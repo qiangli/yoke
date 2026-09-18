@@ -1,0 +1,18 @@
+agents:
+  - name: ycode-cascade-claude-x4
+    tool: ycode
+    model: glm-5.2
+    display: "cascade · glm-5.2 → opus4.8 → fable5 (serves L4)"
+    band: 4
+    band_source: cascade
+    base: ycode-glm-5.2
+    escalation:
+      - ycode-opus4.8   # L3 help
+      - ycode-fable5    # L4 help
+    ledger:
+      reliability: unmeasured
+      notes: |
+        X4 cascade, Anthropic ladder. Base glm-5.2 (L2, same base as the OpenAI
+        cascade); escalates opus4.8 (L3) then fable5 (L4) when stuck. Cost-optimal
+        L4: cheap glm base, Anthropic premium only when it stalls. Analog of
+        ycode-cascade-x4.

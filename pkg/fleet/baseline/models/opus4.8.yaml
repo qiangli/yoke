@@ -1,0 +1,33 @@
+name: opus4.8
+family: opus
+version: "4.8"
+band: 4
+band_source: operator
+# Re-pegged L3 -> L4 on 2026-08-02, by OWNER JUDGEMENT, alongside opus5.
+#
+# THIS RETIRES THE ONE-MODEL-PER-BAND LADDER this file used to assert ("fable5
+# is the sole L4; a clean haiku L1, sonnet L2, opus L3, fable L4"). That ladder
+# was tidy and wrong: a band describes CAPABILITY, not a seating chart, and
+# nothing about the scheme requires exactly one model per rung. Holding to it
+# left the fleet with a single L4 seat and a cost problem — see below.
+#
+# `operator`, NOT `measured`: no gated run on this host has placed Opus 4.8 at
+# L4, and it must not be quoted as one. `bashy leaderboard --role conductor`
+# would settle it and has no rows for this binding yet.
+#
+# THE COST ARGUMENT, recorded because it is the reason and it is not visible in
+# the numbers: fable5's cost_micro (12000) is LOWER than opus (15000), which
+# makes fable look cheaper per unit and is misleading — fable burns roughly
+# DOUBLE the tokens for the same work, so its effective spend is ~1.6x opus.
+# Two L4 seats mean steward and conductor work can route to opus and reach for
+# fable only when it is genuinely wanted.
+display: Claude Opus 4.8
+provider: anthropic
+kind: subscription
+model: claude-opus-4-8
+quality: 0.92
+cost_micro: 15000
+spec:
+  code-review: 0.03
+  planning: 0.03
+  orchestration: 0.04

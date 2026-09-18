@@ -1,0 +1,36 @@
+# ycode agent sandbox image
+# Minimal environment for running agent tasks in isolation.
+FROM docker.io/library/ubuntu:24.04
+
+# Avoid interactive prompts during package installation.
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install essential tools for agent work.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    ca-certificates \
+    curl \
+    git \
+    jq \
+    make \
+    python3 \
+    python3-pip \
+    ripgrep \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root agent user.
+# Ubuntu 24.04 base image ships with a pre-existing `ubuntu` user at
+# UID 1000, so `useradd -u 1000 agent` fails with "UID 1000 is not
+# unique". Delete that user first (idempotent — || true survives the
+# 22.04 case where it doesn't exist).
+RUN userdel -r ubuntu 2>/dev/null || true \
+    && useradd -m -s /bin/bash -u 1000 agent
+
+# Working directory for mounted workspaces.
+RUN mkdir -p /workspace && chown agent:agent /workspace
+
+USER agent
+WORKDIR /workspace
+
+# Default command — keep container alive for exec.
+CMD ["sleep", "infinity"]

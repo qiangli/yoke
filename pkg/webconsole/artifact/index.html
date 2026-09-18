@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en" data-bashy-console="1">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<base href="/">
+<title>bashy apps</title>
+<link rel="stylesheet" href="vendor/xterm.css">
+<link rel="stylesheet" href="backgrounds.css">
+<link rel="stylesheet" href="app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'><rect width='40' height='40' rx='10' fill='%232563eb'/><rect x='10' y='10' width='8.5' height='8.5' rx='2.6' fill='%23ffffff'/><rect x='21.5' y='10' width='8.5' height='8.5' rx='2.6' fill='%235eead4'/><rect x='10' y='21.5' width='8.5' height='8.5' rx='2.6' fill='%23ffffff'/><rect x='21.5' y='21.5' width='8.5' height='8.5' rx='2.6' fill='%23ffffff'/></svg>">
+</head>
+<body>
+<div data-bashy-bg="none" id="bg"></div>
+
+<div id="app">
+  <header id="bar">
+    <a id="brand" href="./" title="bashy apps">
+      <svg class='logo' viewBox='0 0 40 40' aria-hidden='true'><rect width='40' height='40' rx='10' fill='var(--logo-bg)'/><rect x='10' y='10' width='8.5' height='8.5' rx='2.6' fill='var(--logo-fg)'/><rect x='21.5' y='10' width='8.5' height='8.5' rx='2.6' fill='var(--logo-accent)'/><rect x='10' y='21.5' width='8.5' height='8.5' rx='2.6' fill='var(--logo-fg)'/><rect x='21.5' y='21.5' width='8.5' height='8.5' rx='2.6' fill='var(--logo-fg)'/></svg>
+      <span id="wordmark">bashy<b>apps</b></span>
+      <span id="ver" title="build"></span>
+    </a>
+    <nav id="nav">
+      <span id="who"></span>
+      <button id="theme-btn" class="iconbtn" aria-label="Toggle theme" title="Theme"></button>
+      <button id="settings-btn" class="iconbtn" aria-label="Settings" title="Settings"></button>
+      <form id="logout" method="post" action="api/logout" hidden>
+        <button class="iconbtn" type="submit" aria-label="Sign out" title="Sign out"></button>
+      </form>
+    </nav>
+  </header>
+
+  <main id="view">
+    <div id="search-wrap">
+      <input id="search" type="search" placeholder="Search apps" autocomplete="off" spellcheck="false">
+    </div>
+    <div id="grid-host"></div>
+  </main>
+
+  <footer id="foot">
+    <span id="foot-left"></span>
+    <span id="foot-build"></span>
+    <span id="foot-right">the same list in a terminal: <code>bashy commands --view web</code></span>
+  </footer>
+</div>
+
+<dialog id="settings">
+  <form method="dialog" class="sheet">
+    <div class="sheet-head">
+      <h2>Settings</h2>
+      <p>Personalize the launcher and choose which sections appear.</p>
+    </div>
+
+    <section>
+      <h3>Appearance</h3>
+      <div class="seg" id="theme-seg" role="group" aria-label="Theme">
+        <button type="button" data-theme-val="system">System</button>
+        <button type="button" data-theme-val="light">Light</button>
+        <button type="button" data-theme-val="dark">Dark</button>
+      </div>
+    </section>
+
+    <section>
+      <h3>Open apps</h3>
+      <div class="seg" id="open-apps-seg" role="group" aria-label="Open apps">
+        <button type="button" data-open-val="same-tab">Same tab</button>
+        <button type="button" data-open-val="new-tab">New tab</button>
+      </div>
+      <p class="hint">Same tab opens an app in this window; New tab opens it in its own tab. This setting is saved for the whole console.</p>
+    </section>
+
+    <section>
+      <h3>Background</h3>
+      <div class="swatches" id="bg-swatches"></div>
+    </section>
+
+    <section>
+      <h3>Sections</h3>
+      <div id="section-toggles"></div>
+      <label class="row">
+        <span>Recent items</span>
+        <input id="recent-limit" type="number" min="1" max="24" step="1">
+      </label>
+    </section>
+
+    <section id="pair-section">
+      <h3>Phone pairing</h3>
+      <p class="hint">Reach this console from a phone by scanning a QR code — a single-use,
+        time-boxed pass, so an OS password is never typed into the phone.</p>
+      <div id="pair-scope"></div>
+      <!-- HOW LONG THE PHONE STAYS PAIRED. Separate from the scan window (two
+           minutes, and not the clock anyone was fighting): this is the one that
+           decides whether the phone on the desk keeps working tomorrow. -->
+      <label class="row" id="pair-ttl-row">
+        <span>Phone stays paired for</span>
+        <select id="pair-ttl">
+          <option value="4">4 hours</option>
+          <option value="24" selected>24 hours</option>
+          <option value="168">7 days</option>
+          <option value="720">30 days</option>
+          <option value="0">Never expires</option>
+        </select>
+      </label>
+      <div class="pair-actions">
+        <button type="button" class="btn" id="pair-btn">Show pairing code</button>
+        <button type="button" class="btn" id="pair-refresh" hidden>Refresh code</button>
+      </div>
+      <div id="pair-panel" hidden></div>
+      <div id="pair-instructions-host"></div>
+    </section>
+
+    <section>
+      <h3>Favorites</h3>
+      <p class="hint" id="fav-summary"></p>
+      <button type="button" class="btn" id="clear-favs">Clear favorites</button>
+      <button type="button" class="btn" id="clear-recents">Clear recents</button>
+    </section>
+
+    <div class="sheet-foot"><button class="btn primary" value="close">Done</button></div>
+  </form>
+</dialog>
+
+<script src="vendor/xterm.js"></script>
+<script src="vendor/xterm-addon-fit.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

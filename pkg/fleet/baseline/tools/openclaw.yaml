@@ -1,0 +1,16 @@
+name: openclaw
+kind: cli
+display: OpenClaw
+cli:
+  binary: openclaw
+  launch:
+    notes: >-
+      Launch template is left unstaffable because OpenClaw is a chat->agent gateway
+      (Discord/Slack/Telegram/Signal/iMessage/Matrix), NOT a coding CLI. There is no
+      confirmed one-shot agentic invocation; its `openclaw infer` is provider inference,
+      not an agentic task run. Better modeled as a remote PEER than a local worker.
+      It also carries CVE-2026-25253 (zero-click WebSocket hijack, CVSS 8.8) — treat
+      any instance as security-sensitive.
+    env_markers:
+      - OPENCLAW
+quirks: registered; launch template unstaffable (remote PEER, security-sensitive)

@@ -1,0 +1,33 @@
+name: opencode
+kind: cli
+display: OpenCode
+cli:
+  binary: opencode
+  launch:
+    # RUNG 2 via stdout. Measured against OpenCode 1.18.0 on 2026-08-05:
+    # `opencode run --format json ...` emits incremental step_start, tool_use,
+    # text, and step_finish NDJSON records. A step_finish with reason=tool-calls
+    # is intermediate, so do not declare a naive events_done matcher here.
+    events_stdout: --format json
+    # OpenCode 1.18 exposes its unattended permission mode explicitly as
+    # --auto. Config pre-seeding establishes project trust but does not answer
+    # later tool permission requests, so governed acting sessions need both.
+    exec: opencode --auto run --model {model} {prompt}
+    acp_exec: opencode acp
+    prompt_position: last
+    trust_preseed: opencode.json
+    steer_exec: opencode --auto --model {model}
+    supports_say: true
+    supports_graceful_quit: true
+    notes: headless `run`; --auto is the explicit unattended permission mode; judge by committed artifacts, not exit code. --model takes provider/model.
+    watchdog:
+      max_runtime: 45m
+      mem_limit: 12g
+    env_markers:
+      - OPENCODE_CLIENT
+quirks: delivers committed work; pre-seed opencode.json or it silently no-ops (exit 0)
+harness:
+  operability: 0.9
+  shell: 0.9
+  tool-use: 0.8
+  isolation: 0.75

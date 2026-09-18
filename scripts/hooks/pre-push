@@ -1,0 +1,19 @@
+#!/bin/sh
+# pre-push — the pre-push gates. The CI windows leg is the product; these catch
+# its breaks (unix-only types in untagged files, unformatted files) BEFORE the
+# push instead of 10 minutes after. Install once per clone:
+#   git config core.hooksPath scripts/hooks
+# Bypass in an emergency with: git push --no-verify
+#
+# Neither gate is inlined here. Both live in scripts/ — the SAME scripts DAG.md's
+# `crossvet` and `fmtcheck` tasks run and the SAME ones CI runs, so the hook and
+# the manual gates can never check different things. Do not re-inline either.
+#
+# fmtcheck first: it costs ~0.1s against crossvet's several seconds, so the cheap
+# gate reports before the expensive one starts. It REPORTS and never rewrites —
+# gofmt changes doc-comment text as well as whitespace, so the fix is a decision,
+# not an automation. Read that script's header before making it auto-fix.
+set -e
+root="$(git rev-parse --show-toplevel)"
+"$root/scripts/fmtcheck.sh"
+exec "$root/scripts/crossvet.sh"

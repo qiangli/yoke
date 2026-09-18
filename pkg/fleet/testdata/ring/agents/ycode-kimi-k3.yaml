@@ -1,0 +1,8 @@
+agents:
+  - name: ycode-kimi-k3
+    tool: ycode
+    model: kimi-k3
+    display: "ycode · kimi-k3"
+    ledger:
+      reliability: medium
+      notes: coder GREEN (real impl); non-converging as conductor/steward (both timed out 420s, repeat 4.0). Route coder/review.

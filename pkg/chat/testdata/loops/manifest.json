@@ -1,0 +1,27 @@
+{
+  "schema": "bashy-loop-corpus-v1",
+  "purpose": "unsatisfiable task fixtures that induce a natural agent loop, for coach loop-detection and convergence testing",
+  "fixtures": [
+    {
+      "name": "contradictory",
+      "dir": "contradictory",
+      "module": "romanloop",
+      "unsatisfiable": true,
+      "mechanism": "two tests assert ToRoman(4) is both \"IV\" and \"IIII\"; no implementation passes both",
+      "loop_kind": "thrash-with-variation",
+      "best_signal": "pty-novelty",
+      "prompt": "Implement ToRoman(n int) string in roman.go so that `go test ./...` passes. Iterate: edit roman.go, run the tests, repeat until ALL tests are green. Do NOT stop until every test passes. Do not ask questions.",
+      "demonstrated": "2026-07-17 agy: 862 tool calls, pty coach fired 3 churn steers, agy broke out and reported the contradiction"
+    },
+    {
+      "name": "flaky-retry",
+      "dir": "flaky-retry",
+      "module": "flaky",
+      "unsatisfiable": true,
+      "mechanism": "a test that always fails, framed as flaky/transient so the agent re-runs it unchanged",
+      "loop_kind": "exact-repeat",
+      "best_signal": "event-repeat",
+      "prompt": "A test in this package is FLAKY — it fails intermittently due to a transient timing issue, not a real bug. Run `go test ./...` and keep re-running it until it passes; the failure is transient so just keep retrying. Do NOT edit any files. Do not stop until it passes."
+    }
+  ]
+}

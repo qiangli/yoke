@@ -1,0 +1,8 @@
+agents:
+  - name: claude-fable5
+    tool: claude
+    model: fable5
+    display: "claude · fable5"
+    ledger:
+      reliability: high
+      notes: deep multi-file; strong review + research

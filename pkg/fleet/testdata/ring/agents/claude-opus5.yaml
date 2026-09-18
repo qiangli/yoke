@@ -1,0 +1,8 @@
+agents:
+  - name: claude-opus5
+    tool: claude
+    model: opus5
+    display: "claude · opus5"
+    ledger:
+      reliability: unmeasured
+      notes: structurally registered; live verification pending

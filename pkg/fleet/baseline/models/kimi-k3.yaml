@@ -1,0 +1,51 @@
+name: kimi-k3
+family: kimi
+version: "3"
+band: 2
+band_source: measured
+# MEASURED 2026-07-16, first bake-off (ycode harness, 420s/arm — generous for a
+# reasoner). Released the same day (Moonshot): 2.8T sparse MoE, 1M context, native
+# vision; Arena put it above Fable 5 / GPT-5.6 Sol on front-end coding. It is a
+# REASONING model (emits reasoning_content) and drives tools cleanly through the
+# post-fix ycode stream handler — no stall.
+#
+# WHAT IT CAN DO: genuine coder. The coder arm produced a real, correct ToRoman
+# (gate GREEN, tests pass). As a steward it did the right thing unprompted —
+# independently ran the tests and CAUGHT the planted bug ("the comment admits a
+# bug in even-length handling; running the tests myself").
+#
+# WHY IT IS L2, NOT THE DECLARED L3 — it CANNOT CONVERGE. Both arms timed out at
+# 420s without delivering: the coder had green code already on disk and kept going
+# (repeat ratio 4.0 — 4 calls, 1 distinct); the steward had the finding and timed
+# out before writing DECISION: REJECT. Same failure, same band as glm-5.2 (L2) and
+# gemini3.1 (demoted L3->L2): L3 is judgment, and judgment includes knowing when to
+# stop. A diagnosis you never deliver is not a diagnosis.
+#
+# CONFOUND RESOLVED — re-measured at 900s (2.1x the budget). NOT a budget limit: the
+# conductor repeat ratio was IDENTICAL (4.0) and the steward's WORSENED (5.0->7.0);
+# both arms kept re-issuing the SAME single call (distinct=1) and neither delivered.
+# The extra ~8 minutes bought zero new distinct progress — the steward just looped
+# more. This is a STRUCTURAL inability to stop, not a slow reasoner. L2 is the
+# confirmed ceiling for the orchestration roles; more budget does not help.
+#
+# ROUTING: coder / bounded review with a gate — strong there. Not conductor, not
+# steward: it will burn budget and (for judgment tasks) report nothing.
+display: Kimi K3
+provider: openai-compat
+kind: api
+# Moonshot serves two endpoints: api.moonshot.ai (international) and
+# api.moonshot.cn (China). With NO base_url a client falls back to its own
+# default and fails opaquely — which is exactly how opencode:kimi 'broke'.
+base_url: https://api.moonshot.ai/v1
+api_key_ref: moonshot
+model: moonshot/kimi-k3
+quality: 0.85
+# Reported API pricing 2026-07-16: $3/M input, $15/M output.
+cost_micro: 15000
+# ycode detects the provider from the model name, so it takes the BARE id —
+# litellm's `provider/model` prefix is rejected. The id a model answers to is a
+# property of the TOOL, not of the model.
+ids:
+  ycode: kimi-k3
+  # opencode's provider id is `moonshotai`, not `moonshot` (its source says so).
+  opencode: moonshotai/kimi-k3

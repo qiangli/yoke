@@ -1,0 +1,8 @@
+agents:
+  - name: agy-gemini3.6-flash
+    tool: agy
+    model: gemini3.6-flash
+    display: "agy · gemini3.6-flash"
+    ledger:
+      reliability: unmeasured
+      notes: L2 rung; declared band, no gated run on this host yet

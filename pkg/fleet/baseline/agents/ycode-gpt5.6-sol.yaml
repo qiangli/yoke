@@ -1,0 +1,12 @@
+agents:
+  - name: ycode-gpt5.6-sol
+    tool: ycode
+    model: gpt5.6-sol
+    display: "ycode · gpt5.6-sol"
+    ledger:
+      reliability: unmeasured
+      notes: |
+        L4 rung — first-party harness on the OpenAI lane. Speaks the OpenAI Responses
+        API (/v1/responses) so gpt-5 gets function tools + reasoning together, matching
+        codex's wire. The head-to-head counterpart of codex-gpt5.6-sol (same frontier
+        model, ycode via OpenAI API key vs codex via subscription).

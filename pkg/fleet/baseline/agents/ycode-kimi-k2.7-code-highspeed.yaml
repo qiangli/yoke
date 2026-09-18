@@ -1,0 +1,8 @@
+agents:
+  - name: ycode-kimi-k2.7-code-highspeed
+    tool: ycode
+    model: kimi-k2.7-code-highspeed
+    display: "ycode · kimi-k2.7-code-highspeed"
+    ledger:
+      reliability: unmeasured
+      notes: L2 rung — first-party; the high-throughput serving tier of ycode-kimi-k2.7-code; seeded 2026-09-13

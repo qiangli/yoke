@@ -1,0 +1,101 @@
+name: glm-5.2
+family: glm
+version: "5.2"
+band: 2
+band_source: measured
+# THE FLEET'S FIRST *MEASURED* BAND. Three independent exams, harness clean.
+#
+# WHAT IT CAN DO — and it is genuinely good:
+#   CODING: 3/3 gate PASS on the wrap task (48s/46s/44s), plus 2/2 earlier. Minimal turns,
+#     no thrashing, correct code.
+#   FINDING: excellent, and BETTER THAN AN L4 ON THE SAME CODE. Given an adversarial review
+#     brief it found TWO real bugs that codex:gpt-5.5 did not, in code that had just been
+#     reviewed and committed:
+#       - internal/service/local.go:18 — a SECOND hardcoded maxToolIterations=25 that
+#         published EventTurnComplete (a SUCCESS event) for a truncated run
+#       - usage.Tracker.Model never set (every call site used Add(), not AddWithModel()),
+#         so the "Est. cost" line at the end of EVERY run priced every model as Claude
+#         Sonnet — a THIRD hardcoded copy of the pricing. It found this immediately after
+#         the pricing table and cost metric had been fixed and committed.
+#
+# WHY IT IS NOT L3 — measured 3/3, and this is the whole case:
+#   IT CANNOT CONVERGE. It hit the iteration cap in all three exams — 25, 80, and 60 turns
+#   — and produced NO synthesized report in any of them. The third run had nothing in its
+#   way: no truncation bug, no quota wall, 2x429 absorbed by the pacer, 60 turns of budget.
+#   It still never stopped.
+#
+#   Its own transcript is the evidence: "Critical finding emerging...", "Confirmed: the main
+#   flow calls Add()..." — IT HAD THE FINDING AND KEPT INVESTIGATING INSTEAD OF WRITING IT
+#   DOWN. Both bugs above exist only because a HUMAN read its stderr after it failed. Left
+#   alone in an unattended fleet run, it delivers nothing.
+#
+#     A diagnosis you never deliver is not a diagnosis.
+#
+#   L3 is "diagnosis, judgment" — and judgment includes knowing when to stop. It does not.
+#   Same call as gemini3.1 (demoted L3->L2: 9.4x repeat, never converged). Same failure,
+#   same band.
+#
+# ROUTING CONSEQUENCE, and it is not a demotion in practice:
+#   Route it CODING and REVIEW work with a gate and a bounded scope — it is strong there and
+#   cheap. Never make it a conductor or steward: it will burn the budget and report nothing.
+#   It is worth routing work TO. It is never worth leaving ALONE.
+
+display: GLM-5.2 (z.ai)
+provider: openai-compat
+kind: api          # AUTH: an API key (see api_key_ref below)
+billing: flat      # PAY: a prepaid seat. The next token is free at the margin.
+#
+# GLM is the model that split `kind` in two. The field used to mean auth AND billing at
+# once, which worked only because they had always travelled together: a seat plan meant
+# an interactive login, an API key meant per-token metering.
+#
+# The GLM Coding Plan is FLAT-RATE BILLING OVER AN API KEY — economically a
+# subscription, operationally a plain HTTP call. No single enum value can say that, and
+# a fourth value (`api-subscription`) would just grow the enum as the PRODUCT of the two
+# axes. So Kind is auth, Billing is billing, and each names one thing.
+#
+# What `billing: flat` BUYS: the router divides by MARGINAL cost, and under a plan you
+# have already paid for, the next token costs nothing. So this model is preferred over a
+# metered peer of equal quality — not using capacity you already bought is a waste, not
+# a saving. It is not priced at zero, because a plan is prepaid and FINITE: burning its
+# quota on trivial work exhausts it for the work that needs it.
+#
+# This combination is exactly the lane ycode exists to serve: no per-token anxiety AND
+# no third-party CLI to change its flags underneath us (which is what retired aider).
+# PLAN: GLM Coding Plan PRO ($72/mo), upgraded 2026-07-14 on measured evidence.
+#
+# The evidence, because the tiers publish only half the story:
+#
+#   PUBLISHED  quota, per 5h:   Lite ~80   Pro ~400   Max ~1600
+#   NOT PUBLISHED  concurrency: nothing, for any tier
+#
+# We hit BOTH limits, and they are different errors that were being treated the same:
+#
+#   429 code 1302  "Rate limit reached for requests"   -> RPM/concurrency. Back off; clears
+#                                                          in seconds.
+#   429 code 1308  "Usage limit reached for 5 hour"    -> QUOTA GONE. Retrying is futile for
+#                                                          HOURS. Hand off, do not wait.
+#
+# On Lite: one afternoon of real fleet work exhausted the 5h quota (1308), and the
+# concurrency ceiling was ~5 — which is a conductor plus four workers, i.e. sitting
+# permanently ON the limit.
+#
+# MEASURED after the Pro upgrade — the unpublished axis moved too:
+#
+#   concurrency   Lite: 8 requests -> 5 OK, 3x429      Pro: 8 requests -> 8 OK, 0x429
+#                                                      Pro: 12 -> 7 OK, 5x429  (ceiling ~8)
+#
+# So concurrency DOES scale with the tier even though z.ai documents none of it. Pro was
+# chosen over Max on evidence: one deep conductor run costs ~100 requests, and glm-5.2
+# carries a 3x peak-hours quota multiplier — Pro buys ~4-5 such runs per window, and Max
+# buys headroom we have not yet shown we need.
+base_url: https://api.z.ai/api/coding/paas/v4
+api_key_ref: zai
+# THE ENDPOINT IS THE CODING-PLAN ONE: /api/coding/paas/v4, not the general
+# /api/paas/v4. They differ by one path segment, and a coding-plan key is REJECTED by
+# the general endpoint — which reads exactly like "the model is broken".
+model: glm-5.2
+quality: 0.84
+cost_micro: 900
+ids:
+  ycode: glm-5.2

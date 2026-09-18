@@ -1,0 +1,11 @@
+agents:
+  - name: ycode-opus4.8
+    tool: ycode
+    model: opus4.8
+    display: "ycode · opus4.8"
+    ledger:
+      reliability: unmeasured
+      notes: |
+        L3 rung — first-party harness on the Anthropic lane (opus4.8, subscription
+        via ycode's OAuth login, same access as the claude CLI). Counterpart of
+        claude-opus4.8 (Beatrix) for a same-model head-to-head.

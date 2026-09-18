@@ -1,0 +1,8 @@
+agents:
+  - name: codex-gpt-5.5
+    tool: codex
+    model: gpt-5.5
+    display: "codex · gpt-5.5"
+    ledger:
+      reliability: high
+      notes: reliable + honest no-ops; can be plausibly-wrong — gate it

@@ -1,0 +1,12 @@
+agents:
+  - name: ycode-gpt5.6-terra
+    tool: ycode
+    model: gpt5.6-terra
+    display: "ycode · gpt5.6-terra"
+    ledger:
+      reliability: unmeasured
+      notes: |
+        L3 rung — first-party harness on the OpenAI lane. Speaks the OpenAI Responses
+        API (/v1/responses) so gpt-5 gets function tools + reasoning together, matching
+        codex's wire. The head-to-head counterpart of codex-gpt5.6-terra (same model,
+        ycode via OpenAI API key vs codex via subscription).

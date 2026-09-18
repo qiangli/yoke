@@ -1,0 +1,8 @@
+agents:
+  - name: codex-gpt5.6-sol
+    tool: codex
+    model: gpt5.6-sol
+    display: "codex · gpt5.6-sol"
+    ledger:
+      reliability: unmeasured
+      notes: L4 rung — codex's own frontier default

@@ -1,0 +1,21 @@
+name: gemini3.7-flash
+family: gemini-flash
+version: "3.7"
+band: 2
+band_source: declared
+display: Gemini 3.7 Flash (High)
+provider: gemini
+kind: subscription
+# The id comes from `agy models`, agy's OWN published list and the only
+# authoritative source for this field; listed there on 2026-09-13 (with the
+# -medium and -low variants). Not yet verified on the wire from this host —
+# run `bashy agent verify --live` on agy-gemini3.7-flash before relying on it.
+model: gemini-3.7-flash-high
+# A PRIOR, not a measurement. Seeded 2026-09-13 as the successor of 3.6 Flash
+# (Google ships a Flash iteration roughly monthly; 3.7 is a post-training
+# iteration aimed at long-horizon software engineering and agents). It inherits
+# the FLASH-class peg (L2) — a newer version number is not evidence of a higher
+# band, and no gate on this host has run it. The `gemini-flash` family alias
+# re-points to the highest version, so `gemini-flash` now names this one.
+quality: 0.76
+cost_micro: 1200

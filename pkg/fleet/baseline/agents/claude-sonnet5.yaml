@@ -1,0 +1,8 @@
+agents:
+  - name: claude-sonnet5
+    tool: claude
+    model: sonnet5
+    display: "claude · sonnet5"
+    ledger:
+      reliability: unmeasured
+      notes: L2 rung; live-probed

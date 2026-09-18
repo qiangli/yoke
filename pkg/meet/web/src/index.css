@@ -1,0 +1,329 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* The console sets data-theme on <html> (absent means follow the system), and
+   every other app keys off it. relay used to key off a .dark class that nothing
+   defined and nothing set, so it had no dark mode at all: with the console in
+   dark and the system in dark, relay still rendered near-white. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+@theme inline {
+  --font-sans: "DM Sans", "Avenir Next", "Segoe UI", sans-serif;
+  --font-display: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+/* Light. Same rule as the dark block below: the tokens relay shares with the
+   console take the console's exact values (app.css :root), so the apps are one
+   palette rather than two.
+   The sidebar used to be oklch(0.205 …) — a dark navy — in the LIGHT theme,
+   left from this SPA's original standalone design. Beside a light console it
+   read as a bug, because it was one: nothing else in the console has a panel
+   that ignores the theme. It is now a light surface, card-white against the
+   #f2f2f5 page, which is the separation the console uses between page and
+   card. */
+:root {
+  --radius: 0.7rem;
+  --background: #f2f2f5;
+  --foreground: #18181b;
+  --card: #ffffff;
+  --card-foreground: #18181b;
+  --popover: #ffffff;
+  --popover-foreground: #18181b;
+  --primary: #2563eb;
+  --primary-foreground: #ffffff;
+  --secondary: #f4f4f5;
+  --secondary-foreground: #18181b;
+  --muted: #f4f4f5;
+  --muted-foreground: #71717a;
+  --accent: #f4f4f5;
+  --accent-foreground: #18181b;
+  --destructive: oklch(0.58 0.2 27);
+  --border: #e4e4e7;
+  --input: #e4e4e7;
+  --ring: #2563eb;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #18181b;
+  --sidebar-primary: #2563eb;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f4f4f5;
+  --sidebar-accent-foreground: #18181b;
+  --sidebar-border: #e4e4e7;
+  /* The console's mark tokens. ONE mark, every app, every theme — the values
+     are computed in app.css, where the contrast table lives. Keep in step. */
+  --logo-bg: #2563eb;
+  --logo-fg: #ffffff;
+  --logo-accent: #5eead4;
+  color-scheme: light;
+}
+
+/* Dark. The tokens relay shares with the console take the console's exact
+   values (app.css :root[data-theme="dark"]), so the two apps are the same
+   colour rather than two interpretations of "dark". The SPA-only tokens are
+   derived to sit with them. */
+:root[data-theme="dark"] {
+  --background: #09090b;
+  --foreground: #fafafa;
+  --card: #18181b;
+  --card-foreground: #fafafa;
+  --popover: #18181b;
+  --popover-foreground: #fafafa;
+  --primary: #60a5fa;
+  --primary-foreground: #09090b;
+  --secondary: #27272a;
+  --secondary-foreground: #fafafa;
+  --muted: #27272a;
+  --muted-foreground: #a1a1aa;
+  --accent: #27272a;
+  --accent-foreground: #fafafa;
+  --destructive: oklch(0.62 0.21 27);
+  --border: #27272a;
+  --input: #27272a;
+  --ring: #60a5fa;
+  --sidebar: #111113;
+  --sidebar-foreground: #e4e4e7;
+  --sidebar-primary: #60a5fa;
+  --sidebar-primary-foreground: #09090b;
+  --sidebar-accent: #27272a;
+  --sidebar-accent-foreground: #fafafa;
+  --sidebar-border: #27272a;
+  --logo-bg: #2563eb;
+  --logo-fg: #ffffff;
+  --logo-accent: #5eead4;
+  color-scheme: dark;
+}
+
+/* No explicit choice: follow the system, exactly as app.css does. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --background: #09090b;
+    --foreground: #fafafa;
+    --card: #18181b;
+    --card-foreground: #fafafa;
+    --popover: #18181b;
+    --popover-foreground: #fafafa;
+    --primary: #60a5fa;
+    --primary-foreground: #09090b;
+    --secondary: #27272a;
+    --secondary-foreground: #fafafa;
+    --muted: #27272a;
+    --muted-foreground: #a1a1aa;
+    --accent: #27272a;
+    --accent-foreground: #fafafa;
+    --destructive: oklch(0.62 0.21 27);
+    --border: #27272a;
+    --input: #27272a;
+    --ring: #60a5fa;
+    --sidebar: #111113;
+    --sidebar-foreground: #e4e4e7;
+    --sidebar-primary: #60a5fa;
+    --sidebar-primary-foreground: #09090b;
+    --sidebar-accent: #27272a;
+    --sidebar-accent-foreground: #fafafa;
+    --sidebar-border: #27272a;
+    --logo-bg: #2563eb;
+    --logo-fg: #ffffff;
+    --logo-accent: #5eead4;
+    color-scheme: dark;
+  }
+}
+
+* {
+  border-color: var(--border);
+}
+
+html {
+  background: var(--background);
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 55% -20%, oklch(0.93 0.045 185 / 45%), transparent 42%),
+    var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.markdown > :first-child {
+  margin-top: 0;
+}
+
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown p {
+  margin: 0.35rem 0;
+}
+
+.markdown ul,
+.markdown ol {
+  margin: 0.45rem 0;
+  padding-left: 1.25rem;
+}
+
+.markdown ul {
+  list-style: disc;
+}
+
+.markdown ol {
+  list-style: decimal;
+}
+
+.markdown li {
+  padding-left: 0.15rem;
+}
+
+.markdown blockquote {
+  margin: 0.65rem 0;
+  border-left: 2px solid oklch(0.7 0.1 184);
+  padding: 0.15rem 0 0.15rem 0.8rem;
+  color: var(--muted-foreground);
+}
+
+.markdown code {
+  border-radius: 0.3rem;
+  background: var(--secondary);
+  padding: 0.12rem 0.3rem;
+  font-size: 0.86em;
+}
+
+.markdown pre {
+  overflow-x: auto;
+  border-radius: 0.65rem;
+  background: oklch(0.22 0.025 255);
+  padding: 0.8rem 1rem;
+  color: oklch(0.94 0.015 250);
+}
+
+.markdown pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.markdown a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.typing-dot {
+  animation: typing-bounce 1.15s ease-in-out infinite;
+}
+
+@keyframes typing-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.45;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+/* ---- console app chrome -------------------------------------------------
+ * Copied VALUE-FOR-VALUE from webconsole's app.css (#bar, #brand, .logo,
+ * #wordmark, .iconbtn) so relay's header is the SAME OBJECT as board,
+ * messages and terminal rather than a lookalike that drifts.
+ *
+ * Those pages get it by linking app.css. relay is a MOUNTED SPA served
+ * outside the console's asset path and cannot link that stylesheet, so the
+ * rules are restated here. If app.css changes these, change them here too —
+ * pkg/webconsole/console_dom_test.go compares the two headers and will say so.
+ */
+.console-bar {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; gap: .5rem;
+  padding: .75rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--background);
+}
+.console-brand {
+  display: inline-flex; align-items: center; gap: .75rem;
+  text-decoration: none; color: var(--foreground); flex: none;
+}
+.console-logo { width: 32px; height: 32px; display: block; flex: none; }
+.console-wordmark {
+  display: flex; align-items: baseline; gap: .375rem; line-height: 1;
+  font-size: 20px; font-weight: 800; letter-spacing: -.02em;
+}
+.console-wordmark b {
+  font-size: 13px; font-weight: 500; letter-spacing: -.01em;
+  color: var(--muted-foreground);
+}
+.console-iconbtn {
+  width: 36px; height: 36px; border: 0; background: transparent;
+  color: var(--foreground); border-radius: .375rem; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  text-decoration: none;
+}
+.console-iconbtn:hover { background: var(--card); color: var(--primary); }
+.console-iconbtn svg { width: 18px; height: 18px; }
+.console-foot {
+  flex: none; padding: .4rem 1rem; text-align: center;
+  font-size: .7rem; color: var(--muted-foreground);
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}

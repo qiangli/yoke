@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f8fafc" />
+    <meta
+      name="description"
+      content="A focused browser workspace for Bashy Meet conversations."
+    />
+    <title>Meet — bashy</title>
+      <script>
+      // Follow the console's theme. It is stored under the console's own key,
+      // on the SAME ORIGIN — relay is mounted at /relay/, not a separate site —
+      // and every other app reads the resulting data-theme off <html>.
+      //
+      // Inline and before the stylesheet on purpose: applied from a module it
+      // would run after first paint, and the wrong theme would flash first.
+      (() => {
+        const KEY = "bashy.apps.config";           // webconsole app.js CFG_KEY
+        const apply = () => {
+          let theme = "system";
+          try {
+            theme = (JSON.parse(localStorage.getItem(KEY) || "{}").theme) || "system";
+          } catch (_) {
+            // A corrupt or blocked store must not leave the page unstyled:
+            // "system" is the same fallback the console itself uses.
+          }
+          const root = document.documentElement;
+          if (theme === "system") root.removeAttribute("data-theme");
+          else root.setAttribute("data-theme", theme);
+        };
+        apply();
+        // The console writes the key in another tab; follow it live.
+        addEventListener("storage", (e) => { if (e.key === KEY) apply(); });
+      })();
+    </script>
+    <script type="module" crossorigin src="./assets/index-Bw7PDdvN.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-DbFk_rX9.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

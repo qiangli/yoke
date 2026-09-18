@@ -1,0 +1,26 @@
+name: kimi-k2.7-code
+family: kimi-code
+version: "2.7"
+band: 2
+band_source: operator
+# operator: coder
+display: Kimi K2.7 Code
+provider: openai-compat
+kind: api
+# Moonshot serves two endpoints: api.moonshot.ai (international) and
+# api.moonshot.cn (China). With NO base_url a client falls back to its own
+# default and fails opaquely — which is exactly how opencode:kimi 'broke'.
+base_url: https://api.moonshot.ai/v1
+api_key_ref: moonshot
+model: moonshot/kimi-k2.7-code
+quality: 0.82
+cost_micro: 2000
+# ycode detects the provider from the model name, so it takes the BARE id —
+# litellm's `provider/model` prefix is rejected. The id a model answers to is a
+# property of the TOOL, not of the model.
+ids:
+  ycode: kimi-k2.7-code
+  # opencode's provider id is `moonshotai`, not `moonshot` (its source says so).
+  # With `moonshot/` it dies on an opaque "UnknownError" that names nothing —
+  # which is how opencode came to be blamed for a registry typo.
+  opencode: moonshotai/kimi-k2.7-code

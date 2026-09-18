@@ -1,0 +1,8 @@
+agents:
+  - name: codex-gpt5.6-luna
+    tool: codex
+    model: gpt5.6-luna
+    display: "codex · gpt5.6-luna"
+    ledger:
+      reliability: unmeasured
+      notes: L2 rung

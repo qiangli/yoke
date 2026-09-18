@@ -1,0 +1,16 @@
+bin/
+.agents/
+.claude/
+priorart
+reference
+priorart/
+.aider*
+.dag-logs/
+
+# Embedded container helper binaries — built artifacts (scripts/embed-*.sh),
+# consumed only with the matching embed_* build tag; same pattern as ycode and
+# external/ollama/runner_embed. Default builds use the stub (embed_stub.go).
+external/podman/engine/podman_embed/podman.gz
+external/podman/engine/vfkit_embed/vfkit.gz
+external/podman/engine/gvproxy_embed/gvproxy.gz
+

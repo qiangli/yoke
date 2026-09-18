@@ -1,0 +1,12 @@
+name: gpt5.3-spark
+family: gpt-spark
+version: "5.3"
+band: 1
+band_source: declared
+display: GPT-5.3 Codex Spark
+provider: openai
+kind: subscription
+model: gpt-5.3-codex-spark
+quality: 0.70
+cost_micro: 500
+# OpenAI: ultra-fast coding model

@@ -1,0 +1,8 @@
+agents:
+  - name: opencode-deepseek-v4-pro
+    tool: opencode
+    model: deepseek-v4-pro
+    display: "opencode · deepseek-v4-pro"
+    ledger:
+      reliability: medium
+      notes: delivers committed work; pre-seed opencode.json

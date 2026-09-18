@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en" data-bashy-console="1">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<base href="/">
+<title>Inbox — bashy</title>
+<link rel="stylesheet" href="app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'><rect width='40' height='40' rx='10' fill='%232563eb'/><path d='M9 22h6l2 3h6l2-3h6M9 22l3-10h16l3 10v7H9z' fill='none' stroke='%23ffffff' stroke-width='2.6' stroke-linejoin='round'/><path d='M20 8v7m0 0l-3-3m3 3l3-3' fill='none' stroke='%235eead4' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+</head>
+<body class="standalone">
+<header id="bar">
+  <a id="brand" href="inbox/" title="bashy inbox">
+    <svg class="logo" viewBox="0 0 40 40" aria-hidden="true">
+      <rect width="40" height="40" rx="10" fill="var(--logo-bg)"/>
+      <path d="M9 22h6l2 3h6l2-3h6M9 22l3-10h16l3 10v7H9z" fill="none" stroke="var(--logo-fg)" stroke-width="2.6" stroke-linejoin="round"/>
+    </svg>
+    <span id="wordmark">bashy<b>inbox</b></span>
+  </a>
+  <span class="spacer"></span>
+  <span id="ib-mode" class="ro" hidden></span>
+  <span id="ib-who"></span>
+</header>
+
+<main id="ib-page">
+  <aside id="ib-nav" aria-label="Inboxes">
+    <div class="ib-nav-head">
+      <input id="ib-find" type="search" placeholder="Find a name" autocomplete="off" spellcheck="false" aria-label="Find an inbox">
+      <label class="chk" title="hide names whose inbox has nothing waiting"><input id="ib-waiting" type="checkbox"> waiting only</label>
+    </div>
+    <nav id="ib-roster" aria-live="polite"></nav>
+    <p id="ib-nav-foot"></p>
+  </aside>
+
+  <section id="ib-main">
+    <header id="ib-head">
+      <h1 id="ib-title">Inbox</h1>
+      <span id="ib-kind" class="ib-chip" hidden></span>
+      <span class="spacer"></span>
+      <span id="ib-stats"></span>
+    </header>
+
+    <section id="ib-filters">
+      <label>From <select id="f-from"><option value="">anyone</option></select></label>
+      <label>Topic <select id="f-topic"><option value="">any</option></select></label>
+      <label>Room <select id="f-room"><option value="">any</option></select></label>
+      <label>Tier <select id="f-delivery"><option value="">any</option></select></label>
+      <label>State
+        <select id="f-state">
+          <option value="">all</option>
+          <option value="unread">unread</option>
+          <option value="read">read</option>
+        </select>
+      </label>
+      <label>When
+        <select id="f-age">
+          <option value="">any time</option>
+          <option value="today">today</option>
+          <option value="week">this week</option>
+          <option value="older">older</option>
+          <option value="unknown">no timestamp</option>
+        </select>
+      </label>
+      <input id="f-q" type="search" placeholder="Search messages" autocomplete="off" spellcheck="false">
+      <span class="ib-actions">
+        <button id="ib-markall" class="btn primary" type="button" hidden>Mark all read</button>
+        <button id="f-order" class="btn" type="button" aria-pressed="false" title="oldest first (chronological)">Oldest first</button>
+        <button id="f-clear" class="btn" type="button">Clear</button>
+      </span>
+    </section>
+
+    <section id="ib-list" aria-live="polite"></section>
+
+    <footer id="ib-foot"></footer>
+  </section>
+</main>
+
+<script src="inbox.js"></script>
+</body>
+</html>

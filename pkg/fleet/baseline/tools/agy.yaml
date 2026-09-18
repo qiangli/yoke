@@ -1,0 +1,82 @@
+name: agy
+kind: cli
+display: Antigravity
+aliases:
+  - antigravity
+cli:
+  binary: agy
+  launch:
+    # RUNG 2 via stdout. Measured on the wire 2026-07-31:
+    #
+    #   $ agy -p "say ok" --output-format stream-json
+    #   {"event":"step_update","step_update":{...,"state":"ACTIVE",...}}
+    #   {"event":"step_update","step_update":{...,"state":"DONE",...}}
+    #   {"event":"result","result":{"status":"SUCCESS","num_turns":1,...}}
+    #
+    # NOTE THE KEY: agy nests its kind under `event`, where every other tool
+    # uses `type`. A matcher assuming `type` would never fire here, and would do
+    # so silently — a boundary that never arrives is indistinguishable from a
+    # tool still thinking. That asymmetry is why events_done declares its field.
+    events_stdout: --output-format stream-json
+    # Nested one level deeper than claude's, which is why the path is declared
+    # rather than assumed. Measured on a success; the failing status has not
+    # been seen, so it is not guessed at.
+    events_outcome:
+      path: result.status
+      ok: [SUCCESS]
+    events_done:
+      field: event
+      values: [result]
+    # DO NOT ADD `--effort {effort}` HERE. agy has an `--effort (low|medium|high)`
+    # flag, but it is a SECOND SPELLING of the model id's suffix rather than a
+    # second axis, and agy rejects disagreement — measured 2026-08-02:
+    #
+    #   $ agy --model gemini-3.5-flash-low --effort high
+    #   Error: invalid model selection: --model gemini-3.5-flash-low conflicts
+    #          with --effort=high                                    (exit 1)
+    #
+    # Every binding already carries its effort in the id (gemini-3.6-flash-high,
+    # gemini-3.1-pro-low, …), so adding the flag would kill the whole agy fleet
+    # at once. To change effort, bind a different model id.
+    exec: agy --dangerously-skip-permissions --print-timeout 40m --model {model} -p {prompt}
+    # AGY otherwise may retain/select a different project despite the process
+    # cwd. Bind the allocated clone explicitly, before model/prompt argv.
+    # --add-dir makes the allocated clone visible, but does not select it:
+    # agy can otherwise resume its remembered Antigravity project (often the
+    # user's scratch checkout). --new-project is deliberately paired with it
+    # so every governed worker starts a fresh project rooted at this workspace.
+    workspace_arg: --new-project --add-dir {workspace}
+    # Plan mode is the read-only, fail-closed check run before the worker prompt.
+    # The generic launcher supplies a prompt requiring exactly PWD=<path> and
+    # weave compares that reported path to the allocated clone.
+    workspace_preflight_exec: agy --mode plan --print-timeout 40m --model {model} -p {prompt}
+    # Bare `agy --model X` (no -i, no -p) opens agy's OWN interactive TUI — that is
+    # the native steerable session, so the operator sees agy's real UI (not a bashy
+    # wrapper) and the first message arrives over the control channel (supports_say).
+    # `-i <prompt>` REQUIRES an initial-prompt argument and is only for a one-shot
+    # seed; using it here dangled the flag when a human opened an empty session.
+    steer_exec: agy --dangerously-skip-permissions --model {model}
+    prompt_position: last
+    trust_preseed: none
+
+    # supports_say: MEASURED, not asserted. Proven with agentpty.Run + BrokerSay —
+    # the production path `meet say` uses — in pkg/agentpty/steer_live_test.go.
+    # It was `false` here for months because nobody ever tried, and because the
+    # control channel sent `text + \r` in ONE write, which a TUI in bracketed-paste
+    # mode reads as a PASTE: the steer landed in the input box and was never
+    # submitted. Two writes (text, pause, Enter) and it submits.
+    supports_say: true
+    supports_graceful_quit: true
+    notes: headless `-p`; --add-dir binds weave's allocated workspace; plan-mode PWD preflight runs before the writer; bare `agy --model X` opens the steerable TUI (`-i` is a one-shot seed only). Bump --print-timeout (default 5m).
+    auth_hint: >-
+      Antigravity requires a browser sign-in: run `agy` once interactively and complete the
+      login, then it works headless. Not usable in a headless fleet until signed in.
+    watchdog:
+      max_runtime: 45m
+      mem_limit: 12g
+quirks: surgical; forgets to commit (salvage); the prompt must be the last arg (-p swallows flags)
+harness:
+  operability: 0.85
+  shell: 0.85
+  tool-use: 0.8
+  isolation: 0.75

@@ -1,0 +1,13 @@
+name: gemini3.5-flash-low
+family: gemini-flash-low
+version: "3.5"
+band: 1
+band_source: declared
+display: Gemini 3.5 Flash (Low)
+provider: gemini
+kind: subscription
+# agy's model registry uses the hyphenated slug (the catalog name is only our
+# stable fleet label).
+model: gemini-3.5-flash-low
+quality: 0.68
+cost_micro: 700

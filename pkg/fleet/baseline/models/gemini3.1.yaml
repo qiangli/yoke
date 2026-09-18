@@ -1,0 +1,57 @@
+name: gemini3.1
+family: gemini
+version: "3.1"
+band: 2
+band_source: operator
+# Re-pegged L3 -> L2 on 2026-07-14. A CODER, not a conductor.
+#
+# EVIDENCE (one run, and stated as one run): driven as the conductor of a real
+# two-repo task, agy:gemini3.1 made 224 tool calls of which only 22 were
+# DISTINCT -- it re-read the same file 26 times, looped for forty minutes,
+# produced no plan, and edited a tree it had been explicitly told not to touch.
+# It never converged, and it never would have: it took three operator
+# interventions (an ESC to break the loop, a steer, and an explicit staffing
+# instruction) to become useful. Once corrected it investigated well and
+# delegated correctly -- which is the L2 profile exactly.
+#
+# THE CONFOUND, RECORDED HONESTLY: gemini3.1 is reachable through ONE harness
+# (agy), whose own registry gives it the lowest tool-use score in the fleet
+# (0.8). So this run CANNOT separate "the model cannot hold a conductor loop"
+# from "agy's loop detection is weak". The demotion is therefore `operator` --
+# an owner's judgment, backed by lived experience with this family -- and NOT
+# `measured`. Do not let it be quoted as a measurement.
+#
+# TO MEASURE IT PROPERLY: register gemini3.1 under a second harness (ycode
+# reaches gemini directly) and re-run the same conductor task. Loops there too
+# -> the model, and this becomes `measured`. Converges -> it was agy's harness
+# all along, and agy's tool-use score takes the hit instead.
+#
+# ASKED AND ANSWERED 2026-08-02 — "would more thinking have saved it?" NO, and
+# there is no headroom to try. agy's `--effort (low|medium|high)` is not a second
+# axis: it is a SECOND SPELLING of the model id's suffix, and agy rejects
+# disagreement outright —
+#
+#   $ agy --model gemini-3.5-flash-low --effort high
+#   Error: invalid model selection: --model gemini-3.5-flash-low conflicts
+#          with --effort=high                                    (exit 1)
+#
+# This binding is `Gemini 3.1 Pro (High)`, and `agy models` offers only
+# gemini-3.1-pro-high and -low. So the demotion run was ALREADY at this model's
+# maximum reasoning effort. That strengthens the model-side reading of the
+# result; it does not touch the harness confound above, which still stands.
+#
+# COROLLARY FOR agy.yaml: do NOT add `--effort {effort}` to the launch template.
+# Every binding already carries its effort in the model id, so passing both
+# would make agy exit 1 on the conflict — turning a working fleet into a dead
+# one, loudly but everywhere at once.
+display: Gemini 3.1
+provider: gemini
+kind: subscription
+# The id agy actually accepts on --model, from `agy models`.
+model: gemini-3.1-pro-high
+quality: 0.80
+cost_micro: 5000
+spec:
+  deep-research: 0.10
+  web-search: 0.30
+  browser-use: 0.25

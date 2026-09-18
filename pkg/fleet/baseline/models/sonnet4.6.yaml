@@ -1,0 +1,15 @@
+name: sonnet4.6
+family: sonnet
+version: "4.6"
+band: 2
+band_source: declared
+# Banded by family position (sonnet = L2 on the claude ladder), not by any run
+# on this host.
+display: Claude Sonnet 4.6 (Thinking)
+provider: anthropic
+kind: subscription
+# agy-only on this host; verified accepted on the wire 2026-08-02.
+ids:
+  agy: claude-sonnet-4-6
+quality: 0.83
+cost_micro: 6000

@@ -1,0 +1,49 @@
+# herald — the tool half of an A2A peer binding.
+#
+# An external agent is not a new kind of entry. It is a MODEL carrying the
+# peer's URL (provider: a2a, base_url: …) plus this tool, so the pair reads as
+# an ordinary tool:model agent:
+#
+#     herald:acme-reviewer
+#
+# That is the whole "first-class participant" mechanism: because the binding is
+# ordinary, `capability.ResolveTool` resolves it, `Agent.MatrixKey()` files it
+# in the capability matrix, and `meet --participant` / weave / foreman address
+# it with no special case anywhere.
+#
+# The binary is bashy itself: `bashy herald send <peer> <prompt>` dials the
+# peer over A2A. `{model}` substitutes the PEER NAME here — the model half of
+# the binding is the peer, not an LLM.
+name: herald
+kind: cli
+display: Herald (A2A peer)
+cli:
+  binary: bashy
+  launch:
+    exec: bashy herald send {model} {prompt}
+    prompt_position: last
+    trust_preseed: none
+    # No steer_exec and no fork_exec: A2A has no caller->agent mid-turn
+    # steering (SubscribeToTask is read-only, INPUT_REQUIRED is the agent
+    # asking), and no session fork. Declaring either would advertise a
+    # capability the wire cannot carry.
+    supports_say: false
+    supports_graceful_quit: false
+    notes: >-
+      Dials an A2A peer. The peer is a fleet model with provider: a2a and a
+      base_url; add one with `bashy herald add <name> <url>`.
+      The exit status belongs to the GATE, not to the peer: a peer's
+      TASK_STATE_COMPLETED is a self-reported claim, so `herald send` exits 0
+      only when a gate passed, and 2 when the peer claimed completion and
+      nothing verified it. Pass --gate to say what would convince you.
+      Credentials come from the vault by reference (api_key_ref on the peer
+      model), never inline.
+    watchdog:
+      max_runtime: 45m
+      mem_limit: 2g
+quirks: >-
+  Remote peer, not a local harness. Capability is UNMEASURED and unmeasurable
+  from the card: an AgentCard's skills[] is self-asserted prose with no schema,
+  so a peer stays band 0 until a gate this host ran says otherwise. Operability
+  also differs in kind from a local tool — reachability is a property of the
+  network at this moment, not of an installed binary.

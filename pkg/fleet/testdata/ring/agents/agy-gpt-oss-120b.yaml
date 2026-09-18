@@ -1,0 +1,8 @@
+agents:
+  - name: agy-gpt-oss-120b
+    tool: agy
+    model: gpt-oss-120b
+    display: "agy · gpt-oss-120b"
+    ledger:
+      reliability: unmeasured
+      notes: declared band, no gated run on this host yet

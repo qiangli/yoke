@@ -1,0 +1,8 @@
+agents:
+  - name: opencode-kimi-k3
+    tool: opencode
+    model: kimi-k3
+    display: "opencode · kimi-k3"
+    ledger:
+      reliability: medium
+      notes: coder GREEN; non-converging orchestration (glm-profile). Route coder/review. Pre-seed opencode.json.

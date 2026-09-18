@@ -1,0 +1,14 @@
+agents:
+  - name: agy-gemini3.1
+    tool: agy
+    model: gemini3.1
+    display: "agy · gemini3.1"
+    ledger:
+      reliability: medium
+      # It was never signing in. It was never launching: the registry bound it to
+      # `--model gemini-3.1`, which agy rejects outright, so every run died in two
+      # seconds on a flag error. The old note here ("needs interactive sign-in
+      # first") was that failure seen from far enough away to look like a gate.
+      # Re-pegged and live-verified 2026-07-13: attends a meeting in a fresh repo,
+      # no sign-in, no browser.
+      notes: surgical; verified live (agents verify --live)

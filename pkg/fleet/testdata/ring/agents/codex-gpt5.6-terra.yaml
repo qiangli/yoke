@@ -1,0 +1,8 @@
+agents:
+  - name: codex-gpt5.6-terra
+    tool: codex
+    model: gpt5.6-terra
+    display: "codex · gpt5.6-terra"
+    ledger:
+      reliability: unmeasured
+      notes: L3 rung

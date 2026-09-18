@@ -1,0 +1,8 @@
+agents:
+  - name: ycode-kimi-k2.7-code
+    tool: ycode
+    model: kimi-k2.7-code
+    display: "ycode · kimi-k2.7-code"
+    ledger:
+      reliability: unmeasured
+      notes: L2 rung — first-party; opencode cannot reach this model

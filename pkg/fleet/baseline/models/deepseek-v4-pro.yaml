@@ -1,0 +1,36 @@
+name: deepseek-v4-pro
+family: deepseek
+version: "4"
+band: 3
+band_source: measured
+# L3 CONFIRMED across two harnesses, both as a conductor.
+#   opencode (2026-07): 1.2x repeat ratio, decomposed and delegated unprompted — the L3
+#     signal glm-5.2 lacks (glm is L2 precisely because it cannot converge).
+#   ycode (2026-07-16): converges the conductor gate GREEN (0->4 tool calls) once the
+#     reasoning-model turn-stall was fixed (ycode api: flush thinking + tool calls at stream
+#     boundaries). BEFORE the fix it made 0 tool calls and looked incapable — that was a
+#     HARNESS bug, not the model. The stall is the reason this line said "UNTESTED": the
+#     bake-off could not run it until the pairing bug was fixed.
+#
+#   CAVEAT — route it CONDUCTOR, not STEWARD. As a ycode steward on a review-and-decide task
+#   it drove tools (0->5) but timed out at 300s before emitting a DECISION line. It is a
+#   verbose reasoner: give it a generous budget, and prefer it where the task converges on a
+#   gate (conductor) over where it converges on a judgment call under a clock (steward).
+display: DeepSeek V4 Pro
+provider: openai-compat
+kind: api
+base_url: https://api.deepseek.com
+api_key_ref: deepseek
+# `deepseek/deepseek-v4` is REJECTED by the provider: "The supported API model
+# names are deepseek-v4-pro or deepseek-v4-flash, but you passed deepseek-v4."
+# The binding was dead — every agent bound to it failed on every run — and it
+# looked healthy to `agents verify`, which only checks that both halves of the
+# binding resolve in the catalog. `agents verify --live` is what found it.
+model: deepseek/deepseek-v4-pro
+quality: 0.82
+cost_micro: 1500
+# ycode detects the provider from the model name, so it takes the BARE id —
+# litellm's `provider/model` prefix is rejected. The id a model answers to is a
+# property of the TOOL, not of the model.
+ids:
+  ycode: deepseek-v4-pro

@@ -1,0 +1,26 @@
+name: kimi-code
+kind: cli
+display: Kimi Code
+cli:
+  binary: kimi
+  launch:
+    exec: kimi -m {model} -p {prompt} --auto
+    acp_exec: kimi acp
+    prompt_position: last
+    supports_say: true
+    supports_graceful_quit: true
+    notes: >-
+      Moonshot Kimi Code (github.com/MoonshotAI/kimi-code) — a Claude-Code-family
+      agentic CLI (interactive TUI is `kimi`). Note that `-m` takes a config.toml ALIAS,
+      not a provider/model string.
+    watchdog:
+      max_runtime: 45m
+      mem_limit: 12g
+    env_markers:
+      - KIMI_CODE
+quirks: Moonshot agentic CLI
+harness:
+  operability: 0.8
+  shell: 0.8
+  tool-use: 0.8
+  isolation: 0.7

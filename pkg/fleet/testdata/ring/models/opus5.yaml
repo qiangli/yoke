@@ -1,0 +1,32 @@
+name: opus5
+family: opus
+version: "5"
+band: 4
+band_source: operator
+# Re-pegged L3 -> L4 on 2026-08-02, by OWNER JUDGEMENT, so the fleet has more
+# than one L4 seat for steward and conductor work.
+#
+# The previous peg was `declared` and provisional — "inherited from the active
+# opus4.8 rung until Opus 5 is measured" — so nothing is being overturned here;
+# an unmeasured placeholder is being replaced by an owner's call backed by lived
+# experience of this model in those seats.
+#
+# `operator`, NOT `measured`, and the distinction is the whole discipline: no
+# gated run on this host has placed Opus 5 at L4. It must not be quoted as a
+# measurement. `bashy leaderboard --role conductor` is what would settle it, and
+# it has no rows for this binding yet.
+#
+# WHAT THIS RETIRES: the "clean one-model-per-band claude ladder" (haiku L1,
+# sonnet L2, opus L3, fable L4) recorded in opus4.8.yaml. The ladder was a
+# convenient fiction — bands describe capability, not a seating chart, and two
+# models can share a rung. Anthropic prices Opus 5 identically to Opus 4.8.
+display: Claude Opus 5
+provider: anthropic
+kind: subscription
+model: claude-opus-5
+quality: 0.92
+cost_micro: 15000
+spec:
+  code-review: 0.03
+  planning: 0.03
+  orchestration: 0.04

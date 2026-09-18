@@ -1,0 +1,48 @@
+name: glm-5.3
+family: glm
+version: "5.3"
+band: 3
+band_source: measured
+# L3 MEASURED 2026-08-19. GLM-5.3 fixed the convergence failure that kept 5.2
+# at L2: the deciding integration-lead exam finished in 121.648s under a 480s
+# cap, made 10 tool calls with 10 exact-distinct signatures (1.00x repeat
+# ratio), needed zero intervention, rejected a test-tampering lane, preserved
+# immutable inputs, and passed the external objective gate. Earlier bounded
+# coder/lead trials also converged at 1.00x exact-repeat ratio; fixture defects,
+# not model behavior, invalidated two of those lead wrapper results.
+#
+# Route as a coder or conductor. Do not infer L4/steward judgment from this
+# evidence: the measured ladder proves bounded decomposition, review, and
+# synthesis, not autonomous portfolio ownership over a long horizon.
+
+display: GLM-5.3 (z.ai)
+provider: openai-compat
+kind: api          # AUTH: an API key (same zai key as 5.2)
+billing: flat      # PAY: the same prepaid GLM Coding Plan seat. Free at the margin.
+base_url: https://api.z.ai/api/coding/paas/v4
+api_key_ref: zai
+# SAME endpoint and SAME key as 5.2 — verified live, not assumed. The coding-plan path
+# (/api/coding/paas/v4, NOT the general /api/paas/v4) still applies; a coding-plan key
+# on the general endpoint is rejected in a way that reads like "the model is broken".
+model: glm-5.3
+quality: 0.86
+cost_micro: 900
+ids:
+  ycode: glm-5.3
+
+# LIVE-VERIFIED 2026-08-19 on this host, against the coding-plan endpoint:
+#   GET  /models             -> glm-5.3 present (newest id; 4.5 … 5.2 still listed)
+#   POST /chat/completions   -> 200, model=glm-5.3, finish_reason=stop, content "OK"
+#
+# ONE MEASURED PROPERTY THAT 5.2's FILE DOES NOT HAVE, and it is a trap:
+# 5.3 SPENDS REASONING TOKENS. Asked to reply with the two characters "OK" it used 34
+# completion tokens, 29 of them reasoning.
+#
+#   max_tokens: 8   -> 200 OK, finish_reason present, content ""      <- EMPTY, not an error
+#   max_tokens: 256 -> 200 OK, finish_reason stop,    content "OK"
+#
+# A caller with a small max_tokens gets a SUCCESSFUL RESPONSE CARRYING NOTHING. That is
+# the house failure shape (docs/absence-of-evidence.md): a success state reached by the
+# absence of output. Any harness capping completion tokens tightly must budget for the
+# reasoning tokens FIRST, and must treat empty content on a 200 as a failure rather than
+# as an answer.

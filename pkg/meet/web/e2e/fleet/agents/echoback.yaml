@@ -1,0 +1,22 @@
+agents:
+  - name: echoback-fixed
+    tool: echoback
+    model: fixed
+    display: "echoback · fixed"
+    ledger:
+      reliability: high
+      notes: deterministic e2e fixture; never calls a model
+  - name: echoback-alt
+    tool: echoback
+    model: fixed
+    display: "echoback · alt"
+    ledger:
+      reliability: high
+      notes: second seat, so a test can invite one agent to a room that has another
+  - name: echoback-facilitator
+    tool: echoback
+    model: fixed
+    display: "echoback · facilitator"
+    ledger:
+      reliability: high
+      notes: dedicated facilitator seat for browser-created meeting tests

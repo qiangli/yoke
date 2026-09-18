@@ -1,0 +1,81 @@
+name: aider
+kind: cli
+display: Aider
+hidden: true
+
+# RETIRED FROM THE FLEET — 2026-07-14. There are deliberately NO aider agents.
+#
+# The tool stays. What is gone is its ROSTER: the named agent bindings
+# (aider-deepseek-v4-pro, aider-kimi-k2.7-code, …) that made aider something a
+# conductor could be handed. An explicit binding still resolves and still works —
+#
+#     bashy invoke --agent aider:deepseek-v4-pro --instruction "..."
+#
+# — because a `tool:model` pair does not need a named agent. So a human who wants
+# aider gets aider. What no longer happens is a router, a meeting, or a `weave`
+# staffing decision reaching for it on its own.
+#
+# WHY. Not quality. IT PASSED.
+#
+# In a three-harness A/B (ycode vs opencode vs aider — one model, one task, one
+# gate; bashy/docs/harness-ab-deepseek.md) aider wrote 32 lines of plausible,
+# WRONG code. Its own log says why:
+#
+#     "test file (not provided). But we must assume a known spec...
+#      Without seeing the test, we need to deduce."
+#
+# IT NEVER READ THE SPEC. aider only reasons about files explicitly added to the
+# chat. ycode and opencode have file-reading tools and went and read the test
+# themselves; aider was asked to implement a specification it had never been
+# shown, and it guessed.
+#
+# Given its files (--read wrap/wrap_test.go --file wrap/wrap.go) it passes in 68s,
+# cleanly. That is the point: aider is a good tool being asked to be something it
+# is not.
+#
+# THE MISMATCH IS ARCHITECTURAL, and it is with the JOB:
+#
+#     `bashy invoke` hands an agent a TASK, not a file list — because a conductor
+#     DOES NOT KNOW which files a task will touch. That is the whole premise of
+#     delegation. An agent that must be told its files up front cannot be
+#     delegated to. It can only be assisted.
+#
+# aider is a pair-programming tool. Keep it for pairing. Do not staff it.
+#
+# BEFORE RE-ADDING AN AGENT HERE: run the A/B again. If aider has grown file
+# discovery, this note is out of date and should be deleted WITH EVIDENCE — not
+# because the roster looked thin.
+
+cli:
+  binary: aider
+  launch:
+    exec: aider --yes-always --no-git --model {model} --message {prompt}
+    prompt_position: last
+    trust_preseed: none
+    steer_exec: aider --yes-always --no-git --model {model}
+    supports_say: true
+    supports_graceful_quit: true
+    notes: >-
+      aider takes its prompt as the value of --message, so the prompt must stay the final
+      argument. --yes-always makes it non-interactive; --no-git keeps a turn advisory
+      (no repo/commit writes).
+
+      NO FILE DISCOVERY — this is the retirement reason. aider reasons only about files
+      explicitly added to the chat (--file to edit, --read for context). It has a repo
+      map, not a read tool. A prompt that says "read the test and make it pass" gets an
+      agent that never opens the test and deduces a specification instead. A conductor
+      hands out a task, not a file list.
+    watchdog:
+      max_runtime: 45m
+      mem_limit: 12g
+
+quirks: pair-programming tool, not an agentic one — no file discovery; RETIRED from the fleet (see the note in this file); surgical one-shots; auto-commits
+
+harness:
+  operability: 0.8
+  shell: 0.85
+  # 0.7 -> 0.4, and this one is measured rather than guessed. For the only kind of
+  # work a fleet hands out — "here is a goal, go" — aider's tool use is not weak,
+  # it is ABSENT: it cannot find the files the goal refers to.
+  tool-use: 0.4
+  isolation: 0.7

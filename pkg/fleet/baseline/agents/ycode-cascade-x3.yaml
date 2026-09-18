@@ -1,0 +1,20 @@
+agents:
+  - name: ycode-cascade-x3
+    tool: ycode
+    model: glm-5.2
+    display: "cascade · glm-5.2 → terra (serves L3)"
+    # Serves L3 by escalation, rendered X3 — glm-5.2 does the work and calls in
+    # terra (L3) when stuck. A rung shorter than X4 (no sol): cheaper ceiling for
+    # L3-class work.
+    band: 3
+    band_source: cascade
+    base: ycode-glm-5.2
+    escalation:
+      - ycode-gpt5.6-terra   # L3 help — the only rung
+    ledger:
+      reliability: unmeasured
+      notes: |
+        X3 cascade. Base glm-5.2 (L2) runs the task; when the coach's LLM-free
+        reflex fails to break a loop, it escalates to terra (L3) for a
+        content-full steer. Cost-optimal L3: no sol rung, so the ceiling is
+        cheaper than X4. Companion to cascade-glm-x4.

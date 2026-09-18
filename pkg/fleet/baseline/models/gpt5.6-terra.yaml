@@ -1,0 +1,13 @@
+name: gpt5.6-terra
+family: gpt-terra
+version: "5.6"
+band: 3
+band_source: declared
+# OpenAI: balanced agentic coding model for everyday work
+display: GPT-5.6 Terra
+provider: openai
+kind: subscription
+model: gpt-5.6-terra
+quality: 0.90
+cost_micro: 9000
+# OpenAI: balanced agentic coding model for everyday work

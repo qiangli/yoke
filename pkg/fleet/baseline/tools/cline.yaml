@@ -1,0 +1,11 @@
+name: cline
+kind: cli
+display: Cline
+hidden: true
+cli:
+  binary: cline
+  launch:
+    env_markers:
+      - CLINE_ACTIVE
+    notes: Recognized for self-identification only; no headless launch template.
+quirks: detection only

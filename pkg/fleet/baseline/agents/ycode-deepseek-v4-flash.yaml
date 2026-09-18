@@ -1,0 +1,8 @@
+agents:
+  - name: ycode-deepseek-v4-flash
+    tool: ycode
+    model: deepseek-v4-flash
+    display: "ycode · deepseek-v4-flash"
+    ledger:
+      reliability: unmeasured
+      notes: L2 rung — first-party harness

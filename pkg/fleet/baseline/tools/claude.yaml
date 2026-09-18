@@ -1,0 +1,64 @@
+name: claude
+kind: cli
+display: Claude Code
+cli:
+  binary: claude
+  launch:
+    # -p is print mode, and it must be EXPLICIT. Without it claude infers
+    # headlessness from "stdout is not a terminal" — which holds on a pipe and
+    # is false the moment the agent is given a PTY (to clear its trust prompt,
+    # or to be steered mid-run). It then opens its REPL and waits forever, and
+    # the captured "answer" is a TUI banner. Every other tool in the fleet
+    # already says so out loud (codex `exec`, opencode `run`, aider --message,
+    # agy -p); claude was the only one relying on the guess.
+    # RUNG 2 via stdout. Measured on the wire 2026-07-31, not read off the help:
+    #
+    #   $ claude -p "say ok" --output-format stream-json --verbose
+    #   {"type":"system","subtype":"init",...}
+    #   {"type":"assistant","message":{...}}
+    #   {"type":"result","subtype":"success","stop_reason":"end_turn","is_error":false,...}
+    #
+    # --verbose is REQUIRED alongside stream-json in print mode; without it the
+    # stream is refused. The terminal event is `result`, not `turn.end`.
+    events_stdout: --output-format stream-json --verbose
+    # The verdict the exit code does not carry. `is_error` was false on the
+    # measured success; its FAILING spelling has not been observed, so only the
+    # success value is declared and anything else reads as unverified.
+    events_outcome:
+      path: is_error
+      ok: ["false"]
+    events_done:
+      field: type
+      values: [result]
+    exec: claude --dangerously-skip-permissions --model {model} -p {prompt}
+    steer_exec: claude --dangerously-skip-permissions --model {model}
+    # Context-inheriting fork (`delegate self`): --fork-session branches a NEW session
+    # from the current one, inheriting the full transcript; -p runs it headless and it
+    # exits (safe to background — the parent session keeps running). No {model}: a fork
+    # inherits the session's model. Requires the session id (CLAUDE_CODE_SESSION_ID).
+    # {model} is optional: with none, the fork inherits the session's model (the
+    # `--model {model}` pair drops out); `delegate self --model opus` transplants the
+    # inherited context onto a different model (best-effort — claude may honor or
+    # reject a model change on a resumed session).
+    fork_exec: claude --resume {session} --fork-session --dangerously-skip-permissions --model {model} -p {prompt}
+    session_env:
+      - CLAUDE_CODE_SESSION_ID
+      - CLAUDE_SESSION_ID
+    prompt_position: last
+    trust_preseed: .claude.json
+    trust_clear: "say:1"
+    supports_say: true
+    supports_graceful_quit: true
+    notes: TUI is steerable; a per-directory trust prompt needs a `say` of "1" (or a pre-seeded .claude.json).
+    watchdog:
+      max_runtime: 45m
+      mem_limit: 12g
+    env_markers:
+      - CLAUDECODE
+      - CLAUDE_CODE_ENTRYPOINT
+quirks: strongest deep / multi-file work; watch for API-timeout stalls on the hardest issue
+harness:
+  operability: 0.95
+  shell: 0.95
+  tool-use: 0.9
+  isolation: 0.8

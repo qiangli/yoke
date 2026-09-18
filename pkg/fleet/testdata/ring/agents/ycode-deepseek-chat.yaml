@@ -1,0 +1,8 @@
+agents:
+  - name: ycode-deepseek-chat
+    tool: ycode
+    model: deepseek-chat
+    display: "ycode · deepseek-chat"
+    ledger:
+      reliability: unmeasured
+      notes: L1 rung — first-party harness

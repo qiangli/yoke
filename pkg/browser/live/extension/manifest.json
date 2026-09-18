@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "ycode-live",
+  "version": "0.7.2",
+  "description": "ycode live mode — drives this Chrome from a local ycode session via WebSocket.",
+  "minimum_chrome_version": "114",
+  "permissions": [
+    "tabs",
+    "scripting",
+    "activeTab",
+    "storage",
+    "alarms",
+    "clipboardRead",
+    "clipboardWrite",
+    "cookies",
+    "debugger"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "ycode live"
+  }
+}

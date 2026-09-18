@@ -1,0 +1,12 @@
+name: gpt5.4-mini
+family: gpt-mini
+version: "5.4"
+band: 1
+band_source: declared
+display: GPT-5.4 Mini
+provider: openai
+kind: subscription
+model: gpt-5.4-mini
+quality: 0.72
+cost_micro: 800
+# OpenAI: small, fast, cost-efficient — simpler coding tasks

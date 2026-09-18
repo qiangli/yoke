@@ -1,0 +1,13 @@
+name: gemini
+kind: cli
+display: Gemini CLI
+hidden: true
+cli:
+  binary: gemini
+  launch:
+    env_markers:
+      - GEMINI_CLI
+    notes: >-
+      Recognized so a running gemini session identifies itself, but not driven by the
+      fleet: gemini was removed from the roster (2026-06-18). No launch template.
+quirks: not in the fleet roster; detection only

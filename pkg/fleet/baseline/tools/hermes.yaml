@@ -1,0 +1,15 @@
+name: hermes
+kind: cli
+display: Hermes
+cli:
+  binary: hermes
+  launch:
+    exec: hermes -z {prompt}
+    notes: >-
+      Documented contract: "single prompt in, final response text out, nothing else on stdout or stderr"
+      — the cleanest scripting contract in the fleet. hermes has native ACP (`hermes acp`),
+      `hermes mcp serve`, and is the ONLY fleet harness implementing MCP sampling (default-on).
+      This template is declared-not-measured (unverified locally).
+    env_markers:
+      - HERMES_AGENT
+quirks: registered; launch template declared-not-measured

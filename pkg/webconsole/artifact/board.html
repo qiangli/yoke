@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en" data-bashy-console="1">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<base href="/">
+<title>Sprint — bashy</title>
+<link rel="stylesheet" href="app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'><rect width='40' height='40' rx='10' fill='%232563eb'/><rect x='9' y='10' width='6' height='20' rx='2' fill='%23ffffff'/><rect x='17' y='10' width='6' height='13' rx='2' fill='%235eead4'/><rect x='25' y='10' width='6' height='17' rx='2' fill='%23ffffff'/></svg>">
+</head>
+<body class="standalone">
+<header id="bar">
+  <a id="brand" href="sprint/" title="bashy sprint">
+    <svg class="logo" viewBox="0 0 40 40" aria-hidden="true">
+      <rect width="40" height="40" rx="10" fill="var(--logo-bg)"/>
+      <rect x="9" y="10" width="6" height="20" rx="2" fill="var(--logo-fg)"/>
+      <rect x="17" y="10" width="6" height="13" rx="2" fill="var(--logo-accent)"/>
+      <rect x="25" y="10" width="6" height="17" rx="2" fill="var(--logo-fg)"/>
+    </svg>
+    <span id="wordmark">bashy<b>sprint</b></span>
+  </a>
+  <span class="spacer"></span>
+  <span id="bd-verdict"></span>
+  <span id="bd-age" title="the board is collected on a timer, not per request"></span>
+</header>
+
+<main id="bd-page">
+  <section id="bd-warnings" hidden></section>
+
+  <section id="bd-summary"></section>
+
+  <section id="bd-controls">
+    <label class="chk"><input id="f-all" type="checkbox"> include history</label>
+    <span id="bd-scope"></span>
+    <span class="spacer"></span>
+    <button id="f-refresh" class="btn" type="button">Refresh</button>
+  </section>
+
+  <section id="bd-sprints"></section>
+
+  <h2 class="bd-h">Runbooks</h2>
+  <section id="bd-runbooks"></section>
+
+  <h2 class="bd-h">Runs</h2>
+  <section id="bd-lanes"></section>
+
+  <section id="bd-panels"></section>
+
+  <footer id="bd-foot"></footer>
+</main>
+
+<script src="board.js"></script>
+</body>
+</html>

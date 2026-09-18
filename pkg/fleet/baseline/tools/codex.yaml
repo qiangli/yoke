@@ -1,0 +1,56 @@
+name: codex
+kind: cli
+display: Codex
+cli:
+  binary: codex
+  launch:
+    session_env:
+      - CODEX_SESSION_ID
+      - CODEX_THREAD_ID
+    # RUNG 2 via stdout. Measured on the wire 2026-07-31:
+    #
+    #   $ codex exec --json "say ok"
+    #   {"type":"thread.started","thread_id":"..."}
+    #   {"type":"turn.started"}
+    #   {"type":"item.completed","item":{...}}
+    #   {"type":"turn.completed","usage":{...}}
+    #
+    # Two launcher notes measured at the same time: codex REFUSES outside a git
+    # repo without --skip-git-repo-check, and reads stdin unless it is closed.
+    events_stdout: --json
+    # NO events_outcome, deliberately. turn.completed carries usage and nothing
+    # that reads as a verdict, and no failing terminal event has been observed —
+    # so there is nothing to declare. A tool with no path yields `unverified`,
+    # which is the honest answer and still sends the caller to the gate.
+    events_done:
+      field: type
+      values: [turn.completed]
+    exec: codex exec --skip-git-repo-check --sandbox workspace-write --model {model} {prompt}
+    steer_exec: codex --model {model}
+    prompt_position: last
+    trust_preseed: none
+
+    # supports_say: MEASURED, not asserted. Proven with agentpty.Run + BrokerSay —
+    # the production path `meet say` uses — in pkg/agentpty/steer_live_test.go.
+    # It was `false` here for months because nobody ever tried, and because the
+    # control channel sent `text + \r` in ONE write, which a TUI in bracketed-paste
+    # mode reads as a PASTE: the steer landed in the input box and was never
+    # submitted. Two writes (text, pause, Enter) and it submits.
+    supports_say: true
+    supports_graceful_quit: true
+    notes: >-
+      headless `exec`; the sandbox flag is `-s/--sandbox workspace-write` (codex 0.141.0 —
+      NOT `--workspace`, which errors 'unexpected argument' and exits 2). --full-auto is
+      deprecated. Not steerable.
+    watchdog:
+      max_runtime: 45m
+      mem_limit: 12g
+    env_markers:
+      - CODEX_SANDBOX
+      - CODEX_THREAD_ID
+quirks: reliable + honest no-ops; clean headless exec; can be plausibly-wrong — gate it
+harness:
+  operability: 0.7
+  shell: 0.65
+  tool-use: 0.85
+  isolation: 0.8

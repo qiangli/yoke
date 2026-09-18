@@ -1,0 +1,119 @@
+name: ycode
+kind: cli
+display: ycode
+cli:
+  binary: ycode
+  launch:
+    # ycode calls the selected model's provider API directly. The launcher uses
+    # this declaration to restore exactly that provider's key after the agent
+    # credential firewall has scrubbed the operator environment.
+    credential: model-provider
+    # --print is an EXPLICIT headless flag, which is the whole point: ycode does
+    # not infer print mode from "stdout is not a terminal", so a PTY (which it
+    # needs in order to be steerable) cannot flip it into a REPL. claude had to
+    # learn this the hard way; ycode already gets it right.
+    # --danger-skip-permissions is ycode's approval-gate kill-switch, and it was
+    # MISSING. Every other harness in the fleet is handed one (claude and agy take
+    # --dangerously-skip-permissions, aider --yes-always, opencode is preseeded via
+    # opencode.json); ycode was launched with no write authority at all.
+    #
+    # The failure was silent and it flattered the model. In a three-harness bake-off
+    # ycode reasoned out a correct implementation, could not write it, printed it
+    # into its reply, and EXITED 0. A gate that only checked the exit code would
+    # have recorded a pass. What it actually said:
+    #
+    #   "I have the implementation ready, but I don't have workspace-write
+    #    permissions in this environment to write the file."
+    #
+    # The launch guard still refuses this on an uncontained host, and ReadOnly still
+    # strips it (see agentlaunch.UnsafeLaunchFlags) — so `judge` and `meet` remain
+    # unable to touch what they review. It is granted the same way, and gated the
+    # same way, as everyone else's.
+    # The flag goes BEFORE the subcommand (it is a persistent flag, and cobra takes
+    # it either way) so this template and the seeded fallback profile render the
+    # SAME argv. They are two sources of truth for one launch, and a test compares
+    # them precisely so they cannot drift — which it duly caught when I put the
+    # flag after `prompt` here and prepended it there.
+    exec: ycode --danger-skip-permissions prompt --model {model} --print {prompt}
+    # ycode uses a version subcommand rather than the conventional --version.
+    # Fleet consumes this as declared metadata; no provider name is hardcoded
+    # in the generic probe path.
+    version_probe_exec: ycode version
+    workspace_arg: --session-dir {workspace}/.git/ycode-sessions
+    workspace_preflight_exec: ycode shell -c pwd
+    # Context-inheriting fork (`delegate self`). ycode's `--fork <id>` branches a NEW
+    # session from an existing one — it loads the source session's messages into a
+    # fresh id (source untouched), so the spawn inherits the full transcript — then
+    # --print runs the directive headless and exits (safe to background). This is the
+    # first-party fork paying off. Requires the session id (YCODE_SESSION_ID, exported
+    # by a running ycode). {model} is optional (drops out to inherit).
+    fork_exec: ycode --danger-skip-permissions --fork {session} prompt --model {model} --print {prompt}
+    session_env:
+      - YCODE_SESSION_ID
+    prompt_position: last
+    trust_preseed: none
+    # Bare `ycode` is the interactive bubbletea TUI — the same shape as codex and
+    # opencode, and it reads stdin the same way, so agentpty's control socket
+    # reaches it through the pty master with NO ycode change at all.
+    # --danger-skip-permissions is here for the SAME reason it is on `exec` and
+    # `fork_exec`, and it was MISSING here alone: a steerable session that drives
+    # real work (a coach's conductor, a foreman worker) needs write authority, or
+    # it reasons out the answer, cannot write it, and sits at its prompt — the very
+    # "flatters the model" failure documented on `exec` above. Review-only steerable
+    # sessions (meet, judge) pass ReadOnly, which strips it (agentlaunch.
+    # UnsafeLaunchFlags), so this is safe: write by default, stripped when only
+    # talking.
+    steer_exec: ycode --danger-skip-permissions --model {model}
+    # THE FIRST-PARTY DIVIDEND. ycode reports when a turn ends; every other tool
+    # in this fleet leaves bashy to infer it from 25 seconds of silence — which is
+    # wrong for an agent that pauses to think, wrong for one that renders a
+    # spinner, and costs 25s on every single turn.
+    #
+    # It also emits tool.call as STRUCTURED DATA, which is what the fleet-evidence
+    # rule has been asking for from the beginning: a tool call as a fact, not a
+    # line scraped back out of a terminal and guessed at.
+    events_arg: --events {path}
+    # RUNG 1. `ycode acp` speaks the Agent Client Protocol on stdio, so an
+    # external orchestrator can drive this host over a standard rather than over
+    # ycode's private --events convention. Measured on the wire 2026-07-28
+    # against the merged binary, not asserted from a commit message:
+    #
+    #   $ printf '{"jsonrpc":"2.0","id":1,"method":"initialize",...}' | ycode acp
+    #   {"jsonrpc":"2.0","id":1,"result":{"agentCapabilities":{...},
+    #    "protocolVersion":1}}
+    #
+    # events_arg STAYS. A bound model refuses the ACP rung (the protocol carries
+    # no model selection), so `ycode-deepseek-v4-pro` and friends keep taking
+    # rung 2 and lose nothing. Only the bare tool-level `ycode` binding reaches
+    # rung 1 — which is what makes this the fleet's first one.
+    acp_exec: ycode acp
+    supports_say: true
+    supports_graceful_quit: true
+    notes: >-
+      FIRST-PARTY harness. It reaches every API-key provider (deepseek, moonshot,
+      openai, anthropic, gemini, xai, dashscope) and maps each to its own env key,
+      so an api-kind model needs no third-party CLI at all.
+
+      Its startup chatter (LSP, memory consolidation, browser backend, OTel) goes
+      to STDERR; the answer is on stdout, which is why the pipe path keeps them
+      apart and a turn stays clean.
+
+      It STEERS, and it always did. This entry said `supports_say: false` with a
+      comment asserting the bus had to be exposed as a control socket first —
+      written without ever launching `ycode` interactively and typing at it. It is
+      a bubbletea TUI reading stdin; the pty control channel reaches it exactly as
+      it reaches codex and opencode. Measured in pkg/agentpty/steer_live_test.go
+      (STEER_TOOL=ycode): STEERED_OK, echoed AND answered.
+
+      That was the sixth registry claim in one day that described a tool nobody had
+      tried. The bus is still worth exposing — for a real TURN BOUNDARY and for
+      evidence by construction — but not for this.
+    watchdog:
+      max_runtime: 45m
+      mem_limit: 12g
+quirks: first-party; reaches every api-key provider incl. moonshot (which opencode cannot)
+harness:
+  operability: 0.9
+  shell: 0.95
+  tool-use: 0.9
+  isolation: 0.85

@@ -1,0 +1,6 @@
+[submodule "external/ollama/src"]
+	path = external/ollama/src
+	url = https://github.com/qiangli/ollama.git
+[submodule "external/podman/src"]
+	path = external/podman/src
+	url = https://github.com/qiangli/podman.git

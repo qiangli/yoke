@@ -1,0 +1,32 @@
+name: fable5
+family: fable
+version: "5"
+band: 4
+band_source: operator
+# frontier
+display: Claude Fable 5
+provider: anthropic
+kind: subscription
+model: claude-fable-5
+quality: 0.94
+# 12000 -> 30000 on 2026-08-02. The old value was wrong under this field's own
+# definition: CostMicro is "the relative PER-TURN cost", and a per-turn cost has
+# to include how many tokens the turn burns. Fable 5 runs roughly DOUBLE opus's
+# token count for the same work (operator observation), so at opus's 15000 its
+# per-turn cost is ~30000 — not the 12000 that made it look like the cheapest
+# frontier model in the fleet.
+#
+# This is why the entry mattered: routing prefers the cheaper model at equal
+# capability, so an understated cost silently made fable the default for L4
+# steward and conductor work while costing ~1.6x the alternative. Opus 4.8 and
+# Opus 5 were re-pegged to L4 in the same change so that work has somewhere
+# cheaper to go; fable stays L4 and is now reached for deliberately.
+#
+# Still a PRIOR, not a measurement. `bashy leaderboard` computes a relative cost
+# index from real per-run cost on ledger records, and there are none yet — when
+# there are, they replace this number rather than argue with it.
+cost_micro: 30000
+spec:
+  code-review: 0.03
+  deep-research: 0.05
+  orchestration: 0.04

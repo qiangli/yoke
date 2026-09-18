@@ -1,0 +1,8 @@
+name: fixed
+band: 1
+band_source: declared
+display: Fixed (e2e fixture)
+provider: local
+kind: local
+quality: 0.1
+cost_micro: 0

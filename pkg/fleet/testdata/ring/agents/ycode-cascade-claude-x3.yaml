@@ -1,0 +1,16 @@
+agents:
+  - name: ycode-cascade-claude-x3
+    tool: ycode
+    model: glm-5.2
+    display: "cascade · glm-5.2 → opus4.8 (serves L3)"
+    band: 3
+    band_source: cascade
+    base: ycode-glm-5.2
+    escalation:
+      - ycode-opus4.8   # L3 help
+    ledger:
+      reliability: unmeasured
+      notes: |
+        X3 cascade, Anthropic ladder. Base glm-5.2 (L2, the same cheap universal
+        base as the OpenAI cascade) does the work; escalates to opus4.8 (L3) when
+        the coach's reflex fails to break a loop. Analog of ycode-cascade-x3.

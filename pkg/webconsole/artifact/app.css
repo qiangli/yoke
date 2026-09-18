@@ -1,0 +1,962 @@
+/* bashy apps — the launcher.
+ *
+ * Plain CSS, no framework and no build step: the launcher ships inside a single
+ * Go binary, so `go build` alone has to produce a working page. That constraint
+ * is the reason for the hand-written values below.
+ *
+ * bashy ships on its own schedule and this design is bashy's to change. Nothing
+ * here tracks another product: there is no shared stylesheet, no shared token
+ * set, and no parity to maintain.
+ */
+
+:root {
+  --background: #f2f2f5;
+  --foreground: #18181b;
+  --card: #ffffff;
+  --muted: #f4f4f5;
+  --muted-foreground: #71717a;
+  --border: #e4e4e7;
+  --primary: #2563eb;
+  --ok: #16a34a;
+  --warn: #b45309;
+  --off: #a1a1aa;
+  --color-card: var(--card);
+  --color-background: var(--background);
+  --sheet: #ffffff;
+}
+:root[data-theme="dark"], :root:not([data-theme="light"]) {
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --background: #09090b;
+    --foreground: #fafafa;
+    --card: #18181b;
+    --muted: #27272a;
+    --muted-foreground: #a1a1aa;
+    --border: #27272a;
+    --primary: #60a5fa;
+    --ok: #4ade80;
+    --warn: #fbbf24;
+    --off: #52525b;
+    --sheet: #18181b;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --background: #09090b;
+  --foreground: #fafafa;
+  --card: #18181b;
+  --muted: #27272a;
+  --muted-foreground: #a1a1aa;
+  --border: #27272a;
+  --primary: #60a5fa;
+  --ok: #4ade80;
+  --warn: #fbbf24;
+  --off: #52525b;
+  --sheet: #18181b;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+/* The fixed full-viewport background sits behind everything (backgrounds.css
+ * paints it); the app scrolls above it. */
+#app { position: relative; z-index: 1; display: flex; flex-direction: column; min-height: 100%; }
+
+/* ---- layout: atmospheric background, glassy header, glass card ----
+ *
+ * The card and the header only turn glassy when a background preset is active;
+ * with "none" they stay flat on the plain background, because a translucent
+ * panel over a solid colour is just a muddier solid colour.
+ */
+#app { position: relative; z-index: 10; display: flex; flex-direction: column; min-height: 100svh; }
+
+#bar {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; justify-content: space-between; gap: .5rem;
+  padding: .75rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--background);
+}
+body.has-bg #bar {
+  background: color-mix(in srgb, var(--card) 70%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--border) 40%, transparent);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+}
+
+#view {
+  width: 100%; max-width: 1080px; margin: 1.75rem auto;
+  padding: 1.75rem 1.5rem; border-radius: 18px;
+}
+body.has-bg #view {
+  background: color-mix(in srgb, var(--card) 70%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  box-shadow: 0 12px 36px rgba(20, 30, 60, .18);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+}
+.pad { width: 100%; }
+.spacer { flex: 1; }
+
+/* header bits */
+#nav { display: flex; align-items: center; gap: .25rem; }
+#who { color: var(--muted-foreground); font-size: .78rem; margin-right: .35rem; }
+#search-wrap { display: flex; justify-content: center; margin: 0 auto 1.5rem; max-width: 28rem; }
+#search {
+  width: 100%; padding: .5rem .9rem .5rem 2.2rem; border-radius: 9999px;
+  border: 1px solid var(--border); background: var(--background);
+  color: var(--foreground); font: inherit; font-size: .875rem;
+  background-image: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2' stroke-linecap='round'><circle cx='11' cy='11' r='7'/><path d='m20 20-3.5-3.5'/></svg>");
+  background-repeat: no-repeat; background-position: .7rem center; background-size: 1rem;
+}
+#search:focus { outline: none; box-shadow: 0 0 0 2px var(--primary); }
+.iconbtn {
+  width: 36px; height: 36px; border: 0; background: transparent; color: var(--foreground);
+  border-radius: .375rem; cursor: pointer; font-size: 1.1rem; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  text-decoration: none; /* .iconbtn is also used on an <a> (the "all apps" button) */
+}
+.iconbtn:hover { background: var(--card); color: var(--primary); }
+.iconbtn svg { width: 18px; height: 18px; }
+
+/* An SVG mark sits optically smaller than a glyph at the same box size. */
+.icon-svg svg { width: 30px; height: 30px; }
+.star svg { width: 12px; height: 12px; }
+
+/* ---- sections ----
+ * Periscope's section chrome: a small uppercase muted header, tight to its
+ * grid. These were lost in an earlier refactor of the layout block, which is
+ * why Overview rendered as a bare <h2> over an unstyled list.
+ */
+section.sect { margin: 1.5rem 0; }
+section.sect:first-child { margin-top: 0; }
+.sect-head { display: flex; align-items: center; gap: .625rem; margin-bottom: .625rem; }
+.sect-head h2 {
+  margin: 0; font-size: .78rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .08em; color: var(--muted-foreground);
+}
+
+/* Overview: one card, figures reading left to right. */
+.summary {
+  display: flex; flex-wrap: wrap; gap: 1.75rem;
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  background: color-mix(in srgb, var(--card) 55%, transparent);
+  border-radius: .75rem; padding: .85rem 1.1rem;
+}
+.summary div { display: flex; flex-direction: column; gap: .1rem; }
+.summary b { font-size: 1.35rem; font-weight: 600; line-height: 1.1; letter-spacing: -.02em; }
+.summary span { font-size: .68rem; color: var(--muted-foreground);
+  text-transform: uppercase; letter-spacing: .07em; font-weight: 600; }
+
+/* ---- tiles ---- */
+.grid { display: grid; row-gap: .85rem; column-gap: .55rem;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
+.tile-wrap { position: relative; }
+.tile {
+  display: flex; flex-direction: column; align-items: center; gap: .375rem;
+  padding: .375rem .25rem; border-radius: 1rem;
+  text-decoration: none; color: var(--foreground);
+  background: none; border: 0; cursor: pointer; font: inherit; width: 100%;
+}
+.tile:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.icon {
+  position: relative; width: 60px; height: 60px; border-radius: 14px;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-weight: 700; font-size: 28px; line-height: 1;
+  box-shadow: 0 6px 14px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.18), inset 0 -10px 18px rgba(0,0,0,.18);
+  transition: transform .15s, box-shadow .15s;
+}
+.tile:hover .icon {
+  transform: translateY(-2px) scale(1.05);
+  box-shadow: 0 12px 24px rgba(0,0,0,.22), inset 0 1px 0 rgba(255,255,255,.22), inset 0 -10px 18px rgba(0,0,0,.16);
+}
+.tile:active .icon { transform: translateY(0) scale(.98); }
+.tile[disabled] { cursor: default; opacity: .5; }
+.tile[disabled]:hover .icon { transform: none; }
+.badge {
+  position: absolute; right: -1px; bottom: -1px;
+  width: 12px; height: 12px; border-radius: 50%;
+  border: 2px solid var(--card); background: var(--off);
+}
+/* A ready app is the normal case and needs no decoration; only the states that
+   want attention get a dot. */
+.badge.ready { display: none; }
+.badge.stopped { background: var(--warn); }
+
+/* The Inbox tile's unread count. Its OWN corner, opposite the status dot:
+   "is this app running" and "is something waiting for me" are unrelated
+   questions, and one badge answering both would make each unreadable.
+
+   It counts the VIEWER's own unread and nothing else — see applyInboxCount in
+   app.js. The panel is a peek at every other name's mail, so a fleet total here
+   would be a number the reader can never clear. */
+.count {
+  position: absolute; top: -5px; right: -5px;
+  min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 9999px; border: 2px solid var(--card);
+  background: var(--primary); color: #fff;
+  font-size: .66rem; font-weight: 700; line-height: 1;
+  font-variant-numeric: tabular-nums; letter-spacing: 0;
+}
+.label { font-size: .82rem; font-weight: 500; letter-spacing: -.025em; text-align: center;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 .25rem; }
+.sublabel { font-size: .7rem; color: var(--muted-foreground); text-align: center; margin-top: -.2rem; }
+.star {
+  position: absolute; top: -2px; right: calc(50% - 38px);
+  width: 22px; height: 22px; border-radius: 50%;
+  border: 1px solid var(--border); background: var(--card); color: #b85;
+  display: inline-flex; align-items: center; justify-content: center;
+  opacity: 0; transition: opacity .12s; cursor: pointer; font-size: .7rem; padding: 0;
+}
+.tile-wrap:hover .star, .star.on { opacity: 1; }
+}
+.empty { color: var(--muted-foreground); font-size: .85rem; }
+
+/* ---- panels ---- */
+iframe { flex: 1; border: 0; width: 100%; background: var(--card); }
+#term { flex: 1; min-height: 0; background: #1b1b1f; padding: .5rem .25rem .25rem .6rem; }
+.term-msg { padding: .9rem 1.2rem; color: var(--muted-foreground); font-size: .85rem;
+  flex: none; border-top: 1px solid var(--border); display: flex; gap: .75rem; align-items: center;
+  background: var(--card); }
+
+/* ---- settings sheet ---- */
+dialog#settings { border: 0; border-radius: 1rem; padding: 0; max-width: 32rem; width: calc(100% - 2rem);
+  background: var(--sheet); color: var(--foreground); box-shadow: 0 24px 60px rgba(0,0,0,.35); }
+dialog#settings::backdrop { background: rgba(0,0,0,.45); backdrop-filter: blur(2px); }
+.sheet { padding: 1.25rem 1.4rem 1rem; }
+.sheet-head h2 { margin: 0 0 .15rem; font-size: 1rem; }
+.sheet-head p { margin: 0 0 .35rem; color: var(--muted-foreground); font-size: .82rem; }
+.sheet section { margin-top: 1.1rem; }
+.sheet h3 { margin: 0 0 .5rem; font-size: .75rem; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--muted-foreground); font-weight: 600; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: .55rem; overflow: hidden; }
+.seg button { border: 0; background: transparent; color: var(--foreground); font: inherit;
+  font-size: .82rem; padding: .3rem .8rem; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--primary); color: #fff; }
+.swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(78px, 1fr)); gap: .5rem; }
+.swatch-btn { border: 0; background: none; padding: 0; cursor: pointer; font: inherit; }
+.swatch-btn .bg-swatch { height: 46px; border-radius: .5rem; border: 2px solid var(--border); }
+.swatch-btn[aria-pressed="true"] .bg-swatch { border-color: var(--primary); }
+.swatch-btn span { display: block; font-size: .72rem; color: var(--muted-foreground); margin-top: .2rem; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  padding: .35rem 0; font-size: .86rem; }
+.row input[type="number"] { width: 4.5rem; padding: .25rem .45rem; font: inherit; font-size: .82rem;
+  border: 1px solid var(--border); border-radius: .4rem; background: var(--background); color: var(--foreground); }
+.switch { position: relative; width: 34px; height: 20px; flex: none; }
+.switch input { opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+.switch i { position: absolute; inset: 0; border-radius: 9999px; background: var(--border); transition: background .15s; pointer-events: none; }
+.switch i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+  border-radius: 50%; background: #fff; transition: transform .15s; }
+.switch input:checked + i { background: var(--primary); }
+.switch input:checked + i::after { transform: translateX(14px); }
+.hint { color: var(--muted-foreground); font-size: .8rem; margin: 0 0 .5rem; }
+.btn { font: inherit; font-size: .82rem; padding: .3rem .75rem; border-radius: .45rem;
+  border: 1px solid var(--border); background: var(--card); color: var(--foreground); cursor: pointer; }
+.btn.primary { background: var(--primary); color: #fff; border-color: transparent; }
+.sheet-foot { display: flex; justify-content: flex-end; margin-top: 1.25rem; }
+
+/* ---- phone access / QR pairing ---- */
+#pair-panel { margin-top: .6rem; }
+.pair-codes { display: flex; flex-wrap: wrap; gap: 1rem; justify-content: center; }
+.pair-code { text-align: center; }
+.pair-qr { width: 168px; height: 168px; image-rendering: pixelated;
+  background: #fff; border: 1px solid var(--border); border-radius: .5rem; padding: .4rem; }
+.pair-code-label { margin-top: .35rem; font-size: .78rem; font-weight: 600; }
+.pair-code-host { font-size: .74rem; color: var(--muted-foreground); word-break: break-all; }
+.pair-warn { margin: .6rem 0 0; font-size: .76rem; color: var(--muted-foreground);
+  border-left: 3px solid var(--primary); padding-left: .5rem; }
+.pair-restart { display: block; margin-top: .25rem; padding: .4rem .55rem; font-size: .78rem;
+  background: var(--card); border: 1px solid var(--border); border-radius: .4rem; word-break: break-all; }
+.pair-closed-title { margin: 0 0 .3rem; font-weight: 600; font-size: .84rem; }
+.pair-instructions { margin-top: .8rem; border-top: 1px solid var(--border); padding-top: .55rem; }
+.pair-instructions summary { cursor: pointer; font-size: .78rem; font-weight: 600; color: var(--foreground); }
+.pair-instructions-body { margin-top: .65rem; display: grid; gap: .55rem; }
+.pair-os-title { margin: 0 0 .2rem; font-size: .76rem; font-weight: 600; }
+.pair-os ol { margin: 0; padding-left: 1.1rem; font-size: .78rem; color: var(--muted-foreground);
+  display: grid; gap: .12rem; }
+.pair-os-switch { justify-self: start; border: 0; padding: 0; background: none; color: var(--primary);
+  font: inherit; font-size: .76rem; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+
+/* ---- logo palette (the mark inverts so it reads on either theme) ---- */
+/* ONE mark, every app, every theme.
+ *
+ * It used to invert — a dark tile on light, a light tile on dark — so the
+ * product's mark was two different objects depending on a setting, and the
+ * dark tile sat as a black block in a light header.
+ *
+ * These values are computed, not picked. A single tile has three constraints at
+ * once: it must read against the light page (#f2f2f5), against the dark page
+ * (#09090b), and carry a glyph. WCAG contrast for the candidates:
+ *
+ *     tile      vs light pg   vs dark pg   vs white glyph   worst case
+ *     #2563eb      4.63          3.85           5.17           3.85   <- chosen
+ *     #3478f6      3.64          4.89           4.07           3.64
+ *     #1d4ed8      6.00          2.97           6.70           2.97
+ *     #7dd3fc      1.49         11.93           1.67           1.49
+ *
+ * #2563eb has the best WORST CASE, and every one of its three clears the 3:1
+ * WCAG non-text threshold. A pale blue is the intuitive choice and the wrong
+ * one: #7dd3fc scores 1.49 against the light page, so the tile would all but
+ * vanish there. The accent #5eead4 is 3.49 against the tile and a different
+ * hue from the glyph, so it reads as a mark rather than a smudge.
+ */
+:root,
+:root[data-theme="dark"],
+:root[data-theme="light"] {
+  --logo-bg: #2563eb;
+  --logo-fg: #ffffff;
+  --logo-accent: #5eead4;
+}
+#brand:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+/* ---- footer (periscope: centered, muted, bordered only without a bg) ---- */
+#foot { margin-top: auto; display: flex; flex-direction: column; align-items: center; gap: .25rem;
+  padding: 1.25rem; text-align: center; font-size: .75rem; color: var(--muted-foreground); }
+body:not(.has-bg) #foot { border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+#foot code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .72rem;
+  background: color-mix(in srgb, var(--foreground) 10%, transparent);
+  padding: .08rem .35rem; border-radius: .3rem; color: var(--foreground); }
+
+/* ---- brand (periscope: 32px mark, 20px extrabold wordmark, muted suffix) ---- */
+#brand { display: inline-flex; align-items: center; gap: .75rem; text-decoration: none;
+  color: var(--foreground); flex: none; }
+.logo { width: 32px; height: 32px; display: block; flex: none; }
+#wordmark { display: flex; align-items: baseline; gap: .375rem; line-height: 1; }
+#wordmark { font-size: 20px; font-weight: 800; letter-spacing: -.02em; }
+#wordmark b { font-size: 13px; font-weight: 500; color: var(--muted-foreground); letter-spacing: -.01em; }
+
+/* ---- standalone app pages (terminal, board, messages) ---- */
+body.standalone { display: flex; flex-direction: column; height: 100svh; }
+body.standalone #bar { flex: none; }
+#term-page { flex: 1; min-height: 0; display: flex; }
+#term { flex: 1; min-height: 0; background: #1b1b1f; padding: .5rem .25rem .25rem .6rem; }
+#status { display: flex; align-items: center; gap: .6rem; font-size: .8rem; color: var(--muted-foreground); }
+
+/* ---- standalone-app footer (index.html has its own richer #foot instead) ---- */
+#app-foot {
+  flex: none; padding: .4rem 1rem; text-align: center;
+  font-size: .7rem; color: var(--muted-foreground);
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+#copyright { display: block; width: 100%; text-align: center; }
+
+/* A visible failure beats a blank card: see showFatal in app.js. */
+.fatal { border: 1px solid color-mix(in srgb, #ef4444 50%, var(--border));
+  background: color-mix(in srgb, #ef4444 8%, transparent);
+  border-radius: .75rem; padding: .9rem 1.1rem; margin-bottom: 1.25rem; }
+.fatal strong { display: block; font-size: .9rem; }
+.fatal p { margin: .35rem 0 0; font-size: .8rem; color: var(--muted-foreground);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-word; }
+
+/* Build identity: glanceable beside the wordmark, full line in the footer. */
+#ver { font-size: .68rem; font-weight: 500; letter-spacing: 0; color: var(--muted-foreground);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  border: 1px solid var(--border); border-radius: 9999px; padding: .05rem .4rem;
+  align-self: center; margin-left: .15rem; }
+#foot-build { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .7rem; }
+
+/* ---- sign-in ---- */
+.login { flex: 1; display: flex; align-items: center; justify-content: center; padding: 2rem 1.25rem; }
+.login form { width: 100%; max-width: 22rem; display: flex; flex-direction: column; gap: .7rem;
+  background: var(--card); border: 1px solid var(--border); border-radius: 1rem;
+  padding: 1.5rem 1.4rem; box-shadow: 0 12px 36px rgba(20,30,60,.18); }
+.login h1 { margin: 0; font-size: 1.15rem; font-weight: 800; letter-spacing: -.02em; }
+.login h1 b { font-weight: 500; color: var(--muted-foreground); font-size: .8rem; margin-left: .3rem; }
+.login .sub { margin: -.25rem 0 .4rem; color: var(--muted-foreground); font-size: .82rem; }
+.login label { display: flex; flex-direction: column; gap: .25rem; font-size: .78rem;
+  color: var(--muted-foreground); font-weight: 600; }
+.login input { font: inherit; font-size: .9rem; padding: .45rem .6rem; border-radius: .5rem;
+  border: 1px solid var(--border); background: var(--background); color: var(--foreground); }
+.login input:focus { outline: none; box-shadow: 0 0 0 2px var(--primary); }
+.login .btn { margin-top: .4rem; padding: .5rem; font-size: .9rem; }
+.login .err { margin: 0; font-size: .82rem; color: #ef4444; }
+
+#logout { display: inline-flex; margin: 0; }
+
+/* ---- the message board (mb.html) ----
+ *
+ * A board, not a conversation: no roster, no bubbles, no left/right sides. Rows
+ * are uniform and dense because the job is SCANNING across a dozen concurrent
+ * lanes — the one thing the capped CLI view cannot do. Only two things are
+ * allowed to break that uniformity, and both carry an obligation: a post
+ * directed at you, and a post you have not read.
+ */
+#mb-page {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+  width: min(60rem, 100%); margin: 0 auto; padding: 0 1rem 1rem;
+}
+
+#mb-filters {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .5rem;
+  padding: .75rem 0; font-size: .8rem; color: var(--muted-foreground);
+}
+#mb-filters label { display: inline-flex; align-items: center; gap: .35rem; }
+#mb-filters select, #mb-filters input[type="search"] {
+  font: inherit; font-size: .8rem; color: var(--foreground); background: var(--card);
+  border: 1px solid var(--border); border-radius: .45rem; padding: .25rem .4rem;
+  max-width: 14rem;
+}
+#mb-filters input[type="search"] { flex: 1; min-width: 8rem; max-width: none; }
+#mb-filters .chk { gap: .25rem; }
+#mb-count { font-variant-numeric: tabular-nums; }
+
+#mb-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: .4rem; }
+#mb-list .empty { color: var(--muted-foreground); padding: 2rem 0; text-align: center; }
+
+.mb-post {
+  background: var(--card); border: 1px solid var(--border); border-left: 3px solid transparent;
+  border-radius: .5rem; padding: .5rem .7rem; cursor: pointer;
+}
+.mb-post:hover { border-color: var(--primary); }
+/* Directed = the only class of post that carries an obligation, and the only
+ * one the CLI never truncates. It is marked here for the same reason. */
+.mb-post.directed { border-left-color: var(--primary); }
+.mb-post.fresh { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 22%, transparent); }
+
+.mb-post header {
+  display: flex; align-items: baseline; gap: .4rem; flex-wrap: wrap;
+  font-size: .75rem; color: var(--muted-foreground);
+}
+.mb-post .seq { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .7rem; }
+.mb-post .from { font-weight: 600; color: var(--foreground); }
+.mb-post .arrow { opacity: .6; }
+.mb-post .topic {
+  font: inherit; cursor: pointer; background: var(--muted); color: var(--muted-foreground);
+  border: 1px solid var(--border); border-radius: .3rem; padding: 0 .35rem;
+}
+.mb-post .topic:hover { color: var(--primary); border-color: var(--primary); }
+.mb-post .tag {
+  background: var(--warn); color: var(--card); border-radius: .3rem; padding: 0 .35rem; font-size: .68rem;
+}
+.mb-post .at { font-variant-numeric: tabular-nums; }
+.mb-post .body { margin: .3rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .85rem; }
+.mb-post .receipt {
+  margin-top: .4rem; padding-top: .35rem; border-top: 1px dashed var(--border);
+  font-size: .72rem; color: var(--muted-foreground);
+}
+
+#mb-composer {
+  flex: none; margin-top: .6rem; padding: .6rem; background: var(--card);
+  border: 1px solid var(--border); border-radius: .5rem;
+  display: flex; flex-direction: column; gap: .4rem;
+}
+#mb-composer .row { display: flex; align-items: center; gap: .4rem; }
+#mb-composer input, #mb-composer textarea {
+  font: inherit; font-size: .85rem; color: var(--foreground); background: var(--background);
+  border: 1px solid var(--border); border-radius: .45rem; padding: .35rem .5rem; width: 100%;
+}
+#mb-composer textarea { resize: vertical; }
+#mb-composer .foot { font-size: .75rem; color: var(--muted-foreground); }
+#c-count.over { color: var(--warn); font-weight: 600; }
+#c-result.ok { color: var(--ok); }
+#c-result.bad { color: var(--warn); }
+#c-send[disabled] { opacity: .5; cursor: not-allowed; }
+
+#mb-who { font-size: .75rem; color: var(--muted-foreground); }
+#mb-foot { flex: none; padding-top: .5rem; font-size: .72rem; color: var(--muted-foreground); }
+
+/* ---- the steward board (board.html) ----
+ *
+ * Same design vocabulary as the message board, one shape up: stat row, kanban
+ * lanes, collapsible panels. Three state colours and no more — needs-me, live,
+ * finished — because a steward scanning this is sorting for exactly that, and a
+ * palette per state would make the page a legend to be learned.
+ */
+#bd-page {
+  flex: 1; min-height: 0; overflow-y: auto;
+  width: min(78rem, 100%); margin: 0 auto; padding: 0 1rem 1rem;
+}
+
+#bd-verdict { font-size: .72rem; font-weight: 700; letter-spacing: .04em; color: var(--muted-foreground); }
+#bd-verdict.needs { color: var(--warn); }
+#bd-age { font-size: .72rem; color: var(--muted-foreground); margin-left: .6rem; }
+
+#bd-warnings {
+  margin: .75rem 0 0; padding: .5rem .7rem; font-size: .78rem;
+  background: var(--card); border: 1px solid var(--warn); border-radius: .5rem;
+  color: var(--muted-foreground);
+}
+#bd-warnings strong { color: var(--warn); display: block; margin-bottom: .25rem; }
+#bd-warnings .w { overflow-wrap: anywhere; }
+
+#bd-summary {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+  gap: .5rem; padding: .75rem 0;
+}
+.bd-stat {
+  background: var(--card); border: 1px solid var(--border); border-radius: .5rem;
+  padding: .5rem .6rem;
+}
+.bd-stat .v { font-size: 1.35rem; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.bd-stat .k { font-size: .68rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted-foreground); }
+.bd-stat.needs .v { color: var(--warn); }
+.bd-stat.live .v { color: var(--ok); }
+
+#bd-controls {
+  display: flex; align-items: center; gap: .75rem; padding-bottom: .5rem;
+  font-size: .78rem; color: var(--muted-foreground);
+}
+#bd-controls .chk { display: inline-flex; align-items: center; gap: .3rem; }
+
+#bd-lanes {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: .5rem; align-items: start;
+}
+.bd-lane { background: var(--muted); border: 1px solid var(--border); border-radius: .5rem; padding: .4rem; }
+.bd-lane > header { display: flex; align-items: baseline; gap: .4rem; padding: .1rem .2rem .4rem; }
+.bd-lane > header .t { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+.bd-lane > header .n { font-size: .72rem; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.bd-lane .cards { display: flex; flex-direction: column; gap: .35rem; }
+.bd-lane .empty, .bd-lane .dropped { font-size: .72rem; color: var(--muted-foreground); padding: .2rem; }
+
+.bd-card {
+  background: var(--card); border: 1px solid var(--border); border-left: 3px solid transparent;
+  border-radius: .4rem; padding: .4rem .5rem;
+}
+.bd-card.needs { border-left-color: var(--warn); }
+.bd-card.live  { border-left-color: var(--ok); }
+.bd-card.past  { opacity: .62; }
+.bd-card header { display: flex; align-items: baseline; gap: .35rem; font-size: .68rem; color: var(--muted-foreground); }
+.bd-card .id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.bd-card .st { font-weight: 700; }
+.bd-card .t { font-variant-numeric: tabular-nums; }
+.bd-card .label { margin: .2rem 0 0; font-size: .8rem; overflow-wrap: anywhere; }
+.bd-card .meta { margin-top: .2rem; font-size: .68rem; color: var(--muted-foreground); }
+
+#bd-panels { margin-top: .75rem; display: flex; flex-direction: column; gap: .4rem; }
+.bd-panel { background: var(--card); border: 1px solid var(--border); border-radius: .5rem; overflow: hidden; }
+.bd-panel-head {
+  display: flex; align-items: baseline; gap: .5rem; width: 100%; text-align: left;
+  font: inherit; font-size: .8rem; color: var(--foreground); cursor: pointer;
+  background: none; border: 0; padding: .5rem .7rem;
+}
+.bd-panel-head:hover { background: var(--muted); }
+.bd-panel-head .t { font-weight: 600; }
+.bd-panel-head .c, .bd-panel-head .n { font-size: .72rem; color: var(--muted-foreground); }
+.bd-panel-head .n { font-variant-numeric: tabular-nums; }
+.bd-panel-body { padding: 0 .7rem .6rem; }
+.bd-panel-body .empty { font-size: .75rem; color: var(--muted-foreground); }
+.bd-panel-body .dropped { font-size: .72rem; color: var(--muted-foreground); margin: .4rem 0 0; }
+.bd-panel-body .btn { margin-top: .5rem; }
+
+/* Wide tables scroll INSIDE their panel; the page body never scrolls sideways. */
+.tw { overflow-x: auto; }
+.tw table { border-collapse: collapse; width: 100%; font-size: .74rem; }
+.tw th, .tw td {
+  text-align: left; padding: .25rem .5rem .25rem 0; white-space: nowrap;
+  border-bottom: 1px solid var(--border);
+}
+.tw th { font-size: .66rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted-foreground); }
+.tw td { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+#bd-foot { padding-top: .75rem; font-size: .72rem; color: var(--muted-foreground); }
+
+/* Sprints: the section this page exists for. A sprint is the time-boxed set a
+ * conductor drives; the lanes below it are RUNS, which are a different noun. */
+.bd-h { margin: 1rem 0 .4rem; font-size: .72rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .05em; color: var(--muted-foreground); }
+#bd-sprints > header { display: flex; align-items: baseline; gap: .5rem; margin: 1rem 0 .4rem; }
+#bd-sprints > header .t { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted-foreground); }
+#bd-sprints > header .n { font-size: .72rem; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+#bd-sprints > header .new-sprint-link {
+  display: inline-flex; align-items: center; gap: .3rem; border-radius: .4rem;
+  padding: .18rem .4rem; color: var(--primary); font-size: .7rem;
+  font-weight: 600; text-decoration: none;
+}
+#bd-sprints > header .new-sprint-link svg { width: .9rem; height: .9rem; }
+#bd-sprints > header .new-sprint-link:hover { background: var(--muted); }
+#bd-sprints > header .new-sprint-link:focus-visible {
+  outline: 2px solid var(--primary); outline-offset: 1px;
+}
+#bd-sprints .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); gap: .5rem; }
+#bd-sprints .empty { font-size: .78rem; color: var(--muted-foreground); }
+
+.bd-sprint {
+  background: var(--card); border: 1px solid var(--border); border-left: 3px solid transparent;
+  border-radius: .5rem; padding: .5rem .7rem;
+}
+.bd-sprint.live { border-left-color: var(--ok); }
+.bd-sprint.needs { border-left-color: var(--warn); }
+.bd-sprint.past { opacity: .62; }
+.bd-sprint header { display: flex; align-items: baseline; gap: .4rem; flex-wrap: wrap; font-size: .7rem; color: var(--muted-foreground); }
+.bd-sprint .id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.bd-sprint .st { font-weight: 700; }
+.bd-sprint .epic { background: var(--muted); border-radius: .3rem; padding: 0 .35rem; }
+.bd-sprint .gate { border-radius: .3rem; padding: 0 .35rem; border: 1px solid currentColor; }
+.bd-sprint .gate.needs { color: var(--warn); }
+.bd-sprint .gate.past { color: var(--ok); }
+.bd-sprint .label { margin: .25rem 0 0; font-size: .85rem; font-weight: 600; overflow-wrap: anywhere; }
+.bd-sprint .meta { margin-top: .2rem; font-size: .7rem; color: var(--muted-foreground); }
+.bd-sprint .more {
+  margin-top: .35rem; font: inherit; font-size: .7rem; cursor: pointer;
+  background: none; border: 0; padding: 0; color: var(--primary); text-decoration: underline;
+}
+.bd-sprint .more.open { color: var(--muted-foreground); }
+/* Two toggles sit side by side on a card ("stories — 3 open · 0 closed of 3"
+   and "continuity — 4 sections"). With padding:0 and no margin they render as
+   one run-on word — "of 3continuity". An adjacent-sibling rule cannot fix it:
+   each toggle is followed by its own (hidden) body div, so the two buttons are
+   never adjacent. Space every toggle on its trailing edge instead, which also
+   holds when the first one is EXPANDED and the second wraps to its own line.
+   Targets the BUTTONS only: the "+N more" in a refs line is a span in a flex
+   row that already has its gap. */
+.bd-sprint button.more { margin-right: .9rem; }
+
+/* The continuity brief, as the labelled sections a conductor wrote — not a
+ * <pre> wall. Prose wraps; only the label is monospaced, because the label is
+ * the thing you scan for. */
+.bd-sprint .continuity {
+  margin: .35rem 0 0; padding: .4rem .5rem; max-height: 28rem; overflow: auto;
+  background: var(--muted); border-radius: .4rem;
+}
+.bd-sprint .sec { display: flex; gap: .5rem; padding: .3rem 0; align-items: baseline; }
+.bd-sprint .sec + .sec { border-top: 1px solid var(--border); }
+.bd-sprint .sec-k {
+  flex: 0 0 9.5rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .64rem; font-weight: 700; letter-spacing: .02em; text-transform: uppercase;
+  color: var(--primary); overflow-wrap: anywhere;
+}
+.bd-sprint .sec-v { flex: 1; font-size: .74rem; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Run refs: the sprint's items, as chips rather than a count. */
+.bd-sprint .refs { margin-top: .3rem; display: flex; flex-wrap: wrap; gap: .25rem; align-items: baseline; }
+.bd-sprint .refs .k {
+  font-size: .64rem; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted-foreground); margin-right: .15rem;
+}
+.bd-sprint .refs .ref {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .66rem;
+  background: var(--muted); border: 1px solid var(--border); border-radius: .3rem; padding: 0 .3rem;
+}
+.bd-sprint .refs .more { font-size: .66rem; color: var(--muted-foreground); }
+
+/* A CLOSED story must not look like an open one. Both are the same chip, and
+   the only signal was the word in the tooltip — so a card of finished work and
+   a card of work still to do read identically at a glance, which is the one
+   thing a progress display exists to distinguish. Closed is struck through and
+   drops to the "done" green; open keeps the card's ordinary foreground. */
+.bd-sprint .refs .ref.past {
+  color: var(--ok); border-color: var(--ok); background: none;
+  text-decoration: line-through; text-decoration-thickness: 1px; opacity: .8;
+}
+.bd-sprint .refs .ref.needs { color: var(--warn); border-color: var(--warn); }
+
+/* A runbook chip: `#seq slug`. The slug is clipped to a fixed width — a kb
+   slug is a kebab-case sentence, and one long name used to push every other
+   chip onto the next line — with an ellipsis; the button's title carries the
+   complete kb:<slug>, so hovering reads what was cut. The seq is the short,
+   stable handle and is never clipped. */
+.bd-sprint .refs .ref.rb .seq { color: var(--muted-foreground); }
+.bd-sprint .refs .ref.rb .slug {
+  display: inline-block; max-width: 20ch; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; vertical-align: bottom;
+}
+
+/* The head's progress chip: open/closed WITHOUT expanding the list. */
+.bd-sprint .stories {
+  border-radius: .3rem; padding: 0 .35rem; border: 1px solid currentColor;
+  font-size: .64rem; color: var(--primary);
+}
+.bd-sprint .stories.past { color: var(--ok); }
+
+/* Sprint ↔ Meet navigation. The title and project-manager lines each keep the
+   link next to the noun it opens, while the icon has a full touch target and a
+   visible keyboard focus ring. */
+.bd-sprint .sprint-title,
+.bd-sprint .plan { display: flex; align-items: baseline; gap: .4rem; min-width: 0; }
+.bd-sprint .plan .k { opacity: .65; flex: 0 0 auto; }
+.bd-sprint .plan .plan-ref { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; overflow-wrap: anywhere; cursor: text; }
+
+/* THE FIVE STORY STAGES. `past`, `needs` and `live` already carry the card's
+   colours and are reused; these two are the states the card could not express
+   before, and they are deliberately quieter than "needs a decision". */
+.bd-sprint .stage-assigned { border-color: var(--accent, currentColor); opacity: .95; }
+.bd-sprint .stage-unstarted { opacity: .62; }
+.bd-sprint .sec-who { flex: 0 0 auto; margin-left: .5rem; opacity: .7; font-size: .9em; }
+
+/* A STORY BODY IS A DOCUMENT, so it is given a document's shapes and a bound
+   on its height rather than a bound on its content: it scrolls, it is never
+   cut. The 60vh ceiling keeps a seventy-line record from pushing the rest of
+   the card off the screen. */
+.bd-sprint .story-body { max-height: 60vh; overflow-y: auto; overflow-x: hidden; margin-top: .4rem; }
+.bd-sprint .story-body .story-p { margin: .45rem 0; line-height: 1.5; }
+.bd-sprint .story-body .story-h { font-weight: 700; margin: .7rem 0 .3rem; }
+.bd-sprint .story-body .story-h.h1 { font-size: 1.05em; }
+.bd-sprint .story-body .story-h.h2 { font-size: 1em; }
+.bd-sprint .story-body .story-list { margin: .35rem 0; padding-left: 1.1rem; }
+.bd-sprint .story-body .story-list li { margin: .15rem 0; line-height: 1.45; }
+/* Code and transcripts keep their own alignment and scroll SIDEWAYS on their
+   own, so a long command line never widens the card. */
+.bd-sprint .story-body .story-code {
+  margin: .4rem 0; padding: .45rem .6rem; overflow-x: auto;
+  white-space: pre; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .92em; border-radius: 4px; background: rgba(127,127,127,.12);
+}
+.bd-sprint .manager { display: flex; align-items: center; gap: .35rem; min-width: 0; }
+/* An unowned sprint reads as a GAP, not as decoration. It reuses the card's
+   own "needs attention" colour rather than introducing a palette, so it sorts
+   visually with the other things asking for a decision. */
+.bd-sprint .manager.unassigned { color: var(--warn); font-style: italic; }
+.bd-sprint .sprint-title .label { flex: 1; min-width: 0; }
+.bd-sprint .conversation-link {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 1.65rem; height: 1.65rem; border-radius: .4rem;
+  color: var(--muted-foreground); text-decoration: none;
+}
+.bd-sprint .conversation-link svg { width: 1rem; height: 1rem; }
+.bd-sprint .conversation-link:hover { color: var(--primary); background: var(--muted); }
+.bd-sprint .conversation-link:focus-visible {
+  color: var(--primary); outline: 2px solid var(--primary); outline-offset: 1px;
+}
+
+/* A story link. The chip and the list row are BUTTONS now — a thing that
+   responds to a click must be keyboard-reachable and announce itself — so they
+   need the browser's button chrome stripped back to what the span/div looked
+   like, plus an affordance saying they can be clicked. */
+.bd-sprint .link {
+  font: inherit; color: inherit; text-align: left; cursor: pointer;
+  appearance: none; -webkit-appearance: none;
+}
+.bd-sprint .refs .ref.link:hover,
+.bd-sprint .refs .ref.link:focus-visible { border-color: var(--primary); color: var(--primary); }
+.bd-sprint .sec.link {
+  width: 100%; background: none; border: 0; border-radius: .3rem;
+  display: flex; gap: .5rem; align-items: baseline;
+}
+.bd-sprint .sec.link:hover, .bd-sprint .sec.link:focus-visible { background: var(--muted); }
+.bd-sprint .sec.link.past { opacity: .62; }
+.bd-sprint .story-group {
+  padding: .35rem 0 .15rem; font-size: .62rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .05em; color: var(--muted-foreground);
+}
+/* The detail pane is the one place a body is shown, so give it a little
+   separation from the list it was opened from. */
+.bd-sprint .story-detail { border-top: 1px solid var(--border); margin-top: .3rem; }
+
+/* Narrow screens: the label column would squeeze the prose to a ribbon. */
+@media (max-width: 46rem) {
+  .bd-sprint .sec { display: block; }
+  .bd-sprint .sec-k { margin-bottom: .15rem; }
+}
+
+/* Phone layout. Flex items default to min-width:auto, so one long footer code
+   token used to widen the whole app and push header controls off-screen. */
+@media (max-width: 40rem) {
+  html, body, #app { width: 100%; max-width: 100%; overflow-x: hidden; }
+  #app, #bar, #view, #foot, #nav { min-width: 0; }
+  #bar { padding: .6rem .75rem; }
+  #brand { gap: .5rem; min-width: 0; }
+  #who, #ver { display: none; }
+  #nav { flex: none; gap: .1rem; }
+  .iconbtn { width: 40px; height: 40px; }
+
+  #view { width: calc(100% - 1rem); margin: 1rem .5rem; padding: 1rem .75rem; border-radius: 14px; }
+  #search-wrap { margin-bottom: 1rem; }
+  .summary { gap: 1rem; padding: .75rem; }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(82px, 1fr)); column-gap: .35rem; }
+
+  #foot { width: 100%; padding: 1rem .75rem; }
+  #foot span { max-width: 100%; }
+  #foot code { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
+
+  dialog#settings { width: calc(100% - 1rem); max-height: calc(100svh - 1rem); overflow-y: auto; }
+  .sheet { padding: 1rem .9rem .85rem; }
+  .seg { display: flex; width: 100%; }
+  .seg button { flex: 1; min-width: 0; padding-inline: .4rem; }
+  .pair-qr { width: min(168px, 55vw); height: auto; aspect-ratio: 1; }
+}
+
+/* The pairing actions sit on one row: asking for a code, and replacing a spent
+   one. Wraps rather than overflowing on a narrow phone. */
+.pair-actions{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}
+
+/* Scope rows read like the Sections toggles: the name, then the box. The
+   warning sits with the name it qualifies, so the risk is next to the choice
+   rather than in a paragraph above it. */
+.pair-scope-row { text-transform: none; }
+.pair-scope-warn { color: var(--muted-foreground); font-size: .72rem; }
+
+/* ---- the system-wide inbox (inbox.html) ----
+ *
+ * Two panes, and the split IS the feature: the left names every inbox on the
+ * host, the right is one of them in full. The message board next door is a
+ * single stream because a board has one audience; an inbox does not, so a
+ * roster is the only way to ask "who is sitting on a backlog".
+ *
+ * Same vocabulary as the board and the sprint page — uniform dense rows, the
+ * card as the unit, three colours and no more. Only two things break the
+ * uniformity, and each earns it: mail nobody has read (an obligation), and an
+ * interrupt (a claim on somebody's running turn).
+ */
+#ib-page { flex: 1; min-height: 0; display: flex; width: 100%; }
+
+#ib-mode {
+  font-size: .66rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--muted-foreground); border: 1px solid var(--border);
+  border-radius: 9999px; padding: .05rem .45rem; margin-right: .6rem;
+}
+#ib-who { font-size: .75rem; color: var(--muted-foreground); }
+
+/* --- left: the roster --- */
+#ib-nav {
+  flex: none; width: 15.5rem; min-width: 0; display: flex; flex-direction: column;
+  border-right: 1px solid var(--border); background: color-mix(in srgb, var(--card) 45%, transparent);
+}
+.ib-nav-head { flex: none; display: flex; flex-direction: column; gap: .35rem; padding: .6rem .6rem .5rem; }
+.ib-nav-head input[type="search"] {
+  font: inherit; font-size: .8rem; width: 100%; padding: .3rem .45rem;
+  border: 1px solid var(--border); border-radius: .45rem;
+  background: var(--background); color: var(--foreground);
+}
+.ib-nav-head .chk {
+  display: inline-flex; align-items: center; gap: .3rem;
+  font-size: .72rem; color: var(--muted-foreground);
+}
+#ib-roster { flex: 1; min-height: 0; overflow-y: auto; padding: 0 .4rem .4rem; }
+#ib-roster .empty { font-size: .78rem; color: var(--muted-foreground); padding: 1rem .3rem; }
+#ib-nav-foot {
+  flex: none; margin: 0; padding: .4rem .6rem; font-size: .68rem;
+  color: var(--muted-foreground); border-top: 1px solid var(--border);
+}
+
+.ib-group + .ib-group { margin-top: .5rem; }
+.ib-group > header {
+  display: flex; align-items: baseline; gap: .4rem; padding: .35rem .3rem .2rem;
+}
+.ib-group > header .t {
+  font-size: .64rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--muted-foreground);
+}
+.ib-group > header .u { font-size: .64rem; color: var(--primary); font-variant-numeric: tabular-nums; }
+
+.ib-row {
+  display: flex; align-items: center; gap: .4rem; width: 100%;
+  font: inherit; font-size: .8rem; text-align: left; cursor: pointer;
+  background: none; border: 0; border-left: 2px solid transparent;
+  border-radius: .4rem; padding: .28rem .4rem; color: var(--foreground);
+}
+.ib-row:hover { background: var(--muted); }
+.ib-row:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.ib-row.on { background: var(--card); border-left-color: var(--primary); font-weight: 600; }
+.ib-row .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ib-row .c {
+  flex: none; font-size: .68rem; font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground); border-radius: 9999px; padding: 0 .35rem;
+}
+.ib-row .c.unread { background: var(--primary); color: #fff; font-weight: 700; }
+
+/* --- right: one inbox --- */
+#ib-main { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 0 1rem 1rem; }
+
+#ib-head { display: flex; align-items: baseline; gap: .5rem; padding: .75rem 0 .35rem; }
+#ib-title { margin: 0; font-size: 1rem; font-weight: 700; letter-spacing: -.02em; overflow-wrap: anywhere; }
+#ib-stats { font-size: .72rem; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.ib-chip {
+  font-size: .64rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  border: 1px solid currentColor; border-radius: .3rem; padding: 0 .35rem;
+  color: var(--muted-foreground);
+}
+.ib-chip.k-person { color: var(--primary); }
+.ib-chip.k-role { color: var(--warn); }
+
+#ib-filters {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .45rem;
+  padding: .35rem 0 .6rem; font-size: .78rem; color: var(--muted-foreground);
+}
+#ib-filters label { display: inline-flex; align-items: center; gap: .3rem; }
+#ib-filters select, #ib-filters input[type="search"] {
+  font: inherit; font-size: .78rem; color: var(--foreground); background: var(--card);
+  border: 1px solid var(--border); border-radius: .45rem; padding: .22rem .35rem;
+  max-width: 11rem;
+}
+#ib-filters input[type="search"] { flex: 1; min-width: 7rem; max-width: none; }
+/* The two controls that act on the WHOLE view rather than narrowing it. Kept as
+ * one group pushed to the trailing edge so that when the bar wraps they wrap
+ * together — a lone "Clear" on a second line reads as an orphan. */
+.ib-actions { display: inline-flex; gap: .45rem; margin-left: auto; }
+#ib-filters .btn { flex: none; }
+
+#ib-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: .4rem; }
+#ib-list .empty { color: var(--muted-foreground); padding: 2rem 0; text-align: center; }
+
+.ib-msg {
+  background: var(--card); border: 1px solid var(--border); border-left: 3px solid transparent;
+  border-radius: .5rem; padding: .5rem .7rem;
+}
+/* Unread is the one class of message that carries an obligation — somebody has
+ * not been handed this yet — so it is the one that gets the accent. */
+.ib-msg.unread { border-left-color: var(--primary); }
+.ib-msg.urgent { border-left-color: var(--warn); }
+/* Published to the timeline but never folded into this inbox's own buffer. The
+ * dashed edge says "durable, not yet handed over" without a second colour.
+ * The LEFT edge stays solid: it is the unread/interrupt accent, and dashing it
+ * would make two independent facts share one stroke. */
+.ib-msg.pendingless {
+  border-top-style: dashed; border-right-style: dashed; border-bottom-style: dashed;
+}
+
+.ib-msg header {
+  display: flex; align-items: baseline; gap: .4rem; flex-wrap: wrap;
+  font-size: .74rem; color: var(--muted-foreground);
+}
+.ib-msg .seq { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .68rem; }
+.ib-msg .from {
+  font: inherit; font-size: .74rem; font-weight: 600; color: var(--foreground);
+  background: none; border: 0; padding: 0; cursor: pointer;
+}
+.ib-msg .from:hover { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
+.ib-msg .topic {
+  font: inherit; font-size: .7rem; cursor: pointer;
+  background: var(--muted); color: var(--muted-foreground);
+  border: 1px solid var(--border); border-radius: .3rem; padding: 0 .35rem;
+}
+.ib-msg .topic:hover { color: var(--primary); border-color: var(--primary); }
+.ib-msg .room {
+  font-size: .68rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted-foreground);
+}
+.ib-msg .tag.urgent {
+  background: var(--warn); color: var(--card); border-radius: .3rem;
+  padding: 0 .35rem; font-size: .66rem; font-weight: 700;
+}
+.ib-msg .at { font-variant-numeric: tabular-nums; }
+.ib-msg .body { margin: .3rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .85rem; }
+.ib-msg .state {
+  margin-top: .35rem; padding-top: .3rem; border-top: 1px dashed var(--border);
+  font-size: .7rem; color: var(--muted-foreground);
+}
+
+#ib-foot { flex: none; padding-top: .5rem; font-size: .7rem; color: var(--muted-foreground); }
+
+/* Phone: the roster becomes a band across the top rather than a column, so the
+ * message pane keeps the full width it needs to be readable at all. */
+@media (max-width: 46rem) {
+  #ib-page { flex-direction: column; }
+  #ib-nav {
+    width: 100%; border-right: 0; border-bottom: 1px solid var(--border);
+    max-height: 42svh;
+  }
+  #ib-main { padding: 0 .75rem .75rem; }
+  #ib-filters select { max-width: 8.5rem; }
+}
+
+/* The per-message mark-read control. It sits in the state line rather than the
+   header because it belongs with the fact it changes ("waiting · mark read"),
+   and it exists only on your own inbox — every other name is a peek. */
+.ib-msg .mark {
+  font: inherit; font-size: .7rem; cursor: pointer;
+  background: none; border: 0; padding: 0;
+  color: var(--primary); text-decoration: underline; text-underline-offset: 2px;
+}
+.ib-msg .mark:hover { color: var(--foreground); }
+.ib-msg .mark[disabled] { opacity: .5; cursor: default; text-decoration: none; }

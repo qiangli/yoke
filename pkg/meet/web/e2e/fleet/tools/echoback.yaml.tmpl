@@ -1,0 +1,13 @@
+name: echoback
+kind: cli
+display: Echo Back (e2e fixture)
+cli:
+  binary: __DIR__/echoback
+  launch:
+    # {model} is REQUIRED even though the fixture ignores its value: a launch
+    # template without it is refused outright ("the binding is a label, not a
+    # selection"), because an agent is tool:model and a binding that cannot
+    # select a model would be a lie.
+    exec: __DIR__/echoback --model {model} {prompt}
+    prompt_position: last
+    notes: deterministic e2e fixture; echoes the prompt back

@@ -1,0 +1,8 @@
+agents:
+  - name: claude-haiku4.5
+    tool: claude
+    model: haiku4.5
+    display: "claude · haiku4.5"
+    ledger:
+      reliability: unmeasured
+      notes: L1 rung; live-probed

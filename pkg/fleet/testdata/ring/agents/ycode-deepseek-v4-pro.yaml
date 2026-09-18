@@ -1,0 +1,8 @@
+agents:
+  - name: ycode-deepseek-v4-pro
+    tool: ycode
+    model: deepseek-v4-pro
+    display: "ycode · deepseek-v4-pro"
+    ledger:
+      reliability: medium
+      notes: conductor converges GREEN post ycode reasoning-stall fix (2026-07-16); verbose steward — timed out before a DECISION at 300s. Route conductor, not steward.

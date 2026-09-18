@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en" data-bashy-console="1">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<base href="/">
+<title>Terminal — bashy</title>
+<link rel="stylesheet" href="vendor/xterm.css">
+<link rel="stylesheet" href="app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'><rect width='40' height='40' rx='10' fill='%232563eb'/><path d='M11 14l6 6-6 6' fill='none' stroke='%23ffffff' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'/><path d='M21 27h9' fill='none' stroke='%235eead4' stroke-width='3.2' stroke-linecap='round'/></svg>">
+</head>
+<body class="standalone">
+<header id="bar">
+  <a id="brand" href="term/" title="bashy terminal">
+    <svg class="logo" viewBox="0 0 40 40" aria-hidden="true">
+      <rect width="40" height="40" rx="10" fill="var(--logo-bg)"/>
+      <path d="M11 14l6 6-6 6" fill="none" stroke="var(--logo-fg)" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M21 27h9" fill="none" stroke="var(--logo-accent)" stroke-width="3.2" stroke-linecap="round"/>
+    </svg>
+    <span id="wordmark">bashy<b>terminal</b></span>
+  </a>
+  <span class="spacer"></span>
+  <span id="status"></span>
+  <button id="new-term" class="iconbtn" title="New terminal (opens a tab)" aria-label="New terminal">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+         stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+  </button>
+</header>
+<main id="term-page"><div id="term"></div></main>
+<script src="vendor/xterm.js"></script>
+<script src="vendor/xterm-addon-fit.js"></script>
+<script src="term.js"></script>
+</body>
+</html>

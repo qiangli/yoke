@@ -1,0 +1,22 @@
+agents:
+  - name: ycode-glm-5.2
+    tool: ycode
+    model: glm-5.2
+    display: "ycode · glm-5.2"
+    ledger:
+      reliability: unmeasured
+      notes: |
+        L3 rung, provisional. ycode ONLY — deliberately not bound to opencode or aider.
+
+        GLM is an API-key model, and the API-key lane is exactly what ycode exists to
+        own: there is no product in an HTTP call, so a third-party CLI in that path is
+        a liability with no upside. Five dead bindings in one day came from other
+        people's CLIs changing their flags, model ids and provider names underneath us
+        (opencode calls Moonshot "moonshotai"; aider wants "deepseek/deepseek-v4-pro";
+        ycode takes the bare name — one model, three spellings, each a chance to be
+        silently wrong). aider was retired from this lane for that reason.
+
+        Verified live on this host 2026-07-14: gate PASS twice on the wrap task
+        (89s / 125s, exit 0, spec untouched, 6 turns, no repeat loop), and it
+        decomposed-and-delegated unprompted on an adversarial review brief (23 subagent
+        calls). Coder-competent; conductor-shaped. Steward: unproven.

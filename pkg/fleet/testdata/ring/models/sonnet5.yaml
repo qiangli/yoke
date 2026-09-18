@@ -1,0 +1,11 @@
+name: sonnet5
+family: sonnet
+version: "5"
+band: 2
+band_source: declared
+display: Claude Sonnet 5
+provider: anthropic
+kind: subscription
+model: claude-sonnet-5
+quality: 0.85
+cost_micro: 6000

@@ -1,0 +1,38 @@
+agents:
+  - name: ycode-glm-5.3
+    tool: ycode
+    model: glm-5.3
+    display: "ycode · glm-5.3"
+    ledger:
+      reliability: medium
+      notes: |
+        Successor to ycode-glm-5.2 (Xavier), added as a SECOND agent rather than by
+        re-pointing the first. Same lane, same reasoning: GLM is an API-key model and
+        the API-key lane is what ycode exists to own — no third-party CLI in the path
+        to change its flags underneath us.
+
+        WHY A NEW AGENT AND NOT `agents set ycode-glm-5.2 --model glm-5.3` — measured,
+        both ways, before choosing:
+
+          1. THE NICKNAME IS DRAWN FROM THE BINDING, not the name. Re-pointing redraws
+             it: Xavier became Kenji and `whois Xavier` answered "names nothing on this
+             host". Re-pointing destroys the one thing it appears to preserve.
+          2. THE RECORD BECOMES A LIE — a row named ycode-glm-5.2, displayed
+             "ycode · glm-5.2", bound to ycode:glm-5.3.
+          3. BLAST RADIUS OF FOUR. Cascades name their base by AGENT NAME
+             (`base: ycode-glm-5.2`), so re-pointing one agent silently moved all four
+             cascade agents onto an unmeasured model.
+          4. THE LEDGER TRANSFERS. 5.2's "gate PASS twice, 89s/125s" notes would ride
+             along onto a model that has run nothing — a success state inherited rather
+             than earned.
+
+        Adding costs none of that: Xavier keeps its name, band and record; the cascades
+        stay pinned to the model their rungs were chosen on; and the floating family
+        alias `ycode-glm` moves here on its own, so callers who address the FAMILY
+        follow the upgrade while callers who pinned a VERSION stay pinned.
+
+        Measured 2026-08-19: bounded coder and integration-lead trials converged
+        without exact tool-call repetition. The deciding lead trial finished in
+        121.648s/480s with zero intervention, rejected unsafe test tampering, preserved
+        immutable inputs, and passed the external objective gate. Route at L3 for
+        coding and conductor work; this evidence does not establish L4 stewardship.

@@ -1,0 +1,43 @@
+# Local token prices, in USD per token. This is deliberately data, not
+# provider-specific code: adding a tariff means editing this catalog.
+#
+# Billing item names are provider-neutral. A caller reports the items present
+# in its usage record (input, output, cache_read, ...).
+models:
+  deepseek-chat:
+    items:
+      input: 0.00000027
+      output: 0.00000110
+      cache_read: 0.00000007
+    peak_windows:
+      - start: 1
+        end: 4
+      - start: 6
+        end: 10
+    peak_factor: 2.0
+  deepseek-v4-flash:
+    items:
+      input: 0.00000027
+      output: 0.00000110
+      cache_read: 0.00000007
+    peak_windows:
+      - start: 1
+        end: 4
+      - start: 6
+        end: 10
+    peak_factor: 2.0
+  deepseek-v4-pro:
+    items:
+      input: 0.00000055
+      output: 0.00000219
+      cache_read: 0.00000014
+    peak_windows:
+      - start: 1
+        end: 4
+      - start: 6
+        end: 10
+    peak_factor: 2.0
+  example-flat:
+    items:
+      input: 0.000001
+      output: 0.000002

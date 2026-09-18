@@ -1,0 +1,11 @@
+agents:
+  - name: ycode-fable5.1
+    tool: ycode
+    model: fable5.1
+    display: "ycode · fable5.1"
+    ledger:
+      reliability: unmeasured
+      notes: |
+        L4 rung (declared) — first-party harness on the Anthropic lane
+        (subscription via ycode OAuth). Counterpart of claude-fable5.1 for the
+        head-to-head, as ycode-fable5 is of claude-fable5. Seeded 2026-09-13.

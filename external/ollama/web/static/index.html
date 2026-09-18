@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ollama — ycode</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0f1117;--card:#1a1d27;--border:#2a2d3a;--text:#e4e4e7;--muted:#71717a;--accent:#6366f1;--accent-hover:#818cf8;--green:#22c55e;--red:#ef4444;--yellow:#eab308;--blue:#3b82f6}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+a{color:var(--accent);text-decoration:none}a:hover{color:var(--accent-hover)}
+
+.container{max-width:960px;margin:0 auto;padding:24px 16px}
+header{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px}
+header h1{font-size:22px;font-weight:600;display:flex;align-items:center;gap:8px}
+header h1 .logo{font-size:28px}
+.status{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted)}
+.status .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.dot.ok{background:var(--green)}.dot.err{background:var(--red)}
+
+nav{display:flex;gap:4px;margin-bottom:24px;border-bottom:1px solid var(--border);padding-bottom:0}
+nav button{background:none;border:none;color:var(--muted);padding:10px 16px;cursor:pointer;font-size:14px;border-bottom:2px solid transparent;transition:all .15s}
+nav button:hover{color:var(--text)}
+nav button.active{color:var(--accent);border-bottom-color:var(--accent)}
+
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:16px}
+.card h2{font-size:16px;font-weight:600;margin-bottom:12px}
+
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{text-align:left;padding:8px 12px;color:var(--muted);font-weight:500;border-bottom:1px solid var(--border)}
+td{padding:10px 12px;border-bottom:1px solid var(--border)}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:rgba(99,102,241,0.05)}
+
+.btn{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text);cursor:pointer;font-size:13px;transition:all .15s}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.primary:hover{background:var(--accent-hover)}
+.btn.danger{color:var(--red);border-color:transparent}
+.btn.danger:hover{border-color:var(--red)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+
+.input{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px 12px;color:var(--text);font-size:14px;width:100%}
+.input:focus{outline:none;border-color:var(--accent)}
+
+.pull-form{display:flex;gap:8px;margin-bottom:16px}
+.pull-form .input{flex:1}
+
+.tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:500}
+.tag.running{background:rgba(34,197,94,0.15);color:var(--green)}
+.tag.stopped{background:rgba(113,113,122,0.15);color:var(--muted)}
+
+.progress{height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-top:8px}
+.progress-bar{height:100%;background:var(--accent);transition:width .3s}
+
+.empty{text-align:center;padding:40px;color:var(--muted)}
+
+.links{display:flex;gap:12px;margin-top:8px;flex-wrap:wrap}
+.link-card{flex:1;min-width:200px;padding:16px;background:var(--bg);border:1px solid var(--border);border-radius:8px;display:flex;align-items:center;gap:12px;cursor:pointer;transition:border-color .15s}
+.link-card:hover{border-color:var(--accent)}
+.link-card .icon{font-size:24px}
+.link-card .info h3{font-size:14px;font-weight:600}.link-card .info p{font-size:12px;color:var(--muted)}
+
+#toast{position:fixed;bottom:20px;right:20px;padding:12px 20px;border-radius:8px;font-size:14px;display:none;z-index:999;box-shadow:0 4px 12px rgba(0,0,0,.3)}
+#toast.success{background:var(--green);color:#fff;display:block}
+#toast.error{background:var(--red);color:#fff;display:block}
+
+.detail-grid{display:grid;grid-template-columns:120px 1fr;gap:8px;font-size:14px}
+.detail-grid dt{color:var(--muted)}.detail-grid dd{word-break:break-all}
+
+.chips{display:flex;flex-wrap:wrap;gap:6px;padding:4px 0}
+.chip{display:inline-flex;align-items:center;gap:4px;padding:5px 12px;border-radius:16px;border:1px solid var(--border);background:var(--bg);color:var(--text);cursor:pointer;font-size:13px;transition:all .15s}
+.chip:hover{border-color:var(--accent);color:var(--accent)}
+.chip .chip-size{color:var(--muted);font-size:11px}
+
+@media(max-width:600px){.pull-form{flex-direction:column}table{font-size:13px}th,td{padding:6px 8px}}
+</style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <h1><span class="logo">🦙</span> Ollama</h1>
+    <div class="status">
+      <span class="dot" id="statusDot"></span>
+      <span id="statusText">Checking...</span>
+      <span id="versionText"></span>
+    </div>
+  </header>
+
+  <nav>
+    <button class="active" onclick="showTab('models')">Models</button>
+    <button onclick="showTab('running')">Running</button>
+    <button onclick="showTab('pull')">Pull</button>
+    <button onclick="showTab('links')">Chat & Dashboard</button>
+  </nav>
+
+  <!-- Models Tab -->
+  <div id="tab-models" class="tab">
+    <div class="card">
+      <h2>Local Models</h2>
+      <div id="modelList"><div class="empty">Loading...</div></div>
+    </div>
+  </div>
+
+  <!-- Running Tab -->
+  <div id="tab-running" class="tab" style="display:none">
+    <div class="card">
+      <h2>Running Models</h2>
+      <div id="runningList"><div class="empty">Loading...</div></div>
+    </div>
+  </div>
+
+  <!-- Pull Tab -->
+  <div id="tab-pull" class="tab" style="display:none">
+    <div class="card">
+      <h2>Pull Model</h2>
+      <div class="pull-form">
+        <input class="input" id="pullInput" placeholder="Model name (e.g. llama3.2:3b, qwen2.5:7b)" onkeydown="if(event.key==='Enter')pullModel()">
+        <button class="btn primary" onclick="pullModel()" id="pullBtn">Pull</button>
+        <button class="btn danger" onclick="cancelPull()" id="pullCancelBtn" style="display:none">Cancel</button>
+      </div>
+      <div id="pullProgress" style="display:none">
+        <div style="font-size:13px;color:var(--muted)" id="pullStatus">Pulling...</div>
+        <div class="progress"><div class="progress-bar" id="pullBar" style="width:0"></div></div>
+      </div>
+      <h2 style="margin-top:20px">Popular Models</h2>
+      <div id="popularModels"><div class="empty" style="padding:12px">Loading...</div></div>
+      <h2 style="margin-top:20px">Hugging Face (GGUF)</h2>
+      <div class="pull-form">
+        <input class="input" id="hfInput" placeholder="Search GGUF models on Hugging Face..." onkeydown="if(event.key==='Enter')searchHF()">
+        <button class="btn" onclick="searchHF()">Search</button>
+      </div>
+      <div id="hfResults"></div>
+    </div>
+  </div>
+
+  <!-- Links Tab -->
+  <div id="tab-links" class="tab" style="display:none">
+    <div class="card">
+      <h2>Integrations</h2>
+      <div class="links">
+        <a class="link-card" href="../chat/" target="_blank">
+          <span class="icon">💬</span>
+          <div class="info"><h3>Chat</h3><p>Open ycode chat with Ollama models</p></div>
+        </a>
+        <a class="link-card" href="../dashboard/" target="_blank">
+          <span class="icon">📊</span>
+          <div class="info"><h3>Dashboard</h3><p>Ollama inference metrics in Perses</p></div>
+        </a>
+        <a class="link-card" href="../traces/" target="_blank">
+          <span class="icon">🔍</span>
+          <div class="info"><h3>Traces</h3><p>Inference traces in Jaeger</p></div>
+        </a>
+        <a class="link-card" href="../logs/" target="_blank">
+          <span class="icon">📋</span>
+          <div class="info"><h3>Logs</h3><p>Inference logs in VictoriaLogs</p></div>
+        </a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<!-- Model Detail Modal -->
+<div id="modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;display:none;align-items:center;justify-content:center" onclick="if(event.target===this)closeModal()">
+  <div class="card" style="max-width:600px;width:90%;max-height:80vh;overflow-y:auto;margin:auto;position:relative">
+    <button onclick="closeModal()" style="position:absolute;top:12px;right:12px;background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px">✕</button>
+    <div id="modalContent"></div>
+  </div>
+</div>
+
+<script>
+const BASE = detectBase();
+
+function detectBase() {
+  // Ollama API is proxied through the same origin at /ollama/
+  // but the actual Ollama server may also be at localhost:11434
+  const loc = window.location;
+  // Try the reverse proxy path first (strips to Ollama's root)
+  return loc.origin + loc.pathname.replace(/\/+$/, '');
+}
+
+// Detect Ollama API base - try proxy, fall back to direct
+let OLLAMA_API = '';
+async function detectAPI() {
+  // The component's HTTPHandler reverse-proxies to the Ollama server
+  // API calls go through our own origin at the same path prefix
+  const proxyBase = window.location.origin + window.location.pathname.replace(/\/+$/, '');
+  try {
+    const r = await fetch(proxyBase + '/api/version', {signal: AbortSignal.timeout(2000)});
+    if (r.ok) { OLLAMA_API = proxyBase; return; }
+  } catch(e) {}
+  // Fallback: direct Ollama
+  try {
+    const r = await fetch('http://127.0.0.1:11434/api/version', {signal: AbortSignal.timeout(2000)});
+    if (r.ok) { OLLAMA_API = 'http://127.0.0.1:11434'; return; }
+  } catch(e) {}
+  OLLAMA_API = proxyBase; // default even if unreachable
+}
+
+async function api(path, opts) {
+  const r = await fetch(OLLAMA_API + path, opts);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r;
+}
+
+function formatBytes(b) {
+  if (b >= 1073741824) return (b/1073741824).toFixed(1)+' GB';
+  if (b >= 1048576) return (b/1048576).toFixed(0)+' MB';
+  return b+' B';
+}
+
+function timeAgo(date) {
+  const s = Math.floor((Date.now() - new Date(date)) / 1000);
+  if (s < 60) return s+'s ago';
+  if (s < 3600) return Math.floor(s/60)+'m ago';
+  if (s < 86400) return Math.floor(s/3600)+'h ago';
+  return Math.floor(s/86400)+'d ago';
+}
+
+// Tab navigation
+function showTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.style.display = 'none');
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-'+name).style.display = 'block';
+  event.target.classList.add('active');
+  if (name === 'models') loadModels();
+  if (name === 'running') loadRunning();
+  if (name === 'pull') loadPull();
+}
+
+// Toast
+function toast(msg, type='success') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = type;
+  setTimeout(() => t.className = '', 3000);
+}
+
+// Check status
+async function checkStatus() {
+  try {
+    const r = await api('/api/version');
+    const d = await r.json();
+    document.getElementById('statusDot').className = 'dot ok';
+    document.getElementById('statusText').textContent = 'Running';
+    document.getElementById('versionText').textContent = 'v' + d.version;
+  } catch(e) {
+    document.getElementById('statusDot').className = 'dot err';
+    document.getElementById('statusText').textContent = 'Disconnected';
+    document.getElementById('versionText').textContent = '';
+  }
+}
+
+// Load models
+async function loadModels() {
+  try {
+    const r = await api('/api/tags');
+    const d = await r.json();
+    const models = d.models || [];
+    if (models.length === 0) {
+      document.getElementById('modelList').innerHTML = '<div class="empty">No models installed. Use the Pull tab to download one.</div>';
+      return;
+    }
+    let html = '<table><thead><tr><th>Name</th><th>Size</th><th>Modified</th><th>Quantization</th><th></th></tr></thead><tbody>';
+    for (const m of models) {
+      const quant = m.details?.quantization_level || '-';
+      html += `<tr>
+        <td><a href="#" onclick="showModel('${m.name}');return false">${m.name}</a></td>
+        <td>${formatBytes(m.size)}</td>
+        <td>${timeAgo(m.modified_at)}</td>
+        <td>${quant}</td>
+        <td><button class="btn danger" onclick="deleteModel('${m.name}')">Delete</button></td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    document.getElementById('modelList').innerHTML = html;
+  } catch(e) {
+    document.getElementById('modelList').innerHTML = '<div class="empty">Failed to load models: '+e.message+'</div>';
+  }
+}
+
+// Load running models
+async function loadRunning() {
+  try {
+    const r = await api('/api/ps');
+    const d = await r.json();
+    const models = d.models || [];
+    if (models.length === 0) {
+      document.getElementById('runningList').innerHTML = '<div class="empty">No models currently loaded in memory.</div>';
+      return;
+    }
+    let html = '<table><thead><tr><th>Name</th><th>Size</th><th>VRAM</th><th>Until</th><th></th></tr></thead><tbody>';
+    for (const m of models) {
+      const vram = m.size_vram ? formatBytes(m.size_vram) : '-';
+      const expires = m.expires_at ? timeAgo(m.expires_at).replace(' ago','') : '-';
+      html += `<tr>
+        <td>${m.name} <span class="tag running">running</span></td>
+        <td>${formatBytes(m.size)}</td>
+        <td>${vram}</td>
+        <td>${expires}</td>
+        <td><button class="btn" onclick="unloadModel('${m.name}')">Unload</button></td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    document.getElementById('runningList').innerHTML = html;
+  } catch(e) {
+    document.getElementById('runningList').innerHTML = '<div class="empty">Failed to load: '+e.message+'</div>';
+  }
+}
+
+// Show model details
+async function showModel(name) {
+  try {
+    const r = await api('/api/show', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({model:name})});
+    const d = await r.json();
+    let html = `<h2 style="margin-bottom:16px">${name}</h2><dl class="detail-grid">`;
+    if (d.details) {
+      const det = d.details;
+      if (det.family) html += `<dt>Family</dt><dd>${det.family}</dd>`;
+      if (det.parameter_size) html += `<dt>Parameters</dt><dd>${det.parameter_size}</dd>`;
+      if (det.quantization_level) html += `<dt>Quantization</dt><dd>${det.quantization_level}</dd>`;
+      if (det.format) html += `<dt>Format</dt><dd>${det.format}</dd>`;
+    }
+    if (d.model_info) {
+      const info = d.model_info;
+      for (const [k,v] of Object.entries(info)) {
+        if (typeof v !== 'object' && k.includes('.')) {
+          const label = k.split('.').pop().replace(/_/g,' ');
+          html += `<dt>${label}</dt><dd>${v}</dd>`;
+        }
+      }
+    }
+    html += '</dl>';
+    if (d.template) {
+      html += `<h3 style="margin-top:16px;margin-bottom:8px;font-size:14px">Template</h3><pre style="background:var(--bg);padding:12px;border-radius:6px;font-size:12px;overflow-x:auto;white-space:pre-wrap">${escapeHtml(d.template)}</pre>`;
+    }
+    document.getElementById('modalContent').innerHTML = html;
+    document.getElementById('modal').style.display = 'flex';
+  } catch(e) {
+    toast('Failed to load model details: '+e.message, 'error');
+  }
+}
+
+function closeModal() { document.getElementById('modal').style.display = 'none'; }
+
+function escapeHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// Delete model
+async function deleteModel(name) {
+  if (!confirm('Delete model "'+name+'"?')) return;
+  try {
+    await api('/api/delete', {method:'DELETE', headers:{'Content-Type':'application/json'}, body:JSON.stringify({model:name})});
+    toast('Deleted '+name);
+    loadModels();
+  } catch(e) {
+    toast('Delete failed: '+e.message, 'error');
+  }
+}
+
+// Unload model
+async function unloadModel(name) {
+  try {
+    await api('/api/generate', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({model:name, keep_alive:0})});
+    toast('Unloaded '+name);
+    loadRunning();
+  } catch(e) {
+    toast('Unload failed: '+e.message, 'error');
+  }
+}
+
+// Pull state
+let pullAbort = null;
+
+// Pull model with streaming + cancellation
+// Ollama resumes automatically — pulling the same model again picks up where it left off.
+async function pullModel(name) {
+  if (!name) name = document.getElementById('pullInput').value.trim();
+  if (!name) return;
+  const btn = document.getElementById('pullBtn');
+  const cancelBtn = document.getElementById('pullCancelBtn');
+  const prog = document.getElementById('pullProgress');
+  btn.disabled = true;
+  cancelBtn.style.display = 'inline-flex';
+  prog.style.display = 'block';
+
+  pullAbort = new AbortController();
+
+  try {
+    const r = await fetch(OLLAMA_API + '/api/pull', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({model: name, stream: true}),
+      signal: pullAbort.signal
+    });
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, {stream: true});
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const d = JSON.parse(line);
+          document.getElementById('pullStatus').textContent = d.status || 'Pulling...';
+          if (d.total > 0) {
+            const pct = (d.completed / d.total * 100).toFixed(1);
+            document.getElementById('pullBar').style.width = pct + '%';
+          }
+        } catch(e) {}
+      }
+    }
+    toast('Pulled '+name);
+    document.getElementById('pullInput').value = '';
+    prog.style.display = 'none';
+    document.getElementById('pullBar').style.width = '0';
+    loadModels();
+  } catch(e) {
+    if (e.name === 'AbortError') {
+      // Keep model name in input so user can hit Pull again to resume.
+      document.getElementById('pullInput').value = name;
+      document.getElementById('pullStatus').textContent = 'Cancelled — pull again to resume';
+      toast('Cancelled — pull again to resume', 'error');
+    } else {
+      toast('Pull failed: '+e.message, 'error');
+      prog.style.display = 'none';
+      document.getElementById('pullBar').style.width = '0';
+    }
+  } finally {
+    pullAbort = null;
+    btn.disabled = false;
+    cancelBtn.style.display = 'none';
+  }
+}
+
+function cancelPull() {
+  if (pullAbort) pullAbort.abort();
+}
+
+// HF pull state
+let hfPullAbort = null;
+
+// Pull a HF model by fetching GGUF file list, then pulling via Ollama create
+async function pullHFModel(repo, btn) {
+  // HF models need a GGUF file — for now, pull the repo name directly
+  // since Ollama supports pulling from HF via the model name
+  const modelName = repo.toLowerCase().replace(/\//g, '-');
+  btn.disabled = true;
+  btn.textContent = 'Pulling...';
+  hfPullAbort = new AbortController();
+
+  // Show a cancel button next to the pull button
+  const cancelBtn = btn.nextElementSibling;
+  if (cancelBtn) cancelBtn.style.display = 'inline-flex';
+
+  try {
+    // Use the pull input + progress UI for the HF pull
+    document.getElementById('pullInput').value = repo;
+    await pullModel(repo);
+  } finally {
+    hfPullAbort = null;
+    btn.disabled = false;
+    btn.textContent = 'Pull';
+    if (cancelBtn) cancelBtn.style.display = 'none';
+  }
+}
+
+// Search Hugging Face
+async function searchHF() {
+  const q = document.getElementById('hfInput').value.trim();
+  if (!q) return;
+  const el = document.getElementById('hfResults');
+  el.innerHTML = '<div class="empty">Searching...</div>';
+  try {
+    const r = await fetch('https://huggingface.co/api/models?filter=gguf&search='+encodeURIComponent(q)+'&sort=downloads&direction=-1&limit=15');
+    const models = await r.json();
+    if (!models.length) { el.innerHTML = '<div class="empty">No GGUF models found.</div>'; return; }
+    let html = '<table><thead><tr><th>Repository</th><th>Downloads</th><th>Likes</th><th></th></tr></thead><tbody>';
+    for (const m of models) {
+      const safeId = escapeHtml(m.id);
+      html += `<tr>
+        <td><a href="https://huggingface.co/${safeId}" target="_blank">${safeId}</a></td>
+        <td>${m.downloads?.toLocaleString() || 0}</td>
+        <td>${m.likes || 0}</td>
+        <td>
+          <button class="btn" onclick="pullHFModel('${safeId}', this)">Pull</button>
+        </td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    el.innerHTML = html;
+  } catch(e) {
+    el.innerHTML = '<div class="empty">Search failed: '+e.message+'</div>';
+  }
+}
+
+// Load popular models from Ollama registry via server-side proxy.
+// Avoids CORS issues from direct browser-to-ollama.com requests.
+async function loadPopularModels() {
+  const el = document.getElementById('popularModels');
+  try {
+    // Proxy through our own origin to avoid CORS.
+    const proxyBase = window.location.origin + window.location.pathname.replace(/\/+$/, '');
+    const r = await fetch(proxyBase + '/api/registry/tags', {signal: AbortSignal.timeout(5000)});
+    if (!r.ok) throw new Error('HTTP '+r.status);
+    const d = await r.json();
+    const models = d.models || [];
+    if (models.length === 0) {
+      el.innerHTML = '<div class="empty" style="padding:12px">No internet access. Browse models at <a href="https://ollama.com/search" target="_blank">ollama.com/search</a> or pull by name above.</div>';
+      return;
+    }
+    let html = '<div class="chips">';
+    for (const m of models) {
+      const name = m.name || m.model || '';
+      const size = m.size ? formatBytes(m.size) : '';
+      html += `<span class="chip" onclick="selectPopularModel('${name}')" title="Click to pull ${name}">${name}`;
+      if (size) html += ` <span class="chip-size">${size}</span>`;
+      html += '</span>';
+    }
+    html += '</div>';
+    el.innerHTML = html;
+  } catch(e) {
+    el.innerHTML = '<div class="empty" style="padding:12px">Browse models at <a href="https://ollama.com/search" target="_blank">ollama.com/search</a></div>';
+  }
+}
+
+function selectPopularModel(name) {
+  document.getElementById('pullInput').value = name;
+  document.getElementById('pullInput').focus();
+  // Scroll to pull input.
+  document.getElementById('pullInput').scrollIntoView({behavior:'smooth', block:'center'});
+}
+
+// Init
+(async function() {
+  await detectAPI();
+  checkStatus();
+  loadModels();
+  loadPopularModels();
+  setInterval(checkStatus, 30000);
+})();
+</script>
+</body>
+</html>

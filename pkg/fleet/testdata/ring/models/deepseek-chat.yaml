@@ -1,0 +1,16 @@
+name: deepseek-chat
+band: 1
+band_source: declared
+display: DeepSeek Chat
+provider: openai-compat
+kind: api
+base_url: https://api.deepseek.com
+api_key_ref: deepseek
+model: deepseek/deepseek-chat
+quality: 0.75
+cost_micro: 800
+# ycode detects the provider from the model name, so it takes the BARE id —
+# litellm's `provider/model` prefix is rejected. The id a model answers to is a
+# property of the TOOL, not of the model.
+ids:
+  ycode: deepseek-chat

@@ -1,0 +1,13 @@
+name: gpt5.6-sol
+family: gpt-sol
+version: "5.6"
+band: 4
+band_source: declared
+# OpenAI: latest frontier agentic coding model
+display: GPT-5.6 Sol
+provider: openai
+kind: subscription
+model: gpt-5.6-sol
+quality: 0.94
+cost_micro: 18000
+# OpenAI: latest FRONTIER agentic coding model (codex default)

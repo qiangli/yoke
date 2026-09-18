@@ -1,0 +1,175 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        # The windows leg is the product: one identical toolset on
+        # every platform, no system binaries required.
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # external/ollama/src and external/podman/src are submodules (the
+          # vendored forks); needed so the module graph resolves.
+          submodules: recursive
+      # yoke resolves three deps as flat siblings: the certified coreutils it
+      # was split out of (`replace github.com/qiangli/coreutils => ../coreutils`),
+      # the sh engine (`replace mvdan.cc/sh/v3 => ../sh`) and the File Browser
+      # fork that pkg/webconsole embeds (`replace github.com/filebrowser/filebrowser/v2
+      # => ../filebrowser`). Clone all three next door — CI is a standalone
+      # clone, not the dhnt umbrella, where they are already mounted as submodules.
+      - name: Clone flat siblings (../coreutils, ../sh, ../filebrowser)
+        shell: bash
+        run: |
+          git clone --quiet --depth 1 https://github.com/qiangli/coreutils.git ../coreutils
+          git clone --quiet --depth 1 https://github.com/qiangli/sh.git ../sh
+          git clone --quiet --depth 1 https://github.com/qiangli/filebrowser.git ../filebrowser
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Install locale fixtures
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y locales
+          sudo sed -i -E 's/^# *(de_DE ISO-8859-1)/\1/' /etc/locale.gen
+          sudo locale-gen
+      - name: Configure git identity (weave tests create real commits)
+        shell: bash
+        run: |
+          git config --global user.email ci@example.com
+          git config --global user.name CI
+      # Formatting is platform-independent, so this runs on ONE leg — three
+      # would be waste, and the windows leg would additionally have to reason
+      # about line endings.
+      #
+      # It REPORTS and never rewrites, deliberately. gofmt changes doc-comment
+      # TEXT as well as whitespace (a pair of ASCII single-quotes becomes a
+      # curly closing quote), which has already silently corrupted a comment
+      # quoting shell syntax in this tree. An auto-fixing gate would land that
+      # class of change unreviewed, disguised as formatting.
+      - name: gofmt check (reports; never rewrites)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: ./scripts/fmtcheck.sh
+      # The vendored external/ forks (ollama, podman) pull cgo + Apple MLX
+      # (darwin-only) and are upstream's to test. Vet + test coreutils' OWN
+      # packages on every platform — that pure-Go userland is the product.
+      - name: Vet (yoke packages; vendored external/ forks excluded; Windows also compiles tests)
+        shell: bash
+        run: |
+          # Exclude the vendored external/ forks (cgo + platform backends), but
+          # keep the lean pure-Go externals (the `bashy go` provisioner + the act
+          # binmgr wrapper) in scope so they're vetted/built on every platform.
+          base="$(go list ./... | grep -v '/external/')"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # pkg/weave is unix-host agent orchestration (PTY + control sockets;
+            # "weave: PTY not supported on Windows") — test it on unix only. The
+            # cross-platform userland (cmds/git/tool/shell/binmgr) is the product.
+            base="$(echo "$base" | grep -vE '/pkg/weave$')"
+          fi
+          pkgs="$base \
+            github.com/qiangli/yoke/external/gotoolchain \
+            github.com/qiangli/yoke/external/act \
+            github.com/qiangli/yoke/external/gh"
+          go vet $pkgs
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # POSIX applets require Unix process, permission, device and path
+            # semantics. Compile every test natively here; Linux and Darwin
+            # execute the behavioral suite, while Bashy's Windows integration
+            # job exercises the portable room, shell and agent surfaces.
+            go test -run '^$' $pkgs
+          fi
+      # Compile-only Windows checks cannot prove the native resource and
+      # admission behavior. Run this portable changed surface directly, without
+      # retries/baselines; POSIX full-suite exclusions below remain unchanged.
+      - name: Native Windows resources, budgets, and executable verification
+        if: runner.os == 'Windows'
+        timeout-minutes: 12
+        shell: bash
+        env:
+          GOMAXPROCS: "2"
+          GOFLAGS: "-p=2"
+        run: |
+          set -o pipefail
+          go test -json -count=1 -timeout 3m ./pkg/resources -run 'Test(CollectLiveHost|CollectSingleSample|HostObservation|ResourceAlert|ResourcesObservationChild)' | tee "$RUNNER_TEMP/windows-resources.jsonl"
+          go test -json -count=1 -timeout 3m ./pkg/llmbudget | tee "$RUNNER_TEMP/windows-llmbudget.jsonl"
+          # Fail if build tags accidentally exclude a promised native proof.
+          go test ./pkg/dag -list '^TestCapacity(Executable|UnsupportedPlatforms)' > "$RUNNER_TEMP/windows-capacity-tests.txt"
+          grep -Fx 'TestCapacityExecutablePlatformMode' "$RUNNER_TEMP/windows-capacity-tests.txt"
+          grep -Fx 'TestCapacityUnsupportedPlatformsNeverAdvertiseGuardedExecution' "$RUNNER_TEMP/windows-capacity-tests.txt"
+          go test -json -count=1 -timeout 3m ./pkg/dag -run '^TestCapacity(Executable|UnsupportedPlatforms)' | tee "$RUNNER_TEMP/windows-capacity.jsonl"
+
+      - name: Retain native Windows resource admission diagnostics
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-windows-resource-admission
+          path: ${{ runner.temp }}/windows-*.jsonl
+          if-no-files-found: error
+
+      # Process lifecycle regressions must pass every repetition. Keep this
+      # outside the ratchet so a retry cannot hide an intermittent failure,
+      # and retain package-level JSON diagnostics even when all tests pass.
+      - name: Repeated process lifecycle tests (no retries or baseline)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          go test -json ./pkg/chat ./pkg/foreman -run 'Test(Cancel|HungChild|KillProcessTree|ServeControl|ControlStop|ApplyCancelled)' -count=10 -timeout 5m | tee "$RUNNER_TEMP/process-lifecycle.jsonl"
+
+      - name: Retain process lifecycle diagnostics
+        if: always() && runner.os != 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: process-lifecycle-${{ runner.os }}
+          path: ${{ runner.temp }}/process-lifecycle.jsonl
+          if-no-files-found: error
+
+      # The suite runs through the RATCHET, not `go test` directly: tests for
+      # open stories are committed red on purpose, so a plain gate is
+      # permanently red and therefore reports nothing. The script derives the
+      # same package set as the vet step above (it must stay runnable on its
+      # own, outside CI) and fails on a NEW failure, on a baseline entry that
+      # started passing, and unconditionally on a build error.
+      - name: Test (no-regression ratchet against test/known-failures.txt)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: ./scripts/ci-test-gate.sh
+
+      # End-to-end checks for the bashy apps console over a REAL port: HTTP,
+      # WebSocket and the app APIs, with no browser. They cover the plumbing the
+      # byte-level tests cannot see — a tile whose path is not mounted, a page
+      # whose script 404s into the launcher's catch-all, an app API that answers
+      # only off its mount, the terminal's pty socket — and they were behind a
+      # tag that nothing ran, so the coverage existed without being evidence.
+      #
+      # Not on Windows: the pty half skips there anyway, and the native compile
+      # step above already proves the package builds.
+      - name: E2E checks (bashy apps console, no browser)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: go test ./pkg/webconsole -tags e2e -count=1 -timeout 10m
+
+      # Browser end-to-end checks for the bashy apps console. These are the only
+      # tests that can see the CASCADE, the DOM, and a script that THROWS —
+      # every other test in that package reads served bytes and cannot tell a
+      # working page from one whose JS died on load. Four UI defects shipped in
+      # one day through exactly that gap, including a fix in the pairing
+      # section that stopped the Settings dialog from opening at all.
+      #
+      # Linux only: the ubuntu runner image ships Chrome, which chromedp needs.
+      # They are behind the verifydom tag so a contributor without a browser is
+      # never blocked by them.
+      - name: E2E browser checks (bashy apps console)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: go test ./pkg/webconsole -tags verifydom -count=1 -timeout 15m

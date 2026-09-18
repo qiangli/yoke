@@ -1,0 +1,8 @@
+agents:
+  - name: opencode-kimi-k2.7-code
+    tool: opencode
+    model: kimi-k2.7-code
+    display: "opencode · kimi-k2.7-code"
+    ledger:
+      reliability: medium
+      notes: delivers committed work; pre-seed opencode.json

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en" data-bashy-console="1">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<base href="/">
+<title>Messages — bashy</title>
+<link rel="stylesheet" href="app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'><rect width='40' height='40' rx='10' fill='%232563eb'/><rect x='9' y='12' width='22' height='16' rx='3' fill='none' stroke='%23ffffff' stroke-width='2.6'/><path d='M9.5 14.5L20 22l10.5-7.5' fill='none' stroke='%235eead4' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+</head>
+<body class="standalone">
+<header id="bar">
+  <a id="brand" href="mb/" title="bashy messages">
+    <svg class="logo" viewBox="0 0 40 40" aria-hidden="true">
+      <rect width="40" height="40" rx="10" fill="var(--logo-bg)"/>
+      <rect x="9" y="12" width="22" height="16" rx="3" fill="none" stroke="var(--logo-fg)" stroke-width="2.6"/>
+      <path d="M9.5 14.5L20 22l10.5-7.5" fill="none" stroke="var(--logo-accent)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <span id="wordmark">bashy<b>messages</b></span>
+  </a>
+  <span class="spacer"></span>
+  <span id="mb-who" title="posts are signed with this name"></span>
+</header>
+
+<main id="mb-page">
+  <section id="mb-filters">
+    <label>From <select id="f-from"><option value="">anyone</option></select></label>
+    <label>To <select id="f-to"><option value="">anyone</option></select></label>
+    <label>Topic <select id="f-topic"><option value="">any</option></select></label>
+    <input id="f-q" type="search" placeholder="Search posts" autocomplete="off" spellcheck="false">
+    <label class="chk"><input id="f-unread" type="checkbox"> unread for me</label>
+    <button id="f-clear" class="btn" type="button">Clear</button>
+    <span id="mb-count"></span>
+  </section>
+
+  <section id="mb-list" aria-live="polite"></section>
+
+  <form id="mb-composer" autocomplete="off">
+    <div class="row">
+      <input id="c-to" list="mb-agents" placeholder="To — an agent or role (blank = everyone)" spellcheck="false">
+      <datalist id="mb-agents"></datalist>
+      <input id="c-topic" list="mb-topics" placeholder="Topic" spellcheck="false">
+      <datalist id="mb-topics"></datalist>
+    </div>
+    <textarea id="c-body" rows="3" placeholder="A short request, priority, owner — plus a stable repo-relative reference."></textarea>
+    <div class="row foot">
+      <span id="c-count"></span>
+      <span class="spacer"></span>
+      <span id="c-result"></span>
+      <button id="c-send" class="btn primary" type="submit">Post</button>
+    </div>
+  </form>
+
+  <footer id="mb-foot"></footer>
+</main>
+
+<script src="mb.js"></script>
+</body>
+</html>

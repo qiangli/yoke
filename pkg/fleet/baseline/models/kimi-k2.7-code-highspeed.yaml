@@ -1,0 +1,32 @@
+name: kimi-k2.7-code-highspeed
+# Its OWN family, not `kimi-code`: it shares version 2.7 with kimi-k2.7-code, and
+# two models at the same version in one family would tie the derived family
+# alias, which fails closed. Same weights class, higher-throughput serving tier.
+family: kimi-code-highspeed
+version: "2.7"
+band: 2
+band_source: declared
+# declared: inherits kimi-k2.7-code's L2 (operator) peg — a serving tier is not
+# evidence of a different band. Seeded 2026-09-13.
+display: Kimi K2.7 Code (High-speed)
+provider: openai-compat
+kind: api
+# Moonshot serves two endpoints: api.moonshot.ai (international) and
+# api.moonshot.cn (China). With NO base_url a client falls back to its own
+# default and fails opaquely — see kimi-k2.7-code.yaml.
+base_url: https://api.moonshot.ai/v1
+api_key_ref: moonshot
+# Listed by GET https://api.moonshot.ai/v1/models on 2026-09-13 (alongside
+# kimi-k2.6, kimi-k2.7-code, kimi-k3). Not yet exercised with a completion from
+# this host.
+model: moonshot/kimi-k2.7-code-highspeed
+quality: 0.82
+# Moonshot bills the high-speed tier above the standard one; the exact ratio was
+# not read from a price sheet, so this is kimi-k2.7-code's prior scaled up. A
+# ledger record replaces it.
+cost_micro: 3000
+# ycode detects the provider from the model name, so it takes the BARE id;
+# opencode's provider id is `moonshotai` — see kimi-k2.7-code.yaml.
+ids:
+  ycode: kimi-k2.7-code-highspeed
+  opencode: moonshotai/kimi-k2.7-code-highspeed

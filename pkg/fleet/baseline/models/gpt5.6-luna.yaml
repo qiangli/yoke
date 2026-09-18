@@ -1,0 +1,12 @@
+name: gpt5.6-luna
+family: gpt-luna
+version: "5.6"
+band: 2
+band_source: declared
+display: GPT-5.6 Luna
+provider: openai
+kind: subscription
+model: gpt-5.6-luna
+quality: 0.82
+cost_micro: 3000
+# OpenAI: fast and affordable agentic coding model

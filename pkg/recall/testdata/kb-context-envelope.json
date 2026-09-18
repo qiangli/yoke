@@ -1,0 +1,42 @@
+{
+  "context_version": 1,
+  "for": "how do I stop a stuck process on a paired host",
+  "budget": { "limit": 700, "used": 412 },
+  "abstained": false,
+  "rings": [
+    { "name": "agent", "ok": true },
+    { "name": "repo", "ok": true },
+    { "name": "host", "ok": false, "error": "kb: open <path>: no such file or directory" }
+  ],
+  "blocks": [
+    {
+      "ring": "repo",
+      "form": "page",
+      "ref": "kb:never-pkill-on-an-outpost-host",
+      "tokens": 38,
+      "resolution": "line",
+      "status": "validated",
+      "text": "never pkill on an outpost host — WHEN tempted to kill a stuck process on a paired machine, find the exact pid",
+      "why": ["title", "tags"]
+    },
+    {
+      "ring": "agent",
+      "form": "note",
+      "ref": "kb:outpost-restart-after-config-set",
+      "tokens": 24,
+      "resolution": "cue",
+      "status": "candidate",
+      "text": "outpost config set says Restarting but may not restart; verify by process start time",
+      "why": ["body"]
+    },
+    {
+      "ring": "repo",
+      "form": "relation",
+      "ref": "graph:9f2c1a7b0d3e4f56",
+      "tokens": 12,
+      "resolution": "cue",
+      "text": "kb:never-pkill-on-an-outpost-host --about--> outpost",
+      "why": ["target match"]
+    }
+  ]
+}

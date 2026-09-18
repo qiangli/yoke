@@ -1,0 +1,68 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>ycode live</title>
+  <style>
+    body { font: 13px -apple-system, system-ui, sans-serif; width: 420px; margin: 0; padding: 12px; box-sizing: border-box; }
+    body.windowed { width: 100%; min-width: 360px; height: 100vh; display: flex; flex-direction: column; }
+    body.windowed #debug { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+    body.windowed #debug-list { max-height: none; flex: 1; }
+    h1 { font-size: 14px; margin: 0 0 8px 0; }
+    h1 .version { color: #888; font-weight: normal; font-size: 11px; margin-left: 4px; }
+    label { display: block; margin: 8px 0 4px 0; color: #555; }
+    input[type=number] { width: 80px; padding: 4px; }
+    button { padding: 6px 12px; margin-right: 4px; cursor: pointer; }
+    #status { margin-top: 10px; padding: 6px; border-radius: 4px; }
+    #status.connected { background: #e6f7e6; color: #135f13; }
+    #status.disconnected { background: #f6f6f6; color: #555; }
+    #status.connecting { background: #fff3cd; color: #6b4f00; }
+    .hint { color: #777; font-size: 11px; margin-top: 8px; line-height: 1.4; }
+
+    #debug { margin-top: 10px; border-top: 1px solid #eee; padding-top: 8px; }
+    #debug-header { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #555; }
+    #debug-header .title { flex: 1; font-weight: 600; color: #333; }
+    #debug-header label { display: inline-flex; align-items: center; gap: 3px; margin: 0; cursor: pointer; }
+    #debug-header button { padding: 2px 6px; font-size: 11px; }
+    #debug-list { margin-top: 6px; max-height: 320px; overflow-y: auto; font: 11px ui-monospace, Menlo, Consolas, monospace; border: 1px solid #eee; border-radius: 3px; background: #fafafa; }
+    #debug-list:empty::after { content: "no tool calls yet"; display: block; padding: 8px; color: #999; font-family: -apple-system, system-ui, sans-serif; text-align: center; }
+    .row { padding: 3px 6px; border-bottom: 1px solid #f0f0f0; cursor: pointer; }
+    .row:last-child { border-bottom: none; }
+    .row:hover { background: #f0f0f0; }
+    .row .head { display: flex; gap: 6px; align-items: baseline; }
+    .row .mark { width: 10px; flex: none; font-weight: bold; }
+    .row.ok .mark { color: #2a8a2a; }
+    .row.err .mark { color: #c0392b; }
+    .row .method { flex: 1; color: #222; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .row .dur { color: #888; font-size: 10px; flex: none; }
+    .row .body { display: none; margin-top: 4px; color: #444; white-space: pre-wrap; word-break: break-all; }
+    .row.open .body { display: block; }
+    .row .body .label { color: #888; }
+  </style>
+</head>
+<body>
+  <h1>ycode live <span class="version" id="version"></span></h1>
+  <label for="port">ycode port</label>
+  <input id="port" type="number" min="1" max="65535" value="58082" />
+  <div style="margin-top: 10px;">
+    <button id="connect">Connect this tab</button>
+    <button id="disconnect">Disconnect</button>
+  </div>
+  <div id="status" class="disconnected">disconnected</div>
+  <div id="debug">
+    <div id="debug-header">
+      <span class="title">Recent tool calls</span>
+      <label><input type="checkbox" id="mirror" /> console</label>
+      <button id="popout" title="Open in resizable window">Pop out</button>
+      <button id="clear">Clear</button>
+    </div>
+    <div id="debug-list"></div>
+  </div>
+  <div class="hint">
+    Pin this extension and click <strong>Connect this tab</strong> on
+    whichever tab you want ycode to drive. The websocket connects to
+    <code>127.0.0.1:&lt;port&gt;</code>.
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

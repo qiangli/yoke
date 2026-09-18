@@ -1,0 +1,8 @@
+agents:
+  - name: agy-opus4.6
+    tool: agy
+    model: opus4.6
+    display: "agy · opus4.6"
+    ledger:
+      reliability: unmeasured
+      notes: declared band, no gated run on this host yet

@@ -1,0 +1,11 @@
+name: haiku4.5
+family: haiku
+version: "4.5"
+band: 1
+band_source: declared
+display: Claude Haiku 4.5
+provider: anthropic
+kind: subscription
+model: claude-haiku-4-5
+quality: 0.72
+cost_micro: 1000

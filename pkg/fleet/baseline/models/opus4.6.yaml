@@ -1,0 +1,28 @@
+name: opus4.6
+family: opus
+version: "4.6"
+band: 3
+band_source: declared
+# declared, NOT operator: this host has run it through no gate.
+#
+# Deliberately NOT re-pegged to L4 with opus4.8 and opus5 on 2026-08-02. That
+# re-peg was an owner's judgement backed by lived experience of those two models
+# in the steward and conductor seats; nobody has run 4.6 here at all, and
+# inheriting a band from a newer sibling is exactly the "a version number is not
+# evidence" mistake the gemini3.6 entry avoids in the other direction. L3 is the
+# conservative rung for an unrun opus; a gated run moves it.
+display: Claude Opus 4.6 (Thinking)
+provider: anthropic
+kind: subscription
+# Reachable on this host ONLY through agy, which serves Anthropic models to
+# Free/Pro/Ultra plans (antigravity.google/docs/models; Enterprise plans do not
+# get them). Keyed under `ids` rather than a bare `model:` because this id is
+# agy's spelling — if the same model later arrives through the claude tool it
+# will carry a different one, and a bare field would have to be rewritten.
+#
+# Verified accepted on the wire 2026-08-02:
+#   $ agy --model claude-opus-4-6-thinking -p "reply with exactly: OK"  -> OK
+ids:
+  agy: claude-opus-4-6-thinking
+quality: 0.90
+cost_micro: 15000

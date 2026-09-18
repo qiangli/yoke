@@ -1,0 +1,12 @@
+agents:
+  - name: ycode-glm-5.3-flash
+    tool: ycode
+    model: glm-5.3-flash
+    display: "ycode · glm-5.3-flash"
+    ledger:
+      reliability: unmeasured
+      notes: |
+        L2 rung (declared) — the flash-class sibling of ycode-glm-5.3 (Kenji) on
+        the same prepaid coding-plan seat. Same lane, same reasoning as its
+        parent: an API-key model belongs on the first-party harness. Seeded
+        2026-09-13; no gated run on this host yet.

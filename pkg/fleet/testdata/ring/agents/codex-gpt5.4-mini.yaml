@@ -1,0 +1,8 @@
+agents:
+  - name: codex-gpt5.4-mini
+    tool: codex
+    model: gpt5.4-mini
+    display: "codex · gpt5.4-mini"
+    ledger:
+      reliability: unmeasured
+      notes: L1 rung

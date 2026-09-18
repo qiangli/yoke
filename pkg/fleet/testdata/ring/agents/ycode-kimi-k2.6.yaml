@@ -1,0 +1,8 @@
+agents:
+  - name: ycode-kimi-k2.6
+    tool: ycode
+    model: kimi-k2.6
+    display: "ycode · kimi-k2.6"
+    ledger:
+      reliability: unmeasured
+      notes: L2 rung — first-party harness

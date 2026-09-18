@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+*.local
+package-lock.json
+
+# Playwright output. `test-results/.last-run.json` records the previous run's
+# verdict so `--last-failed` can re-run just what broke — it is per-machine
+# state, and a committed one reports another machine's result as this one's.
+test-results/
+playwright-report/
+blob-report/
+.playwright/

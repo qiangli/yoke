@@ -1,0 +1,11 @@
+name: goose
+kind: cli
+display: Goose
+hidden: true
+cli:
+  binary: goose
+  launch:
+    env_markers:
+      - GOOSE_TERMINAL
+    notes: Recognized for self-identification only; no headless launch template.
+quirks: detection only

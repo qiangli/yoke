@@ -1,0 +1,82 @@
+/* Atmospheric background presets for the bashy launcher.
+ * Each --bg-* is a multi-layer image expression: gradients + small inline
+ * SVG silhouettes that render the scene. Total weight is a few KB.
+ *
+ * Every preset is CSS only — layered gradients plus a small inline SVG
+ * silhouette — so the whole set costs a few KB and there is no image to fetch,
+ * which is what makes it embeddable in a single Go binary.
+ *
+ * Two consumers: the fixed full-viewport background div paints the active
+ * preset, and the settings dialog's swatch grid reuses the same custom
+ * properties so the preview matches what you get.
+ */
+:root {
+  --bg-sky:
+    radial-gradient(ellipse 35% 22% at 18% 28%, rgba(255,255,255,0.65), transparent 60%),
+    radial-gradient(ellipse 28% 18% at 62% 42%, rgba(255,255,255,0.5), transparent 60%),
+    radial-gradient(ellipse 32% 20% at 42% 72%, rgba(255,255,255,0.55), transparent 60%),
+    radial-gradient(ellipse 25% 16% at 86% 66%, rgba(255,255,255,0.4), transparent 60%),
+    linear-gradient(180deg, #74b3e6 0%, #a8d2ef 55%, #d4eaf6 100%);
+  --bg-ocean:
+    linear-gradient(180deg,
+      #8ec6e6 0%, #5ea4cb 22%, #3a82b1 42%,
+      #275c83 56%, #2c5471 64%,
+      #d5be8c 78%, #edd2a3 88%, #e2c592 100%);
+  --bg-mountains:
+    url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAxMjAwIDYwMCcgcHJlc2VydmVBc3BlY3RSYXRpbz0neE1pZFlNYXggc2xpY2UnPjxwYXRoIGQ9J00wIDYwMCBMMCAzNjAgTDE2MCAyNjAgTDMyMCAzNTAgTDUwMCAyMzAgTDcwMCAzMjAgTDkwMCAyMDAgTDEwODAgMjkwIEwxMjAwIDI1MCBMMTIwMCA2MDAgWicgZmlsbD0nIzU3NjQ3Nicgb3BhY2l0eT0nMC41NScvPjxwYXRoIGQ9J00wIDYwMCBMMCA0NDAgTDIwMCAzNzAgTDQyMCA0MjAgTDYyMCAzNDAgTDgyMCA0MDAgTDEwMjAgMzYwIEwxMjAwIDQwMCBMMTIwMCA2MDAgWicgZmlsbD0nIzcxODlhMicgb3BhY2l0eT0nMC43Jy8+PHBhdGggZD0nTTAgNjAwIEwwIDUxMCBMMzIwIDQ3MCBMNjQwIDUwMCBMOTYwIDQ2MCBMMTIwMCA0OTAgTDEyMDAgNjAwIFonIGZpbGw9JyNhMGIzYzgnIG9wYWNpdHk9JzAuODUnLz48L3N2Zz4="),
+    radial-gradient(ellipse 60% 25% at 50% 70%, rgba(255,255,255,0.45), transparent 70%),
+    linear-gradient(180deg, #b8c1cf 0%, #9eaabd 50%, #889bb0 100%);
+  --bg-plateau:
+    linear-gradient(180deg,
+      #b3d8ef 0%, #c8e1f1 35%,
+      #d4dfa6 46%, #92c067 56%,
+      #6fa64a 76%, #4f8636 100%);
+  --bg-lakes:
+    radial-gradient(ellipse 22% 6% at 28% 72%, #3f6e89 0%, #345f78 80%, transparent 82%),
+    radial-gradient(ellipse 18% 5% at 70% 80%, #3f6e89 0%, #345f78 80%, transparent 82%),
+    radial-gradient(ellipse 14% 4% at 50% 64%, #3f6e89 0%, #345f78 80%, transparent 82%),
+    linear-gradient(180deg, #b6c4d0 0%, #94a4b3 50%, #6b7d8c 100%);
+  --bg-bamboo:
+    url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAxMjAwIDYwMCcgcHJlc2VydmVBc3BlY3RSYXRpbz0neE1pZFlNaWQgc2xpY2UnPjxnIHN0cm9rZT0nIzM1NWMyNScgc3Ryb2tlLXdpZHRoPSczJyBmaWxsPSdub25lJyBvcGFjaXR5PScwLjYnPjxwYXRoIGQ9J00xMjAgMCBMMTAwIDYwMCcvPjxwYXRoIGQ9J00yMjAgMCBMMjQwIDYwMCcvPjxwYXRoIGQ9J00zODAgMCBMMzYwIDYwMCcvPjxwYXRoIGQ9J001MjAgMCBMNTQwIDYwMCcvPjxwYXRoIGQ9J002ODAgMCBMNjYwIDYwMCcvPjxwYXRoIGQ9J044NDAgMCBMODYwIDYwMCcvPjxwYXRoIGQ9J00xMDAwIDAgTDk4MCA2MDAnLz48cGF0aCBkPSdNMTEyMCAwIEwxMTQwIDYwMCcvPjwvZz48ZyBzdHJva2U9JyMyNjQwMTgnIHN0cm9rZS13aWR0aD0nMicgZmlsbD0nbm9uZScgb3BhY2l0eT0nMC41NSc+PGxpbmUgeDE9JzkwJyB5MT0nMTYwJyB4Mj0nMTEwJyB5Mj0nMTYwJy8+PGxpbmUgeDE9Jzk1JyB5MT0nMzIwJyB4Mj0nMTE1JyB5Mj0nMzIwJy8+PGxpbmUgeDE9JzEwMCcgeTE9JzQ4MCcgeDI9JzEyMCcgeTI9JzQ4MCcvPjxsaW5lIHgxPScyMjUnIHkxPScyMDAnIHgyPScyNDUnIHkyPScyMDAnLz48bGluZSB4MT0nMjMwJyB5MT0nMzgwJyB4Mj0nMjUwJyB5Mj0nMzgwJy8+PGxpbmUgeDE9JzM2NScgeTE9JzI0MCcgeDI9JzM4NScgeTI9JzI0MCcvPjxsaW5lIHgxPSczNzAnIHkxPSc0MjAnIHgyPSczOTAnIHkyPSc0MjAnLz48bGluZSB4MT0nNTI1JyB5MT0nMTYwJyB4Mj0nNTQ1JyB5Mj0nMTYwJy8+PGxpbmUgeDE9JzUzMCcgeTE9JzM0MCcgeDI9JzU1MCcgeTI9JzM0MCcvPjxsaW5lIHgxPSc2NjUnIHkxPScyMjAnIHgyPSc2ODUnIHkyPScyMjAnLz48bGluZSB4MT0nNjcwJyB5MT0nNDAwJyB4Mj0nNjkwJyB5Mj0nNDAwJy8+PGxpbmUgeDE9Jzg0NScgeTE9JzE4MCcgeDI9Jzg2NScgeTI9JzE4MCcvPjxsaW5lIHgxPSc4NTAnIHkxPSczNjAnIHgyPSc4NzAnIHkyPSczNjAnLz48bGluZSB4MT0nOTg1JyB5MT0nMjQwJyB4Mj0nMTAwNScgeTI9JzI0MCcvPjxsaW5lIHgxPSc5OTAnIHkxPSc0MjAnIHgyPScxMDEwJyB5Mj0nNDIwJy8+PC9nPjwvc3ZnPg=="),
+    radial-gradient(ellipse 90% 60% at 50% 80%, rgba(40,80,30,0.4), transparent 70%),
+    linear-gradient(180deg, #6e9956 0%, #4e7a3a 55%, #36592a 100%);
+}
+
+/* The fixed full-viewport background <div> sits at z-index 0 behind the
+ * launcher card. data-bg switches the active preset. */
+[data-bashy-bg] {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-attachment: fixed;
+  background-size: cover, cover, cover, cover, cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  transition: opacity 240ms ease;
+}
+[data-bashy-bg="none"] { background: transparent; }
+[data-bashy-bg="sky"]       { background-image: var(--bg-sky); }
+[data-bashy-bg="ocean"]     { background-image: var(--bg-ocean); }
+[data-bashy-bg="mountains"] { background-image: var(--bg-mountains); }
+[data-bashy-bg="plateau"]   { background-image: var(--bg-plateau); }
+[data-bashy-bg="lakes"]     { background-image: var(--bg-lakes); }
+[data-bashy-bg="bamboo"]    { background-image: var(--bg-bamboo); }
+
+/* Swatch reuses the same backgrounds at thumbnail size. */
+.bg-swatch {
+  background-size: cover, cover, cover, cover, cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+.bg-swatch[data-bg="sky"]       { background-image: var(--bg-sky); }
+.bg-swatch[data-bg="ocean"]     { background-image: var(--bg-ocean); }
+.bg-swatch[data-bg="mountains"] { background-image: var(--bg-mountains); }
+.bg-swatch[data-bg="plateau"]   { background-image: var(--bg-plateau); }
+.bg-swatch[data-bg="lakes"]     { background-image: var(--bg-lakes); }
+.bg-swatch[data-bg="bamboo"]    { background-image: var(--bg-bamboo); }
+.bg-swatch[data-bg="none"] {
+  background: repeating-linear-gradient(45deg,
+    var(--color-card) 0px, var(--color-card) 8px,
+    var(--color-background) 8px, var(--color-background) 16px);
+}

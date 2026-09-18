@@ -1,0 +1,8 @@
+agents:
+  - name: codex-gpt5.3-spark
+    tool: codex
+    model: gpt5.3-spark
+    display: "codex · gpt5.3-spark"
+    ledger:
+      reliability: unmeasured
+      notes: L1 rung

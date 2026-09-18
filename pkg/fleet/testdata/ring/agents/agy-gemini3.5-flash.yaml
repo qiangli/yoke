@@ -1,0 +1,8 @@
+agents:
+  - name: agy-gemini3.5-flash
+    tool: agy
+    model: gemini3.5-flash
+    display: "agy · gemini3.5-flash"
+    ledger:
+      reliability: unmeasured
+      notes: L2 rung; live-probed

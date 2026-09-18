@@ -1,0 +1,17 @@
+name: gpt-oss-120b
+family: gpt-oss
+version: "120b"
+band: 2
+band_source: declared
+# declared and deliberately conservative. This is the MEDIUM reasoning variant of
+# an open-weights 120B — the only variant agy exposes — and no gated run on this
+# host has placed it. L2 is the "capable coder, unproven as a lead" rung, which
+# is where an unmeasured model belongs; a run moves it in either direction.
+display: GPT-OSS-120B (Medium)
+provider: openai
+kind: subscription
+# agy-only on this host; verified accepted on the wire 2026-08-02.
+ids:
+  agy: gpt-oss-120b-medium
+quality: 0.72
+cost_micro: 800

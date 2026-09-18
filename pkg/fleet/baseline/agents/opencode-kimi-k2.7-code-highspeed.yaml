@@ -1,0 +1,8 @@
+agents:
+  - name: opencode-kimi-k2.7-code-highspeed
+    tool: opencode
+    model: kimi-k2.7-code-highspeed
+    display: "opencode · kimi-k2.7-code-highspeed"
+    ledger:
+      reliability: unmeasured
+      notes: L2 rung; the high-throughput serving tier of opencode-kimi-k2.7-code — pre-seed opencode.json; seeded 2026-09-13

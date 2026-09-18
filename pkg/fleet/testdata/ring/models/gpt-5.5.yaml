@@ -1,0 +1,21 @@
+name: gpt-5.5
+family: gpt
+version: "5.5"
+band: 4
+band_source: operator
+# operator: serves BOTH conductor and steward
+display: GPT-5.5 (ChatGPT subscription)
+provider: openai
+kind: subscription
+model: gpt-5.5
+quality: 0.90
+cost_micro: 12000
+# codex leads gated repo-local implementation and trails on broad/ambiguous
+# strategy (2026-07-08 validation meeting).
+spec:
+  coding: 0.06
+  bug-fixing: 0.06
+  test-generation: 0.04
+  planning: -0.05
+  decision-support: -0.05
+  orchestration: -0.05

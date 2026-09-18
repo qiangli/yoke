@@ -1,0 +1,25 @@
+name: fable5.1
+family: fable
+version: "5.1"
+band: 4
+band_source: declared
+# frontier — the current Anthropic flagship (Claude 5 family: Fable 5.1, Opus 5,
+# Sonnet 5, Haiku 4.5). Seeded 2026-09-13.
+display: Claude Fable 5.1
+provider: anthropic
+kind: subscription
+model: claude-fable-5-1
+# A PRIOR, not a measurement: it inherits fable5's L4 peg (itself `operator`,
+# not `measured`), so this is `declared` and prints with the tilde. No gated run
+# on this host has placed Fable 5.1 anywhere; `bashy leaderboard --role
+# steward` would settle it. The `fable` family alias re-points to the highest
+# version, so `fable` now names 5.1 and fable5 stays reachable by its own name.
+quality: 0.94
+# Carried over from fable5: the per-turn cost there was corrected 12000 -> 30000
+# on 2026-08-02 because Fable runs roughly double opus's token count for the
+# same work (operator observation). Nothing measured on 5.1 yet argues with it.
+cost_micro: 30000
+spec:
+  code-review: 0.03
+  deep-research: 0.05
+  orchestration: 0.04

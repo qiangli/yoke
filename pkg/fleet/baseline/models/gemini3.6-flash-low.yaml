@@ -1,0 +1,13 @@
+name: gemini3.6-flash-low
+family: gemini-flash-low
+version: "3.6"
+band: 1
+band_source: declared
+display: Gemini 3.6 Flash (Low)
+provider: gemini
+kind: subscription
+# From `agy models`; this exact id was verified accepted on the wire 2026-08-02.
+model: gemini-3.6-flash-low
+# Prior, not a measurement — see gemini3.6-flash.yaml.
+quality: 0.70
+cost_micro: 700

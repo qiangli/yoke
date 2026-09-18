@@ -1,0 +1,26 @@
+name: gemini3.6-flash
+family: gemini-flash
+version: "3.6"
+band: 2
+band_source: declared
+display: Gemini 3.6 Flash (High)
+provider: gemini
+kind: subscription
+# The id comes from `agy models`, which is agy's OWN published list and the only
+# authoritative source for this field. Verified accepted on the wire 2026-08-02:
+#
+#   $ agy --model gemini-3.6-flash-low -p "reply with exactly: OK"  -> OK (exit 0)
+#
+# Note for anyone reading the 3.1/3.5 entries: their comment says agy "takes
+# DISPLAY strings, not slugs". That is no longer true — both forms are accepted
+# today (the display string was verified on the wire in the same session). What
+# the original comment actually caught was a WRONG id (`gemini-3.1`), not a
+# wrong FORMAT. Prefer the published slug: it is what agy lists, so it cannot
+# drift from what agy accepts.
+model: gemini-3.6-flash-high
+# A PRIOR, not a measurement. Gemini 3.6 is a FLASH-class model — Antigravity's
+# own docs file it under "Fast", and there is no 3.6 Pro — so it is banded with
+# 3.5-flash rather than above it. band_source stays `declared`: this host has run
+# it through no gate, and a newer version number is not evidence of a higher band.
+quality: 0.76
+cost_micro: 1200

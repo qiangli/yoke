@@ -1,0 +1,47 @@
+#!/bin/sh
+# A deterministic stand-in for an agent CLI.
+#
+# Addressing an agent in a room execs a real agent binary (chat.Invoke), which a
+# hermetic suite must never do: it needs a network, a key, and it answers
+# differently every time. This prints a reply derived from the model it was told
+# to use and the prompt it was handed, then exits 0 — so a test can assert on an
+# agent's turn without any of that.
+#
+# THE SHEBANG IS LOAD-BEARING: it must be an ABSOLUTE path, never
+# `#!/usr/bin/env bash`.
+#
+# chat.agentCommand (pkg/chat/chat.go) deliberately puts a shim directory on the
+# spawned agent's PATH so that every `bash`/`sh`/`zsh` the agent shells out to is
+# re-routed to the running bashy binary — that is how the pure-Go userland and
+# OTel reach an agent's own commands. `#!/usr/bin/env bash` is a PATH lookup, so
+# this fixture was resolving `bash` to the shim and re-executing WHOEVER LAUNCHED
+# IT: under `go test` that was the test binary, which re-ran the suite and
+# returned its "PASS" output as the agent's reply (4 chars, 24s); under the
+# browser harness it was the e2e SERVER, which called ListenAndServe and blocked
+# until the turn timed out. Both were silent — one recorded a confident wrong
+# answer, the other recorded nothing.
+#
+# An absolute interpreter path is not looked up, so the shim cannot intercept it.
+set -eu
+model=""
+while [ $# -gt 1 ]; do
+  case "$1" in
+    --model) model="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+prompt="${1:-}"
+case "$prompt" in
+  *"show sampled progress"*)
+    line=1
+    while [ "$line" -le 8 ]; do
+      printf 'progress line %s: inspecting deterministic fixture output\n' "$line"
+      sleep 0.2
+      line=$((line + 1))
+    done
+    # Leave the sampled card on screen long enough for the browser assertion;
+    # the completed transcript remains deterministic and contains every line.
+    sleep 1
+    ;;
+esac
+printf 'ECHO[%s] %s\n' "$model" "$prompt"

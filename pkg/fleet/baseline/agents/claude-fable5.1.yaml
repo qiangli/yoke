@@ -1,0 +1,13 @@
+agents:
+  - name: claude-fable5.1
+    tool: claude
+    model: fable5.1
+    display: "claude · fable5.1"
+    ledger:
+      reliability: unmeasured
+      notes: |
+        L4 rung (declared — inherits fable5's operator peg). Added as a SECOND
+        agent next to claude-fable5 rather than by re-pointing it: the nickname
+        is drawn from the binding, so re-pointing would destroy the name the
+        board already knows, and the old row would become a lie. Seeded
+        2026-09-13; no gated run on this host yet.
