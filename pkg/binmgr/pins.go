@@ -31,7 +31,7 @@ import (
 //
 // Key format: "<name>@<version>/<goos>/<goarch>", e.g.
 //
-//	"go@go1.26.4/linux/amd64". Value: the lowercase hex sha256 of the exact
+//	"go@1.27.1/linux/amd64". Value: the lowercase hex sha256 of the exact
 //
 // artifact binmgr downloads (the raw binary or the archive — the file as a
 // whole, matching what download() hashes).
@@ -42,6 +42,15 @@ import (
 // is intentionally allowed to be sparse — an absent pin is not an error, it just
 // means that tool still resolves its checksum from the release.
 var pinnedDigests = map[string]string{
+	// gotoolchain.DefaultVersion — official go.dev archives, digest confirmed
+	// by an independent download + sha256 of the artifact itself.
+	"go@1.27.1/darwin/amd64":  "8f8f52c6649542cf027bbc9b9c68d1ec042f9f34808a40413f0b8b3f66f3caa4",
+	"go@1.27.1/darwin/arm64":  "ee215d57e0ec269c60cc9ceca68e6bda321ba9ee5afe24f4b0988703c2d87d12",
+	"go@1.27.1/linux/amd64":   "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445",
+	"go@1.27.1/linux/arm64":   "3450b45a3f9ee8568792736a5c5e70a1f2e9b36c35a8f74958c03e51d7d92bec",
+	"go@1.27.1/windows/amd64": "a3911b5e0e1b1053f25ed0675f4c1c6aad1e2bfcf253df2b9be4caabd2edd95d",
+	"go@1.27.1/windows/arm64": "13b69b87bb0e83f96bc68560a8cace7f0343b1e03469f1110ea18d17e3234069",
+
 	"witr@v0.3.3/darwin/amd64":  "39934f6a8d6a0413c52324ccdbd3a0867371785b6c066005ea063a78279487ef",
 	"witr@v0.3.3/darwin/arm64":  "d05b51825604d608da8757e549a1f5322549a350f8336c593429f3f2cd507927",
 	"witr@v0.3.3/linux/amd64":   "08fc46e3f80a374476f71d0d6e6579477cd98c6df5cc59d98224adf948f5ebf5",

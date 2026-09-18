@@ -26,8 +26,9 @@ import (
 )
 
 // DefaultVersion is used when no version is requested. Keep in step with the
-// dhnt go floor.
-const DefaultVersion = "1.26.4"
+// Bash# Go coordinate: fenced ~~~go islands and --source=go refuse a toolchain
+// below 1.27, so the toolchain bashy provisions for itself must satisfy them.
+const DefaultVersion = "1.27.1"
 
 const releaseIndexURL = "https://go.dev/dl/?mode=json&include=all"
 
@@ -54,7 +55,7 @@ func entrypoint() string {
 // Ensure makes the requested Go toolchain available and returns the path to its
 // `go` executable plus its GOROOT. Idempotent: a cache hit does no network I/O
 // (binmgr short-circuits on the cached entrypoint). version is a bare number
-// like "1.26.4" (a leading "go" is tolerated); empty means DefaultVersion.
+// like "1.27.1" (a leading "go" is tolerated); empty means DefaultVersion.
 func Ensure(ctx context.Context, version string) (goBin, goroot string, err error) {
 	version = strings.TrimPrefix(strings.TrimSpace(version), "go")
 	if version == "" {
