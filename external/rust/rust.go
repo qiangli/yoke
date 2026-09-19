@@ -171,3 +171,29 @@ func newCmd(use, short, tool string) *cobra.Command {
 		},
 	}
 }
+
+// EnsureRustc provisions the bashy-owned Rust toolchain (rustup-init, one
+// time) and returns the absolute path of the REAL rustc inside it — the
+// toolchain binary, not the CARGO_HOME/bin rustup proxy, so a caller can
+// exec it without RUSTUP_HOME in its environment. Idempotent.
+func EnsureRustc(ctx context.Context) (string, error) {
+	binDir, env, err := ensureToolchain(ctx)
+	if err != nil {
+		return "", err
+	}
+	rustup := filepath.Join(binDir, "rustup")
+	if runtime.GOOS == "windows" {
+		rustup += ".exe"
+	}
+	c := exec.CommandContext(ctx, rustup, "which", "rustc")
+	c.Env = env
+	out, err := c.Output()
+	if err != nil {
+		return "", fmt.Errorf("rust: rustup which rustc: %w", err)
+	}
+	path := strings.TrimSpace(string(out))
+	if path == "" {
+		return "", fmt.Errorf("rust: rustup which rustc reported nothing")
+	}
+	return path, nil
+}

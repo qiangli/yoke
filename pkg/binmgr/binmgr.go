@@ -27,11 +27,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/ulikunitz/xz"
 )
 
 // Asset is one platform's download for a tool.
 type Asset struct {
-	// URL is the download URL (a raw binary, or a .tar.gz/.tgz/.zip archive).
+	// URL is the download URL (a raw binary, or a .tar.gz/.tgz/.tar.xz/.zip archive).
 	URL string `json:"url"`
 	// SHA256 is the expected hex digest of the downloaded file (preferred).
 	SHA256 string `json:"sha256"`
@@ -275,25 +277,19 @@ func extract(archivePath, url, member, dest string) error {
 	switch {
 	case strings.HasSuffix(url, ".zip"):
 		return extractZip(archivePath, member, dest)
-	case strings.HasSuffix(url, ".tar.gz"), strings.HasSuffix(url, ".tgz"):
-		return extractTarGz(archivePath, member, dest)
+	case strings.HasSuffix(url, ".tar.gz"), strings.HasSuffix(url, ".tgz"), strings.HasSuffix(url, ".tar.xz"):
+		return extractTar(archivePath, url, member, dest)
 	default:
-		return fmt.Errorf("binmgr: archive member requested but %s is not a .zip/.tar.gz", url)
+		return fmt.Errorf("binmgr: archive member requested but %s is not a .zip/.tar.gz/.tar.xz", url)
 	}
 }
 
-func extractTarGz(archivePath, member, dest string) error {
-	f, err := os.Open(archivePath)
+func extractTar(archivePath, url, member, dest string) error {
+	tr, closer, err := tarReader(archivePath, url)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	gz, err := gzip.NewReader(f)
-	if err != nil {
-		return err
-	}
-	defer gz.Close()
-	tr := tar.NewReader(gz)
+	defer closer.Close()
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -364,25 +360,42 @@ func extractTree(archivePath, url, destDir string) error {
 	switch {
 	case strings.HasSuffix(url, ".zip"):
 		return extractTreeZip(archivePath, destDir)
-	case strings.HasSuffix(url, ".tar.gz"), strings.HasSuffix(url, ".tgz"):
-		return extractTreeTarGz(archivePath, destDir)
+	case strings.HasSuffix(url, ".tar.gz"), strings.HasSuffix(url, ".tgz"), strings.HasSuffix(url, ".tar.xz"):
+		return extractTreeTar(archivePath, url, destDir)
 	default:
-		return fmt.Errorf("binmgr: tree extraction needs a .zip/.tar.gz, got %s", url)
+		return fmt.Errorf("binmgr: tree extraction needs a .zip/.tar.gz/.tar.xz, got %s", url)
 	}
 }
 
-func extractTreeTarGz(archivePath, destDir string) error {
+// tarReader opens a .tar.gz/.tgz or .tar.xz archive (Zig ships only .tar.xz
+// on unix). The returned closer releases the file.
+func tarReader(archivePath, url string) (*tar.Reader, io.Closer, error) {
 	f, err := os.Open(archivePath)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-	defer f.Close()
+	if strings.HasSuffix(url, ".tar.xz") {
+		xr, err := xz.NewReader(f)
+		if err != nil {
+			f.Close()
+			return nil, nil, err
+		}
+		return tar.NewReader(xr), f, nil
+	}
 	gz, err := gzip.NewReader(f)
+	if err != nil {
+		f.Close()
+		return nil, nil, err
+	}
+	return tar.NewReader(gz), f, nil
+}
+
+func extractTreeTar(archivePath, url, destDir string) error {
+	tr, closer, err := tarReader(archivePath, url)
 	if err != nil {
 		return err
 	}
-	defer gz.Close()
-	tr := tar.NewReader(gz)
+	defer closer.Close()
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {

@@ -26,6 +26,12 @@ import (
 // backward-compatible; bump periodically or override with $BASHY_UV_VERSION.
 const DefaultVersion = "0.5.11"
 
+// DefaultPython is the CPython line a Bash# island gets when neither the
+// project (.python-version) nor the caller names one: uv installs the newest
+// patch of this line from python-build-standalone (PSF-2.0). Override with
+// $BASHY_PYTHON_VERSION.
+const DefaultPython = "3.13"
+
 // uvTriple maps Go's GOOS/GOARCH to uv's release triple + archive ext.
 func uvTriple() (triple, ext string, err error) {
 	var osPart string
@@ -160,4 +166,47 @@ func newCmd(use, short, mode string) *cobra.Command {
 			return run(cmd.Context(), mode, args)
 		},
 	}
+}
+
+// EnsureInterpreter provisions a uv-managed CPython and returns its absolute
+// python executable. version is a uv python request ("3.13", "3.12.4", ""
+// for DefaultPython). Only uv-MANAGED interpreters are considered — a host
+// python on PATH is never returned, so the same request yields the same
+// interpreter on every host. Idempotent: an installed interpreter is found
+// without network I/O.
+func EnsureInterpreter(ctx context.Context, version string) (string, error) {
+	uv, err := EnsureUv(ctx, os.Getenv("BASHY_UV_VERSION"))
+	if err != nil {
+		return "", err
+	}
+	if version = strings.TrimSpace(version); version == "" {
+		if version = strings.TrimSpace(os.Getenv("BASHY_PYTHON_VERSION")); version == "" {
+			version = DefaultPython
+		}
+	}
+	env := append(os.Environ(), "UV_PYTHON_PREFERENCE=only-managed", "UV_NO_CONFIG=1")
+	find := func() (string, error) {
+		c := exec.CommandContext(ctx, uv, "python", "find", version)
+		c.Env = env
+		out, err := c.Output()
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(string(out)), nil
+	}
+	if path, err := find(); err == nil && path != "" {
+		return path, nil
+	}
+	fmt.Fprintf(os.Stderr, "note: installing CPython %s via uv — one-time, into uv's managed python dir\n", version)
+	c := exec.CommandContext(ctx, uv, "python", "install", version)
+	c.Env = env
+	c.Stdout, c.Stderr = os.Stderr, os.Stderr
+	if err := c.Run(); err != nil {
+		return "", fmt.Errorf("python: uv python install %s: %w", version, err)
+	}
+	path, err := find()
+	if err != nil || path == "" {
+		return "", fmt.Errorf("python: uv python find %s after install: %w", version, err)
+	}
+	return path, nil
 }

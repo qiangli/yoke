@@ -105,6 +105,15 @@ func CC(ctx context.Context) ([]string, error) {
 	return []string{bin, "cc"}, nil
 }
 
+// CXX is CC's C++ counterpart: zig's clang++ driver, same bundled libc++.
+func CXX(ctx context.Context) ([]string, error) {
+	bin, err := Ensure(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return []string{bin, "c++"}, nil
+}
+
 // SystemFallback reports a host C compiler when one exists. It is only for
 // callers that explicitly accept an unpinned toolchain — a certification build
 // must not use it, because the compiler would then vary per host and the
