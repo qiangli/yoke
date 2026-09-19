@@ -967,13 +967,39 @@ func newWeaveSessionsCmd() *cobra.Command {
 	return cmd
 }
 
+// newWeaveSessionStatusCmd is `sprint session status` (alias `open`): the
+// explicit spelling of the derivation every cross-host verb performs lazily —
+// resolve (or create) the repo's session, join it, print the card.
+func newWeaveSessionStatusCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	cmd := &cobra.Command{
+		Use:     "status",
+		Aliases: []string{"open"},
+		Short:   "Resolve (or create) this repo's shared session and print its card",
+		Long: `The repo you are standing in IS the session key: its origin remote, normalized
+to github.com/<org>/<repo>. status looks that session up among the tasks you can
+reach, creates it when the repo has none, joins it as <agent>@<host>, and prints
+the card — task id, repo key, bound sprint, lease holder, participants, and the
+time the answer was fetched. 'open' is the same command.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 0 {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "sprint session status",
+					weavecli.ExitInvalidArg, fmt.Errorf("expected no arguments")))
+			}
+			return runWeaveSessionStatus(cmd, &flags)
+		},
+	}
+	flags.attach(cmd)
+	return cmd
+}
+
 func newWeaveJoinCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var observer bool
 	var once bool
 	cmd := &cobra.Command{
 		Use:   "join [task-id]",
-		Short: "Join a Cloudbox shared session and follow its event feed",
+		Short: "Join this repo's shared session (derived from origin; or an explicit task id) and follow its feed",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 1 {
 				return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "weave join",

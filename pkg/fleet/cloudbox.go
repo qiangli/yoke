@@ -42,15 +42,29 @@ type CloudConfig struct {
 // read-only is the point: a token that pulls a catalog should not be able to
 // rewrite it.
 func (c CloudConfig) Resolve() (CloudClient, error) {
-	base := strings.TrimRight(firstNonEmptyStr(c.URL, os.Getenv("BASHY_CLOUDBOX_URL"), "https://ai.dhnt.io"), "/")
-	tok := firstNonEmptyStr(c.Token, os.Getenv("BASHY_FLEET_TOKEN"), os.Getenv("BASHY_API_KEY"))
-	if tok == "" {
-		tok = outpostToken()
-	}
+	base, tok := ResolveCloud(c.URL, c.Token)
 	if tok == "" {
 		return CloudClient{}, fmt.Errorf("fleet: no cloudbox token (set $BASHY_FLEET_TOKEN or pass --token); the registry works fine without one")
 	}
 	return CloudClient{BaseURL: base, Token: tok, HTTP: &http.Client{Timeout: 20 * time.Second}}, nil
+}
+
+// ResolveCloud is the ONE ladder every bashy-side cloudbox client walks, so a
+// paired host needs no per-feature token setup:
+//
+//	URL:   override > $BASHY_CLOUDBOX_URL > https://ai.dhnt.io
+//	Token: override > $BASHY_FLEET_TOKEN > $BASHY_API_KEY > paired outpost
+//
+// The paired outpost's token is the derived credential — pairing is the only
+// setup a developer does. An empty token means "not paired and nothing set";
+// the caller words the refusal for its own feature.
+func ResolveCloud(urlOverride, tokenOverride string) (base, token string) {
+	base = strings.TrimRight(firstNonEmptyStr(urlOverride, os.Getenv("BASHY_CLOUDBOX_URL"), "https://ai.dhnt.io"), "/")
+	token = firstNonEmptyStr(tokenOverride, os.Getenv("BASHY_FLEET_TOKEN"), os.Getenv("BASHY_API_KEY"))
+	if token == "" {
+		token = outpostToken()
+	}
+	return base, token
 }
 
 func outpostToken() string {

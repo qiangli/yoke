@@ -14,6 +14,10 @@ type directiveMockSessionClient struct {
 	appended       []AppendEventReq
 }
 
+func (m *directiveMockSessionClient) CreateTask(ctx context.Context, req CreateTaskReq) (TaskSummary, error) {
+	return TaskSummary{}, nil
+}
+
 func (m *directiveMockSessionClient) ListTasks(ctx context.Context) ([]TaskSummary, error) {
 	return nil, nil
 }

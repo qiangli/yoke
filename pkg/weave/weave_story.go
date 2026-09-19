@@ -607,7 +607,8 @@ func newSprintSessionCmd() *cobra.Command {
 		Short: "Cloudbox shared sessions (live multi-host collaboration on a sprint)",
 	}
 	cmd.AddCommand(
-		newWeaveSessionsCmd(), // `session list`
+		newWeaveSessionsCmd(),      // `session list`
+		newWeaveSessionStatusCmd(), // `session status` / `session open`
 		newWeaveJoinCmd(),
 		newWeaveTakeCmd(),
 		newWeaveHandoffCmd(),

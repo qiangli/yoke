@@ -30,6 +30,8 @@ type sessionRepoClient struct {
 	repoRoot string
 	pointer  *SessionPointer
 	client   SessionClient
+	// created reports that EnsureRepoSession minted the task on this call.
+	created bool
 }
 
 func sessionClientForRepo() (*sessionRepoClient, error) {
@@ -45,21 +47,14 @@ func sessionClientForRepoRoot(repoRoot string) (*sessionRepoClient, error) {
 	if p == nil {
 		return nil, fmt.Errorf("no shared session pointer found; join with an explicit task id first")
 	}
-	if p.CloudboxBase == "" {
-		return nil, fmt.Errorf("session pointer missing cloudbox_base")
-	}
-	tokenRef := p.TokenRef
-	if tokenRef == "" {
-		tokenRef = "CLOUDBOX_TOKEN"
-	}
-	token := os.Getenv(tokenRef)
-	if token == "" {
-		return nil, fmt.Errorf("session token env %s is not set", tokenRef)
+	base, token, err := sessionCredentials(p)
+	if err != nil {
+		return nil, err
 	}
 	return &sessionRepoClient{
 		repoRoot: repoRoot,
 		pointer:  p,
-		client:   newSessionClient(p.CloudboxBase, token),
+		client:   newSessionClient(base, token),
 	}, nil
 }
 
@@ -84,31 +79,62 @@ func runWeaveSessions(cmd *cobra.Command, flags *weaveOutputFlags) error {
 func runWeaveJoin(cmd *cobra.Command, explicitTaskID string, observer, once bool, flags *weaveOutputFlags) error {
 	const verb = "weave join"
 	mode := flags.mode()
-	sc, err := sessionClientForRepo()
-	if err != nil {
-		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitPrecondFail, err))
-	}
-	taskID, err := resolveJoinTaskID(cmd.Context(), sc.client, explicitTaskID, sc.pointer)
-	if err != nil {
-		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitInvalidArg, err))
-	}
-	participant, host := defaultSessionParticipant()
-	role := "contributor"
-	if observer {
-		role = "observer"
-	}
-	joined, err := sc.client.Join(cmd.Context(), taskID, JoinReq{
-		Participant: participant,
-		Host:        host,
-		Tool:        "weave",
-		Role:        role,
-	})
-	if err != nil {
-		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitGenericFail, err))
-	}
-	sc.pointer.TaskID = taskID
-	if err := WriteSessionPointer(sc.repoRoot, sc.pointer); err != nil {
-		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitGenericFail, err))
+	cwd, _ := os.Getwd()
+	var (
+		sc     *sessionRepoClient
+		taskID string
+		joined JoinResponse
+		err    error
+	)
+	if explicitTaskID == "" && !observer {
+		// The derived path: the repo you stand in IS the session key.
+		sc, err = EnsureRepoSession(cmd.Context(), cwd)
+		if err != nil {
+			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitPrecondFail, err))
+		}
+		taskID = sc.pointer.TaskID
+		participant, host := SessionParticipant()
+		joined, err = sc.client.Join(cmd.Context(), taskID, JoinReq{Participant: participant, Host: host, Tool: "bashy", Role: "contributor"})
+		if err != nil {
+			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitGenericFail, err))
+		}
+	} else {
+		// The explicit path: an id someone handed over, or an observer seat.
+		// No pointer is required — credentials come from the one ladder.
+		pointer, perr := ReadSessionPointer(cwd)
+		if perr != nil {
+			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitPrecondFail, perr))
+		}
+		base, token, cerr := sessionCredentials(pointer)
+		if cerr != nil {
+			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitPrecondFail, cerr))
+		}
+		if pointer == nil {
+			pointer = &SessionPointer{CloudboxBase: base, TokenRef: "CLOUDBOX_TOKEN"}
+		}
+		sc = &sessionRepoClient{repoRoot: cwd, pointer: pointer, client: newSessionClient(base, token)}
+		taskID, err = resolveJoinTaskID(cmd.Context(), sc.client, explicitTaskID, sc.pointer)
+		if err != nil {
+			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitInvalidArg, err))
+		}
+		participant, host := SessionParticipant()
+		role := "contributor"
+		if observer {
+			role = "observer"
+		}
+		joined, err = sc.client.Join(cmd.Context(), taskID, JoinReq{Participant: participant, Host: host, Tool: "bashy", Role: role})
+		if err != nil {
+			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitGenericFail, err))
+		}
+		sc.pointer.TaskID = taskID
+		if sc.pointer.RepoKey == "" {
+			if key, kerr := RepoKey(cwd); kerr == nil {
+				sc.pointer.RepoKey = key
+			}
+		}
+		if err := WriteSessionPointer(sc.repoRoot, sc.pointer); err != nil {
+			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitGenericFail, err))
+		}
 	}
 	if mode == weavecli.OutputJSON {
 		if once {
@@ -388,7 +414,7 @@ func appendSessionEvent(ctx context.Context, client SessionClient, taskID string
 
 func takeSessionLease(ctx context.Context, client SessionClient, taskID, holder string, force bool, ttl time.Duration) (LeaseResponse, error) {
 	if holder == "" {
-		holder, _ = defaultSessionParticipant()
+		holder, _ = SessionParticipant()
 	}
 	action := "claim"
 	if force {
@@ -531,21 +557,6 @@ func joinedTaskID(pointer *SessionPointer) (string, error) {
 	return pointer.TaskID, nil
 }
 
-func defaultSessionParticipant() (string, string) {
-	host, _ := os.Hostname()
-	user := os.Getenv("USER")
-	if user == "" {
-		user = os.Getenv("USERNAME")
-	}
-	if user == "" {
-		user = "unknown"
-	}
-	if host == "" {
-		host = "localhost"
-	}
-	return user + "@" + host, host
-}
-
 func renderSessionTasks(w io.Writer, tasks []TaskSummary) {
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tSTATUS\tLEASE_HOLDER\tGOAL")
@@ -591,6 +602,68 @@ func renderLease(w io.Writer, lease LeaseResponse) {
 	if !lease.LeaseExpires.IsZero() {
 		fmt.Fprintf(w, "lease_expires: %s\n", lease.LeaseExpires.Format(time.RFC3339))
 	}
+}
+
+// sessionStatus is the card `sprint session open|status` prints: the derived
+// key, the task, the bound sprint, who holds the lease, who has been seen —
+// and WHEN the answer was fetched, because a shared view that does not say
+// how fresh it is reads as truth.
+type sessionStatus struct {
+	TaskID       string   `json:"task_id"`
+	RepoKey      string   `json:"repo_key,omitempty"`
+	SprintSeq    int64    `json:"sprint_seq,omitempty"`
+	Created      bool     `json:"created,omitempty"`
+	Holder       *string  `json:"lease_holder"`
+	Participants []string `json:"participants"`
+	Me           string   `json:"me"`
+	AsOf         string   `json:"as_of"`
+}
+
+func runWeaveSessionStatus(cmd *cobra.Command, flags *weaveOutputFlags) error {
+	const verb = "sprint session status"
+	mode := flags.mode()
+	cwd, _ := os.Getwd()
+	sc, err := EnsureRepoSession(cmd.Context(), cwd)
+	if err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitPrecondFail, err))
+	}
+	roster, err := sessionRoster(cmd.Context(), sc.client, sc.pointer.TaskID)
+	if err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitGenericFail, err))
+	}
+	me, _ := SessionParticipant()
+	st := sessionStatus{
+		TaskID: sc.pointer.TaskID, RepoKey: sc.pointer.RepoKey, SprintSeq: sc.pointer.SprintSeq,
+		Created: sc.created, Holder: roster.Holder, Participants: roster.Participants, Me: me,
+		AsOf: time.Now().UTC().Format(time.RFC3339),
+	}
+	if mode == weavecli.OutputJSON {
+		return ec(emitOK(cmd.OutOrStdout(), mode, verb, st))
+	}
+	holder := ""
+	if st.Holder != nil {
+		holder = *st.Holder
+	}
+	w := cmd.OutOrStdout()
+	fmt.Fprintf(w, "session: %s", st.TaskID)
+	if st.Created {
+		fmt.Fprint(w, "  (created now)")
+	}
+	fmt.Fprintln(w)
+	if st.RepoKey != "" {
+		fmt.Fprintf(w, "repo: %s\n", st.RepoKey)
+	}
+	if st.SprintSeq > 0 {
+		fmt.Fprintf(w, "sprint: #%d\n", st.SprintSeq)
+	}
+	fmt.Fprintf(w, "me: %s\n", st.Me)
+	fmt.Fprintf(w, "lease_holder: %s\n", holder)
+	fmt.Fprintln(w, "participants:")
+	for _, p := range st.Participants {
+		fmt.Fprintf(w, "  %s\n", p)
+	}
+	fmt.Fprintf(w, "as of %s\n", st.AsOf)
+	return ec(emitOK(w, mode, verb, nil))
 }
 
 func renderRoster(w io.Writer, roster sessionRosterResult) {

@@ -12,6 +12,14 @@ type SessionPointer struct {
 	SprintID     string `json:"sprint_id,omitempty"`
 	CloudboxBase string `json:"cloudbox_base"`
 	TokenRef     string `json:"token_ref"`
+	// RepoKey is the normalized origin (`github.com/org/repo`) the session
+	// was derived from — recorded so a later reader can tell WHY this task
+	// and detect a remote that moved.
+	RepoKey string `json:"repo_key,omitempty"`
+	// SprintSeq is the manager's sprint number bound to this session, so a
+	// commit on another host may carry `Sprint: #<seq>` for a sprint that
+	// exists on the manager's board only.
+	SprintSeq int64 `json:"sprint_seq,omitempty"`
 }
 
 func ReadSessionPointer(repoRoot string) (*SessionPointer, error) {

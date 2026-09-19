@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,14 @@ type fakeSessionClient struct {
 	shares      []GrantShareReq
 	revokes     []string
 	leaseErr    error
+	creates     []CreateTaskReq
+}
+
+func (f *fakeSessionClient) CreateTask(ctx context.Context, req CreateTaskReq) (TaskSummary, error) {
+	f.creates = append(f.creates, req)
+	t := TaskSummary{ID: fmt.Sprintf("task-%d", len(f.creates)), Goal: req.Goal, TargetRepo: req.TargetRepo, Status: "active"}
+	f.tasks = append(f.tasks, t)
+	return t, nil
 }
 
 func (f *fakeSessionClient) ListTasks(ctx context.Context) ([]TaskSummary, error) {

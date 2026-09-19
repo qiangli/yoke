@@ -21,6 +21,7 @@ var (
 
 type SessionClient interface {
 	ListTasks(ctx context.Context) ([]TaskSummary, error)
+	CreateTask(ctx context.Context, req CreateTaskReq) (TaskSummary, error)
 	GetEvents(ctx context.Context, taskID, since string, limit int) (EventsResponse, error)
 	AppendEvent(ctx context.Context, taskID string, req AppendEventReq) (Event, error)
 	CreateSprint(ctx context.Context, req CreateSprintReq) (SprintSummary, error)
@@ -51,6 +52,7 @@ type TaskSummary struct {
 	Name         string    `json:"name"`
 	Display      string    `json:"display"`
 	Goal         string    `json:"goal"`
+	TargetRepo   string    `json:"target_repo,omitempty"`
 	DoneCriteria string    `json:"done_criteria"`
 	Status       string    `json:"status"`
 	Summary      string    `json:"summary"`
@@ -62,6 +64,19 @@ type TaskSummary struct {
 
 type ListTasksResponse struct {
 	Tasks []TaskSummary `json:"tasks"`
+}
+
+// CreateTaskReq mirrors cloudbox's v1CreateTaskReq; a repo-keyed team session
+// sets TargetRepo to the normalized origin and nothing else it does not know.
+type CreateTaskReq struct {
+	Name         string   `json:"name,omitempty"`
+	Display      string   `json:"display,omitempty"`
+	Goal         string   `json:"goal"`
+	TargetRepo   string   `json:"target_repo,omitempty"`
+	TargetRef    string   `json:"target_ref,omitempty"`
+	Gate         string   `json:"gate,omitempty"`
+	Fleet        []string `json:"fleet,omitempty"`
+	DoneCriteria string   `json:"done_criteria,omitempty"`
 }
 
 type Event struct {
@@ -211,6 +226,14 @@ func (c *httpSessionClient) ListTasks(ctx context.Context) ([]TaskSummary, error
 		return nil, err
 	}
 	return out.Tasks, nil
+}
+
+func (c *httpSessionClient) CreateTask(ctx context.Context, req CreateTaskReq) (TaskSummary, error) {
+	var out TaskSummary
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/tasks", req, &out); err != nil {
+		return TaskSummary{}, err
+	}
+	return out, nil
 }
 
 func (c *httpSessionClient) GetEvents(ctx context.Context, taskID, since string, limit int) (EventsResponse, error) {
