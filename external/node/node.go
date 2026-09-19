@@ -253,3 +253,57 @@ func newExecCmd(use, short, tool string) *cobra.Command {
 		},
 	}
 }
+
+// DefaultTypeScript pins the `typescript` npm package (Apache-2.0) a Bash#
+// TypeScript island compiles with when the project carries none of its own:
+// the last JavaScript-API line, which the island's analyzer drives directly.
+// Override with $BASHY_TYPESCRIPT_VERSION.
+const DefaultTypeScript = "5.9.3"
+
+// EnsureTypeScript provisions the pinned typescript package into a
+// bashy-owned directory with the provisioned npm and returns the package
+// directory (…/node_modules/typescript), which the island's analyzer loads by
+// absolute path. Idempotent: a present package.json of that version is
+// returned without network I/O. A host's global npm root is never consulted.
+func EnsureTypeScript(ctx context.Context) (string, error) {
+	version := strings.TrimSpace(os.Getenv("BASHY_TYPESCRIPT_VERSION"))
+	if version == "" {
+		version = DefaultTypeScript
+	}
+	_, binDir, err := Ensure(ctx, "")
+	if err != nil {
+		return "", err
+	}
+	cache, err := binmgr.CacheDir()
+	if err != nil {
+		return "", err
+	}
+	prefix := filepath.Join(filepath.Dir(cache), "typescript", version)
+	pkg := filepath.Join(prefix, "node_modules", "typescript")
+	if data, err := os.ReadFile(filepath.Join(pkg, "package.json")); err == nil && strings.Contains(string(data), `"version": "`+version+`"`) {
+		return pkg, nil
+	}
+	if err := os.MkdirAll(prefix, 0o755); err != nil {
+		return "", err
+	}
+	npm := filepath.Join(binDir, "npm")
+	if runtime.GOOS == "windows" {
+		npm += ".cmd"
+	}
+	fmt.Fprintf(os.Stderr, "note: installing typescript@%s via npm — one-time, into %s\n", version, prefix)
+	argv := []string{npm, "install", "--prefix", prefix, "--no-audit", "--no-fund", "--no-package-lock", "--loglevel=error", "typescript@" + version}
+	if runtime.GOOS == "windows" {
+		// npm.cmd is a batch file: cmd.exe runs it.
+		argv = append([]string{"cmd.exe", "/d", "/c"}, argv...)
+	}
+	c := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	c.Stdout, c.Stderr = os.Stderr, os.Stderr
+	c.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if err := c.Run(); err != nil {
+		return "", fmt.Errorf("node: npm install typescript@%s: %w", version, err)
+	}
+	if _, err := os.Stat(filepath.Join(pkg, "package.json")); err != nil {
+		return "", fmt.Errorf("node: typescript@%s did not land at %s: %w", version, pkg, err)
+	}
+	return pkg, nil
+}

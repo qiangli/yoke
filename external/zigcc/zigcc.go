@@ -19,7 +19,10 @@ package zigcc
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 
 	"github.com/qiangli/yoke/pkg/binmgr"
 )
@@ -112,6 +115,29 @@ func CXX(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	return []string{bin, "c++"}, nil
+}
+
+// Linker returns a single program that behaves as `cc` — a one-line wrapper
+// over `zig cc` written next to the cached zig — for callers that can name a
+// linker but not an argv (rustc -C linker=). Idempotent.
+func Linker(ctx context.Context) (string, error) {
+	bin, err := Ensure(ctx)
+	if err != nil {
+		return "", err
+	}
+	wrapper := filepath.Join(filepath.Dir(bin), "zig-cc")
+	body := "#!/bin/sh\nexec \"" + bin + "\" cc \"$@\"\n"
+	if runtime.GOOS == "windows" {
+		wrapper += ".cmd"
+		body = "@\"" + bin + "\" cc %*\r\n"
+	}
+	if data, err := os.ReadFile(wrapper); err == nil && string(data) == body {
+		return wrapper, nil
+	}
+	if err := os.WriteFile(wrapper, []byte(body), 0o755); err != nil {
+		return "", fmt.Errorf("zigcc: write linker wrapper: %w", err)
+	}
+	return wrapper, nil
 }
 
 // SystemFallback reports a host C compiler when one exists. It is only for
