@@ -26,9 +26,17 @@ func TestNormalizeRepoKeyFoldsSpellings(t *testing.T) {
 			t.Fatalf("%q → %q, want %q", in, got, want)
 		}
 	}
-	for _, in := range []string{"", "/Users/me/src/bashy", "bashy"} {
+	for _, in := range []string{"", "bashy"} {
 		if _, err := NormalizeRepoKey(in); !errors.Is(err, ErrNoOrigin) {
 			t.Fatalf("%q: want ErrNoOrigin, got %v", in, err)
+		}
+	}
+	// A path remote (a bare repo on a shared filesystem) keys under `file/`,
+	// and file:// spells the same key.
+	for _, in := range []string{"/srv/git/team.git", "file:///srv/git/team.git", "/srv/git/team"} {
+		got, err := NormalizeRepoKey(in)
+		if err != nil || got != "file/srv/git/team" {
+			t.Fatalf("%q → %q, %v", in, got, err)
 		}
 	}
 }

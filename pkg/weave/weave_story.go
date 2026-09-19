@@ -2,6 +2,7 @@ package weave
 
 import (
 	"fmt"
+	todopkg "github.com/qiangli/yoke/pkg/todo"
 	"os"
 	"path/filepath"
 	"sort"
@@ -300,6 +301,13 @@ func runWeaveBoard(cmd *cobra.Command, epic string, flags *weaveOutputFlags) err
 	}
 	now := time.Now().UTC()
 	fmt.Fprintln(out, "SPRINT BOARD")
+	// The board is per host; its STORIES travel through git. One line per
+	// tracked repo says how fresh this host's copy is and what to run.
+	for _, root := range boardStoryRoots(stories) {
+		if fresh := todopkg.RepoFreshness(root); fresh != "" {
+			fmt.Fprintf(out, "%s: %s\n", filepath.Base(root), fresh)
+		}
+	}
 	for _, col := range weaveStoryColumns {
 		fmt.Fprintf(out, "%s:\n", col)
 		any := false
@@ -601,6 +609,26 @@ branches, worktrees, and weave workspaces owned by this sprint.`,
 // with sprint's own board lease verbs; nesting them disambiguates
 // (`sprint take` = local board lease, `sprint session take` = shared
 // cloudbox session lease) and keeps `weave` execution-only.
+// boardStoryRoots is the set of repos the board's open sprints track, each
+// once, so the freshness line is printed per repo rather than per sprint.
+func boardStoryRoots(stories []*weaveStory) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range stories {
+		if s.Column == "done" {
+			continue
+		}
+		for _, root := range sprintStoryRoots(s) {
+			if !seen[root] {
+				seen[root] = true
+				out = append(out, root)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 func newSprintSessionCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "session",

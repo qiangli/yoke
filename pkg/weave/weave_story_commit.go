@@ -6,6 +6,7 @@ package weave
 
 import (
 	"fmt"
+	todopkg "github.com/qiangli/yoke/pkg/todo"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -196,6 +197,34 @@ func validateCommitTraceStories(trace commitTrace, stories []sprintStoryState) e
 	return nil
 }
 
+// loadRepoStoriesForSprint reads the committed stories of the repo the
+// current directory is in (its docs/todo/) and keeps those filed under the
+// sprint. This is the cross-host rung of the trailer check: a sprint number is
+// the manager's, but every story carries it in frontmatter, and the story is
+// checked in — so a second host validates a commit from git alone.
+func loadRepoStoriesForSprint(sprint int64) ([]sprintStoryState, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+	root, err := weaveRepoRoot(cwd)
+	if err != nil {
+		return nil, err
+	}
+	items, err := todopkg.List(todopkg.RepoStore(root), "")
+	if err != nil {
+		return nil, err
+	}
+	var out []sprintStoryState
+	for _, it := range items {
+		if it.Sprint != sprint {
+			continue
+		}
+		out = append(out, sprintStoryState{Ref: sprintStoryRef{Repo: root, ID: it.ID}, Title: it.Title, Status: it.Status, Priority: it.Priority, Seq: it.Seq})
+	}
+	return out, nil
+}
+
 func newSprintCommitMsgCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	cmd := &cobra.Command{
@@ -224,12 +253,25 @@ func newSprintCommitMsgCmd() *cobra.Command {
 			return fail(err)
 		}
 		sprint := findWeaveStory(q, trace.Sprint)
-		if sprint == nil {
-			return fail(fmt.Errorf("commit provenance: Sprint: #%d is not on this host's sprint board", trace.Sprint))
-		}
-		stories, err := loadSprintStories(sprint)
-		if err != nil {
-			return fail(fmt.Errorf("commit provenance: load Sprint #%d stories: %w", trace.Sprint, err))
+		var stories []sprintStoryState
+		if sprint != nil {
+			stories, err = loadSprintStories(sprint)
+			if err != nil {
+				return fail(fmt.Errorf("commit provenance: load Sprint #%d stories: %w", trace.Sprint, err))
+			}
+		} else {
+			// The sprint lives on another host's board (a colleague's, or the
+			// manager's — the sprint board is per host). The committed story
+			// itself says which sprint it belongs to, and the story travels
+			// with the repo, so the repo the commit is happening in is the
+			// authority: derived from git, no session or board needed.
+			stories, err = loadRepoStoriesForSprint(trace.Sprint)
+			if err != nil {
+				return fail(fmt.Errorf("commit provenance: Sprint: #%d is not on this host's sprint board, and this repo's committed stories could not be read: %w", trace.Sprint, err))
+			}
+			if len(stories) == 0 {
+				return fail(fmt.Errorf("commit provenance: Sprint: #%d is not on this host's sprint board and no committed story in this repo (docs/todo/) names it — file the story with `bashy todo add --sprint %d ...` on the manager's host and pull, or take the sprint here", trace.Sprint, trace.Sprint))
+			}
 		}
 		if err := validateCommitTraceStories(trace, stories); err != nil {
 			return fail(fmt.Errorf("commit provenance: %w", err))

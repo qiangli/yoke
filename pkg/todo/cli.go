@@ -326,6 +326,13 @@ func newListCmd(sf storeFunc) *cobra.Command {
 			// The header names WHICH list — auto-detected scope + exact folder — so
 			// there is never confusion about where these tasks live.
 			fmt.Fprintln(cmd.OutOrStdout(), header(scope, st))
+			// A committed list is shared through git; say how fresh this
+			// host's copy is, and what to run when it is behind.
+			if strings.HasPrefix(scope, "repo") {
+				if fresh := RepoFreshness(st.Root); fresh != "" {
+					fmt.Fprintln(cmd.OutOrStdout(), fresh)
+				}
+			}
 			if len(items) == 0 {
 				fmt.Fprintln(cmd.OutOrStdout(), "no tasks (bashy todo add \"...\")")
 				return nil

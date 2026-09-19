@@ -163,3 +163,66 @@ func TestInstallSprintCommitHookPreservesExistingHooks(t *testing.T) {
 		}
 	}
 }
+
+// Sprint 217: the sprint board is per host, but the committed story carries
+// its sprint number, so a commit on ANOTHER host validates from git alone —
+// no board entry, no session.
+func TestSprintCommitMsgAcceptsASprintKnownOnlyFromTheRepoStories(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BASHY_HOME", home)
+	t.Setenv("BASHY_SPRINT_DIR", filepath.Join(home, "sprint")) // empty board: sprint #217 is not here
+	repo := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		c := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		if raw, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, raw)
+		}
+	}
+	git("init", "-q")
+	// The story as the manager's host committed it: frontmatter names the sprint.
+	story := "---\nid: 0329dd5757b0\nseq: 551\ntitle: Local delivery\nstatus: todo\nsprint: 217\n---\n\nbody\n"
+	if err := os.MkdirAll(filepath.Join(repo, "docs", "todo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "docs", "todo", "0329dd5757b0-local-delivery.md"), []byte(story), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wd, _ := os.Getwd()
+	if err := os.Chdir(repo); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+
+	msg := filepath.Join(t.TempDir(), "COMMIT_EDITMSG")
+	if err := os.WriteFile(msg, []byte("inbox: deliver\n\nSprint: #217\nStory: #551\nStory-ID: 0329dd5757b0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run := func(path string) (string, error) {
+		cmd := NewSprintCmd()
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&out)
+		cmd.SetArgs([]string{"commit-msg", path})
+		err := cmd.Execute()
+		return out.String(), err
+	}
+	out, err := run(msg)
+	if err != nil {
+		t.Fatalf("a sprint known from the repo's committed story must validate: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Sprint #217, 1 story reference(s) verified") {
+		t.Fatalf("unexpected output:\n%s", out)
+	}
+
+	// A sprint nobody's story names is still refused, with the cross-host hint.
+	bad := filepath.Join(t.TempDir(), "COMMIT_EDITMSG")
+	if err := os.WriteFile(bad, []byte("x\n\nSprint: #999\nStory: #551\nStory-ID: 0329dd5757b0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err = run(bad)
+	if err == nil || !strings.Contains(out, "not on this host's sprint board and no committed story") {
+		t.Fatalf("want the cross-host refusal, got err=%v\n%s", err, out)
+	}
+}

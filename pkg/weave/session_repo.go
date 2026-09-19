@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -65,15 +66,29 @@ func NormalizeRepoKey(remote string) (string, error) {
 	var host, path string
 	if strings.Contains(remote, "://") {
 		u, err := url.Parse(remote)
-		if err != nil || u.Host == "" {
+		if err != nil {
+			return "", fmt.Errorf("session: cannot parse origin %q", remote)
+		}
+		if u.Scheme == "file" {
+			return NormalizeRepoKey(u.Path)
+		}
+		if u.Host == "" {
 			return "", fmt.Errorf("session: cannot parse origin %q", remote)
 		}
 		host, path = u.Hostname(), u.Path
 	} else if m := scpLikeRemote.FindStringSubmatch(remote); m != nil {
 		host, path = m[1], m[2]
+	} else if filepath.IsAbs(remote) || strings.HasPrefix(remote, "~") || strings.HasPrefix(remote, ".") {
+		// A path remote: a bare repo on a shared filesystem is a legitimate
+		// origin for a team (and the stand-in the gate uses). Key it under a
+		// pseudo-host so every clone of that path agrees, and it can never
+		// collide with a URL's host.
+		abs, err := filepath.Abs(remote)
+		if err != nil {
+			return "", ErrNoOrigin
+		}
+		return "file/" + strings.TrimSuffix(strings.Trim(filepath.ToSlash(abs), "/"), ".git"), nil
 	} else {
-		// A local path or an unknown shape: not a shared remote, so not a
-		// shared session key.
 		return "", ErrNoOrigin
 	}
 	path = strings.Trim(path, "/")
