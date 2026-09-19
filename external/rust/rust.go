@@ -22,6 +22,10 @@ import (
 	"github.com/qiangli/yoke/pkg/binmgr"
 )
 
+// IslandToolchainWindows is the rustup toolchain a Bash# Rust island uses on
+// Windows (see EnsureRustc); BASHY_RUST_VERSION does not change it.
+const IslandToolchainWindows = "stable-x86_64-pc-windows-gnu"
+
 // DefaultToolchain is installed when none is requested. Override via
 // $BASHY_RUST_VERSION (e.g. "1.83.0" or "stable"/"beta"/"nightly").
 const DefaultToolchain = "stable"
@@ -176,16 +180,34 @@ func newCmd(use, short, tool string) *cobra.Command {
 // time) and returns the absolute path of the REAL rustc inside it — the
 // toolchain binary, not the CARGO_HOME/bin rustup proxy, so a caller can
 // exec it without RUSTUP_HOME in its environment. Idempotent.
+//
+// On Windows the island toolchain is the x86_64-pc-windows-GNU one: the msvc
+// target needs Visual Studio's link.exe and the Windows SDK import libraries,
+// which a stock host does not have, while the gnu target links through the
+// provisioned zig cc (the cargo-zigbuild route) — the same on every host.
 func EnsureRustc(ctx context.Context) (string, error) {
 	binDir, env, err := ensureToolchain(ctx)
 	if err != nil {
 		return "", err
 	}
 	rustup := filepath.Join(binDir, "rustup")
+	toolchain := []string(nil)
 	if runtime.GOOS == "windows" {
 		rustup += ".exe"
+		toolchain = []string{"--toolchain", IslandToolchainWindows}
+		c := exec.CommandContext(ctx, rustup, "toolchain", "list")
+		c.Env = env
+		if out, err := c.Output(); err != nil || !strings.Contains(string(out), IslandToolchainWindows) {
+			fmt.Fprintf(os.Stderr, "note: installing the Rust toolchain %s via rustup — one-time\n", IslandToolchainWindows)
+			c := exec.CommandContext(ctx, rustup, "toolchain", "install", IslandToolchainWindows, "--profile", "minimal")
+			c.Stdout, c.Stderr = os.Stderr, os.Stderr
+			c.Env = env
+			if err := c.Run(); err != nil {
+				return "", fmt.Errorf("rust: rustup toolchain install %s: %w", IslandToolchainWindows, err)
+			}
+		}
 	}
-	c := exec.CommandContext(ctx, rustup, "which", "rustc")
+	c := exec.CommandContext(ctx, rustup, append([]string{"which", "rustc"}, toolchain...)...)
 	c.Env = env
 	out, err := c.Output()
 	if err != nil {
