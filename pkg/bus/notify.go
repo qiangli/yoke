@@ -130,6 +130,29 @@ deliberately absent.`,
 			}
 			addr, kind, ok := resolveNotifyTarget(target)
 			if !ok {
+				// A colleague on another host: the doorbell rides the session
+				// relay as a message (topic "notify") and is delivered into
+				// their board when their host next reads its inbox. Scheduling
+				// stays local-only — a scheduled remote notify would need the
+				// relay at fire time, which nothing here guarantees.
+				if route, rok, rerr := resolveRemote(target); rerr != nil {
+					return notifyFailure(cmd, jsonOut, principal, target, subject, rerr)
+				} else if rok {
+					if in != "" || at != "" {
+						return notifyFailure(cmd, jsonOut, principal, target, subject,
+							fmt.Errorf("notify: --in/--at cannot schedule a notification for %s on another host", route.Participant))
+					}
+					res, err := sendRemote(SendRequest{From: principal, To: target, Topic: "notify", Body: subject}, route)
+					if err != nil {
+						return notifyFailure(cmd, jsonOut, principal, target, subject, err)
+					}
+					receipt := NotifyReceipt{SchemaVersion: SchemaVersion, State: StateQueued, Principal: principal, To: route.Participant, Subject: subject}
+					if jsonOut {
+						return json.NewEncoder(cmd.OutOrStdout()).Encode(receipt)
+					}
+					fmt.Fprintf(cmd.ErrOrStderr(), "%s: %s (relayed, id %s)\n", receipt.State, receipt.To, res.ID)
+					return nil
+				}
 				return notifyFailure(cmd, jsonOut, principal, target, subject, unresolvedTargetError(target))
 			}
 			if in != "" && at != "" {

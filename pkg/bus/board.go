@@ -41,6 +41,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
 	"os"
 	"path/filepath"
 	"sort"
@@ -57,7 +58,16 @@ const BoardSchema = "bashy-mb-v1"
 
 // Post is one message on the board.
 type Post struct {
-	// IdempotencyKey is set only by PostMessageOnce for durable system notices.
+	// ID is the post's UNIVERSAL identity: a UUIDv7 minted when the post is
+	// first written, on whichever host that was. Seq is a per-store handle
+	// (`mb:<seq>` means something only on this host); ID is the same string
+	// on every host a message is delivered to, so `mb:<uuid>` resolves
+	// everywhere and a redelivery can be recognised (docs/uniform-ref-
+	// addressing.md D6/D10: the uuid is the identity, seq is input-only).
+	// A legacy record without one reads as before; nothing renumbers.
+	ID string `json:"id,omitempty"`
+	// IdempotencyKey is set by PostMessageOnce for durable system notices and
+	// for a message DELIVERED from another host (key = its ID).
 	IdempotencyKey string `json:"idempotency_key,omitempty"`
 	SchemaVersion  string `json:"schema_version"`
 	Seq            int64  `json:"seq"`
@@ -358,6 +368,9 @@ func PostMessageSeq(p Post) (int64, error) {
 	if p.At == "" {
 		p.At = time.Now().UTC().Format(time.RFC3339)
 	}
+	if strings.TrimSpace(p.ID) == "" {
+		p.ID = NewPostID()
+	}
 
 	var writeErr error
 	withBoardLock("append", func() {
@@ -388,6 +401,10 @@ func PostMessageSeq(p Post) (int64, error) {
 	rotateBoardOpportunistic()
 	return p.Seq, nil
 }
+
+// NewPostID mints the universal identity of a post (UUIDv7: time-ordered, so
+// a same-minute pair still sorts, and a dashed prefix is a valid ref handle).
+func NewPostID() string { return uuid.Must(uuid.NewV7()).String() }
 
 // Posts returns the whole board, oldest first.
 //

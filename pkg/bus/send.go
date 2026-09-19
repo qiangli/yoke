@@ -64,13 +64,19 @@ const (
 	SendDirect    = "direct"
 	SendAudience  = "audience"
 	SendBroadcast = "broadcast"
+	// SendRemote is a message relayed to an agent on another host; its one
+	// Delivery is `queued` until that host delivers it into its own board.
+	SendRemote = "remote"
 )
 
 // SendResult is what a caller needs to report a send truthfully: the assigned
 // sequence, the name to echo back, and one Delivery per recipient carrying the
 // provable Yoke state (accepted/queued/delivered/read/failed/unverified).
 type SendResult struct {
-	Seq  int64  `json:"seq"`
+	Seq int64 `json:"seq"`
+	// ID is the post's universal identity (`mb:<uuid>` resolves on every
+	// host the message reaches); Seq is this host's handle for the same post.
+	ID   string `json:"id,omitempty"`
 	Kind string `json:"kind"`
 
 	// Label is the addressee as the SENDER should see it — the name they typed,
@@ -137,10 +143,32 @@ func Send(req SendRequest) (SendResult, error) {
 	}
 
 	if target := strings.TrimSpace(req.To); target != "" {
+		// A target spelled as <name>@<host> asks the relay's roster FIRST —
+		// that grammar is the roster's, and a local person contact that
+		// happens to look like it must not shadow a colleague on another
+		// host. An ambiguous bare name stops here with choices.
+		if IsRemoteAddress(target) {
+			route, ok, err := resolveRemote(target)
+			if err != nil {
+				return SendResult{}, err
+			}
+			if ok {
+				return sendRemote(req, route)
+			}
+		}
 		// Resolve BEFORE validating the body, so a typo'd addressee is reported
 		// as a typo'd addressee rather than as whatever the body was.
 		addr, kind, ok := ResolveSendTarget(target)
 		if !ok {
+			// Nothing local answers; a bare name may still be ONE colleague
+			// on the session. Several is an ambiguity, not a guess.
+			route, rok, err := resolveRemote(target)
+			if err != nil {
+				return SendResult{}, err
+			}
+			if rok {
+				return sendRemote(req, route)
+			}
 			return SendResult{}, unresolvedTargetError(target)
 		}
 		if err := ValidateCoordinationBody(body); err != nil {

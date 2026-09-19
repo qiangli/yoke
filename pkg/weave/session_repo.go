@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/principal"
@@ -98,6 +100,43 @@ func RepoKey(repoRoot string) (string, error) {
 // The pointer's TokenRef stays an env-var NAME (compatibility with the shipped
 // pointer shape); $CLOUDBOX_TOKEN is its default.
 func sessionCredentials(p *SessionPointer) (base, token string, err error) {
+	key := ""
+	if p != nil {
+		key = p.CloudboxBase + "\x00" + p.TokenRef
+	}
+	credCache.mu.Lock()
+	if c, ok := credCache.m[key]; ok && time.Since(c.at) < credCacheTTL {
+		credCache.mu.Unlock()
+		return c.base, c.token, c.err
+	}
+	credCache.mu.Unlock()
+	base, token, err = resolveSessionCredentials(p)
+	credCache.mu.Lock()
+	credCache.m[key] = credEntry{base: base, token: token, err: err, at: time.Now()}
+	credCache.mu.Unlock()
+	return base, token, err
+}
+
+// The ladder may exec `outpost token print`; an inbox watch polls every two
+// seconds and a turn preamble runs every turn, so the answer is memoized per
+// process for a few minutes. A pairing that changes mid-process is picked up
+// at the next expiry; an error is cached too, so an unpaired host does not
+// spawn a process per poll to learn the same thing.
+type credEntry struct {
+	base, token string
+	err         error
+	at          time.Time
+}
+
+var (
+	credCacheTTL = 5 * time.Minute
+	credCache    = struct {
+		mu sync.Mutex
+		m  map[string]credEntry
+	}{m: map[string]credEntry{}}
+)
+
+func resolveSessionCredentials(p *SessionPointer) (base, token string, err error) {
 	var urlOverride, tokenOverride string
 	if p != nil {
 		urlOverride = p.CloudboxBase

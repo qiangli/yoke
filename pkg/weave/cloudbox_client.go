@@ -373,6 +373,19 @@ func mapCloudboxError(status string, body []byte) error {
 	case "lease_held":
 		return fmt.Errorf("%w: %s: %s", ErrLeaseHeld, status, strings.TrimSpace(string(body)))
 	default:
+		if strings.HasPrefix(status, "403") {
+			var sc struct {
+				RequiredScope string `json:"required_scope"`
+			}
+			_ = json.Unmarshal(body, &sc)
+			if sc.RequiredScope != "" {
+				return fmt.Errorf("%w: this host's cloudbox token lacks %s. A paired outpost token carries the session scopes once cloudbox runs a build with them (tasks:*/sprints:*, Sprint 217) and its boot-time scope catch-up has run; until then set $CLOUDBOX_TOKEN to a token minted with tasks:read,tasks:write,sprints:read,sprints:write", ErrInsufficientScope, sc.RequiredScope)
+			}
+		}
 		return fmt.Errorf("cloudbox request failed: %s: %s", status, strings.TrimSpace(string(body)))
 	}
 }
+
+// ErrInsufficientScope is a 403 naming the scope the token lacks. It is the
+// one refusal a developer can act on without reading cloudbox's JSON.
+var ErrInsufficientScope = errors.New("insufficient scope")

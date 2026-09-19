@@ -50,6 +50,9 @@ func sessionTestEnv(t *testing.T, origin string, fake *fakeSessionClient) string
 		}
 		return origin, nil
 	}
+	credCache.mu.Lock()
+	credCache.m = map[string]credEntry{}
+	credCache.mu.Unlock()
 	oldClient := newSessionClient
 	newSessionClient = func(base, token string) SessionClient {
 		if base != "http://cloudbox.test" || token != "tok-test" {
@@ -133,6 +136,9 @@ func TestEnsureRepoSessionRefusesUnpaired(t *testing.T) {
 	t.Setenv("BASHY_FLEET_TOKEN", "")
 	t.Setenv("BASHY_API_KEY", "")
 	t.Setenv("PATH", t.TempDir()) // no `outpost` binary → no paired token
+	credCache.mu.Lock()
+	credCache.m = map[string]credEntry{}
+	credCache.mu.Unlock()
 	if _, err := EnsureRepoSession(context.Background(), repo); !errors.Is(err, ErrNotPaired) {
 		t.Fatalf("want ErrNotPaired, got %v", err)
 	}

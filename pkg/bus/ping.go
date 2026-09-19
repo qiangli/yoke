@@ -149,26 +149,19 @@ func pingBareTarget(cmd *cobra.Command, target string) error {
 // confirmation that named a recipient the board has never heard of was
 // indistinguishable from a real delivery, which is the defect this closes.
 func pingSend(cmd *cobra.Command, as, target, body string) error {
-	if err := ValidateCoordinationBody(body); err != nil {
-		return fmt.Errorf("ping message: %w", err)
-	}
 	from, err := ResolveAuthoredActor(as)
 	if err != nil {
 		return err
 	}
-	addr, kind, ok := ResolveSendTarget(target)
-	if !ok {
-		return unresolvedTargetError(target)
-	}
-	// Board FIRST, steer second — the durable copy must not be the optional one.
-	seq, err := PostMessageSeq(Post{From: from, To: addr, Topic: "mb", Body: body})
+	// One ladder, Send's: a role to its seat, an agent to its roster name, a
+	// reader to itself, a colleague on another host to the session relay —
+	// and a target matching none of them fails with choices and writes
+	// nothing. Board FIRST, steer second, exactly as mb send.
+	res, err := Send(SendRequest{From: from, To: target, Topic: "mb", Body: body})
 	if err != nil {
-		return err
+		return verbError("ping message", err)
 	}
-	d := SteerLive(addr, steerNotice(from, body))
-	d.State = deliveryState(addr, seq, d.Steered, kind != TargetRole)
-	d.To = RoleLabelFor(d.To)
-	reportDelivery(cmd, []Delivery{d})
+	reportDelivery(cmd, res.Deliveries)
 	return nil
 }
 
