@@ -56,7 +56,7 @@ into ./bin. Pure-Go + cross-platform (no external engines), so it builds for
 every OS including Windows.
 Sources: cmd/, cmds/, tool/, pkg/, git/, shell/, go.mod, go.sum
 Generates: bin/yoke
-Effects: write
+Effects: exec,net,write
 
 ```bash
 set -e
@@ -67,7 +67,7 @@ go build -trimpath -o bin/yoke ./cmd/yoke
 ### test
 Test coreutils' own packages — the cross-platform CI scope (excludes the
 vendored external/ forks).
-Effects: read
+Effects: exec,net,write
 
 ```bash
 set -e
@@ -90,7 +90,6 @@ hook (`scripts/hooks/pre-push`) execs. One script, two callers: the target
 list cannot drift between the manual gate and the automatic one. Read that
 script for the target rationale (including the deliberate `aix`
 fail-closed-lock canary).
-Effects: read
 
 ```bash
 scripts/crossvet.sh
@@ -121,7 +120,6 @@ above. Two checks:
   real fix) inside the script; new unlisted ones hard-fail.
 
 The body delegates to `scripts/consumer-build.sh`.
-Effects: read
 
 ```bash
 scripts/consumer-build.sh
@@ -143,7 +141,6 @@ code block, where the characters survive verbatim.
 The body delegates to `scripts/fmtcheck.sh`, which is also what the CI ubuntu
 leg runs. One script, two callers. Tracked `.go` files only; `external/` is
 excluded as vendored upstream.
-Effects: read
 
 ```bash
 scripts/fmtcheck.sh
@@ -151,7 +148,7 @@ scripts/fmtcheck.sh
 
 ### vet
 Static check, same scope as `test`.
-Effects: read
+Effects: exec,net,write
 
 ```bash
 go vet $(go list ./... | grep -v /external/)
@@ -160,7 +157,7 @@ go vet $(go list ./... | grep -v /external/)
 ### test-all
 Full test including the vendored external/ forks. Needs a unix host with cgo and
 the ollama/podman submodules hydrated.
-Effects: read
+Effects: exec,net,write
 
 ```bash
 go test ./...
@@ -169,7 +166,7 @@ go test ./...
 ### dist
 Cross-compile the multicall binary for every release platform into bin/dist/.
 Generates: bin/dist
-Effects: write
+Effects: exec,net,write
 
 ```bash
 set -e
