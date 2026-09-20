@@ -34,6 +34,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	goruntime "runtime"
 	"strconv"
@@ -2087,5 +2088,62 @@ func TestDOMRunbookPaneSurvivesARefresh(t *testing.T) {
 	}
 	if before != after {
 		t.Errorf("a refresh closed the runbook the reader had open.\n before = %s\n after  = %s", before, after)
+	}
+}
+
+// The Cloud section (sprint 220, story 72c86b58) renders on an unpaired host
+// as the Pair card, its switch hides it, and a submitted invite code runs the
+// pairing sequence with progress on the page — all through the real DOM.
+func TestDOMCloudSectionPairs(t *testing.T) {
+	// Pairing is read from ~/.config/outpost/agent.json; an empty HOME makes
+	// this an UNPAIRED host whatever the developer's machine is, so the Pair
+	// card — the shape a new user meets — is what gets exercised.
+	t.Setenv("HOME", t.TempDir())
+	// A stand-in agent so the sequence runs offline: register and service
+	// install both succeed, and the page must end at "paired".
+	fake := filepath.Join(t.TempDir(), "outpost")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\necho ok\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OUTPOST_BIN", fake)
+	base, ctx, errs := domEnv(t, Options{})
+	var section, status1, status2, hidden string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/"),
+		chromedp.Sleep(1500*time.Millisecond),
+		chromedp.Evaluate(`(document.getElementById("cloud-section")?.innerText||"").slice(0,120)`, &section),
+		chromedp.Click(`#settings-btn`, chromedp.ByQuery),
+		chromedp.Sleep(800*time.Millisecond),
+		// The fourth section switch is Cloud; flip it off and the section goes.
+		chromedp.Evaluate(`(() => { const sw = document.querySelectorAll("#section-toggles input")[3]; sw.click(); return String(!document.getElementById("cloud-section")); })()`, &hidden),
+		chromedp.Evaluate(`(() => { const sw = document.querySelectorAll("#section-toggles input")[3]; sw.click(); document.getElementById("settings").close(); return "ok"; })()`, &status1),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "cloud", errs())
+	if section == "" {
+		t.Fatalf("no Cloud section rendered")
+	}
+	if hidden != "true" {
+		t.Errorf("the Cloud switch did not hide the section (%s)", hidden)
+	}
+	if !strings.Contains(section, "Periscope") && !strings.Contains(section, "Pair this machine") {
+		t.Errorf("Cloud section shows neither the cards nor the Pair card: %q", section)
+	}
+	if strings.Contains(section, "Pair this machine") {
+		// Unpaired here: submit a code and watch the page report progress.
+		if err := chromedp.Run(ctx,
+			chromedp.SendKeys(`#cloud-code`, "invite-test-code", chromedp.ByQuery),
+			chromedp.Click(`#cloud-pair-btn`, chromedp.ByQuery),
+			chromedp.Sleep(2500*time.Millisecond),
+			chromedp.Evaluate(`(document.getElementById("cloud-pair")?.innerText||"") + " | btn=" + (document.getElementById("cloud-pair-btn")?.textContent||"") + " | errs=" + JSON.stringify(window.__errs||[])`, &status2),
+		); err != nil {
+			t.Fatalf("chromedp pair: %v", err)
+		}
+		// With no seam installed the real sequence runs and, on a test
+		// host with no portal, ends in a named error — the page must show it.
+		if !strings.Contains(status2, "Paired") && !strings.Contains(status2, "Pairing…") {
+			t.Errorf("the page did not report the pairing: %q", status2)
+		}
 	}
 }

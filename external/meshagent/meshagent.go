@@ -17,7 +17,38 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/qiangli/yoke/pkg/binmgr"
 )
+
+// DefaultVersion is the pinned outpost release Ensure provisions when
+// $OUTPOST_VERSION is unset. Releases ship one bare binary per platform
+// (`outpost-<ver>-<os>-<arch>[.exe]`) with a `.sha256` sidecar each, which
+// is exactly the shape binmgr verifies: no checksum, no install.
+const DefaultVersion = "v0.14.37"
+
+// Spec is the binmgr GitHub spec for outpost.
+func Spec(version string) binmgr.GitHubSpec {
+	if version == "" {
+		version = strings.TrimSpace(os.Getenv("OUTPOST_VERSION"))
+	}
+	if version == "" {
+		version = DefaultVersion
+	}
+	return binmgr.GitHubSpec{Name: "outpost", Repo: "qiangli/outpost", Version: version}
+}
+
+// Ensure provisions the outpost mesh agent — download → sha256 → cache — and
+// returns its path. A cached copy costs no network. This is what the apps
+// console's Pair button runs on an unpaired host (sprint 220, story
+// 72c86b58): the operator pastes an invite code and never opens a terminal.
+func Ensure(ctx context.Context, version string) (string, error) {
+	tool, err := binmgr.ResolveGitHub(ctx, Spec(version))
+	if err != nil {
+		return "", fmt.Errorf("outpost: resolve: %w", err)
+	}
+	return binmgr.Ensure(ctx, tool)
+}
 
 // ErrNotFound means the outpost mesh agent binary could not be located — the
 // caller should print its own invite/guidance.
@@ -38,6 +69,12 @@ func Resolve() (string, bool) {
 				return cand, true
 			}
 		}
+	}
+	// A copy Ensure provisioned earlier (the console's Pair button, or an
+	// explicit provisioning) — bashy's own cache, last so an operator's
+	// install on PATH keeps winning.
+	if cached := binmgr.CachedBinary("outpost"); cached != "" && isExec(cached) {
+		return cached, true
 	}
 	return "", false
 }

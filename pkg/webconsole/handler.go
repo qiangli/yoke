@@ -142,6 +142,7 @@ type server struct {
 	scopeSegments map[string]string
 	pairing       *pairStore
 	look          *lookStore
+	cloudPair     *cloudPairer // the Cloud section's one action (cloud.go)
 	probes        probeCache
 	inboxes       inboxCache
 	boards        boardCache
@@ -279,6 +280,9 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	// a preference write is a console write, not a public one.
 	mux.HandleFunc("GET /api/look", s.handleLookGet)
 	mux.HandleFunc("PUT /api/look", s.handleLookPut)
+	// The Cloud section: pairing state, and the one action that makes it.
+	mux.HandleFunc("GET /api/cloud", s.handleCloudGet)
+	mux.HandleFunc("POST /api/cloud/pair", s.handleCloudPair)
 	// The external self-description. Ungated (see isOpenPath) and deliberately
 	// a projection, not the internal Panel.
 	mux.HandleFunc("GET /meta", s.handleMeta)

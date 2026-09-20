@@ -960,3 +960,24 @@ body.standalone #bar { flex: none; }
 }
 .ib-msg .mark:hover { color: var(--foreground); }
 .ib-msg .mark[disabled] { opacity: .5; cursor: default; text-decoration: none; }
+
+/* ----------------------------------------------------------- cloud / pair -- */
+.pair-card {
+  grid-column: 1 / -1;
+  display: flex; flex-direction: column; gap: .6rem;
+  padding: 1rem 1.1rem;
+  border-radius: 14px;
+  background: var(--tile-bg, rgba(255,255,255,.55));
+  border: 1px solid var(--tile-border, rgba(0,0,0,.08));
+}
+.pair-card h3 { margin: 0; font-size: 1rem; }
+.pair-card .sub { margin: 0; opacity: .8; font-size: .9rem; }
+.pair-row { display: flex; gap: .5rem; align-items: center; }
+.pair-row input {
+  flex: 1; min-width: 0; padding: .55rem .7rem; border-radius: 10px;
+  border: 1px solid var(--tile-border, rgba(0,0,0,.15)); background: var(--input-bg, rgba(255,255,255,.8));
+  font: inherit;
+}
+.pair-status { font-size: .85rem; opacity: .85; min-height: 1.2em; }
+.pair-status.error { color: #b91c1c; opacity: 1; }
+.pair-status.paired { color: #15803d; opacity: 1; }

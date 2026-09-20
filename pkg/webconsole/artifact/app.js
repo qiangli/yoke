@@ -42,6 +42,12 @@ const verEl = document.getElementById("ver");
 let apps = [];
 // The Inbox tile's numbers, or null when this session may not read them.
 let inboxCounts = null;
+// The host's relationship to the control plane (api/cloud), or null when the
+// answer has not arrived: paired → two cards, unpaired → the Pair card.
+let cloud = null;
+// The invite code being typed, kept across repaints (a poll repaints the page
+// every few seconds and must not eat the operator's typing).
+let cloudCode = "";
 let search = "";
 
 // ------------------------------------------------------------------- look --
@@ -71,6 +77,7 @@ const DEFAULTS = {
   showSummary: true,
   showFavorites: true,
   showRecents: true,
+  showCloud: true,
   recentLimit: 8,
   favorites: [],
   recents: [],
@@ -512,6 +519,10 @@ function renderHome() {
     if (rec.length) pad.append(sectionEl("Recent", rec.map((a) => tile(a, { noStar: true }))));
   }
 
+  if (cfg.showCloud && cloud && !search.trim()) {
+    pad.append(cloudSection());
+  }
+
   if (shown.length) {
     pad.append(sectionEl("Apps", shown.map((a) => tile(a))));
   } else {
@@ -527,12 +538,136 @@ function renderHome() {
   view.replaceChildren(pad);
 }
 
+// ------------------------------------------------------------------- cloud --
+// The Cloud section (sprint 220): paired → Periscope + Cloudbox cards at the
+// addresses this host is paired to; unpaired → one Pair card. Pairing is the
+// only action: paste the invite code the portal mints, and the console
+// provisions the outpost agent, exchanges the code and registers the
+// supervisor — no terminal on any OS. Progress comes from api/cloud, which
+// the regular refresh already polls.
+function cloudCard(title, href, glyph, color, sub) {
+  const wrap = document.createElement("div");
+  wrap.className = "tile-wrap";
+  const a = document.createElement("a");
+  a.className = "tile";
+  a.href = href;
+  a.target = "_blank";
+  a.rel = "noopener";
+  const icon = document.createElement("span");
+  icon.className = "icon";
+  icon.style.background = color;
+  icon.append(document.createTextNode(glyph));
+  const label = document.createElement("span");
+  label.className = "label";
+  label.textContent = title;
+  const s = document.createElement("span");
+  s.className = "sub";
+  s.textContent = sub;
+  a.append(icon, label, s);
+  wrap.append(a);
+  return wrap;
+}
+
+function cloudSection() {
+  const s = document.createElement("section");
+  s.className = "sect";
+  s.id = "cloud-section";
+  const head = document.createElement("div");
+  head.className = "sect-head";
+  const h = document.createElement("h2");
+  h.textContent = "Cloud";
+  head.append(h);
+  s.append(head);
+  const grid = document.createElement("div");
+  grid.className = "grid";
+  if (cloud.paired) {
+    grid.append(
+      cloudCard("Periscope", cloud.periscope, "◎", "linear-gradient(135deg,#0ea5e9,#6366f1)", cloud.host ? "this host: " + cloud.host : "paired"),
+      cloudCard("Cloudbox", cloud.cloudbox, "☁", "linear-gradient(135deg,#8b5cf6,#ec4899)", "portal"),
+    );
+  } else {
+    grid.append(pairCard());
+  }
+  s.append(grid);
+  return s;
+}
+
+function pairCard() {
+  const card = document.createElement("div");
+  card.className = "pair-card";
+  card.id = "cloud-pair";
+  const st = cloud.pair || { state: "idle" };
+  const busy = ["provisioning", "pairing", "installing"].includes(st.state);
+  const h = document.createElement("h3");
+  h.textContent = "Pair this machine";
+  const p = document.createElement("p");
+  p.className = "sub";
+  const link = document.createElement("a");
+  link.href = cloud.portal;
+  link.target = "_blank";
+  link.rel = "noopener";
+  link.textContent = "the portal";
+  p.append("Paste the invite code from ", link, "'s \"Add a machine\" dialog. The console installs the agent and pairs the host; nothing else to set up.");
+  const row = document.createElement("div");
+  row.className = "pair-row";
+  const inp = document.createElement("input");
+  inp.type = "text";
+  inp.id = "cloud-code";
+  inp.placeholder = "invite code";
+  inp.autocomplete = "off";
+  inp.spellcheck = false;
+  inp.value = cloudCode;
+  inp.disabled = busy;
+  inp.addEventListener("input", () => { cloudCode = inp.value; });
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "btn";
+  btn.id = "cloud-pair-btn";
+  btn.textContent = busy ? "Pairing…" : "Pair";
+  btn.disabled = busy;
+  btn.addEventListener("click", () => pairHost(inp, btn));
+  inp.addEventListener("keydown", (e) => { if (e.key === "Enter") pairHost(inp, btn); });
+  row.append(inp, btn);
+  const status = document.createElement("div");
+  status.className = "pair-status " + st.state;
+  status.id = "cloud-pair-status";
+  if (st.state === "error") status.textContent = "Failed: " + (st.message || "unknown error");
+  else if (busy) status.textContent = (st.message || st.state) + "…";
+  else if (st.state === "paired") status.textContent = "Paired — refreshing…";
+  else if (!cloud.outpost.installed) status.textContent = "The outpost agent is not installed yet; Pair downloads it (checksum-verified).";
+  card.append(h, p, row, status);
+  return card;
+}
+
+async function pairHost(inp, btn) {
+  const code = (inp.value || "").trim();
+  if (!code) { inp.focus(); return; }
+  btn.disabled = true;
+  btn.textContent = "Pairing…";
+  try {
+    const r = await fetch(url("api/cloud/pair"), {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }),
+    });
+    if (!r.ok) {
+      const msg = (await r.text()).trim();
+      cloud = { ...cloud, pair: { state: "error", message: msg || r.statusText } };
+      render();
+      return;
+    }
+    cloud = await r.json();
+    render();
+  } catch (e) {
+    cloud = { ...cloud, pair: { state: "error", message: String(e) } };
+    render();
+  }
+}
+
 // ---------------------------------------------------------------- settings --
 const BG_PRESETS = [
   ["none", "None"], ["sky", "Sky"], ["ocean", "Ocean"], ["mountains", "Mountains"],
   ["plateau", "Plateau"], ["lakes", "Lakes"], ["bamboo", "Bamboo"],
 ];
-const SECTIONS = [["showSummary", "Overview"], ["showFavorites", "Favorites"], ["showRecents", "Recent"]];
+const SECTIONS = [["showSummary", "Overview"], ["showFavorites", "Favorites"], ["showRecents", "Recent"], ["showCloud", "Cloud"]];
 const dlg = document.getElementById("settings");
 
 function buildSettings() {
@@ -886,7 +1021,7 @@ document.getElementById("theme-btn").addEventListener("click", () => {
 
 async function refresh() {
   try {
-    const [a, s, l, i] = await Promise.all([
+    const [a, s, l, i, c] = await Promise.all([
       fetch(url("api/apps")).then((r) => r.json()),
       fetch(url("api/session")).then((r) => r.json()).catch(() => null),
       fetch(url("api/look")).then((r) => r.json()).catch(() => null),
@@ -895,9 +1030,11 @@ async function refresh() {
       // this, and the right answer to that is a tile with no badge — not a
       // broken start page.
       fetch(url("api/inbox?summary=1")).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch(url("api/cloud")).then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     apps = a.apps || [];
     inboxCounts = i && !i.error ? i : null;
+    cloud = c;
     // The look ride-along fails soft: no answer leaves the mode at the
     // same-tab default, which is exactly the server's own fallback.
     if (l && l.open_apps) openApps = l.open_apps === "new-tab" ? "new-tab" : "same-tab";
