@@ -67,7 +67,9 @@ func ResolveRemoteParticipant(ctx context.Context, repoRoot, target string) (bus
 		if strings.EqualFold(p, me) {
 			continue
 		}
-		if strings.EqualFold(p, target) {
+		// A person is rostered as `person:<name>@<host>`; `<name>@<host>` —
+		// the spelling the identity rule teaches — must reach them too.
+		if strings.EqualFold(p, target) || strings.EqualFold(strings.TrimPrefix(p, "person:"), target) {
 			hits = []string{p}
 			break
 		}

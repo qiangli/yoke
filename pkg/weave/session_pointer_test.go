@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -24,7 +25,7 @@ func TestSessionPointerRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got == nil || *got != *want {
+	if got == nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("pointer = %+v, want %+v", got, want)
 	}
 }

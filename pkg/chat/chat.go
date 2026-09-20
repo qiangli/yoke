@@ -540,6 +540,22 @@ func agentCommand(ctx context.Context, agent string, args []string, cwd string) 
 	return cmd
 }
 
+// fleetTokenEnv adds BASHY_FLEET_TOKEN when the launcher can resolve the
+// host's pairing token and the env carries none of the explicit spellings.
+func fleetTokenEnv(env []string) []string {
+	for _, kv := range env {
+		for _, name := range []string{"BASHY_FLEET_TOKEN=", "BASHY_API_KEY=", "CLOUDBOX_TOKEN="} {
+			if strings.HasPrefix(kv, name) && len(kv) > len(name) {
+				return env
+			}
+		}
+	}
+	if _, token := fleet.ResolveCloud("", ""); token != "" {
+		env = append(env, "BASHY_FLEET_TOKEN="+token)
+	}
+	return env
+}
+
 // agentChildEnv builds the environment for a spawned agent process.
 //
 // It starts from the launcher's own environment, then, in order:
@@ -579,6 +595,16 @@ func agentChildEnv(ctx context.Context) []string {
 			}
 		}
 	}
+	// The host's own cloudbox pairing credential, so the bashy verbs the agent
+	// runs (mb/inbox/sprint session) reach the shared session from INSIDE the
+	// agent's sandbox. The launcher resolves it by exec'ing `outpost token
+	// print`; a sandboxed child (codex workspace-write) cannot, and every
+	// cross-host send it made fell back to a local post — "this host is not
+	// paired" from a paired host (sprint 220, story ad5b0de9). This is bashy's
+	// identity token, not an operator vault secret: the scrub above is about
+	// keys an agent must not inherit; this one the agent's own bashy needs.
+	// Only when no explicit token is already carried.
+	env = fleetTokenEnv(env)
 	// Give the child the same search path its launcher just used to find it.
 	// Appended, so nothing already on PATH is shadowed; applied BEFORE the shim
 	// dir is prepended, so shell forcing keeps priority.

@@ -258,6 +258,29 @@ func (sf *sessionFlags) canonicalizeRoster() {
 //
 // The human is not checked. `Human` is its own field on State and is a person,
 // not something this host drives.
+// splitAttendees moves the seats that are attendees rather than driven
+// agents out of sf.participants and returns them: a registered person, or —
+// only in a shared board — a `<name>@<host>` address the relay can reach. A
+// name that is neither stays in the roster for routableRoster to refuse with
+// the right error.
+func (sf *sessionFlags) splitAttendees() []string {
+	var attendees, agents []string
+	for _, p := range sf.participants {
+		name := strings.TrimSpace(p)
+		if _, ok := registeredAgentFn(name); ok {
+			agents = append(agents, p)
+			continue
+		}
+		if registeredPersonFn(name) || (sf.shared && bus.RemoteResolve != nil && bus.IsRemoteAddress(name)) {
+			attendees = append(attendees, name)
+			continue
+		}
+		agents = append(agents, p)
+	}
+	sf.participants = agents
+	return attendees
+}
+
 func (sf *sessionFlags) routableRoster() error {
 	for _, p := range sf.participants {
 		if err := routableSeat(p); err != nil {

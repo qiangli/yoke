@@ -24,6 +24,12 @@ type SessionPointer struct {
 	// last join: owner · contributor · observer. An observer can read the
 	// board and send/receive mail; it cannot steer or take the lease.
 	Role string `json:"role,omitempty"`
+	// Seats are the participants (`<name>@<host>`) this checkout has joined
+	// the session AS. The join used to happen once per checkout — for
+	// whoever ran the first verb — so a second seat on the same host (a
+	// live agent session beside the person) never reached the roster and
+	// could not be addressed from another host (sprint 220).
+	Seats []string `json:"seats,omitempty"`
 }
 
 func ReadSessionPointer(repoRoot string) (*SessionPointer, error) {

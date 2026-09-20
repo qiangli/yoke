@@ -445,3 +445,23 @@ func TestForcedShellEnvNoShimNoPath(t *testing.T) {
 		t.Fatalf("PATH should be unchanged when shimDir empty: %#v", got)
 	}
 }
+
+// A governed child gets the host's own pairing token (sprint 220): a
+// sandboxed agent cannot exec `outpost token print`, so without this every
+// bashy verb it runs sees an unpaired host. An explicit token already in the
+// env is left alone.
+func TestFleetTokenEnvOnlyFillsAnEmptyHand(t *testing.T) {
+	t.Setenv("BASHY_FLEET_TOKEN", "")
+	t.Setenv("BASHY_API_KEY", "")
+	t.Setenv("CLOUDBOX_TOKEN", "")
+	got := fleetTokenEnv([]string{"CLOUDBOX_TOKEN=explicit"})
+	if len(got) != 1 {
+		t.Fatalf("an explicit token was overridden: %v", got)
+	}
+	// With BASHY_FLEET_TOKEN set for this process, ResolveCloud answers it.
+	t.Setenv("BASHY_FLEET_TOKEN", "paired-token")
+	got = fleetTokenEnv([]string{"HOME=/x"})
+	if len(got) != 2 || got[1] != "BASHY_FLEET_TOKEN=paired-token" {
+		t.Fatalf("the child did not receive the host token: %v", got)
+	}
+}

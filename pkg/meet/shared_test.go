@@ -1,6 +1,7 @@
 package meet
 
 import (
+	"github.com/qiangli/yoke/pkg/bus"
 	"strings"
 	"testing"
 
@@ -167,5 +168,38 @@ func TestSharedBoardPostRelays(t *testing.T) {
 	}
 	if ev.Origin == nil || !strings.HasPrefix(ev.Origin.Source, "session:") || len(relayed) != 1 || relayed[0].Text != "hello everyone" {
 		t.Fatalf("ev=%+v relayed=%d", ev, len(relayed))
+	}
+}
+
+// Creation seats what invite seats (sprint 220, story ad5b0de9): a person and,
+// in a shared board, a colleague's `<name>@<host>` are attendees from the
+// first `--participant`, not "not a registered agent".
+func TestCreationSeatsPeopleAndRemoteColleaguesAsAttendees(t *testing.T) {
+	newSharedBoard(t) // installs the registries and the fixed clock
+	prev := bus.RemoteResolve
+	bus.RemoteResolve = func(target string) (bus.RemoteRoute, error) { return bus.RemoteRoute{Participant: target}, nil }
+	t.Cleanup(func() { bus.RemoteResolve = prev })
+
+	sf := &sessionFlags{topic: "live test", board: true, shared: true,
+		participants: []string{"codex", "bob", "rafter@winbox"}}
+	st, err := sf.newState()
+	if err != nil {
+		t.Fatalf("shared board with a person and a remote colleague: %v", err)
+	}
+	if strings.Join(st.Participants, ",") != "codex" {
+		t.Fatalf("participants = %v, want only the driven agent", st.Participants)
+	}
+	if strings.Join(st.Observers, ",") != "bob,rafter@winbox" {
+		t.Fatalf("attendees = %v", st.Observers)
+	}
+	// Not shared: an address is nobody this host can drive or reach.
+	sf = &sessionFlags{topic: "local", board: true, participants: []string{"codex", "rafter@winbox"}}
+	if _, err := sf.newState(); err == nil || !strings.Contains(err.Error(), "not a registered agent") {
+		t.Fatalf("an unshared board seated a remote address: %v", err)
+	}
+	// A stranger stays refused with the same error either way.
+	sf = &sessionFlags{topic: "s", board: true, shared: true, participants: []string{"nobody"}}
+	if _, err := sf.newState(); err == nil || !strings.Contains(err.Error(), "not a registered agent") {
+		t.Fatalf("a stranger was seated: %v", err)
 	}
 }

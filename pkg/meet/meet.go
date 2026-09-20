@@ -207,6 +207,7 @@ type sessionFlags struct {
 	minBand      int
 	steerable    bool
 	board        bool
+	shared       bool // --shared: attendees may be <name>@<host> on another host
 	participants []string
 	agenda       []string
 	context      []string
@@ -279,6 +280,12 @@ func (sf *sessionFlags) newState() (*State, error) {
 	// claude-fable5 is ONE agent seated twice, and seating it twice would
 	// dilute the vote while looking like diversity.
 	sf.canonicalizeRoster()
+	// A registered PERSON, or in a shared board a colleague's seat on another
+	// host (`<name>@<host>`), is an ATTENDEE — attributed and addressable,
+	// never scheduled — exactly what `meet invite` seats it as. Creation used
+	// to refuse both ("not a registered agent") while the --shared help said
+	// to invite colleagues by address (sprint 220, story ad5b0de9).
+	attendees := sf.splitAttendees()
 	// And every seat must be one this host can actually drive. `meet invite`
 	// has always checked; creation did not, so any name at all could be seated
 	// and then record a failed turn every round for a participant that was
@@ -290,6 +297,7 @@ func (sf *sessionFlags) newState() (*State, error) {
 	st := &State{
 		ID: newID(sf.topic, nowFn()), Room: assignRoom(), Topic: sf.topic, Agenda: sf.agenda,
 		Participants: sf.participants, Secretary: sf.secretary, Chair: sf.chair,
+		Observers:    attendees,
 		Human:        sf.humanSeat(),
 		Initiator:    sf.initiator,
 		DecisionMode: sf.decisionMode, MinTurnChars: sf.minTurnChars, Context: sf.context,
@@ -353,7 +361,6 @@ func newOpenCmd() *cobra.Command {
 	var rounds int
 	var dry, nonInteractive, yes bool
 	var fromMB string
-	var shared bool
 	cmd := &cobra.Command{
 		Use:   "open [<room>|<id>] [--topic TEXT --participant AGENT ...]",
 		Short: "open a meeting (enters the REPL unless --non-interactive)",
@@ -396,6 +403,7 @@ func newOpenCmd() *cobra.Command {
 			if !sf.board && strings.TrimSpace(sf.chair) == "" {
 				return fmt.Errorf("meet: an open meeting requires an owner (facilitator) — pass --owner NAME from `bashy agent list`")
 			}
+			shared := sf.shared
 			if shared && !sf.board {
 				return fmt.Errorf("meet: --shared rooms are boards (nothing schedules a turn across hosts); pass --board")
 			}
@@ -471,7 +479,7 @@ func newOpenCmd() *cobra.Command {
 	f.BoolVar(&sf.board, "board", false,
 		"open a BOARD: participants read and post on their own turns. No facilitator runs the "+
 			"floor and no secretary is spawned; post with bashy meet tell ROOM --as NAME MESSAGE")
-	f.BoolVar(&shared, "shared", false,
+	f.BoolVar(&sf.shared, "shared", false,
 		"share the board across hosts: every post rides this repo's cloudbox session and colleagues on "+
 			"other hosts (same account or another) read and post in a mirror of the room under the same id. "+
 			"Invite them as <name>@<host>; people from the people catalog by name. Requires --board")

@@ -83,10 +83,32 @@ func addressedTo(to, reader, me string, holder *string) bool {
 		return iAmHolder
 	case strings.EqualFold(to, me), strings.EqualFold(to, reader):
 		return true
+	case strings.EqualFold(to, readerSeat(reader, me)):
+		// `<reader>@<this host>`: the reader's own seat address. The process
+		// running the pass may be another identity on the host (a live
+		// session's wrapper relays for its agent under the person's
+		// identity), so `me` alone misses mail addressed to the seat — and
+		// the pass then advanced the cursor past it, losing the message
+		// (sprint 220, story ad5b0de9).
+		return true
 	case strings.EqualFold(to, "conductor"), strings.HasPrefix(strings.ToLower(to), "conductor:"), strings.EqualFold(to, "owner"):
 		return iAmHolder
 	}
 	return false
+}
+
+// readerSeat is the reader's address on this host: `<reader>@<host>`, with
+// the host taken from the process's own signature. Empty when the reader is
+// already an address or the host is unknown.
+func readerSeat(reader, me string) string {
+	if strings.Contains(reader, "@") {
+		return reader
+	}
+	i := strings.LastIndexByte(me, '@')
+	if i < 0 || reader == "" {
+		return ""
+	}
+	return reader + me[i:]
 }
 
 // DeliverRemoteMail runs one delivery pass for reader in the checkout at
@@ -169,7 +191,13 @@ func DeliverRemoteMail(ctx context.Context, repoRoot, reader string) (DeliveryRe
 			if !addressedTo(d.To, reader, me, lookupHolder()) {
 				continue
 			}
-			if _, err := bus.PostMessageOnce(ctx, d.ID, bus.Post{ID: d.ID, From: d.From, To: reader, Topic: d.Topic, Body: ev.Summary}); err != nil {
+			// Keyed by message AND reader: one host may legitimately file the
+			// same message for two readers (a broadcast, a role address
+			// re-targeted at read time, a second seat reading the feed), and
+			// a key of the id alone made the second filing fail as "notice
+			// key reused with different content" — which then aborted the
+			// whole pass, so nothing after it was delivered either.
+			if _, err := bus.PostMessageOnce(ctx, d.ID+"|"+reader, bus.Post{ID: d.ID, From: d.From, To: reader, Topic: d.Topic, Body: ev.Summary}); err != nil {
 				return rep, fmt.Errorf("deliver %s: %w", d.ID, err)
 			}
 			rep.Delivered++
