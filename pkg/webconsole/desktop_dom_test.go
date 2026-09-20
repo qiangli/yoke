@@ -109,6 +109,7 @@ func TestDOMDesktopConnectsThroughTheMeshProxy(t *testing.T) {
 	base, ctx, errs := domEnv(t, Options{})
 
 	var status, state, name string
+	var formShown bool
 	if err := chromedp.Run(ctx,
 		chromedp.Navigate(base+"/desktop/"+testPeer),
 		chromedp.WaitVisible(`#creds`, chromedp.ByID),
@@ -126,12 +127,18 @@ func TestDOMDesktopConnectsThroughTheMeshProxy(t *testing.T) {
 		chromedp.Evaluate(`document.getElementById("status").textContent`, &status),
 		chromedp.Evaluate(`document.body.dataset.desktop`, &state),
 		chromedp.Evaluate(`document.body.dataset.desktopName`, &name),
+		// A layout fact: the card is display:flex, which outranks [hidden]
+		// unless the stylesheet says otherwise. Ask the renderer, not the DOM.
+		chromedp.Evaluate(`getComputedStyle(document.getElementById("creds")).display !== "none"`, &formShown),
 	); err != nil {
 		t.Fatalf("chromedp: %v (errors: %v)", err, errs())
 	}
 	assertNoJSErrors(t, "desktop", errs())
 	if state != "connected" || name != "verifydom-desktop" || status != "verifydom-desktop" {
 		t.Fatalf("state=%q name=%q status=%q", state, name, status)
+	}
+	if formShown {
+		t.Fatal("the credentials card is still rendered beside the connected desktop")
 	}
 	if got := creds(); got != `{"user":"","password":"hunter2x"}` {
 		t.Fatalf("relay saw credentials %q", got)

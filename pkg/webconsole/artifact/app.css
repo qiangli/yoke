@@ -998,6 +998,9 @@ body.standalone #bar { flex: none; }
   background: var(--card); color: var(--foreground); border: 1px solid var(--border);
   display: flex; flex-direction: column; gap: .6rem;
 }
+/* display:flex above outranks the UA's [hidden] rule — the cascade fact the
+   verifydom tests exist for; say it explicitly. */
+#desktop-page .creds[hidden] { display: none; }
 #desktop-page .creds h2 { margin: 0; font-size: 1.05rem; }
 #desktop-page .creds label { display: flex; flex-direction: column; gap: .25rem; font-size: .82rem; }
 #desktop-page .creds input { font: inherit; padding: .4rem .55rem; border-radius: .45rem; border: 1px solid var(--border); background: var(--background); color: var(--foreground); }
