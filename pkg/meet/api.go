@@ -518,6 +518,13 @@ func PostAs(ref, author, to, text string) (Event, error) {
 		target = AllSeats
 	case target == "":
 		target = strings.TrimSpace(st.DefaultTo)
+		// The seat's own reply is not mail to the seat. When the speaker IS
+		// the default addressee's holder (the sprint manager answering in its
+		// sprint room), an unaddressed post is its answer to the room — it
+		// used to come back to the manager as unread mail from itself.
+		if holder, _ := bus.RoleHolderFor(target); strings.EqualFold(canonAgent(strings.TrimSpace(holder)), canonAgent(who)) {
+			target = ""
+		}
 	default:
 		if _, isRole := bus.RoleHolderFor(target); !isRole {
 			target = canonAgent(target)

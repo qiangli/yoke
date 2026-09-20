@@ -233,3 +233,43 @@ func TestSprintRoomAddressIsPushedIntoASteerableLiveSeat(t *testing.T) {
 		t.Fatalf("the live seat was not told the room and the question: %v", *pushed)
 	}
 }
+
+// The reply half: the seat answering in its own room must not address itself.
+func TestTheSeatsOwnReplyInItsRoomIsNotMailToItself(t *testing.T) {
+	st := newRoom(t)
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+	seatEverything(t)
+	old := bus.HostRoles
+	bus.HostRoles = func() []bus.HostRole {
+		return []bus.HostRole{{Label: "conductor:7", Holder: "codex"}}
+	}
+	t.Cleanup(func() { bus.HostRoles = old })
+	if err := SetDefaultTo(st.ID, "conductor:7"); err != nil {
+		t.Fatal(err)
+	}
+	// The human's unaddressed question goes to the seat.
+	asked, err := PostAs(st.ID, st.Human, "", "how is it going?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if asked.To != "conductor:7" {
+		t.Fatalf("the human's post was not addressed to the seat: %+v", asked)
+	}
+	// The seat's unaddressed answer goes to the room, not back to itself.
+	answer, err := PostAs(st.ID, "codex", "", "going fine")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answer.To != "" {
+		t.Fatalf("the seat's own reply was addressed to %q — mail to itself", answer.To)
+	}
+	directed, _, _, err := Unread(st.ID, "codex", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range directed {
+		if d.Text == "going fine" {
+			t.Fatalf("the seat's own reply is in its unread mail: %+v", directed)
+		}
+	}
+}
