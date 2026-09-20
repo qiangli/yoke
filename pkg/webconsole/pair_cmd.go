@@ -281,14 +281,24 @@ func primaryLANAddr() string {
 	if err == nil {
 		defer c.Close()
 		if a, ok := c.LocalAddr().(*net.UDPAddr); ok && a.IP != nil && !a.IP.IsLoopback() {
-			return a.IP.String()
+			// The default route's source address is the answer when it is a
+			// private one. A public or CGNAT source (a VPN or tailnet holding
+			// the default route) is not where a phone on the LAN would reach
+			// this host, so fall through to the interface scan.
+			if a.IP.IsPrivate() {
+				return a.IP.String()
+			}
 		}
 	}
-	// Fall back to the first non-loopback IPv4 on an up interface.
+	// Fall back to the first private IPv4 on an up interface, then to any
+	// non-loopback IPv4. Interface order is a last resort, not a preference —
+	// it is exactly what made a boot-time guess pick a secondary wired link
+	// over the Wi-Fi the phone was on.
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return ""
 	}
+	first := ""
 	for _, ifc := range ifaces {
 		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 {
 			continue
@@ -300,12 +310,17 @@ func primaryLANAddr() string {
 		for _, a := range addrs {
 			if ipn, ok := a.(*net.IPNet); ok {
 				if v4 := ipn.IP.To4(); v4 != nil && !v4.IsLoopback() {
-					return v4.String()
+					if v4.IsPrivate() {
+						return v4.String()
+					}
+					if first == "" {
+						first = v4.String()
+					}
 				}
 			}
 		}
 	}
-	return ""
+	return first
 }
 
 // mdnsName is <hostname>.local, or "" when the host name is unusable.

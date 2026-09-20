@@ -147,11 +147,7 @@ func servicePairingCounts() (live, pending int, err error) {
 }
 
 func serviceRearmCommand(port int) string {
-	bind := primaryLANAddr()
-	if bind == "" {
-		bind = "<lan-ip>"
-	}
-	args := []string{"bashy", "app", "service", "start", "--pair", "--bind", bind}
+	args := []string{"bashy", "app", "service", "start", "--pair", "--bind", BindLAN}
 	if port > 0 && port != DefaultPort {
 		args = append(args, "--port", strconv.Itoa(port))
 	}
@@ -163,10 +159,6 @@ func shellJoin(args []string) string {
 	for i, arg := range args {
 		if i > 0 {
 			out += " "
-		}
-		if arg == "<lan-ip>" {
-			out += arg
-			continue
 		}
 		if arg != "" && !containsShellSpecial(arg) {
 			out += arg
@@ -198,8 +190,15 @@ func servicePairingNotice() string {
 	}
 	switch {
 	case ok && p.Pair:
+		// A symbolic bind is shown resolved, with the symbol beside it, so the
+		// operator sees both where the phone reaches it now and why that can
+		// change without a restart.
+		where := net.JoinHostPort(p.Bind, strconv.Itoa(p.Port))
+		if p.Bind == BindLAN {
+			where = currentPairListenerAddr(where) + " (" + BindLAN + ")"
+		}
 		return fmt.Sprintf("pairing: armed on %s (%d live device(s), %d pending code(s))",
-			net.JoinHostPort(p.Bind, strconv.Itoa(p.Port)), live, pending)
+			where, live, pending)
 	case live > 0 || pending > 0:
 		return fmt.Sprintf("pairing: disarmed but %d live device(s) and %d pending code(s) exist; re-arm with: %s",
 			live, pending, serviceRearmCommand(DefaultPort))

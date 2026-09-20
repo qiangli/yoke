@@ -84,6 +84,13 @@ type Spec struct {
 	Health string
 	// DefaultPort is used when Options.Port is zero.
 	DefaultPort int
+	// ProbeLoopback makes the liveness probe dial 127.0.0.1 regardless of the
+	// configured bind. Set it for a daemon that ALWAYS keeps a loopback
+	// listener beside its off-loopback one (the apps console does: its LAN
+	// listener opens and closes with the paired-device set and may be bound to
+	// a symbolic address such as "lan"), so liveness is decided by the listener
+	// that is always there rather than the one that is allowed to be absent.
+	ProbeLoopback bool
 }
 
 // Options are the per-invocation knobs.
@@ -181,11 +188,15 @@ const (
 // listener is ours without granting permission to kill an unknown process.
 func (s Spec) probePort(o Options) probe {
 	host := bind(o)
-	switch host {
-	case "", "0.0.0.0":
+	switch {
+	case s.ProbeLoopback, host == "", host == "0.0.0.0":
 		host = "127.0.0.1"
-	case "::", "[::]":
+	case host == "::", host == "[::]":
 		host = "::1"
+	case net.ParseIP(host) == nil && !strings.Contains(host, "."):
+		// A symbolic bind ("lan") is not a dialable name; the daemon that
+		// accepts one always serves loopback too.
+		host = "127.0.0.1"
 	}
 	addr := net.JoinHostPort(host, strconv.Itoa(s.port(o)))
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)

@@ -662,6 +662,30 @@ func TestCurrentPairListenerAddrReplacesAStaleIP(t *testing.T) {
 	}
 }
 
+func TestCurrentPairListenerAddrResolvesSymbolicLAN(t *testing.T) {
+	current := primaryLANAddr()
+	if current == "" {
+		t.Skip("host has no LAN address")
+	}
+	if got, want := currentPairListenerAddr(BindLAN+":22749"), net.JoinHostPort(current, "22749"); got != want {
+		t.Fatalf("symbolic lan bind resolved to %q, want %q", got, want)
+	}
+	// A literal address the host owns is preserved: an operator who pinned an
+	// interface keeps it. Only the symbolic bind follows the network.
+	if got := currentPairListenerAddr(net.JoinHostPort(current, "22749")); got != net.JoinHostPort(current, "22749") {
+		t.Fatalf("owned literal address was rewritten to %q", got)
+	}
+}
+
+func TestServiceRearmCommandNamesTheSymbolicBind(t *testing.T) {
+	if got, want := serviceRearmCommand(DefaultPort), "bashy app service start --pair --bind lan"; got != want {
+		t.Fatalf("re-arm hint = %q, want %q", got, want)
+	}
+	if got, want := serviceRearmCommand(4242), "bashy app service start --pair --bind lan --port 4242"; got != want {
+		t.Fatalf("re-arm hint = %q, want %q", got, want)
+	}
+}
+
 func dialable(addr string) bool {
 	c, err := net.DialTimeout("tcp", addr, 300*time.Millisecond)
 	if err != nil {

@@ -113,7 +113,7 @@ func newServeCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().IntVar(&port, "port", DefaultPort, "port to listen on")
-	cmd.Flags().StringVar(&bind, "bind", "127.0.0.1", "address to bind")
+	cmd.Flags().StringVar(&bind, "bind", "127.0.0.1", "address to bind: an IP, or `lan` for the host's current primary LAN address (followed as the network changes)")
 	cmd.Flags().StringVar(&scope, "scope", "", "filesystem root for the files panel (default: your home directory)")
 	cmd.Flags().BoolVar(&write, "allow-write", false, "allow the files panel to modify files")
 	cmd.Flags().StringSliceVar(&disable, "disable", nil,
@@ -211,7 +211,7 @@ func runServe(ctx context.Context, out io.Writer, opts Options, bind string, por
 		// nothing on the LAN can reach would hand the operator a QR that
 		// cannot work, and they would learn it from the phone.
 		return fmt.Errorf("apps: --pair needs a LAN-bound console; " +
-			"start it with --bind <lan-ip> (find one with `bashy resources system`), " +
+			"start it with --bind lan (or an explicit LAN IP), " +
 			"or reach this host through outpost instead")
 	}
 
@@ -265,11 +265,19 @@ func runServe(ctx context.Context, out io.Writer, opts Options, bind string, por
 		}
 		defer gate()
 	} else {
-		l, lerr := net.Listen("tcp", addr)
+		// A symbolic `lan` bind is resolved once here; only the pair-gated
+		// listener above follows later network changes, because only it can
+		// close and reopen a listener without taking the console down.
+		target := currentPairListenerAddr(addr)
+		if host, _, _ := net.SplitHostPort(target); host == BindLAN {
+			return fmt.Errorf("apps: --bind %s: this host has no LAN address right now", BindLAN)
+		}
+		l, lerr := net.Listen("tcp", target)
 		if lerr != nil {
-			return fmt.Errorf("apps: listen %s: %w", addr, lerr)
+			return fmt.Errorf("apps: listen %s: %w", target, lerr)
 		}
 		ln = l
+		addr = target
 	}
 
 	url := "http://" + addr + "/"
@@ -407,7 +415,18 @@ func runPairGatedListenerWithAddr(ctx context.Context, out io.Writer, srv *http.
 	return func() { close(done) }, nil
 }
 
+// BindLAN is the symbolic --bind value meaning "this host's primary LAN
+// address, whatever it is right now". It exists because a literal IP is a
+// snapshot: a supervisor that guessed one at boot — before Wi-Fi was up, or on
+// a secondary wired link — pinned the phone listener to an address the phone
+// could never reach, and the console then preserved it faithfully because the
+// host still owned it. A symbolic bind is re-resolved every time the
+// pair-gated listener decides where to open, so it follows the default route
+// instead of an enumeration order.
+const BindLAN = "lan"
+
 // currentPairListenerAddr preserves an address while this host still owns it.
+// The symbolic BindLAN always resolves to the current primary LAN address.
 // If a literal IPv4 disappeared (the ordinary DHCP, Wi-Fi, or VPN transition),
 // it preserves the port and follows the host's current primary LAN address.
 // Hostnames, wildcard binds, IPv6, and an unavailable address probe remain
@@ -415,6 +434,12 @@ func runPairGatedListenerWithAddr(ctx context.Context, out io.Writer, srv *http.
 func currentPairListenerAddr(configured string) string {
 	host, port, err := net.SplitHostPort(configured)
 	if err != nil {
+		return configured
+	}
+	if host == BindLAN {
+		if current := primaryLANAddr(); current != "" {
+			return net.JoinHostPort(current, port)
+		}
 		return configured
 	}
 	ip := net.ParseIP(host)

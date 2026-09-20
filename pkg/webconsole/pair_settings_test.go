@@ -250,9 +250,10 @@ func TestPairMintFailsClosedWhenNotArmed(t *testing.T) {
 	if !strings.Contains(restart, "bashy app serve") || !strings.Contains(restart, "--pair") {
 		t.Fatalf("restart = %q, want the exact `bashy app serve … --pair` command", restart)
 	}
-	// The guessed LAN address is filled in (stubbed), not left as a placeholder.
-	if !strings.Contains(restart, "192.168.1.20") {
-		t.Fatalf("restart = %q, want the derived LAN address", restart)
+	// The hint names the symbolic bind, never a literal IP: a literal one is a
+	// snapshot that a later Wi-Fi/DHCP transition silently invalidates.
+	if !strings.Contains(restart, "--bind lan") {
+		t.Fatalf("restart = %q, want --bind lan", restart)
 	}
 }
 

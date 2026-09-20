@@ -89,17 +89,13 @@ func (s *server) handlePairMint(w http.ResponseWriter, r *http.Request) {
 	// the honest answer is the command that would arm it.
 	if s.pairing == nil {
 		lan := lanAddrFn()
-		hint := "<lan-ip>"
-		if lan != "" {
-			hint = lan
-		}
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"enabled": false,
 			"reason":  "phone access is not armed on this console",
 			"detail": "The console must be started on the LAN with pairing on before a phone " +
 				"can reach it. No firewall or router change is made for you, and this stays on " +
 				"your local network — it is never exposed to the internet.",
-			"restart":          "bashy app serve --bind " + hint + " --pair",
+			"restart":          "bashy app serve --bind " + BindLAN + " --pair",
 			"lan_hint_guessed": lan == "",
 		})
 		return

@@ -56,6 +56,10 @@ var spec = svcd.Spec{
 	Argv:        []string{"apps", "serve"},
 	Health:      otelServiceName,
 	DefaultPort: DefaultPort,
+	// The console keeps its loopback listener whatever the LAN one is doing
+	// (closed with no paired device, or bound to the symbolic "lan"), so that
+	// is where liveness is decided.
+	ProbeLoopback: true,
 }
 
 func newServiceCmd() *cobra.Command {
