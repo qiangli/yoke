@@ -26,8 +26,8 @@ func TestFleetListHelpDefinesEveryOutputField(t *testing.T) {
 		},
 		{
 			name: "agents", root: NewAgentsCmd,
-			want: []string{"NAME", "NICK", "BAND", "TOOL", "MODEL", "RELIAB", "RESOLVES", "RING",
-				"structural only", "not a live check", "agents verify NAME --live", "canonical tool:model"},
+			want: []string{"NAME", "NICK", "BAND", "TOOL", "MODEL", "BILLING", "RELIAB", "RESOLVES", "RING",
+				"cost lane", "independent", "structural only", "not a live check", "agents verify NAME --live", "canonical tool:model"},
 		},
 	}
 
@@ -46,6 +46,38 @@ func TestFleetListHelpDefinesEveryOutputField(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestAgentsListReportsAPIKeyFlatBillingSeparately(t *testing.T) {
+	root := t.TempDir()
+	cat := New(WithRoot(root))
+	if err := cat.SaveTool(Tool{Name: "ycode", Kind: ToolKindCLI}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.SaveModel(Model{Name: "glm", Kind: ModelKindAPI, Billing: BillingFlat}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.SaveAgent(Agent{Name: "ycode-glm", Tool: "ycode", Model: "glm"}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runCmd(t, NewAgentsCmd(WithRoot(root)), "list", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []agentRow
+	if err := json.Unmarshal([]byte(out), &rows); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		if row.Name != "ycode-glm" {
+			continue
+		}
+		if row.Kind != ModelKindAPI || row.Billing != BillingFlat {
+			t.Fatalf("kind=%q billing=%q, want api/flat", row.Kind, row.Billing)
+		}
+		return
+	}
+	t.Fatalf("ycode-glm missing from output: %s", out)
 }
 
 func TestToolsTableCallsBooleanModelFieldModelSelect(t *testing.T) {

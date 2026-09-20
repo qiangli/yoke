@@ -392,10 +392,11 @@ type agentRow struct {
 	Tool       string `json:"tool"`
 	Model      string `json:"model"`
 	Binding    string `json:"binding"`
-	// Kind + Provider are inherited from the model (the cost lane): kind is
-	// subscription | api | local-ollama, so a consumer can prefer flat-cost
-	// subscriptions over metered API keys without a second `models` lookup.
+	// Kind, Billing, and Provider are inherited from the model. Kind describes
+	// authentication; Billing describes cost. They are deliberately separate:
+	// GLM's Coding Plan authenticates with an API key but is flat-billed.
 	Kind        string   `json:"kind,omitempty"`
+	Billing     string   `json:"billing,omitempty"`
 	Provider    string   `json:"provider,omitempty"`
 	Reliability string   `json:"reliability,omitempty"`
 	Aliases     []string `json:"aliases,omitempty"`
@@ -418,6 +419,8 @@ func newAgentsList(opts []Option) *cobra.Command {
 			"            that reaches that band by escalation, and '-' is unpegged\n" +
 			"  TOOL      canonical agentic CLI half of the binding\n" +
 			"  MODEL     canonical model half; cascades show base->escalation model chain\n" +
+			"  BILLING   cost lane: flat, metered, flat_then_metered, or free; independent\n" +
+			"            of API-key/subscription/local authentication\n" +
 			"  RELIAB    optional operability prior from the agent ledger; '-' is unknown.\n" +
 			"            It is separate from capability BAND and is not a live check\n" +
 			"  RESOLVES  structural only: both TOOL and MODEL definitions exist. 'yes' does\n" +
@@ -427,7 +430,7 @@ func newAgentsList(opts []Option) *cobra.Command {
 			"Use `agents verify NAME` for launchability and `agents verify NAME --live`\n" +
 			"for an actual response. Use --min-band N to select a capable roster.\n\n" +
 			"JSON additionally includes binding (canonical tool:model), aliases, band_source\n" +
-			"for pegged rows (unpegged rows omit it), the model's kind/provider, and reason\n" +
+			"for pegged rows (unpegged rows omit it), the model's kind/billing/provider, and reason\n" +
 			"when resolves is false.\n\n" +
 			ringFieldHelp,
 		Example: "  bashy agent list --min-band 3\n" +
@@ -455,7 +458,7 @@ func newAgentsList(opts []Option) *cobra.Command {
 					r.Resolves, r.Reason = false, err.Error()
 				} else {
 					r.Band, r.BandSource = m.Band, effectiveBandSource(m.Band, m.BandSource)
-					r.Kind, r.Provider = m.Kind, m.Provider
+					r.Kind, r.Billing, r.Provider = m.Kind, m.BillingMode(), m.Provider
 				}
 				// A cascade agent shows its SERVED band (X4), not the base
 				// model's peg — the ladder is what reaches L4, not glm-5.2 — and
@@ -495,11 +498,11 @@ func newAgentsList(opts []Option) *cobra.Command {
 				return writeJSON(cmd.OutOrStdout(), rows)
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAME\tNICK\tBAND\tTOOL\tMODEL\tRELIAB\tRESOLVES\tRING")
+			fmt.Fprintln(tw, "NAME\tNICK\tBAND\tTOOL\tMODEL\tBILLING\tRELIAB\tRESOLVES\tRING")
 			for _, r := range rows {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 					r.Name, dashIfEmpty(r.Nick), BandLabelWithSource(r.Band, r.BandSource), r.Tool, r.Model,
-					dashIfEmpty(r.Reliability), yesNo(r.Resolves), r.Ring)
+					dashIfEmpty(r.Billing), dashIfEmpty(r.Reliability), yesNo(r.Resolves), r.Ring)
 			}
 			tw.Flush()
 			if len(agents) == 0 {
