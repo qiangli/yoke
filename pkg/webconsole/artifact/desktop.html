@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en" data-bashy-console="1">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<base href="/">
+<title>Desktop — bashy</title>
+<link rel="stylesheet" href="app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'><rect width='40' height='40' rx='10' fill='%232563eb'/><rect x='9' y='11' width='22' height='14' rx='2' fill='none' stroke='%23ffffff' stroke-width='2.6'/><path d='M15 30h10' fill='none' stroke='%235eead4' stroke-width='3.2' stroke-linecap='round'/></svg>">
+</head>
+<body class="standalone">
+<header id="bar">
+  <a id="brand" href="./" title="bashy desktop">
+    <svg class="logo" viewBox="0 0 40 40" aria-hidden="true">
+      <rect width="40" height="40" rx="10" fill="var(--logo-bg)"/>
+      <rect x="9" y="11" width="22" height="14" rx="2" fill="none" stroke="var(--logo-fg)" stroke-width="2.6"/>
+      <path d="M15 30h10" fill="none" stroke="var(--logo-accent)" stroke-width="3.2" stroke-linecap="round"/>
+    </svg>
+    <span id="wordmark">bashy<b>desktop</b></span>
+  </a>
+  <span id="desktop-peer" class="sub"></span>
+  <span class="spacer"></span>
+  <span id="status"></span>
+  <button id="disconnect" class="btn" hidden>Disconnect</button>
+</header>
+<main id="desktop-page">
+  <form id="creds" class="creds" autocomplete="off">
+    <h2>Open this desktop</h2>
+    <p class="hint">The peer's VNC server checks these; the console never stores them. Leave the user empty for a plain VNC password (Windows, Linux, macOS legacy VNC); give the OS user for macOS Screen Sharing.</p>
+    <label>User <input id="user" name="user" autocomplete="off" placeholder="OS user (macOS) — or empty"></label>
+    <label>Password <input id="password" name="password" type="password" autocomplete="off" required></label>
+    <p id="error" class="error" hidden></p>
+    <button class="btn primary" type="submit">Connect</button>
+  </form>
+  <div id="screen" hidden></div>
+</main>
+<script type="module" src="desktop.js"></script>
+</body>
+</html>

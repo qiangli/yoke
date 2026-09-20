@@ -706,9 +706,22 @@ function neighborhoodSection() {
   for (const n of hood.hosts) {
     const wrap = document.createElement("div");
     wrap.className = "tile-wrap";
-    const card = document.createElement("div");
-    card.className = "tile hood";
-    card.title = (n.peer_id ? "peer " + n.peer_id + "\n" : "") + "via " + n.via.join(" + ");
+    // A mesh peer's card IS its Desktop action (sprint 222): a real link to
+    // desktop/<peer>, the peer's screen over the mesh forward — never through
+    // cloudbox — following the same "Open apps" mode as every tile. An
+    // mDNS-only neighbour has no mesh forward to ride, so its card stays a
+    // plain card.
+    const card = document.createElement(n.peer_id ? "a" : "div");
+    card.className = "tile hood" + (n.peer_id ? " has-desktop" : "");
+    if (n.peer_id) {
+      card.href = url("desktop/" + encodeURIComponent(n.peer_id));
+      card.dataset.desktop = n.peer_id;
+      if (openApps === "new-tab") {
+        card.target = "_blank";
+        card.rel = "noopener";
+      }
+    }
+    card.title = (n.peer_id ? "peer " + n.peer_id + "\nOpen its desktop over the mesh\n" : "") + "via " + n.via.join(" + ");
     const icon = document.createElement("span");
     icon.className = "icon";
     icon.style.background = n.owner === "this-account" ? "linear-gradient(135deg,#10b981,#0ea5e9)" : "linear-gradient(135deg,#f59e0b,#ef4444)";
@@ -722,6 +735,12 @@ function neighborhoodSection() {
     if (n.owner !== "this-account") bits.push(n.user ? "discovered · " + n.user : "discovered");
     sub.textContent = bits.join(" · ");
     card.append(icon, label, sub);
+    if (n.peer_id) {
+      const act = document.createElement("span");
+      act.className = "sub action";
+      act.textContent = "Desktop ↗";
+      card.append(act);
+    }
     wrap.append(card);
     grid.append(wrap);
   }

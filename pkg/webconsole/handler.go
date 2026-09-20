@@ -285,6 +285,11 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	mux.HandleFunc("POST /api/cloud/pair", s.handleCloudPair)
 	// The Neighborhood section: same-LAN hosts, discovered peer-to-peer.
 	mux.HandleFunc("GET /api/neighborhood", s.handleNeighborhood)
+	// A neighbour's screen over the mesh (sprint 222): the page and its
+	// websocket, one prefix dispatched inside like /term/ — see desktop.go.
+	// Not a panel: it rides with the Neighborhood and keeps the console-wide
+	// login ladder.
+	mux.HandleFunc("/desktop/", s.handleDesktop)
 	// The external self-description. Ungated (see isOpenPath) and deliberately
 	// a projection, not the internal Panel.
 	mux.HandleFunc("GET /meta", s.handleMeta)

@@ -985,4 +985,23 @@ body.standalone #bar { flex: none; }
 /* ----------------------------------------------------------- neighborhood -- */
 .sect-note { margin-left: auto; font-size: .8rem; opacity: .7; }
 .tile.hood { cursor: default; }
+.tile.hood.has-desktop { cursor: pointer; }
 .tile .sub { font-size: .75rem; opacity: .7; display: block; margin-top: .15rem; }
+.tile .sub.action { color: var(--primary); opacity: 1; font-weight: 500; }
+
+/* ---------------------------------------------------------------- desktop -- */
+/* The standalone desktop page: the credentials card until the peer's VNC
+   server accepts them, then the remote screen filling the viewport. */
+#desktop-page { flex: 1; min-height: 0; display: flex; align-items: stretch; justify-content: center; background: #1b1b1f; }
+#desktop-page .creds {
+  align-self: center; width: min(26rem, 92vw); padding: 1.25rem 1.4rem; border-radius: 1rem;
+  background: var(--card); color: var(--foreground); border: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: .6rem;
+}
+#desktop-page .creds h2 { margin: 0; font-size: 1.05rem; }
+#desktop-page .creds label { display: flex; flex-direction: column; gap: .25rem; font-size: .82rem; }
+#desktop-page .creds input { font: inherit; padding: .4rem .55rem; border-radius: .45rem; border: 1px solid var(--border); background: var(--background); color: var(--foreground); }
+#desktop-page .creds .error { color: #ef4444; font-size: .82rem; margin: 0; }
+#desktop-page .creds .btn { align-self: flex-end; }
+#screen { flex: 1; min-height: 0; min-width: 0; }
+#desktop-peer { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .75rem; color: var(--muted-foreground); }
