@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/qiangli/yoke/pkg/bus"
 	"github.com/qiangli/yoke/pkg/capability"
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/secrets"
@@ -23,6 +24,16 @@ var operableFn = capability.Operable
 // registeredAgentFn is indirected for hermetic engine tests that use tiny
 // synthetic seat names. Production always resolves the actual fleet catalog.
 var registeredAgentFn = func(name string) (fleet.Agent, bool) { return fleet.New().Agent(name) }
+
+// registeredPersonFn answers "is this a person the people catalog knows" —
+// the seat a human other than the room's own human takes (Sprint 217:
+// people meet people, and people and agents meet together). A person is an
+// attendee who reads and posts on their own behalf; never a seat this host
+// schedules a turn for.
+var registeredPersonFn = func(name string) bool {
+	_, ok := fleet.New().Person(name)
+	return ok
+}
 
 // Seating a meeting used to mean naming everyone: --participant this,
 // --participant that, and you had to already know which of the fleet were
@@ -405,6 +416,14 @@ func inviteTo(st *State, actor, agent string) error {
 		return err
 	}
 	if err := routableSeat(agent); err != nil {
+		// Not an agent this host can drive. A registered PERSON still gets a
+		// seat — an attendee, attributed and addressable, never scheduled.
+		// In a shared room a colleague's seat on another host does too; it is
+		// reached through the relay, so it is likewise never scheduled here.
+		name := strings.TrimSpace(agent)
+		if registeredPersonFn(name) || (st.Shared && bus.RemoteResolve != nil && bus.IsRemoteAddress(name)) {
+			return seatAttendee(st, actor, name)
+		}
 		return err
 	}
 	if err := ensureRoomSecretary(context.Background(), st); err != nil {
@@ -470,6 +489,25 @@ func kickFrom(st *State, actor, agent string) error {
 		kept = append(kept, p)
 	}
 	if found == "" {
+		// A person (or remote colleague) seated as an attendee.
+		keptObs := make([]string, 0, len(st.Observers))
+		for _, o := range st.Observers {
+			if found == "" && strings.EqualFold(o, name) {
+				found = o
+				continue
+			}
+			keptObs = append(keptObs, o)
+		}
+		if found != "" {
+			prevObs := st.Observers
+			st.Observers = keptObs
+			if err := st.save(); err != nil {
+				st.Observers = prevObs
+				return err
+			}
+			_, err := record(st, "kick", actorLabel(st, actor), "", fmt.Sprintf("removed %s", seatLabel(found)))
+			return err
+		}
 		return fmt.Errorf("meet: %s is not seated in %s — participants: %s",
 			agent, st.ID, strings.Join(st.Participants, ", "))
 	}
@@ -486,6 +524,31 @@ func kickFrom(st *State, actor, agent string) error {
 		return err
 	}
 	_, err := record(st, "kick", actorLabel(st, actor), "", fmt.Sprintf("removed %s", seatLabel(found)))
+	return err
+}
+
+// seatAttendee seats a person (or a remote colleague) as an observer-attendee.
+// Idempotent, like inviteTo.
+func seatAttendee(st *State, actor, name string) error {
+	for _, o := range st.Observers {
+		if strings.EqualFold(o, name) {
+			return nil
+		}
+	}
+	if strings.EqualFold(st.Human, name) {
+		return nil
+	}
+	prev := st.Observers
+	st.Observers = append(append([]string(nil), prev...), name)
+	if err := st.Validate(); err != nil {
+		st.Observers = prev
+		return err
+	}
+	if err := st.save(); err != nil {
+		st.Observers = prev
+		return err
+	}
+	_, err := record(st, "invite", actorLabel(st, actor), "", fmt.Sprintf("seated %s", seatLabel(name)))
 	return err
 }
 

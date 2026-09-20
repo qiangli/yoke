@@ -353,6 +353,7 @@ func newOpenCmd() *cobra.Command {
 	var rounds int
 	var dry, nonInteractive, yes bool
 	var fromMB string
+	var shared bool
 	cmd := &cobra.Command{
 		Use:   "open [<room>|<id>] [--topic TEXT --participant AGENT ...]",
 		Short: "open a meeting (enters the REPL unless --non-interactive)",
@@ -395,9 +396,22 @@ func newOpenCmd() *cobra.Command {
 			if !sf.board && strings.TrimSpace(sf.chair) == "" {
 				return fmt.Errorf("meet: an open meeting requires an owner (facilitator) — pass --owner NAME from `bashy agent list`")
 			}
+			if shared && !sf.board {
+				return fmt.Errorf("meet: --shared rooms are boards (nothing schedules a turn across hosts); pass --board")
+			}
 			st, err := sf.newState()
 			if err != nil {
 				return err
+			}
+			if shared {
+				if SharedSessionID == nil {
+					return fmt.Errorf("meet: --shared needs the relay bashy wires (not available here)")
+				}
+				sid, serr := SharedSessionID()
+				if serr != nil {
+					return fmt.Errorf("meet: --shared: %w", serr)
+				}
+				st.Shared, st.Session = true, sid
 			}
 			w := cmd.OutOrStdout()
 			sf.printRoster(w)
@@ -457,6 +471,10 @@ func newOpenCmd() *cobra.Command {
 	f.BoolVar(&sf.board, "board", false,
 		"open a BOARD: participants read and post on their own turns. No facilitator runs the "+
 			"floor and no secretary is spawned; post with bashy meet tell ROOM --as NAME MESSAGE")
+	f.BoolVar(&shared, "shared", false,
+		"share the board across hosts: every post rides this repo's cloudbox session and colleagues on "+
+			"other hosts (same account or another) read and post in a mirror of the room under the same id. "+
+			"Invite them as <name>@<host>; people from the people catalog by name. Requires --board")
 	f.StringVar(&fromMB, "from-mb", "",
 		"seed the board from these message-board posts (comma-separated seqs, e.g. 3,7,12), "+
 			"attributed to their original authors, and post a pointer back to mb. Requires --board")

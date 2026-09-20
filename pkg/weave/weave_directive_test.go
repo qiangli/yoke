@@ -18,6 +18,14 @@ func (m *directiveMockSessionClient) CreateTask(ctx context.Context, req CreateT
 	return TaskSummary{}, nil
 }
 
+func (m *directiveMockSessionClient) ListTasksByRepo(ctx context.Context, repo string) (RepoSessions, error) {
+	return RepoSessions{}, ErrRepoQueryUnsupported
+}
+
+func (m *directiveMockSessionClient) JoinByRepo(ctx context.Context, req JoinByRepoReq) (JoinByRepoResponse, error) {
+	return JoinByRepoResponse{}, nil
+}
+
 func (m *directiveMockSessionClient) ListTasks(ctx context.Context) ([]TaskSummary, error) {
 	return nil, nil
 }

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/qiangli/yoke/pkg/bus"
+	"github.com/qiangli/yoke/pkg/meet"
 )
 
 // Local delivery — the MDA half of the email model.
@@ -146,7 +147,24 @@ func DeliverRemoteMail(ctx context.Context, repoRoot, reader string) (DeliveryRe
 				continue
 			}
 			if strings.EqualFold(d.From, me) {
-				continue // my own outbox copy is already on my board
+				continue // my own post is already on my board / in my room
+			}
+			if d.Room != "" {
+				// A post in a shared meet room: file it into this host's
+				// mirror of the room (created on first sight), for everyone
+				// seated there — not into one reader's mailbox.
+				at, _ := time.Parse(time.RFC3339Nano, d.At)
+				filed, err := meet.DeliverShared(meet.SharedEvent{
+					ID: d.ID, RoomID: d.Room, Topic: d.RoomTopic, Session: taskID, Roster: d.Roster,
+					From: d.From, To: d.To, Kind: d.Kind, Body: ev.Summary, At: at,
+				}, sessionHostName())
+				if err != nil {
+					return rep, fmt.Errorf("deliver room post %s: %w", d.ID, err)
+				}
+				if filed {
+					rep.Delivered++
+				}
+				continue
 			}
 			if !addressedTo(d.To, reader, me, lookupHolder()) {
 				continue

@@ -34,6 +34,9 @@ type sessionRepoClient struct {
 	created bool
 }
 
+// Pointer is the resolved session pointer (task id, repo key, seat).
+func (sc *sessionRepoClient) Pointer() *SessionPointer { return sc.pointer }
+
 func sessionClientForRepo() (*sessionRepoClient, error) {
 	cwd, _ := os.Getwd()
 	return sessionClientForRepoRoot(cwd)
@@ -529,8 +532,8 @@ func sessionRoster(ctx context.Context, client SessionClient, taskID string) (se
 		switch ev.Kind {
 		case "join", "leave", "handoff":
 			events = append(events, ev)
-			if ev.Summary != "" {
-				seen[ev.Summary] = true
+			if p := joinParticipant(ev); p != "" {
+				seen[p] = true
 			}
 			if ev.Kind == "handoff" {
 				var d struct {
@@ -548,6 +551,19 @@ func sessionRoster(ctx context.Context, client SessionClient, taskID string) (se
 	}
 	sort.Strings(participants)
 	return sessionRosterResult{TaskID: taskID, Holder: holder, Events: events, Participants: participants}, nil
+}
+
+// joinParticipant is the seat a presence event names: the envelope's
+// participant when present (what bashy sends), else the summary, which
+// cloudbox's join handler writes as "<participant> joined".
+func joinParticipant(ev Event) string {
+	var d struct {
+		Participant string `json:"participant"`
+	}
+	if json.Unmarshal(ev.Detail, &d) == nil && strings.TrimSpace(d.Participant) != "" {
+		return strings.TrimSpace(d.Participant)
+	}
+	return strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(ev.Summary), " joined"))
 }
 
 func joinedTaskID(pointer *SessionPointer) (string, error) {
@@ -613,6 +629,7 @@ type sessionStatus struct {
 	RepoKey      string   `json:"repo_key,omitempty"`
 	SprintSeq    int64    `json:"sprint_seq,omitempty"`
 	Created      bool     `json:"created,omitempty"`
+	Role         string   `json:"role,omitempty"`
 	Holder       *string  `json:"lease_holder"`
 	Participants []string `json:"participants"`
 	Me           string   `json:"me"`
@@ -634,7 +651,7 @@ func runWeaveSessionStatus(cmd *cobra.Command, flags *weaveOutputFlags) error {
 	me, _ := SessionParticipant()
 	st := sessionStatus{
 		TaskID: sc.pointer.TaskID, RepoKey: sc.pointer.RepoKey, SprintSeq: sc.pointer.SprintSeq,
-		Created: sc.created, Holder: roster.Holder, Participants: roster.Participants, Me: me,
+		Created: sc.created, Role: sc.pointer.Role, Holder: roster.Holder, Participants: roster.Participants, Me: me,
 		AsOf: time.Now().UTC().Format(time.RFC3339),
 	}
 	if mode == weavecli.OutputJSON {
@@ -657,6 +674,9 @@ func runWeaveSessionStatus(cmd *cobra.Command, flags *weaveOutputFlags) error {
 		fmt.Fprintf(w, "sprint: #%d\n", st.SprintSeq)
 	}
 	fmt.Fprintf(w, "me: %s\n", st.Me)
+	if st.Role != "" {
+		fmt.Fprintf(w, "role: %s\n", st.Role)
+	}
 	fmt.Fprintf(w, "lease_holder: %s\n", holder)
 	fmt.Fprintln(w, "participants:")
 	for _, p := range st.Participants {

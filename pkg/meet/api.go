@@ -485,7 +485,14 @@ func PostAs(ref, author, to, text string) (Event, error) {
 			Round: st.Round, Speaker: who, Role: string(RoleParticipant),
 			Kind: "message", To: target, Text: sanitizeTurn(text), TS: nowFn(),
 		}
-		return ev, AppendEvent(st.ID, ev)
+		if st.Shared {
+			// The post's universal id, so every host files it once.
+			ev.Origin = &EventOrigin{Source: sharedOriginPrefix + bus.NewPostID()}
+		}
+		if err := AppendEvent(st.ID, ev); err != nil {
+			return ev, err
+		}
+		return ev, relayIfShared(st, ev)
 	}
 	if err := ensureRoomSecretary(context.Background(), st); err != nil {
 		return Event{}, err
@@ -530,7 +537,8 @@ func participantSeat(st *State, name string) bool {
 			return true
 		}
 	}
-	return false
+	// People at the table post and are addressed on their own behalf.
+	return st.humanAttendee(name)
 }
 
 // Address puts a message to ONE agent and returns its reply — the REPL's

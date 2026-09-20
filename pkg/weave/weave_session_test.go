@@ -27,6 +27,38 @@ type fakeSessionClient struct {
 	revokes     []string
 	leaseErr    error
 	creates     []CreateTaskReq
+	// repoSessions answers ListTasksByRepo when set; nil means the server
+	// does not know ?repo= (ErrRepoQueryUnsupported).
+	repoSessions *RepoSessions
+	joinByRepo   []JoinByRepoReq
+	joinRole     string
+	joinErr      error
+}
+
+func (f *fakeSessionClient) ListTasksByRepo(ctx context.Context, repo string) (RepoSessions, error) {
+	if f.repoSessions == nil {
+		return RepoSessions{}, ErrRepoQueryUnsupported
+	}
+	return *f.repoSessions, nil
+}
+
+func (f *fakeSessionClient) JoinByRepo(ctx context.Context, req JoinByRepoReq) (JoinByRepoResponse, error) {
+	f.joinByRepo = append(f.joinByRepo, req)
+	if f.joinErr != nil {
+		return JoinByRepoResponse{}, f.joinErr
+	}
+	var t TaskSummary
+	if f.repoSessions != nil {
+		for _, s := range f.repoSessions.Sessions {
+			t = s.Task
+			break
+		}
+	}
+	role := f.joinRole
+	if role == "" {
+		role = "contributor"
+	}
+	return JoinByRepoResponse{Task: t, Role: role, Cursor: "c0"}, nil
 }
 
 func (f *fakeSessionClient) CreateTask(ctx context.Context, req CreateTaskReq) (TaskSummary, error) {

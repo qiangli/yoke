@@ -22,6 +22,14 @@ var (
 type SessionClient interface {
 	ListTasks(ctx context.Context) ([]TaskSummary, error)
 	CreateTask(ctx context.Context, req CreateTaskReq) (TaskSummary, error)
+	// ListTasksByRepo asks `GET /api/v1/tasks?repo=<key>`. A cloudbox that
+	// knows the query answers with sessions split into reachable and
+	// joinable (ErrRepoQueryUnsupported otherwise, and the caller filters
+	// ListTasks itself).
+	ListTasksByRepo(ctx context.Context, repo string) (RepoSessions, error)
+	// JoinByRepo is `POST /api/v1/tasks/join-by-repo`: the server seats the
+	// caller on the repo's session by GitHub's answer when no share exists.
+	JoinByRepo(ctx context.Context, req JoinByRepoReq) (JoinByRepoResponse, error)
 	GetEvents(ctx context.Context, taskID, since string, limit int) (EventsResponse, error)
 	AppendEvent(ctx context.Context, taskID string, req AppendEventReq) (Event, error)
 	CreateSprint(ctx context.Context, req CreateSprintReq) (SprintSummary, error)
@@ -66,13 +74,46 @@ type ListTasksResponse struct {
 	Tasks []TaskSummary `json:"tasks"`
 }
 
+// RepoSessions is the answer to `?repo=`: what the caller can reach on the
+// key, and what it could be seated on by GitHub's say-so.
+type RepoSessions struct {
+	Repo     string        `json:"repo"`
+	Sessions []RepoSession `json:"sessions"`
+}
+
+type RepoSession struct {
+	Task     TaskSummary `json:"task"`
+	Joinable bool        `json:"joinable"`
+}
+
+// ErrRepoQueryUnsupported: the server answered the plain list (it ignores
+// `?repo=`), so the caller keys the sessions itself.
+var ErrRepoQueryUnsupported = errors.New("cloudbox: ?repo= not supported by this server")
+
+type JoinByRepoReq struct {
+	Repo        string `json:"repo"`
+	Participant string `json:"participant"`
+	Host        string `json:"host"`
+	Tool        string `json:"tool"`
+}
+
+type JoinByRepoResponse struct {
+	Task    TaskSummary               `json:"task"`
+	Role    string                    `json:"role"`
+	Context map[string][]ContextEvent `json:"context"`
+	Cursor  string                    `json:"cursor"`
+}
+
 // CreateTaskReq mirrors cloudbox's v1CreateTaskReq; a repo-keyed team session
 // sets TargetRepo to the normalized origin and nothing else it does not know.
 type CreateTaskReq struct {
-	Name         string   `json:"name,omitempty"`
-	Display      string   `json:"display,omitempty"`
-	Goal         string   `json:"goal"`
-	TargetRepo   string   `json:"target_repo,omitempty"`
+	Name       string `json:"name,omitempty"`
+	Display    string `json:"display,omitempty"`
+	Goal       string `json:"goal"`
+	TargetRepo string `json:"target_repo,omitempty"`
+	// Discovery: "" (derived — a github.com key is joinable by GitHub's
+	// say-so) or "private" (owner + explicit shares only).
+	Discovery    string   `json:"discovery,omitempty"`
 	TargetRef    string   `json:"target_ref,omitempty"`
 	Gate         string   `json:"gate,omitempty"`
 	Fleet        []string `json:"fleet,omitempty"`
@@ -232,6 +273,32 @@ func (c *httpSessionClient) CreateTask(ctx context.Context, req CreateTaskReq) (
 	var out TaskSummary
 	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/tasks", req, &out); err != nil {
 		return TaskSummary{}, err
+	}
+	return out, nil
+}
+
+func (c *httpSessionClient) ListTasksByRepo(ctx context.Context, repo string) (RepoSessions, error) {
+	var raw json.RawMessage
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/tasks?repo="+url.QueryEscape(repo), nil, &raw); err != nil {
+		return RepoSessions{}, err
+	}
+	var probe struct {
+		Sessions *json.RawMessage `json:"sessions"`
+	}
+	if json.Unmarshal(raw, &probe) != nil || probe.Sessions == nil {
+		return RepoSessions{}, ErrRepoQueryUnsupported
+	}
+	var out RepoSessions
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return RepoSessions{}, fmt.Errorf("cloudbox response parse: %w", err)
+	}
+	return out, nil
+}
+
+func (c *httpSessionClient) JoinByRepo(ctx context.Context, req JoinByRepoReq) (JoinByRepoResponse, error) {
+	var out JoinByRepoResponse
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/tasks/join-by-repo", req, &out); err != nil {
+		return JoinByRepoResponse{}, err
 	}
 	return out, nil
 }

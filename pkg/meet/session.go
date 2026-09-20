@@ -269,6 +269,15 @@ type State struct {
 	// seat this host routes or schedules for a turn.
 	Observers []string `json:"observers,omitempty"`
 
+	// Shared marks a board whose transcript rides the repo's cloudbox session
+	// (Sprint 217): every post is relayed to the feed, and a host that reads
+	// the feed keeps a MIRROR of the room under the same id — so people and
+	// agents on other hosts (same account or another) read and post in one
+	// room. Session is the relay's task id. A shared room is always a board:
+	// nothing schedules a turn across hosts.
+	Shared  bool   `json:"shared,omitempty"`
+	Session string `json:"session,omitempty"`
+
 	// Board marks a room where participants read and post on their OWN turns:
 	// no chair runs the floor and no secretary is spawned. It is a room TYPE, not
 	// a turn-model knob — a two-valued Mode string where "" and "meeting" mean the

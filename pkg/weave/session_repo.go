@@ -229,33 +229,45 @@ func EnsureRepoSession(ctx context.Context, repoRoot string) (*sessionRepoClient
 	if err != nil {
 		return nil, err
 	}
-	taskID, err := lookupRepoSession(ctx, client, key)
+	participant, host := SessionParticipant()
+	taskID, role, joined, refused, err := resolveRepoSession(ctx, client, key, participant, host)
 	if err != nil {
 		return nil, err
 	}
 	created := false
 	if taskID == "" {
-		task, err := client.CreateTask(ctx, CreateTaskReq{
+		req := CreateTaskReq{
 			Name:       key,
 			Display:    "team session · " + key,
 			Goal:       "team session for " + key,
 			TargetRepo: key,
-		})
+		}
+		if refused {
+			// GitHub declined this account on the repo, so its session is
+			// nobody's business but its own: private, never discoverable —
+			// otherwise every stranger's fallback session would pollute the
+			// key and make the team's session ambiguous for the next joiner.
+			req.Discovery = "private"
+		}
+		task, err := client.CreateTask(ctx, req)
 		if err != nil {
 			return nil, fmt.Errorf("session: create for %s: %w", key, err)
 		}
 		taskID = task.ID
+		role = "owner"
 		created = true
 	}
-	participant, host := SessionParticipant()
-	if _, err := client.Join(ctx, taskID, JoinReq{Participant: participant, Host: host, Tool: "bashy", Role: "contributor"}); err != nil {
-		return nil, fmt.Errorf("session: join %s: %w", key, err)
+	if !joined {
+		if _, err := client.Join(ctx, taskID, JoinReq{Participant: participant, Host: host, Tool: "bashy", Role: "contributor"}); err != nil {
+			return nil, fmt.Errorf("session: join %s: %w", key, err)
+		}
 	}
 	if pointer == nil {
 		pointer = &SessionPointer{}
 	}
 	pointer.TaskID = taskID
 	pointer.RepoKey = key
+	pointer.Role = role
 	if pointer.CloudboxBase == "" {
 		pointer.CloudboxBase = base
 	}
@@ -266,6 +278,75 @@ func EnsureRepoSession(ctx context.Context, repoRoot string) (*sessionRepoClient
 		return nil, err
 	}
 	return &sessionRepoClient{repoRoot: repoRoot, pointer: pointer, client: client, created: created}, nil
+}
+
+// resolveRepoSession finds the session for a key. A cloudbox that answers
+// `?repo=` decides itself: a reachable session is joined by id; a session
+// GitHub might seat the caller on is joined through join-by-repo, which
+// records the seat (or refuses — a refusal is "no session", so the caller
+// may create its own); several of either is an ambiguity, named and
+// refused. A cloudbox without the query is filtered client-side as before.
+// Returns the task id ("" = none), the seat, whether the join already
+// happened, and whether GitHub declined the caller on a session it saw.
+func resolveRepoSession(ctx context.Context, client SessionClient, key, participant, host string) (taskID, role string, joined, refused bool, err error) {
+	rs, err := client.ListTasksByRepo(ctx, key)
+	if errors.Is(err, ErrRepoQueryUnsupported) {
+		id, lerr := lookupRepoSession(ctx, client, key)
+		if lerr != nil {
+			return "", "", false, false, lerr
+		}
+		if id == "" {
+			return "", "", false, false, nil
+		}
+		return id, "member", false, false, nil
+	}
+	if err != nil {
+		return "", "", false, false, err
+	}
+	var reachable, joinable []TaskSummary
+	for _, s := range rs.Sessions {
+		if !sessionTaskActive(s.Task) {
+			continue
+		}
+		if s.Joinable {
+			joinable = append(joinable, s.Task)
+		} else {
+			reachable = append(reachable, s.Task)
+		}
+	}
+	if len(reachable) > 1 {
+		return "", "", false, false, ambiguousSessions(key, reachable)
+	}
+	if len(reachable) == 1 {
+		return reachable[0].ID, "member", false, false, nil
+	}
+	if len(joinable) > 1 {
+		return "", "", false, false, ambiguousSessions(key, joinable)
+	}
+	if len(joinable) == 1 {
+		resp, jerr := client.JoinByRepo(ctx, JoinByRepoReq{Repo: key, Participant: participant, Host: host, Tool: "bashy"})
+		if jerr != nil {
+			// GitHub does not vouch for this account on that repo: the
+			// session exists but is not ours to join. Not an error — the
+			// caller gets its own (private) session on the key, as any
+			// registered user may.
+			if strings.Contains(strings.ToLower(jerr.Error()), "404") || strings.Contains(strings.ToLower(jerr.Error()), "not found") {
+				return "", "", false, true, nil
+			}
+			return "", "", false, false, fmt.Errorf("session: join %s by repo: %w", key, jerr)
+		}
+		return resp.Task.ID, resp.Role, true, false, nil
+	}
+	return "", "", false, false, nil
+}
+
+func ambiguousSessions(key string, ts []TaskSummary) error {
+	sort.Slice(ts, func(i, j int) bool { return ts[i].Created.Before(ts[j].Created) })
+	ids := make([]string, 0, len(ts))
+	for _, t := range ts {
+		ids = append(ids, t.ID)
+	}
+	return fmt.Errorf("session: %d active sessions are keyed on %s (%s); join one explicitly: bashy sprint session join <task-id>", len(ts), key, strings.Join(ids, ", "))
 }
 
 // lookupRepoSession finds the ONE active session keyed on the repo among the

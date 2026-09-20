@@ -175,3 +175,61 @@ func TestSessionParticipantNeverCarriesTheOSLogin(t *testing.T) {
 		t.Fatalf("no-agent participant %q must be marked person:", p)
 	}
 }
+
+// Slice B: a cloudbox that answers ?repo= decides the seat. A session the
+// caller cannot reach but GitHub might seat it on is joined by repo; the
+// role comes back on the pointer; GitHub refusing means "no session for
+// you" and the caller creates its own.
+func TestEnsureRepoSessionJoinsByRepoWhenGitHubSeatsTheCaller(t *testing.T) {
+	theirs := TaskSummary{ID: "t-theirs", TargetRepo: "github.com/qiangli/bashy", Status: "active"}
+	fake := &fakeSessionClient{
+		repoSessions: &RepoSessions{Repo: "github.com/qiangli/bashy", Sessions: []RepoSession{{Task: theirs, Joinable: true}}},
+		joinRole:     "observer",
+	}
+	repo := sessionTestEnv(t, "git@github.com:qiangli/bashy.git", fake)
+	sc, err := EnsureRepoSession(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sc.created || sc.pointer.TaskID != "t-theirs" || sc.pointer.Role != "observer" {
+		t.Fatalf("pointer = %+v created=%v", sc.pointer, sc.created)
+	}
+	if len(fake.joinByRepo) != 1 || fake.joinByRepo[0].Repo != "github.com/qiangli/bashy" || fake.joinByRepo[0].Participant != "plinth@"+sessionHostName() {
+		t.Fatalf("join-by-repo = %+v", fake.joinByRepo)
+	}
+	if len(fake.joins) != 0 || len(fake.creates) != 0 {
+		t.Fatalf("join-by-repo already seated us: joins=%d creates=%d", len(fake.joins), len(fake.creates))
+	}
+}
+
+func TestEnsureRepoSessionCreatesOwnWhenGitHubRefuses(t *testing.T) {
+	theirs := TaskSummary{ID: "t-theirs", TargetRepo: "github.com/qiangli/bashy", Status: "active"}
+	fake := &fakeSessionClient{
+		repoSessions: &RepoSessions{Sessions: []RepoSession{{Task: theirs, Joinable: true}}},
+		joinErr:      errors.New("cloudbox request failed: 404 Not Found: {}"),
+	}
+	repo := sessionTestEnv(t, "git@github.com:qiangli/bashy.git", fake)
+	sc, err := EnsureRepoSession(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sc.created || sc.pointer.Role != "owner" || sc.pointer.TaskID == "t-theirs" {
+		t.Fatalf("want an own session when GitHub refuses, got %+v created=%v", sc.pointer, sc.created)
+	}
+	// ...and that session is PRIVATE, so it never shows up as joinable to
+	// the next account on the key.
+	if len(fake.creates) != 1 || fake.creates[0].Discovery != "private" {
+		t.Fatalf("a session created after a GitHub refusal must be private: %+v", fake.creates)
+	}
+}
+
+func TestEnsureRepoSessionPrefersReachableOverJoinable(t *testing.T) {
+	mine := TaskSummary{ID: "t-mine", TargetRepo: "github.com/qiangli/bashy", Status: "active"}
+	theirs := TaskSummary{ID: "t-theirs", TargetRepo: "github.com/qiangli/bashy", Status: "active"}
+	fake := &fakeSessionClient{repoSessions: &RepoSessions{Sessions: []RepoSession{{Task: theirs, Joinable: true}, {Task: mine}}}}
+	repo := sessionTestEnv(t, "git@github.com:qiangli/bashy.git", fake)
+	sc, err := EnsureRepoSession(context.Background(), repo)
+	if err != nil || sc.pointer.TaskID != "t-mine" || len(fake.joinByRepo) != 0 || len(fake.joins) != 1 {
+		t.Fatalf("pointer=%+v err=%v joinByRepo=%d joins=%d", sc.pointer, err, len(fake.joinByRepo), len(fake.joins))
+	}
+}

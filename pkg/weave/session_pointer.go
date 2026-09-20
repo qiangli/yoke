@@ -20,6 +20,10 @@ type SessionPointer struct {
 	// commit on another host may carry `Sprint: #<seq>` for a sprint that
 	// exists on the manager's board only.
 	SprintSeq int64 `json:"sprint_seq,omitempty"`
+	// Role is the seat cloudbox gave this account on the session at the
+	// last join: owner · contributor · observer. An observer can read the
+	// board and send/receive mail; it cannot steer or take the lease.
+	Role string `json:"role,omitempty"`
 }
 
 func ReadSessionPointer(repoRoot string) (*SessionPointer, error) {

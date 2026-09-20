@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/qiangli/yoke/pkg/bus"
+	"github.com/qiangli/yoke/pkg/meet"
 	"github.com/qiangli/yoke/pkg/principal"
 )
 
@@ -26,14 +28,18 @@ const MessageEventKind = "message"
 
 // messageDetail is the envelope stored in TaskEvent.Detail.
 type messageDetail struct {
-	Schema   string `json:"schema"`
-	ID       string `json:"id"`
-	From     string `json:"from"`
-	FromURN  string `json:"from_urn,omitempty"`
-	To       string `json:"to"`
-	Topic    string `json:"topic,omitempty"`
-	Priority string `json:"priority,omitempty"`
-	Room     string `json:"room,omitempty"`
+	Schema    string   `json:"schema"`
+	ID        string   `json:"id"`
+	From      string   `json:"from"`
+	FromURN   string   `json:"from_urn,omitempty"`
+	To        string   `json:"to"`
+	Topic     string   `json:"topic,omitempty"`
+	Priority  string   `json:"priority,omitempty"`
+	Room      string   `json:"room,omitempty"`
+	RoomTopic string   `json:"room_topic,omitempty"`
+	Roster    []string `json:"roster,omitempty"`
+	Kind      string   `json:"kind,omitempty"`
+	At        string   `json:"at,omitempty"`
 }
 
 // ResolveRemoteParticipant answers bus.RemoteResolve for the checkout at
@@ -88,8 +94,8 @@ func ResolveRemoteParticipant(ctx context.Context, repoRoot, target string) (bus
 // SendRemoteMessage answers bus.RemoteSend: append the envelope to the
 // session the route was found on.
 func SendRemoteMessage(ctx context.Context, repoRoot string, m bus.RemoteMessage) (bus.RemoteReceipt, error) {
-	if m.ID == "" || m.To == "" || m.From == "" {
-		return bus.RemoteReceipt{}, errors.New("remote message needs id, from and to")
+	if m.ID == "" || m.From == "" || (m.To == "" && m.Room == "") {
+		return bus.RemoteReceipt{}, errors.New("remote message needs id, from, and a recipient (to) or a room")
 	}
 	sc, err := EnsureRepoSession(ctx, repoRoot)
 	if err != nil {
@@ -102,6 +108,7 @@ func SendRemoteMessage(ctx context.Context, repoRoot string, m bus.RemoteMessage
 	detail, err := json.Marshal(messageDetail{
 		Schema: bus.BoardSchema, ID: m.ID, From: m.From, FromURN: m.FromURN,
 		To: m.To, Topic: m.Topic, Priority: m.Priority, Room: m.Room,
+		RoomTopic: m.RoomTopic, Roster: m.Roster, Kind: m.Kind, At: m.At,
 	})
 	if err != nil {
 		return bus.RemoteReceipt{}, err
@@ -125,4 +132,46 @@ func RemoteSenderSignature() (from, fromURN string) {
 		return from, principal.URN(principal.KindAgent, name, "")
 	}
 	return from, ""
+}
+
+// RelaySharedRoomPost answers meet.RelayShared: a post in a shared board rides
+// the room's session as a message carrying room:<id>. The message id is the
+// one the event already carries (Origin "session:<uuid>"), so every host —
+// this one included, when the feed echoes it — files it exactly once. A room
+// post addressed to nobody is for the whole room; To otherwise names a seat
+// as the other hosts know it.
+func RelaySharedRoomPost(ctx context.Context, repoRoot string, st *meet.State, ev meet.Event) error {
+	if st == nil || !st.Shared {
+		return nil
+	}
+	id := ""
+	if ev.Origin != nil {
+		id = strings.TrimPrefix(ev.Origin.Source, "session:")
+	}
+	if id == "" {
+		id = bus.NewPostID()
+	}
+	me, host := SessionParticipant()
+	from, fromURN := RemoteSenderSignature()
+	if from == "" {
+		from = me
+	}
+	to := strings.TrimSpace(ev.To)
+	if to != "" && !bus.IsRemoteAddress(to) && !strings.EqualFold(to, "all") {
+		to = to + "@" + host // a local seat, qualified for the other hosts
+	}
+	if strings.EqualFold(to, "all") {
+		to = ""
+	}
+	kind := ev.Kind
+	if kind == "" {
+		kind = "message"
+	}
+	m := bus.RemoteMessage{
+		ID: id, From: from, FromURN: fromURN, To: to, Topic: "meet",
+		Room: st.ID, RoomTopic: st.Topic, Roster: meet.SharedRoster(st, host), Kind: kind,
+		At: ev.TS.UTC().Format(time.RFC3339Nano), Body: ev.Text, Session: st.Session,
+	}
+	_, err := SendRemoteMessage(ctx, repoRoot, m)
+	return err
 }

@@ -49,9 +49,17 @@ type RemoteMessage struct {
 	To       string `json:"to"`
 	Topic    string `json:"topic,omitempty"`
 	Priority string `json:"priority,omitempty"`
-	Room     string `json:"room,omitempty"`
-	Body     string `json:"-"`
-	Session  string `json:"-"`
+	// Room, when set, makes this a post in a SHARED meet room rather than
+	// mail: the recipient host files it into its mirror of the room. Topic
+	// and Roster describe the room so a host seeing it for the first time
+	// can open the mirror; Kind is the meet event kind (message by default).
+	Room      string   `json:"room,omitempty"`
+	RoomTopic string   `json:"room_topic,omitempty"`
+	Roster    []string `json:"roster,omitempty"`
+	Kind      string   `json:"kind,omitempty"`
+	At        string   `json:"at,omitempty"`
+	Body      string   `json:"-"`
+	Session   string   `json:"-"`
 }
 
 // RemoteReceipt is what the relay reports back. It never claims delivery:
