@@ -501,6 +501,31 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 				var rep drainReport
 				var closedOwner string
 				cwd, _ := os.Getwd()
+				var reclaimed string
+				if ending {
+					// ZERO RESIDUE, IN THREE STEPS, OUTSIDE THE LOCK. (1) every
+					// linked run must have a decision; (2) the settled ones come
+					// down through the one guarded teardown; (3) the mutation below
+					// looks again and refuses if anything sprint-owned is left.
+					var refusal error
+					var reclaimFailures []string
+					if err := weaveStoryRead(cmd, &flags, op, id, func(s *weaveStory) {
+						if undisposed := sprintUndisposedRuns(s); len(undisposed) > 0 {
+							refusal = fmt.Errorf("sprint #%d cannot end — %d linked run(s) have no disposition:\n  %s",
+								id, len(undisposed), strings.Join(undisposed, "\n  "))
+							return
+						}
+						reclaimed, reclaimFailures = sprintReclaimSummary(sprintPruneRunArtifacts(s))
+					}); err != nil {
+						return err
+					}
+					if refusal != nil {
+						return refusal
+					}
+					if len(reclaimFailures) > 0 {
+						return fmt.Errorf("sprint #%d cannot end — cleanup failed:\n  %s", id, strings.Join(reclaimFailures, "\n  "))
+					}
+				}
 				err = runWeaveStoryMutate(cmd, id, op, &flags, func(s *weaveStory) (string, error) {
 					b := s.currentBox()
 					unboxedEnd := ending && len(s.Boxes) == 0
@@ -628,6 +653,12 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 								"sprint #%d cannot end — it is not clean:\n  %s\n  `bashy sprint prune %d` for the full state and the command that fixes each",
 								id, strings.Join(hy.Problems, "\n  "), id)
 						}
+						if residual := sprintResidual(s); len(residual) > 0 {
+							return "", fmt.Errorf(
+								"sprint #%d cannot end — %d sprint-owned artifact(s) remain after cleanup:\n  %s",
+								id, len(residual), strings.Join(residual, "\n  "))
+						}
+						msg += "; " + reclaimed + "; residual: 0"
 						from := s.Column
 						who := weaveStoryConductorName(s, "")
 						s.Column = "done"

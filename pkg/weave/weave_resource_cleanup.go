@@ -201,6 +201,22 @@ func weavePruneOwnedRun(dir string, id int64, repo string, expectedBirth ...time
 		return []sprintPruneAction{{Kind: "run", Repo: repo, Target: fmt.Sprint(id), Err: "active lifecycle; left alone"}}
 	}
 	defer lock.Release()
+	root, ok := weaveRepoRootForQueue(dir)
+	if !ok {
+		return nil
+	}
+	base := weaveBaseBranch(root)
+	// Reconcile first: a `submitted` row whose work already landed by another
+	// route (a manual merge, a peer) is done, and would otherwise sit as a
+	// ghost forever — 18 of them survived the measured incident. Same rule as
+	// weaveReconcileMerged, applied to this one run under the queue lock.
+	_ = withWeaveQueueLock(dir, func(fresh *weaveQueue) error {
+		if cur := findWeaveItem(fresh, id); cur != nil && cur.State == "submitted" && weaveItemMerged(root, base, cur) {
+			cur.State = "done"
+			cur.Disposition = weaveDispositionMerged
+		}
+		return nil
+	})
 	q, err := loadWeaveQueue(dir)
 	if err != nil {
 		return nil
@@ -212,11 +228,6 @@ func weavePruneOwnedRun(dir string, id int64, repo string, expectedBirth ...time
 	if len(expectedBirth) > 0 && (expectedBirth[0].IsZero() || !expectedBirth[0].Equal(it.Created)) {
 		return []sprintPruneAction{{Kind: "run", Repo: repo, Target: fmt.Sprint(id), Err: "sprint run birth unknown or changed; left alone"}}
 	}
-	root, ok := weaveRepoRootForQueue(dir)
-	if !ok {
-		return nil
-	}
-	base := weaveBaseBranch(root)
 	disposition, settled := weaveItemSettled(root, base, it)
 	if !settled {
 		return nil
@@ -395,15 +406,18 @@ func sprintPlanRunArtifacts(s *weaveStory) []sprintPruneAction {
 		if e != nil {
 			continue
 		}
+		root, ok := weaveRepoRootForQueue(dir)
+		if !ok {
+			continue
+		}
+		if cur := findWeaveItem(q, run.ID); cur != nil && cur.State == "submitted" && weaveItemMerged(root, weaveBaseBranch(root), cur) {
+			cur.State = "done" // read-only view of what the reconcile will do
+		}
 		it, e := weaveCleanupEligible(q, run.ID, "")
 		if e != nil {
 			continue
 		}
 		if run.Born.IsZero() || !run.Born.Equal(it.Created) {
-			continue
-		}
-		root, ok := weaveRepoRootForQueue(dir)
-		if !ok {
 			continue
 		}
 		if _, settled := weaveItemSettled(root, weaveBaseBranch(root), it); !settled {

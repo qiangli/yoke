@@ -233,6 +233,9 @@ func sprintInspectRuns(s *weaveStory, h *sprintHygiene) {
 				continue
 			}
 			switch {
+			case it.CleanupError != "":
+				h.Problems = append(h.Problems, fmt.Sprintf(
+					"run %s#%d %q: cleanup failed: %s — fix the cause, then `bashy weave prune`", run.Repo, run.ID, it.Title, it.CleanupError))
 			case it.State == "working":
 				h.Problems = append(h.Problems, fmt.Sprintf(
 					"run %s#%d %q is still working (branch %s, workspace %s) — watch `bashy weave log %d --follow`, then `bashy weave pause` or let it finish", run.Repo, run.ID, it.Title, it.Branch, it.Workspace, run.ID))
