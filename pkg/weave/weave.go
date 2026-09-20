@@ -104,6 +104,7 @@ Common-case usage:
 	cmd.AddCommand(newWeaveReverifyCmd())
 	cmd.AddCommand(newWeaveSalvageCmd())
 	cmd.AddCommand(newWeavePruneCmd())
+	cmd.AddCommand(newWeaveGCCmd())
 	cmd.AddCommand(newWeaveAbandonCmd())
 	cmd.AddCommand(newWeaveKillCmd())
 	cmd.AddCommand(newWeaveFinalizeCmd())

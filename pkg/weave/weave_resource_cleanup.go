@@ -406,43 +406,76 @@ func sprintPlanRunArtifacts(s *weaveStory) []sprintPruneAction {
 		if e != nil {
 			continue
 		}
-		root, ok := weaveRepoRootForQueue(dir)
-		if !ok {
+		it := findWeaveItem(q, run.ID)
+		if it == nil || run.Born.IsZero() || !run.Born.Equal(it.Created) {
 			continue
 		}
-		if cur := findWeaveItem(q, run.ID); cur != nil && cur.State == "submitted" && weaveItemMerged(root, weaveBaseBranch(root), cur) {
-			cur.State = "done" // read-only view of what the reconcile will do
-		}
-		it, e := weaveCleanupEligible(q, run.ID, "")
-		if e != nil {
+		actions = append(actions, weavePlanOwnedRun(dir, run.Repo, it)...)
+	}
+	return actions
+}
+
+// weavePlanOwnedRun is what weavePruneOwnedRun WOULD do for one run: the same
+// eligibility and settlement proof, no lock, no claim, no removal.
+func weavePlanOwnedRun(dir, repo string, it *weaveItem) []sprintPruneAction {
+	var actions []sprintPruneAction
+	q, e := loadWeaveQueue(dir)
+	if e != nil || it == nil {
+		return actions
+	}
+	root, ok := weaveRepoRootForQueue(dir)
+	if !ok {
+		return actions
+	}
+	if cur := findWeaveItem(q, it.ID); cur != nil && cur.State == "submitted" && weaveItemMerged(root, weaveBaseBranch(root), cur) {
+		cur.State = "done" // read-only view of what the reconcile will do
+	}
+	cur, e := weaveCleanupEligible(q, it.ID, "")
+	if e != nil {
+		return actions
+	}
+	if _, settled := weaveItemSettled(root, weaveBaseBranch(root), cur); !settled {
+		return actions
+	}
+	for _, kind := range weaveRunArtifactKinds {
+		if kind == "lock" {
 			continue
 		}
-		if run.Born.IsZero() || !run.Born.Equal(it.Created) {
+		path := weaveRunArtifactPath(dir, cur, kind)
+		if path == "" {
 			continue
 		}
-		if _, settled := weaveItemSettled(root, weaveBaseBranch(root), it); !settled {
+		if _, e := os.Lstat(path); e != nil {
 			continue
 		}
-		for _, kind := range weaveRunArtifactKinds {
-			path := weaveRunArtifactPath(dir, it, kind)
-			if path == "" {
-				continue
-			}
-			if _, e := os.Lstat(path); e != nil {
-				continue
-			}
-			a := sprintPruneAction{Kind: kind, Repo: run.Repo, Target: path, ByteKind: "apparent_regular_file_bytes"}
+		a := sprintPruneAction{Kind: kind, Repo: repo, Target: path, ByteKind: "apparent_regular_file_bytes"}
+		if kind != "socket" {
 			if e := weaveContainedArtifact(dir, path); e != nil {
 				a.Err = e.Error()
-			} else {
-				a.ExpectedBytes, e = weaveArtifactBytes(path)
-				a.BytesComplete = e == nil
-				if e != nil {
-					a.Err = e.Error()
-				}
+				actions = append(actions, a)
+				continue
 			}
-			actions = append(actions, a)
 		}
+		a.ExpectedBytes, e = weaveArtifactBytes(path)
+		a.BytesComplete = e == nil
+		if e != nil {
+			a.Err = e.Error()
+		}
+		actions = append(actions, a)
+	}
+	base := weaveBaseBranch(root)
+	for _, name := range weaveRunBranchNames(cur) {
+		if _, exists := gitBranchTip(root, name); !exists {
+			continue
+		}
+		a := sprintPruneAction{Kind: "branch", Repo: repo, Target: name, BytesComplete: true}
+		preserved := cur.SalvageRef != "" && exec.Command(gitBin(), "-C", root, "merge-base", "--is-ancestor", name, cur.SalvageRef).Run() == nil
+		if wt := gitBranchWorktree(root, name); wt != "" {
+			a.Err = "checked out in worktree " + wt + "; left alone"
+		} else if !preserved && !gitBranchIntegrated(root, base, name) {
+			a.Err = "carries a patch not in " + base + "; left alone"
+		}
+		actions = append(actions, a)
 	}
 	return actions
 }

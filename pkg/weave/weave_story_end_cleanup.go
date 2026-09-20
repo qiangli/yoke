@@ -68,9 +68,20 @@ func sprintUndisposedRuns(s *weaveStory) []string {
 // artifact the plan can still see, a branch name a run still owns, or a
 // recorded cleanup failure. Empty means residual = 0.
 func sprintResidual(s *weaveStory) []string {
+	seen := map[string]bool{}
 	var out []string
+	add := func(line string) {
+		if !seen[line] {
+			seen[line] = true
+			out = append(out, line)
+		}
+	}
 	for _, a := range sprintPlanRunArtifacts(s) {
-		out = append(out, fmt.Sprintf("%s %s", a.Kind, a.Target))
+		line := fmt.Sprintf("%s %s", a.Kind, a.Target)
+		if a.Err != "" {
+			line += " (" + a.Err + ")"
+		}
+		add(line)
 	}
 	for _, run := range s.Runs {
 		dir, err := weaveQueueDirForSprintRun(run)
@@ -86,7 +97,7 @@ func sprintResidual(s *weaveStory) []string {
 			continue
 		}
 		if it.CleanupError != "" {
-			out = append(out, fmt.Sprintf("run %s#%d cleanup failed: %s", run.Repo, run.ID, it.CleanupError))
+			add(fmt.Sprintf("run %s#%d cleanup failed: %s", run.Repo, run.ID, it.CleanupError))
 		}
 		root, ok := weaveRepoRootForQueue(dir)
 		if !ok {
@@ -94,13 +105,13 @@ func sprintResidual(s *weaveStory) []string {
 		}
 		for _, name := range weaveRunBranchNames(it) {
 			if _, exists := gitBranchTip(root, name); exists {
-				out = append(out, fmt.Sprintf("branch %s in %s", name, root))
+				add(fmt.Sprintf("branch %s in %s", name, root))
 			}
 		}
 		for _, kind := range []string{"cache", "agent-data"} {
 			if p := weaveRunArtifactPath(dir, it, kind); p != "" {
 				if _, err := os.Lstat(p); err == nil {
-					out = append(out, fmt.Sprintf("%s %s", kind, p))
+					add(fmt.Sprintf("%s %s", kind, p))
 				}
 			}
 		}
