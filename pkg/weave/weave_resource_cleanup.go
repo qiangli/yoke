@@ -299,10 +299,16 @@ func weavePruneOwnedRun(dir string, id int64, repo string, expectedBirth ...time
 			continue
 		}
 		if kind == "workspace" {
-			// Include untracked/ignored files: cleanup must not discard private work.
-			out, err := exec.Command(gitBin(), "-C", path, "status", "--porcelain", "--untracked-files=all", "--ignored").Output()
+			// Tracked changes and UNTRACKED files are possible private work and
+			// refuse the teardown. IGNORED files do not: the repository itself
+			// says they are not work (build output, caches) and the wrapper's
+			// own injections (KB.md, the exported skills) land ignored — with
+			// --ignored here, no workspace the wrapper had touched could ever be
+			// reclaimed, which is how the measured incident accumulated. Same
+			// rule as weaveMeasureDirtiness, which gates abandon and pull.
+			out, err := exec.Command(gitBin(), "-C", path, "status", "--porcelain", "--untracked-files=all").Output()
 			if err != nil || len(out) > 0 {
-				a.Err = "workspace dirty, untracked, ignored, or unreadable; left alone"
+				a.Err = "workspace dirty, untracked, or unreadable; left alone"
 				acts = append(acts, a)
 				failed = true
 				continue
@@ -505,7 +511,7 @@ func weaveVerifyReclaimWorkspace(root, base string, it *weaveItem, path string) 
 	if _, ok := weaveItemSettled(root, base, &cp); !ok {
 		return errors.New("claimed workspace gained unintegrated work; left alone")
 	}
-	out, e := exec.Command(gitBin(), "-C", path, "status", "--porcelain", "--untracked-files=all", "--ignored").Output()
+	out, e := exec.Command(gitBin(), "-C", path, "status", "--porcelain", "--untracked-files=all").Output()
 	if e != nil || len(out) > 0 {
 		return errors.New("claimed workspace gained uncommitted work; left alone")
 	}

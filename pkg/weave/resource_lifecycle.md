@@ -90,3 +90,34 @@ capacity is available. Cleanup accepts only the run's conventional workspace,
 log and socket paths and repeats the integration proof on the renamed workspace
 immediately before removal. A new clean commit is valuable work too. A hard
 Bashy memory floor requires a declared nonzero launch memory demand.
+
+## Sprint 224 — zero-residue closure
+
+The managed build cache is released on EVERY terminal transition (start,
+reverify, kill, finalize, abandon), independent of a verify verdict; a failed
+release is recorded on the row as `CleanupError` and refuses `sprint end`.
+
+`weavePruneOwnedRun` is the ONE guarded teardown. Its proof is
+`weaveItemSettled`: every workspace commit is reachable from base or the run's
+`SalvageRef`, and the tree is clean. It reconciles a ghost `submitted` row whose
+work landed by another route, then reclaims six artifact kinds — workspace,
+socket (including one relocated under `os.TempDir()` by the AF_UNIX path
+limit), log, managed cache, `agent-data/ycode-<run>`, and the lifecycle lock
+(unlinked while held; the run lock is TryAcquire-only, so no sleeper can hold
+the old inode) — and retires the run's two branch names under three proofs (no
+worktree, every patch upstream or under the salvage ref, `git update-ref -d
+<ref> <tip>`). On full success the row is compacted: paths cleared, disposition
+kept. `pull`, `salvage`, `abandon`, `prune`, `sprint end` and `weave gc` all
+reach it; none removes a run artifact any other way.
+
+`sprint end` runs the reclaim BEFORE the story mutation takes the queue lock
+(the runs may share it), refuses any linked run without a disposition, and
+after the existing gates re-inspects: a remaining sprint-owned artifact, a
+run-owned branch, or a `CleanupError` refuses the close.
+
+Focused verification:
+
+```
+GOMAXPROCS=2 GOFLAGS=-p=2 go test -race ./pkg/weave -run 'GOCache|TestWeaveAbandon|TestWeavePruneOwnedRun|TestWeaveRetireBranch|TestSprintEndRefuses|TestWeaveGC' -count=1
+script/e2e-weave-lifecycle.sh        # umbrella; temp HOME, two repos, seven cases
+```

@@ -588,6 +588,44 @@ and commit a verdict report. A judge round caught nothing the
 orchestrator missed exactly once so far; every other time it
 surfaced a reconciliation worth recording.
 
+## Phase 8 — Close: zero residue (MANDATORY — Sprint 224)
+
+The sprint is not over when the last merge lands. It is over when every run
+has a recorded DISPOSITION, every byte the sprint owned is gone, and `sprint
+end` says `residual: 0`. Do this while you still hold the context — a later
+operator would have to reconstruct story ownership and merge history before
+daring to delete anything, which is exactly the review work cleanup exists to
+do once.
+
+    # 1. accept what passed — pull records disposition=merged and reclaims the run
+    bashy weave pull N
+    # 2. decide about everything else — a disposition implies preservation:
+    #    any unmerged tip goes to refs/salvage/abandoned-N BEFORE teardown
+    bashy weave abandon N --disposition rejected   --reason "gate red twice"
+    bashy weave abandon N --disposition superseded --reason "landed via #M"
+    bashy weave abandon N --disposition empty      --reason "no diff"
+    # 3. end — refuses any undecided run (and names the verb), reclaims what the
+    #    settled runs own, looks again, closes only at residual 0
+    bashy sprint end <sprint>
+    #    → "… reclaimed 3 workspace (…bytes), 3 cache, 2 branch; residual: 0"
+
+- Do NOT report completion unless the `sprint end` line carries
+  `residual: 0`. A refusal names the exact run and the exact verb; run it, then
+  `sprint end` again. There is no `--force` on this path, on purpose.
+- What `end` reclaims is only what the sprint's runs OWN: workspace, managed
+  Go cache, per-run ycode agent data, log, socket, lifecycle lock, and the two
+  branch names `agent/weave-issue-N` / `agent/weave-issue-N-reviewed` — each
+  under proof (no worktree, every patch upstream or under the salvage ref,
+  tip unchanged). Repo-wide branches and worktrees are reported, never
+  touched.
+- `bashy sprint prune <sprint>` is the same question asked read-only at any
+  time; `bashy weave gc` asks it for every queue on the machine (renamed or
+  deleted repositories included) and `--apply` acts. Both refuse on doubt and
+  say why by path.
+- A run's row survives teardown compacted: id, title, state, disposition,
+  reason, head, salvage ref. `weave list --history` still shows it. The
+  workspace, log and socket paths are cleared because the bytes are gone.
+
 ## Shared session (HITL-v2) — remote participants, directives, handoff
 
 OPTIONAL layer. When the work is bound to a cloudbox **Task** (a shared

@@ -582,6 +582,26 @@ Heartbeats stopped. After 30 min idle (default), the reaper:
 
 When you come back: `bashy weave list` shows what's still active. `bashy weave list --history` shows what was reaped. Lost work surface = zero (everything that was committed in the workspace is preserved as a Gitea branch).
 
+## Phase 5 — Close with zero residue
+
+Every run ends with one word on its row — `merged`, `superseded`, `rejected`
+or `empty` — and nothing else of it on disk:
+
+```bash
+bashy weave pull 123                                        # merged, reclaimed
+bashy weave abandon 124 --disposition superseded --reason "125 covered it"
+bashy weave abandon 125 --disposition rejected   --reason "gate red"
+#   ↑ the unmerged tip is preserved as refs/salvage/abandoned-<N> first
+bashy sprint end 7
+# → sprint #7 … reclaimed 3 workspace (…), 3 cache, 3 branch; residual: 0
+```
+
+`sprint end` refuses a run nobody decided about and names the verb. Nothing
+is reported done until it prints `residual: 0`. For state left behind by a
+repository that was moved or deleted, `bashy weave gc` (report) and
+`bashy weave gc --apply` (reclaim) cover every queue on the machine; a
+workspace whose work has nowhere to go is refused by path.
+
 ## What you never had to do
 
 - Configure CI for the local Gitea (auto-detected from your project files).
