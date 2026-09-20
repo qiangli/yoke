@@ -78,8 +78,15 @@ func DefaultEnv() Env {
 		e.SSHConfig = filepath.Join(home, ".ssh", "config")
 		// The outpost daemon records the name the control plane knows this
 		// machine by; its presence is also the pairing signal.
-		if name, ok := readOutpostAgentName(filepath.Join(home, ".config", "outpost", "agent.json")); ok {
-			e.Paired, e.PairedName = true, name
+		// outpost's own path first; then the pre-rename `matrix` path, which
+		// hosts paired before the outpost rename still carry (the MATRIX_*
+		// wire identifiers were kept on purpose, and so was the config dir).
+		// A host read only at the new path reported UNPAIRED while paired.
+		for _, dir := range []string{"outpost", "matrix"} {
+			if name, ok := readOutpostAgentName(filepath.Join(home, ".config", dir, "agent.json")); ok {
+				e.Paired, e.PairedName = true, name
+				break
+			}
 		}
 		e.BoardDir = filepath.Join(home, ".bashy", "mb")
 		e.MeetDir = filepath.Join(home, ".bashy", "meet")
