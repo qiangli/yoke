@@ -1,5 +1,7 @@
 # Repository Guidelines
 
+**`bashy sprint` is the source of requests, plans and details for every agent** — every todo is tracked and accounted for as a STORY in a sprint: read the sprint card (spec-ref, acceptance, continuity) for what to do, and never pick up a todo without a story in a `bashy sprint` (file one first). Delivery commits carry `Sprint:` / `Story:` / `Story-ID:` trailers.
+
 ## Project Structure & Module Organization
 
 This Go module (`github.com/qiangli/yoke`) is bashy's agentic userland: everything on top of the certified POSIX package `github.com/qiangli/coreutils` (a flat sibling this module imports, never the reverse). Non-POSIX command packages live in `cmds/`, one utility per directory (`cmds/tar`, `cmds/jq`, `cmds/browser`); `cmds/all` blank-imports coreutils' certified `cmds/all` and adds these, so it registers the WHOLE userland. `cmd/yoke` is the busybox-style binary (+ `yoke mcp`). Shared runtime and flags come from coreutils' `tool/`; in-process git support is in `git/`; the AgentOS hub packages are in `pkg/`. Docs live in `docs/`; managed externals and the mirrored ollama/podman forks live under `external/`.
