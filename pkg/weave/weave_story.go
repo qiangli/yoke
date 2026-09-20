@@ -876,15 +876,30 @@ func newWeaveStoryMoveCmd() *cobra.Command {
 				}
 				from := s.Column
 				s.Column = col
-				// Leaving an open column ends the sprint's need for a room. This
-				// is the counterpart of retaining it across pause/handoff: the
-				// room's lifetime is the OPEN CARD's, so it closes here and not
-				// when a conductor happens to step away.
-				if sprintColumnOpen(from) && !sprintColumnOpen(col) {
+				// The room's lifetime is the OPEN CARD's, in BOTH directions.
+				// Leaving an open column ends the sprint's need for a room —
+				// the counterpart of retaining it across pause/handoff, so it
+				// closes here and not when a conductor happens to step away.
+				// Entering one opens it: `take` on a backlog sprint followed by
+				// `move … doing` is the ordinary way a sprint begins without a
+				// box, and until this branch existed that path produced a
+				// sprint whose card read "UNREACHABLE: no room" for its whole
+				// life, because take only opens a room for an ALREADY-open
+				// column and move never opened one at all.
+				roomNote := ""
+				switch {
+				case sprintColumnOpen(from) && !sprintColumnOpen(col):
 					_ = closeSprintRoom(s, weaveStoryConductorName(s, ""))
+				case !sprintColumnOpen(from) && sprintColumnOpen(col):
+					// Only a sprint SOMEBODY holds gets a room: the room is how
+					// that somebody is reached, and one convened for an unowned
+					// card would name the mover as a contact who never answers.
+					if _, stale, free := weaveStoryLeaseState(s); strings.TrimSpace(s.Owner) != "" || (!free && !stale) {
+						roomNote = ensureSprintRoom(s, weaveStoryConductorName(s, ""))
+					}
 				}
 				weaveStoryAppend(s, weaveStoryConductorName(s, ""), kindStage, fmt.Sprintf("moved %s → %s", from, col))
-				return fmt.Sprintf("sprint #%d %s → %s", id, from, col), nil
+				return fmt.Sprintf("sprint #%d %s → %s%s", id, from, col, roomNote), nil
 			})
 		},
 	}

@@ -180,6 +180,36 @@ func TestOpenSprintKeepsItsRoomAcrossPauseAndHandoff(t *testing.T) {
 	}
 }
 
+// TestTakeThenMoveIntoDoingOpensTheRoom is the regression for the live defect
+// on sprint #217: `take` on a BACKLOG sprint followed by `move … doing` — the
+// ordinary way a sprint begins without a box — produced a card that read
+// "UNREACHABLE: no room" for its whole life. take opens a room only for an
+// already-open column, and move closed rooms on the way out of `doing` but
+// never opened one on the way in.
+func TestTakeThenMoveIntoDoingOpensTheRoom(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("WEAVE_CONDUCTOR", "Ada")
+	seedLiveAgent(t, "Ada")
+
+	if out, code := runSprint(t, "add", "room on entry"); code != 0 {
+		t.Fatalf("add exit=%d: %s", code, out)
+	}
+	if out, code := runSprint(t, "take", "1", "--owner", "Ada"); code != 0 {
+		t.Fatalf("take exit=%d: %s", code, out)
+	}
+	if got := sprintContactRef(t, 1); got != "" {
+		t.Fatalf("a backlog sprint convened a room %q before any work began", got)
+	}
+	if out, code := runSprint(t, "move", "1", "doing"); code != 0 {
+		t.Fatalf("move doing exit=%d: %s", code, out)
+	}
+	if sprintContactRef(t, 1) == "" {
+		t.Fatalf("moving an owned sprint into doing left it without a room — the card is unreachable")
+	}
+}
+
 // TestClosingASprintReleasesItsRoom is the other half: retention must not leak.
 func TestClosingASprintReleasesItsRoom(t *testing.T) {
 	home := t.TempDir()
