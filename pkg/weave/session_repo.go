@@ -34,31 +34,43 @@ import (
 
 // ErrNoOrigin is returned when the checkout has no origin remote, so no key
 // can be derived. `sprint session join <task-id>` is the escape hatch.
-var ErrNoOrigin = errors.New("session: repo has no origin remote; join with an explicit task id")
+var ErrNoOrigin = errors.New("session: repo has no upstream or origin remote; join with an explicit task id")
 
 // ErrNotPaired is returned when no cloudbox credential resolves. Pairing is
 // the ONLY setup this feature asks for, so the message says exactly that.
 var ErrNotPaired = errors.New("session: this host is not paired with cloudbox (run `bashy login`), and no $BASHY_FLEET_TOKEN / $BASHY_API_KEY / $CLOUDBOX_TOKEN is set")
 
-// repoOriginURL is a seam so tests can derive a key without a git checkout.
+// sessionRemoteNames is the order the session key is taken from: the fork
+// layout `gh repo fork --clone` produces (origin = the fork, upstream = the
+// team's repo) must land on the TEAM's session, so upstream wins when it
+// exists; a plain clone has only origin. One rule, gh's own convention, no flag.
+var sessionRemoteNames = []string{"upstream", "origin"}
+
+// repoSessionRemote is a seam so tests can derive a key without a git
+// checkout. It returns the URL of the first remote in sessionRemoteNames the
+// checkout has, and that remote's name (recorded in the pointer so a later
+// reader can tell WHY this key).
 //
 // The key must not depend on a git BINARY: a Windows host running bashy has
 // MinGit only inside bashy's own cache (`bashy git`), not on PATH, and the
 // first live run on such a host failed here with "no origin remote". So the
 // remote is read from the checkout itself (pure-Go git), and exec'ing git
 // is only the fallback for a layout go-git cannot open.
-var repoOriginURL = func(repoRoot string) (string, error) {
+var repoSessionRemote = func(repoRoot string) (url, name string, err error) {
 	if r, err := gogit.PlainOpenWithOptions(repoRoot, &gogit.PlainOpenOptions{DetectDotGit: true}); err == nil {
-		if rem, err := r.Remote("origin"); err == nil && rem != nil && len(rem.Config().URLs) > 0 {
-			return strings.TrimSpace(rem.Config().URLs[0]), nil
+		for _, n := range sessionRemoteNames {
+			if rem, err := r.Remote(n); err == nil && rem != nil && len(rem.Config().URLs) > 0 {
+				return strings.TrimSpace(rem.Config().URLs[0]), n, nil
+			}
 		}
-		return "", ErrNoOrigin
+		return "", "", ErrNoOrigin
 	}
-	out, err := gitOutput(repoRoot, "remote", "get-url", "origin")
-	if err != nil {
-		return "", ErrNoOrigin
+	for _, n := range sessionRemoteNames {
+		if out, err := gitOutput(repoRoot, "remote", "get-url", n); err == nil && strings.TrimSpace(out) != "" {
+			return strings.TrimSpace(out), n, nil
+		}
 	}
-	return strings.TrimSpace(out), nil
+	return "", "", ErrNoOrigin
 }
 
 var scpLikeRemote = regexp.MustCompile(`^(?:[A-Za-z0-9._-]+@)?([A-Za-z0-9.-]+):(.+)$`)
@@ -117,11 +129,22 @@ func NormalizeRepoKey(remote string) (string, error) {
 
 // RepoKey derives the session key for a checkout.
 func RepoKey(repoRoot string) (string, error) {
-	remote, err := repoOriginURL(repoRoot)
+	key, _, err := RepoKeyRemote(repoRoot)
+	return key, err
+}
+
+// RepoKeyRemote is RepoKey plus the name of the remote the key came from
+// (`upstream` for a fork layout, else `origin`).
+func RepoKeyRemote(repoRoot string) (key, remote string, err error) {
+	url, remote, err := repoSessionRemote(repoRoot)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return NormalizeRepoKey(remote)
+	key, err = NormalizeRepoKey(url)
+	if err != nil {
+		return "", "", err
+	}
+	return key, remote, nil
 }
 
 // sessionCredentials walks the one cloudbox ladder (fleet.ResolveCloud) with
@@ -238,21 +261,54 @@ func EnsureRepoSession(ctx context.Context, repoRoot string) (*sessionRepoClient
 	}
 	client := newSessionClient(base, token)
 	if pointer != nil && pointer.TaskID != "" {
-		// The task is known; make sure THIS seat is on it. A pointer written
-		// before Seats existed records nobody, so the first pass joins the
-		// current participant once more (a join is idempotent on cloudbox).
-		if participant, host := SessionParticipant(); !slices.Contains(pointer.Seats, participant) {
+		participant, host := SessionParticipant()
+		dirty := false
+		if pointer.GitHubSeated() {
+			// The seat is GitHub's answer and GitHub changes its mind (a PR
+			// contributor is granted push; a collaborator is removed), so
+			// the local view is re-derived on every verb: join-by-repo is
+			// what cloudbox re-validates on. Owner and hand-shared members
+			// pay nothing here. Local first — the view may be stale between
+			// verbs, and says since when.
+			resp, err := client.JoinByRepo(ctx, JoinByRepoReq{Repo: pointer.RepoKey, Participant: participant, Host: host, Tool: "bashy"})
+			if err != nil {
+				if isNotFound(err) {
+					return nil, fmt.Errorf("session: GitHub no longer vouches for %s on %s (seat was %s%s); remove %s to open your own session", participant, pointer.RepoKey, pointer.Role, seatSince(pointer), sessionPointerPath(repoRoot))
+				}
+				return nil, fmt.Errorf("session: resync seat on %s: %w", pointer.RepoKey, err)
+			}
+			now := time.Now().UTC().Format(time.RFC3339)
+			if resp.Role != pointer.Role || (resp.Task.ID != "" && resp.Task.ID != pointer.TaskID) || pointer.SeatAsOf == "" {
+				pointer.Role, pointer.SeatAsOf = resp.Role, now
+				if resp.Task.ID != "" {
+					pointer.TaskID = resp.Task.ID
+				}
+				dirty = true
+			}
+			if !slices.Contains(pointer.Seats, participant) {
+				// join-by-repo recorded the seat on cloudbox already.
+				pointer.Seats = append(pointer.Seats, participant)
+				dirty = true
+			}
+		} else if !slices.Contains(pointer.Seats, participant) {
+			// The task is known; make sure THIS seat is on it. A pointer
+			// written before Seats existed records nobody, so the first pass
+			// joins the current participant once more (a join is idempotent
+			// on cloudbox).
 			if _, err := client.Join(ctx, pointer.TaskID, JoinReq{Participant: participant, Host: host, Tool: "bashy", Role: "contributor"}); err != nil {
 				return nil, fmt.Errorf("session: join %s as %s: %w", pointer.TaskID, participant, err)
 			}
 			pointer.Seats = append(pointer.Seats, participant)
+			dirty = true
+		}
+		if dirty {
 			if err := WriteSessionPointer(repoRoot, pointer); err != nil {
 				return nil, err
 			}
 		}
 		return &sessionRepoClient{repoRoot: repoRoot, pointer: pointer, client: client}, nil
 	}
-	key, err := RepoKey(repoRoot)
+	key, remote, err := RepoKeyRemote(repoRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -294,7 +350,13 @@ func EnsureRepoSession(ctx context.Context, repoRoot string) (*sessionRepoClient
 	}
 	pointer.TaskID = taskID
 	pointer.RepoKey = key
+	pointer.RepoRemote = remote
 	pointer.Role = role
+	if pointer.GitHubSeated() {
+		pointer.SeatAsOf = time.Now().UTC().Format(time.RFC3339)
+	} else {
+		pointer.SeatAsOf = ""
+	}
 	if !slices.Contains(pointer.Seats, participant) {
 		pointer.Seats = append(pointer.Seats, participant)
 	}
@@ -360,7 +422,7 @@ func resolveRepoSession(ctx context.Context, client SessionClient, key, particip
 			// session exists but is not ours to join. Not an error — the
 			// caller gets its own (private) session on the key, as any
 			// registered user may.
-			if strings.Contains(strings.ToLower(jerr.Error()), "404") || strings.Contains(strings.ToLower(jerr.Error()), "not found") {
+			if isNotFound(jerr) {
 				return "", "", false, true, nil
 			}
 			return "", "", false, false, fmt.Errorf("session: join %s by repo: %w", key, jerr)
@@ -415,4 +477,23 @@ func lookupRepoSession(ctx context.Context, client SessionClient, key string) (s
 		ids = append(ids, h.ID)
 	}
 	return "", fmt.Errorf("session: %d active sessions are keyed on %s (%s); join one explicitly: bashy sprint session join <task-id>", len(hits), key, strings.Join(ids, ", "))
+}
+
+// isNotFound reads cloudbox's refusal of a join-by-repo: GitHub does not
+// vouch for this account on the repo (or the session is not discoverable).
+func isNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "404") || strings.Contains(msg, "not found")
+}
+
+// seatSince renders the pointer's seat timestamp for a message, or nothing
+// for a pointer written before SeatAsOf existed.
+func seatSince(p *SessionPointer) string {
+	if p == nil || p.SeatAsOf == "" {
+		return ""
+	}
+	return " as of " + p.SeatAsOf
 }

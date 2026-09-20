@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	gogit "github.com/go-git/go-git/v5"
+	gogitconfig "github.com/go-git/go-git/v5/config"
 )
 
 func TestNormalizeRepoKeyFoldsSpellings(t *testing.T) {
@@ -51,12 +54,12 @@ func sessionTestEnv(t *testing.T, origin string, fake *fakeSessionClient) string
 	t.Setenv("BASHY_CLOUDBOX_URL", "http://cloudbox.test")
 	t.Setenv("BASHY_PRINCIPAL", "dhnt:agent/plinth")
 	repo := t.TempDir()
-	oldOrigin := repoOriginURL
-	repoOriginURL = func(string) (string, error) {
+	oldOrigin := repoSessionRemote
+	repoSessionRemote = func(string) (string, string, error) {
 		if origin == "" {
-			return "", ErrNoOrigin
+			return "", "", ErrNoOrigin
 		}
-		return origin, nil
+		return origin, "origin", nil
 	}
 	credCache.mu.Lock()
 	credCache.m = map[string]credEntry{}
@@ -68,7 +71,7 @@ func sessionTestEnv(t *testing.T, origin string, fake *fakeSessionClient) string
 		}
 		return fake
 	}
-	t.Cleanup(func() { repoOriginURL = oldOrigin; newSessionClient = oldClient })
+	t.Cleanup(func() { repoSessionRemote = oldOrigin; newSessionClient = oldClient })
 	return repo
 }
 
@@ -231,5 +234,89 @@ func TestEnsureRepoSessionPrefersReachableOverJoinable(t *testing.T) {
 	sc, err := EnsureRepoSession(context.Background(), repo)
 	if err != nil || sc.pointer.TaskID != "t-mine" || len(fake.joinByRepo) != 0 || len(fake.joins) != 1 {
 		t.Fatalf("pointer=%+v err=%v joinByRepo=%d joins=%d", sc.pointer, err, len(fake.joinByRepo), len(fake.joins))
+	}
+}
+
+// The fork layout `gh repo fork --clone` leaves behind — origin = the fork,
+// upstream = the team's repo — must key the session on UPSTREAM, or every PR
+// contributor opens a private session on their own fork instead of joining
+// the team's (Sprint 226, GitHub team configurations b/c).
+func TestRepoKeyPrefersUpstreamOverOrigin(t *testing.T) {
+	repo := t.TempDir()
+	r, err := gogit.PlainInit(repo, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CreateRemote(&gogitconfig.RemoteConfig{Name: "origin", URLs: []string{"git@github.com:erin/bashy.git"}}); err != nil {
+		t.Fatal(err)
+	}
+	key, remote, err := RepoKeyRemote(repo)
+	if err != nil || key != "github.com/erin/bashy" || remote != "origin" {
+		t.Fatalf("plain clone: key=%q remote=%q err=%v", key, remote, err)
+	}
+	if _, err := r.CreateRemote(&gogitconfig.RemoteConfig{Name: "upstream", URLs: []string{"https://github.com/qiangli/bashy"}}); err != nil {
+		t.Fatal(err)
+	}
+	key, remote, err = RepoKeyRemote(repo)
+	if err != nil || key != "github.com/qiangli/bashy" || remote != "upstream" {
+		t.Fatalf("fork layout: key=%q remote=%q err=%v", key, remote, err)
+	}
+	if _, _, err := RepoKeyRemote(t.TempDir()); err == nil {
+		t.Fatal("a directory that is not a checkout must not yield a key")
+	}
+}
+
+// A GitHub-seated pointer is a local VIEW of GitHub's answer, re-derived on
+// every verb: a PR contributor granted push becomes a contributor on the next
+// verb; a removed collaborator is told so by name; the owner pays nothing.
+func TestEnsureRepoSessionResyncsAGitHubSeat(t *testing.T) {
+	theirs := TaskSummary{ID: "t-theirs", TargetRepo: "github.com/qiangli/bashy", Status: "active"}
+	fake := &fakeSessionClient{
+		repoSessions: &RepoSessions{Repo: "github.com/qiangli/bashy", Sessions: []RepoSession{{Task: theirs, Joinable: true}}},
+		joinRole:     "observer",
+	}
+	repo := sessionTestEnv(t, "git@github.com:qiangli/bashy.git", fake)
+	sc, err := EnsureRepoSession(context.Background(), repo)
+	if err != nil || sc.pointer.Role != "observer" || sc.pointer.SeatAsOf == "" || sc.pointer.RepoRemote != "origin" {
+		t.Fatalf("first resolve: pointer=%+v err=%v", sc.pointer, err)
+	}
+	// Promoted on GitHub: the next verb sees contributor, through join-by-repo only.
+	fake.joinRole = "contributor"
+	sc, err = EnsureRepoSession(context.Background(), repo)
+	if err != nil || sc.pointer.Role != "contributor" || sc.pointer.TaskID != "t-theirs" {
+		t.Fatalf("after grant: pointer=%+v err=%v", sc.pointer, err)
+	}
+	if len(fake.joinByRepo) != 2 || len(fake.joins) != 0 || len(fake.creates) != 0 {
+		t.Fatalf("resync must be ONE join-by-repo per verb and nothing else: joinByRepo=%d joins=%d creates=%d", len(fake.joinByRepo), len(fake.joins), len(fake.creates))
+	}
+	// Demoted: back to observer, same session.
+	fake.joinRole = "observer"
+	if sc, err = EnsureRepoSession(context.Background(), repo); err != nil || sc.pointer.Role != "observer" {
+		t.Fatalf("after demotion: pointer=%+v err=%v", sc.pointer, err)
+	}
+	// Revoked: said by name, never a silent fallback to a private session.
+	fake.joinErr = errors.New("cloudbox request failed: 404 Not Found: {}")
+	_, err = EnsureRepoSession(context.Background(), repo)
+	if err == nil || !strings.Contains(err.Error(), "GitHub no longer vouches") || !strings.Contains(err.Error(), "github.com/qiangli/bashy") || !strings.Contains(err.Error(), "seat was observer as of ") {
+		t.Fatalf("revoked grant must be named: %v", err)
+	}
+	if len(fake.creates) != 0 {
+		t.Fatalf("a revoked seat must not open a private session behind the caller's back: %+v", fake.creates)
+	}
+}
+
+func TestEnsureRepoSessionOwnerNeverResyncs(t *testing.T) {
+	fake := &fakeSessionClient{repoSessions: &RepoSessions{}}
+	repo := sessionTestEnv(t, "git@github.com:qiangli/bashy.git", fake)
+	sc, err := EnsureRepoSession(context.Background(), repo)
+	if err != nil || sc.pointer.Role != "owner" || sc.pointer.SeatAsOf != "" {
+		t.Fatalf("create: pointer=%+v err=%v", sc.pointer, err)
+	}
+	before := len(fake.joinByRepo)
+	if _, err := EnsureRepoSession(context.Background(), repo); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.joinByRepo) != before {
+		t.Fatalf("an owner's seat is cloudbox's own; no join-by-repo on the second verb (got %d)", len(fake.joinByRepo)-before)
 	}
 }

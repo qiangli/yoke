@@ -627,9 +627,11 @@ func renderLease(w io.Writer, lease LeaseResponse) {
 type sessionStatus struct {
 	TaskID       string   `json:"task_id"`
 	RepoKey      string   `json:"repo_key,omitempty"`
+	RepoRemote   string   `json:"repo_remote,omitempty"`
 	SprintSeq    int64    `json:"sprint_seq,omitempty"`
 	Created      bool     `json:"created,omitempty"`
 	Role         string   `json:"role,omitempty"`
+	SeatAsOf     string   `json:"seat_as_of,omitempty"`
 	Holder       *string  `json:"lease_holder"`
 	Participants []string `json:"participants"`
 	Me           string   `json:"me"`
@@ -650,8 +652,8 @@ func runWeaveSessionStatus(cmd *cobra.Command, flags *weaveOutputFlags) error {
 	}
 	me, _ := SessionParticipant()
 	st := sessionStatus{
-		TaskID: sc.pointer.TaskID, RepoKey: sc.pointer.RepoKey, SprintSeq: sc.pointer.SprintSeq,
-		Created: sc.created, Role: sc.pointer.Role, Holder: roster.Holder, Participants: roster.Participants, Me: me,
+		TaskID: sc.pointer.TaskID, RepoKey: sc.pointer.RepoKey, RepoRemote: sc.pointer.RepoRemote, SprintSeq: sc.pointer.SprintSeq,
+		Created: sc.created, Role: sc.pointer.Role, SeatAsOf: sc.pointer.SeatAsOf, Holder: roster.Holder, Participants: roster.Participants, Me: me,
 		AsOf: time.Now().UTC().Format(time.RFC3339),
 	}
 	if mode == weavecli.OutputJSON {
@@ -668,14 +670,22 @@ func runWeaveSessionStatus(cmd *cobra.Command, flags *weaveOutputFlags) error {
 	}
 	fmt.Fprintln(w)
 	if st.RepoKey != "" {
-		fmt.Fprintf(w, "repo: %s\n", st.RepoKey)
+		fmt.Fprintf(w, "repo: %s", st.RepoKey)
+		if st.RepoRemote != "" && st.RepoRemote != "origin" {
+			fmt.Fprintf(w, "  (from remote %s)", st.RepoRemote)
+		}
+		fmt.Fprintln(w)
 	}
 	if st.SprintSeq > 0 {
 		fmt.Fprintf(w, "sprint: #%d\n", st.SprintSeq)
 	}
 	fmt.Fprintf(w, "me: %s\n", st.Me)
 	if st.Role != "" {
-		fmt.Fprintf(w, "role: %s\n", st.Role)
+		fmt.Fprintf(w, "role: %s", st.Role)
+		if st.SeatAsOf != "" {
+			fmt.Fprintf(w, "  (GitHub, as of %s)", st.SeatAsOf)
+		}
+		fmt.Fprintln(w)
 	}
 	fmt.Fprintf(w, "lease_holder: %s\n", holder)
 	fmt.Fprintln(w, "participants:")
