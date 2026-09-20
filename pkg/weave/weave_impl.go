@@ -252,7 +252,12 @@ type weaveItem struct {
 	UntrackedFiles  int    `json:"untracked_files,omitempty"`
 	AutoCommitted   bool   `json:"auto_committed,omitempty"`
 	AutoCommitError string `json:"auto_commit_error,omitempty"`
-	ExitCode        *int   `json:"exit_code,omitempty"`
+	// CleanupError records the last failed release of a run-owned artifact
+	// (the managed build cache today). It is set on the row rather than only
+	// printed, because the transition that failed is over by the time anyone
+	// reads stderr; hygiene and `sprint end` refuse on it.
+	CleanupError string `json:"cleanup_error,omitempty"`
+	ExitCode     *int   `json:"exit_code,omitempty"`
 	KilledBy        string `json:"killed_by,omitempty"`
 	// Completion records an explicit terminalization that did not come from the
 	// agent process exiting. It is deliberately distinct from ExitCode: a
@@ -4042,11 +4047,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		fmt.Fprintf(cmd.ErrOrStderr(), "weave start: queue write failed after tool exit: %v\n", lockErr)
 	} else {
 		weaveDeliverOwnerNotices(dir)
-		if ev.VerifyExit != nil {
-			if err := weaveCleanupManagedGOCache(dir, it); err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "weave start: managed GOCACHE cleanup failed (continuing): %v\n", err)
-			}
-		}
+		weaveReleaseManagedGOCache(cmd.ErrOrStderr(), "weave start", dir, it)
 		// Say it out loud at the moment it is found. A flag only `weave
 		// status` would show is a flag nobody reads until after the merge.
 		if w := weaveIsolationWarning(it); w != "" {
@@ -4326,6 +4327,9 @@ func weaveLogSummary(cmd *cobra.Command, mode weavecli.OutputMode, root string, 
 		if it.AutoCommitError != "" {
 			res["auto_commit_error"] = it.AutoCommitError
 		}
+		if it.CleanupError != "" {
+			res["cleanup_error"] = it.CleanupError
+		}
 		if it.KilledBy != "" {
 			res["killed_by"] = it.KilledBy
 		}
@@ -4366,6 +4370,9 @@ func weaveLogSummary(cmd *cobra.Command, mode weavecli.OutputMode, root string, 
 		fmt.Fprintf(w, "  auto:     committed dirty workspace changes\n")
 	} else if it.AutoCommitError != "" {
 		fmt.Fprintf(w, "  auto:     commit failed: %s\n", it.AutoCommitError)
+	}
+	if it.CleanupError != "" {
+		fmt.Fprintf(w, "  cleanup:  FAILED: %s\n", it.CleanupError)
 	}
 	branchInfo := fmt.Sprintf("%d commit(s) ahead of %s", it.CommitsAhead, base)
 	if len(it.Head) >= 12 {
@@ -5446,6 +5453,9 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 		if it.AutoCommitError != "" {
 			res["auto_commit_error"] = it.AutoCommitError
 		}
+		if it.CleanupError != "" {
+			res["cleanup_error"] = it.CleanupError
+		}
 		if it.KilledBy != "" {
 			res["killed_by"] = it.KilledBy
 		}
@@ -5504,6 +5514,9 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 		fmt.Fprintf(w, "  auto:     committed dirty workspace changes\n")
 	} else if it.AutoCommitError != "" {
 		fmt.Fprintf(w, "  auto:     commit failed: %s\n", it.AutoCommitError)
+	}
+	if it.CleanupError != "" {
+		fmt.Fprintf(w, "  cleanup:  FAILED: %s\n", it.CleanupError)
 	}
 	if it.Dirty {
 		fmt.Fprintf(w, "  dirty:    %d tracked uncommitted file(s)\n", it.DirtyFiles)
@@ -5586,10 +5599,8 @@ func runWeaveReverify(cmd *cobra.Command, id int64, flags *weaveOutputFlags) err
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave reverify",
 			weavecli.ExitGenericFail, lockErr))
 	}
-	if ev.VerifyExit != nil {
-		if err := weaveCleanupManagedGOCache(dir, it); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "weave reverify: managed GOCACHE cleanup failed (continuing): %v\n", err)
-		}
+	if isTerminalState(it.State) {
+		weaveReleaseManagedGOCache(cmd.ErrOrStderr(), "weave reverify", dir, it)
 	}
 	if mode == weavecli.OutputJSON {
 		res := map[string]any{
@@ -6497,11 +6508,7 @@ func runWeaveKill(cmd *cobra.Command, id int64, reason string, yes bool, flags *
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave kill",
 			weavecli.ExitGenericFail, lockErr))
 	}
-	if verifyExit != nil {
-		if err := weaveCleanupManagedGOCache(dir, verifyItem); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "weave kill: managed GOCACHE cleanup failed (continuing): %v\n", err)
-		}
-	}
+	weaveReleaseManagedGOCache(cmd.ErrOrStderr(), "weave kill", dir, verifyItem)
 	if mode == weavecli.OutputJSON {
 		result := map[string]any{
 			"issue":       id,
@@ -6609,11 +6616,7 @@ func runWeaveFinalize(cmd *cobra.Command, id int64, observedIdle bool, flags *we
 	if lockErr != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave finalize", weavecli.ExitGenericFail, lockErr))
 	}
-	if ev.VerifyExit != nil {
-		if err := weaveCleanupManagedGOCache(dir, finalized); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "weave finalize: managed GOCACHE cleanup failed (continuing): %v\n", err)
-		}
-	}
+	weaveReleaseManagedGOCache(cmd.ErrOrStderr(), "weave finalize", dir, finalized)
 	// Fold the terminal gate evidence into the capability matrix (best-effort).
 	weaveRecordCapability(finalized)
 	result := map[string]any{"issue": id, "state": state, "completion": "conductor-finalized-observed-idle"}

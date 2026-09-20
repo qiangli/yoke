@@ -3,6 +3,7 @@ package weave
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -231,4 +232,36 @@ func envHasName(env []string, name string) bool {
 		}
 	}
 	return false
+}
+
+// weaveReleaseManagedGOCache releases a run's managed build cache on EVERY
+// terminal transition, whether or not a verify command ran.
+//
+// The cache is reproducible by construction (it is a GOCACHE), so nothing is
+// lost by removing it, and it was the single largest artifact in the measured
+// incident: one submitted run with no verify command held 6.1 GiB, because the
+// release used to hang off the verify verdict. Failure is recorded on the row as
+// CleanupError, not only printed — the transition is over by the time anyone
+// reads stderr, and hygiene needs a fact it can refuse on. Success clears a
+// stale CleanupError so a retry that worked stops reporting the old failure.
+func weaveReleaseManagedGOCache(stderr io.Writer, verb, queueDir string, it *weaveItem) {
+	if it == nil || queueDir == "" {
+		return
+	}
+	err := weaveCleanupManagedGOCache(queueDir, it)
+	msg := ""
+	if err != nil {
+		msg = fmt.Sprintf("managed GOCACHE: %v", err)
+		fmt.Fprintf(stderr, "%s: managed GOCACHE cleanup failed (continuing): %v\n", verb, err)
+	}
+	if it.CleanupError == msg {
+		return
+	}
+	it.CleanupError = msg
+	_ = withWeaveQueueLock(queueDir, func(q *weaveQueue) error {
+		if fresh := findWeaveItem(q, it.ID); fresh != nil {
+			fresh.CleanupError = msg
+		}
+		return nil
+	})
 }
