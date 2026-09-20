@@ -189,7 +189,7 @@ func TestManagedWorkDMQueuesExactlyOneInboxEventWithoutOneShot(t *testing.T) {
 	if w.Code != http.StatusAccepted || invoked {
 		t.Fatalf("status=%d one-shot=%v body=%s", w.Code, invoked, w.Body.String())
 	}
-	var response map[string]string
+	var response map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}

@@ -598,6 +598,20 @@ func addressJob(ctx context.Context, ref, agent, text string, j *liveJob) (Event
 		return Event{}, err
 	}
 	j.markCommitted(asked)
+	// A LIVE SEAT answers as itself. The question above is directed mail in
+	// that seat's inbox — the sprint manager holding this room's lease, a
+	// weave worker, an operator's `inbox --watch`. Running a one-shot under
+	// the same name would answer from a process with none of that seat's
+	// context and leave the real one to answer again (live_seat.go). The mail
+	// stays UNREAD on purpose: markAnswered is for a turn that ran here.
+	if card, live := liveSeat(target); live {
+		d := deliverToLiveSeat(card, target, roomSteerText(st, target, text))
+		note, nerr := record(st, "note", otelServiceName, "", d.note())
+		if nerr != nil {
+			return Event{}, nerr
+		}
+		return note, nil
+	}
 	ev, err := runTurn(ctx, st, target, text, apiRunner())
 	if err != nil {
 		// The question stays UNREAD deliberately: the agent never answered it, so
@@ -607,6 +621,16 @@ func addressJob(ctx context.Context, ref, agent, text string, j *liveJob) (Event
 	}
 	markAnswered(st, target)
 	return ev, nil
+}
+
+// roomSteerText frames a room question for a live seat's input: which room,
+// who asked, and that the durable copy is in its mail.
+func roomSteerText(st *State, agent, text string) string {
+	who := strings.TrimSpace(st.Human)
+	if who == "" {
+		who = "the room"
+	}
+	return "[meet room " + st.ID + "] " + who + " addressed you (@" + agent + "; it is in your mail — answer with `bashy meet post " + st.ID + " …`): " + text
 }
 
 // recordAsked writes the human's question into the room BEFORE the agent runs.

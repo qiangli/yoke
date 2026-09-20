@@ -20,7 +20,6 @@ import (
 
 	"github.com/qiangli/yoke/pkg/chat"
 	"github.com/qiangli/yoke/pkg/coopauth"
-	"github.com/qiangli/yoke/pkg/room"
 )
 
 type relayDM struct {
@@ -310,12 +309,20 @@ func handleRelayDMMessage(ctx context.Context) http.HandlerFunc {
 		}
 		lock.Unlock()
 		at := stamp.Format(time.RFC3339Nano)
-		// A Start work session owns this canonical identity and has already bound
-		// its inbox. The event above is therefore the message: its inbox relay
-		// delivers it to the persistent session. Starting a second read-only
-		// Invoke here would both duplicate the request and violate one identity.
-		if relayDMWorkSessionLive(agent) {
-			writeJSON(w, http.StatusAccepted, map[string]string{"agent": agent, "status": "queued", "ts": at})
+		// A LIVE SEAT owns this identity — a Start work session, a sprint
+		// manager holding its lease, an operator's `inbox --watch`, anything
+		// that claimed the name. The event above IS the message: it is directed
+		// mail in that seat's unified inbox. Starting a one-shot here would both
+		// duplicate the request and violate one identity — the very defect seen
+		// live, where the sprint manager you addressed answered from a process
+		// that had never seen its sprint (see live_seat.go). Push when the seat
+		// can be pushed; either way, nothing else answers as this name.
+		if card, live := liveSeat(agent); live {
+			d := deliverToLiveSeat(card, agent, dmSteerText(st.Human, body.Text))
+			writeJSON(w, http.StatusAccepted, map[string]any{
+				"agent": agent, "status": "queued", "ts": at,
+				"delivery": d, "note": d.note(),
+			})
 			return
 		}
 		// Cancellable, and remembered by agent name, so the sender can stop the
@@ -333,17 +340,15 @@ func handleRelayDMMessage(ctx context.Context) http.HandlerFunc {
 	}
 }
 
-func relayDMWorkSessionLive(agent string) bool {
-	card, ok, err := room.Find(room.AgentClaimID(canonAgent(agent)))
-	if err != nil || !ok || card.Mode != "meet-work" {
-		return false
+// dmSteerText frames a DM for a live seat's input: who is asking, and where the
+// answer belongs (the DM room), so a steered agent answers in the chat rather
+// than into its own terminal.
+func dmSteerText(human, text string) string {
+	who := strings.TrimSpace(human)
+	if who == "" {
+		who = "the operator"
 	}
-	for _, capability := range card.Caps {
-		if capability == room.CapInboxDelivery {
-			return true
-		}
-	}
-	return false
+	return "[meet dm] " + who + " asks in your 1:1 chat (answer with `bashy inbox`, it is in your mail): " + text
 }
 
 // handleRelayDMWork starts the existing managed Chat session for work that may
