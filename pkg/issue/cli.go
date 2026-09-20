@@ -169,12 +169,12 @@ bullet in a document nobody greps.`,
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&kind, "kind", KindTask, "bug|feature|requirement|task")
+	cmd.Flags().StringVar(&kind, "kind", KindTask, KindHelp)
 	cmd.Flags().StringVar(&body, "body", "", "the details")
 	cmd.Flags().StringVar(&bodyFile, "body-file", "", "read the details from a file ('-' is not supported; give a path)")
 	cmd.Flags().StringVar(&priority, "priority", "", "p0|p1|p2|p3")
 	cmd.Flags().StringArrayVar(&refs, "refs", nil, "another module/repo this issue touches (repeatable)")
-	cmd.Flags().StringArrayVar(&labels, "label", nil, "a label (repeatable)")
+	cmd.Flags().StringArrayVar(&labels, "label", nil, LabelHelp)
 	cmd.Flags().StringVar(&reporter, "reporter", "", "who filed it (defaults to the agent or user)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
 	return cmd
@@ -228,7 +228,7 @@ func newListCmd(repoRoot func() (string, error)) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&kind, "kind", "", "bug|feature|requirement|task")
+	cmd.Flags().StringVar(&kind, "kind", "", "filter by kind word (any word; see `issue list --json` for the words in use)")
 	cmd.Flags().StringVar(&status, "status", "", "open|triaged|closed")
 	cmd.Flags().StringVar(&stage, "stage", "", "plan|code|test|deploy")
 	cmd.Flags().BoolVar(&all, "all", false, "include closed issues")

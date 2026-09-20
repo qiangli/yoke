@@ -1,7 +1,9 @@
 package weave
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,5 +74,31 @@ func TestSprintPrimaryGoalPersistsAcrossRestart(t *testing.T) {
 	}
 	if got.PrimaryGoal != want.PrimaryGoal {
 		t.Fatalf("primary goal after reload = %q, want %q", got.PrimaryGoal, want.PrimaryGoal)
+	}
+}
+
+// Sprint 220, todo:4c6a5982: the report carries the stories' kind vocabulary
+// in use (most used first), and `sprint show` prints it as one line.
+func TestSprintReportBreaksStoriesDownByKind(t *testing.T) {
+	repo := t.TempDir()
+	st := todopkg.RepoStore(repo)
+	for i, kind := range []string{"bug", "feature", "bug", "doc"} {
+		it, err := todopkg.Add(st, fmt.Sprintf("story %d", i), "", "p1", nil, "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		it.Sprint, it.Kind = 9, kind
+		if _, err := st.Save(it); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := sprintOutcomeCost(&weaveStory{ID: 9, StoryRoots: []string{repo}}, time.Now())
+	if len(r.Kinds) != 3 || r.Kinds[0].Word != "bug" || r.Kinds[0].Count != 2 || r.Kinds[1].Word != "doc" || r.Kinds[2].Word != "feature" {
+		t.Fatalf("kinds = %+v (most used first, then alphabetical)", r.Kinds)
+	}
+	var buf bytes.Buffer
+	renderSprintOutcomeCost(&buf, r)
+	if !strings.Contains(buf.String(), "kinds:       2 bug · 1 doc · 1 feature\n") {
+		t.Fatalf("rendered:\n%s", buf.String())
 	}
 }

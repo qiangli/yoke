@@ -6,6 +6,7 @@ package issue
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -117,13 +118,69 @@ func TestIssueIsBornUntriaged(t *testing.T) {
 	}
 }
 
-func TestUnknownKindIsRefused(t *testing.T) {
+// The kind vocabulary is OPEN (sprint 220, todo:4c6a5982): any well-formed
+// word is a kind. What is refused is a malformed word, never an unknown one.
+func TestAnyWordKindIsAccepted(t *testing.T) {
 	s := newStore(t)
-	if _, err := s.Add(&Issue{Kind: "epic", Title: "x"}); err == nil {
-		t.Fatal("an unknown kind was accepted; the vocabulary must be closed or it is not a vocabulary")
+	for _, k := range []string{"epic", "doc", "enhancement", "spike", "tech-debt", "v1.2"} {
+		it := &Issue{Kind: k, Title: "x " + k}
+		if _, err := s.Add(it); err != nil {
+			t.Fatalf("kind %q refused: %v — the vocabulary is open", k, err)
+		}
+		got, err := s.Resolve(it.ID)
+		if err != nil || got.Kind != k {
+			t.Fatalf("kind %q did not round-trip: %v %+v", k, err, got)
+		}
+	}
+	// Only the SHAPE is checked: one lowercase word.
+	for _, k := range []string{"Bug Fix", "-lead", "a\tb", "größe", strings.Repeat("x", WordMaxLen+1)} {
+		if _, err := s.Add(&Issue{Kind: k, Title: "x"}); err == nil {
+			t.Fatalf("malformed kind %q was accepted", k)
+		}
+	}
+	// Case and whitespace are normalised, not refused, so `Bug ` and `bug`
+	// cannot become two kinds.
+	it := &Issue{Kind: " Bug ", Title: "x"}
+	if _, err := s.Add(it); err != nil || it.Kind != KindBug {
+		t.Fatalf("kind ' Bug ' → %q, %v; want %q", it.Kind, err, KindBug)
 	}
 	if _, err := s.Add(&Issue{Kind: KindBug}); err == nil {
 		t.Fatal("a titleless issue was filed — an issue nobody can identify is a note, not a record")
+	}
+}
+
+func TestLabelsAreWordsAndDiscoverable(t *testing.T) {
+	s := newStore(t)
+	a := &Issue{Kind: KindBug, Title: "a", Labels: []string{"Windows, app", "windows"}}
+	if _, err := s.Add(a); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"windows", "app"}; !slices.Equal(a.Labels, want) {
+		t.Fatalf("labels normalised to %v, want %v (comma-split, lowercased, deduped, ordered)", a.Labels, want)
+	}
+	if _, err := s.Add(&Issue{Kind: KindBug, Title: "b", Labels: []string{"two words"}}); err == nil {
+		t.Fatal("a malformed label was accepted")
+	}
+	b := &Issue{Kind: "doc", Title: "b", Labels: []string{"app"}}
+	if _, err := s.Add(b); err != nil {
+		t.Fatal(err)
+	}
+	AddLabels(b, []string{"app", "release"})
+	RemoveLabels(b, []string{"nope"})
+	if want := []string{"app", "release"}; !slices.Equal(b.Labels, want) {
+		t.Fatalf("AddLabels/RemoveLabels → %v, want %v", b.Labels, want)
+	}
+	items, err := s.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := KindsInUse(items)
+	if len(kinds) != 2 || kinds[0].Word != KindBug || kinds[0].Count != 1 || kinds[1].Word != "doc" {
+		t.Fatalf("KindsInUse = %+v", kinds)
+	}
+	labels := LabelsInUse(items)
+	if len(labels) != 2 || labels[0] != (WordCount{Word: "app", Count: 2}) || labels[1] != (WordCount{Word: "windows", Count: 1}) {
+		t.Fatalf("LabelsInUse = %+v (most used first, then alphabetical)", labels)
 	}
 }
 

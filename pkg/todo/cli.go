@@ -63,6 +63,8 @@ type listItem struct {
 	Title     string     `json:"title"`
 	State     string     `json:"state"`
 	Priority  string     `json:"priority,omitempty"`
+	Kind      string     `json:"kind,omitempty"`
+	Labels    []string   `json:"labels,omitempty"`
 	Scope     string     `json:"scope"`
 	Created   time.Time  `json:"created"`
 	Age       string     `json:"age"`
@@ -102,6 +104,8 @@ func toListItems(items []*issue.Issue, scope string) []listItem {
 			Title:     it.Title,
 			State:     it.Status,
 			Priority:  it.Priority,
+			Kind:      it.Kind,
+			Labels:    it.Labels,
 			Scope:     scope,
 			Created:   it.Created,
 			Age:       age(it.Created),
@@ -175,8 +179,89 @@ func NewTodoCmd() *cobra.Command {
 		newStartCmd(sf),
 		newEditCmd(sf),
 		newRmCmd(sf),
+		newWordsCmd(sf, "kinds", "the kind words in use, most used first — read this before inventing a new one", issue.KindsInUse),
+		newWordsCmd(sf, "labels", "the label words in use, most used first — read this before inventing a new one", issue.LabelsInUse),
 	)
 	return root
+}
+
+// filterClassified keeps the items matching a kind word and/or carrying EVERY
+// given label. Words are normalised the same way they were filed, so
+// `--kind Bug` finds `bug`.
+func filterClassified(items []*issue.Issue, kind string, labels []string) ([]*issue.Issue, error) {
+	if kind == "" && len(labels) == 0 {
+		return items, nil
+	}
+	var err error
+	if kind != "" {
+		if kind, err = issue.NormalizeWord(kind); err != nil {
+			return nil, fmt.Errorf("--kind: %w", err)
+		}
+	}
+	want, err := issue.NormalizeWords(labels)
+	if err != nil {
+		return nil, fmt.Errorf("--label: %w", err)
+	}
+	var out []*issue.Issue
+	for _, it := range items {
+		if kind != "" && it.Kind != kind {
+			continue
+		}
+		ok := true
+		for _, l := range want {
+			if !slices.Contains(it.Labels, l) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			out = append(out, it)
+		}
+	}
+	return out, nil
+}
+
+// newWordsCmd is `todo kinds` / `todo labels`: the discovery half of an open
+// vocabulary. There is no whitelist to consult, so this is what a writer
+// reads to pick the spelling already in use — and where a lone typo shows
+// up as a 1-count word beside the real one, to be fixed with `todo edit`.
+func newWordsCmd(sf storeFunc, name, short string, pick func([]*issue.Issue) []issue.WordCount) *cobra.Command {
+	var jsonOut, all bool
+	cmd := &cobra.Command{
+		Use:   name,
+		Short: short,
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			st, scope, err := sf()
+			if err != nil {
+				return err
+			}
+			items, err := List(st, "")
+			if err != nil {
+				return err
+			}
+			if !all {
+				items = slices.DeleteFunc(items, func(it *issue.Issue) bool { return it.Status == StatusDone })
+			}
+			words := pick(items)
+			if jsonOut {
+				return emitJSON(cmd, map[string]any{"scope": scope, "folder": folder(st), name: words})
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), header(scope, st))
+			if len(words) == 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "no %s in use\n", name)
+				return nil
+			}
+			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+			for _, wc := range words {
+				fmt.Fprintf(w, "%d\t%s\n", wc.Count, wc.Word)
+			}
+			return w.Flush()
+		},
+	}
+	cmd.Flags().BoolVar(&all, "all", false, "count done items too")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "machine-readable output")
+	return cmd
 }
 
 // folder is the resolved on-disk directory of a store (where the item files live).
@@ -217,7 +302,8 @@ func noteArg(cmd *cobra.Command, note string) (string, error) {
 }
 
 func newAddCmd(sf storeFunc) *cobra.Command {
-	var priority, note string
+	var priority, note, kind string
+	var labels []string
 	var dueStr, recurring, assignee string
 	var sprint int64
 	var jsonOut bool
@@ -240,12 +326,26 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 			if note, err = noteArg(cmd, note); err != nil {
 				return err
 			}
+			// Classify BEFORE filing so a malformed word is refused with nothing
+			// written; Add itself files `task`, the default kind.
+			kind, err = issue.NormalizeWord(kind)
+			if err != nil {
+				return fmt.Errorf("--kind: %w", err)
+			}
+			labels, err = issue.NormalizeWords(labels)
+			if err != nil {
+				return fmt.Errorf("--label: %w", err)
+			}
 			it, err := Add(st, strings.Join(args, " "), note, priority, due, recurring, assignee)
 			if err != nil {
 				return err
 			}
-			if cmd.Flags().Changed("sprint") {
-				it.Sprint = sprint
+			if cmd.Flags().Changed("sprint") || kind != issue.KindTask || len(labels) > 0 {
+				if cmd.Flags().Changed("sprint") {
+					it.Sprint = sprint
+				}
+				it.Kind = kind
+				it.Labels = labels
 				if _, err := st.Save(it); err != nil {
 					return err
 				}
@@ -255,7 +355,10 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 				notice = notifyAssignee("todo", it)
 			}
 			if jsonOut {
-				out := map[string]any{"id": it.ID, "status": it.Status, "title": it.Title, "sprint": it.Sprint}
+				out := map[string]any{"id": it.ID, "status": it.Status, "title": it.Title, "sprint": it.Sprint, "kind": it.Kind}
+				if len(it.Labels) > 0 {
+					out["labels"] = it.Labels
+				}
 				if notice.Assignee != "" {
 					out["assignee_notified"] = notice.Notified
 					if !notice.Notified {
@@ -270,6 +373,8 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&priority, "priority", "", "priority tier (p0|p1|p2|p3)")
+	cmd.Flags().StringVar(&kind, "kind", issue.KindTask, issue.KindHelp)
+	cmd.Flags().StringArrayVar(&labels, "label", nil, issue.LabelHelp)
 	cmd.Flags().StringVar(&note, "note", "", "task body/details (- reads stdin); this item's own facts — a reusable procedure belongs in a kb runbook, cited as [[kb:<slug>]]")
 	cmd.Flags().StringVar(&dueStr, "due", "", "deadline (e.g. 2026-07-20, +3d)")
 	cmd.Flags().StringVar(&recurring, "recurring", "", "cadence (default=driven by `sprint advance`; or daily, weekly, 24h, cron)")
@@ -282,7 +387,8 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 }
 
 func newListCmd(sf storeFunc) *cobra.Command {
-	var status string
+	var status, kind string
+	var labels []string
 	var jsonOut, all, reverse bool
 	cmd := &cobra.Command{
 		Use:   "list",
@@ -305,6 +411,9 @@ func newListCmd(sf storeFunc) *cobra.Command {
 					}
 				}
 				items = open
+			}
+			if items, err = filterClassified(items, kind, labels); err != nil {
+				return err
 			}
 			if reverse {
 				slices.Reverse(items)
@@ -340,14 +449,22 @@ func newListCmd(sf storeFunc) *cobra.Command {
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 			// #  is the stable running number — the short handle for `todo show 3`,
 			// `todo done 3`, etc. ID stays for scripts / cross-tool references.
-			hasAssignee := false
+			hasAssignee, hasKind := false, false
 			for _, it := range items {
 				if it.Assignee != "" {
 					hasAssignee = true
-					break
+				}
+				// The KIND column appears once any item is classified beyond the
+				// default, so an all-`task` list stays as narrow as before.
+				if it.Kind != "" && it.Kind != issue.KindTask {
+					hasKind = true
 				}
 			}
-			headerStr := "#\tREF\tSTATUS\tPRIO\tAGE\tDUE"
+			headerStr := "#\tREF\tSTATUS\tPRIO"
+			if hasKind {
+				headerStr += "\tKIND"
+			}
+			headerStr += "\tAGE\tDUE"
 			if hasAssignee {
 				headerStr += "\tASSIGNEE"
 			}
@@ -361,8 +478,11 @@ func newListCmd(sf storeFunc) *cobra.Command {
 						dueStr += " (OVERDUE)"
 					}
 				}
-				row := fmt.Sprintf("%d\t%s\t%s\t%s\t%s\t%s",
-					it.Seq, shortRef(it.ID), it.Status, dash(it.Priority), age(it.Created), dueStr)
+				row := fmt.Sprintf("%d\t%s\t%s\t%s", it.Seq, shortRef(it.ID), it.Status, dash(it.Priority))
+				if hasKind {
+					row += fmt.Sprintf("\t%s", dash(it.Kind))
+				}
+				row += fmt.Sprintf("\t%s\t%s", age(it.Created), dueStr)
 				if hasAssignee {
 					row += fmt.Sprintf("\t%s", dash(it.Assignee))
 				}
@@ -373,6 +493,8 @@ func newListCmd(sf storeFunc) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&status, "status", "", "filter by status (todo|assigned|doing|blocked|done)")
+	cmd.Flags().StringVar(&kind, "kind", "", "only items of this kind word (`todo kinds` lists the words in use)")
+	cmd.Flags().StringArrayVar(&labels, "label", nil, "only items carrying every given label (repeatable or comma-separated; `todo labels` lists the words in use)")
 	cmd.Flags().BoolVar(&all, "all", false, "include done tasks")
 	cmd.Flags().BoolVar(&reverse, "reverse", false, "reverse the order (default is priority first, then #1 first)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "machine-readable output")
@@ -566,12 +688,13 @@ func newStartCmd(sf storeFunc) *cobra.Command {
 }
 
 func newEditCmd(sf storeFunc) *cobra.Command {
-	var title, priority, note string
+	var title, priority, note, kind string
+	var labels, unlabels []string
 	var dueStr, recurring, assignee string
 	var sprint int64
 	cmd := &cobra.Command{
 		Use:   "edit <id|prefix>",
-		Short: "modify a task's title/priority/note",
+		Short: "modify a task's title/priority/kind/labels/note",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			st, _, err := sf()
@@ -587,6 +710,25 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 			}
 			if cmd.Flags().Changed("priority") {
 				it.Priority = priority
+			}
+			if cmd.Flags().Changed("kind") {
+				if it.Kind, err = issue.NormalizeWord(kind); err != nil {
+					return fmt.Errorf("--kind: %w", err)
+				}
+			}
+			if len(labels) > 0 {
+				add, err := issue.NormalizeWords(labels)
+				if err != nil {
+					return fmt.Errorf("--label: %w", err)
+				}
+				issue.AddLabels(it, add)
+			}
+			if len(unlabels) > 0 {
+				rm, err := issue.NormalizeWords(unlabels)
+				if err != nil {
+					return fmt.Errorf("--unlabel: %w", err)
+				}
+				issue.RemoveLabels(it, rm)
 			}
 			if cmd.Flags().Changed("note") {
 				if it.Body, err = noteArg(cmd, note); err != nil {
@@ -641,6 +783,9 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&title, "title", "", "new title")
 	cmd.Flags().StringVar(&priority, "priority", "", "new priority (p0|p1|p2|p3)")
+	cmd.Flags().StringVar(&kind, "kind", "", "new kind — "+issue.KindHelp)
+	cmd.Flags().StringArrayVar(&labels, "label", nil, "add "+issue.LabelHelp)
+	cmd.Flags().StringArrayVar(&unlabels, "unlabel", nil, "remove a label (repeatable or comma-separated)")
 	cmd.Flags().StringVar(&note, "note", "", "replace the task body/details (- reads stdin) — the whole body, so re-supply what should stay; a reusable procedure belongs in a kb runbook, cited as [[kb:<slug>]]")
 	cmd.Flags().StringVar(&dueStr, "due", "", "deadline (e.g. 2026-07-20, +3d)")
 	cmd.Flags().StringVar(&recurring, "recurring", "", "cadence (default=driven by `sprint advance`; or daily, weekly, 24h, cron)")

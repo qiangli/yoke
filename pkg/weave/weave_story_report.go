@@ -12,22 +12,27 @@ import (
 	"strings"
 	"time"
 
+	issuepkg "github.com/qiangli/yoke/pkg/issue"
 	todopkg "github.com/qiangli/yoke/pkg/todo"
 )
 
 type sprintOutcomeCostReport struct {
-	Metric          string        `json:"primary_metric"`
-	MetricChange    int           `json:"primary_metric_change"`
-	Elapsed         time.Duration `json:"elapsed"`
-	Stagnant        bool          `json:"stagnant"`
-	TokensAvailable bool          `json:"tokens_available"`
-	InputTokens     int64         `json:"input_tokens,omitempty"`
-	OutputTokens    int64         `json:"output_tokens,omitempty"`
-	CachedTokens    int64         `json:"cached_tokens,omitempty"`
-	DiffAvailable   bool          `json:"diff_available"`
-	ProductionLines int           `json:"production_lines,omitempty"`
-	TestLines       int           `json:"test_lines,omitempty"`
-	ScaffoldLines   int           `json:"scaffolding_lines,omitempty"`
+	Metric string `json:"primary_metric"`
+	// Kinds is the stories' kind vocabulary in use ("3 bug · 5 feature"),
+	// most used first — WHY the sprint's work exists, next to how much of it
+	// is closed.
+	Kinds           []issuepkg.WordCount `json:"kinds,omitempty"`
+	MetricChange    int                  `json:"primary_metric_change"`
+	Elapsed         time.Duration        `json:"elapsed"`
+	Stagnant        bool                 `json:"stagnant"`
+	TokensAvailable bool                 `json:"tokens_available"`
+	InputTokens     int64                `json:"input_tokens,omitempty"`
+	OutputTokens    int64                `json:"output_tokens,omitempty"`
+	CachedTokens    int64                `json:"cached_tokens,omitempty"`
+	DiffAvailable   bool                 `json:"diff_available"`
+	ProductionLines int                  `json:"production_lines,omitempty"`
+	TestLines       int                  `json:"test_lines,omitempty"`
+	ScaffoldLines   int                  `json:"scaffolding_lines,omitempty"`
 }
 
 func sprintOutcomeCost(s *weaveStory, now time.Time) sprintOutcomeCostReport {
@@ -36,6 +41,7 @@ func sprintOutcomeCost(s *weaveStory, now time.Time) sprintOutcomeCostReport {
 		r.Elapsed += b.Elapsed(now)
 	}
 	var itemsClosed []time.Time
+	var stories []*issuepkg.Issue
 	total := 0
 	for _, root := range sprintDeclaredStoryRoots(s) {
 		items, err := todopkg.List(todopkg.RepoStore(root), "")
@@ -47,11 +53,13 @@ func sprintOutcomeCost(s *weaveStory, now time.Time) sprintOutcomeCostReport {
 				continue
 			}
 			total++
+			stories = append(stories, it)
 			if it.Closed != nil {
 				itemsClosed = append(itemsClosed, *it.Closed)
 			}
 		}
 	}
+	r.Kinds = issuepkg.KindsInUse(stories)
 	if total == 0 {
 		r.Metric = "missing"
 	} else {
@@ -178,6 +186,13 @@ func sprintRunDiff(it *weaveItem) (production, test, scaffold int, ok bool) {
 
 func renderSprintOutcomeCost(w io.Writer, r sprintOutcomeCostReport) {
 	fmt.Fprintf(w, "  primary metric: %s; change %+d since last checkpoint\n", r.Metric, r.MetricChange)
+	if len(r.Kinds) > 0 {
+		parts := make([]string, 0, len(r.Kinds))
+		for _, k := range r.Kinds {
+			parts = append(parts, fmt.Sprintf("%d %s", k.Count, k.Word))
+		}
+		fmt.Fprintf(w, "  kinds:       %s\n", strings.Join(parts, " · "))
+	}
 	fmt.Fprintf(w, "  elapsed:     %s\n", roundDur(r.Elapsed))
 	if r.TokensAvailable {
 		fmt.Fprintf(w, "  tokens:      input %d; output %d; cached %d\n", r.InputTokens, r.OutputTokens, r.CachedTokens)

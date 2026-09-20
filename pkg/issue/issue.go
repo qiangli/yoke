@@ -60,13 +60,44 @@ import (
 // `.bashy/generated/` — that tree is derived scratch, and this is source.
 const Dir = ".bashy/issues"
 
-// Kinds — what sort of thing is being recorded.
+// Kinds — what sort of thing is being recorded: WHY the item exists, never
+// how big it is (docs/work-tracking-model.md §2).
+//
+// The vocabulary is OPEN. These four are the suggested words — the ones the
+// help text and `schema` print — not a closed list: `doc`, `enhancement`,
+// `spike`, `chore`, `question` are all accepted as written, and a new word
+// never needs a code change. What is checked is the SHAPE of the word
+// (ValidWord); what keeps a vocabulary coherent is discovery (`todo kinds`
+// shows the words in use with counts, so a writer sees the spelling already
+// taken before inventing one), not enforcement.
 const (
 	KindBug         = "bug"         // it is broken
 	KindFeature     = "feature"     // it would be good to have
+	KindEnhancement = "enhancement" // it exists and should be better
+	KindDoc         = "doc"         // words, not code: a page, a runbook, a README
 	KindRequirement = "requirement" // it must hold (a constraint, a compliance obligation)
 	KindTask        = "task"        // it must be done (chores, migrations)
+	KindChore       = "chore"       // upkeep with no user-visible outcome (pins, CI, cleanup)
+	KindSpike       = "spike"       // find out; the deliverable is knowledge
+	KindTest        = "test"        // coverage or a gate, not a behaviour change
+	KindRefactor    = "refactor"    // same behaviour, better shape
+	KindQuestion    = "question"    // needs an answer or a decision before work
 )
+
+// SuggestedKinds is the common vocabulary printed by help text — a menu of
+// familiar words, not a whitelist: any other word of the same shape is
+// accepted as written.
+var SuggestedKinds = []string{
+	KindBug, KindFeature, KindEnhancement, KindDoc, KindTask, KindChore,
+	KindSpike, KindTest, KindRefactor, KindRequirement, KindQuestion,
+}
+
+// KindHelp is the one-line flag description shared by every front door that
+// takes a kind.
+const KindHelp = "why it exists — one word; common: bug|feature|enhancement|doc|task|chore|spike|test|refactor|requirement|question (any other word is accepted; `todo kinds` shows the words in use)"
+
+// LabelHelp likewise, for --label.
+const LabelHelp = "a label word — an area, OS or surface such as windows, app, release, docs (repeatable or comma-separated; `todo labels` shows the words in use)"
 
 // Statuses — the triage ladder, and nothing more.
 //
@@ -81,14 +112,135 @@ const (
 )
 
 var (
-	kinds    = []string{KindBug, KindFeature, KindRequirement, KindTask}
+	kinds    = SuggestedKinds
 	statuses = []string{StatusOpen, StatusTriaged, StatusClosed}
 )
 
-func ValidKind(k string) bool   { return slices.Contains(kinds, k) }
+// ValidKind reports whether k is a well-formed kind word. Any word of the
+// right shape is valid — membership in Kinds() is a suggestion, not a rule.
+func ValidKind(k string) bool   { return ValidWord(k) }
 func ValidStatus(s string) bool { return slices.Contains(statuses, s) }
-func Kinds() []string           { return append([]string(nil), kinds...) }
-func Statuses() []string        { return append([]string(nil), statuses...) }
+
+// Kinds returns the SUGGESTED kind vocabulary (SuggestedKinds — help text and
+// schema); the words actually in use in a store come from KindsInUse.
+func Kinds() []string    { return append([]string(nil), kinds...) }
+func Statuses() []string { return append([]string(nil), statuses...) }
+
+// WordMaxLen bounds a kind or label: a classifier is a word, not a sentence.
+const WordMaxLen = 32
+
+// ValidWord is the one shape rule for a classifier word (a kind or a label):
+// lowercase ASCII letters and digits, with `-` `_` `.` allowed inside,
+// starting with a letter or digit, at most WordMaxLen bytes. One token: no
+// spaces, no uppercase (so `Bug` and `bug` cannot become two kinds).
+func ValidWord(w string) bool {
+	if w == "" || len(w) > WordMaxLen {
+		return false
+	}
+	for i := 0; i < len(w); i++ {
+		c := w[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+		case i > 0 && (c == '-' || c == '_' || c == '.'):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// WordRule is the shape rule in one line, for error messages and help.
+const WordRule = "one lowercase word: [a-z0-9][a-z0-9._-]*, at most 32 bytes"
+
+// NormalizeWord trims and lowercases a classifier word so `Bug ` files as
+// `bug`; it returns an error naming the rule when the result is still not a
+// word. Lowercasing is the only normalisation — no synonym table.
+func NormalizeWord(w string) (string, error) {
+	w = strings.ToLower(strings.TrimSpace(w))
+	if !ValidWord(w) {
+		return "", fmt.Errorf("%q is not a valid word (%s)", w, WordRule)
+	}
+	return w, nil
+}
+
+// NormalizeWords normalises a list of classifier words (labels), accepting
+// comma-separated entries, dropping empties and duplicates, keeping order.
+func NormalizeWords(in []string) ([]string, error) {
+	var out []string
+	seen := map[string]bool{}
+	for _, raw := range in {
+		for _, w := range strings.Split(raw, ",") {
+			if strings.TrimSpace(w) == "" {
+				continue
+			}
+			n, err := NormalizeWord(w)
+			if err != nil {
+				return nil, err
+			}
+			if !seen[n] {
+				seen[n] = true
+				out = append(out, n)
+			}
+		}
+	}
+	return out, nil
+}
+
+// AddLabels / RemoveLabels edit an issue's labels set-wise, preserving order.
+func AddLabels(it *Issue, add []string) {
+	for _, l := range add {
+		if !slices.Contains(it.Labels, l) {
+			it.Labels = append(it.Labels, l)
+		}
+	}
+}
+
+func RemoveLabels(it *Issue, rm []string) {
+	it.Labels = slices.DeleteFunc(it.Labels, func(l string) bool { return slices.Contains(rm, l) })
+	if len(it.Labels) == 0 {
+		it.Labels = nil
+	}
+}
+
+// WordCount is one row of a vocabulary-in-use listing.
+type WordCount struct {
+	Word  string `json:"word"`
+	Count int    `json:"count"`
+}
+
+// CountWords tallies classifier words across items — the discovery half of an
+// open vocabulary. Sorted by count (desc) then word, so the established
+// spelling comes first and a lone typo sits visibly beside it.
+func CountWords(items []*Issue, pick func(*Issue) []string) []WordCount {
+	counts := map[string]int{}
+	for _, it := range items {
+		for _, w := range pick(it) {
+			if w != "" {
+				counts[w]++
+			}
+		}
+	}
+	out := make([]WordCount, 0, len(counts))
+	for w, n := range counts {
+		out = append(out, WordCount{Word: w, Count: n})
+	}
+	slices.SortFunc(out, func(a, b WordCount) int {
+		if a.Count != b.Count {
+			return b.Count - a.Count
+		}
+		return strings.Compare(a.Word, b.Word)
+	})
+	return out
+}
+
+// KindsInUse and LabelsInUse are the two vocabularies a store actually holds.
+func KindsInUse(items []*Issue) []WordCount {
+	return CountWords(items, func(it *Issue) []string { return []string{it.Kind} })
+}
+
+func LabelsInUse(items []*Issue) []WordCount {
+	return CountWords(items, func(it *Issue) []string { return it.Labels })
+}
 
 // Issue is one record in the register.
 //
@@ -337,7 +489,29 @@ func (s *Store) Resolve(ref string) (*Issue, error) {
 }
 
 // Save writes an issue, creating the register if it does not exist.
+// normalizeClassifiers applies the one shape rule to kind and labels on every
+// write path (Add and Save alike), so a record on disk always holds words.
+func normalizeClassifiers(it *Issue) error {
+	if it.Kind == "" {
+		it.Kind = KindTask
+	}
+	k, err := NormalizeWord(it.Kind)
+	if err != nil {
+		return fmt.Errorf("kind: %w (suggested: %s — any word of that shape is accepted)", err, strings.Join(kinds, ", "))
+	}
+	it.Kind = k
+	labels, err := NormalizeWords(it.Labels)
+	if err != nil {
+		return fmt.Errorf("label: %w", err)
+	}
+	it.Labels = labels
+	return nil
+}
+
 func (s *Store) Save(it *Issue) (string, error) {
+	if err := normalizeClassifiers(it); err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(s.dir(), 0o755); err != nil {
 		return "", err
 	}
@@ -374,8 +548,8 @@ func (s *Store) Add(it *Issue) (string, error) {
 	if it.Kind == "" {
 		it.Kind = KindTask
 	}
-	if !ValidKind(it.Kind) {
-		return "", fmt.Errorf("unknown kind %q (want one of: %s)", it.Kind, strings.Join(kinds, ", "))
+	if err := normalizeClassifiers(it); err != nil {
+		return "", err
 	}
 	if it.ID == "" {
 		it.ID = NewID()
