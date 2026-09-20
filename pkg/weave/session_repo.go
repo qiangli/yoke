@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -237,6 +238,18 @@ func EnsureRepoSession(ctx context.Context, repoRoot string) (*sessionRepoClient
 	}
 	client := newSessionClient(base, token)
 	if pointer != nil && pointer.TaskID != "" {
+		// The task is known; make sure THIS seat is on it. A pointer written
+		// before Seats existed records nobody, so the first pass joins the
+		// current participant once more (a join is idempotent on cloudbox).
+		if participant, host := SessionParticipant(); !slices.Contains(pointer.Seats, participant) {
+			if _, err := client.Join(ctx, pointer.TaskID, JoinReq{Participant: participant, Host: host, Tool: "bashy", Role: "contributor"}); err != nil {
+				return nil, fmt.Errorf("session: join %s as %s: %w", pointer.TaskID, participant, err)
+			}
+			pointer.Seats = append(pointer.Seats, participant)
+			if err := WriteSessionPointer(repoRoot, pointer); err != nil {
+				return nil, err
+			}
+		}
 		return &sessionRepoClient{repoRoot: repoRoot, pointer: pointer, client: client}, nil
 	}
 	key, err := RepoKey(repoRoot)
@@ -282,6 +295,9 @@ func EnsureRepoSession(ctx context.Context, repoRoot string) (*sessionRepoClient
 	pointer.TaskID = taskID
 	pointer.RepoKey = key
 	pointer.Role = role
+	if !slices.Contains(pointer.Seats, participant) {
+		pointer.Seats = append(pointer.Seats, participant)
+	}
 	if pointer.CloudboxBase == "" {
 		pointer.CloudboxBase = base
 	}
