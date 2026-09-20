@@ -37,9 +37,13 @@ func (bashInterp) Run(ctx context.Context, t *Task, tio TaskIO) TaskResult {
 		interp.Dir(tio.Dir),
 		interp.Env(expand.ListEnviron(tio.Env...)),
 		interp.StdIO(nil, tio.Stdout, tio.Stderr),
-		// coreutils userland first; misses fall through to the default exec
+		// CapExecHandler checks every dispatched command against the task's
+		// declared-effects cap (set on ctx by WithTaskCap before Run).
+		// It runs BEFORE shell.Handler so in-process coreutils commands are
+		// covered the same as real binaries.  No cap on ctx → pass-through.
+		// coreutils userland second; misses fall through to the default exec
 		// handler (real binaries: go, docker, …), so build DAGs work too.
-		interp.ExecHandlers(shell.Handler()),
+		interp.ExecHandlers(CapExecHandler(), shell.Handler()),
 	)
 	if err != nil {
 		res.Status, res.ExitCode, res.Err = StatusFailed, 1, err

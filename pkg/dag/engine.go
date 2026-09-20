@@ -714,6 +714,12 @@ func (e *Engine) runAttempt(ctx context.Context, node *Node, capture bool, worke
 		runCtx, cancel = context.WithTimeout(ctx, node.Task.Timeout)
 		defer cancel()
 	}
+	// Wire the declared-effects cap onto the run context so CapExecHandler
+	// can enforce it for every command the body dispatches.
+	// WithTaskCap is a no-op when Effects is empty — uncapped targets are
+	// unaffected. The cap rides on the context, not on a RunContext field, so
+	// it propagates transparently through compound commands and pipelines.
+	runCtx = WithTaskCap(runCtx, node.Task.Effects)
 	stdout, stderr := e.Stdout, e.Stderr
 	var ob, eb *bytes.Buffer
 	if capture {
