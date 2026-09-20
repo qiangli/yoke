@@ -285,6 +285,7 @@ func weaveReapSubmissions(q *weaveQueue, root, base string, now time.Time) []wea
 		}
 		if root != "" && base != "" && weaveItemMerged(root, base, it) {
 			it.State = "done"
+			it.Disposition = weaveDispositionMerged
 			it.NeedsSteward = false
 			it.StewardReason = ""
 			actions = append(actions, weaveReapAction{Issue: it.ID, From: "submitted", To: "done",

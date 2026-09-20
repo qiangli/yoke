@@ -3,6 +3,7 @@ package weave
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -21,7 +22,13 @@ import (
 func setupAbandonGuardFixture(t *testing.T) (root, workspace, sha string) {
 	t.Helper()
 	root = setupIsolationFixture(t)
-	workspace = t.TempDir()
+	// The conventional owned path: teardown now goes through the one guarded
+	// cleanup, which refuses to touch a workspace anywhere else.
+	dir, _ := weaveQueueDir(root)
+	workspace = filepath.Join(dir, "workspaces", "issue-1")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	gitT(t, workspace, "clone", "-q", root, ".")
 	gitT(t, workspace, "checkout", "-q", "-b", "agent/weave-issue-1")
 	gitT(t, workspace, "commit", "--allow-empty", "-qm", "agent work")
@@ -129,10 +136,13 @@ func TestWeaveAbandonForcePreservesAmendedTipAlongsideOlderSalvage(t *testing.T)
 // exactly as before the guard existed — no ref, no --force needed.
 func TestWeaveAbandonDisposesCleanRunNormally(t *testing.T) {
 	root := setupIsolationFixture(t)
-	workspace := t.TempDir()
+	dir, _ := weaveQueueDir(root)
+	workspace := filepath.Join(dir, "workspaces", "issue-1")
+	if err := os.MkdirAll(filepath.Dir(workspace), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	gitT(t, root, "clone", "--local", "--no-hardlinks", root, workspace)
 	t.Chdir(root)
-	dir, _ := weaveQueueDir(root)
 	if err := saveWeaveQueue(dir, &weaveQueue{Root: root, Items: []*weaveItem{{
 		ID: 1, State: "failed", Workspace: workspace,
 	}}}); err != nil {

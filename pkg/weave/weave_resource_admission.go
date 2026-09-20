@@ -46,11 +46,15 @@ func weaveResourceHooks(ctx context.Context) WeaveResourceHooks {
 	}
 	return hooks
 }
+func weaveRunLifecycleLockPath(dir string, id int64) string {
+	return filepath.Join(dir, "run-"+strconv.FormatInt(id, 10)+".lifecycle.lock")
+}
+
 func weaveRunLifecycleLock(dir string, id int64) (*lockfile.Lock, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
-	return lockfile.TryAcquire(filepath.Join(dir, "run-"+strconv.FormatInt(id, 10)+".lifecycle.lock"), lockfile.Holder{Intent: "weave run lifecycle"})
+	return lockfile.TryAcquire(weaveRunLifecycleLockPath(dir, id), lockfile.Holder{Intent: "weave run lifecycle"})
 }
 
 type weaveAdmission struct {

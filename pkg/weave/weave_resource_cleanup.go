@@ -7,8 +7,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/qiangli/yoke/pkg/agentlaunch"
 )
 
 // Apparent bytes removed are not a claim about physical free space: shared
@@ -87,6 +90,111 @@ func weaveCleanupEligible(q *weaveQueue, id int64, path string) (*weaveItem, err
 	cp := *it
 	return &cp, nil
 }
+
+// Run dispositions. A disposition is the durable, one-word answer to "what
+// happened to this run's work" — the only thing a later reader needs once the
+// ephemeral artifacts are gone. It is recorded by the verb that decided it
+// (pull → merged, abandon → superseded|rejected, an empty terminal run →
+// empty) and derived once at cleanup for rows that predate the field.
+const (
+	weaveDispositionMerged     = "merged"
+	weaveDispositionSuperseded = "superseded"
+	weaveDispositionRejected   = "rejected"
+	weaveDispositionEmpty      = "empty"
+)
+
+func weaveValidDisposition(d string) bool {
+	switch d {
+	case weaveDispositionMerged, weaveDispositionSuperseded, weaveDispositionRejected, weaveDispositionEmpty:
+		return true
+	}
+	return false
+}
+
+// weaveItemSettled is THE proof that tearing down a run's workspace loses
+// nothing: every commit in the workspace is reachable from base or from the
+// run's salvage ref, and the tree is clean. It returns the disposition the row
+// should carry. A workspace that is already gone cannot lose anything on disk
+// (its branch, if fetched, is retired by its own proof); its disposition is
+// what the row recorded, else merged/empty from the recorded measurement.
+func weaveItemSettled(root, base string, it *weaveItem) (string, bool) {
+	if it == nil {
+		return "", false
+	}
+	if weaveItemMerged(root, base, it) {
+		return weaveDispositionMerged, true
+	}
+	if it.Workspace == "" {
+		if weaveValidDisposition(it.Disposition) {
+			return it.Disposition, true
+		}
+		if it.CommitsAhead > 0 && it.Head != "" && base != "" &&
+			exec.Command(gitBin(), "-C", root, "merge-base", "--is-ancestor", it.Head, base).Run() == nil {
+			return weaveDispositionMerged, true
+		}
+		return weaveDispositionEmpty, it.CommitsAhead == 0
+	}
+	st, err := os.Stat(it.Workspace)
+	if err != nil {
+		if os.IsNotExist(err) {
+			cp := *it
+			cp.Workspace = ""
+			return weaveItemSettled(root, base, &cp)
+		}
+		return "", false
+	}
+	if !st.IsDir() {
+		return "", false
+	}
+	// Live measurement, never the recorded one (see weaveItemMerged).
+	ahead, head := weaveUnmergedAhead(root, base, it)
+	if ahead == 0 {
+		if it.Disposition != "" && it.Disposition != weaveDispositionMerged {
+			return it.Disposition, true
+		}
+		return weaveDispositionEmpty, true
+	}
+	if it.SalvageRef == "" || head == "" {
+		return "", false
+	}
+	if exec.Command(gitBin(), "-C", root, "merge-base", "--is-ancestor", head, it.SalvageRef).Run() != nil {
+		return "", false
+	}
+	if it.Disposition == weaveDispositionSuperseded {
+		return weaveDispositionSuperseded, true
+	}
+	return weaveDispositionRejected, true
+}
+
+// weaveRunArtifactKinds is the ordered list of everything a run owns on disk.
+// Order matters: the lock goes last, because this function holds it.
+var weaveRunArtifactKinds = []string{"workspace", "socket", "log", "cache", "agent-data", "lock"}
+
+func weaveRunArtifactPath(dir string, it *weaveItem, kind string) string {
+	switch kind {
+	case "workspace":
+		return it.Workspace
+	case "socket":
+		return it.CtlSock
+	case "log":
+		return it.LogPath
+	case "cache":
+		return weaveManagedGOCachePath(nil, dir, it.ID)
+	case "agent-data":
+		return agentlaunch.YcodeDataDir(nil, agentlaunch.Launch{ToolName: agentlaunch.YcodeToolName}, dir, strconv.FormatInt(it.ID, 10))
+	case "lock":
+		return weaveRunLifecycleLockPath(dir, it.ID)
+	}
+	return ""
+}
+
+// weavePruneOwnedRun is the ONE guarded teardown. pull, salvage (via pull),
+// abandon, prune and sprint end all reach it; none of them removes a run
+// artifact any other way. It refuses rather than guesses: active lifecycle,
+// changed birth, unproven settlement, dirty tree, unconventional path, symlink
+// traversal, and a run that changed between the check and the rename all leave
+// the artifact alone and say why. On full success it compacts the row (D4):
+// paths are cleared, the disposition stays.
 func weavePruneOwnedRun(dir string, id int64, repo string, expectedBirth ...time.Time) []sprintPruneAction {
 	lock, err := weaveRunLifecycleLock(dir, id)
 	if err != nil {
@@ -108,98 +216,138 @@ func weavePruneOwnedRun(dir string, id int64, repo string, expectedBirth ...time
 	if !ok {
 		return nil
 	}
-	if !weaveItemMerged(root, weaveBaseBranch(root), it) {
+	base := weaveBaseBranch(root)
+	disposition, settled := weaveItemSettled(root, base, it)
+	if !settled {
 		return nil
 	}
 	var acts []sprintPruneAction
-	for _, artifact := range []struct{ kind, path string }{{"workspace", it.Workspace}, {"socket", it.CtlSock}, {"log", it.LogPath}} {
-		if artifact.path == "" {
+	failed := false
+	for _, kind := range weaveRunArtifactKinds {
+		path := weaveRunArtifactPath(dir, it, kind)
+		if path == "" {
 			continue
 		}
-		if _, err := os.Lstat(artifact.path); os.IsNotExist(err) {
+		if _, err := os.Lstat(path); os.IsNotExist(err) {
 			continue
 		}
-		a := sprintPruneAction{Kind: artifact.kind, Repo: repo, Target: artifact.path, ByteKind: "apparent_regular_file_bytes"}
-		if err := weaveConventionalArtifact(dir, id, artifact.kind, artifact.path); err != nil {
-			a.Err = err.Error()
-			acts = append(acts, a)
-			continue
-		}
-		if err := weaveContainedArtifact(dir, artifact.path); err != nil {
-			a.Err = err.Error()
-			acts = append(acts, a)
-			continue
-		}
-		if artifact.kind == "workspace" {
-			rel, _ := filepath.Rel(filepath.Join(dir, "workspaces"), artifact.path)
-			if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-				a.Err = "workspace outside queue workspaces"
-				acts = append(acts, a)
+		a := sprintPruneAction{Kind: kind, Repo: repo, Target: path, ByteKind: "apparent_regular_file_bytes"}
+		if kind == "lock" {
+			if failed {
+				// Something of the run is still on disk; the lock stays with it.
 				continue
 			}
+			// Held by this function; TryAcquire-only callers mean nobody sleeps
+			// on the old inode, so unlinking while held cannot mint two holders.
+			if err := os.Remove(path); err != nil {
+				a.Err = err.Error()
+				failed = true
+			} else {
+				a.Done = true
+				a.BytesComplete = true
+			}
+			// Acquiring created this file; report it only when the pass
+			// reclaimed something else, so an idle pass stays silent.
+			if a.Err != "" || len(acts) > 0 {
+				acts = append(acts, a)
+			}
+			continue
+		}
+		if err := weaveConventionalArtifact(dir, id, kind, path); err != nil {
+			a.Err = err.Error()
+			acts = append(acts, a)
+			failed = true
+			continue
+		}
+		if kind == "socket" {
+			// A control socket may live under os.TempDir() when the queue path
+			// is too long for a unix socket (weaveCtlSockPath); the conventional
+			// check above already proved it is THIS run's exact path, and a
+			// socket is one inode — remove it, never a tree under it.
+			st, err := os.Lstat(path)
+			if err == nil && st.Mode()&(os.ModeSocket|os.ModeSymlink) == 0 && !st.Mode().IsRegular() {
+				err = errors.New("socket path is not a socket or file")
+			}
+			if err == nil {
+				err = os.Remove(path)
+			}
+			if err != nil {
+				a.Err = err.Error()
+				failed = true
+			} else {
+				a.Done = true
+				a.BytesComplete = true
+			}
+			acts = append(acts, a)
+			continue
+		}
+		if err := weaveContainedArtifact(dir, path); err != nil {
+			a.Err = err.Error()
+			acts = append(acts, a)
+			failed = true
+			continue
+		}
+		if kind == "workspace" {
 			// Include untracked/ignored files: cleanup must not discard private work.
-			out, err := exec.Command(gitBin(), "-C", artifact.path, "status", "--porcelain", "--untracked-files=all", "--ignored").Output()
+			out, err := exec.Command(gitBin(), "-C", path, "status", "--porcelain", "--untracked-files=all", "--ignored").Output()
 			if err != nil || len(out) > 0 {
 				a.Err = "workspace dirty, untracked, ignored, or unreadable; left alone"
 				acts = append(acts, a)
+				failed = true
 				continue
 			}
 		}
-		expected, err := weaveArtifactBytes(artifact.path)
+		expected, err := weaveArtifactBytes(path)
 		a.ExpectedBytes = expected
 		if err != nil {
 			a.Err = err.Error()
 			acts = append(acts, a)
+			failed = true
 			continue
 		}
 		// Claim by atomic rename under the fresh eligibility check. Long deletion
 		// stays outside queue.lock; starts are excluded by the lifecycle lock.
-		quarantine := artifact.path + fmt.Sprintf(".reclaim-%d", time.Now().UnixNano())
+		quarantine := path + fmt.Sprintf(".reclaim-%d", time.Now().UnixNano())
 		err = withWeaveQueueLock(dir, func(fresh *weaveQueue) error {
-			current, err := weaveCleanupEligible(fresh, id, artifact.path)
+			current, err := weaveCleanupEligible(fresh, id, path)
 			if err != nil {
 				return err
 			}
 			if current.Workspace != it.Workspace || current.Head != it.Head || current.FinishedAt != it.FinishedAt || !current.Created.Equal(it.Created) || current.LogPath != it.LogPath || current.CtlSock != it.CtlSock {
 				return errors.New("run changed during cleanup")
 			}
-			if !weaveItemMerged(root, weaveBaseBranch(root), current) {
-				return errors.New("integration proof changed during cleanup")
+			if _, ok := weaveItemSettled(root, base, current); !ok {
+				return errors.New("settlement proof changed during cleanup")
 			}
-			return os.Rename(artifact.path, quarantine)
+			return os.Rename(path, quarantine)
 		})
 		if err != nil {
 			a.Err = err.Error()
 			acts = append(acts, a)
+			failed = true
 			continue
 		}
 		// Recheck after claiming so an edit during the scan cannot be discarded.
-		if artifact.kind == "workspace" {
-			out, e := exec.Command(gitBin(), "-C", quarantine, "status", "--porcelain", "--untracked-files=all", "--ignored").Output()
-			if e != nil || len(out) > 0 {
-				_ = os.Rename(quarantine, artifact.path)
-				a.Err = "workspace changed while claiming; left alone"
+		if kind == "workspace" {
+			if e := weaveVerifyReclaimWorkspace(root, base, it, quarantine); e != nil {
+				_ = os.Rename(quarantine, path)
+				a.Err = e.Error()
 				acts = append(acts, a)
+				failed = true
 				continue
 			}
 		}
 		actual, e := weaveArtifactBytes(quarantine)
 		if e != nil {
-			_ = os.Rename(quarantine, artifact.path)
+			_ = os.Rename(quarantine, path)
 			a.Err = e.Error()
 			acts = append(acts, a)
+			failed = true
 			continue
-		}
-		if artifact.kind == "workspace" {
-			if e = weaveVerifyReclaimWorkspace(root, weaveBaseBranch(root), it, quarantine); e != nil {
-				_ = os.Rename(quarantine, artifact.path)
-				a.Err = e.Error()
-				acts = append(acts, a)
-				continue
-			}
 		}
 		if e = os.RemoveAll(quarantine); e != nil {
 			a.Err = e.Error()
+			failed = true
 		} else {
 			a.Done = true
 			a.ActualBytes = actual
@@ -207,6 +355,22 @@ func weavePruneOwnedRun(dir string, id int64, repo string, expectedBirth ...time
 		}
 		acts = append(acts, a)
 	}
+	// Compact the row: the disposition is the durable outcome; the paths
+	// pointed at bytes that no longer exist. A partial failure keeps every
+	// path so the next pass (and the operator) can still find the leftover.
+	_ = withWeaveQueueLock(dir, func(fresh *weaveQueue) error {
+		cur := findWeaveItem(fresh, id)
+		if cur == nil {
+			return nil
+		}
+		if cur.Disposition == "" {
+			cur.Disposition = disposition
+		}
+		if !failed {
+			cur.Workspace, cur.LogPath, cur.CtlSock = "", "", ""
+		}
+		return nil
+	})
 	return acts
 }
 
@@ -235,21 +399,25 @@ func sprintPlanRunArtifacts(s *weaveStory) []sprintPruneAction {
 			continue
 		}
 		root, ok := weaveRepoRootForQueue(dir)
-		if !ok || !weaveItemMerged(root, weaveBaseBranch(root), it) {
+		if !ok {
 			continue
 		}
-		for _, artifact := range []struct{ kind, path string }{{"workspace", it.Workspace}, {"socket", it.CtlSock}, {"log", it.LogPath}} {
-			if artifact.path == "" {
+		if _, settled := weaveItemSettled(root, weaveBaseBranch(root), it); !settled {
+			continue
+		}
+		for _, kind := range weaveRunArtifactKinds {
+			path := weaveRunArtifactPath(dir, it, kind)
+			if path == "" {
 				continue
 			}
-			if _, e := os.Lstat(artifact.path); e != nil {
+			if _, e := os.Lstat(path); e != nil {
 				continue
 			}
-			a := sprintPruneAction{Kind: artifact.kind, Repo: run.Repo, Target: artifact.path, ByteKind: "apparent_regular_file_bytes"}
-			if e := weaveContainedArtifact(dir, artifact.path); e != nil {
+			a := sprintPruneAction{Kind: kind, Repo: run.Repo, Target: path, ByteKind: "apparent_regular_file_bytes"}
+			if e := weaveContainedArtifact(dir, path); e != nil {
 				a.Err = e.Error()
 			} else {
-				a.ExpectedBytes, e = weaveArtifactBytes(artifact.path)
+				a.ExpectedBytes, e = weaveArtifactBytes(path)
 				a.BytesComplete = e == nil
 				if e != nil {
 					a.Err = e.Error()
@@ -270,6 +438,10 @@ func weaveConventionalArtifact(dir string, id int64, kind, path string) error {
 		expected = filepath.Join(dir, "logs", fmt.Sprintf("issue-%d.log", id))
 	case "socket":
 		expected = weaveCtlSockPath(dir, id)
+	case "cache":
+		expected = weaveManagedGOCachePath(nil, dir, id)
+	case "agent-data":
+		expected = agentlaunch.YcodeDataDir(nil, agentlaunch.Launch{ToolName: agentlaunch.YcodeToolName}, dir, strconv.FormatInt(id, 10))
 	}
 	if expected == "" || filepath.Clean(path) != filepath.Clean(expected) {
 		return errors.New("artifact is not this run's conventional owned path")
@@ -279,7 +451,7 @@ func weaveConventionalArtifact(dir string, id int64, kind, path string) error {
 func weaveVerifyReclaimWorkspace(root, base string, it *weaveItem, path string) error {
 	cp := *it
 	cp.Workspace = path
-	if !weaveItemMerged(root, base, &cp) {
+	if _, ok := weaveItemSettled(root, base, &cp); !ok {
 		return errors.New("claimed workspace gained unintegrated work; left alone")
 	}
 	out, e := exec.Command(gitBin(), "-C", path, "status", "--porcelain", "--untracked-files=all", "--ignored").Output()

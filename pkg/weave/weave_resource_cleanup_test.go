@@ -35,8 +35,19 @@ func TestWeaveResourceCleanupCountsBytes(t *testing.T) {
 		t.Fatal(expected, e)
 	}
 	actions := weavePruneOwnedRun(dir, 1, repo)
-	if len(actions) != 1 || !actions[0].Done || !actions[0].BytesComplete || actions[0].ExpectedBytes != expected || actions[0].ActualBytes == 0 {
+	// The workspace, then the lifecycle lock this very call created and held.
+	if len(actions) != 2 || !actions[0].Done || !actions[0].BytesComplete || actions[0].ExpectedBytes != expected || actions[0].ActualBytes == 0 {
 		t.Fatalf("%+v", actions)
+	}
+	if actions[1].Kind != "lock" || !actions[1].Done {
+		t.Fatalf("lock not reclaimed after full success: %+v", actions[1])
+	}
+	q, e := loadWeaveQueue(dir)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if got := q.Items[0]; got.Workspace != "" || got.Disposition != weaveDispositionMerged {
+		t.Fatalf("row not compacted with its disposition: %+v", got)
 	}
 	if _, e = os.Stat(it.Workspace); !os.IsNotExist(e) {
 		t.Fatal("workspace remains", e)

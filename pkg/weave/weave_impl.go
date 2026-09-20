@@ -257,8 +257,16 @@ type weaveItem struct {
 	// printed, because the transition that failed is over by the time anyone
 	// reads stderr; hygiene and `sprint end` refuse on it.
 	CleanupError string `json:"cleanup_error,omitempty"`
-	ExitCode     *int   `json:"exit_code,omitempty"`
-	KilledBy        string `json:"killed_by,omitempty"`
+	// Disposition is the durable one-word outcome of the run's work
+	// (merged | superseded | rejected | empty), set by the verb that decided
+	// it; DispositionReason is the operator's short why; SalvageRef names the
+	// ref that preserves a rejected/superseded tip. Together they are what
+	// survives teardown — see weaveItemSettled.
+	Disposition       string `json:"disposition,omitempty"`
+	DispositionReason string `json:"disposition_reason,omitempty"`
+	SalvageRef        string `json:"salvage_ref,omitempty"`
+	ExitCode          *int   `json:"exit_code,omitempty"`
+	KilledBy          string `json:"killed_by,omitempty"`
 	// Completion records an explicit terminalization that did not come from the
 	// agent process exiting. It is deliberately distinct from ExitCode: a
 	// conductor may observe an interactive TUI return idle, but weave never
@@ -985,6 +993,7 @@ func weaveReconcileMerged(root, base string, q *weaveQueue) int {
 	for _, it := range q.Items {
 		if it.State == "submitted" && weaveItemMerged(root, base, it) {
 			it.State = "done"
+			it.Disposition = weaveDispositionMerged
 			n++
 		}
 	}
@@ -4010,6 +4019,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			freshIt.LogPath = logPath
 		}
 		freshIt.State = weaveTerminalState(exitCode, runErr, killReason, ev)
+		if freshIt.State == "no-op" {
+			freshIt.Disposition = weaveDispositionEmpty
+		}
 		if freshIt.PauseRequestedBy != "" && childTerminated {
 			freshIt.State = "paused"
 			weaveAppendComment(freshIt, freshIt.PauseRequestedBy, "system", "paused with progress preserved: "+freshIt.PauseReason)
@@ -4661,6 +4673,7 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 			// and report it rather than re-fetching a no-op branch.
 			if it.State == "submitted" && weaveItemMerged(root, base, it) {
 				it.State = "done"
+				it.Disposition = weaveDispositionMerged
 				weaveCloseRegisterOnMerge(root, base, it)
 				if it.Workspace != "" {
 					_ = safeRemoveWorkspace(dir, it.Workspace)
@@ -5031,6 +5044,7 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 			}
 			reportIt := *it
 			it.State = "done"
+			it.Disposition = weaveDispositionMerged
 			it.Workspace = ""
 			reportIt.State = "done"
 			// The work landed, so the register entry it implements is settled. A
@@ -5077,6 +5091,15 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 		}
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave pull",
 			code, lockErr))
+	}
+	// The merge settled the run; the one guarded teardown reclaims what the
+	// merge itself did not touch (log, socket, cache, agent data, lock).
+	for _, it := range mergedReports {
+		for _, a := range weavePruneOwnedRun(dir, it.ID, filepath.Base(root)) {
+			if a.Err != "" {
+				fmt.Fprintf(cmd.ErrOrStderr(), "weave pull: run #%d %s %s: %s\n", it.ID, a.Kind, a.Target, a.Err)
+			}
+		}
 	}
 	for _, it := range mergedReports {
 		ev := weaveTerminalEvidence{
@@ -5145,7 +5168,16 @@ func weaveTestPauseAfterPullLoad() {
 	}
 }
 
-func runWeaveAbandon(cmd *cobra.Command, id int64, reason string, yes, force bool, flags *weaveOutputFlags) error {
+func runWeaveAbandon(cmd *cobra.Command, id int64, reason, disposition string, yes, force bool, flags *weaveOutputFlags) error {
+	if disposition != "" {
+		if !weaveValidDisposition(disposition) || disposition == weaveDispositionMerged {
+			return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "weave abandon",
+				weavecli.ExitInvalidArg, fmt.Errorf("--disposition must be superseded, rejected or empty (merged is what `weave pull` records)")))
+		}
+		// A disposition is an explicit decision about the work; the guard that
+		// --force lifts exists for the operator who has not made one.
+		force = true
+	}
 	mode := flags.mode()
 	cwd, _ := os.Getwd()
 	root, err := weaveRepoRoot(cwd)
@@ -5239,16 +5271,19 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason string, yes, force boo
 		// directory tree. The agent's branch lives inside that clone —
 		// no separate `git branch -D` against the user's repo because
 		// the branch doesn't exist there unless `weave pull` fetched it.
-		if it.Workspace != "" {
-			_ = os.RemoveAll(it.Workspace)
-		}
-		if it.Branch != "" {
-			// Best-effort: drop the branch from the user's repo too, in
-			// case `weave pull` fetched it earlier.
-			_ = exec.Command(gitBin(), "-C", root, "branch", "-D", it.Branch).Run()
-		}
+		// The workspace, branch and every other run-owned artifact come down
+		// through the ONE guarded teardown below, after this lock is released;
+		// the row keeps its paths until that teardown proves and removes them.
 		it.State = "abandoned"
-		it.Workspace = ""
+		it.SalvageRef = preservedRef
+		it.Disposition = disposition
+		if it.Disposition == "" {
+			it.Disposition = weaveDispositionEmpty
+			if preservedRef != "" {
+				it.Disposition = weaveDispositionRejected
+			}
+		}
+		it.DispositionReason = reason
 		it.WrapperPid = 0
 		it.Completion = ""
 		it.FinalizerPID = 0
@@ -5266,21 +5301,41 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason string, yes, force boo
 	// Auto-status: dropping the run returns its linked todo to the backlog
 	// (assigned -> todo, link cleared), so the list stops showing a stale "assigned".
 	weaveReleaseRegister(root, it)
+	acts := weavePruneOwnedRun(dir, it.ID, filepath.Base(root))
+	var leftovers []string
+	for _, a := range acts {
+		if a.Err != "" {
+			leftovers = append(leftovers, fmt.Sprintf("%s %s: %s", a.Kind, a.Target, a.Err))
+		}
+	}
+	if len(acts) == 0 && it.Workspace != "" {
+		if _, err := os.Stat(it.Workspace); err == nil {
+			leftovers = append(leftovers, "workspace "+it.Workspace+": teardown deferred (wrapper still winding down, or settlement unproven) — `weave prune` reclaims it")
+		}
+	}
 	if mode == weavecli.OutputJSON {
 		res := map[string]any{
-			"issue":  it.ID,
-			"state":  it.State,
-			"reason": reason,
+			"issue":       it.ID,
+			"state":       it.State,
+			"reason":      reason,
+			"disposition": it.Disposition,
+			"cleanup":     acts,
 		}
 		if preservedRef != "" {
 			res["preserved_ref"] = preservedRef
 		}
+		if len(leftovers) > 0 {
+			res["leftovers"] = leftovers
+		}
 		return ec(emitOK(cmd.OutOrStdout(), mode, "weave abandon", res))
 	}
 	if preservedRef != "" {
-		fmt.Fprintf(cmd.OutOrStdout(), "weave abandon: run #%d abandoned (unmerged commits preserved at %s)\n", it.ID, preservedRef)
+		fmt.Fprintf(cmd.OutOrStdout(), "weave abandon: run #%d abandoned as %s (unmerged commits preserved at %s)\n", it.ID, it.Disposition, preservedRef)
 	} else {
-		fmt.Fprintf(cmd.OutOrStdout(), "weave abandon: run #%d abandoned\n", it.ID)
+		fmt.Fprintf(cmd.OutOrStdout(), "weave abandon: run #%d abandoned as %s\n", it.ID, it.Disposition)
+	}
+	for _, l := range leftovers {
+		fmt.Fprintf(cmd.ErrOrStderr(), "weave abandon: left alone: %s\n", l)
 	}
 	return nil
 }
@@ -6603,6 +6658,9 @@ func runWeaveFinalize(cmd *cobra.Command, id int64, observedIdle bool, flags *we
 		weaveApplyTerminalEvidence(it, ev)
 		weaveApplyIsolationCheck(it)
 		it.State = state
+		if state == "no-op" {
+			it.Disposition = weaveDispositionEmpty
+		}
 		it.Completion = "conductor-finalized-observed-idle"
 		it.FinalizerPID = 0
 		it.FinalizingAt = time.Time{}
@@ -7017,6 +7075,26 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 	if lockErr != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave prune",
 			weavecli.ExitGenericFail, lockErr))
+	}
+	// The pass above owns workspaces, orphans and caches; the ONE guarded
+	// teardown reclaims what it does not name (log, socket, agent data, lock)
+	// for every settled terminal run, and compacts the row.
+	if q, err := loadWeaveQueue(dir); err == nil {
+		for _, it := range q.Items {
+			if it == nil || !weavePrunableForSweep(it.State, stale) {
+				continue
+			}
+			for _, a := range weavePruneOwnedRun(dir, it.ID, filepath.Base(root)) {
+				switch {
+				case a.Err != "":
+					results = append(results, pruneResult{Issue: it.ID, State: it.State, Action: "failed: " + a.Kind + " " + a.Target + ": " + a.Err})
+				case a.Kind == "workspace" || a.Kind == "cache":
+					// Already counted by the pass above when it got there first.
+				default:
+					results = append(results, pruneResult{Issue: it.ID, State: it.State, Action: a.Kind + "_removed"})
+				}
+			}
+		}
 	}
 
 	// COUNT WHAT HAPPENED, NOT WHAT WAS CONSIDERED. A result row can also

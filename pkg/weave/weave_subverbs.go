@@ -737,6 +737,7 @@ func newWeaveAbandonCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var reason string
 	var yes, force bool
+	var disposition string
 	cmd := &cobra.Command{
 		Use:     "abandon <issue>",
 		Aliases: []string{"resolve", "done", "dispose"},
@@ -756,6 +757,12 @@ clone). Pass --force to destroy it anyway; --force first fetches the branch
 tip into the user's repo as refs/salvage/abandoned-<issue>, so the commits
 survive the teardown even when forced.
 
+--disposition superseded|rejected|empty records WHY on the run and implies the
+preservation --force performs: a disposition is an explicit decision about the
+work, so the tip is fetched to refs/salvage/abandoned-<issue> and the run is
+torn down through the same guarded cleanup ` + "`sprint end`" + ` uses. Without it
+the disposition is derived (rejected when a tip was preserved, else empty).
+
 At a TTY this prompts before tearing down; pass --yes to skip the
 prompt (required in non-interactive / --json invocations). --yes only skips
 the prompt — it does not bypass the unmerged-work guard; use --force for that.`,
@@ -765,13 +772,14 @@ the prompt — it does not bypass the unmerged-work guard; use --force for that.
 			if err != nil {
 				return fmt.Errorf("issue must be an integer: %q", args[0])
 			}
-			return runWeaveAbandon(cmd, id, reason, yes, force, &flags)
+			return runWeaveAbandon(cmd, id, reason, disposition, yes, force, &flags)
 		},
 	}
 	flags.attach(cmd)
 	cmd.Flags().StringVar(&reason, "reason", "", "Optional human-readable reason for logs")
 	cmd.Flags().BoolVar(&yes, "yes", false, "Skip the confirmation prompt")
 	cmd.Flags().BoolVar(&force, "force", false, "Destroy the workspace even if it holds unmerged commits or uncommitted changes; unmerged commits are first preserved as refs/salvage/abandoned-<issue>")
+	cmd.Flags().StringVar(&disposition, "disposition", "", "Record the outcome of the run's work: superseded|rejected|empty (implies preservation of any unmerged tip)")
 	return cmd
 }
 

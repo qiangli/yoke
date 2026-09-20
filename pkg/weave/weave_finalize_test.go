@@ -274,7 +274,11 @@ func TestWeaveKillRecoversExpiredFinalizationWithoutList(t *testing.T) {
 
 func TestWeaveAbandonRecoversExpiredFinalizationWithoutList(t *testing.T) {
 	root := setupIsolationFixture(t)
-	workspace := t.TempDir() + "/workspace"
+	qdir, _ := weaveQueueDir(root)
+	workspace := filepath.Join(qdir, "workspaces", "issue-1")
+	if err := os.MkdirAll(filepath.Dir(workspace), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	gitT(t, root, "clone", "--local", "--no-hardlinks", root, workspace)
 	wrapper := exec.Command("sleep", "60")
 	if err := wrapper.Start(); err != nil {
