@@ -355,6 +355,10 @@ func weavePruneOwnedRun(dir string, id int64, repo string, expectedBirth ...time
 		}
 		acts = append(acts, a)
 	}
+	// The run's two branch names come down under their own proof (S3); a
+	// retained branch is reported, never a cleanup failure — the bytes it
+	// points at are the unique work the whole design exists to keep.
+	acts = append(acts, weaveRetireRunBranches(root, repo, it)...)
 	// Compact the row: the disposition is the durable outcome; the paths
 	// pointed at bytes that no longer exist. A partial failure keeps every
 	// path so the next pass (and the operator) can still find the leftover.
