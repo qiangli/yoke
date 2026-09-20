@@ -74,13 +74,19 @@ func NewGitSCMCmd() *cobra.Command {
 			}
 			c := exec.Command(git, args...)
 			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+			env := os.Environ()
 			if runtime.GOOS == "windows" {
-				c.Env = appendGitWindowsEnv(os.Environ(), gitPromptsNonInteractive(
-					os.Environ(),
+				env = appendGitWindowsEnv(env, gitPromptsNonInteractive(
+					env,
 					term.IsTerminal(int(os.Stdin.Fd())),
 					term.IsTerminal(int(os.Stderr.Fd())),
 				))
 			}
+			if term.IsTerminal(int(os.Stdout.Fd())) {
+				exe, _ := os.Executable()
+				env = appendGitPagerEnv(env, exe, lessOnPath)
+			}
+			c.Env = env
 			return runGitCommand(cmd.Context(), c)
 		},
 	}
@@ -118,6 +124,40 @@ func appendGitWindowsEnv(env []string, nonInteractive bool) []string {
 		env = append(env, "GCM_INTERACTIVE=never")
 	}
 	return env
+}
+
+// appendGitPagerEnv gives git a pager it can actually spawn when stdout is a
+// terminal. git's default pager is `less`, and the provisioned MinGit ships
+// neither `less` nor a `sh` to find one with — so on a bare Windows host every
+// paged command (`git diff`, `git log`) died with "cannot spawn less" the
+// moment a bashy child inherited the terminal (v0.24.1). git's precedence is
+// GIT_PAGER > core.pager > PAGER > less, so this sets PAGER only: an operator's
+// GIT_PAGER, PAGER or core.pager still wins, and a host with `less` is left
+// alone. The pager is bashy's own `more` when bashy's path is one git can
+// exec without a shell (no whitespace, no shell metacharacters — git only
+// splits such a command); otherwise `cat`, which git treats as "no pager"
+// without spawning anything.
+func appendGitPagerEnv(env []string, bashyExe string, lessAvailable func() bool) []string {
+	if hasEnv(env, "GIT_PAGER") || hasEnv(env, "PAGER") {
+		return env
+	}
+	if lessAvailable() {
+		return env
+	}
+	return append(env, "PAGER="+bashyPager(bashyExe))
+}
+
+func bashyPager(exe string) string {
+	exe = strings.ReplaceAll(exe, "\\", "/")
+	if exe == "" || strings.ContainsAny(exe, " \t|&;<>()$`\"' *?[#~=%") {
+		return "cat"
+	}
+	return exe + " more"
+}
+
+func lessOnPath() bool {
+	_, err := exec.LookPath("less")
+	return err == nil
 }
 
 func gitPromptsNonInteractive(env []string, stdinTTY, stderrTTY bool) bool {

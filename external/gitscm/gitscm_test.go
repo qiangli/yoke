@@ -97,3 +97,34 @@ func TestPathReturnsARunnableGit(t *testing.T) {
 		t.Fatalf("%q --version = %q", p, out)
 	}
 }
+
+// git's default pager is `less`, which the provisioned MinGit does not ship;
+// give git bashy's own `more` (or no pager) rather than "cannot spawn less".
+func TestAppendGitPagerEnv(t *testing.T) {
+	noLess := func() bool { return false }
+	hasLess := func() bool { return true }
+	find := func(env []string) (string, bool) { return envValue(env, "PAGER") }
+
+	if got, ok := find(appendGitPagerEnv(nil, `C:\Users\me\.local\bin\bashy.exe`, noLess)); !ok || got != "C:/Users/me/.local/bin/bashy.exe more" {
+		t.Fatalf("PAGER = %q, %v; want bashy's more with forward slashes (git splits a meta-free command without a shell)", got, ok)
+	}
+	if got, _ := find(appendGitPagerEnv(nil, `C:\Users\Some Name\bashy.exe`, noLess)); got != "cat" {
+		t.Fatalf("a path git would mis-split must fall back to the no-pager sentinel `cat`, got %q", got)
+	}
+	if got, _ := find(appendGitPagerEnv(nil, "/opt/homebrew/bin/bashy", noLess)); got != "/opt/homebrew/bin/bashy more" {
+		t.Fatalf("unix path: PAGER = %q", got)
+	}
+	if got, _ := find(appendGitPagerEnv(nil, "", noLess)); got != "cat" {
+		t.Fatalf("unknown executable: PAGER = %q, want cat", got)
+	}
+	// A host that has less, or an operator who chose a pager, is left alone.
+	if _, ok := find(appendGitPagerEnv(nil, "/x/bashy", hasLess)); ok {
+		t.Fatal("PAGER was set although less is on PATH")
+	}
+	for _, env := range [][]string{{"PAGER=most"}, {"GIT_PAGER=delta"}} {
+		out := appendGitPagerEnv(env, "/x/bashy", noLess)
+		if len(out) != 1 {
+			t.Fatalf("operator's pager choice %v was overridden: %v", env, out)
+		}
+	}
+}
