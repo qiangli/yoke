@@ -94,10 +94,12 @@ var SuggestedKinds = []string{
 
 // KindHelp is the one-line flag description shared by every front door that
 // takes a kind.
-const KindHelp = "why it exists — one word; common: bug|feature|enhancement|doc|task|chore|spike|test|refactor|requirement|question (any other word is accepted; `todo kinds` shows the words in use)"
+// (The backticked `word` is cobra's placeholder syntax: the flag renders as
+// `--kind word`; no other backticks may appear in a usage string.)
+const KindHelp = "`word` — why it exists; common: bug|feature|enhancement|doc|task|chore|spike|test|refactor|requirement|question; any other word is accepted (todo kinds shows the words in use)"
 
 // LabelHelp likewise, for --label.
-const LabelHelp = "a label word — an area, OS or surface such as windows, app, release, docs (repeatable or comma-separated; `todo labels` shows the words in use)"
+const LabelHelp = "`word` — an area, OS or surface such as windows, app, release, docs; repeatable or comma-separated (todo labels shows the words in use)"
 
 // Statuses — the triage ladder, and nothing more.
 //

@@ -493,8 +493,8 @@ func newListCmd(sf storeFunc) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&status, "status", "", "filter by status (todo|assigned|doing|blocked|done)")
-	cmd.Flags().StringVar(&kind, "kind", "", "only items of this kind word (`todo kinds` lists the words in use)")
-	cmd.Flags().StringArrayVar(&labels, "label", nil, "only items carrying every given label (repeatable or comma-separated; `todo labels` lists the words in use)")
+	cmd.Flags().StringVar(&kind, "kind", "", "`word` — only items of this kind (todo kinds lists the words in use)")
+	cmd.Flags().StringArrayVar(&labels, "label", nil, "`word` — only items carrying every given label; repeatable or comma-separated (todo labels lists the words in use)")
 	cmd.Flags().BoolVar(&all, "all", false, "include done tasks")
 	cmd.Flags().BoolVar(&reverse, "reverse", false, "reverse the order (default is priority first, then #1 first)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "machine-readable output")
@@ -783,9 +783,9 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&title, "title", "", "new title")
 	cmd.Flags().StringVar(&priority, "priority", "", "new priority (p0|p1|p2|p3)")
-	cmd.Flags().StringVar(&kind, "kind", "", "new kind — "+issue.KindHelp)
-	cmd.Flags().StringArrayVar(&labels, "label", nil, "add "+issue.LabelHelp)
-	cmd.Flags().StringArrayVar(&unlabels, "unlabel", nil, "remove a label (repeatable or comma-separated)")
+	cmd.Flags().StringVar(&kind, "kind", "", issue.KindHelp)
+	cmd.Flags().StringArrayVar(&labels, "label", nil, "add a label: "+issue.LabelHelp)
+	cmd.Flags().StringArrayVar(&unlabels, "unlabel", nil, "`word` — remove a label; repeatable or comma-separated")
 	cmd.Flags().StringVar(&note, "note", "", "replace the task body/details (- reads stdin) — the whole body, so re-supply what should stay; a reusable procedure belongs in a kb runbook, cited as [[kb:<slug>]]")
 	cmd.Flags().StringVar(&dueStr, "due", "", "deadline (e.g. 2026-07-20, +3d)")
 	cmd.Flags().StringVar(&recurring, "recurring", "", "cadence (default=driven by `sprint advance`; or daily, weekly, 24h, cron)")
