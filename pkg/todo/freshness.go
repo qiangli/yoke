@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/qiangli/yoke/external/gitscm"
 )
 
 // RepoFreshness is the one line a git-shared view prints so a stale view
@@ -22,7 +24,7 @@ func RepoFreshness(root string) string {
 		return ""
 	}
 	git := func(args ...string) (string, bool) {
-		c := exec.Command("git", append([]string{"-C", root}, args...)...)
+		c := exec.Command(gitscm.Path(), append([]string{"-C", root}, args...)...)
 		c.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 		out, err := c.Output()
 		if err != nil {

@@ -61,7 +61,7 @@ func weaveSnapshotLiveTree(root string) (weaveLiveSnapshot, error) {
 	if root == "" {
 		return weaveLiveSnapshot{}, fmt.Errorf("no repo root")
 	}
-	out, err := exec.Command("git", "-C", root, "status", "--porcelain", "--untracked-files=all").Output()
+	out, err := exec.Command(gitBin(), "-C", root, "status", "--porcelain", "--untracked-files=all").Output()
 	if err != nil {
 		return weaveLiveSnapshot{}, fmt.Errorf("git status in %s: %w", root, err)
 	}

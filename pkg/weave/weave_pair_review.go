@@ -284,12 +284,12 @@ func weaveCommitPairEvidence(workspace, message string) (bool, error) {
 	if !dirty && untracked == 0 {
 		return false, nil
 	}
-	if out, err := exec.Command("git", "-C", workspace, "add", "-A").CombinedOutput(); err != nil {
+	if out, err := exec.Command(gitBin(), "-C", workspace, "add", "-A").CombinedOutput(); err != nil {
 		return false, fmt.Errorf("git add pair evidence: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	// A proof is intentionally red. A pre-commit hook that runs the suite must
 	// not erase that durable evidence by refusing its commit.
-	if out, err := exec.Command("git", "-C", workspace, "commit", "--no-verify", "-m", message).CombinedOutput(); err != nil {
+	if out, err := exec.Command(gitBin(), "-C", workspace, "commit", "--no-verify", "-m", message).CombinedOutput(); err != nil {
 		return false, fmt.Errorf("git commit pair evidence: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return true, nil
@@ -299,7 +299,7 @@ func weaveReviewChangedTest(workspace, before string) bool {
 	if before == "" {
 		return false
 	}
-	out, err := exec.Command("git", "-C", workspace, "diff", "--name-only", before+"...HEAD").Output()
+	out, err := exec.Command(gitBin(), "-C", workspace, "diff", "--name-only", before+"...HEAD").Output()
 	if err != nil {
 		return false
 	}

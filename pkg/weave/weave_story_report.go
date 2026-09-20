@@ -146,7 +146,7 @@ func sprintRunDiff(it *weaveItem) (production, test, scaffold int, ok bool) {
 	if strings.TrimSpace(it.Workspace) == "" || strings.TrimSpace(it.BaseSHA) == "" || strings.TrimSpace(it.Head) == "" {
 		return 0, 0, 0, false
 	}
-	cmd := exec.Command("git", "diff", "--numstat", it.BaseSHA+".."+it.Head)
+	cmd := exec.Command(gitBin(), "diff", "--numstat", it.BaseSHA+".."+it.Head)
 	cmd.Dir = it.Workspace
 	b, err := cmd.Output()
 	if err != nil {

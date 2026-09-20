@@ -486,7 +486,7 @@ func weaveRunConsumesCapacity(s string) bool {
 }
 
 func weaveRepoRoot(cwd string) (string, error) {
-	out, err := exec.Command("git", "-C", cwd, "rev-parse", "--show-toplevel").Output()
+	out, err := exec.Command(gitBin(), "-C", cwd, "rev-parse", "--show-toplevel").Output()
 	if err != nil {
 		return "", fmt.Errorf("not in a git repo (run from a clone): %w", err)
 	}
@@ -495,7 +495,7 @@ func weaveRepoRoot(cwd string) (string, error) {
 
 func weaveBaseBranch(root string) string {
 	for _, b := range []string{"main", "master"} {
-		if err := exec.Command("git", "-C", root, "rev-parse", "--verify", "refs/heads/"+b).Run(); err == nil {
+		if err := exec.Command(gitBin(), "-C", root, "rev-parse", "--verify", "refs/heads/"+b).Run(); err == nil {
 			return b
 		}
 	}
@@ -822,10 +822,10 @@ func weaveMeasureBranch(workspace, base string) (ahead int, head string) {
 	if workspace == "" {
 		return 0, ""
 	}
-	if out, err := exec.Command("git", "-C", workspace, "rev-list", "--count", base+"..HEAD").Output(); err == nil {
+	if out, err := exec.Command(gitBin(), "-C", workspace, "rev-list", "--count", base+"..HEAD").Output(); err == nil {
 		ahead, _ = strconv.Atoi(strings.TrimSpace(string(out)))
 	}
-	if out, err := exec.Command("git", "-C", workspace, "rev-parse", "HEAD").Output(); err == nil {
+	if out, err := exec.Command(gitBin(), "-C", workspace, "rev-parse", "HEAD").Output(); err == nil {
 		head = strings.TrimSpace(string(out))
 	}
 	return ahead, head
@@ -862,16 +862,16 @@ func weaveUnmergedAhead(root, base string, it *weaveItem) (ahead int, head strin
 	if st, err := os.Stat(it.Workspace); err != nil || !st.IsDir() {
 		return 0, ""
 	}
-	if out, err := exec.Command("git", "-C", it.Workspace, "rev-parse", "HEAD").Output(); err == nil {
+	if out, err := exec.Command(gitBin(), "-C", it.Workspace, "rev-parse", "HEAD").Output(); err == nil {
 		head = strings.TrimSpace(string(out))
 	}
 	ref := weaveCountRef(it, base)
-	out, err := exec.Command("git", "-C", it.Workspace, "rev-list", ref+"..HEAD").Output()
+	out, err := exec.Command(gitBin(), "-C", it.Workspace, "rev-list", ref+"..HEAD").Output()
 	if err != nil {
 		return 0, head
 	}
 	for _, sha := range strings.Fields(string(out)) {
-		if exec.Command("git", "-C", root, "merge-base", "--is-ancestor", sha, base).Run() != nil {
+		if exec.Command(gitBin(), "-C", root, "merge-base", "--is-ancestor", sha, base).Run() != nil {
 			ahead++
 		}
 	}
@@ -967,7 +967,7 @@ func weaveItemMerged(root, base string, it *weaveItem) bool {
 	// `merge-base --is-ancestor A B` exits 0 iff A is an ancestor of B.
 	// A missing object exits 128; a known-but-unmerged sha exits 1 —
 	// both mean "not merged" for our purposes.
-	return exec.Command("git", "-C", root, "merge-base", "--is-ancestor", sha, base).Run() == nil
+	return exec.Command(gitBin(), "-C", root, "merge-base", "--is-ancestor", sha, base).Run() == nil
 }
 
 // weaveReconcileMerged flips any "submitted" item whose work is already
@@ -994,7 +994,7 @@ func weaveMeasureDirtiness(workspace string) (dirty bool, dirtyFiles, untrackedF
 	if workspace == "" {
 		return false, 0, 0
 	}
-	out, err := exec.Command("git", "-C", workspace, "status", "--porcelain", "--untracked-files=all").Output()
+	out, err := exec.Command(gitBin(), "-C", workspace, "status", "--porcelain", "--untracked-files=all").Output()
 	if err != nil {
 		return false, 0, 0
 	}
@@ -1110,7 +1110,7 @@ func weaveSyncSiblingDeps(root, workspace string) (synced, failed []string) {
 // so the shared clone is always a faithful copy of the source). Clones on first
 // use; otherwise fetches + hard-resets — cheap for a `--local` clone.
 func weaveEnsureSyncedClone(orig, dst string) error {
-	head, err := exec.Command("git", "-C", orig, "rev-parse", "HEAD").Output()
+	head, err := exec.Command(gitBin(), "-C", orig, "rev-parse", "HEAD").Output()
 	if err != nil {
 		return fmt.Errorf("resolve HEAD of %s: %w", orig, err)
 	}
@@ -1118,16 +1118,16 @@ func weaveEnsureSyncedClone(orig, dst string) error {
 	gitDir := filepath.Join(dst, ".git")
 	if fi, err := os.Stat(gitDir); err != nil || !fi.IsDir() {
 		_ = os.RemoveAll(dst)
-		if out, err := exec.Command("git", "clone", "--local", "--no-hardlinks", orig, dst).CombinedOutput(); err != nil {
+		if out, err := exec.Command(gitBin(), "clone", "--local", "--no-hardlinks", orig, dst).CombinedOutput(); err != nil {
 			return fmt.Errorf("clone sibling %s: %w: %s", orig, err, out)
 		}
 	}
 	// Bring orig's latest objects over and pin dst to orig's HEAD.
-	_ = exec.Command("git", "-C", dst, "fetch", "--quiet", orig).Run()
-	if out, err := exec.Command("git", "-C", dst, "reset", "--hard", "--quiet", sha).CombinedOutput(); err != nil {
+	_ = exec.Command(gitBin(), "-C", dst, "fetch", "--quiet", orig).Run()
+	if out, err := exec.Command(gitBin(), "-C", dst, "reset", "--hard", "--quiet", sha).CombinedOutput(); err != nil {
 		return fmt.Errorf("sync sibling %s to %.12s: %w: %s", dst, sha, err, out)
 	}
-	_ = exec.Command("git", "-C", dst, "clean", "-qfdx").Run()
+	_ = exec.Command(gitBin(), "-C", dst, "clean", "-qfdx").Run()
 	return nil
 }
 
@@ -1165,7 +1165,7 @@ func weaveHydrateSubmodules(root, workspace string, out, errw io.Writer) error {
 			return nil
 		}
 		subDir := filepath.Dir(p)
-		listed, err := exec.Command("git", "-C", subDir, "config", "-f", ".gitmodules",
+		listed, err := exec.Command(gitBin(), "-C", subDir, "config", "-f", ".gitmodules",
 			"--get-regexp", `^submodule\..*\.path$`).Output()
 		if err != nil {
 			return nil
@@ -1183,7 +1183,7 @@ func weaveHydrateSubmodules(root, workspace string, out, errw io.Writer) error {
 			relPath := filepath.Join(relSubDir, path)
 			localSrc := filepath.Join(root, relPath)
 			if _, err := os.Stat(filepath.Join(localSrc, ".git")); err == nil {
-				_ = exec.Command("git", "-C", subDir, "config", "submodule."+name+".url", localSrc).Run()
+				_ = exec.Command(gitBin(), "-C", subDir, "config", "submodule."+name+".url", localSrc).Run()
 				anyLocal = true
 			}
 		}
@@ -1193,7 +1193,7 @@ func weaveHydrateSubmodules(root, workspace string, out, errw io.Writer) error {
 	// A local checkout must never wait forever on a broken submodule transport.
 	// The queue has already recorded the hydration phase before reaching here,
 	// so timeout failure is both bounded and diagnosable by the conductor.
-	up := exec.CommandContext(ctx, "git", "-C", workspace, "-c", "protocol.file.allow=always",
+	up := exec.CommandContext(ctx, gitBin(), "-C", workspace, "-c", "protocol.file.allow=always",
 		"submodule", "update", "--init", "--recursive")
 	up.Stdout, up.Stderr = out, errw
 	if err := up.Run(); err != nil {
@@ -1205,14 +1205,14 @@ func weaveHydrateSubmodules(root, workspace string, out, errw io.Writer) error {
 	if anyLocal {
 		// Restore canonical .gitmodules URLs recursively so local-origin paths are not
 		// left as breadcrumbs in any submodule config.
-		_ = exec.CommandContext(ctx, "git", "-C", workspace, "submodule", "sync", "--recursive").Run()
+		_ = exec.CommandContext(ctx, gitBin(), "-C", workspace, "submodule", "sync", "--recursive").Run()
 	}
 	// Hydration runs before an agent exists, so it must leave the freshly
 	// allocated workspace clean. In particular, nested submodule checkout
 	// helpers can leave generated or untracked artifacts behind; those make the
 	// wrapper's later auto-commit fail even when the agent changed no source.
 	// This is safe here because the workspace has not been handed to an agent.
-	clean := exec.CommandContext(ctx, "git", "-C", workspace, "submodule", "foreach", "--recursive",
+	clean := exec.CommandContext(ctx, gitBin(), "-C", workspace, "submodule", "foreach", "--recursive",
 		"git reset --hard --quiet && git clean -ffdx -q")
 	clean.Stdout, clean.Stderr = out, errw
 	if err := clean.Run(); err != nil {
@@ -1224,7 +1224,7 @@ func weaveHydrateSubmodules(root, workspace string, out, errw io.Writer) error {
 	// A nested clean can change parent submodules' gitlink markers and status caches.
 	// Reset all submodules recursively after cleaning so parent submodules update
 	// their gitlink markers after child submodules are cleaned.
-	resetSubs := exec.CommandContext(ctx, "git", "-C", workspace, "submodule", "foreach", "--recursive",
+	resetSubs := exec.CommandContext(ctx, gitBin(), "-C", workspace, "submodule", "foreach", "--recursive",
 		"git reset --hard --quiet")
 	resetSubs.Stdout, resetSubs.Stderr = out, errw
 	if err := resetSubs.Run(); err != nil {
@@ -1235,7 +1235,7 @@ func weaveHydrateSubmodules(root, workspace string, out, errw io.Writer) error {
 	}
 	// Reset the superproject too, which only restores its recorded gitlinks and never
 	// touches user work because this clone is still pre-agent.
-	reset := exec.CommandContext(ctx, "git", "-C", workspace, "reset", "--hard", "--quiet")
+	reset := exec.CommandContext(ctx, gitBin(), "-C", workspace, "reset", "--hard", "--quiet")
 	reset.Stdout, reset.Stderr = out, errw
 	if err := reset.Run(); err != nil {
 		return fmt.Errorf("reset hydrated workspace: %w", err)
@@ -1443,13 +1443,13 @@ func weaveCollectFilesTouched(workspace, base string) []string {
 			}
 		}
 	}
-	if out, err := exec.Command("git", "-C", workspace, "diff", "--name-only", base+"...HEAD").Output(); err == nil {
+	if out, err := exec.Command(gitBin(), "-C", workspace, "diff", "--name-only", base+"...HEAD").Output(); err == nil {
 		addLines(out)
 	}
-	if out, err := exec.Command("git", "-C", workspace, "diff", "--name-only").Output(); err == nil {
+	if out, err := exec.Command(gitBin(), "-C", workspace, "diff", "--name-only").Output(); err == nil {
 		addLines(out)
 	}
-	if out, err := exec.Command("git", "-C", workspace, "ls-files", "--others", "--exclude-standard").Output(); err == nil {
+	if out, err := exec.Command(gitBin(), "-C", workspace, "ls-files", "--others", "--exclude-standard").Output(); err == nil {
 		addLines(out)
 	}
 	files := make([]string, 0, len(seen))
@@ -1750,7 +1750,7 @@ func parseWeaveContextTrailer(commitMsg string) (string, bool) {
 }
 
 func weaveResumeMemoryPrefix(workspace string) string {
-	out, err := exec.Command("git", "-C", workspace, "log", "-1", "--format=%B").Output()
+	out, err := exec.Command(gitBin(), "-C", workspace, "log", "-1", "--format=%B").Output()
 	if err != nil {
 		return ""
 	}
@@ -1789,11 +1789,11 @@ func maybeAutoCommit(workspace, msg string) (bool, error) {
 	if !dirty && untrackedFiles == 0 {
 		return false, nil
 	}
-	add := exec.Command("git", "-C", workspace, "add", "-A")
+	add := exec.Command(gitBin(), "-C", workspace, "add", "-A")
 	if out, err := add.CombinedOutput(); err != nil {
 		return false, fmt.Errorf("git add -A: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	commit := exec.Command("git", "-C", workspace, "commit", "-m", msg)
+	commit := exec.Command(gitBin(), "-C", workspace, "commit", "-m", msg)
 	if out, err := commit.CombinedOutput(); err != nil {
 		return false, fmt.Errorf("git commit: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -1858,16 +1858,16 @@ func weaveRunCandidateSuiteGate(root, workspace, branch, baseSHA, command string
 	if err := weaveLinkSiblingReplaces(root, tmpParent); err != nil {
 		return 0, "", false, err
 	}
-	if out, err := exec.Command("git", "clone", "--quiet", "--no-local", root, tmp).CombinedOutput(); err != nil {
+	if out, err := exec.Command(gitBin(), "clone", "--quiet", "--no-local", root, tmp).CombinedOutput(); err != nil {
 		return 0, "", false, fmt.Errorf("clone isolated suite-gate checkout: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	if out, err := exec.Command("git", "-C", tmp, "checkout", "--quiet", "--detach", baseSHA).CombinedOutput(); err != nil {
+	if out, err := exec.Command(gitBin(), "-C", tmp, "checkout", "--quiet", "--detach", baseSHA).CombinedOutput(); err != nil {
 		return 0, "", false, fmt.Errorf("checkout suite-gate base %s: %w: %s", baseSHA, err, strings.TrimSpace(string(out)))
 	}
-	if out, err := exec.Command("git", "-C", tmp, "fetch", "--quiet", "--no-tags", workspace, branch).CombinedOutput(); err != nil {
+	if out, err := exec.Command(gitBin(), "-C", tmp, "fetch", "--quiet", "--no-tags", workspace, branch).CombinedOutput(); err != nil {
 		return 0, "", false, fmt.Errorf("fetch candidate for suite gate: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	merge := exec.Command("git", "-C", tmp,
+	merge := exec.Command(gitBin(), "-C", tmp,
 		"-c", "user.name=weave", "-c", "user.email=weave@localhost",
 		"merge", "--no-ff", "--no-edit", "FETCH_HEAD")
 	if out, err := merge.CombinedOutput(); err != nil {
@@ -2740,7 +2740,7 @@ func runWeavePause(cmd *cobra.Command, reason string, flags *weaveOutputFlags) e
 			alreadyDead := it.WrapperPid > 0 && !pidAlive(it.WrapperPid)
 			head := ""
 			if it.Workspace != "" {
-				if out, err := exec.Command("git", "-C", it.Workspace, "rev-parse", "HEAD").Output(); err == nil {
+				if out, err := exec.Command(gitBin(), "-C", it.Workspace, "rev-parse", "HEAD").Output(); err == nil {
 					head = strings.TrimSpace(string(out))
 				}
 			}
@@ -4994,16 +4994,16 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 				}
 				mergeSubject := fmt.Sprintf("weave: merge run #%d — %s", it.ID, it.Title)
 				mergeMsg := weaveMergeCommitMessage(root, it.Branch, mergeSubject)
-				mc := exec.Command("git", "-C", root, "merge", "--no-ff", "-m", mergeMsg, it.Branch)
+				mc := exec.Command(gitBin(), "-C", root, "merge", "--no-ff", "-m", mergeMsg, it.Branch)
 				out, err := mc.CombinedOutput()
 				if err != nil {
-					_ = exec.Command("git", "-C", root, "merge", "--abort").Run()
+					_ = exec.Command(gitBin(), "-C", root, "merge", "--abort").Run()
 					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "conflict", Detail: strings.TrimSpace(string(out))})
 					return nil
 				}
 				// Delete the fetched branch from user repo if fully merged (-d,
 				// never -D), while the same live-checkout lock is still held.
-				_ = exec.Command("git", "-C", root, "branch", "-d", it.Branch).Run()
+				_ = exec.Command(gitBin(), "-C", root, "branch", "-d", it.Branch).Run()
 				weaveCloseRegisterOnMerge(root, base, it)
 				merged = true
 				return nil
@@ -5238,7 +5238,7 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason string, yes, force boo
 		if it.Branch != "" {
 			// Best-effort: drop the branch from the user's repo too, in
 			// case `weave pull` fetched it earlier.
-			_ = exec.Command("git", "-C", root, "branch", "-D", it.Branch).Run()
+			_ = exec.Command(gitBin(), "-C", root, "branch", "-D", it.Branch).Run()
 		}
 		it.State = "abandoned"
 		it.Workspace = ""
@@ -5621,7 +5621,7 @@ func runWeaveReverify(cmd *cobra.Command, id int64, flags *weaveOutputFlags) err
 
 func gitOut(root string, args ...string) (string, error) {
 	a := append([]string{"-C", root}, args...)
-	out, err := exec.Command("git", a...).CombinedOutput()
+	out, err := exec.Command(gitBin(), a...).CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("%s: %w (%s)", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
@@ -5858,7 +5858,7 @@ func runWeaveReset(cmd *cobra.Command, yes bool, flags *weaveOutputFlags) error 
 			if it.Branch != "" {
 				// Best-effort: drop the branch from the user's repo if
 				// `weave pull` fetched it earlier.
-				_ = exec.Command("git", "-C", root, "branch", "-D", it.Branch).Run()
+				_ = exec.Command(gitBin(), "-C", root, "branch", "-D", it.Branch).Run()
 			}
 			teardowns = append(teardowns, tear{Issue: it.ID, Branch: it.Branch, Workspace: it.Workspace})
 		}
@@ -6964,7 +6964,7 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 			// Best-effort: drop the branch from the user repo if `weave
 			// pull` fetched it earlier. -d (never -D) refuses unmerged.
 			if it.Branch != "" {
-				if exec.Command("git", "-C", root, "branch", "-d", it.Branch).Run() == nil {
+				if exec.Command(gitBin(), "-C", root, "branch", "-d", it.Branch).Run() == nil {
 					results = append(results, pruneResult{Issue: it.ID, State: it.State, Branch: it.Branch, Merged: merged, Action: "branch_deleted"})
 				}
 			}

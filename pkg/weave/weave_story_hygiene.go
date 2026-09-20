@@ -256,7 +256,7 @@ func sprintInspectRuns(s *weaveStory, h *sprintHygiene) {
 // --- git probes. Each returns "unknown" rather than guessing. ---
 
 func gitDirtyFiles(root string) (bool, int) {
-	out, err := exec.Command("git", "-C", root, "status", "--porcelain").Output()
+	out, err := exec.Command(gitBin(), "-C", root, "status", "--porcelain").Output()
 	if err != nil {
 		return false, 0
 	}
@@ -272,7 +272,7 @@ func gitDirtyFiles(root string) (bool, int) {
 // gitUnpushedCount counts commits on HEAD that its upstream does not have.
 // No upstream means the question does not apply, not that the answer is zero.
 func gitUnpushedCount(root string) (int, bool) {
-	out, err := exec.Command("git", "-C", root, "rev-list", "--count", "@{upstream}..HEAD").Output()
+	out, err := exec.Command(gitBin(), "-C", root, "rev-list", "--count", "@{upstream}..HEAD").Output()
 	if err != nil {
 		return 0, false
 	}
@@ -289,7 +289,7 @@ func gitUnpushedCount(root string) (int, bool) {
 // A worktree with uncommitted work is NEVER listed: it holds the only copy of
 // something, and offering it for reclamation is how work disappears.
 func gitStaleWorktrees(root string) []string {
-	out, err := exec.Command("git", "-C", root, "worktree", "list", "--porcelain").Output()
+	out, err := exec.Command(gitBin(), "-C", root, "worktree", "list", "--porcelain").Output()
 	if err != nil {
 		return nil
 	}
@@ -337,11 +337,11 @@ func gitIntegratedBranches(root string) []string {
 	if base == "" {
 		return nil
 	}
-	out, err := exec.Command("git", "-C", root, "for-each-ref", "--format=%(refname:short)", "refs/heads/").Output()
+	out, err := exec.Command(gitBin(), "-C", root, "for-each-ref", "--format=%(refname:short)", "refs/heads/").Output()
 	if err != nil {
 		return nil
 	}
-	cur, _ := exec.Command("git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	cur, _ := exec.Command(gitBin(), "-C", root, "rev-parse", "--abbrev-ref", "HEAD").Output()
 	current := strings.TrimSpace(string(cur))
 	var res []string
 	for _, br := range strings.Split(strings.TrimSpace(string(out)), "\n") {
@@ -358,11 +358,11 @@ func gitIntegratedBranches(root string) []string {
 
 func gitBranchIntegrated(root, base, branch string) bool {
 	// Ancestor: the branch tip is already reachable from base.
-	if err := exec.Command("git", "-C", root, "merge-base", "--is-ancestor", branch, base).Run(); err == nil {
+	if err := exec.Command(gitBin(), "-C", root, "merge-base", "--is-ancestor", branch, base).Run(); err == nil {
 		return true
 	}
 	// Cherry-equivalent: every patch has an upstream twin.
-	out, err := exec.Command("git", "-C", root, "cherry", base, branch).Output()
+	out, err := exec.Command(gitBin(), "-C", root, "cherry", base, branch).Output()
 	if err != nil {
 		return false
 	}

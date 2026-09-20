@@ -153,7 +153,7 @@ func weaveWorkspacePresent(it *weaveItem) bool {
 // weaveOrphanAgentBranches counts agent/* branches in an unclaimed clone. A
 // non-repository (or an unreadable one) counts zero: there is no branch to lose.
 func weaveOrphanAgentBranches(path string) int {
-	cmd := exec.Command("git", "-C", path, "for-each-ref", "--format=%(refname)", "refs/heads/agent/")
+	cmd := exec.Command(gitBin(), "-C", path, "for-each-ref", "--format=%(refname)", "refs/heads/agent/")
 	out, err := cmd.Output()
 	if err != nil {
 		return 0

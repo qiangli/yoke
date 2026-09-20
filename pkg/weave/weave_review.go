@@ -73,11 +73,11 @@ func runWeaveReview(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 	}
 	defer os.RemoveAll(tmpParent)
 	reviewDir := filepath.Join(tmpParent, "checkout")
-	if out, err := exec.Command("git", "clone", "--local", "--no-hardlinks", it.Workspace, reviewDir).CombinedOutput(); err != nil {
+	if out, err := exec.Command(gitBin(), "clone", "--local", "--no-hardlinks", it.Workspace, reviewDir).CombinedOutput(); err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave review",
 			weavecli.ExitGenericFail, fmt.Errorf("git clone --local --no-hardlinks: %w: %s", err, strings.TrimSpace(string(out)))))
 	}
-	if out, err := exec.Command("git", "-C", reviewDir, "checkout", it.Branch).CombinedOutput(); err != nil {
+	if out, err := exec.Command(gitBin(), "-C", reviewDir, "checkout", it.Branch).CombinedOutput(); err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave review",
 			weavecli.ExitStateConflict, fmt.Errorf("checkout %s: %w: %s", it.Branch, err, strings.TrimSpace(string(out)))))
 	}
@@ -151,7 +151,7 @@ func weaveReviewCommitCount(workspace, base string) int {
 	if base == "" {
 		return 0
 	}
-	out, err := exec.Command("git", "-C", workspace, "rev-list", "--count", base+"..HEAD").Output()
+	out, err := exec.Command(gitBin(), "-C", workspace, "rev-list", "--count", base+"..HEAD").Output()
 	if err != nil {
 		return 0
 	}
@@ -163,7 +163,7 @@ func weaveReviewDiffStat(workspace, base string) (files, insertions int) {
 	if base == "" {
 		return 0, 0
 	}
-	out, err := exec.Command("git", "-C", workspace, "diff", "--numstat", base+"..HEAD").Output()
+	out, err := exec.Command(gitBin(), "-C", workspace, "diff", "--numstat", base+"..HEAD").Output()
 	if err != nil {
 		return 0, 0
 	}
@@ -187,7 +187,7 @@ func weaveReviewBaseRef(workspace, base string) string {
 		if ref == "" || ref == "origin/" || ref == "refs/remotes/origin/" {
 			continue
 		}
-		if err := exec.Command("git", "-C", workspace, "rev-parse", "--verify", "--quiet", ref+"^{commit}").Run(); err == nil {
+		if err := exec.Command(gitBin(), "-C", workspace, "rev-parse", "--verify", "--quiet", ref+"^{commit}").Run(); err == nil {
 			return ref
 		}
 	}

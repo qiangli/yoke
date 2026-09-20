@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	gogit "github.com/go-git/go-git/v5"
+
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/principal"
 )
@@ -38,7 +40,19 @@ var ErrNoOrigin = errors.New("session: repo has no origin remote; join with an e
 var ErrNotPaired = errors.New("session: this host is not paired with cloudbox (run `bashy login`), and no $BASHY_FLEET_TOKEN / $BASHY_API_KEY / $CLOUDBOX_TOKEN is set")
 
 // repoOriginURL is a seam so tests can derive a key without a git checkout.
+//
+// The key must not depend on a git BINARY: a Windows host running bashy has
+// MinGit only inside bashy's own cache (`bashy git`), not on PATH, and the
+// first live run on such a host failed here with "no origin remote". So the
+// remote is read from the checkout itself (pure-Go git), and exec'ing git
+// is only the fallback for a layout go-git cannot open.
 var repoOriginURL = func(repoRoot string) (string, error) {
+	if r, err := gogit.PlainOpenWithOptions(repoRoot, &gogit.PlainOpenOptions{DetectDotGit: true}); err == nil {
+		if rem, err := r.Remote("origin"); err == nil && rem != nil && len(rem.Config().URLs) > 0 {
+			return strings.TrimSpace(rem.Config().URLs[0]), nil
+		}
+		return "", ErrNoOrigin
+	}
 	out, err := gitOutput(repoRoot, "remote", "get-url", "origin")
 	if err != nil {
 		return "", ErrNoOrigin

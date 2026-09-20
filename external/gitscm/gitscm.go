@@ -15,6 +15,8 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -159,3 +161,33 @@ func hasEnv(env []string, name string) bool {
 	}
 	return false
 }
+
+// Path is the git executable bashy's OWN code execs, memoized per process.
+//
+// Every internal `exec.Command("git", ...)` site used to assume a git on PATH.
+// That holds on unix; on Windows bashy provisions MinGit into its cache for
+// `bashy git-scm` and never puts it on PATH — so the first live run on a
+// Windows host failed inside weave with "no origin remote" while `bashy git`
+// worked fine on the same box. Path closes the gap: the provisioned git where
+// there is one, the platform git elsewhere, and the bare name "git" as the
+// last resort so a host with neither fails with the error it always had.
+//
+// Provisioning on first use may download MinGit (checksum-verified); that is
+// the same first-use cost `bashy git-scm` pays, cached under binmgr after.
+func Path() string {
+	pathOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		if p, err := Ensure(ctx); err == nil && p != "" {
+			gitPath = p
+			return
+		}
+		gitPath = "git"
+	})
+	return gitPath
+}
+
+var (
+	pathOnce sync.Once
+	gitPath  string
+)

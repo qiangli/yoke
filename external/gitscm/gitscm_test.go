@@ -1,6 +1,10 @@
 package gitscm
 
-import "testing"
+import (
+	"os/exec"
+	"strings"
+	"testing"
+)
 
 func TestAppendGitWindowsEnvInteractiveLeavesPromptsAlone(t *testing.T) {
 	t.Parallel()
@@ -71,5 +75,25 @@ func TestGitPromptsNonInteractive(t *testing.T) {
 				t.Fatalf("want %v, got %v", tt.want, got)
 			}
 		})
+	}
+}
+
+// Path is the one resolver bashy's own git execs use; it must hand back
+// something runnable wherever `bashy git` runs, and never depend on a git
+// on PATH being the answer.
+func TestPathReturnsARunnableGit(t *testing.T) {
+	p := Path()
+	if p == "" {
+		t.Fatal("Path() returned empty")
+	}
+	if Path() != p {
+		t.Fatal("Path() must be memoized")
+	}
+	out, err := exec.Command(p, "--version").Output()
+	if err != nil {
+		t.Skipf("no git available on this host at %q: %v", p, err)
+	}
+	if !strings.HasPrefix(string(out), "git version") {
+		t.Fatalf("%q --version = %q", p, out)
 	}
 }

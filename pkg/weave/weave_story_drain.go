@@ -186,7 +186,7 @@ func pauseWorkersIn(dir string, only map[int64]bool) (int, error) {
 				continue
 			}
 			if it.Workspace != "" {
-				if out, err := exec.Command("git", "-C", it.Workspace, "rev-parse", "HEAD").Output(); err == nil {
+				if out, err := exec.Command(gitBin(), "-C", it.Workspace, "rev-parse", "HEAD").Output(); err == nil {
 					it.Head = strings.TrimSpace(string(out))
 				}
 			}

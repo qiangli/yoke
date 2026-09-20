@@ -53,7 +53,7 @@ func readRunForJudging(id int64) (subject, content, stage string, err error) {
 	}
 	// The agent's work, and only the agent's work: everything on its branch since it
 	// started. A plain `git diff HEAD` in the workspace would miss what it committed.
-	out, err := exec.Command("git", "-C", root, "diff", base+".."+it.Branch).Output()
+	out, err := exec.Command(gitBin(), "-C", root, "diff", base+".."+it.Branch).Output()
 	if err != nil {
 		return "", "", "", fmt.Errorf("reading run #%d's diff: %w", id, err)
 	}

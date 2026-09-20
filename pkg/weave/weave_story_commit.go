@@ -301,7 +301,7 @@ exec bashy sprint commit-msg "$1"
 
 func gitOutput(repo string, args ...string) (string, error) {
 	argv := append([]string{"-C", repo}, args...)
-	cmd := exec.Command("git", argv...)
+	cmd := exec.Command(gitBin(), argv...)
 	// A hook invocation exports GIT_DIR/GIT_WORK_TREE. Passing those through to
 	// `git -C another-repo` makes Git keep operating on the caller's repository
 	// (or treat an empty override as an invalid repo). Remove, do not blank,

@@ -138,7 +138,7 @@ func weavePruneOwnedRun(dir string, id int64, repo string, expectedBirth ...time
 				continue
 			}
 			// Include untracked/ignored files: cleanup must not discard private work.
-			out, err := exec.Command("git", "-C", artifact.path, "status", "--porcelain", "--untracked-files=all", "--ignored").Output()
+			out, err := exec.Command(gitBin(), "-C", artifact.path, "status", "--porcelain", "--untracked-files=all", "--ignored").Output()
 			if err != nil || len(out) > 0 {
 				a.Err = "workspace dirty, untracked, ignored, or unreadable; left alone"
 				acts = append(acts, a)
@@ -175,7 +175,7 @@ func weavePruneOwnedRun(dir string, id int64, repo string, expectedBirth ...time
 		}
 		// Recheck after claiming so an edit during the scan cannot be discarded.
 		if artifact.kind == "workspace" {
-			out, e := exec.Command("git", "-C", quarantine, "status", "--porcelain", "--untracked-files=all", "--ignored").Output()
+			out, e := exec.Command(gitBin(), "-C", quarantine, "status", "--porcelain", "--untracked-files=all", "--ignored").Output()
 			if e != nil || len(out) > 0 {
 				_ = os.Rename(quarantine, artifact.path)
 				a.Err = "workspace changed while claiming; left alone"
@@ -282,7 +282,7 @@ func weaveVerifyReclaimWorkspace(root, base string, it *weaveItem, path string) 
 	if !weaveItemMerged(root, base, &cp) {
 		return errors.New("claimed workspace gained unintegrated work; left alone")
 	}
-	out, e := exec.Command("git", "-C", path, "status", "--porcelain", "--untracked-files=all", "--ignored").Output()
+	out, e := exec.Command(gitBin(), "-C", path, "status", "--porcelain", "--untracked-files=all", "--ignored").Output()
 	if e != nil || len(out) > 0 {
 		return errors.New("claimed workspace gained uncommitted work; left alone")
 	}
