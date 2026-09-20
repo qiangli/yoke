@@ -46,9 +46,22 @@ func weaveOrphanWorkspaceTargets(queueDir string, q *weaveQueue) ([]weaveOrphanW
 	}
 
 	claimed := map[string]bool{}
+	// Sibling clones (<queue>/workspaces/<dep>, for the umbrella's ../<dep>
+	// replace directives) are shared by EVERY run in the queue and claimed by
+	// none of them. While any run is live they are in use — a clean, unclaimed
+	// directory is exactly what one looks like — so they hold until the queue
+	// has no live run. This is the difference between a stale sibling clone
+	// and a live run's dependency tree.
+	liveRun := int64(0)
 	if q != nil {
 		for _, it := range q.Items {
-			if it == nil || it.Workspace == "" {
+			if it == nil {
+				continue
+			}
+			if !isTerminalState(it.State) && liveRun == 0 {
+				liveRun = it.ID
+			}
+			if it.Workspace == "" {
 				continue
 			}
 			if abs, err := filepath.Abs(it.Workspace); err == nil {
@@ -79,9 +92,13 @@ func weaveOrphanWorkspaceTargets(queueDir string, q *weaveQueue) ([]weaveOrphanW
 			if claimed[filepath.Clean(path)] {
 				continue
 			}
+			hold := weaveOrphanWorkspaceHold(path)
+			if hold == "" && liveRun > 0 && !strings.HasPrefix(entry.Name(), "issue-") {
+				hold = fmt.Sprintf("sibling clone shared with live run #%d", liveRun)
+			}
 			out = append(out, weaveOrphanWorkspace{
 				Path: path,
-				Hold: weaveOrphanWorkspaceHold(path),
+				Hold: hold,
 			})
 		}
 	}

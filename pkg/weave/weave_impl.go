@@ -7037,7 +7037,9 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 			return oerr
 		}
 		for _, o := range orphans {
-			if o.Hold != "" && !force {
+			// --force lifts the private-work hold, never the live-run one: a
+			// sibling clone a working run is building against is not litter.
+			if o.Hold != "" && (!force || strings.HasPrefix(o.Hold, "sibling clone shared with live run")) {
 				results = append(results, pruneResult{
 					State: "orphaned-workspace", Workspace: o.Path,
 					Action: "skipped: " + o.Hold,
