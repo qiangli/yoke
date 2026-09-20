@@ -67,10 +67,9 @@ func BuildGraph(d *Document) (*Graph, error) {
 		Order: append([]string(nil), d.Order...),
 	}
 	for _, t := range d.Tasks {
-		for _, ef := range t.Effects {
-			if !knownEffects[ef] {
-				return nil, errf(weavecli.ExitInvalidArg,
-					"target %q declares unknown effect %q (want read/write/net/spend/destroy/time)", t.Name, ef)
+		if len(t.Effects) > 0 {
+			if _, err := parseEffects(t.Effects); err != nil {
+				return nil, errf(weavecli.ExitInvalidArg, "target %q: invalid Effects: %v", t.Name, err)
 			}
 		}
 		g.Nodes[t.Name] = &Node{Task: t, Status: StatusPending}

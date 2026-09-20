@@ -20,19 +20,18 @@ import (
 	"github.com/qiangli/coreutils/shell"
 )
 
-// Effect is one declared capability a target may use. The vocabulary mirrors the
-// dhnt contract model (read/write/net/spend/destroy/time). Declared Effects
-// become the context cap for every command the body dispatches through the
-// in-process shell: commands whose atlas effects fit within the declared cap are
-// allowed; commands that exceed it (or that the atlas does not classify) are
-// denied before execution with exit 126. The same atlas vocabulary applies in
-// both Bash and Bash++ bodies; compound commands and pipelines are covered
-// because the check runs at the ExecHandler seam — every leaf dispatch is
-// checked. A target with no Effects declaration is unconstrained (cap absent).
-var knownEffects = map[string]bool{
-	"read": true, "write": true, "net": true,
-	"spend": true, "destroy": true, "time": true,
-}
+// Effects: on a target declares the capabilities its body may use. The
+// vocabulary is policy/advice's — the atlas effect atoms — not a copy kept
+// here: BuildGraph validates a declaration and the engine turns it into the
+// run-time cap through the same advice.ParseCap call (see parseEffects in
+// interp_cap.go). Declared Effects become the context cap for every command the
+// body dispatches through the in-process shell: commands whose atlas effects
+// fit within the declared cap are allowed; commands that exceed it (or that the
+// atlas does not classify) are denied before execution with exit 126. The same
+// vocabulary applies in both Bash and Bash++ bodies; compound commands and
+// pipelines are covered because the check runs at the ExecHandler seam — every
+// leaf dispatch is checked. A target with no Effects declaration is
+// unconstrained (cap absent).
 
 // CheckResult is the outcome of one Ensure postcondition.
 type CheckResult struct {
