@@ -46,7 +46,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -206,7 +205,7 @@ func (s Spec) probePort(o Options) probe {
 		// Only an explicit refusal proves the address was reached and had no
 		// listener. A timeout, DNS failure, or unreachable address is absence of
 		// evidence and therefore cannot authorize a success claim.
-		if errors.Is(err, syscall.ECONNREFUSED) {
+		if connRefused(err) {
 			return probeClear
 		}
 		return probeOccupied
