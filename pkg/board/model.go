@@ -120,7 +120,15 @@ type Agent struct {
 	Available    bool   `json:"available"`
 	Found        bool   `json:"found"`
 	Availability string `json:"availability"`
-	State        string `json:"state"`
+	// State: idle | working (a weave run) | cooling | live (a running seat in
+	// the room registry) | conducting (holds a fresh sprint lease).
+	State string `json:"state"`
+	// Live, Mode, Task and Sprint come from the room registry and the sprint
+	// leases (foldSeats) — the parts of "who exists" the catalog cannot know.
+	Live   bool   `json:"live,omitempty"`
+	Mode   string `json:"mode,omitempty"`
+	Task   string `json:"task,omitempty"`
+	Sprint int64  `json:"sprint,omitempty"`
 }
 
 type Todo struct {

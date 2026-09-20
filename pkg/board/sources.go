@@ -511,14 +511,31 @@ func (todoSource) Load(_ context.Context, b *Board, o Options) error {
 	return nil
 }
 
+// fleetAvailability is one row of `weave fleet --agents --json`, decoded in
+// THAT command's field names. The board used to read `found`/`available`
+// while the emitter writes `installed` and — deliberately — no `available`
+// at all (weave_fleet.go: assignability is `usable`, only after a probe), so
+// every agent decoded as not found and the console showed a whole fleet as
+// "unavailable" (sprint 220, story 688d01a9). Decode the wire, derive here.
 type fleetAvailability struct {
-	Agent        string `json:"agent"`
-	Tool         string `json:"tool"`
-	Model        string `json:"model"`
-	Reason       string `json:"reason"`
-	CoolingUntil string `json:"cooling_until"`
-	Available    bool   `json:"available"`
-	Found        bool   `json:"found"`
+	Agent         string `json:"agent"`
+	Tool          string `json:"tool"`
+	Model         string `json:"model"`
+	Reason        string `json:"reason"`
+	CoolingUntil  string `json:"cooling_until"`
+	CooldownCause string `json:"cooldown_cause"`
+	Installed     bool   `json:"installed"`
+	Probed        bool   `json:"probed"`
+	Usable        bool   `json:"usable"`
+	Auth          string `json:"auth"`
+}
+
+// found / available are the board's two verdicts over a wire row: the binary
+// resolves; and nothing weave knows of stands in the way of assigning it (no
+// dangling binding, not cooling, and a probe — when one ran — succeeded).
+func (a fleetAvailability) found() bool { return a.Installed }
+func (a fleetAvailability) available() bool {
+	return a.Installed && a.Reason == "" && a.CoolingUntil == "" && (!a.Probed || a.Usable)
 }
 
 type fleetSource struct {
@@ -566,14 +583,20 @@ func (s fleetSource) Load(_ context.Context, b *Board, _ Options) error {
 				binary = tool.Name
 			}
 			if live, ok := available[a.Name]; ok {
-				row.Found, row.Available = live.Found, live.Available
+				row.Found, row.Available = live.found(), live.available()
 				switch {
 				case live.Reason != "":
 					row.Availability = live.Reason
 				case live.CoolingUntil != "":
 					row.Availability = "cooling until " + live.CoolingUntil
 					row.State = "cooling"
-				case live.Available:
+				case !live.Installed:
+					row.Availability = "not on PATH"
+				case live.Probed && !live.Usable:
+					row.Availability = "probe failed"
+				case live.Auth == "needs-login":
+					row.Availability = "installed, not logged in"
+				case live.available():
 					row.Availability = "available"
 				default:
 					row.Availability = "unavailable"
@@ -593,10 +616,85 @@ func (s fleetSource) Load(_ context.Context, b *Board, _ Options) error {
 		}
 		b.Agents = append(b.Agents, row)
 	}
+	foldSeats(b)
 	if fleetErr != nil {
 		return fmt.Errorf("weave fleet availability unavailable; PATH fallback shown: %s", strings.TrimSpace(fleetErr.Error()))
 	}
 	return nil
+}
+
+// foldSeats reconciles the three registries that each knew part of who exists
+// (sprint 220, story 688d01a9): the fleet CATALOG (who is defined), the room
+// REGISTRY (who is running — a live seat is a member card whose PID is alive;
+// room.Members prunes the dead), and the SPRINT LEASES (who is conducting).
+// The catalog alone rendered a conductor holding a fresh lease, with a live
+// `inbox --watch`, as an idle, unavailable row — so the console offered it
+// for nothing. A live seat is `live`; a fresh lease holder is `conducting`
+// with its sprint; a seat the catalog never registered (a lease name) is
+// added as its own row rather than dropped, since a seat that exists must be
+// listable to be chosen.
+func foldSeats(b *Board) {
+	index := map[string]int{}
+	for i, a := range b.Agents {
+		index[strings.ToLower(a.Name)] = i
+	}
+	find := func(name string) (int, bool) {
+		i, ok := index[strings.ToLower(strings.TrimSpace(name))]
+		return i, ok
+	}
+	add := func(a Agent) int {
+		b.Agents = append(b.Agents, a)
+		index[strings.ToLower(a.Name)] = len(b.Agents) - 1
+		return len(b.Agents) - 1
+	}
+	if cards, err := room.Members(); err == nil {
+		for _, c := range cards {
+			name := c.Nick
+			if name == "" {
+				name = c.ID
+			}
+			i, ok := find(name)
+			if !ok && c.Nick != "" {
+				i, ok = find(c.ID)
+			}
+			if !ok {
+				tool, model := c.Tool, c.Model
+				if t, m, found := strings.Cut(c.Binding, ":"); found && tool == "" {
+					tool, model = t, m
+				}
+				i = add(Agent{Name: name, Tool: tool, Model: model, Band: c.Band, Reliability: "unmeasured", Availability: "live seat (not in the catalog)"})
+			}
+			a := &b.Agents[i]
+			if a.State == "idle" || a.State == "" {
+				a.State = "live"
+			}
+			a.Live, a.Found, a.Available = true, true, true
+			if a.Availability == "" || a.Availability == "unavailable" || a.Availability == "not on PATH" {
+				a.Availability = "live"
+			}
+			if c.Mode != "" {
+				a.Mode = c.Mode
+			}
+			if c.Task != "" && a.Task == "" {
+				a.Task = c.Task
+			}
+		}
+	}
+	for _, s := range b.Sprints {
+		holder := s.LeaseHolder
+		if holder == "" || s.LeaseStale {
+			continue
+		}
+		i, ok := find(holder)
+		if !ok {
+			i = add(Agent{Name: holder, Reliability: "unmeasured", Availability: "sprint conductor (not in the catalog)"})
+		}
+		a := &b.Agents[i]
+		a.State, a.Sprint = "conducting", s.ID
+		if a.Task == "" {
+			a.Task = "conducting " + sprintLabel(s.ID)
+		}
+	}
 }
 
 // loadWeaveFleetAvailability enriches the machine roster with weave's
