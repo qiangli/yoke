@@ -2147,3 +2147,39 @@ func TestDOMCloudSectionPairs(t *testing.T) {
 		}
 	}
 }
+
+// The Neighborhood section (sprint 220, story ed857a89) renders the hosts the
+// mesh + mDNS answer, and its switch hides it. Driven through a stand-in
+// outpost so the page is exercised on any machine, paired or not.
+func TestDOMNeighborhoodSection(t *testing.T) {
+	fake := filepath.Join(t.TempDir(), "outpost")
+	script := "#!/bin/sh\ncase \"$1 $2\" in\n" +
+		"'mesh status') echo '{\"status\":{\"peers\":[{\"id\":\"12D3KooWAAA\",\"name\":\"winbox\",\"direct\":true,\"link_class\":\"lan\",\"remote\":[\"/ip4/10.0.0.45/udp/2/quic-v1\"]}]}}';;\n" +
+		"'scan --json') echo '[{\"agent_name\":\"guest-laptop\",\"os_username\":\"guest\",\"paired\":false,\"endpoints\":[{\"kind\":\"http\",\"host\":\"guest-laptop.local\",\"port\":17778}]}]';;\n" +
+		"*) echo ok;;\nesac\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OUTPOST_BIN", fake)
+	base, ctx, errs := domEnv(t, Options{})
+	var section, hidden string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/"),
+		chromedp.Sleep(2500*time.Millisecond),
+		chromedp.Evaluate(`(document.getElementById("neighborhood-section")?.innerText||"")`, &section),
+		chromedp.Click(`#settings-btn`, chromedp.ByQuery),
+		chromedp.Sleep(800*time.Millisecond),
+		chromedp.Evaluate(`(() => { const sw = document.querySelectorAll("#section-toggles input")[4]; sw.click(); const gone = !document.getElementById("neighborhood-section"); sw.click(); document.getElementById("settings").close(); return String(gone); })()`, &hidden),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "neighborhood", errs())
+	for _, want := range []string{"NEIGHBORHOOD", "winbox", "guest-laptop", "discovered"} {
+		if !strings.Contains(section, want) {
+			t.Errorf("section lacks %q: %q", want, section)
+		}
+	}
+	if hidden != "true" {
+		t.Errorf("the Neighborhood switch did not hide the section (%s)", hidden)
+	}
+}

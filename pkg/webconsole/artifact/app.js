@@ -45,6 +45,8 @@ let inboxCounts = null;
 // The host's relationship to the control plane (api/cloud), or null when the
 // answer has not arrived: paired → two cards, unpaired → the Pair card.
 let cloud = null;
+// The same-LAN hosts (api/neighborhood), or null before the first answer.
+let hood = null;
 // The invite code being typed, kept across repaints (a poll repaints the page
 // every few seconds and must not eat the operator's typing).
 let cloudCode = "";
@@ -78,6 +80,7 @@ const DEFAULTS = {
   showFavorites: true,
   showRecents: true,
   showCloud: true,
+  showNeighborhood: true,
   recentLimit: 8,
   favorites: [],
   recents: [],
@@ -523,6 +526,10 @@ function renderHome() {
     pad.append(cloudSection());
   }
 
+  if (cfg.showNeighborhood && hood && !search.trim()) {
+    pad.append(neighborhoodSection());
+  }
+
   if (shown.length) {
     pad.append(sectionEl("Apps", shown.map((a) => tile(a))));
   } else {
@@ -662,12 +669,72 @@ async function pairHost(inp, btn) {
   }
 }
 
+// ------------------------------------------------------------ neighborhood --
+// Same-LAN hosts, discovered peer-to-peer (outpost mesh + mDNS) — nothing here
+// went through cloudbox, and the section works on an unpaired host. One card
+// per host: how it was found, the link, the address.
+function neighborhoodSection() {
+  const s = document.createElement("section");
+  s.className = "sect";
+  s.id = "neighborhood-section";
+  const head = document.createElement("div");
+  head.className = "sect-head";
+  const h = document.createElement("h2");
+  h.textContent = "Neighborhood";
+  head.append(h);
+  const note = document.createElement("span");
+  note.className = "sect-note";
+  note.id = "neighborhood-note";
+  if (hood.agent === "missing") {
+    note.textContent = "needs the outpost agent — pair this machine in Cloud, or install outpost";
+  } else {
+    const src = [];
+    src.push("mesh " + (hood.sources.mesh === "ok" ? "✓" : hood.sources.mesh));
+    src.push("mDNS " + (hood.sources.mdns === "ok" ? "✓" : hood.sources.mdns));
+    note.textContent = src.join(" · ");
+  }
+  head.append(note);
+  s.append(head);
+  const grid = document.createElement("div");
+  grid.className = "grid";
+  if (!hood.hosts.length) {
+    const p = document.createElement("p");
+    p.className = "empty";
+    p.textContent = hood.agent === "missing" ? "" : "No other host on this network right now.";
+    s.append(p);
+  }
+  for (const n of hood.hosts) {
+    const wrap = document.createElement("div");
+    wrap.className = "tile-wrap";
+    const card = document.createElement("div");
+    card.className = "tile hood";
+    card.title = (n.peer_id ? "peer " + n.peer_id + "\n" : "") + "via " + n.via.join(" + ");
+    const icon = document.createElement("span");
+    icon.className = "icon";
+    icon.style.background = n.owner === "this-account" ? "linear-gradient(135deg,#10b981,#0ea5e9)" : "linear-gradient(135deg,#f59e0b,#ef4444)";
+    icon.append(document.createTextNode(n.owner === "this-account" ? "⌂" : "◇"));
+    const label = document.createElement("span");
+    label.className = "label";
+    label.textContent = n.name;
+    const sub = document.createElement("span");
+    sub.className = "sub";
+    const bits = [n.link || "", n.via.join("+"), n.address || ""].filter(Boolean);
+    if (n.owner !== "this-account") bits.push(n.user ? "discovered · " + n.user : "discovered");
+    sub.textContent = bits.join(" · ");
+    card.append(icon, label, sub);
+    wrap.append(card);
+    grid.append(wrap);
+  }
+  s.append(grid);
+  return s;
+}
+
 // ---------------------------------------------------------------- settings --
 const BG_PRESETS = [
   ["none", "None"], ["sky", "Sky"], ["ocean", "Ocean"], ["mountains", "Mountains"],
   ["plateau", "Plateau"], ["lakes", "Lakes"], ["bamboo", "Bamboo"],
 ];
-const SECTIONS = [["showSummary", "Overview"], ["showFavorites", "Favorites"], ["showRecents", "Recent"], ["showCloud", "Cloud"]];
+const SECTIONS = [["showSummary", "Overview"], ["showFavorites", "Favorites"], ["showRecents", "Recent"], ["showCloud", "Cloud"], ["showNeighborhood", "Neighborhood"]];
 const dlg = document.getElementById("settings");
 
 function buildSettings() {
@@ -1021,7 +1088,7 @@ document.getElementById("theme-btn").addEventListener("click", () => {
 
 async function refresh() {
   try {
-    const [a, s, l, i, c] = await Promise.all([
+    const [a, s, l, i, c, n] = await Promise.all([
       fetch(url("api/apps")).then((r) => r.json()),
       fetch(url("api/session")).then((r) => r.json()).catch(() => null),
       fetch(url("api/look")).then((r) => r.json()).catch(() => null),
@@ -1031,10 +1098,12 @@ async function refresh() {
       // broken start page.
       fetch(url("api/inbox?summary=1")).then((r) => (r.ok ? r.json() : null)).catch(() => null),
       fetch(url("api/cloud")).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch(url("api/neighborhood")).then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     apps = a.apps || [];
     inboxCounts = i && !i.error ? i : null;
     cloud = c;
+    hood = n;
     // The look ride-along fails soft: no answer leaves the mode at the
     // same-tab default, which is exactly the server's own fallback.
     if (l && l.open_apps) openApps = l.open_apps === "new-tab" ? "new-tab" : "same-tab";

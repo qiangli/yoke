@@ -283,6 +283,8 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	// The Cloud section: pairing state, and the one action that makes it.
 	mux.HandleFunc("GET /api/cloud", s.handleCloudGet)
 	mux.HandleFunc("POST /api/cloud/pair", s.handleCloudPair)
+	// The Neighborhood section: same-LAN hosts, discovered peer-to-peer.
+	mux.HandleFunc("GET /api/neighborhood", s.handleNeighborhood)
 	// The external self-description. Ungated (see isOpenPath) and deliberately
 	// a projection, not the internal Panel.
 	mux.HandleFunc("GET /meta", s.handleMeta)

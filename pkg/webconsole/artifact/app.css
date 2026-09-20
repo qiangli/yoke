@@ -981,3 +981,8 @@ body.standalone #bar { flex: none; }
 .pair-status { font-size: .85rem; opacity: .85; min-height: 1.2em; }
 .pair-status.error { color: #b91c1c; opacity: 1; }
 .pair-status.paired { color: #15803d; opacity: 1; }
+
+/* ----------------------------------------------------------- neighborhood -- */
+.sect-note { margin-left: auto; font-size: .8rem; opacity: .7; }
+.tile.hood { cursor: default; }
+.tile .sub { font-size: .75rem; opacity: .7; display: block; margin-top: .15rem; }
