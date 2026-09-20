@@ -726,6 +726,10 @@ func loadWeaveQueue(dir string) (*weaveQueue, error) {
 		}
 		q.Stories[i].Execution.PriorityFirst = true
 	}
+	// Every card carries its three handles; the ones written before uuid and
+	// slug existed get them here, deterministically, and the next write
+	// persists them (D14, sprint_handles.go).
+	mintSprintHandles(&q)
 	return &q, nil
 }
 

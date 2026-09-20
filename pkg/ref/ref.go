@@ -295,13 +295,17 @@ func ShapeOf(local string) Shape {
 	return ShapeSlug
 }
 
-// SplitScope splits a ref's id into its optional scope segment and the local
-// part, on the FIRST "/". The scope names the store the entity lives in (a repo
-// checkout by basename, or `user` for the personal store); it is a virtual
-// parent, not a kind. Empty scope when there is no "/".
+// SplitScope splits a ref's id into its optional scope and the local part, on
+// the LAST "/". The scope is the entity's ANCESTRAL PATH — the chain of
+// parents, `/`-joined: one segment for a store (a repo checkout by basename,
+// `user` for the personal list), more when the parent has parents of its own
+// (`<user>/<host>` for a sprint). It is a virtual parent, not a kind, and it is
+// what makes a seq usable across scopes: `todo:repo1/1` and `todo:repoN/1` are
+// two records; the uuid is the other, universal, way to say the same thing
+// (D14). Empty scope when there is no "/"; the local part is always ONE handle.
 func SplitScope(id string) (scope, local string) {
 	id = strings.TrimSpace(id)
-	i := strings.IndexByte(id, '/')
+	i := strings.LastIndexByte(id, '/')
 	if i < 0 {
 		return "", id
 	}

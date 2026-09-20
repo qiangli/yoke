@@ -27,7 +27,12 @@ import (
 // a SIGKILL/token-exhaustion death — work: the successor reconstructs
 // state from the sprint, never from the dead conductor's memory.
 type weaveStory struct {
-	ID          int64            `json:"id"`
+	ID int64 `json:"id"`
+	// UUID and Slug are the sprint's other two handles (D14): the identity
+	// across hosts and the readable name. Minted on demand when a card lacks
+	// them — see sprint_handles.go.
+	UUID        string           `json:"uuid,omitempty"`
+	Slug        string           `json:"slug,omitempty"`
 	Title       string           `json:"title"`
 	Epic        string           `json:"epic,omitempty"`         // grouping label
 	PrimaryGoal string           `json:"primary_goal,omitempty"` // one-sentence outcome the manager protects
@@ -720,7 +725,20 @@ func newWeaveStoryShowCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := strconv.ParseInt(args[0], 10, 64)
 			if err != nil {
-				return fmt.Errorf("sprint must be an integer: %q", args[0])
+				// Not a seq: a uuid, a slug or an ancestral path (D14).
+				dir, derr := weaveStoryDir(cmd, flags.mode(), "sprint show")
+				if derr != nil {
+					return derr
+				}
+				q, lerr := loadWeaveQueue(dir)
+				if lerr != nil {
+					return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "sprint show", weavecli.ExitGenericFail, lerr))
+				}
+				s, ferr := findSprintByHandle(q, args[0])
+				if ferr != nil {
+					return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "sprint show", weavecli.ExitInvalidArg, ferr))
+				}
+				id = s.ID
 			}
 			return runWeaveStoryShow(cmd, id, &flags, links)
 		},
@@ -755,7 +773,7 @@ func runWeaveStoryShow(cmd *cobra.Command, id int64, flags *weaveOutputFlags, li
 			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "sprint show", weavecli.ExitGenericFail, nerr))
 		}
 		payload := map[string]any{
-			"sprint": s, "goal_progress": progress, "next_story": next,
+			"sprint": s, "ref": sprintRefOf(s), "goal_progress": progress, "next_story": next,
 			"resources": sprintResources(cmd, id), "outcome_cost": sprintOutcomeCost(s, time.Now().UTC()),
 		}
 		if links {
@@ -765,7 +783,9 @@ func runWeaveStoryShow(cmd *cobra.Command, id int64, flags *weaveOutputFlags, li
 	}
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "sprint #%d [%s] — %s\n", s.ID, s.Column, s.Title)
-	fmt.Fprintf(out, "  ref:        sprint:%d\n", s.ID)
+	r := sprintRefOf(s)
+	fmt.Fprintf(out, "  ref:        %s · %s · %s\n", r.Ref, r.UUID, r.Slug)
+	fmt.Fprintf(out, "  path:       %s\n", r.Path)
 	renderSprintResources(out, sprintResources(cmd, id))
 	if s.Epic != "" {
 		fmt.Fprintf(out, "  epic:       %s\n", s.Epic)

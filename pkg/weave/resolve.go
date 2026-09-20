@@ -30,12 +30,10 @@ func RegisterRefs(g *ref.Registry) {
 	g.Register(ref.Run, ref.ResolverFunc(resolveRun))
 }
 
-// resolveSprint answers sprint:<n> from the global sprint store.
+// resolveSprint answers sprint:<seq>, sprint:<uuid>, sprint:<slug> and the
+// ancestral spelling sprint:<user>/<host>/<seq> from this host's sprint store
+// (D14). A path under another host is named as such, not "not found".
 func resolveSprint(id string) (ref.Node, error) {
-	n, err := strconv.ParseInt(strings.TrimSpace(id), 10, 64)
-	if err != nil {
-		return ref.Node{}, fmt.Errorf("sprint: %q is not a sprint number", id)
-	}
 	dir, err := sprintStoreDir()
 	if err != nil {
 		return ref.Node{}, err
@@ -44,11 +42,15 @@ func resolveSprint(id string) (ref.Node, error) {
 	if err != nil {
 		return ref.Node{}, fmt.Errorf("weave: read sprint store %s: %w", dir, err)
 	}
-	s := findWeaveStory(q, n)
-	if s == nil {
-		return ref.Node{}, fmt.Errorf("sprint:%s: %w", id, ref.ErrNotFound)
+	s, err := findSprintByHandle(q, id)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return ref.Node{}, fmt.Errorf("sprint:%s: %w", id, ref.ErrNotFound)
+		}
+		return ref.Node{}, err
 	}
 	node := ref.NewNode(ref.Sprint, strconv.FormatInt(s.ID, 10))
+	node.UID = s.UUID
 	node.Title = s.Title
 	node.Status = s.Column // backlog|doing|done — the sprint's stage word
 	node.Where = dir
