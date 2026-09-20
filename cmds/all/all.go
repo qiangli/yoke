@@ -36,4 +36,5 @@ import (
 	_ "github.com/qiangli/yoke/cmds/watch"
 	_ "github.com/qiangli/yoke/cmds/which"
 	_ "github.com/qiangli/yoke/cmds/why"
+	_ "github.com/qiangli/yoke/cmds/winpath"
 )

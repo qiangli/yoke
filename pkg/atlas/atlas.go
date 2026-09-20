@@ -704,7 +704,12 @@ func init() {
 	// asserts this set == tool.Names() with cmds/all + cmds/graph +
 	// cmds/resources registered (the public Bashy inventory).
 	addTools(GroupFileutils,
-		"basename", "chcon", "chgrp", "chmod", "chown", "clip", "cp", "dd",
+		"basename", "chcon", "chgrp", "chmod", "chown", "clip", "cp",
+		// cygpath/wslpath convert path SPELLINGS (pure string work over the
+		// shared mvdan.cc/sh/v3/pathconv converter); they never touch the
+		// filesystem, like basename/dirname.
+		"cygpath", "wslpath",
+		"dd",
 		"df", "dir", "dircolors", "dirname", "du", "file", "find", "install", "link",
 		"ln", "ls", "mkdir", "mkfifo", "mknod", "mktemp", "mv", "readlink",
 		"pax",
@@ -1191,6 +1196,9 @@ func init() {
 		"basename", "dirname", "dircolors", "cal", "ncal", "duration", "echo",
 		"expr", "factor", "false", "printf", "true", "numfmt", "seq", "sleep",
 		"yes", "sync",
+		// path-spelling converters: deterministic string transforms; the one
+		// environment read is the /tmp mapping consulting the host temp dir.
+		"cygpath", "wslpath",
 	)
 
 	// read — reads filesystem, host state, or input data (the privacy surface).

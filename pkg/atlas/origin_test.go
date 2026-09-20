@@ -152,7 +152,7 @@ func TestOriginCountsPinned(t *testing.T) {
 	}
 	want := map[string]int{
 		atlas.OriginGNU:      106, // 105 upstream names + `[`, the alias of test
-		atlas.OriginUnix:     48,
+		atlas.OriginUnix:     50,  // S216 #536: + cygpath, wslpath (classic interop tools, not GNU)
 		atlas.OriginExternal: 12,
 		atlas.OriginBashy:    12,
 	}
