@@ -265,3 +265,65 @@ func TestReadLedger_LegacyRecordsKeepEmptyCapability(t *testing.T) {
 		t.Errorf("legacy record decoded wrong: %+v", o)
 	}
 }
+
+// A function-call receipt (bashy's Bash# decorator seam) lands in the same
+// ledger through skills.AppendAttest, reads back with its status and store
+// revision, and a yield (exit skills.AttestYield) is counted as a handoff —
+// in Runs, in neither Passed nor Failed — so a function that asked for input
+// is never reported as one that failed.
+func TestLedger_FunctionReceiptsReadBackAndYieldIsNotAFailure(t *testing.T) {
+	store := t.TempDir()
+	at := time.Date(2026, 9, 20, 10, 0, 0, 0, time.UTC)
+	fn := func(status int, passed, failed []string) skills.AttestRecord {
+		s := status
+		return skills.AttestRecord{
+			At: at, Name: "deploy", Tier: "bashy@test", ContextKey: "cA",
+			Attest:        dhntskills.Attestation{Skill: "fn:deploy", Tier: "bashy@test", Passed: passed, Failed: failed, Valid: status == 0 && len(failed) == 0},
+			Status:        &s,
+			StoreRevision: Revision(store).String(),
+		}
+	}
+	for _, r := range []skills.AttestRecord{
+		fn(0, []string{`require:test -n "$1"`}, nil),
+		fn(3, nil, []string{`require:test -n "$1"`}),
+		fn(skills.AttestYield, nil, nil),
+	} {
+		if _, err := skills.AppendAttest(store, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := skills.AppendAttest(store, skills.AttestRecord{Name: "../escape"}); err == nil {
+		t.Fatal("a name that is not a ledger name was accepted")
+	}
+
+	l, err := ReadLedger(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.Malformed != 0 || len(l.Observations) != 3 {
+		t.Fatalf("observations = %d, malformed = %d", len(l.Observations), l.Malformed)
+	}
+	s := l.ForSkill("deploy")
+	if s.Runs != 3 || s.Passed != 1 || s.Failed != 1 || s.Yielded != 1 {
+		t.Fatalf("stats = %+v", s)
+	}
+	var yields int
+	for _, o := range l.Observations {
+		if o.Status == nil || o.StoreRevision == "" {
+			t.Fatalf("function receipt lost its status or store revision: %+v", o)
+		}
+		if o.Yielded() {
+			yields++
+			if o.Valid {
+				t.Fatal("a yield read back as a completion")
+			}
+		}
+	}
+	if yields != 1 {
+		t.Fatalf("yields = %d", yields)
+	}
+	// Skill receipts carry neither field and are never yields.
+	if (Observation{Valid: false}).Yielded() {
+		t.Fatal("a status-less receipt read as a yield")
+	}
+}

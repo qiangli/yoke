@@ -837,6 +837,7 @@ type historyRow struct {
 	Runs        int      `json:"runs"`
 	Passed      int      `json:"passed"`
 	Failed      int      `json:"failed"`
+	Yielded     int      `json:"yielded,omitempty"`
 	Rate        float64  `json:"contribution"`
 	Coordinates []string `json:"coordinates,omitempty"`
 	Tiers       []string `json:"tiers,omitempty"`
@@ -900,6 +901,7 @@ func rowOf(subject, kind string, s Stats) historyRow {
 		Runs:        s.Runs,
 		Passed:      s.Passed,
 		Failed:      s.Failed,
+		Yielded:     s.Yielded,
 		Rate:        s.Contribution(),
 		Coordinates: s.Coordinates,
 		Tiers:       s.Tiers,
@@ -958,10 +960,13 @@ func writeHistoryText(cmd *cobra.Command, rep historyReport, name, capability st
 		fmt.Fprintln(out)
 		for _, o := range rep.Runs {
 			state := "FAIL"
-			if o.Valid {
+			switch {
+			case o.Yielded():
+				state = "yield"
+			case o.Valid:
 				state = "pass"
 			}
-			fmt.Fprintf(out, "%s  %-4s  %-24s %s  %s\n",
+			fmt.Fprintf(out, "%s  %-5s  %-24s %s  %s\n",
 				o.At.UTC().Format(time.RFC3339), state, craftTruncate(o.Name, 24), skills.ShortID(o.ContextKey), o.Tier)
 		}
 	}

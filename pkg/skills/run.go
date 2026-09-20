@@ -50,7 +50,31 @@ type AttestRecord struct {
 	// the reader leaves those empty rather than inferring one.
 	Capability string                 `json:"capability,omitempty"`
 	Attest     dhntskills.Attestation `json:"attest"`
+	// Status and StoreRevision are stamped when the receipt attests a Bash#
+	// FUNCTION CALL completing under bashy's decorator seam — a @require /
+	// @ensure / @guard-decorated or agentic{} function — rather than a
+	// `skills run`. Same record, same ledger, same reader: a function's
+	// completion is evidence of exactly the kind a skill run is, and a second
+	// record type for it would be the eighth parallel outcome log pkg/craft
+	// was written to refuse. Status is the call's exit status; a Status of
+	// AttestYield is an agentic yield (input required), which is NOT a
+	// completion and which the reader counts apart from pass and fail.
+	// StoreRevision is craft's graph revision (`g1:…`) taken before the
+	// append — the state of the store the evidence landed on. Skill receipts
+	// leave both absent, as every receipt written before them does.
+	Status        *int   `json:"status,omitempty"`
+	StoreRevision string `json:"store_revision,omitempty"`
 }
+
+// AttestYield is the exit status of an agentic yield — the callee handed
+// control back to its harness for input (weavecli.ExitInputRequired, spelled
+// here so this package stays an import leaf). A receipt carrying it records a
+// handoff, not a completion.
+const AttestYield = 6
+
+// Yielded reports a function-call receipt whose call yielded (exit
+// AttestYield) rather than completing. Never true of a skill receipt.
+func (r AttestRecord) Yielded() bool { return r.Status != nil && *r.Status == AttestYield }
 
 // preflightEffects is the static audit: the effects the bindings WILL
 // report for this skill, checked against the declared cap before
@@ -191,9 +215,21 @@ func dhntProbes(ps *ProbeSet, names []string) []dhntskills.EnvProbe {
 	return out
 }
 
-// appendAttest stores a run receipt in the ring-1 store
-// (<dir>/attest/<name>.jsonl).
-func appendAttest(storeDir string, rec AttestRecord) (string, error) {
+// AppendAttest stores a run receipt in the ring-1 store
+// (<storeDir>/attest/<name>.jsonl) and returns the path it landed in.
+//
+// Exported for bashy's Bash# decorator seam, which attests function calls into
+// THIS ledger rather than one of its own: one writer, one path convention, and
+// pkg/craft reads both kinds of evidence back with no second reader. An empty
+// storeDir is refused rather than resolved — "no store" is the caller's
+// decision to make, exactly as storeAttest makes it.
+func AppendAttest(storeDir string, rec AttestRecord) (string, error) {
+	if strings.TrimSpace(storeDir) == "" {
+		return "", fmt.Errorf("skills: attest: no store directory")
+	}
+	if strings.TrimSpace(rec.Name) == "" || rec.Name != filepath.Base(rec.Name) {
+		return "", fmt.Errorf("skills: attest: %q is not a ledger name", rec.Name)
+	}
 	dir := filepath.Join(storeDir, "attest")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
@@ -346,7 +382,7 @@ func storeAttest(cfg *config, rec AttestRecord, log io.Writer) string {
 	if cfg.cfgDir == "" {
 		return ""
 	}
-	p, err := appendAttest(cfg.cfgDir, rec)
+	p, err := AppendAttest(cfg.cfgDir, rec)
 	if err != nil {
 		fmt.Fprintf(log, "skills: attest store: %v\n", err)
 		return ""

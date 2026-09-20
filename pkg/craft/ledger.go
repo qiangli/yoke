@@ -49,7 +49,18 @@ type Observation struct {
 	Valid      bool      `json:"valid"`
 	Passed     []string  `json:"passed,omitempty"`
 	Failed     []string  `json:"failed,omitempty"`
+	// Status and StoreRevision are present only on a function-call receipt
+	// (bashy's Bash# decorator seam; see skills.AttestRecord). A Status of
+	// skills.AttestYield is a handoff, not a completion — Yielded() — and is
+	// counted apart from pass and fail so a function that hands off is never
+	// reported as one that failed.
+	Status        *int   `json:"status,omitempty"`
+	StoreRevision string `json:"store_revision,omitempty"`
 }
+
+// Yielded reports a function-call receipt whose call yielded for input
+// rather than completing. Never true of a skill receipt.
+func (o Observation) Yielded() bool { return o.Status != nil && *o.Status == skills.AttestYield }
 
 // Ledger is the derived index over every stored receipt. Rebuildable in full
 // from the JSONL at any time; holding no state the logs do not.
@@ -75,6 +86,7 @@ type Stats struct {
 	Runs        int
 	Passed      int
 	Failed      int
+	Yielded     int // agentic yields (exit skills.AttestYield): in Runs, in neither Passed nor Failed — a handoff dilutes Contribution toward 0, never against
 	First       time.Time
 	Last        time.Time
 	Coordinates []string // distinct context keys, sorted
@@ -188,15 +200,17 @@ func observationOf(rec skills.AttestRecord, fallbackName string) Observation {
 		name = fallbackName
 	}
 	return Observation{
-		At:         rec.At,
-		Name:       name,
-		Identity:   rec.Attest.Skill,
-		Capability: rec.Capability,
-		Tier:       rec.Tier,
-		ContextKey: rec.ContextKey,
-		Valid:      rec.Attest.Valid,
-		Passed:     rec.Attest.Passed,
-		Failed:     rec.Attest.Failed,
+		At:            rec.At,
+		Name:          name,
+		Identity:      rec.Attest.Skill,
+		Capability:    rec.Capability,
+		Tier:          rec.Tier,
+		ContextKey:    rec.ContextKey,
+		Valid:         rec.Attest.Valid,
+		Passed:        rec.Attest.Passed,
+		Failed:        rec.Attest.Failed,
+		Status:        rec.Status,
+		StoreRevision: rec.StoreRevision,
 	}
 }
 
@@ -261,9 +275,12 @@ func (l *Ledger) summarise(match func(Observation) bool) Stats {
 			continue
 		}
 		s.Runs++
-		if o.Valid {
+		switch {
+		case o.Yielded():
+			s.Yielded++
+		case o.Valid:
 			s.Passed++
-		} else {
+		default:
 			s.Failed++
 		}
 		if s.First.IsZero() || o.At.Before(s.First) {
