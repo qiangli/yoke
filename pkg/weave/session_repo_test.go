@@ -237,6 +237,21 @@ func TestEnsureRepoSessionPrefersReachableOverJoinable(t *testing.T) {
 	}
 }
 
+// A reachable session carries the seat cloudbox reports — on a GitHub-seated
+// repo's second checkout that is the GitHub role, not a flat "member"; a
+// cloudbox that does not say it still yields "member".
+func TestEnsureRepoSessionReachableShowsReportedRole(t *testing.T) {
+	for _, c := range []struct{ reported, want string }{{"observer", "observer"}, {"contributor", "contributor"}, {"owner", "owner"}, {"", "member"}} {
+		mine := TaskSummary{ID: "t-mine", TargetRepo: "github.com/qiangli/bashy", Status: "active", Role: c.reported}
+		fake := &fakeSessionClient{repoSessions: &RepoSessions{Sessions: []RepoSession{{Task: mine}}}}
+		repo := sessionTestEnv(t, "git@github.com:qiangli/bashy.git", fake)
+		sc, err := EnsureRepoSession(context.Background(), repo)
+		if err != nil || sc.pointer.TaskID != "t-mine" || sc.pointer.Role != c.want {
+			t.Fatalf("reported %q: pointer=%+v err=%v want role %q", c.reported, sc.pointer, err, c.want)
+		}
+	}
+}
+
 // The fork layout `gh repo fork --clone` leaves behind — origin = the fork,
 // upstream = the team's repo — must key the session on UPSTREAM, or every PR
 // contributor opens a private session on their own fork instead of joining

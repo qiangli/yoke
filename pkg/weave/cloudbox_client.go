@@ -68,6 +68,10 @@ type TaskSummary struct {
 	LeaseEpoch   int       `json:"lease_epoch"`
 	Created      time.Time `json:"created"`
 	Modified     time.Time `json:"modified"`
+	// Role is the caller's seat on a session cloudbox lists as reachable
+	// (`?repo=`): owner, or the share's role whatever seated them — a hand
+	// share or GitHub. Empty from a cloudbox that predates it.
+	Role string `json:"role,omitempty"`
 }
 
 type ListTasksResponse struct {

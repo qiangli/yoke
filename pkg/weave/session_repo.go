@@ -410,7 +410,7 @@ func resolveRepoSession(ctx context.Context, client SessionClient, key, particip
 		return "", "", false, false, ambiguousSessions(key, reachable)
 	}
 	if len(reachable) == 1 {
-		return reachable[0].ID, "member", false, false, nil
+		return reachable[0].ID, reachRole(reachable[0]), false, false, nil
 	}
 	if len(joinable) > 1 {
 		return "", "", false, false, ambiguousSessions(key, joinable)
@@ -430,6 +430,16 @@ func resolveRepoSession(ctx context.Context, client SessionClient, key, particip
 		return resp.Task.ID, resp.Role, true, false, nil
 	}
 	return "", "", false, false, nil
+}
+
+// reachRole is the seat to show for a reachable session: the role cloudbox
+// reports (owner, or the share's — the GitHub role on a github-seated repo's
+// second checkout), "member" only when the server does not say.
+func reachRole(t TaskSummary) string {
+	if t.Role != "" {
+		return t.Role
+	}
+	return "member"
 }
 
 func ambiguousSessions(key string, ts []TaskSummary) error {
