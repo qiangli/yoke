@@ -213,8 +213,9 @@ func ensureSprintFromRepo(dir, handle string) (s *weaveStory, created bool, err 
 			Created:    now, UpdatedAt: now,
 		}
 		if cand.Seq > 0 {
-			plan := filepath.Join("docs", fmt.Sprintf("sprint-%d-master-execution-plan.md", cand.Seq))
-			if st, err := os.Stat(filepath.Join(root, plan)); err == nil && !st.IsDir() {
+			// A repo-relative doc ref is a git path: forward slashes on every OS.
+			plan := fmt.Sprintf("docs/sprint-%d-master-execution-plan.md", cand.Seq)
+			if st, err := os.Stat(filepath.Join(root, filepath.FromSlash(plan))); err == nil && !st.IsDir() {
 				s.SpecRef = plan
 			}
 		}
