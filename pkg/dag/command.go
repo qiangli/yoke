@@ -493,6 +493,7 @@ type taskSummary struct {
 	Inputs       []string     `json:"inputs,omitempty"`
 	Sources      []string     `json:"sources,omitempty"`
 	Generates    []string     `json:"generates,omitempty"`
+	Effects      []string     `json:"effects,omitempty"`
 	Lang         string       `json:"lang,omitempty"`
 	Timeout      string       `json:"timeout,omitempty"`
 	Retries      int          `json:"retries,omitempty"`
@@ -623,7 +624,7 @@ func runList(out io.Writer, mode weavecli.OutputMode, doc *Document) error {
 		t, _ := doc.Lookup(name)
 		summary := taskSummary{
 			Name: t.Name, Desc: t.Desc, Requires: t.Requires,
-			Inputs: t.Inputs, Sources: t.Sources, Generates: t.Generates, Lang: t.Lang,
+			Inputs: t.Inputs, Sources: t.Sources, Generates: t.Generates, Effects: t.Effects, Lang: t.Lang,
 			Retries: t.Retries, Host: t.Host, Venue: t.Venue, Distribution: t.Distribution,
 		}
 		if t.Timeout > 0 {
