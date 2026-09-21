@@ -152,7 +152,7 @@ var externalPlatforms = map[string]ExternalPlatform{
 	// git-scm IS the windows path (git-for-windows MinGit; unix uses system git)
 	"cargo": {OS: allOS, WindowsAsset: "rustup-init.exe (external/rust)"}, "rustc": {OS: allOS, WindowsAsset: "rustup-init.exe (external/rust)"},
 	"rustup": {OS: allOS, WindowsAsset: "rustup-init.exe (external/rust)"}, "rust": {OS: allOS, WindowsAsset: "rustup-init.exe (external/rust)"},
-	"clang": {OS: allOS, WindowsAsset: "zig-windows-x86_64 (external/zigcc)"}, "cmake": {OS: allOS, WindowsAsset: "cmake-*-windows-x86_64.zip (external/cmake)"},
+	"clang": {OS: allOS, WindowsAsset: "zig-windows-x86_64 (external/zigcc)"}, "zig": {OS: allOS, WindowsAsset: "zig-windows-x86_64 (external/zigcc)"}, "cmake": {OS: allOS, WindowsAsset: "cmake-*-windows-x86_64.zip (external/cmake)"},
 	"curl":    {OS: allOS, WindowsAsset: "curl-*_win64-mingw.zip (external/curlbin)"},
 	"git-scm": {OS: allOS, WindowsAsset: "MinGit-*-64-bit.zip (external/gitscm)"},
 	"go":      {OS: allOS, WindowsAsset: "go*.windows-amd64.zip (external/gotoolchain)"},
@@ -165,6 +165,7 @@ var externalPlatforms = map[string]ExternalPlatform{
 	"doctl":  {OS: allOS, WindowsAsset: "doctl-*-windows-amd64.zip"},
 	"gcloud": {OS: allOS, WindowsAsset: "vendor installer (PreferHost); google-cloud-cli-windows-x86_64.zip"},
 	"rg":     {OS: allOS, WindowsAsset: "ripgrep-*-x86_64-pc-windows-msvc.zip"},
+	"tofu":   {OS: allOS, WindowsAsset: "tofu_*_windows_amd64.zip"},
 }
 
 // ExternalPlatforms returns the declared platform support of a bin-managed

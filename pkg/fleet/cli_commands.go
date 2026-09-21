@@ -170,8 +170,9 @@ func newCommandsAdd(opts []Option) *cobra.Command {
 	var hidden bool
 	var paths pathFlags
 	c := &cobra.Command{
-		Use:   "add (<name> --set path=value… | <file>|-)",
-		Short: "Register a command in the local store",
+		Use:     "add (<name> --set path=value… | <file>|-)",
+		Aliases: []string{"register"}, // the verb's own name for what it does: a fence runner is registered, then named
+		Short:   "Register a command in the local store",
 		Long: "Register a command in the local store, from --set paths on an empty record\n" +
 			"or from a YAML record file (- = stdin). Exactly one of exec / download /\n" +
 			"script is required; `commands schema` lists every path.\n\n" +

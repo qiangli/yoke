@@ -19,6 +19,7 @@ package zigcc
 import (
 	"context"
 	"fmt"
+	"github.com/spf13/cobra"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -151,4 +152,26 @@ func SystemFallback() (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// NewZigCmd is the `bashy zig` front door: ensure the pinned Zig toolchain
+// (the same one `cc` islands compile with), then exec it with the caller's
+// arguments. Zig is a language of its own — `zig build-exe`, `zig run` — and
+// a `~~~zig` fence reaches it through a runner naming this verb.
+func NewZigCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:                "zig [args...]",
+		Short:              "Self-provisioning Zig toolchain (pinned release, sha256-verified, cached)",
+		DisableFlagParsing: true,
+		SilenceUsage:       true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			bin, err := Ensure(cmd.Context())
+			if err != nil {
+				return err
+			}
+			c := exec.CommandContext(cmd.Context(), bin, args...)
+			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+			return c.Run()
+		},
+	}
 }

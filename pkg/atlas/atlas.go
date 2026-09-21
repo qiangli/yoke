@@ -1083,7 +1083,7 @@ func init() {
 
 	// toolchains (self-provisioning, agent-mode shims)
 	for _, n := range []string{
-		"go", "cmake", "clang", "node", "npm", "npx", "pnpm", "yarn",
+		"go", "cmake", "clang", "zig", "node", "npm", "npx", "pnpm", "yarn",
 		"python", "pip", "uv", "mise", "cargo", "rustc", "rustup", "rust",
 	} {
 		// A compiler/package-manager is a CODE-stage tool: it is how the thing
@@ -1378,7 +1378,7 @@ func init() {
 	// arbitrary code (a compiler / package manager / interpreter — npm and pip
 	// run install scripts), so they are net+exec+write as a class.
 	for _, n := range []string{
-		"go", "cmake", "clang", "node", "npm", "npx", "pnpm", "yarn",
+		"go", "cmake", "clang", "zig", "node", "npm", "npx", "pnpm", "yarn",
 		"python", "pip", "uv", "mise", "cargo", "rustc", "rustup", "rust",
 	} {
 		eff(EffNet, n)
