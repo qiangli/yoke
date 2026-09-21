@@ -210,3 +210,81 @@ func TestEngineInvalidEffectsRefusesBody(t *testing.T) {
 		t.Fatal("body ran despite invalid cap")
 	}
 }
+
+// The shell re-entering itself is classified by its verb, not as an
+// unclassified "bashy": `bashy go build` is the atlas entry for go
+// (exec,net,write); a flag or a script path in verb position stays unknown.
+func TestCapRecursiveBashyClassifiedByVerb(t *testing.T) {
+	exe := filepath.Join(t.TempDir(), "renamed-shell.exe")
+	if err := os.WriteFile(exe, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BASHY_EXE", exe)
+	ctx := WithTargetEffects(context.Background(), func(name string) ([]string, bool) {
+		if name == "t2" {
+			return []string{"write"}, true
+		}
+		if name == "uncapped" {
+			return nil, true
+		}
+		return nil, false
+	})
+	cases := []struct {
+		args    []string
+		name    string
+		effects []string
+	}{
+		{[]string{"bashy", "go", "build"}, "go", []string{"exec", "net", "write"}},
+		{[]string{"/opt/bin/bashy.exe", "git", "status"}, "git", []string{"cred", "net", "read", "write"}},
+		{[]string{exe, "go", "env"}, "go", []string{"exec", "net", "write"}},
+		{[]string{"bashy", "dag", "t2"}, "dag t2", []string{"write"}},
+		{[]string{"bashy", "dag", "uncapped"}, "dag uncapped", nil},
+		{[]string{"bashy", "dag", "missing"}, "dag missing", nil},
+		{[]string{"bashy", "-c", "echo"}, "bashy", nil},
+		{[]string{"bashy", "scripts/x.sh"}, "bashy", nil},
+		{[]string{"bashy"}, "bashy", nil},
+		{[]string{"bashy", "pwd"}, "pwd", []string{"read"}},
+	}
+	for _, c := range cases {
+		name, effects := classifyCommand(ctx, c.args)
+		if name != c.name || strings.Join(effects, ",") != strings.Join(c.effects, ",") {
+			t.Errorf("%v: got (%q, %v), want (%q, %v)", c.args, name, effects, c.name, c.effects)
+		}
+	}
+}
+
+// End to end: a body's `bashy go build` is denied under Effects: write naming
+// go's undeclared effects — before anything runs.
+func TestCapRecursiveBashyDeniedNamesVerb(t *testing.T) {
+	for _, lang := range capLangs {
+		t.Run(lang, func(t *testing.T) {
+			r := runCapped(t, t.TempDir(), lang, "write", "bashy go build ./...")
+			if r.ExitCode != CapDeniedStatus {
+				t.Fatalf("want 126, got exit=%d stderr=%q", r.ExitCode, r.Stderr)
+			}
+			if !strings.Contains(r.Stderr, `denied "go"`) || !strings.Contains(r.Stderr, "exec,net") {
+				t.Errorf("diagnostic = %q", r.Stderr)
+			}
+		})
+	}
+}
+
+// `bashy dag <t>` takes <t>'s own declaration: t2 declares write, so a caller
+// capped to read is denied naming "dag t2" and write.
+func TestCapRecursiveDagTakesSubtargetEffects(t *testing.T) {
+	md := "## Tasks\n\n### t\nEffects: read\n" + block("bash", "bashy dag t2") +
+		"\n### t2\nEffects: write\n" + block("bash", "touch t2.txt")
+	e := contractEngine(t, t.TempDir(), md)
+	report, err := e.Run(context.Background(), "t")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	r := report.Results[0]
+	stderr := r.Stderr + e.Stderr.(*bytes.Buffer).String()
+	if r.ExitCode != CapDeniedStatus {
+		t.Fatalf("want 126, got exit=%d stderr=%q", r.ExitCode, stderr)
+	}
+	if !strings.Contains(stderr, `denied "dag t2"`) || !strings.Contains(stderr, "undeclared effects write") {
+		t.Errorf("diagnostic = %q", stderr)
+	}
+}

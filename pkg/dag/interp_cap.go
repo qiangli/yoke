@@ -6,6 +6,8 @@ package dag
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"mvdan.cc/sh/v3/interp"
@@ -50,8 +52,8 @@ func CapExecHandler() func(interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 			if !ok || len(args) == 0 {
 				return next(ctx, args)
 			}
-			name := commandName(args[0])
-			denied := cap.Exceeded(atlasEffectsFor(name))
+			name, effects := classifyCommand(ctx, args)
+			denied := cap.Exceeded(effects)
 			if len(denied) == 0 {
 				return next(ctx, args)
 			}
@@ -68,6 +70,82 @@ func commandName(arg0 string) string {
 		return arg0[i+1:]
 	}
 	return arg0
+}
+
+// classifyCommand names the command a cap decision is about and returns its
+// effects. A plain command is its basename looked up in the atlas. The shell
+// re-entering itself — a body's `"$BASHY_EXE" go build`, `bashy git …`,
+// `bashy dag <t>` — is not an atlas tool, so it is classified by its VERB:
+// `bashy go` is the atlas entry for go, `bashy git` for git, and `bashy dag <t>`
+// is <t>'s own declared Effects (none declared → unknown, fail closed). A
+// recursive call with no verb, a flag (`bashy -c …`) or a script path stays
+// unknown: nothing declares what it does. The diagnostic names the verb, so a
+// denial reads `denied "go"`, not `denied "bashy"`.
+func classifyCommand(ctx context.Context, args []string) (string, []string) {
+	name := commandName(args[0])
+	if !isSelf(args[0], name) {
+		return name, atlasEffectsFor(name)
+	}
+	if len(args) < 2 {
+		return name, nil
+	}
+	verb := args[1]
+	if strings.HasPrefix(verb, "-") || strings.ContainsAny(verb, `/\`) {
+		return name, nil
+	}
+	if verb == "dag" {
+		if len(args) < 3 {
+			return verb, nil
+		}
+		if resolve, ok := ctx.Value(targetEffectsKey{}).(func(string) ([]string, bool)); ok {
+			if effects, ok := resolve(args[2]); ok && len(effects) > 0 {
+				return verb + " " + args[2], effects
+			}
+		}
+		return verb + " " + args[2], nil
+	}
+	return verb, atlasEffectsFor(verb)
+}
+
+// isSelf reports whether argv[0] is this shell: the file the runner exports as
+// BASHY_EXE (the resolved running binary — its basename may be anything on a
+// host that renamed it), else a bare bashy/bash name, with or without the
+// Windows or launcher suffix.
+func isSelf(arg0, name string) bool {
+	if exe := os.Getenv("BASHY_EXE"); exe != "" && strings.ContainsAny(arg0, `/\`) {
+		if a, err := filepath.Abs(arg0); err == nil && sameFile(a, exe) {
+			return true
+		}
+	}
+	base := strings.ToLower(name)
+	for _, suffix := range []string{".exe", ".real"} {
+		base = strings.TrimSuffix(base, suffix)
+	}
+	return base == "bashy" || base == "bash"
+}
+
+func sameFile(a, b string) bool {
+	if a == b {
+		return true
+	}
+	fa, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	fb, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(fa, fb)
+}
+
+// targetEffectsKey carries the run's target → declared Effects resolver so a
+// body's `bashy dag <t>` can be classified by <t>'s declaration.
+type targetEffectsKey struct{}
+
+// WithTargetEffects attaches the resolver for `bashy dag <t>` classification.
+func WithTargetEffects(ctx context.Context, resolve func(string) ([]string, bool)) context.Context {
+	return context.WithValue(ctx, targetEffectsKey{}, resolve)
 }
 
 // atlasEffectsFor returns the atlas-recorded effects for a command name. nil

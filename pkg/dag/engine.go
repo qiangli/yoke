@@ -705,6 +705,19 @@ func applyExitContract(t *Task, res TaskResult) TaskResult {
 	return res
 }
 
+// targetEffects resolves a target name to its declared Effects for the cap's
+// classification of a body's recursive `bashy dag <t>`.
+func (e *Engine) targetEffects(name string) ([]string, bool) {
+	if e.Graph == nil {
+		return nil, false
+	}
+	n, ok := e.Graph.Nodes[name]
+	if !ok {
+		return nil, false
+	}
+	return n.Task.Effects, true
+}
+
 // runAttempt runs the body once, wrapping it in a context.WithTimeout when the
 // target declares a Timeout. A deadline hit is reported as exit 124 "timeout".
 func (e *Engine) runAttempt(ctx context.Context, node *Node, capture bool, worker *Worker, attempt int) TaskResult {
@@ -721,6 +734,7 @@ func (e *Engine) runAttempt(ctx context.Context, node *Node, capture bool, worke
 	// through compound commands and pipelines. A declaration that does not
 	// parse fails the target here, before the body runs: never unconstrained.
 	runCtx, capErr := WithTaskCap(runCtx, node.Task.Effects)
+	runCtx = WithTargetEffects(runCtx, e.targetEffects)
 	if capErr != nil {
 		return TaskResult{Name: node.Task.Name, Host: node.Task.Host, Status: StatusFailed,
 			ExitCode: weavecli.ExitInvalidArg,
