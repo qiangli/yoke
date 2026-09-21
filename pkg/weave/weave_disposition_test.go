@@ -150,3 +150,66 @@ func TestWeavePruneOwnedRunRefusesUniqueWorkWithoutSalvage(t *testing.T) {
 		t.Fatalf("disposition = %q, want empty", q.Items[0].Disposition)
 	}
 }
+
+// A recorded disposition resolves the reaper's pending decision flags, even
+// when retrying a historical abandon. It does not waive process safety.
+func TestWeaveAbandonReconcilesPendingDecision(t *testing.T) {
+	for _, state := range []string{"killed", "submitted", "abandoned", "done"} {
+		for _, terminated := range []bool{false, true} {
+			name := state + "/terminated"
+			if !terminated {
+				name = state + "/unverified-child"
+			}
+			t.Run(name, func(t *testing.T) {
+				root, workspace, sha := setupAbandonGuardFixture(t)
+				t.Chdir(root)
+				dir, _ := weaveQueueDir(root)
+				it := &weaveItem{ID: 1, State: state, Workspace: workspace,
+					Branch: "agent/weave-issue-1", Head: sha, CommitsAhead: 1,
+					UnmergedCommits: 1, Salvageable: true, NeedsSteward: true,
+					StewardReason:         "submission needs a decision",
+					ResourceReservationID: "fixture-child", ResourceTerminated: terminated}
+				if err := saveWeaveQueue(dir, &weaveQueue{Root: root, Items: []*weaveItem{it}}); err != nil {
+					t.Fatal(err)
+				}
+				story := &weaveStory{Runs: []sprintRun{{Repo: filepath.Base(root), Queue: filepath.Base(dir), ID: 1}}}
+				var before sprintHygiene
+				sprintInspectRuns(story, &before)
+				if len(before.Problems) == 0 {
+					t.Fatal("fixture must reproduce the sprint closure blocker")
+				}
+				for attempt := 0; attempt < 2; attempt++ {
+					out, code := runWeave(t, "abandon", "1", "--yes", "--disposition", "superseded")
+					if code != 0 {
+						t.Fatalf("attempt %d: exit=%d %s", attempt, code, out)
+					}
+					q, err := loadWeaveQueue(dir)
+					if err != nil {
+						t.Fatal(err)
+					}
+					got := q.Items[0]
+					if got.UnmergedCommits != 0 || got.Salvageable || got.NeedsSteward || got.StewardReason != "" {
+						t.Fatalf("pending decision survived disposition: %+v", got)
+					}
+					if got.SalvageRef == "" || gitT(t, root, "rev-parse", got.SalvageRef) != sha {
+						t.Fatalf("preserved history missing after attempt %d: %+v", attempt, got)
+					}
+					_, statErr := os.Stat(workspace)
+					if terminated && !os.IsNotExist(statErr) {
+						t.Fatalf("settled workspace remains: %v", statErr)
+					}
+					if !terminated && statErr != nil {
+						t.Fatalf("unverified child's workspace was removed: %v", statErr)
+					}
+				}
+				if terminated {
+					var after sprintHygiene
+					sprintInspectRuns(story, &after)
+					if len(after.Problems) != 0 || len(after.Reclaimable) != 0 {
+						t.Fatalf("settled run still blocks closure: %+v", after)
+					}
+				}
+			})
+		}
+	}
+}

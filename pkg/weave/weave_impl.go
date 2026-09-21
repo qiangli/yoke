@@ -5208,6 +5208,9 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason, disposition string, y
 		if it == nil {
 			return fmt.Errorf("run #%d not found%s", id, notFoundHint)
 		}
+		// Retrying a disposed run must retain its already preserved history,
+		// including after its workspace has been reclaimed.
+		preservedRef = it.SalvageRef
 		// REFUSE TO DESTROY WORK THAT HAS NOWHERE ELSE TO LIVE.
 		//
 		// `weave prune` already refuses to sweep a workspace holding unmerged
@@ -5288,6 +5291,14 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason, disposition string, y
 			}
 		}
 		it.DispositionReason = reason
+		// The operator has resolved the outstanding decision, after the
+		// preservation guard above succeeded. These are pending-work flags,
+		// not history: keep Head, CommitsAhead and SalvageRef as evidence.
+		// Teardown still independently proves settlement and child termination.
+		it.UnmergedCommits = 0
+		it.Salvageable = false
+		it.NeedsSteward = false
+		it.StewardReason = ""
 		it.WrapperPid = 0
 		it.Completion = ""
 		it.FinalizerPID = 0
