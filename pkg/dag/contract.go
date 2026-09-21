@@ -26,12 +26,13 @@ import (
 // run-time cap through the same advice.ParseCap call (see parseEffects in
 // interp_cap.go). Declared Effects become the context cap for every command the
 // body dispatches through the in-process shell: commands whose atlas effects
-// fit within the declared cap are allowed; commands that exceed it (or that the
-// atlas does not classify) are denied before execution with exit 126. The same
-// vocabulary applies in both Bash and Bash++ bodies; compound commands and
-// pipelines are covered because the check runs at the ExecHandler seam — every
-// leaf dispatch is checked. A target with no Effects declaration is
-// unconstrained (cap absent).
+// fit within the declared cap pass silently; commands that exceed it (or that
+// the atlas does not classify) are reported once on the body's stderr and run
+// anyway — the cap is advisory, because the atlas is a table bashy curates,
+// not a law it can complete. The same vocabulary applies in both Bash and
+// Bash++ bodies; compound commands and pipelines are covered because the
+// check runs at the ExecHandler seam — every leaf dispatch is checked. A
+// target with no Effects declaration reports nothing (cap absent).
 
 // CheckResult is the outcome of one Ensure postcondition.
 type CheckResult struct {

@@ -728,12 +728,12 @@ func (e *Engine) runAttempt(ctx context.Context, node *Node, capture bool, worke
 		defer cancel()
 	}
 	// Wire the declared-effects cap onto the run context so CapExecHandler
-	// can enforce it for every command the body dispatches. No-op when
-	// Effects is empty — uncapped targets are unaffected. The cap rides on
-	// the context, not on a RunContext field, so it propagates transparently
-	// through compound commands and pipelines. A declaration that does not
-	// parse fails the target here, before the body runs: never unconstrained.
-	runCtx, capErr := WithTaskCap(runCtx, node.Task.Effects)
+	// can report, for every command the body dispatches, what the target did
+	// not declare. No-op when Effects is empty. The cap rides on the context,
+	// not on a RunContext field, so it propagates transparently through
+	// compound commands and pipelines. A declaration that does not parse
+	// fails the target here, before the body runs.
+	runCtx, capErr := WithTaskCap(runCtx, node.Task.Name, node.Task.Effects)
 	runCtx = WithTargetEffects(runCtx, e.targetEffects)
 	if capErr != nil {
 		return TaskResult{Name: node.Task.Name, Host: node.Task.Host, Status: StatusFailed,

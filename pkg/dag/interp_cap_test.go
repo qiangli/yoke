@@ -8,6 +8,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -62,71 +63,70 @@ func TestCapAllowedCommandRuns(t *testing.T) {
 	}
 }
 
-// A command that needs an effect the target did not declare is denied BEFORE
-// it runs: the shell sees status 126, the diagnostic names the command and the
-// denied effects, and the side effect never happens. rm is served in-process
-// by shell.Handler, so this also pins the guard running before that handler.
-func TestCapOverCapDeniedBeforeSideEffects(t *testing.T) {
+// A command that needs an effect the target did not declare is REPORTED, not
+// denied: the report names the target, the command and the undeclared
+// effects, and the command runs — the cap is advisory. rm is served
+// in-process by shell.Handler, so this also pins the report running before
+// that handler. A repeat of the same command is reported once.
+func TestCapOverCapReportedAndRuns(t *testing.T) {
 	for _, lang := range capLangs {
 		t.Run(lang, func(t *testing.T) {
 			dir := t.TempDir()
-			victim := filepath.Join(dir, "victim.txt")
-			if err := os.WriteFile(victim, []byte("x"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			r := runCapped(t, dir, lang, "read", "rm victim.txt")
-			if r.Status != StatusFailed || r.ExitCode != CapDeniedStatus {
-				t.Fatalf("want failed/126, got %s exit=%d err=%v", r.Status, r.ExitCode, r.Err)
-			}
-			if !exists(dir, "victim.txt") {
-				t.Fatal("denied rm still deleted the file — side effect leaked")
-			}
-			for _, want := range []string{`denied "rm"`, "destroy", "declared: read"} {
-				if !strings.Contains(r.Stderr, want) {
-					t.Errorf("diagnostic missing %q: %q", want, r.Stderr)
+			for _, f := range []string{"a.txt", "b.txt"} {
+				if err := os.WriteFile(filepath.Join(dir, f), []byte("x"), 0o644); err != nil {
+					t.Fatal(err)
 				}
+			}
+			r := runCapped(t, dir, lang, "read", "rm a.txt\nrm b.txt")
+			if r.Status != StatusDone || r.ExitCode != 0 {
+				t.Fatalf("advisory cap must not fail the body; got %s exit=%d err=%v stderr=%q", r.Status, r.ExitCode, r.Err, r.Stderr)
+			}
+			if exists(dir, "a.txt") || exists(dir, "b.txt") {
+				t.Fatal("reported rm did not run")
+			}
+			for _, want := range []string{`target "t"`, `"rm" needs destroy`, "Effects: read"} {
+				if !strings.Contains(r.Stderr, want) {
+					t.Errorf("report missing %q: %q", want, r.Stderr)
+				}
+			}
+			if n := strings.Count(r.Stderr, `"rm" needs`); n != 1 {
+				t.Errorf("want ONE report for the repeated command, got %d: %q", n, r.Stderr)
 			}
 		})
 	}
 }
 
 // Every leaf of a pipeline is checked, not just the head: `echo | tee` under a
-// read-only cap denies tee (write) with 126 as the pipeline status and writes
-// nothing. The head (echo, pure) is allowed.
+// read-only cap reports tee (write); the pipeline runs and writes. The head
+// (echo, pure) is never reported.
 func TestCapPipelineLeafCovered(t *testing.T) {
 	for _, lang := range capLangs {
 		t.Run(lang, func(t *testing.T) {
 			dir := t.TempDir()
 			r := runCapped(t, dir, lang, "read", "echo hi | tee out.txt")
-			if r.ExitCode != CapDeniedStatus {
-				t.Fatalf("want 126, got exit=%d stderr=%q", r.ExitCode, r.Stderr)
+			if r.ExitCode != 0 || !exists(dir, "out.txt") {
+				t.Fatalf("pipeline must run; exit=%d stderr=%q", r.ExitCode, r.Stderr)
 			}
-			if exists(dir, "out.txt") {
-				t.Fatal("denied pipeline leaf still wrote its output")
-			}
-			if !strings.Contains(r.Stderr, `denied "tee"`) || !strings.Contains(r.Stderr, "write") {
-				t.Errorf("diagnostic = %q", r.Stderr)
+			if !strings.Contains(r.Stderr, `"tee" needs write`) || strings.Contains(r.Stderr, `"echo"`) {
+				t.Errorf("report = %q", r.Stderr)
 			}
 		})
 	}
 }
 
-// A command the atlas does not classify fails closed as "unknown" (126, not
-// the shell's 127), and never reaches the exec handler — the write it would
-// have done through a real /bin/sh does not happen.
-func TestCapUnknownCommandFailsClosed(t *testing.T) {
+// A command the atlas does not classify is reported as "unknown" and runs:
+// the atlas is a table bashy curates, not a law — a tool it has never heard
+// of is exactly what must not break a build.
+func TestCapUnknownCommandReportedAndRuns(t *testing.T) {
 	for _, lang := range capLangs {
 		t.Run(lang, func(t *testing.T) {
 			dir := t.TempDir()
 			r := runCapped(t, dir, lang, "read, write, exec", "sh -c 'touch via-sh.txt'")
-			if r.ExitCode != CapDeniedStatus {
-				t.Fatalf("want 126 for unclassified command, got exit=%d stderr=%q", r.ExitCode, r.Stderr)
+			if r.ExitCode != 0 || !exists(dir, "via-sh.txt") {
+				t.Fatalf("unclassified command must run; exit=%d stderr=%q", r.ExitCode, r.Stderr)
 			}
-			if exists(dir, "via-sh.txt") {
-				t.Fatal("unclassified command ran anyway")
-			}
-			if !strings.Contains(r.Stderr, `denied "sh"`) || !strings.Contains(r.Stderr, "unknown") {
-				t.Errorf("diagnostic = %q", r.Stderr)
+			if !strings.Contains(r.Stderr, `"sh" needs unknown`) {
+				t.Errorf("report = %q", r.Stderr)
 			}
 		})
 	}
@@ -168,26 +168,29 @@ func TestCapVocabularyIsAdvice(t *testing.T) {
 	}
 }
 
-// An unparseable declaration on a hand-assembled Task never yields the
-// unconstrained context: WithTaskCap returns an error AND a deny-all cap.
-func TestWithTaskCapInvalidFailsClosed(t *testing.T) {
-	ctx, err := WithTaskCap(context.Background(), []string{"teleport"})
-	if err == nil {
+// An unparseable declaration is the one hard failure: WithTaskCap returns
+// the error (the engine refuses the body); empty Effects sets no cap. The cap
+// never rides the advice key — that one belongs to @guard, whose denial is
+// the function author's own request.
+func TestWithTaskCapInvalidIsAnError(t *testing.T) {
+	if _, err := WithTaskCap(context.Background(), "t", []string{"teleport"}); err == nil {
 		t.Fatal("want error for invalid effects")
 	}
-	cap, ok := advice.CapFrom(ctx)
-	if !ok {
-		t.Fatal("invalid effects returned the original unconstrained context")
-	}
-	if denied := cap.Exceeded([]string{"read"}); len(denied) == 0 {
-		t.Fatal("fail-closed cap must deny a read")
-	}
-	// Empty Effects: no cap, ctx unchanged.
-	ctx2, err := WithTaskCap(context.Background(), nil)
+	ctx, err := WithTaskCap(context.Background(), "t", []string{"read"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := advice.CapFrom(ctx2); ok {
+	if _, ok := ctx.Value(taskCapKey{}).(*taskCap); !ok {
+		t.Fatal("valid Effects must set the task cap")
+	}
+	if _, ok := advice.CapFrom(ctx); ok {
+		t.Fatal("the task cap must not ride the advice key")
+	}
+	ctx2, err := WithTaskCap(context.Background(), "t", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ctx2.Value(taskCapKey{}).(*taskCap); ok {
 		t.Fatal("empty Effects must not set a cap")
 	}
 }
@@ -253,38 +256,61 @@ func TestCapRecursiveBashyClassifiedByVerb(t *testing.T) {
 	}
 }
 
-// End to end: a body's `bashy go build` is denied under Effects: write naming
-// go's undeclared effects — before anything runs.
-func TestCapRecursiveBashyDeniedNamesVerb(t *testing.T) {
+// shimBashy puts a fake `bashy` first on PATH that records it ran, so the
+// end-to-end recursive tests exercise the report without running the real
+// shell.
+func shimBashy(t *testing.T, dir string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("sh shim")
+	}
+	bin := filepath.Join(dir, "shim")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	shim := "#!/bin/sh\ntouch \"$(dirname \"$0\")/../bashy-ran.txt\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "bashy"), []byte(shim), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// End to end: a body's `bashy go build` under Effects: write is reported as
+// go's undeclared effects, naming the verb — and runs.
+func TestCapRecursiveBashyReportNamesVerb(t *testing.T) {
 	for _, lang := range capLangs {
 		t.Run(lang, func(t *testing.T) {
-			r := runCapped(t, t.TempDir(), lang, "write", "bashy go build ./...")
-			if r.ExitCode != CapDeniedStatus {
-				t.Fatalf("want 126, got exit=%d stderr=%q", r.ExitCode, r.Stderr)
+			dir := t.TempDir()
+			shimBashy(t, dir)
+			r := runCapped(t, dir, lang, "write", "bashy go build ./...")
+			if r.ExitCode != 0 || !exists(dir, "bashy-ran.txt") {
+				t.Fatalf("reported command must run; exit=%d stderr=%q", r.ExitCode, r.Stderr)
 			}
-			if !strings.Contains(r.Stderr, `denied "go"`) || !strings.Contains(r.Stderr, "exec,net") {
-				t.Errorf("diagnostic = %q", r.Stderr)
+			if !strings.Contains(r.Stderr, `"go" needs exec,net`) {
+				t.Errorf("report = %q", r.Stderr)
 			}
 		})
 	}
 }
 
 // `bashy dag <t>` takes <t>'s own declaration: t2 declares write, so a caller
-// capped to read is denied naming "dag t2" and write.
+// capped to read reports "dag t2" needing write.
 func TestCapRecursiveDagTakesSubtargetEffects(t *testing.T) {
+	dir := t.TempDir()
+	shimBashy(t, dir)
 	md := "## Tasks\n\n### t\nEffects: read\n" + block("bash", "bashy dag t2") +
 		"\n### t2\nEffects: write\n" + block("bash", "touch t2.txt")
-	e := contractEngine(t, t.TempDir(), md)
+	e := contractEngine(t, dir, md)
 	report, err := e.Run(context.Background(), "t")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	r := report.Results[0]
 	stderr := r.Stderr + e.Stderr.(*bytes.Buffer).String()
-	if r.ExitCode != CapDeniedStatus {
-		t.Fatalf("want 126, got exit=%d stderr=%q", r.ExitCode, stderr)
+	if r.ExitCode != 0 || !exists(dir, "bashy-ran.txt") {
+		t.Fatalf("reported command must run; exit=%d stderr=%q", r.ExitCode, stderr)
 	}
-	if !strings.Contains(stderr, `denied "dag t2"`) || !strings.Contains(stderr, "undeclared effects write") {
-		t.Errorf("diagnostic = %q", stderr)
+	if !strings.Contains(stderr, `"dag t2" needs write`) {
+		t.Errorf("report = %q", stderr)
 	}
 }

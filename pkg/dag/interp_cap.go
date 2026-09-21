@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"mvdan.cc/sh/v3/interp"
 
@@ -16,52 +17,62 @@ import (
 	"github.com/qiangli/yoke/pkg/policy/advice"
 )
 
-// CapDeniedStatus is the shell status a body sees when a dispatched command
-// exceeds the target's declared Effects: 126 ("found but not executable"), the
-// same status the shell yields for a command it refuses to run.
-const CapDeniedStatus = 126
-
-// CapExecHandler returns an interp.ExecHandlers middleware that enforces a
-// declared-effects cap on every command dispatched in a DAG target body.
+// CapExecHandler returns an interp.ExecHandlers middleware that reports, for
+// every command dispatched in a DAG target body, the effects the target's
+// Effects: line did not declare — and then runs the command anyway.
 //
-// When a cap is active on the context (set by WithTaskCap before the body
-// runs), each argv[0] is looked up in the atlas:
+// The cap is advisory. The check needs to know what a command does, and the
+// only source for that is the atlas, a table bashy curates and can never
+// complete: cc, ssh, outpost, a helper script, the shell re-entering itself
+// have each broken a real target under a denying cap. Bashy ships the rod
+// (the seam, the vocabulary, the report), not the fish (the law of what
+// every tool in the world does) — so an undeclared or unclassified command
+// is named ONCE per target on the body's stderr, and the body's exit status
+// is the body's own:
 //
-//   - pure commands are always allowed regardless of the cap.
-//   - commands whose atlas effects all fit within the cap are allowed.
-//   - commands that exceed the cap (undeclared effects) are denied BEFORE
-//     execution with CapDeniedStatus, naming the command and the denied effects
-//     on the body's stderr.
-//   - commands absent from the atlas (unclassified) deny as "unknown",
-//     matching Cap.Exceeded's fail-closed contract.
+//   - pure commands are never reported.
+//   - commands whose atlas effects all fit within the cap pass silently.
+//   - commands that exceed the cap are reported with the undeclared effects.
+//   - commands absent from the atlas are reported as "unknown".
 //
-// No cap on the context (a target with no Effects) passes through to the next
-// handler unconditionally — targets without declared effects run without
-// restriction, preserving backward compatibility.
+// No cap on the context (a target with no Effects) passes through silently.
 //
 // Ordering: interp.ExecHandlers chains middlewares first to last and the runner
 // calls the FIRST, so this handler must be the first argument — outermost — in
-// the chain. Placed before shell.Handler() it runs even for the in-process
+// the chain. Placed before shell.Handler() it sees even the in-process
 // coreutils tools that handler serves without calling next, and it applies
 // identically to compound commands, pipelines, and subshells: every leaf
 // command the shell dispatches through the ExecHandler seam is checked.
 func CapExecHandler() func(interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 	return func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 		return func(ctx context.Context, args []string) error {
-			cap, ok := advice.CapFrom(ctx)
+			tc, ok := ctx.Value(taskCapKey{}).(*taskCap)
 			if !ok || len(args) == 0 {
 				return next(ctx, args)
 			}
 			name, effects := classifyCommand(ctx, args)
-			denied := cap.Exceeded(effects)
-			if len(denied) == 0 {
-				return next(ctx, args)
+			if undeclared := tc.cap.Exceeded(effects); len(undeclared) > 0 {
+				key := name + "\x00" + strings.Join(undeclared, ",")
+				if _, seen := tc.reported.LoadOrStore(key, struct{}{}); !seen {
+					fmt.Fprintln(interp.HandlerCtx(ctx).Stderr, capWarning(tc.target, name, undeclared, tc.cap))
+				}
 			}
-			fmt.Fprintln(interp.HandlerCtx(ctx).Stderr, capDeniedError(name, denied, cap))
-			return interp.ExitStatus(CapDeniedStatus)
+			return next(ctx, args)
 		}
 	}
 }
+
+// taskCap is a target's parsed Effects: cap plus the once-per-target report
+// ledger, carried under dag's own context key so the report is the ONLY
+// consequence — no other handler (bashy's opt-in audit denies on the
+// advice cap a @guard sets) can turn it into a denial.
+type taskCap struct {
+	target   string
+	cap      advice.Cap
+	reported sync.Map
+}
+
+type taskCapKey struct{}
 
 // commandName strips a leading path so `/usr/bin/echo` and `./myscript` check
 // against the basename, consistent with how the atlas keys its entries.
@@ -77,10 +88,10 @@ func commandName(arg0 string) string {
 // re-entering itself — a body's `"$BASHY_EXE" go build`, `bashy git …`,
 // `bashy dag <t>` — is not an atlas tool, so it is classified by its VERB:
 // `bashy go` is the atlas entry for go, `bashy git` for git, and `bashy dag <t>`
-// is <t>'s own declared Effects (none declared → unknown, fail closed). A
+// is <t>'s own declared Effects (none declared → unknown). A
 // recursive call with no verb, a flag (`bashy -c …`) or a script path stays
-// unknown: nothing declares what it does. The diagnostic names the verb, so a
-// denial reads `denied "go"`, not `denied "bashy"`.
+// unknown: nothing declares what it does. The report names the verb: `"go"
+// needs …`, not `"bashy"`.
 func classifyCommand(ctx context.Context, args []string) (string, []string) {
 	name := commandName(args[0])
 	if !isSelf(args[0], name) {
@@ -161,22 +172,22 @@ func atlasEffectsFor(name string) []string {
 
 // WithTaskCap returns a context carrying the cap derived from a task's declared
 // Effects. Empty Effects sets no cap and returns ctx unchanged — the handler
-// treats absence of a cap as unconstrained.
+// treats absence of a cap as nothing to report.
 //
-// Fail closed: when Effects does not parse (BuildGraph rejects that at graph
-// construction, so it means a Task assembled by hand), the returned context
-// carries the zero Cap — which denies every non-pure command — and the error
-// is returned so the caller can refuse to run the body at all. The original
-// unconstrained ctx is never returned for a non-empty declaration.
-func WithTaskCap(ctx context.Context, effects []string) (context.Context, error) {
+// A declaration that does not parse is the one hard failure left: the
+// vocabulary is the rod's own grammar (BuildGraph rejects it at graph
+// construction, so it means a Task assembled by hand). The error is returned
+// so the caller can refuse to run the body; the returned context carries no
+// cap.
+func WithTaskCap(ctx context.Context, target string, effects []string) (context.Context, error) {
 	if len(effects) == 0 {
 		return ctx, nil
 	}
 	cap, err := parseEffects(effects)
 	if err != nil {
-		return advice.WithCap(ctx, advice.Cap{}), err
+		return ctx, err
 	}
-	return advice.WithCap(ctx, cap), nil
+	return context.WithValue(ctx, taskCapKey{}, &taskCap{target: target, cap: cap}), nil
 }
 
 // parseEffects is the ONE place a target's Effects: declaration is turned into
@@ -187,9 +198,9 @@ func parseEffects(effects []string) (advice.Cap, error) {
 	return advice.ParseCap(strings.Join(effects, ","))
 }
 
-// capDeniedError is the diagnostic for a cap denial: the command, the effects
-// it needs that the target did not declare, and the cap that was in force.
-func capDeniedError(name string, denied []string, cap advice.Cap) error {
-	return fmt.Errorf("dag: effect cap denied %q: undeclared effects %s (declared: %s; add them to Effects: to allow)",
-		name, strings.Join(denied, ","), cap)
+// capWarning is the report for an undeclared effect: the target, the command,
+// the effects it needs that the target did not declare, and the cap in force.
+func capWarning(target, name string, undeclared []string, cap advice.Cap) string {
+	return fmt.Sprintf("dag: effect cap: target %q: %q needs %s not in Effects: %s",
+		target, name, strings.Join(undeclared, ","), cap)
 }

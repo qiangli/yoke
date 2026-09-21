@@ -39,10 +39,10 @@ real dependency graph — an agent-first replacement for make.
 Each target is a heading with an optional description, metadata lines
 (Requires:/Inputs:/Sources:/Generates:), an optional contract
 (Require: precondition, checked before the body; Ensure: postcondition,
-checked after it; Effects: declared effect cap — commands whose atlas
-effects exceed the cap are denied before execution with exit 126;
-unclassified commands fail closed; a failed check exits 3 naming
-the clause), and a fenced code block run through the in-process shell.
+checked after it; Effects: declared effect cap — a command whose atlas
+effects exceed the cap, or that the atlas does not know, is reported once
+on stderr and runs anyway; a failed check exits 3 naming the clause), and a
+fenced code block run through the in-process shell.
 Targets execute in topological order; a target whose dependency failed is
 skipped.
 
