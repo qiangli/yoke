@@ -123,7 +123,7 @@ func commandName(arg0 string) string {
 func classifyCommand(ctx context.Context, args []string) (string, []string) {
 	name := commandName(args[0])
 	if !isSelf(args[0], name) {
-		return name, atlasEffectsFor(name)
+		return name, vouchedEffects(ctx, atlasEffectsFor(name))
 	}
 	if len(args) < 2 {
 		return name, nil
@@ -143,7 +143,20 @@ func classifyCommand(ctx context.Context, args []string) (string, []string) {
 		}
 		return verb + " " + args[2], nil
 	}
-	return verb, atlasEffectsFor(verb)
+	return verb, vouchedEffects(ctx, atlasEffectsFor(verb))
+}
+
+// vouchedEffects lets an author's @effects declaration (advice.WithVouch)
+// classify a command the atlas does not know; the atlas keeps the last word
+// on the commands it does.
+func vouchedEffects(ctx context.Context, effects []string) []string {
+	if effects != nil {
+		return effects
+	}
+	if v, ok := advice.VouchFrom(ctx); ok {
+		return v
+	}
+	return nil
 }
 
 // isSelf reports whether argv[0] is this shell: the file the runner exports as

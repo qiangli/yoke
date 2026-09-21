@@ -138,3 +138,24 @@ func CapFrom(ctx context.Context) (Cap, bool) {
 	c, ok := ctx.Value(capKey{}).(Cap)
 	return c, ok
 }
+
+// A vouch is an author's declaration of what their own code does — a Bash#
+// function's @effects(...) — carried on the context for the commands that
+// function dispatches. A command the atlas does not know is classified by
+// the vouch instead of as "unknown": the atlas is bashy's word about the
+// tools it ships; the vouch is the author's word about everything else. The
+// atlas, being the more precise source, still classifies the commands it
+// knows.
+type vouchKey struct{}
+
+// WithVouch returns ctx carrying effects as the declaration for commands
+// the atlas cannot classify.
+func WithVouch(ctx context.Context, effects []string) context.Context {
+	return context.WithValue(ctx, vouchKey{}, append([]string(nil), effects...))
+}
+
+// VouchFrom returns the declaration on ctx, if any.
+func VouchFrom(ctx context.Context) ([]string, bool) {
+	v, ok := ctx.Value(vouchKey{}).([]string)
+	return v, ok
+}
