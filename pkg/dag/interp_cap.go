@@ -36,6 +36,8 @@ import (
 //   - commands absent from the atlas are reported as "unknown".
 //
 // No cap on the context (a target with no Effects) passes through silently.
+// A @guard cap set by a function inside the body (the advice key) is the
+// author's own and still DENIES — see CapDeniedStatus.
 //
 // Ordering: interp.ExecHandlers chains middlewares first to last and the runner
 // calls the FIRST, so this handler must be the first argument — outermost — in
@@ -46,20 +48,46 @@ import (
 func CapExecHandler() func(interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 	return func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 		return func(ctx context.Context, args []string) error {
-			tc, ok := ctx.Value(taskCapKey{}).(*taskCap)
-			if !ok || len(args) == 0 {
+			if len(args) == 0 {
+				return next(ctx, args)
+			}
+			tc, hasTask := ctx.Value(taskCapKey{}).(*taskCap)
+			guard, hasGuard := advice.CapFrom(ctx)
+			if !hasTask && !hasGuard {
 				return next(ctx, args)
 			}
 			name, effects := classifyCommand(ctx, args)
-			if undeclared := tc.cap.Exceeded(effects); len(undeclared) > 0 {
-				key := name + "\x00" + strings.Join(undeclared, ",")
-				if _, seen := tc.reported.LoadOrStore(key, struct{}{}); !seen {
-					fmt.Fprintln(interp.HandlerCtx(ctx).Stderr, capWarning(tc.target, name, undeclared, tc.cap))
+			// A @guard inside the body is the author's own cap on their own
+			// code: that one denies, as it always has (CapDeniedStatus).
+			if hasGuard {
+				if denied := guard.Exceeded(effects); len(denied) > 0 {
+					fmt.Fprintln(interp.HandlerCtx(ctx).Stderr, capDeniedError(name, denied, guard))
+					return interp.ExitStatus(CapDeniedStatus)
+				}
+			}
+			if hasTask {
+				if undeclared := tc.cap.Exceeded(effects); len(undeclared) > 0 {
+					key := name + "\x00" + strings.Join(undeclared, ",")
+					if _, seen := tc.reported.LoadOrStore(key, struct{}{}); !seen {
+						fmt.Fprintln(interp.HandlerCtx(ctx).Stderr, capWarning(tc.target, name, undeclared, tc.cap))
+					}
 				}
 			}
 			return next(ctx, args)
 		}
 	}
+}
+
+// CapDeniedStatus is the shell status a body sees when a command exceeds a
+// @guard cap set inside it: 126 ("found but not executable"), the same
+// status the shell yields for a command it refuses to run.
+const CapDeniedStatus = 126
+
+// capDeniedError is the diagnostic for a @guard denial: the command, the
+// effects it needs that the guard did not allow, and the cap in force.
+func capDeniedError(name string, denied []string, cap advice.Cap) error {
+	return fmt.Errorf("dag: effect cap denied %q: undeclared effects %s (declared: %s; add them to Effects: to allow)",
+		name, strings.Join(denied, ","), cap)
 }
 
 // taskCap is a target's parsed Effects: cap plus the once-per-target report
