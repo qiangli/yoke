@@ -49,6 +49,10 @@ type Command struct {
 	Script   string           `yaml:"script,omitempty" json:"script,omitempty" doc:"inline body run as bashy -c BODY NAME ARGS ($0 = NAME)"`
 	Dialect  string           `yaml:"dialect,omitempty" json:"dialect,omitempty" doc:"script dialect: bashpp (default) or bash"`
 
+	// The persisted argument schema (command_schema.go). nil = a pre-schema
+	// record: untyped pass-through, exactly as before the field existed.
+	Args *CommandSchema `yaml:"args,omitempty" json:"args,omitempty" doc:"argument schema the shell binds and validates before the body runs (typed positionals, flags, enums, defaults); absent = untyped pass-through"`
+
 	// Atlas metadata (closed vocabularies from pkg/atlas).
 	Effects []string `yaml:"effects,omitempty" json:"effects,omitempty" doc:"security effects (atlas vocabulary); at least one — script bodies must declare theirs"`
 	Caps    []string `yaml:"caps,omitempty" json:"caps,omitempty" doc:"agentic capabilities (atlas vocabulary)"`
@@ -281,6 +285,9 @@ func (c Command) Validate(reserved ReservedName) error {
 	}
 	if c.Cwd != "" && !filepath.IsAbs(c.Cwd) {
 		return fmt.Errorf("fleet: command %q: cwd %q must be absolute", c.Name, c.Cwd)
+	}
+	if err := c.Args.Validate(); err != nil {
+		return fmt.Errorf("fleet: command %q: %w", c.Name, err)
 	}
 	return nil
 }

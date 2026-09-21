@@ -51,6 +51,23 @@ command has:
   script     an inline body run as ` + "`bashy -c BODY NAME ARGS`" + ` (--set script=…;
              its effects are yours to declare: --set effects.0=read)
 
+Any mode may declare an ARGUMENT SCHEMA — typed positionals, named flags,
+enums and defaults — that the shell binds and validates BEFORE the body or
+program runs, so a bad call fails on the argument, not inside the body:
+
+  args.positionals.<i>   name, type (string|int|float|bool), required,
+                         default, enum.<j>   (required ones first)
+  args.flags.<i>         name (--name), shorthand (-x), type, required,
+                         default, enum.<j>   (a bool flag alone means true)
+
+  --set args.positionals.0.name=color --set args.positionals.0.required=true \
+  --set args.positionals.0.enum.0=red --set args.positionals.0.enum.1=blue \
+  --set args.flags.0.name=count --set args.flags.0.type=int
+
+A record without args is untyped pass-through, exactly as before. An invalid
+schema (a required positional after an optional one, a default outside its
+enum, an unknown type) is refused when written and reported by verify.
+
 Dispatch precedence is builtin -> applet -> verb -> REGISTERED -> PATH, in
 every mode (--posix included): a registered name may shadow a PATH program,
 never a command bashy ships — add refuses the collision, and a ring entry a
@@ -162,6 +179,9 @@ func newCommandsAdd(opts []Option) *cobra.Command {
 			"alias or skill is REFUSED — there is no --force for that: a registered\n" +
 			"command may shadow a PATH program, never a command bashy ships.",
 		Example: "  bashy commands add gl --set script='git log --oneline -n \"${1:-10}\"' --set effects.0=read\n" +
+			"  bashy commands add paint --set script='echo \"$@\"' --set effects.0=pure \\\n" +
+			"      --set args.positionals.0.name=color --set args.positionals.0.enum.0=red --set args.positionals.0.enum.1=blue \\\n" +
+			"      --set args.flags.0.name=count --set args.flags.0.type=int --set args.flags.0.required=true\n" +
 			"  bashy commands add jqs --set exec.0=/usr/local/bin/jq --set exec.1=-S\n" +
 			"  bashy commands add witr --set download.github=owner/repo --set download.version=v0.3.3 \\\n" +
 			"      --set download.sha256.linux/amd64=<hex>\n" +
