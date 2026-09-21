@@ -196,9 +196,9 @@ func newSprintStartCmd() *cobra.Command {
 			"  bashy sprint start 3 --owner AGENT_NAME --for 4h",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			id, err := strconv.ParseInt(args[0], 10, 64)
+			id, err := sprintArg(cmd, flags.mode(), "sprint start", args[0])
 			if err != nil {
-				return fmt.Errorf("sprint must be an integer: %q", args[0])
+				return err
 			}
 			if forDur <= 0 {
 				return fmt.Errorf("--for must be positive (got %s)", forDur)

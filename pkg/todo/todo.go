@@ -385,6 +385,28 @@ func List(st *issue.Store, status string) ([]*issue.Issue, error) {
 	return out, nil
 }
 
+// SprintHandles answers the uuid and title of the sprint card numbered seq on
+// THIS host's board, or ok=false when no board is linked in or the card does
+// not exist. A package-variable seam, not an import: todo does not depend on
+// sprint (see issue.Issue.Sprint), so a plain `todo` binary leaves it nil and
+// files only the seq; the sprint-aware wiring sets it, and `todo add/edit
+// --sprint N` then also writes sprint_id + sprint_title so the story carries
+// its sprint to any host that checks the repo out.
+var SprintHandles func(seq int64) (uuid, title string, ok bool)
+
+// LinkSprint sets the story's sprint fields from seq: all three when the seam
+// answers, the seq alone when it does not, and none when seq is 0 (unlink).
+// The seq is a label scoped to the filer's host; the uuid is the identity.
+func LinkSprint(it *issue.Issue, seq int64) {
+	it.Sprint, it.SprintID, it.SprintTitle = seq, "", ""
+	if seq == 0 || SprintHandles == nil {
+		return
+	}
+	if uuid, title, ok := SprintHandles(seq); ok {
+		it.SprintID, it.SprintTitle = uuid, title
+	}
+}
+
 // CadenceSprint is the cadence of an item whose repetition is driven by a
 // SPRINT CYCLE rather than by the clock: `bashy sprint advance` resets it, so
 // there is deliberately no due date to advance.

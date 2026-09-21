@@ -79,6 +79,9 @@ type listItem struct {
 	// console) can group stories under their card without re-reading every
 	// item file — and never required, because todo does not depend on sprint.
 	Sprint int64 `json:"sprint,omitempty"`
+	// SprintID is the sprint's uuid — the identity that holds across hosts,
+	// where Sprint is only the filer's local number.
+	SprintID string `json:"sprint_id,omitempty"`
 }
 
 // listResult is the result object of the `todo list --json` envelope: the
@@ -115,6 +118,7 @@ func toListItems(items []*issue.Issue, scope string) []listItem {
 			Assignee:  it.Assignee,
 			Closed:    it.Closed,
 			Sprint:    it.Sprint,
+			SprintID:  it.SprintID,
 		})
 	}
 	return out
@@ -342,7 +346,7 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 			}
 			if cmd.Flags().Changed("sprint") || kind != issue.KindTask || len(labels) > 0 {
 				if cmd.Flags().Changed("sprint") {
-					it.Sprint = sprint
+					LinkSprint(it, sprint)
 				}
 				it.Kind = kind
 				it.Labels = labels
@@ -356,6 +360,9 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 			}
 			if jsonOut {
 				out := map[string]any{"id": it.ID, "status": it.Status, "title": it.Title, "sprint": it.Sprint, "kind": it.Kind}
+				if it.SprintID != "" {
+					out["sprint_id"] = it.SprintID
+				}
 				if len(it.Labels) > 0 {
 					out["labels"] = it.Labels
 				}
@@ -553,7 +560,11 @@ func newShowCmd(sf storeFunc) *cobra.Command {
 				fmt.Fprintf(w, "  assignee  %s\n", it.Assignee)
 			}
 			if it.Sprint != 0 {
-				fmt.Fprintf(w, "  sprint    #%d\n", it.Sprint)
+				if it.SprintID != "" {
+					fmt.Fprintf(w, "  sprint    #%d · %s\n", it.Sprint, it.SprintID)
+				} else {
+					fmt.Fprintf(w, "  sprint    #%d\n", it.Sprint)
+				}
 			}
 			if it.Weave != 0 {
 				if it.Status == StatusDone {
@@ -769,7 +780,7 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 				if sprint < 0 {
 					return fmt.Errorf("--sprint must be zero (unlink) or a positive sprint number")
 				}
-				it.Sprint = sprint
+				LinkSprint(it, sprint)
 			}
 			if _, err := st.Save(it); err != nil {
 				return err

@@ -296,14 +296,28 @@ func runWeaveBoard(cmd *cobra.Command, epic string, flags *weaveOutputFlags) err
 		}
 	}
 	sort.Slice(stories, func(i, j int) bool { return stories[i].ID < stories[j].ID })
+	// Sprints the checkout's stories name that this host has no card for: a
+	// fresh clone sees the team's sprints here, and the first verb that names
+	// one creates its card.
+	fromRepo := repoSprintsNotOnBoard(q)
 	if mode == weavecli.OutputJSON {
-		return ec(emitOK(cmd.OutOrStdout(), mode, "sprint board", map[string]any{"stories": stories}))
+		payload := map[string]any{"stories": stories}
+		if len(fromRepo) > 0 {
+			rows := make([]map[string]any, 0, len(fromRepo))
+			for _, c := range fromRepo {
+				rows = append(rows, map[string]any{"uuid": c.UUID, "title": c.Title, "seq_there": c.Seq, "stories": c.Stories, "repo": c.Root})
+			}
+			payload["in_checkout_not_on_host"] = rows
+		}
+		return ec(emitOK(cmd.OutOrStdout(), mode, "sprint board", payload))
 	}
 	out := cmd.OutOrStdout()
 	if len(stories) == 0 {
 		fmt.Fprintln(out, "sprint board is empty — `sprint add \"<title>\" --spec <doc>`")
+		renderSprintsFromRepo(out, fromRepo)
 		return nil
 	}
+	defer renderSprintsFromRepo(out, fromRepo)
 	now := time.Now().UTC()
 	fmt.Fprintln(out, "SPRINT BOARD")
 	// The board is per host; its STORIES travel through git. One line per
@@ -412,6 +426,19 @@ for each story it advances:
   Story-ID: d1e86f29d7a7
 
 Install the local fail-closed guard with ` + "`bashy sprint hooks install`" + `.
+
+THE BOARD IS PER HOST; THE SPRINT TRAVELS IN THE REPO. Each user/host runs
+its own sprint numbers, so ` + "`Sprint: #N`" + ` is the committer's local label. What
+crosses hosts is the story: ` + "`todo add --sprint N`" + ` writes sprint (the label),
+sprint_id (the uuid — the identity) and sprint_title into its frontmatter,
+and a host that checks the repo out and has no such card gets one on the
+first verb that names it — ` + "`bashy sprint show <uuid>`" + ` (or the number the
+stories carry) creates it with the SAME uuid and a local number. The guard
+matches stories by uuid, so two hosts commit under different numbers
+against the same stories. An optional ` + "`Sprint-ID: <uuid>`" + ` trailer names the
+sprint unambiguously once the commit has travelled; when present it must be
+the card's uuid. Nothing syncs cards, leases or threads between hosts —
+coordinate outside, keyed by the uuid.
 
 TELL THE OTHER MANAGERS. Several sprints run at once on one host against
 shared repos and a shared gate, so a stage change — created, moved, started,
@@ -689,6 +716,7 @@ func runWeaveStoryAdd(cmd *cobra.Command, title, epic, primaryGoal, spec, accept
 		return err
 	}
 	var newID int64
+	var newUUID string
 	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
 		if q.NextStoryID == 0 {
 			q.NextStoryID = 1
@@ -703,15 +731,19 @@ func runWeaveStoryAdd(cmd *cobra.Command, title, epic, primaryGoal, spec, accept
 		}
 		weaveStoryAppend(s, "conductor", kindStage, fmt.Sprintf("created in %s", column))
 		q.Stories = append(q.Stories, s)
+		// Mint uuid + slug now, under the same write: a story filed against
+		// this card in the next second must be able to carry the uuid.
+		mintSprintHandles(q)
+		newUUID = s.UUID
 		return nil
 	})
 	if lockErr != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "sprint add", weavecli.ExitGenericFail, lockErr))
 	}
 	if mode == weavecli.OutputJSON {
-		return ec(emitOK(cmd.OutOrStdout(), mode, "sprint add", map[string]any{"sprint": newID, "column": column}))
+		return ec(emitOK(cmd.OutOrStdout(), mode, "sprint add", map[string]any{"sprint": newID, "uuid": newUUID, "column": column}))
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "sprint add: sprint #%d in %s\n", newID, column)
+	fmt.Fprintf(cmd.OutOrStdout(), "sprint add: sprint #%d in %s · %s\n", newID, column, newUUID)
 	return nil
 }
 
@@ -723,22 +755,11 @@ func newWeaveStoryShowCmd() *cobra.Command {
 		Short: "Show a sprint card: spec, acceptance, continuity, lease, thread, tasks",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			id, err := strconv.ParseInt(args[0], 10, 64)
+			// A seq, a uuid, a slug or an ancestral path (D14) — and a card this
+			// host has not got yet is created from the checkout's stories.
+			id, err := sprintArg(cmd, flags.mode(), "sprint show", args[0])
 			if err != nil {
-				// Not a seq: a uuid, a slug or an ancestral path (D14).
-				dir, derr := weaveStoryDir(cmd, flags.mode(), "sprint show")
-				if derr != nil {
-					return derr
-				}
-				q, lerr := loadWeaveQueue(dir)
-				if lerr != nil {
-					return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "sprint show", weavecli.ExitGenericFail, lerr))
-				}
-				s, ferr := findSprintByHandle(q, args[0])
-				if ferr != nil {
-					return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "sprint show", weavecli.ExitInvalidArg, ferr))
-				}
-				id = s.ID
+				return err
 			}
 			return runWeaveStoryShow(cmd, id, &flags, links)
 		},
@@ -867,9 +888,9 @@ func newWeaveStoryMoveCmd() *cobra.Command {
 		Short: "Move a sprint to a kanban column",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			id, err := strconv.ParseInt(args[0], 10, 64)
+			id, err := sprintArg(cmd, flags.mode(), "sprint move", args[0])
 			if err != nil {
-				return fmt.Errorf("sprint must be an integer: %q", args[0])
+				return err
 			}
 			col := strings.ToLower(strings.TrimSpace(args[1]))
 			if !isValidColumn(col) {
@@ -997,9 +1018,9 @@ costs more. Delegation transfers execution; it never transfers accountability �
 you still gate, converge and report.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			id, err := strconv.ParseInt(args[0], 10, 64)
+			id, err := sprintArg(cmd, flags.mode(), "sprint take", args[0])
 			if err != nil {
-				return fmt.Errorf("sprint must be an integer: %q", args[0])
+				return err
 			}
 			return runSprintOwnerLifecycle(cmd, &flags, id, "sprint take", "transfer managed sprint owner", func() error {
 				if !cmd.Flags().Changed("owner") || strings.TrimSpace(as) == "" {

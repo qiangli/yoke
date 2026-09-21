@@ -299,6 +299,19 @@ type Issue struct {
 	// by another name and these tools are deliberately uncoupled.
 	Sprint int64 `yaml:"sprint,omitempty" json:"sprint,omitempty"`
 
+	// SprintID and SprintTitle travel with Sprint so the story describes its
+	// sprint to ANY host that checks the repo out. The seq above is the
+	// filer's local number — each user/host runs its own — so it is a label,
+	// never an identity: another host may already use that number for an
+	// unrelated card. The uuid is what says "the same sprint" across hosts,
+	// and the title is what lets a host with no such card create one from the
+	// story alone (`bashy sprint show <uuid>` does exactly that). Both are
+	// written by the sprint-aware `todo add/edit --sprint` and cleared with it;
+	// a plain todo never needs them, and a story without them still matches
+	// its sprint by seq on the host that filed it.
+	SprintID    string `yaml:"sprint_id,omitempty" json:"sprint_id,omitempty"`
+	SprintTitle string `yaml:"sprint_title,omitempty" json:"sprint_title,omitempty"`
+
 	Closed     *time.Time `yaml:"closed,omitempty" json:"closed,omitempty"`
 	Resolution string     `yaml:"resolution,omitempty" json:"resolution,omitempty"` // fixed | declined | duplicate | obsolete
 	ClosedBy   string     `yaml:"closed_by,omitempty" json:"closed_by,omitempty"`

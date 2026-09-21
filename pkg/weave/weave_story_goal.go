@@ -48,6 +48,9 @@ type sprintStoryState struct {
 	Priority string         `json:"priority,omitempty"`
 	Seq      int            `json:"seq,omitempty"`
 	Missing  bool           `json:"missing,omitempty"`
+	// SprintID is the uuid the story's frontmatter names, when it does; the
+	// no-card rung of the commit guard checks an optional Sprint-ID against it.
+	SprintID string `json:"sprint_id,omitempty"`
 }
 
 // sprintInboxDeliveryLive reports whether mail addressed to this owner can
@@ -217,7 +220,7 @@ func loadSprintStories(s *weaveStory) ([]sprintStoryState, error) {
 			return nil, fmt.Errorf("stories in %s: %w", root, err)
 		}
 		for _, it := range items {
-			if it.Sprint != s.ID {
+			if !storyBelongsToSprint(it, s) {
 				continue
 			}
 			key := root + "\x00" + it.ID
@@ -225,7 +228,7 @@ func loadSprintStories(s *weaveStory) ([]sprintStoryState, error) {
 				continue
 			}
 			seen[key] = true
-			out = append(out, sprintStoryState{Ref: sprintStoryRef{Repo: root, ID: it.ID}, Title: it.Title, Status: it.Status, Priority: it.Priority, Seq: it.Seq})
+			out = append(out, sprintStoryState{Ref: sprintStoryRef{Repo: root, ID: it.ID}, Title: it.Title, Status: it.Status, Priority: it.Priority, Seq: it.Seq, SprintID: it.SprintID})
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -324,9 +327,9 @@ func newSprintTrackCmd() *cobra.Command {
 	var repo string
 	cmd := &cobra.Command{Use: "track <sprint>", Short: "Add a repo todo store to the sprint's derived story index", Args: cobra.ExactArgs(1)}
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
-		id, err := strconv.ParseInt(args[0], 10, 64)
+		id, err := sprintArg(cmd, flags.mode(), "sprint track", args[0])
 		if err != nil {
-			return fmt.Errorf("sprint must be an integer: %q", args[0])
+			return err
 		}
 		root, err := normalizeStoryRoot(repo)
 		if err != nil {
@@ -643,7 +646,7 @@ func newSprintNextCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	cmd := &cobra.Command{Use: "next <sprint>", Short: "Show the highest-priority runnable sprint story", Args: cobra.ExactArgs(1)}
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
-		id, err := strconv.ParseInt(args[0], 10, 64)
+		id, err := sprintArg(cmd, flags.mode(), "sprint next", args[0])
 		if err != nil {
 			return err
 		}

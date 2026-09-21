@@ -62,7 +62,6 @@ import (
 	"fmt"
 	"io"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -224,9 +223,9 @@ Run it at the top of every turn. Act on what it shows, record what you did
 you write is what moves the baseline forward.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			id, err := strconv.ParseInt(args[0], 10, 64)
+			id, err := sprintArg(cmd, flags.mode(), "sprint tick", args[0])
 			if err != nil {
-				return fmt.Errorf("sprint must be an integer: %q", args[0])
+				return err
 			}
 			return runSprintTick(cmd, id, as, wait, &flags)
 		},

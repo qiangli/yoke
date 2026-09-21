@@ -32,7 +32,16 @@ type commitStoryRef struct {
 type commitTrace struct {
 	Sprint  int64            `json:"sprint"`
 	Stories []commitStoryRef `json:"stories"`
+	// SprintID is the optional `Sprint-ID: <uuid>` trailer. `Sprint: #N` is
+	// the committer's LOCAL number — each host runs its own — so the uuid is
+	// the value that still means the same sprint once the commit has
+	// travelled. Optional because the hook is fail-closed and a commit made
+	// before the uuid existed must keep passing; when present it must name
+	// the sprint the stories belong to.
+	SprintID string `json:"sprint_id,omitempty"`
 }
+
+var commitSprintUUID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // weaveMergeCommitMessage carries provenance from the commits being integrated
 // onto the merge commit itself. A commit-msg hook validates the commit Git is
@@ -67,6 +76,13 @@ func weaveMergeCommitMessage(root, branch, subject string) string {
 		} else if merged.Sprint != trace.Sprint {
 			return subject
 		}
+		if trace.SprintID != "" {
+			if merged.SprintID == "" {
+				merged.SprintID = trace.SprintID
+			} else if merged.SprintID != trace.SprintID {
+				return subject
+			}
+		}
 		for _, story := range trace.Stories {
 			if id, ok := seenNumbers[story.Number]; ok {
 				if id != story.ID {
@@ -89,6 +105,9 @@ func weaveMergeCommitMessage(root, branch, subject string) string {
 	var b strings.Builder
 	b.WriteString(subject)
 	fmt.Fprintf(&b, "\n\nSprint: #%d", merged.Sprint)
+	if merged.SprintID != "" {
+		fmt.Fprintf(&b, "\nSprint-ID: %s", merged.SprintID)
+	}
 	for _, story := range merged.Stories {
 		fmt.Fprintf(&b, "\nStory: #%d\nStory-ID: %s", story.Number, story.ID)
 	}
@@ -120,7 +139,7 @@ func parseCommitTrace(message string) (commitTrace, error) {
 		return commitTrace{}, fmt.Errorf("provenance trailers must be the final paragraph after a blank line")
 	}
 
-	var sprintValues, storyValues, idValues []string
+	var sprintValues, sprintIDValues, storyValues, idValues []string
 	for _, line := range lines[start+1:] {
 		m := commitTrailerLine.FindStringSubmatch(line)
 		if m == nil {
@@ -129,6 +148,8 @@ func parseCommitTrace(message string) (commitTrace, error) {
 		switch strings.ToLower(m[1]) {
 		case "sprint":
 			sprintValues = append(sprintValues, strings.TrimSpace(m[2]))
+		case "sprint-id":
+			sprintIDValues = append(sprintIDValues, strings.ToLower(strings.TrimSpace(m[2])))
 		case "story":
 			storyValues = append(storyValues, strings.TrimSpace(m[2]))
 		case "story-id":
@@ -144,6 +165,17 @@ func parseCommitTrace(message string) (commitTrace, error) {
 		return commitTrace{}, fmt.Errorf("Sprint trailer must look like `Sprint: #87`, got %q", sprintValues[0])
 	}
 	sprint, _ := strconv.ParseInt(sprintMatch[1], 10, 64)
+	var sprintID string
+	switch len(sprintIDValues) {
+	case 0:
+	case 1:
+		sprintID = sprintIDValues[0]
+		if !commitSprintUUID.MatchString(sprintID) {
+			return commitTrace{}, fmt.Errorf("Sprint-ID must be the sprint's full uuid (bashy sprint show %d prints it), got %q", sprint, sprintID)
+		}
+	default:
+		return commitTrace{}, fmt.Errorf("want at most one `Sprint-ID: <uuid>` trailer, got %d", len(sprintIDValues))
+	}
 
 	if len(storyValues) == 0 {
 		return commitTrace{}, fmt.Errorf("want at least one `Story: #N` trailer")
@@ -152,7 +184,7 @@ func parseCommitTrace(message string) (commitTrace, error) {
 		return commitTrace{}, fmt.Errorf("each Story trailer needs one matching Story-ID trailer (got %d Story, %d Story-ID)", len(storyValues), len(idValues))
 	}
 
-	trace := commitTrace{Sprint: sprint, Stories: make([]commitStoryRef, 0, len(storyValues))}
+	trace := commitTrace{Sprint: sprint, SprintID: sprintID, Stories: make([]commitStoryRef, 0, len(storyValues))}
 	seenNumbers, seenIDs := map[int]bool{}, map[string]bool{}
 	for i, value := range storyValues {
 		storyMatch := commitSprintRef.FindStringSubmatch(value)
@@ -220,7 +252,7 @@ func loadRepoStoriesForSprint(sprint int64) ([]sprintStoryState, error) {
 		if it.Sprint != sprint {
 			continue
 		}
-		out = append(out, sprintStoryState{Ref: sprintStoryRef{Repo: root, ID: it.ID}, Title: it.Title, Status: it.Status, Priority: it.Priority, Seq: it.Seq})
+		out = append(out, sprintStoryState{Ref: sprintStoryRef{Repo: root, ID: it.ID}, Title: it.Title, Status: it.Status, Priority: it.Priority, Seq: it.Seq, SprintID: it.SprintID})
 	}
 	return out, nil
 }
@@ -255,6 +287,9 @@ func newSprintCommitMsgCmd() *cobra.Command {
 		sprint := findWeaveStory(q, trace.Sprint)
 		var stories []sprintStoryState
 		if sprint != nil {
+			if trace.SprintID != "" && !strings.EqualFold(trace.SprintID, sprint.UUID) {
+				return fail(fmt.Errorf("commit provenance: Sprint-ID: %s is not sprint #%d on this host (%s) — the number is this host's label, the uuid is the identity; use the uuid `bashy sprint show %d` prints, or the number of the card that carries this uuid", trace.SprintID, trace.Sprint, sprint.UUID, trace.Sprint))
+			}
 			stories, err = loadSprintStories(sprint)
 			if err != nil {
 				return fail(fmt.Errorf("commit provenance: load Sprint #%d stories: %w", trace.Sprint, err))
@@ -271,6 +306,15 @@ func newSprintCommitMsgCmd() *cobra.Command {
 			}
 			if len(stories) == 0 {
 				return fail(fmt.Errorf("commit provenance: Sprint: #%d is not on this host's sprint board and no committed story in this repo (docs/todo/) names it — file the story with `bashy todo add --sprint %d ...` on the manager's host and pull, or take the sprint here", trace.Sprint, trace.Sprint))
+			}
+			if trace.SprintID != "" {
+				// No card here: the committed stories are the authority, and
+				// any that carries a uuid must carry THIS one.
+				for _, st := range stories {
+					if st.SprintID != "" && !strings.EqualFold(st.SprintID, trace.SprintID) {
+						return fail(fmt.Errorf("commit provenance: Sprint-ID: %s does not match the committed stories of Sprint: #%d (they name %s)", trace.SprintID, trace.Sprint, st.SprintID))
+					}
+				}
 			}
 		}
 		if err := validateCommitTraceStories(trace, stories); err != nil {

@@ -125,9 +125,9 @@ contested claim. The real isolation is the weave workspace.
 Finish with submit (ready for review) or yield (handing it back unfinished).`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			id, err := strconv.ParseInt(args[0], 10, 64)
+			id, err := sprintArg(cmd, flags.mode(), "sprint claim", args[0])
 			if err != nil {
-				return fmt.Errorf("sprint must be an integer: %q", args[0])
+				return err
 			}
 			return runSprintStoryClaim(cmd, id, args[1], owner, repo, force, &flags)
 		},
