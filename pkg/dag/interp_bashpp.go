@@ -15,14 +15,20 @@ import (
 	"github.com/qiangli/coreutils/shell"
 )
 
-// bashppInterp runs a target body tagged ```bashpp (or ```bash++) as Bash++:
+// bashppInterp runs a target body tagged ```bsh (or ```bashsharp) as Bash#:
 // the same in-process fork and coreutils userland as bashInterp, but parsed
 // and executed under syntax.LangBashPP, so a body may use Go-shaped Bash++
 // constructs and declare foreign source fences — `~~~py as py … ~~~` followed
 // by `py.main()` — which the runner prepares through its polyglot seam
 // (environment discovery starts from TaskIO.Dir, so the nearest project venv
 // is selected). Untagged and ```bash bodies stay Classic on purpose: existing
-// task files are never reinterpreted, and Bash++ is opted into per target.
+// task files are never reinterpreted, and Bash# is opted into per target.
+//
+// Tags: bsh / bashsharp are the official spellings (the .bsh extension, the
+// --bashsharp flag); bashpp / bash++ stay as aliases — they name the middle
+// rung of the ladder bash → bash++ (the Go typed core) → bash# (fences,
+// decorators, keyword params) — so no task file written before the rename
+// is reinterpreted or refused.
 //
 // Authoring note: the dag parser closes a body only on a line equal to the
 // OPENING fence marker, so a `~~~py … ~~~` block nests inside a ```bashpp
@@ -68,8 +74,14 @@ func (bashppInterp) Run(ctx context.Context, t *Task, tio TaskIO) TaskResult {
 	return res
 }
 
+// BashSharpTags are every body tag that runs as Bash#, official spellings
+// first. An embedder that overrides the interpreter registers all of them,
+// or a body under the missing spelling falls through to this one.
+var BashSharpTags = []string{"bsh", "bashsharp", "bashpp", "bash++"}
+
 func init() {
 	bi := bashppInterp{}
-	RegisterInterpreter("bashpp", bi)
-	RegisterInterpreter("bash++", bi)
+	for _, tag := range BashSharpTags {
+		RegisterInterpreter(tag, bi)
+	}
 }

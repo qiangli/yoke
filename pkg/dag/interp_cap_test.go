@@ -15,9 +15,10 @@ import (
 	"github.com/qiangli/yoke/pkg/policy/advice"
 )
 
-// capLangs are the two body languages the cap guard must cover identically:
-// Classic ```bash and ```bashpp (Bash#). Both wire CapExecHandler outermost.
-var capLangs = []string{"bash", "bashpp"}
+// capLangs are the body languages the cap guard must cover identically:
+// Classic ```bash and every Bash# tag (bsh/bashsharp official, bashpp/bash++
+// aliases). All wire CapExecHandler outermost.
+var capLangs = append([]string{"bash"}, BashSharpTags...)
 
 // runCapped builds a one-target DAG with the given Effects: line (empty =
 // none) and body, runs it in dir, and returns the result with the engine's

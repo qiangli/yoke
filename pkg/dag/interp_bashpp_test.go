@@ -13,12 +13,12 @@ import (
 	"testing"
 )
 
-// A ```bashpp body runs under the Bash++ dialect: Go-shaped declarations are
+// A ```bsh body runs under the Bash# dialect: Go-shaped declarations are
 // statements, not a parse error. A ```bash body is still Classic.
 func TestBashppBodyRunsAsBashPP(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
-	md := "## Tasks\n\n### typed\n" + block("bashpp", "x := 40\ny := 2\necho \"sum=$((x + y))\"") +
+	md := "## Tasks\n\n### typed\n" + block("bsh", "x := 40\ny := 2\necho \"sum=$((x + y))\"") +
 		"### classic\n" + block("bash", "echo classic")
 	path := writeDAG(t, md)
 
@@ -167,4 +167,27 @@ func mustAbs(t *testing.T, p string) string {
 		return r
 	}
 	return abs
+}
+
+// Every Bash# tag — the official bsh/bashsharp and the bashpp/bash++ aliases
+// — runs the same body the same way; the alias set is a ladder, not a
+// deprecation, so no spelling warns.
+func TestBashSharpTagsAreEquivalent(t *testing.T) {
+	for _, tag := range BashSharpTags {
+		t.Run(tag, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			path := writeDAG(t, "## Tasks\n\n### typed\n"+block(tag, "x := 40\ny := 2\necho \"sum=$((x + y))\""))
+			cmd := NewDagCmd()
+			out, errOut := new(bytes.Buffer), new(bytes.Buffer)
+			cmd.SetOut(out)
+			cmd.SetErr(errOut)
+			cmd.SetArgs([]string{"--file", path, "typed"})
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("Execute: %v (stderr=%s)", err, errOut.String())
+			}
+			if !strings.Contains(out.String(), "sum=42") {
+				t.Fatalf("out=%q stderr=%q", out.String(), errOut.String())
+			}
+		})
+	}
 }

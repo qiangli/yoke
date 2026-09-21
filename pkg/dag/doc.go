@@ -24,7 +24,7 @@
 // output. Later phases layer parallel scheduling + fingerprint skip (P1.5), the
 // dhnt contract/effects/attestation model (P2 — each target may declare an
 // `Ensure:` postcondition and an `Effects:` cap), and multi-interpreter bodies
-// via RegisterInterpreter: a ```bashpp body runs as Bash++ and may declare
+// via RegisterInterpreter: a ```bsh body runs as Bash# and may declare
 // `~~~py`/`~~~typescript` fences whose functions it calls directly, which is
 // how a task reaches another language without a second body interpreter.
 //
