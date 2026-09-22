@@ -3,7 +3,7 @@ id: 2d182deefb31
 kind: feature
 title: show current claims in the existing bashy apps Sprint board
 seq: 4
-status: assigned
+status: done
 priority: p2
 labels:
     - coordination
@@ -12,6 +12,8 @@ assignee: codex-gpt5.6-sol
 sprint: 251
 sprint_id: 40bcd7c0-49e6-5ad5-aa21-30c2647e2e21
 sprint_title: 'bashy claim: voluntary exclusive holds on shared resources'
+closed: 2026-09-22T18:24:08.586711Z
+closed_by: codex-gpt5.6-sol
 ---
 
 Human users need to see when an agent is holding a shared resource. Add a small,
