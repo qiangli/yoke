@@ -36,10 +36,9 @@ func TestTerminalAndJSONGoldens(t *testing.T) {
 	if !strings.Contains(string(text), "age 5h0m0s") || !strings.Contains(string(text), "STALE") {
 		t.Fatalf("terminal did not render unattended age and flag:\n%s", text)
 	}
-	// Golden rebased 2026-07-25 for the dag panel. The ONLY delta is one added
-	// panel line; rows/lanes/summary are untouched because dag runs are a
-	// separate Board field, not new Rows.
-	if got, want := fmt.Sprintf("%x", sha256.Sum256(text)), "64023d3e89b18f0917ca02cad034f126748512708fd1ac8dd9c265f481c9b2bd"; got != want {
+	// Golden rebased 2026-09-22 for the read-only Claims panel. Claims remain a
+	// panel projection, not Rows, so the work lanes and summary are unchanged.
+	if got, want := fmt.Sprintf("%x", sha256.Sum256(text)), "b31bb27445252c32d0f1b60deabff6a286f4dd0f312ab58ff2fa9fc63aea6580"; got != want {
 		t.Errorf("terminal golden changed: got %s\n%s", got, text)
 	}
 	if !strings.Contains(string(text), "Dag runs") {
@@ -56,8 +55,8 @@ func TestTerminalAndJSONGoldens(t *testing.T) {
 	if got.SchemaVersion != SchemaVersion || got.Summary.NeedsSteward != 4 || got.Summary.Unattended != 1 {
 		t.Fatalf("bad JSON envelope: %+v", got.Summary)
 	}
-	// Rebased 2026-09-14 for the workspace panel's attributed resource columns.
-	if sum, want := fmt.Sprintf("%x", sha256.Sum256(raw)), "eda9587c4c2280bd800cf8552db5051c2598eb16e3378fa3c5154358927e3ed3"; sum != want {
+	// Rebased 2026-09-22 for the read-only Claims panel.
+	if sum, want := fmt.Sprintf("%x", sha256.Sum256(raw)), "f02444951ce5647707c2747aefa0b96d6b988c52ad02085f426c5ab465ba5ee8"; sum != want {
 		t.Errorf("JSON golden changed: got %s\n%s", sum, raw)
 	}
 	if strings.Contains(string(raw), "dag_runs") {

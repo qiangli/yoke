@@ -16,6 +16,7 @@ import (
 
 	"github.com/qiangli/yoke/pkg/dag"
 	"github.com/qiangli/yoke/pkg/fleet"
+	"github.com/qiangli/yoke/pkg/policy/coord"
 	"github.com/qiangli/yoke/pkg/room"
 	"github.com/qiangli/yoke/pkg/todo"
 	"github.com/qiangli/yoke/pkg/weave"
@@ -31,7 +32,7 @@ func DefaultSources() []Source {
 	// weave has none. Its stories were then found only if the reader happened to
 	// be standing in the right repo. Measured: the same sprint reported 23
 	// stories from one directory and 0 from another.
-	return []Source{weaveSource{}, sprintSource{}, todoSource{}, fleetSource{}, resourceSource{}, dagSource{}}
+	return []Source{weaveSource{}, sprintSource{}, todoSource{}, fleetSource{}, claimSource{}, resourceSource{}, dagSource{}}
 }
 
 // NewDagSource exposes the dag run-journal source for callers assembling a
@@ -78,6 +79,19 @@ func NewTodoSource() Source   { return todoSource{} }
 func NewSprintSource() Source { return sprintSource{} }
 func NewWeaveSource() Source  { return weaveSource{} }
 func NewFleetSource() Source  { return fleetSource{} }
+func NewClaimSource() Source  { return claimSource{} }
+
+type claimSource struct{}
+
+func (claimSource) Name() string { return "claims" }
+func (claimSource) Load(_ context.Context, b *Board, _ Options) error {
+	claims, err := coord.List(coord.DefaultDir())
+	if err != nil {
+		return err
+	}
+	b.Claims = claims
+	return nil
+}
 
 func executeJSON(cmd *cobra.Command, args ...string) ([]byte, error) {
 	var out bytes.Buffer

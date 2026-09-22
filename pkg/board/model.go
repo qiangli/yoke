@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiangli/yoke/pkg/policy/coord"
 	"github.com/qiangli/yoke/pkg/resources"
 )
 
@@ -45,7 +46,10 @@ type Board struct {
 	// Utilization is the fleet-invariant verdict: idle capacity is only
 	// acceptable when the board reads 0 open work.
 	Utilization *resources.Utilization `json:"utilization,omitempty"`
-	Warnings    []string               `json:"warnings,omitempty"`
+	// Claims feed the read-only Claims panel. They are already projected into
+	// Panels and do not duplicate their host-local records in the overview.
+	Claims   []*coord.Claim `json:"-"`
+	Warnings []string       `json:"warnings,omitempty"`
 }
 
 // Row is the normalized record shared by every source. The richer typed

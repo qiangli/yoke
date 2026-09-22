@@ -989,7 +989,9 @@ func stubBoard(t *testing.T) {
 				CPU: resources.CPU{UsagePercent: 31}, Memory: resources.Memory{UsedPercent: 42},
 				Disks: []resources.Disk{{Mount: "/", UsedPercent: 57}, {Mount: "/data", UsedPercent: 73}},
 			},
-			Panels: []board.PanelView{{ID: "agents", Title: "Agents"}, {ID: "runs", Title: "Runs"},
+			Panels: []board.PanelView{{ID: "agents", Title: "Agents"},
+				{ID: "claims", Title: "Claims", Collapsed: "0 named hold(s) recorded on this host"},
+				{ID: "runs", Title: "Runs"},
 				{ID: "workspaces", Title: "Workspaces", Collapsed: "1 workspace(s); 3.0GiB on disk",
 					Columns: []string{"RUN", "STATE", "DISK", "REPO", "WORKSPACE"},
 					Rows:    [][]string{{"#7", "working", "3.0GiB", "/repo", "/work/issue-7"}}},
@@ -1422,6 +1424,9 @@ func TestDOMSprintShowsDiskAndWorkspaceUsage(t *testing.T) {
 	}
 	if !strings.Contains(panels, "Workspaces") || !strings.Contains(panels, "3.0GiB on disk") {
 		t.Errorf("workspace panel is absent: %q", panels)
+	}
+	if !strings.Contains(panels, "Claims") {
+		t.Errorf("claims panel is absent from the existing Sprint board: %q", panels)
 	}
 	if strings.Index(panels, "Runs") > strings.Index(panels, "Workspaces") || strings.Index(panels, "Workspaces") > strings.Index(panels, "Utilization health") {
 		t.Errorf("workspace panel placement = %q", panels)

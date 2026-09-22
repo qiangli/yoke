@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/qiangli/yoke/pkg/board"
+	"github.com/qiangli/yoke/pkg/policy/coord"
+	"github.com/qiangli/yoke/pkg/principal"
 )
 
 // fakeBoard builds a board from an injected Source, the isolation pattern
@@ -96,6 +98,30 @@ func TestBoardOverviewHidesHistoryByDefault(t *testing.T) {
 	if got := len(all["runs"].([]any)); got != 3 {
 		t.Errorf("?all=1 shows %d runs, want all 3", got)
 	}
+}
+
+func TestBoardOverviewCarriesExistingClaimsPanel(t *testing.T) {
+	h, s := newBoardTestServer(t)
+	b := fakeBoard(t)
+	b.Claims = []*coord.Claim{{Resource: "do1", Mode: coord.ModeLease,
+		Holder: principal.Ref{Name: "lintel", Host: "dragon"}, Intent: "leaf replay",
+		AcquiredAt: b.GeneratedAt.Add(-time.Minute), Heartbeat: b.GeneratedAt}}
+	b.Panels = board.DefaultPanels().Build(b)
+	s.boards.mu.Lock()
+	s.boards.board, s.boards.at = b, time.Now()
+	s.boards.mu.Unlock()
+
+	d := getJSON(t, h, "/api/sprint")
+	for _, raw := range d["panels"].([]any) {
+		p := raw.(map[string]any)
+		if p["id"] == "claims" {
+			if p["title"] != "Claims" || p["row_total"].(float64) != 1 {
+				t.Fatalf("claims panel = %#v", p)
+			}
+			return
+		}
+	}
+	t.Fatal("existing Sprint-board overview has no Claims panel")
 }
 
 // The payload bound is a correctness property, not an optimization: the raw

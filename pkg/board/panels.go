@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiangli/yoke/pkg/policy/coord"
 	"github.com/qiangli/yoke/pkg/resources"
 )
 
@@ -19,7 +20,41 @@ func (p panel) ID() string               { return p.id }
 func (p panel) Build(b *Board) PanelView { return p.build(b) }
 
 func DefaultPanels() *Registry {
-	return NewRegistry(agentPanel(), todoPanel(), sprintPanel(), runPanel(), workspacePanel(), salvagePanel(), dagPanel(), fleetPanel(), resourcePanel(), utilizationPanel())
+	return NewRegistry(agentPanel(), todoPanel(), sprintPanel(), claimsPanel(), runPanel(), workspacePanel(), salvagePanel(), dagPanel(), fleetPanel(), resourcePanel(), utilizationPanel())
+}
+
+// claimsPanel exposes current named holds to human readers of the existing
+// Sprint board. It is a projection only; the browser remains read-only.
+func claimsPanel() Panel {
+	return panel{id: "claims", build: func(b *Board) PanelView {
+		v := PanelView{ID: "claims", Title: "Claims",
+			Columns: []string{"RESOURCE", "HOLDER", "STATE", "INTENT", "HELD FOR", "MODE"}}
+		for _, c := range b.Claims {
+			if c.Resource == "" {
+				continue
+			}
+			host := c.Holder.Host
+			if host == "" {
+				host = "this host"
+			}
+			state := string(c.Liveness(b.GeneratedAt)) + " on " + host
+			age := int64(0)
+			if !c.AcquiredAt.IsZero() {
+				age = int64(b.GeneratedAt.Sub(c.AcquiredAt).Seconds())
+				if age < 0 {
+					age = 0
+				}
+			}
+			mode := c.Mode
+			if mode == "" {
+				mode = coord.ModeLease
+			}
+			v.Rows = append(v.Rows, []string{c.Resource, dash(c.Holder.Name), state,
+				dash(c.Intent), duration(age), mode})
+		}
+		v.Collapsed = fmt.Sprintf("%d named hold(s) recorded on this host", len(v.Rows))
+		return v
+	}}
 }
 
 // dagPanel projects recent `bashy dag` pipeline runs. Failures are what a
