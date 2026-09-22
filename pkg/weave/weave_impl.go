@@ -3558,6 +3558,21 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			// was gone. git recreates reflogs as the agent works;
 			// only the clone-time entries carry the origin path.
 			_ = os.RemoveAll(filepath.Join(workspace, ".git", "logs"))
+			// Mirror the source repo's provenance enforcement into the
+			// clone. `git clone` never copies hooks, so a workspace whose
+			// source is fail-closed on Sprint/Story trailers accepted a
+			// malformed one silently; the agent learned nothing, and the
+			// defect surfaced only at `weave pull`, where the merge cannot
+			// carry provenance it cannot parse and is refused — with the
+			// agent's commits already written. Tell the agent at its own
+			// commit time instead. Advisory: a hook that cannot be installed
+			// must not fail a launch.
+			if weaveSourceEnforcesCommitHook(root) {
+				if _, err := installSprintCommitHook(workspace); err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(),
+						"weave: source repo enforces sprint commit provenance but the workspace hook could not be installed: %v\n", err)
+				}
+			}
 			// Hydrate git submodules from the LOCAL origin. `git clone --local`
 			// does NOT recurse submodules, so a repo whose go.mod `replace`s point
 			// into a submodule (coreutils -> external/{ollama,podman}/src) can't

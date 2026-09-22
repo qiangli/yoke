@@ -226,3 +226,48 @@ func TestSprintCommitMsgAcceptsASprintKnownOnlyFromTheRepoStories(t *testing.T) 
 		t.Fatalf("want the cross-host refusal, got err=%v\n%s", err, out)
 	}
 }
+
+// Sprint 246: `git clone` never copies hooks, so a weave workspace started
+// without the sprint provenance hook even when its source repo was fail-closed.
+// The agent then committed a malformed `Story:` trailer with no feedback and
+// the defect surfaced only at `weave pull` — too late to fix cheaply, because
+// the agent's commits were already written. weaveSourceEnforcesCommitHook is
+// what lets workspace creation mirror the source's enforcement.
+func TestWeaveSourceEnforcesCommitHookDetectsAnInstalledHook(t *testing.T) {
+	repo := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if raw, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, raw)
+		}
+	}
+	git("init", "-q")
+
+	if weaveSourceEnforcesCommitHook(repo) {
+		t.Fatal("a fresh repo enforces nothing, but the helper said it does")
+	}
+	if _, err := installSprintCommitHook(repo); err != nil {
+		t.Fatal(err)
+	}
+	if !weaveSourceEnforcesCommitHook(repo) {
+		t.Fatal("hook installed, but the helper did not see it")
+	}
+
+	// A clone does not inherit it — the bug this guards.
+	clone := filepath.Join(t.TempDir(), "workspace")
+	if raw, err := exec.Command("git", "clone", "--local", "--no-hardlinks", "-q", repo, clone).CombinedOutput(); err != nil {
+		t.Fatalf("clone: %v\n%s", err, raw)
+	}
+	if weaveSourceEnforcesCommitHook(clone) {
+		t.Fatal("the clone reported enforcement it never received; the premise of the fix is wrong")
+	}
+	// Installing it into the clone is what workspace creation now does.
+	if _, err := installSprintCommitHook(clone); err != nil {
+		t.Fatal(err)
+	}
+	if !weaveSourceEnforcesCommitHook(clone) {
+		t.Fatal("hook installed into the clone, but the helper did not see it")
+	}
+}

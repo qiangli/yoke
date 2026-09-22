@@ -363,6 +363,26 @@ func gitOutput(repo string, args ...string) (string, error) {
 	return strings.TrimSpace(string(raw)), nil
 }
 
+// weaveSourceEnforcesCommitHook reports whether a repo has the sprint
+// provenance commit-msg hook installed, i.e. whether commits there are
+// required to carry Sprint/Story/Story-ID trailers.
+//
+// `git clone` never copies hooks, so a weave workspace starts without one even
+// when its source repo is fail-closed. That gap is not cosmetic: the agent
+// commits a malformed trailer with no feedback, and the defect only surfaces
+// at `weave pull`, where weaveMergeCommitMessage cannot propagate provenance
+// it cannot parse and the merge is refused — with the agent's commits already
+// written and no longer cheap to correct. Callers mirror the source's
+// enforcement into the clone so the agent is told at its own commit time.
+func weaveSourceEnforcesCommitHook(root string) bool {
+	gitDir, err := gitOutput(root, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(gitDir, "bashy-hooks", "commit-msg"))
+	return err == nil && !info.IsDir() && info.Mode()&0o111 != 0
+}
+
 func installSprintCommitHook(repo string) (string, error) {
 	root, err := gitOutput(repo, "rev-parse", "--show-toplevel")
 	if err != nil {
