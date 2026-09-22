@@ -480,7 +480,8 @@ this is an order rather than a checklist:
                     board buys work nobody needed.
   3 STAFF           ready INDEPENDENT stories to agents that can actually run
                     (installed is not signed in), capability to difficulty,
-                    flat-billed over metered, widen to ready stories not roster.
+                    flat-billed over metered, widen to ready stories not roster;
+                    claim a shared host BEFORE assigning work to it.
   4 MONITOR         progress, not liveness — a worker can be alive and stuck.
                     Nothing across two ticks is a decision, not a wait.
   5 INTEGRATE       run the gate YOURSELF, read the verdict from bashy and not

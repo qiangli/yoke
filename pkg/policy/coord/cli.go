@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -23,8 +24,8 @@ import (
 // stop.
 func NewClaimCmd(roots func() []string) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "claim",
-		Short: "who is working in this project — and hold it while you write",
+		Use:   "claim [name] [-- command...]",
+		Short: "hold a project or named shared resource while you work",
 		Long: `claim stops two agents from writing the same project at the same time.
 
 It exists because that is not hypothetical. Two agent sessions worked these repos
@@ -43,14 +44,66 @@ a third. A claim on any one .git root would have prevented nothing. So a claim c
 the PROJECT — the repo plus the siblings it depends on — and two claims conflict when
 their path sets INTERSECT.
 
+A NAME claims one shared resource on this host. The detached form is a lease across
+agent invocations; ` + "`bashy claim NAME -- COMMAND`" + ` is a kernel-backed hold for the
+child lifetime. Both are advisory and HOST-LOCAL: they coordinate agents here and do
+not prove that a remote machine is idle.
+
 It refuses on CONFLICT, never on absence: the claim is taken silently on your first
 write, and you are stopped only when someone else already holds one.`,
 		Example: `  bashy claim                     # take/refresh the claim on this project
-  bashy claim list                # who is working right now, and where?
-  bashy claim release             # let someone else have it`,
+	  bashy claim do1 --intent "sprint 251 tests"
+	  bashy claim do1 -- make test       # hold do1 for the child lifetime
+	  bashy claim list                # who is working right now, and where?
+	  bashy claim release do1         # let someone else have the resource`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			dash := cmd.ArgsLenAtDash()
+			if dash >= 0 {
+				if dash != 1 || len(args) < 2 {
+					return fmt.Errorf("usage: bashy claim NAME -- COMMAND [ARG...]")
+				}
+				return nil
+			}
+			if len(args) > 1 {
+				return fmt.Errorf("claim accepts one resource name; use -- before a child command")
+			}
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			intent, _ := cmd.Flags().GetString("intent")
 			force, _ := cmd.Flags().GetBool("force")
+			wait, _ := cmd.Flags().GetDuration("wait")
+			if cmd.ArgsLenAtDash() >= 0 {
+				if force {
+					return fmt.Errorf("--force is not valid with a child-scoped kernel hold")
+				}
+				c, l, err := AcquireAttached(DefaultDir(), args[0], Self(), intent, wait)
+				if err != nil {
+					return err
+				}
+				child := exec.CommandContext(cmd.Context(), args[1], args[2:]...)
+				child.Stdin = cmd.InOrStdin()
+				child.Stdout = cmd.OutOrStdout()
+				child.Stderr = cmd.ErrOrStderr()
+				runErr := child.Run()
+				releaseErr := ReleaseAttached(DefaultDir(), c, l)
+				if runErr != nil {
+					return runErr
+				}
+				return releaseErr
+			}
+			if len(args) == 1 {
+				c, err := AcquireResourceWithin(DefaultDir(), args[0], Self(), intent, force, wait)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "claim: %s held on %s by %s (%s)\n",
+					c.Resource, c.Holder.Host, c.Holder.Name, c.Mode)
+				return nil
+			}
+			if wait > 0 {
+				return fmt.Errorf("--wait requires a named resource")
+			}
 			c, err := Acquire(DefaultDir(), roots(), Self(), intent, force)
 			if err != nil {
 				return err
@@ -62,6 +115,7 @@ write, and you are stopped only when someone else already holds one.`,
 	}
 	cmd.Flags().String("intent", "", "what you are doing (shown to whoever collides with you)")
 	cmd.Flags().Bool("force", false, "take it even if someone else holds it (recorded)")
+	cmd.Flags().Duration("wait", 0, "wait up to this duration for a named resource")
 
 	list := &cobra.Command{
 		Use:   "list",
@@ -89,12 +143,13 @@ sessions became invisible to each other.`,
 				return nil
 			}
 			for _, c := range claims {
-				state := "live"
-				if c.Stale(now) {
-					state = "STALE (reclaimable)"
+				state := string(c.Liveness(now))
+				target, mode := c.Project, "project"
+				if c.Resource != "" {
+					target, mode = c.Resource, c.Mode
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "%-18s %-22s %-20s %s\n",
-					c.Holder.Name, c.Project, state, c.Intent)
+				fmt.Fprintf(cmd.OutOrStdout(), "%-18s %-22s %-10s %-10s %s\n",
+					c.Holder.Name, target, state, mode, c.Intent)
 			}
 			return nil
 		},
@@ -102,10 +157,17 @@ sessions became invisible to each other.`,
 	list.Flags().Bool("json", false, "emit the claims")
 
 	release := &cobra.Command{
-		Use:   "release",
-		Short: "drop this session's claim",
+		Use:   "release [name]",
+		Short: "drop this session's project claim or a named resource hold",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := Release(DefaultDir(), Self()); err != nil {
+			var err error
+			if len(args) == 1 {
+				err = ReleaseResource(DefaultDir(), args[0], Self())
+			} else {
+				err = Release(DefaultDir(), Self())
+			}
+			if err != nil {
 				return err
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "claim: released")

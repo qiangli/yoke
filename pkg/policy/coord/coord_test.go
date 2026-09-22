@@ -5,14 +5,108 @@ package coord
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/qiangli/yoke/pkg/principal"
+	"github.com/qiangli/yoke/pkg/role"
 )
 
 func agentA() principal.Ref { return principal.Ref{Name: "claude-a", Episode: "ep-aaa", Host: "h"} }
 func agentB() principal.Ref { return principal.Ref{Name: "codex-b", Episode: "ep-bbb", Host: "h"} }
+
+func TestNamedResourceLeaseLifecycle(t *testing.T) {
+	dir := t.TempDir()
+	first, err := AcquireResource(dir, "do1", agentA(), "leaf replay", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Resource != "do1" || first.Mode != ModeLease {
+		t.Fatalf("claim = %#v", first)
+	}
+	if _, err := Acquire(dir, []string{"/w/bashy"}, agentB(), "project work", false); err != nil {
+		t.Fatalf("named and project claims conflicted: %v", err)
+	}
+	if _, err := AcquireResource(dir, "do1", agentB(), "other work", false); err == nil {
+		t.Fatal("second holder acquired do1")
+	} else {
+		var conflict *Conflict
+		if !errors.As(err, &conflict) || conflict.Claim.Holder.Name != agentA().Name {
+			t.Fatalf("conflict = %T %v", err, err)
+		}
+		for _, want := range []string{"claude-a", "leaf replay", "since", "do1", "on h"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("conflict %q lacks %q", err, want)
+			}
+		}
+	}
+	refreshed, err := AcquireResource(dir, "do1", agentA(), "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !refreshed.AcquiredAt.Equal(first.AcquiredAt) || refreshed.Intent != first.Intent {
+		t.Fatalf("refresh changed tenure: first=%#v refreshed=%#v", first, refreshed)
+	}
+	if err := ReleaseResource(dir, "do1", agentB()); err == nil {
+		t.Fatal("another holder released do1")
+	}
+	if err := ReleaseResource(dir, "do1", agentA()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcquireResource(dir, "do1", agentB(), "next", false); err != nil {
+		t.Fatalf("released resource was not reclaimable: %v", err)
+	}
+}
+
+func TestNamedResourceLivenessIsHonest(t *testing.T) {
+	dir := t.TempDir()
+	c, err := AcquireResource(dir, "do1", agentA(), "test", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.AcquiredAt = time.Now().Add(-TTL - 2*time.Minute)
+	c.Heartbeat = time.Now().Add(-TTL - time.Minute)
+	if err := writeClaim(resourceClaimPath(dir, "do1"), c); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcquireResource(dir, "do1", agentB(), "reclaim", false); err != nil {
+		t.Fatalf("lapsed lease was not reclaimable: %v", err)
+	}
+
+	c, err = AcquireResource(dir, "do2", agentA(), "unknown", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Heartbeat = time.Time{}
+	if err := writeClaim(resourceClaimPath(dir, "do2"), c); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Liveness(time.Now()); got != role.LivenessUnknown {
+		t.Fatalf("liveness = %q, want unknown", got)
+	}
+	if _, err := AcquireResource(dir, "do2", agentB(), "must refuse", false); err == nil {
+		t.Fatal("unknown lease was treated as free")
+	}
+}
+
+func TestNamedResourceWaitRetriesWholeAcquisition(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := AcquireResource(dir, "do1", agentA(), "first", false); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		time.Sleep(60 * time.Millisecond)
+		_ = ReleaseResource(dir, "do1", agentA())
+	}()
+	start := time.Now()
+	if _, err := AcquireResourceWithin(dir, "do1", agentB(), "second", false, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(start) < 40*time.Millisecond {
+		t.Fatal("bounded wait did not wait for the lease")
+	}
+}
 
 // Alone, a claim is silent and free. Friction that fires when you are the only agent
 // on the machine is friction nobody accepts — and a rule nobody accepts is a rule
