@@ -3,7 +3,7 @@ id: 822d45eef46b
 kind: feature
 title: named resource holds in bashy claim
 seq: 1
-status: assigned
+status: done
 priority: p1
 labels:
     - coordination
@@ -12,6 +12,8 @@ assignee: codex-gpt5.6-sol
 sprint: 251
 sprint_id: 40bcd7c0-49e6-5ad5-aa21-30c2647e2e21
 sprint_title: 'bashy claim: voluntary exclusive holds on shared resources'
+closed: 2026-09-22T18:13:02.64343Z
+closed_by: codex-gpt5.6-sol
 ---
 
 Generalize the existing `bashy claim` mechanism from intersecting project path
