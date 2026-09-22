@@ -1,9 +1,11 @@
 // Package hexdumpcmd implements hexdump(1) (util-linux) in its
-// canonical -C mode only: hex+ASCII display, 16 bytes per line, with
-// the documented default squeezing of repeated identical lines into a
-// single "*" and a final line giving the total input offset. Every
-// other hexdump format (-b, -c, -d, -o, -x, -e, …) is deliberately
-// not supported and fails with the contract error.
+// canonical -C mode (hex+ASCII display, 16 bytes per line) and the
+// one-byte octal -b mode (GNU bash's printf fixtures read wide
+// characters through it), both with the documented default squeezing
+// of repeated identical lines into a single "*" and a final line giving
+// the total input offset. Every other hexdump format (-c, -d, -o, -x,
+// -e, …) is deliberately not supported and fails with the contract
+// error.
 //
 // Fresh implementation against the util-linux manual (the u-root
 // prior art delegates to encoding/hex.Dumper, which has no squeezing
@@ -24,7 +26,7 @@ import (
 var cmd = &tool.Tool{
 	Name:     "hexdump",
 	Synopsis: "Display file contents in hexadecimal and ASCII (canonical -C format).\nMultiple files are concatenated. With no FILE, read standard input.",
-	Usage:    "hexdump -C [FILE]...",
+	Usage:    "hexdump -C|-b [FILE]...",
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
@@ -32,12 +34,17 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	canonical := fs.BoolP("canonical", "C", false, "canonical hex+ASCII display")
+	oneByteOctal := fs.BoolP("one-byte-octal", "b", false, "one-byte octal display")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
 	}
-	if !*canonical {
-		return tool.NotSupported(rc, cmd, "hexdump formats other than -C/--canonical")
+	if !*canonical && !*oneByteOctal {
+		return tool.NotSupported(rc, cmd, "hexdump formats other than -C/--canonical and -b/--one-byte-octal")
+	}
+	format := canonicalFormat
+	if *oneByteOctal && !*canonical {
+		format = octalFormat
 	}
 
 	exit := 0
@@ -67,7 +74,7 @@ func run(rc *tool.RunContext, args []string) int {
 	}()
 
 	w := bufio.NewWriter(rc.Out)
-	if err := dump(io.MultiReader(readers...), w); err != nil {
+	if err := dump(io.MultiReader(readers...), w, format); err != nil {
 		fmt.Fprintf(rc.Err, "hexdump: %v\n", err)
 		exit = 1
 	}
@@ -78,7 +85,19 @@ func run(rc *tool.RunContext, args []string) int {
 	return exit
 }
 
-func dump(r io.Reader, w *bufio.Writer) error {
+// dumpFormat is one hexdump display: how a 16-byte block is rendered and
+// how wide the trailing offset line is.
+type dumpFormat struct {
+	line        func(*bufio.Writer, int64, []byte) error
+	offsetWidth int
+}
+
+var (
+	canonicalFormat = dumpFormat{line: writeLine, offsetWidth: 8}
+	octalFormat     = dumpFormat{line: writeOctalLine, offsetWidth: 7}
+)
+
+func dump(r io.Reader, w *bufio.Writer, format dumpFormat) error {
 	br := bufio.NewReaderSize(r, 64*1024)
 	var offset int64
 	var prev [16]byte
@@ -96,7 +115,7 @@ func dump(r io.Reader, w *bufio.Writer) error {
 					squeezing = true
 				}
 			} else {
-				if werr := writeLine(w, offset, block[:n]); werr != nil {
+				if werr := format.line(w, offset, block[:n]); werr != nil {
 					return werr
 				}
 				squeezing = false
@@ -117,11 +136,31 @@ func dump(r io.Reader, w *bufio.Writer) error {
 		}
 	}
 	if offset > 0 {
-		if _, err := fmt.Fprintf(w, "%08x\n", offset); err != nil {
+		if _, err := fmt.Fprintf(w, "%0*x\n", format.offsetWidth, offset); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// writeOctalLine emits one -b line: a 7-digit hex offset, then each byte
+// as " %03o"; a short last line is padded to the same 71 columns, as
+// util-linux's "%07.7_ax" 16/1 " %03o" "\n" format does:
+//
+//	0000000 150 145 154 154 157 040 167 157 162 154 144 012
+func writeOctalLine(w *bufio.Writer, offset int64, b []byte) error {
+	var line []byte
+	line = fmt.Appendf(line, "%07x", offset)
+	for i := 0; i < 16; i++ {
+		if i < len(b) {
+			line = fmt.Appendf(line, " %03o", b[i])
+		} else {
+			line = append(line, "    "...)
+		}
+	}
+	line = append(line, '\n')
+	_, err := w.Write(line)
+	return err
 }
 
 // writeLine emits one canonical line:

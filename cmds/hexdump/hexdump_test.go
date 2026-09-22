@@ -130,3 +130,30 @@ func TestHexdumpHelpVersion(t *testing.T) {
 		t.Errorf("--version: code=%d out=%q", code, out)
 	}
 }
+
+// -b is util-linux's one-byte octal display: a 7-digit hex offset, each
+// byte as " %03o", short lines padded to 71 columns, a final offset line.
+// The expectations are bash-5.3's printf fixtures (printf.right).
+func TestHexdumpOneByteOctal(t *testing.T) {
+	out, errb, code := runTool(t, "", "\x00", "-b")
+	if code != 0 || errb != "" {
+		t.Fatalf("hexdump -b: code %d, stderr %q", code, errb)
+	}
+	want := "0000000 000" + strings.Repeat(" ", 60) + "\n0000001\n"
+	if out != want {
+		t.Fatalf("hexdump -b NUL:\n got %q\nwant %q", out, want)
+	}
+	in := "\xe0\xb2\x87\xe0\xb2\xb3\xe0\xb2\xbf\xe0\xb2\x95\xe0\xb3\x86\xe0\xb2\x97\xe0\xb2\xb3\xe0\xb3\x81\n"
+	out, _, _ = runTool(t, "", in, "-b")
+	want = "0000000 340 262 207 340 262 263 340 262 277 340 262 225 340 263 206 340\n" +
+		"0000010 262 227 340 262 263 340 263 201 012                            \n" +
+		"0000019\n"
+	if out != want {
+		t.Fatalf("hexdump -b wide:\n got %q\nwant %q", out, want)
+	}
+	// Squeezing still applies.
+	out, _, _ = runTool(t, "", strings.Repeat("a", 48), "-b")
+	if !strings.Contains(out, "\n*\n") || !strings.HasSuffix(out, "0000030\n") {
+		t.Fatalf("hexdump -b squeeze: %q", out)
+	}
+}
