@@ -117,11 +117,75 @@ func resolveRegisteredActorClaim(actor, claimant string) (string, error) {
 			anchor = card.PID
 		}
 	}
-	if !live || anchor <= 0 || !processHasAncestor(anchor) {
+	if !live {
+		// Nobody holds the seat. A process that DECLARES this identity the
+		// way the session roster already trusts it (BASHY_AGENT and its
+		// aliases) takes the seat now — the same first-come rule an inbox
+		// watcher's claim follows — instead of being told to go start a
+		// watcher first. A bare codex/claude in a checkout could otherwise
+		// join a repo session as <name>@<host>, receive mail, and still be
+		// refused when it answered. The guard is unchanged for a HELD seat:
+		// a live claim by another session still wins below.
+		if declared, ok := declaredAgentIdentity(); ok && strings.EqualFold(declared, canonical) {
+			if err := takeAuthoredSeat(canonical, claimant); err != nil {
+				return "", fmt.Errorf("authored communication: take seat %q: %w", canonical, err)
+			}
+			return canonical, nil
+		}
+		reason := fmt.Sprintf("%s has no matching live session claim for %q, and nobody holds that seat — export BASHY_AGENT=%s in the agent's environment (the seat is then taken on its first message), or keep `bashy inbox --as %s --watch` running in that session",
+			claimant, canonical, canonical, canonical)
+		return "", authoredActorRefusal(canonical, claimant, reason)
+	}
+	if anchor <= 0 || !processHasAncestor(anchor) {
 		reason := fmt.Sprintf("%s has no matching live session claim for %q", claimant, canonical)
 		return "", authoredActorRefusal(canonical, claimant, reason)
 	}
 	return canonical, nil
+}
+
+// declaredAgentIdentity is the process-local identity a bare tool declares
+// for itself — the same ladder weave reads to seat a participant on a repo
+// session (BASHY_PRINCIPAL is handled by the caller; it is attribution with
+// its own rule). Empty when nothing is declared.
+func declaredAgentIdentity() (string, bool) {
+	for _, env := range []string{"BASHY_AGENT", "WEAVE_AGENT", "BASHY_AGENT_ID", "WEAVE_CONDUCTOR"} {
+		if v := strings.TrimSpace(os.Getenv(env)); v != "" {
+			name := resolveBoardName(v)
+			return name, name != ""
+		}
+	}
+	return "", false
+}
+
+// takeAuthoredSeat registers the live claim card for an unclaimed identity on
+// behalf of the calling tool session. The card is anchored to this command's
+// PARENT — the harness, or the shell it spawned — so it outlives the command
+// when the parent does and simply expires with it otherwise (the next message
+// takes the seat again; a watcher started meanwhile wins). It carries the
+// tool-session claim, so later commands from the same session match by claim
+// even when their process lineage differs.
+func takeAuthoredSeat(canonical, tool string) error {
+	anchor := os.Getppid()
+	if anchor <= 1 {
+		anchor = os.Getpid()
+	}
+	claim := ""
+	if CurrentSessionClaim != nil {
+		claim = HashSessionClaim(CurrentSessionClaim(canonical))
+	}
+	cwd, _ := os.Getwd()
+	return room.Join(room.Card{
+		ID:           room.AgentClaimID(canonical),
+		Nick:         canonical,
+		Principal:    canonical,
+		SessionClaim: claim,
+		Tool:         tool,
+		Mode:         "authored",
+		Task:         "seat taken on first authored message",
+		PID:          anchor,
+		OwnerPID:     anchor,
+		Cwd:          cwd,
+	})
 }
 
 func agentNameFromPrincipal(principal string) (string, bool) {

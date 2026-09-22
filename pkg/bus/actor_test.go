@@ -223,3 +223,57 @@ func authoredPostCount(t *testing.T, dir string) int {
 	}
 	return len(strings.Split(strings.TrimSpace(string(b)), "\n"))
 }
+
+// A bare tool that declares its identity the way the session roster trusts
+// it takes an UNCLAIMED seat on its first authored message; an undeclared
+// caller is refused with the remedy spelled out; a declaration never
+// overrides a seat somebody else holds.
+func TestResolveAuthoredActorDeclaredIdentityTakesUnclaimedSeat(t *testing.T) {
+	isolateAuthoredActor(t)
+	DetectHarness = func() (string, bool) { return "codex", true }
+	CurrentSessionClaim = func(string) string { return "thread-123" }
+	for _, env := range []string{"BASHY_AGENT", "WEAVE_AGENT", "BASHY_AGENT_ID", "WEAVE_CONDUCTOR"} {
+		t.Setenv(env, "")
+	}
+
+	// Undeclared: refused, and the refusal names the fix.
+	_, err := ResolveAuthoredActor("agent-y")
+	if err == nil || !strings.Contains(err.Error(), "no matching live session claim") || !strings.Contains(err.Error(), "BASHY_AGENT=agent-y") {
+		t.Fatalf("undeclared unclaimed actor error = %v", err)
+	}
+	if _, live, _ := room.Find(room.AgentClaimID("agent-y")); live {
+		t.Fatal("a refused caller must not take the seat")
+	}
+
+	// Declared (alias spelling): accepted, and the seat is now held with the
+	// session claim on the card, anchored to this command's parent.
+	t.Setenv("BASHY_AGENT", "y-alias")
+	got, err := ResolveAuthoredActor("agent-y")
+	if err != nil || got != "agent-y" {
+		t.Fatalf("declared unclaimed actor = %q, %v", got, err)
+	}
+	card, live, err := room.Find(room.AgentClaimID("agent-y"))
+	if err != nil || !live {
+		t.Fatalf("seat not taken: live=%v err=%v", live, err)
+	}
+	if card.SessionClaim != HashSessionClaim("thread-123") || card.Mode != "authored" || card.PID != os.Getppid() {
+		t.Fatalf("seat card = %+v", card)
+	}
+	// Second message from the same session: matched by claim, no new card.
+	if got, err := ResolveAuthoredActor("agent-y"); err != nil || got != "agent-y" {
+		t.Fatalf("repeat authored actor = %q, %v", got, err)
+	}
+
+	// Declaring a name someone ELSE holds live (foreign anchor) is still refused.
+	if err := room.Join(room.Card{
+		ID: room.AgentClaimID("agent-x"), Nick: "agent-x", Tool: "claude", Binding: "claude:test",
+		Mode: "inbox", SessionClaim: HashSessionClaim("other-session"),
+		PID: os.Getpid(), OwnerPID: 2147483000, Principal: "operator",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BASHY_AGENT", "agent-x")
+	if _, err := ResolveAuthoredActor("agent-x"); err == nil || !strings.Contains(err.Error(), "no matching live session claim") {
+		t.Fatalf("declared identity overrode a foreign live claim: %v", err)
+	}
+}
