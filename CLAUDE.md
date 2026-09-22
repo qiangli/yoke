@@ -209,7 +209,10 @@ registry, three consumption surfaces, imported by bashy/ycode/outpost.
   points, pure Go, sample-and-diff for rates; see docs/resources.md),
   `pkg/schedule` (bashy's modern cron, robfig/cron), `pkg/sdlc`
   (the label-driven SDLC control plane), `pkg/secrets` (the
-  cloudbox-vault client behind `bashy secrets`),
+  cloudbox-vault client behind `bashy secrets`; its `gen` subcommand is the
+  one local-only verb — a stdlib re-implementation of 1Password's spg
+  recipe: crypto/rand, rejection-sampled so the output is uniform over the
+  class policy, exact entropy in `--json`; it never resolves a token),
   `pkg/ctty` + `pkg/ask` (reach the HUMAN OPERATOR from a process whose
   stdio belongs to an agent harness — `pkg/ctty` is the channel ladder
   (controlling terminal with an `O_NOCTTY` + foreground-pgrp check → GUI

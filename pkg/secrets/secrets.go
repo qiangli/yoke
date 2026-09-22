@@ -53,7 +53,12 @@ disk (at the cost of the offline fallback).
 To enter a secret interactively without exposing it to an agent or shell
 history, compose the separate ask command with set:
 
-  bashy ask --name OPENAI_API_KEY --stdout | bashy secret set openai`,
+  bashy ask --name OPENAI_API_KEY --stdout | bashy secret set openai
+
+To mint a fresh random secret that never passes through the operator, an
+agent transcript or shell history, compose gen (local-only) with set:
+
+  bashy secret gen | bashy secret set DB_PASSWORD`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -68,6 +73,9 @@ history, compose the separate ask command with set:
 	cmd.AddCommand(newSetCmd(&cfg))
 	cmd.AddCommand(newImportCmd(&cfg))
 	cmd.AddCommand(newRmCmd(&cfg))
+	// gen takes no cfg: it is the one subcommand that never resolves a
+	// token or a URL — it only prints.
+	cmd.AddCommand(newGenCmd())
 	return cmd
 }
 
