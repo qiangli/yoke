@@ -163,17 +163,29 @@ func newChatTimelineCmd() *cobra.Command {
 
 // newChatSteerCmd injects a line into a live session mid-turn.
 func newChatSteerCmd() *cobra.Command {
+	var enter bool
 	cmd := &cobra.Command{
-		Use:   "steer <id> <text>",
+		Use:   "steer <id> <text> | steer <id> --enter",
 		Short: "inject a line into a live session (the one control surface: mid-turn steering)",
-		Args:  cobra.MinimumNArgs(2),
+		Long: "inject a line into a live session (the one control surface: mid-turn steering).\n\n" +
+			"--enter presses Enter instead: some TUIs drop the Enter of a line typed while they\n" +
+			"are busy and leave it unsent in their input box; an empty text line cannot\n" +
+			"express a bare key, so this sends the raw keystroke.",
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := findMember(args[0])
 			if err != nil {
 				return err
 			}
 			text := strings.Join(args[1:], " ")
-			if err := agentpty.SendFrame(c.CtlSock, agentpty.TextFrame(text)); err != nil {
+			frame := agentpty.TextFrame(text)
+			switch {
+			case enter:
+				frame, text = agentpty.VerbatimFrame([]byte("\r")), "<Enter>"
+			case strings.TrimSpace(text) == "":
+				return fmt.Errorf("chat: steer needs text, or --enter to press Enter")
+			}
+			if err := agentpty.SendFrame(c.CtlSock, frame); err != nil {
 				return fmt.Errorf("chat: could not steer %s: %w", c.ID, err)
 			}
 			_ = room.Emit(room.Event{Type: room.EventSteer, Actor: principalName(), Target: c.ID, Body: text})
@@ -181,6 +193,7 @@ func newChatSteerCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&enter, "enter", false, "press Enter in the session instead of sending a line")
 	return cmd
 }
 
