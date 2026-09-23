@@ -18,11 +18,16 @@ import (
 	"github.com/qiangli/coreutils/multicall"
 	"github.com/qiangli/coreutils/tool"
 	"github.com/qiangli/yoke/mcp"
+	"mvdan.cc/sh/v3/interp/ownedexec"
 
 	_ "github.com/qiangli/yoke/cmds/all"
 )
 
 func main() {
+	if err := ownedexec.Adopt(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(126)
+	}
 	// Only the `yoke mcp` front-end form starts the server; when the binary
 	// is symlinked to a tool name, `mcp` is just that tool's operand.
 	base := strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe")
