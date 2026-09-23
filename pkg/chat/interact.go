@@ -287,15 +287,20 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 	// writers cannot race during TUI startup.
 	sessionDone := make(chan struct{})
 	defer close(sessionDone)
-	go runInboxRelay(ctx, sessionDone, inboxReady.Load,
-		func() bus.PreparedPreamble { return bus.PrepareForAgent(name, "") },
-		func(p bus.PreparedPreamble) error {
-			if err := agentctl.Say(sock, p.Text); err != nil {
-				return err
-			}
-			recordPreambleAdmission(context.Background(), p)
-			return p.Commit()
-		}, bus.NewInboxPollGate(name))
+	// BASHY_CHAT_INBOX=off keeps the host's mail out of the session. The agent
+	// bench needs it: every run must see the same input, and board traffic is
+	// neither fixed nor part of any task.
+	if os.Getenv("BASHY_CHAT_INBOX") != "off" {
+		go runInboxRelay(ctx, sessionDone, inboxReady.Load,
+			func() bus.PreparedPreamble { return bus.PrepareForAgent(name, "") },
+			func(p bus.PreparedPreamble) error {
+				if err := agentctl.Say(sock, p.Text); err != nil {
+					return err
+				}
+				recordPreambleAdmission(context.Background(), p)
+				return p.Commit()
+			}, bus.NewInboxPollGate(name))
+	}
 
 	// Foreground + parent-is-a-TTY + Capture:false → agentpty gives native raw-mode
 	// passthrough (the tool's own TUI), teeing to logSink for observers.

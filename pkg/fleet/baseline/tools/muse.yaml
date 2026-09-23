@@ -25,7 +25,10 @@ cli:
     # --yolo = no approval, no sandbox, trust this workspace (this run only).
     # Without it headless exec stops at approval prompts (default on-request).
     exec: muse exec --yolo --model {model} {prompt}
-    workspace_arg: --workspace {workspace}
+    # No workspace_arg: the launcher inserts it right after the binary, where
+    # `muse --workspace W exec ...` parses as TUI options and rejects exec's
+    # flags (measured under weave 2026-09-23). muse roots its workspace at the
+    # cwd, and weave already runs the agent inside the allocated workspace.
     prompt_position: last
     # Bare `muse --model X` opens Muse's own interactive TUI. It quits unless its
     # terminal startup queries (OSC 10/11/4, CSI ? u, CSI c, CSI 6n) are answered;

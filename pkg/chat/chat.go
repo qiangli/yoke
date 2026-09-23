@@ -908,12 +908,16 @@ func NewChatCmd() *cobra.Command {
 			asked := strings.TrimSpace(opt.Instruction) != "" || len(opt.Files) > 0 || len(opt.Context) > 0
 			wantInteractive := !opt.DryRun && (interactive || (!asked && stdinIsTTY(cmd)))
 			if wantInteractive {
-				// An interactive session IS the terminal — without a TTY it would
-				// launch the agent with a closed stdin and hang. Refuse loudly instead
-				// (a programmatic caller wants Invoke, or chat.Session over a socket).
-				if !stdinIsTTY(cmd) {
+				// Without a TTY, an explicit -i is a HEADLESS STEERABLE session: the
+				// agent still gets its own PTY (agentpty's capture branch, which also
+				// answers terminal startup queries), the prompt arrives over the
+				// control socket, and `chat steer <id>` reaches it mid-turn. This is
+				// what a scripted caller — the agent bench — needs to steer an agent
+				// through the same channel a human would. Implicit interactive (no
+				// -i) still requires a terminal.
+				if !stdinIsTTY(cmd) && !interactive {
 					return fmt.Errorf("chat: an interactive session needs a controlling terminal; " +
-						"use -m/--instruction for a one-shot, or drop -i")
+						"use -m/--instruction for a one-shot, or -i for a headless steerable session")
 				}
 				exit, err := Interact(cmd.Context(), opt.Agent, InteractOptions{
 					Prompt:       opt.Instruction,
