@@ -61,6 +61,9 @@ func TestSteerLive(t *testing.T) {
 	case "aider":
 		// aider's REPL: --message makes it a one-shot; without it, it prompts.
 		argv = []string{"aider", "--yes-always", "--no-git", "--model", os.Getenv("STEER_MODEL")}
+	case "muse":
+		// Bare `muse` (no `exec`) is Muse Code's interactive TUI.
+		argv = []string{"muse", "--yolo", "--model", os.Getenv("STEER_MODEL")}
 	default:
 		t.Fatalf("unknown STEER_TOOL %q", tool)
 	}

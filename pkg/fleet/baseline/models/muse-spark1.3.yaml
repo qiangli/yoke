@@ -1,0 +1,35 @@
+name: muse-spark1.3
+family: muse-spark
+version: "1.3"
+band: 3
+band_source: declared
+# EVIDENCE — one run per exam, 2026-09-23, Muse Code 1.3.0 `exec --yolo`, default
+# --reasoning-effort high. Anchors on the same fixtures: claude:sonnet5 (declared L2)
+# on all three, claude:opus5 (L4) on exam 3.
+#   E1 CODING  expression evaluator from a spec, 47 hidden tests:
+#              spark1.2 47/47 (65s) · spark1.3 47/47 (110s) · sonnet5 47/47 (99s)
+#   E2 FINDING adversarial review, 5 seeded bugs + 1 unseeded real one (self-transfer
+#              deadlock); deliver FINDINGS.md without touching the code:
+#              spark1.2 5/5, missed the deadlock, 0 false positives (47s)
+#              spark1.3 5/5 + deadlock, executed every trigger, 0 false positives (199s)
+#              sonnet5  5/5 + deadlock, 0 false positives (108s)
+#   E3 DIAGNOSE failing test whose root causes sit in a DIFFERENT file than the decoy
+#              TODO (float cents parse + per-line truncated discount), 24 hidden tests
+#              that reject symptom patches: ALL FOUR 24/24 (spark1.2 47s, spark1.3 64s,
+#              sonnet5 61s, opus5 58s), ROOT_CAUSE.md written, tests untouched.
+# Every run converged, committed, and stopped on its own — no looping (contrast glm-5.2).
+#
+# WHAT THIS DOES NOT SHOW: the battery hit its ceiling. The L2 and L4 anchors both
+# aced E3, so it cannot separate L2 from L4, and the band below is NOT `measured`.
+# BAND L3 (declared, evidence-backed): the only discriminating result is E2, where
+# spark1.3 matched the anchors exactly — including the unseeded deadlock — and
+# verified each finding by execution. Floor is proven at L2; L3 is the judgment.
+# To MEASURE it: run a conductor task (multi-repo, needs a plan and delegation) and
+# see whether it converges the way an L4 does.
+display: Muse Spark 1.3
+provider: meta
+kind: subscription
+# The id muse accepts on --model (from the Muse Code 1.3.0 binary).
+model: muse-spark-1.3
+quality: 0.85
+cost_micro: 5000
