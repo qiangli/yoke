@@ -472,7 +472,7 @@ func Run(cmd *exec.Cmd, logSink io.Writer, opts Options) (int, string, error) {
 		// The caller decides what the output IS — weave decodes stream-json into
 		// a worker log, a meeting streams the raw lines to whoever is watching.
 		sink, flush := opts.filter(logSink)
-		_, _ = io.Copy(tap(trustTap(sink)), ptmx)
+		_, _ = io.Copy(tap(trustTap(newTermQueryTap(sink, ptmx))), ptmx)
 		if flush != nil {
 			_ = flush()
 		}
