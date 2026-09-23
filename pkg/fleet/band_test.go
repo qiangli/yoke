@@ -212,8 +212,8 @@ func TestBaselineBandsAreSpread(t *testing.T) {
 
 func TestSaveModelRejectsBandOutOfRange(t *testing.T) {
 	c := bareStore(t)
-	if err := c.SaveModel(Model{Name: "x", Band: 5}); err == nil {
-		t.Fatal("band 5 must be rejected")
+	if err := c.SaveModel(Model{Name: "x", Band: MaxBand + 1}); err == nil {
+		t.Fatalf("band %d must be rejected", MaxBand+1)
 	}
 	if err := c.SaveModel(Model{Name: "y", Band: 0}); err != nil {
 		t.Fatalf("band 0 means unpegged, which is legal: %v", err)

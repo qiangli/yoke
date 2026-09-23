@@ -19,7 +19,7 @@ import (
 type Selector struct {
 	Agent string // nick, canonical name, family alias, or a tool:model binding
 	Tool  string // any operable agent using this tool (e.g. "codex")
-	Band  int    // any operable agent pegged at or above this band (1-4)
+	Band  int    // any operable agent pegged at or above this band (1-5)
 }
 
 // pickCandidate is one operable agent a band/tool selector admits.

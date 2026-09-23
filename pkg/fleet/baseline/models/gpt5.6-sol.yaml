@@ -1,8 +1,11 @@
 name: gpt5.6-sol
 family: gpt-sol
 version: "5.6"
-band: 4
+band: 5
 band_source: declared
+# L5 (frontier) declared 2026-09-23 with the band ladder's new top (Sprint #262):
+# golden L5 for the agent-bench L5 pack. Provisional until that pack measures it;
+# the L4 pack (steerable minimum) was passed at 10/10 (opus5) on the first run.
 # OpenAI: latest frontier agentic coding model
 display: GPT-5.6 Sol
 provider: openai

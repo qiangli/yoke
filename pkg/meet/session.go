@@ -19,6 +19,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiangli/yoke/pkg/fleet"
+
 	"github.com/qiangli/coreutils/pkg/lockfile"
 )
 
@@ -500,8 +502,8 @@ func (s *State) Validate() error {
 	if s.SecretaryPending && s.recorded() {
 		return fmt.Errorf("meet: secretary cannot be both pending and assigned")
 	}
-	if s.SecretaryBand < 0 || s.SecretaryBand > 4 {
-		return fmt.Errorf("meet: secretary band must be 1-4")
+	if s.SecretaryBand < 0 || s.SecretaryBand > fleet.MaxBand {
+		return fmt.Errorf("meet: secretary band must be 1-%d", fleet.MaxBand)
 	}
 
 	seen := map[string]bool{}

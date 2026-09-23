@@ -1,7 +1,7 @@
 name: opus5
 family: opus
 version: "5"
-band: 4
+band: 5
 band_source: operator
 # Re-pegged L3 -> L4 on 2026-08-02, by OWNER JUDGEMENT, so the fleet has more
 # than one L4 seat for steward and conductor work.

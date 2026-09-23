@@ -1,7 +1,7 @@
 name: gpt5.6-sol
 family: gpt-sol
 version: "5.6"
-band: 4
+band: 5
 band_source: declared
 # OpenAI: latest frontier agentic coding model
 display: GPT-5.6 Sol

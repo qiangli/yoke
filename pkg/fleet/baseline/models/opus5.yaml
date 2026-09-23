@@ -1,8 +1,11 @@
 name: opus5
 family: opus
 version: "5"
-band: 4
-band_source: operator
+band: 5
+band_source: declared
+# L5 (frontier) declared 2026-09-23 with the band ladder's new top (Sprint #262):
+# golden L5 for the agent-bench L5 pack. Provisional until that pack measures it;
+# the L4 pack (steerable minimum) was passed at 10/10 (opus5) on the first run.
 # Re-pegged L3 -> L4 on 2026-08-02, by OWNER JUDGEMENT, so the fleet has more
 # than one L4 seat for steward and conductor work.
 #

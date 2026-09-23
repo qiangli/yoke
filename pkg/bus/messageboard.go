@@ -410,7 +410,7 @@ manually send numbered <=1024-byte parts using one token: '[ref:abc 1/3]',
 		"what the post is about; readers who declared this concern see it uncapped (convention: shared-baseline, posix-cert, harness, announce)")
 	f.StringVar(&as, "as", "", "sender identity (default: resolved from your principal)")
 	f.StringVar(&to, "to", "", "addressee agent, role, reader, or resolvable principal")
-	f.IntVar(&band, "band", 0, "post to every agent at this band (1-4)")
+	f.IntVar(&band, "band", 0, "post to every agent at this band (1-5)")
 	f.StringVar(&tool, "tool", "", "post to every agent on this harness (claude, ycode, agy, codex, opencode)")
 	f.StringVar(&provider, "provider", "", "post to every agent whose model has this provider")
 	f.StringVar(&family, "family", "", "post to every agent in this model family (opus, sonnet, gemini-flash, ...)")

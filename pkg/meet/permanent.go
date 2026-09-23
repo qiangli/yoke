@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiangli/yoke/pkg/fleet"
+
 	"github.com/qiangli/coreutils/pkg/lockfile"
 )
 
@@ -179,11 +181,11 @@ func ConfiguredPermanentRooms() ([]PermanentRoomConfig, error) {
 		if strings.TrimSpace(raw.Topic) == "" {
 			raw.Topic = permanentRoomTitle(name)
 		}
-		if raw.Band < 0 || raw.Band > 4 {
-			return nil, fmt.Errorf("meet: %s: permanent room %q band must be 1-4", p, name)
+		if raw.Band < 0 || raw.Band > fleet.MaxBand {
+			return nil, fmt.Errorf("meet: %s: permanent room %q band must be 1-%d", p, name, fleet.MaxBand)
 		}
-		if raw.SecretaryBand < 0 || raw.SecretaryBand > 4 {
-			return nil, fmt.Errorf("meet: %s: permanent room %q secretary_band must be 1-4", p, name)
+		if raw.SecretaryBand < 0 || raw.SecretaryBand > fleet.MaxBand {
+			return nil, fmt.Errorf("meet: %s: permanent room %q secretary_band must be 1-%d", p, name, fleet.MaxBand)
 		}
 		// An override may change only the heading or agenda. Preserve the
 		// built-in steward's lazy-start policy unless explicitly disabled.

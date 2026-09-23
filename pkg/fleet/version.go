@@ -5,11 +5,16 @@ import (
 	"strings"
 )
 
-// MaxBand is the top capability band. Four is a deliberate ceiling, not a
-// placeholder: bands exist to make a coarse routing decision cheap ("who is
-// worth seating?"), and a ladder fine enough to argue about would just be
-// the quality score with extra steps.
-const MaxBand = 4
+// MaxBand is the top capability band. Bands stay coarse on purpose: they exist
+// to make a routing decision cheap ("who is worth seating?"), and a ladder fine
+// enough to argue about would just be the quality score with extra steps.
+//
+// L4 is the MINIMUM for steerable work (the agent-bench L4 pack: take a mid-run
+// steer, hold a boundary, stop and hand off, report honestly); L5 is frontier —
+// what only the strongest agents do, measured by the L5 pack (Sprint #262,
+// 2026-09-23). A new top band is added only with a pack that measures it; every
+// check against the top of the ladder uses this constant, never a literal.
+const MaxBand = 5
 
 // CompareVersions orders two model versions, returning -1, 0, or +1.
 //

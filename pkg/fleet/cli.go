@@ -306,7 +306,7 @@ func newModelsList(opts []Option) *cobra.Command {
 		Long: "List inference backends.\n\n" +
 			"Fields:\n" +
 			"  NAME      canonical, version-explicit model name; aliases are also accepted\n" +
-			"  BAND      normalized capability peg: L1 basic through L4 frontier; '-' is\n" +
+			"  BAND      normalized capability peg: L1 basic, L4 steerable minimum, L5 frontier; '-' is\n" +
 			"            unpegged and '~' means not measured. Agents inherit this band\n" +
 			"  KIND      authentication path: subscription, api, or local; not billing mode\n" +
 			"  PROVIDER  backend/provider family used for authentication and routing\n" +

@@ -218,7 +218,7 @@ func (sf *sessionFlags) bind(cmd *cobra.Command) {
 	f := cmd.Flags()
 	f.StringVar(&sf.topic, "topic", "", "meeting topic (required)")
 	f.StringArrayVar(&sf.participants, "participant", nil, "participant agent — decides content (repeatable)")
-	f.IntVar(&sf.minBand, "min-band", 0, "seat every operable agent at this capability band or above (1-4), instead of naming them")
+	f.IntVar(&sf.minBand, "min-band", 0, "seat every operable agent at this capability band or above (1-5), instead of naming them")
 	f.StringVar(&sf.secretary, "secretary", "claude",
 		"secretary agent — records, decides nothing; never a participant or the facilitator. "+
 			"Pass --secretary \"\" for a room that keeps no minutes: a conversation rather than a meeting")

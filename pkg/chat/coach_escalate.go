@@ -23,7 +23,7 @@ import (
 // reflex has demonstrably failed (EscalateAfter generic steers), and only once.
 
 // maxBand is the top of the capability ladder (frontier).
-const maxBand = 4
+const maxBand = fleet.MaxBand
 
 // EscalationRequest is what the reflex hands an agent-coach when the generic
 // steer has not worked.

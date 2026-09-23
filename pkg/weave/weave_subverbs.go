@@ -84,7 +84,7 @@ the lifecycle. It defaults to "code", which is what every existing issue is.`,
 	cmd.Flags().StringVar(&verify, "verify", "", "Verify command the wrapper runs (`bash -c`) in the workspace at terminal time; verify_exit/verify_output recorded on the item, non-zero blocks `weave pull`")
 	cmd.Flags().StringVar(&suiteGate, "suite-gate", "", "Integration suite command run (`bash -c`) at the base repo root after merge; non-zero resets the merge and records suite_gate_exit/suite_gate_output")
 	cmd.Flags().StringVar(&judge, "judge", "", "Verifiability metadata: none (default) | required (compatibility label; use --review-agent on pull to invoke model review)")
-	cmd.Flags().IntVar(&band, "band", 0, "Issue difficulty band (1-4; 0 = infer from the coding agent). Raises the judge floor to max(L3, band)")
+	cmd.Flags().IntVar(&band, "band", 0, "Issue difficulty band (1-5; 0 = infer from the coding agent). Raises the judge floor to max(L3, band)")
 	return cmd
 }
 
