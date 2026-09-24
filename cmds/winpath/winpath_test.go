@@ -108,7 +108,8 @@ func TestCygpathConvert(t *testing.T) {
 		// default -u: Windows → unix, MSYS/Git-Bash /c spelling
 		{[]string{`C:\Program Files\Git`}, "/c/Program Files/Git"},
 		{[]string{`c:/users/x`}, "/c/users/x"},
-		{[]string{"-u", `D:\`}, "/d/"},
+		// a drive root drops its trailing slash (pathconv: C:\ -> /c, sh 9f82fddb)
+		{[]string{"-u", `D:\`}, "/d"},
 		// relative paths only swap separators (cygpath -w foo/bar → foo\bar)
 		{[]string{`foo\bar`}, "foo/bar"},
 		{[]string{"-w", "foo/bar"}, `foo\bar`},

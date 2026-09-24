@@ -139,10 +139,16 @@ func TestGenCustomSymbols(t *testing.T) {
 	if err != nil {
 		t.Fatalf("custom symbols: %v", err)
 	}
+	// @# is ONE class: the guarantee is one symbol per password, not one of
+	// each symbol ("########" is valid, p=2/256 each). Both symbols must
+	// still be drawn across the batch (160 draws; p(miss)=2^-159).
 	for _, pw := range lines(out) {
-		if strings.Trim(pw, "@#") != "" || !strings.Contains(pw, "@") || !strings.Contains(pw, "#") {
-			t.Fatalf("%q is not drawn from @# with both present", pw)
+		if strings.Trim(pw, "@#") != "" {
+			t.Fatalf("%q is not drawn from @#", pw)
 		}
+	}
+	if !strings.Contains(out, "@") || !strings.Contains(out, "#") {
+		t.Fatalf("custom symbols @# not both drawn across the batch: %q", out)
 	}
 }
 

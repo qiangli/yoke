@@ -11,7 +11,8 @@
 // deliberately (one converter, one answer): /dev/null converts to NUL
 // (upstream cygpath prints "nul", upstream wslpath errors); /tmp maps to
 // the host temp directory rather than a cygwin-root/WSL-VHD path; a
-// rootful unix path outside any drive mount (/usr/x) gains the C: drive.
+// rootful unix path outside any drive mount (/usr/x) gains the C: drive;
+// a drive root converts without its trailing slash (D:\ -> /d).
 // Conversion is pure string work on any host — nothing is resolved
 // against the filesystem, so output is deterministic across GOOS.
 package winpathcmd

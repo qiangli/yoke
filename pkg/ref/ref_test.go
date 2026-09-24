@@ -235,7 +235,7 @@ func TestSplitScope(t *testing.T) {
 		{"coreutils/release-cycle", "coreutils", "release-cycle"},
 		{"coreutils/148", "coreutils", "148"},
 		{"user/3", "user", "3"},
-		{"a/b/c", "a/b", "c"},     // the scope is an ancestral PATH; the local part is one handle (D14)
+		{"a/b/c", "a/b", "c"}, // the scope is an ancestral PATH; the local part is one handle (D14)
 		{"alice/hostA/226", "alice/hostA", "226"},
 	} {
 		scope, local := SplitScope(c.in)
