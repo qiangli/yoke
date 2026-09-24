@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/qiangli/yoke/pkg/bus"
 	"github.com/qiangli/yoke/pkg/room"
 )
 
@@ -105,5 +106,31 @@ func TestConsoleRefusesASeatWithoutACapture(t *testing.T) {
 	_, resp, err = dialConsole(t, srv, "shell-only")
 	if err == nil || resp == nil || resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("shell seat: err=%v resp=%v", err, resp)
+	}
+}
+
+// A DM to a live seat is pushed into it even when the agent's name is not
+// already path-safe: the seat's id is the sanitized name, and the push must use
+// it (the composer is the Term view's only input).
+func TestDeliverToLiveSeatSteersADottedAgentName(t *testing.T) {
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+	agent := "codex-gpt5.6-sol"
+	card := room.Card{ID: room.AgentClaimID(agent), Tool: "codex", Binding: "codex:gpt5.6-sol",
+		Mode: "interactive", PID: os.Getpid(), CtlSock: filepath.Join(t.TempDir(), "ctl.sock")}
+	if err := room.Join(card); err != nil {
+		t.Fatal(err)
+	}
+	var gotSock, gotText string
+	prev := bus.SteerFrame
+	bus.SteerFrame = func(sock, text string) error { gotSock, gotText = sock, text; return nil }
+	t.Cleanup(func() { bus.SteerFrame = prev })
+
+	seat, ok := liveSeat(agent)
+	if !ok {
+		t.Fatal("live seat not found")
+	}
+	d := deliverToLiveSeat(seat, agent, "hello")
+	if !d.Steered || gotSock != card.CtlSock || gotText != "hello" {
+		t.Fatalf("delivery = %+v (sock %q, text %q), want a steer into %s", d, gotSock, gotText, card.CtlSock)
 	}
 }

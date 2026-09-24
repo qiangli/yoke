@@ -82,7 +82,11 @@ func deliverToLiveSeat(card room.Card, agent, text string) seatDelivery {
 		d.Reason = "no control socket — launched outside bashy"
 		return d
 	}
-	push := bus.SteerLive(agent, text)
+	// Address the seat by its card id, never by the agent name: the id is the
+	// name made path-safe (room.AgentClaimID turns "codex-gpt5.6-sol" into
+	// "codex-gpt5-6-sol"), so matching on the name missed every dotted agent
+	// and reported a live session as "not running".
+	push := bus.SteerLive(card.ID, text)
 	d.Steered = push.Steered
 	d.Reason = push.Reason
 	return d
