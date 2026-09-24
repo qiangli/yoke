@@ -65,6 +65,9 @@ func Run(cmd *exec.Cmd, logSink io.Writer, opts Options) (int, string, error) {
 		_ = p.Close()
 		return 127, "", fmt.Errorf("conpty resize: %w", err)
 	}
+	if opts.OnResize != nil {
+		opts.OnResize(rows, cols)
+	}
 	if len(cmd.Args) == 0 {
 		_ = p.Close()
 		return 127, "", fmt.Errorf("agentpty: no command")

@@ -181,6 +181,7 @@ func newServeHandler(ctx context.Context, opts MountOptions) http.Handler {
 	route("POST /api/dms/{agent}/work", handleRelayDMWork(ctx))
 	route("POST /api/dms/{agent}/recall", handleRelayDMRecall)
 	route("/observe-dm", handleRelayDMObserve)
+	route("GET /api/dms/{agent}/console", handleConsoleDM)
 	route("GET /api/rooms/{ref}", handleRoomGet)
 	route("POST /api/rooms", handleRoomCreate)
 	route("POST /api/rooms/{ref}/post", handlePost)

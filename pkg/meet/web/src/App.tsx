@@ -1,10 +1,11 @@
-import { useState } from "react"
+import { lazy, Suspense, useState } from "react"
 import {
   Braces,
   ChevronRight,
   Menu,
   PanelRightClose,
   PanelRightOpen,
+  SquareTerminal,
   Users,
 } from "lucide-react"
 
@@ -22,11 +23,18 @@ import {
 } from "@/components/ui/sheet"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { useMeetRoom } from "@/hooks/use-meet-room"
+import { usingMock } from "@/lib/api"
+
+// xterm is loaded only when someone opens a console.
+const SessionConsole = lazy(() => import("@/components/session-console"))
 
 export function App() {
   const meet = useMeetRoom()
   const [detailsOpen, setDetailsOpen] = useState(true)
   const [mobileDetailsOpen, setMobileDetailsOpen] = useState(false)
+  // The third view: the DM agent's own terminal, mirrored read-only.
+  const [consoleOpen, setConsoleOpen] = useState(false)
+  const showConsole = consoleOpen && meet.selectedKind === "dm" && !!meet.selectedRef && !usingMock
   const memberCount = meet.state?.participants.length ?? 0
 
   return (
@@ -187,6 +195,21 @@ export function App() {
               JSON
             </Button>
 
+            {meet.selectedKind === "dm" && !usingMock && (
+              <Button
+                aria-label={consoleOpen ? "Hide the agent's live terminal" : "Show the agent's live terminal"}
+                aria-pressed={consoleOpen}
+                className="h-7 px-2 text-[10px] font-semibold uppercase tracking-wide"
+                onClick={() => setConsoleOpen(!consoleOpen)}
+                size="sm"
+                title="Watch the agent's own terminal, live and read-only; steer it with the composer"
+                variant={consoleOpen ? "secondary" : "ghost"}
+              >
+                <SquareTerminal className="size-3.5" />
+                Term
+              </Button>
+            )}
+
             {meet.selectedKind === "room" && <Button
               aria-label={detailsOpen ? "Hide room details" : "Show room details"}
               className="hidden xl:inline-flex"
@@ -227,13 +250,19 @@ export function App() {
 
           </header>
 
-          <MessageList
-            debugRaw={meet.debugRaw}
-            events={meet.events}
-            kind={meet.selectedKind}
-            live={meet.live}
-            state={meet.state}
-          />
+          {showConsole ? (
+            <Suspense fallback={<div className="flex-1 bg-[#0b0d10]" />}>
+              <SessionConsole agent={meet.selectedRef} />
+            </Suspense>
+          ) : (
+            <MessageList
+              debugRaw={meet.debugRaw}
+              events={meet.events}
+              kind={meet.selectedKind}
+              live={meet.live}
+              state={meet.state}
+            />
+          )}
           <Composer
             error={meet.error}
             initialDraft={meet.draft}

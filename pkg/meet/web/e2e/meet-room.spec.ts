@@ -1,5 +1,5 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import net from "node:net";
@@ -22,6 +22,7 @@ let meetDir = "";
 let binDir = "";
 let serverOutput = "";
 let fleetDir = "";
+let roomDir = "";
 
 /** materializeFleet copies the fixture fleet into a temp dir and renders the
  * tool template, which needs the absolute path of the echoback script. */
@@ -46,6 +47,9 @@ test.beforeAll(async () => {
   fleetDir = materializeFleet();
   binDir = mkdtempSync(path.join(tmpdir(), "bashy-meet-bin-"));
   meetDir = mkdtempSync(path.join(tmpdir(), "bashy-meet-state-"));
+  // The host room (live seats) is isolated too: a test seats a fake live
+  // agent there, and the operator's real seats must never leak in.
+  roomDir = mkdtempSync(path.join(tmpdir(), "bashy-meet-room-"));
   const binary = path.join(binDir, "bashy-meet-e2e");
 
   execFileSync("npm", ["run", "build"], {
@@ -80,6 +84,7 @@ test.beforeAll(async () => {
         ...process.env,
         BASHY_MEET_DIR: meetDir,
         BASHY_FLEET_DIR: fleetDir,
+        BASHY_ROOM_DIR: roomDir,
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -99,6 +104,7 @@ test.afterAll(async () => {
   rmSync(meetDir, { recursive: true, force: true });
   rmSync(binDir, { recursive: true, force: true });
   rmSync(fleetDir, { recursive: true, force: true });
+  rmSync(roomDir, { recursive: true, force: true });
 });
 
 test("renders room list from the real server and opens a live observe socket", async ({ page }) => {
@@ -944,4 +950,43 @@ test("a chat send is accepted immediately and shows the reply when it lands", as
   ).toBeVisible();
   await expect(page.getByRole("button", { name: /^Cancel send/ })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Recall message" })).toHaveCount(0);
+});
+
+// --- The live terminal (Sprint 276) -----------------------------------------
+
+// A seat launched through bashy tees its PTY bytes to the card's log_path; the
+// Term view replays and follows them in a read-only xterm. The fake seat here
+// is a card owned by the (live) server process pointing at a log this test
+// writes, so the browser sees exactly the bytes a real TUI would produce.
+test("the Term view mirrors a live seat's terminal and follows it", async ({ page }) => {
+  const agent = facilitatorAgent;
+  const members = path.join(roomDir, "members");
+  mkdirSync(members, { recursive: true });
+  const logPath = path.join(roomDir, "seat.log");
+  writeFileSync(logPath, "\x1b[1;32mHELLO FROM THE TUI\x1b[0m\r\n");
+  const cardPath = path.join(members, `id-${Buffer.from(agent).toString("base64url")}.json`);
+  writeFileSync(cardPath, JSON.stringify({
+    id: agent, tool: "echoback", binding: "echoback:fixed", mode: "interactive",
+    pid: server?.pid, log_path: logPath, cols: 100, rows: 30, joined: new Date().toISOString(),
+  }));
+  try {
+    await openMeet(page);
+    await openChat(page, agent);
+    await page.getByRole("button", { name: "Show the agent's live terminal" }).click();
+    const rows = page.locator("[data-session-console] .xterm-rows");
+    await expect(rows).toContainText("HELLO FROM THE TUI");
+    appendFileSync(logPath, "SECOND LINE\r\n");
+    await expect(rows).toContainText("SECOND LINE");
+    await page.getByRole("button", { name: "Hide the agent's live terminal" }).click();
+    await expect(page.locator("[data-session-console]")).toHaveCount(0);
+  } finally {
+    rmSync(cardPath, { force: true });
+  }
+});
+
+test("the Term view says how to get a terminal when the agent has none", async ({ page }) => {
+  await openMeet(page);
+  await openChat(page, primaryAgent);
+  await page.getByRole("button", { name: "Show the agent's live terminal" }).click();
+  await expect(page.locator('[data-console-status="unavailable"]')).toContainText("bashy chat --agent");
 });

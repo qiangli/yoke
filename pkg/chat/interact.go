@@ -308,6 +308,7 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 		CtlSock:    sock,
 		Capture:    false,
 		MaxRuntime: opt.Timeout,
+		OnResize:   publishGeometry(card),
 	})
 	if runDone != nil {
 		close(runDone)
@@ -417,4 +418,20 @@ func bindingBand(name string) int {
 		return m.Band
 	}
 	return 0
+}
+
+// publishGeometry keeps the card's Cols/Rows equal to the session PTY's size,
+// so a mirror replaying LogPath draws the TUI at the width it was drawn for.
+// Best-effort: a failed update costs a mirror its geometry, never the session.
+func publishGeometry(card room.Card) func(rows, cols uint16) {
+	var mu sync.Mutex
+	return func(rows, cols uint16) {
+		mu.Lock()
+		defer mu.Unlock()
+		if card.Rows == int(rows) && card.Cols == int(cols) {
+			return
+		}
+		card.Rows, card.Cols = int(rows), int(cols)
+		_ = room.Join(card) // update: this process holds the id
+	}
 }

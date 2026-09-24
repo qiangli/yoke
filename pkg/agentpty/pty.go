@@ -131,6 +131,9 @@ func Run(cmd *exec.Cmd, logSink io.Writer, opts Options) (int, string, error) {
 		_ = ptmx.Close()
 		return 127, "", fmt.Errorf("pty.Setsize: %w", err)
 	}
+	if opts.OnResize != nil {
+		opts.OnResize(rows, cols)
+	}
 	if cmd.Stdout == nil {
 		cmd.Stdout = tty
 	}
@@ -399,6 +402,9 @@ func Run(cmd *exec.Cmd, logSink io.Writer, opts Options) (int, string, error) {
 		for range winch {
 			if parentTTY {
 				_ = pty.InheritSize(os.Stdout, ptmx)
+				if opts.OnResize != nil {
+					opts.OnResize(ptySize())
+				}
 			}
 		}
 	}()

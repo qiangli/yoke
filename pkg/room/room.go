@@ -53,6 +53,10 @@ type Card struct {
 	Caps      []string `json:"caps,omitempty"`
 	CtlSock   string   `json:"ctl_sock,omitempty"` // same-host reach
 	LogPath   string   `json:"log_path,omitempty"`
+	// Cols/Rows are the geometry of the PTY whose raw bytes LogPath captures, so
+	// a mirror can replay them at the size they were drawn for.
+	Cols int `json:"cols,omitempty"`
+	Rows int `json:"rows,omitempty"`
 	// EventsPath is the structured-event stream this member writes, when Events.
 	//
 	// It is ADVERTISED rather than recomputed. A reader used to reconstruct it

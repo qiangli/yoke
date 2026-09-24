@@ -89,6 +89,12 @@ type Options struct {
 	// A non-nil error terminates the child and fails the run.
 	OnStart func(ttyPath string) error
 
+	// OnResize reports the PTY geometry: once at start and again after every
+	// terminal resize that is forwarded into the PTY. A mirror of the session
+	// (a browser console, say) renders the raw bytes at exactly this size; a
+	// TUI reflowed to another width is garbage. nil means nobody asked.
+	OnResize func(rows, cols uint16)
+
 	// Capture forces the output to be captured even when the parent process is
 	// itself a terminal.
 	//
