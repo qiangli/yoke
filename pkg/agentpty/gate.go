@@ -134,7 +134,14 @@ const GateNagClearPayload = "0"
 // ClassifyGate classifies a live PTY tail into the kind of gate the agent
 // appears blocked on. Deliberately pure, so the broker is testable without a
 // live tool, a browser, or a terminal.
+//
+// The tail is matched as SCREEN TEXT, not raw bytes: a TUI positions every word
+// with its own cursor move. codex 0.156.1 draws its folder-trust dialog as
+// `\x1b[5;3HTrust\x1b[5;9Hthis\x1b[5;14Hfolder?`, so a phrase match against
+// the raw tail never sees "trust this folder", the prompt is never cleared, and
+// the next write (an instruction, a mail block) lands in the dialog and quits it.
 func ClassifyGate(tail string) GateVerdict {
+	tail = ScreenText(tail)
 	low := strings.ToLower(tail)
 	if strings.TrimSpace(low) == "" {
 		return GateVerdict{Kind: GateNone}
@@ -383,6 +390,25 @@ func callEscalate(deps RouteDeps, msg string) error {
 		return fmt.Errorf("escalation route unavailable: %s", msg)
 	}
 	return deps.Escalate(msg)
+}
+
+// screenEscape matches the escape sequences a TUI draws with: CSI (including
+// private-mode parameters), OSC, charset selects and two-character escapes. It
+// is the same shape as chat.SanitizeTurn's pattern; agentpty sits below chat, so
+// it keeps its own copy.
+var screenEscape = regexp.MustCompile(
+	"\x1b\\[[0-9;?<>=]*[ -/]*[@-~]" + // CSI, incl. private-mode params
+		"|\x1b\\][^\x07\x1b]*(\x07|\x1b\\\\)" + // OSC
+		"|\x1b[()][0-9A-Za-z]" + // charset select: ESC ( B
+		"|\x1b[0-9A-Za-z><=]") // two-char: ESC 7, ESC 8, ESC =
+
+// ScreenText reduces raw PTY output to the words it draws: every escape
+// sequence becomes a space (a cursor move between two words separates them), and
+// each run of whitespace collapses to one space, so a phrase wrapped or padded
+// across a redraw still reads as one phrase.
+func ScreenText(raw string) string {
+	s := screenEscape.ReplaceAllString(raw, " ")
+	return strings.Join(strings.Fields(s), " ")
 }
 
 func findSignature(low string, signatures []string) (string, bool) {

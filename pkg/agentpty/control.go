@@ -153,14 +153,16 @@ type activityTap struct {
 // Only GateTrust is routed here. The other gates need a browser or a human, and
 // those routes belong to the caller, which knows where an escalation should go.
 type trustClearTap struct {
-	w    io.Writer
-	deps RouteDeps
-	tail string
+	w        io.Writer
+	deps     RouteDeps
+	tail     string
+	onRouted func(GateVerdict, string)
 }
 
-func newTrustClearTap(w io.Writer, ctlSock string) io.Writer {
+func newTrustClearTap(w io.Writer, ctlSock string, onRouted func(GateVerdict, string)) io.Writer {
 	return &trustClearTap{
-		w: w,
+		w:        w,
+		onRouted: onRouted,
 		deps: RouteDeps{
 			State: &GateRouteState{},
 			Say: func(payload string) error {
@@ -178,7 +180,9 @@ func (t *trustClearTap) Write(p []byte) (int, error) {
 			t.tail = t.tail[len(t.tail)-8192:]
 		}
 		if verdict := ClassifyGate(t.tail); verdict.Kind == GateTrust {
-			_, _ = RouteGate(verdict, t.deps)
+			if action, err := RouteGate(verdict, t.deps); err == nil && action == "say_trust" && t.onRouted != nil {
+				t.onRouted(verdict, action)
+			}
 		}
 	}
 	return n, err

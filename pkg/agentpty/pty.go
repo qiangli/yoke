@@ -438,7 +438,7 @@ func Run(cmd *exec.Cmd, logSink io.Writer, opts Options) (int, string, error) {
 		if opts.CtlSock == "" {
 			return w
 		}
-		return newTrustClearTap(w, opts.CtlSock)
+		return newTrustClearTap(w, opts.CtlSock, opts.OnGateRouted)
 	}
 
 	if parentTTY && !opts.Capture {

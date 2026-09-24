@@ -28,7 +28,14 @@ cli:
     exec: codex exec --skip-git-repo-check --sandbox workspace-write --model {model} {prompt}
     steer_exec: codex --model {model}
     prompt_position: last
-    trust_preseed: none
+    # MEASURED 2026-09-24 (codex-cli 0.156.1): a directory codex has not seen
+    # opens a "Trust this folder? … 1. Trust and continue  2. Quit" dialog, and
+    # the answer is saved in ~/.codex/config.toml as
+    # [projects."<git top-level>"] trust_level = "trusted". The preseed writes
+    # that table first. No trust_clear: the generic PTY trust tap clears the
+    # dialog with "1" if it appears anyway, and trust_clear would also mark codex
+    # NeedsTerminal, changing how its headless exec launches.
+    trust_preseed: codex.toml
 
     # supports_say: MEASURED, not asserted. Proven with agentpty.Run + BrokerSay —
     # the production path `meet say` uses — in pkg/agentpty/steer_live_test.go.

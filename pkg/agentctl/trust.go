@@ -38,6 +38,8 @@ func ApplyTrustPreseed(workspace, preseed string) error {
 		return preseedClaudeTrust(workspace)
 	case "opencode.json":
 		return preseedOpencodeTrust(workspace)
+	case "codex.toml":
+		return preseedCodexTrust(workspace)
 	default:
 		return nil
 	}
@@ -196,4 +198,106 @@ func preseedClaudeTrust(workspace string) error {
 		return err
 	}
 	return os.WriteFile(path, append(b, '\n'), 0o600)
+}
+
+// preseedCodexTrust marks a workspace trusted in codex's own config, the way
+// codex records the operator's answer to its "Trust this folder?" dialog:
+//
+//	[projects."<git top-level, symlinks resolved>"]
+//	trust_level = "trusted"
+//
+// (codex-cli 0.156.1, measured 2026-09-24: answering the dialog in a repo's
+// subdirectory saved the repo root, under /private/tmp for a /tmp path.)
+//
+// It APPENDS one table and never rewrites the file. config.toml is the
+// operator's — thousands of lines, and codex rewrites it too — and a TOML round
+// trip would reorder or drop what it does not model. A project that already has
+// a table is left alone, including one the operator marked untrusted.
+func preseedCodexTrust(workspace string) error {
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" {
+		return fmt.Errorf("agentctl: empty workspace")
+	}
+	key, err := codexTrustKey(workspace)
+	if err != nil {
+		return err
+	}
+	dir := strings.TrimSpace(os.Getenv("CODEX_HOME"))
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		dir = filepath.Join(home, ".codex")
+	}
+	path := filepath.Join(dir, "config.toml")
+	header := "[projects." + tomlBasicString(key) + "]"
+	existing, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	for _, line := range strings.Split(string(existing), "\n") {
+		if strings.TrimSpace(line) == header {
+			return nil
+		}
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	block := header + "\ntrust_level = \"trusted\"\n"
+	if len(existing) > 0 {
+		block = "\n" + block
+		if !strings.HasSuffix(string(existing), "\n") {
+			block = "\n" + block
+		}
+	}
+	_, err = f.WriteString(block)
+	return err
+}
+
+// codexTrustKey is the directory codex keys its trust on: the enclosing git
+// work tree's top level (a .git directory, or the .git FILE of a submodule or
+// linked worktree), else the workspace itself — symlinks resolved either way.
+func codexTrustKey(workspace string) (string, error) {
+	abs, err := filepath.Abs(workspace)
+	if err != nil {
+		return "", err
+	}
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = real
+	}
+	for dir := abs; ; {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return abs, nil
+		}
+		dir = parent
+	}
+}
+
+// tomlBasicString quotes s as a TOML basic string.
+func tomlBasicString(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch {
+		case r == '"' || r == '\\':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		case r < 0x20 || r == 0x7f:
+			fmt.Fprintf(&b, "\\u%04X", r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }

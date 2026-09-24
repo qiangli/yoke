@@ -60,6 +60,9 @@ type Session struct {
 	// inboxAgent is used only by transports such as ACP that have an
 	// authenticated protocol session but no PTY control socket.
 	inboxAgent string
+	// ptyInbox bounds the mail typed into a PTY session (nil on ACP, whose
+	// control channel is a protocol message, not a keyboard).
+	ptyInbox *ptyInbox
 
 	// events is the tool's structured channel, when it has one. Its presence is
 	// the difference between KNOWING a turn ended and guessing from silence.
@@ -309,6 +312,7 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 		Nick:         l.Nick,
 		CtlSock:      sock,
 		inboxAgent:   name,
+		ptyInbox:     newPTYInbox(name),
 		events:       tail,
 		launch:       l,
 		allowPremium: opt.AllowPremium,
@@ -635,6 +639,15 @@ func (s *Session) Say(text string) error {
 	if err := preparedInbox.Err(); err != nil {
 		return fmt.Errorf("chat: prepare turn inbox: %w", err)
 	}
+	// A PTY steer is typed: an oversized mail block is announced ahead of the
+	// caller's text instead, and stays unread (no Commit below).
+	inboxComplete := true
+	if s.acp == nil && s.ptyInbox != nil {
+		if block, ok := strings.CutSuffix(preparedInbox.Text, "\n"+text); ok && len(strings.TrimSpace(block)) > ptyInboxBytes {
+			preparedInbox.Text = ptyInboxNotice(s.inboxAgent, strings.TrimSpace(block)) + "\n" + text
+			inboxComplete = false
+		}
+	}
 	text = preparedInbox.Text
 
 	if d := s.governTurn(text); !d.Allowed() {
@@ -652,9 +665,11 @@ func (s *Session) Say(text string) error {
 	if err := s.say(text); err != nil {
 		return err
 	}
-	recordPreambleAdmission(context.Background(), preparedInbox)
-	if err := preparedInbox.Commit(); err != nil {
-		return fmt.Errorf("chat: turn was delivered but its inbox acknowledgement failed: %w", err)
+	if inboxComplete {
+		recordPreambleAdmission(context.Background(), preparedInbox)
+		if err := preparedInbox.Commit(); err != nil {
+			return fmt.Errorf("chat: turn was delivered but its inbox acknowledgement failed: %w", err)
+		}
 	}
 	// Charged on SEND, not on reply: the turn is bought the moment the agent
 	// accepts it, and a session's reply text has no boundary we could bill

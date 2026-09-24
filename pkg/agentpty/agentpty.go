@@ -95,6 +95,13 @@ type Options struct {
 	// TUI reflowed to another width is garbage. nil means nobody asked.
 	OnResize func(rows, cols uint16)
 
+	// OnGateRouted is called after the trust tap answers a gate on the live
+	// output (action is RouteGate's, e.g. "say_trust"). A caller that waits for
+	// the screen to be ready uses it to forget the dialog it was waiting out: the
+	// answered prompt is still in its tail, but no longer on the screen. nil
+	// means nobody asked.
+	OnGateRouted func(v GateVerdict, action string)
+
 	// Capture forces the output to be captured even when the parent process is
 	// itself a terminal.
 	//

@@ -102,6 +102,19 @@ func (s *Session) deliverPreparedInbox(p bus.PreparedPreamble) error {
 	if d := s.governTurn(p.Text); !d.Allowed() {
 		return nil
 	}
+	if s.acp == nil && s.ptyInbox != nil {
+		// Typed into a TUI: bounded, and acknowledged only when it went in whole.
+		complete, err := s.ptyInbox.deliver(p.Text, s.say)
+		if err != nil || !complete {
+			return err
+		}
+		recordPreambleAdmission(context.Background(), p)
+		if err := p.Commit(); err != nil {
+			return err
+		}
+		recordLaunchUsageTokens(context.Background(), s.launch, estimateTokens(p.Text), 0)
+		return nil
+	}
 	if err := s.say(p.Text); err != nil {
 		return err
 	}

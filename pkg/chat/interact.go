@@ -247,23 +247,29 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 	// An interactive instruction must go through the live terminal, after the TUI
 	// has actually drawn and settled. Passing it on argv works for only some tools;
 	// sending it as soon as the socket appears races startup and can be swallowed.
+	//
+	// The inbox relay waits for the same screen: drawn, quiet and gate-free. A
+	// mail block typed into a TUI that is still starting, or into its trust
+	// dialog, is lost at best.
 	var (
-		ready      *interactiveReady
-		delivered  chan error
-		runDone    chan struct{}
-		promptText = opt.Prompt
-		inboxReady atomic.Bool
+		ready           = &interactiveReady{}
+		delivered       chan error
+		runDone         chan struct{}
+		promptText      = opt.Prompt
+		promptDelivered atomic.Bool
 	)
+	if logSink != nil {
+		logSink = io.MultiWriter(logSink, ready)
+	} else {
+		logSink = ready
+	}
+	inboxReady := func() bool {
+		return promptDelivered.Load() && ready.settled(defaultInteractiveDeliveryTiming.settle)
+	}
 	if strings.TrimSpace(promptText) == "" {
-		inboxReady.Store(true)
+		promptDelivered.Store(true)
 	}
 	if strings.TrimSpace(promptText) != "" {
-		ready = &interactiveReady{}
-		if logSink != nil {
-			logSink = io.MultiWriter(logSink, ready)
-		} else {
-			logSink = ready
-		}
 		delivered = make(chan error, 1)
 		runDone = make(chan struct{})
 		go func() {
@@ -272,7 +278,7 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 			if err != nil {
 				cancel() // do not leave a session running after silently losing its instruction
 			} else {
-				inboxReady.Store(true)
+				promptDelivered.Store(true)
 				fmt.Fprintf(status, "chat: instruction delivered to %s\n", card.Nick)
 			}
 			delivered <- err
@@ -291,10 +297,12 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 	// bench needs it: every run must see the same input, and board traffic is
 	// neither fixed nor part of any task.
 	if os.Getenv("BASHY_CHAT_INBOX") != "off" {
-		go runInboxRelay(ctx, sessionDone, inboxReady.Load,
+		mail := newPTYInbox(name)
+		go runInboxRelay(ctx, sessionDone, inboxReady,
 			func() bus.PreparedPreamble { return bus.PrepareForAgent(name, "") },
 			func(p bus.PreparedPreamble) error {
-				if err := agentctl.Say(sock, p.Text); err != nil {
+				complete, err := mail.deliver(p.Text, func(text string) error { return agentctl.Say(sock, text) })
+				if err != nil || !complete {
 					return err
 				}
 				recordPreambleAdmission(context.Background(), p)
@@ -305,10 +313,11 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 	// Foreground + parent-is-a-TTY + Capture:false → agentpty gives native raw-mode
 	// passthrough (the tool's own TUI), teeing to logSink for observers.
 	exit, killed, runErr := agentpty.Run(cmd, logSink, agentpty.Options{
-		CtlSock:    sock,
-		Capture:    false,
-		MaxRuntime: opt.Timeout,
-		OnResize:   publishGeometry(card),
+		CtlSock:      sock,
+		Capture:      false,
+		MaxRuntime:   opt.Timeout,
+		OnResize:     publishGeometry(card),
+		OnGateRouted: ready.gateAnswered,
 	})
 	if runDone != nil {
 		close(runDone)
@@ -340,17 +349,29 @@ func (w *usageCountingWriter) Tokens() int64 {
 	return n
 }
 
+// interactiveReady decides when the agent's TUI can take typed input: it has
+// drawn, the output has gone quiet, and what it drew is not a gate. A still
+// dialog is not a ready prompt — codex's folder-trust dialog sits motionless,
+// and an instruction typed into it quits codex.
 type interactiveReady struct {
 	mu        sync.Mutex
 	drawn     bool
 	lastWrite time.Time
+	tail      string
 }
+
+// readyTailBytes bounds the output the gate check reads: a dialog is one frame.
+const readyTailBytes = 8 << 10
 
 func (r *interactiveReady) Write(p []byte) (int, error) {
 	r.mu.Lock()
 	if len(p) > 0 {
 		r.drawn = true
 		r.lastWrite = time.Now()
+		r.tail += string(p)
+		if len(r.tail) > readyTailBytes {
+			r.tail = r.tail[len(r.tail)-readyTailBytes:]
+		}
 	}
 	r.mu.Unlock()
 	return len(p), nil
@@ -359,7 +380,19 @@ func (r *interactiveReady) Write(p []byte) (int, error) {
 func (r *interactiveReady) settled(forDuration time.Duration) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.drawn && time.Since(r.lastWrite) >= forDuration
+	if !r.drawn || time.Since(r.lastWrite) < forDuration {
+		return false
+	}
+	return agentpty.ClassifyGate(r.tail).Kind == agentpty.GateNone
+}
+
+// gateAnswered forgets the output so far: the trust tap answered the dialog in
+// it, and only what the TUI draws next says whether it is ready.
+func (r *interactiveReady) gateAnswered(agentpty.GateVerdict, string) {
+	r.mu.Lock()
+	r.tail = ""
+	r.lastWrite = time.Now()
+	r.mu.Unlock()
 }
 
 type interactiveDeliveryTiming struct {
