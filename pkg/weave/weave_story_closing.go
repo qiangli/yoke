@@ -132,7 +132,13 @@ func checkClosingConditions(s *weaveStory, others []*weaveStory, repoPath func(s
 		}
 		path, ok := repoPath(run)
 		if !ok {
-			st.Unknown = "no unique checkout on this host"
+			// Almost always a run whose checkout was removed after its work
+			// was integrated or abandoned — often by a previous manager. Say
+			// so and name the fix, rather than sending the operator to commit
+			// and push a repo that is already clean.
+			st.Unknown = fmt.Sprintf("linked run %s#%d has no checkout on this host — "+
+				"`bashy sprint prune %d` lists stale runs; `bashy sprint unlink %d --repo %s --task %d` if it is gone for good",
+				run.Repo, run.ID, s.ID, s.ID, run.Repo, run.ID)
 			out = append(out, st)
 			continue
 		}

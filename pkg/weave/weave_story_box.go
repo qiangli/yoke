@@ -581,8 +581,8 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 					if !force {
 						if len(unclean) > 0 {
 							return "", fmt.Errorf("sprint #%d NOT stopped — the repos are not wrapped up:\n  %s\n"+
-								"  commit, push, and bump pins, then `sprint stop %d` again (--force records it unwrapped)",
-								id, strings.Join(unclean, "\n  "), id)
+								"  commit, push, and bump pins (or unlink stale runs: `sprint prune %d`), then `sprint stop %d` again (--force records it unwrapped)",
+								id, strings.Join(unclean, "\n  "), id, id)
 						}
 						if len(problems) > 0 {
 							return "", fmt.Errorf("sprint #%d NOT stopped — could not park: %s\n  fix, then `sprint stop %d` again (or --force to close anyway)",

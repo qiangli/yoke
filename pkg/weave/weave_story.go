@@ -476,8 +476,9 @@ this is an order rather than a checklist:
   1 MAIL FIRST      human instructions, then your inbox. It can replace the
                     assignment, and reading it is what keeps your seat live.
   2 RE-PRIORITIZE   update the board BEFORE staffing — file what became
-                    visible, correct status/priority/body. Staffing a stale
-                    board buys work nobody needed.
+                    visible, correct status/priority/body, and triage each new
+                    item: defect, design gap (escalate now) or out of scope.
+                    Staffing a stale board buys work nobody needed.
   3 STAFF           ready INDEPENDENT stories to agents that can actually run
                     (installed is not signed in), capability to difficulty,
                     flat-billed over metered, widen to ready stories not roster;
@@ -486,7 +487,8 @@ this is an order rather than a checklist:
                     Nothing across two ticks is a decision, not a wait.
   5 INTEGRATE       run the gate YOURSELF, read the verdict from bashy and not
                     from a worker's prose; review, merge, clean up what this
-                    sprint owns.
+                    sprint owns. Cheap gate per story; the expensive gate
+                    once per iteration, on a frozen candidate.
   6 CHECKPOINT      your context does not survive; the brief is what reaches
                     the next manager, who may be a different tool.
   7 REPEAT          until the sprint's acceptance gate passes — then stop and
