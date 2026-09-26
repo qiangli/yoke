@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -143,7 +142,7 @@ func NewGoCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			c := exec.CommandContext(cmd.Context(), goBin, args...)
+			c := binmgr.Command(cmd.Context(), goBin, args...)
 			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 			c.Env = goCommandEnv(goroot)
 			return c.Run()

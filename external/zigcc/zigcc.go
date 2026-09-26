@@ -169,7 +169,7 @@ func NewZigCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			c := exec.CommandContext(cmd.Context(), bin, args...)
+			c := binmgr.Command(cmd.Context(), bin, args...)
 			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 			return c.Run()
 		},

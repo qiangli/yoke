@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -213,7 +212,7 @@ func newCorepackCmd(pm string) *cobra.Command {
 			if runtime.GOOS == "windows" {
 				corepack += ".cmd"
 			}
-			c := exec.CommandContext(cmd.Context(), corepack, append([]string{pm}, args...)...)
+			c := binmgr.Command(cmd.Context(), corepack, append([]string{pm}, args...)...)
 			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 			c.Env = append(os.Environ(),
 				"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
@@ -246,7 +245,7 @@ func newExecCmd(use, short, tool string) *cobra.Command {
 				}
 				target = filepath.Join(binDir, name)
 			}
-			c := exec.CommandContext(cmd.Context(), target, args...)
+			c := binmgr.Command(cmd.Context(), target, args...)
 			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 			c.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 			return c.Run()
@@ -296,7 +295,7 @@ func EnsureTypeScript(ctx context.Context) (string, error) {
 		// npm.cmd is a batch file: cmd.exe runs it.
 		argv = append([]string{"cmd.exe", "/d", "/c"}, argv...)
 	}
-	c := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	c := binmgr.Command(ctx, argv[0], argv[1:]...)
 	c.Stdout, c.Stderr = os.Stderr, os.Stderr
 	c.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	if err := c.Run(); err != nil {

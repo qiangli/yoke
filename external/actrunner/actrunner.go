@@ -14,7 +14,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -154,7 +153,7 @@ func Register(ctx context.Context, o RegisterOptions) error {
 			return err
 		}
 	}
-	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd := binmgr.Command(ctx, bin, args...)
 	cmd.Dir = o.DataDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -239,7 +238,7 @@ func Daemon(ctx context.Context, version, dataDir string, extraEnv ...string) er
 		// the docker_host "-" setting takes effect (required for podman backends).
 		daemonArgs = append(daemonArgs, "--config", ConfigPath(dataDir))
 	}
-	cmd := exec.CommandContext(ctx, bin, daemonArgs...)
+	cmd := binmgr.Command(ctx, bin, daemonArgs...)
 	cmd.Dir = dataDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

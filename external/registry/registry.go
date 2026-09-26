@@ -98,7 +98,7 @@ func (e Entry) NewCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			c := exec.CommandContext(cmd.Context(), bin, args...)
+			c := binmgr.Command(cmd.Context(), bin, args...)
 			if e.ExecEnv != nil {
 				c.Env = e.ExecEnv()
 			}

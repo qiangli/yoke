@@ -132,7 +132,7 @@ func buildSpec(goos, goarch string) binmgr.GitHubSpec {
 }
 
 func defaultExecCmd(ctx context.Context, binPath string, args []string, dir string, env []string, stdin io.Reader, stdout, stderr io.Writer) (int, int, error) {
-	c := exec.CommandContext(ctx, binPath, args...)
+	c := binmgr.Command(ctx, binPath, args...)
 	c.Dir = dir
 	if env != nil {
 		c.Env = env

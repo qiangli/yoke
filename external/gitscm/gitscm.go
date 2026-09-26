@@ -72,7 +72,7 @@ func NewGitSCMCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			c := exec.Command(git, args...)
+			c := binmgr.Command(context.Background(), git, args...)
 			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 			env := os.Environ()
 			if runtime.GOOS == "windows" {

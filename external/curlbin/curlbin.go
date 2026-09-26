@@ -59,7 +59,7 @@ func NewCurlCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			p := exec.CommandContext(cmd.Context(), c, args...)
+			p := binmgr.Command(cmd.Context(), c, args...)
 			p.Stdin, p.Stdout, p.Stderr = os.Stdin, os.Stdout, os.Stderr
 			return p.Run()
 		},

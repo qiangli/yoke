@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -158,7 +157,7 @@ func run(ctx context.Context, mode string, args []string) error {
 	case "pip":
 		argv = append([]string{"pip"}, args...)
 	}
-	c := exec.CommandContext(ctx, uv, argv...)
+	c := binmgr.Command(ctx, uv, argv...)
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	c.Env = uvEnv(append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH")))
 	return c.Run()
@@ -203,7 +202,7 @@ func EnsureInterpreter(ctx context.Context, version string) (string, error) {
 	}
 	env := uvEnv(append(os.Environ(), "UV_PYTHON_PREFERENCE=only-managed", "UV_NO_CONFIG=1"))
 	find := func() (string, error) {
-		c := exec.CommandContext(ctx, uv, "python", "find", version)
+		c := binmgr.Command(ctx, uv, "python", "find", version)
 		c.Env = env
 		out, err := c.Output()
 		if err != nil {
@@ -215,7 +214,7 @@ func EnsureInterpreter(ctx context.Context, version string) (string, error) {
 		return path, nil
 	}
 	fmt.Fprintf(os.Stderr, "note: installing CPython %s via uv — one-time, into uv's managed python dir\n", version)
-	c := exec.CommandContext(ctx, uv, "python", "install", version)
+	c := binmgr.Command(ctx, uv, "python", "install", version)
 	c.Env = env
 	c.Stdout, c.Stderr = os.Stderr, os.Stderr
 	if err := c.Run(); err != nil {

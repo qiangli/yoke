@@ -296,7 +296,7 @@ func StartDaemon(ctx context.Context, o Options) (State, error) {
 	if err != nil {
 		return State{}, err
 	}
-	cmd := exec.Command(bin, "web", "--config", cfg)
+	cmd := binmgr.Command(context.Background(), bin, "web", "--config", cfg)
 	cmd.Dir = o.DataDir
 	cmd.Env = append(os.Environ(), "GITEA_WORK_DIR="+o.DataDir)
 	cmd.Stdout = log
@@ -796,7 +796,7 @@ func promoteAdminViaAPI(ctx context.Context, baseURL, user string) error {
 }
 
 func runGiteaAdmin(ctx context.Context, bin, dataDir string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd := binmgr.Command(ctx, bin, args...)
 	cmd.Dir = dataDir
 	cmd.Env = append(os.Environ(), "GITEA_WORK_DIR="+dataDir)
 	return cmd.CombinedOutput()

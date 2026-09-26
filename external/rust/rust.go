@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -135,7 +134,7 @@ func ensureToolchain(ctx context.Context) (binDir string, env []string, err erro
 		toolchain = DefaultToolchain
 	}
 	fmt.Fprintf(os.Stderr, "note: installing the Rust toolchain (%s) via rustup — one-time, into %s\n", toolchain, cargoHome)
-	c := exec.CommandContext(ctx, init, "-y", "--no-modify-path", "--profile", "minimal", "--default-toolchain", toolchain)
+	c := binmgr.Command(ctx, init, "-y", "--no-modify-path", "--profile", "minimal", "--default-toolchain", toolchain)
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	c.Env = env
 	if runErr := c.Run(); runErr != nil {
@@ -168,7 +167,7 @@ func newCmd(use, short, tool string) *cobra.Command {
 			if runtime.GOOS == "windows" {
 				exe += ".exe"
 			}
-			c := exec.CommandContext(cmd.Context(), filepath.Join(binDir, exe), args...)
+			c := binmgr.Command(cmd.Context(), filepath.Join(binDir, exe), args...)
 			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 			c.Env = env
 			return c.Run()
@@ -195,11 +194,11 @@ func EnsureRustc(ctx context.Context) (string, error) {
 	if runtime.GOOS == "windows" {
 		rustup += ".exe"
 		toolchain = []string{"--toolchain", IslandToolchainWindows}
-		c := exec.CommandContext(ctx, rustup, "toolchain", "list")
+		c := binmgr.Command(ctx, rustup, "toolchain", "list")
 		c.Env = env
 		if out, err := c.Output(); err != nil || !strings.Contains(string(out), IslandToolchainWindows) {
 			fmt.Fprintf(os.Stderr, "note: installing the Rust toolchain %s via rustup — one-time\n", IslandToolchainWindows)
-			c := exec.CommandContext(ctx, rustup, "toolchain", "install", IslandToolchainWindows, "--profile", "minimal")
+			c := binmgr.Command(ctx, rustup, "toolchain", "install", IslandToolchainWindows, "--profile", "minimal")
 			c.Stdout, c.Stderr = os.Stderr, os.Stderr
 			c.Env = env
 			if err := c.Run(); err != nil {
@@ -207,7 +206,7 @@ func EnsureRustc(ctx context.Context) (string, error) {
 			}
 		}
 	}
-	c := exec.CommandContext(ctx, rustup, append([]string{"which", "rustc"}, toolchain...)...)
+	c := binmgr.Command(ctx, rustup, append([]string{"which", "rustc"}, toolchain...)...)
 	c.Env = env
 	out, err := c.Output()
 	if err != nil {

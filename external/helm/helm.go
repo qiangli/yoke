@@ -12,7 +12,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"runtime"
 	"strings"
 
@@ -128,7 +127,7 @@ through to helm.`,
 			if err != nil {
 				return err
 			}
-			c := exec.CommandContext(cmd.Context(), bin, args...)
+			c := binmgr.Command(cmd.Context(), bin, args...)
 			c.Env = kube.ExecEnvFor(res.KUBECONFIG)
 			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 			return c.Run()

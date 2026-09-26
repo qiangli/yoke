@@ -96,7 +96,7 @@ func Exec(ctx context.Context, args ...string) error {
 		}
 		return ErrNotFound
 	}
-	c := exec.CommandContext(ctx, bin, args...)
+	c := binmgr.Command(ctx, bin, args...)
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return c.Run()
 }
