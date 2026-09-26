@@ -37,7 +37,12 @@ func uvTriple() (triple, ext string, err error) {
 	var osPart string
 	switch runtime.GOOS {
 	case "linux":
+		// A host without glibc (the FROM-scratch bashy image, musl distros)
+		// cannot run uv's glibc build; uv's musl build is static.
 		osPart = "unknown-linux-gnu"
+		if !hasGlibc() {
+			osPart = "unknown-linux-musl"
+		}
 	case "darwin":
 		osPart = "apple-darwin"
 	case "windows":
@@ -209,4 +214,22 @@ func EnsureInterpreter(ctx context.Context, version string) (string, error) {
 		return "", fmt.Errorf("python: uv python find %s after install: %w", version, err)
 	}
 	return path, nil
+}
+
+// glibcLoaders are the dynamic loaders a glibc system provides.
+var glibcLoaders = []string{
+	"/lib64/ld-linux-x86-64.so.2",
+	"/lib/ld-linux-aarch64.so.1",
+	"/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+	"/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1",
+}
+
+// hasGlibc reports whether this Linux host can run glibc-linked binaries.
+func hasGlibc() bool {
+	for _, path := range glibcLoaders {
+		if _, err := os.Stat(path); err == nil {
+			return true
+		}
+	}
+	return false
 }
