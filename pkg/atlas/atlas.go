@@ -887,6 +887,11 @@ func init() {
 	// model once and lets the agent edit the current repository. No spend:
 	// the model is local, which is the point of the verb.
 	addVerb("genie", Entry{Stage: StageCode, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON, CapSpawnsProcesses}})
+	// ycode is the engine for agents declared in YAML (Sprint #301): bashy
+	// runs its CLI in-process. Like chat/delegate it drives a model (spend) and
+	// the agent's commands (exec, write), over the network when the model is
+	// remote.
+	addVerb("ycode", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
 	addVerb("coach", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
 	addVerb("meet", Entry{Stage: StagePlan, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses},
 		Web: &WebSurface{Label: "Meet", Mount: "meet", Mode: WebInProcess, Port: 8637,
@@ -1294,7 +1299,7 @@ func init() {
 		// anywhere the caller chose without validating the path first.
 		"ask",
 		// verbs
-		"weave", "genie", "sprint", "dag", "sdlc", "supervise", "capability", "leaderboard", "agent", "dks",
+		"weave", "genie", "ycode", "sprint", "dag", "sdlc", "supervise", "capability", "leaderboard", "agent", "dks",
 		"tool", "model", "person", "kb", "skill", "lexicon", "claim", "mirror", "git",
 		"git-scm", "gh", "curl", "helm", "self", "bootstrap", "upgrade",
 		// commands add/set write the registered-command ring (Sprint 179).
@@ -1322,7 +1327,7 @@ func init() {
 	eff(EffNet,
 		"ntp", "sntp", "browser", "fetch", "search", "ping",
 		"delegate", "coach", "sdlc", "chat", "invoke", "meet", "pair", "judge", "tool", "model", "agent", "act", "sota",
-		"herald", "genie",
+		"herald", "genie", "ycode",
 		"act-runner", "mirror", "oci", "podman", "docker", "sandbox", "ollama", "dks", "peer", "git",
 		"git-scm", "gh", "loom", "web", "curl", "rclone", "zot", "seaweedfs",
 		"kopia", "kubectl", "helm", "self", "bootstrap", "upgrade", "secret",
@@ -1339,7 +1344,7 @@ func init() {
 		"newgrp", "ping",
 		"find", "awk", "xargs", "at", "batch", "nice", "nohup",
 		"stdbuf", "time", "timeout", "watch", "env",
-		"weave", "dag", "sdlc", "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "schedule", "act", "sota", "genie",
+		"weave", "dag", "sdlc", "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "schedule", "act", "sota", "genie", "ycode",
 		"act-runner", "skill", "oci", "podman", "docker", "sandbox", "ollama", "dks", "peer",
 		"git-scm", "loom", "curl", "zot", "seaweedfs", "kopia", "kubectl",
 		"verify", "conform", "gate", "run", "tessaro", "login", "why",
@@ -1383,7 +1388,7 @@ func init() {
 	// compute, or cloud resources.
 	// judge SPENDS: every reviewer is a metered inference call, and a --panel 3
 	// costs three of them. An agent must be able to see that before it fans out.
-	eff(EffSpend, "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "sdlc", "weave", "peer", "ollama", "sota", "herald")
+	eff(EffSpend, "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "sdlc", "weave", "peer", "ollama", "sota", "herald", "ycode")
 
 	// The toolchain provisioners each download over the network and then run
 	// arbitrary code (a compiler / package manager / interpreter — npm and pip
