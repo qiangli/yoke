@@ -17,10 +17,10 @@ func newFakeClock() *fakeClock {
 func (c *fakeClock) now() time.Time          { return c.t }
 func (c *fakeClock) advance(d time.Duration) { c.t = c.t.Add(d) }
 
-// fakePool stands in for *Pool: it applies the two spare hooks the way a real
+// scalePool stands in for *Pool: it applies the two spare hooks the way a real
 // pool eventually does (grow towards MinSpare, trim down to MaxSpare) without
 // launching a CLI, and records the targets it was given.
-type fakePool struct {
+type scalePool struct {
 	cfg     PoolConfig
 	idle    int
 	busy    int
@@ -35,15 +35,15 @@ type fakePool struct {
 	maxCalls []int
 }
 
-func newFakePool(cfg PoolConfig) *fakePool { return &fakePool{cfg: cfg} }
+func newScalePool(cfg PoolConfig) *scalePool { return &scalePool{cfg: cfg} }
 
-func (f *fakePool) Stats() PoolStats {
+func (f *scalePool) Stats() PoolStats {
 	return PoolStats{Idle: f.idle, Busy: f.busy, Queued: f.queued, Spawned: f.spawned, Failed: f.failed}
 }
 
-func (f *fakePool) Config() PoolConfig { return f.cfg }
+func (f *scalePool) Config() PoolConfig { return f.cfg }
 
-func (f *fakePool) SetMinSpare(n int) {
+func (f *scalePool) SetMinSpare(n int) {
 	if n > f.cfg.MaxWorkers {
 		n = f.cfg.MaxWorkers
 	}
@@ -66,7 +66,7 @@ func (f *fakePool) SetMinSpare(n int) {
 	}
 }
 
-func (f *fakePool) SetMaxSpare(n int) {
+func (f *scalePool) SetMaxSpare(n int) {
 	f.maxCalls = append(f.maxCalls, n)
 	f.cfg.MaxSpare = n
 	if f.cfg.MinSpare > n {
@@ -77,7 +77,7 @@ func (f *fakePool) SetMaxSpare(n int) {
 	}
 }
 
-func (f *fakePool) lastMin() int {
+func (f *scalePool) lastMin() int {
 	if len(f.minCalls) == 0 {
 		return -1
 	}
@@ -135,7 +135,7 @@ func equalInts(a, b []int) bool {
 func TestAutoscalerBurstDoublesSpawnRateUpToCap(t *testing.T) {
 	clk := newFakeClock()
 	a := newTestScaler(t, clk, AutoscaleConfig{})
-	pool := newFakePool(PoolConfig{MinSpare: 8, MaxSpare: 8, MaxWorkers: 8})
+	pool := newScalePool(PoolConfig{MinSpare: 8, MaxSpare: 8, MaxWorkers: 8})
 	pool.stuck = true
 	register(t, a, PoolRegistration{Agent: "claude", Pool: pool})
 
@@ -154,7 +154,7 @@ func TestAutoscalerBurstDoublesSpawnRateUpToCap(t *testing.T) {
 func TestAutoscalerResetsSpawnRateWhenSatisfied(t *testing.T) {
 	clk := newFakeClock()
 	a := newTestScaler(t, clk, AutoscaleConfig{})
-	pool := newFakePool(PoolConfig{MinSpare: 4, MaxSpare: 4, MaxWorkers: 8})
+	pool := newScalePool(PoolConfig{MinSpare: 4, MaxSpare: 4, MaxWorkers: 8})
 	register(t, a, PoolRegistration{Agent: "claude", Pool: pool})
 
 	ticks(a, clk, 4)
@@ -177,7 +177,7 @@ func TestAutoscalerResetsSpawnRateWhenSatisfied(t *testing.T) {
 func TestAutoscalerShrinksToMaxSpareThenGoesColdAfterIdleTTL(t *testing.T) {
 	clk := newFakeClock()
 	a := newTestScaler(t, clk, AutoscaleConfig{})
-	pool := newFakePool(PoolConfig{MinSpare: 1, MaxSpare: 3, MaxWorkers: 8, IdleTTL: 10 * time.Second})
+	pool := newScalePool(PoolConfig{MinSpare: 1, MaxSpare: 3, MaxWorkers: 8, IdleTTL: 10 * time.Second})
 	pool.idle = 6
 	register(t, a, PoolRegistration{Agent: "claude", Pool: pool})
 	a.Observe("claude", clk.now(), time.Second)
@@ -207,7 +207,7 @@ func TestAutoscalerShrinksToMaxSpareThenGoesColdAfterIdleTTL(t *testing.T) {
 func TestAutoscalerPredictiveTargetFollowsLittlesLaw(t *testing.T) {
 	clk := newFakeClock()
 	a := newTestScaler(t, clk, AutoscaleConfig{})
-	pool := newFakePool(PoolConfig{MinSpare: 0, MaxSpare: 8, MaxWorkers: 8})
+	pool := newScalePool(PoolConfig{MinSpare: 0, MaxSpare: 8, MaxWorkers: 8})
 	register(t, a, PoolRegistration{Agent: "agy", Pool: pool})
 
 	// Four arrivals per second, half a second of service each: lambda*W = 2.
@@ -245,8 +245,8 @@ func TestAutoscalerBandSparesGoToTheRankLeader(t *testing.T) {
 			return nil
 		}),
 	})
-	claude := newFakePool(PoolConfig{MaxSpare: 4, MaxWorkers: 4})
-	codex := newFakePool(PoolConfig{MaxSpare: 4, MaxWorkers: 4})
+	claude := newScalePool(PoolConfig{MaxSpare: 4, MaxWorkers: 4})
+	codex := newScalePool(PoolConfig{MaxSpare: 4, MaxWorkers: 4})
 	register(t, a, PoolRegistration{Agent: "claude", Band: 4, Pool: claude})
 	register(t, a, PoolRegistration{Agent: "codex", Band: 4, Pool: codex})
 
@@ -281,8 +281,8 @@ func TestAutoscalerDoesNotPrewarmBelowTheReserveFloor(t *testing.T) {
 			return 0, false // untracked quota is not a reason to hold back
 		},
 	})
-	claude := newFakePool(PoolConfig{MinSpare: 1, MaxSpare: 4, MaxWorkers: 4})
-	codex := newFakePool(PoolConfig{MaxSpare: 4, MaxWorkers: 4})
+	claude := newScalePool(PoolConfig{MinSpare: 1, MaxSpare: 4, MaxWorkers: 4})
+	codex := newScalePool(PoolConfig{MaxSpare: 4, MaxWorkers: 4})
 	register(t, a, PoolRegistration{Agent: "claude", Band: 4, Pool: claude})
 	register(t, a, PoolRegistration{Agent: "codex", Band: 4, Pool: codex})
 
@@ -309,8 +309,8 @@ func TestAutoscalerDoesNotPrewarmBelowTheReserveFloor(t *testing.T) {
 func TestAutoscalerRespectsVendorConcurrencyCap(t *testing.T) {
 	clk := newFakeClock()
 	a := newTestScaler(t, clk, AutoscaleConfig{VendorMaxWorkers: map[string]int{"anthropic": 3}})
-	first := newFakePool(PoolConfig{MinSpare: 2, MaxSpare: 2, MaxWorkers: 4})
-	second := newFakePool(PoolConfig{MinSpare: 2, MaxSpare: 2, MaxWorkers: 4})
+	first := newScalePool(PoolConfig{MinSpare: 2, MaxSpare: 2, MaxWorkers: 4})
+	second := newScalePool(PoolConfig{MinSpare: 2, MaxSpare: 2, MaxWorkers: 4})
 	register(t, a, PoolRegistration{Agent: "claude-sonnet", Provider: "anthropic", Pool: first})
 	register(t, a, PoolRegistration{Agent: "claude-haiku", Provider: "anthropic", Pool: second})
 
@@ -327,8 +327,8 @@ func TestAutoscalerRespectsVendorConcurrencyCap(t *testing.T) {
 func TestAutoscalerRespectsHostWideCap(t *testing.T) {
 	clk := newFakeClock()
 	a := newTestScaler(t, clk, AutoscaleConfig{HostMaxWorkers: 2})
-	first := newFakePool(PoolConfig{MinSpare: 4, MaxSpare: 4, MaxWorkers: 4})
-	second := newFakePool(PoolConfig{MinSpare: 4, MaxSpare: 4, MaxWorkers: 4})
+	first := newScalePool(PoolConfig{MinSpare: 4, MaxSpare: 4, MaxWorkers: 4})
+	second := newScalePool(PoolConfig{MinSpare: 4, MaxSpare: 4, MaxWorkers: 4})
 	register(t, a, PoolRegistration{Agent: "claude", Pool: first})
 	register(t, a, PoolRegistration{Agent: "codex", Pool: second})
 
@@ -346,7 +346,7 @@ func TestAutoscalerRespectsHostWideCap(t *testing.T) {
 func TestAutoscalerDoesNotPrewarmAFailingTool(t *testing.T) {
 	clk := newFakeClock()
 	a := newTestScaler(t, clk, AutoscaleConfig{})
-	pool := newFakePool(PoolConfig{MinSpare: 2, MaxSpare: 2, MaxWorkers: 4})
+	pool := newScalePool(PoolConfig{MinSpare: 2, MaxSpare: 2, MaxWorkers: 4})
 	pool.failSpawn = true
 	register(t, a, PoolRegistration{Agent: "opencode", Pool: pool})
 
@@ -412,13 +412,13 @@ func TestHostWorkerCapUsesFreeMemoryWhenAvailable(t *testing.T) {
 func TestAutoscalerRegisterValidatesAndUnregisterStops(t *testing.T) {
 	clk := newFakeClock()
 	a := newTestScaler(t, clk, AutoscaleConfig{})
-	if err := a.Register(PoolRegistration{Pool: newFakePool(DefaultPoolConfig())}); err == nil {
+	if err := a.Register(PoolRegistration{Pool: newScalePool(DefaultPoolConfig())}); err == nil {
 		t.Fatal("Register without an agent name: want error")
 	}
 	if err := a.Register(PoolRegistration{Agent: "claude"}); err == nil {
 		t.Fatal("Register without a pool: want error")
 	}
-	pool := newFakePool(PoolConfig{MinSpare: 1, MaxSpare: 1, MaxWorkers: 2})
+	pool := newScalePool(PoolConfig{MinSpare: 1, MaxSpare: 1, MaxWorkers: 2})
 	register(t, a, PoolRegistration{Agent: "claude", Pool: pool})
 	ticks(a, clk, 2)
 	a.Unregister("claude")
