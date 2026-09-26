@@ -33,7 +33,7 @@ func newDagCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "dag [flags] [target ...]",
 		Short: "Run markdown-defined targets as a dependency DAG",
-		Long: `dag runs targets defined as headings in a markdown file (DAG.md) as a
+		Long: `dag runs targets defined as headings in a markdown file (dag.md) as a
 real dependency graph — an agent-first replacement for make.
 
 Each target is a heading with an optional description, metadata lines
@@ -81,7 +81,7 @@ routes any agentic tool to these targets through bashy dag.`,
 			out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
 
 			// --serve needs no DAG file: it serves the whole run journal, so it
-			// short-circuits before discovery. A directory with no DAG.md can
+			// short-circuits before discovery. A directory with no dag.md can
 			// still watch runs started from anywhere else on the machine.
 			if serveF != "" {
 				// --serve carries an optional value, which pflag only accepts
@@ -109,7 +109,7 @@ routes any agentic tool to these targets through bashy dag.`,
 			// positional that names an existing file is treated as --file, so a
 			// dag file can be run by path without -f. A leading positional that
 			// names a DIRECTORY resolves to that folder's known entry (its
-			// DAG.md), so a conventional deploy folder like `.bashy/deploy/`
+			// dag.md), so a conventional deploy folder like `.bashy/deploy/`
 			// works as the single entry point (`bashy dag .bashy/deploy deploy-qa`).
 			// An explicit --file wins.
 			// Bodies run in the INVOKING working directory (make parity):
@@ -344,7 +344,7 @@ routes any agentic tool to these targets through bashy dag.`,
 	cmd.Flags().BoolVar(&meshF, "mesh", false, "Dispatch Host:-tagged targets to another machine (control plane only; body fetches its own code/data)")
 	cmd.Flags().StringVar(&remoteCmd, "remote", "", "Remote-exec command for --mesh (default: ssh or DAG_REMOTE_EXEC)")
 	cmd.Flags().StringVar(&remoteShell, "remote-shell", "", "Remote shell argv for --mesh (default: bash -s; use none to feed stdin directly)")
-	cmd.Flags().StringVarP(&fileArg, "file", "f", "", "DAG markdown file (default: discover DAG.md)")
+	cmd.Flags().StringVarP(&fileArg, "file", "f", "", "DAG markdown file (default: discover dag.md, any case)")
 	cmd.Flags().StringVar(&cacheDir, "cache-dir", "", "Fingerprint cache directory (default: DAG_CACHE_DIR or user cache)")
 	cmd.Flags().StringVar(&cacheExport, "cache-export", "", "Copy this DAG's fingerprint cache file to DIR after the run")
 	cmd.Flags().StringVar(&cacheImport, "cache-import", "", "Copy this DAG's fingerprint cache file from DIR before the run")

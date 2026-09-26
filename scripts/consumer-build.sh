@@ -35,7 +35,7 @@
 #   (b) refuse a module `replace` pinned to a commit that is not an ancestor of
 #       the target fork's default branch; report the branch it lives on.
 #
-# Wired into DAG.md as `consumer-build`, beside `test` and `crossvet`. Run it
+# Wired into dag.md as `consumer-build`, beside `test` and `crossvet`. Run it
 # before merge. Network is used only by part (b) to ask the fork about its
 # branches; when the fork is unreachable (offline) part (b) WARNS and skips
 # rather than failing, so an offline build is never blocked by it.

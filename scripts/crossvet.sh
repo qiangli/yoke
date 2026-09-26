@@ -4,7 +4,7 @@
 # THE ONE implementation. Both callers delegate here so the target list can
 # never drift between them:
 #   - scripts/hooks/pre-push  (automatic, once `git config core.hooksPath scripts/hooks`)
-#   - DAG.md's `crossvet` task (manual: `bashy dag crossvet`)
+#   - dag.md's `crossvet` task (manual: `bashy dag crossvet`)
 #
 # Why this exists: `go test` on darwin STRUCTURALLY cannot see a build-tag
 # break — a file that is //go:build !windows never compiles for windows, so a

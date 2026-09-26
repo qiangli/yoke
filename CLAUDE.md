@@ -49,7 +49,7 @@ full statement; this file does not repeat it.
 
 ## Build & test
 
-No Makefile — `DAG.md` is the agent-first equivalent (`bashy dag --list` /
+No Makefile — `dag.md` is the agent-first equivalent (`bashy dag --list` /
 `build` / `test` / `crossvet` / `consumer-build`). Plain go:
 
 ```bash
@@ -199,7 +199,7 @@ registry, three consumption surfaces, imported by bashy/ycode/outpost.
 
   Newer engines, same pattern (one impl, every host; each pulls its deps
   only into its importers): `pkg/dag` (agent-first task runner — the
-  Makefile replacement behind `bashy dag`; this repo's own `DAG.md` +
+  Makefile replacement behind `bashy dag`; this repo's own `dag.md` +
   `dag-p*.md` are its task files), `pkg/foreman` (process manager over
   dag; its prompts carry a bounded checkpoint + recent window, never the whole
   history, and its state changes are sequenced + digested for `status --wait` —

@@ -4,7 +4,7 @@
 # THE ONE implementation, same shape as scripts/crossvet.sh: every caller
 # delegates here so the scope can never drift between them.
 #   - .github/workflows/test.yml (the ubuntu leg)
-#   - DAG.md's `fmtcheck` task (manual: `bashy dag fmtcheck`)
+#   - dag.md's `fmtcheck` task (manual: `bashy dag fmtcheck`)
 #
 # # Why this fails instead of fixing
 #

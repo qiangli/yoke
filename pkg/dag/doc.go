@@ -2,7 +2,7 @@
 // See LICENSE for licensing information
 
 // Package dag is an agent-first task runner: a Makefile replacement whose
-// targets are defined as headings in a markdown file (DAG.md) and executed as
+// targets are defined as headings in a markdown file (dag.md) and executed as
 // a real dependency DAG. It is built for AI agents first, humans second — the
 // inverse of make/task/just.
 //
