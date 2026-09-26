@@ -69,11 +69,15 @@ func uvTriple() (triple, ext string, err error) {
 // EnsureUv fetches (if needed) the uv binary and returns its cached path.
 func EnsureUv(ctx context.Context, version string) (string, error) {
 	version = strings.TrimPrefix(strings.TrimSpace(version), "v")
-	if version == "" {
-		version = DefaultVersion
+	pinned := DefaultVersion
+	if needsMusl() {
+		pinned = MuslUvVersion
 	}
-	if version != DefaultVersion {
-		fmt.Fprintf(os.Stderr, "note: uv %s is not the pinned default (%s) — verifying against the official published checksum\n", version, DefaultVersion)
+	if version == "" {
+		version = pinned
+	}
+	if version != pinned {
+		fmt.Fprintf(os.Stderr, "note: uv %s is not the pinned default (%s) — verifying against the official published checksum\n", version, pinned)
 	}
 	triple, ext, err := uvTriple()
 	if err != nil {
@@ -141,6 +145,10 @@ func run(ctx context.Context, mode string, args []string) error {
 		return err
 	}
 	binDir := filepath.Dir(uv)
+	// Every mode can install or run CPython (`uv python install`, `uv run`).
+	if err := EnsureMuslLoader(ctx); err != nil {
+		return err
+	}
 	var argv []string
 	switch mode {
 	case "uv":
@@ -152,7 +160,7 @@ func run(ctx context.Context, mode string, args []string) error {
 	}
 	c := exec.CommandContext(ctx, uv, argv...)
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
-	c.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	c.Env = uvEnv(append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH")))
 	return c.Run()
 }
 
@@ -189,7 +197,11 @@ func EnsureInterpreter(ctx context.Context, version string) (string, error) {
 			version = DefaultPython
 		}
 	}
-	env := append(os.Environ(), "UV_PYTHON_PREFERENCE=only-managed", "UV_NO_CONFIG=1")
+	// A host without libc needs musl's loader before any CPython can run.
+	if err := EnsureMuslLoader(ctx); err != nil {
+		return "", err
+	}
+	env := uvEnv(append(os.Environ(), "UV_PYTHON_PREFERENCE=only-managed", "UV_NO_CONFIG=1"))
 	find := func() (string, error) {
 		c := exec.CommandContext(ctx, uv, "python", "find", version)
 		c.Env = env
