@@ -731,7 +731,7 @@ func (s *Server) agentHeadroom(agent string) (float64, bool) {
 	if !ok {
 		return 0, false
 	}
-	return s.quota.Headroom(row.Model)
+	return s.quota.Headroom(s.ctx, row)
 }
 
 func (s *Server) pool(agent string) *Pool {
@@ -792,7 +792,7 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	entries := s.catalog.ModelList(r.Context(), filter)
-	labels := s.quotaLabels()
+	labels := s.quotaLabels(r.Context())
 	for i := range entries {
 		entries[i].XQuota = labels(entries[i])
 	}
@@ -803,28 +803,36 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 // many seats and an untracked seat has no figure, so both are empty rather
 // than a zero that reads as "exhausted".
 //
-// The per-model memo is not an optimisation detail: a seat's headroom is a
-// live llmbudget read (~15ms), a listing carries a row per model AND per
-// agent, and several agents share one model. Without it a listing pays for
-// the same seat four or five times.
-func (s *Server) quotaLabels() func(ModelEntry) string {
+// Headroom belongs to an agent's provider/account binding, not merely its
+// model. An aggregate model row is projected through its first deterministic
+// agent, while the per-agent memo lets that model row and agent row share one
+// read without collapsing distinct accounts that happen to use one model.
+func (s *Server) quotaLabels(ctx context.Context) func(ModelEntry) string {
 	memo := map[string]string{}
 	return func(entry ModelEntry) string {
 		if _, _, isBand := parseBand(entry.ID); isBand {
 			return ""
 		}
-		model := entry.ID
-		if agent, ok := s.agent(entry.ID); ok {
-			model = agent.Model
+		agent, ok := s.agent(entry.ID)
+		if !ok {
+			for _, candidate := range s.catalog.inventory() {
+				if candidate.Model == entry.ID {
+					agent, ok = candidate, true
+					break
+				}
+			}
 		}
-		if label, ok := memo[model]; ok {
+		if !ok {
+			return ""
+		}
+		if label, ok := memo[agent.Name]; ok {
 			return label
 		}
 		label := ""
-		if headroom, known := s.quota.Headroom(model); known {
+		if headroom, known := s.quota.Headroom(ctx, agent); known {
 			label = fmt.Sprintf("%.2f", headroom)
 		}
-		memo[model] = label
+		memo[agent.Name] = label
 		return label
 	}
 }

@@ -23,14 +23,17 @@ type fakeQuota struct {
 	previewCalls  []string
 }
 
-func (q *fakeQuota) Headroom(model string) (float64, bool) {
+func (q *fakeQuota) Headroom(_ context.Context, agent Agent) (float64, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.headroomCalls == nil {
 		q.headroomCalls = map[string]int{}
 	}
-	q.headroomCalls[model]++
-	v, ok := q.headroom[model]
+	q.headroomCalls[agent.Model]++
+	v, ok := q.headroom[agent.Name]
+	if !ok {
+		v, ok = q.headroom[agent.Model]
+	}
 	return v, ok
 }
 func (q *fakeQuota) Preview(_ context.Context, agent Agent) (bool, string) {
@@ -119,6 +122,31 @@ func TestRouterQuotaFirstAndBreakerFallback(t *testing.T) {
 	}
 	if len(recorder.decisions) != 2 || len(router.History()) != 2 {
 		t.Fatalf("recorded=%d history=%d", len(recorder.decisions), len(router.History()))
+	}
+}
+
+func TestHeadroomRanksKnownAboveFloorThenUnknownThenBelowFloor(t *testing.T) {
+	router := &Router{policy: DefaultPolicy()}
+	candidates := []Candidate{
+		{Agent: "below", Score: CandidateScore{Headroom: .10, HeadroomKnown: true, BelowReserve: true}},
+		{Agent: "unknown", Score: CandidateScore{}},
+		{Agent: "above", Score: CandidateScore{Headroom: .40, HeadroomKnown: true}},
+	}
+	router.rank(candidates, PolicyQuotaFirst, Selector{Raw: "L4"}, 4)
+	if got := []string{candidates[0].Agent, candidates[1].Agent, candidates[2].Agent}; got[0] != "above" || got[1] != "unknown" || got[2] != "below" {
+		t.Fatalf("headroom order = %v, want [above unknown below]", got)
+	}
+}
+
+func TestRankingReasonPrintsUnknownHeadroomHonestly(t *testing.T) {
+	router, cat, _ := newTestRouter(t, DefaultPolicy(), &fakeQuota{headroom: map[string]float64{}})
+	decision, err := router.Route(context.Background(), selector(t, cat, "L4"), Filter{}, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := decision.Header()
+	if !strings.Contains(got, "headroom=unknown") || strings.Contains(got, "headroom=0.00") {
+		t.Fatalf("Header() = %q, want literal unknown headroom", got)
 	}
 }
 

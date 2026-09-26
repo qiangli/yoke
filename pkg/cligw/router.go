@@ -27,7 +27,7 @@ type PoolState interface {
 // QuotaSource is the read-only subset of llmbudget used during routing.
 // Headroom is normalized to [0,1]. An unknown headroom is not exhaustion.
 type QuotaSource interface {
-	Headroom(model string) (remaining float64, known bool)
+	Headroom(ctx context.Context, agent Agent) (remaining float64, known bool)
 	Preview(ctx context.Context, agent Agent) (allowed bool, reason string)
 }
 
@@ -446,9 +446,16 @@ func rankingReason(policyName string, winner Candidate) string {
 		return policyName
 	}
 	if policyName == PolicyLatencyFirst {
-		return fmt.Sprintf("latency-first idle=%d queue=%d headroom=%.2f", winner.Score.Idle, winner.Score.Queued, winner.Score.Headroom)
+		return fmt.Sprintf("latency-first idle=%d queue=%d headroom=%s", winner.Score.Idle, winner.Score.Queued, headroomReason(winner.Score))
 	}
-	return fmt.Sprintf("quota-first headroom=%.2f idle=%d queue=%d weight=%.2f", winner.Score.Headroom, winner.Score.Idle, winner.Score.Queued, winner.Score.Weight)
+	return fmt.Sprintf("quota-first headroom=%s idle=%d queue=%d weight=%.2f", headroomReason(winner.Score), winner.Score.Idle, winner.Score.Queued, winner.Score.Weight)
+}
+
+func headroomReason(score CandidateScore) string {
+	if !score.HeadroomKnown {
+		return "unknown"
+	}
+	return fmt.Sprintf("%.2f", score.Headroom)
 }
 
 func (r *Router) toolInstalled(agent Agent) bool {
@@ -549,7 +556,7 @@ func (r *Router) score(ctx context.Context, agents []Agent, policyName, sessionI
 		if _, marked := marks[agent.Name]; marked || r.breaker.InCooldown(agent.Name) || !r.toolInstalled(agent) {
 			continue
 		}
-		headroom, known := r.quota.Headroom(agent.Model)
+		headroom, known := r.quota.Headroom(ctx, agent)
 		if known {
 			headroom = max(0, min(1, headroom))
 		}
@@ -587,12 +594,14 @@ func (emptyPool) Queued(string) int { return 0 }
 
 type llmBudgetQuota struct{}
 
-func (llmBudgetQuota) Headroom(model string) (float64, bool) {
-	status := llmbudget.Status(model)
-	if !status.LimitKnown || status.Limit == nil || status.Remaining == nil || *status.Limit <= 0 {
+func (llmBudgetQuota) Headroom(ctx context.Context, agent Agent) (float64, bool) {
+	remaining, known, err := llmbudget.SubscriptionHeadroom(ctx, llmbudget.Binding{
+		Model: agent.Model, Agent: agent.Name, Provider: agent.Provider,
+	})
+	if err != nil {
 		return 0, false
 	}
-	return float64(*status.Remaining) / float64(*status.Limit), true
+	return remaining, known
 }
 
 func (llmBudgetQuota) Preview(ctx context.Context, agent Agent) (bool, string) {
@@ -629,18 +638,19 @@ func cacheHeadroom(source QuotaSource) QuotaSource {
 	return &headroomCache{source: source, ttl: headroomTTL, entries: map[string]headroomEntry{}}
 }
 
-func (c *headroomCache) Headroom(model string) (float64, bool) {
+func (c *headroomCache) Headroom(ctx context.Context, agent Agent) (float64, bool) {
 	now := time.Now()
+	key := agent.Provider + "\x00" + agent.Name + "\x00" + agent.Model
 	c.mu.Lock()
-	if entry, ok := c.entries[model]; ok && now.Before(entry.expires) {
+	if entry, ok := c.entries[key]; ok && now.Before(entry.expires) {
 		c.mu.Unlock()
 		return entry.remaining, entry.known
 	}
 	c.mu.Unlock()
 
-	remaining, known := c.source.Headroom(model)
+	remaining, known := c.source.Headroom(ctx, agent)
 	c.mu.Lock()
-	c.entries[model] = headroomEntry{remaining: remaining, known: known, expires: now.Add(c.ttl)}
+	c.entries[key] = headroomEntry{remaining: remaining, known: known, expires: now.Add(c.ttl)}
 	c.mu.Unlock()
 	return remaining, known
 }
