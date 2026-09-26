@@ -704,3 +704,106 @@ func waitFor(t *testing.T, cond func() bool) {
 	}
 	t.Fatal("condition not met within the deadline")
 }
+
+// TestFilterCandidatesStatus_NotFoundWipeReachesFallback: a model no local
+// backend can hold is a 404 wipe, and that is the same story as an empty
+// pool — the host's remote path must still get its turn.
+func TestFilterCandidatesStatus_NotFoundWipeReachesFallback(t *testing.T) {
+	up := newUpstream(t, "alpha", echoJSON)
+	var gotModel string
+	env := newEnv(t, []resolve.ModelRow{row("llama3.2:1b", "alpha")}, []*upstream{up}, func(c *Config) {
+		c.FilterCandidatesStatus = func(context.Context, string, string, []string) ([]string, int, string) {
+			return nil, http.StatusNotFound, "no local backend can hold llama3.2:1b"
+		}
+		c.Fallback = func(w http.ResponseWriter, _ *http.Request, _, model string, _ []byte) bool {
+			gotModel = model
+			writeJSON(w, http.StatusOK, map[string]any{"served_by": "fallback", "model": model})
+			return true
+		}
+	})
+	w := env.do(t, http.MethodPost, ChatCompletionsPath, chatPayload("llama3.2:1b"), nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want the fallback's 200", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "fallback") {
+		t.Errorf("body=%s, want the fallback's response", w.Body.String())
+	}
+	if gotModel != "llama3.2:1b" {
+		t.Errorf("fallback model=%q, want llama3.2:1b", gotModel)
+	}
+	if up.hits.Load() != 0 {
+		t.Errorf("excluded backend must not be hit")
+	}
+}
+
+// TestFilterCandidatesStatus_NotFoundWipeFallbackDeclines: a fallback that
+// declines leaves the hook's own 404 reason on the wire, not a generic one.
+func TestFilterCandidatesStatus_NotFoundWipeFallbackDeclines(t *testing.T) {
+	up := newUpstream(t, "alpha", echoJSON)
+	called := false
+	env := newEnv(t, []resolve.ModelRow{row("llama3.2:1b", "alpha")}, []*upstream{up}, func(c *Config) {
+		c.FilterCandidatesStatus = func(context.Context, string, string, []string) ([]string, int, string) {
+			return nil, http.StatusNotFound, "no local backend can hold llama3.2:1b"
+		}
+		c.Fallback = func(http.ResponseWriter, *http.Request, string, string, []byte) bool {
+			called = true
+			return false
+		}
+	})
+	w := env.do(t, http.MethodPost, ChatCompletionsPath, chatPayload("llama3.2:1b"), nil)
+	if !called {
+		t.Fatalf("404 wipe must consult the fallback")
+	}
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s, want 404", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "no local backend can hold llama3.2:1b") {
+		t.Errorf("body=%s, want the hook's reason", w.Body.String())
+	}
+	if up.hits.Load() != 0 {
+		t.Errorf("excluded backend must not be hit")
+	}
+}
+
+// TestFilterCandidatesStatus_QuotaWipeSkipsFallback: 429 (and 503) mean the
+// backends exist and a retry will work — leaving the pool would silently
+// move the request off it, so the fallback stays untouched.
+func TestFilterCandidatesStatus_QuotaWipeSkipsFallback(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		status int
+		want   int
+	}{
+		{name: "rate limited", status: http.StatusTooManyRequests, want: http.StatusTooManyRequests},
+		{name: "zero defaults to rate limited", status: 0, want: http.StatusTooManyRequests},
+		{name: "unavailable", status: http.StatusServiceUnavailable, want: http.StatusServiceUnavailable},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			up := newUpstream(t, "alpha", echoJSON)
+			called := false
+			env := newEnv(t, []resolve.ModelRow{row("llama3.2:1b", "alpha")}, []*upstream{up}, func(c *Config) {
+				c.FilterCandidatesStatus = func(context.Context, string, string, []string) ([]string, int, string) {
+					return nil, tt.status, "over budget"
+				}
+				c.Fallback = func(w http.ResponseWriter, _ *http.Request, _, _ string, _ []byte) bool {
+					called = true
+					writeJSON(w, http.StatusOK, map[string]any{"served_by": "fallback"})
+					return true
+				}
+			})
+			w := env.do(t, http.MethodPost, ChatCompletionsPath, chatPayload("llama3.2:1b"), nil)
+			if called {
+				t.Fatalf("status=%d wipe must not reach the fallback", tt.status)
+			}
+			if w.Code != tt.want {
+				t.Fatalf("status=%d body=%s, want %d", w.Code, w.Body.String(), tt.want)
+			}
+			if !strings.Contains(w.Body.String(), "over budget") {
+				t.Errorf("body=%s, want the hook's reason", w.Body.String())
+			}
+			if up.hits.Load() != 0 {
+				t.Errorf("excluded backend must not be hit")
+			}
+		})
+	}
+}
