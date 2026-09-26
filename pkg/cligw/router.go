@@ -68,8 +68,12 @@ type Decision struct {
 }
 
 // Header formats the gateway's routing audit response header.
-func (d Decision) Header() string {
-	return fmt.Sprintf("X-Bashy-Routed: agent=%s, band=%s, reason=%s", d.Agent, d.Band, d.Reason)
+func (d Decision) Header() string { return RoutedHeader + ": " + d.HeaderValue() }
+
+// HeaderValue is the RoutedHeader value alone — what an HTTP adapter sets on
+// the response.
+func (d Decision) HeaderValue() string {
+	return fmt.Sprintf("agent=%s, band=%s, reason=%s", d.Agent, d.Band, d.Reason)
 }
 
 // RouteError is safe for an HTTP adapter to expose directly.
@@ -90,15 +94,22 @@ type JSONLRecorder struct {
 }
 
 func (r *JSONLRecorder) Record(ctx context.Context, decision Decision) error {
+	return r.Append(ctx, decision)
+}
+
+// Append writes one JSON value as a line. Routing decisions and served-token
+// usage records share the recorder — and therefore the mutex — so the two
+// streams interleave by line and never by byte.
+func (r *JSONLRecorder) Append(ctx context.Context, value any) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if strings.TrimSpace(r.Path) == "" {
 		return errors.New("cligw: empty usage recorder path")
 	}
-	b, err := json.Marshal(decision)
+	b, err := json.Marshal(value)
 	if err != nil {
-		return fmt.Errorf("cligw: encode usage decision: %w", err)
+		return fmt.Errorf("cligw: encode usage record: %w", err)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -259,7 +270,14 @@ func (r *Router) Route(ctx context.Context, sel Selector, filter Filter, policyN
 }
 
 func (r *Router) routeOnce(ctx context.Context, sel Selector, filter Filter, policyName, sessionID string) (Decision, error) {
-	agents := r.catalog.Candidates(ctx, sel, filter)
+	return r.decide(ctx, r.catalog.Candidates(ctx, sel, filter), sel, policyName, sessionID)
+}
+
+// decide scores an already-selected candidate set and returns the winner of
+// the lowest band that has one. It is separate from candidate selection so the
+// autoscaler can rank a SUBSET without paying for a quota preview per agent in
+// the whole band — an L5 rank over the full fleet costs seconds.
+func (r *Router) decide(ctx context.Context, agents []Agent, sel Selector, policyName, sessionID string) (Decision, error) {
 	if len(agents) == 0 {
 		return Decision{}, &RouteError{Status: 503, Reason: "no fleet candidate matches the selector and filter"}
 	}
@@ -468,6 +486,53 @@ func (r *Router) MarkIneligible(agent, account, reason string) {
 	r.mu.Lock()
 	r.ineligible[agent] = ineligibleMark{Account: account, Reason: reason}
 	r.mu.Unlock()
+}
+
+// Rank returns the eligible agents of one band, best first, WITHOUT recording
+// a decision or touching affinity. It is the autoscaler's Ranker: prewarmed
+// spares sit on the agent the router would pick next.
+//
+// It deliberately does not escalate. A band with no eligible agent gets no
+// spares; prewarming the band above it would spend a better seat on demand
+// that has not arrived.
+func (r *Router) Rank(ctx context.Context, band int, filter Filter, policyName string, only ...string) []string {
+	if band < 1 || band > fleet.MaxBand {
+		return nil
+	}
+	policy := r.policy
+	if err := policy.Validate(); err != nil {
+		return nil
+	}
+	if strings.TrimSpace(policyName) == "" {
+		policyName = policy.Default
+	}
+	if !validPolicyName(policyName) {
+		return nil
+	}
+	sel := Selector{Raw: fleet.BandLabel(band), Kind: SelectorBand, Band: band, catalog: r.catalog}
+	agents := r.catalog.Candidates(ctx, sel, policy.Filter.Merge(filter))
+	if len(only) > 0 {
+		wanted := make(map[string]struct{}, len(only))
+		for _, name := range only {
+			wanted[name] = struct{}{}
+		}
+		kept := make([]Agent, 0, len(only))
+		for _, agent := range agents {
+			if _, ok := wanted[agent.Name]; ok {
+				kept = append(kept, agent)
+			}
+		}
+		agents = kept
+	}
+	decision, err := r.decide(ctx, agents, sel, policyName, "")
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(decision.Ranked))
+	for _, candidate := range decision.Ranked {
+		out = append(out, candidate.Agent)
+	}
+	return out
 }
 
 // History returns a copy of the bounded in-memory decision ring, oldest first.

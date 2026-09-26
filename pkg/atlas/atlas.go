@@ -1057,6 +1057,16 @@ func init() {
 		Caps: []string{CapDaemon, CapSpawnsProcesses}})
 	addVerb("ollama", Entry{Stage: StageCross, Group: GroupEngines, Tier: TierSphere,
 		Caps: []string{CapDaemon, CapNeedsNetwork, CapSpawnsProcesses}})
+	// `llm` is the OTHER local inference front door, and it answers a question
+	// `ollama` cannot: the fleet's flat-billed seats (claude, codex, agy) are
+	// reachable only as CLIs, so no OpenAI-protocol client could spend them.
+	// `llm serve` puts /v1/chat/completions in front of a pool of pre-spawned
+	// one-shot CLI workers, and a request asks for a capability BAND (L4, L4+,
+	// auto) rather than a vendor model — the router picks the seat with the most
+	// remaining quota. Engines, next to ollama: both are inference this host
+	// serves itself, one from weights and one from subscriptions.
+	addVerb("llm", Entry{Stage: StageCross, Group: GroupEngines, Tier: TierUserland,
+		Caps: []string{CapJSON, CapDaemon, CapNeedsNetwork, CapSpawnsProcesses}})
 	// `peer` is the CANONICAL name of the sphere tier's front door (operator,
 	// 2026-09-13, Sprint 167) — the word a user reaches for — and `sphere` is
 	// its hidden alias, kept because the tier is called that in
@@ -1305,6 +1315,10 @@ func init() {
 		// commands add/set write the registered-command ring (Sprint 179).
 		"commands",
 		"rclone", "meet", "mb", "messages", "ping", "inbox", "bus", "notify",
+		// llm WRITES its bearer token, the endpoint record of a running
+		// server, and a usage.jsonl line per routing decision and per
+		// served request.
+		"llm",
 		// app WRITES through its terminal (a real shell) and its session key.
 		"app",
 		// steward APPENDS to the host's journal and rewrites the seat/grant files. It is
@@ -1332,6 +1346,8 @@ func init() {
 		"git-scm", "gh", "loom", "web", "curl", "rclone", "zot", "seaweedfs",
 		"kopia", "kubectl", "helm", "self", "bootstrap", "upgrade", "secret",
 		"otel", "tessaro", "login", "app",
+		// llm's workers are agent CLIs, and they reach their vendor.
+		"llm",
 		// commands verify on a download: record provisions the pinned binary.
 		"commands",
 	)
@@ -1348,6 +1364,8 @@ func init() {
 		"act-runner", "skill", "oci", "podman", "docker", "sandbox", "ollama", "dks", "peer",
 		"git-scm", "loom", "curl", "zot", "seaweedfs", "kopia", "kubectl",
 		"verify", "conform", "gate", "run", "tessaro", "login", "why",
+		// llm spawns one CLI worker process per request and retires it.
+		"llm",
 		// app spawns a bashy per browser terminal tab
 		"app",
 		// herald runs the GATE — an operator-supplied command that decides
@@ -1388,7 +1406,9 @@ func init() {
 	// compute, or cloud resources.
 	// judge SPENDS: every reviewer is a metered inference call, and a --panel 3
 	// costs three of them. An agent must be able to see that before it fans out.
-	eff(EffSpend, "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "sdlc", "weave", "peer", "ollama", "sota", "herald", "ycode")
+	// llm SPENDS on somebody's behalf: the caller is an arbitrary OpenAI
+	// client, and every request it serves burns a seat's quota window.
+	eff(EffSpend, "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "sdlc", "weave", "peer", "ollama", "sota", "herald", "ycode", "llm")
 
 	// The toolchain provisioners each download over the network and then run
 	// arbitrary code (a compiler / package manager / interpreter — npm and pip
