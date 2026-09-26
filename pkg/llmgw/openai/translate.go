@@ -154,7 +154,7 @@ func CallAnthropic(ctx context.Context, client *http.Client, baseURL, apiKey, mo
 			Message:      &ChatResponseMessage{Role: "assistant", Content: text.String()},
 			FinishReason: &finish,
 		}},
-		Usage: ChatUsage{
+		Usage: Usage{
 			PromptTokens:     aresp.Usage.InputTokens,
 			CompletionTokens: aresp.Usage.OutputTokens,
 			TotalTokens:      aresp.Usage.InputTokens + aresp.Usage.OutputTokens,
@@ -262,7 +262,7 @@ func CallGemini(ctx context.Context, client *http.Client, baseURL, apiKey, model
 			Message:      &ChatResponseMessage{Role: "assistant", Content: text.String()},
 			FinishReason: &finish,
 		}},
-		Usage: ChatUsage{
+		Usage: Usage{
 			PromptTokens:     gresp.UsageMetadata.PromptTokenCount,
 			CompletionTokens: gresp.UsageMetadata.CandidatesTokenCount,
 			TotalTokens:      gresp.UsageMetadata.TotalTokenCount,

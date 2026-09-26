@@ -19,7 +19,7 @@ import (
 // constituent request; admission, fairness, priority, and slot
 // ownership are evaluated per job, not per HTTP request.
 //
-// First request: full admission via llm_admit.go.
+// First request: full admission via admit.go.
 // Subsequent same-Job-ID: fast-path dispatch to the bound (backend,
 // model) — skip the queue entirely as long as the slot is held.
 // Slot release: (a) client signals X-LLM-Job-Done: true on a response
