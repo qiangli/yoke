@@ -36,6 +36,20 @@ func TestRenderPromptTranscriptAndTools(t *testing.T) {
 	}
 }
 
+func TestRenderCompletionPromptSeparatesSystemMessages(t *testing.T) {
+	got, err := RenderCompletionPrompt(&openai.ChatRequest{Messages: []openai.ChatMessage{
+		{Role: "system", Content: json.RawMessage(`"first"`)},
+		{Role: "developer", Content: json.RawMessage(`"second"`)},
+		{Role: "user", Content: json.RawMessage(`"hello"`)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.System != "first\n\nsecond" || strings.Contains(got.Prompt, "first") || got.Prompt != "Conversation:\nUser:\nhello" {
+		t.Fatalf("completion prompt = %+v", got)
+	}
+}
+
 func TestRenderPromptRejectsImage(t *testing.T) {
 	_, err := RenderPrompt(&openai.ChatRequest{Messages: []openai.ChatMessage{{
 		Role: "user", Content: json.RawMessage(`[{"type":"image_url","image_url":{"url":"data:image/png;base64,x"}}]`),

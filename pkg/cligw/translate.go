@@ -15,6 +15,16 @@ Respond with plain text, or, when calling tools, with exactly one JSON object an
 {"tool_calls":[{"name":"<tool name>","arguments":{}}]}
 Use only listed tool names. Each arguments object must satisfy that tool's JSON schema.`
 
+const neutralSystemPrompt = "You are a helpful assistant. Answer the user directly."
+
+// CompletionPrompt keeps native system instructions separate from the user
+// transcript. Workers with a system-prompt override pass System through that
+// channel; workers without one prepend it to Prompt explicitly.
+type CompletionPrompt struct {
+	System string
+	Prompt string
+}
+
 // ErrUnsupportedContent is returned when a message contains an image or any
 // other content part that a text-only CLI worker cannot faithfully consume.
 var ErrUnsupportedContent = errors.New("cligw: images and non-text message content are not supported")
@@ -22,15 +32,28 @@ var ErrUnsupportedContent = errors.New("cligw: images and non-text message conte
 // RenderPrompt turns an OpenAI chat request into the deterministic transcript
 // consumed by one-shot CLI workers.
 func RenderPrompt(req *openai.ChatRequest) (string, error) {
+	completion, err := RenderCompletionPrompt(req)
+	if err != nil {
+		return "", err
+	}
+	if completion.System == "" {
+		return completion.Prompt, nil
+	}
+	return inlineSystemPrompt(completion.System, completion.Prompt), nil
+}
+
+// RenderCompletionPrompt turns an OpenAI chat request into separate system
+// instructions and a deterministic conversation transcript.
+func RenderCompletionPrompt(req *openai.ChatRequest) (CompletionPrompt, error) {
 	if req == nil {
-		return "", errors.New("cligw: nil chat request")
+		return CompletionPrompt{}, errors.New("cligw: nil chat request")
 	}
 
 	var systems, turns []string
 	for _, message := range req.Messages {
 		content, err := textContent(message.Content)
 		if err != nil {
-			return "", fmt.Errorf("cligw: %s message: %w", message.Role, err)
+			return CompletionPrompt{}, fmt.Errorf("cligw: %s message: %w", message.Role, err)
 		}
 		switch strings.ToLower(strings.TrimSpace(message.Role)) {
 		case "system", "developer":
@@ -48,14 +71,11 @@ func RenderPrompt(req *openai.ChatRequest) (string, error) {
 			}
 			turns = append(turns, label+":\n"+content)
 		default:
-			return "", fmt.Errorf("cligw: unsupported message role %q", message.Role)
+			return CompletionPrompt{}, fmt.Errorf("cligw: unsupported message role %q", message.Role)
 		}
 	}
 
 	sections := make([]string, 0, 4)
-	if len(systems) > 0 {
-		sections = append(sections, "System:\n"+strings.Join(systems, "\n\n"))
-	}
 	if len(turns) > 0 {
 		sections = append(sections, "Conversation:\n"+strings.Join(turns, "\n\n"))
 	}
@@ -63,11 +83,21 @@ func RenderPrompt(req *openai.ChatRequest) (string, error) {
 	if len(req.Tools) > 0 || len(bytes.TrimSpace(toolChoice)) > 0 {
 		block, err := renderTools(req.Tools, toolChoice)
 		if err != nil {
-			return "", err
+			return CompletionPrompt{}, err
 		}
 		sections = append(sections, block)
 	}
-	return strings.Join(sections, "\n\n"), nil
+	return CompletionPrompt{System: strings.Join(systems, "\n\n"), Prompt: strings.Join(sections, "\n\n")}, nil
+}
+
+func inlineSystemPrompt(system, prompt string) string {
+	if system == "" {
+		return prompt
+	}
+	if prompt == "" {
+		return "System:\n" + system
+	}
+	return "System:\n" + system + "\n\n" + prompt
 }
 
 func textContent(raw json.RawMessage) (string, error) {

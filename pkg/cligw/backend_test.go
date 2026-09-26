@@ -46,6 +46,17 @@ func TestAgentBackendStream(t *testing.T) {
 	if !strings.Contains(body, `"content":"hello "`) || !strings.Contains(body, `"content":"world"`) || !strings.Contains(body, `"finish_reason":"stop"`) || !strings.HasSuffix(body, "data: [DONE]\n\n") {
 		t.Fatalf("stream = %s", body)
 	}
+	chunks := strings.Split(strings.TrimSuffix(strings.TrimSuffix(body, "data: [DONE]\n\n"), "\n\n"), "\n\n")
+	for i, chunk := range chunks {
+		var doc map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(chunk, "data: ")), &doc); err != nil {
+			t.Fatal(err)
+		}
+		_, hasUsage := doc["usage"]
+		if hasUsage != (i == len(chunks)-1) {
+			t.Fatalf("chunk %d usage presence = %v; stream=%s", i, hasUsage, body)
+		}
+	}
 }
 
 func TestAgentBackendToolCallRoundTrip(t *testing.T) {

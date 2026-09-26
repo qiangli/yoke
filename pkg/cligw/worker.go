@@ -10,6 +10,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -136,7 +138,10 @@ func NewWorker(ctx context.Context, agent string) (*Worker, error) {
 	w := &Worker{agent: agent, launch: launch, tool: tool, mode: mode, cwd: cwd}
 	// ACP is deliberately a cold fallback until the ACP worker transport lands.
 	if mode != WarmCold && mode != WarmACP {
-		if err := w.start(w.argv("")); err != nil {
+		if err := w.prepareSystemPrompt(""); err != nil {
+			return nil, err
+		}
+		if err := w.start(w.argv("", "")); err != nil {
 			return nil, err
 		}
 	}
@@ -160,6 +165,12 @@ func (w *Worker) StartedAt() time.Time {
 // Do sends the worker its only prompt, streams parsed events to onEvent, and
 // waits for the entire owned process group to terminate.
 func (w *Worker) Do(ctx context.Context, prompt string, onEvent func(Event)) (Result, error) {
+	return w.DoCompletion(ctx, CompletionPrompt{Prompt: prompt}, onEvent)
+}
+
+// DoCompletion sends one completion while preserving a request's system
+// messages as native CLI instructions where the tool supports that channel.
+func (w *Worker) DoCompletion(ctx context.Context, input CompletionPrompt, onEvent func(Event)) (Result, error) {
 	w.mu.Lock()
 	if w.used || w.closed {
 		w.mu.Unlock()
@@ -167,8 +178,33 @@ func (w *Worker) Do(ctx context.Context, prompt string, onEvent func(Event)) (Re
 	}
 	w.used = true
 	mode := w.mode
+	prompt := input.Prompt
+	if !w.nativeSystemPrompt() {
+		prompt = inlineSystemPrompt(systemPrompt(input.System), prompt)
+	}
+	// Native system overrides are launch-time settings. A worker prewarmed with
+	// the neutral prompt must be relaunched when this request adds instructions.
+	if mode != WarmCold && mode != WarmACP && input.System != "" && w.nativeSystemPrompt() {
+		w.killAndWait(w.cmd, w.wait)
+		w.cmd, w.stdin, w.lines, w.wait, w.stderr = nil, nil, nil, nil, nil
+		if err := w.prepareSystemPrompt(input.System); err != nil {
+			w.mu.Unlock()
+			w.removeDir()
+			return Result{Outcome: OutcomeError}, err
+		}
+		if err := w.startLocked(w.argv("", input.System)); err != nil {
+			w.mu.Unlock()
+			w.removeDir()
+			return Result{Outcome: OutcomeError}, err
+		}
+	}
 	if mode == WarmCold || mode == WarmACP {
-		if err := w.startLocked(w.argv(prompt)); err != nil {
+		if err := w.prepareSystemPrompt(input.System); err != nil {
+			w.mu.Unlock()
+			w.removeDir()
+			return Result{Outcome: OutcomeError}, err
+		}
+		if err := w.startLocked(w.argv(prompt, input.System)); err != nil {
 			w.mu.Unlock()
 			w.removeDir()
 			return Result{Outcome: OutcomeError}, err
@@ -204,6 +240,7 @@ func (w *Worker) Do(ctx context.Context, prompt string, onEvent func(Event)) (Re
 	var processDone, streamDone bool
 	var terminalVerdict fleet.Verdict
 	var explicitFailure bool
+	var sawTextDelta bool
 
 	for !processDone || !streamDone {
 		select {
@@ -244,6 +281,14 @@ func (w *Worker) Do(ctx context.Context, prompt string, onEvent func(Event)) (Re
 						ev.Text = s
 					}
 				}
+			}
+			isTextDelta := claudeTextDelta(ev.Raw)
+			if isTextDelta {
+				sawTextDelta = true
+			} else if sawTextDelta && w.tool.Name == "claude" && ev.Type == "assistant" {
+				// Claude follows partial stream events with a full assistant
+				// snapshot. Keep it for terminal metadata, but do not duplicate it.
+				ev.Text = ""
 			}
 			if ev.Text != "" {
 				text.WriteString(ev.Text)
@@ -345,7 +390,7 @@ func scanWorkerLines(r io.Reader, out chan<- workerLine) {
 	}
 }
 
-func (w *Worker) argv(prompt string) []string {
+func (w *Worker) argv(prompt, requestSystem string) []string {
 	args := append([]string(nil), w.launch.Args...)
 	events := w.tool.EventsStdoutArgv()
 	switch w.tool.Name {
@@ -354,6 +399,7 @@ func (w *Worker) argv(prompt string) []string {
 			args = moveArgFirst(args, "-p")
 		}
 		extra := append([]string{}, events...)
+		extra = append(extra, "--include-partial-messages", "--system-prompt", systemPrompt(requestSystem))
 		extra = append(extra, "--tools", "", "--no-session-persistence", "--strict-mcp-config", "--setting-sources", "")
 		if w.mode == WarmStdinStreamJSON {
 			extra = append([]string{"--input-format", "stream-json"}, extra...)
@@ -374,6 +420,7 @@ func (w *Worker) argv(prompt string) []string {
 	case "codex":
 		args = shortSandbox(args)
 		args = insertAfter(args, "exec", events)
+		args = insertAfter(args, "exec", []string{"-c", "model_instructions_file=" + strconv.Quote(w.codexInstructionsPath())})
 	default:
 		args = insertBeforePromptFlag(args, events)
 	}
@@ -382,6 +429,31 @@ func (w *Worker) argv(prompt string) []string {
 		argv = append(argv, prompt)
 	}
 	return argv
+}
+
+func systemPrompt(request string) string {
+	if strings.TrimSpace(request) == "" {
+		return neutralSystemPrompt
+	}
+	return neutralSystemPrompt + "\n\n" + request
+}
+
+func (w *Worker) nativeSystemPrompt() bool {
+	return w.tool.Name == "claude" || w.tool.Name == "codex"
+}
+
+func (w *Worker) codexInstructionsPath() string {
+	return filepath.Join(w.cwd, "instructions.md")
+}
+
+func (w *Worker) prepareSystemPrompt(request string) error {
+	if w.tool.Name != "codex" {
+		return nil
+	}
+	if err := os.WriteFile(w.codexInstructionsPath(), []byte(systemPrompt(request)+"\n"), 0o600); err != nil {
+		return fmt.Errorf("cligw: write codex system prompt: %w", err)
+	}
+	return nil
 }
 
 func (w *Worker) promptBody(prompt string) ([]byte, error) {
@@ -429,8 +501,10 @@ func eventText(obj map[string]any) string {
 	}
 	if typ, _ := obj["type"].(string); typ == "stream_event" {
 		if event, ok := obj["event"].(map[string]any); ok {
-			if delta, ok := event["delta"].(map[string]any); ok {
-				return stringValue(delta["text"])
+			if stringValue(event["type"]) == "content_block_delta" {
+				if delta, ok := event["delta"].(map[string]any); ok && stringValue(delta["type"]) == "text_delta" {
+					return stringValue(delta["text"])
+				}
 			}
 		}
 	}
@@ -455,6 +529,16 @@ func eventText(obj map[string]any) string {
 		return stringValue(obj["text"])
 	}
 	return ""
+}
+
+func claudeTextDelta(raw []byte) bool {
+	var obj map[string]any
+	if json.Unmarshal(raw, &obj) != nil || stringValue(obj["type"]) != "stream_event" {
+		return false
+	}
+	event, _ := obj["event"].(map[string]any)
+	delta, _ := event["delta"].(map[string]any)
+	return stringValue(event["type"]) == "content_block_delta" && stringValue(delta["type"]) == "text_delta"
 }
 
 func eventFailed(ev Event) bool {
