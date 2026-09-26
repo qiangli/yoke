@@ -23,6 +23,8 @@ import (
 // unchanged):
 //
 //	POST /v1/chat/completions
+//	POST /v1/messages
+//	POST /anthropic/v1/messages
 //	POST /v1/embeddings
 //	GET  /v1/models
 //	GET  /health
@@ -211,8 +213,9 @@ func New(cfg Config) http.Handler {
 	// return to the same backend and reuse its KV cache. Embeddings opt
 	// OUT — each call is independent, so routing should optimise purely
 	// for load distribution.
-	chat := g.inference(ChatCompletionsPath, chatCompletionsBody, true)
-	embed := g.inference(EmbeddingsPath, embeddingsBody, false)
+	chat := g.inference(openAICodec(ChatCompletionsPath, chatCompletionsBody), true)
+	embed := g.inference(openAICodec(EmbeddingsPath, embeddingsBody), false)
+	messages := g.inference(anthropicCodec(), true)
 
 	for _, prefix := range []string{"", AliasPrefix} {
 		g.mux.Handle("POST "+prefix+ChatCompletionsPath, chat)
@@ -220,6 +223,8 @@ func New(cfg Config) http.Handler {
 		g.mux.HandleFunc("GET "+prefix+ModelsPath, g.listModels)
 		g.mux.HandleFunc("GET "+prefix+HealthPath, g.health)
 	}
+	g.mux.Handle("POST "+AnthropicMessagesPath, messages)
+	g.mux.Handle("POST "+MessagesPath, messages)
 	return g
 }
 
@@ -246,21 +251,26 @@ type dispatchPick struct {
 	OriginalName string
 }
 
-// inference is the shared spine for chat and embeddings. The differences —
-// upstream path, how the model name is read out of the body, whether session
-// affinity applies — arrive as arguments; everything else is identical.
-func (g *gateway) inference(upstreamPath string, peek func([]byte) (string, error), useAffinity bool) http.HandlerFunc {
+// inference is the shared spine for every inference wire format. Request and
+// response translation, upstream path, and session-affinity policy arrive as
+// arguments; authorization through accounting remains identical.
+func (g *gateway) inference(codec inferenceCodec, useAffinity bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		started := time.Now()
+		if codec.anthropic && r.Header.Get("Authorization") == "" {
+			if key := strings.TrimSpace(r.Header.Get("x-api-key")); key != "" {
+				r.Header.Set("Authorization", "Bearer "+key)
+			}
+		}
 
 		principal, ceiling, err := g.cfg.Authorize(r)
 		if err != nil {
-			writeJSON(w, http.StatusUnauthorized, errBody(err.Error()))
+			codec.writeError(w, http.StatusUnauthorized, errBody(err.Error()))
 			return
 		}
 		principal = strings.TrimSpace(principal)
 		if principal == "" {
-			writeJSON(w, http.StatusUnauthorized, errBody("no principal"))
+			codec.writeError(w, http.StatusUnauthorized, errBody("no principal"))
 			return
 		}
 
@@ -268,18 +278,21 @@ func (g *gateway) inference(upstreamPath string, peek func([]byte) (string, erro
 		// upload before routing has even started.
 		body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBody))
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, errBody("read body: "+err.Error()))
+			codec.writeError(w, http.StatusBadRequest, errBody("read body: "+err.Error()))
 			return
 		}
 		_ = r.Body.Close()
 
-		model, err := peek(body)
+		body, model, stream, err := codec.decode(body)
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, errBody(err.Error()))
+			codec.writeError(w, http.StatusBadRequest, errBody(err.Error()))
 			return
 		}
+		if codec.prepare != nil {
+			codec.prepare(r, stream)
+		}
 		if model == "" {
-			writeJSON(w, http.StatusBadRequest, errBody("model is required"))
+			codec.writeError(w, http.StatusBadRequest, errBody("model is required"))
 			return
 		}
 
@@ -293,7 +306,7 @@ func (g *gateway) inference(upstreamPath string, peek func([]byte) (string, erro
 		model = autoReq.Model
 
 		if g.cfg.AllowModel != nil && !g.cfg.AllowModel(principal, model) {
-			writeJSON(w, http.StatusForbidden, map[string]any{
+			codec.writeError(w, http.StatusForbidden, map[string]any{
 				"error": "this key is not authorized for model " + model,
 				"model": model,
 			})
@@ -329,7 +342,7 @@ func (g *gateway) inference(upstreamPath string, peek func([]byte) (string, erro
 			case sched.AdmitRateLimited:
 				g.cfg.Metrics.ObserveDispatch("", "", "rate_limited")
 				status := sched.ApplyAdmissionHeaders(w, out)
-				writeJSON(w, status, map[string]any{
+				codec.writeError(w, status, map[string]any{
 					"error":         "principal in-flight cap reached",
 					"max_in_flight": g.admissionLimit(principal),
 					"hint":          "honor Retry-After and slow your concurrent request rate",
@@ -339,7 +352,7 @@ func (g *gateway) inference(upstreamPath string, peek func([]byte) (string, erro
 				g.cfg.Metrics.ObserveDispatch("", "", "overloaded")
 				g.cfg.Metrics.ObserveRetryFreeIssued()
 				status := sched.ApplyAdmissionHeaders(w, out)
-				writeJSON(w, status, map[string]any{
+				codec.writeError(w, status, map[string]any{
 					"error": "pool queue overloaded",
 					"hint":  "retry with " + sched.RetryOfHeader + ": <nonce> for free-retry (no cap or fair-share charge)",
 				})
@@ -365,7 +378,7 @@ func (g *gateway) inference(upstreamPath string, peek func([]byte) (string, erro
 		ctx := r.Context()
 		pick, outcome := g.dispatch(ctx, autoReq, principal, sessionID, body)
 		if outcome != routeOK {
-			g.serveUnroutable(w, r, outcome, principal, model, body, remoteAllowed)
+			g.serveUnroutable(w, r, outcome, principal, model, body, remoteAllowed, codec)
 			return
 		}
 
@@ -378,7 +391,7 @@ func (g *gateway) inference(upstreamPath string, peek func([]byte) (string, erro
 		if pick.Model != requested {
 			patched, perr := resolve.PatchModelField(body, pick.Model)
 			if perr != nil {
-				writeJSON(w, http.StatusInternalServerError, errBody("patch model field: "+perr.Error()))
+				codec.writeError(w, http.StatusInternalServerError, errBody("patch model field: "+perr.Error()))
 				return
 			}
 			body = patched
@@ -404,7 +417,7 @@ func (g *gateway) inference(upstreamPath string, peek func([]byte) (string, erro
 			nonce := g.cfg.Admitter.IssueNonce(principal, jobID, 0)
 			w.Header().Set("Retry-After", "1")
 			w.Header().Set(sched.RetryFreeHeader, nonce)
-			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			codec.writeError(w, http.StatusServiceUnavailable, map[string]any{
 				"error": "all reachable (backend, model) slots saturated",
 				"model": model,
 				"hint":  "retry with " + sched.RetryOfHeader + ": <nonce> for free-retry",
@@ -450,7 +463,8 @@ func (g *gateway) inference(upstreamPath string, peek func([]byte) (string, erro
 		}
 
 		modify := g.modifyResponse(modifyArgs{
-			upstreamPath: upstreamPath,
+			upstreamPath: codec.upstreamPath,
+			codec:        codec,
 			principal:    principal,
 			jobID:        jobID,
 			jobDone:      jobDone,
@@ -464,7 +478,11 @@ func (g *gateway) inference(upstreamPath string, peek func([]byte) (string, erro
 			delivered:    func() string { name, _ := delivered.Load().(string); return name },
 		})
 
-		chosen, _, _ := ServeWithFailover(w, r, slate, body, modify)
+		served := &byteWriteCounter{ResponseWriter: w}
+		chosen, _, status := ServeWithFailover(served, r, slate, body, modify)
+		if served.bytesWritten == 0 && status >= http.StatusBadRequest {
+			codec.writeError(w, status, errBody("upstream request failed"))
+		}
 		if chosen != nil && chosen.Name() != primary.Name() {
 			// Rebind the affinity to the backend that actually
 			// delivered, so the next turn pins to the known-working
@@ -490,6 +508,7 @@ func (b *recordingBackend) Serve(w http.ResponseWriter, r *http.Request, body []
 // modifyArgs is the request-scoped state the response callback closes over.
 type modifyArgs struct {
 	upstreamPath string
+	codec        inferenceCodec
 	principal    string
 	jobID        string
 	jobDone      bool
@@ -566,6 +585,11 @@ func (g *gateway) modifyResponse(a modifyArgs) func(*http.Response) error {
 				g.cfg.Jobs.Release(a.jobID)
 			}
 		})
+		if a.codec.adapt != nil {
+			if err := a.codec.adapt(resp, strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 }
@@ -709,14 +733,14 @@ func (g *gateway) failoverSlate(ctx context.Context, principal, model string, pr
 // serveUnroutable answers a request no pooled backend can serve: the host's
 // fallback first when the posture permits leaving the pool, then the status
 // the routing outcome calls for.
-func (g *gateway) serveUnroutable(w http.ResponseWriter, r *http.Request, outcome routeOutcome, principal, model string, body []byte, remoteAllowed bool) {
+func (g *gateway) serveUnroutable(w http.ResponseWriter, r *http.Request, outcome routeOutcome, principal, model string, body []byte, remoteAllowed bool, codec inferenceCodec) {
 	switch outcome {
 	case routeQuotaExhausted:
 		// Every eligible backend was excluded by host policy. 429 is the
 		// only answer that tells a well-behaved client to back off and
 		// that a later retry will likely work — a 404 would read as
 		// "this model does not exist."
-		writeJSON(w, http.StatusTooManyRequests, map[string]any{
+		codec.writeError(w, http.StatusTooManyRequests, map[string]any{
 			"error": "every backend for " + model + " is over its shared-usage budget",
 			"model": model,
 		})
@@ -733,9 +757,9 @@ func (g *gateway) serveUnroutable(w http.ResponseWriter, r *http.Request, outcom
 				" (set " + resolve.RouteHeader + ": " + resolve.RouteLocalFirst +
 				", or pass allow_cloud)"
 		}
-		writeJSON(w, http.StatusNotFound, map[string]any{"error": msg, "model": model})
+		codec.writeError(w, http.StatusNotFound, map[string]any{"error": msg, "model": model})
 	default:
-		writeJSON(w, http.StatusInternalServerError, errBody("router returned no backend and no reason"))
+		codec.writeError(w, http.StatusInternalServerError, errBody("router returned no backend and no reason"))
 	}
 }
 
