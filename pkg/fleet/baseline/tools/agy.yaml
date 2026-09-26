@@ -6,6 +6,7 @@ aliases:
 cli:
   binary: agy
   launch:
+    warm: stdin-stream-json
     # RUNG 2 via stdout. Measured on the wire 2026-07-31:
     #
     #   $ agy -p "say ok" --output-format stream-json

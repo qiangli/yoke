@@ -151,6 +151,11 @@ type ToolLaunch struct {
 	// {model} and the flag token immediately preceding it are dropped, so
 	// a template with a model flag degrades exactly to one without.
 	Exec string `yaml:"exec,omitempty" json:"exec,omitempty" doc:"headless argv template"`
+	// Warm declares how cligw may start a one-shot process before its prompt is
+	// known. Empty and "cold" both defer process creation until the request.
+	// stdin-stream-json sends one tool-specific JSON user message, stdin sends
+	// the prompt bytes directly, and acp is reserved for the ACP transport.
+	Warm string `yaml:"warm,omitempty" json:"warm,omitempty" doc:"prewarm transport: stdin-stream-json, acp, stdin, or cold"`
 	// Credential declares how this harness authenticates a bound model.
 	// "model-provider" grants only the credential named by Model.APIKeyRef, or
 	// by Model.Provider when no explicit key reference exists. Values remain in

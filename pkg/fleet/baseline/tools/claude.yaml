@@ -4,6 +4,7 @@ display: Claude Code
 cli:
   binary: claude
   launch:
+    warm: stdin-stream-json
     # -p is print mode, and it must be EXPLICIT. Without it claude infers
     # headlessness from "stdout is not a terminal" — which holds on a pipe and
     # is false the moment the agent is given a PTY (to clear its trust prompt,

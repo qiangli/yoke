@@ -4,6 +4,7 @@ display: Codex
 cli:
   binary: codex
   launch:
+    warm: stdin
     session_env:
       - CODEX_SESSION_ID
       - CODEX_THREAD_ID
