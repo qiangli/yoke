@@ -36,7 +36,7 @@ func (bashInterp) Run(ctx context.Context, t *Task, tio TaskIO) TaskResult {
 	runner, err := interp.New(
 		interp.Dir(tio.Dir),
 		interp.Env(expand.ListEnviron(tio.Env...)),
-		interp.StdIO(nil, tio.Stdout, tio.Stderr),
+		interp.StdIO(tio.Stdin, tio.Stdout, tio.Stderr),
 		// CapExecHandler checks every dispatched command against the task's
 		// declared-effects cap (set on ctx by WithTaskCap before Run).
 		// It runs BEFORE shell.Handler so in-process coreutils commands are

@@ -54,6 +54,7 @@ type Engine struct {
 	// on the path that runs targets.
 	Observer func(Event)
 
+	Stdin  io.Reader // shared with the bodies (TaskIO.Stdin); nil = empty
 	Stdout io.Writer
 	Stderr io.Writer
 
@@ -754,8 +755,8 @@ func (e *Engine) runAttempt(ctx context.Context, node *Node, capture bool, worke
 	// and terminal ordering is unchanged.
 	if e.Journal != nil && journalMayTee(node.Task) {
 		if w := e.Journal.attemptLogWriter(node.Task.Name, attempt); w != nil {
-			stdout = io.MultiWriter(stdout, w)
-			stderr = io.MultiWriter(stderr, w)
+			stdout = journalTee{stdout, w}
+			stderr = journalTee{stderr, w}
 		}
 	}
 	// Builtin Tools: preflight — prepend a presence + version check to the body
@@ -769,6 +770,7 @@ func (e *Engine) runAttempt(ctx context.Context, node *Node, capture bool, worke
 	res := e.executeTask(runCtx, task, worker, TaskIO{
 		Dir:    e.Dir,
 		Env:    e.envFor(node),
+		Stdin:  e.Stdin,
 		Stdout: stdout,
 		Stderr: stderr,
 	})
@@ -1113,3 +1115,24 @@ func firstUnmetDep(n *Node) (string, bool) {
 	}
 	return "", false
 }
+
+// journalTee writes to the real sink first, then to the run journal. It is a
+// named type rather than io.MultiWriter so a body runner can Unwrap it and see
+// that its sink is still the caller's terminal — a terminal sink is streamed,
+// never buffered as model-visible output.
+type journalTee struct {
+	primary io.Writer
+	journal io.Writer
+}
+
+func (t journalTee) Write(p []byte) (int, error) {
+	n, err := t.primary.Write(p)
+	if err != nil {
+		return n, err
+	}
+	_, _ = t.journal.Write(p) // the journal is best-effort; the sink is not
+	return len(p), nil
+}
+
+// Unwrap returns the sink the journal copies.
+func (t journalTee) Unwrap() io.Writer { return t.primary }

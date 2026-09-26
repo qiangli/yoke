@@ -254,6 +254,7 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 				Cache:       cache,
 				Verbose:     mode == weavecli.OutputAuto || mode == weavecli.OutputPlain,
 				Capture:     mode == weavecli.OutputJSON,
+				Stdin:       cmd.InOrStdin(),
 				Stdout:      out,
 				Stderr:      errOut,
 			}

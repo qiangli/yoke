@@ -14,8 +14,12 @@ import (
 
 // TaskIO is the execution environment handed to an interpreter for one target.
 type TaskIO struct {
-	Dir    string
-	Env    []string // os.Environ() shape
+	Dir string
+	Env []string // os.Environ() shape
+	// Stdin is the caller's standard input, shared by the bodies like make
+	// shares its stdin with recipes (`echo x | bashy dag t`, a body's `cat`
+	// reads x). Nil reads as empty.
+	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
 }
