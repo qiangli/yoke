@@ -31,6 +31,24 @@ func TestCLIHelper(t *testing.T) {
 	}
 	args = args[1:]
 	switch args[0] {
+	case "backend-text":
+		fmt.Println(`{"type":"item.completed","item":{"type":"agent_message","text":"hello from cli"}}`)
+		fmt.Println(`{"type":"turn.completed","usage":{"input_tokens":11,"output_tokens":3}}`)
+	case "backend-stream":
+		fmt.Println(`{"type":"item.completed","item":{"type":"agent_message","text":"hello "}}`)
+		fmt.Println(`{"type":"item.completed","item":{"type":"agent_message","text":"world"}}`)
+		fmt.Println(`{"type":"turn.completed","usage":{"input_tokens":8,"output_tokens":2}}`)
+	case "backend-tool":
+		fmt.Println(`{"type":"item.completed","item":{"type":"agent_message","text":"{\"tool_calls\":[{\"name\":\"weather\",\"arguments\":{\"city\":\"Paris\"}}]}"}}`)
+		fmt.Println(`{"type":"turn.completed","usage":{"input_tokens":9,"output_tokens":7}}`)
+	case "backend-crash":
+		fmt.Fprintln(os.Stderr, "fake backend crash")
+		os.Exit(7)
+	case "backend-cancel":
+		if path := os.Getenv("CLIGW_CANCEL_STARTED"); path != "" {
+			_ = os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0o600)
+		}
+		time.Sleep(time.Minute)
 	case "warm":
 		body, err := io.ReadAll(os.Stdin)
 		if err != nil {

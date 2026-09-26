@@ -7,19 +7,37 @@ import (
 
 // ChatRequest is the request subset used by the provider translators.
 type ChatRequest struct {
-	Model               string        `json:"model"`
-	Messages            []ChatMessage `json:"messages"`
-	MaxTokens           int           `json:"max_tokens,omitempty"`
-	MaxCompletionTokens int           `json:"max_completion_tokens,omitempty"`
-	Temperature         *float64      `json:"temperature,omitempty"`
-	Stream              bool          `json:"stream,omitempty"`
+	Model               string          `json:"model"`
+	Messages            []ChatMessage   `json:"messages"`
+	MaxTokens           int             `json:"max_tokens,omitempty"`
+	MaxCompletionTokens int             `json:"max_completion_tokens,omitempty"`
+	Temperature         *float64        `json:"temperature,omitempty"`
+	Stream              bool            `json:"stream,omitempty"`
+	Stop                json.RawMessage `json:"stop,omitempty"`
+	Tools               []Tool          `json:"tools,omitempty"`
+	ToolChoice          json.RawMessage `json:"tool_choice,omitempty"`
 }
 
 // ChatMessage is an input message. Content may be a string or an array of
 // typed content parts.
 type ChatMessage struct {
-	Role    string          `json:"role"`
-	Content json.RawMessage `json:"content"`
+	Role       string          `json:"role"`
+	Content    json.RawMessage `json:"content"`
+	Name       string          `json:"name,omitempty"`
+	ToolCallID string          `json:"tool_call_id,omitempty"`
+}
+
+// Tool is an OpenAI function tool declaration.
+type Tool struct {
+	Type     string             `json:"type"`
+	Function FunctionDefinition `json:"function"`
+}
+
+// FunctionDefinition describes a callable function and its JSON input schema.
+type FunctionDefinition struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters"`
 }
 
 // ChatCompletion is an OpenAI-compatible chat completion or stream chunk.
