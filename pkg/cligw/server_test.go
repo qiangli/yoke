@@ -208,6 +208,12 @@ func TestServerRoutesBandByHeadroomAndStampsRoutedHeader(t *testing.T) {
 	if got := first.Header.Get(RoutedHeader); !strings.HasPrefix(got, "agent=warm-four, band=L4, reason=quota-first") {
 		t.Fatalf("%s = %q, want the quota leader", RoutedHeader, got)
 	}
+	if got := ts.quota.headrooms("sonnet-x"); got != 1 {
+		t.Fatalf("sonnet-x headroom reads after /v1/models and Route = %d, want one shared cached read", got)
+	}
+	if got := ts.quota.headrooms("gpt-x"); got != 1 {
+		t.Fatalf("gpt-x headroom reads after /v1/models and Route = %d, want one shared cached read", got)
+	}
 	var completion struct {
 		Model   string `json:"model"`
 		Choices []struct {
@@ -227,6 +233,7 @@ func TestServerRoutesBandByHeadroomAndStampsRoutedHeader(t *testing.T) {
 	// agent, which is the whole point of routing through cligw's Router
 	// rather than the gateway's own least-loaded pick.
 	ts.quota.headroom["sonnet-x"], ts.quota.headroom["gpt-x"] = .1, .9
+	expireHeadroom(ts.Server.quota)
 	second := ts.do(t, http.MethodPost, "/v1/chat/completions", ts.Token(), fmt.Sprintf(chatBody, "L4"))
 	secondBody, _ := io.ReadAll(second.Body)
 	_ = second.Body.Close()

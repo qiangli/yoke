@@ -219,6 +219,7 @@ func NewServer(opts ServerOptions) (*Server, error) {
 	if quota == nil {
 		quota = llmBudgetQuota{}
 	}
+	quota = cacheHeadroom(quota)
 	breaker := opts.Breaker
 	if breaker == nil {
 		breaker = sched.NewBreaker()
@@ -701,12 +702,8 @@ func (s *Server) Queued(agent string) int {
 // router would pick them, so band spares sit on the next agent to be chosen.
 //
 // It ranks ONLY the agents this server holds a pool for, and caches the answer
-// for rankTTL. Both are about cost: a rank previews a seat's quota per
-// candidate (~100ms each), the scaler asks once per band per tick, and it holds
-// its own lock while it asks — so an unrestricted, uncached rank over an
-// 80-agent band would stall /health for seconds, every second. The answer is
-// the same either way: the autoscaler intersects the rank with its registered
-// pools, and a spare can only be placed on a pool that exists.
+// for rankTTL. Router.Rank uses cached headroom and never previews admission;
+// restricting it still avoids rescoring a large fleet on every scaler tick.
 func (s *Server) Rank(band int) []string {
 	names := s.poolNames()
 	if len(names) == 0 {

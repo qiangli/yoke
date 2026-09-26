@@ -49,7 +49,8 @@ type CandidateScore struct {
 	Preferred     bool    `json:"preferred"`
 }
 
-// Candidate is one eligible agent and its auditable routing score.
+// Candidate is one cheaply eligible agent and its auditable routing score and
+// preview outcome. Candidates after the winner remain marked "not previewed".
 type Candidate struct {
 	Agent    string         `json:"agent"`
 	Model    string         `json:"model"`
@@ -57,9 +58,20 @@ type Candidate struct {
 	Provider string         `json:"provider"`
 	Band     int            `json:"band"`
 	Score    CandidateScore `json:"score"`
+	Preview  string         `json:"preview"`
+	Reason   string         `json:"preview_reason,omitempty"`
 }
 
-// Decision is the selected route and the eligible candidates in rank order.
+const (
+	previewAllowed      = "allowed"
+	previewRefused      = "refused"
+	previewNotRun       = "not previewed"
+	previewBelowReserve = "below reserve"
+	headroomTTL         = 10 * time.Second
+)
+
+// Decision is the selected route and its cheaply eligible candidates in rank
+// order, including refused and not-previewed seats for auditability.
 type Decision struct {
 	Agent  string      `json:"agent"`
 	Band   string      `json:"band"`
@@ -193,6 +205,7 @@ func NewRouter(catalog *FleetCatalog, policy Policy, options ...RouterOption) *R
 	if opt.quota == nil {
 		opt.quota = llmBudgetQuota{}
 	}
+	opt.quota = cacheHeadroom(opt.quota)
 	if opt.breaker == nil {
 		opt.breaker = sched.NewBreaker()
 	}
@@ -273,66 +286,24 @@ func (r *Router) routeOnce(ctx context.Context, sel Selector, filter Filter, pol
 	return r.decide(ctx, r.catalog.Candidates(ctx, sel, filter), sel, policyName, sessionID)
 }
 
-// decide scores an already-selected candidate set and returns the winner of
-// the lowest band that has one. It is separate from candidate selection so the
-// autoscaler can rank a SUBSET without paying for a quota preview per agent in
-// the whole band — an L5 rank over the full fleet costs seconds.
+// decide cheaply ranks an already-selected candidate set, then previews quota
+// eligibility in rank order and stops at the first allowed seat.
 func (r *Router) decide(ctx context.Context, agents []Agent, sel Selector, policyName, sessionID string) (Decision, error) {
 	if len(agents) == 0 {
 		return Decision{}, &RouteError{Status: 503, Reason: "no fleet candidate matches the selector and filter"}
 	}
-	r.mu.Lock()
-	affinity := r.affinity[sessionID]
-	marks := make(map[string]ineligibleMark, len(r.ineligible))
-	for name, mark := range r.ineligible {
-		marks[name] = mark
+	scored := r.score(ctx, agents, policyName, sessionID)
+	if err := ctx.Err(); err != nil {
+		return Decision{}, err
 	}
-	r.mu.Unlock()
-
 	byBand := make(map[int][]Candidate)
-	nonQuotaRejected, quotaRejected := 0, 0
+	byName := make(map[string]Agent, len(agents))
 	for _, agent := range agents {
-		if err := ctx.Err(); err != nil {
-			return Decision{}, err
-		}
-		if _, marked := marks[agent.Name]; marked {
-			nonQuotaRejected++
-			continue
-		}
-		if r.breaker.InCooldown(agent.Name) || !r.toolInstalled(agent) {
-			nonQuotaRejected++
-			continue
-		}
-		allowed, _ := r.quota.Preview(ctx, agent)
-		if !allowed {
-			quotaRejected++
-			continue
-		}
-		headroom, known := r.quota.Headroom(agent.Model)
-		if known {
-			if headroom < 0 {
-				headroom = 0
-			}
-			if headroom > 1 {
-				headroom = 1
-			}
-		}
-		idle, queued := r.pool.Idle(agent.Name), r.pool.Queued(agent.Name)
-		preferred := false
-		if value, ok := strings.CutPrefix(policyName, "prefer:"); ok {
-			preferred = agent.Provider == value || agent.Tool == value
-		}
-		candidate := Candidate{
-			Agent: agent.Name, Model: agent.Model, Tool: agent.Tool, Provider: agent.Provider, Band: agent.Band,
-			Score: CandidateScore{
-				Headroom: headroom, HeadroomKnown: known,
-				BelowReserve: known && headroom < r.policy.ReserveFloor,
-				WarmIdle:     idle > 0, Idle: idle, Queued: queued,
-				Weight: r.policy.weight(agent.Provider), Affinity: affinity == agent.Name,
-				Preferred: preferred,
-			},
-		}
-		byBand[agent.Band] = append(byBand[agent.Band], candidate)
+		byName[agent.Name] = agent
+	}
+	nonQuotaRejected, quotaRejected := len(agents)-len(scored), 0
+	for _, candidate := range scored {
+		byBand[candidate.Band] = append(byBand[candidate.Band], candidate)
 	}
 
 	bands := make([]int, 0, len(byBand))
@@ -342,23 +313,34 @@ func (r *Router) decide(ctx context.Context, agents []Agent, sel Selector, polic
 	sort.Ints(bands)
 	for _, band := range bands {
 		candidates := byBand[band]
-		aboveFloor := false
-		for _, candidate := range candidates {
-			if !candidate.Score.BelowReserve {
-				aboveFloor = true
-				break
-			}
-		}
-		if !aboveFloor {
-			quotaRejected += len(candidates)
-			continue
-		}
 		r.rank(candidates, policyName, sel, band)
-		winner := candidates[0]
-		return Decision{
-			Agent: winner.Agent, Band: fleet.BandLabel(winner.Band),
-			Reason: rankingReason(policyName, winner), Ranked: candidates,
-		}, nil
+		for i := range candidates {
+			if candidates[i].Score.BelowReserve {
+				candidates[i].Preview = previewBelowReserve
+				quotaRejected++
+				continue
+			}
+			agent, ok := byName[candidates[i].Agent]
+			if !ok {
+				continue
+			}
+			allowed, reason := r.quota.Preview(ctx, agent)
+			if err := ctx.Err(); err != nil {
+				return Decision{}, err
+			}
+			candidates[i].Reason = reason
+			if !allowed {
+				candidates[i].Preview = previewRefused
+				quotaRejected++
+				continue
+			}
+			candidates[i].Preview = previewAllowed
+			winner := candidates[i]
+			return Decision{
+				Agent: winner.Agent, Band: fleet.BandLabel(winner.Band),
+				Reason: rankingReason(policyName, winner), Ranked: candidates,
+			}, nil
+		}
 	}
 	if quotaRejected > 0 && nonQuotaRejected == 0 {
 		return Decision{}, &RouteError{Status: 429, Reason: "all matching candidates were refused by quota or below the reserve floor"}
@@ -383,6 +365,9 @@ func (r *Router) rank(candidates []Candidate, policyName string, sel Selector, b
 				available = i
 				break
 			}
+		}
+		if available == 0 {
+			return
 		}
 		key := sel.Raw + ":" + fmt.Sprint(band)
 		r.mu.Lock()
@@ -488,9 +473,10 @@ func (r *Router) MarkIneligible(agent, account, reason string) {
 	r.mu.Unlock()
 }
 
-// Rank returns the eligible agents of one band, best first, WITHOUT recording
-// a decision or touching affinity. It is the autoscaler's Ranker: prewarmed
-// spares sit on the agent the router would pick next.
+// Rank returns the cheaply eligible agents of one band, best first, WITHOUT
+// previewing quota, recording a decision, or touching affinity. It is the
+// autoscaler's Ranker: prewarmed spares sit on the agent the router would pick
+// next according to cached headroom and pool state.
 //
 // It deliberately does not escalate. A band with no eligible agent gets no
 // spares; prewarming the band above it would spend a better seat on demand
@@ -524,15 +510,67 @@ func (r *Router) Rank(ctx context.Context, band int, filter Filter, policyName s
 		}
 		agents = kept
 	}
-	decision, err := r.decide(ctx, agents, sel, policyName, "")
-	if err != nil {
+	candidates := r.score(ctx, agents, policyName, "")
+	if len(candidates) == 0 {
 		return nil
 	}
-	out := make([]string, 0, len(decision.Ranked))
-	for _, candidate := range decision.Ranked {
+	aboveFloor := false
+	for _, candidate := range candidates {
+		if !candidate.Score.BelowReserve {
+			aboveFloor = true
+			break
+		}
+	}
+	if !aboveFloor {
+		return nil
+	}
+	r.rank(candidates, policyName, sel, band)
+	out := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
 		out = append(out, candidate.Agent)
 	}
 	return out
+}
+
+func (r *Router) score(ctx context.Context, agents []Agent, policyName, sessionID string) []Candidate {
+	r.mu.Lock()
+	affinity := r.affinity[sessionID]
+	marks := make(map[string]ineligibleMark, len(r.ineligible))
+	for name, mark := range r.ineligible {
+		marks[name] = mark
+	}
+	r.mu.Unlock()
+
+	candidates := make([]Candidate, 0, len(agents))
+	for _, agent := range agents {
+		if ctx.Err() != nil {
+			return nil
+		}
+		if _, marked := marks[agent.Name]; marked || r.breaker.InCooldown(agent.Name) || !r.toolInstalled(agent) {
+			continue
+		}
+		headroom, known := r.quota.Headroom(agent.Model)
+		if known {
+			headroom = max(0, min(1, headroom))
+		}
+		idle, queued := r.pool.Idle(agent.Name), r.pool.Queued(agent.Name)
+		preferred := false
+		if value, ok := strings.CutPrefix(policyName, "prefer:"); ok {
+			preferred = agent.Provider == value || agent.Tool == value
+		}
+		candidates = append(candidates, Candidate{
+			Agent: agent.Name, Model: agent.Model, Tool: agent.Tool, Provider: agent.Provider, Band: agent.Band,
+			Preview: previewNotRun,
+			Score: CandidateScore{
+				Headroom: headroom, HeadroomKnown: known,
+				BelowReserve: known && headroom < r.policy.ReserveFloor,
+				WarmIdle:     idle > 0, Idle: idle, Queued: queued,
+				Weight: r.policy.weight(agent.Provider), Affinity: affinity == agent.Name,
+				Preferred: preferred,
+			},
+		})
+	}
+	return candidates
 }
 
 // History returns a copy of the bounded in-memory decision ring, oldest first.
@@ -565,6 +603,50 @@ func (llmBudgetQuota) Preview(ctx context.Context, agent Agent) (bool, string) {
 		return false, err.Error()
 	}
 	return admission.Decision.Allowed(), admission.Decision.Reason
+}
+
+type headroomEntry struct {
+	remaining float64
+	known     bool
+	expires   time.Time
+}
+
+// headroomCache shares short-lived model headroom between routing, autoscaling,
+// and /v1/models. Preview is deliberately never cached: it evaluates live
+// concurrency and reservation state for the one candidate about to run.
+type headroomCache struct {
+	source QuotaSource
+	ttl    time.Duration
+
+	mu      sync.Mutex
+	entries map[string]headroomEntry
+}
+
+func cacheHeadroom(source QuotaSource) QuotaSource {
+	if _, ok := source.(*headroomCache); ok {
+		return source
+	}
+	return &headroomCache{source: source, ttl: headroomTTL, entries: map[string]headroomEntry{}}
+}
+
+func (c *headroomCache) Headroom(model string) (float64, bool) {
+	now := time.Now()
+	c.mu.Lock()
+	if entry, ok := c.entries[model]; ok && now.Before(entry.expires) {
+		c.mu.Unlock()
+		return entry.remaining, entry.known
+	}
+	c.mu.Unlock()
+
+	remaining, known := c.source.Headroom(model)
+	c.mu.Lock()
+	c.entries[model] = headroomEntry{remaining: remaining, known: known, expires: now.Add(c.ttl)}
+	c.mu.Unlock()
+	return remaining, known
+}
+
+func (c *headroomCache) Preview(ctx context.Context, agent Agent) (bool, string) {
+	return c.source.Preview(ctx, agent)
 }
 
 func usagePath() string {

@@ -3,24 +3,65 @@ package cligw
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/llmgw/sched"
 )
 
 type fakeQuota struct {
-	headroom map[string]float64
-	refused  map[string]string
+	mu            sync.Mutex
+	headroom      map[string]float64
+	headroomCalls map[string]int
+	refused       map[string]string
+	refuseFirst   int
+	previewDelay  time.Duration
+	previewCalls  []string
 }
 
 func (q *fakeQuota) Headroom(model string) (float64, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.headroomCalls == nil {
+		q.headroomCalls = map[string]int{}
+	}
+	q.headroomCalls[model]++
 	v, ok := q.headroom[model]
 	return v, ok
 }
 func (q *fakeQuota) Preview(_ context.Context, agent Agent) (bool, string) {
+	q.mu.Lock()
+	q.previewCalls = append(q.previewCalls, agent.Name)
+	call := len(q.previewCalls)
+	delay := q.previewDelay
 	reason, refused := q.refused[agent.Name]
+	refused = refused || call <= q.refuseFirst
+	q.mu.Unlock()
+	time.Sleep(delay)
 	return !refused, reason
+}
+
+func (q *fakeQuota) previews() []string {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return append([]string(nil), q.previewCalls...)
+}
+
+func (q *fakeQuota) headrooms(model string) int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.headroomCalls[model]
+}
+
+func expireHeadroom(q QuotaSource) {
+	cache := q.(*headroomCache)
+	cache.mu.Lock()
+	cache.entries = map[string]headroomEntry{}
+	cache.mu.Unlock()
 }
 
 type fakePool map[string][2]int
@@ -162,6 +203,7 @@ func TestRouterLatencyFirstAndProviderWeight(t *testing.T) {
 	}
 
 	quota.headroom["strong"], quota.headroom["small"] = .5, .5
+	expireHeadroom(router.quota)
 	pool["gamma"], pool["x-cascade"] = [2]int{}, [2]int{}
 	got, err = router.Route(context.Background(), sel, Filter{}, PolicyQuotaFirst, "")
 	if err != nil {
@@ -169,6 +211,80 @@ func TestRouterLatencyFirstAndProviderWeight(t *testing.T) {
 	}
 	if got.Agent != "x-cascade" || got.Ranked[0].Score.Weight != 5 {
 		t.Fatalf("provider weight = %+v", got)
+	}
+}
+
+func TestRouterPreviewsCandidatesLazily(t *testing.T) {
+	quota := &fakeQuota{
+		headroom:    map[string]float64{"strong": .8, "small": .7},
+		refuseFirst: 1,
+	}
+	router, cat, _ := newTestRouter(t, DefaultPolicy(), quota)
+	got, err := router.Route(context.Background(), selector(t, cat, "L4"), Filter{}, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls := quota.previews(); len(calls) != 2 {
+		t.Fatalf("Preview calls = %v, want two after the leader refused", calls)
+	}
+	if got.Ranked[0].Preview != previewRefused || got.Ranked[1].Preview != previewAllowed {
+		t.Fatalf("preview audit = %+v", got.Ranked)
+	}
+
+	quota = &fakeQuota{headroom: map[string]float64{"strong": .8, "small": .7}}
+	router, cat, _ = newTestRouter(t, DefaultPolicy(), quota)
+	got, err = router.Route(context.Background(), selector(t, cat, "L4"), Filter{}, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls := quota.previews(); len(calls) != 1 {
+		t.Fatalf("Preview calls = %v, want only the allowed leader", calls)
+	}
+	if got.Ranked[0].Preview != previewAllowed || got.Ranked[1].Preview != previewNotRun {
+		t.Fatalf("preview audit = %+v", got.Ranked)
+	}
+}
+
+func TestRouterRankNeverPreviews(t *testing.T) {
+	quota := &fakeQuota{headroom: map[string]float64{"strong": .8, "small": .7}}
+	router, _, _ := newTestRouter(t, DefaultPolicy(), quota)
+	if got := router.Rank(context.Background(), 4, Filter{}, ""); len(got) != 2 {
+		t.Fatalf("Rank = %v, want two L4 candidates", got)
+	}
+	if calls := quota.previews(); len(calls) != 0 {
+		t.Fatalf("Rank called Preview for %v", calls)
+	}
+}
+
+func TestRouterRouteTenCandidatesPaysForOnePreview(t *testing.T) {
+	cat := testFleet(t)
+	for i := range 8 {
+		if err := cat.Registry().SaveAgent(fleet.Agent{
+			Name: fmt.Sprintf("candidate-%02d", i), Tool: "beta-tool", Model: "strong",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cat = NewFleetCatalog(cat.Registry())
+	quota := &fakeQuota{
+		headroom:     map[string]float64{"strong": .8, "small": .7},
+		previewDelay: 50 * time.Millisecond,
+	}
+	router := NewRouter(cat, DefaultPolicy(), WithQuotaSource(quota), WithRecorder(&memoryRecorder{}))
+	start := time.Now()
+	got, err := router.Route(context.Background(), selector(t, cat, "L4"), Filter{}, "", "")
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Ranked) != 10 {
+		t.Fatalf("ranked candidates = %d, want 10", len(got.Ranked))
+	}
+	if calls := quota.previews(); len(calls) != 1 {
+		t.Fatalf("Preview calls = %v, want one", calls)
+	}
+	if elapsed >= 150*time.Millisecond {
+		t.Fatalf("Route took %v, want less than 150ms", elapsed)
 	}
 }
 
