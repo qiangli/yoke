@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,6 +105,30 @@ func TestListModels_Shape(t *testing.T) {
 	}
 	if _, ok := raw.Data[1]["x_hosts"]; ok {
 		t.Errorf("x_hosts present without expand")
+	}
+}
+
+func TestListModels_CatalogFailureReturns503(t *testing.T) {
+	up := newUpstream(t, "alpha", echoJSON)
+	env := newEnv(t, modelRows(), []*upstream{up}, func(c *Config) {
+		c.Catalog.(*fakeCatalog).err = errors.New("inventory offline")
+	})
+
+	w := env.do(t, http.MethodGet, ModelsPath, nil, nil)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s, want 503", w.Code, w.Body.String())
+	}
+	var got struct {
+		Error struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if got.Error.Type != "catalog_unavailable" || !strings.Contains(got.Error.Message, "inventory offline") {
+		t.Errorf("error=%+v", got.Error)
 	}
 }
 

@@ -95,7 +95,11 @@ func (g *gateway) listModels(w http.ResponseWriter, r *http.Request) {
 
 	var rows []resolve.ModelRow
 	if g.cfg.Catalog != nil {
-		rows = g.cfg.Catalog.Rows(ctx, principal)
+		rows, err = catalogRows(ctx, g.cfg.Catalog, principal)
+		if err != nil {
+			writeCatalogUnavailable(w, inferenceCodec{}, err.Error())
+			return
+		}
 	}
 
 	// First row per name wins as the canonical entry — catalogs return
@@ -154,6 +158,13 @@ func (g *gateway) listModels(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(data, func(i, j int) bool { return data[i].ID < data[j].ID })
 
 	writeJSON(w, http.StatusOK, ModelList{Object: "list", Data: data})
+}
+
+func catalogRows(ctx context.Context, catalog resolve.Catalog, principal string) ([]resolve.ModelRow, error) {
+	if errCatalog, ok := catalog.(resolve.ErrCatalog); ok {
+		return errCatalog.RowsErr(ctx, principal)
+	}
+	return catalog.Rows(ctx, principal), nil
 }
 
 // backendDetail renders the x_hosts expansion for one model's rows. The

@@ -2,6 +2,7 @@ package resolve
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -14,6 +15,15 @@ type fakeCatalog struct {
 	rows     map[string][]ModelRow
 	aliases  map[string]fakeAlias
 	rowCalls int
+}
+
+type failingCatalog struct {
+	*fakeCatalog
+	err error
+}
+
+func (c *failingCatalog) RowsErr(context.Context, string) ([]ModelRow, error) {
+	return nil, c.err
 }
 
 type fakeAlias struct {
@@ -146,6 +156,21 @@ func TestCandidateModels(t *testing.T) {
 				t.Errorf("catalog Rows called %d times, want at most 1", cat.rowCalls)
 			}
 		})
+	}
+}
+
+func TestCandidateModelsErr_UsesErrCatalog(t *testing.T) {
+	want := errors.New("catalog offline")
+	cat := &failingCatalog{fakeCatalog: newTestCatalog(), err: want}
+	got, err := CandidateModelsErr(context.Background(), cat, autoReq("tier:L2/coding"), testPrincipal, nil, nil, nil)
+	if !errors.Is(err, want) {
+		t.Fatalf("error=%v, want %v", err, want)
+	}
+	if got != nil {
+		t.Errorf("models=%v, want nil", got)
+	}
+	if cat.rowCalls != 0 {
+		t.Errorf("Rows called %d times; RowsErr must be used", cat.rowCalls)
 	}
 }
 

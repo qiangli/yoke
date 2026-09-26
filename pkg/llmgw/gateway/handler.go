@@ -90,6 +90,12 @@ type RouteDefaultFunc func(principal string) string
 // 429 rather than 404, because a retry later is the honest advice.
 type FilterCandidatesFunc func(ctx context.Context, principal, model string, backends []string) []string
 
+// FilterCandidatesStatusFunc narrows the eligible backends and describes why
+// none remain. When kept is non-empty, status and reason are ignored. When it
+// is empty, status may be 404, 429, or 503; zero or any other value defaults
+// to 429. This hook takes precedence over FilterCandidates when both are set.
+type FilterCandidatesStatusFunc func(ctx context.Context, principal, model string, backends []string) (kept []string, status int, reason string)
+
 // FallbackFunc is the last chance to serve a request no pooled backend can.
 // Called only when the routing posture permits leaving the pool. It returns
 // true when it has written a response; the gateway then does nothing more.
@@ -153,11 +159,12 @@ type Config struct {
 	Loaded   *LoadedCache
 
 	// Host policy hooks. All optional.
-	FilterCandidates FilterCandidatesFunc
-	Fallback         FallbackFunc
-	OnUsage          OnUsageFunc
-	ListExtra        ListExtraFunc
-	DecorateModel    DecorateModelFunc
+	FilterCandidates       FilterCandidatesFunc
+	FilterCandidatesStatus FilterCandidatesStatusFunc
+	Fallback               FallbackFunc
+	OnUsage                OnUsageFunc
+	ListExtra              ListExtraFunc
+	DecorateModel          DecorateModelFunc
 
 	// ModifyResponse runs on every upstream response after the gateway
 	// has stamped its own headers and installed the tool-call extractor,
@@ -239,7 +246,15 @@ const (
 	routeOK             routeOutcome = ""
 	routeNoBackends     routeOutcome = "no_backends"
 	routeQuotaExhausted routeOutcome = "quota_exhausted"
+	routeFiltered       routeOutcome = "filtered"
+	routeCatalogFailed  routeOutcome = "catalog_failed"
 )
+
+type routeFailure struct {
+	outcome routeOutcome
+	status  int
+	reason  string
+}
 
 // dispatchPick is one resolved routing decision: where to send the request,
 // under which model name, and why.
@@ -376,9 +391,9 @@ func (g *gateway) inference(codec inferenceCodec, useAffinity bool) http.Handler
 		}
 
 		ctx := r.Context()
-		pick, outcome := g.dispatch(ctx, autoReq, principal, sessionID, body)
-		if outcome != routeOK {
-			g.serveUnroutable(w, r, outcome, principal, model, body, remoteAllowed, codec)
+		pick, failure := g.dispatch(ctx, autoReq, principal, sessionID, body)
+		if failure.outcome != routeOK {
+			g.serveUnroutable(w, r, failure, principal, model, body, remoteAllowed, codec)
 			return
 		}
 
@@ -598,19 +613,25 @@ func (g *gateway) modifyResponse(a modifyArgs) func(*http.Response) error {
 // returns the first (backend, model) pair that can serve. On failure the
 // outcome says whether the model was nowhere to be found or whether host
 // policy excluded the backends that had it.
-func (g *gateway) dispatch(ctx context.Context, req resolve.Request, principal, sessionID string, body []byte) (dispatchPick, routeOutcome) {
-	names := resolve.CandidateModels(ctx, g.cfg.Catalog, req, principal,
+func (g *gateway) dispatch(ctx context.Context, req resolve.Request, principal, sessionID string, body []byte) (dispatchPick, routeFailure) {
+	names, err := resolve.CandidateModelsErr(ctx, g.cfg.Catalog, req, principal,
 		func(backend, model string) bool { return g.cfg.Loaded.HasLoaded(backend, model) },
 		historyAdapter{g.cfg.History}, body)
+	if err != nil {
+		return dispatchPick{}, routeFailure{outcome: routeCatalogFailed, reason: err.Error()}
+	}
 	if len(names) == 0 {
-		return dispatchPick{}, routeNoBackends
+		return dispatchPick{}, routeFailure{outcome: routeNoBackends}
 	}
 
 	// Track the worst outcome across attempts so an empty result reports
 	// exclusion (429) in preference to absence (404).
-	worst := routeOK
+	var worst routeFailure
 	for i, name := range names {
-		candidates, excluded := g.backendsFor(ctx, principal, name)
+		candidates, failure := g.backendsFor(ctx, principal, name)
+		if failure.outcome == routeCatalogFailed {
+			return dispatchPick{}, failure
+		}
 		if backend := g.pickBackend(ctx, name, sessionID, candidates); backend != nil {
 			pick := dispatchPick{
 				Backend:      backend,
@@ -626,32 +647,35 @@ func (g *gateway) dispatch(ctx context.Context, req resolve.Request, principal, 
 			default:
 				pick.Reason = resolve.ReasonSubstitutedFailover
 			}
-			return pick, routeOK
+			return pick, routeFailure{}
 		}
-		if excluded && worst == routeOK {
-			worst = routeQuotaExhausted
+		if failure.outcome != routeOK && failure.outcome != routeNoBackends && worst.outcome == routeOK {
+			worst = failure
 		}
 		// Never substitute across an exact match the caller forbade.
 		if !req.AutoEnabled {
 			break
 		}
 	}
-	if worst == routeOK {
-		worst = routeNoBackends
+	if worst.outcome == routeOK {
+		worst.outcome = routeNoBackends
 	}
 	return dispatchPick{OriginalName: req.Model}, worst
 }
 
 // backendsFor returns the live backends exposing model to principal, in
-// catalog order. excluded reports that backends existed but the host's
-// FilterCandidates hook removed every one of them.
-func (g *gateway) backendsFor(ctx context.Context, principal, model string) (backends []Backend, excluded bool) {
+// catalog order, or a failure describing why none can be used.
+func (g *gateway) backendsFor(ctx context.Context, principal, model string) (backends []Backend, failure routeFailure) {
 	if g.cfg.Catalog == nil || g.cfg.Backend == nil {
-		return nil, false
+		return nil, routeFailure{outcome: routeNoBackends}
+	}
+	rows, err := catalogRows(ctx, g.cfg.Catalog, principal)
+	if err != nil {
+		return nil, routeFailure{outcome: routeCatalogFailed, reason: err.Error()}
 	}
 	seen := map[string]struct{}{}
 	names := make([]string, 0, 4)
-	for _, row := range g.cfg.Catalog.Rows(ctx, principal) {
+	for _, row := range rows {
 		if row.Name != model {
 			continue
 		}
@@ -662,11 +686,25 @@ func (g *gateway) backendsFor(ctx context.Context, principal, model string) (bac
 		names = append(names, row.Backend)
 	}
 	if len(names) == 0 {
-		return nil, false
+		return nil, routeFailure{outcome: routeNoBackends}
 	}
-	if g.cfg.FilterCandidates != nil {
+	legacyExcluded := false
+	if g.cfg.FilterCandidatesStatus != nil {
+		kept, status, reason := g.cfg.FilterCandidatesStatus(ctx, principal, model, names)
+		if len(kept) == 0 {
+			return nil, routeFailure{
+				outcome: routeFiltered,
+				status:  filterCandidatesStatus(status),
+				reason:  strings.TrimSpace(reason),
+			}
+		}
+		names = kept
+	} else if g.cfg.FilterCandidates != nil {
 		kept := g.cfg.FilterCandidates(ctx, principal, model, names)
-		excluded = len(kept) < len(names)
+		legacyExcluded = len(kept) < len(names)
+		if len(kept) == 0 {
+			return nil, routeFailure{outcome: routeQuotaExhausted}
+		}
 		names = kept
 	}
 	backends = make([]Backend, 0, len(names))
@@ -675,7 +713,22 @@ func (g *gateway) backendsFor(ctx context.Context, principal, model string) (bac
 			backends = append(backends, backend)
 		}
 	}
-	return backends, excluded
+	if len(backends) == 0 {
+		if legacyExcluded {
+			return nil, routeFailure{outcome: routeQuotaExhausted}
+		}
+		return nil, routeFailure{outcome: routeNoBackends}
+	}
+	return backends, routeFailure{}
+}
+
+func filterCandidatesStatus(status int) int {
+	switch status {
+	case http.StatusNotFound, http.StatusTooManyRequests, http.StatusServiceUnavailable:
+		return status
+	default:
+		return http.StatusTooManyRequests
+	}
 }
 
 // pickBackend applies the selection tiers, first applicable wins:
@@ -733,8 +786,16 @@ func (g *gateway) failoverSlate(ctx context.Context, principal, model string, pr
 // serveUnroutable answers a request no pooled backend can serve: the host's
 // fallback first when the posture permits leaving the pool, then the status
 // the routing outcome calls for.
-func (g *gateway) serveUnroutable(w http.ResponseWriter, r *http.Request, outcome routeOutcome, principal, model string, body []byte, remoteAllowed bool, codec inferenceCodec) {
-	switch outcome {
+func (g *gateway) serveUnroutable(w http.ResponseWriter, r *http.Request, failure routeFailure, principal, model string, body []byte, remoteAllowed bool, codec inferenceCodec) {
+	switch failure.outcome {
+	case routeCatalogFailed:
+		writeCatalogUnavailable(w, codec, failure.reason)
+	case routeFiltered:
+		reason := failure.reason
+		if reason == "" {
+			reason = "every backend for " + model + " was excluded by host policy"
+		}
+		codec.writeError(w, failure.status, map[string]any{"error": reason, "model": model})
 	case routeQuotaExhausted:
 		// Every eligible backend was excluded by host policy. 429 is the
 		// only answer that tells a well-behaved client to back off and
