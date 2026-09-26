@@ -94,12 +94,21 @@ type FilterCandidatesFunc func(ctx context.Context, principal, model string, bac
 // none remain. When kept is non-empty, status and reason are ignored. When it
 // is empty, status may be 404, 429, or 503; zero or any other value defaults
 // to 429. This hook takes precedence over FilterCandidates when both are set.
+//
+// The status decides whether Fallback still gets a turn. 404 means "no
+// backend here can hold this model", which is the same story as an empty
+// pool, so the gateway escalates to Fallback exactly as it would for a
+// model the catalog never listed. 429 and 503 mean the backends exist and
+// a retry will likely work, so Fallback is NOT called and the client gets
+// the status with this hook's reason.
 type FilterCandidatesStatusFunc func(ctx context.Context, principal, model string, backends []string) (kept []string, status int, reason string)
 
-// FallbackFunc is the last chance to serve a request no pooled backend can.
-// Called only when the routing posture permits leaving the pool. It returns
-// true when it has written a response; the gateway then does nothing more.
-// Optional; a nil hook goes straight to 404.
+// FallbackFunc is the last chance to serve a request no pooled backend can:
+// either the pool has no backend for the model at all, or
+// FilterCandidatesStatus wiped the slate with a 404. Called only when the
+// routing posture permits leaving the pool. It returns true when it has
+// written a response; the gateway then does nothing more. Optional; a nil
+// hook goes straight to 404.
 type FallbackFunc func(w http.ResponseWriter, r *http.Request, principal, model string, body []byte) bool
 
 // OnUsageFunc receives the token usage parsed from the tail of a served
@@ -794,6 +803,16 @@ func (g *gateway) serveUnroutable(w http.ResponseWriter, r *http.Request, failur
 		reason := failure.reason
 		if reason == "" {
 			reason = "every backend for " + model + " was excluded by host policy"
+		}
+		// A 404 wipe says the model is nowhere in the pool, which is
+		// exactly the routeNoBackends story — so it escalates to the
+		// host's fallback the same way. A 429 or 503 wipe does not: the
+		// backends exist and a later retry is the honest advice, so
+		// leaving the pool would silently change where the request ran.
+		if failure.status == http.StatusNotFound && remoteAllowed && g.cfg.Fallback != nil {
+			if g.cfg.Fallback(w, r, principal, model, body) {
+				return
+			}
 		}
 		codec.writeError(w, failure.status, map[string]any{"error": reason, "model": model})
 	case routeQuotaExhausted:
