@@ -91,6 +91,7 @@ type Document struct {
 	Path     string
 	Name     string   // optional file-level frontmatter `name`
 	Desc     string   // optional file-level frontmatter `description`
+	Type     string   // optional frontmatter `type` — the OKF page type (`dag`)
 	Default  string   // optional frontmatter `default` — make's .DEFAULT_GOAL
 	Includes []string // optional frontmatter `include` — files merged in (make's `include`)
 	Tasks    []*Task
@@ -101,7 +102,13 @@ type Document struct {
 	// ${NAME} in metadata before BuildGraph (see expand.go).
 	Vars []DocVar
 
-	byName map[string]*Task
+	// FrontmatterYAMLErr is why the frontmatter block is not strict YAML
+	// ("" when it is, or when there is none). The line reading still parsed
+	// it; `--check` reports it because skill loaders and OKF readers will not.
+	FrontmatterYAMLErr string
+
+	hasFrontmatter bool
+	byName         map[string]*Task
 }
 
 // DocVar is one frontmatter `vars:` entry. Op is the assignment operator:
@@ -141,7 +148,8 @@ var metaKeys = map[string]bool{
 }
 
 // Parse reads a DAG markdown document. The format:
-//   - Optional YAML frontmatter (`---` … `---`) with `name`/`description`.
+//   - Optional YAML frontmatter (`---` … `---`) with `name`/`description`
+//     (see frontmatter.go for `type`, `metadata:` and the strict-YAML read).
 //   - If a `## Tasks` heading exists, targets are its `### name` children;
 //     otherwise targets are top-level `## name` headings.
 //   - Under each target heading: prose description, metadata lines
@@ -217,6 +225,10 @@ func Parse(r io.Reader, path string) (*Document, error) {
 			j++
 		}
 		if j < len(lines) {
+			// A closed block is also read as YAML: the spec-clean spelling an
+			// Agent Skill or OKF page uses (folded descriptions, `type:`,
+			// `metadata:` nesting) layers over the line reading above.
+			applyYAMLFrontmatter(doc, strings.Join(lines[1:j], "\n"))
 			j++ // consume closing ---
 		}
 		start = j

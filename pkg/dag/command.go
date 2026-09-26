@@ -26,7 +26,7 @@ func newDagCmd() *cobra.Command {
 	var (
 		listF, jsonF, plainF, quietF, keepGoing, forceF, explainF, dryRunF, outGroupF, checkF, watchF bool
 		sandboxF, fleetF, meshF, timingsF, runsF, noJournalF, statusF, htmlF                          bool
-		fileArg, showRunF, serveF                                                                     string
+		fileArg, showRunF, serveF, skillF                                                             string
 		cacheDir, cacheExport, cacheImport, chunksPath, remoteCmd, remoteShell                        string
 		jobs, keepRuns                                                                                int
 	)
@@ -56,7 +56,14 @@ skipped.
 
 With no target, dag runs the file's default goal — the frontmatter
 "default:" key, or a target named "default" — and otherwise lists the
-targets (like a Makefile whose .DEFAULT_GOAL is help).`,
+targets (like a Makefile whose .DEFAULT_GOAL is help).
+
+The frontmatter is YAML that other readers share: name + description (an
+Agent Skill's routing surface), type: dag (an OKF page type), and the
+dag-only keys (default, vars, include) either top-level or nested under
+metadata:. dag --check warns when the header is not strict YAML or lacks
+them; dag --skill DIR writes DIR/<name>/SKILL.md, a thin Agent Skill that
+routes any agentic tool to these targets through bashy dag.`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		// Targets are OPERANDS of the root command, and RunE validates them
@@ -169,6 +176,9 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 			}
 			if listF {
 				return runList(out, mode, doc)
+			}
+			if skillF != "" {
+				return runSkill(out, errOut, mode, doc, skillF)
 			}
 			// Read-only reporters (--timings, --runs, --show) report what is on
 			// disk and run nothing, so they belong here with --check/--list:
@@ -315,6 +325,7 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 	cmd.Flags().BoolVar(&explainF, "explain", false, "Explain per target whether it would run or is up-to-date (runs nothing)")
 	cmd.Flags().BoolVarP(&dryRunF, "dryrun", "n", false, "Print the ordered plan without running any target body")
 	cmd.Flags().BoolVar(&outGroupF, "output-group", false, "Fold each target's output in GitHub ::group::/::endgroup:: markers (auto-on under GITHUB_ACTIONS)")
+	cmd.Flags().StringVar(&skillF, "skill", "", "Write a thin Agent Skill for this file to DIR/<name>/SKILL.md (routes other agents to bashy dag); runs nothing")
 	cmd.Flags().BoolVar(&checkF, "check", false, "Validate the file (parse, deps, cycles, effects) and exit; runs nothing")
 	cmd.Flags().BoolVar(&timingsF, "timings", false, "Report recorded per-target durations, total (T) and longest (L); runs nothing")
 	cmd.Flags().BoolVar(&watchF, "watch", false, "Poll Sources/Inputs and re-run affected targets until interrupted")
@@ -399,6 +410,7 @@ func runCheck(out, errOut io.Writer, mode weavecli.OutputMode, doc *Document, g 
 			res.Warnings = append(res.Warnings, "target "+name+" has no body and no requires (no-op)")
 		}
 	}
+	res.Warnings = append(res.Warnings, frontmatterWarnings(doc)...)
 	if mode == weavecli.OutputJSON {
 		emitOK(out, res)
 		return nil
