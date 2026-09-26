@@ -330,6 +330,9 @@ var packages = map[string]Package{
 	"llmgw": {Role: RoleUnwired, Note: "standalone gateway core for protocol translation, scheduling, " +
 		"resolution, backend selection, and failover. It is a nested module with no importer or front-door " +
 		"verb in this repository yet; the handler and command stories own that wiring."},
+	"cligw": {Role: RoleUnwired, Note: "OpenAI-compatible gateway over pre-spawned one-shot agent CLI workers " +
+		"(llmgw backend). No front-door verb yet; `bashy llm serve|pools|env` (Sprint #305 L10) wires it — " +
+		"reclassify to library under that verb when it lands."},
 	"mailx": {Role: RoleLibrary, FrontDoor: "mailx", Note: "pure-Go local-mail kernel used by cmds/mailx and its mail alias: " +
 		"validated message parsing, mbox delivery, locking, transactional mailbox updates, and From-line quoting."},
 	"release": {Role: RoleUnwired, Note: "release pipeline T0 core: .goreleaser.yaml subset, " +
