@@ -25,6 +25,7 @@ type ChatMessage struct {
 	Role       string          `json:"role"`
 	Content    json.RawMessage `json:"content"`
 	ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
+	Name       string          `json:"name,omitempty"`
 	ToolCallID string          `json:"tool_call_id,omitempty"`
 }
 
@@ -42,6 +43,9 @@ type ToolFunction struct {
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
 	Arguments   string          `json:"arguments,omitempty"`
 }
+
+// FunctionDefinition is the declaration view of ToolFunction.
+type FunctionDefinition = ToolFunction
 
 // ToolCall is a complete assistant tool call.
 type ToolCall struct {

@@ -89,9 +89,24 @@ func ApplyToolCallExtractor(resp *http.Response) io.ReadCloser {
 // backend content already had arguments as a string we preserve it
 // verbatim, otherwise we re-marshal the object back into a string.
 func extractToolCallFromContent(content string) (name, argsJSON string, ok bool) {
+	calls, ok := extractToolCallsFromContent(content)
+	if !ok || len(calls) != 1 {
+		return "", "", false
+	}
+	return calls[0].name, calls[0].arguments, true
+}
+
+type extractedToolCall struct {
+	name      string
+	arguments string
+}
+
+// extractToolCallsFromContent accepts both the historical single-call shape
+// and cligw's strict, potentially multi-call envelope.
+func extractToolCallsFromContent(content string) ([]extractedToolCall, bool) {
 	s := strings.TrimSpace(content)
 	if len(s) < 2 || s[0] != '{' {
-		return "", "", false
+		return nil, false
 	}
 	// Strict whole-document parse. A model emitting `{...}garbage` is
 	// not a tool call we can confidently extract.
@@ -102,45 +117,54 @@ func extractToolCallFromContent(content string) (name, argsJSON string, ok bool)
 	var env struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
+		ToolCalls []struct {
+			Name      string          `json:"name"`
+			Arguments json.RawMessage `json:"arguments"`
+		} `json:"tool_calls"`
 	}
 	if err := dec.Decode(&env); err != nil {
-		return "", "", false
+		return nil, false
 	}
 	// Trailing tokens after the envelope means this is not just a
 	// tool-call payload (e.g. prose + JSON). Bail.
 	if dec.More() {
-		return "", "", false
+		return nil, false
 	}
-	if strings.TrimSpace(env.Name) == "" || len(env.Arguments) == 0 {
-		return "", "", false
+	rawCalls := env.ToolCalls
+	if len(rawCalls) == 0 && env.Name != "" {
+		rawCalls = append(rawCalls, struct {
+			Name      string          `json:"name"`
+			Arguments json.RawMessage `json:"arguments"`
+		}{Name: env.Name, Arguments: env.Arguments})
 	}
-	// OpenAI's tool_calls[].function.arguments is a JSON string of
-	// the arguments object — never the raw object. Normalize both
-	// shapes (object literal or already-stringified JSON) to the
-	// canonical string form so downstream clients see exactly what
-	// they expect.
-	trimmed := bytes.TrimSpace(env.Arguments)
-	switch {
-	case len(trimmed) > 0 && trimmed[0] == '{':
-		argsJSON = string(trimmed)
-	case len(trimmed) > 0 && trimmed[0] == '"':
-		// Already a JSON string — unmarshal then we have the actual
-		// contents to compare.
-		var s2 string
-		if err := json.Unmarshal(trimmed, &s2); err != nil {
-			return "", "", false
+	if len(rawCalls) == 0 {
+		return nil, false
+	}
+	calls := make([]extractedToolCall, 0, len(rawCalls))
+	for _, call := range rawCalls {
+		if strings.TrimSpace(call.Name) == "" || len(call.Arguments) == 0 {
+			return nil, false
 		}
-		// Validate that the string parses as an object so we don't
-		// hand the client a non-conforming arguments payload.
-		var obj map[string]any
-		if err := json.Unmarshal([]byte(s2), &obj); err != nil {
-			return "", "", false
+		// OpenAI's tool_calls[].function.arguments is a JSON string.
+		trimmed := bytes.TrimSpace(call.Arguments)
+		var argsJSON string
+		switch {
+		case len(trimmed) > 0 && trimmed[0] == '{':
+			argsJSON = string(trimmed)
+		case len(trimmed) > 0 && trimmed[0] == '"':
+			if err := json.Unmarshal(trimmed, &argsJSON); err != nil {
+				return nil, false
+			}
+			var obj map[string]any
+			if err := json.Unmarshal([]byte(argsJSON), &obj); err != nil {
+				return nil, false
+			}
+		default:
+			return nil, false
 		}
-		argsJSON = s2
-	default:
-		return "", "", false
+		calls = append(calls, extractedToolCall{name: call.Name, arguments: argsJSON})
 	}
-	return env.Name, argsJSON, true
+	return calls, true
 }
 
 // quickProbeLooksLikeToolCall is a cheap front-line filter that lets
@@ -217,22 +241,24 @@ func TransformChatCompletionJSON(body []byte) ([]byte, bool) {
 		if !ok || content == "" {
 			continue
 		}
-		name, argsJSON, ok := extractToolCallFromContent(content)
+		calls, ok := extractToolCallsFromContent(content)
 		if !ok {
 			continue
 		}
 		msg["content"] = ""
-		msg["tool_calls"] = []any{
-			map[string]any{
+		toolCalls := make([]any, 0, len(calls))
+		for index, call := range calls {
+			toolCalls = append(toolCalls, map[string]any{
 				"id":    nextToolCallID(),
 				"type":  "function",
-				"index": 0,
+				"index": index,
 				"function": map[string]any{
-					"name":      name,
-					"arguments": argsJSON,
+					"name":      call.name,
+					"arguments": call.arguments,
 				},
-			},
+			})
 		}
+		msg["tool_calls"] = toolCalls
 		ch["message"] = msg
 		ch["finish_reason"] = "tool_calls"
 		choices[i] = ch
@@ -525,7 +551,7 @@ func (t *SSEToolCallTransformer) examineEvent(event []byte) {
 // otherwise replay the original buffered events.
 func (t *SSEToolCallTransformer) finalizeBuffer() {
 	content := t.accumContent.String()
-	name, argsJSON, ok := extractToolCallFromContent(content)
+	calls, ok := extractToolCallsFromContent(content)
 	if !ok {
 		// False positive on the probe — replay the raw backend bytes
 		// so the client sees the original (presumably text) stream
@@ -543,7 +569,18 @@ func (t *SSEToolCallTransformer) finalizeBuffer() {
 	}
 	model := t.originalModel
 	created := t.originalCreate
-	callID := nextToolCallID()
+	toolCalls := make([]any, 0, len(calls))
+	for index, call := range calls {
+		toolCalls = append(toolCalls, map[string]any{
+			"index": index,
+			"id":    nextToolCallID(),
+			"type":  "function",
+			"function": map[string]any{
+				"name":      call.name,
+				"arguments": call.arguments,
+			},
+		})
+	}
 
 	first := map[string]any{
 		"id":      id,
@@ -554,18 +591,8 @@ func (t *SSEToolCallTransformer) finalizeBuffer() {
 			map[string]any{
 				"index": 0,
 				"delta": map[string]any{
-					"role": "assistant",
-					"tool_calls": []any{
-						map[string]any{
-							"index": 0,
-							"id":    callID,
-							"type":  "function",
-							"function": map[string]any{
-								"name":      name,
-								"arguments": argsJSON,
-							},
-						},
-					},
+					"role":       "assistant",
+					"tool_calls": toolCalls,
 				},
 				"finish_reason": nil,
 			},

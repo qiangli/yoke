@@ -149,6 +149,23 @@ func TestTransformChatCompletionJSON_ToolCall(t *testing.T) {
 	}
 }
 
+func TestTransformChatCompletionJSON_ToolCallsEnvelope(t *testing.T) {
+	in := []byte(`{"choices":[{"message":{"role":"assistant","content":"{\"tool_calls\":[{\"name\":\"weather\",\"arguments\":{\"city\":\"Paris\"}},{\"name\":\"clock\",\"arguments\":{\"zone\":\"UTC\"}}]}"},"finish_reason":"stop"}]}`)
+	out, transformed := TransformChatCompletionJSON(in)
+	if !transformed {
+		t.Fatal("expected tool_calls envelope transformation")
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(out, &doc); err != nil {
+		t.Fatal(err)
+	}
+	choice := doc["choices"].([]any)[0].(map[string]any)
+	message := choice["message"].(map[string]any)
+	if calls := message["tool_calls"].([]any); len(calls) != 2 {
+		t.Fatalf("tool_calls = %#v", calls)
+	}
+}
+
 func TestTransformChatCompletionJSON_PlainText_NoChange(t *testing.T) {
 	in := []byte(`{
 		"id":"chatcmpl-2",
