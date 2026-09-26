@@ -21,6 +21,7 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 	"fmt"
+	"github.com/klauspost/compress/zstd"
 	"io"
 	"net/http"
 	"os"
@@ -277,10 +278,10 @@ func extract(archivePath, url, member, dest string) error {
 	switch {
 	case strings.HasSuffix(url, ".zip"):
 		return extractZip(archivePath, member, dest)
-	case strings.HasSuffix(url, ".tar.gz"), strings.HasSuffix(url, ".tgz"), strings.HasSuffix(url, ".tar.xz"):
+	case isTarArchive(url):
 		return extractTar(archivePath, url, member, dest)
 	default:
-		return fmt.Errorf("binmgr: archive member requested but %s is not a .zip/.tar.gz/.tar.xz", url)
+		return fmt.Errorf("binmgr: archive member requested but %s is not a .zip/.tar.gz/.tar.xz/.tar.zst", url)
 	}
 }
 
@@ -360,19 +361,38 @@ func extractTree(archivePath, url, destDir string) error {
 	switch {
 	case strings.HasSuffix(url, ".zip"):
 		return extractTreeZip(archivePath, destDir)
-	case strings.HasSuffix(url, ".tar.gz"), strings.HasSuffix(url, ".tgz"), strings.HasSuffix(url, ".tar.xz"):
+	case isTarArchive(url):
 		return extractTreeTar(archivePath, url, destDir)
 	default:
-		return fmt.Errorf("binmgr: tree extraction needs a .zip/.tar.gz/.tar.xz, got %s", url)
+		return fmt.Errorf("binmgr: tree extraction needs a .zip/.tar.gz/.tar.xz/.tar.zst, got %s", url)
 	}
 }
 
-// tarReader opens a .tar.gz/.tgz or .tar.xz archive (Zig ships only .tar.xz
-// on unix). The returned closer releases the file.
+// isTarArchive reports a compressed tar this package can unpack.
+func isTarArchive(url string) bool {
+	for _, s := range []string{".tar.gz", ".tgz", ".tar.xz", ".tar.zst"} {
+		if strings.HasSuffix(url, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// tarReader opens a .tar.gz/.tgz, .tar.xz (Zig ships only .tar.xz on unix) or
+// .tar.zst (the official linux ollama) archive. The returned closer releases
+// the file (and the decoder).
 func tarReader(archivePath, url string) (*tar.Reader, io.Closer, error) {
 	f, err := os.Open(archivePath)
 	if err != nil {
 		return nil, nil, err
+	}
+	if strings.HasSuffix(url, ".tar.zst") {
+		zr, err := zstd.NewReader(f)
+		if err != nil {
+			f.Close()
+			return nil, nil, err
+		}
+		return tar.NewReader(zr), closerFunc(func() error { zr.Close(); return f.Close() }), nil
 	}
 	if strings.HasSuffix(url, ".tar.xz") {
 		xr, err := xz.NewReader(f)
@@ -501,3 +521,7 @@ func isExecutable(path string) bool {
 	}
 	return info.Mode()&0o111 != 0
 }
+
+type closerFunc func() error
+
+func (c closerFunc) Close() error { return c() }

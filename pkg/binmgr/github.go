@@ -163,8 +163,8 @@ func assetUsable(name, member string, tree bool) bool {
 	if isSidecar(n) {
 		return false
 	}
-	archive := strings.HasSuffix(n, ".tar.gz") || strings.HasSuffix(n, ".tgz") || strings.HasSuffix(n, ".zip")
-	compressed := strings.HasSuffix(n, ".xz") || strings.HasSuffix(n, ".gz") || strings.HasSuffix(n, ".bz2")
+	archive := strings.HasSuffix(n, ".tar.gz") || strings.HasSuffix(n, ".tgz") || strings.HasSuffix(n, ".tar.zst") || strings.HasSuffix(n, ".zip")
+	compressed := strings.HasSuffix(n, ".xz") || strings.HasSuffix(n, ".gz") || strings.HasSuffix(n, ".bz2") || strings.HasSuffix(n, ".zst")
 	if member == "" && !tree {
 		return !archive && !compressed
 	}
