@@ -22,6 +22,7 @@ import (
 // fakeCatalog is a static resolve.Catalog over a row slice.
 type fakeCatalog struct {
 	rows    []resolve.ModelRow
+	err     error
 	aliases map[string]struct {
 		class   int
 		domains []string
@@ -29,6 +30,10 @@ type fakeCatalog struct {
 }
 
 func (c *fakeCatalog) Rows(context.Context, string) []resolve.ModelRow { return c.rows }
+
+func (c *fakeCatalog) RowsErr(context.Context, string) ([]resolve.ModelRow, error) {
+	return c.rows, c.err
+}
 
 func (c *fakeCatalog) Alias(_ context.Context, name string) (int, []string, bool) {
 	a, ok := c.aliases[name]
@@ -444,6 +449,87 @@ func TestFilterCandidates_ExcludedAllGives429(t *testing.T) {
 	}
 	if up.hits.Load() != 0 {
 		t.Errorf("excluded backend must not be hit")
+	}
+}
+
+func TestFilterCandidatesStatus_EmptyUsesStatusAndReason(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		status int
+		want   int
+	}{
+		{name: "not found", status: http.StatusNotFound, want: http.StatusNotFound},
+		{name: "rate limited", status: http.StatusTooManyRequests, want: http.StatusTooManyRequests},
+		{name: "zero defaults to rate limited", status: 0, want: http.StatusTooManyRequests},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			up := newUpstream(t, "alpha", echoJSON)
+			env := newEnv(t, []resolve.ModelRow{row("llama3.2:1b", "alpha")}, []*upstream{up}, func(c *Config) {
+				c.FilterCandidatesStatus = func(context.Context, string, string, []string) ([]string, int, string) {
+					return nil, tt.status, "capacity policy rejected every backend"
+				}
+			})
+			w := env.do(t, http.MethodPost, ChatCompletionsPath, chatPayload("llama3.2:1b"), nil)
+			if w.Code != tt.want {
+				t.Fatalf("status=%d body=%s, want %d", w.Code, w.Body.String(), tt.want)
+			}
+			if !strings.Contains(w.Body.String(), "capacity policy rejected every backend") {
+				t.Errorf("body=%s, want policy reason", w.Body.String())
+			}
+			if up.hits.Load() != 0 {
+				t.Errorf("excluded backend must not be hit")
+			}
+		})
+	}
+}
+
+func TestFilterCandidatesStatus_PartialProceeds(t *testing.T) {
+	alpha := newUpstream(t, "alpha", echoJSON)
+	beta := newUpstream(t, "beta", echoJSON)
+	rows := []resolve.ModelRow{
+		row("llama3.2:1b", "alpha"),
+		row("llama3.2:1b", "beta"),
+	}
+	env := newEnv(t, rows, []*upstream{alpha, beta}, func(c *Config) {
+		c.FilterCandidates = func(context.Context, string, string, []string) []string {
+			return nil
+		}
+		c.FilterCandidatesStatus = func(context.Context, string, string, []string) ([]string, int, string) {
+			return []string{"beta"}, http.StatusServiceUnavailable, "ignored"
+		}
+	})
+	w := env.do(t, http.MethodPost, ChatCompletionsPath, chatPayload("llama3.2:1b"), nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", w.Code, w.Body.String())
+	}
+	if alpha.hits.Load() != 0 || beta.hits.Load() != 1 {
+		t.Errorf("hits alpha=%d beta=%d, want 0 and 1", alpha.hits.Load(), beta.hits.Load())
+	}
+}
+
+func TestCatalogFailure_ChatReturns503(t *testing.T) {
+	up := newUpstream(t, "alpha", echoJSON)
+	env := newEnv(t, []resolve.ModelRow{row("llama3.2:1b", "alpha")}, []*upstream{up}, func(c *Config) {
+		c.Catalog.(*fakeCatalog).err = errors.New("inventory offline")
+	})
+	w := env.do(t, http.MethodPost, ChatCompletionsPath, chatPayload("llama3.2:1b"), nil)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s, want 503", w.Code, w.Body.String())
+	}
+	var got struct {
+		Error struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if got.Error.Type != "catalog_unavailable" || !strings.Contains(got.Error.Message, "inventory offline") {
+		t.Errorf("error=%+v", got.Error)
+	}
+	if up.hits.Load() != 0 {
+		t.Errorf("backend must not be hit")
 	}
 }
 

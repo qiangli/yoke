@@ -117,6 +117,26 @@ func (c inferenceCodec) writeError(w http.ResponseWriter, status int, value any)
 	writeJSON(w, status, anthropic.ErrorResponse{Type: "error", Error: anthropic.ErrorBody{Type: anthropicErrorType(status), Message: msg}})
 }
 
+func writeCatalogUnavailable(w http.ResponseWriter, codec inferenceCodec, detail string) {
+	message := "model catalog unavailable"
+	if detail = strings.TrimSpace(detail); detail != "" {
+		message += ": " + detail
+	}
+	if codec.anthropic {
+		writeJSON(w, http.StatusServiceUnavailable, anthropic.ErrorResponse{
+			Type:  "error",
+			Error: anthropic.ErrorBody{Type: "catalog_unavailable", Message: message},
+		})
+		return
+	}
+	writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+		"error": map[string]any{
+			"message": message,
+			"type":    "catalog_unavailable",
+		},
+	})
+}
+
 func errorMessage(value any) string {
 	switch v := value.(type) {
 	case map[string]any:

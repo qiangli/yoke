@@ -20,7 +20,9 @@ import (
 // Implementations are expected to be cheap: CandidateModels calls Rows at
 // most once per request, but the gateway calls CandidateModels once per
 // inbound request, so a per-request cache or a refreshed snapshot is the
-// intended shape.
+// intended shape. Catalogs that can distinguish an empty inventory from a
+// failed inventory read should also implement ErrCatalog; callers that know
+// about ErrCatalog use RowsErr and must not treat its error as an empty result.
 type Catalog interface {
 	// Rows returns every model row the principal can reach, in
 	// PRIORITY ORDER — the principal's own backends first, then rows
@@ -29,8 +31,10 @@ type Catalog interface {
 	// model name is the one whose class is believed.
 	//
 	// Staleness is the catalog's business: a row that is returned is
-	// one the resolver may route to. An empty or nil slice is a valid
-	// answer and means "nothing reachable", never an error.
+	// one the resolver may route to. For Catalog-only implementations,
+	// an empty or nil slice means "nothing reachable". Implementations
+	// with a fallible backing store should also implement ErrCatalog so
+	// the absence of evidence is not mistaken for a successful read.
 	Rows(ctx context.Context, principal string) []ModelRow
 
 	// Alias resolves an operator-defined model alias ("best-coder") to
@@ -38,6 +42,20 @@ type Catalog interface {
 	// per-principal. Returns ok=false when the name is not an alias —
 	// which is the common case, since most requests name a model.
 	Alias(ctx context.Context, name string) (class int, domains []string, ok bool)
+}
+
+// ErrCatalog is the optional error-reporting extension to Catalog. A Catalog
+// that implements ErrCatalog is read through RowsErr by error-aware resolver
+// and gateway paths; Rows remains part of Catalog for source compatibility.
+type ErrCatalog interface {
+	RowsErr(ctx context.Context, principal string) ([]ModelRow, error)
+}
+
+func catalogRows(ctx context.Context, cat Catalog, principal string) ([]ModelRow, error) {
+	if errCatalog, ok := cat.(ErrCatalog); ok {
+		return errCatalog.RowsErr(ctx, principal)
+	}
+	return cat.Rows(ctx, principal), nil
 }
 
 // ModelRow is one (backend, model) pair the principal can reach. It is a

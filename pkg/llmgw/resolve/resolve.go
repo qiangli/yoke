@@ -182,13 +182,26 @@ func ParseCapabilitySpec(s string) (int, []string, bool) {
 // (auto / capability spec / alias) resolve to nothing rather than
 // falling back to a model name the client never asked for.
 func CandidateModels(ctx context.Context, cat Catalog, req Request, principal string, loaded LoadedFunc, hist PromptHistory, body []byte) []string {
+	models, _ := CandidateModelsErr(ctx, cat, req, principal, loaded, hist, body)
+	return models
+}
+
+// CandidateModelsErr is CandidateModels with catalog read errors preserved.
+// When cat implements ErrCatalog, it is read through RowsErr. CandidateModels
+// remains as the source-compatible helper for callers that cannot surface an
+// inventory error; gateways should use this form.
+func CandidateModelsErr(ctx context.Context, cat Catalog, req Request, principal string, loaded LoadedFunc, hist PromptHistory, body []byte) ([]string, error) {
 	if !req.AutoEnabled || req.Model == "" {
-		return []string{req.Model}
+		return []string{req.Model}, nil
 	}
 
 	var rows []ModelRow
 	if cat != nil {
-		rows = cat.Rows(ctx, principal)
+		var err error
+		rows, err = catalogRows(ctx, cat, principal)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// "auto" model name → classify from the prompt.
@@ -196,27 +209,27 @@ func CandidateModels(ctx context.Context, cat Catalog, req Request, principal st
 		class, doms, _ := ClassifyFromPrompt(body, hist)
 		inClass := filterInClass(rows, class, doms)
 		if len(inClass) == 0 {
-			return nil
+			return nil, nil
 		}
-		return uniqueModelNames(inClass)
+		return uniqueModelNames(inClass), nil
 	}
 
 	// "tier:LX/domain" capability spec.
 	if class, domains, ok := ParseCapabilitySpec(req.Model); ok {
 		inClass := filterInClass(rows, class, domains)
 		if len(inClass) == 0 {
-			return nil
+			return nil, nil
 		}
-		return uniqueModelNames(inClass)
+		return uniqueModelNames(inClass), nil
 	}
 
 	// Operator-defined alias.
 	if class, domains, ok := LookupAliasClass(ctx, cat, req.Model); ok && len(domains) > 0 {
 		inClass := filterInClass(rows, class, domains)
 		if len(inClass) == 0 {
-			return nil
+			return nil, nil
 		}
-		return uniqueModelNames(inClass)
+		return uniqueModelNames(inClass), nil
 	}
 
 	// A concrete model name: learn its class from the catalog, and
@@ -232,12 +245,12 @@ func CandidateModels(ctx context.Context, cat Catalog, req Request, principal st
 		}
 	}
 	if len(domains) == 0 {
-		return []string{req.Model}
+		return []string{req.Model}, nil
 	}
 
 	inClass := filterInClass(rows, class, domains)
 	if len(inClass) == 0 {
-		return []string{req.Model}
+		return []string{req.Model}, nil
 	}
 
 	// Collect unique model names, exact first.
@@ -275,10 +288,10 @@ func CandidateModels(ctx context.Context, cat Catalog, req Request, principal st
 				cold = append(cold, name)
 			}
 		}
-		return append(warm, cold...)
+		return append(warm, cold...), nil
 	}
 
-	return candidates
+	return candidates, nil
 }
 
 // PatchModelField rewrites the top-level "model" field of a JSON request

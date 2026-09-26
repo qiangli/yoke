@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -94,6 +95,24 @@ func TestAnthropicMessages_ErrorShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Type != "error" || got.Error.Type != "invalid_request_error" || !strings.Contains(got.Error.Message, "model is required") {
+		t.Errorf("error=%+v", got)
+	}
+}
+
+func TestAnthropicMessages_CatalogFailureShape(t *testing.T) {
+	up := newUpstream(t, "alpha", echoJSON)
+	env := newEnv(t, []resolve.ModelRow{row("L4", "alpha")}, []*upstream{up}, func(c *Config) {
+		c.Catalog.(*fakeCatalog).err = errors.New("inventory offline")
+	})
+	w := env.do(t, http.MethodPost, AnthropicMessagesPath, anthropicPayload(false), nil)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s, want 503", w.Code, w.Body.String())
+	}
+	var got anthropic.ErrorResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Type != "error" || got.Error.Type != "catalog_unavailable" || !strings.Contains(got.Error.Message, "inventory offline") {
 		t.Errorf("error=%+v", got)
 	}
 }
