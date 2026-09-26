@@ -327,12 +327,14 @@ var packages = map[string]Package{
 		"subprocess, drives a prompt turn, reports touched files. No importer in this repo and no " +
 		"front-door verb — the `fanout` condition. Wiring it is in flight elsewhere; reclassify to " +
 		"command/library when it lands, or hold the §2.2a conversation that retired fanout."},
-	"llmgw": {Role: RoleUnwired, Note: "standalone gateway core for protocol translation, scheduling, " +
-		"resolution, backend selection, and failover. It is a nested module with no importer or front-door " +
-		"verb in this repository yet; the handler and command stories own that wiring."},
-	"cligw": {Role: RoleUnwired, Note: "OpenAI-compatible gateway over pre-spawned one-shot agent CLI workers " +
-		"(llmgw backend). No front-door verb yet; `bashy llm serve|pools|env` (Sprint #305 L10) wires it — " +
-		"reclassify to library under that verb when it lands."},
+	"llmgw": libPkg("llm", "the gateway CORE — protocol translation, scheduling, resolution, backend "+
+		"selection and failover — as a nested module so cloudbox/hub can import it without pulling in yoke. "+
+		"It deserves no verb of its own because it has no host: a Backend, a Catalog and an Authorize hook "+
+		"are all supplied by its embedder. pkg/cligw is this repo's embedder, which is what puts it behind `llm`."),
+	"cligw": libPkg("llm", "the fleet-agent Backend and front door over llmgw: FleetCatalog + band grammar "+
+		"(L4/L4+/auto), the one-shot CLI worker pool, the quota-first Router, the prefork autoscaler, and "+
+		"NewCmd (`llm serve|pools|env`). The command tree lives here rather than in cmds/ because it is "+
+		"mounted by a host (bashy), the same way pkg/weave and pkg/ask are."),
 	"mailx": {Role: RoleLibrary, FrontDoor: "mailx", Note: "pure-Go local-mail kernel used by cmds/mailx and its mail alias: " +
 		"validated message parsing, mbox delivery, locking, transactional mailbox updates, and From-line quoting."},
 	"release": {Role: RoleUnwired, Note: "release pipeline T0 core: .goreleaser.yaml subset, " +

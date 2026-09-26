@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/llmgw/resolve"
@@ -13,9 +15,25 @@ import (
 // FleetCatalog projects bashy's merged fleet registry onto the gateway's
 // model catalog. The candidate unit is an agent, not a model: two tools bound
 // to the same model are two independently routable backends.
+//
+// The projection is CACHED for inventoryTTL. Deriving it resolves every
+// agent's tool/model binding through the fleet catalog — measured at ~0.8s for
+// a 125-agent fleet — and it sits on the path of every routing decision, every
+// /v1/models row and every autoscaler tick. Without the cache a single model
+// listing re-derived it once per row and took minutes.
 type FleetCatalog struct {
 	fleet *fleet.Catalog
+
+	mu       sync.Mutex
+	cached   []Agent
+	index    map[string]Agent
+	cachedAt time.Time
 }
+
+// inventoryTTL is how long a derived inventory is reused. A registry edit is a
+// human-scale event, so a second of staleness costs nothing next to
+// re-deriving the whole binding table hundreds of times a minute.
+const inventoryTTL = 5 * time.Second
 
 // NewFleetCatalog wraps an already configured fleet catalog. Tests and
 // embedders use this to supply an isolated ring.
@@ -157,7 +175,36 @@ func modelEntry(id string, a Agent) ModelEntry {
 	}
 }
 
+// inventory returns the cached agent projection. The returned slice and the
+// string slices inside it are SHARED with every other caller — read them, do
+// not sort or mutate them in place.
 func (c *FleetCatalog) inventory() []Agent {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cached != nil && time.Since(c.cachedAt) < inventoryTTL {
+		return c.cached
+	}
+	c.cached = c.deriveInventory()
+	c.index = make(map[string]Agent, len(c.cached))
+	for _, agent := range c.cached {
+		c.index[agent.Name] = agent
+	}
+	c.cachedAt = time.Now()
+	return c.cached
+}
+
+// Agent returns one launchable agent from the cached projection. It is the O(1)
+// lookup the HTTP surface needs: a scan per model-list row is what made the
+// uncached listing quadratic.
+func (c *FleetCatalog) Agent(name string) (Agent, bool) {
+	c.inventory()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	agent, ok := c.index[name]
+	return agent, ok
+}
+
+func (c *FleetCatalog) deriveInventory() []Agent {
 	rows, _ := c.fleet.Agents()
 	out := make([]Agent, 0, len(rows))
 	for _, raw := range rows {
