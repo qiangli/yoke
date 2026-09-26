@@ -29,7 +29,7 @@ type ChatCompletion struct {
 	Created int64        `json:"created"`
 	Model   string       `json:"model"`
 	Choices []ChatChoice `json:"choices"`
-	Usage   ChatUsage    `json:"usage"`
+	Usage   Usage        `json:"usage"`
 }
 
 // ChatChoice is one completion choice.
@@ -46,12 +46,8 @@ type ChatResponseMessage struct {
 	Content string `json:"content"`
 }
 
-// ChatUsage reports token counts on a completion.
-type ChatUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
-}
+// ChatUsage is retained for source compatibility. New code should use Usage.
+type ChatUsage = Usage
 
 // EffectiveMaxTokens returns the request's token ceiling, defaulting to 4096.
 func (r *ChatRequest) EffectiveMaxTokens() int {
