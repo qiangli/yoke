@@ -137,6 +137,7 @@ var packages = map[string]Package{
 	"browser":    cmdPkg("browser"),
 	"bus":        cmdPkg("bus"),
 	"capability": cmdPkg("capability"),
+	"stats":      cmdPkg("stats"),
 	"chat":       cmdPkg("chat"),
 	"codegraph":  cmdPkg("graph"),
 	"dag":        cmdPkg("dag"),

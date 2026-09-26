@@ -897,6 +897,10 @@ func init() {
 	// is the routing input. Read-only over the run ledger; CROSS because you
 	// ask "who has earned this" at any stage.
 	addVerb("leaderboard", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	// stats is a pure filter over results JSONL (resolve rates with clustered
+	// CIs, paired differences, pass^k, cost per solve): it decides nothing and
+	// only reads its input.
+	addVerb("stats", Entry{Stage: StageTest, Group: GroupOrch, Caps: []string{CapJSON}})
 	// mb: the host message board — read what was posted to you, post to others.
 	// CROSS, because you check the board at any stage. NOT named inbox/im: this
 	// is a shared append-only spool with per-reader cursors, so it is neither a
@@ -1242,7 +1246,7 @@ func init() {
 		// code-intel / net
 		"ast", "graph", "browser", "fetch",
 		// verbs that read stores / remote state
-		"capability", "leaderboard", "meet", "mb", "messages", "ping", "inbox", "bus", "agent", "tool", "model", "person", "whois",
+		"capability", "leaderboard", "stats", "meet", "mb", "messages", "ping", "inbox", "bus", "agent", "tool", "model", "person", "whois",
 		"kb", "skill", "lexicon", "claim", "git", "web", "rclone", "kopia", "commands", "context",
 		// craft READS the attestation ledger skills writes; it never writes it.
 		"craft", "define",

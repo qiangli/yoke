@@ -20,8 +20,10 @@ import (
 // `agents` were two unrelated verbs). A plural spelling may exist only as a
 // hidden alias of its singular. Exceptions are enumerated here, never implied.
 
-// nonPluralEndingInS are verbs whose final s is not a plural.
-var nonPluralEndingInS = []string{"bus", "dks", "seaweedfs", "whois"}
+// nonPluralEndingInS are verbs whose final s is not a plural. `stats` is
+// short for statistics (a mass noun, the filter over results JSONL); its
+// would-be singular `stat` is the coreutils file-status command.
+var nonPluralEndingInS = []string{"bus", "dks", "seaweedfs", "stats", "whois"}
 
 // pluralListers are listers of the bash `jobs`/`dirs` shape, where the
 // plural means "print the set". `commands` cannot be singularised: `command`
