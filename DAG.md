@@ -1,6 +1,7 @@
 ---
 name: yoke
 description: Build/test/lint targets for yoke as a bashy dag pipeline (agent-first, no Makefile)
+type: dag
 ---
 
 # yoke — DAG task file
