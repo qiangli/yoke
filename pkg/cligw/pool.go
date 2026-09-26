@@ -212,6 +212,14 @@ func (p *Pool) Stats() PoolStats {
 	}
 }
 
+// Config returns the pool's configuration with the live MinSpare/MaxSpare
+// targets, so the autoscaler can read the ceilings it must not exceed.
+func (p *Pool) Config() PoolConfig {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.cfg
+}
+
 // SetMinSpare changes the target driven by the later autoscaler.
 func (p *Pool) SetMinSpare(n int) {
 	if n < 0 {
