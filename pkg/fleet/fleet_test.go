@@ -312,6 +312,40 @@ func TestMarshalRoundTrips(t *testing.T) {
 	}
 }
 
+func TestLaunchWarmRoundTrips(t *testing.T) {
+	for name, want := range map[string]string{
+		"claude": "stdin-stream-json",
+		"agy":    "stdin-stream-json",
+		"codex":  "stdin",
+	} {
+		t.Run(name, func(t *testing.T) {
+			tool, ok := baseline(t).Tool(name)
+			if !ok {
+				t.Fatalf("baseline tool %q is missing", name)
+			}
+			if tool.CLI.Launch.Warm != want {
+				t.Fatalf("warm = %q, want %q", tool.CLI.Launch.Warm, want)
+			}
+			body, err := Marshal(tool)
+			if err != nil {
+				t.Fatal(err)
+			}
+			again, err := ParseTool(name, body, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if again.CLI.Launch.Warm != want {
+				t.Fatalf("round-tripped warm = %q, want %q", again.CLI.Launch.Warm, want)
+			}
+		})
+	}
+
+	other, ok := baseline(t).Tool("opencode")
+	if !ok || other.CLI.Launch.Warm != "" {
+		t.Fatalf("unmeasured tool warm = %q, want empty/cold", other.CLI.Launch.Warm)
+	}
+}
+
 // Function kits share the tool namespace with agentic CLIs. They are not
 // fleet tools and must not appear in a default listing.
 func TestFunctionKitsAreNotFleetTools(t *testing.T) {
