@@ -70,7 +70,7 @@ func (b *AgentBackend) Serve(w http.ResponseWriter, r *http.Request, body []byte
 	if err := json.Unmarshal(body, &req); err != nil {
 		return b.writeResponse(w, r, http.StatusBadRequest, "application/json", errorBody("decode chat request: "+err.Error()), modify)
 	}
-	prompt, err := RenderPrompt(&req)
+	prompt, err := RenderCompletionPrompt(&req)
 	if err != nil {
 		return b.writeResponse(w, r, http.StatusBadRequest, "application/json", errorBody(err.Error()), modify)
 	}
@@ -86,7 +86,7 @@ func (b *AgentBackend) Serve(w http.ResponseWriter, r *http.Request, body []byte
 	defer b.Pool.Release(worker)
 
 	var deltas []string
-	result, err := worker.Do(r.Context(), prompt, func(event Event) {
+	result, err := worker.DoCompletion(r.Context(), prompt, func(event Event) {
 		if event.Text != "" {
 			deltas = append(deltas, event.Text)
 		}
@@ -214,23 +214,32 @@ func streamBody(id, model string, events []string, finalText, finish string, usa
 			}
 		}
 		remaining = remaining[len(event):]
-		writeSSE(&out, openai.ChatCompletion{
+		writeSSE(&out, streamChunk{
 			ID: id, Object: "chat.completion.chunk", Created: created, Model: model,
 			Choices: []openai.ChatChoice{{Index: 0, Delta: &openai.ChatResponseMessage{Role: roleFor(i), Content: event}}},
 		})
 	}
 	if len(events) == 0 && remaining != "" {
-		writeSSE(&out, openai.ChatCompletion{
+		writeSSE(&out, streamChunk{
 			ID: id, Object: "chat.completion.chunk", Created: created, Model: model,
 			Choices: []openai.ChatChoice{{Index: 0, Delta: &openai.ChatResponseMessage{Role: "assistant", Content: remaining}}},
 		})
 	}
-	writeSSE(&out, openai.ChatCompletion{
+	writeSSE(&out, streamChunk{
 		ID: id, Object: "chat.completion.chunk", Created: created, Model: model,
-		Choices: []openai.ChatChoice{{Index: 0, Delta: &openai.ChatResponseMessage{}, FinishReason: &finish}}, Usage: usage,
+		Choices: []openai.ChatChoice{{Index: 0, Delta: &openai.ChatResponseMessage{}, FinishReason: &finish}}, Usage: &usage,
 	})
 	out.WriteString("data: [DONE]\n\n")
 	return out.Bytes()
+}
+
+type streamChunk struct {
+	ID      string              `json:"id"`
+	Object  string              `json:"object"`
+	Created int64               `json:"created"`
+	Model   string              `json:"model"`
+	Choices []openai.ChatChoice `json:"choices"`
+	Usage   *openai.Usage       `json:"usage,omitempty"`
 }
 
 func roleFor(index int) string {

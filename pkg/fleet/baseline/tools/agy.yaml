@@ -28,6 +28,9 @@ cli:
     events_done:
       field: event
       values: [result]
+    # LIMIT (agy --help, 2026-09-26): print mode has no system-prompt or base-
+    # instructions override. cligw therefore sends its neutral prompt and any
+    # request system/developer messages in an explicit inline System block.
     # DO NOT ADD `--effort {effort}` HERE. agy has an `--effort (low|medium|high)`
     # flag, but it is a SECOND SPELLING of the model id's suffix rather than a
     # second axis, and agy rejects disagreement — measured 2026-08-02:
