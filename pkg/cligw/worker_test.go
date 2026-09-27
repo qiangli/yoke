@@ -198,10 +198,21 @@ func TestMeasuredWarmArgv(t *testing.T) {
 		{
 			name: "codex",
 			w:    &Worker{cwd: "/tmp/cligw-test", mode: WarmStdin, launch: agentlaunch.Launch{Tool: "codex", Args: []string{"exec", "--skip-git-repo-check", "--sandbox", "read-only"}}, tool: fleet.Tool{Name: "codex", CLI: fleet.ToolCLI{Launch: fleet.ToolLaunch{EventsStdout: "--json"}}}},
-			// the bare model: codex's own tools off (Sprint 290 W1)
-			want: []string{"codex", "exec", "-c", `model_instructions_file="/tmp/cligw-test/instructions.md"`,
+			// the bare model: codex's own tools off (Sprint 290 W1), every one
+			// of them (Sprint 317): a tool call is another sampling request,
+			// and turn.completed sums them all.
+			want: append([]string{"codex", "exec", "-c", `model_instructions_file="/tmp/cligw-test/instructions.md"`,
 				"--ephemeral", "--ignore-user-config", "--disable", "shell_tool", "--disable", "apps", "--disable", "browser_use", "--disable", "computer_use",
-				"-c", `web_search="disabled"`, "--json", "--skip-git-repo-check", "-s", "read-only"},
+				"-c", `web_search="disabled"`}, append(codexToolsOffConfig(),
+				"--json", "--skip-git-repo-check", "-s", "read-only")...),
+		},
+		{
+			name: "codex with a catalog",
+			w:    &Worker{cwd: "/tmp/cligw-test", mode: WarmStdin, codexCatalog: "/tmp/cligw-test/models.json", launch: agentlaunch.Launch{Tool: "codex", Args: []string{"exec", "--sandbox", "read-only"}}, tool: fleet.Tool{Name: "codex", CLI: fleet.ToolCLI{Launch: fleet.ToolLaunch{EventsStdout: "--json"}}}},
+			want: append([]string{"codex", "exec", "-c", `model_catalog_json="/tmp/cligw-test/models.json"`, "-c", `model_instructions_file="/tmp/cligw-test/instructions.md"`,
+				"--ephemeral", "--ignore-user-config", "--disable", "shell_tool", "--disable", "apps", "--disable", "browser_use", "--disable", "computer_use",
+				"-c", `web_search="disabled"`}, append(codexToolsOffConfig(),
+				"--json", "-s", "read-only")...),
 		},
 	}
 	for _, tt := range tests {
@@ -320,4 +331,68 @@ func waitFor(t *testing.T, timeout time.Duration, check func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("condition did not become true")
+}
+
+func TestCodexToolsOffConfigTurnsOffEveryRemainingTool(t *testing.T) {
+	// Measured on codex-cli 0.157.1 (Sprint 317): with only shell/apps/browser/
+	// computer off, gpt-5.5 still listed request_user_input, view_image,
+	// get/create/update_goal, apply_patch, image_gen, tool_search and
+	// multi_tool_use.parallel.
+	got := strings.Join(codexToolsOffConfig(), " ")
+	for _, want := range []string{"features.goals=false", "features.image_generation=false", "features.view_image=false",
+		"features.tool_suggest=false", "features.skill_search=false", "features.multi_agent=false", "features.sleep_tool=false",
+		"features.unified_exec=false", "features.plugins=false", "tools.experimental_request_user_input.enabled=false",
+		"include_environment_context=false", "include_permissions_instructions=false"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("codexToolsOffConfig lacks %s: %s", want, got)
+		}
+	}
+	if strings.Contains(got, "--disable") {
+		t.Errorf("an unknown --disable name is fatal on older codex; use -c features.X=false: %s", got)
+	}
+}
+
+func TestWriteCodexCatalogDropsApplyPatch(t *testing.T) {
+	home := t.TempDir()
+	cache := `{"fetched_at":"2026-09-27T00:00:00Z","etag":"x","models":[` +
+		`{"slug":"gpt-5.5","apply_patch_tool_type":"freeform","context_window":272000},` +
+		`{"slug":"gpt-5.6-sol","apply_patch_tool_type":"function"}]}`
+	if err := os.WriteFile(filepath.Join(home, "models_cache.json"), []byte(cache), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEX_HOME", home)
+	dir := t.TempDir()
+	path, err := writeCodexCatalog(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(path) != dir {
+		t.Fatalf("catalog %s is not in the worker dir %s", path, dir)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Models []map[string]any `json:"models"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Models) != 2 {
+		t.Fatalf("models = %v", got.Models)
+	}
+	for _, m := range got.Models {
+		if v, ok := m["apply_patch_tool_type"]; !ok || v != nil {
+			t.Fatalf("%v: apply_patch_tool_type must be present and null", m["slug"])
+		}
+	}
+	if got.Models[0]["context_window"] != float64(272000) {
+		t.Fatalf("other metadata must be kept: %v", got.Models[0])
+	}
+
+	t.Setenv("CODEX_HOME", t.TempDir())
+	if path, err := writeCodexCatalog(t.TempDir()); err != nil || path != "" {
+		t.Fatalf("no cache: path=%q err=%v, want no catalog and no error", path, err)
+	}
 }

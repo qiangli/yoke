@@ -79,6 +79,10 @@ type Worker struct {
 	mode   WarmMode
 	cwd    string
 
+	// codexCatalog is a codex model catalog without apply_patch, written
+	// into cwd by prepareSystemPrompt; empty when codex has no cache to copy.
+	codexCatalog string
+
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	lines  <-chan workerLine
@@ -424,10 +428,13 @@ func (w *Worker) argv(prompt, requestSystem string) []string {
 		// The bare model, as claude's --tools "": no shell, no apps, browser
 		// or computer use, no web search, no user config (MCP servers), no
 		// saved session.
-		args = insertAfter(args, "exec", []string{"--ephemeral", "--ignore-user-config",
+		args = insertAfter(args, "exec", append([]string{"--ephemeral", "--ignore-user-config",
 			"--disable", "shell_tool", "--disable", "apps", "--disable", "browser_use", "--disable", "computer_use",
-			"-c", `web_search="disabled"`})
+			"-c", `web_search="disabled"`}, codexToolsOffConfig()...))
 		args = insertAfter(args, "exec", []string{"-c", "model_instructions_file=" + strconv.Quote(w.codexInstructionsPath())})
+		if w.codexCatalog != "" {
+			args = insertAfter(args, "exec", []string{"-c", "model_catalog_json=" + strconv.Quote(w.codexCatalog)})
+		}
 	default:
 		args = insertBeforePromptFlag(args, events)
 	}
@@ -453,12 +460,81 @@ func (w *Worker) codexInstructionsPath() string {
 	return filepath.Join(w.cwd, "instructions.md")
 }
 
+// codexToolsOffConfig turns off the tools codex exec still offers once shell,
+// apps, browser and computer use are disabled. Every tool call — even one the
+// read-only sandbox rejects — is another sampling request that resends the
+// whole prompt, and turn.completed reports the thread's running total, so one
+// door call was billed as N model turns (Sprint 317: 173k-836k prompt tokens
+// in multiples of the ~6.7k base). Written as -c keys, not --disable: an
+// unknown --disable name is fatal on an older codex, an unknown key is a
+// warning. apply_patch has no switch; see writeCodexCatalog.
+func codexToolsOffConfig() []string {
+	var args []string
+	for _, feature := range []string{"goals", "image_generation", "view_image", "tool_suggest", "skill_search",
+		"multi_agent", "sleep_tool", "unified_exec", "plugins"} {
+		args = append(args, "-c", "features."+feature+"=false")
+	}
+	return append(args,
+		"-c", "tools.experimental_request_user_input.enabled=false",
+		// The sandbox and cwd descriptions invite file edits the bare model
+		// cannot make.
+		"-c", "include_environment_context=false",
+		"-c", "include_permissions_instructions=false",
+		"-c", "include_apps_instructions=false",
+		"-c", "include_collaboration_mode_instructions=false")
+}
+
+// writeCodexCatalog copies codex's own model cache ($CODEX_HOME, default
+// ~/.codex, models_cache.json) into dir with apply_patch_tool_type cleared on
+// every model: codex registers apply_patch whenever the model metadata names
+// a patch tool type, and model_catalog_json is the only override. No cache
+// means no catalog (codex keeps apply_patch), not an error.
+func writeCodexCatalog(dir string) (string, error) {
+	home := os.Getenv("CODEX_HOME")
+	if home == "" {
+		userHome, err := os.UserHomeDir()
+		if err != nil {
+			return "", nil
+		}
+		home = filepath.Join(userHome, ".codex")
+	}
+	raw, err := os.ReadFile(filepath.Join(home, "models_cache.json"))
+	if err != nil {
+		return "", nil
+	}
+	var cache struct {
+		Models []map[string]any `json:"models"`
+	}
+	if json.Unmarshal(raw, &cache) != nil || len(cache.Models) == 0 {
+		return "", nil
+	}
+	for _, m := range cache.Models {
+		m["apply_patch_tool_type"] = nil
+	}
+	out, err := json.Marshal(map[string]any{"models": cache.Models})
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "models.json")
+	if err := os.WriteFile(path, out, 0o600); err != nil {
+		return "", fmt.Errorf("cligw: write codex model catalog: %w", err)
+	}
+	return path, nil
+}
+
 func (w *Worker) prepareSystemPrompt(request string) error {
 	if w.tool.Name != "codex" {
 		return nil
 	}
 	if err := os.WriteFile(w.codexInstructionsPath(), []byte(systemPrompt(request)+"\n"), 0o600); err != nil {
 		return fmt.Errorf("cligw: write codex system prompt: %w", err)
+	}
+	if w.codexCatalog == "" {
+		catalog, err := writeCodexCatalog(w.cwd)
+		if err != nil {
+			return err
+		}
+		w.codexCatalog = catalog
 	}
 	return nil
 }
