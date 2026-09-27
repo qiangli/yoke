@@ -566,6 +566,14 @@ func usageFromEvent(raw []byte) Usage {
 			OutputTokens:      number(m, "output_tokens", "completion_tokens", "output"),
 			TotalTokens:       number(m, "total_tokens", "total"),
 		}
+		// Anthropic counts cache reads and cache writes apart from
+		// input_tokens; OpenAI's input_tokens already includes its cached
+		// part. InputTokens is always the whole prompt, so prompt_tokens means
+		// the same for every seat (cost per solve compares across vendors).
+		if _, anthropic := m["cache_read_input_tokens"]; anthropic || m["cache_creation_input_tokens"] != nil {
+			u.InputTokens += number(m, "cache_read_input_tokens") + number(m, "cache_creation_input_tokens")
+			u.TotalTokens = 0
+		}
 		if u.TotalTokens == 0 {
 			u.TotalTokens = u.InputTokens + u.OutputTokens
 		}
