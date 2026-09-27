@@ -18,6 +18,7 @@ import (
 
 	"github.com/qiangli/yoke/pkg/agentlaunch"
 	"github.com/qiangli/yoke/pkg/fleet"
+	"github.com/qiangli/yoke/pkg/secrets"
 )
 
 // WarmMode is the transport used to deliver a prompt to a pre-started CLI.
@@ -351,7 +352,7 @@ func (w *Worker) startLocked(argv []string) error {
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = w.cwd
-	cmd.Env = agentlaunch.PrincipalEnv(os.Environ(), w.launch)
+	cmd.Env = workerEnv(os.Environ(), w.launch)
 	prepareProcessGroup(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -760,4 +761,14 @@ func (b *lockedBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.b.String()
+}
+
+// workerEnv is a CLI worker's environment: the credential firewall first (the
+// door's own environment may hold vendor API keys — a seat must run on its
+// CLI's own login, the subscription, never bill a key it happened to
+// inherit), then only the credentials the launch contract names, then the
+// principal. The same order weave and chat use for the same CLIs.
+func workerEnv(parent []string, l agentlaunch.Launch) []string {
+	env := secrets.PreserveEnvNames(secrets.ScrubAgentEnv(parent), parent, l.PreserveEnv)
+	return agentlaunch.PrincipalEnv(env, l)
 }
