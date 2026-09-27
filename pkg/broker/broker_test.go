@@ -712,3 +712,22 @@ func TestParseStickyHeader(t *testing.T) {
 		t.Fatal("digest depends on number spelling")
 	}
 }
+
+// A binding whose model left the engine is refused with 503, never served by
+// another model.
+func TestStickyUnavailableIdentityIsRefusedNotRerouted(t *testing.T) {
+	h := newHarness(t, nil)
+	h.do("POST", "/v1/sticky", StickySpec{Key: "gone", Model: "qwen3:8b"}, nil)
+	h.eng.mu.Lock()
+	delete(h.eng.models, "qwen3:8b")
+	h.eng.mu.Unlock()
+	h.b.refreshTags(context.Background(), true)
+	before := h.eng.body()
+	resp, out := h.do("POST", "/sticky/gone/v1/chat/completions", chat("llama3.2:3b"), nil)
+	if resp.StatusCode != 503 || resp.Header.Get("Retry-After") == "" {
+		t.Fatalf("got %d %v", resp.StatusCode, out)
+	}
+	if after := h.eng.body(); after != nil && before == nil {
+		t.Fatalf("the engine served something: %v", after)
+	}
+}

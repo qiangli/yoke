@@ -505,6 +505,8 @@ func (b *Broker) serveLocal(w http.ResponseWriter, r *http.Request, ri *reqInfo,
 
 	release, wait, err := b.device.Acquire(ctx, ri.class, ri.principal)
 	w.Header().Set(WaitHeader, strconv.FormatInt(wait.Milliseconds(), 10))
+	trace.SpanFromContext(ctx).SetAttributes(attribute.Int64("bashy.queue_wait_ms", wait.Milliseconds()),
+		attribute.String("bashy.model", m.Name), attribute.String("bashy.model_digest", m.Digest))
 	if err != nil {
 		if errors.Is(err, ErrQueueFull) {
 			b.finish(ri, http.StatusServiceUnavailable, wait, err.Error())
