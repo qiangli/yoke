@@ -33,6 +33,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -2186,5 +2189,54 @@ func TestDOMNeighborhoodSection(t *testing.T) {
 	}
 	if hidden != "true" {
 		t.Errorf("the Neighborhood switch did not hide the section (%s)", hidden)
+	}
+}
+
+// A registered app (`bashy app add`) is a real launcher tile: its label and
+// glyph render, it is ready while its server is up, and clicking it lands on
+// the proxied app — not merely an entry in /api/apps.
+func TestDOMRegisteredAppTile(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "<!doctype html><title>up</title><p id=up>upstream "+r.URL.Path+"</p>")
+	}))
+	t.Cleanup(up.Close)
+	_, port, _ := net.SplitHostPort(up.Listener.Addr().String())
+	writeAppRecord(t, "pyhttp", "name: pyhttp\nlabel: Py HTTP\nicon: \"\U0001F40D\"\nport: "+port+"\n")
+
+	base, ctx, errs := domEnv(t, Options{Ctx: context.Background()})
+	var tile, landed string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/"),
+		// Wait for the tile, not a fixed sleep: the first paint waits on every
+		// launcher ride-along, and /api/neighborhood can take seconds.
+		chromedp.WaitVisible(`a.tile[href$="pyhttp/"]`, chromedp.ByQuery),
+		chromedp.Evaluate(`(()=>{const a=[...document.querySelectorAll("a.tile")].find(e=>e.querySelector(".label")?.textContent==="Py HTTP");
+			if(!a) return "NONE";
+			return JSON.stringify({href:new URL(a.href).pathname, glyph:a.querySelector(".icon").textContent,
+				ready:!!a.querySelector(".badge.ready")});})()`, &tile),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "launcher", errs())
+	if tile == "NONE" {
+		t.Fatal("no ready tile labelled \"Py HTTP\" on the launcher")
+	}
+	var got struct {
+		Href, Glyph string
+		Ready       bool
+	}
+	_ = json.Unmarshal([]byte(tile), &got)
+	if got.Href != "/pyhttp/" || got.Glyph != "\U0001F40D" || !got.Ready {
+		t.Errorf("tile = %s", tile)
+	}
+	if err := chromedp.Run(ctx,
+		chromedp.Click(`a.tile[href$="pyhttp/"]`, chromedp.ByQuery),
+		chromedp.WaitVisible(`#up`, chromedp.ByQuery),
+		chromedp.Text(`#up`, &landed, chromedp.ByQuery),
+	); err != nil {
+		t.Fatalf("click through: %v", err)
+	}
+	if landed != "upstream /" {
+		t.Errorf("clicking the tile landed on %q", landed)
 	}
 }
