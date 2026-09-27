@@ -76,6 +76,7 @@ type Pool struct {
 	failStreak uint
 	nextSpawn  time.Time
 	closed     bool
+	closeDone  chan struct{} // closed once the first Close has retired everything
 	wg         sync.WaitGroup
 }
 
@@ -110,7 +111,7 @@ func NewPool(ctx context.Context, agent string, cfg PoolConfig) *Pool {
 		cfg.StartServers = cfg.MaxWorkers
 	}
 	pctx, cancel := context.WithCancel(ctx)
-	p := &Pool{agent: agent, cfg: cfg, ctx: pctx, stop: cancel, busy: make(map[*Worker]struct{})}
+	p := &Pool{agent: agent, cfg: cfg, ctx: pctx, stop: cancel, busy: make(map[*Worker]struct{}), closeDone: make(chan struct{})}
 
 	p.mu.Lock()
 	for i := 0; i < cfg.StartServers; i++ {
@@ -257,12 +258,17 @@ func (p *Pool) SetMaxSpare(n int) {
 }
 
 // Close kills idle workers, cancels spawn backoff, and wakes queued callers.
+// Every caller returns only after the first Close has retired every worker
+// and its directory: a cancelled parent context starts Close from the pool's
+// watcher, and the door exits as soon as its own Close returns.
 func (p *Pool) Close() error {
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
+		<-p.closeDone
 		return nil
 	}
+	defer close(p.closeDone)
 	p.closed = true
 	p.stop()
 	idle := p.idle

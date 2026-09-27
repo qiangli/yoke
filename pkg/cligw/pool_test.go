@@ -3,6 +3,7 @@ package cligw
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -59,4 +60,42 @@ func TestPoolIdleTTLRetiresOldestAboveMinSpare(t *testing.T) {
 	defer pool.Close()
 	waitFor(t, 3*time.Second, func() bool { return pool.Stats().Idle == 1 })
 	waitFor(t, 3*time.Second, func() bool { return pool.Stats().Idle == 0 })
+}
+
+// A door stop cancels the server context before it closes each pool, so the
+// pool's own context watcher usually starts Close first. The caller's Close
+// must still return only once every worker is dead and its directory gone:
+// the door exits right after it (Sprint 317, todo 369bc721).
+func TestPoolCloseAfterContextCancelWaitsForWorkerCleanup(t *testing.T) {
+	installFakeCatalog(t, "claude", WarmStdinStreamJSON, "warm")
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool := NewPool(ctx, "test-agent", PoolConfig{
+		StartServers: 3, MinSpare: 3, MaxSpare: 3, MaxWorkers: 3,
+	})
+	waitFor(t, 3*time.Second, func() bool { return pool.Stats().Idle == 3 })
+	cancel()
+	// Spin, not poll: Close must be entered while the watcher is still
+	// killing workers.
+	for deadline := time.Now().Add(3 * time.Second); ; {
+		pool.mu.Lock()
+		closed := pool.closed
+		pool.mu.Unlock()
+		if closed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("context cancel did not close the pool")
+		}
+	}
+	_ = pool.Close()
+	left, err := filepath.Glob(filepath.Join(tmp, "cligw-worker-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 0 {
+		t.Fatalf("Close returned with %d worker dirs left: %v", len(left), left)
+	}
 }
