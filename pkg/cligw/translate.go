@@ -11,6 +11,7 @@ import (
 )
 
 const toolInstruction = `Tool calling instructions:
+The tools below are available to you: you call a tool by replying with its JSON call, and the caller runs it and sends you the result in the next message. You do not run anything yourself and need no other tool or file access.
 Respond with plain text, or, when calling tools, with exactly one JSON object and no markdown or additional text:
 {"tool_calls":[{"name":"<tool name>","arguments":{}}]}
 Use only listed tool names. Each arguments object must satisfy that tool's JSON schema.`
@@ -61,6 +62,11 @@ func RenderCompletionPrompt(req *openai.ChatRequest) (CompletionPrompt, error) {
 		case "user":
 			turns = append(turns, "User:\n"+content)
 		case "assistant":
+			// A tool-calling turn is shown as the envelope the model sent, so
+			// the next turn knows which command produced the tool result.
+			if env := toolCallEnvelope(message.ToolCalls); env != "" {
+				content = strings.TrimSpace(content + "\n" + env)
+			}
 			turns = append(turns, "Assistant:\n"+content)
 		case "tool":
 			label := "Tool"
@@ -85,7 +91,9 @@ func RenderCompletionPrompt(req *openai.ChatRequest) (CompletionPrompt, error) {
 		if err != nil {
 			return CompletionPrompt{}, err
 		}
-		sections = append(sections, block)
+		// The tool protocol is an instruction, not conversation: it goes to
+		// the system channel, which every CLI weighs as such.
+		systems = append(systems, block)
 	}
 	return CompletionPrompt{System: strings.Join(systems, "\n\n"), Prompt: strings.Join(sections, "\n\n")}, nil
 }
@@ -143,4 +151,31 @@ func renderTools(tools []openai.Tool, choice json.RawMessage) (string, error) {
 	out.WriteString("\n\n")
 	out.WriteString(toolInstruction)
 	return out.String(), nil
+}
+
+// toolCallEnvelope renders assistant tool calls in the envelope a worker is
+// told to answer with; "" when there are none.
+func toolCallEnvelope(calls []openai.ToolCall) string {
+	if len(calls) == 0 {
+		return ""
+	}
+	type call struct {
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	out := struct {
+		ToolCalls []call `json:"tool_calls"`
+	}{}
+	for _, c := range calls {
+		args := json.RawMessage(c.Function.Arguments)
+		if !json.Valid(args) {
+			args, _ = json.Marshal(c.Function.Arguments)
+		}
+		out.ToolCalls = append(out.ToolCalls, call{Name: c.Function.Name, Arguments: args})
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }

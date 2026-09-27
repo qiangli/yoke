@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -101,6 +102,9 @@ func (b *AgentBackend) Serve(w http.ResponseWriter, r *http.Request, body []byte
 	}
 
 	text, stopped := applyStops(result.Text, rawJSON(req.Stop))
+	if len(req.Tools) > 0 {
+		text = toolEnvelopeTail(text)
+	}
 	finish := "stop"
 	if stopped {
 		finish = "stop"
@@ -260,3 +264,24 @@ func writeSSE(out *bytes.Buffer, value any) {
 }
 
 var _ gateway.Backend = (*AgentBackend)(nil)
+
+var toolEnvelopeStart = regexp.MustCompile(`\{\s*"tool_calls"\s*:`)
+
+// toolEnvelopeTail keeps only the tool-call envelope when a CLI answered a
+// tool call with text around it (a sentence before, a markdown fence, or
+// more text after): the worker was told to reply with the bare envelope, and
+// the gateway turns exactly that into structured tool_calls. The first
+// well-formed envelope wins; anything else is returned unchanged.
+func toolEnvelopeTail(text string) string {
+	for _, at := range toolEnvelopeStart.FindAllStringIndex(text, -1) {
+		dec := json.NewDecoder(strings.NewReader(text[at[0]:]))
+		var env struct {
+			ToolCalls []json.RawMessage `json:"tool_calls"`
+		}
+		if dec.Decode(&env) != nil || len(env.ToolCalls) == 0 {
+			continue
+		}
+		return strings.TrimSpace(text[at[0] : at[0]+int(dec.InputOffset())])
+	}
+	return text
+}

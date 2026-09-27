@@ -198,7 +198,10 @@ func TestMeasuredWarmArgv(t *testing.T) {
 		{
 			name: "codex",
 			w:    &Worker{cwd: "/tmp/cligw-test", mode: WarmStdin, launch: agentlaunch.Launch{Tool: "codex", Args: []string{"exec", "--skip-git-repo-check", "--sandbox", "read-only"}}, tool: fleet.Tool{Name: "codex", CLI: fleet.ToolCLI{Launch: fleet.ToolLaunch{EventsStdout: "--json"}}}},
-			want: []string{"codex", "exec", "-c", `model_instructions_file="/tmp/cligw-test/instructions.md"`, "--json", "--skip-git-repo-check", "-s", "read-only"},
+			// the bare model: codex's own tools off (Sprint 290 W1)
+			want: []string{"codex", "exec", "-c", `model_instructions_file="/tmp/cligw-test/instructions.md"`,
+				"--ephemeral", "--ignore-user-config", "--disable", "shell_tool", "--disable", "apps", "--disable", "browser_use", "--disable", "computer_use",
+				"-c", `web_search="disabled"`, "--json", "--skip-git-repo-check", "-s", "read-only"},
 		},
 	}
 	for _, tt := range tests {

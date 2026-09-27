@@ -421,6 +421,12 @@ func (w *Worker) argv(prompt, requestSystem string) []string {
 	case "codex":
 		args = shortSandbox(args)
 		args = insertAfter(args, "exec", events)
+		// The bare model, as claude's --tools "": no shell, no apps, browser
+		// or computer use, no web search, no user config (MCP servers), no
+		// saved session.
+		args = insertAfter(args, "exec", []string{"--ephemeral", "--ignore-user-config",
+			"--disable", "shell_tool", "--disable", "apps", "--disable", "browser_use", "--disable", "computer_use",
+			"-c", `web_search="disabled"`})
 		args = insertAfter(args, "exec", []string{"-c", "model_instructions_file=" + strconv.Quote(w.codexInstructionsPath())})
 	default:
 		args = insertBeforePromptFlag(args, events)

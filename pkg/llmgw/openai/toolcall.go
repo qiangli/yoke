@@ -33,6 +33,10 @@ import (
 func ApplyToolCallExtractor(resp *http.Response) io.ReadCloser {
 	contentType := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Type")))
 	if strings.HasPrefix(contentType, "text/event-stream") {
+		// A rewritten stream has another length: the backend's
+		// Content-Length no longer frames it.
+		resp.ContentLength = -1
+		resp.Header.Del("Content-Length")
 		return NewSSEToolCallTransformer(resp.Body)
 	}
 	// Buffer + rewrite the JSON body. Reading the full body is fine
