@@ -430,14 +430,17 @@ func TestDOMLongPressMenuSuppressedOnTiles(t *testing.T) {
 		chromedp.Evaluate(`String(matchMedia("(hover: none)").matches)`, &hoverNone),
 
 		// A touch long-press on a tile: the menu must be suppressed.
-		chromedp.Evaluate(`(()=>{const w=document.querySelector(".tile-wrap");
+		// An APP tile — the one that carries a star. Cloud and Neighborhood
+		// cards share .tile-wrap but have no star to reveal, so they keep
+		// the menu.
+		chromedp.Evaluate(`(()=>{const w=document.querySelector(".tile-wrap:has(.star)");
 			if(!w) return "NO TILE";
 			const ev=new PointerEvent("contextmenu",{bubbles:true,cancelable:true,pointerType:"touch"});
 			w.dispatchEvent(ev); return String(ev.defaultPrevented);})()`, &onTileTouch),
 
 		// A MOUSE right-click keeps its menu: a desktop user has no long press
 		// and must not lose copy-link or open-in-new-tab.
-		chromedp.Evaluate(`(()=>{const w=document.querySelector(".tile-wrap");
+		chromedp.Evaluate(`(()=>{const w=document.querySelector(".tile-wrap:has(.star)");
 			const ev=new PointerEvent("contextmenu",{bubbles:true,cancelable:true,pointerType:"mouse"});
 			w.dispatchEvent(ev); return String(ev.defaultPrevented);})()`, &onTileMouse),
 

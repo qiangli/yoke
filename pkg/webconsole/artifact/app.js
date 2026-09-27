@@ -1106,8 +1106,12 @@ document.getElementById("theme-btn").addEventListener("click", () => {
 });
 
 async function refresh() {
+  // The slow ride-alongs (api/cloud, api/neighborhood) never gate the grid:
+  // neighborhood discovery can take seconds on a LAN, and the tiles must not
+  // wait for it. Each fills its own section when it lands.
+  refreshSlow();
   try {
-    const [a, s, l, i, c, n] = await Promise.all([
+    const [a, s, l, i] = await Promise.all([
       fetch(url("api/apps")).then((r) => r.json()),
       fetch(url("api/session")).then((r) => r.json()).catch(() => null),
       fetch(url("api/look")).then((r) => r.json()).catch(() => null),
@@ -1116,13 +1120,9 @@ async function refresh() {
       // this, and the right answer to that is a tile with no badge — not a
       // broken start page.
       fetch(url("api/inbox?summary=1")).then((r) => (r.ok ? r.json() : null)).catch(() => null),
-      fetch(url("api/cloud")).then((r) => (r.ok ? r.json() : null)).catch(() => null),
-      fetch(url("api/neighborhood")).then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     apps = a.apps || [];
     inboxCounts = i && !i.error ? i : null;
-    cloud = c;
-    hood = n;
     // The look ride-along fails soft: no answer leaves the mode at the
     // same-tab default, which is exactly the server's own fallback.
     if (l && l.open_apps) openApps = l.open_apps === "new-tab" ? "new-tab" : "same-tab";
@@ -1142,6 +1142,24 @@ async function refresh() {
   // Only the home grid reflects liveness; repainting under a live terminal
   // would tear down the session every few seconds.
   render();
+}
+
+// refreshSlow fetches the Cloud and Neighborhood sections off the grid's
+// critical path. One request of each kind is in flight at a time, so a slow
+// discovery never piles up behind the 5-second refresh.
+const slowInFlight = {};
+function refreshSlow() {
+  const load = (key, path, set) => {
+    if (slowInFlight[key]) return;
+    slowInFlight[key] = true;
+    fetch(url(path))
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null)
+      .then((v) => { set(v); render(); })
+      .finally(() => { slowInFlight[key] = false; });
+  };
+  load("cloud", "api/cloud", (v) => { cloud = v; });
+  load("hood", "api/neighborhood", (v) => { hood = v; });
 }
 
 applyChrome();
