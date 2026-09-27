@@ -1131,6 +1131,10 @@ func init() {
 	addVerb("helm", staged(StageDeploy, managed(GroupClusterCloud, TierCluster, CapNeedsNetwork)))
 	addVerb("dks", Entry{Stage: StageDeploy, Group: GroupClusterCloud, Tier: TierCluster,
 		Caps: []string{CapDaemon, CapNeedsNetwork, CapSpawnsProcesses}})
+	// ephemeral-host rents a cloud machine with a mandatory deadline and budget,
+	// records it in a ledger, and destroys only what the ledger holds (Sprint 311).
+	addVerb("ephemeral-host", Entry{Stage: StageCross, Group: GroupClusterCloud, Tier: TierCloud,
+		Caps: []string{CapJSON, CapDryRun, CapNeedsNetwork}})
 
 	// platform
 	// commands is the lister AND, since Sprint 179, the CRUD front door of the
@@ -1445,6 +1449,12 @@ func init() {
 	eff(EffNet, "posix-providers")
 	eff(EffExec, "posix-providers")
 	eff(EffWrite, "posix-providers")
+	// ephemeral-host WRITES its ledger, reaches the provider API with a vault
+	// token, and every host it rents is metered until destroyed.
+	eff(EffWrite, "ephemeral-host")
+	eff(EffNet, "ephemeral-host")
+	eff(EffCred, "ephemeral-host")
+	eff(EffSpend, "ephemeral-host")
 	eff(EffPersist, "posix-providers")
 	eff(EffRead, "posix-providers")
 	// posix-gate reads the provider cache/provenance and staged PATH entries,
