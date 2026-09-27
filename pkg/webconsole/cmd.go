@@ -21,6 +21,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/qiangli/yoke/pkg/coopauth"
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/hostauth"
 	"github.com/qiangli/yoke/pkg/websession"
 )
@@ -33,7 +34,9 @@ func NewAppsCmd() *cobra.Command {
 		Long: "app serves bashy's Apps — its surfaces in a browser at one address.\n\n" +
 			"It is ONE launcher with the apps deep-linked beneath it, not one server per\n" +
 			"verb: one nav, one auth, one design system. `bashy commands --view web` lists\n" +
-			"the same surfaces in the terminal.",
+			"the same surfaces in the terminal.\n\n" +
+			"`bashy app add NAME --port N` registers any local web server as a tile of\n" +
+			"its own (show · set · rm · edit manage it); bashy ships no catalog of them.",
 		SilenceUsage: true,
 		// The caller (bashy's dispatch arm) prints the error. Without this cobra
 		// prints its own copy first and every failure is reported twice.
@@ -41,6 +44,9 @@ func NewAppsCmd() *cobra.Command {
 	}
 	cmd.AddCommand(newServeCmd(), newListCmd(), newServiceCmd(),
 		newPairCmd(), newDevicesCmd(), newRevokeCmd())
+	// Registered apps: the operator's own tiles (add · show · set · rm · edit
+	// · schema), persisted in the fleet ring beside the stock panels.
+	cmd.AddCommand(fleet.NewAppCmds(fleet.WithAppValidate(ValidateRegisteredApp))...)
 	// Bare `bashy app` serves — the common case should not need a subcommand.
 	cmd.RunE = func(c *cobra.Command, args []string) error {
 		serve, _, err := c.Find([]string{"serve"})

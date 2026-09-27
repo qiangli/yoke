@@ -20,6 +20,9 @@ const (
 	// the sixth fleet noun and the only one with no embedded ring — bashy
 	// ships the mechanism, never a catalog of commands.
 	KindCommand = "command"
+	// KindApp is the registered-app noun (`bashy app add`): a local web
+	// server tiled by the Apps console. Like commands, no embedded ring.
+	KindApp = "app"
 )
 
 // Tool kind discriminators. The cloudbox Tool registry is shared between

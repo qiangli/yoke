@@ -25,6 +25,7 @@ type Config struct {
 	contextCloner ContextCloner
 	reservedName  ReservedName
 	commandProbe  CommandProbe
+	appValidate   AppValidator
 }
 
 // ReservedName reports whether a command name is already taken by something
@@ -179,9 +180,9 @@ func (c *Catalog) sources(noun string) []assetring.Source {
 	}
 	// The seeded roster (models + agents) can be switched off; the tool
 	// launch contracts cannot — see SeedsEnv.
-	// Registered commands have NO embedded ring by design (rod, not fish):
-	// bashy ships the mechanism and never a catalog of commands.
-	seeded := (noun == dirTools || !seedsOff()) && noun != dirCommands
+	// Registered commands and apps have NO embedded ring by design (rod, not
+	// fish): bashy ships the mechanism and never a catalog of them.
+	seeded := (noun == dirTools || !seedsOff()) && noun != dirCommands && noun != dirApps
 	if sub, err := fs.Sub(base, baselineRoot+"/"+noun); err == nil && seeded {
 		out = append(out, assetring.FileFS(sub, assetring.RingEmbedded, ext))
 	}

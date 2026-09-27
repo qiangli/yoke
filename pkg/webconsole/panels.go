@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -103,10 +104,23 @@ func builtinPanels() []Panel {
 	return []Panel{term, files}
 }
 
-// Discover returns the tile list: the console's own panels, plus every verb that
-// declares an atlas.WebSurface. Later sources shadow earlier ones by name, which
-// is the assetring precedence order.
+// Discover returns the tile list: the console's own panels, every verb that
+// declares an atlas.WebSurface, then every registered app (`bashy app add`).
+// A registered app never shadows a stock panel: a colliding one is reported
+// and skipped.
 func Discover() []Panel {
+	panels := stockPanels()
+	reg, errs := discoverRegistered(TakenMounts(panels))
+	for _, err := range errs {
+		slog.Warn("apps: skipping registered app", "err", err)
+	}
+	return append(panels, reg...)
+}
+
+// stockPanels is what bashy ships: the console's own panels plus the atlas
+// surfaces. Later sources shadow earlier ones by name, which is the assetring
+// precedence order.
+func stockPanels() []Panel {
 	out := map[string]Panel{}
 	order := []string{}
 	add := func(p Panel) {
