@@ -393,8 +393,20 @@ func (c *Catalog) Agent(name string) (Agent, bool) {
 				matches = append(matches, a)
 			}
 		}
-		if len(matches) > 0 {
+		if len(matches) == 1 {
 			return unique(matches)
+		}
+		// Several identities share the binding (seat clones, managers). The
+		// binding still names ONE agent: the canonical <tool>-<model> one,
+		// whose name is the binding itself; the others stay reachable by
+		// their own names. No canonical agent -> ambiguous, never a guess.
+		for _, a := range matches {
+			if strings.EqualFold(a.Name, tool+"-"+model) {
+				return unique([]Agent{a})
+			}
+		}
+		if len(matches) > 0 {
+			return Agent{}, false
 		}
 	}
 	// Case-insensitive fallback, exact match having failed: a nickname is a
