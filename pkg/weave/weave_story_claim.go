@@ -157,7 +157,7 @@ func runSprintStoryClaim(cmd *cobra.Command, id int64, ref, as, repo string, for
 		if err != nil {
 			return "", err
 		}
-		if it.Status == todopkg.StatusDone || it.Status == issue.StatusClosed {
+		if todopkg.IsClosed(it.Status) {
 			return "", fmt.Errorf("story %s is already closed", it.ID)
 		}
 		if held := strings.TrimSpace(it.Assignee); held != "" && !strings.EqualFold(held, who) && !force {
@@ -403,7 +403,7 @@ func sprintStoryClosureAudit(s *weaveStory) error {
 			if it.Sprint != s.ID {
 				continue
 			}
-			if it.Status != todopkg.StatusDone && it.Status != issue.StatusClosed {
+			if !todopkg.IsClosed(it.Status) {
 				return fmt.Errorf("sprint #%d cannot end — story %s is still %s; close it or move it to another sprint", s.ID, it.ID, it.Status)
 			}
 		}

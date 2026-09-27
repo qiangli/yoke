@@ -790,7 +790,7 @@ func runWeaveStoryShow(cmd *cobra.Command, id int64, flags *weaveOutputFlags, li
 	if mode == weavecli.OutputJSON {
 		progress := make([]map[string]any, 0, len(s.Goal))
 		for _, g := range s.Goal {
-			progress = append(progress, map[string]any{"id": g.ID, "checked": sprintGoalDone(g), "dangling": sprintGoalDangling(g)})
+			progress = append(progress, map[string]any{"id": g.ID, "checked": sprintGoalDone(g), "wontfix": sprintGoalWontfix(g), "dangling": sprintGoalDangling(g)})
 		}
 		next, nerr := nextSprintStory(s)
 		if nerr != nil {

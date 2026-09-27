@@ -36,7 +36,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/qiangli/yoke/pkg/issue"
 	todopkg "github.com/qiangli/yoke/pkg/todo"
 )
 
@@ -72,8 +71,7 @@ func sameSprintStoryRef(a, b sprintStoryRef) bool {
 
 // sprintOpenStory reports whether a story still needs work.
 func sprintOpenStory(st sprintStoryState) bool {
-	return st.Status != todopkg.StatusDone &&
-		st.Status != issue.StatusClosed &&
+	return !todopkg.IsClosed(st.Status) &&
 		st.Status != todopkg.StatusBlocked
 }
 

@@ -45,9 +45,19 @@ const (
 	StatusDoing    = "doing"    // in progress by ME (the steward/human works it directly)
 	StatusBlocked  = "blocked"  // waiting on something else
 	StatusDone     = "done"     // completed
+	StatusWontfix  = "wontfix"  // closed by decision, nothing delivered
 )
 
-var statuses = []string{StatusTodo, StatusAssigned, StatusDoing, StatusBlocked, StatusDone}
+var statuses = []string{StatusTodo, StatusAssigned, StatusDoing, StatusBlocked, StatusDone, StatusWontfix}
+
+// IsClosed reports whether a status ends an item's life: done (delivered),
+// wontfix (closed by decision, nothing delivered) or the issue register's
+// closed. Every "is it still open" check goes through here, so a wontfix
+// item closes a sprint story, a goal item and a list exactly like done —
+// without claiming a delivery.
+func IsClosed(status string) bool {
+	return status == StatusDone || status == StatusWontfix || status == issue.StatusClosed
+}
 
 var todoAgentCatalog = func() *fleet.Catalog { return fleet.New() }
 
@@ -327,7 +337,7 @@ func SetStatus(st *issue.Store, ref, status string) (*issue.Issue, error) {
 		}
 	} else {
 		it.Status = status
-		if status == StatusDone {
+		if IsClosed(status) {
 			now := time.Now().UTC()
 			it.Closed = &now
 		} else {
@@ -349,10 +359,10 @@ func Remove(st *issue.Store, ref string) (*issue.Issue, error) {
 	return it, st.Remove(it)
 }
 
-// IsOverdue reports whether an item's due date is in the past. Done items are
-// never overdue, and a nil due date is never overdue.
+// IsOverdue reports whether an item's due date is in the past. Closed items
+// are never overdue, and a nil due date is never overdue.
 func IsOverdue(it *issue.Issue) bool {
-	if it.Status == StatusDone || it.Due == nil {
+	if IsClosed(it.Status) || it.Due == nil {
 		return false
 	}
 	return it.Due.Before(time.Now().UTC())

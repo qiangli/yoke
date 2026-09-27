@@ -257,11 +257,26 @@ func sprintGoalDone(g sprintGoalItem) bool {
 	}
 	for _, ref := range g.Stories {
 		story := resolveSprintStory(ref)
-		if story.Missing || (story.Status != todopkg.StatusDone && story.Status != issue.StatusClosed) {
+		if story.Missing || (!todopkg.IsClosed(story.Status)) {
 			return false
 		}
 	}
 	return !g.GateRequired || strings.TrimSpace(g.Evidence) != ""
+}
+
+// sprintGoalWontfix reports whether a goal item was closed by decision: it
+// has stories and every one of them is wontfix. The item counts as closed
+// (sprintGoalDone), but the checklist must not show it as delivered.
+func sprintGoalWontfix(g sprintGoalItem) bool {
+	if len(g.Stories) == 0 {
+		return false
+	}
+	for _, ref := range g.Stories {
+		if resolveSprintStory(ref).Status != todopkg.StatusWontfix {
+			return false
+		}
+	}
+	return true
 }
 
 func sprintGoalDangling(g sprintGoalItem) []string {
@@ -290,7 +305,7 @@ func nextSprintStory(s *weaveStory) (*sprintStoryState, error) {
 		return nil, err
 	}
 	for i := range stories {
-		if stories[i].Status != todopkg.StatusDone && stories[i].Status != issue.StatusClosed && stories[i].Status != todopkg.StatusBlocked {
+		if !todopkg.IsClosed(stories[i].Status) && stories[i].Status != todopkg.StatusBlocked {
 			return &stories[i], nil
 		}
 	}
@@ -309,15 +324,18 @@ func renderSprintExecution(w io.Writer, s *weaveStory) {
 	if len(s.Goal) > 0 {
 		fmt.Fprintln(w, "  ── goal checklist (derived from story closure + evidence) ──")
 		for _, g := range s.Goal {
-			mark := " "
+			mark, note := " ", ""
 			if sprintGoalDone(g) {
 				mark = "x"
+				if sprintGoalWontfix(g) {
+					mark, note = "-", " (won't do)"
+				}
 			}
 			warning := ""
 			if dangling := sprintGoalDangling(g); len(dangling) > 0 {
 				warning = "  WARNING dangling: " + strings.Join(dangling, ", ")
 			}
-			fmt.Fprintf(w, "  [%s] %s — %s%s\n", mark, g.ID, g.Text, warning)
+			fmt.Fprintf(w, "  [%s] %s — %s%s%s\n", mark, g.ID, g.Text, note, warning)
 		}
 	}
 }

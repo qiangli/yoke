@@ -138,7 +138,7 @@ func takeCensus(s *weaveStory) (*cycleCensus, error) {
 				c.records = append(c.records, cs)
 			case strings.TrimSpace(it.Recurring) != "":
 				c.recurring = append(c.recurring, cs)
-			case it.Status == todopkg.StatusDone:
+			case todopkg.IsClosed(it.Status):
 				c.doneOneOff = append(c.doneOneOff, cs)
 			default:
 				c.openOneOff = append(c.openOneOff, cs)

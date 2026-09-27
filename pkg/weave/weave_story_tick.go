@@ -69,7 +69,6 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/weavecli"
 	"github.com/qiangli/yoke/pkg/bus"
-	"github.com/qiangli/yoke/pkg/issue"
 	todopkg "github.com/qiangli/yoke/pkg/todo"
 )
 
@@ -400,7 +399,7 @@ func sprintTickReadBoard(s *weaveStory, since time.Time) sprintTickBoard {
 			if it.Closed != nil && it.Closed.After(since) {
 				b.Closed++
 			}
-			if it.Status == todopkg.StatusDone || it.Status == issue.StatusClosed {
+			if todopkg.IsClosed(it.Status) {
 				continue
 			}
 			b.Open++
@@ -433,7 +432,7 @@ func sprintTickReadBoard(s *weaveStory, since time.Time) sprintTickBoard {
 		return stories[i].Ref.ID < stories[j].Ref.ID
 	})
 	for _, story := range stories {
-		if story.Status == todopkg.StatusDone || story.Status == issue.StatusClosed || story.Status == todopkg.StatusBlocked {
+		if todopkg.IsClosed(story.Status) || story.Status == todopkg.StatusBlocked {
 			continue
 		}
 		b.Next = story.Ref.ID

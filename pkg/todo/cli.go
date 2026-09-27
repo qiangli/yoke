@@ -51,7 +51,7 @@ func shortRef(id string) string {
 // issue into the fields a list consumer needs, rather than the full issue
 // record (which drags in register-only fields like kind/stage/refs/weave).
 //
-//	state    — the lifecycle vocabulary (todo|assigned|doing|blocked|done);
+//	state    — the lifecycle vocabulary (todo|assigned|doing|blocked|done|wontfix);
 //	           this is the issue's Status under the name a list consumer reads.
 //	scope    — the resolved scope label, repeated per row so an item stays
 //	           self-describing once rows from several lists are merged.
@@ -245,7 +245,7 @@ func newWordsCmd(sf storeFunc, name, short string, pick func([]*issue.Issue) []i
 				return err
 			}
 			if !all {
-				items = slices.DeleteFunc(items, func(it *issue.Issue) bool { return it.Status == StatusDone })
+				items = slices.DeleteFunc(items, func(it *issue.Issue) bool { return IsClosed(it.Status) })
 			}
 			words := pick(items)
 			if jsonOut {
@@ -413,7 +413,7 @@ func newListCmd(sf storeFunc) *cobra.Command {
 			if status == "" && !all {
 				var open []*issue.Issue
 				for _, it := range items {
-					if it.Status != StatusDone {
+					if !IsClosed(it.Status) {
 						open = append(open, it)
 					}
 				}
@@ -499,7 +499,7 @@ func newListCmd(sf storeFunc) *cobra.Command {
 			return w.Flush()
 		},
 	}
-	cmd.Flags().StringVar(&status, "status", "", "filter by status (todo|assigned|doing|blocked|done)")
+	cmd.Flags().StringVar(&status, "status", "", "filter by status (todo|assigned|doing|blocked|done|wontfix)")
 	cmd.Flags().StringVar(&kind, "kind", "", "`word` — only items of this kind (todo kinds lists the words in use)")
 	cmd.Flags().StringArrayVar(&labels, "label", nil, "`word` — only items carrying every given label; repeatable or comma-separated (todo labels lists the words in use)")
 	cmd.Flags().BoolVar(&all, "all", false, "include done tasks")
@@ -567,7 +567,7 @@ func newShowCmd(sf storeFunc) *cobra.Command {
 				}
 			}
 			if it.Weave != 0 {
-				if it.Status == StatusDone {
+				if IsClosed(it.Status) {
 					fmt.Fprintf(w, "  weave     #%d\n", it.Weave)
 				} else {
 					fmt.Fprintf(w, "  weave     #%d (in flight)\n", it.Weave)
@@ -640,7 +640,7 @@ func printLinks(w io.Writer, outbound, inbound []linkRef) {
 
 func newStatusCmd(sf storeFunc) *cobra.Command {
 	return &cobra.Command{
-		Use:   "status <id|prefix> <todo|assigned|doing|blocked|done>",
+		Use:   "status <id|prefix> <todo|assigned|doing|blocked|done|wontfix>",
 		Short: "update a task's status",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -762,7 +762,7 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 			ownerChanged := cmd.Flags().Changed("owner")
 			reassigned := ownerChanged && assignee != ""
 			if ownerChanged {
-				if it.Sprint != 0 && (it.Status == StatusDone || it.Closed != nil) {
+				if it.Sprint != 0 && (IsClosed(it.Status) || it.Closed != nil) {
 					return fmt.Errorf("done sprint story %s cannot retroactively assign or reopen; acceptance provenance must be recorded by `bashy sprint accept %d %s`", it.ID, it.Sprint, it.ID)
 				}
 				canonical, err := canonicalAssignee(assignee)

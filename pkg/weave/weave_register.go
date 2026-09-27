@@ -80,7 +80,7 @@ func runWeaveAddFromTodo(cmd *cobra.Command, ref string, flags *weaveOutputFlags
 	if err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave add", weavecli.ExitInvalidArg, err))
 	}
-	if it.Status == todopkg.StatusDone || it.Status == issue.StatusClosed {
+	if todopkg.IsClosed(it.Status) {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave add", weavecli.ExitInvalidArg,
 			fmt.Errorf("todo %s is already done — `bashy todo status %s doing` to reopen it first", it.ID[:min(8, len(it.ID))], it.ID[:min(8, len(it.ID))])))
 	}
@@ -168,7 +168,7 @@ func runWeaveAddFromIssue(cmd *cobra.Command, ref string, flags *weaveOutputFlag
 	if err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave add", weavecli.ExitInvalidArg, err))
 	}
-	if it.Status == todopkg.StatusDone || it.Status == issue.StatusClosed {
+	if todopkg.IsClosed(it.Status) {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave add", weavecli.ExitInvalidArg,
 			fmt.Errorf("todo %s is already done — `bashy todo --repo status %s doing` to reopen it first", it.ID[:min(8, len(it.ID))], it.ID[:min(8, len(it.ID))])))
 	}
@@ -256,7 +256,7 @@ func weaveCloseRegisterOnMerge(root, base string, it *weaveItem) {
 		return
 	}
 	st, ri, err := findRegisterItem(root, it.Register)
-	if err != nil || ri.Status == todopkg.StatusDone || ri.Status == issue.StatusClosed {
+	if err != nil || todopkg.IsClosed(ri.Status) {
 		return
 	}
 	now := timeNowUTC()
