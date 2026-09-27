@@ -178,7 +178,6 @@ var packages = map[string]Package{
 	"sdlc":          cmdPkg("sdlc"),
 	"search":        cmdPkg("search"),
 	"secrets":       cmdPkg("secret"),
-	"ephemeralhost": cmdPkg("ephemeral-host"),
 	"skills":        cmdPkg("skill"),
 	"craft":         cmdPkg("craft"),
 	"role": libPkg("sprint", "how to REACH whoever holds a role — the bus topic and room behind the "+
