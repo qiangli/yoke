@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/qiangli/yoke/pkg/broker/door"
 )
 
 // The managed ollama is ALWAYS OUR OWN, fully isolated from any host install:
@@ -87,6 +89,21 @@ func applyManagedEnv(port int) string {
 	return DefaultURL()
 }
 
+// applyClientEnv points a client verb (list, run, pull, ps, ...) at the
+// host's model door (pkg/broker, port 24556) unless OLLAMA_HOST is set: the
+// door schedules the exclusive engine for every shell, and the owner token
+// rides in the URL path, which the ollama client preserves.
+func applyClientEnv() {
+	if strings.TrimSpace(os.Getenv("OLLAMA_HOST")) == "" {
+		if host, err := door.OllamaHost(); err == nil {
+			os.Setenv("OLLAMA_HOST", host)
+		}
+	}
+	if strings.TrimSpace(os.Getenv("OLLAMA_MODELS")) == "" {
+		os.Setenv("OLLAMA_MODELS", ManagedModelsDir())
+	}
+}
+
 // RunManagedServe binds + runs the embedded ollama server on the bashy-owned
 // port (never 11434), with models under the bashy-owned dir, blocking until the
 // context is cancelled or SIGINT/SIGTERM arrives.
@@ -122,7 +139,13 @@ func NewManagedOllamaCmd() *cobra.Command {
 	})
 	// Default every subcommand at the bashy-owned daemon (never 11434) unless the
 	// caller set OLLAMA_HOST explicitly.
-	cmd.PersistentPreRun = func(*cobra.Command, []string) { applyManagedEnv(managedPort()) }
+	cmd.PersistentPreRun = func(c *cobra.Command, _ []string) {
+		if c.Name() == "serve" {
+			applyManagedEnv(managedPort())
+			return
+		}
+		applyClientEnv()
+	}
 	return cmd
 }
 

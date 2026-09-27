@@ -59,8 +59,9 @@ import (
 // own, never 11434 (ollama's) — a cligw on the ollama port would silently
 // answer for a different engine.
 const (
-	// DefaultPort is the loopback port `llm serve` binds when none is given.
-	DefaultPort = 11435
+	// DefaultPort is the loopback port `llm serve` binds when none is given:
+	// the host's model door (pkg/broker), 24556 = "AILLM" on a keypad.
+	DefaultPort = 24556
 
 	// DefaultRequestTimeout bounds one request end to end, queue wait
 	// included. An agent CLI turn is slow, so this is generous; it exists
@@ -292,6 +293,46 @@ func serverPolicy(opts ServerOptions) (Policy, error) {
 // Handler returns the HTTP surface: the llmgw gateway behind cligw's routing
 // middleware, plus cligw's own /v1/models and /health.
 func (s *Server) Handler() http.Handler { return s.handler }
+
+// ResolveAgent answers "which agent would serve this model right now" — a
+// band, model, alias or agent selector resolved through the router exactly as
+// a request would be. The broker freezes the answer in a sticky binding.
+// `auto` has no fixed answer (it depends on the prompt) and is refused.
+func (s *Server) ResolveAgent(ctx context.Context, model, filterHeader string) (Agent, error) {
+	filter, err := ParseFilterWithDefault(filterHeader, s.policy.Filter)
+	if err != nil {
+		return Agent{}, err
+	}
+	sel, err := s.catalog.ParseModelSelector(model)
+	if err != nil {
+		return Agent{}, err
+	}
+	if sel.Kind == SelectorAuto {
+		return Agent{}, errors.New("cligw: `auto` picks a band per prompt and cannot be frozen; name a band, model or agent")
+	}
+	decision, err := s.router.Route(ctx, sel, filter, "", "")
+	if err != nil {
+		return Agent{}, err
+	}
+	a, ok := s.catalog.Agent(decision.Agent)
+	if !ok {
+		return Agent{}, fmt.Errorf("cligw: routed to unknown agent %q", decision.Agent)
+	}
+	return a, nil
+}
+
+// VendorModel is the provider-side model id the agent's tool is handed
+// (the tool-specific id when the registry has one).
+func (s *Server) VendorModel(a Agent) string {
+	m, ok := s.catalog.fleet.Model(a.Model)
+	if !ok {
+		return ""
+	}
+	if id := m.ToolIDs[a.Tool]; id != "" {
+		return id
+	}
+	return m.UpstreamID
+}
 
 // Router returns the live router, so a host can inspect decision history.
 func (s *Server) Router() *Router { return s.router }

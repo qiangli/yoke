@@ -333,8 +333,13 @@ var packages = map[string]Package{
 		"are all supplied by its embedder. pkg/cligw is this repo's embedder, which is what puts it behind `llm`."),
 	"cligw": libPkg("llm", "the fleet-agent Backend and front door over llmgw: FleetCatalog + band grammar "+
 		"(L4/L4+/auto), the one-shot CLI worker pool, the quota-first Router, the prefork autoscaler, and "+
-		"NewCmd (`llm serve|pools|env`). The command tree lives here rather than in cmds/ because it is "+
+		"NewCmd (`llm pools`; pkg/broker replaces serve/env with the door's). The command tree lives here rather than in cmds/ because it is "+
 		"mounted by a host (bashy), the same way pkg/weave and pkg/ask are."),
+	"broker": libPkg("llm", "the host's ONE model door (Sprint 302, port 24556): an exclusive-device run queue "+
+		"with priority classes in front of bashy's own Ollama engine, cligw's agent pools behind the same "+
+		"endpoint, shell-scoped sessions, sticky bindings that freeze an exact model identity, and a run "+
+		"record per request. It owns `llm serve|up|down|env|sticky` (cligw's tree with serve/env replaced) "+
+		"and is mounted by bashy, which also routes `ollama serve` to it."),
 	"mailx": {Role: RoleLibrary, FrontDoor: "mailx", Note: "pure-Go local-mail kernel used by cmds/mailx and its mail alias: " +
 		"validated message parsing, mbox delivery, locking, transactional mailbox updates, and From-line quoting."},
 	"release": {Role: RoleUnwired, Note: "release pipeline T0 core: .goreleaser.yaml subset, " +
