@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -181,9 +182,10 @@ const (
 const probeTTL = 3 * time.Second
 
 type probeCache struct {
-	mu   sync.Mutex
-	at   time.Time
-	last []Status
+	mu     sync.Mutex
+	at     time.Time
+	last   []Status
+	panels []Panel
 }
 
 // Probe reports each panel's liveness, dialling proxied services in parallel.
@@ -194,7 +196,7 @@ type probeCache struct {
 func (c *probeCache) Probe(ctx context.Context, panels []Panel) []Status {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if time.Since(c.at) < probeTTL && c.last != nil {
+	if time.Since(c.at) < probeTTL && c.last != nil && reflect.DeepEqual(c.panels, panels) {
 		return c.last
 	}
 
@@ -226,7 +228,7 @@ func (c *probeCache) Probe(ctx context.Context, panels []Panel) []Status {
 	}
 	wg.Wait()
 
-	c.at, c.last = time.Now(), out
+	c.at, c.last, c.panels = time.Now(), out, append([]Panel(nil), panels...)
 	return out
 }
 

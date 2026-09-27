@@ -50,6 +50,8 @@ type Options struct {
 	// Scope is the filesystem root the Files panel is confined to. Empty means
 	// the working directory.
 	Scope string
+	// Launcher replaces the start page with a directory containing index.html.
+	Launcher string
 	// AllowWrite enables the Files panel's write operations. Default read-only.
 	AllowWrite bool
 
@@ -127,15 +129,16 @@ func (o Options) disabled(p Panel) bool {
 }
 
 type server struct {
-	opts         Options
-	guard        *coopauth.Guard
-	sessions     *websession.Store
-	auth         hostauth.Authenticator
-	limiter      *websession.Limiter
-	requireLogin bool
-	port         int
-	panels       []Panel
-	panelAuth    map[string]string // mount segment -> auth tier
+	opts           Options
+	guard          *coopauth.Guard
+	sessions       *websession.Store
+	auth           hostauth.Authenticator
+	limiter        *websession.Limiter
+	requireLogin   bool
+	port           int
+	panels         []Panel
+	liveRegistered bool
+	panelAuth      map[string]string // mount segment -> auth tier
 	// scopeSegments maps a panel NAME (what an operator types in --allow) to
 	// its mount SEGMENT (what the gate sees). They differ — the terminal is
 	// "terminal" at /term/ — and conflating them turns a deny into an allow.
@@ -166,6 +169,13 @@ func Handler(opts Options) (http.Handler, func() error, error) {
 // that has no HTTP surface — the board cache, which must be seedable so a test
 // never runs the real collector and its subprocess fan-out.
 func newHandler(opts Options) (*server, http.Handler, func() error, error) {
+	if opts.Launcher != "" {
+		launcher, err := launcherDir(opts.Launcher)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		opts.Launcher = launcher
+	}
 	if opts.Ctx == nil {
 		opts.Ctx = context.Background()
 	}
@@ -237,6 +247,16 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 			s.panels = append(s.panels, apps...)
 		}
 	}
+	if opts.Panels == nil {
+		s.liveRegistered = true
+		kept := make([]Panel, 0, len(s.panels))
+		for _, p := range s.panels {
+			if p.Source != "registered" {
+				kept = append(kept, p)
+			}
+		}
+		s.panels = kept
+	}
 	if len(opts.Disable) > 0 {
 		kept := s.panels[:0]
 		for _, p := range s.panels {
@@ -274,6 +294,8 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	// Ungated: a liveness probe that needs an identity is a probe that cannot run.
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /api/apps", s.handleApps)
+	mux.HandleFunc("POST /api/apps/registered", s.handleRegisteredSave)
+	mux.HandleFunc("DELETE /api/apps/registered/{name}", s.handleRegisteredRemove)
 	mux.HandleFunc("GET /api/session", s.handleSession)
 	// The look settings: GET is the structured projection, PUT is the one
 	// writer. Gated by the same console ladder as every other /api route —
@@ -404,7 +426,7 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	}
 
 	// Everything else is the start page, including its client-side routes.
-	mux.HandleFunc("/", s.handleSPA)
+	mux.HandleFunc("/", s.handleRoot)
 
 	// otelhttp costs nothing without an exporter: the global provider is a no-op,
 	// so this is span-shaped bookkeeping that never leaves the process.

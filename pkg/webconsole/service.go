@@ -66,6 +66,7 @@ func newServiceCmd() *cobra.Command {
 	var opt svcd.Options
 	var asJSON bool
 	var pair bool
+	var launcher string
 	cmd := &cobra.Command{
 		Use:   "service",
 		Short: "run the console as a supervised background daemon",
@@ -79,6 +80,7 @@ func newServiceCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+	cmd.PersistentFlags().StringVar(&launcher, "launcher", "", "serve a directory containing index.html as the launcher")
 	cmd.PersistentFlags().IntVar(&opt.Port, "port", 0, "port the console listens on (0 = default)")
 	cmd.PersistentFlags().StringVar(&opt.Bind, "bind", "", "address the console binds (default 127.0.0.1)")
 	cmd.PersistentFlags().BoolVar(&asJSON, "json", false, "emit the status envelope as JSON")
@@ -89,12 +91,16 @@ func newServiceCmd() *cobra.Command {
 			Use: "start", Short: "start the console daemon",
 			SilenceUsage: true, SilenceErrors: true,
 			RunE: func(c *cobra.Command, _ []string) error {
-				effectiveOpt, effectivePair, err := serviceStartPlan(opt, pair,
-					c.Flags().Changed("pair") || c.Flags().Changed("bind") || c.Flags().Changed("port"))
+				explicit := c.Flags().Changed("pair") || c.Flags().Changed("bind") || c.Flags().Changed("port")
+				effectiveOpt, effectivePair, err := serviceStartPlan(opt, pair, explicit)
 				if err != nil {
 					return err
 				}
-				svc := serviceSpec(effectivePair)
+				effectiveLauncher, err := serviceLauncherPlan(launcher, c.Flags().Changed("launcher"))
+				if err != nil {
+					return err
+				}
+				svc := serviceSpec(effectivePair, effectiveLauncher)
 				if st, serr := svc.StatusOf(effectiveOpt); serr == nil && st.Running {
 					printServiceStatus(c.OutOrStdout(), st, asJSON, "start")
 					printServicePairingNotice(c.OutOrStdout(), asJSON)
@@ -103,7 +109,7 @@ func newServiceCmd() *cobra.Command {
 				st, err := svc.Start(effectiveOpt)
 				printServiceStatus(c.OutOrStdout(), st, asJSON, "start")
 				if err == nil && st.Running {
-					if perr := saveServiceProfile(effectiveOpt, effectivePair); perr != nil {
+					if perr := saveServiceProfile(effectiveOpt, effectivePair, effectiveLauncher); perr != nil {
 						return perr
 					}
 				}
@@ -142,11 +148,14 @@ func newServiceCmd() *cobra.Command {
 	return cmd
 }
 
-func serviceSpec(pair bool) svcd.Spec {
+func serviceSpec(pair bool, launcher ...string) svcd.Spec {
 	s := spec
 	s.Argv = append([]string{}, spec.Argv...)
 	if pair {
 		s.Argv = append(s.Argv, "--pair")
+	}
+	if len(launcher) > 0 && launcher[0] != "" {
+		s.Argv = append(s.Argv, "--launcher", launcher[0])
 	}
 	return s
 }

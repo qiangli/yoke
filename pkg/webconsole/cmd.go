@@ -6,6 +6,7 @@ package webconsole
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -89,14 +90,15 @@ func sessionKey() ([]byte, error) {
 
 func newServeCmd() *cobra.Command {
 	var (
-		port    int
-		bind    string
-		scope   string
-		write   bool
-		pair    bool
-		disable []string
-		apps    []string
-		appAuth []string
+		port     int
+		bind     string
+		scope    string
+		launcher string
+		write    bool
+		pair     bool
+		disable  []string
+		apps     []string
+		appAuth  []string
 	)
 	cmd := &cobra.Command{
 		Use:           "serve",
@@ -110,6 +112,7 @@ func newServeCmd() *cobra.Command {
 			}
 			return runServe(c.Context(), c.OutOrStdout(), Options{
 				Scope:      scope,
+				Launcher:   launcher,
 				AllowWrite: write,
 				Pairing:    pair,
 				Disable:    disable,
@@ -118,6 +121,7 @@ func newServeCmd() *cobra.Command {
 			}, bind, port)
 		},
 	}
+	cmd.Flags().StringVar(&launcher, "launcher", "", "serve a directory containing index.html as the launcher")
 	cmd.Flags().IntVar(&port, "port", DefaultPort, "port to listen on")
 	cmd.Flags().StringVar(&bind, "bind", "127.0.0.1", "address to bind: an IP, or `lan` for the host's current primary LAN address (followed as the network changes)")
 	cmd.Flags().StringVar(&scope, "scope", "", "filesystem root for the files panel (default: your home directory)")
@@ -137,6 +141,7 @@ func newServeCmd() *cobra.Command {
 
 func newListCmd() *cobra.Command {
 	var apps, appAuth []string
+	var asJSON bool
 	cmd := &cobra.Command{
 		Use:           "list",
 		Short:         "list the apps and whether each one is up",
@@ -156,6 +161,11 @@ func newListCmd() *cobra.Command {
 				}
 				panels = append(panels, extra...)
 			}
+			if asJSON {
+				return json.NewEncoder(c.OutOrStdout()).Encode(map[string]any{
+					"schema_version": appsSchemaVersion, "base": "/", "apps": pc.Probe(c.Context(), panels),
+				})
+			}
 			w := tabwriter.NewWriter(c.OutOrStdout(), 0, 0, 2, ' ', 0)
 			fmt.Fprintln(w, "SURFACE\tPATH\tMODE\tAUTH\tSOURCE\tSTATUS\tSTART")
 			for _, st := range pc.Probe(c.Context(), panels) {
@@ -173,6 +183,7 @@ func newListCmd() *cobra.Command {
 			return w.Flush()
 		},
 	}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the /api/apps projection as JSON")
 	cmd.Flags().StringArrayVar(&apps, "app", nil,
 		"publish a third-party program as a tile: <bin> or <bin>@<port>, repeatable")
 	cmd.Flags().StringArrayVar(&appAuth, "app-auth", nil,

@@ -23,11 +23,12 @@ const serviceProfileSchema = "bashy-apps-service-profile-v1"
 // after installs. A bare start must not silently replace a paired LAN console
 // with a loopback-only one while phone devices still exist.
 type serviceProfile struct {
-	Schema  string    `json:"schema"`
-	Pair    bool      `json:"pair"`
-	Bind    string    `json:"bind"`
-	Port    int       `json:"port"`
-	Updated time.Time `json:"updated"`
+	Launcher string    `json:"launcher,omitempty"`
+	Schema   string    `json:"schema"`
+	Pair     bool      `json:"pair"`
+	Bind     string    `json:"bind"`
+	Port     int       `json:"port"`
+	Updated  time.Time `json:"updated"`
 }
 
 func serviceProfilePath() (string, error) {
@@ -66,7 +67,7 @@ func loadServiceProfile() (serviceProfile, bool, error) {
 	return p, true, nil
 }
 
-func saveServiceProfile(opt svcd.Options, pair bool) error {
+func saveServiceProfile(opt svcd.Options, pair bool, launcher ...string) error {
 	path, err := serviceProfilePath()
 	if err != nil {
 		return err
@@ -80,6 +81,9 @@ func saveServiceProfile(opt svcd.Options, pair bool) error {
 		Bind:    effectiveServiceBind(opt),
 		Port:    effectiveServicePort(opt),
 		Updated: time.Now().UTC(),
+	}
+	if len(launcher) > 0 {
+		p.Launcher = launcher[0]
 	}
 	raw, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {
@@ -205,4 +209,21 @@ func servicePairingNotice() string {
 	default:
 		return ""
 	}
+}
+
+// serviceLauncherPlan resolves the directory before the daemon changes cwd.
+func serviceLauncherPlan(launcher string, explicit bool) (string, error) {
+	if !explicit {
+		p, ok, err := loadServiceProfile()
+		if err != nil {
+			return "", err
+		}
+		if ok {
+			launcher = p.Launcher
+		}
+	}
+	if launcher == "" {
+		return "", nil
+	}
+	return launcherDir(launcher)
 }

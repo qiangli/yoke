@@ -4,6 +4,7 @@
 package webconsole
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -59,12 +60,19 @@ func firstSegment(p string) string {
 // a public app opens its own mount and nothing else. /api/*, /login*, the
 // launcher at / and every other panel keep the console-wide ladder, so a public
 // tile can never become a hole into the Terminal.
-func (s *server) panelTier(path string) (string, bool) {
-	seg := firstSegment(path)
+func (s *server) panelTier(r *http.Request) (string, bool) {
+	seg := firstSegment(r.URL.Path)
 	if seg == "" {
 		return "", false
 	}
 	tier, ok := s.panelAuth[seg]
+	if !ok {
+		for _, p := range s.requestPanels(r) {
+			if p.Source == "registered" && strings.Trim(p.Path, "/") == seg {
+				return p.Auth, true
+			}
+		}
+	}
 	return tier, ok
 }
 
@@ -91,11 +99,14 @@ func (s *server) consoleGate(next http.Handler) http.Handler {
 	vouched := guard.RequireAuth(next)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.liveRegistered {
+			r = r.WithContext(context.WithValue(r.Context(), registeredPanelsKey{}, s.currentPanels()))
+		}
 		if isOpenPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if tier, ok := s.panelTier(r.URL.Path); ok && (tier == AuthPublic || tier == AuthCustom) {
+		if tier, ok := s.panelTier(r); ok && (tier == AuthPublic || tier == AuthCustom) {
 			next.ServeHTTP(w, r)
 			return
 		}

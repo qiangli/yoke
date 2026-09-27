@@ -34,7 +34,7 @@ func (s *server) handleApps(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"schema_version": appsSchemaVersion,
 		"base":           coopauth.BaseHref(r),
-		"apps":           s.probes.Probe(r.Context(), s.panels),
+		"apps":           s.probes.Probe(r.Context(), s.requestPanels(r)),
 	})
 }
 
@@ -144,8 +144,8 @@ func writeMetaJSON(w http.ResponseWriter, r *http.Request, v any) {
 
 // handleMeta lists every panel this console serves.
 func (s *server) handleMeta(w http.ResponseWriter, r *http.Request) {
-	views := make([]MetaView, 0, len(s.panels))
-	for _, p := range s.panels {
+	views := make([]MetaView, 0, len(s.requestPanels(r)))
+	for _, p := range s.requestPanels(r) {
 		views = append(views, metaViewOf(p))
 	}
 	writeMetaJSON(w, r, map[string]any{
@@ -161,7 +161,7 @@ func (s *server) handleMeta(w http.ResponseWriter, r *http.Request) {
 // that --disable exists to remove.
 func (s *server) handleMetaApp(w http.ResponseWriter, r *http.Request) {
 	want := r.PathValue("app")
-	for _, p := range s.panels {
+	for _, p := range s.requestPanels(r) {
 		if p.Name == want || strings.Trim(p.Path, "/") == want {
 			writeMetaJSON(w, r, metaViewOf(p))
 			return
