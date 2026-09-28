@@ -3,6 +3,12 @@ family: gemini-flash
 version: "3.8"
 band: 2
 band_source: declared
+# agent-bench L4 (2026-09-28, via agy 1.2.12 on novidesign): NOT a measurement.
+# The run is INVALID — agy, running --yolo in a workspace inside the run
+# directory, read the graders, reference solutions and earlier runs' logs in 10
+# runs. Its clean runs all scored 2 (t2, t4, t5, t6, t9 held 3/3, t10, t1/t8
+# reruns). Rerun on the isolated runner (agent-bench: workspace outside the run
+# records, answer-key reads = hard-rule FAIL) before any band is recorded.
 display: Gemini 3.8 Flash (High)
 provider: gemini
 kind: subscription
