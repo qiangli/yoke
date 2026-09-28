@@ -51,7 +51,7 @@ cli:
     watchdog:
       max_runtime: 45m
       mem_limit: 12g
-quirks: unmeasured in the fleet
+quirks: no mid-turn steer injection — typed input waits in the TUI input box until the current turn ends, so a STOP lands after the work (agent-bench l4/t3-stop 0/3, 2026-09-28)
 harness:
   operability: 0.75
   shell: 0.75
