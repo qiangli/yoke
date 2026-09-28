@@ -41,3 +41,15 @@ func TestTermQueryTapIgnoresPlainOutput(t *testing.T) {
 		t.Fatalf("unexpected reply %q", reply.String())
 	}
 }
+
+func TestTermQueryTapAnswersSecondaryDA(t *testing.T) {
+	// agy (Antigravity CLI 1.2.12) with TERM unset waits for the secondary DA
+	// reply before drawing anything; kitty graphics probe + DA1 + DA2.
+	var out, reply bytes.Buffer
+	w := newTermQueryTap(&out, &reply)
+	_, _ = w.Write([]byte("\x1b_Ga=q,f=32,s=1,v=1,i=31;AAAAAA==\x1b\\\x1b[c\x1b["))
+	_, _ = w.Write([]byte(">c\x1b[>0c"))
+	if got, want := reply.String(), "\x1b[?62;22c\x1b[>1;10;0c\x1b[>1;10;0c"; got != want {
+		t.Fatalf("replies:\n got %q\nwant %q", got, want)
+	}
+}

@@ -17,6 +17,8 @@ import (
 //	CSI 6n         (cursor position)
 //
 // and exits a moment later when nothing replies, which made it unsteerable.
+// agy (Antigravity CLI 1.2.12) with TERM unset also sends CSI > c (secondary
+// DA) and waits for that reply before it draws anything (2026-09-28).
 // termQueryTap answers them the way a plain xterm-class terminal would, so the
 // TUI stays up. It only runs on the headless branch: with a real terminal on
 // the parent, that terminal answers and a second reply would be typed as input.
@@ -24,6 +26,7 @@ import (
 var termQueryRE = regexp.MustCompile(
 	`\x1b\[6n` + // DSR cursor position
 		`|\x1b\[0?c` + // primary device attributes
+		`|\x1b\[>0?c` + // secondary device attributes
 		`|\x1b\[\?u` + // kitty keyboard protocol flags
 		`|\x1b\](1[01]);\?(?:\x07|\x1b\\)` + // OSC 10/11 colour query
 		`|\x1b\]4;(\d+);\?(?:\x07|\x1b\\)`) // OSC 4 palette query
@@ -63,6 +66,8 @@ func termQueryAnswer(buf []byte, m []int) []byte {
 	switch {
 	case bytes.Equal(q, []byte("\x1b[6n")):
 		return []byte("\x1b[1;1R")
+	case bytes.HasPrefix(q, []byte("\x1b[>")):
+		return []byte("\x1b[>1;10;0c")
 	case bytes.HasSuffix(q, []byte("c")) && q[1] == '[':
 		return []byte("\x1b[?62;22c")
 	case bytes.Equal(q, []byte("\x1b[?u")):
