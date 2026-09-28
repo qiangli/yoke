@@ -70,10 +70,13 @@ func (a cliAdapter) ResolveAgent(ctx context.Context, model, filter string) (Age
 		Provider: ag.Provider, Kind: ag.Kind, Warm: ag.Warm, Band: ag.Band}, nil
 }
 
-// toolVersions caches `<tool> --version` for identities.
+// toolVersions caches each tool's reported version for identities. probe
+// names the argv that reports it (cligw's VersionProbeArgv: the declared
+// binary a worker runs); without one it is `<tool> --version` on PATH.
 type toolVersions struct {
-	mu sync.Mutex
-	m  map[string]struct {
+	probe func(tool string) []string
+	mu    sync.Mutex
+	m     map[string]struct {
 		v  string
 		at time.Time
 	}
@@ -87,9 +90,15 @@ func (t *toolVersions) get(tool string) string {
 	}
 	t.mu.Unlock()
 	v := "unknown"
-	if path, err := exec.LookPath(tool); err == nil {
+	argv := []string{tool, "--version"}
+	if t.probe != nil {
+		if p := t.probe(tool); len(p) > 0 {
+			argv = p
+		}
+	}
+	if path, err := exec.LookPath(argv[0]); err == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		out, err := exec.CommandContext(ctx, path, "--version").Output()
+		out, err := exec.CommandContext(ctx, path, argv[1:]...).Output()
 		cancel()
 		if err == nil {
 			v = strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
@@ -163,7 +172,7 @@ func RunDoor(ctx context.Context, o DoorOptions) error {
 		}
 		defer cli.Close()
 		go cli.Autoscaler().Run(ctx)
-		versions := &toolVersions{}
+		versions := &toolVersions{probe: cli.VersionProbeArgv}
 		opts.CLI = cliAdapter{s: cli, versions: versions}
 		opts.ToolVersion = versions.get
 	}

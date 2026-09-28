@@ -334,6 +334,23 @@ func (s *Server) VendorModel(a Agent) string {
 	return m.UpstreamID
 }
 
+// VersionProbeArgv is the argv that reports tool's version for an identity:
+// the tool definition's version probe, run on the executable a worker launches
+// (cli.binary), so a pinned CLI copy is the version the identity names. An
+// unknown tool falls back to `<tool> --version`.
+func (s *Server) VersionProbeArgv(tool string) []string {
+	t, ok := s.catalog.Registry().Tool(tool)
+	if !ok {
+		return []string{tool, "--version"}
+	}
+	argv := t.VersionProbeArgv()
+	if len(argv) == 0 {
+		return []string{t.Binary(), "--version"}
+	}
+	argv[0] = t.Binary()
+	return argv
+}
+
 // Router returns the live router, so a host can inspect decision history.
 func (s *Server) Router() *Router { return s.router }
 
