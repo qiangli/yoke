@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -24,6 +25,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/qiangli/yoke/pkg/binmgr"
+	"mvdan.cc/sh/v3/pathconv"
 )
 
 // embeddedSums pins the OFFICIAL sha256 digests of the DefaultVersion archives,
@@ -290,12 +292,9 @@ func EnsureTypeScript(ctx context.Context) (string, error) {
 		npm += ".cmd"
 	}
 	fmt.Fprintf(os.Stderr, "note: installing typescript@%s via npm — one-time, into %s\n", version, prefix)
-	argv := []string{npm, "install", "--prefix", prefix, "--no-audit", "--no-fund", "--no-package-lock", "--loglevel=error", "typescript@" + version}
-	if runtime.GOOS == "windows" {
-		// npm.cmd is a batch file: cmd.exe runs it.
-		argv = append([]string{"cmd.exe", "/d", "/c"}, argv...)
-	}
-	c := binmgr.Command(ctx, argv[0], argv[1:]...)
+	argv := npmArgv(runtime.GOOS, pathconv.LogicalDrives(), npm,
+		[]string{"install", "--prefix", prefix, "--no-audit", "--no-fund", "--no-package-lock", "--loglevel=error", "typescript@" + version})
+	c := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	c.Stdout, c.Stderr = os.Stderr, os.Stderr
 	c.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	if err := c.Run(); err != nil {
@@ -305,4 +304,17 @@ func EnsureTypeScript(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("node: typescript@%s did not land at %s: %w", version, pkg, err)
 	}
 	return pkg, nil
+}
+
+// npmArgv is the argv that runs npm with args. The managed-tool drive-path
+// adaptation (binmgr.PrepareArgs) applies to npm and its arguments only: on
+// Windows npm.cmd is a batch file that cmd.exe runs, and cmd.exe's own `/d`
+// and `/c` switches are not POSIX drive paths (with D: present they became
+// `D:\`, and cmd.exe started interactively instead of running npm).
+func npmArgv(goos string, drives pathconv.DriveSet, npm string, args []string) []string {
+	argv := append([]string{npm}, args...)
+	if goos != "windows" {
+		return argv
+	}
+	return append([]string{"cmd.exe", "/d", "/c"}, pathconv.NativeArgsIn(drives, argv)...)
 }
