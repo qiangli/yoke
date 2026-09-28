@@ -178,15 +178,18 @@ func newChatSteerCmd() *cobra.Command {
 				return err
 			}
 			text := strings.Join(args[1:], " ")
-			frame := agentpty.TextFrame(text)
 			switch {
 			case enter:
-				frame, text = agentpty.VerbatimFrame([]byte("\r")), "<Enter>"
+				if err := steerSend(c.CtlSock, agentpty.VerbatimFrame([]byte("\r"))); err != nil {
+					return fmt.Errorf("chat: could not steer %s: %w", c.ID, err)
+				}
+				text = "<Enter>"
 			case strings.TrimSpace(text) == "":
 				return fmt.Errorf("chat: steer needs text, or --enter to press Enter")
-			}
-			if err := agentpty.SendFrame(c.CtlSock, frame); err != nil {
-				return fmt.Errorf("chat: could not steer %s: %w", c.ID, err)
+			default:
+				if err := deliverSteer(c, text); err != nil {
+					return err
+				}
 			}
 			_ = room.Emit(room.Event{Type: room.EventSteer, Actor: principalName(), Target: c.ID, Body: text})
 			fmt.Fprintf(cmd.ErrOrStderr(), "chat: steered %s\n", c.ID)
@@ -195,6 +198,39 @@ func newChatSteerCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&enter, "enter", false, "press Enter in the session instead of sending a line")
 	return cmd
+}
+
+// steerSend writes one frame to a session's control socket (a seam for tests).
+var steerSend = agentpty.SendFrame
+
+// steerInterruptFirst reports whether a tool's TUI holds a typed line until its
+// current turn ends, so a steer has to break the turn (ESC) before the line can
+// reach the agent. Declared per tool in the fleet registry (steer_interrupt).
+var steerInterruptFirst = func(tool string) bool {
+	t, ok := newCatalog().Tool(tool)
+	return ok && t.IsCLI() && t.CLI.Launch.SteerInterrupt
+}
+
+// steerInterruptSettle is how long a TUI gets to cancel its turn after the ESC
+// before the line is typed.
+var steerInterruptSettle = 2 * time.Second
+
+// deliverSteer types a steer line into a live session. For a tool that holds
+// typed input until its turn ends (Muse Code 1.3), a mid-turn STOP would land
+// after the work it was meant to stop — agent-bench l4/t3-stop scored 0/3 that
+// way, and 2 with an ESC first — so such a session is interrupted first.
+func deliverSteer(c room.Card, text string) error {
+	if steerInterruptFirst(c.Tool) {
+		if err := steerSend(c.CtlSock, agentpty.VerbatimFrame([]byte{0x1b})); err != nil {
+			return fmt.Errorf("chat: could not interrupt %s before the steer: %w", c.ID, err)
+		}
+		_ = room.Emit(room.Event{Type: room.EventInterrupt, Actor: principalName(), Target: c.ID})
+		time.Sleep(steerInterruptSettle)
+	}
+	if err := steerSend(c.CtlSock, agentpty.TextFrame(text)); err != nil {
+		return fmt.Errorf("chat: could not steer %s: %w", c.ID, err)
+	}
+	return nil
 }
 
 // grantKeys returns the keystroke(s) that answer a tool's approval prompt —

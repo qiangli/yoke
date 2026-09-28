@@ -191,6 +191,12 @@ type ToolLaunch struct {
 	// about the tool, MEASURED (pkg/agentpty/steer_live_test.go), not asserted.
 	SupportsSay bool `yaml:"supports_say,omitempty" json:"supports_say,omitempty" doc:"whether live steering is supported"`
 
+	// SteerInterrupt marks a tool whose TUI holds a typed line until its current
+	// turn ends, so `bashy chat steer` sends ESC before the line. Without it a
+	// mid-turn STOP reaches Muse Code 1.3 only after the work is done (measured,
+	// agent-bench l4/t3-stop 2026-09-28: 0/3 without, 2 with the ESC).
+	SteerInterrupt bool `yaml:"steer_interrupt,omitempty" json:"steer_interrupt,omitempty" doc:"interrupt (ESC) before a steer line"`
+
 	// ACPExec is the argv template that launches this tool as an ACP AGENT
 	// speaking JSON-RPC on stdio. Empty means the tool does not speak ACP and
 	// the launcher falls to the next rung.
