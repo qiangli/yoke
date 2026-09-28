@@ -148,7 +148,29 @@ func Apply(cacheDir string) error {
 	if p := os.Getenv("PATH"); !strings.Contains(p, cacheDir) {
 		_ = os.Setenv("PATH", cacheDir+string(os.PathListSeparator)+p)
 	}
+	// podman drives its WSL machine through wsl.exe in System32; a caller
+	// whose PATH is only bashy's own directory would get "wsl: executable
+	// file not found" from machine start/stop/list.
+	_ = os.Setenv("PATH", withSystemDir(os.Getenv("PATH"), os.Getenv("SystemRoot")))
 	return nil
+}
+
+// withSystemDir appends systemRoot\System32 to a Windows PATH that lacks it
+// (compared case-insensitively, as Windows does).
+func withSystemDir(path, systemRoot string) string {
+	if systemRoot == "" {
+		return path
+	}
+	sys := strings.TrimRight(systemRoot, `\`) + `\System32`
+	for _, dir := range strings.Split(path, ";") {
+		if strings.EqualFold(strings.TrimRight(dir, `\`), sys) {
+			return path
+		}
+	}
+	if path == "" {
+		return sys
+	}
+	return path + ";" + sys
 }
 
 // stageFile copies src to dest with an executable mode, skipping the copy
