@@ -12,6 +12,7 @@ import (
 // interrupted before a steer, or a mid-turn STOP lands after the work
 // (agent-bench l4/t3-stop, 2026-09-28). Other CLIs get the line alone.
 func TestDeliverSteerInterruptsFirstOnlyWhenTheToolNeedsIt(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // deliverSteer emits room events: keep them out of the host room
 	var sent []string
 	oldSend, oldFirst, oldSettle := steerSend, steerInterruptFirst, steerInterruptSettle
 	t.Cleanup(func() { steerSend, steerInterruptFirst, steerInterruptSettle = oldSend, oldFirst, oldSettle })
