@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/qiangli/yoke/pkg/agentpty"
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/room"
 )
 
@@ -37,13 +38,30 @@ func TestDeliverSteerInterruptsFirstOnlyWhenTheToolNeedsIt(t *testing.T) {
 	}
 }
 
-// The flag is read from the fleet registry: muse declares it, claude does not.
+// The flag is read from the fleet registry: a tool that declares
+// steer_interrupt gets it, one that does not (and an unknown tool) does not.
+// No baseline tool declares it today — Muse needed a second Enter, not an ESC
+// (agentpty steerResubmitDelay) — so the test registers its own.
 func TestSteerInterruptFirstReadsTheToolBinding(t *testing.T) {
-	if !steerInterruptFirst("muse") {
-		t.Error("muse: steer_interrupt not declared in its tool binding")
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	prev := newCatalog
+	newCatalog = func() *fleet.Catalog { return fleet.New(fleet.WithRoot(root)) }
+	t.Cleanup(func() { newCatalog = prev })
+	for name, flag := range map[string]bool{"holdsinput": true, "plaintui": false} {
+		tool := fleet.Tool{Name: name, Kind: fleet.ToolKindCLI, CLI: fleet.ToolCLI{
+			Binary: "true",
+			Launch: fleet.ToolLaunch{Exec: "true {prompt}", SteerInterrupt: flag},
+		}}
+		if err := newCatalog().SaveTool(tool); err != nil {
+			t.Fatalf("SaveTool %s: %v", name, err)
+		}
 	}
-	if steerInterruptFirst("claude") {
-		t.Error("claude: steer_interrupt must not be set (its TUI takes a line mid-turn)")
+	if !steerInterruptFirst("holdsinput") {
+		t.Error("holdsinput declares steer_interrupt but was not interrupted")
+	}
+	if steerInterruptFirst("plaintui") {
+		t.Error("plaintui does not declare steer_interrupt but would be interrupted")
 	}
 	if steerInterruptFirst("no-such-tool") {
 		t.Error("an unknown tool must not be interrupted")

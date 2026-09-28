@@ -38,6 +38,17 @@ func newPTYControlScanner(r io.Reader) *bufio.Scanner {
 // It is not a magic sleep — it is the difference between typing and pasting.
 var steerEnterDelay = 150 * time.Millisecond
 
+// steerResubmitDelay is when the SECOND Enter goes in.
+//
+// Some TUIs drop an Enter that arrives while they are busy with a turn: the
+// steer sits typed but unsent in the input box until the turn ends, which for a
+// mid-turn STOP is after the work it was meant to stop. Measured 2026-09-28 on
+// agent-bench l4/t3-stop: Muse Code 1.3 0/3 and agy 1.2.12 0 with one Enter; the
+// same steer with another Enter 3 s later stopped Muse after the current module
+// (2 points). A bare Enter on an empty input box is a no-op in every fleet TUI,
+// so the second Enter is harmless when the first one was taken.
+var steerResubmitDelay = 3 * time.Second
+
 func writePTYControlLine(ptmx io.Writer, line string) {
 	if line == "" {
 		return
@@ -77,6 +88,11 @@ func writePTYControlLine(ptmx io.Writer, line string) {
 	// as "deepseek did nothing", which is a lie about the model.
 	writePTYChunked(ptmx, line)
 	time.Sleep(steerEnterDelay)
+	_, _ = io.WriteString(ptmx, "\r")
+	// Again, for a TUI that dropped the first Enter while busy (see
+	// steerResubmitDelay). Synchronous on purpose: frames are written in order,
+	// so the next steer's text can never be split by a late Enter.
+	time.Sleep(steerResubmitDelay)
 	_, _ = io.WriteString(ptmx, "\r")
 }
 

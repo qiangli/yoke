@@ -37,10 +37,11 @@ cli:
     # and answered) with the standard text, pause, CR submit.
     steer_exec: muse --yolo --model {model}
     supports_say: true
-    # The TUI holds a typed line until its current turn ends, so a mid-turn STOP
-    # would land after the work; `bashy chat steer` sends ESC first (measured
-    # 2026-09-28, agent-bench l4/t3-stop: 0/3 without, 2 with the ESC).
-    steer_interrupt: true
+    # A mid-turn steer needs a SECOND Enter: the TUI drops an Enter that arrives
+    # while it is busy, leaving the line unsent. agentpty sends one 3 s later for
+    # every tool (steerResubmitDelay). No steer_interrupt (ESC) is needed —
+    # measured 2026-09-28, agent-bench l4/t3-stop: one Enter 0/3; a second Enter
+    # 3 s later, no ESC, 2.
     supports_graceful_quit: true
     notes: >-
       Meta's terminal coding agent (Muse Code). Headless is the `exec`
@@ -55,7 +56,7 @@ cli:
     watchdog:
       max_runtime: 45m
       mem_limit: 12g
-quirks: holds typed input until the current turn ends; an ESC first (steer_interrupt, bashy chat interrupt) lets a mid-turn STOP through (agent-bench l4/t3-stop 0/3 without, 2 with, 2026-09-28)
+quirks: drops an Enter that arrives mid-turn, leaving a steer unsent in the input box; a second Enter (agentpty steerResubmitDelay) submits it (agent-bench l4/t3-stop 0/3 with one Enter, 2 with two, 2026-09-28)
 harness:
   operability: 0.75
   shell: 0.75
