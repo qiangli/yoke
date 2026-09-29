@@ -503,7 +503,8 @@ and digest, or fleet agent, CLI version, launch fingerprint and the agent's
 declared effort (only when one is declared: undeclared adds nothing, so older
 digests are unchanged), plus options — then serves every request under its key
 with that identity or refuses (never reroutes; a CLI upgrade or an effort
-change after creation is refused with 409). Use one per benchmark comparison, shared across arms by digest:
+change after creation is refused with 409). Use one per benchmark comparison,
+shared across arms by digest:
 
   bashy llm sticky create g03-opus5 --model claude-opus5
   bashy llm sticky create arm-genie --identity <digest from above>
