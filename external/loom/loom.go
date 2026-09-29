@@ -497,6 +497,7 @@ func loomProxyHandler(target, publicPrefix string, autoProvision bool) (http.Han
 	}
 	rp := httputil.NewSingleHostReverseProxy(targetURL)
 	prefix := cleanPublicPrefix(publicPrefix)
+	upstreamOrigin := targetURL.Scheme + "://" + targetURL.Host
 	baseDirector := rp.Director
 	rp.Director = func(req *http.Request) {
 		targetPrefix := cleanPublicPrefix(req.Header.Get("X-Forwarded-Prefix"))
@@ -552,6 +553,7 @@ func loomProxyHandler(target, publicPrefix string, autoProvision bool) (http.Han
 		if err != nil {
 			return err
 		}
+		body = rewriteUpstreamOrigin(body, upstreamOrigin, forwardedOrigin(resp.Request.Header), prefix, targetPrefix)
 		body = rewriteLocalHTMLPrefix(body, prefix, targetPrefix)
 		resp.Body = io.NopCloser(bytes.NewReader(body))
 		resp.ContentLength = int64(len(body))
@@ -680,11 +682,63 @@ func rewriteLocalHTMLPrefix(body []byte, prefix, target string) []byte {
 	if target != "" {
 		replacement = target + "/"
 	}
+	// Quoted with nothing after the prefix (gitea's appSubUrl form): the value
+	// becomes the bare target — '' on a root mount, which is what gitea expects.
+	body = bytes.ReplaceAll(body, []byte(`"`+prefix+`"`), []byte(`"`+target+`"`))
+	body = bytes.ReplaceAll(body, []byte(`'`+prefix+`'`), []byte(`'`+target+`'`))
 	body = bytes.ReplaceAll(body, []byte(`"`+prefix+`/`), []byte(`"`+replacement))
 	body = bytes.ReplaceAll(body, []byte(`'`+prefix+`/`), []byte(`'`+replacement))
 	body = bytes.ReplaceAll(body, []byte(`=`+prefix+`/`), []byte(`=`+replacement))
 	body = bytes.ReplaceAll(body, []byte(`:`+prefix+`/`), []byte(`:`+replacement))
 	body = bytes.ReplaceAll(body, []byte(prefix+`/`), []byte(replacement))
+	// gitea also emits the prefix JS/JSON-escaped (every / is \/) in
+	// window.config. Keyed on the opening quote so an escaped ABSOLUTE URL
+	// (appUrl) is left to rewriteUpstreamOrigin, never blindly path-rewritten.
+	esc, escTarget := escapeSlashes(prefix), escapeSlashes(target)
+	body = bytes.ReplaceAll(body, []byte(`"`+esc+`\/`), []byte(`"`+escTarget+`\/`))
+	body = bytes.ReplaceAll(body, []byte(`'`+esc+`\/`), []byte(`'`+escTarget+`\/`))
+	body = bytes.ReplaceAll(body, []byte(`"`+esc+`"`), []byte(`"`+escTarget+`"`))
+	body = bytes.ReplaceAll(body, []byte(`'`+esc+`'`), []byte(`'`+escTarget+`'`))
+	return body
+}
+
+// escapeSlashes renders s the way gitea's JS/JSON output escapes it: every /
+// becomes \/ (window.config values, og meta blobs).
+func escapeSlashes(s string) string { return strings.ReplaceAll(s, "/", `\/`) }
+
+// forwardedOrigin is the browser-facing origin the proxy is mounted behind —
+// webconsole's proxyTo sends X-Forwarded-Proto + X-Forwarded-Host for exactly
+// this. Empty unless BOTH are present: guessing an origin is worse than
+// leaving gitea's own value.
+func forwardedOrigin(h http.Header) string {
+	proto := strings.TrimSpace(h.Get("X-Forwarded-Proto"))
+	host := strings.TrimSpace(h.Get("X-Forwarded-Host"))
+	if proto == "" || host == "" {
+		return ""
+	}
+	return proto + "://" + host
+}
+
+// rewriteUpstreamOrigin rewrites gitea's ABSOLUTE self-URLs (appUrl, og:url):
+// <upstream origin><public prefix> becomes <forwarded origin><target>, in the
+// plain and the \/-escaped form. Absolute upstream URLs bypass the launcher
+// (and its auth) under any mount, so they must carry the browser-facing
+// origin; without one (forwardedOrigin empty) they are left alone.
+func rewriteUpstreamOrigin(body []byte, upstreamOrigin, fwdOrigin, prefix, target string) []byte {
+	if fwdOrigin == "" {
+		return body
+	}
+	from, to := upstreamOrigin+prefix, fwdOrigin+target
+	if from == to {
+		return body
+	}
+	for _, suffix := range []string{`/`, `"`, `'`} {
+		body = bytes.ReplaceAll(body, []byte(from+suffix), []byte(to+suffix))
+	}
+	escFrom, escTo := escapeSlashes(from), escapeSlashes(to)
+	for _, suffix := range []string{`\/`, `"`, `'`} {
+		body = bytes.ReplaceAll(body, []byte(escFrom+suffix), []byte(escTo+suffix))
+	}
 	return body
 }
 

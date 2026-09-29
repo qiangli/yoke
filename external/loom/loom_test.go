@@ -1,6 +1,7 @@
 package loom
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -420,6 +421,191 @@ func TestLoomProxyStripsTheMountPrefixFromRequests(t *testing.T) {
 	_ = resp.Body.Close()
 	if gotPath != "/assets/js/iife.js" {
 		t.Fatalf("upstream path = %q, want /assets/js/iife.js", gotPath)
+	}
+}
+
+func TestLoomProxyRewritesTheEscapedAppSubUrl(t *testing.T) {
+	const prefix = "/matrix/h/dragon/app/loom"
+	const config = `<script>window.config = {appSubUrl: '\/matrix\/h\/dragon\/app\/loom', assetUrlPrefix: '\/matrix\/h\/dragon\/app\/loom\/assets'};</script>`
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(config))
+	}))
+	t.Cleanup(upstream.Close)
+
+	handler, err := loomProxyHandler(upstream.URL, prefix, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(handler)
+	t.Cleanup(proxy.Close)
+
+	req, _ := http.NewRequest(http.MethodGet, proxy.URL+"/loom/", nil)
+	req.Header.Set("X-Forwarded-Prefix", "/loom")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	s := string(body)
+	for _, want := range []string{`appSubUrl: '\/loom'`, `assetUrlPrefix: '\/loom\/assets'`} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("rewritten HTML missing %q:\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, `\/matrix\/`) {
+		t.Fatalf("rewritten HTML still contains the escaped cloud prefix:\n%s", s)
+	}
+}
+
+func TestLoomProxyRewritesTheEscapedAppSubUrlToEmptyAtRoot(t *testing.T) {
+	const prefix = "/matrix/h/dragon/app/loom"
+	const config = `<script>window.config = {appSubUrl: '\/matrix\/h\/dragon\/app\/loom', assetUrlPrefix: '\/matrix\/h\/dragon\/app\/loom\/assets'};</script>`
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(config))
+	}))
+	t.Cleanup(upstream.Close)
+
+	handler, err := loomProxyHandler(upstream.URL, prefix, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(handler)
+	t.Cleanup(proxy.Close)
+
+	req, _ := http.NewRequest(http.MethodGet, proxy.URL+"/", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	s := string(body)
+	for _, want := range []string{`appSubUrl: ''`, `assetUrlPrefix: '\/assets'`} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("rewritten HTML missing %q:\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, `\/matrix\/`) {
+		t.Fatalf("rewritten HTML still contains the escaped cloud prefix:\n%s", s)
+	}
+}
+
+func TestLoomProxyRewritesTheAbsoluteAppUrlToTheForwardedOrigin(t *testing.T) {
+	const prefix = "/matrix/h/dragon/app/loom"
+	var origin string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		esc := strings.ReplaceAll(origin+prefix, "/", `\/`)
+		_, _ = fmt.Fprintf(w, `<meta property="og:url" content="%s"><script>window.config = {appUrl: '%s\/'};</script>`, origin+prefix, esc)
+	}))
+	t.Cleanup(upstream.Close)
+	origin = upstream.URL
+
+	handler, err := loomProxyHandler(upstream.URL, prefix, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(handler)
+	t.Cleanup(proxy.Close)
+
+	req, _ := http.NewRequest(http.MethodGet, proxy.URL+"/loom/", nil)
+	req.Header.Set("X-Forwarded-Prefix", "/loom")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Forwarded-Host", "git.example.com")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	s := string(body)
+	for _, want := range []string{`content="https://git.example.com/loom"`, `appUrl: 'https:\/\/git.example.com\/loom\/'`} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("rewritten HTML missing %q:\n%s", want, s)
+		}
+	}
+	if host := strings.TrimPrefix(origin, "http://"); strings.Contains(s, host) {
+		t.Fatalf("rewritten HTML still leaks the upstream origin %q:\n%s", host, s)
+	}
+}
+
+func TestLoomProxyKeepsTheAbsoluteAppUrlWithoutForwardedHeaders(t *testing.T) {
+	const prefix = "/matrix/h/dragon/app/loom"
+	var origin string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		esc := strings.ReplaceAll(origin+prefix, "/", `\/`)
+		_, _ = fmt.Fprintf(w, `<meta property="og:url" content="%s"><script>window.config = {appUrl: '%s\/'};</script>`, origin+prefix, esc)
+	}))
+	t.Cleanup(upstream.Close)
+	origin = upstream.URL
+
+	handler, err := loomProxyHandler(upstream.URL, prefix, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(handler)
+	t.Cleanup(proxy.Close)
+
+	req, _ := http.NewRequest(http.MethodGet, proxy.URL+"/loom/", nil)
+	req.Header.Set("X-Forwarded-Prefix", "/loom")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	s := string(body)
+	esc := strings.ReplaceAll(origin+prefix, "/", `\/`)
+	for _, want := range []string{`content="` + origin + prefix + `"`, `appUrl: '` + esc + `\/'`} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("absolute upstream URL was rewritten without a forwarded origin; missing %q:\n%s", want, s)
+		}
+	}
+}
+
+func TestLoomProxyCloudPathStaysByteIdentical(t *testing.T) {
+	const prefix = "/matrix/h/dragon/app/loom"
+	var origin string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		esc := strings.ReplaceAll(origin+prefix, "/", `\/`)
+		_, _ = fmt.Fprintf(w, `<meta property="og:url" content="%s"><link href="%s/assets/css/index.css"><script>window.config = {appUrl: '%s\/', appSubUrl: '%s'};</script>`,
+			origin+prefix, prefix, esc, strings.ReplaceAll(prefix, "/", `\/`))
+	}))
+	t.Cleanup(upstream.Close)
+	origin = upstream.URL
+
+	handler, err := loomProxyHandler(upstream.URL, prefix, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(handler)
+	t.Cleanup(proxy.Close)
+
+	req, _ := http.NewRequest(http.MethodGet, proxy.URL+prefix+"/", nil)
+	req.Header.Set("X-Forwarded-Prefix", prefix)
+	req.Header.Set("X-Forwarded-Proto", "http")
+	req.Header.Set("X-Forwarded-Host", strings.TrimPrefix(origin, "http://"))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	got, _ := io.ReadAll(resp.Body)
+	esc := strings.ReplaceAll(origin+prefix, "/", `\/`)
+	want := fmt.Sprintf(`<meta property="og:url" content="%s"><link href="%s/assets/css/index.css"><script>window.config = {appUrl: '%s\/', appSubUrl: '%s'};</script>`,
+		origin+prefix, prefix, esc, strings.ReplaceAll(prefix, "/", `\/`))
+	if string(got) != want {
+		t.Fatalf("cloud-path body changed:\n got %q\nwant %q", got, want)
 	}
 }
 
