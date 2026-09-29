@@ -1,0 +1,4 @@
+# vendor<TAB>generation<TAB>ordered models, strongest first
+vendor-a	gen-1	model-a>model-b
+
+vendor-b	gen-1	model-c>model-d
