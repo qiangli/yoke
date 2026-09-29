@@ -285,3 +285,24 @@ func (f *fakeRunner) Run(ctx context.Context, agent string, args []string, cwd s
 	f.args = args
 	return f.out, 0, nil
 }
+
+func TestRefusalsAreStructured(t *testing.T) {
+	cmd := fleet.ToolCommand{Name: "review", Slash: "/review", Mode: "print"}
+	stubInvoke(t, "", 2, errors.New(`agent launch: refusing to launch "claude" with --dangerously-skip-permissions`))
+	res, err := Run(context.Background(), claudeTool(), cmd, "", Options{})
+	var re *RefusalError
+	if !errors.As(err, &re) || re.Kind != RefusalLaunchGuard || res.Refusal != RefusalLaunchGuard {
+		t.Fatalf("guard: %+v %v", res, err)
+	}
+	if !strings.Contains(res.Hint, "BASHY_ALLOW_UNSAFE_AGENT_LAUNCH") || !strings.Contains(res.Hint, "contain") {
+		t.Fatalf("hint %q", res.Hint)
+	}
+	if os.Getenv(agentlaunch.UnsafeLaunchEnv) != "" {
+		t.Fatal("toolcmd set the unsafe-launch bypass")
+	}
+	stubInvoke(t, "", 2, errors.New("chat: agent claude is already live (pid 1) — an agent is one identity"))
+	res, err = Run(context.Background(), claudeTool(), cmd, "", Options{})
+	if !errors.As(err, &re) || re.Kind != RefusalAgentLive || !strings.Contains(res.Hint, "--agent") {
+		t.Fatalf("live: %+v %v", res, err)
+	}
+}

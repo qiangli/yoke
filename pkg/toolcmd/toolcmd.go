@@ -61,22 +61,26 @@ type Options struct {
 
 // Result is the structured envelope of one command run.
 type Result struct {
-	Tool      string    `json:"tool"`
-	Command   string    `json:"command"`
-	Mode      string    `json:"mode"`
-	Slash     string    `json:"slash,omitempty"`   // the rendered slash line
-	Argv      []string  `json:"argv,omitempty"`    // print: the rendered argv (dry-run and real)
-	Steps     []string  `json:"steps,omitempty"`   // tui: the rendered frames (dry-run)
-	Dir       string    `json:"dir,omitempty"`     // the workdir used
-	Outcome   string    `json:"outcome"`           // success | error | unavailable | timeout | cancelled | dry-run
-	Verdict   string    `json:"verdict,omitempty"` // the tool's own terminal verdict (events_outcome): succeeded | unverified
-	Text      string    `json:"text,omitempty"`    // turn: final message; transcript: whole session text
-	Artifacts []string  `json:"artifacts,omitempty"`
-	Session   string    `json:"session,omitempty"` // tool session id when known
-	ExitCode  int       `json:"exit_code"`
-	Error     string    `json:"error,omitempty"`
-	Started   time.Time `json:"started"`
-	Duration  string    `json:"duration,omitempty"`
+	Tool      string   `json:"tool"`
+	Command   string   `json:"command"`
+	Mode      string   `json:"mode"`
+	Slash     string   `json:"slash,omitempty"`   // the rendered slash line
+	Argv      []string `json:"argv,omitempty"`    // print: the rendered argv (dry-run and real)
+	Steps     []string `json:"steps,omitempty"`   // tui: the rendered frames (dry-run)
+	Dir       string   `json:"dir,omitempty"`     // the workdir used
+	Outcome   string   `json:"outcome"`           // success | error | unavailable | timeout | cancelled | dry-run
+	Verdict   string   `json:"verdict,omitempty"` // the tool's own terminal verdict (events_outcome): succeeded | unverified
+	Text      string   `json:"text,omitempty"`    // turn: final message; transcript: whole session text
+	Artifacts []string `json:"artifacts,omitempty"`
+	Session   string   `json:"session,omitempty"` // tool session id when known
+	ExitCode  int      `json:"exit_code"`
+	Error     string   `json:"error,omitempty"`
+	// Refusal names a guard that refused the launch (RefusalLaunchGuard,
+	// RefusalAgentLive) and Hint the legitimate ways forward. Set by Run.
+	Refusal  string    `json:"refusal,omitempty"`
+	Hint     string    `json:"hint,omitempty"`
+	Started  time.Time `json:"started"`
+	Duration string    `json:"duration,omitempty"`
 }
 
 // ErrUnavailable marks a command the tool refused in the requested mode.
@@ -93,15 +97,69 @@ func Run(ctx context.Context, tool fleet.Tool, cmd fleet.ToolCommand, args strin
 		err := errors.Join(errs...)
 		return Result{Tool: tool.Name, Command: cmd.Name, Mode: cmd.Mode, Outcome: OutcomeError, Error: err.Error()}, err
 	}
+	var res Result
+	var err error
 	switch cmd.Mode {
 	case fleet.ToolCommandPrint:
-		return runPrint(ctx, tool, cmd, args, opts)
+		res, err = runPrint(ctx, tool, cmd, args, opts)
 	case fleet.ToolCommandTUI:
-		return runTUI(ctx, tool, cmd, args, opts)
+		res, err = runTUI(ctx, tool, cmd, args, opts)
 	default:
 		err := fmt.Errorf("toolcmd: %s:%s: unknown mode %q", tool.Name, cmd.Name, cmd.Mode)
 		return Result{Tool: tool.Name, Command: cmd.Name, Mode: cmd.Mode, Outcome: OutcomeError, Error: err.Error()}, err
 	}
+	if err != nil {
+		if refusal, hint := classifyRefusal(err); refusal != "" {
+			res.Refusal, res.Hint = refusal, hint
+			err = &RefusalError{Kind: refusal, Hint: hint, Err: err}
+			res.Error = err.Error()
+		}
+	}
+	return res, err
+}
+
+// Refusal kinds.
+const (
+	// RefusalLaunchGuard: the tool's launch carries an approval-gate
+	// kill-switch (e.g. --dangerously-skip-permissions) and nothing contains
+	// it. toolcmd never sets or implies the bypass.
+	RefusalLaunchGuard = "launch-guard"
+	// RefusalAgentLive: the agent identity already has a live session; an
+	// agent is a singleton, so a second one is refused, not queued.
+	RefusalAgentLive = "agent-live"
+)
+
+// RefusalError is a launch a guard refused, with the ways forward.
+type RefusalError struct {
+	Kind string
+	Hint string
+	Err  error
+}
+
+func (e *RefusalError) Error() string {
+	return fmt.Sprintf("toolcmd: refused (%s): %v\n%s", e.Kind, e.Err, e.Hint)
+}
+func (e *RefusalError) Unwrap() error { return e.Err }
+
+const (
+	hintLaunchGuard = "ways out: run it contained (bashy contain -- bashy tool cmd run ..., or a Bash# @contain fence), " +
+		"or the operator explicitly accepts the risk by setting BASHY_ALLOW_UNSAFE_AGENT_LAUNCH=1 in the environment. " +
+		"bashy tool cmd has no flag that bypasses the guard."
+	hintAgentLive = "ways out: pass --agent NAME with a clone identity (bashy agent clone AGENT), " +
+		"or attach to the live session (bashy chat --agent AGENT --attach), or wait for it to end."
+)
+
+// classifyRefusal recognises the two launch refusals by their stable
+// wording in agentlaunch.GuardUnsafeArgs and chat.errAgentLive.
+func classifyRefusal(err error) (kind, hint string) {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "agent launch: refusing to launch"):
+		return RefusalLaunchGuard, hintLaunchGuard
+	case strings.Contains(msg, "is already live") || strings.Contains(msg, "agent live"):
+		return RefusalAgentLive, hintAgentLive
+	}
+	return "", ""
 }
 
 // RenderSlash substitutes {args} in the slash line, or appends args after a
