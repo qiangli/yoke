@@ -177,6 +177,37 @@ func TestBaselineAGYDeclaresWorkspaceBinding(t *testing.T) {
 	}
 }
 
+// codex 0.157's workspace-write sandbox makes <root>/.git read-only for
+// compound shell commands and denies socket binds, so a weave worker could edit
+// files but not commit, and could not run tests that listen on loopback
+// (measured 2026-09-29: `.git/index.lock: Operation not permitted`, httptest
+// bind refused). In an allocated weave workspace (an isolated clone) the
+// launch must grant exactly that workspace's .git and command network; a
+// launch without a workspace (chat, the user's own repo) keeps codex's default.
+func TestBaselineCodexWorkspaceGrantsGitAndLoopback(t *testing.T) {
+	codex, ok := baseline(t).Tool("codex")
+	if !ok {
+		t.Fatal("baseline codex missing")
+	}
+	argv := codex.ArgvWithWorkspace("/tmp/weave-work", "gpt-5.5", "task")
+	joined := strings.Join(argv, "\x00")
+	for _, want := range []string{
+		"-c\x00sandbox_workspace_write.writable_roots=[\"/tmp/weave-work/.git\"]",
+		"-c\x00sandbox_workspace_write.network_access=true",
+		"exec\x00--skip-git-repo-check\x00--sandbox\x00workspace-write",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("codex workspace argv missing %q: %q", strings.ReplaceAll(want, "\x00", " "), argv)
+		}
+	}
+	if argv[0] != "codex" || argv[1] != "-c" {
+		t.Fatalf("global -c overrides must precede the exec subcommand: %q", argv)
+	}
+	if direct := strings.Join(codex.Argv("gpt-5.5", "task"), " "); strings.Contains(direct, "writable_roots") || strings.Contains(direct, "network_access") {
+		t.Fatalf("a launch without a workspace must keep codex's default sandbox: %q", direct)
+	}
+}
+
 func TestBaselineYcodeDeclaresProbeAndWorkspaceContracts(t *testing.T) {
 	ycode, ok := baseline(t).Tool("ycode")
 	if !ok {

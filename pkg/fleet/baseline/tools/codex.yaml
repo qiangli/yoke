@@ -27,6 +27,16 @@ cli:
       field: type
       values: [turn.completed]
     exec: codex exec --skip-git-repo-check --sandbox workspace-write --model {model} {prompt}
+    # MEASURED 2026-09-29 (codex-cli 0.157.1): inside a weave workspace the
+    # workspace-write sandbox keeps <root>/.git read-only for compound shell
+    # commands (`echo x > f && git add f` → `.git/index.lock: Operation not
+    # permitted`) and refuses socket binds, so a worker could edit but never
+    # commit, and could not run tests that listen on loopback (httptest). The
+    # same command committed and bound 127.0.0.1 once these two overrides were
+    # passed. They apply ONLY when an orchestrator allocated a workspace (an
+    # isolated clone); chat and other launches without one keep codex's default.
+    # -c is a global option, so it must precede `exec` (rendered after the binary).
+    workspace_arg: -c sandbox_workspace_write.writable_roots=["{workspace}/.git"] -c sandbox_workspace_write.network_access=true
     steer_exec: codex --model {model}
     prompt_position: last
     # MEASURED 2026-09-24 (codex-cli 0.156.1): a directory codex has not seen
