@@ -412,7 +412,7 @@ func runSprintStoryAccept(cmd *cobra.Command, id int64, ref, repo, evidence stri
 	if skip {
 		fmt.Fprintln(cmd.OutOrStdout(), "ladder: unrated by manager")
 	} else if ratingErr != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "ladder: delivery not recorded: %v\n", ratingErr)
+		fmt.Fprintf(cmd.OutOrStdout(), "ladder: not rated — %v\n", ratingErr)
 	} else {
 		sprintLadderAppend(cmd, event)
 	}

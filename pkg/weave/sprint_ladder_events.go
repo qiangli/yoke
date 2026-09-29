@@ -20,7 +20,8 @@ func sprintLadderFlags(cmd *cobra.Command) {
 }
 
 // sprintLadderDelivery joins only a recorded story/run relation, never an
-// instance nickname. The launch recipe preserves a clone's underlying model.
+// instance nickname. Use the run ledger's canonical identity resolver so
+// registered clones share their base agent's tool:model binding.
 func sprintLadderDelivery(cmd *cobra.Command, s *weaveStory, story *issue.Issue, actor, root string, now time.Time) (*ladder.Event, error) {
 	agent, _ := cmd.Flags().GetString("agent")
 	points, _ := cmd.Flags().GetInt("points")
@@ -57,13 +58,11 @@ func sprintLadderDelivery(cmd *cobra.Command, s *weaveStory, story *issue.Issue,
 				}
 			}
 		}
-		if agent == "" && matched.LaunchSpec != nil {
-			tool := matched.LaunchSpec.Tool
-			if tool == "" {
-				tool = matched.Tool
-			}
-			if tool != "" && matched.LaunchSpec.Model != "" {
-				agent = tool + ":" + matched.LaunchSpec.Model
+		if agent == "" {
+			var ok bool
+			agent, ok = weaveCapabilityAgent(matched)
+			if !ok {
+				return nil, fmt.Errorf("no canonical agent identity for the linked run; pass --agent tool:model")
 			}
 		}
 		if !cmd.Flags().Changed("points") {
@@ -81,10 +80,10 @@ func sprintLadderDelivery(cmd *cobra.Command, s *weaveStory, story *issue.Issue,
 		}
 	}
 	if agent == "" {
-		if matched != nil || story.Weave != 0 {
-			return nil, fmt.Errorf("cannot resolve linked run tool:model; supply --agent")
+		if story.Weave != 0 {
+			return nil, fmt.Errorf("no canonical agent identity for the linked run; pass --agent tool:model")
 		}
-		return nil, nil
+		return nil, fmt.Errorf("story has no linked run; pass --agent and --points to rate")
 	}
 	if !ladder.ValidPoints(ladder.Points(points)) {
 		return nil, fmt.Errorf("delivery needs valid --points (1, 2, 3, 5 or 8)")

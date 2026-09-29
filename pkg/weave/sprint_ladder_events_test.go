@@ -2,14 +2,17 @@ package weave
 
 import (
 	"bytes"
-	"github.com/qiangli/yoke/pkg/ladder"
-	"github.com/qiangli/yoke/pkg/ladder/blame"
-	todopkg "github.com/qiangli/yoke/pkg/todo"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/qiangli/yoke/pkg/fleet"
+	"github.com/qiangli/yoke/pkg/ladder"
+	"github.com/qiangli/yoke/pkg/ladder/blame"
+	todopkg "github.com/qiangli/yoke/pkg/todo"
 )
 
 func TestSprintLadderLifecycle(t *testing.T) {
@@ -23,6 +26,10 @@ func TestSprintLadderLifecycle(t *testing.T) {
 	}{
 		{"explicit", "accept", []string{"--agent", "tool-b:model-b", "--points", "2"},
 			time.Minute, 1, 1, false, false},
+		{"no-run", "accept", nil, time.Minute, 0, 0, false, false},
+		{"unknown-accept", "accept", nil, time.Minute, 0, 0, false, false},
+		{"unknown-fail", "fail", nil, time.Minute, 0, 0, true, false},
+		{"unknown-override", "accept", []string{"--agent", "tool-b:model-b", "--points", "2"}, time.Minute, 1, 1, false, false},
 		{"within", "accept", nil, time.Minute, 1, 1, false, false},
 		{"turns", "accept", nil, time.Minute, .5, 1, false, false},
 		{"story-link", "accept", nil, time.Minute, 1, 1, false, false},
@@ -41,6 +48,17 @@ func TestSprintLadderLifecycle(t *testing.T) {
 			home, repo := t.TempDir(), t.TempDir()
 			t.Setenv("HOME", home)
 			t.Setenv("BASHY_HOME", filepath.Join(home, ".bashy"))
+			cat := pinFleetWith(t)
+			if err := cat.SaveAgent(fleet.Agent{Name: "agent-a", Tool: "tool-a", Model: "model-a"}); err != nil {
+				t.Fatal(err)
+			}
+			clone, err := cat.CloneAgent("agent-a", "agent-a-w25", false, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := cat.SaveAgent(clone); err != nil {
+				t.Fatal(err)
+			}
 			board := filepath.Join(home, "sprint")
 			t.Setenv("BASHY_SPRINT_DIR", board)
 			t.Setenv("BASHY_ROOM_DIR", filepath.Join(home, "room"))
@@ -60,7 +78,10 @@ func TestSprintLadderLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			now := time.Now().UTC()
-			run := &weaveItem{ID: 25, Register: it.ID, Points: 1, Owner: "agent-a-w25", Tool: "tool-a", Created: now, StartedAt: now.Add(-tc.wall), FinishedAt: now, LaunchSpec: &weaveLaunchSpec{Tool: "tool-a", Model: "model-a", Agent: "agent-a-w25"}}
+			run := &weaveItem{ID: 25, Register: it.ID, Points: 1, Owner: "agent-a-w25", Tool: "tool-a", Created: now, StartedAt: now.Add(-tc.wall), FinishedAt: now, LaunchSpec: &weaveLaunchSpec{Tool: filepath.Join(home, "bin", "tool-a"), Model: "wire-model-a-v1", Agent: "agent-a-w25"}}
+			if strings.HasPrefix(tc.name, "unknown-") {
+				run.LaunchSpec.Agent = "unknown-agent-w25"
+			}
 			if tc.name == "turns" {
 				run.LogPath = filepath.Join(home, "result.jsonl")
 				if err = os.WriteFile(run.LogPath, []byte("{\"type\":\"result\",\"num_turns\":21}\n"), 0600); err != nil {
@@ -75,7 +96,7 @@ func TestSprintLadderLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			s := &weaveStory{ID: 1, Title: "neutral", Column: "doing", Owner: "manager", Lease: &weaveStoryLease{Holder: "manager", At: now}, StoryRoots: []string{repo}, Created: now, Runs: []sprintRun{{Repo: filepath.Base(repo), Queue: tag, ID: 25, Born: now}}}
-			if tc.name == "explicit" {
+			if tc.name == "explicit" || tc.name == "no-run" {
 				s.Runs = nil
 				it.Weave = 0
 				if _, err = st.Save(it); err != nil {
@@ -135,6 +156,21 @@ func TestSprintLadderLifecycle(t *testing.T) {
 			if tc.name == "skip" && !strings.Contains(out.String(), "unrated by manager") {
 				t.Fatal(out.String())
 			}
+			if tc.name == "no-run" {
+				want := "ladder: not rated — story has no linked run; pass --agent and --points to rate"
+				if !strings.Contains(out.String(), want) {
+					t.Fatalf("missing no-run notice: stdout=%s stderr=%s", out.String(), stderr.String())
+				}
+			}
+			if tc.name == "unknown-accept" {
+				want := "ladder: not rated — no canonical agent identity for the linked run; pass --agent tool:model"
+				if !strings.Contains(out.String(), want) {
+					t.Fatalf("missing identity notice: stdout=%s stderr=%s", out.String(), stderr.String())
+				}
+			}
+			if tc.name == "unknown-fail" && (err == nil || !strings.Contains(stderr.String(), "no canonical agent identity")) {
+				t.Fatalf("missing identity refusal: err=%v stderr=%s", err, stderr.String())
+			}
 			if tc.count == 0 {
 				if _, e := os.Stat(ladder.DefaultStorePath()); !os.IsNotExist(e) {
 					t.Fatalf("unexpected ledger: %v", e)
@@ -152,12 +188,28 @@ func TestSprintLadderLifecycle(t *testing.T) {
 			if len(events) != 1 {
 				t.Fatal(events)
 			}
+			raw, e := os.ReadFile(ladder.DefaultStorePath())
+			if e != nil {
+				t.Fatal(e)
+			}
+			var fields map[string]any
+			if e = json.Unmarshal(bytes.TrimSpace(raw), &fields); e != nil {
+				t.Fatal(e)
+			}
+			for _, field := range []string{"agent", "story", "note"} {
+				value, _ := fields[field].(string)
+				if strings.HasPrefix(value, "/") || strings.Contains(value, home) || strings.Contains(value, "~/") || strings.Contains(value, "/Users/") || strings.Contains(value, "/home/") {
+					t.Fatalf("path leaked into %s: %s", field, raw)
+				}
+			}
 			ev := events[0]
 			wantAgent, wantPoints, wantWall := "tool-a:model-a", ladder.Points(1), int(tc.wall.Seconds())
-			if tc.name == "explicit" {
+			if tc.name == "explicit" || tc.name == "unknown-override" {
 				wantAgent = "tool-b:model-b"
 				wantPoints = 2
-				wantWall = 0
+				if tc.name == "explicit" {
+					wantWall = 0
+				}
 			}
 			if ev.Agent != wantAgent || ev.Points != wantPoints || ev.Outcome != tc.outcome || ev.Season != 4 || ev.Story != it.ID || ev.Sprint != 1 || ev.Reviewer != "manager" || ev.CapsUsed.WallSeconds != wantWall {
 				t.Fatalf("%+v", ev)
