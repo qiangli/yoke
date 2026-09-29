@@ -1,12 +1,17 @@
 package loom
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -656,6 +661,220 @@ func TestStateRoundTrip(t *testing.T) {
 	if _, err := readState(dir); !os.IsNotExist(err) {
 		t.Fatalf("expected removed state, got %v", err)
 	}
+}
+
+func TestStartRefusesWhenTheProxyPortIsHeldByAForeignProcess(t *testing.T) {
+	ln, host, port := listenOnEphemeralLoopback(t)
+	defer ln.Close()
+
+	_, err := StartDaemon(context.Background(), Options{
+		DataDir:   t.TempDir(),
+		Addr:      host,
+		Port:      freeTCPPort(t),
+		ProxyPort: port,
+		Stdout:    io.Discard,
+		Stderr:    io.Discard,
+	})
+	if err == nil {
+		t.Fatal("StartDaemon succeeded with a foreign listener on the proxy port")
+	}
+	if !strings.Contains(err.Error(), "proxy port") || !strings.Contains(err.Error(), "did not launch") {
+		t.Fatalf("error = %v, want clear foreign proxy port refusal", err)
+	}
+}
+
+func TestStopReclaimsTheProxyPort(t *testing.T) {
+	dir := t.TempDir()
+	ln, host, port := listenOnEphemeralLoopback(t)
+	_ = ln.Close()
+	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+
+	proxy := startLoomHelper(t, dir, "loom", "proxy", "--target", upstream.URL, "--addr", host, "--port", fmt.Sprintf("%d", port))
+	t.Cleanup(func() {
+		if proxy.ProcessState == nil {
+			_ = proxy.Process.Kill()
+			_ = proxy.Wait()
+		}
+	})
+	if err := waitHTTP(context.Background(), "http://"+addr, 5*time.Second); err != nil {
+		t.Fatalf("proxy helper did not start: %v", err)
+	}
+	if err := recordOwnedProxy(dir, addr, proxy.Process.Pid); err != nil {
+		t.Fatal(err)
+	}
+	sleeper := startLoomHelper(t, dir, "sleep")
+	t.Cleanup(func() {
+		if sleeper.ProcessState == nil {
+			_ = sleeper.Process.Kill()
+			_ = sleeper.Wait()
+		}
+	})
+
+	if err := writeState(State{
+		PID:       sleeper.Process.Pid,
+		URL:       "http://" + net.JoinHostPort(host, fmt.Sprintf("%d", freeTCPPort(t))),
+		ProxyPID:  0,
+		ProxyURL:  "http://" + addr,
+		ProxyAddr: addr,
+		RootURL:   "https://ai.dhnt.io/matrix/h/dragon/app/loom/",
+		Addr:      net.JoinHostPort(host, fmt.Sprintf("%d", freeTCPPort(t))),
+		DataDir:   dir,
+		LogPath:   filepath.Join(dir, "loom.log"),
+		StartedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := StopDaemon(dir, 5*time.Second); err != nil {
+		t.Fatalf("StopDaemon: %v", err)
+	}
+	if !waitTCPPortFree(addr, 5*time.Second) {
+		t.Fatalf("proxy port %s is still held after StopDaemon", addr)
+	}
+}
+
+func TestStartWithoutRootURLPreservesAConfiguredRootURL(t *testing.T) {
+	dir := t.TempDir()
+	const root = "https://ai.dhnt.io/matrix/h/dragon/app/loom/"
+	cfg, err := ensureConfig(dir, "127.0.0.1", 3000, root, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := Options{DataDir: dir, Addr: "127.0.0.1", Port: 3000, ProxyPort: freeTCPPort(t), Stdout: io.Discard, Stderr: io.Discard}
+	rewrite, err := prepareDaemonOptions(&opts, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rewrite != nil {
+		t.Fatalf("bare start reported a ROOT_URL rewrite: %+v", rewrite)
+	}
+	if opts.RootURL != root {
+		t.Fatalf("RootURL = %q, want configured %q", opts.RootURL, root)
+	}
+	if p := publicPrefix(opts.RootURL); p == "" {
+		t.Fatalf("publicPrefix(%q) is empty; proxy would omit --public-prefix", opts.RootURL)
+	}
+	if _, err := ensureConfig(opts.DataDir, opts.Addr, opts.Port, opts.RootURL, opts.actionsOn()); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatalf("bare start changed app.ini:\n--- before ---\n%s\n--- after ---\n%s", before, after)
+	}
+}
+
+func TestStartWithExplicitRootURLRewritesAndSaysSo(t *testing.T) {
+	dir := t.TempDir()
+	const oldRoot = "https://ai.dhnt.io/matrix/h/dragon/app/loom/"
+	const newRoot = "https://git.example.test/loom/"
+	cfg, err := ensureConfig(dir, "127.0.0.1", 3000, oldRoot, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var stderr bytes.Buffer
+	_, err = StartDaemon(ctx, Options{
+		DataDir:         dir,
+		Addr:            "127.0.0.1",
+		Port:            3000,
+		ProxyPort:       freeTCPPort(t),
+		RootURL:         newRoot,
+		RootURLExplicit: true,
+		Stdout:          io.Discard,
+		Stderr:          &stderr,
+	})
+	if err == nil {
+		t.Fatal("StartDaemon unexpectedly succeeded with a canceled context")
+	}
+	data, readErr := os.ReadFile(cfg)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !strings.Contains(string(data), "ROOT_URL = "+newRoot) {
+		t.Fatalf("explicit ROOT_URL was not written:\n%s", data)
+	}
+	msg := stderr.String()
+	if !strings.Contains(msg, "rewriting ROOT_URL") || !strings.Contains(msg, oldRoot) || !strings.Contains(msg, newRoot) {
+		t.Fatalf("stderr = %q, want explicit ROOT_URL rewrite notice", msg)
+	}
+}
+
+func listenOnEphemeralLoopback(t *testing.T) (net.Listener, string, int) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, portText, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		_ = ln.Close()
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		_ = ln.Close()
+		t.Fatal(err)
+	}
+	return ln, host, port
+}
+
+func freeTCPPort(t *testing.T) int {
+	t.Helper()
+	ln, _, port := listenOnEphemeralLoopback(t)
+	_ = ln.Close()
+	return port
+}
+
+func startLoomHelper(t *testing.T, dir string, args ...string) *exec.Cmd {
+	t.Helper()
+	cmdArgs := append([]string{"-test.run=TestLoomHelperProcess", "--"}, args...)
+	cmd := exec.Command(os.Args[0], cmdArgs...)
+	cmd.Env = append(os.Environ(), "LOOM_HELPER_PROCESS=1")
+	cmd.Dir = dir
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	return cmd
+}
+
+func TestLoomHelperProcess(t *testing.T) {
+	if os.Getenv("LOOM_HELPER_PROCESS") != "1" {
+		return
+	}
+	args := os.Args
+	for len(args) > 0 && args[0] != "--" {
+		args = args[1:]
+	}
+	if len(args) == 0 {
+		os.Exit(2)
+	}
+	args = args[1:]
+	if len(args) == 1 && args[0] == "sleep" {
+		select {}
+	}
+	if len(args) >= 1 && args[0] == "loom" {
+		cmd := NewLoomCmd()
+		cmd.SetArgs(args[1:])
+		if err := cmd.Execute(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	os.Exit(2)
 }
 
 func TestOwnerIdentities(t *testing.T) {
