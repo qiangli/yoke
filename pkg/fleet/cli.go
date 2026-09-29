@@ -407,6 +407,11 @@ type agentRow struct {
 	Resolves    bool     `json:"resolves"`
 	Reason      string   `json:"reason,omitempty"`
 	Ring        string   `json:"ring"`
+	// DerivedBand is the band the ladder's gates award (0 = unplaced), and
+	// MissingGates the gates failing up to the next band or the seed's band.
+	// Band/BandSource are the EFFECTIVE band: derived, or an active seed.
+	DerivedBand  int      `json:"derived_band"`
+	MissingGates []string `json:"missing_gates,omitempty"`
 }
 
 func newAgentsList(opts []Option) *cobra.Command {
@@ -419,8 +424,15 @@ func newAgentsList(opts []Option) *cobra.Command {
 			"Fields:\n" +
 			"  NAME      canonical singleton agent identity used for launch and attribution\n" +
 			"  NICK      human-friendly name, explicit or deterministically assigned\n" +
-			"  BAND      inherited model band; '~' is not measured, X1-X4 is a cascade\n" +
-			"            that reaches that band by escalation, and '-' is unpegged\n" +
+			"  BAND      effective band: the DERIVED band, or a peg still seeding the\n" +
+			"            ladder (the model's band or the agent's seat, until it expires or\n" +
+			"            established ratings replace it); '~' marks a peg that is not\n" +
+			"            measured, X1-X5 is a cascade that reaches that band by\n" +
+			"            escalation, and '-' is unpegged and unplaced\n" +
+			"  DERIVED   highest band n whose gates G1..Gn all hold (certificates plus\n" +
+			"            conservative duty ratings); '-' is unplaced. Never stored\n" +
+			"  MISSING   gates failing up to the next band (or the seed's band, when\n" +
+			"            higher); `agent show NAME` lists each failed condition\n" +
 			"  TOOL      canonical agentic CLI half of the binding\n" +
 			"  MODEL     canonical model half; cascades show base->escalation model chain\n" +
 			"  BILLING   cost lane: flat, metered, flat_then_metered, or free; independent\n" +
@@ -434,8 +446,10 @@ func newAgentsList(opts []Option) *cobra.Command {
 			"Use `agents verify NAME` for launchability and `agents verify NAME --live`\n" +
 			"for an actual response. Use --min-band N to select a capable roster.\n\n" +
 			"JSON additionally includes binding (canonical tool:model), aliases, band_source\n" +
-			"for pegged rows (unpegged rows omit it), the model's kind/billing/provider, and reason\n" +
-			"when resolves is false.\n\n" +
+			"for banded rows (derived, or the seed's source; unbanded rows omit it),\n" +
+			"derived_band, missing_gates, the model's kind/billing/provider, and reason\n" +
+			"when resolves is false. Season and band lines come from ladder.yaml in the\n" +
+			"fleet root; without it nothing expires by season and no rating line is placed.\n\n" +
 			ringFieldHelp,
 		Example: "  bashy agent list --min-band 3\n" +
 			"  bashy agent list --json",
@@ -447,9 +461,24 @@ func newAgentsList(opts []Option) *cobra.Command {
 				return fmt.Errorf("fleet: --band and --min-band are alternatives; give one")
 			}
 			cat := New(opts...)
+			ladder, err := cat.Ladder()
+			if err != nil {
+				return err
+			}
 			agents, errs := cat.Agents()
+			// The ladder is placed over the WHOLE fleet before any filter:
+			// G4/G5 compare against band medians, which a filtered view
+			// would silently move.
+			entries := make([]LadderEntry, len(agents))
+			for i, a := range agents {
+				entries[i] = LadderEntry{Agent: a}
+				if _, _, m, err := cat.Binding(a.Name); err == nil {
+					entries[i].Model, entries[i].Resolved = m, true
+				}
+			}
+			standings := DeriveStandings(entries, ladder)
 			rows := make([]agentRow, 0, len(agents))
-			for _, a := range agents {
+			for i, a := range agents {
 				r := agentRow{
 					Name: a.Name, Nick: a.NickName(), Tool: a.Tool, Model: a.Model,
 					Binding: a.MatrixKey(), Aliases: a.Aliases, Resolves: true,
@@ -461,9 +490,11 @@ func newAgentsList(opts []Option) *cobra.Command {
 				if _, _, m, err := cat.Binding(a.Name); err != nil {
 					r.Resolves, r.Reason = false, err.Error()
 				} else {
-					r.Band, r.BandSource = m.Band, effectiveBandSource(m.Band, m.BandSource)
 					r.Kind, r.Billing, r.Provider = m.Kind, m.BillingMode(), m.Provider
 				}
+				st := standings[i]
+				r.Band, r.BandSource = st.Band, st.Source
+				r.DerivedBand, r.MissingGates = st.Derived, st.MissingGates()
 				// A cascade agent shows its SERVED band (X4), not the base
 				// model's peg — the ladder is what reaches L4, not glm-5.2 — and
 				// its MODEL column shows the whole ladder (base → escalation
@@ -502,10 +533,11 @@ func newAgentsList(opts []Option) *cobra.Command {
 				return writeJSON(cmd.OutOrStdout(), rows)
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAME\tNICK\tBAND\tTOOL\tMODEL\tBILLING\tRELIAB\tRESOLVES\tRING")
+			fmt.Fprintln(tw, "NAME\tNICK\tBAND\tDERIVED\tMISSING\tTOOL\tMODEL\tBILLING\tRELIAB\tRESOLVES\tRING")
 			for _, r := range rows {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-					r.Name, dashIfEmpty(r.Nick), BandLabelWithSource(r.Band, r.BandSource), r.Tool, r.Model,
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					r.Name, dashIfEmpty(r.Nick), BandLabelWithSource(r.Band, r.BandSource),
+					BandLabel(r.DerivedBand), dashIfEmpty(strings.Join(r.MissingGates, ",")), r.Tool, r.Model,
 					dashIfEmpty(r.Billing), dashIfEmpty(r.Reliability), yesNo(r.Resolves), r.Ring)
 			}
 			tw.Flush()
@@ -536,9 +568,14 @@ func newAgentsShow(opts []Option) *cobra.Command {
 	var asJSON, asYAML bool
 	var field string
 	c := &cobra.Command{
-		Use:           "show <name>",
-		Short:         "Print an agent's binding",
-		Long:          "Print an agent's binding. <name> may be a nickname, an alias, or a bare tool:model.",
+		Use:   "show <name>",
+		Short: "Print an agent's binding",
+		Long: "Print an agent's binding. <name> may be a nickname, an alias, or a bare tool:model.\n\n" +
+			"The summary includes the agent's place on the band ladder: the effective band,\n" +
+			"the DERIVED band (highest n whose gates G1..Gn all hold), any seed peg and\n" +
+			"whether it still holds, each failed gate condition up to the next band, the\n" +
+			"code/manage/judge ratings (r ± RD, events), and each certificate's validity.\n" +
+			"--json and --yaml print the stored record, which never contains a band.",
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -570,6 +607,12 @@ func newAgentsShow(opts []Option) *cobra.Command {
 			if len(a.Aliases) > 0 {
 				fmt.Fprintf(out, "aliases: %s\n", strings.Join(a.Aliases, " "))
 			}
+			ladder, err := cat.Ladder()
+			if err != nil {
+				return err
+			}
+			standings, _ := cat.Standings(ladder)
+			writeStanding(out, a, standings[a.Name])
 			_, tool, model, err := cat.Binding(a.Name)
 			if err != nil {
 				fmt.Fprintf(out, "resolves: no (%v)\n", err)
@@ -588,6 +631,47 @@ func newAgentsShow(opts []Option) *cobra.Command {
 	c.Flags().BoolVar(&asYAML, "yaml", false, "emit the canonical YAML asset blob")
 	c.Flags().StringVar(&field, "field", "", "print one dotted path")
 	return c
+}
+
+// writeStanding renders an agent's place on the band ladder for humans.
+func writeStanding(out io.Writer, a Agent, st Standing) {
+	if a.IsCascade() && a.Band > 0 {
+		fmt.Fprintf(out, "band:    %s (cascade), derived %s\n", BandLabelWithSource(a.Band, BandCascade), BandLabel(st.Derived))
+	} else {
+		fmt.Fprintf(out, "band:    %s, derived %s\n", BandLabelWithSource(st.Band, st.Source), BandLabel(st.Derived))
+	}
+	if sd := st.Seed; sd != nil {
+		state := "inactive"
+		if sd.Active {
+			state = "active"
+		}
+		fmt.Fprintf(out, "seed:    %s %s, %s (%s)\n", BandLabel(sd.Band), sd.Source, state, sd.Reason)
+	}
+	if miss := st.Missing(); len(miss) > 0 {
+		fmt.Fprintln(out, "missing:")
+		for _, c := range miss {
+			fmt.Fprintf(out, "  %s\n", c)
+		}
+	}
+	for _, duty := range []string{DutyCode, DutyManage, DutyJudge} {
+		d := a.Ratings.Duty(duty)
+		if d == nil {
+			continue
+		}
+		est := "provisional"
+		if d.Established() {
+			est = "established"
+		}
+		fmt.Fprintf(out, "rating:  %-6s %s ± %s, %d events, %s (conservative %s)\n", duty,
+			fmtRating(d.R), fmtRating(d.RD), d.Events, est, fmtRating(d.Conservative()))
+	}
+	for _, c := range st.Certificates {
+		state := "valid"
+		if !c.Valid {
+			state = c.Reason
+		}
+		fmt.Fprintf(out, "cert:    %-7s season %d on %s %s: %s\n", c.Name, c.Season, c.Model, dashIfEmpty(c.Version), state)
+	}
 }
 
 // --- shared helpers ------------------------------------------------------

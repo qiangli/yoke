@@ -147,6 +147,9 @@ func (c *Catalog) SaveAgent(a Agent) error {
 	if err := ValidEffort(a.Effort); err != nil {
 		return err
 	}
+	if err := ValidLadderEvidence(a); err != nil {
+		return err
+	}
 	// Store the binding by canonical name, whatever the caller typed. `agents
 	// add x --model opus` is a fine thing to write and a terrible thing to
 	// persist: `opus` floats, so the saved identity would change meaning under
