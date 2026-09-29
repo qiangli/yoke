@@ -182,3 +182,18 @@ func weaveStoryRead(cmd *cobra.Command, flags *weaveOutputFlags, op string, id i
 	fn(s)
 	return nil
 }
+
+// sprintEndCleanupTally is the end-cleanup checks' passed/total, the hygiene
+// input of the manager scorecard. Undisposed runs and reclaim failures refuse
+// end before its mutation, so they are not counted again here; of the rest,
+// repo hygiene and zero residue also refuse, and the one that never blocks —
+// host artifacts `sprint prune` could still reclaim — is what can fall short.
+func sprintEndCleanupTally(hy sprintHygiene, residual []string) (passed, total int) {
+	for _, ok := range []bool{hy.Clean(), len(residual) == 0, len(hy.Reclaimable) == 0} {
+		total++
+		if ok {
+			passed++
+		}
+	}
+	return passed, total
+}
