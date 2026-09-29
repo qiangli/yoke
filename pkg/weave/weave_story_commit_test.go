@@ -122,6 +122,271 @@ func TestSprintCommitMsgPrintsActionableRefusal(t *testing.T) {
 	}
 }
 
+func TestInstallSprintHooksWritesPrePushHook(t *testing.T) {
+	repo := t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		raw, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, raw)
+		}
+		return strings.TrimSpace(string(raw))
+	}
+	git("init", "-q")
+
+	if _, err := installSprintCommitHook(repo); err != nil {
+		t.Fatal(err)
+	}
+	managed := git("config", "--local", "--get", "core.hooksPath")
+	for _, name := range []string{"commit-msg", "pre-push"} {
+		info, err := os.Stat(filepath.Join(managed, name))
+		if err != nil || info.Mode()&0o111 == 0 {
+			t.Fatalf("managed %s hook = info:%v err:%v", name, info, err)
+		}
+	}
+	raw, err := os.ReadFile(filepath.Join(managed, "pre-push"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(raw)
+	for _, want := range []string{
+		"pre-push.before-bashy",
+		"bashy sprint commit-msg --check-range",
+		"command -v bashy",
+		"merge-base",
+		"max-parents=0",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("managed pre-push hook missing %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestInstallSprintHooksIdempotentAndPreservesForeignHooks(t *testing.T) {
+	repo := t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		raw, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, raw)
+		}
+		return strings.TrimSpace(string(raw))
+	}
+	git("init", "-q")
+	hooks := filepath.Join(repo, "project-hooks")
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	foreignCommit := "#!/bin/sh\nexit 0\n"
+	foreignPush := "#!/bin/sh\ncat >/dev/null\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(hooks, "commit-msg"), []byte(foreignCommit), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hooks, "pre-push"), []byte(foreignPush), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git("config", "--local", "core.hooksPath", hooks)
+
+	install := func() string {
+		t.Helper()
+		if _, err := installSprintCommitHook(repo); err != nil {
+			t.Fatal(err)
+		}
+		return git("config", "--local", "--get", "core.hooksPath")
+	}
+	managed := install()
+	for _, tc := range []struct{ name, prior, want string }{
+		{"commit-msg", "commit-msg.before-bashy", foreignCommit},
+		{"pre-push", "pre-push.before-bashy", foreignPush},
+	} {
+		prior, err := os.ReadFile(filepath.Join(managed, tc.prior))
+		if err != nil || string(prior) != tc.want {
+			t.Fatalf("%s preserved = %q, err = %v, want %q", tc.prior, prior, err, tc.want)
+		}
+		managedBody, err := os.ReadFile(filepath.Join(managed, tc.name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(managedBody), tc.prior) {
+			t.Fatalf("managed %s does not chain %s:\n%s", tc.name, tc.prior, managedBody)
+		}
+	}
+
+	// A second install must not clobber the preserved predecessors.
+	again := install()
+	if again != managed {
+		t.Fatalf("re-install moved hooks path: %q -> %q", managed, again)
+	}
+	for _, tc := range []struct{ prior, want string }{
+		{"commit-msg.before-bashy", foreignCommit},
+		{"pre-push.before-bashy", foreignPush},
+	} {
+		prior, err := os.ReadFile(filepath.Join(managed, tc.prior))
+		if err != nil || string(prior) != tc.want {
+			t.Fatalf("after re-install %s = %q, err = %v, want %q", tc.prior, prior, err, tc.want)
+		}
+	}
+	prePush, err := os.ReadFile(filepath.Join(managed, "pre-push"))
+	if err != nil || string(prePush) != managedPrePushHook {
+		t.Fatalf("re-install rewrote pre-push unexpectedly: err=%v:\n%s", err, prePush)
+	}
+}
+
+func TestManagedPrePushHookChecksPushedRanges(t *testing.T) {
+	repo := t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t.test",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t.test",
+		)
+		raw, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, raw)
+		}
+		return strings.TrimSpace(string(raw))
+	}
+	git("init", "-q")
+	if err := os.WriteFile(filepath.Join(repo, "file"), []byte("a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "file")
+	git("commit", "-qm", "root")
+	git("commit", "-qm", "second", "--allow-empty")
+	base := git("rev-parse", "HEAD")
+	git("checkout", "-qb", "feature")
+	git("commit", "-qm", "feature work", "--allow-empty")
+	tip := git("rev-parse", "HEAD")
+	zero := strings.Repeat("0", 40)
+
+	fakeBin := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "bashy-args.log")
+	fakeBashy := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$FAKE_BASHY_LOG\"\nexit \"${FAKE_BASHY_EXIT:-0}\"\n"
+	if err := os.WriteFile(filepath.Join(fakeBin, "bashy"), []byte(fakeBashy), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hookPath := filepath.Join(t.TempDir(), "pre-push")
+	if err := os.WriteFile(hookPath, []byte(managedPrePushHook), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func(stdin, exit string) (int, string) {
+		t.Helper()
+		if err := os.WriteFile(logPath, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("/bin/sh", hookPath, "origin", "file://"+repo)
+		cmd.Dir = repo
+		cmd.Stdin = strings.NewReader(stdin)
+		var combined bytes.Buffer
+		cmd.Stdout = &combined
+		cmd.Stderr = &combined
+		cmd.Env = append(os.Environ(),
+			"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+			"FAKE_BASHY_LOG="+logPath,
+			"FAKE_BASHY_EXIT="+exit,
+		)
+		err := cmd.Run()
+		code := 0
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				code = exitErr.ExitCode()
+			} else {
+				t.Fatalf("run hook: %v\n%s", err, combined.String())
+			}
+		}
+		raw, readErr := os.ReadFile(logPath)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		return code, strings.TrimSpace(string(raw))
+	}
+
+	line := "refs/heads/feature " + tip + " refs/heads/feature " + base + "\n"
+	if code, logged := run(line, "0"); code != 0 {
+		t.Fatalf("passing check exited %d", code)
+	} else if want := "sprint commit-msg --check-range " + base + ".." + tip; logged != want {
+		t.Fatalf("logged = %q, want %q", logged, want)
+	}
+
+	if code, logged := run(line, "1"); code == 0 {
+		t.Fatal("a failing check-range must block the push")
+	} else if want := "sprint commit-msg --check-range " + base + ".." + tip; logged != want {
+		t.Fatalf("logged = %q, want %q", logged, want)
+	}
+
+	deletion := "refs/heads/feature " + zero + " refs/heads/feature " + tip + "\n"
+	if code, logged := run(deletion, "0"); code != 0 || logged != "" {
+		t.Fatalf("deletion: code=%d logged=%q, want no check", code, logged)
+	}
+
+	newBranch := "refs/heads/feature " + tip + " refs/heads/feature " + zero + "\n"
+	if code, logged := run(newBranch, "0"); code != 0 {
+		t.Fatalf("new branch exited %d", code)
+	} else if want := "sprint commit-msg --check-range " + base + ".." + tip; logged != want {
+		t.Fatalf("new branch logged = %q, want %q", logged, want)
+	}
+}
+
+func TestManagedPrePushHookChainsForeignHook(t *testing.T) {
+	repo := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		if raw, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, raw)
+		}
+	}
+	git("init", "-q")
+	hooks := filepath.Join(repo, "project-hooks")
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(t.TempDir(), "foreign-ran")
+	foreign := "#!/bin/sh\necho ran >> \"" + marker + "\"\ncat >/dev/null\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(hooks, "pre-push"), []byte(foreign), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git("config", "--local", "core.hooksPath", hooks)
+	if _, err := installSprintCommitHook(repo); err != nil {
+		t.Fatal(err)
+	}
+	managed, err := func() (string, error) {
+		cmd := exec.Command("git", "-C", repo, "config", "--local", "--get", "core.hooksPath")
+		raw, err := cmd.CombinedOutput()
+		return strings.TrimSpace(string(raw)), err
+	}()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fakeBin := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "bashy-args.log")
+	fakeBashy := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$FAKE_BASHY_LOG\"\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(fakeBin, "bashy"), []byte(fakeBashy), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	zero := strings.Repeat("0", 40)
+	cmd := exec.Command("/bin/sh", filepath.Join(managed, "pre-push"), "origin", "file://"+repo)
+	cmd.Dir = repo
+	cmd.Stdin = strings.NewReader("refs/heads/x abcdef1234567890abcdef1234567890abcdef12 refs/heads/x " + zero + "\n")
+	cmd.Env = append(os.Environ(),
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"FAKE_BASHY_LOG="+logPath,
+	)
+	var combined bytes.Buffer
+	cmd.Stdout = &combined
+	cmd.Stderr = &combined
+	// The pushed sha is unknown here; the hook must still chain the foreign
+	// hook first and then attempt its own check without hanging on stdin.
+	_ = cmd.Run()
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("foreign pre-push hook was not chained: %v\n%s", err, combined.String())
+	}
+}
+
 func TestInstallSprintCommitHookPreservesExistingHooks(t *testing.T) {
 	repo := t.TempDir()
 	git := func(args ...string) string {

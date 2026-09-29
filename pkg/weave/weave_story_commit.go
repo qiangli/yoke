@@ -369,6 +369,72 @@ fi
 exec bashy sprint commit-msg "$1"
 `
 
+// managedPrePushHook re-verifies recorded commit attribution for every range
+// the push carries. Git feeds the pushed refs on stdin as
+// "<local ref> <local sha> <remote ref> <remote sha>" lines; each pushed
+// range is re-checked with `bashy sprint commit-msg --check-range`, which
+// exits non-zero only under BASHY_SPRINT_ENFORCE=must — so in every other
+// mode the push proceeds and the findings are advisory output.
+const managedPrePushHook = `#!/bin/sh
+set -eu
+hook_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+input=$(mktemp "${TMPDIR:-/tmp}/bashy-pre-push.XXXXXX")
+trap 'rm -f "$input"' EXIT INT TERM HUP
+cat > "$input"
+if [ -x "$hook_dir/pre-push.before-bashy" ]; then
+  "$hook_dir/pre-push.before-bashy" "$@" < "$input"
+fi
+if ! command -v bashy >/dev/null 2>&1; then
+  echo "pre-push: bashy is required to validate Sprint/Story provenance" >&2
+  exit 1
+fi
+zero=0000000000000000000000000000000000000000
+status=0
+while read -r local_ref local_sha remote_ref remote_sha rest; do
+  case "${local_ref}${local_sha}${remote_ref}${remote_sha}" in
+    "") continue ;;
+  esac
+  case "$local_sha" in
+    "$zero"|"") continue ;;
+  esac
+  if [ "$remote_sha" = "$zero" ] || [ -z "$remote_sha" ]; then
+    base=""
+    upstream=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null || true)
+    case "$upstream" in
+      refs/remotes/*) upstream=${upstream#refs/remotes/} ;;
+      *) upstream="" ;;
+    esac
+    if [ -z "$upstream" ]; then
+      for cand in origin/main origin/master main master; do
+        if git rev-parse --verify --quiet "$cand" >/dev/null 2>&1; then
+          upstream=$cand
+          break
+        fi
+      done
+    fi
+    if [ -n "$upstream" ]; then
+      base=$(git merge-base "$upstream" "$local_sha" 2>/dev/null || true)
+    fi
+    if [ -z "$base" ]; then
+      base=$(git rev-list --max-parents=0 "$local_sha" 2>/dev/null | head -n 1 || true)
+    fi
+    if [ -n "$base" ] && [ "$base" != "$local_sha" ]; then
+      range="$base..$local_sha"
+    else
+      range="$local_sha"
+    fi
+  else
+    range="$remote_sha..$local_sha"
+  fi
+  if ! bashy sprint commit-msg --check-range "$range"; then
+    status=1
+  fi
+done < "$input"
+rm -f "$input"
+trap - EXIT INT TERM HUP
+exit "$status"
+`
+
 func gitOutput(repo string, args ...string) (string, error) {
 	argv := append([]string{"-C", repo}, args...)
 	cmd := exec.Command(gitBin(), argv...)
@@ -438,7 +504,7 @@ func installSprintCommitHook(repo string) (string, error) {
 		}
 		for _, entry := range entries {
 			name := entry.Name()
-			if entry.IsDir() || strings.HasSuffix(name, ".sample") || name == "commit-msg" {
+			if entry.IsDir() || strings.HasSuffix(name, ".sample") || name == "commit-msg" || name == "pre-push" {
 				continue
 			}
 			target := filepath.Join(managed, name)
@@ -455,24 +521,15 @@ func installSprintCommitHook(repo string) (string, error) {
 				}
 			}
 		}
-		oldCommit := filepath.Join(oldHooks, "commit-msg")
-		if info, statErr := os.Stat(oldCommit); statErr == nil && info.Mode()&0o111 != 0 {
-			prior := filepath.Join(managed, "commit-msg.before-bashy")
-			if _, err := os.Stat(prior); os.IsNotExist(err) {
-				raw, readErr := os.ReadFile(oldCommit)
-				if readErr != nil {
-					return "", fmt.Errorf("preserve existing commit-msg hook: %w", readErr)
-				}
-				if writeErr := os.WriteFile(prior, raw, 0o755); writeErr != nil {
-					return "", fmt.Errorf("preserve existing commit-msg hook: %w", writeErr)
-				}
-			}
-		}
 	}
 
-	hook := filepath.Join(managed, "commit-msg")
-	if err := os.WriteFile(hook, []byte(managedCommitHook), 0o755); err != nil {
-		return "", fmt.Errorf("install commit-msg hook: %w", err)
+	for _, managedHook := range []struct{ name, body string }{
+		{"commit-msg", managedCommitHook},
+		{"pre-push", managedPrePushHook},
+	} {
+		if err := installManagedHook(oldHooks, managed, managedHook.name, managedHook.body); err != nil {
+			return "", err
+		}
 	}
 	if _, err := gitOutput(root, "config", "--local", "core.hooksPath", managed); err != nil {
 		return "", err
@@ -480,11 +537,42 @@ func installSprintCommitHook(repo string) (string, error) {
 	return root, nil
 }
 
+// installManagedHook writes one managed hook, preserving a pre-existing
+// foreign hook of the same name as "<name>.before-bashy" so the managed
+// script can chain it. An already-preserved predecessor is never overwritten,
+// which keeps re-installs idempotent; when the previous hooks directory
+// already is the managed one there is nothing foreign to preserve.
+func installManagedHook(oldHooks, managed, name, body string) error {
+	if oldHooks != managed {
+		old := filepath.Join(oldHooks, name)
+		if info, statErr := os.Stat(old); statErr == nil && info.Mode()&0o111 != 0 {
+			prior := filepath.Join(managed, name+".before-bashy")
+			if _, err := os.Stat(prior); os.IsNotExist(err) {
+				raw, readErr := os.ReadFile(old)
+				if readErr != nil {
+					return fmt.Errorf("preserve existing %s hook: %w", name, readErr)
+				}
+				if writeErr := os.WriteFile(prior, raw, 0o755); writeErr != nil {
+					return fmt.Errorf("preserve existing %s hook: %w", name, writeErr)
+				}
+			}
+		}
+	}
+	hook := filepath.Join(managed, name)
+	if err := os.Remove(hook); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("install %s hook: %w", name, err)
+	}
+	if err := os.WriteFile(hook, []byte(body), 0o755); err != nil {
+		return fmt.Errorf("install %s hook: %w", name, err)
+	}
+	return nil
+}
+
 func newSprintHooksCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "hooks", Short: "Install sprint/story provenance enforcement into Git"}
 	cmd.AddCommand(&cobra.Command{
 		Use:   "install",
-		Short: "Install the commit-msg guard in the current repository",
+		Short: "Install the commit-msg and pre-push guards in the current repository",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			root, err := installSprintCommitHook(".")
