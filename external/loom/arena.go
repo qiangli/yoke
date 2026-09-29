@@ -20,6 +20,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/format/packfile"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+	"github.com/go-git/go-git/v5/storage/memory"
 )
 
 // ArenaClient administers sprint repositories through the local Gitea API.
@@ -127,6 +128,50 @@ func (c ArenaClient) PushBase(org, name, root, sha string) error {
 		return err
 	}
 	return remote.PushContext(ctx, &gogit.PushOptions{RemoteName: "anonymous", RefSpecs: []config.RefSpec{"+refs/heads/arena-base:refs/heads/base"}, Auth: auth})
+}
+
+// BaseSHA reports the commit currently pinned as an arena repository's base.
+// It uses the remote ref directly so it works for both the loom HTTP service
+// and the file-backed repositories used by tests.
+func (c ArenaClient) BaseSHA(org, name string) (string, error) {
+	endpoint, auth := c.arenaRepoEndpoint(org, name)
+	parsed, err := url.Parse(c.URL)
+	if err != nil {
+		return "", err
+	}
+	if parsed.Scheme == "http" || parsed.Scheme == "https" {
+		ctx := c.Context
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(c.URL, "/")+"/api/v1/repos/"+url.PathEscape(org)+"/"+url.PathEscape(name), nil)
+		if err != nil {
+			return "", err
+		}
+		req.SetBasicAuth(LoopbackUser, LoopbackPassword)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return "", err
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusNotFound {
+			return "", os.ErrNotExist
+		}
+		if resp.StatusCode != http.StatusOK {
+			return "", fmt.Errorf("loom arena inspection: HTTP %d", resp.StatusCode)
+		}
+	}
+	remote := gogit.NewRemote(memory.NewStorage(), &config.RemoteConfig{Name: "arena", URLs: []string{endpoint}})
+	refs, err := remote.List(&gogit.ListOptions{Auth: auth})
+	if err != nil {
+		return "", err
+	}
+	for _, ref := range refs {
+		if ref.Name() == plumbing.NewBranchReferenceName("base") {
+			return ref.Hash().String(), nil
+		}
+	}
+	return "", os.ErrNotExist
 }
 
 // Bundle fetches every branch and writes a Git v2 bundle with all fetched objects.

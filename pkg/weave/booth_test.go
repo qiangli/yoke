@@ -85,11 +85,11 @@ func (b *boothFakeBackend) CopyBoothBase(_, _, fork, _, _ string) error { b.fork
 func TestBoothPrepareFakeAndNoSecretInItem(t *testing.T) {
 	dir := t.TempDir()
 	fake := new(boothFakeBackend)
-	user, fork, cred, err := boothPrepare(dir, "repo", 7, 4, fake)
+	user, fork, cred, err := boothPrepare(dir, "repo", 7, "sprint-4-12345678", fake)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if user != "booth-4-7" || fake.user != user || fake.fork != fork {
+	if user != "booth-4-12345678-7" || fake.user != user || fake.fork != fork {
 		t.Fatalf("provision: %q %q %q", user, fake.user, fake.fork)
 	}
 	pass, err := os.ReadFile(filepath.Join(dir, "booth-7.password"))
@@ -114,7 +114,7 @@ func TestBoothPrepareFakeAndNoSecretInItem(t *testing.T) {
 	if st.Mode().Perm() != 0o600 {
 		t.Fatalf("credential mode %o", st.Mode().Perm())
 	}
-	_, _, _, err = boothPrepare(dir, "repo", 7, 4, fake)
+	_, _, _, err = boothPrepare(dir, "repo", 7, "sprint-4-12345678", fake)
 	if err != nil {
 		t.Fatal(err)
 	}

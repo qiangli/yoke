@@ -183,13 +183,16 @@ func boothPasswordFile(queueDir string, run int64) (string, string, error) {
 	return pass, path, nil
 }
 
-func boothPrepare(queueDir, repo string, run, sprint int64, backend boothBackend) (string, string, string, error) {
+func boothPrepare(queueDir, repo string, run int64, org string, backend boothBackend) (string, string, string, error) {
 	password, _, err := boothPasswordFile(queueDir, run)
 	if err != nil {
 		return "", "", "", err
 	}
-	user := fmt.Sprintf("booth-%d-%d", sprint, run)
-	org := arenaOrg(sprint)
+	suffix := strings.TrimPrefix(org, "sprint-")
+	if suffix == org || suffix == "" {
+		return "", "", "", fmt.Errorf("invalid arena org")
+	}
+	user := fmt.Sprintf("booth-%s-%d", suffix, run)
 	fork, err := backend.CreateBooth(org, repo, user, password)
 	if err != nil {
 		return "", "", "", err

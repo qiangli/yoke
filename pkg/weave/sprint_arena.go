@@ -25,18 +25,42 @@ type arenaRepo struct {
 type sprintArena struct {
 	Repos  []arenaRepo `json:"repos"`
 	Digest string      `json:"digest"`
+	// Org is recorded so old cards retain their original arena name even after
+	// the naming scheme gains an identity discriminator.
+	Org string `json:"org,omitempty"`
 }
 type arenaSource struct{ Name, Root, SHA string }
 type arenaBackend interface {
 	EnsureOrg(string) error
 	EnsureRepo(string, string) error
 	PushBase(string, string, string, string) error
+	BaseSHA(string, string) (string, error)
 	Bundle(string, string, string) error
 	DeleteRepo(string, string) error
 	DeleteOrg(string) error
 }
 
-func arenaOrg(id int64) string { return fmt.Sprintf("sprint-%d", id) }
+func arenaNewOrg(s *weaveStory) string {
+	uuid := strings.ReplaceAll(s.UUID, "-", "")
+	if len(uuid) >= 8 {
+		if _, err := hex.DecodeString(uuid[:8]); err == nil {
+			return fmt.Sprintf("sprint-%d-%s", s.ID, uuid[:8])
+		}
+	}
+	return fmt.Sprintf("sprint-%d", s.ID)
+}
+
+func arenaOrg(s *weaveStory) string {
+	if s.Arena != nil {
+		if s.Arena.Org != "" {
+			return s.Arena.Org
+		}
+		// Cards written before Org was persisted used this name. Keep them
+		// addressable rather than silently moving them to a UUID-derived org.
+		return fmt.Sprintf("sprint-%d", s.ID)
+	}
+	return arenaNewOrg(s)
+}
 
 func arenaDigest(repos []arenaRepo) string {
 	lines := make([]string, 0, len(repos))
@@ -48,22 +72,22 @@ func arenaDigest(repos []arenaRepo) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func arenaUp(s *weaveStory, sources []arenaSource, backend arenaBackend, rebase bool) error {
+func arenaUp(s *weaveStory, sources []arenaSource, backend arenaBackend, rebase bool) (bool, error) {
 	if len(sources) == 0 {
-		return fmt.Errorf("sprint #%d has no tracked or linked repositories", s.ID)
+		return false, fmt.Errorf("sprint #%d has no tracked or linked repositories", s.ID)
 	}
 	repos := make([]arenaRepo, 0, len(sources))
 	seen := map[string]string{}
 	for _, source := range sources {
 		if source.Name == "" || source.Name != filepath.Base(source.Name) || source.Name == "." || source.Name == ".." {
-			return fmt.Errorf("invalid arena repo name %q", source.Name)
+			return false, fmt.Errorf("invalid arena repo name %q", source.Name)
 		}
 		if len(source.SHA) != 40 {
-			return fmt.Errorf("invalid base SHA for %s", source.Name)
+			return false, fmt.Errorf("invalid base SHA for %s", source.Name)
 		}
 		if old, ok := seen[source.Name]; ok {
 			if old != source.Root {
-				return fmt.Errorf("multiple checkouts named %s", source.Name)
+				return false, fmt.Errorf("multiple checkouts named %s", source.Name)
 			}
 			continue
 		}
@@ -72,36 +96,47 @@ func arenaUp(s *weaveStory, sources []arenaSource, backend arenaBackend, rebase 
 	}
 	sort.Slice(repos, func(i, j int) bool { return repos[i].Repo < repos[j].Repo })
 	digest := arenaDigest(repos)
+	repaired := false
 	if s.Arena != nil {
 		if s.Arena.Digest == digest {
-			return nil
-		}
-		if !rebase {
-			return fmt.Errorf("arena base changed; use --rebase to pin a new base")
+			drift, err := arenaDrift(s, backend)
+			if err != nil {
+				return false, err
+			}
+			if len(drift) == 0 {
+				return false, nil
+			}
+			repaired = true
+		} else if !rebase {
+			return false, fmt.Errorf("arena base changed; use --rebase to pin a new base")
 		}
 	}
-	org := arenaOrg(s.ID)
+	org := arenaOrg(s)
 	if err := backend.EnsureOrg(org); err != nil {
-		return err
+		return false, err
 	}
 	for _, r := range repos {
 		if err := backend.EnsureRepo(org, r.Repo); err != nil {
-			return err
+			return false, err
 		}
 		if err := backend.PushBase(org, r.Repo, seen[r.Repo], r.Base); err != nil {
-			return err
+			return false, err
 		}
 	}
-	s.Arena = &sprintArena{Repos: repos, Digest: digest}
-	weaveStoryAppend(s, weaveConductorName(""), "arena", digest)
-	return nil
+	s.Arena = &sprintArena{Org: org, Repos: repos, Digest: digest}
+	if repaired {
+		weaveStoryAppend(s, weaveConductorName(""), "arena-repair", digest)
+	} else {
+		weaveStoryAppend(s, weaveConductorName(""), "arena", digest)
+	}
+	return repaired, nil
 }
 
 func arenaDown(s *weaveStory, store string, backend arenaBackend) error {
 	if s.Arena == nil {
 		return nil
 	}
-	org := arenaOrg(s.ID)
+	org := arenaOrg(s)
 	var paths []string
 	for _, r := range s.Arena.Repos {
 		rel := filepath.Join("arena", strconv.FormatInt(s.ID, 10), r.Repo+".bundle")
@@ -127,8 +162,30 @@ func arenaDown(s *weaveStory, store string, backend arenaBackend) error {
 	return nil
 }
 
-func arenaWriteStatus(w io.Writer, s *weaveStory, baseURL string, running, asJSON bool) error {
-	orgURL := strings.TrimRight(baseURL, "/") + "/" + arenaOrg(s.ID)
+func arenaDrift(s *weaveStory, backend arenaBackend) ([]string, error) {
+	if s.Arena == nil {
+		return nil, nil
+	}
+	org := arenaOrg(s)
+	var drift []string
+	for _, repo := range s.Arena.Repos {
+		base, err := backend.BaseSHA(org, repo.Repo)
+		if err != nil {
+			if os.IsNotExist(err) {
+				drift = append(drift, repo.Repo+": missing")
+				continue
+			}
+			return nil, err
+		}
+		if base != repo.Base {
+			drift = append(drift, fmt.Sprintf("%s: base mismatch (got %s, want %s)", repo.Repo, base, repo.Base))
+		}
+	}
+	return drift, nil
+}
+
+func arenaWriteStatus(w io.Writer, s *weaveStory, baseURL string, running, asJSON bool, drift []string) error {
+	orgURL := strings.TrimRight(baseURL, "/") + "/" + arenaOrg(s)
 	var repos []arenaRepo
 	var digest string
 	if s.Arena != nil {
@@ -136,7 +193,7 @@ func arenaWriteStatus(w io.Writer, s *weaveStory, baseURL string, running, asJSO
 		digest = s.Arena.Digest
 	}
 	if asJSON {
-		return json.NewEncoder(w).Encode(map[string]any{"sprint": s.ID, "org_url": orgURL, "repos": repos, "digest": digest, "running": running})
+		return json.NewEncoder(w).Encode(map[string]any{"sprint": s.ID, "org_url": orgURL, "repos": repos, "digest": digest, "running": running, "drift": drift})
 	}
 	_, err := fmt.Fprintf(w, "arena %s running=%t digest=%s\n", orgURL, running, digest)
 	if err != nil {
@@ -144,6 +201,11 @@ func arenaWriteStatus(w io.Writer, s *weaveStory, baseURL string, running, asJSO
 	}
 	for _, r := range repos {
 		if _, err := fmt.Fprintf(w, "  %s %s\n", r.Repo, r.Base); err != nil {
+			return err
+		}
+	}
+	for _, item := range drift {
+		if _, err := fmt.Fprintf(w, "  drift: %s\n", item); err != nil {
 			return err
 		}
 	}
@@ -250,6 +312,7 @@ func newSprintArenaCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		repaired := false
 		err = withWeaveQueueLock(dir, func(q *weaveQueue) error {
 			card := findWeaveStory(q, id)
 			if card == nil {
@@ -258,16 +321,26 @@ func newSprintArenaCmd() *cobra.Command {
 			if err := authorizeSprintLeaseToken(cmd, card, "arena up"); err != nil {
 				return err
 			}
-			return arenaUp(card, sources, client, rebase)
+			repaired, err = arenaUp(card, sources, client, rebase)
+			return err
 		})
 		if err != nil {
 			return err
+		}
+		if repaired {
+			if _, err := fmt.Fprintln(cmd.OutOrStdout(), "arena repaired"); err != nil {
+				return err
+			}
 		}
 		s, err = arenaCard(id)
 		if err != nil {
 			return err
 		}
-		return arenaWriteStatus(cmd.OutOrStdout(), s, st.RootURL, true, false)
+		drift, err := arenaDrift(s, client)
+		if err != nil {
+			return err
+		}
+		return arenaWriteStatus(cmd.OutOrStdout(), s, st.RootURL, true, false, drift)
 	}
 	status := &cobra.Command{Use: "status N", Args: cobra.ExactArgs(1)}
 	var jsonOutput bool
@@ -292,7 +365,19 @@ func newSprintArenaCmd() *cobra.Command {
 		if base == "" {
 			base = fmt.Sprintf("http://%s:%d", loom.DefaultAddr, loom.DefaultPort)
 		}
-		return arenaWriteStatus(cmd.OutOrStdout(), s, base, running, jsonOutput)
+		var drift []string
+		if running && s.Arena != nil {
+			client := loom.ArenaClient{URL: st.URL, Context: cmd.Context()}
+			drift, err = arenaDrift(s, client)
+			if err != nil {
+				return err
+			}
+		} else if s.Arena != nil {
+			for _, repo := range s.Arena.Repos {
+				drift = append(drift, repo.Repo+": missing (loom is not running)")
+			}
+		}
+		return arenaWriteStatus(cmd.OutOrStdout(), s, base, running, jsonOutput, drift)
 	}
 	down := &cobra.Command{Use: "down N", Args: cobra.ExactArgs(1)}
 	down.Flags().Bool("override", false, "operator override")
@@ -314,6 +399,7 @@ func newSprintArenaCmd() *cobra.Command {
 			return fmt.Errorf("loom is not running")
 		}
 		client := loom.ArenaClient{URL: st.URL, Context: cmd.Context()}
+		org := ""
 		err = withWeaveQueueLock(store, func(q *weaveQueue) error {
 			card := findWeaveStory(q, id)
 			if card == nil {
@@ -322,12 +408,13 @@ func newSprintArenaCmd() *cobra.Command {
 			if err := authorizeSprintLeaseToken(cmd, card, "arena down"); err != nil {
 				return err
 			}
+			org = arenaOrg(card)
 			return arenaDown(card, store, client)
 		})
 		if err != nil {
 			return err
 		}
-		_, err = fmt.Fprintf(cmd.OutOrStdout(), "arena %s archived under arena/%d and removed\n", arenaOrg(id), id)
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "arena %s archived under arena/%d and removed\n", org, id)
 		return err
 	}
 	cmd.AddCommand(up, status, down)

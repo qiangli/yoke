@@ -3498,7 +3498,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			if err != nil {
 				return err
 			}
-			boothUser, boothFork, boothCred, err = boothPrepare(dir, filepath.Base(root), it.ID, boothSprint, backend)
+			boothUser, boothFork, boothCred, err = boothPrepare(dir, filepath.Base(root), it.ID, arenaOrg(card), backend)
 			if err != nil {
 				return err
 			}
