@@ -230,14 +230,17 @@ func SprintOpponent(assignments []Assignment) Rating {
 
 // scorecardRatio maps expected/actual onto [0,1] (on-budget or better = 1).
 // A missing expectation cannot be scored either way; it lands neutral at 0.5
-// with a note.
+// with a note. A non-positive actual means the measurement was never
+// recorded, not that the sprint was free: it also lands neutral at 0.5 —
+// a perfect 1 would reward the sprint that lost its meter.
 func scorecardRatio(expected, actual float64, name string, notes *[]string) float64 {
 	if expected <= 0 {
 		*notes = append(*notes, fmt.Sprintf("no expected %s per point; %s ratio neutral at 0.5", name, name))
 		return 0.5
 	}
 	if actual <= 0 {
-		return 1
+		*notes = append(*notes, fmt.Sprintf("actual %s per point not recorded; %s ratio neutral at 0.5", name, name))
+		return 0.5
 	}
 	return scorecardClamp01(expected / actual)
 }

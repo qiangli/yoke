@@ -247,6 +247,31 @@ func TestComputeScorecardEfficiencyMissingExpected(t *testing.T) {
 	}
 }
 
+// An actual of zero means the meter never ran, not that the sprint was free.
+// Scoring it 1 would reward the sprint that lost its measurement; it lands
+// neutral at 0.5 with a note, like a missing expectation.
+func TestComputeScorecardEfficiencyActualNotRecordedIsNeutral(t *testing.T) {
+	in := scorecardNeutralInput([]Assignment{scorecardAssignment(3, 1500, 1)})
+	in.CostPerPoint = 0 // expected 2, actual never recorded
+	card, err := ComputeScorecard(in, DefaultScorecardWeights())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (0.5 + 1.0) / 2; math.Abs(card.Components["efficiency"]-want) > 1e-9 {
+		t.Errorf("efficiency with unrecorded cost = %v, want %v (cost neutral, wall on target)",
+			card.Components["efficiency"], want)
+	}
+	found := false
+	for _, note := range card.Notes {
+		if strings.Contains(note, "not recorded") && strings.Contains(note, "cost") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("unrecorded-actual note absent from %v", card.Notes)
+	}
+}
+
 func TestComputeScorecardHygieneFailClosed(t *testing.T) {
 	in := scorecardNeutralInput([]Assignment{scorecardAssignment(3, 1500, 1)})
 	in.HygieneChecksPassed = 0

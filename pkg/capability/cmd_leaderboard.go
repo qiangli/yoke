@@ -35,6 +35,11 @@ func NewLeaderboardCmd() *cobra.Command {
 		minSamples   int
 		since        time.Duration
 		role         string
+		duty         string
+		dutySeason   int
+		dutyEvents   string
+		dutyLines    string
+		dutyCost     bool
 	)
 	cmd := &cobra.Command{
 		Use:   "leaderboard",
@@ -64,6 +69,19 @@ of evidence is not a failure, and ranking an agent down for a harness crash is
 how a leaderboard stops describing agents.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// The per-duty band ladder is a separate view over the ladder
+			// event store; without --duty (or --cost) the classic view below
+			// is untouched, byte for byte.
+			if duty != "" || dutyCost {
+				return runDutyLeaderboard(cmd.OutOrStdout(), dutyViewOptions{
+					Duty:   duty,
+					Season: dutySeason,
+					Events: dutyEvents,
+					Lines:  dutyLines,
+					Cost:   dutyCost,
+					JSON:   asJSON,
+				})
+			}
 			recs, err := ReadLedger()
 			if err != nil {
 				return fmt.Errorf("leaderboard: reading the run ledger: %w", err)
@@ -94,6 +112,11 @@ how a leaderboard stops describing agents.`,
 	cmd.Flags().IntVar(&minSamples, "min-samples", DefaultMinSamples, "gated runs required before an agent is ranked")
 	cmd.Flags().DurationVar(&since, "since", 0, "ignore records older than this (0 = all history)")
 	cmd.Flags().StringVar(&role, "role", "", "restrict to one seat (steward, conductor, coder, tester, agent-user)")
+	cmd.Flags().StringVar(&duty, "duty", "", "per-duty band ladder view (code, manage, judge, all)")
+	cmd.Flags().IntVar(&dutySeason, "season", 0, "season to rank (default: latest in the ladder event store)")
+	cmd.Flags().StringVar(&dutyEvents, "events", "", "ladder event store path (default: the host ladder store)")
+	cmd.Flags().StringVar(&dutyLines, "lines", "", "JSON file of fitted rating lines; unfitted lines fail closed")
+	cmd.Flags().BoolVar(&dutyCost, "cost", false, "rating per dollar — informational, routing only, never promotes")
 	return cmd
 }
 
