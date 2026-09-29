@@ -38,7 +38,9 @@ type commitTrace struct {
 	// travelled. Optional because the hook is fail-closed and a commit made
 	// before the uuid existed must keep passing; when present it must name
 	// the sprint the stories belong to.
-	SprintID string `json:"sprint_id,omitempty"`
+	SprintID     string `json:"sprint_id,omitempty"`
+	Agent        string `json:"agent,omitempty"`
+	AgentPresent bool   `json:"-"`
 }
 
 var commitSprintUUID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -139,13 +141,15 @@ func parseCommitTrace(message string) (commitTrace, error) {
 		return commitTrace{}, fmt.Errorf("provenance trailers must be the final paragraph after a blank line")
 	}
 
-	var sprintValues, sprintIDValues, storyValues, idValues []string
+	var sprintValues, sprintIDValues, storyValues, idValues, agentValues []string
 	for _, line := range lines[start+1:] {
 		m := commitTrailerLine.FindStringSubmatch(line)
 		if m == nil {
 			return commitTrace{}, fmt.Errorf("final trailer paragraph contains a non-trailer line %q", line)
 		}
 		switch strings.ToLower(m[1]) {
+		case "agent":
+			agentValues = append(agentValues, strings.TrimSpace(m[2]))
 		case "sprint":
 			sprintValues = append(sprintValues, strings.TrimSpace(m[2]))
 		case "sprint-id":
@@ -185,6 +189,12 @@ func parseCommitTrace(message string) (commitTrace, error) {
 	}
 
 	trace := commitTrace{Sprint: sprint, SprintID: sprintID, Stories: make([]commitStoryRef, 0, len(storyValues))}
+	if len(agentValues) > 1 {
+		return commitTrace{}, fmt.Errorf("want at most one Agent trailer")
+	}
+	if len(agentValues) == 1 {
+		trace.Agent, trace.AgentPresent = agentValues[0], true
+	}
 	seenNumbers, seenIDs := map[int]bool{}, map[string]bool{}
 	for i, value := range storyValues {
 		storyMatch := commitSprintRef.FindStringSubmatch(value)
@@ -259,14 +269,26 @@ func loadRepoStoriesForSprint(sprint int64) ([]sprintStoryState, error) {
 
 func newSprintCommitMsgCmd() *cobra.Command {
 	var flags weaveOutputFlags
+	var checkRange string
 	cmd := &cobra.Command{
-		Use:   "commit-msg <file>",
+		Use:   "commit-msg <file> | --check-range <rev-range>",
 		Short: "Validate mandatory Sprint/Story/Story-ID Git trailers",
-		Args:  cobra.ExactArgs(1),
+		Args: func(cmd *cobra.Command, args []string) error {
+			if cmd.Flags().Changed("check-range") {
+				if strings.TrimSpace(checkRange) == "" {
+					return fmt.Errorf("--check-range needs a revision range")
+				}
+				return cobra.NoArgs(cmd, args)
+			}
+			return cobra.ExactArgs(1)(cmd, args)
+		},
 	}
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		fail := func(err error) error {
 			return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "sprint commit-msg", weavecli.ExitGenericFail, err))
+		}
+		if cmd.Flags().Changed("check-range") {
+			return sprintCommitCheckRange(cmd, flags.mode(), checkRange)
 		}
 		raw, err := os.ReadFile(args[0])
 		if err != nil {
@@ -320,12 +342,16 @@ func newSprintCommitMsgCmd() *cobra.Command {
 		if err := validateCommitTraceStories(trace, stories); err != nil {
 			return fail(fmt.Errorf("commit provenance: %w", err))
 		}
+		if err := sprintCommitAttribution(cmd, dir, sprint, trace, stories, ""); err != nil {
+			return fail(err)
+		}
 		if flags.mode() == weavecli.OutputJSON {
 			return ec(emitOK(cmd.OutOrStdout(), flags.mode(), "sprint commit-msg", trace))
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "commit provenance: Sprint #%d, %d story reference(s) verified\n", trace.Sprint, len(trace.Stories))
 		return nil
 	}
+	cmd.Flags().StringVar(&checkRange, "check-range", "", "Re-verify recorded commit attribution in a Git revision range")
 	flags.attach(cmd)
 	return cmd
 }
