@@ -1,0 +1,20 @@
+name: door-agy-gemini3.8-flash
+display: agy-gemini3.8-flash via the model door (sticky genie-gemini3.8-flash)
+# The cligw model door: bashy's loopback openai-compat front of a CLI harness,
+# stable at 127.0.0.1:24556. The sticky path pins one CLI session per genie
+# agent; the bashy-llm owner token authenticates to the door. No family: a
+# door proxies a family member and must not capture its floating alias.
+# band: declared from the served model (models/gemini3.8-flash.yaml) — the door changes the harness in
+# front of the model, not the model; no gate has run through the door yet.
+band: 2
+band_source: declared
+kind: api
+billing: flat_then_metered
+source: cloud
+provider: openai-compat
+base_url: http://127.0.0.1:24556/sticky/genie-gemini3.8-flash/v1
+api_key_ref: bashy-llm
+model: agy-gemini3.8-flash
+ids:
+  genie: door-agy-gemini3.8-flash
+context_length: 200000

@@ -1,0 +1,9 @@
+agents:
+  - name: genie-opus5
+    description: 'genie on claude-opus5, served by the model door (sticky genie-opus5): same model as claude-opus5'
+    tool: genie
+    model: door-claude-opus5
+    display: "genie · door-claude-opus5"
+    ledger:
+      reliability: unmeasured
+      notes: Sprint #328 live check FAIL (timed out without answering) — door readiness is story 84389f905a84

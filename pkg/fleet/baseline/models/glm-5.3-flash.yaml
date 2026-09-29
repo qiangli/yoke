@@ -23,3 +23,8 @@ quality: 0.80
 cost_micro: 500
 ids:
   ycode: glm-5.3-flash
+  # opencode takes `provider/model` and its provider for this seat is the
+  # CODING PLAN (`zai-coding-plan`, api.z.ai/api/coding/paas/v4), not `zai`
+  # (the general /api/paas/v4 that rejects a coding-plan key). Listed by
+  # `opencode models zai-coding-plan` (opencode 1.18.30) on 2026-09-29.
+  opencode: zai-coding-plan/glm-5.3-flash
