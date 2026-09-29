@@ -92,6 +92,22 @@ func TestPreserveEnvNamesAbsentAndDuplicateInputs(t *testing.T) {
 	}
 }
 
+func TestPreserveEnvAliasesProjectsOnlyTheDeclaredTarget(t *testing.T) {
+	child := []string{"PATH=/bin"}
+	parent := []string{"ZAI_API_KEY=selected", "OPENAI_API_KEY=unrelated"}
+	got := PreserveEnvAliases(child, parent, map[string][]string{
+		"ZHIPU_API_KEY": {"ZAI_API_KEY", "ZAI_TOKEN"},
+	})
+	if !slices.Contains(got, "ZHIPU_API_KEY=selected") {
+		t.Fatalf("projected environment = %v", got)
+	}
+	for _, name := range []string{"ZAI_API_KEY", "OPENAI_API_KEY"} {
+		if hasEnvName(got, name) {
+			t.Fatalf("source or unrelated credential leaked: %v", got)
+		}
+	}
+}
+
 func hasEnvName(env []string, name string) bool { return countEnvName(env, name) != 0 }
 
 func countEnvName(env []string, name string) int {

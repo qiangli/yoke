@@ -199,6 +199,11 @@ type ToolLaunch struct {
 	// by Model.Provider when no explicit key reference exists. Values remain in
 	// the launcher environment; this field carries names and policy only.
 	Credential string `yaml:"credential,omitempty" json:"credential,omitempty" doc:"credential policy for bound models"`
+	// CredentialEnv maps a model api_key_ref to the environment variable this
+	// CLI expects. The launcher finds the value under the ordinary names for the
+	// reference, then projects it under this declared name after scrubbing the
+	// child environment. This keeps provider-specific spelling in fleet assets.
+	CredentialEnv map[string]string `yaml:"credential_env,omitempty" json:"credential_env,omitempty" doc:"api_key_ref to CLI credential environment variable aliases"`
 	// WorkspaceArg is an optional argv fragment that binds the launched tool to
 	// the orchestrator's allocated workspace. {workspace} is replaced by that
 	// absolute path. It is rendered immediately after the binary, before the

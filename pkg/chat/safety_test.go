@@ -133,6 +133,29 @@ func TestAgentChildEnvLegacyLaunchFallsBackToCatalogCredential(t *testing.T) {
 	}
 }
 
+func TestAgentChildEnvProjectsDeclaredToolCredentialAlias(t *testing.T) {
+	pinCatalog(t)
+	permitUnsafeLaunch(t)
+	t.Setenv("BASHY_ALLOW_AGENT_SECRETS", "0")
+	t.Setenv("BASHY_FORCE_AGENT_SHELL", "0")
+	t.Setenv("ZAI_API_KEY", "selected-model-credential")
+	t.Setenv("OPENAI_API_KEY", "unrelated-operator-credential")
+
+	l, err := resolveLaunch("opencode:glm-5.3", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := agentChildEnv(withLaunch(context.Background(), l))
+	if !contains(env, "ZHIPU_API_KEY=selected-model-credential") {
+		t.Fatalf("OpenCode environment missing declared credential alias: %v", selectedEnv(env, []string{"ZHIPU_API_KEY", "ZAI_API_KEY", "OPENAI_API_KEY"}))
+	}
+	for _, name := range []string{"ZAI_API_KEY", "OPENAI_API_KEY"} {
+		if childEnvHasName(env, name) {
+			t.Fatalf("OpenCode environment leaked %s: %v", name, childEnvNames(env))
+		}
+	}
+}
+
 // Coach uses Session/steer_exec while chat uses the one-shot exec template.
 // Those are deliberately different argv attached differently, but they must
 // never become different credential environments again.

@@ -75,6 +75,43 @@ func PreserveEnvNames(childEnv, parentEnv, names []string) []string {
 	return childEnv
 }
 
+// PreserveEnvAliases restores one declared credential under the environment
+// variable name expected by a CLI. Each target names ordered parent candidates;
+// the first non-empty source wins. Values remain opaque and no source name is
+// copied into the child unless it was separately declared.
+func PreserveEnvAliases(childEnv, parentEnv []string, aliases map[string][]string) []string {
+	present := make(map[string]struct{}, len(childEnv))
+	values := make(map[string]string, len(parentEnv))
+	for _, kv := range childEnv {
+		if name, _, ok := strings.Cut(kv, "="); ok && name != "" {
+			present[name] = struct{}{}
+		}
+	}
+	for _, kv := range parentEnv {
+		name, value, ok := strings.Cut(kv, "=")
+		if ok && name != "" && strings.TrimSpace(value) != "" {
+			values[name] = value
+		}
+	}
+	for target, sources := range aliases {
+		target = strings.TrimSpace(target)
+		if target == "" {
+			continue
+		}
+		if _, ok := present[target]; ok {
+			continue
+		}
+		for _, source := range sources {
+			if value, ok := values[strings.TrimSpace(source)]; ok {
+				childEnv = append(childEnv, target+"="+value)
+				present[target] = struct{}{}
+				break
+			}
+		}
+	}
+	return childEnv
+}
+
 // GrantAgentKey finds the one credential a model's api_key_ref names, in the
 // parent's environment, and returns it as a NAME=value entry to add back to a
 // scrubbed child environment.

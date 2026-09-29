@@ -203,9 +203,13 @@ type LaunchProfile struct {
 	Args []string
 	// UnsafeArgs are the agent's own approval-gate kill-switches. They are
 	// prepended to Args ONLY when unsafeLaunchAllowed() (an explicit opt-in or a
-	// verified container) — never by default. Prepending keeps a prompt-consuming
-	// trailing flag last.
+	// verified container) — never by default. Most profiles prepend them so a
+	// prompt-consuming trailing flag stays last; a profile may declare otherwise
+	// when its CLI grammar requires the subcommand first.
 	UnsafeArgs []string
+	// UnsafeArgsAfter places kill-switches after the safe command tokens when
+	// a CLI's subcommand grammar requires it.
+	UnsafeArgsAfter bool
 }
 
 func toAgentLaunchOptions(opt Options) agentlaunch.Options {
@@ -238,6 +242,9 @@ type Launch struct {
 	// PreserveEnv carries environment-variable names only. The runner copies
 	// matching entries from its own environment after scrubbing.
 	PreserveEnv []string
+	// CredentialEnvAliases maps a CLI environment variable to the candidate
+	// parent names carrying its credential. Values never enter the launch.
+	CredentialEnvAliases map[string][]string
 
 	// TakesPrompt reports whether the prompt goes on the command line. A headless
 	// launch always does. A STEERABLE launch sometimes does not — codex and
@@ -257,28 +264,41 @@ func (l Launch) Binding() string {
 
 func fromAgentLaunch(l agentlaunch.Launch) Launch {
 	return Launch{
-		Nick:        l.Nick,
-		Tool:        l.Tool,
-		ToolName:    l.ToolName,
-		Model:       l.Model,
-		ModelName:   l.ModelName,
-		Args:        l.Args,
-		PreserveEnv: append([]string(nil), l.PreserveEnv...),
-		TakesPrompt: l.TakesPrompt,
+		Nick:                 l.Nick,
+		Tool:                 l.Tool,
+		ToolName:             l.ToolName,
+		Model:                l.Model,
+		ModelName:            l.ModelName,
+		Args:                 l.Args,
+		PreserveEnv:          append([]string(nil), l.PreserveEnv...),
+		CredentialEnvAliases: cloneCredentialEnvAliases(l.CredentialEnvAliases),
+		TakesPrompt:          l.TakesPrompt,
 	}
 }
 
 func toAgentLaunch(l Launch) agentlaunch.Launch {
 	return agentlaunch.Launch{
-		Nick:        l.Nick,
-		Tool:        l.Tool,
-		ToolName:    l.ToolName,
-		Model:       l.Model,
-		ModelName:   l.ModelName,
-		Args:        l.Args,
-		PreserveEnv: append([]string(nil), l.PreserveEnv...),
-		TakesPrompt: l.TakesPrompt,
+		Nick:                 l.Nick,
+		Tool:                 l.Tool,
+		ToolName:             l.ToolName,
+		Model:                l.Model,
+		ModelName:            l.ModelName,
+		Args:                 l.Args,
+		PreserveEnv:          append([]string(nil), l.PreserveEnv...),
+		CredentialEnvAliases: cloneCredentialEnvAliases(l.CredentialEnvAliases),
+		TakesPrompt:          l.TakesPrompt,
 	}
+}
+
+func cloneCredentialEnvAliases(in map[string][]string) map[string][]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string][]string, len(in))
+	for target, sources := range in {
+		out[target] = append([]string(nil), sources...)
+	}
+	return out
 }
 
 // Runner starts an agent process. Tests and higher-level workflows can replace
@@ -592,7 +612,10 @@ func agentChildEnv(ctx context.Context) []string {
 	if l, ok := LaunchFrom(ctx); ok {
 		if len(l.PreserveEnv) > 0 {
 			env = secrets.PreserveEnvNames(env, parent, l.PreserveEnv)
-		} else if l.ModelName != "" {
+		}
+		if len(l.CredentialEnvAliases) > 0 {
+			env = secrets.PreserveEnvAliases(env, parent, l.CredentialEnvAliases)
+		} else if len(l.PreserveEnv) == 0 && l.ModelName != "" {
 			// Backward compatibility: callers may still construct Launch values
 			// manually. Resolve the same catalog declaration the old path used,
 			// and grant only its first matching credential rather than widening
@@ -741,8 +764,9 @@ var seededProfiles = func() map[string]LaunchProfile {
 	out := make(map[string]LaunchProfile, len(agentlaunch.SeededProfiles))
 	for name, p := range agentlaunch.SeededProfiles {
 		out[name] = LaunchProfile{
-			Args:       append([]string(nil), p.Args...),
-			UnsafeArgs: append([]string(nil), p.UnsafeArgs...),
+			Args:            append([]string(nil), p.Args...),
+			UnsafeArgs:      append([]string(nil), p.UnsafeArgs...),
+			UnsafeArgsAfter: p.UnsafeArgsAfter,
 		}
 	}
 	return out

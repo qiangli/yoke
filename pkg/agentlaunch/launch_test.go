@@ -43,7 +43,7 @@ func TestResolveWithCatalogUsesProviderSideModelID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if l.Model != "deepseek/deepseek-v4-pro" || strings.Join(l.Args, " ") != "--auto run --model deepseek/deepseek-v4-pro" {
+	if l.Model != "deepseek/deepseek-v4-pro" || strings.Join(l.Args, " ") != "run --auto --model deepseek/deepseek-v4-pro" {
 		t.Fatalf("launch = %+v", l)
 	}
 }
@@ -199,6 +199,21 @@ func TestResolveCarriesSelectedCredentialNames(t *testing.T) {
 	}
 	if slices.Contains(l.PreserveEnv, "OPENAI_API_KEY") {
 		t.Errorf("resolved launch widened to unrelated credential: names=%v", l.PreserveEnv)
+	}
+}
+
+func TestResolveProjectsToolCredentialAliasFromFleetData(t *testing.T) {
+	fleettest.Ring(t)
+	t.Setenv(UnsafeLaunchEnv, "1")
+	l, err := ResolveWithCatalog("opencode:glm-5.3", Options{}, testCatalog(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := l.CredentialEnvAliases["ZHIPU_API_KEY"]; !slices.Contains(got, "ZAI_API_KEY") {
+		t.Fatalf("OpenCode credential aliases = %v, want ZHIPU_API_KEY sourced from ZAI_API_KEY", l.CredentialEnvAliases)
+	}
+	if slices.Contains(l.PreserveEnv, "ZAI_API_KEY") {
+		t.Fatalf("OpenCode credential should be projected, not expose its source name: %v", l.PreserveEnv)
 	}
 }
 
