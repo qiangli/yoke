@@ -249,6 +249,78 @@ func TestSprintLeaseTokenGuardCoverage(t *testing.T) {
 	visit(NewSprintCmd())
 }
 
+func TestSprintLeaseTokenWorkerVerbsUngated(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	t.Setenv("BASHY_SPRINT_DIR", "")
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+	t.Setenv("BASHY_SPRINT_LEASE_TOKEN", "wrong")
+	t.Setenv("BASHY_SPRINT_ENFORCE", "must")
+	dir, err := sprintStoreDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := withWeaveQueueLock(dir, func(q *weaveQueue) error {
+		q.Stories = append(q.Stories, &weaveStory{ID: 1, Lease: &weaveStoryLease{Holder: "agent-a", TokenHash: sprintLeaseTokenHash("secret")}})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]*cobra.Command{}
+	for _, cmd := range NewSprintCmd().Commands() {
+		if cmd.Name() == "goal" {
+			continue
+		}
+		byName[cmd.Name()] = cmd
+	}
+	// Worker verbs on a story are attributed to the claiming agent and must
+	// not require the manager's lease token, even in must mode.
+	for _, name := range []string{"claim", "yield", "submit"} {
+		cmd, ok := byName[name]
+		if !ok || cmd.RunE == nil {
+			t.Fatalf("%s command not found", name)
+		}
+		if cmd.Flags().Lookup("override") != nil || cmd.Flags().Lookup("reason") != nil {
+			t.Fatalf("%s still carries the lease-guard flags", name)
+		}
+		var stderr bytes.Buffer
+		cmd.SetErr(&stderr)
+		// Invoke the entry directly so the guard, if present, fires before
+		// the verb's own argument handling.
+		err := cmd.RunE(cmd, []string{"1", "unused"})
+		if err != nil && (strings.Contains(err.Error(), "detected bypass") || strings.Contains(err.Error(), "lease token")) {
+			t.Fatalf("%s refused without the manager token: %v", name, err)
+		}
+		if strings.Contains(stderr.String(), "detected bypass") {
+			t.Fatalf("%s warned about a bypass: %s", name, stderr.String())
+		}
+	}
+	s, err := sprintOwnerSnapshot(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range s.Thread {
+		if e.Kind == "bypass" {
+			t.Fatalf("worker verb recorded a bypass event: %+v", e)
+		}
+	}
+	// The manager's accept verb stays gated.
+	accept, ok := byName["accept"]
+	if !ok || accept.RunE == nil {
+		t.Fatal("accept command not found")
+	}
+	if accept.Flags().Lookup("override") == nil || accept.Flags().Lookup("reason") == nil {
+		t.Fatal("accept lost its lease-guard flags")
+	}
+	var stderr bytes.Buffer
+	accept.SetErr(&stderr)
+	if err := accept.RunE(accept, []string{"1", "unused"}); err == nil || !strings.Contains(stderr.String(), "detected bypass") {
+		t.Fatalf("accept no longer requires the lease token: err=%v stderr=%s", err, stderr.String())
+	}
+}
+
 func TestSprintLeaseTokenInstructionAcquiresLegacyLease(t *testing.T) {
 	t.Setenv("BASHY_HOME", t.TempDir())
 	t.Setenv("BASHY_SPRINT_DIR", "")
