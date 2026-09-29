@@ -59,7 +59,7 @@ func TestPopulatedRingListsWithoutTheHint(t *testing.T) {
 	cmd := NewModelsCmd(WithRoot(root), WithoutCloudOverlay())
 	cmd.SetOut(&out)
 	cmd.SetErr(&errOut)
-	cmd.SetArgs([]string{"list"})
+	cmd.SetArgs([]string{"list", "--custom"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}

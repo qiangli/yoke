@@ -408,7 +408,7 @@ func TestAgentListShowsDerivedBandAndMissingGates(t *testing.T) {
 	if _, err := runCmd(t, NewAgentsCmd(opts...), "set", "a1", "--set", "certificates.name=l1.season=10", "--set", "certificates.name=l1.model=m1", "--set", "certificates.name=l1.version=1"); err != nil {
 		t.Fatal(err)
 	}
-	out, err := runCmd(t, NewAgentsCmd(opts...), "list", "--json")
+	out, err := runCmd(t, NewAgentsCmd(opts...), "list", "--custom", "--json")
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -424,7 +424,7 @@ func TestAgentListShowsDerivedBandAndMissingGates(t *testing.T) {
 		t.Fatalf("row = %+v; want effective L4 declared seed, derived L1, missing G2,G3,G4", r)
 	}
 
-	table, err := runCmd(t, NewAgentsCmd(opts...), "list")
+	table, err := runCmd(t, NewAgentsCmd(opts...), "list", "--custom")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -455,11 +455,11 @@ func TestAgentListShowsDerivedBandAndMissingGates(t *testing.T) {
 // a peg did.
 func TestAgentListBandFilterReadsTheEffectiveBand(t *testing.T) {
 	_, opts := ladderCatalog(t)
-	out, err := runCmd(t, NewAgentsCmd(opts...), "list", "--json", "--min-band", "4")
+	out, err := runCmd(t, NewAgentsCmd(opts...), "list", "--custom", "--json", "--min-band", "4")
 	if err != nil || !strings.Contains(out, `"a1"`) {
 		t.Fatalf("--min-band 4 dropped the L4-seeded agent: %v\n%s", err, out)
 	}
-	out, err = runCmd(t, NewAgentsCmd(opts...), "list", "--json", "--min-band", "5")
+	out, err = runCmd(t, NewAgentsCmd(opts...), "list", "--custom", "--json", "--min-band", "5")
 	if err != nil || strings.Contains(out, `"a1"`) {
 		t.Fatalf("--min-band 5 kept an L4 agent: %v\n%s", err, out)
 	}

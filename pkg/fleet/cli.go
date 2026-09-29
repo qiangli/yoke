@@ -123,33 +123,48 @@ type toolRow struct {
 }
 
 func newToolsList(opts []Option) *cobra.Command {
-	var asJSON, all bool
+	var asJSON bool
+	var filter listFilter
 	c := &cobra.Command{
 		Use:   "list",
 		Short: "List agentic CLI tools",
 		Long: "List agentic CLI tools.\n\n" +
 			"The asset registry's tool namespace is shared with MCP-style function kits;\n" +
-			"the default view contains visible kind:cli fleet tools. --all also includes\n" +
-			"hidden CLI definitions and non-CLI func/web/system entries.\n\n" +
+			"the default view contains visible kind:cli fleet tools. Explicit ring\n" +
+			"views also include hidden CLI definitions and non-CLI func/web/system entries.\n\n" +
 			"Fields:\n" +
 			"  NAME          canonical registry name used by --tool and agent bindings\n" +
-			"  KIND          cli = agent harness; func/web/system appear only with --all\n" +
+			"  KIND          cli = agent harness; func/web/system appear in explicit views\n" +
 			"  BINARY        executable Bashy will run: declared binary, otherwise NAME;\n" +
 			"                use `tools verify NAME` to check PATH\n" +
 			"  MODEL-SELECT  yes when Bashy can pass a binding's model at launch; no means\n" +
 			"                the tool may choose its own default, and a binding is only a label\n" +
 			"  RING          source of the selected definition (explained below)\n\n" +
 			"JSON also includes aliases and spells MODEL-SELECT as selects_model.\n\n" +
-			ringFieldHelp,
+			ringFieldHelp + "\n\n" + listFilterHelp,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			selected, err := filter.selected()
+			if err != nil {
+				return err
+			}
 			c := New(opts...)
-			tools, errs := c.Tools(all)
+			tools, errs := c.Tools(true)
 			rows := make([]toolRow, 0, len(tools))
+			hidden := 0
 			for _, t := range tools {
-				if t.Hidden && !all {
+				if !filter.match(t.Ring, selected) {
+					if selected == "" && t.Ring == assetring.RingLocal {
+						hidden++
+					}
+					continue
+				}
+				if !t.IsCLI() && selected == "" {
+					continue
+				}
+				if t.Hidden && selected == "" {
 					continue // kept in the registry (detected/resolvable), just not listed
 				}
 				rows = append(rows, toolRow{
@@ -166,11 +181,12 @@ func newToolsList(opts []Option) *cobra.Command {
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", r.Name, r.Kind, r.Binary, yesNo(r.Model), r.Ring)
 			}
 			tw.Flush()
+			hiddenCustomHint(cmd, hidden, selected)
 			return reportParseErrs(cmd.ErrOrStderr(), errs)
 		},
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
-	c.Flags().BoolVar(&all, "all", false, "include hidden CLI and non-CLI func/web/system entries")
+	filter.flags(c)
 	return c
 }
 
@@ -296,6 +312,7 @@ type modelRow struct {
 	Band       int      `json:"band,omitempty"`
 	BandSource string   `json:"band_source,omitempty"`
 	Kind       string   `json:"kind,omitempty"`
+	Source     string   `json:"source,omitempty"`
 	Provider   string   `json:"provider,omitempty"`
 	Target     string   `json:"target,omitempty"`
 	Aliases    []string `json:"aliases,omitempty"`
@@ -304,6 +321,7 @@ type modelRow struct {
 
 func newModelsList(opts []Option) *cobra.Command {
 	var asJSON bool
+	var filter listFilter
 	c := &cobra.Command{
 		Use:   "list",
 		Short: "List inference backends",
@@ -320,17 +338,29 @@ func newModelsList(opts []Option) *cobra.Command {
 			"  RING      source of the selected definition (explained below)\n\n" +
 			"Bands are comparable across providers; vendor tier names are not mapped\n" +
 			"positionally. For pegged rows JSON reports the numeric band and band_source\n" +
-			"(declared, operator, measured, or cascade); unpegged rows omit both.\n\n" +
-			ringFieldHelp,
+			"(declared, operator, measured, or cascade); unpegged rows omit both.\n" +
+			"JSON source is the model's cloud/local inference path, not its RING.\n\n" +
+			ringFieldHelp + "\n\n" + listFilterHelp,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			selected, err := filter.selected()
+			if err != nil {
+				return err
+			}
 			models, errs := New(opts...).Models()
 			rows := make([]modelRow, 0, len(models))
+			hidden := 0
 			for _, m := range models {
+				if !filter.match(m.Ring, selected) {
+					if selected == "" && m.Ring == assetring.RingLocal {
+						hidden++
+					}
+					continue
+				}
 				rows = append(rows, modelRow{
-					Name: m.Name, Band: m.Band, BandSource: effectiveBandSource(m.Band, m.BandSource), Kind: m.Kind, Provider: m.Provider,
+					Name: m.Name, Band: m.Band, BandSource: effectiveBandSource(m.Band, m.BandSource), Kind: m.Kind, Source: m.Source, Provider: m.Provider,
 					Target: m.Target(), Aliases: m.Names()[1:], Ring: m.Ring.String(),
 				})
 			}
@@ -344,6 +374,7 @@ func newModelsList(opts []Option) *cobra.Command {
 					r.Kind, r.Provider, r.Target, strings.Join(r.Aliases, ","), r.Ring)
 			}
 			tw.Flush()
+			hiddenCustomHint(cmd, hidden, selected)
 			if len(models) == 0 {
 				emptyRingHint(cmd.ErrOrStderr(), KindModel)
 			}
@@ -351,6 +382,7 @@ func newModelsList(opts []Option) *cobra.Command {
 		},
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
+	filter.flags(c)
 	return c
 }
 
@@ -415,7 +447,8 @@ type agentRow struct {
 }
 
 func newAgentsList(opts []Option) *cobra.Command {
-	var asJSON, all bool
+	var asJSON bool
+	var filter listFilter
 	var band, minBand int
 	c := &cobra.Command{
 		Use:   "list",
@@ -442,7 +475,7 @@ func newAgentsList(opts []Option) *cobra.Command {
 			"  RESOLVES  structural only: both TOOL and MODEL definitions exist. 'yes' does\n" +
 			"            not prove installation, credentials, launch, or a successful turn\n" +
 			"  RING      source of this agent definition, not its tool/model definitions\n\n" +
-			"Dangling agents and ephemeral task clones are hidden unless --all is given.\n" +
+			"Dangling agents and ephemeral task clones are hidden in the default view.\n" +
 			"Use `agents verify NAME` for launchability and `agents verify NAME --live`\n" +
 			"for an actual response. Use --min-band N to select a capable roster.\n\n" +
 			"JSON additionally includes binding (canonical tool:model), aliases, band_source\n" +
@@ -450,13 +483,17 @@ func newAgentsList(opts []Option) *cobra.Command {
 			"derived_band, missing_gates, the model's kind/billing/provider, and reason\n" +
 			"when resolves is false. Season and band lines come from ladder.yaml in the\n" +
 			"fleet root; without it nothing expires by season and no rating line is placed.\n\n" +
-			ringFieldHelp,
+			ringFieldHelp + "\n\n" + listFilterHelp,
 		Example: "  bashy agent list --min-band 3\n" +
 			"  bashy agent list --json",
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			selected, err := filter.selected()
+			if err != nil {
+				return err
+			}
 			if band != 0 && minBand != 0 {
 				return fmt.Errorf("fleet: --band and --min-band are alternatives; give one")
 			}
@@ -478,7 +515,14 @@ func newAgentsList(opts []Option) *cobra.Command {
 			}
 			standings := DeriveStandings(entries, ladder)
 			rows := make([]agentRow, 0, len(agents))
+			hidden := 0
 			for i, a := range agents {
+				if !filter.match(a.Ring, selected) {
+					if selected == "" && a.Ring == assetring.RingLocal {
+						hidden++
+					}
+					continue
+				}
 				r := agentRow{
 					Name: a.Name, Nick: a.NickName(), Tool: a.Tool, Model: a.Model,
 					Binding: a.MatrixKey(), Aliases: a.Aliases, Resolves: true,
@@ -503,14 +547,14 @@ func newAgentsList(opts []Option) *cobra.Command {
 					r.Band, r.BandSource = a.Band, a.BandSource
 					r.Model = cascadeModelChain(cat, a)
 				}
-				if !r.Resolves && !all {
+				if !r.Resolves && selected == "" {
 					continue
 				}
 				// An EPHEMERAL clone is a worker minted for one task, not a
 				// member of the roster. A fleet listing that grows a row per
 				// in-flight task is a listing nobody reads, and the roster is
 				// what an operator picks from.
-				if a.Ephemeral && !all {
+				if a.Ephemeral && selected == "" {
 					continue
 				}
 				// An unpegged or dangling agent is never silently swept into a
@@ -541,6 +585,7 @@ func newAgentsList(opts []Option) *cobra.Command {
 					dashIfEmpty(r.Billing), dashIfEmpty(r.Reliability), yesNo(r.Resolves), r.Ring)
 			}
 			tw.Flush()
+			hiddenCustomHint(cmd, hidden, selected)
 			if len(agents) == 0 {
 				emptyRingHint(cmd.ErrOrStderr(), KindAgent)
 			}
@@ -551,7 +596,7 @@ func newAgentsList(opts []Option) *cobra.Command {
 		},
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
-	c.Flags().BoolVar(&all, "all", false, "include dangling and ephemeral agents")
+	filter.flags(c)
 	c.Flags().IntVar(&band, "band", 0, "only agents in exactly this band (1-4)")
 	c.Flags().IntVar(&minBand, "min-band", 0, "only agents in this band or above (1-4)")
 	return c

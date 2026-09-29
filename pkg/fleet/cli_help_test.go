@@ -60,7 +60,7 @@ func TestAgentsListReportsAPIKeyFlatBillingSeparately(t *testing.T) {
 	if err := cat.SaveAgent(Agent{Name: "ycode-glm", Tool: "ycode", Model: "glm"}); err != nil {
 		t.Fatal(err)
 	}
-	out, err := runCmd(t, NewAgentsCmd(WithRoot(root)), "list", "--json")
+	out, err := runCmd(t, NewAgentsCmd(WithRoot(root)), "list", "--custom", "--json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestToolsListReportsEffectiveBinaryFallback(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	out, err := runCmd(t, NewToolsCmd(WithRoot(root)), "--json")
+	out, err := runCmd(t, NewToolsCmd(WithRoot(root)), "--custom", "--json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestModelsJSONMakesLegacyDeclaredBandSourceExplicit(t *testing.T) {
 	if err := cat.SaveModel(Model{Name: "prior-model", Band: 2}); err != nil {
 		t.Fatal(err)
 	}
-	out, err := runCmd(t, NewModelsCmd(WithRoot(root)), "--json")
+	out, err := runCmd(t, NewModelsCmd(WithRoot(root)), "--custom", "--json")
 	if err != nil {
 		t.Fatal(err)
 	}
