@@ -132,7 +132,42 @@ type Tool struct {
 	// capability matrix reads these as priors.
 	Harness map[string]float64 `yaml:"harness,omitempty" json:"harness,omitempty" doc:"harness capability priors"`
 
+	// Commands exposes this tool's own vendor features (slash commands,
+	// skills, subcommands) as named bashy services — the inverse of cligw,
+	// which strips them. Data only; see toolcommand.go and
+	// docs/tool-commands-design.md (Sprint #324).
+	Commands []ToolCommand `yaml:"commands,omitempty" json:"commands,omitempty" doc:"vendor slash commands exposed as bashy tool commands, keyed by canonical cross-tool name"`
+
 	Ring assetring.Ring `yaml:"-" json:"ring"`
+}
+
+// Tool command modes.
+const (
+	ToolCommandPrint = "print" // one-shot through the exec template (or the command's own exec)
+	ToolCommandTUI   = "tui"   // typed into a steered interactive session (steer_exec)
+)
+
+// ToolCommand is one vendor feature of a tool exposed as a bashy command
+// (`<tool>:<name>`). Name is a CANONICAL cross-tool name — every tool
+// registers the same feature under the same name (CanonicalToolCommands) —
+// and Slash is this tool's own spelling of it.
+type ToolCommand struct {
+	Name       string            `yaml:"name" json:"name" doc:"canonical cross-tool command name (plan, review, deep-research, ...); unique per tool"`
+	Slash      string            `yaml:"slash" json:"slash" doc:"the tool-specific line to send; {args} is replaced by the caller's text"`
+	Mode       string            `yaml:"mode" json:"mode" doc:"print (one-shot via the exec template) or tui (steered session via steer_exec)"`
+	Capability string            `yaml:"capability,omitempty" json:"capability,omitempty" doc:"capability tag for --capability routing"`
+	Timeout    string            `yaml:"timeout,omitempty" json:"timeout,omitempty" doc:"Go duration bounding the whole command; empty = runner default"`
+	Output     string            `yaml:"output,omitempty" json:"output,omitempty" doc:"turn (final message, default), transcript, or file:<glob> (artifacts in the workdir)"`
+	Exec       string            `yaml:"exec,omitempty" json:"exec,omitempty" doc:"print only: argv template used instead of cli.launch.exec, for a feature that is a subcommand ({args}, {model}, {workspace})"`
+	Steps      []ToolCommandStep `yaml:"steps,omitempty" json:"steps,omitempty" doc:"tui only: scripted frames after the slash line"`
+	Quit       string            `yaml:"quit,omitempty" json:"quit,omitempty" doc:"tui only: line that ends the session; empty = the tool's graceful quit"`
+}
+
+// ToolCommandStep is one scripted TUI frame. Exactly one field is set.
+type ToolCommandStep struct {
+	Say      string `yaml:"say,omitempty" json:"say,omitempty" doc:"type a line into the session"`
+	Key      string `yaml:"key,omitempty" json:"key,omitempty" doc:"send one named key verbatim (esc, enter, tab, ctrl-c, ...)"`
+	WaitIdle string `yaml:"wait_idle,omitempty" json:"wait_idle,omitempty" doc:"wait until the session is quiet for this Go duration"`
 }
 
 type ToolCLI struct {

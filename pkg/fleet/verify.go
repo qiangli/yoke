@@ -82,6 +82,17 @@ func (c *Catalog) VerifyTool(name string, ps *spacetime.ProbeSet) Check {
 	if t.CLI.Launch.AuthHint != "" {
 		chk.Reason += "; " + t.CLI.Launch.AuthHint
 	}
+	// Commands: an invalid declaration is something a caller is counting on
+	// and will not get; a non-canonical name is merely unshared. Both warn.
+	cmdErrs, cmdWarns := t.ValidateCommands()
+	var notes []string
+	for _, e := range cmdErrs {
+		notes = append(notes, e.Error())
+	}
+	notes = append(notes, cmdWarns...)
+	if len(notes) > 0 {
+		chk.Warn = strings.Join(notes, "; ")
+	}
 	return chk
 }
 

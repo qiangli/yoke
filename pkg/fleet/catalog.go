@@ -238,6 +238,10 @@ func (c *Catalog) Tools(all bool) ([]Tool, []error) {
 		if !all && !r.Entry.IsCLI() {
 			continue
 		}
+		// An invalid commands block is reported like an unreadable entry,
+		// but the tool itself stays: a bad command never hides its tool.
+		cmdErrs, _ := r.Entry.ValidateCommands()
+		errs = append(errs, cmdErrs...)
 		out = append(out, r.Entry)
 	}
 	return out, errs
