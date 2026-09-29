@@ -38,6 +38,7 @@ package ask
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -169,7 +170,7 @@ func runAsk(c *cobra.Command, o *options) error {
 		}
 	}()
 
-	value, err := obtain(r, ctty.Channel(o.channel))
+	value, err := obtain(r, ctty.Channel(o.channel), c.ErrOrStderr())
 	if err != nil {
 		return err
 	}
@@ -191,7 +192,13 @@ func runAsk(c *cobra.Command, o *options) error {
 // already-resolved binary). What must NOT fall through is a rung that reached the
 // human and got "no": re-prompting somebody who just cancelled is how a legitimate
 // mechanism turns into a nuisance, and then into a phish people click through.
-func obtain(r Request, requested ctty.Channel) ([]byte, error) {
+//
+// status is the COMMAND's error stream, not os.Stderr. The distinction is
+// load-bearing for --stdout: `bashy ask --stdout | bashy secret set NAME` stores
+// whatever crosses stdout, so every instruction and rendezvous note must follow
+// wherever the host wired the command's stderr — a hardcoded os.Stderr bypasses a
+// host that rewires the streams, and the prose ends up in the vault.
+func obtain(r Request, requested ctty.Channel, status io.Writer) ([]byte, error) {
 	probe := ctty.CurrentProbe(requested)
 	req := ctty.Request{
 		Frame:   renderFrame(r),
@@ -208,7 +215,7 @@ func obtain(r Request, requested ctty.Channel) ([]byte, error) {
 			// stderr, not stdout: the request carries no secret, and under a
 			// harness stderr is exactly the channel that reaches the model so it
 			// can relay the instruction to the human.
-			v, err := waitForAnswer(r, os.Stderr)
+			v, err := waitForAnswer(r, status)
 			if err != nil {
 				return nil, err
 			}
