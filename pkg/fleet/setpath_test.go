@@ -90,10 +90,10 @@ func TestUnsetClearsAnExistingValue(t *testing.T) {
 	}
 }
 
-func TestSetCopiesEveryNounIntoLocalRing(t *testing.T) {
+func TestSetOverlaysEveryNounIntoLocalRing(t *testing.T) {
 	root := isolatedFleetRoot(t)
 	// Tools ship embedded; models and agents come from the test ring, which is
-	// mounted as a shared dir — the note must name the ring the copy came from.
+	// mounted as a shared dir — the note must name the lower ring.
 	for _, tc := range []struct {
 		name, ring string
 		cmd        *cobra.Command
@@ -107,8 +107,8 @@ func TestSetCopiesEveryNounIntoLocalRing(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s set: %v", tc.name, err)
 		}
-		if !strings.Contains(out, "note: copied "+entry+" from the "+tc.ring+" ring into the local store") {
-			t.Errorf("%s copy note missing from %q", tc.name, out)
+		if !strings.Contains(out, "note: overlaid "+entry+" from the "+tc.ring+" ring in the local store") {
+			t.Errorf("%s overlay note missing from %q", tc.name, out)
 		}
 	}
 }

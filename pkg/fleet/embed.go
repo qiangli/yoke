@@ -9,14 +9,15 @@ const baselineRoot = "baseline"
 // with no configuration, no shared catalog, and no cloudbox — a launch
 // contract per harness (every one, including the declared-but-not-measured
 // ones) plus a default model and agent roster carrying its band pegs and
-// reliability ledger. Every higher ring shadows it; nothing ever writes to it.
+// reliability ledger. Higher rings may replace it; a marked local overlay
+// merges field by field with the next lower entry. Nothing writes to it.
 //
 // The seeds are DATA, not the mechanism: rod-not-fish binds the Go (no
 // vendor knowledge in code, no model name the runtime special-cases), while
 // the roster is an initial default an operator overwrites — a same-named
 // file in a shared dir on $BASHY_MODELS_PATH / $BASHY_AGENTS_PATH, an org
-// overlay pulled by `sync`, or a `bashy model|agent set` copy-on-write in
-// the local store all win over it. Without seeds a process that does not
+// overlay pulled by `sync`, or a sparse `bashy model|agent set` overlay in
+// the local store all take precedence. Without seeds a process that does not
 // inherit the operator's shell exports (a headless worker, a daemon, an ssh
 // session, a fresh host) saw an empty fleet, and every band-routed picker —
 // `chat --band`, `steward start`, `meet --min-band`, the weave judge floor —

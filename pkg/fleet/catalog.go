@@ -169,8 +169,8 @@ func (c *Catalog) nounDir(noun string) string {
 
 // sources assembles a noun's rings in precedence order: the embedded
 // baseline, then shared catalog dirs, then any injected overlay (an org
-// catalog cache), then the host-local store. The last source wins, so a
-// local entry shadows everything.
+// catalog cache), then the host-local store. A marked local overlay merges
+// into the next lower winning entry; legacy local files replace it.
 func (c *Catalog) sources(noun string) []assetring.Source {
 	var out []assetring.Source
 
@@ -197,7 +197,11 @@ func (c *Catalog) sources(noun string) []assetring.Source {
 		out = append(out, cloudSources(c.cfg.root, noun)...)
 	}
 	if !c.cfg.noLocal {
-		out = append(out, assetring.FileDir(c.nounDir(noun), assetring.RingLocal, ext))
+		local := assetring.FileDir(c.nounDir(noun), assetring.RingLocal, ext)
+		if noun == dirTools || noun == dirModels || noun == dirAgents {
+			local = overlaySource{Source: local, lower: append([]assetring.Source(nil), out...), noun: noun}
+		}
+		out = append(out, local)
 	}
 	return out
 }

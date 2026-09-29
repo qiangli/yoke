@@ -28,6 +28,7 @@ func NewToolsCmd(opts ...Option) *cobra.Command {
 		newSchema(KindTool),
 		newToolsAdd(opts),
 		newToolsSet(opts),
+		newMigrateOverride(dirTools, opts),
 		newRm(KindTool, opts, (*Catalog).RemoveTool),
 		newEdit(KindTool, opts, (*Catalog).MaterializeTool),
 		newSync(KindTool, opts),
@@ -45,6 +46,7 @@ func NewModelsCmd(opts ...Option) *cobra.Command {
 		newSchema(KindModel),
 		newModelsAdd(opts),
 		newModelsSet(opts),
+		newMigrateOverride(dirModels, opts),
 		newRm(KindModel, opts, (*Catalog).RemoveModel),
 		newEdit(KindModel, opts, (*Catalog).MaterializeModel),
 		newSync(KindModel, opts),
@@ -63,6 +65,7 @@ func NewAgentsCmd(opts ...Option) *cobra.Command {
 		newAgentsAdd(opts),
 		newAgentsClone(opts),
 		newAgentsSet(opts),
+		newMigrateOverride(dirAgents, opts),
 		newRm(KindAgent, opts, (*Catalog).RemoveAgent),
 		newEdit(KindAgent, opts, (*Catalog).MaterializeAgent),
 		newSync(KindAgent, opts),
@@ -104,8 +107,9 @@ seeded model/agent roster; BASHY_FLEET_SEEDS=off drops the roster, never the
 contracts); shared = read-only directory from BASHY_TOOLS_PATH,
 BASHY_MODELS_PATH, or BASHY_AGENTS_PATH; cloud = organization catalog cached by
 sync; local = writable host override under BASHY_FLEET_DIR or the noun-specific
-BASHY_*_DIR. Precedence is embedded -> shared -> cloud -> local; the last
-definition of a name wins.`
+BASHY_*_DIR. Precedence is embedded -> shared -> cloud -> local. A local file
+with overlay: true merges its present fields onto the next lower entry;
+an older full file remains a complete replacement until migrated.`
 
 // --- tools --------------------------------------------------------------
 
