@@ -271,9 +271,15 @@ var toolEnvelopeStart = regexp.MustCompile(`\{\s*"tool_calls"\s*:`)
 // tool call with text around it (a sentence before, a markdown fence, or
 // more text after): the worker was told to reply with the bare envelope, and
 // the gateway turns exactly that into structured tool_calls. The first
-// well-formed envelope wins; anything else is returned unchanged.
+// well-formed envelope wins. Failing that, the first complete call object
+// after an envelope's opening bracket is returned as a one-call envelope: a
+// model that batches calls and drops the array's closing bracket
+// (`{"tool_calls":[{call}}{"tool_calls":[{call}}}`, gpt-5.5 on the codex seat)
+// otherwise has every call fall through as text, and then narrates results it
+// never got. Anything else is returned unchanged.
 func toolEnvelopeTail(text string) string {
-	for _, at := range toolEnvelopeStart.FindAllStringIndex(text, -1) {
+	starts := toolEnvelopeStart.FindAllStringIndex(text, -1)
+	for _, at := range starts {
 		dec := json.NewDecoder(strings.NewReader(text[at[0]:]))
 		var env struct {
 			ToolCalls []json.RawMessage `json:"tool_calls"`
@@ -282,6 +288,24 @@ func toolEnvelopeTail(text string) string {
 			continue
 		}
 		return strings.TrimSpace(text[at[0] : at[0]+int(dec.InputOffset())])
+	}
+	for _, at := range starts {
+		rest := strings.TrimLeft(text[at[1]:], " \t\r\n")
+		if !strings.HasPrefix(rest, "[") {
+			continue
+		}
+		dec := json.NewDecoder(strings.NewReader(rest[1:]))
+		var call json.RawMessage
+		if dec.Decode(&call) != nil {
+			continue
+		}
+		var probe struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(call, &probe) != nil || probe.Name == "" {
+			continue
+		}
+		return `{"tool_calls":[` + string(call) + `]}`
 	}
 	return text
 }
