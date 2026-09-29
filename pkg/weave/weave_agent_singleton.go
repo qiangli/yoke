@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/qiangli/yoke/pkg/assetring"
+	"github.com/qiangli/yoke/pkg/fleet"
 )
 
 // ONE AGENT, ONE ISSUE AT A TIME — AND WHAT TO DO WHEN YOU WANT MORE.
@@ -89,12 +89,12 @@ func weaveIssueCloneName(agent string, id int64) string {
 //
 // Reusing an existing record is what makes `--resume` work: the same issue comes
 // back to the same worker rather than minting elif-w412 twice.
-func weaveCloneAgentForIssue(agent string, id int64) (string, error) {
+func weaveCloneAgentForIssue(agent string, id int64, queueDir string) (string, error) {
 	name := weaveIssueCloneName(agent, id)
 	cat := fleetCatalog()
 	if existing, ok := cat.Agent(name); ok {
-		if !existing.Ephemeral {
-			return "", fmt.Errorf("weave: %q already names a permanent agent; rename it or start this run under another agent", name)
+		if !existing.Ephemeral || existing.Lifecycle == nil || existing.Lifecycle.WeaveQueue != queueDir || existing.Lifecycle.RunID != id {
+			return "", fmt.Errorf("weave: %q is not owned by this run; rename it or start this run under another agent", name)
 		}
 		return name, nil
 	}
@@ -102,39 +102,35 @@ func weaveCloneAgentForIssue(agent string, id int64) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	origin := ""
+	if clone.Lifecycle != nil {
+		origin = clone.Lifecycle.SprintID
+	}
+	clone.Lifecycle = &fleet.AgentLifecycle{WeaveQueue: queueDir, RunID: id, SprintID: origin}
 	if err := cat.SaveAgent(clone); err != nil {
 		return "", fmt.Errorf("weave: minting worker %q: %w", name, err)
 	}
 	return name, nil
 }
 
-// weaveReapIssueClones removes the ephemeral workers of issues that have
-// finished.
-//
-// Reading IS the reconciliation, as everywhere else here: this runs when a queue
-// is next started rather than from a sweeper, so there is no daemon to be down
-// and no state that outlives the thing it describes. An ephemeral record left by
-// a crash is reclaimed the same way.
-func weaveReapIssueClones(q *weaveQueue) {
-	if q == nil {
-		return
-	}
+// A clone minted by a sprint manager initially belongs to the sprint. Its first
+// weave assignment narrows that ownership to the run, preserving sprint origin.
+// Seats created with agent add remain sprint-owned; permanent agents are never
+// converted just because they were selected to execute a run.
+func weaveBindEphemeralClone(agent, dir string, id int64) error {
 	cat := fleetCatalog()
-	for _, it := range q.Items {
-		if it == nil || !isTerminalState(it.State) || it.LaunchSpec == nil {
-			continue
-		}
-		name := strings.TrimSpace(it.LaunchSpec.Agent)
-		if name == "" {
-			continue
-		}
-		// Only a record WE wrote is ever removed. Reaping an entry an operator
-		// hand-wrote, or one an org catalog supplies, would be deleting someone
-		// else's data on a timer — so the ring is checked, not just the flag.
-		a, ok := cat.Agent(name)
-		if !ok || !a.Ephemeral || a.Ring != assetring.RingLocal {
-			continue
-		}
-		_ = cat.RemoveAgent(name)
+	a, ok := cat.Agent(agent)
+	if !ok || !a.Ephemeral || a.Lifecycle == nil || a.ClonedFrom == "" {
+		return nil
 	}
+	if a.Lifecycle.RunID != 0 {
+		if a.Lifecycle.RunID != id || a.Lifecycle.WeaveQueue != dir {
+			return fmt.Errorf("weave: ephemeral agent %s belongs to another run", a.Name)
+		}
+		return nil
+	}
+	p := *a.Lifecycle
+	p.WeaveQueue, p.RunID = dir, id
+	a.Lifecycle = &p
+	return cat.SaveAgent(a)
 }

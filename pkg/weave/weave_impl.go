@@ -766,7 +766,11 @@ func saveWeaveQueue(dir string, q *weaveQueue) error {
 	if err := weaveWriteFile(tmp, b, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	weaveReconcileEphemeralAgents(dir, q)
+	return nil
 }
 
 // weaveStartedCol renders the subagent's start time for the list
@@ -3323,16 +3327,15 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	// a worker answering about this issue using what it learned on another is
 	// wrong in the way that looks right. See weave_agent_singleton.go.
 	//
-	// Ephemeral workers of FINISHED issues are reclaimed here rather than by a
-	// sweeper — reading is the reconciliation, as everywhere else in this queue.
-	weaveReapIssueClones(q)
+	// Ephemeral workers are archived after durable queue transitions;
+	// admission here resolves or mints only the worker for this run.
 	if agentLaunch != nil && agentLaunch.Named() {
 		if busy := weaveAgentWorkingOn(q, agentLaunch.Nick, it.ID); busy != nil {
 			if !opts.clone {
 				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 					weavecli.ExitStateConflict, weaveAgentBusyErr(agentLaunch.Nick, busy, it)))
 			}
-			cloneName, cerr := weaveCloneAgentForIssue(agentLaunch.Nick, it.ID)
+			cloneName, cerr := weaveCloneAgentForIssue(agentLaunch.Nick, it.ID, dir)
 			if cerr != nil {
 				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 					weavecli.ExitGenericFail, cerr))
@@ -3359,6 +3362,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	// and never filled, so the queue could say which tool was running but not
 	// which identity — which is exactly what the check above needs to read.
 	if agentLaunch != nil && launchSpec != nil {
+		if err := weaveBindEphemeralClone(agentLaunch.Nick, dir, it.ID); err != nil {
+			return err
+		}
 		launchSpec.Agent = agentLaunch.Nick
 	}
 	// Bare-tool launch guard. A single tool token that did not resolve to a fleet

@@ -74,8 +74,16 @@ func ensureSprintOwnerSession(ctx context.Context, id int64, owner, brief, cwd s
 			return "", false, err
 		}
 	}
+	req.Env = map[string]string{}
 	if raw != "" {
-		req.Env = map[string]string{sprintLeaseTokenEnv: raw}
+		req.Env[sprintLeaseTokenEnv] = raw
+	}
+	if dir, e := sprintStoreDir(); e == nil {
+		if q, e := readWeaveQueue(dir); e == nil {
+			if s := findWeaveStory(q, id); s != nil {
+				req.Env["BASHY_MINT_SPRINT"] = s.UUID
+			}
+		}
 	}
 	session, err := StartSprintOwner(ctx, req)
 	if err != nil {
@@ -105,6 +113,11 @@ func releaseSprintOwnerSession(ctx context.Context, id int64, owner, cwd string)
 	}
 	if err := retireSprintOwnerSession(ctx, id, owner, cwd); err != nil {
 		return fmt.Sprintf("; could not stop %s's session (%v)", owner, err)
+	}
+	// The terminal board write deliberately retained a still-live manager.
+	// Reconcile again after its session has actually stopped.
+	if dir, err := sprintStoreDir(); err == nil {
+		_ = withWeaveQueueLock(dir, func(*weaveQueue) error { return nil })
 	}
 	return fmt.Sprintf("; stopped %s's session", owner)
 }
