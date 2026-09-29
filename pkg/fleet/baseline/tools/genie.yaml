@@ -1,0 +1,42 @@
+name: genie
+kind: cli
+display: genie (bashy-native agent)
+cli:
+  binary: bashy
+  launch:
+    # Headless: one turn in the working directory, the answer on stdout. -m
+    # names a registry API model (external endpoint) or a door/local id (the
+    # host's model door serves it; the host pick when omitted).
+    exec: bashy genie -m {model} {prompt}
+    prompt_position: last
+    watchdog:
+      max_runtime: 45m
+      mem_limit: 12g
+    # Interactive: bare `bashy genie -m MODEL` is bashy's agent terminal with
+    # genie attached; every free-text line is one ycode turn.
+    steer_exec: bashy genie -m {model}
+    # supports_say is MEASURED (Sprint #323, stories #1115/#1098,
+    # 2026-09-28, dragon, ycode 2efcc3a): `bashy chat --agent <genie on
+    # gpt-oss:20b> -i --yolo` under a headless pty, steered only through
+    # `bashy chat steer|interrupt`.
+    #   steer  a line sent while a turn ran was echoed at once and acted on
+    #          (STEERED_OK x2: echoed + answered). A turn owns the terminal:
+    #          each mid-turn line is queued on the session's compiled queue
+    #          (class steering) and reaches the model at its next step; a
+    #          line the turn did not drain runs as the next turn.
+    #   Enter  a bare Enter mid-turn is ignored; the session keeps working
+    #          (agentpty's second Enter after every steer is harmless).
+    #   STOP   a STOP steer mid-turn was drained after the in-flight tool call
+    #          and the model answered STOPPED with no further tool call — the
+    #          step the model had already chosen when STOP arrived finishes,
+    #          nothing after it (3 runs; 4.1-12.5 s from steer to turn end).
+    #   ESC    `bashy chat interrupt` cancelled the running turn in 0.1-0.6 s (2 runs):
+    #          the in-flight tool was cancelled, turn.failed recorded, the
+    #          prompt returned, the session continued (next turn kept its
+    #          history).
+    # So no steer_interrupt: a STOP line reaches the running turn without an
+    # ESC, which would discard the turn instead of letting it wind down.
+    supports_say: true
+    supports_graceful_quit: true
+    notes: Headless is `bashy genie -m MODEL MESSAGE` (one turn, answer on stdout); interactive is bare `bashy genie -m MODEL`. -m names a registry API model (external endpoint) or a door/local id. A mid-turn steer line is delivered to the running turn at its next step; ESC or Ctrl-C interrupts the turn, not the session.
+quirks: "first-party; built on ycode. Mid-turn steering is kept (measured 2026-09-28, ycode 2efcc3a): a steer line reaches the running turn at its next step, a STOP halts it before its next tool call, ESC (chat interrupt) or Ctrl-C cancels the turn and keeps the session. An ESC sent to an IDLE prompt is taken by the line editor and prefixes the next typed line — interrupt only while a turn runs."
