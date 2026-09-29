@@ -18,6 +18,7 @@ const sprintLeaseTokenEnv = "BASHY_SPRINT_LEASE_TOKEN"
 // sprintLeaseGatedVerbs are manager state changes. Goal subverbs are also
 // gated because they are all state changes on the sprint plan.
 var sprintLeaseGatedVerbs = map[string]bool{
+	"arena":      true,
 	"accept":     true,
 	"fail":       true,
 	"assign":     true,

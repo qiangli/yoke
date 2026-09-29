@@ -47,6 +47,7 @@ type weaveStory struct {
 	Lease       *weaveStoryLease `json:"lease,omitempty"`        // current conductor + heartbeat
 	Thread      []weaveComment   `json:"thread,omitempty"`       // sprint-level history
 	Runs        []sprintRun      `json:"runs,omitempty"`         // linked weave runs, CROSS-REPO
+	Arena       *sprintArena     `json:"arena,omitempty"`
 	// Boxes are the sprint's TIME CYCLES, oldest first — orthogonal to Column
 	// (position) and Lease (conductor liveness). A sprint is stopped and
 	// restarted freely over its life, so this is a LIST: one entry per
@@ -618,6 +619,7 @@ branches, worktrees, and weave workspaces owned by this sprint.`,
 		newSprintFocusCmd(),
 		newSprintCommitMsgCmd(),
 		newSprintHooksCmd(),
+		newSprintArenaCmd(),
 		// Conductor-coordination, moved here from `weave` (plan layer,
 		// not per-repo execution): the cloudbox shared-session group and
 		// the conductor director.
