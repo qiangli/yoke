@@ -70,6 +70,23 @@ func TestCLIHelper(t *testing.T) {
 	case "backend-tool":
 		fmt.Println(`{"type":"item.completed","item":{"type":"agent_message","text":"{\"tool_calls\":[{\"name\":\"weather\",\"arguments\":{\"city\":\"Paris\"}}]}"}}`)
 		fmt.Println(`{"type":"turn.completed","usage":{"input_tokens":9,"output_tokens":7}}`)
+	case "muse-fixture":
+		// A real Muse Code 1.3.0 `exec --json` stream, scrubbed (testdata).
+		body, err := os.ReadFile(os.Getenv("CLIGW_MUSE_FIXTURE"))
+		if err != nil {
+			os.Exit(95)
+		}
+		os.Stdout.Write(body)
+	case "muse-terminal-only":
+		fmt.Println(`{"schema_version":1,"payload_type":"run.lifecycle.started","payload":{"kind":"run_started"}}`)
+		fmt.Println(`{"schema_version":1,"payload_type":"run.terminal.completed","payload":{"kind":"run_terminal","terminal":"completed","text":"only terminal","reason":null}}`)
+	case "muse-tool":
+		fmt.Println(`{"schema_version":1,"payload_type":"run.output.delta","payload":{"kind":"run_output_delta","text":"Calling a tool.\n{\"tool_calls\":[{\"name\":\"weather\","}}`)
+		fmt.Println(`{"schema_version":1,"payload_type":"run.output.delta","payload":{"kind":"run_output_delta","text":"\"arguments\":{\"city\":\"Paris\"}}]}"}}`)
+		fmt.Println(`{"schema_version":1,"payload_type":"run.terminal.completed","payload":{"kind":"run_terminal","terminal":"completed","text":"Calling a tool.\n{\"tool_calls\":[{\"name\":\"weather\",\"arguments\":{\"city\":\"Paris\"}}]}","reason":null}}`)
+	case "muse-failed":
+		fmt.Println(`{"schema_version":1,"payload_type":"run.terminal.failed","payload":{"kind":"run_terminal","terminal":"failed","text":null,"reason":"billing_error"}}`)
+		os.Exit(1)
 	case "backend-crash":
 		fmt.Fprintln(os.Stderr, "fake backend crash")
 		os.Exit(7)
@@ -306,6 +323,10 @@ func installFakeCatalog(t *testing.T, toolName string, warm WarmMode, mode strin
 	}
 	if toolName == "claude" {
 		launch.EventsOutcome = fleet.EventsOutcome{Path: "is_error", OK: []string{"false"}}
+	} else if toolName == "muse" || strings.HasPrefix(mode, "muse-") {
+		// As the baseline muse.yaml declares them (Muse Code 1.3.0).
+		launch.EventsDone = fleet.EventsDone{Field: "payload_type", Values: []string{"run.terminal.completed", "run.terminal.failed", "run.terminal.cancelled"}}
+		launch.EventsOutcome = fleet.EventsOutcome{Path: "payload.terminal", OK: []string{"completed"}}
 	} else if toolName == "agy" {
 		launch.EventsDone = fleet.EventsDone{Field: "event", Values: []string{"result"}}
 		launch.EventsOutcome = fleet.EventsOutcome{Path: "result.status", OK: []string{"SUCCESS"}}

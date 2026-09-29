@@ -306,6 +306,12 @@ func (w *Worker) DoCompletion(ctx context.Context, input CompletionPrompt, onEve
 				text.WriteString(ev.Text)
 			}
 			if ev.Done {
+				if text.Len() == 0 {
+					if final := mspTerminalText(ev.Raw); final != "" {
+						text.WriteString(final)
+						ev.Text = final
+					}
+				}
 				result.Raw = append(result.Raw[:0], ev.Raw...)
 				result.Usage = usageFromEvent(ev.Raw)
 				terminalVerdict = w.tool.CLI.Launch.EventsOutcome.Read(ev.Raw)
@@ -612,6 +618,14 @@ func parseEvent(line []byte, done fleet.EventsDone) (Event, bool) {
 }
 
 func eventText(obj map[string]any) string {
+	// Muse Code (`exec --json`, MSP records): the kind is the top-level
+	// payload_type and the answer streams as run.output.delta payload.text.
+	// The terminal record repeats the whole answer; see mspTerminalText.
+	if stringValue(obj["payload_type"]) == "run.output.delta" {
+		if payload, ok := obj["payload"].(map[string]any); ok {
+			return stringValue(payload["text"])
+		}
+	}
 	if typ, _ := obj["type"].(string); typ == "item.completed" {
 		if item, ok := obj["item"].(map[string]any); ok {
 			if kind, _ := item["type"].(string); kind == "agent_message" {
@@ -649,6 +663,19 @@ func eventText(obj map[string]any) string {
 		return stringValue(obj["text"])
 	}
 	return ""
+}
+
+// mspTerminalText is the whole answer a Muse Code terminal record
+// (run.terminal.*) carries in payload.text. It is only the fallback for a
+// turn that streamed no run.output.delta: taking it as well would duplicate
+// the answer.
+func mspTerminalText(raw []byte) string {
+	var obj map[string]any
+	if json.Unmarshal(raw, &obj) != nil || !strings.HasPrefix(stringValue(obj["payload_type"]), "run.terminal.") {
+		return ""
+	}
+	payload, _ := obj["payload"].(map[string]any)
+	return stringValue(payload["text"])
 }
 
 func claudeTextDelta(raw []byte) bool {
