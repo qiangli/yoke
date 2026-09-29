@@ -12,7 +12,7 @@ cli:
     # OpenCode 1.18 exposes its unattended permission mode explicitly as
     # --auto. Config pre-seeding establishes project trust but does not answer
     # later tool permission requests, so governed acting sessions need both.
-    exec: opencode --auto run --model {model} {prompt}
+    exec: opencode run --auto --model {model} {prompt}
     acp_exec: opencode acp
     prompt_position: last
     trust_preseed: opencode.json

@@ -114,7 +114,7 @@ func TestArgvDropsOrphanedModelFlag(t *testing.T) {
 		"claude":   {"claude", "--dangerously-skip-permissions", "-p"},
 		"codex":    {"codex", "exec", "--skip-git-repo-check", "--sandbox", "workspace-write"},
 		"agy":      {"agy", "--dangerously-skip-permissions", "--print-timeout", "40m", "-p"},
-		"opencode": {"opencode", "--auto", "run"},
+		"opencode": {"opencode", "run", "--auto"},
 		"aider":    {"aider", "--yes-always", "--no-git", "--message"},
 	}
 	for name, want := range legacy {
@@ -208,6 +208,38 @@ func TestBaselineCodexWorkspaceGrantsGitAndLoopback(t *testing.T) {
 	}
 }
 
+// opencode 1.18.30 treats a flag placed before the subcommand as the default
+// TUI command, printing its usage block and exiting 1. The exec template must
+// place the subcommand ('run') before any flag.
+func TestBaselineOpencodeLaunchPutsFlagsAfterTheSubcommand(t *testing.T) {
+	opencode, ok := baseline(t).Tool("opencode")
+	if !ok {
+		t.Fatal("baseline opencode missing")
+	}
+	fields := strings.Fields(opencode.CLI.Launch.Exec)
+	runIdx := -1
+	firstFlagIdx := -1
+	for i, f := range fields {
+		if f == "run" && runIdx == -1 {
+			runIdx = i
+		}
+		if strings.HasPrefix(f, "-") && firstFlagIdx == -1 {
+			firstFlagIdx = i
+		}
+	}
+	if runIdx == -1 {
+		t.Fatalf("opencode exec template missing %q subcommand: %q", "run", opencode.CLI.Launch.Exec)
+	}
+	if firstFlagIdx != -1 && runIdx > firstFlagIdx {
+		t.Fatalf("opencode subcommand %q (index %d) must precede first flag %q (index %d): %q",
+			"run", runIdx, fields[firstFlagIdx], firstFlagIdx, opencode.CLI.Launch.Exec)
+	}
+	argv := opencode.Argv("model", "task")
+	if len(argv) < 2 || argv[0] != "opencode" || argv[1] != "run" {
+		t.Fatalf("opencode argv must begin with 'opencode run': %q", argv)
+	}
+}
+
 func TestBaselineYcodeDeclaresProbeAndWorkspaceContracts(t *testing.T) {
 	ycode, ok := baseline(t).Tool("ycode")
 	if !ok {
@@ -238,7 +270,7 @@ func TestArgvSubstitutesModel(t *testing.T) {
 	oc, _ := c.Tool("opencode")
 	m, _ := c.Model("deepseek-v4-pro")
 	got = oc.Argv(m.Target(), "hi")
-	want = []string{"opencode", "--auto", "run", "--model", "deepseek/deepseek-v4-pro", "hi"}
+	want = []string{"opencode", "run", "--auto", "--model", "deepseek/deepseek-v4-pro", "hi"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("Argv = %q, want %q", got, want)
 	}
