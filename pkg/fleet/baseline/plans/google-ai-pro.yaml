@@ -1,0 +1,15 @@
+name: google-ai-pro
+display: Google AI Pro
+vendor: Google
+vendor_plan: Google AI Pro
+# Google's ladder is Free < AI Plus < AI Pro < AI Ultra (5x / 20x). Pro sits below
+# Ultra, so its normalized tier is pro. It is the seat agy (Antigravity) bills every
+# model it serves against — including the Claude and GPT-OSS models reached
+# through agy. Checked 2026-09-29.
+tier: pro
+as_of: "2026-09-29"
+sources:
+  - https://gemini.google/subscriptions/
+notes: >-
+  Antigravity on Pro is described only as "Entry rate limits" (Ultra: higher /
+  highest). No numeric threshold is published, so none is recorded.

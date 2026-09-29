@@ -22,6 +22,7 @@ const (
 	dirHosts    = "hosts"
 	dirCommands = "commands"
 	dirApps     = "apps"
+	dirPlans    = "plans"
 )
 
 // DefaultRoot is the parent of every noun's local store. $BASHY_FLEET_DIR
@@ -46,6 +47,7 @@ var nounEnv = map[string]string{
 	dirHosts:    "BASHY_HOSTS_DIR",
 	dirCommands: "BASHY_COMMANDS_DIR",
 	dirApps:     "BASHY_APPS_DIR",
+	dirPlans:    "BASHY_PLANS_DIR",
 }
 
 // nounPathEnv maps a noun to its PATH-list of read-only shared dirs.
@@ -57,6 +59,7 @@ var nounPathEnv = map[string]string{
 	dirHosts:    "BASHY_HOSTS_PATH",
 	dirCommands: "BASHY_COMMANDS_PATH",
 	dirApps:     "BASHY_APPS_PATH",
+	dirPlans:    "BASHY_PLANS_PATH",
 }
 
 // NounDir resolves a noun's local store directory.

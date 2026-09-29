@@ -7,6 +7,7 @@ band_season: 1
 display: Gemini 3.5 Flash (Low)
 provider: gemini
 kind: subscription
+plan: google-ai-pro  # the seat this model is billed through; see plans/google-ai-pro.yaml
 # agy's model registry uses the hyphenated slug (the catalog name is only our
 # stable fleet label).
 model: gemini-3.5-flash-low

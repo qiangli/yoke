@@ -9,6 +9,7 @@ band_season: 1
 display: Claude Sonnet 4.6 (Thinking)
 provider: anthropic
 kind: subscription
+plan: google-ai-pro  # the seat this model is billed through; see plans/google-ai-pro.yaml
 # agy-only on this host; verified accepted on the wire 2026-08-02.
 ids:
   agy: claude-sonnet-4-6

@@ -1,0 +1,16 @@
+name: meta-muse-pro
+display: Meta Muse (Pro seat)
+vendor: Meta
+# The operator's seat is recorded as Pro — a paid plan below Meta's top one. On
+# 2026-09-29 Meta's help page listed the Muse plans as Power ($20/mo, 500M Muse
+# tokens/week) and Maximum ($100/mo, 3B/week), with NO plan named Pro, and Muse
+# Code sells separate Everyday/High/Power usage plans. Which of those products and
+# plans meters the muse CLI's seat is NOT established, so vendor_plan is left unset
+# and no limit is recorded: a number read off the wrong plan is a guess.
+tier: pro
+as_of: "2026-09-29"
+sources:
+  - https://www.meta.com/help/subscriptions/1021145227643680/
+notes: >-
+  Tier is operator-reported (story 5fec08b11a5f). Set vendor_plan and add the
+  matching weekly token limit once the seat's vendor plan is confirmed.

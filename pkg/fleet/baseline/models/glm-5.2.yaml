@@ -45,6 +45,7 @@ display: GLM-5.2 (z.ai)
 provider: openai-compat
 kind: api          # AUTH: an API key (see api_key_ref below)
 billing: flat      # PAY: a prepaid seat. The next token is free at the margin.
+plan: zai-glm-coding-pro  # the seat this model is billed through; see plans/zai-glm-coding-pro.yaml
 #
 # GLM is the model that split `kind` in two. The field used to mean auth AND billing at
 # once, which worked only because they had always travelled together: a seat plan meant

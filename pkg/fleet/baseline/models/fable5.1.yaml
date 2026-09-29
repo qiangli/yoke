@@ -9,6 +9,7 @@ band_season: 1
 display: Claude Fable 5.1
 provider: anthropic
 kind: subscription
+plan: claude-max  # the seat this model is billed through; see plans/claude-max.yaml
 model: claude-fable-5-1
 # A PRIOR, not a measurement: it inherits fable5's L4 peg (itself `operator`,
 # not `measured`), so this is `declared` and prints with the tilde. No gated run

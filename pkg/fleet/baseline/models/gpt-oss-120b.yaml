@@ -11,6 +11,7 @@ band_season: 1
 display: GPT-OSS-120B (Medium)
 provider: openai
 kind: subscription
+plan: google-ai-pro  # the seat this model is billed through; see plans/google-ai-pro.yaml
 # agy-only on this host; verified accepted on the wire 2026-08-02.
 ids:
   agy: gpt-oss-120b-medium

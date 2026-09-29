@@ -48,6 +48,7 @@ band_season: 1
 display: Gemini 3.1
 provider: gemini
 kind: subscription
+plan: google-ai-pro  # the seat this model is billed through; see plans/google-ai-pro.yaml
 # The id agy actually accepts on --model, from `agy models`.
 model: gemini-3.1-pro-high
 quality: 0.80

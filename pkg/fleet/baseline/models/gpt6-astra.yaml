@@ -11,6 +11,7 @@ band_season: 1
 display: GPT-6 Astra
 provider: openai
 kind: subscription
+plan: chatgpt-pro  # the seat this model is billed through; see plans/chatgpt-pro.yaml
 model: gpt-6-astra
 quality: 0.95
 # Unpriced prior: set above sol's 18000 because it is the higher tier.

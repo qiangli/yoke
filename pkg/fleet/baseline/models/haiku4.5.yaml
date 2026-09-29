@@ -7,6 +7,7 @@ band_season: 1
 display: Claude Haiku 4.5
 provider: anthropic
 kind: subscription
+plan: claude-max  # the seat this model is billed through; see plans/claude-max.yaml
 model: claude-haiku-4-5
 quality: 0.72
 cost_micro: 1000

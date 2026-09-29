@@ -1,0 +1,15 @@
+name: claude-max
+display: Claude Max 20x
+vendor: Anthropic
+vendor_plan: Max 20x
+# Max 20x is Anthropic's highest INDIVIDUAL plan (Free < Pro < Max 5x < Max 20x),
+# checked on the vendor's pricing page 2026-09-29.
+tier: max
+as_of: "2026-09-29"
+sources:
+  - https://claude.com/pricing
+notes: >-
+  The page states usage resets on a rolling five-hour session window with weekly
+  limits on top for paid plans, and that "there's no fixed message count" — Max 20x
+  is described only as 20x Pro's usage per session. No numeric limit is published,
+  so none is recorded: the budget gate stays fail-open for this seat.
