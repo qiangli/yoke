@@ -1028,21 +1028,11 @@ you still gate, converge and report.`,
 			if err != nil {
 				return err
 			}
+			who, err := sprintTakeOwner(cmd, &flags, as)
+			if err != nil {
+				return err
+			}
 			return runSprintOwnerLifecycle(cmd, &flags, id, "sprint take", "transfer managed sprint owner", func() error {
-				if !cmd.Flags().Changed("owner") || strings.TrimSpace(as) == "" {
-					return fmt.Errorf("--owner is required, and there are two cases.\n" +
-						"  YOU are the manager (you were told to take this sprint): use your OWN name.\n" +
-						"    `bashy agent list` to find it, or register one:\n" +
-						"    `bashy agent add <name> --tool <tool> --model <model>`\n" +
-						"    then re-run with --owner <name>. That is not a guess; it is your identity.\n" +
-						"  You are appointing SOMEONE ELSE: choose a NAME from `bashy agent list`\n" +
-						"    and ask the user rather than guessing on their behalf.")
-				}
-				who := strings.TrimSpace(as)
-				if err := validateSprintClaimant(who); err != nil {
-					return err
-				}
-				who, _ = canonicalFleetAgentName(who)
 				before, err := sprintOwnerSnapshot(id)
 				if err != nil {
 					return err
@@ -1051,18 +1041,27 @@ you still gate, converge and report.`,
 					return err
 				}
 				prev, stale, free := weaveStoryLeaseState(before)
+				expectedOwner := strings.TrimSpace(before.Owner)
+				selfRename := false
 				if !free && !stale && prev != who && !force {
-					return fmt.Errorf("sprint #%d lease is held by %s (fresh) — coordinate, or --force to take over", id, prev)
+					selfRename = StopSprintOwner != nil && expectedOwner != "" && strings.EqualFold(expectedOwner, prev) && !strings.EqualFold(expectedOwner, who)
+					if !selfRename {
+						return fmt.Errorf("sprint #%d lease is held by %s (fresh) — coordinate, or --force to take over", id, prev)
+					}
 				}
 				if err := checkSprintManagerBand(cmd, id, who); err != nil {
 					return err
 				}
-				expectedOwner := strings.TrimSpace(before.Owner)
+				retiredOld := false
 				if expectedOwner != "" && !strings.EqualFold(expectedOwner, who) {
 					cwd, _ := os.Getwd()
 					if err := retireSprintOwnerSession(cmd.Context(), id, expectedOwner, cwd); err != nil {
+						if selfRename {
+							return fmt.Errorf("sprint #%d lease is held by %s (fresh) — coordinate, or --force to take over", id, prev)
+						}
 						return fmt.Errorf("cannot transfer sprint #%d manager from %s to %s: %w", id, expectedOwner, who, err)
 					}
+					retiredOld = true
 				}
 				var rawToken string
 				var minted bool
@@ -1071,7 +1070,7 @@ you still gate, converge and report.`,
 						return "", fmt.Errorf("sprint #%d sprint manager changed concurrently from %s to %s", id, expectedOwner, s.Owner)
 					}
 					prev, stale, free := weaveStoryLeaseState(s)
-					if !free && !stale && prev != who && !force {
+					if !free && !stale && prev != who && !force && !retiredOld {
 						return "", fmt.Errorf("sprint #%d lease is held by %s (fresh) — coordinate, or --force to take over", id, prev)
 					}
 					// The room is the SPRINT's, so a takeover inherits it rather
@@ -1114,6 +1113,8 @@ you still gate, converge and report.`,
 						weaveStoryAppend(s, who, kindStage, fmt.Sprintf("took STALE conductor lease from %s (recovery)", prev))
 					case prev == who:
 						weaveStoryAppend(s, who, kindSystem, "resumed own conductor lease and delivery stream")
+					case retiredOld:
+						weaveStoryAppend(s, who, kindStage, fmt.Sprintf("renamed own conductor lease from %s", prev))
 					default:
 						weaveStoryAppend(s, who, kindStage, fmt.Sprintf("force-took conductor lease from %s", prev))
 					}
@@ -1135,6 +1136,25 @@ you still gate, converge and report.`,
 	cmd.Flags().String("reason", "", "reason for manager eligibility override")
 	flags.attach(cmd)
 	return cmd
+}
+
+func sprintTakeOwner(cmd *cobra.Command, flags *weaveOutputFlags, as string) (string, error) {
+	if !cmd.Flags().Changed("owner") || strings.TrimSpace(as) == "" {
+		err := fmt.Errorf("--owner is required, and there are two cases.\n" +
+			"  YOU are the manager (you were told to take this sprint): use your OWN name.\n" +
+			"    `bashy agent list` to find it, or register one:\n" +
+			"    `bashy agent add <name> --tool <tool> --model <model>`\n" +
+			"    then re-run with --owner <name>. That is not a guess; it is your identity.\n" +
+			"  You are appointing SOMEONE ELSE: choose a NAME from `bashy agent list`\n" +
+			"    and ask the user rather than guessing on their behalf.")
+		return "", ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "sprint take", weavecli.ExitGenericFail, err))
+	}
+	who := strings.TrimSpace(as)
+	if err := validateSprintClaimant(who); err != nil {
+		return "", ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "sprint take", weavecli.ExitPrecondFail, err))
+	}
+	who, _ = canonicalFleetAgentName(who)
+	return who, nil
 }
 
 func newWeaveStoryHandoffCmd() *cobra.Command {
