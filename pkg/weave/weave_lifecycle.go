@@ -110,6 +110,10 @@ var weaveLifecycleTransitions = []weaveTransition{
 	{From: "no-op", To: "working", By: "weave start --resume"},
 	{From: "no-op", To: "allocated", By: "weave start --run N -- <agent> (no workspace to resume)"},
 	{From: "no-op", To: "abandoned", By: "weave abandon / weave prune --stale"},
+	// A "no-op" can be a stale wrapper measurement over a branch that holds
+	// real commits (run #36). Salvage measures the branch and, when the work
+	// is there, rescues it exactly as it does for failed/killed.
+	{From: "no-op", To: "done", By: "weave salvage + weave pull (measured commits contradict the recorded emptiness)"},
 
 	// --- stopped-with-a-branch -------------------------------------------
 	{From: "failed", To: "working", By: "weave start --resume"},

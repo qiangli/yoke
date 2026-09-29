@@ -478,8 +478,15 @@ func weaveItemVisibleInList(it *weaveItem, includeHistory bool) bool {
 		return it != nil
 	}
 	switch it.State {
-	case "done", "abandoned", "no-op":
+	case "done", "abandoned":
 		return false
+	case "no-op":
+		// A genuine no-op has nothing actionable and stays hidden — but a
+		// "no-op" whose branch measurably holds commits (a stale wrapper
+		// measurement; run #36) is stranded work, and hiding it is how it
+		// stays stranded. Salvageable is annotated by the list paths before
+		// this visibility check runs.
+		return it.Salvageable && weaveWorkspacePresent(it)
 	case "failed", "killed":
 		return weaveWorkspacePresent(it)
 	default:
@@ -848,6 +855,29 @@ func weaveMeasureBranch(workspace, base string) (ahead int, head string) {
 	return ahead, head
 }
 
+// weaveLiveAhead answers "how many commits is this run ahead of base" the way
+// weaveItemMerged already does: by asking the workspace, live, whenever it is
+// still on disk, and falling back to the recorded terminal evidence only when
+// it is gone. The recorded CommitsAhead is the WRAPPER's terminal-time
+// measurement; a tool that commits as the wrapper is measuring (or crashes on
+// the way out) leaves it stale at 0 while the branch carries the work, and a
+// decision or display that trusts that stale zero reports real work as
+// absence. A live measurement whose HEAD read failed (git absent, clone
+// corrupt) is "could not measure", not "measured zero" — the record wins then.
+func weaveLiveAhead(base string, it *weaveItem) (ahead int, head string) {
+	if it == nil {
+		return 0, ""
+	}
+	if it.Workspace != "" {
+		if st, err := os.Stat(it.Workspace); err == nil && st.IsDir() {
+			if ahead, head = weaveMeasureBranch(it.Workspace, weaveCountRef(it, base)); head != "" {
+				return ahead, head
+			}
+		}
+	}
+	return it.CommitsAhead, it.Head
+}
+
 // weaveUnmergedAhead is THE measurement of "work this run holds that is not on
 // the base branch": the number of commits in the run's workspace that the user
 // repo cannot reach from base, plus the workspace HEAD sha.
@@ -895,27 +925,20 @@ func weaveUnmergedAhead(root, base string, it *weaveItem) (ahead int, head strin
 	return ahead, head
 }
 
-// weaveClassifySalvageable reports committed work held by a TERMINAL run —
-// weaveUnmergedAhead plus the state gate that decides whether `weave salvage`
-// is the verb that applies.
+// weaveClassifySalvageable reports committed work held by a run that has
+// STOPPED — weaveUnmergedAhead behind a gate that excludes only the states
+// still moving on their own (todo/allocated/working/paused/finalizing). It
+// deliberately does NOT enumerate the "expected" terminal states: run #36 was
+// recorded "no-op" (a stale wrapper measurement) while its branch held the
+// whole story, and a salvageable-classifier that trusts the state word over
+// the measured branch is the same disease one layer up. If a stopped run's
+// branch holds unmerged commits, it is salvageable, whatever the label says.
 func weaveClassifySalvageable(root, base string, it *weaveItem) (bool, int) {
-	if it == nil || (it.State != "killed" && it.State != "failed" && it.State != "submitted") {
+	if it == nil || !isTerminalState(it.State) {
 		return false, 0
 	}
 	unmerged, _ := weaveUnmergedAhead(root, base, it)
 	return unmerged > 0, unmerged
-}
-
-// weaveSalvageableState reports whether `weave salvage <id>` accepts a run in
-// this state (see runWeaveSalvage's switch). It is what lets a refusal name the
-// verb that WOULD work instead of leaving the operator to guess — and guessing,
-// from a message shaped like absence, means `weave abandon`.
-func weaveSalvageableState(state string) bool {
-	switch state {
-	case "killed", "failed", "submitted", "working":
-		return true
-	}
-	return false
 }
 
 func weaveAnnotateSalvageable(root, base string, it *weaveItem) {
@@ -1541,6 +1564,29 @@ func weaveTerminalState(exitCode int, runErr error, killedBy string, ev weaveTer
 		return "no-op"
 	}
 	return "failed"
+}
+
+// weaveTerminalStateMeasured is weaveTerminalState with the rule this file
+// keeps having to relearn applied to the one state that asserts ABSENCE:
+// before concluding "no-op", go back to the workspace and count again. The
+// evidence in ev is the wrapper's measurement from moments earlier — a tool
+// whose commit lands as the wrapper is measuring leaves ev.CommitsAhead a
+// stale 0, and a "no-op" written from that zero strands committed work (pull
+// and salvage both used to refuse it; run #36 needed a manual fetch+merge).
+// A run holding commits must never be classified no-op, so the re-measurement
+// is folded back into ev and the classification redone from the corrected
+// evidence. Every other state is left exactly as weaveTerminalState decides.
+func weaveTerminalStateMeasured(workspace, countRef string, exitCode int, runErr error, killedBy string, ev *weaveTerminalEvidence) string {
+	state := weaveTerminalState(exitCode, runErr, killedBy, *ev)
+	if state != "no-op" {
+		return state
+	}
+	ahead, head := weaveMeasureBranch(workspace, countRef)
+	if ahead <= 0 || head == "" {
+		return state
+	}
+	ev.CommitsAhead, ev.Head = ahead, head
+	return weaveTerminalState(exitCode, runErr, killedBy, *ev)
 }
 
 func weaveIssueMemoryFiles(it *weaveItem) []string {
@@ -3872,15 +3918,20 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		killReason string
 		runErr     error
 		toolStdout bytes.Buffer
-		coachRep   chat.CoachReport
-		coachMode  string
+		// The last bytes of the tool's stderr, kept so a failure can be
+		// reported WITH its cause: an exit status alone cannot distinguish an
+		// assertion failure from ENOSPC, a missing binary, or a signal kill.
+		// Bounded, because stderr is captured only for this diagnosis.
+		toolStderrTail = &weaveTailWriter{max: weaveThrottleTailBytes}
+		coachRep       chat.CoachReport
+		coachMode      string
 	)
 	if ptyMode == "never" {
 		var outputMu sync.Mutex
 		stdout := weaveSynchronizedWriter{mu: &outputMu, dst: cmd.OutOrStdout()}
 		stderr := weaveSynchronizedWriter{mu: &outputMu, dst: cmd.ErrOrStderr()}
 		stdoutCapture := captureRedaction.Writer(io.MultiWriter(stdout, &toolStdout))
-		stderrCapture := captureRedaction.Writer(stderr)
+		stderrCapture := captureRedaction.Writer(io.MultiWriter(stderr, toolStderrTail))
 		tool.Stdin = os.Stdin
 		tool.Stdout = stdoutCapture
 		tool.Stderr = stderrCapture
@@ -3948,6 +3999,12 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	if it.VerifyCommand != "" && (exitCode == 0 || ev.CommitsAhead > 0) {
 		ev = weaveCollectTerminalEvidence(workspace, weaveCountRef(it, base), dir, it.VerifyCommand, it, true)
 	}
+	// Classify from MEASURED evidence: re-count before concluding "no-op",
+	// because a commit that landed as the wrapper measured must never let a
+	// run holding work be filed as empty (see weaveTerminalStateMeasured).
+	// Corrections fold back into ev, so the display, the memory observation
+	// and the reporter all carry the same corrected count.
+	terminalState := weaveTerminalStateMeasured(workspace, weaveCountRef(it, base), exitCode, runErr, killReason, &ev)
 	var outsideWorkspacePaths []string
 	if ev.CommitsAhead == 0 && logPath != "" {
 		outsideWorkspacePaths = weaveOutsideWorkspacePaths(weaveReadThrottleLogTail(logPath), workspace)
@@ -4037,7 +4094,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		if logPath != "" {
 			freshIt.LogPath = logPath
 		}
-		freshIt.State = weaveTerminalState(exitCode, runErr, killReason, ev)
+		freshIt.State = terminalState
 		if freshIt.State == "no-op" {
 			freshIt.Disposition = weaveDispositionEmpty
 		}
@@ -4168,13 +4225,17 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		}
 	}
 
-	if runErr != nil {
+	if runErr != nil && exitCode == 0 {
+		// The wrapper itself failed (exec error, log flush) with no tool exit
+		// to report; the error already names its own cause.
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 			weavecli.ExitGenericFail, runErr))
 	}
-	if exitCode != 0 {
+	if exitCode != 0 || runErr != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
-			weavecli.ExitGenericFail, fmt.Errorf("tool exited with %d", exitCode)))
+			weavecli.ExitGenericFail,
+			weaveToolFailureError(exitCode, killReason, runErr,
+				weaveToolFailureTail(logPath, toolStderrTail.String(), toolStdout.String()))))
 	}
 	if mode == weavecli.OutputJSON {
 		return ec(emitOK(cmd.OutOrStdout(), mode, "weave start", map[string]any{
@@ -4187,6 +4248,88 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		}))
 	}
 	return nil
+}
+
+// weaveTailWriter keeps only the last max bytes written through it — a
+// capture bound for streams that are recorded solely to explain a failure.
+type weaveTailWriter struct {
+	max int
+	buf []byte
+}
+
+func (w *weaveTailWriter) Write(p []byte) (int, error) {
+	w.buf = append(w.buf, p...)
+	if len(w.buf) > w.max {
+		w.buf = w.buf[len(w.buf)-w.max:]
+	}
+	return len(p), nil
+}
+
+func (w *weaveTailWriter) String() string { return string(w.buf) }
+
+// weaveToolFailureTail picks the most cause-bearing capture of a dead tool's
+// output — the PTY log when one was recorded, else captured stderr, else
+// captured stdout — and reduces it to a bounded, meaningful tail: ANSI paint
+// stripped, blank lines dropped, last few lines only. Never the whole log.
+func weaveToolFailureTail(logPath, stderrCapture, stdoutCapture string) string {
+	raw := ""
+	if logPath != "" {
+		raw = weaveReadThrottleLogTail(logPath)
+	}
+	if raw == "" {
+		raw = stderrCapture
+	}
+	if raw == "" {
+		raw = stdoutCapture
+	}
+	raw = weaveANSIEscape.ReplaceAllString(raw, "")
+	raw = strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(raw)
+	var lines []string
+	for _, ln := range strings.Split(raw, "\n") {
+		if ln = strings.TrimSpace(ln); ln != "" {
+			lines = append(lines, ln)
+		}
+	}
+	const maxLines, maxBytes = 8, 700
+	if len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
+	}
+	tail := strings.Join(lines, "\n")
+	if len(tail) > maxBytes {
+		tail = "…" + tail[len(tail)-maxBytes:]
+	}
+	return tail
+}
+
+// weaveToolFailureError reports a tool's death WITH its cause, not only its
+// exit status. "tool exited with N" alone filed a disk-full crash as a flaky
+// test: the status cannot distinguish an assertion failure from ENOSPC, a
+// missing binary, or a signal kill, and those demand different responses. So:
+// a signalled child is said to have been signalled (by name, not a shifted
+// code), the wrapper's kill reason travels along, an underlying error is
+// wrapped (errors.Is still finds ENOSPC/ENOENT through it), and the captured
+// output's bounded tail rides in the message. The exit code stays.
+func weaveToolFailureError(exitCode int, killReason string, runErr error, outputTail string) error {
+	status := fmt.Sprintf("tool exited with %d", exitCode)
+	if exitCode >= 129 {
+		status = fmt.Sprintf("tool killed by signal %v (exit %d)", syscall.Signal(exitCode-128), exitCode)
+	}
+	var detail []string
+	if killReason != "" {
+		detail = append(detail, killReason)
+	}
+	if tail := strings.TrimSpace(outputTail); tail != "" {
+		detail = append(detail, "last output:\n"+tail)
+	}
+	switch {
+	case runErr != nil && len(detail) > 0:
+		return fmt.Errorf("%s: %w — %s", status, runErr, strings.Join(detail, " — "))
+	case runErr != nil:
+		return fmt.Errorf("%s: %w", status, runErr)
+	case len(detail) > 0:
+		return fmt.Errorf("%s — %s", status, strings.Join(detail, " — "))
+	}
+	return errors.New(status)
 }
 
 // runWeaveSay injects one line into a running subagent's PTY via
@@ -4332,6 +4475,9 @@ func decodeCescape(s string) []byte {
 func weaveLogSummary(cmd *cobra.Command, mode weavecli.OutputMode, root string, it *weaveItem) error {
 	base := weaveBaseBranch(root)
 	merged := weaveItemMerged(root, base, it)
+	// Measured, not recorded: the recorded count is the dead wrapper's last
+	// word, and the branch may have moved past it (see weaveLiveAhead).
+	liveAhead, liveHead := weaveLiveAhead(base, it)
 	if mode == weavecli.OutputJSON {
 		weaveComputeBlocked(it)
 		res := map[string]any{
@@ -4342,11 +4488,11 @@ func weaveLogSummary(cmd *cobra.Command, mode weavecli.OutputMode, root string, 
 			"blocked":       it.Blocked,
 			"comments":      len(it.Comments),
 			"duration":      weaveDurationCol(it),
-			"commits_ahead": it.CommitsAhead,
+			"commits_ahead": liveAhead,
 			"merged":        merged,
 		}
-		if it.Head != "" {
-			res["head"] = it.Head
+		if liveHead != "" {
+			res["head"] = liveHead
 		}
 		if it.ExitCode != nil {
 			res["exit_code"] = *it.ExitCode
@@ -4405,9 +4551,9 @@ func weaveLogSummary(cmd *cobra.Command, mode weavecli.OutputMode, root string, 
 	if it.CleanupError != "" {
 		fmt.Fprintf(w, "  cleanup:  FAILED: %s\n", it.CleanupError)
 	}
-	branchInfo := fmt.Sprintf("%d commit(s) ahead of %s", it.CommitsAhead, base)
-	if len(it.Head) >= 12 {
-		branchInfo += " @ " + it.Head[:12]
+	branchInfo := fmt.Sprintf("%d commit(s) ahead of %s", liveAhead, base)
+	if len(liveHead) >= 12 {
+		branchInfo += " @ " + liveHead[:12]
 	}
 	fmt.Fprintf(w, "  branch:   %s\n", branchInfo)
 	if it.Dirty {
@@ -5450,6 +5596,12 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 	base := weaveBaseBranch(root)
 	merged := weaveItemMerged(root, base, it)
 	weaveAnnotateSalvageable(root, base, it)
+	// The displayed count is MEASURED from the workspace while it exists,
+	// falling back to the record only once it is gone. Run #36's status
+	// printed "0 commit(s) ahead ... @ <head>" — naming the very commit it
+	// claimed did not exist — because the stale wrapper measurement was
+	// echoed instead of asked about.
+	liveAhead, liveHead := weaveLiveAhead(base, it)
 	// Reconcile for display: a submitted item already in base reads as
 	// done (and reconciledFrom records the drift so the operator sees
 	// why prune would now sweep it).
@@ -5485,7 +5637,7 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 			"base_sha":           it.BaseSHA,
 			"launch_phase":       it.LaunchPhase,
 			"completion":         it.Completion,
-			"commits_ahead":      it.CommitsAhead,
+			"commits_ahead":      liveAhead,
 			"salvageable":        it.Salvageable,
 			"unmerged_commits":   it.UnmergedCommits,
 			"branch":             it.Branch,
@@ -5513,8 +5665,8 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 		if reconciledFrom != "" {
 			res["reconciled_from"] = reconciledFrom
 		}
-		if it.Head != "" {
-			res["head"] = it.Head
+		if liveHead != "" {
+			res["head"] = liveHead
 		}
 		if it.ExitCode != nil {
 			res["exit_code"] = *it.ExitCode
@@ -5574,9 +5726,9 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 	if it.Branch != "" {
 		fmt.Fprintf(w, "  branch:   %s\n", it.Branch)
 	}
-	branchInfo := fmt.Sprintf("%d commit(s) ahead of %s", it.CommitsAhead, base)
-	if len(it.Head) >= 12 {
-		branchInfo += " @ " + it.Head[:12]
+	branchInfo := fmt.Sprintf("%d commit(s) ahead of %s", liveAhead, base)
+	if len(liveHead) >= 12 {
+		branchInfo += " @ " + liveHead[:12]
 	}
 	fmt.Fprintf(w, "  commits:  %s\n", branchInfo)
 	if it.Salvageable {
@@ -6672,7 +6824,7 @@ func runWeaveFinalize(cmd *cobra.Command, id int64, observedIdle bool, flags *we
 	if verifyCommand != "" && (ev.CommitsAhead > 0 || ev.Dirty || ev.UntrackedFiles > 0) {
 		ev = weaveCollectTerminalEvidence(workspace, countRef, dir, verifyCommand, &weaveItem{ID: id}, true)
 	}
-	state := weaveTerminalState(0, nil, "", ev)
+	state := weaveTerminalStateMeasured(workspace, countRef, 0, nil, "", &ev)
 	if state == "submitted" && (ev.Dirty || ev.UntrackedFiles > 0 || (ev.VerifyExit != nil && *ev.VerifyExit != 0)) {
 		state = "failed"
 	}
@@ -6747,13 +6899,15 @@ func weaveTestPauseAfterFinalizeClaim() {
 // route other than `weave pull`) is flipped to "done" and swept in the
 // same pass — without this, such an item is stranded forever (prune
 // refuses it, leaving only the data-loss-flavored `abandon`).
-// runWeaveSalvage merges the committed work of a KILLED (or failed) item that
-// `weave pull` won't auto-merge, without the manual fetch+cherry-pick dance.
-// It is not a blind force: it promotes the item to "submitted" only after
-// confirming it has commits ahead of base and a clean tree, then delegates to
-// runWeavePull — so pull's dirty / verify-exit gates still apply. This is the
-// supported path for "the agent did good work but its TUI was killed, so it
-// landed in `killed` state."
+// runWeaveSalvage merges the committed work of a STOPPED item that `weave
+// pull` won't auto-merge, without the manual fetch+cherry-pick dance.
+// Eligibility is the measured branch, never the state word: killed, failed,
+// even a run misrecorded "no-op" by a stale wrapper measurement — if the
+// workspace branch holds commits, salvage rescues them. It is not a blind
+// force: it promotes the item to "submitted" only after confirming it has
+// commits ahead of base and a clean tree, then delegates to runWeavePull — so
+// pull's dirty / verify-exit gates still apply. This is the supported path for
+// "the agent did good work but its run ended in a state pull refuses."
 //
 // Model review is opt-in here, as it is for pull. A bare salvage still runs the
 // deterministic dirty / verify / suite / isolation gates. --no-review remains
@@ -6788,15 +6942,20 @@ func runWeaveSalvage(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64,
 			// Already a normal pull target; let pull handle it — but the review
 			// gate below still applies, because salvage is the verb that was
 			// asked for and it must not be a cheaper door into the same merge.
-		case "killed", "failed":
-			// promotable below
-		default:
-			return fmt.Errorf("run #%d is %q — salvage applies to killed/failed items holding committed work (done/abandoned/allocated have nothing to merge)", issueID, it.State)
-		}
-		if it.State == "submitted" || it.State == "working" {
 			diffStat = weaveSalvageDiffStat(it, base)
 			return nil
+		case "todo", "allocated", "paused", "finalizing":
+			// Not stopped: nothing terminal has been (mis)recorded yet, and
+			// paused/finalizing still own their next transition.
+			return fmt.Errorf("run #%d is %q — salvage rescues committed work from a run that has stopped; resume or finish this one instead", issueID, it.State)
 		}
+		// Any STOPPED run is eligible on the strength of what its branch
+		// MEASURABLY holds — never on its state word. Run #36 was recorded
+		// "no-op" (a stale wrapper measurement) while its branch held the
+		// committed, reviewed work; refusing it because the label said empty
+		// is what turned a misclassification into stranded work. The genuine
+		// refusals remain: no workspace, a dirty tree, or a branch that truly
+		// holds nothing.
 		if it.Workspace == "" {
 			return fmt.Errorf("run #%d has no workspace to salvage from", issueID)
 		}
@@ -6805,11 +6964,12 @@ func runWeaveSalvage(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64,
 		}
 		ahead, head := weaveMeasureBranch(it.Workspace, weaveCountRef(it, base))
 		if ahead <= 0 {
-			return fmt.Errorf("run #%d has 0 commits ahead of %s — nothing to salvage", issueID, base)
+			return fmt.Errorf("run #%d has 0 commits ahead of %s — MEASURED in the workspace, not read from the record; nothing to salvage", issueID, base)
 		}
 		diffStat = weaveSalvageDiffStat(it, base)
+		fromState := it.State
 		it.State = "submitted"
-		it.Body = fmt.Sprintf("[salvaged: promoted from killed/failed to submitted at %.12s (%d commit(s) ahead); merging via pull's verify gate]\n\n", head, ahead) + it.Body
+		it.Body = fmt.Sprintf("[salvaged: promoted from %s to submitted at %.12s (%d commit(s) ahead); merging via pull's verify gate]\n\n", fromState, head, ahead) + it.Body
 		return nil
 	})
 	if lockErr != nil {
@@ -7326,7 +7486,7 @@ func weavePrintSalvageableFooter(w io.Writer, ids []int64) {
 		}
 		fmt.Fprintf(&b, "#%d", id)
 	}
-	fmt.Fprintf(w, "SALVAGEABLE: %s hold committed work not merged to the base branch — inspect with `weave status <id>`; pull submitted runs or salvage killed/failed runs (do NOT re-run: the diff is already there)\n", b.String())
+	fmt.Fprintf(w, "SALVAGEABLE: %s hold committed work not merged to the base branch — inspect with `weave status <id>`; pull submitted runs or `weave salvage <id>` any other stopped run, whatever its state word (do NOT re-run: the diff is already there)\n", b.String())
 }
 
 // weaveNotPullableDetail explains a pull refusal for a run that pull does not
@@ -7338,12 +7498,10 @@ func weavePrintSalvageableFooter(w io.Writer, ids []int64) {
 // refusal with no next step is how an operator ends up at `weave abandon`,
 // which is the one command that turns "not merged yet" into "gone".
 func weaveNotPullableDetail(it *weaveItem, base string, ahead int) string {
-	next := fmt.Sprintf("inspect with `weave status %d`", it.ID)
-	if weaveSalvageableState(it.State) {
-		next = fmt.Sprintf("inspect the killed/failed run, then `weave salvage %d`", it.ID)
-	}
-	return fmt.Sprintf("run is %q and holds %d commit(s) not on %s — NOT empty; pull merges `submitted` runs, so %s. Do NOT abandon/prune: those commits exist only in this run's workspace clone",
-		it.State, ahead, base, next)
+	// salvage accepts ANY stopped run holding commits, whatever its state
+	// word — so the next step is always the same and always recoverable.
+	return fmt.Sprintf("run is %q and holds %d commit(s) not on %s — NOT empty; pull merges `submitted` runs, so inspect the %s run, then `weave salvage %d`. Do NOT abandon/prune: those commits exist only in this run's workspace clone",
+		it.State, ahead, base, it.State, it.ID)
 }
 
 // weavePruneHoldReason says, in one line, why a workspace was not deleted.

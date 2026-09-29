@@ -30,12 +30,20 @@ type weaveHealthProbe struct {
 	PIDAlive        func(int) bool
 	WorkspaceExists func(string) bool
 	LogModifiedAt   func(string) (time.Time, bool)
+	// MeasureBranch counts commits ahead of a ref in a workspace, live.
+	// Health must not trust the recorded CommitsAhead when the artifact is
+	// still on disk: that field is the wrapper's terminal-time measurement,
+	// and a tool that commits as the wrapper measures (or dies on the way
+	// out) leaves it a stale 0 — which is exactly how a "no-op" holding real
+	// work sailed past the consistency check below.
+	MeasureBranch func(workspace, ref string) (ahead int, head string)
 }
 
 func defaultWeaveHealthProbe(now time.Time) weaveHealthProbe {
 	return weaveHealthProbe{
-		Now:      now.UTC(),
-		PIDAlive: pidAlive,
+		Now:           now.UTC(),
+		PIDAlive:      pidAlive,
+		MeasureBranch: weaveMeasureBranch,
 		WorkspaceExists: func(path string) bool {
 			st, err := os.Stat(path)
 			return err == nil && st.IsDir()
@@ -181,6 +189,15 @@ func weaveHealthSnapshotFor(it *weaveItem, probe weaveHealthProbe) weaveHealthSn
 	if s.Workspace != "" {
 		s.WorkspaceExists = probe.WorkspaceExists(s.Workspace)
 	}
+	// If the artifact is on disk, ask the artifact: the recorded count is a
+	// dead wrapper's last word. Only a measurement that actually resolved a
+	// HEAD overrides the record — (0, "") means "could not measure", and a
+	// failed measurement is not evidence of absence.
+	if s.WorkspaceExists && it.BaseSHA != "" && probe.MeasureBranch != nil {
+		if ahead, head := probe.MeasureBranch(s.Workspace, it.BaseSHA); head != "" {
+			s.CommitsAhead, s.Head = ahead, head
+		}
+	}
 	if s.WrapperPID > 0 {
 		s.WrapperAlive = probe.PIDAlive(s.WrapperPID)
 	}
@@ -261,6 +278,13 @@ func weaveHealthConsistencyIssue(s weaveHealthSnapshot, it *weaveItem) (string, 
 	}
 	if s.State == "done" && s.CommitsAhead <= 0 && strings.TrimSpace(s.Head) == "" {
 		return "done run has no commit evidence", "inspect the base and queue record before declaring success", true
+	}
+	if s.State == "no-op" && s.CommitsAhead > 0 {
+		// The state asserts emptiness; the measured branch contradicts it.
+		// This is stranded work, not an incomplete record — name the verb
+		// that rescues it, because "inspect" reads as "probably nothing".
+		return fmt.Sprintf("run recorded no-op but its branch holds %d commit(s)", s.CommitsAhead),
+			fmt.Sprintf("the work is real — `weave salvage %d` merges it through the ordinary gates", s.Issue), true
 	}
 	if s.State == "no-op" && (s.FinishedAt.IsZero() || s.Dirty || s.CommitsAhead != 0) {
 		return "no-op terminal evidence is incomplete", "inspect the workspace and terminal record", true
