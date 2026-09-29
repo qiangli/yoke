@@ -186,6 +186,67 @@ func TestAssignCommandSeedsLinksAndInjectsIdentity(t *testing.T) {
 		}
 		return nil
 	}
+	for _, tc := range []struct {
+		name, env, reason string
+		flags             []string
+		shadow, probe     bool
+	}{
+		{name: "tool flags", flags: []string{"--exclude-tool", "tool-a", "--exclude-tool", "other"}, reason: "tool:tool-a"},
+		{name: "agent flags", flags: []string{"--exclude-agent", "agent-a", "--exclude-agent", "other"}, reason: "agent:agent-a"},
+		{name: "tool env", env: " tool:tool-a , agent:other ", reason: "tool:tool-a"},
+		{name: "agent env", env: "agent:agent-a", reason: "agent:agent-a"},
+		{name: "binding env", env: "agent:tool-a:model-a", reason: "agent:tool-a:model-a"},
+		{name: "additive", env: "tool:tool-a", flags: []string{"--exclude-agent", "other"}, reason: "tool:tool-a"},
+		{name: "shadow", shadow: true, reason: "shadow"},
+		{name: "probe", probe: true, reason: "cached probe: unusable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("BASHY_SPRINT_DISPATCH_EXCLUDE", tc.env)
+			if tc.shadow {
+				if err := cat.SaveAgent(fleet.Agent{Name: "agent-a", Tool: "tool-a", Model: "model-a", Band: 3, Role: &fleet.AgentRole{Scope: "shadow"}}); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					if err := cat.SaveAgent(fleet.Agent{Name: "agent-a", Tool: "tool-a", Model: "model-a", Band: 3}); err != nil {
+						t.Error(err)
+					}
+				})
+			}
+			if tc.probe {
+				dir, err := weaveQueueDir(root)
+				if err != nil {
+					t.Fatal(err)
+				}
+				saveFleetProbeCache(dir, map[string]fleetProbeEntry{"tool-a": {Capable: false, ProbedAt: time.Now()}})
+				t.Cleanup(func() { saveFleetProbeCache(dir, nil) })
+			}
+			for _, manual := range []bool{false, true} {
+				cmd := newSprintAssignCmd()
+				args := append([]string{"1", story.ID, "--repo", root, "--dry-run"}, tc.flags...)
+				if manual {
+					args = append(args, "--agent", "agent-a")
+				}
+				cmd.SetArgs(args)
+				var out bytes.Buffer
+				cmd.SetOut(&out)
+				cmd.SetErr(&out)
+				err := cmd.Execute()
+				if manual {
+					if err == nil || !strings.Contains(err.Error(), "not an eligible fleet binding") {
+						t.Fatalf("manual exclusion: %v", err)
+					}
+				} else if err != nil {
+					t.Fatal(err)
+				}
+				if !strings.Contains(out.String(), "excluded=agent-a") || !strings.Contains(out.String(), tc.reason) || (!manual && !strings.Contains(out.String(), "wait: no free entrant")) {
+					t.Fatal(out.String())
+				}
+				if launched != 0 {
+					t.Fatal("excluded entrant launched")
+				}
+			}
+		})
+	}
 	for _, dry := range []bool{true, false} {
 		cmd := newSprintAssignCmd()
 		args := []string{"1", story.ID, "--repo", root, "--points", "5", "--agent", "agent-a"}
