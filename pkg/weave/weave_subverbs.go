@@ -100,6 +100,8 @@ func newWeaveStartCmd() *cobra.Command {
 	var idleTimeout time.Duration
 	var maxRuntime time.Duration
 	var memLimit string
+	var arena string
+	var blind bool
 	cmd := &cobra.Command{
 		Use:   "start [-- <agent>|<tool> [args...]]",
 		Short: "Allocate a workspace and launch an agent",
@@ -162,6 +164,8 @@ blocks until N reaches a terminal state.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runWeaveStart(cmd, issue, tool, args, weaveStartOptions{
 				noSpawn:     noSpawn,
+				arena:       arena,
+				blind:       blind,
 				resume:      resume,
 				clone:       cloneAgent,
 				pty:         ptyMode,
@@ -176,6 +180,8 @@ blocks until N reaches a terminal state.`,
 	cmd.Flags().StringVar(&tool, "tool", "", "Agent nickname, tool:model, or tool name (alternative to trailing -- <agent>)")
 	cmd.Flags().BoolVar(&resume, "resume", false, "Reattach to an existing lease for the given issue")
 	cmd.Flags().BoolVar(&noSpawn, "no-spawn", false, "Allocate the workspace but do not exec the tool")
+	cmd.Flags().StringVar(&arena, "arena", "", "Sprint arena for a private booth workspace")
+	cmd.Flags().BoolVar(&blind, "blind", false, "Give the booth a story-only prompt")
 	cmd.Flags().BoolVar(&cloneAgent, "clone", false, "If the named agent is already working another run, mint a per-issue ephemeral clone (own name, own context) instead of waiting for it")
 	cmd.Flags().BoolVar(&autoCommit, "auto-commit", false, "Compatibility flag; dirty terminal trees are preserved automatically when verification permits")
 	cmd.Flags().StringVar(&ptyMode, "pty", "auto", "PTY allocation: auto (default) | always | never")

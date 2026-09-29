@@ -183,7 +183,11 @@ type weaveItem struct {
 	// local "main" ref drifts (origin is removed; the root branch may
 	// advance after clone), which is what made `weave status` miscount
 	// "0 commits ahead" when the branch actually had a commit.
-	BaseSHA string `json:"base_sha,omitempty"`
+	BaseSHA      string `json:"base_sha,omitempty"`
+	ArenaSprint  int64  `json:"arena_sprint,omitempty"`
+	BoothUser    string `json:"booth_user,omitempty"`
+	BoothForkURL string `json:"booth_fork_url,omitempty"`
+	Blind        bool   `json:"blind,omitempty"`
 	// LaunchPhase is durable, operator-visible progress while a workspace is
 	// being provisioned.  In particular, hydration can legitimately take a
 	// while; leaving an item as todo until it finishes makes an active launch
@@ -3120,6 +3124,8 @@ func truncate(s string, n int) string {
 type weaveStartOptions struct {
 	noSpawn bool
 	resume  bool
+	arena   string
+	blind   bool
 	// clone runs this issue under a per-issue EPHEMERAL clone of the named agent
 	// instead of the agent itself, so several issues can run in parallel without
 	// sharing one identity's cursor, kb attribution and ledger. Without it, an
@@ -3291,10 +3297,26 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	// `-- 007` / `-- claude:opus` name an AGENT, so the launch argv comes from
 	// the registry with the issue body as the prompt. This is resolved here,
 	// after the issue is known, because the body IS the prompt.
-	agentLaunch, agentArgv, aerr := weaveExpandAgent(toolArgs, it.Body, it.Title)
+	promptBody := it.Body
+	promptTitle := it.Title
+	if opts.blind || it.Blind {
+		promptBody = boothProjection(promptBody)
+		promptTitle = boothProjection(promptTitle)
+	}
+	agentLaunch, agentArgv, aerr := weaveExpandAgent(toolArgs, promptBody, promptTitle)
+	if aerr == nil && (opts.blind || it.Blind) && agentLaunch != nil {
+		blindPrompt := promptBody
+		if blindPrompt == "" {
+			blindPrompt = promptTitle
+		}
+		agentArgv = boothBlindArgv(agentLaunch, blindPrompt)
+	}
 	if aerr != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 			weavecli.ExitInvalidArg, aerr))
+	}
+	if (opts.blind || it.Blind) && agentLaunch == nil && !opts.noSpawn {
+		return fmt.Errorf("blind booths require a registered agent so the story-only prompt can be enforced")
 	}
 
 	// ONE AGENT, ONE LIVE ISSUE. Two issues under one identity mix context, and
@@ -3319,7 +3341,14 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 				agentLaunch.Nick, busy.ID, it.ID, cloneName)
 			toolArgs = []string{cloneName}
 			launchSpec = weaveLaunchSpecFromArgs(toolArgs, opts)
-			agentLaunch, agentArgv, aerr = weaveExpandAgent(toolArgs, it.Body, it.Title)
+			agentLaunch, agentArgv, aerr = weaveExpandAgent(toolArgs, promptBody, promptTitle)
+			if aerr == nil && (opts.blind || it.Blind) && agentLaunch != nil {
+				blindPrompt := promptBody
+				if blindPrompt == "" {
+					blindPrompt = promptTitle
+				}
+				agentArgv = boothBlindArgv(agentLaunch, blindPrompt)
+			}
 			if aerr != nil {
 				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 					weavecli.ExitInvalidArg, aerr))
@@ -3431,6 +3460,50 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			weavecli.ExitPrecondFail, fmt.Errorf("resolve source HEAD: %w", baseErr)))
 	}
 	baseSHA := strings.TrimSpace(string(baseOut))
+	boothFork, boothCred, boothUser := "", "", ""
+	boothSprint := it.ArenaSprint
+	if opts.arena != "" {
+		var parseErr error
+		boothSprint, parseErr = strconv.ParseInt(strings.TrimPrefix(opts.arena, "sprint-"), 10, 64)
+		if parseErr != nil || boothSprint <= 0 {
+			return fmt.Errorf("invalid --arena sprint %q", opts.arena)
+		}
+	}
+	if opts.blind && boothSprint == 0 {
+		return fmt.Errorf("--blind requires --arena SPRINT")
+	}
+	if boothSprint != 0 {
+		card, err := arenaCard(boothSprint)
+		if err != nil {
+			return err
+		}
+		if card.Arena == nil {
+			return fmt.Errorf("sprint %d has no arena", boothSprint)
+		}
+		found := false
+		for _, r := range card.Arena.Repos {
+			if r.Repo == filepath.Base(root) {
+				baseSHA, found = r.Base, true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("repo is not in sprint %d arena", boothSprint)
+		}
+		if opts.resume {
+			boothFork, boothUser = it.BoothForkURL, it.BoothUser
+			boothCred = filepath.Join(dir, fmt.Sprintf("booth-%d.credentials", it.ID))
+		} else {
+			backend, err := boothLiveBackend()
+			if err != nil {
+				return err
+			}
+			boothUser, boothFork, boothCred, err = boothPrepare(dir, filepath.Base(root), it.ID, boothSprint, backend)
+			if err != nil {
+				return err
+			}
+		}
+	}
 	branch := fmt.Sprintf("agent/weave-issue-%d", it.ID)
 	if opts.resume {
 		branch = it.Branch
@@ -3545,6 +3618,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			freshIt.Workspace = workspace
 			freshIt.Branch = branch
 			freshIt.BaseSHA = baseSHA
+			freshIt.ArenaSprint, freshIt.BoothUser, freshIt.BoothForkURL, freshIt.Blind = boothSprint, boothUser, boothFork, opts.blind
 			freshIt.LaunchPhase = "provisioning workspace"
 			freshIt.StartedAt = time.Now().UTC()
 			// Record the provisioning launcher before clone/hydration. If it
@@ -3580,7 +3654,11 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			// clone, the workspace has its own `.git`; refs and HEAD
 			// can't cross the boundary, and a wandering agent hits a
 			// different git repo entirely.
-			gw := exec.CommandContext(admission.ctx, "git", "clone", "--local", "--no-hardlinks", "--no-checkout", root, workspace)
+			cloneArgs := []string{"clone", "--local", "--no-hardlinks", "--no-checkout", root, workspace}
+			if boothFork != "" {
+				cloneArgs = boothCloneArgs(boothFork, boothUser, boothCred, workspace)
+			}
+			gw := exec.CommandContext(admission.ctx, "git", cloneArgs...)
 			gw.Stdout = cmd.OutOrStdout()
 			gw.Stderr = cmd.ErrOrStderr()
 			if err := gw.Run(); err != nil {
@@ -3603,7 +3681,13 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			// origin repo's master directly. Nothing in the weave flow
 			// needs the remote — `weave pull` fetches FROM the workspace
 			// path into the user's repo, never the other way around.
-			_ = exec.CommandContext(admission.ctx, "git", "-C", workspace, "remote", "remove", "origin").Run()
+			if boothFork == "" {
+				_ = exec.CommandContext(admission.ctx, "git", "-C", workspace, "remote", "remove", "origin").Run()
+			} else {
+				if err := exec.CommandContext(admission.ctx, "git", "-C", workspace, "config", "credential.helper", "store --file="+boothCred).Run(); err != nil {
+					return err
+				}
+			}
 			// Scrub reflogs: `git clone` records "clone: from <abs
 			// origin path>" in .git/logs/HEAD — the breadcrumb the
 			// second workspace escape had available after the remote
@@ -3619,7 +3703,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			// agent's commits already written. Tell the agent at its own
 			// commit time instead. Advisory: a hook that cannot be installed
 			// must not fail a launch.
-			if weaveSourceEnforcesCommitHook(root) {
+			if boothFork == "" && weaveSourceEnforcesCommitHook(root) {
 				if _, err := installSprintCommitHook(workspace); err != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(),
 						"weave: source repo enforces sprint commit provenance but the workspace hook could not be installed: %v\n", err)
@@ -3640,10 +3724,12 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			if err := admission.ctx.Err(); err != nil {
 				return err
 			}
-			if err := weaveHydrateSubmodules(root, workspace, cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
-				weaveMarkLaunchFailed(dir, it.ID, fmt.Errorf("hydrate submodules: %w", err))
-				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
-					weavecli.ExitGenericFail, fmt.Errorf("hydrate submodules: %w", err)))
+			if boothFork == "" {
+				if err := weaveHydrateSubmodules(root, workspace, cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
+					weaveMarkLaunchFailed(dir, it.ID, fmt.Errorf("hydrate submodules: %w", err))
+					return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
+						weavecli.ExitGenericFail, fmt.Errorf("hydrate submodules: %w", err)))
+				}
 			}
 		}
 		// Faithful, fast, Windows-safe sibling-dep view. A clone of the target
@@ -3664,7 +3750,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			}
 			return nil
 		})
-		if synced, failed := weaveSyncSiblingDeps(root, workspace); len(synced) > 0 || len(failed) > 0 {
+		if synced, failed := boothSyncSiblingDeps(root, workspace, boothFork == ""); len(synced) > 0 || len(failed) > 0 {
 			if len(synced) > 0 {
 				fmt.Fprintf(cmd.ErrOrStderr(), "weave: sibling deps synced to source HEAD: %s\n", strings.Join(synced, ", "))
 			}
@@ -3745,11 +3831,15 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	if opts.resume {
 		memoryPrefix = weaveResumeMemoryPrefix(workspace)
 	}
-	if err := weaveInjectMemoryFileWithPrefix(dir, workspace, it, memoryPrefix); err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "weave start: memory inject failed (continuing): %v\n", err)
+	if it.ArenaSprint == 0 {
+		if err := weaveInjectMemoryFileWithPrefix(dir, workspace, it, memoryPrefix); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "weave start: memory inject failed (continuing): %v\n", err)
+		}
 	}
-	if err := weaveInjectKBFile(dir, workspace, it); err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "weave start: kb inject failed (continuing): %v\n", err)
+	if it.ArenaSprint == 0 {
+		if err := weaveInjectKBFile(dir, workspace, it); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "weave start: kb inject failed (continuing): %v\n", err)
+		}
 	}
 	if mode != weavecli.OutputJSON {
 		fmt.Fprintf(cmd.OutOrStdout(), "weave start: run #%d workspace=%s branch=%s\n", it.ID, workspace, branch)
@@ -3805,6 +3895,18 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	// so each ycode run gets its own data store under it.
 	launcherEnv := os.Environ()
 	env := weaveChildEnv(launcherEnv, workspace, branch, base, dir, it, agentLaunch)
+	if it.ArenaSprint != 0 {
+		env = boothScrubEnv(env, strings.Split(os.Getenv("BASHY_BOOTH_ENV_DENY"), ","))
+		env, err = boothSeedAgentDirs(env, dir, it.ID, displayTool)
+		if err != nil {
+			return err
+		}
+		boothHome := filepath.Join(dir, fmt.Sprintf("booth-%d-home", it.ID))
+		if err := os.MkdirAll(boothHome, 0o700); err != nil {
+			return err
+		}
+		env = append(env, "BASHY_HOME="+boothHome)
+	}
 	for k, v := range carrier {
 		env = append(env, fmt.Sprintf("%s=%s", strings.ToUpper(k), v))
 	}
