@@ -25,7 +25,13 @@ func TestSeededContractArgsUnchanged(t *testing.T) {
 		"claude":   {"--dangerously-skip-permissions", "-p"},
 		"codex":    {"exec", "--skip-git-repo-check", "--sandbox", "workspace-write"},
 		"agy":      {"--dangerously-skip-permissions", "--print-timeout", "40m", "-p"},
-		"opencode": {"--auto", "run"},
+		// opencode 1.18.30 treats a flag placed BEFORE the subcommand as the
+		// default TUI command: it prints usage and exits 1 having done no
+		// work, so every opencode agent died instantly in weave. The
+		// subcommand now comes first, as it already did for codex above.
+		// Corrected deliberately in Sprint #314 (#1235) — do not "restore"
+		// the old order to make this table match an older binding.
+		"opencode": {"run", "--auto"},
 	}
 	for tool, want := range legacy {
 		got, ok := seededContract(tool)
