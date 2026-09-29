@@ -15,6 +15,7 @@ band_season: 1
 display: Claude Opus 4.6 (Thinking)
 provider: anthropic
 kind: subscription
+plan: google-ai-pro  # the seat this model is billed through; see plans/google-ai-pro.yaml
 # Reachable on this host ONLY through agy, which serves Anthropic models to
 # Free/Pro/Ultra plans (antigravity.google/docs/models; Enterprise plans do not
 # get them). Keyed under `ids` rather than a bare `model:` because this id is

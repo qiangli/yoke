@@ -8,6 +8,7 @@ band_season: 1
 display: GPT-5.5 (ChatGPT subscription)
 provider: openai
 kind: subscription
+plan: chatgpt-pro  # the seat this model is billed through; see plans/chatgpt-pro.yaml
 model: gpt-5.5
 quality: 0.90
 cost_micro: 12000

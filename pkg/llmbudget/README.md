@@ -62,6 +62,38 @@ global distributed quota. Source observations are reporting evidence, while
 configured local policy is the admission authority; unknown external consumption
 prevents this from guaranteeing a provider-wide quota.
 
+## Subscription plans
+
+A fleet model may name the subscription seat it is billed through (`plan:` →
+`pkg/fleet/baseline/plans/<id>.yaml`; a same-named file in the local
+`~/.config/bashy/plans/` or on `$BASHY_PLANS_PATH` replaces a seed). A plan
+records the vendor's own plan name, a normalized tier (`free < entry < pro <
+max`, where `max` is the vendor's highest individual plan whatever the vendor
+calls it), the date it was checked, its source pages, and only KNOWN limits,
+each with evidence (`published` vendor page or `measured` bashy observation),
+date and source.
+
+`FromFleetModel` uses the plan id as the shared seat counter (so every model on
+one seat draws one budget) and takes day/week token/request limits from the
+plan. Environment variables still override. Limits in units or windows this
+meter does not count (credits, 5-hour windows, concurrency) stay on the plan
+record for readers and are ignored here; an unrecorded limit stays unset and the
+gate stays fail-open. `PreferForHeavy` orders candidate models by plan tier for
+heavy/manager work, and the sprint scheduler (`ladder.Entrant.PlanRank`) prefers
+the higher tier for manager tasks and stories of 5+ points among near-equal
+matches. No vendor or plan name appears in Go.
+
+Seeded seats as of 2026-09-29: Claude Max 20x (max,
+https://claude.com/pricing) and ChatGPT Pro (max,
+https://learn.chatgpt.com/docs/pricing) publish no numeric limits; Google AI
+Pro (pro, https://gemini.google/subscriptions/) publishes none for
+Antigravity; the Meta Muse seat is recorded as pro with no limits because the
+vendor page (https://www.meta.com/help/subscriptions/1021145227643680/) names
+no Pro plan and the seat's product is unconfirmed; the GLM Coding Plan Pro (pro,
+https://docs.z.ai/devpack/overview) publishes 12,000 credits per 5 hours and
+60,000 per week, plus bashy's measured concurrency ceiling of ~8 on glm-5.2
+(2026-07-14).
+
 ## Documented sources
 
 Both source kinds require `enabled:true`, explicit provider/account/pool/lane and

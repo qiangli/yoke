@@ -679,7 +679,14 @@ type Model struct {
 
 	// Tier is the provider's own word for its tier, carried from an org
 	// overlay. It is not Band and is not routable.
-	Tier          string   `yaml:"tier,omitempty" json:"tier,omitempty" doc:"provider-native tier name"`
+	Tier string `yaml:"tier,omitempty" json:"tier,omitempty" doc:"provider-native tier name"`
+
+	// Plan names the subscription plan (a record under plans/) this model is
+	// PAID THROUGH — the seat, not the vendor of the weights: a Claude model
+	// served by agy draws on the Google plan, not the Anthropic one. Empty or
+	// dangling means unknown, and unknown is fail-open everywhere it is read
+	// (see Plan and PlanTierRank).
+	Plan          string   `yaml:"plan,omitempty" json:"plan,omitempty" doc:"subscription plan id the model is billed through (plans/)"`
 	Capabilities  []string `yaml:"capabilities,omitempty" json:"capabilities,omitempty" doc:"declared model capabilities"`
 	Domain        []string `yaml:"domain,omitempty" json:"domain,omitempty" doc:"preferred task domains"`
 	ContextLength int64    `yaml:"context_length,omitempty" json:"context_length,omitempty" doc:"maximum context length"`

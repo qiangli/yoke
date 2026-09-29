@@ -1,0 +1,40 @@
+name: zai-glm-coding-pro
+display: GLM Coding Plan Pro (z.ai)
+vendor: Z.ai
+vendor_plan: GLM Coding Plan Pro
+# Z.ai's ladder is Lite < Pro < Max, so Pro's normalized tier is pro. Flat billing
+# over an API key (api_key_ref zai) on the coding-plan endpoint — see
+# models/glm-5.2.yaml for why that split Kind from Billing.
+tier: pro
+as_of: "2026-09-29"
+sources:
+  - https://docs.z.ai/devpack/overview
+notes: >-
+  The plan is metered in CREDITS (dual 5-hour and weekly budgets), not tokens or
+  prompts; the token allowance a credit buys varies with model, cache hit rate and
+  peak hours, so no token limit is derived from it. The earlier published quota
+  (~400 prompts per 5h, recorded 2026-07-14 in models/glm-5.2.yaml) predates the
+  credit scheme and is not carried forward.
+limits:
+  - window: 5h
+    unit: credits
+    value: 12000
+    evidence: published
+    as_of: "2026-09-29"
+    source: https://docs.z.ai/devpack/overview
+  - window: week
+    unit: credits
+    value: 60000
+    evidence: published
+    as_of: "2026-09-29"
+    source: https://docs.z.ai/devpack/overview
+  # MEASURED 2026-07-14 on this host after the Lite->Pro upgrade: 8 parallel
+  # requests -> 8 OK; 12 -> 7 OK, 5x429 (code 1302). z.ai publishes no concurrency
+  # for any tier; this is a bashy observation on glm-5.2 only.
+  - window: concurrent
+    unit: requests
+    value: 8
+    model: glm-5.2
+    evidence: measured
+    as_of: "2026-07-14"
+    source: pkg/fleet/baseline/models/glm-5.2.yaml

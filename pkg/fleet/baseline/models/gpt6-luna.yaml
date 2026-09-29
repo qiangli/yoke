@@ -11,6 +11,7 @@ band_season: 1
 display: GPT-6 Luna
 provider: openai
 kind: subscription
+plan: chatgpt-pro  # the seat this model is billed through; see plans/chatgpt-pro.yaml
 model: gpt-6-luna
 quality: 0.83
 # Carried over from gpt5.6-luna; not re-priced.

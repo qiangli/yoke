@@ -11,6 +11,7 @@ band_source: declared
 band_season: 1
 kind: api
 billing: flat_then_metered
+plan: claude-max  # the seat this model is billed through; see plans/claude-max.yaml
 source: cloud
 provider: openai-compat
 base_url: http://127.0.0.1:24556/sticky/genie-opus5/v1

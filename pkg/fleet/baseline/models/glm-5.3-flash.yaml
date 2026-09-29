@@ -13,6 +13,7 @@ display: GLM-5.3 Flash (z.ai)
 provider: openai-compat
 kind: api          # AUTH: an API key (same zai key as 5.3)
 billing: flat      # PAY: the same prepaid GLM Coding Plan seat. Free at the margin.
+plan: zai-glm-coding-pro  # the seat this model is billed through; see plans/zai-glm-coding-pro.yaml
 base_url: https://api.z.ai/api/coding/paas/v4
 api_key_ref: zai
 # Listed by GET /models on the coding-plan endpoint on 2026-09-13 (with glm-5.3,

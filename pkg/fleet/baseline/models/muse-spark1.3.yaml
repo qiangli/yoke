@@ -29,6 +29,7 @@ band_season: 1
 display: Muse Spark 1.3
 provider: meta
 kind: subscription
+plan: meta-muse-pro  # the seat this model is billed through; see plans/meta-muse-pro.yaml
 # The id muse accepts on --model (from the Muse Code 1.3.0 binary).
 model: muse-spark-1.3
 quality: 0.85

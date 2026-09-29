@@ -12,6 +12,7 @@ band_season: 1
 display: GPT-6 Sol
 provider: openai
 kind: subscription
+plan: chatgpt-pro  # the seat this model is billed through; see plans/chatgpt-pro.yaml
 model: gpt-6-sol
 quality: 0.94
 # Carried over from gpt5.6-sol; not re-priced.

@@ -8,6 +8,7 @@ band_season: 1
 display: Claude Fable 5
 provider: anthropic
 kind: subscription
+plan: claude-max  # the seat this model is billed through; see plans/claude-max.yaml
 model: claude-fable-5
 quality: 0.94
 # 12000 -> 30000 on 2026-08-02. The old value was wrong under this field's own

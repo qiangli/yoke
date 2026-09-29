@@ -45,7 +45,7 @@ func (g *Gate) CollectReport(ctx context.Context, opt ReportOptions) (*Report, e
 				report.Warnings = append(report.Warnings, e.Error())
 			}
 			for _, m := range models {
-				roster = append(roster, Binding{Model: m.Name, Provider: m.Provider, Lane: laneFor(FromFleetModel(m))})
+				roster = append(roster, Binding{Model: m.Name, Provider: m.Provider, Lane: laneFor(FromFleetModelPlan(m, fleet.Plan{}))})
 			}
 			agents, errs := cat.Agents()
 			for _, e := range errs {
@@ -368,9 +368,15 @@ func reportModelResolver(g *Gate) (func(string) (Model, bool), func() ([]fleet.M
 	list := func() ([]fleet.Model, []error) {
 		if !loaded {
 			loaded = true
-			models, errs = fleet.New().Models()
+			cat := fleet.New()
+			models, errs = cat.Models()
+			plans, _ := cat.Plans()
+			byName := make(map[string]fleet.Plan, len(plans))
+			for _, p := range plans {
+				byName[p.Name] = p
+			}
 			for _, fm := range models {
-				m := FromFleetModel(fm)
+				m := FromFleetModelPlan(fm, byName[fm.Plan])
 				for _, name := range fm.Names() {
 					if _, exists := catalog[name]; !exists {
 						catalog[name] = m

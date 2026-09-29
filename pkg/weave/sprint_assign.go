@@ -211,6 +211,13 @@ func sprintAssignPool(root string, events []ladder.Event, now time.Time, exclusi
 			aliases[binding.MatrixKey()] = append(aliases[binding.MatrixKey()], a.Name)
 		}
 	}
+	// Plan tier ranks the seat each model bills through; an unrecorded or
+	// dangling plan is rank 0 (unknown), which only ever loses a heavy-work tie.
+	planRank := map[string]int{}
+	plans, _ := cat.Plans()
+	for _, p := range plans {
+		planRank[p.Name] = p.Rank()
+	}
 	var pool []ladder.Entrant
 	seen := map[string]bool{}
 	for _, a := range agents {
@@ -273,7 +280,7 @@ func sprintAssignPool(root string, events []ladder.Event, now time.Time, exclusi
 		names := append(aliases[key], key)
 		// Fleet exposes a billing-adjusted relative cost, not a measured
 		// dollars-per-point rate; use it only as the scheduler tie-breaker.
-		pool = append(pool, ladder.Entrant{Agent: a.Name, Vendor: tool.Name, Band: band, Standings: standings, Free: !sprintAssignBusy(queues, names), CostPerPoint: float64(model.MarginalCostMicro()), CodingStoriesThisSeason: count})
+		pool = append(pool, ladder.Entrant{Agent: a.Name, Vendor: tool.Name, Band: band, Standings: standings, Free: !sprintAssignBusy(queues, names), CostPerPoint: float64(model.MarginalCostMicro()), PlanRank: planRank[model.Plan], CodingStoriesThisSeason: count})
 	}
 	return pool, lines, nil
 }

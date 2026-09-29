@@ -12,6 +12,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -52,12 +53,15 @@ func (d Decision) Allowed() bool {
 }
 
 type Model struct {
-	Name        string
-	Kind        string
-	Billing     string
-	Provider    string
-	CostMicro   int64
-	Plan        string
+	Name      string
+	Kind      string
+	Billing   string
+	Provider  string
+	CostMicro int64
+	Plan      string
+	// PlanTier is the normalized tier of the subscription seat (fleet plan
+	// data: free, entry, pro, max); empty is unknown and never a preference.
+	PlanTier    string
 	DowngradeTo string
 	RouteAltTo  string
 	Limits      Limits
@@ -430,21 +434,45 @@ func (g *Gate) model(name string) (Model, bool) {
 	return Model{}, false
 }
 
+// FromFleetModel converts a catalog model, resolving the subscription plan it
+// is billed through from the fleet's plan data.
 func FromFleetModel(m fleet.Model) Model {
+	var p fleet.Plan
+	if m.Plan != "" {
+		p, _ = fleet.New().ModelPlan(m)
+	}
+	return FromFleetModelPlan(m, p)
+}
+
+// FromFleetModelPlan is FromFleetModel with the plan already resolved (a zero
+// Plan = unknown). The plan names the shared seat counter and supplies the
+// KNOWN day/week token and request limits; an environment limit overrides it,
+// and a limit the plan does not record stays unset — fail-open, never guessed.
+// Limits in units or windows this meter does not count (credits, 5-hour
+// windows, concurrency) are carried by the plan record and ignored here.
+func FromFleetModelPlan(m fleet.Model, p fleet.Plan) Model {
+	planLimit := func(envName, window, unit string) int64 {
+		if v := envInt(envName); v > 0 {
+			return v
+		}
+		v, _ := p.Limit(window, unit, m.Name)
+		return v
+	}
 	return Model{
 		Name:      m.Name,
 		Kind:      m.Kind,
 		Billing:   m.BillingMode(),
 		Provider:  m.Provider,
 		CostMicro: m.CostMicro,
-		Plan:      env("BASHY_LLM_PLAN_"+envKey(m.Name), ""),
+		Plan:      env("BASHY_LLM_PLAN_"+envKey(m.Name), p.Name),
+		PlanTier:  p.Tier,
 		Limits: Limits{
 			BudgetUSD:      envFloat("BASHY_LLM_BUDGET_DAILY_USD"),
 			ProviderUSD:    envFloat("BASHY_LLM_PROVIDER_" + envKey(m.Provider) + "_DAILY_USD"),
-			DailyTokens:    envInt("BASHY_LLM_MODEL_" + envKey(m.Name) + "_DAILY_TOKENS"),
-			WeeklyTokens:   envInt("BASHY_LLM_MODEL_" + envKey(m.Name) + "_WEEKLY_TOKENS"),
-			DailyRequests:  envInt("BASHY_LLM_MODEL_" + envKey(m.Name) + "_DAILY_REQUESTS"),
-			WeeklyRequests: envInt("BASHY_LLM_MODEL_" + envKey(m.Name) + "_WEEKLY_REQUESTS"),
+			DailyTokens:    planLimit("BASHY_LLM_MODEL_"+envKey(m.Name)+"_DAILY_TOKENS", fleet.PlanWindowDay, fleet.PlanUnitTokens),
+			WeeklyTokens:   planLimit("BASHY_LLM_MODEL_"+envKey(m.Name)+"_WEEKLY_TOKENS", fleet.PlanWindowWeek, fleet.PlanUnitTokens),
+			DailyRequests:  planLimit("BASHY_LLM_MODEL_"+envKey(m.Name)+"_DAILY_REQUESTS", fleet.PlanWindowDay, fleet.PlanUnitRequests),
+			WeeklyRequests: planLimit("BASHY_LLM_MODEL_"+envKey(m.Name)+"_WEEKLY_REQUESTS", fleet.PlanWindowWeek, fleet.PlanUnitRequests),
 			NearLimitRatio: envFloat("BASHY_LLM_NEAR_LIMIT_RATIO"),
 			RateTokens:     envInt("BASHY_LLM_PROVIDER_" + envKey(m.Provider) + "_RATE_TOKENS"),
 			RatePer:        envDuration("BASHY_LLM_PROVIDER_" + envKey(m.Provider) + "_RATE_PER"),
@@ -576,6 +604,27 @@ func planName(m Model) string {
 		return m.Provider + ":default"
 	}
 	return m.Name
+}
+
+// PreferForHeavy orders candidate models for heavy or manager work: the
+// highest subscription plan tier first (a top seat has the quota to absorb
+// it), otherwise keeping the caller's order. Unknown models and unknown tiers
+// rank last but are never dropped — plan tier is a preference, not a gate.
+func PreferForHeavy(models []string) []string { return defaultGate.PreferForHeavy(models) }
+
+// PreferForHeavy is the per-gate form of the package-level PreferForHeavy.
+func (g *Gate) PreferForHeavy(models []string) []string {
+	g.mu.Lock()
+	rank := make(map[string]int, len(models))
+	for _, name := range models {
+		if m, ok := g.model(name); ok {
+			rank[name] = fleet.PlanTierRank(m.PlanTier)
+		}
+	}
+	g.mu.Unlock()
+	out := append([]string(nil), models...)
+	sort.SliceStable(out, func(i, j int) bool { return rank[out[i]] > rank[out[j]] })
+	return out
 }
 
 func firstPositive(v ...float64) float64 {

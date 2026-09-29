@@ -25,6 +25,7 @@ band_season: 1
 display: Claude Opus 4.8
 provider: anthropic
 kind: subscription
+plan: claude-max  # the seat this model is billed through; see plans/claude-max.yaml
 model: claude-opus-4-8
 quality: 0.92
 cost_micro: 15000

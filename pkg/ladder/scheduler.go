@@ -11,15 +11,26 @@ const (
 	HeadToHeadRate           = 0.05
 	CurrencyStoriesPerSeason = 2
 	ScheduleTargetExpected   = 0.7
+
+	// HeavyPoints is the estimate at and above which a story is heavy work.
+	HeavyPoints Points = 5
+	// PlanPreferenceWindow is how far (in expected score) a heavy or manager
+	// pick may drift from the closest match to land on a higher plan tier.
+	PlanPreferenceWindow = 0.05
 )
 
 // Entrant is an available agent and its current duty standings.
 type Entrant struct {
-	Agent                   string
-	Vendor                  string
-	Band                    int
-	Standings               map[Duty]DutyStanding
-	CostPerPoint            float64
+	Agent        string
+	Vendor       string
+	Band         int
+	Standings    map[Duty]DutyStanding
+	CostPerPoint float64
+	// PlanRank is the normalized subscription tier of the seat the agent bills
+	// through (fleet.PlanTierRank: 1 free .. 4 max; 0 unknown). Heavy and manager
+	// work prefers the higher tier within PlanPreferenceWindow, because a top
+	// plan has the quota to absorb it; it never excludes anyone.
+	PlanRank                int
 	Free                    bool
 	CodingStoriesThisSeason int
 }
@@ -34,6 +45,10 @@ type StoryTask struct {
 	Author     string
 	AuthorCode DutyStanding
 }
+
+// Heavy reports whether a task should prefer higher-tier plans: every
+// manager task, and any story estimated at HeavyPoints or more.
+func (t StoryTask) Heavy() bool { return t.Duty == DutyManage || t.Points >= HeavyPoints }
 
 // Pick records the selected agent and why it was selected.
 type Pick struct {
@@ -58,8 +73,10 @@ func ScheduleStory(task StoryTask, pool []Entrant, lines Lines) Pick {
 			if !ok || schedulerExpected(task, standing) < 0.5 {
 				continue
 			}
+			same := best >= 0 && e.CodingStoriesThisSeason == pool[best].CodingStoriesThisSeason
 			if best < 0 || e.CodingStoriesThisSeason < pool[best].CodingStoriesThisSeason ||
-				(e.CodingStoriesThisSeason == pool[best].CodingStoriesThisSeason && e.CostPerPoint < pool[best].CostPerPoint) {
+				(same && task.Heavy() && e.PlanRank > pool[best].PlanRank) ||
+				(same && (!task.Heavy() || e.PlanRank == pool[best].PlanRank) && e.CostPerPoint < pool[best].CostPerPoint) {
 				best = i
 			}
 		}
@@ -85,6 +102,9 @@ func ScheduleStory(task StoryTask, pool []Entrant, lines Lines) Pick {
 				(e.CostPerPoint == pool[best].CostPerPoint && standing.RD > pool[best].Standings[task.Duty].RD))) {
 			best, bestDistance = i, distance
 		}
+	}
+	if best >= 0 && task.Heavy() {
+		best = schedulerPlanPreference(task, pool, best, bestDistance)
 	}
 	if best >= 0 {
 		return schedulerPick(task, pool[best], "match", false)
@@ -139,6 +159,40 @@ func ScheduleReviewer(author DutyStanding, authorBand int, authorVendor string, 
 		}
 	}
 	return Pick{}, false
+}
+
+// schedulerPlanPreference re-picks a heavy task's match among the entrants
+// within PlanPreferenceWindow of the closest one: highest plan tier first, then
+// the closest match, then cost. Plan tier is data (the fleet's plans), so no
+// vendor is named here.
+func schedulerPlanPreference(task StoryTask, pool []Entrant, best int, bestDistance float64) int {
+	pick, pickDistance := best, bestDistance
+	for i := range pool {
+		e := &pool[i]
+		if !e.Free || e.Band != task.Band {
+			continue
+		}
+		standing, ok := e.Standings[task.Duty]
+		if !ok {
+			continue
+		}
+		distance := math.Abs(schedulerExpected(task, standing) - ScheduleTargetExpected)
+		if distance > bestDistance+PlanPreferenceWindow {
+			continue
+		}
+		p := &pool[pick]
+		switch {
+		case e.PlanRank > p.PlanRank:
+		case e.PlanRank < p.PlanRank:
+			continue
+		case distance < pickDistance && math.Abs(distance-pickDistance) >= .01:
+		case math.Abs(distance-pickDistance) < .01 && e.CostPerPoint < p.CostPerPoint:
+		default:
+			continue
+		}
+		pick, pickDistance = i, distance
+	}
+	return pick
 }
 
 func schedulerExpected(task StoryTask, standing DutyStanding) float64 {

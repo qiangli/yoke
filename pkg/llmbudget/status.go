@@ -19,6 +19,7 @@ type BudgetStatus struct {
 	ModelKnown bool   `json:"model_known"`
 	Lane       Lane   `json:"lane,omitempty"`
 	Plan       string `json:"plan,omitempty"`
+	PlanTier   string `json:"plan_tier,omitempty"`
 
 	// Basis names the ceiling these numbers are measured against — the
 	// binding one, i.e. the ceiling with the least headroom. Unit is the
@@ -92,6 +93,7 @@ func (g *Gate) status(model string) BudgetStatus {
 	}
 	s.Lane = laneFor(m)
 	s.Plan = planName(m)
+	s.PlanTier = m.PlanTier
 
 	type candidate struct {
 		basis string
