@@ -671,6 +671,12 @@ type Model struct {
 	// Empty means declared. Nothing should present an unmeasured band as fact.
 	BandSource string `yaml:"band_source,omitempty" json:"band_source,omitempty" doc:"evidence supporting the capability band"`
 
+	// BandSeason is the season the peg was set. Under the band ladder a peg is
+	// only a SEED for the agents bound to this model, and it expires
+	// SeatSeasons after it was set unless their gates confirm it. A peg with
+	// no season is unclocked: it is reported as such, never silently aged.
+	BandSeason int `yaml:"band_season,omitempty" json:"band_season,omitempty" doc:"season the capability band peg was set"`
+
 	// Tier is the provider's own word for its tier, carried from an org
 	// overlay. It is not Band and is not routable.
 	Tier          string   `yaml:"tier,omitempty" json:"tier,omitempty" doc:"provider-native tier name"`
@@ -777,6 +783,13 @@ type Agent struct {
 	// empty and the band is inherited from the model, as always.
 	Band       int    `yaml:"band,omitempty" json:"band,omitempty" doc:"served capability band for a cascade"`
 	BandSource string `yaml:"band_source,omitempty" json:"band_source,omitempty" doc:"source of the served band"`
+
+	// Ratings, Certificates and Seat are the band ladder's EVIDENCE (see
+	// ladder.go). The band itself is derived from them and never stored: an
+	// agent holds band n only while every gate G1..Gn holds.
+	Ratings      *DutyRatings  `yaml:"ratings,omitempty" json:"ratings,omitempty" doc:"duty ratings (code, manage, judge)"`
+	Certificates []Certificate `yaml:"certificates,omitempty" json:"certificates,omitempty" doc:"passed certification suites, bound to model and season"`
+	Seat         *Seat         `yaml:"seat,omitempty" json:"seat,omitempty" doc:"operator or provisional band seat; a seed that expires"`
 
 	Role        *AgentRole        `yaml:"role,omitempty" json:"role,omitempty" doc:"permissions and scope"`
 	Ledger      *AgentLedger      `yaml:"ledger,omitempty" json:"ledger,omitempty" doc:"operational reliability record"`
