@@ -43,6 +43,7 @@ func TestBandGateAdmissionRules(t *testing.T) {
 
 func TestBandGateCloneAndSeed(t *testing.T) {
 	t.Setenv("BASHY_HOME", t.TempDir())
+	t.Setenv("BASHY_LADDER_SEASON", "1")
 	cat := pinFleetWith(t)
 	if err := cat.SaveModel(fleet.Model{Name: "gate-model", Band: 4}); err != nil {
 		t.Fatal(err)
@@ -67,6 +68,32 @@ func TestBandGateCloneAndSeed(t *testing.T) {
 	ok, why, err = sprintManagerEligibility("agent-a-w25")
 	if err != nil || !ok || !strings.Contains(why, "provisional") {
 		t.Fatalf("clone evidence: %v %q %v", ok, why, err)
+	}
+}
+
+func TestBandGateEligibilityUsesCurrentSeason(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	t.Setenv("BASHY_LADDER_SEASON", "1")
+	cat := pinFleetWith(t)
+	if err := cat.SaveModel(fleet.Model{Name: "gate-low", Band: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.SaveAgent(fleet.Agent{Name: "agent-b", Tool: "tool-b", Model: "gate-low"}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := ladder.OpenStore("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Append(ladder.Event{Kind: ladder.EventKindSeat, Agent: "tool-b:gate-low", Season: 2, Provisional: 4}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, why, err := sprintManagerEligibility("agent-b"); err != nil || ok || !strings.Contains(why, "certificate") {
+		t.Fatalf("season 1: %v %q %v", ok, why, err)
+	}
+	t.Setenv("BASHY_LADDER_SEASON", "2")
+	if ok, why, err := sprintManagerEligibility("agent-b"); err != nil || !ok || !strings.Contains(why, "provisional") {
+		t.Fatalf("season 2: %v %q %v", ok, why, err)
 	}
 }
 
@@ -121,5 +148,35 @@ func TestBandGateShouldMustOverride(t *testing.T) {
 	}
 	if gates != 2 || overrides != 1 {
 		t.Fatalf("thread gates=%d overrides=%d", gates, overrides)
+	}
+}
+
+func TestSprintStartAndTakeUseBandGateNotLeaseGuard(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	t.Setenv("BASHY_SPRINT_DIR", t.TempDir())
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+	t.Setenv("BASHY_SPRINT_LEASE_TOKEN", "wrong")
+	t.Setenv("BASHY_SPRINT_ENFORCE", "must")
+	cat := pinFleetWith(t)
+	if err := cat.SaveModel(fleet.Model{Name: "gate-low", Band: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.SaveAgent(fleet.Agent{Name: "agent-b", Tool: "tool-b", Model: "gate-low"}); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := runSprint(t, "add", "gate fixture"); code != 0 {
+		t.Fatalf("add: %d %s", code, out)
+	}
+	for _, args := range [][]string{
+		{"start", "1", "--owner", "agent-b", "--for", "1h"},
+		{"take", "1", "--owner", "agent-b"},
+	} {
+		out, code := runSprint(t, args...)
+		if code == 0 || !strings.Contains(out, "manager gate:") {
+			t.Fatalf("%s: code=%d output=%q", args[0], code, out)
+		}
+		if strings.Contains(out, "lease token") || strings.Contains(out, "detected bypass") {
+			t.Fatalf("%s incorrectly lease-gated: %q", args[0], out)
+		}
 	}
 }

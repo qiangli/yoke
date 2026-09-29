@@ -234,7 +234,7 @@ func TestSprintLeaseTokenGuardCoverage(t *testing.T) {
 				visit(cmd)
 				continue
 			}
-			if cmd.Flags().Lookup("reason") == nil || cmd.Flags().Lookup("override") == nil || cmd.RunE == nil {
+			if !(root.Name() == "goal" || sprintLeaseGatedVerbs[cmd.Name()]) || cmd.RunE == nil {
 				continue
 			}
 			var stderr bytes.Buffer

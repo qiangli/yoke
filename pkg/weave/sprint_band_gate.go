@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/qiangli/yoke/pkg/capability"
 	"github.com/qiangli/yoke/pkg/ladder"
@@ -79,12 +80,7 @@ func sprintManagerEligibility(owner string) (bool, string, error) {
 	} else if !os.IsNotExist(err) {
 		return false, "", err
 	}
-	season := 1
-	for _, event := range events {
-		if event.Season > season {
-			season = event.Season
-		}
-	}
+	season := ladder.SeasonOf(time.Now())
 	rep := ladder.Replay(events, season)
 	profile := ladder.Profile{}
 	if rec := rep.Agents[a.MatrixKey()]; rec != nil {
