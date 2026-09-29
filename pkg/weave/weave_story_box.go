@@ -449,7 +449,7 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 	var flags weaveOutputFlags
 	var note, gateCmd, gateDir string
 	var gateTimeout time.Duration
-	var force, noVerify bool
+	var force, noVerify, noScorecard bool
 	verb := "stop"
 	short := "Close a sprint's time-box and record planned vs actual"
 	if ending {
@@ -511,7 +511,7 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 				var rep drainReport
 				var closedOwner string
 				cwd, _ := os.Getwd()
-				var reclaimed string
+				var reclaimed, scorecard string
 				if ending {
 					// ZERO RESIDUE, IN THREE STEPS, OUTSIDE THE LOCK. (1) every
 					// linked run must have a decision; (2) the settled ones come
@@ -658,17 +658,24 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 						if err := sprintCoverageGate(s, false, ""); err != nil {
 							return "", err
 						}
+						var hygiene sprintHygiene
 						if hy := sprintCheckHygiene(s); !hy.Clean() {
 							return "", fmt.Errorf(
 								"sprint #%d cannot end — it is not clean:\n  %s\n  `bashy sprint prune %d` for the full state and the command that fixes each",
 								id, strings.Join(hy.Problems, "\n  "), id)
+						} else {
+							hygiene = hy // kept for the manager scorecard below
 						}
-						if residual := sprintResidual(s); len(residual) > 0 {
+						residual := sprintResidual(s)
+						if len(residual) > 0 {
 							return "", fmt.Errorf(
 								"sprint #%d cannot end — %d sprint-owned artifact(s) remain after cleanup:\n  %s",
 								id, len(residual), strings.Join(residual, "\n  "))
 						}
 						msg += "; " + reclaimed + "; residual: 0"
+						// Scored before the lease goes: its holder is the manager.
+						passed, total := sprintEndCleanupTally(hygiene, residual)
+						scorecard = sprintScorecardAtEnd(s, noScorecard, passed, total, now)
 						from := s.Column
 						who := weaveStoryConductorName(s, "")
 						s.Column = "done"
@@ -687,6 +694,13 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 				})
 				if err != nil {
 					return err
+				}
+				if scorecard != "" {
+					out := cmd.OutOrStdout()
+					if flags.mode() == weavecli.OutputJSON {
+						out = cmd.ErrOrStderr()
+					}
+					fmt.Fprintf(out, "%s: %s\n", op, scorecard)
 				}
 				if sessionNote := releaseSprintOwnerSession(cmd.Context(), id, closedOwner, cwd); sessionNote != "" {
 					fmt.Fprintf(cmd.ErrOrStderr(), "%s: %s\n", op, strings.TrimPrefix(sessionNote, "; "))
@@ -718,6 +732,8 @@ close the current cadence cycle.`
 	if !ending {
 		cmd.Flags().BoolVar(&force, "force", false, "close even over a red gate or an unparked worker — recorded as not clean")
 		cmd.Flags().BoolVar(&noVerify, "no-verify", false, "deprecated compatibility flag; omitting --gate already records an unverified close")
+	} else {
+		cmd.Flags().BoolVar(&noScorecard, "no-scorecard", false, "skip the manager scorecard and its ladder manage event (logged on the thread)")
 	}
 	flags.attach(cmd)
 	return cmd
