@@ -15,6 +15,28 @@ import (
 
 const sprintLeaseTokenEnv = "BASHY_SPRINT_LEASE_TOKEN"
 
+// sprintLeaseGatedVerbs are manager state changes. Goal subverbs are also
+// gated because they are all state changes on the sprint plan.
+var sprintLeaseGatedVerbs = map[string]bool{
+	"accept":     true,
+	"fail":       true,
+	"assign":     true,
+	"checkpoint": true,
+	"move":       true,
+	"edit":       true,
+	"extend":     true,
+	"end":        true,
+	"stop":       true,
+	"handoff":    true,
+	"link":       true,
+	"unlink":     true,
+	"track":      true,
+	"untrack":    true,
+	"focus":      true,
+	"advance":    true,
+	"rm":         true,
+}
+
 func mintSprintLeaseToken() (string, string, error) {
 	var secret [32]byte
 	if _, err := rand.Read(secret[:]); err != nil {
@@ -125,13 +147,9 @@ func installSprintLeaseTokenGuards(root *cobra.Command) {
 			installSprintLeaseTokenGuards(cmd)
 			continue
 		}
-		gated := root.Name() == "goal"
+		gated := root.Name() == "goal" || sprintLeaseGatedVerbs[cmd.Name()]
 		// claim, yield and submit are worker verbs attributed to the
 		// claiming agent, not manager state verbs, so they stay ungated.
-		switch cmd.Name() {
-		case "accept", "fail", "assign", "checkpoint", "move", "edit", "extend", "end", "stop", "handoff", "link", "unlink", "track", "untrack", "focus", "advance", "rm":
-			gated = true
-		}
 		if !gated || cmd.RunE == nil {
 			continue
 		}
