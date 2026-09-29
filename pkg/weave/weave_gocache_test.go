@@ -203,3 +203,66 @@ func TestRunWeavePruneRemovesCrashLeftoverManagedGOCache(t *testing.T) {
 			doc.Result.Removed, doc.Result.CacheRemoved, out)
 	}
 }
+
+func TestPruneReclaimsPerRunBuildCaches(t *testing.T) {
+	root := weaveTestRepo(t)
+	dir, err := weaveQueueDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := weaveManagedGOCachePath(nil, dir, 1)
+	if err := os.MkdirAll(cache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "blob"), []byte("cache\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	q := &weaveQueue{Root: root, Items: []*weaveItem{{ID: 1, State: "failed", Created: time.Now().UTC()}}}
+	if err := saveWeaveQueue(dir, q); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Chdir(root)
+	if out, code := runWeave(t, "prune", "--yes", "--json"); code != 0 {
+		t.Fatalf("prune exit=%d: %s", code, out)
+	}
+	if _, err := os.Stat(cache); !os.IsNotExist(err) {
+		t.Fatalf("per-run build cache survived prune: %v", err)
+	}
+}
+
+func TestPruneLeavesTheSharedGoCacheAlone(t *testing.T) {
+	root := weaveTestRepo(t)
+	dir, err := weaveQueueDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared := filepath.Join(t.TempDir(), "Library", "Caches", "go-build")
+	if err := os.MkdirAll(shared, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(shared, "sentinel")
+	if err := os.WriteFile(sentinel, []byte("shared\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(weaveManagedGOCacheEnv, shared)
+	cache := weaveManagedGOCachePath(nil, dir, 1)
+	if err := os.MkdirAll(cache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	q := &weaveQueue{Root: root, Items: []*weaveItem{{ID: 1, State: "failed", Created: time.Now().UTC()}}}
+	if err := saveWeaveQueue(dir, q); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Chdir(root)
+	if out, code := runWeave(t, "prune", "--yes", "--json"); code != 0 {
+		t.Fatalf("prune exit=%d: %s", code, out)
+	}
+	if got, err := os.ReadFile(sentinel); err != nil || string(got) != "shared\n" {
+		t.Fatalf("shared GOCACHE was touched: got=%q err=%v", got, err)
+	}
+	if _, err := os.Stat(cache); !os.IsNotExist(err) {
+		t.Fatalf("managed per-run cache survived while protecting shared cache: %v", err)
+	}
+}

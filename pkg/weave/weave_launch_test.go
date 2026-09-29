@@ -102,6 +102,56 @@ func TestWeaveStartRejectsFlagsAfterAgentBeforeProvisioning(t *testing.T) {
 	}
 }
 
+func TestStartRefusesBelowTheFreeSpaceThreshold(t *testing.T) {
+	root := setupIsolationFixture(t)
+	t.Chdir(root)
+	if _, code := runWeave(t, "add", "disk guard", "--json"); code != 0 {
+		t.Fatal("weave add failed")
+	}
+	oldProbe := weaveWorkspaceFreeSpaceFn
+	weaveWorkspaceFreeSpaceFn = func(path string) (weaveFreeSpace, error) {
+		return weaveFreeSpace{Bytes: weaveWorkspaceFreeSpaceThreshold - 1}, nil
+	}
+	t.Cleanup(func() { weaveWorkspaceFreeSpaceFn = oldProbe })
+
+	out, code := runWeave(t, "start", "--run", "1", "--no-spawn", "--tool", "sh")
+	if code == 0 {
+		t.Fatalf("start succeeded below free-space threshold: %s", out)
+	}
+	if !strings.Contains(out, "free space") || !strings.Contains(out, "threshold") {
+		t.Fatalf("refusal must name free space and threshold: %s", out)
+	}
+	dir, _ := weaveQueueDir(root)
+	q, _ := loadWeaveQueue(dir)
+	it := findWeaveItem(q, 1)
+	if it.State != "todo" || it.Workspace != "" || it.WrapperPid != 0 {
+		t.Fatalf("refused start must leave the run queued: %+v", it)
+	}
+}
+
+func TestStartProceedsWhenSpaceIsAvailable(t *testing.T) {
+	root := setupIsolationFixture(t)
+	t.Chdir(root)
+	if _, code := runWeave(t, "add", "disk guard", "--json"); code != 0 {
+		t.Fatal("weave add failed")
+	}
+	oldProbe := weaveWorkspaceFreeSpaceFn
+	weaveWorkspaceFreeSpaceFn = func(path string) (weaveFreeSpace, error) {
+		return weaveFreeSpace{Bytes: weaveWorkspaceFreeSpaceThreshold}, nil
+	}
+	t.Cleanup(func() { weaveWorkspaceFreeSpaceFn = oldProbe })
+
+	if out, code := runWeave(t, "start", "--run", "1", "--no-spawn", "--tool", "sh", "--json"); code != 0 {
+		t.Fatalf("start refused at threshold: exit=%d %s", code, out)
+	}
+	dir, _ := weaveQueueDir(root)
+	q, _ := loadWeaveQueue(dir)
+	it := findWeaveItem(q, 1)
+	if it.State != "allocated" || it.Workspace == "" {
+		t.Fatalf("start did not allocate with sufficient space: %+v", it)
+	}
+}
+
 func TestPointRuntimeBudgetScaleAndExplicitCap(t *testing.T) {
 	wants := map[int]time.Duration{
 		1: 3*time.Minute + 45*time.Second,

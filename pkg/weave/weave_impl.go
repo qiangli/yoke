@@ -3373,6 +3373,14 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 				weavecli.ExitStateConflict, fmt.Errorf("--resume: workspace missing on disk: %s", it.Workspace)))
 		}
 	}
+	workspace := filepath.Join(dir, "workspaces", fmt.Sprintf("issue-%d", it.ID))
+	if opts.resume {
+		workspace = it.Workspace
+	}
+	if err := weaveCheckWorkspaceFreeSpace(workspace); err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
+			weavecli.ExitPrecondFail, err))
+	}
 	// The wrapper owns the lifecycle lock and reservation before provisioning.
 	// A detached launcher merely starts this process; it owns no capacity.
 	lifecycle, admissionErr := weaveRunLifecycleLock(dir, it.ID)
@@ -3423,10 +3431,8 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			weavecli.ExitPrecondFail, fmt.Errorf("resolve source HEAD: %w", baseErr)))
 	}
 	baseSHA := strings.TrimSpace(string(baseOut))
-	workspace := filepath.Join(dir, "workspaces", fmt.Sprintf("issue-%d", it.ID))
 	branch := fmt.Sprintf("agent/weave-issue-%d", it.ID)
 	if opts.resume {
-		workspace = it.Workspace
 		branch = it.Branch
 	}
 	agentEventsPath := ""

@@ -229,3 +229,79 @@ func TestSprintLadderLifecycle(t *testing.T) {
 		})
 	}
 }
+
+func TestENOSPCGateFailureIsClassifiedEnvironment(t *testing.T) {
+	home, repo := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BASHY_HOME", filepath.Join(home, ".bashy"))
+	cat := pinFleetWith(t)
+	if err := cat.SaveAgent(fleet.Agent{Name: "agent-a", Tool: "tool-a", Model: "model-a"}); err != nil {
+		t.Fatal(err)
+	}
+	board := filepath.Join(home, "sprint")
+	t.Setenv("BASHY_SPRINT_DIR", board)
+	t.Setenv("BASHY_ROOM_DIR", filepath.Join(home, "room"))
+	t.Setenv("BASHY_PRINCIPAL", "")
+	t.Setenv("WEAVE_CONDUCTOR", "manager")
+	t.Setenv("BASHY_LADDER_SEASON", "4")
+	st := todopkg.RepoStore(repo)
+	story, err := todopkg.Add(st, "deliver", "", "p0", nil, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	story.Sprint = 1
+	story.Assignee = "agent-a"
+	story.Status = todopkg.StatusAssigned
+	story.Weave = 25
+	if _, err = st.Save(story); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	run := &weaveItem{
+		ID:           25,
+		Register:     story.ID,
+		Points:       1,
+		Owner:        "agent-a",
+		Tool:         "tool-a",
+		State:        "failed",
+		Created:      now,
+		StartedAt:    now.Add(-time.Minute),
+		FinishedAt:   now,
+		VerifyOutput: "go test ./pkg/weave: write /tmp/x: no space left on device",
+		LaunchSpec:   &weaveLaunchSpec{Tool: filepath.Join(home, "bin", "tool-a"), Model: "model-a", Agent: "agent-a"},
+	}
+	tag := filepath.Base(repo) + "-test"
+	if err = saveWeaveQueue(filepath.Join(weaveStateRoot(home), tag), &weaveQueue{Root: repo, Items: []*weaveItem{run}}); err != nil {
+		t.Fatal(err)
+	}
+	s := &weaveStory{ID: 1, Title: "neutral", Column: "doing", Owner: "manager", Lease: &weaveStoryLease{Holder: "manager", At: now}, StoryRoots: []string{repo}, Created: now, Runs: []sprintRun{{Repo: filepath.Base(repo), Queue: tag, ID: 25, Born: now}}}
+	if err = saveWeaveQueue(board, &weaveQueue{NextStoryID: 2, Stories: []*weaveStory{s}}); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewSprintCmd()
+	var out, stderr bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"fail", "1", story.ID, "--repo", repo})
+	if err = cmd.Execute(); err != nil {
+		t.Fatalf("sprint fail: %v stdout=%s stderr=%s", err, out.String(), stderr.String())
+	}
+	store, err := ladder.OpenStore("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events=%+v", events)
+	}
+	if events[0].Blame.Class != blame.ClassEnvironment {
+		t.Fatalf("ENOSPC failure blame = %+v, want environment", events[0].Blame)
+	}
+	if !strings.Contains(out.String(), "Fix the delivery environment") {
+		t.Fatalf("environment failure did not print fix-item prompt: stdout=%s stderr=%s", out.String(), stderr.String())
+	}
+}

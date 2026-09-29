@@ -123,7 +123,8 @@ func newSprintFailCmd() *cobra.Command {
 			return err
 		}
 		actor := weaveConductorName("")
-		attribution := blame.Attribution{By: actor, At: time.Now().UTC()}
+		now := time.Now().UTC()
+		attribution := blame.Attribution{By: actor, At: now}
 		attribution.Class, err = blame.ParseClass(class)
 		if err != nil {
 			return err
@@ -160,12 +161,15 @@ func newSprintFailCmd() *cobra.Command {
 			if strings.TrimSpace(it.Assignee) == "" {
 				return "", fmt.Errorf("story %s is not claimed by anyone", it.ID)
 			}
-			event, err = sprintLadderDelivery(cmd, s, it, actor, root, time.Now().UTC())
+			event, err = sprintLadderDelivery(cmd, s, it, actor, root, now)
 			if err != nil {
 				return "", err
 			}
 			if event == nil {
 				return "", fmt.Errorf("failure delivery needs a linked run or --agent and --points")
+			}
+			if attribution.Class == blame.ClassUnclassified {
+				attribution = sprintEnvironmentBlameFromRunEvidence(s, it, root, actor, now)
 			}
 			event.Outcome = 0
 			event.Blame = attribution
@@ -207,4 +211,62 @@ func newSprintFailCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&note, "message", "m", "", "manager continuity note")
 	flags.attach(cmd)
 	return cmd
+}
+
+func sprintEnvironmentBlameFromRunEvidence(s *weaveStory, story *issue.Issue, root, actor string, now time.Time) blame.Attribution {
+	run := sprintLinkedRunForStory(s, story, root)
+	if run == nil || !weaveOutputContainsENOSPC(sprintRunFailureEvidence(run)) {
+		return blame.Attribution{}
+	}
+	return blame.Attribution{
+		Class: blame.ClassEnvironment,
+		By:    actor,
+		At:    now,
+		Evidence: []blame.Evidence{{
+			Kind: blame.EvidenceHost,
+			Ref:  fmt.Sprintf("weave-run-%d", run.ID),
+			Note: "captured gate output contains ENOSPC/no space left on device",
+		}},
+	}
+}
+
+func sprintLinkedRunForStory(s *weaveStory, story *issue.Issue, root string) *weaveItem {
+	if s == nil || story == nil {
+		return nil
+	}
+	for _, link := range s.Runs {
+		dir, err := weaveQueueDirForSprintRun(link)
+		if err != nil {
+			continue
+		}
+		q, err := loadWeaveQueue(dir)
+		if err != nil {
+			continue
+		}
+		run := findWeaveItem(q, link.ID)
+		if run == nil || (!link.Born.IsZero() && !link.Born.Equal(run.Created)) {
+			continue
+		}
+		if run.Register == story.ID || (run.Register == "" && story.Weave == run.ID && filepath.Clean(q.Root) == filepath.Clean(root)) {
+			return run
+		}
+	}
+	return nil
+}
+
+func sprintRunFailureEvidence(run *weaveItem) string {
+	if run == nil {
+		return ""
+	}
+	var parts []string
+	parts = append(parts, run.VerifyOutput, run.SuiteGateOutput, run.Completion, run.KilledBy)
+	if run.LogPath != "" {
+		parts = append(parts, weaveReadThrottleLogTail(run.LogPath))
+	}
+	return strings.Join(parts, "\n")
+}
+
+func weaveOutputContainsENOSPC(s string) bool {
+	s = strings.ToLower(s)
+	return strings.Contains(s, "enospc") || strings.Contains(s, "no space left on device")
 }
