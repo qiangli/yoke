@@ -1,0 +1,21 @@
+vendor	vendor_cli	fleet_model	in_bashy_seeds	vendor_model_id	capability_area	benchmark	variant_or_subscore	metric	score	agent_tool_or_harness	settings	date	source_type	source_url	notes	collector
+vendor-a	cli-a	model-a	yes	id-a	coding-debug-test	bench-x	overall	%	60.0	cli-a	max	2026-09-01	vendor	https://example.invalid/a		t
+vendor-a	cli-a	model-b	yes	id-b	coding-debug-test	bench-x	overall	% resolved	40.5 ±2.1	vendor internal harness		2026-09-01	vendor	https://example.invalid/a		t
+vendor-b	cli-b	model-c	yes	id-c	coding-debug-test	bench-x	overall	accuracy %	20 (±3.0)	Terminus 2		2026-09-01	official-board	https://example.invalid/b		t
+vendor-b	cli-b	model-c	yes	id-c	tool-use-agentic	bench-y		score (0-1)	0.7	unstated		2026-09-01	aggregator	https://example.invalid/b		t
+vendor-a	cli-a	model-a	yes	id-a	tool-use-agentic	bench-y		%	55	none/API		2026-09-01	paper	https://example.invalid/c		t
+vendor-a	cli-a	model-a	yes	id-a	coding-debug-test	bench-elo		Elo	1400	arena		2026-09-01	aggregator	https://example.invalid/d		t
+vendor-a	cli-a	model-b	yes	id-b	coding-debug-test	bench-idx		index	55	AA		2026-09-01	aggregator	https://example.invalid/d		t
+vendor-a	cli-a	model-b	yes	id-b	coding-debug-test	bench-hours		hours	2.5	METR harness		2026-09-01	aggregator	https://example.invalid/d		t
+vendor-a	cli-a	model-b	yes	id-b	coding-debug-test	bench-x	overall	%	n/a (figure only)	unstated		2026-09-01	press	https://example.invalid/e		t
+vendor-a	cli-a	model-b	yes	id-b	coding-debug-test	bench-x	overall	%	42.6 / 62.5	unstated		2026-09-01	press	https://example.invalid/e		t
+vendor-a	cli-a	model-b	yes	id-b	coding-debug-test	bench-x	overall	%	~56	unstated		2026-09-01	press	https://example.invalid/e		t
+vendor-a	cli-a	model-b	yes	id-b	coding-debug-test	bench-x	overall	%	50-52	unstated		2026-09-01	press	https://example.invalid/e		t
+vendor-a	cli-a	model-b	yes	id-b	coding-debug-test	bench-x	overall	%	140	unstated		2026-09-01	press	https://example.invalid/e		t
+vendor-a	cli-a	model-b	yes	id-b	coding-debug-test	bench-x	overall	resolved%;completion(0-1)	40;0.5	unstated		2026-09-01	press	https://example.invalid/e		t
+vendor-a	cli-a	model-b	yes	id-b	coding-debug-test	bench-x	overall	error % (lower better)	12	unstated		2026-09-01	press	https://example.invalid/e		t
+vendor-a	cli-a	model-b	yes	id-b	reasoning-knowledge	bench-r		%	70	unstated		2026-09-01	vendor	https://example.invalid/f		t
+vendor-a	cli-a	model-b	yes	id-b	multimodal	bench-m		%	70	unstated		2026-09-01	vendor	https://example.invalid/f		t
+vendor-a	cli-a		no	id-z	coding-debug-test	bench-x	overall	%	33	unstated		2026-09-01	vendor	https://example.invalid/f		t
+vendor-a	cli-a	model-a	yes	id-a	coding-debug-test	bench-x	overall	%		unstated		2026-09-01	vendor	https://example.invalid/f		t
+vendor-b	cli-b	model-c	yes	id-c	coding-debug-test	bench-solo	overall	%	50	unstated		2026-09-01	vendor	https://example.invalid/f		t
