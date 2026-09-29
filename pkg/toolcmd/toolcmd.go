@@ -52,6 +52,11 @@ type Options struct {
 	Stderr io.Writer
 	// DryRun renders the argv (print) or steps (tui) without running anything.
 	DryRun bool
+	// Argv is the caller's args as an argv (e.g. the words after `--` on the
+	// CLI). A print command's `exec` template expands {args} to these tokens
+	// verbatim; when nil, the args string is split with shell quoting rules.
+	// Slash lines always use the args string.
+	Argv []string
 }
 
 // Result is the structured envelope of one command run.
@@ -59,12 +64,13 @@ type Result struct {
 	Tool      string    `json:"tool"`
 	Command   string    `json:"command"`
 	Mode      string    `json:"mode"`
-	Slash     string    `json:"slash,omitempty"` // the rendered slash line
-	Argv      []string  `json:"argv,omitempty"`  // print: the rendered argv (dry-run and real)
-	Steps     []string  `json:"steps,omitempty"` // tui: the rendered frames (dry-run)
-	Dir       string    `json:"dir,omitempty"`   // the workdir used
-	Outcome   string    `json:"outcome"`         // success | error | unavailable | timeout | cancelled | dry-run
-	Text      string    `json:"text,omitempty"`  // turn: final message; transcript: whole session text
+	Slash     string    `json:"slash,omitempty"`   // the rendered slash line
+	Argv      []string  `json:"argv,omitempty"`    // print: the rendered argv (dry-run and real)
+	Steps     []string  `json:"steps,omitempty"`   // tui: the rendered frames (dry-run)
+	Dir       string    `json:"dir,omitempty"`     // the workdir used
+	Outcome   string    `json:"outcome"`           // success | error | unavailable | timeout | cancelled | dry-run
+	Verdict   string    `json:"verdict,omitempty"` // the tool's own terminal verdict (events_outcome): succeeded | unverified
+	Text      string    `json:"text,omitempty"`    // turn: final message; transcript: whole session text
 	Artifacts []string  `json:"artifacts,omitempty"`
 	Session   string    `json:"session,omitempty"` // tool session id when known
 	ExitCode  int       `json:"exit_code"`

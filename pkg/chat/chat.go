@@ -160,6 +160,15 @@ type Options struct {
 	// CtlSock is the unix socket an operator writes to in order to steer this
 	// agent mid-run (see agentpty). Only meaningful with PTY.
 	CtlSock string
+
+	// ExecArgv, when non-nil, REPLACES the resolved launch argv (everything
+	// after the binary) and no prompt is appended: the caller rendered a
+	// per-command argv template itself (a tool command whose vendor feature is
+	// a subcommand, e.g. `codex exec review --json ...`; pkg/toolcmd). The
+	// caller is responsible for finalizing it (agentlaunch.FinalizeArgs) and
+	// for carrying its own event-stream flags; no event argv is inserted. The
+	// prompt built from Instruction still labels and budgets the turn.
+	ExecArgv []string
 }
 
 // Result is the stable envelope returned by Invoke and optionally printed by
@@ -1062,12 +1071,15 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 		}
 	}
 	args := append(lnch.Args, prompt)
+	if opt.ExecArgv != nil {
+		args = append([]string(nil), opt.ExecArgv...)
+	}
 	// A caller asking to observe a turn live needs the tool's declared event
 	// stream, not a pipe around a CLI that buffers prose until exit. The fleet
 	// registry is the adapter: AGY receives stream-json flags, while tools with
 	// no stdout event contract keep their existing argv.
 	var eventPath string
-	if opt.Stream != nil || opt.EventStream != nil {
+	if (opt.Stream != nil || opt.EventStream != nil) && opt.ExecArgv == nil {
 		args = agentlaunch.InsertBeforePrompt(args,
 			agentlaunch.EventStdoutArgs(toAgentLaunch(lnch)))
 		// ycode exposes the same structured stream through a file side-channel
