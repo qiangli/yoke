@@ -1,0 +1,12 @@
+agents:
+  - name: opencode-glm-5.3
+    tool: opencode
+    model: glm-5.3
+    display: "opencode · glm-5.3"
+    ledger:
+      reliability: unmeasured
+      notes: |
+        GLM-5.3 on opencode over the z.ai coding-plan seat (opencode id
+        zai-coding-plan/glm-5.3, see models/glm-5.3.yaml). The Sprint #328 live
+        check ran it with the bare id and failed; seeded 2026-09-29 with the
+        opencode-specific id, not yet re-verified. Pre-seed opencode.json.

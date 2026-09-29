@@ -1,0 +1,9 @@
+agents:
+  - name: genie-gpt-5.5
+    description: 'genie on codex-gpt-5.5, served by the model door (sticky genie-gpt-5.5): same model as codex-gpt-5.5'
+    tool: genie
+    model: door-codex-gpt-5.5
+    display: "genie · door-codex-gpt-5.5"
+    ledger:
+      reliability: unmeasured
+      notes: headless live check PASS once the door is up (bashy llm up) and the owner token is bound to bashy-llm (Sprint #328, 2026-09-29)

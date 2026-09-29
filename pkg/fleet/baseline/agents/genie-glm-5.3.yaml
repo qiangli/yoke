@@ -1,0 +1,9 @@
+agents:
+  - name: genie-glm-5.3
+    description: genie on GLM-5.3 via -m (API model, z.ai endpoint)
+    tool: genie
+    model: glm-5.3
+    display: "genie · glm-5.3"
+    ledger:
+      reliability: medium
+      notes: headless live check PASS (Sprint #328 tool readiness, 2026-09-29)
