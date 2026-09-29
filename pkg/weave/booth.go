@@ -69,7 +69,59 @@ func boothBlindArgv(l *weaveAgentLaunch, prompt string) []string {
 	if l == nil {
 		return nil
 	}
-	return weaveAgentEventsStdoutArgv(l, l.Argv(prompt))
+	argv := l.Argv(prompt)
+	// Keychain login requires the existing config identity. Print mode can
+	// avoid writing a transcript there even though that config is shared.
+	if boothConfigEnv(l.ToolName) == "CLAUDE_CONFIG_DIR" {
+		if len(argv) > 0 && argv[len(argv)-1] == prompt {
+			argv = append(argv[:len(argv)-1], "--safe-mode", "--no-session-persistence", prompt)
+		} else {
+			argv = append(argv, "--safe-mode", "--no-session-persistence")
+		}
+	}
+	return weaveAgentEventsStdoutArgv(l, argv)
+}
+
+func boothConfigEnv(toolName string) string {
+	toolName = strings.ToUpper(filepath.Base(toolName))
+	var prefix strings.Builder
+	for _, r := range toolName {
+		if r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			prefix.WriteRune(r)
+		} else {
+			prefix.WriteByte('_')
+		}
+	}
+	return prefix.String() + "_CONFIG_DIR"
+}
+
+func boothSetEnv(env []string, key, value string) []string {
+	out := make([]string, 0, len(env)+1)
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, key+"=") {
+			out = append(out, kv)
+		}
+	}
+	return append(out, key+"="+value)
+}
+
+func boothUnsetEnv(env []string, key string) []string {
+	out := env[:0]
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, key+"=") {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
+func boothGetEnv(env []string, key string) string {
+	for i := len(env) - 1; i >= 0; i-- {
+		if strings.HasPrefix(env[i], key+"=") {
+			return strings.TrimPrefix(env[i], key+"=")
+		}
+	}
+	return ""
 }
 
 func boothCredentialFile(queueDir string, run int64, forkURL, user, password string) (string, error) {
@@ -174,10 +226,19 @@ func boothSeedAgentDirs(env []string, queueDir string, run int64, toolName strin
 	}
 	defaultSource := filepath.Join(home, "."+toolName)
 	defaultDest := filepath.Join(boothHome, "."+toolName)
-	if err := boothCopyLogin(defaultSource, defaultDest); err != nil {
-		return nil, err
+	configKey := boothConfigEnv(toolName)
+	// Auth behavior is keyed by the redirect variable, not a model or vendor.
+	// This login uses the OS keychain, whose entry is scoped to the config dir.
+	// Keep that identity while suppressing automatic memory and (in blind
+	// print mode) session persistence. Other config writes remain possible;
+	// standard booths are an integrity layer, not a hard filesystem sandbox.
+	keychainLogin := configKey == "CLAUDE_CONFIG_DIR"
+	if !keychainLogin {
+		if err := boothCopyLogin(defaultSource, defaultDest); err != nil {
+			return nil, err
+		}
 	}
-	env = append(env, "HOME="+boothHome)
+	env = boothSetEnv(env, "HOME", boothHome)
 	var prefix strings.Builder
 	for _, r := range toolName {
 		if r >= 'a' && r <= 'z' {
@@ -188,15 +249,15 @@ func boothSeedAgentDirs(env []string, queueDir string, run int64, toolName strin
 			prefix.WriteByte('_')
 		}
 	}
-	for _, key := range []string{prefix.String() + "_HOME", prefix.String() + "_CONFIG_DIR"} {
+	for _, key := range []string{prefix.String() + "_HOME", configKey} {
 		var source string
-		for _, kv := range env {
-			if strings.HasPrefix(kv, key+"=") {
-				source = strings.TrimPrefix(kv, key+"=")
-			}
-		}
+		source = boothGetEnv(env, key)
 		if source == "" {
 			source = defaultSource
+		}
+		if keychainLogin && key == configKey {
+			env = boothSetEnv(env, key, source)
+			continue
 		}
 		dest := filepath.Join(queueDir, "booth-"+strconv.FormatInt(run, 10)+"-agent", strings.ToLower(key))
 		if err := os.MkdirAll(dest, 0o700); err != nil {
@@ -205,7 +266,56 @@ func boothSeedAgentDirs(env []string, queueDir string, run int64, toolName strin
 		if err := boothCopyLogin(source, dest); err != nil {
 			return nil, err
 		}
-		env = append(env, key+"="+dest)
+		env = boothSetEnv(env, key, dest)
+	}
+	if keychainLogin {
+		env = boothSetEnv(env, "CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1")
+		if filepath.Base(boothGetEnv(env, configKey)) == "."+toolName {
+			// An explicit redirect to the default directory is still a
+			// different keychain identity. Restore the default HOME lookup.
+			source := boothGetEnv(env, configKey)
+			env = boothSetEnv(env, "HOME", filepath.Dir(source))
+			env = boothUnsetEnv(env, configKey)
+		}
+		fmt.Fprintf(os.Stderr, "weave: WARNING booth shares the keychain login home; automatic memory is disabled, but other tool settings may be written there\n")
+	}
+	// XDG locations can override HOME. Keep session databases and caches in
+	// booth state even when the operator exports global XDG paths.
+	xdgDataSource := boothGetEnv(env, "XDG_DATA_HOME")
+	if xdgDataSource == "" {
+		xdgDataSource = filepath.Join(home, ".local", "share")
+	}
+	xdgConfigSource := boothGetEnv(env, "XDG_CONFIG_HOME")
+	if xdgConfigSource == "" {
+		xdgConfigSource = filepath.Join(home, ".config")
+	}
+	for key, suffix := range map[string]string{
+		"XDG_DATA_HOME":   filepath.Join(".local", "share"),
+		"XDG_CONFIG_HOME": ".config",
+		"XDG_CACHE_HOME":  ".cache",
+		"XDG_STATE_HOME":  filepath.Join(".local", "state"),
+	} {
+		dest := filepath.Join(boothHome, suffix)
+		if err := os.MkdirAll(dest, 0o700); err != nil {
+			return nil, err
+		}
+		env = boothSetEnv(env, key, dest)
+	}
+	if configKey == "OPENCODE_CONFIG_DIR" {
+		// This login is stored in XDG data, not the config directory.
+		if err := boothCopyLogin(filepath.Join(xdgDataSource, toolName), filepath.Join(boothHome, ".local", "share", toolName)); err != nil {
+			return nil, err
+		}
+	}
+	if configKey == "MUSE_CONFIG_DIR" {
+		if err := boothCopyLogin(filepath.Join(xdgConfigSource, toolName), filepath.Join(boothHome, ".config", toolName)); err != nil {
+			return nil, err
+		}
+	}
+	if configKey == "AGY_CONFIG_DIR" {
+		// The registry documents interactive browser sign-in but no
+		// portable credential file or config redirect contract.
+		fmt.Fprintf(os.Stderr, "weave: WARNING booth login may not survive redirected HOME for %s; verify sign-in before scoring\n", configKey)
 	}
 	return env, nil
 }

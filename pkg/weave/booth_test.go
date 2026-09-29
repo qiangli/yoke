@@ -162,6 +162,89 @@ func TestBoothAgentDirCopiesLoginOnly(t *testing.T) {
 	}
 }
 
+func TestBoothKeychainLoginKeepsConfigAndDisablesMemory(t *testing.T) {
+	src := filepath.Join(t.TempDir(), ".claude")
+	queue := t.TempDir()
+	env, err := boothSeedAgentDirs([]string{"CLAUDE_CONFIG_DIR=" + src, "HOME=/real", "CLAUDE_CODE_DISABLE_AUTO_MEMORY=0"}, queue, 3, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := map[string]string{}
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		values[k] = v
+	}
+	if values["CLAUDE_CONFIG_DIR"] != "" {
+		t.Fatalf("default keychain config should be implicit: %q", values["CLAUDE_CONFIG_DIR"])
+	}
+	if values["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] != "1" {
+		t.Fatalf("auto memory remains enabled: %q", values["CLAUDE_CODE_DISABLE_AUTO_MEMORY"])
+	}
+	if values["HOME"] != filepath.Dir(src) {
+		t.Fatalf("keychain home changed: %q", values["HOME"])
+	}
+}
+
+func TestBoothBlindArgvDisablesSessionPersistence(t *testing.T) {
+	l := &weaveAgentLaunch{ToolName: "claude", Args: []string{"claude", "-p", "{prompt}"}}
+	argv := boothBlindArgv(l, "story")
+	if !strings.Contains(strings.Join(argv, " "), "--no-session-persistence") {
+		t.Fatalf("persistent session: %v", argv)
+	}
+	if !strings.Contains(strings.Join(argv, " "), "--safe-mode") {
+		t.Fatalf("global customization remains enabled: %v", argv)
+	}
+}
+
+func TestBoothXDGDataIsPrivateAndCopiesLogin(t *testing.T) {
+	src := t.TempDir()
+	queue := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, "opencode"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "opencode", "auth.json"), []byte("login"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env, err := boothSeedAgentDirs([]string{"XDG_DATA_HOME=" + src, "XDG_CONFIG_HOME=/global/config", "XDG_STATE_HOME=/global/state"}, queue, 4, "opencode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := map[string]string{}
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		values[k] = v
+	}
+	for _, key := range []string{"XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"} {
+		if !strings.HasPrefix(values[key], queue) {
+			t.Errorf("%s escaped booth: %q", key, values[key])
+		}
+	}
+	b, err := os.ReadFile(filepath.Join(values["XDG_DATA_HOME"], "opencode", "auth.json"))
+	if err != nil || string(b) != "login" {
+		t.Fatalf("login copy: %q %v", b, err)
+	}
+}
+
+func TestBoothXDGConfigCopiesLogin(t *testing.T) {
+	src := t.TempDir()
+	queue := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, "muse"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "muse", "auth.json"), []byte("login"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env, err := boothSeedAgentDirs([]string{"XDG_CONFIG_HOME=" + src}, queue, 5, "muse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := boothGetEnv(env, "XDG_CONFIG_HOME")
+	b, err := os.ReadFile(filepath.Join(config, "muse", "auth.json"))
+	if err != nil || string(b) != "login" {
+		t.Fatalf("login copy: %q %v", b, err)
+	}
+}
+
 func TestBoothCredentialAndProjection(t *testing.T) {
 	dir := t.TempDir()
 	path, err := boothCredentialFile(dir, 7, "http://127.0.0.1:3000/booth-4-7/repo.git", "booth-4-7", "secret")
