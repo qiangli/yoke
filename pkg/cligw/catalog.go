@@ -97,6 +97,7 @@ type Agent struct {
 	Kind          string   `json:"kind"`
 	Provider      string   `json:"provider"`
 	Warm          string   `json:"warm"`
+	Effort        string   `json:"effort,omitempty"` // declared reasoning effort; "" = the tool's default
 	Capabilities  []string `json:"capabilities,omitempty"`
 	Domains       []string `json:"domains,omitempty"`
 	ContextLength int64    `json:"context_length,omitempty"`
@@ -224,7 +225,7 @@ func (c *FleetCatalog) deriveInventory() []Agent {
 		out = append(out, Agent{
 			Name: a.Name, Model: model.Name, Tool: tool.Name,
 			Band: band, BandSource: source, Kind: model.Kind,
-			Provider: model.Provider, Warm: warmMode(tool),
+			Provider: model.Provider, Warm: warmMode(tool), Effort: a.Effort,
 			Capabilities: cloneStrings(model.Capabilities),
 			Domains:      modelDomains(model), ContextLength: model.ContextLength,
 		})

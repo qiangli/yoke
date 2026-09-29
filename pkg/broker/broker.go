@@ -64,7 +64,15 @@ type AgentInfo struct {
 	Provider    string
 	Kind        string
 	Warm        string
+	Effort      string // declared reasoning effort ("" = the tool's default)
 	Band        int
+}
+
+// AgentLookup is an optional CLIBackend capability: the agent's binding as
+// it stands now, so a frozen identity's declared effort can be re-checked on
+// every use. A backend without it is not re-checked.
+type AgentLookup interface {
+	LookupAgent(name string) (AgentInfo, bool)
 }
 
 // CLIBackend is the cligw surface: an http.Handler for the OpenAI/Anthropic
@@ -762,7 +770,7 @@ func (b *Broker) resolveIdentity(ctx context.Context, principal, session string,
 	return Identity{
 		Backend: BackendCLI, Location: "local", Model: info.Model, Agent: info.Name,
 		Tool: info.Tool, ToolVersion: version, VendorModel: info.VendorModel, Provider: info.Provider,
-		Launch: "cligw-pure-completion/" + firstNonEmpty(info.Warm, "cold"), Options: nilIfEmpty(options),
+		Launch: "cligw-pure-completion/" + firstNonEmpty(info.Warm, "cold"), Effort: info.Effort, Options: nilIfEmpty(options),
 	}, nil
 }
 
@@ -783,6 +791,11 @@ func (b *Broker) checkIdentity(ctx context.Context, bnd *Binding) error {
 		if b.opts.ToolVersion != nil && id.ToolVersion != "" {
 			if v := b.opts.ToolVersion(id.Tool); v != id.ToolVersion {
 				return stickyErr(409, "sticky: identity %s: %s is now %q (was %q); the binding cannot be served exactly", ShortDigest(bnd.Digest), id.Tool, v, id.ToolVersion)
+			}
+		}
+		if lk, ok := b.opts.CLI.(AgentLookup); ok && id.Agent != "" {
+			if cur, found := lk.LookupAgent(id.Agent); found && cur.Effort != id.Effort {
+				return stickyErr(409, "sticky: identity %s: agent %s now declares effort %q (was %q); the binding cannot be served exactly", ShortDigest(bnd.Digest), id.Agent, cur.Effort, id.Effort)
 			}
 		}
 	}

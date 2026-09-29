@@ -140,6 +140,13 @@ func NewWorker(ctx context.Context, agent string) (*Worker, error) {
 		return nil, fmt.Errorf("cligw: tool %q has unsupported warm mode %q", tool.Name, mode)
 	}
 
+	// A declared effort the tool cannot be told is refused here, loudly:
+	// silently dropping it would serve a different setting than the binding
+	// (and its sticky identity) says.
+	if _, err := effortArgs(tool.Name, launch.Effort); err != nil {
+		return nil, err
+	}
+
 	w := &Worker{agent: agent, launch: launch, tool: tool, mode: mode, cwd: cwd}
 	// ACP is deliberately a cold fallback until the ACP worker transport lands.
 	if mode != WarmCold && mode != WarmACP {
@@ -406,6 +413,7 @@ func (w *Worker) argv(prompt, requestSystem string) []string {
 		extra := append([]string{}, events...)
 		extra = append(extra, "--include-partial-messages", "--system-prompt", systemPrompt(requestSystem))
 		extra = append(extra, "--tools", "", "--no-session-persistence", "--strict-mcp-config", "--setting-sources", "")
+		extra = append(extra, w.effortArgs()...)
 		if w.mode == WarmStdinStreamJSON {
 			extra = append([]string{"--input-format", "stream-json"}, extra...)
 			args = append(args, extra...)
@@ -435,6 +443,9 @@ func (w *Worker) argv(prompt, requestSystem string) []string {
 		if w.codexCatalog != "" {
 			args = insertAfter(args, "exec", []string{"-c", "model_catalog_json=" + strconv.Quote(w.codexCatalog)})
 		}
+		if effort := w.effortArgs(); len(effort) > 0 {
+			args = insertAfter(args, "exec", effort)
+		}
 	default:
 		args = insertBeforePromptFlag(args, events)
 	}
@@ -443,6 +454,32 @@ func (w *Worker) argv(prompt, requestSystem string) []string {
 		argv = append(argv, prompt)
 	}
 	return argv
+}
+
+// effortArgs is the argv that tells tool to run at a declared reasoning
+// effort. Unset effort = no argv at all (the tool's default, byte-for-byte the
+// argv an undeclared binding always had). A tool with no known effort flag is
+// an error, never a silent no-op. agy is deliberately absent: its bindings
+// carry effort in the model id, and passing both fails (see baseline agy.yaml).
+func effortArgs(tool, effort string) ([]string, error) {
+	if effort == "" {
+		return nil, nil
+	}
+	if err := fleet.ValidEffort(effort); err != nil {
+		return nil, fmt.Errorf("cligw: %w", err)
+	}
+	switch tool {
+	case "claude":
+		return []string{"--effort", effort}, nil
+	case "codex":
+		return []string{"-c", "model_reasoning_effort=" + strconv.Quote(effort)}, nil
+	}
+	return nil, fmt.Errorf("cligw: the binding declares effort %q but tool %q has no known effort flag (supported: claude, codex); unset the agent's effort or encode it in the model id", effort, tool)
+}
+
+func (w *Worker) effortArgs() []string {
+	args, _ := effortArgs(w.tool.Name, w.launch.Effort) // validated in NewWorker
+	return args
 }
 
 func systemPrompt(request string) string {

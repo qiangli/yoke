@@ -92,6 +92,12 @@ type Launch struct {
 	// launch may open an EMPTY session (codex, opencode) and expect the first
 	// message to arrive over the control channel instead.
 	TakesPrompt bool
+
+	// Effort is the named agent's declared reasoning effort (fleet
+	// Agent.Effort); empty when undeclared or when the launch is not a named
+	// agent. The launch argv does NOT carry it: the consumer that knows the
+	// tool's flag applies it (cligw's worker), and refuses a tool without one.
+	Effort string
 }
 
 func (l Launch) Binding() string {
@@ -172,6 +178,7 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 	namedAgent := false
 	if a, ok := cat.Agent(name); ok {
 		toolName, modelName, lnch.Nick = a.Tool, a.Model, a.Name
+		lnch.Effort = a.Effort
 		namedAgent = true
 	} else if t, m, ok := strings.Cut(name, ":"); ok && t != "" && m != "" {
 		toolName, modelName = t, m

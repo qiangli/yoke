@@ -321,6 +321,11 @@ func (s *Server) ResolveAgent(ctx context.Context, model, filterHeader string) (
 	return a, nil
 }
 
+// Agent returns the fleet agent name as the catalog projects it right now
+// (cached for a few seconds). The broker uses it to re-check a frozen
+// identity's declared settings — effort — against the live binding.
+func (s *Server) Agent(name string) (Agent, bool) { return s.catalog.Agent(name) }
+
 // VendorModel is the provider-side model id the agent's tool is handed
 // (the tool-specific id when the registry has one).
 func (s *Server) VendorModel(a Agent) string {

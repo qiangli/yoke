@@ -51,18 +51,23 @@ type StickySpec struct {
 // Identity is what a binding freezes. Its digest is the proof, on every
 // response and run record, that two calls were served by the same instance.
 type Identity struct {
-	Backend     string         `json:"backend"`  // ollama-local | cligw
-	Location    string         `json:"location"` // local | peer:<name> | cloudbox
-	Model       string         `json:"model"`    // engine model or registry model
-	ModelDigest string         `json:"model_digest,omitempty"`
-	Agent       string         `json:"agent,omitempty"` // fleet agent (tool:model binding)
-	Tool        string         `json:"tool,omitempty"`
-	ToolVersion string         `json:"tool_version,omitempty"`
-	VendorModel string         `json:"vendor_model,omitempty"`
-	Provider    string         `json:"provider,omitempty"`
-	Launch      string         `json:"launch,omitempty"`  // launch fingerprint
-	Account     string         `json:"account,omitempty"` // x_account where known
-	Options     map[string]any `json:"options,omitempty"` // num_ctx, temperature, seed …
+	Backend     string `json:"backend"`  // ollama-local | cligw
+	Location    string `json:"location"` // local | peer:<name> | cloudbox
+	Model       string `json:"model"`    // engine model or registry model
+	ModelDigest string `json:"model_digest,omitempty"`
+	Agent       string `json:"agent,omitempty"` // fleet agent (tool:model binding)
+	Tool        string `json:"tool,omitempty"`
+	ToolVersion string `json:"tool_version,omitempty"`
+	VendorModel string `json:"vendor_model,omitempty"`
+	Provider    string `json:"provider,omitempty"`
+	Launch      string `json:"launch,omitempty"`  // launch fingerprint
+	Account     string `json:"account,omitempty"` // x_account where known
+	// Effort is the binding's DECLARED reasoning effort (fleet agent
+	// `effort`). omitempty is load-bearing: an undeclared effort adds nothing
+	// to the canonical JSON, so every identity frozen before effort existed
+	// keeps its exact digest.
+	Effort  string         `json:"effort,omitempty"`
+	Options map[string]any `json:"options,omitempty"` // num_ctx, temperature, seed …
 }
 
 // Digest is the sha256 of the identity's canonical JSON (map keys sorted by

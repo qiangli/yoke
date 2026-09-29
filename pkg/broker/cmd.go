@@ -66,8 +66,21 @@ func (a cliAdapter) ResolveAgent(ctx context.Context, model, filter string) (Age
 	if err != nil {
 		return AgentInfo{}, err
 	}
+	return a.info(ag), nil
+}
+
+// LookupAgent implements AgentLookup over cligw's live catalog.
+func (a cliAdapter) LookupAgent(name string) (AgentInfo, bool) {
+	ag, ok := a.s.Agent(name)
+	if !ok {
+		return AgentInfo{}, false
+	}
+	return a.info(ag), true
+}
+
+func (a cliAdapter) info(ag cligw.Agent) AgentInfo {
 	return AgentInfo{Name: ag.Name, Tool: ag.Tool, Model: ag.Model, VendorModel: a.s.VendorModel(ag),
-		Provider: ag.Provider, Kind: ag.Kind, Warm: ag.Warm, Band: ag.Band}, nil
+		Provider: ag.Provider, Kind: ag.Kind, Warm: ag.Warm, Effort: ag.Effort, Band: ag.Band}
 }
 
 // toolVersions caches each tool's reported version for identities. probe
@@ -486,9 +499,11 @@ func newStickyCmd() *cobra.Command {
 		Use:   "sticky",
 		Short: "sticky bindings: the exact same model instance across requests",
 		Long: `A sticky binding resolves a model ONCE and freezes its identity — local model
-and digest, or fleet agent, CLI version and launch fingerprint, plus options —
-then serves every request under its key with that identity or refuses (never
-reroutes). Use one per benchmark comparison, shared across arms by digest:
+and digest, or fleet agent, CLI version, launch fingerprint and the agent's
+declared effort (only when one is declared: undeclared adds nothing, so older
+digests are unchanged), plus options — then serves every request under its key
+with that identity or refuses (never reroutes; a CLI upgrade or an effort
+change after creation is refused with 409). Use one per benchmark comparison, shared across arms by digest:
 
   bashy llm sticky create g03-opus5 --model claude-opus5
   bashy llm sticky create arm-genie --identity <digest from above>
@@ -628,6 +643,9 @@ func printSticky(w io.Writer, view map[string]any, asJSON bool) error {
 		fmt.Fprintf(w, "agent     %s (%s %s, %s)\n", a, str(id["tool"]), str(id["tool_version"]), str(id["vendor_model"]))
 	} else {
 		fmt.Fprintf(w, "model     %s (%s)\n", str(id["model"]), str(id["model_digest"]))
+	}
+	if e := str(id["effort"]); e != "" {
+		fmt.Fprintf(w, "effort    %s\n", e)
 	}
 	if o, ok := id["options"].(map[string]any); ok && len(o) > 0 {
 		data, _ := json.Marshal(o)

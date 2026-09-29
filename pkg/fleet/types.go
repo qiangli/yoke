@@ -713,6 +713,15 @@ type Agent struct {
 	Tool  string `yaml:"tool" json:"tool" doc:"bound tool name"`    // → Tool.Name
 	Model string `yaml:"model" json:"model" doc:"bound model name"` // → Model.Name
 
+	// Effort is the reasoning-effort level this binding is DECLARED to run at
+	// (e.g. low, medium, high). It is a property of the binding, not of the
+	// model (the same model may run at different efforts under different
+	// tools) nor of the tool (one tool serves many models). Empty = the tool's
+	// own default, untouched. The model door (cligw) passes it to the CLI —
+	// claude `--effort L`, codex `-c model_reasoning_effort="L"` — refuses a
+	// tool with no known effort flag, and freezes it into the sticky identity.
+	Effort string `yaml:"effort,omitempty" json:"effort,omitempty" doc:"declared reasoning effort (low, medium, high, …); empty = the tool's default"`
+
 	// A CASCADE agent (band_source: cascade) is not a plain tool:model binding.
 	// It runs a cheap Base agent and, when the base gets stuck, escalates through
 	// Escalation (a ladder of agent names, tried in order — e.g. an L3 then an L4)

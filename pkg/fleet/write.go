@@ -96,6 +96,9 @@ func (c *Catalog) SaveAgent(a Agent) error {
 	if err := validName(a.Name); err != nil {
 		return err
 	}
+	if err := ValidEffort(a.Effort); err != nil {
+		return err
+	}
 	// Store the binding by canonical name, whatever the caller typed. `agents
 	// add x --model opus` is a fine thing to write and a terrible thing to
 	// persist: `opus` floats, so the saved identity would change meaning under
@@ -223,4 +226,20 @@ func mergeAliases(cur, add, rm []string) []string {
 		out = append(out, a)
 	}
 	return out
+}
+
+// ValidEffort accepts an empty (undeclared) effort or one lowercase word such
+// as low, medium, high, xhigh or max. Which words a tool accepts is the tool's
+// business — the CLI rejects an unknown level itself — but a value that could
+// smuggle a second flag or config key into an argv never reaches one.
+func ValidEffort(e string) error {
+	if e == "" {
+		return nil
+	}
+	for _, r := range e {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') {
+			return fmt.Errorf("fleet: effort %q must be one lowercase word (e.g. low, medium, high)", e)
+		}
+	}
+	return nil
 }
