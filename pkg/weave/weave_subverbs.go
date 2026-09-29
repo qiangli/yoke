@@ -102,6 +102,8 @@ func newWeaveStartCmd() *cobra.Command {
 	var memLimit string
 	var arena string
 	var blind bool
+	var sealed bool
+	var sealedAllow []string
 	cmd := &cobra.Command{
 		Use:   "start [-- <agent>|<tool> [args...]]",
 		Short: "Allocate a workspace and launch an agent",
@@ -162,10 +164,16 @@ The exit_code and finished_at are persisted.
 "weave pull" picks up submitted branches; "weave wait --issue N"
 blocks until N reaches a terminal state.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if sealed && arena == "" && !resume {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "weave start",
+					weavecli.ExitInvalidArg, fmt.Errorf("--sealed runs a booth in the sandbox tier and requires --arena SPRINT")))
+			}
 			return runWeaveStart(cmd, issue, tool, args, weaveStartOptions{
 				noSpawn:     noSpawn,
 				arena:       arena,
 				blind:       blind,
+				sealed:      sealed,
+				sealedAllow: sealedAllow,
 				resume:      resume,
 				clone:       cloneAgent,
 				pty:         ptyMode,
@@ -182,6 +190,8 @@ blocks until N reaches a terminal state.`,
 	cmd.Flags().BoolVar(&noSpawn, "no-spawn", false, "Allocate the workspace but do not exec the tool")
 	cmd.Flags().StringVar(&arena, "arena", "", "Sprint arena for a private booth workspace")
 	cmd.Flags().BoolVar(&blind, "blind", false, "Give the booth a story-only prompt")
+	cmd.Flags().BoolVar(&sealed, "sealed", false, "Run the booth agent in a podman container: only the workspace mounted, egress limited to model providers and loom")
+	cmd.Flags().StringSliceVar(&sealedAllow, "allow-host", nil, "Extra model-provider endpoint (host, host:port or URL) for a --sealed booth's egress allowlist; also BASHY_SEALED_ALLOW")
 	cmd.Flags().BoolVar(&cloneAgent, "clone", false, "If the named agent is already working another run, mint a per-issue ephemeral clone (own name, own context) instead of waiting for it")
 	cmd.Flags().BoolVar(&autoCommit, "auto-commit", false, "Compatibility flag; dirty terminal trees are preserved automatically when verification permits")
 	cmd.Flags().StringVar(&ptyMode, "pty", "auto", "PTY allocation: auto (default) | always | never")
