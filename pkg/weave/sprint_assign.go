@@ -109,8 +109,39 @@ func sprintAssignBusy(queues []*weaveQueue, names []string) bool {
 	return false
 }
 
+// Sprint cards do not expose dispatch exclusions. Environment defaults are
+// additive with command flags, so a manual pick cannot bypass host policy.
+type sprintAssignExclusions struct {
+	tools, agents []string
+	report        func(agent, reason string)
+}
+
+func sprintAssignExcludeOptions(tools, agents []string) (sprintAssignExclusions, error) {
+	x := sprintAssignExclusions{tools: append([]string(nil), tools...), agents: append([]string(nil), agents...)}
+	for _, entry := range strings.Split(os.Getenv("BASHY_SPRINT_DISPATCH_EXCLUDE"), ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		kind, name, ok := strings.Cut(entry, ":")
+		name = strings.TrimSpace(name)
+		if !ok || name == "" {
+			return x, fmt.Errorf("invalid dispatch exclusion %q: want tool:TOOL or agent:NAME", entry)
+		}
+		switch strings.TrimSpace(kind) {
+		case "tool":
+			x.tools = append(x.tools, name)
+		case "agent":
+			x.agents = append(x.agents, name)
+		default:
+			return x, fmt.Errorf("invalid dispatch exclusion %q: want tool:TOOL or agent:NAME", entry)
+		}
+	}
+	return x, nil
+}
+
 // Only cached probe evidence is consulted: dispatch never invokes a probe.
-func sprintAssignPool(root string, events []ladder.Event, now time.Time) ([]ladder.Entrant, ladder.Lines, error) {
+func sprintAssignPool(root string, events []ladder.Event, now time.Time, exclusions ...sprintAssignExclusions) ([]ladder.Entrant, ladder.Lines, error) {
 	cat := fleetCatalog()
 	agents, errs := cat.Agents()
 	if len(errs) > 0 {
@@ -147,6 +178,32 @@ func sprintAssignPool(root string, events []ladder.Event, now time.Time) ([]ladd
 			}
 		}
 	}
+	toolReasons, bindingReasons := map[string]string{}, map[string]string{}
+	for _, x := range exclusions {
+		for _, name := range x.tools {
+			key := strings.TrimSpace(name)
+			if tool, ok := cat.Tool(key); ok {
+				key = tool.Name
+			}
+			toolReasons[key] = "excluded tool:" + name
+		}
+		for _, name := range x.agents {
+			key := strings.TrimSpace(name)
+			if binding, _, _, err := cat.Binding(key); err == nil {
+				key = binding.MatrixKey()
+			}
+			bindingReasons[key] = "excluded agent:" + name
+		}
+	}
+	// Role.Scope is the fleet responsibility boundary. A shadow binding must
+	// never affect real picks, even through another name for the same binding.
+	for _, a := range agents {
+		if a.Role != nil && strings.EqualFold(strings.TrimSpace(a.Role.Scope), "shadow") {
+			if binding, _, _, err := cat.Binding(a.Name); err == nil && bindingReasons[binding.MatrixKey()] == "" {
+				bindingReasons[binding.MatrixKey()] = "shadow role scope"
+			}
+		}
+	}
 	aliases := map[string][]string{}
 	for _, a := range agents {
 		binding, _, _, err := cat.Binding(a.Name)
@@ -165,7 +222,22 @@ func sprintAssignPool(root string, events []ladder.Event, now time.Time) ([]ladd
 			continue
 		}
 		key := binding.MatrixKey()
-		if seen[key] || unusable[tool.Name] {
+		reason := toolReasons[tool.Name]
+		if reason == "" {
+			reason = bindingReasons[key]
+		}
+		if reason == "" && unusable[tool.Name] {
+			reason = "cached probe: unusable tool:" + tool.Name
+		}
+		if reason != "" {
+			for _, x := range exclusions {
+				if x.report != nil {
+					x.report(a.Name, reason)
+				}
+			}
+			continue
+		}
+		if seen[key] {
 			continue
 		}
 		seen[key] = true
@@ -327,6 +399,7 @@ func newSprintReviewCmd() *cobra.Command { return sprintAssignCommand(true) }
 
 func sprintAssignCommand(review bool) *cobra.Command {
 	var repo, manual, author string
+	var excludeTools, excludeAgents []string
 	var points, band, authorBand int
 	var dry bool
 	name := "assign"
@@ -336,6 +409,8 @@ func sprintAssignCommand(review bool) *cobra.Command {
 	cmd := &cobra.Command{Use: name + " <sprint> <story>", Short: "Schedule a fleet worker through the band ladder", Args: cobra.ExactArgs(2)}
 	cmd.Flags().StringVar(&repo, "repo", "", "repository holding the story")
 	cmd.Flags().BoolVar(&dry, "dry-run", false, "print selection without mutation or launch")
+	cmd.Flags().StringArrayVar(&excludeTools, "exclude-tool", nil, "exclude tool (repeatable; adds to BASHY_SPRINT_DISPATCH_EXCLUDE tool:TOOL,agent:NAME)")
+	cmd.Flags().StringArrayVar(&excludeAgents, "exclude-agent", nil, "exclude agent binding (repeatable; adds to environment exclusions)")
 	if review {
 		cmd.Flags().StringVar(&author, "author", "", "author tool:model")
 		cmd.Flags().IntVar(&authorBand, "author-band", 0, "author band (3, 4 or 5)")
@@ -345,6 +420,13 @@ func sprintAssignCommand(review bool) *cobra.Command {
 		cmd.Flags().StringVar(&manual, "agent", "", "manual assignment override, recorded in the thread")
 	}
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		exclusions, err := sprintAssignExcludeOptions(excludeTools, excludeAgents)
+		if err != nil {
+			return err
+		}
+		exclusions.report = func(agent, reason string) {
+			fmt.Fprintf(cmd.OutOrStdout(), "excluded=%s reason=%s\n", agent, reason)
+		}
 		if !review && (strings.TrimSpace(repo) == "" || band < 3 || band > 5) {
 			return fmt.Errorf("--repo PATH and --band 3|4|5 required")
 		}
@@ -376,7 +458,7 @@ func sprintAssignCommand(review bool) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		pool, lines, err := sprintAssignPool(root, events, time.Now())
+		pool, lines, err := sprintAssignPool(root, events, time.Now(), exclusions)
 		if err != nil {
 			return err
 		}
@@ -438,7 +520,7 @@ func sprintAssignCommand(review bool) *cobra.Command {
 		task := ladder.StoryTask{ID: story.ID, Duty: ladder.DutyCode, Band: band, Points: ladder.Points(points), Rating: rating}
 		return sprintAssignDispatch(cmd, task, pool, lines, manual, dry, root, sprintAssignDeps{seed: func() (int64, error) { return sprintAssignSeed(cmd, id, root, story, points, band) }, record: record, launch: func(cmd *cobra.Command, r sprintAssignLaunch) error {
 			// Re-read availability after seeding: do not use clones to bypass a busy base.
-			fresh, _, err := sprintAssignPool(root, events, time.Now())
+			fresh, _, err := sprintAssignPool(root, events, time.Now(), exclusions)
 			if err != nil {
 				return err
 			}
@@ -449,7 +531,7 @@ func sprintAssignCommand(review bool) *cobra.Command {
 				}
 			}
 			if !free {
-				return fmt.Errorf("agent %s became busy; run #%d remains queued", r.Agent, r.Run)
+				return fmt.Errorf("agent %s became busy or ineligible; run #%d remains queued", r.Agent, r.Run)
 			}
 			story.Assignee = r.Agent
 			if _, err = todopkg.RepoStore(root).Save(story); err != nil {
