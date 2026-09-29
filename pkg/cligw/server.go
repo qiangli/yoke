@@ -303,6 +303,9 @@ func (s *Server) ResolveAgent(ctx context.Context, model, filterHeader string) (
 	if err != nil {
 		return Agent{}, err
 	}
+	if filter.Slash != "" {
+		return Agent{}, fmt.Errorf("cligw: slash=%s runs a tool command and cannot be frozen into a sticky identity", filter.Slash)
+	}
 	sel, err := s.catalog.ParseModelSelector(model)
 	if err != nil {
 		return Agent{}, err
@@ -483,8 +486,23 @@ func (s *Server) route(next http.Handler) http.Handler {
 			writeJSON(w, status, errorEnvelope(err.Error()))
 			return
 		}
+		anthropicSurface := isAnthropicPath(r.URL.Path)
+		if filter.Slash != "" {
+			if err := s.catalog.CheckSlash(filter.Slash); err != nil {
+				writeSlashError(w, anthropicSurface, slashFailure{Status: http.StatusBadRequest,
+					Type: "tool_command_unknown", Message: err.Error(), Command: filter.Slash})
+				return
+			}
+		}
 		wasAuto := sel.Kind == SelectorAuto
 		sel = sel.Classify(body, historyLookup{s.history})
+		if filter.Slash != "" && !s.slashCandidatesExist(r.Context(), sel, s.policy.Filter.Merge(filter)) {
+			writeSlashError(w, anthropicSurface, slashFailure{Status: http.StatusNotFound, Type: "tool_command_no_candidate",
+				Message: fmt.Sprintf("cligw: no agent for model %q declares tool command %q (unmet requirement: slash=%s); tools declaring it: %s",
+					model, filter.Slash, filter.Slash, strings.Join(s.catalog.toolsDeclaring(filter.Slash), ", ")),
+				Command: filter.Slash})
+			return
+		}
 
 		// A bad X-Bashy-Policy is the caller's mistake, not the host's, and
 		// the Router reports it as a plain error the HTTP layer could only
@@ -512,6 +530,13 @@ func (s *Server) route(next http.Handler) http.Handler {
 				return
 			}
 			writeJSON(w, http.StatusInternalServerError, errorEnvelope(err.Error()))
+			return
+		}
+		if filter.Slash != "" {
+			// A slash request runs the agent's vendor command; it takes no
+			// completion worker, so no pool is created or consulted.
+			w.Header().Set(RoutedHeader, decision.HeaderValue())
+			s.serveSlash(w, r, body, model, decision, filter.Slash)
 			return
 		}
 		if _, err := s.Backend(decision.Agent); err != nil {
@@ -831,6 +856,8 @@ type UsageRecord struct {
 	Agent         string       `json:"agent"`
 	Usage         openai.Usage `json:"usage"`
 	LatencyMS     int64        `json:"latency_ms"`
+	// Command is the tool command a slash= request ran ("<tool>:<name>").
+	Command string `json:"command,omitempty"`
 }
 
 // ModelListResponse is the OpenAI /v1/models envelope carrying cligw's band
@@ -851,6 +878,18 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 	}
 	filter, err := ParseFilterWithDefault(r.Header.Get(FilterHeader), s.policy.Filter)
 	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorEnvelope(err.Error()))
+		return
+	}
+	// The filter keys are accepted as query parameters too
+	// (/v1/models?slash=plan); a query key overrides the header's.
+	query, err := filterFromQuery(r.URL.Query())
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorEnvelope(err.Error()))
+		return
+	}
+	filter = filter.Merge(query)
+	if err := s.catalog.CheckSlash(filter.Slash); err != nil {
 		writeJSON(w, http.StatusBadRequest, errorEnvelope(err.Error()))
 		return
 	}

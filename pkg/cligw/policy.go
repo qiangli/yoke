@@ -115,6 +115,12 @@ func (p *Policy) Validate() error {
 	if math.IsNaN(p.ReserveFloor) || math.IsInf(p.ReserveFloor, 0) || p.ReserveFloor < 0 || p.ReserveFloor > 1 {
 		return fmt.Errorf("cligw: reserve_floor must be between 0 and 1")
 	}
+	if strings.TrimSpace(p.Filter.Slash) != "" {
+		// slash= RUNS a vendor command. As a door-wide default it would turn
+		// every completion — benchmarks included — into a command run, so it
+		// is a per-request key only (X-Bashy-Filter, /v1/models?slash=).
+		return fmt.Errorf("cligw: filter.slash is a per-request key (X-Bashy-Filter: slash=NAME); it cannot be a policy default")
+	}
 	p.Escalate = strings.TrimSpace(p.Escalate)
 	if p.Escalate == "" {
 		p.Escalate = EscalateNone

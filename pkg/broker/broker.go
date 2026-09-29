@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/qiangli/yoke/pkg/broker/door"
+	"github.com/qiangli/yoke/pkg/cligw"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -353,6 +354,17 @@ func (b *Broker) dispatch(w http.ResponseWriter, r *http.Request, ri *reqInfo, b
 	}
 	model := jsonString(payload["model"])
 
+	// A slash= request RUNS a vendor tool command (cligw slash.go); it is not
+	// a completion from a frozen identity. Refuse it on a sticky binding so a
+	// benchmark identity only ever serves completions (Sprint #324 S5).
+	slash := slashOf(r.Header.Get(cligw.FilterHeader))
+	if slash != "" && (ri.params["sticky"] != "" || strings.TrimSpace(r.Header.Get(StickyHeader)) != "") {
+		writeErr(w, r.URL.Path, http.StatusBadRequest, fmt.Sprintf(
+			"sticky: slash=%s runs a tool command and is not served from a sticky binding (identities serve completions only); send it without %s or /sticky/<key>",
+			slash, StickyHeader))
+		return
+	}
+
 	binding, spec, err := b.stickyFor(ctx, r, ri, payload, model)
 	if err != nil {
 		writeStickyErr(w, r.URL.Path, err)
@@ -380,6 +392,11 @@ func (b *Broker) dispatch(w http.ResponseWriter, r *http.Request, ri *reqInfo, b
 		}
 	} else if _, ok := b.localModel(ctx, model); !ok {
 		backend = BackendCLI
+	}
+	if slash != "" && backend == BackendLocal {
+		writeErr(w, r.URL.Path, http.StatusBadRequest, fmt.Sprintf(
+			"slash=%s runs a fleet agent's tool command; model %q is a local engine model — name a band, agent or `auto`", slash, model))
+		return
 	}
 	if native && backend != BackendLocal {
 		writeErr(w, r.URL.Path, http.StatusNotFound, fmt.Sprintf("model %q is not a local model on this host's engine", model))
@@ -718,6 +735,9 @@ func (b *Broker) createBinding(ctx context.Context, principal, session string, s
 	if err := spec.validate(); err != nil {
 		return nil, stickyErr(400, "%v", err)
 	}
+	if name := slashOf(spec.Filter); name != "" {
+		return nil, stickyErr(400, "sticky: filter slash=%s runs a tool command and cannot be frozen into a binding (identities serve completions only)", name)
+	}
 	id, err := b.resolveIdentity(ctx, principal, session, spec, reqModel)
 	if err != nil {
 		return nil, err
@@ -903,7 +923,10 @@ func (b *Broker) serveTurns(w http.ResponseWriter, r *http.Request, ri *reqInfo)
 
 func (b *Broker) serveModels(w http.ResponseWriter, r *http.Request, ri *reqInfo) {
 	var data []json.RawMessage
-	if b.local {
+	// A slash= listing asks for agents that declare a tool command; local
+	// engine models declare none.
+	slashListing := r.URL.Query().Get("slash") != "" || slashOf(r.Header.Get(cligw.FilterHeader)) != ""
+	if b.local && !slashListing {
 		tags := b.refreshTags(r.Context(), false)
 		names := make([]string, 0, len(tags))
 		for n := range tags {
@@ -925,8 +948,21 @@ func (b *Broker) serveModels(w http.ResponseWriter, r *http.Request, ri *reqInfo
 	if b.opts.CLI != nil {
 		req := httptestRequest(r.Context(), http.MethodGet, "/v1/models"+queryOf(r))
 		req.Header.Set("Authorization", "Bearer "+b.opts.CLI.Token())
+		if f := r.Header.Get(cligw.FilterHeader); f != "" {
+			req.Header.Set(cligw.FilterHeader, f)
+		}
 		rec := &bufferWriter{header: http.Header{}}
 		b.opts.CLI.ServeHTTP(rec, req)
+		if rec.status >= http.StatusBadRequest {
+			// A bad filter (unknown slash name, malformed key) is the
+			// caller's to see, not an empty listing.
+			for k, v := range rec.header {
+				w.Header()[k] = v
+			}
+			w.WriteHeader(rec.status)
+			_, _ = w.Write(rec.buf.Bytes())
+			return
+		}
 		var list struct {
 			Data []json.RawMessage `json:"data"`
 		}
@@ -938,6 +974,16 @@ func (b *Broker) serveModels(w http.ResponseWriter, r *http.Request, ri *reqInfo
 		data = []json.RawMessage{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
+}
+
+// slashOf returns the slash= key of an X-Bashy-Filter value ("" when absent
+// or unparsable — a malformed filter is cligw's 400 to report).
+func slashOf(filter string) string {
+	f, err := cligw.ParseFilter(filter)
+	if err != nil {
+		return ""
+	}
+	return f.Slash
 }
 
 func queryOf(r *http.Request) string {

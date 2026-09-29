@@ -3,6 +3,7 @@ package cligw
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -170,6 +171,11 @@ type Filter struct {
 	Provider   string `json:"provider,omitempty" yaml:"provider,omitempty"`
 	Tool       string `json:"tool,omitempty" yaml:"tool,omitempty"`
 	BandSource string `json:"band_source,omitempty" yaml:"band_source,omitempty"`
+	// Slash is a canonical tool-command name (fleet.ToolCommand.Name, e.g.
+	// "plan"): only agents whose tool declares that command match, and a
+	// routed request carrying it RUNS the command (toolcmd) instead of a
+	// tools-off completion. It is a per-request key — see slash.go.
+	Slash string `json:"slash,omitempty" yaml:"slash,omitempty"`
 }
 
 // ParseFilter parses X-Bashy-Filter's key=value[,key=value] syntax.
@@ -193,6 +199,8 @@ func ParseFilter(header string) (Filter, error) {
 			out.Tool = value
 		case "band_source":
 			out.BandSource = value
+		case "slash":
+			out.Slash = strings.TrimPrefix(value, "/")
 		default:
 			return Filter{}, fmt.Errorf("cligw: unknown filter key %q", key)
 		}
@@ -214,6 +222,9 @@ func (f Filter) Merge(request Filter) Filter {
 	if request.BandSource != "" {
 		f.BandSource = request.BandSource
 	}
+	if request.Slash != "" {
+		f.Slash = request.Slash
+	}
 	return f
 }
 
@@ -231,7 +242,8 @@ func (f Filter) Match(a Agent) bool {
 	return (f.Kind == "" || a.Kind == f.Kind) &&
 		(f.Provider == "" || a.Provider == f.Provider) &&
 		(f.Tool == "" || a.Tool == f.Tool) &&
-		(f.BandSource == "" || a.BandSource == f.BandSource)
+		(f.BandSource == "" || a.BandSource == f.BandSource) &&
+		(f.Slash == "" || slices.Contains(a.Commands, f.Slash))
 }
 
 func (c *FleetCatalog) unknownSelector(name string) error {

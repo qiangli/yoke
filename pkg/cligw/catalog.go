@@ -3,6 +3,7 @@ package cligw
 import (
 	"context"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -101,6 +102,10 @@ type Agent struct {
 	Capabilities  []string `json:"capabilities,omitempty"`
 	Domains       []string `json:"domains,omitempty"`
 	ContextLength int64    `json:"context_length,omitempty"`
+	// Commands are the canonical names of the tool commands the agent's
+	// tool declares (fleet.Tool.Commands), name-sorted. Filter.Slash
+	// matches against them.
+	Commands []string `json:"commands,omitempty"`
 }
 
 // ModelEntry is one OpenAI model-list row plus bashy routing metadata.
@@ -116,6 +121,10 @@ type ModelEntry struct {
 	XTool       string `json:"x_tool"`
 	XWarm       string `json:"x_warm"`
 	XQuota      string `json:"x_quota"`
+	// XCommands lists the tool commands the row's agent declares; a
+	// ?slash=NAME / X-Bashy-Filter: slash=NAME listing keeps only rows
+	// whose agent declares NAME.
+	XCommands []string `json:"x_commands,omitempty"`
 }
 
 // ModelList returns band aliases first, then launchable registry models and
@@ -173,6 +182,7 @@ func modelEntry(id string, a Agent) ModelEntry {
 		ID: id, Object: "model", OwnedBy: "bashy",
 		XBand: a.Band, XBandSource: a.BandSource, XKind: a.Kind,
 		XProvider: a.Provider, XTool: a.Tool, XWarm: a.Warm,
+		XCommands: cloneOrNil(a.Commands),
 	}
 }
 
@@ -228,6 +238,7 @@ func (c *FleetCatalog) deriveInventory() []Agent {
 			Provider: model.Provider, Warm: warmMode(tool), Effort: a.Effort,
 			Capabilities: cloneStrings(model.Capabilities),
 			Domains:      modelDomains(model), ContextLength: model.ContextLength,
+			Commands: commandNames(tool),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -293,5 +304,28 @@ func reflectedString(v any, field string) string {
 }
 
 func cloneStrings(in []string) []string { return append([]string(nil), in...) }
+
+func cloneOrNil(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	return cloneStrings(in)
+}
+
+// commandNames is the sorted, de-duplicated set of a tool's declared
+// command names.
+func commandNames(t fleet.Tool) []string {
+	if len(t.Commands) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(t.Commands))
+	for _, c := range t.Commands {
+		if name := strings.TrimSpace(c.Name); name != "" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return slices.Compact(names)
+}
 
 var _ resolve.Catalog = (*FleetCatalog)(nil)
