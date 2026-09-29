@@ -18,6 +18,7 @@ import (
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/format/packfile"
+	"github.com/go-git/go-git/v5/plumbing/transport"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 )
 
@@ -90,6 +91,15 @@ func (c ArenaClient) EnsureRepo(org, repo string) error {
 	return c.request(http.MethodPost, "/orgs/"+url.PathEscape(org)+"/repos", map[string]any{"name": repo, "private": true, "auto_init": false}, http.StatusCreated, http.StatusConflict)
 }
 
+func (c ArenaClient) arenaRepoEndpoint(org, name string) (string, transport.AuthMethod) {
+	endpoint := strings.TrimRight(c.URL, "/") + "/" + org + "/" + name + ".git"
+	parsed, err := url.Parse(endpoint)
+	if err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") {
+		return endpoint, &githttp.BasicAuth{Username: LoopbackUser, Password: LoopbackPassword}
+	}
+	return endpoint, nil
+}
+
 func (c ArenaClient) PushBase(org, name, root, sha string) error {
 	dir, err := os.MkdirTemp("", "arena-push-")
 	if err != nil {
@@ -111,11 +121,12 @@ func (c ArenaClient) PushBase(org, name, root, sha string) error {
 	if err := r.Storer.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("arena-base"), hash)); err != nil {
 		return err
 	}
-	remote, err := r.CreateRemoteAnonymous(&config.RemoteConfig{Name: "arena", URLs: []string{strings.TrimRight(c.URL, "/") + "/" + org + "/" + name + ".git"}})
+	endpoint, auth := c.arenaRepoEndpoint(org, name)
+	remote, err := r.CreateRemoteAnonymous(&config.RemoteConfig{Name: "anonymous", URLs: []string{endpoint}})
 	if err != nil {
 		return err
 	}
-	return remote.PushContext(ctx, &gogit.PushOptions{RefSpecs: []config.RefSpec{"+refs/heads/arena-base:refs/heads/base"}, Auth: &githttp.BasicAuth{Username: LoopbackUser, Password: LoopbackPassword}})
+	return remote.PushContext(ctx, &gogit.PushOptions{RemoteName: "anonymous", RefSpecs: []config.RefSpec{"+refs/heads/arena-base:refs/heads/base"}, Auth: auth})
 }
 
 // Bundle fetches every branch and writes a Git v2 bundle with all fetched objects.
@@ -129,7 +140,8 @@ func (c ArenaClient) Bundle(org, name, path string) (err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	r, err := gogit.PlainCloneContext(ctx, dir, true, &gogit.CloneOptions{URL: strings.TrimRight(c.URL, "/") + "/" + org + "/" + name + ".git", NoCheckout: true, Auth: &githttp.BasicAuth{Username: LoopbackUser, Password: LoopbackPassword}})
+	endpoint, auth := c.arenaRepoEndpoint(org, name)
+	r, err := gogit.PlainCloneContext(ctx, dir, true, &gogit.CloneOptions{URL: endpoint, ReferenceName: plumbing.NewBranchReferenceName("base"), NoCheckout: true, Auth: auth})
 	if err != nil {
 		return err
 	}
