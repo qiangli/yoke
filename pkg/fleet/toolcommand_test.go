@@ -233,3 +233,43 @@ func TestToolSchemaListsCommandFields(t *testing.T) {
 		}
 	}
 }
+
+// The shipped baseline carries only MEASURED commands (Sprint #324 S6), and
+// every one must validate with no error and no warning: a seed that warns is
+// a seed nobody measured under its canonical name.
+func TestBaselineToolCommandsValidate(t *testing.T) {
+	entries, err := baselineFS.ReadDir("baseline/tools")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seeded := map[string][]string{}
+	for _, e := range entries {
+		body, err := baselineFS.ReadFile("baseline/tools/" + e.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		tool, err := ParseTool(strings.TrimSuffix(e.Name(), ".yaml"), body, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", e.Name(), err)
+		}
+		errs, warns := tool.ValidateCommands()
+		for _, e := range errs {
+			t.Errorf("baseline %v", e)
+		}
+		for _, w := range warns {
+			t.Errorf("baseline warning: %s", w)
+		}
+		for _, c := range tool.Commands {
+			seeded[tool.Name] = append(seeded[tool.Name], c.Name+"/"+c.Mode)
+		}
+	}
+	want := map[string][]string{"claude": {"plan/tui"}, "codex": {"review/print"}}
+	if len(seeded) != len(want) {
+		t.Errorf("seeded commands %v, want exactly %v (seed only what is measured)", seeded, want)
+	}
+	for tool, cmds := range want {
+		if strings.Join(seeded[tool], ",") != strings.Join(cmds, ",") {
+			t.Errorf("%s commands %v, want %v", tool, seeded[tool], cmds)
+		}
+	}
+}

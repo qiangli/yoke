@@ -63,3 +63,29 @@ harness:
   shell: 0.95
   tool-use: 0.9
   isolation: 0.8
+# Tool commands (Sprint #324): claude's own vendor features as bashy services,
+# `bashy tool cmd run claude:<name> -- TEXT`. Only commands MEASURED on the
+# wire are seeded here; unmeasured ones (deep-research, exit, review, …) are
+# a user overlay — docs/tool-commands-overlay-example.yaml in the umbrella.
+commands:
+  # MEASURED 2026-09-28 (claude 2.1.284, Sprint #324 S3 live smoke
+  # TestLiveTUIPlan): /plan is a TUI built-in — `claude -p "/plan …"` answers
+  # "/plan isn't available in this environment." with num_turns 0 — so it is
+  # mode tui. Driven through steer_exec with exactly these steps and quit, a
+  # three-line plan request returned outcome success in 39.7 s; the turn text
+  # was "Enabled plan mode … three-line plan"; the session was torn down.
+  # The steps are the measured sequence verbatim (esc included); change them
+  # only with a new measurement.
+  # The launch guard applies (steer_exec skips permissions): run contained, or
+  # accept it explicitly with BASHY_ALLOW_UNSAFE_AGENT_LAUNCH=1. No timeout is
+  # declared (runner default 30m; the smoke capped itself at 4m).
+  - name: plan
+    slash: /plan {args}
+    mode: tui
+    capability: planning
+    output: turn
+    steps:
+      - wait_idle: 25s
+      - key: esc
+      - wait_idle: 3s
+    quit: /exit

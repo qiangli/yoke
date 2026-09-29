@@ -387,6 +387,24 @@ func Record(agent string, c Capability, pass bool, latencyMS, costMicro int64, n
 	return m.save()
 }
 
+// CommandFor returns the tool command (Sprint #324, fleet `commands:`) whose
+// `capability:` tag names c — accepting the same aliases as ParseCapability,
+// so `capability: review` and `capability: code-review` both match
+// CapCodeReview. The first declared match wins. Routing picks the AGENT; this
+// only tells the caller that the picked agent's tool also has a vendor
+// feature for the capability (`bashy tool cmd run <tool>:<name>`).
+func CommandFor(t fleet.Tool, c Capability) (fleet.ToolCommand, bool) {
+	for _, cmd := range t.Commands {
+		if cmd.Capability == "" {
+			continue
+		}
+		if got, ok := ParseCapability(cmd.Capability); ok && got == c {
+			return cmd, true
+		}
+	}
+	return fleet.ToolCommand{}, false
+}
+
 // --- agent id helpers ------------------------------------------------------
 
 // ToolOf returns the tool half of a tool:model agent id.

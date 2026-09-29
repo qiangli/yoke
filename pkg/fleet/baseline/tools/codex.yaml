@@ -62,3 +62,22 @@ harness:
   shell: 0.65
   tool-use: 0.85
   isolation: 0.8
+# Tool commands (Sprint #324): codex's own vendor features as bashy services,
+# `bashy tool cmd run codex:<name> -- ARGS`. Only commands MEASURED on the
+# wire are seeded here; the rest are a user overlay
+# (docs/tool-commands-overlay-example.yaml in the umbrella).
+commands:
+  # MEASURED 2026-09-28 (codex-cli 0.157.1, Sprint #324 S2 live smoke): review
+  # is a print-mode SUBCOMMAND, not a slash line (`codex exec review --help`:
+  # [PROMPT], --uncommitted, --base, --commit, --json, -m), hence exec:.
+  # `codex exec review --json --uncommitted` on a 3-line toy git repo returned
+  # outcome success in 24.4 s with a P1 finding. {args} is the caller's argv
+  # verbatim (e.g. `-- --uncommitted` or `-- --base main "focus on auth"`).
+  # Like every codex exec it wants a git repo (run with --dir inside one).
+  # slash: is the TUI spelling and the command's identity; it is not sent here.
+  - name: review
+    slash: /review {args}
+    mode: print
+    capability: code-review
+    output: turn
+    exec: codex exec review --json {args}

@@ -853,6 +853,22 @@ var roleDefaults = map[string]string{
 	"release":   "claude",
 }
 
+// offerToolCommand tells a --capability caller that the routed agent's tool
+// also declares a vendor command for that capability (Sprint #324 S6). It
+// OFFERS, never switches: the chat path stays the one the caller asked for,
+// and a tool command (a tui session, a vendor subcommand) is a different
+// contract that pkg/toolcmd runs — which imports chat, so chat cannot.
+func offerToolCommand(w io.Writer, agent string, c capability.Capability) {
+	tool, ok := newCatalog().Tool(capability.ToolOf(agent))
+	if !ok {
+		return
+	}
+	if tc, ok := capability.CommandFor(tool, c); ok {
+		fmt.Fprintf(w, "chat: %s also declares tool command %s:%s (%s mode) for %s — bashy tool cmd run %s:%s -- TEXT\n",
+			tool.Name, tool.Name, tc.Name, tc.Mode, c, tool.Name, tc.Name)
+	}
+}
+
 // NewChatCmd returns the `bashy chat` command.
 func NewChatCmd() *cobra.Command {
 	var opt Options
@@ -894,6 +910,7 @@ func NewChatCmd() *cobra.Command {
 				opt.Agent = best.Agent
 				fmt.Fprintf(cmd.ErrOrStderr(), "chat: capability %s → %s (q=%.2f)\n",
 					c, best.Agent, best.Cell.Quality)
+				offerToolCommand(cmd.ErrOrStderr(), best.Agent, c)
 			}
 
 			// --band/--tool pick ONE operable agent for you (a specific --agent names
