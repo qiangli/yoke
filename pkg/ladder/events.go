@@ -18,6 +18,9 @@ const (
 	EventKindCert       EventKind = "cert"
 	EventKindSeat       EventKind = "seat"
 	EventKindCorrection EventKind = "correction"
+	// EventKindSeed sets an agent's starting rating for one duty from
+	// public data (SeedR/SeedRD). It is a prior, never a rated event.
+	EventKindSeed EventKind = "seed"
 )
 
 // Event is one immutable item in the rating ledger. ID is the stable correction reference.
@@ -50,11 +53,14 @@ type Event struct {
 	Note        string      `json:"note,omitempty"`
 	Cert        Certificate `json:"cert,omitempty"`
 	Provisional int         `json:"provisional,omitempty"`
+	// SeedR and SeedRD are a seed event's starting rating and deviation.
+	SeedR  float64 `json:"seed_r,omitempty"`
+	SeedRD float64 `json:"seed_rd,omitempty"`
 }
 
 func eventKnownKind(k EventKind) bool {
 	switch k {
-	case EventKindDelivery, EventKindRegression, EventKindEstimate, EventKindManage, EventKindCert, EventKindSeat, EventKindCorrection:
+	case EventKindDelivery, EventKindRegression, EventKindEstimate, EventKindManage, EventKindCert, EventKindSeat, EventKindCorrection, EventKindSeed:
 		return true
 	}
 	return false
