@@ -126,8 +126,10 @@ func installSprintLeaseTokenGuards(root *cobra.Command) {
 			continue
 		}
 		gated := root.Name() == "goal"
+		// claim, yield and submit are worker verbs attributed to the
+		// claiming agent, not manager state verbs, so they stay ungated.
 		switch cmd.Name() {
-		case "claim", "yield", "submit", "accept", "assign", "checkpoint", "move", "edit", "extend", "end", "stop", "handoff", "link", "unlink", "track", "untrack", "focus", "advance", "rm":
+		case "accept", "assign", "checkpoint", "move", "edit", "extend", "end", "stop", "handoff", "link", "unlink", "track", "untrack", "focus", "advance", "rm":
 			gated = true
 		}
 		if !gated || cmd.RunE == nil {
