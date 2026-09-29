@@ -30,6 +30,67 @@ const el = (tag, cls, text) => {
 // card's two disclosures, and `story` is the one story whose body is showing.
 const state = { all: false, open: {}, stories: {}, cont: {}, story: {}, runs: [], runbook: "", dutyTab: "all", dutyTool: "", dutyBand: "", dutyCost: false, dutyAgentOpen: {} };
 
+// The Runs and Leaderboard sections collapse through the same idiom as the
+// panels — a bd-panel-head button over a bd-panel-body — and the same state.open,
+// keyed "sec:<name>". Unlike a panel they default OPEN (an absent key is open, so
+// an upgrade never empties a board), and only a deliberate collapse is written to
+// localStorage so it survives a reload. Storage throws in a private window; the
+// page then just renders open.
+const SECTION_STORE = "bashy.board.sections";
+
+function restoreSections() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SECTION_STORE) || "{}");
+    for (const k of Object.keys(saved)) if (saved[k] === false) state.open["sec:" + k] = false;
+  } catch (_) {}
+}
+
+function saveSections(names) {
+  try {
+    const out = {};
+    for (const k of names) if (state.open["sec:" + k] === false) out[k] = false;
+    localStorage.setItem(SECTION_STORE, JSON.stringify(out));
+  } catch (_) {}
+}
+
+// mountSections builds each toggle ONCE, at init — never from load() — so the
+// 15s refresh cannot drop a keyboard user's focus, and collapsing never gates
+// loading: the render functions keep filling a hidden body.
+function mountSections() {
+  const secs = [...document.querySelectorAll(".bd-sec")];
+  const names = secs.map((sec) => sec.id.replace(/^bd-sec-/, ""));
+  restoreSections();
+  for (const sec of secs) {
+    const name = sec.id.replace(/^bd-sec-/, "");
+    const body = sec.querySelector(":scope > .bd-panel-body");
+    const h = el("button", "bd-panel-head");
+    h.type = "button";
+    h.setAttribute("aria-controls", body.id);
+    const chev = el("span", "chev", "▾");
+    chev.setAttribute("aria-hidden", "true");
+    h.append(chev, el("span", "t", sec.dataset.title), el("span", "spacer"), el("span", "n"));
+    const apply = () => {
+      const open = state.open["sec:" + name] !== false;
+      body.hidden = !open;
+      h.setAttribute("aria-expanded", String(open));
+    };
+    h.addEventListener("click", () => {
+      state.open["sec:" + name] = body.hidden;
+      apply();
+      saveSections(names);
+    });
+    apply();
+    sec.insertBefore(h, body);
+  }
+}
+
+// setSectionCount is the number beside a section's title, so a collapsed
+// section still says how much it is hiding.
+function setSectionCount(name, text) {
+  const n = document.querySelector("#bd-sec-" + name + " > .bd-panel-head .n");
+  if (n) n.textContent = text;
+}
+
 // writeHash mirrors the two things a reader can deep-link into the URL: the
 // history toggle and the open runbook. Keep it the one writer so a reload
 // lands the reader where they were.
@@ -809,6 +870,7 @@ function renderSprints(d) {
 function renderLanes(d) {
   const host = $("bd-lanes");
   const lanes = d.lanes || [];
+  setSectionCount("runs", lanes.length ? String(lanes.reduce((n, l) => n + (l.cards || []).length, 0)) : "");
   if (!lanes.length) {
     host.replaceChildren(el("p", "empty", "No runs."));
     return;
@@ -1297,6 +1359,7 @@ async function renderRunbooks() {
 }
 
 function init() {
+  mountSections();
   const params = new URLSearchParams(location.hash.replace(/^#/, ""));
   state.all = params.get("all") === "1";
   state.runbook = params.get("runbook") || "";

@@ -6,6 +6,21 @@
 <base href="/">
 <title>Sprint — bashy</title>
 <link rel="stylesheet" href="app.css">
+<style>
+/* Runs and Leaderboard collapse with the bottom panels' idiom (bd-panel-head
+ * over bd-panel-body). This only keeps them looking like the section headings
+ * they replace: no card around the section, the heading flush left. */
+.bd-sec { background: none; border: 0; border-radius: 0; overflow: visible; margin-top: 1rem; }
+.bd-sec > .bd-panel-head { padding: .2rem 0; margin: 0 0 .4rem; font-size: .72rem;
+  text-transform: uppercase; letter-spacing: .05em; color: var(--muted-foreground); }
+.bd-sec > .bd-panel-head:hover { background: none; color: var(--foreground); }
+.bd-sec > .bd-panel-head:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: .25rem; }
+.bd-sec > .bd-panel-head .t { font-weight: 700; }
+.bd-sec > .bd-panel-head .chev { display: inline-block; width: .9em; transition: transform .12s; }
+.bd-sec > .bd-panel-head[aria-expanded="false"] .chev { transform: rotate(-90deg); }
+.bd-sec > .bd-panel-body { padding: 0; }
+@media (prefers-reduced-motion: reduce) { .bd-sec > .bd-panel-head .chev { transition: none; } }
+</style>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'><rect width='40' height='40' rx='10' fill='%232563eb'/><rect x='9' y='10' width='6' height='20' rx='2' fill='%23ffffff'/><rect x='17' y='10' width='6' height='13' rx='2' fill='%235eead4'/><rect x='25' y='10' width='6' height='17' rx='2' fill='%23ffffff'/></svg>">
 </head>
 <body class="standalone">
@@ -41,14 +56,16 @@
   <h2 class="bd-h">Runbooks</h2>
   <section id="bd-runbooks"></section>
 
-  <h2 class="bd-h">Runs</h2>
-  <section id="bd-lanes"></section>
+  <section id="bd-sec-runs" class="bd-panel bd-sec" data-title="Runs">
+    <div id="bd-runs-body" class="bd-panel-body"><section id="bd-lanes"></section></div>
+  </section>
 
   <h2 class="bd-h">Duty Ladder</h2>
   <section id="bd-leaderboard-duty"></section>
 
-  <h2 class="bd-h">Leaderboard</h2>
-  <section id="bd-leaderboard"></section>
+  <section id="bd-sec-leaderboard" class="bd-panel bd-sec" data-title="Leaderboard">
+    <div id="bd-leaderboard-body" class="bd-panel-body"><section id="bd-leaderboard"></section></div>
+  </section>
 
   <section id="bd-panels"></section>
 
