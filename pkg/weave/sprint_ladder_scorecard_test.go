@@ -9,6 +9,7 @@ import (
 
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/ladder"
+	"github.com/qiangli/yoke/pkg/ladder/blame"
 )
 
 // Story #1205: a successful `sprint end` scores the manager and appends ONE
@@ -114,7 +115,7 @@ func TestSprintEndScorecardRecordsOneManageEvent(t *testing.T) {
 	// Independent expectation: ratings are the ledger BEFORE the sprint; the
 	// pool's best agent (agent-a, the only one with a prior rated event) is
 	// what agent-b's assignment is measured against.
-	season := sprintScorecardSeason(time.Now())
+	season := ladder.SeasonOf(time.Now())
 	pre := ladder.Replay([]ladder.Event{prior}, season)
 	aR := scorecardRating(pre.Agents["agent-a"].Standings[ladder.DutyCode])
 	r3, _ := ladder.StoryInitialRating(3)
@@ -247,19 +248,68 @@ func TestSprintEndScorecardUnresolvableManagerWritesNothing(t *testing.T) {
 	}
 }
 
-func TestSprintScorecardSeasonIsCalendarWeeks(t *testing.T) {
-	for _, c := range []struct {
-		at   time.Time
-		want int
-	}{
-		{time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), 1},
-		{time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC), 1},
-		{time.Date(2026, 10, 4, 23, 59, 0, 0, time.UTC), 1},
-		{time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC), 2},
-		{time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC), 4},
-	} {
-		if got := sprintScorecardSeason(c.at); got != c.want {
-			t.Errorf("season(%s) = %d, want %d", c.at, got, c.want)
-		}
+// The season comes from ladder.SeasonOf (no local fallback), so its
+// BASHY_LADDER_SEASON override reaches the recorded manage event.
+func TestSprintEndScorecardSeasonIsLadderSeasonOf(t *testing.T) {
+	scorecardEndFixture(t)
+	t.Setenv("BASHY_LADDER_SEASON", "3")
+	if out, code := runSprint(t, "end", "1"); code != 0 {
+		t.Fatalf("end exit=%d: %s", code, out)
+	}
+	got := scorecardManageEvents(t)
+	if len(got) != 1 || got[0].Season != 3 {
+		t.Fatalf("manage event must carry ladder.SeasonOf's season 3: %+v", got)
+	}
+}
+
+func scorecardSpecBlame() blame.Attribution {
+	return blame.Attribution{Class: blame.ClassSpec, By: "reviewer",
+		Evidence: []blame.Evidence{{Kind: blame.EvidenceContradiction, Ref: "thread-1", Note: "acceptance contradicts spec"}}}
+}
+
+// Story #1197/#1205: SpecFailures counts this sprint's failed deliveries with
+// a valid spec-class attribution authored by the manager (an empty Author is
+// the manager's by default; an empty manager counts every author).
+func TestSprintScorecardInputCountsManagerSpecFailures(t *testing.T) {
+	at := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	d := func(id, author string, sprint int, outcome float64, attr blame.Attribution) ladder.Event {
+		return ladder.Event{ID: id, At: at, Season: 1, Kind: ladder.EventKindDelivery, Agent: "agent-a",
+			Story: "s-" + id, Points: 2, Outcome: outcome, Sprint: sprint, Author: author, Blame: attr}
+	}
+	invalid := scorecardSpecBlame()
+	invalid.Evidence[0].Note = ""
+	env := blame.Attribution{Class: blame.ClassEnvironment, By: "reviewer",
+		Evidence: []blame.Evidence{{Kind: blame.EvidenceQuota, Ref: "q"}}}
+	events := []ladder.Event{
+		d("mine", "tool:model-m", 1, 0, scorecardSpecBlame()),
+		d("byname", "Ada", 1, 0, scorecardSpecBlame()),
+		d("unauthored", "", 1, 0, scorecardSpecBlame()),
+		d("other", "tool:model-x", 1, 0, scorecardSpecBlame()),
+		d("invalid", "tool:model-m", 1, 0, invalid),
+		d("env", "tool:model-m", 1, 0, env),
+		d("othersprint", "tool:model-m", 2, 0, scorecardSpecBlame()),
+	}
+	if got := sprintScorecardInput(events, 1, 1, "tool:model-m", "Ada").SpecFailures; got != 3 {
+		t.Fatalf("manager SpecFailures = %d, want 3 (mine, byname, unauthored)", got)
+	}
+	if got := sprintScorecardInput(events, 1, 1).SpecFailures; got != 4 {
+		t.Fatalf("no manager: SpecFailures = %d, want 4 (every valid spec failure)", got)
+	}
+	corr := ladder.Event{ID: "c", At: at, Season: 1, Kind: ladder.EventKindCorrection, Supersedes: "mine"}
+	if got := sprintScorecardInput(append(events, corr), 1, 1, "tool:model-m", "Ada").SpecFailures; got != 2 {
+		t.Fatalf("a corrected delivery must not count: SpecFailures = %d, want 2", got)
+	}
+}
+
+func TestSprintEndScorecardChargesManagerSpecFailure(t *testing.T) {
+	scorecardEndFixture(t)
+	scorecardAppend(t, ladder.Event{ID: "d1", At: time.Now().UTC(), Season: 1, Kind: ladder.EventKindDelivery,
+		Agent: "agent-a", Story: "s1", Points: 3, Outcome: 0, Sprint: 1, Author: "claude:opus5", Blame: scorecardSpecBlame()})
+	if out, code := runSprint(t, "end", "1"); code != 0 {
+		t.Fatalf("end exit=%d: %s", code, out)
+	}
+	got := scorecardManageEvents(t)
+	if len(got) != 1 || !strings.Contains(got[0].Note, "breakdown=0.80") {
+		t.Fatalf("one manager spec failure must cost breakdown 0.2: %+v", got)
 	}
 }

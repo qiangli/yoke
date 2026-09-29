@@ -35,6 +35,9 @@ type Event struct {
 	Blame    blame.Attribution `json:"blame,omitempty"`
 	Estimate Points            `json:"estimate,omitempty"`
 	Reviewer string            `json:"reviewer,omitempty"`
+	// Author is who wrote the story (usually the manager who wrote or split
+	// it); a spec-class failure charges the author.
+	Author   string `json:"author,omitempty"`
 	CapsUsed struct {
 		Turns       int `json:"turns"`
 		WallSeconds int `json:"wall_seconds"`

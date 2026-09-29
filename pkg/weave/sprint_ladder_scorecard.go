@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/qiangli/yoke/pkg/ladder"
+	"github.com/qiangli/yoke/pkg/ladder/blame"
 )
 
 const (
@@ -35,33 +36,12 @@ const (
 	sprintBypassKind = "bypass"
 )
 
-// sprintScorecardEpoch is the Monday that opens season 1. A season is ONE
-// calendar week (UTC): fleet ratings are shared across concurrent sprints, so
-// a rating period cannot be one sprint.
-var sprintScorecardEpoch = time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
-
-// sprintScorecardSeason is the local stand-in for ladder.SeasonOf until that
-// lands; delete it then. Anything before the epoch is season 1.
-func sprintScorecardSeason(now time.Time) int {
-	d := now.UTC().Sub(sprintScorecardEpoch)
-	if d < 0 {
-		return 1
-	}
-	return int(d/(7*24*time.Hour)) + 1
-}
-
 // sprintManagerIdentity names the manager as its canonical tool:model rating
 // identity: the lease holder (the owner when no lease is held), resolved
 // read-only through the fleet registry. A clone resolves to its parent's
 // binding, since a clone carries the parent's tool and model.
 func sprintManagerIdentity(s *weaveStory) (string, error) {
-	name := ""
-	if s.Lease != nil {
-		name = strings.TrimSpace(s.Lease.Holder)
-	}
-	if name == "" {
-		name = strings.TrimSpace(s.Owner)
-	}
+	name := sprintManagerName(s)
 	if name == "" {
 		return "", fmt.Errorf("sprint #%d has no lease holder or owner", s.ID)
 	}
@@ -70,6 +50,19 @@ func sprintManagerIdentity(s *weaveStory) (string, error) {
 		return "", fmt.Errorf("manager %q does not resolve to a tool:model in the fleet registry", name)
 	}
 	return a.MatrixKey(), nil
+}
+
+// sprintManagerName is the manager's fleet name: the lease holder, else the
+// owner.
+func sprintManagerName(s *weaveStory) string {
+	name := ""
+	if s.Lease != nil {
+		name = strings.TrimSpace(s.Lease.Holder)
+	}
+	if name == "" {
+		name = strings.TrimSpace(s.Owner)
+	}
+	return name
 }
 
 // sprintScorecardAtEnd scores the ending sprint and records it. It runs inside
@@ -96,8 +89,8 @@ func sprintScorecardAtEnd(s *weaveStory, skip bool, hygienePassed, hygieneTotal 
 		return "scorecard not recorded: ladder store: " + err.Error()
 	}
 
-	season := sprintScorecardSeason(now)
-	in := sprintScorecardInput(events, s.ID, season)
+	season := ladder.SeasonOf(now)
+	in := sprintScorecardInput(events, s.ID, season, identity, sprintManagerName(s))
 	in.HygieneChecksPassed, in.HygieneChecksTotal = hygienePassed, hygieneTotal
 	for _, c := range s.Thread {
 		switch c.Kind {
@@ -146,7 +139,14 @@ func sprintScorecardAtEnd(s *weaveStory, skip bool, hygienePassed, hygieneTotal 
 // or the chosen agent if it rates higher: availability snapshots are not
 // recorded yet, and the chosen agent was available by definition, so regret
 // is never negative.
-func sprintScorecardInput(events []ladder.Event, sprint int64, season int) ladder.ScorecardInput {
+//
+// SpecFailures counts sprint N's failed deliveries whose blame is a VALID
+// spec-class attribution (the story could not be built as written) and whose
+// Author is the manager, named by any of managers (its tool:model identity or
+// fleet name). A delivery with no Author counts too: a sprint's stories are
+// its manager's unless recorded otherwise. With no managers given, every
+// author counts.
+func sprintScorecardInput(events []ladder.Event, sprint int64, season int, managers ...string) ladder.ScorecardInput {
 	dropped := map[string]bool{}
 	for _, e := range events {
 		if e.Kind == ladder.EventKindCorrection && e.Supersedes != "" && e.Season <= season {
@@ -181,6 +181,9 @@ func sprintScorecardInput(events []ladder.Event, sprint int64, season int) ladde
 
 	var in ladder.ScorecardInput
 	for _, e := range current {
+		if e.Outcome == 0 && blame.Consequence(e.Blame) == blame.ActionChargeEstimatorAndAuthor && sprintScorecardAuthoredBy(e.Author, managers) {
+			in.SpecFailures++
+		}
 		storyR, _ := ladder.StoryInitialRating(e.Points)
 		story := ladder.Rating{R: storyR, RD: ladder.InitialRD, Vol: ladder.InitialVol}
 		chosen := rating(e.Agent)
@@ -202,6 +205,21 @@ func sprintScorecardInput(events []ladder.Event, sprint int64, season int) ladde
 		})
 	}
 	return in
+}
+
+// sprintScorecardAuthoredBy reports whether author is one of managers; an
+// empty author, or no managers at all, matches.
+func sprintScorecardAuthoredBy(author string, managers []string) bool {
+	author = strings.TrimSpace(author)
+	if author == "" || len(managers) == 0 {
+		return true
+	}
+	for _, m := range managers {
+		if m != "" && m == author {
+			return true
+		}
+	}
+	return false
 }
 
 // sprintScorecardComponents renders the components in a stable order.

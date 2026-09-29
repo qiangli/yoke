@@ -15,6 +15,9 @@ type AgentRecord struct {
 	Certs       []Certificate
 	Provisional int
 	Unrated     int
+	// SpecCharges counts delivery failures with a valid spec-class
+	// attribution on stories this agent authored.
+	SpecCharges int
 }
 
 // StoryRecord contains a story's settled difficulty and attempt count.
@@ -121,10 +124,21 @@ func Replay(events []Event, currentSeason int) ReplayResult {
 	}
 	agentRatings := make(map[string]map[Duty]Rating)
 	storyRatings := make(map[string]Rating)
+	// A failed delivery with a valid spec-class attribution (design section
+	// 7) charges the story's author and every estimator; the implementer
+	// stays unrated below. specStories is keyed after regressions rewrite
+	// their delivery, so a regressed delivery is agent-class, never spec.
+	specStories := make(map[string]bool)
 	for _, item := range active {
 		e := item.event
 		if e.Agent != "" {
 			replayAgent(&out, e.Agent)
+		}
+		if e.Kind == EventKindDelivery && e.Outcome == 0 && blame.Consequence(e.Blame) == blame.ActionChargeEstimatorAndAuthor {
+			specStories[e.Story] = true
+			if e.Author != "" {
+				replayAgent(&out, e.Author).SpecCharges++
+			}
 		}
 		if e.Kind == EventKindDelivery && e.Story != "" && ValidPoints(e.Points) {
 			s := replayStory(&out, e)
@@ -224,7 +238,12 @@ func Replay(events []Event, currentSeason int) ReplayResult {
 			if miss < 0 {
 				miss = -miss
 			}
-			replayAdd(results, e.Agent, DutyJudge, e.Story+e.ID, Result{Opponent: Rating{R: s.Rating.R, RD: 50}, Score: 1 - EstimatePenalty(miss)})
+			score := 1 - EstimatePenalty(miss)
+			if specStories[e.Story] {
+				// The story could not be built as written: full penalty.
+				score = 0
+			}
+			replayAdd(results, e.Agent, DutyJudge, e.Story+e.ID, Result{Opponent: Rating{R: s.Rating.R, RD: 50}, Score: score})
 		}
 		for name, a := range out.Agents {
 			before := agentRatings[name][DutyJudge]

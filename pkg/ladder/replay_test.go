@@ -102,3 +102,96 @@ func TestReplayEqualTimeOrder(t *testing.T) {
 		t.Fatalf("order changed replay: %+v vs %+v", x, y)
 	}
 }
+
+// Story #1197, design section 7: spec failures charge the estimator and author.
+func eventTestSpecBlame() blame.Attribution {
+	return blame.Attribution{Class: blame.ClassSpec, By: "reviewer", Evidence: []blame.Evidence{{Kind: blame.EvidenceAmbiguity, Ref: "thread-1", Note: "acceptance contradicts the spec-ref"}}}
+}
+func eventTestEnvBlame() blame.Attribution {
+	return blame.Attribution{Class: blame.ClassEnvironment, By: "reviewer", Evidence: []blame.Evidence{{Kind: blame.EvidenceQuota, Ref: "quota-1"}}}
+}
+
+// eventTestSpecFixture is a spec-story attempt plus an exact estimate on a
+// control story, so the judge's estimate on story-x is scored against an
+// otherwise-identical baseline.
+func eventTestSpecFixture(attr blame.Attribution) []Event {
+	d := eventTestDelivery("d", "agent-a", "story-x", 1, 0)
+	d.Blame = attr
+	d.Author = "author-m"
+	est := Event{ID: "e", At: eventTestAt(1), Season: 1, Kind: EventKindEstimate, Agent: "judge-a", Story: "story-x", Estimate: 2}
+	return []Event{d, est}
+}
+
+func TestReplaySpecFailureChargesAuthorAndZeroesEstimates(t *testing.T) {
+	got := Replay(eventTestSpecFixture(eventTestSpecBlame()), 1)
+	impl := got.Agents["agent-a"]
+	if impl.Standings[DutyCode].Events != 0 || impl.Unrated != 1 || impl.SpecCharges != 0 {
+		t.Fatalf("spec failure must not rate the implementer: %+v", impl)
+	}
+	author := got.Agents["author-m"]
+	if author == nil || author.SpecCharges != 1 {
+		t.Fatalf("spec failure must charge the author: %+v", author)
+	}
+	s := got.Stories["story-x"]
+	want := Update(NewRating(), []Result{{Opponent: Rating{R: s.Rating.R, RD: 50}, Score: 0}}, DefaultTau)
+	judge := got.Agents["judge-a"].Standings[DutyJudge]
+	eventTestClose(t, judge.R, want.R)
+	if judge.Events != 1 {
+		t.Fatalf("estimate must still be rated (at full penalty): %+v", judge)
+	}
+}
+
+func TestReplaySpecFailureWithoutAuthorStillZeroesEstimates(t *testing.T) {
+	events := eventTestSpecFixture(eventTestSpecBlame())
+	events[0].Author = ""
+	got := Replay(events, 1)
+	for name, a := range got.Agents {
+		if a.SpecCharges != 0 {
+			t.Fatalf("no author: nobody is charged, got %s=%+v", name, a)
+		}
+	}
+	s := got.Stories["story-x"]
+	want := Update(NewRating(), []Result{{Opponent: Rating{R: s.Rating.R, RD: 50}, Score: 0}}, DefaultTau)
+	eventTestClose(t, got.Agents["judge-a"].Standings[DutyJudge].R, want.R)
+}
+
+func TestReplayEnvironmentFailureChargesNobody(t *testing.T) {
+	got := Replay(eventTestSpecFixture(eventTestEnvBlame()), 1)
+	if a := got.Agents["author-m"]; a != nil {
+		t.Fatalf("environment failure must not charge the author: %+v", a)
+	}
+	if impl := got.Agents["agent-a"]; impl.Standings[DutyCode].Events != 0 || impl.Unrated != 1 {
+		t.Fatalf("environment failure must not rate the implementer: %+v", impl)
+	}
+	// Estimate 2 on a 2-point story with no rated attempts: exact, no penalty.
+	s := got.Stories["story-x"]
+	want := Update(NewRating(), []Result{{Opponent: Rating{R: s.Rating.R, RD: 50}, Score: 1}}, DefaultTau)
+	eventTestClose(t, got.Agents["judge-a"].Standings[DutyJudge].R, want.R)
+}
+
+func TestReplayAgentFailureRatesImplementerOnly(t *testing.T) {
+	got := Replay(eventTestSpecFixture(eventTestAgentBlame()), 1)
+	if a := got.Agents["author-m"]; a != nil {
+		t.Fatalf("agent failure must not charge the author: %+v", a)
+	}
+	impl := got.Agents["agent-a"]
+	if impl.Standings[DutyCode].Events != 1 || impl.Unrated != 0 || impl.SpecCharges != 0 {
+		t.Fatalf("agent failure must rate the implementer: %+v", impl)
+	}
+	// The estimate is scored against the settled bucket, not forced to 0.
+	s := got.Stories["story-x"]
+	bucket := Points(1)
+	best := math.Inf(1)
+	for _, p := range []Points{1, 2, 3, 5, 8} {
+		r, _ := StoryInitialRating(p)
+		if d := math.Abs(s.Rating.R - r); d < best {
+			best, bucket = d, p
+		}
+	}
+	miss := storyBucket(2) - storyBucket(bucket)
+	if miss < 0 {
+		miss = -miss
+	}
+	want := Update(NewRating(), []Result{{Opponent: Rating{R: s.Rating.R, RD: 50}, Score: 1 - EstimatePenalty(miss)}}, DefaultTau)
+	eventTestClose(t, got.Agents["judge-a"].Standings[DutyJudge].R, want.R)
+}
