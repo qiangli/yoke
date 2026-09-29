@@ -1054,6 +1054,9 @@ you still gate, converge and report.`,
 				if !free && !stale && prev != who && !force {
 					return fmt.Errorf("sprint #%d lease is held by %s (fresh) — coordinate, or --force to take over", id, prev)
 				}
+				if err := checkSprintManagerBand(cmd, id, who); err != nil {
+					return err
+				}
 				expectedOwner := strings.TrimSpace(before.Owner)
 				if expectedOwner != "" && !strings.EqualFold(expectedOwner, who) {
 					cwd, _ := os.Getwd()
@@ -1128,6 +1131,8 @@ you still gate, converge and report.`,
 	role.AttachOwner(cmd.Flags(), &as, role.ProjectManager,
 		"accountable for delivery from start to end; required explicitly on every take")
 	cmd.Flags().BoolVar(&force, "force", false, "take over a fresh lease")
+	cmd.Flags().Bool("override", false, "override manager eligibility (requires --reason)")
+	cmd.Flags().String("reason", "", "reason for manager eligibility override")
 	flags.attach(cmd)
 	return cmd
 }

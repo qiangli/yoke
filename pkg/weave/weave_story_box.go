@@ -234,6 +234,9 @@ func newSprintStartCmd() *cobra.Command {
 				if prev, stale, free := weaveStoryLeaseState(before); !free && !stale && prev != who {
 					return fmt.Errorf("sprint #%d is held by %s — `sprint take %d` to assume delivery first", id, prev, id)
 				}
+				if err := checkSprintManagerBand(cmd, id, who); err != nil {
+					return err
+				}
 				expectedOwner := strings.TrimSpace(before.Owner)
 				if expectedOwner != "" && !strings.EqualFold(expectedOwner, who) {
 					if err := retireSprintOwnerSession(cmd.Context(), id, expectedOwner, cwd); err != nil {
@@ -351,6 +354,8 @@ func newSprintStartCmd() *cobra.Command {
 			})
 		},
 	}
+	cmd.Flags().Bool("override", false, "override manager eligibility (requires --reason)")
+	cmd.Flags().String("reason", "", "reason for manager eligibility override")
 	cmd.Flags().DurationVar(&forDur, "for", DefaultSprintBox, "how long this sprint gets")
 	// ONE FLAG, DOMAIN TITLES. --owner is the single spelling across meet,
 	// sprint and todo; here it is called the PROJECT MANAGER, because that is
