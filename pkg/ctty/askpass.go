@@ -159,19 +159,54 @@ const osascriptSrc = `on run argv
 	return "OK:" & (text returned of r)
 end run`
 
+// runOsascript prompts, and for a HIDDEN value keeps prompting until the
+// operator accepts a receipt of what arrived.
+//
+// The receipt loop exists because the native hidden-answer field's own
+// rendering is misleading — a long paste shows as a single dot, and deleting
+// then fills the box with them — and the field cannot be made to show a useful
+// count. So after OK, a second dialog states the length and character-class
+// makeup (receiptLine — never the value itself) and offers Use or Retry.
+// Retry re-prompts; the context deadline bounds the whole exchange to the
+// request's timeout.
 func runOsascript(ctx context.Context, path string, req Request) ([]byte, error) {
 	hidden := "0"
 	if req.Hidden {
 		hidden = "1"
 	}
 	secs := strconv.Itoa(int(req.timeout().Seconds()))
-	cmd := exec.CommandContext(ctx, path, "-e", osascriptSrc,
-		req.text(), req.title(), hidden, secs)
+	for {
+		cmd := exec.CommandContext(ctx, path, "-e", osascriptSrc,
+			req.text(), req.title(), hidden, secs)
+		out, err := cmd.Output()
+		if err != nil {
+			return nil, guiFailure("osascript", err)
+		}
+		v, err := parseTaggedResult("osascript", string(out))
+		if err != nil || !req.Hidden {
+			return v, err
+		}
+		retry, err := confirmReceipt(ctx, path, req, v)
+		if err != nil {
+			return nil, err
+		}
+		if !retry {
+			return v, nil
+		}
+	}
+}
+
+// confirmReceipt shows the non-secret receipt for a hidden value and reports
+// whether the operator wants to re-enter it.
+func confirmReceipt(ctx context.Context, path string, req Request, value []byte) (retry bool, err error) {
+	text := receiptLine(value) + "\n\nUse this value, or Retry to enter it again."
+	secs := strconv.Itoa(int(req.timeout().Seconds()))
+	cmd := exec.CommandContext(ctx, path, "-e", receiptSrc, text, req.title(), secs)
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, guiFailure("osascript", err)
+		return false, guiFailure("osascript", err)
 	}
-	return parseTaggedResult("osascript", string(out))
+	return parseReceiptResult(string(out))
 }
 
 // parseTaggedResult reads the OK:/CANCEL/TIMEOUT contract that our own osascript
