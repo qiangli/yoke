@@ -28,7 +28,7 @@ const el = (tag, cls, text) => {
 // with replaceChildren, so anything a reader opened lives here or it collapses
 // under them mid-read: `open` is the panels, `stories`/`cont` are a sprint
 // card's two disclosures, and `story` is the one story whose body is showing.
-const state = { all: false, open: {}, stories: {}, cont: {}, story: {}, runs: [], runbook: "" };
+const state = { all: false, open: {}, stories: {}, cont: {}, story: {}, runs: [], runbook: "", dutyTab: "all", dutyTool: "", dutyBand: "", dutyCost: false, dutyAgentOpen: {} };
 
 // writeHash mirrors the two things a reader can deep-link into the URL: the
 // history toggle and the open runbook. Keep it the one writer so a reload
@@ -938,9 +938,243 @@ async function load() {
   renderSprints(d);
   renderRunbooks();
   renderLanes(d);
+  renderDutyLeaderboard();
   renderLeaderboard();
   renderPanels(d);
   renderMeta(d);
+}
+
+// renderDutyLeaderboard is the per-duty band ladder view (Story #1223):
+// reads from /api/sprint/leaderboard/duty, shows code/manage/judge duty
+// standings with client-side filters (vendor/tool, band) and a cost-view toggle.
+// Clicking an agent row expands its rated events from /api/sprint/leaderboard/duty/agent.
+async function renderDutyLeaderboard() {
+  const host = $("bd-leaderboard-duty");
+  if (!host) return;
+
+  let dutyQuery = "api/sprint/leaderboard/duty";
+  if (state.dutyCost) dutyQuery += "?cost=1";
+
+  let d;
+  try {
+    const r = await fetch(url(dutyQuery));
+    d = await r.json();
+    if (!r.ok) throw new Error(d.error || "HTTP " + r.status);
+  } catch (e) {
+    host.replaceChildren(el("p", "empty", "duty ladder unavailable — " + String(e.message || e)));
+    return;
+  }
+
+  if (d.unavailable) {
+    const card = el("article", "bd-sprint");
+    card.append(el("div", "meta", d.unavailable));
+    host.replaceChildren(card);
+    return;
+  }
+
+  const duties = d.duties || {};
+  const hasRows = Object.values(duties).some((rows) => (rows || []).length > 0);
+  if (!hasRows) {
+    host.replaceChildren(el("p", "empty", d.note || "no rated events yet — nothing to rank"));
+    return;
+  }
+
+  const card = el("article", "bd-sprint");
+
+  // Metadata / Lines header
+  let metaText = "season " + (d.season || 1);
+  if (d.lines) {
+    const formatLine = (v) => (v != null && v > 0 ? Math.round(v) : "unfitted");
+    metaText += " · lines: L3Code=" + formatLine(d.lines.L3Code) +
+      " L4Code=" + formatLine(d.lines.L4Code) +
+      " L4Manage=" + formatLine(d.lines.L4Manage) +
+      " L5Code=" + formatLine(d.lines.L5Code) +
+      " L5Manage=" + formatLine(d.lines.L5Manage) +
+      " L5Judge=" + formatLine(d.lines.L5Judge);
+  }
+  card.append(el("div", "meta", metaText));
+  if (d.provenance) card.append(el("div", "meta", d.provenance));
+  if (d.note) card.append(el("div", "meta", d.note));
+
+  // Controls bar: duty tabs, filters, cost toggle
+  const ctrl = el("div", "bd-controls");
+
+  // Duty tabs
+  const tabWrap = el("span", "btn-group");
+  for (const tab of ["all", "code", "manage", "judge"]) {
+    const b = el("button", "btn" + (state.dutyTab === tab ? " active" : ""), tab.toUpperCase());
+    b.type = "button";
+    b.addEventListener("click", () => {
+      state.dutyTab = tab;
+      renderDutyLeaderboard();
+    });
+    tabWrap.append(b);
+  }
+  ctrl.append(tabWrap);
+
+  // Tool / vendor filter
+  const toolInput = el("input", "inp");
+  toolInput.type = "text";
+  toolInput.placeholder = "filter tool/vendor...";
+  toolInput.value = state.dutyTool || "";
+  toolInput.addEventListener("input", (e) => {
+    state.dutyTool = e.target.value.toLowerCase().trim();
+    renderDutyLeaderboard();
+  });
+  ctrl.append(toolInput);
+
+  // Band filter
+  const bandSelect = el("select", "sel");
+  const optAll = el("option", null, "all bands");
+  optAll.value = "";
+  bandSelect.append(optAll);
+  for (let b = 5; b >= 0; b--) {
+    const opt = el("option", null, "L" + b);
+    opt.value = String(b);
+    if (state.dutyBand === String(b)) opt.selected = true;
+    bandSelect.append(opt);
+  }
+  bandSelect.addEventListener("change", (e) => {
+    state.dutyBand = e.target.value;
+    renderDutyLeaderboard();
+  });
+  ctrl.append(bandSelect);
+
+  // Cost view toggle
+  const costLabel = el("label", "chk");
+  const costChk = el("input");
+  costChk.type = "checkbox";
+  costChk.checked = !!state.dutyCost;
+  costChk.addEventListener("change", (e) => {
+    state.dutyCost = e.target.checked;
+    renderDutyLeaderboard();
+  });
+  costLabel.append(costChk);
+  costLabel.append(document.createTextNode(" cost view (informational — routing only, never promotes)"));
+  ctrl.append(costLabel);
+
+  card.append(ctrl);
+
+  // Duty tables
+  const dutyList = state.dutyTab === "all" ? ["code", "manage", "judge"] : [state.dutyTab];
+  for (const duty of dutyList) {
+    const rawRows = duties[duty] || [];
+    const filteredRows = rawRows.filter((r) => {
+      if (state.dutyTool && !(r.agent || "").toLowerCase().includes(state.dutyTool)) {
+        return false;
+      }
+      if (state.dutyBand !== "") {
+        const effective = r.provisional && r.provisional > r.band ? r.provisional : r.band;
+        if (String(effective) !== state.dutyBand && String(r.band) !== state.dutyBand) {
+          return false;
+        }
+      }
+      return true;
+    });
+
+    const title = duty.toUpperCase() + (state.dutyCost ? " — rating per dollar (routing only, never promotes)" : " (by conservative rating R−2RD)");
+    card.append(el("div", "story-group", title));
+
+    if (!filteredRows.length) {
+      card.append(el("p", "empty", "no matching rows"));
+      continue;
+    }
+
+    const cols = state.dutyCost
+      ? ["RANK", "AGENT", "R", "COST", "R/$", "BAND", "MOVE"]
+      : ["RANK", "AGENT", "R", "RD", "LOWER", "EVENTS", "BAND", "MISSING", "CURRENCY", "MOVE"];
+
+    const t = el("table");
+    const thead = el("thead");
+    const hr = el("tr");
+    for (const c of cols) hr.append(el("th", null, c));
+    thead.append(hr);
+    t.append(thead);
+
+    const tb = el("tbody");
+    for (const r of filteredRows) {
+      const tr = el("tr");
+      tr.style.cursor = "pointer";
+      tr.title = "click to view rated events";
+
+      const rankStr = r.separable === false ? "≈" : String(r.rank);
+      const eventsStr = String(r.events) + (r.established ? "*" : "");
+      let bandStr = "L" + r.band;
+      if (r.provisional && r.provisional > r.band) {
+        bandStr = "L" + r.band + " (prov L" + r.provisional + ")";
+      }
+
+      let cells;
+      if (state.dutyCost) {
+        const costStr = r.cost != null ? "$" + Number(r.cost).toFixed(2) : "no cost recorded";
+        const rpdStr = r.r_per_dollar != null ? Number(r.r_per_dollar).toFixed(1) : "—";
+        cells = [rankStr, r.agent, String(Math.round(r.r)), costStr, rpdStr, bandStr, r.move || ""];
+      } else {
+        cells = [
+          rankStr,
+          r.agent,
+          String(Math.round(r.r)),
+          String(Math.round(r.rd)),
+          String(Math.round(r.lower)),
+          eventsStr,
+          bandStr,
+          (r.missing || []).join("; "),
+          r.currency || "",
+          r.move || ""
+        ];
+      }
+
+      for (const cell of cells) tr.append(el("td", null, cell));
+      tb.append(tr);
+
+      tr.addEventListener("click", () => {
+        state.dutyAgentOpen[r.agent] = !state.dutyAgentOpen[r.agent];
+        renderDutyLeaderboard();
+      });
+
+      if (state.dutyAgentOpen[r.agent]) {
+        const detailTr = el("tr", "duty-agent-detail");
+        const detailTd = el("td");
+        detailTd.colSpan = cols.length;
+        detailTd.append(el("p", "meta", "loading rated events for " + r.agent + "..."));
+        detailTr.append(detailTd);
+        tb.append(detailTr);
+
+        fetch(url("api/sprint/leaderboard/duty/agent?name=" + encodeURIComponent(r.agent)))
+          .then((res) => res.json())
+          .then((data) => {
+            const evList = data.events || [];
+            if (!evList.length) {
+              detailTd.replaceChildren(el("p", "empty", "no rated events recorded for " + r.agent));
+              return;
+            }
+            const evCols = ["At", "Season", "Kind", "Story", "Points", "Outcome", "Blame", "Cost"];
+            const evRows = evList.map((e) => [
+              (e.at || "").substring(0, 19).replace("T", " "),
+              String(e.season || ""),
+              String(e.kind || ""),
+              String(e.story || ""),
+              String(e.points != null ? e.points : ""),
+              String(e.outcome != null ? e.outcome : ""),
+              String(e.blame || ""),
+              e.cost != null && e.cost > 0 ? "$" + Number(e.cost).toFixed(2) : ""
+            ]);
+            detailTd.replaceChildren(table(evCols, evRows));
+          })
+          .catch((err) => {
+            detailTd.replaceChildren(el("p", "empty", "failed to load events: " + String(err.message || err)));
+          });
+      }
+    }
+    t.append(tb);
+
+    const wrap = el("div", "tw");
+    wrap.append(t);
+    card.append(wrap);
+  }
+
+  card.append(el("div", "meta", "* established (>= 8 rated events) · ≈ inseparable from row above (overlapping rating intervals)"));
+  host.replaceChildren(card);
 }
 
 // renderLeaderboard is `bashy leaderboard` as one read-only section: the

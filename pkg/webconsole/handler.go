@@ -403,6 +403,8 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 		// The leaderboard: `bashy leaderboard`'s Compute, projected verbatim —
 		// read-only like its siblings (panel_leaderboard.go).
 		mux.HandleFunc("GET /api/sprint/leaderboard", s.handleLeaderboard)
+		mux.HandleFunc("GET /api/sprint/leaderboard/duty", s.handleDutyLeaderboard)
+		mux.HandleFunc("GET /api/sprint/leaderboard/duty/agent", s.handleDutyAgentEvents)
 	}
 
 	closers := []func() error{}
