@@ -117,6 +117,35 @@ func TestSprintStartAndTakeRejectEmptyExplicitOwner(t *testing.T) {
 	}
 }
 
+func TestTakeWithoutOwnerPromptsForIdentityOnTheFirstAttempt(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	dir := t.TempDir()
+	t.Setenv("BASHY_SPRINT_DIR", dir)
+	seedAgent(t, "manager")
+	if out, code := runSprint(t, "add", "identity before lock"); code != 0 {
+		t.Fatal(out)
+	}
+	lockPath := filepath.Join(dir, "owner-lifecycle", "1.lock")
+	held, err := lockfile.TryAcquire(lockPath, lockfile.Holder{Name: "test-holder", Intent: "fixture"})
+	if err != nil {
+		t.Fatalf("hold lifecycle lock: %v", err)
+	}
+	defer held.Release()
+	oldWait := sprintOwnerLifecycleWait
+	sprintOwnerLifecycleWait = time.Millisecond
+	t.Cleanup(func() { sprintOwnerLifecycleWait = oldWait })
+
+	out, code := runSprint(t, "take", "1")
+	if code == 0 || !strings.Contains(out, "--owner is required") {
+		t.Fatalf("missing owner did not produce identity prompt first: exit=%d output=%s", code, out)
+	}
+	if strings.Contains(out, "owner lifecycle") {
+		t.Fatalf("missing owner hit lifecycle lock before identity validation: %s", out)
+	}
+}
+
 func TestSprintStartCanonicalizesAliasBeforeLeaseComparison(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -138,6 +167,70 @@ func TestSprintStartCanonicalizesAliasBeforeLeaseComparison(t *testing.T) {
 	q, _ := readWeaveQueue(dir)
 	if got := findWeaveStory(q, 1).Owner; got != "claude-fable5" {
 		t.Fatalf("canonical owner = %q", got)
+	}
+}
+
+func TestTakeRenamingYourOwnSeatDoesNotRequireForce(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("BASHY_SPRINT_DIR", t.TempDir())
+	seedAgent(t, "old-manager")
+	seedAgent(t, "new-manager")
+	if out, code := runSprint(t, "add", "self rename"); code != 0 {
+		t.Fatal(out)
+	}
+	if out, code := runSprint(t, "start", "1", "--owner", "old-manager", "--for", "1h"); code != 0 {
+		t.Fatal(out)
+	}
+	var retired []SprintOwnerRequest
+	withSprintOwnerStopper(t, func(_ context.Context, req SprintOwnerRequest) error {
+		retired = append(retired, req)
+		return nil
+	})
+	if out, code := runSprint(t, "take", "1", "--owner", "new-manager"); code != 0 {
+		t.Fatalf("self rename required force: exit=%d output=%s", code, out)
+	}
+	if len(retired) != 1 || retired[0].Owner != "old-manager" {
+		t.Fatalf("retired sessions = %+v", retired)
+	}
+	dir, _ := sprintStoreDir()
+	q, _ := readWeaveQueue(dir)
+	s := findWeaveStory(q, 1)
+	if s.Owner != "new-manager" || s.Lease == nil || s.Lease.Holder != "new-manager" {
+		t.Fatalf("renamed sprint = %+v", s)
+	}
+}
+
+func TestTakeStillRequiresForceForADifferentLiveSession(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("BASHY_SPRINT_DIR", t.TempDir())
+	seedAgent(t, "old-manager")
+	seedAgent(t, "new-manager")
+	if out, code := runSprint(t, "add", "different session"); code != 0 {
+		t.Fatal(out)
+	}
+	if out, code := runSprint(t, "start", "1", "--owner", "old-manager", "--for", "1h"); code != 0 {
+		t.Fatal(out)
+	}
+	var retired []SprintOwnerRequest
+	withSprintOwnerStopper(t, func(_ context.Context, req SprintOwnerRequest) error {
+		retired = append(retired, req)
+		return errors.New("different live session")
+	})
+	out, code := runSprint(t, "take", "1", "--owner", "new-manager")
+	if code == 0 || !strings.Contains(out, "--force") {
+		t.Fatalf("different live session did not require force: exit=%d output=%s", code, out)
+	}
+	if len(retired) != 1 {
+		t.Fatalf("expected one session-identity check, got %+v", retired)
+	}
+	dir, _ := sprintStoreDir()
+	q, _ := readWeaveQueue(dir)
+	if got := findWeaveStory(q, 1).Owner; got != "old-manager" {
+		t.Fatalf("refused takeover changed owner to %q", got)
 	}
 }
 

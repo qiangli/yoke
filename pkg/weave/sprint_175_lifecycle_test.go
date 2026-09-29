@@ -114,3 +114,79 @@ func TestSprintManagerAcceptIsTheOnlyClosePath(t *testing.T) {
 		t.Fatal("manager acceptance evidence was not persisted")
 	}
 }
+
+func TestSubmitDefaultsToTheStoryHolder(t *testing.T) {
+	home := t.TempDir()
+	repo := t.TempDir()
+	t.Setenv("BASHY_SPRINT_DIR", home)
+	t.Setenv("WEAVE_CONDUCTOR", "manager")
+	st := todopkg.RepoStore(repo)
+	it, err := todopkg.Add(st, "delivered by worker", "", "p0", nil, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	it.Sprint = 1
+	it.Assignee = "worker"
+	it.Status = todopkg.StatusAssigned
+	if _, err := st.Save(it); err != nil {
+		t.Fatal(err)
+	}
+	s := &weaveStory{ID: 1, Title: "neutral", PrimaryGoal: "deliver", SpecRef: "docs/plan.md", Column: "doing", Owner: "manager", Lease: &weaveStoryLease{Holder: "manager", At: time.Now().UTC()}, StoryRoots: []string{repo}, Created: time.Now().UTC()}
+	if err := saveWeaveQueue(home, &weaveQueue{NextStoryID: 2, Stories: []*weaveStory{s}}); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewSprintCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"submit", "1", it.ID, "--repo", repo, "-m", "commit abc; tests pass"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("submit defaulting to holder failed: %v\n%s", err, out.String())
+	}
+	q, err := loadWeaveQueue(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sprintSubmissionEvidence(q.Stories[0], it.ID) {
+		t.Fatal("submission evidence was not recorded")
+	}
+	if got := q.Stories[0].Thread[len(q.Stories[0].Thread)-1].Author; got != "worker" {
+		t.Fatalf("submission actor = %q, want worker", got)
+	}
+}
+
+func TestConductorAcceptsItsOwnClaimWithoutTheDance(t *testing.T) {
+	home := t.TempDir()
+	repo := t.TempDir()
+	t.Setenv("BASHY_SPRINT_DIR", home)
+	t.Setenv("WEAVE_CONDUCTOR", "manager")
+	st := todopkg.RepoStore(repo)
+	it, err := todopkg.Add(st, "manager delivered", "", "p0", nil, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	it.Sprint = 1
+	it.Assignee = "manager"
+	it.Status = todopkg.StatusAssigned
+	if _, err := st.Save(it); err != nil {
+		t.Fatal(err)
+	}
+	s := &weaveStory{ID: 1, Title: "neutral", PrimaryGoal: "deliver", SpecRef: "docs/plan.md", Column: "doing", Owner: "manager", Lease: &weaveStoryLease{Holder: "manager", At: time.Now().UTC()}, StoryRoots: []string{repo}, Created: time.Now().UTC()}
+	if err := saveWeaveQueue(home, &weaveQueue{NextStoryID: 2, Stories: []*weaveStory{s}}); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewSprintCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"accept", "1", it.ID, "--repo", repo, "--no-rating"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("accept own claim: %v\n%s", err, out.String())
+	}
+	got, _ := todopkg.ResolveRef(st, it.ID)
+	if got.Status != todopkg.StatusDone || got.Closed == nil || got.ClosedBy != "manager" {
+		t.Fatalf("accepted story = %+v", got)
+	}
+}
