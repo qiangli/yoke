@@ -80,8 +80,8 @@ const (
 
 // WithinCap reports whether actual usage is within p's inclusive cap.
 func WithinCap(p Points, turns int, wall time.Duration) bool {
-	cap, ok := CapFor(p)
-	return ok && turns <= cap.Turns && wall <= cap.Wall
+	limit, ok := CapFor(p)
+	return ok && turns <= limit.Turns && wall <= limit.Wall
 }
 
 // OutcomeScore returns the rating score assigned to an outcome.
@@ -119,7 +119,7 @@ func ClassifyDelivery(p Points, turns int, wall time.Duration, accepted bool, re
 func EstimateMiss(estimated Points, turns int, wall time.Duration) int {
 	estimateIndex := storyBucket(estimated)
 	if estimateIndex < 0 {
-		return 0
+		return 5
 	}
 	actualIndex := storyActualBucket(turns, wall)
 	miss := estimateIndex - actualIndex

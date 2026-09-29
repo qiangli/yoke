@@ -131,3 +131,9 @@ func TestEstimateMissAndPenalty(t *testing.T) {
 		}
 	}
 }
+
+func TestEstimateMissInvalidFailsClosed(t *testing.T) {
+	if got := EstimateMiss(13, 1, time.Minute); got != 5 {
+		t.Fatalf("invalid estimate miss = %d, want 5", got)
+	}
+}
