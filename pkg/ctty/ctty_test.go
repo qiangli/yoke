@@ -242,6 +242,11 @@ func TestTrimAnswerKeepsMeaningfulWhitespace(t *testing.T) {
 		"":              "",
 		"no-newline":    "no-newline",
 		"multi\nline\n": "multi\nline",
+		// ONE terminator, not every trailing CR/LF: a value that genuinely ends
+		// in a newline keeps it (story #1243 — the delivered value must be
+		// byte-identical apart from the single trailing terminator).
+		"ends-with-newline\n\n":  "ends-with-newline\n",
+		"ends-with-crlf\r\n\r\n": "ends-with-crlf\r\n",
 	}
 	for in, want := range cases {
 		if got := string(trimAnswer([]byte(in))); got != want {

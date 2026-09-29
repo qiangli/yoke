@@ -115,13 +115,18 @@ func (t *Terminal) ReadLine(prompt string) ([]byte, error) {
 	return trimAnswer([]byte(line)), nil
 }
 
-// trimAnswer strips only the line terminator.
+// trimAnswer strips ONE line terminator — the newline the terminal or a helper
+// appended — and nothing else.
 //
-// Trailing whitespace is NOT stripped, and that is deliberate: some tokens
-// legitimately end in a space or a tab, and silently mangling a credential is
-// worse than storing an odd one — the caller gets an authentication failure it
-// cannot explain. pkg/secrets settled this same question the same way for its
-// pipe path.
+// One, not every trailing CR/LF: the greedy TrimRight this replaces ate a
+// newline that was part of the value (story #1243). Trailing whitespace is NOT
+// stripped either, and that is deliberate: some tokens legitimately end in a
+// space or a tab, and silently mangling a credential is worse than storing an
+// odd one — the caller gets an authentication failure it cannot explain.
+// pkg/secrets settled this same question the same way for its pipe path, and
+// pkg/ask's trimTerminator is this function's twin.
 func trimAnswer(b []byte) []byte {
-	return []byte(strings.TrimRight(string(b), "\r\n"))
+	s := strings.TrimSuffix(string(b), "\n")
+	s = strings.TrimSuffix(s, "\r")
+	return []byte(s)
 }
