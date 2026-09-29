@@ -89,6 +89,10 @@ type Options struct {
 	Owner  string
 	Stdout io.Writer
 	Stderr io.Writer
+
+	// RootURLExplicit is set by the CLI when --root-url was supplied. API
+	// callers that set RootURL directly are also treated as explicit.
+	RootURLExplicit bool
 }
 
 // actionsOn resolves the effective Actions toggle: an explicit Options.Actions
@@ -268,13 +272,27 @@ func removeState(dataDir string) error {
 }
 
 func StartDaemon(ctx context.Context, o Options) (State, error) {
-	o.defaults()
+	rootURLExplicit := o.RootURLExplicit || strings.TrimSpace(o.RootURL) != ""
+	rootRewrite, err := prepareDaemonOptions(&o, rootURLExplicit)
+	if err != nil {
+		return State{}, err
+	}
+	if rootRewrite != nil {
+		fmt.Fprintf(o.Stderr, "loom: rewriting ROOT_URL from %s to %s\n", rootRewrite.from, rootRewrite.to)
+	}
 	if st, err := readState(o.DataDir); err == nil && healthy(ctx, st.URL, 2*time.Second) {
 		proxyOK := st.ProxyURL == "" || healthy(ctx, st.ProxyURL, 2*time.Second)
 		if st.RootURL == o.RootURL && st.Addr == fmt.Sprintf("%s:%d", o.Addr, o.Port) && proxyOK {
 			return st, nil
 		}
 		_, _ = StopDaemon(o.DataDir, 10*time.Second)
+	}
+	if err := ensureProxyPortFreeForStart(o.DataDir, o.Addr, o.ProxyPort); err != nil {
+		return State{}, err
+	}
+	cfg, err := ensureConfig(o.DataDir, o.Addr, o.Port, o.RootURL, o.actionsOn())
+	if err != nil {
+		return State{}, err
 	}
 	tool, err := binmgr.ResolveGitHub(ctx, Spec(o.Version))
 	if err != nil {
@@ -283,10 +301,6 @@ func StartDaemon(ctx context.Context, o Options) (State, error) {
 	bin, err := binmgr.Ensure(ctx, tool)
 	if err != nil {
 		return State{}, fmt.Errorf("loom: fetch gitea: %w", err)
-	}
-	cfg, err := ensureConfig(o.DataDir, o.Addr, o.Port, o.RootURL, o.actionsOn())
-	if err != nil {
-		return State{}, err
 	}
 	if err := os.MkdirAll(o.DataDir, 0o755); err != nil {
 		return State{}, err
@@ -327,6 +341,7 @@ func StartDaemon(ctx context.Context, o Options) (State, error) {
 		_ = log.Close()
 		return State{}, fmt.Errorf("loom: start proxy: %w", err)
 	}
+	_ = recordOwnedProxy(o.DataDir, proxyAddr, proxyCmd.Process.Pid)
 	go func() {
 		_ = proxyCmd.Wait()
 	}()
@@ -381,14 +396,22 @@ func StopDaemon(dataDir string, timeout time.Duration) (State, error) {
 	if st.ProxyPID > 0 {
 		proxyProc, _ = os.FindProcess(st.ProxyPID)
 	}
+	proxyAddr := st.ProxyAddr
+	if proxyAddr == "" && st.ProxyURL != "" {
+		if u, parseErr := url.Parse(st.ProxyURL); parseErr == nil {
+			proxyAddr = u.Host
+		}
+	}
 	if proxyProc != nil {
 		_ = proxyProc.Signal(os.Interrupt)
 	}
+	_ = signalOwnedProxyPort(dataDir, proxyAddr, os.Interrupt)
 	_ = proc.Signal(os.Interrupt)
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		proxyDead := st.ProxyURL == "" || !healthy(context.Background(), st.ProxyURL, 500*time.Millisecond)
 		if !healthy(context.Background(), st.URL, 500*time.Millisecond) && proxyDead {
+			_ = removeOwnedProxyRecords(dataDir, proxyAddr)
 			_ = removeState(dataDir)
 			return st, nil
 		}
@@ -397,9 +420,311 @@ func StopDaemon(dataDir string, timeout time.Duration) (State, error) {
 	if proxyProc != nil {
 		_ = proxyProc.Kill()
 	}
+	_ = signalOwnedProxyPort(dataDir, proxyAddr, syscall.SIGKILL)
 	_ = proc.Kill()
+	_ = removeOwnedProxyRecords(dataDir, proxyAddr)
 	_ = removeState(dataDir)
 	return st, nil
+}
+
+type rootURLRewrite struct {
+	from string
+	to   string
+}
+
+func prepareDaemonOptions(o *Options, rootURLExplicit bool) (*rootURLRewrite, error) {
+	o.defaults()
+	existingRoot, err := configuredRootURL(o.DataDir)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	if !rootURLExplicit && existingRoot != "" {
+		o.RootURL = existingRoot
+	}
+	if !strings.HasSuffix(o.RootURL, "/") {
+		o.RootURL += "/"
+	}
+	if rootURLExplicit && existingRoot != "" && existingRoot != o.RootURL {
+		return &rootURLRewrite{from: existingRoot, to: o.RootURL}, nil
+	}
+	return nil, nil
+}
+
+func configuredRootURL(dataDir string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(dataDir, "app.ini"))
+	if err != nil {
+		return "", err
+	}
+	return rootURLFromINI(string(data)), nil
+}
+
+func rootURLFromINI(ini string) string {
+	inServer := false
+	for _, ln := range strings.Split(ini, "\n") {
+		t := strings.TrimSpace(ln)
+		if strings.HasPrefix(t, "[") && strings.HasSuffix(t, "]") {
+			inServer = strings.EqualFold(t, "[server]")
+			continue
+		}
+		if !inServer {
+			continue
+		}
+		k, v, ok := strings.Cut(t, "=")
+		if ok && strings.EqualFold(strings.TrimSpace(k), "ROOT_URL") {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+func proxyRegistryPath(dataDir string) string {
+	return filepath.Join(dataDir, "loom-proxies.json")
+}
+
+func ensureProxyPortFreeForStart(dataDir, addr string, port int) error {
+	addrPort := net.JoinHostPort(addr, strconv.Itoa(port))
+	ln, err := net.Listen("tcp", addrPort)
+	if err == nil {
+		_ = ln.Close()
+		return nil
+	}
+	owners, ownerErr := ownedProxyPortPIDs(dataDir, addr, port)
+	if ownerErr == nil && len(owners) > 0 {
+		for _, pid := range owners {
+			proc, findErr := os.FindProcess(pid)
+			if findErr == nil {
+				_ = proc.Signal(os.Interrupt)
+			}
+		}
+		if waitTCPPortFree(addrPort, 5*time.Second) {
+			return nil
+		}
+		for _, pid := range owners {
+			proc, findErr := os.FindProcess(pid)
+			if findErr == nil {
+				_ = proc.Kill()
+			}
+		}
+		if waitTCPPortFree(addrPort, 5*time.Second) {
+			return nil
+		}
+	}
+	return fmt.Errorf("loom: proxy port %s is already in use by a process loom did not launch; stop that process or choose --proxy-port", addrPort)
+}
+
+func signalOwnedProxyPort(dataDir, addr string, sig os.Signal) error {
+	host, portText, err := net.SplitHostPort(addr)
+	if err != nil {
+		return err
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		return err
+	}
+	owners, err := ownedProxyPortPIDs(dataDir, host, port)
+	if err != nil {
+		return err
+	}
+	for _, pid := range owners {
+		proc, findErr := os.FindProcess(pid)
+		if findErr == nil {
+			_ = proc.Signal(sig)
+		}
+	}
+	return nil
+}
+
+func waitTCPPortFree(addrPort string, max time.Duration) bool {
+	deadline := time.Now().Add(max)
+	for {
+		ln, err := net.Listen("tcp", addrPort)
+		if err == nil {
+			_ = ln.Close()
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func ownedProxyPortPIDs(dataDir, addr string, port int) ([]int, error) {
+	listeners, err := tcpListenPIDs(port)
+	if err != nil {
+		return nil, err
+	}
+	listening := map[int]bool{}
+	for _, pid := range listeners {
+		listening[pid] = true
+	}
+	registered := registeredProxyPIDs(dataDir, net.JoinHostPort(addr, strconv.Itoa(port)))
+	owned := map[int]bool{}
+	for _, pid := range registered {
+		if listening[pid] {
+			owned[pid] = true
+		}
+	}
+	argOwners, _ := loomProxyPortOwnersByArgs(addr, port)
+	for _, pid := range argOwners {
+		if listening[pid] {
+			owned[pid] = true
+		}
+	}
+	var out []int
+	for pid := range owned {
+		out = append(out, pid)
+	}
+	sort.Ints(out)
+	return out, nil
+}
+
+func tcpListenPIDs(port int) ([]int, error) {
+	out, err := exec.Command("lsof", "-nP", "-iTCP:"+strconv.Itoa(port), "-sTCP:LISTEN", "-Fpca").Output()
+	if err != nil {
+		return nil, err
+	}
+	var pids []int
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "p") {
+			pid, _ := strconv.Atoi(strings.TrimSpace(line[1:]))
+			if pid > 0 {
+				pids = append(pids, pid)
+			}
+		}
+	}
+	return pids, nil
+}
+
+func loomProxyPortOwnersByArgs(addr string, port int) ([]int, error) {
+	out, err := exec.Command("lsof", "-nP", "-iTCP:"+strconv.Itoa(port), "-sTCP:LISTEN", "-Fpca").Output()
+	if err != nil {
+		return nil, err
+	}
+	var owners []int
+	var pid int
+	var args string
+	flush := func() {
+		if pid > 0 && isLoomProxyArgs(args, addr, port) {
+			owners = append(owners, pid)
+		}
+		pid = 0
+		args = ""
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if line == "" {
+			continue
+		}
+		switch line[0] {
+		case 'p':
+			flush()
+			pid, _ = strconv.Atoi(strings.TrimSpace(line[1:]))
+		case 'a':
+			args = line[1:]
+		}
+	}
+	flush()
+	return owners, nil
+}
+
+func recordOwnedProxy(dataDir, addr string, pid int) error {
+	if pid <= 0 {
+		return nil
+	}
+	reg := map[string][]int{}
+	data, err := os.ReadFile(proxyRegistryPath(dataDir))
+	if err == nil {
+		_ = json.Unmarshal(data, &reg)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	seen := false
+	for _, existing := range reg[addr] {
+		if existing == pid {
+			seen = true
+			break
+		}
+	}
+	if !seen {
+		reg[addr] = append(reg[addr], pid)
+	}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return err
+	}
+	data, err = json.MarshalIndent(reg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(proxyRegistryPath(dataDir), append(data, '\n'), 0o600)
+}
+
+func registeredProxyPIDs(dataDir, addr string) []int {
+	data, err := os.ReadFile(proxyRegistryPath(dataDir))
+	if err != nil {
+		return nil
+	}
+	reg := map[string][]int{}
+	if err := json.Unmarshal(data, &reg); err != nil {
+		return nil
+	}
+	return reg[addr]
+}
+
+func removeOwnedProxyRecords(dataDir, addr string) error {
+	data, err := os.ReadFile(proxyRegistryPath(dataDir))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	reg := map[string][]int{}
+	if err := json.Unmarshal(data, &reg); err != nil {
+		return err
+	}
+	delete(reg, addr)
+	if len(reg) == 0 {
+		err := os.Remove(proxyRegistryPath(dataDir))
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	data, err = json.MarshalIndent(reg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(proxyRegistryPath(dataDir), append(data, '\n'), 0o600)
+}
+
+func isLoomProxyArgs(args, addr string, port int) bool {
+	fields := strings.Fields(args)
+	for i, f := range fields {
+		if f != "loom" || i+1 >= len(fields) || fields[i+1] != "proxy" {
+			continue
+		}
+		for j := i + 2; j < len(fields)-1; j++ {
+			if fields[j] == "--port" && fields[j+1] == strconv.Itoa(port) {
+				if !hasFlagValue(fields, "--addr") || flagValue(fields, "--addr") == addr {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func hasFlagValue(fields []string, flag string) bool {
+	return flagValue(fields, flag) != ""
+}
+
+func flagValue(fields []string, flag string) string {
+	for i := 0; i < len(fields)-1; i++ {
+		if fields[i] == flag {
+			return fields[i+1]
+		}
+	}
+	return ""
 }
 
 func ExposeService(ctx context.Context, service, addr string) error {
@@ -1371,6 +1696,7 @@ compiled in). Expose it over the mesh with: outpost mesh service add git <addr>.
 			if cmd.Flags().Changed("actions") {
 				o.Actions = &actions
 			}
+			o.RootURLExplicit = cmd.Flags().Changed("root-url")
 			st, err := StartDaemon(cmd.Context(), o)
 			if err != nil {
 				return err
