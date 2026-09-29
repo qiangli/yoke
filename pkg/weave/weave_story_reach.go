@@ -245,7 +245,7 @@ func validateSprintOwner(name string) error {
 	}
 	return fmt.Errorf("sprint manager %q owns nothing here, so mb/chat/inbox cannot reach it.\n"+
 		"  choose an agent from `bashy agent list`\n"+
-		"  then re-run with --owner %s", n, n)
+		"  then re-run with --owner NAME", n)
 }
 
 // isPlaceholderConductorName catches the generic fallbacks that used to be

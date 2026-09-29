@@ -36,6 +36,7 @@ package weave
 // died — is the worse failure. The real isolation is the weave workspace.
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -296,7 +297,7 @@ func runSprintStorySubmit(cmd *cobra.Command, id int64, ref, as, repo, evidence 
 			return "", fmt.Errorf("story %s is held by %s, not %s — claim it first, or let them submit it", it.ID, held, who)
 		}
 		if strings.TrimSpace(it.Assignee) == "" {
-			return "", fmt.Errorf("story %s is unclaimed — run `bashy sprint claim %d %s --owner %s` before submission", it.ID, id, it.ID, who)
+			return "", errors.New(unclaimedSubmitHint(id, it.ID, who))
 		}
 		note := fmt.Sprintf("%s submitted story %s for merge/closure", who, shortSprintStoryID(it.ID))
 		if message := strings.TrimSpace(evidence); message != "" {
@@ -409,4 +410,17 @@ func sprintStoryClosureAudit(s *weaveStory) error {
 		}
 	}
 	return nil
+}
+
+// unclaimedSubmitHint is the refusal for submitting a story nobody claimed.
+//
+// A placeholder identity ("conductor" is the fallback when no agent identity
+// is set) is never suggested: claim refuses it, so the hint would be a dead
+// end. The caller is pointed at the agent roster instead.
+func unclaimedSubmitHint(id int64, storyID, who string) string {
+	if isPlaceholderConductorName(who) {
+		return fmt.Sprintf("story %s is unclaimed — run `bashy sprint claim %d %s --owner NAME` "+
+			"(NAME from `bashy agent list`) before submission", storyID, id, storyID)
+	}
+	return fmt.Sprintf("story %s is unclaimed — run `bashy sprint claim %d %s --owner %s` before submission", storyID, id, storyID, who)
 }
