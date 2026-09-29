@@ -1,0 +1,8 @@
+agents:
+  - name: codex-gpt6-astra
+    tool: codex
+    model: gpt6-astra
+    display: "codex · gpt6-astra"
+    ledger:
+      reliability: unmeasured
+      notes: L5 rung — codex's own frontier default; live verification pending

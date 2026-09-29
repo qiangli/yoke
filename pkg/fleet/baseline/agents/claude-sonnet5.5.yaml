@@ -1,0 +1,8 @@
+agents:
+  - name: claude-sonnet5.5
+    tool: claude
+    model: sonnet5.5
+    display: "claude · sonnet5.5"
+    ledger:
+      reliability: unmeasured
+      notes: L2 rung (declared prior); structurally registered, live verification pending

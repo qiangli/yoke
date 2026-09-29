@@ -1,0 +1,22 @@
+name: opus5.5
+family: opus
+version: "5.5"
+band: 5
+band_source: declared
+# A PRIOR, not a measurement. Seeded 2026-09-29 as the successor of Opus 5
+# (Claude 5 family: Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 4.5). It inherits
+# opus5's L5 peg — itself `declared` and provisional — and a newer version
+# number is not evidence of a different band; no gated run on this host has
+# placed it. The `opus` family alias re-points to the highest version, so
+# `opus` now names 5.5 and opus5 stays reachable by its own name.
+display: Claude Opus 5.5
+provider: anthropic
+kind: subscription
+model: claude-opus-5-5
+quality: 0.93
+# Carried over from opus5; not re-priced.
+cost_micro: 15000
+spec:
+  code-review: 0.03
+  planning: 0.03
+  orchestration: 0.04

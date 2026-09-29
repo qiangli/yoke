@@ -1,0 +1,8 @@
+agents:
+  - name: claude-opus5.5
+    tool: claude
+    model: opus5.5
+    display: "claude · opus5.5"
+    ledger:
+      reliability: unmeasured
+      notes: L5 rung (declared prior); structurally registered, live verification pending

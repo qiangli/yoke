@@ -1,0 +1,16 @@
+name: gpt6-luna
+family: gpt-luna
+version: "6"
+band: 2
+band_source: declared
+# A PRIOR, not a measurement. Seeded 2026-09-29 from codex's own model list
+# (priority 3, "Fast and affordable model for easier tasks"); successor of
+# gpt5.6-luna, whose L2 peg it inherits. The `gpt-luna` family alias re-points
+# to 6.
+display: GPT-6 Luna
+provider: openai
+kind: subscription
+model: gpt-6-luna
+quality: 0.83
+# Carried over from gpt5.6-luna; not re-priced.
+cost_micro: 3000

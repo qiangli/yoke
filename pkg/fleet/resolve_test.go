@@ -93,8 +93,8 @@ func TestRefModelFamilyAliasResolvesToNewest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("family alias did not resolve: %v", err)
 	}
-	if n.ID != "opus5" || n.Ref != "model:opus5" {
-		t.Fatalf("model:opus = %q, want the newest member model:opus5", n.Ref)
+	if n.ID != "opus5.5" || n.Ref != "model:opus5.5" {
+		t.Fatalf("model:opus = %q, want the newest member model:opus5.5", n.Ref)
 	}
 	if !strings.Contains(n.Title, "alias opus") {
 		t.Errorf("Title %q does not say the alias was resolved", n.Title)

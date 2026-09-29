@@ -1,0 +1,8 @@
+agents:
+  - name: codex-gpt6-luna
+    tool: codex
+    model: gpt6-luna
+    display: "codex · gpt6-luna"
+    ledger:
+      reliability: unmeasured
+      notes: L2 rung (declared prior); live verification pending

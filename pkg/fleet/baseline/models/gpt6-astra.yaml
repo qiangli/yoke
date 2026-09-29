@@ -1,0 +1,16 @@
+name: gpt6-astra
+family: gpt-astra
+version: "6"
+band: 5
+band_source: declared
+# A PRIOR, not a measurement. Seeded 2026-09-29 from codex's own model list
+# (priority 1, "Frontier intelligence for the most demanding work"). OpenAI's
+# new top tier above Sol; it takes the frontier peg (L5) that gpt5.6-sol held
+# as the previous flagship. No gated run on this host has placed it.
+display: GPT-6 Astra
+provider: openai
+kind: subscription
+model: gpt-6-astra
+quality: 0.95
+# Unpriced prior: set above sol's 18000 because it is the higher tier.
+cost_micro: 24000

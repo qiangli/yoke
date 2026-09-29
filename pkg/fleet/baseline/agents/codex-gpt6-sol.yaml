@@ -1,0 +1,8 @@
+agents:
+  - name: codex-gpt6-sol
+    tool: codex
+    model: gpt6-sol
+    display: "codex · gpt6-sol"
+    ledger:
+      reliability: unmeasured
+      notes: L5 rung (declared prior); live verification pending
