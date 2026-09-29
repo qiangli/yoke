@@ -271,3 +271,16 @@ func TestWeaveSourceEnforcesCommitHookDetectsAnInstalledHook(t *testing.T) {
 		t.Fatal("hook installed into the clone, but the helper did not see it")
 	}
 }
+
+func TestParseCommitAgentTrailer(t *testing.T) {
+	base := "deliver\n\nSprint: #87\nStory: #110\nStory-ID: d1e86f29d7a7\n"
+	for _, agent := range []string{"agent-a", "tool-a:model-a", ""} {
+		trace, err := parseCommitTrace(base + "Agent: " + agent + "\n")
+		if err != nil || !trace.AgentPresent || trace.Agent != agent {
+			t.Fatalf("trace=%+v err=%v", trace, err)
+		}
+	}
+	if _, err := parseCommitTrace(base + "Agent: agent-a\nAgent: agent-b\n"); err == nil {
+		t.Fatal("duplicate Agent accepted")
+	}
+}
