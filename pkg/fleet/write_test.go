@@ -56,9 +56,8 @@ func TestSavedAgentIsAnAssetDocument(t *testing.T) {
 	}
 }
 
-// Modifying an entry that lives in a lower ring copies it into the local
-// store. The operator's edit shadows the baseline; the baseline is never
-// mutated.
+// Modifying an entry that lives in a lower ring writes a sparse local
+// overlay. The baseline remains readable and unchanged.
 func TestSetCopiesOnWriteFromBaseline(t *testing.T) {
 	c, root := store(t)
 
@@ -76,13 +75,19 @@ func TestSetCopiesOnWriteFromBaseline(t *testing.T) {
 	if after.Ring != assetring.RingLocal || after.CLI.Binary != "my-codex" {
 		t.Fatalf("local override not in effect: %+v", after)
 	}
-	// The launch template survived the copy — a partial write would silently
-	// break every agent bound to this tool.
+	// The launch template comes from the baseline through the overlay.
 	if after.CLI.Launch.Exec != before.CLI.Launch.Exec {
 		t.Fatalf("launch template lost on copy-on-write: %q", after.CLI.Launch.Exec)
 	}
 	if _, err := os.Stat(filepath.Join(root, "tools", "codex.yaml")); err != nil {
-		t.Fatalf("copy-on-write did not land in the local store: %v", err)
+		t.Fatalf("overlay did not land in the local store: %v", err)
+	}
+	local, err := os.ReadFile(filepath.Join(root, "tools", "codex.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(local), "overlay: true") || strings.Contains(string(local), "launch:") {
+		t.Fatalf("direct SaveTool froze launch contract: %s", local)
 	}
 }
 

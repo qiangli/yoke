@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 // --- agents add / set --------------------------------------------------
@@ -170,9 +171,8 @@ func newAgentsSet(opts []Option) *cobra.Command {
 		Use:   "set <name>",
 		Short: "Modify an agent's binding or nicknames",
 		Long: "Modify an agent's binding or nicknames.\n\n" +
-			"An agent from the embedded baseline, a shared dir, or an org overlay is\n" +
-			"copied into the host-local store on first modification: the edit shadows\n" +
-			"the original rather than mutating a catalog this host does not own.",
+			"An agent from a lower ring gains a sparse host-local overlay on first\n" +
+			"modification. The lower catalog remains readable and unchanged.",
 		Example:       "  bashy agent set 007 --model opus --add-alias bond",
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
@@ -184,6 +184,7 @@ func newAgentsSet(opts []Option) *cobra.Command {
 				return fmt.Errorf("fleet: no agent %q", args[0])
 			}
 			from := a.Ring
+			before := a
 
 			if cmd.Flags().Changed("tool") {
 				a.Tool = f.tool
@@ -216,11 +217,13 @@ func newAgentsSet(opts []Option) *cobra.Command {
 			if err := cat.claimName(KindAgent, a.Name, claims, f.force); err != nil {
 				return err
 			}
-			if err := cat.SaveAgent(a); err != nil {
+			if err := cat.saveChanged(dirAgents, a.Name, before, a, changedOverlayPaths(cmd, f.paths, map[string]string{
+				"tool": "tool", "model": "model", "display": "display", "description": "description", "nick": "nick", "ephemeral": "ephemeral", "add-alias": "aliases", "rm-alias": "aliases",
+			})); err != nil {
 				return err
 			}
 			if from != ringLocal() {
-				fmt.Fprintf(cmd.ErrOrStderr(), "note: copied %s from the %s ring into the local store\n", a.Name, from)
+				fmt.Fprintf(cmd.ErrOrStderr(), "note: overlaid %s from the %s ring in the local store\n", a.Name, from)
 			}
 			return reportAgentSaved(cmd, cat, a)
 		},
@@ -293,7 +296,7 @@ func newToolsSet(opts []Option) *cobra.Command {
 	c := &cobra.Command{
 		Use:           "set <name>",
 		Short:         "Modify a tool definition",
-		Long:          "Modify a tool definition. Entries from a lower ring are copied into the local store first.",
+		Long:          "Modify a tool definition. Entries from a lower ring gain a sparse local overlay.",
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -304,6 +307,7 @@ func newToolsSet(opts []Option) *cobra.Command {
 				return fmt.Errorf("fleet: no tool %q", args[0])
 			}
 			from := t.Ring
+			before := t
 			if cmd.Flags().Changed("binary") {
 				t.CLI.Binary = binary
 			}
@@ -324,11 +328,13 @@ func newToolsSet(opts []Option) *cobra.Command {
 			if err := cat.claimName(KindTool, t.Name, t.Aliases, force); err != nil {
 				return err
 			}
-			if err := cat.SaveTool(t); err != nil {
+			if err := cat.saveChanged(dirTools, t.Name, before, t, changedOverlayPaths(cmd, paths, map[string]string{
+				"binary": "cli.binary", "exec": "cli.launch.exec", "display": "display", "hidden": "hidden", "add-alias": "aliases", "rm-alias": "aliases",
+			})); err != nil {
 				return err
 			}
 			if from != ringLocal() {
-				fmt.Fprintf(cmd.ErrOrStderr(), "note: copied %s from the %s ring into the local store\n", t.Name, from)
+				fmt.Fprintf(cmd.ErrOrStderr(), "note: overlaid %s from the %s ring in the local store\n", t.Name, from)
 			}
 			if t.CLI.Launch.Exec != "" && !t.TakesModel() {
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s has no %s placeholder, so agents bound to it cannot select a model\n", t.Name, ModelToken)
@@ -452,6 +458,7 @@ func newModelsSet(opts []Option) *cobra.Command {
 				return fmt.Errorf("fleet: no model %q", args[0])
 			}
 			from := m.Ring
+			before := m
 			for flag, set := range map[string]func(){
 				"provider":    func() { m.Provider = provider },
 				"kind":        func() { m.Kind = kind },
@@ -483,11 +490,13 @@ func newModelsSet(opts []Option) *cobra.Command {
 			if err := cat.claimName(KindModel, m.Name, m.Aliases, force); err != nil {
 				return err
 			}
-			if err := cat.SaveModel(m); err != nil {
+			if err := cat.saveChanged(dirModels, m.Name, before, m, changedOverlayPaths(cmd, paths, map[string]string{
+				"provider": "provider", "kind": "kind", "upstream": "model", "base-url": "base_url", "api-key-ref": "api_key_ref", "display": "display", "quality": "quality", "cost-micro": "cost_micro", "band": "band", "band-source": "band_source", "id": "tool_ids", "add-alias": "aliases", "rm-alias": "aliases",
+			})); err != nil {
 				return err
 			}
 			if from != ringLocal() {
-				fmt.Fprintf(cmd.ErrOrStderr(), "note: copied %s from the %s ring into the local store\n", m.Name, from)
+				fmt.Fprintf(cmd.ErrOrStderr(), "note: overlaid %s from the %s ring in the local store\n", m.Name, from)
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), m.Name)
 			return nil
@@ -509,6 +518,22 @@ func newModelsSet(opts []Option) *cobra.Command {
 	c.Flags().BoolVar(&force, "force", false, "take a name that already belongs to another entry")
 	paths.bind(c)
 	return c
+}
+
+func changedOverlayPaths(cmd *cobra.Command, paths pathFlags, flags map[string]string) []string {
+	var out []string
+	cmd.Flags().Visit(func(f *pflag.Flag) {
+		if path := flags[f.Name]; path != "" {
+			out = append(out, path)
+		}
+	})
+	for _, s := range paths.set {
+		if p, _, ok := strings.Cut(s, "="); ok {
+			out = append(out, p)
+		}
+	}
+	out = append(out, paths.unset...)
+	return out
 }
 
 type pathFlags struct {

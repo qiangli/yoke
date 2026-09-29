@@ -48,7 +48,13 @@ func ParseTool(name string, body []byte, src assetring.Source) (Tool, error) {
 	if src != nil {
 		t.Ring = src.Ring()
 	}
-	if t.CLI.Binary == "" && t.IsCLI() {
+	// A present empty/null binary is an intentional clear in an overlay.
+	// Only a missing declaration receives the name fallback.
+	var fields map[string]any
+	_ = yaml.Unmarshal(body, &fields)
+	cli, _ := fields["cli"].(map[string]any)
+	_, binarySpecified := cli["binary"]
+	if t.CLI.Binary == "" && t.IsCLI() && !binarySpecified {
 		t.CLI.Binary = t.Name
 	}
 	return t, nil
@@ -63,7 +69,10 @@ func ParseModel(name string, body []byte, src assetring.Source) (Model, error) {
 	if m.Name == "" {
 		m.Name = name
 	}
-	if m.Source == "" {
+	var fields map[string]any
+	_ = yaml.Unmarshal(body, &fields)
+	_, sourceSpecified := fields["source"]
+	if m.Source == "" && !sourceSpecified {
 		m.Source = ModelSourceCloud
 	}
 	if src != nil {

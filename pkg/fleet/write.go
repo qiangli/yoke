@@ -7,66 +7,107 @@ import (
 	"strings"
 
 	"github.com/qiangli/yoke/pkg/assetring"
+	"gopkg.in/yaml.v3"
 )
 
 // Writes always land in the host-local ring. An entry that comes from the
-// embedded baseline, a shared dir, or an org overlay is copied into the
-// local store on first modification, so the operator's edit shadows the
-// original instead of mutating a source they do not own.
+// embedded baseline, a shared dir, or an org overlay becomes a sparse local
+// overlay on first modification. Lower sources are never mutated.
 
 // ringLocal is the only writable ring.
 func ringLocal() assetring.Ring { return assetring.RingLocal }
 
-// MaterializeTool copies a tool into the local store if it is not already
-// there, and returns the path an editor should open.
+// MaterializeTool creates an empty local overlay if needed and returns its path.
 func (c *Catalog) MaterializeTool(name string) (string, error) {
 	t, ok := c.Tool(name)
 	if !ok {
 		return "", fmt.Errorf("fleet: no tool %q", name)
 	}
+	if err := c.requireMigrated(dirTools, t.Name); err != nil {
+		return "", err
+	}
 	if t.Ring != ringLocal() {
-		if err := c.SaveTool(t); err != nil {
+		if err := c.saveChanged(dirTools, t.Name, t, t, nil); err != nil {
 			return "", err
 		}
 	}
 	return entryPath(c.nounDir(dirTools), t.Name)
 }
 
-// MaterializeModel copies a model into the local store if needed.
+// MaterializeModel creates an empty local overlay if needed.
 func (c *Catalog) MaterializeModel(name string) (string, error) {
 	m, ok := c.Model(name)
 	if !ok {
 		return "", fmt.Errorf("fleet: no model %q", name)
 	}
+	if err := c.requireMigrated(dirModels, m.Name); err != nil {
+		return "", err
+	}
 	if m.Ring != ringLocal() {
-		if err := c.SaveModel(m); err != nil {
+		if err := c.saveChanged(dirModels, m.Name, m, m, nil); err != nil {
 			return "", err
 		}
 	}
 	return entryPath(c.nounDir(dirModels), m.Name)
 }
 
-// MaterializeAgent copies an agent into the local store if needed.
+// MaterializeAgent creates an empty local overlay if needed.
 func (c *Catalog) MaterializeAgent(name string) (string, error) {
 	a, ok := c.Agent(name)
 	if !ok {
 		return "", fmt.Errorf("fleet: no agent %q", name)
 	}
+	if err := c.requireMigrated(dirAgents, a.Name); err != nil {
+		return "", err
+	}
 	if a.Ring != ringLocal() {
-		if err := c.SaveAgent(a); err != nil {
+		if err := c.saveChanged(dirAgents, a.Name, a, a, nil); err != nil {
 			return "", err
 		}
 	}
-	return entryPath(c.nounDir(dirAgents), a.Name)
+	fileName := a.Name
+	if lowerFile, _, ok := c.lowerEntry(dirAgents, a.Name); ok {
+		fileName = lowerFile
+	}
+	return entryPath(c.nounDir(dirAgents), fileName)
 }
 
-// SaveTool writes a tool into the local store as canonical YAML.
+func (c *Catalog) requireMigrated(noun, name string) error {
+	fileName, _, ok := c.lowerEntry(noun, name)
+	if !ok {
+		return nil
+	}
+	path, err := entryPath(c.nounDir(noun), fileName)
+	if err != nil {
+		return err
+	}
+	body, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !isOverlay(body) {
+		return fmt.Errorf("fleet: %s %q is a full-copy local override; run %s migrate %s before editing it", noun, name, strings.TrimSuffix(noun, "s"), name)
+	}
+	return nil
+}
+
+// SaveTool writes a sparse overlay when a lower tool exists, else a full entry.
 func (c *Catalog) SaveTool(t Tool) error {
 	if err := validName(t.Name); err != nil {
 		return err
 	}
 	if t.Kind == "" {
 		t.Kind = ToolKindCLI
+	}
+	if body, ok := c.lowerBody(dirTools, t.Name); ok {
+		base, err := ParseTool(t.Name, body, nil)
+		if err != nil {
+			return err
+		}
+		return c.saveChanged(dirTools, t.Name, base, t, nil)
 	}
 	data, err := Marshal(t)
 	if err != nil {
@@ -75,13 +116,20 @@ func (c *Catalog) SaveTool(t Tool) error {
 	return writeEntry(c.nounDir(dirTools), t.Name, data)
 }
 
-// SaveModel writes a model into the local store as canonical YAML.
+// SaveModel writes a sparse overlay when a lower model exists, else a full entry.
 func (c *Catalog) SaveModel(m Model) error {
 	if err := validName(m.Name); err != nil {
 		return err
 	}
 	if m.Band < 0 || m.Band > MaxBand {
 		return fmt.Errorf("fleet: band %d is out of range (1-%d, or 0 for unpegged)", m.Band, MaxBand)
+	}
+	if body, ok := c.lowerBody(dirModels, m.Name); ok {
+		base, err := ParseModel(m.Name, body, nil)
+		if err != nil {
+			return err
+		}
+		return c.saveChanged(dirModels, m.Name, base, m, nil)
 	}
 	data, err := Marshal(m)
 	if err != nil {
@@ -90,8 +138,8 @@ func (c *Catalog) SaveModel(m Model) error {
 	return writeEntry(c.nounDir(dirModels), m.Name, data)
 }
 
-// SaveAgent writes an agent into the local store, wrapped in the asset
-// envelope so the file is a valid catalog entry on either side.
+// SaveAgent writes a sparse overlay when a lower agent exists, else a full
+// agent file envelope.
 func (c *Catalog) SaveAgent(a Agent) error {
 	if err := validName(a.Name); err != nil {
 		return err
@@ -110,6 +158,18 @@ func (c *Catalog) SaveAgent(a Agent) error {
 	}
 	if t, ok := c.Tool(a.Tool); ok {
 		a.Tool = t.Name
+	}
+	if body, ok := c.lowerBody(dirAgents, a.Name); ok {
+		file, err := ParseAgentFile(a.Name, body, nil)
+		if err != nil {
+			return err
+		}
+		for _, base := range file.Agents {
+			if base.Name == a.Name {
+				return c.saveChanged(dirAgents, a.Name, base, a, nil)
+			}
+		}
+		return fmt.Errorf("fleet: lower agent file %q has no matching identity", a.Name)
 	}
 	data, err := Marshal(AgentFile{Agents: []Agent{a}})
 	if err != nil {
@@ -142,6 +202,49 @@ func (c *Catalog) RemoveModel(name string) error {
 
 // RemoveAgent deletes an agent from the local store.
 func (c *Catalog) RemoveAgent(name string) error {
+	if fileName, _, ok := c.lowerEntry(dirAgents, name); ok {
+		path, err := entryPath(c.nounDir(dirAgents), fileName)
+		if err != nil {
+			return err
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) && fileName != name {
+				return removeEntry(c.nounDir(dirAgents), dirAgents, name)
+			}
+			return fmt.Errorf("fleet: agent %q is not in the local store: %w", name, err)
+		}
+		if !isOverlay(body) {
+			if fileName != name {
+				return fmt.Errorf("fleet: full-copy agent file %q contains multiple identities; migrate it before removing one", fileName)
+			}
+			return removeEntry(c.nounDir(dirAgents), dirAgents, fileName)
+		}
+		patch, err := decodeMap(body)
+		if err != nil {
+			return err
+		}
+		items, ok := patch["agents"].([]any)
+		if !ok {
+			return fmt.Errorf("fleet: agent overlay %q has no agents", fileName)
+		}
+		for i, item := range items {
+			m, ok := item.(yamlMap)
+			if ok && m["name"] == name {
+				items = append(items[:i], items[i+1:]...)
+				if len(items) == 0 {
+					return os.Remove(path)
+				}
+				patch["agents"] = items
+				data, err := yaml.Marshal(patch)
+				if err != nil {
+					return err
+				}
+				return writeEntry(c.nounDir(dirAgents), fileName, data)
+			}
+		}
+		return fmt.Errorf("fleet: agent %q has no local override", name)
+	}
 	return removeEntry(c.nounDir(dirAgents), dirAgents, name)
 }
 
