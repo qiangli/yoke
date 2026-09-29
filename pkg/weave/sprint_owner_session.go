@@ -32,6 +32,8 @@ var StopSprintOwner func(context.Context, SprintOwnerRequest) error
 // SprintOwnerRequest is what the host needs to run, or stop, an owner.
 type SprintOwnerRequest struct {
 	Sprint int64
+	// Env must be applied to the launched manager process, never to its brief or logs.
+	Env map[string]string `json:"-"`
 	// Owner is the fleet agent name. It is already validated as registered by
 	// the time this is called.
 	Owner string
@@ -53,7 +55,7 @@ type SprintOwnerSession struct {
 // ensureSprintOwnerSession delivers one explicit instruction to a managed
 // owner session. An instruction is a requested side effect, so failure is an
 // error rather than an advisory attached to an otherwise-successful start.
-func ensureSprintOwnerSession(ctx context.Context, id int64, owner, brief, cwd string, duration time.Duration) (note string, launched bool, err error) {
+func ensureSprintOwnerSession(ctx context.Context, id int64, owner, brief, cwd string, duration time.Duration, leaseToken ...string) (note string, launched bool, err error) {
 	owner = strings.TrimSpace(owner)
 	if owner == "" || strings.TrimSpace(brief) == "" {
 		return "", false, nil
@@ -62,6 +64,19 @@ func ensureSprintOwnerSession(ctx context.Context, id int64, owner, brief, cwd s
 		return "", false, fmt.Errorf("managed sprint-manager launch is not wired")
 	}
 	req := SprintOwnerRequest{Sprint: id, Owner: owner, Brief: brief, Cwd: cwd, Duration: duration}
+	var raw string
+	if len(leaseToken) > 0 {
+		raw = leaseToken[0]
+	} else {
+		var err error
+		raw, err = sprintInstructionLeaseToken(id, owner)
+		if err != nil {
+			return "", false, err
+		}
+	}
+	if raw != "" {
+		req.Env = map[string]string{sprintLeaseTokenEnv: raw}
+	}
 	session, err := StartSprintOwner(ctx, req)
 	if err != nil {
 		return "", false, err

@@ -98,8 +98,9 @@ type sprintRun struct {
 // record which one throws away the single piece of evidence that can be
 // rechecked at read time, and leaves a killed watch looking alive for a TTL.
 type weaveStoryLease struct {
-	Holder string    `json:"holder"`
-	At     time.Time `json:"at"`
+	TokenHash string    `json:"token_hash,omitempty"`
+	Holder    string    `json:"holder"`
+	At        time.Time `json:"at"`
 	// AttachedPID is set ONLY while a foreground process is holding this seat
 	// open on this host — today the `sprint take/start --watch` stream. It is
 	// not a second liveness model competing with the heartbeat; it is what
@@ -631,6 +632,7 @@ branches, worktrees, and weave workspaces owned by this sprint.`,
 	// ...and the errors a RunE returns itself: a guard that runs before
 	// the store is opened is not a cobra structural error, so neither
 	// reporter above sees it. See runerr.go.
+	installSprintLeaseTokenGuards(cmd)
 	installRunErrorReporting(cmd)
 	for _, option := range options {
 		option(cmd)
@@ -1058,7 +1060,9 @@ you still gate, converge and report.`,
 						return fmt.Errorf("cannot transfer sprint #%d manager from %s to %s: %w", id, expectedOwner, who, err)
 					}
 				}
-				return runWeaveStoryMutate(cmd, id, "sprint take", &flags, func(s *weaveStory) (string, error) {
+				var rawToken string
+				var minted bool
+				err = runWeaveStoryMutate(cmd, id, "sprint take", &flags, func(s *weaveStory) (string, error) {
 					if strings.TrimSpace(s.Owner) != expectedOwner {
 						return "", fmt.Errorf("sprint #%d sprint manager changed concurrently from %s to %s", id, expectedOwner, s.Owner)
 					}
@@ -1081,7 +1085,15 @@ you still gate, converge and report.`,
 					// CLAIM-TIME: the seat must be RUNNING, not merely declared.
 					// A sprint seated to a name with no process behind it accepts
 					// room messages and inbox mail that nobody will ever read.
-					s.Lease = &weaveStoryLease{Holder: who, At: time.Now().UTC()}
+					raw, hash, fresh, err := prepareSprintLeaseToken(s, who)
+					rawToken, minted = raw, fresh
+					if err != nil {
+						return "", err
+					}
+					if err := saveSprintLeaseToken(id, who, raw); err != nil {
+						return "", err
+					}
+					s.Lease = &weaveStoryLease{Holder: who, At: time.Now().UTC(), TokenHash: hash}
 					s.Owner = who
 					// The brief is printed on TAKE, not offered by a separate verb.
 					// `resume` existed only to show it, which meant the takeover
@@ -1103,6 +1115,10 @@ you still gate, converge and report.`,
 					}
 					return fmt.Sprintf("sprint #%d: %s is now conductor — use this exact name for mb/Meet/chat/ping; %s\n%s\ncontinuity: %s", id, who, sprintReadyLine(id, who), sprintOrientationLine(s), brief), nil
 				})
+				if err == nil && minted {
+					fmt.Fprintf(cmd.ErrOrStderr(), "Sprint %d lease token (save privately; shown once): %s\n", id, rawToken)
+				}
+				return err
 			})
 		},
 	}
@@ -1539,7 +1555,7 @@ successor can take over.
 					return "", fmt.Errorf("sprint #%d lease is STALE (was %s) — take it explicitly to recover", id, prev)
 				}
 				s.Continuity = message
-				s.Lease = &weaveStoryLease{Holder: prev, At: time.Now().UTC()}
+				s.Lease.At = time.Now().UTC()
 				// AUTHOR WITH THE HOLDER THIS COMMAND JUST VALIDATED.
 				//
 				// It used to resolve the author BEFORE the sprint was loaded, through

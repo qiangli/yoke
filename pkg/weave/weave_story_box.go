@@ -240,7 +240,11 @@ func newSprintStartCmd() *cobra.Command {
 						return fmt.Errorf("cannot transfer sprint #%d manager from %s to %s: %w", id, expectedOwner, who, err)
 					}
 				}
-				sessionNote, launched, err := ensureSprintOwnerSession(cmd.Context(), id, who, instruction, cwd, forDur)
+				rawToken, tokenHash, minted, err := prepareSprintLeaseToken(before, who)
+				if err != nil {
+					return err
+				}
+				sessionNote, launched, err := ensureSprintOwnerSession(cmd.Context(), id, who, instruction, cwd, forDur, rawToken)
 				if err != nil {
 					if launched {
 						_ = retireSprintOwnerSession(cmd.Context(), id, who, cwd)
@@ -293,7 +297,10 @@ func newSprintStartCmd() *cobra.Command {
 					// CLAIM-TIME: the seat must be RUNNING, not merely declared.
 					// A sprint seated to a name with no process behind it accepts
 					// room messages and inbox mail that nobody will ever read.
-					s.Lease = &weaveStoryLease{Holder: who, At: now}
+					if err := saveSprintLeaseToken(id, who, rawToken); err != nil {
+						return "", err
+					}
+					s.Lease = &weaveStoryLease{Holder: who, At: now, TokenHash: tokenHash}
 					s.Owner = who
 					s.Boxes = append(s.Boxes, weaveStoryBox{StartedAt: now, Cutoff: now.Add(forDur), Planned: forDur})
 					// A room is opened automatically, because an OPTIONAL room is
@@ -334,6 +341,9 @@ func newSprintStartCmd() *cobra.Command {
 						id, moved, roundDur(forDur), now.Add(forDur).Format("15:04 MST"), who, roomNote+sessionNote,
 						sprintReadyLine(id, who), sprintOrientationLine(s)), nil
 				})
+				if err == nil && minted && strings.TrimSpace(instruction) == "" {
+					fmt.Fprintf(cmd.ErrOrStderr(), "Sprint %d lease token (save privately; shown once): %s\n", id, rawToken)
+				}
 				if err != nil && launched {
 					_ = retireSprintOwnerSession(cmd.Context(), id, who, cwd)
 				}
