@@ -91,7 +91,12 @@ func TestBareToolArgvIsUnchangedFromTheLegacyTable(t *testing.T) {
 		// now live in UnsafeArgs and are prepended only when unsafe launches are
 		// permitted — which permitUnsafeLaunch has done. So the FULL rendered argv
 		// must still equal the exact legacy table, kill-switch included.
-		legacy := append(append([]string{}, want.UnsafeArgs...), want.Args...)
+		legacy := append([]string{}, want.Args...)
+		if want.UnsafeArgsAfter {
+			legacy = append(legacy, want.UnsafeArgs...)
+		} else {
+			legacy = append(append([]string{}, want.UnsafeArgs...), legacy...)
+		}
 		if strings.Join(args, "\x00") != strings.Join(legacy, "\x00") {
 			t.Errorf("%s: args =\n  %q\nwant (legacy table)\n  %q", name, args, legacy)
 		}
@@ -124,7 +129,7 @@ func TestModelIsTheProviderSideID(t *testing.T) {
 	if tool != "opencode" || model != "deepseek/deepseek-v4-pro" {
 		t.Fatalf("tool=%q model=%q", tool, model)
 	}
-	if strings.Join(args, " ") != "--auto run --model deepseek/deepseek-v4-pro" {
+	if strings.Join(args, " ") != "run --auto --model deepseek/deepseek-v4-pro" {
 		t.Fatalf("args = %q", args)
 	}
 }

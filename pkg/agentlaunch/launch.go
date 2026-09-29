@@ -87,6 +87,10 @@ type Launch struct {
 	// credential entries must survive the child credential firewall. Values are
 	// never stored in a Launch.
 	PreserveEnv []string
+	// CredentialEnvAliases projects a credential found under one of the source
+	// names onto the CLI-specific target name. It carries names only: the child
+	// firewall copies the opaque value after it has scrubbed the environment.
+	CredentialEnvAliases map[string][]string
 
 	// TakesPrompt reports whether the prompt goes on the command line. A steerable
 	// launch may open an EMPTY session (codex, opencode) and expect the first
@@ -140,8 +144,9 @@ func RenderWorkspace(argv []string, workspace string) ([]string, error) {
 const workspacePreflightPrompt = "Report the absolute current working directory or project directory. Do not modify files. Print exactly PWD=<absolute-path> and nothing else."
 
 type LaunchProfile struct {
-	Args       []string
-	UnsafeArgs []string
+	Args            []string
+	UnsafeArgs      []string
+	UnsafeArgsAfter bool
 }
 
 var SeededProfiles = map[string]LaunchProfile{
@@ -154,7 +159,7 @@ var SeededProfiles = map[string]LaunchProfile{
 	"claude":   {Args: []string{"-p"}, UnsafeArgs: []string{"--dangerously-skip-permissions"}},
 	"codex":    {Args: []string{"exec", "--skip-git-repo-check", "--sandbox", "workspace-write"}},
 	"agy":      {Args: []string{"--print-timeout", "40m", "-p"}, UnsafeArgs: []string{"--dangerously-skip-permissions"}},
-	"opencode": {Args: []string{"run"}, UnsafeArgs: []string{"--auto"}},
+	"opencode": {Args: []string{"run"}, UnsafeArgs: []string{"--auto"}, UnsafeArgsAfter: true},
 	"aider":    {Args: []string{"--no-git", "--message"}, UnsafeArgs: []string{"--yes-always"}},
 	"ycode":    {Args: []string{"prompt", "--print"}, UnsafeArgs: []string{"--danger-skip-permissions"}},
 }
@@ -199,8 +204,14 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 		lnch.Model, lnch.ModelName = modelName, modelName
 		if m, ok := cat.Model(modelName); ok {
 			lnch.Model, lnch.ModelName = m.TargetFor(toolName), m.Name
-			lnch.PreserveEnv = append(lnch.PreserveEnv,
-				secrets.CredentialEnvNames(tool.CredentialRefFor(m))...)
+			ref := tool.CredentialRefFor(m)
+			if target := tool.CLI.Launch.CredentialEnv[ref]; target != "" {
+				lnch.CredentialEnvAliases = map[string][]string{
+					target: secrets.CredentialEnvNames(ref),
+				}
+			} else {
+				lnch.PreserveEnv = append(lnch.PreserveEnv, secrets.CredentialEnvNames(ref)...)
+			}
 
 		}
 	}
@@ -326,7 +337,11 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 	base := append([]string{}, prof.Args...)
 	if len(prof.UnsafeArgs) > 0 {
 		if ok, _ := UnsafeLaunchAllowed(); ok {
-			base = append(append([]string{}, prof.UnsafeArgs...), base...)
+			if prof.UnsafeArgsAfter {
+				base = append(base, prof.UnsafeArgs...)
+			} else {
+				base = append(append([]string{}, prof.UnsafeArgs...), base...)
+			}
 		}
 	}
 	out, err := FinalizeArgs(toolName, base, opt)
