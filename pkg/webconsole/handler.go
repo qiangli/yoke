@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -483,7 +484,9 @@ func (s *server) panelHandler(p Panel) (http.Handler, func() error) {
 // when it is not running — a stopped tile that renders a connection-refused
 // stack trace teaches nothing.
 func (s *server) proxyTo(p Panel) http.Handler {
-	target := &url.URL{Scheme: "http", Host: "127.0.0.1:" + strconv.Itoa(p.Port)}
+	host := proxyHost(p)
+	endpoint := net.JoinHostPort(host, strconv.Itoa(p.Port))
+	target := &url.URL{Scheme: "http", Host: endpoint}
 	rp := httputil.NewSingleHostReverseProxy(target)
 
 	// The app must be able to build correct absolute URLs and correct redirects
@@ -530,7 +533,7 @@ func (s *server) proxyTo(p Panel) http.Handler {
 	rp.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusBadGateway)
-		msg := p.Label + " is not running on 127.0.0.1:" + strconv.Itoa(p.Port) + ".\n"
+		msg := p.Label + " is not running on " + endpoint + ".\n"
 		if hint := p.StartHint(); hint != "" {
 			msg += "Start it with:  " + hint + "\n"
 		}

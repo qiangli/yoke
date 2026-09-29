@@ -5,11 +5,15 @@ package webconsole
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -18,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/qiangli/yoke/external/loom"
 	"github.com/qiangli/yoke/pkg/atlas"
 	"github.com/qiangli/yoke/pkg/webterm"
 )
@@ -29,6 +34,9 @@ type Panel struct {
 	Path  string `json:"path"`  // app-relative path, always trailing-slashed
 	Mode  string `json:"mode"`  // atlas.WebSelf | WebInProcess | WebProxy
 	Port  int    `json:"port,omitempty"`
+	// ProxyHost is the host half for proxy panels. Empty means 127.0.0.1, which
+	// is the historical convention for atlas panels that only declare a port.
+	ProxyHost string `json:"-"`
 
 	// Start is the argv, after `bashy`, that starts a proxied service. It is the
 	// answer a stopped tile shows, so the reader never has to go find the
@@ -102,7 +110,136 @@ func builtinPanels() []Panel {
 		Mode: atlas.WebInProcess, Source: "builtin", Available: true,
 		Auth: AuthSystem,
 	}
-	return []Panel{term, files}
+	loomPanel := Panel{
+		Name: "loom", Label: "Loom", Path: "/loom/",
+		Mode: atlas.WebProxy, Port: loom.DefaultProxyPort,
+		Start: []string{"loom", "start"}, Icon: "M4 5h16M4 19h16M9 5v14M15 5v14M4 12h16",
+		Tip:    "Local git forge (Gitea): orgs, repos, sprint arenas",
+		Source: "builtin", Available: true, Auth: AuthSystem,
+	}
+	return []Panel{term, files, loomPanel, hostBuiltinPanel()}
+}
+
+var (
+	outpostAdminDefaultAddr = "127.0.0.1:17777"
+	outpostConfigShow       = readOutpostConfigShow
+	outpostAdminAddrMu      sync.Mutex
+	outpostAdminAddrCache   *resolvedOutpostAdminAddr
+)
+
+type resolvedOutpostAdminAddr struct {
+	host string
+	port int
+	note string
+}
+
+func hostBuiltinPanel() Panel {
+	p := Panel{
+		Name: "host", Label: "Host", Path: "/host/",
+		Mode: atlas.WebProxy, Icon: "M4 5h16v6H4zM4 13h16v6H4zM8 8h3M8 16h3",
+		Start: []string{"outpost", "service", "start"}, StartIsFull: true,
+		Tip:    "Outpost — this host's services and remote access",
+		Source: "builtin", Auth: AuthSystem,
+	}
+	host, port, note := resolveOutpostAdminAddr()
+	if note != "" {
+		p.Available = false
+		p.Note = note
+		return p
+	}
+	p.ProxyHost, p.Port, p.Available = host, port, true
+	return p
+}
+
+func resolveOutpostAdminAddr() (string, int, string) {
+	outpostAdminAddrMu.Lock()
+	if outpostAdminAddrCache != nil {
+		got := *outpostAdminAddrCache
+		outpostAdminAddrMu.Unlock()
+		return got.host, got.port, got.note
+	}
+	outpostAdminAddrMu.Unlock()
+
+	host, port, note := resolveOutpostAdminAddrUncached()
+	outpostAdminAddrMu.Lock()
+	outpostAdminAddrCache = &resolvedOutpostAdminAddr{host: host, port: port, note: note}
+	outpostAdminAddrMu.Unlock()
+	return host, port, note
+}
+
+func resolveOutpostAdminAddrUncached() (string, int, string) {
+	for _, candidate := range []struct {
+		source string
+		value  string
+	}{
+		{source: "$OUTPOST_ADMIN_ADDR", value: os.Getenv("OUTPOST_ADMIN_ADDR")},
+		{source: "outpost config show", value: configuredOutpostAdminAddr()},
+		{source: "default", value: outpostAdminDefaultAddr},
+	} {
+		addr := strings.TrimSpace(candidate.value)
+		if addr == "" {
+			continue
+		}
+		host, port, err := splitAdminAddr(addr)
+		if err != nil {
+			return "", 0, fmt.Sprintf("%s has unusable admin address %q: %v", candidate.source, addr, err)
+		}
+		return host, port, ""
+	}
+	return "", 0, "outpost admin address is not configured"
+}
+
+func resetOutpostAdminAddrCache() {
+	outpostAdminAddrMu.Lock()
+	outpostAdminAddrCache = nil
+	outpostAdminAddrMu.Unlock()
+}
+
+func configuredOutpostAdminAddr() string {
+	cfg, err := outpostConfigShow()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(cfg.AdminAddr)
+}
+
+type outpostConfig struct {
+	AdminAddr string `json:"admin_addr"`
+}
+
+func readOutpostConfigShow() (outpostConfig, error) {
+	cmd := exec.Command("outpost", "config", "show", "--json")
+	out, err := cmd.Output()
+	if err != nil {
+		return outpostConfig{}, err
+	}
+	var cfg outpostConfig
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		return outpostConfig{}, err
+	}
+	return cfg, nil
+}
+
+func splitAdminAddr(addr string) (string, int, error) {
+	if strings.Contains(addr, "://") {
+		u, err := url.Parse(addr)
+		if err != nil {
+			return "", 0, err
+		}
+		addr = u.Host
+	}
+	host, portText, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", 0, err
+	}
+	if host == "" {
+		return "", 0, errors.New("missing host")
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port <= 0 || port > 65535 {
+		return "", 0, fmt.Errorf("invalid port %q", portText)
+	}
+	return host, port, nil
 }
 
 // Discover returns the tile list: the console's own panels, every verb that
@@ -211,19 +348,19 @@ func (c *probeCache) Probe(ctx context.Context, panels []Panel) []Status {
 			out[i].Status = StatusReady
 		default:
 			wg.Add(1)
-			go func(i int, port int) {
+			go func(i int, host string, port int) {
 				defer wg.Done()
 				out[i].Status = StatusStopped
-				if port == 0 {
+				if host == "" || port == 0 {
 					return
 				}
 				d := net.Dialer{Timeout: 300 * time.Millisecond}
-				conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+				conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 				if err == nil {
 					_ = conn.Close()
 					out[i].Status = StatusReady
 				}
-			}(i, p.Port)
+			}(i, proxyHost(p), p.Port)
 		}
 	}
 	wg.Wait()
@@ -243,6 +380,13 @@ func TakenMounts(panels []Panel) map[string]bool {
 		}
 	}
 	return taken
+}
+
+func proxyHost(p Panel) string {
+	if p.ProxyHost != "" {
+		return p.ProxyHost
+	}
+	return "127.0.0.1"
 }
 
 // discoverApps turns --app specs into panels.
