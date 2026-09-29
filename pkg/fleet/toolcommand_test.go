@@ -273,3 +273,23 @@ func TestBaselineToolCommandsValidate(t *testing.T) {
 		}
 	}
 }
+
+// A print-mode codex command runs in whatever directory the caller names —
+// through the model door that is an X-Bashy-Workdir codex has never trusted.
+// Without --skip-git-repo-check codex exits 1 ("Not inside a trusted
+// directory") before reviewing anything (Sprint 324 S5 live smoke, 2026-09-29).
+func TestBaselineCodexCommandsSkipTrustCheck(t *testing.T) {
+	body, err := baselineFS.ReadFile("baseline/tools/codex.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool, err := ParseTool("codex", body, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range tool.Commands {
+		if c.Mode == ToolCommandPrint && strings.HasPrefix(c.Exec, "codex exec") && !strings.Contains(c.Exec, "--skip-git-repo-check") {
+			t.Errorf("codex:%s exec %q lacks --skip-git-repo-check", c.Name, c.Exec)
+		}
+	}
+}

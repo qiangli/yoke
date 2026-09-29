@@ -73,11 +73,14 @@ commands:
   # `codex exec review --json --uncommitted` on a 3-line toy git repo returned
   # outcome success in 24.4 s with a P1 finding. {args} is the caller's argv
   # verbatim (e.g. `-- --uncommitted` or `-- --base main "focus on auth"`).
-  # Like every codex exec it wants a git repo (run with --dir inside one).
+  # Like every codex exec it wants a git repo (run with --dir inside one), and
+  # like the tool's own exec: line it passes --skip-git-repo-check: the door
+  # runs it in an X-Bashy-Workdir codex has never trusted, where it otherwise
+  # exits 1 "Not inside a trusted directory" (measured 2026-09-29, S5 smoke).
   # slash: is the TUI spelling and the command's identity; it is not sent here.
   - name: review
     slash: /review {args}
     mode: print
     capability: code-review
     output: turn
-    exec: codex exec review --json {args}
+    exec: codex exec review --json --skip-git-repo-check {args}
