@@ -3,6 +3,7 @@ family: gpt-terra
 version: "5.6"
 band: 3
 band_source: declared
+band_season: 1
 # OpenAI: balanced agentic coding model for everyday work
 display: GPT-5.6 Terra
 provider: openai

@@ -6,6 +6,7 @@ family: kimi-code-highspeed
 version: "2.7"
 band: 2
 band_source: declared
+band_season: 1
 # declared: inherits kimi-k2.7-code's L2 (operator) peg — a serving tier is not
 # evidence of a different band. Seeded 2026-09-13.
 display: Kimi K2.7 Code (High-speed)

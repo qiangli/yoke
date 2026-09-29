@@ -8,6 +8,7 @@ display: codex-gpt-5.5 via the model door (sticky genie-gpt-5.5)
 # front of the model, not the model; no gate has run through the door yet.
 band: 4
 band_source: declared
+band_season: 1
 kind: api
 billing: flat_then_metered
 source: cloud

@@ -3,6 +3,7 @@ family: opus
 version: "5.5"
 band: 5
 band_source: declared
+band_season: 1
 # A PRIOR, not a measurement. Seeded 2026-09-29 as the successor of Opus 5
 # (Claude 5 family: Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 4.5). It inherits
 # opus5's L5 peg — itself `declared` and provisional — and a newer version

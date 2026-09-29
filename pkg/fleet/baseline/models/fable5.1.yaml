@@ -3,6 +3,7 @@ family: fable
 version: "5.1"
 band: 4
 band_source: declared
+band_season: 1
 # frontier — the current Anthropic flagship (Claude 5 family: Fable 5.1, Opus 5,
 # Sonnet 5, Haiku 4.5). Seeded 2026-09-13.
 display: Claude Fable 5.1

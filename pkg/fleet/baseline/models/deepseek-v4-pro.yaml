@@ -3,6 +3,7 @@ family: deepseek
 version: "4"
 band: 3
 band_source: measured
+band_season: 1
 # L3 CONFIRMED across two harnesses, both as a conductor.
 #   opencode (2026-07): 1.2x repeat ratio, decomposed and delegated unprompted — the L3
 #     signal glm-5.2 lacks (glm is L2 precisely because it cannot converge).

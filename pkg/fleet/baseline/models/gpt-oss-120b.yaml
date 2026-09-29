@@ -3,6 +3,7 @@ family: gpt-oss
 version: "120b"
 band: 2
 band_source: declared
+band_season: 1
 # declared and deliberately conservative. This is the MEDIUM reasoning variant of
 # an open-weights 120B — the only variant agy exposes — and no gated run on this
 # host has placed it. L2 is the "capable coder, unproven as a lead" rung, which
