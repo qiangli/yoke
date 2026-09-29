@@ -117,6 +117,7 @@ how a leaderboard stops describing agents.`,
 	cmd.Flags().StringVar(&dutyEvents, "events", "", "ladder event store path (default: the host ladder store)")
 	cmd.Flags().StringVar(&dutyLines, "lines", "", "JSON file of fitted rating lines; unfitted lines fail closed")
 	cmd.Flags().BoolVar(&dutyCost, "cost", false, "rating per dollar — informational, routing only, never promotes")
+	cmd.AddCommand(newLadderRecordCmd())
 	return cmd
 }
 
