@@ -123,7 +123,7 @@ func renderTable(w io.Writer, board Board) error {
 		fmt.Fprintf(w, "  %-28s %8s %7s %6s %8s\n", "agent", "wilson", "rate", "n", "repeat")
 		for _, s := range ranked {
 			fmt.Fprintf(w, "  %-28s %8.3f %6.0f%% %6d %8s\n",
-				s.Agent, s.WilsonLB, s.PassRate*100, s.GatedRuns, repeatCell(s))
+				s.Agent, s.WilsonLB, s.PassRate*100, s.GatedRuns, RepeatCell(s))
 		}
 		fmt.Fprintln(w)
 	}
@@ -131,7 +131,7 @@ func renderTable(w io.Writer, board Board) error {
 	if len(observed) > 0 {
 		fmt.Fprintln(w, "OBSERVED, NOT RANKED (too little evidence to order; alphabetical)")
 		for _, s := range observed {
-			fmt.Fprintf(w, "  %-28s %s\n", s.Agent, observedNote(s))
+			fmt.Fprintf(w, "  %-28s %s\n", s.Agent, ObservedNote(s))
 		}
 		fmt.Fprintln(w)
 	}
@@ -178,7 +178,7 @@ func renderMarkdown(w io.Writer, board Board, since time.Duration) error {
 		fmt.Fprintln(w, "|---|---|---|---|---|---|---|")
 		for i, s := range ranked {
 			fmt.Fprintf(w, "| %d | `%s` | **%.3f** | %.0f%% | %d | %s | %s |\n",
-				i+1, s.Agent, s.WilsonLB, s.PassRate*100, s.GatedRuns, repeatCell(s), costCell(s))
+				i+1, s.Agent, s.WilsonLB, s.PassRate*100, s.GatedRuns, RepeatCell(s), CostCell(s))
 		}
 		fmt.Fprintln(w)
 	}
@@ -195,7 +195,7 @@ func renderMarkdown(w io.Writer, board Board, since time.Duration) error {
 		fmt.Fprintln(w, "| agent | evidence |")
 		fmt.Fprintln(w, "|---|---|")
 		for _, s := range observed {
-			fmt.Fprintf(w, "| `%s` | %s |\n", s.Agent, observedNote(s))
+			fmt.Fprintf(w, "| `%s` | %s |\n", s.Agent, ObservedNote(s))
 		}
 		fmt.Fprintln(w)
 	}
@@ -231,26 +231,31 @@ func renderMarkdown(w io.Writer, board Board, since time.Duration) error {
 	return nil
 }
 
-// repeatCell renders loop discipline, and renders it as unknown when no
+// RepeatCell renders loop discipline, and renders it as unknown when no
 // events-mode record exists. Printing 0.0 would read as "no repetition", which
-// is the opposite of what an absent measurement means.
-func repeatCell(s Standing) string {
+// is the opposite of what an absent measurement means. Exported because the
+// bashy console's read-only projection must render the SAME cell — a second
+// formatter is how the app and the CLI drift apart.
+func RepeatCell(s Standing) string {
 	if s.RepeatSamples == 0 {
 		return "—"
 	}
 	return fmt.Sprintf("%.1f×", s.RepeatRatio)
 }
 
-func costCell(s Standing) string {
+// CostCell renders the relative cost index, em dash when no cost evidence
+// exists. Exported for the same reason as RepeatCell.
+func CostCell(s Standing) string {
 	if s.CostIndex <= 0 {
 		return "—"
 	}
 	return fmt.Sprintf("%.2f", s.CostIndex)
 }
 
-// observedNote says WHY a row is unranked, because "observed" alone leaves a
+// ObservedNote says WHY a row is unranked, because "observed" alone leaves a
 // reader guessing between "barely ran" and "ran a lot, before we recorded it".
-func observedNote(s Standing) string {
+// Exported for the same reason as RepeatCell.
+func ObservedNote(s Standing) string {
 	var parts []string
 	if s.GatedRuns > 0 {
 		parts = append(parts, fmt.Sprintf("%d/%d gated runs passed", s.Passes, s.GatedRuns))
