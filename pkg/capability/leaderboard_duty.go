@@ -457,6 +457,11 @@ func renderDutyCost(w io.Writer, events []ladder.Event, season int, duty ladder.
 	return nil
 }
 
+// RatedCost returns each agent's recorded cost over its rated events.
+func RatedCost(events []ladder.Event, season int) map[string]float64 {
+	return dutyRatedCost(events, season)
+}
+
 // dutyRatedCost sums each agent's recorded Cost over its RATED events through
 // the given season, honouring corrections. Unrated events (a delivery with an
 // unclassified failure, a cert, a seat) carry no rating and so no cost here.
