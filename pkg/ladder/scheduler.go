@@ -44,15 +44,18 @@ type Pick struct {
 }
 
 // ScheduleStory assigns a free entrant using currency, rating fit, then play-up.
+// Currency gives L4/L5 agents their two coding stories on L3-owned work only;
+// it cannot preempt L4/L5-owned work or assign a code matchup below 0.5 expected.
 func ScheduleStory(task StoryTask, pool []Entrant, lines Lines) Pick {
-	if task.Duty == DutyCode {
+	if task.Duty == DutyCode && task.Band == 3 {
 		best := -1
 		for i := range pool {
 			e := &pool[i]
 			if !e.Free || (e.Band != 4 && e.Band != 5) || e.CodingStoriesThisSeason >= CurrencyStoriesPerSeason {
 				continue
 			}
-			if _, ok := e.Standings[DutyCode]; !ok {
+			standing, ok := e.Standings[DutyCode]
+			if !ok || schedulerExpected(task, standing) < 0.5 {
 				continue
 			}
 			if best < 0 || e.CodingStoriesThisSeason < pool[best].CodingStoriesThisSeason ||
@@ -116,22 +119,8 @@ func SchedulePick(task StoryTask, pool []Entrant, lines Lines) Pick {
 }
 
 // ScheduleReviewer selects a free reviewer that dominates the author on code.
-// If the author is in pool, that entrant establishes the author's band.
-func ScheduleReviewer(author DutyStanding, authorVendor string, pool []Entrant) (Pick, bool) {
-	authorBand := 0
-	for _, e := range pool {
-		if e.Vendor == authorVendor && e.Standings[DutyCode] == author {
-			authorBand = e.Band
-			break
-		}
-	}
-	if authorBand == 0 {
-		for _, e := range pool {
-			if e.Band > 0 && (authorBand == 0 || e.Band < authorBand) {
-				authorBand = e.Band
-			}
-		}
-	}
+// It checks the author's band first, then one band higher, never below it.
+func ScheduleReviewer(author DutyStanding, authorBand int, authorVendor string, pool []Entrant) (Pick, bool) {
 	for band := authorBand; band <= authorBand+1; band++ {
 		best := -1
 		for i := range pool {

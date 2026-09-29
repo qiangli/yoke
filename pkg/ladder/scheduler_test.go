@@ -62,6 +62,26 @@ func TestScheduleStoryCurrencyAndPlayUp(t *testing.T) {
 	}
 }
 
+func TestScheduleStoryCurrencyOnlyForCodingBandAndViableMatch(t *testing.T) {
+	for _, band := range []int{4, 5} {
+		t.Run(fmt.Sprintf("band-%d", band), func(t *testing.T) {
+			task := StoryTask{Duty: DutyCode, Band: band, Rating: 1500}
+			currency := schedulerEntrant("currency", band, 1800, 50, 1)
+			fit := schedulerEntrant("fit", band, 1650, 50, 2)
+			fit.CodingStoriesThisSeason = CurrencyStoriesPerSeason
+			if got := ScheduleStory(task, []Entrant{currency, fit}, Lines{}); got.Agent != "fit" || got.Reason != "match" {
+				t.Fatalf("higher-band work should use rating fit: %+v", got)
+			}
+		})
+	}
+	task := StoryTask{Duty: DutyCode, Band: 3, Rating: 1800}
+	hopeless := schedulerEntrant("hopeless", 5, 1000, 50, 1)
+	fit := schedulerEntrant("fit", 3, 1900, 50, 2)
+	if got := ScheduleStory(task, []Entrant{hopeless, fit}, Lines{}); got.Agent != "fit" || got.Reason != "match" {
+		t.Fatalf("currency must skip hopeless mismatch: %+v", got)
+	}
+}
+
 func TestScheduleReviewer(t *testing.T) {
 	author := DutyStanding{R: 1600, RD: 50}
 	base := schedulerEntrant("author", 3, 1600, 50, 1)
@@ -72,19 +92,35 @@ func TestScheduleReviewer(t *testing.T) {
 	strong.Vendor = "same"
 	up := schedulerEntrant("up", 4, 1800, 50, 1)
 	up.Vendor = "other"
-	if got, ok := ScheduleReviewer(author, "same", []Entrant{base, weak, strong, up}); !ok || got.Agent != "strong" {
+	if got, ok := ScheduleReviewer(author, 3, "same", []Entrant{base, weak, strong, up}); !ok || got.Agent != "strong" {
 		t.Fatalf("same-band dominance: %+v %v", got, ok)
 	}
-	if got, ok := ScheduleReviewer(author, "same", []Entrant{base, weak, up}); !ok || got.Agent != "up" {
+	if got, ok := ScheduleReviewer(author, 3, "same", []Entrant{base, weak, up}); !ok || got.Agent != "up" {
 		t.Fatalf("escalation: %+v %v", got, ok)
 	}
-	if _, ok := ScheduleReviewer(author, "same", []Entrant{base, weak}); ok {
+	if _, ok := ScheduleReviewer(author, 3, "same", []Entrant{base, weak}); ok {
 		t.Fatal("review should refuse uphill")
 	}
 	other := schedulerEntrant("other", 3, 1700, 50, 10)
 	other.Vendor = "other"
-	if got, ok := ScheduleReviewer(author, "same", []Entrant{base, strong, other}); !ok || got.Agent != "other" {
+	if got, ok := ScheduleReviewer(author, 3, "same", []Entrant{base, strong, other}); !ok || got.Agent != "other" {
 		t.Fatalf("vendor preference: %+v %v", got, ok)
+	}
+}
+
+func TestScheduleReviewerUsesAuthorBandWithoutPoolEntry(t *testing.T) {
+	author := DutyStanding{R: 1600, RD: 50}
+	lower := schedulerEntrant("lower", 2, 1900, 50, 1)
+	same := schedulerEntrant("same", 3, 1700, 50, 2)
+	upper := schedulerEntrant("upper", 4, 1800, 50, 1)
+	if got, ok := ScheduleReviewer(author, 3, "author-vendor", []Entrant{lower, same, upper}); !ok || got.Agent != "same" {
+		t.Fatalf("absent author should prefer own band in mixed pool: %+v %v", got, ok)
+	}
+	if got, ok := ScheduleReviewer(author, 3, "author-vendor", []Entrant{lower, upper}); !ok || got.Agent != "upper" {
+		t.Fatalf("absent author should escalate one band: %+v %v", got, ok)
+	}
+	if got, ok := ScheduleReviewer(author, 3, "author-vendor", []Entrant{lower}); ok || got.Agent != "" {
+		t.Fatalf("must never choose below author band: %+v %v", got, ok)
 	}
 }
 
