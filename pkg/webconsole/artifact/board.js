@@ -938,8 +938,48 @@ async function load() {
   renderSprints(d);
   renderRunbooks();
   renderLanes(d);
+  renderLeaderboard();
   renderPanels(d);
   renderMeta(d);
+}
+
+// renderLeaderboard is `bashy leaderboard` as one read-only section: the
+// server calls the same Compute the CLI does, so this table can never disagree
+// with it. Three tiers, always shown — an empty tier says "none yet", because
+// a tier that silently vanishes is indistinguishable from one that was never
+// computed. Like everything on this page it writes nothing and touches no
+// lease, and a fetch failure degrades to a line here without breaking the rest
+// of the page.
+async function renderLeaderboard() {
+  const host = $("bd-leaderboard");
+  let d;
+  try {
+    const r = await fetch(url("api/sprint/leaderboard"));
+    d = await r.json();
+    if (!r.ok) throw new Error(d.error || "HTTP " + r.status);
+  } catch (e) {
+    host.replaceChildren(el("p", "empty", "leaderboard unavailable — " + String(e.message || e)));
+    return;
+  }
+  const card = el("article", "bd-sprint");
+  card.append(el("div", "meta", d.unavailable ||
+    d.records + " ledger records · " + d.agents + " agents · ranked at n>=" + d.min_samples));
+  // The provenance is not decoration: without it the ranked table reads as a
+  // benchmark claim, which these host-local numbers cannot carry.
+  if (d.provenance) card.append(el("div", "meta", d.provenance));
+  for (const tier of d.tiers || []) {
+    card.append(el("div", "story-group", tier.title + (tier.note ? " — " + tier.note : "")));
+    if ((tier.rows || []).length) {
+      card.append(table(tier.columns, tier.rows));
+    } else {
+      card.append(el("p", "empty", "none yet"));
+    }
+  }
+  if (d.pre_ledger_agents) {
+    card.append(el("div", "meta", d.pre_ledger_agents +
+      " agent(s) carry matrix evidence predating the run ledger — observed, never ranked (a recording gap, not a performance one)"));
+  }
+  host.replaceChildren(card);
 }
 
 // runbookDetail fetches ONE runbook page, cached per slug like storyDetail:

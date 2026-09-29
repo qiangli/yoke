@@ -400,6 +400,9 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 		// can cite — read-only, one list and one body (panel_runbooks.go).
 		mux.HandleFunc("GET /api/sprint/runbooks", s.handleRunbooks)
 		mux.HandleFunc("GET /api/sprint/runbook/{slug}", s.handleRunbook)
+		// The leaderboard: `bashy leaderboard`'s Compute, projected verbatim —
+		// read-only like its siblings (panel_leaderboard.go).
+		mux.HandleFunc("GET /api/sprint/leaderboard", s.handleLeaderboard)
 	}
 
 	closers := []func() error{}
