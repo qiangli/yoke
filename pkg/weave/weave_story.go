@@ -628,6 +628,7 @@ branches, worktrees, and weave workspaces owned by this sprint.`,
 		newWeaveConductCmd(),
 	)
 
+	cmd.AddCommand(newSprintGradeCommands()...)
 	// Positional-argument half. Must follow AddCommand: it walks
 	// root.Commands() to wrap each subverb's Args validator, so a
 	// subcommand added afterwards would not be covered.
