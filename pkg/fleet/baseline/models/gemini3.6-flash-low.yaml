@@ -3,6 +3,7 @@ family: gemini-flash-low
 version: "3.6"
 band: 1
 band_source: declared
+band_season: 1
 display: Gemini 3.6 Flash (Low)
 provider: gemini
 kind: subscription

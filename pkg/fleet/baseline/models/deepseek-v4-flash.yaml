@@ -3,6 +3,7 @@ family: deepseek-flash
 version: "4"
 band: 2
 band_source: declared
+band_season: 1
 display: DeepSeek V4 Flash
 provider: openai-compat
 kind: api

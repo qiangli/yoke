@@ -53,6 +53,24 @@ func TestEmbeddedSeedsResolve(t *testing.T) {
 	}
 }
 
+// Sprint #328 story #1195: the two-season peg expiry runs on model.band_season,
+// so every embedded peg must carry its season. A peg with no season is
+// unclocked: it holds forever and never expires once an operator advances
+// ladder.yaml.
+func TestEmbeddedPegsCarryASeason(t *testing.T) {
+	c := New(WithRoot(t.TempDir()), WithoutCloudOverlay())
+
+	models, errs := c.Models()
+	if len(errs) != 0 {
+		t.Fatalf("seed models parse: %v", errs)
+	}
+	for _, m := range models {
+		if m.Band > 0 && m.BandSeason <= 0 {
+			t.Errorf("model %q band L%d has no band_season — an unclocked peg never expires", m.Name, m.Band)
+		}
+	}
+}
+
 // BASHY_FLEET_SEEDS=off drops the seeded roster and nothing else: the tool
 // launch contracts are the mechanism and stay embedded. This is the switch
 // fleettest.Ring relies on, and what an org that publishes its own catalog

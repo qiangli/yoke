@@ -3,6 +3,7 @@ family: kimi
 version: "3"
 band: 2
 band_source: measured
+band_season: 1
 # MEASURED 2026-07-16, first bake-off (ycode harness, 420s/arm — generous for a
 # reasoner). Released the same day (Moonshot): 2.8T sparse MoE, 1M context, native
 # vision; Arena put it above Fable 5 / GPT-5.6 Sol on front-end coding. It is a

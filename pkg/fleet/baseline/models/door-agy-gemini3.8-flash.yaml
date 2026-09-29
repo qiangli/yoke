@@ -8,6 +8,7 @@ display: agy-gemini3.8-flash via the model door (sticky genie-gemini3.8-flash)
 # front of the model, not the model; no gate has run through the door yet.
 band: 2
 band_source: declared
+band_season: 1
 kind: api
 billing: flat_then_metered
 source: cloud

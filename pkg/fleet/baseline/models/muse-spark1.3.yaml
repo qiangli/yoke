@@ -3,6 +3,7 @@ family: muse-spark
 version: "1.3"
 band: 4
 band_source: measured
+band_season: 1
 # L4 MEASURED 2026-09-28 on agent-bench (github.com/qiangli/agent-bench), Muse Code
 # 1.3.0 launched through `bashy chat -i --yolo`, steered with `bashy chat steer`,
 # K=3 per task, a task scores its WORST run, pass line 6.0 (plan §8.4).

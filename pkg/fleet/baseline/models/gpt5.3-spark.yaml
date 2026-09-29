@@ -3,6 +3,7 @@ family: gpt-spark
 version: "5.3"
 band: 1
 band_source: declared
+band_season: 1
 display: GPT-5.3 Codex Spark
 provider: openai
 kind: subscription

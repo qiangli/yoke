@@ -3,6 +3,7 @@ family: gpt-astra
 version: "6"
 band: 5
 band_source: declared
+band_season: 1
 # A PRIOR, not a measurement. Seeded 2026-09-29 from codex's own model list
 # (priority 1, "Frontier intelligence for the most demanding work"). OpenAI's
 # new top tier above Sol; it takes the frontier peg (L5) that gpt5.6-sol held

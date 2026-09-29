@@ -3,6 +3,7 @@ family: kimi
 version: "2.6"
 band: 2
 band_source: operator
+band_season: 1
 # operator: coder
 display: Kimi K2.6
 provider: openai-compat

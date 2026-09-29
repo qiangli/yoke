@@ -3,6 +3,7 @@ family: sonnet
 version: "5.5"
 band: 2
 band_source: declared
+band_season: 1
 # A PRIOR, not a measurement. Seeded 2026-09-29 as the successor of Sonnet 5;
 # it inherits sonnet5's L2 peg. The `sonnet` family alias re-points to 5.5.
 display: Claude Sonnet 5.5

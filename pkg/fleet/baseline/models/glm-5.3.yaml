@@ -3,6 +3,7 @@ family: glm
 version: "5.3"
 band: 3
 band_source: measured
+band_season: 1
 # L3 MEASURED 2026-08-19. GLM-5.3 fixed the convergence failure that kept 5.2
 # at L2: the deciding integration-lead exam finished in 121.648s under a 480s
 # cap, made 10 tool calls with 10 exact-distinct signatures (1.00x repeat

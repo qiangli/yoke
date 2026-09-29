@@ -3,6 +3,7 @@ family: sonnet
 version: "4.6"
 band: 2
 band_source: declared
+band_season: 1
 # Banded by family position (sonnet = L2 on the claude ladder), not by any run
 # on this host.
 display: Claude Sonnet 4.6 (Thinking)
