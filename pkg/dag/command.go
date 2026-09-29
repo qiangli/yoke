@@ -235,10 +235,11 @@ routes any agentic tool to these targets through bashy dag.`,
 			if concurrency < 1 {
 				concurrency = 1
 			}
-			// CI log grouping: explicit --output-group, or auto-on under GitHub
-			// Actions. Suppressed in JSON mode, which emits a single envelope.
-			outputGroup := (outGroupF || os.Getenv("GITHUB_ACTIONS") == "true") &&
-				mode != weavecli.OutputJSON
+			// CI log grouping: explicit --output-group, or auto-on for parallel
+			// GitHub Actions runs. Serial runs stream live by default, including
+			// through pipes, so long targets do not look hung to watchers.
+			autoGroup := os.Getenv("GITHUB_ACTIONS") == "true" && concurrency > 1
+			outputGroup := (outGroupF || autoGroup) && mode != weavecli.OutputJSON
 			// Body env: process env, then frontmatter vars (so ${HOST} etc. are
 			// available to bodies, not just metadata), then CLI overrides (win).
 			bodyEnv := os.Environ()

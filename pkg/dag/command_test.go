@@ -6,12 +6,55 @@ package dag
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
+
+type streamingRecorder struct {
+	ch chan string
+	b  bytes.Buffer
+}
+
+func newStreamingRecorder() *streamingRecorder {
+	return &streamingRecorder{ch: make(chan string, 8)}
+}
+
+func (w *streamingRecorder) Write(p []byte) (int, error) {
+	n, err := w.b.Write(p)
+	for {
+		s := w.b.String()
+		i := strings.IndexByte(s, '\n')
+		if i < 0 {
+			return n, err
+		}
+		select {
+		case w.ch <- s[:i+1]:
+		default:
+		}
+		w.b.Reset()
+		w.b.WriteString(s[i+1:])
+	}
+}
+
+func (w *streamingRecorder) waitLine(t *testing.T, timeout time.Duration) string {
+	t.Helper()
+	select {
+	case line := <-w.ch:
+		return line
+	case <-time.After(timeout):
+		t.Fatalf("timed out waiting for streamed line; output so far:\n%s", w.String())
+		return ""
+	}
+}
+
+func (w *streamingRecorder) String() string {
+	return w.b.String()
+}
 
 func writeDAG(t *testing.T, md string) string {
 	t.Helper()
@@ -355,6 +398,136 @@ func TestCommandOutputGroup(t *testing.T) {
 	}
 	if ob := strings.Index(s, "OUT-B"); ob < gb {
 		t.Errorf("OUT-B not inside group b\n%s", s)
+	}
+}
+
+func TestRunStreamsTargetOutputBeforeTheTargetEnds(t *testing.T) {
+	t.Setenv("GITHUB_ACTIONS", "true")
+	path := writeDAG(t, "## Tasks\n\n### slow\n"+block("bash", "echo start\nsleep 0.2\necho end"))
+
+	out := newStreamingRecorder()
+	errOut := new(bytes.Buffer)
+	cmd := NewDagCmd()
+	cmd.SetOut(out)
+	cmd.SetErr(errOut)
+	cmd.SetArgs([]string{"--plain", "--file", path, "slow"})
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Execute() }()
+
+	if line := out.waitLine(t, 100*time.Millisecond); line != "start\n" {
+		t.Fatalf("first line = %q, want start before target ends; output so far:\n%s", line, out.String())
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("target finished before streaming assertion; err=%v output=%q", err, out.String())
+	default:
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("Execute: %v (stderr=%s)", err, errOut.String())
+	}
+}
+
+func TestRunStreamsThroughAPipe(t *testing.T) {
+	t.Setenv("GITHUB_ACTIONS", "true")
+	path := writeDAG(t, "## Tasks\n\n### slow\n"+block("bash", "echo start\nsleep 0.2\necho end"))
+
+	pr, pw := io.Pipe()
+	errOut := new(bytes.Buffer)
+	cmd := NewDagCmd()
+	cmd.SetOut(pw)
+	cmd.SetErr(errOut)
+	cmd.SetArgs([]string{"--plain", "--file", path, "slow"})
+
+	done := make(chan error, 1)
+	go func() {
+		err := cmd.Execute()
+		_ = pw.Close()
+		done <- err
+	}()
+
+	lineCh := make(chan string, 1)
+	go func() {
+		var b []byte
+		buf := make([]byte, 1)
+		for {
+			n, err := pr.Read(buf)
+			if n > 0 {
+				b = append(b, buf[:n]...)
+				if buf[0] == '\n' {
+					lineCh <- string(b)
+					_, _ = io.Copy(io.Discard, pr)
+					return
+				}
+			}
+			if err != nil {
+				lineCh <- string(b)
+				return
+			}
+		}
+	}()
+
+	select {
+	case line := <-lineCh:
+		if line != "start\n" {
+			t.Fatalf("first piped line = %q, want start", line)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for first line through pipe")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("target finished before pipe streaming assertion; err=%v", err)
+	default:
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("Execute: %v (stderr=%s)", err, errOut.String())
+	}
+}
+
+func TestParallelTargetsStayGrouped(t *testing.T) {
+	t.Setenv("GITHUB_ACTIONS", "true")
+	dir := t.TempDir()
+	p := filepath.Join(dir, "DAG.md")
+	md := "## Tasks\n\n" +
+		"### a\n" + block("bash", "echo OUT-A") +
+		"### b\n" + block("bash", "echo OUT-B")
+	if err := os.WriteFile(p, []byte(md), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewDagCmd()
+	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
+	cmd.SetOut(out)
+	cmd.SetErr(errOut)
+	cmd.SetArgs([]string{"-j", "2", "--plain", "--file", p, "a", "b"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v (stderr=%s)", err, errOut.String())
+	}
+
+	s := out.String()
+	if g := strings.Count(s, "::group::"); g != 2 {
+		t.Fatalf("want 2 ::group:: markers, got %d\n%s", g, s)
+	}
+	if e := strings.Count(s, "::endgroup::"); e != 2 {
+		t.Fatalf("want 2 ::endgroup:: markers, got %d\n%s", e, s)
+	}
+	ga := strings.Index(s, "::group::a")
+	gb := strings.Index(s, "::group::b")
+	if ga < 0 || gb < 0 {
+		t.Fatalf("missing group markers:\n%s", s)
+	}
+	ea := strings.Index(s[ga:], "::endgroup::")
+	eb := strings.LastIndex(s, "::endgroup::")
+	if ea < 0 || eb < 0 {
+		t.Fatalf("missing end group markers:\n%s", s)
+	}
+	ea += ga
+	if oa := strings.Index(s, "OUT-A"); oa < ga || oa > ea {
+		t.Fatalf("OUT-A not inside group a:\n%s", s)
+	}
+	if ob := strings.Index(s, "OUT-B"); ob < gb || ob > eb {
+		t.Fatalf("OUT-B not inside group b:\n%s", s)
 	}
 }
 
