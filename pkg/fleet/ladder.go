@@ -481,17 +481,16 @@ func seedOf(e LadderEntry) *SeedStatus {
 // judgeSeed decides whether a peg still sets the band.
 //
 // A seed stops at the first of: the gates confirm it (derived ≥ seed), it
-// expires (SeatSeasons after it was set), or — for a declared prior only —
-// the ratings its band gates on are all established, so evidence can speak.
-// An operator or provisional seat holds until confirmed or expired: the owner
-// seated it on purpose and gave the gates a fixed time to agree.
+// expires (SeatSeasons after it was set), or the ratings its band gates on are
+// all established, so evidence can speak. Provisional seats hold until
+// confirmed or expired to preserve their bootstrap period.
 func judgeSeed(seed *SeedStatus, ev *ladderEval, derived, season int) {
 	switch {
 	case derived >= seed.Band:
 		seed.Reason = "confirmed by the gates"
 	case season > 0 && seed.Season > 0 && season-seed.Season >= SeatSeasons:
 		seed.Reason = fmt.Sprintf("expired: seated season %d, expired from season %d", seed.Season, seed.Season+SeatSeasons)
-	case seed.Source == BandDeclared && dutiesEstablished(ev.entry.Agent.Ratings, seed.Band):
+	case seed.Source != SeatProvisional && dutiesEstablished(ev.entry.Agent.Ratings, seed.Band):
 		seed.Reason = "yielded to established ratings"
 	default:
 		seed.Active = true

@@ -251,33 +251,40 @@ func TestDeclaredPegIsASeedThatYieldsAndExpires(t *testing.T) {
 	}
 }
 
-// An operator or provisional seat holds even against established ratings —
-// the owner seated it on purpose — but only until it expires.
-func TestSeatsHoldUntilExpiryOrConfirmation(t *testing.T) {
-	for _, src := range []string{BandOperator, SeatProvisional} {
-		t.Run(src, func(t *testing.T) {
-			e := l3Entry("a", 1700)
-			e.Agent.Ratings.Manage = rated(1500, 50, 10)
-			e.Agent.Ratings.Judge = rated(1500, 50, 10)
-			e.Agent.Seat = &Seat{Band: 5, Source: src, Season: 9}
-			s := DeriveStandings([]LadderEntry{e}, testLadder())[0]
-			if s.Band != 5 || s.Source != src || s.Derived != 3 {
-				t.Fatalf("band L%d %q derived L%d; want seated L5 over derived L3", s.Band, s.Source, s.Derived)
-			}
-			l := testLadder()
-			l.Season = 11
-			// Seated in 9, the seat expires from 11; the season-10 certificates
-			// still hold, so the agent drops to its derived L3.
-			if s := DeriveStandings([]LadderEntry{e}, l)[0]; s.Band != 3 || s.Seed.Active {
-				t.Fatalf("season 11: band L%d seed %+v; want the seat expired to derived L3", s.Band, s.Seed)
-			}
-		})
-	}
-	// Confirmation: once derived reaches the seat, the band is derived.
+// Operator seats are rating seeds: once the target band's duties are
+// established, evidence can speak. Provisional seats retain their bootstrap
+// hold until confirmed or expired.
+func TestOperatorSeatYieldsToEstablishedRatings(t *testing.T) {
 	e := l3Entry("a", 1700)
-	e.Agent.Seat = &Seat{Band: 3, Source: BandOperator, Season: 10}
+	e.Agent.Ratings.Manage = rated(1500, 50, 10)
+	e.Agent.Seat = &Seat{Band: 4, Source: BandOperator, Season: 9}
+	s := DeriveStandings([]LadderEntry{e}, testLadder())[0]
+	if s.Band != s.Derived || s.Source != BandDerived || s.Seed.Active || s.Seed.Reason != "yielded to established ratings" {
+		t.Fatalf("band L%d %q derived L%d seed %+v; want operator seed yielded to derived band", s.Band, s.Source, s.Derived, s.Seed)
+	}
+}
+
+func TestProvisionalSeatHoldsUntilExpiryOrConfirmation(t *testing.T) {
+	e := l3Entry("a", 1700)
+	e.Agent.Ratings.Manage = rated(1500, 50, 10)
+	e.Agent.Ratings.Judge = rated(1500, 50, 10)
+	e.Agent.Seat = &Seat{Band: 5, Source: SeatProvisional, Season: 9}
+	s := DeriveStandings([]LadderEntry{e}, testLadder())[0]
+	if s.Band != 5 || s.Source != SeatProvisional || s.Derived != 3 || !s.Seed.Active {
+		t.Fatalf("band L%d %q derived L%d seed %+v; want provisional L5 held over derived L3", s.Band, s.Source, s.Derived, s.Seed)
+	}
+	l := testLadder()
+	l.Season = 11
+	// Seated in 9, the seat expires from 11; season-10 certificates still
+	// hold, so the agent drops to its derived L3.
+	if s := DeriveStandings([]LadderEntry{e}, l)[0]; s.Band != 3 || s.Seed.Active {
+		t.Fatalf("season 11: band L%d seed %+v; want the provisional seat expired to derived L3", s.Band, s.Seed)
+	}
+	// A provisional seat also clears when the gates confirm it.
+	e = l3Entry("a", 1700)
+	e.Agent.Seat = &Seat{Band: 3, Source: SeatProvisional, Season: 10}
 	if s := DeriveStandings([]LadderEntry{e}, testLadder())[0]; s.Source != BandDerived || s.Seed.Active {
-		t.Fatalf("confirmed seat: source %q seed %+v; want derived", s.Source, s.Seed)
+		t.Fatalf("confirmed provisional seat: source %q seed %+v; want derived", s.Source, s.Seed)
 	}
 }
 
