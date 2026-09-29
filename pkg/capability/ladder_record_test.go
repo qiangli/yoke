@@ -3,9 +3,14 @@ package capability
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
+	"testing/fstest"
 
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/ladder"
 )
 
@@ -314,5 +319,159 @@ func TestLadderRecordIDsUnique(t *testing.T) {
 			t.Fatalf("duplicate event id %q", e.ID)
 		}
 		seen[e.ID] = true
+	}
+}
+
+// ladderSeedFleet pins newCatalog to a scratch fleet: model-x is bound under
+// two tools (plus a clone that must not be seeded), model-q has no seedfit row,
+// and the seedfit TSV names model-y, which no agent is bound to.
+func ladderSeedFleet(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	cat := fleet.New(fleet.WithRoot(root), fleet.WithBaselineFS(fstest.MapFS{}))
+	for _, tool := range []string{"tool-a", "tool-b", "tool-c"} {
+		if err := cat.SaveTool(fleet.Tool{Name: tool}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, m := range []fleet.Model{
+		{Name: "model-x1", Aliases: []string{"model-x"}},
+		{Name: "model-q"},
+	} {
+		if err := cat.SaveModel(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, a := range []fleet.Agent{
+		{Name: "a-x", Tool: "tool-a", Model: "model-x1"},
+		{Name: "a-x-nick", Tool: "tool-a", Model: "model-x1"},
+		{Name: "b-x", Tool: "tool-b", Model: "model-x1"},
+		{Name: "c-q", Tool: "tool-c", Model: "model-q"},
+		{Name: "a-x-2", Tool: "tool-a", Model: "model-x1", ClonedFrom: "a-x", ClonedAt: "2026-09-01T00:00:00Z"},
+	} {
+		if err := cat.SaveAgent(a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prev := newCatalog
+	newCatalog = func() *fleet.Catalog {
+		return fleet.New(fleet.WithRoot(root), fleet.WithBaselineFS(fstest.MapFS{}))
+	}
+	t.Cleanup(func() { newCatalog = prev })
+
+	tsv := "# method: test\n# skipped: \n" +
+		"model\tvendor\ttheta\tlo90\thi90\tn\tcode_rating\trd\tplacement\tadjusted\n" +
+		"model-x\tvendor-a\t0.500\t0.100\t0.900\t12\t1700\t90\tL3\tfalse\n" +
+		"model-y\tvendor-b\t-0.200\t-0.600\t0.200\t4\t1420\t210\tL2\tfalse\n"
+	path := filepath.Join(t.TempDir(), "seedfit.tsv")
+	if err := os.WriteFile(path, []byte(tsv), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func ladderSeedAgents(events []ladder.Event) []string {
+	var got []string
+	for _, e := range events {
+		got = append(got, e.Agent)
+	}
+	sort.Strings(got)
+	return got
+}
+
+func TestLadderRecordSeedImportMapsModelsToAgents(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	tsv := ladderSeedFleet(t)
+	out := ladderRecordMust(t, "record", "seed", "--from-seedfit", tsv)
+	events := ladderRecordStore(t)
+	// Two tools bind model-x (by alias in the TSV); the nickname collapses
+	// onto its binding and the clone is skipped.
+	if got := ladderSeedAgents(events); strings.Join(got, ",") != "tool-a:model-x1,tool-b:model-x1" {
+		t.Fatalf("seeded agents = %v\n%s", got, out)
+	}
+	for _, e := range events {
+		if e.Kind != ladder.EventKindSeed || e.Duty != ladder.DutyCode || e.SeedR != 1700 || e.SeedRD != 90 || e.Season != 1 {
+			t.Errorf("seed event = %+v", e)
+		}
+		if e.ID == "" || !strings.Contains(out, e.ID) {
+			t.Errorf("summary does not carry event id %q:\n%s", e.ID, out)
+		}
+	}
+	for _, want := range []string{"agents seeded: 2", "seedfit models with no fleet agent: model-y", "fleet agents with no seedfit row: tool-c:model-q"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("summary missing %q:\n%s", want, out)
+		}
+	}
+	// The imported seed is the agent's starting code rating.
+	res := ladder.Replay(events, 1)
+	if r := res.Agents["tool-a:model-x1"].Standings[ladder.DutyCode].R; r < 1699 || r > 1701 {
+		t.Errorf("replayed seed R = %v, want ~1700", r)
+	}
+}
+
+func TestLadderRecordSeedToolFilters(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	tsv := ladderSeedFleet(t)
+	ladderRecordMust(t, "record", "seed", "--from-seedfit", tsv, "--tool", "tool-b")
+	if got := ladderSeedAgents(ladderRecordStore(t)); strings.Join(got, ",") != "tool-b:model-x1" {
+		t.Fatalf("--tool seeded %v", got)
+	}
+
+	t.Setenv("BASHY_HOME", t.TempDir())
+	ladderRecordMust(t, "record", "seed", "--from-seedfit", tsv, "--tool-map", "model-x=tool-a,model-x=tool-b")
+	if got := ladderSeedAgents(ladderRecordStore(t)); strings.Join(got, ",") != "tool-a:model-x1,tool-b:model-x1" {
+		t.Fatalf("--tool-map seeded %v", got)
+	}
+
+	t.Setenv("BASHY_HOME", t.TempDir())
+	ladderRecordMust(t, "record", "seed", "--from-seedfit", tsv, "--tool-map", "model-x=tool-a")
+	if got := ladderSeedAgents(ladderRecordStore(t)); strings.Join(got, ",") != "tool-a:model-x1" {
+		t.Fatalf("--tool-map seeded %v", got)
+	}
+	if _, err := ladderRecordRun(t, "record", "seed", "--from-seedfit", tsv, "--tool-map", "model-x"); err == nil {
+		t.Error("malformed --tool-map accepted")
+	}
+}
+
+func TestLadderRecordSeedDryRunWritesNothing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BASHY_HOME", home)
+	tsv := ladderSeedFleet(t)
+	out := ladderRecordMust(t, "record", "seed", "--from-seedfit", tsv, "--dry-run")
+	if !strings.Contains(out, "tool-a:model-x1") || !strings.Contains(out, "dry run") {
+		t.Errorf("dry run output:\n%s", out)
+	}
+	if _, err := os.Stat(ladder.DefaultStorePath()); !os.IsNotExist(err) {
+		t.Fatalf("dry run touched the store: %v", err)
+	}
+}
+
+func TestLadderRecordSeedManual(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	out := ladderRecordMust(t, "record", "seed", "--agent", "tool-a:model-a", "--duty", "judge",
+		"--r", "1600", "--rd", "120", "--reason", "owner prior")
+	events := ladderRecordStore(t)
+	if len(events) != 1 {
+		t.Fatalf("want 1 event, got %d", len(events))
+	}
+	e := events[0]
+	if e.Kind != ladder.EventKindSeed || e.Agent != "tool-a:model-a" || e.Duty != ladder.DutyJudge ||
+		e.SeedR != 1600 || e.SeedRD != 120 || e.Note != "owner prior" {
+		t.Fatalf("event = %+v", e)
+	}
+	if !strings.Contains(out, e.ID) {
+		t.Errorf("confirmation %q lacks id %q", out, e.ID)
+	}
+	for _, bad := range [][]string{
+		{"--agent", "tool-a:model-a", "--duty", "judge", "--r", "1600"},                          // no reason
+		{"--agent", "tool-a:model-a", "--duty", "sing", "--r", "1600", "--reason", "x"},          // bad duty
+		{"--agent", "model-a", "--r", "1600", "--reason", "x"},                                   // not tool:model
+		{"--agent", "tool-a:model-a", "--reason", "x"},                                           // no rating
+		{"--agent", "tool-a:model-a", "--r", "1600", "--reason", "x", "--from-seedfit", "f.tsv"}, // both modes
+		{}, // neither
+	} {
+		if _, err := ladderRecordRun(t, append([]string{"record", "seed"}, bad...)...); err == nil {
+			t.Errorf("accepted %v", bad)
+		}
 	}
 }

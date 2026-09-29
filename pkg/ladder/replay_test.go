@@ -195,3 +195,61 @@ func TestReplayAgentFailureRatesImplementerOnly(t *testing.T) {
 	want := Update(NewRating(), []Result{{Opponent: Rating{R: s.Rating.R, RD: 50}, Score: 1 - EstimatePenalty(miss)}}, DefaultTau)
 	eventTestClose(t, got.Agents["judge-a"].Standings[DutyJudge].R, want.R)
 }
+
+func eventTestSeed(id, agent string, duty Duty, at time.Time, r, rd float64) Event {
+	return Event{ID: id, At: at, Season: 1, Kind: EventKindSeed, Agent: agent, Duty: duty, SeedR: r, SeedRD: rd}
+}
+
+// A seed replaces NewRating as the agent's starting point for its duty, with
+// the RD floored at 150, and never counts as a rated event.
+func TestReplaySeedIsStartingRating(t *testing.T) {
+	seed := eventTestSeed("s", "agent-a", DutyCode, eventTestAt(1), 1700, 60)
+	a := eventTestDelivery("a", "agent-a", "story-a", 1, 1)
+	a.At = eventTestAt(2)
+	got := Replay([]Event{seed, a}, 1)
+	start := Rating{R: 1700, RD: SeedRDFloor, Vol: InitialVol}
+	want := Update(start, []Result{{Opponent: Rating{R: 1450, RD: InitialRD, Vol: InitialVol}, Score: 1}}, DefaultTau)
+	standing := got.Agents["agent-a"].Standings[DutyCode]
+	eventTestClose(t, standing.R, want.R)
+	eventTestClose(t, standing.RD, want.RD)
+	if standing.Events != 1 {
+		t.Fatalf("seed counted as an event: %+v", standing)
+	}
+	// The story played the seeded agent, not a default one.
+	storyWant := Update(Rating{R: 1450, RD: InitialRD, Vol: InitialVol}, []Result{{Opponent: start, Score: 0}}, DefaultTau)
+	eventTestClose(t, got.Stories["story-a"].Rating.R, storyWant.R)
+	// Other duties are untouched by a code seed.
+	if m := got.Agents["agent-a"].Standings[DutyManage]; m.R != Update(NewRating(), nil, DefaultTau).R {
+		t.Fatalf("manage standing moved by a code seed: %+v", m)
+	}
+}
+
+func TestReplaySeedAloneAndRDAboveFloor(t *testing.T) {
+	seed := eventTestSeed("s", "agent-a", DutyJudge, eventTestAt(1), 1600, 200)
+	got := Replay([]Event{seed}, 2)
+	a := got.Agents["agent-a"]
+	if a == nil {
+		t.Fatal("seeded agent missing")
+	}
+	want := Update(Update(Rating{R: 1600, RD: 200, Vol: InitialVol}, nil, DefaultTau), nil, DefaultTau)
+	s := a.Standings[DutyJudge]
+	eventTestClose(t, s.R, want.R)
+	eventTestClose(t, s.RD, want.RD)
+	if s.Events != 0 || a.Unrated != 0 {
+		t.Fatalf("seed counted: %+v", a)
+	}
+}
+
+func TestReplayLaterSeedWins(t *testing.T) {
+	late := eventTestSeed("late", "agent-a", DutyCode, eventTestAt(3), 1800, 150)
+	early := eventTestSeed("early", "agent-a", DutyCode, eventTestAt(2), 1300, 150)
+	// Input order must not matter: the latest At wins.
+	got := Replay([]Event{late, early}, 1)
+	want := Update(Rating{R: 1800, RD: 150, Vol: InitialVol}, nil, DefaultTau)
+	eventTestClose(t, got.Agents["agent-a"].Standings[DutyCode].R, want.R)
+	// A corrected seed is gone, and the earlier one stands.
+	fix := Event{ID: "fix", At: eventTestAt(4), Season: 1, Kind: EventKindCorrection, Agent: "reviewer", Supersedes: "late"}
+	got = Replay([]Event{late, early, fix}, 1)
+	want = Update(Rating{R: 1300, RD: 150, Vol: InitialVol}, nil, DefaultTau)
+	eventTestClose(t, got.Agents["agent-a"].Standings[DutyCode].R, want.R)
+}

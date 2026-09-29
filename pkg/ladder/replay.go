@@ -75,6 +75,31 @@ func replaySortedResults(items []replayRated) []Result {
 	return results
 }
 
+// SeedRDFloor is the smallest deviation a seed may start with. Public-data
+// seeds are priors that must lose to evidence quickly, so a seed never claims
+// more certainty than this (manager decision recorded on Sprint #331).
+const SeedRDFloor = 150.0
+
+// replaySeeds collects each agent's starting rating per duty from the active
+// seed events. Items are in At order, so a later seed replaces an earlier one.
+func replaySeeds(active []replayItem) map[string]map[Duty]Rating {
+	seeds := make(map[string]map[Duty]Rating)
+	for _, item := range active {
+		e := item.event
+		if e.Kind != EventKindSeed || e.Agent == "" || e.SeedR <= 0 {
+			continue
+		}
+		if e.Duty != DutyCode && e.Duty != DutyManage && e.Duty != DutyJudge {
+			continue
+		}
+		if seeds[e.Agent] == nil {
+			seeds[e.Agent] = make(map[Duty]Rating)
+		}
+		seeds[e.Agent][e.Duty] = Rating{R: e.SeedR, RD: math.Max(e.SeedRD, SeedRDFloor), Vol: InitialVol}
+	}
+	return seeds
+}
+
 // Replay derives current standings from immutable events in season order.
 func Replay(events []Event, currentSeason int) ReplayResult {
 	out := ReplayResult{Agents: make(map[string]*AgentRecord), Stories: make(map[string]*StoryRecord)}
@@ -122,7 +147,9 @@ func Replay(events []Event, currentSeason int) ReplayResult {
 		active[match].event.Outcome = 0
 		active[match].event.Blame = blame.Attribution{Class: blame.ClassAgent, By: active[match].event.Agent, Evidence: []blame.Evidence{{Kind: blame.EvidenceReview, Ref: fmt.Sprintf("regression:%s:%d", e.Story, item.index)}}}
 	}
-	agentRatings := make(map[string]map[Duty]Rating)
+	// A seed is the ONLY effect of a seed event: it replaces NewRating as the
+	// agent's starting point for its duty and is never a rated result.
+	agentRatings := replaySeeds(active)
 	storyRatings := make(map[string]Rating)
 	// A failed delivery with a valid spec-class attribution (design section
 	// 7) charges the story's author and every estimator; the implementer
