@@ -136,6 +136,7 @@ Finish with submit (ready for review) or yield (handing it back unfinished).`,
 	}
 	role.AttachOwner(cmd.Flags(), &owner, role.Assignee,
 		"agent claiming the story (default $WEAVE_AGENT/$WEAVE_CONDUCTOR)")
+	cmd.Flags().StringVar(&owner, "as", "", "alias for --owner")
 	cmd.Flags().StringVar(&repo, "repo", "", "repo root holding the story")
 	cmd.Flags().BoolVar(&force, "force", false, "take a story another agent holds")
 	flags.attach(cmd)
@@ -278,6 +279,7 @@ up, and pretending otherwise is how two agents end up on one story.`,
 		},
 	}
 	cmd.Flags().StringVar(&as, "as", "", "submitting agent (default $WEAVE_AGENT/$WEAVE_CONDUCTOR)")
+	cmd.Flags().StringVar(&as, "owner", "", "alias for --as")
 	cmd.Flags().StringVar(&repo, "repo", "", "repo root holding the story")
 	cmd.Flags().StringVarP(&evidence, "message", "m", "", "optional continuity note: what changed, commit/branch, or checks run")
 	flags.attach(cmd)
@@ -293,6 +295,12 @@ func runSprintStorySubmit(cmd *cobra.Command, id int64, ref, as, repo, evidence 
 		_, it, err := resolveSprintStoryFor(s, repo, ref)
 		if err != nil {
 			return "", err
+		}
+		if strings.TrimSpace(as) == "" {
+			held := strings.TrimSpace(it.Assignee)
+			if held != "" {
+				who = held
+			}
 		}
 		if held := strings.TrimSpace(it.Assignee); held != "" && !strings.EqualFold(held, who) {
 			return "", fmt.Errorf("story %s is held by %s, not %s — claim it first, or let them submit it", it.ID, held, who)
@@ -380,10 +388,11 @@ func runSprintStoryAccept(cmd *cobra.Command, id int64, ref, repo, evidence stri
 		if err != nil {
 			return "", err
 		}
-		if strings.TrimSpace(it.Assignee) == "" {
+		held := strings.TrimSpace(it.Assignee)
+		if held == "" {
 			return "", fmt.Errorf("story %s was never claimed", it.ID)
 		}
-		if !sprintSubmissionEvidence(s, it.ID) {
+		if !sprintSubmissionEvidence(s, it.ID) && !strings.EqualFold(held, actor) {
 			return "", fmt.Errorf("story %s has no submitted delivery evidence — run `bashy sprint submit %d %s -m \"<evidence>\"` first", it.ID, id, it.ID)
 		}
 		if todopkg.IsClosed(it.Status) {

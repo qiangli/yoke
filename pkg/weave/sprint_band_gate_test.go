@@ -180,3 +180,24 @@ func TestSprintStartAndTakeUseBandGateNotLeaseGuard(t *testing.T) {
 		}
 	}
 }
+
+func TestTakeStillChecksTheManagerBandAfterIdentityResolution(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	t.Setenv("BASHY_SPRINT_DIR", t.TempDir())
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+	t.Setenv("BASHY_SPRINT_ENFORCE", "must")
+	cat := pinFleetWith(t)
+	if err := cat.SaveModel(fleet.Model{Name: "gate-low", Band: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.SaveAgent(fleet.Agent{Name: "agent-b", Tool: "tool-b", Model: "gate-low"}); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := runSprint(t, "add", "take gate fixture"); code != 0 {
+		t.Fatalf("add: %d %s", code, out)
+	}
+	out, code := runSprint(t, "take", "1", "--owner", "agent-b")
+	if code == 0 || !strings.Contains(out, "manager gate:") {
+		t.Fatalf("take skipped manager band gate: code=%d output=%q", code, out)
+	}
+}
