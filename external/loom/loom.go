@@ -499,10 +499,12 @@ func loomProxyHandler(target, publicPrefix string, autoProvision bool) (http.Han
 	prefix := cleanPublicPrefix(publicPrefix)
 	baseDirector := rp.Director
 	rp.Director = func(req *http.Request) {
+		targetPrefix := cleanPublicPrefix(req.Header.Get("X-Forwarded-Prefix"))
 		stripPublicPrefix(req.URL, prefix)
+		stripPublicPrefix(req.URL, targetPrefix)
 		baseDirector(req)
 		req.Host = targetURL.Host
-		if prefix != "" && req.Header.Get("X-Forwarded-Prefix") == "" {
+		if prefix != "" && targetPrefix != prefix {
 			req.Header.Del("Accept-Encoding")
 		}
 		stripWebauthHeaders(req.Header)
@@ -529,14 +531,19 @@ func loomProxyHandler(target, publicPrefix string, autoProvision bool) (http.Han
 		}
 	}
 	rp.ModifyResponse = func(resp *http.Response) error {
-		if prefix == "" || resp == nil || resp.Request == nil || resp.Request.Header.Get("X-Forwarded-Prefix") != "" {
+		if prefix == "" || resp == nil || resp.Request == nil {
+			return nil
+		}
+		targetPrefix := cleanPublicPrefix(resp.Request.Header.Get("X-Forwarded-Prefix"))
+		if targetPrefix == prefix {
 			return nil
 		}
 		if loc := resp.Header.Get("Location"); loc != "" {
-			if stripped := stripPathPrefix(loc, prefix); stripped != loc {
-				resp.Header.Set("Location", stripped)
+			if rewritten := rewritePathPrefix(loc, prefix, targetPrefix); rewritten != loc {
+				resp.Header.Set("Location", rewritten)
 			}
 		}
+		rewriteSetCookiePath(resp.Header, prefix, targetPrefix)
 		if !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/html") || resp.Body == nil {
 			return nil
 		}
@@ -545,7 +552,7 @@ func loomProxyHandler(target, publicPrefix string, autoProvision bool) (http.Han
 		if err != nil {
 			return err
 		}
-		body = rewriteLocalHTMLPrefix(body, prefix)
+		body = rewriteLocalHTMLPrefix(body, prefix, targetPrefix)
 		resp.Body = io.NopCloser(bytes.NewReader(body))
 		resp.ContentLength = int64(len(body))
 		resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
@@ -592,35 +599,92 @@ func stripPublicPrefix(u *url.URL, prefix string) {
 }
 
 func stripPathPrefix(pathOrURL, prefix string) string {
+	return rewritePathPrefix(pathOrURL, prefix, "")
+}
+
+func rewritePathPrefix(pathOrURL, prefix, target string) string {
 	if prefix == "" || pathOrURL == "" {
 		return pathOrURL
 	}
 	if u, err := url.Parse(pathOrURL); err == nil && u.Scheme != "" {
-		if stripped := stripPathPrefix(u.Path, prefix); stripped != u.Path {
-			u.Path = stripped
+		if rewritten := rewritePathPrefix(u.Path, prefix, target); rewritten != u.Path {
+			u.Path = rewritten
 			u.RawPath = ""
 			return u.RequestURI()
 		}
 		return pathOrURL
 	}
+	replacement := "/"
+	if target != "" {
+		replacement = target
+	}
 	if pathOrURL == prefix {
-		return "/"
+		return replacement
 	}
 	if strings.HasPrefix(pathOrURL, prefix+"/") {
-		return strings.TrimPrefix(pathOrURL, prefix)
+		if target == "" {
+			return strings.TrimPrefix(pathOrURL, prefix)
+		}
+		return target + strings.TrimPrefix(pathOrURL, prefix)
 	}
 	return pathOrURL
 }
 
-func rewriteLocalHTMLPrefix(body []byte, prefix string) []byte {
+func rewriteSetCookiePath(h http.Header, prefix, target string) {
+	cookies := h.Values("Set-Cookie")
+	if len(cookies) == 0 {
+		return
+	}
+	replacement := "/"
+	if target != "" {
+		replacement = target
+	}
+	for i, cookie := range cookies {
+		cookies[i] = rewriteCookiePath(cookie, prefix, replacement)
+	}
+	h.Del("Set-Cookie")
+	for _, cookie := range cookies {
+		h.Add("Set-Cookie", cookie)
+	}
+}
+
+func rewriteCookiePath(cookie, prefix, replacement string) string {
+	attrs := strings.Split(cookie, ";")
+	for i, attr := range attrs {
+		trimmed := strings.TrimLeft(attr, " \t")
+		if len(trimmed) < len("Path=") || !strings.EqualFold(trimmed[:len("Path=")], "Path=") {
+			continue
+		}
+		pathStart := len(attr) - len(trimmed) + len("Path=")
+		path := attr[pathStart:]
+		if path != prefix && !strings.HasPrefix(path, prefix+"/") {
+			continue
+		}
+		suffix := strings.TrimPrefix(path, prefix)
+		if suffix == "" {
+			attrs[i] = attr[:pathStart] + replacement
+		} else if replacement == "/" {
+			attrs[i] = attr[:pathStart] + suffix
+		} else {
+			attrs[i] = attr[:pathStart] + replacement + suffix
+		}
+	}
+	return strings.Join(attrs, ";")
+}
+
+func rewriteLocalHTMLPrefix(body []byte, prefix, target string) []byte {
 	if prefix == "" {
 		return body
 	}
-	body = bytes.ReplaceAll(body, []byte(`"`+prefix+`/`), []byte(`"/`))
-	body = bytes.ReplaceAll(body, []byte(`'`+prefix+`/`), []byte(`'/`))
-	body = bytes.ReplaceAll(body, []byte(`=`+prefix+`/`), []byte(`=/`))
-	body = bytes.ReplaceAll(body, []byte(`:`+prefix+`/`), []byte(`:/`))
-	body = bytes.ReplaceAll(body, []byte(prefix+`/`), []byte(`/`))
+	replacement := "/"
+	if target != "" {
+		replacement = target + "/"
+	}
+	body = bytes.ReplaceAll(body, []byte(`"`+prefix+`/`), []byte(`"`+replacement))
+	body = bytes.ReplaceAll(body, []byte(`'`+prefix+`/`), []byte(`'`+replacement))
+	body = bytes.ReplaceAll(body, []byte(`=`+prefix+`/`), []byte(`=`+replacement))
+	body = bytes.ReplaceAll(body, []byte(`:`+prefix+`/`), []byte(`:`+replacement))
+	body = bytes.ReplaceAll(body, []byte(prefix+`/`), []byte(replacement))
 	return body
 }
 
@@ -1028,7 +1092,7 @@ const loomHeaderTemplate = `<style>
 	display: none !important;
 }
 </style>
-<script>
+<script nonce="{{.CspNonce}}">
 document.addEventListener('DOMContentLoaded', () => {
 	const logo = document.getElementById('navbar-logo');
 	if (!logo) return;

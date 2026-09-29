@@ -240,7 +240,7 @@ func TestProxyStripsPublicPrefix(t *testing.T) {
 	}
 }
 
-func TestProxyRewritesPublicPrefixForDirectLocalHTML(t *testing.T) {
+func TestLoomProxyRewritesToRootWithNoForwardedPrefix(t *testing.T) {
 	const prefix = "/matrix/h/dragon/app/loom"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -278,13 +278,53 @@ func TestProxyRewritesPublicPrefixForDirectLocalHTML(t *testing.T) {
 	}
 }
 
-func TestProxyPreservesPublicPrefixForForwardedHTML(t *testing.T) {
+func TestLoomProxyRewritesGiteaPathsIntoTheMountPrefix(t *testing.T) {
+	const prefix = "/matrix/h/dragon/app/loom"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Location", "https://ai.dhnt.io"+prefix+"/user/login")
+		_, _ = w.Write([]byte(`<link href="` + prefix + `/assets/css/x.css"><script src="` + prefix + `/assets/js/iife.js"></script>`))
+	}))
+	t.Cleanup(upstream.Close)
+
+	handler, err := loomProxyHandler(upstream.URL, prefix, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(handler)
+	t.Cleanup(proxy.Close)
+
+	req, _ := http.NewRequest(http.MethodGet, proxy.URL+"/loom/repo/issues/new", nil)
+	req.Header.Set("X-Forwarded-Prefix", "/loom")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	s := string(body)
+	for _, want := range []string{`href="/loom/assets/css/x.css"`, `src="/loom/assets/js/iife.js"`} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("rewritten HTML missing %q:\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, "/matrix/") {
+		t.Fatalf("rewritten HTML still contains cloud path:\n%s", s)
+	}
+	if got := resp.Header.Get("Location"); got != "/loom/user/login" {
+		t.Fatalf("Location = %q, want /loom/user/login", got)
+	}
+}
+
+func TestLoomProxyLeavesTheCloudPathUnchanged(t *testing.T) {
 	const prefix = "/matrix/h/dragon/app/loom"
 	var gotAcceptEncoding string
+	const body = `<link href="/matrix/h/dragon/app/loom/assets/css/index.css">`
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAcceptEncoding = r.Header.Get("Accept-Encoding")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(`<link href="` + prefix + `/assets/css/index.css">`))
+		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(upstream.Close)
 
@@ -304,12 +344,88 @@ func TestProxyPreservesPublicPrefixForForwardedHTML(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(body), prefix+"/assets/css/index.css") {
-		t.Fatalf("forwarded HTML lost public prefix:\n%s", body)
+	gotBody, _ := io.ReadAll(resp.Body)
+	if string(gotBody) != body {
+		t.Fatalf("body changed:\n got %q\nwant %q", gotBody, body)
 	}
 	if gotAcceptEncoding != "gzip" {
 		t.Fatalf("Accept-Encoding = %q, want preserved for forwarded traffic", gotAcceptEncoding)
+	}
+}
+
+func TestLoomProxyRewritesSetCookiePathIntoTheMount(t *testing.T) {
+	const prefix = "/matrix/h/dragon/app/loom"
+	for _, tt := range []struct {
+		name            string
+		forwardedPrefix string
+		wantPath        string
+	}{
+		{name: "mount", forwardedPrefix: "/loom", wantPath: "/loom"},
+		{name: "root", wantPath: "/"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Add("Set-Cookie", "i_like_gitea=abc; Path="+prefix+"; HttpOnly; SameSite=Lax")
+				w.WriteHeader(http.StatusOK)
+			}))
+			t.Cleanup(upstream.Close)
+
+			handler, err := loomProxyHandler(upstream.URL, prefix, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			proxy := httptest.NewServer(handler)
+			t.Cleanup(proxy.Close)
+
+			req, _ := http.NewRequest(http.MethodGet, proxy.URL+"/", nil)
+			if tt.forwardedPrefix != "" {
+				req.Header.Set("X-Forwarded-Prefix", tt.forwardedPrefix)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = resp.Body.Close()
+
+			got := resp.Header.Values("Set-Cookie")
+			want := "i_like_gitea=abc; Path=" + tt.wantPath + "; HttpOnly; SameSite=Lax"
+			if len(got) != 1 || got[0] != want {
+				t.Fatalf("Set-Cookie = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestLoomProxyStripsTheMountPrefixFromRequests(t *testing.T) {
+	var gotPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+
+	handler, err := loomProxyHandler(upstream.URL, "/matrix/h/dragon/app/loom", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(handler)
+	t.Cleanup(proxy.Close)
+
+	req, _ := http.NewRequest(http.MethodGet, proxy.URL+"/loom/assets/js/iife.js", nil)
+	req.Header.Set("X-Forwarded-Prefix", "/loom")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if gotPath != "/assets/js/iife.js" {
+		t.Fatalf("upstream path = %q, want /assets/js/iife.js", gotPath)
+	}
+}
+
+func TestLoomHeaderTemplateScriptCarriesTheCspNonce(t *testing.T) {
+	if !strings.Contains(loomHeaderTemplate, `<script nonce="{{.CspNonce}}">`) {
+		t.Fatalf("loomHeaderTemplate script tag lacks CSP nonce:\n%s", loomHeaderTemplate)
 	}
 }
 
