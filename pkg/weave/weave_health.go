@@ -232,7 +232,7 @@ func weaveHealthConsistencyIssue(s weaveHealthSnapshot, it *weaveItem) (string, 
 		if it == nil || it.LaunchSpec == nil {
 			return "active run has no launch specification", "inspect the queue record before resuming", true
 		}
-		if s.Tool != "" && it.LaunchSpec.Tool != "" && s.Tool != it.LaunchSpec.Tool {
+		if s.Tool != "" && it.LaunchSpec.Tool != "" && !weaveSameLaunchTool(s.Tool, it.LaunchSpec.Tool) {
 			return fmt.Sprintf("owner launch tool %q contradicts recorded tool %q", it.LaunchSpec.Tool, s.Tool), "repair the launch record before resuming", true
 		}
 		if s.WrapperPID <= 0 {
@@ -308,4 +308,25 @@ func weaveClassifyHealth(s weaveHealthSnapshot, it *weaveItem, now time.Time) we
 		return weaveHealthReport{Health: weaveHealthWedged, Reason: fmt.Sprintf("no worker progress for %s", now.Sub(last).Round(time.Second)), Next: fmt.Sprintf("inspect and `weave kill %d` if it is not making progress", s.Issue), Snapshot: s}
 	}
 	return weaveHealthReport{Health: weaveHealthHealthy, Reason: "live worker and recent progress evidence agree", Next: fmt.Sprintf("continue monitoring run #%d", s.Issue), Snapshot: s}
+}
+
+// weaveSameLaunchTool reports whether a launch binary is the recorded tool.
+// The record holds the bare tool NAME ("codex"); the launch spec may hold the
+// resolved binary PATH (a managed, versioned install such as
+// ~/.bashy/tools/codex/0.157.1/codex, or codex.exe on Windows). Comparing them
+// as strings flagged every such run as inconsistent, so compare the path's
+// executable name instead. Both separators are accepted because a record can
+// be read on a different OS than the one that wrote it.
+func weaveSameLaunchTool(recorded, launched string) bool {
+	if recorded == launched {
+		return true
+	}
+	base := launched
+	if i := strings.LastIndexAny(base, `/\`); i >= 0 {
+		base = base[i+1:]
+	}
+	if len(base) > 4 && strings.EqualFold(base[len(base)-4:], ".exe") {
+		base = base[:len(base)-4]
+	}
+	return base == recorded
 }
