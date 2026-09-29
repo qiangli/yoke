@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -617,6 +618,48 @@ func TestLoomProxyCloudPathStaysByteIdentical(t *testing.T) {
 func TestLoomHeaderTemplateScriptCarriesTheCspNonce(t *testing.T) {
 	if !strings.Contains(loomHeaderTemplate, `<script nonce="{{.CspNonce}}">`) {
 		t.Fatalf("loomHeaderTemplate script tag lacks CSP nonce:\n%s", loomHeaderTemplate)
+	}
+}
+
+func TestLoomHeaderUsesTheLoomIconAndNotTheTeapot(t *testing.T) {
+	// The launcher tile's loom path (pkg/webconsole/artifact/app.js): the
+	// header and the tile must be the same identity.
+	const loomPath = "M4 5h16M4 19h16M9 5v14M15 5v14M4 12h16"
+	if !strings.Contains(loomHeaderTemplate, loomPath) {
+		t.Errorf("header template missing the loom icon path %q", loomPath)
+	}
+	for _, bad := range []string{"logo.svg", "gitea-logo", "teapot"} {
+		if strings.Contains(strings.ToLower(loomHeaderTemplate), bad) {
+			t.Errorf("header template still references the Gitea logo (%q)", bad)
+		}
+	}
+}
+
+func TestLoomHeaderScriptsCarryTheCspNonce(t *testing.T) {
+	// Gitea v1.27.3 publishes script-src with a per-request nonce, so EVERY
+	// inline script must carry nonce="{{.CspNonce}}" or it is refused.
+	tags := regexp.MustCompile(`(?i)<script\b[^>]*>`).FindAllString(loomHeaderTemplate, -1)
+	if len(tags) == 0 {
+		t.Fatal("header template contains no inline script")
+	}
+	for _, tag := range tags {
+		if !strings.Contains(tag, `nonce="{{.CspNonce}}"`) {
+			t.Errorf("inline script without the CSP nonce: %s", tag)
+		}
+	}
+}
+
+func TestLoomHeaderHomeLinkIsMountRelative(t *testing.T) {
+	// The header runs under both the local mount and the cloud path
+	// /matrix/h/dragon/app/loom/, so the home link must be derived from
+	// window.config.appSubUrl (like the logo href), never a hardcoded "/".
+	if strings.Contains(loomHeaderTemplate, `href="/"`) {
+		t.Error("header template hardcodes the home link to \"/\"; the cloud path would break")
+	}
+	for _, want := range []string{"loom-home", "appSubUrl"} {
+		if !strings.Contains(loomHeaderTemplate, want) {
+			t.Errorf("header template missing derived home link marker %q", want)
+		}
 	}
 }
 

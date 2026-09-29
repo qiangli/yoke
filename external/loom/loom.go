@@ -1470,28 +1470,76 @@ const loomHeaderTemplate = `<style>
 .page-content.home .ui.stackable.middle.very.relaxed.page.grid .column > p.large {
 	display: none !important;
 }
+
+/* Loom brand home link: an ordinary navbar item pinned to the right end. */
+#loom-home {
+	display: inline-flex;
+	align-items: center;
+	align-self: center;
+	margin-left: auto;
+	padding: 0 0.75rem;
+	color: inherit;
+}
+#loom-home svg {
+	width: 22px;
+	height: 22px;
+}
 </style>
 <script nonce="{{.CspNonce}}">
 document.addEventListener('DOMContentLoaded', () => {
+	// The loom mark: the launcher tile's single-stroke 24-grid path, drawn
+	// the way the tile draws it (no fill, currentColor) so header and tile
+	// are the same identity.
+	const loomMark = '<svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16M4 19h16M9 5v14M15 5v14M4 12h16"/></svg>';
+	// The launcher app-home mark: four rounded squares, the same mark every
+	// other app page (e.g. files) carries on its top-right home link.
+	const appsMark = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>';
+	// The app root, derived the way the logo href always has been: Gitea
+	// publishes its sub-URL as window.config.appSubUrl, otherwise parse it
+	// from the path. Never a hardcoded mount — the header runs under both
+	// the local mount and the cloud path /matrix/h/dragon/app/loom/.
+	const loomAppRoot = () => {
+		const appSubUrl = window.config && window.config.appSubUrl;
+		if (appSubUrl) {
+			return appSubUrl.replace(/\/+$/, '');
+		}
+		const path = window.location.pathname;
+		const appMount = '/app/loom/';
+		const appAt = path.indexOf(appMount);
+		if (appAt >= 0) {
+			return path.slice(0, appAt + appMount.length).replace(/\/+$/, '');
+		}
+		if (path === '/loom' || path.startsWith('/loom/')) {
+			return '/loom';
+		}
+		return '';
+	};
+	// The landing page is the parent of the app mount — the same rule the
+	// files app uses for its apps button — so the cloud path survives.
+	const loomHomeUrl = (root) => {
+		const clean = (root || '').replace(/\/+$/, '');
+		const slash = clean.lastIndexOf('/');
+		return (slash > 0 ? clean.slice(0, slash) : '') + '/';
+	};
+	const root = loomAppRoot();
 	const logo = document.getElementById('navbar-logo');
-	if (!logo) return;
-	const appSubUrl = window.config && window.config.appSubUrl;
-	if (appSubUrl) {
-		logo.href = appSubUrl + '/';
-		return;
+	if (logo) {
+		logo.href = root + '/';
+		logo.innerHTML = loomMark;
+		logo.setAttribute('aria-label', 'Loom');
 	}
-	const path = window.location.pathname;
-	const appMount = '/app/loom/';
-	const appAt = path.indexOf(appMount);
-	if (appAt >= 0) {
-		logo.href = path.slice(0, appAt + appMount.length);
-		return;
+	if (!document.getElementById('loom-home')) {
+		const home = document.createElement('a');
+		home.id = 'loom-home';
+		home.href = loomHomeUrl(root);
+		home.title = 'Home';
+		home.setAttribute('aria-label', 'Home');
+		home.innerHTML = appsMark;
+		const bar = document.querySelector('#navbar .navbar-right') ||
+			document.querySelector('#navbar .right.menu') ||
+			document.getElementById('navbar');
+		if (bar) bar.appendChild(home);
 	}
-	if (path === '/loom' || path.startsWith('/loom/')) {
-		logo.href = '/loom/';
-		return;
-	}
-	logo.href = '/';
 });
 </script>
 `
