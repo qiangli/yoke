@@ -47,6 +47,7 @@ import (
 	"github.com/qiangli/coreutils/pkg/weavecli"
 	"github.com/qiangli/yoke/pkg/bus"
 	"github.com/qiangli/yoke/pkg/issue"
+	"github.com/qiangli/yoke/pkg/ladder"
 	"github.com/qiangli/yoke/pkg/role"
 	todopkg "github.com/qiangli/yoke/pkg/todo"
 )
@@ -335,6 +336,9 @@ func newSprintAcceptCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&repo, "repo", "", "repo root holding the story")
 	cmd.Flags().StringVarP(&evidence, "message", "m", "", "optional manager continuity note")
+	sprintLadderFlags(cmd)
+	cmd.Flags().Int("rework", 0, "number of rework rounds")
+	cmd.Flags().Bool("no-rating", false, "accept without a ladder event")
 	flags.attach(cmd)
 	return cmd
 }
@@ -360,7 +364,14 @@ func sprintAcceptanceEvidence(s *weaveStory, storyID string) bool {
 }
 
 func runSprintStoryAccept(cmd *cobra.Command, id int64, ref, repo, evidence string, flags *weaveOutputFlags) error {
-	return runWeaveStoryMutate(cmd, id, "sprint accept", flags, func(s *weaveStory) (string, error) {
+	var event *ladder.Event
+	var ratingErr error
+	skip, _ := cmd.Flags().GetBool("no-rating")
+	rework, _ := cmd.Flags().GetInt("rework")
+	if rework < 0 {
+		return fmt.Errorf("--rework must be non-negative")
+	}
+	err := runWeaveStoryMutate(cmd, id, "sprint accept", flags, func(s *weaveStory) (string, error) {
 		actor := weaveStoryConductorName(s, "")
 		if s.Lease == nil || !strings.EqualFold(strings.TrimSpace(s.Lease.Holder), actor) {
 			return "", fmt.Errorf("only sprint #%d's current manager may accept stories", id)
@@ -375,6 +386,9 @@ func runSprintStoryAccept(cmd *cobra.Command, id int64, ref, repo, evidence stri
 		if !sprintSubmissionEvidence(s, it.ID) {
 			return "", fmt.Errorf("story %s has no submitted delivery evidence — run `bashy sprint submit %d %s -m \"<evidence>\"` first", it.ID, id, it.ID)
 		}
+		if todopkg.IsClosed(it.Status) {
+			return "", fmt.Errorf("story %s is already closed", it.ID)
+		}
 		it.Status = todopkg.StatusDone
 		now := time.Now().UTC()
 		it.Closed = &now
@@ -387,8 +401,22 @@ func runSprintStoryAccept(cmd *cobra.Command, id int64, ref, repo, evidence stri
 			note += ": " + message
 		}
 		weaveStoryAppend(s, actor, "decision", note)
+		if !skip {
+			event, ratingErr = sprintLadderDelivery(cmd, s, it, actor, root, now)
+		}
 		return fmt.Sprintf("sprint #%d: accepted story %s", id, shortSprintStoryID(it.ID)), nil
 	})
+	if err != nil {
+		return err
+	}
+	if skip {
+		fmt.Fprintln(cmd.OutOrStdout(), "ladder: unrated by manager")
+	} else if ratingErr != nil {
+		fmt.Fprintf(cmd.OutOrStdout(), "ladder: not rated — %v\n", ratingErr)
+	} else {
+		sprintLadderAppend(cmd, event)
+	}
+	return nil
 }
 
 // sprintStoryClosureAudit keeps lifecycle completion about durable state, not
