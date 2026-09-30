@@ -2,6 +2,7 @@ package weave
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -72,7 +73,7 @@ func TestAgentWorkingOnSkipsTheRunBeingStarted(t *testing.T) {
 // TestAgentBusyErrNamesBothWaysForward — a refusal that only says "no" is how an
 // operator learns to reach for --force.
 func TestAgentBusyErrNamesBothWaysForward(t *testing.T) {
-	msg := weaveAgentBusyErr("elif", item(3, "working", "elif", 1), item(9, "todo", "", 0)).Error()
+	msg := weaveAgentBusyErr("elif", "", item(3, "working", "elif", 1), item(9, "todo", "", 0)).Error()
 	for _, want := range []string{"elif", "#3", "#9", "--clone", "queued"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("refusal is missing %q:\n%s", want, msg)
@@ -89,5 +90,107 @@ func TestIssueCloneNameIsUsableAsAnAgentName(t *testing.T) {
 	}
 	if strings.ContainsAny(got, `/\ `) {
 		t.Errorf("clone name %q is not filename-safe", got)
+	}
+}
+
+func setupNamedRepo(t *testing.T, home, name string) string {
+	t.Helper()
+	dir := filepath.Join(home, name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, dir, "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(dir, "seed.txt"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, dir, "add", "seed.txt")
+	gitT(t, dir, "commit", "-qm", "seed")
+	root, err := weaveRepoRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+// TestStartRefusesAgentLiveInAnotherQueue — the identity is fleet-wide, so the
+// busy check reads every queue on the host, not just the one being started in.
+// The refusal names the run as repo#id (a bare #1 would read as this queue's),
+// and --clone stays the way to run in parallel.
+func TestStartRefusesAgentLiveInAnotherQueue(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("BASHY_AGENTIC", "")
+	if err := os.WriteFile(filepath.Join(home, ".gitconfig"),
+		[]byte("[user]\n\tname = Weave Test\n\temail = weave-test@example.invalid\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pinAgentFleet(t)
+
+	repoA := setupNamedRepo(t, home, "repo-alpha")
+	repoB := setupNamedRepo(t, home, "repo-beta")
+
+	dirA, err := weaveQueueDir(repoA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	qA := &weaveQueue{
+		Root: repoA,
+		Items: []*weaveItem{
+			{
+				ID:         1,
+				Title:      "alpha task",
+				State:      "working",
+				WrapperPid: os.Getpid(),
+				LaunchSpec: &weaveLaunchSpec{Tool: "claude", Agent: "007"},
+			},
+		},
+	}
+	if err := saveWeaveQueue(dirA, qA); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Chdir(repoB)
+	if out, code := runWeave(t, "add", "beta task", "--body", "body", "--json"); code != 0 {
+		t.Fatalf("weave add failed (exit %d): %s", code, out)
+	}
+
+	out, code := runWeave(t, "start", "--run", "1", "--no-spawn", "--tool", "007")
+	if code == 0 {
+		t.Fatalf("weave start must refuse agent live in another queue, got exit 0, output: %s", out)
+	}
+	if !strings.Contains(out, "repo-alpha#1") {
+		t.Errorf("refusal output must name repo#id (repo-alpha#1), got:\n%s", out)
+	}
+	if !strings.Contains(out, "agent 007 is already working run repo-alpha#1") {
+		t.Errorf("refusal output must explain agent is working run repo-alpha#1, got:\n%s", out)
+	}
+
+	dirB, err := weaveQueueDir(repoB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	qB, err := loadWeaveQueue(dirB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if it := findWeaveItem(qB, 1); it == nil || it.State != "todo" {
+		t.Fatalf("a refused run must stay queued: %+v", it)
+	}
+
+	// --clone still allowed
+	out, code = runWeave(t, "start", "--run", "1", "--clone", "--no-spawn", "--tool", "007")
+	if code != 0 {
+		t.Fatalf("weave start --clone must succeed, got exit %d, output: %s", code, out)
+	}
+	if !strings.Contains(out, "007 is on repo-alpha#1") {
+		t.Errorf("clone notice must name the other queue's run (repo-alpha#1), got:\n%s", out)
+	}
+	if qB, err = loadWeaveQueue(dirB); err != nil {
+		t.Fatal(err)
+	}
+	it := findWeaveItem(qB, 1)
+	if it == nil || it.LaunchSpec == nil || it.LaunchSpec.Agent != "007-w1" {
+		t.Fatalf("clone worker not allocated as 007-w1: %+v", it)
 	}
 }
