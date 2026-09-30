@@ -67,7 +67,9 @@ type dutyRowView struct {
 	Events      int      `json:"events"`
 	Established bool     `json:"established"`
 	Band        int      `json:"band"`
-	Provisional int      `json:"provisional,omitempty"`
+	Seed        int      `json:"seed"`
+	Streak      int      `json:"streak"`
+	Moved       bool     `json:"moved"`
 	Missing     []string `json:"missing,omitempty"`
 	Currency    string   `json:"currency,omitempty"`
 	Move        string   `json:"move"`
@@ -179,7 +181,9 @@ func (s *server) handleDutyLeaderboard(w http.ResponseWriter, r *http.Request) {
 				Events:      rw.Events,
 				Established: rw.Established,
 				Band:        rw.Band,
-				Provisional: rw.Provisional,
+				Seed:        rw.Seed,
+				Streak:      rw.Streak,
+				Moved:       rw.Moved,
 				Missing:     rw.Missing,
 				Currency:    rw.Currency,
 				Move:        rw.Move,
