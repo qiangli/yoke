@@ -2,49 +2,25 @@ package weave
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
-	"github.com/qiangli/yoke/pkg/capability"
 	"github.com/qiangli/yoke/pkg/ladder"
 	"github.com/spf13/cobra"
 )
 
-// bandGateAdmission applies the manager rules to a resolved binding's evidence.
-func bandGateAdmission(p ladder.Profile, lines ladder.Lines, season, peg int) (bool, string) {
-	// DeriveBand includes provisional seats, so name that rule first.
-	if p.Provisional >= 4 {
-		return true, "provisional seat"
+// bandGateAdmission reports a manager's current band. BASHY_SPRINT_ENFORCE
+// controls lease-token checks; a lower manager band records a fallback even
+// in must mode.
+func bandGateAdmission(p ladder.Profile, _ ladder.Lines, _ int, peg int) (bool, string) {
+	band := peg
+	if band < 1 {
+		band = 1
 	}
-	band, misses := ladder.DeriveBand(p, lines, season)
 	if band >= 4 {
-		return true, "derived L4+"
+		return true, fmt.Sprintf("current L%d", band)
 	}
-	manage := p.Standings[ladder.DutyManage]
-	playStanding := manage
-	if manage.Events == 0 {
-		playStanding = p.Standings[ladder.DutyCode]
-	}
-	if band == 3 && lines.L4Manage > 0 && playStanding.RD > 0 && playStanding.Lower()+playStanding.RD >= lines.L4Manage {
-		return true, "play-up candidate"
-	}
-	if !manage.Established() && peg >= 4 {
-		return true, "seed fleet peg"
-	}
-	var reasons []string
-	for _, miss := range misses {
-		reasons = append(reasons, miss.Reason)
-	}
-	if band < 3 {
-		reasons = append(reasons, "G4 requires manager and review certificates, conservative code and manage standings")
-	}
-	if lines.L4Manage <= 0 {
-		reasons = append(reasons, "L4 manage line not yet fitted")
-	} else if manage.Lower() < lines.L4Manage {
-		reasons = append(reasons, fmt.Sprintf("conservative manage %.0f below L4 line %.0f", manage.Lower(), lines.L4Manage))
-	}
-	return false, strings.Join(reasons, "; ")
+	return false, fmt.Sprintf("current L%d", band)
 }
 
 func sprintManagerEligibility(owner string) (bool, string, error) {
@@ -60,53 +36,35 @@ func sprintManagerEligibility(owner string) (bool, string, error) {
 		}
 		a = parent
 	}
-	peg := a.Band
-	if _, _, model, bindErr := cat.Binding(a.Name); bindErr == nil && peg == 0 {
-		peg = model.Band
-	} else if model, found := cat.Model(a.Model); found && peg == 0 {
-		peg = model.Band
-	}
-	path := ladder.DefaultStorePath()
-	var events []ladder.Event
-	if _, err := os.Stat(path); err == nil {
-		store, err := ladder.OpenStore(path)
-		if err != nil {
-			return false, "", err
-		}
-		events, err = store.Read()
-		if err != nil {
-			return false, "", err
-		}
-	} else if !os.IsNotExist(err) {
+	events, err := sprintAssignReadEvents()
+	if err != nil {
 		return false, "", err
 	}
-	season := ladder.SeasonOf(time.Now())
-	rep := ladder.Replay(events, season)
-	profile := ladder.Profile{}
-	if rec := rep.Agents[a.MatrixKey()]; rec != nil {
-		profile.Standings, profile.Certs, profile.Provisional = rec.Standings, rec.Certs, rec.Provisional
-		if n := len(rec.Certs); n > 0 {
-			profile.ModelVersion = rec.Certs[n-1].ModelVersion
+	pool, _, err := seatPool("", events, time.Now())
+	if err != nil {
+		return false, "", err
+	}
+	for _, e := range pool {
+		if e.Agent == a.Name {
+			return e.Band >= 4, fmt.Sprintf("current L%d", e.Band), nil
 		}
 	}
-	ok, why := bandGateAdmission(profile, capability.LadderLines(rep, season), season, peg)
-	return ok, why, nil
+	seed := a.Band
+	if m, found := cat.Model(a.Model); found {
+		seed = m.Band
+	}
+	key := a.Tool + ":" + a.Model
+	state := seatBand(seed, events, key)
+	return state.Band >= 4, fmt.Sprintf("current L%d", state.Band), nil
 }
 
-// checkSprintManagerBand runs before a lease is acquired and records the verdict
-// even when must-mode refuses the operation.
 func checkSprintManagerBand(cmd *cobra.Command, id int64, owner string) error {
 	ok, why, err := sprintManagerEligibility(owner)
 	if err != nil {
 		return fmt.Errorf("manager gate: %w", err)
 	}
-	override, _ := cmd.Flags().GetBool("override")
-	reason, _ := cmd.Flags().GetString("reason")
-	if override && strings.TrimSpace(reason) == "" {
-		return fmt.Errorf("manager gate: --override requires --reason")
-	}
-	if !ok && override {
-		why = why + "; override: " + strings.TrimSpace(reason)
+	if why == "agent not in fleet" || why == "agent not in available fleet" {
+		return fmt.Errorf("manager gate: %s", why)
 	}
 	dir, err := sprintStoreDir()
 	if err != nil {
@@ -117,28 +75,22 @@ func checkSprintManagerBand(cmd *cobra.Command, id int64, owner string) error {
 		if s == nil {
 			return fmt.Errorf("sprint #%d not found", id)
 		}
-		kind := "band-gate"
-		if !ok && override {
-			kind = "override"
+		if !ok {
+			band := 1
+			fmt.Sscanf(why, "current L%d", &band)
+			seatRecordFallback(s, seatFallbackEvent{Seat: "manager", WantedBand: 4, ChosenAgent: owner, Band: band})
+		} else {
+			weaveStoryAppend(s, owner, "band-gate", why)
 		}
-		weaveStoryAppend(s, owner, kind, why)
 		return nil
 	})
 	if err != nil {
 		return err
 	}
-	if ok {
-		fmt.Fprintf(cmd.ErrOrStderr(), "manager gate: %s eligible (%s)\n", owner, why)
+	if !ok {
+		fmt.Fprintf(cmd.ErrOrStderr(), "manager fallback: %s is L%s (no L4 free)\n", owner, strings.TrimPrefix(why, "current L"))
 		return nil
 	}
-	if override {
-		fmt.Fprintf(cmd.ErrOrStderr(), "manager gate: %s override (%s)\n", owner, why)
-		return nil
-	}
-	message := fmt.Sprintf("manager gate: %s ineligible (%s); use --override --reason <reason>", owner, why)
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("BASHY_SPRINT_ENFORCE")), "must") {
-		return fmt.Errorf("%s", message)
-	}
-	fmt.Fprintln(cmd.ErrOrStderr(), "WARN: "+message)
+	fmt.Fprintf(cmd.ErrOrStderr(), "manager gate: %s eligible (%s)\n", owner, why)
 	return nil
 }

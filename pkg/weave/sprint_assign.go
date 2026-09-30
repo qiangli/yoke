@@ -5,12 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/qiangli/yoke/pkg/capability"
 	"github.com/qiangli/yoke/pkg/issue"
 	"github.com/qiangli/yoke/pkg/ladder"
 	todopkg "github.com/qiangli/yoke/pkg/todo"
@@ -18,12 +16,16 @@ import (
 )
 
 type sprintAssignEvent struct {
-	Story    string  `json:"story"`
-	Agent    string  `json:"agent"`
-	Expected float64 `json:"expected"`
-	Reason   string  `json:"reason"`
-	Run      int64   `json:"run"`
-	Manual   bool    `json:"manual,omitempty"`
+	Story       string  `json:"story"`
+	Agent       string  `json:"agent"`
+	Seat        string  `json:"seat,omitempty"`
+	WantedBand  int     `json:"wanted_band,omitempty"`
+	Band        int     `json:"band,omitempty"`
+	ChosenAgent string  `json:"chosen_agent,omitempty"`
+	Expected    float64 `json:"expected"`
+	Reason      string  `json:"reason"`
+	Run         int64   `json:"run"`
+	Manual      bool    `json:"manual,omitempty"`
 }
 
 type sprintAssignLaunch struct {
@@ -68,7 +70,7 @@ func sprintAssignDispatch(cmd *cobra.Command, task ladder.StoryTask, pool []ladd
 	runner := ladder.ScheduleStory(task, remaining, lines)
 	fmt.Fprintf(cmd.OutOrStdout(), "pick=%s expected=%.3f reason=%s runner-up=%s (%.3f, %s)\n", pick.Agent, pick.Expected, pick.Reason, runner.Agent, runner.Expected, runner.Reason)
 	if pick.Reason == "wait" {
-		fmt.Fprintln(cmd.OutOrStdout(), "wait: no free entrant in the owning band or within the play-up line")
+		fmt.Fprintln(cmd.OutOrStdout(), "capacity wait: no agent available")
 		return nil
 	}
 	if dry {
@@ -83,17 +85,48 @@ func sprintAssignDispatch(cmd *cobra.Command, task ladder.StoryTask, pool []ladd
 	if err = deps.record("assign", sprintAssignEvent{Story: task.ID, Agent: pick.Agent, Expected: pick.Expected, Reason: pick.Reason, Run: run, Manual: manual != ""}); err != nil {
 		return err
 	}
+	for _, e := range pool {
+		if e.Agent == pick.Agent && e.Band < task.Band {
+			if err = deps.record("fallback", sprintAssignEvent{Story: task.ID, Agent: pick.Agent, ChosenAgent: pick.Agent, Seat: "worker", WantedBand: task.Band, Band: e.Band}); err != nil {
+				return err
+			}
+			break
+		}
+	}
 	return deps.launch(cmd, sprintAssignLaunch{Repo: repo, Agent: pick.Agent, Run: run, Env: map[string]string{"BASHY_AGENT": pick.Agent}})
 }
 
 func sprintReviewDispatch(cmd *cobra.Command, story string, author ladder.DutyStanding, band int, vendor string, pool []ladder.Entrant, dry bool, record func(string, sprintAssignEvent) error) error {
-	pick, ok := ladder.ScheduleReviewer(author, band, vendor, pool)
-	if !ok {
-		pick.Reason = "escalate to owner"
+	_ = author
+	lower := make([]ladder.Entrant, 0, len(pool))
+	for _, e := range pool {
+		if e.Band <= band {
+			lower = append(lower, e)
+		}
+	}
+	choices := seatPanel(lower, 1, vendor)
+	if len(choices) == 0 {
+		choices = seatPanel(pool, 1, vendor)
+	}
+	pick := ladder.Pick{Reason: "wait"}
+	if len(choices) > 0 {
+		pick = ladder.Pick{Agent: choices[0].Agent, Reason: fmt.Sprintf("cascade:L%d", choices[0].Band)}
+	}
+	if pick.Agent == "" {
+		fmt.Fprintln(cmd.OutOrStdout(), "capacity wait: no agent available")
+		return nil
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "reviewer=%s reason=%s\n", pick.Agent, pick.Reason)
 	if dry {
 		return nil
+	}
+	for _, e := range pool {
+		if e.Agent == pick.Agent && e.Band < band {
+			if err := record("fallback", sprintAssignEvent{Story: story, Agent: pick.Agent, ChosenAgent: pick.Agent, Seat: "review", WantedBand: band, Band: e.Band}); err != nil {
+				return err
+			}
+			break
+		}
 	}
 	return record("review-assign", sprintAssignEvent{Story: story, Agent: pick.Agent, Expected: pick.Expected, Reason: pick.Reason})
 }
@@ -142,147 +175,7 @@ func sprintAssignExcludeOptions(tools, agents []string) (sprintAssignExclusions,
 
 // Only cached probe evidence is consulted: dispatch never invokes a probe.
 func sprintAssignPool(root string, events []ladder.Event, now time.Time, exclusions ...sprintAssignExclusions) ([]ladder.Entrant, ladder.Lines, error) {
-	cat := fleetCatalog()
-	agents, errs := cat.Agents()
-	if len(errs) > 0 {
-		return nil, ladder.Lines{}, fmt.Errorf("fleet catalog: %v", errs)
-	}
-	sort.Slice(agents, func(i, j int) bool { return agents[i].Name < agents[j].Name })
-	season := ladder.SeasonOf(now)
-	rep := ladder.Replay(events, season)
-	lines := capability.LadderLines(rep, season)
-	dirs := weaveAllQueueDirs()
-	if root != "" {
-		dir, err := weaveQueueDir(root)
-		if err != nil {
-			return nil, lines, err
-		}
-		dirs = append(dirs, dir)
-	}
-	var queues []*weaveQueue
-	unusable := map[string]bool{}
-	seenDirs := map[string]bool{}
-	for _, dir := range dirs {
-		if seenDirs[dir] {
-			continue
-		}
-		seenDirs[dir] = true
-		q, err := loadWeaveQueue(dir)
-		if err != nil {
-			return nil, lines, err
-		}
-		queues = append(queues, q)
-		for tool, p := range loadFleetProbeCache(dir) {
-			if !p.Capable {
-				unusable[tool] = true
-			}
-		}
-	}
-	toolReasons, bindingReasons := map[string]string{}, map[string]string{}
-	for _, x := range exclusions {
-		for _, name := range x.tools {
-			key := strings.TrimSpace(name)
-			if tool, ok := cat.Tool(key); ok {
-				key = tool.Name
-			}
-			toolReasons[key] = "excluded tool:" + name
-		}
-		for _, name := range x.agents {
-			key := strings.TrimSpace(name)
-			if binding, _, _, err := cat.Binding(key); err == nil {
-				key = binding.MatrixKey()
-			}
-			bindingReasons[key] = "excluded agent:" + name
-		}
-	}
-	// Role.Scope is the fleet responsibility boundary. A shadow binding must
-	// never affect real picks, even through another name for the same binding.
-	for _, a := range agents {
-		if a.Role != nil && strings.EqualFold(strings.TrimSpace(a.Role.Scope), "shadow") {
-			if binding, _, _, err := cat.Binding(a.Name); err == nil && bindingReasons[binding.MatrixKey()] == "" {
-				bindingReasons[binding.MatrixKey()] = "shadow role scope"
-			}
-		}
-	}
-	aliases := map[string][]string{}
-	for _, a := range agents {
-		binding, _, _, err := cat.Binding(a.Name)
-		if err == nil {
-			aliases[binding.MatrixKey()] = append(aliases[binding.MatrixKey()], a.Name)
-		}
-	}
-	// Plan tier ranks the seat each model bills through; an unrecorded or
-	// dangling plan is rank 0 (unknown), which only ever loses a heavy-work tie.
-	planRank := map[string]int{}
-	plans, _ := cat.Plans()
-	for _, p := range plans {
-		planRank[p.Name] = p.Rank()
-	}
-	var pool []ladder.Entrant
-	seen := map[string]bool{}
-	for _, a := range agents {
-		if a.Ephemeral || a.ClonedFrom != "" {
-			continue
-		}
-		binding, tool, model, err := cat.Binding(a.Name)
-		if err != nil {
-			continue
-		}
-		key := binding.MatrixKey()
-		reason := toolReasons[tool.Name]
-		if reason == "" {
-			reason = bindingReasons[key]
-		}
-		if reason == "" && unusable[tool.Name] {
-			reason = "cached probe: unusable tool:" + tool.Name
-		}
-		if reason != "" {
-			for _, x := range exclusions {
-				if x.report != nil {
-					x.report(a.Name, reason)
-				}
-			}
-			continue
-		}
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		peg := a.Band
-		if peg == 0 {
-			peg = model.Band
-		}
-		profile := ladder.Profile{}
-		if rec := rep.Agents[key]; rec != nil {
-			profile.Standings, profile.Certs, profile.Provisional = rec.Standings, rec.Certs, rec.Provisional
-			if n := len(rec.Certs); n > 0 {
-				profile.ModelVersion = rec.Certs[n-1].ModelVersion
-			}
-		}
-		band, _ := ladder.DeriveBand(profile, lines, season)
-		if profile.Provisional == 0 && !profile.Standings[ladder.DutyCode].Established() {
-			band = peg
-		}
-		standings := map[ladder.Duty]ladder.DutyStanding{}
-		for duty, s := range profile.Standings {
-			standings[duty] = s
-		}
-		if _, ok := standings[ladder.DutyCode]; !ok {
-			r := ladder.NewRating()
-			standings[ladder.DutyCode] = ladder.DutyStanding{R: r.R, RD: r.RD}
-		}
-		count := 0
-		for _, ev := range events {
-			if ev.Agent == key && ev.Season == season && ev.Kind == ladder.EventKindDelivery && ev.Duty == ladder.DutyCode {
-				count++
-			}
-		}
-		names := append(aliases[key], key)
-		// Fleet exposes a billing-adjusted relative cost, not a measured
-		// dollars-per-point rate; use it only as the scheduler tie-breaker.
-		pool = append(pool, ladder.Entrant{Agent: a.Name, Vendor: tool.Name, Band: band, Standings: standings, Free: !sprintAssignBusy(queues, names), CostPerPoint: float64(model.MarginalCostMicro()), PlanRank: planRank[model.Plan], CodingStoriesThisSeason: count})
-	}
-	return pool, lines, nil
+	return seatPool(root, events, now, exclusions...)
 }
 
 func sprintAssignReadEvents() ([]ladder.Event, error) {
@@ -489,14 +382,9 @@ func sprintAssignCommand(review bool) *cobra.Command {
 			}
 			rep := ladder.Replay(events, ladder.SeasonOf(time.Now()))
 			rec := rep.Agents[authorKey]
-			// Missing author evidence cannot establish dominance. Escalation
-			// is a successful scheduling decision, and is recorded as such.
-			if rec == nil {
-				return sprintReviewDispatch(cmd, story.ID, ladder.DutyStanding{}, authorBand, vendor, nil, dry, record)
-			}
-			standing, ok := rec.Standings[ladder.DutyCode]
-			if !ok {
-				return sprintReviewDispatch(cmd, story.ID, ladder.DutyStanding{}, authorBand, vendor, nil, dry, record)
+			standing := ladder.DutyStanding{}
+			if rec != nil {
+				standing = rec.Standings[ladder.DutyCode]
 			}
 			filtered := pool[:0]
 			for _, e := range pool {

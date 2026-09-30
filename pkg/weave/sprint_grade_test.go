@@ -107,8 +107,8 @@ func TestMergeRequiresGradeAndDominance(t *testing.T) {
 	if _, err := sprintGradeLatest(s, "repo#1", "generation"); err == nil {
 		t.Fatal("accepted missing grade")
 	}
-	if err := sprintGradeDominance("agent-a", "agent-b", nil); err == nil || !strings.Contains(err.Error(), "escalate") {
-		t.Fatalf("missing evidence: %v", err)
+	if err := sprintGradeDominance("agent-a", "agent-b", nil); err != nil {
+		t.Fatalf("missing evidence blocked merge: %v", err)
 	}
 	r, _ := gogit.PlainOpen(dir)
 	w, _ := r.Worktree()
@@ -262,8 +262,8 @@ func TestGradeMergeCommands(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if out, code := runSprint(t, "merge", "331", "--run", run, "--into", target, "--reviewer", "agent-b"); code == 0 || !strings.Contains(out, "escalate") {
-				t.Fatalf("dominance: %d %s", code, out)
+			if out, code := runSprint(t, "merge", "331", "--run", run, "--into", target, "--reviewer", "agent-b"); code != 0 {
+				t.Fatalf("reviewer fallback blocked merge: %d %s", code, out)
 			}
 			t.Setenv(sprintLeaseTokenEnv, "wrong")
 			if out, code := runSprint(t, "merge", "331", "--run", run, "--into", target); code == 0 {
@@ -293,7 +293,7 @@ func TestGradeMergeCommands(t *testing.T) {
 					kinds = append(kinds, c.Kind)
 				}
 			}
-			if strings.Join(kinds, ",") != "grade,grade,grade,merge" {
+			if strings.Join(kinds, ",") != "grade,merge,grade,grade,merge" {
 				t.Fatalf("events = %v", kinds)
 			}
 			if _, err = os.Stat(dir); err != nil {
@@ -361,8 +361,8 @@ func TestMergeDominanceReplay(t *testing.T) {
 	now := time.Now()
 	season := ladder.SeasonOf(now)
 	events := []ladder.Event{{ID: "a", Agent: "agent-a", Kind: ladder.EventKindSeed, Duty: ladder.DutyCode, SeedR: 1600, SeedRD: 150, Season: season, At: now}, {ID: "b", Agent: "agent-b", Kind: ladder.EventKindSeed, Duty: ladder.DutyCode, SeedR: 1800, SeedRD: 150, Season: season, At: now}}
-	if err := sprintGradeDominance("agent-b", "agent-a", events); err == nil {
-		t.Fatal("point rating incorrectly used instead of conservative rating")
+	if err := sprintGradeDominance("agent-b", "agent-a", events); err != nil {
+		t.Fatal("reviewer rating blocked merge", err)
 	}
 	events[1].SeedR = 2000
 	if err := sprintGradeDominance("agent-b", "agent-a", events); err != nil {

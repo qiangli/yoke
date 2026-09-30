@@ -26,8 +26,8 @@ func TestAssignDispatch(t *testing.T) {
 	}{
 		{name: "fit", band: 3, want: "match", launches: 1},
 		{name: "busy", busy: true, band: 3, want: "wait"},
-		{name: "play-up", band: 4, want: "play-up", launches: 1},
-		{name: "wait", band: 5, want: "wait"},
+		{name: "cascade", band: 4, want: "cascade:L3", launches: 1},
+		{name: "L5 cascade", band: 5, want: "cascade:L3", launches: 1},
 		{name: "dry-run", dry: true, band: 3, want: "match"},
 		{name: "manual", manual: true, band: 3, want: "manual override", launches: 1},
 	} {
@@ -41,7 +41,7 @@ func TestAssignDispatch(t *testing.T) {
 			cmd := &cobra.Command{}
 			cmd.SetOut(&out)
 			cmd.SetContext(context.Background())
-			launches, events := 0, 0
+			launches, events, fallbacks := 0, 0, 0
 			deps := sprintAssignDeps{launch: func(_ *cobra.Command, r sprintAssignLaunch) error {
 				launches++
 				if r.Env["BASHY_AGENT"] != "agent-a" {
@@ -49,6 +49,13 @@ func TestAssignDispatch(t *testing.T) {
 				}
 				return nil
 			}, record: func(kind string, e sprintAssignEvent) error {
+				if kind == "fallback" {
+					fallbacks++
+					if e.Seat != "worker" || e.WantedBand != tc.band || e.Band != 3 || e.ChosenAgent != "agent-a" {
+						t.Fatalf("fallback: %+v", e)
+					}
+					return nil
+				}
 				events++
 				if kind != "assign" || e.Run != 7 || e.Agent != "agent-a" {
 					t.Fatalf("event: %s %+v", kind, e)
@@ -68,6 +75,9 @@ func TestAssignDispatch(t *testing.T) {
 			}
 			if launches != tc.launches || events != tc.launches {
 				t.Fatalf("launches=%d events=%d", launches, events)
+			}
+			if want := map[bool]int{true: 1, false: 0}[tc.band > 3 && tc.launches > 0]; fallbacks != want {
+				t.Fatalf("fallbacks=%d want %d", fallbacks, want)
 			}
 			if !strings.Contains(out.String(), tc.want) {
 				t.Fatal(out.String())
@@ -105,7 +115,7 @@ func TestReviewDispatchDominanceAndEscalation(t *testing.T) {
 	if err := sprintReviewDispatch(cmd, "story", author, 3, "tool-a", pool, true, nil); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "escalate to owner") {
+	if !strings.Contains(out.String(), "agent-b") {
 		t.Fatal(out.String())
 	}
 }
@@ -238,7 +248,7 @@ func TestAssignCommandSeedsLinksAndInjectsIdentity(t *testing.T) {
 				} else if err != nil {
 					t.Fatal(err)
 				}
-				if !strings.Contains(out.String(), "excluded=agent-a") || !strings.Contains(out.String(), tc.reason) || (!manual && !strings.Contains(out.String(), "wait: no free entrant")) {
+				if !strings.Contains(out.String(), "excluded=agent-a") || !strings.Contains(out.String(), tc.reason) || (!manual && !strings.Contains(out.String(), "capacity wait: no agent available")) {
 					t.Fatal(out.String())
 				}
 				if launched != 0 {
@@ -320,8 +330,8 @@ func TestAssignPoolReplayProbeAndBusyClone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pool) != 1 || pool[0].Band != 5 {
-		t.Fatalf("provisional pool %+v", pool)
+	if len(pool) != 1 || pool[0].Band != 3 {
+		t.Fatalf("provisional event changed the band %+v", pool)
 	}
 	dir, _ := weaveQueueDir(root)
 	if err = withWeaveQueueLock(dir, func(q *weaveQueue) error {
@@ -384,7 +394,7 @@ func TestReviewCommandUnknownStandingEscalates(t *testing.T) {
 	if err = cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "escalate to owner") {
+	if !strings.Contains(out.String(), "capacity wait: no agent available") {
 		t.Fatal(out.String())
 	}
 	q, err := loadWeaveQueue(board)
@@ -392,7 +402,7 @@ func TestReviewCommandUnknownStandingEscalates(t *testing.T) {
 		t.Fatal(err)
 	}
 	data, _ := json.Marshal(findWeaveStory(q, 1))
-	if !bytes.Contains(data, []byte("review-assign")) {
-		t.Fatalf("missing escalation event: %s", data)
+	if bytes.Contains(data, []byte("review-assign")) {
+		t.Fatalf("capacity wait recorded an assignment: %s", data)
 	}
 }
