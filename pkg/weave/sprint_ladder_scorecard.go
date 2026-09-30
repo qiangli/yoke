@@ -376,7 +376,17 @@ func sprintScorecardMedian(values []float64) float64 {
 // IDs do not prove a merge, and a grade alone does not prove one either.
 func sprintScorecardEvidence(events []ladder.Event, s *weaveStory, season int, managers ...string) (ladder.ScorecardInput, []string) {
 	in := sprintScorecardInput(events, s.ID, season, managers...)
-	notes := []string{"false rejections unavailable: panels required; left at 0"}
+	notes := []string{}
+	if private, err := sprintPlantedCounts(s.ID); err == nil {
+		in.PlantedDefects = private.PlantedDefects
+		in.PlantedCaught = private.PlantedCaught
+		in.FalseRejections = private.FalseRejections
+		if private.FalseRejections == 0 {
+			notes = append(notes, "false rejections unavailable: panels required; left at 0")
+		}
+	} else {
+		notes = append(notes, "private review outcomes unavailable: "+err.Error())
+	}
 	if in.ExpectedCostPerPoint == 0 {
 		notes = append(notes, "no prior sprint with recorded cost in the last 3 finished sprints; cost baseline unavailable")
 	}
