@@ -195,7 +195,7 @@ func parseCommitTrace(message string) (commitTrace, error) {
 	if len(agentValues) == 1 {
 		trace.Agent, trace.AgentPresent = agentValues[0], true
 	}
-	seenNumbers, seenIDs := map[int]bool{}, map[string]bool{}
+	seenIDs := map[string]bool{}
 	for i, value := range storyValues {
 		storyMatch := commitSprintRef.FindStringSubmatch(value)
 		if storyMatch == nil {
@@ -207,33 +207,36 @@ func parseCommitTrace(message string) (commitTrace, error) {
 		if !commitStoryID.MatchString(id) {
 			return commitTrace{}, fmt.Errorf("Story-ID must be the full 12-character lowercase hex id, got %q", idValues[i])
 		}
-		if seenNumbers[number] || seenIDs[id] {
+		// The stable id is the identity; numbers are per repo, so two stories
+		// of one sprint may share one.
+		if seenIDs[id] {
 			return commitTrace{}, fmt.Errorf("duplicate story provenance pair Story: #%d / Story-ID: %s", number, id)
 		}
-		seenNumbers[number], seenIDs[id] = true, true
+		seenIDs[id] = true
 		trace.Stories = append(trace.Stories, commitStoryRef{Number: number, ID: id})
 	}
 	return trace, nil
 }
 
 func validateCommitTraceStories(trace commitTrace, stories []sprintStoryState) error {
-	byNumber := make(map[int]sprintStoryState, len(stories))
+	// Resolve by the stable id: a story number is per repo (and a repo store
+	// can hold a duplicate), so in a multi-repo sprint numbers collide.
+	numbered := make(map[int]bool, len(stories))
 	byID := make(map[string]sprintStoryState, len(stories))
 	for _, story := range stories {
-		byNumber[story.Seq] = story
+		numbered[story.Seq] = true
 		byID[story.Ref.ID] = story
 	}
 	for _, ref := range trace.Stories {
-		bySeq, numberOK := byNumber[ref.Number]
 		byStable, idOK := byID[ref.ID]
-		if !numberOK {
+		if !idOK && !numbered[ref.Number] {
 			return fmt.Errorf("Story: #%d is not linked to Sprint: #%d; a story is a repo todo, so file it with `bashy todo add --sprint %d ...` (a weave run is execution, not a story), then use `bashy sprint track %d --repo <repo>` when it lives in another repo", ref.Number, trace.Sprint, trace.Sprint, trace.Sprint)
 		}
 		if !idOK {
 			return fmt.Errorf("Story-ID: %s is not linked to Sprint: #%d", ref.ID, trace.Sprint)
 		}
-		if bySeq.Ref.ID != byStable.Ref.ID {
-			return fmt.Errorf("Story: #%d resolves to %s, not Story-ID: %s", ref.Number, bySeq.Ref.ID, ref.ID)
+		if byStable.Seq != ref.Number {
+			return fmt.Errorf("Story: #%d does not match Story-ID: %s, which resolves to #%d", ref.Number, ref.ID, byStable.Seq)
 		}
 	}
 	return nil

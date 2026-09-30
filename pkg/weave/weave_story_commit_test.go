@@ -77,6 +77,38 @@ func TestValidateCommitTraceStories(t *testing.T) {
 	}
 }
 
+// Story numbers are per repo (and a repo's store can hold a duplicate), so in a
+// multi-repo sprint two stories share a number. The stable id is the identity:
+// each pair must resolve by id and carry that story's own number, and one
+// commit may cite both.
+func TestValidateCommitTraceStoriesSharedNumber(t *testing.T) {
+	stories := []sprintStoryState{
+		{Seq: 3, Ref: sprintStoryRef{Repo: "coreutils", ID: "8a64e0c1b37d"}},
+		{Seq: 3, Ref: sprintStoryRef{Repo: "sh", ID: "38c49bfdb5d3"}},
+		{Seq: 15, Ref: sprintStoryRef{Repo: "coreutils", ID: "6972ef8ec6cb"}},
+		{Seq: 15, Ref: sprintStoryRef{Repo: "coreutils", ID: "95fcce29a7cc"}},
+	}
+	for _, ref := range []commitStoryRef{{3, "8a64e0c1b37d"}, {3, "38c49bfdb5d3"}, {15, "6972ef8ec6cb"}, {15, "95fcce29a7cc"}} {
+		if err := validateCommitTraceStories(commitTrace{Sprint: 100, Stories: []commitStoryRef{ref}}, stories); err != nil {
+			t.Fatalf("%+v: %v", ref, err)
+		}
+	}
+	both, err := parseCommitTrace("docs: x\n\nSprint: #100\nStory: #15\nStory-ID: 6972ef8ec6cb\nStory: #15\nStory-ID: 95fcce29a7cc")
+	if err != nil {
+		t.Fatalf("two stories sharing a number in one commit: %v", err)
+	}
+	if err := validateCommitTraceStories(both, stories); err != nil {
+		t.Fatal(err)
+	}
+	wrong := commitTrace{Sprint: 100, Stories: []commitStoryRef{{15, "38c49bfdb5d3"}}}
+	if err := validateCommitTraceStories(wrong, stories); err == nil || !strings.Contains(err.Error(), "resolves to") {
+		t.Fatalf("wrong number for a known id: err = %v", err)
+	}
+	if _, err := parseCommitTrace("docs: x\n\nSprint: #100\nStory: #3\nStory-ID: 38c49bfdb5d3\nStory: #3\nStory-ID: 38c49bfdb5d3"); err == nil {
+		t.Fatal("the same id twice must still be refused")
+	}
+}
+
 func TestManagedCommitHookChainsAndValidates(t *testing.T) {
 	for _, want := range []string{"commit-msg.before-bashy", `bashy sprint commit-msg "$1"`} {
 		if !strings.Contains(managedCommitHook, want) {
