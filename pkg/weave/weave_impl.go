@@ -4159,6 +4159,13 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			ev = weaveCollectTerminalEvidence(workspace, weaveCountRef(it, base), dir, it.VerifyCommand, it, true)
 		}
 	}
+	// Publish after auto-commit, outside the queue lock and before terminal
+	// state becomes observable. Use an independent bounded context on exit.
+	boothPushErr := sprintGradePushAttempt(context.Background(), it, dir)
+	if boothPushErr != nil {
+		runErr = errors.Join(runErr, fmt.Errorf("publish booth attempt: %w", boothPushErr))
+		fmt.Fprintf(cmd.ErrOrStderr(), "weave start: publish booth attempt: %v\n", boothPushErr)
+	}
 	finalizationClaimed := false
 	lockErr := withWeaveQueueLock(dir, func(freshQ *weaveQueue) error {
 		freshIt := findWeaveItem(freshQ, it.ID)
@@ -4209,6 +4216,11 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		if freshIt.PauseRequestedBy != "" && childTerminated {
 			freshIt.State = "paused"
 			weaveAppendComment(freshIt, freshIt.PauseRequestedBy, "system", "paused with progress preserved: "+freshIt.PauseReason)
+		}
+		if boothPushErr != nil {
+			freshIt.State = "failed"
+			weaveAppendComment(freshIt, "conductor", "system", "publish booth attempt failed: "+boothPushErr.Error())
+			freshIt.Body = "[publish booth attempt failed: " + boothPushErr.Error() + "]\n\n" + freshIt.Body
 		}
 		weaveQueueOwnerNotice(dir, freshQ, freshIt, "run-terminal")
 		if freshIt.State == "killed" {

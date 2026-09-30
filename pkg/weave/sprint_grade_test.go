@@ -77,6 +77,9 @@ func TestGradeFreshGateAndTamper(t *testing.T) {
 				t.Fatal(err)
 			}
 			item := &weaveItem{ID: 1, Workspace: dir, Branch: "master", BoothForkURL: fork, BaseSHA: base}
+			if err := sprintGradePushAttempt(context.Background(), item, ""); err != nil {
+				t.Fatal(err)
+			}
 			for i := 0; i < 2; i++ {
 				ev, err := sprintGradeAttempt(context.Background(), 331, "repo#1", item, "", base, tc.gate, nil, time.Second*5)
 				if err != nil {
@@ -169,6 +172,9 @@ func TestGradeMergeCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	item := &weaveItem{ID: 1, Owner: "agent-a", Workspace: dir, Branch: "master", BoothForkURL: fork, BaseSHA: base, Created: time.Now().UTC()}
+	if err := sprintGradePushAttempt(context.Background(), item, ""); err != nil {
+		t.Fatal(err)
+	}
 	if err = saveWeaveQueue(queue, &weaveQueue{Root: dir, NextID: 2, Items: []*weaveItem{item}}); err != nil {
 		t.Fatal(err)
 	}
@@ -336,5 +342,134 @@ func TestMergeManagerRequiredInAdvisoryMode(t *testing.T) {
 	t.Setenv(sprintLeaseTokenEnv, "secret")
 	if err := sprintGradeManager(s); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestGradeBoothStoredHostCredential(t *testing.T) {
+	dir := t.TempDir()
+	user := "booth-1-a1b2c3d4-7"
+	fork := "http://localhost:3000/" + user + "/repo.git"
+	file, err := boothCredentialFile(dir, 7, fork, user, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// git credential-store rewrites credentials at host scope by default.
+	if err = os.WriteFile(file, []byte("http://"+user+":secret@localhost%3a3000\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	item := &weaveItem{ID: 7, Branch: "agent/work", BoothUser: user, BoothForkURL: fork}
+	if _, auth, err := sprintGradeSource(item, dir); err != nil || auth == nil {
+		t.Fatalf("host credential: %v", err)
+	}
+	item.BoothUser = "booth-other"
+	if _, _, err := sprintGradeSource(item, dir); err == nil {
+		t.Fatal("accepted another booth")
+	}
+}
+
+func TestGradeAllowTestChangeFlag(t *testing.T) {
+	cmd := newSprintGradeCommands()[0]
+	if err := cmd.ParseFlags([]string{"--allow-test-change", "tests/**", "--allow-test-change", "*_test.go"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGradeBoothPublishAndMerge(t *testing.T) {
+	dir, base, _ := sprintGradeFixture(t)
+	// Track one original skill so filtering must preserve the pinned base.
+	base = sprintGradeCommit(t, dir, ".agents/skills/original/SKILL.md", "base skill", "base skills")
+	fork := filepath.Join(t.TempDir(), "fork.git")
+	if _, err := gogit.PlainClone(fork, true, &gogit.CloneOptions{URL: dir}); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "target")
+	tr, err := gogit.PlainClone(target, false, &gogit.CloneOptions{URL: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := tr.Config()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.User.Name, cfg.User.Email = "Manager", "manager@example.invalid"
+	if err := tr.SetConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	sprintGradeCommit(t, dir, ".agents/skills/original/SKILL.md", "provisioned", "provision skills")
+	sprintGradeCommit(t, dir, ".claude/skills/added/SKILL.md", "provisioned", "provision more skills")
+	sprintGradeCommit(t, dir, "pkg/code_test.go", "updated", "Update tests\n\nSprint: #331\nStory: #1217\nStory-ID: 4474b08d8299\n")
+	head := sprintGradeCommit(t, dir, ".agents/skills/extra/SKILL.md", "more scaffolding", "weave(auto): provisioned skills")
+	item := &weaveItem{ID: 1, ArenaSprint: 331, Workspace: dir, Branch: "master", BoothForkURL: fork, BaseSHA: base}
+	if err := sprintGradePushAttempt(context.Background(), item, ""); err != nil {
+		t.Fatal(err)
+	}
+	local, _ := gogit.PlainOpen(dir)
+	ref, _ := local.Head()
+	if ref.Hash().String() != head {
+		t.Fatal("publication changed workspace HEAD")
+	}
+	ev, err := sprintGradeAttempt(context.Background(), 331, "repo#1", item, "", base, "exit 0", nil, time.Second*5)
+	if err != nil || ev.Verdict != "tamper" {
+		t.Fatalf("default protection: %+v %v", ev, err)
+	}
+	ev, err = sprintGradeAttempt(context.Background(), 331, "repo#1", item, "", base, "exit 0", nil, time.Second*5, "pkg/*_test.go")
+	if err != nil || ev.Verdict != "pass" {
+		t.Fatalf("allowed test update: %+v %v", ev, err)
+	}
+	if len(ev.AllowTestChange) != 1 {
+		t.Fatal("allowance missing from event")
+	}
+	published, _ := gogit.PlainOpen(fork)
+	c, err := published.CommitObject(plumbing.NewHash(ev.Commit))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for c.Hash.String() != base {
+		tree, err := c.Tree()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tree.FindEntry(".claude/skills/added/SKILL.md"); err == nil {
+			t.Fatal("provisioned skill published")
+		}
+		f, err := tree.File(".agents/skills/original/SKILL.md")
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := f.Contents()
+		if body != "base skill" {
+			t.Fatal("tracked skill changed")
+		}
+		c, err = c.Parent(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err = sprintGradeMerge(context.Background(), target, fork, "attempt", nil, ev, "agent-a"); err != nil {
+		t.Fatal(err)
+	}
+	item.BoothForkURL = filepath.Join(t.TempDir(), "missing")
+	if err := sprintGradePushAttempt(context.Background(), item, ""); err == nil {
+		t.Fatal("push failure swallowed")
+	}
+}
+
+func TestGradeAllowTestChangeScope(t *testing.T) {
+	dir, base, _ := sprintGradeFixture(t)
+	head := sprintGradeCommit(t, dir, "pkg/code_test.go", "updated", "update")
+	r, _ := gogit.PlainOpen(dir)
+	bc, _ := r.CommitObject(plumbing.NewHash(base))
+	ac, _ := r.CommitObject(plumbing.NewHash(head))
+	for _, tc := range []struct {
+		allow   string
+		tamper  bool
+		invalid bool
+	}{
+		{"tests/**", true, false}, {"pkg/*_test.go", false, false}, {"[", false, true},
+	} {
+		got, err := sprintGradeTamper(bc, ac, nil, tc.allow)
+		if (err != nil) != tc.invalid || got != tc.tamper {
+			t.Fatalf("%q: %t %v", tc.allow, got, err)
+		}
 	}
 }

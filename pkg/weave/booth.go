@@ -124,13 +124,17 @@ func boothGetEnv(env []string, key string) string {
 	return ""
 }
 
+func boothCredentialPath(queueDir string, run int64) string {
+	return filepath.Join(queueDir, "booth-"+strconv.FormatInt(run, 10)+".credentials")
+}
+
 func boothCredentialFile(queueDir string, run int64, forkURL, user, password string) (string, error) {
 	u, err := url.Parse(forkURL)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return "", fmt.Errorf("invalid booth fork URL")
 	}
 	u.User = url.UserPassword(user, password)
-	path := filepath.Join(queueDir, "booth-"+strconv.FormatInt(run, 10)+".credentials")
+	path := boothCredentialPath(queueDir, run)
 	if err := os.MkdirAll(queueDir, 0o700); err != nil {
 		return "", err
 	}
