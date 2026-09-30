@@ -30,7 +30,7 @@
 >   process tree, and the wrapper forwards SIGTERM/SIGINT/SIGHUP
 >   to the tree, so `weave kill`/`abandon` can't orphan a subagent.
 >   Pointed work derives `--max-runtime` automatically
->   (1=3m45s, 2=7m30s, 3=11m15s, 5=18m45s, 8=30m); an explicit
+>   (1=5m, 2=8m, 3=12m, 5=20m, 8=30m); an explicit
 >   value may tighten but cannot exceed that cap. Sprint links reject
 >   missing or invalid points.
 > - `weave start` refuses an issue whose previous wrapper is still

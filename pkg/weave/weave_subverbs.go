@@ -144,7 +144,7 @@ is the flags-after-'--' mistake that silently disables agent expansion; put
 weave flags before '--'.
 
 POINTS ARE A HARD EXECUTION BUDGET. A pointed run gets a max-runtime even when
-the flag is omitted: 1=3m45s, 2=7m30s, 3=11m15s, 5=18m45s, 8=30m. An explicit
+the flag is omitted: 1=5m, 2=8m, 3=12m, 5=20m, 8=30m. An explicit
 --max-runtime may tighten that ceiling but cannot exceed it. Resume and
 reassignment use the same cap. Legacy unpointed standalone runs remain
 launchable, but a sprint refuses to link them.
@@ -196,7 +196,7 @@ blocks until N reaches a terminal state.`,
 	cmd.Flags().BoolVar(&autoCommit, "auto-commit", false, "Compatibility flag; dirty terminal trees are preserved automatically when verification permits")
 	cmd.Flags().StringVar(&ptyMode, "pty", "auto", "PTY allocation: auto (default) | always | never")
 	cmd.Flags().DurationVar(&idleTimeout, "idle-timeout", 0, "Kill the subagent tree if no PTY output for this long (e.g. 5m); default off — caught the claude-TUI stuck case in the dogfood")
-	cmd.Flags().DurationVar(&maxRuntime, "max-runtime", 0, "Hard wall-clock ceiling; pointed runs derive 1=3m45s,2=7m30s,3=11m15s,5=18m45s,8=30m and reject a larger explicit value; unpointed default off")
+	cmd.Flags().DurationVar(&maxRuntime, "max-runtime", 0, "Hard wall-clock ceiling; pointed runs derive 1=5m,2=8m,3=12m,5=20m,8=30m and reject a larger explicit value; unpointed default off")
 	cmd.Flags().StringVar(&memLimit, "mem-limit", "16g", "Kill the subagent tree when its total RSS exceeds this (e.g. 16g, 512m); 0 disables — the OOM backstop")
 	return cmd
 }

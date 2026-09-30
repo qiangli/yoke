@@ -154,10 +154,10 @@ func TestStartProceedsWhenSpaceIsAvailable(t *testing.T) {
 
 func TestPointRuntimeBudgetScaleAndExplicitCap(t *testing.T) {
 	wants := map[int]time.Duration{
-		1: 3*time.Minute + 45*time.Second,
-		2: 7*time.Minute + 30*time.Second,
-		3: 11*time.Minute + 15*time.Second,
-		5: 18*time.Minute + 45*time.Second,
+		1: 5 * time.Minute,
+		2: 8 * time.Minute,
+		3: 12 * time.Minute,
+		5: 20 * time.Minute,
 		8: 30 * time.Minute,
 	}
 	for points, want := range wants {
@@ -186,27 +186,39 @@ func TestPointRuntimeBudgetScaleAndExplicitCap(t *testing.T) {
 }
 
 func TestPointedStartAndResumePersistBoundedRuntime(t *testing.T) {
-	root := setupIsolationFixture(t)
-	t.Chdir(root)
-	if _, code := runWeave(t, "add", "bounded", "--points", "2", "--json"); code != 0 {
-		t.Fatal("weave add failed")
-	}
-	if out, code := runWeave(t, "start", "--run", "1", "--no-spawn", "--tool", "sh", "--json"); code != 0 {
-		t.Fatalf("bounded start failed (exit %d): %s", code, out)
-	}
-	dir, _ := weaveQueueDir(root)
-	q, _ := loadWeaveQueue(dir)
-	it := findWeaveItem(q, 1)
-	if it.LaunchSpec == nil || it.LaunchSpec.MaxRuntime != 7*time.Minute+30*time.Second {
-		t.Fatalf("derived launch spec = %+v", it.LaunchSpec)
-	}
-	if out, code := runWeave(t, "start", "--run", "1", "--resume", "--no-spawn", "--tool", "sh", "--max-runtime", "6m", "--json"); code != 0 {
-		t.Fatalf("bounded resume failed (exit %d): %s", code, out)
-	}
-	q, _ = loadWeaveQueue(dir)
-	it = findWeaveItem(q, 1)
-	if it.LaunchSpec == nil || it.LaunchSpec.MaxRuntime != 6*time.Minute {
-		t.Fatalf("resumed launch spec = %+v", it.LaunchSpec)
+	for _, explicit := range []bool{false, true} {
+		name := "derived"
+		if explicit {
+			name = "explicit"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := setupIsolationFixture(t)
+			t.Chdir(root)
+			if _, code := runWeave(t, "add", "bounded", "--points", "1", "--json"); code != 0 {
+				t.Fatal("weave add failed")
+			}
+			args := []string{"start", "--run", "1", "--no-spawn", "--tool", "sh", "--json"}
+			if explicit {
+				args = append(args, "--max-runtime", "5m")
+			}
+			if out, code := runWeave(t, args...); code != 0 {
+				t.Fatalf("bounded start failed (exit %d): %s", code, out)
+			}
+			dir, _ := weaveQueueDir(root)
+			q, _ := loadWeaveQueue(dir)
+			it := findWeaveItem(q, 1)
+			if it.LaunchSpec == nil || it.LaunchSpec.MaxRuntime != 5*time.Minute {
+				t.Fatalf("launch spec = %+v", it.LaunchSpec)
+			}
+			if out, code := runWeave(t, "start", "--run", "1", "--resume", "--no-spawn", "--tool", "sh", "--max-runtime", "4m", "--json"); code != 0 {
+				t.Fatalf("bounded resume failed (exit %d): %s", code, out)
+			}
+			q, _ = loadWeaveQueue(dir)
+			it = findWeaveItem(q, 1)
+			if it.LaunchSpec == nil || it.LaunchSpec.MaxRuntime != 4*time.Minute {
+				t.Fatalf("resumed launch spec = %+v", it.LaunchSpec)
+			}
+		})
 	}
 }
 
@@ -216,8 +228,8 @@ func TestPointedStartRejectsRuntimeAboveCapBeforeProvisioning(t *testing.T) {
 	if _, code := runWeave(t, "add", "too long", "--points", "1", "--json"); code != 0 {
 		t.Fatal("weave add failed")
 	}
-	out, code := runWeave(t, "start", "--run", "1", "--no-spawn", "--tool", "sh", "--max-runtime", "4m")
-	if code == 0 || !strings.Contains(out, "exceeds the 1-point cap 3m45s") {
+	out, code := runWeave(t, "start", "--run", "1", "--no-spawn", "--tool", "sh", "--max-runtime", "6m")
+	if code == 0 || !strings.Contains(out, "exceeds the 1-point cap 5m0s") {
 		t.Fatalf("over-cap start exit=%d output=%q", code, out)
 	}
 	dir, _ := weaveQueueDir(root)
