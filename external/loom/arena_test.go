@@ -47,6 +47,10 @@ func TestArenaPushBaseAndBundleLocalRepo(t *testing.T) {
 	if err := client.PushBase("sprint-1", "example", source, want.String()); err != nil {
 		t.Fatalf("PushBase: %v", err)
 	}
+	// Re-pinning the same base (arena up after a partial pin) is a no-op, not an error.
+	if err := client.PushBase("sprint-1", "example", source, want.String()); err != nil {
+		t.Fatalf("PushBase again: %v", err)
+	}
 	bare, err := gogit.PlainOpen(barePath)
 	if err != nil {
 		t.Fatal(err)

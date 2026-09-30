@@ -127,7 +127,11 @@ func (c ArenaClient) PushBase(org, name, root, sha string) error {
 	if err != nil {
 		return err
 	}
-	return remote.PushContext(ctx, &gogit.PushOptions{RemoteName: "anonymous", RefSpecs: []config.RefSpec{"+refs/heads/arena-base:refs/heads/base"}, Auth: auth})
+	err = remote.PushContext(ctx, &gogit.PushOptions{RemoteName: "anonymous", RefSpecs: []config.RefSpec{"+refs/heads/arena-base:refs/heads/base"}, Auth: auth})
+	if errors.Is(err, gogit.NoErrAlreadyUpToDate) {
+		return nil
+	}
+	return err
 }
 
 // BaseSHA reports the commit currently pinned as an arena repository's base.
