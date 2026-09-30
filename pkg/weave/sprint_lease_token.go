@@ -40,6 +40,7 @@ var sprintLeaseGatedVerbs = map[string]bool{
 	"advance":    true,
 	"rm":         true,
 	"panel":      true,
+	"estimate":   true,
 }
 
 func mintSprintLeaseToken() (string, string, error) {
