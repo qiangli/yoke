@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -372,6 +373,48 @@ func TestMarshalRoundTrips(t *testing.T) {
 	}
 	if again.CLI.Launch.ACPExec != tl.CLI.Launch.ACPExec {
 		t.Fatalf("ACP launch template lost in round trip: %q", again.CLI.Launch.ACPExec)
+	}
+}
+
+func TestLinuxRecipeRoundTrips(t *testing.T) {
+	tool, err := ParseTool("agent-a", []byte(`name: agent-a
+kind: cli
+cli:
+  binary: agent-a
+  versions:
+    - version: 1.2.3
+      install: cp /host/agent-a /usr/local/bin/agent-a
+  linux:
+    install: npm install -g @example/agent-a@{version}
+    requires: [nodejs, npm]
+    binary: agent-a
+`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := ToolLinux{Install: "npm install -g @example/agent-a@{version}", Requires: []string{"nodejs", "npm"}, Binary: "agent-a"}
+	if !reflect.DeepEqual(tool.CLI.Linux, want) {
+		t.Fatalf("linux recipe = %#v, want %#v", tool.CLI.Linux, want)
+	}
+	body, err := Marshal(tool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := ParseTool("agent-a", body, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(again.CLI.Linux, want) {
+		t.Fatalf("round-tripped linux recipe = %#v, want %#v", again.CLI.Linux, want)
+	}
+	fields := map[string]string{}
+	for _, f := range schemaFields(KindTool) {
+		fields[f.Path] = f.Description
+	}
+	for _, path := range []string{"cli.linux", "cli.linux.install", "cli.linux.requires", "cli.linux.binary"} {
+		if fields[path] == "" {
+			t.Errorf("schema lacks documented %s", path)
+		}
 	}
 }
 

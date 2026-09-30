@@ -173,7 +173,17 @@ type ToolCommandStep struct {
 type ToolCLI struct {
 	Binary   string        `yaml:"binary,omitempty" json:"binary,omitempty" doc:"executable to run"`
 	Versions []ToolVersion `yaml:"versions,omitempty" json:"versions,omitempty" doc:"known downloadable versions"`
+	Linux    ToolLinux     `yaml:"linux,omitempty" json:"linux,omitempty" doc:"Linux image installation recipe, separate from host installation"`
 	Launch   ToolLaunch    `yaml:"launch,omitempty" json:"launch" doc:"headless and interactive launch contract"`
+}
+
+// ToolLinux describes how a CLI is installed in a sealed Linux image.
+// It is intentionally separate from ToolVersion.Install, which is a host
+// installation recipe.
+type ToolLinux struct {
+	Install  string   `yaml:"install,omitempty" json:"install,omitempty" doc:"shell command run in the Linux image; {version} is replaced by cli.versions.version"`
+	Requires []string `yaml:"requires,omitempty" json:"requires,omitempty" doc:"apt packages required before installation"`
+	Binary   string   `yaml:"binary,omitempty" json:"binary,omitempty" doc:"binary path or name in the Linux image"`
 }
 
 type ToolVersion struct {

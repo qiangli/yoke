@@ -13,7 +13,7 @@ import (
 )
 
 func TestSealedImagePlan(t *testing.T) {
-	tool := fleet.Tool{Name: "agent-a", CLI: fleet.ToolCLI{Binary: "/host/bin/agent-a", Versions: []fleet.ToolVersion{{Version: "1.2.3", Install: "npm install -g @example/agent-a"}}}}
+	tool := fleet.Tool{Name: "agent-a", CLI: fleet.ToolCLI{Binary: "/host/bin/agent-a", Versions: []fleet.ToolVersion{{Version: "1.2.3", Install: "cp /host/agent-a /another/path"}}, Linux: fleet.ToolLinux{Install: "npm install -g @example/agent-a@{version}", Requires: []string{"nodejs", "npm"}, Binary: "agent-a"}}}
 	plan, err := boothSealedPlanImage(tool, nil, "", "arm64")
 	if err != nil {
 		t.Fatal(err)
@@ -21,7 +21,7 @@ func TestSealedImagePlan(t *testing.T) {
 	if plan.Tag != "localhost/bashy-sealed-agent-agent-a:1.2.3" {
 		t.Fatal(plan.Tag)
 	}
-	for _, want := range []string{"FROM docker.io/library/debian:bookworm-slim", "git ca-certificates", "npm install -g -- '@example/agent-a@1.2.3'", "HOME=/home/booth"} {
+	for _, want := range []string{"FROM docker.io/library/debian:bookworm-slim", "ca-certificates git nodejs npm", "npm install -g @example/agent-a@1.2.3", "HOME=/home/booth"} {
 		if !strings.Contains(plan.Containerfile, want) {
 			t.Errorf("missing %q: %s", want, plan.Containerfile)
 		}
@@ -39,7 +39,7 @@ func TestSealedImageMissingRecipe(t *testing.T) {
 	for _, install := range []string{"", "cp /host/agent-a /another/path", "npm install -g @example/agent-a && bad"} {
 		tool := fleet.Tool{Name: "agent-a", CLI: fleet.ToolCLI{Binary: "agent-a", Versions: []fleet.ToolVersion{{Version: "1", Install: install}}}}
 		_, err := boothSealedPlanImage(tool, nil, "", "amd64")
-		if err == nil || !strings.Contains(err.Error(), "cli.versions.install") {
+		if err == nil || !strings.Contains(err.Error(), "cli.linux.install") {
 			t.Fatalf("install %q: %v", install, err)
 		}
 	}
@@ -89,7 +89,7 @@ func TestSealedImageDefaultAndOverride(t *testing.T) {
 
 func TestSealedImageDryRunUsesRegistry(t *testing.T) {
 	cat := fleet.New(fleet.WithRoot(t.TempDir()))
-	tool := fleet.Tool{Name: "agent-a", Kind: "cli", CLI: fleet.ToolCLI{Binary: "agent-a", Versions: []fleet.ToolVersion{{Version: "3.2", Install: "npm install -g @example/agent-a@3.2"}}}}
+	tool := fleet.Tool{Name: "agent-a", Kind: "cli", CLI: fleet.ToolCLI{Binary: "agent-a", Versions: []fleet.ToolVersion{{Version: "3.2", Install: "cp /host/agent-a /another/path"}}, Linux: fleet.ToolLinux{Install: "npm install -g @example/agent-a@{version}", Requires: []string{"nodejs", "npm"}, Binary: "agent-a"}}}
 	if err := cat.SaveTool(tool); err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestSealedImageDryRunUsesRegistry(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err, output.String())
 	}
-	for _, want := range []string{"Containerfile:", "npm install -g -- '@example/agent-a@3.2'", "podman argv: [", "Containerfile", "localhost/bashy-sealed-agent-agent-a:3.2"} {
+	for _, want := range []string{"Containerfile:", "npm install -g @example/agent-a@3.2", "podman argv: [", "Containerfile", "localhost/bashy-sealed-agent-agent-a:3.2"} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("missing %q in %s", want, output.String())
 		}
