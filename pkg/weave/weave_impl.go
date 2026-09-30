@@ -1763,9 +1763,34 @@ func weaveAutoCommitMessage(it *weaveItem) string {
 func weaveAutoCommitMessageWithContext(it *weaveItem, ev weaveTerminalEvidence) string {
 	trailer := weaveContextTrailer(it, ev)
 	if trailer == "" {
-		return weaveAutoCommitMessage(it)
+		return weaveAppendRunProvenance(it, weaveAutoCommitMessage(it))
 	}
-	return weaveAutoCommitMessage(it) + "\n\n" + trailer
+	return weaveAppendRunProvenance(it, weaveAutoCommitMessage(it)+"\n\n"+trailer)
+}
+
+func weaveAppendRunProvenance(it *weaveItem, message string) string {
+	if it == nil {
+		return message
+	}
+	lines := strings.Split(it.Body, "\n")
+	for i, line := range lines {
+		if !strings.HasPrefix(line, "Sprint: #") {
+			continue
+		}
+		var trailers []string
+		for _, next := range lines[i:] {
+			if !strings.HasPrefix(next, "Sprint: ") && !strings.HasPrefix(next, "Sprint-ID: ") &&
+				!strings.HasPrefix(next, "Story: ") && !strings.HasPrefix(next, "Story-ID: ") {
+				break
+			}
+			trailers = append(trailers, next)
+		}
+		block := strings.Join(trailers, "\n")
+		if _, err := parseCommitTrace("auto\n\n" + block); err == nil {
+			return message + "\n\n" + block
+		}
+	}
+	return message
 }
 
 func weaveContextTrailer(it *weaveItem, ev weaveTerminalEvidence) string {
@@ -7752,7 +7777,7 @@ func weaveCrashedAutoCommitMessage(it *weaveItem, exitCode int, killReason strin
 	if killReason != "" {
 		how = "killed: " + killReason
 	}
-	return fmt.Sprintf("wip(weave #%d): work preserved from a run that %s\n\n"+
+	message := fmt.Sprintf("wip(weave #%d): work preserved from a run that %s\n\n"+
 		"%s\n\n"+
 		"The agent did not exit cleanly, so this run is NOT submitted and this\n"+
 		"commit asserts nothing about whether the work is correct or complete.\n"+
@@ -7760,4 +7785,5 @@ func weaveCrashedAutoCommitMessage(it *weaveItem, exitCode int, killReason strin
 		"workspace, and an uncommitted tree is one `weave prune` away from gone.\n\n"+
 		"Inspect it, then `weave salvage %d` to run any configured deterministic gates and merge.",
 		it.ID, how, strings.TrimSpace(it.Title), it.ID)
+	return weaveAppendRunProvenance(it, message)
 }

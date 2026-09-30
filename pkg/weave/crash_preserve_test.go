@@ -47,6 +47,28 @@ func TestCrashedAutoCommitMessageIsHonestBothWays(t *testing.T) {
 	}
 }
 
+func TestTerminalAutoCommitMessageEndsWithRunProvenance(t *testing.T) {
+	it := &weaveItem{
+		ID:    5,
+		Title: "Gate 2: failure is loud",
+		Body:  "Delivery commit trailers:\nSprint: #338\nStory: #1255\nStory-ID: 0baa2eb78731\n",
+	}
+	for name, msg := range map[string]string{
+		"clean":  weaveAutoCommitMessageWithContext(it, weaveTerminalEvidence{}),
+		"killed": weaveCrashedAutoCommitMessage(it, 0, "wall-clock cap"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			trace, err := parseCommitTrace(msg)
+			if err != nil {
+				t.Fatalf("sprint commit-msg rejected auto-commit: %v\n%s", err, msg)
+			}
+			if trace.Sprint != 338 || len(trace.Stories) != 1 || trace.Stories[0].Number != 1255 || trace.Stories[0].ID != "0baa2eb78731" {
+				t.Fatalf("provenance = %+v", trace)
+			}
+		})
+	}
+}
+
 // THE LOAD-BEARING INVARIANT: preserving the artifact must never promote it.
 //
 // Committing a crashed run's tree gives it commits — and `submitted` is decided
