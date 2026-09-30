@@ -8,9 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/ladder"
+	"github.com/qiangli/yoke/pkg/ladder/blame"
 )
 
 // --- fixtures ---------------------------------------------------------------
@@ -115,6 +118,44 @@ func TestLeaderboardBandsTable(t *testing.T) {
 	out := dutyRun(t, "bands", "--events", path)
 	if !strings.Contains(out, "SEED") || !strings.Contains(out, "STREAK") || !strings.Contains(out, "agent-a") || !strings.Contains(out, "L2") {
 		t.Fatal(out)
+	}
+}
+
+func TestLeaderboardBandsUsesFleetMatrixKey(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BASHY_FLEET_DIR", root)
+	t.Setenv("BASHY_FLEET_SEEDS", "off")
+	cat := fleet.New(fleet.WithRoot(root), fleet.WithBaselineFS(fstest.MapFS{}))
+	if err := cat.SaveTool(fleet.Tool{Name: "tool-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.SaveModel(fleet.Model{Name: "model-a", Band: 2}); err != nil {
+		t.Fatal(err)
+	}
+	for _, agent := range []fleet.Agent{
+		{Name: "agent-a", Tool: "tool-a", Model: "model-a"},
+		{Name: "agent-a-copy", Tool: "tool-a", Model: "model-a", ClonedFrom: "agent-a"},
+	} {
+		if err := cat.SaveAgent(agent); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := dutyWriteEvents(t, []ladder.Event{{
+		At:      dutyStamp(1, 1),
+		Season:  1,
+		Kind:    ladder.EventKindDelivery,
+		Agent:   "tool-a:model-a",
+		Duty:    ladder.DutyCode,
+		Story:   "story-a",
+		Points:  3,
+		Outcome: 0,
+		Blame:   blame.Attribution{Class: blame.ClassAgent, By: "reviewer", At: dutyStamp(1, 1), Evidence: []blame.Evidence{{Kind: blame.EvidenceGate, Ref: "gate-1"}}},
+	}})
+
+	out := dutyRun(t, "bands", "--events", path)
+	line := dutyLine(t, out, "tool-a:model-a")
+	if strings.Count(out, "tool-a:model-a") != 1 || !strings.Contains(line, "agent-a,agent-a-copy") || !strings.Contains(line, "-1") {
+		t.Fatalf("bands output:\n%s", out)
 	}
 }
 
