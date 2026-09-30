@@ -543,7 +543,7 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 				}
 				err = runWeaveStoryMutate(cmd, id, op, &flags, func(s *weaveStory) (string, error) {
 					b := s.currentBox()
-					unboxedEnd := ending && len(s.Boxes) == 0
+					unboxedEnd := ending && b == nil
 					if b == nil && !unboxedEnd {
 						// Saying "stopped" about a sprint that was never running
 						// would be a small lie of exactly the kind this feature is
@@ -577,14 +577,12 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 					// CLOSING CONDITIONS: committed, pushed, pinned. A green gate
 					// says the code works; it says nothing about whether the work
 					// was PUT anywhere the next sprint will find it.
-					var repoPath = func(run sprintRun) (string, bool) {
-						dir, err := weaveQueueDirForSprintRun(run)
-						if err != nil {
-							return "", false
+					repos := checkClosingConditions(s, currentBoard, sprintRunRoot)
+					for _, repo := range repos {
+						for _, warning := range repo.Warnings {
+							fmt.Fprintln(cmd.ErrOrStderr(), warning)
 						}
-						return weaveRepoRootForQueue(dir)
 					}
-					repos := checkClosingConditions(s, currentBoard, repoPath)
 					rep.Repos = repos
 					var unclean []string
 					for i := range repos {
@@ -619,7 +617,11 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 
 					msg := ""
 					if unboxedEnd {
-						msg = "ended without a recorded time-box; " + drainEvidenceSummary(&rep)
+						if len(s.Boxes) == 0 {
+							msg = "ended without a recorded time-box; " + drainEvidenceSummary(&rep)
+						} else {
+							msg = "ended after the time-box was stopped; " + drainEvidenceSummary(&rep)
+						}
 					} else {
 						b.StoppedAt = &now
 						elapsed := b.Elapsed(now)
@@ -657,6 +659,7 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 						if err := sprintUnansweredGate(s, "end"); err != nil {
 							return "", err
 						}
+						sprintRetireMovedGoals(s)
 						if err := sprintStoryClosureAudit(s); err != nil {
 							return "", err
 						}

@@ -289,6 +289,30 @@ func sprintGoalDangling(g sprintGoalItem) []string {
 	return out
 }
 
+// Reconcile transfers made in the repo store (including on another host) before
+// closing. A mixed goal remains required until its remaining stories leave too.
+func sprintRetireMovedGoals(s *weaveStory) {
+	kept := s.Goal[:0]
+	for _, g := range s.Goal {
+		moved := len(g.Stories) > 0
+		var destinations []string
+		for _, ref := range g.Stories {
+			it, err := todopkg.ResolveRef(todopkg.RepoStore(ref.Repo), ref.ID)
+			if err != nil || it.Sprint == 0 || storyBelongsToSprint(it, s) {
+				moved = false
+				break
+			}
+			destinations = append(destinations, fmt.Sprintf("%s to sprint #%d", it.ID, it.Sprint))
+		}
+		if moved {
+			weaveStoryAppend(s, weaveStoryConductorName(s, ""), "decision", sprintGoalEpitaph(g, "stories moved: "+strings.Join(destinations, ", ")))
+		} else {
+			kept = append(kept, g)
+		}
+	}
+	s.Goal = kept
+}
+
 func sprintUncheckedGoals(s *weaveStory) []string {
 	var out []string
 	for _, g := range s.Goal {

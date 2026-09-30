@@ -73,7 +73,8 @@ func sprintCheckHygiene(s *weaveStory) sprintHygiene {
 		return h
 	}
 	seen := map[string]bool{}
-	shared := sprintSharedHygieneRoots(s, sprintHygieneBoard())
+	board := sprintHygieneBoard()
+	shared := sprintSharedHygieneRoots(s, board)
 	for _, run := range s.Runs {
 		dir, err := weaveQueueDirForSprintRun(run)
 		if err != nil {
@@ -92,6 +93,14 @@ func sprintCheckHygiene(s *weaveStory) sprintHygiene {
 		}
 		seen[root] = true
 		h.Repos = append(h.Repos, root)
+		dirty, warnings, err := sprintDirtyOwnership(s, board, root, sprintRunRoot)
+		h.Shared = append(h.Shared, warnings...)
+		if err != nil {
+			h.Problems = append(h.Problems, fmt.Sprintf("%s: cannot check: %v", run.Repo, err))
+		}
+		if dirty > 0 {
+			h.Problems = append(h.Problems, fmt.Sprintf("%s: %d uncommitted file(s) in %s", run.Repo, dirty, root))
+		}
 		if ids := shared[hygieneRootKey(root)]; len(ids) > 0 {
 			h.Shared = append(h.Shared, sprintSharedHygieneLabel(run.Repo, root, ids))
 			continue
@@ -111,6 +120,14 @@ func sprintCheckHygiene(s *weaveStory) sprintHygiene {
 		}
 		seen[root] = true
 		h.Repos = append(h.Repos, root)
+		dirty, warnings, err := sprintDirtyOwnership(s, board, root, sprintRunRoot)
+		h.Shared = append(h.Shared, warnings...)
+		if err != nil {
+			h.Problems = append(h.Problems, fmt.Sprintf("%s: cannot check: %v", filepath.Base(root), err))
+		}
+		if dirty > 0 {
+			h.Problems = append(h.Problems, fmt.Sprintf("%s: %d uncommitted file(s) in %s", filepath.Base(root), dirty, root))
+		}
 		if ids := shared[hygieneRootKey(root)]; len(ids) > 0 {
 			h.Shared = append(h.Shared, sprintSharedHygieneLabel(filepath.Base(root), root, ids))
 			continue
@@ -199,10 +216,6 @@ func sprintSharedHygieneLabel(label, root string, ids []int64) string {
 
 // sprintInspectRepo reports the git-visible state of one checkout.
 func sprintInspectRepo(root, label string, h *sprintHygiene) {
-	if dirty, files := gitDirtyFiles(root); dirty {
-		h.Problems = append(h.Problems,
-			fmt.Sprintf("%s: %d uncommitted file(s) in %s — inspect `git -C %s status`, then commit or `git -C %s checkout -- .`", label, files, root, root, root))
-	}
 	if ahead, ok := gitUnpushedCount(root); ok && ahead > 0 {
 		h.Problems = append(h.Problems,
 			fmt.Sprintf("%s: %d commit(s) not pushed in %s — a successor cloning from origin would not see them; `git -C %s log @{upstream}..HEAD --oneline` then `git -C %s push`", label, ahead, root, root, root))
