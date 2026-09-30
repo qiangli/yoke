@@ -824,8 +824,9 @@ type Agent struct {
 	// closes. It is hidden from `agents list` unless --all, because a fleet
 	// roster listing every in-flight task's worker is a roster nobody reads.
 	// Task, when set, names the work it was minted for.
-	Ephemeral bool   `yaml:"ephemeral,omitempty" json:"ephemeral,omitempty" doc:"whether the agent exists for one task"`
-	Task      string `yaml:"task,omitempty" json:"task,omitempty" doc:"task assigned to an ephemeral agent"`
+	Lifecycle *AgentLifecycle `yaml:"lifecycle,omitempty" json:"lifecycle,omitempty" doc:"work owning this ephemeral definition"`
+	Ephemeral bool            `yaml:"ephemeral,omitempty" json:"ephemeral,omitempty" doc:"whether the agent exists for one task"`
+	Task      string          `yaml:"task,omitempty" json:"task,omitempty" doc:"task assigned to an ephemeral agent"`
 
 	// AutoNick and Derived are computed by the catalog at load: the
 	// assigned human name (when Nick is empty) and the floating family

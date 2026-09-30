@@ -20,6 +20,7 @@ import (
 type agentFlags struct {
 	tool, model, display, description, nick string
 	aliases, addAlias, rmAlias              []string
+	sprint                                  string
 	force, ephemeral                        bool
 	paths                                   pathFlags
 }
@@ -32,6 +33,9 @@ func (f *agentFlags) bind(c *cobra.Command, forSet bool) {
 	c.Flags().StringVar(&f.nick, "nick", "", "the agent's human name; empty means one is assigned from the binding")
 	c.Flags().BoolVar(&f.force, "force", false, "take a name that already belongs to another entry")
 	c.Flags().BoolVar(&f.ephemeral, "ephemeral", false, "mark this as a one-task agent")
+	if !forSet {
+		c.Flags().StringVar(&f.sprint, "sprint", "", "own this ephemeral seat by sprint UUID (defaults to managed sprint context)")
+	}
 	f.paths.bind(c)
 	if forSet {
 		c.Flags().StringArrayVar(&f.addAlias, "add-alias", nil, "add a nickname (repeatable)")
@@ -62,7 +66,7 @@ func newAgentsAdd(opts []Option) *cobra.Command {
 			arg := args[0]
 
 			if f.tool == "" && f.model == "" && len(f.paths.set) == 0 && len(f.paths.unset) == 0 && !cmd.Flags().Changed("ephemeral") && looksLikePath(arg) {
-				return importAgent(cmd, cat, arg, f.force)
+				return importAgent(cmd, cat, arg, f.force, f.sprint)
 			}
 			if len(f.paths.set) == 0 && (f.tool == "" || f.model == "") {
 				return fmt.Errorf("fleet: minting %q needs both --tool and --model (an agent always names both)", arg)
@@ -74,6 +78,7 @@ func newAgentsAdd(opts []Option) *cobra.Command {
 			if err := applyPathFlags(cmd, KindAgent, &a, f.paths); err != nil {
 				return err
 			}
+			MintAgentLifecycle(&a, f.sprint)
 			claims := append(append([]string{}, a.Aliases...), a.Nick)
 			if err := cat.claimName(KindAgent, a.Name, claims, f.force); err != nil {
 				return err
@@ -88,7 +93,7 @@ func newAgentsAdd(opts []Option) *cobra.Command {
 	return c
 }
 
-func importAgent(cmd *cobra.Command, cat *Catalog, path string, force bool) error {
+func importAgent(cmd *cobra.Command, cat *Catalog, path string, force bool, sprint string) error {
 	data, err := readSource(path, cmd.InOrStdin())
 	if err != nil {
 		return err
@@ -98,6 +103,7 @@ func importAgent(cmd *cobra.Command, cat *Catalog, path string, force bool) erro
 		return err
 	}
 	for _, a := range file.Agents {
+		MintAgentLifecycle(&a, sprint)
 		if err := cat.claimName(KindAgent, a.Name, a.Aliases, force); err != nil {
 			return err
 		}

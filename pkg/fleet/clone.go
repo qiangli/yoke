@@ -64,8 +64,10 @@ func (c *Catalog) CloneAgent(parentName, newName string, ephemeral bool, task st
 	clone.Ring = 0
 	clone.ClonedFrom = parent.Name
 	clone.ClonedAt = time.Now().UTC().Format(time.RFC3339)
+	clone.Lifecycle = nil // ownership never descends from the parent
 	clone.Ephemeral = ephemeral
 	clone.Task = strings.TrimSpace(task)
+	MintAgentLifecycle(&clone, "")
 	// A clone of a clone must not keep saying it is a clone of its GRANDparent.
 	// An inherited description is a real one the operator wrote and is worth
 	// keeping; the one this command generates is not, so it is regenerated.
@@ -123,6 +125,7 @@ func taskCloneName(parent, task string) string {
 
 func newAgentsClone(opts []Option) *cobra.Command {
 	var ephemeral, fresh, force bool
+	var sprint string
 	var task string
 	c := &cobra.Command{
 		Use:   "clone <parent> [<name>]",
@@ -175,6 +178,7 @@ func newAgentsClone(opts []Option) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			MintAgentLifecycle(&clone, sprint)
 			if err := cat.claimName(KindAgent, clone.Name, nil, force); err != nil {
 				return err
 			}
@@ -201,6 +205,7 @@ func newAgentsClone(opts []Option) *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().StringVar(&sprint, "sprint", "", "own this ephemeral clone by sprint UUID (defaults to managed sprint context)")
 	c.Flags().BoolVar(&ephemeral, "ephemeral", false, "mint for one task; hidden from `agents list` and meant to be removed when the task closes")
 	c.Flags().StringVar(&task, "task", "", "the work this clone is for (names an ephemeral clone, recorded on any clone)")
 	c.Flags().BoolVar(&fresh, "fresh", false, "do not branch the parent's context — same binding, no history")
