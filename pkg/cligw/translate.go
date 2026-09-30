@@ -12,7 +12,7 @@ import (
 
 const toolInstruction = `Tool calling instructions:
 The tools below are available to you: you call a tool by replying with its JSON call, and the caller runs it and sends you the result in the next message. You do not run anything yourself and need no other tool or file access.
-Respond with plain text, or, when calling tools, with exactly one JSON object and no markdown or additional text:
+Never write a tool result yourself; wait for the caller to send the real result. Respond with plain text, or, when calling tools, with exactly one JSON object and no markdown or additional text. The call object must be your whole reply:
 {"tool_calls":[{"name":"<tool name>","arguments":{}}]}
 Use only listed tool names. Each arguments object must satisfy that tool's JSON schema.`
 
