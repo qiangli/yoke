@@ -12,6 +12,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/qiangli/yoke/pkg/ladder"
+	todopkg "github.com/qiangli/yoke/pkg/todo"
 )
 
 func sprintGradeFixture(t *testing.T) (string, string, string) {
@@ -123,7 +124,7 @@ func TestMergeRequiresGradeAndDominance(t *testing.T) {
 		t.Fatal(err)
 	}
 	ev := sprintGradeEvent{Run: "repo#1", Commit: head, Verdict: "pass", GateExit: 0}
-	if _, err = sprintGradeMerge(context.Background(), dir, source, "attempt", nil, ev, "agent-a"); err != nil {
+	if _, err = sprintGradeMerge(context.Background(), dir, source, "attempt", nil, ev, "agent-a", map[string]string{"Sprint": "#331", "Story": "#1217", "Story-ID": "4474b08d8299"}); err != nil {
 		t.Fatal(err)
 	}
 	ref, _ := r.Head()
@@ -143,90 +144,185 @@ func TestMergeRequiresGradeAndDominance(t *testing.T) {
 }
 
 func TestGradeMergeCommands(t *testing.T) {
-	dir, base, _ := sprintGradeFixture(t)
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("BASHY_PRINCIPAL", "agent-manager")
-	t.Setenv("BASHY_SPRINT_ENFORCE", "must")
-	t.Setenv(sprintLeaseTokenEnv, "secret")
-	fork := filepath.Join(t.TempDir(), "fork.git")
-	if _, err := gogit.PlainClone(fork, true, &gogit.CloneOptions{URL: dir}); err != nil {
-		t.Fatal(err)
-	}
-	target := filepath.Join(t.TempDir(), "real")
-	r, err := gogit.PlainClone(target, false, &gogit.CloneOptions{URL: dir})
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg, _ := r.Config()
-	cfg.User.Name = "Manager"
-	cfg.User.Email = "manager@example.invalid"
-	if err = r.SetConfig(cfg); err != nil {
-		t.Fatal(err)
-	}
-	w, _ := r.Worktree()
-	if err = w.Reset(&gogit.ResetOptions{Mode: gogit.HardReset, Commit: plumbing.NewHash(base)}); err != nil {
-		t.Fatal(err)
-	}
-	queue, err := weaveQueueDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	item := &weaveItem{ID: 1, Owner: "agent-a", Workspace: dir, Branch: "master", BoothForkURL: fork, BaseSHA: base, Created: time.Now().UTC()}
-	if err := sprintGradePushAttempt(context.Background(), item, ""); err != nil {
-		t.Fatal(err)
-	}
-	if err = saveWeaveQueue(queue, &weaveQueue{Root: dir, NextID: 2, Items: []*weaveItem{item}}); err != nil {
-		t.Fatal(err)
-	}
-	repo := filepath.Base(dir)
-	run := repo + "#1"
-	s := &weaveStory{ID: 331, Lease: &weaveStoryLease{Holder: "agent-manager", TokenHash: sprintLeaseTokenHash("secret"), At: time.Now()}, Runs: []sprintRun{{Repo: repo, Queue: filepath.Base(queue), ID: 1, Born: item.Created}}, Arena: &sprintArena{Repos: []arenaRepo{{Repo: repo, Base: base}}}}
-	board, _ := sprintStoreDir()
-	if err = withWeaveQueueLock(board, func(q *weaveQueue) error { q.Stories = append(q.Stories, s); return nil }); err != nil {
-		t.Fatal(err)
-	}
-	if out, code := runSprint(t, "merge", "331", "--run", run, "--into", target); code == 0 || !strings.Contains(out, "passing grade") {
-		t.Fatalf("missing grade: %d %s", code, out)
-	}
-	if out, code := runSprint(t, "grade", "331", "--run", run, "--gate", "exit 0", "--json"); code != 0 || !strings.Contains(out, `"verdict":"pass"`) {
-		t.Fatalf("grade: %d %s", code, out)
-	}
-	if out, code := runSprint(t, "merge", "331", "--run", run, "--into", target, "--reviewer", "agent-b"); code == 0 || !strings.Contains(out, "escalate") {
-		t.Fatalf("dominance: %d %s", code, out)
-	}
-	t.Setenv(sprintLeaseTokenEnv, "wrong")
-	if out, code := runSprint(t, "merge", "331", "--run", run, "--into", target); code == 0 {
-		t.Fatalf("invalid token allowed: %s", out)
-	}
-	t.Setenv(sprintLeaseTokenEnv, "secret")
-	if out, code := runSprint(t, "grade", "331", "--run", run, "--gate", "exit 3", "--json"); code == 0 || !strings.Contains(out, `"gate_exit":3`) {
-		t.Fatalf("failed grade: %d %s", code, out)
-	}
-	if out, code := runSprint(t, "merge", "331", "--run", run, "--into", target); code == 0 {
-		t.Fatalf("latest failure ignored: %s", out)
-	}
-	if out, code := runSprint(t, "grade", "331", "--run", run, "--gate", "exit 0"); code != 0 {
-		t.Fatalf("regrade: %d %s", code, out)
-	}
-	if out, code := runSprint(t, "merge", "331", "--run", run, "--into", target, "--json"); code != 0 || !strings.Contains(out, `"merge_commit"`) {
-		t.Fatalf("merge: %d %s", code, out)
-	}
-	q, err := loadWeaveQueue(board)
-	if err != nil {
-		t.Fatal(err)
-	}
-	card := findWeaveStory(q, 331)
-	kinds := []string{}
-	for _, c := range card.Thread {
-		if c.Kind == "grade" || c.Kind == "merge" {
-			kinds = append(kinds, c.Kind)
-		}
-	}
-	if strings.Join(kinds, ",") != "grade,grade,grade,merge" {
-		t.Fatalf("events = %v", kinds)
-	}
-	if _, err = os.Stat(dir); err != nil {
-		t.Fatal("workspace was deleted")
+	for _, tc := range []struct{ name, message, link, want string }{
+		{"blind-register", "Blind implementation", "register", ""},
+		{"blind-story", "Blind implementation", "story", ""},
+		{"matching", "Implement\n\nSprint: #331\nStory: #1217\nStory-ID: 4474b08d8299\n", "register", ""},
+		{"sprint-mismatch", "Implement\n\nSprint: #332", "register", "Sprint trailer disagrees"},
+		{"story-mismatch", "Implement\n\nStory: #1218", "register", "Story trailer disagrees"},
+		{"id-mismatch", "Implement\n\nStory-ID: other", "register", "Story-ID trailer disagrees"},
+		{"unlinked", "Blind implementation", "", "run is not linked to a story; link it before merge"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, base, _ := sprintGradeFixture(t)
+			attemptRepo, err := gogit.PlainOpen(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			attemptTree, err := attemptRepo.Worktree()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := attemptTree.Reset(&gogit.ResetOptions{Mode: gogit.HardReset, Commit: plumbing.NewHash(base)}); err != nil {
+				t.Fatal(err)
+			}
+			head := sprintGradeCommit(t, dir, "code.go", "blind implementation", tc.message)
+			storyRoot := t.TempDir()
+			story, err := todopkg.Add(todopkg.RepoStore(storyRoot), "implement", "body", "p1", nil, "", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			story.ID, story.Seq, story.Sprint = "4474b08d8299", 1217, 331
+			if tc.link == "story" {
+				story.Weave = 1
+			}
+			if _, err = todopkg.RepoStore(storyRoot).Save(story); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("HOME", t.TempDir())
+			t.Setenv("BASHY_PRINCIPAL", "agent-manager")
+			t.Setenv("BASHY_SPRINT_ENFORCE", "must")
+			t.Setenv(sprintLeaseTokenEnv, "secret")
+			fork := filepath.Join(t.TempDir(), "fork.git")
+			if _, err := gogit.PlainClone(fork, true, &gogit.CloneOptions{URL: dir}); err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Join(t.TempDir(), "real")
+			r, err := gogit.PlainClone(target, false, &gogit.CloneOptions{URL: dir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg, _ := r.Config()
+			cfg.User.Name = "Manager"
+			cfg.User.Email = "manager@example.invalid"
+			if err = r.SetConfig(cfg); err != nil {
+				t.Fatal(err)
+			}
+			w, _ := r.Worktree()
+			if err = w.Reset(&gogit.ResetOptions{Mode: gogit.HardReset, Commit: plumbing.NewHash(base)}); err != nil {
+				t.Fatal(err)
+			}
+			queue, err := weaveQueueDir(storyRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			item := &weaveItem{ID: 1, Owner: "agent-a", Workspace: dir, Branch: "master", BoothForkURL: fork, BaseSHA: base, Created: time.Now().UTC()}
+			if tc.link == "register" {
+				item.Register = story.ID
+			}
+			if err := sprintGradePushAttempt(context.Background(), item, ""); err != nil {
+				t.Fatal(err)
+			}
+			if err = saveWeaveQueue(queue, &weaveQueue{Root: storyRoot, NextID: 2, Items: []*weaveItem{item}}); err != nil {
+				t.Fatal(err)
+			}
+			repo := filepath.Base(storyRoot)
+			run := repo + "#1"
+			s := &weaveStory{ID: 331, StoryRoots: []string{storyRoot}, Lease: &weaveStoryLease{Holder: "agent-manager", TokenHash: sprintLeaseTokenHash("secret"), At: time.Now()}, Runs: []sprintRun{{Repo: repo, Queue: filepath.Base(queue), ID: 1, Born: item.Created}}, Arena: &sprintArena{Repos: []arenaRepo{{Repo: repo, Base: base}}}}
+			board, _ := sprintStoreDir()
+			if err = withWeaveQueueLock(board, func(q *weaveQueue) error { q.Stories = append(q.Stories, s); return nil }); err != nil {
+				t.Fatal(err)
+			}
+			if out, code := runSprint(t, "merge", "331", "--run", run, "--into", target); code == 0 || !strings.Contains(out, "passing grade") {
+				t.Fatalf("missing grade: %d %s", code, out)
+			}
+			if out, code := runSprint(t, "grade", "331", "--run", run, "--gate", "exit 0", "--json"); code != 0 || !strings.Contains(out, `"verdict":"pass"`) {
+				t.Fatalf("grade: %d %s", code, out)
+			}
+			if tc.want != "" {
+				out, code := runSprint(t, "merge", "331", "--run", run, "--into", target)
+				if code == 0 || !strings.Contains(out, tc.want) {
+					t.Fatalf("merge: %d %s; want %s", code, out, tc.want)
+				}
+				ref, _ := r.Head()
+				if ref.Hash().String() != base {
+					t.Fatal("target moved on rejection")
+				}
+				return
+			}
+			for _, name := range []string{"a-dirty", "b-dirty", "c-dirty", "d-dirty", "e-dirty", "f-dirty"} {
+				if err := os.WriteFile(filepath.Join(target, name), []byte("dirty"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			out, code := runSprint(t, "merge", "331", "--run", run, "--into", target)
+			if code == 0 || !strings.Contains(out, "merge target is not clean") {
+				t.Fatalf("dirty: %d %s", code, out)
+			}
+			for _, name := range []string{"a-dirty", "b-dirty", "c-dirty", "d-dirty", "e-dirty"} {
+				if !strings.Contains(out, name) {
+					t.Fatalf("missing dirty path %s: %s", name, out)
+				}
+			}
+			if strings.Contains(out, "f-dirty") {
+				t.Fatalf("more than five paths: %s", out)
+			}
+			for _, name := range []string{"a-dirty", "b-dirty", "c-dirty", "d-dirty", "e-dirty", "f-dirty"} {
+				if err := os.Remove(filepath.Join(target, name)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if out, code := runSprint(t, "merge", "331", "--run", run, "--into", target, "--reviewer", "agent-b"); code == 0 || !strings.Contains(out, "escalate") {
+				t.Fatalf("dominance: %d %s", code, out)
+			}
+			t.Setenv(sprintLeaseTokenEnv, "wrong")
+			if out, code := runSprint(t, "merge", "331", "--run", run, "--into", target); code == 0 {
+				t.Fatalf("invalid token allowed: %s", out)
+			}
+			t.Setenv(sprintLeaseTokenEnv, "secret")
+			if out, code := runSprint(t, "grade", "331", "--run", run, "--gate", "exit 3", "--json"); code == 0 || !strings.Contains(out, `"gate_exit":3`) {
+				t.Fatalf("failed grade: %d %s", code, out)
+			}
+			if out, code := runSprint(t, "merge", "331", "--run", run, "--into", target); code == 0 {
+				t.Fatalf("latest failure ignored: %s", out)
+			}
+			if out, code := runSprint(t, "grade", "331", "--run", run, "--gate", "exit 0"); code != 0 {
+				t.Fatalf("regrade: %d %s", code, out)
+			}
+			if out, code := runSprint(t, "merge", "331", "--run", run, "--into", target, "--json"); code != 0 || !strings.Contains(out, `"merge_commit"`) {
+				t.Fatalf("merge: %d %s", code, out)
+			}
+			q, err := loadWeaveQueue(board)
+			if err != nil {
+				t.Fatal(err)
+			}
+			card := findWeaveStory(q, 331)
+			kinds := []string{}
+			for _, c := range card.Thread {
+				if c.Kind == "grade" || c.Kind == "merge" {
+					kinds = append(kinds, c.Kind)
+				}
+			}
+			if strings.Join(kinds, ",") != "grade,grade,grade,merge" {
+				t.Fatalf("events = %v", kinds)
+			}
+			if _, err = os.Stat(dir); err != nil {
+				t.Fatal("workspace was deleted")
+			}
+			ref, err := r.Head()
+			if err != nil {
+				t.Fatal(err)
+			}
+			merged, err := r.CommitObject(ref.Hash())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(merged.ParentHashes) != 2 || merged.ParentHashes[1].String() != head {
+				t.Fatalf("parents: %v", merged.ParentHashes)
+			}
+			for _, trailer := range []string{"Sprint: #331", "Story: #1217", "Story-ID: 4474b08d8299", "Agent: agent-a"} {
+				if !strings.Contains(merged.Message, trailer) {
+					t.Fatalf("missing %s: %s", trailer, merged.Message)
+				}
+			}
+			original, err := r.CommitObject(plumbing.NewHash(head))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if original.Message != tc.message || original.Author.Name != "Attempt Author" {
+				t.Fatal("attempt changed")
+			}
+		})
 	}
 }
 
@@ -302,7 +398,7 @@ func TestMergeRejectsChangedAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	sprintGradeCommit(t, dir, "new.go", "new", "new attempt")
-	_, err = sprintGradeMerge(context.Background(), target, dir, "master", nil, sprintGradeEvent{Commit: head, Verdict: "pass"}, "agent-a")
+	_, err = sprintGradeMerge(context.Background(), target, dir, "master", nil, sprintGradeEvent{Commit: head, Verdict: "pass"}, "agent-a", nil)
 	if err == nil || !strings.Contains(err.Error(), "changed since grade") {
 		t.Fatalf("stale grade: %v", err)
 	}
@@ -445,7 +541,7 @@ func TestGradeBoothPublishAndMerge(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err = sprintGradeMerge(context.Background(), target, fork, "attempt", nil, ev, "agent-a"); err != nil {
+	if _, err = sprintGradeMerge(context.Background(), target, fork, "attempt", nil, ev, "agent-a", map[string]string{"Sprint": "#331", "Story": "#1217", "Story-ID": "4474b08d8299"}); err != nil {
 		t.Fatal(err)
 	}
 	item.BoothForkURL = filepath.Join(t.TempDir(), "missing")
