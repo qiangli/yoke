@@ -181,3 +181,12 @@ func TestHeatTemplateAndPairedEvents(t *testing.T) {
 		t.Fatalf("read paired events: %v %v", events, err)
 	}
 }
+
+func TestHeatDeliveryEventUsesCanonicalAgent(t *testing.T) {
+	now := time.Date(2026, 9, 29, 10, 0, 0, 0, time.UTC)
+	rec := heatRecord{ID: "identity", Sprint: 331, Story: "story-id"}
+	a := heatAttempt{Agent: "fleet-name", CanonicalAgent: "tool:model", Verdict: "pass", Fairness: heatFairness{Points: 3}}
+	if got := heatDeliveryEvent(rec, a, now).Agent; got != "tool:model" {
+		t.Fatalf("event agent = %q, want canonical tool:model", got)
+	}
+}

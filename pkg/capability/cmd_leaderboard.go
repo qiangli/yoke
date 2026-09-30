@@ -40,6 +40,7 @@ func NewLeaderboardCmd() *cobra.Command {
 		dutyEvents   string
 		dutyLines    string
 		dutyCost     bool
+		dutyH2H      bool
 	)
 	cmd := &cobra.Command{
 		Use:   "leaderboard",
@@ -72,13 +73,14 @@ how a leaderboard stops describing agents.`,
 			// The per-duty band ladder is a separate view over the ladder
 			// event store; without --duty (or --cost) the classic view below
 			// is untouched, byte for byte.
-			if duty != "" || dutyCost {
+			if duty != "" || dutyCost || dutyH2H {
 				return runDutyLeaderboard(cmd.OutOrStdout(), dutyViewOptions{
 					Duty:   duty,
 					Season: dutySeason,
 					Events: dutyEvents,
 					Lines:  dutyLines,
 					Cost:   dutyCost,
+					H2H:    dutyH2H,
 					JSON:   asJSON,
 				})
 			}
@@ -117,6 +119,7 @@ how a leaderboard stops describing agents.`,
 	cmd.Flags().StringVar(&dutyEvents, "events", "", "ladder event store path (default: the host ladder store)")
 	cmd.Flags().StringVar(&dutyLines, "lines", "", "JSON file of fitted rating lines; unfitted lines fail closed")
 	cmd.Flags().BoolVar(&dutyCost, "cost", false, "rating per dollar — informational, routing only, never promotes")
+	cmd.Flags().BoolVar(&dutyH2H, "h2h", false, "paired heat outcomes with exact McNemar tests")
 	cmd.AddCommand(newLadderRecordCmd())
 	return cmd
 }
