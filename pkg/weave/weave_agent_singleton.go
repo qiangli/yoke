@@ -2,6 +2,7 @@ package weave
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/qiangli/yoke/pkg/fleet"
@@ -60,15 +61,42 @@ func weaveAgentWorkingOn(q *weaveQueue, agent string, exceptID int64) *weaveItem
 	return nil
 }
 
+// weaveAgentWorkingElsewhere is the same check over every OTHER queue on the
+// host — the enumeration `weave list --all` walks. An agent is one identity
+// fleet-wide, not per queue: its cursor, attribution and ledger do not know
+// which repo a run was started from. Returns the live run and the name of the
+// repo it belongs to, so the refusal can say repo#id.
+func weaveAgentWorkingElsewhere(skipDir, agent string) (*weaveItem, string) {
+	skipDir = filepath.Clean(skipDir)
+	for _, dir := range weaveAllQueueDirs() {
+		if filepath.Clean(dir) == skipDir {
+			continue
+		}
+		q, err := loadWeaveQueue(dir)
+		if err != nil || !weaveQueueRootAvailable(q) {
+			continue
+		}
+		if busy := weaveAgentWorkingOn(q, agent, 0); busy != nil {
+			root := q.Root
+			if root == "" {
+				root = dir
+			}
+			return busy, filepath.Base(root)
+		}
+	}
+	return nil, ""
+}
+
 // weaveAgentBusyErr says what is happening and names BOTH ways forward. A
 // refusal that only says "no" is how an operator learns to reach for --force.
-func weaveAgentBusyErr(agent string, busy, want *weaveItem) error {
+// busyRepo names the repo of a run in another queue; "" means this one.
+func weaveAgentBusyErr(agent, busyRepo string, busy, want *weaveItem) error {
 	return fmt.Errorf(
-		"agent %s is already working run #%d (%s) — an agent is one identity, and two live issues "+
+		"agent %s is already working run %s#%d (%s) — an agent is one identity, and two live issues "+
 			"under it mix context. Run #%d stays queued for it.\n"+
 			"  wait, and it picks #%d up next\n"+
 			"  or: weave start --run %d --clone   mint a per-issue clone with its own context",
-		agent, busy.ID, strings.TrimSpace(busy.Title), want.ID, want.ID, want.ID)
+		agent, busyRepo, busy.ID, strings.TrimSpace(busy.Title), want.ID, want.ID, want.ID)
 }
 
 // weaveIssueCloneName is the ephemeral clone's name: the agent, plus the work.

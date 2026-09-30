@@ -3337,18 +3337,22 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	// Ephemeral workers are archived after durable queue transitions;
 	// admission here resolves or mints only the worker for this run.
 	if agentLaunch != nil && agentLaunch.Named() {
-		if busy := weaveAgentWorkingOn(q, agentLaunch.Nick, it.ID); busy != nil {
+		busy, busyRepo := weaveAgentWorkingOn(q, agentLaunch.Nick, it.ID), ""
+		if busy == nil {
+			busy, busyRepo = weaveAgentWorkingElsewhere(dir, agentLaunch.Nick)
+		}
+		if busy != nil {
 			if !opts.clone {
 				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
-					weavecli.ExitStateConflict, weaveAgentBusyErr(agentLaunch.Nick, busy, it)))
+					weavecli.ExitStateConflict, weaveAgentBusyErr(agentLaunch.Nick, busyRepo, busy, it)))
 			}
 			cloneName, cerr := weaveCloneAgentForIssue(agentLaunch.Nick, it.ID, dir)
 			if cerr != nil {
 				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 					weavecli.ExitGenericFail, cerr))
 			}
-			fmt.Fprintf(cmd.ErrOrStderr(), "weave: %s is on #%d; running #%d as %s (its own context)\n",
-				agentLaunch.Nick, busy.ID, it.ID, cloneName)
+			fmt.Fprintf(cmd.ErrOrStderr(), "weave: %s is on %s#%d; running #%d as %s (its own context)\n",
+				agentLaunch.Nick, busyRepo, busy.ID, it.ID, cloneName)
 			toolArgs = []string{cloneName}
 			launchSpec = weaveLaunchSpecFromArgs(toolArgs, opts)
 			agentLaunch, agentArgv, aerr = weaveExpandAgent(toolArgs, promptBody, promptTitle)
