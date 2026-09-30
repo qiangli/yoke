@@ -100,7 +100,21 @@ func sprintLadderAppend(cmd *cobra.Command, ev *ladder.Event) {
 	if ev == nil {
 		return
 	}
+	seed := 0
+	if _, modelName, ok := strings.Cut(ev.Agent, ":"); ok {
+		if model, found := fleetCatalog().Model(modelName); found {
+			seed = model.Band
+			if ev.ModelVersion == "" {
+				ev.ModelVersion = model.Version
+			}
+		}
+	}
 	store, err := ladder.OpenStore(ladder.DefaultStorePath())
+	var events []ladder.Event
+	if err == nil {
+		events, err = store.Read()
+	}
+	before := ladder.CurrentBand(seed, events, ev.Agent)
 	if err == nil {
 		err = store.Append(*ev)
 	}
@@ -109,6 +123,21 @@ func sprintLadderAppend(cmd *cobra.Command, ev *ladder.Event) {
 		return
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "ladder: delivery recorded (%s, %d, %g)\n", ev.Agent, ev.Points, ev.Outcome)
+	after := ladder.CurrentBand(seed, append(events, *ev), ev.Agent)
+	if after.Band == before.Band || len(after.Moves) == 0 {
+		return
+	}
+	move := after.Moves[len(after.Moves)-1]
+	audit := ladder.Event{Kind: ladder.EventKindBand, Agent: ev.Agent, At: ev.At, Season: ev.Season, FromBand: move.From, ToBand: move.To, Note: move.Reason}
+	if err := store.Append(audit); err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "ladder: band move not recorded: %v\n", err)
+		return
+	}
+	verb, run := "promoted", "successes"
+	if move.Reason == "relegate" {
+		verb, run = "relegated", "failures"
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "ladder: %s %s L%d -> L%d (5 consecutive %s)\n", ev.Agent, verb, move.From, move.To, run)
 }
 
 func newSprintFailCmd() *cobra.Command {

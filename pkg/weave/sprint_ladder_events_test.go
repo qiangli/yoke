@@ -305,3 +305,47 @@ func TestENOSPCGateFailureIsClassifiedEnvironment(t *testing.T) {
 		t.Fatalf("environment failure did not print fix-item prompt: stdout=%s stderr=%s", out.String(), stderr.String())
 	}
 }
+
+func TestSprintLadderStreakBandAudit(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BASHY_HOME", filepath.Join(home, ".bashy"))
+	cat := pinFleetWith(t)
+	if err := cat.SaveModel(fleet.Model{Name: "model-a", Band: 3}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.SaveAgent(fleet.Agent{Name: "agent-a", Tool: "tool-a", Model: "model-a"}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := ladder.OpenStore("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := NewSprintCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	for i := 0; i < 5; i++ {
+		ev := &ladder.Event{Kind: ladder.EventKindDelivery, Agent: "tool-a:model-a", Points: 1, Outcome: 1, Season: 1, At: time.Unix(int64(i+1), 0)}
+		sprintLadderAppend(cmd, ev)
+		events, err := store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := i + 1
+		if i == 4 {
+			want++
+		}
+		if len(events) != want {
+			t.Fatalf("delivery %d: events=%+v", i+1, events)
+		}
+		if i == 4 {
+			move := events[len(events)-1]
+			if move.Kind != ladder.EventKindBand || move.FromBand != 3 || move.ToBand != 4 || move.Note != "promote" {
+				t.Fatalf("move=%+v", move)
+			}
+			if !strings.Contains(out.String(), "promoted L3 -> L4 (5 consecutive successes)") {
+				t.Fatal(out.String())
+			}
+		}
+	}
+}
