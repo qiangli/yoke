@@ -38,8 +38,8 @@ func TestHeatFakeLaunchAndGrade(t *testing.T) {
 		}
 		return nil
 	}, grade)
-	if rec.Status != "void" || grades != 2 {
-		t.Fatalf("void heat rated: %+v grades=%d", rec, grades)
+	if rec.Status != "rated" || grades != 4 {
+		t.Fatalf("cross-tool heat should rate: %+v grades=%d", rec, grades)
 	}
 }
 
@@ -56,8 +56,31 @@ func TestHeatFairnessAndWinner(t *testing.T) {
 		t.Fatal("distinct entrant models need distinct digests but remain comparable")
 	}
 	b.ToolVersion = "v2"
+	if heatMismatch([]heatFairness{base, b}) != "" {
+		t.Fatal("different entrant tool versions must remain comparable")
+	}
+	b.Template = "other"
 	if heatMismatch([]heatFairness{base, b}) == "" {
-		t.Fatal("tool version mismatch must void heat")
+		t.Fatal("template mismatch must void heat")
+	}
+	b = base
+	b.PromptHash = "different"
+	if heatMismatch([]heatFairness{base, b}) != "prompt mismatch" {
+		t.Fatal("prompt mismatch must void heat")
+	}
+	b = base
+	b.Gate = "different"
+	if heatMismatch([]heatFairness{base, b}) != "gate mismatch" {
+		t.Fatal("gate mismatch must void heat")
+	}
+	b = base
+	b.Started = now.Add(59 * time.Second)
+	if heatMismatch([]heatFairness{base, b}) != "" {
+		t.Fatal("starts within 60 seconds are comparable")
+	}
+	b.Started = now.Add(61 * time.Second)
+	if heatMismatch([]heatFairness{base, b}) != "start tick mismatch" {
+		t.Fatal("starts beyond 60 seconds must void")
 	}
 	results := []heatAttempt{{Agent: "agent-a", Verdict: "fail", Turns: 1}, {Agent: "agent-b", Verdict: "pass", Turns: 20}}
 	if got := heatWinner(results); got != "agent-b" {
@@ -75,6 +98,34 @@ func TestHeatFairnessAndWinner(t *testing.T) {
 	}
 	if got := heatResultCost("{\"type\":\"result\",\"total_cost_usd\":1.25}\n"); got != 1.25 {
 		t.Fatalf("cost = %g", got)
+	}
+}
+
+func TestHeatPreflightFailureIsEnvironmentBlame(t *testing.T) {
+	now := time.Date(2026, 9, 29, 10, 0, 0, 0, time.UTC)
+	rec := heatRecord{ID: "preflight", Attempts: []heatAttempt{{Agent: "agent-a"}, {Agent: "agent-b"}}}
+	heatSchedule(&rec, func(i int, a *heatAttempt) error {
+		a.Fairness = heatFairness{Base: "base", Template: "template", ToolVersion: fmt.Sprintf("v%d", i), Model: a.Agent, Points: 1, MaxRuntime: time.Minute, Started: now}
+		if i == 1 {
+			return fmt.Errorf("workspace preflight failed: authentication required")
+		}
+		return nil
+	}, func(i int, a *heatAttempt) error { a.Verdict = "pass"; return nil })
+	if rec.Status != "rated" || rec.Attempts[1].Verdict != "fail" || rec.Attempts[1].Error == "" {
+		t.Fatalf("preflight attempt: %+v", rec)
+	}
+	e := heatDeliveryEvent(rec, rec.Attempts[1], now)
+	if e.Blame.Class != "environment" || !strings.Contains(e.Blame.Evidence[0].Note, "authentication required") {
+		t.Fatalf("blame: %+v", e.Blame)
+	}
+}
+
+func TestHeatEntrantVersionChangesVoid(t *testing.T) {
+	f := heatFairness{Base: "base", Template: "template", ToolVersion: "v1", Model: "model-a", Points: 1, MaxRuntime: time.Minute, Started: time.Now()}
+	rec := heatRecord{Attempts: []heatAttempt{{Fairness: f, FinishToolVersion: "v2", FinishModel: "model-a"}, {Fairness: f, FinishToolVersion: "v1", FinishModel: "model-a"}}}
+	heatSchedule(&rec, func(_ int, _ *heatAttempt) error { return nil }, func(_ int, a *heatAttempt) error { a.Verdict = "pass"; return nil })
+	if rec.Status != "void" || rec.Reason != "entrant version changed" {
+		t.Fatalf("version drift: %+v", rec)
 	}
 }
 

@@ -25,6 +25,8 @@ import (
 type heatFairness struct {
 	Base        string        `json:"base"`
 	Template    string        `json:"template"`
+	PromptHash  string        `json:"prompt_hash"`
+	Gate        string        `json:"gate"`
 	ToolVersion string        `json:"tool_version"`
 	Model       string        `json:"model"`
 	Points      int           `json:"points"`
@@ -33,18 +35,21 @@ type heatFairness struct {
 }
 
 type heatAttempt struct {
-	Agent    string           `json:"agent"`
-	Run      string           `json:"run"`
-	Fairness heatFairness     `json:"fairness"`
-	Digest   string           `json:"digest"`
-	Verdict  string           `json:"verdict,omitempty"`
-	Tamper   bool             `json:"tamper,omitempty"`
-	GateExit int              `json:"gate_exit,omitempty"`
-	Grade    sprintGradeEvent `json:"grade,omitempty"`
-	Turns    int              `json:"turns,omitempty"`
-	Wall     time.Duration    `json:"wall,omitempty"`
-	Cost     float64          `json:"cost,omitempty"`
-	Error    string           `json:"error,omitempty"`
+	Agent             string           `json:"agent"`
+	Run               string           `json:"run"`
+	Fairness          heatFairness     `json:"fairness"`
+	Digest            string           `json:"digest"`
+	FinishToolVersion string           `json:"finish_tool_version,omitempty"`
+	FinishModel       string           `json:"finish_model,omitempty"`
+	PreflightFailed   bool             `json:"preflight_failed,omitempty"`
+	Verdict           string           `json:"verdict,omitempty"`
+	Tamper            bool             `json:"tamper,omitempty"`
+	GateExit          int              `json:"gate_exit,omitempty"`
+	Grade             sprintGradeEvent `json:"grade,omitempty"`
+	Turns             int              `json:"turns,omitempty"`
+	Wall              time.Duration    `json:"wall,omitempty"`
+	Cost              float64          `json:"cost,omitempty"`
+	Error             string           `json:"error,omitempty"`
 }
 
 type heatRecord struct {
@@ -60,7 +65,7 @@ type heatRecord struct {
 
 func heatDigest(f heatFairness) string {
 	tick := f.Started.UTC().Truncate(time.Minute).Format(time.RFC3339)
-	data, _ := json.Marshal([]any{f.Base, f.Template, f.ToolVersion, f.Model, f.Points, f.MaxRuntime.String(), tick})
+	data, _ := json.Marshal([]any{f.Base, f.Template, f.PromptHash, f.Gate, f.ToolVersion, f.Model, f.Points, f.MaxRuntime.String(), tick})
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
@@ -77,13 +82,16 @@ func heatMismatch(all []heatFairness) string {
 		if a.Template != b.Template {
 			return "template mismatch"
 		}
+		if a.PromptHash != b.PromptHash {
+			return "prompt mismatch"
+		}
+		if a.Gate != b.Gate {
+			return "gate mismatch"
+		}
 		if a.Points != b.Points || a.MaxRuntime != b.MaxRuntime {
 			return "cap mismatch"
 		}
-		if a.ToolVersion != b.ToolVersion {
-			return "tool version mismatch"
-		}
-		if !a.Started.UTC().Truncate(time.Minute).Equal(b.Started.UTC().Truncate(time.Minute)) {
+		if d := a.Started.Sub(b.Started); d > time.Minute || d < -time.Minute {
 			return "start tick mismatch"
 		}
 	}
@@ -120,6 +128,10 @@ func heatSchedule(rec *heatRecord, launch func(int, *heatAttempt) error, grade f
 			a := &rec.Attempts[i]
 			if err := launch(i, a); err != nil {
 				a.Error = err.Error()
+				if strings.Contains(strings.ToLower(a.Error), "preflight") {
+					a.PreflightFailed = true
+					a.Verdict = "fail"
+				}
 			}
 			if !a.Fairness.Started.IsZero() {
 				a.Digest = heatDigest(a.Fairness)
@@ -130,8 +142,11 @@ func heatSchedule(rec *heatRecord, launch func(int, *heatAttempt) error, grade f
 	var fair []heatFairness
 	for _, a := range rec.Attempts {
 		fair = append(fair, a.Fairness)
-		if a.Error != "" {
+		if a.Error != "" && !a.PreflightFailed {
 			rec.Reason = "launch error"
+		}
+		if a.FinishToolVersion != "" && a.FinishToolVersion != a.Fairness.ToolVersion || a.FinishModel != "" && a.FinishModel != a.Fairness.Model {
+			rec.Reason = "entrant version changed"
 		}
 	}
 	if reason := heatMismatch(fair); reason != "" {
@@ -142,6 +157,9 @@ func heatSchedule(rec *heatRecord, launch func(int, *heatAttempt) error, grade f
 		return
 	}
 	for i := range rec.Attempts {
+		if rec.Attempts[i].PreflightFailed {
+			continue
+		}
 		if err := grade(i, &rec.Attempts[i]); err != nil {
 			rec.Attempts[i].Error = err.Error()
 			rec.Reason = "grade error"
@@ -322,6 +340,7 @@ func runSprintHeat(cmd *cobra.Command, sprint int64, story string, agents []stri
 	if len(item.Refs) > 0 {
 		body += fmt.Sprintf("\n\nThis issue also touches: %v\n", item.Refs)
 	}
+	promptSum := sha256.Sum256([]byte(body))
 	var links []sprintRun
 	for i, agent := range agents {
 		it := &weaveItem{Title: item.Title, Body: body, Register: item.ID, State: "todo", Priority: "p2", Points: points, Created: time.Now().UTC()}
@@ -333,7 +352,7 @@ func runSprintHeat(cmd *cobra.Command, sprint int64, story string, agents []stri
 			return err
 		}
 		links = append(links, link)
-		rec.Attempts[i] = heatAttempt{Agent: agent, Run: fmt.Sprintf("%s#%d", link.Repo, link.ID), Fairness: heatFairness{Base: base, Template: template.Digest, Model: agent, Points: points, MaxRuntime: cap}}
+		rec.Attempts[i] = heatAttempt{Agent: agent, Run: fmt.Sprintf("%s#%d", link.Repo, link.ID), Fairness: heatFairness{Base: base, Template: template.Digest, PromptHash: hex.EncodeToString(promptSum[:]), Gate: gate, Model: agent, Points: points, MaxRuntime: cap}}
 	}
 	if err := withWeaveQueueLock(board, func(q *weaveQueue) error {
 		s := findWeaveStory(q, sprint)
@@ -372,6 +391,21 @@ func runSprintHeat(cmd *cobra.Command, sprint int64, story string, agents []stri
 				a.Fairness.Started = it.StartedAt
 			}
 		}
+		if launchErr != nil {
+			return launchErr
+		}
+		finishCtx, finishCancel := context.WithTimeout(cmd.Context(), 10*time.Second)
+		finishVersion, finishErr := exec.CommandContext(finishCtx, launch.Tool, "--version").Output()
+		finishCancel()
+		if finishErr != nil {
+			return fmt.Errorf("finish tool version: %w", finishErr)
+		}
+		a.FinishToolVersion = strings.TrimSpace(string(finishVersion))
+		finishLaunch, _, finishErr := weaveExpandAgent([]string{a.Agent}, body, item.Title)
+		if finishErr != nil || finishLaunch == nil {
+			return fmt.Errorf("finish model: %v", finishErr)
+		}
+		a.FinishModel = finishLaunch.Model
 		return launchErr
 	}, func(i int, a *heatAttempt) error {
 		q, err := loadWeaveQueue(queue)
@@ -473,7 +507,11 @@ func heatDeliveryEvent(rec heatRecord, a heatAttempt, now time.Time) ladder.Even
 			ev.Outcome = 0.5
 		}
 	} else {
-		ev.Blame = blame.Attribution{Class: blame.ClassAgent, Evidence: []blame.Evidence{{Kind: blame.EvidenceGate, Ref: "heat:" + rec.ID + "/" + a.Run, Note: a.Verdict}}, By: ev.Reviewer, At: now}
+		class, kind, note := blame.ClassAgent, blame.EvidenceGate, a.Verdict
+		if a.PreflightFailed {
+			class, note = blame.ClassEnvironment, a.Error
+		}
+		ev.Blame = blame.Attribution{Class: class, Evidence: []blame.Evidence{{Kind: kind, Ref: "heat:" + rec.ID + "/" + a.Run, Note: note}}, By: ev.Reviewer, At: now}
 	}
 	ev.CapsUsed.Turns = a.Turns
 	ev.CapsUsed.WallSeconds = int(a.Wall.Seconds())

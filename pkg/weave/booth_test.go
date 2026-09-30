@@ -162,6 +162,44 @@ func TestBoothAgentDirCopiesLoginOnly(t *testing.T) {
 	}
 }
 
+func TestBoothAgyCopiesGeminiOAuthWithoutMemory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	src := filepath.Join(home, ".gemini")
+	if err := os.MkdirAll(src, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{"oauth_creds.json": "oauth", "google_accounts.json": "account", "history.json": "history"} {
+		if err := os.WriteFile(filepath.Join(src, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(src, "antigravity-cli"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "antigravity-cli", "antigravity-oauth-token"), []byte("token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env, err := boothSeedAgentDirs([]string{"HOME=" + home}, t.TempDir(), 9, "agy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gemini := filepath.Join(boothGetEnv(env, "HOME"), ".gemini")
+	for name, want := range map[string]string{"oauth_creds.json": "oauth", "google_accounts.json": "account"} {
+		b, err := os.ReadFile(filepath.Join(gemini, name))
+		if err != nil || string(b) != want {
+			t.Fatalf("%s: %q %v", name, b, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(gemini, "history.json")); !os.IsNotExist(err) {
+		t.Fatalf("history copied: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join(gemini, "antigravity-cli", "antigravity-oauth-token"))
+	if err != nil || string(b) != "token" {
+		t.Fatalf("CLI token: %q %v", b, err)
+	}
+}
+
 func TestBoothKeychainLoginKeepsConfigAndDisablesMemory(t *testing.T) {
 	src := filepath.Join(t.TempDir(), ".claude")
 	queue := t.TempDir()
