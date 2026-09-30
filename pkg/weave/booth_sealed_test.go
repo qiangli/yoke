@@ -258,6 +258,21 @@ func TestSealedStartRequiresArena(t *testing.T) {
 	}
 }
 
+func TestSealedImageUnavailableExplainsLinuxCLIRequirement(t *testing.T) {
+	err := boothSealedImageUnavailable("localhost/agent-image:missing", fmt.Errorf("not found"))
+	got := err.Error()
+	for _, want := range []string{
+		"localhost/agent-image:missing",
+		"Linux build of the agent CLI",
+		"BASHY_SEALED_IMAGE",
+		"not found",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("diagnostic missing %q: %s", want, got)
+		}
+	}
+}
+
 // TestSealedLiveEgress starts a real sealed container and proves the egress
 // allowlist: the loom stand-in (an HTTP server on host loopback) is reachable
 // through the proxy, while an external host is refused by the proxy and
