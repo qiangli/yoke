@@ -404,6 +404,7 @@ func writeSim(t *testing.T) string {
 			"vendor": r.Vendor, "vendor_cli": r.VendorCLI, "fleet_model": r.Model,
 			"capability_area": r.Area, "benchmark": r.Benchmark, "metric": r.Metric,
 			"score": r.Score, "agent_tool_or_harness": r.Harness, "source_type": r.SourceType,
+			"source_url": "https://example.invalid/" + r.Model + "/" + r.Benchmark,
 		}
 		var cols []string
 		for _, h := range matrixHeader {
@@ -481,5 +482,76 @@ func TestMainUsageErrors(t *testing.T) {
 	}
 	if c, _, _ := runMain("--matrix", filepath.Join(t.TempDir(), "missing.tsv")); c != 1 {
 		t.Errorf("missing file: exit %d want 1", c)
+	}
+}
+
+func TestReconcilePrefersSourceThenLatestAndDropsUntraceable(t *testing.T) {
+	rows := []Row{
+		{Model: "agent-a", Benchmark: "bench", Variant: "main", Score: "40", SourceType: "aggregator", SourceURL: "https://example.invalid/a", Date: "2026-01-02", Line: 2},
+		{Model: "agent-a", Benchmark: "bench", Variant: "main", Score: "50", SourceType: "vendor", SourceURL: "https://example.invalid/b", Date: "2026-01-01", Line: 3},
+		{Model: "agent-a", Benchmark: "bench", Variant: "main", Score: "60", SourceType: "vendor", SourceURL: "https://example.invalid/c", Date: "2026-02-01", Line: 4},
+		{Model: "agent-b", Benchmark: "bench", Variant: "main", Score: "70", SourceType: "official-board", Line: 5},
+	}
+	got, log := Reconcile(rows)
+	if len(got) != 1 || got[0].Line != 4 {
+		t.Fatalf("kept %#v, want line 4", got)
+	}
+	if len(log) != 2 || log[0].Kept.Line != 4 || log[1].Kept.Line != 0 {
+		t.Fatalf("resolution log = %#v", log)
+	}
+	if log[0].Dropped[1].Reason != "source priority" {
+		t.Fatalf("source precedence not logged: %#v", log[0])
+	}
+}
+
+func TestBandsAnchorsAndCaps(t *testing.T) {
+	r := &Result{Models: []ModelEstimate{
+		{Model: "agent-a", Theta: 2, SE: .1}, {Model: "agent-b", Theta: 1, SE: .2},
+		{Model: "agent-c", Theta: 3, SE: .1}, {Model: "agent-d", Theta: 4, SE: .1}, {Model: "agent-e", Theta: 1.5, SE: .1},
+	}}
+	if err := r.AssignBands([]string{"agent-a", "agent-b"}, []string{"agent-c", "agent-e"}, 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, m := range r.Models {
+		got[m.Model] = m.Placement
+	}
+	if got["agent-a"] != "L4" || got["agent-b"] != "L4" {
+		t.Fatalf("anchors = %v", got)
+	}
+	if got["agent-c"] != "L5" {
+		t.Fatalf("above-cut flagship = %v", got)
+	}
+	if got["agent-e"] != "L4" {
+		t.Fatalf("below-cut flagship = %v", got)
+	}
+	if got["agent-d"] != "L4" {
+		t.Fatalf("non-flagship capped = %v", got)
+	}
+}
+
+func TestBandsOutputReportsLineupAndIsDeterministic(t *testing.T) {
+	p := writeSim(t)
+	o := filepath.Join(t.TempDir(), "order.tsv")
+	if err := os.WriteFile(o, []byte("vendor-a\tgen\tmodel-a>model-b\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--matrix", p, "--bands", "--order", o, "--anchors-l4", "model-c,model-d", "--flagships", "model-h", "--format", "md"}
+	c1, out1, err1 := runMain(args...)
+	c2, out2, _ := runMain(args...)
+	if c1 != 0 || c2 != 0 {
+		t.Fatalf("exit %d/%d: %s", c1, c2, err1)
+	}
+	if out1 != out2 {
+		t.Fatal("band output is nondeterministic")
+	}
+	for _, want := range []string{"## Resolutions", "## Lineup", "L4 lower cut", "## Bands"} {
+		if !strings.Contains(out1, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	code, tsv, errs := runMain("--matrix", p, "--bands", "--anchors-l4", "model-c,model-d", "--format", "tsv")
+	if code != 0 || errs != "" || !strings.HasPrefix(tsv, "model\ttheta\tband\tbasis\tnotes\n") {
+		t.Fatalf("band TSV = exit %d stderr %q output %q", code, errs, tsv)
 	}
 }

@@ -381,6 +381,7 @@ type ModelEstimate struct {
 	Placement     string
 	Adjusted      bool    // moved by an order constraint
 	ThetaFit      float64 // θ before any order projection
+	Basis, Notes  string
 }
 
 // ItemEstimate is one item's fitted parameters (on the standardised θ scale).
@@ -416,18 +417,167 @@ type Adjustment struct {
 
 // Result is the whole fit.
 type Result struct {
-	Models     []ModelEstimate
-	Items      []ItemEstimate
-	Offsets    []OffsetEstimate
-	Harness    []HarnessMapping
-	Skips      map[string]int
-	Order      []Adjustment
-	OrderGiven bool
-	NObs       int
-	Params     int
-	Phi        float64
-	Iterations int
-	Converged  bool
+	Models       []ModelEstimate
+	Items        []ItemEstimate
+	Offsets      []OffsetEstimate
+	Harness      []HarnessMapping
+	Skips        map[string]int
+	Order        []Adjustment
+	OrderGiven   bool
+	NObs         int
+	Params       int
+	Phi          float64
+	Iterations   int
+	Converged    bool
+	Resolutions  []Resolution
+	BandCuts     BandCuts
+	Contributing map[string]map[string]bool
+}
+
+// Resolution records how duplicate published measurements were settled.
+// Paper is ranked between vendor and aggregator, extending the design's
+// published source ordering for the matrix's paper-backed entries.
+type Resolution struct {
+	Group   string
+	Kept    Row
+	Dropped []ResolutionDrop
+}
+
+type ResolutionDrop struct {
+	Row    Row
+	Reason string
+}
+
+// BandCuts are the documented seeded-band boundaries.
+type BandCuts struct {
+	L4, L5, L3, L2 float64
+	Set            bool
+}
+
+func sourceRank(source string) int {
+	switch strings.ToLower(strings.TrimSpace(source)) {
+	case "official-board":
+		return 5
+	case "vendor":
+		return 4
+	case "paper":
+		return 3
+	case "aggregator":
+		return 2
+	case "press":
+		return 1
+	default:
+		return 0
+	}
+}
+
+// Reconcile retains one traceable row per model, benchmark, and variant.
+// It ranks official board, vendor, paper, aggregator, press, then uses the
+// latest lexicographic ISO date (and source URL / input line as stable ties).
+func Reconcile(rows []Row) ([]Row, []Resolution) {
+	groups := map[string][]Row{}
+	var keys []string
+	for _, row := range rows {
+		key := row.Model + "\x00" + row.Benchmark + "\x00" + row.Variant
+		if _, ok := groups[key]; !ok {
+			keys = append(keys, key)
+		}
+		groups[key] = append(groups[key], row)
+	}
+	sort.Strings(keys)
+	var kept []Row
+	log := make([]Resolution, 0, len(keys))
+	for _, key := range keys {
+		rows := groups[key]
+		r := Resolution{Group: strings.ReplaceAll(key, "\x00", " / ")}
+		var candidates []Row
+		for _, row := range rows {
+			if strings.TrimSpace(row.SourceURL) == "" {
+				r.Dropped = append(r.Dropped, ResolutionDrop{row, "no source_url"})
+			} else {
+				candidates = append(candidates, row)
+			}
+		}
+		sort.SliceStable(candidates, func(i, j int) bool {
+			a, b := candidates[i], candidates[j]
+			if sourceRank(a.SourceType) != sourceRank(b.SourceType) {
+				return sourceRank(a.SourceType) > sourceRank(b.SourceType)
+			}
+			if a.Date != b.Date {
+				return a.Date > b.Date
+			}
+			if a.SourceURL != b.SourceURL {
+				return a.SourceURL < b.SourceURL
+			}
+			return a.Line < b.Line
+		})
+		if len(candidates) > 0 {
+			r.Kept = candidates[0]
+			kept = append(kept, candidates[0])
+			for _, row := range candidates[1:] {
+				reason := "source priority"
+				if sourceRank(row.SourceType) == sourceRank(candidates[0].SourceType) {
+					reason = "older date"
+				}
+				r.Dropped = append(r.Dropped, ResolutionDrop{row, reason})
+			}
+		}
+		log = append(log, r)
+	}
+	return kept, log
+}
+
+// AssignBands maps the fit to L1–L5 using owner-supplied anchors and
+// flagships. Anchors always remain L4; flagships alone may receive L5.
+func (r *Result) AssignBands(anchors, flagships []string, l3Gap, l2Gap float64) error {
+	if len(anchors) == 0 {
+		return errors.New("--anchors-l4 is required with --bands")
+	}
+	if l3Gap <= 0 || l2Gap <= 0 {
+		return errors.New("band gaps must be positive")
+	}
+	byName := map[string]*ModelEstimate{}
+	for i := range r.Models {
+		byName[r.Models[i].Model] = &r.Models[i]
+	}
+	anchor := map[string]bool{}
+	minTheta, maxTheta, maxHalf := math.Inf(1), math.Inf(-1), 0.0
+	for _, name := range anchors {
+		m := byName[name]
+		if m == nil {
+			return fmt.Errorf("L4 anchor %q not in fit", name)
+		}
+		anchor[name] = true
+		half := Z90 * m.SE
+		minTheta = math.Min(minTheta, m.Theta-half)
+		maxTheta = math.Max(maxTheta, m.Theta)
+		maxHalf = math.Max(maxHalf, half)
+	}
+	cuts := BandCuts{L4: minTheta, L5: maxTheta + maxHalf, Set: true}
+	cuts.L3, cuts.L2 = cuts.L4-l3Gap, cuts.L4-l3Gap-l2Gap
+	r.BandCuts = cuts
+	flagship := map[string]bool{}
+	for _, name := range flagships {
+		flagship[name] = true
+	}
+	for i := range r.Models {
+		m := &r.Models[i]
+		switch {
+		case anchor[m.Model]:
+			m.Placement = "L4"
+		case flagship[m.Model] && m.Theta >= cuts.L5:
+			m.Placement = "L5"
+		case m.Theta >= cuts.L4:
+			m.Placement = "L4"
+		case m.Theta >= cuts.L3:
+			m.Placement = "L3"
+		case m.Theta >= cuts.L2:
+			m.Placement = "L2"
+		default:
+			m.Placement = "L1"
+		}
+	}
+	return nil
 }
 
 // CodeRating maps θ to the seed Glicko code rating.
@@ -777,6 +927,7 @@ func Fit(prep Prepared) (*Result, error) {
 	res := &Result{
 		Skips: prep.Skips, NObs: len(p.obs), Params: p.P,
 		Phi: phi, Iterations: iters, Converged: conv,
+		Contributing: map[string]map[string]bool{},
 	}
 	nObs := make([]int, p.nM)
 	vendors := make([]map[string]int, p.nM)
@@ -787,6 +938,10 @@ func Fit(prep Prepared) (*Result, error) {
 			vendors[m] = map[string]int{}
 		}
 		vendors[m][o.Vendor]++
+		if res.Contributing[o.Model] == nil {
+			res.Contributing[o.Model] = map[string]bool{}
+		}
+		res.Contributing[o.Model][o.Item] = true
 	}
 	for m, name := range p.models {
 		th := (x[m] - mu) / sd
@@ -1180,6 +1335,91 @@ func (r *Result) WriteTSV(w io.Writer, l2, l3 *float64) {
 	}
 }
 
+func (r *Result) bandDetails() {
+	items := append([]ItemEstimate(nil), r.Items...)
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].A != items[j].A {
+			return items[i].A > items[j].A
+		}
+		return items[i].Key < items[j].Key
+	})
+	resolved := map[string][]string{}
+	for _, x := range r.Resolutions {
+		if x.Kept.Model == "" {
+			continue
+		}
+		if len(x.Dropped) > 0 {
+			resolved[x.Kept.Model] = append(resolved[x.Kept.Model], "reconciled "+x.Group)
+		}
+	}
+	adjusted := map[string]bool{}
+	for _, x := range r.Order {
+		if x.Applied {
+			adjusted[x.Model] = true
+		}
+	}
+	for i := range r.Models {
+		basis := make([]string, 0, 3)
+		for _, item := range items {
+			if r.Contributing[r.Models[i].Model][item.Key] && len(basis) < 3 {
+				basis = append(basis, item.Key)
+			}
+		}
+		r.Models[i].Basis = strings.Join(basis, ", ")
+		notes := append([]string(nil), resolved[r.Models[i].Model]...)
+		if adjusted[r.Models[i].Model] {
+			notes = append(notes, "lineup projection")
+		}
+		r.Models[i].Notes = strings.Join(notes, "; ")
+	}
+}
+
+// WriteResolutionsTSV writes the audit log requested by --resolutions.
+func (r *Result) WriteResolutionsTSV(w io.Writer) {
+	fmt.Fprintln(w, "group\tkept_line\tdropped_line\treason")
+	for _, x := range r.Resolutions {
+		for _, d := range x.Dropped {
+			fmt.Fprintf(w, "%s\t%d\t%d\t%s\n", x.Group, x.Kept.Line, d.Row.Line, d.Reason)
+		}
+	}
+}
+
+// WriteBandsMarkdown renders the seed table and its reconciliation audit.
+func (r *Result) WriteBandsMarkdown(w io.Writer) {
+	r.bandDetails()
+	pf := func(format string, a ...any) { fmt.Fprintf(w, format, a...) }
+	c := r.BandCuts
+	pf("# Seed bands — composite coding ability (θ)\n\n")
+	pf("Method: %s. Reconciliation ranks official board > vendor > paper > aggregator > press; among equal sources the latest date wins, and rows without source_url are dropped.\n\n", methodLine)
+	pf("## Band cut points\n\nL4 lower cut = min anchor θ minus that anchor’s 90%% half-interval. L5 cut = max anchor θ plus the largest anchor half-interval. L3 = L4 − gap and L2 = L3 − gap. Only a declared flagship at or above L5 receives L5; other models are capped at L4.\n\n")
+	pf("| L4 lower cut | L5 cut | L3 cut | L2 cut |\n|---|---|---|---|\n| %s | %s | %s | %s |\n", fmtF(c.L4, 3), fmtF(c.L5, 3), fmtF(c.L3, 3), fmtF(c.L2, 3))
+	pf("\n## Resolutions\n\n| group | kept line | dropped line | reason |\n|---|---|---|---|\n")
+	for _, x := range r.Resolutions {
+		for _, d := range x.Dropped {
+			pf("| %s | %d | %d | %s |\n", mdCell(x.Group), x.Kept.Line, d.Row.Line, mdCell(d.Reason))
+		}
+	}
+	pf("\n## Lineup\n\nDisagreements between fitted order and declared lineup are settled by weighted projection.\n\n| vendor | generation | model | θ fitted | θ settled |\n|---|---|---|---|---|\n")
+	for _, a := range r.Order {
+		if a.Applied {
+			pf("| %s | %s | %s | %s | %s |\n", mdCell(a.Vendor), mdCell(a.Generation), mdCell(a.Model), fmtF(a.From, 3), fmtF(a.To, 3))
+		}
+	}
+	pf("\n## Bands\n\n| model | score (θ) | band | basis | notes |\n|---|---|---|---|---|\n")
+	for _, m := range r.Models {
+		pf("| %s | %s | %s | %s | %s |\n", mdCell(m.Model), fmtF(m.Theta, 3), m.Placement, mdCell(m.Basis), mdCell(m.Notes))
+	}
+}
+
+// WriteBandsTSV writes the publishable seed data table.
+func (r *Result) WriteBandsTSV(w io.Writer) {
+	r.bandDetails()
+	fmt.Fprintln(w, "model\ttheta\tband\tbasis\tnotes")
+	for _, m := range r.Models {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", m.Model, fmtF(m.Theta, 3), m.Placement, m.Basis, m.Notes)
+	}
+}
+
 func parseLine(s string) (*float64, error) {
 	if s == "" {
 		return nil, nil
@@ -1202,6 +1442,13 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	l2s := fs.String("l2-line", "", "θ of the L2 line (below it: L1)")
 	l3s := fs.String("l3-line", "", "θ of the L3 line (above it: L3, L4 candidate)")
 	format := fs.String("format", "md", "output format: md or tsv")
+	bands := fs.Bool("bands", false, "assign seeded L1-L5 bands")
+	reconcile := fs.Bool("reconcile", false, "reconcile traceable duplicate measurements")
+	resolutions := fs.String("resolutions", "", "write reconciliation audit TSV")
+	anchors := fs.String("anchors-l4", "", "comma-separated L4 anchor models (required with --bands)")
+	flagships := fs.String("flagships", "", "comma-separated current frontier flagship models")
+	l3Gap := fs.Float64("l3-gap", 1, "θ gap from L4 to L3")
+	l2Gap := fs.Float64("l2-gap", 1, "θ gap from L3 to L2")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -1243,6 +1490,10 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "yoke-seedfit: %v\n", err)
 		return 1
 	}
+	var resolutionLog []Resolution
+	if *bands || *reconcile {
+		rows, resolutionLog = Reconcile(rows)
+	}
 	res, err := Fit(Prepare(rows))
 	if err != nil {
 		fmt.Fprintf(stderr, "yoke-seedfit: %v\n", err)
@@ -1262,11 +1513,45 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		}
 		res.ApplyOrder(chains)
 	}
-	res.Place(l2, l3)
-	if *format == "tsv" {
+	if *bands {
+		if err := res.AssignBands(splitCSV(*anchors), splitCSV(*flagships), *l3Gap, *l2Gap); err != nil {
+			fmt.Fprintf(stderr, "yoke-seedfit: %v\n", err)
+			return 2
+		}
+	} else {
+		res.Place(l2, l3)
+	}
+	res.Resolutions = resolutionLog
+	if *resolutions != "" {
+		rf, err := os.Create(*resolutions)
+		if err != nil {
+			fmt.Fprintf(stderr, "yoke-seedfit: %v\n", err)
+			return 1
+		}
+		res.WriteResolutionsTSV(rf)
+		if err := rf.Close(); err != nil {
+			fmt.Fprintf(stderr, "yoke-seedfit: %v\n", err)
+			return 1
+		}
+	}
+	if *bands && *format == "tsv" {
+		res.WriteBandsTSV(stdout)
+	} else if *bands {
+		res.WriteBandsMarkdown(stdout)
+	} else if *format == "tsv" {
 		res.WriteTSV(stdout, l2, l3)
 	} else {
 		res.WriteMarkdown(stdout, l2, l3)
 	}
 	return 0
+}
+
+func splitCSV(s string) []string {
+	var out []string
+	for _, x := range strings.Split(s, ",") {
+		if x = strings.TrimSpace(x); x != "" {
+			out = append(out, x)
+		}
+	}
+	return out
 }
