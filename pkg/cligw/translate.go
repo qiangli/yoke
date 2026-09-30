@@ -108,6 +108,21 @@ func inlineSystemPrompt(system, prompt string) string {
 	return "System:\n" + system + "\n\n" + prompt
 }
 
+// Muse exec has no native system-prompt override. Ask it to complete the
+// caller's conversation, rather than interpreting the transcript as a task for
+// its local coding agent. In particular, Genie's instruction to use native
+// tools must be reconciled with the door's text transport at this boundary.
+func museCompletionPrompt(input CompletionPrompt) string {
+	return `Complete the supplied conversation by producing only its next assistant reply.
+The supplied system instructions and conversation are the completion context. Tool names and workspace references in that context belong to the caller. The caller executes requested tools and supplies their results in later conversation turns. Your local Muse tools remain disabled; completing this conversation requires no local shell execution or filesystem access.
+
+BEGIN COMPLETION CONTEXT
+` + inlineSystemPrompt(systemPrompt(input.System), input.Prompt) + `
+END COMPLETION CONTEXT
+
+Output transport: return only the next assistant reply, without role labels or commentary about completing the conversation. If the reply calls a supplied tool, serialize that call as exactly one JSON object: {"tool_calls":[{"name":"<listed tool name>","arguments":{}}]}. This is the caller's tool-call transport, including when the supplied instructions say to use the tool itself rather than write a JSON blob or shell script as text. Use only supplied tool names and argument schemas; preserve tool-choice constraints. Do not execute tools locally, invent tool results, or claim a requested action succeeded before the caller supplies its result. If no tool call is needed, return the assistant's plain text answer.`
+}
+
 func textContent(raw json.RawMessage) (string, error) {
 	if len(bytes.TrimSpace(raw)) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return "", nil

@@ -191,7 +191,9 @@ func (w *Worker) DoCompletion(ctx context.Context, input CompletionPrompt, onEve
 	w.used = true
 	mode := w.mode
 	prompt := input.Prompt
-	if !w.nativeSystemPrompt() {
+	if w.tool.Name == "muse" {
+		prompt = museCompletionPrompt(input)
+	} else if !w.nativeSystemPrompt() {
 		prompt = inlineSystemPrompt(systemPrompt(input.System), prompt)
 	}
 	// Native system overrides are launch-time settings. A worker prewarmed with
