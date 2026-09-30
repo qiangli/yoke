@@ -120,7 +120,7 @@ how a leaderboard stops describing agents.`,
 	cmd.Flags().StringVar(&dutyLines, "lines", "", "JSON file of fitted rating lines; unfitted lines fail closed")
 	cmd.Flags().BoolVar(&dutyCost, "cost", false, "rating per dollar — informational, routing only, never promotes")
 	cmd.Flags().BoolVar(&dutyH2H, "h2h", false, "paired heat outcomes with exact McNemar tests")
-	cmd.AddCommand(newLadderRecordCmd())
+	cmd.AddCommand(newLadderRecordCmd(), newLadderSeasonEndCmd())
 	return cmd
 }
 
