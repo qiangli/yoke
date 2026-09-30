@@ -3,12 +3,11 @@ id: 3c5bbbb60f9e
 kind: bug
 title: 'door-muse: drop the muse tool-calling refusal so genie-muse-spark1.3 answers (live pong gate)'
 seq: 25
-status: assigned
+status: todo
 priority: p1
 labels:
     - door
 created: 2026-09-30T16:16:34.75947Z
-assignee: claude-opus5.5
 sprint: 340
 sprint_id: 07abaf0d-4c54-57e7-b324-8c926b4c300f
 sprint_title: Pure-Go m4, localedef and lp; listing view for the optional external POSIX tools
