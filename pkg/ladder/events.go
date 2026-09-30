@@ -21,6 +21,8 @@ const (
 	// EventKindSeed sets an agent's starting rating for one duty from
 	// public data (SeedR/SeedRD). It is a prior, never a rated event.
 	EventKindSeed EventKind = "seed"
+	// EventKindBand records a computed move for audit; it is not replay input.
+	EventKindBand EventKind = "band"
 )
 
 // Event is one immutable item in the rating ledger. ID is the stable correction reference.
@@ -45,14 +47,17 @@ type Event struct {
 		Turns       int `json:"turns"`
 		WallSeconds int `json:"wall_seconds"`
 	} `json:"caps_used,omitempty"`
-	Cost        float64     `json:"cost,omitempty"`
-	Sprint      int         `json:"sprint,omitempty"`
-	Score       float64     `json:"score,omitempty"`
-	Opponent    Rating      `json:"opponent,omitempty"`
-	Supersedes  string      `json:"supersedes,omitempty"`
-	Note        string      `json:"note,omitempty"`
-	Cert        Certificate `json:"cert,omitempty"`
-	Provisional int         `json:"provisional,omitempty"`
+	Cost         float64     `json:"cost,omitempty"`
+	Sprint       int         `json:"sprint,omitempty"`
+	Score        float64     `json:"score,omitempty"`
+	Opponent     Rating      `json:"opponent,omitempty"`
+	Supersedes   string      `json:"supersedes,omitempty"`
+	Note         string      `json:"note,omitempty"`
+	FromBand     int         `json:"from_band,omitempty"`
+	ToBand       int         `json:"to_band,omitempty"`
+	ModelVersion string      `json:"model_version,omitempty"`
+	Cert         Certificate `json:"cert,omitempty"`
+	Provisional  int         `json:"provisional,omitempty"`
 	// SeedR and SeedRD are a seed event's starting rating and deviation.
 	SeedR  float64 `json:"seed_r,omitempty"`
 	SeedRD float64 `json:"seed_rd,omitempty"`
@@ -60,7 +65,7 @@ type Event struct {
 
 func eventKnownKind(k EventKind) bool {
 	switch k {
-	case EventKindDelivery, EventKindRegression, EventKindEstimate, EventKindManage, EventKindCert, EventKindSeat, EventKindCorrection, EventKindSeed:
+	case EventKindDelivery, EventKindRegression, EventKindEstimate, EventKindManage, EventKindCert, EventKindSeat, EventKindCorrection, EventKindSeed, EventKindBand:
 		return true
 	}
 	return false
