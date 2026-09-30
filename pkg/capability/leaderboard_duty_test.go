@@ -379,3 +379,45 @@ func TestDutyJSONSchema(t *testing.T) {
 		}
 	}
 }
+
+func TestHeadToHeadPairsHeatsAndMcNemar(t *testing.T) {
+	events := []ladder.Event{
+		{Season: 1, Kind: ladder.EventKindDelivery, Agent: "agent-a", Duty: ladder.DutyCode, Points: 3, Outcome: 1, Note: "heat:one"},
+		{Season: 1, Kind: ladder.EventKindDelivery, Agent: "agent-b", Duty: ladder.DutyCode, Points: 3, Outcome: 0, Note: "heat:one"},
+		{Season: 1, Kind: ladder.EventKindDelivery, Agent: "agent-a", Duty: ladder.DutyCode, Points: 3, Outcome: 0, Note: "heat:two"},
+		{Season: 1, Kind: ladder.EventKindDelivery, Agent: "agent-b", Duty: ladder.DutyCode, Points: 3, Outcome: 1, Note: "heat:two"},
+		{Season: 1, Kind: ladder.EventKindDelivery, Agent: "agent-a", Duty: ladder.DutyCode, Points: 3, Outcome: 1, Note: "heat:three"},
+		{Season: 1, Kind: ladder.EventKindDelivery, Agent: "agent-b", Duty: ladder.DutyCode, Points: 3, Outcome: 1, Note: "heat:three"},
+	}
+	rows := ComputeHeadToHead(events, 1, ladder.DutyCode)
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	r := rows[0]
+	if r.Shared != 3 || r.WinsA != 1 || r.WinsB != 1 || r.Ties != 1 || r.Discordant != 2 || r.P != 1 || !r.Inseparable {
+		t.Fatalf("row = %+v", r)
+	}
+}
+
+func TestHeadToHeadExactMcNemar(t *testing.T) {
+	if got := ExactMcNemar(8, 2); got < 0.109374 || got > 0.109376 {
+		t.Fatalf("p = %g, want 0.109375", got)
+	}
+}
+
+func TestHeadToHeadJSONAndInseparableText(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	events := []ladder.Event{
+		{Season: 1, Kind: ladder.EventKindDelivery, Agent: "agent-a", Duty: ladder.DutyCode, Points: 3, Outcome: 1, Note: "heat:one"},
+		{Season: 1, Kind: ladder.EventKindDelivery, Agent: "agent-b", Duty: ladder.DutyCode, Points: 3, Outcome: 0, Note: "heat:one"},
+	}
+	path := dutyWriteEvents(t, events)
+	board := dutyRunBoard(t, "--h2h", "--events", path, "--json")
+	if len(board.H2H) != 1 || !board.H2H[0].Inseparable {
+		t.Fatalf("h2h = %+v, want one inseparable pair", board.H2H)
+	}
+	out := dutyRun(t, "--h2h", "--events", path)
+	if !strings.Contains(out, "inseparable") {
+		t.Fatalf("text must label inseparable pair:\n%s", out)
+	}
+}

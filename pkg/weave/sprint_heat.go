@@ -36,6 +36,7 @@ type heatFairness struct {
 
 type heatAttempt struct {
 	Agent             string           `json:"agent"`
+	CanonicalAgent    string           `json:"canonical_agent,omitempty"`
 	Run               string           `json:"run"`
 	Fairness          heatFairness     `json:"fairness"`
 	Digest            string           `json:"digest"`
@@ -390,6 +391,11 @@ func runSprintHeat(cmd *cobra.Command, sprint int64, story string, agents []stri
 			if it := findWeaveItem(q, links[i].ID); it != nil && !it.StartedAt.IsZero() {
 				a.Fairness.Started = it.StartedAt
 			}
+			if it := findWeaveItem(q, links[i].ID); it != nil {
+				if agent, ok := weaveCapabilityAgent(it); ok {
+					a.CanonicalAgent = agent
+				}
+			}
 		}
 		if launchErr != nil {
 			return launchErr
@@ -500,7 +506,15 @@ func heatFinish(cmd *cobra.Command, rec heatRecord, store *ladder.Store) error {
 }
 
 func heatDeliveryEvent(rec heatRecord, a heatAttempt, now time.Time) ladder.Event {
-	ev := ladder.Event{Kind: ladder.EventKindDelivery, Agent: a.Agent, Duty: ladder.DutyCode, Points: ladder.Points(a.Fairness.Points), At: now, Season: ladder.SeasonOf(now), Sprint: int(rec.Sprint), Story: rec.Story, Note: "heat:" + rec.ID, Reviewer: weaveConductorName("")}
+	agent := a.CanonicalAgent
+	if agent == "" {
+		if binding, ok := fleetCatalog().Agent(a.Agent); ok {
+			agent = binding.MatrixKey()
+		} else {
+			agent = a.Agent
+		}
+	}
+	ev := ladder.Event{Kind: ladder.EventKindDelivery, Agent: agent, Duty: ladder.DutyCode, Points: ladder.Points(a.Fairness.Points), At: now, Season: ladder.SeasonOf(now), Sprint: int(rec.Sprint), Story: rec.Story, Note: "heat:" + rec.ID, Reviewer: weaveConductorName("")}
 	if a.Verdict == "pass" {
 		ev.Outcome = 1
 		if a.Fairness.MaxRuntime > 0 && a.Wall > a.Fairness.MaxRuntime {

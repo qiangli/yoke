@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"sort"
 	"strconv"
@@ -63,6 +64,21 @@ type DutyBoard struct {
 	Season        int                  `json:"season"`
 	Lines         ladder.Lines         `json:"lines"`
 	Duties        map[string][]DutyRow `json:"duties"`
+	H2H           []HeadToHeadRow      `json:"h2h"`
+}
+
+// HeadToHeadRow is one paired comparison from heat delivery events. AgentA
+// sorts before AgentB, so WinsA and WinsB have a stable meaning.
+type HeadToHeadRow struct {
+	AgentA      string  `json:"agent_a"`
+	AgentB      string  `json:"agent_b"`
+	Shared      int     `json:"shared"`
+	WinsA       int     `json:"wins_a"`
+	WinsB       int     `json:"wins_b"`
+	Ties        int     `json:"ties"`
+	Discordant  int     `json:"discordant"`
+	P           float64 `json:"p"`
+	Inseparable bool    `json:"inseparable"`
 }
 
 // ComputeDutyBoard replays the event ledger through the current season and
@@ -118,6 +134,7 @@ func ComputeDutyBoard(events []ladder.Event, season int, override *ladder.Lines,
 		Season:        season,
 		Lines:         lines,
 		Duties:        make(map[string][]DutyRow, len(duties)),
+		H2H:           []HeadToHeadRow{},
 	}
 	for _, duty := range duties {
 		rows := make([]DutyRow, 0, len(names))
@@ -273,10 +290,14 @@ type dutyViewOptions struct {
 	Events string // "" = ladder.DefaultStorePath()
 	Lines  string // JSON file of ladder.Lines
 	Cost   bool
+	H2H    bool
 	JSON   bool
 }
 
 func runDutyLeaderboard(w io.Writer, opts dutyViewOptions) error {
+	if opts.H2H && opts.Duty == "" {
+		opts.Duty = string(ladder.DutyCode)
+	}
 	duties, err := dutySelection(opts.Duty)
 	if err != nil {
 		return err
@@ -323,6 +344,9 @@ func runDutyLeaderboard(w io.Writer, opts dutyViewOptions) error {
 		return renderDutyCost(w, events, season, duties[0], path)
 	}
 	board := ComputeDutyBoard(events, season, override, duties)
+	if opts.H2H {
+		board.H2H = ComputeHeadToHead(events, season, duties[0])
+	}
 	if opts.JSON {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
@@ -344,6 +368,100 @@ func dutySelection(s string) ([]ladder.Duty, error) {
 	default:
 		return nil, fmt.Errorf("leaderboard: unknown duty %q (code, manage, judge, all)", s)
 	}
+}
+
+// ComputeHeadToHead joins delivery events from the same heat into binary
+// paired outcomes. A passing outcome wins over every non-passing outcome;
+// matching binary outcomes are ties. Only one event per agent per heat is
+// considered, so a malformed duplicate cannot manufacture a comparison.
+func ComputeHeadToHead(events []ladder.Event, season int, duty ladder.Duty) []HeadToHeadRow {
+	heats := make(map[string]map[string]ladder.Event)
+	for _, e := range events {
+		if e.Kind != ladder.EventKindDelivery || e.Duty != duty || e.Season < 1 || e.Season > season {
+			continue
+		}
+		id, ok := heatID(e.Note)
+		if !ok || e.Agent == "" {
+			continue
+		}
+		if heats[id] == nil {
+			heats[id] = make(map[string]ladder.Event)
+		}
+		if _, exists := heats[id][e.Agent]; !exists {
+			heats[id][e.Agent] = e
+		}
+	}
+
+	type pair struct{ a, b string }
+	rows := make(map[pair]*HeadToHeadRow)
+	for _, entrants := range heats {
+		names := make([]string, 0, len(entrants))
+		for name := range entrants {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for i := 0; i < len(names); i++ {
+			for j := i + 1; j < len(names); j++ {
+				key := pair{names[i], names[j]}
+				r := rows[key]
+				if r == nil {
+					r = &HeadToHeadRow{AgentA: key.a, AgentB: key.b}
+					rows[key] = r
+				}
+				r.Shared++
+				aPass := entrants[key.a].Outcome == 1
+				bPass := entrants[key.b].Outcome == 1
+				switch {
+				case aPass && !bPass:
+					r.WinsA++
+				case bPass && !aPass:
+					r.WinsB++
+				default:
+					r.Ties++
+				}
+			}
+		}
+	}
+	out := make([]HeadToHeadRow, 0, len(rows))
+	for _, r := range rows {
+		r.Discordant = r.WinsA + r.WinsB
+		r.P = ExactMcNemar(r.WinsA, r.WinsB)
+		r.Inseparable = r.Discordant < 6 || r.P >= 0.05
+		out = append(out, *r)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].AgentA != out[j].AgentA {
+			return out[i].AgentA < out[j].AgentA
+		}
+		return out[i].AgentB < out[j].AgentB
+	})
+	return out
+}
+
+func heatID(note string) (string, bool) {
+	const prefix = "heat:"
+	if !strings.HasPrefix(note, prefix) || len(note) == len(prefix) {
+		return "", false
+	}
+	return note[len(prefix):], true
+}
+
+// ExactMcNemar is the two-sided exact binomial p-value for discordant pairs.
+func ExactMcNemar(winsA, winsB int) float64 {
+	n := winsA + winsB
+	if n == 0 {
+		return 1
+	}
+	m := min(winsA, winsB)
+	ln2 := math.Ln2
+	var tail float64
+	for k := 0; k <= m; k++ {
+		lnChoose, _ := math.Lgamma(float64(n + 1))
+		lnK, _ := math.Lgamma(float64(k + 1))
+		lnRest, _ := math.Lgamma(float64(n - k + 1))
+		tail += math.Exp(lnChoose - lnK - lnRest - float64(n)*ln2)
+	}
+	return min(1, 2*tail)
 }
 
 func dutyReadEvents(path string) ([]ladder.Event, error) {
@@ -383,6 +501,18 @@ func renderDutyBoard(w io.Writer, board DutyBoard, path string) error {
 			fmt.Fprintf(w, "  %-4s %-24s %6.0f %5.0f %6.0f %7s %-15s %-44s %-8s %s\n",
 				rank, r.Agent, r.R, r.RD, r.Lower, events, dutyBandCell(r),
 				strings.Join(r.Missing, "; "), r.Currency, r.Move)
+		}
+	}
+	if len(board.H2H) > 0 {
+		fmt.Fprintln(w, "\nHEAD-TO-HEAD (paired heat outcomes)")
+		fmt.Fprintln(w, "  AGENT A                  AGENT B                  SHARED  W-L-T   P")
+		for _, r := range board.H2H {
+			result := fmt.Sprintf("%d-%d-%d", r.WinsA, r.WinsB, r.Ties)
+			label := fmt.Sprintf("%.4g", r.P)
+			if r.Inseparable {
+				label += " inseparable"
+			}
+			fmt.Fprintf(w, "  %-24s %-24s %6d  %-7s %s\n", r.AgentA, r.AgentB, r.Shared, result, label)
 		}
 	}
 	fmt.Fprintf(w, "\n* established (>= %d rated events) · ≈ inseparable from the row above (overlapping rating intervals)\n",
