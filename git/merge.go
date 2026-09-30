@@ -358,10 +358,10 @@ func Merge(opts MergeOptions) (*Result, error) {
 // (repo then global). Errors with a how-to-fix hint when absent —
 // callers use this to fail fast before mutating any ref.
 func commitSignature(r *gogit.Repository) (*object.Signature, error) {
-	// LocalScope merges system + global + repo-local config, so a
-	// repo-local `git config user.name` takes precedence over global —
-	// matching real git's identity resolution.
-	cfg, err := r.ConfigScoped(config.LocalScope)
+	// go-git's SystemScope is the widest view: system + global + repo-local,
+	// with repo-local taking precedence — real git's identity resolution.
+	// (LocalScope is the repo config ALONE.)
+	cfg, err := r.ConfigScoped(config.SystemScope)
 	if err != nil || cfg.User.Name == "" || cfg.User.Email == "" {
 		return nil, fmt.Errorf("user identity not configured — run %q and %q first", CLIName+" config user.name <name>", CLIName+" config user.email <email>")
 	}
