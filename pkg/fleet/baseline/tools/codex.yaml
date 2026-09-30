@@ -43,7 +43,7 @@ cli:
     # isolated clone); chat and other launches without one keep codex's default.
     # -c is a global option, so it must precede `exec` (rendered after the binary).
     workspace_arg: -c sandbox_workspace_write.writable_roots=["{workspace}/.git"] -c sandbox_workspace_write.network_access=true
-    steer_exec: codex --model {model}
+    steer_exec: codex --no-daemon --model {model}
     prompt_position: last
     # MEASURED 2026-09-24 (codex-cli 0.156.1): a directory codex has not seen
     # opens a "Trust this folder? … 1. Trust and continue  2. Quit" dialog, and

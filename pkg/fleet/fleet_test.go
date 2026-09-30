@@ -599,3 +599,22 @@ func TestPersonOSUserIsPerHost(t *testing.T) {
 		t.Fatalf("DefaultOSUser not used: %q, %v", u, known)
 	}
 }
+
+// A steered codex session (conductors, steered workers) must run its shell
+// commands in its own process. Without --no-daemon the TUI hands them to the
+// shared app-server daemon, whose environment is the login profile's, so the
+// identity foreman injects (BASHY_AGENT_ID, BASHY_PRINCIPAL, ...) is lost and
+// every sprint action records as an anonymous bypass.
+func TestBaselineCodexSteerRunsWithoutTheSharedDaemon(t *testing.T) {
+	codex, ok := baseline(t).Tool("codex")
+	if !ok {
+		t.Fatal("baseline codex missing")
+	}
+	argv, ok := codex.SteerArgvPrefix("gpt-6-sol")
+	if !ok {
+		t.Fatal("baseline codex is not steerable")
+	}
+	if !strings.Contains(strings.Join(argv, " "), "--no-daemon") {
+		t.Fatalf("codex steer argv %q lacks --no-daemon", argv)
+	}
+}
