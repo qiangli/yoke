@@ -3,6 +3,12 @@ kind: cli
 display: Codex
 cli:
   binary: codex
+  versions:
+    - version: 0.157.1
+  linux:
+    install: npm install -g @openai/codex@{version}
+    requires: [nodejs, npm]
+    binary: codex
   launch:
     warm: stdin
     session_env:

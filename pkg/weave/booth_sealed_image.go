@@ -26,7 +26,6 @@ type boothSealedImagePlan struct {
 
 var boothSealedImageComponent = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 var boothSealedImageVersion = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`)
-var boothSealedImagePackage = regexp.MustCompile(`^(@[a-z0-9._-]+/)?[a-z0-9][a-z0-9._-]*$`)
 
 func boothSealedImageTag(t fleet.Tool, d *fleet.CommandDownload, override string) (string, error) {
 	if override != "" {
@@ -60,12 +59,32 @@ func boothSealedPlanImage(t fleet.Tool, d *fleet.CommandDownload, tag, arch stri
 		return p, fmt.Errorf("sealed image: unsupported Linux architecture %q", arch)
 	}
 	binary := filepath.Base(t.CLI.Binary)
+	if t.CLI.Linux.Binary != "" {
+		binary = filepath.Base(t.CLI.Linux.Binary)
+	}
 	if !boothSealedImageComponent.MatchString(binary) {
 		return p, fmt.Errorf("sealed image for %s: missing or invalid cli.binary", t.Name)
 	}
 	var install string
-	packages := "git ca-certificates"
-	if d != nil {
+	packages := "ca-certificates git"
+	if t.CLI.Linux.Install != "" {
+		if t.CLI.Linux.Binary == "" {
+			return p, fmt.Errorf("sealed image for %s: missing cli.linux.binary", t.Name)
+		}
+		if len(t.CLI.Versions) == 0 || !boothSealedImageVersion.MatchString(t.CLI.Versions[0].Version) {
+			return p, fmt.Errorf("sealed image for %s: missing or invalid cli.versions.version for cli.linux", t.Name)
+		}
+		if strings.ContainsAny(t.CLI.Linux.Install, "\r\n") {
+			return p, fmt.Errorf("sealed image for %s: invalid cli.linux.install", t.Name)
+		}
+		for _, required := range t.CLI.Linux.Requires {
+			if !boothSealedImageComponent.MatchString(required) {
+				return p, fmt.Errorf("sealed image for %s: invalid cli.linux.requires package %q", t.Name, required)
+			}
+			packages += " " + required
+		}
+		install = strings.ReplaceAll(t.CLI.Linux.Install, "{version}", t.CLI.Versions[0].Version)
+	} else if d != nil {
 		if d.Version == "" {
 			return p, fmt.Errorf("sealed image for %s: missing download.version", t.Name)
 		}
@@ -102,26 +121,7 @@ func boothSealedPlanImage(t fleet.Tool, d *fleet.CommandDownload, tag, arch stri
 		}
 		install += " && chmod 0755 " + dest + " && rm /tmp/agent-download"
 	} else {
-		if len(t.CLI.Versions) == 0 {
-			return p, fmt.Errorf("sealed image for %s: missing Linux recipe cli.versions.install (npm install -g PACKAGE) or command download.url", t.Name)
-		}
-		v := t.CLI.Versions[0]
-		words := strings.Fields(v.Install)
-		if len(words) != 4 || words[0] != "npm" || words[1] != "install" || words[2] != "-g" {
-			return p, fmt.Errorf("sealed image for %s: missing Linux recipe cli.versions.install (npm install -g PACKAGE) or command download.url", t.Name)
-		}
-		pkg := words[3]
-		if i := strings.LastIndex(pkg, "@"); i > 0 {
-			if pkg[i+1:] != v.Version {
-				return p, fmt.Errorf("sealed image for %s: cli.versions.install version differs from cli.versions.version", t.Name)
-			}
-			pkg = pkg[:i]
-		}
-		if !boothSealedImagePackage.MatchString(pkg) || !boothSealedImageVersion.MatchString(v.Version) {
-			return p, fmt.Errorf("sealed image for %s: invalid cli.versions.install package or cli.versions.version", t.Name)
-		}
-		packages += " nodejs npm"
-		install = "npm install -g -- " + boothSealedImageQuote(pkg+"@"+v.Version) + " && npm cache clean --force"
+		return p, fmt.Errorf("sealed image for %s: missing Linux recipe cli.linux.install or command download.url", t.Name)
 	}
 	resolved, err := boothSealedImageTag(t, d, tag)
 	if err != nil {
