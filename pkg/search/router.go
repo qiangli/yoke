@@ -4,13 +4,13 @@ import "strings"
 
 // Lane is the search primitive a query is routed to. The router classifies a
 // query to a lane and dispatches to the cheapest primitive that can answer it —
-// this is bashy search's spine (see docs/bashy-search-design.md). No lane builds
-// a persistent code index.
+// this is bashy search's spine (see docs/bashy-search-design.md). The filename
+// lane can use a persistent index; content and code intelligence remain scans.
 type Lane string
 
 const (
 	LaneContent Lane = "content" // literal/regex text → grep-style scan
-	LaneFiles   Lane = "files"   // filename/path → find
+	LaneFiles   Lane = "files"   // filename/path → indexed lookup or scan
 	LaneSymbol  Lane = "symbol"  // "where is X defined" → ast (treesitter)
 	LaneRefs    Lane = "refs"    // "who calls X" / impact → graph / ast refs
 	LaneKB      Lane = "kb"      // concept / lesson → kb knowledge

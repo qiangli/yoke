@@ -1,6 +1,6 @@
 // Local search (P0b) — the other half of the find-things primitive. A unifying
-// FRONT over what bashy already has: a content/filename scan (grep+find, no new
-// index — a scan is not an index) and kb facts (the kb Go API). ast (treesitter)
+// FRONT over what bashy already has: a content scan, indexed or scanned filenames,
+// and kb facts (the kb Go API). ast (treesitter)
 // and graph are a documented follow-up; an agent can call those verbs directly
 // today.
 package search
@@ -61,7 +61,7 @@ func Local(query string, opt LocalOptions) ([]LocalResult, error) {
 	case "kb":
 		return searchKB(q, max)
 	case "files":
-		return scanTree(dir, q, max, true)
+		return searchFiles(dir, q, max)
 	case "content":
 		return scanTree(dir, q, max, false)
 	}
@@ -69,7 +69,7 @@ func Local(query string, opt LocalOptions) ([]LocalResult, error) {
 	lane, term := Classify(q)
 	switch lane {
 	case LaneFiles:
-		return scanTree(dir, term, max, true)
+		return searchFiles(dir, term, max)
 	case LaneKB:
 		return searchKB(term, max)
 	case LaneSymbol, LaneRefs:
@@ -90,6 +90,15 @@ func Local(query string, opt LocalOptions) ([]LocalResult, error) {
 		}
 		return out, nil
 	}
+}
+
+func searchFiles(dir, query string, max int) ([]LocalResult, error) {
+	if indexed, found, err := queryFileIndex(dir, query, max); err != nil {
+		return nil, err
+	} else if found {
+		return indexed, nil
+	}
+	return scanTree(dir, query, max, true)
 }
 
 // scanTree walks dir matching file CONTENT (or file NAMES when byName), skipping
