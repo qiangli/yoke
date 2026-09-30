@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/term"
@@ -168,16 +169,39 @@ type activityTap struct {
 //
 // Only GateTrust is routed here. The other gates need a browser or a human, and
 // those routes belong to the caller, which knows where an escalation should go.
+//
+// It answers a STARTUP dialog and nothing else. It used to classify its whole
+// 8 KB tail on every write for the life of the session, so any output that
+// QUOTED a trust dialog — a diff of gate.go, a story, a log — typed "1" at a
+// working agent. In codex that "1" can land in the permissions menu, where 1 is
+// Read Only: sprint #328 lost its conductor twice that way, to "cannot open
+// queue.lock". So the tap is done after one answer, done once the session has
+// been typed at (input), and reads only the end of the screen until then.
 type trustClearTap struct {
 	w        io.Writer
 	deps     RouteDeps
 	tail     string
 	onRouted func(GateVerdict, string)
+	input    *atomic.Bool // set by inputTap; nil means nobody types at this session
+	done     bool
 }
 
-func newTrustClearTap(w io.Writer, ctlSock string, onRouted func(GateVerdict, string)) io.Writer {
+// inputTap wraps the PTY as the control channel writes to it, and records that
+// the session has been typed at — which is what ends the trust tap's watch.
+type inputTap struct {
+	w     io.Writer
+	typed *atomic.Bool
+}
+
+func (i *inputTap) Write(p []byte) (int, error) {
+	i.typed.Store(true)
+	return i.w.Write(p)
+}
+
+func newTrustClearTap(w io.Writer, ctlSock string, input *atomic.Bool, onRouted func(GateVerdict, string)) io.Writer {
 	return &trustClearTap{
 		w:        w,
+		input:    input,
 		onRouted: onRouted,
 		deps: RouteDeps{
 			State: &GateRouteState{},
@@ -190,15 +214,21 @@ func newTrustClearTap(w io.Writer, ctlSock string, onRouted func(GateVerdict, st
 
 func (t *trustClearTap) Write(p []byte) (int, error) {
 	n, err := t.w.Write(p)
-	if len(p) > 0 {
-		t.tail += string(p)
-		if len(t.tail) > 8192 {
-			t.tail = t.tail[len(t.tail)-8192:]
-		}
-		if verdict := ClassifyGate(t.tail); verdict.Kind == GateTrust {
-			if action, err := RouteGate(verdict, t.deps); err == nil && action == "say_trust" && t.onRouted != nil {
-				t.onRouted(verdict, action)
-			}
+	if len(p) == 0 || t.done {
+		return n, err
+	}
+	if t.input != nil && t.input.Load() {
+		t.done, t.tail = true, ""
+		return n, err
+	}
+	t.tail += string(p)
+	if len(t.tail) > 8192 {
+		t.tail = t.tail[len(t.tail)-8192:]
+	}
+	if verdict := ClassifyGate(screenEnd(t.tail, trustDialogLines)); verdict.Kind == GateTrust {
+		t.done, t.tail = true, ""
+		if action, err := RouteGate(verdict, t.deps); err == nil && action == "say_trust" && t.onRouted != nil {
+			t.onRouted(verdict, action)
 		}
 	}
 	return n, err
