@@ -3126,10 +3126,11 @@ func truncate(s string, n int) string {
 // when launched without -p) never exit on their own and need a
 // heuristic kill on idle.
 type weaveStartOptions struct {
-	noSpawn bool
-	resume  bool
-	arena   string
-	blind   bool
+	noSpawn      bool
+	resume       bool
+	arena        string
+	blind        bool
+	heatTemplate boothTemplate // manager-only prepared source for a blind heat
 	// clone runs this issue under a per-issue EPHEMERAL clone of the named agent
 	// instead of the agent itself, so several issues can run in parallel without
 	// sharing one identity's cursor, kb attribution and ledger. Without it, an
@@ -3664,13 +3665,34 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			if boothFork != "" {
 				cloneArgs = boothCloneArgs(boothFork, boothUser, boothCred, workspace)
 			}
-			gw := exec.CommandContext(admission.ctx, "git", cloneArgs...)
-			gw.Stdout = cmd.OutOrStdout()
-			gw.Stderr = cmd.ErrOrStderr()
-			if err := gw.Run(); err != nil {
-				weaveMarkLaunchFailed(dir, it.ID, fmt.Errorf("clone workspace: %w", err))
+			var cloneErr error
+			if opts.heatTemplate.Dir != "" {
+				_, _, cloneErr = copyBoothTemplate(opts.heatTemplate, workspace)
+				if cloneErr == nil {
+					if remotes, e := exec.CommandContext(admission.ctx, "git", "-C", workspace, "remote").Output(); e == nil {
+						for _, name := range strings.Fields(string(remotes)) {
+							if e := exec.CommandContext(admission.ctx, "git", "-C", workspace, "remote", "remove", name).Run(); e != nil {
+								cloneErr = e
+								break
+							}
+						}
+					} else {
+						cloneErr = e
+					}
+				}
+				if cloneErr == nil {
+					cloneErr = exec.CommandContext(admission.ctx, "git", "-C", workspace, "remote", "add", "origin", boothFork).Run()
+				}
+			} else {
+				gw := exec.CommandContext(admission.ctx, "git", cloneArgs...)
+				gw.Stdout = cmd.OutOrStdout()
+				gw.Stderr = cmd.ErrOrStderr()
+				cloneErr = gw.Run()
+			}
+			if cloneErr != nil {
+				weaveMarkLaunchFailed(dir, it.ID, fmt.Errorf("clone workspace: %w", cloneErr))
 				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
-					weavecli.ExitGenericFail, fmt.Errorf("git clone --local --no-hardlinks: %w", err)))
+					weavecli.ExitGenericFail, fmt.Errorf("clone workspace: %w", cloneErr)))
 			}
 			// Check out the per-issue agent branch in the clone.
 			ck := exec.CommandContext(admission.ctx, "git", "-C", workspace, "checkout", "-b", branch, baseSHA)

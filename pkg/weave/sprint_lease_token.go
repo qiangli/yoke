@@ -21,6 +21,7 @@ var sprintLeaseGatedVerbs = map[string]bool{
 	"grade":      true,
 	"merge":      true,
 	"arena":      true,
+	"heat":       true,
 	"accept":     true,
 	"fail":       true,
 	"assign":     true,
