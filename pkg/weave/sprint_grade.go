@@ -373,7 +373,39 @@ func sprintGradeDominance(reviewer, author string, events []ladder.Event) error 
 	return fmt.Errorf("escalate: reviewer does not dominate author's code rating")
 }
 
-func sprintGradeMerge(ctx context.Context, into, source, branch string, auth transport.AuthMethod, ev sprintGradeEvent, agent string) (string, error) {
+// Resolve provenance outside the booth, using the same Register/Weave relation
+// as delivery scoring. A run number alone is scoped to its repository.
+func sprintGradeTrailers(s *weaveStory, runs *weaveQueue, it *weaveItem) (map[string]string, error) {
+	card := *s
+	card.StoryRoots = append(append([]string(nil), s.StoryRoots...), runs.Root)
+	stories, err := loadSprintStories(&card)
+	if err != nil {
+		return nil, err
+	}
+	var trailers map[string]string
+	for _, state := range stories {
+		_, story, err := resolveSprintStoryFor(&card, state.Ref.Repo, state.Ref.ID)
+		if err != nil {
+			return nil, err
+		}
+		if it.Register != story.ID && !(it.Register == "" && story.Weave == it.ID && filepath.Clean(runs.Root) == filepath.Clean(state.Ref.Repo)) {
+			continue
+		}
+		if trailers != nil {
+			return nil, fmt.Errorf("run is linked to multiple stories; resolve the links before merge")
+		}
+		if story.Seq <= 0 {
+			return nil, fmt.Errorf("linked story has no sequence number")
+		}
+		trailers = map[string]string{"Sprint": fmt.Sprintf("#%d", s.ID), "Story": fmt.Sprintf("#%d", story.Seq), "Story-ID": story.ID}
+	}
+	if trailers == nil {
+		return nil, fmt.Errorf("run is not linked to a story; link it before merge")
+	}
+	return trailers, nil
+}
+
+func sprintGradeMerge(ctx context.Context, into, source, branch string, auth transport.AuthMethod, ev sprintGradeEvent, agent string, trailers map[string]string) (string, error) {
 	if ev.Verdict != "pass" || ev.Tamper || ev.GateExit != 0 {
 		return "", fmt.Errorf("merge requires a passing grade without tampering")
 	}
@@ -393,7 +425,17 @@ func sprintGradeMerge(ctx context.Context, into, source, branch string, auth tra
 		return "", err
 	}
 	if !status.IsClean() {
-		return "", fmt.Errorf("merge target is not clean")
+		var paths []string
+		for name, state := range status {
+			if state.Staging != gogit.Unmodified || state.Worktree != gogit.Unmodified {
+				paths = append(paths, name)
+			}
+		}
+		sort.Strings(paths)
+		if len(paths) > 5 {
+			paths = paths[:5]
+		}
+		return "", fmt.Errorf("merge target is not clean: %s", strings.Join(paths, ", "))
 	}
 	hash, err := sprintGradeFetch(ctx, r, source, branch, auth)
 	if err != nil {
@@ -406,24 +448,27 @@ func sprintGradeMerge(ctx context.Context, into, source, branch string, auth tra
 	if err != nil {
 		return "", err
 	}
-	// Copy the delivery trailers verbatim; retaining the attempt as a parent
+	// The manager supplies provenance; retaining the attempt as a parent
 	// preserves every original commit, signature, author and trailer.
-	trailers := map[string]string{}
+	seen := map[string]bool{}
 	for _, line := range strings.Split(c.Message, "\n") {
-		key, _, ok := strings.Cut(line, ":")
+		key, value, ok := strings.Cut(line, ":")
 		if ok && (key == "Sprint" || key == "Story" || key == "Story-ID") {
-			if trailers[key] != "" {
+			if seen[key] {
 				return "", fmt.Errorf("duplicate %s trailer", key)
 			}
-			trailers[key] = line
+			seen[key] = true
+			if strings.TrimSpace(value) != trailers[key] {
+				return "", fmt.Errorf("attempt %s trailer disagrees with run story linkage", key)
+			}
 		}
 	}
 	message := "Merge graded attempt " + ev.Run + "\n\n"
 	for _, key := range []string{"Sprint", "Story", "Story-ID"} {
 		if trailers[key] == "" {
-			return "", fmt.Errorf("attempt lacks %s trailer", key)
+			return "", fmt.Errorf("run is not linked to a story; link it before merge")
 		}
-		message += trailers[key] + "\n"
+		message += key + ": " + trailers[key] + "\n"
 	}
 	message += "Agent: " + agent + "\n"
 	if _, err = yokegit.Merge(yokegit.MergeOptions{RepoPath: into, Ref: hash.String(), NoFF: true, Message: message}); err != nil {
@@ -554,13 +599,17 @@ func newSprintGradeCommands() []*cobra.Command {
 							return e
 						}
 					}
+					trailers, e := sprintGradeTrailers(s, runs, it)
+					if e != nil {
+						return e
+					}
 					source, auth, e := sprintGradeSource(it, queue)
 					if e != nil {
 						return e
 					}
 					ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 					defer cancel()
-					ev.MergeCommit, e = sprintGradeMerge(ctx, into, source, sprintGradeBranch(it), auth, ev, agent)
+					ev.MergeCommit, e = sprintGradeMerge(ctx, into, source, sprintGradeBranch(it), auth, ev, agent, trailers)
 					if e != nil {
 						return e
 					}
