@@ -328,7 +328,7 @@ func TestSprintScorecardRecordedCosts(t *testing.T) {
 		}
 	}
 	in := sprintScorecardInput(events, 5, 1)
-	if in.CostPerPoint != 50 || in.ExpectedCostPerPoint != 2 || in.WallPerPoint != 60 || in.ExpectedWallPerPoint != 900 {
+	if in.CostPerPoint != 50 || in.ExpectedCostPerPoint != 2 || in.WallPerPoint != 60 || in.ExpectedWallPerPoint != 240 { // 2 pts: 8 min cap (owner caps 2026-09-30)
 		t.Fatalf("recorded inputs: %+v", in)
 	}
 	// An unfinished sprint and corrected deliveries must not enter the baseline.
@@ -431,7 +431,7 @@ func TestSprintScorecardMeterEvidenceFilters(t *testing.T) {
 	ignored.Cost = 10000
 	events := []ladder.Event{a, b, ignored}
 	in := sprintScorecardInput(events, 1, 1)
-	if in.CostPerPoint != 2 || in.WallPerPoint != 60 || in.ExpectedWallPerPoint != 7200.0/7 {
+	if in.CostPerPoint != 2 || in.WallPerPoint != 60 || in.ExpectedWallPerPoint != 1680.0/7 { // (480s + 1200s) / 7 points: caps 8m/20m (owner caps 2026-09-30)
 		t.Fatalf("weighted meters: %+v", in)
 	}
 	b.Cost = 0
@@ -441,7 +441,7 @@ func TestSprintScorecardMeterEvidenceFilters(t *testing.T) {
 		t.Fatalf("partial meters rewarded: %+v", in)
 	}
 	in = sprintScorecardInput(append(events, ladder.Event{Kind: ladder.EventKindCorrection, Season: 1, Supersedes: "b"}), 1, 1)
-	if in.CostPerPoint != 2 || in.ExpectedWallPerPoint != 900 {
+	if in.CostPerPoint != 2 || in.ExpectedWallPerPoint != 240 { // 2 pts: 8 min cap (owner caps 2026-09-30)
 		t.Fatalf("corrected meters: %+v", in)
 	}
 }
@@ -466,7 +466,7 @@ func TestSprintEndScorecardPersistsEvidenceNotes(t *testing.T) {
 		t.Fatalf("end: %d %s", code, out)
 	}
 	got := scorecardManageEvents(t)
-	if len(got) != 1 || !strings.Contains(got[0].Note, "efficiency=0.50") || !strings.Contains(got[0].Note, "review=0.00") || !strings.Contains(got[0].Note, "panels") || !strings.Contains(out, "prior sprint") {
+	if len(got) != 1 || !strings.Contains(got[0].Note, "efficiency=0.32") || !strings.Contains(got[0].Note, "review=0.00") || !strings.Contains(got[0].Note, "panels") || !strings.Contains(out, "prior sprint") {
 		t.Fatalf("persisted evidence: %+v\n%s", got, out)
 	}
 }
