@@ -1,7 +1,9 @@
 package weave
 
 import (
+	"fmt"
 	"math"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -311,5 +313,160 @@ func TestSprintEndScorecardChargesManagerSpecFailure(t *testing.T) {
 	got := scorecardManageEvents(t)
 	if len(got) != 1 || !strings.Contains(got[0].Note, "breakdown=0.80") {
 		t.Fatalf("one manager spec failure must cost breakdown 0.2: %+v", got)
+	}
+}
+
+func TestSprintScorecardRecordedCosts(t *testing.T) {
+	at := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	var events []ladder.Event
+	for i, cost := range []float64{200, 2, 8, 4, 100} {
+		e := ladder.Event{ID: fmt.Sprint(i), At: at.Add(time.Duration(i) * time.Hour), Season: 1, Kind: ladder.EventKindDelivery, Sprint: i + 1, Agent: "agent-a", Story: fmt.Sprint(i), Points: 2, Outcome: 1, Cost: cost}
+		e.CapsUsed.WallSeconds = 120
+		events = append(events, e)
+		if i < 4 {
+			events = append(events, ladder.Event{ID: fmt.Sprintf("m%d", i), At: e.At.Add(time.Minute), Season: 1, Kind: ladder.EventKindManage, Sprint: i + 1})
+		}
+	}
+	in := sprintScorecardInput(events, 5, 1)
+	if in.CostPerPoint != 50 || in.ExpectedCostPerPoint != 2 || in.WallPerPoint != 60 || in.ExpectedWallPerPoint != 900 {
+		t.Fatalf("recorded inputs: %+v", in)
+	}
+	// An unfinished sprint and corrected deliveries must not enter the baseline.
+	events = append(events, ladder.Event{ID: "correction", Season: 1, Kind: ladder.EventKindCorrection, Supersedes: "2"})
+	in = sprintScorecardInput(events, 5, 1)
+	if in.ExpectedCostPerPoint != 1.5 {
+		t.Fatalf("corrected baseline = %v", in.ExpectedCostPerPoint)
+	}
+}
+
+func TestSprintScorecardEvidenceAndPenalty(t *testing.T) {
+	at := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	s := &weaveStory{ID: 1, Owner: "manager", Thread: []weaveComment{{At: at, Kind: "merge", Body: `{"story":"merged"}`}}}
+	events := []ladder.Event{{ID: "reg", At: at, Season: 1, Kind: ladder.EventKindRegression, Story: "merged"}, {ID: "other", At: at, Season: 1, Kind: ladder.EventKindRegression, Story: "unmerged"}}
+	in, notes := sprintScorecardEvidence(events, s, 1)
+	if in.EscapedRegressions != 1 || in.FalseRejections != 0 {
+		t.Fatalf("review inputs: %+v", in)
+	}
+	if !strings.Contains(strings.Join(notes, ";"), "panels") || !strings.Contains(strings.Join(notes, ";"), "prior sprint") {
+		t.Fatalf("missing evidence notes: %v", notes)
+	}
+	in.StallDetectMinutes = []float64{20, 40}
+	card, err := ladder.ComputeScorecard(in, ladder.DefaultScorecardWeights())
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := card.Score
+	sprintScorecardApplyEvidence(&card, in, notes)
+	if math.Abs(card.Components["efficiency"]-0.4) > 1e-9 || math.Abs(card.Score-(before-0.015)) > 1e-9 {
+		t.Fatalf("stall penalty: %+v", card)
+	}
+	if !strings.Contains(strings.Join(card.Notes, ";"), "30.0") {
+		t.Fatal(card.Notes)
+	}
+	in.AutoFails = []ladder.AutoFail{ladder.AutoFailDetectedBypass}
+	card, _ = ladder.ComputeScorecard(in, ladder.DefaultScorecardWeights())
+	sprintScorecardApplyEvidence(&card, in, notes)
+	if card.Score != 0 {
+		t.Fatal("penalty changed auto-fail")
+	}
+}
+
+func TestSprintScorecardLinkedRunStalls(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BASHY_HOME", home)
+	t.Setenv("HOME", home)
+	at := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	repo := filepath.Join(home, "repo")
+	link := sprintRun{Repo: "repo", ID: 2, Queue: "repo-test", Born: at.Add(-time.Hour)}
+	run := &weaveItem{ID: 2, Register: "merged", State: "killed", Created: link.Born, StartedAt: link.Born, FinishedAt: at}
+	dir := filepath.Join(weaveStateRoot(home), link.Queue)
+	if err := saveWeaveQueue(dir, &weaveQueue{Root: repo, Items: []*weaveItem{run}}); err != nil {
+		t.Fatal(err)
+	}
+	s := &weaveStory{ID: 1, Owner: "manager", Runs: []sprintRun{link}, Thread: []weaveComment{
+		{At: at.Add(30 * time.Minute), Author: "manager", Kind: "relaunch", Body: "relaunch repo#2"},
+		{At: at.Add(5 * time.Minute), Author: "manager", Kind: "fail", Body: "repo#20 failed"},
+		{At: at.Add(10 * time.Minute), Author: "worker", Kind: "fail", Body: "repo#2 failed"},
+		{At: at.Add(20 * time.Minute), Author: "manager", Kind: "assign", Body: `{"run":2,"story":"merged"}`},
+		{At: at.Add(time.Hour), Author: "manager", Kind: "merge", Body: `{"run":"repo#2","generation":"` + link.Queue + ":" + link.Born.UTC().Format(time.RFC3339Nano) + `"}`},
+	}}
+	events := []ladder.Event{{ID: "r", Kind: ladder.EventKindRegression, Season: 1, Story: "merged", At: at.Add(2 * time.Hour)}}
+	in, _ := sprintScorecardEvidence(events, s, 1)
+	if len(in.StallDetectMinutes) != 1 || in.StallDetectMinutes[0] != 20 || in.EscapedRegressions != 1 {
+		t.Fatalf("linked evidence: %+v", in)
+	}
+	run.LogPath = filepath.Join(home, "log")
+	if err := os.WriteFile(run.LogPath, []byte("progress"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(run.LogPath, at.Add(-10*time.Minute), at.Add(-10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveWeaveQueue(dir, &weaveQueue{Root: repo, Items: []*weaveItem{run}}); err != nil {
+		t.Fatal(err)
+	}
+	in, _ = sprintScorecardEvidence(events, s, 1)
+	if len(in.StallDetectMinutes) != 1 || in.StallDetectMinutes[0] != 30 {
+		t.Fatalf("log progress: %+v", in)
+	}
+	s.Runs[0].Born = at
+	in, notes := sprintScorecardEvidence(events, s, 1)
+	if len(in.StallDetectMinutes) != 0 || in.EscapedRegressions != 0 || !strings.Contains(strings.Join(notes, ";"), "unavailable") {
+		t.Fatalf("recycled run: %+v %v", in, notes)
+	}
+}
+
+func TestSprintScorecardMeterEvidenceFilters(t *testing.T) {
+	a := ladder.Event{ID: "a", Season: 1, Kind: ladder.EventKindDelivery, Sprint: 1, Agent: "agent-a", Story: "a", Points: 2, Outcome: 1, Cost: 4}
+	a.CapsUsed.WallSeconds = 120
+	b := a
+	b.ID = "b"
+	b.Story = "b"
+	b.Points = 5
+	b.Cost = 10
+	b.CapsUsed.WallSeconds = 300
+	ignored := a
+	ignored.ID = "ignored"
+	ignored.Outcome = 0
+	ignored.Cost = 10000
+	events := []ladder.Event{a, b, ignored}
+	in := sprintScorecardInput(events, 1, 1)
+	if in.CostPerPoint != 2 || in.WallPerPoint != 60 || in.ExpectedWallPerPoint != 7200.0/7 {
+		t.Fatalf("weighted meters: %+v", in)
+	}
+	b.Cost = 0
+	b.CapsUsed.WallSeconds = 0
+	in = sprintScorecardInput([]ladder.Event{a, b}, 1, 1)
+	if in.CostPerPoint != 0 || in.WallPerPoint != 0 {
+		t.Fatalf("partial meters rewarded: %+v", in)
+	}
+	in = sprintScorecardInput(append(events, ladder.Event{Kind: ladder.EventKindCorrection, Season: 1, Supersedes: "b"}), 1, 1)
+	if in.CostPerPoint != 2 || in.ExpectedWallPerPoint != 900 {
+		t.Fatalf("corrected meters: %+v", in)
+	}
+}
+
+func TestSprintEndScorecardPersistsEvidenceNotes(t *testing.T) {
+	home := scorecardEndFixture(t)
+	at := time.Now().UTC()
+	e := ladder.Event{ID: "d", At: at, Season: 1, Kind: ladder.EventKindDelivery, Sprint: 1, Agent: "agent-a", Story: "merged", Points: 2, Outcome: 1, Cost: 4}
+	e.CapsUsed.WallSeconds = 3600
+	scorecardAppend(t, e, ladder.Event{ID: "r", At: at, Season: 1, Kind: ladder.EventKindRegression, Agent: "agent-a", Story: "merged"})
+	dir := filepath.Join(home, ".bashy", "sprint")
+	q, err := loadWeaveQueue(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	weaveStoryAppend(findWeaveStory(q, 1), "Ada", "merge", `{"story":"merged"}`)
+	if err := saveWeaveQueue(dir, q); err != nil {
+		t.Fatal(err)
+	}
+	out, code := runSprint(t, "end", "1")
+	if code != 0 {
+		t.Fatalf("end: %d %s", code, out)
+	}
+	got := scorecardManageEvents(t)
+	if len(got) != 1 || !strings.Contains(got[0].Note, "efficiency=0.50") || !strings.Contains(got[0].Note, "review=0.00") || !strings.Contains(got[0].Note, "panels") || !strings.Contains(out, "prior sprint") {
+		t.Fatalf("persisted evidence: %+v\n%s", got, out)
 	}
 }

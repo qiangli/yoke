@@ -15,11 +15,15 @@ package weave
 // it never fails the end that already succeeded.
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/qiangli/yoke/pkg/ladder"
 	"github.com/qiangli/yoke/pkg/ladder/blame"
@@ -90,7 +94,7 @@ func sprintScorecardAtEnd(s *weaveStory, skip bool, hygienePassed, hygieneTotal 
 	}
 
 	season := ladder.SeasonOf(now)
-	in := sprintScorecardInput(events, s.ID, season, identity, sprintManagerName(s))
+	in, notes := sprintScorecardEvidence(events, s, season, identity, sprintManagerName(s))
 	in.HygieneChecksPassed, in.HygieneChecksTotal = hygienePassed, hygieneTotal
 	for _, c := range s.Thread {
 		switch c.Kind {
@@ -107,6 +111,7 @@ func sprintScorecardAtEnd(s *weaveStory, skip bool, hygienePassed, hygieneTotal 
 		return "scorecard not recorded: " + err.Error()
 	}
 
+	sprintScorecardApplyEvidence(&card, in, notes)
 	summary := sprintScorecardSummary(s.ID, identity, season, card)
 	e := ladder.Event{
 		ID:       fmt.Sprintf("manage-sprint-%d-%d", s.ID, now.UnixNano()),
@@ -204,6 +209,7 @@ func sprintScorecardInput(events []ladder.Event, sprint int64, season int, manag
 			Rated:         ladder.DeliveryRates(e),
 		})
 	}
+	sprintScorecardMeters(&in, events, current, dropped, int(sprint), season)
 	return in
 }
 
@@ -251,7 +257,7 @@ func sprintScorecardAutoFails(card ladder.Scorecard) string {
 func sprintScorecardNote(card ladder.Scorecard) string {
 	return fmt.Sprintf("%s expected=%.2f actual=%.2f regret=%.2f unrated=%d instructions=%d autofails=%s",
 		sprintScorecardComponents(card), card.Expected, card.Actual, sprintScorecardZero(card.Regret),
-		card.Unrated, card.SupervisorInstructions, sprintScorecardAutoFails(card))
+		card.Unrated, card.SupervisorInstructions, sprintScorecardAutoFails(card)) + " notes=" + strings.Join(card.Notes, "; ")
 }
 
 // sprintScorecardZero folds -0.00 into 0.00 for display.
@@ -275,4 +281,246 @@ func sprintScorecardSummary(sprint int64, identity string, season int, card ladd
 		fmt.Fprintf(&b, "\n  notes: %s", strings.Join(card.Notes, "; "))
 	}
 	return b.String()
+}
+
+// Meter sums use all rated points, but incomplete meters stay neutral rather
+// than treating unrecorded attempts as free. Wall units are seconds throughout.
+func sprintScorecardMeters(in *ladder.ScorecardInput, events, current []ladder.Event, dropped map[string]bool, sprint, season int) {
+	totals := func(es []ladder.Event) (cost, wall, caps, points float64) {
+		costOK, wallOK := true, true
+		for _, e := range es {
+			if !ladder.DeliveryRates(e) {
+				continue
+			}
+			points += float64(e.Points)
+			if e.Cost <= 0 || math.IsNaN(e.Cost) || math.IsInf(e.Cost, 0) {
+				costOK = false
+			} else {
+				cost += e.Cost
+			}
+			if e.CapsUsed.WallSeconds <= 0 {
+				wallOK = false
+			} else {
+				wall += float64(e.CapsUsed.WallSeconds)
+			}
+			cap, _ := ladder.CapFor(e.Points)
+			caps += cap.Wall.Seconds()
+		}
+		if !costOK {
+			cost = 0
+		}
+		if !wallOK {
+			wall = 0
+		}
+		return
+	}
+	cost, wall, caps, points := totals(current)
+	if points > 0 {
+		in.CostPerPoint = cost / points
+		in.WallPerPoint = wall / points
+		in.ExpectedWallPerPoint = caps / points
+	}
+	// A manage event is the ledger's evidence that a sprint finished. Order by
+	// completion time, not sprint number or append order; take exactly three.
+	finished := map[int]time.Time{}
+	for _, e := range events {
+		if e.Kind == ladder.EventKindManage && e.Sprint > 0 && e.Sprint != sprint && !dropped[e.ID] && e.Season >= 1 && e.Season <= season && e.At.After(finished[e.Sprint]) {
+			finished[e.Sprint] = e.At
+		}
+	}
+	ids := make([]int, 0, len(finished))
+	for id := range finished {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		if finished[ids[i]].Equal(finished[ids[j]]) {
+			return ids[i] < ids[j]
+		}
+		return finished[ids[i]].After(finished[ids[j]])
+	})
+	if len(ids) > 3 {
+		ids = ids[:3]
+	}
+	var ratios []float64
+	for _, id := range ids {
+		var deliveries []ladder.Event
+		for _, e := range events {
+			if e.Sprint == id && !dropped[e.ID] && e.Season >= 1 && e.Season <= season && !e.At.After(finished[id]) {
+				deliveries = append(deliveries, e)
+			}
+		}
+		c, _, _, p := totals(deliveries)
+		if p > 0 && c > 0 {
+			ratios = append(ratios, c/p)
+		}
+	}
+	if len(ratios) > 0 {
+		in.ExpectedCostPerPoint = sprintScorecardMedian(ratios)
+	}
+}
+
+func sprintScorecardMedian(values []float64) float64 {
+	v := append([]float64(nil), values...)
+	sort.Float64s(v)
+	n := len(v)
+	if n == 0 {
+		return 0
+	}
+	if n%2 == 1 {
+		return v[n/2]
+	}
+	return (v[n/2-1] + v[n/2]) / 2
+}
+
+// Evidence joins are deliberately exact. Prose story references and shortened
+// IDs do not prove a merge, and a grade alone does not prove one either.
+func sprintScorecardEvidence(events []ladder.Event, s *weaveStory, season int, managers ...string) (ladder.ScorecardInput, []string) {
+	in := sprintScorecardInput(events, s.ID, season, managers...)
+	notes := []string{"false rejections unavailable: panels required; left at 0"}
+	if in.ExpectedCostPerPoint == 0 {
+		notes = append(notes, "no prior sprint with recorded cost in the last 3 finished sprints; cost baseline unavailable")
+	}
+	if in.CostPerPoint == 0 {
+		notes = append(notes, "rated delivery cost evidence absent or incomplete; cost neutral")
+	}
+	if in.WallPerPoint == 0 {
+		notes = append(notes, "rated delivery wall evidence absent or incomplete; wall neutral")
+	}
+	merged := map[string]bool{}
+	// Explicit story references can survive a pruned run queue.
+	for _, c := range s.Thread {
+		if c.Kind == "merge" {
+			var e struct {
+				Story string `json:"story"`
+			}
+			if json.Unmarshal([]byte(c.Body), &e) == nil && e.Story != "" {
+				merged[e.Story] = true
+			}
+		}
+	}
+	seen := map[string]bool{}
+	for _, link := range s.Runs {
+		key := fmt.Sprintf("%s/%s#%d/%s", link.Queue, link.Repo, link.ID, link.Born.Format(time.RFC3339Nano))
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		name := fmt.Sprintf("%s#%d", link.Repo, link.ID)
+		dir, err := weaveQueueDirForSprintRun(link)
+		var run *weaveItem
+		if err == nil {
+			q, e := loadWeaveQueue(dir)
+			if e == nil {
+				run = findWeaveItem(q, link.ID)
+			}
+		}
+		if run == nil || (!link.Born.IsZero() && !link.Born.Equal(run.Created)) {
+			notes = append(notes, "run "+name+" evidence unavailable")
+			continue
+		}
+		for _, c := range s.Thread {
+			if c.Kind != "merge" {
+				continue
+			}
+			var e sprintGradeEvent
+			if json.Unmarshal([]byte(c.Body), &e) == nil && e.Run == name && e.Generation == filepath.Base(dir)+":"+run.Created.UTC().Format(time.RFC3339Nano) && run.Register != "" {
+				merged[run.Register] = true
+			}
+		}
+		if run.State != "failed" && run.State != "killed" && run.State != "looped" {
+			continue
+		}
+		progress := run.FinishedAt
+		if run.LogPath != "" {
+			if info, e := os.Stat(run.LogPath); e == nil && !info.ModTime().Before(run.StartedAt) && (progress.IsZero() || !info.ModTime().After(progress)) {
+				progress = info.ModTime()
+			}
+		}
+		var next time.Time
+		if !progress.IsZero() {
+			for _, c := range s.Thread {
+				if c.Kind != "fail" && c.Kind != "abandon" && c.Kind != "assign" && c.Kind != "relaunch" {
+					continue
+				}
+				if c.Author != sprintManagerName(s) || c.At.Before(progress) {
+					continue
+				}
+				matches := false
+				var e struct {
+					Run   json.RawMessage `json:"run"`
+					Story string          `json:"story"`
+				}
+				if json.Unmarshal([]byte(c.Body), &e) == nil {
+					var ref string
+					var id int64
+					if json.Unmarshal(e.Run, &ref) == nil {
+						matches = ref == name
+					} else if json.Unmarshal(e.Run, &id) == nil && id == link.ID && e.Story != "" && e.Story == run.Register {
+						count := 0
+						for _, r := range s.Runs {
+							if r.ID == id {
+								count++
+							}
+						}
+						matches = count == 1
+					}
+				} else {
+					for _, word := range strings.FieldsFunc(c.Body, func(r rune) bool {
+						return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '#' && r != '-' && r != '_' && r != '.'
+					}) {
+						if word == name {
+							matches = true
+						}
+					}
+				}
+				if matches && (next.IsZero() || c.At.Before(next)) {
+					next = c.At
+				}
+			}
+		}
+		if progress.IsZero() || next.IsZero() {
+			notes = append(notes, "run "+name+" stall detection unavailable: missing progress or manager action")
+			continue
+		}
+		in.StallDetectMinutes = append(in.StallDetectMinutes, next.Sub(progress).Minutes())
+	}
+	dropped := map[string]bool{}
+	for _, e := range events {
+		if e.Kind == ladder.EventKindCorrection && e.Season >= 1 && e.Season <= season {
+			dropped[e.Supersedes] = true
+		}
+	}
+	for _, e := range events {
+		if e.Kind == ladder.EventKindRegression && !dropped[e.ID] && e.Season >= 1 && e.Season <= season && merged[e.Story] {
+			in.EscapedRegressions++
+		}
+	}
+	if len(merged) == 0 {
+		notes = append(notes, "merged story evidence unavailable; escaped regressions left at 0")
+	}
+	if len(in.StallDetectMinutes) == 0 {
+		notes = append(notes, "no recorded stall detection intervals; no recovery penalty")
+	}
+	return in, notes
+}
+
+// A median recovery delay over 15 minutes subtracts 0.10 from efficiency
+// (at most 0.015 from the default weighted score). This bounded penalty is
+// applied here because the ladder calculator does not yet consume stalls.
+func sprintScorecardApplyEvidence(card *ladder.Scorecard, in ladder.ScorecardInput, notes []string) {
+	card.Notes = append(card.Notes, notes...)
+	if len(in.StallDetectMinutes) == 0 {
+		return
+	}
+	median := sprintScorecardMedian(in.StallDetectMinutes)
+	card.Notes = append(card.Notes, fmt.Sprintf("stall detection minutes %v; median %.1f", in.StallDetectMinutes, median))
+	if median <= 15 {
+		return
+	}
+	before := card.Components["efficiency"]
+	card.Components["efficiency"] = math.Max(0, before-0.10)
+	if len(card.AutoFails) == 0 {
+		card.Score -= ladder.DefaultScorecardWeights().Efficiency * (before - card.Components["efficiency"])
+	}
+	card.Notes = append(card.Notes, "median stall detection exceeds 15 minutes; efficiency penalty 0.10 (floored at 0)")
 }
