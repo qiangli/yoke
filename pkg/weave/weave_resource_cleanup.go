@@ -14,6 +14,14 @@ import (
 	"github.com/qiangli/yoke/pkg/agentlaunch"
 )
 
+// errWeaveArtifactScanBound reports that a byte measurement stopped at its
+// bound. The measurement is only a report, so callers treat it as "bytes
+// unknown", never as a reason to keep an artifact.
+var errWeaveArtifactScanBound = errors.New("artifact scan bound exceeded")
+
+// weaveArtifactScanMaxEntries bounds one byte measurement (a var for tests).
+var weaveArtifactScanMaxEntries = 100000
+
 // Apparent bytes removed are not a claim about physical free space: shared
 // extents, sparse files and filesystem metadata make those different metrics.
 func weaveArtifactBytes(path string) (uint64, error) {
@@ -25,8 +33,8 @@ func weaveArtifactBytes(path string) (uint64, error) {
 			return err
 		}
 		entries++
-		if entries > 100000 || time.Now().After(deadline) {
-			return errors.New("artifact scan bound exceeded")
+		if entries > weaveArtifactScanMaxEntries || time.Now().After(deadline) {
+			return errWeaveArtifactScanBound
 		}
 		info, err := d.Info()
 		if err != nil {
@@ -316,7 +324,9 @@ func weavePruneOwnedRun(dir string, id int64, repo string, expectedBirth ...time
 		}
 		expected, err := weaveArtifactBytes(path)
 		a.ExpectedBytes = expected
-		if err != nil {
+		// A bounded measurement only means the byte count is unknown; the
+		// ownership and settlement checks below decide whether to reclaim.
+		if err != nil && !errors.Is(err, errWeaveArtifactScanBound) {
 			a.Err = err.Error()
 			acts = append(acts, a)
 			failed = true
@@ -355,7 +365,8 @@ func weavePruneOwnedRun(dir string, id int64, repo string, expectedBirth ...time
 			}
 		}
 		actual, e := weaveArtifactBytes(quarantine)
-		if e != nil {
+		bounded := errors.Is(e, errWeaveArtifactScanBound)
+		if e != nil && !bounded {
 			_ = os.Rename(quarantine, path)
 			a.Err = e.Error()
 			acts = append(acts, a)
@@ -368,7 +379,7 @@ func weavePruneOwnedRun(dir string, id int64, repo string, expectedBirth ...time
 		} else {
 			a.Done = true
 			a.ActualBytes = actual
-			a.BytesComplete = true
+			a.BytesComplete = !bounded
 		}
 		acts = append(acts, a)
 	}
@@ -464,7 +475,7 @@ func weavePlanOwnedRun(dir, repo string, it *weaveItem) []sprintPruneAction {
 		}
 		a.ExpectedBytes, e = weaveArtifactBytes(path)
 		a.BytesComplete = e == nil
-		if e != nil {
+		if e != nil && !errors.Is(e, errWeaveArtifactScanBound) {
 			a.Err = e.Error()
 		}
 		actions = append(actions, a)
