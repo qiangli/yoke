@@ -493,7 +493,7 @@ func boothSealedEnsureProxyImage(ctx context.Context, bin, image string) error {
 // executes a sealed agent. Podman machines run Linux containers, so a host CLI
 // executable cannot be copied into the image as a substitute.
 func boothSealedImageUnavailable(image string, err error) error {
-	return fmt.Errorf("sealed booth image %q is not available: build an image containing a Linux build of the agent CLI (or set BASHY_SEALED_IMAGE): %w", image, err)
+	return fmt.Errorf("sealed booth image %q is not available: build an image containing a Linux build of the agent CLI with weave sealed-image build --tool TOOL (or set BASHY_SEALED_IMAGE): %w", image, err)
 }
 
 // boothSealedStage assembles the container's home: the standard booth's
@@ -660,15 +660,10 @@ func boothSealedImageFor(tool string) string {
 	if img := os.Getenv("BASHY_SEALED_IMAGE"); img != "" {
 		return img
 	}
-	var b strings.Builder
-	for _, r := range strings.ToLower(filepath.Base(tool)) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '.' || r == '_' {
-			b.WriteRune(r)
-		} else {
-			b.WriteByte('-')
-		}
-	}
-	return "localhost/bashy-sealed-" + b.String() + ":latest"
+	t, _ := fleetCatalog().Tool(tool)
+	c, _ := fleetCatalog().Command(filepath.Base(t.CLI.Binary))
+	tag, _ := boothSealedImageTag(t, c.Download, "")
+	return tag
 }
 
 // boothSealedStart is weave start's one call into the sealed tier: it turns
@@ -677,10 +672,6 @@ func boothSealedImageFor(tool string) string {
 func boothSealedStart(ctx context.Context, dir string, it *weaveItem, l *weaveAgentLaunch, displayTool, workspace string, toolArgs, env []string, boothFork, boothCred string, opts weaveStartOptions) ([]string, []string, func(), error) {
 	if it == nil || it.ArenaSprint == 0 {
 		return nil, nil, nil, fmt.Errorf("--sealed runs a booth in the sandbox tier and requires --arena SPRINT")
-	}
-	bin, err := podman.Resolve()
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("--sealed needs podman: %w", err)
 	}
 	tool := displayTool
 	modelBaseURL := ""
@@ -694,6 +685,17 @@ func boothSealedStart(ctx context.Context, dir string, it *weaveItem, l *weaveAg
 			}
 		}
 	}
+	if err := boothSealedCheckLogin(tool, dir, it.ID, env); err != nil {
+		return nil, nil, nil, err
+	}
+	image := boothSealedImageFor(tool)
+	if image == "" {
+		return nil, nil, nil, fmt.Errorf("sealed image for %s: missing cli.versions.version or download.version; build with weave sealed-image build --tool %s or set BASHY_SEALED_IMAGE", tool, tool)
+	}
+	bin, err := podman.Resolve()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("--sealed needs podman: %w", err)
+	}
 	memLimit, err := parseWeaveMemLimit(opts.memLimit)
 	if err != nil {
 		return nil, nil, nil, err
@@ -703,7 +705,7 @@ func boothSealedStart(ctx context.Context, dir string, it *weaveItem, l *weaveAg
 	}
 	launched, err := boothSealedLaunch(ctx, bin, boothSealedInput{
 		QueueDir: dir, Run: it.ID, Workspace: workspace,
-		Image: boothSealedImageFor(tool), ProxyImage: os.Getenv("BASHY_SEALED_PROXY_IMAGE"),
+		Image: image, ProxyImage: os.Getenv("BASHY_SEALED_PROXY_IMAGE"),
 		Argv: toolArgs, Env: env, LoomURL: boothFork, CredentialFile: boothCred,
 		Allow: opts.sealedAllow, AllowEnv: os.Getenv("BASHY_SEALED_ALLOW"), ModelBaseURL: modelBaseURL,
 		TTY: opts.ptyMode() != "never", MemLimitBytes: memLimit,
