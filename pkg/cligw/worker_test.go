@@ -70,7 +70,7 @@ func TestCLIHelper(t *testing.T) {
 	case "backend-tool":
 		fmt.Println(`{"type":"item.completed","item":{"type":"agent_message","text":"{\"tool_calls\":[{\"name\":\"weather\",\"arguments\":{\"city\":\"Paris\"}}]}"}}`)
 		fmt.Println(`{"type":"turn.completed","usage":{"input_tokens":9,"output_tokens":7}}`)
-	case "muse-fixture":
+	case "muse-fixture", "response-fixture":
 		// A real Muse Code 1.3.0 `exec --json` stream, scrubbed (testdata).
 		body, err := os.ReadFile(os.Getenv("CLIGW_MUSE_FIXTURE"))
 		if err != nil {
@@ -191,7 +191,7 @@ func TestWorkerCrashReturnsErrorOutcome(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := w.Do(context.Background(), "boom", nil)
-	if err == nil || got.Outcome != OutcomeError || !strings.Contains(err.Error(), "fake crash") {
+	if err == nil || got.Outcome != OutcomeError || !strings.Contains(err.Error(), "exit status 7") {
 		t.Fatalf("result=%+v err=%v", got, err)
 	}
 }
@@ -210,7 +210,7 @@ func TestMeasuredWarmArgv(t *testing.T) {
 		{
 			name: "agy",
 			w:    &Worker{mode: WarmStdinStreamJSON, launch: agentlaunch.Launch{Tool: "agy", Args: []string{"--print-timeout", "40m", "--model", "M", "-p"}}, tool: fleet.Tool{Name: "agy", CLI: fleet.ToolCLI{Launch: fleet.ToolLaunch{EventsStdout: "--output-format stream-json"}}}},
-			want: []string{"agy", "--model", "M", "--input-format", "stream-json", "--output-format", "stream-json", "-p="},
+			want: []string{"agy", "--model", "M", "--new-project", "--add-dir", "", "--log-file", os.DevNull, "--input-format", "stream-json", "--output-format", "stream-json", "-p="},
 		},
 		{
 			name: "codex",

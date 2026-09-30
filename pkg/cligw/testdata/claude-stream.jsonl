@@ -1,0 +1,6 @@
+{"type":"user","message":{"role":"user","content":"PRIVATE_PROMPT"}}
+{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"PRIVATE_THINKING"}}}
+{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"o"}}}
+{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"k"}}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"ok"},{"type":"tool_use","input":{"text":"PRIVATE_TOOL_INPUT"}}]}}
+{"type":"result","is_error":false,"result":"ok","usage":{"input_tokens":10,"output_tokens":2}}

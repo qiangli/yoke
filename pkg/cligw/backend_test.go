@@ -116,7 +116,7 @@ func TestAgentBackendCrashCanRetry(t *testing.T) {
 	if attempt.Status != http.StatusBadGateway || !attempt.CanRetry || attempt.Committed || rec.Body.Len() != 0 {
 		t.Fatalf("attempt=%+v body=%q", attempt, rec.Body.String())
 	}
-	if !strings.Contains(rec.Header().Get("X-Bashy-Backend-Error"), "fake backend crash") {
+	if !strings.Contains(rec.Header().Get("X-Bashy-Backend-Error"), "exit status 7") {
 		t.Fatalf("backend error header = %q", rec.Header().Get("X-Bashy-Backend-Error"))
 	}
 }

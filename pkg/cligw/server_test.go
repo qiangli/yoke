@@ -516,7 +516,7 @@ func TestEndpointRecordAndEnvURLs(t *testing.T) {
 }
 
 func TestLoopbackIsTheDefaultAndLANIsExplicit(t *testing.T) {
-	listener, endpoint, err := Listen("", 0)
+	listener, endpoint, err := listen("", 0)
 	if err != nil {
 		t.Fatal(err)
 	}

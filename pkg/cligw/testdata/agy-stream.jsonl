@@ -1,0 +1,6 @@
+{"event":"init","init":{"model":"fixture"}}
+{"event":"step_update","step_update":{"step_index":0,"state":"DONE","step_type":"user_input","text_delta":"PRIVATE_PROMPT"}}
+{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"thinking","text_delta":"PRIVATE_THINKING"}}
+{"event":"step_update","step_update":{"step_index":2,"state":"ACTIVE","step_type":"agent_response","text_delta":"o"}}
+{"event":"step_update","step_update":{"step_index":2,"state":"DONE","step_type":"agent_response","text_delta":"k"}}
+{"event":"result","result":{"status":"SUCCESS","response":"ok","usage":{"input_tokens":10,"output_tokens":2,"cache_read_tokens":4,"total_tokens":12}}}

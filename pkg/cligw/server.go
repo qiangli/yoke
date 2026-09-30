@@ -1116,6 +1116,11 @@ func Listen(bind string, port int) (net.Listener, Endpoint, error) {
 	if port <= 0 {
 		port = DefaultPort
 	}
+	return listen(bind, port)
+}
+
+// listen accepts port zero for isolated listeners in tests.
+func listen(bind string, port int) (net.Listener, Endpoint, error) {
 	bind = strings.TrimSpace(bind)
 	if bind == "" {
 		bind = BindLoopback

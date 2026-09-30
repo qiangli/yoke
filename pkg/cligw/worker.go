@@ -307,7 +307,7 @@ func (w *Worker) DoCompletion(ctx context.Context, input CompletionPrompt, onEve
 			}
 			if ev.Done {
 				if text.Len() == 0 {
-					if final := mspTerminalText(ev.Raw); final != "" {
+					if final := terminalText(ev.Raw); final != "" {
 						text.WriteString(final)
 						ev.Text = final
 					}
@@ -427,6 +427,9 @@ func (w *Worker) argv(prompt, requestSystem string) []string {
 			args = insertBeforePromptFlag(args, extra)
 		}
 	case "agy":
+		// cwd alone does not select an Agy project; otherwise it can reuse
+		// the operator's remembered conversation/workspace.
+		args = insertBeforePromptFlag(args, []string{"--new-project", "--add-dir", w.cwd, "--log-file", os.DevNull})
 		if w.mode == WarmStdinStreamJSON {
 			args = removeArg(args, "-p")
 			args = removePair(args, "--print-timeout")
@@ -436,6 +439,9 @@ func (w *Worker) argv(prompt, requestSystem string) []string {
 		} else {
 			args = insertBeforePromptFlag(args, events)
 		}
+	case "muse":
+		args = insertBeforePromptFlag(args, events)
+		args = append(args, "--no-session-log", "--no-foreign-personal-context", "--disable-web-tools", "--disable-shell", "--disable-write")
 	case "codex":
 		args = shortSandbox(args)
 		args = insertAfter(args, "exec", events)
@@ -612,15 +618,23 @@ func parseEvent(line []byte, done fleet.EventsDone) (Event, bool) {
 	if typ == "" {
 		typ, _ = obj["event"].(string)
 	}
+	if typ == "" {
+		typ, _ = obj["payload_type"].(string)
+	}
 	ev := Event{Type: typ, Raw: append(json.RawMessage(nil), line...), Done: done.Match(line)}
 	ev.Text = eventText(obj)
 	return ev, true
 }
 
 func eventText(obj map[string]any) string {
+	// Agy emits text deltas inside step_update, including the final DONE
+	// update. Tool info and thinking steps are deliberately not answer text.
+	if stringValue(obj["event"]) == "step_update" && stringValue(nested(obj, "step_update", "step_type")) == "agent_response" {
+		return stringValue(nested(obj, "step_update", "text_delta"))
+	}
 	// Muse Code (`exec --json`, MSP records): the kind is the top-level
 	// payload_type and the answer streams as run.output.delta payload.text.
-	// The terminal record repeats the whole answer; see mspTerminalText.
+	// The terminal record repeats the whole answer; see terminalText.
 	if stringValue(obj["payload_type"]) == "run.output.delta" {
 		if payload, ok := obj["payload"].(map[string]any); ok {
 			return stringValue(payload["text"])
@@ -642,7 +656,7 @@ func eventText(obj map[string]any) string {
 			}
 		}
 	}
-	if msg, ok := obj["message"].(map[string]any); ok {
+	if msg, ok := obj["message"].(map[string]any); ok && stringValue(obj["type"]) == "assistant" {
 		switch content := msg["content"].(type) {
 		case string:
 			return content
@@ -665,17 +679,22 @@ func eventText(obj map[string]any) string {
 	return ""
 }
 
-// mspTerminalText is the whole answer a Muse Code terminal record
-// (run.terminal.*) carries in payload.text. It is only the fallback for a
-// turn that streamed no run.output.delta: taking it as well would duplicate
-// the answer.
-func mspTerminalText(raw []byte) string {
+// terminalText supplies a complete answer only when no text was streamed.
+// Terminal snapshots must never be appended to an already streamed answer.
+func terminalText(raw []byte) string {
 	var obj map[string]any
-	if json.Unmarshal(raw, &obj) != nil || !strings.HasPrefix(stringValue(obj["payload_type"]), "run.terminal.") {
+	if json.Unmarshal(raw, &obj) != nil {
 		return ""
 	}
-	payload, _ := obj["payload"].(map[string]any)
-	return stringValue(payload["text"])
+	switch {
+	case stringValue(obj["type"]) == "result":
+		return stringValue(obj["result"])
+	case stringValue(obj["event"]) == "result":
+		return stringValue(nested(obj, "result", "response"))
+	case strings.HasPrefix(stringValue(obj["payload_type"]), "run.terminal."):
+		return stringValue(nested(obj, "payload", "text"))
+	}
+	return ""
 }
 
 func claudeTextDelta(raw []byte) bool {
@@ -708,7 +727,7 @@ func usageFromEvent(raw []byte) Usage {
 		}
 		u := Usage{
 			InputTokens:       number(m, "input_tokens", "prompt_tokens", "input"),
-			CachedInputTokens: number(m, "cached_input_tokens", "cache_read_input_tokens"),
+			CachedInputTokens: number(m, "cached_input_tokens", "cache_read_input_tokens", "cache_read_tokens"),
 			OutputTokens:      number(m, "output_tokens", "completion_tokens", "output"),
 			TotalTokens:       number(m, "total_tokens", "total"),
 		}
@@ -884,11 +903,8 @@ func (w *Worker) killAndWait(cmd *exec.Cmd, wait <-chan error) {
 
 func (w *Worker) runError(waitErr, scanErr error) error {
 	parts := []error{waitErr, scanErr}
-	if w.stderr != nil {
-		if msg := strings.TrimSpace(w.stderr.String()); msg != "" {
-			parts = append(parts, errors.New(msg))
-		}
-	}
+	// Provider stderr can echo prompts, replies, credentials, or tool input.
+	// Keep diagnostics structural: these errors reach HTTP headers and logs.
 	err := errors.Join(parts...)
 	if err == nil {
 		err = errors.New("CLI reported an error outcome")

@@ -14,6 +14,11 @@ cli:
     #   {"event":"step_update","step_update":{...,"state":"DONE",...}}
     #   {"event":"result","result":{"status":"SUCCESS","num_turns":1,...}}
     #
+    # Re-measured 2026-09-29 (Sprint #328 / #1230): assistant text is
+    # step_update.step_type=agent_response, with text_delta on ACTIVE and
+    # DONE updates. result.response repeats the complete answer; result.usage
+    # includes cache_read_tokens. cligw extracts deltas, or falls back to the
+    # terminal response when no deltas arrived, and starts a fresh project.
     # NOTE THE KEY: agy nests its kind under `event`, where every other tool
     # uses `type`. A matcher assuming `type` would never fire here, and would do
     # so silently — a boundary that never arrives is indistinguishable from a
