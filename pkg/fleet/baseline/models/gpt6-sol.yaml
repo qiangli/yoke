@@ -1,8 +1,8 @@
 name: gpt6-sol
 family: gpt-sol
 version: "6"
-band: 5
-band_source: declared
+band: 4
+band_source: seeded
 band_season: 1
 # A PRIOR, not a measurement. Seeded 2026-09-29 from codex's own model list
 # (priority 2, "Workhorse model for coding and everyday work"); successor of

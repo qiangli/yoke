@@ -1,8 +1,8 @@
 name: gemini3.8-flash
 family: gemini-flash
 version: "3.8"
-band: 2
-band_source: declared
+band: 3
+band_source: seeded
 band_season: 1
 # agent-bench L4 (2026-09-28, via agy 1.2.12 on novidesign): NOT a measurement.
 # The run is INVALID — agy, running --yolo in a workspace inside the run

@@ -1,8 +1,8 @@
 name: gpt-oss-120b
 family: gpt-oss
 version: "120b"
-band: 2
-band_source: declared
+band: 1
+band_source: seeded
 band_season: 1
 # declared and deliberately conservative. This is the MEDIUM reasoning variant of
 # an open-weights 120B — the only variant agy exposes — and no gated run on this

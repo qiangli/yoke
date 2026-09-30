@@ -1,8 +1,8 @@
 name: opus4.8
 family: opus
 version: "4.8"
-band: 4
-band_source: operator
+band: 3
+band_source: seeded
 band_season: 1
 # Re-pegged L3 -> L4 on 2026-08-02, by OWNER JUDGEMENT, alongside opus5.
 #

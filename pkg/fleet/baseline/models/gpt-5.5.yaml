@@ -1,8 +1,8 @@
 name: gpt-5.5
 family: gpt
 version: "5.5"
-band: 4
-band_source: operator
+band: 3
+band_source: seeded
 band_season: 1
 # operator: serves BOTH conductor and steward
 display: GPT-5.5 (ChatGPT subscription)
