@@ -2,6 +2,9 @@ package git
 
 import (
 	"context"
+	"io"
+	"path/filepath"
+	"strings"
 
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/osfs"
@@ -42,15 +45,46 @@ func (l dotGitLoader) Load(ep *transport.Endpoint) (storer.Storer, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := fs.Stat(".git"); err == nil {
-		if fs, err = fs.Chroot(".git"); err != nil {
-			return nil, err
+	if fi, err := fs.Stat(".git"); err == nil {
+		if fi.IsDir() {
+			if fs, err = fs.Chroot(".git"); err != nil {
+				return nil, err
+			}
+		} else if dir, ok := gitdirFile(fs, ep.Path); ok {
+			// Submodule checkouts and linked worktrees carry a .git FILE
+			// ("gitdir: <path>") pointing at the real repository.
+			if fs, err = l.base.Chroot(dir); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if _, err := fs.Stat("config"); err != nil {
 		return nil, transport.ErrRepositoryNotFound
 	}
 	return filesystem.NewStorage(fs, cache.NewObjectLRUDefault()), nil
+}
+
+// gitdirFile resolves a ".git" file's "gitdir:" line, relative to the
+// checkout at path when it is not absolute.
+func gitdirFile(fs billy.Filesystem, path string) (string, bool) {
+	f, err := fs.Open(".git")
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, 4096))
+	if err != nil {
+		return "", false
+	}
+	dir, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir:")
+	if !ok {
+		return "", false
+	}
+	dir = strings.TrimSpace(dir)
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(path, dir)
+	}
+	return dir, true
 }
 
 // localTransport wraps the in-process server to fix one negotiation
