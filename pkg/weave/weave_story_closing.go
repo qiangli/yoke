@@ -20,23 +20,8 @@ package weave
 // later, in CI, on code that plainly exists. Leaving a sprint with stale pins
 // hands that to whoever comes next with no way to tell it was inherited.
 //
-// # The concurrency caveat, which is the interesting part
-//
-// A repo may be linked by MORE THAN ONE running sprint. When it is, dirtiness
-// there is not evidence about this sprint — another sprint's worker may have
-// put it there, and demanding a clean tree would either block a stop for
-// somebody else's work or, worse, invite a conductor to "tidy up" changes that
-// were not theirs.
-//
-// So a shared repo is REPORTED AND NOT REQUIRED CLEAN. The sprint can close
-// over it; the report names the sprint it is shared with, so the state is
-// attributable rather than mysterious. Only repos this sprint holds alone are
-// held to the bar.
-//
-// This is the same principle as everything else here: never assert something
-// the system cannot actually know. "This repo is dirty" is a fact; "this sprint
-// left it dirty" is a claim, and with two sprints on one repo it is a claim
-// nothing can support.
+// Dirty paths are attributed to stories and linked repos. Sharing a checkout
+// does not exempt this sprint's own files; other or unknown ownership is warned.
 
 import (
 	"fmt"
@@ -57,7 +42,7 @@ type repoState struct {
 	Repo string `json:"repo"`
 	Path string `json:"path,omitempty"`
 	// Shared names the other RUNNING sprints that also link this repo. When
-	// non-empty the repo is exempt from the clean bar — see the file comment.
+	// non-empty, repo-wide push/pin checks are exempt; owned dirty files are not.
 	Shared []int64 `json:"shared_with,omitempty"`
 
 	Dirty      int      `json:"dirty_files,omitempty"`
@@ -67,11 +52,12 @@ type repoState struct {
 	Unknown    string   `json:"unknown,omitempty"` // why it could not be checked
 	Exempt     bool     `json:"exempt,omitempty"`
 	Referenced string   `json:"-"`
+	Warnings   []string `json:"warnings,omitempty"`
 }
 
 // OK reports a repo that meets the closing bar, or is exempt from it.
 func (r *repoState) OK() bool {
-	if r.Exempt {
+	if r.Exempt && r.Dirty == 0 && r.Unknown == "" {
 		return true
 	}
 	return r.Dirty == 0 && r.Unpushed == 0 && len(r.StalePins) == 0 && r.Unknown == ""
@@ -82,7 +68,7 @@ func (r *repoState) Describe() string {
 	switch {
 	case r.Unknown != "":
 		return fmt.Sprintf("%s: cannot check (%s)", r.Repo, r.Unknown)
-	case r.Exempt:
+	case r.Exempt && r.Dirty == 0:
 		ids := make([]string, 0, len(r.Shared))
 		for _, id := range r.Shared {
 			ids = append(ids, fmt.Sprintf("#%d", id))
@@ -125,11 +111,7 @@ func checkClosingConditions(s *weaveStory, others []*weaveStory, repoPath func(s
 		}
 		seen[key] = true
 		st := repoState{Repo: run.Repo, Shared: shared[key]}
-		if len(st.Shared) > 0 {
-			st.Exempt = true
-			out = append(out, st)
-			continue
-		}
+		st.Exempt = len(st.Shared) > 0
 		path, ok := repoPath(run)
 		if !ok {
 			// Almost always a run whose checkout was removed after its work
@@ -144,6 +126,25 @@ func checkClosingConditions(s *weaveStory, others []*weaveStory, repoPath func(s
 		}
 		st.Path = path
 		inspectRepo(&st)
+		dirty, warnings, err := sprintDirtyOwnership(s, others, path, repoPath)
+		st.Dirty, st.Warnings = dirty, warnings
+		if err != nil {
+			st.Unknown = err.Error()
+			st.Exempt = false
+		}
+		seen[hygieneRootKey(path)] = true
+		out = append(out, st)
+	}
+	for _, root := range sprintDeclaredStoryRoots(s) {
+		if seen[hygieneRootKey(root)] {
+			continue
+		}
+		st := repoState{Repo: filepath.Base(root), Path: root}
+		dirty, warnings, err := sprintDirtyOwnership(s, others, root, repoPath)
+		st.Dirty, st.Warnings = dirty, warnings
+		if err != nil {
+			st.Unknown = err.Error()
+		}
 		out = append(out, st)
 	}
 	return out

@@ -716,6 +716,7 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			previous := *it
 			if title != "" {
 				it.Title = title
 			}
@@ -784,6 +785,11 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 			}
 			if _, err := st.Save(it); err != nil {
 				return err
+			}
+			if cmd.Flags().Changed("sprint") && SprintChanged != nil {
+				if err := SprintChanged(&previous); err != nil {
+					return fmt.Errorf("story saved, but retiring its former sprint goals failed: %w", err)
+				}
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "edited %s — %s\n", it.ID[:8], it.Title)
 			if reassigned {

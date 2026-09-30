@@ -37,7 +37,7 @@ func dirtyHygieneRepo(t *testing.T, name string) string {
 	return root
 }
 
-func TestSprintHygieneAcceptsDirtyRootsAttributedToAnotherActiveSprint(t *testing.T) {
+func TestSprintHygieneAttributesDirtyPathsInSharedRoots(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	umbrella := dirtyHygieneRepo(t, "umbrella")
 	bashy := dirtyHygieneRepo(t, "bashy")
@@ -72,28 +72,18 @@ func TestSprintHygieneAcceptsDirtyRootsAttributedToAnotherActiveSprint(t *testin
 	t.Cleanup(func() { currentBoard = previous })
 
 	hy := sprintCheckHygiene(closing)
-	if !hy.Clean() {
-		t.Fatalf("shared active work blocked the closing sprint: %+v", hy)
+	if hy.Clean() || len(hy.Problems) != 1 || !strings.Contains(hy.Problems[0], bashy) {
+		t.Fatalf("shared checkout must still block on our linked repo: %+v", hy)
 	}
-	if len(hy.Shared) != 2 {
-		t.Fatalf("shared attribution = %v, want umbrella and bashy", hy.Shared)
-	}
-	for _, root := range []string{umbrella, bashy} {
-		found := false
-		for _, line := range hy.Shared {
-			found = found || strings.Contains(line, root) && strings.Contains(line, "#120")
-		}
-		if !found {
-			t.Errorf("shared report does not attribute %s to sprint #120: %v", root, hy.Shared)
-		}
+	if !strings.Contains(strings.Join(hy.Shared, "\n"), umbrella) {
+		t.Fatalf("unattributed umbrella dirt must stay visible: %+v", hy)
 	}
 
-	// Attribution is an exemption only while the other sprint is active. Once
-	// its box stops, the same dirty roots must fail closed again.
+	// Stopping the other sprint does not make unrelated umbrella dirt ours.
 	stopped := now
 	active.Boxes[0].StoppedAt = &stopped
 	hy = sprintCheckHygiene(closing)
-	if hy.Clean() || len(hy.Problems) < 2 {
-		t.Fatalf("inactive sprint still exempted dirty roots: %+v", hy)
+	if hy.Clean() || len(hy.Problems) != 1 || !strings.Contains(hy.Problems[0], bashy) {
+		t.Fatalf("ownership changed when the other sprint stopped: %+v", hy)
 	}
 }

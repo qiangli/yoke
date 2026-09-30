@@ -404,6 +404,10 @@ func List(st *issue.Store, status string) ([]*issue.Issue, error) {
 // its sprint to any host that checks the repo out.
 var SprintHandles func(seq int64) (uuid, title string, ok bool)
 
+// SprintChanged reconciles the former sprint after a story edit is saved.
+// Plain todo binaries leave it nil; sprint-aware binaries retire moved goals.
+var SprintChanged func(previous *issue.Issue) error
+
 // LinkSprint sets the story's sprint fields from seq: all three when the seam
 // answers, the seq alone when it does not, and none when seq is 0 (unlink).
 // The seq is a label scoped to the filer's host; the uuid is the identity.

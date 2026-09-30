@@ -20,6 +20,23 @@ import (
 
 func init() {
 	todopkg.SprintHandles = sprintHandlesForTodo
+	todopkg.SprintChanged = func(previous *issue.Issue) error {
+		if previous.Sprint == 0 && previous.SprintID == "" {
+			return nil
+		}
+		dir, err := sprintStoreDir()
+		if err != nil {
+			return err
+		}
+		return withWeaveQueueLock(dir, func(q *weaveQueue) error {
+			for _, s := range q.Stories {
+				if storyBelongsToSprint(previous, s) {
+					sprintRetireMovedGoals(s)
+				}
+			}
+			return nil
+		})
+	}
 }
 
 // sprintHandlesForTodo is the pkg/todo seam: uuid + title of the local card

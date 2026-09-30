@@ -915,6 +915,7 @@ func newWeaveStoryMoveCmd() *cobra.Command {
 			}
 			return runWeaveStoryMutate(cmd, id, "sprint move", &flags, func(s *weaveStory) (string, error) {
 				if col == "done" {
+					sprintRetireMovedGoals(s)
 					if remaining := sprintUncheckedGoals(s); len(remaining) > 0 {
 						return "", fmt.Errorf("sprint #%d has unchecked goal items: %s", id, strings.Join(remaining, ", "))
 					}
