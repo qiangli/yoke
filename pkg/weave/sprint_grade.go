@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
@@ -26,28 +28,29 @@ import (
 )
 
 type sprintGradeEvent struct {
-	Run         string        `json:"run"`
-	Generation  string        `json:"generation"`
-	Commit      string        `json:"commit"`
-	Base        string        `json:"base"`
-	Gate        string        `json:"gate"`
-	GateExit    int           `json:"gate_exit"`
-	Tamper      bool          `json:"tamper"`
-	Verdict     string        `json:"verdict"`
-	Duration    time.Duration `json:"duration"`
-	Checkout    string        `json:"checkout"`
-	Output      string        `json:"output,omitempty"`
-	Reviewer    string        `json:"reviewer,omitempty"`
-	Agent       string        `json:"agent,omitempty"`
-	MergeCommit string        `json:"merge_commit,omitempty"`
+	AllowTestChange []string      `json:"allow_test_change,omitempty"`
+	Run             string        `json:"run"`
+	Generation      string        `json:"generation"`
+	Commit          string        `json:"commit"`
+	Base            string        `json:"base"`
+	Gate            string        `json:"gate"`
+	GateExit        int           `json:"gate_exit"`
+	Tamper          bool          `json:"tamper"`
+	Verdict         string        `json:"verdict"`
+	Duration        time.Duration `json:"duration"`
+	Checkout        string        `json:"checkout"`
+	Output          string        `json:"output,omitempty"`
+	Reviewer        string        `json:"reviewer,omitempty"`
+	Agent           string        `json:"agent,omitempty"`
+	MergeCommit     string        `json:"merge_commit,omitempty"`
 }
 
 // Credentials stay in memory and are never placed in the checkout or event.
 func sprintGradeSource(it *weaveItem, queue string) (string, transport.AuthMethod, error) {
-	if it.Branch == "" {
+	if sprintGradeBranch(it) == "" {
 		return "", nil, fmt.Errorf("run has no branch")
 	}
-	if err := plumbing.NewBranchReferenceName(it.Branch).Validate(); err != nil {
+	if err := plumbing.NewBranchReferenceName(sprintGradeBranch(it)).Validate(); err != nil {
 		return "", nil, err
 	}
 	if it.BoothForkURL == "" {
@@ -66,13 +69,34 @@ func sprintGradeSource(it *weaveItem, queue string) (string, transport.AuthMetho
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return it.BoothForkURL, nil, nil
 	}
-	data, err := os.ReadFile(filepath.Join(queue, fmt.Sprintf("booth-%d.credentials", it.ID)))
+	data, err := os.ReadFile(boothCredentialPath(queue, it.ID))
 	if err != nil {
 		return "", nil, fmt.Errorf("read booth credentials: %w", err)
 	}
 	for _, line := range strings.Split(string(data), "\n") {
-		c, e := url.Parse(strings.TrimSpace(line))
-		if e != nil || c.User == nil || c.Scheme != u.Scheme || c.Host != u.Host || c.Path != u.Path {
+		raw := strings.TrimSpace(line)
+		// credential-store may percent-encode the port separator in the
+		// authority. Decode only the host, never the user/password or path.
+		if scheme, rest, ok := strings.Cut(raw, "://"); ok {
+			end := strings.IndexAny(rest, "/?#")
+			if end < 0 {
+				end = len(rest)
+			}
+			start := strings.LastIndex(rest[:end], "@") + 1
+			host, e := url.PathUnescape(rest[start:end])
+			if e != nil || strings.ContainsAny(host, "/?#@") {
+				continue
+			}
+			raw = scheme + "://" + rest[:start] + host + rest[end:]
+		}
+		c, e := url.Parse(raw)
+		if e != nil || c.User == nil || c.Scheme != u.Scheme || c.Host != u.Host {
+			continue
+		}
+		// Git credential-store defaults to host scope and may discard the
+		// path after clone. Only accept that form for the recorded booth's
+		// own fork; never derive a username from the run number.
+		if c.Path != u.Path && !(c.Path == "" && strings.HasPrefix(u.Path, "/"+it.BoothUser+"/")) {
 			continue
 		}
 		password, ok := c.User.Password()
@@ -135,11 +159,11 @@ func sprintGradeMatch(pattern, name string) (bool, error) {
 	return match(0, 0)
 }
 
-func sprintGradeTamper(base, attempt *object.Commit, globs []string) (bool, error) {
+func sprintGradeTamper(base, attempt *object.Commit, globs []string, allow ...string) (bool, error) {
 	if len(globs) == 0 {
 		globs = []string{"*_test.go", "test_*.py", "*_test.py", "tests/**", "grader/**"}
 	}
-	for _, g := range globs {
+	for _, g := range append(append([]string{}, globs...), allow...) {
 		for _, part := range strings.Split(g, "/") {
 			if part != "**" {
 				if _, err := path.Match(part, ""); err != nil {
@@ -158,6 +182,15 @@ func sprintGradeTamper(base, attempt *object.Commit, globs []string) (bool, erro
 	}
 	tamper := false
 	err = bt.Files().ForEach(func(f *object.File) error {
+		for _, g := range allow {
+			matched, e := sprintGradeMatch(g, f.Name)
+			if e != nil {
+				return e
+			}
+			if matched {
+				return nil
+			}
+		}
 		for _, g := range globs {
 			matched, e := sprintGradeMatch(g, f.Name)
 			if e != nil {
@@ -184,8 +217,8 @@ func sprintGradeTamper(base, attempt *object.Commit, globs []string) (bool, erro
 	return tamper, err
 }
 
-func sprintGradeAttempt(ctx context.Context, sprint int64, run string, it *weaveItem, queue, base, gate string, globs []string, timeout time.Duration) (sprintGradeEvent, error) {
-	ev := sprintGradeEvent{Run: run, Base: base, Gate: gate, GateExit: -1, Verdict: "fail"}
+func sprintGradeAttempt(ctx context.Context, sprint int64, run string, it *weaveItem, queue, base, gate string, globs []string, timeout time.Duration, allow ...string) (sprintGradeEvent, error) {
+	ev := sprintGradeEvent{AllowTestChange: append([]string(nil), allow...), Run: run, Base: base, Gate: gate, GateExit: -1, Verdict: "fail"}
 	if strings.TrimSpace(gate) == "" || timeout <= 0 {
 		return ev, fmt.Errorf("nonempty --gate and positive --timeout required")
 	}
@@ -242,7 +275,7 @@ func sprintGradeAttempt(ctx context.Context, sprint int64, run string, it *weave
 	}
 	fetchCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	hash, err := sprintGradeFetch(fetchCtx, r, source, it.Branch, auth)
+	hash, err := sprintGradeFetch(fetchCtx, r, source, sprintGradeBranch(it), auth)
 	if err != nil {
 		return ev, err
 	}
@@ -262,7 +295,7 @@ func sprintGradeAttempt(ctx context.Context, sprint int64, run string, it *weave
 	if !ancestor {
 		return ev, fmt.Errorf("attempt does not descend from the arena base")
 	}
-	ev.Tamper, err = sprintGradeTamper(bc, ac, globs)
+	ev.Tamper, err = sprintGradeTamper(bc, ac, globs, allow...)
 	if err != nil {
 		return ev, err
 	}
@@ -407,7 +440,7 @@ func newSprintGradeCommands() []*cobra.Command {
 	var commands []*cobra.Command
 	for _, verb := range []string{"grade", "merge"} {
 		var run, gate, into, reviewer string
-		var globs []string
+		var globs, allow []string
 		var jsonOut bool
 		var timeout time.Duration
 		cmd := &cobra.Command{Use: verb + " N --run REPO#ID", Short: "Grade outside the booth or merge a graded attempt", Args: cobra.ExactArgs(1)}
@@ -417,6 +450,7 @@ func newSprintGradeCommands() []*cobra.Command {
 		if verb == "grade" {
 			cmd.Flags().StringVar(&gate, "gate", "", "gate command (bash -c)")
 			cmd.Flags().StringArrayVar(&globs, "tests-glob", nil, "protected test glob (repeatable)")
+			cmd.Flags().StringArrayVar(&allow, "allow-test-change", nil, "accepted test change glob (repeatable; recorded in grade)")
 		} else {
 			cmd.Flags().StringVar(&into, "into", "", "real repository checkout")
 			cmd.Flags().StringVar(&reviewer, "reviewer", "", "reviewer subject to code dominance")
@@ -491,7 +525,7 @@ func newSprintGradeCommands() []*cobra.Command {
 					return fmt.Errorf("run has no pinned arena base")
 				}
 				if verb == "grade" {
-					ev, e = sprintGradeAttempt(cmd.Context(), id, run, it, queue, base, gate, globs, timeout)
+					ev, e = sprintGradeAttempt(cmd.Context(), id, run, it, queue, base, gate, globs, timeout, allow...)
 					if e != nil {
 						return e
 					}
@@ -526,7 +560,7 @@ func newSprintGradeCommands() []*cobra.Command {
 					}
 					ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 					defer cancel()
-					ev.MergeCommit, e = sprintGradeMerge(ctx, into, source, it.Branch, auth, ev, agent)
+					ev.MergeCommit, e = sprintGradeMerge(ctx, into, source, sprintGradeBranch(it), auth, ev, agent)
 					if e != nil {
 						return e
 					}
@@ -575,6 +609,215 @@ func sprintGradeManager(s *weaveStory) error {
 	}
 	if token == "" || sprintLeaseTokenHash(token) != s.Lease.TokenHash {
 		return fmt.Errorf("merge requires the manager lease token")
+	}
+	return nil
+}
+
+func sprintGradeBranch(it *weaveItem) string {
+	if it.BoothForkURL != "" || it.ArenaSprint != 0 {
+		return "attempt"
+	}
+	return it.Branch
+}
+
+// Restore only provisioned skill directories to the pinned base. Build objects
+// directly: the worker's index, checkout and HEAD remain untouched.
+func sprintGradeRestoreTree(r *gogit.Repository, attempt, base plumbing.Hash, parts []string) (plumbing.Hash, error) {
+	read := func(hash plumbing.Hash) ([]object.TreeEntry, error) {
+		if hash.IsZero() {
+			return nil, nil
+		}
+		tree, err := r.TreeObject(hash)
+		if err != nil {
+			return nil, err
+		}
+		return append([]object.TreeEntry(nil), tree.Entries...), nil
+	}
+	entries, err := read(attempt)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	original, err := read(base)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	var old, current object.TreeEntry
+	for _, e := range original {
+		if e.Name == parts[0] {
+			old = e
+		}
+	}
+	var kept []object.TreeEntry
+	for _, e := range entries {
+		if e.Name == parts[0] {
+			current = e
+		} else {
+			kept = append(kept, e)
+		}
+	}
+	replacement := old
+	if len(parts) > 1 {
+		a, b := plumbing.ZeroHash, plumbing.ZeroHash
+		if current.Mode == filemode.Dir {
+			a = current.Hash
+		}
+		if old.Mode == filemode.Dir {
+			b = old.Hash
+		}
+		// No protected subtree at either side: preserve the existing entry.
+		if a.IsZero() && b.IsZero() {
+			return attempt, nil
+		}
+		hash, e := sprintGradeRestoreTree(r, a, b, parts[1:])
+		if e != nil {
+			return plumbing.ZeroHash, e
+		}
+		replacement = object.TreeEntry{Name: parts[0], Mode: filemode.Dir, Hash: hash}
+		if hash.IsZero() {
+			replacement = object.TreeEntry{}
+		}
+	}
+	if replacement.Name != "" {
+		kept = append(kept, replacement)
+	}
+	if len(kept) == 0 {
+		return plumbing.ZeroHash, nil
+	}
+	sort.Sort(object.TreeEntrySorter(kept))
+	tree := &object.Tree{Entries: kept}
+	encoded := r.Storer.NewEncodedObject()
+	if err := tree.Encode(encoded); err != nil {
+		return plumbing.ZeroHash, err
+	}
+	return r.Storer.SetEncodedObject(encoded)
+}
+
+func sprintGradePushAttempt(ctx context.Context, it *weaveItem, queue string) error {
+	if it.ArenaSprint == 0 && it.BoothForkURL == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	source, auth, err := sprintGradeSource(it, queue)
+	if err != nil {
+		return err
+	}
+	r, err := gogit.PlainOpen(it.Workspace)
+	if err != nil {
+		return err
+	}
+	head, err := r.Head()
+	if err != nil {
+		return err
+	}
+	base, err := r.CommitObject(plumbing.NewHash(it.BaseSHA))
+	if err != nil {
+		return err
+	}
+	tip, err := r.CommitObject(head.Hash())
+	if err != nil {
+		return err
+	}
+	ancestor, err := base.IsAncestor(tip)
+	if err != nil {
+		return err
+	}
+	if !ancestor {
+		return fmt.Errorf("booth attempt does not descend from pinned base")
+	}
+	// Rewrite only commits whose tree or parent changes. Keep author, committer,
+	// message and delivery trailers. Contaminated objects are never pushed as
+	// ancestors; original commits remain available in the booth workspace.
+	memo := map[plumbing.Hash]plumbing.Hash{base.Hash: base.Hash}
+	var clean func(plumbing.Hash) (plumbing.Hash, error)
+	clean = func(hash plumbing.Hash) (plumbing.Hash, error) {
+		if err := ctx.Err(); err != nil {
+			return plumbing.ZeroHash, err
+		}
+		if found, ok := memo[hash]; ok {
+			return found, nil
+		}
+		c, err := r.CommitObject(hash)
+		if err != nil {
+			return plumbing.ZeroHash, err
+		}
+		before, err := c.IsAncestor(base)
+		if err != nil {
+			return plumbing.ZeroHash, err
+		}
+		if before {
+			memo[hash] = hash
+			return hash, nil
+		}
+		originalTree := c.TreeHash
+		changed := false
+		for i, p := range c.ParentHashes {
+			parent, err := clean(p)
+			if err != nil {
+				return plumbing.ZeroHash, err
+			}
+			changed = changed || parent != p
+			c.ParentHashes[i] = parent
+		}
+		for _, name := range []string{".agents/skills", ".claude/skills"} {
+			tree, err := sprintGradeRestoreTree(r, c.TreeHash, base.TreeHash, strings.Split(name, "/"))
+			if err != nil {
+				return plumbing.ZeroHash, err
+			}
+			if tree.IsZero() {
+				encoded := r.Storer.NewEncodedObject()
+				if err := (&object.Tree{}).Encode(encoded); err != nil {
+					return plumbing.ZeroHash, err
+				}
+				tree, err = r.Storer.SetEncodedObject(encoded)
+				if err != nil {
+					return plumbing.ZeroHash, err
+				}
+			}
+			changed = changed || tree != c.TreeHash
+			c.TreeHash = tree
+		}
+		// An auto-commit containing only provisioned files becomes empty.
+		// Drop it so the delivery commit (and its trailers) remains the tip.
+		if c.TreeHash != originalTree && len(c.ParentHashes) == 1 {
+			parent, err := r.CommitObject(c.ParentHashes[0])
+			if err != nil {
+				return plumbing.ZeroHash, err
+			}
+			if parent.TreeHash == c.TreeHash {
+				memo[hash] = parent.Hash
+				return parent.Hash, nil
+			}
+		}
+		result := hash
+		if changed {
+			c.PGPSignature = "" // A rewritten object cannot retain its old signature.
+			encoded := r.Storer.NewEncodedObject()
+			if err := c.Encode(encoded); err != nil {
+				return plumbing.ZeroHash, err
+			}
+			result, err = r.Storer.SetEncodedObject(encoded)
+			if err != nil {
+				return plumbing.ZeroHash, err
+			}
+		}
+		memo[hash] = result
+		return result, nil
+	}
+	hash, err := clean(head.Hash())
+	if err != nil {
+		return err
+	}
+	remote := gogit.NewRemote(r.Storer, &config.RemoteConfig{Name: "booth-attempt", URLs: []string{source}})
+	err = remote.PushContext(ctx, &gogit.PushOptions{RemoteName: "booth-attempt", Auth: auth, RefSpecs: []config.RefSpec{config.RefSpec("+" + hash.String() + ":refs/heads/attempt")}})
+	if err != nil && !errors.Is(err, gogit.NoErrAlreadyUpToDate) {
+		// Remote diagnostics are untrusted and can contain credential material.
+		message := err.Error()
+		if basic, ok := auth.(*http.BasicAuth); ok && basic.Password != "" {
+			message = strings.ReplaceAll(message, basic.Password, "[redacted]")
+			message = strings.ReplaceAll(message, url.QueryEscape(basic.Password), "[redacted]")
+		}
+		return fmt.Errorf("push booth attempt failed: %s", message)
 	}
 	return nil
 }
