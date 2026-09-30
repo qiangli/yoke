@@ -290,7 +290,9 @@ func TestLadderCertifyBenchDiscovery(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	t.Chdir(repo)
+	originalRoots := ladderCertifyDiscoveryRoots
+	ladderCertifyDiscoveryRoots = func() []string { return []string{repo} }
+	t.Cleanup(func() { ladderCertifyDiscoveryRoots = originalRoots })
 	got, err := ladderCertifyBench("", home)
 	if err != nil || got != bench {
 		t.Fatalf("bench=%s err=%v", got, err)
@@ -304,6 +306,13 @@ func TestLadderCertifyBenchDiscovery(t *testing.T) {
 	}
 	if _, err := ladderCertifyBench(bench, home); err == nil {
 		t.Fatal("explicit invalid path fell back")
+	}
+	if err := os.Remove(filepath.Join(home, "agent-bench", "DAG.md")); err != nil {
+		t.Fatal(err)
+	}
+	got, err = ladderCertifyBench("", home)
+	if got != "" || err == nil || !strings.Contains(err.Error(), "agent-bench checkout absent (need DAG.md)") || !strings.Contains(err.Error(), "--bench PATH") {
+		t.Fatalf("missing checkout: bench=%q err=%v", got, err)
 	}
 }
 
