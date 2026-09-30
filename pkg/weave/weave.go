@@ -82,6 +82,7 @@ Common-case usage:
 	cmd.AddCommand(newWeaveSplitCmd())
 	cmd.AddCommand(newWeaveLinkCmd())
 	cmd.AddCommand(newWeaveStartCmd())
+	cmd.AddCommand(newWeaveSealedImageCmd())
 	cmd.AddCommand(newWeaveNextCmd())
 	cmd.AddCommand(newWeavePrioCmd())
 	cmd.AddCommand(newWeavePointCmd())
