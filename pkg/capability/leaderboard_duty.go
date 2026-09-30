@@ -206,17 +206,39 @@ func newLeaderboardBandsCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		names := map[string]bool{}
+		names := map[string][]string{}
+		seeds := map[string]int{}
 		for _, e := range events {
 			if e.Agent != "" {
-				names[e.Agent] = true
+				names[e.Agent] = nil
 			}
 		}
 		cat := fleet.New()
 		if agents, _ := cat.Agents(); len(agents) > 0 {
 			for _, a := range agents {
-				if !a.Ephemeral && a.ClonedFrom == "" {
-					names[a.Name] = true
+				if a.Ephemeral {
+					continue
+				}
+				base := a
+				seen := map[string]bool{a.Name: true}
+				for base.ClonedFrom != "" {
+					if seen[base.ClonedFrom] {
+						break
+					}
+					seen[base.ClonedFrom] = true
+					parent, ok := cat.Agent(base.ClonedFrom)
+					if !ok {
+						break
+					}
+					base = parent
+				}
+				key := base.MatrixKey()
+				if key == ":" {
+					continue
+				}
+				names[key] = append(names[key], a.Name)
+				if _, ok := seeds[key]; !ok {
+					seeds[key] = dutySeedBand(base.Name)
 				}
 			}
 		}
@@ -225,15 +247,24 @@ func newLeaderboardBandsCmd() *cobra.Command {
 			ordered = append(ordered, name)
 		}
 		sort.Strings(ordered)
-		fmt.Fprintln(cmd.OutOrStdout(), "AGENT                    SEED CURRENT STREAK LAST MOVE")
-		for _, name := range ordered {
-			state := ladder.CurrentBand(dutySeedBand(name), events, name)
+		fmt.Fprintln(cmd.OutOrStdout(), "AGENT                    NAMES                    SEED CURRENT STREAK LAST MOVE")
+		for _, key := range ordered {
+			seed := seeds[key]
+			if seed == 0 {
+				seed = dutySeedBand(key)
+			}
+			state := ladder.CurrentBand(seed, events, key)
 			last := "—"
 			if n := len(state.Moves); n > 0 {
 				move := state.Moves[n-1]
 				last = fmt.Sprintf("%s L%d→L%d", move.At.Format("2006-01-02"), move.From, move.To)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%-24s L%-4d L%-6d %+6d %s\n", name, state.Seed, state.Band, state.Streak, last)
+			aliases := append([]string(nil), names[key]...)
+			sort.Strings(aliases)
+			if len(aliases) == 0 {
+				aliases = []string{"—"}
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%-24s %-24s L%-4d L%-6d %+6d %s\n", key, strings.Join(aliases, ","), state.Seed, state.Band, state.Streak, last)
 		}
 		return nil
 	}
