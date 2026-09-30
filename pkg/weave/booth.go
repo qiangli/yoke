@@ -246,6 +246,21 @@ func boothSeedAgentDirs(env []string, queueDir string, run int64, toolName strin
 		}
 	}
 	env = boothSetEnv(env, "HOME", boothHome)
+	// Keychain-backed logins (macOS) find the login keychain through
+	// $HOME/Library/Keychains; the booth HOME links to the operator's.
+	if kc := filepath.Join(home, "Library", "Keychains"); home != "" {
+		if _, err := os.Stat(kc); err == nil {
+			link := filepath.Join(boothHome, "Library", "Keychains")
+			if _, err := os.Lstat(link); os.IsNotExist(err) {
+				if err := os.MkdirAll(filepath.Dir(link), 0o700); err != nil {
+					return nil, err
+				}
+				if err := os.Symlink(kc, link); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
 	var prefix strings.Builder
 	for _, r := range toolName {
 		if r >= 'a' && r <= 'z' {

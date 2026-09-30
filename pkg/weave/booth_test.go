@@ -306,3 +306,26 @@ func TestBoothCredentialAndProjection(t *testing.T) {
 		t.Fatalf("credential outside queue: %s", path)
 	}
 }
+
+// A keychain-backed login (muse on macOS stores auth.json with
+// storage=keychain) resolves the login keychain through
+// $HOME/Library/Keychains; a private booth HOME must still reach it.
+func TestBoothHomeReachesLoginKeychain(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	keychains := filepath.Join(home, "Library", "Keychains")
+	if err := os.MkdirAll(keychains, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(keychains, "login.keychain-db"), []byte("kc"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env, err := boothSeedAgentDirs([]string{"HOME=" + home}, t.TempDir(), 7, "muse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(boothGetEnv(env, "HOME"), "Library", "Keychains", "login.keychain-db"))
+	if err != nil || string(b) != "kc" {
+		t.Fatalf("booth HOME cannot reach the login keychain: %q %v", b, err)
+	}
+}
