@@ -320,9 +320,14 @@ func boothSeedAgentDirs(env []string, queueDir string, run int64, toolName strin
 		}
 	}
 	if configKey == "AGY_CONFIG_DIR" {
-		// The registry documents interactive browser sign-in but no
-		// portable credential file or config redirect contract.
-		fmt.Fprintf(os.Stderr, "weave: WARNING booth login may not survive redirected HOME for %s; verify sign-in before scoring\n", configKey)
+		// This CLI keeps browser OAuth in the shared SDK home, separate from
+		// its own session directory. Copy only login files into private HOME.
+		if err := boothCopyLogin(filepath.Join(home, ".gemini"), filepath.Join(boothHome, ".gemini")); err != nil {
+			return nil, err
+		}
+		if err := boothCopyLogin(filepath.Join(home, ".gemini", "antigravity-cli"), filepath.Join(boothHome, ".gemini", "antigravity-cli")); err != nil {
+			return nil, err
+		}
 	}
 	return env, nil
 }
@@ -331,7 +336,7 @@ func boothCopyLogin(source, dest string) error {
 	if err := os.MkdirAll(dest, 0o700); err != nil {
 		return err
 	}
-	for _, name := range []string{"auth.json", ".credentials.json"} {
+	for _, name := range []string{"auth.json", ".credentials.json", "oauth_creds.json", "google_accounts.json", "antigravity-oauth-token"} {
 		b, err := os.ReadFile(filepath.Join(source, name))
 		if os.IsNotExist(err) {
 			continue
