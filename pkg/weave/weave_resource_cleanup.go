@@ -400,6 +400,7 @@ func weavePruneOwnedRun(dir string, id int64, repo string, expectedBirth ...time
 		}
 		if !failed {
 			cur.Workspace, cur.LogPath, cur.CtlSock = "", "", ""
+			cur.CleanupError = ""
 		}
 		return nil
 	})

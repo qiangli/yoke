@@ -126,6 +126,15 @@ func TestSprintEndRefusesOnRecordedCleanupFailure(t *testing.T) {
 	if err := saveWeaveQueue(dir, q); err != nil {
 		t.Fatal(err)
 	}
+	// Keep a real unsafe artifact after the recorded failure. A stale error
+	// with nothing left to clean is cleared by a successful guarded retry.
+	cache := weaveManagedGOCachePath(nil, dir, 1)
+	if err := os.MkdirAll(filepath.Dir(cache), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), cache); err != nil {
+		t.Fatal(err)
+	}
 	out, code := runSprint(t, "end", "1")
 	if code == 0 || !strings.Contains(out, "cleanup failed") {
 		t.Fatalf("end must refuse on a recorded cleanup failure: exit=%d\n%s", code, out)

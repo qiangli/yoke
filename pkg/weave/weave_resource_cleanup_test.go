@@ -53,6 +53,35 @@ func TestWeaveResourceCleanupCountsBytes(t *testing.T) {
 		t.Fatal("workspace remains", e)
 	}
 }
+
+func TestWeaveResourceCleanupClearsStaleCacheErrorOnlyOnSuccess(t *testing.T) {
+	for _, scenario := range []string{"clean", "dirty"} {
+		t.Run(scenario, func(t *testing.T) {
+			dir, repo, it := resourceCleanupFixture(t)
+			it.CleanupError = "managed GOCACHE: old unlinkat failure"
+			if err := saveWeaveQueue(dir, &weaveQueue{Root: repo, Items: []*weaveItem{it}}); err != nil {
+				t.Fatal(err)
+			}
+			if scenario == "dirty" {
+				if err := os.WriteFile(filepath.Join(it.Workspace, "private.txt"), []byte("keep"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			weavePruneOwnedRun(dir, it.ID, repo)
+			q, err := loadWeaveQueue(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := q.Items[0]
+			if scenario == "clean" && got.CleanupError != "" {
+				t.Fatalf("successful retry kept stale cleanup error: %q", got.CleanupError)
+			}
+			if scenario == "dirty" && got.CleanupError != it.CleanupError {
+				t.Fatalf("failed retry cleared cleanup error: %q", got.CleanupError)
+			}
+		})
+	}
+}
 func TestWeaveResourceCleanupProtectsWork(t *testing.T) {
 	for _, scenario := range []string{"dirty", "untracked", "active", "competitor", "locked", "symlink", "uncertain"} {
 		t.Run(scenario, func(t *testing.T) {
