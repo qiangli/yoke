@@ -622,6 +622,7 @@ branches, worktrees, and weave workspaces owned by this sprint.`,
 		newSprintHooksCmd(),
 		newSprintArenaCmd(),
 		newSprintHeatCmd(),
+		newSprintPanelCmd(),
 		// Conductor-coordination, moved here from `weave` (plan layer,
 		// not per-repo execution): the cloudbox shared-session group and
 		// the conductor director.
