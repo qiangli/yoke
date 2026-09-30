@@ -94,8 +94,8 @@ GOAL · FILES likely touched · VERIFY cmd (--verify) · MERGE criteria · KNOWN
 Always list repo-specific traps (e.g. "submodule: bump the umbrella pin separately
 after pushing"; "native access gate must stay fail-closed"). Review the DIFF before
 merging, not just the exit code. Keep issues ≤3 points; split bigger work.
-Points enforce the hard runtime ceiling: 1=3m45s, 2=7m30s, 3=11m15s,
-5=18m45s, 8=30m. Omitted --max-runtime derives that cap; an explicit value
+Points enforce the hard runtime ceiling: 1=5m, 2=8m, 3=12m,
+5=20m, 8=30m. Omitted --max-runtime derives that cap; an explicit value
 may only tighten it. Sprint links reject unpointed work.
 
 ## The kb loop (host knowledge base — check before, write back after)

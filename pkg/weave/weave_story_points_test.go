@@ -136,7 +136,7 @@ func TestSprintLinkRejectsClaimedRunWithoutCompliantBudget(t *testing.T) {
 	}{
 		{name: "missing", want: "no bounded launch runtime"},
 		{name: "zero", spec: &weaveLaunchSpec{}, want: "no bounded launch runtime"},
-		{name: "over", spec: &weaveLaunchSpec{MaxRuntime: 8 * time.Minute}, want: "exceeds the 2-point cap 7m30s"},
+		{name: "over", spec: &weaveLaunchSpec{MaxRuntime: 9 * time.Minute}, want: "exceeds the 2-point cap 8m0s"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setClaimed(tc.spec)

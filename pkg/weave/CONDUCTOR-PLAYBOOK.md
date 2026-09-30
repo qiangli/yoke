@@ -247,8 +247,8 @@ used, timebox the whole phase to a few minutes.
    (or file with `weave add --points N` directly). PTS shows in
    `weave list`.
 4. Assign per the report card and the points. `weave start` derives the hard
-   `--max-runtime` from points (1→3m45s, 2→7m30s, 3→11m15s,
-   5→18m45s, 8→30m); an explicit value may tighten but never extend it. Send the
+   `--max-runtime` from points (1→5m, 2→8m, 3→12m,
+   5→20m, 8→30m); an explicit value may tighten but never extend it. Send the
    biggest issues to the
    strongest tool first.
 

@@ -35,6 +35,7 @@ import (
 	"github.com/qiangli/yoke/pkg/chat"
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/gate"
+	"github.com/qiangli/yoke/pkg/ladder"
 	"github.com/qiangli/yoke/pkg/room"
 	"github.com/qiangli/yoke/pkg/telemetry"
 	"github.com/qiangli/yoke/pkg/weave/memory"
@@ -6584,22 +6585,17 @@ func runWeaveListWatch(cmd *cobra.Command, includeHistory bool, flags *weaveOutp
 // weaveValidPoints is the allowed story-point scale (Fibonacci;
 // 8 = the ~30-minute cap — split anything judged bigger).
 func weaveValidPoints(n int) bool {
-	switch n {
-	case 1, 2, 3, 5, 8:
-		return true
-	}
-	return false
+	return ladder.ValidPoints(ladder.Points(n))
 }
 
-// weavePointRuntimeCap makes the estimate an execution ceiling. The scale is
-// linear and exact: one point is 3m45s, so the largest accepted item (8) gets
-// 30m and every smaller Fibonacci estimate gets proportionally less. A caller
-// must reject an invalid point value rather than treating it as unbounded.
+// weavePointRuntimeCap makes the estimate an execution ceiling. A caller must
+// reject an invalid point value rather than treating it as unbounded.
 func weavePointRuntimeCap(points int) (time.Duration, bool) {
-	if !weaveValidPoints(points) {
+	cap, ok := ladder.CapFor(ladder.Points(points))
+	if !ok {
 		return 0, false
 	}
-	return time.Duration(points) * (15 * time.Minute / 4), true
+	return cap.Wall, true
 }
 
 func weaveBoundRuntime(points int, requested time.Duration) (time.Duration, error) {
