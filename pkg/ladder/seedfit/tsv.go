@@ -28,6 +28,7 @@ type Row struct {
 	Area, Benchmark, Variant string
 	Metric, Score            string
 	Harness, SourceType      string
+	SourceURL, Date          string
 	Line                     int // 1-based line in the input file
 }
 
@@ -70,6 +71,7 @@ func ReadMatrix(r io.Reader) ([]Row, error) {
 			Area: get("capability_area"), Benchmark: get("benchmark"), Variant: get("variant_or_subscore"),
 			Metric: get("metric"), Score: get("score"),
 			Harness: get("agent_tool_or_harness"), SourceType: get("source_type"),
+			SourceURL: get("source_url"), Date: get("date"),
 			Line: line,
 		})
 	}
