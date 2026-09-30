@@ -582,7 +582,9 @@ branches, worktrees, and weave workspaces owned by this sprint.`,
 	// every subverb; installArgsErrorReporting has no such inheritance and
 	// walks the tree, so it must run AFTER AddCommand below.
 	cmd.SetFlagErrorFunc(weaveFlagErrorFunc)
-	cmd.AddCommand(newSprintAssignCmd(), newSprintReviewCmd())
+	acceptCmd, failCmd := newSprintAcceptCmd(), newSprintFailCmd()
+	sprintReassignInstallHooks(acceptCmd, failCmd)
+	cmd.AddCommand(newSprintAssignCmd(), newSprintReviewCmd(), newSprintReassignCmd())
 	cmd.AddCommand(
 		newWeaveBoardCmd(),
 		newWeaveStoryAddCmd(),
@@ -592,8 +594,8 @@ branches, worktrees, and weave workspaces owned by this sprint.`,
 		newSprintClaimCmd(),
 		newSprintYieldCmd(),
 		newSprintSubmitCmd(),
-		newSprintAcceptCmd(),
-		newSprintFailCmd(),
+		acceptCmd,
+		failCmd,
 		newWeaveStoryEditCmd(),
 		newWeaveStoryRmCmd(),
 		newSprintStatusCmd(),
