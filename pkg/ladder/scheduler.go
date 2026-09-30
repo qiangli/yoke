@@ -2,6 +2,7 @@ package ladder
 
 import (
 	"encoding/binary"
+	"fmt"
 	"hash/fnv"
 	"math"
 )
@@ -33,6 +34,11 @@ type Entrant struct {
 	PlanRank                int
 	Free                    bool
 	CodingStoriesThisSeason int
+	// Successes and AgentFailures are the host-local assigned-story record.
+	Successes     int
+	AgentFailures int
+	// SeedScore is used for ordering only before any host record exists.
+	SeedScore float64
 }
 
 // StoryTask describes a story to place in its owning band.
@@ -58,7 +64,8 @@ type Pick struct {
 	ChallengeMatch bool
 }
 
-// ScheduleStory assigns a free entrant using currency, rating fit, then play-up.
+// ScheduleStory assigns a free entrant using currency, rating fit, then a
+// band-by-band fallback cascade.
 // Currency gives L4/L5 agents their two coding stories on L3-owned work only;
 // it cannot preempt L4/L5-owned work or assign a code matchup below 0.5 expected.
 func ScheduleStory(task StoryTask, pool []Entrant, lines Lines) Pick {
@@ -110,24 +117,19 @@ func ScheduleStory(task StoryTask, pool []Entrant, lines Lines) Pick {
 		return schedulerPick(task, pool[best], "match", false)
 	}
 
-	line := schedulerLine(task.Band, task.Duty, lines)
-	if line > 0 {
+	for band := task.Band - 1; band >= 1; band-- {
 		best = -1
 		for i := range pool {
 			e := &pool[i]
-			if !e.Free || e.Band != task.Band-1 {
+			if !e.Free || e.Band != band {
 				continue
 			}
-			standing, ok := e.Standings[task.Duty]
-			if !ok || standing.RD < 0 || standing.Lower() < line-standing.RD {
-				continue
-			}
-			if best < 0 || standing.Lower() > pool[best].Standings[task.Duty].Lower() {
+			if best < 0 || schedulerTrackRecordBetter(*e, pool[best], task.Duty) {
 				best = i
 			}
 		}
 		if best >= 0 {
-			return schedulerPick(task, pool[best], "play-up", true)
+			return schedulerPick(task, pool[best], fmt.Sprintf("cascade:L%d", band), true)
 		}
 	}
 	return Pick{Reason: "wait"}
@@ -138,8 +140,8 @@ func SchedulePick(task StoryTask, pool []Entrant, lines Lines) Pick {
 	return ScheduleStory(task, pool, lines)
 }
 
-// ScheduleReviewer selects a free reviewer that dominates the author on code.
-// It checks the author's band first, then one band higher, never below it.
+// ScheduleReviewer selects a free reviewer in the author's band or above who
+// dominates the author on code. It checks the author's band then one band up.
 func ScheduleReviewer(author DutyStanding, authorBand int, authorVendor string, pool []Entrant) (Pick, bool) {
 	for band := authorBand; band <= authorBand+1; band++ {
 		best := -1
@@ -149,8 +151,7 @@ func ScheduleReviewer(author DutyStanding, authorBand int, authorVendor string, 
 			if !e.Free || e.Band != band || !ok || !DominanceOK(standing, author) {
 				continue
 			}
-			if best < 0 || (e.Vendor != authorVendor && pool[best].Vendor == authorVendor) ||
-				((e.Vendor != authorVendor) == (pool[best].Vendor != authorVendor) && e.CostPerPoint < pool[best].CostPerPoint) {
+			if best < 0 || schedulerReviewerBetter(*e, pool[best], authorVendor) {
 				best = i
 			}
 		}
@@ -159,6 +160,41 @@ func ScheduleReviewer(author DutyStanding, authorBand int, authorVendor string, 
 		}
 	}
 	return Pick{}, false
+}
+
+func schedulerTrackRecordBetter(a, b Entrant, duty Duty) bool {
+	aScore, bScore := a.SeedScore, b.SeedScore
+	if a.Successes+a.AgentFailures > 0 {
+		aScore = float64(a.Successes+1) / float64(a.Successes+a.AgentFailures+2)
+	}
+	if b.Successes+b.AgentFailures > 0 {
+		bScore = float64(b.Successes+1) / float64(b.Successes+b.AgentFailures+2)
+	}
+	if aScore != bScore {
+		return aScore > bScore
+	}
+	if a.CostPerPoint != b.CostPerPoint {
+		return a.CostPerPoint < b.CostPerPoint
+	}
+	ard, aok := a.Standings[duty]
+	brd, bok := b.Standings[duty]
+	if aok != bok {
+		return aok
+	}
+	return aok && ard.RD > brd.RD
+}
+
+func schedulerReviewerBetter(a, b Entrant, authorVendor string) bool {
+	aDiff, bDiff := a.Vendor != authorVendor, b.Vendor != authorVendor
+	if aDiff != bDiff {
+		return aDiff
+	}
+	aLower := a.Standings[DutyCode].Lower()
+	bLower := b.Standings[DutyCode].Lower()
+	if aLower != bLower {
+		return aLower > bLower
+	}
+	return a.CostPerPoint < b.CostPerPoint
 }
 
 // schedulerPlanPreference re-picks a heavy task's match among the entrants
@@ -201,32 +237,6 @@ func schedulerExpected(task StoryTask, standing DutyStanding) float64 {
 
 func schedulerPick(task StoryTask, e Entrant, reason string, challenge bool) Pick {
 	return Pick{Agent: e.Agent, Expected: schedulerExpected(task, e.Standings[task.Duty]), Reason: reason, ChallengeMatch: challenge}
-}
-
-func schedulerLine(band int, duty Duty, lines Lines) float64 {
-	switch band {
-	case 3:
-		if duty == DutyCode {
-			return lines.L3Code
-		}
-	case 4:
-		switch duty {
-		case DutyCode:
-			return lines.L4Code
-		case DutyManage:
-			return lines.L4Manage
-		}
-	case 5:
-		switch duty {
-		case DutyCode:
-			return lines.L5Code
-		case DutyManage:
-			return lines.L5Manage
-		case DutyJudge:
-			return lines.L5Judge
-		}
-	}
-	return 0
 }
 
 // SampleChallenge deterministically selects approximately 15% of stories.

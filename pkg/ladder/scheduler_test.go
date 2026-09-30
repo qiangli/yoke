@@ -48,16 +48,17 @@ func TestScheduleStoryCurrencyAndPlayUp(t *testing.T) {
 	near.Standings[DutyManage] = DutyStanding{R: 1700, RD: 100}
 	far := schedulerEntrant("far", 3, 1500, 50, 1)
 	far.Standings[DutyManage] = DutyStanding{R: 1800, RD: 100}
-	if got := ScheduleStory(manage, []Entrant{near, far}, Lines{L4Manage: 1550}); got.Agent != "far" || got.Reason != "play-up" || !got.ChallengeMatch {
-		t.Fatalf("play-up: %+v", got)
+	far.SeedScore = 1
+	if got := ScheduleStory(manage, []Entrant{near, far}, Lines{L4Manage: 1550}); got.Agent != "far" || got.Reason != "cascade:L3" || !got.ChallengeMatch {
+		t.Fatalf("fallback cascade: %+v", got)
 	}
-	if got := ScheduleStory(manage, []Entrant{near}, Lines{L4Manage: 0}); got.Reason != "wait" || got.Agent != "" {
+	if got := ScheduleStory(manage, []Entrant{near}, Lines{L4Manage: 0}); got.Reason != "cascade:L3" || got.Agent != "near" {
 		t.Fatalf("unfitted line: %+v", got)
 	}
-	if got := ScheduleStory(manage, []Entrant{near}, Lines{L4Manage: 1601}); got.Reason != "wait" {
+	if got := ScheduleStory(manage, []Entrant{near}, Lines{L4Manage: 1601}); got.Reason != "cascade:L3" {
 		t.Fatalf("outside one RD: %+v", got)
 	}
-	if got := ScheduleStory(StoryTask{Duty: DutyJudge, Band: 5, Rating: 1600}, []Entrant{near}, Lines{L5Judge: 1500}); got.Reason != "wait" {
+	if got := ScheduleStory(StoryTask{Duty: DutyJudge, Band: 5, Rating: 1600}, []Entrant{near}, Lines{L5Judge: 1500}); got.Reason != "cascade:L3" {
 		t.Fatalf("two bands down: %+v", got)
 	}
 }
@@ -140,5 +141,64 @@ func TestSchedulerSampling(t *testing.T) {
 	}
 	if challenges < 1300 || challenges > 1700 || heads < 400 || heads > 600 {
 		t.Fatalf("rates challenge=%d head=%d", challenges, heads)
+	}
+}
+
+func TestScheduleStoryCascadeByTrackRecord(t *testing.T) {
+	task := StoryTask{Duty: DutyManage, Band: 5, Rating: 1600}
+	l1a := schedulerEntrant("l1-a", 1, 1500, 50, 1)
+	l1a.Successes, l1a.AgentFailures = 7, 2
+	l1b := schedulerEntrant("l1-b", 1, 1500, 50, 5)
+	l1b.Successes, l1b.AgentFailures = 3, 0
+	l1a.Agent = "l1-a"
+	pool := []Entrant{schedulerEntrant("busy-l5", 5, 1600, 50, 1), schedulerEntrant("busy-l4", 4, 1600, 50, 1), l1a, l1b}
+	pool[0].Free = false
+	pool[1].Free = false
+	got := ScheduleStory(task, pool, Lines{})
+	if got.Agent != "l1-b" || got.Reason != "cascade:L1" || !got.ChallengeMatch {
+		t.Fatalf("cascade track record: %+v", got)
+	}
+}
+
+func TestScheduleStoryCascadeSeedAndLaplace(t *testing.T) {
+	task := StoryTask{Duty: DutyManage, Band: 3, Rating: 1600}
+	a := schedulerEntrant("seed-a", 2, 1500, 50, 5)
+	b := schedulerEntrant("seed-b", 2, 1500, 50, 1)
+	a.SeedScore, b.SeedScore = .4, .8
+	if got := ScheduleStory(task, []Entrant{a, b}, Lines{}); got.Agent != "seed-b" {
+		t.Fatalf("seed fallback: %+v", got)
+	}
+	a.Successes, a.AgentFailures = 2, 0 // 3/4
+	b.Successes, b.AgentFailures = 8, 4 // 9/14
+	if got := ScheduleStory(task, []Entrant{b, a}, Lines{}); got.Agent != "seed-a" {
+		t.Fatalf("Laplace rate should beat raw counts: %+v", got)
+	}
+}
+
+func TestScheduleStoryCascadeOwningBandAndNoFreeWait(t *testing.T) {
+	task := StoryTask{Duty: DutyCode, Band: 3, Rating: 1500}
+	match := schedulerEntrant("match", 3, 1650, 50, 1)
+	low := schedulerEntrant("low", 2, 1800, 50, .1)
+	if got := ScheduleStory(task, []Entrant{low, match}, Lines{}); got.Agent != "match" || got.Reason != "match" || got.ChallengeMatch {
+		t.Fatalf("owning band match: %+v", got)
+	}
+	match.Free, low.Free = false, false
+	if got := ScheduleStory(task, []Entrant{match, low}, Lines{}); got.Reason != "wait" || got.Agent != "" {
+		t.Fatalf("no free entrant: %+v", got)
+	}
+}
+
+func TestScheduleReviewerBandAndRanking(t *testing.T) {
+	author := DutyStanding{R: 1600, RD: 50}
+	low := schedulerEntrant("lower", 2, 1900, 50, 1)
+	sameVendor := schedulerEntrant("same-vendor", 3, 1800, 50, 1)
+	sameVendor.Vendor = "author"
+	differentWeak := schedulerEntrant("different-weak", 3, 1700, 50, 9)
+	differentWeak.Vendor = "other"
+	differentStrong := schedulerEntrant("different-strong", 3, 1750, 50, 10)
+	differentStrong.Vendor = "other"
+	upper := schedulerEntrant("upper", 4, 1800, 50, 1)
+	if got, ok := ScheduleReviewer(author, 3, "author", []Entrant{low, sameVendor, differentWeak, differentStrong, upper}); !ok || got.Agent != "different-strong" {
+		t.Fatalf("vendor then conservative code ordering: %+v %v", got, ok)
 	}
 }
