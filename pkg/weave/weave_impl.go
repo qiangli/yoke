@@ -188,6 +188,8 @@ type weaveItem struct {
 	BoothUser    string `json:"booth_user,omitempty"`
 	BoothForkURL string `json:"booth_fork_url,omitempty"`
 	Blind        bool   `json:"blind,omitempty"`
+	// Sealed records a sandbox-tier booth attempt (booth_sealed.go).
+	Sealed *boothSealedRecord `json:"sealed,omitempty"`
 	// LaunchPhase is durable, operator-visible progress while a workspace is
 	// being provisioned.  In particular, hydration can legitimately take a
 	// while; leaving an item as todo until it finishes makes an active launch
@@ -3130,6 +3132,10 @@ type weaveStartOptions struct {
 	resume  bool
 	arena   string
 	blind   bool
+	// sealed runs the booth in the sandbox tier; sealedAllow adds provider
+	// endpoints to its egress allowlist (booth_sealed.go).
+	sealed      bool
+	sealedAllow []string
 	// clone runs this issue under a per-issue EPHEMERAL clone of the named agent
 	// instead of the agent itself, so several issues can run in parallel without
 	// sharing one identity's cursor, kb attribution and ledger. Without it, an
@@ -3919,6 +3925,13 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	if err := weaveRunWorkspacePreflight(agentLaunch, workspace, env); err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 			weavecli.ExitPrecondFail, err))
+	}
+	if opts.sealed {
+		var sealedCleanup func()
+		if toolArgs, env, sealedCleanup, err = boothSealedStart(admission.ctx, dir, it, agentLaunch, displayTool, workspace, toolArgs, env, boothFork, boothCred, opts); err != nil {
+			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start", weavecli.ExitPrecondFail, err))
+		}
+		defer sealedCleanup()
 	}
 	tool := exec.CommandContext(admission.ctx, toolArgs[0], toolArgs[1:]...)
 	weaveConfigureOwnedCancellation(tool)
