@@ -9,7 +9,7 @@ labels:
     - door
 created: 2026-09-30T16:16:34.75947Z
 weave: 132
-assignee: qiangli
+assignee: s340-muse-triage-astra
 sprint: 340
 sprint_id: 07abaf0d-4c54-57e7-b324-8c926b4c300f
 sprint_title: Pure-Go m4, localedef and lp; listing view for the optional external POSIX tools

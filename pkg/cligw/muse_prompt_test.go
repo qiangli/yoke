@@ -12,7 +12,9 @@ import (
 )
 
 // This checks the prompt delivered to the CLI, not model compliance. The fixture
-// uses Genie's real system template and the reported failing task/tool shape.
+// is constructed, not a captured live request. Its system text matches
+// ycode/examples/genie/prompts/system.md at 22fe94f96191; the user request is the
+// reported failing scratch-file task with a minimal bashy tool schema.
 func TestMuseGenieCompletionContext(t *testing.T) {
 	data, err := os.ReadFile("testdata/genie-muse-request.json")
 	if err != nil {
