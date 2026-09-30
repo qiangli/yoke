@@ -207,6 +207,10 @@ func Run(cmd *exec.Cmd, logSink io.Writer, opts Options) (int, string, error) {
 		slog.Warn("agentpty: --mem-limit is not enforced on Windows yet", "limit_mb", opts.MemLimitBytes>>20)
 	}
 
+	// Set once a control line is typed at the session: the trust tap stands down.
+	var typed atomic.Bool
+	ctl := &inputTap{w: p, typed: &typed}
+
 	// Control socket: Windows 10 1803+ speaks AF_UNIX, and Go's net package
 	// dials it; the file-tail fallback covers an older host.
 	if opts.CtlSock != "" {
@@ -226,7 +230,7 @@ func Run(cmd *exec.Cmd, logSink io.Writer, opts Options) (int, string, error) {
 						defer c.Close()
 						sc := newPTYControlScanner(c)
 						for sc.Scan() {
-							writePTYControlLine(p, sc.Text())
+							writePTYControlLine(ctl, sc.Text())
 						}
 					}(conn)
 				}
@@ -234,7 +238,7 @@ func Run(cmd *exec.Cmd, logSink io.Writer, opts Options) (int, string, error) {
 		} else if f, err := os.OpenFile(opts.CtlSock, os.O_CREATE|os.O_RDONLY, 0o600); err == nil {
 			_ = f.Close()
 			defer func() { _ = os.Remove(opts.CtlSock) }()
-			go tailPTYControlFile(opts.CtlSock, p)
+			go tailPTYControlFile(opts.CtlSock, ctl)
 			slog.Warn("agentpty: control socket unavailable; using file control fallback", "path", opts.CtlSock, "err", lnErr)
 		} else {
 			slog.Warn("agentpty: control socket unavailable; steering disabled for this run", "path", opts.CtlSock, "err", lnErr)
@@ -252,7 +256,7 @@ func Run(cmd *exec.Cmd, logSink io.Writer, opts Options) (int, string, error) {
 		if opts.CtlSock == "" {
 			return w
 		}
-		return newTrustClearTap(w, opts.CtlSock, opts.OnGateRouted)
+		return newTrustClearTap(w, opts.CtlSock, &typed, opts.OnGateRouted)
 	}
 
 	if parentTTY && !opts.Capture {

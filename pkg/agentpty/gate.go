@@ -411,6 +411,39 @@ func ScreenText(raw string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
+// trustDialogLines is how much of the END of the screen the trust tap reads. A
+// folder-trust dialog is the last thing a starting TUI draws and it is short;
+// codex's is seven lines.
+const trustDialogLines = 12
+
+// cursorRow matches a cursor-position sequence and captures its row.
+var cursorRow = regexp.MustCompile("\x1b\\[([0-9]*)(?:;[0-9]*)?[Hf]")
+
+// screenEnd returns the last n non-blank lines of raw PTY output. A line ends at
+// a newline or at a cursor move to another row — a full-screen TUI draws whole
+// screens without ever writing a newline.
+func screenEnd(raw string, n int) string {
+	row := ""
+	raw = cursorRow.ReplaceAllStringFunc(raw, func(m string) string {
+		r := cursorRow.FindStringSubmatch(m)[1]
+		if r == row {
+			return m
+		}
+		row = r
+		return "\n"
+	})
+	var lines []string
+	for _, line := range strings.Split(raw, "\n") {
+		if ScreenText(line) != "" {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
+}
+
 func findSignature(low string, signatures []string) (string, bool) {
 	for _, sig := range signatures {
 		if strings.Contains(low, sig) {

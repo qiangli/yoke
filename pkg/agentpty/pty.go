@@ -351,6 +351,10 @@ func Run(cmd *exec.Cmd, logSink io.Writer, opts Options) (int, string, error) {
 		}()
 	}
 
+	// Set once a control line is typed at the session: the trust tap stands down.
+	var typed atomic.Bool
+	ctl := &inputTap{w: ptmx, typed: &typed}
+
 	// Control socket for `weave say`: every line received becomes
 	// keystrokes on the PTY master (trailing \r = Enter, which the
 	// TUI's line discipline reads as submit). Serving it in both
@@ -373,7 +377,7 @@ func Run(cmd *exec.Cmd, logSink io.Writer, opts Options) (int, string, error) {
 						defer c.Close()
 						sc := newPTYControlScanner(c)
 						for sc.Scan() {
-							writePTYControlLine(ptmx, sc.Text())
+							writePTYControlLine(ctl, sc.Text())
 						}
 					}(conn)
 				}
@@ -382,7 +386,7 @@ func Run(cmd *exec.Cmd, logSink io.Writer, opts Options) (int, string, error) {
 			if f, err := os.OpenFile(opts.CtlSock, os.O_CREATE|os.O_RDONLY, 0o600); err == nil {
 				_ = f.Close()
 				defer func() { _ = os.Remove(opts.CtlSock) }()
-				go tailPTYControlFile(opts.CtlSock, ptmx)
+				go tailPTYControlFile(opts.CtlSock, ctl)
 				slog.Warn("agentpty: control socket unavailable; using file control fallback", "path", opts.CtlSock, "err", lnErr)
 			} else {
 				slog.Warn("agentpty: control socket unavailable; `weave say` disabled for this run", "path", opts.CtlSock, "err", lnErr)
@@ -438,7 +442,7 @@ func Run(cmd *exec.Cmd, logSink io.Writer, opts Options) (int, string, error) {
 		if opts.CtlSock == "" {
 			return w
 		}
-		return newTrustClearTap(w, opts.CtlSock, opts.OnGateRouted)
+		return newTrustClearTap(w, opts.CtlSock, &typed, opts.OnGateRouted)
 	}
 
 	if parentTTY && !opts.Capture {
