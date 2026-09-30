@@ -412,7 +412,7 @@ func newModelsAdd(opts []Option) *cobra.Command {
 			"belongs to (`opus`). Declare --family and --version and the catalog will\n" +
 			"point the bare family name at whichever version is newest — so the alias\n" +
 			"follows the releases and the name in a record never changes meaning.\n\n" +
-			"--band is the model's capability peg, 1 (basic) to 4 (frontier), measured\n" +
+			"--band is the model's capability peg, 1 (basic) to 5 (frontier), measured\n" +
 			"across providers rather than taken from the vendor's own tier ladder.",
 		Example: "  bashy model add opus5 --family opus --version 5 --band 3 \\\n" +
 			"      --provider anthropic --kind subscription --upstream claude-opus-5\n" +
@@ -515,7 +515,7 @@ func newModelsAdd(opts []Option) *cobra.Command {
 	c.Flags().StringVar(&m.Display, "display", "", "human-facing label")
 	c.Flags().StringVar(&m.Family, "family", "", "product line; the bare family name floats to its newest version")
 	c.Flags().StringVar(&m.Version, "version", "", "version within the family, e.g. 4.9")
-	c.Flags().IntVar(&m.Band, "band", 0, "capability peg 1-4, normalized across providers")
+	c.Flags().IntVar(&m.Band, "band", 0, "capability peg 1-5, normalized across providers")
 	c.Flags().StringVar(&bandSource, "band-source", "", "evidence for the capability band")
 	c.Flags().StringArrayVar(&ids, "id", nil, "tool-specific model id as <tool>=<upstream> (repeatable)")
 	c.Flags().StringArrayVar(&m.Aliases, "alias", nil, "an additional name (repeatable)")
@@ -601,7 +601,7 @@ func newModelsSet(opts []Option) *cobra.Command {
 	c.Flags().StringVar(&display, "display", "", "human-facing label")
 	c.Flags().Float64Var(&quality, "quality", 0, "capability prior in [0,1]; the router's quality term")
 	c.Flags().Int64Var(&costMicro, "cost-micro", 0, "relative per-turn cost; the router's cost term")
-	c.Flags().IntVar(&band, "band", 0, "capability peg 1-4, normalized across providers")
+	c.Flags().IntVar(&band, "band", 0, "capability peg 1-5, normalized across providers")
 	c.Flags().StringVar(&bandSource, "band-source", "", "evidence for the capability band")
 	c.Flags().StringArrayVar(&ids, "id", nil, "tool-specific model id as <tool>=<upstream> (repeatable)")
 	c.Flags().StringArrayVar(&addAlias, "add-alias", nil, "add an alias (repeatable)")

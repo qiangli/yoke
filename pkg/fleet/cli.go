@@ -322,6 +322,7 @@ type modelRow struct {
 func newModelsList(opts []Option) *cobra.Command {
 	var asJSON bool
 	var filter listFilter
+	var band, minBand int
 	c := &cobra.Command{
 		Use:   "list",
 		Short: "List inference backends",
@@ -349,6 +350,15 @@ func newModelsList(opts []Option) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if band != 0 && minBand != 0 {
+				return fmt.Errorf("fleet: --band and --min-band are alternatives; give one")
+			}
+			if band != 0 && (band < 1 || band > MaxBand) {
+				return fmt.Errorf("fleet: --band %d out of range (1-%d)", band, MaxBand)
+			}
+			if minBand != 0 && (minBand < 1 || minBand > MaxBand) {
+				return fmt.Errorf("fleet: --min-band %d out of range (1-%d)", minBand, MaxBand)
+			}
 			models, errs := New(opts...).Models()
 			rows := make([]modelRow, 0, len(models))
 			hidden := 0
@@ -357,6 +367,12 @@ func newModelsList(opts []Option) *cobra.Command {
 					if selected == "" && m.Ring == assetring.RingLocal {
 						hidden++
 					}
+					continue
+				}
+				if band != 0 && m.Band != band {
+					continue
+				}
+				if minBand != 0 && m.Band < minBand {
 					continue
 				}
 				rows = append(rows, modelRow{
@@ -383,6 +399,8 @@ func newModelsList(opts []Option) *cobra.Command {
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
 	filter.flags(c)
+	c.Flags().IntVar(&band, "band", 0, "only models in exactly this band (1-5)")
+	c.Flags().IntVar(&minBand, "min-band", 0, "only models in this band or above (1-5)")
 	return c
 }
 
@@ -597,8 +615,8 @@ func newAgentsList(opts []Option) *cobra.Command {
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
 	filter.flags(c)
-	c.Flags().IntVar(&band, "band", 0, "only agents in exactly this band (1-4)")
-	c.Flags().IntVar(&minBand, "min-band", 0, "only agents in this band or above (1-4)")
+	c.Flags().IntVar(&band, "band", 0, "only agents in exactly this band (1-5)")
+	c.Flags().IntVar(&minBand, "min-band", 0, "only agents in this band or above (1-5)")
 	return c
 }
 
