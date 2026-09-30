@@ -2,7 +2,7 @@ name: haiku4.5
 family: haiku
 version: "4.5"
 band: 1
-band_source: declared
+band_source: seeded
 band_season: 1
 display: Claude Haiku 4.5
 provider: anthropic

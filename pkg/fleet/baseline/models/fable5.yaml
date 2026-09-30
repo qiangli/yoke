@@ -2,7 +2,7 @@ name: fable5
 family: fable
 version: "5"
 band: 4
-band_source: operator
+band_source: seeded
 band_season: 1
 # frontier
 display: Claude Fable 5

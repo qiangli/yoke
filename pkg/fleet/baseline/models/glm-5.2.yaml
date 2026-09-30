@@ -2,7 +2,7 @@ name: glm-5.2
 family: glm
 version: "5.2"
 band: 2
-band_source: measured
+band_source: seeded
 band_season: 1
 # THE FLEET'S FIRST *MEASURED* BAND. Three independent exams, harness clean.
 #

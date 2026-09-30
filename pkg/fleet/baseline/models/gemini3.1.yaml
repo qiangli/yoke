@@ -2,7 +2,7 @@ name: gemini3.1
 family: gemini
 version: "3.1"
 band: 2
-band_source: operator
+band_source: seeded
 band_season: 1
 # Re-pegged L3 -> L2 on 2026-07-14. A CODER, not a conductor.
 #
