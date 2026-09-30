@@ -1835,26 +1835,60 @@ func weaveResumeMemoryPrefix(workspace string) string {
 	return "## Resuming — last context\n\n```text\n" + trailer + "\n```"
 }
 
-// weaveEnsureBashyExclude adds bashy's own skill-export markers to the clone's
-// .git/info/exclude so the wrapper's auto-commit never captures them. The
-// `.bashy-export.json` ownership marker is written into a worker's workspace
-// (under .agents/skills/…, .claude/skills/…) as agent scaffolding at launch —
-// not worker code — and it carries workspace-specific content, so committing it
-// per-branch makes `weave pull` add/add-CONFLICT across parallel workers on an
-// identical artifact path, silently blocking every merge. Excluding the basename
-// (gitignore matches it at any depth) keeps it untracked so `git add -A` skips it.
+// weaveEnsureBashyExclude adds bashy's own skill-provisioning scaffolding to
+// the clone's .git/info/exclude so neither the wrapper's auto-commit nor a
+// worker's `git add -A` ever captures it. Provisioned skills live under
+// .agents/skills/… and .claude/skills/… as agent scaffolding at launch — not
+// worker code — and committing them per-branch makes `weave pull` add/add-
+// CONFLICT across parallel workers on an identical artifact path, silently
+// blocking every merge. info/exclude is local to the clone (never committed)
+// and never silences files the repo already tracks, so a tracked skill file
+// the worker edits is still committed. The `.bashy-export.json` basename line
+// is kept for markers written outside those roots.
 func weaveEnsureBashyExclude(workspace string) {
-	excl := filepath.Join(workspace, ".git", "info", "exclude")
+	excl := weaveExcludeFile(workspace)
+	if excl == "" {
+		return // best-effort; a missing exclude only reinstates the old behavior
+	}
 	existing, _ := os.ReadFile(excl)
-	if strings.Contains(string(existing), ".bashy-export.json") {
+	want := []string{".bashy-export.json", ".agents/skills/", ".claude/skills/"}
+	var missing []string
+	for _, line := range want {
+		if !strings.Contains(string(existing), line) {
+			missing = append(missing, line)
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(excl), 0o755); err != nil {
 		return
 	}
 	f, err := os.OpenFile(excl, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		return // best-effort; a missing exclude only reinstates the old behavior
+		return
 	}
 	defer f.Close()
-	_, _ = f.WriteString("\n# bashy skill-export marker — never commit (weave: causes add/add merge conflicts)\n.bashy-export.json\n")
+	_, _ = f.WriteString("\n# bashy provisioned skills — scaffolding, never commit (weave: causes add/add merge conflicts)\n")
+	for _, line := range missing {
+		_, _ = f.WriteString(line + "\n")
+	}
+}
+
+// weaveExcludeFile resolves the workspace's local exclude file. For a
+// worktree .git is a file, so filepath.Join(workspace, ".git", ...) points
+// nowhere — `git rev-parse --git-path info/exclude` is the path git itself
+// uses.
+func weaveExcludeFile(workspace string) string {
+	out, err := exec.Command(gitBin(), "-C", workspace, "rev-parse", "--git-path", "info/exclude").Output()
+	if err != nil {
+		return ""
+	}
+	p := strings.TrimSpace(string(out))
+	if p != "" && !filepath.IsAbs(p) {
+		p = filepath.Join(workspace, p)
+	}
+	return p
 }
 
 func maybeAutoCommit(workspace, msg string) (bool, error) {
@@ -3796,6 +3830,10 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		// workspace is weave-owned, so the host may stock it freely.
 		if ProvisionWorkspace != nil {
 			ProvisionWorkspace(workspace, cmd.ErrOrStderr())
+			// Exclude at provisioning time so a worker's `git add -A`
+			// never picks the scaffolding up either — not just the
+			// terminal auto-commit.
+			weaveEnsureBashyExclude(workspace)
 		}
 		for _, kv := range [][2]string{
 			{"user.name", fmt.Sprintf("agent-weave-issue-%d", it.ID)},
