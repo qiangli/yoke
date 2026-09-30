@@ -687,6 +687,7 @@ func (s *Server) Backend(agent string) (*AgentBackend, error) {
 	}
 	pool := NewPool(s.ctx, agent, s.poolConfigFor(row))
 	backend := NewAgentBackend(agent, row.Model, pool)
+	backend.Tool = row.Tool
 	s.pools[agent] = pool
 	s.backends[agent] = backend
 	s.order = append(s.order, agent)

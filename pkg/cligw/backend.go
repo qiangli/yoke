@@ -22,6 +22,19 @@ type AgentBackend struct {
 	Agent string
 	Model string
 	Pool  *Pool
+	// Tool is the fleet tool behind the seat (fleet.Tool.Name). A tool that
+	// is not ToolCallingCapable refuses requests that offer tools.
+	Tool string
+}
+
+// ToolCallingCapable reports whether a seat on tool can serve a tool-calling
+// request as a bare completion. muse cannot: `muse exec` has no flag to
+// replace its system prompt, so with its own tools disabled it still answers
+// as the Muse agent, describing its empty read-only session ("Requested
+// Bashy tool is not in this session's tool list") instead of emitting the
+// caller's tool call. Plain-text chat through such a seat is unaffected.
+func ToolCallingCapable(tool string) bool {
+	return tool != "muse"
 }
 
 // NewAgentBackend returns a gateway backend for one agent and model.
@@ -74,6 +87,11 @@ func (b *AgentBackend) Serve(w http.ResponseWriter, r *http.Request, body []byte
 	prompt, err := RenderCompletionPrompt(&req)
 	if err != nil {
 		return b.writeResponse(w, r, http.StatusBadRequest, "application/json", errorBody(err.Error()), modify)
+	}
+	if len(req.Tools) > 0 && !ToolCallingCapable(b.Tool) {
+		return b.writeResponse(w, r, http.StatusBadRequest, "application/json", errorBody(fmt.Sprintf(
+			"cligw: seat %q (tool %s) is not completion-capable for tool-calling requests: it answers as its own agent, not with the caller's tool calls; pick another seat or send the request without tools",
+			b.Name(), b.Tool)), modify)
 	}
 	if b.Pool == nil {
 		return gateway.Attempt{Status: http.StatusServiceUnavailable, CanRetry: true}
