@@ -42,11 +42,11 @@ func TestCapsAndWithinCap(t *testing.T) {
 		points Points
 		cap    Cap
 	}{
-		{1, Cap{20, 15 * time.Minute}},
-		{2, Cap{35, 30 * time.Minute}},
-		{3, Cap{50, 45 * time.Minute}},
-		{5, Cap{80, 90 * time.Minute}},
-		{8, Cap{120, 180 * time.Minute}},
+		{1, Cap{15, 5 * time.Minute}},
+		{2, Cap{25, 8 * time.Minute}},
+		{3, Cap{35, 12 * time.Minute}},
+		{5, Cap{55, 20 * time.Minute}},
+		{8, Cap{80, 30 * time.Minute}},
 	}
 	for _, test := range tests {
 		got, ok := CapFor(test.points)
@@ -65,6 +65,29 @@ func TestCapsAndWithinCap(t *testing.T) {
 	}
 }
 
+func TestOverCapFailure(t *testing.T) {
+	tests := []struct {
+		name   string
+		points Points
+		turns  int
+		wall   time.Duration
+		want   bool
+	}{
+		{"at double cap", 1, 30, 10 * time.Minute, false},
+		{"over double turns", 1, 31, 10 * time.Minute, true},
+		{"over double wall", 1, 30, 10*time.Minute + time.Nanosecond, true},
+		{"under double cap", 8, 160, 60 * time.Minute, false},
+		{"invalid points", 4, 0, 0, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := OverCapFailure(test.points, test.wall, test.turns); got != test.want {
+				t.Fatalf("OverCapFailure(%d, %s, %d) = %t, want %t", test.points, test.wall, test.turns, got, test.want)
+			}
+		})
+	}
+}
+
 func TestOutcomeScoresAndClassification(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -76,13 +99,13 @@ func TestOutcomeScoresAndClassification(t *testing.T) {
 		want         OutcomeKind
 		score        float64
 	}{
-		{"accepted", 20, 15 * time.Minute, true, 0, false, OutcomeAccepted, 1},
-		{"over turns", 21, 15 * time.Minute, true, 0, false, OutcomeAcceptedOverCap, .5},
-		{"over wall", 20, 15*time.Minute + time.Nanosecond, true, 0, false, OutcomeAcceptedOverCap, .5},
-		{"one rework wins over cap", 21, 15 * time.Minute, true, 1, false, OutcomeReworked, .5},
-		{"two reworks fails", 20, 15 * time.Minute, true, 2, false, OutcomeFailed, 0},
-		{"not accepted", 20, 15 * time.Minute, false, 0, false, OutcomeFailed, 0},
-		{"false done wins", 20, 15 * time.Minute, true, 0, true, OutcomeFalseDone, 0},
+		{"accepted", 15, 5 * time.Minute, true, 0, false, OutcomeAccepted, 1},
+		{"over turns", 16, 5 * time.Minute, true, 0, false, OutcomeAcceptedOverCap, .5},
+		{"over wall", 15, 5*time.Minute + time.Nanosecond, true, 0, false, OutcomeAcceptedOverCap, .5},
+		{"one rework wins over cap", 16, 5 * time.Minute, true, 1, false, OutcomeReworked, .5},
+		{"two reworks fails", 15, 5 * time.Minute, true, 2, false, OutcomeFailed, 0},
+		{"not accepted", 15, 5 * time.Minute, false, 0, false, OutcomeFailed, 0},
+		{"false done wins", 15, 5 * time.Minute, true, 0, true, OutcomeFalseDone, 0},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -105,15 +128,15 @@ func TestEstimateMissAndPenalty(t *testing.T) {
 		wall      time.Duration
 		want      int
 	}{
-		{"one point hit", 1, 20, 15 * time.Minute, 0},
-		{"one point just over", 1, 21, 15 * time.Minute, 1},
-		{"two point lower-bound turn", 2, 21, 30 * time.Minute, 0},
-		{"two point lower-bound wall", 2, 35, 15*time.Minute + time.Nanosecond, 0},
-		{"two point fits one", 2, 20, 15 * time.Minute, 1},
-		{"five point fits two", 5, 35, 30 * time.Minute, 2},
-		{"three point to five", 3, 51, 45 * time.Minute, 1},
-		{"eight point beyond", 8, 121, 180 * time.Minute, 1},
-		{"one point beyond eight", 1, 121, 180 * time.Minute, 5},
+		{"one point hit", 1, 15, 5 * time.Minute, 0},
+		{"one point just over", 1, 16, 5 * time.Minute, 1},
+		{"two point lower-bound turn", 2, 16, 8 * time.Minute, 0},
+		{"two point lower-bound wall", 2, 25, 5*time.Minute + time.Nanosecond, 0},
+		{"two point fits one", 2, 15, 5 * time.Minute, 1},
+		{"five point fits two", 5, 25, 8 * time.Minute, 2},
+		{"three point to five", 3, 36, 12 * time.Minute, 1},
+		{"eight point beyond", 8, 81, 30 * time.Minute, 1},
+		{"one point beyond eight", 1, 81, 30 * time.Minute, 5},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

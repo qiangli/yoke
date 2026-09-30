@@ -48,22 +48,30 @@ type Cap struct {
 	Wall  time.Duration
 }
 
-// CapFor returns the cap for p.
+// CapFor returns the cap for p. Per the 2026-09-30 owner decision, these caps
+// are refit from evidence.
 func CapFor(p Points) (Cap, bool) {
 	switch p {
 	case 1:
-		return Cap{Turns: 20, Wall: 15 * time.Minute}, true
+		return Cap{Turns: 15, Wall: 5 * time.Minute}, true
 	case 2:
-		return Cap{Turns: 35, Wall: 30 * time.Minute}, true
+		return Cap{Turns: 25, Wall: 8 * time.Minute}, true
 	case 3:
-		return Cap{Turns: 50, Wall: 45 * time.Minute}, true
+		return Cap{Turns: 35, Wall: 12 * time.Minute}, true
 	case 5:
-		return Cap{Turns: 80, Wall: 90 * time.Minute}, true
+		return Cap{Turns: 55, Wall: 20 * time.Minute}, true
 	case 8:
-		return Cap{Turns: 120, Wall: 180 * time.Minute}, true
+		return Cap{Turns: 80, Wall: 30 * time.Minute}, true
 	default:
 		return Cap{}, false
 	}
+}
+
+// OverCapFailure reports whether usage exceeds twice the point cap.
+// Environment blame is applied by the caller.
+func OverCapFailure(points Points, wall time.Duration, turns int) bool {
+	cap, ok := CapFor(points)
+	return ok && (wall > 2*cap.Wall || turns > 2*cap.Turns)
 }
 
 // OutcomeKind classifies a completed story delivery.
