@@ -489,6 +489,13 @@ func boothSealedEnsureProxyImage(ctx context.Context, bin, image string) error {
 	return err
 }
 
+// boothSealedImageUnavailable tells an operator how to supply the image that
+// executes a sealed agent. Podman machines run Linux containers, so a host CLI
+// executable cannot be copied into the image as a substitute.
+func boothSealedImageUnavailable(image string, err error) error {
+	return fmt.Errorf("sealed booth image %q is not available: build an image containing a Linux build of the agent CLI (or set BASHY_SEALED_IMAGE): %w", image, err)
+}
+
 // boothSealedStage assembles the container's home: the standard booth's
 // seeded login material plus a container-side git credential store.
 func boothSealedStage(in boothSealedInput) (string, error) {
@@ -559,7 +566,7 @@ func boothSealedLaunch(ctx context.Context, bin string, in boothSealedInput) (*b
 	base := os.Environ()
 	digest, err := boothSealedPodman(ctx, bin, base, "", "image", "inspect", "--format", "{{.Id}}", in.Image)
 	if err != nil {
-		return nil, fmt.Errorf("sealed booth image %q is not available: build an image with the agent CLI installed (or set BASHY_SEALED_IMAGE): %w", in.Image, err)
+		return nil, boothSealedImageUnavailable(in.Image, err)
 	}
 	if !strings.HasPrefix(digest, "sha256:") {
 		digest = "sha256:" + digest
