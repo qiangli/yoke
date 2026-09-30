@@ -1,6 +1,8 @@
 package weave
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +11,7 @@ import (
 	"time"
 
 	"github.com/qiangli/yoke/pkg/ladder"
+	"github.com/spf13/cobra"
 )
 
 func TestHeatFakeLaunchAndGrade(t *testing.T) {
@@ -188,5 +191,122 @@ func TestHeatDeliveryEventUsesCanonicalAgent(t *testing.T) {
 	a := heatAttempt{Agent: "fleet-name", CanonicalAgent: "tool:model", Verdict: "pass", Fairness: heatFairness{Points: 3}}
 	if got := heatDeliveryEvent(rec, a, now).Agent; got != "tool:model" {
 		t.Fatalf("event agent = %q, want canonical tool:model", got)
+	}
+}
+
+func TestHeatShadowCannotWinOrVoid(t *testing.T) {
+	now := time.Date(2026, 9, 29, 10, 0, 0, 0, time.UTC)
+	base := heatFairness{Base: "base", Template: "template", PromptHash: "prompt", Gate: "gate", Points: 1, Started: now}
+	rec := heatRecord{Attempts: []heatAttempt{{Agent: "agent-a"}, {Agent: "agent-b"}, {Agent: "agent-shadow", Shadow: true}}}
+	graded := 0
+	heatSchedule(&rec, func(i int, a *heatAttempt) error {
+		a.Fairness = base
+		if i == 2 {
+			a.Fairness.Template = "different"
+			return fmt.Errorf("shadow launch error")
+		}
+		return nil
+	}, func(i int, a *heatAttempt) error {
+		graded++
+		a.Verdict = "pass"
+		a.Cost = float64(2 - i)
+		return nil
+	})
+	if rec.Status != "rated" || rec.Winner != "agent-b" || graded != 3 {
+		t.Fatalf("shadow affected heat: %+v graded=%d", rec, graded)
+	}
+	if got := heatWinner([]heatAttempt{{Agent: "agent-a", Verdict: "pass", Cost: 2}, {Agent: "agent-shadow", Shadow: true, Verdict: "pass", Cost: 0}}); got != "agent-a" {
+		t.Fatalf("shadow winner: %q", got)
+	}
+}
+
+func TestHeatShadowEventAndFlag(t *testing.T) {
+	cmd := newSprintHeatCmd()
+	if cmd.Flags().Lookup("shadow") == nil || cmd.Flags().Lookup("shadow-only-record") == nil {
+		t.Fatal("shadow flags missing")
+	}
+	rec := heatRecord{ID: "pilot", Sprint: 331, Story: "story"}
+	a := heatAttempt{Agent: "agent-shadow", Shadow: true, Verdict: "pass", Fairness: heatFairness{Points: 1}}
+	ev := heatDeliveryEvent(rec, a, time.Now())
+	if ev.Note != "shadow heat:pilot" || ev.Agent != "agent-shadow" {
+		t.Fatalf("shadow delivery: %+v", ev)
+	}
+	if strings.Contains(strings.ToLower(heatStoryPrompt("Implement parser\nShadow: hidden")), "shadow") {
+		t.Fatal("shadow wording leaked into booth prompt")
+	}
+}
+
+func TestHeatShadowGradeFailureDoesNotVoid(t *testing.T) {
+	now := time.Date(2026, 9, 29, 10, 0, 0, 0, time.UTC)
+	rec := heatRecord{Attempts: []heatAttempt{{Agent: "agent-a"}, {Agent: "agent-b"}, {Agent: "agent-shadow", Shadow: true}}}
+	heatSchedule(&rec, func(_ int, a *heatAttempt) error {
+		a.Fairness = heatFairness{Base: "base", Template: "template", Gate: "gate", Started: now}
+		if a.Shadow {
+			a.FinishToolVersion = "v2"
+			a.Fairness.ToolVersion = "v1"
+		}
+		return nil
+	}, func(_ int, a *heatAttempt) error {
+		if a.Shadow {
+			return fmt.Errorf("shadow grade failed")
+		}
+		a.Verdict = "pass"
+		return nil
+	})
+	if rec.Status != "rated" || rec.Winner == "agent-shadow" || !strings.Contains(rec.Attempts[2].Error, "grade failed") {
+		t.Fatalf("shadow grade changed real heat: %+v", rec)
+	}
+}
+
+func TestHeatShadowThreadAndOwnRecord(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BASHY_HOME", home)
+	t.Setenv("BASHY_SPRINT_DIR", filepath.Join(home, "sprint"))
+	board, err := sprintStoreDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := withWeaveQueueLock(board, func(q *weaveQueue) error {
+		q.Stories = append(q.Stories, &weaveStory{ID: 331})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := ladder.OpenStore(filepath.Join(home, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := heatRecord{ID: "pilot", Sprint: 331, Story: "story", Status: "rated", Winner: "agent-a", Attempts: []heatAttempt{
+		{Agent: "agent-a", Run: "repo#1", Verdict: "pass", Fairness: heatFairness{Points: 1}},
+		{Agent: "agent-shadow", Run: "repo#2", Shadow: true, Verdict: "pass", Fairness: heatFairness{Points: 1}},
+	}}
+	cmd := &cobra.Command{}
+	cmd.SetOut(&bytes.Buffer{})
+	if err := heatFinish(cmd, rec, store); err != nil {
+		t.Fatal(err)
+	}
+	card, err := arenaCard(331)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(card.Thread) != 1 {
+		t.Fatalf("thread: %+v", card.Thread)
+	}
+	var brief struct {
+		Attempts []any `json:"attempts"`
+		Shadows  []any `json:"shadows"`
+	}
+	if err := json.Unmarshal([]byte(card.Thread[0].Body), &brief); err != nil {
+		t.Fatal(err)
+	}
+	if len(brief.Attempts) != 1 || len(brief.Shadows) != 1 {
+		t.Fatalf("shadow results not separate: %+v", brief)
+	}
+	events, err := store.Read()
+	if err != nil || len(events) != 2 {
+		t.Fatalf("events: %+v %v", events, err)
+	}
+	if events[0].Agent != "agent-a" || events[1].Agent != "agent-shadow" || events[1].Note != "shadow heat:pilot" {
+		t.Fatalf("shadow event rates wrong agent: %+v", events)
 	}
 }

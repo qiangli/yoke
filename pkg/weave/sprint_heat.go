@@ -36,6 +36,7 @@ type heatFairness struct {
 
 type heatAttempt struct {
 	Agent             string           `json:"agent"`
+	Shadow            bool             `json:"shadow,omitempty"`
 	CanonicalAgent    string           `json:"canonical_agent,omitempty"`
 	Run               string           `json:"run"`
 	Fairness          heatFairness     `json:"fairness"`
@@ -100,10 +101,16 @@ func heatMismatch(all []heatFairness) string {
 }
 
 func heatWinner(all []heatAttempt) string {
-	if len(all) == 0 {
+	var real []heatAttempt
+	for _, a := range all {
+		if !a.Shadow {
+			real = append(real, a)
+		}
+	}
+	if len(real) == 0 {
 		return ""
 	}
-	copy := append([]heatAttempt(nil), all...)
+	copy := append([]heatAttempt(nil), real...)
 	sort.SliceStable(copy, func(i, j int) bool {
 		a, b := copy[i], copy[j]
 		if (a.Verdict == "pass") != (b.Verdict == "pass") {
@@ -142,6 +149,9 @@ func heatSchedule(rec *heatRecord, launch func(int, *heatAttempt) error, grade f
 	wg.Wait()
 	var fair []heatFairness
 	for _, a := range rec.Attempts {
+		if a.Shadow {
+			continue
+		}
 		fair = append(fair, a.Fairness)
 		if a.Error != "" && !a.PreflightFailed {
 			rec.Reason = "launch error"
@@ -163,7 +173,9 @@ func heatSchedule(rec *heatRecord, launch func(int, *heatAttempt) error, grade f
 		}
 		if err := grade(i, &rec.Attempts[i]); err != nil {
 			rec.Attempts[i].Error = err.Error()
-			rec.Reason = "grade error"
+			if !rec.Attempts[i].Shadow {
+				rec.Reason = "grade error"
+			}
 		}
 	}
 	if rec.Reason != "" {
@@ -173,7 +185,18 @@ func heatSchedule(rec *heatRecord, launch func(int, *heatAttempt) error, grade f
 	rec.Status, rec.Winner = "rated", heatWinner(rec.Attempts)
 }
 
-func heatStoryPrompt(body string) string { return boothProjection(body) }
+func heatStoryPrompt(body string) string {
+	var lines []string
+	for _, line := range strings.Split(boothProjection(body), "\n") {
+		key := strings.ToLower(strings.TrimLeft(line, " \t-*#>"))
+		key = strings.ReplaceAll(key, "*", "")
+		if strings.HasPrefix(key, "shadow:") || strings.HasPrefix(key, "shadow agent:") || strings.HasPrefix(key, "shadow agents:") || strings.HasPrefix(key, "shadow-only-record:") {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
 
 func heatResultCost(log string) float64 {
 	lines := strings.Split(log, "\n")
@@ -215,24 +238,30 @@ func heatSave(rec heatRecord) error {
 func newSprintHeatCmd() *cobra.Command {
 	var story, agents, gate string
 	var points int
-	var allow []string
+	var allow, shadows []string
+	var shadowOnlyRecord bool
 	cmd := &cobra.Command{Use: "heat N --story ID --agents A,B --gate CMD", Short: "Run a blind paired story heat", Args: cobra.ExactArgs(1)}
 	cmd.Flags().StringVar(&story, "story", "", "todo story id")
 	cmd.Flags().StringVar(&agents, "agents", "", "comma-separated agent names")
 	cmd.Flags().StringVar(&gate, "gate", "", "shared external grading command")
 	cmd.Flags().IntVar(&points, "points", 0, "story point cap (1,2,3,5,8)")
 	cmd.Flags().StringArrayVar(&allow, "allow-test-change", nil, "accepted test change glob")
+	cmd.Flags().StringArrayVar(&shadows, "shadow", nil, "additional blind shadow agent (repeatable; excluded from winner and merge)")
+	cmd.Flags().BoolVar(&shadowOnlyRecord, "shadow-only-record", false, "shadow delivery events rate only the shadow agent itself; real agents' records are unaffected")
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		id, err := strconv.ParseInt(args[0], 10, 64)
 		if err != nil || id <= 0 {
 			return fmt.Errorf("invalid sprint number")
 		}
-		return runSprintHeat(cmd, id, story, strings.Split(agents, ","), gate, points, allow)
+		if shadowOnlyRecord && len(shadows) == 0 {
+			return fmt.Errorf("--shadow-only-record requires --shadow")
+		}
+		return runSprintHeat(cmd, id, story, strings.Split(agents, ","), shadows, gate, points, allow)
 	}
 	return cmd
 }
 
-func runSprintHeat(cmd *cobra.Command, sprint int64, story string, agents []string, gate string, points int, allow []string) error {
+func runSprintHeat(cmd *cobra.Command, sprint int64, story string, agents, shadows []string, gate string, points int, allow []string) error {
 	if story == "" || strings.TrimSpace(gate) == "" || len(agents) < 2 {
 		return fmt.Errorf("--story, --gate and at least two --agents required")
 	}
@@ -245,6 +274,16 @@ func runSprintHeat(cmd *cobra.Command, sprint int64, story string, agents []stri
 		seen[agent] = true
 		agents[i] = agent
 	}
+	for i, agent := range shadows {
+		agent = strings.TrimSpace(agent)
+		if agent == "" || seen[agent] {
+			return fmt.Errorf("shadow agents must be distinct from all entrants and nonempty")
+		}
+		seen[agent] = true
+		shadows[i] = agent
+	}
+	realCount := len(agents)
+	agents = append(agents, shadows...)
 	card, err := arenaCard(sprint)
 	if err != nil {
 		return err
@@ -353,14 +392,14 @@ func runSprintHeat(cmd *cobra.Command, sprint int64, story string, agents []stri
 			return err
 		}
 		links = append(links, link)
-		rec.Attempts[i] = heatAttempt{Agent: agent, Run: fmt.Sprintf("%s#%d", link.Repo, link.ID), Fairness: heatFairness{Base: base, Template: template.Digest, PromptHash: hex.EncodeToString(promptSum[:]), Gate: gate, Model: agent, Points: points, MaxRuntime: cap}}
+		rec.Attempts[i] = heatAttempt{Agent: agent, Shadow: i >= realCount, Run: fmt.Sprintf("%s#%d", link.Repo, link.ID), Fairness: heatFairness{Base: base, Template: template.Digest, PromptHash: hex.EncodeToString(promptSum[:]), Gate: gate, Model: agent, Points: points, MaxRuntime: cap}}
 	}
 	if err := withWeaveQueueLock(board, func(q *weaveQueue) error {
 		s := findWeaveStory(q, sprint)
 		if s == nil {
 			return fmt.Errorf("sprint disappeared")
 		}
-		s.Runs = append(s.Runs, links...)
+		s.Runs = append(s.Runs, links[:realCount]...)
 		return nil
 	}); err != nil {
 		return err
@@ -473,15 +512,27 @@ func heatFinish(cmd *cobra.Command, rec heatRecord, store *ladder.Store) error {
 				Verdict string `json:"verdict"`
 				Tamper  bool   `json:"tamper"`
 			} `json:"attempts"`
-		}{ID: rec.ID, Status: rec.Status, Reason: rec.Reason, Winner: rec.Winner}
-		for _, a := range rec.Attempts {
-			brief.Attempts = append(brief.Attempts, struct {
+			Shadows []struct {
 				Agent   string `json:"agent"`
 				Run     string `json:"run"`
 				Digest  string `json:"digest"`
 				Verdict string `json:"verdict"`
 				Tamper  bool   `json:"tamper"`
-			}{a.Agent, a.Run, a.Digest, a.Verdict, a.Tamper})
+			} `json:"shadows,omitempty"`
+		}{ID: rec.ID, Status: rec.Status, Reason: rec.Reason, Winner: rec.Winner}
+		for _, a := range rec.Attempts {
+			entry := struct {
+				Agent   string `json:"agent"`
+				Run     string `json:"run"`
+				Digest  string `json:"digest"`
+				Verdict string `json:"verdict"`
+				Tamper  bool   `json:"tamper"`
+			}{a.Agent, a.Run, a.Digest, a.Verdict, a.Tamper}
+			if a.Shadow {
+				brief.Shadows = append(brief.Shadows, entry)
+			} else {
+				brief.Attempts = append(brief.Attempts, entry)
+			}
 		}
 		summary, err := json.Marshal(brief)
 		if err != nil {
@@ -515,6 +566,9 @@ func heatDeliveryEvent(rec heatRecord, a heatAttempt, now time.Time) ladder.Even
 		}
 	}
 	ev := ladder.Event{Kind: ladder.EventKindDelivery, Agent: agent, Duty: ladder.DutyCode, Points: ladder.Points(a.Fairness.Points), At: now, Season: ladder.SeasonOf(now), Sprint: int(rec.Sprint), Story: rec.Story, Note: "heat:" + rec.ID, Reviewer: weaveConductorName("")}
+	if a.Shadow {
+		ev.Note = "shadow heat:" + rec.ID
+	}
 	if a.Verdict == "pass" {
 		ev.Outcome = 1
 		if a.Fairness.MaxRuntime > 0 && a.Wall > a.Fairness.MaxRuntime {
