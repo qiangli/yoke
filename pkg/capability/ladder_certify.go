@@ -241,14 +241,20 @@ func ladderCertifySafeName(name string) bool {
 	return name != "" && name != "." && name != ".." && !strings.ContainsAny(name, "/\\=\x00") && strings.IndexFunc(name, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) < 0
 }
 
+// ladderCertifyDiscoveryRoots allows tests to isolate checkout discovery from
+// the host's working directory, build source tree, and executable location.
+var ladderCertifyDiscoveryRoots = func() []string {
+	cwd, _ := os.Getwd()
+	_, source, _, _ := runtime.Caller(0)
+	exe, _ := os.Executable()
+	return []string{cwd, filepath.Dir(source), filepath.Dir(exe)}
+}
+
 func ladderCertifyBench(explicit, home string) (string, error) {
 	candidates := []string{explicit}
 	if explicit == "" {
 		candidates = nil
-		cwd, _ := os.Getwd()
-		_, source, _, _ := runtime.Caller(0)
-		exe, _ := os.Executable()
-		for _, start := range []string{cwd, filepath.Dir(source), filepath.Dir(exe)} {
+		for _, start := range ladderCertifyDiscoveryRoots() {
 			for dir := start; dir != ""; dir = filepath.Dir(dir) {
 				data, err := os.ReadFile(filepath.Join(dir, "go.mod"))
 				if err == nil && (strings.Contains(string(data), "module github.com/qiangli/yoke\n") || strings.Contains(string(data), "module github.com/qiangli/bashy\n")) {
