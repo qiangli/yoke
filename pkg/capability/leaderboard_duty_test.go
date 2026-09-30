@@ -110,6 +110,14 @@ func dutyFindRow(t *testing.T, rows []DutyRow, agent string) DutyRow {
 	return DutyRow{}
 }
 
+func TestLeaderboardBandsTable(t *testing.T) {
+	path := dutyWriteEvents(t, dutyDeliveries("agent-a", 1, 5, 1, 0))
+	out := dutyRun(t, "bands", "--events", path)
+	if !strings.Contains(out, "SEED") || !strings.Contains(out, "STREAK") || !strings.Contains(out, "agent-a") || !strings.Contains(out, "L2") {
+		t.Fatal(out)
+	}
+}
+
 // dutyLine returns the rendered line containing needle.
 func dutyLine(t *testing.T, out, needle string) string {
 	t.Helper()
@@ -245,24 +253,24 @@ func TestDutyDerivedBandAndMissingReasons(t *testing.T) {
 	}
 }
 
-func TestDutyProvisionalSeatDisplay(t *testing.T) {
+func TestDutyProvisionalSeatIgnored(t *testing.T) {
 	t.Setenv("BASHY_HOME", t.TempDir())
 	events := []ladder.Event{dutySeat("agent-a", 1, 5)}
 	path := dutyWriteEvents(t, events)
 
 	board := dutyRunBoard(t, "--duty", "code", "--events", path, "--json")
 	row := dutyFindRow(t, board.Duties["code"], "agent-a")
-	if row.Band != 0 || row.Provisional != 5 {
-		t.Errorf("band/provisional = %d/%d, want 0/5", row.Band, row.Provisional)
+	if row.Band != 1 || row.Seed != 1 || row.Moved {
+		t.Errorf("band/seed/moved = %d/%d/%v, want 1/1/false", row.Band, row.Seed, row.Moved)
 	}
 	out := dutyRun(t, "--duty", "code", "--events", path)
-	if !strings.Contains(out, "L0 (prov L5)") {
-		t.Errorf("provisional band cell absent from:\n%s", out)
+	if strings.Contains(out, "prov") {
+		t.Errorf("provisional display remains:\n%s", out)
 	}
 }
 
-// An L4-or-above seat owes 2 coding stories a season; an idle one is DUE.
-func TestDutyCurrencyDueForIdleHighSeat(t *testing.T) {
+// A provisional seat no longer changes the current band or currency duty.
+func TestDutyCurrencyIgnoresProvisionalSeat(t *testing.T) {
 	t.Setenv("BASHY_HOME", t.TempDir())
 	var events []ladder.Event
 	events = append(events, dutyDeliveries("agent-idle", 1, 8, 1, 0)...)
@@ -276,11 +284,11 @@ func TestDutyCurrencyDueForIdleHighSeat(t *testing.T) {
 	if board.Season != 2 {
 		t.Fatalf("season = %d, want the store maximum 2", board.Season)
 	}
-	if got := dutyFindRow(t, rows, "agent-idle").Currency; got != "DUE 0/2" {
-		t.Errorf("idle seat currency = %q, want \"DUE 0/2\"", got)
+	if got := dutyFindRow(t, rows, "agent-idle").Currency; got != "" {
+		t.Errorf("idle seat currency = %q, want empty", got)
 	}
-	if got := dutyFindRow(t, rows, "agent-current").Currency; got != "ok 2/2" {
-		t.Errorf("current seat currency = %q, want \"ok 2/2\"", got)
+	if got := dutyFindRow(t, rows, "agent-current").Currency; got != "" {
+		t.Errorf("current seat currency = %q, want empty", got)
 	}
 }
 

@@ -356,21 +356,40 @@ func sprintGradeLatest(s *weaveStory, run, generation string) (sprintGradeEvent,
 }
 
 func sprintGradeDominance(reviewer, author string, events []ladder.Event) error {
-	for _, p := range []*string{&reviewer, &author} {
-		if a, _, _, err := fleetCatalog().Binding(*p); err == nil {
-			*p = a.MatrixKey()
+	_, err := sprintGradeReviewFallback(reviewer, author, events)
+	return err
+}
+
+func sprintGradeReviewFallback(reviewer, author string, events []ladder.Event) (*seatFallbackEvent, error) {
+	pool, _, err := seatPool("", events, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	cat := fleetCatalog()
+	resolve := func(name string) string {
+		if a, _, _, e := cat.Binding(name); e == nil {
+			return a.MatrixKey()
+		}
+		return name
+	}
+	reviewerKey, authorKey := resolve(reviewer), resolve(author)
+	reviewerBand, authorBand := 0, 0
+	for _, e := range pool {
+		key := resolve(e.Agent)
+		if key == reviewerKey {
+			reviewerBand = e.Band
+		}
+		if key == authorKey {
+			authorBand = e.Band
 		}
 	}
-	rep := ladder.Replay(events, ladder.SeasonOf(time.Now()))
-	rr, ar := rep.Agents[reviewer], rep.Agents[author]
-	if rr != nil && ar != nil {
-		rs, rok := rr.Standings[ladder.DutyCode]
-		as, aok := ar.Standings[ladder.DutyCode]
-		if rok && aok && ladder.DominanceOK(rs, as) {
-			return nil
-		}
+	if reviewerBand == 0 || authorBand == 0 {
+		return nil, nil
 	}
-	return fmt.Errorf("escalate: reviewer does not dominate author's code rating")
+	if reviewerBand < authorBand {
+		return &seatFallbackEvent{Seat: "review", WantedBand: authorBand, ChosenAgent: reviewer, Band: reviewerBand}, nil
+	}
+	return nil, nil
 }
 
 // Resolve provenance outside the booth, using the same Register/Weave relation
@@ -569,6 +588,8 @@ func newSprintGradeCommands() []*cobra.Command {
 				if len(base) != 40 {
 					return fmt.Errorf("run has no pinned arena base")
 				}
+				var reviewFallback *seatFallbackEvent
+				var reviewStory string
 				if verb == "grade" {
 					ev, e = sprintGradeAttempt(cmd.Context(), id, run, it, queue, base, gate, globs, timeout, allow...)
 					if e != nil {
@@ -595,7 +616,7 @@ func newSprintGradeCommands() []*cobra.Command {
 						if e != nil {
 							return e
 						}
-						if e = sprintGradeDominance(reviewer, agent, events); e != nil {
+						if reviewFallback, e = sprintGradeReviewFallback(reviewer, agent, events); e != nil {
 							return e
 						}
 					}
@@ -603,6 +624,7 @@ func newSprintGradeCommands() []*cobra.Command {
 					if e != nil {
 						return e
 					}
+					reviewStory = trailers["Story-ID"]
 					source, auth, e := sprintGradeSource(it, queue)
 					if e != nil {
 						return e
@@ -621,6 +643,11 @@ func newSprintGradeCommands() []*cobra.Command {
 					return e
 				}
 				weaveStoryAppend(s, weaveConductorName(""), verb, string(b))
+				if reviewFallback != nil {
+					reviewFallback.Story = reviewStory
+					seatRecordFallback(s, *reviewFallback)
+					fmt.Fprintf(cmd.OutOrStdout(), "review by L%d: no L%d available\n", reviewFallback.Band, reviewFallback.WantedBand)
+				}
 				return nil
 			})
 			if err != nil {

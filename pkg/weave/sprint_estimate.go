@@ -89,8 +89,7 @@ func estimateDraw(cmd *cobra.Command, sprintID int64, s *weaveStory, story strin
 		}
 	}
 	now := time.Now().UTC()
-	season := ladder.SeasonOf(now)
-	pool, err := buildPanelPool(ladder.Replay(events, season), season)
+	pool, _, err := seatPool("", events, now)
 	if err != nil {
 		return nil, err
 	}
@@ -100,17 +99,19 @@ func estimateDraw(cmd *cobra.Command, sprintID int64, s *weaveStory, story strin
 			authorVendor = tool.Name
 		}
 	}
-	sprintUUID := s.UUID
-	if sprintUUID == "" {
-		sprintUUID = strconv.FormatInt(sprintID, 10)
+	wanted := ladder.EstimatePanelSize(input)
+	members := seatPanel(pool, wanted, authorVendor)
+	if len(members) == 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "capacity wait: no agent available")
+		return nil, nil
 	}
-	kind := "low-stakes"
-	if ladder.EstimatePanelSize(input) == 3 {
-		kind = "design"
+	if len(members) < wanted {
+		seatRecordFallback(s, seatFallbackEvent{Seat: "estimate", Story: story, WantedBand: 5, ChosenAgent: members[0].Agent, Band: members[0].Band, WantedSize: wanted, Size: len(members)})
 	}
-	members, err := ladder.PanelDraw(ladder.PanelCase{ID: "estimate:" + story, Kind: kind, Points: input.Expected, AuthorVendor: authorVendor}, pool, panelCaseSeed(sprintUUID, "estimate:"+story))
-	if err != nil {
-		return nil, err
+	for _, m := range members {
+		if m.Band < 5 {
+			seatRecordFallback(s, seatFallbackEvent{Seat: "estimate", Story: story, WantedBand: 5, ChosenAgent: m.Agent, Band: m.Band})
+		}
 	}
 	names := make([]string, len(members))
 	for i, member := range members {
@@ -164,6 +165,9 @@ func newSprintEstimateCmd() *cobra.Command {
 				estimators, err := estimateDraw(cmd, id, s, story, input)
 				if err != nil {
 					return err
+				}
+				if len(estimators) == 0 {
+					return nil
 				}
 				record := sprintEstimateRecord{Story: story, Estimators: estimators}
 				if err := saveSprintEstimate(path, record); err != nil {

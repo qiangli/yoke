@@ -316,9 +316,7 @@ func runSprintPanelDraw(cmd *cobra.Command, id int64, flags *weaveOutputFlags, c
 	}
 
 	now := time.Now().UTC()
-	season := ladder.SeasonOf(now)
-	rep := ladder.Replay(events, season)
-	pool, err := buildPanelPool(rep, season)
+	pool, _, err := seatPool("", events, now)
 	if err != nil {
 		return err
 	}
@@ -342,9 +340,19 @@ func runSprintPanelDraw(cmd *cobra.Command, id int64, flags *weaveOutputFlags, c
 			LowConfidence: lowConfidence,
 		}
 
-		members, err := ladder.PanelDraw(c, pool, seed)
-		if err != nil {
-			return err
+		wanted := ladder.PanelSize(c)
+		members := seatPanel(pool, wanted, c.AuthorVendor)
+		if len(members) == 0 {
+			fmt.Fprintln(cmd.OutOrStdout(), "capacity wait: no agent available")
+			return nil
+		}
+		if len(members) < wanted {
+			seatRecordFallback(s, seatFallbackEvent{Seat: "panel", Story: caseID, WantedBand: 5, ChosenAgent: members[0].Agent, Band: members[0].Band, WantedSize: wanted, Size: len(members)})
+		}
+		for _, m := range members {
+			if m.Band < 5 {
+				seatRecordFallback(s, seatFallbackEvent{Seat: "panel", Story: caseID, WantedBand: 5, ChosenAgent: m.Agent, Band: m.Band})
+			}
 		}
 
 		// Check if planted calibration case under seed

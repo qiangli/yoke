@@ -22,8 +22,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/ladder"
 	"github.com/qiangli/yoke/pkg/ladder/blame"
+	"github.com/spf13/cobra"
 )
 
 // LeaderboardDutySchema is the --duty --json envelope version.
@@ -47,10 +49,10 @@ type DutyRow struct {
 	Lower       float64 `json:"lower"`
 	Events      int     `json:"events"`
 	Established bool    `json:"established"`
-	// Band is the DERIVED band; Provisional is set only when a provisional
-	// seat lifts the agent above it.
-	Band        int `json:"band"`
-	Provisional int `json:"provisional,omitempty"`
+	Band        int     `json:"band"`
+	Seed        int     `json:"seed"`
+	Streak      int     `json:"streak"`
+	Moved       bool    `json:"moved"`
 	// Missing is the first two gate misses blocking band+1, then "...".
 	Missing  []string `json:"missing,omitempty"`
 	Currency string   `json:"currency,omitempty"`
@@ -82,8 +84,14 @@ type HeadToHeadRow struct {
 }
 
 // ComputeDutyBoard replays the event ledger through the current season and
-// builds one ladder per requested duty. Pure: no I/O, no clock.
+// builds one ladder per requested duty, using the local fleet catalog for seeds.
 func ComputeDutyBoard(events []ladder.Event, season int, override *ladder.Lines, duties []ladder.Duty) DutyBoard {
+	active := make([]ladder.Event, 0, len(events))
+	for _, e := range events {
+		if e.Season <= season {
+			active = append(active, e)
+		}
+	}
 	rep := ladder.Replay(events, season)
 	prev := ladder.Replay(events, season-1)
 	lines := dutyMergeLines(dutyComputeLines(rep, season), override)
@@ -95,18 +103,18 @@ func ComputeDutyBoard(events []ladder.Event, season int, override *ladder.Lines,
 	sort.Strings(names)
 
 	type agentView struct {
-		band, prov int
-		missing    []string
-		currency   string
+		band, seed, streak int
+		missing            []string
+		currency           string
 	}
 	views := make(map[string]agentView, len(names))
 	for _, name := range names {
 		rec := rep.Agents[name]
-		band, misses := ladder.DeriveBand(dutyProfile(rec, 0), lines, season)
-		v := agentView{band: band}
-		if rec.Provisional > band {
-			v.prov = rec.Provisional
-		}
+		seed := dutySeedBand(name)
+		state := ladder.CurrentBand(seed, active, name)
+		band := state.Band
+		_, misses := ladder.DeriveBand(dutyProfile(rec, 0), lines, season)
+		v := agentView{band: band, seed: seed, streak: state.Streak}
 		for i, m := range misses {
 			if i == 2 {
 				v.missing = append(v.missing, "...")
@@ -114,7 +122,7 @@ func ComputeDutyBoard(events []ladder.Event, season int, override *ladder.Lines,
 			}
 			v.missing = append(v.missing, m.Reason)
 		}
-		if effective := max(band, rec.Provisional); effective >= 4 {
+		if band >= 4 {
 			rated := rec.Standings[ladder.DutyCode].Events
 			if p := prev.Agents[name]; p != nil {
 				rated -= p.Standings[ladder.DutyCode].Events
@@ -153,7 +161,9 @@ func ComputeDutyBoard(events []ladder.Event, season int, override *ladder.Lines,
 				Events:      s.Events,
 				Established: s.Established(),
 				Band:        v.band,
-				Provisional: v.prov,
+				Seed:        v.seed,
+				Streak:      v.streak,
+				Moved:       v.band != v.seed,
 				Missing:     v.missing,
 				Currency:    v.currency,
 				Move:        move,
@@ -169,6 +179,65 @@ func ComputeDutyBoard(events []ladder.Event, season int, override *ladder.Lines,
 		board.Duties[string(duty)] = rows
 	}
 	return board
+}
+
+func dutySeedBand(agent string) int {
+	cat := fleet.New()
+	if a, _, model, err := cat.Binding(agent); err == nil {
+		if a.IsCascade() && a.Band > 0 {
+			return a.Band
+		}
+		if model.Band > 0 {
+			return model.Band
+		}
+	}
+	return 1
+}
+
+func newLeaderboardBandsCmd() *cobra.Command {
+	var path string
+	cmd := &cobra.Command{Use: "bands", Short: "show seeded and current agent bands", Args: cobra.NoArgs}
+	cmd.Flags().StringVar(&path, "events", "", "ladder event store path")
+	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
+		if path == "" {
+			path = ladder.DefaultStorePath()
+		}
+		events, err := dutyReadEvents(path)
+		if err != nil {
+			return err
+		}
+		names := map[string]bool{}
+		for _, e := range events {
+			if e.Agent != "" {
+				names[e.Agent] = true
+			}
+		}
+		cat := fleet.New()
+		if agents, _ := cat.Agents(); len(agents) > 0 {
+			for _, a := range agents {
+				if !a.Ephemeral && a.ClonedFrom == "" {
+					names[a.Name] = true
+				}
+			}
+		}
+		ordered := make([]string, 0, len(names))
+		for name := range names {
+			ordered = append(ordered, name)
+		}
+		sort.Strings(ordered)
+		fmt.Fprintln(cmd.OutOrStdout(), "AGENT                    SEED CURRENT STREAK LAST MOVE")
+		for _, name := range ordered {
+			state := ladder.CurrentBand(dutySeedBand(name), events, name)
+			last := "—"
+			if n := len(state.Moves); n > 0 {
+				move := state.Moves[n-1]
+				last = fmt.Sprintf("%s L%d→L%d", move.At.Format("2006-01-02"), move.From, move.To)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%-24s L%-4d L%-6d %+6d %s\n", name, state.Seed, state.Band, state.Streak, last)
+		}
+		return nil
+	}
+	return cmd
 }
 
 // dutyAssignRanks numbers rows already sorted by Lower descending. Adjacent
@@ -487,8 +556,8 @@ func renderDutyBoard(w io.Writer, board DutyBoard, path string) error {
 			continue
 		}
 		fmt.Fprintf(w, "\n%s (by conservative rating R−2RD)\n", strings.ToUpper(string(duty)))
-		fmt.Fprintf(w, "  %-4s %-24s %6s %5s %6s %7s %-15s %-44s %-8s %s\n",
-			"RANK", "AGENT", "R", "RD", "LOWER", "EVENTS", "BAND", "MISSING", "CURRENCY", "MOVE")
+		fmt.Fprintf(w, "  %-4s %-24s %6s %5s %6s %7s %-6s %-6s %-7s %-5s %-44s %-8s %s\n",
+			"RANK", "AGENT", "R", "RD", "LOWER", "EVENTS", "BAND", "SEED", "STREAK", "MOVED", "MISSING", "CURRENCY", "MOVE")
 		for _, r := range rows {
 			rank := strconv.Itoa(r.Rank)
 			if !r.Separable {
@@ -498,8 +567,8 @@ func renderDutyBoard(w io.Writer, board DutyBoard, path string) error {
 			if r.Established {
 				events += "*"
 			}
-			fmt.Fprintf(w, "  %-4s %-24s %6.0f %5.0f %6.0f %7s %-15s %-44s %-8s %s\n",
-				rank, r.Agent, r.R, r.RD, r.Lower, events, dutyBandCell(r),
+			fmt.Fprintf(w, "  %-4s %-24s %6.0f %5.0f %6.0f %7s %-6s %-6s %-7s %-5s %-44s %-8s %s\n",
+				rank, r.Agent, r.R, r.RD, r.Lower, events, dutyBandCell(r), fmt.Sprintf("L%d", r.Seed), fmt.Sprintf("%+d", r.Streak), map[bool]string{true: "yes", false: "no"}[r.Moved],
 				strings.Join(r.Missing, "; "), r.Currency, r.Move)
 		}
 	}
@@ -521,9 +590,6 @@ func renderDutyBoard(w io.Writer, board DutyBoard, path string) error {
 }
 
 func dutyBandCell(r DutyRow) string {
-	if r.Provisional > r.Band {
-		return fmt.Sprintf("L%d (prov L%d)", r.Band, r.Provisional)
-	}
 	return fmt.Sprintf("L%d", r.Band)
 }
 
