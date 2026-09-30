@@ -26,8 +26,8 @@ func TestAssignDispatch(t *testing.T) {
 	}{
 		{name: "fit", band: 3, want: "match", launches: 1},
 		{name: "busy", busy: true, band: 3, want: "wait"},
-		{name: "play-up", band: 4, want: "play-up", launches: 1},
-		{name: "wait", band: 5, want: "wait"},
+		{name: "cascade-one-down", band: 4, want: "cascade:L3", launches: 1},
+		{name: "cascade-two-down-never-wait", band: 5, want: "cascade:L3", launches: 1},
 		{name: "dry-run", dry: true, band: 3, want: "match"},
 		{name: "manual", manual: true, band: 3, want: "manual override", launches: 1},
 	} {
