@@ -107,6 +107,12 @@ func (c *Catalog) SaveTool(t Tool) error {
 		if err != nil {
 			return err
 		}
+		// Host adoption supplies only the host executable and its installation
+		// record. The sealed-image recipe belongs to the declared tool and must
+		// survive that narrower update.
+		if t.CLI.Linux.Install == "" && len(t.CLI.Linux.Requires) == 0 && t.CLI.Linux.Binary == "" {
+			t.CLI.Linux = base.CLI.Linux
+		}
 		return c.saveChanged(dirTools, t.Name, base, t, nil)
 	}
 	data, err := Marshal(t)

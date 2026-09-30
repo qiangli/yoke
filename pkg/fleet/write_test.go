@@ -3,6 +3,7 @@ package fleet
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -88,6 +89,40 @@ func TestSetCopiesOnWriteFromBaseline(t *testing.T) {
 	}
 	if !strings.Contains(string(local), "overlay: true") || strings.Contains(string(local), "launch:") {
 		t.Fatalf("direct SaveTool froze launch contract: %s", local)
+	}
+}
+
+// A host-adoption record owns only the executable and its host installation
+// record.  It must not erase the image recipe declared by the embedded tool.
+func TestSaveToolHostAdoptionKeepsLinuxRecipe(t *testing.T) {
+	base := fstest.MapFS{
+		"baseline/tools/agent-a.yaml": &fstest.MapFile{Data: []byte(`name: agent-a
+kind: cli
+cli:
+  binary: agent-a
+  versions:
+    - version: 1.0.0
+  linux:
+    install: npm install -g @example/agent-a@{version}
+    requires: [nodejs, npm]
+    binary: agent-a
+`)},
+	}
+	c := New(WithRoot(t.TempDir()), WithBaselineFS(base), WithoutCloudOverlay())
+	adopted := Tool{Name: "agent-a", Kind: ToolKindCLI, CLI: ToolCLI{
+		Binary:   "/host/cache/agent-a",
+		Versions: []ToolVersion{{Version: "1.0.0", Install: "cp /host/agent-a /host/cache/agent-a"}},
+	}}
+	if err := c.SaveTool(adopted); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := c.Tool("agent-a")
+	if !ok {
+		t.Fatal("adopted tool did not resolve")
+	}
+	want := ToolLinux{Install: "npm install -g @example/agent-a@{version}", Requires: []string{"nodejs", "npm"}, Binary: "agent-a"}
+	if !reflect.DeepEqual(got.CLI.Linux, want) {
+		t.Fatalf("linux recipe = %#v, want %#v", got.CLI.Linux, want)
 	}
 }
 
