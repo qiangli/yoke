@@ -103,7 +103,7 @@ func (b *AgentBackend) Serve(w http.ResponseWriter, r *http.Request, body []byte
 
 	text, stopped := applyStops(result.Text, rawJSON(req.Stop))
 	if len(req.Tools) > 0 {
-		text = toolEnvelopeTail(text)
+		text = recoverToolAnswer(text, req.Tools)
 	}
 	finish := "stop"
 	if stopped {
@@ -308,4 +308,119 @@ func toolEnvelopeTail(text string) string {
 		return `{"tool_calls":[` + string(call) + `]}`
 	}
 	return text
+}
+
+// recoverToolAnswer accepts a leading bare arguments object only when the
+// offered tool schemas identify one callable tool. The envelope path keeps
+// its existing behavior for model replies that already name their tool.
+func recoverToolAnswer(answer string, tools []openai.Tool) string {
+	if env := toolEnvelopeTail(answer); env != answer {
+		return env
+	}
+	start := strings.TrimSpace(answer)
+	if strings.HasPrefix(start, "```") {
+		lineEnd := strings.IndexByte(start, '\n')
+		if lineEnd < 0 || (start[3:lineEnd] != "" && strings.TrimSpace(start[3:lineEnd]) != "json") {
+			return answer
+		}
+		start = strings.TrimSpace(start[lineEnd+1:])
+	}
+	if !strings.HasPrefix(start, "{") {
+		return answer
+	}
+	dec := json.NewDecoder(strings.NewReader(start))
+	var args map[string]json.RawMessage
+	if dec.Decode(&args) != nil || args == nil || len(args) == 0 {
+		return answer
+	}
+	raw := json.RawMessage(start[:dec.InputOffset()])
+	var match string
+	for _, offered := range tools {
+		if offered.Type != "function" || offered.Function.Name == "" || !validToolArguments(args, offered.Function.Parameters, len(tools) > 1) {
+			continue
+		}
+		if match != "" {
+			return answer
+		}
+		match = offered.Function.Name
+	}
+	if match == "" {
+		return answer
+	}
+	name, _ := json.Marshal(match)
+	return `{"tool_calls":[{"name":` + string(name) + `,"arguments":` + string(raw) + `}]}`
+}
+
+func validToolArguments(args map[string]json.RawMessage, parameters json.RawMessage, exactRequired bool) bool {
+	var schema struct {
+		Type       string `json:"type"`
+		Properties map[string]struct {
+			Type string `json:"type"`
+		} `json:"properties"`
+		Required             []string        `json:"required"`
+		AdditionalProperties json.RawMessage `json:"additionalProperties"`
+	}
+	if json.Unmarshal(parameters, &schema) != nil || schema.Type != "object" || len(schema.Properties) == 0 {
+		return false
+	}
+	required := make(map[string]bool, len(schema.Required))
+	for _, key := range schema.Required {
+		required[key] = true
+		if _, ok := args[key]; !ok {
+			return false
+		}
+	}
+	if exactRequired && len(args) != len(required) {
+		return false
+	}
+	for key, value := range args {
+		property, ok := schema.Properties[key]
+		if !ok {
+			if exactRequired || string(schema.AdditionalProperties) == "false" {
+				return false
+			}
+			continue
+		}
+		if exactRequired && !required[key] {
+			return false
+		}
+		if !validJSONType(value, property.Type) {
+			return false
+		}
+	}
+	return true
+}
+
+func validJSONType(raw json.RawMessage, typ string) bool {
+	if typ == "" {
+		return true
+	}
+	var value any
+	if json.Unmarshal(raw, &value) != nil {
+		return false
+	}
+	switch typ {
+	case "string":
+		_, ok := value.(string)
+		return ok
+	case "boolean":
+		_, ok := value.(bool)
+		return ok
+	case "number":
+		_, ok := value.(float64)
+		return ok
+	case "integer":
+		n, ok := value.(float64)
+		return ok && n == float64(int64(n))
+	case "object":
+		_, ok := value.(map[string]any)
+		return ok
+	case "array":
+		_, ok := value.([]any)
+		return ok
+	case "null":
+		return value == nil
+	default:
+		return false
+	}
 }
