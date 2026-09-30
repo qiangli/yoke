@@ -75,6 +75,33 @@ func newAgentsAdd(opts []Option) *cobra.Command {
 				Name: arg, Aliases: f.aliases, Tool: f.tool, Model: f.model,
 				Display: f.display, Description: f.description, Nick: f.nick, Ephemeral: f.ephemeral,
 			}
+			if seed, ok := cat.Agent(arg); ok && seed.Name == arg && seed.Ring != ringLocal() {
+				// A flag-built mint over a seed starts from the seed, so
+				// unmentioned fields inherit instead of nulling out of
+				// the sparse overlay (story #1178).
+				if cmd.Flags().Changed("tool") {
+					seed.Tool = a.Tool
+				}
+				if cmd.Flags().Changed("model") {
+					seed.Model = a.Model
+				}
+				if cmd.Flags().Changed("display") {
+					seed.Display = a.Display
+				}
+				if cmd.Flags().Changed("description") {
+					seed.Description = a.Description
+				}
+				if cmd.Flags().Changed("nick") {
+					seed.Nick = a.Nick
+				}
+				if cmd.Flags().Changed("ephemeral") {
+					seed.Ephemeral = a.Ephemeral
+				}
+				if cmd.Flags().Changed("alias") {
+					seed.Aliases = mergeAliases(seed.Aliases, a.Aliases, nil)
+				}
+				a = seed
+			}
 			if err := applyPathFlags(cmd, KindAgent, &a, f.paths); err != nil {
 				return err
 			}
@@ -272,6 +299,17 @@ func newToolsAdd(opts []Option) *cobra.Command {
 				}
 			} else {
 				t = Tool{Name: args[0], Hidden: hidden}
+				if seed, ok := cat.Tool(args[0]); ok && seed.Name == args[0] && seed.Ring != ringLocal() {
+					// A flag-built mint over a seed starts from the seed,
+					// so unmentioned fields inherit instead of nulling out
+					// of the sparse overlay (story #1178). Minting under a
+					// name that only aliases a seed still refuses below in
+					// claimName.
+					if cmd.Flags().Changed("hidden") {
+						seed.Hidden = hidden
+					}
+					t = seed
+				}
 				if err := applyPathFlags(cmd, KindTool, &t, paths); err != nil {
 					return err
 				}
@@ -386,6 +424,7 @@ func newModelsAdd(opts []Option) *cobra.Command {
 			cat := New(opts...)
 			arg := args[0]
 
+			fromFlags := false
 			if looksLikePath(arg) && m.Provider == "" && m.Kind == "" && len(paths.set) == 0 && len(paths.unset) == 0 && bandSource == "" && len(ids) == 0 {
 				data, err := readSource(arg, cmd.InOrStdin())
 				if err != nil {
@@ -398,8 +437,54 @@ func newModelsAdd(opts []Option) *cobra.Command {
 				m = parsed
 			} else {
 				m.Name = arg
+				fromFlags = true
 			}
-			if bandSource != "" {
+			if seed, ok := cat.Model(arg); fromFlags && ok && seed.Name == arg && seed.Ring != ringLocal() {
+				// A flag-built mint over a seed starts from the seed, so
+				// unmentioned fields inherit instead of nulling out of
+				// the sparse overlay (story #1178). An imported document
+				// keeps its own full record.
+				if cmd.Flags().Changed("provider") {
+					seed.Provider = m.Provider
+				}
+				if cmd.Flags().Changed("kind") {
+					seed.Kind = m.Kind
+				}
+				if cmd.Flags().Changed("upstream") {
+					seed.UpstreamID = m.UpstreamID
+				}
+				if cmd.Flags().Changed("base-url") {
+					seed.BaseURL = m.BaseURL
+				}
+				if cmd.Flags().Changed("api-key-ref") {
+					seed.APIKeyRef = m.APIKeyRef
+				}
+				if cmd.Flags().Changed("display") {
+					seed.Display = m.Display
+				}
+				if cmd.Flags().Changed("family") {
+					seed.Family = m.Family
+				}
+				if cmd.Flags().Changed("version") {
+					seed.Version = m.Version
+				}
+				if cmd.Flags().Changed("band") {
+					seed.Band = m.Band
+				}
+				if cmd.Flags().Changed("band-source") {
+					seed.BandSource = bandSource
+				}
+				if cmd.Flags().Changed("quality") {
+					seed.Quality = m.Quality
+				}
+				if cmd.Flags().Changed("cost-micro") {
+					seed.CostMicro = m.CostMicro
+				}
+				if cmd.Flags().Changed("alias") {
+					seed.Aliases = mergeAliases(seed.Aliases, m.Aliases, nil)
+				}
+				m = seed
+			} else if bandSource != "" {
 				m.BandSource = bandSource
 			}
 			if err := applyIDs(&m, ids); err != nil {
