@@ -144,6 +144,40 @@ func TestCodexUnsafeTransformDeduplicatesLocalBypassOverride(t *testing.T) {
 	}
 }
 
+func TestCodexDefaultsToYoloAcrossLaunchKinds(t *testing.T) {
+	root := t.TempDir()
+	for _, tc := range []struct {
+		name string
+		opt  Options
+	}{
+		{"invoke", Options{}},
+		{"attended-chat", Options{Steer: true, Attended: true}},
+		{"steer-chat", Options{Steer: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l, err := ResolveWithCatalog("codex", tc.opt, testCatalog(root))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n := strings.Count(strings.Join(l.Args, " "), "--dangerously-bypass-approvals-and-sandbox"); n != 1 {
+				t.Fatalf("bypass count = %d in %q", n, l.Args)
+			}
+			if slices.Contains(l.Args, "--sandbox") {
+				t.Fatalf("Codex default retained sandbox flag: %q", l.Args)
+			}
+		})
+	}
+	for _, opt := range []Options{{ReadOnly: true}, {Sandbox: "workspace-write"}, {ReadOnly: true, Sandbox: "danger-full-access"}} {
+		l, err := ResolveWithCatalog("codex", opt, testCatalog(root))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if slices.Contains(l.Args, "--dangerously-bypass-approvals-and-sandbox") || !slices.Contains(l.Args, "--sandbox") {
+			t.Fatalf("safe Codex launch lost its sandbox: %q", l.Args)
+		}
+	}
+}
+
 func TestCodexExplicitSandboxRemovesLocalBypassOverride(t *testing.T) {
 	got, err := FinalizeArgs("codex", []string{
 		"exec", "--dangerously-bypass-approvals-and-sandbox", "--sandbox", "danger-full-access",

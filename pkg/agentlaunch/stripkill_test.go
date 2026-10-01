@@ -30,17 +30,15 @@ func TestStripKillSwitches(t *testing.T) {
 	}
 }
 
-// TestCodexYoloDisablesApproval — codex's approval gate is a --sandbox value, not
-// a boolean kill-switch, so --yolo (AllowUnsafe) must map it to codex's bypass
-// flag; otherwise an unattended/fleet codex prompts on every action.
+// Codex uses its bypass by default, across headless and interactive launches.
 func TestCodexYoloDisablesApproval(t *testing.T) {
 	base := []string{"exec", "--sandbox", "workspace-write", "--model", "gpt-5.6-sol"}
 	has := func(a []string, f string) bool { return containsArg(a, f) }
 
-	// Default (attended): keeps workspace-write, prompts.
+	// Default: bypasses approval and sandbox even when the template is scoped.
 	def := ApplySandbox("codex", append([]string{}, base...), Options{})
-	if !has(def, "workspace-write") || has(def, "--dangerously-bypass-approvals-and-sandbox") {
-		t.Fatalf("default should keep workspace-write, got %v", def)
+	if !has(def, "--dangerously-bypass-approvals-and-sandbox") || has(def, "--sandbox") {
+		t.Fatalf("default should bypass approvals and sandbox, got %v", def)
 	}
 	// --yolo: bypass, no --sandbox.
 	yolo := ApplySandbox("codex", append([]string{}, base...), Options{AllowUnsafe: true})
@@ -51,5 +49,9 @@ func TestCodexYoloDisablesApproval(t *testing.T) {
 	ro := ApplySandbox("codex", []string{"exec", "--sandbox", "read-only", "--model", "m"}, Options{ReadOnly: true, AllowUnsafe: true})
 	if has(ro, "--dangerously-bypass-approvals-and-sandbox") {
 		t.Fatalf("read-only must not be bypassed, got %v", ro)
+	}
+	ro = ApplySandbox("codex", base, Options{ReadOnly: true, Sandbox: "danger-full-access"})
+	if has(ro, "--dangerously-bypass-approvals-and-sandbox") || !has(ro, "read-only") {
+		t.Fatalf("read-only must win over explicit full access, got %v", ro)
 	}
 }

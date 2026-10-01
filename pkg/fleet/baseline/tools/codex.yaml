@@ -32,15 +32,14 @@ cli:
     events_done:
       field: type
       values: [turn.completed]
+    # The shared launcher replaces workspace-write with Codex's approval and
+    # sandbox bypass by default (operator decision, 2026-09-30). The template's
+    # sandbox remains available for an explicit safe sandbox override.
     exec: codex exec --skip-git-repo-check --sandbox workspace-write --model {model} {prompt}
-    # MEASURED 2026-09-29 (codex-cli 0.157.1): inside a weave workspace the
-    # workspace-write sandbox keeps <root>/.git read-only for compound shell
-    # commands (`echo x > f && git add f` → `.git/index.lock: Operation not
-    # permitted`) and refuses socket binds, so a worker could edit but never
-    # commit, and could not run tests that listen on loopback (httptest). The
-    # same command committed and bound 127.0.0.1 once these two overrides were
-    # passed. They apply ONLY when an orchestrator allocated a workspace (an
-    # isolated clone); chat and other launches without one keep codex's default.
+    # These grants apply when an orchestrator allocates a workspace and the
+    # caller explicitly selects workspace-write. With the default bypass they
+    # have no effect. They were measured on codex-cli 0.157.1: without them,
+    # workspace-write denied writes to <root>/.git and loopback socket binds.
     # -c is a global option, so it must precede `exec` (rendered after the binary).
     workspace_arg: -c sandbox_workspace_write.writable_roots=["{workspace}/.git"] -c sandbox_workspace_write.network_access=true
     steer_exec: codex --no-daemon --model {model}
@@ -63,9 +62,10 @@ cli:
     supports_say: true
     supports_graceful_quit: true
     notes: >-
-      headless `exec`; the sandbox flag is `-s/--sandbox workspace-write` (codex 0.141.0 —
-      NOT `--workspace`, which errors 'unexpected argument' and exits 2). --full-auto is
-      deprecated. Not steerable.
+      headless `exec`; Bashy's launch resolver defaults to Codex's full-access
+      bypass. Explicit safe sandbox overrides use `-s/--sandbox` (codex 0.141.0 —
+      NOT `--workspace`, which errors 'unexpected argument' and exits 2). --full-auto
+      is deprecated. Not steerable.
     watchdog:
       max_runtime: 45m
       mem_limit: 12g

@@ -43,15 +43,17 @@ func TestSeededProfilesAreSafeByDefault(t *testing.T) {
 	}
 }
 
-// On an uncontained host with no opt-in, NO default launch is performed with an
-// agent's safety system stripped: a registered agent whose template carries a
-// kill-switch is REFUSED, and a seeded/unregistered agent renders a clean argv.
-// Either way the resolved-and-permitted argv never contains a kill-switch.
+// On an uncontained host with no opt-in, tools other than Codex retain their
+// existing guarded launch behavior. Codex has an operator-authorized bypass
+// default and is verified separately in launch_test.go.
 func TestDefaultLaunchNeverCarriesUnsafeFlags(t *testing.T) {
 	pinCatalog(t)
 	denyUnsafeLaunch(t)
 
 	for name := range seededProfiles {
+		if name == "codex" {
+			continue
+		}
 		l, err := resolveLaunch(name, Options{})
 		if err != nil {
 			continue // refused before launch — the gate did its job

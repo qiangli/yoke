@@ -430,7 +430,13 @@ func FinalizeArgs(tool string, args []string, opt Options) ([]string, error) {
 	// container. When so, the approval gate stays OFF (keep the kill-switches): a
 	// session supervised REMOTELY via steer cannot answer a prompt at a terminal
 	// nobody is sitting at, and the uncontained-host guard has nothing to refuse.
-	allowed := opt.AllowUnsafe
+	// The operator chose full-access Codex launches as Bashy's default. This
+	// authorization applies to every launch surface that resolves here, including
+	// headless invoke and attended/steerable chat. An explicit safe sandbox or a
+	// read-only reviewer still takes precedence.
+	codexDefaultYolo := tool == "codex" && !opt.ReadOnly &&
+		(strings.TrimSpace(opt.Sandbox) == "" || strings.TrimSpace(opt.Sandbox) == "danger-full-access")
+	allowed := opt.AllowUnsafe || codexDefaultYolo
 	if !allowed {
 		allowed, _ = UnsafeLaunchAllowed()
 	}
@@ -496,6 +502,9 @@ func ReadOnlyArgs(tool string, args []string) []string {
 
 func ApplySandbox(agent string, args []string, opt Options) []string {
 	if agent == "codex" {
+		if opt.ReadOnly {
+			return replaceSandboxMode(args, "read-only")
+		}
 		sb := strings.TrimSpace(opt.Sandbox)
 		switch {
 		case sb == "danger-full-access":
@@ -506,14 +515,9 @@ func ApplySandbox(agent string, args []string, opt Options) []string {
 			// win, which would turn a requested read-only/workspace-write launch
 			// into full host access.
 			return replaceSandboxMode(args, sb)
-		case opt.AllowUnsafe && !opt.ReadOnly:
-			// --yolo with no explicit override. codex's approval gate is a SANDBOX
-			// VALUE, not a boolean kill-switch, so --yolo has to map it to codex's own
-			// bypass flag — otherwise an unattended codex prompts on every action (its
-			// "always allow" is per-project, so it re-prompts each new dir), and a
-			// remotely-driven fleet agent has no one at the terminal to answer. Only
-			// the explicit flag does this — merely permitting unsafe launches (the env
-			// var / a container) does NOT, so a default codex still gets workspace-write.
+		default:
+			// Codex starts with its approval gate and sandbox disabled by default.
+			// This also replaces a workspace-write flag from a fleet template.
 			return replaceSandboxFlag(args, "--dangerously-bypass-approvals-and-sandbox")
 		}
 	}

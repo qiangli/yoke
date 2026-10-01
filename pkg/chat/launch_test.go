@@ -73,10 +73,9 @@ func argv(t *testing.T, name string, opt Options) (string, []string, string) {
 	return l.Tool, l.Args, l.Model
 }
 
-// THE GOLDEN TEST. Routing launch contracts through the registry must not move
-// a single argument for a bare tool name. These are the exact arg lists the
-// hardcoded seededProfiles table produced before the registry existed.
-func TestBareToolArgvIsUnchangedFromTheLegacyTable(t *testing.T) {
+// Bare tools keep their seeded launch contract, except Codex's operator-chosen
+// default full-access mode, which replaces its workspace-write pair.
+func TestBareToolArgvFollowsSeededProfiles(t *testing.T) {
 	permitUnsafeLaunch(t)
 	pinCatalog(t)
 	for name, want := range seededProfiles {
@@ -96,6 +95,9 @@ func TestBareToolArgvIsUnchangedFromTheLegacyTable(t *testing.T) {
 			legacy = append(legacy, want.UnsafeArgs...)
 		} else {
 			legacy = append(append([]string{}, want.UnsafeArgs...), legacy...)
+		}
+		if name == "codex" {
+			legacy = []string{"exec", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox"}
 		}
 		if strings.Join(args, "\x00") != strings.Join(legacy, "\x00") {
 			t.Errorf("%s: args =\n  %q\nwant (legacy table)\n  %q", name, args, legacy)
@@ -517,29 +519,31 @@ func TestUnsafeLaunchIsRefusedOnAnUncontainedHost(t *testing.T) {
 	}
 }
 
-// codex's own sandbox is the DEFAULT and must keep working untouched — the gate
-// must not fire on a tool that is sandboxing itself.
-func TestSelfSandboxingToolIsNotRefused(t *testing.T) {
+// The operator authorized Codex full access as Bashy's default launch mode.
+func TestCodexDefaultsToYoloOnAnUncontainedHost(t *testing.T) {
 	pinCatalog(t)
 	stubContainerized(t, false)
 
 	l, err := resolveLaunch("codex", Options{})
 	if err != nil {
-		t.Fatalf("codex --sandbox workspace-write must launch: %v", err)
+		t.Fatalf("codex default launch: %v", err)
 	}
-	if !adjacent(l.Args, "--sandbox", "workspace-write") {
+	if !contains(l.Args, "--dangerously-bypass-approvals-and-sandbox") || contains(l.Args, "--sandbox") {
 		t.Fatalf("args = %q", l.Args)
 	}
 }
 
-// Turning codex's sandbox OFF is the same class of act as --dangerously-*, and
-// is caught even though it is spelled as a flag PAIR rather than a single flag.
-func TestTurningOffASelfSandboxIsRefused(t *testing.T) {
+// An explicit safe sandbox still wins over Codex's default bypass.
+func TestCodexExplicitSafeSandboxIsHonored(t *testing.T) {
 	pinCatalog(t)
 	stubContainerized(t, false)
 
-	if _, err := resolveLaunch("codex", Options{Sandbox: "danger-full-access"}); err == nil {
-		t.Fatal("codex danger-full-access was permitted on an uncontained host")
+	l, err := resolveLaunch("codex", Options{Sandbox: "workspace-write"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !adjacent(l.Args, "--sandbox", "workspace-write") || contains(l.Args, "--dangerously-bypass-approvals-and-sandbox") {
+		t.Fatalf("args = %q", l.Args)
 	}
 }
 
