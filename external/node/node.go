@@ -6,7 +6,10 @@
 // resolve the platform archive + its sha256 from nodejs.org's per-release
 // SHASUMS256.txt, then hand off to binmgr's tree-mode Ensure (download → verify
 // → extract → cache → exec). No embedding — the self-sufficient worker story,
-// same shape as external/gotoolchain.
+// same shape as external/gotoolchain. License as the archive's LICENSE states
+// it: Node core MIT plus ~40 bundled permissive deps (V8 BSD-3, ICU, OpenSSL
+// Apache-2.0, …) and the bundled npm under Artistic-2.0 — OSI-approved but not
+// MIT/BSD/Apache; record it as such, download + exec only.
 package node
 
 import (

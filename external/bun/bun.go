@@ -1,6 +1,13 @@
-// Package bun provisions the Bun JavaScript runtime (MIT) from its GitHub
-// releases — the alternative TypeScript island runtime a project selects with
-// a bun lockfile or BASHPP_TYPESCRIPT_RUNTIME=bun. Download + exec, never
+// Package bun provisions the Bun JavaScript runtime from its GitHub releases —
+// the alternative TypeScript island runtime a project selects with a bun
+// lockfile or BASHPP_TYPESCRIPT_RUNTIME=bun (node stays the default).
+//
+// License, as upstream's LICENSE.md states it: Bun's own code is MIT, but the
+// shipped binary statically links JavaScriptCore/WebKit (LGPL-2) and tinycc
+// (LGPL-2.1), so the program is NOT permissive as a whole; the release zip
+// carries no license file. That is fine only because it is download + exec —
+// a separate process on its own terms, never linked, embedded or redistributed
+// by bashy. Do not label it "MIT" in an inventory. Download + exec, never
 // bundled; the release's SHASUMS256.txt is the transit check (pin a digest in
 // binmgr's pins.go for a supply-chain root).
 package bun

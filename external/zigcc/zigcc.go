@@ -8,7 +8,11 @@
 // official clang+llvm releases are 1.0-1.6 GB per platform, to produce a make(1)
 // of a few hundred kilobytes. Zig ships the same clang frontend with bundled
 // libc headers and a linker in 48-54 MB, roughly 27x smaller, and it is MIT
-// licensed so bashy may fetch and cache it freely.
+// licensed so bashy may fetch and cache it freely. Inside the archive, lib/
+// bundles third-party libc trees on their own terms — glibc headers/csu/abilists
+// (LGPL-2.1+), mingw-w64 (ZPL-2.1, parts public domain/BSD/LGPL), musl (MIT),
+// libc++/libunwind (Apache-2.0 with LLVM exception). They are compile-time
+// inputs to programs built on the user's machine; bashy distributes none of it.
 //
 // This deliberately does NOT touch external/clang. That provider answers a
 // different question ("give me clang": llvm-mingw on Windows, system clang
