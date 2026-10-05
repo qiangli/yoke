@@ -127,6 +127,13 @@ func TestVersionOverrideFenceArgvAndChildEnv(t *testing.T) {
 		!strings.Contains(joined, "POWERSHELL_UPDATECHECK=Off") {
 		t.Fatalf("ChildEnv = %q", env)
 	}
+	if runtime.GOOS == "linux" && !strings.Contains(joined, "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1") {
+		t.Fatalf("Linux ChildEnv lacks invariant globalization: %q", env)
+	}
+	overridden := ChildEnv([]string{"DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=0"})
+	if strings.Count(strings.Join(overridden, "\n"), "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=") != 1 {
+		t.Fatalf("ChildEnv duplicated explicit globalization setting: %q", overridden)
+	}
 }
 
 func testArchive(t *testing.T, name string, body []byte) []byte {

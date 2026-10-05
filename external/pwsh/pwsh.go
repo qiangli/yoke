@@ -119,17 +119,28 @@ func FenceArgv(ctx context.Context, version string) ([]string, error) {
 }
 
 // ChildEnv returns a copy of env with PowerShell network telemetry and update
-// checks disabled. Existing spellings are replaced rather than duplicated.
+// checks disabled. On Linux it selects invariant globalization by default, so
+// the pinned runtime also starts on minimal hosts and in the scratch image
+// without ICU. Callers with ICU can explicitly set the .NET variable to 0.
+// Existing PowerShell setting spellings are replaced rather than duplicated.
 func ChildEnv(env []string) []string {
-	out := make([]string, 0, len(env)+2)
+	out := make([]string, 0, len(env)+3)
+	hasGlobalizationSetting := false
 	for _, item := range env {
 		name, _, ok := strings.Cut(item, "=")
+		if ok && strings.EqualFold(name, "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT") {
+			hasGlobalizationSetting = true
+		}
 		if ok && (strings.EqualFold(name, "POWERSHELL_TELEMETRY_OPTOUT") || strings.EqualFold(name, "POWERSHELL_UPDATECHECK")) {
 			continue
 		}
 		out = append(out, item)
 	}
-	return append(out, "POWERSHELL_TELEMETRY_OPTOUT=1", "POWERSHELL_UPDATECHECK=Off")
+	out = append(out, "POWERSHELL_TELEMETRY_OPTOUT=1", "POWERSHELL_UPDATECHECK=Off")
+	if runtime.GOOS == "linux" && !hasGlobalizationSetting {
+		out = append(out, "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1")
+	}
+	return out
 }
 
 // Command is the execution seam for the managed runtime. It deliberately goes
