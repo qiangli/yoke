@@ -29,6 +29,7 @@ func TestReleaseAssetsArePinned(t *testing.T) {
 		{"linux", "amd64", false, "powershell-7.6.6-linux-x64.tar.gz", "ddbc4a2d113bbd46d283cfedcbcd117a70caefd7673f41f2b4e0000badf103bc"},
 		{"linux", "arm64", false, "powershell-7.6.6-linux-arm64.tar.gz", "924829e54c983648f6f1419a2dc7f9433c861b2fb5bd57736ff096c24f133729"},
 		{"linux", "amd64", true, "powershell-7.6.6-linux-musl-x64.tar.gz", "9537c256a60c34f6bc2dd60c1c10b31a0c2ef26e96799d066be78325ab4947cc"},
+		{"linux", "arm64", true, "powershell-7.6.6-linux-x64-musl-noopt-fxdependent.tar.gz", "29a3d89b5d54f3aa67decaf64bd9cbf72cea469aa9e69330e5dc2c5ffdb37f38"},
 		{"darwin", "amd64", false, "powershell-7.6.6-osx-x64.tar.gz", "e325ed9f666894eb39a5ea52800b602da2fb4242bbe9747ceddb39cdc66de805"},
 		{"darwin", "arm64", false, "powershell-7.6.6-osx-arm64.tar.gz", "6df833d094ebac1c1a74340d7b3437f4aaf5e03ce640484a1c4359f3ce8b3db1"},
 	}
@@ -47,7 +48,7 @@ func TestReleaseAssetsArePinned(t *testing.T) {
 	}{
 		{"7.6.7", "darwin", "arm64", false},
 		{DefaultVersion, "freebsd", "amd64", false},
-		{DefaultVersion, "linux", "arm64", true},
+		{DefaultVersion, "linux", "386", true},
 	} {
 		if _, err := assetFor(tc.version, tc.goos, tc.goarch, tc.musl); err == nil || !strings.Contains(err.Error(), "no pinned") {
 			t.Errorf("assetFor(%+v) error = %v, want clear missing-pin refusal", tc, err)

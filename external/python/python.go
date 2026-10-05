@@ -19,6 +19,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/qiangli/yoke/pkg/binmgr"
+	"github.com/qiangli/yoke/pkg/muslrt"
 )
 
 // DefaultVersion pins the uv release fetched when none is requested. uv is
@@ -227,20 +228,5 @@ func EnsureInterpreter(ctx context.Context, version string) (string, error) {
 	return path, nil
 }
 
-// glibcLoaders are the dynamic loaders a glibc system provides.
-var glibcLoaders = []string{
-	"/lib64/ld-linux-x86-64.so.2",
-	"/lib/ld-linux-aarch64.so.1",
-	"/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
-	"/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1",
-}
-
 // hasGlibc reports whether this Linux host can run glibc-linked binaries.
-func hasGlibc() bool {
-	for _, path := range glibcLoaders {
-		if _, err := os.Stat(path); err == nil {
-			return true
-		}
-	}
-	return false
-}
+func hasGlibc() bool { return muslrt.HasGlibc() }

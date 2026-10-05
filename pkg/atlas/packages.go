@@ -285,6 +285,7 @@ var packages = map[string]Package{
 	"autofix":     supPkg("adapts a plausible-but-wrong command into one that runs here"),
 	"autoretry":   supPkg("transient-failure recognition and retry policy"),
 	"binmgr":      supPkg("download → verify → cache → supervise, under every managed external"),
+	"muslrt":      supPkg("musl loader + pinned Alpine runtime libraries for toolchains on hosts without glibc"),
 	"bre":         supPkg("POSIX BRE → Go regexp, shared by grep and sed"),
 	"collate": supPkg("glibc ISO-8859-1 collation via dlopen'd strcoll_l (purego, no cgo); a " +
 		"provider-only engine like bre, wired to no verb — locale-aware ordering a tool asks for, not a command"),
