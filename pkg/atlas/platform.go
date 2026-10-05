@@ -160,7 +160,8 @@ var externalPlatforms = map[string]ExternalPlatform{
 	"node":    {OS: allOS, WindowsAsset: "node-*-win-x64.zip (external/node)"}, "npm": {OS: allOS, WindowsAsset: "ships with node"},
 	"npx": {OS: allOS, WindowsAsset: "ships with node"}, "pnpm": {OS: allOS, WindowsAsset: "via node/corepack"}, "yarn": {OS: allOS, WindowsAsset: "via node/corepack"},
 	"python": {OS: allOS, WindowsAsset: "python-build-standalone *-pc-windows-msvc (external/python)"}, "pip": {OS: allOS, WindowsAsset: "ships with python"},
-	"uv": {OS: allOS, WindowsAsset: "uv-x86_64-pc-windows-msvc.zip (external/python)"},
+	"uv":   {OS: allOS, WindowsAsset: "uv-x86_64-pc-windows-msvc.zip (external/python)"},
+	"pwsh": {OS: allOS, WindowsAsset: "PowerShell-7.6.6-win-x64.zip / PowerShell-7.6.6-win-arm64.zip (external/pwsh)"},
 	// declarative registry CLIs (external/registry)
 	"doctl":  {OS: allOS, WindowsAsset: "doctl-*-windows-amd64.zip"},
 	"gcloud": {OS: allOS, WindowsAsset: "vendor installer (PreferHost); google-cloud-cli-windows-x86_64.zip"},

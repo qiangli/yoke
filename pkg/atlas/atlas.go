@@ -1108,7 +1108,7 @@ func init() {
 	// toolchains (self-provisioning, agent-mode shims)
 	for _, n := range []string{
 		"go", "cmake", "clang", "zig", "node", "npm", "npx", "pnpm", "yarn",
-		"python", "pip", "uv", "mise", "cargo", "rustc", "rustup", "rust",
+		"python", "pip", "uv", "mise", "cargo", "rustc", "rustup", "rust", "pwsh",
 	} {
 		// A compiler/package-manager is a CODE-stage tool: it is how the thing
 		// gets built. (`bashy go` also runs tests, but so does every compiler —
@@ -1415,7 +1415,7 @@ func init() {
 	// run install scripts), so they are net+exec+write as a class.
 	for _, n := range []string{
 		"go", "cmake", "clang", "zig", "node", "npm", "npx", "pnpm", "yarn",
-		"python", "pip", "uv", "mise", "cargo", "rustc", "rustup", "rust",
+		"python", "pip", "uv", "mise", "cargo", "rustc", "rustup", "rust", "pwsh",
 	} {
 		eff(EffNet, n)
 		eff(EffExec, n)
