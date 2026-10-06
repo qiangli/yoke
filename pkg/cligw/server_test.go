@@ -244,6 +244,10 @@ func TestServerRoutesBandByHeadroomAndStampsRoutedHeader(t *testing.T) {
 		t.Fatalf("%s = %q, want the new quota leader", RoutedHeader, got)
 	}
 
+	// A client can consume the declared Content-Length before the proxy's
+	// audit-tail cleanup finishes. Wait for handlers to return before checking
+	// both accounting records; Close is also safe for the registered cleanup.
+	ts.http.Close()
 	// Both the decision and the served usage are in usage.jsonl.
 	lines := readUsageLog(t)
 	var decisions, usage int
