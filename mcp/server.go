@@ -10,8 +10,7 @@
 //   - list_tools — enumerate the tools this build ships (name + synopsis)
 //   - run_tool   — run one: {name, args, stdin, dir, env} -> {stdout, stderr, exit_code}
 //
-// run_tool delegates to multicall.Dispatch, so name resolution and the
-// unknown-tool diagnostic match the standalone `coreutils` binary exactly.
+// run_tool checks the effect policy before delegating to multicall.Dispatch.
 //
 // As agentic verbs (symbols, repomap, …) land in the registry they can
 // additionally be registered as typed, individually-schema'd MCP tools on
@@ -78,6 +77,15 @@ type RunToolOutput struct {
 // the tool sets they want available (e.g. coreutils/cmds/all) before any
 // client lists or runs tools.
 func NewServer(name, version string) *mcpsdk.Server {
+	return NewServerWithOptions(name, version, Options{})
+}
+
+// NewServerWithOptions builds a server with an explicit effect policy.
+func NewServerWithOptions(name, version string, opts Options) *mcpsdk.Server {
+	policy := opts.Policy
+	if policy == nil {
+		policy = &Policy{}
+	}
 	srv := mcpsdk.NewServer(
 		&mcpsdk.Implementation{Name: name, Version: version},
 		&mcpsdk.ServerOptions{
@@ -93,7 +101,10 @@ func NewServer(name, version string) *mcpsdk.Server {
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "run_tool",
 		Description: "Run one userland command. Provide name + args (and optional stdin/dir/env); returns stdout, stderr, and exit_code. No process is spawned — execution is in-process and pure Go.",
-	}, runToolHandler)
+	}, policy.runToolHandler)
+
+	addServerInfo(srv, name, version, policy)
+	srv.AddReceivingMiddleware(policy.middleware)
 
 	return srv
 }
@@ -138,7 +149,11 @@ func listToolsHandler(_ context.Context, _ *mcpsdk.CallToolRequest, _ ListToolsI
 	return nil, ListToolsOutput{Tools: infos}, nil
 }
 
-func runToolHandler(ctx context.Context, _ *mcpsdk.CallToolRequest, in RunToolInput) (*mcpsdk.CallToolResult, RunToolOutput, error) {
+func (p *Policy) runToolHandler(ctx context.Context, _ *mcpsdk.CallToolRequest, in RunToolInput) (*mcpsdk.CallToolResult, RunToolOutput, error) {
+	if err := p.Check(in.Name, commandEffects(in.Name)); err != nil {
+		res, out := policyDenial(in.Name, err)
+		return res, out, nil
+	}
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
 		Ctx: ctx,
