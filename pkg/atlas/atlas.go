@@ -735,7 +735,7 @@ func init() {
 		"tput", "write",
 		// locale reports the environment's locale settings; logger writes to the
 		// system log; newgrp changes the caller's group credential for a new shell.
-		"locale", "logger", "newgrp",
+		"locale", "logger", "newgrp", "gencat",
 		// tabs emits the terminal's clear-tab and set-tab capabilities; like tput
 		// it reads terminfo and writes only to stdout.
 		"tabs",
@@ -1015,6 +1015,8 @@ func init() {
 	// TREE, and steward holds a MANDATE. Claiming the seat restores no diff and touches
 	// no repository — work is a diff, a seat is not.
 	addVerb("steward", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	// The experimental MCP front door exposes command discovery and execution to agents.
+	addVerb("mcp", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}, Effects: []string{EffExec}})
 	// skill: destructive for the same reason as tool/model/agent above — `rm`
 	// on the local ring, no undo.
 	addVerb("skill", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON, CapDestructive}})
@@ -1214,6 +1216,10 @@ func init() {
 	// coverage ratchet requires ≥1 effect on every entry, so a new command that
 	// is added without a line here fails the build by name — classification is
 	// mandatory, never fail-open. A command legitimately lists several atoms.
+
+	// gencat reads message sources and updates the compiled catalog.
+	eff(EffRead, "gencat")
+	eff(EffWrite, "gencat")
 
 	// pure — deterministic, touches nothing governed.
 	eff(EffPure,
