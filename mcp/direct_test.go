@@ -561,3 +561,24 @@ func TestRegisteredInvalidSchemaPreservesTools(t *testing.T) {
 	}
 	t.Fatal("invalid refresh replaced the previous tool")
 }
+
+func TestBuildServerUnknownToolNameErrors(t *testing.T) {
+	if _, err := BuildServer("t", "0", Options{Tools: []string{"no-such-command-xyz"}}); err == nil {
+		t.Fatal("BuildServer accepted an unknown tool name")
+	}
+}
+
+func TestDeclareSyntheticEffects(t *testing.T) {
+	srv, err := BuildServer("t", "0", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	DeclareSyntheticEffects(srv, "shell_exec", []string{"exec"})
+	state := directStateFor(srv, nil)
+	if !state.policy.knownCommand("shell_exec") {
+		t.Fatal("synthetic name not known to the policy")
+	}
+	if got := state.policy.commandEffects("shell_exec"); len(got) != 1 || got[0] != "exec" {
+		t.Fatalf("effects = %v, want [exec]", got)
+	}
+}

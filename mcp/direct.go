@@ -312,3 +312,12 @@ func registerScript(srv *mcpsdk.Server, state *directState, opts Options) {
 		return result, RunToolOutput{Stdout: stdout, Stderr: stderr, ExitCode: exit}, nil
 	})
 }
+
+// DeclareSyntheticEffects records the atlas effects of a tool the caller
+// registers on srv itself (one that is neither a registry command nor a
+// registered command), so the policy gate recognizes the name and enforces
+// its effects. Call it after BuildServer and before serving.
+func DeclareSyntheticEffects(srv *mcpsdk.Server, name string, effects []string) {
+	state := directStateFor(srv, nil)
+	state.policy.synthetic.Store(name, append([]string(nil), effects...))
+}

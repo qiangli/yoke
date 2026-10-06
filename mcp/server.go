@@ -85,6 +85,17 @@ func NewServer(name, version string) *mcpsdk.Server {
 // NewServerWithOptions builds a server with an explicit effect policy.
 // It panics on invalid tool selection; use RegisterDirectTools for error handling.
 func NewServerWithOptions(name, version string, opts Options) *mcpsdk.Server {
+	srv, err := BuildServer(name, version, opts)
+	if err != nil {
+		panic(err)
+	}
+	return srv
+}
+
+// BuildServer is NewServerWithOptions returning the direct-tool registration
+// error (an unknown name in Options.Tools, an invalid registered schema)
+// instead of panicking — the form a command-line front door wants.
+func BuildServer(name, version string, opts Options) (*mcpsdk.Server, error) {
 	policy := opts.Policy
 	if policy == nil {
 		policy = &Policy{}
@@ -113,10 +124,10 @@ func NewServerWithOptions(name, version string, opts Options) *mcpsdk.Server {
 	addServerInfo(srv, name, version, policy)
 	directStateFor(srv, policy)
 	if err := RegisterDirectTools(srv, opts); err != nil {
-		panic(err)
+		return nil, err
 	}
 
-	return srv
+	return srv, nil
 }
 
 // ServeStdio runs an MCP server over stdio until the transport closes or
