@@ -71,8 +71,8 @@ func TestProtocolConformance(t *testing.T) {
 		for _, tool := range first.Tools {
 			names = append(names, tool.Name)
 		}
-		if !slices.Equal(names, []string{"list_tools", "run_tool"}) {
-			t.Errorf("tools/list = %v, want [list_tools run_tool]", names)
+		if !slices.Equal(names, []string{"list_tools", "run_tool", "server_info"}) {
+			t.Errorf("tools/list = %v, want [list_tools run_tool server_info]", names)
 		}
 		if first.NextCursor != "" {
 			t.Errorf("unexpected next page: %q", first.NextCursor)
