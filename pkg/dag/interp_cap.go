@@ -130,18 +130,24 @@ func classifyCommand(ctx context.Context, args []string) (string, []string) {
 	}
 	verb := args[1]
 	if strings.HasPrefix(verb, "-") || strings.ContainsAny(verb, `/\`) {
-		return name, nil
+		// `bashy -c …` or `bashy path/script`: the shell runs something in a
+		// child process it no longer governs — that is EffExec, not an
+		// unknown leaf. Its own leaves are checked when it dispatches them.
+		return name, []string{atlas.EffExec}
 	}
 	if verb == "dag" {
-		if len(args) < 3 {
-			return verb, nil
-		}
+		// A dag target is positional and comes LAST; flags (`-f dag.md …`)
+		// precede it, so classify by the real target, not args[2]. When it
+		// resolves in THIS dag, carry its declared effects; otherwise the
+		// recursion still spawns a bashy subprocess we no longer govern.
 		if resolve, ok := ctx.Value(targetEffectsKey{}).(func(string) ([]string, bool)); ok {
-			if effects, ok := resolve(args[2]); ok && len(effects) > 0 {
-				return verb + " " + args[2], effects
+			if target := args[len(args)-1]; !strings.HasPrefix(target, "-") && target != "dag" {
+				if effects, found := resolve(target); found {
+					return verb + " " + target, effects
+				}
 			}
 		}
-		return verb + " " + args[2], nil
+		return verb, []string{atlas.EffExec}
 	}
 	return verb, vouchedEffects(ctx, atlasEffectsFor(verb))
 }

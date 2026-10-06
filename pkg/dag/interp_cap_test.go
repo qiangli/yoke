@@ -243,9 +243,15 @@ func TestCapRecursiveBashyClassifiedByVerb(t *testing.T) {
 		{[]string{exe, "go", "env"}, "go", []string{"exec", "net", "write"}},
 		{[]string{"bashy", "dag", "t2"}, "dag t2", []string{"write"}},
 		{[]string{"bashy", "dag", "uncapped"}, "dag uncapped", nil},
-		{[]string{"bashy", "dag", "missing"}, "dag missing", nil},
-		{[]string{"bashy", "-c", "echo"}, "bashy", nil},
-		{[]string{"bashy", "scripts/x.sh"}, "bashy", nil},
+		// Flags precede the positional target: classify by the real last-arg
+		// target, not the first flag. An unresolved target still spawns a
+		// bashy subprocess (exec).
+		{[]string{"bashy", "dag", "-f", "f.md", "t2"}, "dag t2", []string{"write"}},
+		{[]string{"bashy", "dag", "missing"}, "dag", []string{"exec"}},
+		// Self running a child process it no longer governs classifies as exec,
+		// not an unknown leaf; its own leaves are checked when it dispatches them.
+		{[]string{"bashy", "-c", "echo"}, "bashy", []string{"exec"}},
+		{[]string{"bashy", "scripts/x.sh"}, "bashy", []string{"exec"}},
 		{[]string{"bashy"}, "bashy", nil},
 		{[]string{"bashy", "pwd"}, "pwd", []string{"read"}},
 	}
