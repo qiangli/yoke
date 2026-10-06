@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/qiangli/coreutils/tool"
+	"github.com/qiangli/yoke/pkg/atlas"
 )
 
 // commandEffectOverrides carries declared effects for synthetic tool names.
@@ -26,6 +29,21 @@ type directInput struct {
 	Stdin string            `json:"stdin,omitempty"`
 	Dir   string            `json:"dir,omitempty"`
 	Env   map[string]string `json:"env,omitempty"`
+}
+
+// RegisterDirectTools exposes the explicitly selected registry commands.
+// AllTools adds canonical commands supported on this server's operating system.
+func RegisterDirectTools(srv *mcpsdk.Server, opts Options) error {
+	names := append([]string(nil), opts.Tools...)
+	if opts.AllTools {
+		for _, name := range tool.Names() {
+			if entry, ok := atlas.Lookup(name); ok && (entry.AliasOf != "" || !slices.Contains(entry.OS, runtime.GOOS)) {
+				continue
+			}
+			names = append(names, name)
+		}
+	}
+	return registerRegistryTools(srv, opts.Policy, names)
 }
 
 // registerRegistryTools is the generic registry-command part of direct tool
@@ -50,6 +68,9 @@ func registerRegistryTools(srv *mcpsdk.Server, policy *Policy, names []string) e
 		}
 		usage, _, _ := strings.Cut(command.Usage, "\n")
 		doc := tool.DocumentAsMCP(name, command.Synopsis+" — "+usage)
+		if entry, ok := atlas.Lookup(name); ok {
+			doc.Tool.ApplyEffects(entry.Effects, entry.OS)
+		}
 		properties := doc.Tool.InputSchema["properties"].(map[string]any)
 		properties["stdin"] = map[string]any{"type": "string"}
 		properties["dir"] = map[string]any{"type": "string"}

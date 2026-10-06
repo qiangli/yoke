@@ -35,9 +35,6 @@ type Record struct {
 	Denial   string        `json:"denial"`
 }
 
-// Options configures the server's effect policy.
-type Options struct{ Policy *Policy }
-
 func privileged(effect string) bool {
 	switch effect {
 	case "destroy", "spend", "cred", "priv":

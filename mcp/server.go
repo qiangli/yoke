@@ -36,6 +36,14 @@ import (
 	"github.com/qiangli/yoke/pkg/atlas"
 )
 
+// Options configures policy and direct command exposure. With neither Tools nor
+// AllTools set, only the compatibility tools and server_info are exposed.
+type Options struct {
+	Policy   *Policy
+	Tools    []string
+	AllTools bool
+}
+
 // ToolInfo describes one registered tool for list_tools. Group and Caps are
 // the Command Atlas axes (pkg/atlas): the functional group and the agentic
 // capability flags; both are additive and omitted when the atlas has no
@@ -81,6 +89,7 @@ func NewServer(name, version string) *mcpsdk.Server {
 }
 
 // NewServerWithOptions builds a server with an explicit effect policy.
+// It panics on invalid tool selection; use RegisterDirectTools for error handling.
 func NewServerWithOptions(name, version string, opts Options) *mcpsdk.Server {
 	policy := opts.Policy
 	if policy == nil {
@@ -109,6 +118,9 @@ func NewServerWithOptions(name, version string, opts Options) *mcpsdk.Server {
 
 	addServerInfo(srv, name, version, policy)
 	srv.AddReceivingMiddleware(policy.middleware)
+	if err := RegisterDirectTools(srv, opts); err != nil {
+		panic(err)
+	}
 
 	return srv
 }
