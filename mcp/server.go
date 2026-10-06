@@ -89,6 +89,10 @@ func NewServerWithOptions(name, version string, opts Options) *mcpsdk.Server {
 	srv := mcpsdk.NewServer(
 		&mcpsdk.Implementation{Name: name, Version: version},
 		&mcpsdk.ServerOptions{
+			// MCP 2026-07-28 deprecates logging/roots/sampling; an explicit empty
+			// capability set stops the SDK advertising logging by default while
+			// tools stay inferred from the registered tool set.
+			Capabilities: &mcpsdk.ServerCapabilities{},
 			Instructions: "Pure-Go AgentOS userland. Use list_tools to discover commands, run_tool to execute one. Tools follow GNU semantics for the flags they implement and fail loudly (exit 2) on unsupported flags rather than guessing.",
 		},
 	)
