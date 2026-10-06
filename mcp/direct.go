@@ -27,6 +27,7 @@ type directState struct {
 	mu       sync.Mutex
 	policy   *Policy
 	names    []string
+	static   map[string]bool
 	reserved map[string]bool
 }
 
@@ -53,6 +54,9 @@ func directStateFor(srv *mcpsdk.Server, policy *Policy) *directState {
 // RegisteredCommand adapts a caller-owned command to a direct MCP tool.
 // Schema parameters named stdin or dir take precedence over transport inputs.
 type RegisteredCommand struct {
+	// Static retains this adapter across refreshes while the snapshot keeps
+	// its name marked Static. Omission removes it; a non-static entry replaces it.
+	Static                bool
 	Name, Synopsis, Usage string
 	Effects, OS           []string
 	Schema                *tool.ArgSchema
@@ -183,6 +187,7 @@ func refreshRegistered(srv *mcpsdk.Server, state *directState, opts Options) err
 		description *mcpsdk.Tool
 	}
 	var ready []prepared
+	var retained []string
 	seen := map[string]bool{}
 	for _, command := range commands {
 		if !directToolName.MatchString(command.Name) {
@@ -194,6 +199,10 @@ func refreshRegistered(srv *mcpsdk.Server, state *directState, opts Options) err
 		seen[command.Name] = true
 		if command.Run == nil {
 			return fmt.Errorf("registered command %s has no runner", command.Name)
+		}
+		if command.Static && state.static[command.Name] {
+			retained = append(retained, command.Name)
+			continue
 		}
 		usage, _, _ := strings.Cut(command.Usage, "\n")
 		doc := tool.DocumentAsMCP(command.Name, command.Synopsis+" — "+usage)
@@ -228,11 +237,23 @@ func refreshRegistered(srv *mcpsdk.Server, state *directState, opts Options) err
 		ready = append(ready, prepared{command, description})
 	}
 	// Validate the full snapshot before removing any previously registered tools.
-	srv.RemoveTools(state.names...)
+	var removed []string
 	for _, name := range state.names {
+		if !slices.Contains(retained, name) {
+			removed = append(removed, name)
+		}
+	}
+	if len(removed) > 0 {
+		srv.RemoveTools(removed...)
+	}
+	for _, name := range removed {
 		state.policy.synthetic.Delete(name)
 	}
-	state.names = nil
+	state.names = retained
+	state.static = make(map[string]bool, len(retained))
+	for _, name := range retained {
+		state.static[name] = true
+	}
 	for _, item := range ready {
 		command := item.command
 		state.policy.synthetic.Store(command.Name, command.Effects)
@@ -282,6 +303,7 @@ func refreshRegistered(srv *mcpsdk.Server, state *directState, opts Options) err
 			return &mcpsdk.CallToolResult{IsError: exit != 0}, RunToolOutput{Stdout: stdout, Stderr: stderr, ExitCode: exit}, nil
 		})
 		state.names = append(state.names, command.Name)
+		state.static[command.Name] = command.Static
 	}
 	return nil
 }
