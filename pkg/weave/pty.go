@@ -64,6 +64,12 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 		MaxRuntime:    guards.maxRuntime,
 		MemLimitBytes: guards.memLimitBytes,
 		CtlSock:       guards.ctlSock,
+		OnStart: func(string) error {
+			if guards.onStart != nil {
+				return guards.onStart()
+			}
+			return nil
+		},
 
 		// weave's worker log is read by humans and by `weave wait --broker`, so
 		// an agent's stream-json is decoded into prose rather than dumped raw.

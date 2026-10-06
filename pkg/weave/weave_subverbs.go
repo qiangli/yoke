@@ -822,6 +822,25 @@ many commits it is ahead, and the last substrate-verified result.`,
 	return cmd
 }
 
+func newWeaveReconcileCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	cmd := &cobra.Command{
+		Use:   "reconcile <issue>",
+		Short: "Settle a retained reservation after verifying its recorded child group stopped",
+		Long:  "Reconcile a retained resource reservation only when the launch recorded the child birth identity and isolated process group, and that group is absent now. Wrapper death, TTL expiry, and an empty process listing do not prove termination. Legacy runs without this record remain reserved for operator investigation. Portable process groups do not contain descendants that deliberately detach into another session; this command requires stronger containment evidence for those workloads.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil || id <= 0 {
+				return fmt.Errorf("issue must be a positive integer")
+			}
+			return runWeaveReconcile(cmd, id, &flags)
+		},
+	}
+	flags.attach(cmd)
+	return cmd
+}
+
 func newWeaveKillCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var reason string

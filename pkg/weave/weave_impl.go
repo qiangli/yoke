@@ -290,13 +290,17 @@ type weaveItem struct {
 	// from there to the whole subagent process group). Set when
 	// state flips to working; cleared on terminal state. Used by
 	// `weave abandon` for precise SIGTERM instead of pkill-by-name.
-	WrapperPid               int    `json:"wrapper_pid,omitempty"`
-	WrapperStartID           string `json:"wrapper_start_id,omitempty"` // OS birth identity, recorded at launch; absent on legacy runs
-	PauseRequestedBy         string `json:"pause_requested_by,omitempty"`
-	PauseReason              string `json:"pause_reason,omitempty"`
-	ResourceTerminated       bool   `json:"resource_terminated,omitempty"`
-	ResourceReservationID    string `json:"resource_reservation_id,omitempty"`
-	ResourceReservationOwner string `json:"resource_reservation_owner,omitempty"`
+	WrapperPid               int       `json:"wrapper_pid,omitempty"`
+	WrapperStartID           string    `json:"wrapper_start_id,omitempty"` // OS birth identity, recorded at launch; absent on legacy runs
+	ChildPID                 int       `json:"child_pid,omitempty"`
+	ChildStartID             string    `json:"child_start_id,omitempty"`
+	ChildGroup               int       `json:"child_group,omitempty"` // recorded only after isolated group launch
+	PauseRequestedBy         string    `json:"pause_requested_by,omitempty"`
+	PauseReason              string    `json:"pause_reason,omitempty"`
+	ResourceTerminated       bool      `json:"resource_terminated,omitempty"`
+	ResourceVerifiedAt       time.Time `json:"resource_verified_at,omitempty"`
+	ResourceReservationID    string    `json:"resource_reservation_id,omitempty"`
+	ResourceReservationOwner string    `json:"resource_reservation_owner,omitempty"`
 	// Stale is computed at read time by `weave list` (never
 	// persisted): state is "working" but the recorded wrapper PID
 	// is no longer alive — the wrapper crashed or was killed
@@ -3233,6 +3237,7 @@ type weaveGuards struct {
 	// eventsPath is a tool-declared structured progress stream. Its follower
 	// writes concise events to the worker log and feeds the idle watchdog.
 	eventsPath string
+	onStart    func() error
 }
 
 // errWeaveWrapperLive is returned from inside the queue-lock callback
@@ -3514,7 +3519,8 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	}
 	childLaunched, childTerminated := false, false
 	defer func() {
-		if !childLaunched || childTerminated {
+		finishErr := admission.finish(childTerminated, childLaunched)
+		if finishErr == nil && (!childLaunched || childTerminated) {
 			_ = withWeaveQueueLock(dir, func(q *weaveQueue) error {
 				if current := findWeaveItem(q, it.ID); current != nil && current.ResourceReservationID == admission.request.ID {
 					current.ResourceTerminated = true
@@ -3522,8 +3528,8 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 				return nil
 			})
 		}
-		if err := admission.finish(childTerminated, childLaunched); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "weave: reservation retained: %v\n", err)
+		if finishErr != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "weave: reservation retained: %v\n", finishErr)
 		}
 	}()
 	base := weaveBaseBranch(root)
@@ -4153,7 +4159,15 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		tool.Stdout = stdoutCapture
 		tool.Stderr = stderrCapture
 		childLaunched = true
-		runErr = tool.Run()
+		runErr = tool.Start()
+		if runErr == nil {
+			if err := weaveRecordOwnedChild(cmd.Context(), dir, it.ID, tool, admission); err != nil {
+				weaveAbortOwnedChild(tool)
+				runErr = errors.Join(err, tool.Wait())
+			} else {
+				runErr = tool.Wait()
+			}
+		}
 		if err := stdoutCapture.Close(); runErr == nil && err != nil {
 			runErr = fmt.Errorf("flush redacted tool stdout: %w", err)
 		}
@@ -4174,6 +4188,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			// (no user input source); stdout/stderr go to the PTY
 			// master which we copy to logFile.
 			logCapture := captureRedaction.Writer(logFile)
+			guards.onStart = func() error { return weaveRecordOwnedChild(cmd.Context(), dir, it.ID, tool, admission) }
 			childLaunched = true
 			exitCode, killReason, coachRep, coachMode, runErr = runWeaveToolPTY(tool, logCapture, guards)
 			if err := logCapture.Close(); runErr == nil && err != nil {
@@ -4184,6 +4199,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			}
 		} else {
 			// Interactive TTY pass-through.
+			guards.onStart = func() error { return weaveRecordOwnedChild(cmd.Context(), dir, it.ID, tool, admission) }
 			childLaunched = true
 			exitCode, killReason, coachRep, coachMode, runErr = runWeaveToolPTY(tool, nil, guards)
 		}
@@ -4289,7 +4305,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			it = freshIt
 			return nil
 		}
-		freshIt.ResourceTerminated = childTerminated
+		// The deferred reservation settlement records this only after it succeeds.
 		freshIt.FinishedAt = finishedAt
 		freshIt.ExitCode = &exitCode
 		freshIt.KilledBy = killReason
@@ -6802,9 +6818,9 @@ func weaveConfirmTargeted(cmd *cobra.Command, mode weavecli.OutputMode, prompt s
 // pkill / killall / kill -9 — those match by name and will catch
 // peer ycode/claude/codex sessions belonging to OTHER agents in
 // the same machine. `weave kill <issue>` reads the recorded
-// wrapper PID from the queue and signals only that process group,
-// then flips the queue item to `failed` with a "killed by
-// orchestrator" marker.
+// wrapper PID from the queue and signals only that wrapper group,
+// then records a killed state. Reservation settlement separately requires
+// proof that the recorded child group stopped.
 func runWeaveKill(cmd *cobra.Command, id int64, reason string, yes bool, flags *weaveOutputFlags) error {
 	mode := flags.mode()
 	cwd, _ := os.Getwd()
@@ -6874,6 +6890,7 @@ func runWeaveKill(cmd *cobra.Command, id int64, reason string, yes bool, flags *
 	var workspace string
 	var verifyCommand string
 	var verifyItem *weaveItem
+	var resourceWarning string
 	notFoundHint := weaveOtherActiveQueuesHintSuffix(dir)
 	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
 		it := findWeaveItem(q, id)
@@ -6894,7 +6911,6 @@ func runWeaveKill(cmd *cobra.Command, id int64, reason string, yes bool, flags *
 		weaveStopWrapper(wrapperPid)
 		killed = true
 	}
-
 	// killed stays killed: the forced stop is recorded as its own
 	// terminal state, never silently promoted. Measure after the
 	// process tree is dead so verify cannot race a still-running build.
@@ -6969,6 +6985,11 @@ func runWeaveKill(cmd *cobra.Command, id int64, reason string, yes bool, flags *
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave kill",
 			weavecli.ExitGenericFail, lockErr))
 	}
+	if verifyItem.ResourceReservationID != "" && !verifyItem.ResourceTerminated {
+		if err := weaveReconcileOwnedTree(cmd.Context(), dir, id); err != nil {
+			resourceWarning = err.Error()
+		}
+	}
 	weaveReleaseManagedGOCache(cmd.ErrOrStderr(), "weave kill", dir, verifyItem)
 	if mode == weavecli.OutputJSON {
 		result := map[string]any{
@@ -6983,13 +7004,37 @@ func runWeaveKill(cmd *cobra.Command, id int64, reason string, yes bool, flags *
 			result["verify_output"] = verifyOutput
 			result["verify_tree"] = verifyTree
 		}
+		if resourceWarning != "" {
+			result["resource_warning"] = resourceWarning
+		}
 		return ec(emitOK(cmd.OutOrStdout(), mode, "weave kill", result))
+	}
+	if resourceWarning != "" {
+		fmt.Fprintln(cmd.ErrOrStderr(), "weave kill:", resourceWarning)
 	}
 	if verifyExit != nil {
 		fmt.Fprintf(cmd.OutOrStdout(), "weave kill: run #%d wrapper_pid=%d killed=%v state=%s verify_exit=%d\n", id, wrapperPid, killed, finalState, *verifyExit)
 	} else {
 		fmt.Fprintf(cmd.OutOrStdout(), "weave kill: run #%d wrapper_pid=%d killed=%v state=%s\n", id, wrapperPid, killed, finalState)
 	}
+	return nil
+}
+
+func runWeaveReconcile(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error {
+	mode := flags.mode()
+	cwd, _ := os.Getwd()
+	root, err := weaveRepoRoot(cwd)
+	if err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave reconcile", weavecli.ExitPrecondFail, err))
+	}
+	dir, _ := weaveQueueDir(root)
+	if err := weaveReconcileOwnedTree(cmd.Context(), dir, id); err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave reconcile", weavecli.ExitStateConflict, err))
+	}
+	if mode == weavecli.OutputJSON {
+		return ec(emitOK(cmd.OutOrStdout(), mode, "weave reconcile", map[string]any{"issue": id, "resource_terminated": true}))
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "weave reconcile: run #%d owned child group stopped; reservation settled\n", id)
 	return nil
 }
 

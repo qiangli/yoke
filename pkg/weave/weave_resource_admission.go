@@ -163,11 +163,107 @@ func (a *weaveAdmission) finish(terminated bool, launched bool) error {
 }
 func weaveRecordAdmission(it *weaveItem, a *weaveAdmission) {
 	it.ResourceTerminated = false
+	it.ResourceVerifiedAt = time.Time{}
+	it.ChildPID, it.ChildGroup, it.ChildStartID = 0, 0, ""
 	it.PauseRequestedBy = ""
 	it.PauseReason = ""
 	it.WrapperStartID = a.startID
 	it.ResourceReservationID = a.request.ID
 	it.ResourceReservationOwner = a.request.Owner
+}
+func weaveRecordOwnedChild(ctx context.Context, dir string, run int64, cmd *exec.Cmd, a *weaveAdmission) error {
+	if cmd.Process == nil {
+		return errors.New("child process did not start")
+	}
+	hooks := weaveResourceHooks(ctx)
+	if hooks.LookupIdentity == nil {
+		// Direct yoke callers without the native observer can still launch.
+		// They cannot later reconcile an orphan from a missing birth record.
+		return nil
+	}
+	group, err := weaveOwnedChildGroup(cmd.Process.Pid)
+	if err != nil {
+		// A very short child can exit before inspection. Its synchronous Wait
+		// still governs normal settlement, but an orphan cannot be reconciled.
+		return nil
+	}
+	if group == 0 {
+		return nil
+	} // Windows has no portable group lifetime proof.
+	lookupCtx, cancel := context.WithTimeout(ctx, time.Second)
+	start, err := hooks.LookupIdentity(lookupCtx, cmd.Process.Pid)
+	cancel()
+	if err != nil || start == "" {
+		return nil
+	}
+	return withWeaveQueueLock(dir, func(q *weaveQueue) error {
+		it := findWeaveItem(q, run)
+		if it == nil || it.ResourceReservationID != a.request.ID || it.State != "working" {
+			return errors.New("run ownership changed before child registration")
+		}
+		it.ChildPID, it.ChildStartID, it.ChildGroup = cmd.Process.Pid, start, group
+		return nil
+	})
+}
+
+// Reconciliation is supported only for a recorded isolated child group. A
+// vanished wrapper, expired lease, or an empty process listing is no proof.
+func weaveReconcileOwnedTree(ctx context.Context, dir string, run int64) error {
+	q, err := loadWeaveQueue(dir)
+	if err != nil {
+		return err
+	}
+	it := findWeaveItem(q, run)
+	if it == nil {
+		return fmt.Errorf("run #%d not found", run)
+	}
+	if it.ResourceReservationID == "" || it.ResourceTerminated {
+		return nil
+	}
+	if it.WrapperPid > 0 && pidAlive(it.WrapperPid) {
+		return errors.New("wrapper may still be active; retry after it exits")
+	}
+	if err := weaveRecordedGroupStopped(it); err != nil {
+		return fmt.Errorf("run #%d reservation retained: %w", run, err)
+	}
+	verifiedAt := it.ResourceVerifiedAt
+	if verifiedAt.IsZero() {
+		verifiedAt = time.Now().UTC()
+		if err := withWeaveQueueLock(dir, func(q *weaveQueue) error {
+			cur := findWeaveItem(q, run)
+			if cur == nil || cur.ResourceReservationID != it.ResourceReservationID || cur.ChildPID != it.ChildPID || cur.ChildStartID != it.ChildStartID || cur.ChildGroup != it.ChildGroup {
+				return errors.New("run identity changed during reconciliation")
+			}
+			if cur.ResourceVerifiedAt.IsZero() {
+				cur.ResourceVerifiedAt = verifiedAt
+			} else {
+				verifiedAt = cur.ResourceVerifiedAt
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+	}
+	gate := weaveResourceHooks(ctx).Budget
+	if gate == nil {
+		gate = llmbudget.DefaultFromEnv()
+	}
+	host, err := os.Hostname()
+	if err != nil {
+		return err
+	}
+	proof := llmbudget.TerminationProof{Owner: it.ResourceReservationOwner, Run: filepath.Join(dir, strconv.FormatInt(run, 10)), Host: host, VerifiedAt: verifiedAt, Evidence: fmt.Sprintf("recorded child pid %d birth %s isolated group %d absent", it.ChildPID, it.ChildStartID, it.ChildGroup)}
+	if err := gate.ReconcileTerminated(ctx, it.ResourceReservationID, proof); err != nil {
+		return fmt.Errorf("run #%d reservation retained: %w", run, err)
+	}
+	return withWeaveQueueLock(dir, func(q *weaveQueue) error {
+		cur := findWeaveItem(q, run)
+		if cur == nil || cur.ResourceReservationID != it.ResourceReservationID || cur.ChildPID != it.ChildPID || cur.ChildStartID != it.ChildStartID || cur.ChildGroup != it.ChildGroup {
+			return errors.New("run identity changed during reconciliation; inspect queue before retry")
+		}
+		cur.ResourceTerminated = true
+		return nil
+	})
 }
 func weaveVerifiedWrapper(ctx context.Context, it *weaveItem) error {
 	if it.WrapperPid <= 0 || it.WrapperStartID == "" {

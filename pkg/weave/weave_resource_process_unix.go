@@ -5,6 +5,7 @@ package weave
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -15,6 +16,32 @@ import (
 func weavePrepareOwnedChild(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
+func weaveOwnedChildGroup(pid int) (int, error) {
+	group, err := syscall.Getpgid(pid)
+	if err != nil {
+		return 0, err
+	}
+	if group != pid {
+		return 0, errors.New("child did not enter its isolated process group")
+	}
+	return group, nil
+}
+
+// A group probe covers the child session weave created. Descendants that
+// deliberately leave that session are outside this portable proof; workloads
+// allowed to do that need a cgroup/job-object lifetime backend before release.
+func weaveRecordedGroupStopped(it *weaveItem) error {
+	if it.ChildPID <= 0 || it.ChildStartID == "" || it.ChildGroup != it.ChildPID {
+		return errors.New("child birth identity and isolated group were not recorded at launch; retain reservation and inspect the owned process tree")
+	}
+	if err := syscall.Kill(-it.ChildGroup, 0); err != syscall.ESRCH {
+		if err == nil || err == syscall.EPERM {
+			return errors.New("recorded child process group may still contain processes")
+		}
+		return fmt.Errorf("inspect recorded child process group: %w", err)
+	}
+	return nil
+}
 func weaveConfigureOwnedCancellation(cmd *exec.Cmd) {
 	// Cancellation targets this child's process group, never the wrapper's peers.
 	cmd.Cancel = func() error {
@@ -22,6 +49,13 @@ func weaveConfigureOwnedCancellation(cmd *exec.Cmd) {
 			return nil
 		}
 		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+}
+func weaveAbortOwnedChild(cmd *exec.Cmd) {
+	if cmd.Cancel != nil {
+		_ = cmd.Cancel()
+	} else if cmd.Process != nil {
+		_ = cmd.Process.Kill()
 	}
 }
 func weaveOwnedChildTerminated(cmd *exec.Cmd) bool {

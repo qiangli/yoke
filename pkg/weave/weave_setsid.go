@@ -45,11 +45,10 @@ func pidAlive(pid int) bool {
 	return proc.Signal(syscall.Signal(0)) == nil
 }
 
-// weaveStopWrapper precisely terminates the wrapper process whose
-// PID is recorded on a queue item. The wrapper auto-setsid'd at
-// startup, so signalling the negative PID hits the whole subagent
-// process group — claude, codex, their MCP children, all caught in
-// one SIGTERM. After a brief grace window we escalate to SIGKILL.
+// weaveStopWrapper signals the recorded wrapper group. A plain child uses
+// its own process group, and a PTY child uses its own session; both depend on
+// the wrapper's cancellation path to stop them. The later recorded-child
+// group probe is therefore required before releasing any reservation.
 //
 // Used by `weave abandon` instead of pkill-by-name. pkill -f would
 // also catch peer ycode / claude / codex sessions belonging to
@@ -67,9 +66,8 @@ func weaveStopWrapper(pid int) {
 	if err := proc.Signal(syscall.Signal(0)); err != nil {
 		return
 	}
-	// SIGTERM the process group (negative PID). The wrapper put
-	// itself in a new session via Setsid, so its PID is the PGID
-	// of the entire subagent tree.
+	// SIGTERM the wrapper group (negative PID). The worker child may be
+	// in another group; signalling the wrapper alone is not a child proof.
 	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil {
 		// Group send failed (group may not exist if Setsid never
 		// ran); fall back to single-process TERM.
