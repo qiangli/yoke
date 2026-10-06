@@ -17,6 +17,7 @@ require (
 	github.com/filebrowser/filebrowser/v2 v2.63.23
 	github.com/go-git/go-billy/v5 v5.9.0
 	github.com/go-git/go-git/v5 v5.19.1
+	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/itchyny/gojq v0.12.19
@@ -66,6 +67,17 @@ require (
 replace mvdan.cc/sh/v3 => ../sh
 
 replace github.com/qiangli/coreutils => ../coreutils
+
+// gotreesitter: pinned local fork of upstream v0.16.0 (../gotreesitter,
+// hosting qiangli/gotreesitter, module path kept as upstream's) with the
+// five non-permissive grammars deleted at the byte level — caddy,
+// disassembly, ebnf, jq (GPL-3.0) and nim (MPL-2.0). Upstream has no
+// exclusion mechanism that removes embedded blobs. The path replace also
+// redirects the transitive qiangli/gfy -> odvcencio v0.15.3 imports (same
+// five grammars embedded), which a module-path rename could not reach. See
+// the fork's FORK.md for provenance; THIRD_PARTY_GRAMMARS.md carries the
+// surviving 201 attributions.
+replace github.com/odvcencio/gotreesitter => ../gotreesitter
 
 // Local MIT fork adds POSIX awk float formats, locale-aware data and string
 // semantics, an error-bearing regex backend across all surfaces, and the
@@ -199,7 +211,6 @@ require (
 	github.com/google/flatbuffers v24.3.25+incompatible // indirect
 	github.com/google/go-containerregistry v0.21.1 // indirect
 	github.com/google/go-intervals v0.0.2 // indirect
-	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
 	github.com/gorilla/handlers v1.5.2 // indirect
 	github.com/gorilla/mux v1.8.1 // indirect
