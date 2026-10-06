@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/qiangli/coreutils/tool"
 	"github.com/qiangli/yoke/pkg/atlas"
 	"reflect"
@@ -374,6 +375,78 @@ func TestRegisteredRefreshValidation(t *testing.T) {
 		}
 		if len(listed.Tools) != 4 {
 			t.Fatalf("failed update changed tools: %+v", listed.Tools)
+		}
+	}
+}
+
+func TestScriptTool(t *testing.T) {
+	const script = "echo '$HOME'; printf \"%s\" \"$(literal)\"\n"
+	for _, tc := range []struct {
+		name string
+		exit int
+		err  error
+	}{{"success", 0, nil}, {"exit", 9, nil}, {"error", 0, errors.New("interpreter failed")}} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			records := make(chan Record, 10)
+			opts := Options{Policy: &Policy{Audit: func(r Record) { records <- r }}, RunScript: func(ctx context.Context, got, stdin, dir string) (string, string, int, error) {
+				calls++
+				if ctx == nil || got != script || stdin != "input" || dir != "working" {
+					t.Errorf("script invocation: %q %q %q", got, stdin, dir)
+				}
+				return "output", "diagnostic", tc.exit, tc.err
+			}}
+			cs, ctx := policyClient(t, NewServerWithOptions("script", "test", opts))
+			listed, err := cs.ListTools(ctx, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, d := range listed.Tools {
+				if d.Name != "bashy" {
+					continue
+				}
+				found = true
+				if d.Annotations == nil || d.Annotations.ReadOnlyHint || !reflect.DeepEqual(d.Meta["bashy.effects"], []any{"exec"}) {
+					t.Fatalf("script descriptor: %+v", d)
+				}
+			}
+			if !found {
+				t.Fatal("bashy not registered")
+			}
+			result, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{Name: "bashy", Arguments: map[string]any{"script": script, "stdin": "input", "dir": "working"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out := decodeStructured[RunToolOutput](t, result); out != (RunToolOutput{Stdout: "output", Stderr: "diagnostic", ExitCode: tc.exit}) {
+				t.Fatalf("output: %+v", out)
+			}
+			if result.IsError != (tc.exit != 0 || tc.err != nil) {
+				t.Fatalf("result: %+v", result)
+			}
+			record := <-records
+			if !record.Allowed || !reflect.DeepEqual(record.Effects, []string{"exec"}) {
+				t.Fatalf("audit: %+v", record)
+			}
+			for _, invalid := range []map[string]any{{}, {"script": 42}, {"script": "true", "args": []string{}}} {
+				result, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{Name: "bashy", Arguments: invalid})
+				if err == nil && !result.IsError {
+					t.Fatalf("accepted invalid input: %v", invalid)
+				}
+			}
+			if calls != 1 {
+				t.Fatalf("runner called %d times", calls)
+			}
+		})
+	}
+	cs, ctx := policyClient(t, NewServerWithOptions("no-script", "test", Options{}))
+	listed, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range listed.Tools {
+		if d.Name == "bashy" {
+			t.Fatal("bashy registered without RunScript")
 		}
 	}
 }

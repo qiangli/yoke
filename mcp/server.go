@@ -43,6 +43,7 @@ type Options struct {
 	Tools      []string
 	AllTools   bool
 	Registered func() []RegisteredCommand
+	RunScript  func(ctx context.Context, script, stdin, dir string) (stdout, stderr string, exit int, err error)
 }
 
 // ToolInfo describes one registered tool for list_tools. Group and Caps are

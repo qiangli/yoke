@@ -92,8 +92,13 @@ func RegisterDirectTools(srv *mcpsdk.Server, opts Options) error {
 			state.reserved[name] = true
 		}
 	}
-	return refreshRegistered(srv, state, opts)
-
+	if err := refreshRegistered(srv, state, opts); err != nil {
+		return err
+	}
+	if opts.RunScript != nil {
+		registerScript(srv, state, opts)
+	}
+	return nil
 }
 
 // registerRegistryTools is the generic registry-command part of direct tool
@@ -265,4 +270,31 @@ func refreshRegistered(srv *mcpsdk.Server, state *directState, opts Options) err
 		state.names = append(state.names, command.Name)
 	}
 	return nil
+}
+
+type scriptInput struct {
+	Script string `json:"script"`
+	Stdin  string `json:"stdin,omitempty"`
+	Dir    string `json:"dir,omitempty"`
+}
+
+func registerScript(srv *mcpsdk.Server, state *directState, opts Options) {
+	doc := tool.MCPToolDescription{
+		Name: "bashy", Description: "Run literal script bytes through the bashy interpreter.",
+		InputSchema: map[string]any{
+			"type": "object", "required": []string{"script"}, "additionalProperties": false,
+			"properties": map[string]any{"script": map[string]any{"type": "string"}, "stdin": map[string]any{"type": "string"}, "dir": map[string]any{"type": "string"}},
+		},
+	}
+	doc.ApplyEffects([]string{"exec"}, []string{runtime.GOOS})
+	description, _ := sdkTool(doc) // fixed, JSON-compatible descriptor
+	state.policy.synthetic.Store("bashy", []string{"exec"})
+	mcpsdk.AddTool(srv, description, func(ctx context.Context, _ *mcpsdk.CallToolRequest, in scriptInput) (*mcpsdk.CallToolResult, RunToolOutput, error) {
+		stdout, stderr, exit, err := opts.RunScript(ctx, in.Script, in.Stdin, in.Dir)
+		result := &mcpsdk.CallToolResult{IsError: exit != 0}
+		if err != nil {
+			result.SetError(err)
+		}
+		return result, RunToolOutput{Stdout: stdout, Stderr: stderr, ExitCode: exit}, nil
+	})
 }
