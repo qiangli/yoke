@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/qiangli/yoke/pkg/chat"
+	"github.com/qiangli/yoke/pkg/fleet/fleettest"
 )
 
 func writeConfig(t *testing.T, body string) string {
@@ -891,6 +892,10 @@ func TestBuildConductorBriefStatesDelegationBoundary(t *testing.T) {
 }
 
 func TestDelegateDryRunUsesConductorAgent(t *testing.T) {
+	// Resolve against the embedded tool contracts, never the host tool ring
+	// (whose claude binary may be an absolute, versioned installation path).
+	fleettest.Ring(t)
+	t.Setenv("BASHY_TOOLS_PATH", "")
 	path := writeConfig(t, `
 conductor:
   agent: claude
@@ -910,7 +915,7 @@ deployment:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Status != "dry-run" || res.Chat.Agent != "claude" {
+	if res.Status != "dry-run" || res.Conductor != "claude" || res.Chat.Agent != "claude" {
 		t.Fatalf("unexpected delegate result: %+v", res)
 	}
 	if !strings.Contains(res.Chat.Output, "claude --dangerously-skip-permissions") {

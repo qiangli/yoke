@@ -3,6 +3,7 @@ package supervise
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/qiangli/yoke/pkg/chat"
+	"github.com/qiangli/yoke/pkg/fleet/fleettest"
 )
 
 func TestWorkerLaunchFailureCannotPassAnAlreadyGreenGate(t *testing.T) {
@@ -90,7 +92,12 @@ type scriptRunner struct {
 }
 
 func (s scriptRunner) Run(_ context.Context, agent string, _ []string, _ string) (string, int, error) {
-	return s.reply[agent], s.code[agent], nil
+	reply, hasReply := s.reply[agent]
+	code, hasCode := s.code[agent]
+	if !hasReply && !hasCode {
+		return "", 1, fmt.Errorf("scriptRunner: unexpected agent %q", agent)
+	}
+	return reply, code, nil
 }
 
 type noProgress struct{}
@@ -110,6 +117,11 @@ func (f funcRunner) Run(ctx context.Context, agent string, args []string, cwd st
 
 func testEnv(t *testing.T) string {
 	t.Helper()
+	// chat.Invoke reads the tool catalog before calling the injected runner.
+	// Host overrides can replace bare tool names with installation paths,
+	// invalidating the canned replies and exit codes keyed by those names.
+	fleettest.Ring(t)
+	t.Setenv("BASHY_TOOLS_PATH", "")
 	dir := t.TempDir()
 	t.Setenv("BASHY_SUPERVISE_DIR", filepath.Join(dir, "store"))
 	old := nowFn
@@ -260,7 +272,11 @@ func TestUngatedWorkerFailureIsUnverifiedAndDoesNotConverge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Converged || res.Verdicts[0].Passed || !res.Verdicts[0].Unverified {
+	if len(res.Verdicts) != 1 {
+		t.Fatalf("expected one failed verdict: %+v", res)
+	}
+	v := res.Verdicts[0]
+	if res.Converged || v.Passed || !v.Unverified || v.GateExit != 1 || v.Detail != "failed" {
 		t.Fatalf("failed ungated task must retain evidence metadata without converging: %+v", res)
 	}
 }
@@ -303,7 +319,13 @@ func TestReportContents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _ := os.ReadFile(res.Report)
+	if !res.Judged || res.Judgment != "The goal is met; nothing left." {
+		t.Fatalf("expected the requested supervisor summary: %+v", res)
+	}
+	b, err := os.ReadFile(res.Report)
+	if err != nil {
+		t.Fatal(err)
+	}
 	md := string(b)
 	for _, must := range []string{"# Supervision — fix the thing", "CONVERGED", "Supervisor summary (optional)", "The goal is met", "| Task | Verdict |"} {
 		if !strings.Contains(md, must) {
