@@ -22,7 +22,7 @@ that patch nor GNU m4 source is linked into the Go multicall binary.
 | [freebsd/freebsd-src](https://cgit.freebsd.org/src/tree/bin/dd/conv_tab.c?id=e043f37205ffbde5627ff299ad25cd532f2956f0) | BSD-3-Clause | cmds/dd (conv=ascii/ebcdic/ibm POSIX codeset conversion tables, `bin/dd/conv_tab.c` @ `e043f37205ffbde5627ff299ad25cd532f2956f0`) |
 | [GNU m4 1.4.19](https://ftp.gnu.org/gnu/m4/m4-1.4.19.tar.xz) | GPL-3.0-or-later | `tools/posix-providers/patches/m4-1.4.19-posix-semantics.patch` (source-derived POSIX corrections applied only while locally building the separate external provider) |
 | [pranshuparmar/witr](https://github.com/pranshuparmar/witr) | Apache-2.0 | cmds/why (managed external v0.3.3) |
-| [odvcencio/gotreesitter](https://github.com/odvcencio/gotreesitter) | MIT (runtime) + per-grammar licenses, see `THIRD_PARTY_GRAMMARS.md` | pkg/treesitter, cmds/ast (linked dependency; embeds 206 grammar parse tables — five are non-permissive and are listed EXCLUDED there) |
+| [odvcencio/gotreesitter](https://github.com/odvcencio/gotreesitter) | MIT (runtime) + per-grammar licenses, see `THIRD_PARTY_GRAMMARS.md` | pkg/treesitter, cmds/ast (linked dependency; embeds 201 permissive grammar parse tables, attributed in `THIRD_PARTY_GRAMMARS.md`) |
 | [ebitengine/purego](https://github.com/ebitengine/purego) | Apache-2.0 | pkg/collate, pkg/ctype (linked dependency v0.10.1; dlopen/dlsym FFI to glibc strcoll_l / \*_l ctype functions, no cgo — not copied source) |
 
 Go tools without a row above are fresh implementations written from the

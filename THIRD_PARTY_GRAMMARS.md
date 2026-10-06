@@ -9,223 +9,218 @@ from the pinned module's `grammars/languages.lock`; regenerate on every
 gotreesitter bump and read the result before pinning.
 
 Policy: compiled-in means permissive only (bashy
-`docs/licensing-supply-chain-policy.md` §1). Grammars under EXCLUDED are
-non-permissive and must not be linked into any shipped binary.
+`docs/licensing-supply-chain-policy.md` §1). Any grammar under EXCLUDED
+is non-permissive and must not be linked into any shipped binary.
 
-Generated against gotreesitter v0.16.0: 206 grammars, 201 permissive, 5 excluded.
+Generated against gotreesitter v0.16.0: 201 grammars, 201 permissive, 0 excluded.
 
-## Excluded (non-permissive)
+## EXCLUDED (non-permissive)
 
 | grammar | repository | commit | license |
 |---|---|---|---|
-| `caddy` | https://github.com/opa-oz/tree-sitter-caddy | `9b3fde99d3d7` | **GPL-3.0** |
-| `disassembly` | https://github.com/ColinKennedy/tree-sitter-disassembly | `0229c0211dba` | **GPL-3.0** |
-| `ebnf` | https://github.com/RubixDev/ebnf | `8e635b0b723c` | **GPL-3.0** |
-| `jq` | https://github.com/nverno/tree-sitter-jq | `1e139eba1fd3` | **GPL-3.0** |
-| `nim` | https://github.com/alaviss/tree-sitter-nim | `9b4ede21a6ca` | **MPL-2.0** |
 
 ## Included
 
 | grammar | repository | commit | license | evidence |
 |---|---|---|---|---|
-| `ada` | https://github.com/briot/tree-sitter-ada | `6b58259a08b1` | MIT | GitHub license API |
-| `agda` | https://github.com/tree-sitter/tree-sitter-agda | `e8d47a6987ef` | MIT | GitHub license API |
-| `angular` | https://github.com/dlvandenberg/tree-sitter-angular | `f0d0685701b7` | MIT | GitHub license API |
-| `apex` | https://github.com/aheber/tree-sitter-sfapex | `3597575a4297` | MIT | GitHub license API |
-| `arduino` | https://github.com/ObserverOfTime/tree-sitter-arduino | `53eb391da4c6` | MIT | GitHub license API |
-| `asm` | https://github.com/RubixDev/tree-sitter-asm | `839741fef4da` | MIT | GitHub license API |
-| `astro` | https://github.com/virchau13/tree-sitter-astro | `213f6e6973d9` | MIT | GitHub license API |
+| `ada` | https://github.com/briot/tree-sitter-ada | `6b58259a08b1` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `agda` | https://github.com/tree-sitter/tree-sitter-agda | `e8d47a6987ef` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `angular` | https://github.com/dlvandenberg/tree-sitter-angular | `f0d0685701b7` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `apex` | https://github.com/aheber/tree-sitter-sfapex | `3597575a4297` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `arduino` | https://github.com/ObserverOfTime/tree-sitter-arduino | `53eb391da4c6` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `asm` | https://github.com/RubixDev/tree-sitter-asm | `839741fef4da` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `astro` | https://github.com/virchau13/tree-sitter-astro | `213f6e6973d9` | MIT | GitHub license API (cached for unchanged grammar commit) |
 | `authzed` | https://github.com/mleonidas/tree-sitter-authzed | `83e5c26a8687` | MIT | package.json |
-| `awk` | https://github.com/Beaglefoot/tree-sitter-awk | `34bbdc7cce8e` | MIT | GitHub license API |
-| `bash` | https://github.com/tree-sitter/tree-sitter-bash | `a06c2e4415e9` | MIT | GitHub license API |
-| `bass` | https://github.com/vito/tree-sitter-bass | `28dc7059722b` | MIT | GitHub license API |
-| `beancount` | https://github.com/polarmutex/tree-sitter-beancount | `d7a03a7506fb` | MIT | GitHub license API |
-| `bibtex` | https://github.com/latex-lsp/tree-sitter-bibtex | `8d04ed27b3bc` | MIT | GitHub license API |
-| `bicep` | https://github.com/amaanq/tree-sitter-bicep | `bff59884307c` | MIT | GitHub license API |
-| `bitbake` | https://github.com/amaanq/tree-sitter-bitbake | `a5d04fdb5a69` | MIT | GitHub license API |
-| `blade` | https://github.com/EmranMR/tree-sitter-blade | `42b3c5a06bc2` | MIT | GitHub license API |
+| `awk` | https://github.com/Beaglefoot/tree-sitter-awk | `34bbdc7cce8e` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `bash` | https://github.com/tree-sitter/tree-sitter-bash | `a06c2e4415e9` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `bass` | https://github.com/vito/tree-sitter-bass | `28dc7059722b` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `beancount` | https://github.com/polarmutex/tree-sitter-beancount | `d7a03a7506fb` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `bibtex` | https://github.com/latex-lsp/tree-sitter-bibtex | `8d04ed27b3bc` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `bicep` | https://github.com/amaanq/tree-sitter-bicep | `bff59884307c` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `bitbake` | https://github.com/amaanq/tree-sitter-bitbake | `a5d04fdb5a69` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `blade` | https://github.com/EmranMR/tree-sitter-blade | `42b3c5a06bc2` | MIT | GitHub license API (cached for unchanged grammar commit) |
 | `brightscript` | https://github.com/ajdelcimmuto/tree-sitter-brightscript | `253fdfaa2381` | ISC | package.json |
-| `c` | https://github.com/tree-sitter/tree-sitter-c | `ae19b676b13b` | MIT | GitHub license API |
-| `c_sharp` | https://github.com/tree-sitter/tree-sitter-c-sharp | `88366631d598` | MIT | GitHub license API |
-| `cairo` | https://github.com/amaanq/tree-sitter-cairo | `6238f609bea2` | MIT | GitHub license API |
-| `capnp` | https://github.com/amaanq/tree-sitter-capnp | `7b0883c03e5e` | MIT | GitHub license API |
-| `chatito` | https://github.com/ObserverOfTime/tree-sitter-chatito | `c0ed82c665b7` | MIT | GitHub license API |
-| `circom` | https://github.com/Decurity/tree-sitter-circom | `02150524228b` | MIT | GitHub license API |
-| `clojure` | https://github.com/sogaiu/tree-sitter-clojure | `e43eff80d17c` | CC0-1.0 | GitHub license API |
-| `cmake` | https://github.com/uyha/tree-sitter-cmake | `c7b2a71e7f8e` | MIT | GitHub license API |
-| `cobol` | https://github.com/yutaro-sakamoto/tree-sitter-cobol | `e99dbdc3d800` | MIT | GitHub license API |
-| `comment` | https://github.com/stsewd/tree-sitter-comment | `66272d2b6c73` | MIT | GitHub license API |
-| `commonlisp` | https://github.com/theHamsta/tree-sitter-commonlisp | `32323509b3d9` | MIT | GitHub license API |
+| `c` | https://github.com/tree-sitter/tree-sitter-c | `ae19b676b13b` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `c_sharp` | https://github.com/tree-sitter/tree-sitter-c-sharp | `88366631d598` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `cairo` | https://github.com/amaanq/tree-sitter-cairo | `6238f609bea2` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `capnp` | https://github.com/amaanq/tree-sitter-capnp | `7b0883c03e5e` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `chatito` | https://github.com/ObserverOfTime/tree-sitter-chatito | `c0ed82c665b7` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `circom` | https://github.com/Decurity/tree-sitter-circom | `02150524228b` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `clojure` | https://github.com/sogaiu/tree-sitter-clojure | `e43eff80d17c` | CC0-1.0 | GitHub license API (cached for unchanged grammar commit) |
+| `cmake` | https://github.com/uyha/tree-sitter-cmake | `c7b2a71e7f8e` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `cobol` | https://github.com/yutaro-sakamoto/tree-sitter-cobol | `e99dbdc3d800` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `comment` | https://github.com/stsewd/tree-sitter-comment | `66272d2b6c73` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `commonlisp` | https://github.com/theHamsta/tree-sitter-commonlisp | `32323509b3d9` | MIT | GitHub license API (cached for unchanged grammar commit) |
 | `cooklang` | https://github.com/addcninblue/tree-sitter-cooklang | `4ebe237c1cf6` | ISC | package.json |
 | `corn` | https://github.com/jakestanger/tree-sitter-corn | `464654742cbf` | MIT | package.json |
-| `cpon` | https://github.com/amaanq/tree-sitter-cpon | `594289eadfec` | MIT | GitHub license API |
-| `cpp` | https://github.com/tree-sitter/tree-sitter-cpp | `8b5b49eb196b` | MIT | GitHub license API |
-| `crystal` | https://github.com/keidax/tree-sitter-crystal | `51ad1411de94` | MIT | GitHub license API |
-| `css` | https://github.com/tree-sitter/tree-sitter-css | `dda5cfc5722c` | MIT | GitHub license API |
-| `csv` | https://github.com/amaanq/tree-sitter-csv | `f6bf6e35eb0b` | MIT | GitHub license API |
-| `cuda` | https://github.com/theHamsta/tree-sitter-cuda | `48b066f334f4` | MIT | GitHub license API |
-| `cue` | https://github.com/eonpatapon/tree-sitter-cue | `be0f609c73cc` | MIT | GitHub license API |
-| `cylc` | https://github.com/elliotfontaine/tree-sitter-cylc | `6d1d81137112` | MIT | GitHub license API |
-| `d` | https://github.com/gdamore/tree-sitter-d | `fb028c8f14f4` | MIT | GitHub license API |
-| `dart` | https://github.com/UserNobody14/tree-sitter-dart | `0fc19c3a57b1` | MIT | GitHub license API |
-| `desktop` | https://github.com/ValdezFOmar/tree-sitter-desktop | `58e2ae16828d` | MIT | GitHub license API |
-| `devicetree` | https://github.com/joelspadin/tree-sitter-devicetree | `e685f1f6ac17` | MIT | GitHub license API |
-| `dhall` | https://github.com/jbellerb/tree-sitter-dhall | `62013259b26a` | MIT | GitHub license API |
-| `diff` | https://github.com/the-mikedavis/tree-sitter-diff | `2520c3f934b3` | MIT | GitHub license API |
-| `djot` | https://github.com/treeman/tree-sitter-djot | `74fac1f53c6d` | MIT | GitHub license API |
-| `dockerfile` | https://github.com/camdencheek/tree-sitter-dockerfile | `971acdd90856` | MIT | GitHub license API |
-| `dot` | https://github.com/rydesun/tree-sitter-dot | `80327abbba6f` | MIT | GitHub license API |
-| `doxygen` | https://github.com/amaanq/tree-sitter-doxygen | `ccd998f378c3` | MIT | GitHub license API |
-| `dtd` | https://github.com/tree-sitter-grammars/tree-sitter-xml | `5000ae8f22d1` | MIT | GitHub license API |
-| `earthfile` | https://github.com/glehmann/tree-sitter-earthfile | `5baef88717ad` | MIT | GitHub license API |
-| `editorconfig` | https://github.com/ValdezFOmar/tree-sitter-editorconfig | `63f104dab268` | MIT | GitHub license API |
+| `cpon` | https://github.com/amaanq/tree-sitter-cpon | `594289eadfec` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `cpp` | https://github.com/tree-sitter/tree-sitter-cpp | `8b5b49eb196b` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `crystal` | https://github.com/keidax/tree-sitter-crystal | `51ad1411de94` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `css` | https://github.com/tree-sitter/tree-sitter-css | `dda5cfc5722c` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `csv` | https://github.com/amaanq/tree-sitter-csv | `f6bf6e35eb0b` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `cuda` | https://github.com/theHamsta/tree-sitter-cuda | `48b066f334f4` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `cue` | https://github.com/eonpatapon/tree-sitter-cue | `be0f609c73cc` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `cylc` | https://github.com/elliotfontaine/tree-sitter-cylc | `6d1d81137112` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `d` | https://github.com/gdamore/tree-sitter-d | `fb028c8f14f4` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `dart` | https://github.com/UserNobody14/tree-sitter-dart | `0fc19c3a57b1` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `desktop` | https://github.com/ValdezFOmar/tree-sitter-desktop | `58e2ae16828d` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `devicetree` | https://github.com/joelspadin/tree-sitter-devicetree | `e685f1f6ac17` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `dhall` | https://github.com/jbellerb/tree-sitter-dhall | `62013259b26a` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `diff` | https://github.com/the-mikedavis/tree-sitter-diff | `2520c3f934b3` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `djot` | https://github.com/treeman/tree-sitter-djot | `74fac1f53c6d` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `dockerfile` | https://github.com/camdencheek/tree-sitter-dockerfile | `971acdd90856` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `dot` | https://github.com/rydesun/tree-sitter-dot | `80327abbba6f` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `doxygen` | https://github.com/amaanq/tree-sitter-doxygen | `ccd998f378c3` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `dtd` | https://github.com/tree-sitter-grammars/tree-sitter-xml | `5000ae8f22d1` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `earthfile` | https://github.com/glehmann/tree-sitter-earthfile | `5baef88717ad` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `editorconfig` | https://github.com/ValdezFOmar/tree-sitter-editorconfig | `63f104dab268` | MIT | GitHub license API (cached for unchanged grammar commit) |
 | `eds` | https://github.com/uyha/tree-sitter-eds | `26d529e6cfec` | MIT | Cargo.toml/tree-sitter.json |
 | `eex` | https://github.com/connorlay/tree-sitter-eex | `f742f2fe3274` | MIT | package.json |
-| `elisp` | https://github.com/Wilfred/tree-sitter-elisp | `29b4e49275f4` | MIT | GitHub license API |
-| `elixir` | https://github.com/elixir-lang/tree-sitter-elixir | `7937d3b4d65f` | Apache-2.0 | GitHub license API |
-| `elm` | https://github.com/elm-tooling/tree-sitter-elm | `6d9511c28181` | MIT | GitHub license API |
+| `elisp` | https://github.com/Wilfred/tree-sitter-elisp | `29b4e49275f4` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `elixir` | https://github.com/elixir-lang/tree-sitter-elixir | `7937d3b4d65f` | Apache-2.0 | GitHub license API (cached for unchanged grammar commit) |
+| `elm` | https://github.com/elm-tooling/tree-sitter-elm | `6d9511c28181` | MIT | GitHub license API (cached for unchanged grammar commit) |
 | `elsa` | https://github.com/glapa-grossklag/tree-sitter-elsa | `0a66b2b3f3c1` | MIT | package.json |
-| `embedded_template` | https://github.com/tree-sitter/tree-sitter-embedded-template | `3499d85f0a0d` | MIT | GitHub license API |
-| `enforce` | https://github.com/simonvic/tree-sitter-enforce | `eb2796871d96` | MIT | GitHub license API |
-| `erlang` | https://github.com/WhatsApp/tree-sitter-erlang | `1d78195c4fbb` | Apache-2.0 | GitHub license API |
+| `embedded_template` | https://github.com/tree-sitter/tree-sitter-embedded-template | `3499d85f0a0d` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `enforce` | https://github.com/simonvic/tree-sitter-enforce | `eb2796871d96` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `erlang` | https://github.com/WhatsApp/tree-sitter-erlang | `1d78195c4fbb` | Apache-2.0 | GitHub license API (cached for unchanged grammar commit) |
 | `facility` | https://github.com/FacilityApi/tree-sitter-facility | `e4bfd3e960de` | MIT | package.json |
-| `faust` | https://github.com/khiner/tree-sitter-faust | `122dd1019192` | MIT | GitHub license API |
-| `fennel` | https://github.com/alexmozaidze/tree-sitter-fennel | `3f0f6b24d599` | CC0-1.0 | GitHub license API |
-| `fidl` | https://github.com/google/tree-sitter-fidl | `0a8910f29326` | Apache-2.0 | GitHub license API |
-| `firrtl` | https://github.com/amaanq/tree-sitter-firrtl | `8503d3a0fe0f` | Apache-2.0 | GitHub license API |
-| `fish` | https://github.com/ram02z/tree-sitter-fish | `fa2143f5d66a` | Unlicense | GitHub license API |
-| `foam` | https://github.com/FoamScience/tree-sitter-foam | `472c24f11a54` | MIT | GitHub license API |
-| `forth` | https://github.com/AlexanderBrevig/tree-sitter-forth | `360ef13f8c60` | MIT | GitHub license API |
-| `fortran` | https://github.com/stadelmanma/tree-sitter-fortran | `2880b7aab4fb` | MIT | GitHub license API |
-| `fsharp` | https://github.com/ionide/tree-sitter-fsharp | `5141851c278a` | MIT | GitHub license API |
-| `gdscript` | https://github.com/PrestonKnopp/tree-sitter-gdscript | `89e66b6bdc00` | MIT | GitHub license API |
-| `git_config` | https://github.com/the-mikedavis/tree-sitter-git-config | `0fbc9f99d5a2` | MIT | GitHub license API |
-| `git_rebase` | https://github.com/the-mikedavis/tree-sitter-git-rebase | `bff4b66b44b0` | MIT | GitHub license API |
-| `gitattributes` | https://github.com/tree-sitter-grammars/tree-sitter-gitattributes | `1b7af09d45b5` | MIT | GitHub license API |
-| `gitcommit` | https://github.com/gbprod/tree-sitter-gitcommit | `a716678c0f00` | MIT | GitHub license API |
-| `gitignore` | https://github.com/shunsambongi/tree-sitter-gitignore | `f4685bf11ac4` | MIT | GitHub license API |
-| `gleam` | https://github.com/gleam-lang/tree-sitter-gleam | `6ea757f7eb8d` | Apache-2.0 | GitHub license API |
-| `glsl` | https://github.com/tree-sitter-grammars/tree-sitter-glsl | `24a6c8ef698e` | MIT | GitHub license API |
-| `gn` | https://github.com/tree-sitter-grammars/tree-sitter-gn | `bc06955bc1e3` | MIT | GitHub license API |
-| `go` | https://github.com/tree-sitter/tree-sitter-go | `2346a3ab1bb3` | MIT | GitHub license API |
-| `godot_resource` | https://github.com/PrestonKnopp/tree-sitter-godot-resource | `302c1895f54b` | MIT | GitHub license API |
-| `gomod` | https://github.com/camdencheek/tree-sitter-go-mod | `2e886870578e` | MIT | GitHub license API |
-| `graphql` | https://github.com/bkegley/tree-sitter-graphql | `5e66e961eee4` | MIT | GitHub license API |
-| `groovy` | https://github.com/murtaza64/tree-sitter-groovy | `a88865a3301a` | MIT | GitHub license API |
-| `hack` | https://github.com/slackhq/tree-sitter-hack | `1a7ded902881` | MIT | GitHub license API |
-| `hare` | https://github.com/tree-sitter-grammars/tree-sitter-hare | `eed7ddf6a66b` | MIT | GitHub license API |
-| `haskell` | https://github.com/tree-sitter/tree-sitter-haskell | `0975ef72fc3c` | MIT | GitHub license API |
-| `haxe` | https://github.com/vantreeseba/tree-sitter-haxe | `a55f3e2cf1e4` | MIT | GitHub license API |
-| `hcl` | https://github.com/tree-sitter-grammars/tree-sitter-hcl | `64ad62785d44` | Apache-2.0 | GitHub license API |
-| `heex` | https://github.com/phoenixframework/tree-sitter-heex | `b5a7cb5f74dc` | MIT | GitHub license API |
-| `hlsl` | https://github.com/tree-sitter-grammars/tree-sitter-hlsl | `bab9111922d5` | MIT | GitHub license API |
-| `html` | https://github.com/tree-sitter/tree-sitter-html | `73a3947324f6` | MIT | GitHub license API |
-| `http` | https://github.com/rest-nvim/tree-sitter-http | `db8b4398de90` | MIT | GitHub license API |
-| `hurl` | https://github.com/pfeiferj/tree-sitter-hurl | `597efbd7ce9a` | Apache-2.0 | GitHub license API |
-| `hyprlang` | https://github.com/tree-sitter-grammars/tree-sitter-hyprlang | `22723f25f3fa` | MIT | GitHub license API |
-| `ini` | https://github.com/justinmk/tree-sitter-ini | `e4018b517613` | Apache-2.0 | GitHub license API |
-| `janet` | https://github.com/sogaiu/tree-sitter-janet-simple | `d18318699520` | CC0-1.0 | GitHub license API |
-| `java` | https://github.com/tree-sitter/tree-sitter-java | `e10607b45ff7` | MIT | GitHub license API |
-| `javascript` | https://github.com/tree-sitter/tree-sitter-javascript | `58404d8cf191` | MIT | GitHub license API |
-| `jinja2` | https://github.com/dbt-labs/tree-sitter-jinja2 | `a82ed374f4cb` | Apache-2.0 | GitHub license API |
-| `jsdoc` | https://github.com/tree-sitter/tree-sitter-jsdoc | `658d18dcdddb` | MIT | GitHub license API |
-| `json` | https://github.com/tree-sitter/tree-sitter-json | `001c28d7a298` | MIT | GitHub license API |
-| `json5` | https://github.com/Joakker/tree-sitter-json5 | `aa630ef48903` | MIT | GitHub license API |
-| `jsonnet` | https://github.com/sourcegraph/tree-sitter-jsonnet | `ddd075f1939a` | MIT | GitHub license API |
-| `julia` | https://github.com/tree-sitter/tree-sitter-julia | `e0f9dcd180fd` | MIT | GitHub license API |
-| `just` | https://github.com/IndianBoy42/tree-sitter-just | `60df3d5b3fda` | Apache-2.0 | GitHub license API |
-| `kconfig` | https://github.com/amaanq/tree-sitter-kconfig | `9ac99fe4c0c2` | MIT | GitHub license API |
-| `kdl` | https://github.com/tree-sitter-grammars/tree-sitter-kdl | `b37e3d58e5c5` | MIT | GitHub license API |
-| `kotlin` | https://github.com/fwcd/tree-sitter-kotlin | `57170e50a32b` | MIT | GitHub license API |
-| `ledger` | https://github.com/cbarrete/tree-sitter-ledger | `96c92d4908a8` | MIT | GitHub license API |
-| `less` | https://github.com/rhino1998/tree-sitter-less | `2bd739e106a3` | MIT | GitHub license API |
-| `linkerscript` | https://github.com/amaanq/tree-sitter-linkerscript | `f99011a35542` | MIT | GitHub license API |
-| `liquid` | https://github.com/hankthetank27/tree-sitter-liquid | `fa11c7ba4503` | MIT | GitHub license API |
-| `llvm` | https://github.com/benwilliamgraham/tree-sitter-llvm | `2914786ae677` | MIT | GitHub license API |
-| `lua` | https://github.com/tree-sitter-grammars/tree-sitter-lua | `10fe0054734e` | MIT | GitHub license API |
-| `luau` | https://github.com/tree-sitter-grammars/tree-sitter-luau | `a8914d6c1fc5` | MIT | GitHub license API |
-| `make` | https://github.com/tree-sitter-grammars/tree-sitter-make | `70613f3d812c` | MIT | GitHub license API |
-| `markdown` | https://github.com/tree-sitter-grammars/tree-sitter-markdown | `f969cd3ae3f9` | MIT | GitHub license API |
-| `markdown_inline` | https://github.com/tree-sitter-grammars/tree-sitter-markdown | `f969cd3ae3f9` | MIT | GitHub license API |
-| `matlab` | https://github.com/acristoffers/tree-sitter-matlab | `574dde565cad` | MIT | GitHub license API |
-| `mermaid` | https://github.com/monaqa/tree-sitter-mermaid | `90ae195b3193` | MIT | GitHub license API |
-| `meson` | https://github.com/tree-sitter-grammars/tree-sitter-meson | `c84f3540624b` | MIT | GitHub license API |
-| `mojo` | https://github.com/HerringtonDarkholme/tree-sitter-mojo | `99fe918e69f0` | MIT | GitHub license API |
+| `faust` | https://github.com/khiner/tree-sitter-faust | `122dd1019192` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `fennel` | https://github.com/alexmozaidze/tree-sitter-fennel | `3f0f6b24d599` | CC0-1.0 | GitHub license API (cached for unchanged grammar commit) |
+| `fidl` | https://github.com/google/tree-sitter-fidl | `0a8910f29326` | Apache-2.0 | GitHub license API (cached for unchanged grammar commit) |
+| `firrtl` | https://github.com/amaanq/tree-sitter-firrtl | `8503d3a0fe0f` | Apache-2.0 | GitHub license API (cached for unchanged grammar commit) |
+| `fish` | https://github.com/ram02z/tree-sitter-fish | `fa2143f5d66a` | Unlicense | GitHub license API (cached for unchanged grammar commit) |
+| `foam` | https://github.com/FoamScience/tree-sitter-foam | `472c24f11a54` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `forth` | https://github.com/AlexanderBrevig/tree-sitter-forth | `360ef13f8c60` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `fortran` | https://github.com/stadelmanma/tree-sitter-fortran | `2880b7aab4fb` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `fsharp` | https://github.com/ionide/tree-sitter-fsharp | `5141851c278a` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `gdscript` | https://github.com/PrestonKnopp/tree-sitter-gdscript | `89e66b6bdc00` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `git_config` | https://github.com/the-mikedavis/tree-sitter-git-config | `0fbc9f99d5a2` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `git_rebase` | https://github.com/the-mikedavis/tree-sitter-git-rebase | `bff4b66b44b0` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `gitattributes` | https://github.com/tree-sitter-grammars/tree-sitter-gitattributes | `1b7af09d45b5` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `gitcommit` | https://github.com/gbprod/tree-sitter-gitcommit | `a716678c0f00` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `gitignore` | https://github.com/shunsambongi/tree-sitter-gitignore | `f4685bf11ac4` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `gleam` | https://github.com/gleam-lang/tree-sitter-gleam | `6ea757f7eb8d` | Apache-2.0 | GitHub license API (cached for unchanged grammar commit) |
+| `glsl` | https://github.com/tree-sitter-grammars/tree-sitter-glsl | `24a6c8ef698e` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `gn` | https://github.com/tree-sitter-grammars/tree-sitter-gn | `bc06955bc1e3` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `go` | https://github.com/tree-sitter/tree-sitter-go | `2346a3ab1bb3` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `godot_resource` | https://github.com/PrestonKnopp/tree-sitter-godot-resource | `302c1895f54b` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `gomod` | https://github.com/camdencheek/tree-sitter-go-mod | `2e886870578e` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `graphql` | https://github.com/bkegley/tree-sitter-graphql | `5e66e961eee4` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `groovy` | https://github.com/murtaza64/tree-sitter-groovy | `a88865a3301a` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `hack` | https://github.com/slackhq/tree-sitter-hack | `1a7ded902881` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `hare` | https://github.com/tree-sitter-grammars/tree-sitter-hare | `eed7ddf6a66b` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `haskell` | https://github.com/tree-sitter/tree-sitter-haskell | `0975ef72fc3c` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `haxe` | https://github.com/vantreeseba/tree-sitter-haxe | `a55f3e2cf1e4` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `hcl` | https://github.com/tree-sitter-grammars/tree-sitter-hcl | `64ad62785d44` | Apache-2.0 | GitHub license API (cached for unchanged grammar commit) |
+| `heex` | https://github.com/phoenixframework/tree-sitter-heex | `b5a7cb5f74dc` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `hlsl` | https://github.com/tree-sitter-grammars/tree-sitter-hlsl | `bab9111922d5` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `html` | https://github.com/tree-sitter/tree-sitter-html | `73a3947324f6` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `http` | https://github.com/rest-nvim/tree-sitter-http | `db8b4398de90` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `hurl` | https://github.com/pfeiferj/tree-sitter-hurl | `597efbd7ce9a` | Apache-2.0 | GitHub license API (cached for unchanged grammar commit) |
+| `hyprlang` | https://github.com/tree-sitter-grammars/tree-sitter-hyprlang | `22723f25f3fa` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `ini` | https://github.com/justinmk/tree-sitter-ini | `e4018b517613` | Apache-2.0 | GitHub license API (cached for unchanged grammar commit) |
+| `janet` | https://github.com/sogaiu/tree-sitter-janet-simple | `d18318699520` | CC0-1.0 | GitHub license API (cached for unchanged grammar commit) |
+| `java` | https://github.com/tree-sitter/tree-sitter-java | `e10607b45ff7` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `javascript` | https://github.com/tree-sitter/tree-sitter-javascript | `58404d8cf191` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `jinja2` | https://github.com/dbt-labs/tree-sitter-jinja2 | `a82ed374f4cb` | Apache-2.0 | GitHub license API (cached for unchanged grammar commit) |
+| `jsdoc` | https://github.com/tree-sitter/tree-sitter-jsdoc | `658d18dcdddb` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `json` | https://github.com/tree-sitter/tree-sitter-json | `001c28d7a298` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `json5` | https://github.com/Joakker/tree-sitter-json5 | `aa630ef48903` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `jsonnet` | https://github.com/sourcegraph/tree-sitter-jsonnet | `ddd075f1939a` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `julia` | https://github.com/tree-sitter/tree-sitter-julia | `e0f9dcd180fd` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `just` | https://github.com/IndianBoy42/tree-sitter-just | `60df3d5b3fda` | Apache-2.0 | GitHub license API (cached for unchanged grammar commit) |
+| `kconfig` | https://github.com/amaanq/tree-sitter-kconfig | `9ac99fe4c0c2` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `kdl` | https://github.com/tree-sitter-grammars/tree-sitter-kdl | `b37e3d58e5c5` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `kotlin` | https://github.com/fwcd/tree-sitter-kotlin | `57170e50a32b` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `ledger` | https://github.com/cbarrete/tree-sitter-ledger | `96c92d4908a8` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `less` | https://github.com/rhino1998/tree-sitter-less | `2bd739e106a3` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `linkerscript` | https://github.com/amaanq/tree-sitter-linkerscript | `f99011a35542` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `liquid` | https://github.com/hankthetank27/tree-sitter-liquid | `fa11c7ba4503` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `llvm` | https://github.com/benwilliamgraham/tree-sitter-llvm | `2914786ae677` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `lua` | https://github.com/tree-sitter-grammars/tree-sitter-lua | `10fe0054734e` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `luau` | https://github.com/tree-sitter-grammars/tree-sitter-luau | `a8914d6c1fc5` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `make` | https://github.com/tree-sitter-grammars/tree-sitter-make | `70613f3d812c` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `markdown` | https://github.com/tree-sitter-grammars/tree-sitter-markdown | `f969cd3ae3f9` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `markdown_inline` | https://github.com/tree-sitter-grammars/tree-sitter-markdown | `f969cd3ae3f9` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `matlab` | https://github.com/acristoffers/tree-sitter-matlab | `574dde565cad` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `mermaid` | https://github.com/monaqa/tree-sitter-mermaid | `90ae195b3193` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `meson` | https://github.com/tree-sitter-grammars/tree-sitter-meson | `c84f3540624b` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `mojo` | https://github.com/HerringtonDarkholme/tree-sitter-mojo | `99fe918e69f0` | MIT | GitHub license API (cached for unchanged grammar commit) |
 | `move` | https://github.com/tree-sitter-grammars/tree-sitter-move | `b8ca25518749` | MIT | package.json |
-| `nginx` | https://github.com/opa-oz/tree-sitter-nginx | `47ade644d754` | MIT | GitHub license API |
-| `nickel` | https://github.com/nickel-lang/tree-sitter-nickel | `b5b6cc3bc7b9` | MIT | GitHub license API |
-| `ninja` | https://github.com/alemuller/tree-sitter-ninja | `0a95cfdc0745` | MIT | GitHub license API |
-| `nix` | https://github.com/nix-community/tree-sitter-nix | `eabf96807ea4` | MIT | GitHub license API |
-| `norg` | https://github.com/nvim-neorg/tree-sitter-norg | `d89d95af13d4` | MIT | GitHub license API |
-| `nushell` | https://github.com/nushell/tree-sitter-nu | `bb3f533e5792` | MIT | GitHub license API |
-| `objc` | https://github.com/tree-sitter-grammars/tree-sitter-objc | `181a81b8f23a` | MIT | GitHub license API |
-| `ocaml` | https://github.com/tree-sitter/tree-sitter-ocaml | `5a979b3ec7f1` | MIT | GitHub license API |
-| `odin` | https://github.com/tree-sitter-grammars/tree-sitter-odin | `d2ca8efb4487` | MIT | GitHub license API |
-| `org` | https://github.com/emiasims/tree-sitter-org | `64cfbc213f5a` | MIT | GitHub license API |
-| `pascal` | https://github.com/Isopod/tree-sitter-pascal | `042119eca2e1` | MIT | GitHub license API |
-| `pem` | https://github.com/ObserverOfTime/tree-sitter-pem | `e525b177a229` | MIT | GitHub license API |
-| `perl` | https://github.com/tree-sitter-perl/tree-sitter-perl | `ad74e6db234c` | MIT | GitHub license API |
-| `php` | https://github.com/tree-sitter/tree-sitter-php | `3f2465c217d0` | MIT | GitHub license API |
-| `pkl` | https://github.com/apple/tree-sitter-pkl | `a02fc36f6001` | Apache-2.0 | GitHub license API |
-| `powershell` | https://github.com/airbus-cert/tree-sitter-powershell | `da65ba3acc93` | MIT | GitHub license API |
-| `prisma` | https://github.com/victorhqc/tree-sitter-prisma | `3556b2c1f20e` | MIT | GitHub license API |
-| `prolog` | https://github.com/Rukiza/tree-sitter-prolog | `c246cf2bf365` | ISC | GitHub license API |
-| `promql` | https://github.com/MichaHoffmann/tree-sitter-promql | `77625d78eebc` | Apache-2.0 | GitHub license API |
-| `properties` | https://github.com/tree-sitter-grammars/tree-sitter-properties | `6310671b24d4` | MIT | GitHub license API |
-| `proto` | https://github.com/treywood/tree-sitter-proto | `e9f6b43f6844` | MIT | GitHub license API |
-| `pug` | https://github.com/zealot128/tree-sitter-pug | `13e919537017` | MIT | GitHub license API |
-| `puppet` | https://github.com/tree-sitter-grammars/tree-sitter-puppet | `15f192929b7d` | MIT | GitHub license API |
-| `purescript` | https://github.com/postsolar/tree-sitter-purescript | `f541f95ffd68` | MIT | GitHub license API |
-| `python` | https://github.com/tree-sitter/tree-sitter-python | `26855eabccb1` | MIT | GitHub license API |
-| `ql` | https://github.com/tree-sitter/tree-sitter-ql | `1fd627a4e8bf` | MIT | GitHub license API |
-| `r` | https://github.com/r-lib/tree-sitter-r | `0e6ef7741712` | MIT | GitHub license API |
-| `racket` | https://github.com/6cdh/tree-sitter-racket | `56b57807f86a` | MIT | GitHub license API |
-| `regex` | https://github.com/tree-sitter/tree-sitter-regex | `b2ac15e27fce` | MIT | GitHub license API |
-| `rego` | https://github.com/FallenAngel97/tree-sitter-rego | `ddd39af81fe8` | MIT | GitHub license API |
-| `requirements` | https://github.com/tree-sitter-grammars/tree-sitter-requirements | `caeb2ba854de` | MIT | GitHub license API |
-| `rescript` | https://github.com/rescript-lang/tree-sitter-rescript | `43c2f1f35024` | MIT | GitHub license API |
-| `robot` | https://github.com/Hubro/tree-sitter-robot | `278958ff2fc4` | ISC | GitHub license API |
-| `ron` | https://github.com/amaanq/tree-sitter-ron | `78938553b930` | Apache-2.0 | GitHub license API |
-| `rst` | https://github.com/stsewd/tree-sitter-rst | `4e562e1598b9` | MIT | GitHub license API |
-| `ruby` | https://github.com/tree-sitter/tree-sitter-ruby | `ad907a69da0c` | MIT | GitHub license API |
-| `rust` | https://github.com/tree-sitter/tree-sitter-rust | `77a3747266f4` | MIT | GitHub license API |
-| `scala` | https://github.com/tree-sitter/tree-sitter-scala | `97aead18d977` | MIT | GitHub license API |
-| `scheme` | https://github.com/6cdh/tree-sitter-scheme | `b5c701148501` | MIT | GitHub license API |
-| `scss` | https://github.com/tree-sitter-grammars/tree-sitter-scss | `bca847c1410f` | MIT | GitHub license API |
-| `smithy` | https://github.com/indoorvivants/tree-sitter-smithy | `ec4fe14586f2` | MIT | GitHub license API |
-| `solidity` | https://github.com/JoranHonig/tree-sitter-solidity | `048fe686cb1f` | MIT | GitHub license API |
-| `sparql` | https://github.com/GordianDziwis/tree-sitter-sparql | `1ef52d35a73a` | MIT | GitHub license API |
-| `sql` | https://github.com/m-novikov/tree-sitter-sql | `587f30d184b0` | MIT | GitHub license API |
-| `squirrel` | https://github.com/amaanq/tree-sitter-squirrel | `072c969749e6` | MIT | GitHub license API |
-| `ssh_config` | https://github.com/tree-sitter-grammars/tree-sitter-ssh-config | `71d2693deada` | MIT | GitHub license API |
-| `starlark` | https://github.com/tree-sitter-grammars/tree-sitter-starlark | `a453dbf3ba43` | MIT | GitHub license API |
-| `svelte` | https://github.com/tree-sitter-grammars/tree-sitter-svelte | `ae5199db4775` | MIT | GitHub license API |
-| `swift` | https://github.com/alex-pinkus/tree-sitter-swift | `41d6e5fe811e` | MIT | GitHub license API |
-| `tablegen` | https://github.com/amaanq/tree-sitter-tablegen | `b1170880c613` | MIT | GitHub license API |
-| `tcl` | https://github.com/tree-sitter-grammars/tree-sitter-tcl | `8f11ac7206a5` | MIT | GitHub license API |
-| `teal` | https://github.com/euclidianAce/tree-sitter-teal | `05d276e73705` | MIT | GitHub license API |
-| `templ` | https://github.com/vrischmann/tree-sitter-templ | `1c6db04effbc` | MIT | GitHub license API |
-| `textproto` | https://github.com/PorterAtGoogle/tree-sitter-textproto | `568471b80fd8` | ISC | GitHub license API |
-| `thrift` | https://github.com/duskmoon314/tree-sitter-thrift | `68fd0d80943a` | MIT | GitHub license API |
-| `tlaplus` | https://github.com/tlaplus-community/tree-sitter-tlaplus | `add40814fda3` | MIT | GitHub license API |
-| `tmux` | https://github.com/Freed-Wu/tree-sitter-tmux | `75d1b995b0c2` | MIT | GitHub license API |
-| `todotxt` | https://github.com/arnarg/tree-sitter-todotxt | `3937c5cd105e` | MIT | GitHub license API |
-| `toml` | https://github.com/tree-sitter/tree-sitter-toml | `342d9be207c2` | MIT | GitHub license API |
-| `tsx` | https://github.com/tree-sitter/tree-sitter-typescript | `75b3874edb2d` | MIT | GitHub license API |
-| `turtle` | https://github.com/GordianDziwis/tree-sitter-turtle | `7f789ea7ef76` | MIT | GitHub license API |
-| `twig` | https://github.com/gbprod/tree-sitter-twig | `7195ee573ab5` | MIT | GitHub license API |
-| `typescript` | https://github.com/tree-sitter/tree-sitter-typescript | `75b3874edb2d` | MIT | GitHub license API |
-| `typst` | https://github.com/uben0/tree-sitter-typst | `46cf4ded12ee` | MIT | GitHub license API |
-| `uxntal` | https://github.com/amaanq/tree-sitter-uxntal | `ad9b638b9140` | MIT | GitHub license API |
-| `v` | https://github.com/vlang/v-analyzer | `9cf6a37689f0` | MIT | GitHub license API |
-| `verilog` | https://github.com/tree-sitter/tree-sitter-verilog | `227d277b6a1a` | MIT | GitHub license API |
-| `vhdl` | https://github.com/jpt13653903/tree-sitter-vhdl | `a09b8dc58b59` | MIT | GitHub license API |
-| `vimdoc` | https://github.com/neovim/tree-sitter-vimdoc | `f061895a0eff` | Apache-2.0 | GitHub license API |
-| `vue` | https://github.com/tree-sitter-grammars/tree-sitter-vue | `ce8011a414fd` | MIT | GitHub license API |
+| `nginx` | https://github.com/opa-oz/tree-sitter-nginx | `47ade644d754` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `nickel` | https://github.com/nickel-lang/tree-sitter-nickel | `b5b6cc3bc7b9` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `ninja` | https://github.com/alemuller/tree-sitter-ninja | `0a95cfdc0745` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `nix` | https://github.com/nix-community/tree-sitter-nix | `eabf96807ea4` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `norg` | https://github.com/nvim-neorg/tree-sitter-norg | `d89d95af13d4` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `nushell` | https://github.com/nushell/tree-sitter-nu | `bb3f533e5792` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `objc` | https://github.com/tree-sitter-grammars/tree-sitter-objc | `181a81b8f23a` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `ocaml` | https://github.com/tree-sitter/tree-sitter-ocaml | `5a979b3ec7f1` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `odin` | https://github.com/tree-sitter-grammars/tree-sitter-odin | `d2ca8efb4487` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `org` | https://github.com/emiasims/tree-sitter-org | `64cfbc213f5a` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `pascal` | https://github.com/Isopod/tree-sitter-pascal | `042119eca2e1` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `pem` | https://github.com/ObserverOfTime/tree-sitter-pem | `e525b177a229` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `perl` | https://github.com/tree-sitter-perl/tree-sitter-perl | `ad74e6db234c` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `php` | https://github.com/tree-sitter/tree-sitter-php | `3f2465c217d0` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `pkl` | https://github.com/apple/tree-sitter-pkl | `a02fc36f6001` | Apache-2.0 | GitHub license API (cached for unchanged grammar commit) |
+| `powershell` | https://github.com/airbus-cert/tree-sitter-powershell | `da65ba3acc93` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `prisma` | https://github.com/victorhqc/tree-sitter-prisma | `3556b2c1f20e` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `prolog` | https://github.com/Rukiza/tree-sitter-prolog | `c246cf2bf365` | ISC | GitHub license API (cached for unchanged grammar commit) |
+| `promql` | https://github.com/MichaHoffmann/tree-sitter-promql | `77625d78eebc` | Apache-2.0 | GitHub license API (cached for unchanged grammar commit) |
+| `properties` | https://github.com/tree-sitter-grammars/tree-sitter-properties | `6310671b24d4` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `proto` | https://github.com/treywood/tree-sitter-proto | `e9f6b43f6844` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `pug` | https://github.com/zealot128/tree-sitter-pug | `13e919537017` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `puppet` | https://github.com/tree-sitter-grammars/tree-sitter-puppet | `15f192929b7d` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `purescript` | https://github.com/postsolar/tree-sitter-purescript | `f541f95ffd68` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `python` | https://github.com/tree-sitter/tree-sitter-python | `26855eabccb1` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `ql` | https://github.com/tree-sitter/tree-sitter-ql | `1fd627a4e8bf` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `r` | https://github.com/r-lib/tree-sitter-r | `0e6ef7741712` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `racket` | https://github.com/6cdh/tree-sitter-racket | `56b57807f86a` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `regex` | https://github.com/tree-sitter/tree-sitter-regex | `b2ac15e27fce` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `rego` | https://github.com/FallenAngel97/tree-sitter-rego | `ddd39af81fe8` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `requirements` | https://github.com/tree-sitter-grammars/tree-sitter-requirements | `caeb2ba854de` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `rescript` | https://github.com/rescript-lang/tree-sitter-rescript | `43c2f1f35024` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `robot` | https://github.com/Hubro/tree-sitter-robot | `278958ff2fc4` | ISC | GitHub license API (cached for unchanged grammar commit) |
+| `ron` | https://github.com/amaanq/tree-sitter-ron | `78938553b930` | Apache-2.0 | GitHub license API (cached for unchanged grammar commit) |
+| `rst` | https://github.com/stsewd/tree-sitter-rst | `4e562e1598b9` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `ruby` | https://github.com/tree-sitter/tree-sitter-ruby | `ad907a69da0c` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `rust` | https://github.com/tree-sitter/tree-sitter-rust | `77a3747266f4` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `scala` | https://github.com/tree-sitter/tree-sitter-scala | `97aead18d977` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `scheme` | https://github.com/6cdh/tree-sitter-scheme | `b5c701148501` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `scss` | https://github.com/tree-sitter-grammars/tree-sitter-scss | `bca847c1410f` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `smithy` | https://github.com/indoorvivants/tree-sitter-smithy | `ec4fe14586f2` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `solidity` | https://github.com/JoranHonig/tree-sitter-solidity | `048fe686cb1f` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `sparql` | https://github.com/GordianDziwis/tree-sitter-sparql | `1ef52d35a73a` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `sql` | https://github.com/m-novikov/tree-sitter-sql | `587f30d184b0` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `squirrel` | https://github.com/amaanq/tree-sitter-squirrel | `072c969749e6` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `ssh_config` | https://github.com/tree-sitter-grammars/tree-sitter-ssh-config | `71d2693deada` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `starlark` | https://github.com/tree-sitter-grammars/tree-sitter-starlark | `a453dbf3ba43` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `svelte` | https://github.com/tree-sitter-grammars/tree-sitter-svelte | `ae5199db4775` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `swift` | https://github.com/alex-pinkus/tree-sitter-swift | `41d6e5fe811e` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `tablegen` | https://github.com/amaanq/tree-sitter-tablegen | `b1170880c613` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `tcl` | https://github.com/tree-sitter-grammars/tree-sitter-tcl | `8f11ac7206a5` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `teal` | https://github.com/euclidianAce/tree-sitter-teal | `05d276e73705` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `templ` | https://github.com/vrischmann/tree-sitter-templ | `1c6db04effbc` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `textproto` | https://github.com/PorterAtGoogle/tree-sitter-textproto | `568471b80fd8` | ISC | GitHub license API (cached for unchanged grammar commit) |
+| `thrift` | https://github.com/duskmoon314/tree-sitter-thrift | `68fd0d80943a` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `tlaplus` | https://github.com/tlaplus-community/tree-sitter-tlaplus | `add40814fda3` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `tmux` | https://github.com/Freed-Wu/tree-sitter-tmux | `75d1b995b0c2` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `todotxt` | https://github.com/arnarg/tree-sitter-todotxt | `3937c5cd105e` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `toml` | https://github.com/tree-sitter/tree-sitter-toml | `342d9be207c2` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `tsx` | https://github.com/tree-sitter/tree-sitter-typescript | `75b3874edb2d` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `turtle` | https://github.com/GordianDziwis/tree-sitter-turtle | `7f789ea7ef76` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `twig` | https://github.com/gbprod/tree-sitter-twig | `7195ee573ab5` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `typescript` | https://github.com/tree-sitter/tree-sitter-typescript | `75b3874edb2d` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `typst` | https://github.com/uben0/tree-sitter-typst | `46cf4ded12ee` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `uxntal` | https://github.com/amaanq/tree-sitter-uxntal | `ad9b638b9140` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `v` | https://github.com/vlang/v-analyzer | `9cf6a37689f0` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `verilog` | https://github.com/tree-sitter/tree-sitter-verilog | `227d277b6a1a` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `vhdl` | https://github.com/jpt13653903/tree-sitter-vhdl | `a09b8dc58b59` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `vimdoc` | https://github.com/neovim/tree-sitter-vimdoc | `f061895a0eff` | Apache-2.0 | GitHub license API (cached for unchanged grammar commit) |
+| `vue` | https://github.com/tree-sitter-grammars/tree-sitter-vue | `ce8011a414fd` | MIT | GitHub license API (cached for unchanged grammar commit) |
 | `wat` | https://github.com/wasm-lsp/tree-sitter-wasm | `2ca28a9f9d70` | Apache-2.0 WITH LLVM-exception | LICENSE |
-| `wgsl` | https://github.com/szebniok/tree-sitter-wgsl | `40259f3c77ea` | MIT | GitHub license API |
-| `wolfram` | https://github.com/bostick/tree-sitter-wolfram | `63ebdac6f040` | MIT | GitHub license API |
-| `xml` | https://github.com/tree-sitter-grammars/tree-sitter-xml | `5000ae8f22d1` | MIT | GitHub license API |
-| `yaml` | https://github.com/tree-sitter-grammars/tree-sitter-yaml | `4463985dfccc` | MIT | GitHub license API |
-| `yuck` | https://github.com/Philipp-M/tree-sitter-yuck | `e877f6ade4b7` | MIT | GitHub license API |
-| `zig` | https://github.com/tree-sitter-grammars/tree-sitter-zig | `6479aa13f32f` | MIT | GitHub license API |
+| `wgsl` | https://github.com/szebniok/tree-sitter-wgsl | `40259f3c77ea` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `wolfram` | https://github.com/bostick/tree-sitter-wolfram | `63ebdac6f040` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `xml` | https://github.com/tree-sitter-grammars/tree-sitter-xml | `5000ae8f22d1` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `yaml` | https://github.com/tree-sitter-grammars/tree-sitter-yaml | `4463985dfccc` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `yuck` | https://github.com/Philipp-M/tree-sitter-yuck | `e877f6ade4b7` | MIT | GitHub license API (cached for unchanged grammar commit) |
+| `zig` | https://github.com/tree-sitter-grammars/tree-sitter-zig | `6479aa13f32f` | MIT | GitHub license API (cached for unchanged grammar commit) |
