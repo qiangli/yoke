@@ -93,6 +93,9 @@ func (p *Policy) audit(record Record) {
 }
 
 func commandEffects(name string) []string {
+	if effects, ok := commandEffectOverrides.Load(name); ok {
+		return append([]string{}, effects.([]string)...)
+	}
 	if entry, ok := atlas.Lookup(name); ok {
 		return append([]string{}, entry.Effects...)
 	}
