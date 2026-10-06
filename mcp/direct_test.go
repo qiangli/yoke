@@ -1,13 +1,17 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"github.com/qiangli/coreutils/tool"
 	"github.com/qiangli/yoke/pkg/atlas"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -126,14 +130,14 @@ func TestDirectRegistrySchema(t *testing.T) {
 }
 
 func TestDirectEffectOverride(t *testing.T) {
-	commandEffectOverrides.Store("mcp-synthetic-probe", []string{"exec"})
-	t.Cleanup(func() { commandEffectOverrides.Delete("mcp-synthetic-probe") })
-	effects := commandEffects("mcp-synthetic-probe")
+	p := &Policy{synthetic: &sync.Map{}}
+	p.synthetic.Store("mcp-synthetic-probe", []string{"exec"})
+	effects := p.commandEffects("mcp-synthetic-probe")
 	if len(effects) != 1 || effects[0] != "exec" {
 		t.Fatalf("effects: %v", effects)
 	}
 	effects[0] = "pure"
-	if commandEffects("mcp-synthetic-probe")[0] != "exec" {
+	if p.commandEffects("mcp-synthetic-probe")[0] != "exec" {
 		t.Fatal("caller mutated stored effects")
 	}
 }
@@ -186,6 +190,190 @@ func TestDirectAtlasMetadata(t *testing.T) {
 		}
 		if d.Annotations == nil || d.Annotations.DestructiveHint == nil || *d.Annotations.DestructiveHint != (d.Name == "rm") {
 			t.Fatalf("%s annotations: %+v", d.Name, d.Annotations)
+		}
+	}
+}
+
+func TestRegisteredSchemaAndPolicy(t *testing.T) {
+	schema := &tool.ArgSchema{
+		Positionals: []tool.ArgParameter{{Name: "source", Required: true}, {Name: "target", Required: true}},
+		Flags:       []tool.ArgFlag{{Name: "count", Type: "int", Default: "2"}},
+	}
+	calls := 0
+	command := RegisteredCommand{Name: "registered-copy", Synopsis: "Copy", Usage: "copy SOURCE TARGET\nmore", Schema: schema, Effects: []string{"destroy"}, OS: []string{"darwin", "linux"},
+		Run: func(ctx context.Context, argv []string, stdin, dir string) (string, string, int) {
+			calls++
+			if ctx == nil || !reflect.DeepEqual(argv, []string{"--count", "2", "a", "b"}) || stdin != "input" || dir != "working" {
+				t.Errorf("invocation: %v %q %q", argv, stdin, dir)
+			}
+			return "output", "error", 7
+		},
+	}
+	for _, allow := range []bool{false, true} {
+		opts := Options{Policy: &Policy{Allow: map[string]bool{"destroy": allow}, Audit: func(Record) {}}, Registered: func() []RegisteredCommand { return []RegisteredCommand{command} }}
+		cs, ctx := policyClient(t, NewServerWithOptions("registered", "test", opts))
+		listed, err := cs.ListTools(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, d := range listed.Tools {
+			if d.Name != command.Name {
+				continue
+			}
+			found = true
+			props := d.InputSchema.(map[string]any)["properties"].(map[string]any)
+			if props["count"].(map[string]any)["type"] != "integer" || props["args"] != nil || !*d.Annotations.DestructiveHint {
+				t.Fatalf("descriptor: %+v", d)
+			}
+		}
+		if !found {
+			t.Fatal("missing registered tool")
+		}
+		result, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{Name: command.Name, Arguments: map[string]any{"source": "a", "target": "b", "stdin": "input", "dir": "working"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := decodeStructured[RunToolOutput](t, result)
+		if !result.IsError {
+			t.Fatal("expected tool error")
+		}
+		if allow {
+			if out != (RunToolOutput{Stdout: "output", Stderr: "error", ExitCode: 7}) {
+				t.Fatalf("output: %+v", out)
+			}
+		} else if out.ExitCode != 126 {
+			t.Fatalf("denial: %+v", out)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("runner called %d times", calls)
+	}
+}
+
+func TestRegisteredRefreshNotification(t *testing.T) {
+	command := RegisteredCommand{Name: "registered-first", Effects: []string{"pure"}, Run: func(_ context.Context, args []string, stdin, dir string) (string, string, int) {
+		return strings.Join(args, ",") + stdin + dir, "", 0
+	}}
+	commands := []RegisteredCommand{command}
+	opts := Options{Policy: &Policy{Audit: func(Record) {}}, Registered: func() []RegisteredCommand { return commands }}
+	srv := NewServerWithOptions("refresh", "test", opts)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	changed := make(chan struct{}, 10)
+	st, ct := mcpsdk.NewInMemoryTransports()
+	ss, err := srv.Connect(ctx, st, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ss.Close()
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "refresh-client", Version: "1"}, &mcpsdk.ClientOptions{ToolListChangedHandler: func(context.Context, *mcpsdk.ToolListChangedRequest) {
+		select {
+		case changed <- struct{}{}:
+		default:
+		}
+	}})
+	cs, err := client.Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	if _, err := cs.ListTools(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	command.Name = "registered-added"
+	commands = append(commands, command)
+	if err := NotifyToolsChanged(srv, opts); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-changed:
+	case <-ctx.Done():
+		t.Fatal("no tools/list_changed notification")
+	}
+	listed, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := []string{}
+	for _, d := range listed.Tools {
+		names = append(names, d.Name)
+	}
+	if !slices.Contains(names, command.Name) {
+		t.Fatalf("new tool absent: %v", names)
+	}
+	result, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{Name: command.Name, Arguments: map[string]any{"args": []string{"x", "y"}, "stdin": "z", "dir": "d"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := decodeStructured[RunToolOutput](t, result); out.Stdout != "x,yzd" {
+		t.Fatalf("output: %+v", out)
+	}
+	commands = nil
+	if err := NotifyToolsChanged(srv, opts); err != nil {
+		t.Fatal(err)
+	}
+	listed, err = cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Tools) != 3 {
+		t.Fatalf("removed tools remain: %+v", listed.Tools)
+	}
+}
+
+func TestRegisteredEffectsAreServerLocal(t *testing.T) {
+	command := RegisteredCommand{Name: "registered-local", Effects: []string{"destroy"}, Run: func(context.Context, []string, string, string) (string, string, int) { return "ran", "", 0 }}
+	opts := Options{Policy: &Policy{Audit: func(Record) {}}, Registered: func() []RegisteredCommand { return []RegisteredCommand{command} }}
+	blocked := NewServerWithOptions("blocked", "test", opts)
+	command.Effects = []string{"pure"}
+	allowed := NewServerWithOptions("allowed", "test", opts)
+	for _, tc := range []struct {
+		srv  *mcpsdk.Server
+		exit int
+	}{{blocked, 126}, {allowed, 0}} {
+		cs, ctx := policyClient(t, tc.srv)
+		result, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{Name: command.Name, Arguments: map[string]any{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out := decodeStructured[RunToolOutput](t, result); out.ExitCode != tc.exit {
+			t.Fatalf("output: %+v", out)
+		}
+	}
+}
+
+func TestRegisteredCannotWeakenRegistryPolicy(t *testing.T) {
+	opts := Options{Policy: &Policy{Audit: func(Record) {}}, Registered: func() []RegisteredCommand {
+		return []RegisteredCommand{{Name: "rm", Effects: []string{"pure"}, Run: func(context.Context, []string, string, string) (string, string, int) { return "", "", 0 }}}
+	}}
+	cs, ctx := policyClient(t, NewServerWithOptions("collision", "test", opts))
+	result, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{Name: "run_tool", Arguments: RunToolInput{Name: "rm", Args: []string{"unused"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := decodeStructured[RunToolOutput](t, result); out.ExitCode != 126 {
+		t.Fatalf("registry policy weakened: %+v", out)
+	}
+}
+
+func TestRegisteredRefreshValidation(t *testing.T) {
+	command := RegisteredCommand{Name: "registered-stable", Run: func(context.Context, []string, string, string) (string, string, int) { return "", "", 0 }}
+	commands := []RegisteredCommand{command}
+	opts := Options{Registered: func() []RegisteredCommand { return commands }}
+	srv := NewServerWithOptions("validation", "test", opts)
+	for _, invalid := range []RegisteredCommand{{Name: "run_tool", Run: command.Run}, {Name: "no-runner"}, command} {
+		commands = []RegisteredCommand{command, invalid}
+		if err := NotifyToolsChanged(srv, opts); err == nil {
+			t.Fatalf("accepted invalid command: %+v", invalid)
+		}
+		cs, ctx := policyClient(t, srv)
+		listed, err := cs.ListTools(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(listed.Tools) != 4 {
+			t.Fatalf("failed update changed tools: %+v", listed.Tools)
 		}
 	}
 }

@@ -39,9 +39,10 @@ import (
 // Options configures policy and direct command exposure. With neither Tools nor
 // AllTools set, only the compatibility tools and server_info are exposed.
 type Options struct {
-	Policy   *Policy
-	Tools    []string
-	AllTools bool
+	Policy     *Policy
+	Tools      []string
+	AllTools   bool
+	Registered func() []RegisteredCommand
 }
 
 // ToolInfo describes one registered tool for list_tools. Group and Caps are
@@ -117,7 +118,7 @@ func NewServerWithOptions(name, version string, opts Options) *mcpsdk.Server {
 	}, policy.runToolHandler)
 
 	addServerInfo(srv, name, version, policy)
-	srv.AddReceivingMiddleware(policy.middleware)
+	directStateFor(srv, policy)
 	if err := RegisterDirectTools(srv, opts); err != nil {
 		panic(err)
 	}
@@ -166,8 +167,8 @@ func listToolsHandler(_ context.Context, _ *mcpsdk.CallToolRequest, _ ListToolsI
 }
 
 func (p *Policy) runToolHandler(ctx context.Context, _ *mcpsdk.CallToolRequest, in RunToolInput) (*mcpsdk.CallToolResult, RunToolOutput, error) {
-	if err := p.Check(in.Name, commandEffects(in.Name)); err != nil {
-		res, out := policyDenial(in.Name, err)
+	if err := p.Check(in.Name, (*Policy)(nil).commandEffects(in.Name)); err != nil {
+		res, out := p.policyDenial(in.Name, err)
 		return res, out, nil
 	}
 	var out, errb bytes.Buffer

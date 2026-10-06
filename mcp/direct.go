@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,15 +11,52 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"weak"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/qiangli/coreutils/tool"
 	"github.com/qiangli/yoke/pkg/atlas"
 )
 
-// commandEffectOverrides carries declared effects for synthetic tool names.
-// Writers store immutable slices; readers receive a copy from commandEffects.
-var commandEffectOverrides sync.Map // map[string][]string
+// Each server owns its synthetic effects and refresh state. Weak keys and a
+// cleanup prevent the index from retaining servers after callers release them.
+var directStates sync.Map // map[weak.Pointer[mcpsdk.Server]]*directState
+
+type directState struct {
+	mu       sync.Mutex
+	policy   *Policy
+	names    []string
+	reserved map[string]bool
+}
+
+func directStateFor(srv *mcpsdk.Server, policy *Policy) *directState {
+	key := weak.Make(srv)
+	if value, ok := directStates.Load(key); ok {
+		return value.(*directState)
+	}
+	p := &Policy{}
+	if policy != nil {
+		*p = *policy
+	}
+	p.synthetic = &sync.Map{}
+	state := &directState{policy: p, reserved: map[string]bool{"list_tools": true, "run_tool": true, "server_info": true, "bashy": true}}
+	value, loaded := directStates.LoadOrStore(key, state)
+	if loaded {
+		return value.(*directState)
+	}
+	runtime.AddCleanup(srv, func(key weak.Pointer[mcpsdk.Server]) { directStates.Delete(key) }, key)
+	srv.AddReceivingMiddleware(p.middleware)
+	return state
+}
+
+// RegisteredCommand adapts a caller-owned command to a direct MCP tool.
+// Schema parameters named stdin or dir take precedence over transport inputs.
+type RegisteredCommand struct {
+	Name, Synopsis, Usage string
+	Effects, OS           []string
+	Schema                *tool.ArgSchema
+	Run                   func(ctx context.Context, argv []string, stdin, dir string) (stdout, stderr string, exit int)
+}
 
 var directToolName = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
 
@@ -43,7 +81,19 @@ func RegisterDirectTools(srv *mcpsdk.Server, opts Options) error {
 			names = append(names, name)
 		}
 	}
-	return registerRegistryTools(srv, opts.Policy, names)
+	state := directStateFor(srv, opts.Policy)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if err := registerRegistryTools(srv, state.policy, names); err != nil {
+		return err
+	}
+	for _, name := range names {
+		if directToolName.MatchString(name) {
+			state.reserved[name] = true
+		}
+	}
+	return refreshRegistered(srv, state, opts)
+
 }
 
 // registerRegistryTools is the generic registry-command part of direct tool
@@ -75,18 +125,11 @@ func registerRegistryTools(srv *mcpsdk.Server, policy *Policy, names []string) e
 		properties["stdin"] = map[string]any{"type": "string"}
 		properties["dir"] = map[string]any{"type": "string"}
 		properties["env"] = map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}}
-		// The SDK's InputSchema is any, Annotations is *ToolAnnotations, and Meta
-		// is an embedded map. JSON conversion preserves the descriptor's wire
-		// representation without assuming these are identical Go field types.
-		data, err := json.Marshal(doc.Tool)
+		description, err := sdkTool(doc.Tool)
 		if err != nil {
-			return fmt.Errorf("describe %s: %w", name, err)
+			return err
 		}
-		var description mcpsdk.Tool
-		if err := json.Unmarshal(data, &description); err != nil {
-			return fmt.Errorf("describe %s: %w", name, err)
-		}
-		descriptions = append(descriptions, &description)
+		descriptions = append(descriptions, description)
 	}
 	// Validate the whole selection before mutating the server.
 	for _, description := range descriptions {
@@ -94,6 +137,132 @@ func registerRegistryTools(srv *mcpsdk.Server, policy *Policy, names []string) e
 		mcpsdk.AddTool(srv, description, func(ctx context.Context, req *mcpsdk.CallToolRequest, in directInput) (*mcpsdk.CallToolResult, RunToolOutput, error) {
 			return policy.runToolHandler(ctx, req, RunToolInput{Name: name, Args: in.Args, Stdin: in.Stdin, Dir: in.Dir, Env: in.Env})
 		})
+	}
+	return nil
+}
+
+// sdkTool preserves the descriptor's JSON schema and metadata. SDK v1.8.0
+// uses bare bools for readOnlyHint/idempotentHint and pointers for the other
+// hints; unmarshalling maps absent bools to their protocol default (false).
+func sdkTool(doc tool.MCPToolDescription) (*mcpsdk.Tool, error) {
+	data, err := json.Marshal(doc)
+	if err != nil {
+		return nil, fmt.Errorf("describe %s: %w", doc.Name, err)
+	}
+	var description mcpsdk.Tool
+	if err := json.Unmarshal(data, &description); err != nil {
+		return nil, fmt.Errorf("describe %s: %w", doc.Name, err)
+	}
+	return &description, nil
+}
+
+// NotifyToolsChanged refreshes the registered-command snapshot. SDK additions
+// and removals emit notifications/tools/list_changed to subscribed clients.
+// Options.Policy does not replace the policy established at server creation.
+func NotifyToolsChanged(srv *mcpsdk.Server, opts Options) error {
+	state := directStateFor(srv, opts.Policy)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return refreshRegistered(srv, state, opts)
+}
+
+func refreshRegistered(srv *mcpsdk.Server, state *directState, opts Options) error {
+	var commands []RegisteredCommand
+	if opts.Registered != nil {
+		commands = append(commands, opts.Registered()...)
+	}
+	slices.SortFunc(commands, func(a, b RegisteredCommand) int { return strings.Compare(a.Name, b.Name) })
+	type prepared struct {
+		command     RegisteredCommand
+		description *mcpsdk.Tool
+	}
+	var ready []prepared
+	seen := map[string]bool{}
+	for _, command := range commands {
+		if !directToolName.MatchString(command.Name) {
+			continue
+		}
+		if state.reserved[command.Name] || seen[command.Name] {
+			return fmt.Errorf("duplicate tool name: %s", command.Name)
+		}
+		seen[command.Name] = true
+		if command.Run == nil {
+			return fmt.Errorf("registered command %s has no runner", command.Name)
+		}
+		usage, _, _ := strings.Cut(command.Usage, "\n")
+		doc := tool.DocumentAsMCP(command.Name, command.Synopsis+" — "+usage)
+		if command.Schema != nil {
+			doc = tool.DocumentAsMCPSchema(command.Name, command.Synopsis+" — "+usage, *command.Schema)
+		}
+		props := doc.Tool.InputSchema["properties"].(map[string]any)
+		for _, key := range []string{"stdin", "dir"} {
+			if _, exists := props[key]; !exists {
+				props[key] = map[string]any{"type": "string"}
+			}
+		}
+		command.Effects = append([]string(nil), command.Effects...)
+		doc.Tool.ApplyEffects(command.Effects, command.OS)
+		description, err := sdkTool(doc.Tool)
+		if err != nil {
+			return err
+		}
+		ready = append(ready, prepared{command, description})
+	}
+	// Validate the full snapshot before removing any previously registered tools.
+	srv.RemoveTools(state.names...)
+	for _, name := range state.names {
+		state.policy.synthetic.Delete(name)
+	}
+	state.names = nil
+	for _, item := range ready {
+		command := item.command
+		state.policy.synthetic.Store(command.Name, command.Effects)
+		mcpsdk.AddTool(srv, item.description, func(ctx context.Context, req *mcpsdk.CallToolRequest, _ map[string]any) (*mcpsdk.CallToolResult, RunToolOutput, error) {
+			// Recheck the captured effects: a refresh can replace the lookup while
+			// an invocation of this older handler is already in flight.
+			if err := state.policy.Check(command.Name, command.Effects); err != nil {
+				res, out := state.policy.policyDenial(command.Name, err)
+				return res, out, nil
+			}
+			// UseNumber preserves large integers for ArgSchema.Argv.
+			arguments := map[string]any{}
+			raw := req.Params.Arguments
+			if len(raw) == 0 {
+				raw = json.RawMessage(`{}`)
+			}
+			decoder := json.NewDecoder(bytes.NewReader(raw))
+			decoder.UseNumber()
+			if err := decoder.Decode(&arguments); err != nil {
+				return nil, RunToolOutput{}, err
+			}
+			var argv []string
+			var stdin, dir string
+			if command.Schema != nil {
+				props := command.Schema.JSONSchema()["properties"].(map[string]any)
+				if _, exists := props["stdin"]; !exists {
+					stdin, _ = arguments["stdin"].(string)
+					delete(arguments, "stdin")
+				}
+				if _, exists := props["dir"]; !exists {
+					dir, _ = arguments["dir"].(string)
+					delete(arguments, "dir")
+				}
+				var err error
+				argv, err = command.Schema.Argv(arguments)
+				if err != nil {
+					return nil, RunToolOutput{}, err
+				}
+			} else {
+				var in directInput
+				if err := json.Unmarshal(raw, &in); err != nil {
+					return nil, RunToolOutput{}, err
+				}
+				argv, stdin, dir = in.Args, in.Stdin, in.Dir
+			}
+			stdout, stderr, exit := command.Run(ctx, argv, stdin, dir)
+			return &mcpsdk.CallToolResult{IsError: exit != 0}, RunToolOutput{Stdout: stdout, Stderr: stderr, ExitCode: exit}, nil
+		})
+		state.names = append(state.names, command.Name)
 	}
 	return nil
 }

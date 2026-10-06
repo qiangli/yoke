@@ -9,6 +9,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -19,8 +20,9 @@ import (
 // Policy grants privileged effects explicitly. A nil or zero Policy grants none.
 // Configure Allow and Audit before serving; Audit may be called concurrently.
 type Policy struct {
-	Allow map[string]bool
-	Audit func(Record)
+	Allow     map[string]bool
+	Audit     func(Record)
+	synthetic *sync.Map
 }
 
 // Record describes one tools/call, including policy denials and dispatch failures.
@@ -46,7 +48,7 @@ func privileged(effect string) bool {
 // Check rejects unknown commands and ungranted privileged effects in Atlas
 // vocabulary order, independently of the order supplied by the caller.
 func (p *Policy) Check(name string, effects []string) error {
-	if _, ok := atlas.Lookup(name); !ok && tool.Lookup(name) == nil {
+	if !p.knownCommand(name) {
 		return fmt.Errorf("unknown command: %s", name)
 	}
 	for _, effect := range atlas.Effects() {
@@ -89,9 +91,21 @@ func (p *Policy) audit(record Record) {
 	}
 }
 
-func commandEffects(name string) []string {
-	if effects, ok := commandEffectOverrides.Load(name); ok {
-		return append([]string{}, effects.([]string)...)
+func (p *Policy) knownCommand(name string) bool {
+	if p != nil && p.synthetic != nil {
+		if _, ok := p.synthetic.Load(name); ok {
+			return true
+		}
+	}
+	_, ok := atlas.Lookup(name)
+	return ok || tool.Lookup(name) != nil
+}
+
+func (p *Policy) commandEffects(name string) []string {
+	if p != nil && p.synthetic != nil {
+		if effects, ok := p.synthetic.Load(name); ok {
+			return append([]string{}, effects.([]string)...)
+		}
 	}
 	if entry, ok := atlas.Lookup(name); ok {
 		return append([]string{}, entry.Effects...)
@@ -99,9 +113,9 @@ func commandEffects(name string) []string {
 	return []string{}
 }
 
-func policyDenial(name string, err error) (*mcpsdk.CallToolResult, RunToolOutput) {
+func (p *Policy) policyDenial(name string, err error) (*mcpsdk.CallToolResult, RunToolOutput) {
 	out := RunToolOutput{Stderr: err.Error(), ExitCode: 126}
-	if _, ok := atlas.Lookup(name); !ok && tool.Lookup(name) == nil {
+	if !p.knownCommand(name) {
 		// Preserve the generic runner's historical unknown-command status and stderr.
 		out.ExitCode = 2
 		out.Stderr = fmt.Sprintf("%s: not a supported command\n", name)
@@ -131,7 +145,7 @@ func (p *Policy) middleware(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 				if res.IsError && record.ExitCode == 0 {
 					record.ExitCode = 1
 				}
-				if record.Tool == "run_tool" || record.Denial != "" {
+				{
 					data, marshalErr := json.Marshal(res.StructuredContent)
 					var out struct {
 						ExitCode *int `json:"exit_code"`
@@ -155,17 +169,17 @@ func (p *Policy) middleware(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 				return next(ctx, method, req)
 			}
 			record.Command = in.Name
-			record.Effects = commandEffects(in.Name)
+			record.Effects = (*Policy)(nil).commandEffects(in.Name)
 			if denial := p.Check(in.Name, record.Effects); denial != nil {
 				record.Denial = denial.Error()
-				res, _ := policyDenial(in.Name, denial)
+				res, _ := p.policyDenial(in.Name, denial)
 				return res, nil
 			}
 		default:
-			record.Effects = commandEffects(record.Command)
+			record.Effects = p.commandEffects(record.Command)
 			if denial := p.Check(record.Command, record.Effects); denial != nil {
 				record.Denial = denial.Error()
-				res, _ := policyDenial(record.Command, denial)
+				res, _ := p.policyDenial(record.Command, denial)
 				return res, nil
 			}
 		}
