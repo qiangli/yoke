@@ -36,6 +36,16 @@ func ServeHTTP(ctx context.Context, name, version string, opts Options, listen s
 // seconds before active connections are closed). It reports serving or
 // shutdown errors; normal cancellation returns nil.
 func ServeHTTPWithShutdown(ctx context.Context, name, version string, opts Options, listen string) (addr string, shutdown func() error, err error) {
+	server, err := BuildServer(name, version, opts)
+	if err != nil {
+		return "", nil, err
+	}
+	return ServeHTTPServerWithShutdown(ctx, server, listen)
+}
+
+// ServeHTTPServerWithShutdown serves a prebuilt server, preserving caller-owned
+// tools, middleware and registered-command refreshes on the actual HTTP server.
+func ServeHTTPServerWithShutdown(ctx context.Context, server *mcpsdk.Server, listen string) (addr string, shutdown func() error, err error) {
 	listen, err = loopbackListenAddress(ctx, listen)
 	if err != nil {
 		return "", nil, err
@@ -44,7 +54,6 @@ func ServeHTTPWithShutdown(ctx context.Context, name, version string, opts Optio
 	if err != nil {
 		return "", nil, err
 	}
-	server := NewServerWithOptions(name, version, opts)
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server { return server }, &mcpsdk.StreamableHTTPOptions{Stateless: true}))
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
