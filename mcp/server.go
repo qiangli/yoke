@@ -3,19 +3,10 @@
 // shell ExecHandler and the busybox multicall binary) so that non-Go
 // agents (codex, claude, …) can drive the AgentOS userland.
 //
-// The registry holds CLI-shaped tools (argv + stdin -> stdout/stderr/exit),
-// so the faithful MCP mapping is two generic meta-tools rather than a
-// schema per tool:
-//
-//   - list_tools — enumerate the tools this build ships (name + synopsis)
-//   - run_tool   — run one: {name, args, stdin, dir, env} -> {stdout, stderr, exit_code}
-//
-// run_tool checks the effect policy before delegating to multicall.Dispatch.
-//
-// As agentic verbs (symbols, repomap, …) land in the registry they can
-// additionally be registered as typed, individually-schema'd MCP tools on
-// the same server via RegisterTool; the generic pair always covers the
-// whole registry as a floor.
+// The compatibility list_tools and run_tool tools cover the complete registry.
+// Options can additionally expose selected commands, registered commands with
+// typed schemas, and an optional bashy script runner as individual tools.
+// Execution is gated by the server's effect policy.
 //
 // This package uses the official SDK (github.com/modelcontextprotocol/go-sdk),
 // the same one the umbrella already pins, aliased mcpsdk to avoid clashing
@@ -37,11 +28,12 @@ import (
 )
 
 // Options configures policy and direct command exposure. With neither Tools nor
-// AllTools set, only the compatibility tools and server_info are exposed.
+// AllTools set, the registry is exposed only through the compatibility tools.
+// Registered and RunScript independently add caller-owned tools.
 type Options struct {
 	Policy     *Policy
-	Tools      []string
-	AllTools   bool
+	Tools      []string // Explicit registry names; unknown names are errors.
+	AllTools   bool     // Add canonical registry names supported on runtime.GOOS.
 	Registered func() []RegisteredCommand
 	RunScript  func(ctx context.Context, script, stdin, dir string) (stdout, stderr string, exit int, err error)
 }

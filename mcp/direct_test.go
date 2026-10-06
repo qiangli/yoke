@@ -6,6 +6,7 @@ import (
 	"errors"
 	"github.com/qiangli/coreutils/tool"
 	"github.com/qiangli/yoke/pkg/atlas"
+	"io"
 	"reflect"
 	"runtime"
 	"slices"
@@ -449,4 +450,114 @@ func TestScriptTool(t *testing.T) {
 			t.Fatal("bashy registered without RunScript")
 		}
 	}
+}
+
+func init() {
+	// Include real atlas entries for platform and alias selection without
+	// executing platform-specific commands in this package's test suite.
+	for _, name := range []string{"ps", "docker"} {
+		if tool.Lookup(name) == nil {
+			tool.Register(&tool.Tool{Name: name, Run: func(*tool.RunContext, []string) int { return 0 }})
+		}
+	}
+	tool.Register(&tool.Tool{Name: "mcp-context-probe", Run: func(rc *tool.RunContext, args []string) int {
+		input, _ := io.ReadAll(rc.In)
+		environment := append([]string(nil), rc.Env...)
+		slices.Sort(environment)
+		data, _ := json.Marshal([]any{args, string(input), rc.Dir, environment, rc.Ctx != nil, rc.FS != nil})
+		rc.Out.Write(data)
+		return 0
+	}})
+}
+
+func TestDirectRunContextMatchesCompat(t *testing.T) {
+	cs, ctx := policyClient(t, NewServerWithOptions("context", "test", Options{Tools: []string{"mcp-context-probe"}, Policy: &Policy{Audit: func(Record) {}}}))
+	arguments := map[string]any{"args": []string{"one", "two"}, "stdin": "bytes\n", "dir": "working", "env": map[string]string{"Z": "last", "A": "first"}}
+	direct, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{Name: "mcp-context-probe", Arguments: arguments})
+	if err != nil {
+		t.Fatal(err)
+	}
+	arguments["name"] = "mcp-context-probe"
+	compat, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{Name: "run_tool", Arguments: arguments})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := decodeStructured[RunToolOutput](t, direct)
+	if want := decodeStructured[RunToolOutput](t, compat); got != want {
+		t.Fatalf("direct %+v != compat %+v", got, want)
+	}
+	if got.Stdout != `[["one","two"],"bytes\n","working",["A=first","Z=last"],true,true]` {
+		t.Fatalf("context: %s", got.Stdout)
+	}
+}
+
+func TestRegisteredArgumentValidation(t *testing.T) {
+	calls := 0
+	command := RegisteredCommand{Name: "registered-typed", Schema: &tool.ArgSchema{
+		Positionals: []tool.ArgParameter{{Name: "number", Type: "int", Required: true}},
+		Flags:       []tool.ArgFlag{{Name: "mode", Enum: []string{"fast", "slow"}, Default: "fast"}, {Name: "verbose", Type: "bool"}},
+	}, Run: func(_ context.Context, args []string, _, _ string) (string, string, int) {
+		calls++
+		return strings.Join(args, "|"), "", 0
+	}}
+	cs, ctx := policyClient(t, NewServerWithOptions("typed", "test", Options{Policy: &Policy{Audit: func(Record) {}}, Registered: func() []RegisteredCommand { return []RegisteredCommand{command} }}))
+	for _, arguments := range []map[string]any{{}, {"number": "1"}, {"number": 1.5}, {"number": 1, "mode": "invalid"}, {"number": 1, "extra": true}} {
+		result, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{Name: command.Name, Arguments: arguments})
+		if err == nil && !result.IsError {
+			t.Fatalf("accepted invalid arguments: %v", arguments)
+		}
+	}
+	if calls != 0 {
+		t.Fatalf("invalid arguments reached runner %d times", calls)
+	}
+	result, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{Name: command.Name, Arguments: map[string]any{"number": json.Number("9007199254740993"), "verbose": true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := decodeStructured[RunToolOutput](t, result); out.Stdout != "--mode|fast|--verbose|9007199254740993" {
+		t.Fatalf("argv: %+v", out)
+	}
+}
+
+func TestDescriptorConversion(t *testing.T) {
+	yes, no := true, false
+	doc := tool.DocumentAsMCP("fixture", "description").Tool
+	doc.Annotations = &tool.MCPToolAnnotations{Title: "Fixture", ReadOnlyHint: &no, IdempotentHint: &yes, DestructiveHint: &no, OpenWorldHint: &yes}
+	doc.Meta = map[string]any{"custom": map[string]any{"value": "preserved"}}
+	converted, err := sdkTool(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, _ := json.Marshal(doc)
+	actual, _ := json.Marshal(converted)
+	if string(original) == string(actual) {
+		return
+	}
+	var a, b any
+	json.Unmarshal(original, &a)
+	json.Unmarshal(actual, &b)
+	if !reflect.DeepEqual(a, b) {
+		t.Fatalf("descriptor changed: %s != %s", actual, original)
+	}
+}
+
+func TestRegisteredInvalidSchemaPreservesTools(t *testing.T) {
+	command := RegisteredCommand{Name: "registered-schema", Run: func(context.Context, []string, string, string) (string, string, int) { return "", "", 0 }}
+	opts := Options{Registered: func() []RegisteredCommand { return []RegisteredCommand{command} }}
+	srv := NewServerWithOptions("schema", "test", opts)
+	command.Schema = &tool.ArgSchema{Flags: []tool.ArgFlag{{Name: "count", Type: "int", Default: "2", Enum: []string{"1"}}}}
+	if err := NotifyToolsChanged(srv, opts); err == nil {
+		t.Fatal("accepted invalid schema default")
+	}
+	cs, ctx := policyClient(t, srv)
+	listed, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range listed.Tools {
+		if d.Name == command.Name && d.InputSchema.(map[string]any)["properties"].(map[string]any)["args"] != nil {
+			return
+		}
+	}
+	t.Fatal("invalid refresh replaced the previous tool")
 }

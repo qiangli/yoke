@@ -145,14 +145,12 @@ func (p *Policy) middleware(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 				if res.IsError && record.ExitCode == 0 {
 					record.ExitCode = 1
 				}
-				{
-					data, marshalErr := json.Marshal(res.StructuredContent)
-					var out struct {
-						ExitCode *int `json:"exit_code"`
-					}
-					if marshalErr == nil && json.Unmarshal(data, &out) == nil && out.ExitCode != nil {
-						record.ExitCode = *out.ExitCode
-					}
+				data, marshalErr := json.Marshal(res.StructuredContent)
+				var out struct {
+					ExitCode *int `json:"exit_code"`
+				}
+				if marshalErr == nil && json.Unmarshal(data, &out) == nil && out.ExitCode != nil {
+					record.ExitCode = *out.ExitCode
 				}
 			}
 			p.audit(record)

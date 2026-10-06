@@ -13,6 +13,7 @@ import (
 	"sync"
 	"weak"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/qiangli/coreutils/tool"
 	"github.com/qiangli/yoke/pkg/atlas"
@@ -210,6 +211,19 @@ func refreshRegistered(srv *mcpsdk.Server, state *directState, opts Options) err
 		description, err := sdkTool(doc.Tool)
 		if err != nil {
 			return err
+		}
+		// Resolve before mutation so invalid defaults return an error instead
+		// of letting the SDK panic midway through replacing the snapshot.
+		data, err := json.Marshal(description.InputSchema)
+		if err != nil {
+			return err
+		}
+		var schema jsonschema.Schema
+		if err := json.Unmarshal(data, &schema); err != nil {
+			return fmt.Errorf("schema %s: %w", command.Name, err)
+		}
+		if _, err := schema.Resolve(&jsonschema.ResolveOptions{ValidateDefaults: true}); err != nil {
+			return fmt.Errorf("schema %s: %w", command.Name, err)
 		}
 		ready = append(ready, prepared{command, description})
 	}
