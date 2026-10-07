@@ -314,6 +314,7 @@ type execRunner struct {
 	pty              bool
 	ctlSock          string
 	killOnParentExit bool
+	catalog          *fleet.Catalog
 }
 
 // runPTY runs the agent attached to a pseudo-terminal.
@@ -400,9 +401,7 @@ func (r execRunner) runPTY(cmd *exec.Cmd, agent string) (string, int, error) {
 	// BASHY_NO_COACH.
 	var coach *Coach
 	if ReflexEnabled() {
-		coach = NewLineCoach(DefaultCoachPolicy(), NewCtlSteerer(r.ctlSock))
-		// P2b: a steerable invoke can escalate to an agent one band above `agent`.
-		coach.SetEscalation(context.Background(), agent, BandGraduatedEscalator)
+		coach = newPTYCoach(agent, r.ctlSock, r.catalog)
 		sink = io.MultiWriter(sink, coach)
 	}
 	exit, killReason, err := agentpty.Run(cmd, sink, agentpty.Options{
@@ -424,6 +423,16 @@ func (r execRunner) runPTY(cmd *exec.Cmd, agent string) (string, int, error) {
 		return out, exit, fmt.Errorf("%s exited %d", cmd.Path, exit)
 	}
 	return out, 0, nil
+}
+
+func newPTYCoach(agent, ctlSock string, catalog *fleet.Catalog) *Coach {
+	coach := NewLineCoach(DefaultCoachPolicy(), NewCtlSteerer(ctlSock))
+	// The reflex can steer within the current invocation. A pinned caller
+	// cannot escalate through the host catalog to an unrelated agent.
+	if catalog == nil {
+		coach.SetEscalation(context.Background(), agent, BandGraduatedEscalator)
+	}
+	return coach
 }
 
 func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd string) (string, int, error) {
@@ -1065,7 +1074,7 @@ func stdinIsTTY(cmd *cobra.Command) bool {
 // Invoke resolves the agent, builds the prompt, and runs it.
 func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 	if runner == nil {
-		runner = execRunner{pty: opt.PTY, ctlSock: opt.CtlSock, killOnParentExit: opt.KillOnParentExit}
+		runner = execRunner{pty: opt.PTY, ctlSock: opt.CtlSock, killOnParentExit: opt.KillOnParentExit, catalog: opt.Catalog}
 	}
 	name, err := ResolveAgent(opt.Agent, opt.Role)
 	if err != nil {
