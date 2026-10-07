@@ -153,6 +153,7 @@ const (
 // and Slash is this tool's own spelling of it.
 type ToolCommand struct {
 	Name       string            `yaml:"name" json:"name" doc:"canonical cross-tool command name (plan, review, deep-research, ...); unique per tool"`
+	Effects    []string          `yaml:"effects,omitempty" json:"effects,omitempty" doc:"declared effect atoms for guarded callers"`
 	Slash      string            `yaml:"slash" json:"slash" doc:"the tool-specific line to send; {args} is replaced by the caller's text"`
 	Mode       string            `yaml:"mode" json:"mode" doc:"print (one-shot via the exec template) or tui (steered session via steer_exec)"`
 	Capability string            `yaml:"capability,omitempty" json:"capability,omitempty" doc:"capability tag for --capability routing"`

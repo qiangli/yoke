@@ -39,7 +39,9 @@ const schemaVersion = "bashy-chat-v1"
 // Options describes one unattended agent invocation. It is exported so workflow
 // commands such as sdlc can use the same primitive as human operators.
 type Options struct {
-	Agent       string
+	Agent string
+	// Catalog pins fleet resolution for an embedded caller. Nil uses the host catalog.
+	Catalog     *fleet.Catalog
 	Role        string
 	Task        string
 	Instruction string
@@ -312,6 +314,7 @@ type execRunner struct {
 	pty              bool
 	ctlSock          string
 	killOnParentExit bool
+	catalog          *fleet.Catalog
 }
 
 // runPTY runs the agent attached to a pseudo-terminal.
@@ -398,9 +401,7 @@ func (r execRunner) runPTY(cmd *exec.Cmd, agent string) (string, int, error) {
 	// BASHY_NO_COACH.
 	var coach *Coach
 	if ReflexEnabled() {
-		coach = NewLineCoach(DefaultCoachPolicy(), NewCtlSteerer(r.ctlSock))
-		// P2b: a steerable invoke can escalate to an agent one band above `agent`.
-		coach.SetEscalation(context.Background(), agent, BandGraduatedEscalator)
+		coach = newPTYCoach(agent, r.ctlSock, r.catalog)
 		sink = io.MultiWriter(sink, coach)
 	}
 	exit, killReason, err := agentpty.Run(cmd, sink, agentpty.Options{
@@ -422,6 +423,16 @@ func (r execRunner) runPTY(cmd *exec.Cmd, agent string) (string, int, error) {
 		return out, exit, fmt.Errorf("%s exited %d", cmd.Path, exit)
 	}
 	return out, 0, nil
+}
+
+func newPTYCoach(agent, ctlSock string, catalog *fleet.Catalog) *Coach {
+	coach := NewLineCoach(DefaultCoachPolicy(), NewCtlSteerer(ctlSock))
+	// The reflex can steer within the current invocation. A pinned caller
+	// cannot escalate through the host catalog to an unrelated agent.
+	if catalog == nil {
+		coach.SetEscalation(context.Background(), agent, BandGraduatedEscalator)
+	}
+	return coach
 }
 
 func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd string) (string, int, error) {
@@ -787,7 +798,11 @@ func resolveLaunch(name string, opt Options) (Launch, error) {
 	prevContainerized := agentlaunch.Containerized
 	agentlaunch.Containerized = containerized
 	defer func() { agentlaunch.Containerized = prevContainerized }()
-	l, err := agentlaunch.ResolveWithCatalog(name, toAgentLaunchOptions(opt), newCatalog)
+	catalog := newCatalog
+	if opt.Catalog != nil {
+		catalog = func() *fleet.Catalog { return opt.Catalog }
+	}
+	l, err := agentlaunch.ResolveWithCatalog(name, toAgentLaunchOptions(opt), catalog)
 	return fromAgentLaunch(l), err
 }
 
@@ -1059,7 +1074,7 @@ func stdinIsTTY(cmd *cobra.Command) bool {
 // Invoke resolves the agent, builds the prompt, and runs it.
 func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 	if runner == nil {
-		runner = execRunner{pty: opt.PTY, ctlSock: opt.CtlSock, killOnParentExit: opt.KillOnParentExit}
+		runner = execRunner{pty: opt.PTY, ctlSock: opt.CtlSock, killOnParentExit: opt.KillOnParentExit, catalog: opt.Catalog}
 	}
 	name, err := ResolveAgent(opt.Agent, opt.Role)
 	if err != nil {
@@ -1126,7 +1141,11 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 		// ycode exposes the same structured stream through a file side-channel
 		// rather than stdout. Ask for that channel here too; the runner bridge
 		// below follows it into Stream while the process is alive.
-		if extra := agentlaunch.EventFileArgsWithCatalog(toAgentLaunch(lnch), "<events>", newCatalog); len(extra) > 0 {
+		catalog := newCatalog
+		if opt.Catalog != nil {
+			catalog = func() *fleet.Catalog { return opt.Catalog }
+		}
+		if extra := agentlaunch.EventFileArgsWithCatalog(toAgentLaunch(lnch), "<events>", catalog); len(extra) > 0 {
 			if !opt.DryRun {
 				dir, mkErr := os.MkdirTemp("", "bashy-chat-events-")
 				if mkErr != nil {
@@ -1134,7 +1153,7 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 				}
 				defer os.RemoveAll(dir)
 				eventPath = filepath.Join(dir, "events.ndjson")
-				extra = agentlaunch.EventFileArgsWithCatalog(toAgentLaunch(lnch), eventPath, newCatalog)
+				extra = agentlaunch.EventFileArgsWithCatalog(toAgentLaunch(lnch), eventPath, catalog)
 			}
 			args = agentlaunch.InsertBeforePrompt(args, extra)
 		}
