@@ -11,10 +11,12 @@ package skills
 // pre-flight audit, and the attestation all apply unchanged.
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	dhntskills "github.com/dhnt/dhnt/skills"
@@ -24,6 +26,12 @@ import (
 // dagPrimitive is the synthetic dhnt primitive id a --target run binds
 // (canonical dhnt: da-ga).
 const dagPrimitive = "daga"
+
+// errNoTasksFace marks materializeTasks' "no tasks.md, no pointer" case so a
+// caller that only wants to KNOW the targets (listing them as methods) can
+// treat it as zero targets rather than a failure — the same file's absence
+// is a hard error for --target, which asked to run one.
+var errNoTasksFace = errors.New("skills: no tasks face")
 
 // materializeTasks resolves the skill's tasks face to an on-disk path:
 // a bundled tasks.md wins (the real file for directory-backed skills, a
@@ -61,7 +69,7 @@ func materializeTasks(sk Skill, src Source, cwd string) (path string, doc *dag.D
 			return "", nil, cleanup, fmt.Errorf("skills: %q tasks pointer %q not found under %s", sk.Name, sk.Meta["tasks"], cwd)
 		}
 	default:
-		return "", nil, cleanup, fmt.Errorf("skills: %q has no tasks face (bundle a tasks.md, or point at one via metadata tasks: <repo-relative path>)", sk.Name)
+		return "", nil, cleanup, fmt.Errorf("skills: %q has no tasks face (bundle a tasks.md, or point at one via metadata tasks: <repo-relative path>): %w", sk.Name, errNoTasksFace)
 	}
 	doc, err = dag.ParseFile(path)
 	if err != nil {
@@ -128,7 +136,53 @@ func targetEffects(doc *dag.Document, target string) ([]dhntskills.Effect, error
 	for e := range atoms {
 		out = append(out, e)
 	}
+	// Map iteration order is random; a cap-exceeded message or a declared
+	// method's effect list must read the same way on every run, so order by
+	// the lattice's own declaration order (iota), not by this call's map.
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out, nil
+}
+
+// TaskTarget is one tasks.md target exposed as a callable method: its name
+// and the SAME effects [targetEffects] computes for the --target audit, so
+// a caller that turns this into a method's declared effects enforces
+// exactly the cap `run --target` itself checks — never a looser guess.
+type TaskTarget struct {
+	Name    string
+	Effects []string
+}
+
+// listTaskTargets answers a skill's tasks.md targets in declaration order,
+// or (nil, nil) when the skill has no tasks face at all — not an error, so
+// a caller exposing these as extra methods leaves a plain skill's methods
+// unchanged. Any other failure (a malformed tasks.md, an unknown effect
+// atom) is returned as an error.
+func listTaskTargets(cfg *config, name, cwd string) ([]TaskTarget, error) {
+	sk, src, ok := cfg.catalog().Get(name)
+	if !ok {
+		return nil, fmt.Errorf("skills: %q not found", name)
+	}
+	_, doc, cleanup, err := materializeTasks(sk, src, cwd)
+	defer cleanup()
+	if err != nil {
+		if errors.Is(err, errNoTasksFace) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	targets := make([]TaskTarget, 0, len(doc.Order))
+	for _, t := range doc.Order {
+		effects, err := targetEffects(doc, t)
+		if err != nil {
+			return nil, err
+		}
+		atoms := make([]string, len(effects))
+		for i, e := range effects {
+			atoms[i] = e.String()
+		}
+		targets = append(targets, TaskTarget{Name: t, Effects: atoms})
+	}
+	return targets, nil
 }
 
 // runDagTarget executes one target of a task file through the dag

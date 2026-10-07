@@ -72,6 +72,48 @@ func TestRunTargetUncontracted(t *testing.T) {
 	}
 }
 
+// --list answers the tasks.md targets and the SAME effects --target itself
+// audits — no ordering flake, no running anything — and an untasked skill
+// answers nothing (exit 0), not an error: a caller that turns this into
+// extra methods must leave a plain skill's methods alone.
+func TestRunTargetList(t *testing.T) {
+	store, work := t.TempDir(), t.TempDir()
+	src := t.TempDir()
+	dir := writeTasksSkill(t, src, "taskful",
+		"---\nname: taskful\ndescription: has targets\n---", "", tasksFixture(work))
+	f := &cobraRunner{t: t, opts: []Option{WithConfigDir(store)}}
+	if _, _, err := f.run("add", dir); err != nil {
+		t.Fatal(err)
+	}
+	stdout, _, err := f.run("run", "taskful", "--list")
+	if err != nil {
+		t.Fatalf("--list: %v", err)
+	}
+	if !strings.Contains(stdout, `"name":"hello"`) || !strings.Contains(stdout, `"name":"boom"`) {
+		t.Fatalf("stdout: %q", stdout)
+	}
+	if !strings.Contains(stdout, `"read"`) {
+		t.Fatalf("missing implied read effect: %q", stdout)
+	}
+	// Running nothing: the target's own marker file is untouched.
+	if _, err := os.Stat(filepath.Join(work, "made.txt")); err == nil {
+		t.Fatal("--list ran a target")
+	}
+	// --list stands alone.
+	if _, _, err := f.run("run", "taskful", "--list", "--target", "hello"); err == nil {
+		t.Fatal("--list --target combined")
+	}
+	// An untasked skill answers nothing, not an error.
+	plain := writeSkillDir(t, src, "no-tasks", "---\nname: no-tasks\ndescription: x\n---", "")
+	if _, _, err := f.run("add", plain); err != nil {
+		t.Fatal(err)
+	}
+	stdout, _, err = f.run("run", "no-tasks", "--list")
+	if err != nil || strings.TrimSpace(stdout) != "" {
+		t.Fatalf("untasked --list: stdout=%q err=%v", stdout, err)
+	}
+}
+
 // Contracted skill: the dag target runs AS the steps phase — contract
 // evaluated, effects observed, receipt attested.
 func TestRunTargetContracted(t *testing.T) {

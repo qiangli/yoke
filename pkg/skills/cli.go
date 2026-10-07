@@ -192,7 +192,7 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 	}
 	verify.Flags().BoolVar(&verifyJSON, "json", false, "machine-readable report")
 
-	var runJSON, adapt bool
+	var runJSON, adapt, listTargets bool
 	var repairAgent, target string
 	var attempts int
 	run := &cobra.Command{
@@ -201,6 +201,12 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 		Long:  "run executes a skill's canonical face through the in-process userland:\ncontract predicates and step primitives resolve their concrete commands from\nSKILL.md metadata (check-*/step-* keys), a static pre-flight audit refuses to\nstart when the declared effect cap cannot cover what the bindings report, and\nevery run emits a re-checkable attestation stored in the host-local store.\nA host that has learned a fixed version of the skill runs it transparently.\nWith --adapt, a failing run asks the repair agent for corrected steps,\nverifies them under the ORIGINAL contract and effect cap, folds the fix into\na guarded environment arm, and saves it to the host overlay — the next run\n(by any agent on this host) reuses it. Command output streams to stderr;\nthe receipt is stdout.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if listTargets {
+				if target != "" || adapt {
+					return fmt.Errorf("skills: --list stands alone")
+				}
+				return runListTargets(cmd, cfg, args[0], runJSON)
+			}
 			if target != "" && adapt {
 				return fmt.Errorf("skills: --target and --adapt do not combine (adapt repairs canonical steps, not dag targets)")
 			}
@@ -215,6 +221,7 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 	run.Flags().StringVar(&repairAgent, "repair-agent", "", "headless agent CLI for repair proposals; the prompt is appended as the last argument (e.g. \"claude -p\")")
 	run.Flags().IntVar(&attempts, "attempts", 2, "max repair attempts under --adapt")
 	run.Flags().StringVar(&target, "target", "", "execute this dag target from the skill's tasks.md (contracted skills stay attested)")
+	run.Flags().BoolVar(&listTargets, "list", false, "list this skill's tasks.md targets and their declared effects, running nothing (empty when the skill has no tasks face)")
 
 	var learnJSON bool
 	learn := &cobra.Command{
@@ -1024,6 +1031,27 @@ func runRun(cmd *cobra.Command, cfg *config, name string, asJSON, adapt bool, re
 	}
 	if !rec.Attest.Valid {
 		return fmt.Errorf("skills: %q contract not satisfied", name)
+	}
+	return nil
+}
+
+// runListTargets answers a skill's tasks.md targets, one
+// `{"name":...,"effects":[...]}` object per line — the [ParseMethods] shape
+// a fence alias's `methods` answer also uses. A skill with no tasks face
+// prints nothing and exits 0, so a caller that turns this into extra
+// methods leaves a plain three-verb skill unchanged. --json is accepted for
+// symmetry with the rest of `run` but this answer is always JSON lines: it
+// is a machine protocol, not a human receipt.
+func runListTargets(cmd *cobra.Command, cfg *config, name string, _ bool) error {
+	targets, err := listTaskTargets(cfg, name, mustGetwd())
+	if err != nil {
+		return err
+	}
+	enc := json.NewEncoder(cmd.OutOrStdout())
+	for _, t := range targets {
+		if err := enc.Encode(map[string]any{"name": t.Name, "effects": t.Effects}); err != nil {
+			return err
+		}
 	}
 	return nil
 }
