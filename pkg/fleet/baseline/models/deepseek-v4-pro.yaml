@@ -35,3 +35,4 @@ cost_micro: 1500
 # property of the TOOL, not of the model.
 ids:
   ycode: deepseek-v4-pro
+  genie: deepseek-v4-pro

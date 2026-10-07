@@ -189,11 +189,8 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 	} else {
 		toolName = name
 	}
-	// Fleet keeps the historical ycode:MODEL spelling as a compatibility
-	// alias. Its launch is the genie backend; ycode itself is the human UI.
-	if toolName == "ycode" {
-		toolName = "genie"
-	}
+	// Keep the ycode catalog row as the alias's launch metadata. Its headless
+	// template invokes genie, while its ACP declaration remains authoritative.
 	lnch.Tool, lnch.ToolName = toolName, toolName
 
 	tool, known := cat.Tool(toolName)
@@ -208,6 +205,12 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 		lnch.Model, lnch.ModelName = modelName, modelName
 		if m, ok := cat.Model(modelName); ok {
 			lnch.Model, lnch.ModelName = m.TargetFor(toolName), m.Name
+			// genie -m accepts a registry key, then resolves provider IDs itself.
+			// The ycode alias invokes genie too, so do not pass ycode's
+			// provider-specific TargetFor value (for example, a bare DeepSeek ID).
+			if toolName == YcodeToolName || toolName == "genie" {
+				lnch.Model = m.Name
+			}
 			ref := tool.CredentialRefFor(m)
 			if target := tool.CLI.Launch.CredentialEnv[ref]; target != "" {
 				lnch.CredentialEnvAliases = map[string][]string{

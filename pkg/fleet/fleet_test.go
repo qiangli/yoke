@@ -256,6 +256,14 @@ func TestBaselineYcodeAliasesGenieLaunch(t *testing.T) {
 	if !ok || strings.Join(steerArgv, " ") != "ycode -m deepseek-v4-pro" {
 		t.Fatalf("steer ycode argv = %q, supported=%t", steerArgv, ok)
 	}
+	genie, ok := baseline(t).Tool("genie")
+	if !ok {
+		t.Fatal("baseline genie missing")
+	}
+	steerArgv, ok = genie.SteerArgvPrefix("deepseek-v4-pro")
+	if !ok || strings.Join(steerArgv, " ") != "ycode -m deepseek-v4-pro" {
+		t.Fatalf("steer genie argv = %q, supported=%t", steerArgv, ok)
+	}
 }
 
 func TestArgvSubstitutesModel(t *testing.T) {

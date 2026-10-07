@@ -55,8 +55,8 @@ func TestYcodeModelAliasResolvesToGenieBackend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if l.ToolName != "genie" {
-		t.Fatalf("ycode alias resolved to %+v, want genie via bashy", l)
+	if l.ToolName != "ycode" {
+		t.Fatalf("ycode alias resolved to %+v, want ycode launch metadata", l)
 	}
 	want := []string{"bashy", "genie", "-m", l.Model, "pong"}
 	if got := l.Argv("pong"); !slices.Equal(got, want) {
@@ -67,6 +67,37 @@ func TestYcodeModelAliasResolvesToGenieBackend(t *testing.T) {
 	}
 	if _, ok := SeededProfiles["ycode"]; ok {
 		t.Fatal("obsolete external-ycode seeded profile remains")
+	}
+}
+
+func TestResolveYcodePreservesACPAndSteerLaunches(t *testing.T) {
+	fleettest.Ring(t)
+	t.Setenv(UnsafeLaunchEnv, "1")
+	acp, err := ResolveWithCatalog("ycode", Options{ACP: true}, NewCatalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acp.Tool != "bashy" || strings.Join(acp.Args, " ") != "ycode acp" {
+		t.Fatalf("ycode ACP launch = %+v, want bashy ycode acp", acp)
+	}
+
+	steer, err := ResolveWithCatalog("ycode:deepseek-v4-pro", Options{Steer: true}, NewCatalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if steer.Model != "deepseek-v4-pro" {
+		t.Fatalf("genie model argument = %q, want registry key deepseek-v4-pro", steer.Model)
+	}
+	if steer.Tool != "bashy" || strings.Join(steer.Args, " ") != "ycode -m deepseek-v4-pro" {
+		t.Fatalf("ycode steer launch = %+v, want bashy ycode -m deepseek-v4-pro", steer)
+	}
+
+	genieSteer, err := ResolveWithCatalog("genie:deepseek-v4-pro", Options{Steer: true}, NewCatalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(genieSteer.Args, " ") != "ycode -m deepseek-v4-pro" {
+		t.Fatalf("genie steer launch = %+v, want bashy ycode -m deepseek-v4-pro", genieSteer)
 	}
 }
 
@@ -223,7 +254,7 @@ func TestManagedSprintOwnerProfilesResolveWithExplicitUnsafeAuthorization(t *tes
 		{agent: "codex-gpt5.6-sol", tool: "codex"},
 		{agent: "agy-opus4.6", tool: "agy"},
 		{agent: "opencode-kimi-k3", tool: "opencode"},
-		{agent: "ycode-gpt5.6-sol", tool: "genie"},
+		{agent: "ycode-gpt5.6-sol", tool: "ycode"},
 	} {
 		t.Run(tc.tool, func(t *testing.T) {
 			l, err := ResolveWithCatalog(tc.agent, Options{

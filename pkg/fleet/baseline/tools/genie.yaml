@@ -14,7 +14,7 @@ cli:
       mem_limit: 12g
     # Interactive: bare `bashy genie -m MODEL` is bashy's agent terminal with
     # genie attached; every free-text line is one ycode turn.
-    steer_exec: bashy genie -m {model}
+    steer_exec: bashy ycode -m {model}
     # supports_say is MEASURED (Sprint #323, stories #1115/#1098,
     # 2026-09-28, dragon, ycode 2efcc3a): `bashy chat --agent <genie on
     # gpt-oss:20b> -i --yolo` under a headless pty, steered only through
