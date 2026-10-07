@@ -1,6 +1,6 @@
 agents:
   - name: ycode-cascade-x3
-    tool: ycode
+    tool: genie
     model: glm-5.2
     display: "cascade · glm-5.2 → terra (serves L3)"
     # Serves L3 by escalation, rendered X3 — glm-5.2 does the work and calls in

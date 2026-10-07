@@ -241,20 +241,20 @@ func TestBaselineOpencodeLaunchPutsFlagsAfterTheSubcommand(t *testing.T) {
 	}
 }
 
-func TestBaselineYcodeDeclaresProbeAndWorkspaceContracts(t *testing.T) {
+func TestBaselineYcodeAliasesGenieLaunch(t *testing.T) {
 	ycode, ok := baseline(t).Tool("ycode")
 	if !ok {
 		t.Fatal("baseline ycode missing")
 	}
-	if got := strings.Join(ycode.VersionProbeArgv(), " "); got != "ycode version" {
-		t.Fatalf("ycode version probe = %q", got)
+	if ycode.CLI.Binary != "bashy" {
+		t.Fatalf("ycode binary = %q, want bashy", ycode.CLI.Binary)
 	}
-	argv := strings.Join(ycode.ArgvWithWorkspace("/tmp/weave-work", "deepseek-v4-pro", "task"), "\x00")
-	if !strings.Contains(argv, "--session-dir\x00/tmp/weave-work/.git/ycode-sessions") {
-		t.Fatalf("workspace session binding missing: %q", argv)
-	}
-	if direct := strings.Join(ycode.Argv("deepseek-v4-pro", "task"), " "); direct != "ycode --danger-skip-permissions prompt --model deepseek-v4-pro --print task" {
+	if direct := strings.Join(ycode.Argv("deepseek-v4-pro", "task"), " "); direct != "bashy genie -m deepseek-v4-pro task" {
 		t.Fatalf("direct ycode argv changed: %q", direct)
+	}
+	steerArgv, ok := ycode.SteerArgvPrefix("deepseek-v4-pro")
+	if !ok || strings.Join(steerArgv, " ") != "ycode -m deepseek-v4-pro" {
+		t.Fatalf("steer ycode argv = %q, supported=%t", steerArgv, ok)
 	}
 }
 

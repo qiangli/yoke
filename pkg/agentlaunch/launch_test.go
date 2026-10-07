@@ -48,6 +48,28 @@ func TestResolveWithCatalogUsesProviderSideModelID(t *testing.T) {
 	}
 }
 
+func TestYcodeModelAliasResolvesToGenieBackend(t *testing.T) {
+	fleettest.Ring(t)
+	t.Setenv(UnsafeLaunchEnv, "1")
+	l, err := ResolveWithCatalog("ycode:glm-5.3", Options{}, NewCatalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.ToolName != "genie" {
+		t.Fatalf("ycode alias resolved to %+v, want genie via bashy", l)
+	}
+	want := []string{"bashy", "genie", "-m", l.Model, "pong"}
+	if got := l.Argv("pong"); !slices.Equal(got, want) {
+		t.Fatalf("ycode alias argv = %q, want %q", got, want)
+	}
+	if _, ok := SeededProfiles["genie"]; ok {
+		t.Fatal("genie unexpectedly has a seeded profile; fleet template owns its launch")
+	}
+	if _, ok := SeededProfiles["ycode"]; ok {
+		t.Fatal("obsolete external-ycode seeded profile remains")
+	}
+}
+
 func TestResolveAgGeminiVariantsUsesRegistryIDsWithoutEffortFlag(t *testing.T) {
 	fleettest.Ring(t)
 	t.Setenv(UnsafeLaunchEnv, "1")
@@ -78,7 +100,6 @@ func TestDangerousPermissionFlagsAreCanonicalAndSingular(t *testing.T) {
 		"claude":   "--dangerously-skip-permissions",
 		"agy":      "--dangerously-skip-permissions",
 		"opencode": "--auto",
-		"ycode":    "--danger-skip-permissions",
 	}
 	for toolName, wantFlag := range want {
 		for _, steer := range []bool{false, true} {
@@ -202,7 +223,7 @@ func TestManagedSprintOwnerProfilesResolveWithExplicitUnsafeAuthorization(t *tes
 		{agent: "codex-gpt5.6-sol", tool: "codex"},
 		{agent: "agy-opus4.6", tool: "agy"},
 		{agent: "opencode-kimi-k3", tool: "opencode"},
-		{agent: "ycode-gpt5.6-sol", tool: "ycode"},
+		{agent: "ycode-gpt5.6-sol", tool: "genie"},
 	} {
 		t.Run(tc.tool, func(t *testing.T) {
 			l, err := ResolveWithCatalog(tc.agent, Options{

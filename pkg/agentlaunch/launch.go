@@ -161,7 +161,6 @@ var SeededProfiles = map[string]LaunchProfile{
 	"agy":      {Args: []string{"--print-timeout", "40m", "-p"}, UnsafeArgs: []string{"--dangerously-skip-permissions"}},
 	"opencode": {Args: []string{"run"}, UnsafeArgs: []string{"--auto"}, UnsafeArgsAfter: true},
 	"aider":    {Args: []string{"--no-git", "--message"}, UnsafeArgs: []string{"--yes-always"}},
-	"ycode":    {Args: []string{"prompt", "--print"}, UnsafeArgs: []string{"--danger-skip-permissions"}},
 }
 
 var NewCatalog = func() *fleet.Catalog { return fleet.New() }
@@ -189,6 +188,11 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 		toolName, modelName = t, m
 	} else {
 		toolName = name
+	}
+	// Fleet keeps the historical ycode:MODEL spelling as a compatibility
+	// alias. Its launch is the genie backend; ycode itself is the human UI.
+	if toolName == "ycode" {
+		toolName = "genie"
 	}
 	lnch.Tool, lnch.ToolName = toolName, toolName
 
@@ -750,7 +754,6 @@ var canonicalUnsafeFlag = map[string]string{
 	"agy":      "--dangerously-skip-permissions",
 	"opencode": "--auto",
 	"aider":    "--yes-always",
-	"ycode":    "--danger-skip-permissions",
 }
 
 // normalizeUnsafeFlags makes a fleet template's dangerous-permission request

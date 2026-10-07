@@ -1,6 +1,6 @@
 agents:
   - name: ycode-cascade-claude-x3
-    tool: ycode
+    tool: genie
     model: glm-5.2
     display: "cascade · glm-5.2 → opus4.8 (serves L3)"
     band: 3

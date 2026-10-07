@@ -1,6 +1,6 @@
 agents:
   - name: ycode-deepseek-v4.1-flash
-    tool: ycode
+    tool: genie
     model: deepseek-v4.1-flash
     display: "ycode · deepseek-v4.1-flash"
     ledger:

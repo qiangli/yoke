@@ -1,6 +1,6 @@
 agents:
   - name: ycode-opus4.8
-    tool: ycode
+    tool: genie
     model: opus4.8
     display: "ycode · opus4.8"
     ledger:

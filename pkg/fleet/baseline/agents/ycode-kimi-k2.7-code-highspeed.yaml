@@ -1,6 +1,6 @@
 agents:
   - name: ycode-kimi-k2.7-code-highspeed
-    tool: ycode
+    tool: genie
     model: kimi-k2.7-code-highspeed
     display: "ycode · kimi-k2.7-code-highspeed"
     ledger:

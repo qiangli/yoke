@@ -73,10 +73,7 @@ func TestBaselineClaudeForksCodexDoesNot(t *testing.T) {
 	if !claude.CanFork() {
 		t.Fatal("baseline claude should declare fork_exec (delegate self relies on it)")
 	}
-	// ycode is first-party and now ships a headless --fork, so it forks too.
-	if ycode, ok := cat.Tool("ycode"); ok && !ycode.CanFork() {
-		t.Fatal("baseline ycode should declare fork_exec (its --fork inherits the session transcript)")
-	}
+	// Fleet ycode aliases genie, whose sessions are managed by bashy.
 	if codex, ok := cat.Tool("codex"); ok && codex.CanFork() {
 		t.Fatal("codex must NOT declare a fork — its headless resume mutates the parent thread")
 	}

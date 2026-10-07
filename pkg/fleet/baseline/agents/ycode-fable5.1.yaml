@@ -1,6 +1,6 @@
 agents:
   - name: ycode-fable5.1
-    tool: ycode
+    tool: genie
     model: fable5.1
     display: "ycode · fable5.1"
     ledger:

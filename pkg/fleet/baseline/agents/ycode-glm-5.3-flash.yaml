@@ -1,6 +1,6 @@
 agents:
   - name: ycode-glm-5.3-flash
-    tool: ycode
+    tool: genie
     model: glm-5.3-flash
     display: "ycode · glm-5.3-flash"
     ledger:

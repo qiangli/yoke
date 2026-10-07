@@ -166,16 +166,12 @@ func TestBaselineToolsStayOnTheRungTheyAreOnToday(t *testing.T) {
 // DECLARED is not EFFECTIVE, and the baseline catalog is where that stops being
 // theoretical.
 //
-// Both ACP-declaring tools were measured on the wire, not asserted: `opencode
-// acp` in run #190, `ycode acp` after run #24 merged. With the opt-in gate off
-// each is still driven on the rung it was on before ACP existed — and they fall
-// to DIFFERENT rungs, which is the point of the ladder being a ladder:
+// opencode ACP was measured on the wire in run #190. Ycode's ACP entry now
+// routes through `bashy ycode acp`; it no longer declares the retired external
+// CLI's events file. With the opt-in gate off both fall to pty:
 //
 //	opencode  declares acp only            -> gate off: pty
-//	ycode     declares acp AND events      -> gate off: events
-//
-// A single-step fallback would have collapsed both to pty and quietly cost
-// ycode its structured turn boundaries.
+//	ycode     declares acp only             -> gate off: pty
 func TestOpencodeDeclaresACPButIsGatedUntilOptedIn(t *testing.T) {
 	cat := fleet.New(fleet.WithRoot(t.TempDir()))
 	for _, tc := range []struct {
@@ -183,7 +179,7 @@ func TestOpencodeDeclaresACPButIsGatedUntilOptedIn(t *testing.T) {
 		whenGateOff Rung
 	}{
 		{"opencode", RungPTY}, // no events_arg: falls all the way to pty
-		{"ycode", RungEvents}, // has events_arg: falls one step, to events
+		{"ycode", RungPTY},    // genie backend declares ACP only; no external events file
 	} {
 		tool, ok := cat.Tool(tc.name)
 		if !ok {

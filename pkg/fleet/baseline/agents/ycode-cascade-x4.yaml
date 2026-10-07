@@ -1,6 +1,6 @@
 agents:
   - name: ycode-cascade-x4
-    tool: ycode
+    tool: genie
     # Nominal binding (= the base's model) so the catalog resolves it like any
     # agent; the cascade behavior is driven by base + escalation below.
     model: glm-5.2

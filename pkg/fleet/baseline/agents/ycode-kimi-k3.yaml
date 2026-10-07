@@ -1,6 +1,6 @@
 agents:
   - name: ycode-kimi-k3
-    tool: ycode
+    tool: genie
     model: kimi-k3
     display: "ycode · kimi-k3"
     ledger:

@@ -1,6 +1,6 @@
 agents:
   - name: ycode-gpt5.6-sol
-    tool: ycode
+    tool: genie
     model: gpt5.6-sol
     display: "ycode · gpt5.6-sol"
     ledger:
