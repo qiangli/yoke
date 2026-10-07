@@ -25,6 +25,8 @@ var githubAPI = "https://api.github.com"
 // digest in pins.go, where the trust root is this repo's reviewed history rather
 // than the downloaded release. See Ensure and pins.go.
 type GitHubSpec struct {
+	// RequireArchive needs retained archive metadata; a legacy extracted binary alone is insufficient.
+	RequireArchive bool
 	// Name is the logical tool name — the cache key and the cached binary name.
 	Name string
 	// Repo is "owner/repo" (e.g. "go-gitea/gitea").
@@ -63,6 +65,12 @@ func ResolveGitHub(ctx context.Context, spec GitHubSpec) (Tool, error) {
 	if spec.Name == "" || spec.Repo == "" {
 		return Tool{}, fmt.Errorf("binmgr: github spec needs name and repo")
 	}
+	if cached, ok := cachedGitHubTool(spec); ok {
+		return cached, nil
+	}
+	if Offline() {
+		return Tool{}, offlineMissing(spec.Name, spec.Version)
+	}
 	rel, err := fetchRelease(ctx, spec.Repo, spec.Version)
 	if err != nil {
 		return Tool{}, err
@@ -92,13 +100,15 @@ func ResolveGitHub(ctx context.Context, spec GitHubSpec) (Tool, error) {
 	if err != nil {
 		return Tool{}, err
 	}
-	return Tool{
+	tool := Tool{
 		Name:    spec.Name,
 		Version: rel.TagName,
 		Assets: map[string]Asset{
 			Platform(): {URL: asset.URL, SHA256: sha, MD5: md5sum, Binary: spec.Member, Tree: spec.Tree, Entrypoint: spec.Entrypoint},
 		},
-	}, nil
+	}
+	rememberGitHubTool(spec, tool)
+	return tool, nil
 }
 
 func fetchRelease(ctx context.Context, repo, version string) (*ghRelease, error) {
@@ -258,6 +268,9 @@ func digestForFile(checksums, filename string, re *regexp.Regexp) string {
 }
 
 func httpGetBody(ctx context.Context, url, accept string) ([]byte, error) {
+	if Offline() {
+		return nil, fmt.Errorf("binmgr: BASHY_OFFLINE=1 refuses network lookup %s", url)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err

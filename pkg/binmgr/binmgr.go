@@ -63,9 +63,11 @@ type Asset struct {
 // Tool is a managed external binary: a logical name, a version (the cache key),
 // and per-platform assets keyed by "goos/goarch" (e.g. "linux/amd64").
 type Tool struct {
-	Name    string           `json:"name"`
-	Version string           `json:"version"`
-	Assets  map[string]Asset `json:"assets"`
+	cachedPath string
+	cachedName string
+	Name       string           `json:"name"`
+	Version    string           `json:"version"`
+	Assets     map[string]Asset `json:"assets"`
 }
 
 // Platform returns the current "goos/goarch" key.
@@ -99,18 +101,20 @@ func BinaryName(name string) string { return binaryName(name) }
 // version wins), or "" when none is cached. A hot-path caller uses it to skip
 // version resolution + network entirely: Ensure lays tools out at
 // <CacheDir>/<name>/<version>/<binaryName>. Both raw-binary and Tree entrypoints
-// whose entrypoint basename equals the tool name are found.
+// whose entrypoint basename equals the tool name are found. Product executables
+// extracted together by EnsureMembers are also discoverable.
 func CachedBinary(name string) string {
 	root, err := CacheDir()
 	if err != nil {
 		return ""
 	}
-	// This package writes managed tools two ways, and a lookup that knows only
+	// This package writes managed tools in several layouts; a lookup knowing only
 	// one of them silently reports "not installed" for a binary sitting in the
 	// cache:
 	//
 	//   Ensure           -> <root>/<name>/<version>/<binary>   (version-pinned)
 	//   ProvisionManaged -> <root>/<binary>                    (latest-wins)
+	//   EnsureMembers    -> <root>/bashy-archive/<version>/members-<hash>/<binary>
 	//
 	// podman, ollama and the other engine tools come from ProvisionManaged, so
 	// globbing only the versioned form missed every one of them — callers then
@@ -118,11 +122,17 @@ func CachedBinary(name string) string {
 	// and cost a host its container runtime when that PATH was regenerated
 	// without the usual package-manager prefixes.
 	//
-	// Both layouts are searched here so this stays the single answer to "where
-	// is managed tool X"; newest mtime wins across both, so a freshly-pinned
+	// These layouts are searched here so this stays the single answer to "where
+	// is managed tool X"; newest mtime wins across them, so a freshly-pinned
 	// version supersedes an older flat drop and vice versa. Callers must not
 	// reconstruct either path themselves.
 	candidates, _ := filepath.Glob(filepath.Join(root, name, "*", binaryName(name)))
+	switch name {
+	case "bashy", "outpost", "bash", "sh":
+		paired, _ := filepath.Glob(filepath.Join(root, "bashy-archive", "*", "members-*", binaryName(name)))
+		candidates = append(candidates, paired...)
+	}
+
 	if flat := filepath.Join(root, binaryName(name)); flat != "" {
 		candidates = append(candidates, flat)
 	}
@@ -147,6 +157,9 @@ func Ensure(ctx context.Context, t Tool) (string, error) {
 	if t.Name == "" || t.Version == "" {
 		return "", fmt.Errorf("binmgr: tool name and version are required")
 	}
+	if t.cachedName == t.Name && t.cachedPath != "" && isExecutable(t.cachedPath) {
+		return t.cachedPath, nil
+	}
 	asset, ok := t.Assets[Platform()]
 	if !ok || asset.URL == "" {
 		return "", fmt.Errorf("binmgr: %s %s has no asset for %s", t.Name, t.Version, Platform())
@@ -165,6 +178,9 @@ func Ensure(ctx context.Context, t Tool) (string, error) {
 	}
 	if isExecutable(dest) {
 		return dest, nil // cache hit — no network
+	}
+	if Offline() {
+		return "", offlineMissing(t.Name, t.Version)
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
@@ -253,6 +269,9 @@ func Ensure(ctx context.Context, t Tool) (string, error) {
 }
 
 func download(ctx context.Context, url string, w io.Writer) (sha, sha512sum, md5sum string, err error) {
+	if Offline() {
+		return "", "", "", fmt.Errorf("binmgr: BASHY_OFFLINE=1 refuses download %s", url)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", "", "", err

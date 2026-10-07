@@ -69,6 +69,9 @@ func ProvisionManaged(ctx context.Context, spec ManagedSpec) (string, error) {
 	if isExecFile(dest) {
 		return dest, nil // 1. cache hit
 	}
+	if Offline() {
+		return "", offlineMissing(spec.Name, "managed")
+	}
 	for _, dep := range spec.Deps {
 		if dep.DestDir == "" {
 			dep.DestDir = dir
