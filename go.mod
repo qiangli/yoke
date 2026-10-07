@@ -11,6 +11,7 @@ require (
 	github.com/chromedp/cdproto v0.0.0-20260321001828-e3e3800016bc
 	github.com/chromedp/chromedp v0.15.1
 	github.com/coder/acp-go-sdk v0.13.5
+	github.com/coder/websocket v1.8.14
 	github.com/creack/pty/v2 v2.0.1
 	github.com/dhnt/dhnt v0.2.0-alpha.3.0.20260619230448-ddbed43582c0
 	github.com/ebitengine/purego v0.10.1
