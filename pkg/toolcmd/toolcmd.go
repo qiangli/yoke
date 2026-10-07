@@ -37,6 +37,7 @@ const DefaultTimeout = 30 * time.Minute
 
 // Options tune one command run.
 type Options struct {
+	Catalog *fleet.Catalog
 	// Dir is the working directory. Empty = a fresh temp dir (kept when the
 	// command collects file artifacts, removed otherwise).
 	Dir string

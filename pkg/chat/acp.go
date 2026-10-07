@@ -109,7 +109,11 @@ func startACPSession(ctx context.Context, agent string, opt SessionOptions) (*Se
 		// exactly as it did before ACP existed.
 		return nil, false, nil
 	}
-	tool, known := newCatalog().Tool(l.ToolName)
+	catalog := newCatalog()
+	if opt.Catalog != nil {
+		catalog = opt.Catalog
+	}
+	tool, known := catalog.Tool(l.ToolName)
 	if !known || !agentlaunch.EffectiveRung(tool.CLI.Launch).IsACP() {
 		return nil, false, nil
 	}

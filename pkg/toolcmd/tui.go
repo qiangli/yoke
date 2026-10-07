@@ -193,8 +193,9 @@ func runTUI(ctx context.Context, tool fleet.Tool, cmd fleet.ToolCommand, args st
 		}
 	}
 	sess, err := startTUISession(runCtx, agent, chat.SessionOptions{
-		Cwd:    dir,
-		Stream: opts.Stdout,
+		Catalog: opts.Catalog,
+		Cwd:     dir,
+		Stream:  opts.Stdout,
 		// agentpty's own MaxRuntime is the backstop behind runCtx.
 		Timeout: timeout + time.Minute,
 		Mode:    "toolcmd",

@@ -55,6 +55,13 @@ func (t Tool) ValidateCommands() (errs []error, warns []string) {
 		bad := func(format string, a ...any) {
 			errs = append(errs, fmt.Errorf("tool %s: command %s: %s", t.Name, label, fmt.Sprintf(format, a...)))
 		}
+		seenEffects := map[string]bool{}
+		for _, effect := range c.Effects {
+			if strings.TrimSpace(effect) != effect || effect == "" || seenEffects[effect] {
+				bad("invalid or duplicate effect %q", effect)
+			}
+			seenEffects[effect] = true
+		}
 		if c.Name == "" {
 			bad("name is empty")
 		} else if seen[c.Name] {

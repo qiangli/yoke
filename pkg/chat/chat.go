@@ -39,7 +39,9 @@ const schemaVersion = "bashy-chat-v1"
 // Options describes one unattended agent invocation. It is exported so workflow
 // commands such as sdlc can use the same primitive as human operators.
 type Options struct {
-	Agent       string
+	Agent string
+	// Catalog pins fleet resolution for an embedded caller. Nil uses the host catalog.
+	Catalog     *fleet.Catalog
 	Role        string
 	Task        string
 	Instruction string
@@ -787,7 +789,11 @@ func resolveLaunch(name string, opt Options) (Launch, error) {
 	prevContainerized := agentlaunch.Containerized
 	agentlaunch.Containerized = containerized
 	defer func() { agentlaunch.Containerized = prevContainerized }()
-	l, err := agentlaunch.ResolveWithCatalog(name, toAgentLaunchOptions(opt), newCatalog)
+	catalog := newCatalog
+	if opt.Catalog != nil {
+		catalog = func() *fleet.Catalog { return opt.Catalog }
+	}
+	l, err := agentlaunch.ResolveWithCatalog(name, toAgentLaunchOptions(opt), catalog)
 	return fromAgentLaunch(l), err
 }
 
@@ -1126,7 +1132,11 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 		// ycode exposes the same structured stream through a file side-channel
 		// rather than stdout. Ask for that channel here too; the runner bridge
 		// below follows it into Stream while the process is alive.
-		if extra := agentlaunch.EventFileArgsWithCatalog(toAgentLaunch(lnch), "<events>", newCatalog); len(extra) > 0 {
+		catalog := newCatalog
+		if opt.Catalog != nil {
+			catalog = func() *fleet.Catalog { return opt.Catalog }
+		}
+		if extra := agentlaunch.EventFileArgsWithCatalog(toAgentLaunch(lnch), "<events>", catalog); len(extra) > 0 {
 			if !opt.DryRun {
 				dir, mkErr := os.MkdirTemp("", "bashy-chat-events-")
 				if mkErr != nil {
@@ -1134,7 +1144,7 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 				}
 				defer os.RemoveAll(dir)
 				eventPath = filepath.Join(dir, "events.ndjson")
-				extra = agentlaunch.EventFileArgsWithCatalog(toAgentLaunch(lnch), eventPath, newCatalog)
+				extra = agentlaunch.EventFileArgsWithCatalog(toAgentLaunch(lnch), eventPath, catalog)
 			}
 			args = agentlaunch.InsertBeforePrompt(args, extra)
 		}

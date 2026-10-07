@@ -17,6 +17,7 @@ import (
 	"github.com/qiangli/yoke/pkg/agentlaunch"
 	"github.com/qiangli/yoke/pkg/agentpty"
 	"github.com/qiangli/yoke/pkg/bus"
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/llmbudget"
 	"github.com/qiangli/yoke/pkg/room"
 )
@@ -102,6 +103,7 @@ type Session struct {
 
 // SessionOptions configures a live agent session.
 type SessionOptions struct {
+	Catalog *fleet.Catalog
 	// Prompt opens the conversation. A tool whose steerable launch takes a prompt
 	// on the command line (agy -i) gets it there; one that opens an empty session
 	// (codex, opencode) is SENT it over the control channel once it is up, which
@@ -176,6 +178,7 @@ type SessionOptions struct {
 // session comes to be resolved as attended and governed as something else.
 func (o SessionOptions) launchOptions() Options {
 	return Options{
+		Catalog:  o.Catalog,
 		Cwd:      o.Cwd,
 		ReadOnly: o.ReadOnly,
 		// ReadOnly is stricter and wins — same precedence as Interact.
@@ -265,10 +268,14 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 	id := agentID(l)
 
 	var tail *eventTail
-	if tl, ok := newCatalog().Tool(l.ToolName); ok && tl.ReportsTurnEnd() {
+	catalog := newCatalog()
+	if opt.Catalog != nil {
+		catalog = opt.Catalog
+	}
+	if tl, ok := catalog.Tool(l.ToolName); ok && tl.ReportsTurnEnd() {
 		evPath, err := sessionEventsPath(id)
 		if err == nil {
-			if extra := agentlaunch.EventFileArgsWithCatalog(toAgentLaunch(l), evPath, newCatalog); len(extra) > 0 {
+			if extra := agentlaunch.EventFileArgsWithCatalog(toAgentLaunch(l), evPath, func() *fleet.Catalog { return catalog }); len(extra) > 0 {
 				argv = append(argv, extra...)
 				tail = &eventTail{path: evPath}
 			}

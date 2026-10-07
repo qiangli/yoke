@@ -67,7 +67,15 @@ func planPrint(tool fleet.Tool, cmd fleet.ToolCommand, args string, opts Options
 	}
 	model := ""
 	if strings.Contains(cmd.Exec, fleet.ModelToken) {
-		m, err := resolveModel(p.Agent)
+		var m string
+		var err error
+		if opts.Catalog != nil {
+			var launch agentlaunch.Launch
+			launch, err = agentlaunch.ResolveWithCatalog(p.Agent, agentlaunch.Options{DryRun: true}, func() *fleet.Catalog { return opts.Catalog })
+			m = launch.Model
+		} else {
+			m, err = resolveModel(p.Agent)
+		}
 		if err != nil {
 			return p, fmt.Errorf("toolcmd: %s:%s: resolve model: %w", tool.Name, cmd.Name, err)
 		}
@@ -199,6 +207,7 @@ func runPrint(ctx context.Context, tool fleet.Tool, cmd fleet.ToolCommand, args 
 
 	copt := chat.Options{
 		Agent:       plan.Agent,
+		Catalog:     opts.Catalog,
 		Instruction: plan.Slash,
 		Cwd:         dir,
 		DryRun:      opts.DryRun,
