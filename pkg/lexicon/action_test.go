@@ -327,7 +327,7 @@ func TestAction_RegisteredCommandFacet(t *testing.T) {
 		Contract: ContractNone, Latitude: LatitudeExact, Authority: AuthorityDeterministic,
 		EffectsDeclared: atlas.ProjectEffects([]string{atlas.EffExec, atlas.EffRead}),
 		AtlasEffects:    []string{atlas.EffExec, atlas.EffRead},
-		// Derived from the author's declared effects: an exec'd command is
+		// Uncurated commands default to the worst case: an exec'd command is
 		// irreversible (its child is ungoverned past the execve).
 		Reversibility: atlas.RevIrreversible,
 		Executor:      ExecutorRegistered, Envelope: EnvelopeRun, Scope: ScopeGeneric,

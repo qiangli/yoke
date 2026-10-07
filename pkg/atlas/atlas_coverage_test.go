@@ -158,7 +158,7 @@ func TestReversibilityCoverageAndConsistency(t *testing.T) {
 }
 
 // The curated classes a policy engine and a replay planner key off: the design
-// examples (readonly ls/true, idempotent mkdir, compensable create/store rows,
+// examples (readonly ls/true, idempotent mkdir, compensable fresh-create rows,
 // irreversible rm/mv/git push/spend), pinned so a reclassification is a
 // deliberate edit here. chmod is pinned IRREVERSIBLE: compensating an in-place
 // mode change needs the prior mode, which no atlas row captures.
@@ -169,7 +169,7 @@ func TestReversibilitySpotClasses(t *testing.T) {
 		"cat":    atlas.RevReadonly,
 		"mkdir":  atlas.RevIdempotent,
 		"link":   atlas.RevCompensable,  // fresh create, fails-not-clobbers → remove to compensate
-		"sprint": atlas.RevCompensable,  // restorable store
+		"sprint": atlas.RevIrreversible, // whole command includes destructive lifecycle operations
 		"chmod":  atlas.RevIrreversible, // in-place mode change, prior mode not captured
 		"touch":  atlas.RevIrreversible, // in-place mtime change on an existing file
 		"rm":     atlas.RevIrreversible,

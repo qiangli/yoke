@@ -1649,36 +1649,20 @@ func init() {
 	// idempotent — mutating but re-run converges, no cleanup (mkdir -p-shaped).
 	rev(RevIdempotent, "mkdir")
 
-	// compensable — no inverse, but a compensating action reliably restores the
-	// goal state WITHOUT depending on prior state the atlas does not capture.
-	// The bar is deliberately narrow: a fresh create that FAILS rather than
-	// clobbers (compensate by deleting it), a durable append-only soft-delete
-	// store (compensate by forgetting the entry), a reversible self-upgrade
-	// (re-pin the prior release). An in-place change to an existing object
-	// (chmod/chown, touch's mtime, stty, a clobbering write) is NOT here — its
-	// compensation needs the prior value, which no row captures, so the
-	// worst case is irreversible (see below).
-	rev(RevCompensable,
-		// pure create: POSIX link/mkfifo/mknod fail if the target exists (no
-		// clobber), mktemp mints a fresh unique name — compensate by removing
-		// the freshly created node; no prior state is destroyed.
-		"link", "mkfifo", "mknod", "mktemp",
-		// durable append-only wiki: writes append, forget soft-deletes, and the
-		// log retains superseded records — compensate by forgetting the entry.
-		"graph",
-		// verbs: read+write stores whose prior state is retained and restorable
-		// (supersede-not-delete / versioned), and the self-upgrade path
-		// (re-pin to the prior release).
-		"sprint", "capability", "leaderboard", "person", "handoff", "resume",
-		"kb", "lexicon", "claim", "steward", "todo", "secret", "ask",
-		"self", "bootstrap", "upgrade",
-	)
+	// Compensable fresh creates fail rather than clobber an existing target.
+	// Removing the newly created node compensates their persistent change.
+	rev(RevCompensable, "link", "mkfifo", "mknod", "mktemp")
 
 	// irreversible — destruction, metered spend, a sent/durable message, a
 	// history rewrite, an in-place edit that can lose data, a clobber-by-design
 	// copy/move, or an ungoverned child process that can do any of these (the
 	// worst case for every exec wrapper).
 	rev(RevIrreversible,
+		// Whole command rows include deletion, replacement, migration, or lifecycle
+		// operations. No per-invocation prior state or recovery guarantee exists.
+		"graph", "sprint", "capability", "leaderboard", "person", "handoff", "resume",
+		"kb", "lexicon", "claim", "steward", "todo", "secret", "ask",
+		"self", "bootstrap", "upgrade",
 		// destructive data loss
 		"dd", "rm", "shred", "truncate", "unlink", "mail", "mailx",
 		// clobber-by-design copy/move/overwrite/link, in-place edits
