@@ -77,6 +77,11 @@ func RegisteredEntry(s RegisteredSpec) Entry {
 	e.Caps = dedupSorted(e.Caps)
 	e.Effects = dedupSorted(e.Effects)
 	sort.Strings(e.OS)
+	// Reversibility is derived from the author's declared effects + the kind's
+	// caps the same way Effects are left as declared — curated-never-inferred
+	// holds for a record the operator wrote, and a conservative worst-case class
+	// keeps an under-declared registered command from reading as safe.
+	e.Reversibility = DeriveReversibility(e.Effects, e.Caps)
 	return e
 }
 

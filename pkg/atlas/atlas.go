@@ -27,6 +27,7 @@ package atlas
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -139,6 +140,49 @@ const (
 	EffSpend   = "spend"   // incurs metered cost (paid inference, cloud resources)
 )
 
+// Reversibility is the row's undo/replay class (amendment A2): what an action
+// record, an undo/redo map, or a replay engine may do with an invocation of
+// this command. It is a CLOSED, curated vocabulary — never inferred for a
+// hand-listed table row — and is coverage-ratcheted exactly like Effects: an
+// unclassified row fails the ratchet, it does not fail open. The class is the
+// row's WORST CASE over its whole flag/precondition surface (the same
+// convention as MaximumEffects): generic `mv` is irreversible because one
+// invocation clobbers an existing destination, even though `mv -n` to a fresh
+// path is not. Per-invocation refinement (`rm -i` vs `rm -rf`) belongs to the
+// Sprint 286 D1 action record, never to the atlas.
+//
+// Design of record:
+// dhnt/docs/bashsharp-effect-decorators-amendment-2026-10.md (Sprint 381 S4,
+// amendment A2).
+const (
+	// RevReadonly — no persistent state mutation; nothing to undo. A readonly
+	// row is trivially idempotent too, but the vocabulary keeps the classes
+	// distinct because they answer orthogonal questions (does the row mutate at
+	// all? what may undo/replay do with it?): classification is by category
+	// priority — a row that mutates nothing is readonly even though the
+	// idempotence predicate also holds — never a claim that idempotence requires
+	// mutation.
+	RevReadonly = "readonly"
+	// RevIdempotent — mutating, but re-running converges to the same state with
+	// no cleanup needed (mkdir -p-shaped). Still scheduled and recorded as a
+	// write even though re-running converges.
+	RevIdempotent = "idempotent"
+	// RevReversible — a GUARANTEED exact inverse exists for EVERY invocation
+	// across the row's whole flag surface. Under the worst-case convention this
+	// is expected rare or empty at row level; a specific reversible invocation
+	// is established in the D1 action record instead.
+	RevReversible = "reversible"
+	// RevCompensable — no inverse, but a compensating action RELIABLY restores
+	// the goal state across the whole flag surface (resource create → delete,
+	// git commit → revert, chmod → restore the prior mode).
+	RevCompensable = "compensable"
+	// RevIrreversible — neither an inverse nor a reliable compensation. The
+	// conservative worst case: destruction, metered spend, a sent/durable
+	// message, a history rewrite, an in-place edit that can lose data, or an
+	// ungoverned child process that can do any of these.
+	RevIrreversible = "irreversible"
+)
+
 // Subclass refines the verb class only.
 const (
 	SubclassProvisioner     = "provisioner"
@@ -182,11 +226,15 @@ type Entry struct {
 	Subclass string      // verbs only: provisioner | managed-external | ""
 	Caps     []string
 	Effects  []string // security effects (closed vocab); every entry has ≥1
-	AliasOf  string   // e.g. docker → podman, upgrade → self
-	Origin   string   // provenance (closed vocab, exclusive); every entry has one
-	Posix    bool     // one of the 116 POSIX-required names (cross-cuts Origin)
-	OS       []string // platforms the command is supported on (closed vocab; platform.go)
-	Partial  []string // supported platforms where it runs with a documented gap
+	// Reversibility is the row's undo/replay class (closed vocab; curated, never
+	// inferred for a table row; coverage-ratcheted like Effects). Worst case over
+	// the whole flag surface. See the Rev* constants and ReversibilityConsistency.
+	Reversibility string
+	AliasOf       string   // e.g. docker → podman, upgrade → self
+	Origin        string   // provenance (closed vocab, exclusive); every entry has one
+	Posix         bool     // one of the 116 POSIX-required names (cross-cuts Origin)
+	OS            []string // platforms the command is supported on (closed vocab; platform.go)
+	Partial       []string // supported platforms where it runs with a documented gap
 
 	// Web declares a browser UI, and is how `bashy web-console` discovers what
 	// to put on the start page without a hardcoded table. Nil = no web surface.
@@ -301,6 +349,83 @@ func Effects() []string {
 	}
 }
 
+// Reversibilities returns the closed reversibility vocabulary in increasing
+// severity (what undo/replay may safely do, most permissive to least):
+// readonly, idempotent, reversible, compensable, irreversible. The order IS the
+// severity ladder, so it is deliberately not sorted alphabetically.
+func Reversibilities() []string {
+	return []string{RevReadonly, RevIdempotent, RevReversible, RevCompensable, RevIrreversible}
+}
+
+// DeriveReversibility computes a conservative worst-case reversibility class
+// from the effects and caps of a DERIVED entry — a declarative-registry CLI
+// (RegistryEntry) or an operator-registered command (RegisteredEntry) — exactly
+// as those entries derive their Effects from data rather than a hand-listed
+// table row. It is NEVER used for a curated table row (those are classified by
+// hand via rev()). The derivation is worst-case-safe: metered spend, a
+// destructive effect, or an ungoverned child process is irreversible; any other
+// mutation is compensable; a row that only reads/queries is readonly. The
+// result always satisfies ReversibilityConsistency.
+func DeriveReversibility(effects, caps []string) string {
+	switch {
+	case slices.Contains(effects, EffSpend):
+		return RevIrreversible
+	case slices.Contains(effects, EffDestroy) || slices.Contains(caps, CapDestructive):
+		return RevIrreversible
+	case slices.Contains(effects, EffExec) || slices.Contains(caps, CapSpawnsProcesses):
+		// An exec'd / process-spawning external is ungoverned past the execve;
+		// its worst case is anything the child can do.
+		return RevIrreversible
+	case slices.Contains(effects, EffWrite) || slices.Contains(effects, EffPersist) ||
+		slices.Contains(effects, EffPriv) || slices.Contains(effects, EffRemote):
+		return RevCompensable
+	default:
+		return RevReadonly
+	}
+}
+
+// ReversibilityConsistency enforces the amendment §4 rules on one entry's
+// curated class against its declared effects and caps, in the design's order.
+// It returns a non-nil error describing the first contradiction, or nil when
+// the class is valid and consistent. It is the predicate the coverage test
+// pins. The rules are worst-case-safe: they force a class far enough UP the
+// severity ladder (metered spend, destruction) and reject a readonly claim that
+// in fact mutates, destroys, or incurs a charge — but they never pick a class,
+// which is rev()'s curation. EffPure / CapReadOnly are evidence for a readonly
+// check, not overrides of the preceding rules.
+func ReversibilityConsistency(e Entry) error {
+	class := e.Reversibility
+	if !slices.Contains(Reversibilities(), class) {
+		return fmt.Errorf("reversibility %q not in vocabulary %v", class, Reversibilities())
+	}
+	has := func(ef string) bool { return slices.Contains(e.Effects, ef) }
+	destructive := has(EffDestroy) || slices.Contains(e.Caps, CapDestructive)
+	// Incurred spend without a guaranteed refund is irreversible.
+	if has(EffSpend) && class != RevIrreversible {
+		return fmt.Errorf("declares %q but class is %q (metered spend without a guaranteed refund is irreversible)",
+			EffSpend, class)
+	}
+	// A destructive row cannot claim anything weaker than compensable.
+	if destructive && class != RevCompensable && class != RevIrreversible {
+		return fmt.Errorf("is destructive (%s/%s) but class is %q (requires %q or %q)",
+			EffDestroy, CapDestructive, class, RevCompensable, RevIrreversible)
+	}
+	// Readonly requires no persistent mutation, destruction, or incurred charge.
+	// (Reading over the network or spawning a known-pure external does not
+	// disqualify it — remote reads may be readonly.)
+	if class == RevReadonly {
+		for _, bad := range []string{EffWrite, EffDestroy, EffPersist, EffPriv, EffSpend} {
+			if has(bad) {
+				return fmt.Errorf("class %q but declares mutating/charging effect %q", RevReadonly, bad)
+			}
+		}
+		if slices.Contains(e.Caps, CapDestructive) {
+			return fmt.Errorf("class %q but declares %q", RevReadonly, CapDestructive)
+		}
+	}
+	return nil
+}
+
 // Origins returns the closed origin vocabulary in presentation order:
 // the shell first, then the userland by how far it is from the standard,
 // then what bashy exec's, then what bashy invented.
@@ -409,6 +534,9 @@ func RegistryEntry(tier int) Entry {
 			CapCached, CapNeedsNetwork, CapSelfProvisioning, CapSpawnsProcesses,
 		},
 		Effects: effects,
+		// A managed external execs its own process (net + exec); its worst case
+		// is anything the child does — irreversible, derived not curated.
+		Reversibility: DeriveReversibility(effects, []string{CapSpawnsProcesses}),
 	}
 }
 
@@ -687,6 +815,33 @@ func eff(effect string, names ...string) {
 			continue
 		}
 		panic(fmt.Sprintf("atlas: effect %q names unknown command %q", effect, n))
+	}
+}
+
+// rev assigns the reversibility class of existing entries (tool OR verb). An
+// unknown name OR a name already classified panics, so the table self-checks at
+// init: every row is classified exactly once, by hand. The coverage ratchet
+// (atlas_coverage_test.go) asserts no row is left unclassified, and
+// ReversibilityConsistency pins the §4 rules on each assignment.
+func rev(class string, names ...string) {
+	for _, n := range names {
+		if e, ok := tools[n]; ok {
+			if e.Reversibility != "" {
+				panic(fmt.Sprintf("atlas: reversibility of %q already set to %q", n, e.Reversibility))
+			}
+			e.Reversibility = class
+			tools[n] = e
+			continue
+		}
+		if e, ok := verbs[n]; ok {
+			if e.Reversibility != "" {
+				panic(fmt.Sprintf("atlas: reversibility of %q already set to %q", n, e.Reversibility))
+			}
+			e.Reversibility = class
+			verbs[n] = e
+			continue
+		}
+		panic(fmt.Sprintf("atlas: reversibility %q names unknown command %q", class, n))
 	}
 }
 
@@ -1457,6 +1612,109 @@ func init() {
 	// and execs the staged shell for its runtime probes.
 	eff(EffRead, "posix-gate")
 	eff(EffExec, "posix-gate")
+
+	// --- reversibility classification (amendment A2) ------------------------
+	//
+	// One undo/replay class per row, curated by hand (never inferred for a table
+	// row) and worst-case over the whole flag surface. Runs over BOTH tables
+	// before the alias pass so aliasVerb copies the final class. rev() panics on
+	// an unknown or doubly-classified name; the coverage ratchet requires every
+	// row to be classified and ReversibilityConsistency pins the §4 rules. The
+	// initial census assigns no row the `reversible` class: under the worst-case
+	// convention a guaranteed exact inverse for EVERY invocation is rare, so
+	// per-invocation reversibility is established in the D1 action record, not
+	// here. See the Rev* constants.
+
+	// readonly — no persistent mutation; nothing to undo. Pure computation,
+	// local reads, time/host/terminfo queries, remote READS (ntp/sntp/fetch is
+	// not here — see below), and the fixed-purpose read-only externals (bc, m4,
+	// nm, man) whose worst case cannot mutate anything local.
+	rev(RevReadonly,
+		// pure
+		"basename", "cygpath", "wslpath", "dircolors", "dirname", "numfmt",
+		"echo", "expr", "factor", "false", "printf", "true", "seq", "sleep",
+		"yes", "sync", "duration", "cal", "ncal",
+		// filesystem / host reads
+		"df", "dir", "du", "file", "ls", "vdir", "readlink", "realpath", "tree",
+		"stat", "test", "[",
+		// textutils transforms and digests that only read their input
+		"b2sum", "base32", "base64", "basenc", "cat", "cksum", "cmp", "comm",
+		"cut", "diff", "expand", "fmt", "fold", "grep", "iconv", "head",
+		"hexdump", "join", "jq", "md5sum", "more", "nl", "od", "paste", "pr",
+		"ptx", "shuf", "sort", "strings", "sum", "tac", "tail", "tokens", "tr",
+		"tsort", "unexpand", "uniq", "uuencode", "wc", "sha1sum", "sha224sum",
+		"sha256sum", "sha384sum", "sha512sum", "zcat",
+		// host / environment / time queries
+		"arch", "atq", "date", "getconf", "groups", "hostid", "hostname", "id",
+		"logname", "locale", "nproc", "ntp", "pathchk", "pinky", "printenv",
+		"ps", "pwd", "sntp", "tput", "tabs", "tty", "tz", "uname", "uptime",
+		"users", "which", "who", "whoami",
+		// code-intel / diagnostics reads
+		"ast", "resources", "posix-gate",
+		// fixed-purpose read-only externals
+		"bc", "m4", "nm", "man",
+		// verbs that only read a store or query a remote read-only protocol
+		"stats", "whois", "search", "craft", "define", "inspect", "context",
+		"doctor", "audit", "otel", "check", "web",
+	)
+
+	// idempotent — mutating but re-run converges, no cleanup (mkdir -p-shaped).
+	rev(RevIdempotent, "mkdir")
+
+	// compensable — no inverse, but a compensating action reliably restores the
+	// goal state: ownership/mode resets, create-then-remove, regenerable
+	// outputs, a removable schedule, an append-with-soft-delete store, a
+	// reversible self-upgrade.
+	rev(RevCompensable,
+		// permission / ownership changes: restore the prior mode/owner/label
+		"chcon", "chgrp", "chmod", "chown",
+		// create-only or restorable local mutations
+		"clip", "link", "mkfifo", "mknod", "mktemp", "touch", "rmdir", "csplit",
+		"split", "uudecode", "gzip", "gunzip", "mesg", "renice", "stty",
+		// append-only wiki with soft-delete forget
+		"graph",
+		// removable schedules / regenerable outputs
+		"crontab", "atrm", "gencat", "ar", "ctags", "localedef",
+		// remote mutation is at best compensable (HTTP POST, browser actions)
+		"fetch", "browser",
+		// verbs: read+write stores whose prior state is restorable, and the
+		// self-upgrade path (re-pin to the prior release)
+		"sprint", "capability", "leaderboard", "person", "handoff", "resume",
+		"kb", "lexicon", "claim", "steward", "todo", "secret", "ask",
+		"self", "bootstrap", "upgrade",
+	)
+
+	// irreversible — destruction, metered spend, a sent/durable message, a
+	// history rewrite, an in-place edit that can lose data, a clobber-by-design
+	// copy/move, or an ungoverned child process that can do any of these (the
+	// worst case for every exec wrapper).
+	rev(RevIrreversible,
+		// destructive data loss
+		"dd", "rm", "shred", "truncate", "unlink", "mail", "mailx",
+		// clobber-by-design copy/move/overwrite/link, in-place edits
+		"cp", "mv", "ln", "tee", "tar", "pax", "sed", "ed", "patch", "ex", "vi",
+		"install",
+		// exec wrappers over an arbitrary command, process spawners
+		"find", "awk", "xargs", "at", "batch", "nice", "nohup", "stdbuf",
+		"time", "timeout", "watch", "env", "newgrp", "why",
+		// irreversible local actions / sent-or-durable messages
+		"kill", "write", "talk", "logger",
+		// fixed-purpose irreversible externals
+		"make", "strip", "lp", "posix-providers",
+		// verbs: metered spend, ungoverned processes, remote control planes,
+		// durable message buses, history-rewriting forges, registry deletions
+		"weave", "agentic", "dag", "sdlc", "chat", "invoke", "delegate",
+		"genie", "ycode", "coach", "meet", "supervise", "mb", "messages",
+		"ping", "inbox", "notify", "bus", "herald", "tool", "model", "agent",
+		"schedule", "act", "act-runner", "mirror", "mcp", "skill", "oci",
+		"podman", "docker", "sandbox", "ollama", "llm", "peer", "git",
+		"git-scm", "gh", "loom", "app", "curl", "rclone", "zot", "seaweedfs",
+		"kopia", "kubectl", "helm", "dks", "commands", "pair", "judge", "gate",
+		"conform", "verify", "run", "tessaro", "login", "sota",
+		// toolchain provisioners: download + run arbitrary code
+		"go", "cmake", "clang", "zig", "node", "npm", "npx", "pnpm", "yarn",
+		"python", "pip", "uv", "mise", "cargo", "rustc", "rustup", "rust", "pwsh",
+	)
 
 	// --- origin + posix -------------------------------------------------------
 	//

@@ -94,13 +94,17 @@ func TestAction_CommandFacet(t *testing.T) {
 			Kind: ActionCommand, Identity: "verb:" + name,
 			Contract: ContractNone, Latitude: LatitudeExact, Authority: AuthorityDeterministic,
 			EffectsDeclared: atlas.ProjectEffects(e.Effects), AtlasEffects: e.Effects,
-			Executor: ExecutorVerb, Envelope: EnvelopeRun, Scope: ScopeGeneric,
+			Reversibility: e.Reversibility,
+			Executor:      ExecutorVerb, Envelope: EnvelopeRun, Scope: ScopeGeneric,
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("%s:\n got %+v\nwant %+v", name, got, want)
 		}
 		if len(got.AtlasEffects) == 0 {
 			t.Errorf("%s: atlas effects empty — every atlas entry declares at least one", name)
+		}
+		if got.Reversibility == "" {
+			t.Errorf("%s: reversibility empty — every atlas row carries an undo/replay class", name)
 		}
 	}
 	// An alias is a term for the target's concept, so it carries the target's
@@ -121,6 +125,10 @@ func TestAction_StandardToolFacet(t *testing.T) {
 	}
 	if !contains(rm.AtlasEffects, atlas.EffDestroy) || !contains(rm.EffectsDeclared, "destroy") {
 		t.Errorf("rm must project destroy on both sides: %+v", rm)
+	}
+	// The atlas undo/replay class rides the facet: rm is irreversible.
+	if rm.Reversibility != atlas.RevIrreversible {
+		t.Errorf("rm reversibility = %q, want %q", rm.Reversibility, atlas.RevIrreversible)
 	}
 	if !contains(facetOf(t, s, "cat").EffectsDeclared, "read") {
 		t.Error("cat must declare read")
@@ -319,7 +327,10 @@ func TestAction_RegisteredCommandFacet(t *testing.T) {
 		Contract: ContractNone, Latitude: LatitudeExact, Authority: AuthorityDeterministic,
 		EffectsDeclared: atlas.ProjectEffects([]string{atlas.EffExec, atlas.EffRead}),
 		AtlasEffects:    []string{atlas.EffExec, atlas.EffRead},
-		Executor:        ExecutorRegistered, Envelope: EnvelopeRun, Scope: ScopeGeneric,
+		// Derived from the author's declared effects: an exec'd command is
+		// irreversible (its child is ungoverned past the execve).
+		Reversibility: atlas.RevIrreversible,
+		Executor:      ExecutorRegistered, Envelope: EnvelopeRun, Scope: ScopeGeneric,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("\n got %+v\nwant %+v", got, want)

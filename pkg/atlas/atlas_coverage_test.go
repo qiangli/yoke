@@ -127,6 +127,117 @@ func TestClosedVocabularies(t *testing.T) {
 	}
 }
 
+// Reversibility is MANDATORY on every row and curated, never inferred. A new
+// command that is added without a rev() line is unclassified, and unclassified
+// must fail the ratchet, not fall through — the same discipline as Effects.
+// This census spans both modules' pkg/ (ToolNames() carries coreutils'
+// certified cmds/all), so a reversibility class cannot hide on either side.
+func TestReversibilityCoverageAndConsistency(t *testing.T) {
+	vocab := sliceSet(atlas.Reversibilities())
+	check := func(names []string) {
+		for _, n := range names {
+			e, ok := atlas.Lookup(n)
+			if !ok {
+				t.Fatalf("Lookup(%q) missing for listed name", n)
+			}
+			if e.Reversibility == "" {
+				t.Errorf("%s: no reversibility class (classify it in pkg/atlas via rev())", n)
+				continue
+			}
+			if !vocab[e.Reversibility] {
+				t.Errorf("%s: reversibility %q not in vocabulary %v", n, e.Reversibility, atlas.Reversibilities())
+			}
+			// The §4 consistency rules are pinned here on every row.
+			if err := atlas.ReversibilityConsistency(e); err != nil {
+				t.Errorf("%s: %v", n, err)
+			}
+		}
+	}
+	check(atlas.ToolNames())
+	check(atlas.VerbNames())
+}
+
+// The curated classes a policy engine and a replay planner key off: the design
+// examples (readonly ls/true, idempotent mkdir, compensable chmod/git commit,
+// irreversible rm/mv/git push/spend), pinned so a reclassification is a
+// deliberate edit here.
+func TestReversibilitySpotClasses(t *testing.T) {
+	want := map[string]string{
+		"ls":     atlas.RevReadonly,
+		"true":   atlas.RevReadonly,
+		"cat":    atlas.RevReadonly,
+		"mkdir":  atlas.RevIdempotent,
+		"chmod":  atlas.RevCompensable,
+		"sprint": atlas.RevCompensable,
+		"rm":     atlas.RevIrreversible,
+		"mv":     atlas.RevIrreversible,
+		"git":    atlas.RevIrreversible, // worst case: push --force / history rewrite
+		"weave":  atlas.RevIrreversible, // metered spend
+	}
+	for name, cls := range want {
+		e, ok := atlas.Lookup(name)
+		if !ok {
+			t.Fatalf("%s is absent from atlas", name)
+		}
+		if e.Reversibility != cls {
+			t.Errorf("%s reversibility = %q, want %q", name, e.Reversibility, cls)
+		}
+	}
+}
+
+// Derived entries (registry CLIs, operator-registered commands) are NOT curated
+// table rows; their class is derived from effects/caps and must stay
+// worst-case-safe and self-consistent.
+func TestReversibilityDerivedEntries(t *testing.T) {
+	// A cloud CLI execs a process → irreversible.
+	if got := atlas.RegistryEntry(6).Reversibility; got != atlas.RevIrreversible {
+		t.Errorf("RegistryEntry(6) reversibility = %q, want %q", got, atlas.RevIrreversible)
+	}
+	// A read-only registered script derives readonly; an exec'd one irreversible.
+	ro := atlas.RegisteredEntry(atlas.RegisteredSpec{Effects: []string{atlas.EffRead}})
+	if ro.Reversibility != atlas.RevReadonly {
+		t.Errorf("read-only registered command = %q, want %q", ro.Reversibility, atlas.RevReadonly)
+	}
+	if err := atlas.ReversibilityConsistency(ro); err != nil {
+		t.Errorf("derived read-only entry inconsistent: %v", err)
+	}
+	ex := atlas.RegisteredEntry(atlas.RegisteredSpec{Kind: atlas.RegisteredExec, Effects: []string{atlas.EffRead}})
+	if ex.Reversibility != atlas.RevIrreversible {
+		t.Errorf("exec registered command = %q, want %q", ex.Reversibility, atlas.RevIrreversible)
+	}
+	dst := atlas.RegisteredEntry(atlas.RegisteredSpec{Effects: []string{atlas.EffDestroy}})
+	if dst.Reversibility != atlas.RevIrreversible {
+		t.Errorf("destructive registered command = %q, want %q", dst.Reversibility, atlas.RevIrreversible)
+	}
+}
+
+// ReversibilityConsistency rejects the contradictions §4 names: a readonly row
+// that mutates, a destructive row that claims less than compensable, and spend
+// without irreversible.
+func TestReversibilityConsistencyRejectsContradictions(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		e    atlas.Entry
+	}{
+		{"readonly+write", atlas.Entry{Reversibility: atlas.RevReadonly, Effects: []string{atlas.EffWrite}}},
+		{"readonly+destructiveCap", atlas.Entry{Reversibility: atlas.RevReadonly, Caps: []string{atlas.CapDestructive}}},
+		{"destroy+readonly", atlas.Entry{Reversibility: atlas.RevReadonly, Effects: []string{atlas.EffDestroy}}},
+		{"destroy+idempotent", atlas.Entry{Reversibility: atlas.RevIdempotent, Effects: []string{atlas.EffDestroy}}},
+		{"spend+compensable", atlas.Entry{Reversibility: atlas.RevCompensable, Effects: []string{atlas.EffSpend}}},
+		{"unknown-class", atlas.Entry{Reversibility: "maybe", Effects: []string{atlas.EffRead}}},
+	} {
+		if err := atlas.ReversibilityConsistency(tc.e); err == nil {
+			t.Errorf("%s: expected a consistency error, got nil", tc.name)
+		}
+	}
+	// A legitimate remote read stays readonly.
+	if err := atlas.ReversibilityConsistency(atlas.Entry{
+		Reversibility: atlas.RevReadonly, Effects: []string{atlas.EffRead, atlas.EffNet},
+	}); err != nil {
+		t.Errorf("remote read should be a valid readonly: %v", err)
+	}
+}
+
 func TestOutputShapeDefaultsToResult(t *testing.T) {
 	for _, shape := range []atlas.OutputShape{"", "future", "VERDICT", atlas.ShapeResult} {
 		if got := (atlas.Entry{Shape: shape}).OutputShape(); got != atlas.ShapeResult {

@@ -40,9 +40,16 @@ type ActionFacet struct {
 	// consumer that needs exec/cred/priv/persist — distinctions the lattice
 	// does not draw. Commands only.
 	AtlasEffects []string `json:"atlas_effects,omitempty" yaml:"atlas_effects,omitempty"`
-	Executor     string   `json:"executor" yaml:"executor"` // builtin | coreutils | path | verb | dhnt | dag | agentlaunch:<tool>
-	Envelope     string   `json:"envelope" yaml:"envelope"` // the result shape a run produces
-	Scope        string   `json:"scope" yaml:"scope"`       // generic | host
+	// Reversibility is the command's atlas undo/replay class (readonly |
+	// idempotent | reversible | compensable | irreversible), the row's worst
+	// case over its flag surface. It is the key an undo/redo map and a replay
+	// engine schedule around (Sprint 286 D1/D3) and the basis of the
+	// effect-derived @confirm (irreversible requires confirmation). Commands
+	// only — a skill or an agent binding has no single atlas row to carry it.
+	Reversibility string `json:"reversibility,omitempty" yaml:"reversibility,omitempty"`
+	Executor      string `json:"executor" yaml:"executor"` // builtin | coreutils | path | verb | dhnt | dag | agentlaunch:<tool>
+	Envelope      string `json:"envelope" yaml:"envelope"` // the result shape a run produces
+	Scope         string `json:"scope" yaml:"scope"`       // generic | host
 }
 
 // The facet's closed vocabularies.
@@ -96,6 +103,7 @@ func commandFacet(name string, e atlas.Entry, executor string) *ActionFacet {
 		Authority:       AuthorityDeterministic,
 		EffectsDeclared: atlas.ProjectEffects(e.Effects),
 		AtlasEffects:    append([]string(nil), e.Effects...),
+		Reversibility:   e.Reversibility,
 		Executor:        executor,
 		Envelope:        EnvelopeRun,
 		Scope:           ScopeGeneric,

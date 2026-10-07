@@ -327,6 +327,9 @@ func writeConcept(out io.Writer, c *Concept) {
 		if len(a.EffectsDeclared) > 0 {
 			line += " effects=" + strings.Join(a.EffectsDeclared, ",")
 		}
+		if a.Reversibility != "" {
+			line += " reversibility=" + a.Reversibility
+		}
 		fmt.Fprintf(out, "  runs: %s via %s (%s)\n", line, a.Executor, a.Envelope)
 	}
 	if c.ScopeNote != "" {
