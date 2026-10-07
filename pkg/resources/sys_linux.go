@@ -109,19 +109,18 @@ func diskStats() ([]Disk, error) {
 		return nil, err
 	}
 	defer f.Close()
-	var out []Disk
+	var candidates []diskCandidate
 	for _, m := range parseMountinfo(f) {
 		var st unix.Statfs_t
 		if err := unix.Statfs(m.point, &st); err != nil {
 			continue
 		}
-		d := diskFromStatfs(m.point, m.device, m.fstype, uint64(st.Bsize), st.Blocks, st.Bfree, st.Bavail)
-		if d.TotalBytes == 0 {
-			continue
-		}
-		out = append(out, d)
+		candidates = append(candidates, diskCandidate{
+			mount: m.point, device: m.device, fstype: m.fstype, readOnly: m.readOnly,
+			blockSize: uint64(st.Bsize), blocks: st.Blocks, bfree: st.Bfree, bavail: st.Bavail,
+		})
 	}
-	return out, nil
+	return candidateDisks(candidates), nil
 }
 
 // gpuStats reads the kernel's own GPU nodes: the NVIDIA driver's procfs

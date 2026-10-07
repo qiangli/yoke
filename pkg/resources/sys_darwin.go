@@ -112,7 +112,7 @@ func diskStats() ([]Disk, error) {
 	if err != nil {
 		return nil, err
 	}
-	var out []Disk
+	var candidates []diskCandidate
 	for i := range n {
 		st := &buf[i]
 		fstype := unix.ByteSliceToString(st.Fstypename[:])
@@ -122,13 +122,13 @@ func diskStats() ([]Disk, error) {
 		if !strings.HasPrefix(device, "/dev/") {
 			continue
 		}
-		d := diskFromStatfs(unix.ByteSliceToString(st.Mntonname[:]), device, fstype,
-			uint64(st.Bsize), st.Blocks, st.Bfree, uint64(st.Bavail))
-		if d.TotalBytes == 0 {
-			continue
-		}
-		out = append(out, d)
+		candidates = append(candidates, diskCandidate{
+			mount: unix.ByteSliceToString(st.Mntonname[:]), device: device, fstype: fstype,
+			readOnly:  st.Flags&unix.MNT_RDONLY != 0,
+			blockSize: uint64(st.Bsize), blocks: st.Blocks, bfree: st.Bfree, bavail: uint64(st.Bavail),
+		})
 	}
+	out := candidateDisks(candidates)
 	// One APFS container backs the system, data, preboot, VM, and update
 	// volumes, and every one of them reports the container's capacity. The
 	// container — /dev/diskN out of /dev/diskNsMsK — is the real pool.

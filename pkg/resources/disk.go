@@ -37,6 +37,43 @@ func dedupeByKey(disks []Disk, key func(Disk) string) []Disk {
 // is exactly what collapses bind mounts.
 func byDevice(d Disk) string { return d.Device }
 
+// diskCandidate is one OS-reported mount before capacity filtering. The
+// platform collectors translate their native mount enumeration into these;
+// candidateDisks applies the portable keep/drop rules.
+type diskCandidate struct {
+	mount, device, fstype            string
+	readOnly                         bool
+	blockSize, blocks, bfree, bavail uint64
+}
+
+// candidateDisks converts candidates to Disks, dropping mounts that carry
+// no actionable capacity:
+//
+//   - Read-only media (installer disk images, mounted ISOs/DMGs) cannot
+//     receive new bytes, so a nearly-full read-only volume is normal, not
+//     pressure. Keeping one made a mounted installer report host disk at
+//     ~100% while the writable container had tens of GiB free.
+//   - Zero-sized pseudo mounts (autofs triggers and the like) divide by
+//     nothing and display as 0 or 100% trivia.
+//
+// The root mount is always kept even when read-only: it is the covering
+// fallback for destination-filesystem lookups, and on APFS the sealed
+// system volume is the container's canonical representative.
+func candidateDisks(in []diskCandidate) []Disk {
+	out := make([]Disk, 0, len(in))
+	for _, c := range in {
+		if c.readOnly && c.mount != "/" {
+			continue
+		}
+		d := diskFromStatfs(c.mount, c.device, c.fstype, c.blockSize, c.blocks, c.bfree, c.bavail)
+		if d.TotalBytes == 0 {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
 // diskFromStatfs builds a Disk from the statfs quintet every unix reports.
 // "Free" is the caller-available figure (bavail), not bfree: the
 // root-reserved blocks are not space a fleet of agents can use, and

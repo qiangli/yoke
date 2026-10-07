@@ -138,6 +138,29 @@ func TestParseMountinfo(t *testing.T) {
 	}
 }
 
+func TestParseMountinfoReadOnly(t *testing.T) {
+	in := `25 30 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw
+33 25 8:2 / /mnt/iso ro,relatime shared:2 - iso9660 /dev/sr0 ro
+34 25 8:1 / /var/lib/docker rw - ext4 /dev/sda1 rw
+`
+	got := parseMountinfo(strings.NewReader(in))
+	if len(got) != 2 || got[0].point != "/" || got[1].point != "/var/lib/docker" {
+		t.Fatalf("got %+v, want [/ /var/lib/docker]: the iso9660 ISO is already excluded by the fstype allowlist", got)
+	}
+	// Harden the other direction too: with a real fstype, the ro flag must
+	// survive parsing so collection can drop read-only media.
+	in = `25 30 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw
+35 25 8:3 / /mnt/backup ro,relatime shared:3 - ext4 /dev/sdb1 ro
+`
+	got = parseMountinfo(strings.NewReader(in))
+	if len(got) != 2 || got[0].readOnly || !got[1].readOnly {
+		t.Fatalf("ro flags = %+v, want [{/ false} {/mnt/backup true}]", got)
+	}
+	if got := candidateDisks([]diskCandidate{{mount: got[1].point, device: got[1].device, fstype: got[1].fstype, readOnly: got[1].readOnly, blockSize: 4096, blocks: 1000, bfree: 4, bavail: 4}}); len(got) != 0 {
+		t.Fatalf("read-only ext4 media survived candidateDisks: %+v", got)
+	}
+}
+
 func TestDeviceKey(t *testing.T) {
 	for in, want := range map[string]string{
 		"/dev/nvme0n1p2": "nvme0n1p2",

@@ -164,9 +164,10 @@ func parseCPUModel(r io.Reader) string {
 
 // mountLine is one entry of /proc/self/mountinfo.
 type mountLine struct {
-	device string
-	point  string
-	fstype string
+	device   string
+	point    string
+	fstype   string
+	readOnly bool
 }
 
 // parseMountinfo reads /proc/self/mountinfo, keeping only real block-backed
@@ -188,7 +189,7 @@ func parseMountinfo(r io.Reader) []mountLine {
 		if len(head) < 5 || len(tail) < 2 {
 			continue
 		}
-		m := mountLine{point: unescapeOctal(head[4]), fstype: tail[0], device: unescapeOctal(tail[1])}
+		m := mountLine{point: unescapeOctal(head[4]), fstype: tail[0], device: unescapeOctal(tail[1]), readOnly: hasMountOption(head, "ro")}
 		if !realFSType(m.fstype) || !strings.HasPrefix(m.device, "/") || seen[m.point] {
 			continue
 		}
@@ -196,6 +197,21 @@ func parseMountinfo(r io.Reader) []mountLine {
 		out = append(out, m)
 	}
 	return out
+}
+
+// hasMountOption reports whether the per-mount options field (head[5] in
+// /proc/self/mountinfo: id parent major:minor root point options ...) carries
+// the named comma-separated option, e.g. "ro".
+func hasMountOption(head []string, name string) bool {
+	if len(head) <= 5 {
+		return false
+	}
+	for opt := range strings.SplitSeq(head[5], ",") {
+		if strings.TrimSpace(opt) == name {
+			return true
+		}
+	}
+	return false
 }
 
 // realFSType reports whether a filesystem type represents durable storage
