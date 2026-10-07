@@ -151,9 +151,8 @@ const (
 // path is not. Per-invocation refinement (`rm -i` vs `rm -rf`) belongs to the
 // Sprint 286 D1 action record, never to the atlas.
 //
-// Design of record:
-// dhnt/docs/bashsharp-effect-decorators-amendment-2026-10.md (Sprint 381 S4,
-// amendment A2).
+// Design: the bashsharp effect-decorators amendment A2 (a reversibility class
+// per atlas row).
 const (
 	// RevReadonly — no persistent state mutation; nothing to undo. A readonly
 	// row is trivially idempotent too, but the vocabulary keeps the classes
@@ -173,8 +172,13 @@ const (
 	// is established in the D1 action record instead.
 	RevReversible = "reversible"
 	// RevCompensable — no inverse, but a compensating action RELIABLY restores
-	// the goal state across the whole flag surface (resource create → delete,
-	// git commit → revert, chmod → restore the prior mode).
+	// the goal state across the whole flag surface WITHOUT depending on prior
+	// state the atlas does not capture: a fresh resource create that fails
+	// rather than clobbers (compensate by deleting it), an append-only
+	// soft-delete store (compensate by forgetting the entry), a reversible
+	// self-upgrade (re-pin the prior release). An in-place attribute change
+	// (chmod → restore the prior mode) is NOT compensable at row level — the
+	// prior mode is not captured — so it is irreversible; see rev() below.
 	RevCompensable = "compensable"
 	// RevIrreversible — neither an inverse nor a reliable compensation. The
 	// conservative worst case: destruction, metered spend, a sent/durable
@@ -357,32 +361,15 @@ func Reversibilities() []string {
 	return []string{RevReadonly, RevIdempotent, RevReversible, RevCompensable, RevIrreversible}
 }
 
-// DeriveReversibility computes a conservative worst-case reversibility class
-// from the effects and caps of a DERIVED entry — a declarative-registry CLI
-// (RegistryEntry) or an operator-registered command (RegisteredEntry) — exactly
-// as those entries derive their Effects from data rather than a hand-listed
-// table row. It is NEVER used for a curated table row (those are classified by
-// hand via rev()). The derivation is worst-case-safe: metered spend, a
-// destructive effect, or an ungoverned child process is irreversible; any other
-// mutation is compensable; a row that only reads/queries is readonly. The
-// result always satisfies ReversibilityConsistency.
-func DeriveReversibility(effects, caps []string) string {
-	switch {
-	case slices.Contains(effects, EffSpend):
-		return RevIrreversible
-	case slices.Contains(effects, EffDestroy) || slices.Contains(caps, CapDestructive):
-		return RevIrreversible
-	case slices.Contains(effects, EffExec) || slices.Contains(caps, CapSpawnsProcesses):
-		// An exec'd / process-spawning external is ungoverned past the execve;
-		// its worst case is anything the child can do.
-		return RevIrreversible
-	case slices.Contains(effects, EffWrite) || slices.Contains(effects, EffPersist) ||
-		slices.Contains(effects, EffPriv) || slices.Contains(effects, EffRemote):
-		return RevCompensable
-	default:
-		return RevReadonly
-	}
-}
+// Reversibility is NEVER inferred. A curated table row is classified by hand
+// via rev(); a DERIVED entry — a declarative-registry CLI (RegistryEntry) or an
+// operator-registered command (RegisteredEntry) — is not a curated row and
+// carries no validated class, so it defaults to the fail-closed worst case,
+// RevIrreversible. Deriving a weaker class from a record's declared effects
+// (compensable from a write, readonly from an empty/unknown declaration) would
+// let an under-declared or unknown command read as safe — exactly the failure
+// the curated-never-inferred rule exists to prevent. The default is set at the
+// construction site (see RegistryEntry and RegisteredEntry), not computed here.
 
 // ReversibilityConsistency enforces the amendment §4 rules on one entry's
 // curated class against its declared effects and caps, in the design's order.
@@ -535,8 +522,9 @@ func RegistryEntry(tier int) Entry {
 		},
 		Effects: effects,
 		// A managed external execs its own process (net + exec); its worst case
-		// is anything the child does — irreversible, derived not curated.
-		Reversibility: DeriveReversibility(effects, []string{CapSpawnsProcesses}),
+		// is anything the child does. Derived, not a curated row, so it takes the
+		// fail-closed default: irreversible (never inferred from effects).
+		Reversibility: RevIrreversible,
 	}
 }
 
@@ -1662,23 +1650,25 @@ func init() {
 	rev(RevIdempotent, "mkdir")
 
 	// compensable — no inverse, but a compensating action reliably restores the
-	// goal state: ownership/mode resets, create-then-remove, regenerable
-	// outputs, a removable schedule, an append-with-soft-delete store, a
-	// reversible self-upgrade.
+	// goal state WITHOUT depending on prior state the atlas does not capture.
+	// The bar is deliberately narrow: a fresh create that FAILS rather than
+	// clobbers (compensate by deleting it), a durable append-only soft-delete
+	// store (compensate by forgetting the entry), a reversible self-upgrade
+	// (re-pin the prior release). An in-place change to an existing object
+	// (chmod/chown, touch's mtime, stty, a clobbering write) is NOT here — its
+	// compensation needs the prior value, which no row captures, so the
+	// worst case is irreversible (see below).
 	rev(RevCompensable,
-		// permission / ownership changes: restore the prior mode/owner/label
-		"chcon", "chgrp", "chmod", "chown",
-		// create-only or restorable local mutations
-		"clip", "link", "mkfifo", "mknod", "mktemp", "touch", "rmdir", "csplit",
-		"split", "uudecode", "gzip", "gunzip", "mesg", "renice", "stty",
-		// append-only wiki with soft-delete forget
+		// pure create: POSIX link/mkfifo/mknod fail if the target exists (no
+		// clobber), mktemp mints a fresh unique name — compensate by removing
+		// the freshly created node; no prior state is destroyed.
+		"link", "mkfifo", "mknod", "mktemp",
+		// durable append-only wiki: writes append, forget soft-deletes, and the
+		// log retains superseded records — compensate by forgetting the entry.
 		"graph",
-		// removable schedules / regenerable outputs
-		"crontab", "atrm", "gencat", "ar", "ctags", "localedef",
-		// remote mutation is at best compensable (HTTP POST, browser actions)
-		"fetch", "browser",
-		// verbs: read+write stores whose prior state is restorable, and the
-		// self-upgrade path (re-pin to the prior release)
+		// verbs: read+write stores whose prior state is retained and restorable
+		// (supersede-not-delete / versioned), and the self-upgrade path
+		// (re-pin to the prior release).
 		"sprint", "capability", "leaderboard", "person", "handoff", "resume",
 		"kb", "lexicon", "claim", "steward", "todo", "secret", "ask",
 		"self", "bootstrap", "upgrade",
@@ -1694,6 +1684,24 @@ func init() {
 		// clobber-by-design copy/move/overwrite/link, in-place edits
 		"cp", "mv", "ln", "tee", "tar", "pax", "sed", "ed", "patch", "ex", "vi",
 		"install",
+		// in-place changes to an existing object's attributes/state: restoring
+		// needs the PRIOR mode/owner/label/timestamp/terminal/priority, which no
+		// row captures — so the compensation is not guaranteed and the worst
+		// case is irreversible, not compensable.
+		"chcon", "chgrp", "chmod", "chown", "touch", "clip", "mesg", "renice",
+		"stty",
+		// removal of a resource whose content/metadata the row does not retain
+		// (an emptied directory's mode/owner, a dropped at-job's command/time).
+		"rmdir", "atrm",
+		// writers that generate or overwrite output in place and can clobber a
+		// pre-existing file (named output pieces, decoded targets, lossy -f
+		// overwrites, in-archive member edits, compiled artifacts).
+		"csplit", "split", "uudecode", "gzip", "gunzip", "crontab", "gencat",
+		"ar", "ctags", "localedef",
+		// remote mutation with no reliable compensation at row level: a generic
+		// HTTP write or a browser action can trigger a durable or metered
+		// server-side effect nothing on this host can undo.
+		"fetch", "browser",
 		// exec wrappers over an arbitrary command, process spawners
 		"find", "awk", "xargs", "at", "batch", "nice", "nohup", "stdbuf",
 		"time", "timeout", "watch", "env", "newgrp", "why",

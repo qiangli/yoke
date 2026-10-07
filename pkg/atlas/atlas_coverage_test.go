@@ -158,17 +158,20 @@ func TestReversibilityCoverageAndConsistency(t *testing.T) {
 }
 
 // The curated classes a policy engine and a replay planner key off: the design
-// examples (readonly ls/true, idempotent mkdir, compensable chmod/git commit,
+// examples (readonly ls/true, idempotent mkdir, compensable create/store rows,
 // irreversible rm/mv/git push/spend), pinned so a reclassification is a
-// deliberate edit here.
+// deliberate edit here. chmod is pinned IRREVERSIBLE: compensating an in-place
+// mode change needs the prior mode, which no atlas row captures.
 func TestReversibilitySpotClasses(t *testing.T) {
 	want := map[string]string{
 		"ls":     atlas.RevReadonly,
 		"true":   atlas.RevReadonly,
 		"cat":    atlas.RevReadonly,
 		"mkdir":  atlas.RevIdempotent,
-		"chmod":  atlas.RevCompensable,
-		"sprint": atlas.RevCompensable,
+		"link":   atlas.RevCompensable,  // fresh create, fails-not-clobbers → remove to compensate
+		"sprint": atlas.RevCompensable,  // restorable store
+		"chmod":  atlas.RevIrreversible, // in-place mode change, prior mode not captured
+		"touch":  atlas.RevIrreversible, // in-place mtime change on an existing file
 		"rm":     atlas.RevIrreversible,
 		"mv":     atlas.RevIrreversible,
 		"git":    atlas.RevIrreversible, // worst case: push --force / history rewrite
@@ -186,21 +189,53 @@ func TestReversibilitySpotClasses(t *testing.T) {
 }
 
 // Derived entries (registry CLIs, operator-registered commands) are NOT curated
-// table rows; their class is derived from effects/caps and must stay
-// worst-case-safe and self-consistent.
+// table rows and carry no validated class, so reversibility is NEVER inferred
+// from their declared effects: every derived entry defaults to the fail-closed
+// worst case, irreversible. These regressions pin the two inferences that must
+// NOT happen — compensable from a write/persist/priv/remote declaration, and
+// readonly from an empty/unknown declaration — because either would let an
+// under-declared or unknown command read as safe.
 func TestReversibilityDerivedEntries(t *testing.T) {
 	// A cloud CLI execs a process → irreversible.
 	if got := atlas.RegistryEntry(6).Reversibility; got != atlas.RevIrreversible {
 		t.Errorf("RegistryEntry(6) reversibility = %q, want %q", got, atlas.RevIrreversible)
 	}
-	// A read-only registered script derives readonly; an exec'd one irreversible.
+
+	// REGRESSION — an empty/unknown declaration must NOT read as readonly. A
+	// registered command that declares no effect at all defaults irreversible,
+	// never readonly (which would say "nothing to undo").
+	empty := atlas.RegisteredEntry(atlas.RegisteredSpec{})
+	if empty.Reversibility != atlas.RevIrreversible {
+		t.Errorf("empty/unknown registered command = %q, want %q (must not infer readonly)",
+			empty.Reversibility, atlas.RevIrreversible)
+	}
+	if err := atlas.ReversibilityConsistency(empty); err != nil {
+		t.Errorf("derived empty entry inconsistent: %v", err)
+	}
+
+	// REGRESSION — a write (or persist/priv/remote) declaration must NOT read as
+	// compensable. The author's effect list is not a curated class, so a writing
+	// registered command is still irreversible by default.
+	for _, ef := range []string{atlas.EffWrite, atlas.EffPersist, atlas.EffPriv, atlas.EffRemote} {
+		w := atlas.RegisteredEntry(atlas.RegisteredSpec{Effects: []string{ef}})
+		if w.Reversibility != atlas.RevIrreversible {
+			t.Errorf("registered command declaring %q = %q, want %q (must not infer compensable)",
+				ef, w.Reversibility, atlas.RevIrreversible)
+		}
+		if err := atlas.ReversibilityConsistency(w); err != nil {
+			t.Errorf("derived %q entry inconsistent: %v", ef, err)
+		}
+	}
+
+	// A read-only declaration is likewise NOT trusted to mean readonly: the
+	// record is not curated, so it still defaults irreversible.
 	ro := atlas.RegisteredEntry(atlas.RegisteredSpec{Effects: []string{atlas.EffRead}})
-	if ro.Reversibility != atlas.RevReadonly {
-		t.Errorf("read-only registered command = %q, want %q", ro.Reversibility, atlas.RevReadonly)
+	if ro.Reversibility != atlas.RevIrreversible {
+		t.Errorf("read-declaring registered command = %q, want %q (must not infer readonly)",
+			ro.Reversibility, atlas.RevIrreversible)
 	}
-	if err := atlas.ReversibilityConsistency(ro); err != nil {
-		t.Errorf("derived read-only entry inconsistent: %v", err)
-	}
+
+	// An exec'd registered command and a destructive one are also irreversible.
 	ex := atlas.RegisteredEntry(atlas.RegisteredSpec{Kind: atlas.RegisteredExec, Effects: []string{atlas.EffRead}})
 	if ex.Reversibility != atlas.RevIrreversible {
 		t.Errorf("exec registered command = %q, want %q", ex.Reversibility, atlas.RevIrreversible)

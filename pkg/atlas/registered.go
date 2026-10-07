@@ -77,11 +77,13 @@ func RegisteredEntry(s RegisteredSpec) Entry {
 	e.Caps = dedupSorted(e.Caps)
 	e.Effects = dedupSorted(e.Effects)
 	sort.Strings(e.OS)
-	// Reversibility is derived from the author's declared effects + the kind's
-	// caps the same way Effects are left as declared — curated-never-inferred
-	// holds for a record the operator wrote, and a conservative worst-case class
-	// keeps an under-declared registered command from reading as safe.
-	e.Reversibility = DeriveReversibility(e.Effects, e.Caps)
+	// Reversibility is NEVER inferred from the author's declared effects: a
+	// registered record is not a curated atlas row and carries no validated
+	// class, so it defaults to the fail-closed worst case. Inferring a weaker
+	// class (compensable from a write, readonly from an empty declaration) would
+	// let an under-declared or unknown registered command read as safe. A
+	// specific invocation's reversibility is established in the D1 action record.
+	e.Reversibility = RevIrreversible
 	return e
 }
 
