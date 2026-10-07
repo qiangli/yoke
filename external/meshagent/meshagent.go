@@ -16,30 +16,45 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/qiangli/yoke/pkg/binmgr"
 )
 
-// DefaultVersion is the pinned outpost release Ensure provisions when
-// $OUTPOST_VERSION is unset. Releases ship one bare binary per platform
-// (`outpost-<ver>-<os>-<arch>[.exe]`) with a `.sha256` sidecar each, which
-// is exactly the shape binmgr verifies: no checksum, no install.
-const DefaultVersion = "v0.14.37"
+// HostVersion supplies the embedding product's release tag. Set once at startup.
+// An untagged development host falls back to latest; release tags retain their
+// prerelease suffix so fetching a companion never switches release channels.
+var HostVersion = func() string { return "" }
 
-// Spec is the binmgr GitHub spec for outpost.
+// Spec is the binmgr GitHub spec for the outpost member of a bashy release.
 func Spec(version string) binmgr.GitHubSpec {
+	version = strings.TrimSpace(version)
 	if version == "" {
 		version = strings.TrimSpace(os.Getenv("OUTPOST_VERSION"))
 	}
 	if version == "" {
-		version = DefaultVersion
+		version = strings.TrimSpace(HostVersion())
 	}
-	return binmgr.GitHubSpec{Name: "outpost", Repo: "qiangli/outpost", Version: version}
+	if version == "" || version == "dev" || version == "(devel)" {
+		version = "latest"
+	}
+	if version != "latest" && !strings.HasPrefix(version, "v") {
+		version = "v" + version
+	}
+	return binmgr.GitHubSpec{Name: "outpost", Repo: "qiangli/bashy", Version: version,
+		AssetMatch: func(name, goos, goarch string) bool {
+			suffix := "-" + goos + "-" + goarch
+			if goos == "windows" {
+				suffix += ".exe"
+			}
+			return strings.HasPrefix(name, "outpost-") && strings.HasSuffix(name, suffix)
+		},
+	}
 }
 
 // Ensure provisions the outpost mesh agent — download → sha256 → cache — and
-// returns its path. A cached copy costs no network. This is what the apps
+// returns its path. This is what the apps
 // console's Pair button runs on an unpaired host (sprint 220, story
 // 72c86b58): the operator pastes an invite code and never opens a terminal.
 func Ensure(ctx context.Context, version string) (string, error) {
@@ -54,9 +69,28 @@ func Ensure(ctx context.Context, version string) (string, error) {
 // caller should print its own invite/guidance.
 var ErrNotFound = errors.New("meshagent: outpost mesh agent not found")
 
-// Resolve finds the outpost binary: $OUTPOST_BIN, then $PATH, then the usual
+// Resolve finds the outpost binary: executable sibling, $OUTPOST_BIN, $PATH, then the usual
 // install spots. Returns ("", false) when none is usable.
 func Resolve() (string, bool) {
+	exe, _ := os.Executable()
+	return resolve(exe)
+}
+
+// resolve accepts the host executable path so tests never need to execute themselves.
+func resolve(exe string) (string, bool) {
+	name := "outpost"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	if exe != "" {
+		// Follow the host link (e.g. Homebrew's bin link) to its versioned pair.
+		if real, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = real
+		}
+		if p := filepath.Join(filepath.Dir(exe), name); isExec(p) {
+			return p, true
+		}
+	}
 	if p := strings.TrimSpace(os.Getenv("OUTPOST_BIN")); p != "" {
 		return p, isExec(p)
 	}
@@ -64,7 +98,7 @@ func Resolve() (string, bool) {
 		return p, true
 	}
 	if home, err := os.UserHomeDir(); err == nil {
-		for _, rel := range []string{"bin/outpost", ".local/bin/outpost"} {
+		for _, rel := range []string{filepath.Join("bin", name), filepath.Join(".local", "bin", name)} {
 			if cand := filepath.Join(home, rel); isExec(cand) {
 				return cand, true
 			}
@@ -106,5 +140,5 @@ func isExec(p string) bool {
 	if err != nil || fi.IsDir() {
 		return false
 	}
-	return fi.Mode()&0o111 != 0
+	return fi.Mode().IsRegular() && (runtime.GOOS == "windows" && strings.EqualFold(filepath.Ext(p), ".exe") || runtime.GOOS != "windows" && fi.Mode()&0o111 != 0)
 }
