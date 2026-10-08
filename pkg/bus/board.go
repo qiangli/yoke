@@ -50,6 +50,7 @@ import (
 	"time"
 
 	"github.com/qiangli/yoke/pkg/agentpty"
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/room"
 )
 
@@ -96,6 +97,12 @@ type Post struct {
 	Mode  string `json:"mode,omitempty"`
 	Topic string `json:"topic,omitempty"`
 	Body  string `json:"body"`
+	// FromParty and ToParty are additive snapshots of an INSTANCE sender and
+	// recipient, taken once at send time. To then holds instance/<uuid>, so a
+	// label reused later never re-targets this post; the snapshot keeps the
+	// display name and family binding it was written under.
+	FromParty *Party `json:"from_party,omitempty"`
+	ToParty   *Party `json:"to_party,omitempty"`
 }
 
 // Broadcast reports a post for everyone: no named recipient and no selector.
@@ -112,6 +119,11 @@ func (p Post) Directed(reader string) bool {
 	}
 	if strings.EqualFold(to, strings.TrimSpace(reader)) {
 		return true
+	}
+	if toID, ok := fleet.ParseInstanceAddress(to); ok {
+		// Personal instance mail follows the UUID and nothing else.
+		rid, rok := ExplicitInstanceID(reader)
+		return rok && strings.EqualFold(rid, toID)
 	}
 	// A post addressed to a ROLE on this host is directed at whoever is reading,
 	// because a seat is host-and-login scoped rather than tied to an identity.
@@ -708,6 +720,8 @@ type Delivery struct {
 	// Steered is the raw signal (did SteerLive push?); State is the claim a
 	// receipt is allowed to make about it, which is a narrower thing.
 	State string `json:"state,omitempty"`
+	// Warning is an honest caveat: accepted onto the board is not read.
+	Warning string `json:"warning,omitempty"`
 }
 
 // SteerLive injects text into a recipient's live session when it has one.
@@ -963,20 +977,11 @@ const (
 // the Yoke rule that an unresolvable identity must "fail with choices
 // instead of guessing".
 func ResolveSendTarget(target string) (addr, kind string, ok bool) {
-	t := strings.TrimSpace(target)
-	if t == "" {
+	r, err := ResolveRecipient(target)
+	if err != nil {
 		return "", "", false
 	}
-	if topic, isRole := ResolveRole(t); isRole {
-		return topic, TargetRole, true
-	}
-	if name, isAgent := resolveAgentName(t); isAgent {
-		return name, TargetAgent, true
-	}
-	if _, has := CursorSeq(t); has {
-		return t, TargetReader, true
-	}
-	return resolvePrincipalTarget(t)
+	return r.Addr, r.Kind, true
 }
 
 // resolveAgentName reports whether target names an agent in the roster, and the
@@ -1051,6 +1056,14 @@ func NearMisses(target string, max int) []string {
 	for _, r := range boardReaders() {
 		add(r)
 	}
+	if all, err := InstanceStoreFn().List(); err == nil {
+		for _, i := range all {
+			if i.Active() {
+				add(i.Label)
+				add(i.Handle)
+			}
+		}
+	}
 
 	type scored struct {
 		name string
@@ -1087,13 +1100,13 @@ func NearMisses(target string, max int) []string {
 // the word `failed`, what was tried, the near misses, and the broadcast escape
 // hatch. Nothing is written before this is returned.
 func unresolvedTargetError(target string) error {
-	msg := fmt.Sprintf("failed: %q matches no role, agent, board reader, or resolvable principal on this host — nothing was posted",
+	msg := fmt.Sprintf("failed: %q matches no role, instance, agent, board reader, or resolvable principal on this host — nothing was posted",
 		strings.TrimSpace(target))
 	if nm := NearMisses(target, 5); len(nm) > 0 {
 		msg += "\n  did you mean: " + strings.Join(nm, ", ")
 	}
 	msg += "\n  or broadcast to everyone: bashy mb post \"...\""
-	return errors.New(msg)
+	return &RecipientError{Reason: ReasonUnresolved, Target: strings.TrimSpace(target), msg: msg}
 }
 
 // levenshtein is the edit distance between two strings, for ranking near misses.

@@ -142,11 +142,12 @@ func sendRemote(req SendRequest, route RemoteRoute) (SendResult, error) {
 	// The outbox copy. Its To is the remote address, so no local reader is
 	// obliged by it; it is the record of what was sent, with the same ID the
 	// recipient host will file it under.
-	seq, err := PostMessageSeq(Post{ID: id, From: req.From, To: route.Participant, Topic: req.Topic, Body: req.Body})
+	seq, err := PostMessageSeq(Post{ID: id, From: req.From, To: route.Participant, Topic: req.Topic, Body: req.Body, FromParty: SenderParty(req.From)})
 	if err != nil {
 		return SendResult{}, fmt.Errorf("relay accepted %s (id %s) but the local outbox copy failed: %w", route.Participant, id, err)
 	}
-	d := Delivery{To: route.Participant, State: StateQueued, Reason: "relayed; delivered when the recipient host next reads its inbox"}
+	d := Delivery{To: route.Participant, State: StateQueued, Reason: "relayed; delivered when the recipient host next reads its inbox",
+		Warning: "the relay accepted the envelope for " + route.Participant + "; that is not proof the recipient host has read it"}
 	return SendResult{Seq: seq, ID: id, Kind: SendRemote, Label: route.Participant, Deliveries: []Delivery{d}}, nil
 }
 

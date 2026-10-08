@@ -1854,7 +1854,14 @@ func newDMCmd() *cobra.Command {
 		Short: "open or reuse a direct conversation using derived peer presence",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			peer := canonAgent(strings.TrimSpace(strings.TrimPrefix(args[0], "@")))
+			target, err := resolveSeatTarget(args[0])
+			if err != nil {
+				return err
+			}
+			if target.Role {
+				return fmt.Errorf("meet: %s is a role seat, not a personal one; a DM needs a person or agent — message the seat with `bashy mb send %s \"...\"`", target.Seat, target.Seat)
+			}
+			peer := target.Seat
 			if err := routableSeat(peer); err != nil {
 				return err
 			}
@@ -1875,6 +1882,11 @@ func newDMCmd() *cobra.Command {
 			live, err := dmPeerLive(peer)
 			if err != nil {
 				return fmt.Errorf("meet: derive presence for %s: %w", peer, err)
+			}
+			if !live && target.Party != nil {
+				return fmt.Errorf("meet: instance %s (%s) has no live Meet session, and starting one for an instance is not wired here; "+
+					"the message can still be queued to it with `bashy mb send %s \"...\"` (acceptance is not proof it was read)",
+					target.Party.UUID, target.Party.Label, target.Party.UUID)
 			}
 			if !live {
 				dm, err := ensureRelayDM(peer, caller)

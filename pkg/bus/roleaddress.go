@@ -162,3 +162,20 @@ func AddressedToRole(to string) bool {
 	}
 	return false
 }
+
+// resolveRoleRecipient resolves a role label to its durable address.
+//
+// The ADDRESS is stored, never the holder: a vacant seat is still a valid
+// address that retains pending mail for the next holder, and the only honest
+// thing to add is a warning that nobody holds it right now.
+func resolveRoleRecipient(label string) (Recipient, bool) {
+	topic, ok := ResolveRole(label)
+	if !ok {
+		return Recipient{}, false
+	}
+	r := Recipient{Addr: topic, Kind: TargetRole, Label: RoleLabelFor(topic)}
+	if _, held := RoleHolderFor(label); !held {
+		r.Warning = "seat " + r.Label + " is vacant — mail stays pending for its next holder; nobody has read it"
+	}
+	return r, true
+}

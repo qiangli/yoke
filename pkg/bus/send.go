@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/qiangli/yoke/pkg/fleet"
 )
 
 // SendRequest is one authored post, with its target already chosen.
@@ -129,6 +131,7 @@ func Send(req SendRequest) (SendResult, error) {
 		}
 		seq, err := PostMessageSeq(Post{
 			From: req.From, Audience: &aud, Mode: mode, Topic: req.Topic, Body: body,
+			FromParty: SenderParty(req.From),
 		})
 		if err != nil {
 			return SendResult{}, err
@@ -156,10 +159,15 @@ func Send(req SendRequest) (SendResult, error) {
 				return sendRemote(req, route)
 			}
 		}
-		// Resolve BEFORE validating the body, so a typo'd addressee is reported
-		// as a typo'd addressee rather than as whatever the body was.
-		addr, kind, ok := ResolveSendTarget(target)
-		if !ok {
+		// Resolve ONCE, BEFORE validating the body or appending, so a typo'd
+		// addressee is reported as a typo'd addressee rather than as whatever
+		// the body was, and what is stored is the identity resolved here —
+		// an instance's UUID address or a role's seat — never the typed name.
+		rec, rerr := ResolveRecipient(target)
+		if rerr != nil {
+			if Refusal(rerr) {
+				return SendResult{}, rerr
+			}
 			// Nothing local answers; a bare name may still be ONE colleague
 			// on the session. Several is an ambiguity, not a guess.
 			route, rok, err := resolveRemote(target)
@@ -169,27 +177,26 @@ func Send(req SendRequest) (SendResult, error) {
 			if rok {
 				return sendRemote(req, route)
 			}
-			return SendResult{}, unresolvedTargetError(target)
+			return SendResult{}, rerr
 		}
 		if err := ValidateCoordinationBody(body); err != nil {
 			return SendResult{}, &BodyError{Err: err}
 		}
-		seq, err := PostMessageSeq(Post{From: req.From, To: addr, Topic: req.Topic, Body: body})
+		seq, err := PostMessageSeq(Post{
+			From: req.From, To: rec.Addr, Topic: req.Topic, Body: body,
+			FromParty: SenderParty(req.From), ToParty: rec.Party,
+		})
 		if err != nil {
 			return SendResult{}, err
 		}
-		d := SteerLive(addr, steerNotice(req.From, body))
-		// A ROLE is a seat, not a reader: its cursor is not one agent's, so the
-		// per-reader states do not apply.
-		d.State = deliveryState(addr, seq, d.Steered, kind != TargetRole)
-		d.To = RoleLabelFor(d.To)
+		d := deliverDirect(rec, seq, steerNotice(req.From, body))
 		return SendResult{Seq: seq, Kind: SendDirect, Label: d.To, Deliveries: []Delivery{d}}, nil
 	}
 
 	if err := ValidateCoordinationBody(body); err != nil {
 		return SendResult{}, &BodyError{Err: err}
 	}
-	seq, err := PostMessageSeq(Post{From: req.From, Topic: req.Topic, Body: body})
+	seq, err := PostMessageSeq(Post{From: req.From, Topic: req.Topic, Body: body, FromParty: SenderParty(req.From)})
 	if err != nil {
 		return SendResult{}, err
 	}
@@ -202,4 +209,28 @@ func Send(req SendRequest) (SendResult, error) {
 		}
 	}
 	return res, nil
+}
+
+// deliverDirect steers a resolved recipient and reports only what is provable.
+//
+// A ROLE is a seat, not a reader, so per-reader states do not apply and the
+// post is merely accepted. An instance is steered by its ownership claim and
+// judged by its UUID-named cursor. Anything the board cannot prove stays
+// unverified and says so: acceptance is not delivery.
+func deliverDirect(rec Recipient, seq int64, notice string) Delivery {
+	steerTo, cursorOf, perReader := rec.Addr, rec.Addr, rec.Kind != TargetRole
+	if rec.Kind == TargetInstance {
+		id, _ := fleet.ParseInstanceAddress(rec.Addr)
+		steerTo, cursorOf = "instance:"+id, id
+	}
+	d := SteerLive(steerTo, notice)
+	d.State = deliveryState(cursorOf, seq, d.Steered, perReader)
+	d.To = rec.Label
+	switch {
+	case rec.Warning != "":
+		d.Warning = rec.Warning
+	case d.State == StateUnverified:
+		d.Warning = "no read evidence for " + rec.Label + " — the board accepted this; that is not proof it was delivered"
+	}
+	return d
 }

@@ -396,6 +396,11 @@ func routableSeat(name string) error {
 	if _, ok := registeredAgentFn(name); ok {
 		return nil
 	}
+	if isInst, err := instanceSeat(name); err != nil {
+		return err
+	} else if isInst {
+		return nil
+	}
 	return fmt.Errorf("meet: %q is not a registered agent — choose one from "+
 		"`bashy agent list` or register an ephemeral agent first", name)
 }

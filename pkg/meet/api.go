@@ -472,18 +472,38 @@ func PostAs(ref, author, to, text string) (Event, error) {
 			}
 		}
 		target := ""
+		var toParty *bus.Party
 		if isAllSeats(to) {
 			target = AllSeats
 		} else if strings.TrimSpace(to) != "" {
-			target = canonAgent(strings.TrimSpace(strings.TrimPrefix(to, "@")))
-			if !participantSeat(st, target) {
+			// The common send-time resolver runs BEFORE the membership check and
+			// before anything is appended: ambiguous, retired and invalid-role
+			// addressees are refused here with the bus's lookup instructions.
+			tgt, err := resolveSeatTarget(to)
+			if err != nil {
+				return Event{}, err
+			}
+			target, toParty = tgt.Seat, tgt.Party
+			seat := target
+			if tgt.Role {
+				// A role is a seat, not a person: membership is judged on whoever
+				// holds it now, but the ROLE ADDRESS is what is stored, so a
+				// handover keeps the mail. A vacant seat has no one to seat.
+				holder, held := bus.RoleHolderFor(target)
+				if !held {
+					return Event{}, fmt.Errorf("meet: failed: seat %s is vacant, so no one at board %s can receive it; address a participant instead", target, st.ID)
+				}
+				seat = canonAgent(holder)
+			}
+			if !participantSeat(st, seat) {
 				return Event{}, fmt.Errorf("meet: failed: %s has no seat in board %s; invite it with `bashy meet invite %s %s`",
-					seatLabel(target), st.ID, st.ID, target)
+					seatLabel(seat), st.ID, st.ID, seat)
 			}
 		}
 		ev := Event{
 			Round: st.Round, Speaker: who, Role: string(RoleParticipant),
 			Kind: "message", To: target, Text: sanitizeTurn(text), TS: nowFn(),
+			FromParty: bus.SenderParty(who), ToParty: toParty,
 		}
 		if st.Shared {
 			// The post's universal id, so every host files it once.
@@ -507,6 +527,7 @@ func PostAs(ref, author, to, text string) (Event, error) {
 	// is `conductor:<n>` — the SEAT. The label is stored verbatim and resolved to
 	// a holder at READ time, so a handover re-targets mail already in flight.
 	target := strings.TrimSpace(strings.TrimPrefix(to, "@"))
+	var toParty *bus.Party
 	switch {
 	case isAllSeats(target):
 		// An EXPLICIT broadcast. It must not fall through to DefaultTo below:
@@ -526,13 +547,16 @@ func PostAs(ref, author, to, text string) (Event, error) {
 			target = ""
 		}
 	default:
-		if _, isRole := bus.RoleHolderFor(target); !isRole {
-			target = canonAgent(target)
+		tgt, err := resolveSeatTarget(target)
+		if err != nil {
+			return Event{}, err
 		}
+		target, toParty = tgt.Seat, tgt.Party
 	}
 	ev := Event{
 		Round: st.Round, Speaker: who, Role: string(RoleHuman),
 		Kind: "human", To: target, Text: text, TS: nowFn(),
+		FromParty: bus.SenderParty(who), ToParty: toParty,
 	}
 	return recordFull(st, ev)
 }

@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiangli/yoke/pkg/bus"
 	"github.com/qiangli/yoke/pkg/fleet"
 
 	"github.com/qiangli/coreutils/pkg/lockfile"
@@ -65,6 +66,13 @@ type Event struct {
 	// store. It is deliberately structured: consumers may correlate only this
 	// exact source identifier, never infer identity from rendered prose.
 	Origin *EventOrigin `json:"origin,omitempty"`
+
+	// FromParty / ToParty are additive snapshots of an instance speaker or
+	// addressee as they were when the event was written: the UUID is the
+	// identity, the label and family binding are display provenance that a
+	// later label reuse cannot rewrite.
+	FromParty *bus.Party `json:"from_party,omitempty"`
+	ToParty   *bus.Party `json:"to_party,omitempty"`
 
 	// Turn outcome, recorded so a reader can tell a timeout from an empty reply
 	// from a crash without re-reading logs. Absent on legacy events — statusOf()
