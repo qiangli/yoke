@@ -34,7 +34,12 @@ tracks the OPEN gaps**, prioritized by consumer-workflow impact.
       `-n`/`--no-commit` stages without committing, conventional Revert
       message; merges, sequencer flags, multi-commit stay loud).
       Proven by `TestNativeRevert_Rollback`.
-- [ ] **`clean -fd` / `-n`** — remove untracked files/dirs. **MED** — workspace hygiene.
+- [x] **`clean -fd` / `-n`** — remove untracked files/dirs. **MED** — workspace hygiene.
+      CLOSED 2026-10-08 (sprint 252, S252.5): `clean.go` — host parity
+      (no -d never recurses into untracked dirs, tracked/ignored content
+      never touched, embedded repos skipped with a note, bare clean
+      fatals 128, single-dash bundles). Proven by
+      `TestNativeClean_DryRunAndForce`.
 - [ ] `bisect`, `reflog`, `describe`, `submodule`, `gc`, `prune`, `fsck`,
       `verify-tag`, `mktag`, `pack-refs`, `index-pack`, `verify-pack` — **LOW**.
 
@@ -60,7 +65,13 @@ tracks the OPEN gaps**, prioritized by consumer-workflow impact.
       files with go-git commondir support (plain repos unaffected). Proven
       by `TestNativeWorktree_AddRemoveList` (fresh checkout reads clean
       through go-git).
-- [ ] **`apply <patch>`** (`exec_write.go:471`) — MED — go-git lacks worktree patch-apply.
+- [x] **`apply <patch>`** — MED — go-git lacks worktree patch-apply.
+      CLOSED 2026-10-08 (sprint 252, S252.5): `apply.go` — real anchored
+      hunks with exact context (no fuzz), new/delete/rename files,
+      exec-bit flips, --check, multi-file all-or-nothing; mismatches fail
+      exit 1 with the tree untouched, binaries/mode-only-beyond-exec/
+      -R/--cached/--index/stdin stay loud. Proven by
+      `TestNativeApply_Files`.
 - [ ] **`read-tree`** (`exec_plumbing.go:215`) — LOW (plumbing).
 - [ ] **`for-each-ref`** (`exec_read.go:925`) — LOW (format parsing).
 
@@ -71,7 +82,7 @@ tracks the OPEN gaps**, prioritized by consumer-workflow impact.
 | **commit** | ~`--amend` (exists in typed `Commit`, `git.go:259` — just wire the argv), `-q`~ CLOSED 2026-10-08 (S252.3, `TestNativeCommit_Amend`) | `exec_write.go:558` | **HIGH** |
 | **push** | ~`--delete` / `:<branch>` (delete remote branch)~ CLOSED 2026-10-08 (S252.1, `TestNativePush_Delete`); `-q`, `--dry-run`, `--tags` still open | `exec_write.go:18` | **HIGH** |
 | **reset** | ~`--hard`, `--soft`~ CLOSED 2026-10-08 (S252.3, `TestNativeReset_HardSoft`; soft/hard with paths + bad rev fail 128 like host) | `exec_read.go:930,992` | **HIGH** |
-| **checkout** | `--theirs`, `--ours`, `-f` (only `-b`/`-B` supported) | `exec_read.go:812` | MED |
+| **checkout** | ~`--theirs`, `--ours`, `-f`~ CLOSED 2026-10-08 (S252.5, `TestNativeCheckout_Sides`: unmerged stage 2/3 resolution with index collapse, force switches) | `exec_read.go:812` | MED |
 | **diff** | `--stat`, ~`--name-only`, `--diff-filter`~ CLOSED 2026-10-08 (S252.4, `TestNativeDiff_NameOnlyFilter`: worktree + `--cached` columns, filter select/exclude, pathspecs, `--quiet` honors filter), full `--cached` output still open | `exec_read.go:255,308-330` | MED |
 | **log** | `-S` (pickaxe), `--grep`; `--author` rejected; ~9 `--format` placeholders only; `--date=` ignored | `exec_read.go:129-252` | MED |
 | **branch** | `-f` (force create) | `exec_read.go:612` | LOW |
@@ -90,9 +101,17 @@ tracks the OPEN gaps**, prioritized by consumer-workflow impact.
 These accept-and-ignore instead of rejecting; per the package rule they should
 `ErrUnsupported` (or be implemented). Fixing them is independent of new features.
 
-- [ ] **`branch` silently ignores *unknown* flags** (`exec_read.go:642` appends them
-      as positionals) — the one real correctness bug; should reject.
-- [ ] `branch -v` — parsed then ignored (`exec_read.go:649` `_ = verbose`).
+- [x] **`branch` silently ignores *unknown* flags** — the one real correctness bug; should reject.
+      CLOSED 2026-10-08 (sprint 252, S252.5): probed live — every
+      unknown-flag shape already returned ErrUnsupported — then made
+      structural (rejected up front in the flag loop, never let into
+      a positional) and pinned by test (`branch --bogus`).
+      Note: the old code *appended* flags to a positional list that no
+      downstream path consumed silently; the guarantee is now explicit.
+- [x] `branch -v` — parsed then ignored (`_ = verbose`).
+      CLOSED 2026-10-08 (S252.5): `-v`/`--verbose` now renders tip hash +
+      subject on all three listing paths (degrades to plain on resolve
+      failure, never breaks listing).
 - [ ] `log --date=<fmt>` — parsed, value ignored (always RFC3339).
 - [ ] `status --short` vs `--porcelain` — treated identically; no version distinction.
 - [ ] `fetch --tags` / `--prune` — accepted, no effect.

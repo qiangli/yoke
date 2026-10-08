@@ -10,7 +10,10 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	gitindex "github.com/go-git/go-git/v5/plumbing/format/index"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/storer"
 )
 
 // TestIsAncestor covers both the typed predicate and the
@@ -505,7 +508,11 @@ func TestNativeWorktree_AddRemoveList(t *testing.T) {
 // dirtyFile overwrites a worktree file without staging or committing.
 func dirtyFile(t *testing.T, dir, name, content string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(name)), []byte(content), 0o644); err != nil {
+	full := filepath.Join(dir, filepath.FromSlash(name))
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -936,6 +943,319 @@ func TestNativeDiff_NameOnlyFilter(t *testing.T) {
 	} {
 		if _, err := Exec(ctx, dir, argv); err != ErrUnsupported {
 			t.Errorf("diff %v err = %v, want ErrUnsupported", argv, err)
+		}
+	}
+}
+
+// TestNativeClean_DryRunAndForce pins `clean -n/-f/-d`: dry-run lists
+// without touching, -f removes untracked files, -d takes whole dirs,
+// ignored files and tracked content always survive, nested repos are
+// skipped, and a bare clean refuses like host git.
+func TestNativeClean_DryRunAndForce(t *testing.T) {
+	ctx := context.Background()
+	dir := makeTwoCommitRepo(t)
+	setLocalIdentity(t, dir)
+	commitFiles(t, dir, map[string]string{".gitignore": "ignored.log\n"}, "ignore log")
+
+	dirtyFile(t, dir, "top.txt", "top\n")
+	dirtyFile(t, dir, "sub/inner.txt", "inner\n")
+	dirtyFile(t, dir, "ignored.log", "ignored\n")
+	if _, err := Init(InitOptions{Path: filepath.Join(dir, "nested")}); err != nil {
+		t.Fatalf("nested init: %v", err)
+	}
+
+	res, err := Exec(ctx, dir, []string{"clean", "-n"})
+	if err != nil {
+		t.Fatalf("clean -n: %v", err)
+	}
+	if !strings.Contains(res.Stdout, "Would remove top.txt") {
+		t.Errorf("dry-run = %q, want top.txt listed", res.Stdout)
+	}
+	if strings.Contains(res.Stdout, "ignored.log") {
+		t.Errorf("dry-run = %q, ignored files must not list", res.Stdout)
+	}
+	if _, serr := os.Stat(filepath.Join(dir, "top.txt")); serr != nil {
+		t.Errorf("dry-run removed top.txt")
+	}
+
+	if _, err := Exec(ctx, dir, []string{"clean", "-f"}); err != nil {
+		t.Fatalf("clean -f: %v", err)
+	}
+	if _, serr := os.Stat(filepath.Join(dir, "top.txt")); !os.IsNotExist(serr) {
+		t.Errorf("top.txt survived clean -f")
+	}
+	// No -d: untracked directories are never recursed into.
+	if _, serr := os.Stat(filepath.Join(dir, "sub", "inner.txt")); serr != nil {
+		t.Errorf("sub/inner.txt removed without -d: %v", serr)
+	}
+	if got := readFile(t, dir, "a.txt"); got != "line1\nline2\n" {
+		t.Errorf("tracked a.txt = %q after clean", got)
+	}
+	if got := readFile(t, dir, "ignored.log"); got != "ignored\n" {
+		t.Errorf("ignored.log = %q after clean, must survive", got)
+	}
+
+	res, err = Exec(ctx, dir, []string{"clean", "-fd"})
+	if err != nil {
+		t.Fatalf("clean -fd: %v", err)
+	}
+	if _, serr := os.Stat(filepath.Join(dir, "sub")); !os.IsNotExist(serr) {
+		t.Errorf("sub/ survived clean -fd")
+	}
+	if _, serr := os.Stat(filepath.Join(dir, "nested")); !os.IsNotExist(serr) {
+		if !strings.Contains(res.Stdout, "Skipping repository nested") {
+			t.Errorf("nested repo removed or skipped silently: %q", res.Stdout)
+		}
+	}
+
+	res, err = Exec(ctx, dir, []string{"clean"})
+	if err != nil {
+		t.Fatalf("bare clean: %v", err)
+	}
+	if res.ExitCode != 128 {
+		t.Errorf("bare clean = %+v, want exit 128", res)
+	}
+}
+
+// craftUnmerged stages a host-style conflict for path: base/ours/theirs
+// blobs in the index stages plus marker text in the worktree.
+func craftUnmerged(t *testing.T, dir, path, base, ours, theirs string) {
+	t.Helper()
+	r, err := gogit.PlainOpen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	put := func(content string) plumbing.Hash {
+		obj := r.Storer.NewEncodedObject()
+		obj.SetType(plumbing.BlobObject)
+		obj.SetSize(int64(len(content)))
+		w, err := obj.Writer()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		h, err := r.Storer.SetEncodedObject(obj)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	idx, err := r.Storer.Index()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rebuilt []*gitindex.Entry
+	for _, e := range idx.Entries {
+		if e.Name != path {
+			rebuilt = append(rebuilt, e)
+		}
+	}
+	rebuilt = append(rebuilt,
+		&gitindex.Entry{Name: path, Hash: put(base), Mode: filemode.Regular, Stage: gitindex.Merged},
+		&gitindex.Entry{Name: path, Hash: put(ours), Mode: filemode.Regular, Stage: gitindex.OurMode},
+		&gitindex.Entry{Name: path, Hash: put(theirs), Mode: filemode.Regular, Stage: gitindex.TheirMode},
+	)
+	idx.Entries = rebuilt
+	if ist, ok := r.Storer.(storer.IndexStorer); ok {
+		if err := ist.SetIndex(idx); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		t.Fatal("index not writable")
+	}
+	markers := "<<<<<<< ours\n" + ours + "=======\n" + theirs + ">>>>>>> theirs\n"
+	if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(path)), []byte(markers), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestNativeCheckout_Sides pins `checkout --theirs/--ours` (conflict
+// triage from unmerged index stages), `-f` branch switches that discard
+// local changes, `branch -v` output, and loud unknown branch flags.
+func TestNativeCheckout_Sides(t *testing.T) {
+	ctx := context.Background()
+	dir := makeTwoCommitRepo(t)
+	setLocalIdentity(t, dir)
+
+	if _, err := Exec(ctx, dir, []string{"branch", "--bogus"}); err != ErrUnsupported {
+		t.Errorf("branch --bogus err = %v, want ErrUnsupported", err)
+	}
+	res, err := Exec(ctx, dir, []string{"branch", "-v"})
+	if err != nil {
+		t.Fatalf("branch -v: %v", err)
+	}
+	if !strings.Contains(res.Stdout, "second") {
+		t.Errorf("branch -v = %q, want tip subject", res.Stdout)
+	}
+
+	base := currentBranch(t, dir)
+	if _, err := Exec(ctx, dir, []string{"checkout", "-b", "other"}); err != nil {
+		t.Fatalf("checkout -b: %v", err)
+	}
+	commitFiles(t, dir, map[string]string{"a.txt": "other branch\n"}, "other work")
+	if _, err := Exec(ctx, dir, []string{"checkout", base}); err != nil {
+		t.Fatalf("checkout back: %v", err)
+	}
+	dirtyFile(t, dir, "a.txt", "local edits\n")
+	if _, err := Exec(ctx, dir, []string{"checkout", "-f", "other"}); err != nil {
+		t.Fatalf("checkout -f: %v", err)
+	}
+	if got := readFile(t, dir, "a.txt"); got != "other branch\n" {
+		t.Errorf("a.txt after -f checkout = %q", got)
+	}
+
+	// Crafted conflict: --theirs takes stage 3, --ours stage 2.
+	craftUnmerged(t, dir, "a.txt", "other branch\n", "our side\n", "their side\n")
+	if _, err := Exec(ctx, dir, []string{"checkout", "--theirs", "--", "a.txt"}); err != nil {
+		t.Fatalf("checkout --theirs: %v", err)
+	}
+	if got := readFile(t, dir, "a.txt"); got != "their side\n" {
+		t.Errorf("a.txt after --theirs = %q", got)
+	}
+	craftUnmerged(t, dir, "a.txt", "other branch\n", "our side\n", "their side\n")
+	if _, err := Exec(ctx, dir, []string{"checkout", "--ours", "a.txt"}); err != nil {
+		t.Fatalf("checkout --ours: %v", err)
+	}
+	if got := readFile(t, dir, "a.txt"); got != "our side\n" {
+		t.Errorf("a.txt after --ours = %q", got)
+	}
+
+	// Merged paths are not triage candidates: loud exit 1.
+	res, err = Exec(ctx, dir, []string{"checkout", "--theirs", "a.txt"})
+	if err != nil {
+		t.Fatalf("theirs on merged: %v", err)
+	}
+	if res.ExitCode != 1 {
+		t.Errorf("theirs on merged = %+v, want exit 1", res)
+	}
+}
+
+const applyModifyPatch = `diff --git a/a.txt b/a.txt
+--- a/a.txt
++++ b/a.txt
+@@ -1,2 +1,2 @@
+ line1
+-line2
++line2 changed
+`
+
+const applyNewPatch = `diff --git a/new.txt b/new.txt
+new file mode 100644
+--- /dev/null
++++ b/new.txt
+@@ -0,0 +1 @@
++hello
+`
+
+const applyDeletePatch = `diff --git a/c.txt b/c.txt
+deleted file mode 100644
+--- a/c.txt
++++ /dev/null
+@@ -1 +0,0 @@
+-see
+`
+
+// writePatch stores a patch file in dir and returns its name.
+func writePatch(t *testing.T, dir, name, content string) string {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return name
+}
+
+// TestNativeApply_Files pins `apply <patch>`: modify/new/delete hunks
+// land byte-exact in the worktree (unstaged — plain apply never touches
+// the index), context mismatches fail exit-1 with the tree untouched
+// across ALL files, and binary patches stay loud.
+func TestNativeApply_Files(t *testing.T) {
+	ctx := context.Background()
+	dir := makeTwoCommitRepo(t)
+	setLocalIdentity(t, dir)
+	commitFiles(t, dir, map[string]string{"c.txt": "see\n"}, "add c")
+
+	patch := writePatch(t, dir, "fix.patch", applyModifyPatch+applyNewPatch+applyDeletePatch)
+
+	// --check first, on the pristine tree: verifies without writing.
+	if _, err := Exec(ctx, dir, []string{"apply", "--check", patch}); err != nil {
+		t.Fatalf("apply --check: %v", err)
+	}
+	if got := readFile(t, dir, "a.txt"); got != "line1\nline2\n" {
+		t.Errorf("apply --check wrote files")
+	}
+	if _, serr := os.Stat(filepath.Join(dir, "new.txt")); !os.IsNotExist(serr) {
+		t.Errorf("apply --check created new.txt")
+	}
+
+	if _, err := Exec(ctx, dir, []string{"apply", patch}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if got := readFile(t, dir, "a.txt"); got != "line1\nline2 changed\n" {
+		t.Errorf("a.txt = %q", got)
+	}
+	if got := readFile(t, dir, "new.txt"); got != "hello\n" {
+		t.Errorf("new.txt = %q", got)
+	}
+	if _, serr := os.Stat(filepath.Join(dir, "c.txt")); !os.IsNotExist(serr) {
+		t.Errorf("c.txt survived apply-delete")
+	}
+	// Plain apply stages nothing.
+	res, err := Exec(ctx, dir, []string{"diff", "--cached", "--name-only"})
+	if err != nil {
+		t.Fatalf("cached: %v", err)
+	}
+	if strings.TrimSpace(res.Stdout) != "" {
+		t.Errorf("apply staged files: %q", res.Stdout)
+	}
+
+	// Mismatched context: exit 1, and the multi-file run applies
+	// nothing (the new-file hunk must not land either). Reset the
+	// tree first so only the modify hunk is broken.
+	dirtyFile(t, dir, "a.txt", "different\n")
+	if err := os.Remove(filepath.Join(dir, "new.txt")); err != nil {
+		t.Fatal(err)
+	}
+	dirtyFile(t, dir, "c.txt", "see\n")
+	res, err = Exec(ctx, dir, []string{"apply", patch})
+	if err != nil {
+		t.Fatalf("bad-context apply: %v", err)
+	}
+	if res.ExitCode != 1 {
+		t.Errorf("bad-context = %+v, want exit 1", res)
+	}
+	if _, serr := os.Stat(filepath.Join(dir, "new.txt")); !os.IsNotExist(serr) {
+		t.Errorf("new.txt landed despite failed sibling hunk")
+	}
+	if got := readFile(t, dir, "c.txt"); got != "see\n" {
+		t.Errorf("c.txt = %q after failed apply, delete must not run", got)
+	}
+	if got := readFile(t, dir, "a.txt"); got != "different\n" {
+		t.Errorf("a.txt = %q after failed apply", got)
+	}
+
+	bin := writePatch(t, dir, "bin.patch", "diff --git a/x.bin b/x.bin\nBinary files a/x.bin and b/x.bin differ\n")
+	if _, err := Exec(ctx, dir, []string{"apply", bin}); err != ErrUnsupported {
+		t.Errorf("binary apply err = %v, want ErrUnsupported", err)
+	}
+	res, err = Exec(ctx, dir, []string{"apply", "no-such.patch"})
+	if err != nil {
+		t.Fatalf("missing patch: %v", err)
+	}
+	if res.ExitCode != 128 {
+		t.Errorf("missing patch = %+v, want exit 128", res)
+	}
+	for _, argv := range [][]string{
+		{"apply"},
+		{"apply", "-R", patch},
+		{"apply", "-"},
+	} {
+		if _, err := Exec(ctx, dir, argv); err != ErrUnsupported {
+			t.Errorf("apply %v err = %v, want ErrUnsupported", argv, err)
 		}
 	}
 }

@@ -48,6 +48,7 @@ var execHandlers = map[string]execFunc{
 	"show":         nativeShow,
 	// local writes
 	"add":      nativeAdd,
+	"clean":    nativeClean,
 	"commit":   nativeCommit,
 	"branch":   nativeBranch,
 	"checkout": nativeCheckout,
@@ -65,6 +66,7 @@ var execHandlers = map[string]execFunc{
 	// history surgery (linear, conflict-free cases only)
 	"cherry":       nativeCherry,
 	"cherry-pick":  nativeCherryPick,
+	"revert":       nativeRevert,
 	"rebase":       nativeRebase,
 	"apply":        nativeApply,
 	"format-patch": nativeFormatPatch,

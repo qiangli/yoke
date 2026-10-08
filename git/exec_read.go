@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,7 +15,9 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/format/index"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/storer"
 )
 
 // openRepo opens the git repository at or above dir. A ".git" FILE
@@ -757,7 +760,8 @@ func nativeBranch(_ context.Context, dir string, args []string) (*ExecResult, er
 		return nil, ErrUnsupported
 	}
 
-	// Parse list flags
+	// Parse list flags. Unknown flags fail here, structurally — never
+	// fall into a positional slot (GAPS.md section D).
 	listRemote := false
 	listAll := false
 	verbose := false
@@ -765,7 +769,7 @@ func nativeBranch(_ context.Context, dir string, args []string) (*ExecResult, er
 	nonFlagArgs := []string{}
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
-		case "-v":
+		case "-v", "--verbose":
 			verbose = true
 		case "-r":
 			listRemote = true
@@ -778,17 +782,34 @@ func nativeBranch(_ context.Context, dir string, args []string) (*ExecResult, er
 			} else {
 				return nil, ErrUnsupported
 			}
+		case "-D", "-d":
+			// Delete verbs: consumed positionally below (args[0]).
+			nonFlagArgs = append(nonFlagArgs, args[i])
 		default:
 			if strings.HasPrefix(args[i], "--contains=") {
 				containsRef = strings.TrimPrefix(args[i], "--contains=")
-			} else if strings.HasPrefix(args[i], "-") && args[i] != "-D" && args[i] != "-d" {
-				nonFlagArgs = append(nonFlagArgs, args[i])
+			} else if strings.HasPrefix(args[i], "-") {
+				return nil, ErrUnsupported
 			} else {
 				nonFlagArgs = append(nonFlagArgs, args[i])
 			}
 		}
 	}
-	_ = verbose
+
+	// branchVerbose decorates one branch line with tip hash + subject.
+	// Resolution failures degrade to the plain line: verbosity must
+	// never break listing.
+	branchVerbose := func(ref *plumbing.Reference) string {
+		if !verbose {
+			return ""
+		}
+		c, err := repo.CommitObject(ref.Hash())
+		if err != nil {
+			return ""
+		}
+		subj, _, _ := strings.Cut(strings.TrimSpace(c.Message), "\n")
+		return " " + shortHash(ref.Hash()) + " " + subj
+	}
 
 	// Listing mode: no non-flag args, or only -v/-r/-a/--contains
 	isListMode := len(nonFlagArgs) == 0 || (len(args) > 0 && (args[0] == "-v" || args[0] == "-r" || args[0] == "-a"))
@@ -830,6 +851,7 @@ func nativeBranch(_ context.Context, dir string, args []string) (*ExecResult, er
 					b.WriteString("  ")
 				}
 				b.WriteString(name)
+				b.WriteString(branchVerbose(ref))
 				b.WriteByte('\n')
 				return nil
 			})
@@ -855,6 +877,7 @@ func nativeBranch(_ context.Context, dir string, args []string) (*ExecResult, er
 				}
 				b.WriteString("  ")
 				b.WriteString(ref.Name().Short())
+				b.WriteString(branchVerbose(ref))
 				b.WriteByte('\n')
 				return nil
 			})
@@ -883,6 +906,7 @@ func nativeBranch(_ context.Context, dir string, args []string) (*ExecResult, er
 				b.WriteString("  ")
 			}
 			b.WriteString(name)
+			b.WriteString(branchVerbose(ref))
 			b.WriteByte('\n')
 			return nil
 		})
@@ -966,6 +990,17 @@ func nativeCheckout(_ context.Context, dir string, args []string) (*ExecResult, 
 		return nil, ErrUnsupported
 	}
 
+	// -f/--force discards local changes on branch switches (host parity
+	// for the switch itself; pathspec checkouts stay unsupported).
+	force := false
+	for len(args) > 0 && (args[0] == "-f" || args[0] == "--force") {
+		force = true
+		args = args[1:]
+	}
+	if len(args) == 0 {
+		return nil, ErrUnsupported
+	}
+
 	// Handle -b (create and checkout)
 	if args[0] == "-b" {
 		if len(args) < 2 {
@@ -975,6 +1010,7 @@ func nativeCheckout(_ context.Context, dir string, args []string) (*ExecResult, 
 		err := wt.Checkout(&gogit.CheckoutOptions{
 			Branch: plumbing.NewBranchReferenceName(branchName),
 			Create: true,
+			Force:  force,
 		})
 		if err != nil {
 			return nil, ErrUnsupported
@@ -999,7 +1035,7 @@ func nativeCheckout(_ context.Context, dir string, args []string) (*ExecResult, 
 		if err := repo.Storer.SetReference(ref); err != nil {
 			return nil, ErrUnsupported
 		}
-		if err := wt.Checkout(&gogit.CheckoutOptions{Branch: plumbing.NewBranchReferenceName(branchName)}); err != nil {
+		if err := wt.Checkout(&gogit.CheckoutOptions{Branch: plumbing.NewBranchReferenceName(branchName), Force: force}); err != nil {
 			return nil, ErrUnsupported
 		}
 		return &ExecResult{
@@ -1012,6 +1048,7 @@ func nativeCheckout(_ context.Context, dir string, args []string) (*ExecResult, 
 		branchName := args[0]
 		err := wt.Checkout(&gogit.CheckoutOptions{
 			Branch: plumbing.NewBranchReferenceName(branchName),
+			Force:  force,
 		})
 		if err != nil {
 			return nil, ErrUnsupported
@@ -1021,7 +1058,101 @@ func nativeCheckout(_ context.Context, dir string, args []string) (*ExecResult, 
 		}, nil
 	}
 
+	// checkout --theirs/--ours [--] <paths>: resolve unmerged index
+	// stages back into the worktree (conflict triage). Stage 3 is
+	// theirs, stage 2 ours; the index collapses to the chosen side.
+	// Our own merges are all-or-nothing and never leave U state, so in
+	// practice this serves host-created conflicts in shared repos.
+	if len(args) > 0 && (args[0] == "--theirs" || args[0] == "--ours") {
+		return checkoutSide(repo, wt, wt.Filesystem.Root(), args[0] == "--theirs", args[1:])
+	}
+
 	return nil, ErrUnsupported
+}
+
+// checkoutSide implements `checkout --theirs|--ours [--] <paths...>`.
+func checkoutSide(repo *gogit.Repository, wt *gogit.Worktree, root string, theirs bool, args []string) (*ExecResult, error) {
+	var paths []string
+	for _, a := range args {
+		if a == "--" {
+			continue
+		}
+		if strings.HasPrefix(a, "-") {
+			return nil, ErrUnsupported
+		}
+		paths = append(paths, filepath.ToSlash(filepath.Clean(a)))
+	}
+	if len(paths) == 0 {
+		return nil, ErrUnsupported
+	}
+	want := index.OurMode
+	if theirs {
+		want = index.TheirMode
+	}
+
+	idx, err := repo.Storer.Index()
+	if err != nil {
+		return nil, ErrUnsupported
+	}
+	for _, p := range paths {
+		var pick *index.Entry
+		unmerged := false
+		for _, e := range idx.Entries {
+			if e.Name != p {
+				continue
+			}
+			if e.Stage != index.Merged {
+				unmerged = true
+			}
+			if e.Stage == want {
+				pick = e
+			}
+		}
+		if !unmerged || pick == nil {
+			return &ExecResult{Stderr: fmt.Sprintf("error: pathspec '%s' did not match any unmerged file(s)\n", p), ExitCode: 1}, nil
+		}
+		blob, err := repo.BlobObject(pick.Hash)
+		if err != nil {
+			return nil, ErrUnsupported
+		}
+		r, err := blob.Reader()
+		if err != nil {
+			return nil, ErrUnsupported
+		}
+		raw, err := io.ReadAll(r)
+		r.Close()
+		if err != nil {
+			return nil, ErrUnsupported
+		}
+		full := filepath.Join(root, filepath.FromSlash(p))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			return nil, ErrUnsupported
+		}
+		if err := os.WriteFile(full, raw, 0o644); err != nil {
+			return nil, ErrUnsupported
+		}
+		// Collapse every stage of this path to the chosen blob: the
+		// picked entry itself survives (re-staged merged), the other
+		// stages for this path go.
+		pick.Stage = index.Merged
+		var rebuilt []*index.Entry
+		for _, e := range idx.Entries {
+			if e.Name == p && e != pick {
+				continue
+			}
+			rebuilt = append(rebuilt, e)
+		}
+		idx.Entries = rebuilt
+		if ist, ok := repo.Storer.(storer.IndexStorer); ok {
+			if err := ist.SetIndex(idx); err != nil {
+				return nil, ErrUnsupported
+			}
+		} else {
+			return nil, ErrUnsupported
+		}
+	}
+	_ = wt
+	return &ExecResult{Stdout: ""}, nil
 }
 
 func nativeRemote(_ context.Context, dir string, args []string) (*ExecResult, error) {

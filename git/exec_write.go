@@ -496,45 +496,7 @@ func nativeRebase(_ context.Context, dir string, args []string) (*ExecResult, er
 	return &ExecResult{Stdout: fmt.Sprintf("Successfully rebased and updated.\n")}, nil
 }
 
-// nativeApply implements "git apply <patch-file>" via go-git.
-// Returns ErrUnsupported for complex patches.
-func nativeApply(_ context.Context, dir string, args []string) (*ExecResult, error) {
-	if len(args) == 0 {
-		return nil, ErrUnsupported
-	}
-
-	// Find the patch file
-	var patchFile string
-	for _, arg := range args {
-		if strings.HasPrefix(arg, "-") {
-			// Reject flags we don't support
-			return nil, ErrUnsupported
-		}
-		patchFile = arg
-	}
-
-	if patchFile == "" {
-		return nil, ErrUnsupported
-	}
-
-	// Make path absolute relative to dir
-	if !filepath.IsAbs(patchFile) {
-		patchFile = filepath.Join(dir, patchFile)
-	}
-
-	// Read patch content
-	_, err := os.ReadFile(patchFile)
-	if err != nil {
-		return &ExecResult{
-			Stderr:   fmt.Sprintf("error: can't open patch '%s': %v\n", patchFile, err),
-			ExitCode: 128,
-		}, nil
-	}
-
-	// go-git doesn't provide a direct unified diff apply on worktree.
-	// For now, fall through to host git for actual apply operations.
-	return nil, ErrUnsupported
-}
+// nativeApply lives in apply.go (S252.5): real worktree patch application.
 
 // nativeFormatPatch implements "git format-patch" via go-git.
 func nativeFormatPatch(_ context.Context, dir string, args []string) (*ExecResult, error) {
