@@ -55,6 +55,9 @@ type Store struct {
 	registryRoot string
 	// maxTranscript bounds transcript artifacts; overridable for tests.
 	maxTranscript int64
+	// deputyResolver resolves a handle to an instance snapshot at deputy grant time.
+	// Nil means handles are taken as literal holder names; a real fleet resolver will be injected by the host.
+	deputyResolver DeputyResolver
 }
 
 // Option configures a Store.
@@ -135,6 +138,13 @@ func WithScope(id string) Option {
 	return WithScopeProvider(StaticScope(Scope{
 		ID: id, Machine: "static:" + id, Account: "static:" + id, Host: id, Source: "static",
 	}))
+}
+
+// WithDeputyResolver injects the instance handle resolver used at deputy grant time.
+// The resolver maps a human handle (e.g. "Esme-2") to a holder instance UUID snapshot.
+// Stored snapshot ensures reusing a handle never transfers old authority.
+func WithDeputyResolver(r DeputyResolver) Option {
+	return func(s *Store) { s.deputyResolver = r }
 }
 
 // Open prepares the store directory. The journal records what an agent did across

@@ -71,6 +71,11 @@ const (
 	KindRepair Kind = "repair"
 	// KindCheckpoint marks that a checkpoint was materialized at this watermark.
 	KindCheckpoint Kind = "checkpoint"
+
+	// Deputy lifecycle — scoped occupancies of the steward position.
+	// Reuse existing journal/hash/epoch machinery; no generic framework.
+	KindDeputyGranted Kind = "deputy.granted"
+	KindDeputyRevoked Kind = "deputy.revoked"
 )
 
 var knownKinds = map[Kind]bool{
@@ -79,6 +84,7 @@ var knownKinds = map[Kind]bool{
 	KindSeatClaimed: true, KindSeatTakeover: true, KindSeatReleased: true,
 	KindWorkstreamOpen: true, KindWorkstreamUpdate: true, KindWorkstreamClose: true,
 	KindReconcile: true, KindRepair: true, KindCheckpoint: true,
+	KindDeputyGranted: true, KindDeputyRevoked: true,
 }
 
 // Known reports whether this is a kind the package understands. An entry of an

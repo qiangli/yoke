@@ -48,7 +48,22 @@ func rolesForBoard() []bus.HostRole {
 			role.Holder = view.Authority.Holder.Name
 		}
 	}
-	return []bus.HostRole{role}
+	out := []bus.HostRole{role}
+	// Deputy role mail: deputy:<scope> is durable and survives holder handoff
+	// because the topic is the scope, not the holder. Each active deputy
+	// contributes one HostRole so bus addresses them via existing inbox/mb/ping/meet.
+	if st, err := Open(""); err == nil {
+		if deps, err := st.DeputyActive(time.Now()); err == nil {
+			for _, d := range deps {
+				out = append(out, bus.HostRole{
+					Label: DeputyLabelForScope(d.Scope),
+					Topic: DeputyTopicForScope(d.Scope),
+					Holder: d.Holder.Name,
+				})
+			}
+		}
+	}
+	return out
 }
 
 // seatsForLexicon reports this host's steward seat.
