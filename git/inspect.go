@@ -386,3 +386,22 @@ func commitPatch(commit *object.Commit) (string, error) {
 	}
 	return patch.String(), nil
 }
+
+// ResolveCommit resolves rev (HEAD, a branch, a tag — annotated tags are
+// peeled — or a SHA) in the repo at repoPath to its full commit SHA. Unlike
+// RevParse it never computes worktree status, so it stays cheap on large
+// trees.
+func ResolveCommit(repoPath, rev string) (string, error) {
+	if repoPath == "" {
+		repoPath = "."
+	}
+	r, err := gogit.PlainOpen(repoPath)
+	if err != nil {
+		return "", fmt.Errorf("not a git repository: %w", err)
+	}
+	c, err := resolveCommit(r, rev)
+	if err != nil {
+		return "", err
+	}
+	return c.Hash.String(), nil
+}

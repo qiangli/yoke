@@ -1018,6 +1018,9 @@ func init() {
 	// change — re-add it when the surface is actually usable. A tile that opens
 	// something broken is worse than no tile: it costs a click to learn nothing.
 	addVerb("dag", Entry{Stage: StageCross, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
+	// mod: the Bash# module contract — sibling pins are go.mod versions in a
+	// go.work workspace; drift/sync/dir/tools/init compose the go command.
+	addVerb("mod", Entry{Stage: StageCross, Group: GroupToolchains, Tier: TierWorkspace, Caps: []string{CapJSON}})
 	addVerb("sdlc", Entry{Stage: StageDeploy, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
 	// Chat began as a one-shot launcher and was temporarily renamed `invoke`.
 	// It now owns real governed interactive sessions and their control surface,
@@ -1589,6 +1592,11 @@ func init() {
 	// contact an MTA, talkd, or another host; talk's AF_UNIX session is not
 	// classified as network egress.
 	eff(EffNet, "lp")
+	// mod reads go.work/go.mod, edits go.mod/go.sum and runs go (which may download).
+	eff(EffRead, "mod")
+	eff(EffWrite, "mod")
+	eff(EffNet, "mod")
+	eff(EffExec, "mod")
 	// The provisioner downloads pinned upstream source, runs a compiler over it,
 	// and installs a binary that outlives the session.
 	eff(EffNet, "posix-providers")
@@ -1703,8 +1711,8 @@ func init() {
 		"git-scm", "gh", "loom", "app", "curl", "rclone", "zot", "seaweedfs",
 		"kopia", "kubectl", "helm", "dks", "commands", "pair", "judge", "gate",
 		"conform", "verify", "run", "tessaro", "login", "sota",
-		// toolchain provisioners: download + run arbitrary code
-		"go", "cmake", "clang", "zig", "node", "npm", "npx", "pnpm", "yarn",
+		// toolchain provisioners: download + run arbitrary code (mod runs go)
+		"go", "mod", "cmake", "clang", "zig", "node", "npm", "npx", "pnpm", "yarn",
 		"python", "pip", "uv", "mise", "cargo", "rustc", "rustup", "rust", "pwsh",
 	)
 

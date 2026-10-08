@@ -141,6 +141,7 @@ var packages = map[string]Package{
 	"chat":       cmdPkg("chat"),
 	"codegraph":  cmdPkg("graph"),
 	"dag":        cmdPkg("dag"),
+	"gomod":      cmdPkg("mod"),
 	"foreman":    libPkg("weave", "internal process manager for steerable agent sessions under weave and sprint; suppressed from the public atlas (Bashy #40)"),
 	"gate":       cmdPkg("gate"),
 	"handoff":    cmdPkg("handoff"),

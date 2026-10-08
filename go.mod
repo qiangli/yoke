@@ -26,6 +26,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/odvcencio/gotreesitter v0.16.0
 	github.com/ollama/ollama v0.0.0-00010101000000-000000000000
+	github.com/pkg/sftp v1.13.10
 	github.com/qiangli/coreutils v0.0.0
 	github.com/qiangli/gfy v0.0.0-20260504062854-764095a2877d
 	github.com/qiangli/yoke/pkg/llmgw v0.0.0-00010101000000-000000000000
@@ -51,6 +52,7 @@ require (
 	go.podman.io/common v0.67.2-0.20260423135811-cbaa5f41e643
 	go.podman.io/podman/v6 v6.0.0-20260424181651-a8c36318565d
 	golang.org/x/crypto v0.53.0
+	golang.org/x/mod v0.36.0
 	golang.org/x/net v0.56.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/term v0.44.0
@@ -279,7 +281,6 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.27 // indirect
 	github.com/pjbgf/sha1cd v0.6.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
-	github.com/pkg/sftp v1.13.10 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
@@ -348,7 +349,6 @@ require (
 	go4.org/unsafe/assume-no-moving-gc v0.0.0-20231121144256-b99613f794b6 // indirect
 	golang.org/x/arch v0.20.0 // indirect
 	golang.org/x/image v0.42.0 // indirect
-	golang.org/x/mod v0.36.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/text v0.38.0 // indirect
