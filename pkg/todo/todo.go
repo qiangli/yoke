@@ -408,6 +408,15 @@ var SprintHandles func(seq int64) (uuid, title string, ok bool)
 // Plain todo binaries leave it nil; sprint-aware binaries retire moved goals.
 var SprintChanged func(previous *issue.Issue) error
 
+// SprintPreflight proves the sprint board is writable BEFORE a story edit
+// that moves it is saved. A confined manager session (sandbox denies the
+// board) must fail here — before any store is written — rather than save
+// the story and then fail the board reconcile, which leaves repo cards
+// moved while the host index still says missing. Plain todo binaries leave
+// it nil (no board, nothing to prove); sprint-aware binaries probe the
+// board lock.
+var SprintPreflight func() error
+
 // LinkSprint sets the story's sprint fields from seq: all three when the seam
 // answers, the seq alone when it does not, and none when seq is 0 (unlink).
 // The seq is a label scoped to the filer's host; the uuid is the identity.

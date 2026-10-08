@@ -783,12 +783,29 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 				}
 				LinkSprint(it, sprint)
 			}
+			if cmd.Flags().Changed("sprint") && (SprintChanged != nil || SprintPreflight != nil) {
+				// The board reconcile below runs AFTER the story save, so a
+				// denied board would leave a half-moved story. Prove the board
+				// writable first: a confined session fails here with the story
+				// untouched.
+				if SprintPreflight != nil {
+					if err := SprintPreflight(); err != nil {
+						return fmt.Errorf("sprint board is not writable, story left unchanged: %w", err)
+					}
+				}
+			}
 			if _, err := st.Save(it); err != nil {
 				return err
 			}
 			if cmd.Flags().Changed("sprint") && SprintChanged != nil {
 				if err := SprintChanged(&previous); err != nil {
-					return fmt.Errorf("story saved, but retiring its former sprint goals failed: %w", err)
+					// The story is already saved but the board missed it: roll
+					// the story back rather than leave repo cards moved while
+					// the host index still says missing.
+					if _, rerr := st.Save(&previous); rerr != nil {
+						return fmt.Errorf("story saved, but retiring its former sprint goals failed: %v; rolling the story back failed too: %v", err, rerr)
+					}
+					return fmt.Errorf("story left unchanged: retiring its former sprint goals failed: %w", err)
 				}
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "edited %s — %s\n", it.ID[:8], it.Title)
