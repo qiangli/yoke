@@ -140,10 +140,14 @@ func (h *harness) lastRecord(n int) Record {
 
 // fakeCLI imitates cligw.
 type fakeCLI struct {
-	mu       sync.Mutex
-	resolved int
-	lastAuth string
-	lastBody map[string]any
+	mu          sync.Mutex
+	resolved    int
+	lastAuth    string
+	lastBody    map[string]any
+	sticky      *fakeStickySession
+	stickyAgent string
+	stickyErr   error
+	dials       int
 }
 
 func (c *fakeCLI) snap() (string, map[string]any, int) {
@@ -494,11 +498,12 @@ func TestStickyCLIFreezesAgentAndRefusesDrift(t *testing.T) {
 	if resp.StatusCode != 409 {
 		t.Fatalf("drift: %d", resp.StatusCode)
 	}
-	// reset=none on a CLI agent is refused explicitly.
+	// reset=none on a CLI agent holds one warm worker for the binding: the
+	// implicit worker binding serves its turn instead of answering 501.
 	h.tool.Store("2.1.0")
-	resp, _ = h.do("POST", "/v1/chat/completions", chat("L5"), map[string]string{StickyHeader: "mt; bind=worker; reset=none"})
-	if resp.StatusCode != 501 {
-		t.Fatalf("cli reset=none: %d", resp.StatusCode)
+	resp, out = h.do("POST", "/v1/chat/completions", chat("L5"), map[string]string{StickyHeader: "mt; bind=worker; reset=none"})
+	if resp.StatusCode != 200 {
+		t.Fatalf("cli reset=none: %d %v", resp.StatusCode, out)
 	}
 }
 

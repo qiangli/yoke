@@ -101,7 +101,24 @@ func (b *AgentBackend) Serve(w http.ResponseWriter, r *http.Request, body []byte
 		return gateway.Attempt{Status: http.StatusBadGateway, CanRetry: true}
 	}
 
-	text, stopped := applyStops(result.Text, rawJSON(req.Stop))
+	text, finish := FinishChat(req, result.Text)
+	id := NewCompletionID()
+	if result.Usage.Estimated {
+		w.Header().Set("X-Bashy-Usage-Estimated", "true")
+	}
+	contentType, payload := EncodeChat(req, text, finish, id, deltas, result.Usage)
+	return b.writeResponse(w, r, http.StatusOK, contentType, payload, modify)
+}
+
+// NewCompletionID mints one chat completion id.
+func NewCompletionID() string {
+	return fmt.Sprintf("chatcmpl-llmgw-%016x", completionSequence.Add(1))
+}
+
+// FinishChat applies the request's stop sequences and tool-answer recovery to
+// a worker's answer text, returning the served text and finish reason.
+func FinishChat(req openai.ChatRequest, text string) (string, string) {
+	text, stopped := applyStops(text, rawJSON(req.Stop))
 	if len(req.Tools) > 0 {
 		text = recoverToolAnswer(text, req.Tools)
 	}
@@ -109,25 +126,27 @@ func (b *AgentBackend) Serve(w http.ResponseWriter, r *http.Request, body []byte
 	if stopped {
 		finish = "stop"
 	}
-	id := fmt.Sprintf("chatcmpl-llmgw-%016x", completionSequence.Add(1))
-	usage := openai.Usage{
-		PromptTokens: int(result.Usage.InputTokens), CompletionTokens: int(result.Usage.OutputTokens),
-		TotalTokens: int(result.Usage.TotalTokens),
-	}
-	if result.Usage.Estimated {
-		w.Header().Set("X-Bashy-Usage-Estimated", "true")
+	return text, finish
+}
+
+// EncodeChat builds the OpenAI chat completion payload for a finished turn,
+// streaming SSE when the request asked for it. Usage stays in worker units;
+// callers set X-Bashy-Usage-Estimated themselves when it is estimated.
+func EncodeChat(req openai.ChatRequest, answer, finish, id string, deltas []string, usage Usage) (string, []byte) {
+	ou := openai.Usage{
+		PromptTokens: int(usage.InputTokens), CompletionTokens: int(usage.OutputTokens),
+		TotalTokens: int(usage.TotalTokens),
 	}
 	if req.Stream {
-		payload := streamBody(id, req.Model, deltas, text, finish, usage)
-		return b.writeResponse(w, r, http.StatusOK, "text/event-stream", payload, modify)
+		return "text/event-stream", streamBody(id, req.Model, deltas, answer, finish, ou)
 	}
 	completion := openai.ChatCompletion{
 		ID: id, Object: "chat.completion", Created: time.Now().Unix(), Model: req.Model,
-		Choices: []openai.ChatChoice{{Index: 0, Message: &openai.ChatResponseMessage{Role: "assistant", Content: text}, FinishReason: &finish}},
-		Usage:   usage,
+		Choices: []openai.ChatChoice{{Index: 0, Message: &openai.ChatResponseMessage{Role: "assistant", Content: answer}, FinishReason: &finish}},
+		Usage:   ou,
 	}
 	payload, _ := json.Marshal(completion)
-	return b.writeResponse(w, r, http.StatusOK, "application/json", payload, modify)
+	return "application/json", payload
 }
 
 func (b *AgentBackend) writeResponse(w http.ResponseWriter, r *http.Request, status int, contentType string, payload []byte, modify func(*http.Response) error) gateway.Attempt {

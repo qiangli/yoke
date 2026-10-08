@@ -122,6 +122,12 @@ type Broker struct {
 	audit  *auditLog
 	tracer trace.Tracer
 
+	// stickyW holds one warm CLI per bind=worker/reset=none binding, keyed
+	// like the sticky store (principal + "\x00" + key). Sessions retire when
+	// their binding is deleted or expires (onEvict) or when a turn fails.
+	stickyWMu sync.Mutex
+	stickyW   map[string]*stickyEntry
+
 	tagMu   sync.Mutex
 	tags    map[string]engineModel // canonical name -> model
 	tagsAt  time.Time
@@ -147,6 +153,7 @@ func New(ctx context.Context, opts Options) (*Broker, error) {
 		device:  NewDevice(opts.QueueLimit),
 		tracer:  otel.Tracer("bashy/broker"),
 		derived: map[string]bool{},
+		stickyW: map[string]*stickyEntry{},
 	}
 	var stickyPath, auditPath string
 	if opts.StateDir != "" {
@@ -154,6 +161,7 @@ func New(ctx context.Context, opts Options) (*Broker, error) {
 		auditPath = filepath.Join(opts.StateDir, "audit.jsonl")
 	}
 	b.sticky = newStickyStore(stickyPath, opts.Now)
+	b.sticky.onEvict = b.evictStickyWorker
 	b.audit = newAuditLog(auditPath)
 	if opts.Engine != nil {
 		base, err := opts.Engine.Start(ctx)
@@ -433,11 +441,6 @@ func (b *Broker) dispatch(w http.ResponseWriter, r *http.Request, ri *reqInfo, b
 			writeStickyErr(w, r.URL.Path, err)
 			return
 		}
-		if backend == BackendCLI && (binding.Spec.Bind == BindWorker || binding.Spec.Reset == ResetNone) {
-			writeErr(w, r.URL.Path, http.StatusNotImplemented,
-				"sticky bind=worker / reset=none on CLI agents is not available yet (cligw workers are one-shot); use bind=identity reset=each")
-			return
-		}
 		var messages []json.RawMessage
 		if binding.Spec.Reset == ResetNone {
 			_ = json.Unmarshal(payload["messages"], &messages)
@@ -467,6 +470,14 @@ func (b *Broker) dispatch(w http.ResponseWriter, r *http.Request, ri *reqInfo, b
 	if backend == BackendCLI {
 		if b.opts.CLI == nil {
 			writeErr(w, r.URL.Path, http.StatusNotFound, fmt.Sprintf("model %q is not a local model and this broker serves no fleet agents", model))
+			return
+		}
+		// One warm CLI per binding: reset=none implies bind=worker, and the
+		// turn runs on the binding's held session with only the new messages.
+		// bind=worker with reset=each needs no conversation, so every turn is
+		// an independent one-shot below.
+		if binding != nil && binding.Spec.Bind == BindWorker && binding.Spec.Reset == ResetNone {
+			b.serveStickyWorker(w, r, ri, binding, payload)
 			return
 		}
 		if binding != nil {

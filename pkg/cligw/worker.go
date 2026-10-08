@@ -100,15 +100,19 @@ type workerLine struct {
 	err  error
 }
 
-// NewWorker resolves agent through the fleet registry and creates a one-shot
-// worker in a fresh temporary working directory.
-func NewWorker(ctx context.Context, agent string) (*Worker, error) {
+// resolveWorkerSeat resolves agent through the fleet registry into a fresh
+// temporary working directory. The caller owns the directory: it must remove
+// it when seat setup fails, and hand ownership to the worker or session when
+// setup succeeds.
+func resolveWorkerSeat(ctx context.Context, agent string) (string, agentlaunch.Launch, fleet.Tool, WarmMode, error) {
+	var launch agentlaunch.Launch
+	var tool fleet.Tool
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return "", launch, tool, "", err
 	}
 	cwd, err := os.MkdirTemp("", "cligw-worker-")
 	if err != nil {
-		return nil, fmt.Errorf("cligw: create worker directory: %w", err)
+		return "", launch, tool, "", fmt.Errorf("cligw: create worker directory: %w", err)
 	}
 	failed := true
 	defer func() {
@@ -118,9 +122,9 @@ func NewWorker(ctx context.Context, agent string) (*Worker, error) {
 	}()
 
 	opt := agentlaunch.Options{ReadOnly: true, Sandbox: "read-only"}
-	launch, err := agentlaunch.Resolve(agent, opt)
+	launch, err = agentlaunch.Resolve(agent, opt)
 	if err != nil {
-		return nil, err
+		return "", launch, tool, "", err
 	}
 	// Resolve already finalizes the argv. ApplySandbox is intentionally also
 	// applied here: cligw's pure-completion boundary remains fail-closed even if
@@ -128,7 +132,7 @@ func NewWorker(ctx context.Context, agent string) (*Worker, error) {
 	launch.Args = agentlaunch.ApplySandbox(launch.ToolName, launch.Args, opt)
 	tool, ok := agentlaunch.NewCatalog().Tool(launch.ToolName)
 	if !ok {
-		return nil, fmt.Errorf("cligw: resolved tool %q is not in the fleet catalog", launch.ToolName)
+		return "", launch, tool, "", fmt.Errorf("cligw: resolved tool %q is not in the fleet catalog", launch.ToolName)
 	}
 	mode := WarmMode(strings.TrimSpace(tool.CLI.Launch.Warm))
 	if mode == "" {
@@ -137,27 +141,39 @@ func NewWorker(ctx context.Context, agent string) (*Worker, error) {
 	switch mode {
 	case WarmCold, WarmStdinStreamJSON, WarmACP, WarmStdin:
 	default:
-		return nil, fmt.Errorf("cligw: tool %q has unsupported warm mode %q", tool.Name, mode)
+		return "", launch, tool, "", fmt.Errorf("cligw: tool %q has unsupported warm mode %q", tool.Name, mode)
 	}
 
 	// A declared effort the tool cannot be told is refused here, loudly:
 	// silently dropping it would serve a different setting than the binding
 	// (and its sticky identity) says.
 	if _, err := effortArgs(tool.Name, launch.Effort); err != nil {
-		return nil, err
+		return "", launch, tool, "", err
 	}
 
+	failed = false
+	return cwd, launch, tool, mode, nil
+}
+
+// NewWorker resolves agent through the fleet registry and creates a one-shot
+// worker in a fresh temporary working directory.
+func NewWorker(ctx context.Context, agent string) (*Worker, error) {
+	cwd, launch, tool, mode, err := resolveWorkerSeat(ctx, agent)
+	if err != nil {
+		return nil, err
+	}
 	w := &Worker{agent: agent, launch: launch, tool: tool, mode: mode, cwd: cwd}
 	// ACP is deliberately a cold fallback until the ACP worker transport lands.
 	if mode != WarmCold && mode != WarmACP {
 		if err := w.prepareSystemPrompt(""); err != nil {
+			_ = os.RemoveAll(cwd)
 			return nil, err
 		}
 		if err := w.start(w.argv("", "")); err != nil {
+			_ = os.RemoveAll(cwd)
 			return nil, err
 		}
 	}
-	failed = false
 	return w, nil
 }
 

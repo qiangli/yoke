@@ -78,6 +78,17 @@ func (a cliAdapter) LookupAgent(name string) (AgentInfo, bool) {
 	return a.info(ag), true
 }
 
+// DialSticky implements StickyDialer over cligw's session registry: one warm
+// CLI per bind=worker/reset=none binding. Tools that cannot hold a session
+// (and a full room) come back as cligw errors the broker maps to 501 and 429.
+func (a cliAdapter) DialSticky(ctx context.Context, agent string) (stickyWorker, error) {
+	sess, err := a.s.DialSticky(ctx, agent)
+	if err != nil {
+		return nil, err
+	}
+	return sess, nil
+}
+
 func (a cliAdapter) info(ag cligw.Agent) AgentInfo {
 	return AgentInfo{Name: ag.Name, Tool: ag.Tool, Model: ag.Model, VendorModel: a.s.VendorModel(ag),
 		Provider: ag.Provider, Kind: ag.Kind, Warm: ag.Warm, Effort: ag.Effort, Band: ag.Band}

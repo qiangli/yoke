@@ -213,6 +213,15 @@ func (p *Pool) Stats() PoolStats {
 	}
 }
 
+// Total returns idle plus busy workers plus spawning reservations: every
+// process this pool owns or is about to own. Sticky sessions are counted
+// separately by the server against the same ceiling.
+func (p *Pool) Total() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.total
+}
+
 // Config returns the pool's configuration with the live MinSpare/MaxSpare
 // targets, so the autoscaler can read the ceilings it must not exceed.
 func (p *Pool) Config() PoolConfig {

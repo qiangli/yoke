@@ -260,6 +260,10 @@ type stickyStore struct {
 	m    map[string]*Binding // principal + "\x00" + key
 	path string
 	now  func() time.Time
+	// onEvict retires per-binding resources (a held sticky worker) when a
+	// binding is deleted or expires. It runs under mu and must not call back
+	// into the store.
+	onEvict func(principal, key string)
 }
 
 func newStickyStore(path string, now func() time.Time) *stickyStore {
@@ -310,14 +314,21 @@ func (s *stickyStore) saveLocked() {
 func (s *stickyStore) sweepLocked() {
 	now := s.now()
 	changed := false
+	var evicted []*Binding
 	for k, b := range s.m {
 		if ttl := b.ttl(); ttl > 0 && now.Sub(b.LastUsed) > ttl {
 			delete(s.m, k)
+			evicted = append(evicted, b)
 			changed = true
 		}
 	}
 	if changed {
 		s.saveLocked()
+	}
+	if s.onEvict != nil {
+		for _, b := range evicted {
+			s.onEvict(b.Principal, b.Spec.Key)
+		}
 	}
 }
 
@@ -411,7 +422,25 @@ func (s *stickyStore) delete(principal, session, key string) bool {
 	}
 	delete(s.m, k)
 	s.saveLocked()
+	if s.onEvict != nil {
+		s.onEvict(principal, key)
+	}
 	return true
+}
+
+// restoreTranscript rolls a binding's recorded transcript back after a failed
+// sticky-worker turn, so the retry is accepted as the same extension instead
+// of refused as a divergence (or, worse, served from a fresh worker with only
+// the delta). The use budget stays consumed: the attempt happened.
+func (s *stickyStore) restoreTranscript(principal, session, key string, transcript []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b := s.m[storeKey(principal, key)]
+	if b == nil || !b.visibleTo(principal, session) {
+		return
+	}
+	b.Transcript = append([]string(nil), transcript...)
+	s.saveLocked()
 }
 
 func (s *stickyStore) list(principal, session string) []Binding {

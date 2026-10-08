@@ -1,6 +1,8 @@
 package cligw
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -123,6 +125,55 @@ func TestCLIHelper(t *testing.T) {
 		prompt := args[len(args)-1]
 		fmt.Printf("{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":%q}}\n", "answer:"+prompt)
 		fmt.Println(`{"type":"turn.completed","usage":{"input_tokens":4,"cached_input_tokens":1,"output_tokens":2}}`)
+	case "sticky-loop":
+		// A stdin-stream-json CLI that stays up across turns: one NDJSON
+		// user line in, one assistant event plus a terminal result out.
+		// The pid prefix proves two turns reached the same process.
+		scan := bufio.NewScanner(os.Stdin)
+		scan.Buffer(make([]byte, 64<<10), 4<<20)
+		for scan.Scan() {
+			line := append([]byte(nil), scan.Bytes()...)
+			if len(bytes.TrimSpace(line)) == 0 {
+				continue
+			}
+			var message struct {
+				Type    string `json:"type"`
+				Message struct {
+					Role    string `json:"role"`
+					Content string `json:"content"`
+				} `json:"message"`
+			}
+			if json.Unmarshal(line, &message) != nil || message.Message.Role != "user" {
+				os.Exit(92)
+			}
+			fmt.Printf("{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":%q}]}}\n", strconv.Itoa(os.Getpid())+":"+message.Message.Content)
+			fmt.Println(`{"type":"result","is_error":false,"usage":{"input_tokens":7,"output_tokens":2}}`)
+		}
+	case "sticky-partials":
+		// Claude's wire shape across turns: text deltas as stream_event,
+		// then the full assistant snapshot, then the terminal result. A
+		// session must not duplicate the snapshot into the turn text.
+		scan := bufio.NewScanner(os.Stdin)
+		scan.Buffer(make([]byte, 64<<10), 4<<20)
+		for scan.Scan() {
+			line := append([]byte(nil), scan.Bytes()...)
+			if len(bytes.TrimSpace(line)) == 0 {
+				continue
+			}
+			var message struct {
+				Type    string `json:"type"`
+				Message struct {
+					Role    string `json:"role"`
+					Content string `json:"content"`
+				} `json:"message"`
+			}
+			if json.Unmarshal(line, &message) != nil || message.Message.Role != "user" {
+				os.Exit(92)
+			}
+			fmt.Printf("{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":%q}}}\n", "half:"+message.Message.Content)
+			fmt.Printf("{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":%q}]}}\n", "half:"+message.Message.Content)
+			fmt.Println(`{"type":"result","is_error":false,"usage":{"input_tokens":7,"output_tokens":2}}`)
+		}
 	case "crash":
 		fmt.Fprintln(os.Stderr, "fake crash")
 		os.Exit(7)

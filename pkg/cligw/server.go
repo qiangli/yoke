@@ -196,6 +196,13 @@ type Server struct {
 	backends map[string]*AgentBackend
 	order    []string
 	closed   bool
+
+	// stickyMu guards the reserved sticky sessions below, separately from mu:
+	// DialSticky needs the pool (mu) and the session budget (stickyMu) without
+	// nesting them the other way anywhere.
+	stickyMu    sync.Mutex
+	stickyCount map[string]int
+	stickySet   map[*StickySession]struct{}
 }
 
 // NewServer wires the fleet catalog, the router, the autoscaler and the llmgw
@@ -252,9 +259,11 @@ func NewServer(opts ServerOptions) (*Server, error) {
 		poolCfg: poolCfg, timeout: timeout,
 		history: sched.NewHistoryBuffer(),
 		ctx:     ctx, cancel: cancel,
-		ranked:   map[int]rankEntry{},
-		pools:    map[string]*Pool{},
-		backends: map[string]*AgentBackend{},
+		ranked:      map[int]rankEntry{},
+		pools:       map[string]*Pool{},
+		backends:    map[string]*AgentBackend{},
+		stickyCount: map[string]int{},
+		stickySet:   map[*StickySession]struct{}{},
 	}
 	s.router = NewRouter(catalog, policy,
 		WithPoolState(s), WithQuotaSource(quota), WithBreaker(breaker), WithRecorder(recorder))
@@ -385,6 +394,17 @@ func (s *Server) Close() error {
 	s.cancel()
 	for _, pool := range pools {
 		_ = pool.Close()
+	}
+	// Reserved sticky sessions retire with the server, like pools. Copy the
+	// set: Close drops each reservation, which mutates it.
+	s.stickyMu.Lock()
+	sessions := make([]*StickySession, 0, len(s.stickySet))
+	for sess := range s.stickySet {
+		sessions = append(sessions, sess)
+	}
+	s.stickyMu.Unlock()
+	for _, sess := range sessions {
+		_ = sess.Close()
 	}
 	return nil
 }
@@ -698,6 +718,67 @@ func (s *Server) Backend(agent string) (*AgentBackend, error) {
 		return nil, err
 	}
 	return backend, nil
+}
+
+// DialSticky reserves one warm CLI for a sticky bind=worker/reset=none
+// binding and returns its session. The session shares the agent's
+// concurrency budget with the one-shot pool: pool workers plus reserved
+// sessions never exceed the pool ceiling (already capped by the vendor seat),
+// and a full room is refused fast instead of queueing behind the binding.
+// Only stdin-stream-json tools can hold a session; anything else is
+// ErrStickyUnsupported, anything full is ErrStickyCapped. The caller owns the
+// session and must Close it; the count drops when the session closes.
+func (s *Server) DialSticky(ctx context.Context, agent string) (*StickySession, error) {
+	row, ok := s.agent(agent)
+	if !ok {
+		return nil, fmt.Errorf("cligw: agent %q is not a launchable fleet agent", agent)
+	}
+	if WarmMode(strings.TrimSpace(row.Warm)) != WarmStdinStreamJSON {
+		warm := strings.TrimSpace(row.Warm)
+		if warm == "" {
+			warm = string(WarmCold)
+		}
+		return nil, fmt.Errorf("%w: agent %q runs tool %q with warm mode %q",
+			ErrStickyUnsupported, agent, row.Tool, warm)
+	}
+	backend, err := s.Backend(agent)
+	if err != nil {
+		return nil, err
+	}
+	pool := backend.Pool
+	max := pool.Config().MaxWorkers
+	s.stickyMu.Lock()
+	if pool.Total()+s.stickyCount[agent] >= max {
+		s.stickyMu.Unlock()
+		return nil, fmt.Errorf("%w: agent %q holds %d workers and sessions at ceiling %d",
+			ErrStickyCapped, agent, pool.Total()+s.stickyCount[agent], max)
+	}
+	s.stickyCount[agent]++
+	s.stickyMu.Unlock()
+	sess, err := NewStickySession(ctx, agent)
+	if err != nil {
+		s.stickyMu.Lock()
+		s.stickyCount[agent]--
+		s.stickyMu.Unlock()
+		return nil, err
+	}
+	s.stickyMu.Lock()
+	s.stickySet[sess] = struct{}{}
+	s.stickyMu.Unlock()
+	sess.onClose = func() { s.releaseSticky(sess, agent) }
+	return sess, nil
+}
+
+func (s *Server) releaseSticky(sess *StickySession, agent string) {
+	s.stickyMu.Lock()
+	defer s.stickyMu.Unlock()
+	if _, ok := s.stickySet[sess]; !ok {
+		return
+	}
+	delete(s.stickySet, sess)
+	if s.stickyCount[agent] > 0 {
+		s.stickyCount[agent]--
+	}
 }
 
 // checkSpawnable reports a pool that has never produced a worker and has
