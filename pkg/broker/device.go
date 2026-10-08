@@ -74,7 +74,7 @@ type Device struct {
 	// OnSwitch runs (while the device is held) before a different
 	// principal's work starts, so caches never cross principals (Q8).
 	last     string
-	OnSwitch func(ctx context.Context, from, to string)
+	OnSwitch func(ctx context.Context, from, to string) error
 
 	// Counters for the live view.
 	served   uint64
@@ -102,7 +102,10 @@ func (d *Device) Acquire(ctx context.Context, class Class, principal string) (fu
 	if !d.busy && d.queuedLocked() == 0 {
 		d.busy = true
 		d.mu.Unlock()
-		d.switchTo(ctx, principal)
+		if err := d.switchTo(ctx, principal); err != nil {
+			d.release()
+			return nil, time.Since(start), err
+		}
 		return d.releaseFunc(), 0, nil
 	}
 	if d.queuedLocked() >= d.limit {
@@ -115,7 +118,10 @@ func (d *Device) Acquire(ctx context.Context, class Class, principal string) (fu
 
 	select {
 	case <-w.ready:
-		d.switchTo(ctx, principal)
+		if err := d.switchTo(ctx, principal); err != nil {
+			d.release()
+			return nil, time.Since(start), err
+		}
 		return d.releaseFunc(), time.Since(start), nil
 	case <-ctx.Done():
 		d.mu.Lock()
@@ -131,20 +137,25 @@ func (d *Device) Acquire(ctx context.Context, class Class, principal string) (fu
 	}
 }
 
-func (d *Device) switchTo(ctx context.Context, principal string) {
+func (d *Device) switchTo(ctx context.Context, principal string) error {
 	d.mu.Lock()
-	from := d.last
+	from, hook := d.last, d.OnSwitch
+	d.mu.Unlock()
+	// Do not publish the new owner until eviction succeeds. A failed attempt
+	// must retry eviction on the next acquisition, including after startup.
+	if from != principal && hook != nil {
+		if err := hook(ctx, from, principal); err != nil {
+			return err
+		}
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.last = principal
 	d.served++
-	hook := d.OnSwitch
-	switched := from != "" && from != principal
-	if switched {
+	if from != "" && from != principal {
 		d.switches++
 	}
-	d.mu.Unlock()
-	if switched && hook != nil {
-		hook(ctx, from, principal)
-	}
+	return nil
 }
 
 func (d *Device) releaseFunc() func() {

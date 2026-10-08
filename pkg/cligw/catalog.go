@@ -195,6 +195,10 @@ func (c *FleetCatalog) inventory() []Agent {
 	if c.cached != nil && time.Since(c.cachedAt) < inventoryTTL {
 		return c.cached
 	}
+	return c.refreshLocked()
+}
+
+func (c *FleetCatalog) refreshLocked() []Agent {
 	c.cached = c.deriveInventory()
 	c.index = make(map[string]Agent, len(c.cached))
 	for _, agent := range c.cached {
@@ -212,6 +216,10 @@ func (c *FleetCatalog) Agent(name string) (Agent, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	agent, ok := c.index[name]
+	if !ok {
+		c.refreshLocked()
+		agent, ok = c.index[name]
+	}
 	return agent, ok
 }
 

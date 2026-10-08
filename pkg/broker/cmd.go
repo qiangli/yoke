@@ -97,7 +97,7 @@ type toolVersions struct {
 
 func (t *toolVersions) get(tool string) string {
 	t.mu.Lock()
-	if e, ok := t.m[tool]; ok && time.Since(e.at) < time.Minute {
+	if e, ok := t.m[tool]; ok && e.v != "unknown" && time.Since(e.at) < time.Minute {
 		t.mu.Unlock()
 		return e.v
 	}
@@ -230,7 +230,11 @@ func RunDoor(ctx context.Context, o DoorOptions) error {
 	if sock, err := door.SocketPath(); err == nil {
 		_ = os.Remove(sock)
 		if ln, err := net.Listen("unix", sock); err == nil {
-			_ = os.Chmod(sock, 0o600)
+			if err := os.Chmod(sock, 0o600); err != nil {
+				ln.Close()
+				tcp.Close()
+				return err
+			}
 			listeners = append(listeners, ln)
 			defer os.Remove(sock)
 		}

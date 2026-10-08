@@ -71,6 +71,7 @@ func (c *FleetCatalog) ParseModelSelector(s string) (Selector, error) {
 		return Selector{Raw: s, Kind: SelectorModel, Name: m.Name, catalog: c}, nil
 	}
 	if a, ok := c.fleet.Agent(s); ok {
+		c.Agent(a.Name) // Refresh a missing projection before routing the new binding.
 		return Selector{Raw: s, Kind: SelectorAgent, Name: a.Name, catalog: c}, nil
 	}
 	return Selector{}, c.unknownSelector(s)

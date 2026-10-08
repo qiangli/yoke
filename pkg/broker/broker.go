@@ -180,14 +180,17 @@ func (b *Broker) Device() *Device { return b.device }
 
 // onPrincipalSwitch evicts resident models before another principal's work
 // runs on the device, so no prefix/KV cache hit ever crosses principals (Q8).
-func (b *Broker) onPrincipalSwitch(ctx context.Context, from, to string) {
+func (b *Broker) onPrincipalSwitch(ctx context.Context, from, to string) error {
 	models, err := b.engine.ps(ctx)
 	if err != nil {
-		return
+		return fmt.Errorf("cache isolation: list resident models: %w", err)
 	}
 	for _, m := range models {
-		_ = b.engine.unload(ctx, m.Name)
+		if err := b.engine.unload(ctx, m.Name); err != nil {
+			return fmt.Errorf("cache isolation: unload %s: %w", m.Name, err)
+		}
 	}
+	return nil
 }
 
 // ---- request context -------------------------------------------------------
@@ -204,6 +207,7 @@ type reqInfo struct {
 	params    map[string]string
 	started   time.Time
 	rec       Record
+	finished  bool
 }
 
 // splitParams peels the /k/<token>, /s/<session> and /sticky/<key> pairs a
@@ -226,7 +230,10 @@ func splitParams(p string) (map[string]string, string) {
 }
 
 func (b *Broker) authorize(r *http.Request, pathToken string) (string, error) {
-	if owner, _ := r.Context().Value(unixOwnerKey).(bool); owner {
+	if owner, unixPeer := r.Context().Value(unixOwnerKey).(bool); unixPeer {
+		if !owner {
+			return "", errors.New("unix socket peer is not the owner")
+		}
 		return b.opts.Principal, nil
 	}
 	presented := pathToken
@@ -251,16 +258,30 @@ func (b *Broker) authorize(r *http.Request, pathToken string) (string, error) {
 func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	params, rest := splitParams(r.URL.Path)
 	ri := &reqInfo{params: params, started: b.opts.Now()}
+	ri.rec = Record{Time: ri.started, Method: r.Method, Path: rest, Class: ClassInteractive.String()}
+	cw := newCaptureWriter(w)
+	w = cw
+	defer func() {
+		if !ri.finished {
+			if cw.status == 0 {
+				cw.status = http.StatusOK
+			}
+			ri.rec.PromptTok, ri.rec.OutputTok = parseTokens(cw.tail)
+			b.finish(ri, cw.status, 0, "")
+		}
+	}()
 	principal, err := b.authorize(r, params["k"])
 	if err != nil {
 		writeErr(w, rest, http.StatusUnauthorized, err.Error())
 		return
 	}
 	ri.principal = principal
+	ri.rec.Principal = principal
 	ri.session = params["s"]
 	if ri.session == "" {
 		ri.session = strings.TrimSpace(r.Header.Get(SessionHeader))
 	}
+	ri.rec.Session = ri.session
 	if err := ValidateSession(ri.session); err != nil {
 		writeErr(w, rest, http.StatusBadRequest, err.Error())
 		return
@@ -420,7 +441,7 @@ func (b *Broker) dispatch(w http.ResponseWriter, r *http.Request, ri *reqInfo, b
 				messages = []json.RawMessage{}
 			}
 		}
-		use, err := b.sticky.use(ri.principal, binding.Spec.Key, messages)
+		use, err := b.sticky.use(ri.principal, ri.session, binding.Spec.Key, messages)
 		if err != nil {
 			writeStickyErr(w, r.URL.Path, err)
 			return
@@ -528,7 +549,7 @@ func (b *Broker) serveLocal(w http.ResponseWriter, r *http.Request, ri *reqInfo,
 	payload["model"], _ = json.Marshal(target)
 	body, _ := json.Marshal(payload)
 
-	release, wait, err := b.device.Acquire(ctx, ri.class, ri.principal)
+	release, wait, err := b.device.Acquire(ctx, ri.class, storeKey(ri.principal, ri.session))
 	w.Header().Set(WaitHeader, strconv.FormatInt(wait.Milliseconds(), 10))
 	trace.SpanFromContext(ctx).SetAttributes(attribute.Int64("bashy.queue_wait_ms", wait.Milliseconds()),
 		attribute.String("bashy.model", m.Name), attribute.String("bashy.model_digest", m.Digest))
@@ -540,7 +561,12 @@ func (b *Broker) serveLocal(w http.ResponseWriter, r *http.Request, ri *reqInfo,
 			writeErr(w, r.URL.Path, http.StatusServiceUnavailable, "the local model queue is full; retry later")
 			return
 		}
-		b.finish(ri, 499, wait, err.Error())
+		status := http.StatusServiceUnavailable
+		if ctx.Err() != nil {
+			status = 499
+		}
+		b.finish(ri, status, wait, err.Error())
+		writeErr(w, r.URL.Path, status, err.Error())
 		return
 	}
 	defer release()
@@ -555,6 +581,10 @@ func (b *Broker) serveLocal(w http.ResponseWriter, r *http.Request, ri *reqInfo,
 }
 
 func (b *Broker) finish(ri *reqInfo, status int, wait time.Duration, errMsg string) {
+	if ri.finished {
+		return
+	}
+	ri.finished = true
 	ri.rec.Status = status
 	ri.rec.WaitMS = wait.Milliseconds()
 	ri.rec.WallMS = b.opts.Now().Sub(ri.started).Milliseconds()
@@ -1033,14 +1063,14 @@ func (b *Broker) serveHealth(w http.ResponseWriter, r *http.Request) {
 // ---- serving ---------------------------------------------------------------
 
 // Serve runs the door on the given listeners until ctx ends. A unix
-// listener's connections are the owner's (the socket is 0600).
+// listener authenticates kernel peer credentials in addition to its 0600 mode.
 func (b *Broker) Serve(ctx context.Context, listeners ...net.Listener) error {
 	srv := &http.Server{
 		Handler:           b,
 		ReadHeaderTimeout: 30 * time.Second,
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
 			if c.LocalAddr().Network() == "unix" {
-				return context.WithValue(ctx, unixOwnerKey, true)
+				return context.WithValue(ctx, unixOwnerKey, socketOwner(c))
 			}
 			return ctx
 		},

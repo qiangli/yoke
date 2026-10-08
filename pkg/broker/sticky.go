@@ -100,6 +100,15 @@ type Binding struct {
 	Transcript []string `json:"transcript,omitempty"`
 }
 
+// Context-bearing bindings never inherit across a shell boundary. Only
+// reset=each identities may be exported through the session lineage.
+func (b *Binding) visibleTo(principal, session string) bool {
+	if b.Spec.Reset == ResetNone && b.Session != session {
+		return false
+	}
+	return visible(b.scoped, principal, session)
+}
+
 func (b *Binding) ttl() time.Duration {
 	if b.Spec.TTL == "" {
 		return DefaultStickyTTL
@@ -318,7 +327,7 @@ func (s *stickyStore) get(principal, session, key string) *Binding {
 	defer s.mu.Unlock()
 	s.sweepLocked()
 	b := s.m[storeKey(principal, key)]
-	if b == nil || !visible(b.scoped, principal, session) {
+	if b == nil || !b.visibleTo(principal, session) {
 		return nil
 	}
 	cp := *b
@@ -330,9 +339,10 @@ func (s *stickyStore) get(principal, session, key string) *Binding {
 func (s *stickyStore) findDigest(principal, session, digest string) *Binding {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.sweepLocked()
 	want := ShortDigest(digest)
 	for _, b := range s.m {
-		if visible(b.scoped, principal, session) && strings.HasPrefix(ShortDigest(b.Digest), want) {
+		if b.visibleTo(principal, session) && strings.HasPrefix(ShortDigest(b.Digest), want) {
 			cp := *b
 			return &cp
 		}
@@ -348,6 +358,9 @@ func (s *stickyStore) put(b *Binding) (*Binding, error) {
 	s.sweepLocked()
 	k := storeKey(b.Principal, b.Spec.Key)
 	if old := s.m[k]; old != nil {
+		if !old.visibleTo(b.Principal, b.Session) {
+			return nil, stickyErr(409, "sticky: key is owned by another session")
+		}
 		if old.Digest != b.Digest {
 			return nil, stickyErr(409, "sticky: key %q is already bound to identity %s (this spec resolves to %s); delete it first",
 				b.Spec.Key, ShortDigest(old.Digest), ShortDigest(b.Digest))
@@ -364,11 +377,12 @@ func (s *stickyStore) put(b *Binding) (*Binding, error) {
 
 // use consumes one use, checking the uses budget and, for reset=none, that
 // messages extend the recorded transcript. It returns the use number.
-func (s *stickyStore) use(principal, key string, messages []json.RawMessage) (int, error) {
+func (s *stickyStore) use(principal, session, key string, messages []json.RawMessage) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.sweepLocked()
 	b := s.m[storeKey(principal, key)]
-	if b == nil {
+	if b == nil || !b.visibleTo(principal, session) {
 		return 0, stickyErr(404, "sticky: key %q is gone (expired or deleted)", key)
 	}
 	if b.Spec.Uses > 0 && b.Used >= b.Spec.Uses {
@@ -392,7 +406,7 @@ func (s *stickyStore) delete(principal, session, key string) bool {
 	defer s.mu.Unlock()
 	k := storeKey(principal, key)
 	b := s.m[k]
-	if b == nil || !visible(b.scoped, principal, session) {
+	if b == nil || !b.visibleTo(principal, session) {
 		return false
 	}
 	delete(s.m, k)
@@ -406,7 +420,7 @@ func (s *stickyStore) list(principal, session string) []Binding {
 	s.sweepLocked()
 	var out []Binding
 	for _, b := range s.m {
-		if visible(b.scoped, principal, session) {
+		if b.visibleTo(principal, session) {
 			out = append(out, *b)
 		}
 	}

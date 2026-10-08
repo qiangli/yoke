@@ -650,9 +650,9 @@ func TestSessionLineageRules(t *testing.T) {
 func TestPrincipalSwitchEvictsResidentModels(t *testing.T) {
 	h := newHarness(t, nil)
 	var switched []string
-	h.b.device.OnSwitch = func(ctx context.Context, from, to string) {
+	h.b.device.OnSwitch = func(ctx context.Context, from, to string) error {
 		switched = append(switched, from+">"+to)
-		h.b.onPrincipalSwitch(ctx, from, to)
+		return h.b.onPrincipalSwitch(ctx, from, to)
 	}
 	rel, _, _ := h.b.device.Acquire(context.Background(), ClassInteractive, "alice")
 	rel()
@@ -660,10 +660,10 @@ func TestPrincipalSwitchEvictsResidentModels(t *testing.T) {
 	rel()
 	rel, _, _ = h.b.device.Acquire(context.Background(), ClassInteractive, "bob")
 	rel()
-	if len(switched) != 1 || switched[0] != "alice>bob" {
+	if len(switched) != 2 || switched[0] != ">alice" || switched[1] != "alice>bob" {
 		t.Fatalf("switches %v", switched)
 	}
-	if len(h.eng.unloadedList()) != 1 || h.eng.unloadedList()[0] != "llama3.2:3b" {
+	if len(h.eng.unloadedList()) != 2 || h.eng.unloadedList()[0] != "llama3.2:3b" {
 		t.Fatalf("unloaded %v", h.eng.unloadedList())
 	}
 }
