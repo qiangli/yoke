@@ -64,9 +64,11 @@ scripts/crossvet.sh                  # THE CROSS-OS GATE — alongside go test, 
 scripts/ci-test-gate.sh              # what CI runs: the no-regression ratchet
 ```
 
-Flat siblings this module replaces: `../coreutils`, `../sh`, `../filebrowser`
-(the `pkg/webconsole` File Browser fork). CI clones all three next door;
-inside the dhnt umbrella they are submodules already.
+Siblings are go.mod pins: coreutils at a pseudo-version, and the sh,
+filebrowser (the `pkg/webconsole` File Browser fork), gotreesitter and goawk
+forks as versioned replaces. CI builds a plain clone; inside the dhnt
+umbrella the root go.work builds the live trees. The atlas census reads
+coreutils' `pkg/` through `go list -m` (pinned module or live tree).
 
 **CI runs the suite through a RATCHET** (`scripts/ci-test-gate.sh` against
 `test/known-failures.txt`, per GOOS), exactly as coreutils does — a plain
