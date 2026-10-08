@@ -119,6 +119,14 @@ func TestGuiAnswerRequiresPositiveEvidence(t *testing.T) {
 			raw:     "OK:token\r\n",
 			wantVal: "token",
 		},
+		{
+			// Story #1243's one-terminator rule applies to the GUI tag parsers
+			// too: only the line terminator the helper appended may go. A value
+			// that genuinely ends in a newline keeps it.
+			name:    "a value ending in a newline keeps it on the GUI path",
+			raw:     "OK:ends-with-newline\n\n",
+			wantVal: "ends-with-newline\n",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

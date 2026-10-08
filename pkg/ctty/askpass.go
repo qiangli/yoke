@@ -220,7 +220,12 @@ func confirmReceipt(ctx context.Context, path string, req Request, value []byte)
 // distinguishable, and an unrecognised line is an ERROR rather than a fourth,
 // silently-empty outcome.
 func parseTaggedResult(who, raw string) ([]byte, error) {
-	line := strings.TrimRight(raw, "\r\n")
+	// One line terminator — the one the helper appended — and nothing else.
+	// The greedy TrimRight this replaces ate newlines that were part of the
+	// value, the same defect story #1243 fixed on the tty/helper paths.
+	// Twins: trimAnswer here, trimTerminator in pkg/ask.
+	line := strings.TrimSuffix(raw, "\n")
+	line = strings.TrimSuffix(line, "\r")
 	switch {
 	case line == "CANCEL":
 		return nil, ErrDeclined
