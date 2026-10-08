@@ -35,6 +35,22 @@ func TestAgentBackendNonStream(t *testing.T) {
 	}
 }
 
+func TestAgentBackendDrainsFastCLIOutputBeforeWaitReturns(t *testing.T) {
+	backend, cleanup := testBackend(t, "backend-burst")
+	defer cleanup()
+	rec, attempt := serveBackend(t, backend, `{"model":"test-model","messages":[{"role":"user","content":"hi"}]}`, nil)
+	if attempt.Status != http.StatusOK || !attempt.Committed || attempt.CanRetry {
+		t.Fatalf("attempt = %+v; backend error = %q", attempt, rec.Header().Get("X-Bashy-Backend-Error"))
+	}
+	var got openai.ChatCompletion
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage.CompletionTokens != 96 || !strings.Contains(got.Choices[0].Message.Content, "chunk-095") {
+		t.Fatalf("CLI output was truncated before its terminal event: usage=%+v content=%q", got.Usage, got.Choices[0].Message.Content)
+	}
+}
+
 func TestAgentBackendStream(t *testing.T) {
 	backend, cleanup := testBackend(t, "backend-stream")
 	defer cleanup()

@@ -35,6 +35,11 @@ func TestCLIHelper(t *testing.T) {
 	case "backend-text":
 		fmt.Println(`{"type":"item.completed","item":{"type":"agent_message","text":"hello from cli"}}`)
 		fmt.Println(`{"type":"turn.completed","usage":{"input_tokens":11,"output_tokens":3}}`)
+	case "backend-burst":
+		for i := 0; i < 96; i++ {
+			fmt.Printf("{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":%q}}\n", fmt.Sprintf("chunk-%03d ", i))
+		}
+		fmt.Println(`{"type":"turn.completed","usage":{"input_tokens":11,"output_tokens":96}}`)
 	case "backend-stream":
 		fmt.Println(`{"type":"item.completed","item":{"type":"agent_message","text":"hello "}}`)
 		fmt.Println(`{"type":"item.completed","item":{"type":"agent_message","text":"world"}}`)

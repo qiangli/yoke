@@ -373,22 +373,36 @@ func (w *Worker) startLocked(argv []string) error {
 	cmd.Dir = w.cwd
 	cmd.Env = workerEnv(os.Environ(), w.launch)
 	prepareProcessGroup(cmd)
-	stdout, err := cmd.StdoutPipe()
+	// Own both ends of stdout instead of using exec.Cmd.StdoutPipe. Wait closes
+	// a StdoutPipe as soon as the child exits, which can race the scanner and
+	// discard a fast CLI's final (terminal) event. A direct *os.File keeps Wait
+	// out of the read side; closing our parent writer after Start gives the
+	// scanner EOF only after the child (and any inherited descendants) close it.
+	stdout, stdoutWriter, err := os.Pipe()
 	if err != nil {
 		return fmt.Errorf("cligw: %s stdout: %w", w.agent, err)
 	}
+	cmd.Stdout = stdoutWriter
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
+		_ = stdout.Close()
+		_ = stdoutWriter.Close()
 		return fmt.Errorf("cligw: %s stdin: %w", w.agent, err)
 	}
 	stderr := &lockedBuffer{}
 	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
+		_ = stdout.Close()
+		_ = stdoutWriter.Close()
 		return fmt.Errorf("cligw: start %s: %w", w.agent, err)
 	}
+	_ = stdoutWriter.Close()
 	linec := make(chan workerLine, 64)
 	waitc := make(chan error, 1)
-	go scanWorkerLines(stdout, linec)
+	go func() {
+		scanWorkerLines(stdout, linec)
+		_ = stdout.Close()
+	}()
 	go func() {
 		waitc <- cmd.Wait()
 		close(waitc)
