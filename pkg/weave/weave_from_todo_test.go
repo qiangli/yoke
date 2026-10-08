@@ -6,11 +6,65 @@ package weave
 import (
 	"bytes"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	todopkg "github.com/qiangli/yoke/pkg/todo"
 )
+
+func TestWeaveAddFromTodoPoints(t *testing.T) {
+	for _, scope := range []string{"repo", "host"} {
+		for _, points := range []int{0, 1, 2, 3, 5, 8} {
+			t.Run(scope+"/"+strconv.Itoa(points), func(t *testing.T) {
+				root := setupIsolationFixture(t)
+				t.Chdir(root)
+				t.Setenv("BASHY_TODO_DIR", filepath.Join(t.TempDir(), "todo"))
+				store := todopkg.RepoStore(root)
+				if scope == "host" {
+					var err error
+					store, err = todopkg.UserStore("")
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				item, err := todopkg.Add(store, "Pointed todo", "Task body", "p1", nil, "", "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				args := []string{"add", "--from-todo", item.ID, "--json"}
+				if points != 0 {
+					args = append(args, "--points", strconv.Itoa(points))
+				}
+				if out, code := runWeave(t, args...); code != 0 {
+					t.Fatalf("add exit=%d: %s", code, out)
+				}
+				dir, err := weaveQueueDir(root)
+				if err != nil {
+					t.Fatal(err)
+				}
+				q, err := loadWeaveQueue(dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				run := findWeaveItem(q, 1)
+				if run == nil {
+					t.Fatal("created run missing from queue")
+				}
+				if run.Points != points || run.Register != item.ID {
+					t.Fatalf("run points=%d register=%s, want points=%d register=%s", run.Points, run.Register, points, item.ID)
+				}
+				linked, err := store.Resolve(item.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if linked.Weave != run.ID || linked.Status != todopkg.StatusAssigned {
+					t.Fatalf("todo link = %+v, want assigned to run %d", linked, run.ID)
+				}
+			})
+		}
+	}
+}
 
 func TestWeaveAddFromTodoRepoAndHost(t *testing.T) {
 	home := t.TempDir()

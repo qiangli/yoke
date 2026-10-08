@@ -61,7 +61,7 @@ the lifecycle. It defaults to "code", which is what every existing issue is.`,
 			}
 			_ = tool
 			if fromTodo != "" {
-				return runWeaveAddFromTodo(cmd, fromTodo, &flags)
+				return runWeaveAddFromTodo(cmd, fromTodo, points, &flags)
 			}
 			if fromIssue != "" {
 				return runWeaveAddFromIssue(cmd, fromIssue, &flags)

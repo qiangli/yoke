@@ -68,7 +68,7 @@ func findRegisterItem(root, ref string) (*issue.Store, *issue.Issue, error) {
 	return nil, nil, fmt.Errorf("item %q not found in repo or host stores", ref)
 }
 
-func runWeaveAddFromTodo(cmd *cobra.Command, ref string, flags *weaveOutputFlags) error {
+func runWeaveAddFromTodo(cmd *cobra.Command, ref string, points int, flags *weaveOutputFlags) error {
 	mode := flags.mode()
 	cwd, _ := os.Getwd()
 	root, err := weaveRepoRoot(cwd)
@@ -109,6 +109,7 @@ func runWeaveAddFromTodo(cmd *cobra.Command, ref string, flags *weaveOutputFlags
 			Title:    it.Title,
 			Body:     body,
 			Priority: prio,
+			Points:   points,
 			Stage:    it.Stage,
 			Register: it.ID,
 			State:    "todo",
