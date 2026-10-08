@@ -285,6 +285,9 @@ func StartDaemon(ctx context.Context, o Options) (State, error) {
 		}
 		_, _ = StopDaemon(o.DataDir, 10*time.Second)
 	}
+	if err := ensureGiteaPortFreeForStart(o.DataDir, o.Addr, o.Port); err != nil {
+		return State{}, err
+	}
 	if err := ensureProxyPortFreeForStart(o.DataDir, o.Addr, o.ProxyPort); err != nil {
 		return State{}, err
 	}
@@ -323,6 +326,7 @@ func StartDaemon(ctx context.Context, o Options) (State, error) {
 		_ = log.Close()
 	}()
 	addr := fmt.Sprintf("%s:%d", o.Addr, o.Port)
+	_ = recordOwnedProxy(o.DataDir, addr, cmd.Process.Pid)
 	proxyAddr := fmt.Sprintf("%s:%d", o.Addr, o.ProxyPort)
 	proxyURL := "http://" + proxyAddr
 	proxyArgs := []string{"loom", "proxy", "--target", "http://" + addr, "--addr", o.Addr, "--port", strconv.Itoa(o.ProxyPort)}
@@ -400,16 +404,21 @@ func StopDaemon(dataDir string, timeout time.Duration) (State, error) {
 			proxyAddr = u.Host
 		}
 	}
+	// State.PID is only the process this start launched; a gitea left over from
+	// an earlier start can still hold the port, so reclaim by ownership too.
+	giteaMatch := giteaArgsMatcher(dataDir)
 	if proxyProc != nil {
 		_ = proxyProc.Signal(os.Interrupt)
 	}
-	_ = signalOwnedProxyPort(dataDir, proxyAddr, os.Interrupt)
+	_ = signalOwnedPort(dataDir, proxyAddr, isLoomProxyArgs, os.Interrupt)
 	_ = proc.Signal(os.Interrupt)
+	_ = signalOwnedPort(dataDir, st.Addr, giteaMatch, os.Interrupt)
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		proxyDead := st.ProxyURL == "" || !healthy(context.Background(), st.ProxyURL, 500*time.Millisecond)
-		if !healthy(context.Background(), st.URL, 500*time.Millisecond) && proxyDead {
+		if !healthy(context.Background(), st.URL, 500*time.Millisecond) && proxyDead && tcpAddrFree(st.Addr) {
 			_ = removeOwnedProxyRecords(dataDir, proxyAddr)
+			_ = removeOwnedProxyRecords(dataDir, st.Addr)
 			_ = removeState(dataDir)
 			return st, nil
 		}
@@ -418,9 +427,14 @@ func StopDaemon(dataDir string, timeout time.Duration) (State, error) {
 	if proxyProc != nil {
 		_ = proxyProc.Kill()
 	}
-	_ = signalOwnedProxyPort(dataDir, proxyAddr, syscall.SIGKILL)
+	_ = signalOwnedPort(dataDir, proxyAddr, isLoomProxyArgs, syscall.SIGKILL)
 	_ = proc.Kill()
+	_ = signalOwnedPort(dataDir, st.Addr, giteaMatch, syscall.SIGKILL)
+	if st.Addr != "" && !waitTCPPortFree(st.Addr, 5*time.Second) {
+		return st, fmt.Errorf("loom: gitea port %s is still held after stop by a process loom did not launch", st.Addr)
+	}
 	_ = removeOwnedProxyRecords(dataDir, proxyAddr)
+	_ = removeOwnedProxyRecords(dataDir, st.Addr)
 	_ = removeState(dataDir)
 	return st, nil
 }
@@ -480,13 +494,29 @@ func proxyRegistryPath(dataDir string) string {
 }
 
 func ensureProxyPortFreeForStart(dataDir, addr string, port int) error {
+	if err := ensureOwnedPortFree(dataDir, addr, port, isLoomProxyArgs); err != nil {
+		return fmt.Errorf("loom: proxy port %s is already in use by a process loom did not launch; stop that process or choose --proxy-port", net.JoinHostPort(addr, strconv.Itoa(port)))
+	}
+	return nil
+}
+
+func ensureGiteaPortFreeForStart(dataDir, addr string, port int) error {
+	if err := ensureOwnedPortFree(dataDir, addr, port, giteaArgsMatcher(dataDir)); err != nil {
+		return fmt.Errorf("loom: gitea port %s is already in use by a process loom did not launch; stop that process or choose --port", net.JoinHostPort(addr, strconv.Itoa(port)))
+	}
+	return nil
+}
+
+// ensureOwnedPortFree frees the port if a process loom launched holds it (by
+// registry or argv), and errors if it cannot — never signalling anything else.
+func ensureOwnedPortFree(dataDir, addr string, port int, match func(args, addr string, port int) bool) error {
 	addrPort := net.JoinHostPort(addr, strconv.Itoa(port))
 	ln, err := net.Listen("tcp", addrPort)
 	if err == nil {
 		_ = ln.Close()
 		return nil
 	}
-	owners, ownerErr := ownedProxyPortPIDs(dataDir, addr, port)
+	owners, ownerErr := ownedPortPIDs(dataDir, addr, port, match)
 	if ownerErr == nil && len(owners) > 0 {
 		for _, pid := range owners {
 			proc, findErr := os.FindProcess(pid)
@@ -507,10 +537,10 @@ func ensureProxyPortFreeForStart(dataDir, addr string, port int) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("loom: proxy port %s is already in use by a process loom did not launch; stop that process or choose --proxy-port", addrPort)
+	return fmt.Errorf("port %s held by a process loom did not launch", addrPort)
 }
 
-func signalOwnedProxyPort(dataDir, addr string, sig os.Signal) error {
+func signalOwnedPort(dataDir, addr string, match func(args, addr string, port int) bool, sig os.Signal) error {
 	host, portText, err := net.SplitHostPort(addr)
 	if err != nil {
 		return err
@@ -519,7 +549,7 @@ func signalOwnedProxyPort(dataDir, addr string, sig os.Signal) error {
 	if err != nil {
 		return err
 	}
-	owners, err := ownedProxyPortPIDs(dataDir, host, port)
+	owners, err := ownedPortPIDs(dataDir, host, port, match)
 	if err != nil {
 		return err
 	}
@@ -530,6 +560,38 @@ func signalOwnedProxyPort(dataDir, addr string, sig os.Signal) error {
 		}
 	}
 	return nil
+}
+
+func tcpAddrFree(addr string) bool {
+	if addr == "" {
+		return true
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return false
+	}
+	_ = ln.Close()
+	return true
+}
+
+// giteaArgsMatcher recognises `<bin> web --config <dataDir>/app.ini`, the exact
+// argv StartDaemon launches; the binary's name is irrelevant (binmgr caches it
+// under its own name).
+func giteaArgsMatcher(dataDir string) func(args, addr string, port int) bool {
+	cfg := filepath.Join(dataDir, "app.ini")
+	return func(args, _ string, _ int) bool { return isLoomGiteaArgs(args, cfg) }
+}
+
+func isLoomGiteaArgs(args, cfg string) bool {
+	fields := strings.Fields(args)
+	isWeb := false
+	for _, f := range fields[min(1, len(fields)):] {
+		if f == "web" {
+			isWeb = true
+			break
+		}
+	}
+	return isWeb && flagValue(fields, "--config") == cfg
 }
 
 func waitTCPPortFree(addrPort string, max time.Duration) bool {
@@ -547,7 +609,7 @@ func waitTCPPortFree(addrPort string, max time.Duration) bool {
 	}
 }
 
-func ownedProxyPortPIDs(dataDir, addr string, port int) ([]int, error) {
+func ownedPortPIDs(dataDir, addr string, port int, match func(args, addr string, port int) bool) ([]int, error) {
 	listeners, err := tcpListenPIDs(port)
 	if err != nil {
 		return nil, err
@@ -563,9 +625,8 @@ func ownedProxyPortPIDs(dataDir, addr string, port int) ([]int, error) {
 			owned[pid] = true
 		}
 	}
-	argOwners, _ := loomProxyPortOwnersByArgs(addr, port)
-	for _, pid := range argOwners {
-		if listening[pid] {
+	for _, pid := range listeners {
+		if match(pidArgs(pid), addr, port) {
 			owned[pid] = true
 		}
 	}
@@ -594,35 +655,13 @@ func tcpListenPIDs(port int) ([]int, error) {
 	return pids, nil
 }
 
-func loomProxyPortOwnersByArgs(addr string, port int) ([]int, error) {
-	out, err := exec.Command("lsof", "-nP", "-iTCP:"+strconv.Itoa(port), "-sTCP:LISTEN", "-Fpca").Output()
+// pidArgs is the process's full command line ("" when unreadable).
+func pidArgs(pid int) string {
+	out, err := exec.Command("ps", "-o", "args=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {
-		return nil, err
+		return ""
 	}
-	var owners []int
-	var pid int
-	var args string
-	flush := func() {
-		if pid > 0 && isLoomProxyArgs(args, addr, port) {
-			owners = append(owners, pid)
-		}
-		pid = 0
-		args = ""
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		if line == "" {
-			continue
-		}
-		switch line[0] {
-		case 'p':
-			flush()
-			pid, _ = strconv.Atoi(strings.TrimSpace(line[1:]))
-		case 'a':
-			args = line[1:]
-		}
-	}
-	flush()
-	return owners, nil
+	return strings.TrimSpace(string(out))
 }
 
 func recordOwnedProxy(dataDir, addr string, pid int) error {
@@ -1483,7 +1522,7 @@ const loomHeaderTemplate = `<style>
 	height: 22px;
 }
 </style>
-<script nonce="{{.CspNonce}}">
+<script nonce="{{ctx.CspScriptNonce}}">
 document.addEventListener('DOMContentLoaded', () => {
 	// The loom mark: the launcher tile's single-stroke 24-grid path, drawn
 	// the way the tile draws it (no fill, currentColor) so header and tile

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"html/template"
 	"io"
 	"net"
 	"net/http"
@@ -616,8 +617,39 @@ func TestLoomProxyCloudPathStaysByteIdentical(t *testing.T) {
 }
 
 func TestLoomHeaderTemplateScriptCarriesTheCspNonce(t *testing.T) {
-	if !strings.Contains(loomHeaderTemplate, `<script nonce="{{.CspNonce}}">`) {
+	if !strings.Contains(loomHeaderTemplate, `<script nonce="{{ctx.CspScriptNonce}}">`) {
 		t.Fatalf("loomHeaderTemplate script tag lacks CSP nonce:\n%s", loomHeaderTemplate)
+	}
+}
+
+// Gitea renders custom/header with a map as dot, so an unknown key such as
+// {{.CspNonce}} silently renders empty and the CSP refuses the script. Render
+// the template the way Gitea does (nonce published only via ctx.CspScriptNonce)
+// and assert the served script carries it.
+func TestLoomHeaderRendersANonEmptyCspNonce(t *testing.T) {
+	const nonce = "0123456789abcdef"
+	tmpl, err := template.New("custom/header").Funcs(template.FuncMap{
+		"ctx": func() map[string]string { return map[string]string{"CspScriptNonce": nonce} },
+	}).Parse(loomHeaderTemplate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := tmpl.Execute(&out, map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	rendered := out.String()
+	if strings.Contains(rendered, `nonce=""`) {
+		t.Fatalf("rendered header has an empty script nonce:\n%s", rendered)
+	}
+	tags := regexp.MustCompile(`(?i)<script\b[^>]*>`).FindAllString(rendered, -1)
+	if len(tags) == 0 {
+		t.Fatal("rendered header contains no inline script")
+	}
+	for _, tag := range tags {
+		if !strings.Contains(tag, `nonce="`+nonce+`"`) {
+			t.Errorf("rendered script tag lacks the CSP nonce: %s", tag)
+		}
 	}
 }
 
@@ -637,13 +669,13 @@ func TestLoomHeaderUsesTheLoomIconAndNotTheTeapot(t *testing.T) {
 
 func TestLoomHeaderScriptsCarryTheCspNonce(t *testing.T) {
 	// Gitea v1.27.3 publishes script-src with a per-request nonce, so EVERY
-	// inline script must carry nonce="{{.CspNonce}}" or it is refused.
+	// inline script must carry nonce="{{ctx.CspScriptNonce}}" or it is refused.
 	tags := regexp.MustCompile(`(?i)<script\b[^>]*>`).FindAllString(loomHeaderTemplate, -1)
 	if len(tags) == 0 {
 		t.Fatal("header template contains no inline script")
 	}
 	for _, tag := range tags {
-		if !strings.Contains(tag, `nonce="{{.CspNonce}}"`) {
+		if !strings.Contains(tag, `nonce="{{ctx.CspScriptNonce}}"`) {
 			t.Errorf("inline script without the CSP nonce: %s", tag)
 		}
 	}
@@ -781,6 +813,137 @@ func TestStopReclaimsTheProxyPort(t *testing.T) {
 	}
 }
 
+func startGiteaStandIn(t *testing.T, dir, addr string, extra ...string) *exec.Cmd {
+	t.Helper()
+	cmd := startLoomHelper(t, dir, append([]string{"listen", addr}, extra...)...)
+	t.Cleanup(func() {
+		if cmd.ProcessState == nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}
+	})
+	go func() { _ = cmd.Wait() }()
+	if err := waitHTTP(context.Background(), "http://"+addr, 5*time.Second); err != nil {
+		t.Fatalf("gitea stand-in did not start: %v", err)
+	}
+	return cmd
+}
+
+func TestStopReclaimsTheGiteaPort(t *testing.T) {
+	dir := t.TempDir()
+	host := "127.0.0.1"
+	addr := net.JoinHostPort(host, fmt.Sprintf("%d", freeTCPPort(t)))
+	// The listener is NOT State.PID (the stale-process case): only the owned
+	// registry can find it.
+	stale := startGiteaStandIn(t, dir, addr)
+	if err := recordOwnedProxy(dir, addr, stale.Process.Pid); err != nil {
+		t.Fatal(err)
+	}
+	sleeper := startLoomHelper(t, dir, "sleep")
+	t.Cleanup(func() {
+		_ = sleeper.Process.Kill()
+		_ = sleeper.Wait()
+	})
+	if err := writeState(State{PID: sleeper.Process.Pid, URL: "http://" + addr, Addr: addr, DataDir: dir, StartedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := StopDaemon(dir, 5*time.Second); err != nil {
+		t.Fatalf("StopDaemon: %v", err)
+	}
+	if !waitTCPPortFree(addr, 5*time.Second) {
+		t.Fatalf("gitea port %s is still held after StopDaemon", addr)
+	}
+}
+
+func TestStopReclaimsAnUnregisteredGiteaByItsArgv(t *testing.T) {
+	dir := t.TempDir()
+	addr := net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", freeTCPPort(t)))
+	startGiteaStandIn(t, dir, addr, "web", "--config", filepath.Join(dir, "app.ini"))
+	sleeper := startLoomHelper(t, dir, "sleep")
+	t.Cleanup(func() {
+		_ = sleeper.Process.Kill()
+		_ = sleeper.Wait()
+	})
+	if err := writeState(State{PID: sleeper.Process.Pid, URL: "http://" + addr, Addr: addr, DataDir: dir, StartedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := StopDaemon(dir, 5*time.Second); err != nil {
+		t.Fatalf("StopDaemon: %v", err)
+	}
+	if !waitTCPPortFree(addr, 5*time.Second) {
+		t.Fatalf("gitea port %s is still held after StopDaemon", addr)
+	}
+}
+
+func TestStopLeavesAForeignGiteaPortListenerAlone(t *testing.T) {
+	dir := t.TempDir()
+	addr := net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", freeTCPPort(t)))
+	foreign := startGiteaStandIn(t, dir, addr, "web", "--config", "/somewhere/else/app.ini")
+	sleeper := startLoomHelper(t, dir, "sleep")
+	t.Cleanup(func() {
+		_ = sleeper.Process.Kill()
+		_ = sleeper.Wait()
+	})
+	if err := writeState(State{PID: sleeper.Process.Pid, URL: "http://" + addr, Addr: addr, DataDir: dir, StartedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := StopDaemon(dir, 1*time.Second); err == nil || !strings.Contains(err.Error(), "did not launch") {
+		t.Fatalf("StopDaemon error = %v, want it to report the foreign holder", err)
+	}
+	if !healthy(context.Background(), "http://"+addr, time.Second) {
+		t.Fatalf("StopDaemon killed pid %d, a listener loom did not launch", foreign.Process.Pid)
+	}
+}
+
+func TestStartRefusesWhenTheGiteaPortIsHeldByAForeignProcess(t *testing.T) {
+	ln, host, port := listenOnEphemeralLoopback(t)
+	defer ln.Close()
+
+	_, err := StartDaemon(context.Background(), Options{
+		DataDir:   t.TempDir(),
+		Addr:      host,
+		Port:      port,
+		ProxyPort: freeTCPPort(t),
+		Stdout:    io.Discard,
+		Stderr:    io.Discard,
+	})
+	if err == nil {
+		t.Fatal("StartDaemon succeeded with a foreign listener on the gitea port")
+	}
+	if !strings.Contains(err.Error(), "gitea port") || !strings.Contains(err.Error(), "did not launch") {
+		t.Fatalf("error = %v, want clear foreign gitea port refusal", err)
+	}
+}
+
+func TestStartReclaimsAStaleOwnedGiteaByItsArgv(t *testing.T) {
+	dir := t.TempDir()
+	host := "127.0.0.1"
+	port := freeTCPPort(t)
+	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+	startGiteaStandIn(t, dir, addr, "web", "--config", filepath.Join(dir, "app.ini"))
+	if err := ensureGiteaPortFreeForStart(dir, host, port); err != nil {
+		t.Fatalf("ensureGiteaPortFreeForStart: %v", err)
+	}
+	if !waitTCPPortFree(addr, 5*time.Second) {
+		t.Fatalf("stale gitea still holds %s", addr)
+	}
+}
+
+func TestIsLoomGiteaArgs(t *testing.T) {
+	cfg := "/data/loom/app.ini"
+	for args, want := range map[string]bool{
+		"/cache/gitea web --config /data/loom/app.ini":        true,
+		"/cache/gitea-1.27.3 web --config /data/loom/app.ini": true,
+		"/cache/gitea web --config /other/app.ini":            false,
+		"/cache/gitea web":            false,
+		"nginx -c /data/loom/app.ini": false,
+	} {
+		if got := isLoomGiteaArgs(args, cfg); got != want {
+			t.Errorf("isLoomGiteaArgs(%q) = %v, want %v", args, got, want)
+		}
+	}
+}
+
 func TestStartWithoutRootURLPreservesAConfiguredRootURL(t *testing.T) {
 	dir := t.TempDir()
 	const root = "https://ai.dhnt.io/matrix/h/dragon/app/loom/"
@@ -906,6 +1069,17 @@ func TestLoomHelperProcess(t *testing.T) {
 	}
 	args = args[1:]
 	if len(args) == 1 && args[0] == "sleep" {
+		select {}
+	}
+	if len(args) >= 2 && args[0] == "listen" {
+		ln, err := net.Listen("tcp", args[1])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		go func() {
+			_ = http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+		}()
 		select {}
 	}
 	if len(args) >= 1 && args[0] == "loom" {
