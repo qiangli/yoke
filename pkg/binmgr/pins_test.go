@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -118,3 +119,43 @@ func TestEnsure_MD5AllowedWithOptIn(t *testing.T) {
 		t.Fatalf("opt-in md5 was refused: %v", err)
 	}
 }
+
+func TestPinnedSHA256_VPrefixTolerance(t *testing.T) {
+	// A tool pinned with 'v' like witr@v0.3.3 should resolve with or without 'v'.
+	shaWithV, ok1 := PinnedSHA256("witr", "v0.3.3", "darwin/amd64")
+	shaWithoutV, ok2 := PinnedSHA256("witr", "0.3.3", "darwin/amd64")
+	if !ok1 || !ok2 {
+		t.Fatalf("expected PinnedSHA256 for witr to succeed both ways: ok1=%v, ok2=%v", ok1, ok2)
+	}
+	if shaWithV != shaWithoutV {
+		t.Errorf("sha mismatch: with v %q != without v %q", shaWithV, shaWithoutV)
+	}
+
+	// A tool pinned without 'v' like go@1.27.1 should also resolve with or without 'v'.
+	goWithoutV, ok3 := PinnedSHA256("go", "1.27.1", "darwin/amd64")
+	goWithV, ok4 := PinnedSHA256("go", "v1.27.1", "darwin/amd64")
+	if !ok3 || !ok4 {
+		t.Fatalf("expected PinnedSHA256 for go to succeed both ways: ok3=%v, ok4=%v", ok3, ok4)
+	}
+	if goWithoutV != goWithV {
+		t.Errorf("sha mismatch: without v %q != with v %q", goWithoutV, goWithV)
+	}
+}
+
+func TestPinnedDigests_ValidFormat(t *testing.T) {
+	for key, sha := range pinnedDigests {
+		if len(sha) != 64 {
+			t.Errorf("pin %q has invalid sha length %d: %q", key, len(sha), sha)
+		}
+		for _, c := range sha {
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+				t.Errorf("pin %q contains non-hex char in sha: %q", key, sha)
+				break
+			}
+		}
+		if !strings.Contains(key, "@") || !strings.Contains(key, "/") {
+			t.Errorf("pin %q does not match <name>@<version>/<platform> format", key)
+		}
+	}
+}
+

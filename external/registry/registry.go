@@ -38,6 +38,8 @@ type Entry struct {
 	// EnvVersion is the env var that pins the release (e.g. "DOCTL_VERSION"); ""
 	// means always-latest.
 	EnvVersion string
+	// DefaultVersion is the pinned release version (e.g. "v1.179.0") when EnvVersion is unset.
+	DefaultVersion string
 	// Resolve builds the binmgr.Tool for a version ("" = resolve latest). Usually
 	// a thin wrapper over binmgr.ResolveGitHub / ResolveURL.
 	Resolve func(ctx context.Context, version string) (binmgr.Tool, error)
@@ -60,6 +62,9 @@ func (e Entry) Ensure(ctx context.Context) (string, error) {
 		version = strings.TrimSpace(os.Getenv(e.EnvVersion))
 	}
 	if version == "" {
+		version = e.DefaultVersion
+	}
+	if version == "" {
 		// PreferHost: the vendor install + its own self-update is the trusted path
 		// (bashy must not TOFU-download a large unsigned SDK), so a host copy wins
 		// over any managed one when no version is pinned.
@@ -75,6 +80,13 @@ func (e Entry) Ensure(ctx context.Context) (string, error) {
 	tool, err := e.Resolve(ctx, version)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", e.Name, err)
+	}
+	// Fail-closed verification: every downloaded tool in the default registry
+	// must have a committed sha256 pin for the current platform.
+	if !e.PreferHost {
+		if _, ok := binmgr.PinnedSHA256(tool.Name, tool.Version, binmgr.Platform()); !ok {
+			return "", fmt.Errorf("registry: %s %s has no committed sha256 pin for %s — refusing unverified download (fail-closed)", tool.Name, tool.Version, binmgr.Platform())
+		}
 	}
 	return binmgr.Ensure(ctx, tool)
 }

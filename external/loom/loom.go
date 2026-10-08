@@ -36,10 +36,8 @@ import (
 )
 
 const (
-	// DefaultVersion pins the Gitea release loom runs. "" / "latest" resolves the
-	// newest release dynamically; pin for reproducibility ($LOOM_GITEA_VERSION
-	// or --gitea-version override). go-gitea/gitea is MIT.
-	DefaultVersion   = "latest"
+	// DefaultVersion pins the Gitea release loom runs. go-gitea/gitea is MIT.
+	DefaultVersion   = "v1.27.3"
 	DefaultAddr      = "127.0.0.1"
 	DefaultPort      = 31880
 	DefaultProxyPort = 31881

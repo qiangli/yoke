@@ -165,6 +165,8 @@ var externalPlatforms = map[string]ExternalPlatform{
 	// declarative registry CLIs (external/registry)
 	"doctl":  {OS: allOS, WindowsAsset: "doctl-*-windows-amd64.zip"},
 	"gcloud": {OS: allOS, WindowsAsset: "vendor installer (PreferHost); google-cloud-cli-windows-x86_64.zip"},
+	"gitea":  {OS: allOS, WindowsAsset: "gitea-*-windows-4.0-amd64.exe"},
+	"ollama": {OS: allOS, WindowsAsset: "ollama-windows-amd64.zip"},
 	"rg":     {OS: allOS, WindowsAsset: "ripgrep-*-x86_64-pc-windows-msvc.zip"},
 	"tofu":   {OS: allOS, WindowsAsset: "tofu_*_windows_amd64.zip"},
 }

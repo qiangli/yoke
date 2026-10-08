@@ -99,7 +99,7 @@ func TestEnsureConfig_ReconcilesServerAndActions(t *testing.T) {
 
 func TestSpec(t *testing.T) {
 	s := Spec("")
-	if s.Repo != "go-gitea/gitea" || s.Name != "loom" || s.Version != "latest" {
+	if s.Repo != "go-gitea/gitea" || s.Name != "loom" || s.Version != DefaultVersion {
 		t.Fatalf("default spec = %+v", s)
 	}
 	if Spec("v1.24.0").Version != "v1.24.0" {

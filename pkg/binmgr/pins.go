@@ -59,6 +59,53 @@ var pinnedDigests = map[string]string{
 	"witr@v0.3.3/windows/arm64": "e644a1e152437a0aff93c672660b363de690361ca90f35a792f88b361ca569e4",
 	"witr@v0.3.3/freebsd/amd64": "0fcc966fc8adbdf901174c96901e15f4b202e8925bc2ce6d20daf11b9f12305c",
 	"witr@v0.3.3/freebsd/arm64": "41ec530a07062797d3143a286c2d094643a3c4b7f1c2171bee81e6e0345b17f1",
+
+	// doctl@v1.179.0 — official digitalocean/doctl release checksums
+	"doctl@v1.179.0/darwin/amd64":  "be0f7c01635a290cc99fb81e73dd1968cec28e24a1609c68fd30df012e2e8312",
+	"doctl@v1.179.0/darwin/arm64":  "a3ac281a5685a73c28047b73e846228b1fcf1c402491512ba68772396344e48d",
+	"doctl@v1.179.0/linux/amd64":   "2871f12bde6defbeb1bb3ccaeb260b2b0328118fa16e2294065c7c74efb2a58a",
+	"doctl@v1.179.0/linux/arm64":   "d1d452e0e631ea5998c11f621732afcab4955a5ae05e9ae75e0e7039377f7923",
+	"doctl@v1.179.0/windows/amd64": "107d12d884d46962f0838c864f08bc06d3e9e8e5329d2eea5466fca05d5aae19",
+	"doctl@v1.179.0/windows/arm64": "0e072dd2df5aadd4d899781e21fb5a46d0b057dcef1161a27f458e7d58a2f9ac",
+
+	// rg@15.1.0 — official BurntSushi/ripgrep release sha256 sidecars
+	"rg@15.1.0/darwin/amd64":  "64811cb24e77cac3057d6c40b63ac9becf9082eedd54ca411b475b755d334882",
+	"rg@15.1.0/darwin/arm64":  "378e973289176ca0c6054054ee7f631a065874a352bf43f0fa60ef079b6ba715",
+	"rg@15.1.0/linux/amd64":   "1c9297be4a084eea7ecaedf93eb03d058d6faae29bbc57ecdaf5063921491599",
+	"rg@15.1.0/linux/arm64":   "2b661c6ef508e902f388e9098d9c4c5aca72c87b55922d94abdba830b4dc885e",
+	"rg@15.1.0/windows/amd64": "124510b94b6baa3380d051fdf4650eaa80a302c876d611e9dba0b2e18d87493a",
+	"rg@15.1.0/windows/arm64": "00d931fb5237c9696ca49308818edb76d8eb6fc132761cb2a1bd616b2df02f8e",
+
+	// tofu@v1.13.1 — official opentofu/opentofu release tofu_1.13.1_SHA256SUMS
+	"tofu@v1.13.1/darwin/amd64":  "a73720443ba38712d7d96dc1e857add02c15a790919c653ad07492e9952f8c27",
+	"tofu@v1.13.1/darwin/arm64":  "be78f659f04ef06a9dbd9b3934d46af95d787a3aa38396d459dea395261816a9",
+	"tofu@v1.13.1/linux/amd64":   "378ada19d4bc70c43732004e8159be771b23b9a5afdf059e5f8a2b3fa2c70a69",
+	"tofu@v1.13.1/linux/arm64":   "9c1ef375aa1852db0b2888aa921b640c71f8140d4682aa4fec99378a64fa7dc3",
+	"tofu@v1.13.1/windows/amd64": "5b653d1d95719eeec4ccf55f0e2102081b6f589d788197f1cabeb89cbd4078a7",
+	"tofu@v1.13.1/windows/arm64": "b835f4aed6c447dda73f547dec340aa8ef1e7a80a513303091f8169ad7159afc",
+
+	// gitea@v1.27.3 & loom@v1.27.3 — official go-gitea/gitea release sha256 sidecars
+	"gitea@v1.27.3/darwin/amd64":  "23964155add4490ed73733fa90ea63154b724ab6fe389b7a979db4ef3d7ed8ce",
+	"gitea@v1.27.3/darwin/arm64":  "fd83383e05a4185e8f852563a7599f5d8f3e18ede00d412c0f9f044771aef162",
+	"gitea@v1.27.3/linux/amd64":   "4da93c2c10b6980c359bcb86d5573ebfd7770e2e151756534edee24c8c12d971",
+	"gitea@v1.27.3/linux/arm64":   "04c086d36dba793546e331484a9da34571763efdfa77dc526cc98e0f10917e7b",
+	"gitea@v1.27.3/windows/amd64": "d9ed1fc48ec33a8cb97d7fed3882b4e159efc3fcae3a77d0d240e250d5bf6e21",
+	"gitea@v1.27.3/windows/arm64": "d590f8be49cdac0a734b04b7936c18986eb0e600cc98d5f3414fd797f092c1d4",
+
+	"loom@v1.27.3/darwin/amd64":  "23964155add4490ed73733fa90ea63154b724ab6fe389b7a979db4ef3d7ed8ce",
+	"loom@v1.27.3/darwin/arm64":  "fd83383e05a4185e8f852563a7599f5d8f3e18ede00d412c0f9f044771aef162",
+	"loom@v1.27.3/linux/amd64":   "4da93c2c10b6980c359bcb86d5573ebfd7770e2e151756534edee24c8c12d971",
+	"loom@v1.27.3/linux/arm64":   "04c086d36dba793546e331484a9da34571763efdfa77dc526cc98e0f10917e7b",
+	"loom@v1.27.3/windows/amd64": "d9ed1fc48ec33a8cb97d7fed3882b4e159efc3fcae3a77d0d240e250d5bf6e21",
+	"loom@v1.27.3/windows/arm64": "d590f8be49cdac0a734b04b7936c18986eb0e600cc98d5f3414fd797f092c1d4",
+
+	// ollama@v0.40.1 — official ollama/ollama release sha256sum.txt
+	"ollama@v0.40.1/darwin/amd64":  "66e1587711f3a06315b23782ba74897001da6c8b8edf6c0371f7533015a076dd",
+	"ollama@v0.40.1/darwin/arm64":  "66e1587711f3a06315b23782ba74897001da6c8b8edf6c0371f7533015a076dd",
+	"ollama@v0.40.1/linux/amd64":   "a7aebbe3dd76ccf1351a56a3e57218ad4863cb5f9a9938c58de87a37555e355d",
+	"ollama@v0.40.1/linux/arm64":   "f5cbd9a97e0de9502ef928cb993f6d16468e25be6d55a8529d7fd2b67a130bcb",
+	"ollama@v0.40.1/windows/amd64": "b394d14436d38032f23190e3f14eb2c6dad5ebbe4e192414f74c8fdca01703ab",
+	"ollama@v0.40.1/windows/arm64": "68681e6822160121c3384ba99c91025cfea2d14dcc7d166af0f94263b69407a9",
 }
 
 // PinnedSHA256 returns the committed sha256 for a tool tuple, if one exists.
@@ -69,6 +116,13 @@ func PinnedSHA256(name, version, platform string) (string, bool) {
 // pinnedSHA256 returns the committed sha256 for a tool tuple, if one exists.
 func pinnedSHA256(name, version, platform string) (string, bool) {
 	sha, ok := pinnedDigests[name+"@"+version+"/"+platform]
+	if !ok {
+		if strings.HasPrefix(version, "v") {
+			sha, ok = pinnedDigests[name+"@"+strings.TrimPrefix(version, "v")+"/"+platform]
+		} else {
+			sha, ok = pinnedDigests[name+"@v"+version+"/"+platform]
+		}
+	}
 	if !ok {
 		return "", false
 	}

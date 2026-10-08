@@ -7,25 +7,32 @@ import (
 	"github.com/qiangli/yoke/pkg/binmgr"
 )
 
+// RgVersion is the default pinned release of ripgrep.
+const RgVersion = "15.1.0"
+
 // rg - ripgrep (BurntSushi/ripgrep, MIT OR Unlicense), tier 2 userland.
 // Ships per-platform release archives with the rg binary nested under the
 // archive root directory. Checksums are resolved by binmgr from the release's
 // checksum list.
 func init() {
 	register(Entry{
-		Name:       "rg",
-		Tier:       2,
-		License:    "MIT OR Unlicense",
-		Synopsis:   "ripgrep fast recursive text search (managed external, MIT OR Unlicense)",
-		EnvVersion: "RG_VERSION",
+		Name:           "rg",
+		Tier:           2,
+		License:        "MIT OR Unlicense",
+		Synopsis:       "ripgrep fast recursive text search (managed external, MIT OR Unlicense)",
+		EnvVersion:     "RG_VERSION",
+		DefaultVersion: RgVersion,
 		Long: `rg runs ripgrep (BurntSushi/ripgrep) - downloaded from GitHub
-releases, sha256-verified, and cached by binmgr (not compiled in).
+releases, sha256-verified against pinned digests, and cached by binmgr (not compiled in).
 $RG_VERSION pins the release; all args pass through to rg.`,
 		Resolve: func(ctx context.Context, version string) (binmgr.Tool, error) {
+			if version == "" {
+				version = RgVersion
+			}
 			return binmgr.ResolveGitHub(ctx, binmgr.GitHubSpec{
 				Name:       "rg",
 				Repo:       "BurntSushi/ripgrep",
-				Version:    version, // "" -> latest
+				Version:    version,
 				Member:     "rg",
 				AssetMatch: rgAssetMatch,
 			})
