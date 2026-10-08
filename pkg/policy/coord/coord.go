@@ -542,6 +542,68 @@ func Acquire(dir string, roots []string, holder principal.Ref, intent string, fo
 	})
 }
 
+// Prunable reports whether prune would remove this claim: a lapsed,
+// non-attached hold. Attached holds are kernel-scoped — the lockfile is the
+// liveness signal, not the heartbeat — so they are never pruned. Unknown
+// holds are the absence of evidence either way, and like acquisition, prune
+// looks rather than seizes: only LivenessLapsed goes.
+func (c *Claim) Prunable(now time.Time) bool {
+	if c.Mode == ModeAttached {
+		return false
+	}
+	return c.Liveness(now) == role.LivenessLapsed
+}
+
+// Lapsed returns every claim prune would remove, freshest first.
+func Lapsed(dir string, now time.Time) ([]*Claim, error) {
+	claims, err := List(dir)
+	if err != nil {
+		return nil, err
+	}
+	var out []*Claim
+	for _, c := range claims {
+		if c.Prunable(now) {
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+
+// Prune removes every lapsed project and named-resource claim from dir and
+// returns what it removed, freshest first. Live, unknown, and attached
+// (kernel-locked) claims are untouched. With dryRun it only reports what
+// would go, writing nothing. Removal holds claims.lock across the whole
+// scan-and-remove pass so two operators cannot prune half-overlapping sets.
+func Prune(dir string, now time.Time, dryRun bool) ([]*Claim, error) {
+	if dryRun {
+		return Lapsed(dir, now)
+	}
+	var pruned []*Claim
+	_, err := withLock(dir, func() (*Claim, error) {
+		lapsed, err := Lapsed(dir, now)
+		if err != nil {
+			return nil, err
+		}
+		for _, c := range lapsed {
+			var p string
+			if c.Resource != "" {
+				p = resourceClaimPath(dir, c.Resource)
+			} else {
+				p = claimPath(dir, c.Holder)
+			}
+			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+				return nil, err
+			}
+			pruned = append(pruned, c)
+		}
+		return nil, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return pruned, nil
+}
+
 // Release drops this holder's claim. A claim that is never released still expires;
 // releasing is a courtesy to whoever is waiting, not a correctness requirement.
 func Release(dir string, holder principal.Ref) error {

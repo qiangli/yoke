@@ -55,7 +55,8 @@ write, and you are stopped only when someone else already holds one.`,
 	  bashy claim do1 --intent "sprint 251 tests"
 	  bashy claim do1 -- make test       # hold do1 for the child lifetime
 	  bashy claim list                # who is working right now, and where?
-	  bashy claim release do1         # let someone else have the resource`,
+	  bashy claim release do1         # let someone else have the resource
+	  bashy claim prune               # clear lapsed claims no live holder holds`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			dash := cmd.ArgsLenAtDash()
 			if dash >= 0 {
@@ -220,7 +221,56 @@ sequence, hand off, or release; until then the git write guard continues to refu
 	}
 	request.Flags().StringVarP(&requestMessage, "message", "m", "", "merge/sequencing request (default names requester and project)")
 
-	cmd.AddCommand(list, request, release)
+	prune := &cobra.Command{
+		Use:   "prune",
+		Short: "remove lapsed claims no live holder holds",
+		Long: `prune clears claims whose heartbeat is past the TTL — project claims
+and named resource holds left behind by agents that stopped without
+releasing. Live and attached (kernel-locked) claims are never touched, so
+pruning while others work is safe.`,
+		Example: `  bashy claim prune              # clear lapsed claims
+  bashy claim prune --dry-run    # show what would go, remove nothing
+  bashy claim prune --json         # machine-readable removals`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dryRun, _ := cmd.Flags().GetBool("dry-run")
+			asJSON, _ := cmd.Flags().GetBool("json")
+			now := time.Now()
+			pruned, err := Prune(DefaultDir(), now, dryRun)
+			if err != nil {
+				return err
+			}
+			if asJSON {
+				if pruned == nil {
+					pruned = []*Claim{}
+				}
+				b, _ := json.MarshalIndent(pruned, "", "  ")
+				fmt.Fprintln(cmd.OutOrStdout(), string(b))
+				return nil
+			}
+			if len(pruned) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "claim: nothing lapsed to prune")
+				return nil
+			}
+			verb := "pruned"
+			if dryRun {
+				verb = "would prune"
+			}
+			for _, c := range pruned {
+				target, mode := c.Project, "project"
+				if c.Resource != "" {
+					target, mode = c.Resource, c.Mode
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%s %-18s %-22s %-10s age %s %s\n",
+					verb, c.Holder.Name, target, mode,
+					now.Sub(c.Heartbeat).Round(time.Second), c.Intent)
+			}
+			return nil
+		},
+	}
+	prune.Flags().Bool("dry-run", false, "show what would be removed without removing it")
+	prune.Flags().Bool("json", false, "emit the pruned claims")
+
+	cmd.AddCommand(list, request, release, prune)
 	return cmd
 }
 
