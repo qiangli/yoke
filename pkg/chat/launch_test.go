@@ -24,7 +24,43 @@ func TestInvokeLiveStreamEnablesDeclaredToolEvents(t *testing.T) {
 	}
 }
 
-func TestInvokeLiveStreamEnablesYcodeEventFile(t *testing.T) {
+// pinEventFileCatalog is pinCatalog plus a local tool that declares the
+// events_arg side channel. No baseline tool declares one any more (fleet ycode
+// is the bashy genie backend and takes no --events flag), so the generic
+// events_arg mechanism is exercised through a declared tool instead.
+func pinEventFileCatalog(t *testing.T) {
+	t.Helper()
+	fleettest.Ring(t)
+	root := t.TempDir()
+	cat := fleet.New(fleet.WithRoot(root))
+	if err := cat.SaveTool(fleet.Tool{
+		Name: "evfile", Kind: fleet.ToolKindCLI,
+		CLI: fleet.ToolCLI{Binary: "evfile", Launch: fleet.ToolLaunch{
+			Exec: "evfile --model {model} {prompt}", EventsArg: "--events {path}",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	prev := newCatalog
+	newCatalog = func() *fleet.Catalog { return fleet.New(fleet.WithRoot(root)) }
+	t.Cleanup(func() { newCatalog = prev })
+}
+
+func TestInvokeLiveStreamEnablesDeclaredEventFile(t *testing.T) {
+	permitUnsafeLaunch(t)
+	pinEventFileCatalog(t)
+	res, err := Invoke(context.Background(), Options{
+		Agent: "evfile:glm-5.2", Instruction: "hi", DryRun: true, Stream: io.Discard,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Output, "--events <events>") {
+		t.Fatalf("live argv lacks declared event file: %q", res.Output)
+	}
+}
+
+func TestInvokeLiveStreamOmitsEventFileForYcodeGenieAlias(t *testing.T) {
 	permitUnsafeLaunch(t)
 	pinCatalog(t)
 	res, err := Invoke(context.Background(), Options{
@@ -33,8 +69,8 @@ func TestInvokeLiveStreamEnablesYcodeEventFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(res.Output, "--events <events>") {
-		t.Fatalf("live ycode argv lacks declared event file: %q", res.Output)
+	if strings.Contains(res.Output, "--events") {
+		t.Fatalf("ycode aliases the genie backend, which takes no --events flag: %q", res.Output)
 	}
 }
 

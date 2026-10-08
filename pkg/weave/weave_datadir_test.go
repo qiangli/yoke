@@ -159,23 +159,19 @@ func TestWeaveChildEnvLeavesNilLaunchUntouched(t *testing.T) {
 
 // --- end-to-end: two REAL concurrent ycode workers through the spawn path ---
 
-// TestWeaveTwoConcurrentYcodeWorkersGetDistinctStores is the live reproduction
-// of the reported bug: a SECOND ycode weave worker died instantly because both
-// shared one locked data store. It launches two ycode weave workers AT THE SAME
-// TIME through the real `weave start` cobra spawn path (genuine exec.Command
-// subprocesses, real weaveChildEnv), with a stub `ycode` binary that records the
-// YCODE_DATA_DIR each worker received. Both must start (exit clean) and the two
-// recorded stores must be DIFFERENT — the precondition that prevents the
-// "storage is locked by another ycode process" death.
+// TestWeaveTwoConcurrentYcodeWorkersGetDistinctStores launches two ycode weave
+// workers AT THE SAME TIME through the real `weave start` cobra spawn path
+// (genuine exec.Command subprocesses, real weaveChildEnv). Fleet ycode is an
+// alias for the bashy genie backend, so the process that runs is a stub `bashy`
+// on PATH. Both workers must start clean with the genie argv, in DISTINCT
+// workspaces, and must not share one YCODE_DATA_DIR store: the
+// per-run store injection must still give each worker a different
+// YCODE_DATA_DIR (a shared locked store is what killed the second worker of a
+// pair).
 func TestWeaveTwoConcurrentYcodeWorkersGetDistinctStores(t *testing.T) {
 	root := setupIsolationFixture(t)
 	t.Chdir(root)
 
-	// This test very likely runs INSIDE a ycode agent (the ambient env carries
-	// YCODE_DATA_DIR for this very run). That operator-set value must be
-	// respected in general (TestWeaveChildEnvRespectsOperatorSetYcodeDataDir),
-	// but here we are simulating a CLEAN operator shell so the per-run
-	// derivation is exercised end-to-end. Snapshot, unset, restore.
 	for _, name := range []string{agentlaunch.YcodeDataDirEnv, agentlaunch.YcodeHomeEnv} {
 		if cur, ok := os.LookupEnv(name); ok {
 			t.Cleanup(func() { _ = os.Setenv(name, cur) })
@@ -183,8 +179,6 @@ func TestWeaveTwoConcurrentYcodeWorkersGetDistinctStores(t *testing.T) {
 		}
 	}
 
-	// Register a ycode agent + model in an isolated fleet catalog, and make
-	// weave resolve against it (the same swap TestNamedYcodeChildEnv... uses).
 	fleetRoot := t.TempDir()
 	cat := fleet.New(fleet.WithRoot(fleetRoot))
 	if err := cat.SaveModel(fleet.Model{Name: "glm-5.2", UpstreamID: "glm-5.2", Kind: "api", APIKeyRef: "ZAI_API_KEY"}); err != nil {
@@ -197,26 +191,18 @@ func TestWeaveTwoConcurrentYcodeWorkersGetDistinctStores(t *testing.T) {
 	fleetCatalog = func() *fleet.Catalog { return fleet.New(fleet.WithRoot(fleetRoot)) }
 	t.Cleanup(func() { fleetCatalog = prevCatalog })
 
-	// Stub `ycode` binary on PATH. It must satisfy the workspace preflight
-	// (`ycode shell -c pwd` → print the cwd) AND, for the real launch, record
-	// the YCODE_DATA_DIR it was handed.
+	// Stub `bashy`: record the argv, workspace and store of each launch.
 	stubDir := t.TempDir()
 	logPath := filepath.Join(t.TempDir(), "workers.log")
 	stub := "#!/bin/sh\n" +
-		"case \"$*\" in\n" +
-		"  *\"shell -c pwd\"*) pwd; exit 0 ;;\n" + // workspace preflight (workspace_arg precedes it): report the cwd
-		"  *) pid=$$; dir=${" + agentlaunch.YcodeDataDirEnv + "}; echo \"$pid $dir\" >> " + logPath + "; exit 0 ;;\n" + // agent launch: record the per-run store
-		"esac\n"
-	if err := os.WriteFile(filepath.Join(stubDir, "ycode"), []byte(stub), 0o755); err != nil {
+		"echo \"$$|$PWD|${" + agentlaunch.YcodeDataDirEnv + "}|$1 $2 $3\" >> " + logPath + "\n" +
+		"exit 0\n"
+	if err := os.WriteFile(filepath.Join(stubDir, "bashy"), []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", stubDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	// The ycode launch template carries --danger-skip-permissions, which an
-	// uncontained host refuses; this sandbox is uncontained, so accept the risk
-	// explicitly (the operator's documented opt-in).
 	t.Setenv(agentlaunch.UnsafeLaunchEnv, "1")
 
-	// Two issues for two workers.
 	if _, code := runWeave(t, "add", "worker A task", "--json"); code != 0 {
 		t.Fatal("weave add #1 failed")
 	}
@@ -224,7 +210,6 @@ func TestWeaveTwoConcurrentYcodeWorkersGetDistinctStores(t *testing.T) {
 		t.Fatal("weave add #2 failed")
 	}
 
-	// Launch BOTH workers at the same time through the real spawn path.
 	type result struct {
 		out  string
 		code int
@@ -248,24 +233,35 @@ func TestWeaveTwoConcurrentYcodeWorkersGetDistinctStores(t *testing.T) {
 		}
 	}
 
-	// Both workers recorded the store they were handed. They must differ.
 	data, err := os.ReadFile(logPath)
 	if err != nil {
-		t.Fatalf("no worker records written — stub ycode was never launched:\n%+v", res)
+		t.Fatalf("no worker records written — stub bashy was never launched:\n%+v", res)
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) < 2 {
+	if len(lines) != 2 {
 		t.Fatalf("expected 2 worker records, got %d: %q", len(lines), string(data))
 	}
-	dirA := strings.TrimSpace(strings.TrimPrefix(lines[0], lines[0][:strings.IndexByte(lines[0], ' ')+1]))
-	dirB := strings.TrimSpace(strings.TrimPrefix(lines[1], lines[1][:strings.IndexByte(lines[1], ' ')+1]))
-	if dirA == "" || dirB == "" {
-		t.Fatalf("a worker received no %s: %q", agentlaunch.YcodeDataDirEnv, string(data))
+	var cwds, stores []string
+	for _, line := range lines {
+		f := strings.SplitN(line, "|", 4)
+		if len(f) != 4 {
+			t.Fatalf("malformed worker record %q", line)
+		}
+		if f[3] != "genie -m glm-5.2" {
+			t.Fatalf("ycode worker was not launched as the genie backend: %q", f[3])
+		}
+		cwds = append(cwds, f[1])
+		stores = append(stores, f[2])
 	}
-	if dirA == dirB {
+	if cwds[0] == cwds[1] {
+		t.Fatalf("two concurrent ycode workers share one workspace %q\nrecords:\n%s", cwds[0], data)
+	}
+	if stores[0] == "" || stores[1] == "" {
+		t.Fatalf("a worker received no %s:\n%s", agentlaunch.YcodeDataDirEnv, data)
+	}
+	if stores[0] == stores[1] {
 		t.Fatalf("two concurrent ycode workers share one store %q — the second would die on the lock\nrecords:\n%s",
-			dirA, string(data))
+			stores[0], data)
 	}
-	t.Logf("TWO CONCURRENT YCODE WORKERS STARTED with distinct stores:\n  worker A: %s\n  worker B: %s\n%s",
-		dirA, dirB, strings.TrimSpace(string(data)))
+	t.Logf("TWO CONCURRENT YCODE WORKERS STARTED in distinct workspaces:\n%s", strings.TrimSpace(string(data)))
 }

@@ -312,12 +312,12 @@ func TestInvokeReductionOptOutStillRedacts(t *testing.T) {
 
 func TestInvokeBoundsEventStream(t *testing.T) {
 	permitUnsafeLaunch(t)
-	pinCatalog(t)
+	pinEventFileCatalog(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	var events bytes.Buffer
 	full := strings.Repeat("{\"type\":\"tool.call\",\"path\":\""+filepath.Join(home, "fixture")+"\"}\n", 2000)
-	_, err := Invoke(context.Background(), Options{Agent: "ycode", Instruction: "summarize", Cwd: t.TempDir(), EventStream: &events}, eventRunner{output: "ok\n", events: full})
+	_, err := Invoke(context.Background(), Options{Agent: "evfile:glm-5.2", Instruction: "summarize", Cwd: t.TempDir(), EventStream: &events}, eventRunner{output: "ok\n", events: full})
 	if err != nil {
 		t.Fatal(err)
 	}

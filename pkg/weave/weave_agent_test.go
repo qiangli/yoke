@@ -73,9 +73,20 @@ func TestExpandedAgentEnablesDeclaredStdoutEventsOnce(t *testing.T) {
 	}
 }
 
-func TestExpandedYcodeEnablesDeclaredEventFile(t *testing.T) {
-	pinAgentFleet(t)
-	l, argv, err := weaveExpandAgent([]string{"ycode:glm-5.2"}, "body", "title")
+// No baseline tool declares events_arg any more (fleet ycode is the bashy genie
+// backend and takes no --events flag), so the generic mechanism is exercised
+// through a catalog tool that declares it.
+func TestExpandedToolEnablesDeclaredEventFile(t *testing.T) {
+	cat := pinAgentFleet(t)
+	if err := cat.SaveTool(fleet.Tool{
+		Name: "evfile", Kind: fleet.ToolKindCLI,
+		CLI: fleet.ToolCLI{Binary: "evfile", Launch: fleet.ToolLaunch{
+			Exec: "evfile --model {model} {prompt}", EventsArg: "--events {path}",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	l, argv, err := weaveExpandAgent([]string{"evfile:glm-5.2"}, "body", "title")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,13 +94,25 @@ func TestExpandedYcodeEnablesDeclaredEventFile(t *testing.T) {
 	argv = weaveAgentEventsFileArgv(l, argv, path)
 	got := strings.Join(argv, " ")
 	if !strings.Contains(got, "--events "+path) {
-		t.Fatalf("ycode event file flag missing: %q", got)
+		t.Fatalf("event file flag missing: %q", got)
 	}
 	if !strings.HasPrefix(argv[len(argv)-1], "body") {
 		t.Fatalf("event file flags displaced the final prompt: %q", argv)
 	}
 	if twice := weaveAgentEventsFileArgv(l, argv, path); strings.Join(twice, "\x00") != strings.Join(argv, "\x00") {
 		t.Fatalf("event file flag injection is not idempotent:\n once=%q\n twice=%q", argv, twice)
+	}
+}
+
+func TestExpandedYcodeAliasTakesNoEventFile(t *testing.T) {
+	pinAgentFleet(t)
+	l, argv, err := weaveExpandAgent([]string{"ycode:glm-5.2"}, "body", "title")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	if got := strings.Join(weaveAgentEventsFileArgv(l, argv, path), " "); strings.Contains(got, "--events") {
+		t.Fatalf("ycode aliases the genie backend, which takes no --events flag: %q", got)
 	}
 }
 

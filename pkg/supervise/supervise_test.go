@@ -55,10 +55,10 @@ func TestNoSupervisorDoesNotLaunchSummaryAndConverges(t *testing.T) {
 func TestUnavailableOptionalSupervisorDoesNotBlockConvergence(t *testing.T) {
 	testEnv(t)
 	p := &Plan{
-		Goal: "g", Supervisor: "ycode", Fleet: []string{"agy"}, MaxAttempts: 1, Cwd: os.TempDir(),
+		Goal: "g", Supervisor: "claude", Fleet: []string{"agy"}, MaxAttempts: 1, Cwd: os.TempDir(),
 		Contracts: []*Contract{{ID: "t1", Goal: "do", Gate: "true"}},
 	}
-	r := scriptRunner{reply: map[string]string{"agy": "done"}, code: map[string]int{"ycode": 1}}
+	r := scriptRunner{reply: map[string]string{"agy": "done"}, code: map[string]int{"claude": 1}}
 	res, err := Run(context.Background(), p, r, noProgress{})
 	if err != nil {
 		t.Fatal(err)
@@ -71,10 +71,10 @@ func TestUnavailableOptionalSupervisorDoesNotBlockConvergence(t *testing.T) {
 func TestExplicitSupervisorSummaryCannotOverrideConvergence(t *testing.T) {
 	testEnv(t)
 	p := &Plan{
-		Goal: "g", Supervisor: "ycode", Fleet: []string{"agy"}, MaxAttempts: 1, Cwd: os.TempDir(),
+		Goal: "g", Supervisor: "claude", Fleet: []string{"agy"}, MaxAttempts: 1, Cwd: os.TempDir(),
 		Contracts: []*Contract{{ID: "t1", Goal: "do", Gate: "true"}},
 	}
-	r := scriptRunner{reply: map[string]string{"agy": "done", "ycode": "I would not ship this."}}
+	r := scriptRunner{reply: map[string]string{"agy": "done", "claude": "I would not ship this."}}
 	res, err := Run(context.Background(), p, r, noProgress{})
 	if err != nil {
 		t.Fatal(err)

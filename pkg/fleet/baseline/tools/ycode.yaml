@@ -42,3 +42,8 @@ cli:
     supports_graceful_quit: true
     notes: Headless runs one turn through `bashy genie -m MODEL MESSAGE`; interactive steering opens `bashy ycode -m MODEL`. -m names a registry API model (external endpoint) or a door/local id. A mid-turn steer line is delivered to the running turn at its next step; ESC or Ctrl-C interrupts the turn, not the session.
 quirks: "first-party; built on ycode. Mid-turn steering is kept (measured 2026-09-28, ycode 2efcc3a): a steer line reaches the running turn at its next step, a STOP halts it before its next tool call, ESC (chat interrupt) or Ctrl-C cancels the turn and keeps the session. An ESC sent to an IDLE prompt is taken by the line editor and prefixes the next typed line — interrupt only while a turn runs."
+harness:
+  operability: 0.9
+  shell: 0.95
+  tool-use: 0.9
+  isolation: 0.85
