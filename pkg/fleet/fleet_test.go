@@ -204,6 +204,21 @@ func TestBaselineCodexWorkspaceGrantsGitAndLoopback(t *testing.T) {
 	if argv[0] != "codex" || argv[1] != "-c" {
 		t.Fatalf("global -c overrides must precede the exec subcommand: %q", argv)
 	}
+	// {gocache} is only known to the orchestrator; a concrete workspace render
+	// must not leak the placeholder, and binding it adds exactly one grant.
+	if strings.Contains(joined, GOCacheToken) {
+		t.Fatalf("concrete workspace render leaked %s: %q", GOCacheToken, argv)
+	}
+	placeheld := strings.Join(codex.ArgvWithWorkspace(WorkspaceToken, "gpt-5.5", "task"), "\x00")
+	if !strings.Contains(placeheld, `writable_roots=["{workspace}/.git","{gocache}"]`) {
+		t.Fatalf("placeholder render must carry the cache grant: %q", placeheld)
+	}
+	if got := BindGOCache(placeheld, "/q/agent-data/go-build-cache/run-7"); !strings.Contains(got, `["{workspace}/.git","/q/agent-data/go-build-cache/run-7"]`) {
+		t.Fatalf("BindGOCache did not grant the managed cache: %q", got)
+	}
+	if got := BindGOCache(placeheld, ""); !strings.Contains(got, `writable_roots=["{workspace}/.git"]`) || strings.Contains(got, GOCacheToken) {
+		t.Fatalf("empty cache must drop the grant cleanly: %q", got)
+	}
 	if direct := strings.Join(codex.Argv("gpt-5.5", "task"), " "); strings.Contains(direct, "writable_roots") || strings.Contains(direct, "network_access") {
 		t.Fatalf("a launch without a workspace must keep codex's default sandbox: %q", direct)
 	}

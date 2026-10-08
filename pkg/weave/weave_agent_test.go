@@ -160,7 +160,7 @@ func TestExpandAGYCarriesGenericWorkspacePlaceholder(t *testing.T) {
 	if len(l.WorkspacePreflight) == 0 {
 		t.Fatal("agy expansion must carry its named workspace preflight command")
 	}
-	bound, err := weaveBindAgentWorkspace(l, argv, "/tmp/allocated-work")
+	bound, err := weaveBindAgentWorkspace(l, argv, "/tmp/allocated-work", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -484,5 +484,46 @@ func TestPromptIsNeverEmpty(t *testing.T) {
 		if a == "" {
 			t.Fatalf("argv[%d] is empty: %q", i, argv)
 		}
+	}
+}
+
+// A sandboxed (codex workspace-write) worker can only write its workspace and
+// the roots granted on the command line. The weave-managed GOCACHE lives
+// outside the workspace, so it must be granted or the worker falls back to a
+// hand-made /tmp cache that nothing reclaims.
+func TestBindAgentWorkspaceGrantsManagedGOCacheToSandboxedWorker(t *testing.T) {
+	pinAgentFleet(t)
+	l, argv, err := weaveExpandAgent([]string{"codex:gpt-5.5"}, "body", "title")
+	if err != nil || l == nil {
+		t.Fatalf("launch=%+v err=%v", l, err)
+	}
+	queue := t.TempDir()
+	cache := weaveManagedGOCachePath(nil, queue, 7)
+	bound, err := weaveBindAgentWorkspace(l, argv, "/tmp/allocated-work", cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(bound, " ")
+	want := `writable_roots=["/tmp/allocated-work/.git","` + cache + `"]`
+	if !strings.Contains(got, want) {
+		t.Fatalf("bound codex argv lacks the managed GOCACHE grant %q: %q", want, got)
+	}
+	if strings.Contains(got, "{gocache}") || strings.Contains(got, fleet.WorkspaceToken) {
+		t.Fatalf("unresolved placeholder in %q", got)
+	}
+}
+
+func TestBindAgentWorkspaceWithoutManagedGOCacheDropsGrant(t *testing.T) {
+	pinAgentFleet(t)
+	l, argv, err := weaveExpandAgent([]string{"codex:gpt-5.5"}, "body", "title")
+	if err != nil || l == nil {
+		t.Fatalf("launch=%+v err=%v", l, err)
+	}
+	bound, err := weaveBindAgentWorkspace(l, argv, "/tmp/allocated-work", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(bound, " "); !strings.Contains(got, `writable_roots=["/tmp/allocated-work/.git"]`) || strings.Contains(got, "{gocache}") {
+		t.Fatalf("operator-owned GOCACHE must leave only the .git grant: %q", got)
 	}
 }

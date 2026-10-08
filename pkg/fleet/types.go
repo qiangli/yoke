@@ -109,7 +109,21 @@ const (
 	ModelToken     = "{model}"
 	WorkspaceToken = "{workspace}"
 	SessionToken   = "{session}" // the current session id, for a context-inheriting fork
+	// GOCacheToken is the per-run managed build cache a sandboxed worker must
+	// be allowed to write. Only the orchestrator knows it, so it survives
+	// rendering as a quoted list element (`,"{gocache}"`) until BindGOCache.
+	GOCacheToken = "{gocache}"
 )
+
+// BindGOCache fills GOCacheToken in s with cache, or drops the whole list
+// element when cache is empty so the result stays well-formed.
+func BindGOCache(s, cache string) string {
+	elem := `,"` + GOCacheToken + `"`
+	if cache == "" {
+		return strings.ReplaceAll(s, elem, "")
+	}
+	return strings.ReplaceAll(s, GOCacheToken, cache)
+}
 
 // Tool is an agentic CLI harness.
 //
@@ -415,6 +429,9 @@ func (t Tool) renderLaunch(tmpl, workspace, modelID, session, prompt string) []s
 		if i == 1 && workspace != "" {
 			for _, wf := range strings.Fields(t.CLI.Launch.WorkspaceArg) {
 				wf = strings.ReplaceAll(wf, WorkspaceToken, workspace)
+				if workspace != WorkspaceToken {
+					wf = BindGOCache(wf, "")
+				}
 				out = append(out, wf)
 			}
 		}

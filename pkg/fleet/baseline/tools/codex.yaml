@@ -41,7 +41,10 @@ cli:
     # have no effect. They were measured on codex-cli 0.157.1: without them,
     # workspace-write denied writes to <root>/.git and loopback socket binds.
     # -c is a global option, so it must precede `exec` (rendered after the binary).
-    workspace_arg: -c sandbox_workspace_write.writable_roots=["{workspace}/.git"] -c sandbox_workspace_write.network_access=true
+    # {gocache} is the run's weave-managed GOCACHE: outside the workspace, so
+    # without this grant go build/test is denied and the worker invents a /tmp
+    # cache that nothing reclaims (todo 7e5009b7d531).
+    workspace_arg: -c sandbox_workspace_write.writable_roots=["{workspace}/.git","{gocache}"] -c sandbox_workspace_write.network_access=true
     steer_exec: codex --no-daemon --model {model}
     prompt_position: last
     # MEASURED 2026-09-24 (codex-cli 0.156.1): a directory codex has not seen

@@ -37,6 +37,7 @@ import (
 	"github.com/qiangli/yoke/pkg/gate"
 	"github.com/qiangli/yoke/pkg/ladder"
 	"github.com/qiangli/yoke/pkg/room"
+	"github.com/qiangli/yoke/pkg/secrets"
 	"github.com/qiangli/yoke/pkg/telemetry"
 	"github.com/qiangli/yoke/pkg/weave/memory"
 
@@ -3051,7 +3052,7 @@ func weaveSpawnResumeWrapper(dir string, issueID int64, spec *weaveLaunchSpec) (
 	var logFile *os.File
 	logsDir := filepath.Join(dir, "logs")
 	if err := os.MkdirAll(logsDir, 0o755); err == nil {
-		if f, err := os.OpenFile(filepath.Join(logsDir, fmt.Sprintf("issue-%d-wrapper.log", issueID)), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+		if f, err := os.OpenFile(filepath.Join(logsDir, fmt.Sprintf("issue-%d-wrapper.log", issueID)), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
 			logFile = f
 			c.Stdout = f
 			c.Stderr = f
@@ -3607,7 +3608,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	}
 	agentEventsPath := ""
 	if agentLaunch != nil {
-		toolArgs, err = weaveBindAgentWorkspace(agentLaunch, toolArgs, workspace)
+		toolArgs, err = weaveBindAgentWorkspace(agentLaunch, toolArgs, workspace, weaveManagedGOCachePath(os.Environ(), dir, it.ID))
 		if err != nil {
 			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 				weavecli.ExitPrecondFail, err))
@@ -4088,15 +4089,11 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	var logPath string
 	if useLogFile {
 		logsDir := filepath.Join(dir, "logs")
-		if err := os.MkdirAll(logsDir, 0o755); err != nil {
-			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
-				weavecli.ExitGenericFail, fmt.Errorf("create log dir: %w", err)))
-		}
 		logPath = filepath.Join(logsDir, fmt.Sprintf("issue-%d.log", it.ID))
-		f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+		f, err := weaveOpenCaptureLog(logsDir, logPath, len(secrets.VaultEnvNames()) > 0)
 		if err != nil {
 			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
-				weavecli.ExitGenericFail, fmt.Errorf("open log: %w", err)))
+				weavecli.ExitGenericFail, err))
 		}
 		logFile = f
 		// A live worker must be distinguishable from a launch that never began.

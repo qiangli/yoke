@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -15,7 +16,7 @@ import (
 func TestWeaveCaptureRedactionInactiveIsLoudAndPassesThrough(t *testing.T) {
 	var diagnostics bytes.Buffer
 	capture := newWeaveCaptureRedactionForNames(
-		[]string{"PRESENT_SECRET=synthetic-present-value"},
+		nil,
 		map[string]struct{}{"MISSING_SECRET": {}},
 		&diagnostics,
 	)
@@ -111,6 +112,11 @@ func TestWeaveCaptureRedactsLogAndReturnedText(t *testing.T) {
 		t.Fatalf("read capture log: %v", err)
 	}
 	assertNoCaptureValue(t, logPath, logData, fixture)
+	if runtime.GOOS != "windows" {
+		if st, err := os.Stat(logPath); err != nil || st.Mode().Perm() != 0o600 {
+			t.Fatalf("capture log mode = %v (stat err %v), want 0600", st.Mode().Perm(), err)
+		}
+	}
 	if !bytes.HasSuffix(logData, []byte(" final bytes")) {
 		t.Fatalf("redacted capture tail was truncated: path=%s bytes=%d", logPath, len(logData))
 	}
@@ -133,5 +139,84 @@ func assertNoCaptureValue(t *testing.T, path string, captured []byte, value stri
 	t.Helper()
 	if offset := bytes.Index(captured, []byte(value)); offset >= 0 {
 		t.Fatalf("registered vault value reached capture: path=%s offset=%d", path, offset)
+	}
+}
+
+func TestWeaveCaptureRedactionKeepsRegistrableSecretsWhenOneFails(t *testing.T) {
+	const (
+		good     = "synthetic-registrable-value-0001"
+		tooShort = "x"
+	)
+	var diagnostics bytes.Buffer
+	capture := newWeaveCaptureRedactionForNames(
+		[]string{"GOOD_SECRET=" + good, "SHORT_SECRET=" + tooShort},
+		map[string]struct{}{"GOOD_SECRET": {}, "SHORT_SECRET": {}, "MISSING_SECRET": {}},
+		&diagnostics,
+	)
+
+	var dst bytes.Buffer
+	w := capture.Writer(&dst)
+	if _, err := w.Write([]byte("before " + good + " after")); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+	assertNoCaptureValue(t, "capture", dst.Bytes(), good)
+	if !strings.Contains(dst.String(), "before ") || !strings.Contains(dst.String(), " after") {
+		t.Fatal("redaction lost surrounding non-secret output")
+	}
+
+	diag := diagnostics.String()
+	for _, want := range []string{"SHORT_SECRET", "MISSING_SECRET", "PARTIAL"} {
+		if !strings.Contains(diag, want) {
+			t.Fatalf("diagnostic does not name %q: %q", want, diag)
+		}
+	}
+	if strings.Contains(diag, "GOOD_SECRET") {
+		t.Fatal("diagnostic names a secret that was registered successfully")
+	}
+	assertNoCaptureValue(t, "diagnostics", []byte(diag), good)
+	if strings.Contains(diag, "="+tooShort) {
+		t.Fatal("diagnostic echoed a secret value")
+	}
+}
+
+func TestWeaveCaptureRedactionNothingToRegisterIsSilent(t *testing.T) {
+	var diagnostics bytes.Buffer
+	capture := newWeaveCaptureRedactionForNames(nil, map[string]struct{}{}, &diagnostics)
+	if diagnostics.Len() != 0 {
+		t.Fatalf("unexpected diagnostic: %q", diagnostics.String())
+	}
+	if capture.secretsRendered {
+		t.Fatal("no vault names but secretsRendered is set")
+	}
+}
+
+func TestWeaveCaptureLogIsOwnerOnlyWhenSecretsRendered(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file modes")
+	}
+	dir := filepath.Join(t.TempDir(), "logs")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "issue-1.log")
+	if err := os.WriteFile(path, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := weaveOpenCaptureLog(dir, path, true)
+	if err != nil {
+		t.Fatalf("open capture log: %v", err)
+	}
+	_ = f.Close()
+	for p, want := range map[string]os.FileMode{dir: 0o700, path: 0o600} {
+		st, err := os.Stat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := st.Mode().Perm(); got != want {
+			t.Fatalf("%s mode = %o, want %o", filepath.Base(p), got, want)
+		}
 	}
 }

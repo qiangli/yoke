@@ -64,16 +64,16 @@ func weaveResolveAgent(name string) (*weaveAgentLaunch, error) {
 // weaveBindAgentWorkspace replaces the generic launch placeholder after weave
 // has allocated the concrete clone. No tool name is consulted here: workspace
 // binding and preflight behavior come entirely from the fleet launch metadata.
-func weaveBindAgentWorkspace(l *weaveAgentLaunch, argv []string, workspace string) ([]string, error) {
+func weaveBindAgentWorkspace(l *weaveAgentLaunch, argv []string, workspace, gocache string) ([]string, error) {
 	if l == nil {
 		return argv, nil
 	}
-	bound, err := agentlaunch.RenderWorkspace(argv, workspace)
+	bound, err := agentlaunch.RenderWorkspaceGOCache(argv, workspace, gocache)
 	if err != nil {
 		return nil, err
 	}
 	if len(l.WorkspacePreflight) > 0 {
-		l.WorkspacePreflight, err = agentlaunch.RenderWorkspace(l.WorkspacePreflight, workspace)
+		l.WorkspacePreflight, err = agentlaunch.RenderWorkspaceGOCache(l.WorkspacePreflight, workspace, gocache)
 		if err != nil {
 			return nil, err
 		}

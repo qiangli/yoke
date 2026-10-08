@@ -1,8 +1,11 @@
 package weave
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"os"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -13,8 +16,17 @@ import (
 // weaveCaptureRedaction is created at an agent-output capture boundary. It
 // snapshots the vault-rendered values already present in the launcher's
 // environment; it never fetches or renders the vault itself.
+//
+// Failure posture: redact every value that can be registered. A value that
+// cannot be (absent from the environment, or shorter than
+// secrets.MinRedactedValueLen) is reported by NAME and reason only, and capture
+// continues with partial redaction; one unprotectable entry never strips
+// protection from the others.
 type weaveCaptureRedaction struct {
 	redactor *secrets.Redactor
+	// secretsRendered is true when the vault names any secret for this run,
+	// whether or not each could be registered; capture files are then owner-only.
+	secretsRendered bool
 }
 
 func newWeaveCaptureRedaction(environ []string, diagnostics io.Writer) weaveCaptureRedaction {
@@ -41,22 +53,67 @@ func newWeaveCaptureRedactionForNames(environ []string, names map[string]struct{
 	sort.Strings(sortedNames)
 
 	redactor := secrets.NewRedactor()
+	var failed []string
+	registered := 0
 	for _, name := range sortedNames {
 		value, ok := values[name]
 		if !ok {
-			weaveWarnCaptureRedactionInactive(diagnostics)
-			return weaveCaptureRedaction{}
+			failed = append(failed, name+" (not in environment)")
+			continue
 		}
 		if err := redactor.Register(name, value); err != nil {
-			weaveWarnCaptureRedactionInactive(diagnostics)
-			return weaveCaptureRedaction{}
+			failed = append(failed, name+" ("+weaveRegisterFailureReason(err)+")")
+			continue
 		}
+		registered++
 	}
-	return weaveCaptureRedaction{redactor: redactor}
+	if len(failed) > 0 {
+		weaveWarnCaptureRedactionIncomplete(diagnostics, registered, failed)
+	}
+	return weaveCaptureRedaction{redactor: redactor, secretsRendered: true}
 }
 
-func weaveWarnCaptureRedactionInactive(w io.Writer) {
-	fmt.Fprintln(w, "weave start: WARNING: SECRET REDACTION INACTIVE — not all vault-rendered values could be registered; capture will continue unredacted")
+func weaveRegisterFailureReason(err error) string {
+	if errors.Is(err, secrets.ErrSecretTooShort) {
+		return "value too short to redact"
+	}
+	return "cannot be registered"
+}
+
+func weaveWarnCaptureRedactionIncomplete(w io.Writer, registered int, failed []string) {
+	level := "PARTIAL"
+	if registered == 0 {
+		level = "INACTIVE"
+	}
+	fmt.Fprintf(w, "weave start: WARNING: SECRET REDACTION %s — %d vault-rendered value(s) registered; NOT redacted in capture: %s\n",
+		level, registered, strings.Join(failed, ", "))
+}
+
+// weaveOpenCaptureLog creates the capture log truncated. When secrets were
+// rendered for the run the file is 0600 in a 0700 directory, chmod-ed
+// explicitly because OpenFile/MkdirAll honour the mode only on creation.
+func weaveOpenCaptureLog(logsDir, logPath string, secretsRendered bool) (*os.File, error) {
+	dirMode, fileMode := os.FileMode(0o755), os.FileMode(0o600)
+	if secretsRendered {
+		dirMode = 0o700
+	}
+	if err := os.MkdirAll(logsDir, dirMode); err != nil {
+		return nil, fmt.Errorf("create log dir: %w", err)
+	}
+	if secretsRendered {
+		if err := os.Chmod(logsDir, dirMode); err != nil {
+			return nil, fmt.Errorf("restrict log dir: %w", err)
+		}
+	}
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, fileMode)
+	if err != nil {
+		return nil, fmt.Errorf("open log: %w", err)
+	}
+	if err := f.Chmod(fileMode); err != nil && runtime.GOOS != "windows" {
+		_ = f.Close()
+		return nil, fmt.Errorf("restrict log: %w", err)
+	}
+	return f, nil
 }
 
 // Writer never closes dst. This matches secrets.Redactor.Writer and lets the

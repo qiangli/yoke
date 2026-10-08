@@ -126,12 +126,18 @@ func (l Launch) Argv(prompt string) []string {
 // intentionally tool-agnostic: the fleet profile, not weave, chooses which CLI
 // flag carries the path.
 func RenderWorkspace(argv []string, workspace string) ([]string, error) {
+	return RenderWorkspaceGOCache(argv, workspace, "")
+}
+
+// RenderWorkspaceGOCache is RenderWorkspace plus the sandbox grant for the
+// orchestrator-managed build cache; an empty gocache drops the grant.
+func RenderWorkspaceGOCache(argv []string, workspace, gocache string) ([]string, error) {
 	if strings.TrimSpace(workspace) == "" {
 		return nil, errors.New("agent launch: allocated workspace is empty")
 	}
 	out := append([]string(nil), argv...)
 	for i, arg := range out {
-		out[i] = strings.ReplaceAll(arg, fleet.WorkspaceToken, workspace)
+		out[i] = fleet.BindGOCache(strings.ReplaceAll(arg, fleet.WorkspaceToken, workspace), gocache)
 	}
 	for _, arg := range out {
 		if strings.Contains(arg, fleet.WorkspaceToken) {
