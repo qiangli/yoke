@@ -281,3 +281,56 @@ func TestOwnershipAndReconfigurationBlockARun(t *testing.T) {
 		t.Error("cap exhaustion blocked the run")
 	}
 }
+
+// A recorded context whose record is GONE (store wiped, or retired by a
+// `weave reset` in another clone — the store is host-global) must not leave its
+// stale UUID on the run. Stamping it would hand the worker an identity with no
+// record behind it, failing every principal.SelfInstance lookup. The run
+// continues as the new conversation it now is.
+func TestUnresumableRecordedContextBecomesAFreshOne(t *testing.T) {
+	it, l := instanceRun(t)
+	if _, err := weaveOpenRunInstance(it, l, "agent/weave-issue-37"); err != nil {
+		t.Fatal(err)
+	}
+	stale := it.Instance
+
+	// The record disappears underneath the run.
+	t.Setenv(fleet.InstanceDirEnv, t.TempDir())
+
+	ctx, err := weaveOpenRunInstance(it, l, "agent/weave-issue-37")
+	if err != nil {
+		t.Fatalf("a run with an unresumable recorded context was refused: %v", err)
+	}
+	if it.Instance == stale {
+		t.Fatalf("the run kept a UUID with no record: %s", stale)
+	}
+	if it.Instance == "" || it.Instance != ctx.Instance.UUID {
+		t.Fatalf("the run did not record its new conversation: %q", it.Instance)
+	}
+	// The stamped identity must resolve to a real record.
+	store := fleet.NewInstanceStore(os.Getenv(fleet.InstanceDirEnv))
+	if _, err := store.Resume(it.Instance); err != nil {
+		t.Errorf("the stamped identity does not resolve: %v", err)
+	}
+}
+
+// When no identity can be taken at all, the run records NOTHING rather than a
+// half-written one — honestly unidentified beats wrongly identified.
+func TestUnidentifiableRunClearsStaleFields(t *testing.T) {
+	it, _ := instanceRun(t)
+	it.Instance = "11111111-2222-3333-4444-555555555555"
+	it.InstanceFamily = "single:claude:opus5.5@dead"
+	it.InstanceLabel = "Ghost"
+
+	// A launch with no resolvable family: nothing can be opened, fresh or not.
+	bare := &weaveAgentLaunch{Nick: "claude", Tool: "claude", ToolName: "claude"}
+	if _, err := weaveOpenRunInstance(it, bare, "agent/weave-issue-37"); err != nil {
+		t.Fatal(err)
+	}
+	if it.Instance != "" || it.InstanceFamily != "" || it.InstanceLabel != "" {
+		t.Errorf("stale identity survived: %q / %q / %q", it.Instance, it.InstanceFamily, it.InstanceLabel)
+	}
+	if got := weaveInstanceEnv([]string{"PATH=/bin"}, it); len(got) != 1 {
+		t.Errorf("an unidentified run was stamped: %v", got)
+	}
+}

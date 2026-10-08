@@ -110,10 +110,25 @@ func weaveOpenRunInstance(it *weaveItem, l *weaveAgentLaunch, branch string) (ag
 		req.Fresh = true
 	}
 	ctx, err := agentlaunch.OpenContext(agentlaunch.Launch(*l), req)
+	// A RECORDED CONTEXT THAT NO LONGER RESUMES must not leave its UUID on the
+	// run. The store is host-global and outlives no checkout in particular, so
+	// a record can genuinely be gone — wiped, or retired by `weave reset` on
+	// another clone — and the stale id would then be stamped onto the worker,
+	// which would advertise an identity with no record behind it and fail
+	// every principal.SelfInstance lookup. Continue as a NEW conversation
+	// instead, which is what it now is.
+	if err != nil && !weaveInstanceBlocksRun(err) && req.Resume != "" {
+		req.Resume, req.Fresh = "", true
+		ctx, err = agentlaunch.OpenContext(agentlaunch.Launch(*l), req)
+	}
 	if err != nil {
 		if weaveInstanceBlocksRun(err) {
 			return agentlaunch.InstanceContext{}, err
 		}
+		// Honestly unidentified rather than wrongly identified: clear the
+		// fields so weaveInstanceEnv stamps nothing and the worker behaves
+		// exactly as a pre-instance one.
+		it.Instance, it.InstanceFamily, it.InstanceLabel = "", "", ""
 		return agentlaunch.InstanceContext{}, nil
 	}
 	it.Instance = ctx.Instance.UUID
