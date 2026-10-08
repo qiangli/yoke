@@ -372,3 +372,22 @@ func TestWeaveRecoverOrphanedAllocationsWithoutPID(t *testing.T) {
 		t.Fatalf("manual allocation must remain resumable: %#v", got)
 	}
 }
+
+func TestWeaveProvisioningLimitFromEnv(t *testing.T) {
+	for _, tc := range []struct {
+		env  string
+		want time.Duration
+	}{
+		{"", weaveProvisioningTimeout},
+		{"15m", 15 * time.Minute},
+		{"90s", 90 * time.Second},
+		{"bogus", weaveProvisioningTimeout},
+		{"-1m", weaveProvisioningTimeout},
+		{"0", weaveProvisioningTimeout},
+	} {
+		t.Setenv("BASHY_WEAVE_PROVISION_TIMEOUT", tc.env)
+		if got := weaveProvisioningLimit(); got != tc.want {
+			t.Errorf("BASHY_WEAVE_PROVISION_TIMEOUT=%q: got %s, want %s", tc.env, got, tc.want)
+		}
+	}
+}

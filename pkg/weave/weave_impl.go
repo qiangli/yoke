@@ -1205,13 +1205,27 @@ func weaveEnsureSyncedClone(orig, dst string) error {
 // resets the URLs to their canonical .gitmodules values, so the local-origin path
 // is not left as a breadcrumb an escaping agent could follow back (mirroring the
 // `git remote remove origin` isolation above).
-const weaveProvisioningTimeout = 2 * time.Minute
+const weaveProvisioningTimeout = 10 * time.Minute
+
+// weaveProvisioningLimit bounds workspace provisioning. An umbrella workspace
+// hydrates every submodule recursively, which takes minutes on a busy host, so
+// the default is generous; BASHY_WEAVE_PROVISION_TIMEOUT (a Go duration such
+// as 15m) overrides it. Invalid or non-positive values keep the default.
+func weaveProvisioningLimit() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("BASHY_WEAVE_PROVISION_TIMEOUT")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return weaveProvisioningTimeout
+}
 
 func weaveHydrateSubmodules(root, workspace string, out, errw io.Writer) error {
 	if _, err := os.Stat(filepath.Join(workspace, ".gitmodules")); err != nil {
 		return nil // no submodules — nothing to hydrate
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), weaveProvisioningTimeout)
+	limit := weaveProvisioningLimit()
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
 
 	anyLocal := false
@@ -1254,7 +1268,7 @@ func weaveHydrateSubmodules(root, workspace string, out, errw io.Writer) error {
 	up.Stdout, up.Stderr = out, errw
 	if err := up.Run(); err != nil {
 		if ctx.Err() != nil {
-			return fmt.Errorf("git submodule update --init timed out after 2m: %w", ctx.Err())
+			return fmt.Errorf("git submodule update --init timed out after %s (BASHY_WEAVE_PROVISION_TIMEOUT): %w", limit, ctx.Err())
 		}
 		return fmt.Errorf("git submodule update --init: %w", err)
 	}
@@ -1346,7 +1360,7 @@ func weaveAllocatedLaunchOrphaned(it *weaveItem, now time.Time) bool {
 	if it.WrapperPid > 0 {
 		return !pidAlive(it.WrapperPid)
 	}
-	if it.StartedAt.IsZero() || now.Sub(it.StartedAt) < weaveProvisioningTimeout {
+	if it.StartedAt.IsZero() || now.Sub(it.StartedAt) < weaveProvisioningLimit() {
 		return false
 	}
 	switch it.LaunchPhase {
