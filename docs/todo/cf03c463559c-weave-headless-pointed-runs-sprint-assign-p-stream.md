@@ -3,14 +3,18 @@ id: cf03c463559c
 kind: bug
 title: 'weave: headless pointed runs (sprint assign, -p stream-json / codex exec) record max_runtime but are never killed at the cap'
 seq: 22
-status: todo
+status: done
 priority: p1
 labels:
     - weave
 created: 2026-09-30T13:04:10.311815Z
+weave: 2
+assignee: codex-gpt5.6-terra
 sprint: 379
 sprint_id: 908c2ac2-e7bc-55fe-86bd-d25046ac4684
 sprint_title: 'bashy 1.0.0 feature list: bash + Bash# + Yoke'
+closed: 2026-10-08T19:39:08.459999Z
+closed_by: claude-opus5.5
 ---
 
 Steward 2026-09-30, Sprint #319 (dhnt queue dhnt-31437fad): run #5 (claude sonnet5.5, points 5, launch_spec.max_runtime=1200000000000 = 20m, argv '-p --output-format stream-json') ran 12:08:35Z-12:57:30Z = 48m55s, exit 0, no delivery; run #6 (codex exec gpt-5.6-sol, points 5, same max_runtime) ran 26m28s. Both launched through 'sprint assign' (manual override). PTY-launched runs the same day were killed exactly at the cap ('[agent] terminating subagent: runtime exceeds --max-runtime 20m0s', yoke #126-128). So the ceiling is enforced only on the PTY path. Fix (KISS): enforce max_runtime in the one place every launch path shares (the run supervisor), killing the process group at the cap. Red/green: a headless pointed run of a sleeping fake agent is killed at its cap.

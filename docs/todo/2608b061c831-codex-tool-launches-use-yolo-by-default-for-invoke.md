@@ -3,11 +3,13 @@ id: 2608b061c831
 kind: bug
 title: Codex tool launches use YOLO by default for invoke and chat
 seq: 29
-status: todo
+status: assigned
 priority: p1
 labels:
     - codex
 created: 2026-10-01T02:20:14.191817Z
+weave: 3
+assignee: codex-gpt5.6-terra
 sprint: 379
 sprint_id: 908c2ac2-e7bc-55fe-86bd-d25046ac4684
 sprint_title: 'bashy 1.0.0 feature list: bash + Bash# + Yoke'
