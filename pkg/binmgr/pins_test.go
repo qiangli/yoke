@@ -158,4 +158,3 @@ func TestPinnedDigests_ValidFormat(t *testing.T) {
 		}
 	}
 }
-

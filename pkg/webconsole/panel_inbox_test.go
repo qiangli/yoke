@@ -183,6 +183,11 @@ func TestInboxMarkReadTouchesOnlyTheViewersOwnInbox(t *testing.T) {
 		if before[path] == sum {
 			continue
 		}
+		// A .lock file is the bus's shared cross-process write lock (holder
+		// metadata, no mail), so it belongs to no name.
+		if strings.HasSuffix(path, ".lock") {
+			continue
+		}
 		if !strings.Contains(path, "operator") && !strings.HasSuffix(path, "timeline.jsonl") {
 			t.Errorf("marking the viewer's mail read rewrote %s, which is not theirs", path)
 		}
