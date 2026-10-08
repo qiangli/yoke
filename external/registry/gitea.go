@@ -7,7 +7,7 @@ import (
 )
 
 // GiteaVersion is the default pinned release of Gitea.
-const GiteaVersion = "v1.27.3"
+const GiteaVersion = "v28.1.0"
 
 // gitea — the lightweight Git forge (go-gitea/gitea, MIT), tier 5 (cluster).
 // Ships per-platform GitHub-release raw binaries and checksums.

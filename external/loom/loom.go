@@ -37,7 +37,7 @@ import (
 
 const (
 	// DefaultVersion pins the Gitea release loom runs. go-gitea/gitea is MIT.
-	DefaultVersion   = "v1.27.3"
+	DefaultVersion   = "v28.1.0"
 	DefaultAddr      = "127.0.0.1"
 	DefaultPort      = 31880
 	DefaultProxyPort = 31881

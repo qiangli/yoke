@@ -84,20 +84,22 @@ var pinnedDigests = map[string]string{
 	"tofu@v1.13.1/windows/amd64": "5b653d1d95719eeec4ccf55f0e2102081b6f589d788197f1cabeb89cbd4078a7",
 	"tofu@v1.13.1/windows/arm64": "b835f4aed6c447dda73f547dec340aa8ef1e7a80a513303091f8169ad7159afc",
 
-	// gitea@v1.27.3 & loom@v1.27.3 — official go-gitea/gitea release sha256 sidecars
-	"gitea@v1.27.3/darwin/amd64":  "23964155add4490ed73733fa90ea63154b724ab6fe389b7a979db4ef3d7ed8ce",
-	"gitea@v1.27.3/darwin/arm64":  "fd83383e05a4185e8f852563a7599f5d8f3e18ede00d412c0f9f044771aef162",
-	"gitea@v1.27.3/linux/amd64":   "4da93c2c10b6980c359bcb86d5573ebfd7770e2e151756534edee24c8c12d971",
-	"gitea@v1.27.3/linux/arm64":   "04c086d36dba793546e331484a9da34571763efdfa77dc526cc98e0f10917e7b",
-	"gitea@v1.27.3/windows/amd64": "d9ed1fc48ec33a8cb97d7fed3882b4e159efc3fcae3a77d0d240e250d5bf6e21",
-	"gitea@v1.27.3/windows/arm64": "d590f8be49cdac0a734b04b7936c18986eb0e600cc98d5f3414fd797f092c1d4",
+	// gitea@v28.1.0 & loom@v28.1.0 — official go-gitea/gitea release sha256 sidecars.
+	// Never pin below the release a host's loom database was migrated by: Gitea
+	// refuses to open a newer database (v1.27.3 broke Dragon's loom, 2026-10-08).
+	"gitea@v28.1.0/darwin/amd64":  "32c2cde3a677a7ca20be1a581851eac707bf1b97476321bef60febaa2167bb90",
+	"gitea@v28.1.0/darwin/arm64":  "26eed10447854770894faf7ae6bf5618a8788522c9565e58d5de6a55845226ee",
+	"gitea@v28.1.0/linux/amd64":   "ea93cfa4a300564ac457d3903469fea49ec5a4da37d0cebaa435f8e329ea64d0",
+	"gitea@v28.1.0/linux/arm64":   "47bf18a8e4602b17910cd660a902541e2c13b67c732f2607da8326fa3cd46805",
+	"gitea@v28.1.0/windows/amd64": "68495c963bab1bfcbbe5b48916c7f362a49aca931583575e09763a02ddf63e2d",
+	"gitea@v28.1.0/windows/arm64": "04e2bc31d61e8e3335be8816ea7fc6dea22fa723822d9a6159161f95a49bae5a",
 
-	"loom@v1.27.3/darwin/amd64":  "23964155add4490ed73733fa90ea63154b724ab6fe389b7a979db4ef3d7ed8ce",
-	"loom@v1.27.3/darwin/arm64":  "fd83383e05a4185e8f852563a7599f5d8f3e18ede00d412c0f9f044771aef162",
-	"loom@v1.27.3/linux/amd64":   "4da93c2c10b6980c359bcb86d5573ebfd7770e2e151756534edee24c8c12d971",
-	"loom@v1.27.3/linux/arm64":   "04c086d36dba793546e331484a9da34571763efdfa77dc526cc98e0f10917e7b",
-	"loom@v1.27.3/windows/amd64": "d9ed1fc48ec33a8cb97d7fed3882b4e159efc3fcae3a77d0d240e250d5bf6e21",
-	"loom@v1.27.3/windows/arm64": "d590f8be49cdac0a734b04b7936c18986eb0e600cc98d5f3414fd797f092c1d4",
+	"loom@v28.1.0/darwin/amd64":  "32c2cde3a677a7ca20be1a581851eac707bf1b97476321bef60febaa2167bb90",
+	"loom@v28.1.0/darwin/arm64":  "26eed10447854770894faf7ae6bf5618a8788522c9565e58d5de6a55845226ee",
+	"loom@v28.1.0/linux/amd64":   "ea93cfa4a300564ac457d3903469fea49ec5a4da37d0cebaa435f8e329ea64d0",
+	"loom@v28.1.0/linux/arm64":   "47bf18a8e4602b17910cd660a902541e2c13b67c732f2607da8326fa3cd46805",
+	"loom@v28.1.0/windows/amd64": "68495c963bab1bfcbbe5b48916c7f362a49aca931583575e09763a02ddf63e2d",
+	"loom@v28.1.0/windows/arm64": "04e2bc31d61e8e3335be8816ea7fc6dea22fa723822d9a6159161f95a49bae5a",
 
 	// goreleaser@v2.18.2-bashy.1 — qiangli/goreleaser fork release, built from
 	// v2.18.2 + a README fork notice (commit 7af3788) with Go 1.27.2.
