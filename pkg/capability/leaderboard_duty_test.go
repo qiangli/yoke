@@ -470,3 +470,13 @@ func TestHeadToHeadJSONAndInseparableText(t *testing.T) {
 		t.Fatalf("text must label inseparable pair:\n%s", out)
 	}
 }
+
+func TestHeadToHeadDoesNotCountSameFamilyAsOpponent(t *testing.T) {
+	events := []ladder.Event{
+		{Season: 1, Kind: ladder.EventKindDelivery, Agent: "alias-a", FamilyID: "family:v1", InstanceUUID: "uuid-a", Duty: ladder.DutyCode, Points: 3, Outcome: 1, Note: "heat:one"},
+		{Season: 1, Kind: ladder.EventKindDelivery, Agent: "alias-b", FamilyID: "family:v1", InstanceUUID: "uuid-b", Duty: ladder.DutyCode, Points: 3, Outcome: 0, Note: "heat:one"},
+	}
+	if got := ComputeHeadToHead(events, 1, ladder.DutyCode); len(got) != 0 {
+		t.Fatalf("same family counted as self-opponent: %+v", got)
+	}
+}

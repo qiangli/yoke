@@ -114,6 +114,13 @@ func seatPool(root string, events []ladder.Event, now time.Time, exclusions ...s
 			continue
 		}
 		key := binding.MatrixKey()
+		ratingKey := key
+		if family, ok, familyErr := cat.FamilyOf(a.Name); familyErr == nil && ok {
+			familyID := family.ID()
+			if rep.Agents[familyID] != nil {
+				ratingKey = familyID
+			}
+		}
 		reason := toolReasons[tool.Name]
 		if reason == "" {
 			reason = bindingReasons[key]
@@ -133,9 +140,9 @@ func seatPool(root string, events []ladder.Event, now time.Time, exclusions ...s
 		if a.IsCascade() && a.Band > 0 {
 			seed = a.Band
 		}
-		state := seatBand(seed, events, key)
+		state := seatBand(seed, events, ratingKey)
 		profile := ladder.Profile{}
-		if rec := rep.Agents[key]; rec != nil {
+		if rec := rep.Agents[ratingKey]; rec != nil {
 			profile.Standings = rec.Standings
 		}
 		standings := map[ladder.Duty]ladder.DutyStanding{}
@@ -148,14 +155,14 @@ func seatPool(root string, events []ladder.Event, now time.Time, exclusions ...s
 		}
 		count := 0
 		for _, ev := range events {
-			if ev.Agent == key && ev.Season == season && ev.Kind == ladder.EventKindDelivery && ev.Duty == ladder.DutyCode {
+			if ev.RatingAgent() == ratingKey && ev.Season == season && ev.Kind == ladder.EventKindDelivery && ev.Duty == ladder.DutyCode {
 				count++
 			}
 		}
 		names := append(aliases[key], key)
 		// Fleet exposes a billing-adjusted relative cost, not a measured
 		// dollars-per-point rate; use it only as the scheduler tie-breaker.
-		successes, failures := seatRecord(events, key)
+		successes, failures := seatRecord(events, ratingKey)
 		pool = append(pool, ladder.Entrant{Agent: a.Name, Vendor: tool.Name, Band: state.Band, Standings: standings, Free: !sprintAssignBusy(queues, names), CostPerPoint: float64(model.MarginalCostMicro()), PlanRank: planRank[model.Plan], CodingStoriesThisSeason: count, Successes: successes, AgentFailures: failures})
 	}
 	return pool, lines, nil
@@ -177,7 +184,7 @@ func seatRecord(events []ladder.Event, agent string) (successes, failures int) {
 		}
 	}
 	for _, e := range events {
-		if e.Kind != ladder.EventKindDelivery || e.Agent != agent || dropped[e.ID] || strings.Contains(strings.ToLower(e.Note), "shadow") {
+		if e.Kind != ladder.EventKindDelivery || e.RatingAgent() != agent || dropped[e.ID] || strings.Contains(strings.ToLower(e.Note), "shadow") {
 			continue
 		}
 		switch {

@@ -47,10 +47,12 @@ func CurrentBand(seed int, events []Event, agent string) BandState {
 	}
 	version := ""
 	for _, e := range ordered {
-		if e.Kind != EventKindDelivery || e.Agent != agent || dropped[e.ID] || strings.Contains(strings.ToLower(e.Note), "shadow") {
+		if e.Kind != EventKindDelivery || e.RatingAgent() != agent || dropped[e.ID] || strings.Contains(strings.ToLower(e.Note), "shadow") {
 			continue
 		}
-		if e.ModelVersion != "" {
+		// FamilyID already freezes the complete configuration. Selected model
+		// versions inside a composite are diagnostic and do not reset its streak.
+		if e.FamilyID == "" && e.ModelVersion != "" {
 			if version != "" && version != e.ModelVersion {
 				state.Streak = 0
 			}

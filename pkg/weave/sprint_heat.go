@@ -570,6 +570,7 @@ func heatDeliveryEvent(rec heatRecord, a heatAttempt, now time.Time) ladder.Even
 		}
 	}
 	ev := ladder.Event{Kind: ladder.EventKindDelivery, Agent: agent, Duty: ladder.DutyCode, Points: ladder.Points(a.Fairness.Points), At: now, Season: ladder.SeasonOf(now), Sprint: int(rec.Sprint), Story: rec.Story, Note: "heat:" + rec.ID, Reviewer: weaveConductorName("")}
+	ev.ID = "heat:" + rec.ID + ":run:" + a.Run
 	if a.Shadow {
 		ev.Note = "shadow heat:" + rec.ID
 	}

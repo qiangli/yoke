@@ -9,6 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/qiangli/coreutils/pkg/lockfile"
 )
 
 // Store is an append-only JSONL event ledger.
@@ -61,6 +64,27 @@ func (s *Store) Append(e Event) error {
 	}
 	if e.Schema != EventSchema {
 		return errors.New("ladder: invalid schema")
+	}
+	lock, err := lockfile.Acquire(s.path+".lock", lockfile.Holder{
+		Name: "ladder", PID: os.Getpid(), Intent: "append ladder event", Since: time.Now(),
+	})
+	if err != nil {
+		return fmt.Errorf("ladder: lock: %w", err)
+	}
+	defer lock.Release()
+	// A producer retry repeats the same immutable event ID. Treat it as a
+	// successful append so restart/resume cannot double-count evidence. An
+	// empty ID retains the legacy append-every-call behavior.
+	if e.ID != "" {
+		events, readErr := s.Read()
+		if readErr != nil {
+			return readErr
+		}
+		for _, existing := range events {
+			if existing.ID == e.ID {
+				return nil
+			}
+		}
 	}
 	data, err := json.Marshal(e)
 	if err != nil {

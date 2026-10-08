@@ -86,16 +86,17 @@ func replaySeeds(active []replayItem) map[string]map[Duty]Rating {
 	seeds := make(map[string]map[Duty]Rating)
 	for _, item := range active {
 		e := item.event
-		if e.Kind != EventKindSeed || e.Agent == "" || e.SeedR <= 0 {
+		name := e.RatingAgent()
+		if e.Kind != EventKindSeed || name == "" || e.SeedR <= 0 {
 			continue
 		}
 		if e.Duty != DutyCode && e.Duty != DutyManage && e.Duty != DutyJudge {
 			continue
 		}
-		if seeds[e.Agent] == nil {
-			seeds[e.Agent] = make(map[Duty]Rating)
+		if seeds[name] == nil {
+			seeds[name] = make(map[Duty]Rating)
 		}
-		seeds[e.Agent][e.Duty] = Rating{R: e.SeedR, RD: math.Max(e.SeedRD, SeedRDFloor), Vol: InitialVol}
+		seeds[name][e.Duty] = Rating{R: e.SeedR, RD: math.Max(e.SeedRD, SeedRDFloor), Vol: InitialVol}
 	}
 	return seeds
 }
@@ -158,8 +159,9 @@ func Replay(events []Event, currentSeason int) ReplayResult {
 	specStories := make(map[string]bool)
 	for _, item := range active {
 		e := item.event
-		if e.Agent != "" {
-			replayAgent(&out, e.Agent)
+		ratingAgent := e.RatingAgent()
+		if ratingAgent != "" {
+			replayAgent(&out, ratingAgent)
 		}
 		if e.Kind == EventKindDelivery && e.Outcome == 0 && blame.Consequence(e.Blame) == blame.ActionChargeEstimatorAndAuthor {
 			specStories[e.Story] = true
@@ -178,30 +180,31 @@ func Replay(events []Event, currentSeason int) ReplayResult {
 		storyResults := make(map[string][]replayRated)
 		for _, item := range active {
 			e := item.event
+			ratingAgent := e.RatingAgent()
 			if e.Season != season {
 				continue
 			}
 			switch e.Kind {
 			case EventKindDelivery:
 				s := out.Stories[e.Story]
-				if s == nil || e.Agent == "" {
+				if s == nil || ratingAgent == "" {
 					continue
 				}
 				if !(e.Outcome == 1 || e.Outcome == .5 || (e.Outcome == 0 && blame.Rates(e.Blame))) {
-					out.Agents[e.Agent].Unrated++
+					out.Agents[ratingAgent].Unrated++
 					continue
 				}
 				opponent := storyRatings[e.Story]
-				replayAdd(agentResults, e.Agent, DutyCode, e.Story+e.ID, Result{Opponent: opponent, Score: e.Outcome})
+				replayAdd(agentResults, ratingAgent, DutyCode, e.Story+e.ID, Result{Opponent: opponent, Score: e.Outcome})
 				agentBefore := NewRating()
-				if duties := agentRatings[e.Agent]; duties != nil && duties[DutyCode].R != 0 {
+				if duties := agentRatings[ratingAgent]; duties != nil && duties[DutyCode].R != 0 {
 					agentBefore = duties[DutyCode]
 				}
-				storyResults[e.Story] = append(storyResults[e.Story], replayRated{key: e.Agent + e.ID, result: Result{Opponent: agentBefore, Score: 1 - e.Outcome}})
+				storyResults[e.Story] = append(storyResults[e.Story], replayRated{key: ratingAgent + e.ID, result: Result{Opponent: agentBefore, Score: 1 - e.Outcome}})
 			case EventKindManage:
-				replayAdd(agentResults, e.Agent, DutyManage, fmt.Sprintf("%09d:%s", e.Sprint, e.ID), Result{Opponent: e.Opponent, Score: e.Score})
+				replayAdd(agentResults, ratingAgent, DutyManage, fmt.Sprintf("%09d:%s", e.Sprint, e.ID), Result{Opponent: e.Opponent, Score: e.Score})
 			case EventKindCert:
-				if a := out.Agents[e.Agent]; a != nil {
+				if a := out.Agents[ratingAgent]; a != nil {
 					c := e.Cert
 					if c.Season == 0 {
 						c.Season = e.Season
@@ -209,7 +212,7 @@ func Replay(events []Event, currentSeason int) ReplayResult {
 					a.Certs = append(a.Certs, c)
 				}
 			case EventKindSeat:
-				if a := out.Agents[e.Agent]; a != nil {
+				if a := out.Agents[ratingAgent]; a != nil {
 					a.Provisional = e.Provisional
 				}
 			}
@@ -270,7 +273,7 @@ func Replay(events []Event, currentSeason int) ReplayResult {
 				// The story could not be built as written: full penalty.
 				score = 0
 			}
-			replayAdd(results, e.Agent, DutyJudge, e.Story+e.ID, Result{Opponent: Rating{R: s.Rating.R, RD: 50}, Score: score})
+			replayAdd(results, e.RatingAgent(), DutyJudge, e.Story+e.ID, Result{Opponent: Rating{R: s.Rating.R, RD: 50}, Score: score})
 		}
 		for name, a := range out.Agents {
 			before := agentRatings[name][DutyJudge]

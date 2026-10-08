@@ -41,6 +41,30 @@ func TestReplayGoldenSeasonAndUnrated(t *testing.T) {
 		t.Fatal(got.Stories["story-b"])
 	}
 }
+
+func TestReplayAttributedInstancesAccumulateByFamily(t *testing.T) {
+	a := eventTestDelivery("a", "alias-one", "story-a", 1, 1)
+	a.InstanceUUID, a.FamilyID, a.SelectedBinding = "uuid-1", "family:v1", "tool:model-v1"
+	b := eventTestDelivery("b", "reused-label", "story-b", 1, .5)
+	b.InstanceUUID, b.FamilyID, b.SelectedBinding = "uuid-2", "family:v1", "tool:model-v2"
+	got := Replay([]Event{a, b}, 1)
+	if got.Agents["alias-one"] != nil || got.Agents["reused-label"] != nil {
+		t.Fatalf("aliases split family standing: %+v", got.Agents)
+	}
+	if family := got.Agents["family:v1"]; family == nil || family.Standings[DutyCode].Events != 2 {
+		t.Fatalf("two instances did not accumulate: %+v", family)
+	}
+}
+
+func TestReplayNewFamilyDoesNotInheritAndLegacyIsUnchanged(t *testing.T) {
+	legacy := eventTestDelivery("legacy", "tool:model", "story-a", 1, 1)
+	configured := eventTestDelivery("configured", "tool:model", "story-b", 1, 1)
+	configured.FamilyID, configured.InstanceUUID = "family:v2", "uuid-2"
+	got := Replay([]Event{legacy, configured}, 1)
+	if got.Agents["tool:model"].Standings[DutyCode].Events != 1 || got.Agents["family:v2"].Standings[DutyCode].Events != 1 {
+		t.Fatalf("legacy and new configuration blended: %+v", got.Agents)
+	}
+}
 func TestReplayRegressionAndDecay(t *testing.T) {
 	a := eventTestDelivery("a", "agent-a", "story-a", 1, 1)
 	base := Replay([]Event{a}, 3)

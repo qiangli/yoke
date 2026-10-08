@@ -27,19 +27,24 @@ const (
 
 // Event is one immutable item in the rating ledger. ID is the stable correction reference.
 type Event struct {
-	Schema   string            `json:"schema,omitempty"`
-	ID       string            `json:"id,omitempty"`
-	At       time.Time         `json:"at"`
-	Season   int               `json:"season"`
-	Kind     EventKind         `json:"kind"`
-	Agent    string            `json:"agent"`
-	Duty     Duty              `json:"duty,omitempty"`
-	Story    string            `json:"story,omitempty"`
-	Points   Points            `json:"points,omitempty"`
-	Outcome  float64           `json:"outcome"`
-	Blame    blame.Attribution `json:"blame,omitempty"`
-	Estimate Points            `json:"estimate,omitempty"`
-	Reviewer string            `json:"reviewer,omitempty"`
+	Schema string    `json:"schema,omitempty"`
+	ID     string    `json:"id,omitempty"`
+	At     time.Time `json:"at"`
+	Season int       `json:"season"`
+	Kind   EventKind `json:"kind"`
+	Agent  string    `json:"agent"`
+	// InstanceUUID and FamilyID are optional immutable identity evidence.
+	// Old events deliberately leave them empty and continue to rate Agent.
+	InstanceUUID    string            `json:"instance_uuid,omitempty"`
+	FamilyID        string            `json:"family_id,omitempty"`
+	SelectedBinding string            `json:"selected_binding,omitempty"`
+	Duty            Duty              `json:"duty,omitempty"`
+	Story           string            `json:"story,omitempty"`
+	Points          Points            `json:"points,omitempty"`
+	Outcome         float64           `json:"outcome"`
+	Blame           blame.Attribution `json:"blame,omitempty"`
+	Estimate        Points            `json:"estimate,omitempty"`
+	Reviewer        string            `json:"reviewer,omitempty"`
 	// Author is who wrote the story (usually the manager who wrote or split
 	// it); a spec-class failure charges the author.
 	Author   string `json:"author,omitempty"`
@@ -61,6 +66,16 @@ type Event struct {
 	// SeedR and SeedRD are a seed event's starting rating and deviation.
 	SeedR  float64 `json:"seed_r,omitempty"`
 	SeedRD float64 `json:"seed_rd,omitempty"`
+}
+
+// RatingAgent is the rating identity recorded by the event. New attributed
+// evidence accumulates under the frozen family configuration; legacy evidence
+// retains its original Agent attribution.
+func (e Event) RatingAgent() string {
+	if e.FamilyID != "" {
+		return e.FamilyID
+	}
+	return e.Agent
 }
 
 func eventKnownKind(k EventKind) bool {

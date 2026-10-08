@@ -73,6 +73,21 @@ func TestCurrentBandStreak(t *testing.T) {
 			t.Fatalf("got %+v", s)
 		}
 	})
+	t.Run("composite selection preserves family streak", func(t *testing.T) {
+		events := many(success, 5)
+		for i := range events {
+			events[i].FamilyID = "family:composite-v1"
+			events[i].InstanceUUID = "uuid-a"
+			events[i].ModelVersion = "selected-v1"
+			events[i].SelectedBinding = "tool:model-v1"
+		}
+		events[2].ModelVersion = "selected-v2"
+		events[2].SelectedBinding = "other:model-v2"
+		s := CurrentBand(3, events, "family:composite-v1")
+		if s.Band != 4 || len(s.Moves) != 1 {
+			t.Fatalf("selected composite rung reset family streak: %+v", s)
+		}
+	})
 	t.Run("shadow and other agent", func(t *testing.T) {
 		events := many(success, 4)
 		shadow := success

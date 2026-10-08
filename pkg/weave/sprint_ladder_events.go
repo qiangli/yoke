@@ -89,6 +89,9 @@ func sprintLadderDelivery(cmd *cobra.Command, s *weaveStory, story *issue.Issue,
 		return nil, fmt.Errorf("delivery needs valid --points (1, 2, 3, 5 or 8)")
 	}
 	ev := &ladder.Event{Kind: ladder.EventKindDelivery, Agent: strings.TrimSpace(agent), Duty: ladder.DutyCode, Points: ladder.Points(points), At: now, Season: ladder.SeasonOf(now), Sprint: int(s.ID), Story: story.ID, Reviewer: actor}
+	if matched != nil {
+		ev.ID = fmt.Sprintf("sprint:%d:story:%s:run:%d:%d", s.ID, story.ID, matched.ID, matched.Created.UnixNano())
+	}
 	ev.CapsUsed.WallSeconds = int(wall.Seconds())
 	ev.CapsUsed.Turns = turns
 	rework, _ := cmd.Flags().GetInt("rework")
@@ -129,6 +132,9 @@ func sprintLadderAppend(cmd *cobra.Command, ev *ladder.Event) {
 	}
 	move := after.Moves[len(after.Moves)-1]
 	audit := ladder.Event{Kind: ladder.EventKindBand, Agent: ev.Agent, At: ev.At, Season: ev.Season, FromBand: move.From, ToBand: move.To, Note: move.Reason}
+	if ev.ID != "" {
+		audit.ID = ev.ID + ":band"
+	}
 	if err := store.Append(audit); err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "ladder: band move not recorded: %v\n", err)
 		return

@@ -110,7 +110,7 @@ func ComputeDutyBoard(events []ladder.Event, season int, override *ladder.Lines,
 	views := make(map[string]agentView, len(names))
 	for _, name := range names {
 		rec := rep.Agents[name]
-		seed := dutySeedBand(name)
+		seed := dutySeedBandForEvidence(name, active)
 		state := ladder.CurrentBand(seed, active, name)
 		band := state.Band
 		_, misses := ladder.DeriveBand(dutyProfile(rec, 0), lines, season)
@@ -194,6 +194,21 @@ func dutySeedBand(agent string) int {
 	return 1
 }
 
+func dutySeedBandForEvidence(identity string, events []ladder.Event) int {
+	for _, e := range events {
+		if e.RatingAgent() != identity {
+			continue
+		}
+		if e.SelectedBinding != "" {
+			return dutySeedBand(e.SelectedBinding)
+		}
+		if e.FamilyID != "" && e.Agent != "" {
+			return dutySeedBand(e.Agent)
+		}
+	}
+	return dutySeedBand(identity)
+}
+
 func newLeaderboardBandsCmd() *cobra.Command {
 	var path string
 	cmd := &cobra.Command{Use: "bands", Short: "show seeded and current agent bands", Args: cobra.NoArgs}
@@ -209,8 +224,8 @@ func newLeaderboardBandsCmd() *cobra.Command {
 		names := map[string][]string{}
 		seeds := map[string]int{}
 		for _, e := range events {
-			if e.Agent != "" {
-				names[e.Agent] = nil
+			if name := e.RatingAgent(); name != "" {
+				names[name] = nil
 			}
 		}
 		cat := fleet.New()
@@ -251,7 +266,7 @@ func newLeaderboardBandsCmd() *cobra.Command {
 		for _, key := range ordered {
 			seed := seeds[key]
 			if seed == 0 {
-				seed = dutySeedBand(key)
+				seed = dutySeedBandForEvidence(key, events)
 			}
 			state := ladder.CurrentBand(seed, events, key)
 			last := "—"
@@ -481,14 +496,15 @@ func ComputeHeadToHead(events []ladder.Event, season int, duty ladder.Duty) []He
 			continue
 		}
 		id, ok := heatID(e.Note)
-		if !ok || e.Agent == "" {
+		name := e.RatingAgent()
+		if !ok || name == "" {
 			continue
 		}
 		if heats[id] == nil {
 			heats[id] = make(map[string]ladder.Event)
 		}
-		if _, exists := heats[id][e.Agent]; !exists {
-			heats[id][e.Agent] = e
+		if _, exists := heats[id][name]; !exists {
+			heats[id][name] = e
 		}
 	}
 

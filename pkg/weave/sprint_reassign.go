@@ -180,8 +180,8 @@ func sprintReassignOutcomes(chain []sprintReassignEvent, accepted bool, lastBlam
 		return nil
 	}
 	first := chain[0]
-	makeEvent := func(agent string, points int, outcome float64, attribution blame.Attribution) ladder.Event {
-		return ladder.Event{Kind: ladder.EventKindDelivery, Agent: agent, Duty: ladder.DutyCode, Story: first.Story, Points: ladder.Points(points), Outcome: outcome, Blame: attribution, At: now, Season: ladder.SeasonOf(now), Note: "reassign:" + first.Story}
+	makeEvent := func(id, agent string, points int, outcome float64, attribution blame.Attribution) ladder.Event {
+		return ladder.Event{ID: id, Kind: ladder.EventKindDelivery, Agent: agent, Duty: ladder.DutyCode, Story: first.Story, Points: ladder.Points(points), Outcome: outcome, Blame: attribution, At: now, Season: ladder.SeasonOf(now), Note: "reassign:" + first.Story}
 	}
 	var events []ladder.Event
 	for _, e := range chain {
@@ -189,7 +189,7 @@ func sprintReassignOutcomes(chain []sprintReassignEvent, accepted bool, lastBlam
 		if e.Environment {
 			a = blame.Attribution{Class: blame.ClassEnvironment, By: weaveConductorName(""), At: now, Evidence: []blame.Evidence{{Kind: blame.EvidenceHost, Ref: fmt.Sprintf("timeout:%d", e.FromRun), Note: e.Evidence}}}
 		}
-		events = append(events, makeEvent(e.FromAgent, e.Points, 0, a))
+		events = append(events, makeEvent(fmt.Sprintf("reassign:%s:run:%d", first.Story, e.FromRun), e.FromAgent, e.Points, 0, a))
 	}
 	last := chain[len(chain)-1]
 	outcome := 0.0
@@ -197,7 +197,7 @@ func sprintReassignOutcomes(chain []sprintReassignEvent, accepted bool, lastBlam
 		outcome = 1
 		lastBlame = blame.Attribution{}
 	}
-	events = append(events, makeEvent(last.ToAgent, last.Points, outcome, lastBlame))
+	events = append(events, makeEvent(fmt.Sprintf("reassign:%s:run:%d", first.Story, last.ToRun), last.ToAgent, last.Points, outcome, lastBlame))
 	return events
 }
 

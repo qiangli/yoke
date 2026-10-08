@@ -114,7 +114,7 @@ func sprintScorecardAtEnd(s *weaveStory, skip bool, hygienePassed, hygieneTotal 
 	sprintScorecardApplyEvidence(&card, in, notes)
 	summary := sprintScorecardSummary(s.ID, identity, season, card)
 	e := ladder.Event{
-		ID:       fmt.Sprintf("manage-sprint-%d-%d", s.ID, now.UnixNano()),
+		ID:       fmt.Sprintf("sprint:%d:manage", s.ID),
 		At:       now,
 		Season:   season,
 		Kind:     ladder.EventKindManage,
