@@ -24,16 +24,19 @@ type seatTarget struct {
 // `mb send` and `ping`, before anything is written. Ambiguous, retired and
 // invalid-role names are definitive refusals; an instance resolves to its
 // UUID; a role stays a role address so a handover keeps the mail. Anything
-// the bus does not know falls back to Meet's own roster, whose membership
-// check still decides.
+// the bus does not know as a name falls back to Meet's own roster, whose
+// membership check still decides; a validation failure never does.
 func resolveSeatTarget(typed string) (seatTarget, error) {
 	t := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(typed), "@"))
 	rec, err := bus.ResolveRecipient(t)
 	if err != nil {
-		if bus.Refusal(err) {
-			return seatTarget{}, fmt.Errorf("meet: %w", err)
+		// Only "no instance or role by this name" may use the legacy roster. An
+		// unreadable instance store, an unknown UUID, an ambiguous, retired or
+		// invalid-role name all fail closed BEFORE anything is appended.
+		if bus.LegacyName(err) {
+			return seatTarget{Seat: canonAgent(t)}, nil
 		}
-		return seatTarget{Seat: canonAgent(t)}, nil
+		return seatTarget{}, fmt.Errorf("meet: %w", err)
 	}
 	switch rec.Kind {
 	case bus.TargetInstance:
@@ -53,10 +56,7 @@ func instanceSeat(name string) (bool, error) {
 	}
 	rec, err := bus.ResolveRecipient(id)
 	if err != nil {
-		if bus.Refusal(err) {
-			return false, fmt.Errorf("meet: %w", err)
-		}
-		return false, nil
+		return false, fmt.Errorf("meet: %w", err)
 	}
 	return rec.Kind == bus.TargetInstance, nil
 }

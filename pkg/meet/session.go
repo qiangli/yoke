@@ -74,6 +74,11 @@ type Event struct {
 	FromParty *bus.Party `json:"from_party,omitempty"`
 	ToParty   *bus.Party `json:"to_party,omitempty"`
 
+	// Warning is a send-time caveat (a vacant seat holds the mail, nobody has
+	// read it). It describes the SEND, so it is returned to the sender and never
+	// written into the room log.
+	Warning string `json:"-"`
+
 	// Turn outcome, recorded so a reader can tell a timeout from an empty reply
 	// from a crash without re-reading logs. Absent on legacy events — statusOf()
 	// reconstructs it from the marker text.

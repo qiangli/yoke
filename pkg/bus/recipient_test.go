@@ -83,8 +83,8 @@ func TestResolveRecipient_ExplicitUUIDSpellings(t *testing.T) {
 			t.Errorf("ResolveRecipient(%q) = %+v, %v", in, r, err)
 		}
 	}
-	if _, err := ResolveRecipient("00000000-0000-4000-8000-000000000000"); err == nil || Refusal(err) {
-		t.Errorf("unknown UUID should be unresolved (relay may still try), got %v", err)
+	if _, err := ResolveRecipient("00000000-0000-4000-8000-000000000000"); err == nil || !Refusal(err) || LegacyName(err) {
+		t.Errorf("unknown UUID must be a definitive refusal (a UUID is not a route), got %v", err)
 	}
 }
 

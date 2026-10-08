@@ -130,7 +130,7 @@ func (p Post) Directed(reader string) bool {
 	// That is what lets a third-party TUI read the seat's mail with no --as, no
 	// principal and no setup — and it matches the board's existing rule that
 	// addressing says who should ACT, never who may read.
-	return AddressedToRole(to)
+	return AddressedToRole(to) && roleReaderAllowed(to, reader)
 }
 
 // Audiences describes a post's intended audience for display.

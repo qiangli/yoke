@@ -483,6 +483,9 @@ func handlePost(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, err)
 		return
 	}
+	if ev.Warning != "" {
+		w.Header().Set("X-Meet-Warning", ev.Warning)
+	}
 	writeJSON(w, http.StatusOK, ev)
 }
 

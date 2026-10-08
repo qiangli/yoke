@@ -471,7 +471,7 @@ func PostAs(ref, author, to, text string) (Event, error) {
 					seatLabel(who), st.ID, st.ID, who)
 			}
 		}
-		target := ""
+		target, warning := "", ""
 		var toParty *bus.Party
 		if isAllSeats(to) {
 			target = AllSeats
@@ -486,16 +486,19 @@ func PostAs(ref, author, to, text string) (Event, error) {
 			target, toParty = tgt.Seat, tgt.Party
 			seat := target
 			if tgt.Role {
-				// A role is a seat, not a person: membership is judged on whoever
-				// holds it now, but the ROLE ADDRESS is what is stored, so a
-				// handover keeps the mail. A vacant seat has no one to seat.
-				holder, held := bus.RoleHolderFor(target)
-				if !held {
-					return Event{}, fmt.Errorf("meet: failed: seat %s is vacant, so no one at board %s can receive it; address a participant instead", target, st.ID)
+				// A role is a seat, not a person: the ROLE ADDRESS is what is
+				// stored, so a handover keeps the mail. Membership is judged on
+				// whoever holds it now. A vacant seat has no one to judge: the
+				// mail is retained for the next holder (who is delivered to only
+				// if seated here), and the sender is told nobody has read it.
+				if holder, held := bus.RoleHolderFor(target); held {
+					seat = canonAgent(holder)
+				} else {
+					seat = ""
+					warning = tgt.Warning
 				}
-				seat = canonAgent(holder)
 			}
-			if !participantSeat(st, seat) {
+			if seat != "" && !participantSeat(st, seat) {
 				return Event{}, fmt.Errorf("meet: failed: %s has no seat in board %s; invite it with `bashy meet invite %s %s`",
 					seatLabel(seat), st.ID, st.ID, seat)
 			}
@@ -503,7 +506,7 @@ func PostAs(ref, author, to, text string) (Event, error) {
 		ev := Event{
 			Round: st.Round, Speaker: who, Role: string(RoleParticipant),
 			Kind: "message", To: target, Text: sanitizeTurn(text), TS: nowFn(),
-			FromParty: bus.SenderParty(who), ToParty: toParty,
+			FromParty: bus.SenderParty(who), ToParty: toParty, Warning: warning,
 		}
 		if st.Shared {
 			// The post's universal id, so every host files it once.
@@ -528,6 +531,7 @@ func PostAs(ref, author, to, text string) (Event, error) {
 	// a holder at READ time, so a handover re-targets mail already in flight.
 	target := strings.TrimSpace(strings.TrimPrefix(to, "@"))
 	var toParty *bus.Party
+	warning := ""
 	switch {
 	case isAllSeats(target):
 		// An EXPLICIT broadcast. It must not fall through to DefaultTo below:
@@ -537,26 +541,32 @@ func PostAs(ref, author, to, text string) (Event, error) {
 		// a message meant for the whole room would reach exactly one reader
 		// while its author was told it went to all of them.
 		target = AllSeats
-	case target == "":
-		target = strings.TrimSpace(st.DefaultTo)
-		// The seat's own reply is not mail to the seat. When the speaker IS
-		// the default addressee's holder (the sprint manager answering in its
-		// sprint room), an unaddressed post is its answer to the room — it
-		// used to come back to the manager as unread mail from itself.
-		if holder, _ := bus.RoleHolderFor(target); strings.EqualFold(canonAgent(strings.TrimSpace(holder)), canonAgent(who)) {
-			target = ""
-		}
 	default:
-		tgt, err := resolveSeatTarget(target)
-		if err != nil {
-			return Event{}, err
+		if target == "" {
+			target = strings.TrimSpace(st.DefaultTo)
+			// The seat's own reply is not mail to the seat. When the speaker IS
+			// the default addressee's holder (the sprint manager answering in its
+			// sprint room), an unaddressed post is its answer to the room — it
+			// used to come back to the manager as unread mail from itself.
+			if holder, _ := bus.RoleHolderFor(target); strings.EqualFold(canonAgent(strings.TrimSpace(holder)), canonAgent(who)) {
+				target = ""
+			}
 		}
-		target, toParty = tgt.Seat, tgt.Party
+		if target != "" {
+			// The explicit AND the default addressee resolve here, once, before
+			// anything is appended: a stored DefaultTo handle is as reusable as a
+			// typed one, so it never reaches the log unresolved.
+			tgt, err := resolveSeatTarget(target)
+			if err != nil {
+				return Event{}, err
+			}
+			target, toParty, warning = tgt.Seat, tgt.Party, tgt.Warning
+		}
 	}
 	ev := Event{
 		Round: st.Round, Speaker: who, Role: string(RoleHuman),
 		Kind: "human", To: target, Text: text, TS: nowFn(),
-		FromParty: bus.SenderParty(who), ToParty: toParty,
+		FromParty: bus.SenderParty(who), ToParty: toParty, Warning: warning,
 	}
 	return recordFull(st, ev)
 }

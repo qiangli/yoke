@@ -163,19 +163,51 @@ func AddressedToRole(to string) bool {
 	return false
 }
 
+// RoleReaderAuthorizer decides whether reader may treat mail to a role topic as
+// directed at it. Nil keeps the board's historical rule — role mail is visible
+// to every reader on this host — because a reader name is only a claim until
+// the session identity layer authenticates it (a UUID, a label or --as proves
+// nothing by itself). The authenticated-occupancy owners wire a real check
+// here once reader identity is authenticated; AuthorizeByHolder is the check
+// they can install, and it is decided on CURRENT occupancy at read time so a
+// handover re-targets mail already in flight.
+var RoleReaderAuthorizer func(topic, reader string) bool
+
+// AuthorizeByHolder authorizes only the principal that holds the seat right
+// now. A vacant seat authorizes nobody, so its mail is retained (see
+// canArchivePost), not delivered to whoever happens to read.
+func AuthorizeByHolder(topic, reader string) bool {
+	holder, ok := RoleHolderFor(topic)
+	return ok && strings.EqualFold(strings.TrimSpace(holder), strings.TrimSpace(reader))
+}
+
+func roleReaderAllowed(topic, reader string) bool {
+	return RoleReaderAuthorizer == nil || RoleReaderAuthorizer(topic, reader)
+}
+
 // resolveRoleRecipient resolves a role label to its durable address.
 //
 // The ADDRESS is stored, never the holder: a vacant seat is still a valid
 // address that retains pending mail for the next holder, and the only honest
 // thing to add is a warning that nobody holds it right now.
 func resolveRoleRecipient(label string) (Recipient, bool) {
-	topic, ok := ResolveRole(label)
-	if !ok {
+	label = strings.TrimSpace(label)
+	if label == "" || HostRoles == nil {
 		return Recipient{}, false
 	}
-	r := Recipient{Addr: topic, Kind: TargetRole, Label: RoleLabelFor(topic)}
-	if _, held := RoleHolderFor(label); !held {
-		r.Warning = "seat " + r.Label + " is vacant — mail stays pending for its next holder; nobody has read it"
+	for _, role := range HostRoles() {
+		if !strings.EqualFold(role.Label, label) && !strings.EqualFold(role.Topic, label) {
+			continue
+		}
+		addr := role.Topic
+		if addr == "" {
+			addr = role.Label
+		}
+		r := Recipient{Addr: addr, Kind: TargetRole, Label: role.Label}
+		if strings.TrimSpace(role.Holder) == "" {
+			r.Warning = "seat " + r.Label + " is vacant — mail stays pending for its next holder; nobody has read it"
+		}
+		return r, true
 	}
-	return r, true
+	return Recipient{}, false
 }

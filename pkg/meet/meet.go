@@ -963,6 +963,9 @@ func newTellCmd() *cobra.Command {
 				}
 				return err
 			}
+			if ev.Warning != "" {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", ev.Warning)
+			}
 			writeTellReceipts(cmd.ErrOrStderr(), args[0], ev)
 			return nil
 		},
@@ -1859,7 +1862,9 @@ func newDMCmd() *cobra.Command {
 				return err
 			}
 			if target.Role {
-				return fmt.Errorf("meet: %s is a role seat, not a personal one; a DM needs a person or agent — message the seat with `bashy mb send %s \"...\"`", target.Seat, target.Seat)
+				return fmt.Errorf("meet: %s is a role seat, not a personal one, so a DM cannot be opened with it; "+
+					"role mail is sent with `bashy mb send %s \"...\"` or, inside a room, `bashy meet tell <room> --to %s \"...\"` (both keep the seat address across a handover)",
+					target.Seat, target.Seat, target.Seat)
 			}
 			peer := target.Seat
 			if err := routableSeat(peer); err != nil {

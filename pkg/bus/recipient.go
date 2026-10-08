@@ -23,11 +23,13 @@ package bus
 import (
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/qiangli/yoke/pkg/fleet"
+	"github.com/qiangli/yoke/pkg/principal"
 )
 
 // TargetInstance is a personal recipient resolved to one conversation's UUID.
@@ -42,12 +44,19 @@ type Party struct {
 	Label    string   `json:"label,omitempty"`
 	FamilyID string   `json:"family_id,omitempty"`
 	Family   string   `json:"family,omitempty"`
+	Policy   string   `json:"policy,omitempty"`
 	Bindings []string `json:"bindings,omitempty"`
+	// Selected is the binding a SENDER ran as, from the frozen set. Empty for a
+	// recipient, and for a sender that did not say.
+	Selected string `json:"selected,omitempty"`
 }
+
+// SelectedBindingEnv is the binding the launcher exported for this session. It is validated against the instance's frozen set.
+const SelectedBindingEnv = "BASHY_AGENT_BINDING"
 
 func partyOf(i fleet.Instance) *Party {
 	return &Party{
-		UUID: i.UUID, Label: i.Label, FamilyID: i.FamilyID, Family: i.Family,
+		UUID: i.UUID, Label: i.Label, FamilyID: i.FamilyID, Family: i.Family, Policy: i.Policy,
 		Bindings: append([]string(nil), i.Bindings...),
 	}
 }
@@ -67,12 +76,17 @@ type Recipient struct {
 }
 
 // Reasons a recipient fails to resolve. All are definitive except
-// ReasonUnresolved, which a caller may still try on the cross-host relay.
+// ReasonUnresolved, which a caller may still try on the cross-host relay or,
+// in Meet, on the legacy roster. An unreadable instance store and a UUID with
+// no record are definitive: a failure validating a local instance must never
+// degrade into a remote or legacy name guess.
 const (
 	ReasonUnresolved = "unresolved"
 	ReasonAmbiguous  = "ambiguous"
 	ReasonRetired    = "retired"
 	ReasonRole       = "role"
+	ReasonUnknownID  = "unknown-instance"
+	ReasonStore      = "store"
 )
 
 // RecipientError is a refusal that wrote nothing.
@@ -88,6 +102,20 @@ func (e *RecipientError) Error() string { return e.msg }
 func Refusal(err error) bool {
 	var re *RecipientError
 	return errors.As(err, &re) && re.Reason != ReasonUnresolved
+}
+
+// LegacyName reports a failure that means only "no instance or role by this
+// name": the one case where a genuinely legacy person, reader or agent name may
+// still be tried by a caller with its own compatibility roster.
+func LegacyName(err error) bool {
+	var re *RecipientError
+	return errors.As(err, &re) && re.Reason == ReasonUnresolved
+}
+
+func storeError(err error) error {
+	return &RecipientError{Reason: ReasonStore, msg: fmt.Sprintf(
+		"failed: instance store unreadable (%v) — the recipient cannot be validated, so nothing was posted\n"+
+			"  check the instance records: bashy instance list", err)}
 }
 
 // InstanceStoreFn opens the instance store; a var so tests can pin it.
@@ -108,15 +136,44 @@ func ExplicitInstanceID(s string) (string, bool) {
 }
 
 // SenderParty snapshots the sender when it is an instance; nil otherwise.
+//
+// The sender is an instance when it SPELLS a UUID, or when the session's own
+// ambient instance (BASHY_PRINCIPAL / BASHY_INSTANCE) is the one speaking: from
+// is empty or is that instance's label or handle. An explicit --as naming
+// somebody else never inherits the ambient identity. The record is read once,
+// now, so a later label reuse or catalog edit cannot rewrite who sent an old
+// post.
 func SenderParty(from string) *Party {
-	id, ok := ExplicitInstanceID(from)
-	if !ok {
-		return nil
+	store := InstanceStoreFn()
+	var inst fleet.Instance
+	if id, ok := ExplicitInstanceID(from); ok {
+		got, err := store.Get(id)
+		if err != nil {
+			return nil
+		}
+		inst = got
+	} else {
+		id, ok := principal.SelfInstanceUUID()
+		if !ok {
+			return nil
+		}
+		got, err := store.Get(id)
+		if err != nil {
+			return nil
+		}
+		f := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(from), "@"))
+		if f != "" && !strings.EqualFold(f, strings.TrimSpace(got.Label)) && !strings.EqualFold(f, strings.TrimSpace(got.Handle)) {
+			return nil
+		}
+		inst = got
 	}
-	if inst, err := InstanceStoreFn().Get(id); err == nil {
-		return partyOf(inst)
+	p := partyOf(inst)
+	if want := strings.TrimSpace(os.Getenv(SelectedBindingEnv)); want != "" {
+		if sel, err := inst.Select(want); err == nil {
+			p.Selected = sel
+		}
 	}
-	return nil
+	return p
 }
 
 // ResolveRecipient resolves what a sender typed to the identity a post is
@@ -135,7 +192,7 @@ func ResolveRecipient(target string) (Recipient, error) {
 	store := InstanceStoreFn()
 	all, lerr := store.List()
 	if lerr != nil {
-		return Recipient{}, fmt.Errorf("failed: instance store unreadable (%v) — nothing was posted", lerr)
+		return Recipient{}, storeError(lerr)
 	}
 	if inst, found, err := resolveInstanceName(t, all); err != nil {
 		return Recipient{}, err
@@ -172,10 +229,11 @@ func recipientForUUID(typed, id string) (Recipient, error) {
 	inst, err := InstanceStoreFn().Get(id)
 	if err != nil {
 		if errors.Is(err, fleet.ErrInstanceUnknown) {
-			return Recipient{}, &RecipientError{Reason: ReasonUnresolved, Target: typed, msg: fmt.Sprintf(
-				"failed: %q names no instance record on this host — nothing was posted\n  list live instances: bashy instance list", typed)}
+			return Recipient{}, &RecipientError{Reason: ReasonUnknownID, Target: typed, msg: fmt.Sprintf(
+				"failed: %q names no instance record on this host — a UUID is identity, not a route, so it was not tried as a name or sent to the relay; nothing was posted\n"+
+					"  list live instances: bashy instance list", typed)}
 		}
-		return Recipient{}, err
+		return Recipient{}, storeError(err)
 	}
 	if !inst.Active() {
 		return Recipient{}, retiredError(typed, inst, nil)

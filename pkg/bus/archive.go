@@ -219,6 +219,14 @@ func canArchivePost(p Post, readers []boardReaderState, now time.Time, window ti
 			return false
 		}
 	}
+	// With occupancy authorization on, a vacant seat directs the mail at nobody,
+	// and "nobody has a cursor behind it" is not "somebody read it": retain it
+	// for the next holder.
+	if RoleReaderAuthorizer != nil {
+		if _, held := RoleHolderFor(to); !held {
+			return false
+		}
+	}
 	return true
 }
 
