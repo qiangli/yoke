@@ -165,11 +165,26 @@ func weaveRecordAdmission(it *weaveItem, a *weaveAdmission) {
 	it.ResourceTerminated = false
 	it.ResourceVerifiedAt = time.Time{}
 	it.ChildPID, it.ChildGroup, it.ChildStartID = 0, 0, ""
+	it.ProvisionGroup, it.ToolLaunchRecorded = weaveOwnProvisionGroup(), false
 	it.PauseRequestedBy = ""
 	it.PauseReason = ""
 	it.WrapperStartID = a.startID
 	it.ResourceReservationID = a.request.ID
 	it.ResourceReservationOwner = a.request.Owner
+}
+
+// weaveRecordToolLaunch durably marks that the native tool is about to start.
+// It precedes Start, so a missing mark plus an absent provisioning group proves
+// the tool never ran; a present mark always requires recorded child evidence.
+func weaveRecordToolLaunch(dir string, run int64, a *weaveAdmission) error {
+	return withWeaveQueueLock(dir, func(q *weaveQueue) error {
+		it := findWeaveItem(q, run)
+		if it == nil || it.ResourceReservationID != a.request.ID || it.State != "working" {
+			return errors.New("run ownership changed before tool launch")
+		}
+		it.ToolLaunchRecorded = true
+		return nil
+	})
 }
 func weaveRecordOwnedChild(ctx context.Context, dir string, run int64, cmd *exec.Cmd, a *weaveAdmission) error {
 	if cmd.Process == nil {
@@ -220,8 +235,11 @@ func weaveReconcileOwnedTree(ctx context.Context, dir string, run int64) error {
 	if it.ResourceReservationID == "" || it.ResourceTerminated {
 		return nil
 	}
-	if it.WrapperPid > 0 && pidAlive(it.WrapperPid) {
+	if weaveWrapperMayBeActive(ctx, it) {
 		return errors.New("wrapper may still be active; retry after it exits")
+	}
+	if it.ChildPID == 0 && !it.ToolLaunchRecorded && it.ProvisionGroup > 0 {
+		return weaveSettlePreToolLaunch(ctx, dir, run, it)
 	}
 	if err := weaveRecordedGroupStopped(it); err != nil {
 		return fmt.Errorf("run #%d reservation retained: %w", run, err)
@@ -265,6 +283,68 @@ func weaveReconcileOwnedTree(ctx context.Context, dir string, run int64) error {
 		return nil
 	})
 }
+
+// weaveSettlePreToolLaunch releases a reservation whose wrapper died while
+// provisioning. The proof is the recorded provisioning group being absent
+// (wrapper and every clone/hydration subprocess gone) and no tool-launch mark.
+// Nothing ran against the model, so the reservation is released, not charged.
+func weaveSettlePreToolLaunch(ctx context.Context, dir string, run int64, it *weaveItem) error {
+	if err := weaveProvisionGroupStopped(it.ProvisionGroup); err != nil {
+		return fmt.Errorf("run #%d reservation retained: %w", run, err)
+	}
+	same := func(cur *weaveItem) bool {
+		return cur != nil && cur.ResourceReservationID == it.ResourceReservationID && cur.ProvisionGroup == it.ProvisionGroup &&
+			cur.ChildPID == 0 && !cur.ToolLaunchRecorded
+	}
+	if err := withWeaveQueueLock(dir, func(q *weaveQueue) error {
+		cur := findWeaveItem(q, run)
+		if !same(cur) {
+			return errors.New("run identity changed during reconciliation")
+		}
+		if cur.ResourceVerifiedAt.IsZero() {
+			cur.ResourceVerifiedAt = time.Now().UTC()
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	gate := weaveResourceHooks(ctx).Budget
+	if gate == nil {
+		gate = llmbudget.DefaultFromEnv()
+	}
+	if err := gate.Release(ctx, it.ResourceReservationID, it.ResourceReservationOwner); err != nil {
+		return fmt.Errorf("run #%d reservation retained: %w", run, err)
+	}
+	return withWeaveQueueLock(dir, func(q *weaveQueue) error {
+		cur := findWeaveItem(q, run)
+		if !same(cur) {
+			return errors.New("run identity changed during reconciliation; inspect queue before retry")
+		}
+		cur.ResourceTerminated = true
+		weaveAppendComment(cur, "conductor", "system", fmt.Sprintf(
+			"reservation released: provisioning group %d absent and the native tool launch was never recorded", it.ProvisionGroup))
+		return nil
+	})
+}
+
+// weaveWrapperMayBeActive is conservative: a live PID counts unless its birth
+// identity is known to differ from the recorded wrapper (a reused PID).
+func weaveWrapperMayBeActive(ctx context.Context, it *weaveItem) bool {
+	if it.WrapperPid <= 0 || !pidAlive(it.WrapperPid) {
+		return false
+	}
+	lookup := weaveResourceHooks(ctx).LookupIdentity
+	if it.WrapperStartID == "" || lookup == nil {
+		return true
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, time.Second)
+	id, err := lookup(lookupCtx, it.WrapperPid)
+	cancel()
+	return err != nil || id == "" || id == it.WrapperStartID
+}
+
+var errWeaveWrapperReused = errors.New("wrapper PID was reused; refusing control")
+
 func weaveVerifiedWrapper(ctx context.Context, it *weaveItem) error {
 	if it.WrapperPid <= 0 || it.WrapperStartID == "" {
 		return errors.New("wrapper identity unknown; cannot control legacy or unverified work")
@@ -278,7 +358,7 @@ func weaveVerifiedWrapper(ctx context.Context, it *weaveItem) error {
 		return err
 	}
 	if id != it.WrapperStartID {
-		return errors.New("wrapper PID was reused; refusing control")
+		return errWeaveWrapperReused
 	}
 	return nil
 }

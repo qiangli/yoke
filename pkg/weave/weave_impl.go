@@ -313,11 +313,18 @@ type weaveItem struct {
 	// from there to the whole subagent process group). Set when
 	// state flips to working; cleared on terminal state. Used by
 	// `weave abandon` for precise SIGTERM instead of pkill-by-name.
-	WrapperPid               int       `json:"wrapper_pid,omitempty"`
-	WrapperStartID           string    `json:"wrapper_start_id,omitempty"` // OS birth identity, recorded at launch; absent on legacy runs
-	ChildPID                 int       `json:"child_pid,omitempty"`
-	ChildStartID             string    `json:"child_start_id,omitempty"`
-	ChildGroup               int       `json:"child_group,omitempty"` // recorded only after isolated group launch
+	WrapperPid     int    `json:"wrapper_pid,omitempty"`
+	WrapperStartID string `json:"wrapper_start_id,omitempty"` // OS birth identity, recorded at launch; absent on legacy runs
+	ChildPID       int    `json:"child_pid,omitempty"`
+	ChildStartID   string `json:"child_start_id,omitempty"`
+	ChildGroup     int    `json:"child_group,omitempty"` // recorded only after isolated group launch
+	// ProvisionGroup is the wrapper's own process group, recorded at admission
+	// only when the wrapper leads it (auto-setsid): every clone/hydration
+	// subprocess runs inside it. ToolLaunchRecorded is written under the queue
+	// lock BEFORE the native tool starts. Together they prove a launch that died
+	// during provisioning never reached the tool, without any child evidence.
+	ProvisionGroup           int       `json:"provision_group,omitempty"`
+	ToolLaunchRecorded       bool      `json:"tool_launch_recorded,omitempty"`
 	PauseRequestedBy         string    `json:"pause_requested_by,omitempty"`
 	PauseReason              string    `json:"pause_reason,omitempty"`
 	ResourceTerminated       bool      `json:"resource_terminated,omitempty"`
@@ -3407,7 +3414,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			weavecli.ExitStateConflict, fmt.Errorf("run #%d state is %q", it.ID, it.State)))
 	}
 	if it.ResourceReservationID != "" && !it.ResourceTerminated {
-		return fmt.Errorf("run #%d prior child termination is unverified; reconcile its retained reservation before restart", it.ID)
+		return fmt.Errorf("run #%d prior child termination is unverified; run `bashy weave kill --issue %d` (stops the verified owned group) or `bashy weave reconcile %d` to settle its retained reservation before restart", it.ID, it.ID, it.ID)
 	}
 	boundedRuntime, budgetErr := weaveBoundRuntime(it.Points, opts.maxRuntime)
 	if budgetErr != nil {
@@ -3553,6 +3560,10 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	if launchSpec != nil {
 		admissionModel, admissionAgent = launchSpec.Model, launchSpec.Agent
 	}
+	// Detach before admission, not just before the tool: the wrapper then leads
+	// the process group every provisioning subprocess inherits, and admission
+	// records it so a wrapper that dies mid-hydration is recoverable by proof.
+	weaveMaybeSetsid(weaveStdinIsTTY())
 	admission, admissionErr := beginWeaveAdmission(cmd.Context(), weaveResourceHooks(cmd.Context()), WeaveResourceDemand{
 		Run: filepath.Join(dir, strconv.FormatInt(it.ID, 10)), Queue: dir, Model: admissionModel, Agent: admissionAgent, Workspace: it.Workspace, MemoryBytes: uint64(memoryDemand),
 	})
@@ -4226,6 +4237,11 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		coachRep       chat.CoachReport
 		coachMode      string
 	)
+	if err := weaveRecordToolLaunch(dir, it.ID, admission); err != nil {
+		// The row is no longer this wrapper's; leave it to its owner.
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
+			weavecli.ExitGenericFail, err))
+	}
 	if ptyMode == "never" {
 		var outputMu sync.Mutex
 		stdout := weaveSynchronizedWriter{mu: &outputMu, dst: cmd.OutOrStdout()}
@@ -6990,6 +7006,7 @@ func runWeaveKill(cmd *cobra.Command, id int64, reason string, yes bool, flags *
 	var verifyCommand string
 	var verifyItem *weaveItem
 	var resourceWarning string
+	retainedOnly := false
 	notFoundHint := weaveOtherActiveQueuesHintSuffix(dir)
 	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
 		it := findWeaveItem(q, id)
@@ -6997,6 +7014,14 @@ func runWeaveKill(cmd *cobra.Command, id int64, reason string, yes bool, flags *
 			return fmt.Errorf("run #%d not found%s", id, notFoundHint)
 		}
 		if it.State != "working" && !weaveWrapperTerminalClaimed(it) {
+			if it.ResourceReservationID != "" && !it.ResourceTerminated {
+				// Already terminal but its owned child (or provisioning) was
+				// never proven stopped: kill finishes that stop, nothing else.
+				copy := *it
+				verifyItem = &copy
+				retainedOnly = true
+				return nil
+			}
 			return fmt.Errorf("run #%d state is %q (kill requires working)", id, it.State)
 		}
 		wrapperPid = it.WrapperPid
@@ -7006,9 +7031,37 @@ func runWeaveKill(cmd *cobra.Command, id int64, reason string, yes bool, flags *
 		verifyItem = &copy
 		return nil
 	})
+	if lockErr == nil && retainedOnly {
+		return runWeaveKillRetained(cmd, mode, dir, verifyItem, reason)
+	}
 	if lockErr == nil && wrapperPid > 0 {
-		weaveStopWrapper(wrapperPid)
-		killed = true
+		// A recorded birth identity gates the wrapper signal: a reused PID is
+		// some other process and is never signalled; an unverifiable live PID
+		// refuses the kill rather than guess.
+		stop := verifyItem.WrapperStartID == "" && pidAlive(wrapperPid)
+		if verifyItem.WrapperStartID != "" && pidAlive(wrapperPid) {
+			err := weaveVerifiedWrapper(cmd.Context(), verifyItem)
+			if err != nil && !errors.Is(err, errWeaveWrapperReused) {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave kill",
+					weavecli.ExitStateConflict, fmt.Errorf("run #%d wrapper pid %d unverifiable; refusing to signal: %w", id, wrapperPid, err)))
+			}
+			stop = err == nil
+		}
+		if stop {
+			weaveStopWrapper(wrapperPid)
+			killed = true
+		}
+	}
+	// The wrapper's own cancellation stops its child group. When the wrapper
+	// was already gone (or never answered), stop the recorded group directly,
+	// by verified birth identity, before measuring the workspace.
+	if lockErr == nil && verifyItem.ResourceReservationID != "" && !verifyItem.ResourceTerminated &&
+		verifyItem.ChildPID > 0 && !weaveWrapperMayBeActive(cmd.Context(), verifyItem) {
+		if err := weaveStopVerifiedChildGroup(cmd.Context(), verifyItem, weaveChildStopGrace); err != nil {
+			resourceWarning = err.Error()
+		} else {
+			killed = true
+		}
 	}
 	// killed stays killed: the forced stop is recorded as its own
 	// terminal state, never silently promoted. Measure after the
@@ -7086,7 +7139,7 @@ func runWeaveKill(cmd *cobra.Command, id int64, reason string, yes bool, flags *
 	}
 	if verifyItem.ResourceReservationID != "" && !verifyItem.ResourceTerminated {
 		if err := weaveReconcileOwnedTree(cmd.Context(), dir, id); err != nil {
-			resourceWarning = err.Error()
+			resourceWarning = strings.TrimPrefix(resourceWarning+"; "+err.Error(), "; ")
 		}
 	}
 	weaveReleaseManagedGOCache(cmd.ErrOrStderr(), "weave kill", dir, verifyItem)
@@ -7116,6 +7169,38 @@ func runWeaveKill(cmd *cobra.Command, id int64, reason string, yes bool, flags *
 	} else {
 		fmt.Fprintf(cmd.OutOrStdout(), "weave kill: run #%d wrapper_pid=%d killed=%v state=%s\n", id, wrapperPid, killed, finalState)
 	}
+	return nil
+}
+
+// weaveChildStopGrace is how long each verified group signal gets to take
+// effect before escalation (a var for tests).
+var weaveChildStopGrace = 5 * time.Second
+
+// runWeaveKillRetained finishes a kill for a terminal run whose reservation
+// is retained: stop the recorded child group by verified identity, then settle
+// only on absence proof. The recorded state and the workspace are untouched.
+func runWeaveKillRetained(cmd *cobra.Command, mode weavecli.OutputMode, dir string, it *weaveItem, reason string) error {
+	fail := func(err error) error {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave kill", weavecli.ExitStateConflict,
+			fmt.Errorf("run #%d reservation retained: %w", it.ID, err)))
+	}
+	if weaveWrapperMayBeActive(cmd.Context(), it) {
+		return fail(errors.New("wrapper may still be active; retry after it exits"))
+	}
+	if it.ChildPID > 0 {
+		if err := weaveStopVerifiedChildGroup(cmd.Context(), it, weaveChildStopGrace); err != nil {
+			return fail(err)
+		}
+	}
+	if err := weaveReconcileOwnedTree(cmd.Context(), dir, it.ID); err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave kill", weavecli.ExitStateConflict, err))
+	}
+	if mode == weavecli.OutputJSON {
+		return ec(emitOK(cmd.OutOrStdout(), mode, "weave kill", map[string]any{
+			"issue": it.ID, "state": it.State, "resource_terminated": true, "reason": reason,
+		}))
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "weave kill: run #%d state=%s owned processes stopped; reservation settled\n", it.ID, it.State)
 	return nil
 }
 

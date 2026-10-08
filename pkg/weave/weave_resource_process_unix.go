@@ -42,6 +42,84 @@ func weaveRecordedGroupStopped(it *weaveItem) error {
 	}
 	return nil
 }
+
+// weaveOwnProvisionGroup names this wrapper's process group only when the
+// wrapper leads it; a shared launcher group would contain unrelated peers.
+func weaveOwnProvisionGroup() int {
+	if pid := os.Getpid(); syscall.Getpgrp() == pid {
+		return pid
+	}
+	return 0
+}
+func weaveProvisionGroupStopped(group int) error {
+	if group <= 0 {
+		return errors.New("provisioning group was not recorded at admission")
+	}
+	if err := syscall.Kill(-group, 0); err != syscall.ESRCH {
+		if err == nil || err == syscall.EPERM {
+			return errors.New("recorded provisioning group may still contain the wrapper or its provisioning subprocesses")
+		}
+		return fmt.Errorf("inspect recorded provisioning group: %w", err)
+	}
+	return nil
+}
+
+// weaveStopVerifiedChildGroup stops a recorded isolated child group whose
+// wrapper is gone. Each signal is preceded by a fresh check that the group
+// leader still carries its recorded birth identity: the kernel never reuses a
+// PID while its group exists, so a verified live leader means the group is the
+// one weave created. A leader that cannot be verified (exited, reused, or no
+// observer) is never signalled; surviving descendants retain the reservation.
+func weaveStopVerifiedChildGroup(ctx context.Context, it *weaveItem, grace time.Duration) error {
+	if it.ChildPID <= 0 || it.ChildStartID == "" || it.ChildGroup != it.ChildPID {
+		return errors.New("child birth identity and isolated group were not recorded at launch; refusing to signal")
+	}
+	gone := func() bool { return syscall.Kill(-it.ChildGroup, 0) == syscall.ESRCH }
+	if gone() {
+		return nil
+	}
+	lookup := weaveResourceHooks(ctx).LookupIdentity
+	verify := func() error {
+		if lookup == nil {
+			return errors.New("native process identity lookup unavailable; refusing to signal")
+		}
+		lookupCtx, cancel := context.WithTimeout(ctx, time.Second)
+		id, err := lookup(lookupCtx, it.ChildPID)
+		cancel()
+		if err != nil || id == "" {
+			return fmt.Errorf("child group leader %d birth identity unverifiable (%v); refusing to signal its group", it.ChildPID, err)
+		}
+		if id != it.ChildStartID {
+			return fmt.Errorf("child PID %d was reused; refusing to signal", it.ChildPID)
+		}
+		return nil
+	}
+	wait := func(d time.Duration) bool {
+		deadline := time.Now().Add(d)
+		for !gone() {
+			if ctx.Err() != nil || time.Now().After(deadline) {
+				return false
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		return true
+	}
+	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL} {
+		if err := verify(); err != nil {
+			if gone() {
+				return nil
+			}
+			return err
+		}
+		if err := syscall.Kill(-it.ChildGroup, sig); err != nil && err != syscall.ESRCH {
+			return fmt.Errorf("signal child group %d: %w", it.ChildGroup, err)
+		}
+		if wait(grace) {
+			return nil
+		}
+	}
+	return errors.New("recorded child process group may still contain processes after SIGKILL")
+}
 func weaveConfigureOwnedCancellation(cmd *exec.Cmd) {
 	// Cancellation targets this child's process group, never the wrapper's peers.
 	cmd.Cancel = func() error {
