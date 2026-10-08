@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -200,92 +201,18 @@ func nativeCherryPick(_ context.Context, dir string, args []string) (*ExecResult
 		return nil, ErrUnsupported
 	}
 
-	// Write patch to temp file and apply
-	patchStr := patch.String()
-	if patchStr == "" {
+	if patch.String() == "" {
 		// Empty patch, nothing to do
 		return &ExecResult{Stdout: ""}, nil
 	}
 
-	tmpFile, err := os.CreateTemp("", "cherry-pick-*.patch")
+	// All-or-nothing: plan first so a conflict writes nothing.
+	plans, err := planPatchApplication(wt.Filesystem.Root(), patch)
 	if err != nil {
 		return nil, ErrUnsupported
 	}
-	defer os.Remove(tmpFile.Name())
-
-	if _, err := tmpFile.WriteString(patchStr); err != nil {
-		tmpFile.Close()
+	if err := writePatchPlans(wt, wt.Filesystem.Root(), plans); err != nil {
 		return nil, ErrUnsupported
-	}
-	tmpFile.Close()
-
-	// Apply the patch — go-git doesn't have a direct Apply method on worktree
-	// for unified diffs. We need to manually apply changes from the patch.
-	// For simplicity, iterate the file patches and apply them.
-	for _, fp := range patch.FilePatches() {
-		if fp.IsBinary() {
-			return nil, ErrUnsupported
-		}
-		from, to := fp.Files()
-
-		if to == nil {
-			// File deleted
-			path := from.Path()
-			fullPath := filepath.Join(wt.Filesystem.Root(), path)
-			if err := os.Remove(fullPath); err != nil {
-				return nil, ErrUnsupported
-			}
-			continue
-		}
-
-		if from == nil {
-			// New file — reconstruct content from chunks
-			content := reconstructContent(fp)
-			fullPath := filepath.Join(wt.Filesystem.Root(), to.Path())
-			dir := filepath.Dir(fullPath)
-			if err := os.MkdirAll(dir, 0755); err != nil {
-				return nil, ErrUnsupported
-			}
-			if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
-				return nil, ErrUnsupported
-			}
-			continue
-		}
-
-		// Modified file — apply hunks
-		// Read current file content
-		fullPath := filepath.Join(wt.Filesystem.Root(), to.Path())
-		existing, err := os.ReadFile(fullPath)
-		if err != nil {
-			return nil, ErrUnsupported
-		}
-
-		newContent, err := applyChunks(string(existing), fp)
-		if err != nil {
-			// Conflict detected
-			return nil, ErrUnsupported
-		}
-
-		if from.Path() != to.Path() {
-			// Rename
-			oldPath := filepath.Join(wt.Filesystem.Root(), from.Path())
-			os.Remove(oldPath)
-		}
-
-		if err := os.WriteFile(fullPath, []byte(newContent), 0644); err != nil {
-			return nil, ErrUnsupported
-		}
-	}
-
-	// Stage all changes
-	status, err := wt.Status()
-	if err != nil {
-		return nil, ErrUnsupported
-	}
-	for path := range status {
-		if _, err := wt.Add(path); err != nil {
-			return nil, ErrUnsupported
-		}
 	}
 
 	// Create new commit with original message
@@ -301,6 +228,97 @@ func nativeCherryPick(_ context.Context, dir string, args []string) (*ExecResult
 	}
 
 	return &ExecResult{Stdout: ""}, nil
+}
+
+// nativeRevert implements "git revert [--no-edit] [-n|--no-commit]
+// <commit>" via go-git: reverse-apply a single-parent commit, stage, and
+// commit with the conventional Revert message. Conflicts (a chunk that no
+// longer applies) return ErrUnsupported with the tree untouched — the
+// all-or-nothing contract shared with cherry-pick. Sequencer flags
+// (--continue/--abort/--skip), -m (merges), and multi-commit reverts stay
+// loud ErrUnsupported.
+func nativeRevert(_ context.Context, dir string, args []string) (*ExecResult, error) {
+	noCommit := false
+	var positionals []string
+	for _, arg := range args {
+		switch arg {
+		case "--no-edit":
+			// Non-interactive tier: no editor exists, both forms commit.
+		case "-n", "--no-commit":
+			noCommit = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return nil, ErrUnsupported
+			}
+			positionals = append(positionals, arg)
+		}
+	}
+	if len(positionals) != 1 {
+		return nil, ErrUnsupported
+	}
+
+	repo, err := openRepo(dir)
+	if err != nil {
+		return nil, ErrUnsupported
+	}
+
+	hash, err := repo.ResolveRevision(plumbing.Revision(positionals[0]))
+	if err != nil {
+		return nil, ErrUnsupported
+	}
+	commit, err := repo.CommitObject(*hash)
+	if err != nil {
+		return nil, ErrUnsupported
+	}
+	if commit.NumParents() != 1 {
+		return nil, ErrUnsupported
+	}
+	parent, err := commit.Parent(0)
+	if err != nil {
+		return nil, ErrUnsupported
+	}
+
+	// The reverse patch: commit → parent.
+	patch, err := commit.Patch(parent)
+	if err != nil {
+		return nil, ErrUnsupported
+	}
+
+	wt, err := repo.Worktree()
+	if err != nil {
+		return nil, ErrUnsupported
+	}
+	root := wt.Filesystem.Root()
+	if patch.String() != "" {
+		plans, err := planPatchApplication(root, patch)
+		if err != nil {
+			return nil, ErrUnsupported
+		}
+		if err := writePatchPlans(wt, root, plans); err != nil {
+			return nil, ErrUnsupported
+		}
+	}
+
+	if noCommit {
+		return &ExecResult{Stdout: ""}, nil
+	}
+
+	subject, _, _ := strings.Cut(strings.TrimSpace(commit.Message), "\n")
+	msg := fmt.Sprintf("Revert %q\n\nThis reverts commit %s.\n", subject, commit.Hash.String())
+	copts := &gogit.CommitOptions{}
+	if sig := resolveAuthor(repo); sig != nil {
+		copts.Author = sig
+	}
+	newHash, err := wt.Commit(msg, copts)
+	if err != nil {
+		return nil, ErrUnsupported
+	}
+	head, _ := repo.Head()
+	branchName := "HEAD"
+	if head != nil && head.Name().IsBranch() {
+		branchName = head.Name().Short()
+	}
+	return &ExecResult{Stdout: fmt.Sprintf("[%s %s] Revert %q\n", branchName, newHash.String()[:7], subject)}, nil
 }
 
 // nativeRebase implements simple linear "git rebase <target>" via go-git.
@@ -726,6 +744,91 @@ func nativeRm(_ context.Context, dir string, args []string) (*ExecResult, error)
 // nativeStashTier2 is intentionally ErrUnsupported — go-git lacks stash support.
 // The base nativeStash in git_native.go already does this; this is here for completeness
 // if the map entry needs to reference a tier2 function.
+
+// planPatchApplication computes the resulting worktree contents for every
+// file touched by patch, writing nothing. Returned map: path → new content,
+// with a nil content meaning "delete path". All-or-nothing: a binary file,
+// a missing delete target, or a chunk mismatch aborts the whole plan before
+// a byte is written, so callers never leave a half-applied tree.
+func planPatchApplication(root string, patch *object.Patch) (map[string]*string, error) {
+	plans := map[string]*string{}
+	for _, fp := range patch.FilePatches() {
+		if fp.IsBinary() {
+			return nil, fmt.Errorf("binary patch")
+		}
+		from, to := fp.Files()
+
+		if to == nil {
+			// File deleted by the patch.
+			path := from.Path()
+			fullPath := filepath.Join(root, filepath.FromSlash(path))
+			if _, err := os.Stat(fullPath); err != nil {
+				return nil, fmt.Errorf("delete missing %s", path)
+			}
+			plans[filepath.ToSlash(path)] = nil
+			continue
+		}
+
+		if from == nil {
+			// New file — reconstruct content from added chunks.
+			content := reconstructContent(fp)
+			plans[filepath.ToSlash(to.Path())] = &content
+			continue
+		}
+
+		// Modified file (possibly renamed) — apply hunks to current bytes.
+		fullPath := filepath.Join(root, filepath.FromSlash(to.Path()))
+		existing, err := os.ReadFile(fullPath)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", to.Path(), err)
+		}
+		newContent, err := applyChunks(string(existing), fp)
+		if err != nil {
+			return nil, err
+		}
+		plans[filepath.ToSlash(to.Path())] = &newContent
+		if from.Path() != to.Path() {
+			plans[filepath.ToSlash(from.Path())] = nil
+		}
+	}
+	return plans, nil
+}
+
+// writePatchPlans carries out a plan from planPatchApplication: deletes,
+// directory creation, file writes, then staging of every touched path.
+func writePatchPlans(wt *gogit.Worktree, root string, plans map[string]*string) error {
+	var paths []string
+	for p := range plans {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	for _, p := range paths {
+		content := plans[p]
+		fullPath := filepath.Join(root, filepath.FromSlash(p))
+		if content == nil {
+			if err := os.Remove(fullPath); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(fullPath, []byte(*content), 0644); err != nil {
+			return err
+		}
+	}
+	status, err := wt.Status()
+	if err != nil {
+		return err
+	}
+	for path := range status {
+		if _, err := wt.Add(path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // reconstructContent builds file content from added chunks in a file patch.
 func reconstructContent(fp diff.FilePatch) string {

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -263,6 +265,57 @@ func formatCommit(format string, c *object.Commit) string {
 	return r.Replace(format)
 }
 
+// diffStatusLetter maps a go-git status code to its git diff-filter
+// letter. '?' covers Unmodified/Untracked, which plain diff never lists.
+func diffStatusLetter(code gogit.StatusCode) byte {
+	switch code {
+	case gogit.Added:
+		return 'A'
+	case gogit.Modified:
+		return 'M'
+	case gogit.Deleted:
+		return 'D'
+	case gogit.Renamed:
+		return 'R'
+	case gogit.Copied:
+		return 'C'
+	case gogit.UpdatedButUnmerged:
+		return 'U'
+	default:
+		return '?'
+	}
+}
+
+// diffFilterKeep applies a --diff-filter string (host rules: uppercase
+// selects, lowercase excludes) to one entry letter.
+func diffFilterKeep(filter string, letter byte) bool {
+	if letter == '?' {
+		return false
+	}
+	if filter == "" {
+		return true
+	}
+	included := false
+	hasUpper := false
+	for i := 0; i < len(filter); i++ {
+		c := filter[i]
+		if c >= 'a' && c <= 'z' {
+			if c-'a'+'A' == letter {
+				return false
+			}
+			continue
+		}
+		hasUpper = true
+		if c == letter {
+			included = true
+		}
+	}
+	if !hasUpper {
+		return true
+	}
+	return included
+}
+
 func nativeDiff(_ context.Context, dir string, args []string) (*ExecResult, error) {
 	repo, err := openRepo(dir)
 	if err != nil {
@@ -274,43 +327,73 @@ func nativeDiff(_ context.Context, dir string, args []string) (*ExecResult, erro
 		return nil, ErrUnsupported
 	}
 
-	// Parse flags
+	// Parse flags. Commit revisions are not supported (only worktree
+	// forms); exact on-disk paths after -- (or bare) filter the listing.
 	cached := false
 	stat := false
 	quiet := false
-	for _, arg := range args {
-		switch arg {
-		case "--cached", "--staged":
+	nameOnly := false
+	diffFilter := ""
+	var paths []string
+	dashDash := false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--":
+			dashDash = true
+		case arg == "--cached" || arg == "--staged":
 			cached = true
-		case "--stat":
+		case arg == "--stat":
 			stat = true
-		case "--quiet":
+		case arg == "--quiet":
 			quiet = true
-		default:
-			// Path specs, commit ranges, etc. — fall through
+		case arg == "--name-only":
+			nameOnly = true
+		case arg == "--diff-filter" && i+1 < len(args):
+			i++
+			diffFilter += args[i]
+		case strings.HasPrefix(arg, "--diff-filter="):
+			diffFilter += strings.TrimPrefix(arg, "--diff-filter=")
+		case strings.HasPrefix(arg, "-"):
 			return nil, ErrUnsupported
+		case dashDash:
+			paths = append(paths, filepath.ToSlash(filepath.Clean(arg)))
+		default:
+			// A bare positional is a pathspec only when it names a
+			// file on disk or in the status; otherwise it is a commit
+			// revision, which this tier cannot diff.
+			if _, serr := os.Stat(filepath.Join(dir, filepath.FromSlash(arg))); serr != nil {
+				st, serr := wt.Status()
+				if serr != nil {
+					return nil, ErrUnsupported
+				}
+				if _, ok := st[filepath.ToSlash(filepath.Clean(arg))]; !ok {
+					return nil, ErrUnsupported
+				}
+			}
+			paths = append(paths, filepath.ToSlash(filepath.Clean(arg)))
 		}
 	}
 
 	// --quiet reports only via exit status: 0 = no differences, 1 =
 	// differences. Combined with --cached this is the "are there staged
-	// changes?" predicate loom uses to skip empty commits.
+	// changes?" predicate loom uses to skip empty commits. --diff-filter
+	// narrows the predicate like host git.
 	if quiet {
 		status, err := wt.Status()
 		if err != nil {
 			return nil, ErrUnsupported
 		}
-		for _, fs := range status {
+		for path, fs := range status {
+			if len(paths) > 0 && !slices.Contains(paths, path) {
+				continue
+			}
+			code := fs.Worktree
 			if cached {
-				// Staged column: index vs HEAD.
-				if fs.Staging != gogit.Unmodified && fs.Staging != gogit.Untracked {
-					return &ExecResult{ExitCode: 1}, nil
-				}
-			} else {
-				// Unstaged column: worktree vs index.
-				if fs.Worktree != gogit.Unmodified && fs.Worktree != gogit.Untracked {
-					return &ExecResult{ExitCode: 1}, nil
-				}
+				code = fs.Staging
+			}
+			if diffFilterKeep(diffFilter, diffStatusLetter(code)) {
+				return &ExecResult{ExitCode: 1}, nil
 			}
 		}
 		return &ExecResult{ExitCode: 0}, nil
@@ -319,6 +402,33 @@ func nativeDiff(_ context.Context, dir string, args []string) (*ExecResult, erro
 	_ = stat // stat formatting is complex; fall through for now
 	if stat {
 		return nil, ErrUnsupported
+	}
+
+	if nameOnly {
+		status, err := wt.Status()
+		if err != nil {
+			return nil, ErrUnsupported
+		}
+		var out []string
+		for path, fs := range status {
+			if len(paths) > 0 && !slices.Contains(paths, path) {
+				continue
+			}
+			code := fs.Worktree
+			if cached {
+				// Staged column: index vs HEAD.
+				code = fs.Staging
+			}
+			if diffFilterKeep(diffFilter, diffStatusLetter(code)) {
+				out = append(out, path)
+			}
+		}
+		sort.Strings(out)
+		var b strings.Builder
+		for _, p := range out {
+			b.WriteString(p + "\n")
+		}
+		return &ExecResult{Stdout: b.String()}, nil
 	}
 
 	if cached {

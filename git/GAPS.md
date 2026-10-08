@@ -28,7 +28,12 @@ tracks the OPEN gaps**, prioritized by consumer-workflow impact.
       (+ then - on replicated change) and `TestNativeCherry_SkipsMerges`
       (merges never listed, post-merge-base equivalence set — both probed
       against host git the same day). `go test -short ./...` green.
-- [ ] **`revert <commit>` (`--no-edit`)** — reverse-apply a commit. **HIGH** — rollback.
+- [x] **`revert <commit>` (`--no-edit`)** — reverse-apply a commit. **HIGH** — rollback.
+      CLOSED 2026-10-08 (sprint 252, S252.4): `nativeRevert` in `exec_write.go`
+      (single-parent reverse patch via the shared all-or-nothing applier,
+      `-n`/`--no-commit` stages without committing, conventional Revert
+      message; merges, sequencer flags, multi-commit stay loud).
+      Proven by `TestNativeRevert_Rollback`.
 - [ ] **`clean -fd` / `-n`** — remove untracked files/dirs. **MED** — workspace hygiene.
 - [ ] `bisect`, `reflog`, `describe`, `submodule`, `gc`, `prune`, `fsck`,
       `verify-tag`, `mktag`, `pack-refs`, `index-pack`, `verify-pack` — **LOW**.
@@ -67,7 +72,7 @@ tracks the OPEN gaps**, prioritized by consumer-workflow impact.
 | **push** | ~`--delete` / `:<branch>` (delete remote branch)~ CLOSED 2026-10-08 (S252.1, `TestNativePush_Delete`); `-q`, `--dry-run`, `--tags` still open | `exec_write.go:18` | **HIGH** |
 | **reset** | ~`--hard`, `--soft`~ CLOSED 2026-10-08 (S252.3, `TestNativeReset_HardSoft`; soft/hard with paths + bad rev fail 128 like host) | `exec_read.go:930,992` | **HIGH** |
 | **checkout** | `--theirs`, `--ours`, `-f` (only `-b`/`-B` supported) | `exec_read.go:812` | MED |
-| **diff** | `--stat`, `--name-only`, `--diff-filter`, full `--cached` output | `exec_read.go:255,308-330` | MED |
+| **diff** | `--stat`, ~`--name-only`, `--diff-filter`~ CLOSED 2026-10-08 (S252.4, `TestNativeDiff_NameOnlyFilter`: worktree + `--cached` columns, filter select/exclude, pathspecs, `--quiet` honors filter), full `--cached` output still open | `exec_read.go:255,308-330` | MED |
 | **log** | `-S` (pickaxe), `--grep`; `--author` rejected; ~9 `--format` placeholders only; `--date=` ignored | `exec_read.go:129-252` | MED |
 | **branch** | `-f` (force create) | `exec_read.go:612` | LOW |
 | **tag** | `-F <file>` (annotated message from file; typed `tag.go` also lacks it), `--format` on list | `exec_read.go:1161` | LOW |

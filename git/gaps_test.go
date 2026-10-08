@@ -812,6 +812,134 @@ func TestNativeReset_HardSoft(t *testing.T) {
 	}
 }
 
+// TestNativeRevert_Rollback pins `revert <commit>`: the change is undone
+// in a new Revert commit; -n stages without committing; merges,
+// sequencer flags, and inapplicable reversions stay loud.
+func TestNativeRevert_Rollback(t *testing.T) {
+	ctx := context.Background()
+	dir := makeTwoCommitRepo(t)
+	setLocalIdentity(t, dir)
+	commitFiles(t, dir, map[string]string{"a.txt": "line1\nline2\nline3\n"}, "bad change")
+
+	res, err := Exec(ctx, dir, []string{"revert", "--no-edit", "HEAD"})
+	if err != nil {
+		t.Fatalf("revert: %v", err)
+	}
+	if got := readFile(t, dir, "a.txt"); got != "line1\nline2\n" {
+		t.Errorf("a.txt after revert = %q, want change undone", got)
+	}
+	if got := headMessage(t, dir); !strings.HasPrefix(got, `Revert "bad change"`) {
+		t.Errorf("HEAD message = %q, want Revert prefix", got)
+	}
+	if !strings.Contains(res.Stdout, `Revert "bad change"`) {
+		t.Errorf("revert output = %q", res.Stdout)
+	}
+	if n := commitCount(t, dir); n != 4 {
+		t.Errorf("history = %d commits, want 4", n)
+	}
+
+	// -n stages the reversal without committing. "worse change" jumped
+	// 2-line → 4-line in one commit, so its reversal lands on 2-line.
+	commitFiles(t, dir, map[string]string{"a.txt": "line1\nline2\nline3\nline4\n"}, "worse change")
+	if _, err := Exec(ctx, dir, []string{"revert", "-n", "HEAD"}); err != nil {
+		t.Fatalf("revert -n: %v", err)
+	}
+	if n := commitCount(t, dir); n != 5 {
+		t.Errorf("history = %d commits, want 5 (-n commits nothing)", n)
+	}
+	if got := readFile(t, dir, "a.txt"); got != "line1\nline2\n" {
+		t.Errorf("a.txt after -n = %q", got)
+	}
+
+	// Inapplicable reversion: file gone since — loud, tree untouched.
+	if err := os.Remove(filepath.Join(dir, "a.txt")); err != nil {
+		t.Fatal(err)
+	}
+	commitFiles(t, dir, map[string]string{"b.txt": "bee\n"}, "drop a")
+	if _, err := Exec(ctx, dir, []string{"revert", "HEAD~3"}); err != ErrUnsupported {
+		t.Errorf("inapplicable revert err = %v, want ErrUnsupported", err)
+	}
+	if n := commitCount(t, dir); n != 6 {
+		t.Errorf("history = %d, failed revert must not commit", n)
+	}
+
+	for _, argv := range [][]string{
+		{"revert", "--continue"},
+		{"revert", "HEAD", "HEAD~1"},
+		{"revert", "no-such-rev"},
+	} {
+		if _, err := Exec(ctx, dir, argv); err != ErrUnsupported {
+			t.Errorf("revert %v err = %v, want ErrUnsupported", argv, err)
+		}
+	}
+}
+
+// TestNativeDiff_NameOnlyFilter pins `diff --name-only` (+ `--cached`,
+// `--diff-filter`, pathspecs): the conflict-triage listing from the
+// GAPS.md reality check. Patch output and commit revisions stay loud.
+func TestNativeDiff_NameOnlyFilter(t *testing.T) {
+	ctx := context.Background()
+	dir := makeTwoCommitRepo(t)
+	setLocalIdentity(t, dir)
+	commitFiles(t, dir, map[string]string{"c.txt": "see\n"}, "add c")
+
+	dirtyFile(t, dir, "a.txt", "modified\n")
+	if err := os.Remove(filepath.Join(dir, "c.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Exec(ctx, dir, []string{"diff", "--name-only"})
+	if err != nil {
+		t.Fatalf("name-only: %v", err)
+	}
+	if res.Stdout != "a.txt\nc.txt\n" {
+		t.Errorf("name-only = %q, want both files sorted", res.Stdout)
+	}
+	res, err = Exec(ctx, dir, []string{"diff", "--name-only", "--diff-filter=M"})
+	if err != nil {
+		t.Fatalf("filter M: %v", err)
+	}
+	if res.Stdout != "a.txt\n" {
+		t.Errorf("filter M = %q", res.Stdout)
+	}
+	res, err = Exec(ctx, dir, []string{"diff", "--name-only", "--diff-filter=d", "--", "c.txt"})
+	if err != nil {
+		t.Fatalf("exclude d: %v", err)
+	}
+	if res.Stdout != "" {
+		t.Errorf("exclude d + path = %q, want empty", res.Stdout)
+	}
+
+	// Staged column: stage a.txt, cached lists it, unstaged does not.
+	if _, err := Exec(ctx, dir, []string{"add", "a.txt"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	res, err = Exec(ctx, dir, []string{"diff", "--cached", "--name-only"})
+	if err != nil {
+		t.Fatalf("cached name-only: %v", err)
+	}
+	if res.Stdout != "a.txt\n" {
+		t.Errorf("cached = %q, want staged a.txt", res.Stdout)
+	}
+
+	// --quiet honors the filter: only deletions present, M-only → 0.
+	res, err = Exec(ctx, dir, []string{"diff", "--quiet", "--diff-filter=M"})
+	if err != nil {
+		t.Fatalf("quiet filter: %v", err)
+	}
+	_ = res
+
+	for _, argv := range [][]string{
+		{"diff", "--stat"},
+		{"diff", "--name-only", "HEAD"},
+		{"diff", "--cached"},
+	} {
+		if _, err := Exec(ctx, dir, argv); err != ErrUnsupported {
+			t.Errorf("diff %v err = %v, want ErrUnsupported", argv, err)
+		}
+	}
+}
+
 // TestNativePush_Delete pins `push --delete` and the `:<branch>` refspec:
 // the branch leaves the remote, output mirrors host git's " - [deleted]"
 // stderr shape, and a ref-less --delete fails loud like host git (128).
