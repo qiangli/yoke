@@ -227,7 +227,7 @@ func RunDoor(ctx context.Context, o DoorOptions) error {
 		return fmt.Errorf("broker: listen on port %d: %w", port, err)
 	}
 	listeners := []net.Listener{tcp}
-	if sock, err := door.SocketPath(); err == nil {
+	if sock, err := door.SocketPath(); err == nil && peerCredentialsSupported {
 		_ = os.Remove(sock)
 		if ln, err := net.Listen("unix", sock); err == nil {
 			if err := os.Chmod(sock, 0o600); err != nil {

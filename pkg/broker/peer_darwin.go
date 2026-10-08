@@ -4,6 +4,9 @@ package broker
 
 import "golang.org/x/sys/unix"
 
+// peerCredentialsSupported: the kernel reports a unix peer's uid here.
+const peerCredentialsSupported = true
+
 // peerUID reads the peer's credentials from the kernel via LOCAL_PEERCRED
 // (the BSD/darwin spelling of SO_PEERCRED).
 //
