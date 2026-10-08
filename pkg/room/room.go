@@ -328,17 +328,24 @@ func Join(c Card) error {
 		c.Joined = now()
 	}
 	c.Updated = now()
-	b, err := json.MarshalIndent(c, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(path, b, 0o600); err != nil {
+	if err := writeCardFile(path, c); err != nil {
 		return err
 	}
 	if legacy != "" && legacy != path {
 		_ = os.Remove(legacy)
 	}
 	return Emit(Event{Type: EventJoin, Actor: c.Principal, Target: c.ID, Body: c.Binding})
+}
+
+// writeCardFile persists a card. Shared by Join and ClaimSession so the two
+// claim paths cannot drift on encoding or file mode — the second one was
+// written by copying the first, which is exactly how they would.
+func writeCardFile(path string, c Card) error {
+	b, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, b, 0o600)
 }
 
 // readCard loads one card file. A missing or unreadable card is "no card" —

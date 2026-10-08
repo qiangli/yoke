@@ -121,6 +121,18 @@ type weaveStoryLease struct {
 	// pid dies with the command and would otherwise sentence the seat to
 	// death the moment the read returned.
 	AttachedPID int `json:"attached_pid,omitempty"`
+
+	// Instance and Session say WHICH CONVERSATION holds this seat, and under
+	// which owning session.
+	//
+	// Holder is a name, and a name is no longer unique to one conversation: a
+	// family may have several live instances, all answering to it. So the
+	// holder alone cannot tell a heartbeat from a second driver — see
+	// sprint_lease_instance.go, which is where that decision lives. Empty
+	// means a legacy or unattributed lease and is accepted unchanged; live
+	// conductors took their seats before these fields existed.
+	Instance string `json:"instance,omitempty"`
+	Session  string `json:"session,omitempty"`
 }
 
 // SprintLeaseTTL is how long a conductor's heartbeat stays believable.
@@ -1107,7 +1119,17 @@ you still gate, converge and report.`,
 					if err := saveSprintLeaseToken(id, who, raw); err != nil {
 						return "", err
 					}
+					leaseInstance, leaseSession := sprintLeaseIdentity()
+					// REFUSE a competing owning session on the instance that
+					// already holds this seat, before anything is written: a
+					// takeover by a second driver of one conversation is not a
+					// handoff, and the token above would otherwise be minted
+					// for it.
+					if err := sprintLeaseAccepts(id, s.Lease, leaseInstance, leaseSession); err != nil {
+						return "", err
+					}
 					s.Lease = &weaveStoryLease{Holder: who, At: time.Now().UTC(), TokenHash: hash}
+					stampSprintLeaseInstance(s.Lease, leaseInstance, leaseSession)
 					s.Owner = who
 					// The brief is printed on TAKE, not offered by a separate verb.
 					// `resume` existed only to show it, which meant the takeover
