@@ -215,22 +215,43 @@ func resolveDeputyHolderFromStore(s *Store, handle string) (principal.Ref, error
 	if s.deputyResolver != nil {
 		return s.deputyResolver.Resolve(handle)
 	}
-	// No resolver: treat handle as holder Name. If it looks like UUID, put in Episode.
-	// This keeps authority tests independent of the resolver until foundation integration.
 	handle = strings.TrimSpace(handle)
 	if handle == "" {
 		return principal.Ref{}, fmt.Errorf("deputy: empty handle")
 	}
-	// If handle contains episode delimiter "@" or ":" treat as name:episode
+	// Bare UUID (no delimiter) must be treated as Episode with empty Name so
+	// DeputyAdd's Episode-required gate still passes and lookup is UUID-based.
+	// Heuristic: UUIDs contain dashes and hex, and are >= 8 chars; but strictly
+	// we treat any handle without ":"/"@" that looks like a UUID (contains "-")
+	// and parses as hex-with-dashes as a bare Episode.
+	if isBareUUID(handle) {
+		return principal.Ref{Episode: handle, Kind: principal.KindAgent}, nil
+	}
 	if before, after, ok := strings.Cut(handle, "@"); ok && after != "" {
 		return principal.Ref{Name: before, Episode: after, Kind: principal.KindAgent}, nil
 	}
 	if before, after, ok := strings.Cut(handle, ":"); ok && after != "" && !strings.Contains(before, "/") {
-		// allow "handle:uuid" form
 		return principal.Ref{Name: before, Episode: after, Kind: principal.KindAgent}, nil
 	}
-	// Bare handle: use as Name, generate Episode as handle for dedup? No: keep Episode empty,
-	// Holder matching will fall back to SameHolder name match. But to ensure handle reuse test
-	// can demonstrate UUID snapshot isolation, tests should set Episode explicitly.
-	return principal.Ref{Name: handle, Kind: principal.KindAgent}, nil
+	// No resolver and handle is not resolvable to a UUID snapshot. Fail closed:
+	// production requires fleet.InstanceStore wiring; without it a bare handle
+	// would grant Name-only authority that never fences reuse.
+	return principal.Ref{}, fmt.Errorf("deputy: handle %q requires a resolver (fleet.InstanceStore) — bare handles cannot be granted without a resolved instance UUID; wire WithDeputyResolver or pass a bare UUID / name:uuid form", handle)
+}
+
+func isBareUUID(s string) bool {
+	s = strings.TrimSpace(s)
+	if len(s) < 8 || !strings.Contains(s, "-") {
+		return false
+	}
+	for _, c := range s {
+		if c == '-' {
+			continue
+		}
+		if (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') {
+			continue
+		}
+		return false
+	}
+	return true
 }

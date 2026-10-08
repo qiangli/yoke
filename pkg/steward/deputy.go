@@ -317,8 +317,8 @@ func (s *Store) DeputyAdd(actor principal.Ref, epoch uint64, holder principal.Re
 	if err := scope.Valid(); err != nil {
 		return Deputy{}, err
 	}
-	if strings.TrimSpace(holder.Name) == "" && strings.TrimSpace(holder.Episode) == "" {
-		return Deputy{}, &ErrDeputyScope{Why: "deputy holder is empty — pass an instance UUID or handle resolved at grant time"}
+	if strings.TrimSpace(holder.Episode) == "" {
+		return Deputy{}, &ErrDeputyScope{Why: "deputy holder Episode (instance UUID) is required — resolve handles to a UUID snapshot at grant time; Name-only holders do not fence reuse"}
 	}
 	if ttl <= 0 {
 		ttl = 24 * time.Hour
@@ -334,19 +334,17 @@ func (s *Store) DeputyAdd(actor principal.Ref, epoch uint64, holder principal.Re
 		}
 		// No deputies of deputies: reject before authorize for a clear signal.
 		// Check against current active deputies (fenced/expired/revoked excluded).
+		// Match strictly on Episode UUID; a missing Episode never matches.
 		curEpoch := deriveAuthority(rep).Epoch
 		depsPre := deriveDeputies(rep.Entries)
 		for _, d := range depsPre {
 			if !d.Active(now, curEpoch) {
 				continue
 			}
-			matched := false
-			if d.Holder.Episode != "" && actor.Episode != "" {
-				matched = d.Holder.Episode == actor.Episode
-			} else {
-				matched = SameHolder(d.Holder, actor)
+			if d.Holder.Episode == "" || actor.Episode == "" {
+				continue
 			}
-			if matched {
+			if d.Holder.Episode == actor.Episode {
 				return &ErrDeputyIsDeputy{}
 			}
 		}
@@ -494,45 +492,67 @@ func (s *Store) DeputyActive(now time.Time) ([]Deputy, error) {
 // within the given sprint/epic scope. It enforces: active, epoch fenced,
 // not revoked/expired, holder snapshot matches resolved UUID (reuse never transfers),
 // scope containment, allowed actions, and independence (no self-conduct).
+// Holder must carry Episode (instance UUID); Name-only holders never match.
 func (s *Store) CheckDeputyAuthority(holder principal.Ref, action string, sprint int, epic string, now time.Time) error {
 	now = mustUTC(now)
 	rep, err := s.Replay()
 	if err != nil {
 		return err
 	}
+	if rep.Corrupt {
+		return &ErrCorruptTail{Line: rep.CorruptLine, Reason: rep.CorruptReason, Kind: rep.CorruptKind, ValidEntries: len(rep.Entries)}
+	}
+	if strings.TrimSpace(holder.Episode) == "" {
+		return &ErrDeputyScope{Why: fmt.Sprintf("holder %q has no Episode UUID — authority requires a resolved instance snapshot", holderName(holder))}
+	}
 	auth := deriveAuthority(rep)
 	m := deriveDeputies(rep.Entries)
-	// Find deputy that claims this holder instance
-	var dep *Deputy
+	// Find deputy that claims this holder instance: deterministic eligible scope selection.
+	// Multiple historical grants may share a handle label; only the UUID snapshot matters.
+	// Scan all deputies, collect candidates that match this UUID, then pick the active
+	// eligible grant deterministically (latest GrantedAt wins; ties by ID).
+	var candidates []Deputy
 	for _, d := range m {
-		// match by instance UUID strictly: holder.Episode must equal deputy.Holder.Episode
-		// If holder has no Episode, fall back to SameHolder name+host
-		matched := false
-		if d.Holder.Episode != "" && holder.Episode != "" {
-			matched = d.Holder.Episode == holder.Episode
-		} else {
-			matched = SameHolder(d.Holder, holder)
+		if d.Holder.Episode != holder.Episode {
+			continue
 		}
-		if matched {
-			if !d.Active(now, auth.Epoch) {
-				// fencing/expiry/revoke takes precedence over scope
-				if d.Revoked {
-					return &ErrDeputyRevoked{ID: d.ID}
-				}
-				if d.Expired(now) {
-					return &ErrDeputyExpired{ID: d.ID}
-				}
-				if d.Epoch != auth.Epoch {
-					return &ErrDeputyFenced{ID: d.ID, Presented: d.Epoch, Current: auth.Epoch}
-				}
+		candidates = append(candidates, d)
+	}
+	if len(candidates) == 0 {
+		return &ErrDeputyScope{Why: fmt.Sprintf("no deputy grant for holder UUID %q", holder.Episode)}
+	}
+	// Prefer active candidates; if none active, return the fencing reason from the most recent candidate
+	var dep *Deputy
+	var bestActive *Deputy
+	for i := range candidates {
+		d := candidates[i]
+		if d.Active(now, auth.Epoch) {
+			if bestActive == nil || d.GrantedAt.After(bestActive.GrantedAt) || (d.GrantedAt.Equal(bestActive.GrantedAt) && d.ID > bestActive.ID) {
+				cp := d
+				bestActive = &cp
 			}
-			cp := d
-			dep = &cp
-			break
 		}
 	}
-	if dep == nil {
-		return &ErrDeputyScope{Why: fmt.Sprintf("no active deputy for holder %q", holderName(holder))}
+	if bestActive != nil {
+		dep = bestActive
+	} else {
+		// No active grant: report why the most recent matching grant is not active
+		latest := candidates[0]
+		for _, d := range candidates[1:] {
+			if d.GrantedAt.After(latest.GrantedAt) || (d.GrantedAt.Equal(latest.GrantedAt) && d.ID > latest.ID) {
+				latest = d
+			}
+		}
+		if latest.Revoked {
+			return &ErrDeputyRevoked{ID: latest.ID}
+		}
+		if latest.Expired(now) {
+			return &ErrDeputyExpired{ID: latest.ID}
+		}
+		if latest.Epoch != auth.Epoch {
+			return &ErrDeputyFenced{ID: latest.ID, Presented: latest.Epoch, Current: auth.Epoch}
+		}
+		return &ErrDeputyScope{Why: fmt.Sprintf("no active deputy for holder UUID %q (grant %q is not active)", holder.Episode, latest.ID)}
 	}
 	// Independence: deputy cannot conduct a sprint in its own scope
 	// Conduct is a conductor act, not a deputy act — it is forbidden inside supervised scope and allowed outside.
@@ -574,4 +594,53 @@ func DeputyTopicForScope(scope DeputyScope) string {
 		return "deputy"
 	}
 	return "deputy." + lbl
+}
+
+// AuthorizeAct is the real authority guard for the steward's four acts that a
+// deputy may perform within scope: activate, fence, judge, gate. It preserves
+// steward privileges: if actor is the current steward holder at epoch, it
+// authorizes without deputy scope checks. Otherwise it delegates to
+// CheckDeputyAuthority. Cross-scope allocation/release/integration stays
+// steward-only by rejecting non-allowed actions and out-of-scope requests.
+// It also applies the existing corrupt-journal rejection before any check.
+func (s *Store) AuthorizeAct(actor principal.Ref, epoch uint64, action string, sprint int, epic string, now time.Time) error {
+	now = mustUTC(now)
+	rep, err := s.Replay()
+	if err != nil {
+		return err
+	}
+	if rep.Corrupt {
+		return &ErrCorruptTail{Line: rep.CorruptLine, Reason: rep.CorruptReason, Kind: rep.CorruptKind, ValidEntries: len(rep.Entries)}
+	}
+	// Steward path: if actor is the current holder at the presented epoch, allow.
+	if auth, err := authorize(rep, actor, epoch); err == nil {
+		_ = auth
+		// Steward is always authorized for the four acts and for cross-scope.
+		// No scope check needed — steward owns allocation/release/integration.
+		if allowedDeputyActions[action] || action == DeputyActionConduct {
+			return nil
+		}
+		// Cross-scope actions are steward-only, so steward passes too.
+		return nil
+	} else {
+		// If the error is fencing/holder mismatch, fall through to deputy path;
+		// if it is corrupt/vacant/no-epoch, the authorize error is the answer.
+		// Distinguish: ErrNotHolder/ErrFenced may still be eligible as deputy;
+		// ErrCorruptTail/ErrNoEpoch/Vacant are not deputy-eligible either, but
+		// CheckDeputyAuthority will re-check corrupt and return a scope error
+		// that would be misleading. So return the steward authorize error when
+		// it is not a holder/epoch mismatch that a deputy could satisfy.
+		switch err.(type) {
+		case *ErrNotHolder, *ErrFenced:
+			// possibly a deputy — continue
+		default:
+			// For ErrNoEpoch, corrupt already handled, vacant, etc., try deputy
+			// only if actor has an Episode (deputy path requires UUID); otherwise
+			// return the steward error directly to preserve fencing signal.
+			if strings.TrimSpace(actor.Episode) == "" {
+				return err
+			}
+		}
+	}
+	return s.CheckDeputyAuthority(actor, action, sprint, epic, now)
 }

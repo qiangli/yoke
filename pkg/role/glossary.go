@@ -29,7 +29,7 @@ func Glossary() []GlossaryEntry {
 			Title:       "steward",
 			Kind:        Steward,
 			Scope:       "one machine × one OS account",
-			Occupancy:   "Authority{Holder,Epoch} + heartbeat, tri-state liveness, epoch fencing, authorized Takeover (coreutils/pkg/steward/)",
+			Occupancy:   "Authority{Holder,Epoch} + heartbeat, tri-state liveness, epoch fencing, authorized Takeover (yoke/pkg/steward/)",
 			Description: "The one steward per host×user who answers for the host. Holds the seat, runs the journal, and is the only seat that may allocate across scopes, release cross-scope resources, and integrate across deputies.",
 			Address:     "steward",
 			AliasesByContext: map[string]string{
@@ -56,7 +56,7 @@ func Glossary() []GlossaryEntry {
 			Title:       "conductor",
 			Kind:        Conductor,
 			Scope:       "one sprint",
-			Occupancy:   "weaveStoryLease{Holder,At}, 30 min TTL (coreutils/pkg/weave/weave_story.go)",
+			Occupancy:   "weaveStoryLease{Holder,At}, 30 min TTL (yoke/pkg/weave/weave_story.go)",
 			Description: "Holds one sprint's lease and delivers that sprint. One writer per sprint; N sibling conductors under one steward is the flat scaling pattern.",
 			Address:     "conductor:<sprint>",
 			AliasesByContext: map[string]string{

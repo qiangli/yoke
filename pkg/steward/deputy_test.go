@@ -259,6 +259,89 @@ func TestDeputyMailSurvivesHandoff(t *testing.T) {
 	}
 }
 
+func TestAuthorizeActPreservesStewardAndLimitsDeputy(t *testing.T) {
+	s := newStore(t)
+	ste := agent("steward")
+	ep := mustClaim(t, s, ste, at(0))
+	holder := deputyHolder("deputyA", "uuid-a")
+	mustDeputy(t, s, ste, ep, holder, "deputyA", DeputyScope{Sprints: []int{331}}, 24*time.Hour, at(time.Minute))
+	// Steward can act on any sprint via AuthorizeAct (cross-scope)
+	if err := s.AuthorizeAct(ste, ep, DeputyActionJudge, 999, "", at(2*time.Minute)); err != nil {
+		t.Fatalf("steward should pass AuthorizeAct for any sprint, got %v", err)
+	}
+	if err := s.AuthorizeAct(ste, ep, "allocate", 331, "", at(2*time.Minute)); err != nil {
+		t.Fatalf("steward allocate should pass, got %v", err)
+	}
+	// Deputy in scope passes via AuthorizeAct
+	if err := s.AuthorizeAct(holder, ep, DeputyActionJudge, 331, "", at(2*time.Minute)); err != nil {
+		t.Fatalf("deputy in scope via AuthorizeAct should pass, got %v", err)
+	}
+	// Deputy out of scope fails via AuthorizeAct
+	if err := s.AuthorizeAct(holder, ep, DeputyActionJudge, 999, "", at(2*time.Minute)); err == nil {
+		t.Fatal("deputy out of scope via AuthorizeAct should fail")
+	}
+	// Deputy cross-scope allocate fails
+	if err := s.AuthorizeAct(holder, ep, "allocate", 331, "", at(2*time.Minute)); err == nil {
+		t.Fatal("deputy allocate should fail via AuthorizeAct")
+	}
+}
+
+func TestDeputyRequiresEpisodeUUID(t *testing.T) {
+	s := newStore(t)
+	ste := agent("steward")
+	ep := mustClaim(t, s, ste, at(0))
+	// Name-only holder should be rejected at grant time
+	nameOnly := principal.Ref{Kind: principal.KindAgent, Name: "bare", Host: "test-host"}
+	if _, err := s.DeputyAdd(ste, ep, nameOnly, "bare", DeputyScope{Sprints: []int{331}}, 24*time.Hour, at(time.Minute)); err == nil {
+		t.Fatal("Name-only holder without Episode should be rejected")
+	}
+	// bare UUID via CLI resolver path: DeputyAdd requires Episode, so bare UUID grant must carry Episode
+	bareUUID := "550e8400-e29b-41d4-a716-446655440000"
+	holder := principal.Ref{Kind: principal.KindAgent, Episode: bareUUID, Host: "test-host"}
+	dep := mustDeputy(t, s, ste, ep, holder, bareUUID, DeputyScope{Sprints: []int{332}}, 24*time.Hour, at(2*time.Minute))
+	if dep.Holder.Episode != bareUUID {
+		t.Fatalf("bare UUID holder episode mismatch: %q", dep.Holder.Episode)
+	}
+	// Name-only holder cannot gain authority even if a deputy exists for same Name
+	nameOnly2 := principal.Ref{Kind: principal.KindAgent, Name: "same-name", Host: "test-host"}
+	// holder has Episode, but checker with Name-only should fail
+	if err := s.CheckDeputyAuthority(nameOnly2, DeputyActionJudge, 332, "", at(3*time.Minute)); err == nil {
+		t.Fatal("Name-only checker should not match UUID-granted deputy")
+	}
+}
+
+func TestDeputyCorruptJournalFences(t *testing.T) {
+	s := newStore(t)
+	ste := agent("steward")
+	ep := mustClaim(t, s, ste, at(0))
+	holder := deputyHolder("deputyA", "uuid-a")
+	mustDeputy(t, s, ste, ep, holder, "deputyA", DeputyScope{Sprints: []int{331}}, 24*time.Hour, at(time.Minute))
+	appendRaw(t, s, "{\"bad\": }\n")
+	if err := s.CheckDeputyAuthority(holder, DeputyActionJudge, 331, "", at(2*time.Minute)); err == nil {
+		t.Fatal("corrupt journal should fence deputy authority")
+	}
+	if err := s.AuthorizeAct(holder, ep, DeputyActionJudge, 331, "", at(2*time.Minute)); err == nil {
+		t.Fatal("corrupt journal should fence AuthorizeAct")
+	}
+}
+
+func TestDeputyDeterministicEligibleGrant(t *testing.T) {
+	s := newStore(t)
+	ste := agent("steward")
+	ep := mustClaim(t, s, ste, at(0))
+	holder := deputyHolder("deputyA", "uuid-a")
+	// Grant, revoke, re-grant same UUID same scope — multiple historical grants must not mask live eligible one
+	dep1 := mustDeputy(t, s, ste, ep, holder, "deputyA", DeputyScope{Sprints: []int{331}}, 24*time.Hour, at(time.Minute))
+	s.DeputyRevoke(ste, ep, dep1.ID, at(2*time.Minute))
+	mustDeputy(t, s, ste, ep, holder, "deputyA", DeputyScope{Sprints: []int{331}}, 24*time.Hour, at(3*time.Minute))
+	if err := s.CheckDeputyAuthority(holder, DeputyActionJudge, 331, "", at(4*time.Minute)); err != nil {
+		t.Fatalf("live eligible grant should be selected despite historical revoked grant, got %v", err)
+	}
+	if err := s.AuthorizeAct(holder, ep, DeputyActionGate, 331, "", at(4*time.Minute)); err != nil {
+		t.Fatalf("AuthorizeAct should find live eligible grant, got %v", err)
+	}
+}
+
 type countingResolver struct {
 	handle string
 	uuids  []string
