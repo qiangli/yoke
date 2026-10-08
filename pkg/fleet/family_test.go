@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -17,16 +18,44 @@ func TestFamilyIDSeparatesModelsOfOneVendor(t *testing.T) {
 }
 
 // The ID is a function of the configuration, so two hosts reading the same
-// configuration agree without syncing anything, and a set written in two
-// orders is one set.
-func TestFamilyIDIsDeterministicAndOrderIndependent(t *testing.T) {
+// configuration agree without syncing anything.
+func TestFamilyIDIsDeterministic(t *testing.T) {
 	a := Family{Name: "ladder", Policy: PolicyCascade, Bindings: []string{"claude:opus5.5", "codex:gpt6-sol"}}
-	b := Family{Name: "ladder", Policy: PolicyCascade, Bindings: []string{"codex:gpt6-sol", "claude:opus5.5"}}
+	b := Family{Name: "ladder", Policy: PolicyCascade, Bindings: []string{"claude:opus5.5", "codex:gpt6-sol"}}
 	if a.ID() != b.ID() {
-		t.Fatalf("binding order changed the family id: %s vs %s", a.ID(), b.ID())
+		t.Fatalf("one configuration computed two ids: %s vs %s", a.ID(), b.ID())
 	}
 	if a.ID() != a.ID() {
 		t.Fatal("family id is not stable")
+	}
+}
+
+// Reordering a cascade is a POLICY change, so it mints a new family.
+//
+// An earlier version sorted the bindings and called two orders one set. For a
+// ladder that is wrong: the order IS the escalation sequence, so
+// [opus,codex] and [codex,opus] run cheap-first in opposite directions. Under
+// the sorted id a live instance kept its identity — and its frozen "immutable"
+// configuration — across a reordering it never agreed to.
+func TestFamilyIDChangesWithBindingOrder(t *testing.T) {
+	a := Family{Name: "ladder", Policy: PolicyCascade, Bindings: []string{"claude:opus5.5", "codex:gpt6-sol"}}
+	b := Family{Name: "ladder", Policy: PolicyCascade, Bindings: []string{"codex:gpt6-sol", "claude:opus5.5"}}
+	if a.ID() == b.ID() {
+		t.Fatalf("reordering the escalation ladder left the family id unchanged (%s)", a.ID())
+	}
+}
+
+// The digest is wide enough to be a durable key. 32 bits was not: instances
+// freeze this id and #1269 keys ratings on it, so a collision merges two
+// configurations' identities and histories with nothing reporting it.
+func TestFamilyIDDigestIsWide(t *testing.T) {
+	f := Family{Name: "ladder", Policy: PolicyCascade, Bindings: []string{"claude:opus5.5"}}
+	_, digest, ok := strings.Cut(f.ID(), "@")
+	if !ok {
+		t.Fatalf("family id %q has no digest", f.ID())
+	}
+	if len(digest) != 2*configDigestBytes || configDigestBytes < 16 {
+		t.Fatalf("digest %q is %d hex chars from %d bytes; want at least 16 bytes", digest, len(digest), configDigestBytes)
 	}
 }
 

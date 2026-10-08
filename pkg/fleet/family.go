@@ -36,7 +36,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"sort"
+	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -83,11 +84,41 @@ var ErrBindingImmutable = errors.New("fleet: an instance's bindings are immutabl
 // nothing to run is not a family.
 var ErrFamilyEmpty = errors.New("fleet: a family needs at least one tool:model binding")
 
+// ErrFamilyUnresolved reports a declared configuration that could not be
+// resolved in full — a cascade rung naming an agent this catalog does not
+// have, or a binding with no model.
+//
+// It is an ERROR rather than a shorter ladder. The frozen binding set is what
+// later refuses a reconfiguration, so a silently skipped rung produces an
+// instance whose set is missing a model it should have been allowed to select
+// — and, worse, makes ID() depend on how complete the reader's catalog happened
+// to be, so two hosts would compute two different identities for one declared
+// family. Refusing keeps the configuration a fact about the declaration.
+var ErrFamilyUnresolved = errors.New("fleet: family configuration does not resolve")
+
+// configDigestBytes is the width of the configuration fingerprint in ID().
+//
+// 16 bytes (128 bits), not 4. The ID is a durable key — instances freeze it,
+// and the ratings work in #1269 keys on it — so a collision would silently
+// merge two different configurations' identities and histories. 32 bits is
+// roughly even odds of a collision in ~77k configurations by the birthday
+// bound, which is not a margin to hand a key that outlives the process.
+const configDigestBytes = 16
+
 // Composite reports a predefined multi-binding configuration.
 func (f Family) Composite() bool { return len(f.Bindings) > 1 || f.Policy == PolicyCascade }
 
-// Config is the canonical text of the configuration: order-independent in the
-// bindings, because a set written in two orders is one set.
+// Config is the canonical text of the configuration, in DECLARED ORDER.
+//
+// The order is part of the configuration and must NOT be normalised away. For
+// a cascade the sequence IS the selection policy — base first, then each rung
+// in the order it escalates — so [sonnet,opus] and [opus,sonnet] are two
+// different behaviours that happen to name the same two models. An earlier
+// draft sorted the bindings on the theory that "a set written in two orders is
+// one set"; that is true of a set and false of a ladder, and it made reordering
+// an escalation ladder invisible to ID(). A live instance would then have kept
+// its identity across a policy change it never agreed to, which is exactly the
+// silent reconfiguration this type exists to prevent.
 func (f Family) Config() string {
 	b := make([]string, 0, len(f.Bindings))
 	for _, s := range f.Bindings {
@@ -95,7 +126,6 @@ func (f Family) Config() string {
 			b = append(b, s)
 		}
 	}
-	sort.Strings(b)
 	policy := f.Policy
 	if policy == "" {
 		policy = PolicySingle
@@ -112,7 +142,7 @@ func (f Family) ID() string {
 		kind = "composite"
 	}
 	sum := sha256.Sum256([]byte(f.Config()))
-	return kind + ":" + strings.TrimSpace(f.Name) + "@" + hex.EncodeToString(sum[:4])
+	return kind + ":" + strings.TrimSpace(f.Name) + "@" + hex.EncodeToString(sum[:configDigestBytes])
 }
 
 // Allows reports whether a binding is inside the frozen set.
@@ -150,44 +180,64 @@ func (f Family) Select(binding string) (string, error) {
 //
 // A plain entry is one binding. A CASCADE entry (BandSource "cascade", with a
 // Base and an Escalation ladder) is the predefined composite: its bindings are
-// the base's binding followed by each rung's, in declared order, and its policy
+// the base's binding followed by each rung's, IN DECLARED ORDER, and its policy
 // is PolicyCascade. That reuse is deliberate — the fleet already had a
 // multi-model mechanism and a second one would be a second thing to keep
 // honest.
 //
-// A rung that names no resolvable agent is SKIPPED rather than guessed at: a
-// fabricated binding in a frozen set is worse than a shorter ladder, because
-// the set is what later refuses a reconfiguration.
-func (c *Catalog) FamilyOf(name string) (Family, bool) {
+// A rung that names no resolvable agent is an ERROR (ErrFamilyUnresolved), not
+// a skipped rung: see that error for why a shortened ladder is worse than a
+// refusal. ok=false still means "no such agent", which is a question, not a
+// malformed answer.
+func (c *Catalog) FamilyOf(name string) (Family, bool, error) {
 	a, ok := c.Agent(name)
 	if !ok {
-		return Family{}, false
+		return Family{}, false, nil
 	}
 	f := Family{Name: a.Name, Display: a.NickName()}
 	if !a.IsCascade() {
-		f.Policy, f.Bindings = PolicySingle, []string{a.MatrixKey()}
-		return f, true
+		key := a.MatrixKey()
+		if key == "" || key == ":" {
+			return Family{}, true, fmt.Errorf("%w: agent %s declares no tool:model binding", ErrFamilyUnresolved, a.Name)
+		}
+		f.Policy, f.Bindings = PolicySingle, []string{key}
+		return f, true, nil
 	}
 	f.Policy = PolicyCascade
 	seen := map[string]bool{}
-	add := func(agentName string) {
-		rung, found := c.Agent(agentName)
+	add := func(rungName, role string) error {
+		rungName = strings.TrimSpace(rungName)
+		if rungName == "" {
+			return nil
+		}
+		rung, found := c.Agent(rungName)
 		if !found {
-			return
+			return fmt.Errorf("%w: %s %s names agent %q, which this catalog does not have", ErrFamilyUnresolved, a.Name, role, rungName)
 		}
 		key := rung.MatrixKey()
-		if key == ":" || seen[key] {
-			return
+		if key == "" || key == ":" {
+			return fmt.Errorf("%w: %s %s %q declares no tool:model binding", ErrFamilyUnresolved, a.Name, role, rungName)
+		}
+		// A repeated rung is dropped rather than refused: naming the same
+		// tool:model twice in a ladder is redundant, not unresolved, and the
+		// set it describes is unambiguous.
+		if seen[key] {
+			return nil
 		}
 		seen[key] = true
 		f.Bindings = append(f.Bindings, key)
+		return nil
 	}
-	add(a.Base)
-	for _, rung := range a.Escalation {
-		add(rung)
+	if err := add(a.Base, "base"); err != nil {
+		return Family{}, true, err
+	}
+	for i, rung := range a.Escalation {
+		if err := add(rung, "escalation rung "+strconv.Itoa(i+1)); err != nil {
+			return Family{}, true, err
+		}
 	}
 	if len(f.Bindings) == 0 {
-		return Family{}, false
+		return Family{}, true, fmt.Errorf("%w: cascade %s resolves to no bindings", ErrFamilyUnresolved, a.Name)
 	}
-	return f, true
+	return f, true, nil
 }

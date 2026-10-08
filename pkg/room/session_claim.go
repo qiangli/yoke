@@ -94,7 +94,7 @@ func ClaimSession(c Card) error {
 			prior, ok = readCard(candidate)
 		}
 	}
-	if ok && PidAlive(prior.PID) {
+	if ok && sessionCardAlive(prior) {
 		// A live incumbent with a DIFFERENT digest is the competing session
 		// this function exists to refuse. A live incumbent with no digest at
 		// all is also a refusal: it predates this contract, so there is no
@@ -123,6 +123,26 @@ func ClaimSession(c Card) error {
 	return Emit(Event{Type: EventJoin, Actor: c.Principal, Target: c.ID, Body: c.Binding})
 }
 
+// sessionCardAlive reports whether an incumbent session card is still held by
+// a live owner.
+//
+// It asks about OwnerPID — the STABLE harness process — and falls back to PID
+// only when no owner was recorded. Card.PID on a session card is whichever
+// per-turn child command wrote it last, and that process exits at the end of
+// the turn: judging liveness by it meant an incumbent looked DEAD in the gap
+// between two turns, so a competing session walked in and took a conversation
+// its owner was still having. The refusal this file exists for was therefore
+// only in force while a child command happened to be running.
+//
+// A card with neither pid is not live. That is the safe direction: it cannot
+// prove an owner, and an unprovable owner must not block a newcomer forever.
+func sessionCardAlive(c Card) bool {
+	if c.OwnerPID != 0 {
+		return PidAlive(c.OwnerPID)
+	}
+	return c.PID != 0 && PidAlive(c.PID)
+}
+
 // ReleaseSession gives up a claim held by this session.
 //
 // It checks the DIGEST rather than the pid, for the same reason ClaimSession
@@ -131,6 +151,13 @@ func ClaimSession(c Card) error {
 // the same forgiving shape as Leave, and for the same reason: every caller
 // pairs claim with a deferred release, and that defer runs even when the claim
 // was refused.
+//
+// It takes the SAME lock as ClaimSession, and re-reads under it. Without that,
+// the read that proved the card was ours and the remove that acted on it
+// straddled a window in which another session could legitimately claim the id
+// — a stale incumbent is reclaimable, so this is a real sequence — and the
+// release then deleted the NEW owner's card, leaving the id unowned while that
+// owner believed it held the claim.
 func ReleaseSession(id, sessionClaim string) {
 	if id == "" || sessionClaim == "" {
 		return
@@ -139,6 +166,14 @@ func ReleaseSession(id, sessionClaim string) {
 	if err != nil {
 		return
 	}
+	claimLock, err := lockfile.Acquire(memberClaimsLockPath(), lockfile.Holder{
+		Name: id, PID: os.Getpid(), Intent: "release owning session",
+	})
+	if err != nil {
+		return
+	}
+	defer claimLock.Release()
+
 	path := memberPath(dir, id)
 	if _, ok := readCard(path); !ok {
 		if legacy, safe := legacyMemberPath(dir, id); safe {
@@ -166,7 +201,11 @@ func SessionOwner(id string) (Card, bool) {
 			c, ok = readCard(legacy)
 		}
 	}
-	if !ok || !PidAlive(c.PID) {
+	// Same liveness rule as the claim itself. If these two disagreed, a
+	// refusal would report no incumbent to explain itself with — which is
+	// exactly what a caller sees when it cannot find the session it is
+	// competing against.
+	if !ok || !sessionCardAlive(c) {
 		return Card{}, false
 	}
 	return c, true

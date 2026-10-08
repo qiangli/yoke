@@ -56,23 +56,20 @@ const (
 	// a handover — so the resolver must too: whois cannot know fewer names
 	// than the thing that sends (see role.go).
 	KindRole Kind = "role"
-	// KindInstance is ONE CONVERSATION on a family, identified by a UUID
-	// (fleet.Instance). It is the identity an external session establishes
-	// once — BASHY_PRINCIPAL=dhnt:instance/<uuid> — so that neither its inbox
-	// reads nor its authored commands need a repeated --as.
-	//
-	// It is a separate kind from KindAgent because the two answer different
-	// questions. An agent name says what configuration is running; an instance
-	// UUID says WHICH conversation, and only the second can own a mailbox: a
-	// name is reusable and a conversation must not be.
-	KindInstance Kind = "instance"
 )
+
+// There is deliberately NO "instance" kind. An INSTANCE — one conversation on
+// a family — is an AGENT principal whose name is a UUID instead of a nickname
+// (see instance.go). A new kind would have been a second vocabulary for the
+// same noun: every resolver, every URN parser and every stored principal
+// string would have had to learn it, and the only thing it bought was a
+// grammar that said "instance" out loud. The UUID already says which
+// conversation, and nothing but an instance has a UUID for a name.
 
 // kinds is the set accepted as a `kind:name` prefix.
 var kinds = map[Kind]bool{
 	KindPerson: true, KindAgent: true, KindTool: true,
 	KindModel: true, KindHost: true, KindRole: true,
-	KindInstance: true,
 }
 
 // LocalOwner is the implicit owner of every entry on an unpaired host. On

@@ -40,13 +40,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/qiangli/coreutils/pkg/lockfile"
 	"gopkg.in/yaml.v3"
 )
 
@@ -144,13 +144,19 @@ func (i Instance) ClaimID() string {
 }
 
 // URN is the principal form an external session exports once
-// (BASHY_PRINCIPAL=dhnt:instance/<uuid>) so that neither its inbox reads nor
-// its authored commands need a repeated --as.
+// (BASHY_PRINCIPAL=dhnt:agent/<uuid>) so that neither its inbox reads nor its
+// authored commands need a repeated --as.
+//
+// The kind is AGENT, not a new "instance" kind: an instance is an agent
+// principal whose name is a UUID rather than a nickname, so every resolver
+// that already understands agents understands this without being changed. See
+// principal.InstanceURN, which is where that decision is argued.
 func (i Instance) URN() string {
-	if strings.TrimSpace(i.UUID) == "" {
+	canonical, err := ParseInstanceUUID(i.UUID)
+	if err != nil {
 		return ""
 	}
-	return "dhnt:instance/" + i.UUID
+	return "dhnt:agent/" + canonical
 }
 
 // Rebind always refuses. It exists so the refusal has ONE place and one
@@ -288,52 +294,64 @@ type OpenOptions struct {
 //
 // The family's configuration is frozen into the record at this moment. Nothing
 // about the new instance is inherited from whatever last held its label.
+// The cap count, the label choice and the handle check are all made against
+// the roster and then written, so the whole sequence is under the store lock —
+// see withLock for what each of the three races produced without it.
 func (s *InstanceStore) Open(f Family, opts OpenOptions) (Instance, error) {
 	if len(f.Bindings) == 0 {
 		return Instance{}, ErrFamilyEmpty
 	}
-	all, err := s.List()
+	var inst Instance
+	err := s.withLock("open instance", func() error {
+		all, err := s.List()
+		if err != nil {
+			return err
+		}
+		famID := f.ID()
+
+		var live []Instance
+		for _, i := range all {
+			if i.Active() && i.FamilyID == famID {
+				live = append(live, i)
+			}
+		}
+		if limit := s.Cap(); limit >= 0 && len(live) >= limit {
+			return &CapError{FamilyID: famID, Family: f.Name, Cap: limit, Live: live}
+		}
+
+		label := strings.TrimSpace(opts.Label)
+		if label == "" {
+			label = nextLabel(labelBase(f), all)
+		} else if err := checkAddressFree(label, "", all); err != nil {
+			return err
+		}
+		if h := strings.TrimSpace(opts.Handle); h != "" {
+			if err := checkAddressFree(h, "", all); err != nil {
+				return err
+			}
+			// A label and a handle on ONE instance may not collide with each
+			// other either: they live in one address scope, so an instance
+			// labelled Esme with handle esme would make `esme` ambiguous
+			// against itself.
+			if strings.EqualFold(h, label) {
+				return fmt.Errorf("%w: %s is both the label and the handle", ErrHandleAmbiguous, h)
+			}
+		}
+
+		inst = Instance{
+			UUID:     uuid.NewString(),
+			FamilyID: famID,
+			Family:   f.Name,
+			Policy:   f.Policy,
+			Bindings: append([]string{}, f.Bindings...),
+			Label:    label,
+			Handle:   strings.TrimSpace(opts.Handle),
+			Created:  nowStamp(),
+			MailFrom: opts.MailFrom,
+		}
+		return s.write(inst)
+	})
 	if err != nil {
-		return Instance{}, err
-	}
-	famID := f.ID()
-
-	var live []Instance
-	for _, i := range all {
-		if i.Active() && i.FamilyID == famID {
-			live = append(live, i)
-		}
-	}
-	if limit := s.Cap(); limit >= 0 && len(live) >= limit {
-		return Instance{}, &CapError{FamilyID: famID, Family: f.Name, Cap: limit, Live: live}
-	}
-
-	label := strings.TrimSpace(opts.Label)
-	if label == "" {
-		label = nextLabel(labelBase(f), all)
-	} else if labelHeld(label, all) {
-		return Instance{}, fmt.Errorf("%w: %s", ErrLabelHeld, label)
-	}
-	if h := strings.TrimSpace(opts.Handle); h != "" {
-		if _, found, err := resolveHandle(h, all); err != nil {
-			return Instance{}, err
-		} else if found {
-			return Instance{}, fmt.Errorf("%w: %s", ErrHandleAmbiguous, h)
-		}
-	}
-
-	inst := Instance{
-		UUID:     uuid.NewString(),
-		FamilyID: famID,
-		Family:   f.Name,
-		Policy:   f.Policy,
-		Bindings: append([]string{}, f.Bindings...),
-		Label:    label,
-		Handle:   strings.TrimSpace(opts.Handle),
-		Created:  nowStamp(),
-		MailFrom: opts.MailFrom,
-	}
-	if err := s.write(inst); err != nil {
 		return Instance{}, err
 	}
 	return inst, nil
@@ -358,64 +376,100 @@ func (s *InstanceStore) Resume(id string) (Instance, error) {
 }
 
 // Get reads one record by UUID, retired or not.
+//
+// The id is canonicalized before it is used as a path, and the record's own
+// UUID is VALIDATED against it after the read. Both halves of finding 4: the
+// first stops an id that is not a UUID from naming a file, and the second
+// stops a file whose contents disagree with its name from answering for an
+// identity it does not hold — which is what would happen to a hand-edited or
+// hand-copied record, and the mailbox is keyed on that UUID.
 func (s *InstanceStore) Get(id string) (Instance, error) {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return Instance{}, ErrInstanceUnknown
+	canonical, err := ParseInstanceUUID(id)
+	if err != nil {
+		return Instance{}, err
 	}
-	b, err := os.ReadFile(s.path(id))
+	b, err := os.ReadFile(s.path(canonical))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return Instance{}, fmt.Errorf("%w: %s", ErrInstanceUnknown, id)
+			return Instance{}, fmt.Errorf("%w: %s", ErrInstanceUnknown, canonical)
 		}
 		return Instance{}, err
 	}
 	var inst Instance
 	if err := yaml.Unmarshal(b, &inst); err != nil {
-		return Instance{}, fmt.Errorf("fleet: instance %s: %w", id, err)
+		return Instance{}, fmt.Errorf("fleet: instance %s: %w", canonical, err)
 	}
-	if inst.UUID == "" {
-		return Instance{}, fmt.Errorf("%w: %s", ErrInstanceUnknown, id)
+	recorded, err := ParseInstanceUUID(inst.UUID)
+	if err != nil {
+		return Instance{}, fmt.Errorf("fleet: instance record %s: %w", canonical, err)
 	}
+	if recorded != canonical {
+		return Instance{}, fmt.Errorf("fleet: instance record %s declares uuid %s; refusing to answer for an identity it does not hold", canonical, recorded)
+	}
+	inst.UUID = recorded
 	return inst, nil
 }
 
 // Retire archives an instance's mail, releases its display label, and leaves
 // the record in place.
 //
+// mail supplies the instance's PERSONAL mail, and it is required. The earlier
+// version of this function created an empty archive file and called that
+// "archived, not deleted" — a pointer to a file with nothing in it, which is
+// indistinguishable from having dropped the mail and is worse, because it
+// looks like evidence. Finding 5. pkg/fleet cannot read the bus itself (it is
+// a leaf), so the records arrive through the seam; passing nil is refused
+// rather than treated as "no mail", since every caller that has not been wired
+// up yet would otherwise archive nothing and report success.
+//
+// The caller's records are retained UNDER THE OLD UUID and the archive is
+// keyed on it, so mail addressed to a retired instance still resolves to that
+// instance's evidence — the UUID keeps its delivery meaning after retirement.
+// What retirement releases is the LABEL, and only the label.
+//
 // archive is where the mail went. It is returned rather than merely logged
-// because "archived, not deleted" is a claim somebody will have to check.
-func (s *InstanceStore) Retire(id string) (archive string, err error) {
-	inst, err := s.Get(id)
+// because "archived, not deleted" is a claim somebody will have to check (see
+// ArchivedMail, which reads it back).
+func (s *InstanceStore) Retire(id string, mail MailSource) (archive string, err error) {
+	if mail == nil {
+		return "", ErrMailSourceRequired
+	}
+	err = s.withLock("retire instance", func() error {
+		inst, err := s.Get(id)
+		if err != nil {
+			return err
+		}
+		if !inst.Active() {
+			// Already retired: idempotent, and it must NOT archive again. A
+			// second pass would append the same records a second time and
+			// double the evidence.
+			archive = inst.MailArchive
+			return nil
+		}
+		records, err := mail(inst)
+		if err != nil {
+			return fmt.Errorf("fleet: collect mail for instance %s: %w", inst.UUID, err)
+		}
+		// The mail is archived BEFORE the record is marked retired. If the
+		// append fails the instance stays live and its label stays held, which
+		// is the recoverable order: a retired instance whose mail never
+		// reached the archive has released its label on a promise it did not
+		// keep.
+		archive, err = s.appendArchive(inst, records)
+		if err != nil {
+			return err
+		}
+		inst.Retired = nowStamp()
+		inst.MailArchive = archive
+		// The label is RELEASED, not blanked: `instance show` on a retired
+		// UUID still has to say which label it held, or past evidence stops
+		// resolving. Freedom to reuse the label comes from Retired being set —
+		// checkAddressFree only considers live instances. The release is safe
+		// because it happens under the store lock: a concurrent Open either
+		// sees the label still held or sees it free, never half-released.
+		return s.write(inst)
+	})
 	if err != nil {
-		return "", err
-	}
-	if !inst.Active() {
-		return inst.MailArchive, nil
-	}
-	archive = filepath.Join(s.dir, "archive", inst.UUID+".jsonl")
-	if err := os.MkdirAll(filepath.Dir(archive), 0o700); err != nil {
-		return "", err
-	}
-	// Touch the archive so the pointer is never a promise about a path that
-	// does not exist. The bus writes the retained records into it (see
-	// ArchiveInstanceMail); an instance that received nothing archives empty,
-	// which is a true statement and not a missing file.
-	f, err := os.OpenFile(archive, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return "", err
-	}
-	if err := f.Close(); err != nil {
-		return "", err
-	}
-
-	inst.Retired = nowStamp()
-	inst.MailArchive = archive
-	// The label is RELEASED, not blanked: `instance show` on a retired UUID
-	// still has to say which label it held, or past evidence stops resolving.
-	// Freedom to reuse the label comes from Retired being set — labelHeld only
-	// considers live instances.
-	if err := s.write(inst); err != nil {
 		return "", err
 	}
 	return archive, nil
@@ -424,27 +478,30 @@ func (s *InstanceStore) Retire(id string) (archive string, err error) {
 // SetHandle records an instance's optional self-chosen handle, refusing one
 // that would be ambiguous among live instances.
 func (s *InstanceStore) SetHandle(id, handle string) (Instance, error) {
-	inst, err := s.Resume(id)
-	if err != nil {
-		return Instance{}, err
-	}
-	h := strings.TrimSpace(handle)
-	all, err := s.List()
-	if err != nil {
-		return Instance{}, err
-	}
-	if h != "" {
-		for _, other := range all {
-			if other.UUID == inst.UUID || !other.Active() {
-				continue
-			}
-			if strings.EqualFold(strings.TrimSpace(other.Handle), h) || strings.EqualFold(strings.TrimSpace(other.Label), h) {
-				return Instance{}, fmt.Errorf("%w: %s", ErrHandleAmbiguous, h)
-			}
+	var inst Instance
+	err := s.withLock("set instance handle", func() error {
+		var err error
+		if inst, err = s.Resume(id); err != nil {
+			return err
 		}
-	}
-	inst.Handle = h
-	if err := s.write(inst); err != nil {
+		h := strings.TrimSpace(handle)
+		all, err := s.List()
+		if err != nil {
+			return err
+		}
+		if err := checkAddressFree(h, inst.UUID, all); err != nil {
+			return err
+		}
+		// An instance may not take a handle equal to its OWN label either:
+		// the two would be two spellings of one address and ResolveHandle
+		// would have to pick between them.
+		if h != "" && strings.EqualFold(h, strings.TrimSpace(inst.Label)) {
+			return fmt.Errorf("%w: %s is already this instance's label", ErrHandleAmbiguous, h)
+		}
+		inst.Handle = h
+		return s.write(inst)
+	})
+	if err != nil {
 		return Instance{}, err
 	}
 	return inst, nil
@@ -471,9 +528,23 @@ func (s *InstanceStore) List() ([]Instance, error) {
 		var inst Instance
 		// A garbled record is skipped rather than fatal: one bad file must not
 		// make the whole roster unreadable, which would wedge every open.
-		if yaml.Unmarshal(b, &inst) != nil || inst.UUID == "" {
+		if yaml.Unmarshal(b, &inst) != nil {
 			continue
 		}
+		// A record whose uuid is not a UUID is garbled in the way that matters
+		// most — the field is the identity — so it is skipped on the same
+		// grounds, and never canonicalized into something plausible.
+		canonical, err := ParseInstanceUUID(inst.UUID)
+		if err != nil {
+			continue
+		}
+		// A record whose filename disagrees with its uuid is skipped rather
+		// than counted. It would otherwise occupy a cap slot and hold a label
+		// under one identity while Get refuses to return it under either.
+		if e.Name() != canonical+ext {
+			continue
+		}
+		inst.UUID = canonical
 		out = append(out, inst)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -573,14 +644,41 @@ func resolveHandle(handle string, all []Instance) (Instance, bool, error) {
 	}
 }
 
-func labelHeld(label string, all []Instance) bool {
-	want := strings.ToLower(strings.TrimSpace(label))
+// checkAddressFree refuses a label or handle that any LIVE instance already
+// answers to — in EITHER direction.
+//
+// Labels and handles share one address scope, because ResolveHandle resolves
+// both and a human typing a name does not say which kind it is. So the checks
+// have to cross: a new LABEL must not collide with an existing HANDLE (which
+// Open previously did not check, so `Esme` could be opened while another
+// instance already answered to the handle `esme`), and a new HANDLE must not
+// collide with an existing LABEL. Checking only like against like made the
+// scope ambiguous through the gap between the two sets.
+//
+// except is a UUID to ignore — the instance being updated, which is allowed to
+// keep its own addresses.
+func checkAddressFree(name, except string, all []Instance) error {
+	want := strings.ToLower(strings.TrimSpace(name))
+	if want == "" {
+		return nil
+	}
 	for _, i := range all {
-		if i.Active() && strings.ToLower(strings.TrimSpace(i.Label)) == want {
-			return true
+		if !i.Active() || strings.EqualFold(i.UUID, except) {
+			continue
+		}
+		if strings.ToLower(strings.TrimSpace(i.Label)) == want {
+			return fmt.Errorf("%w: %s (held by %s)", ErrLabelHeld, strings.TrimSpace(name), i.UUID)
+		}
+		if strings.ToLower(strings.TrimSpace(i.Handle)) == want {
+			return fmt.Errorf("%w: %s (handle of %s)", ErrHandleAmbiguous, strings.TrimSpace(name), i.UUID)
 		}
 	}
-	return false
+	return nil
+}
+
+// addressTaken reports a label or handle a live instance already answers to.
+func addressTaken(name string, all []Instance) bool {
+	return checkAddressFree(name, "", all) != nil
 }
 
 func nextLabel(base string, all []Instance) string {
@@ -588,12 +686,15 @@ func nextLabel(base string, all []Instance) string {
 	if base == "" {
 		base = "instance"
 	}
-	if !labelHeld(base, all) {
+	// A DERIVED label skips handles too, for the same reason an explicit one
+	// is refused against them: Esme-2 is worth nothing if `Esme-2` already
+	// resolves to somebody else's chosen handle.
+	if !addressTaken(base, all) {
 		return base
 	}
 	for n := 2; ; n++ {
 		candidate := base + "-" + strconv.Itoa(n)
-		if !labelHeld(candidate, all) {
+		if !addressTaken(candidate, all) {
 			return candidate
 		}
 	}
@@ -610,12 +711,78 @@ func labelBase(f Family) string {
 
 func nowStamp() string { return time.Now().UTC().Format(time.RFC3339Nano) }
 
+// ParseInstanceUUID canonicalizes an instance id: parsed as a UUID and
+// rendered in the one lower-case hyphenated form.
+//
+// Every lookup goes through it, and that is finding 4. The previous version
+// mapped an id to a filename by replacing unsafe characters with "-", which is
+// a LOSSY alias: "../x" and ".-/x" named one file, an upper-case UUID named a
+// different file from the same UUID written in lower case, and the garbage id
+// "!!!" resolved to a file called "-". A store addressed by an alias is a
+// store where two ids can silently share a mailbox and where an id from a flag
+// can point outside the directory. Parsing refuses all of it up front: either
+// the caller named a UUID or it named nothing.
+func ParseInstanceUUID(id string) (string, error) {
+	trimmed := strings.TrimSpace(id)
+	if trimmed == "" {
+		return "", fmt.Errorf("%w: (empty)", ErrInstanceUnknown)
+	}
+	u, err := uuid.Parse(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("%w: %q is not a UUID", ErrInstanceMalformed, trimmed)
+	}
+	return u.String(), nil
+}
+
+// ErrInstanceMalformed reports an id that is not a UUID at all.
+//
+// It is separate from ErrInstanceUnknown because the two mean different things
+// to the caller: "no such instance" is a question about the store, while "that
+// is not a UUID" is a question about the argument, and only the second is
+// still wrong after the store changes.
+var ErrInstanceMalformed = errors.New("fleet: instance id is not a UUID")
+
+// lockPath is the ONE interprocess lock guarding this store.
+//
+// It sits inside the store dir and ends in .lock, so List (which reads only
+// *.yaml) does not see it as a record. One lock for the whole store rather
+// than one per record, because every check this store makes is a check ACROSS
+// records — the per-family cap, the label set, the handle set — so a per-record
+// lock would serialize exactly the writes that do not conflict and leave the
+// cross-record reads unprotected.
+func (s *InstanceStore) lockPath() string { return filepath.Join(s.dir, "instances.lock") }
+
+// withLock runs fn with the store's interprocess lock held.
+//
+// Finding 1: Open, SetHandle and Retire each read the roster, decide against
+// it, and write — and without one lock around all three steps the decision is
+// made against a roster that another process is changing. Concretely: two
+// concurrent opens on a family at cap-1 both counted 0 live instances and both
+// wrote, so the cap silently admitted two; two opens picking a derived label
+// both found "Esme" free; and two SetHandle calls both found a handle
+// unambiguous and made it ambiguous. The lock is interprocess because the
+// store is host-global by design (see InstanceDir) and the colliding writers
+// are separate `bashy` processes in separate checkouts, not goroutines.
+func (s *InstanceStore) withLock(intent string, fn func() error) error {
+	if err := os.MkdirAll(s.dir, 0o700); err != nil {
+		return err
+	}
+	lock, err := lockfile.Acquire(s.lockPath(), lockfile.Holder{
+		Name: "instances", PID: os.Getpid(), Intent: intent,
+	})
+	if err != nil {
+		return fmt.Errorf("fleet: serialize instance store: %w", err)
+	}
+	defer lock.Release()
+	return fn()
+}
+
 func (s *InstanceStore) path(id string) string {
-	// A UUID is already path-safe, but the id arrives from a flag and an
-	// environment variable, so it is sanitized rather than trusted: nothing
-	// here may address a file outside the store.
-	safe := instanceFileName(id)
-	return filepath.Join(s.dir, safe+ext)
+	// id is already canonical here: every caller parses it first. A UUID in
+	// canonical form contains only hex and hyphens, so it cannot escape the
+	// store directory and needs no sanitizing — which is the point of parsing
+	// instead of sanitizing.
+	return filepath.Join(s.dir, id+ext)
 }
 
 func (s *InstanceStore) write(i Instance) error {
@@ -655,17 +822,6 @@ func (s *InstanceStore) write(i Instance) error {
 	return nil
 }
 
-var instanceUnsafeFile = regexp.MustCompile(`[^A-Za-z0-9_.-]+`)
-
-// instanceFileName reduces an id to the characters a filename may hold
-// on every host we run on. It is deliberately lossy and deliberately NOT a
-// hash: a store you can read with ls is worth more than one whose filenames
-// round-trip.
-func instanceFileName(id string) string {
-	cleaned := instanceUnsafeFile.ReplaceAllString(strings.TrimSpace(id), "-")
-	cleaned = strings.Trim(cleaned, "-.")
-	if cleaned == "" {
-		return "instance"
-	}
-	return cleaned
-}
+// There is deliberately no filename-sanitizing helper here any more. See
+// ParseInstanceUUID: the id is PARSED, so there is nothing left to sanitize,
+// and a lossy mapping from id to filename was the bug.

@@ -78,18 +78,39 @@ type InstanceClaim struct {
 	Task string
 }
 
-// InstanceURN is the canonical identifier of an instance.
-func InstanceURN(uuid string) string {
-	return URN(KindInstance, strings.TrimSpace(uuid), LocalOwner)
+// InstanceURN is the canonical identifier of an instance: an AGENT principal
+// whose name is the instance UUID.
+//
+// It reuses KindAgent rather than introducing an "instance" kind. An instance
+// IS an agent — it is what an agent configuration looks like while somebody is
+// talking to it — and the UUID in the name is already what distinguishes one
+// conversation from another. A new kind would have had to be taught to every
+// resolver and every stored principal string to say nothing more than this
+// does.
+//
+// It returns "" for a non-UUID, so a label or nickname can never be dressed up
+// as an instance identity: a label is reusable and must not address mail.
+func InstanceURN(id string) string {
+	canonical, err := fleet.ParseInstanceUUID(id)
+	if err != nil {
+		return ""
+	}
+	return URN(KindAgent, canonical, LocalOwner)
 }
 
 // SelfInstanceUUID reports the instance UUID this process is running as,
 // reading BASHY_PRINCIPAL first and BASHY_INSTANCE second.
+//
+// A BASHY_PRINCIPAL naming an agent counts as an instance only when its name
+// is a UUID. That is the whole distinction between the two: `dhnt:agent/esme`
+// names a configuration (and keeps its existing meaning for every legacy
+// agent, which this migration must not disturb), while
+// `dhnt:agent/<uuid>` names one conversation on it.
 func SelfInstanceUUID() (string, bool) {
 	if urn := strings.TrimSpace(os.Getenv("BASHY_PRINCIPAL")); urn != "" {
-		if kind, name, _, err := ParseURN(urn); err == nil && kind == KindInstance {
-			if name = strings.TrimSpace(name); name != "" {
-				return name, true
+		if kind, name, _, err := ParseURN(urn); err == nil && kind == KindAgent {
+			if id, err := fleet.ParseInstanceUUID(name); err == nil {
+				return id, true
 			}
 		}
 	}

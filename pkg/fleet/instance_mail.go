@@ -23,6 +23,7 @@ package fleet
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -72,6 +73,23 @@ func (i Instance) Accepts(to string, seq int64) bool {
 // MailboxStart is the bus sequence this instance's mailbox begins at.
 func (i Instance) MailboxStart() int64 { return i.MailFrom }
 
+// MailSource yields an instance's retained PERSONAL mail as opaque lines.
+//
+// It is the seam between this leaf package and the bus, which owns the records
+// and their format. Retire takes one rather than reading the bus itself (that
+// would put a consumer in fleet's import graph) and rather than defaulting to
+// "no mail" (that is the empty-placeholder archive of finding 5).
+type MailSource func(Instance) ([]string, error)
+
+// ErrMailSourceRequired reports a retirement with no way to collect the mail
+// it claims to archive.
+//
+// Fail closed, on purpose. The alternative — accept nil and write an empty
+// archive — produces a retirement that REPORTS archived mail and holds none,
+// and the operator has no way to tell that from an instance that genuinely
+// received nothing.
+var ErrMailSourceRequired = errors.New("fleet: retiring an instance requires a mail source; archiving nothing is not archiving")
+
 // ArchiveMail appends an instance's retained mail to its retirement archive
 // and returns the archive path.
 //
@@ -79,14 +97,33 @@ func (i Instance) MailboxStart() int64 { return i.MailFrom }
 // the contract, and a second archive call that replaced the first would delete
 // exactly the evidence the first one preserved. Records are opaque lines — the
 // caller owns their format.
+//
+// It takes the store lock, because it updates the record's archive pointer and
+// must not race Retire doing the same.
 func (s *InstanceStore) ArchiveMail(id string, records []string) (string, error) {
-	inst, err := s.Get(id)
+	var path string
+	err := s.withLock("archive instance mail", func() error {
+		inst, err := s.Get(id)
+		if err != nil {
+			return err
+		}
+		path, err = s.appendArchive(inst, records)
+		return err
+	})
 	if err != nil {
 		return "", err
 	}
-	path := inst.MailArchive
-	if strings.TrimSpace(path) == "" {
-		path = filepath.Join(s.dir, "archive", inst.UUID+".jsonl")
+	return path, nil
+}
+
+// appendArchive is ArchiveMail's body, without the lock. Retire already holds
+// it; calling the exported form from there would deadlock, and dropping the
+// lock between the retirement decision and the archive write would reopen the
+// window the lock exists to close.
+func (s *InstanceStore) appendArchive(inst Instance, records []string) (string, error) {
+	path := strings.TrimSpace(inst.MailArchive)
+	if path == "" {
+		path = s.archivePath(inst)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return "", err
@@ -126,6 +163,13 @@ func (s *InstanceStore) ArchiveMail(id string, records []string) (string, error)
 	return path, nil
 }
 
+// archivePath keys the archive on the UUID, which is what makes a retired
+// instance's mail still findable under the identity it was addressed to after
+// its label has been handed to somebody else.
+func (s *InstanceStore) archivePath(inst Instance) string {
+	return filepath.Join(s.dir, "archive", inst.UUID+".jsonl")
+}
+
 // ArchivedMail reads back an instance's archived mail.
 //
 // It is readable on purpose. An archive nothing can open is indistinguishable
@@ -137,9 +181,9 @@ func (s *InstanceStore) ArchivedMail(id string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	path := inst.MailArchive
-	if strings.TrimSpace(path) == "" {
-		path = filepath.Join(s.dir, "archive", inst.UUID+".jsonl")
+	path := strings.TrimSpace(inst.MailArchive)
+	if path == "" {
+		path = s.archivePath(inst)
 	}
 	f, err := os.Open(path)
 	if err != nil {
