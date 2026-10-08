@@ -4,12 +4,14 @@
 package gate
 
 import (
+	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	yokegit "github.com/qiangli/yoke/git"
 )
 
 // ExitFailed is the exit code when the gate does not pass. Distinct from 1 (an
@@ -130,9 +132,11 @@ to say what passing MEANS. That is how a green check mark comes to mean nothing.
 }
 
 func repoRoot(dir string) string {
-	out, err := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel").Output()
+	// One door (sprint 252 S252.6): --show-toplevel is natively routed;
+	// any failure still falls back to dir, as before.
+	out, err := yokegit.RunChecked(context.Background(), dir, []string{"rev-parse", "--show-toplevel"})
 	if err != nil {
 		return dir
 	}
-	return strings.TrimSpace(string(out))
+	return strings.TrimSpace(out)
 }

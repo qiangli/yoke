@@ -4,10 +4,10 @@
 package handoff
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -15,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	yokegit "github.com/qiangli/yoke/git"
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/principal"
 )
@@ -565,11 +566,12 @@ func projectRoots(root string) []string {
 }
 
 func repoRoot(dir string) (string, error) {
-	out, err := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel").Output()
+	// One door (sprint 252 S252.6): --show-toplevel is natively routed.
+	out, err := yokegit.RunChecked(context.Background(), dir, []string{"rev-parse", "--show-toplevel"})
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(out)), nil
+	return strings.TrimSpace(out), nil
 }
 
 func refName(r principal.Ref) string {

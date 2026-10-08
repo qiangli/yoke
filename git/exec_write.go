@@ -95,8 +95,20 @@ func nativePush(_ context.Context, dir string, args []string) (*ExecResult, erro
 			opts.RefSpecs = append(opts.RefSpecs, config.RefSpec(":"+dst))
 		}
 	} else if refSpec != "" {
-		// Push specific branch
-		spec := config.RefSpec(fmt.Sprintf("refs/heads/%s:refs/heads/%s", refSpec, refSpec))
+		// A bare name means the same-named branch; a full ref or
+		// refspec passes through (colon-less refs normalize to
+		// ref:ref, the `push <remote> <ref>` shorthand) — otherwise
+		// tag pushes land under a mangled refs/heads/refs/tags/…
+		// path (caught by sdlc idempotency through the S252.6 door).
+		var spec config.RefSpec
+		switch {
+		case strings.Contains(refSpec, ":"):
+			spec = config.RefSpec(refSpec)
+		case strings.Contains(refSpec, "refs/"):
+			spec = config.RefSpec(refSpec + ":" + refSpec)
+		default:
+			spec = config.RefSpec(fmt.Sprintf("refs/heads/%s:refs/heads/%s", refSpec, refSpec))
+		}
 		opts.RefSpecs = []config.RefSpec{spec}
 	} else {
 		// Push current branch

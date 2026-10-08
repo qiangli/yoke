@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	yokegit "github.com/qiangli/yoke/git"
 	"github.com/qiangli/yoke/pkg/chat"
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/gate"
@@ -253,16 +253,18 @@ func existingWork(diffRef, file string) (string, error) {
 	if diffRef != "" {
 		args = append(args, diffRef)
 	}
-	out, err := exec.Command("git", args...).Output()
-	if err == nil && strings.TrimSpace(string(out)) != "" {
-		return string(out), nil
+	// One door (sprint 252 S252.6): revision diffs and show stay on the
+	// host binary through the door (unrouted rev forms, verbatim argv).
+	out, err := yokegit.RunChecked(context.Background(), "", args)
+	if err == nil && strings.TrimSpace(out) != "" {
+		return out, nil
 	}
 	// A clean tree with no ref given: attack the last commit. That is the change a human
 	// means when they say "break what I just did".
 	if diffRef == "" {
-		out, err = exec.Command("git", "show", "--format=%s%n", "HEAD").Output()
-		if err == nil && strings.TrimSpace(string(out)) != "" {
-			return string(out), nil
+		out, err = yokegit.RunChecked(context.Background(), "", []string{"show", "--format=%s%n", "HEAD"})
+		if err == nil && strings.TrimSpace(out) != "" {
+			return out, nil
 		}
 	}
 	return "", ErrNoWork

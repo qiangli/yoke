@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 
+	yokegit "github.com/qiangli/yoke/git"
 	"github.com/spf13/cobra"
 )
 
@@ -114,13 +115,13 @@ func DeployOnce(ctx context.Context, opt DeployOnceOptions) (DeployOnceResult, e
 }
 
 func remoteTagExists(ctx context.Context, cwd, remote, tag string) (bool, error) {
-	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--tags", remote, "refs/tags/"+tag)
-	cmd.Dir = cwd
-	out, err := cmd.CombinedOutput()
+	// One door (S252.6): ls-remote is unrouted (network op), so this
+	// stays on the host binary through the door (verbatim argv).
+	out, err := yokegit.RunChecked(ctx, cwd, []string{"ls-remote", "--tags", remote, "refs/tags/" + tag})
 	if err != nil {
-		return false, fmt.Errorf("git ls-remote %s %s: %w\n%s", remote, tag, err, strings.TrimSpace(string(out)))
+		return false, fmt.Errorf("git ls-remote %s %s: %w", remote, tag, err)
 	}
-	return strings.TrimSpace(string(out)) != "", nil
+	return strings.TrimSpace(out) != "", nil
 }
 
 func newDeployOnceCmd() *cobra.Command {

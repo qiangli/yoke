@@ -4,11 +4,13 @@
 package handoff
 
 import (
+	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+
+	yokegit "github.com/qiangli/yoke/git"
 )
 
 // maxUntrackedBytes caps a single carried file. A handoff record is meant to
@@ -185,28 +187,39 @@ func Apply(ws WorkingState, target string) error {
 // optimisation, and PLAIN apply is the guarantee. Try the optimisation, keep the
 // guarantee.
 func applyPatch(target, diff string) error {
+	// One door (sprint 252 S252.6): the patch travels through a temp
+	// file instead of stdin (Exec carries no stdin channel), so the
+	// native tier and the host fallback see identical bytes. Attempt
+	// order is unchanged: 3-way first, plain second, whitespace-last.
+	f, err := os.CreateTemp("", "handoff-apply-*.patch")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	if _, err := f.WriteString(diff); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	f.Close()
+	defer os.Remove(tmp)
+	ctx := context.Background()
 	try := func(args ...string) error {
-		cmd := exec.Command("git", append(gitArgs(target, "apply"), args...)...)
-		cmd.Stdin = strings.NewReader(diff)
-		var stderr strings.Builder
-		cmd.Stderr = &stderr
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
-		}
-		return nil
+		_, err := yokegit.RunChecked(ctx, target, args)
+		return err
 	}
 
 	// Best effort: 3-way can merge around drift when the objects are reachable.
-	if err := try("--3way", "-"); err == nil {
+	if err := try(append(configFlags(), "apply", "--3way", tmp)...); err == nil {
 		return nil
 	}
 	// The portable path: a plain context patch needs nothing but the working tree.
-	if err := try("-"); err == nil {
+	if err := try("apply", tmp); err == nil {
 		return nil
 	}
 	// Last resort before giving up: tolerate whitespace noise, which is the most
 	// common cause of a patch failing on an otherwise identical tree.
-	if err := try("--whitespace=nowarn", "-"); err == nil {
+	if err := try(append(configFlags(), "apply", "--whitespace=nowarn", tmp)...); err == nil {
 		return nil
 	}
 	return fmt.Errorf("the captured diff did not apply to %s.\n"+
@@ -226,11 +239,11 @@ func gitOut(repo string, args ...string) (string, error) {
 // gitOutRaw preserves output byte-for-byte. Use it for anything whose trailing
 // newline is semantically load-bearing — a patch, above all.
 func gitOutRaw(repo string, args ...string) (string, error) {
-	out, err := exec.Command("git", gitArgs(repo, args...)...).Output()
-	if err != nil {
-		return "", err
-	}
-	return string(out), nil
+	// One door (sprint 252 S252.6): the -c pairs ride along for host
+	// determinism (the native tier is LF-stable without them and would
+	// reject -c); the door serves natively what it routes and replays
+	// the rest against the host binary with verbatim argv.
+	return yokegit.RunChecked(context.Background(), repo, append(configFlags(), args...))
 }
 
 // gitArgs builds the argv for a handoff git call, pinning the line-ending
@@ -241,9 +254,9 @@ func gitOutRaw(repo string, args ...string) (string, error) {
 // corrupting the reconstruction the whole feature exists to guarantee. Forcing
 // autocrlf=false + eol=lf on handoff's own invocations makes capture/apply
 // deterministic on every platform, independent of the host's git config.
-func gitArgs(repo string, args ...string) []string {
-	base := []string{"-C", repo, "-c", "core.autocrlf=false", "-c", "core.eol=lf"}
-	return append(base, args...)
+// configFlags pins patch/diff byte determinism for host invocations.
+func configFlags() []string {
+	return []string{"-c", "core.autocrlf=false", "-c", "core.eol=lf"}
 }
 
 func short(sha string) string {

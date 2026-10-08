@@ -1156,6 +1156,27 @@ func checkoutSide(repo *gogit.Repository, wt *gogit.Worktree, root string, their
 }
 
 func nativeRemote(_ context.Context, dir string, args []string) (*ExecResult, error) {
+	// Bare `remote` lists names; `remote -v` lists name + URL (both via
+	// the typed Remotes helper — weave's template bootstrap uses these).
+	if len(args) == 0 || (len(args) == 1 && args[0] == "-v") {
+		_, entries, err := Remotes(dir)
+		if err != nil {
+			return nil, ErrUnsupported
+		}
+		var b strings.Builder
+		for _, e := range entries {
+			if len(args) == 1 {
+				url := ""
+				if len(e.URLs) > 0 {
+					url = e.URLs[0]
+				}
+				fmt.Fprintf(&b, "%s\t%s (fetch)\n%s\t%s (push)\n", e.Name, url, e.Name, url)
+				continue
+			}
+			b.WriteString(e.Name + "\n")
+		}
+		return &ExecResult{Stdout: b.String()}, nil
+	}
 	if len(args) < 2 {
 		return nil, ErrUnsupported
 	}
@@ -1167,6 +1188,15 @@ func nativeRemote(_ context.Context, dir string, args []string) (*ExecResult, er
 	remoteName := args[1]
 
 	switch args[0] {
+	case "add":
+		// `remote add <name> <url>`: exactly one URL, like host git.
+		if len(args) != 3 {
+			return nil, ErrUnsupported
+		}
+		if _, err := repo.CreateRemote(&config.RemoteConfig{Name: remoteName, URLs: []string{args[2]}}); err != nil {
+			return &ExecResult{Stderr: fmt.Sprintf("fatal: remote %s already exists\n", remoteName), ExitCode: 128}, nil
+		}
+		return &ExecResult{Stdout: ""}, nil
 	case "get-url":
 		remote, err := repo.Remote(remoteName)
 		if err != nil {

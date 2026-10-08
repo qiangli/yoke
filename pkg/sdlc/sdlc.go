@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	yokegit "github.com/qiangli/yoke/git"
 	"github.com/qiangli/yoke/pkg/chat"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -2978,10 +2979,11 @@ func PushSourceToUpstream(ctx context.Context, opt PushSourceOptions) (PushSourc
 		return res, nil
 	}
 	pushArgs := []string{"push", "--force-with-lease", authURL, opt.Branch + ":refs/heads/" + opt.Head}
-	cmd := exec.CommandContext(ctx, "git", pushArgs...)
-	cmd.Dir = cwd
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return res, fmt.Errorf("git push to source: %w\n%s", err, redactToken(string(out), token))
+	// One door (S252.6): auth-URL pushes need the network + credential
+	// handling only the host binary has; the door tries native first.
+	out, err := yokegit.RunChecked(ctx, cwd, pushArgs)
+	if err != nil {
+		return res, fmt.Errorf("git push to source: %w\n%s", err, redactToken(out, token))
 	}
 	res.Status = "pushed"
 	if opt.NoPR || !isGitHubURL(upstream) {
@@ -3084,12 +3086,12 @@ func PublishGitHubPages(ctx context.Context, opt PublishOptions) (PublishResult,
 		res.Status = "dry-run"
 		return res, nil
 	}
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = cwd
-	out, err := cmd.CombinedOutput()
-	res.Output = string(out)
+	// One door (S252.6): remote-name pushes run natively, anything the
+	// tier cannot serve falls back to the host binary through the door.
+	out, err := yokegit.RunChecked(ctx, cwd, args)
+	res.Output = out
 	if err != nil {
-		return res, fmt.Errorf("git %s: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		return res, fmt.Errorf("git %s: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(out))
 	}
 	res.Status = "published"
 	res.PublishedAt = time.Now().UTC()
@@ -3434,13 +3436,11 @@ func setGitRemote(ctx context.Context, dir, name, url string) error {
 }
 
 func runGitErr(ctx context.Context, dir string, args ...string) error {
-	cmd := exec.CommandContext(ctx, "git", args...)
-	if dir != "" {
-		cmd.Dir = dir
-	}
-	out, err := cmd.CombinedOutput()
+	// One door (sprint 252 S252.6): every sdlc git call flows through
+	// the native tier first, host binary only on ErrUnsupported.
+	out, err := yokegit.RunChecked(ctx, dir, args)
 	if err != nil {
-		return fmt.Errorf("git %s: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("git %s: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(out))
 	}
 	return nil
 }
@@ -3481,13 +3481,13 @@ func gitSummary(dir string) map[string]any {
 }
 
 func runGit(dir string, args ...string) string {
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
+	// One door (sprint 252 S252.6): native tier first, host binary on
+	// ErrUnsupported; any failure still reads as "" to callers.
+	out, err := yokegit.RunChecked(context.Background(), dir, args)
 	if err != nil {
 		return ""
 	}
-	return string(out)
+	return out
 }
 
 func listIssueFiles(dir string) []string {

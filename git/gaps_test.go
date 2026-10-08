@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1260,6 +1261,70 @@ func TestNativeApply_Files(t *testing.T) {
 	}
 }
 
+// TestNativeRemote_ListAdd pins bare `remote`, `remote -v` and
+// `remote add`: the template-bootstrap verbs weave calls per start.
+func TestNativeRemote_ListAdd(t *testing.T) {
+	ctx := context.Background()
+	dir := makeTwoCommitRepo(t)
+
+	if _, err := Exec(ctx, dir, []string{"remote", "add", "origin", "https://example.com/r.git"}); err != nil {
+		t.Fatalf("remote add: %v", err)
+	}
+	res, err := Exec(ctx, dir, []string{"remote"})
+	if err != nil {
+		t.Fatalf("remote: %v", err)
+	}
+	if strings.TrimSpace(res.Stdout) != "origin" {
+		t.Errorf("remote = %q, want origin", res.Stdout)
+	}
+	res, err = Exec(ctx, dir, []string{"remote", "-v"})
+	if err != nil {
+		t.Fatalf("remote -v: %v", err)
+	}
+	if !strings.Contains(res.Stdout, "origin\thttps://example.com/r.git (fetch)") {
+		t.Errorf("remote -v = %q", res.Stdout)
+	}
+	res, err = Exec(ctx, dir, []string{"remote", "add", "origin", "https://example.com/other.git"})
+	if err != nil {
+		t.Fatalf("duplicate add: %v", err)
+	}
+	if res.ExitCode != 128 {
+		t.Errorf("duplicate add = %+v, want exit 128", res)
+	}
+}
+
+// TestRunExternal_OneDoor pins the S252.6 contract: routed verbs answer
+// natively (byte-identical to Exec), unrouted verbs replay against the
+// host binary with its exit code preserved. Skipped where no host git
+// exists — the native half is covered by every other test here.
+func TestRunExternal_OneDoor(t *testing.T) {
+	if _, err := osexec.LookPath("git"); err != nil {
+		t.Skip("no host git on PATH")
+	}
+	ctx := context.Background()
+	dir := makeTwoCommitRepo(t)
+
+	want, err := Exec(ctx, dir, []string{"status"})
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	got, err := RunExternal(ctx, dir, []string{"status"})
+	if err != nil {
+		t.Fatalf("RunExternal: %v", err)
+	}
+	if got.Stdout != want.Stdout {
+		t.Errorf("native mismatch: Exec %q vs RunExternal %q", want.Stdout, got.Stdout)
+	}
+
+	res, err := RunExternal(ctx, dir, []string{"--version"})
+	if err != nil {
+		t.Fatalf("host --version: %v", err)
+	}
+	if res.ExitCode != 0 || !strings.HasPrefix(strings.TrimSpace(res.Stdout), "git version ") {
+		t.Errorf("host --version = %+v", res)
+	}
+}
+
 // TestNativePush_Delete pins `push --delete` and the `:<branch>` refspec:
 // the branch leaves the remote, output mirrors host git's " - [deleted]"
 // stderr shape, and a ref-less --delete fails loud like host git (128).
@@ -1327,5 +1392,44 @@ func TestNativePush_Delete(t *testing.T) {
 	}
 	if res.ExitCode != 128 || !strings.Contains(res.Stderr, "--delete doesn't make sense") {
 		t.Errorf("ref-less delete = %+v, want exit 128 + host fatal", res)
+	}
+}
+
+// TestNativePush_TagRefspec pins full-refspec passthrough: `push origin
+// refs/tags/<t>` must land the tag, not a mangled refs/heads path.
+// (Caught live by sdlc's deploy idempotency via the S252.6 door.)
+func TestNativePush_TagRefspec(t *testing.T) {
+	ctx := context.Background()
+	remoteDir := t.TempDir()
+	if _, err := gogit.PlainInit(remoteDir, true); err != nil {
+		t.Fatalf("init bare: %v", err)
+	}
+	localDir := setupTestRepo(t)
+	repo, err := gogit.PlainOpen(localDir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := repo.CreateRemote(&config.RemoteConfig{Name: "origin", URLs: []string{remoteDir}}); err != nil {
+		t.Fatalf("create remote: %v", err)
+	}
+	head, err := repo.Head()
+	if err != nil {
+		t.Fatalf("head: %v", err)
+	}
+	if _, err := repo.CreateTag("v9.9.9", head.Hash(), nil); err != nil {
+		t.Fatalf("tag: %v", err)
+	}
+	if _, err := nativePush(ctx, localDir, []string{"-f", "origin", "refs/tags/v9.9.9"}); err != nil {
+		t.Fatalf("push tag refspec: %v", err)
+	}
+	remote, err := gogit.PlainOpen(remoteDir)
+	if err != nil {
+		t.Fatalf("open remote: %v", err)
+	}
+	if _, err := remote.Reference(plumbing.NewTagReferenceName("v9.9.9"), false); err != nil {
+		t.Errorf("tag not on remote after push: %v", err)
+	}
+	if _, err := remote.Reference(plumbing.NewBranchReferenceName("refs/tags/v9.9.9"), false); err == nil {
+		t.Errorf("mangled refs/heads/refs/tags ref landed on remote")
 	}
 }

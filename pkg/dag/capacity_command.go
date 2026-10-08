@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
+	yokegit "github.com/qiangli/yoke/git"
 	"github.com/spf13/cobra"
 )
 
@@ -154,15 +154,18 @@ func capacityCheckoutRevision(ctx context.Context, dir string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	run := func(args ...string) (string, error) {
-		cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
-		var out limitedCapacityBuffer
-		out.limit = 4096
-		cmd.Stdout = &out
-		cmd.Stderr = io.Discard
-		if e := cmd.Run(); e != nil {
+		// One door (sprint 252 S252.6): verification reads flow through
+		// the door (native where routed, host otherwise). The 4096-byte
+		// cap and the opaque error shape are preserved.
+		res, err := yokegit.RunExternal(ctx, dir, args)
+		if err != nil || res.ExitCode != 0 {
 			return "", fmt.Errorf("receiver checkout verification failed")
 		}
-		return strings.TrimSpace(out.String()), nil
+		out := res.Stdout
+		if len(out) > 4096 {
+			out = out[:4096]
+		}
+		return strings.TrimSpace(out), nil
 	}
 	revision, e := run("rev-parse", "HEAD")
 	if e != nil {

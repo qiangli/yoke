@@ -4,14 +4,16 @@
 package judge
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+
+	yokegit "github.com/qiangli/yoke/git"
 )
 
 // ExitBlocked is returned by `judge --gate` when the verdict is not "approve".
@@ -165,11 +167,13 @@ func gather(diff, file string, run int64, stage string) (subject, content, st st
 }
 
 func git(args ...string) (string, error) {
-	out, err := exec.Command("git", args...).Output()
+	// One door (sprint 252 S252.6): revision reads (unrouted rev forms)
+	// stay on the host binary through the door (verbatim argv).
+	out, err := yokegit.RunChecked(context.Background(), "", args)
 	if err != nil {
 		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 	}
-	return string(out), nil
+	return out, nil
 }
 
 func render(cmd *cobra.Command, r Report) {

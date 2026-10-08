@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/qiangli/yoke/external/loom"
+	yokegit "github.com/qiangli/yoke/git"
 	"github.com/qiangli/yoke/pkg/ladder"
 	"github.com/qiangli/yoke/pkg/ladder/blame"
 	"github.com/spf13/cobra"
@@ -357,10 +358,13 @@ func runSprintHeat(cmd *cobra.Command, sprint int64, story string, agents, shado
 	if err := os.Remove(source); err != nil {
 		return err
 	}
-	if output, err := exec.CommandContext(cmd.Context(), "git", "clone", "--local", "--no-hardlinks", "--no-checkout", root, source).CombinedOutput(); err != nil {
+	// One door (sprint 252 S252.6): --no-checkout and --detach are
+	// unrouted, so these stay on the host binary through the door
+	// (verbatim argv, combined output preserved in the error).
+	if output, err := yokegit.RunChecked(cmd.Context(), "", []string{"clone", "--local", "--no-hardlinks", "--no-checkout", root, source}); err != nil {
 		return fmt.Errorf("prepare heat source: %w: %s", err, output)
 	}
-	if output, err := exec.CommandContext(cmd.Context(), "git", "-C", source, "checkout", "--detach", base).CombinedOutput(); err != nil {
+	if output, err := yokegit.RunChecked(cmd.Context(), source, []string{"checkout", "--detach", base}); err != nil {
 		return fmt.Errorf("checkout arena base: %w: %s", err, output)
 	}
 	template, err := buildBoothTemplate(cmd.Context(), int(sprint), item.ID, source, nil)

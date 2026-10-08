@@ -31,6 +31,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/qiangli/coreutils/pkg/weavecli"
+	yokegit "github.com/qiangli/yoke/git"
 	"github.com/qiangli/yoke/pkg/agentpty"
 	"github.com/qiangli/yoke/pkg/chat"
 	"github.com/qiangli/yoke/pkg/fleet"
@@ -3561,12 +3562,17 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	// resolves through the clone's shared refs and can silently select a newer
 	// main than a detached conductor checkout. A run's base is a commit, not a
 	// moving branch name.
-	baseOut, baseErr := exec.CommandContext(admission.ctx, "git", "-C", root, "rev-parse", "HEAD").Output()
+	// One door (sprint 252 S252.6): source-HEAD resolution through the
+	// native tier's typed RevParse.
+	baseSHA := ""
+	revRes, baseErr := yokegit.RevParse(yokegit.RevParseOptions{RepoPath: root})
+	if baseErr == nil {
+		baseSHA = revRes.Hash
+	}
 	if baseErr != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 			weavecli.ExitPrecondFail, fmt.Errorf("resolve source HEAD: %w", baseErr)))
 	}
-	baseSHA := strings.TrimSpace(string(baseOut))
 	boothFork, boothCred, boothUser := "", "", ""
 	boothSprint := it.ArenaSprint
 	if opts.arena != "" {
@@ -3769,9 +3775,11 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			if opts.heatTemplate.Dir != "" {
 				_, _, cloneErr = copyBoothTemplate(opts.heatTemplate, workspace)
 				if cloneErr == nil {
-					if remotes, e := exec.CommandContext(admission.ctx, "git", "-C", workspace, "remote").Output(); e == nil {
-						for _, name := range strings.Fields(string(remotes)) {
-							if e := exec.CommandContext(admission.ctx, "git", "-C", workspace, "remote", "remove", name).Run(); e != nil {
+					// One door (S252.6): template-remote bootstrap runs
+					// natively (bare `remote`, `remove`, `add` routed).
+					if remotes, e := yokegit.RunChecked(admission.ctx, workspace, []string{"remote"}); e == nil {
+						for _, name := range strings.Fields(remotes) {
+							if _, e := yokegit.RunChecked(admission.ctx, workspace, []string{"remote", "remove", name}); e != nil {
 								cloneErr = e
 								break
 							}
@@ -3781,13 +3789,14 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 					}
 				}
 				if cloneErr == nil {
-					cloneErr = exec.CommandContext(admission.ctx, "git", "-C", workspace, "remote", "add", "origin", boothFork).Run()
+					_, cloneErr = yokegit.RunChecked(admission.ctx, workspace, []string{"remote", "add", "origin", boothFork})
 				}
 			} else {
-				gw := exec.CommandContext(admission.ctx, "git", cloneArgs...)
-				gw.Stdout = cmd.OutOrStdout()
-				gw.Stderr = cmd.ErrOrStderr()
-				cloneErr = gw.Run()
+				// One door (S252.6): --no-checkout and network /
+				// credential clones stay on the host binary through the
+				// door (verbatim argv); output forwards on completion.
+				cloneRes, cloneRunErr := yokegit.RunExternal(admission.ctx, "", cloneArgs)
+				cloneErr = yokegit.ForwardResult(cmd.OutOrStdout(), cmd.ErrOrStderr(), cloneArgs, cloneRes, cloneRunErr)
 			}
 			if cloneErr != nil {
 				weaveMarkLaunchFailed(dir, it.ID, fmt.Errorf("clone workspace: %w", cloneErr))
@@ -3795,10 +3804,10 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 					weavecli.ExitGenericFail, fmt.Errorf("clone workspace: %w", cloneErr)))
 			}
 			// Check out the per-issue agent branch in the clone.
-			ck := exec.CommandContext(admission.ctx, "git", "-C", workspace, "checkout", "-b", branch, baseSHA)
-			ck.Stdout = cmd.OutOrStdout()
-			ck.Stderr = cmd.ErrOrStderr()
-			if err := ck.Run(); err != nil {
+			// One door (S252.6): `checkout -b` is natively routed.
+			ckArgs := []string{"checkout", "-b", branch, baseSHA}
+			ckRes, ckRunErr := yokegit.RunExternal(admission.ctx, workspace, ckArgs)
+			if err := yokegit.ForwardResult(cmd.OutOrStdout(), cmd.ErrOrStderr(), ckArgs, ckRes, ckRunErr); err != nil {
 				weaveMarkLaunchFailed(dir, it.ID, fmt.Errorf("checkout immutable base %s: %w", baseSHA, err))
 				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 					weavecli.ExitGenericFail, fmt.Errorf("git checkout -b %s: %w", branch, err)))
@@ -3810,9 +3819,12 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			// needs the remote — `weave pull` fetches FROM the workspace
 			// path into the user's repo, never the other way around.
 			if boothFork == "" {
-				_ = exec.CommandContext(admission.ctx, "git", "-C", workspace, "remote", "remove", "origin").Run()
+				_, _ = yokegit.RunChecked(admission.ctx, workspace, []string{"remote", "remove", "origin"})
 			} else {
-				if err := exec.CommandContext(admission.ctx, "git", "-C", workspace, "config", "credential.helper", "store --file="+boothCred).Run(); err != nil {
+				// One door (S252.6): config writes are unrouted
+				// (LOW), so the credential helper stays on the host
+				// binary through the door.
+				if _, err := yokegit.RunChecked(admission.ctx, workspace, []string{"config", "credential.helper", "store --file=" + boothCred}); err != nil {
 					return err
 				}
 			}
@@ -3899,7 +3911,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			{"user.name", fmt.Sprintf("agent-weave-issue-%d", it.ID)},
 			{"user.email", fmt.Sprintf("agent-weave-issue-%d@ycode.local", it.ID)},
 		} {
-			_ = exec.CommandContext(admission.ctx, "git", "-C", workspace, "config", kv[0], kv[1]).Run()
+			// One door (S252.6): config writes stay on the host
+			// binary through the door (unrouted LOW).
+			_, _ = yokegit.RunChecked(admission.ctx, workspace, []string{"config", kv[0], kv[1]})
 		}
 		// Lock around the state=working transition so concurrent
 		// `weave start --issue N` invocations targeting different
