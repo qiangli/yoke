@@ -170,8 +170,29 @@ type weaveItem struct {
 	// commit attribution stay legible and the conductor can address a
 	// specific "who". Assigned at claim time (weaveAgentName); handed to
 	// the subagent as $WEAVE_AGENT so it signs its own comments.
-	Owner     string `json:"owner,omitempty"`
-	Workspace string `json:"workspace,omitempty"`
+	Owner string `json:"owner,omitempty"`
+	// Instance is the UUID of the CONVERSATION this run drives, and
+	// InstanceFamily is the family configuration FROZEN at claim time.
+	//
+	// Owner above is the per-issue SEAT (`007-a`) and Tool is the CLI; neither
+	// identifies a context. Two runs of one agent are two conversations with
+	// two mailboxes, and a seat name is reused by the next run of the same
+	// issue — so neither can key mail or ownership. See weave_instance.go.
+	//
+	// InstanceFamily is recorded rather than re-derived because the catalog row
+	// it came from can be edited in place: resolving the family again at read
+	// time would attribute this run to a configuration it never executed.
+	Instance       string `json:"instance,omitempty"`
+	InstanceFamily string `json:"instance_family,omitempty"`
+	// InstanceLabel is the display label the context holds ("Esme-2"). For
+	// RENDERING only — labels are released on retirement and reissued, so this
+	// must never be used to address anything.
+	InstanceLabel string `json:"instance_label,omitempty"`
+	// SessionClaim is the run's stable one-way session digest. The worker and
+	// every per-turn command it spawns inherit it, which is what makes them one
+	// owning session rather than a competing one per turn.
+	SessionClaim string `json:"session_claim,omitempty"`
+	Workspace    string `json:"workspace,omitempty"`
 	// legacyWorkspace reads the pre-rename queue.json key. The on-disk
 	// isolation dir + this field were called "sandbox" before the
 	// userland/workspace/sandbox/cluster taxonomy reserved "sandbox" for
@@ -3684,6 +3705,12 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 				// worker's seat.
 				freshIt.Owner = weaveAgentName(ownerBase, freshIt.ID)
 				freshIt.LaunchSpec = launchSpec
+				// Bind the run to its conversation. A resume continues the
+				// recorded UUID; a reassignment to a different agent is a
+				// different family and therefore a different context.
+				if _, err := weaveOpenRunInstance(freshIt, agentLaunch, branch); err != nil {
+					return err
+				}
 			}
 			if prevOwner == "" && freshIt.Owner != "" {
 				weaveAppendComment(freshIt, "conductor", "system",
@@ -3948,6 +3975,11 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 				// The OWNER is the per-issue seat (`007-a`), not the agent.
 				freshIt.Owner = weaveAgentName(ownerBase, freshIt.ID)
 				freshIt.LaunchSpec = launchSpec
+				// Bind the run to its conversation: a fresh UUID with an empty
+				// mailbox, or the recorded one on a resume.
+				if _, err := weaveOpenRunInstance(freshIt, agentLaunch, branch); err != nil {
+					return err
+				}
 			}
 			// Record assignment / formal reassignment in the task thread.
 			// A reassignment (prevOwner set and different) is how a task
@@ -6402,6 +6434,15 @@ func runWeaveReset(cmd *cobra.Command, yes bool, flags *weaveOutputFlags) error 
 				// Best-effort: drop the branch from the user's repo if
 				// `weave pull` fetched it earlier.
 				_ = exec.Command(gitBin(), "-C", root, "branch", "-D", it.Branch).Run()
+			}
+			// The run record is about to be DELETED, so its conversation can
+			// never be resumed — this is the one point where retiring it is
+			// correct. Mail is archived under its own UUID and the label is
+			// released for a later instance; a merely killed or failed run is
+			// deliberately NOT retired, because it still owns the context its
+			// next attempt will resume.
+			if _, err := weaveRetireRunInstance(it); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "weave reset: could not retire the context of run #%d (its mail is left intact): %v\n", it.ID, err)
 			}
 			teardowns = append(teardowns, tear{Issue: it.ID, Branch: it.Branch, Workspace: it.Workspace})
 		}

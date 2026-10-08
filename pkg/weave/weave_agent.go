@@ -292,8 +292,12 @@ func weaveChildEnv(environ []string, workspace, branch, base, queueDir string, i
 		fmt.Sprintf("WEAVE_AGENT=%s", it.Owner),
 		fmt.Sprintf("WEAVE_OWNER=%s", it.Owner),
 	)
-	// WEAVE_AGENT is the seat; BASHY_PRINCIPAL is the agent that fills it.
+	// WEAVE_AGENT is the seat; BASHY_PRINCIPAL is the agent that fills it;
+	// BASHY_INSTANCE is the CONVERSATION, which is none of the three. Stamped
+	// from the run record so the worker, the sprint lease it may take, and a
+	// later ratings read all see one identity.
 	env = weaveAgentEnv(env, l)
+	env = weaveInstanceEnv(env, it)
 	// Per-run agent store isolation. ycode locks its data dir, so two workers
 	// sharing one store is a hidden concurrency limit of 1 — the second dies on
 	// launch. Derive a per-issue store under the queue dir (NOT the workspace),
