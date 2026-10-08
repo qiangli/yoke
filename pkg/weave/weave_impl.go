@@ -6707,6 +6707,14 @@ func weaveValidPoints(n int) bool {
 	return ladder.ValidPoints(ladder.Points(n))
 }
 
+// weaveRuntimeCapFactor scales the ladder's point estimate into a launch
+// ceiling. The ladder walls (1=5m ... 8=30m) are effort estimates; a real agent
+// run also hydrates a workspace, builds, runs focused tests and reports, and
+// the ceiling went unenforced for headless runs until the cap fix landed. At
+// 1x every 2-point worker on 2026-10-08 was killed at 8 minutes mid-work, so
+// the ceiling is 4x the estimate (2=32m, 3=48m, 5=80m, 8=2h).
+const weaveRuntimeCapFactor = 4
+
 // weavePointRuntimeCap makes the estimate an execution ceiling. A caller must
 // reject an invalid point value rather than treating it as unbounded.
 func weavePointRuntimeCap(points int) (time.Duration, bool) {
@@ -6714,7 +6722,7 @@ func weavePointRuntimeCap(points int) (time.Duration, bool) {
 	if !ok {
 		return 0, false
 	}
-	return cap.Wall, true
+	return cap.Wall * weaveRuntimeCapFactor, true
 }
 
 func weaveBoundRuntime(points int, requested time.Duration) (time.Duration, error) {

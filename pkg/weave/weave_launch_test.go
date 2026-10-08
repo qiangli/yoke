@@ -154,11 +154,11 @@ func TestStartProceedsWhenSpaceIsAvailable(t *testing.T) {
 
 func TestPointRuntimeBudgetScaleAndExplicitCap(t *testing.T) {
 	wants := map[int]time.Duration{
-		1: 5 * time.Minute,
-		2: 8 * time.Minute,
-		3: 12 * time.Minute,
-		5: 20 * time.Minute,
-		8: 30 * time.Minute,
+		1: 20 * time.Minute,
+		2: 32 * time.Minute,
+		3: 48 * time.Minute,
+		5: 80 * time.Minute,
+		8: 120 * time.Minute,
 	}
 	for points, want := range wants {
 		got, err := weaveBoundRuntime(points, 0)
@@ -207,7 +207,11 @@ func TestPointedStartAndResumePersistBoundedRuntime(t *testing.T) {
 			dir, _ := weaveQueueDir(root)
 			q, _ := loadWeaveQueue(dir)
 			it := findWeaveItem(q, 1)
-			if it.LaunchSpec == nil || it.LaunchSpec.MaxRuntime != 5*time.Minute {
+			want := 20 * time.Minute // derived 1-point launch ceiling
+			if explicit {
+				want = 5 * time.Minute
+			}
+			if it.LaunchSpec == nil || it.LaunchSpec.MaxRuntime != want {
 				t.Fatalf("launch spec = %+v", it.LaunchSpec)
 			}
 			if out, code := runWeave(t, "start", "--run", "1", "--resume", "--no-spawn", "--tool", "sh", "--max-runtime", "4m", "--json"); code != 0 {
@@ -228,8 +232,8 @@ func TestPointedStartRejectsRuntimeAboveCapBeforeProvisioning(t *testing.T) {
 	if _, code := runWeave(t, "add", "too long", "--points", "1", "--json"); code != 0 {
 		t.Fatal("weave add failed")
 	}
-	out, code := runWeave(t, "start", "--run", "1", "--no-spawn", "--tool", "sh", "--max-runtime", "6m")
-	if code == 0 || !strings.Contains(out, "exceeds the 1-point cap 5m0s") {
+	out, code := runWeave(t, "start", "--run", "1", "--no-spawn", "--tool", "sh", "--max-runtime", "21m")
+	if code == 0 || !strings.Contains(out, "exceeds the 1-point cap 20m0s") {
 		t.Fatalf("over-cap start exit=%d output=%q", code, out)
 	}
 	dir, _ := weaveQueueDir(root)
