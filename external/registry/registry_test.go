@@ -251,5 +251,3 @@ func TestRegistryVerificationFailsClosedOnMissingPin(t *testing.T) {
 		t.Fatal("expected Ensure to fail closed for unpinned tool, but succeeded")
 	}
 }
-
-
