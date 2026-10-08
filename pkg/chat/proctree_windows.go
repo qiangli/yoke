@@ -32,4 +32,8 @@ func killProcessTree(cmd *exec.Cmd) error {
 	return cmd.Process.Kill()
 }
 
-func budgetOwnedGroupGone(cmd *exec.Cmd) bool { return cmd == nil || cmd.Process == nil }
+// Without a job object only the direct child can be verified: once Wait has
+// returned it is gone. Descendants are untracked here, as in killProcessTree.
+func budgetOwnedGroupGone(cmd *exec.Cmd) bool {
+	return cmd == nil || cmd.Process == nil || cmd.ProcessState != nil
+}
