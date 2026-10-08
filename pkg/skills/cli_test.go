@@ -185,3 +185,20 @@ func TestCLIShowByteCompat(t *testing.T) {
 		t.Fatal("show missing did not error")
 	}
 }
+
+func TestProbeJSONCarriesSchemaVersion(t *testing.T) {
+	out, _, err := cliFixture(t).run("probe", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["schema_version"] != "bashy-skill-probe-v1" {
+		t.Fatalf("probe envelope lacks schema version: %v", got["schema_version"])
+	}
+	if got["probes"] == nil || got["context_key"] == nil {
+		t.Fatal("lost existing probe fields")
+	}
+}

@@ -1285,6 +1285,7 @@ func init() {
 	// registered-command ring (`commands add|set|rm|…`): rm deletes a local
 	// entry outright (destructive, like the other registry nouns), add/set
 	// write it, and `verify` on a download: record provisions over the net.
+	addVerb("install-agent", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapSpawnsProcesses, CapDestructive}, Effects: []string{EffRead, EffWrite, EffDestroy, EffExec}, Reversibility: RevIrreversible})
 	addVerb("commands", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapDestructive, CapJSON}})
 	// inspect: the one diagnostics verb whose SUBJECT IS BASHY ITSELF. `doctor`
 	// answers about the host, `why` about the process tree, `otel` about a

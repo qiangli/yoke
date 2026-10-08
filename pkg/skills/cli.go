@@ -793,9 +793,10 @@ func runProbe(cmd *cobra.Command, cfg *config, refresh, asJSON bool) error {
 	key := ps.EnvironmentCoordinate()
 	if asJSON {
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(struct {
-			Probes     map[string]string `json:"probes"`
-			ContextKey string            `json:"context_key"`
-		}{vals, key})
+			SchemaVersion string            `json:"schema_version"`
+			Probes        map[string]string `json:"probes"`
+			ContextKey    string            `json:"context_key"`
+		}{"bashy-skill-probe-v1", vals, key})
 	}
 	names := make([]string, 0, len(vals))
 	for k := range vals {
