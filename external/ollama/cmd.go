@@ -75,6 +75,7 @@ func newOllamaServeCmd(opts CmdOptions) *cobra.Command {
 			c.Stdout = os.Stdout
 			c.Stderr = os.Stderr
 			c.Stdin = os.Stdin
+			c.Env = managedServeEnv(os.Environ(), managedPort())
 			return c.Run()
 		},
 	}

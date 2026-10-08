@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -76,17 +77,54 @@ func ManagedURL() string {
 
 // applyManagedEnv points this process at the bashy-owned daemon WITHOUT touching
 // a host ollama: it sets OLLAMA_HOST (bind + client target) and OLLAMA_MODELS in
-// our own process env only, and only when unset — an explicit override wins.
-// Crucially it NEVER lets the effective host fall through to the upstream 11434
-// default. Returns the resolved base URL.
+// our own process env only. A user host wins, except the model door's client URL:
+// a server must never try to bind that address. Crucially it NEVER lets the
+// effective host fall through to the upstream 11434 default. Returns the resolved
+// base URL.
 func applyManagedEnv(port int) string {
-	if strings.TrimSpace(os.Getenv("OLLAMA_HOST")) == "" {
-		os.Setenv("OLLAMA_HOST", fmt.Sprintf("%s:%d", managedBindAddr, port))
-	}
+	os.Setenv("OLLAMA_HOST", managedServeHost(os.Getenv("OLLAMA_HOST"), port))
 	if strings.TrimSpace(os.Getenv("OLLAMA_MODELS")) == "" {
 		os.Setenv("OLLAMA_MODELS", ManagedModelsDir())
 	}
 	return DefaultURL()
+}
+
+// managedServeHost returns a safe OLLAMA_HOST bind target for a server. The
+// door address is for clients only: it includes an authenticated /k/ path and
+// normally uses door.Port(). Never let a serve process inherit it as a bind
+// address.
+func managedServeHost(host string, port int) string {
+	host = strings.TrimSpace(host)
+	if host == "" || isDoorHost(host) {
+		return fmt.Sprintf("%s:%d", managedBindAddr, port)
+	}
+	return host
+}
+
+func isDoorHost(host string) bool {
+	parseHost := host
+	if !strings.Contains(parseHost, "://") {
+		parseHost = "http://" + parseHost
+	}
+	u, err := url.Parse(parseHost)
+	if err != nil {
+		return false
+	}
+	return u.Port() == strconv.Itoa(door.Port()) || strings.HasPrefix(u.Path, "/k/")
+}
+
+// managedServeEnv produces an explicit child environment for a system ollama
+// serve. It mirrors applyManagedEnv without mutating the parent environment.
+func managedServeEnv(env []string, port int) []string {
+	const prefix = "OLLAMA_HOST="
+	for i, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			out := append([]string(nil), env...)
+			out[i] = prefix + managedServeHost(strings.TrimPrefix(entry, prefix), port)
+			return out
+		}
+	}
+	return append(env, prefix+managedServeHost("", port))
 }
 
 // applyClientEnv points a client verb (list, run, pull, ps, ...) at the
