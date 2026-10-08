@@ -17,6 +17,10 @@ const (
 	InSync  State = "in-sync"
 	Stale   State = "stale"
 	Unknown State = "unknown" // cannot be compared: placeholder, local replace, missing tag or repo
+	// Cycle is a stale pin on a sibling that pins this module back: each
+	// side's pin commit moves the other's HEAD, so the edge can never be
+	// in sync at once. It is reported, but it does not fail.
+	Cycle State = "cycle"
 )
 
 // Drift is one pin of Module on Sibling.
@@ -60,9 +64,22 @@ func (ws *Workspace) Drift(m *Module, resolve ResolveFunc) []Drift {
 			}
 			return resolve(repo, "refs/tags/"+tag)
 		})
+		if d.State == Stale && ws.pins(r.Sibling, m) {
+			d.State = Cycle
+		}
 		out = append(out, d)
 	}
 	return out
+}
+
+// pins reports whether module a pins module b.
+func (ws *Workspace) pins(a, b *Module) bool {
+	for _, r := range ws.SiblingRequires(a) {
+		if r.Sibling == b {
+			return true
+		}
+	}
+	return false
 }
 
 func compare(r Require, head string, tagCommit func(string) (string, error)) (State, string) {
@@ -113,7 +130,7 @@ func StaleSiblings(dir string) []string {
 	}
 	var names []string
 	for _, d := range ws.Drift(m, nil) {
-		if d.State != InSync {
+		if d.State == Stale || d.State == Unknown {
 			names = append(names, filepath.ToSlash(d.Name))
 		}
 	}

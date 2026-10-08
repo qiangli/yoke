@@ -68,7 +68,7 @@ func (ws *Workspace) Sync(ctx context.Context, m *Module, only []string, resolve
 	var changes []Change
 	for _, d := range ws.Drift(m, resolve) {
 		r := reqs[d.Sibling]
-		if d.State == InSync || d.Head == "" || r.Local || (len(want) > 0 && !want[d.Sibling] && !want[d.Name]) {
+		if d.State == InSync || d.State == Cycle || d.Head == "" || r.Local || (len(want) > 0 && !want[d.Sibling] && !want[d.Name]) {
 			continue
 		}
 		args := []string{"get", d.Sibling + "@" + d.Head}

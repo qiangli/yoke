@@ -16,6 +16,9 @@ import (
 	"strings"
 
 	"golang.org/x/mod/modfile"
+	"golang.org/x/mod/module"
+
+	coregit "github.com/qiangli/yoke/git"
 )
 
 // Module is one workspace member: its module path, directory and parsed go.mod.
@@ -146,18 +149,69 @@ func (ws *Workspace) SiblingRequires(m *Module) []Require {
 			continue
 		}
 		req := Require{Path: r.Mod.Path, Version: r.Mod.Version, Sibling: sib}
+		replaced := false
 		for _, rp := range m.File.Replace {
 			if rp.Old.Path != r.Mod.Path || (rp.Old.Version != "" && rp.Old.Version != r.Mod.Version) {
 				continue
 			}
+			replaced = true
 			req.Via = rp.New.Path
 			req.Local = rp.New.Version == ""
 			req.Version = rp.New.Version
+		}
+		// A local replace inside the module's own repo wires that repo's
+		// nested modules together; it is not a pin on a sibling.
+		if req.Local && ws.inRepo(m.Dir, req.Via) {
+			continue
+		}
+		// A fork published under an upstream path, required without a
+		// replace, is a pin on upstream — the workspace's fork tree is not
+		// what that module builds standalone.
+		if !replaced && ws.IsFork(sib) {
+			continue
 		}
 		out = append(out, req)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out
+}
+
+// inRepo reports whether the local replace path rel, taken from the module
+// at dir, stays inside that module's repository.
+func (ws *Workspace) inRepo(dir, rel string) bool {
+	target := filepath.Clean(filepath.Join(dir, filepath.FromSlash(rel)))
+	r, err := filepath.Rel(ws.RepoDir(dir), target)
+	return err == nil && r != ".." && !strings.HasPrefix(r, ".."+string(filepath.Separator))
+}
+
+// IsFork reports whether the workspace module m is published under a module
+// path that is not its repository's own (a fork of an upstream module, like
+// mvdan.cc/sh/v3 in github.com/qiangli/sh). A repo without an origin remote
+// is not treated as a fork.
+func (ws *Workspace) IsFork(m *Module) bool {
+	repo := ws.RepoDir(m.Dir)
+	_, remotes, err := coregit.Remotes(repo)
+	if err != nil {
+		return false
+	}
+	for _, r := range remotes {
+		if r.Name != "origin" || len(r.URLs) == 0 {
+			continue
+		}
+		base, err := ModulePathFromRemote(r.URLs[0])
+		if err != nil {
+			return false
+		}
+		if sub, err := filepath.Rel(repo, m.Dir); err == nil && sub != "." {
+			base += "/" + filepath.ToSlash(sub)
+		}
+		p := m.Path
+		if prefix, _, ok := module.SplitPathVersion(p); ok {
+			p = prefix
+		}
+		return p != base
+	}
+	return false
 }
 
 // RepoDir is the git repository holding the module at dir: the nearest
