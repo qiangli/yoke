@@ -225,3 +225,24 @@ func TestForcedSalvageCommitMessageSaysItWasNotGated(t *testing.T) {
 		t.Fatalf("message should carry the run title, got:\n%s", msg)
 	}
 }
+
+// A forced-salvage commit in a repo with the fail-closed sprint commit-msg hook
+// must end with the registered story's trailers, or the hook refuses it.
+func TestForcedSalvageCommitMessageCarriesStoryTrailers(t *testing.T) {
+	ws := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(ws, "docs", "todo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	story := "---\nid: abc123def456\nkind: bug\ntitle: x\nseq: 1720\nsprint: 379\n---\n\nbody sprint: 1\n"
+	if err := os.WriteFile(filepath.Join(ws, "docs", "todo", "abc123def456-x.md"), []byte(story), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	msg := weaveForcedSalvageCommitMessage(&weaveItem{ID: 9, Title: "t", Register: "abc123def456", Workspace: ws})
+	want := "\n\nSprint: #379\nStory: #1720\nStory-ID: abc123def456"
+	if !strings.HasSuffix(msg, want) {
+		t.Fatalf("message must end with the story trailers %q, got:\n%s", want, msg)
+	}
+	if got := weaveForcedSalvageCommitMessage(&weaveItem{ID: 9, Title: "t", Register: "nope", Workspace: ws}); strings.Contains(got, "Sprint:") {
+		t.Fatalf("no story file must mean no trailers, got:\n%s", got)
+	}
+}

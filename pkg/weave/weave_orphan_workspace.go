@@ -146,10 +146,55 @@ func weaveForcedSalvageCommitMessage(it *weaveItem) string {
 	if title != "" {
 		msg += "\n\n" + title
 	}
-	return msg + "\n\nThis tree was committed by `--force` so it could be preserved as a\n" +
+	msg += "\n\nThis tree was committed by `--force` so it could be preserved as a\n" +
 		"salvage ref. It was NOT submitted, reviewed or gated: the run ended\n" +
 		"without committing it. Treat it as work in progress that needs a\n" +
 		"human decision, not as a finished change."
+	// A repo with the fail-closed sprint commit-msg hook reads the final
+	// paragraph as the trailer block; without the run's own Sprint/Story
+	// trailers the preservation commit is refused and --force cannot
+	// preserve anything. Reuse the trailers of the story the run registered.
+	if tr := weaveSalvageTrailers(it); tr != "" {
+		msg += "\n\n" + tr
+	}
+	return msg
+}
+
+// weaveSalvageTrailers returns "Sprint: #N\nStory: #S\nStory-ID: ID" for the
+// sprint story a run registered, read from the story file in the run's own
+// workspace (docs/todo/<id>-*.md). It returns "" when the run has no story or
+// the file cannot be read; the commit then carries no trailers, as before.
+func weaveSalvageTrailers(it *weaveItem) string {
+	if it == nil || strings.TrimSpace(it.Register) == "" || strings.TrimSpace(it.Workspace) == "" {
+		return ""
+	}
+	id := strings.TrimSpace(it.Register)
+	matches, _ := filepath.Glob(filepath.Join(it.Workspace, "docs", "todo", id+"*.md"))
+	if len(matches) == 0 {
+		return ""
+	}
+	data, err := os.ReadFile(matches[0])
+	if err != nil {
+		return ""
+	}
+	var seq, sprint, fullID string
+	for i, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if i > 0 && line == "---" {
+			break
+		}
+		if v, ok := strings.CutPrefix(line, "id:"); ok {
+			fullID = strings.TrimSpace(v)
+		} else if v, ok := strings.CutPrefix(line, "seq:"); ok {
+			seq = strings.TrimSpace(v)
+		} else if v, ok := strings.CutPrefix(line, "sprint:"); ok {
+			sprint = strings.TrimSpace(v)
+		}
+	}
+	if seq == "" || sprint == "" || fullID == "" {
+		return ""
+	}
+	return "Sprint: #" + sprint + "\nStory: #" + seq + "\nStory-ID: " + fullID
 }
 
 // weaveWorkspacePresent reports whether an item's workspace still exists on
