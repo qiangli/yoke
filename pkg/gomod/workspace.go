@@ -145,7 +145,9 @@ func (ws *Workspace) SiblingRequires(m *Module) []Require {
 	var out []Require
 	for _, r := range m.File.Require {
 		sib := ws.byPath[r.Mod.Path]
-		if sib == nil || sib == m {
+		// A pin on a module of the same repository is that repo's own
+		// wiring (it can never match HEAD after the commit that sets it).
+		if sib == nil || sib == m || ws.RepoDir(sib.Dir) == ws.RepoDir(m.Dir) {
 			continue
 		}
 		req := Require{Path: r.Mod.Path, Version: r.Mod.Version, Sibling: sib}

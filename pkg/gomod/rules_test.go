@@ -69,3 +69,17 @@ func TestDriftReportsCycleEdges(t *testing.T) {
 		}
 	}
 }
+
+// A pin on a nested module of the same repository is not a sibling pin.
+func TestSiblingRequiresSkipsSameRepo(t *testing.T) {
+	t.Setenv("GOWORK", "")
+	root := t.TempDir()
+	write(t, filepath.Join(root, "go.work"), "go 1.24\n\nuse (\n\t./y\n\t./y/external/otel\n)\n")
+	write(t, filepath.Join(root, "y/go.mod"), "module example.com/y\n\ngo 1.24\n")
+	write(t, filepath.Join(root, "y/external/otel/go.mod"), "module example.com/y/external/otel\n\ngo 1.24\n\nrequire example.com/y v0.0.0-20260101000000-aaaaaaaaaaaa\n")
+	write(t, filepath.Join(root, "y/.git/HEAD"), "ref: refs/heads/main\n")
+	ws, _ := Load(root)
+	if r := ws.SiblingRequires(ws.ByPath("example.com/y/external/otel")); len(r) != 0 {
+		t.Fatalf("same-repo pin reported: %+v", r)
+	}
+}

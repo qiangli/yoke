@@ -72,11 +72,19 @@ func (ws *Workspace) Drift(m *Module, resolve ResolveFunc) []Drift {
 	return out
 }
 
-// pins reports whether module a pins module b.
+// pins reports whether any module of a's repository pins a module of b's
+// repository (pinning is a repo-to-repo relation: a commit moves every module
+// in the repo).
 func (ws *Workspace) pins(a, b *Module) bool {
-	for _, r := range ws.SiblingRequires(a) {
-		if r.Sibling == b {
-			return true
+	ra, rb := ws.RepoDir(a.Dir), ws.RepoDir(b.Dir)
+	for _, m := range ws.Modules {
+		if ws.RepoDir(m.Dir) != ra {
+			continue
+		}
+		for _, r := range ws.SiblingRequires(m) {
+			if ws.RepoDir(r.Sibling.Dir) == rb {
+				return true
+			}
 		}
 	}
 	return false
