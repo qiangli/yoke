@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -43,12 +44,34 @@ func isolateAuthoredActor(t *testing.T) string {
 	return mb
 }
 
+// foreignLivePID is a pid that is LIVE and is not an ancestor of this process —
+// what a card held by somebody else's harness looks like.
+//
+// These fixtures used a high unused pid number for "foreign", which also made
+// the card DEAD once room judged a card by its recorded owner rather than by
+// whichever process wrote it last. A refusal would then have been proving only
+// that nobody held the seat, which is not what these tests are about. A child
+// of the test process is live and, being a descendant, is foreign to the
+// ancestry check.
+func foreignLivePID(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command("sh", "-c", "sleep 60")
+	if err := cmd.Start(); err != nil {
+		t.Skipf("cannot start a live foreign process: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	})
+	return cmd.Process.Pid
+}
+
 func TestResolveAuthoredActorUsesCanonicalDottedAgentClaim(t *testing.T) {
 	isolateAuthoredActor(t)
 	const raw = "dotted-session"
 	if err := room.Join(room.Card{
 		ID: room.AgentClaimID("agent.x"), Nick: "agent.x", Tool: "codex", Binding: "codex:test",
-		Mode: "interactive", PID: os.Getpid(), OwnerPID: 2147483000,
+		Mode: "interactive", PID: os.Getpid(), OwnerPID: foreignLivePID(t),
 		SessionClaim: HashSessionClaim(raw), Principal: "operator",
 	}); err != nil {
 		t.Fatal(err)
@@ -79,7 +102,7 @@ func TestResolveAuthoredActorAcceptsMatchingHashedSessionClaim(t *testing.T) {
 	const raw = "vendor-session-secret"
 	if err := room.Join(room.Card{
 		ID: "agent-x", Nick: "agent-x", Tool: "claude", Binding: "claude:test",
-		Mode: "inbox", PID: os.Getpid(), OwnerPID: 2147483000,
+		Mode: "inbox", PID: os.Getpid(), OwnerPID: foreignLivePID(t),
 		SessionClaim: HashSessionClaim(raw), Principal: "operator",
 	}); err != nil {
 		t.Fatal(err)
@@ -145,7 +168,8 @@ func TestForgedPrincipalCannotBypassForeignLiveClaim(t *testing.T) {
 	mb := isolateAuthoredActor(t)
 	if err := room.Join(room.Card{
 		ID: "agent-y", Nick: "agent-y", Tool: "claude", Binding: "claude:test",
-		Mode: "inbox", PID: os.Getpid(), OwnerPID: 2147483000, Principal: "operator",
+		Mode: "inbox", PID: os.Getpid(), OwnerPID: foreignLivePID(t),
+		SessionClaim: HashSessionClaim("other-session"), Principal: "operator",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +292,7 @@ func TestResolveAuthoredActorDeclaredIdentityTakesUnclaimedSeat(t *testing.T) {
 	if err := room.Join(room.Card{
 		ID: room.AgentClaimID("agent-x"), Nick: "agent-x", Tool: "claude", Binding: "claude:test",
 		Mode: "inbox", SessionClaim: HashSessionClaim("other-session"),
-		PID: os.Getpid(), OwnerPID: 2147483000, Principal: "operator",
+		PID: os.Getpid(), OwnerPID: foreignLivePID(t), Principal: "operator",
 	}); err != nil {
 		t.Fatal(err)
 	}

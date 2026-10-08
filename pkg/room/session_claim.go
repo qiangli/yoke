@@ -101,13 +101,24 @@ func ClaimSession(c Card) error {
 		// evidence it is us, and guessing in favour of the newcomer would hand
 		// an in-flight conversation to a second driver.
 		if prior.SessionClaim != c.SessionClaim {
-			return &ErrLive{ID: c.ID, PID: prior.PID}
+			// Name the HOLDER, not the writer. A refusal that reports the
+			// incumbent's dead per-turn child reads as a stale-card bug to
+			// whoever was refused, so the operator kills a card that is
+			// legitimately held instead of looking for the other session.
+			return &ErrLive{ID: c.ID, PID: holderPID(prior)}
 		}
 		if c.Joined == "" {
 			c.Joined = prior.Joined
 		}
 		if c.OwnerPID == 0 {
 			c.OwnerPID = prior.OwnerPID
+			// Normalize the writer pid onto the inherited owner. A child
+			// command that does not know the harness pid would otherwise leave
+			// a card whose PID is about to exit, and every pre-contract reader
+			// on the host judges a card by PID alone.
+			if c.OwnerPID != 0 {
+				c.PID = c.OwnerPID
+			}
 		}
 	}
 	if c.Joined == "" {
@@ -124,24 +135,11 @@ func ClaimSession(c Card) error {
 }
 
 // sessionCardAlive reports whether an incumbent session card is still held by
-// a live owner.
-//
-// It asks about OwnerPID — the STABLE harness process — and falls back to PID
-// only when no owner was recorded. Card.PID on a session card is whichever
-// per-turn child command wrote it last, and that process exits at the end of
-// the turn: judging liveness by it meant an incumbent looked DEAD in the gap
-// between two turns, so a competing session walked in and took a conversation
-// its owner was still having. The refusal this file exists for was therefore
-// only in force while a child command happened to be running.
-//
-// A card with neither pid is not live. That is the safe direction: it cannot
-// prove an owner, and an unprovable owner must not block a newcomer forever.
-func sessionCardAlive(c Card) bool {
-	if c.OwnerPID != 0 {
-		return PidAlive(c.OwnerPID)
-	}
-	return c.PID != 0 && PidAlive(c.PID)
-}
+// a live owner. It is the shared holder rule (card_holder.go) under the name
+// this file's reasoning uses; the two must not be allowed to drift, because
+// every time a reader and the claim disagreed about who was alive, the claim
+// lost.
+func sessionCardAlive(c Card) bool { return cardAlive(c) }
 
 // ReleaseSession gives up a claim held by this session.
 //

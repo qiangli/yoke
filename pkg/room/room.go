@@ -317,11 +317,28 @@ func Join(c Card) error {
 		}
 	}
 	if ok {
-		if prior.PID != c.PID && PidAlive(prior.PID) {
-			return &ErrLive{ID: c.ID, PID: prior.PID}
+		// The holder, not the writer (see card_holder.go). A session card's
+		// writer is a per-turn child command and is dead between turns, so
+		// fencing on it let a plain Join overwrite a LIVE instance card — and a
+		// plain Join carries no session digest, so it cannot prove it is that
+		// instance's owning session. ClaimSession is the path that can.
+		holder := holderPID(prior)
+		if heldByOtherThan(prior, c.PID) {
+			return &ErrLive{ID: c.ID, PID: holder}
 		}
-		if prior.PID == c.PID && c.Joined == "" {
-			c.Joined = prior.Joined
+		if holder == c.PID {
+			// The same holder revising its own card. Carry the fence forward:
+			// a card left in place but claiming nothing refuses nobody, which
+			// is the same end state as deleting it.
+			if c.Joined == "" {
+				c.Joined = prior.Joined
+			}
+			if c.OwnerPID == 0 {
+				c.OwnerPID = prior.OwnerPID
+			}
+			if c.SessionClaim == "" {
+				c.SessionClaim = prior.SessionClaim
+			}
 		}
 	}
 	if c.Joined == "" {
@@ -337,15 +354,52 @@ func Join(c Card) error {
 	return Emit(Event{Type: EventJoin, Actor: c.Principal, Target: c.ID, Body: c.Binding})
 }
 
-// writeCardFile persists a card. Shared by Join and ClaimSession so the two
-// claim paths cannot drift on encoding or file mode — the second one was
-// written by copying the first, which is exactly how they would.
+// writeCardFile persists a card ATOMICALLY. Shared by Join and ClaimSession so
+// the two claim paths cannot drift on encoding, durability or file mode — the
+// second one was written by copying the first, which is exactly how they would.
+//
+// It was an os.WriteFile, which truncates before it writes. Every reader in
+// this package treats an unparseable card as NO CARD (readCard), so a reader
+// landing in that window — or after a crash or a full disk left the card
+// half-written — sees a live instance as absent, and an absent claim fences
+// nobody. Staging a complete file and renaming it over the old one means a
+// reader sees either the previous card or the new one; the fsync is what makes
+// that true across a power loss rather than only across a concurrent read.
+//
+// The staging file is deliberately OUTSIDE members/: that directory is the
+// public membership set and consumers are entitled to treat every entry in it
+// as a card (same reasoning as memberClaimsLockPath).
 func writeCardFile(path string, c Card) error {
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, b, 0o600)
+	stage, err := os.CreateTemp(Dir(), "card-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := stage.Name()
+	defer func() {
+		// Only reached when the rename did not happen; after a successful
+		// rename the path no longer exists and the remove is a no-op.
+		_ = os.Remove(tmp)
+	}()
+	if err := stage.Chmod(0o600); err != nil {
+		_ = stage.Close()
+		return err
+	}
+	if _, err := stage.Write(b); err != nil {
+		_ = stage.Close()
+		return err
+	}
+	if err := stage.Sync(); err != nil {
+		_ = stage.Close()
+		return err
+	}
+	if err := stage.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // readCard loads one card file. A missing or unreadable card is "no card" —
@@ -380,27 +434,54 @@ func Leave(id string) {
 // command publishes work on behalf of its long-lived parent and a later
 // command retires that same card. LeavePID lets that launcher prove the same
 // parent still owns the card without weakening the incumbent protection.
+// It takes the SAME lock the claim paths take, and re-reads under it. Without
+// that, the read that proved the card was ours and the remove that acted on it
+// straddled a window in which a stale card could be legitimately reclaimed by
+// somebody else — and the remove then deleted the NEW holder's card.
 func LeavePID(id string, pid int) {
 	dir, err := membersDir()
 	if err != nil {
 		return
 	}
+	claimLock, err := lockfile.Acquire(memberClaimsLockPath(), lockfile.Holder{
+		Name: id, PID: os.Getpid(), Intent: "retire room member identity",
+	})
+	if err != nil {
+		return
+	}
+	defer claimLock.Release()
+
 	path := memberPath(dir, id)
 	if _, ok := readCard(path); !ok {
 		if legacy, safe := legacyMemberPath(dir, id); safe {
 			path = legacy
 		}
 	}
-	if prior, ok := readCard(path); ok && prior.PID != pid && PidAlive(prior.PID) {
+	// Holder liveness, not writer liveness: a per-turn child command's deferred
+	// Leave used to evict the card of the live harness that spawned it, because
+	// the card's recorded writer pid was that child's dead predecessor.
+	if prior, ok := readCard(path); ok && heldByOtherThan(prior, pid) {
 		return
 	}
 	_ = os.Remove(path)
 	_ = Emit(Event{Type: EventLeave, Target: id})
 }
 
-// Members returns the live membership, newest first, pruning any card whose pid is
-// gone (a crash left the file behind). Reading IS the reconciliation — no sweeper,
-// so the board never asserts a dead member is live.
+// Members returns the live membership, newest first, pruning any card whose
+// HOLDER is gone (a crash left the file behind). Reading IS the reconciliation
+// — no sweeper, so the board never asserts a dead member is live.
+//
+// It pruned on Card.PID, the per-turn writer, so between two turns of a live
+// agent session it DELETED that session's claim; the next competing session
+// then found no incumbent to be refused by. The holder rule (card_holder.go) is
+// the same one ClaimSession fences on, which is the point: when the reader and
+// the claim disagreed about who was alive, the claim lost.
+//
+// Deletion is a TRY, never a wait. Members is called from inside
+// WithMemberClaimsGuard (weave's agent retirement reads the board while holding
+// the claim lock), so blocking for that lock here would deadlock the caller.
+// The returned view is already correct without the deletion; a skipped prune is
+// retried by the next reader.
 func Members() ([]Card, error) {
 	dir, err := membersDir()
 	if err != nil {
@@ -411,6 +492,7 @@ func Members() ([]Card, error) {
 		return nil, err
 	}
 	var out []Card
+	var stale []string
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 			continue
@@ -420,14 +502,42 @@ func Members() ([]Card, error) {
 		if !ok {
 			continue
 		}
-		if !PidAlive(c.PID) {
-			_ = os.Remove(p)
+		if !cardAlive(c) {
+			stale = append(stale, p)
 			continue
 		}
 		out = append(out, c)
 	}
+	pruneStaleCards(stale)
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Joined > out[j].Joined })
 	return out, nil
+}
+
+// pruneStaleCards removes cards read as dead, under the claim lock and only if
+// they are STILL dead.
+//
+// The re-read is the whole point: a stale card is reclaimable, so between the
+// read above and this removal a live member may legitimately have taken the id,
+// and deleting its card would leave that member believing it held a claim that
+// no longer existed — the same unowned-but-believed-owned state the fencing in
+// Join and ClaimSession exists to prevent.
+func pruneStaleCards(paths []string) {
+	if len(paths) == 0 {
+		return
+	}
+	claimLock, err := lockfile.TryAcquire(memberClaimsLockPath(), lockfile.Holder{
+		Name: "room-prune", PID: os.Getpid(), Intent: "prune stale member cards",
+	})
+	if err != nil {
+		return // held: a claim is in flight, or this process already holds it
+	}
+	defer claimLock.Release()
+	for _, p := range paths {
+		if c, ok := readCard(p); ok && cardAlive(c) {
+			continue
+		}
+		_ = os.Remove(p)
+	}
 }
 
 // Find resolves an id to a live member. A unique id/nick prefix matches, so an
