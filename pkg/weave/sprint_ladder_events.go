@@ -117,7 +117,11 @@ func sprintLadderAppend(cmd *cobra.Command, ev *ladder.Event) {
 	if err == nil {
 		events, err = store.Read()
 	}
-	before := ladder.CurrentBand(seed, events, ev.Agent)
+	key := ev.RatingAgent()
+	if ev.FamilyID != "" {
+		seed = ev.SeedBand
+	}
+	before := ladder.CurrentBand(seed, events, key)
 	if err == nil {
 		err = store.Append(*ev)
 	}
@@ -126,12 +130,19 @@ func sprintLadderAppend(cmd *cobra.Command, ev *ladder.Event) {
 		return
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "ladder: delivery recorded (%s, %d, %g)\n", ev.Agent, ev.Points, ev.Outcome)
-	after := ladder.CurrentBand(seed, append(events, *ev), ev.Agent)
+	// Re-read after append: an identical retry is successful but must not be
+	// locally appended a second time for band/audit calculation.
+	afterEvents, readErr := store.Read()
+	if readErr != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "ladder: delivery recorded but band unavailable: %v\n", readErr)
+		return
+	}
+	after := ladder.CurrentBand(seed, afterEvents, key)
 	if after.Band == before.Band || len(after.Moves) == 0 {
 		return
 	}
 	move := after.Moves[len(after.Moves)-1]
-	audit := ladder.Event{Kind: ladder.EventKindBand, Agent: ev.Agent, At: ev.At, Season: ev.Season, FromBand: move.From, ToBand: move.To, Note: move.Reason}
+	audit := ladder.Event{Kind: ladder.EventKindBand, Agent: ev.Agent, InstanceUUID: ev.InstanceUUID, FamilyID: ev.FamilyID, SelectedBinding: ev.SelectedBinding, SeedBand: ev.SeedBand, At: ev.At, Season: ev.Season, FromBand: move.From, ToBand: move.To, Note: move.Reason}
 	if ev.ID != "" {
 		audit.ID = ev.ID + ":band"
 	}

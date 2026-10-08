@@ -65,6 +65,14 @@ func TestReplayNewFamilyDoesNotInheritAndLegacyIsUnchanged(t *testing.T) {
 		t.Fatalf("legacy and new configuration blended: %+v", got.Agents)
 	}
 }
+
+func TestReplayInvalidEstimateChargesFamilyIdentity(t *testing.T) {
+	e := Event{ID: "estimate", At: eventTestAt(1), Season: 1, Kind: EventKindEstimate, Agent: "reused-label", FamilyID: "family:v1", InstanceUUID: "uuid-1", Story: "missing", Estimate: 2}
+	got := Replay([]Event{e}, 1)
+	if got.Agents["reused-label"] != nil || got.Agents["family:v1"] == nil || got.Agents["family:v1"].Unrated != 1 {
+		t.Fatalf("invalid estimate attributed to wrong identity: %+v", got.Agents)
+	}
+}
 func TestReplayRegressionAndDecay(t *testing.T) {
 	a := eventTestDelivery("a", "agent-a", "story-a", 1, 1)
 	base := Replay([]Event{a}, 3)

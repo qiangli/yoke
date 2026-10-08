@@ -35,16 +35,19 @@ type Event struct {
 	Agent  string    `json:"agent"`
 	// InstanceUUID and FamilyID are optional immutable identity evidence.
 	// Old events deliberately leave them empty and continue to rate Agent.
-	InstanceUUID    string            `json:"instance_uuid,omitempty"`
-	FamilyID        string            `json:"family_id,omitempty"`
-	SelectedBinding string            `json:"selected_binding,omitempty"`
-	Duty            Duty              `json:"duty,omitempty"`
-	Story           string            `json:"story,omitempty"`
-	Points          Points            `json:"points,omitempty"`
-	Outcome         float64           `json:"outcome"`
-	Blame           blame.Attribution `json:"blame,omitempty"`
-	Estimate        Points            `json:"estimate,omitempty"`
-	Reviewer        string            `json:"reviewer,omitempty"`
+	InstanceUUID    string `json:"instance_uuid,omitempty"`
+	FamilyID        string `json:"family_id,omitempty"`
+	SelectedBinding string `json:"selected_binding,omitempty"`
+	// SeedBand is the applicable prior frozen with a family snapshot. It is
+	// deliberately not inferred later from SelectedBinding or a live catalog.
+	SeedBand int               `json:"seed_band,omitempty"`
+	Duty     Duty              `json:"duty,omitempty"`
+	Story    string            `json:"story,omitempty"`
+	Points   Points            `json:"points,omitempty"`
+	Outcome  float64           `json:"outcome"`
+	Blame    blame.Attribution `json:"blame,omitempty"`
+	Estimate Points            `json:"estimate,omitempty"`
+	Reviewer string            `json:"reviewer,omitempty"`
 	// Author is who wrote the story (usually the manager who wrote or split
 	// it); a spec-class failure charges the author.
 	Author   string `json:"author,omitempty"`

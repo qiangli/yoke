@@ -245,12 +245,13 @@ func Replay(events []Event, currentSeason int) ReplayResult {
 		results := make(map[string]map[Duty][]replayRated)
 		for _, item := range active {
 			e := item.event
+			ratingAgent := e.RatingAgent()
 			if e.Kind != EventKindEstimate || e.Season != season {
 				continue
 			}
 			s := out.Stories[e.Story]
 			if s == nil || !ValidPoints(e.Estimate) {
-				if a := out.Agents[e.Agent]; a != nil {
+				if a := out.Agents[ratingAgent]; a != nil {
 					a.Unrated++
 				}
 				continue
@@ -273,7 +274,7 @@ func Replay(events []Event, currentSeason int) ReplayResult {
 				// The story could not be built as written: full penalty.
 				score = 0
 			}
-			replayAdd(results, e.RatingAgent(), DutyJudge, e.Story+e.ID, Result{Opponent: Rating{R: s.Rating.R, RD: 50}, Score: score})
+			replayAdd(results, ratingAgent, DutyJudge, e.Story+e.ID, Result{Opponent: Rating{R: s.Rating.R, RD: 50}, Score: score})
 		}
 		for name, a := range out.Agents {
 			before := agentRatings[name][DutyJudge]

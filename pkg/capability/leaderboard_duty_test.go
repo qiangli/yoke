@@ -480,3 +480,15 @@ func TestHeadToHeadDoesNotCountSameFamilyAsOpponent(t *testing.T) {
 		t.Fatalf("same family counted as self-opponent: %+v", got)
 	}
 }
+
+func TestFamilySeedComesFromFrozenEvidenceNotSelectedCompositeMember(t *testing.T) {
+	events := []ladder.Event{{Season: 1, Kind: ladder.EventKindDelivery, Agent: "alias", FamilyID: "family:composite-v1", InstanceUUID: "uuid-a", SelectedBinding: "unknown:selected-member", SeedBand: 4, Duty: ladder.DutyCode, Points: 3, Outcome: 1}}
+	if got := dutySeedBandForEvidence("family:composite-v1", events); got != 4 {
+		t.Fatalf("seed = L%d, want frozen family L4", got)
+	}
+	changedSelection := append([]ladder.Event(nil), events...)
+	changedSelection[0].SelectedBinding = "another:member"
+	if got := dutySeedBandForEvidence("family:composite-v1", changedSelection); got != 4 {
+		t.Fatalf("selected member changed family seed to L%d", got)
+	}
+}

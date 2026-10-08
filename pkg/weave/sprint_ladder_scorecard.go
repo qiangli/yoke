@@ -113,8 +113,18 @@ func sprintScorecardAtEnd(s *weaveStory, skip bool, hygienePassed, hygieneTotal 
 
 	sprintScorecardApplyEvidence(&card, in, notes)
 	summary := sprintScorecardSummary(s.ID, identity, season, card)
+	holder := "legacy"
+	if s.Lease != nil {
+		holder = strings.TrimSpace(s.Lease.Instance)
+		if holder == "" {
+			holder = strings.TrimSpace(s.Lease.Holder)
+		}
+		if holder == "" {
+			holder = "legacy"
+		}
+	}
 	e := ladder.Event{
-		ID:       fmt.Sprintf("sprint:%d:manage", s.ID),
+		ID:       fmt.Sprintf("sprint:%d:manage:holder:%s", s.ID, holder),
 		At:       now,
 		Season:   season,
 		Kind:     ladder.EventKindManage,

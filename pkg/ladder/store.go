@@ -82,7 +82,10 @@ func (s *Store) Append(e Event) error {
 		}
 		for _, existing := range events {
 			if existing.ID == e.ID {
-				return nil
+				if sameEvent(existing, e) {
+					return nil
+				}
+				return fmt.Errorf("ladder: event id %q conflicts with existing immutable event", e.ID)
 			}
 		}
 	}
@@ -100,6 +103,18 @@ func (s *Store) Append(e Event) error {
 		return writeErr
 	}
 	return closeErr
+}
+
+func sameEvent(a, b Event) bool {
+	if a.Schema == "" {
+		a.Schema = EventSchema
+	}
+	if b.Schema == "" {
+		b.Schema = EventSchema
+	}
+	ab, aerr := json.Marshal(a)
+	bb, berr := json.Marshal(b)
+	return aerr == nil && berr == nil && string(ab) == string(bb)
 }
 
 // Read returns valid events. A malformed final unterminated line is reported with the valid prefix.

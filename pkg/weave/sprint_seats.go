@@ -116,10 +116,10 @@ func seatPool(root string, events []ladder.Event, now time.Time, exclusions ...s
 		key := binding.MatrixKey()
 		ratingKey := key
 		if family, ok, familyErr := cat.FamilyOf(a.Name); familyErr == nil && ok {
-			familyID := family.ID()
-			if rep.Agents[familyID] != nil {
-				ratingKey = familyID
-			}
+			// A known configuration is a distinct rating identity even before
+			// its first result. Falling back to MatrixKey here transfers earned
+			// history into a fresh configuration.
+			ratingKey = family.ID()
 		}
 		reason := toolReasons[tool.Name]
 		if reason == "" {

@@ -55,6 +55,12 @@ func TestStoreAppendIdempotentIDButDistinctRetriesRemainDistinct(t *testing.T) {
 	if err := s.Append(first); err != nil {
 		t.Fatal(err)
 	}
+	conflict := first
+	conflict.Outcome = 0
+	conflict.Blame = eventTestAgentBlame()
+	if err := s.Append(conflict); err == nil || !strings.Contains(err.Error(), "conflicts") {
+		t.Fatalf("conflicting immutable id: %v", err)
+	}
 	if err := s.Append(first); err != nil {
 		t.Fatal(err)
 	}

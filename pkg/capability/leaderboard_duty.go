@@ -199,11 +199,10 @@ func dutySeedBandForEvidence(identity string, events []ladder.Event) int {
 		if e.RatingAgent() != identity {
 			continue
 		}
-		if e.SelectedBinding != "" {
-			return dutySeedBand(e.SelectedBinding)
-		}
-		if e.FamilyID != "" && e.Agent != "" {
-			return dutySeedBand(e.Agent)
+		if e.FamilyID != "" {
+			// A family prior is immutable evidence. The selected composite
+			// member is diagnostic and must never choose the family seed.
+			return e.SeedBand
 		}
 	}
 	return dutySeedBand(identity)

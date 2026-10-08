@@ -77,7 +77,7 @@ is confirmed or expires, so replay no longer treats that seat as active.`,
 				}
 				if states[name].ProvisionalSince == 0 && rec.Provisional > 0 {
 					for _, e := range events {
-						if e.Agent == name && e.Kind == ladder.EventKindSeat && e.Provisional > 0 && e.Season <= season {
+						if e.RatingAgent() == name && e.Kind == ladder.EventKindSeat && e.Provisional > 0 && e.Season <= season {
 							states[name] = ladder.SeasonState{Agent: name, Band: states[name].Band, Demoted: states[name].Demoted, ModelVersion: states[name].ModelVersion, ProvisionalSince: e.Season}
 						}
 					}
