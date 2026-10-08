@@ -10,6 +10,7 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
 // TestIsAncestor covers both the typed predicate and the
@@ -663,6 +664,151 @@ func TestNativeStash_PathspecConflictAndRef(t *testing.T) {
 		if _, err := Exec(ctx, dir, argv); err != ErrUnsupported {
 			t.Errorf("stash %v err = %v, want ErrUnsupported", argv, err)
 		}
+	}
+}
+
+// commitCount counts commits reachable from HEAD.
+func commitCount(t *testing.T, dir string) int {
+	t.Helper()
+	r, err := gogit.PlainOpen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := r.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	it, err := r.Log(&gogit.LogOptions{From: head.Hash()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = it.ForEach(func(_ *object.Commit) error {
+		n++
+		return nil
+	})
+	it.Close()
+	return n
+}
+
+func headMessage(t *testing.T, dir string) string {
+	t.Helper()
+	r, err := gogit.PlainOpen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := r.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := r.CommitObject(head.Hash())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(c.Message)
+}
+
+// TestNativeCommit_Amend pins `commit --amend` (with and without -m) and
+// `-q`: amend folds the index into HEAD without growing history.
+func TestNativeCommit_Amend(t *testing.T) {
+	ctx := context.Background()
+	dir := makeTwoCommitRepo(t)
+	setLocalIdentity(t, dir)
+
+	dirtyFile(t, dir, "a.txt", "line1\nline2\nline3\n")
+	res, err := Exec(ctx, dir, []string{"commit", "--amend", "-m", "second amended"})
+	if err != nil {
+		t.Fatalf("commit --amend: %v", err)
+	}
+	if commitCount(t, dir) != 2 {
+		t.Errorf("amend grew history: %d commits", commitCount(t, dir))
+	}
+	if got := headMessage(t, dir); got != "second amended" {
+		t.Errorf("HEAD message = %q", got)
+	}
+	if !strings.Contains(res.Stdout, "second amended") {
+		t.Errorf("amend output = %q", res.Stdout)
+	}
+
+	// --amend without -m keeps the message; -q suppresses output.
+	dirtyFile(t, dir, "a.txt", "line1\nline2\nline3\nline4\n")
+	res, err = Exec(ctx, dir, []string{"commit", "--amend", "-q"})
+	if err != nil {
+		t.Fatalf("amend keep-message: %v", err)
+	}
+	if got := headMessage(t, dir); got != "second amended" {
+		t.Errorf("HEAD message = %q, want kept", got)
+	}
+	if res.Stdout != "" {
+		t.Errorf("-q output = %q, want empty", res.Stdout)
+	}
+	if commitCount(t, dir) != 2 {
+		t.Errorf("history = %d commits, want 2", commitCount(t, dir))
+	}
+}
+
+// TestNativeReset_HardSoft pins `reset --hard/--soft [<commit>]`: soft
+// moves HEAD only (worktree+index untouched), hard restores the tree,
+// mixed (default) unstages. Bad revisions and soft-with-paths fail loud.
+func TestNativeReset_HardSoft(t *testing.T) {
+	ctx := context.Background()
+	dir := makeTwoCommitRepo(t)
+	setLocalIdentity(t, dir)
+	commitFiles(t, dir, map[string]string{"a.txt": "line1\nline2\nline3\n"}, "third")
+
+	// Soft: HEAD moves back, worktree keeps v3 content.
+	dirtyFile(t, dir, "a.txt", "line1\nline2\nline3\n")
+	if _, err := Exec(ctx, dir, []string{"reset", "--soft", "HEAD~1"}); err != nil {
+		t.Fatalf("reset --soft: %v", err)
+	}
+	if got := headMessage(t, dir); got != "second" {
+		t.Errorf("HEAD after soft = %q, want second", got)
+	}
+	if got := readFile(t, dir, "a.txt"); got != "line1\nline2\nline3\n" {
+		t.Errorf("worktree after soft = %q, must be untouched", got)
+	}
+
+	// Hard: HEAD moves back AND the tree is restored.
+	if _, err := Exec(ctx, dir, []string{"reset", "--hard", "HEAD~1"}); err != nil {
+		t.Fatalf("reset --hard: %v", err)
+	}
+	if got := headMessage(t, dir); got != "first" {
+		t.Errorf("HEAD after hard = %q, want first", got)
+	}
+	if got := readFile(t, dir, "a.txt"); got != "line1\n" {
+		t.Errorf("worktree after hard = %q, want first-commit content", got)
+	}
+
+	// Mixed to a hash: HEAD moves, worktree stays dirty.
+	commitFiles(t, dir, map[string]string{"a.txt": "line1\nline2\n"}, "second again")
+	head, err := RevParse(RevParseOptions{RepoPath: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirtyFile(t, dir, "a.txt", "uncommitted\n")
+	if _, err := Exec(ctx, dir, []string{"reset", head.Hash}); err != nil {
+		t.Fatalf("mixed reset to hash: %v", err)
+	}
+	if got := readFile(t, dir, "a.txt"); got != "uncommitted\n" {
+		t.Errorf("worktree after mixed = %q, must be untouched", got)
+	}
+
+	res, err := Exec(ctx, dir, []string{"reset", "--hard", "no-such-rev"})
+	if err != nil {
+		t.Fatalf("bad rev: %v", err)
+	}
+	if res.ExitCode != 128 {
+		t.Errorf("bad rev = %+v, want exit 128", res)
+	}
+	res, err = Exec(ctx, dir, []string{"reset", "--soft", "HEAD", "--", "a.txt"})
+	if err != nil {
+		t.Fatalf("soft with paths: %v", err)
+	}
+	if res.ExitCode != 128 {
+		t.Errorf("soft with paths = %+v, want exit 128", res)
+	}
+	if _, err := Exec(ctx, dir, []string{"reset", "--keep"}); err != ErrUnsupported {
+		t.Errorf("reset --keep err = %v, want ErrUnsupported", err)
 	}
 }
 

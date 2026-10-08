@@ -569,12 +569,18 @@ func nativeAdd(_ context.Context, dir string, args []string) (*ExecResult, error
 func nativeCommit(_ context.Context, dir string, args []string) (*ExecResult, error) {
 	// Extract -m message
 	msg := ""
+	amend := false
+	quiet := false
 	for i := 0; i < len(args); i++ {
 		if args[i] == "-m" && i+1 < len(args) {
 			i++
 			msg = args[i]
 		} else if strings.HasPrefix(args[i], "-m") {
 			msg = args[i][2:]
+		} else if args[i] == "--amend" {
+			amend = true
+		} else if args[i] == "-q" {
+			quiet = true
 		} else if args[i] == "--allow-empty" || args[i] == "--no-verify" {
 			// Accepted flags, no-op
 		} else {
@@ -582,13 +588,25 @@ func nativeCommit(_ context.Context, dir string, args []string) (*ExecResult, er
 		}
 	}
 
-	if msg == "" {
-		return nil, ErrUnsupported
-	}
-
 	repo, err := openRepo(dir)
 	if err != nil {
 		return nil, ErrUnsupported
+	}
+
+	// --amend without -m keeps the HEAD message (typed Commit parity).
+	if msg == "" {
+		if !amend {
+			return nil, ErrUnsupported
+		}
+		headRef, herr := repo.Head()
+		if herr != nil {
+			return nil, ErrUnsupported
+		}
+		headCommit, herr := repo.CommitObject(headRef.Hash())
+		if herr != nil {
+			return nil, ErrUnsupported
+		}
+		msg = headCommit.Message
 	}
 
 	wt, err := repo.Worktree()
@@ -596,7 +614,7 @@ func nativeCommit(_ context.Context, dir string, args []string) (*ExecResult, er
 		return nil, ErrUnsupported
 	}
 
-	opts := &gogit.CommitOptions{}
+	opts := &gogit.CommitOptions{Amend: amend}
 	// Provide an explicit author when git config is not available (e.g. in containers).
 	// Try repo-level config first, then fall back to a default signature.
 	if sig := resolveAuthor(repo); sig != nil {
@@ -608,6 +626,9 @@ func nativeCommit(_ context.Context, dir string, args []string) (*ExecResult, er
 		return nil, ErrUnsupported
 	}
 
+	if quiet {
+		return &ExecResult{Stdout: ""}, nil
+	}
 	// Format output similar to git commit
 	head, _ := repo.Head()
 	branchName := "HEAD"
@@ -949,23 +970,40 @@ func nativeReset(_ context.Context, dir string, args []string) (*ExecResult, err
 		return nil, ErrUnsupported
 	}
 
-	// Check for specific file paths after "--"
+	// reset [--soft|--mixed|--hard] [<commit>] [-- <paths>]; default mixed.
+	// Last mode flag wins, like host git.
+	mode := gogit.MixedReset
+	target := "HEAD"
 	var files []string
 	dashDash := false
 	for _, arg := range args {
-		if arg == "--" {
+		switch {
+		case arg == "--":
 			dashDash = true
-			continue
-		}
-		if arg == "HEAD" {
-			continue
-		}
-		if strings.HasPrefix(arg, "-") {
+		case arg == "--soft" && !dashDash:
+			mode = gogit.SoftReset
+		case arg == "--mixed" && !dashDash:
+			mode = gogit.MixedReset
+		case arg == "--hard" && !dashDash:
+			mode = gogit.HardReset
+		case dashDash:
+			files = append(files, arg)
+		case strings.HasPrefix(arg, "-"):
+			return nil, ErrUnsupported
+		case target == "HEAD":
+			target = arg
+		default:
 			return nil, ErrUnsupported
 		}
-		if dashDash {
-			files = append(files, arg)
+	}
+
+	// Only mixed reset takes paths; soft/hard with paths is a host fatal.
+	if len(files) > 0 && mode != gogit.MixedReset {
+		kind := "soft"
+		if mode == gogit.HardReset {
+			kind = "hard"
 		}
+		return &ExecResult{Stderr: fmt.Sprintf("fatal: Cannot do %s reset with paths.\n", kind), ExitCode: 128}, nil
 	}
 
 	if len(files) > 0 {
@@ -1010,19 +1048,25 @@ func nativeReset(_ context.Context, dir string, args []string) (*ExecResult, err
 		return &ExecResult{Stdout: ""}, nil
 	}
 
-	// No specific files: mixed reset to HEAD (unstage everything)
-	head, err := repo.Head()
+	// No specific files: reset to the target in the requested mode.
+	commit, err := resolveCommit(repo, target)
 	if err != nil {
-		return nil, ErrUnsupported
+		return &ExecResult{Stderr: fmt.Sprintf("fatal: ambiguous argument '%s': unknown revision\n", target), ExitCode: 128}, nil
 	}
 	err = wt.Reset(&gogit.ResetOptions{
-		Mode:   gogit.MixedReset,
-		Commit: head.Hash(),
+		Mode:   mode,
+		Commit: commit.Hash,
 	})
 	if err != nil {
 		return nil, ErrUnsupported
 	}
 
+	// Host git announces the landing commit on --hard; soft/mixed stay
+	// quiet (mixed keeps its "" shape from before this story).
+	if mode == gogit.HardReset {
+		first := strings.SplitN(commit.Message, "\n", 2)[0]
+		return &ExecResult{Stdout: fmt.Sprintf("HEAD is now at %s %s\n", shortHash(commit.Hash), first)}, nil
+	}
 	return &ExecResult{Stdout: ""}, nil
 }
 

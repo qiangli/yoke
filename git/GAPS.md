@@ -63,9 +63,9 @@ tracks the OPEN gaps**, prioritized by consumer-workflow impact.
 
 | subcommand | missing flags | file:line | prio |
 |---|---|---|---|
-| **commit** | `--amend` (exists in typed `Commit`, `git.go:259` — just wire the argv), `-q` | `exec_write.go:558` | **HIGH** |
+| **commit** | ~`--amend` (exists in typed `Commit`, `git.go:259` — just wire the argv), `-q`~ CLOSED 2026-10-08 (S252.3, `TestNativeCommit_Amend`) | `exec_write.go:558` | **HIGH** |
 | **push** | ~`--delete` / `:<branch>` (delete remote branch)~ CLOSED 2026-10-08 (S252.1, `TestNativePush_Delete`); `-q`, `--dry-run`, `--tags` still open | `exec_write.go:18` | **HIGH** |
-| **reset** | `--hard`, `--soft` (only an unstage form, which itself errors) | `exec_read.go:930,992` | **HIGH** |
+| **reset** | ~`--hard`, `--soft`~ CLOSED 2026-10-08 (S252.3, `TestNativeReset_HardSoft`; soft/hard with paths + bad rev fail 128 like host) | `exec_read.go:930,992` | **HIGH** |
 | **checkout** | `--theirs`, `--ours`, `-f` (only `-b`/`-B` supported) | `exec_read.go:812` | MED |
 | **diff** | `--stat`, `--name-only`, `--diff-filter`, full `--cached` output | `exec_read.go:255,308-330` | MED |
 | **log** | `-S` (pickaxe), `--grep`; `--author` rejected; ~9 `--format` placeholders only; `--date=` ignored | `exec_read.go:129-252` | MED |
