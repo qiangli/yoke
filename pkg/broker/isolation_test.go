@@ -145,3 +145,40 @@ func TestUnknownToolVersionIsRetried(t *testing.T) {
 		t.Fatalf("cached failed catalog lookup; probes=%d", probes)
 	}
 }
+
+func TestRestoredStickyContextIsOwnerSessionOnly(t *testing.T) {
+	now := time.Now()
+	path := filepath.Join(t.TempDir(), "sticky.json")
+	s := newStickyStore(path, func() time.Time { return now })
+	b := &Binding{scoped: scoped{Principal: "alice", Session: "s-parent", Exported: true, Created: now},
+		Spec: StickySpec{Key: "context", Reset: ResetNone, Bind: BindWorker, TTL: "1s"}, Digest: "abcdef1234567890"}
+	if _, err := s.put(b); err != nil {
+		t.Fatal(err)
+	}
+	messages := []json.RawMessage{json.RawMessage(`{"role":"user","content":"private context"}`)}
+	if _, err := s.use("alice", "s-parent", "context", messages); err != nil {
+		t.Fatal(err)
+	}
+	s = newStickyStore(path, func() time.Time { return now })
+	if restored := s.get("alice", "s-parent", "context"); restored == nil || len(restored.Transcript) != 1 {
+		t.Fatal("owner session failed to restore its transcript")
+	}
+	for _, caller := range []struct{ principal, session string }{
+		{"bob", "s-parent"}, {"alice", "s-other"}, {"alice", "s-parent~child"}, {"alice", CloneSession("s-parent", now)},
+	} {
+		if s.get(caller.principal, caller.session, "context") != nil || s.findDigest(caller.principal, caller.session, b.Digest) != nil {
+			t.Errorf("restored context visible to %+v", caller)
+		}
+		if _, err := s.use(caller.principal, caller.session, "context", messages); err == nil {
+			t.Errorf("restored context used by %+v", caller)
+		}
+		if s.delete(caller.principal, caller.session, "context") {
+			t.Errorf("restored context deleted by %+v", caller)
+		}
+	}
+	now = now.Add(2 * time.Second)
+	s = newStickyStore(path, func() time.Time { return now })
+	if s.get("alice", "s-parent", "context") != nil || s.findDigest("alice", "s-parent", b.Digest) != nil {
+		t.Fatal("expired context recovered after restart")
+	}
+}

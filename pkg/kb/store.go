@@ -32,12 +32,15 @@ import (
 //	<dir>/.git           best-effort history/blame via the pure-Go git package
 type Store struct {
 	dir string
-	// owner, when set, scopes reads to a single principal: Load and List
+	// ownerScoped restricts reads to a single principal: Load and List
 	// return only pages this principal wrote (Source.Tool match). It is set
 	// for the AGENT ring, whose store is owner-only — another principal
-	// sharing the physical directory sees nothing, not an error. Empty (the
-	// repo and host rings) means every page is visible.
-	owner string
+	// sharing the physical directory sees nothing, not an error. An empty
+	// owner on an agent ring denies all reads; only Open creates an unscoped
+	// repo or host store. Keep scope separate from the identity to fail closed
+	// when principal resolution is missing.
+	ownerScoped bool
+	owner       string
 }
 
 // RepoSub is the committed per-repo kb: docs/kb/, inside the repo and CHECKED
@@ -94,6 +97,7 @@ func Open(dir string) *Store {
 // Source.Tool, which is the same owner.
 func OpenAgentRing(dir, owner string) *Store {
 	s := Open(dir)
+	s.ownerScoped = true
 	s.owner = strings.TrimSpace(owner)
 	return s
 }
@@ -124,7 +128,7 @@ func (s *Store) Load(slug string) (*Page, error) {
 	if err != nil {
 		return nil, err
 	}
-	if s.owner != "" && !ownedBy(p, s.owner) {
+	if s.ownerScoped && (s.owner == "" || !ownedBy(p, s.owner)) {
 		return nil, os.ErrNotExist
 	}
 	return p, nil

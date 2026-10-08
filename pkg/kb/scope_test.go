@@ -141,3 +141,33 @@ func TestResolveKBDirBaseDirTravel(t *testing.T) {
 		t.Fatalf("--base-dir travel failed: %q %q, want repo %s", label, dir, filepath.Join(other, "docs", "kb"))
 	}
 }
+
+func TestAgentRingMissingPrincipalDeniesLoadAndList(t *testing.T) {
+	dir := t.TempDir()
+	store := Open(dir)
+	for _, p := range []*Page{
+		{Slug: "private", Type: TypeLesson, Title: "private", Status: StatusCandidate, Source: &Source{Tool: "alice"}},
+		{Slug: "unattributed", Type: TypeLesson, Title: "unattributed", Status: StatusCandidate},
+	} {
+		if err := store.Write(p, "add"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, owner := range []string{"", " ", "bob"} {
+		scoped := OpenAgentRing(dir, owner)
+		for _, slug := range []string{"private", "unattributed"} {
+			if _, err := scoped.Load(slug); !os.IsNotExist(err) {
+				t.Errorf("owner %q loaded %s: %v", owner, slug, err)
+			}
+		}
+		if pages, err := scoped.List(); err != nil || len(pages) != 0 {
+			t.Errorf("owner %q list: %d pages, %v", owner, len(pages), err)
+		}
+	}
+	if pages, err := store.List(); err != nil || len(pages) != 2 {
+		t.Fatalf("unscoped store: %d pages, %v", len(pages), err)
+	}
+	if pages, err := OpenAgentRing(dir, "alice").List(); err != nil || len(pages) != 1 {
+		t.Fatalf("owner store: %d pages, %v", len(pages), err)
+	}
+}

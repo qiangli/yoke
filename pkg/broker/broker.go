@@ -180,6 +180,10 @@ func (b *Broker) Device() *Device { return b.device }
 
 // onPrincipalSwitch evicts resident models before another principal's work
 // runs on the device, so no prefix/KV cache hit ever crosses principals (Q8).
+// This is content isolation, not timing isolation: shared queue contention,
+// model residency and eviction/reload latency can reveal another scope's
+// activity. Responses are not constant-time; callers requiring timing isolation
+// need separate execution resources.
 func (b *Broker) onPrincipalSwitch(ctx context.Context, from, to string) error {
 	models, err := b.engine.ps(ctx)
 	if err != nil {

@@ -357,3 +357,36 @@ func (r *capturingReader) Recall(q Query) ([]Hit, error) {
 	r.query = q
 	return append([]Hit(nil), r.hits...), nil
 }
+
+// Repeated assembly must not recover another principal's checkpoint, even
+// when the caller knows its episode and all readers share one physical store.
+func TestContextPrincipalAndSessionIsolation(t *testing.T) {
+	isolateRecallStores(t)
+	dir := filepath.Join(os.Getenv("YCODE_DATA_DIR"), "kb")
+	p := &kb.Page{Slug: "private-widget", Form: kb.FormNote, Type: kb.TypeLesson,
+		Title: "widget checkpoint", Body: "private context", Status: kb.StatusCandidate,
+		Tags: []string{"checkpoint"}, Source: &kb.Source{Tool: "alice", Episode: "session-a"}}
+	if err := kb.Open(dir).Write(p, "add"); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, principal, session string
+		want                     int
+	}{
+		{"owner", "alice", "session-a", 1},
+		{"other-principal", "bob", "session-a", 0},
+		{"anonymous", "", "session-a", 0},
+		{"whitespace-principal", " ", "session-a", 0},
+		{"other-session", "alice", "session-b", 0},
+		{"missing-session", "alice", "", 0},
+		{"owner-again", "alice", "session-a", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := Context(Query{Text: "widget", Episode: tc.session, Rings: []string{RingAgent}},
+				AgentRing{Store: kb.OpenAgentRing(dir, tc.principal), Path: dir})
+			if len(res.Blocks) != tc.want {
+				t.Fatalf("principal %q session %q: got %d blocks, want %d", tc.principal, tc.session, len(res.Blocks), tc.want)
+			}
+		})
+	}
+}
