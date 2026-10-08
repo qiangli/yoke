@@ -4,355 +4,406 @@
 package steward
 
 import (
+	"bytes"
+	"errors"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/principal"
 )
 
-func deputyHolder(name, uuid string) principal.Ref {
-	return principal.Ref{Kind: principal.KindAgent, Name: name, Episode: uuid, Host: "test-host"}
+// Every test here drives the REAL mutations — DeputyAdd/DeputyRevoke, Act and
+// the cobra commands — over temporary journal and instance stores.
+
+type deputyFixture struct {
+	s     *Store
+	is    *fleet.InstanceStore
+	ste   principal.Ref
+	epoch uint64
 }
 
-func mustDeputy(t *testing.T, s *Store, actor principal.Ref, epoch uint64, holder principal.Ref, handle string, scope DeputyScope, ttl time.Duration, when time.Time) Deputy {
+func newDeputyFixture(t *testing.T, opts ...Option) *deputyFixture {
 	t.Helper()
-	d, err := s.DeputyAdd(actor, epoch, holder, handle, scope, ttl, when)
+	is := fleet.NewInstanceStore(t.TempDir()).WithCap(-1)
+	s := newStore(t, append([]Option{WithDeputyResolver(InstanceResolver{Store: is})}, opts...)...)
+	ste := agent("steward")
+	return &deputyFixture{s: s, is: is, ste: ste, epoch: mustClaim(t, s, ste, at(0))}
+}
+
+func (f *deputyFixture) instance(t *testing.T, label string) fleet.Instance {
+	t.Helper()
+	inst, err := f.is.Open(fleet.Family{Name: "cfg-" + strings.ToLower(label), Display: label, Policy: fleet.PolicySingle, Bindings: []string{"claude:test"}}, fleet.OpenOptions{Label: label})
 	if err != nil {
-		t.Fatalf("DeputyAdd: %v", err)
+		t.Fatalf("instance %s: %v", label, err)
+	}
+	return inst
+}
+
+// grant resolves handle through the real InstanceResolver, then grants.
+func (f *deputyFixture) grant(t *testing.T, handle string, scope DeputyScope, ttl time.Duration, when time.Time) (Deputy, error) {
+	t.Helper()
+	holder, err := f.s.DeputyResolver().Resolve(handle)
+	if err != nil {
+		return Deputy{}, err
+	}
+	return f.s.DeputyAdd(f.ste, f.epoch, holder, handle, scope, ttl, when)
+}
+
+func (f *deputyFixture) mustGrantDeputy(t *testing.T, handle string, scope DeputyScope, when time.Time) Deputy {
+	t.Helper()
+	d, err := f.grant(t, handle, scope, 24*time.Hour, when)
+	if err != nil {
+		t.Fatalf("grant %s %v: %v", handle, scope, err)
 	}
 	return d
 }
 
-// In-scope authority passes
-func TestDeputyInScopeAuthorityPasses(t *testing.T) {
-	s := newStore(t)
-	ste := agent("steward")
-	ep := mustClaim(t, s, ste, at(0))
-	holder := deputyHolder("deputyA", "uuid-a")
-	dep := mustDeputy(t, s, ste, ep, holder, "deputyA", DeputyScope{Sprints: []int{331, 332}}, 24*time.Hour, at(time.Minute))
+func sprint(n int) ActTarget { return ActTarget{Sprint: n} }
 
-	if err := s.CheckDeputyAuthority(holder, DeputyActionFence, 331, "", at(2*time.Minute)); err != nil {
-		t.Fatalf("fence in scope should pass, got %v", err)
-	}
-	if err := s.CheckDeputyAuthority(holder, DeputyActionJudge, 332, "", at(2*time.Minute)); err != nil {
-		t.Fatalf("judge in scope should pass, got %v", err)
-	}
-	if err := s.CheckDeputyAuthority(holder, DeputyActionGate, 331, "", at(2*time.Minute)); err != nil {
-		t.Fatalf("gate in scope should pass, got %v", err)
-	}
-	if err := s.CheckDeputyAuthority(holder, DeputyActionActivate, 332, "", at(2*time.Minute)); err != nil {
-		t.Fatalf("activate in scope should pass, got %v", err)
-	}
-	// epic scope
-	holder2 := deputyHolder("deputyB", "uuid-b")
-	dep2 := mustDeputy(t, s, ste, ep, holder2, "deputyB", DeputyScope{Epic: "agent-comms"}, 24*time.Hour, at(3*time.Minute))
-	_ = dep
-	_ = dep2
-	if err := s.CheckDeputyAuthority(holder2, DeputyActionJudge, 0, "agent-comms", at(4*time.Minute)); err != nil {
-		t.Fatalf("epic in scope should pass, got %v", err)
+func wantErr[T error](t *testing.T, err error, what string) {
+	t.Helper()
+	var target T
+	if !errors.As(err, &target) {
+		t.Fatalf("%s: want %T, got %v", what, target, err)
 	}
 }
 
-// Out-of-scope fails clearly
-func TestDeputyOutOfScopeFails(t *testing.T) {
-	s := newStore(t)
-	ste := agent("steward")
-	ep := mustClaim(t, s, ste, at(0))
-	holder := deputyHolder("deputyA", "uuid-a")
-	mustDeputy(t, s, ste, ep, holder, "deputyA", DeputyScope{Sprints: []int{331, 332}}, 24*time.Hour, at(time.Minute))
-
-	if err := s.CheckDeputyAuthority(holder, DeputyActionJudge, 999, "", at(2*time.Minute)); err == nil {
-		t.Fatal("out-of-scope judge should fail")
-	} else {
-		if _, ok := err.(*ErrDeputyOutOfScope); !ok {
-			t.Fatalf("want ErrDeputyOutOfScope, got %T: %v", err, err)
+func TestDeputyFourActsInScopeAreRealJournalMutations(t *testing.T) {
+	f := newDeputyFixture(t)
+	a := f.instance(t, "Ada")
+	c1, c2 := f.instance(t, "Cora"), f.instance(t, "Dex")
+	dep := f.mustGrantDeputy(t, a.UUID, DeputyScope{Sprints: []int{332, 331}}, at(time.Minute))
+	if dep.Holder.Episode != a.UUID || dep.ScopeLabel != "331,332" || dep.OnBehalfOf.Name != "steward" {
+		t.Fatalf("grant snapshot = %+v", dep)
+	}
+	me := InstanceRef(a.UUID)
+	steps := []ActRequest{
+		{Act: ActActivate, Target: sprint(331), Owner: c1.UUID},
+		{Act: ActFence, Target: sprint(331), Owner: c2.UUID},
+		{Act: ActGate, Target: sprint(331), Summary: "merge gate green"},
+		{Act: ActJudge, Target: sprint(331), Outcome: OutcomeSuccess},
+	}
+	for i, req := range steps {
+		e, err := f.s.Act(me, f.epoch, req, at(time.Duration(2+i)*time.Minute))
+		if err != nil {
+			t.Fatalf("%s in scope: %v", req.Act, err)
+		}
+		if e.Workstream != "sprint-331" || e.Epoch != f.epoch || e.Actor.Episode != a.UUID {
+			t.Fatalf("%s entry = %+v", req.Act, e)
+		}
+		var tagged, onBehalf bool
+		for _, ev := range e.Evidence {
+			tagged = tagged || (ev.Kind == "act" && ev.Ref == req.Act)
+			onBehalf = onBehalf || (ev.Kind == "deputy" && ev.Ref == dep.ID)
+		}
+		if !tagged || !onBehalf {
+			t.Fatalf("%s entry evidence = %+v", req.Act, e.Evidence)
 		}
 	}
-	// cross-scope allocation (not an allowed deputy action)
-	if err := s.CheckDeputyAuthority(holder, "allocate", 331, "", at(2*time.Minute)); err == nil {
-		t.Fatal("cross-scope allocate should fail")
-	}
-}
-
-// Overlapping scopes fail
-func TestDeputyOverlappingScopesFail(t *testing.T) {
-	s := newStore(t)
-	ste := agent("steward")
-	ep := mustClaim(t, s, ste, at(0))
-	h1 := deputyHolder("d1", "uuid-1")
-	mustDeputy(t, s, ste, ep, h1, "d1", DeputyScope{Sprints: []int{331, 332}}, 24*time.Hour, at(time.Minute))
-	h2 := deputyHolder("d2", "uuid-2")
-	_, err := s.DeputyAdd(ste, ep, h2, "d2", DeputyScope{Sprints: []int{332, 333}}, 24*time.Hour, at(2*time.Minute))
-	if err == nil {
-		t.Fatal("overlapping sprints should be refused")
-	}
-	if _, ok := err.(*ErrDeputyOverlap); !ok {
-		t.Fatalf("want ErrDeputyOverlap, got %T: %v", err, err)
-	}
-	// epic overlap
-	h3 := deputyHolder("d3", "uuid-3")
-	_, err = s.DeputyAdd(ste, ep, h3, "d3", DeputyScope{Epic: "X"}, 24*time.Hour, at(3*time.Minute))
+	board, _, err := f.s.Board()
 	if err != nil {
-		t.Fatalf("epic X first grant: %v", err)
+		t.Fatal(err)
 	}
-	h4 := deputyHolder("d4", "uuid-4")
-	_, err = s.DeputyAdd(ste, ep, h4, "d4", DeputyScope{Epic: "X"}, 24*time.Hour, at(4*time.Minute))
-	if err == nil {
-		t.Fatal("overlapping epic should be refused")
-	}
-}
-
-// Self-judging/conducting fails
-func TestDeputySelfConductFails(t *testing.T) {
-	s := newStore(t)
-	ste := agent("steward")
-	ep := mustClaim(t, s, ste, at(0))
-	holder := deputyHolder("deputyA", "uuid-a")
-	mustDeputy(t, s, ste, ep, holder, "deputyA", DeputyScope{Sprints: []int{331}}, 24*time.Hour, at(time.Minute))
-	if err := s.CheckDeputyAuthority(holder, DeputyActionConduct, 331, "", at(2*time.Minute)); err == nil {
-		t.Fatal("deputy conducting its own scope should fail")
-	} else {
-		if _, ok := err.(*ErrDeputySelfConduct); !ok {
-			t.Fatalf("want ErrDeputySelfConduct, got %T: %v", err, err)
-		}
-	}
-	// conducting outside scope is allowed (not self)
-	if err := s.CheckDeputyAuthority(holder, DeputyActionConduct, 999, "", at(2*time.Minute)); err != nil {
-		t.Fatalf("conducting outside own scope should pass, got %v", err)
-	}
-}
-
-// Revoke fences
-func TestDeputyRevokeFences(t *testing.T) {
-	s := newStore(t)
-	ste := agent("steward")
-	ep := mustClaim(t, s, ste, at(0))
-	holder := deputyHolder("deputyA", "uuid-a")
-	dep := mustDeputy(t, s, ste, ep, holder, "deputyA", DeputyScope{Sprints: []int{331}}, 24*time.Hour, at(time.Minute))
-	if err := s.DeputyRevoke(ste, ep, dep.ID, at(2*time.Minute)); err != nil {
-		t.Fatalf("revoke: %v", err)
-	}
-	if err := s.CheckDeputyAuthority(holder, DeputyActionJudge, 331, "", at(3*time.Minute)); err == nil {
-		t.Fatal("revoked deputy should be fenced")
-	}
-}
-
-// Expiry fences
-func TestDeputyExpiryFences(t *testing.T) {
-	s := newStore(t)
-	ste := agent("steward")
-	ep := mustClaim(t, s, ste, at(0))
-	holder := deputyHolder("deputyA", "uuid-a")
-	mustDeputy(t, s, ste, ep, holder, "deputyA", DeputyScope{Sprints: []int{331}}, time.Hour, at(time.Minute))
-	// after 2h should be expired
-	if err := s.CheckDeputyAuthority(holder, DeputyActionJudge, 331, "", at(2*time.Hour)); err == nil {
-		t.Fatal("expired deputy should be fenced")
-	}
-}
-
-// Changed steward epoch fences
-func TestDeputyEpochFencing(t *testing.T) {
-	s := newStore(t)
-	ste := agent("steward")
-	ep1 := mustClaim(t, s, ste, at(0))
-	holder := deputyHolder("deputyA", "uuid-a")
-	mustDeputy(t, s, ste, ep1, holder, "deputyA", DeputyScope{Sprints: []int{331}}, 24*time.Hour, at(time.Minute))
-	// steward takeover bumps epoch
-	ep2 := mustTakeover(t, s, agent("steward2"), at(5*time.Minute))
-	if ep2 == ep1 {
-		t.Fatal("epoch should bump")
-	}
-	if err := s.CheckDeputyAuthority(holder, DeputyActionJudge, 331, "", at(6*time.Minute)); err == nil {
-		t.Fatal("deputy from old epoch should be fenced after steward takeover")
-	} else {
-		if _, ok := err.(*ErrDeputyFenced); !ok {
-			t.Fatalf("want ErrDeputyFenced, got %T: %v", err, err)
+	for _, ws := range board.Workstreams {
+		if ws.Name == "sprint-331" && ws.Owner != c2.UUID {
+			t.Fatalf("fence did not reassign the conductor: owner %q", ws.Owner)
 		}
 	}
 }
 
-// Reused handle receives no old grant
-func TestDeputyReusedHandleReceivesNoOldGrant(t *testing.T) {
-	s := newStore(t)
-	ste := agent("steward")
-	ep := mustClaim(t, s, ste, at(0))
-	// resolver that returns different UUID for same handle on successive calls
-	call := 0
-	resolver := &countingResolver{handle: "Esme-2", uuids: []string{"uuid-old", "uuid-new"}, calls: &call}
-	storeWithResolver := func() *Store {
-		// reopen same underlying store dir with resolver
-		// For test isolation we use same store but inject resolver via field
-		s.deputyResolver = resolver
-		return s
-	}
-	storeWithResolver()
-	hOld := deputyHolder("Esme-2", "uuid-old")
-	// grant to old UUID
-	mustDeputy(t, s, ste, ep, hOld, "Esme-2", DeputyScope{Sprints: []int{331}}, 24*time.Hour, at(time.Minute))
-	// revoke old deputy to allow same scope with new holder (non-overlap check would otherwise block)
-	deps, _ := s.DeputyList(at(2 * time.Minute))
-	s.DeputyRevoke(ste, ep, deps[0].ID, at(2*time.Minute))
-	// Now grant to same handle but resolved to new UUID
-	hNew := deputyHolder("Esme-2", "uuid-new")
-	depNew := mustDeputy(t, s, ste, ep, hNew, "Esme-2", DeputyScope{Sprints: []int{331}}, 24*time.Hour, at(3*time.Minute))
-	// Old holder should not have authority via new deputy's scope (different UUID)
-	if err := s.CheckDeputyAuthority(hOld, DeputyActionJudge, 331, "", at(4*time.Minute)); err == nil {
-		t.Fatal("old handle holder (uuid-old) should not gain authority from new grant to uuid-new")
-	}
-	// New holder should have authority
-	if err := s.CheckDeputyAuthority(hNew, DeputyActionJudge, 331, "", at(4*time.Minute)); err != nil {
-		t.Fatalf("new holder should have authority, got %v", err)
-	}
-	_ = depNew
-}
+func TestDeputyCrossScopeAndStewardOnlyFail(t *testing.T) {
+	f := newDeputyFixture(t)
+	a, b := f.instance(t, "Ada"), f.instance(t, "Bo")
+	f.mustGrantDeputy(t, a.UUID, DeputyScope{Sprints: []int{331}}, at(time.Minute))
+	me := InstanceRef(a.UUID)
+	now := at(2 * time.Minute)
 
-// No deputies of deputies
-func TestDeputyCannotGrantDeputy(t *testing.T) {
-	s := newStore(t)
-	ste := agent("steward")
-	ep := mustClaim(t, s, ste, at(0))
-	holder := deputyHolder("deputyA", "uuid-a")
-	mustDeputy(t, s, ste, ep, holder, "deputyA", DeputyScope{Sprints: []int{331}}, 24*time.Hour, at(time.Minute))
-	// deputy trying to grant another deputy should fail
-	other := deputyHolder("deputyB", "uuid-b")
-	_, err := s.DeputyAdd(holder, ep, other, "deputyB", DeputyScope{Sprints: []int{332}}, 24*time.Hour, at(2*time.Minute))
+	_, err := f.s.Act(me, f.epoch, ActRequest{Act: ActGate, Target: sprint(333)}, now)
+	wantErr[*ErrDeputyOutOfScope](t, err, "gate outside scope")
+	_, err = f.s.Act(me, f.epoch, ActRequest{Act: ActGate, Target: ActTarget{Epic: "comms"}}, now)
+	wantErr[*ErrDeputyOutOfScope](t, err, "gate on an epic outside scope")
+	_, err = f.s.Act(me, f.epoch, ActRequest{Act: ActJudge}, now)
+	wantErr[*ErrDeputyStewardOnly](t, err, "act with no target (cross-scope)")
+	_, err = f.s.Act(me, f.epoch, ActRequest{Act: "allocate", Target: sprint(331)}, now)
 	if err == nil {
-		t.Fatal("deputy should not be able to grant deputies")
+		t.Fatal("a fifth act passed")
 	}
-	if _, ok := err.(*ErrDeputyIsDeputy); !ok {
-		t.Fatalf("want ErrDeputyIsDeputy, got %T: %v", err, err)
+	// Allocation (grant), release, integration (generic decisions) stay with the steward.
+	_, err = f.s.DeputyAdd(me, f.epoch, InstanceRef(b.UUID), "Bo", DeputyScope{Sprints: []int{340}}, time.Hour, now)
+	wantErr[*ErrDeputyIsDeputy](t, err, "deputy granting a deputy")
+	wantErr[*ErrNotHolder](t, f.s.DeputyRevoke(me, f.epoch, "dep-x", now), "deputy revoking")
+	_, err = f.s.Decide(me, f.epoch, "sprint-331", "integrate", "window", nil, now)
+	wantErr[*ErrNotHolder](t, err, "deputy integration decision")
+	wantErr[*ErrNotHolder](t, f.s.Release(me, f.epoch, "", now), "deputy releasing the seat")
+	// The steward is never scope-limited.
+	if _, err := f.s.Act(f.ste, f.epoch, ActRequest{Act: ActGate, Target: sprint(333)}, now); err != nil {
+		t.Fatalf("steward gate: %v", err)
+	}
+	// A stranger with no grant is just not the holder.
+	_, err = f.s.Act(InstanceRef(b.UUID), f.epoch, ActRequest{Act: ActGate, Target: sprint(331)}, now)
+	wantErr[*ErrNotHolder](t, err, "ungranted instance")
+}
+
+func TestDeputyStaleOrZeroEpochFencesNeverFallsThrough(t *testing.T) {
+	f := newDeputyFixture(t)
+	a := f.instance(t, "Ada")
+	f.mustGrantDeputy(t, a.UUID, DeputyScope{Sprints: []int{331}}, at(time.Minute))
+	me := InstanceRef(a.UUID)
+	req := ActRequest{Act: ActGate, Target: sprint(331)}
+
+	_, err := f.s.Act(me, 0, req, at(2*time.Minute))
+	wantErr[*ErrNoEpoch](t, err, "zero epoch")
+	_, err = f.s.Act(me, f.epoch+7, req, at(2*time.Minute))
+	wantErr[*ErrFenced](t, err, "wrong epoch")
+
+	// Steward takeover: the old epoch is stale, and presenting the NEW one does
+	// not revive a grant made under the old one.
+	newEpoch := mustTakeover(t, f.s, agent("steward-2"), at(3*time.Minute))
+	_, err = f.s.Act(me, f.epoch, req, at(4*time.Minute))
+	wantErr[*ErrFenced](t, err, "stale epoch after takeover")
+	_, err = f.s.Act(me, newEpoch, req, at(4*time.Minute))
+	wantErr[*ErrDeputyFenced](t, err, "grant from the old steward epoch")
+}
+
+func TestDeputyExpiryAndRevokeFence(t *testing.T) {
+	f := newDeputyFixture(t)
+	a, b := f.instance(t, "Ada"), f.instance(t, "Bo")
+	if _, err := f.grant(t, a.UUID, DeputyScope{Sprints: []int{331}}, time.Hour, at(0)); err != nil {
+		t.Fatal(err)
+	}
+	_, err := f.s.Act(InstanceRef(a.UUID), f.epoch, ActRequest{Act: ActGate, Target: sprint(331)}, at(2*time.Hour))
+	wantErr[*ErrDeputyExpired](t, err, "expired")
+
+	db := f.mustGrantDeputy(t, b.UUID, DeputyScope{Sprints: []int{340}}, at(3*time.Hour))
+	if err := f.s.DeputyRevoke(f.ste, f.epoch, db.ID, at(4*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.s.Act(InstanceRef(b.UUID), f.epoch, ActRequest{Act: ActJudge, Target: sprint(340)}, at(5*time.Hour))
+	wantErr[*ErrDeputyRevoked](t, err, "revoked")
+}
+
+func TestDeputyTwoGrantsSameUUIDSelectScopeAndForbidConduct(t *testing.T) {
+	f := newDeputyFixture(t)
+	a := f.instance(t, "Ada")
+	f.mustGrantDeputy(t, a.UUID, DeputyScope{Sprints: []int{331}}, at(time.Minute))
+	f.mustGrantDeputy(t, a.UUID, DeputyScope{Sprints: []int{340}}, at(2*time.Minute))
+	me := InstanceRef(a.UUID)
+	now := at(3 * time.Minute)
+	for _, n := range []int{331, 340} {
+		if _, err := f.s.Act(me, f.epoch, ActRequest{Act: ActGate, Target: sprint(n)}, now); err != nil {
+			t.Fatalf("gate %d with two grants: %v", n, err)
+		}
+		wantErr[*ErrDeputySelfConduct](t, f.s.MayConduct(me, sprint(n), now), "conduct own scope")
+		_, err := f.s.Act(f.ste, f.epoch, ActRequest{Act: ActActivate, Target: sprint(n), Owner: a.UUID}, now)
+		wantErr[*ErrDeputySelfConduct](t, err, "installing the deputy as conductor")
+	}
+	if err := f.s.MayConduct(me, sprint(999), now); err != nil {
+		t.Fatalf("conducting outside its scope is allowed: %v", err)
 	}
 }
 
-// Durable role mail survives authorized holder handoff
-func TestDeputyMailSurvivesHandoff(t *testing.T) {
-	s := newStore(t)
-	ste := agent("steward")
-	ep := mustClaim(t, s, ste, at(0))
-	h1 := deputyHolder("d", "uuid-1")
-	dep1 := mustDeputy(t, s, ste, ep, h1, "d", DeputyScope{Sprints: []int{331, 332}}, 24*time.Hour, at(time.Minute))
-	topic := DeputyTopicForScope(dep1.Scope)
-	label := DeputyLabelForScope(dep1.Scope)
-	if topic != "deputy.331,332" {
-		t.Fatalf("topic %q", topic)
+func TestDeputyEpicSprintOverlap(t *testing.T) {
+	// No membership lookup: mixed scopes fail closed.
+	f := newDeputyFixture(t)
+	a, b := f.instance(t, "Ada"), f.instance(t, "Bo")
+	f.mustGrantDeputy(t, a.UUID, DeputyScope{Sprints: []int{331}}, at(time.Minute))
+	_, err := f.grant(t, b.UUID, DeputyScope{Epic: "comms"}, time.Hour, at(2*time.Minute))
+	wantErr[*ErrMembershipUnknown](t, err, "mixed scope without membership")
+
+	// With membership: an epic containing a deputized sprint overlaps.
+	member := EpicMembershipFunc(func(n int) (string, error) {
+		if n == 331 || n == 332 {
+			return "comms", nil
+		}
+		return "", nil
+	})
+	g := newDeputyFixture(t, WithEpicMembership(member))
+	a, b = g.instance(t, "Ada"), g.instance(t, "Bo")
+	g.mustGrantDeputy(t, a.UUID, DeputyScope{Sprints: []int{331}}, at(time.Minute))
+	_, err = g.grant(t, b.UUID, DeputyScope{Epic: "comms"}, time.Hour, at(2*time.Minute))
+	wantErr[*ErrDeputyOverlap](t, err, "epic over a deputized sprint")
+	_, err = g.grant(t, b.UUID, DeputyScope{Sprints: []int{331, 400}}, time.Hour, at(2*time.Minute))
+	wantErr[*ErrDeputyOverlap](t, err, "overlapping sprint lists")
+	c := g.instance(t, "Cy")
+	g.mustGrantDeputy(t, c.UUID, DeputyScope{Epic: "infra"}, at(3*time.Minute))
+	// An epic deputy acts on member sprints, and only them.
+	if _, err := g.s.Act(InstanceRef(a.UUID), g.epoch, ActRequest{Act: ActGate, Target: sprint(331)}, at(4*time.Minute)); err != nil {
+		t.Fatal(err)
 	}
-	if label != "deputy:331,332" {
-		t.Fatalf("label %q", label)
+	_, err = g.s.Act(InstanceRef(c.UUID), g.epoch, ActRequest{Act: ActGate, Target: sprint(332)}, at(4*time.Minute))
+	wantErr[*ErrDeputyOutOfScope](t, err, "epic deputy on a sprint of another epic")
+}
+
+func TestDeputySelfJudgeFails(t *testing.T) {
+	f := newDeputyFixture(t)
+	a, c := f.instance(t, "Ada"), f.instance(t, "Cora")
+	// Ada conducted sprint 331 before being deputized over it.
+	if _, err := f.s.Act(f.ste, f.epoch, ActRequest{Act: ActActivate, Target: sprint(331), Owner: a.UUID}, at(time.Minute)); err != nil {
+		t.Fatal(err)
 	}
-	// handoff: revoke old, grant new holder with same scope
-	s.DeputyRevoke(ste, ep, dep1.ID, at(2*time.Minute))
-	h2 := deputyHolder("d2", "uuid-2")
-	dep2 := mustDeputy(t, s, ste, ep, h2, "d2", DeputyScope{Sprints: []int{331, 332}}, 24*time.Hour, at(3*time.Minute))
-	if DeputyTopicForScope(dep2.Scope) != topic {
-		t.Fatalf("topic should survive handoff")
+	f.mustGrantDeputy(t, a.UUID, DeputyScope{Sprints: []int{331, 332}}, at(2*time.Minute))
+	me := InstanceRef(a.UUID)
+	_, err := f.s.Act(me, f.epoch, ActRequest{Act: ActJudge, Target: sprint(331)}, at(3*time.Minute))
+	wantErr[*ErrDeputySelfJudge](t, err, "judging a sprint it conducted")
+
+	// Ada authored a claim in sprint 332 (conducted by Cora) and may not judge it.
+	if _, err := f.s.Act(f.ste, f.epoch, ActRequest{Act: ActActivate, Target: sprint(332), Owner: c.UUID}, at(4*time.Minute)); err != nil {
+		t.Fatal(err)
 	}
-	if DeputyLabelForScope(dep2.Scope) != label {
-		t.Fatalf("label should survive handoff")
+	authored, err := f.s.Act(me, f.epoch, ActRequest{Act: ActGate, Target: sprint(332), Summary: "converged"}, at(5*time.Minute))
+	if err != nil {
+		t.Fatal(err)
 	}
-	// old holder fenced via revoke
-	if err := s.CheckDeputyAuthority(h1, DeputyActionJudge, 331, "", at(4*time.Minute)); err == nil {
-		t.Fatal("old holder should not have authority after revoke")
-	}
-	// new holder has authority and same durable address
-	if err := s.CheckDeputyAuthority(h2, DeputyActionJudge, 331, "", at(4*time.Minute)); err != nil {
-		t.Fatalf("new holder should have authority, got %v", err)
+	_, err = f.s.Act(me, f.epoch, ActRequest{Act: ActJudge, Target: sprint(332), TargetSeq: authored.Seq}, at(6*time.Minute))
+	wantErr[*ErrDeputySelfJudge](t, err, "judging its own claim")
+	// A claim it did not author, in a sprint it did not conduct, it may judge.
+	theirs := mustRecord(t, f.s, Entry{Actor: f.ste, Kind: KindEffect, Workstream: "sprint-332", Summary: "work"}, f.epoch, at(7*time.Minute))
+	if _, err := f.s.Act(me, f.epoch, ActRequest{Act: ActJudge, Target: sprint(332), TargetSeq: theirs.Seq}, at(8*time.Minute)); err != nil {
+		t.Fatalf("independent judge: %v", err)
 	}
 }
 
-func TestAuthorizeActPreservesStewardAndLimitsDeputy(t *testing.T) {
-	s := newStore(t)
-	ste := agent("steward")
-	ep := mustClaim(t, s, ste, at(0))
-	holder := deputyHolder("deputyA", "uuid-a")
-	mustDeputy(t, s, ste, ep, holder, "deputyA", DeputyScope{Sprints: []int{331}}, 24*time.Hour, at(time.Minute))
-	// Steward can act on any sprint via AuthorizeAct (cross-scope)
-	if err := s.AuthorizeAct(ste, ep, DeputyActionJudge, 999, "", at(2*time.Minute)); err != nil {
-		t.Fatalf("steward should pass AuthorizeAct for any sprint, got %v", err)
+func TestDeputyUnknownRetiredAndReusedLabelGetNoGrant(t *testing.T) {
+	f := newDeputyFixture(t)
+	_, err := f.grant(t, "0b9a3f0e-1c2d-4e5f-8a9b-0c1d2e3f4a5b", DeputyScope{Sprints: []int{331}}, time.Hour, at(0))
+	if !errors.Is(err, fleet.ErrInstanceUnknown) {
+		t.Fatalf("unknown UUID: %v", err)
 	}
-	if err := s.AuthorizeAct(ste, ep, "allocate", 331, "", at(2*time.Minute)); err != nil {
-		t.Fatalf("steward allocate should pass, got %v", err)
+	_, err = f.grant(t, "nobody", DeputyScope{Sprints: []int{331}}, time.Hour, at(0))
+	if err == nil {
+		t.Fatal("unknown handle granted")
 	}
-	// Deputy in scope passes via AuthorizeAct
-	if err := s.AuthorizeAct(holder, ep, DeputyActionJudge, 331, "", at(2*time.Minute)); err != nil {
-		t.Fatalf("deputy in scope via AuthorizeAct should pass, got %v", err)
+	_, err = f.s.DeputyAdd(f.ste, f.epoch, principal.Ref{Name: "Esme"}, "Esme", DeputyScope{Sprints: []int{331}}, time.Hour, at(0))
+	wantErr[*ErrDeputyScope](t, err, "name-only holder")
+
+	old := f.instance(t, "Esme")
+	f.mustGrantDeputy(t, "Esme", DeputyScope{Sprints: []int{331}}, at(time.Minute))
+	if _, err := f.is.Retire(old.UUID, func(fleet.Instance) ([]string, error) { return nil, nil }); err != nil {
+		t.Fatal(err)
 	}
-	// Deputy out of scope fails via AuthorizeAct
-	if err := s.AuthorizeAct(holder, ep, DeputyActionJudge, 999, "", at(2*time.Minute)); err == nil {
-		t.Fatal("deputy out of scope via AuthorizeAct should fail")
+	_, err = f.grant(t, old.UUID, DeputyScope{Sprints: []int{350}}, time.Hour, at(2*time.Minute))
+	if err == nil || !strings.Contains(err.Error(), "retired") {
+		t.Fatalf("retired instance: %v", err)
 	}
-	// Deputy cross-scope allocate fails
-	if err := s.AuthorizeAct(holder, ep, "allocate", 331, "", at(2*time.Minute)); err == nil {
-		t.Fatal("deputy allocate should fail via AuthorizeAct")
+	reused := f.instance(t, "Esme")
+	if reused.UUID == old.UUID {
+		t.Fatal("label reuse kept the UUID")
+	}
+	_, err = f.s.Act(InstanceRef(reused.UUID), f.epoch, ActRequest{Act: ActGate, Target: sprint(331)}, at(3*time.Minute))
+	wantErr[*ErrNotHolder](t, err, "reused label inheriting the old grant")
+	// Nor does a principal that only carries the label as a name.
+	_, err = f.s.Act(principal.Ref{Kind: principal.KindAgent, Name: "Esme"}, f.epoch, ActRequest{Act: ActGate, Target: sprint(331)}, at(3*time.Minute))
+	wantErr[*ErrNotHolder](t, err, "label as identity")
+}
+
+func TestDeputyCorruptJournalRejected(t *testing.T) {
+	f := newDeputyFixture(t)
+	a := f.instance(t, "Ada")
+	f.mustGrantDeputy(t, a.UUID, DeputyScope{Sprints: []int{331}}, at(time.Minute))
+	appendRaw(t, f.s, "{not json\n")
+	_, err := f.s.Act(InstanceRef(a.UUID), f.epoch, ActRequest{Act: ActGate, Target: sprint(331)}, at(2*time.Minute))
+	wantErr[*ErrCorruptTail](t, err, "act on corrupt journal")
+	wantErr[*ErrCorruptTail](t, f.s.MayConduct(InstanceRef(a.UUID), sprint(331), at(2*time.Minute)), "conduct lookup")
+	_, err = f.s.DeputyOccupancies(at(2 * time.Minute))
+	wantErr[*ErrCorruptTail](t, err, "occupancy lookup")
+}
+
+func TestDeputyRoleAddressSurvivesVacancyAndHandoff(t *testing.T) {
+	f := newDeputyFixture(t)
+	a, b := f.instance(t, "Ada"), f.instance(t, "Bo")
+	da := f.mustGrantDeputy(t, a.UUID, DeputyScope{Sprints: []int{331, 332}}, at(time.Minute))
+	occ, ok, err := f.s.DeputyOccupant("deputy:331,332", at(2*time.Minute))
+	if err != nil || !ok || occ.Holder != a.UUID || occ.Topic != "deputy.331,332" {
+		t.Fatalf("occupant = %+v %v %v", occ, ok, err)
+	}
+	if err := f.s.DeputyRevoke(f.ste, f.epoch, da.ID, at(3*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	occ, ok, _ = f.s.DeputyOccupant("deputy:331,332", at(4*time.Minute))
+	if !ok || !occ.Vacant || occ.Holder != "" || occ.Address != "deputy:331,332" {
+		t.Fatalf("vacant address = %+v %v", occ, ok)
+	}
+	f.mustGrantDeputy(t, b.UUID, DeputyScope{Sprints: []int{332, 331}}, at(5*time.Minute))
+	occ, _, _ = f.s.DeputyOccupant("deputy:331,332", at(6*time.Minute))
+	if occ.Vacant || occ.Holder != b.UUID {
+		t.Fatalf("handoff holder = %+v", occ)
+	}
+	all, _ := f.s.DeputyOccupancies(at(6 * time.Minute))
+	if len(all) != 1 {
+		t.Fatalf("one durable address expected, got %+v", all)
 	}
 }
 
-func TestDeputyRequiresEpisodeUUID(t *testing.T) {
-	s := newStore(t)
-	ste := agent("steward")
-	ep := mustClaim(t, s, ste, at(0))
-	// Name-only holder should be rejected at grant time
-	nameOnly := principal.Ref{Kind: principal.KindAgent, Name: "bare", Host: "test-host"}
-	if _, err := s.DeputyAdd(ste, ep, nameOnly, "bare", DeputyScope{Sprints: []int{331}}, 24*time.Hour, at(time.Minute)); err == nil {
-		t.Fatal("Name-only holder without Episode should be rejected")
+// cliAs runs the real cobra tree as a given principal (cli() pins "tester").
+func cliAs(t *testing.T, dir, urn string, args ...string) (string, error) {
+	t.Helper()
+	t.Setenv("BASHY_PRINCIPAL", urn)
+	t.Setenv("BASHY_EPISODE", "")
+	t.Setenv("BASHY_HOST_ID", "cli-test-machine")
+	t.Setenv(EpochEnv, os.Getenv(EpochEnv))
+	cmd := NewStewardCmd(WithRegistryRoot(cliRegistry(dir)))
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetIn(strings.NewReader(""))
+	cmd.SetArgs(append([]string{"--dir", dir}, args...))
+	err := cmd.Execute()
+	return out.String(), err
+}
+
+func TestDeputyCLI(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(fleet.InstanceDirEnv, t.TempDir())
+	seedSeat(t, dir)
+	is := fleet.NewInstanceStore("").WithCap(-1)
+	inst, err := is.Open(fleet.Family{Name: "cfg", Display: "Ada", Policy: fleet.PolicySingle, Bindings: []string{"claude:test"}}, fleet.OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
 	}
-	// bare UUID via CLI resolver path: DeputyAdd requires Episode, so bare UUID grant must carry Episode
-	bareUUID := "550e8400-e29b-41d4-a716-446655440000"
-	holder := principal.Ref{Kind: principal.KindAgent, Episode: bareUUID, Host: "test-host"}
-	dep := mustDeputy(t, s, ste, ep, holder, bareUUID, DeputyScope{Sprints: []int{332}}, 24*time.Hour, at(2*time.Minute))
-	if dep.Holder.Episode != bareUUID {
-		t.Fatalf("bare UUID holder episode mismatch: %q", dep.Holder.Episode)
+	if out, err := cli(t, dir, "deputy", "add", "0b9a3f0e-1c2d-4e5f-8a9b-0c1d2e3f4a5b", "--sprints", "331"); err == nil {
+		t.Fatalf("unknown UUID granted through the CLI:\n%s", out)
 	}
-	// Name-only holder cannot gain authority even if a deputy exists for same Name
-	nameOnly2 := principal.Ref{Kind: principal.KindAgent, Name: "same-name", Host: "test-host"}
-	// holder has Episode, but checker with Name-only should fail
-	if err := s.CheckDeputyAuthority(nameOnly2, DeputyActionJudge, 332, "", at(3*time.Minute)); err == nil {
-		t.Fatal("Name-only checker should not match UUID-granted deputy")
+	out := mustCLI(t, dir, "deputy", "add", "Ada", "--sprints", "331,332", "--ttl", "2h")
+	if !strings.Contains(out, inst.UUID) || !strings.Contains(out, "deputy:331,332") {
+		t.Fatalf("deputy add output:\n%s", out)
+	}
+	if out := mustCLI(t, dir, "deputy", "occupant", "deputy:331,332"); !strings.Contains(out, inst.UUID) {
+		t.Fatalf("occupant output:\n%s", out)
+	}
+	deputy := principal.InstanceURN(inst.UUID)
+	if out, err := cliAs(t, dir, deputy, "act", "gate", "--sprint", "331", "-m", "green"); err != nil {
+		t.Fatalf("deputy gate via CLI: %v\n%s", err, out)
+	}
+	if out, err := cliAs(t, dir, deputy, "act", "gate", "--sprint", "400"); err == nil {
+		t.Fatalf("deputy out-of-scope gate via CLI passed:\n%s", out)
+	}
+	if out, err := cliAs(t, dir, deputy, "act", "gate", "--sprint", "331", "--epoch", "99"); err == nil {
+		t.Fatalf("deputy act with a stale epoch passed via CLI:\n%s", out)
+	}
+	if out, err := cliAs(t, dir, deputy, "deputy", "add", "Ada", "--sprints", "500"); err == nil {
+		t.Fatalf("deputy granted a deputy via CLI:\n%s", out)
+	}
+	if out := mustCLI(t, dir, "deputy", "list"); !strings.Contains(out, "active") {
+		t.Fatalf("deputy list:\n%s", out)
+	}
+	t.Setenv(EpochEnv, "")
+	if out, err := cliAs(t, dir, deputy, "act", "gate", "--sprint", "331"); err == nil {
+		t.Fatalf("deputy act with no epoch passed via CLI:\n%s", out)
 	}
 }
 
-func TestDeputyCorruptJournalFences(t *testing.T) {
-	s := newStore(t)
-	ste := agent("steward")
-	ep := mustClaim(t, s, ste, at(0))
-	holder := deputyHolder("deputyA", "uuid-a")
-	mustDeputy(t, s, ste, ep, holder, "deputyA", DeputyScope{Sprints: []int{331}}, 24*time.Hour, at(time.Minute))
-	appendRaw(t, s, "{\"bad\": }\n")
-	if err := s.CheckDeputyAuthority(holder, DeputyActionJudge, 331, "", at(2*time.Minute)); err == nil {
-		t.Fatal("corrupt journal should fence deputy authority")
+func TestGlossaryCommand(t *testing.T) {
+	dir := t.TempDir()
+	out := mustCLI(t, dir, "glossary")
+	for _, w := range []string{"steward", "deputy", "conductor", "worker", "deputy:<scope>", "conductor:<sprint>", `"manager"`} {
+		if !strings.Contains(out, w) {
+			t.Fatalf("glossary missing %q:\n%s", w, out)
+		}
 	}
-	if err := s.AuthorizeAct(holder, ep, DeputyActionJudge, 331, "", at(2*time.Minute)); err == nil {
-		t.Fatal("corrupt journal should fence AuthorizeAct")
+	if _, err := cli(t, dir, "glossary", "director"); err == nil {
+		t.Fatal("glossary invented a fourth role")
 	}
-}
-
-func TestDeputyDeterministicEligibleGrant(t *testing.T) {
-	s := newStore(t)
-	ste := agent("steward")
-	ep := mustClaim(t, s, ste, at(0))
-	holder := deputyHolder("deputyA", "uuid-a")
-	// Grant, revoke, re-grant same UUID same scope — multiple historical grants must not mask live eligible one
-	dep1 := mustDeputy(t, s, ste, ep, holder, "deputyA", DeputyScope{Sprints: []int{331}}, 24*time.Hour, at(time.Minute))
-	s.DeputyRevoke(ste, ep, dep1.ID, at(2*time.Minute))
-	mustDeputy(t, s, ste, ep, holder, "deputyA", DeputyScope{Sprints: []int{331}}, 24*time.Hour, at(3*time.Minute))
-	if err := s.CheckDeputyAuthority(holder, DeputyActionJudge, 331, "", at(4*time.Minute)); err != nil {
-		t.Fatalf("live eligible grant should be selected despite historical revoked grant, got %v", err)
-	}
-	if err := s.AuthorizeAct(holder, ep, DeputyActionGate, 331, "", at(4*time.Minute)); err != nil {
-		t.Fatalf("AuthorizeAct should find live eligible grant, got %v", err)
-	}
-}
-
-type countingResolver struct {
-	handle string
-	uuids  []string
-	calls  *int
-}
-
-func (r *countingResolver) Resolve(handle string) (principal.Ref, error) {
-	idx := *r.calls
-	*r.calls++
-	if idx >= len(r.uuids) {
-		idx = len(r.uuids) - 1
-	}
-	return principal.Ref{Kind: principal.KindAgent, Name: r.handle, Episode: r.uuids[idx], Host: "test-host"}, nil
 }

@@ -49,17 +49,13 @@ func rolesForBoard() []bus.HostRole {
 		}
 	}
 	out := []bus.HostRole{role}
-	// Deputy role mail: deputy:<scope> is durable and survives holder handoff
-	// because the topic is the scope, not the holder. Each active deputy
-	// contributes one HostRole so bus addresses them via existing inbox/mb/ping/meet.
+	// deputy:<scope> is role mail through the same addressing. The address is
+	// the SCOPE, so it survives vacancy and handoff; Holder is the current
+	// instance UUID snapshot, empty while vacant — never a reusable label.
 	if st, err := Open(""); err == nil {
-		if deps, err := st.DeputyActive(time.Now()); err == nil {
-			for _, d := range deps {
-				out = append(out, bus.HostRole{
-					Label: DeputyLabelForScope(d.Scope),
-					Topic: DeputyTopicForScope(d.Scope),
-					Holder: d.Holder.Name,
-				})
+		if occs, err := st.DeputyOccupancies(time.Now()); err == nil {
+			for _, occ := range occs {
+				out = append(out, bus.HostRole{Label: occ.Address, Topic: occ.Topic, Holder: occ.Holder})
 			}
 		}
 	}

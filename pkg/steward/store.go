@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/qiangli/yoke/pkg/fleet"
 )
 
 // clockSkew is how far a timestamp may run ahead of our clock before we stop
@@ -55,9 +57,11 @@ type Store struct {
 	registryRoot string
 	// maxTranscript bounds transcript artifacts; overridable for tests.
 	maxTranscript int64
-	// deputyResolver resolves a handle to an instance snapshot at deputy grant time.
-	// Nil means handles are taken as literal holder names; a real fleet resolver will be injected by the host.
+	// deputyResolver resolves a handle to an instance snapshot at deputy grant
+	// time. Nil means the host's fleet.InstanceStore (InstanceResolver).
 	deputyResolver DeputyResolver
+	// epicMembership answers sprint→epic for mixed-scope questions; nil fails closed.
+	epicMembership EpicMembership
 }
 
 // Option configures a Store.
@@ -140,11 +144,25 @@ func WithScope(id string) Option {
 	}))
 }
 
-// WithDeputyResolver injects the instance handle resolver used at deputy grant time.
-// The resolver maps a human handle (e.g. "Esme-2") to a holder instance UUID snapshot.
-// Stored snapshot ensures reusing a handle never transfers old authority.
+// WithDeputyResolver injects the resolver used at deputy grant time; the
+// default is InstanceResolver over the host's fleet.InstanceStore.
 func WithDeputyResolver(r DeputyResolver) Option {
 	return func(s *Store) { s.deputyResolver = r }
+}
+
+// WithEpicMembership injects the sprint→epic lookup for mixed epic/sprint
+// deputy scopes. Without it those questions fail closed.
+func WithEpicMembership(m EpicMembership) Option {
+	return func(s *Store) { s.epicMembership = m }
+}
+
+// DeputyResolver returns the grant-time resolver: the injected one, else the
+// host's accepted fleet.InstanceStore.
+func (s *Store) DeputyResolver() DeputyResolver {
+	if s.deputyResolver != nil {
+		return s.deputyResolver
+	}
+	return InstanceResolver{Store: fleet.NewInstanceStore("")}
 }
 
 // Open prepares the store directory. The journal records what an agent did across

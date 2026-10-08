@@ -3,86 +3,105 @@
 
 package role
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
-// GlossaryEntry is one official role or occupancy in the binary glossary.
-// It is generated from existing official vocabulary (role.Kind) plus the
-// deputy occupancy, not hand-written prose.
+// The official names are steward, deputy, conductor and worker
+// (docs/orchestration-roles.md §3a). Only steward and conductor are a Kind;
+// deputy is an OCCUPANCY of the steward position and worker holds no seat, so
+// neither adds a Kind. Everyday words ("manager", "lead", …) are read in
+// context, never policed.
+const (
+	Deputy = "deputy"
+	Worker = "worker"
+)
+
+// Kinds is the official title vocabulary.
+func Kinds() []Kind { return []Kind{Steward, Conductor} }
+
+// GlossaryEntry is one official name in the binary glossary.
 type GlossaryEntry struct {
-	Name            string            `json:"name"`
-	Title           string            `json:"title"`
-	Kind            Kind              `json:"kind,omitempty"`
-	Scope           string            `json:"scope"`
-	Occupancy       string            `json:"occupancy"`
-	Description     string            `json:"description"`
-	Address         string            `json:"address"`
+	Name             string            `json:"name"`
+	Kind             Kind              `json:"kind,omitempty"` // the title it is (or occupies)
+	Occupancy        bool              `json:"occupancy,omitempty"`
+	Scope            string            `json:"scope"`
+	Address          string            `json:"address"`
+	Holds            string            `json:"holds"`
+	Description      string            `json:"description"`
 	AliasesByContext map[string]string `json:"aliases_by_context,omitempty"`
 }
 
-// Glossary returns the single binary role glossary built from existing
-// official vocabulary plus deputy occupancy. Official names are
-// steward, deputy, conductor and worker; everyday words are shown by context.
-func Glossary() []GlossaryEntry {
-	return []GlossaryEntry{
-		{
-			Name:        "steward",
-			Title:       "steward",
-			Kind:        Steward,
-			Scope:       "one machine × one OS account",
-			Occupancy:   "Authority{Holder,Epoch} + heartbeat, tri-state liveness, epoch fencing, authorized Takeover (yoke/pkg/steward/)",
-			Description: "The one steward per host×user who answers for the host. Holds the seat, runs the journal, and is the only seat that may allocate across scopes, release cross-scope resources, and integrate across deputies.",
-			Address:     "steward",
-			AliasesByContext: map[string]string{
-				"host":    "steward",
-				"manager": "steward (when talking about the host)",
-			},
-		},
-		{
-			Name:        "deputy",
-			Title:       "deputy",
-			Kind:        Steward, // occupancy of the steward position, not another Kind
-			Scope:       "listed sprints or an epic, non-overlapping, time-boxed",
-			Occupancy:   "Holder instance UUID, OnBehalfOf steward, non-overlapping scope (listed sprints or an epic), time box, revocation and steward epoch fencing. Several per host×user.",
-			Description: "An occupancy of the steward position. May perform the steward's four acts only within its scope: activate scope transfer, fence, judge and run the merge gate. Cross-scope allocation/release/integration stays with the steward. Flat — no deputies of deputies, and a deputy cannot conduct a sprint in its own scope. Addressed as deputy:<scope> via existing inbox/mb/ping/meet.",
-			Address:     "deputy:<scope>",
-			AliasesByContext: map[string]string{
-				"manager":   "deputy (when talking about managing several sprints)",
-				"supervisor": "deputy in prose; official is deputy",
-				"lead":      "deputy in prose; official is deputy",
-			},
-		},
-		{
-			Name:        "conductor",
-			Title:       "conductor",
-			Kind:        Conductor,
-			Scope:       "one sprint",
-			Occupancy:   "weaveStoryLease{Holder,At}, 30 min TTL (yoke/pkg/weave/weave_story.go)",
-			Description: "Holds one sprint's lease and delivers that sprint. One writer per sprint; N sibling conductors under one steward is the flat scaling pattern.",
-			Address:     "conductor:<sprint>",
-			AliasesByContext: map[string]string{
-				"manager":       "conductor (when talking about managing a sprint)",
-				"sprint manager": "conductor",
-			},
-		},
-		{
-			Name:        "worker",
-			Title:       "worker",
-			Kind:        "",
-			Scope:       "one run",
-			Occupancy:   "no seat — addressed through its conductor",
-			Description: "Catch-all for agents doing the work: a weave agent, a foreman sub-hub, or a harness-internal subagent. Every actor is either an addressable seat or somebody's worker, with nothing in between.",
-			Address:     "(via conductor)",
-			AliasesByContext: map[string]string{
-				"agent": "worker in prose; official is worker",
-			},
-		},
+// AliasContexts lists the everyday words in a stable order.
+func (e GlossaryEntry) AliasContexts() []string {
+	out := make([]string, 0, len(e.AliasesByContext))
+	for k := range e.AliasesByContext {
+		out = append(out, k)
 	}
+	sort.Strings(out)
+	return out
+}
+
+// Glossary is generated from the vocabulary above: one entry per Kind, the
+// deputy occupancy of the steward Kind, and worker. Addresses come from
+// Assignment.Label so the glossary cannot drift from what addressing accepts.
+func Glossary() []GlossaryEntry {
+	var out []GlossaryEntry
+	for _, k := range Kinds() {
+		switch k {
+		case Steward:
+			out = append(out, GlossaryEntry{
+				Name: string(k), Kind: k,
+				Scope:       "one machine × one OS account",
+				Address:     Assignment{Kind: k}.Label(),
+				Holds:       "the steward seat: holder, epoch fence, journal",
+				Description: "answers for the host; the only seat that allocates across scopes, releases and integrates, and grants deputies",
+				AliasesByContext: map[string]string{
+					"manager": "the steward, when talking about the host",
+				},
+			}, GlossaryEntry{
+				Name: Deputy, Kind: k, Occupancy: true,
+				Scope:       "listed sprints or one epic; non-overlapping; time-boxed",
+				Address:     Deputy + ":<scope>",
+				Holds:       "an occupancy of the steward seat: instance UUID, on behalf of the steward, fenced by its epoch",
+				Description: "performs the steward's four acts (activate, fence, judge, merge gate) inside its scope; never conducts there; no deputies of deputies",
+				AliasesByContext: map[string]string{
+					"manager":    "a deputy, when talking about managing several sprints",
+					"supervisor": "a deputy, in prose",
+					"lead":       "a deputy, in prose",
+				},
+			})
+		case Conductor:
+			out = append(out, GlossaryEntry{
+				Name: string(k), Kind: k,
+				Scope:       "one sprint",
+				Address:     Assignment{Kind: k, Ref: "<sprint>"}.Label(),
+				Holds:       "the sprint lease",
+				Description: "delivers one sprint; escalates to its deputy, or to the steward",
+				AliasesByContext: map[string]string{
+					"manager":        "the conductor, when talking about managing a sprint",
+					"sprint manager": "the conductor",
+				},
+			})
+		}
+	}
+	return append(out, GlossaryEntry{
+		Name:        Worker,
+		Scope:       "one run",
+		Address:     "(through its conductor)",
+		Holds:       "no seat",
+		Description: "an agent doing the work under a conductor",
+		AliasesByContext: map[string]string{
+			"agent": "a worker, in prose",
+		},
+	})
 }
 
 // GlossaryByName returns one entry by official name, case-insensitive.
 func GlossaryByName(name string) (GlossaryEntry, bool) {
 	for _, e := range Glossary() {
-		if strings.EqualFold(e.Name, name) {
+		if strings.EqualFold(e.Name, strings.TrimSpace(name)) {
 			return e, true
 		}
 	}
