@@ -4044,7 +4044,17 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		}
 		defer sealedCleanup()
 	}
-	tool := exec.CommandContext(admission.ctx, toolArgs[0], toolArgs[1:]...)
+	// The supervisor, rather than a particular transport, owns the hard
+	// wall-clock cap. PTY launches also have a watchdog for their richer UI
+	// diagnostics, but pointed/headless launches wait directly below; deriving
+	// this context here gives every launch path the same process-group kill.
+	runCtx := admission.ctx
+	cancelRun := func() {}
+	if opts.maxRuntime > 0 {
+		runCtx, cancelRun = context.WithTimeout(admission.ctx, opts.maxRuntime)
+	}
+	defer cancelRun()
+	tool := exec.CommandContext(runCtx, toolArgs[0], toolArgs[1:]...)
 	weaveConfigureOwnedCancellation(tool)
 	if opts.ptyMode() == "never" {
 		weavePrepareOwnedChild(tool)
@@ -4214,6 +4224,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			childLaunched = true
 			exitCode, killReason, coachRep, coachMode, runErr = runWeaveToolPTY(tool, nil, guards)
 		}
+	}
+	if errors.Is(context.Cause(runCtx), context.DeadlineExceeded) {
+		killReason = fmt.Sprintf("max-runtime %s exceeded", opts.maxRuntime)
 	}
 
 	// Persist the outcome regardless of envelope mode — `weave wait`

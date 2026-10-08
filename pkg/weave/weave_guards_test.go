@@ -51,6 +51,53 @@ func TestRunWeaveToolPTYMaxRuntimeFires(t *testing.T) {
 	}
 }
 
+// Headless pointed agents do not pass through runWeaveToolPTY. Their supervisor
+// must still enforce the recorded hard cap and retain the workspace for a
+// deliberate resume or salvage.
+func TestWeaveHeadlessMaxRuntimeFires(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process-group assertion is unix-only")
+	}
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("sleep not on PATH")
+	}
+	root := setupIsolationFixture(t)
+	t.Chdir(root)
+	if _, code := runWeave(t, "add", "bounded headless", "--points", "1", "--json"); code != 0 {
+		t.Fatal("weave add failed")
+	}
+
+	done := make(chan int, 1)
+	go func() {
+		_, code := runWeave(t, "start", "--run", "1", "--pty", "never", "--max-runtime", "150ms", "--", "sleep", "60")
+		done <- code
+	}()
+	select {
+	case code := <-done:
+		if code == 0 {
+			t.Fatal("headless sleep exited successfully after runtime cap")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("headless max-runtime guard did not fire")
+	}
+
+	dir, err := weaveQueueDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q, err := loadWeaveQueue(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	it := findWeaveItem(q, 1)
+	if it == nil || it.State != "killed" || !strings.Contains(it.KilledBy, "max-runtime") {
+		t.Fatalf("headless cap outcome = %+v, want killed by max-runtime", it)
+	}
+	if !weaveWorkspaceLive(it) {
+		t.Fatalf("capped headless run lost workspace: %+v", it)
+	}
+}
+
 func TestParseWeaveMemLimit(t *testing.T) {
 	cases := []struct {
 		in      string
