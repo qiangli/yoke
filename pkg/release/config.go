@@ -143,7 +143,7 @@ type refusal struct {
 	hint string
 }
 
-const binmgrHint = "run the tail through the binmgr-managed goreleaser binary"
+const binmgrHint = "run the tail through the provisioned release engine (`bashy release --snapshot` handles this itself)"
 
 // LoadConfig reads and validates a .goreleaser.yaml subset from path.
 func LoadConfig(path string) (*Config, error) {
@@ -156,6 +156,23 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	return cfg, nil
+}
+
+// IsUnimplemented reports whether err means "a config beyond the embedded
+// subset": an ErrUnsupportedStage refusal, or a strict-decode type error for
+// a key this tier does not declare. Either way the right move is to hand the
+// whole config to the provisioned release engine, which speaks the full
+// schema. Syntax errors, missing files and I/O failures are not
+// unimplemented — they fail where they stand.
+func IsUnimplemented(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrUnsupportedStage) {
+		return true
+	}
+	var terr *yaml.TypeError
+	return errors.As(err, &terr)
 }
 
 // ParseConfig parses and validates config bytes. Unknown keys are an error:

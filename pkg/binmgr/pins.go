@@ -99,6 +99,16 @@ var pinnedDigests = map[string]string{
 	"loom@v1.27.3/windows/amd64": "d9ed1fc48ec33a8cb97d7fed3882b4e159efc3fcae3a77d0d240e250d5bf6e21",
 	"loom@v1.27.3/windows/arm64": "d590f8be49cdac0a734b04b7936c18986eb0e600cc98d5f3414fd797f092c1d4",
 
+	// goreleaser@v2.18.2-bashy.1 — qiangli/goreleaser fork release, built from
+	// v2.18.2 + a README fork notice (commit 7af3788) with Go 1.27.2.
+	// Provisioned silently by `bashy release`; never a user-facing verb.
+	"goreleaser@v2.18.2-bashy.1/darwin/amd64":  "6541f0aed90654fcf69bcdd6979e3a7b9407aabcc450b028d547bb05ba87df4d",
+	"goreleaser@v2.18.2-bashy.1/darwin/arm64":  "5e4dce5d497058651b453b14e69a189b8928e01cfb0b6117bab75f4a7badf384",
+	"goreleaser@v2.18.2-bashy.1/linux/amd64":   "0801ec64d19e18393e1620d9cccb71ee01af0376b79f961c3e90c6c2f0132b5a",
+	"goreleaser@v2.18.2-bashy.1/linux/arm64":   "7b65d7e90db05b980969ab2db42993f35b3946b78d3a800d5d82a7a10232cd3b",
+	"goreleaser@v2.18.2-bashy.1/windows/amd64": "6e9ff7dd2d9d88810b26c25d0fafcacca2f0df341209bdf7c6c4c4ab1fbf52cd",
+	"goreleaser@v2.18.2-bashy.1/windows/arm64": "c6d83c623d3b5b4ecb4b5bbe2dd18b9a00aded82be536bc9e26d69a733be6eb1",
+
 	// ollama@v0.40.1 — official ollama/ollama release sha256sum.txt
 	"ollama@v0.40.1/darwin/amd64":  "66e1587711f3a06315b23782ba74897001da6c8b8edf6c0371f7533015a076dd",
 	"ollama@v0.40.1/darwin/arm64":  "66e1587711f3a06315b23782ba74897001da6c8b8edf6c0371f7533015a076dd",

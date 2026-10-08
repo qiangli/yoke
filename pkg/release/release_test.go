@@ -44,6 +44,35 @@ func TestParseConfigRejectsUnknownKey(t *testing.T) {
 	}
 }
 
+// IsUnimplemented separates "a config for the provisioned engine" from
+// "a config that is broken": named-but-unembedded stages and unknown keys
+// delegate; syntax errors, nil and anything else fail where they stand.
+func TestIsUnimplemented(t *testing.T) {
+	_, stageErr := ParseConfig([]byte("signs:\n  - cmd: cosign\n"))
+	_, unknownErr := ParseConfig([]byte("wobbles:\n  - nope\n"))
+	_, syntaxErr := ParseConfig([]byte("builds:\n  - id: [unclosed\n"))
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"unsupported stage", stageErr, true},
+		{"unknown key", unknownErr, true},
+		{"syntax error", syntaxErr, false},
+		{"other", errors.New("boom"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.err == nil && tc.want {
+				t.Fatal("test setup: expected a non-nil error")
+			}
+			if got := IsUnimplemented(tc.err); got != tc.want {
+				t.Errorf("IsUnimplemented(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestApplyDefaults(t *testing.T) {
 	cfg, err := ParseConfig([]byte("project_name: demo\n"))
 	if err != nil {
