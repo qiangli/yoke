@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -14,8 +15,18 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
-// openRepo opens the git repository at or above dir.
+// openRepo opens the git repository at or above dir. A ".git" FILE
+// (linked worktree or submodule-style gitdir pointer) opens with
+// go-git's commondir support so objects/refs resolve from the shared
+// store; without it every read in a linked worktree fails with
+// "object not found". Plain directories are unaffected.
 func openRepo(dir string) (*gogit.Repository, error) {
+	if fi, err := os.Stat(filepath.Join(dir, ".git")); err == nil && !fi.IsDir() {
+		return gogit.PlainOpenWithOptions(dir, &gogit.PlainOpenOptions{
+			DetectDotGit:          true,
+			EnableDotGitCommonDir: true,
+		})
+	}
 	return gogit.PlainOpenWithOptions(dir, &gogit.PlainOpenOptions{
 		DetectDotGit: true,
 	})
@@ -1086,14 +1097,6 @@ func nativeShow(_ context.Context, dir string, args []string) (*ExecResult, erro
 	b.WriteString(patch.String())
 
 	return &ExecResult{Stdout: b.String()}, nil
-}
-
-func nativeStash(_ context.Context, _ string, _ []string) (*ExecResult, error) {
-	return nil, ErrUnsupported
-}
-
-func nativeWorktree(_ context.Context, _ string, _ []string) (*ExecResult, error) {
-	return nil, ErrUnsupported
 }
 
 func nativeMerge(_ context.Context, dir string, args []string) (*ExecResult, error) {

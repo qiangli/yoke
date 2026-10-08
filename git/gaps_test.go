@@ -374,6 +374,298 @@ func TestNativeCherry_SkipsMerges(t *testing.T) {
 	}
 }
 
+// openWorktreeStatus opens path with go-git and returns its status —
+// proving our gitfile layout is a first-class repo to the engine.
+func openWorktreeStatus(t *testing.T, path string) gogit.Status {
+	t.Helper()
+	r, err := openRepo(path)
+	if err != nil {
+		t.Fatalf("open linked worktree: %v", err)
+	}
+	w, err := r.Worktree()
+	if err != nil {
+		t.Fatalf("worktree: %v", err)
+	}
+	st, err := w.Status()
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	return st
+}
+
+// TestNativeWorktree_AddRemoveList pins `worktree add/remove/list`: a new
+// checkout at a commit with a clean go-git status, branch double-checkout
+// refused without -f, dirty removal refused without --force, and list
+// output in both shapes.
+func TestNativeWorktree_AddRemoveList(t *testing.T) {
+	ctx := context.Background()
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "main")
+	if _, err := Init(InitOptions{Path: dir}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	commitFiles(t, dir, map[string]string{"a.txt": "line1\n"}, "first")
+	commitFiles(t, dir, map[string]string{"a.txt": "line1\nline2\n"}, "second")
+	base := currentBranch(t, dir)
+
+	wt1 := filepath.Join(parent, "wt1")
+	if _, err := Exec(ctx, dir, []string{"worktree", "add", wt1}); err != nil {
+		t.Fatalf("worktree add: %v", err)
+	}
+	if got := readFile(t, wt1, "a.txt"); got != "line1\nline2\n" {
+		t.Errorf("wt a.txt = %q", got)
+	}
+	if st := openWorktreeStatus(t, wt1); !st.IsClean() {
+		t.Errorf("fresh worktree status not clean: %v", st)
+	}
+	// The .git file points into the main admin dir (host-git layout).
+	dotgit, err := os.ReadFile(filepath.Join(wt1, ".git"))
+	if err != nil || !strings.HasPrefix(string(dotgit), "gitdir: ") {
+		t.Fatalf(".git file = %q, err = %v", dotgit, err)
+	}
+
+	res, err := Exec(ctx, dir, []string{"worktree", "list"})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if !strings.Contains(res.Stdout, wt1) || !strings.Contains(res.Stdout, "["+base+"]") {
+		t.Errorf("list = %q, want wt path + [%s]", res.Stdout, base)
+	}
+	res, err = Exec(ctx, dir, []string{"worktree", "list", "--porcelain"})
+	if err != nil {
+		t.Fatalf("list --porcelain: %v", err)
+	}
+	if !strings.Contains(res.Stdout, "worktree "+wt1) || !strings.Contains(res.Stdout, "branch refs/heads/"+base) {
+		t.Errorf("porcelain = %q", res.Stdout)
+	}
+
+	// Same branch twice without -f: loud refusal, host-git's shape.
+	res, err = Exec(ctx, dir, []string{"worktree", "add", filepath.Join(parent, "wt-dup"), base})
+	if err != nil {
+		t.Fatalf("dup add: %v", err)
+	}
+	if res.ExitCode != 128 || !strings.Contains(res.Stderr, "already used by worktree") {
+		t.Errorf("dup add = %+v, want 128 + already-used", res)
+	}
+	wt2 := filepath.Join(parent, "wt2")
+	if _, err := Exec(ctx, dir, []string{"worktree", "add", "-f", wt2, base}); err != nil {
+		t.Fatalf("worktree add -f: %v", err)
+	}
+
+	// Dirty worktree: removal refused without --force, honored with it.
+	if err := os.WriteFile(filepath.Join(wt1, "a.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err = Exec(ctx, dir, []string{"worktree", "remove", wt1})
+	if err != nil {
+		t.Fatalf("remove dirty: %v", err)
+	}
+	if res.ExitCode != 128 || !strings.Contains(res.Stderr, "--force") {
+		t.Errorf("remove dirty = %+v, want 128 + --force hint", res)
+	}
+	if _, err := Exec(ctx, dir, []string{"worktree", "remove", "--force", wt1}); err != nil {
+		t.Fatalf("remove --force: %v", err)
+	}
+	if _, serr := os.Stat(wt1); !os.IsNotExist(serr) {
+		t.Errorf("wt1 still on disk after remove")
+	}
+	// Clean worktree removes without --force.
+	if _, err := Exec(ctx, dir, []string{"worktree", "remove", wt2}); err != nil {
+		t.Fatalf("remove clean: %v", err)
+	}
+
+	// Detached checkout at a hash lists as detached.
+	head, rerr := RevParse(RevParseOptions{RepoPath: dir})
+	if rerr != nil {
+		t.Fatalf("RevParse: %v", rerr)
+	}
+	wt3 := filepath.Join(parent, "wt3")
+	if _, err := Exec(ctx, dir, []string{"worktree", "add", wt3, head.Hash}); err != nil {
+		t.Fatalf("detached add: %v", err)
+	}
+	res, err = Exec(ctx, dir, []string{"worktree", "list", "--porcelain"})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if !strings.Contains(res.Stdout, "detached") {
+		t.Errorf("porcelain = %q, want a detached marker", res.Stdout)
+	}
+
+	// Not a worktree: loud fatal, never a silent no-op.
+	res, err = Exec(ctx, dir, []string{"worktree", "remove", filepath.Join(parent, "nope")})
+	if err != nil {
+		t.Fatalf("remove missing: %v", err)
+	}
+	if res.ExitCode != 128 {
+		t.Errorf("remove missing = %+v, want exit 128", res)
+	}
+}
+
+// dirtyFile overwrites a worktree file without staging or committing.
+func dirtyFile(t *testing.T, dir, name, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(name)), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestNativeStash_PushPopList pins `stash push/pop/list`: push snapshots
+// and restores HEAD, pop re-applies and drops, list shows the stack newest
+// first. Untracked files survive a push (host-git parity); overlapping
+// local changes refuse the pop with exit 1 and keep the entry.
+func TestNativeStash_PushPopList(t *testing.T) {
+	ctx := context.Background()
+	dir := makeTwoCommitRepo(t)
+	setLocalIdentity(t, dir)
+
+	dirtyFile(t, dir, "a.txt", "stashed change\n")
+	if err := os.WriteFile(filepath.Join(dir, "new-untracked.txt"), []byte("keep me\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Exec(ctx, dir, []string{"stash", "push", "-m", "test stash"})
+	if err != nil {
+		t.Fatalf("stash push: %v", err)
+	}
+	if !strings.Contains(res.Stdout, "Saved working directory") {
+		t.Errorf("push = %q", res.Stdout)
+	}
+	if got := readFile(t, dir, "a.txt"); got != "line1\nline2\n" {
+		t.Errorf("a.txt after push = %q, want HEAD content", got)
+	}
+	if got := readFile(t, dir, "new-untracked.txt"); got != "keep me\n" {
+		t.Errorf("untracked file after push = %q, must survive", got)
+	}
+
+	res, err = Exec(ctx, dir, []string{"stash", "list"})
+	if err != nil {
+		t.Fatalf("stash list: %v", err)
+	}
+	if !strings.Contains(res.Stdout, "stash@{0}: test stash") {
+		t.Errorf("list = %q", res.Stdout)
+	}
+
+	// Pop onto the clean tree: applies and drops the entry.
+	res, err = Exec(ctx, dir, []string{"stash", "pop"})
+	if err != nil {
+		t.Fatalf("stash pop: %v", err)
+	}
+	if !strings.Contains(res.Stdout, "Dropped stash@{0}") {
+		t.Errorf("pop = %q", res.Stdout)
+	}
+	if got := readFile(t, dir, "a.txt"); got != "stashed change\n" {
+		t.Errorf("a.txt after pop = %q", got)
+	}
+	res, err = Exec(ctx, dir, []string{"stash", "list"})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if strings.TrimSpace(res.Stdout) != "" {
+		t.Errorf("list after pop = %q, want empty", res.Stdout)
+	}
+
+	// Empty pop and clean push are loud-but-gentle, like host git.
+	res, err = Exec(ctx, dir, []string{"stash", "pop"})
+	if err != nil {
+		t.Fatalf("pop empty: %v", err)
+	}
+	if res.ExitCode != 1 {
+		t.Errorf("pop empty = %+v, want exit 1", res)
+	}
+	if _, err := Exec(ctx, dir, []string{"stash"}); err != nil {
+		t.Fatalf("bare stash on clean tree: %v", err)
+	}
+}
+
+// TestNativeStash_PathspecConflictAndRef pins pathspec push (only the
+// named file is stashed), pop conflicts (exit 1, entry kept), and
+// `pop stash@{n}` addressing.
+func TestNativeStash_PathspecConflictAndRef(t *testing.T) {
+	ctx := context.Background()
+	dir := makeTwoCommitRepo(t)
+	setLocalIdentity(t, dir)
+	commitFiles(t, dir, map[string]string{"b.txt": "bee\n"}, "add b")
+
+	dirtyFile(t, dir, "a.txt", "dirty a\n")
+	dirtyFile(t, dir, "b.txt", "dirty b\n")
+	if _, err := Exec(ctx, dir, []string{"stash", "push", "b.txt"}); err != nil {
+		t.Fatalf("pathspec push: %v", err)
+	}
+	if got := readFile(t, dir, "b.txt"); got != "bee\n" {
+		t.Errorf("b.txt after push = %q, want HEAD", got)
+	}
+	if got := readFile(t, dir, "a.txt"); got != "dirty a\n" {
+		t.Errorf("a.txt after pathspec push = %q, must stay dirty", got)
+	}
+	if _, err := Exec(ctx, dir, []string{"stash", "pop"}); err != nil {
+		t.Fatalf("pop: %v", err)
+	}
+	if got := readFile(t, dir, "b.txt"); got != "dirty b\n" {
+		t.Errorf("b.txt after pop = %q", got)
+	}
+
+	// Overlap: push v1, dirty v2, pop refuses and keeps the entry.
+	dirtyFile(t, dir, "a.txt", "v1\n")
+	if _, err := Exec(ctx, dir, []string{"stash", "push", "-m", "v1 entry"}); err != nil {
+		t.Fatalf("push v1: %v", err)
+	}
+	dirtyFile(t, dir, "a.txt", "v2\n")
+	res, err := Exec(ctx, dir, []string{"stash", "pop"})
+	if err != nil {
+		t.Fatalf("conflicting pop: %v", err)
+	}
+	if res.ExitCode != 1 || !strings.Contains(res.Stderr, "would be overwritten") {
+		t.Errorf("conflicting pop = %+v, want exit 1 + overwrite warning", res)
+	}
+	res, err = Exec(ctx, dir, []string{"stash", "list"})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if !strings.Contains(res.Stdout, "v1 entry") {
+		t.Errorf("entry dropped on conflict: %q", res.Stdout)
+	}
+	// Resolve by restoring HEAD content, then pop applies cleanly.
+	dirtyFile(t, dir, "a.txt", "line1\nline2\n")
+	if _, err := Exec(ctx, dir, []string{"stash", "pop"}); err != nil {
+		t.Fatalf("pop after resolve: %v", err)
+	}
+	if got := readFile(t, dir, "a.txt"); got != "v1\n" {
+		t.Errorf("a.txt = %q, want v1", got)
+	}
+
+	// stash@{n}: two entries, pop the older one by address.
+	dirtyFile(t, dir, "a.txt", "old\n")
+	if _, err := Exec(ctx, dir, []string{"stash", "push", "-m", "older"}); err != nil {
+		t.Fatalf("push older: %v", err)
+	}
+	dirtyFile(t, dir, "a.txt", "new\n")
+	if _, err := Exec(ctx, dir, []string{"stash", "push", "-m", "newer"}); err != nil {
+		t.Fatalf("push newer: %v", err)
+	}
+	if _, err := Exec(ctx, dir, []string{"stash", "pop", "stash@{1}"}); err != nil {
+		t.Fatalf("pop stash@{1}: %v", err)
+	}
+	if got := readFile(t, dir, "a.txt"); got != "old\n" {
+		t.Errorf("a.txt = %q, want older entry", got)
+	}
+	res, err = Exec(ctx, dir, []string{"stash", "list"})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if strings.Contains(res.Stdout, "older") || !strings.Contains(res.Stdout, "newer") {
+		t.Errorf("list = %q, want only newer left", res.Stdout)
+	}
+
+	for _, argv := range [][]string{
+		{"stash", "drop"},
+		{"stash", "push", "--index"},
+		{"stash", "push", "-u"},
+	} {
+		if _, err := Exec(ctx, dir, argv); err != ErrUnsupported {
+			t.Errorf("stash %v err = %v, want ErrUnsupported", argv, err)
+		}
+	}
+}
+
 // TestNativePush_Delete pins `push --delete` and the `:<branch>` refspec:
 // the branch leaves the remote, output mirrors host git's " - [deleted]"
 // stderr shape, and a ref-less --delete fails loud like host git (128).

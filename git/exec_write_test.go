@@ -459,15 +459,21 @@ func TestNativeStash_NotImplemented(t *testing.T) {
 
 	dir := setupTestRepo(t)
 
-	// All stash operations should return ErrUnsupported
-	_, err := nativeStash(context.Background(), dir, nil)
-	if err != ErrUnsupported {
-		t.Errorf("expected ErrUnsupported for stash, got %v", err)
+	// Stash is implemented (S252.2): an empty stack lists empty and pops
+	// loud, instead of the old blanket ErrUnsupported.
+	res, err := nativeStash(context.Background(), dir, []string{"list"})
+	if err != nil {
+		t.Fatalf("stash list: %v", err)
 	}
-
-	_, err = nativeStash(context.Background(), dir, []string{"list"})
-	if err != ErrUnsupported {
-		t.Errorf("expected ErrUnsupported for stash list, got %v", err)
+	if res.Stdout != "" {
+		t.Errorf("empty stash list = %q, want empty", res.Stdout)
+	}
+	res, err = nativeStash(context.Background(), dir, []string{"pop"})
+	if err != nil {
+		t.Fatalf("stash pop: %v", err)
+	}
+	if res.ExitCode != 1 {
+		t.Errorf("empty stash pop = %+v, want exit 1", res)
 	}
 }
 

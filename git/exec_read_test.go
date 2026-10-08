@@ -310,9 +310,15 @@ func TestNativeStash_ReturnsNotImplemented(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping in short mode")
 	}
-	_, err := nativeStash(context.Background(), "", nil)
-	if err != ErrUnsupported {
-		t.Errorf("expected ErrUnsupported, got %v", err)
+	// Stash is implemented (S252.2); what stays loud is the unrouted
+	// surface: unknown subcommands and index-tracking flags.
+	for _, argv := range [][]string{
+		{"drop"},
+		{"push", "--index"},
+	} {
+		if _, err := nativeStash(context.Background(), t.TempDir(), argv); err != ErrUnsupported {
+			t.Errorf("stash %v err = %v, want ErrUnsupported", argv, err)
+		}
 	}
 }
 

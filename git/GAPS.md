@@ -35,10 +35,26 @@ tracks the OPEN gaps**, prioritized by consumer-workflow impact.
 
 ## B. Routed but stubbed (entry exists, always returns `ErrUnsupported`)
 
-- [ ] **`stash` / `stash push <file>` / `stash pop`** (`exec_read.go:1091`) — **HIGH** —
+- [x] **`stash` / `stash push <file>` / `stash pop`** — **HIGH** —
       bisect/loom local-change isolation.
-- [ ] **`worktree add [-f] <path> [<commit>]` / `worktree remove --force`**
-      (`exec_read.go:1095`) — **HIGH** — weave sandbox + bisect isolation.
+      CLOSED 2026-10-08 (sprint 252, S252.2): `stash.go` — snapshot
+      semantics (push records tracked changes + HEAD base, restores HEAD;
+      pop re-applies file-by-file with overlap check, drops on success),
+      `push [-m] [path...]`, `pop [stash@{n}]`, `list`. Untracked files
+      survive push (sheltered across the hard reset). Storage is a JSON
+      stack under the main `.git/bashy-stash/` — host git neither sees our
+      entries nor vice versa (documented limitation). `--index`/`-u` and
+      drop/apply/show/branch stay loud ErrUnsupported. Proven by
+      `TestNativeStash_PushPopList` + `TestNativeStash_PathspecConflictAndRef`.
+- [x] **`worktree add [-f] <path> [<commit>]` / `worktree remove --force`**
+      — **HIGH** — weave sandbox + bisect isolation.
+      CLOSED 2026-10-08 (sprint 252, S252.2): `worktree.go` over real
+      gitfile linked worktrees (host-interoperable layout; `list` and
+      `--porcelain` included). Branch double-checkout refused without -f,
+      dirty removal refused without --force. `openRepo` now opens `.git`
+      files with go-git commondir support (plain repos unaffected). Proven
+      by `TestNativeWorktree_AddRemoveList` (fresh checkout reads clean
+      through go-git).
 - [ ] **`apply <patch>`** (`exec_write.go:471`) — MED — go-git lacks worktree patch-apply.
 - [ ] **`read-tree`** (`exec_plumbing.go:215`) — LOW (plumbing).
 - [ ] **`for-each-ref`** (`exec_read.go:925`) — LOW (format parsing).
