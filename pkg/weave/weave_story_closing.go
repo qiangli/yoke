@@ -12,7 +12,8 @@ package weave
 //
 //	committed   no uncommitted changes in the working tree
 //	pushed      nothing sitting only on this machine
-//	pinned      .sibling-pins agrees with each sibling's HEAD, where one exists
+//	pinned      each sibling pin (a go.mod version in a go.work workspace, or
+//	            legacy .sibling-pins) agrees with the sibling's HEAD
 //
 // The third is here because this tree learned it the hard way: a pin is the
 // ONLY sibling source CI sees, and inside an umbrella the siblings are
@@ -35,6 +36,7 @@ import (
 	"github.com/qiangli/coreutils/pkg/weavecli"
 
 	coregit "github.com/qiangli/yoke/git"
+	"github.com/qiangli/yoke/pkg/gomod"
 )
 
 // repoState is one linked repo's closing readiness.
@@ -229,6 +231,15 @@ func inspectRepo(st *repoState) {
 // Absent .sibling-pins means nothing to check — most repos have none, and their
 // absence is not a finding.
 func stalePins(repoPath string) []string {
+	if _, ok := gomod.FindWorkspace(repoPath); ok {
+		return gomod.StaleSiblings(repoPath)
+	}
+	return legacyStalePins(repoPath)
+}
+
+// legacyStalePins checks a .sibling-pins file (removed once every repo pins
+// siblings in go.mod).
+func legacyStalePins(repoPath string) []string {
 	data, err := os.ReadFile(filepath.Join(repoPath, ".sibling-pins"))
 	if err != nil {
 		return nil
