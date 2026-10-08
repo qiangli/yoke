@@ -168,6 +168,10 @@ var packages = map[string]Package{
 		"pidfile, a port probe that identifies the listener via /healthz before signalling it, and a "+
 		"stop that escalates so the port is actually freed. Adopted by the web console first; pkg/meet, "+
 		"pkg/sdlc and pkg/schedule still carry private copies and should migrate onto it"),
+	"sshclient": libPkg("peer", "SSH client transport (dial, known-hosts, pty resize) shared by bashy's "+
+		"peer channel/remote exec and outpost's ssh commands; moved here from outpost so bashy does not import outpost"),
+	"sshserver": libPkg("peer", "SSH server (sessions, port forwards, authorized_keys) that outpost embeds and "+
+		"bashy's peer reverse proxy dials; moved here from outpost so bashy does not import outpost"),
 	"mirror":        cmdPkg("mirror"),
 	"pair":          cmdPkg("pair"),
 	"patch":         cmdPkg("patch"),
