@@ -230,6 +230,20 @@ func TestCodexDefaultsToYoloAcrossLaunchKinds(t *testing.T) {
 	}
 }
 
+func TestCodexDefaultYoloDoesNotApplyToOtherTools(t *testing.T) {
+	for _, tool := range []string{"claude", "agy", "opencode", "ycode"} {
+		t.Run(tool, func(t *testing.T) {
+			l, err := ResolveWithCatalog(tool, Options{DryRun: true}, testCatalog(t.TempDir()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if slices.Contains(l.Args, "--dangerously-bypass-approvals-and-sandbox") {
+				t.Fatalf("non-Codex default inherited Codex bypass: %q", l.Args)
+			}
+		})
+	}
+}
+
 func TestCodexExplicitSandboxRemovesLocalBypassOverride(t *testing.T) {
 	got, err := FinalizeArgs("codex", []string{
 		"exec", "--dangerously-bypass-approvals-and-sandbox", "--sandbox", "danger-full-access",
