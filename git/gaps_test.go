@@ -6,6 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/config"
+	"github.com/go-git/go-git/v5/plumbing"
 )
 
 // TestIsAncestor covers both the typed predicate and the
@@ -275,5 +279,167 @@ func TestRepoRoot(t *testing.T) {
 	gotResolved, _ := filepath.EvalSymlinks(root)
 	if gotResolved != wantResolved {
 		t.Errorf("RepoRoot = %q, want %q", gotResolved, wantResolved)
+	}
+}
+
+// seedCherryRepo builds the branch-cleanup fixture: base with two commits,
+// feat branched off carrying one unique change ("gadget").
+func seedCherryRepo(t *testing.T) (dir, base string) {
+	t.Helper()
+	dir = makeTwoCommitRepo(t)
+	setLocalIdentity(t, dir)
+	base = currentBranch(t, dir)
+	ctx := context.Background()
+	if _, err := nativeCheckout(ctx, dir, []string{"-b", "feat"}); err != nil {
+		t.Fatalf("checkout -b feat: %v", err)
+	}
+	commitFiles(t, dir, map[string]string{"gadget.txt": "gadget\n"}, "add gadget")
+	if _, err := nativeCheckout(ctx, dir, []string{base}); err != nil {
+		t.Fatalf("checkout %s: %v", base, err)
+	}
+	return dir, base
+}
+
+// TestNativeCherry_MissingThenEquivalent pins `cherry <base> <feat>`: a
+// unique change reports "+", the same change re-applied on base under a
+// different SHA reports "-". Loud failures: unknown flags, missing args,
+// and unresolvable revisions return ErrUnsupported.
+func TestNativeCherry_MissingThenEquivalent(t *testing.T) {
+	dir, base := seedCherryRepo(t)
+	ctx := context.Background()
+
+	res, err := Exec(ctx, dir, []string{"cherry", base, "feat"})
+	if err != nil {
+		t.Fatalf("cherry: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(res.Stdout), "\n")
+	if len(lines) != 1 || !strings.HasPrefix(lines[0], "+ ") || len(lines[0]) != 42 {
+		t.Fatalf("cherry = %q, want one \"+ <full-sha>\" line", res.Stdout)
+	}
+
+	// Same change, different SHA on base: patch-identity must match.
+	commitFiles(t, dir, map[string]string{"gadget.txt": "gadget\n"}, "add gadget again")
+	res, err = Exec(ctx, dir, []string{"cherry", base, "feat"})
+	if err != nil {
+		t.Fatalf("cherry after replicate: %v", err)
+	}
+	if got := strings.TrimSpace(res.Stdout); !strings.HasPrefix(got, "- ") || len(strings.Split(got, "\n")) != 1 {
+		t.Errorf("cherry = %q, want one \"- <sha>\" line", res.Stdout)
+	}
+
+	// -v appends the subject; default head is HEAD (here: base, so empty).
+	res, err = Exec(ctx, dir, []string{"cherry", "-v", base, "feat"})
+	if err != nil {
+		t.Fatalf("cherry -v: %v", err)
+	}
+	if got := strings.TrimSpace(res.Stdout); !strings.HasSuffix(got, " add gadget") {
+		t.Errorf("cherry -v = %q, want subject suffix", res.Stdout)
+	}
+
+	for _, argv := range [][]string{
+		{"cherry", "--pretty", base, "feat"},
+		{"cherry"},
+		{"cherry", base, "feat", "extra"},
+		{"cherry", base, "no-such-branch"},
+	} {
+		if _, err := Exec(ctx, dir, argv); err != ErrUnsupported {
+			t.Errorf("cherry %v err = %v, want ErrUnsupported", argv, err)
+		}
+	}
+}
+
+// TestNativeCherry_SkipsMerges pins two host-git rules, both probed
+// against host git 2026-10-08: merge commits are never listed, and the
+// upstream equivalence set is post-merge-base only. Here side merges feat
+// after base already replicated the change, so the merge-base is base's
+// tip, the upstream set is empty, and the feat line reports "+" while the
+// merge commit itself stays silent — exactly one line either way.
+func TestNativeCherry_SkipsMerges(t *testing.T) {
+	dir, base := seedCherryRepo(t)
+	ctx := context.Background()
+	commitFiles(t, dir, map[string]string{"gadget.txt": "gadget\n"}, "add gadget again")
+	if _, err := nativeCheckout(ctx, dir, []string{"-b", "side"}); err != nil {
+		t.Fatalf("checkout -b side: %v", err)
+	}
+	if _, err := Merge(MergeOptions{RepoPath: dir, Ref: "feat", NoFF: true, Message: "merge feat"}); err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	res, err := Exec(ctx, dir, []string{"cherry", base, "side"})
+	if err != nil {
+		t.Fatalf("cherry: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(res.Stdout), "\n")
+	if len(lines) != 1 || !strings.HasPrefix(lines[0], "+ ") {
+		t.Errorf("cherry = %q, want exactly one (merge skipped, twin pre-merge-base) line", res.Stdout)
+	}
+}
+
+// TestNativePush_Delete pins `push --delete` and the `:<branch>` refspec:
+// the branch leaves the remote, output mirrors host git's " - [deleted]"
+// stderr shape, and a ref-less --delete fails loud like host git (128).
+func TestNativePush_Delete(t *testing.T) {
+	ctx := context.Background()
+	remoteDir := t.TempDir()
+	remote, err := gogit.PlainInit(remoteDir, true)
+	if err != nil {
+		t.Fatalf("init bare: %v", err)
+	}
+	_ = remote
+	localDir := setupTestRepo(t)
+	repo, err := gogit.PlainOpen(localDir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := repo.CreateRemote(&config.RemoteConfig{Name: "origin", URLs: []string{remoteDir}}); err != nil {
+		t.Fatalf("create remote: %v", err)
+	}
+	if _, err := nativePush(ctx, localDir, nil); err != nil {
+		t.Fatalf("seed push: %v", err)
+	}
+	if _, err := nativeCheckout(ctx, localDir, []string{"-b", "feat"}); err != nil {
+		t.Fatalf("checkout -b: %v", err)
+	}
+	commitFiles(t, localDir, map[string]string{"feat.txt": "f\n"}, "feat work")
+	if _, err := nativePush(ctx, localDir, []string{"origin", "feat"}); err != nil {
+		t.Fatalf("push feat: %v", err)
+	}
+	branchGone := func() bool {
+		r, err := gogit.PlainOpen(remoteDir)
+		if err != nil {
+			t.Fatalf("open remote: %v", err)
+		}
+		_, err = r.Reference(plumbing.NewBranchReferenceName("feat"), false)
+		return err != nil
+	}
+
+	res, err := nativePush(ctx, localDir, []string{"origin", "--delete", "feat"})
+	if err != nil {
+		t.Fatalf("push --delete: %v", err)
+	}
+	if res.ExitCode != 0 || !strings.Contains(res.Stderr, "[deleted]") || !strings.Contains(res.Stderr, "feat") {
+		t.Errorf("delete result = %+v, want exit 0 and [deleted] feat on stderr", res)
+	}
+	if !branchGone() {
+		t.Errorf("feat still on remote after --delete")
+	}
+
+	// The ":<branch>" refspec form deletes too.
+	if _, err := nativePush(ctx, localDir, []string{"origin", "feat"}); err != nil {
+		t.Fatalf("re-push feat: %v", err)
+	}
+	if _, err := nativePush(ctx, localDir, []string{"origin", ":feat"}); err != nil {
+		t.Fatalf("push :feat: %v", err)
+	}
+	if !branchGone() {
+		t.Errorf("feat still on remote after :feat refspec")
+	}
+
+	// No refs to delete: host git's fatal, exit 128.
+	res, err = nativePush(ctx, localDir, []string{"--delete", "origin"})
+	if err != nil {
+		t.Fatalf("ref-less delete: %v", err)
+	}
+	if res.ExitCode != 128 || !strings.Contains(res.Stderr, "--delete doesn't make sense") {
+		t.Errorf("ref-less delete = %+v, want exit 128 + host fatal", res)
 	}
 }

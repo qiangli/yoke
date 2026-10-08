@@ -63,6 +63,7 @@ var execHandlers = map[string]execFunc{
 	"pull":  nativePull,
 	"clone": nativeClone,
 	// history surgery (linear, conflict-free cases only)
+	"cherry":       nativeCherry,
 	"cherry-pick":  nativeCherryPick,
 	"rebase":       nativeRebase,
 	"apply":        nativeApply,

@@ -20,9 +20,14 @@ tracks the OPEN gaps**, prioritized by consumer-workflow impact.
 
 ## A. Unrouted subcommands (no dispatch entry → `ErrUnsupported`)
 
-- [ ] **`cherry <base> <branch>`** — patch-id equivalence / merge check. **HIGH** —
+- [x] **`cherry <base> <branch>`** — patch-id equivalence / merge check. **HIGH** —
       gates branch cleanup ("is this branch's work already in master, even under a
       different SHA?"); no easy host-free substitute (patch-id over the range).
+      CLOSED 2026-10-08 (sprint 252, S252.1): `nativeCherry` in `cherry.go`,
+      routed in `exec.go`, proven by `TestNativeCherry_MissingThenEquivalent`
+      (+ then - on replicated change) and `TestNativeCherry_SkipsMerges`
+      (merges never listed, post-merge-base equivalence set — both probed
+      against host git the same day). `go test -short ./...` green.
 - [ ] **`revert <commit>` (`--no-edit`)** — reverse-apply a commit. **HIGH** — rollback.
 - [ ] **`clean -fd` / `-n`** — remove untracked files/dirs. **MED** — workspace hygiene.
 - [ ] `bisect`, `reflog`, `describe`, `submodule`, `gc`, `prune`, `fsck`,
@@ -43,7 +48,7 @@ tracks the OPEN gaps**, prioritized by consumer-workflow impact.
 | subcommand | missing flags | file:line | prio |
 |---|---|---|---|
 | **commit** | `--amend` (exists in typed `Commit`, `git.go:259` — just wire the argv), `-q` | `exec_write.go:558` | **HIGH** |
-| **push** | `--delete` / `:<branch>` (delete remote branch), `-q`, `--dry-run`, `--tags` | `exec_write.go:18` | **HIGH** |
+| **push** | ~`--delete` / `:<branch>` (delete remote branch)~ CLOSED 2026-10-08 (S252.1, `TestNativePush_Delete`); `-q`, `--dry-run`, `--tags` still open | `exec_write.go:18` | **HIGH** |
 | **reset** | `--hard`, `--soft` (only an unstage form, which itself errors) | `exec_read.go:930,992` | **HIGH** |
 | **checkout** | `--theirs`, `--ours`, `-f` (only `-b`/`-B` supported) | `exec_read.go:812` | MED |
 | **diff** | `--stat`, `--name-only`, `--diff-filter`, full `--cached` output | `exec_read.go:255,308-330` | MED |

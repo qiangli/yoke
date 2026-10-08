@@ -26,6 +26,8 @@ func nativePush(_ context.Context, dir string, args []string) (*ExecResult, erro
 
 	var remote string
 	var refSpec string
+	var deletes []string // remote branch names to delete ("--delete" or ":<branch>")
+	deleteMode := false
 	setUpstream := false
 	forceWithLease := false
 
@@ -37,9 +39,22 @@ func nativePush(_ context.Context, dir string, args []string) (*ExecResult, erro
 			forceWithLease = true
 		case args[i] == "--force" || args[i] == "-f":
 			opts.Force = true
+		case args[i] == "--delete" || args[i] == "-d":
+			deleteMode = true
+		// Host git shape: the first positional is always the remote,
+		// wherever flags sit; later ones are the refspec (exactly one)
+		// or, under --delete, branches to delete.
 		case !strings.HasPrefix(args[i], "-"):
-			if remote == "" {
+			if strings.HasPrefix(args[i], ":") {
+				name := strings.TrimPrefix(args[i], ":")
+				if name == "" {
+					return nil, ErrUnsupported
+				}
+				deletes = append(deletes, name)
+			} else if remote == "" {
 				remote = args[i]
+			} else if deleteMode {
+				deletes = append(deletes, args[i])
 			} else if refSpec == "" {
 				refSpec = args[i]
 			} else {
@@ -48,6 +63,16 @@ func nativePush(_ context.Context, dir string, args []string) (*ExecResult, erro
 		default:
 			return nil, ErrUnsupported
 		}
+	}
+
+	// A ":<branch>" refspec always means delete, with or without --delete.
+	// A lone positional under --delete is the remote (host git: "--delete
+	// doesn't make sense without any refs"), never an implied branch.
+	if deleteMode && len(deletes) == 0 {
+		return &ExecResult{
+			Stderr:   "fatal: --delete doesn't make sense without any refs\n",
+			ExitCode: 128,
+		}, nil
 	}
 
 	if remote != "" {
@@ -60,7 +85,15 @@ func nativePush(_ context.Context, dir string, args []string) (*ExecResult, erro
 		opts.ForceWithLease = &gogit.ForceWithLease{}
 	}
 
-	if refSpec != "" {
+	if len(deletes) > 0 {
+		for _, name := range deletes {
+			dst := name
+			if !strings.Contains(dst, "refs/") {
+				dst = "refs/heads/" + dst
+			}
+			opts.RefSpecs = append(opts.RefSpecs, config.RefSpec(":"+dst))
+		}
+	} else if refSpec != "" {
 		// Push specific branch
 		spec := config.RefSpec(fmt.Sprintf("refs/heads/%s:refs/heads/%s", refSpec, refSpec))
 		opts.RefSpecs = []config.RefSpec{spec}
@@ -84,6 +117,19 @@ func nativePush(_ context.Context, dir string, args []string) (*ExecResult, erro
 			return &ExecResult{Stdout: "Everything up-to-date\n"}, nil
 		}
 		return nil, ErrUnsupported
+	}
+
+	if len(deletes) > 0 {
+		var b strings.Builder
+		b.WriteString("To " + opts.RemoteName + "\n")
+		for _, name := range deletes {
+			short := name
+			if strings.HasPrefix(short, "refs/heads/") {
+				short = strings.TrimPrefix(short, "refs/heads/")
+			}
+			b.WriteString(" - [deleted]         " + short + "\n")
+		}
+		return &ExecResult{Stderr: b.String()}, nil
 	}
 
 	// Set upstream tracking if requested
