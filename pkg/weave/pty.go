@@ -77,6 +77,7 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 		// that disagreement is why the filter is injected rather than baked in.
 		Filter: func(w io.Writer) (io.Writer, func() error) {
 			sj := newWeaveStreamJSONLogWriter(w)
+			sj.errs = guards.streamErrs
 			return sj, sj.Flush
 		},
 	})

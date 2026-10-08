@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 )
 
 const (
@@ -14,8 +15,9 @@ const (
 )
 
 type weaveStreamJSONLogWriter struct {
-	w   io.Writer
-	buf []byte
+	w    io.Writer
+	buf  []byte
+	errs *weaveStreamErrorTracker
 }
 
 func newWeaveStreamJSONLogWriter(w io.Writer) *weaveStreamJSONLogWriter {
@@ -57,6 +59,7 @@ func (w *weaveStreamJSONLogWriter) writeLine(line []byte) error {
 	text := string(line)
 	body := strings.TrimSuffix(text, "\n")
 	body = strings.TrimSuffix(body, "\r")
+	w.errs.Observe(body)
 	summary, ok := weaveDistillStreamJSONLine(body)
 	if !ok {
 		_, err := w.w.Write(line)
@@ -99,6 +102,12 @@ type weaveStreamJSONEvent struct {
 	} `json:"usage"`
 	Error struct {
 		Message string `json:"message"`
+		// OpenCode nests its provider failure as
+		// {"type":"error","error":{"name":"UnknownError","data":{"message":...}}}.
+		Name string `json:"name"`
+		Data struct {
+			Message string `json:"message"`
+		} `json:"data"`
 	} `json:"error"`
 	Part struct {
 		Type   string  `json:"type"`
@@ -159,7 +168,7 @@ func weaveDistillStreamJSONLine(line string) (string, bool) {
 		}
 		return "[turn failed] " + message, true
 	case "error":
-		message := weaveTruncateLogText(strings.TrimSpace(event.Error.Message), weaveStreamJSONTextLimit)
+		message := weaveTruncateLogText(event.errorText(), weaveStreamJSONTextLimit)
 		if message == "" {
 			return "[error]", true
 		}
@@ -412,4 +421,74 @@ func weaveTruncateLogText(s string, limit int) string {
 		return s[:limit]
 	}
 	return strings.TrimSpace(s[:limit-3]) + "..."
+}
+
+// errorText is the human-readable failure carried by an error event, across the
+// flat (codex) and nested (opencode) shapes.
+func (e weaveStreamJSONEvent) errorText() string {
+	msg := strings.TrimSpace(e.Error.Message)
+	if msg == "" {
+		msg = strings.TrimSpace(e.Error.Data.Message)
+	}
+	if name := strings.TrimSpace(e.Error.Name); name != "" {
+		if msg == "" {
+			return name
+		}
+		return name + ": " + msg
+	}
+	return msg
+}
+
+// weaveStreamErrorTracker remembers whether the worker's event stream ended on
+// an unrecovered error. OpenCode reports a provider failure as an error event
+// and does not reliably carry that into its exit status, so the stream is the
+// evidence. A later finished step or turn clears it: tools emit transient
+// errors (retry notices) that the run then recovers from.
+type weaveStreamErrorTracker struct {
+	mu  sync.Mutex
+	msg string
+}
+
+// Observe feeds one line of worker stdout; non-JSON lines are ignored. Safe on a
+// nil receiver.
+func (t *weaveStreamErrorTracker) Observe(line string) {
+	if t == nil {
+		return
+	}
+	line = strings.TrimSpace(line)
+	if !weaveStreamJSONMaybeObject([]byte(line)) {
+		return
+	}
+	var event weaveStreamJSONEvent
+	if json.Unmarshal([]byte(line), &event) != nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	switch event.Type {
+	case "error", "turn.failed":
+		t.msg = event.errorText()
+		if t.msg == "" {
+			t.msg = event.Type
+		}
+	case "step_finish", "turn.completed", "result":
+		t.msg = ""
+	}
+}
+
+// ObserveAll feeds a captured stdout blob.
+func (t *weaveStreamErrorTracker) ObserveAll(out string) {
+	for _, line := range strings.Split(out, "\n") {
+		t.Observe(line)
+	}
+}
+
+// Message is the unrecovered stream error, or "" when there is none.
+func (t *weaveStreamErrorTracker) Message() string {
+	if t == nil {
+		return ""
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.msg
 }

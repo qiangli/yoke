@@ -189,3 +189,48 @@ func TestWeaveStreamJSONLogWriterPassesPlainTextWithoutNewline(t *testing.T) {
 		t.Fatalf("plain text was buffered: got %q", out.String())
 	}
 }
+
+func TestWeaveDistillStreamJSONLineOpenCodeProviderError(t *testing.T) {
+	line := `{"type":"error","timestamp":1,"sessionID":"ses_x","error":{"name":"UnknownError","data":{"message":"Unexpected server error. Check server logs for details.","ref":"err_ecdb11da"}}}`
+	got, ok := weaveDistillStreamJSONLine(line)
+	want := "[error] UnknownError: Unexpected server error. Check server logs for details."
+	if !ok || got != want {
+		t.Fatalf("weaveDistillStreamJSONLine()=(%q,%v), want (%q,true)", got, ok, want)
+	}
+}
+
+func TestWeaveStreamErrorTracker(t *testing.T) {
+	errLine := `{"type":"error","error":{"name":"UnknownError","data":{"message":"boom"}}}`
+	tr := &weaveStreamErrorTracker{}
+	tr.Observe(`{"type":"step_start","part":{}}`)
+	if tr.Message() != "" {
+		t.Fatalf("no error yet, got %q", tr.Message())
+	}
+	tr.Observe(errLine)
+	if got := tr.Message(); got != "UnknownError: boom" {
+		t.Fatalf("Message()=%q", got)
+	}
+	tr.Observe(`{"type":"step_finish","part":{"reason":"stop"}}`)
+	if tr.Message() != "" {
+		t.Fatalf("a later finished step must clear a transient error, got %q", tr.Message())
+	}
+
+	var out bytes.Buffer
+	w := newWeaveStreamJSONLogWriter(&out)
+	w.errs = &weaveStreamErrorTracker{}
+	if _, err := w.Write([]byte(errLine + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.errs.Message(); got != "UnknownError: boom" {
+		t.Fatalf("log writer did not record the provider error: %q", got)
+	}
+}
+
+func TestWeaveTerminalStateProviderErrorWithoutWorkFails(t *testing.T) {
+	if got := weaveTerminalState(0, nil, "", weaveTerminalEvidence{StreamError: "UnknownError: boom"}); got != "failed" {
+		t.Fatalf("exit 0 + provider error + no work = %q, want failed", got)
+	}
+	if got := weaveTerminalState(0, nil, "", weaveTerminalEvidence{StreamError: "x", CommitsAhead: 1}); got != "submitted" {
+		t.Fatalf("commits are evidence and must still win, got %q", got)
+	}
+}

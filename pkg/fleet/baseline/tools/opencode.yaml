@@ -24,7 +24,10 @@ cli:
     steer_exec: opencode --auto --model {model}
     supports_say: true
     supports_graceful_quit: true
-    notes: headless `run`; --auto is the explicit unattended permission mode; judge by committed artifacts, not exit code. --model takes provider/model.
+    notes: |
+      headless `run`; --auto is the explicit unattended permission mode; judge by committed artifacts, not exit code. --model takes provider/model.
+      opencode 1.18.30 (Homebrew 1.18.30_1) fails EVERY run with UnknownError "Unexpected server error" (err_*): `TypeError: undefined is not an object (evaluating 'a.name')` in SystemPrompt.environment while resolving the Reference service layer. It reproduces with an empty HOME, no config, no auth, any provider or --model, --pure, any cwd, so it is the installed build, not bashy config, credentials or the zai-coding-plan binding. Fix is an operator-approved opencode version change (the fleet pins CLI versions); agents must not reinstall it.
+      The failure is reported as a {"type":"error","error":{"name","data":{"message"}}} event on the --format json stream; weave records exit 0 + that error + no commits as failed, not no-op.
     watchdog:
       max_runtime: 45m
       mem_limit: 12g

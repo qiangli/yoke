@@ -1482,9 +1482,13 @@ type weaveTerminalEvidence struct {
 	Dirty          bool
 	DirtyFiles     int
 	UntrackedFiles int
-	VerifyExit     *int
-	VerifyOutput   string
-	VerifyTree     string
+	// StreamError is an unrecovered error event from the worker's structured
+	// stdout (see weaveStreamErrorTracker). Set by the run wrapper, not measured
+	// from the workspace.
+	StreamError  string
+	VerifyExit   *int
+	VerifyOutput string
+	VerifyTree   string
 }
 
 func weaveCollectTerminalEvidence(workspace, base, queueDir, verifyCommand string, it *weaveItem, runVerify bool) weaveTerminalEvidence {
@@ -1591,6 +1595,9 @@ func weaveTerminalState(exitCode int, runErr error, killedBy string, ev weaveTer
 		return "submitted"
 	}
 	if exitCode == 0 && runErr == nil && ev.CommitsAhead == 0 && !ev.Dirty && ev.UntrackedFiles == 0 {
+		if ev.StreamError != "" {
+			return "failed"
+		}
 		return "no-op"
 	}
 	return "failed"
@@ -3253,6 +3260,8 @@ type weaveGuards struct {
 	// writes concise events to the worker log and feeds the idle watchdog.
 	eventsPath string
 	onStart    func() error
+	// streamErrs, when set, receives the worker's decoded error events.
+	streamErrs *weaveStreamErrorTracker
 }
 
 // errWeaveWrapperLive is returned from inside the queue-lock callback
@@ -4085,6 +4094,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		ctlSock:       ctlSock,
 		coachee:       it.Tool,
 		eventsPath:    agentEventsPath,
+		streamErrs:    &weaveStreamErrorTracker{},
 	}
 	if ctlSock != "" {
 		if err := os.MkdirAll(filepath.Dir(ctlSock), 0o755); err != nil {
@@ -4192,6 +4202,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		if err := stdoutCapture.Close(); runErr == nil && err != nil {
 			runErr = fmt.Errorf("flush redacted tool stdout: %w", err)
 		}
+		guards.streamErrs.ObserveAll(toolStdout.String())
 		if err := stderrCapture.Close(); runErr == nil && err != nil {
 			runErr = fmt.Errorf("flush redacted tool stderr: %w", err)
 		}
@@ -4256,6 +4267,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	if it.VerifyCommand != "" && (exitCode == 0 || ev.CommitsAhead > 0) {
 		ev = weaveCollectTerminalEvidence(workspace, weaveCountRef(it, base), dir, it.VerifyCommand, it, true)
 	}
+	ev.StreamError = guards.streamErrs.Message()
 	// Classify from MEASURED evidence: re-count before concluding "no-op",
 	// because a commit that landed as the wrapper measured must never let a
 	// run holding work be filed as empty (see weaveTerminalStateMeasured).
