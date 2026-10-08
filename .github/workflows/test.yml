@@ -20,22 +20,6 @@ jobs:
           # external/ollama/src and external/podman/src are submodules (the
           # vendored forks); needed so the module graph resolves.
           submodules: recursive
-      # yoke resolves four deps as flat siblings: the certified coreutils it
-      # was split out of (`replace github.com/qiangli/coreutils => ../coreutils`),
-      # the sh engine (`replace mvdan.cc/sh/v3 => ../sh`) and the File Browser
-      # fork that pkg/webconsole embeds (`replace github.com/filebrowser/filebrowser/v2
-      # => ../filebrowser`), plus the blob-free tree-sitter fork. Clone all four
-      # next door — CI is a standalone clone without the umbrella sibling checkouts.
-      - name: Clone flat siblings (coreutils, sh, filebrowser, gotreesitter)
-        shell: bash
-        run: |
-          git clone --quiet --depth 1 https://github.com/qiangli/coreutils.git ../coreutils
-          git clone --quiet --depth 1 https://github.com/qiangli/sh.git ../sh
-          git clone --quiet --depth 1 https://github.com/qiangli/filebrowser.git ../filebrowser
-          git init --quiet ../gotreesitter
-          git -C ../gotreesitter remote add origin https://github.com/qiangli/gotreesitter.git
-          git -C ../gotreesitter fetch --quiet --depth 1 origin c8a5d22bb3f02f9985d1a83799f494f4e43d783d
-          git -C ../gotreesitter checkout --quiet FETCH_HEAD
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod

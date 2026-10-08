@@ -12,8 +12,8 @@ package weave
 //
 //	committed   no uncommitted changes in the working tree
 //	pushed      nothing sitting only on this machine
-//	pinned      each sibling pin (a go.mod version in a go.work workspace, or
-//	            legacy .sibling-pins) agrees with the sibling's HEAD
+//	pinned      each sibling pin (a go.mod version in a go.work workspace)
+//	            agrees with the sibling's HEAD
 //
 // The third is here because this tree learned it the hard way: a pin is the
 // ONLY sibling source CI sees, and inside an umbrella the siblings are
@@ -226,51 +226,11 @@ func inspectRepo(st *repoState) {
 	st.StalePins = stalePins(st.Path)
 }
 
-// stalePins reports sibling pins that disagree with the sibling's HEAD.
-//
-// Absent .sibling-pins means nothing to check — most repos have none, and their
-// absence is not a finding.
+// stalePins reports sibling pins (go.mod versions in a go.work workspace) that
+// are stale or cannot be compared with the sibling's HEAD. No workspace means
+// nothing to check — a standalone clone builds what go.mod declares.
 func stalePins(repoPath string) []string {
-	if _, ok := gomod.FindWorkspace(repoPath); ok {
-		return gomod.StaleSiblings(repoPath)
-	}
-	return legacyStalePins(repoPath)
-}
-
-// legacyStalePins checks a .sibling-pins file (removed once every repo pins
-// siblings in go.mod).
-func legacyStalePins(repoPath string) []string {
-	data, err := os.ReadFile(filepath.Join(repoPath, ".sibling-pins"))
-	if err != nil {
-		return nil
-	}
-	var stale []string
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		name, pinned, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-		name, pinned = strings.TrimSpace(name), strings.TrimSpace(pinned)
-		if name == "" || pinned == "" {
-			continue
-		}
-		sib := filepath.Join(filepath.Dir(repoPath), name)
-		if _, err := os.Stat(filepath.Join(sib, ".git")); err != nil {
-			continue // sibling not checked out here — nothing to compare against
-		}
-		head, err := coregit.RevParse(coregit.RevParseOptions{RepoPath: sib})
-		if err != nil || head == nil || head.Hash == "" {
-			continue
-		}
-		if !strings.EqualFold(strings.TrimSpace(head.Hash), pinned) {
-			stale = append(stale, name)
-		}
-	}
-	return stale
+	return gomod.StaleSiblings(repoPath)
 }
 
 // weaveRepoRootForQueue reads the repo a queue serves.

@@ -6,6 +6,7 @@ package atlas_test
 import (
 	"bufio"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -89,9 +90,9 @@ func TestGNUOriginMatchesUpstream(t *testing.T) {
 // a Go applet or a pinned provider must be an atlas tool; shell-owned rows
 // (cd, alias, …) are the embedder's builtins and appear in no table.
 func TestPosixRequiredMatchesManifest(t *testing.T) {
-	// The manifest lives with the certified package (coreutils/docs); this
-	// module is its flat sibling, in the umbrella and in a standalone clone.
-	f, err := os.Open("../../../coreutils/docs/posix-required-commands.tsv")
+	// The manifest lives with the certified package (coreutils/docs), the
+	// module yoke pins (the live tree inside the dhnt go.work).
+	f, err := os.Open(filepath.Join(coreutilsDir(t), "docs", "posix-required-commands.tsv"))
 	if err != nil {
 		t.Fatalf("manifest: %v", err)
 	}

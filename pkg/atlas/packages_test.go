@@ -24,6 +24,7 @@ package atlas_test
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -33,14 +34,14 @@ import (
 // pkgDirs lists the directories under pkg/ — the ground truth the census is
 // ratcheted against. The userland's pkg/ spans two modules since Sprint 208:
 // this one (yoke) and the certified coreutils it was split out of, a flat
-// sibling in the umbrella and in a standalone clone. The census stays ONE
+// pinned module (the live tree inside the dhnt go.work). The census stays ONE
 // table over both, so a capability cannot hide on the other side of the
-// split. The test runs with cwd = pkg/atlas, so yoke's pkg/ is ".." and
-// coreutils' is "../../../coreutils/pkg".
+// split. The test runs with cwd = pkg/atlas, so yoke's pkg/ is ".."; the
+// coreutils module directory comes from the go command.
 func pkgDirs(t *testing.T) []string {
 	t.Helper()
 	var out []string
-	for _, dir := range []string{"..", "../../../coreutils/pkg"} {
+	for _, dir := range []string{"..", filepath.Join(coreutilsDir(t), "pkg")} {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			t.Fatalf("read %s: %v", dir, err)
