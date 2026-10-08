@@ -811,7 +811,7 @@ func resolveLaunch(name string, opt Options) (Launch, error) {
 // hosts / the lean `bash` binary never reach this path).
 func forceAgentShell() bool { return os.Getenv("BASHY_FORCE_AGENT_SHELL") != "0" }
 
-// shimDir is the directory of sh/bash/zsh symlinks to the bashy binary, prepended
+// shimDir is the directory of sh/bash/zsh exec wrappers for the bashy binary, prepended
 // to a spawned agent's PATH so bare-name shell lookups resolve to bashy. Override
 // with BASHY_SHIM_DIR (used by tests).
 func shimDir() string {
@@ -825,7 +825,7 @@ func shimDir() string {
 	return filepath.Join(home, ".bashy", "shims")
 }
 
-// ensureShims makes shimDir hold sh/bash/zsh symlinks to bashy (idempotent,
+// ensureShims makes shimDir hold sh/bash/zsh exec wrappers for bashy (idempotent,
 // best-effort). No-op on Windows (POSIX shell names don't apply) or when the dir
 // is unavailable; returns "" in those cases so forcedShellEnv skips the PATH shim.
 func ensureShims(bashy string) string {
@@ -837,12 +837,9 @@ func ensureShims(bashy string) string {
 		return ""
 	}
 	for _, name := range []string{"sh", "bash", "zsh"} {
-		link := filepath.Join(dir, name)
-		if target, err := os.Readlink(link); err == nil && target == bashy {
-			continue
+		if err := WriteShellShim(filepath.Join(dir, name), bashy); err != nil {
+			return ""
 		}
-		_ = os.Remove(link)
-		_ = os.Symlink(bashy, link)
 	}
 	return dir
 }

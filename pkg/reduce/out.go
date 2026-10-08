@@ -34,7 +34,8 @@ func NewOutCmd(resolve func() (*Store, error)) *cobra.Command {
 		Long: `out reprints the full, un-reduced bytes that an elision marker spilled to a
 content-addressed artifact. The handle is the digest prefix shown in the marker
 (for example 'bashy out 9c2d4f1a'). An ambiguous prefix is reported so you can
-lengthen it; the recovered bytes are byte-identical to the original output and
+lengthen it; the recovered bytes are byte-identical to the stored artifact (after
+secret redaction and display normalization), not the pre-redaction stream, and
 compose with anything else (` + "`bashy out 9c2d4f1a | rg FAIL`" + `).`,
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
