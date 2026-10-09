@@ -435,7 +435,10 @@ It is NOT ` + "`meet open`" + `, which convenes a deliberation session.`),
 				if err != nil {
 					return err
 				}
-				if !st.Running {
+				// Under --json the printed bashy-meet-service-v1 envelope is
+				// the answer, so a stopped daemon still exits 0. Human mode
+				// keeps the non-zero exit: supervisors poll on it.
+				if !st.Running && !asJSON {
 					return ErrServiceStopped
 				}
 				return nil

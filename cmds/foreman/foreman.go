@@ -26,6 +26,9 @@ var cmd = &tool.Tool{
 
 const defaultForemanMaxRuntime = 30 * time.Minute
 
+// foremanSchemaVersion tags every map-shaped JSON envelope this command emits.
+const foremanSchemaVersion = "foreman-v1"
+
 var runner chat.Runner
 
 func init() { cmd.Run = run; tool.Register(cmd) }
@@ -397,7 +400,10 @@ func runList(rc *tool.RunContext, jsonOut bool) int {
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
 	if jsonOut {
-		return emitJSON(rc, items)
+		if items == nil {
+			items = []foreman.State{}
+		}
+		return emitJSON(rc, map[string]any{"schema_version": foremanSchemaVersion, "sessions": items})
 	}
 	for _, st := range items {
 		fmt.Fprintf(rc.Out, "%s\t%s\t%s\n", st.ID, st.Status, st.Goal)
@@ -559,6 +565,15 @@ func ok(rc *tool.RunContext, jsonOut bool, v map[string]any) int {
 }
 
 func emitJSON(rc *tool.RunContext, v any) int {
+	// Map payloads (ok/fail, list envelope) carry the envelope version
+	// additively. Struct and slice payloads — status snapshots, transition
+	// streams — pass through untouched, so existing field consumers keep
+	// working.
+	if m, isMap := v.(map[string]any); isMap {
+		if _, tagged := m["schema_version"]; !tagged {
+			m["schema_version"] = foremanSchemaVersion
+		}
+	}
 	data, _ := json.Marshal(v)
 	fmt.Fprintln(rc.Out, string(data))
 	return 0

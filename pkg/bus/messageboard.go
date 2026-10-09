@@ -170,6 +170,13 @@ type boardRead struct {
 	seenBy  bool
 }
 
+// boardEmptyEnvelope is the one line an empty `mb --json` read prints: a
+// typed empty set rather than no output at all.
+type boardEmptyEnvelope struct {
+	SchemaVersion string `json:"schema_version"`
+	Posts         []Post `json:"posts"`
+}
+
 // readBoard is the ONE implementation of reading the board.
 //
 // Extracted from `mb`'s RunE so `bashy ping` with no arguments is literally the
@@ -217,6 +224,14 @@ func readBoard(cmd *cobra.Command, o boardRead) error {
 			enc := json.NewEncoder(w)
 			for _, p := range posts {
 				if eerr := enc.Encode(p); eerr != nil {
+					return eerr
+				}
+			}
+			if len(posts) == 0 {
+				// A JSON consumer cannot tell "no output yet" from "no posts";
+				// say the empty set in one typed line. Non-empty output is
+				// unchanged: one Post object per line, no envelope.
+				if eerr := enc.Encode(boardEmptyEnvelope{SchemaVersion: BoardSchema, Posts: []Post{}}); eerr != nil {
 					return eerr
 				}
 			}
