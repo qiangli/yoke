@@ -89,6 +89,9 @@ func rolesFromQueue(q *weaveQueue, now time.Time) []bus.HostRole {
 			Label:  "conductor:" + strconv.FormatInt(s.ID, 10),
 			Topic:  sprintTopic(s.ID),
 			Holder: s.Lease.Holder,
+			// The authorizer matches a UUID-stamped reader on this, and a
+			// legacy-named reader on Holder.
+			HolderInstance: s.Lease.Instance,
 		})
 	}
 	return out

@@ -198,3 +198,16 @@ func TestConductorRoles_ResolveOutsideAnyRepository(t *testing.T) {
 		t.Fatalf("conductorRoles() = %+v, want the board role from outside a repo", got)
 	}
 }
+
+// Role mail is authorized against the current holder, and a stamped session
+// reads as instance/<uuid>: the address must carry the holder's instance or a
+// UUID-stamped conductor is refused its own seat's mail.
+func TestConductorRoles_CarryTheHolderInstance(t *testing.T) {
+	now := time.Now()
+	got := rolesFromQueue(&weaveQueue{Stories: []*weaveStory{
+		{ID: 7, Lease: &weaveStoryLease{Holder: "claude-opus5.5", Instance: "4b0c1c3e-0000-4000-8000-000000000007", At: now}},
+	}}, now)
+	if len(got) != 1 || got[0].HolderInstance != "4b0c1c3e-0000-4000-8000-000000000007" || got[0].Holder != "claude-opus5.5" {
+		t.Fatalf("conductor role lost its holder identity: %+v", got)
+	}
+}
