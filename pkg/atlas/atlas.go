@@ -1132,7 +1132,10 @@ func init() {
 	addVerb("act-runner", staged(StageTest, managed(GroupOrch, TierSandbox, CapDaemon)))
 	addVerb("mirror", staged(StageCross, managed(GroupStorage, TierUserland, CapDaemon, CapNeedsNetwork)))
 
-	// knowledge
+	// knowledge and skills: kb, graph (registered above under GroupCodeIntel tools),
+	// skill, and craft are the v1.0.0 knowledge surface (Part 4j, Sprint 379 / Story #1529).
+	// The standalone memory front door is deferred to post-1.0 (Sprint 284); memory
+	// in 1.0 is fronted by kb recall.
 	addVerb("kb", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON}})
 	addVerb("search", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON, CapNeedsNetwork}})
 	addVerb("sota", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON, CapNeedsNetwork, CapSpawnsProcesses}})
@@ -1161,7 +1164,7 @@ func init() {
 	// TREE, and steward holds a MANDATE. Claiming the seat restores no diff and touches
 	// no repository — work is a diff, a seat is not.
 	addVerb("steward", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
-	// The experimental MCP front door exposes command discovery and execution to agents.
+	// The MCP front door exposes command discovery and execution to agents (v1.0.0).
 	addVerb("mcp", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}, Effects: []string{EffExec}})
 	// skill: destructive for the same reason as tool/model/agent above — `rm`
 	// on the local ring, no undo.
@@ -1175,6 +1178,7 @@ func init() {
 	// no longer dispatches is exactly the kind of stale advertisement that gate
 	// exists to catch. Its local-first property is unchanged and now rides kb's
 	// entry — neither declares `net`, which pkg/atlas/localfirst_test.go pins.
+	// The standalone memory front door is deferred to post-1.0 (Sprint 284).
 	addVerb("define", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON, CapReadOnly}})
 
 	// engines

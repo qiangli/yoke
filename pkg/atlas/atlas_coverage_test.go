@@ -9,8 +9,10 @@
 package atlas_test
 
 import (
+	"os"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 
 	_ "github.com/qiangli/yoke/cmds/all"
@@ -550,5 +552,69 @@ func TestAtlasWhyMetadataPins(t *testing.T) {
 		if !effs[ef] {
 			t.Errorf("why effects missing effect %q", ef)
 		}
+	}
+}
+
+func TestKnowledgeAndSkills10Reconciliation(t *testing.T) {
+	// Reconcile Y8 knowledge and skills surface (Story 498b3d4031ef, Sprint 379):
+	// kb, graph, skill, craft are v1.0 verbs/tools on the atlas.
+	// The standalone memory front door is deferred to post-1.0 (Sprint 284);
+	// memory in 1.0 is fronted by `kb recall`, so "memory" must not be a registered atlas verb/tool.
+	for _, n := range []string{"kb", "skill", "craft"} {
+		if !slices.Contains(atlas.VerbNames(), n) {
+			t.Errorf("atlas verb %q missing from VerbNames (must be present in 1.0)", n)
+		}
+		e, ok := atlas.Lookup(n)
+		if !ok {
+			t.Errorf("Lookup(%q) missing from atlas", n)
+		}
+		if e.Tier != atlas.TierUserland {
+			t.Errorf("Lookup(%q).Tier = %q, want %q", n, e.Tier, atlas.TierUserland)
+		}
+		if e.Group != atlas.GroupKnowledge {
+			t.Errorf("Lookup(%q).Group = %q, want %q", n, e.Group, atlas.GroupKnowledge)
+		}
+		if e.Stage != atlas.StageCross {
+			t.Errorf("Lookup(%q).Stage = %q, want %q", n, e.Stage, atlas.StageCross)
+		}
+		if !slices.Contains(e.Caps, atlas.CapJSON) {
+			t.Errorf("Lookup(%q).Caps missing %q", n, atlas.CapJSON)
+		}
+	}
+
+	// graph is an in-process code intelligence / knowledge graph tool in 1.0.
+	if !slices.Contains(atlas.ToolNames(), "graph") {
+		t.Errorf("atlas tool graph missing from ToolNames (must be present in 1.0)")
+	}
+	graphEntry, ok := atlas.Lookup("graph")
+	if !ok {
+		t.Errorf("Lookup(\"graph\") missing from atlas")
+	}
+	if graphEntry.Tier != atlas.TierUserland {
+		t.Errorf("Lookup(\"graph\").Tier = %q, want %q", graphEntry.Tier, atlas.TierUserland)
+	}
+	if graphEntry.Group != atlas.GroupCodeIntel {
+		t.Errorf("Lookup(\"graph\").Group = %q, want %q", graphEntry.Group, atlas.GroupCodeIntel)
+	}
+	if !slices.Contains(graphEntry.Caps, atlas.CapJSON) {
+		t.Errorf("Lookup(\"graph\").Caps missing %q", atlas.CapJSON)
+	}
+	if !slices.Contains(graphEntry.Caps, atlas.CapCached) {
+		t.Errorf("Lookup(\"graph\").Caps missing %q", atlas.CapCached)
+	}
+
+	// Standalone memory front door is post-1.0 (Sprint 284); 1.0 memory is fronted by `kb recall`.
+	if _, ok := atlas.Lookup("memory"); ok {
+		t.Errorf("standalone memory front door is post-1.0 (Sprint 284) and must not have an atlas entry")
+	}
+
+	// Check atlas source comments: 1.0 commands (kb, graph, skill, craft, mcp) must not be marked experimental or deferred.
+	data, err := os.ReadFile("atlas.go")
+	if err != nil {
+		t.Fatalf("reading atlas.go: %v", err)
+	}
+	content := string(data)
+	if strings.Contains(content, "The experimental MCP front door") {
+		t.Errorf("atlas.go still describes MCP front door as experimental (graduated to 1.0)")
 	}
 }
