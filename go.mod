@@ -29,7 +29,7 @@ require (
 	github.com/odvcencio/gotreesitter v0.16.0
 	github.com/ollama/ollama v0.0.0-00010101000000-000000000000
 	github.com/pkg/sftp v1.13.10
-	github.com/qiangli/coreutils v0.0.0-20261009071524-54a8fb26235e
+	github.com/qiangli/coreutils v0.0.0-20261009201221-a50cc1f27e6f
 	github.com/qiangli/gfy v0.0.0-20261009070616-1a9d12418c8d
 	github.com/qiangli/yoke/pkg/llmgw v0.0.0-00010101000000-000000000000
 	github.com/qiangli/yoke/pkg/oci v0.0.0-00010101000000-000000000000
@@ -69,7 +69,7 @@ require (
 // checkout. Same convention as ycode/outpost/bashy. coreutils is the
 // certified POSIX package this module was split out of (Sprint 208); yoke
 // imports it, never the reverse.
-replace mvdan.cc/sh/v3 => github.com/qiangli/sh/v3 v3.0.0-20261009065157-d3d7766e8a47
+replace mvdan.cc/sh/v3 => github.com/qiangli/sh/v3 v3.0.0-20261009223315-5ed7e8b0b4ff
 
 // gotreesitter: pinned local fork of upstream v0.16.0 (../gotreesitter,
 // hosting qiangli/gotreesitter, module path kept as upstream's) with the
@@ -87,7 +87,7 @@ replace github.com/odvcencio/gotreesitter => github.com/qiangli/gotreesitter v0.
 // required side effect that a non-"in" reference creates an absent array
 // element. Keeping the narrow fork here makes the conformance fixes build from
 // this repository rather than an unpublished dependency commit.
-replace github.com/benhoyt/goawk => github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261009071524-54a8fb26235e
+replace github.com/benhoyt/goawk => github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261009201221-a50cc1f27e6f
 
 replace github.com/ollama/ollama => ./external/ollama/src
 
