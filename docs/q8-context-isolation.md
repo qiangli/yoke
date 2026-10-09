@@ -19,6 +19,36 @@ queue contention, model residency and eviction/reload latency can reveal another
 scope's activity. Content isolation does not make responses constant-time.
 No timing benchmark was added.
 
+## Agent relation ring: principal scope (2026-10-09)
+
+The agent page ring was scoped to the calling principal (`OpenAgentRing`), but
+the agent *relation* ring — the Sense-derived `observed` and the `decided-in`
+decision prefixes — was read unscoped from the same physically shared store.
+Any principal (including an anonymous or whitespace-only caller) assembling
+context over the agent ring saw every other principal's observations and
+decisions. `recall.RelationRing` now scopes the agent ring by owner
+(`kb.OwnerRelationRing`), and `Store.LiveRelations` applies the store's own
+owner scope so the `kb search --form relation --ring agent` and `kb doctor`
+paths match. A missing principal sees nothing; repo and host relation rings
+stay shared by design. Scoping runs after relation replay, so a forgotten
+(revoked) observation cannot be recovered through the ring — even by its author.
+
+Coverage: `recall.TestAgentRelationRingIsPrincipalScopedAndHonorsForget`
+(owner/other/anonymous/whitespace/unknown principals + forget) and
+`kb.TestLiveRelationsIsOwnerScopedOnAgentRing` (store-level, scoped vs. Open).
+
+Residual, by design:
+
+- **Timing side channel.** As with the broker cache, content isolation is not
+  timing isolation: a shared on-disk relation log means read latency can vary
+  with another scope's write volume. No constant-time guarantee, no benchmark.
+- **Identity precedence.** Page scope uses `kb.ToolID()`; a relation's author
+  is stamped by `cmds/graph`'s `contribBy`, whose env precedence differs
+  (`BASHY_AGENT_ID` first, no `WEAVE_AGENT`/`CLAUDECODE` fallback). When the two
+  disagree the scope fails *closed* — an owner may not see its own relations —
+  which never leaks but can hide. Unifying the write-side author identity with
+  `ToolID()` is a follow-up, out of scope for this run.
+
 ## Scope that remains open
 
 At the supplied base `6103baf8716f58e4fcfa97fa080f3a9ad189c87a`, the tracked tree

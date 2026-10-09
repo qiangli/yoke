@@ -25,6 +25,14 @@ func (r RepoRing) Recall(q Query) ([]Hit, error) {
 type RelationRing struct {
 	RingName string
 	Path     string
+	// Owner scopes the AGENT relation ring to one principal, mirroring the agent
+	// page ring (kb.OpenAgentRing). The agent relation store — the Sense-derived
+	// "observed" and "decided-in" prefixes — is physically shared across
+	// principals exactly like the agent page store, so a relation authored by
+	// another principal must be invisible and a missing principal (empty Owner)
+	// must see nothing (Q8). Owner is empty for the repo and host rings, whose
+	// relation stores are shared by design.
+	Owner string
 }
 
 func (r RelationRing) Ring() string { return r.RingName }
@@ -37,7 +45,13 @@ func (r RelationRing) Recall(q Query) ([]Hit, error) {
 			return nil, err
 		}
 	}
-	live, err := (kb.RelationRing{Dir: r.Path}).Live()
+	var live []kb.Relation
+	var err error
+	if r.RingName == RingAgent {
+		live, err = (kb.OwnerRelationRing{Dir: r.Path, Owner: r.Owner}).Live()
+	} else {
+		live, err = (kb.RelationRing{Dir: r.Path}).Live()
+	}
 	if err != nil {
 		return nil, err
 	}

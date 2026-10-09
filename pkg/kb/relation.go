@@ -83,6 +83,36 @@ func (r RelationRing) Live() ([]Relation, error) {
 	return ReplayRelations(all), nil
 }
 
+// OwnerRelationRing reads the agent relation store scoped to one principal.
+// That store is physically shared across principals exactly like the agent
+// page store (OpenAgentRing): a relation authored by another principal is
+// invisible, and a missing principal (empty Owner, including whitespace) sees
+// nothing — so an unauthenticated caller cannot recover another agent's
+// observations or decisions (Q8). Scoping happens after ReplayRelations, so a
+// forgotten (revoked) relation stays unrecoverable through this ring.
+type OwnerRelationRing struct {
+	Dir   string
+	Owner string
+}
+
+func (r OwnerRelationRing) Live() ([]Relation, error) {
+	all, err := (RelationRing{Dir: r.Dir}).Live()
+	if err != nil {
+		return nil, err
+	}
+	owner := strings.TrimSpace(r.Owner)
+	if owner == "" {
+		return nil, nil
+	}
+	out := make([]Relation, 0, len(all))
+	for _, rel := range all {
+		if strings.TrimSpace(rel.By) == owner {
+			out = append(out, rel)
+		}
+	}
+	return out, nil
+}
+
 func ReadLegacyRelations(repoRoot string) ([]Relation, error) {
 	return readRelations(LegacyRepoContribPath(repoRoot))
 }

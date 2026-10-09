@@ -358,6 +358,63 @@ func (r *capturingReader) Recall(q Query) ([]Hit, error) {
 	return append([]Hit(nil), r.hits...), nil
 }
 
+// Agent-ring relations are the Sense-derived ("observed") and decision
+// ("decided-in") prefixes. Their store is physically shared across principals
+// exactly like the agent page store, so recall must scope them to the caller:
+// another principal's observation must never surface, a missing or
+// whitespace-only principal sees nothing, and a forgotten (revoked) observation
+// cannot be recovered through the ring — even by its own author. (Q8, #1524.)
+func TestAgentRelationRingIsPrincipalScopedAndHonorsForget(t *testing.T) {
+	root := isolateRecallStores(t)
+	agentDir := filepath.Join(root, "agent-relations")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lines := []string{
+		`{"id":"r-alice","op":"observe","by":"alice","target":"widget","text":"alice saw the widget","at":"2026-01-01T00:00:00Z"}`,
+		`{"id":"r-bob","op":"observe","by":"bob","target":"widget","text":"bob saw the widget","at":"2026-01-02T00:00:00Z"}`,
+	}
+	writeRelations := func(ls []string) {
+		if err := os.WriteFile(kb.RelationPath(agentDir), []byte(strings.Join(ls, "\n")+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assemble := func(principal string) ContextResult {
+		return Context(Query{Text: "widget", Rings: []string{RingAgent}, Forms: []string{kb.FormRelation}, Budget: 200},
+			RelationRing{RingName: RingAgent, Path: agentDir, Owner: principal})
+	}
+	writeRelations(lines)
+	for _, tc := range []struct {
+		principal, want string // want "" means expect zero blocks
+	}{
+		{"bob", "graph:r-bob"},
+		{"alice", "graph:r-alice"},
+		{"", ""},
+		{" ", ""},
+		{"carol", ""},
+	} {
+		res := assemble(tc.principal)
+		if tc.want == "" {
+			if len(res.Blocks) != 0 {
+				t.Errorf("principal %q saw another agent's relations: %+v", tc.principal, res.Blocks)
+			}
+			continue
+		}
+		if len(res.Blocks) != 1 || res.Blocks[0].Ref != tc.want {
+			t.Errorf("principal %q = %+v, want only %s", tc.principal, res.Blocks, tc.want)
+		}
+	}
+	// A forgotten observation cannot be recovered, and the forget does not leak
+	// one principal's revocation onto another principal's surviving relation.
+	writeRelations(append(lines, `{"id":"f1","op":"forget","by":"alice","forget_id":"r-alice","at":"2026-01-03T00:00:00Z"}`))
+	if res := assemble("alice"); len(res.Blocks) != 0 {
+		t.Errorf("alice recovered a forgotten observation: %+v", res.Blocks)
+	}
+	if res := assemble("bob"); len(res.Blocks) != 1 || res.Blocks[0].Ref != "graph:r-bob" {
+		t.Errorf("forget disturbed another principal's relation: %+v", res.Blocks)
+	}
+}
+
 // Repeated assembly must not recover another principal's checkpoint, even
 // when the caller knows its episode and all readers share one physical store.
 func TestContextPrincipalAndSessionIsolation(t *testing.T) {

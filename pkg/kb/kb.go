@@ -235,7 +235,7 @@ campaign memory (~/.bashy/weave/...). No terms lists everything (use
 			hits := Search(pages, q)
 			var rel []Relation
 			if form == FormRelation {
-				live, err := (RelationRing{Dir: store.Dir()}).Live()
+				live, err := store.LiveRelations()
 				if err != nil {
 					return err
 				}
@@ -1014,7 +1014,7 @@ so a reported page is left byte-identical on disk. Scope it with --ring.`,
 				}
 			}
 			rep := Doctor(pages, store, todoNodes, todoKnown)
-			relations, err := (RelationRing{Dir: store.Dir()}).Live()
+			relations, err := store.LiveRelations()
 			if err != nil {
 				return err
 			}

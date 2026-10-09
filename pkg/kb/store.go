@@ -163,6 +163,19 @@ func (s *Store) List() ([]*Page, error) {
 	return out, nil
 }
 
+// LiveRelations returns the store's live relations with the same scope as its
+// page reads. On an owner-scoped agent ring only the calling principal's
+// relations are visible — and a missing principal (empty owner) sees none —
+// so the agent relation store (the Sense-derived "observed" and "decided-in"
+// prefixes) cannot leak across principals any more than the page store can
+// (Q8). Every other ring's relation store is shared, matching page behavior.
+func (s *Store) LiveRelations() ([]Relation, error) {
+	if s.ownerScoped {
+		return (OwnerRelationRing{Dir: s.dir, Owner: s.owner}).Live()
+	}
+	return (RelationRing{Dir: s.dir}).Live()
+}
+
 // Write persists a page (atomic temp+rename), stamps timestamps, appends a
 // journal record, regenerates the index, and best-effort git-commits the
 // store. op names the mutation for the journal ("add", "update",

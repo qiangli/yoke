@@ -196,7 +196,7 @@ func openContextRings() []Reader {
 	skillsDir := skills.DefaultStoreDir()
 	return []Reader{
 		AgentRing{Store: kb.OpenAgentRing(agentDir, kb.ToolID()), Path: agentDir, Required: true},
-		RelationRing{RingName: RingAgent, Path: agentDir},
+		RelationRing{RingName: RingAgent, Path: agentDir, Owner: kb.ToolID()},
 		RepoRing{Store: kb.Open(repoDir), Path: repoDir},
 		RelationRing{RingName: RingRepo, Path: repoDir},
 		HostRing{Store: kb.Open(hostDir), Path: hostDir},

@@ -6,6 +6,7 @@ package kb
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -139,6 +140,34 @@ func TestResolveKBDirBaseDirTravel(t *testing.T) {
 	}
 	if label != "repo" || dir != filepath.Join(other, "docs", "kb") {
 		t.Fatalf("--base-dir travel failed: %q %q, want repo %s", label, dir, filepath.Join(other, "docs", "kb"))
+	}
+}
+
+// LiveRelations must apply the same owner scope as page reads: the agent
+// relation store (observed/decided-in prefixes) is shared across principals,
+// so one principal's relations are invisible to another and a missing
+// principal sees none. An unscoped Open stays shared (repo/host rings).
+func TestLiveRelationsIsOwnerScopedOnAgentRing(t *testing.T) {
+	dir := t.TempDir()
+	lines := []string{
+		`{"id":"r-alice","op":"observe","by":"alice","target":"widget","at":"2026-01-01T00:00:00Z"}`,
+		`{"id":"r-bob","op":"observe","by":"bob","target":"widget","at":"2026-01-02T00:00:00Z"}`,
+	}
+	if err := os.WriteFile(RelationPath(dir), []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		owner string
+		want  int
+	}{{"alice", 1}, {"bob", 1}, {"", 0}, {" ", 0}, {"carol", 0}} {
+		rels, err := OpenAgentRing(dir, tc.owner).LiveRelations()
+		if err != nil || len(rels) != tc.want {
+			t.Errorf("owner %q: %d relations, %v; want %d", tc.owner, len(rels), err, tc.want)
+		}
+	}
+	// An unscoped store (repo/host ring) keeps every relation.
+	if rels, err := Open(dir).LiveRelations(); err != nil || len(rels) != 2 {
+		t.Fatalf("unscoped store: %d relations, %v", len(rels), err)
 	}
 }
 
