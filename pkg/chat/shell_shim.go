@@ -16,10 +16,10 @@ func WriteShellShim(path, bashy string) error {
 	if !filepath.IsAbs(bashy) {
 		return fmt.Errorf("shell shim target must be absolute: %q", bashy)
 	}
-	base := filepath.Base(bashy)
-	if base != "bashy" && base != "bashy.exe" {
-		return fmt.Errorf("shell shim target must be bashy: %q", bashy)
-	}
+	// A Go test binary (or anything in the Go build cache) is deleted after
+	// the run, so a shim pointing at it breaks the host's sh. Launchers with
+	// other names (the installed bash launcher, an install-agent shell path)
+	// are legitimate targets.
 	if strings.HasSuffix(bashy, ".test") {
 		return fmt.Errorf("shell shim target must not be a test binary: %q", bashy)
 	}

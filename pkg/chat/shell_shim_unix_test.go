@@ -17,7 +17,6 @@ func TestWriteShellShimRejectsTestBinary(t *testing.T) {
 		name  string
 		bashy string
 	}{
-		{"basename not bashy", "/tmp/some/other"},
 		{"ends with .test", "/tmp/bashy.test"},
 		{"go-build path with bashy", "/tmp/go-build123/b001/bashy"},
 		{"go-build with test suffix", "/tmp/go-build123/b001/exe.test"},
@@ -29,7 +28,7 @@ func TestWriteShellShimRejectsTestBinary(t *testing.T) {
 		}
 	}
 	// valid names must succeed
-	for _, bashy := range []string{"/tmp/bashy", "/tmp/bashy.exe"} {
+	for _, bashy := range []string{"/tmp/bashy", "/tmp/bashy.exe", "/tmp/bin/bash"} {
 		shim2 := filepath.Join(t.TempDir(), "sh")
 		if err := WriteShellShim(shim2, bashy); err != nil {
 			t.Errorf("WriteShellShim(%q) should succeed: %v", bashy, err)
@@ -47,9 +46,6 @@ func TestEnsureShimsRejectsTestBinary(t *testing.T) {
 	// basename not bashy
 	if got := ensureShims("/tmp/go-build123/b001/agentos.test"); got != "" {
 		t.Fatalf("ensureShims with test binary should return empty, got %q", got)
-	}
-	if got := ensureShims("/tmp/other"); got != "" {
-		t.Fatalf("ensureShims with non-bashy should return empty, got %q", got)
 	}
 }
 
