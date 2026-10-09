@@ -18,6 +18,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/format/index"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/storer"
+	"github.com/go-git/go-git/v5/storage/filesystem"
 )
 
 // openRepo opens the git repository at or above dir. A ".git" FILE
@@ -990,6 +991,32 @@ func nativeCheckout(_ context.Context, dir string, args []string) (*ExecResult, 
 		return nil, ErrUnsupported
 	}
 
+	idxPath := repoIndexPath(repo, wt)
+	var origIndex []byte
+	var origMode os.FileMode = 0o644
+	var hadIndex bool
+	if idxPath != "" {
+		if fi, err := os.Stat(idxPath); err == nil {
+			origMode = fi.Mode()
+			if data, err := os.ReadFile(idxPath); err == nil {
+				origIndex = data
+				hadIndex = true
+			}
+		} else if errors.Is(err, os.ErrNotExist) {
+			return nil, checkoutUnsupported("unborn index requires initial checkout by host git")
+		}
+	}
+	restoreIndex := func() {
+		if idxPath == "" {
+			return
+		}
+		if hadIndex {
+			_ = os.WriteFile(idxPath, origIndex, origMode)
+		} else {
+			_ = os.Remove(idxPath)
+		}
+	}
+
 	// -f/--force discards local changes on branch switches (host parity
 	// for the switch itself; pathspec checkouts stay unsupported).
 	force := false
@@ -1051,6 +1078,7 @@ func nativeCheckout(_ context.Context, dir string, args []string) (*ExecResult, 
 			// leave a partial native attempt for RunExternal to trip over.
 			_ = repo.Storer.RemoveReference(branchRef)
 			_ = repo.Storer.SetReference(oldHead)
+			restoreIndex()
 			return nil, checkoutUnsupported("worktree checkout failed: %v", err)
 		}
 		return &ExecResult{
@@ -1102,6 +1130,7 @@ func nativeCheckout(_ context.Context, dir string, args []string) (*ExecResult, 
 				_ = repo.Storer.SetReference(oldBranch)
 			}
 			_ = repo.Storer.SetReference(oldHead)
+			restoreIndex()
 			return nil, checkoutUnsupported("worktree checkout failed: %v", err)
 		}
 		return &ExecResult{
@@ -1117,6 +1146,7 @@ func nativeCheckout(_ context.Context, dir string, args []string) (*ExecResult, 
 			Force:  force,
 		})
 		if err != nil {
+			restoreIndex()
 			return nil, ErrUnsupported
 		}
 		return &ExecResult{
@@ -1130,10 +1160,42 @@ func nativeCheckout(_ context.Context, dir string, args []string) (*ExecResult, 
 	// Our own merges are all-or-nothing and never leave U state, so in
 	// practice this serves host-created conflicts in shared repos.
 	if len(args) > 0 && (args[0] == "--theirs" || args[0] == "--ours") {
-		return checkoutSide(repo, wt, wt.Filesystem.Root(), args[0] == "--theirs", args[1:])
+		res, err := checkoutSide(repo, wt, wt.Filesystem.Root(), args[0] == "--theirs", args[1:])
+		if err != nil {
+			restoreIndex()
+		}
+		return res, err
 	}
 
 	return nil, ErrUnsupported
+}
+
+func repoIndexPath(repo *gogit.Repository, wt *gogit.Worktree) string {
+	if s, ok := repo.Storer.(*filesystem.Storage); ok && s.Filesystem() != nil {
+		if root := s.Filesystem().Root(); root != "" {
+			return filepath.Join(root, "index")
+		}
+	}
+	if wt != nil && wt.Filesystem != nil {
+		root := wt.Filesystem.Root()
+		dotgit := filepath.Join(root, ".git")
+		if fi, err := os.Stat(dotgit); err == nil {
+			if fi.IsDir() {
+				return filepath.Join(dotgit, "index")
+			}
+			if raw, err := os.ReadFile(dotgit); err == nil {
+				line := strings.TrimSpace(string(raw))
+				if strings.HasPrefix(line, "gitdir: ") {
+					admin := strings.TrimPrefix(line, "gitdir: ")
+					if !filepath.IsAbs(admin) {
+						admin = filepath.Join(root, admin)
+					}
+					return filepath.Join(admin, "index")
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func checkoutUnsupported(format string, args ...any) error {

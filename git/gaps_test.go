@@ -1,6 +1,7 @@
 package git
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -89,10 +90,10 @@ func TestNativeClone_LocalNoHardlinks(t *testing.T) {
 	}
 }
 
-// TestNativeCheckoutCreateBranchNoCheckoutClone makes sure a checkout which
-// falls back to host git has not already created its branch. go-git's
-// Checkout creates the ref before it populates the index/worktree, so native
-// support must be determined before that call.
+// TestNativeCheckoutCreateBranchNoCheckoutClone makes sure checkout -b on an
+// unborn index clone (--no-checkout) returns ErrUnsupported before any write so
+// RunExternal host fallback performs the initial checkout cleanly with no
+// half-written index or staged deletions.
 func TestNativeCheckoutCreateBranchNoCheckoutClone(t *testing.T) {
 	ctx := context.Background()
 	src := t.TempDir()
@@ -101,57 +102,155 @@ func TestNativeCheckoutCreateBranchNoCheckoutClone(t *testing.T) {
 	}
 	setLocalIdentity(t, src)
 
-	files := make(map[string]string, 1777)
-	for i := range 1259 {
-		files[fmt.Sprintf("regular/%03d.txt", i)] = "regular\n"
+	// Build a real nested tree: several subdirectories, a binary file, ~200 files.
+	files := make(map[string]string, 210)
+	subdirs := []string{
+		"cmd/yoke/cli",
+		"pkg/weave/engine",
+		"pkg/agent/runtime",
+		"docs/specs/v1",
+		"internal/tools/scripts",
+		"assets/templates/nested",
 	}
-	for i := range 518 {
-		files[fmt.Sprintf("executable/%03d.sh", i)] = "#!/bin/sh\nexit 0\n"
+	for i := range 200 {
+		dir := subdirs[i%len(subdirs)]
+		files[fmt.Sprintf("%s/file_%03d.txt", dir, i)] = fmt.Sprintf("nested content %d\n", i)
 	}
-	commitFiles(t, src, files, "seed")
-	for i := range 518 {
-		if err := os.Chmod(filepath.Join(src, fmt.Sprintf("executable/%03d.sh", i)), 0755); err != nil {
-			t.Fatalf("chmod executable %d: %v", i, err)
-		}
+	commitFiles(t, src, files, "seed text files")
+
+	// Binary file
+	binPath := filepath.Join(src, "assets", "binary", "archive.tgz")
+	if err := os.MkdirAll(filepath.Dir(binPath), 0o755); err != nil {
+		t.Fatalf("mkdir binary dir: %v", err)
 	}
-	commitFiles(t, src, map[string]string{"modes": "updated\n"}, "record executable modes")
+	if err := os.WriteFile(binPath, []byte{0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0x00, 0x42}, 0o644); err != nil {
+		t.Fatalf("write binary file: %v", err)
+	}
+	if _, err := Add(AddOptions{RepoPath: src, All: true}); err != nil {
+		t.Fatalf("add binary: %v", err)
+	}
+	if _, err := Commit(CommitOptions{RepoPath: src, Message: "seed binary", AuthorName: "T", AuthorEmail: "t@e"}); err != nil {
+		t.Fatalf("commit binary: %v", err)
+	}
 
 	sha, err := RunChecked(ctx, src, []string{"rev-parse", "HEAD"})
 	if err != nil {
 		t.Fatalf("resolve source HEAD: %v", err)
 	}
-	cloneNoCheckout := func(name string) string {
-		dst := filepath.Join(t.TempDir(), name)
-		cmd := osexec.CommandContext(ctx, "git", "clone", "--local", "--no-hardlinks", "--no-checkout", src, dst)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("clone --no-checkout: %v\n%s", err, out)
-		}
-		return dst
-	}
-	dst := cloneNoCheckout("native")
+	sha = strings.TrimSpace(sha)
 
-	branch := "agent/native"
-	res, err := Exec(ctx, dst, []string{"checkout", "-b", branch, strings.TrimSpace(sha)})
-	if err != nil || res.ExitCode != 0 {
-		t.Fatalf("native checkout with start point: result=%+v err=%v", res, err)
+	dst := filepath.Join(t.TempDir(), "clone")
+	cmd := osexec.CommandContext(ctx, "git", "clone", "--local", "--no-hardlinks", "--no-checkout", src, dst)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clone --no-checkout: %v\n%s", err, out)
 	}
 
-	dst = cloneNoCheckout("fallback")
-	branch = "agent/x"
-	args := []string{"checkout", "--guess", "-b", branch, strings.TrimSpace(sha)}
-	if _, err := Exec(ctx, dst, args); !errors.Is(err, ErrUnsupported) {
-		t.Fatalf("native checkout error = %v, want ErrUnsupported", err)
+	// Verify the clone has an unborn index (.git/index does not exist).
+	idxFile := filepath.Join(dst, ".git", "index")
+	if _, err := os.Stat(idxFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected unborn index (.git/index absent), got err: %v", err)
 	}
+
+	// Exec checkout -b must return ErrUnsupported BEFORE any write.
+	branch := "agent/x"
+	args := []string{"checkout", "-b", branch, sha}
+	res, err := Exec(ctx, dst, args)
+	if !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("Exec on unborn index returned %v (res=%+v), want ErrUnsupported", err, res)
+	}
+	// Verify no .git/index was left behind by the native refusal.
+	if _, err := os.Stat(idxFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("native checkout wrote index on unborn clone: %v", err)
+	}
+	// Verify branch was not created.
 	ref, err := Exec(ctx, dst, []string{"rev-parse", "--verify", "refs/heads/" + branch})
 	if err == nil && ref.ExitCode == 0 {
 		t.Fatalf("native refusal created branch %q", branch)
 	}
-	res, err = RunExternal(ctx, dst, args)
-	if err != nil {
-		t.Fatalf("fallback checkout: %v", err)
+
+	// RunExternal fallback must perform the initial checkout cleanly.
+	fres, ferr := RunExternal(ctx, dst, args)
+	if ferr != nil {
+		t.Fatalf("RunExternal fallback failed: %v", ferr)
 	}
-	if res.ExitCode != 0 {
-		t.Fatalf("fallback checkout exit %d: %s", res.ExitCode, res.Stderr)
+	if fres.ExitCode != 0 {
+		t.Fatalf("RunExternal exit %d: %s", fres.ExitCode, fres.Stderr)
+	}
+
+	// Assert git status --porcelain is empty and all files exist.
+	statusOut, err := RunChecked(ctx, dst, []string{"status", "--porcelain"})
+	if err != nil {
+		t.Fatalf("git status: %v", err)
+	}
+	if strings.TrimSpace(statusOut) != "" {
+		t.Fatalf("git status --porcelain not empty:\n%s", statusOut)
+	}
+
+	for f := range files {
+		full := filepath.Join(dst, filepath.FromSlash(f))
+		if _, err := os.Stat(full); err != nil {
+			t.Fatalf("file %s missing: %v", f, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dst, "assets", "binary", "archive.tgz")); err != nil {
+		t.Fatalf("binary file missing: %v", err)
+	}
+}
+
+func TestNativeCheckoutFailureRestoresOriginalIndex(t *testing.T) {
+	ctx := context.Background()
+	src := t.TempDir()
+	if _, err := Init(InitOptions{Path: src}); err != nil {
+		t.Fatalf("init source: %v", err)
+	}
+	setLocalIdentity(t, src)
+
+	commitFiles(t, src, map[string]string{
+		"a.txt": "file a\n",
+		"b.txt": "file b\n",
+	}, "initial commit")
+
+	idxFile := filepath.Join(src, ".git", "index")
+
+	// Create a second commit with a file in a subdirectory
+	commitFiles(t, src, map[string]string{
+		"sub/c.txt": "file c\n",
+	}, "second commit")
+	sha, err := RunChecked(ctx, src, []string{"rev-parse", "HEAD"})
+	if err != nil {
+		t.Fatalf("rev-parse: %v", err)
+	}
+
+	// Reset back to first commit so worktree and index are at commit 1
+	if _, err := RunChecked(ctx, src, []string{"reset", "--hard", "HEAD~1"}); err != nil {
+		t.Fatalf("reset hard: %v", err)
+	}
+
+	origResetBytes, err := os.ReadFile(idxFile)
+	if err != nil {
+		t.Fatalf("read index: %v", err)
+	}
+
+	// Make the worktree prevent writing `sub/c.txt` by making `sub` a read-only directory
+	subDir := filepath.Join(src, "sub")
+	if err := os.MkdirAll(subDir, 0o500); err != nil {
+		t.Fatalf("mkdir sub: %v", err)
+	}
+	defer os.Chmod(subDir, 0o755)
+
+	// Attempt checkout -b to the second commit which needs to create sub/c.txt
+	res, err := Exec(ctx, src, []string{"checkout", "-b", "agent/blocked", strings.TrimSpace(sha)})
+	if err == nil && (res == nil || res.ExitCode == 0) {
+		t.Fatalf("expected checkout to fail on unwritable dir")
+	}
+
+	// Verify that index file was restored to origResetBytes
+	afterBytes, err := os.ReadFile(idxFile)
+	if err != nil {
+		t.Fatalf("read index after failure: %v", err)
+	}
+	if !bytes.Equal(afterBytes, origResetBytes) {
+		t.Fatalf("index was not restored on checkout failure: got %d bytes, want %d bytes", len(afterBytes), len(origResetBytes))
 	}
 }
 
