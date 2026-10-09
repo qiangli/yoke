@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/cookiejar"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -1192,5 +1193,63 @@ func TestE2EPairingHonoursTheChosenExpiry(t *testing.T) {
 	}
 	if ttl <= neverExpiresAfter {
 		t.Errorf("never-expiring device lasts %s, inside the window that still reads as a date", ttl)
+	}
+}
+
+// The permanent Host tile must survive a stopped outpost and compose the
+// console mount with its own prefix when the admin service is running.
+func TestE2EHostBuiltinLifecycle(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/status" {
+			w.Write([]byte(`{"ok":true}`))
+			return
+		}
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write([]byte(`<base href="` + r.Header.Get("X-Forwarded-Prefix") + `/"><a href="api/status">Status</a>`))
+	}))
+	defer upstream.Close()
+	t.Setenv("OUTPOST_ADMIN_ADDR", strings.TrimPrefix(upstream.URL, "http://"))
+	withOutpostAdminResolver(t, outpostConfig{}, nil, "127.0.0.1:17777")
+	base := serve(t, Options{})
+	assertTile := func(want string) {
+		t.Helper()
+		code, body, _ := get(t, base+"/api/apps")
+		if code != 200 {
+			t.Fatalf("apps = %d: %s", code, body)
+		}
+		var payload struct {
+			Apps []Status `json:"apps"`
+		}
+		if err := json.Unmarshal([]byte(body), &payload); err != nil {
+			t.Fatal(err)
+		}
+		for _, app := range payload.Apps {
+			if app.Name != "host" {
+				continue
+			}
+			if app.Label != "Host" || app.Source != "builtin" || app.Path != "/host/" || app.Icon == "" || app.StartHint != "outpost service start" || app.Status != want {
+				t.Fatalf("Host tile = %+v, want %s", app, want)
+			}
+			return
+		}
+		t.Fatal("permanent Host tile missing")
+	}
+	assertTile(StatusReady)
+	code, body, _ := get(t, base+"/host/")
+	if code != 200 || !strings.Contains(body, `<base href="/host/">`) {
+		t.Fatalf("Host page = %d: %s", code, body)
+	}
+	if code, body, _ := get(t, base+"/host/api/status"); code != 200 || body != `{"ok":true}` {
+		t.Fatalf("Host API = %d: %s", code, body)
+	}
+	upstream.Close()
+	// A fresh console has no cached probe result.
+	base = serve(t, Options{})
+	assertTile(StatusStopped)
+	if code, body, _ := get(t, base+"/host/"); code != http.StatusBadGateway || !strings.Contains(body, "outpost service start") {
+		t.Fatalf("stopped Host = %d: %s", code, body)
 	}
 }

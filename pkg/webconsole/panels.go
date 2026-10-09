@@ -170,13 +170,13 @@ func resolveOutpostAdminAddr() (string, int, string) {
 func resolveOutpostAdminAddrUncached() (string, int, string) {
 	for _, candidate := range []struct {
 		source string
-		value  string
+		value  func() string
 	}{
-		{source: "$OUTPOST_ADMIN_ADDR", value: os.Getenv("OUTPOST_ADMIN_ADDR")},
-		{source: "outpost config show", value: configuredOutpostAdminAddr()},
-		{source: "default", value: outpostAdminDefaultAddr},
+		{source: "$OUTPOST_ADMIN_ADDR", value: func() string { return os.Getenv("OUTPOST_ADMIN_ADDR") }},
+		{source: "outpost config show", value: configuredOutpostAdminAddr},
+		{source: "default", value: func() string { return outpostAdminDefaultAddr }},
 	} {
-		addr := strings.TrimSpace(candidate.value)
+		addr := strings.TrimSpace(candidate.value())
 		if addr == "" {
 			continue
 		}

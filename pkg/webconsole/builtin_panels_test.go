@@ -120,3 +120,16 @@ func TestRegisteredAppCannotShadowTheBuiltinLoom(t *testing.T) {
 		t.Fatal("registered app validation accepted builtin loom")
 	}
 }
+
+func TestHostEnvironmentOverrideDoesNotReadConfig(t *testing.T) {
+	t.Setenv("OUTPOST_ADMIN_ADDR", "127.0.0.1:19999")
+	withOutpostAdminResolver(t, outpostConfig{}, nil, "127.0.0.1:17777")
+	outpostConfigShow = func() (outpostConfig, error) {
+		t.Error("explicit admin address must not launch outpost config show")
+		return outpostConfig{}, nil
+	}
+	p := hostBuiltinPanel()
+	if p.Port != 19999 || !p.Available {
+		t.Fatalf("host panel = %+v", p)
+	}
+}
