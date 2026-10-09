@@ -494,6 +494,19 @@ func (b *Broker) dispatch(w http.ResponseWriter, r *http.Request, ri *reqInfo, b
 // serveLocal runs one request on the exclusive device.
 func (b *Broker) serveLocal(w http.ResponseWriter, r *http.Request, ri *reqInfo, payload map[string]json.RawMessage, model string, binding *Binding, native bool) {
 	ctx := r.Context()
+	anth := !native && isAnthropicPath(r.URL.Path)
+	clientModel := model
+	anthStream := false
+	if anth {
+		oa, err := anthropicToOpenAIPayload(payload)
+		if err != nil {
+			b.finish(ri, http.StatusBadRequest, 0, err.Error())
+			writeErr(w, r.URL.Path, http.StatusBadRequest, err.Error())
+			return
+		}
+		payload = oa
+		anthStream = string(payload["stream"]) == "true"
+	}
 	m, ok := b.localModel(ctx, model)
 	if !ok {
 		b.finish(ri, http.StatusNotFound, 0, fmt.Sprintf("model %q not found", model))
@@ -586,8 +599,12 @@ func (b *Broker) serveLocal(w http.ResponseWriter, r *http.Request, ri *reqInfo,
 	}
 	defer release()
 	cw := newCaptureWriter(w)
-	b.proxyEngine(cw, r, body)
-	ri.rec.PromptTok, ri.rec.OutputTok = parseTokens(cw.tail)
+	if anth {
+		ri.rec.PromptTok, ri.rec.OutputTok = b.serveAnthropicLocal(ctx, cw, body, anthStream, clientModel)
+	} else {
+		b.proxyEngine(cw, r, body)
+		ri.rec.PromptTok, ri.rec.OutputTok = parseTokens(cw.tail)
+	}
 	status := cw.status
 	if ctx.Err() != nil {
 		status = 499 // the client hung up; whatever the engine said went nowhere
@@ -1142,6 +1159,10 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func writeErr(w http.ResponseWriter, path string, status int, msg string) {
 	if strings.HasPrefix(path, "/api/") {
 		writeJSON(w, status, map[string]string{"error": msg})
+		return
+	}
+	if isAnthropicPath(path) {
+		writeAnthropicErr(w, status, msg)
 		return
 	}
 	writeJSON(w, status, map[string]any{"error": map[string]any{"message": msg, "type": "bashy_broker", "code": status}})

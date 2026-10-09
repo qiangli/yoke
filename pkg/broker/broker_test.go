@@ -29,6 +29,7 @@ type fakeEngine struct {
 	created  []string
 	unloaded []string
 	lastBody map[string]any
+	chatFn   func(w http.ResponseWriter, body map[string]any) // overrides the /v1/chat/completions reply
 	server   *httptest.Server
 }
 
@@ -95,6 +96,10 @@ func (f *fakeEngine) serve(w http.ResponseWriter, r *http.Request) {
 			<-hold
 		}
 		f.inflight.Add(-1)
+		if r.URL.Path == "/v1/chat/completions" && f.chatFn != nil {
+			f.chatFn(w, body)
+			return
+		}
 		if r.URL.Path == "/v1/chat/completions" {
 			io.WriteString(w, `{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":7,"completion_tokens":3}}`)
 			return
