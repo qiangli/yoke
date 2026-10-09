@@ -188,6 +188,10 @@ routes any agentic tool to these targets through bashy dag.`,
 			// printed the target list instead of the timings.
 			absPath, _ := filepath.Abs(path)
 			cache := LoadCache(absPath, cacheDir)
+			// Resolved execution inputs for the fingerprint: frontmatter
+			// vars with CLI KEY=VALUE overrides applied (values are hashed
+			// into fingerprints, never stored — see Cache.ExecInputs).
+			cache.ExecInputs = execEnv(docVars, overrides)
 			if cacheImport != "" {
 				if err := cache.ImportFromDir(cacheImport); err != nil {
 					return emitErr(errOut, mode, errf(weavecli.ExitInvalidArg, "cache import: %v", err))

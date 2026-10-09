@@ -27,6 +27,12 @@ type Cache struct {
 	path      string
 	Hashes    map[string]string        `json:"hashes"`
 	Durations map[string]time.Duration `json:"durations,omitempty"`
+	// ExecInputs carries the document-level resolved execution inputs for
+	// fingerprinting: frontmatter `vars:` values with CLI KEY=VALUE overrides
+	// already applied (see execEnv). Transient: never persisted to the cache
+	// JSON, so values (which may be secrets) are hashed into fingerprints,
+	// never stored or logged.
+	ExecInputs map[string]string `json:"-"`
 }
 
 // ResolveCacheDir resolves dag's on-disk root: an explicit cacheDir wins, then
@@ -153,7 +159,45 @@ func (c *Cache) Fingerprint(n *Node, dir string, depFPs map[string]string) strin
 		io.WriteString(h, "src\x00"+p+"\x00")
 	}
 	io.WriteString(h, "files\x00"+expansionHash(dir, collectSourceFiles(dir, paths))+"\x00")
+	// Resolved execution inputs: the interpreter tag, placement intent, and
+	// the sorted effective environment (document vars + CLI overrides, with
+	// the target's own Env winning). Values feed only the one-way hash —
+	// they never land in the cache file, logs, or JSON envelopes.
+	lang := n.Task.Lang
+	if lang == "" {
+		lang = "bash" // the default body runner: ``` and ```bash are identical
+	}
+	io.WriteString(h, "lang\x00"+lang+"\x00")
+	io.WriteString(h, "host\x00"+n.Task.Host+"\x00")
+	secrets := append([]string{}, n.Task.Secrets...)
+	sort.Strings(secrets)
+	for _, s := range secrets {
+		io.WriteString(h, "secret\x00"+s+"\x00") // names only, never values
+	}
+	env := execEnv(c.ExecInputs, n.Task.Env)
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		io.WriteString(h, "env\x00"+k+"\x00"+env[k]+"\x00")
+	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// execEnv merges document-level resolved inputs (frontmatter vars with CLI
+// overrides applied) with the target's own Env entries, which win. Callers
+// hash the result; the values themselves are never stored.
+func execEnv(base map[string]string, taskEnv []string) map[string]string {
+	out := make(map[string]string, len(base)+len(taskEnv))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range envMap(taskEnv) {
+		out[k] = v
+	}
+	return out
 }
 
 // UpToDate reports whether n can be skipped: it declares Generates, every

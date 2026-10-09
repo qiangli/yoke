@@ -85,11 +85,48 @@
 // order: its body, then each dependency's already-computed fingerprint (so an
 // upstream change invalidates everything downstream), then the content hash of
 // every Sources/Inputs path (a file's bytes, or a directory's recursive file
-// contents). A target is up-to-date — and is skipped — iff it declares
-// Generates, all of those outputs exist on disk, AND its recorded fingerprint
-// matches the freshly computed one. A target with no Generates is phony and
-// always runs. `--force` (-B) ignores the cache entirely; `--explain` prints,
+// contents; glob patterns expand deterministically — see below), then the
+// resolved execution inputs (interpreter tag, Host, secret names, and the
+// sorted effective environment). A target is up-to-date — and is skipped —
+// iff it declares Generates, every required Generates pattern matches at
+// least one non-excluded path on disk, AND its recorded fingerprint matches
+// the freshly computed one. A target with no Generates is phony and always
+// runs. `--force` (-B) ignores the cache entirely; `--explain` prints,
 // per target, whether it would run or is up-to-date and why, running nothing.
+//
+// # What invalidates the cache
+//
+// A target rebuilds when any of its effective inputs change:
+//
+//   - Body: any edit to the target's fenced code block.
+//   - Sources/Inputs: adding, deleting, or changing a matched file. Entries
+//     are glob-expanded — `*`/`?`/classes within a segment, `**` across
+//     segments, leading `!` exclusions — over sorted forward-slash paths, so
+//     the same dag.md behaves the same on Linux, macOS and Windows. An
+//     excluded file never invalidates. A required Generates pattern with no
+//     match is never a cache hit (the target reruns).
+//   - Upstream: any dependency's fingerprint changed (invalidation flows
+//     downstream through Requires).
+//   - Execution inputs: the interpreter tag (``` vs ```python), Host, the
+//     declared secret NAMES, and the sorted effective environment — the
+//     target's Env entries over the frontmatter `vars:` values with CLI
+//     KEY=VALUE overrides applied. Changing a variable the body reads (even
+//     one mentioned nowhere else) forces a rebuild; matrix children differ by
+//     their injected Env. Values feed only the one-way fingerprint hash: they
+//     are never written to the cache file, logs, or JSON.
+//   - Missing outputs: a declared Generates path that no longer matches
+//     (deleted outside the run) forces a rerun.
+//
+// Deliberately NOT hashed: secret VALUES (rotating a secret must not rebuild
+// the world; the declared names still invalidate), Venue/Match/capacity and
+// other scheduling-only knobs (they change where or when a target runs, not
+// what it produces), and include-file identity (an include contributes through
+// the merged body and metadata it produces — a changed include that alters a
+// body or Env invalidates exactly that target).
+//
+// Changing what a pattern means (glob support itself, or the execution-input
+// fold) changes every stored fingerprint once: the next run after such an
+// upgrade rebuilds output-producing targets one final time.
 //
 // # Contracts: Require: / Ensure: / Effects:
 //
