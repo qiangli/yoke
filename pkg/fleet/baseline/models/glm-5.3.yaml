@@ -27,6 +27,13 @@ api_key_ref: zai
 # (/api/coding/paas/v4, NOT the general /api/paas/v4) still applies; a coding-plan key
 # on the general endpoint is rejected in a way that reads like "the model is broken".
 model: glm-5.3
+# CONTEXT: the vendor's model page, https://docs.z.ai/guides/llm/glm-5.3
+# (read 2026-10-09), states a 1M-token context window and a maximum output
+# length of 128K tokens (the schema has no max-output field; genie reserves
+# its own). "1M" is recorded as 1,000,000 — Z.ai does not spell the exact
+# figure, and the decimal reading is the conservative budget. Without this
+# line genie ran the model under a 32768-token fallback (20480 usable).
+context_length: 1000000
 quality: 0.86
 cost_micro: 900
 ids:

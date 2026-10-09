@@ -28,6 +28,13 @@ api_key_ref: deepseek
 # looked healthy to `agents verify`, which only checks that both halves of the
 # binding resolve in the catalog. `agents verify --live` is what found it.
 model: deepseek/deepseek-v4-pro
+# CONTEXT: the vendor's model table, https://api-docs.deepseek.com/quick_start/pricing
+# (read 2026-10-09), lists deepseek-v4-pro with CONTEXT LENGTH "1M" and OUTPUT LENGTH
+# MAXIMUM "384K" (the schema has no max-output field; genie reserves its own).
+# "1M" is recorded as 1,000,000 — the vendor does not spell the exact figure,
+# and the decimal reading is the conservative budget. Without this line genie
+# ran the model under a 32768-token fallback (20480 usable).
+context_length: 1000000
 quality: 0.82
 cost_micro: 1500
 # ycode detects the provider from the model name, so it takes the BARE id —

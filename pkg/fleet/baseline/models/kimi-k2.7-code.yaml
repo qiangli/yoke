@@ -14,6 +14,11 @@ kind: api
 base_url: https://api.moonshot.ai/v1
 api_key_ref: moonshot
 model: moonshot/kimi-k2.7-code
+# CONTEXT: the vendor's model table, https://platform.kimi.ai/docs/pricing/chat
+# (read 2026-10-09; platform.moonshot.ai redirects there), lists kimi-k2.7-code with a
+# context length of 262,144 tokens. It lists no max-output figure. Without
+# this line genie ran the model under a 32768-token fallback (20480 usable).
+context_length: 262144
 quality: 0.82
 cost_micro: 2000
 # ycode detects the provider from the model name, so it takes the BARE id —

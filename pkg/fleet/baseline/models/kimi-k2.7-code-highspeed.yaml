@@ -21,6 +21,11 @@ api_key_ref: moonshot
 # kimi-k2.6, kimi-k2.7-code, kimi-k3). Not yet exercised with a completion from
 # this host.
 model: moonshot/kimi-k2.7-code-highspeed
+# CONTEXT: the vendor's model table, https://platform.kimi.ai/docs/pricing/chat
+# (read 2026-10-09; platform.moonshot.ai redirects there), lists kimi-k2.7-code-highspeed with a
+# context length of 262,144 tokens. It lists no max-output figure. Without
+# this line genie ran the model under a 32768-token fallback (20480 usable).
+context_length: 262144
 quality: 0.82
 # Moonshot bills the high-speed tier above the standard one; the exact ratio was
 # not read from a price sheet, so this is kimi-k2.7-code's prior scaled up. A

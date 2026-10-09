@@ -40,6 +40,11 @@ kind: api
 base_url: https://api.moonshot.ai/v1
 api_key_ref: moonshot
 model: moonshot/kimi-k3
+# CONTEXT: the vendor's model table, https://platform.kimi.ai/docs/pricing/chat
+# (read 2026-10-09; platform.moonshot.ai redirects there), lists kimi-k3 with a
+# context length of 1,048,576 tokens. It lists no max-output figure. Without
+# this line genie ran the model under a 32768-token fallback (20480 usable).
+context_length: 1048576
 quality: 0.85
 # Reported API pricing 2026-07-16: $3/M input, $15/M output.
 cost_micro: 15000

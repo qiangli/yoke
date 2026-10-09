@@ -14,6 +14,13 @@ kind: api
 base_url: https://api.deepseek.com
 api_key_ref: deepseek
 model: deepseek/deepseek-flash
+# CONTEXT: the vendor's model table, https://api-docs.deepseek.com/quick_start/pricing
+# (read 2026-10-09), lists deepseek-flash with CONTEXT LENGTH "1M" and OUTPUT LENGTH
+# MAXIMUM "384K" (the schema has no max-output field; genie reserves its own).
+# "1M" is recorded as 1,000,000 — the vendor does not spell the exact figure,
+# and the decimal reading is the conservative budget. Without this line genie
+# ran the model under a 32768-token fallback (20480 usable).
+context_length: 1000000
 quality: 0.77
 # DeepSeek cut the price with V4.1; carried over from v4 as an upper bound.
 cost_micro: 600
