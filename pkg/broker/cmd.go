@@ -413,8 +413,16 @@ func newDownCmd() *cobra.Command {
 	}
 }
 
+// EnvSchemaVersion is the envelope `llm env --json` emits. The five client
+// variables sit under env exactly as the shell form exports them.
+const EnvSchemaVersion = "bashy-llm-env-v1"
+
+// envVarOrder is the shell form's line order and its export list.
+var envVarOrder = []string{"OPENAI_BASE_URL", "OPENAI_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "OLLAMA_HOST"}
+
 func newEnvCmd() *cobra.Command {
 	var sticky string
+	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "env",
 		Short: "print the environment a client needs (OpenAI, Anthropic and Ollama clients)",
@@ -427,7 +435,11 @@ func newEnvCmd() *cobra.Command {
 The key is the owner token, not a vendor key. With --sticky KEY the base URLs
 carry the binding, so a client that only takes a base URL (mini-swe-agent via
 litellm) is bound without code changes. The caller's $BASHY_MODEL_SESSION, if
-set, is carried in the URLs too.`,
+set, is carried in the URLs too.
+
+--json emits the bashy-llm-env-v1 envelope (base_url, session, sticky, env)
+instead of shell assignments. Both forms carry the owner token: never commit
+either, record only the schema name as evidence.`,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -450,16 +462,33 @@ set, is carried in the URLs too.`,
 			}
 			base := door.BaseURL()
 			out := c.OutOrStdout()
-			fmt.Fprintf(out, "OPENAI_BASE_URL=%s%s/v1\n", base, prefix)
-			fmt.Fprintf(out, "OPENAI_API_KEY=%s\n", token)
-			fmt.Fprintf(out, "ANTHROPIC_BASE_URL=%s%s/anthropic\n", base, prefix)
-			fmt.Fprintf(out, "ANTHROPIC_API_KEY=%s\n", token)
-			fmt.Fprintf(out, "OLLAMA_HOST=%s/k/%s%s\n", base, token, prefix)
-			fmt.Fprintln(out, "export OPENAI_BASE_URL OPENAI_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_API_KEY OLLAMA_HOST")
+			env := map[string]string{
+				"OPENAI_BASE_URL":    base + prefix + "/v1",
+				"OPENAI_API_KEY":     token,
+				"ANTHROPIC_BASE_URL": base + prefix + "/anthropic",
+				"ANTHROPIC_API_KEY":  token,
+				"OLLAMA_HOST":        base + "/k/" + token + prefix,
+			}
+			if asJSON {
+				enc := json.NewEncoder(out)
+				enc.SetIndent("", "  ")
+				return enc.Encode(struct {
+					SchemaVersion string            `json:"schema_version"`
+					BaseURL       string            `json:"base_url"`
+					Session       string            `json:"session"`
+					Sticky        string            `json:"sticky"`
+					Env           map[string]string `json:"env"`
+				}{EnvSchemaVersion, base, strings.TrimSpace(os.Getenv(SessionEnv)), sticky, env})
+			}
+			for _, k := range envVarOrder {
+				fmt.Fprintf(out, "%s=%s\n", k, env[k])
+			}
+			fmt.Fprintln(out, "export "+strings.Join(envVarOrder, " "))
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&sticky, "sticky", "", "bind the printed base URLs to this sticky key")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the "+EnvSchemaVersion+" envelope instead of shell assignments")
 	return cmd
 }
 
