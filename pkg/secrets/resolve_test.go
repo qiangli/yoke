@@ -11,7 +11,7 @@ import (
 // Sprint: #379; Story: #37; Story-ID: 5b537ed16256
 //
 // The catalog names a credential by a STANDARD ref (`api_key_ref: zai`); a host
-// binds that ref under its own vault name (`ZAI_API_KEY=@dragon-zai` in
+// binds that ref under its own vault name (`ZAI_API_KEY=@host-zai` in
 // secrets.map). A caller that looked the ref up in the vault by its bare name
 // (`bashy secret get zai`) found nothing on every host whose vault names are
 // host-prefixed — which is every host set up by the template. The resolution
@@ -32,16 +32,16 @@ func TestResolveAgentKeyThroughHostBinding(t *testing.T) {
 				}
 				w.Header().Set("Content-Type", "application/json")
 				// The vault knows the HOST name only; there is no secret called "zai".
-				_, _ = w.Write([]byte(`{"secrets":[{"name":"dragon-zai","value":"vault-fixture"},{"name":"dragon-github","value":"unrelated"}]}`))
+				_, _ = w.Write([]byte(`{"secrets":[{"name":"host-zai","value":"vault-fixture"},{"name":"host-github","value":"unrelated"}]}`))
 			}))
 			defer server.Close()
 			t.Setenv("BASHY_CLOUDBOX_URL", server.URL)
 			if err := os.MkdirAll(filepath.Join(cfg, "bashy"), 0700); err != nil {
 				t.Fatal(err)
 			}
-			tmpl := "ZAI_API_KEY=@dragon-zai\nGITHUB_TOKEN=@dragon-github\n"
+			tmpl := "ZAI_API_KEY=@host-zai\nGITHUB_TOKEN=@host-github\n"
 			if mode == "unbound" {
-				tmpl = "GITHUB_TOKEN=@dragon-github\n"
+				tmpl = "GITHUB_TOKEN=@host-github\n"
 			}
 			if err := os.WriteFile(filepath.Join(cfg, "bashy", "secrets.map"), []byte(tmpl), 0600); err != nil {
 				t.Fatal(err)
@@ -90,14 +90,14 @@ func TestResolveAgentKeyGrantsNothingElse(t *testing.T) {
 	t.Setenv("BASHY_SECRETS_TOKEN", "fixture-token")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"secrets":[{"name":"dragon-zai","value":"z"},{"name":"dragon-github","value":"g"}]}`))
+		_, _ = w.Write([]byte(`{"secrets":[{"name":"host-zai","value":"z"},{"name":"host-github","value":"g"}]}`))
 	}))
 	defer server.Close()
 	t.Setenv("BASHY_CLOUDBOX_URL", server.URL)
 	if err := os.MkdirAll(filepath.Join(cfg, "bashy"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(cfg, "bashy", "secrets.map"), []byte("ZAI_API_KEY=@dragon-zai\nGITHUB_TOKEN=@dragon-github\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(cfg, "bashy", "secrets.map"), []byte("ZAI_API_KEY=@host-zai\nGITHUB_TOKEN=@host-github\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	got, ok := ResolveAgentKey([]string{"PATH=/bin"}, "zai")

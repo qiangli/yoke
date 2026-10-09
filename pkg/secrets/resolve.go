@@ -6,7 +6,7 @@ import "strings"
 //
 // A model names its credential by a STANDARD ref — `api_key_ref: zai` — and
 // that ref is the same in every copy of the catalog. The VAULT name is not: a
-// host binds the ref under its own name in secrets.map (`ZAI_API_KEY=@dragon-zai`),
+// host binds the ref under its own name in secrets.map (`ZAI_API_KEY=@host-zai`),
 // and that binding is the only place the two are joined. A caller that asked
 // the vault for the bare ref (`bashy secret get zai`) therefore found nothing on
 // every host set up from the template, while the same key was one `bashy secret

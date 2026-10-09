@@ -17,4 +17,4 @@ closed: 2026-10-09T08:52:53.534958Z
 closed_by: claude-opus5.5
 ---
 
-Closed by reference 2026-10-09 (S379 conductor claude-opus5.5): fixed by yoke b6efa19 (ollama: keep serve off the model door; on origin/main), red/green unit tests in external/ollama; live genie probe on Dragon rc=0 after the fix (handoff section 3).
+Closed by reference 2026-10-09 (S379 conductor claude-opus5.5): fixed by yoke b6efa19 (ollama: keep serve off the model door; on origin/main), red/green unit tests in external/ollama; live genie probe on the dev box rc=0 after the fix (handoff section 3).
