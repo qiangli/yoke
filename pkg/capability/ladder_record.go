@@ -50,7 +50,7 @@ canonical tool:model.`,
 }
 
 func newLadderRecordSeatCmd() *cobra.Command {
-	var agent, reason string
+	var agent, reason, id string
 	var band, season int
 	cmd := &cobra.Command{
 		Use:   "seat",
@@ -70,6 +70,9 @@ func newLadderRecordSeatCmd() *cobra.Command {
 				return fmt.Errorf("record seat: --season is required")
 			}
 			e := ladderRecordBase(season)
+			if id != "" {
+				e.ID = id
+			}
 			e.Kind = ladder.EventKindSeat
 			e.Agent = agent
 			e.Provisional = band
@@ -81,11 +84,12 @@ func newLadderRecordSeatCmd() *cobra.Command {
 	cmd.Flags().IntVar(&band, "band", -1, "provisional band 0..5 (0 clears the seat)")
 	cmd.Flags().StringVar(&reason, "reason", "", "why the seat was set")
 	cmd.Flags().IntVar(&season, "season", 0, "season the seat was set in")
+	cmd.Flags().StringVar(&id, "id", "", "stable event id for replay-safe retries")
 	return cmd
 }
 
 func newLadderRecordCertCmd() *cobra.Command {
-	var agent, kind, modelVersion, evidence string
+	var agent, kind, modelVersion, evidence, id string
 	var season int
 	cmd := &cobra.Command{
 		Use:   "cert",
@@ -109,6 +113,9 @@ func newLadderRecordCertCmd() *cobra.Command {
 				return fmt.Errorf("record cert: --season is required")
 			}
 			e := ladderRecordBase(season)
+			if id != "" {
+				e.ID = id
+			}
 			e.Kind = ladder.EventKindCert
 			e.Agent = agent
 			e.Cert = ladder.Certificate{Kind: ck, ModelVersion: modelVersion, Season: season}
@@ -121,11 +128,12 @@ func newLadderRecordCertCmd() *cobra.Command {
 	cmd.Flags().StringVar(&modelVersion, "model-version", "", "certified model version")
 	cmd.Flags().StringVar(&evidence, "evidence", "", "run/report ref backing the certificate")
 	cmd.Flags().IntVar(&season, "season", 0, "season the certificate was earned in")
+	cmd.Flags().StringVar(&id, "id", "", "stable event id for replay-safe retries")
 	return cmd
 }
 
 func newLadderRecordCorrectionCmd() *cobra.Command {
-	var supersedes, reason string
+	var supersedes, reason, id string
 	var season int
 	cmd := &cobra.Command{
 		Use:   "correction",
@@ -142,6 +150,9 @@ func newLadderRecordCorrectionCmd() *cobra.Command {
 				return fmt.Errorf("record correction: --season is required")
 			}
 			e := ladderRecordBase(season)
+			if id != "" {
+				e.ID = id
+			}
 			e.Kind = ladder.EventKindCorrection
 			e.Agent = e.Reviewer
 			e.Supersedes = supersedes
@@ -152,6 +163,7 @@ func newLadderRecordCorrectionCmd() *cobra.Command {
 	cmd.Flags().StringVar(&supersedes, "supersedes", "", "id of the event this corrects")
 	cmd.Flags().StringVar(&reason, "reason", "", "why the correction was recorded")
 	cmd.Flags().IntVar(&season, "season", 0, "season the correction was recorded in")
+	cmd.Flags().StringVar(&id, "id", "", "stable event id for replay-safe retries")
 	return cmd
 }
 
@@ -376,7 +388,7 @@ func ladderRecordRead() ([]ladder.Event, error) {
 // evidence quickly, so replay floors their RD at ladder.SeedRDFloor however
 // confident the fit was (manager decision recorded on Sprint #331).
 func newLadderRecordSeedCmd() *cobra.Command {
-	var from, tool, agent, duty, reason string
+	var from, tool, agent, duty, reason, id string
 	var toolMap []string
 	var r, rd float64
 	var season int
@@ -403,6 +415,8 @@ records one seed by hand. --dry-run prints what would be written.`,
 				return fmt.Errorf("record seed: --season must be >= 1")
 			}
 			switch {
+			case from != "" && id != "":
+				return fmt.Errorf("record seed: --id is only valid for one manual seed")
 			case from != "" && agent != "":
 				return fmt.Errorf("record seed: --from-seedfit and --agent are exclusive")
 			case from != "":
@@ -431,6 +445,9 @@ records one seed by hand. --dry-run prints what would be written.`,
 				return fmt.Errorf("record seed: --reason is required (no seed without a reason)")
 			}
 			e := ladderSeedEvent(season, agent, d, r, rd, reason)
+			if id != "" {
+				e.ID = id
+			}
 			if dryRun {
 				fmt.Fprintf(cmd.OutOrStdout(), "would seed %s %s r=%.0f rd=%.0f (dry run: nothing written)\n", e.Agent, e.Duty, e.SeedR, e.SeedRD)
 				return nil
@@ -448,6 +465,7 @@ records one seed by hand. --dry-run prints what would be written.`,
 	cmd.Flags().StringVar(&reason, "reason", "", "manual: why the seed was set")
 	cmd.Flags().IntVar(&season, "season", 1, "season the seed is recorded in")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the seeds without writing them")
+	cmd.Flags().StringVar(&id, "id", "", "stable event id for replay-safe retries")
 	return cmd
 }
 

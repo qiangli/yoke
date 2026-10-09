@@ -19,18 +19,26 @@ import (
 // A reassign entry is the durable attempt chain. Run numbers are local to a
 // queue, so the sprint's run links remain the authority for resolving them.
 type sprintReassignEvent struct {
-	Story       string `json:"story"`
-	Repo        string `json:"repo,omitempty"`
-	FromRun     int64  `json:"from_run"`
-	FromAgent   string `json:"from_agent"`
-	ToRun       int64  `json:"to_run"`
-	ToAgent     string `json:"to_agent"`
-	Cap         string `json:"cap"`
-	Points      int    `json:"points"`
-	WantedBand  int    `json:"wanted_band,omitempty"`
-	Band        int    `json:"band,omitempty"`
-	Environment bool   `json:"environment,omitempty"`
-	Evidence    string `json:"evidence,omitempty"`
+	Story               string `json:"story"`
+	Repo                string `json:"repo,omitempty"`
+	FromRun             int64  `json:"from_run"`
+	FromAgent           string `json:"from_agent"`
+	FromInstanceUUID    string `json:"from_instance_uuid,omitempty"`
+	FromFamilyID        string `json:"from_family_id,omitempty"`
+	FromSelectedBinding string `json:"from_selected_binding,omitempty"`
+	FromSeedBand        int    `json:"from_seed_band,omitempty"`
+	ToRun               int64  `json:"to_run"`
+	ToAgent             string `json:"to_agent"`
+	ToInstanceUUID      string `json:"to_instance_uuid,omitempty"`
+	ToFamilyID          string `json:"to_family_id,omitempty"`
+	ToSelectedBinding   string `json:"to_selected_binding,omitempty"`
+	ToSeedBand          int    `json:"to_seed_band,omitempty"`
+	Cap                 string `json:"cap"`
+	Points              int    `json:"points"`
+	WantedBand          int    `json:"wanted_band,omitempty"`
+	Band                int    `json:"band,omitempty"`
+	Environment         bool   `json:"environment,omitempty"`
+	Evidence            string `json:"evidence,omitempty"`
 }
 
 type sprintReassignDeps struct {
@@ -85,6 +93,9 @@ func sprintReassignDispatch(cmd *cobra.Command, run *weaveItem, from string, att
 		return err
 	}
 	e := sprintReassignEvent{Story: run.Register, FromRun: run.ID, FromAgent: from, ToRun: id, ToAgent: to, Cap: cap.Wall.String(), Points: run.Points, WantedBand: band, Band: chosen[0].Band, Environment: environment}
+	if run.Instance != "" {
+		e.FromInstanceUUID, e.FromFamilyID, e.FromSelectedBinding, e.FromSeedBand = run.Instance, run.InstanceFamily, from, run.Band
+	}
 	if err := deps.record(e); err != nil {
 		return err
 	}
@@ -180,8 +191,8 @@ func sprintReassignOutcomes(chain []sprintReassignEvent, accepted bool, lastBlam
 		return nil
 	}
 	first := chain[0]
-	makeEvent := func(id, agent string, points int, outcome float64, attribution blame.Attribution) ladder.Event {
-		return ladder.Event{ID: id, Kind: ladder.EventKindDelivery, Agent: agent, Duty: ladder.DutyCode, Story: first.Story, Points: ladder.Points(points), Outcome: outcome, Blame: attribution, At: now, Season: ladder.SeasonOf(now), Note: "reassign:" + first.Story}
+	makeEvent := func(id, agent, instance, family, selected string, seed, points int, outcome float64, attribution blame.Attribution) ladder.Event {
+		return ladder.Event{ID: id, Kind: ladder.EventKindDelivery, Agent: agent, InstanceUUID: instance, FamilyID: family, SelectedBinding: selected, SeedBand: seed, Duty: ladder.DutyCode, Story: first.Story, Points: ladder.Points(points), Outcome: outcome, Blame: attribution, At: now, Season: ladder.SeasonOf(now), Note: "reassign:" + first.Story}
 	}
 	var events []ladder.Event
 	for _, e := range chain {
@@ -189,7 +200,7 @@ func sprintReassignOutcomes(chain []sprintReassignEvent, accepted bool, lastBlam
 		if e.Environment {
 			a = blame.Attribution{Class: blame.ClassEnvironment, By: weaveConductorName(""), At: now, Evidence: []blame.Evidence{{Kind: blame.EvidenceHost, Ref: fmt.Sprintf("timeout:%d", e.FromRun), Note: e.Evidence}}}
 		}
-		events = append(events, makeEvent(fmt.Sprintf("reassign:%s:run:%d", first.Story, e.FromRun), e.FromAgent, e.Points, 0, a))
+		events = append(events, makeEvent(fmt.Sprintf("reassign:%s:run:%d", first.Story, e.FromRun), e.FromAgent, e.FromInstanceUUID, e.FromFamilyID, e.FromSelectedBinding, e.FromSeedBand, e.Points, 0, a))
 	}
 	last := chain[len(chain)-1]
 	outcome := 0.0
@@ -197,7 +208,7 @@ func sprintReassignOutcomes(chain []sprintReassignEvent, accepted bool, lastBlam
 		outcome = 1
 		lastBlame = blame.Attribution{}
 	}
-	events = append(events, makeEvent(fmt.Sprintf("reassign:%s:run:%d", first.Story, last.ToRun), last.ToAgent, last.Points, outcome, lastBlame))
+	events = append(events, makeEvent(fmt.Sprintf("reassign:%s:run:%d", first.Story, last.ToRun), last.ToAgent, last.ToInstanceUUID, last.ToFamilyID, last.ToSelectedBinding, last.ToSeedBand, last.Points, outcome, lastBlame))
 	return events
 }
 
@@ -523,6 +534,25 @@ func sprintReassignDelivery(s *weaveStory, story string, accepted bool, lastBlam
 	if err != nil {
 		return nil, err
 	}
+	// Re-resolve every attempt from the immutable run links. The reassign row
+	// is written before the replacement launches, so its ToRun cannot carry
+	// instance evidence until delivery time.
+	for i := range chain {
+		if run := sprintReassignLinkedRun(s, chain[i].Repo, story, chain[i].FromRun); run != nil && run.Instance != "" {
+			selected := chain[i].FromAgent
+			if actual, ok := weaveCapabilityAgent(run); ok {
+				selected = actual
+			}
+			chain[i].FromInstanceUUID, chain[i].FromFamilyID, chain[i].FromSelectedBinding, chain[i].FromSeedBand = run.Instance, run.InstanceFamily, selected, run.Band
+		}
+		if run := sprintReassignLinkedRun(s, chain[i].Repo, story, chain[i].ToRun); run != nil && run.Instance != "" {
+			selected := chain[i].ToAgent
+			if actual, ok := weaveCapabilityAgent(run); ok {
+				selected = actual
+			}
+			chain[i].ToInstanceUUID, chain[i].ToFamilyID, chain[i].ToSelectedBinding, chain[i].ToSeedBand = run.Instance, run.InstanceFamily, selected, run.Band
+		}
+	}
 	events := sprintReassignOutcomes(chain, accepted, lastBlame, now)
 	for i := range events {
 		events[i].Sprint = int(s.ID)
@@ -544,6 +574,27 @@ func sprintReassignDelivery(s *weaveStory, story string, accepted bool, lastBlam
 		}
 	}
 	return events, nil
+}
+
+func sprintReassignLinkedRun(s *weaveStory, repo, story string, id int64) *weaveItem {
+	for _, link := range s.Runs {
+		if link.ID != id || (repo != "" && link.Repo != repo) {
+			continue
+		}
+		dir, err := weaveQueueDirForSprintRun(link)
+		if err != nil {
+			continue
+		}
+		q, err := loadWeaveQueue(dir)
+		if err != nil {
+			continue
+		}
+		run := findWeaveItem(q, link.ID)
+		if run != nil && run.Register == story && (link.Born.IsZero() || link.Born.Equal(run.Created)) {
+			return run
+		}
+	}
+	return nil
 }
 
 func sprintReassignResolve(cmd *cobra.Command, sprint int64, repo, ref string) (*weaveStory, string, *issue.Issue, error) {

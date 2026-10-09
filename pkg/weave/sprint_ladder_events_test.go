@@ -78,7 +78,7 @@ func TestSprintLadderLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			now := time.Now().UTC()
-			run := &weaveItem{ID: 25, Register: it.ID, Points: 1, Owner: "agent-a-w25", Tool: "tool-a", Created: now, StartedAt: now.Add(-tc.wall), FinishedAt: now, LaunchSpec: &weaveLaunchSpec{Tool: filepath.Join(home, "bin", "tool-a"), Model: "wire-model-a-v1", Agent: "agent-a-w25"}}
+			run := &weaveItem{ID: 25, Register: it.ID, Points: 1, Owner: "agent-a-w25", Tool: "tool-a", Created: now, StartedAt: now.Add(-tc.wall), FinishedAt: now, Instance: "uuid-25", InstanceFamily: "family:agent-a-v1", Band: 3, LaunchSpec: &weaveLaunchSpec{Tool: filepath.Join(home, "bin", "tool-a"), Model: "wire-model-a-v1", Agent: "agent-a-w25"}}
 			if strings.HasPrefix(tc.name, "unknown-") {
 				run.LaunchSpec.Agent = "unknown-agent-w25"
 			}
@@ -214,13 +214,16 @@ func TestSprintLadderLifecycle(t *testing.T) {
 			if ev.Agent != wantAgent || ev.Points != wantPoints || ev.Outcome != tc.outcome || ev.Season != 4 || ev.Story != it.ID || ev.Sprint != 1 || ev.Reviewer != "manager" || ev.CapsUsed.WallSeconds != wantWall {
 				t.Fatalf("%+v", ev)
 			}
+			if tc.name == "within" && (ev.InstanceUUID != "uuid-25" || ev.FamilyID != "family:agent-a-v1" || ev.SelectedBinding != "tool-a:model-a" || ev.SeedBand != 3) {
+				t.Fatalf("delivery lost frozen run attribution: %+v", ev)
+			}
 			if tc.name == "turns" && ev.CapsUsed.Turns != 21 {
 				t.Fatal(ev.CapsUsed)
 			}
 			if tc.name == "agent" && (!blame.Rates(ev.Blame) || ev.Blame.By != "manager") {
 				t.Fatal(ev.Blame)
 			}
-			if tc.name == "unclassified" && (blame.Rates(ev.Blame) || ladder.Replay(events, 4).Agents[ev.Agent].Unrated != 1) {
+			if tc.name == "unclassified" && (blame.Rates(ev.Blame) || ladder.Replay(events, 4).Agents[ev.RatingAgent()].Unrated != 1) {
 				t.Fatal("rated unclassified")
 			}
 			if tc.name == "environment" && !strings.Contains(out.String(), "open a fix item: bashy todo add") {

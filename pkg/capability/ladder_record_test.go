@@ -97,6 +97,18 @@ func TestLadderRecordSeat(t *testing.T) {
 	}
 }
 
+func TestLadderRecordStableIDIsReplaySafe(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	t.Setenv("BASHY_AGENT", "agent-a")
+	args := []string{"record", "seat", "--id", "seat:stable", "--agent", "tool-a:model-a", "--band", "5", "--reason", "owner seats provisional", "--season", "7"}
+	ladderRecordMust(t, args...)
+	ladderRecordMust(t, args...)
+	events := ladderRecordStore(t)
+	if len(events) != 1 || events[0].ID != "seat:stable" {
+		t.Fatalf("stable retry wrote %+v", events)
+	}
+}
+
 func TestLadderRecordSeatClears(t *testing.T) {
 	t.Setenv("BASHY_HOME", t.TempDir())
 	t.Setenv("BASHY_AGENT", "agent-a")

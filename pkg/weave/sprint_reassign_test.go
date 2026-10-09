@@ -30,7 +30,7 @@ func TestReassignDispatch(t *testing.T) {
 			cmd := &cobra.Command{}
 			cmd.SetOut(&bytes.Buffer{})
 			now := time.Now().UTC()
-			run := &weaveItem{ID: 1, State: tc.state, Points: 1, Register: "story-a", StartedAt: now.Add(-6 * time.Minute), KilledBy: tc.evidence, Owner: "agent-a", Branch: "keep-me"}
+			run := &weaveItem{ID: 1, State: tc.state, Points: 1, Register: "story-a", StartedAt: now.Add(-6 * time.Minute), KilledBy: tc.evidence, Owner: "agent-a", Branch: "keep-me", Instance: "uuid-a", InstanceFamily: "family:a-v1", Band: 4}
 			if tc.environment {
 				run.Completion = "max-runtime"
 			}
@@ -58,6 +58,9 @@ func TestReassignDispatch(t *testing.T) {
 			if !tc.dry && (got.FromRun != 1 || got.ToRun != 2 || got.ToAgent != "agent-b" || run.Branch != "keep-me") {
 				t.Fatalf("event=%+v branch=%s", got, run.Branch)
 			}
+			if !tc.dry && (got.FromInstanceUUID != "uuid-a" || got.FromFamilyID != "family:a-v1" || got.FromSelectedBinding != "agent-a" || got.FromSeedBand != 4) {
+				t.Fatalf("event lost from-run attribution: %+v", got)
+			}
 		})
 	}
 }
@@ -73,13 +76,16 @@ func TestReassignOutcomes(t *testing.T) {
 		{"environment A", true, true, 0, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			chain := []sprintReassignEvent{{Story: "story-a", FromRun: 1, FromAgent: "agent-a", ToRun: 2, ToAgent: "agent-b", Points: 1, Environment: tc.environment}}
+			chain := []sprintReassignEvent{{Story: "story-a", FromRun: 1, FromAgent: "agent-a", FromInstanceUUID: "uuid-a", FromFamilyID: "family:a-v1", FromSelectedBinding: "tool:model-a", FromSeedBand: 3, ToRun: 2, ToAgent: "agent-b", ToInstanceUUID: "uuid-b", ToFamilyID: "family:b-v1", ToSelectedBinding: "tool:model-b", ToSeedBand: 4, Points: 1, Environment: tc.environment}}
 			events := sprintReassignOutcomes(chain, tc.accepted, blame.Attribution{Class: blame.ClassAgent, Evidence: []blame.Evidence{{Kind: blame.EvidenceGate, Ref: "failed"}}, By: "manager", At: time.Now()}, time.Now())
 			if len(events) != 2 || events[0].Outcome != tc.wantA || events[1].Outcome != tc.wantB || events[0].Note != "reassign:story-a" || events[1].Note != "reassign:story-a" {
 				t.Fatalf("events=%+v", events)
 			}
 			if tc.environment && events[0].Blame.Class != blame.ClassEnvironment {
 				t.Fatalf("A blame=%+v", events[0].Blame)
+			}
+			if events[0].FamilyID != "family:a-v1" || events[0].InstanceUUID != "uuid-a" || events[0].SelectedBinding != "tool:model-a" || events[0].SeedBand != 3 || events[1].FamilyID != "family:b-v1" || events[1].InstanceUUID != "uuid-b" || events[1].SelectedBinding != "tool:model-b" || events[1].SeedBand != 4 {
+				t.Fatalf("per-run attribution=%+v", events)
 			}
 		})
 	}
@@ -130,8 +136,8 @@ func TestReassignAcceptFailChain(t *testing.T) {
 				t.Fatal(err)
 			}
 			tag := filepath.Base(qdir)
-			a := &weaveItem{ID: 1, Register: story.ID, Points: 1, State: "killed", KilledBy: "max-runtime", Owner: "agent-a", Created: now.Add(-10 * time.Minute), StartedAt: now.Add(-10 * time.Minute), FinishedAt: now.Add(-5 * time.Minute), Branch: "keep-a"}
-			b := &weaveItem{ID: 2, Register: story.ID, Points: 1, State: "submitted", Owner: "agent-b", Created: now.Add(-4 * time.Minute), StartedAt: now.Add(-4 * time.Minute), FinishedAt: now.Add(-time.Minute)}
+			a := &weaveItem{ID: 1, Register: story.ID, Points: 1, Band: 3, State: "killed", KilledBy: "max-runtime", Owner: "agent-a", Instance: "uuid-a", InstanceFamily: "family:a-v1", Created: now.Add(-10 * time.Minute), StartedAt: now.Add(-10 * time.Minute), FinishedAt: now.Add(-5 * time.Minute), Branch: "keep-a"}
+			b := &weaveItem{ID: 2, Register: story.ID, Points: 1, Band: 4, State: "submitted", Owner: "agent-b", Instance: "uuid-b", InstanceFamily: "family:b-v1", Created: now.Add(-4 * time.Minute), StartedAt: now.Add(-4 * time.Minute), FinishedAt: now.Add(-time.Minute)}
 			if err := saveWeaveQueue(qdir, &weaveQueue{Root: repo, Items: []*weaveItem{a, b}}); err != nil {
 				t.Fatal(err)
 			}
@@ -165,6 +171,9 @@ func TestReassignAcceptFailChain(t *testing.T) {
 			}
 			if len(events) != 2 || events[0].Agent != "agent-a" || events[0].Blame.Class != blame.ClassAgent || events[1].Agent != "agent-b" || events[1].Outcome != map[bool]float64{true: 1, false: 0}[accepted] {
 				t.Fatalf("events=%+v", events)
+			}
+			if events[0].InstanceUUID != "uuid-a" || events[0].FamilyID != "family:a-v1" || events[0].SelectedBinding != "agent-a" || events[0].SeedBand != 3 || events[1].InstanceUUID != "uuid-b" || events[1].FamilyID != "family:b-v1" || events[1].SelectedBinding != "agent-b" || events[1].SeedBand != 4 {
+				t.Fatalf("run attribution=%+v", events)
 			}
 			got, err := todopkg.ResolveRef(st, story.ID)
 			if err != nil {

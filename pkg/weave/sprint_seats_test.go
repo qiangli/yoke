@@ -2,13 +2,58 @@ package weave
 
 import (
 	"bytes"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/qiangli/yoke/pkg/capability"
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/ladder"
 	"github.com/qiangli/yoke/pkg/ladder/blame"
 	"github.com/spf13/cobra"
 )
+
+func TestSeatPoolAndDutyBoardUseFamilyEvidenceKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BASHY_HOME", home)
+	t.Setenv("BASHY_SPRINT_DIR", filepath.Join(home, "sprint"))
+	cat := pinFleetWith(t)
+	for _, err := range []error{
+		cat.SaveTool(fleet.Tool{Name: "tool-a"}),
+		cat.SaveModel(fleet.Model{Name: "model-a", Band: 3}),
+		cat.SaveAgent(fleet.Agent{Name: "agent-a", Tool: "tool-a", Model: "model-a", Band: 3}),
+	} {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	family, ok, err := cat.FamilyOf("agent-a")
+	if err != nil || !ok {
+		t.Fatalf("family: %+v %t %v", family, ok, err)
+	}
+	now := time.Now().UTC()
+	season := ladder.SeasonOf(now)
+	events := []ladder.Event{{ID: "family-result", Season: season, Kind: ladder.EventKindDelivery, Agent: "tool-a:model-a", FamilyID: family.ID(), InstanceUUID: "uuid-a", SelectedBinding: "tool-a:model-a", SeedBand: 3, Duty: ladder.DutyCode, Points: 3, Outcome: 1, At: now}}
+	pool, _, err := seatPool("", events, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entrant *ladder.Entrant
+	for i := range pool {
+		if pool[i].Agent == "agent-a" {
+			entrant = &pool[i]
+			break
+		}
+	}
+	if entrant == nil {
+		t.Fatal("agent-a missing from seat pool")
+	}
+	board := capability.ComputeDutyBoard(events, season, nil, []ladder.Duty{ladder.DutyCode})
+	rows := board.Duties[string(ladder.DutyCode)]
+	if len(rows) != 1 || rows[0].Agent != family.ID() || entrant.Band != rows[0].Band || entrant.Standings[ladder.DutyCode].Events != rows[0].Events {
+		t.Fatalf("seat pool and duty board disagree for %s: entrant=%+v rows=%+v", family.ID(), entrant, rows)
+	}
+}
 
 func TestSeatRecordAndBand(t *testing.T) {
 	base := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)

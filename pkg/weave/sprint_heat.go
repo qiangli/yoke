@@ -39,6 +39,9 @@ type heatAttempt struct {
 	Agent             string           `json:"agent"`
 	Shadow            bool             `json:"shadow,omitempty"`
 	CanonicalAgent    string           `json:"canonical_agent,omitempty"`
+	InstanceUUID      string           `json:"instance_uuid,omitempty"`
+	FamilyID          string           `json:"family_id,omitempty"`
+	SeedBand          int              `json:"seed_band,omitempty"`
 	Run               string           `json:"run"`
 	Fairness          heatFairness     `json:"fairness"`
 	Digest            string           `json:"digest"`
@@ -438,6 +441,7 @@ func runSprintHeat(cmd *cobra.Command, sprint int64, story string, agents, shado
 				if agent, ok := weaveCapabilityAgent(it); ok {
 					a.CanonicalAgent = agent
 				}
+				a.InstanceUUID, a.FamilyID, a.SeedBand = it.Instance, it.InstanceFamily, it.Band
 			}
 		}
 		if launchErr != nil {
@@ -570,6 +574,9 @@ func heatDeliveryEvent(rec heatRecord, a heatAttempt, now time.Time) ladder.Even
 		}
 	}
 	ev := ladder.Event{Kind: ladder.EventKindDelivery, Agent: agent, Duty: ladder.DutyCode, Points: ladder.Points(a.Fairness.Points), At: now, Season: ladder.SeasonOf(now), Sprint: int(rec.Sprint), Story: rec.Story, Note: "heat:" + rec.ID, Reviewer: weaveConductorName("")}
+	if a.InstanceUUID != "" {
+		ev.InstanceUUID, ev.FamilyID, ev.SelectedBinding, ev.SeedBand = a.InstanceUUID, a.FamilyID, agent, a.SeedBand
+	}
 	ev.ID = "heat:" + rec.ID + ":run:" + a.Run
 	if a.Shadow {
 		ev.Note = "shadow heat:" + rec.ID

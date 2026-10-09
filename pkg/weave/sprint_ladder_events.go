@@ -91,12 +91,24 @@ func sprintLadderDelivery(cmd *cobra.Command, s *weaveStory, story *issue.Issue,
 	ev := &ladder.Event{Kind: ladder.EventKindDelivery, Agent: strings.TrimSpace(agent), Duty: ladder.DutyCode, Points: ladder.Points(points), At: now, Season: ladder.SeasonOf(now), Sprint: int(s.ID), Story: story.ID, Reviewer: actor}
 	if matched != nil {
 		ev.ID = fmt.Sprintf("sprint:%d:story:%s:run:%d:%d", s.ID, story.ID, matched.ID, matched.Created.UnixNano())
+		selected, _ := weaveCapabilityAgent(matched)
+		stampRunLadderEvent(ev, matched, selected)
 	}
 	ev.CapsUsed.WallSeconds = int(wall.Seconds())
 	ev.CapsUsed.Turns = turns
 	rework, _ := cmd.Flags().GetInt("rework")
 	ev.Outcome = ladder.OutcomeScore(ladder.ClassifyDelivery(ev.Points, turns, wall, true, rework, false))
 	return ev, nil
+}
+
+func stampRunLadderEvent(ev *ladder.Event, run *weaveItem, selectedBinding string) {
+	if ev == nil || run == nil || strings.TrimSpace(run.Instance) == "" {
+		return
+	}
+	ev.InstanceUUID = run.Instance
+	ev.FamilyID = run.InstanceFamily
+	ev.SelectedBinding = strings.TrimSpace(selectedBinding)
+	ev.SeedBand = run.Band
 }
 
 func sprintLadderAppend(cmd *cobra.Command, ev *ladder.Event) {

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStoreRoundTripAndTruncatedLine(t *testing.T) {
@@ -71,6 +72,26 @@ func TestStoreAppendIdempotentIDButDistinctRetriesRemainDistinct(t *testing.T) {
 	}
 	events, err := s.Read()
 	if err != nil || len(events) != 2 {
+		t.Fatalf("events=%+v err=%v", events, err)
+	}
+}
+
+func TestStoreRestartRetryIgnoresDerivedTimestamp(t *testing.T) {
+	s, err := OpenStore(filepath.Join(t.TempDir(), "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := eventTestDelivery("restart-safe", "agent-a", "story-a", 1, 1)
+	if err := s.Append(first); err != nil {
+		t.Fatal(err)
+	}
+	retry := first
+	retry.At = retry.At.Add(time.Minute)
+	if err := s.Append(retry); err != nil {
+		t.Fatalf("identical restart retry conflicted only because At changed: %v", err)
+	}
+	events, err := s.Read()
+	if err != nil || len(events) != 1 {
 		t.Fatalf("events=%+v err=%v", events, err)
 	}
 }

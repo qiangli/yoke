@@ -194,6 +194,16 @@ func TestHeatDeliveryEventUsesCanonicalAgent(t *testing.T) {
 	}
 }
 
+func TestHeatDeliveryEventUsesFrozenRunFamily(t *testing.T) {
+	now := time.Date(2026, 9, 29, 10, 0, 0, 0, time.UTC)
+	rec := heatRecord{ID: "identity", Sprint: 331, Story: "story-id"}
+	a := heatAttempt{Agent: "alias", CanonicalAgent: "tool:model-v2", InstanceUUID: "uuid-1", FamilyID: "family:composite-v1", SeedBand: 4, Verdict: "pass", Fairness: heatFairness{Points: 3}}
+	e := heatDeliveryEvent(rec, a, now)
+	if e.InstanceUUID != "uuid-1" || e.FamilyID != "family:composite-v1" || e.SelectedBinding != "tool:model-v2" || e.SeedBand != 4 {
+		t.Fatalf("event lost frozen run attribution: %+v", e)
+	}
+}
+
 func TestHeatShadowCannotWinOrVoid(t *testing.T) {
 	now := time.Date(2026, 9, 29, 10, 0, 0, 0, time.UTC)
 	base := heatFairness{Base: "base", Template: "template", PromptHash: "prompt", Gate: "gate", Points: 1, Started: now}

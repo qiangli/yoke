@@ -112,6 +112,11 @@ func sameEvent(a, b Event) bool {
 	if b.Schema == "" {
 		b.Schema = EventSchema
 	}
+	// At and blame attribution time are write-time diagnostics, not part of
+	// the immutable result. A producer reconstructing the same stable event
+	// after restart will naturally stamp a new clock value.
+	a.At, b.At = time.Time{}, time.Time{}
+	a.Blame.At, b.Blame.At = time.Time{}, time.Time{}
 	ab, aerr := json.Marshal(a)
 	bb, berr := json.Marshal(b)
 	return aerr == nil && berr == nil && string(ab) == string(bb)
