@@ -258,6 +258,8 @@ var packages = map[string]Package{
 	"ctty": libPkg("ask", "the channel ladder (controlling terminal → GUI askpass → nothing) under "+
 		"`bashy ask`. Not a capability an operator invokes — it is HOW ask reaches a human, and it "+
 		"is meaningless without a question to carry."),
+	"instance": libPkg("agent", "list/open/retire for agent context instances (UUID, family, mailbox) over "+
+		"fleet.InstanceStore; bashy mounts it as `bashy instance`. An agent concern, not a separate capability."),
 	"fleet": libPkg("tool", "the declarative registry behind tool/model/agent/person/whois. Four "+
 		"verbs project one registry; the registry is not a fifth verb."),
 	"hostauth": libPkg("app", "verifies web-console login credentials against the host OS. "+
