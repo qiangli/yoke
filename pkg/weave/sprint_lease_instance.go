@@ -57,9 +57,18 @@ func (e *sprintInstanceConflict) Error() string {
 //
 // nil lease, no recorded instance, or a caller that names no instance → the
 // pre-instance behaviour, unchanged. A caller claiming the SAME instance with
-// a different non-empty session digest → refused.
-func sprintLeaseAccepts(id int64, lease *weaveStoryLease, instance, session string) error {
-	if lease == nil {
+// a different non-empty session digest, while that seat is LIVE → refused.
+//
+// `live` is why the parameter exists. The refusal is "there is a second driver
+// of this conversation", and a lapsed seat has no driver at all: the conductor
+// that recorded the incumbent session is gone. Refusing on the digest alone
+// made a CRASHED conductor unrecoverable by the only party entitled to recover
+// it — the same instance, resumed, which the story contract requires to keep
+// its UUID and therefore cannot present a new one to get past the check. That
+// is a worse failure than the one being prevented: the competing-driver case
+// has a remedy (open another instance), while the locked-out case has none.
+func sprintLeaseAccepts(id int64, lease *weaveStoryLease, live bool, instance, session string) error {
+	if lease == nil || !live {
 		return nil
 	}
 	held := strings.TrimSpace(lease.Instance)

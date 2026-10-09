@@ -1096,6 +1096,20 @@ you still gate, converge and report.`,
 					if !free && !stale && prev != who && !force && !retiredOld {
 						return "", fmt.Errorf("sprint #%d lease is held by %s (fresh) — coordinate, or --force to take over", id, prev)
 					}
+					// REFUSE a competing owning session on the instance that
+					// already holds this seat, BEFORE anything is written — a
+					// takeover by a second driver of one conversation is not a
+					// handoff. This ran after the private lease token had been
+					// minted and saved, so a refused session was left holding
+					// the credential that authorizes the very verbs it had
+					// just been denied. --force does not reach it: force is how
+					// you take a seat from another INSTANCE, and the answer to
+					// a second driver of your own conversation is a new
+					// instance, not a louder claim on this one.
+					leaseInstance, leaseSession := sprintLeaseIdentity()
+					if err := sprintLeaseAccepts(id, s.Lease, !stale && !free, leaseInstance, leaseSession); err != nil {
+						return "", err
+					}
 					// The room is the SPRINT's, so a takeover inherits it rather
 					// than replacing it — the transcript left by the previous
 					// conductor is the handover context, and closing it to open an
@@ -1117,15 +1131,6 @@ you still gate, converge and report.`,
 						return "", err
 					}
 					if err := saveSprintLeaseToken(id, who, raw); err != nil {
-						return "", err
-					}
-					leaseInstance, leaseSession := sprintLeaseIdentity()
-					// REFUSE a competing owning session on the instance that
-					// already holds this seat, before anything is written: a
-					// takeover by a second driver of one conversation is not a
-					// handoff, and the token above would otherwise be minted
-					// for it.
-					if err := sprintLeaseAccepts(id, s.Lease, leaseInstance, leaseSession); err != nil {
 						return "", err
 					}
 					s.Lease = &weaveStoryLease{Holder: who, At: time.Now().UTC(), TokenHash: hash}

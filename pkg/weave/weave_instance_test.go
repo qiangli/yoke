@@ -166,11 +166,11 @@ func TestWeaveChildEnvStampsTheRecordedIdentity(t *testing.T) {
 		t.Errorf("the lease recorded instance %q", lease.Instance)
 	}
 	// A competing session on that same seat is refused.
-	if err := sprintLeaseAccepts(321, lease, instance, "sha256:someone-else"); err == nil {
+	if err := sprintLeaseAccepts(321, lease, true, instance, "sha256:someone-else"); err == nil {
 		t.Error("a competing session took a held conductor seat")
 	}
 	// The owning session is accepted.
-	if err := sprintLeaseAccepts(321, lease, instance, session); err != nil {
+	if err := sprintLeaseAccepts(321, lease, true, instance, session); err != nil {
 		t.Errorf("the owning session was refused its own seat: %v", err)
 	}
 }
