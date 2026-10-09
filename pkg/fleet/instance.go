@@ -298,8 +298,8 @@ type OpenOptions struct {
 // the roster and then written, so the whole sequence is under the store lock —
 // see withLock for what each of the three races produced without it.
 func (s *InstanceStore) Open(f Family, opts OpenOptions) (Instance, error) {
-	if len(f.Bindings) == 0 {
-		return Instance{}, ErrFamilyEmpty
+	if err := f.validate(); err != nil {
+		return Instance{}, err
 	}
 	var inst Instance
 	err := s.withLock("open instance", func() error {
@@ -343,7 +343,7 @@ func (s *InstanceStore) Open(f Family, opts OpenOptions) (Instance, error) {
 			FamilyID: famID,
 			Family:   f.Name,
 			Policy:   f.Policy,
-			Bindings: append([]string{}, f.Bindings...),
+			Bindings: f.normalizedBindings(),
 			Label:    label,
 			Handle:   strings.TrimSpace(opts.Handle),
 			Created:  nowStamp(),
@@ -434,28 +434,37 @@ func (s *InstanceStore) Retire(id string, mail MailSource) (archive string, err 
 	if mail == nil {
 		return "", ErrMailSourceRequired
 	}
+	// The mail is collected BEFORE the store lock: the source reads the bus,
+	// which has locks of its own, and holding ours across that call is a
+	// lock-order hazard. The state is re-read under the lock below.
+	inst, err := s.Get(id)
+	if err != nil {
+		return "", err
+	}
+	if !inst.Active() {
+		// Already retired: idempotent, and it must NOT archive again.
+		return inst.MailArchive, nil
+	}
+	records, err := mail(inst)
+	if err != nil {
+		return "", fmt.Errorf("fleet: collect mail for instance %s: %w", inst.UUID, err)
+	}
 	err = s.withLock("retire instance", func() error {
 		inst, err := s.Get(id)
 		if err != nil {
 			return err
 		}
 		if !inst.Active() {
-			// Already retired: idempotent, and it must NOT archive again. A
-			// second pass would append the same records a second time and
-			// double the evidence.
 			archive = inst.MailArchive
 			return nil
-		}
-		records, err := mail(inst)
-		if err != nil {
-			return fmt.Errorf("fleet: collect mail for instance %s: %w", inst.UUID, err)
 		}
 		// The mail is archived BEFORE the record is marked retired. If the
 		// append fails the instance stays live and its label stays held, which
 		// is the recoverable order: a retired instance whose mail never
 		// reached the archive has released its label on a promise it did not
-		// keep.
-		archive, err = s.appendArchive(inst, records)
+		// keep. A retry after a failure between the two steps skips the
+		// records the archive already holds.
+		archive, err = s.writeArchive(inst, records, true)
 		if err != nil {
 			return err
 		}
@@ -464,9 +473,8 @@ func (s *InstanceStore) Retire(id string, mail MailSource) (archive string, err 
 		// The label is RELEASED, not blanked: `instance show` on a retired
 		// UUID still has to say which label it held, or past evidence stops
 		// resolving. Freedom to reuse the label comes from Retired being set —
-		// checkAddressFree only considers live instances. The release is safe
-		// because it happens under the store lock: a concurrent Open either
-		// sees the label still held or sees it free, never half-released.
+		// checkAddressFree only considers live instances. The pointer and the
+		// retired marker land in this ONE record write.
 		return s.write(inst)
 	})
 	if err != nil {

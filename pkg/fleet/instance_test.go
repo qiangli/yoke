@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func instanceStore(t *testing.T) *InstanceStore {
@@ -457,4 +458,123 @@ func mustList(t *testing.T, s *InstanceStore) []Instance {
 		t.Fatal(err)
 	}
 	return all
+}
+
+// GAP 4. The mail source reads the bus, which has locks of its own; running it
+// while holding the store lock is a lock-order hazard. Collection must happen
+// BEFORE the lock, and the state is re-checked under it.
+func TestRetireCollectsMailBeforeTakingTheStoreLock(t *testing.T) {
+	s := instanceStore(t)
+	inst, err := s.Open(testFamily(), OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	src := func(Instance) ([]string, error) {
+		// Another writer to the same store, run while the mail source is
+		// still executing. If Retire holds the store lock here, this blocks
+		// until the lock wait gives up.
+		go func() {
+			_, err := NewInstanceStore(s.Dir()).SetHandle(inst.UUID, "probe")
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			if err != nil {
+				return nil, err
+			}
+		case <-time.After(3 * time.Second):
+			return nil, errors.New("store lock was held while the mail source ran")
+		}
+		return []string{`{"seq":1}`}, nil
+	}
+	if _, err := s.Retire(inst.UUID, src); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// GAP 4. A retry after a failed record write finds the archive already holding
+// the records; archiving them again would double the evidence.
+func TestRetireRetryDoesNotDoubleTheArchive(t *testing.T) {
+	s := instanceStore(t)
+	inst, err := s.Open(testFamily(), OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := []string{`{"seq":1,"body":"a"}`, `{"seq":2,"body":"b"}`}
+	// The first attempt got as far as the archive and no further.
+	if _, err := s.ArchiveMail(inst.UUID, records); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Retire(inst.UUID, mailOf(append(records, `{"seq":3,"body":"c"}`)...)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ArchivedMail(inst.UUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("archive = %v; want each of the 3 records exactly once", got)
+	}
+	retired, _ := s.Get(inst.UUID)
+	if retired.Active() {
+		t.Fatal("instance is still active after a successful retirement")
+	}
+}
+
+// GAP 5. The archive location is derived from the UUID. A stored MailArchive
+// path is data in a user-writable record and must never redirect the append.
+func TestArchiveIgnoresAStoredMailArchivePath(t *testing.T) {
+	s := instanceStore(t)
+	inst, err := s.Open(testFamily(), OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	elsewhere := filepath.Join(t.TempDir(), "elsewhere.jsonl")
+	tampered := inst
+	tampered.MailArchive = elsewhere
+	if err := s.write(tampered); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := s.Retire(inst.UUID, mailOf(`{"seq":1,"body":"x"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := s.archivePath(inst)
+	if archive != want {
+		t.Fatalf("archive = %q; want the UUID-derived %q", archive, want)
+	}
+	if _, err := os.Stat(elsewhere); !os.IsNotExist(err) {
+		t.Fatalf("the stored MailArchive path was written to: %v", err)
+	}
+	if got, err := s.ArchivedMail(inst.UUID); err != nil || len(got) != 1 {
+		t.Fatalf("archived mail = %v %v; want the one record under the derived path", got, err)
+	}
+}
+
+// GAP 6. Bindings are compared case-insensitively everywhere else, so the
+// configuration identity must be too; and ',' / '|' are the Config separators.
+func TestFamilyConfigNormalizesBindings(t *testing.T) {
+	a := Family{Name: "n", Policy: PolicySingle, Bindings: []string{"  Claude:Opus5.5 "}}
+	b := Family{Name: "n", Policy: PolicySingle, Bindings: []string{"claude:opus5.5"}}
+	if a.Config() != b.Config() || a.ID() != b.ID() {
+		t.Fatalf("case/space variants are different families: %q vs %q", a.Config(), b.Config())
+	}
+}
+
+func TestOpenRejectsBindingsThatForgeTheConfigSeparators(t *testing.T) {
+	s := instanceStore(t)
+	for _, bad := range []string{"claude:opus,codex:gpt", "claude:opus|x"} {
+		_, err := s.Open(Family{Name: "n", Policy: PolicySingle, Bindings: []string{bad}}, OpenOptions{})
+		if !errors.Is(err, ErrBindingMalformed) {
+			t.Errorf("binding %q: got %v; want ErrBindingMalformed", bad, err)
+		}
+	}
+	inst, err := s.Open(Family{Name: "n", Policy: PolicySingle, Bindings: []string{" Claude:Opus5.5 "}}, OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inst.Bindings[0] != "claude:opus5.5" {
+		t.Fatalf("frozen binding = %q; want it normalized", inst.Bindings[0])
+	}
 }

@@ -107,8 +107,15 @@ func (s *InstanceStore) ArchiveMail(id string, records []string) (string, error)
 		if err != nil {
 			return err
 		}
-		path, err = s.appendArchive(inst, records)
-		return err
+		path, err = s.writeArchive(inst, records, false)
+		if err != nil {
+			return err
+		}
+		if inst.MailArchive != path {
+			inst.MailArchive = path
+			return s.write(inst)
+		}
+		return nil
 	})
 	if err != nil {
 		return "", err
@@ -116,14 +123,31 @@ func (s *InstanceStore) ArchiveMail(id string, records []string) (string, error)
 	return path, nil
 }
 
-// appendArchive is ArchiveMail's body, without the lock. Retire already holds
-// it; calling the exported form from there would deadlock, and dropping the
-// lock between the retirement decision and the archive write would reopen the
-// window the lock exists to close.
-func (s *InstanceStore) appendArchive(inst Instance, records []string) (string, error) {
-	path := strings.TrimSpace(inst.MailArchive)
-	if path == "" {
-		path = s.archivePath(inst)
+// writeArchive is ArchiveMail's body, without the lock and without touching the
+// record: Retire already holds the lock and writes the record once itself.
+//
+// The path is ALWAYS archivePath(inst). A stored MailArchive is data in a
+// user-writable record and must not redirect where mail is appended.
+// skipPresent drops records whose exact line is already in the archive, which
+// is what makes a retried retirement idempotent.
+func (s *InstanceStore) writeArchive(inst Instance, records []string, skipPresent bool) (string, error) {
+	path := s.archivePath(inst)
+	if skipPresent {
+		have, err := readLines(path)
+		if err != nil {
+			return "", err
+		}
+		present := make(map[string]bool, len(have))
+		for _, l := range have {
+			present[l] = true
+		}
+		fresh := records[:0:0]
+		for _, rec := range records {
+			if !present[strings.TrimRight(rec, "\n")] {
+				fresh = append(fresh, rec)
+			}
+		}
+		records = fresh
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return "", err
@@ -154,13 +178,31 @@ func (s *InstanceStore) appendArchive(inst Instance, records []string) (string, 
 	if err := f.Close(); err != nil {
 		return "", err
 	}
-	if inst.MailArchive != path {
-		inst.MailArchive = path
-		if err := s.write(inst); err != nil {
-			return path, err
+	return path, nil
+}
+
+// readLines returns the non-empty trimmed lines of a file; a missing file is none.
+func readLines(path string) ([]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+	var out []string
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for sc.Scan() {
+		if line := strings.TrimSpace(sc.Text()); line != "" {
+			out = append(out, line)
 		}
 	}
-	return path, nil
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("fleet: read mail archive %s: %w", path, err)
+	}
+	return out, nil
 }
 
 // archivePath keys the archive on the UUID, which is what makes a retired
@@ -181,28 +223,5 @@ func (s *InstanceStore) ArchivedMail(id string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	path := strings.TrimSpace(inst.MailArchive)
-	if path == "" {
-		path = s.archivePath(inst)
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	defer f.Close()
-	var out []string
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	for sc.Scan() {
-		if line := strings.TrimSpace(sc.Text()); line != "" {
-			out = append(out, line)
-		}
-	}
-	if err := sc.Err(); err != nil {
-		return nil, fmt.Errorf("fleet: read mail archive for %s: %w", inst.UUID, err)
-	}
-	return out, nil
+	return readLines(s.archivePath(inst))
 }

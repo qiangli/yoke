@@ -84,6 +84,11 @@ var ErrBindingImmutable = errors.New("fleet: an instance's bindings are immutabl
 // nothing to run is not a family.
 var ErrFamilyEmpty = errors.New("fleet: a family needs at least one tool:model binding")
 
+// ErrBindingMalformed reports a binding containing ',' or '|', the separators
+// of Config(): admitting them would let one binding forge another family's
+// configuration text and therefore its ID.
+var ErrBindingMalformed = errors.New("fleet: a binding must not contain ',' or '|'")
+
 // ErrFamilyUnresolved reports a declared configuration that could not be
 // resolved in full — a cascade rung naming an agent this catalog does not
 // have, or a binding with no model.
@@ -120,17 +125,37 @@ func (f Family) Composite() bool { return len(f.Bindings) > 1 || f.Policy == Pol
 // its identity across a policy change it never agreed to, which is exactly the
 // silent reconfiguration this type exists to prevent.
 func (f Family) Config() string {
-	b := make([]string, 0, len(f.Bindings))
-	for _, s := range f.Bindings {
-		if s = strings.TrimSpace(s); s != "" {
-			b = append(b, s)
-		}
-	}
 	policy := f.Policy
 	if policy == "" {
 		policy = PolicySingle
 	}
-	return policy + "|" + strings.Join(b, ",") + "|" + strings.TrimSpace(f.Version)
+	return policy + "|" + strings.Join(f.normalizedBindings(), ",") + "|" + strings.TrimSpace(f.Version)
+}
+
+// normalizedBindings trims and lower-cases the declared bindings, dropping
+// blanks, because Allows already compares them that way: two spellings of one
+// binding must not be two configurations.
+func (f Family) normalizedBindings() []string {
+	b := make([]string, 0, len(f.Bindings))
+	for _, s := range f.Bindings {
+		if s = strings.ToLower(strings.TrimSpace(s)); s != "" {
+			b = append(b, s)
+		}
+	}
+	return b
+}
+
+// validate refuses a family whose bindings cannot be told apart in Config().
+func (f Family) validate() error {
+	if len(f.normalizedBindings()) == 0 {
+		return ErrFamilyEmpty
+	}
+	for _, s := range f.Bindings {
+		if strings.ContainsAny(s, ",|") {
+			return fmt.Errorf("%w: %q", ErrBindingMalformed, s)
+		}
+	}
+	return nil
 }
 
 // ID is the family's stable identity: kind, name, and a digest of the
