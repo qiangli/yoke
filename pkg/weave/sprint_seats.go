@@ -115,10 +115,11 @@ func seatPool(root string, events []ladder.Event, now time.Time, exclusions ...s
 		}
 		key := binding.MatrixKey()
 		ratingKey := key
-		if family, ok, familyErr := cat.FamilyOf(a.Name); familyErr == nil && ok {
-			// A known configuration is a distinct rating identity even before
-			// its first result. Falling back to MatrixKey here transfers earned
-			// history into a fresh configuration.
+		if family, ok, familyErr := cat.FamilyOf(a.Name); familyErr == nil && ok && hasFamilyEvidence(events, family.ID()) {
+			// A configuration that has family-attributed evidence is rated
+			// under its family. Until a writer stamps one, its history is the
+			// legacy tool:model evidence: keying by a family nothing carries
+			// would show every agent as seed-only.
 			ratingKey = family.ID()
 		}
 		reason := toolReasons[tool.Name]
@@ -273,4 +274,14 @@ func seatPanel(pool []ladder.Entrant, wanted int, authorVendor string) []ladder.
 		}
 	}
 	return picked
+}
+
+// hasFamilyEvidence reports whether any event is attributed to the family.
+func hasFamilyEvidence(events []ladder.Event, familyID string) bool {
+	for _, ev := range events {
+		if ev.FamilyID == familyID {
+			return true
+		}
+	}
+	return false
 }
