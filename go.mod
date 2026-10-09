@@ -29,8 +29,8 @@ require (
 	github.com/odvcencio/gotreesitter v0.16.0
 	github.com/ollama/ollama v0.0.0-00010101000000-000000000000
 	github.com/pkg/sftp v1.13.10
-	github.com/qiangli/coreutils v0.0.0-20261008110135-6a81627c0a11
-	github.com/qiangli/gfy v0.0.0-20260920194528-5f76a171a47d
+	github.com/qiangli/coreutils v0.0.0-20261009071524-54a8fb26235e
+	github.com/qiangli/gfy v0.0.0-20261009070616-1a9d12418c8d
 	github.com/qiangli/yoke/pkg/llmgw v0.0.0-00010101000000-000000000000
 	github.com/qiangli/yoke/pkg/oci v0.0.0-00010101000000-000000000000
 	github.com/rjeczalik/notify v0.9.3
@@ -69,7 +69,7 @@ require (
 // checkout. Same convention as ycode/outpost/bashy. coreutils is the
 // certified POSIX package this module was split out of (Sprint 208); yoke
 // imports it, never the reverse.
-replace mvdan.cc/sh/v3 => github.com/qiangli/sh/v3 v3.0.0-20261007045242-f6589660f589
+replace mvdan.cc/sh/v3 => github.com/qiangli/sh/v3 v3.0.0-20261009065157-d3d7766e8a47
 
 // gotreesitter: pinned local fork of upstream v0.16.0 (../gotreesitter,
 // hosting qiangli/gotreesitter, module path kept as upstream's) with the
@@ -80,14 +80,14 @@ replace mvdan.cc/sh/v3 => github.com/qiangli/sh/v3 v3.0.0-20261007045242-f658966
 // five grammars embedded), which a module-path rename could not reach. See
 // the fork's FORK.md for provenance; THIRD_PARTY_GRAMMARS.md carries the
 // surviving 201 attributions.
-replace github.com/odvcencio/gotreesitter => github.com/qiangli/gotreesitter v0.0.0-20261006115113-c8a5d22bb3f0
+replace github.com/odvcencio/gotreesitter => github.com/qiangli/gotreesitter v0.0.0-20261009064153-466dad1c3aef
 
 // Local MIT fork adds POSIX awk float formats, locale-aware data and string
 // semantics, an error-bearing regex backend across all surfaces, and the
 // required side effect that a non-"in" reference creates an absent array
 // element. Keeping the narrow fork here makes the conformance fixes build from
 // this repository rather than an unpublished dependency commit.
-replace github.com/benhoyt/goawk => github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261008110135-6a81627c0a11
+replace github.com/benhoyt/goawk => github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261009071524-54a8fb26235e
 
 replace github.com/ollama/ollama => ./external/ollama/src
 
@@ -375,4 +375,4 @@ require (
 	tags.cncf.io/container-device-interface/specs-go v1.1.0 // indirect
 )
 
-replace github.com/filebrowser/filebrowser/v2 => github.com/qiangli/filebrowser/v2 v2.0.0-20261002203458-0b059ae20b79
+replace github.com/filebrowser/filebrowser/v2 => github.com/qiangli/filebrowser/v2 v2.0.0-20261009064700-9c1237190cff
