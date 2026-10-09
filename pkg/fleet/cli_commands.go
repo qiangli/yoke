@@ -167,7 +167,7 @@ func newCommandsShow(opts []Option) *cobra.Command {
 
 func newCommandsAdd(opts []Option) *cobra.Command {
 	var name string
-	var hidden bool
+	var hidden, force bool
 	var paths pathFlags
 	c := &cobra.Command{
 		Use:     "add (<name> --set path=value… | <file>|-)",
@@ -215,7 +215,7 @@ func newCommandsAdd(opts []Option) *cobra.Command {
 					return err
 				}
 			}
-			if err := cat.claimName(KindCommand, r.Name, r.Aliases, false); err != nil {
+			if err := cat.claimName(KindCommand, r.Name, r.Aliases, force); err != nil {
 				return err
 			}
 			if err := cat.SaveCommand(r); err != nil {
@@ -228,13 +228,14 @@ func newCommandsAdd(opts []Option) *cobra.Command {
 	}
 	c.Flags().StringVar(&name, "name", "", "store under this name instead of the document's own")
 	c.Flags().BoolVar(&hidden, "hidden", false, "omit this command from default listings")
+	c.Flags().BoolVar(&force, "force", false, "take a name that already belongs to another registered command (never a builtin)")
 	paths.bind(c)
 	return c
 }
 
 func newCommandsSet(opts []Option) *cobra.Command {
 	var addAlias, rmAlias []string
-	var hidden bool
+	var hidden, force bool
 	var paths pathFlags
 	c := &cobra.Command{
 		Use:           "set <name>",
@@ -257,7 +258,7 @@ func newCommandsSet(opts []Option) *cobra.Command {
 			if err := applyPathFlags(cmd, KindCommand, &r, paths); err != nil {
 				return err
 			}
-			if err := cat.claimName(KindCommand, r.Name, r.Aliases, false); err != nil {
+			if err := cat.claimName(KindCommand, r.Name, r.Aliases, force); err != nil {
 				return err
 			}
 			if err := cat.SaveCommand(r); err != nil {
@@ -273,6 +274,7 @@ func newCommandsSet(opts []Option) *cobra.Command {
 	c.Flags().StringArrayVar(&addAlias, "add-alias", nil, "add an alias (repeatable)")
 	c.Flags().StringArrayVar(&rmAlias, "rm-alias", nil, "drop an alias (repeatable)")
 	c.Flags().BoolVar(&hidden, "hidden", false, "omit this command from default listings")
+	c.Flags().BoolVar(&force, "force", false, "take a name that already belongs to another registered command (never a builtin)")
 	paths.bind(c)
 	return c
 }

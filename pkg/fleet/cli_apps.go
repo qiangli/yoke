@@ -104,6 +104,7 @@ func (f *appFlags) apply(cmd *cobra.Command, a *App) error {
 
 func newAppsAdd(opts []Option) *cobra.Command {
 	var f appFlags
+	var force bool
 	c := &cobra.Command{
 		Use:     "add (<name> --port N [flags] | <file>|-)",
 		Aliases: []string{"register"},
@@ -135,7 +136,7 @@ func newAppsAdd(opts []Option) *cobra.Command {
 					return err
 				}
 			}
-			if err := cat.claimName(KindApp, a.Name, nil, false); err != nil {
+			if err := cat.claimName(KindApp, a.Name, nil, force); err != nil {
 				return err
 			}
 			if err := cat.SaveApp(a); err != nil {
@@ -147,11 +148,13 @@ func newAppsAdd(opts []Option) *cobra.Command {
 		},
 	}
 	f.bind(c)
+	c.Flags().BoolVar(&force, "force", false, "take a name that already belongs to another registered app")
 	return c
 }
 
 func newAppsSet(opts []Option) *cobra.Command {
 	var f appFlags
+	var force bool
 	c := &cobra.Command{
 		Use:           "set <name>",
 		Short:         "Modify a registered app",
@@ -169,7 +172,7 @@ func newAppsSet(opts []Option) *cobra.Command {
 			if err := f.apply(cmd, &a); err != nil {
 				return err
 			}
-			if err := cat.claimName(KindApp, a.Name, nil, false); err != nil {
+			if err := cat.claimName(KindApp, a.Name, nil, force); err != nil {
 				return err
 			}
 			if err := cat.SaveApp(a); err != nil {
@@ -184,5 +187,6 @@ func newAppsSet(opts []Option) *cobra.Command {
 		},
 	}
 	f.bind(c)
+	c.Flags().BoolVar(&force, "force", false, "take a name that already belongs to another registered app")
 	return c
 }

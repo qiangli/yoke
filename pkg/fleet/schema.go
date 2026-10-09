@@ -30,6 +30,8 @@ func nounType(noun string) reflect.Type {
 		return reflect.TypeOf(Command{})
 	case KindApp:
 		return reflect.TypeOf(App{})
+	case KindPerson:
+		return reflect.TypeOf(Person{})
 	default:
 		return nil
 	}

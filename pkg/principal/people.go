@@ -30,7 +30,9 @@ func NewPeopleCmd(opts ...fleet.Option) *cobra.Command {
 	list := newPeopleList(opts)
 	root.RunE = list.RunE
 	root.Flags().AddFlagSet(list.Flags())
-	root.AddCommand(list, newPeopleAdd(opts), newPeopleSet(opts), newPeopleRm(opts))
+	root.AddCommand(list, newPeopleShow(opts), newPeopleAdd(opts), newPeopleSet(opts),
+		fleet.NewEditCmd(fleet.KindPerson, opts, func(c *fleet.Catalog, n string) (string, error) { return c.MaterializePerson(n) }),
+		newPeopleRm(opts), fleet.NewSchemaCmd(fleet.KindPerson))
 	return root
 }
 
@@ -80,9 +82,32 @@ func osUserFlags(vals []string) (map[string]string, error) {
 	return out, nil
 }
 
+// newPeopleShow prints one person's record, the same shape every registry
+// noun's show uses (YAML, or --json).
+func newPeopleShow(opts []fleet.Option) *cobra.Command {
+	var asJSON bool
+	c := &cobra.Command{
+		Use:           "show <handle>",
+		Short:         "Print a person's record",
+		Args:          cobra.ExactArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			p, ok := fleet.New(opts...).Person(args[0])
+			if !ok {
+				return fmt.Errorf("principal: no person %q", args[0])
+			}
+			return fleet.Emit(cmd.OutOrStdout(), p, asJSON)
+		},
+	}
+	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
+	return c
+}
+
 func newPeopleAdd(opts []fleet.Option) *cobra.Command {
 	var p fleet.Person
 	var osUsers []string
+	var force bool
 	c := &cobra.Command{
 		Use:   "add <handle>",
 		Short: "Add a human principal",
@@ -101,13 +126,14 @@ func newPeopleAdd(opts []fleet.Option) *cobra.Command {
 			}
 			p.Handle, p.OSUsers = args[0], m
 			cat := fleet.New(opts...)
-			if err := cat.SavePerson(p); err != nil {
+			if err := cat.CreatePerson(p, force); err != nil {
 				return err
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), p.Handle)
 			return nil
 		},
 	}
+	c.Flags().BoolVar(&force, "force", false, "replace an existing person, or take a name that already belongs to someone else")
 	c.Flags().StringVar(&p.Display, "display", "", "human-facing name")
 	c.Flags().StringVar(&p.Email, "email", "", "account email; authoritative identity when paired")
 	c.Flags().StringVar(&p.DefaultOSUser, "default-os-user", "", "account name on hosts with no explicit binding")
