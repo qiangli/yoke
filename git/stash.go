@@ -495,4 +495,3 @@ func stashList(dir string) (*ExecResult, error) {
 	}
 	return &ExecResult{Stdout: b.String()}, nil
 }
-
