@@ -356,7 +356,32 @@ func TestHelpMakesGateAndSupervisorOptional(t *testing.T) {
 // tools whose templates carry a `--dangerously-*` flag, which chat's
 // guardUnsafeArgs refuses on an uncontained host. The gate is the point of that
 // guard and is tested in pkg/chat; here it is a precondition, not the subject.
+//
+// It also isolates shell shims from the real HOME so tests that reach
+// chat.ensureShims via agentChildEnv do not poison ~/.bashy/shims with a
+// go-build *.test binary.
 func TestMain(m *testing.M) {
+	home, err := os.MkdirTemp("/tmp", "yoke-supervise-home-*")
+	if err != nil {
+		panic(err)
+	}
+	shims, err := os.MkdirTemp("/tmp", "yoke-supervise-shims-*")
+	if err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("HOME", home); err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("USERPROFILE", home); err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("BASHY_SHIM_DIR", filepath.Join(shims, "shims")); err != nil {
+		panic(err)
+	}
+	defer func() {
+		_ = os.RemoveAll(home)
+		_ = os.RemoveAll(shims)
+	}()
 	os.Setenv(chat.UnsafeLaunchEnv, "1")
 	os.Exit(m.Run())
 }

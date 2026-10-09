@@ -16,6 +16,16 @@ func WriteShellShim(path, bashy string) error {
 	if !filepath.IsAbs(bashy) {
 		return fmt.Errorf("shell shim target must be absolute: %q", bashy)
 	}
+	base := filepath.Base(bashy)
+	if base != "bashy" && base != "bashy.exe" {
+		return fmt.Errorf("shell shim target must be bashy: %q", bashy)
+	}
+	if strings.HasSuffix(bashy, ".test") {
+		return fmt.Errorf("shell shim target must not be a test binary: %q", bashy)
+	}
+	if strings.Contains(bashy, "go-build") {
+		return fmt.Errorf("shell shim target must not be under go-build: %q", bashy)
+	}
 	body := []byte("#!/bin/sh\nexec '" + strings.ReplaceAll(bashy, "'", "'\"'\"'") + "' \"$@\"\n")
 	if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0111 != 0 {
 		if old, err := os.ReadFile(path); err == nil && bytes.Equal(old, body) {
