@@ -26,6 +26,11 @@ func TestManagedServeDoesNotBindDoorHost(t *testing.T) {
 	}
 	t.Setenv("OLLAMA_HOST", doorHost)
 
+	// Pretend the inference runner is compiled in so serve takes the embedded
+	// path (this test observes its bind env, not a real runner).
+	defer func(prev func() bool) { runnerAvailable = prev }(runnerAvailable)
+	runnerAvailable = func() bool { return true }
+
 	var embeddedHost string
 	// Replace the embedded server so this test observes its bind environment
 	// without starting a model server.

@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	runner_embed "github.com/qiangli/yoke/external/ollama/runner_embed"
 )
 
 // CmdOptions defines callbacks and settings for the Cobra command tree.
@@ -57,14 +59,35 @@ All HTTP calls go to whatever OLLAMA_HOST resolves to.`,
 	return cmd
 }
 
+// useEmbeddedServe reports whether `ollama serve` should run bashy's
+// in-process embedded ollama server. That path needs an embedded-serve
+// callback, no explicit --use-system-binaries request, AND the inference
+// runner actually compiled into this binary (`-tags embed_runner`, see
+// runner_embed.Available). A from-source build without the runner has no
+// engine to run, so serve must fall back to a resolved system ollama rather
+// than hard-failing with ErrRunnerNotInstalled — otherwise the host model
+// door (which spawns `bashy ollama serve` as its engine) cannot serve any
+// local model on such a build.
+// runnerAvailable reports whether the embedded inference runner is compiled
+// into this binary. It is a package var so tests can exercise both the
+// embedded-serve and the system-fallback path on one build.
+var runnerAvailable = runner_embed.Available
+
+func useEmbeddedServe(opts CmdOptions) bool {
+	return !opts.UseSystemBinaries && opts.RunEmbeddedServe != nil && runnerAvailable()
+}
+
 func newOllamaServeCmd(opts CmdOptions) *cobra.Command {
 	return &cobra.Command{
 		Use:   "serve",
 		Short: "Bind the ollama HTTP server on $OLLAMA_HOST (foreground)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !opts.UseSystemBinaries && opts.RunEmbeddedServe != nil {
+			if useEmbeddedServe(opts) {
 				return opts.RunEmbeddedServe(cmd.Context())
+			}
+			if !opts.UseSystemBinaries && opts.RunEmbeddedServe != nil && !runnerAvailable() {
+				fmt.Fprintln(os.Stderr, "ollama: no embedded inference runner in this build; falling back to a resolved system ollama (build with -tags embed_runner for the isolated in-process engine)")
 			}
 			bin, err := Resolve()
 			if err != nil {
