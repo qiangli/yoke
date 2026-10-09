@@ -1,0 +1,18 @@
+name: alpha-notes
+kind: skill
+description: ungated
+identity: ""
+capability: ""
+contract:
+  effects: []
+  ensure: []
+  steps: 0
+files:
+  SKILL.md: |
+    ---
+    name: alpha-notes
+    description: ungated
+    ---
+    ALPHA BODY
+  reference.md: |
+    ALPHA REFERENCE

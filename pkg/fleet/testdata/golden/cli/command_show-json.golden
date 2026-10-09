@@ -1,0 +1,21 @@
+{
+  "name": "gt-cmd",
+  "kind": "command",
+  "synopsis": "golden fixture command",
+  "exec": [
+    "gt-external"
+  ],
+  "effects": [
+    "read"
+  ],
+  "group": "shellutils",
+  "tier": "userland",
+  "stage": "cross",
+  "shape": "result",
+  "os": [
+    "darwin",
+    "linux",
+    "windows"
+  ],
+  "ring": 2
+}

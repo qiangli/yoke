@@ -1,0 +1,11 @@
+{
+  "name": "gt-agent",
+  "description": "golden fixture agent",
+  "nick": "Goldie",
+  "tool": "gt-tool",
+  "model": "gt-model",
+  "derived": [
+    "gt-tool-gt"
+  ],
+  "ring": 2
+}

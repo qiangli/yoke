@@ -1,0 +1,187 @@
+[
+  {
+    "path": "aliases",
+    "type": "[]string",
+    "description": "alternate accepted names"
+  },
+  {
+    "path": "aliases.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "api_key_ref",
+    "type": "string",
+    "description": "credential-store key name"
+  },
+  {
+    "path": "band",
+    "type": "int",
+    "description": "normalized capability band"
+  },
+  {
+    "path": "band_season",
+    "type": "int",
+    "description": "season the capability band peg was set"
+  },
+  {
+    "path": "band_source",
+    "type": "string",
+    "description": "evidence supporting the capability band"
+  },
+  {
+    "path": "base_url",
+    "type": "string",
+    "description": "provider API base URL"
+  },
+  {
+    "path": "billing",
+    "type": "string",
+    "description": "billing mode"
+  },
+  {
+    "path": "capabilities",
+    "type": "[]string",
+    "description": "declared model capabilities"
+  },
+  {
+    "path": "capabilities.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "context_length",
+    "type": "int",
+    "description": "maximum context length"
+  },
+  {
+    "path": "cost_micro",
+    "type": "int",
+    "description": "relative per-turn cost"
+  },
+  {
+    "path": "display",
+    "type": "string",
+    "description": "human-facing label"
+  },
+  {
+    "path": "domain",
+    "type": "[]string",
+    "description": "preferred task domains"
+  },
+  {
+    "path": "domain.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "family",
+    "type": "string",
+    "description": "version-independent product family"
+  },
+  {
+    "path": "ids",
+    "type": "map[string]string",
+    "description": "tool-specific provider-side model ids"
+  },
+  {
+    "path": "ids.\u003ckey\u003e",
+    "type": "string",
+    "description": "map value"
+  },
+  {
+    "path": "kind",
+    "type": "string",
+    "description": "authentication mode"
+  },
+  {
+    "path": "model",
+    "type": "string",
+    "description": "default provider-side model id"
+  },
+  {
+    "path": "name",
+    "type": "string",
+    "description": "canonical model name"
+  },
+  {
+    "path": "plan",
+    "type": "string",
+    "description": "subscription plan id the model is billed through (plans/)"
+  },
+  {
+    "path": "price",
+    "type": "float",
+    "description": "relative provider price"
+  },
+  {
+    "path": "provider",
+    "type": "string",
+    "description": "inference provider"
+  },
+  {
+    "path": "quality",
+    "type": "float",
+    "description": "overall capability prior"
+  },
+  {
+    "path": "source",
+    "type": "string",
+    "description": "model source: cloud or local"
+  },
+  {
+    "path": "spec",
+    "type": "map[string]float",
+    "description": "per-capability adjustments"
+  },
+  {
+    "path": "spec.\u003ckey\u003e",
+    "type": "float",
+    "description": "map value"
+  },
+  {
+    "path": "tier",
+    "type": "string",
+    "description": "provider-native tier name"
+  },
+  {
+    "path": "version",
+    "type": "string",
+    "description": "version within the product family"
+  },
+  {
+    "path": "x_hosts",
+    "type": "[]object",
+    "description": "paired hosts serving the model"
+  },
+  {
+    "path": "x_hosts.\u003cindex\u003e",
+    "type": "object",
+    "description": "list element"
+  },
+  {
+    "path": "x_hosts.\u003cindex\u003e.host",
+    "type": "string",
+    "description": "paired host name"
+  },
+  {
+    "path": "x_hosts.\u003cindex\u003e.owner",
+    "type": "string",
+    "description": "host owner"
+  },
+  {
+    "path": "x_hosts.name=\u003cvalue\u003e",
+    "type": "object",
+    "description": "named list element"
+  },
+  {
+    "path": "x_hosts.name=\u003cvalue\u003e.host",
+    "type": "string",
+    "description": "paired host name"
+  },
+  {
+    "path": "x_hosts.name=\u003cvalue\u003e.owner",
+    "type": "string",
+    "description": "host owner"
+  }
+]

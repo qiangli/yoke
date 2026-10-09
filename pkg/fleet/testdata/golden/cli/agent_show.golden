@@ -1,0 +1,12 @@
+gt-agent  (gt-tool:gt-model)
+band:    L3~, derived -
+seed:    L3 declared, active (unclocked: no season recorded)
+missing:
+  G1: l1 certificate (missing)
+  G2: l2 certificate (missing)
+  G3: l3 certificate (missing)
+  G3: steer certificate (missing)
+  G3: conservative code ≥ L3 line (code unrated)
+tool:    gt-tool (gt-tool)
+model:   gt-model → gt-upstream-1
+launch:  gt-tool --yolo -m gt-upstream-1 {prompt}

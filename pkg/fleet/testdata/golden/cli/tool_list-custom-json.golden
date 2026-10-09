@@ -1,0 +1,9 @@
+[
+  {
+    "name": "gt-tool",
+    "kind": "cli",
+    "binary": "gt-tool",
+    "selects_model": true,
+    "ring": "local"
+  }
+]

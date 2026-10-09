@@ -1,0 +1,322 @@
+[
+  {
+    "path": "aliases",
+    "type": "[]string",
+    "description": "alternate names (each passes the same collision filter)"
+  },
+  {
+    "path": "aliases.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "args",
+    "type": "object",
+    "description": "argument schema the shell binds and validates before the body runs (typed positionals, flags, enums, defaults); absent = untyped pass-through"
+  },
+  {
+    "path": "args.flags",
+    "type": "[]object",
+    "description": "named arguments (--name, --name=value; -x for a shorthand); a bool flag given without a value is true"
+  },
+  {
+    "path": "args.flags.\u003cindex\u003e",
+    "type": "object",
+    "description": "list element"
+  },
+  {
+    "path": "args.flags.\u003cindex\u003e.default",
+    "type": "string",
+    "description": "value bound when the invocation omits it; must convert to type and, with an enum, be one of its entries"
+  },
+  {
+    "path": "args.flags.\u003cindex\u003e.enum",
+    "type": "[]string",
+    "description": "the closed set of accepted values (non-empty entries, each in the canonical spelling of type)"
+  },
+  {
+    "path": "args.flags.\u003cindex\u003e.enum.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "args.flags.\u003cindex\u003e.name",
+    "type": "string",
+    "description": "long flag name, used as --name (letters, digits, _ and -; no leading dash)"
+  },
+  {
+    "path": "args.flags.\u003cindex\u003e.required",
+    "type": "bool",
+    "description": "the invocation must supply it (a required flag may not carry a default)"
+  },
+  {
+    "path": "args.flags.\u003cindex\u003e.shorthand",
+    "type": "string",
+    "description": "short spelling, used as -x (letters and digits)"
+  },
+  {
+    "path": "args.flags.\u003cindex\u003e.type",
+    "type": "string",
+    "description": "string (default) | int | float | bool; a bool flag given with no value binds to true"
+  },
+  {
+    "path": "args.flags.name=\u003cvalue\u003e",
+    "type": "object",
+    "description": "named list element"
+  },
+  {
+    "path": "args.flags.name=\u003cvalue\u003e.default",
+    "type": "string",
+    "description": "value bound when the invocation omits it; must convert to type and, with an enum, be one of its entries"
+  },
+  {
+    "path": "args.flags.name=\u003cvalue\u003e.enum",
+    "type": "[]string",
+    "description": "the closed set of accepted values (non-empty entries, each in the canonical spelling of type)"
+  },
+  {
+    "path": "args.flags.name=\u003cvalue\u003e.enum.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "args.flags.name=\u003cvalue\u003e.name",
+    "type": "string",
+    "description": "long flag name, used as --name (letters, digits, _ and -; no leading dash)"
+  },
+  {
+    "path": "args.flags.name=\u003cvalue\u003e.required",
+    "type": "bool",
+    "description": "the invocation must supply it (a required flag may not carry a default)"
+  },
+  {
+    "path": "args.flags.name=\u003cvalue\u003e.shorthand",
+    "type": "string",
+    "description": "short spelling, used as -x (letters and digits)"
+  },
+  {
+    "path": "args.flags.name=\u003cvalue\u003e.type",
+    "type": "string",
+    "description": "string (default) | int | float | bool; a bool flag given with no value binds to true"
+  },
+  {
+    "path": "args.positionals",
+    "type": "[]object",
+    "description": "positional arguments in order; required ones first, then optional (a default makes one optional)"
+  },
+  {
+    "path": "args.positionals.\u003cindex\u003e",
+    "type": "object",
+    "description": "list element"
+  },
+  {
+    "path": "args.positionals.\u003cindex\u003e.default",
+    "type": "string",
+    "description": "value bound when the invocation omits it; must convert to type and, with an enum, be one of its entries"
+  },
+  {
+    "path": "args.positionals.\u003cindex\u003e.enum",
+    "type": "[]string",
+    "description": "the closed set of accepted values (non-empty entries, each in the canonical spelling of type)"
+  },
+  {
+    "path": "args.positionals.\u003cindex\u003e.enum.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "args.positionals.\u003cindex\u003e.name",
+    "type": "string",
+    "description": "parameter name (a bare identifier; what an error message calls it)"
+  },
+  {
+    "path": "args.positionals.\u003cindex\u003e.required",
+    "type": "bool",
+    "description": "the invocation must supply it (a required positional may not carry a default)"
+  },
+  {
+    "path": "args.positionals.\u003cindex\u003e.type",
+    "type": "string",
+    "description": "string (default) | int | float | bool; the value is converted before the body runs"
+  },
+  {
+    "path": "args.positionals.name=\u003cvalue\u003e",
+    "type": "object",
+    "description": "named list element"
+  },
+  {
+    "path": "args.positionals.name=\u003cvalue\u003e.default",
+    "type": "string",
+    "description": "value bound when the invocation omits it; must convert to type and, with an enum, be one of its entries"
+  },
+  {
+    "path": "args.positionals.name=\u003cvalue\u003e.enum",
+    "type": "[]string",
+    "description": "the closed set of accepted values (non-empty entries, each in the canonical spelling of type)"
+  },
+  {
+    "path": "args.positionals.name=\u003cvalue\u003e.enum.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "args.positionals.name=\u003cvalue\u003e.name",
+    "type": "string",
+    "description": "parameter name (a bare identifier; what an error message calls it)"
+  },
+  {
+    "path": "args.positionals.name=\u003cvalue\u003e.required",
+    "type": "bool",
+    "description": "the invocation must supply it (a required positional may not carry a default)"
+  },
+  {
+    "path": "args.positionals.name=\u003cvalue\u003e.type",
+    "type": "string",
+    "description": "string (default) | int | float | bool; the value is converted before the body runs"
+  },
+  {
+    "path": "caps",
+    "type": "[]string",
+    "description": "agentic capabilities (atlas vocabulary)"
+  },
+  {
+    "path": "caps.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "cwd",
+    "type": "string",
+    "description": "working directory for the child (absolute); default the caller's"
+  },
+  {
+    "path": "dialect",
+    "type": "string",
+    "description": "script dialect: bashpp (default) or bash"
+  },
+  {
+    "path": "download",
+    "type": "object",
+    "description": "pinned release to provision (binmgr); the sha256 in the record is the trust root"
+  },
+  {
+    "path": "download.github",
+    "type": "string",
+    "description": "owner/repo of a GitHub release (one of github/url)"
+  },
+  {
+    "path": "download.member",
+    "type": "string",
+    "description": "executable path inside a .tar.gz/.zip; empty = the download is the raw binary"
+  },
+  {
+    "path": "download.sha256",
+    "type": "map[string]string",
+    "description": "goos/goarch -\u003e hex sha256 of the downloaded artifact; required per platform"
+  },
+  {
+    "path": "download.sha256.\u003ckey\u003e",
+    "type": "string",
+    "description": "map value"
+  },
+  {
+    "path": "download.url",
+    "type": "string",
+    "description": "download URL template with {version} {goos} {goarch} {ext} (one of github/url)"
+  },
+  {
+    "path": "download.version",
+    "type": "string",
+    "description": "release tag; required and never latest — there is nothing to pin otherwise"
+  },
+  {
+    "path": "effects",
+    "type": "[]string",
+    "description": "security effects (atlas vocabulary); at least one — script bodies must declare theirs"
+  },
+  {
+    "path": "effects.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "env",
+    "type": "[]string",
+    "description": "extra KEY=VALUE entries for the child process"
+  },
+  {
+    "path": "env.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "exec",
+    "type": "[]string",
+    "description": "argv template: an absolute path or PATH name plus fixed args; user args are appended, or spliced at a single {args} element"
+  },
+  {
+    "path": "exec.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "group",
+    "type": "string",
+    "description": "functional group (atlas vocabulary); default shellutils"
+  },
+  {
+    "path": "hidden",
+    "type": "bool",
+    "description": "omit from default listings (--all shows it)"
+  },
+  {
+    "path": "kind",
+    "type": "string",
+    "description": "always command"
+  },
+  {
+    "path": "long",
+    "type": "string",
+    "description": "help body for bashy commands NAME"
+  },
+  {
+    "path": "name",
+    "type": "string",
+    "description": "canonical command name (a bare identifier)"
+  },
+  {
+    "path": "os",
+    "type": "[]string",
+    "description": "supported platforms (darwin linux windows); default all, or the platforms a download carries a digest for"
+  },
+  {
+    "path": "os.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "script",
+    "type": "string",
+    "description": "inline body run as bashy -c BODY NAME ARGS ($0 = NAME)"
+  },
+  {
+    "path": "shape",
+    "type": "string",
+    "description": "output shape: result (default) or verdict"
+  },
+  {
+    "path": "stage",
+    "type": "string",
+    "description": "SDLC stage (atlas vocabulary); default cross"
+  },
+  {
+    "path": "synopsis",
+    "type": "string",
+    "description": "one line for bashy commands"
+  },
+  {
+    "path": "tier",
+    "type": "string",
+    "description": "execution tier (atlas vocabulary); default userland"
+  }
+]

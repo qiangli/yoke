@@ -1,0 +1,33 @@
+{
+  "name": "gt-tool",
+  "kind": "cli",
+  "display": "Golden Tool",
+  "cli": {
+    "binary": "gt-tool",
+    "linux": {},
+    "launch": {
+      "exec": "gt-tool --yolo -m {model} {prompt}",
+      "key_env": [
+        "OPENAI_API_KEY"
+      ],
+      "env": [
+        "OPENAI_BASE_URL={base_url}"
+      ],
+      "prompt_position": "last",
+      "watchdog": {},
+      "events_done": {},
+      "events_outcome": {},
+      "events_fail": {}
+    }
+  },
+  "quirks": "fixture",
+  "integration": {
+    "detect": "~/.gt-tool",
+    "skills": {
+      "user": [
+        "~/.agents/skills"
+      ]
+    }
+  },
+  "ring": 2
+}

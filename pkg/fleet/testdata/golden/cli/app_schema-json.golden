@@ -1,0 +1,52 @@
+[
+  {
+    "path": "auth",
+    "type": "string",
+    "description": "auth tier: system (default), public or custom"
+  },
+  {
+    "path": "icon",
+    "type": "string",
+    "description": "SVG path data on a 24 grid, or one emoji"
+  },
+  {
+    "path": "kind",
+    "type": "string",
+    "description": "always app"
+  },
+  {
+    "path": "label",
+    "type": "string",
+    "description": "tile label; default the name"
+  },
+  {
+    "path": "login_path",
+    "type": "string",
+    "description": "custom auth only: app-relative login path"
+  },
+  {
+    "path": "name",
+    "type": "string",
+    "description": "app name; also its mount (/\u003cname\u003e/) — one path segment"
+  },
+  {
+    "path": "port",
+    "type": "int",
+    "description": "loopback port the app listens on; the console proxies /\u003cname\u003e/ to it"
+  },
+  {
+    "path": "start",
+    "type": "[]string",
+    "description": "argv shown as the start hint when the app is down (never run by the console)"
+  },
+  {
+    "path": "start.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "tip",
+    "type": "string",
+    "description": "tile tooltip"
+  }
+]

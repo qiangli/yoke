@@ -1,0 +1,10 @@
+handle: gt-person
+aliases:
+  - goldie
+display: Golden Person
+email: gt@example.test
+os_users:
+  gt-host: gtuser
+hosts:
+  - gt-host
+source: local

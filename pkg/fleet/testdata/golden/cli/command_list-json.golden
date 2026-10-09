@@ -1,0 +1,11 @@
+[
+  {
+    "name": "gt-cmd",
+    "mode": "exec",
+    "effects": [
+      "read"
+    ],
+    "ring": "local",
+    "synopsis": "golden fixture command"
+  }
+]

@@ -1,0 +1,317 @@
+[
+  {
+    "path": "aliases",
+    "type": "[]string",
+    "description": "alternate accepted names"
+  },
+  {
+    "path": "aliases.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "band",
+    "type": "int",
+    "description": "served capability band for a cascade"
+  },
+  {
+    "path": "band_source",
+    "type": "string",
+    "description": "source of the served band"
+  },
+  {
+    "path": "base",
+    "type": "string",
+    "description": "base agent for a cascade"
+  },
+  {
+    "path": "certificates",
+    "type": "[]object",
+    "description": "passed certification suites, bound to model and season"
+  },
+  {
+    "path": "certificates.\u003cindex\u003e",
+    "type": "object",
+    "description": "list element"
+  },
+  {
+    "path": "certificates.\u003cindex\u003e.model",
+    "type": "string",
+    "description": "canonical model the certificate was earned on"
+  },
+  {
+    "path": "certificates.\u003cindex\u003e.name",
+    "type": "string",
+    "description": "certificate name (l1, l2, l3, steer, manager, review, judge, l5)"
+  },
+  {
+    "path": "certificates.\u003cindex\u003e.season",
+    "type": "int",
+    "description": "season the certificate was earned"
+  },
+  {
+    "path": "certificates.\u003cindex\u003e.version",
+    "type": "string",
+    "description": "model version the certificate was earned on"
+  },
+  {
+    "path": "certificates.name=\u003cvalue\u003e",
+    "type": "object",
+    "description": "named list element"
+  },
+  {
+    "path": "certificates.name=\u003cvalue\u003e.model",
+    "type": "string",
+    "description": "canonical model the certificate was earned on"
+  },
+  {
+    "path": "certificates.name=\u003cvalue\u003e.name",
+    "type": "string",
+    "description": "certificate name (l1, l2, l3, steer, manager, review, judge, l5)"
+  },
+  {
+    "path": "certificates.name=\u003cvalue\u003e.season",
+    "type": "int",
+    "description": "season the certificate was earned"
+  },
+  {
+    "path": "certificates.name=\u003cvalue\u003e.version",
+    "type": "string",
+    "description": "model version the certificate was earned on"
+  },
+  {
+    "path": "cloned_at",
+    "type": "string",
+    "description": "clone creation time"
+  },
+  {
+    "path": "cloned_from",
+    "type": "string",
+    "description": "parent agent name"
+  },
+  {
+    "path": "description",
+    "type": "string",
+    "description": "purpose of the agent"
+  },
+  {
+    "path": "display",
+    "type": "string",
+    "description": "human-facing label"
+  },
+  {
+    "path": "effort",
+    "type": "string",
+    "description": "declared reasoning effort (low, medium, high, …); empty = the tool's default"
+  },
+  {
+    "path": "ephemeral",
+    "type": "bool",
+    "description": "whether the agent exists for one task"
+  },
+  {
+    "path": "escalation",
+    "type": "[]string",
+    "description": "cascade escalation ladder"
+  },
+  {
+    "path": "escalation.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "functions",
+    "type": "[]string",
+    "description": "available function kits"
+  },
+  {
+    "path": "functions.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "instruction",
+    "type": "object",
+    "description": "standing instruction"
+  },
+  {
+    "path": "instruction.content",
+    "type": "string",
+    "description": "instruction text"
+  },
+  {
+    "path": "ledger",
+    "type": "object",
+    "description": "operational reliability record"
+  },
+  {
+    "path": "ledger.notes",
+    "type": "string",
+    "description": "reliability notes"
+  },
+  {
+    "path": "ledger.reliability",
+    "type": "string",
+    "description": "operability prior"
+  },
+  {
+    "path": "lifecycle",
+    "type": "object",
+    "description": "work owning this ephemeral definition"
+  },
+  {
+    "path": "lifecycle.run_id",
+    "type": "int",
+    "description": "run number within the owning queue"
+  },
+  {
+    "path": "lifecycle.sprint_id",
+    "type": "string",
+    "description": "owning sprint UUID"
+  },
+  {
+    "path": "lifecycle.weave_queue",
+    "type": "string",
+    "description": "absolute owning weave queue directory"
+  },
+  {
+    "path": "model",
+    "type": "string",
+    "description": "bound model name"
+  },
+  {
+    "path": "name",
+    "type": "string",
+    "description": "canonical agent name"
+  },
+  {
+    "path": "nick",
+    "type": "string",
+    "description": "human name used in conversation"
+  },
+  {
+    "path": "ratings",
+    "type": "object",
+    "description": "duty ratings (code, manage, judge)"
+  },
+  {
+    "path": "ratings.code",
+    "type": "object",
+    "description": "coding duty rating"
+  },
+  {
+    "path": "ratings.code.events",
+    "type": "int",
+    "description": "rated events in this duty"
+  },
+  {
+    "path": "ratings.code.r",
+    "type": "float",
+    "description": "Glicko-2 rating"
+  },
+  {
+    "path": "ratings.code.rd",
+    "type": "float",
+    "description": "Glicko-2 rating deviation"
+  },
+  {
+    "path": "ratings.judge",
+    "type": "object",
+    "description": "judging duty rating"
+  },
+  {
+    "path": "ratings.judge.events",
+    "type": "int",
+    "description": "rated events in this duty"
+  },
+  {
+    "path": "ratings.judge.r",
+    "type": "float",
+    "description": "Glicko-2 rating"
+  },
+  {
+    "path": "ratings.judge.rd",
+    "type": "float",
+    "description": "Glicko-2 rating deviation"
+  },
+  {
+    "path": "ratings.manage",
+    "type": "object",
+    "description": "sprint-management duty rating"
+  },
+  {
+    "path": "ratings.manage.events",
+    "type": "int",
+    "description": "rated events in this duty"
+  },
+  {
+    "path": "ratings.manage.r",
+    "type": "float",
+    "description": "Glicko-2 rating"
+  },
+  {
+    "path": "ratings.manage.rd",
+    "type": "float",
+    "description": "Glicko-2 rating deviation"
+  },
+  {
+    "path": "role",
+    "type": "object",
+    "description": "permissions and scope"
+  },
+  {
+    "path": "role.allowed_tools",
+    "type": "[]string",
+    "description": "tools permitted for the role"
+  },
+  {
+    "path": "role.allowed_tools.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "role.scope",
+    "type": "string",
+    "description": "role responsibility boundary"
+  },
+  {
+    "path": "role.skills",
+    "type": "[]string",
+    "description": "skills assigned to the role"
+  },
+  {
+    "path": "role.skills.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "seat",
+    "type": "object",
+    "description": "operator or provisional band seat; a seed that expires"
+  },
+  {
+    "path": "seat.band",
+    "type": "int",
+    "description": "seated band"
+  },
+  {
+    "path": "seat.season",
+    "type": "int",
+    "description": "season the seat was granted"
+  },
+  {
+    "path": "seat.source",
+    "type": "string",
+    "description": "seat kind: operator or provisional"
+  },
+  {
+    "path": "task",
+    "type": "string",
+    "description": "task assigned to an ephemeral agent"
+  },
+  {
+    "path": "tool",
+    "type": "string",
+    "description": "bound tool name"
+  }
+]

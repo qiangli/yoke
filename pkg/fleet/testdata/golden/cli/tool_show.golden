@@ -1,0 +1,18 @@
+name: gt-tool
+kind: cli
+display: Golden Tool
+cli:
+  binary: gt-tool
+  launch:
+    exec: gt-tool --yolo -m {model} {prompt}
+    key_env:
+      - OPENAI_API_KEY
+    env:
+      - OPENAI_BASE_URL={base_url}
+    prompt_position: last
+quirks: fixture
+integration:
+  detect: ~/.gt-tool
+  skills:
+    user:
+      - ~/.agents/skills

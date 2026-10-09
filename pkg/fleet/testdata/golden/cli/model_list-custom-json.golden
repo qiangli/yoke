@@ -1,0 +1,16 @@
+[
+  {
+    "name": "gt-model",
+    "band": 3,
+    "band_source": "declared",
+    "kind": "api",
+    "source": "cloud",
+    "provider": "openai-compat",
+    "target": "gt-upstream-1",
+    "aliases": [
+      "gt-alias",
+      "gt"
+    ],
+    "ring": "local"
+  }
+]

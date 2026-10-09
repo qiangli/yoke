@@ -1,0 +1,697 @@
+[
+  {
+    "path": "aliases",
+    "type": "[]string",
+    "description": "alternate accepted names"
+  },
+  {
+    "path": "aliases.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "cli",
+    "type": "object",
+    "description": "command-line harness settings"
+  },
+  {
+    "path": "cli.binary",
+    "type": "string",
+    "description": "executable to run"
+  },
+  {
+    "path": "cli.launch",
+    "type": "object",
+    "description": "headless and interactive launch contract"
+  },
+  {
+    "path": "cli.launch.acp_exec",
+    "type": "string",
+    "description": "ACP agent argv template"
+  },
+  {
+    "path": "cli.launch.auth_hint",
+    "type": "string",
+    "description": "interactive authentication guidance"
+  },
+  {
+    "path": "cli.launch.credential",
+    "type": "string",
+    "description": "credential policy for bound models"
+  },
+  {
+    "path": "cli.launch.credential_env",
+    "type": "map[string]string",
+    "description": "api_key_ref to CLI credential environment variable aliases"
+  },
+  {
+    "path": "cli.launch.credential_env.\u003ckey\u003e",
+    "type": "string",
+    "description": "map value"
+  },
+  {
+    "path": "cli.launch.env",
+    "type": "[]string",
+    "description": "KEY=VALUE pairs set on every launch ({model}, {base_url}, {base_url_origin}, {base_url_path}, {state_dir})"
+  },
+  {
+    "path": "cli.launch.env.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "cli.launch.env_markers",
+    "type": "[]string",
+    "description": "environment variables identifying the tool"
+  },
+  {
+    "path": "cli.launch.env_markers.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "cli.launch.events_arg",
+    "type": "string",
+    "description": "structured-event side-channel argument"
+  },
+  {
+    "path": "cli.launch.events_done",
+    "type": "object",
+    "description": "terminal-event matcher"
+  },
+  {
+    "path": "cli.launch.events_done.field",
+    "type": "string",
+    "description": "JSON key carrying the event kind"
+  },
+  {
+    "path": "cli.launch.events_done.values",
+    "type": "[]string",
+    "description": "event kinds that end a turn"
+  },
+  {
+    "path": "cli.launch.events_done.values.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "cli.launch.events_fail",
+    "type": "object",
+    "description": "event kinds that mean the turn failed, whatever the exit code"
+  },
+  {
+    "path": "cli.launch.events_fail.field",
+    "type": "string",
+    "description": "JSON key carrying the event kind"
+  },
+  {
+    "path": "cli.launch.events_fail.values",
+    "type": "[]string",
+    "description": "event kinds that end a turn"
+  },
+  {
+    "path": "cli.launch.events_fail.values.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "cli.launch.events_outcome",
+    "type": "object",
+    "description": "terminal-event success rule"
+  },
+  {
+    "path": "cli.launch.events_outcome.ok",
+    "type": "[]string",
+    "description": "values that mean success"
+  },
+  {
+    "path": "cli.launch.events_outcome.ok.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "cli.launch.events_outcome.path",
+    "type": "string",
+    "description": "dotted path to the outcome value"
+  },
+  {
+    "path": "cli.launch.events_stdout",
+    "type": "string",
+    "description": "structured-event stdout arguments"
+  },
+  {
+    "path": "cli.launch.exec",
+    "type": "string",
+    "description": "headless argv template"
+  },
+  {
+    "path": "cli.launch.fork_exec",
+    "type": "string",
+    "description": "context-inheriting fork argv template"
+  },
+  {
+    "path": "cli.launch.key_env",
+    "type": "[]string",
+    "description": "environment variables that receive the bound model's credential"
+  },
+  {
+    "path": "cli.launch.key_env.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "cli.launch.min_context",
+    "type": "int",
+    "description": "smallest model context window (tokens) the CLI accepts"
+  },
+  {
+    "path": "cli.launch.notes",
+    "type": "string",
+    "description": "launch contract notes"
+  },
+  {
+    "path": "cli.launch.prompt_position",
+    "type": "string",
+    "description": "declared prompt position"
+  },
+  {
+    "path": "cli.launch.session_env",
+    "type": "[]string",
+    "description": "environment variables carrying the session id"
+  },
+  {
+    "path": "cli.launch.session_env.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "cli.launch.setup",
+    "type": "string",
+    "description": "shell snippet run before every launch ({model}, {base_url}, ... shell-quoted)"
+  },
+  {
+    "path": "cli.launch.steer_exec",
+    "type": "string",
+    "description": "interactive steerable argv template"
+  },
+  {
+    "path": "cli.launch.steer_interrupt",
+    "type": "bool",
+    "description": "interrupt (ESC) before a steer line"
+  },
+  {
+    "path": "cli.launch.supports_graceful_quit",
+    "type": "bool",
+    "description": "whether a quit signal exits cleanly"
+  },
+  {
+    "path": "cli.launch.supports_say",
+    "type": "bool",
+    "description": "whether live steering is supported"
+  },
+  {
+    "path": "cli.launch.trust_clear",
+    "type": "string",
+    "description": "input that clears a trust prompt"
+  },
+  {
+    "path": "cli.launch.trust_preseed",
+    "type": "string",
+    "description": "config path preseeded for workspace trust"
+  },
+  {
+    "path": "cli.launch.version_probe_exec",
+    "type": "string",
+    "description": "version-probe argv template"
+  },
+  {
+    "path": "cli.launch.warm",
+    "type": "string",
+    "description": "prewarm transport: stdin-stream-json, acp, stdin, or cold"
+  },
+  {
+    "path": "cli.launch.watchdog",
+    "type": "object",
+    "description": "runtime resource limits"
+  },
+  {
+    "path": "cli.launch.watchdog.max_runtime",
+    "type": "string",
+    "description": "maximum run duration"
+  },
+  {
+    "path": "cli.launch.watchdog.mem_limit",
+    "type": "string",
+    "description": "maximum memory use"
+  },
+  {
+    "path": "cli.launch.workspace_arg",
+    "type": "string",
+    "description": "argv fragment binding a workspace"
+  },
+  {
+    "path": "cli.launch.workspace_preflight_exec",
+    "type": "string",
+    "description": "read-only workspace verification template"
+  },
+  {
+    "path": "cli.linux",
+    "type": "object",
+    "description": "Linux image installation recipe, separate from host installation"
+  },
+  {
+    "path": "cli.linux.binary",
+    "type": "string",
+    "description": "binary path or name in the Linux image"
+  },
+  {
+    "path": "cli.linux.install",
+    "type": "string",
+    "description": "shell command run in the Linux image; {version} is replaced by cli.versions.version"
+  },
+  {
+    "path": "cli.linux.requires",
+    "type": "[]string",
+    "description": "apt packages required before installation"
+  },
+  {
+    "path": "cli.linux.requires.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "cli.managed",
+    "type": "object",
+    "description": "pinned binmgr-managed install: vendor artifact per platform, verified by digest"
+  },
+  {
+    "path": "cli.managed.assets",
+    "type": "map[string]object",
+    "description": "per-platform artifacts keyed goos/goarch"
+  },
+  {
+    "path": "cli.managed.assets.\u003ckey\u003e",
+    "type": "object",
+    "description": "map value"
+  },
+  {
+    "path": "cli.managed.assets.\u003ckey\u003e.entrypoint",
+    "type": "string",
+    "description": "executable path inside the unpacked tree (tree only)"
+  },
+  {
+    "path": "cli.managed.assets.\u003ckey\u003e.member",
+    "type": "string",
+    "description": "executable inside a .zip/.tar.gz; empty = raw binary"
+  },
+  {
+    "path": "cli.managed.assets.\u003ckey\u003e.sha256",
+    "type": "string",
+    "description": "hex sha256 of the downloaded file"
+  },
+  {
+    "path": "cli.managed.assets.\u003ckey\u003e.sha512",
+    "type": "string",
+    "description": "hex sha512 of the downloaded file, when the vendor publishes no sha256"
+  },
+  {
+    "path": "cli.managed.assets.\u003ckey\u003e.tree",
+    "type": "bool",
+    "description": "unpack the whole archive instead of one member"
+  },
+  {
+    "path": "cli.managed.assets.\u003ckey\u003e.url",
+    "type": "string",
+    "description": "download URL; {version} expands to the pinned version"
+  },
+  {
+    "path": "cli.managed.env",
+    "type": "[]string",
+    "description": "KEY=VALUE set on every launch (the vendor's self-update switch)"
+  },
+  {
+    "path": "cli.managed.env.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "cli.managed.license",
+    "type": "string",
+    "description": "vendor licence of the downloaded artifact (SPDX id or terms); download+exec only"
+  },
+  {
+    "path": "cli.managed.license_url",
+    "type": "string",
+    "description": "where the licence or terms are published"
+  },
+  {
+    "path": "cli.managed.notes",
+    "type": "string",
+    "description": "provenance and verification notes"
+  },
+  {
+    "path": "cli.managed.source",
+    "type": "string",
+    "description": "where the vendor publishes: github-release, vendor-url, npm, pypi"
+  },
+  {
+    "path": "cli.managed.version",
+    "type": "string",
+    "description": "pinned vendor version; {version} in asset urls expands to it"
+  },
+  {
+    "path": "cli.versions",
+    "type": "[]object",
+    "description": "known downloadable versions"
+  },
+  {
+    "path": "cli.versions.\u003cindex\u003e",
+    "type": "object",
+    "description": "list element"
+  },
+  {
+    "path": "cli.versions.\u003cindex\u003e.download",
+    "type": "string",
+    "description": "download location"
+  },
+  {
+    "path": "cli.versions.\u003cindex\u003e.install",
+    "type": "string",
+    "description": "installation command"
+  },
+  {
+    "path": "cli.versions.\u003cindex\u003e.version",
+    "type": "string",
+    "description": "version identifier"
+  },
+  {
+    "path": "cli.versions.name=\u003cvalue\u003e",
+    "type": "object",
+    "description": "named list element"
+  },
+  {
+    "path": "cli.versions.name=\u003cvalue\u003e.download",
+    "type": "string",
+    "description": "download location"
+  },
+  {
+    "path": "cli.versions.name=\u003cvalue\u003e.install",
+    "type": "string",
+    "description": "installation command"
+  },
+  {
+    "path": "cli.versions.name=\u003cvalue\u003e.version",
+    "type": "string",
+    "description": "version identifier"
+  },
+  {
+    "path": "commands",
+    "type": "[]object",
+    "description": "vendor slash commands exposed as bashy tool commands, keyed by canonical cross-tool name"
+  },
+  {
+    "path": "commands.\u003cindex\u003e",
+    "type": "object",
+    "description": "list element"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.capability",
+    "type": "string",
+    "description": "capability tag for --capability routing"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.effects",
+    "type": "[]string",
+    "description": "declared effect atoms for guarded callers"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.effects.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.exec",
+    "type": "string",
+    "description": "print only: argv template used instead of cli.launch.exec, for a feature that is a subcommand ({args}, {model}, {workspace})"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.mode",
+    "type": "string",
+    "description": "print (one-shot via the exec template) or tui (steered session via steer_exec)"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.name",
+    "type": "string",
+    "description": "canonical cross-tool command name (plan, review, deep-research, ...); unique per tool"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.output",
+    "type": "string",
+    "description": "turn (final message, default), transcript, or file:\u003cglob\u003e (artifacts in the workdir)"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.quit",
+    "type": "string",
+    "description": "tui only: line that ends the session; empty = the tool's graceful quit"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.slash",
+    "type": "string",
+    "description": "the tool-specific line to send; {args} is replaced by the caller's text"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.steps",
+    "type": "[]object",
+    "description": "tui only: scripted frames after the slash line"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.steps.\u003cindex\u003e",
+    "type": "object",
+    "description": "list element"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.steps.\u003cindex\u003e.key",
+    "type": "string",
+    "description": "send one named key verbatim (esc, enter, tab, ctrl-c, ...)"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.steps.\u003cindex\u003e.say",
+    "type": "string",
+    "description": "type a line into the session"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.steps.\u003cindex\u003e.wait_idle",
+    "type": "string",
+    "description": "wait until the session is quiet for this Go duration"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.timeout",
+    "type": "string",
+    "description": "Go duration bounding the whole command; empty = runner default"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e",
+    "type": "object",
+    "description": "named list element"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.capability",
+    "type": "string",
+    "description": "capability tag for --capability routing"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.effects",
+    "type": "[]string",
+    "description": "declared effect atoms for guarded callers"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.effects.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.exec",
+    "type": "string",
+    "description": "print only: argv template used instead of cli.launch.exec, for a feature that is a subcommand ({args}, {model}, {workspace})"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.mode",
+    "type": "string",
+    "description": "print (one-shot via the exec template) or tui (steered session via steer_exec)"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.name",
+    "type": "string",
+    "description": "canonical cross-tool command name (plan, review, deep-research, ...); unique per tool"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.output",
+    "type": "string",
+    "description": "turn (final message, default), transcript, or file:\u003cglob\u003e (artifacts in the workdir)"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.quit",
+    "type": "string",
+    "description": "tui only: line that ends the session; empty = the tool's graceful quit"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.slash",
+    "type": "string",
+    "description": "the tool-specific line to send; {args} is replaced by the caller's text"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.steps",
+    "type": "[]object",
+    "description": "tui only: scripted frames after the slash line"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.steps.\u003cindex\u003e",
+    "type": "object",
+    "description": "list element"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.steps.\u003cindex\u003e.key",
+    "type": "string",
+    "description": "send one named key verbatim (esc, enter, tab, ctrl-c, ...)"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.steps.\u003cindex\u003e.say",
+    "type": "string",
+    "description": "type a line into the session"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.steps.\u003cindex\u003e.wait_idle",
+    "type": "string",
+    "description": "wait until the session is quiet for this Go duration"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.timeout",
+    "type": "string",
+    "description": "Go duration bounding the whole command; empty = runner default"
+  },
+  {
+    "path": "display",
+    "type": "string",
+    "description": "human-facing label"
+  },
+  {
+    "path": "harness",
+    "type": "map[string]float",
+    "description": "harness capability priors"
+  },
+  {
+    "path": "harness.\u003ckey\u003e",
+    "type": "float",
+    "description": "map value"
+  },
+  {
+    "path": "hidden",
+    "type": "bool",
+    "description": "omit the tool from default listings"
+  },
+  {
+    "path": "integration",
+    "type": "object",
+    "description": "how the tool takes skills, instruction files and MCP servers"
+  },
+  {
+    "path": "integration.detect",
+    "type": "string",
+    "description": "path whose existence means the tool is set up for this user"
+  },
+  {
+    "path": "integration.instructions",
+    "type": "[]object",
+    "description": "instruction files the tool loads"
+  },
+  {
+    "path": "integration.instructions.\u003cindex\u003e",
+    "type": "object",
+    "description": "list element"
+  },
+  {
+    "path": "integration.instructions.\u003cindex\u003e.file",
+    "type": "string",
+    "description": "instruction file path (user scope) or repo-relative path (project scope)"
+  },
+  {
+    "path": "integration.instructions.\u003cindex\u003e.scope",
+    "type": "string",
+    "description": "user (default) or project"
+  },
+  {
+    "path": "integration.mcp",
+    "type": "object",
+    "description": "the tool's MCP server configuration (declared)"
+  },
+  {
+    "path": "integration.mcp.cli",
+    "type": "[]string",
+    "description": "the tool's own command that adds a server (preferred over editing the file)"
+  },
+  {
+    "path": "integration.mcp.cli.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "integration.mcp.config",
+    "type": "string",
+    "description": "config file path"
+  },
+  {
+    "path": "integration.mcp.format",
+    "type": "string",
+    "description": "json, jsonc, json5, toml or yaml"
+  },
+  {
+    "path": "integration.mcp.key",
+    "type": "string",
+    "description": "dotted path of the server map"
+  },
+  {
+    "path": "integration.shell_env",
+    "type": "string",
+    "description": "env var naming the shell the tool runs commands with"
+  },
+  {
+    "path": "integration.skills",
+    "type": "object",
+    "description": "Agent Skills roots the tool reads"
+  },
+  {
+    "path": "integration.skills.project",
+    "type": "[]string",
+    "description": "project-scope skill roots, relative to the repo root"
+  },
+  {
+    "path": "integration.skills.project.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "integration.skills.user",
+    "type": "[]string",
+    "description": "user-scope skill roots"
+  },
+  {
+    "path": "integration.skills.user.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "kind",
+    "type": "string",
+    "description": "tool kind: cli, func, web, or system"
+  },
+  {
+    "path": "name",
+    "type": "string",
+    "description": "canonical registry name"
+  },
+  {
+    "path": "quirks",
+    "type": "string",
+    "description": "known tool-specific behavior"
+  }
+]

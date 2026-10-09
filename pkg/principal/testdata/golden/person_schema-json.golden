@@ -1,0 +1,57 @@
+[
+  {
+    "path": "aliases",
+    "type": "[]string",
+    "description": ""
+  },
+  {
+    "path": "aliases.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "default_os_user",
+    "type": "string",
+    "description": ""
+  },
+  {
+    "path": "display",
+    "type": "string",
+    "description": ""
+  },
+  {
+    "path": "email",
+    "type": "string",
+    "description": ""
+  },
+  {
+    "path": "handle",
+    "type": "string",
+    "description": ""
+  },
+  {
+    "path": "hosts",
+    "type": "[]string",
+    "description": ""
+  },
+  {
+    "path": "hosts.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "os_users",
+    "type": "map[string]string",
+    "description": ""
+  },
+  {
+    "path": "os_users.\u003ckey\u003e",
+    "type": "string",
+    "description": "map value"
+  },
+  {
+    "path": "source",
+    "type": "string",
+    "description": ""
+  }
+]

@@ -1,0 +1,6 @@
+{
+  "name": "gt-app",
+  "kind": "app",
+  "port": 18080,
+  "ring": 2
+}

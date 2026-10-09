@@ -1,0 +1,20 @@
+{
+  "name": "gt-model",
+  "aliases": [
+    "gt-alias"
+  ],
+  "kind": "api",
+  "source": "cloud",
+  "provider": "openai-compat",
+  "base_url": "https://api.example.test/v1",
+  "api_key_ref": "gtkey",
+  "model": "gt-upstream-1",
+  "family": "gt",
+  "version": "1",
+  "band": 3,
+  "band_source": "declared",
+  "derived": [
+    "gt"
+  ],
+  "ring": 2
+}

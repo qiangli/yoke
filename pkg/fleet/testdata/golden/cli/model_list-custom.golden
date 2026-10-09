@@ -1,0 +1,2 @@
+NAME      BAND  KIND  PROVIDER       TARGET         ALIASES      RING
+gt-model  L3~   api   openai-compat  gt-upstream-1  gt-alias,gt  local

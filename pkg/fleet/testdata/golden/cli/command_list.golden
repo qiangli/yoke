@@ -1,0 +1,2 @@
+NAME    MODE  EFFECTS  RING   SHADOWED-BY  SYNOPSIS
+gt-cmd  exec  read     local  -            golden fixture command

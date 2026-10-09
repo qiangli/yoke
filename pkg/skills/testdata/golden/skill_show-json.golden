@@ -1,0 +1,16 @@
+{
+  "capability": "",
+  "contract": {
+    "effects": [],
+    "ensure": [],
+    "steps": 0
+  },
+  "description": "ungated",
+  "files": {
+    "SKILL.md": "---\nname: alpha-notes\ndescription: ungated\n---\nALPHA BODY\n",
+    "reference.md": "ALPHA REFERENCE\n"
+  },
+  "identity": "",
+  "kind": "skill",
+  "name": "alpha-notes"
+}

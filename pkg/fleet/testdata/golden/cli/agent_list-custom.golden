@@ -1,0 +1,2 @@
+NAME      NICK    BAND  DERIVED  MISSING   TOOL     MODEL     BILLING  RELIAB  RESOLVES  RING
+gt-agent  Goldie  L3~   -        G1,G2,G3  gt-tool  gt-model  metered  -       yes       local
