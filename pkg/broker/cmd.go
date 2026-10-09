@@ -404,7 +404,7 @@ func newDownCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := p.Signal(syscall.SIGTERM); err != nil {
+			if err := stopDoorProcess(p); err != nil {
 				return err
 			}
 			fmt.Fprintf(c.OutOrStdout(), "stopping the model door (pid %d)\n", h.PID)

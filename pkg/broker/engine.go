@@ -13,7 +13,6 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -55,6 +54,12 @@ type ExecEngine struct {
 	done chan struct{}
 }
 
+// engineJobHook is nil on Unix, where the engine's own process group
+// (Setpgid) is the whole tree and SIGTERM reaches it. Only Windows sets it
+// (job_windows.go), to put a just-started engine in a job object, so Stop can
+// take the engine and its spawned runners down together.
+var engineJobHook func(*exec.Cmd) error
+
 func (e *ExecEngine) Start(ctx context.Context) (string, error) {
 	if len(e.Argv) == 0 {
 		return "", errors.New("broker: engine command is empty")
@@ -77,6 +82,16 @@ func (e *ExecEngine) Start(ctx context.Context) (string, error) {
 	cmd.SysProcAttr = engineSysProcAttr()
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("broker: start engine: %w", err)
+	}
+	// Windows needs the engine in a job object to stop its whole tree later
+	// (engineJobHook); the other platforms need nothing here, so it is nil
+	// there and this is a no-op.
+	if hook := engineJobHook; hook != nil {
+		if err := hook(cmd); err != nil {
+			_ = cmd.Process.Kill()
+			_, _ = cmd.Process.Wait()
+			return "", fmt.Errorf("broker: start engine: %w", err)
+		}
 	}
 	done := make(chan struct{})
 	go func() { _ = cmd.Wait(); close(done) }()
@@ -111,7 +126,9 @@ func (e *ExecEngine) Stop(ctx context.Context) error {
 	if cmd == nil || cmd.Process == nil {
 		return nil
 	}
-	_ = cmd.Process.Signal(syscall.SIGTERM)
+	// SIGTERM to the engine's own process group on Unix; the engine's job
+	// object on Windows, where Kill reaches one process only.
+	_ = stopEngineProcess(cmd.Process)
 	select {
 	case <-exited:
 	case <-time.After(10 * time.Second):
