@@ -191,6 +191,68 @@ var SeededProfiles = map[string]LaunchProfile{
 
 var NewCatalog = func() *fleet.Catalog { return fleet.New() }
 
+// SetupShell is the shell that runs a tool's declared setup before the tool:
+// bashy itself (the launcher), so the snippet sees the same userland on every
+// OS. A variable so tests never exec the test binary.
+var SetupShell = os.Executable
+
+// ToolStateDir is the bashy-owned config directory private to one tool:model
+// binding ($BASHY_HOME/tool-state/<tool>/<model>, ~/.bashy when BASHY_HOME is
+// unset), created 0700 unless dryRun. A setup writes the CLI's provider config
+// here and points the CLI at it through its own config-location variable, so
+// the user's own configuration of that CLI is never rewritten.
+func ToolStateDir(tool, model string, dryRun bool) (string, error) {
+	root := strings.TrimSpace(os.Getenv("BASHY_HOME"))
+	if root == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("agent launch: tool state dir: %w", err)
+		}
+		root = filepath.Join(home, ".bashy")
+	}
+	if model == "" {
+		model = "_"
+	}
+	clean := func(s string) string {
+		return strings.Map(func(r rune) rune {
+			if r == '/' || r == '\\' || r == ':' || r == os.PathSeparator {
+				return '_'
+			}
+			return r
+		}, s)
+	}
+	dir := filepath.Join(root, "tool-state", clean(tool), clean(model))
+	if !dryRun {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return "", fmt.Errorf("agent launch: tool state dir: %w", err)
+		}
+	}
+	return dir, nil
+}
+
+// applySetup wraps a resolved launch whose tool declares cli.launch.setup:
+// the launch becomes `bashy --bashsharp -c '<setup>; exec "$@"' <tool> <args...>`
+// (Bash#, a superset of the classic shell, so a setup is written in bashy's own
+// language), so the
+// snippet runs in the tool's own child environment and working directory and
+// then the tool replaces it. Every consumer (delegate, chat, weave, cligw)
+// runs a Launch as Tool+Args(+prompt), so all of them get the setup without
+// knowing it exists; a trailing prompt stays the last "$@" argument.
+func applySetup(l *Launch, tool fleet.Tool, vars fleet.LaunchVars) error {
+	script := tool.SetupScript(vars)
+	if script == "" {
+		return nil
+	}
+	shell, err := SetupShell()
+	if err != nil || shell == "" {
+		return fmt.Errorf("agent launch: tool %q declares a setup, but bashy cannot locate itself to run it: %v", tool.Name, err)
+	}
+	args := []string{"--bashsharp", "-c", script + "\nexec \"$@\"", tool.Name + "-setup", l.Tool}
+	l.Args = append(args, l.Args...)
+	l.Tool = shell
+	return nil
+}
+
 type CatalogFunc func() *fleet.Catalog
 
 func Resolve(name string, opt Options) (Launch, error) {
@@ -227,9 +289,11 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 	// Resolving it first — as this used to — hands somebody the wrong string, and
 	// a wrong model id is a dead binding that looks perfectly healthy right up
 	// until an agent tries to speak.
+	var boundBaseURL string // the bound model's endpoint, for the tool's launch env
 	if modelName != "" {
 		lnch.Model, lnch.ModelName = modelName, modelName
 		if m, ok := cat.Model(modelName); ok {
+			boundBaseURL = m.BaseURL
 			lnch.Model, lnch.ModelName = m.TargetFor(toolName), m.Name
 			// genie -m accepts a registry key, then resolves provider IDs itself.
 			// The ycode alias invokes genie too, so do not pass ycode's
@@ -241,6 +305,14 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 			if target := tool.CLI.Launch.CredentialEnv[ref]; target != "" {
 				lnch.CredentialEnvAliases = map[string][]string{
 					target: secrets.CredentialEnvNames(ref),
+				}
+			} else if len(tool.CLI.Launch.KeyEnv) > 0 && ref != "" {
+				// The protocol's key name, whatever this model's ref is called.
+				lnch.CredentialEnvAliases = make(map[string][]string, len(tool.CLI.Launch.KeyEnv))
+				for _, target := range tool.CLI.Launch.KeyEnv {
+					if target = strings.TrimSpace(target); target != "" {
+						lnch.CredentialEnvAliases[target] = secrets.CredentialEnvNames(ref)
+					}
 				}
 			} else {
 				lnch.PreserveEnv = append(lnch.PreserveEnv, secrets.CredentialEnvNames(ref)...)
@@ -256,6 +328,18 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 		if err := resolveManaged(&lnch, tool); err != nil {
 			return lnch, err
 		}
+		// The recipe's own launch env, after the managed install's pairs: the
+		// bound model's id and endpoint for a tool that reads them from the
+		// environment (names and values here are never credentials).
+		vars := fleet.LaunchVars{Model: lnch.Model, BaseURL: boundBaseURL}
+		if tool.UsesStateDir() {
+			dir, err := ToolStateDir(tool.Name, lnch.ModelName, opt.DryRun)
+			if err != nil {
+				return lnch, err
+			}
+			vars.StateDir = dir
+		}
+		lnch.Env = append(lnch.Env, tool.LaunchEnv(vars)...)
 		lnch.FailEvents = tool.CLI.Launch.EventsFail
 		// A BOUND MODEL REFUSES ACP, and the caller falls to the rung below —
 		// which delivers the model the way it always has.
@@ -299,7 +383,7 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 				lnch.Tool = bin
 			}
 			lnch.Args, lnch.TakesPrompt = out, false
-			return lnch, nil
+			return lnch, applySetup(&lnch, tool, vars)
 		}
 		render := func(m string) ([]string, bool) {
 			return tool.ArgvPrefixWithWorkspace(opt.Workspace, m)
@@ -328,7 +412,7 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 				lnch.WorkspacePreflight = append([]string{preflight[0]}, preflightArgs...)
 			}
 			lnch.TakesPrompt = !opt.Steer || tool.SteerTakesPrompt()
-			return lnch, nil
+			return lnch, applySetup(&lnch, tool, vars)
 		}
 		if opt.Steer {
 			return lnch, fmt.Errorf("agent launch: %q cannot be steered — tool %q declares no interactive launch (steer_exec). "+

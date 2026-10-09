@@ -233,6 +233,27 @@ type ToolLaunch struct {
 	// reference, then projects it under this declared name after scrubbing the
 	// child environment. This keeps provider-specific spelling in fleet assets.
 	CredentialEnv map[string]string `yaml:"credential_env,omitempty" json:"credential_env,omitempty" doc:"api_key_ref to CLI credential environment variable aliases"`
+	// KeyEnv names the environment variables that receive the bound model's
+	// credential whatever its api_key_ref — the protocol's key name (an
+	// OpenAI-compatible CLI reads OPENAI_API_KEY for every endpoint). A
+	// CredentialEnv entry for the ref still wins. Names only; the child
+	// firewall copies the value after scrubbing.
+	KeyEnv []string `yaml:"key_env,omitempty" json:"key_env,omitempty" doc:"environment variables that receive the bound model's credential"`
+	// Env is KEY=VALUE pairs set on every launch. Values may carry the bound
+	// model's {model} (its tool-specific id), {base_url}, {base_url_origin}
+	// (scheme://host[:port]), {base_url_path} and {state_dir} (a bashy-owned
+	// directory private to the tool:model binding); a pair whose placeholder has
+	// no value for this launch is dropped, never set empty. A tool that takes
+	// its model from the environment declares {model} here instead of argv.
+	Env []string `yaml:"env,omitempty" json:"env,omitempty" doc:"KEY=VALUE pairs set on every launch ({model}, {base_url}, {base_url_origin}, {base_url_path}, {state_dir})"`
+	// Setup is a Bash# snippet (classic shell is valid Bash#) bashy runs
+	// immediately before every launch of
+	// this tool (headless, steered, ACP, weave, cligw alike), in the tool's own
+	// child environment and working directory: write the provider config the
+	// CLI reads, select its default model. Placeholders are the Env ones,
+	// shell-quoted; credentials are referenced as $VARS from KeyEnv or
+	// CredentialEnv, never as placeholders. A failing setup fails the launch.
+	Setup string `yaml:"setup,omitempty" json:"setup,omitempty" doc:"shell snippet run before every launch ({model}, {base_url}, ... shell-quoted)"`
 	// WorkspaceArg is an optional argv fragment that binds the launched tool to
 	// the orchestrator's allocated workspace. {workspace} is replaced by that
 	// absolute path. It is rendered immediately after the binary, before the
@@ -458,6 +479,18 @@ func (t Tool) renderLaunch(tmpl, workspace, modelID, session, prompt string) []s
 		case WorkspaceToken:
 			out = append(out, workspace)
 		default:
+			// A token carrying {model} inside it (provider/{model}) renders
+			// the model in place; unbound, it goes the way a bare {model}
+			// does, taking its orphaned flag with it.
+			if strings.Contains(f, ModelToken) {
+				if modelID == "" {
+					if n := len(out); n > 0 && strings.HasPrefix(out[n-1], "-") {
+						out = out[:n-1]
+					}
+					continue
+				}
+				f = strings.ReplaceAll(f, ModelToken, modelID)
+			}
 			out = append(out, strings.ReplaceAll(f, WorkspaceToken, workspace))
 		}
 	}
@@ -485,7 +518,124 @@ func (t Tool) VersionProbeArgv() []string {
 // TakesModel reports whether the launch template can select a model. A
 // tool without a {model} placeholder cannot: binding it to a model is a
 // label, not a selection.
-func (t Tool) TakesModel() bool { return strings.Contains(t.CLI.Launch.Exec, ModelToken) }
+func (t Tool) TakesModel() bool {
+	if strings.Contains(t.CLI.Launch.Exec, ModelToken) {
+		return true
+	}
+	for _, kv := range t.CLI.Launch.Env {
+		if strings.Contains(kv, ModelToken) {
+			return true
+		}
+	}
+	return strings.Contains(t.CLI.Launch.Setup, ModelToken)
+}
+
+// SetupScript renders the tool's setup snippet for one launch, every
+// placeholder value single-quoted for the shell ("" when the tool declares
+// no setup).
+func (t Tool) SetupScript(v LaunchVars) string {
+	s := strings.TrimSpace(t.CLI.Launch.Setup)
+	if s == "" {
+		return ""
+	}
+	var pairs []string
+	for tok, val := range v.tokens() {
+		pairs = append(pairs, tok, shellQuote(val))
+	}
+	return strings.NewReplacer(pairs...).Replace(s)
+}
+
+// UsesStateDir reports whether the launch env or setup refers to {state_dir}.
+func (t Tool) UsesStateDir() bool {
+	if strings.Contains(t.CLI.Launch.Setup, StateDirToken) {
+		return true
+	}
+	for _, kv := range t.CLI.Launch.Env {
+		if strings.Contains(kv, StateDirToken) {
+			return true
+		}
+	}
+	return false
+}
+
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// Launch-env placeholders filled from the bound model's endpoint, plus the
+// bashy-owned private directory a tool's setup writes its config into.
+const (
+	BaseURLToken       = "{base_url}"
+	BaseURLOriginToken = "{base_url_origin}"
+	BaseURLPathToken   = "{base_url_path}"
+	StateDirToken      = "{state_dir}"
+)
+
+// LaunchVars are the per-launch values the env and setup placeholders take.
+// StateDir is a bashy-owned directory private to one tool:model binding, so a
+// setup never rewrites the user's own configuration of the same CLI.
+type LaunchVars struct {
+	Model    string // the tool-specific model id
+	BaseURL  string // the bound model's endpoint
+	StateDir string // bashy-owned per-binding config dir
+}
+
+func (v LaunchVars) tokens() map[string]string {
+	origin, path := splitBaseURL(v.BaseURL)
+	return map[string]string{
+		ModelToken:         v.Model,
+		BaseURLToken:       v.BaseURL,
+		BaseURLOriginToken: origin,
+		BaseURLPathToken:   path,
+		StateDirToken:      v.StateDir,
+	}
+}
+
+// LaunchEnv renders the tool's launch env for one launch (empty LaunchVars
+// fields mean no model is bound, or it has no endpoint). A pair whose placeholder has no
+// value is dropped rather than set empty, so a tool's own default survives.
+func (t Tool) LaunchEnv(v LaunchVars) []string {
+	if len(t.CLI.Launch.Env) == 0 {
+		return nil
+	}
+	vals := v.tokens()
+	var out []string
+	for _, kv := range t.CLI.Launch.Env {
+		key, val, ok := strings.Cut(kv, "=")
+		if !ok || strings.TrimSpace(key) == "" {
+			continue
+		}
+		drop := false
+		for tok, v := range vals {
+			if strings.Contains(val, tok) {
+				if v == "" {
+					drop = true
+					break
+				}
+				val = strings.ReplaceAll(val, tok, v)
+			}
+		}
+		if !drop {
+			out = append(out, key+"="+val)
+		}
+	}
+	return out
+}
+
+// splitBaseURL splits an endpoint into scheme://host[:port] and its path
+// ("/api/coding/paas/v4"); both are "" when baseURL is not an absolute URL.
+func splitBaseURL(baseURL string) (origin, path string) {
+	scheme, rest, ok := strings.Cut(strings.TrimSpace(baseURL), "://")
+	if !ok || scheme == "" || rest == "" {
+		return "", ""
+	}
+	host, p, _ := strings.Cut(rest, "/")
+	if host == "" {
+		return "", ""
+	}
+	if p != "" {
+		path = "/" + strings.TrimRight(p, "/")
+	}
+	return scheme + "://" + host, path
+}
 
 // CredentialRefFor returns the single credential reference this tool needs to
 // invoke m. An explicit model key always wins. A direct-provider harness may
