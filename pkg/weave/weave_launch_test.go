@@ -1,6 +1,9 @@
 package weave
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -283,6 +286,63 @@ func TestWeaveProvisioningFailureIsTerminalAndObservable(t *testing.T) {
 type errHydrationTestFailure struct{}
 
 func (errHydrationTestFailure) Error() string { return "hydration test timeout" }
+
+func TestWeaveStartRefusesInvalidPreExistingWorkspace(t *testing.T) {
+	root := setupIsolationFixture(t)
+	t.Chdir(root)
+	if _, code := runWeave(t, "add", "workspace reuse check", "--json"); code != 0 {
+		t.Fatal("weave add failed")
+	}
+	dir, _ := weaveQueueDir(root)
+	ws := filepath.Join(dir, "workspaces", "issue-1")
+
+	// 1. Existing workspace is NOT a git repo: must refuse and name the directory.
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "junk.txt"), []byte("junk"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, code := runWeave(t, "start", "--run", "1", "--no-spawn", "--tool", "sh")
+	if code == 0 || !strings.Contains(out, ws) {
+		t.Fatalf("start on non-git workspace should fail and name dir %q (code=%d): %s", ws, code, out)
+	}
+
+	// 2. Existing workspace is a git repo on the wrong branch (main instead of agent/weave-issue-1).
+	_ = os.RemoveAll(ws)
+	gitT(t, root, "clone", "--local", "--no-hardlinks", root, ws)
+	out, code = runWeave(t, "start", "--run", "1", "--no-spawn", "--tool", "sh")
+	if code == 0 || !strings.Contains(out, ws) {
+		t.Fatalf("start on wrong branch workspace should fail and name dir %q (code=%d): %s", ws, code, out)
+	}
+
+	// 3. Existing workspace is on agent/weave-issue-1 but dirty (e.g. unpopulated tracked deletions).
+	_ = os.RemoveAll(ws)
+	gitT(t, root, "clone", "--local", "--no-hardlinks", root, ws)
+	gitT(t, ws, "checkout", "-q", "-b", "agent/weave-issue-1")
+	if err := os.Remove(filepath.Join(ws, "seed.txt")); err != nil {
+		t.Fatal(err)
+	}
+	out, code = runWeave(t, "start", "--run", "1", "--no-spawn", "--tool", "sh")
+	if code == 0 || !strings.Contains(out, ws) {
+		t.Fatalf("start on unpopulated workspace should fail and name dir %q (code=%d): %s", ws, code, out)
+	}
+
+	// 4. Test that weaveMarkLaunchFailed cleans up the half-made workspace before returning.
+	weaveMarkLaunchFailed(dir, 1, fmt.Errorf("simulated launch failure"))
+	if _, err := os.Stat(ws); !os.IsNotExist(err) {
+		t.Fatalf("weaveMarkLaunchFailed did not remove half-made workspace %s: err=%v", ws, err)
+	}
+
+	// 5. Existing workspace is a clean git repo on agent/weave-issue-1: start accepts it.
+	_ = os.RemoveAll(ws)
+	gitT(t, root, "clone", "--local", "--no-hardlinks", root, ws)
+	gitT(t, ws, "checkout", "-q", "-b", "agent/weave-issue-1")
+	out, code = runWeave(t, "start", "--run", "1", "--no-spawn", "--tool", "sh")
+	if code != 0 {
+		t.Fatalf("start on clean matching workspace should succeed (code=%d): %s", code, out)
+	}
+}
 
 // An external kill can happen while clone/hydration is running, before the
 // item becomes working.  That must not leave a permanently allocated phantom

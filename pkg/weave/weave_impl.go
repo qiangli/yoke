@@ -1097,6 +1097,34 @@ func weaveMeasureDirtiness(workspace string) (dirty bool, dirtyFiles, untrackedF
 	return dirtyFiles > 0, dirtyFiles, untrackedFiles
 }
 
+// weaveVerifyExistingWorkspace verifies that a pre-existing workspace on a
+// non-resume start is a valid git repository, checked out on expectedBranch,
+// with a clean working tree.
+func weaveVerifyExistingWorkspace(workspace, expectedBranch string) error {
+	cmd := exec.Command(gitBin(), "-C", workspace, "rev-parse", "--abbrev-ref", "HEAD")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("existing workspace %s is not a git repository or HEAD is unreadable: %w (%s)",
+			workspace, err, strings.TrimSpace(string(out)))
+	}
+	curBranch := strings.TrimSpace(string(out))
+	if curBranch != expectedBranch {
+		return fmt.Errorf("existing workspace %s is on branch %q, want run branch %q",
+			workspace, curBranch, expectedBranch)
+	}
+	statusCmd := exec.Command(gitBin(), "-C", workspace, "status", "--porcelain")
+	statusOut, err := statusCmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("existing workspace %s status check failed: %w (%s)",
+			workspace, err, strings.TrimSpace(string(statusOut)))
+	}
+	if trimmed := strings.TrimSpace(string(statusOut)); trimmed != "" {
+		return fmt.Errorf("existing workspace %s is not clean: uncommitted changes or unpopulated files present:\n%s",
+			workspace, trimmed)
+	}
+	return nil
+}
+
 // weaveRunVerify executes an item's verify command via `bash -c` in
 // the workspace with a 10-minute ceiling, returning the exit code and
 // the last 2000 bytes of combined output. Like weaveMeasureBranch,
@@ -1343,12 +1371,17 @@ func weaveHydrateSubmodules(root, workspace string, out, errw io.Writer) error {
 	return nil
 }
 
-// weaveMarkLaunchFailed makes provisioning failures durable.  A timed out
-// clone/hydration used to return while the item still looked todo, leaving a
-// conductor with no observable worker or actionable terminal evidence.
+// weaveMarkLaunchFailed makes provisioning failures durable and removes
+// any half-made workspace left on disk before returning so subsequent runs
+// do not reuse corrupted state.
 func weaveMarkLaunchFailed(dir string, issueID int64, cause error) {
+	ws := filepath.Join(dir, "workspaces", fmt.Sprintf("issue-%d", issueID))
+	_ = os.RemoveAll(ws)
 	_ = withWeaveQueueLock(dir, func(q *weaveQueue) error {
 		if it := findWeaveItem(q, issueID); it != nil {
+			if it.Workspace != "" && it.Workspace != ws {
+				_ = os.RemoveAll(it.Workspace)
+			}
 			it.State = "failed"
 			it.LaunchPhase = "failed: " + cause.Error()
 			it.FinishedAt = time.Now().UTC()
@@ -3837,6 +3870,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 				cloneErr = yokegit.ForwardResult(cmd.OutOrStdout(), cmd.ErrOrStderr(), cloneArgs, cloneRes, cloneRunErr)
 			}
 			if cloneErr != nil {
+				_ = os.RemoveAll(workspace)
 				weaveMarkLaunchFailed(dir, it.ID, fmt.Errorf("clone workspace: %w", cloneErr))
 				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 					weavecli.ExitGenericFail, fmt.Errorf("clone workspace: %w", cloneErr)))
@@ -3846,6 +3880,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			ckArgs := []string{"checkout", "-b", branch, baseSHA}
 			ckRes, ckRunErr := yokegit.RunExternal(admission.ctx, workspace, ckArgs)
 			if err := yokegit.ForwardResult(cmd.OutOrStdout(), cmd.ErrOrStderr(), ckArgs, ckRes, ckRunErr); err != nil {
+				_ = os.RemoveAll(workspace)
 				weaveMarkLaunchFailed(dir, it.ID, fmt.Errorf("checkout immutable base %s: %w", baseSHA, err))
 				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 					weavecli.ExitGenericFail, fmt.Errorf("git checkout -b %s: %w", branch, err)))
@@ -3904,10 +3939,18 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			}
 			if boothFork == "" {
 				if err := weaveHydrateSubmodules(root, workspace, cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
+					_ = os.RemoveAll(workspace)
 					weaveMarkLaunchFailed(dir, it.ID, fmt.Errorf("hydrate submodules: %w", err))
 					return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 						weavecli.ExitGenericFail, fmt.Errorf("hydrate submodules: %w", err)))
 				}
+			}
+		} else {
+			// When a workspace already exists on a non-resume start, verify
+			// it is a git repo on the run branch with a clean tree, else refuse.
+			if err := weaveVerifyExistingWorkspace(workspace, branch); err != nil {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
+					weavecli.ExitStateConflict, err))
 			}
 		}
 		// Faithful, fast, Windows-safe sibling-dep view. A clone of the target
