@@ -1,6 +1,8 @@
 module github.com/qiangli/yoke/external/otel
 
-go 1.26.5
+go 1.27
+
+toolchain go1.27.1
 
 require (
 	github.com/qiangli/yoke v0.0.0-20261008102552-a61399bab543
