@@ -45,7 +45,7 @@ func pidAlive(pid int) bool {
 	return proc.Signal(syscall.Signal(0)) == nil
 }
 
-// weaveStopWrapper signals the recorded wrapper group. A plain child uses
+// weaveStopWrapper signals only the recorded wrapper. A plain child uses
 // its own process group, and a PTY child uses its own session; both depend on
 // the wrapper's cancellation path to stop them. The later recorded-child
 // group probe is therefore required before releasing any reservation.
@@ -66,13 +66,11 @@ func weaveStopWrapper(pid int) {
 	if err := proc.Signal(syscall.Signal(0)); err != nil {
 		return
 	}
-	// SIGTERM the wrapper group (negative PID). The worker child may be
-	// in another group; signalling the wrapper alone is not a child proof.
-	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil {
-		// Group send failed (group may not exist if Setsid never
-		// ran); fall back to single-process TERM.
-		_ = proc.Signal(syscall.SIGTERM)
-	}
+	// A wrapper group can contain sibling wrappers: setsid is best effort,
+	// and interactive launches intentionally retain their launcher's session.
+	// Only the wrapper owns cancellation of its isolated child group. Never
+	// infer ownership of every group member from the wrapper's recorded PID.
+	_ = proc.Signal(syscall.SIGTERM)
 	// 5-second grace; if still alive, escalate.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -81,7 +79,5 @@ func weaveStopWrapper(pid int) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil {
-		_ = proc.Signal(syscall.SIGKILL)
-	}
+	_ = proc.Signal(syscall.SIGKILL)
 }

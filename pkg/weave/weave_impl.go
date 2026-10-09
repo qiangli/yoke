@@ -6488,8 +6488,8 @@ func runWeaveReset(cmd *cobra.Command, yes bool, flags *weaveOutputFlags) error 
 			if it.Workspace == "" && it.Branch == "" && it.WrapperPid == 0 {
 				continue
 			}
-			// Stop any still-running wrapper precisely (PID + setsid
-			// group). Reset is a destructive batch op — we want
+			// Stop each recorded wrapper PID. Reset is a destructive
+			// batch op — we want
 			// everything torn down cleanly.
 			if it.WrapperPid > 0 {
 				weaveStopWrapper(it.WrapperPid)
