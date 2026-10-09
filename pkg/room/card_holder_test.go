@@ -231,3 +231,23 @@ func timeoutAfter() <-chan struct{} {
 	}()
 	return ch
 }
+
+// The owner rule is for session claims. A plain card (an inbox watcher) is
+// held by its writer: once that process exits it is not live, however long
+// the parent recorded as OwnerPID keeps running, and its own Leave removes it.
+func TestPlainCardIsHeldByItsWriterNotItsParent(t *testing.T) {
+	isolate(t)
+	if err := Join(Card{ID: "watcher-exited", Tool: "codex", Mode: "inbox", PID: deadPID(t), OwnerPID: os.Getpid()}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, ok, _ := Find("watcher-exited"); ok {
+		t.Fatal("an exited watcher stayed live because its parent is alive")
+	}
+	if err := Join(Card{ID: "watcher-live", Tool: "codex", Mode: "inbox", PID: os.Getpid(), OwnerPID: os.Getppid()}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	Leave("watcher-live")
+	if _, ok, _ := Find("watcher-live"); ok {
+		t.Fatal("a watcher's own Leave was refused because its parent is alive")
+	}
+}

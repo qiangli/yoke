@@ -15,12 +15,18 @@ package room
 // Join overwrote it, and a departing child's Leave evicted it. A claim that is
 // gone refuses nobody, which is how one instance came to have two live drivers.
 //
-// The holder is therefore the OWNER when one is recorded, and only otherwise
-// the writer. Every path below asks these three functions and nothing else.
+// The holder of a session claim is therefore the OWNER when one is recorded,
+// and only otherwise the writer. Every path below asks these three functions and nothing else.
 
 // holderPID is the process whose liveness decides whether a card is held.
+//
+// The owner rule is for SESSION CLAIMS, whose writer is a per-turn child. A
+// card without a session claim is held by the process that wrote it: an inbox
+// watcher records its parent as OwnerPID, and judging it on that parent kept
+// an exited watcher on the board, and refused its own Leave, for as long as
+// the parent shell lived.
 func holderPID(c Card) int {
-	if c.OwnerPID != 0 {
+	if c.OwnerPID != 0 && c.SessionClaim != "" {
 		return c.OwnerPID
 	}
 	return c.PID
