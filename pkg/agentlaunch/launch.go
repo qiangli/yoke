@@ -290,10 +290,11 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 	// a wrong model id is a dead binding that looks perfectly healthy right up
 	// until an agent tries to speak.
 	var boundBaseURL string // the bound model's endpoint, for the tool's launch env
+	var boundContext int64  // the bound model's declared context window (0 = undeclared)
 	if modelName != "" {
 		lnch.Model, lnch.ModelName = modelName, modelName
 		if m, ok := cat.Model(modelName); ok {
-			boundBaseURL = m.BaseURL
+			boundBaseURL, boundContext = m.BaseURL, m.ContextLength
 			lnch.Model, lnch.ModelName = m.TargetFor(toolName), m.Name
 			// genie -m accepts a registry key, then resolves provider IDs itself.
 			// The ycode alias invokes genie too, so do not pass ycode's
@@ -357,9 +358,17 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 		// would be SATISFIED BY THE ABSENCE of any check. A slower transport is a
 		// cost; a band that silently lies is a defect. So ACP serves tool-level
 		// bindings only, and a tool:model binding takes a rung that can honour it.
-		if opt.ACP && lnch.Model != "" {
+		//
+		// A tool that receives its model through the launch env or setup
+		// (cli.launch.env / setup carry {model}) is the exception: the binding
+		// travels outside the protocol, so ACP honours it.
+		if opt.ACP && lnch.Model != "" && !tool.ModelViaLaunch() {
 			return lnch, fmt.Errorf("agent launch: %q binds model %q, which cannot be delivered over ACP — the protocol has no model selection and %q takes no model flag in ACP mode; use a rung that can carry it",
 				name, lnch.Model, tool.Name)
+		}
+		if min := tool.CLI.Launch.MinContext; min > 0 && boundContext > 0 && boundContext < min {
+			return lnch, fmt.Errorf("agent launch: tool %q needs a context window of at least %d tokens, but model %q declares %d; bind a model with a larger window (or raise context_length if the server is configured for more)",
+				tool.Name, min, lnch.ModelName, boundContext)
 		}
 		if lnch.Model != "" && !tool.TakesModel() {
 			return lnch, fmt.Errorf("agent launch: tool %q cannot select a model, so %q is a label, not a selection (its launch template has no %s)",

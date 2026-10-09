@@ -223,3 +223,70 @@ func TestModelPlaceholderInsideToken(t *testing.T) {
 		t.Fatalf("unbound argv = %q, want %q", got, want)
 	}
 }
+
+// F11: ACP has no model selection, so a bound model used to refuse ACP. A
+// tool that receives its model through the launch env (or setup) carries the
+// binding outside the protocol, so ACP honours it; an argv-only tool is still
+// refused rather than silently running its own default model.
+func TestACPCarriesBindingThroughLaunchEnv(t *testing.T) {
+	root := t.TempDir()
+	cat := fleet.New(fleet.WithRoot(root))
+	for _, tl := range []fleet.Tool{
+		{Name: "envacp", Kind: fleet.ToolKindCLI, CLI: fleet.ToolCLI{Binary: "envacp", Launch: fleet.ToolLaunch{
+			Exec: "envacp --headless -t {prompt}", ACPExec: "envacp acp",
+			KeyEnv: []string{"LLM_API_KEY"}, Env: []string{"LLM_MODEL={model}"},
+		}}},
+		{Name: "argvacp", Kind: fleet.ToolKindCLI, CLI: fleet.ToolCLI{Binary: "argvacp", Launch: fleet.ToolLaunch{
+			Exec: "argvacp -m {model} {prompt}", ACPExec: "argvacp --acp",
+		}}},
+	} {
+		if err := cat.SaveTool(tl); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := cat.SaveModel(fleet.Model{Name: "m1", Kind: "api", Provider: "openai-compat",
+		UpstreamID: "glm-5.3", BaseURL: "https://api.example.test/v1", APIKeyRef: "zai"}); err != nil {
+		t.Fatal(err)
+	}
+	l, err := ResolveWithCatalog("envacp:m1", Options{ACP: true, AllowUnsafe: true, DryRun: true}, testCatalog(root))
+	if err != nil {
+		t.Fatalf("env-bound ACP refused: %v", err)
+	}
+	if !slices.Equal(l.Args, []string{"acp"}) || !slices.Contains(l.Env, "LLM_MODEL=glm-5.3") {
+		t.Fatalf("acp launch = args %q env %q", l.Args, l.Env)
+	}
+	if _, err := ResolveWithCatalog("argvacp:m1", Options{ACP: true, AllowUnsafe: true, DryRun: true}, testCatalog(root)); err == nil {
+		t.Fatal("argv-only tool must still refuse a bound model over ACP")
+	}
+}
+
+// F16: a tool that needs a minimum context window refuses a model declaring
+// less, with a message naming both numbers; an undeclared length is not
+// checked (absence of data is not a refusal).
+func TestMinContextRefusesSmallerModel(t *testing.T) {
+	root := t.TempDir()
+	cat := fleet.New(fleet.WithRoot(root))
+	if err := cat.SaveTool(fleet.Tool{Name: "bigctx", Kind: fleet.ToolKindCLI, CLI: fleet.ToolCLI{Binary: "bigctx", Launch: fleet.ToolLaunch{
+		Exec: "bigctx -m {model} -z {prompt}", MinContext: 64000,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []fleet.Model{
+		{Name: "small", Kind: "local", Provider: "openai-compat", UpstreamID: "qwen3:8b", ContextLength: 40960},
+		{Name: "large", Kind: "api", Provider: "openai-compat", UpstreamID: "glm-5.3", ContextLength: 131072},
+		{Name: "unknown", Kind: "local", Provider: "openai-compat", UpstreamID: "x"},
+	} {
+		if err := cat.SaveModel(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := ResolveWithCatalog("bigctx:small", Options{AllowUnsafe: true, DryRun: true}, testCatalog(root))
+	if err == nil || !strings.Contains(err.Error(), "64000") || !strings.Contains(err.Error(), "40960") {
+		t.Fatalf("small model: err = %v", err)
+	}
+	for _, ok := range []string{"bigctx:large", "bigctx:unknown"} {
+		if _, err := ResolveWithCatalog(ok, Options{AllowUnsafe: true, DryRun: true}, testCatalog(root)); err != nil {
+			t.Fatalf("%s refused: %v", ok, err)
+		}
+	}
+}

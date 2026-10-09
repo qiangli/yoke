@@ -152,6 +152,11 @@ type Tool struct {
 	// docs/tool-commands-design.md (Sprint #324).
 	Commands []ToolCommand `yaml:"commands,omitempty" json:"commands,omitempty" doc:"vendor slash commands exposed as bashy tool commands, keyed by canonical cross-tool name"`
 
+	// Integration declares how the tool takes skills, instructions and MCP
+	// servers, so bashy can enable its skills in any tool from data
+	// (integration.go).
+	Integration ToolIntegration `yaml:"integration,omitempty" json:"integration" doc:"how the tool takes skills, instruction files and MCP servers"`
+
 	Ring assetring.Ring `yaml:"-" json:"ring"`
 }
 
@@ -254,6 +259,12 @@ type ToolLaunch struct {
 	// shell-quoted; credentials are referenced as $VARS from KeyEnv or
 	// CredentialEnv, never as placeholders. A failing setup fails the launch.
 	Setup string `yaml:"setup,omitempty" json:"setup,omitempty" doc:"shell snippet run before every launch ({model}, {base_url}, ... shell-quoted)"`
+	// MinContext is the smallest context window (tokens) this CLI accepts;
+	// a binding to a model whose declared context_length is below it is
+	// refused at launch with a clear message instead of failing inside the
+	// tool. 0 means no minimum. A model with no declared length is not
+	// checked: the tool's own error remains the authority there.
+	MinContext int64 `yaml:"min_context,omitempty" json:"min_context,omitempty" doc:"smallest model context window (tokens) the CLI accepts"`
 	// WorkspaceArg is an optional argv fragment that binds the launched tool to
 	// the orchestrator's allocated workspace. {workspace} is replaced by that
 	// absolute path. It is rendered immediately after the binary, before the
@@ -528,6 +539,21 @@ func (t Tool) TakesModel() bool {
 		}
 	}
 	return strings.Contains(t.CLI.Launch.Setup, ModelToken)
+}
+
+// ModelViaLaunch reports whether the tool receives its bound model through
+// the launch environment or the setup hook rather than its argv. Such a tool
+// can carry a binding over ACP, whose launch has no model flag.
+func (t Tool) ModelViaLaunch() bool {
+	if strings.Contains(t.CLI.Launch.Setup, ModelToken) {
+		return true
+	}
+	for _, kv := range t.CLI.Launch.Env {
+		if strings.Contains(kv, ModelToken) {
+			return true
+		}
+	}
+	return false
 }
 
 // SetupScript renders the tool's setup snippet for one launch, every

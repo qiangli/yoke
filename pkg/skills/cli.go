@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/redact"
 )
 
@@ -243,17 +244,18 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 	promote.Flags().StringVar(&promoteOut, "out", "", "bundle output directory (default ./promote-<name>)")
 
 	var expTo string
+	var expTools []string
 	var expUser, expRepo, expForce, expYAML bool
 	export := &cobra.Command{
 		Use:   "export <name>",
 		Short: "install a catalog skill into agent skill directories (user scope, a dir, or --repo)",
-		Long:  "export writes a skill folder where agentic tools read skills:\n  --user  ~/.agents/skills (the vendor-neutral standard) plus each DETECTED\n          vendor root (~/.claude/skills, ~/.copilot/skills)\n  --to    any directory (a workspace, a team catalog checkout)\n  --repo  .agents/skills at the repo root (+ .claude/skills if .claude exists);\n          repo writes are explicit-only — your repository, your call\nEvery export carries an ownership marker; re-exports refresh only folders we\nwrote (--force overrides). Content is the standard portable skill folder.\nWith --yaml (--to only) the skill is written as ONE record document,\n<dir>/<name>.yaml, instead of a folder — the shape `add` imports back.",
+		Long:  "export writes a skill folder where agentic tools read skills:\n  --user  ~/.agents/skills (the vendor-neutral standard) plus each DETECTED\n          vendor root (~/.claude/skills, ~/.copilot/skills)\n  --to    any directory (a workspace, a team catalog checkout)\n  --repo  .agents/skills at the repo root (+ .claude/skills if .claude exists);\n          repo writes are explicit-only — your repository, your call\n  --tool  a named tool's own skill roots and instruction files, from its\n          integration: block (any tool, built in or custom; with --repo, its\n          project roots); --user also covers every DETECTED tool that\n          declares one\nInstruction files get one bashy-managed block between markers, replaced in\nplace on re-export; the rest of the file is never touched.\nEvery export carries an ownership marker; re-exports refresh only folders we\nwrote (--force overrides). Content is the standard portable skill folder.\nWith --yaml (--to only) the skill is written as ONE record document,\n<dir>/<name>.yaml, instead of a folder — the shape `add` imports back.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if expYAML {
 				return runExportRecord(cmd, cfg, args[0], expTo, expUser, expRepo, expForce)
 			}
-			return runExport(cmd, cfg, args[0], expTo, expUser, expRepo, expForce)
+			return runExport(cmd, cfg, args[0], expTo, expTools, expUser, expRepo, expForce)
 		},
 	}
 	export.Flags().StringVar(&expTo, "to", "", "export into this directory")
@@ -261,6 +263,7 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 	export.Flags().BoolVar(&expRepo, "repo", false, "install at repo scope (explicit consent)")
 	export.Flags().BoolVar(&expForce, "force", false, "replace folders not exported by us")
 	export.Flags().BoolVar(&expYAML, "yaml", false, "write the record (<dir>/<name>.yaml) instead of the folder; --to only")
+	export.Flags().StringSliceVar(&expTools, "tool", nil, "install into this tool's declared skill roots and instruction files (its integration: block); repeatable")
 
 	// NOTE: the evidence ledger these runs write is READ by `bashy craft`
 	// (coreutils/pkg/craft), not here. skills manages the catalog; craft is
@@ -615,29 +618,75 @@ func runEdit(cmd *cobra.Command, cfg *config, name string) error {
 	return ed.Run()
 }
 
-func runExport(cmd *cobra.Command, cfg *config, name, to string, user, repo, force bool) error {
+// fleetTools lists the tool catalog for export targeting; a variable so tests
+// supply a catalog without touching the host's fleet store.
+var fleetTools = func() []fleet.Tool {
+	ts, _ := fleet.New().Tools(true)
+	return ts
+}
+
+func runExport(cmd *cobra.Command, cfg *config, name, to string, tools []string, user, repo, force bool) error {
 	sk, src, ok := cfg.catalog().Get(name)
 	if !ok {
 		return fmt.Errorf("skills: %q not found", name)
 	}
-	var roots []string
+	var roots, instructions []string
 	if to != "" {
 		roots = append(roots, to)
 	}
+	home, herr := os.UserHomeDir()
 	if user {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return err
+		if herr != nil {
+			return herr
 		}
 		roots = append(roots, userExportRoots(home)...)
 	}
-	if repo {
-		roots = append(roots, repoExportRoots(findRepoRoot(mustGetwd()))...)
+	// Tool integration: --tool names are explicit consent (user scope unless
+	// --repo); --user adds every detected tool that declares roots.
+	if user || (len(tools) > 0 && !repo) {
+		tgs, err := toolTargets(fleetTools(), tools, user, fleet.ScopeUser, home, "", nil)
+		if err != nil {
+			return err
+		}
+		for _, tg := range tgs {
+			roots = append(roots, tg.SkillRoots...)
+			instructions = append(instructions, tg.Instructions...)
+		}
 	}
-	if len(roots) == 0 {
-		return fmt.Errorf("skills: pick a target: --user, --repo, or --to DIR")
+	if repo {
+		repoRoot := findRepoRoot(mustGetwd())
+		roots = append(roots, repoExportRoots(repoRoot)...)
+		if len(tools) > 0 {
+			tgs, err := toolTargets(fleetTools(), tools, false, fleet.ScopeProject, home, repoRoot, nil)
+			if err != nil {
+				return err
+			}
+			for _, tg := range tgs {
+				roots = append(roots, tg.SkillRoots...)
+				instructions = append(instructions, tg.Instructions...)
+			}
+		}
+	}
+	roots, instructions = dedupPaths(roots), dedupPaths(instructions)
+	if len(roots) == 0 && len(instructions) == 0 {
+		return fmt.Errorf("skills: pick a target: --user, --repo, --tool NAME, or --to DIR")
 	}
 	var firstErr error
+	for _, path := range instructions {
+		changed, err := UpsertInstructionBlock(path, sk.Name, instructionBody(sk.Name, sk.Description))
+		if err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "skills: %v\n", err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		verb := "unchanged"
+		if changed {
+			verb = "updated"
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "instructions %s: %s\n", verb, path)
+	}
 	for _, root := range roots {
 		dst, err := ExportTo(sk, src, root, force)
 		if err != nil {
@@ -650,6 +699,19 @@ func runExport(cmd *cobra.Command, cfg *config, name, to string, user, repo, for
 		fmt.Fprintf(cmd.OutOrStdout(), "exported: %s\n", dst)
 	}
 	return firstErr
+}
+
+func dedupPaths(in []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range in {
+		c := filepath.Clean(p)
+		if !seen[c] {
+			seen[c] = true
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // runExportRecord is `export --yaml`: the skill as one record document at
