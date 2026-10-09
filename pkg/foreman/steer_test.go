@@ -103,3 +103,19 @@ func TestSteerableDefersToChat(t *testing.T) {
 		t.Fatal("chat.CanSteer said yes to an unregistered agent")
 	}
 }
+
+func TestExplicitSandboxSurvivesDetachedForemanStart(t *testing.T) {
+	root := t.TempDir()
+	s, err := Start(context.Background(), Options{Root: root, ID: "sandbox-manager", Goal: "manage", Agent: "codex", AllowUnsafe: true, Sandbox: "workspace-write", WritableRoots: []string{"/managed/state"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(root, s.State().ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := reopened.liveSessionOptions("manage", io.Discard, time.Minute)
+	if !got.AllowUnsafe || got.Sandbox != "workspace-write" || len(got.WritableRoots) != 1 || got.WritableRoots[0] != "/managed/state" {
+		t.Fatalf("detached profile lost: %+v", got)
+	}
+}

@@ -89,11 +89,13 @@ func (s *Session) runDAGTarget(ctx context.Context, dir string, task *dag.Task) 
 	}
 	prompt := s.composeDAGPrompt(task)
 	res, err := chat.Invoke(ctx, chat.Options{
-		Agent:       s.state.Agent,
-		Role:        s.state.Role,
-		Instruction: prompt,
-		Cwd:         firstNonEmpty(s.state.Cwd, dir),
-		AllowUnsafe: s.state.AllowUnsafe,
+		Agent:         s.state.Agent,
+		Role:          s.state.Role,
+		Instruction:   prompt,
+		Cwd:           firstNonEmpty(s.state.Cwd, dir),
+		AllowUnsafe:   s.state.AllowUnsafe,
+		Sandbox:       s.state.Sandbox,
+		WritableRoots: append([]string(nil), s.state.WritableRoots...),
 	}, s.runner)
 	if out := strings.TrimSpace(res.Output); out != "" {
 		if rerr := s.record(RoleAgent, task.Name, out); rerr != nil {

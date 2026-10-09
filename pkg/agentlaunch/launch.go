@@ -21,6 +21,8 @@ import (
 type Options struct {
 	Sandbox  string
 	ReadOnly bool
+	// WritableRoots adds explicitly granted paths only to workspace-write Codex launches.
+	WritableRoots []string
 	// Workspace is the orchestrator-allocated project directory. Tools opt in to
 	// receiving it through their fleet launch metadata; an empty value leaves
 	// historical argv unchanged. Callers may pass fleet.WorkspaceToken when the
@@ -460,6 +462,7 @@ func FinalizeArgs(tool string, args []string, opt Options) ([]string, error) {
 		args = StripKillSwitches(tool, args) // a human is at the terminal → approval ON
 	}
 	args = ApplySandbox(tool, args, opt)
+	args = applyWritableRoots(tool, args, opt.WritableRoots)
 	args = normalizeUnsafeFlags(tool, args)
 	if opt.DryRun {
 		return args, nil
@@ -470,6 +473,29 @@ func FinalizeArgs(tool string, args []string, opt Options) ([]string, error) {
 		}
 	}
 	return args, nil
+}
+
+// applyWritableRoots extends only an explicitly selected workspace-write profile.
+// --add-dir is additive: a second writable_roots config would replace the
+// recipe's .git and managed build-cache grants instead of extending them.
+func applyWritableRoots(tool string, args, roots []string) []string {
+	if tool != "codex" || !ContainsArgSequence(args, []string{"--sandbox", "workspace-write"}) {
+		return args
+	}
+	seen := make(map[string]bool)
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "--add-dir" {
+			seen[args[i+1]] = true
+		}
+	}
+	for _, root := range roots {
+		if strings.TrimSpace(root) == "" || seen[root] {
+			continue
+		}
+		args = append(args, "--add-dir", root)
+		seen[root] = true
+	}
+	return args
 }
 
 // StripKillSwitches removes ONLY the auto-approve kill-switch flags

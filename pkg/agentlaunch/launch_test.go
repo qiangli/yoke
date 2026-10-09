@@ -608,3 +608,46 @@ func TestStructuralRefusalOutranksTheRegistrationRefusal(t *testing.T) {
 		t.Fatalf("the specific diagnosis was displaced by a less specific one:\n%v", err)
 	}
 }
+
+// Sprint owners use foreman --yolo (steerable); workers use the headless
+// recipe. A safe profile is opt-in for either seat, never inferred from role.
+func TestCodexManagerAndWorkerWritableRoots(t *testing.T) {
+	fleettest.Ring(t)
+	root := t.TempDir()
+	for _, tc := range []struct {
+		name  string
+		opt   Options
+		grant bool
+	}{
+		{"manager", Options{Steer: true, AllowUnsafe: true}, false},
+		{"worker", Options{}, false},
+		{"sandboxed-manager", Options{Steer: true, AllowUnsafe: true, Sandbox: "workspace-write"}, true},
+		{"sandboxed-worker", Options{Sandbox: "workspace-write"}, true},
+		{"reviewer", Options{ReadOnly: true}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.opt.Workspace = "/managed/project"
+			tc.opt.WritableRoots = []string{"/managed/bashy state", "/managed/bashy state"}
+			l, err := ResolveWithCatalog("codex", tc.opt, testCatalog(root))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := ContainsArgSequence(l.Args, []string{"--add-dir", "/managed/bashy state"}); got != tc.grant {
+				t.Fatalf("state grant=%v, want %v; argv=%q", got, tc.grant, l.Args)
+			}
+			if tc.grant {
+				if strings.Count(strings.Join(l.Args, "\x00"), "/managed/bashy state") != 1 {
+					t.Fatalf("duplicate grant: %q", l.Args)
+				}
+				if !ContainsArgSequence(l.Args, []string{"--sandbox", "workspace-write"}) || slices.Contains(l.Args, "--dangerously-bypass-approvals-and-sandbox") {
+					t.Fatalf("safe profile lost: %q", l.Args)
+				}
+				if !strings.Contains(strings.Join(l.Args, " "), "/managed/project/.git") || !slices.Contains(l.Args, "sandbox_workspace_write.network_access=true") {
+					t.Fatalf("commit/network grants lost: %q", l.Args)
+				}
+			} else if !tc.opt.ReadOnly && (!slices.Contains(l.Args, "--dangerously-bypass-approvals-and-sandbox") || slices.Contains(l.Args, "--sandbox")) {
+				t.Fatalf("full-access seat restricted: %q", l.Args)
+			}
+		})
+	}
+}

@@ -125,6 +125,10 @@ type SessionOptions struct {
 	// TALK needs no write authority, and read-only passes the launch guard by
 	// construction on an ordinary host.
 	ReadOnly bool
+	// Sandbox and WritableRoots carry an explicitly requested safe profile.
+	// Managed sprint owners keep their full-access default unless overridden.
+	Sandbox       string
+	WritableRoots []string
 
 	// Attended marks a session a HUMAN is driving turn by turn through a proxying
 	// front end — ycode's /agent attach is the case this exists for: the operator
@@ -178,9 +182,11 @@ type SessionOptions struct {
 // session comes to be resolved as attended and governed as something else.
 func (o SessionOptions) launchOptions() Options {
 	return Options{
-		Catalog:  o.Catalog,
-		Cwd:      o.Cwd,
-		ReadOnly: o.ReadOnly,
+		Catalog:       o.Catalog,
+		Cwd:           o.Cwd,
+		Sandbox:       o.Sandbox,
+		WritableRoots: append([]string(nil), o.WritableRoots...),
+		ReadOnly:      o.ReadOnly,
 		// ReadOnly is stricter and wins — same precedence as Interact.
 		Attended:     o.Attended && !o.ReadOnly,
 		AllowPremium: o.AllowPremium,

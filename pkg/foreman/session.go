@@ -26,7 +26,9 @@ type Options struct {
 	// unattended managed session to keep the agent CLI's approval-bypass flag.
 	// It is persisted because a detached start is reopened by the serve process
 	// before the live chat session is launched.
-	AllowUnsafe bool
+	AllowUnsafe   bool
+	Sandbox       string
+	WritableRoots []string
 
 	// Eager brings the agent up AT Start instead of on the first message.
 	//
@@ -97,6 +99,8 @@ func Start(ctx context.Context, opt Options) (*Session, error) {
 		UpdatedAt:       now,
 		OpeningSendOnce: opt.OpeningSendOnce,
 		AllowUnsafe:     opt.AllowUnsafe,
+		Sandbox:         opt.Sandbox,
+		WritableRoots:   append([]string(nil), opt.WritableRoots...),
 	}
 	if opt.MaxRuntime > 0 {
 		st.MaxRuntime = opt.MaxRuntime.String()
@@ -328,11 +332,13 @@ func (s *Session) Apply(ctx context.Context, cmd Command) error {
 		}
 
 		res, err := chat.Invoke(ctx, chat.Options{
-			Agent:       s.state.Agent,
-			Role:        s.state.Role,
-			Instruction: s.composePrompt(cmd.Message, prior),
-			Cwd:         s.state.Cwd,
-			AllowUnsafe: s.state.AllowUnsafe,
+			Agent:         s.state.Agent,
+			Role:          s.state.Role,
+			Instruction:   s.composePrompt(cmd.Message, prior),
+			Cwd:           s.state.Cwd,
+			AllowUnsafe:   s.state.AllowUnsafe,
+			Sandbox:       s.state.Sandbox,
+			WritableRoots: append([]string(nil), s.state.WritableRoots...),
 		}, s.runner)
 		if out := strings.TrimSpace(res.Output); out != "" {
 			if rerr := s.record(RoleAgent, "", out); rerr != nil {

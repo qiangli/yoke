@@ -57,6 +57,10 @@ type State struct {
 	// Without persistence, the parent accepts the mode and the serve child loses
 	// it just before chat applies the unattended-host launch guard.
 	AllowUnsafe bool `json:"allow_unsafe,omitempty"`
+	// Sandbox and WritableRoots survive the detached start → serve handoff so
+	// the manager's launch profile cannot silently widen on its first turn.
+	Sandbox       string   `json:"sandbox,omitempty"`
+	WritableRoots []string `json:"writable_roots,omitempty"`
 
 	// Binding is the canonical tool:model this session is actually talking to.
 	// Agent may be an alias or a nickname; a record must never store one of those.

@@ -21,7 +21,7 @@ import (
 var cmd = &tool.Tool{
 	Name:     "foreman",
 	Synopsis: "Drive a persistent, steerable agent session.",
-	Usage:    "foreman start [--detach] [--yolo] [--max-runtime 30m|--no-max-runtime] --goal TEXT [--agent AGENT]\n   or: foreman tell <id> TEXT\n   or: foreman status [--wait DURATION] [--after SEQ] [--watch] [--json] <id>\n   or: foreman log <id> [-f]\n   or: foreman interrupt <id>   (ESC — breaks a tool loop)\n   or: foreman list\n   or: foreman --once --agent AGENT --instruction TEXT",
+	Usage:    "foreman start [--detach] [--yolo] [--sandbox MODE] [--writable-root PATH] [--max-runtime 30m|--no-max-runtime] --goal TEXT [--agent AGENT]\n   or: foreman tell <id> TEXT\n   or: foreman status [--wait DURATION] [--after SEQ] [--watch] [--json] <id>\n   or: foreman log <id> [-f]\n   or: foreman interrupt <id>   (ESC — breaks a tool loop)\n   or: foreman list\n   or: foreman --once --agent AGENT --instruction TEXT",
 }
 
 const defaultForemanMaxRuntime = 30 * time.Minute
@@ -138,6 +138,8 @@ func runStart(rc *tool.RunContext, flags map[string]string, args []string, jsonO
 		Runner:          runner,
 		OpeningSendOnce: flags["opening-send-once"] == "true",
 		AllowUnsafe:     flags["yolo"] == "true",
+		Sandbox:         flags["sandbox"],
+		WritableRoots:   splitWritableRoots(flags["writable-root"]),
 	})
 	if err != nil {
 		return fail(rc, jsonOut, err)
@@ -160,6 +162,13 @@ func runStart(rc *tool.RunContext, flags map[string]string, args []string, jsonO
 		}
 	}
 	return 0
+}
+
+func splitWritableRoots(value string) []string {
+	if value = strings.TrimSpace(value); value == "" {
+		return nil
+	}
+	return []string{value}
 }
 
 func runServe(rc *tool.RunContext, args []string) int {

@@ -41,17 +41,18 @@ const schemaVersion = "bashy-chat-v1"
 type Options struct {
 	Agent string
 	// Catalog pins fleet resolution for an embedded caller. Nil uses the host catalog.
-	Catalog     *fleet.Catalog
-	Role        string
-	Task        string
-	Instruction string
-	Files       []string
-	Context     []string
-	Cwd         string
-	Timeout     time.Duration
-	Sandbox     string
-	JSON        bool
-	DryRun      bool
+	Catalog       *fleet.Catalog
+	Role          string
+	Task          string
+	Instruction   string
+	Files         []string
+	Context       []string
+	Cwd           string
+	Timeout       time.Duration
+	Sandbox       string
+	WritableRoots []string
+	JSON          bool
+	DryRun        bool
 	// ReadOnly launches the agent with NO write authority: the approval-gate
 	// kill-switches are stripped from its argv and a sandboxing tool is pinned to
 	// its read-only mode.
@@ -215,16 +216,22 @@ type LaunchProfile struct {
 }
 
 func toAgentLaunchOptions(opt Options) agentlaunch.Options {
+	workspace := ""
+	if strings.TrimSpace(opt.Sandbox) == "workspace-write" && !opt.ReadOnly {
+		workspace = opt.Cwd
+	}
 	return agentlaunch.Options{
-		Sandbox:     opt.Sandbox,
-		ReadOnly:    opt.ReadOnly,
-		Attended:    opt.Attended,
-		AllowUnsafe: opt.AllowUnsafe,
-		DryRun:      opt.DryRun,
-		Steer:       opt.Steer,
-		Fork:        opt.Fork,
-		Session:     opt.Session,
-		ACP:         opt.ACP,
+		Sandbox:       opt.Sandbox,
+		Workspace:     workspace,
+		WritableRoots: append([]string(nil), opt.WritableRoots...),
+		ReadOnly:      opt.ReadOnly,
+		Attended:      opt.Attended,
+		AllowUnsafe:   opt.AllowUnsafe,
+		DryRun:        opt.DryRun,
+		Steer:         opt.Steer,
+		Fork:          opt.Fork,
+		Session:       opt.Session,
+		ACP:           opt.ACP,
 	}
 }
 

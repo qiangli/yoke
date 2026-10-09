@@ -198,6 +198,8 @@ func (s *Session) liveSessionOptions(prompt string, sink io.Writer, timeout time
 		Timeout:         timeout,
 		ReadOnly:        false, // a foreman's agent is here to DO the work
 		AllowUnsafe:     s.state.AllowUnsafe,
+		Sandbox:         s.state.Sandbox,
+		WritableRoots:   append([]string(nil), s.state.WritableRoots...),
 		Mode:            "foreman",
 		Task:            s.state.ID,
 	}
