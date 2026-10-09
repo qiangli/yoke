@@ -84,6 +84,9 @@ func RegisteredEntry(s RegisteredSpec) Entry {
 	// let an under-declared or unknown registered command read as safe. A
 	// specific invocation's reversibility is established in the D1 action record.
 	e.Reversibility = RevIrreversible
+	// Likewise the stability tier: a registered record is declared by nobody
+	// on the release ladder, so it reports the entry tier, never a promise.
+	e.Stability = StabilityExperimental
 	return e
 }
 

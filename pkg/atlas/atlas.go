@@ -234,11 +234,14 @@ type Entry struct {
 	// inferred for a table row; coverage-ratcheted like Effects). Worst case over
 	// the whole flag surface. See the Rev* constants and ReversibilityConsistency.
 	Reversibility string
-	AliasOf       string   // e.g. docker → podman, upgrade → self
-	Origin        string   // provenance (closed vocab, exclusive); every entry has one
-	Posix         bool     // one of the 116 POSIX-required names (cross-cuts Origin)
-	OS            []string // platforms the command is supported on (closed vocab; platform.go)
-	Partial       []string // supported platforms where it runs with a documented gap
+	// Stability is the release stability tier (closed vocab; curated via stab(),
+	// never inferred; verb-coverage-ratcheted). See the Stability* constants.
+	Stability string
+	AliasOf   string   // e.g. docker → podman, upgrade → self
+	Origin    string   // provenance (closed vocab, exclusive); every entry has one
+	Posix     bool     // one of the 116 POSIX-required names (cross-cuts Origin)
+	OS        []string // platforms the command is supported on (closed vocab; platform.go)
+	Partial   []string // supported platforms where it runs with a documented gap
 
 	// Web declares a browser UI, and is how `bashy web-console` discovers what
 	// to put on the start page without a hardcoded table. Nil = no web surface.
@@ -360,6 +363,36 @@ func Effects() []string {
 func Reversibilities() []string {
 	return []string{RevReadonly, RevIdempotent, RevReversible, RevCompensable, RevIrreversible}
 }
+
+// Release stability tiers (closed vocabulary — bashy
+// docs/release-roadmap-and-versioning.md §Stability tiers). The tier is the
+// five-point bar's point (1): what a verb PROMISES about its shape, separate
+// from the execution Tier it runs in. A feature enters at experimental and
+// graduates only on evidence — a named consumer and a versioned envelope —
+// never on age; nothing is supported before the post-1.0 foundation gate.
+const (
+	// StabilityExperimental — may change or disappear without notice; a
+	// change is a patch. The entry tier and the fail-closed default.
+	StabilityExperimental = "experimental"
+	// StabilityPreview — shape believed settled and validated by a real
+	// reader; a breaking change is announced with a migration note (minor).
+	StabilityPreview = "preview"
+	// StabilitySupported — bound by the version rules; a break is a major.
+	StabilitySupported = "supported"
+)
+
+// Stabilities returns the closed stability vocabulary in graduation order
+// (entry tier first). The order IS the ladder, so it is not sorted.
+func Stabilities() []string {
+	return []string{StabilityExperimental, StabilityPreview, StabilitySupported}
+}
+
+// Stability is NEVER inferred. A curated verb row is declared by hand via
+// stab(); a DERIVED entry (RegistryEntry, RegisteredEntry) is not a curated
+// row and carries no validated tier, so it takes the entry tier,
+// StabilityExperimental — a reader must never mistake "nobody declared" for a
+// promise. Tool rows (the certified coreutils package) are outside the Yoke
+// ladder and stay unclassified unless a front door declares one (graph).
 
 // Reversibility is NEVER inferred. A curated table row is classified by hand
 // via rev(); a DERIVED entry — a declarative-registry CLI (RegistryEntry) or an
@@ -525,6 +558,8 @@ func RegistryEntry(tier int) Entry {
 		// is anything the child does. Derived, not a curated row, so it takes the
 		// fail-closed default: irreversible (never inferred from effects).
 		Reversibility: RevIrreversible,
+		// Derived, not declared: the entry tier, never a promise.
+		Stability: StabilityExperimental,
 	}
 }
 
@@ -830,6 +865,35 @@ func rev(class string, names ...string) {
 			continue
 		}
 		panic(fmt.Sprintf("atlas: reversibility %q names unknown command %q", class, n))
+	}
+}
+
+// stab declares the release stability tier of existing entries (tool OR verb).
+// An unknown name, an unknown tier, OR a name already declared panics, so the
+// table self-checks at init: every row is declared exactly once, by hand. The
+// coverage ratchet (stability_test.go) asserts no VERB is left undeclared.
+func stab(tier string, names ...string) {
+	if !slices.Contains(Stabilities(), tier) {
+		panic(fmt.Sprintf("atlas: invalid stability %q (one of %v)", tier, Stabilities()))
+	}
+	for _, n := range names {
+		if e, ok := tools[n]; ok {
+			if e.Stability != "" {
+				panic(fmt.Sprintf("atlas: stability of %q already set to %q", n, e.Stability))
+			}
+			e.Stability = tier
+			tools[n] = e
+			continue
+		}
+		if e, ok := verbs[n]; ok {
+			if e.Stability != "" {
+				panic(fmt.Sprintf("atlas: stability of %q already set to %q", n, e.Stability))
+			}
+			e.Stability = tier
+			verbs[n] = e
+			continue
+		}
+		panic(fmt.Sprintf("atlas: stability %q names unknown command %q", tier, n))
 	}
 }
 
@@ -1717,6 +1781,60 @@ func init() {
 		"kopia", "kubectl", "helm", "dks", "commands", "pair", "judge", "gate",
 		"conform", "verify", "run", "tessaro", "login", "sota",
 		// toolchain provisioners: download + run arbitrary code (mod runs go)
+		"go", "mod", "cmake", "clang", "zig", "node", "npm", "npx", "pnpm", "yarn",
+		"python", "pip", "uv", "mise", "cargo", "rustc", "rustup", "rust", "pwsh",
+	)
+
+	// --- release stability tier -----------------------------------------------
+	//
+	// The five-point bar's point (1): every verb DECLARES its tier (bashy
+	// docs/release-roadmap-and-versioning.md §Stability tiers; the v1.0.0
+	// evidence table is bashy docs/release-bar-v1.generated.md). Declared
+	// BEFORE the alias pass so a plural spelling inherits its noun's tier;
+	// an alias declared with AliasOf directly (audit → inspect, verify →
+	// conform, …) is listed here beside its target and must match it.
+	//
+	// preview is declared only where the release bar already records BOTH a
+	// named consumer AND a versioned JSON envelope probe for the verb, and the
+	// embedding shell does not mark it experimental (curated-hidden). Naming
+	// a new consumer does not promote a verb here: the bar records it first,
+	// the tier follows. Nothing is supported before the post-1.0 foundation
+	// gate. genie is preview by the roadmap's own declaration (the reference
+	// agent ships at preview).
+	stab(StabilityPreview,
+		"sprint", "todo", "weave", "dag", // embedded bashy skill + loom-v2 / dag-v1
+		"mb", "messages", // embedded bashy skill + bashy-mb-v1 (messages is mb's alias)
+		"meet",           // force-agent-shell skill + bashy-meet-service-v1
+		"inbox", "whois", // bashy / inbox skills + bashy-inbox-v1 / bashy-whois-v1
+		"agent",                                 // conductor skill + bashy-fleet-list-v1 (agents inherits)
+		"inspect", "context", "audit", "doctor", // bashy skill + bashy-context-v1; the last three are inspect's aliases
+		"commands",      // bashy skill + bashy-commands-v1
+		"ollama",        // llm model door (engine argv) + bashy-ollama-status-v1
+		"install-agent", // force-agent-shell skill + bashy-install-agent-v1
+		"skill",         // bashy skill + bashy-skill-probe-v1
+		"genie",         // roadmap: the reference agent ships at preview
+	)
+	// Everything else enters at experimental: no named consumer, no versioned
+	// envelope on the bar, or curated-hidden in the embedding shell (supervise,
+	// mcp, check, conform, run, lexicon, sota, self, web, podman, docker).
+	// model/tool/chat/llm/verify/kb/graph/craft have readers named in the
+	// Story 1533 report; they graduate when the bar records them.
+	stab(StabilityExperimental,
+		// curated-hidden in bashy (status: experimental) — never promoted here
+		"supervise", "judge", "pair", "sdlc", "schedule", "herald", "mcp",
+		"lexicon", "sota", "check", "conform", "verify", "run", "podman", "docker", "self",
+		"bootstrap", "upgrade", "web",
+		// v1.0.0 list, consumer or envelope still missing on the bar
+		"ping", "bus", "notify", "app", "model", "tool", "chat", "invoke",
+		"llm", "kb", "graph", "craft", "ask", "oci", "sandbox", "loom", "ycode",
+		// orchestration / knowledge / fleet verbs outside the v1.0.0 table
+		"agentic", "capability", "claim", "coach", "define", "delegate", "dks",
+		"gate", "handoff", "leaderboard", "login", "mirror", "otel", "peer",
+		"person", "resume", "search", "secret", "stats", "steward", "tessaro",
+		// engines, forges and managed externals fronted by a verb
+		"act", "act-runner", "curl", "gh", "git", "git-scm", "helm", "kopia",
+		"kubectl", "rclone", "seaweedfs", "zot",
+		// toolchain provisioners
 		"go", "mod", "cmake", "clang", "zig", "node", "npm", "npx", "pnpm", "yarn",
 		"python", "pip", "uv", "mise", "cargo", "rustc", "rustup", "rust", "pwsh",
 	)
