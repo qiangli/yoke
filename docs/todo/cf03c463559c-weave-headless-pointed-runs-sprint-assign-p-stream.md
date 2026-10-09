@@ -8,7 +8,6 @@ priority: p1
 labels:
     - weave
 created: 2026-09-30T13:04:10.311815Z
-weave: 2
 assignee: codex-gpt5.6-terra
 sprint: 379
 sprint_id: 908c2ac2-e7bc-55fe-86bd-d25046ac4684

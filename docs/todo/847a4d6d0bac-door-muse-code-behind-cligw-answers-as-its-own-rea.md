@@ -8,7 +8,6 @@ priority: p1
 labels:
     - door
 created: 2026-09-30T11:33:41.135676Z
-weave: 1
 assignee: muse-conductor
 sprint: 379
 sprint_id: 908c2ac2-e7bc-55fe-86bd-d25046ac4684
