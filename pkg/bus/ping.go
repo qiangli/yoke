@@ -42,7 +42,9 @@ func NewPingCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "ping [<target> [<message>...]]",
 		Short: "read the board, message someone on it, or ICMP a host",
-		Long: `ping is the front door to this host's message board, and to the classic command.
+		Long: InboxReaderLine + `
+
+ping is the front door to this host's message board, and to the classic command.
 
   bashy ping                          what is new for you (same as ` + "`bashy mb`" + `)
   bashy ping steward "..."            message whoever holds the steward seat

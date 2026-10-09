@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/qiangli/yoke/pkg/agentpty"
+	"github.com/qiangli/yoke/pkg/bus"
 	"github.com/qiangli/yoke/pkg/room"
 )
 
@@ -140,7 +141,11 @@ func newChatTimelineCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "timeline",
 		Short: "print the host room's event timeline (join/leave/steer/status/note)",
-		Args:  cobra.NoArgs,
+		Long: bus.InboxReaderLine + `
+
+timeline prints the host room's event log — join/leave/steer/status/note. It is
+the raw append-only record; for messages addressed to you, read 'bashy inbox'.`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			events, err := room.Timeline(n)
 			if err != nil {

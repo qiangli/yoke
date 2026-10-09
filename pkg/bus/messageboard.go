@@ -65,7 +65,9 @@ func NewMessageBoardCmd() *cobra.Command {
 		Use:     "mb",
 		Aliases: []string{"messages"},
 		Short:   "the host message board: read what was posted, post to others",
-		Long: `mb is the host's message board — one shared, append-only board every agent
+		Long: InboxReaderLine + `
+
+mb is the host's message board — one shared, append-only board every agent
 and human on this machine posts to and reads from.
 
   bashy mb                      what is new for you (marks it read)

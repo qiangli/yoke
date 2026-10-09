@@ -40,13 +40,21 @@ import (
 // SchemaVersion tags every JSON envelope this package emits.
 const SchemaVersion = "bashy-bus-v1"
 
+// InboxReaderLine is the one-line pointer every board-reading front door opens
+// its help with, so a reader of mb / bus / ping / the chat timeline learns the
+// cursor-safe `bashy inbox` view before anything else. Kept here as the single
+// source of truth so the wording stays identical across every reader surface.
+const InboxReaderLine = "Messages to you: bashy inbox (peek by default; --from/--search/--since; reply with bashy mb send)"
+
 // NewBusCmd returns the `bus` command tree — the host-agnostic entry point a
 // front end mounts (e.g. `bashy bus`), mirroring secrets.NewSecretsCmd.
 func NewBusCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "bus",
 		Short: "agent notification bus: publish a change, watch for one",
-		Long: `bus is how agents on this host tell each other something changed.
+		Long: InboxReaderLine + `
+
+bus is how agents on this host tell each other something changed.
 
 It is the push half of a pair: 'bashy kb' holds what is TRUE about the host and
 is read when an agent goes looking; the bus carries what just CHANGED and
