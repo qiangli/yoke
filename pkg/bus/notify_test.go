@@ -3,6 +3,7 @@ package bus
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -219,5 +220,47 @@ func TestNotifyJSONFailureIsNonzeroAndMachineReadable(t *testing.T) {
 	}
 	if got.State != StateFailed || got.Error == "" {
 		t.Fatalf("failure receipt = %+v", got)
+	}
+}
+
+func TestNotifyRefusalNeverFallsBackToLabelCursor(t *testing.T) {
+	for _, kind := range []string{"retired", "ambiguous"} {
+		t.Run(kind, func(t *testing.T) {
+			isolate(t)
+			s := instStore(t)
+			a := openEsme(t, s, "Ada")
+			target, reason := "Ada", ReasonRetired
+			if kind == "retired" {
+				retire(t, s, a.UUID)
+			} else {
+				openEsme(t, s, "Bea")
+				target, reason = "esme", ReasonAmbiguous
+			}
+			if err := writeCursor(target, 0); err != nil {
+				t.Fatal(err)
+			}
+			asked := relaySpy(t)
+			before := timelineHigh()
+			for _, send := range []func() error{
+				func() error { return NotifyEvent("tester", target, "hello") },
+				func() error { _, _, err := runNotifyCommand(t, "--as", "tester", target, "hello"); return err },
+			} {
+				err := send()
+				var re *RecipientError
+				if !errors.As(err, &re) || re.Reason != reason || !Refusal(err) {
+					t.Errorf("refusal = %v, want %s", err, reason)
+				}
+				hint := "its archived mail:"
+				if kind == "ambiguous" {
+					hint = "address one by label or UUID:"
+				}
+				if err == nil || !strings.Contains(err.Error(), hint) {
+					t.Errorf("missing actionable lookup: %v", err)
+				}
+			}
+			if timelineHigh() != before || len(*asked) != 0 {
+				t.Fatalf("refused target posted or relayed: %v", *asked)
+			}
+		})
 	}
 }

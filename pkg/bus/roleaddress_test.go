@@ -8,30 +8,31 @@ func withHostRoles(t *testing.T, roles ...HostRole) {
 	t.Cleanup(func() { HostRoles = nil })
 }
 
-// THE UNIFICATION, stated as a test. A post addressed to a role on this host is
-// DIRECTED at whoever reads the board — no --as, no principal, no setup.
-//
-// That is what lets a third-party TUI holding the steward seat run `bashy mb`
-// and see the seat's mail. A seat is host-and-login scoped rather than tied to
-// an identity, and the board's rule has always been that addressing says who
-// should ACT, never who may read.
-func TestDirected_RoleMailIsDirectedAtAnyReaderOnThisHost(t *testing.T) {
-	withHostRoles(t, HostRole{Label: "steward", Topic: "steward.dragon-u501"})
+func TestDirected_RoleMailRequiresHolderAuthorization(t *testing.T) {
+	withHostRoles(t, HostRole{Label: "steward", Topic: "steward.test", Holder: "holder"})
+	prev := RoleReaderAuthorizer
+	t.Cleanup(func() { RoleReaderAuthorizer = prev })
+	p := Post{To: "steward.test"}
+	RoleReaderAuthorizer = nil
+	if p.Directed("holder") || p.Directed(p.To) {
+		t.Fatal("nil authorizer admitted role mail")
+	}
+	RoleReaderAuthorizer = AuthorizeByHolder
+	if !p.Directed("holder") || p.Directed("other") || p.Directed(p.To) {
+		t.Fatal("role holder authorization bypassed")
+	}
+	if !(Post{To: "holder"}).Directed("holder") {
+		t.Fatal("personal mail regressed")
+	}
+}
 
-	p := Post{To: "steward.dragon-u501", Body: "volunteering as conductor"}
-	for _, reader := range []string{"codex-gpt5.6-sol", "claude-opus5", "qiangli"} {
-		if !p.Directed(reader) {
-			t.Errorf("role mail is not directed at %q — a seat's mail must reach whoever holds it, whatever they are called", reader)
+func TestAuthorizeByHolder_InstancePrincipal(t *testing.T) {
+	const id = "11111111-1111-4111-8111-111111111111"
+	withHostRoles(t, HostRole{Label: "conductor:22", Topic: "conductor.22", Holder: id})
+	for _, reader := range []string{id, "instance/" + id, "dhnt:agent/" + id} {
+		if !AuthorizeByHolder("conductor.22", reader) {
+			t.Errorf("holder %q refused", reader)
 		}
-	}
-
-	// An agent's own mail is unaffected: still directed only at that agent.
-	q := Post{To: "codex-gpt5.6-sol", Body: "yours alone"}
-	if q.Directed("claude-opus5") {
-		t.Error("an agent-addressed post leaked to another agent")
-	}
-	if !q.Directed("codex-gpt5.6-sol") {
-		t.Error("an agent-addressed post stopped reaching its own agent")
 	}
 }
 
@@ -90,5 +91,25 @@ func TestRoleAddressing_UnwiredHostIsUnchanged(t *testing.T) {
 	}
 	if (Post{To: "steward.dragon-u501"}).Directed("anyone") {
 		t.Error("role mail was directed with no host wired")
+	}
+}
+
+func TestAuthorizeByHolder_DeputyUUIDAndVacancy(t *testing.T) {
+	const id = "11111111-1111-4111-8111-111111111111"
+	withHostRoles(t, HostRole{Label: "deputy:321", Topic: "deputy.321", Holder: id})
+	prev := RoleReaderAuthorizer
+	t.Cleanup(func() { RoleReaderAuthorizer = prev })
+	p := Post{To: "deputy.321"}
+	RoleReaderAuthorizer = nil
+	if p.Directed(id) {
+		t.Fatal("unwired deputy mail admitted")
+	}
+	RoleReaderAuthorizer = AuthorizeByHolder
+	if !p.Directed(id) || p.Directed("other") {
+		t.Fatal("deputy holder authorization failed")
+	}
+	withHostRoles(t, HostRole{Label: "deputy:321", Topic: "deputy.321"})
+	if p.Directed(id) {
+		t.Fatal("vacant deputy mail admitted")
 	}
 }

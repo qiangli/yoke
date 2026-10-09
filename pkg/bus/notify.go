@@ -45,7 +45,10 @@ func NotifyEvent(principal, target, subject string) error {
 	if err := validateNotifySubject(subject); err != nil {
 		return err
 	}
-	addr, _, ok := resolveNotifyTarget(target)
+	addr, _, ok, err := resolveNotifyTarget(target)
+	if err != nil {
+		return err
+	}
 	if !ok {
 		return unresolvedTargetError(target)
 	}
@@ -128,7 +131,10 @@ deliberately absent.`,
 				return notifyFailure(cmd, jsonOut, "", target, subject,
 					fmt.Errorf("notify: sender identity is required; pass --as or set BASHY_PRINCIPAL"))
 			}
-			addr, kind, ok := resolveNotifyTarget(target)
+			addr, kind, ok, err := resolveNotifyTarget(target)
+			if err != nil {
+				return notifyFailure(cmd, jsonOut, principal, target, subject, err)
+			}
 			if !ok {
 				// A colleague on another host: the doorbell rides the session
 				// relay as a message (topic "notify") and is delivered into
@@ -297,15 +303,20 @@ func findNotificationSeq(after int64, principal, to, subject string) int64 {
 // then accepts a name proven by this private channel's own cursor. That final
 // case matters for a bus-only subscriber that has never joined the public board:
 // its existing inbox is evidence, not a guessed identity.
-func resolveNotifyTarget(target string) (addr, kind string, ok bool) {
-	if addr, kind, ok := ResolveSendTarget(target); ok {
-		return addr, kind, true
+func resolveNotifyTarget(target string) (addr, kind string, ok bool, err error) {
+	rec, err := ResolveRecipient(target)
+	if err == nil {
+		return rec.Addr, rec.Kind, true, nil
+	}
+	// A cursor cannot resurrect a retired identity or disambiguate a family.
+	if Refusal(err) {
+		return "", "", false, err
 	}
 	target = strings.TrimSpace(target)
 	if _, ok := inboxCursorSeq(target); ok {
-		return target, TargetReader, true
+		return target, TargetReader, true, nil
 	}
-	return "", "", false
+	return "", "", false, nil
 }
 
 // inboxDeliveryState applies the canonical Delivery vocabulary to the bus

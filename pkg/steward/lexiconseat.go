@@ -24,6 +24,7 @@ import (
 func init() {
 	lexicon.SeatSource = seatsForLexicon
 	bus.RegisterHostRoles(rolesForBoard)
+	bus.RoleReaderAuthorizer = bus.AuthorizeByHolder
 }
 
 // rolesForBoard makes `steward` an address on the board.
@@ -46,6 +47,7 @@ func rolesForBoard() []bus.HostRole {
 	if st, err := Open(""); err == nil {
 		if view, err := st.Status(time.Now()); err == nil && !view.Authority.Vacant {
 			role.Holder = view.Authority.Holder.Name
+			role.HolderInstance = instanceUUIDOf(view.Authority.Holder)
 		}
 	}
 	out := []bus.HostRole{role}

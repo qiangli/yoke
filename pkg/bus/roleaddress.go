@@ -42,6 +42,9 @@ type HostRole struct {
 	// inbox for this role. Empty means vacant or unknown; the public board
 	// address remains valid, but no generic reader may advance role state.
 	Holder string
+	// HolderInstance is the current holder UUID, captured by the seat owner.
+	// Holder remains available for legacy registered-name readers.
+	HolderInstance string
 }
 
 // HostRoles lists the addressable roles on this host, injected by whoever owns
@@ -145,12 +148,8 @@ func RoleHolderFor(label string) (holder string, ok bool) {
 
 // AddressedToRole reports a post addressed to a role that exists on this host.
 //
-// This is what makes role mail DIRECTED for a reader rather than background
-// chatter, and the scoping is deliberate: a seat is host-and-login scoped, so
-// every session on this host can see and act on its mail. That matches the
-// board's existing rule — public by construction, where addressing says who
-// should ACT and never who may read — and it is what lets a raw third-party TUI
-// read the seat's mail with no identity, no flag and no setup.
+// Authorization is separate: a recognized role topic reaches its current
+// holder only when roleReaderAllowed approves the reader.
 func AddressedToRole(to string) bool {
 	if strings.TrimSpace(to) == "" || HostRoles == nil {
 		return false
@@ -163,26 +162,37 @@ func AddressedToRole(to string) bool {
 	return false
 }
 
-// RoleReaderAuthorizer decides whether reader may treat mail to a role topic as
-// directed at it. Nil keeps the board's historical rule — role mail is visible
-// to every reader on this host — because a reader name is only a claim until
-// the session identity layer authenticates it (a UUID, a label or --as proves
-// nothing by itself). The authenticated-occupancy owners wire a real check
-// here once reader identity is authenticated; AuthorizeByHolder is the check
-// they can install, and it is decided on CURRENT occupancy at read time so a
-// handover re-targets mail already in flight.
+// RoleReaderAuthorizer decides whether reader may treat role mail as directed.
+// Unwired hosts deny role mail. Seat owners install AuthorizeByHolder against
+// current occupancy; reader authentication remains the host's responsibility.
 var RoleReaderAuthorizer func(topic, reader string) bool
 
 // AuthorizeByHolder authorizes only the principal that holds the seat right
 // now. A vacant seat authorizes nobody, so its mail is retained (see
 // canArchivePost), not delivered to whoever happens to read.
 func AuthorizeByHolder(topic, reader string) bool {
-	holder, ok := RoleHolderFor(topic)
-	return ok && strings.EqualFold(strings.TrimSpace(holder), strings.TrimSpace(reader))
+	reader = strings.TrimSpace(reader)
+	if reader == "" || HostRoles == nil {
+		return false
+	}
+	for _, role := range HostRoles() {
+		if !strings.EqualFold(role.Topic, topic) && !strings.EqualFold(role.Label, topic) {
+			continue
+		}
+		if id, ok := ExplicitInstanceID(reader); ok {
+			holder := role.HolderInstance
+			if holder == "" {
+				holder, _ = ExplicitInstanceID(role.Holder)
+			}
+			return holder != "" && strings.EqualFold(holder, id)
+		}
+		return role.Holder != "" && strings.EqualFold(strings.TrimSpace(role.Holder), reader)
+	}
+	return false
 }
 
 func roleReaderAllowed(topic, reader string) bool {
-	return RoleReaderAuthorizer == nil || RoleReaderAuthorizer(topic, reader)
+	return RoleReaderAuthorizer != nil && RoleReaderAuthorizer(topic, reader)
 }
 
 // resolveRoleRecipient resolves a role label to its durable address.

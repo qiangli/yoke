@@ -149,9 +149,10 @@ func TestRoleReaderAuthorizer_HolderOnlyAndVacancyRetained(t *testing.T) {
 	withHostRoles(t, HostRole{Label: "conductor:22", Topic: "conductor.22", Holder: "claude-a"})
 	p := Post{To: "conductor.22", Body: "x", Seq: 1}
 
-	// Unwired: the historical host-visible rule is unchanged and documented.
-	if !p.Directed("anyone") {
-		t.Fatal("default behavior changed")
+	// Unwired role mail must fail closed.
+	RoleReaderAuthorizer = nil
+	if p.Directed("anyone") || p.Directed(p.To) {
+		t.Fatal("unwired role mail was directed to a reader")
 	}
 	RoleReaderAuthorizer = AuthorizeByHolder
 	if !p.Directed("claude-a") || p.Directed("intruder") || p.Directed("") {

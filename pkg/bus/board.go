@@ -117,6 +117,9 @@ func (p Post) Directed(reader string) bool {
 	if to == "" {
 		return false
 	}
+	if AddressedToRole(to) {
+		return roleReaderAllowed(to, reader)
+	}
 	if strings.EqualFold(to, strings.TrimSpace(reader)) {
 		return true
 	}
@@ -125,12 +128,7 @@ func (p Post) Directed(reader string) bool {
 		rid, rok := ExplicitInstanceID(reader)
 		return rok && strings.EqualFold(rid, toID)
 	}
-	// A post addressed to a ROLE on this host is directed at whoever is reading,
-	// because a seat is host-and-login scoped rather than tied to an identity.
-	// That is what lets a third-party TUI read the seat's mail with no --as, no
-	// principal and no setup — and it matches the board's existing rule that
-	// addressing says who should ACT, never who may read.
-	return AddressedToRole(to) && roleReaderAllowed(to, reader)
+	return false
 }
 
 // Audiences describes a post's intended audience for display.

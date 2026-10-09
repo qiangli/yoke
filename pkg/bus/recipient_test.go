@@ -186,6 +186,9 @@ func TestResolveRecipient_RetiredLabelDoesNotFallToReaderCursor(t *testing.T) {
 }
 
 func TestResolveRecipient_RoleAddressSurvivesHandoff(t *testing.T) {
+	prev := RoleReaderAuthorizer
+	RoleReaderAuthorizer = AuthorizeByHolder
+	t.Cleanup(func() { RoleReaderAuthorizer = prev })
 	isolate(t)
 	instStore(t)
 	withHostRoles(t, HostRole{Label: "conductor:22", Topic: "conductor.22", Holder: "claude-a"})

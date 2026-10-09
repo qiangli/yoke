@@ -1888,12 +1888,8 @@ func newDMCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("meet: derive presence for %s: %w", peer, err)
 			}
-			if !live && target.Party != nil {
-				return fmt.Errorf("meet: instance %s (%s) has no live Meet session, and starting one for an instance is not wired here; "+
-					"the message can still be queued to it with `bashy mb send %s \"...\"` (acceptance is not proof it was read)",
-					target.Party.UUID, target.Party.Label, target.Party.UUID)
-			}
-			if !live {
+
+			if !live && target.Party == nil {
 				dm, err := ensureRelayDM(peer, caller)
 				if err != nil {
 					return err
@@ -1913,6 +1909,10 @@ func newDMCmd() *cobra.Command {
 			})
 			if err != nil {
 				return err
+			}
+			if !live {
+				fmt.Fprintf(cmd.OutOrStdout(), "board DM @%s · room %s · unverified: no read evidence for %s; messages queue for instance %s — acceptance is not proof it was delivered\n", st.Name, roomLabel(st), target.Party.Label, peer)
+				return nil
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "board DM @%s · room %s · %s is live; messages wait for its next `meet read`\n",
 				st.Name, roomLabel(st), peer)

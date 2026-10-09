@@ -135,18 +135,57 @@ func TestRoutableSeat_ActiveInstanceYesRetiredNo(t *testing.T) {
 	}
 }
 
-func TestDM_ColdInstanceIsHonestlyRefused(t *testing.T) {
+func TestDM_ColdInstanceQueuesByUUIDWithWarning(t *testing.T) {
 	s := meetInstances(t)
+	t.Setenv("BASHY_MEET_DIR", t.TempDir())
 	a := openInst(t, s, "Ada")
+	prev := dmPeerLive
+	dmPeerLive = func(string) (bool, error) { return false, nil }
+	t.Cleanup(func() { dmPeerLive = prev })
 	cmd := newDMCmd()
 	cmd.SetArgs([]string{"--as", "codex", a.UUID})
-	cmd.SetOut(new(strings.Builder))
-	cmd.SetErr(new(strings.Builder))
-	err := cmd.Execute()
-	if err == nil {
-		t.Fatal("a cold instance DM was reported as opened")
+	var out strings.Builder
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "bashy mb send") {
-		t.Errorf("error should point at the queueing path: %v", err)
+	for _, want := range []string{"no read evidence", "not proof", "unverified"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q in %s", want, out.String())
+		}
+	}
+	name, err := directMessageRoomName("codex", a.UUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := resolveMeeting("@" + name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := loadState(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.Board {
+		t.Fatal("cold instance DM must queue on a board")
+	}
+	ev, err := PostAs(id, "codex", a.UUID, "queued for Ada")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.To != a.UUID || ev.ToParty == nil || ev.ToParty.UUID != a.UUID {
+		t.Fatalf("queued event: %+v", ev)
+	}
+	if _, err := s.Retire(a.UUID, func(fleet.Instance) ([]string, error) { return []string{`{}`}, nil }); err != nil {
+		t.Fatal(err)
+	}
+	fresh := openInst(t, s, "Ada")
+	events, err := readTranscript(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].To != a.UUID || events[0].To == fresh.UUID {
+		t.Fatalf("queued mail followed reused label: %+v", events)
 	}
 }
