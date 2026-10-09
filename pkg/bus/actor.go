@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/qiangli/yoke/pkg/fleet"
+	"github.com/qiangli/yoke/pkg/principal"
 	"github.com/qiangli/yoke/pkg/room"
 )
 
@@ -35,8 +37,13 @@ func HashSessionClaim(raw string) string {
 // and requires an unattributed external harness to prove its live session claim.
 func ResolveAuthoredActor(explicit string) (string, error) {
 	requested := strings.TrimSpace(explicit)
-	principal := strings.TrimSpace(os.Getenv("BASHY_PRINCIPAL"))
-	if self, ok := agentNameFromPrincipal(principal); ok {
+	stamp := strings.TrimSpace(os.Getenv("BASHY_PRINCIPAL"))
+	if id, ok, err := authoredInstanceID(requested, stamp); err != nil {
+		return "", err
+	} else if ok {
+		return resolveInstanceActor(id)
+	}
+	if self, ok := agentNameFromPrincipal(stamp); ok {
 		if requested != "" {
 			claimed := resolveBoardName(requested)
 			if !strings.EqualFold(self, claimed) {
@@ -86,6 +93,103 @@ func ResolveAuthoredActor(explicit string) (string, error) {
 		return resolveRegisteredActorClaim(registered, loginName())
 	}
 	return actor, nil
+}
+
+// authoredInstanceID reports the instance an authored command speaks as: the
+// one the principal is stamped with, or one named by --as. A stamped instance
+// cannot author as anyone else.
+func authoredInstanceID(requested, stamp string) (string, bool, error) {
+	var self string
+	if kind, name, _, err := principal.ParseURN(stamp); err == nil && kind == principal.KindAgent {
+		if id, err := fleet.ParseInstanceUUID(name); err == nil {
+			self = id
+		}
+	}
+	if requested == "" {
+		return self, self != "", nil
+	}
+	asID, asInstance := ExplicitInstanceID(requested)
+	switch {
+	case self == "" && !asInstance:
+		return "", false, nil
+	case self != "" && (!asInstance || !strings.EqualFold(self, asID)):
+		return "", false, authoredActorRefusal(requested, self,
+			fmt.Sprintf("instance %q cannot author as %q", self, requested))
+	}
+	return asID, true, nil
+}
+
+// resolveInstanceActor admits an authored command as an instance whose
+// instance:<uuid> room card is held by this session. It needs no catalog agent
+// name. An unowned instance the process declares (by its stamped principal) is
+// taken on first use, as an unclaimed agent seat is; a seat held by another
+// session is refused.
+func resolveInstanceActor(id string) (string, error) {
+	inst, err := InstanceStoreFn().Get(id)
+	if err != nil {
+		return "", fmt.Errorf("authored communication: instance %s: %w", id, err)
+	}
+	if !inst.Active() {
+		return "", fmt.Errorf("authored communication: instance %s is retired; open a new one with `bashy instance open`", inst.UUID)
+	}
+	addr := inst.MailAddress()
+	card, live, err := room.Find(inst.ClaimID())
+	if err != nil {
+		return "", fmt.Errorf("authored communication: inspect session claim for instance %s: %w", inst.UUID, err)
+	}
+	session := HashSessionClaim(currentInstanceSession(inst))
+	if live {
+		if session != "" && card.SessionClaim != "" &&
+			subtle.ConstantTimeCompare([]byte(card.SessionClaim), []byte(session)) == 1 {
+			return addr, nil
+		}
+		anchor := card.OwnerPID
+		if anchor <= 0 {
+			anchor = card.PID
+		}
+		if anchor > 0 && processHasAncestor(anchor) {
+			return addr, nil
+		}
+		return "", fmt.Errorf("authored communication: instance %s has no matching live session claim; it is driven by a live session in %s — hand off or open a new instance",
+			inst.UUID, orUnreported(card.Cwd))
+	}
+	anchor := os.Getppid()
+	if anchor <= 1 {
+		anchor = os.Getpid()
+	}
+	cwd, _ := os.Getwd()
+	if err := principal.ClaimInstance(inst, principal.InstanceClaim{
+		Session: session, OwnerPID: anchor, Cwd: cwd, Mode: "authored",
+		Task: "seat taken on first authored message",
+	}); err != nil {
+		return "", fmt.Errorf("authored communication: take instance %s: %w", inst.UUID, err)
+	}
+	return addr, nil
+}
+
+func orUnreported(cwd string) string {
+	if cwd = strings.TrimSpace(cwd); cwd != "" {
+		return cwd
+	}
+	return "an unreported directory"
+}
+
+// currentInstanceSession asks the host for the tool-session identifier. The
+// hook is keyed by agent name, so an instance offers the names it can be known
+// by — its label, then its bindings — and the first answer wins.
+func currentInstanceSession(inst fleet.Instance) string {
+	if CurrentSessionClaim == nil {
+		return ""
+	}
+	for _, name := range append([]string{inst.Label}, inst.Bindings...) {
+		if name = strings.TrimSpace(name); name == "" {
+			continue
+		}
+		if raw := strings.TrimSpace(CurrentSessionClaim(name)); raw != "" {
+			return raw
+		}
+	}
+	return ""
 }
 
 func resolveRegisteredActorClaim(actor, claimant string) (string, error) {

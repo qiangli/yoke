@@ -603,3 +603,36 @@ func TestFilterPostsForReaderPreservesAddressingAndRefreshes(t *testing.T) {
 		t.Fatalf("filter changed claim holder: %q", holder)
 	}
 }
+
+// GAP 1. A session stamped with an instance reads its PERSONAL mail without
+// --as: BoardIdentity answers instance/<uuid>, and an explicit --as still wins.
+func TestBoardIdentity_StampedInstanceReadsItsPersonalMail(t *testing.T) {
+	boardInTempHome(t)
+	const id = "aaaaaaaa-1111-2222-3333-444444444444"
+	addr := "instance/" + id
+
+	t.Setenv("BASHY_PRINCIPAL", "dhnt:agent/"+id)
+	if got, err := BoardIdentity(""); err != nil || got != addr {
+		t.Fatalf("principal-stamped identity = %q, %v; want %q", got, err, addr)
+	}
+	t.Setenv("BASHY_PRINCIPAL", "")
+	t.Setenv("BASHY_INSTANCE", id)
+	if got, err := BoardIdentity(""); err != nil || got != addr {
+		t.Fatalf("BASHY_INSTANCE identity = %q, %v; want %q", got, err, addr)
+	}
+	if got, err := BoardIdentity("tester"); err != nil || got != "tester" {
+		t.Fatalf("explicit --as = %q, %v; want it to win", got, err)
+	}
+
+	if err := Publish(Notification{Principal: "conductor:321", To: addr, Body: "personal word"}); err != nil {
+		t.Fatal(err)
+	}
+	who, _ := BoardIdentity("")
+	snap, err := SnapshotInbox(who)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Items) != 1 || !strings.Contains(snap.Items[0].Body, "personal word") {
+		t.Fatalf("the stamped session did not read its personal mail: %+v", snap.Items)
+	}
+}

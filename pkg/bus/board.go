@@ -51,6 +51,7 @@ import (
 
 	"github.com/qiangli/yoke/pkg/agentpty"
 	"github.com/qiangli/yoke/pkg/fleet"
+	"github.com/qiangli/yoke/pkg/principal"
 	"github.com/qiangli/yoke/pkg/room"
 )
 
@@ -647,6 +648,14 @@ func BoardIdentity(as string) (string, error) {
 		// Explicit always wins, including a human inside an agent session who
 		// means to speak as themselves: `--as qiangli`.
 		return resolveBoardName(s), nil
+	}
+	// A session stamped with an instance reads that conversation's PERSONAL
+	// mail. This sits before the agent-principal branch because
+	// dhnt:agent/<uuid> would otherwise be read as an agent nickname.
+	if id, ok := principal.SelfInstanceUUID(); ok {
+		if canonical, err := fleet.ParseInstanceUUID(id); err == nil {
+			return fleet.InstanceAddressPrefix + canonical, nil
+		}
 	}
 	if v := strings.TrimSpace(os.Getenv("BASHY_PRINCIPAL")); v != "" {
 		// `dhnt:agent/Omar` → `Omar` → the catalog's canonical name.

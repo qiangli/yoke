@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/qiangli/yoke/pkg/fleet"
+	"github.com/qiangli/yoke/pkg/principal"
 	"github.com/qiangli/yoke/pkg/room"
 	"github.com/spf13/cobra"
 )
@@ -299,5 +301,96 @@ func TestResolveAuthoredActorDeclaredIdentityTakesUnclaimedSeat(t *testing.T) {
 	t.Setenv("BASHY_AGENT", "agent-x")
 	if _, err := ResolveAuthoredActor("agent-x"); err == nil || !strings.Contains(err.Error(), "no matching live session claim") {
 		t.Fatalf("declared identity overrode a foreign live claim: %v", err)
+	}
+}
+
+const instanceTestUUID = "aaaaaaaa-1111-2222-3333-444444444444"
+
+func openInstanceForTest(t *testing.T) fleet.Instance {
+	t.Helper()
+	store := fleet.NewInstanceStore(t.TempDir())
+	prior := InstanceStoreFn
+	InstanceStoreFn = func() *fleet.InstanceStore { return store }
+	t.Cleanup(func() { InstanceStoreFn = prior })
+	inst, err := store.Open(fleet.Family{Name: "esme-cfg", Display: "Esme", Policy: fleet.PolicySingle,
+		Bindings: []string{"claude:opus5.5"}}, fleet.OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return inst
+}
+
+// GAP 2. A session stamped with dhnt:agent/<uuid> whose instance:<uuid> card
+// carries the current session digest authors as the instance, with no catalog
+// agent name anywhere.
+func TestResolveAuthoredActorAcceptsAHeldInstanceClaim(t *testing.T) {
+	isolateAuthoredActor(t)
+	inst := openInstanceForTest(t)
+	const raw = "instance-session"
+	if err := principal.ClaimInstance(inst, principal.InstanceClaim{
+		Session: HashSessionClaim(raw), OwnerPID: foreignLivePID(t), Cwd: "/tmp/x",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	CurrentSessionClaim = func(string) string { return raw }
+	t.Setenv("BASHY_PRINCIPAL", inst.URN())
+
+	want := inst.MailAddress()
+	if got, err := ResolveAuthoredActor(""); err != nil || got != want {
+		t.Fatalf("actor = %q, %v; want %q", got, err, want)
+	}
+	if got, err := ResolveAuthoredActor(inst.UUID); err != nil || got != want {
+		t.Fatalf("--as <uuid> actor = %q, %v; want %q", got, err, want)
+	}
+	// An instance cannot author as somebody else.
+	if _, err := ResolveAuthoredActor("agent-x"); err == nil {
+		t.Fatal("an instance authored as a different agent")
+	}
+}
+
+// GAP 2, the refusal half: a card held by a DIFFERENT session digest, owned by
+// a process that is not our ancestor, is a competing session.
+func TestResolveAuthoredActorRefusesACompetingInstanceSession(t *testing.T) {
+	isolateAuthoredActor(t)
+	inst := openInstanceForTest(t)
+	if err := principal.ClaimInstance(inst, principal.InstanceClaim{
+		Session: HashSessionClaim("the-owner"), OwnerPID: foreignLivePID(t), Cwd: "/tmp/x",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	CurrentSessionClaim = func(string) string { return "an-impostor" }
+	t.Setenv("BASHY_PRINCIPAL", inst.URN())
+	if got, err := ResolveAuthoredActor(""); err == nil {
+		t.Fatalf("a competing session authored as %q", got)
+	}
+}
+
+// GAP 2: an unknown or retired instance is not an identity.
+func TestResolveAuthoredActorRefusesAnUnknownInstance(t *testing.T) {
+	isolateAuthoredActor(t)
+	openInstanceForTest(t)
+	CurrentSessionClaim = func(string) string { return "s" }
+	t.Setenv("BASHY_PRINCIPAL", "dhnt:agent/"+instanceTestUUID)
+	if got, err := ResolveAuthoredActor(""); err == nil {
+		t.Fatalf("an instance with no record authored as %q", got)
+	}
+}
+
+// GAP 2: an unowned instance the caller names takes its seat on first use,
+// and later commands from the same session are recognised by digest.
+func TestResolveAuthoredActorTakesAnUnownedInstanceOnFirstUse(t *testing.T) {
+	isolateAuthoredActor(t)
+	inst := openInstanceForTest(t)
+	CurrentSessionClaim = func(string) string { return "first-use-session" }
+	if got, err := ResolveAuthoredActor(inst.UUID); err != nil || got != inst.MailAddress() {
+		t.Fatalf("first use = %q, %v", got, err)
+	}
+	card, live, err := room.Find(inst.ClaimID())
+	if err != nil || !live || card.SessionClaim != HashSessionClaim("first-use-session") {
+		t.Fatalf("seat not taken by the session: %+v live=%v err=%v", card, live, err)
+	}
+	t.Setenv("BASHY_PRINCIPAL", inst.URN())
+	if got, err := ResolveAuthoredActor(""); err != nil || got != inst.MailAddress() {
+		t.Fatalf("second command = %q, %v", got, err)
 	}
 }
