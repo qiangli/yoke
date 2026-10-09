@@ -12,6 +12,9 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
+	"runtime"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -94,14 +97,34 @@ func newOllamaServeCmd(opts CmdOptions) *cobra.Command {
 				return err
 			}
 			fmt.Printf("Ollama server starting via system binary %s...\n", bin)
-			c := exec.CommandContext(cmd.Context(), bin, "serve")
-			c.Stdout = os.Stdout
-			c.Stderr = os.Stderr
-			c.Stdin = os.Stdin
-			c.Env = managedServeEnv(os.Environ(), managedPort())
-			return c.Run()
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			return runSystemServe(ctx, bin, managedServeEnv(os.Environ(), managedPort()))
 		},
 	}
+}
+
+// runSystemServe runs `bin serve` in the foreground until it exits or ctx ends.
+// Cancelling ctx sends the child SIGTERM (Kill on Windows) and waits for it, so
+// ollama can stop its own runner children instead of leaving them orphaned.
+func runSystemServe(ctx context.Context, bin string, env []string) error {
+	c := exec.CommandContext(ctx, bin, "serve")
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	c.Stdin = os.Stdin
+	c.Env = env
+	c.Cancel = func() error {
+		if runtime.GOOS == "windows" {
+			return c.Process.Kill()
+		}
+		return c.Process.Signal(syscall.SIGTERM)
+	}
+	c.WaitDelay = 15 * time.Second
+	err := c.Run()
+	if ctx.Err() != nil {
+		return nil
+	}
+	return err
 }
 
 func newOllamaPullCmd(opts CmdOptions) *cobra.Command {
