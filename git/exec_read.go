@@ -1003,17 +1003,55 @@ func nativeCheckout(_ context.Context, dir string, args []string) (*ExecResult, 
 
 	// Handle -b (create and checkout)
 	if args[0] == "-b" {
-		if len(args) < 2 {
-			return nil, ErrUnsupported
+		if len(args) < 2 || len(args) > 3 {
+			return nil, checkoutUnsupported("-b accepts a branch and optional start point")
 		}
 		branchName := args[1]
-		err := wt.Checkout(&gogit.CheckoutOptions{
-			Branch: plumbing.NewBranchReferenceName(branchName),
+		startPoint := "HEAD"
+		if len(args) == 3 {
+			startPoint = args[2]
+		}
+		commit, err := resolveCommit(repo, startPoint)
+		if err != nil {
+			return &ExecResult{Stderr: fmt.Sprintf("fatal: invalid reference: %s\n", startPoint), ExitCode: 128}, nil
+		}
+
+		// A clone made with --no-checkout has an index for HEAD but no
+		// working-tree files. go-git regards those files as local deletions
+		// and rejects its normal merge reset only after creating the branch.
+		// It is safe to populate exactly this state with a hard reset; any
+		// other dirty state remains unsupported before we mutate refs.
+		populate, err := checkoutNeedsPopulate(wt)
+		if err != nil {
+			return nil, checkoutUnsupported("cannot inspect worktree status: %v", err)
+		}
+		if !force && !populate {
+			status, err := wt.Status()
+			if err != nil {
+				return nil, checkoutUnsupported("cannot inspect worktree status: %v", err)
+			}
+			if !status.IsClean() {
+				return nil, checkoutUnsupported("dirty worktree is not safe for a branch-creating checkout")
+			}
+		}
+
+		branchRef := plumbing.NewBranchReferenceName(branchName)
+		oldHead, err := repo.Storer.Reference(plumbing.HEAD)
+		if err != nil {
+			return nil, checkoutUnsupported("cannot read HEAD before checkout: %v", err)
+		}
+		err = wt.Checkout(&gogit.CheckoutOptions{
+			Branch: branchRef,
+			Hash:   commit.Hash,
 			Create: true,
-			Force:  force,
+			Force:  force || populate,
 		})
 		if err != nil {
-			return nil, ErrUnsupported
+			// Checkout creates the branch before changing HEAD/index. Do not
+			// leave a partial native attempt for RunExternal to trip over.
+			_ = repo.Storer.RemoveReference(branchRef)
+			_ = repo.Storer.SetReference(oldHead)
+			return nil, checkoutUnsupported("worktree checkout failed: %v", err)
 		}
 		return &ExecResult{
 			Stdout: fmt.Sprintf("Switched to a new branch '%s'\n", branchName),
@@ -1023,20 +1061,48 @@ func nativeCheckout(_ context.Context, dir string, args []string) (*ExecResult, 
 	// Handle -B (create the branch, or reset it to HEAD if it exists,
 	// then switch to it). This is what loom's reference-clone setup uses.
 	if args[0] == "-B" {
-		if len(args) < 2 {
-			return nil, ErrUnsupported
+		if len(args) != 2 {
+			return nil, checkoutUnsupported("-B accepts exactly one branch name")
 		}
 		branchName := args[1]
 		head, err := repo.Head()
 		if err != nil {
-			return nil, ErrUnsupported
+			return nil, checkoutUnsupported("cannot resolve HEAD: %v", err)
 		}
-		ref := plumbing.NewHashReference(plumbing.NewBranchReferenceName(branchName), head.Hash())
+		populate, err := checkoutNeedsPopulate(wt)
+		if err != nil {
+			return nil, checkoutUnsupported("cannot inspect worktree status: %v", err)
+		}
+		if !force && !populate {
+			status, err := wt.Status()
+			if err != nil {
+				return nil, checkoutUnsupported("cannot inspect worktree status: %v", err)
+			}
+			if !status.IsClean() {
+				return nil, checkoutUnsupported("dirty worktree is not safe for a branch-resetting checkout")
+			}
+		}
+		branchRef := plumbing.NewBranchReferenceName(branchName)
+		oldBranch, branchErr := repo.Storer.Reference(branchRef)
+		if branchErr != nil && !errors.Is(branchErr, plumbing.ErrReferenceNotFound) {
+			return nil, checkoutUnsupported("cannot read branch %q: %v", branchName, branchErr)
+		}
+		oldHead, err := repo.Storer.Reference(plumbing.HEAD)
+		if err != nil {
+			return nil, checkoutUnsupported("cannot read HEAD before checkout: %v", err)
+		}
+		ref := plumbing.NewHashReference(branchRef, head.Hash())
 		if err := repo.Storer.SetReference(ref); err != nil {
-			return nil, ErrUnsupported
+			return nil, checkoutUnsupported("cannot reset branch %q: %v", branchName, err)
 		}
-		if err := wt.Checkout(&gogit.CheckoutOptions{Branch: plumbing.NewBranchReferenceName(branchName), Force: force}); err != nil {
-			return nil, ErrUnsupported
+		if err := wt.Checkout(&gogit.CheckoutOptions{Branch: branchRef, Force: force || populate}); err != nil {
+			if oldBranch == nil {
+				_ = repo.Storer.RemoveReference(branchRef)
+			} else {
+				_ = repo.Storer.SetReference(oldBranch)
+			}
+			_ = repo.Storer.SetReference(oldHead)
+			return nil, checkoutUnsupported("worktree checkout failed: %v", err)
 		}
 		return &ExecResult{
 			Stdout: fmt.Sprintf("Reset branch '%s'\n", branchName),
@@ -1068,6 +1134,31 @@ func nativeCheckout(_ context.Context, dir string, args []string) (*ExecResult, 
 	}
 
 	return nil, ErrUnsupported
+}
+
+func checkoutUnsupported(format string, args ...any) error {
+	return fmt.Errorf("%w: checkout: %s", ErrUnsupported, fmt.Sprintf(format, args...))
+}
+
+// checkoutNeedsPopulate reports the one dirty state produced by `git clone
+// --no-checkout`: depending on the index implementation, go-git reports each
+// path as either deleted from the worktree or deleted from the index.
+func checkoutNeedsPopulate(wt *gogit.Worktree) (bool, error) {
+	status, err := wt.Status()
+	if err != nil {
+		return false, err
+	}
+	if len(status) == 0 {
+		return false, nil
+	}
+	for _, file := range status {
+		missingFromWorktree := file.Staging == gogit.Unmodified && file.Worktree == gogit.Deleted
+		missingFromIndex := file.Staging == gogit.Deleted && file.Worktree == gogit.Unmodified
+		if !missingFromWorktree && !missingFromIndex {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // checkoutSide implements `checkout --theirs|--ours [--] <paths...>`.

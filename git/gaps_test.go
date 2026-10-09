@@ -2,6 +2,8 @@ package git
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
@@ -84,6 +86,72 @@ func TestNativeClone_LocalNoHardlinks(t *testing.T) {
 	// not a hardlink/alternate into src.
 	if _, err := os.Stat(filepath.Join(sandbox, ".git")); err != nil {
 		t.Errorf("sandbox .git missing: %v", err)
+	}
+}
+
+// TestNativeCheckoutCreateBranchNoCheckoutClone makes sure a checkout which
+// falls back to host git has not already created its branch. go-git's
+// Checkout creates the ref before it populates the index/worktree, so native
+// support must be determined before that call.
+func TestNativeCheckoutCreateBranchNoCheckoutClone(t *testing.T) {
+	ctx := context.Background()
+	src := t.TempDir()
+	if _, err := Init(InitOptions{Path: src}); err != nil {
+		t.Fatalf("init source: %v", err)
+	}
+	setLocalIdentity(t, src)
+
+	files := make(map[string]string, 1777)
+	for i := range 1259 {
+		files[fmt.Sprintf("regular/%03d.txt", i)] = "regular\n"
+	}
+	for i := range 518 {
+		files[fmt.Sprintf("executable/%03d.sh", i)] = "#!/bin/sh\nexit 0\n"
+	}
+	commitFiles(t, src, files, "seed")
+	for i := range 518 {
+		if err := os.Chmod(filepath.Join(src, fmt.Sprintf("executable/%03d.sh", i)), 0755); err != nil {
+			t.Fatalf("chmod executable %d: %v", i, err)
+		}
+	}
+	commitFiles(t, src, map[string]string{"modes": "updated\n"}, "record executable modes")
+
+	sha, err := RunChecked(ctx, src, []string{"rev-parse", "HEAD"})
+	if err != nil {
+		t.Fatalf("resolve source HEAD: %v", err)
+	}
+	cloneNoCheckout := func(name string) string {
+		dst := filepath.Join(t.TempDir(), name)
+		cmd := osexec.CommandContext(ctx, "git", "clone", "--local", "--no-hardlinks", "--no-checkout", src, dst)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("clone --no-checkout: %v\n%s", err, out)
+		}
+		return dst
+	}
+	dst := cloneNoCheckout("native")
+
+	branch := "agent/native"
+	res, err := Exec(ctx, dst, []string{"checkout", "-b", branch, strings.TrimSpace(sha)})
+	if err != nil || res.ExitCode != 0 {
+		t.Fatalf("native checkout with start point: result=%+v err=%v", res, err)
+	}
+
+	dst = cloneNoCheckout("fallback")
+	branch = "agent/x"
+	args := []string{"checkout", "--guess", "-b", branch, strings.TrimSpace(sha)}
+	if _, err := Exec(ctx, dst, args); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("native checkout error = %v, want ErrUnsupported", err)
+	}
+	ref, err := Exec(ctx, dst, []string{"rev-parse", "--verify", "refs/heads/" + branch})
+	if err == nil && ref.ExitCode == 0 {
+		t.Fatalf("native refusal created branch %q", branch)
+	}
+	res, err = RunExternal(ctx, dst, args)
+	if err != nil {
+		t.Fatalf("fallback checkout: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("fallback checkout exit %d: %s", res.ExitCode, res.Stderr)
 	}
 }
 
