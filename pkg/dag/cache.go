@@ -128,11 +128,19 @@ func (c *Cache) ExportToDir(dir string) error {
 }
 
 // Fingerprint computes a node's content hash: its body + the hashes of its
-// Sources/Inputs (file or directory, recursive) + its resolved deps'
-// fingerprints (so an upstream change invalidates everything downstream).
-// dir is the document directory; relative operands resolve against it. The
-// deps map carries already-computed dependency fingerprints (callers walk in
-// topological order, so a dep's fingerprint is ready before its dependent's).
+// Sources/Inputs + its resolved deps' fingerprints (so an upstream change
+// invalidates everything downstream). dir is the document directory; relative
+// operands resolve against it. The deps map carries already-computed
+// dependency fingerprints (callers walk in topological order, so a dep's
+// fingerprint is ready before its dependent's).
+//
+// Sources/Inputs entries are glob-expanded (see glob.go): `*`/`?`/classes
+// match within a segment, `**` crosses segments, and a leading `!` excludes.
+// The declared patterns themselves feed the hash (renaming a pattern
+// invalidates), then the sorted matched file labels plus their contents — so
+// adding, deleting, or changing a matching file invalidates while an excluded
+// file does not. Literal paths keep their old meaning (a file's bytes, or a
+// directory's recursive contents).
 func (c *Cache) Fingerprint(n *Node, dir string, depFPs map[string]string) string {
 	h := sha256.New()
 	io.WriteString(h, "body\x00"+n.Task.Body+"\x00")
@@ -142,14 +150,17 @@ func (c *Cache) Fingerprint(n *Node, dir string, depFPs map[string]string) strin
 	paths := append(append([]string{}, n.Task.Sources...), n.Task.Inputs...)
 	sort.Strings(paths)
 	for _, p := range paths {
-		io.WriteString(h, "src\x00"+p+"\x00"+hashPath(filepath.Join(dir, p))+"\x00")
+		io.WriteString(h, "src\x00"+p+"\x00")
 	}
+	io.WriteString(h, "files\x00"+expansionHash(dir, collectSourceFiles(dir, paths))+"\x00")
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// UpToDate reports whether n can be skipped: it declares Generates, all of them
-// exist, and its recorded fingerprint matches fp. A target with no Generates is
-// never up-to-date (it is effectively phony — like make's no-output targets).
+// UpToDate reports whether n can be skipped: it declares Generates, every
+// required (positive) Generates pattern matches at least one non-excluded
+// path, and its recorded fingerprint matches fp. An unmatched required
+// pattern is never a cache hit. A target with no Generates is never
+// up-to-date (it is effectively phony — like make's no-output targets).
 func (c *Cache) UpToDate(n *Node, dir, fp string) bool {
 	if len(n.Task.Generates) == 0 {
 		return false
@@ -157,12 +168,7 @@ func (c *Cache) UpToDate(n *Node, dir, fp string) bool {
 	if c.Hashes[n.Task.Name] != fp {
 		return false
 	}
-	for _, g := range n.Task.Generates {
-		if _, err := os.Stat(filepath.Join(dir, g)); err != nil {
-			return false
-		}
-	}
-	return true
+	return generatesMissing(dir, n.Task.Generates) == ""
 }
 
 // Record stores a node's fingerprint after a successful run.
@@ -222,34 +228,6 @@ func (c *Cache) Save() {
 		return
 	}
 	_ = os.Rename(tmp, c.path)
-}
-
-// hashPath hashes a file's content, or a directory's recursive file contents.
-// A missing path hashes to a stable sentinel (so "absent" differs from "empty"
-// and re-appearing the file invalidates).
-func hashPath(p string) string {
-	fi, err := os.Stat(p)
-	if err != nil {
-		return "absent"
-	}
-	h := sha256.New()
-	if !fi.IsDir() {
-		hashFile(h, p)
-		return hex.EncodeToString(h.Sum(nil))
-	}
-	var files []string
-	_ = filepath.Walk(p, func(path string, info os.FileInfo, err error) error {
-		if err == nil && !info.IsDir() {
-			files = append(files, path)
-		}
-		return nil
-	})
-	sort.Strings(files)
-	for _, f := range files {
-		io.WriteString(h, f+"\x00")
-		hashFile(h, f)
-	}
-	return hex.EncodeToString(h.Sum(nil))
 }
 
 func hashFile(h io.Writer, p string) {

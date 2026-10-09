@@ -229,10 +229,8 @@ func (e *Engine) explainOne(n *Node, fp string) (wouldRun bool, reason string) {
 	if !ok {
 		return true, "no cache entry (never recorded)"
 	}
-	for _, g := range n.Task.Generates {
-		if _, err := os.Stat(filepath.Join(e.Dir, g)); err != nil {
-			return true, "missing output: " + g
-		}
+	if missing := generatesMissing(e.Dir, n.Task.Generates); missing != "" {
+		return true, "missing output: " + missing
 	}
 	if stored != fp {
 		return true, "fingerprint changed (body or sources differ from cache)"

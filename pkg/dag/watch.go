@@ -6,7 +6,6 @@ package dag
 import (
 	"context"
 	"io"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -14,6 +13,9 @@ import (
 
 const watchInterval = time.Second
 
+// watchFingerprints hashes the same glob-expanded Sources/Inputs the
+// fingerprint cache uses (see glob.go), so watch sees membership changes —
+// an added, deleted, or changed matching file — and ignores excluded files.
 func watchFingerprints(g *Graph, dir string) map[string]string {
 	out := make(map[string]string, len(g.Nodes))
 	for _, name := range g.Order {
@@ -24,9 +26,9 @@ func watchFingerprints(g *Graph, dir string) map[string]string {
 		for _, p := range paths {
 			b.WriteString(p)
 			b.WriteByte(0)
-			b.WriteString(hashPath(filepath.Join(dir, p)))
-			b.WriteByte(0)
 		}
+		b.WriteString(expansionHash(dir, collectSourceFiles(dir, paths)))
+		b.WriteByte(0)
 		out[name] = b.String()
 	}
 	return out
