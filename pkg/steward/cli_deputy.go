@@ -63,6 +63,9 @@ func newDeputyAddCmd(o *opts) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if strings.TrimSpace(epic) != "" && !s.HasEpicMembership() {
+				return fmt.Errorf("deputy: --epic grants need the sprint board's epic lookup, which is not wired into this steward command — grant listed --sprints instead (e.g. --sprints 331,332)")
+			}
 			handle := strings.TrimSpace(args[0])
 			holder, err := s.DeputyResolver().Resolve(handle)
 			if err != nil {

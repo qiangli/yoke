@@ -1110,6 +1110,12 @@ you still gate, converge and report.`,
 					if err := sprintLeaseAccepts(id, s.Lease, !stale && !free, leaseInstance, leaseSession); err != nil {
 						return "", err
 					}
+					// INDEPENDENCE: a deputy never conducts what it
+					// supervises — an active deputy over this sprint cannot
+					// take its conductor lease. Before anything is written.
+					if err := vetSprintConductor(id, who, s.Epic); err != nil {
+						return "", err
+					}
 					// The room is the SPRINT's, so a takeover inherits it rather
 					// than replacing it — the transcript left by the previous
 					// conductor is the handover context, and closing it to open an

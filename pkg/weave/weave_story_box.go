@@ -237,6 +237,12 @@ func newSprintStartCmd() *cobra.Command {
 				if err := checkSprintManagerBand(cmd, id, who); err != nil {
 					return err
 				}
+				// INDEPENDENCE, same as `take`: a deputy never conducts what
+				// it supervises. Before the session is launched or anything
+				// is written.
+				if err := vetSprintConductor(id, who, before.Epic); err != nil {
+					return err
+				}
 				expectedOwner := strings.TrimSpace(before.Owner)
 				if expectedOwner != "" && !strings.EqualFold(expectedOwner, who) {
 					if err := retireSprintOwnerSession(cmd.Context(), id, expectedOwner, cwd); err != nil {

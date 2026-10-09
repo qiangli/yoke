@@ -750,9 +750,23 @@ func (s *Store) Act(actor principal.Ref, epoch uint64, req ActRequest, now time.
 				return &ErrDeputyScope{Why: "activate needs --owner: the conductor the scope transfers to"}
 			}
 			if owner != "" {
+				// Resolve the conductor to an instance UUID snapshot NOW,
+				// through the same resolver as deputy grants: a raw handle or
+				// label is not an identity, and storing it raw lets a deputy
+				// install itself under its label and dodge the UUID-compared
+				// independence checks below. An unresolvable owner is refused,
+				// never stored.
+				resolved, rerr := s.DeputyResolver().Resolve(owner)
+				if rerr != nil {
+					return fmt.Errorf("owner %q: %w", owner, rerr)
+				}
+				owner = instanceUUIDOf(resolved)
+				if owner == "" {
+					return &ErrDeputyScope{Why: fmt.Sprintf("owner %q resolved to no instance UUID", strings.TrimSpace(req.Owner))}
+				}
 				// Independence: nobody holding an active occupancy over this
 				// target may be installed as its conductor.
-				if d, err := s.ownActiveIn(rep, ownerRef(owner), req.Target, now); err != nil {
+				if d, err := s.ownActiveIn(rep, resolved, req.Target, now); err != nil {
 					return err
 				} else if d != nil {
 					return &ErrDeputySelfConduct{ID: d.ID, Target: req.Target}

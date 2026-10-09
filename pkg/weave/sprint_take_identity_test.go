@@ -10,6 +10,7 @@ package weave
 // anything is written".
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -129,6 +130,47 @@ func TestStaleSeatIsRecoverableByTheSameInstanceOnANewSession(t *testing.T) {
 	}
 	if after.Lease.Session != "sha256:resumed-session" || after.Lease.Instance != instance {
 		t.Fatalf("recovery did not record the resuming session: %+v", after.Lease)
+	}
+}
+
+// A holder that is an active deputy over the sprint cannot take its conductor
+// lease: a deputy may activate, fence, judge and gate inside its scope, but it
+// never conducts what it supervises. The verdict comes from the steward seat;
+// here it is stated so the test does not need one.
+func TestTakeRefusesActiveDeputyHolder(t *testing.T) {
+	const owner = "agent-a"
+	takeFixture(t, owner)
+	prev := vetSprintConductor
+	vetSprintConductor = func(id int64, holder, epic string) error {
+		if id == 1 && holder == owner {
+			return fmt.Errorf("sprint #%d conductor %q holds an active deputy over it — a deputy never conducts what it supervises", id, holder)
+		}
+		return nil
+	}
+	t.Cleanup(func() { vetSprintConductor = prev })
+	out, code := runSprint(t, "take", "1", "--owner", owner)
+	if code == 0 {
+		t.Fatalf("a deputy holder took the conductor lease of its own sprint: %s", out)
+	}
+	if !strings.Contains(out, "deputy") {
+		t.Fatalf("the refusal did not name the deputy rule: %s", out)
+	}
+	after, err := sprintOwnerSnapshot(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(after.Owner) != "" || after.Lease != nil {
+		t.Fatalf("the refused take moved the seat: owner %q lease %+v", after.Owner, after.Lease)
+	}
+}
+
+// Without a steward seat there are no deputies, so the check allows: the
+// appointment path must not depend on a seat that was never claimed.
+func TestVetSprintConductorAllowsWithoutSeat(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("BASHY_STEWARD_DIR", "")
+	if err := defaultVetSprintConductor(1, "agent-a", ""); err != nil {
+		t.Fatalf("no seat must allow: %v", err)
 	}
 }
 

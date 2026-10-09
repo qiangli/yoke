@@ -36,6 +36,10 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
+
+	"github.com/qiangli/yoke/pkg/fleet"
+	"github.com/qiangli/yoke/pkg/steward"
 )
 
 // sprintInstanceConflict reports a competing owning session on the instance
@@ -87,6 +91,70 @@ func sprintLeaseAccepts(id int64, lease *weaveStoryLease, live bool, instance, s
 		return nil
 	}
 	return &sprintInstanceConflict{SprintID: id, Instance: held, Holder: lease.Holder}
+}
+
+// vetSprintConductor refuses a conductor appointment (take/start) for a holder
+// that is an active deputy over the sprint: a deputy may activate, fence,
+// judge and gate inside its scope, but it never conducts what it supervises.
+// A var so tests can state the verdict without a seat.
+var vetSprintConductor = defaultVetSprintConductor
+
+// defaultVetSprintConductor is the MayConduct lookup the lease acquisition
+// takes. Anything it cannot establish is an ALLOW, not a refusal: an
+// unresolvable holder matches no occupancy (occupancies key on instance UUIDs,
+// and take/start already refused unregistered names as claimants), and a host
+// with no steward seat has no deputies to refuse.
+func defaultVetSprintConductor(sprintID int64, holder, epic string) error {
+	uuid, ok := sprintConductorInstanceUUID(holder)
+	if !ok {
+		return nil
+	}
+	dir, err := steward.DefaultSeatDir()
+	if err != nil || strings.TrimSpace(dir) == "" {
+		return nil
+	}
+	if _, err := os.Stat(dir); err != nil {
+		return nil // no seat, no deputies
+	}
+	// The membership answers for the sprint being taken, which is the only
+	// sprint MayConduct's single-target lookup can ask about.
+	member := steward.EpicMembershipFunc(func(n int) (string, error) {
+		if int64(n) == sprintID {
+			return epic, nil
+		}
+		return "", nil
+	})
+	st, err := steward.Open(dir, steward.WithEpicMembership(member))
+	if err != nil {
+		return nil
+	}
+	if err := st.MayConduct(steward.InstanceRef(uuid), steward.ActTarget{Sprint: int(sprintID)}, time.Now()); err != nil {
+		return fmt.Errorf("sprint #%d: %w", sprintID, err)
+	}
+	return nil
+}
+
+// sprintConductorInstanceUUID maps a conductor name to its live instance UUID,
+// mirroring the deputy grant resolver: a UUID names its record, anything else
+// must resolve to exactly one live instance.
+func sprintConductorInstanceUUID(holder string) (string, bool) {
+	holder = strings.TrimSpace(holder)
+	if holder == "" {
+		return "", false
+	}
+	is := fleet.NewInstanceStore("")
+	if id, err := fleet.ParseInstanceUUID(holder); err == nil {
+		inst, gerr := is.Get(id)
+		if gerr != nil || !inst.Active() {
+			return "", false
+		}
+		return inst.UUID, true
+	}
+	inst, ok, err := is.ResolveHandle(holder)
+	if err != nil || !ok || !inst.Active() {
+		return "", false
+	}
+	return inst.UUID, true
 }
 
 // sprintLeaseIdentity is the instance identity a conductor command runs under,

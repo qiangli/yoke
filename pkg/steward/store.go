@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/qiangli/yoke/pkg/fleet"
@@ -163,6 +164,27 @@ func (s *Store) DeputyResolver() DeputyResolver {
 		return s.deputyResolver
 	}
 	return InstanceResolver{Store: fleet.NewInstanceStore("")}
+}
+
+// HasEpicMembership reports whether the sprint→epic lookup is wired. The CLI
+// refuses --epic grants without it (see newDeputyAddCmd): an epic occupancy
+// whose member sprints cannot be established fails closed everywhere it
+// matters, so granting one would mint authority nobody can exercise.
+func (s *Store) HasEpicMembership() bool { return s.epicMembership != nil }
+
+// DefaultSeatDir reports the directory Open("") would keep this scope's seat
+// in, creating nothing. A read-only check ("is there a seat to consult?")
+// stats this path first: Open creates and binds, so opening merely to ask
+// whether a seat exists would mint one.
+func DefaultSeatDir() (string, error) {
+	if v := strings.TrimSpace(os.Getenv("BASHY_STEWARD_DIR")); v != "" {
+		return v, nil
+	}
+	sc, err := OSScope{}.Scope()
+	if err != nil {
+		return "", err
+	}
+	return defaultDirFor(sc)
 }
 
 // Open prepares the store directory. The journal records what an agent did across

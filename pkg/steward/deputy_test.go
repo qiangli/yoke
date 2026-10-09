@@ -237,6 +237,50 @@ func TestDeputyEpicSprintOverlap(t *testing.T) {
 	wantErr[*ErrDeputyOutOfScope](t, err, "epic deputy on a sprint of another epic")
 }
 
+// An --owner that is a handle must resolve to the instance UUID at act time,
+// or a deputy can install ITSELF as conductor under its label and then judge
+// work it conducted: ownerRef("Ada") is name-only and isHolder matches UUIDs
+// only, so the independence checks never fire on the raw label.
+func TestDeputyActivateWithOwnHandleAsOwnerIsRefused(t *testing.T) {
+	f := newDeputyFixture(t)
+	a := f.instance(t, "Ada")
+	c := f.instance(t, "Cora")
+	f.mustGrantDeputy(t, a.UUID, DeputyScope{Sprints: []int{331}}, at(time.Minute))
+	me := InstanceRef(a.UUID)
+	// The deputy's own handle resolves to its own UUID: installing itself is
+	// conducting its own scope.
+	_, err := f.s.Act(me, f.epoch, ActRequest{Act: ActActivate, Target: sprint(331), Owner: "Ada"}, at(2*time.Minute))
+	wantErr[*ErrDeputySelfConduct](t, err, "deputy activating its own sprint with its own handle")
+	// A handle that names no live instance is refused, not stored raw.
+	_, err = f.s.Act(me, f.epoch, ActRequest{Act: ActActivate, Target: sprint(331), Owner: "nobody"}, at(2*time.Minute))
+	if err == nil || !strings.Contains(err.Error(), "nobody") {
+		t.Fatalf("unresolvable owner must be refused naming it, got %v", err)
+	}
+	// Another instance's handle resolves and is stored as its UUID, so later
+	// independence checks compare UUIDs.
+	e, err := f.s.Act(me, f.epoch, ActRequest{Act: ActActivate, Target: sprint(331), Owner: "Cora"}, at(3*time.Minute))
+	if err != nil {
+		t.Fatalf("activate with a resolvable handle: %v", err)
+	}
+	if e.Update == nil || e.Update.Owner != c.UUID {
+		t.Fatalf("owner must be stored as the instance UUID, got %+v", e.Update)
+	}
+	// Judging a sprint another instance conducts is still allowed.
+	if _, err = f.s.Act(me, f.epoch, ActRequest{Act: ActJudge, Target: sprint(331)}, at(4*time.Minute)); err != nil {
+		t.Fatalf("judging a sprint conducted by someone else: %v", err)
+	}
+	// The steward installing the deputy BY HANDLE stores the UUID too, so a
+	// later self-judge is still caught by UUID comparison.
+	g := newDeputyFixture(t)
+	ga := g.instance(t, "Ada")
+	if _, err := g.s.Act(g.ste, g.epoch, ActRequest{Act: ActActivate, Target: sprint(331), Owner: "Ada"}, at(time.Minute)); err != nil {
+		t.Fatalf("steward activate by handle: %v", err)
+	}
+	g.mustGrantDeputy(t, ga.UUID, DeputyScope{Sprints: []int{331}}, at(2*time.Minute))
+	_, err = g.s.Act(InstanceRef(ga.UUID), g.epoch, ActRequest{Act: ActJudge, Target: sprint(331)}, at(3*time.Minute))
+	wantErr[*ErrDeputySelfJudge](t, err, "judging a sprint conducted under a resolved handle")
+}
+
 func TestDeputySelfJudgeFails(t *testing.T) {
 	f := newDeputyFixture(t)
 	a, c := f.instance(t, "Ada"), f.instance(t, "Cora")
@@ -392,6 +436,23 @@ func TestDeputyCLI(t *testing.T) {
 	t.Setenv(EpochEnv, "")
 	if out, err := cliAs(t, dir, deputy, "act", "gate", "--sprint", "331"); err == nil {
 		t.Fatalf("deputy act with no epoch passed via CLI:\n%s", out)
+	}
+}
+
+// The production steward command is opened with no epic membership wired: the
+// sprint board lookup it would need is not small enough to inject here (it
+// would execute the board per scope check), so an --epic grant is refused
+// with directions instead of failing closed mid-grant. Store-level epic
+// grants with injected membership keep working (TestDeputyEpicSprintOverlap).
+func TestDeputyCLIEpicGrantRefusedWithoutMembership(t *testing.T) {
+	dir := t.TempDir()
+	seedSeat(t, dir)
+	out, err := cli(t, dir, "deputy", "add", "Ada", "--epic", "comms")
+	if err == nil {
+		t.Fatalf("epic grant without membership passed:\n%s", out)
+	}
+	if !strings.Contains(out+err.Error(), "--sprints") {
+		t.Fatalf("the refusal must point at --sprints: out=%q err=%v", out, err)
 	}
 }
 
