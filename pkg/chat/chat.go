@@ -21,6 +21,7 @@ import (
 	"github.com/qiangli/yoke/pkg/agentctl"
 	"github.com/qiangli/yoke/pkg/agentlaunch"
 	"github.com/qiangli/yoke/pkg/agentpty"
+	"github.com/qiangli/yoke/pkg/binmgr"
 	"github.com/qiangli/yoke/pkg/capability"
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/kb"
@@ -260,6 +261,14 @@ type Launch struct {
 	// opencode open an empty session — and those get their opening message down
 	// the control channel instead.
 	TakesPrompt bool
+
+	// ManagedTool, Env and FailEvents mirror agentlaunch.Launch: the pinned
+	// binmgr install Tool points into (nil = a PATH name or an explicit
+	// override), the recipe's KEY=VALUE pairs for the child, and the event
+	// kinds that mean the turn failed whatever the exit code.
+	ManagedTool *binmgr.Tool
+	Env         []string
+	FailEvents  fleet.EventsDone
 }
 
 // Binding is the capability-matrix key for this launch, or "" when no model
@@ -282,6 +291,9 @@ func fromAgentLaunch(l agentlaunch.Launch) Launch {
 		PreserveEnv:          append([]string(nil), l.PreserveEnv...),
 		CredentialEnvAliases: cloneCredentialEnvAliases(l.CredentialEnvAliases),
 		TakesPrompt:          l.TakesPrompt,
+		ManagedTool:          l.ManagedTool,
+		Env:                  append([]string(nil), l.Env...),
+		FailEvents:           l.FailEvents,
 	}
 }
 
@@ -296,6 +308,9 @@ func toAgentLaunch(l Launch) agentlaunch.Launch {
 		PreserveEnv:          append([]string(nil), l.PreserveEnv...),
 		CredentialEnvAliases: cloneCredentialEnvAliases(l.CredentialEnvAliases),
 		TakesPrompt:          l.TakesPrompt,
+		ManagedTool:          l.ManagedTool,
+		Env:                  append([]string(nil), l.Env...),
+		FailEvents:           l.FailEvents,
 	}
 }
 
@@ -444,6 +459,26 @@ func newPTYCoach(agent, ctlSock string, catalog *fleet.Catalog) *Coach {
 
 func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd string) (string, int, error) {
 	observeBudgetProcess(ctx, nil)
+	// profile is the REGISTRY name the trust preseed and the coach are keyed
+	// by. It used to be the binary name, which coincided with the tool name
+	// until a managed install made argv[0] a cache path.
+	profile := agent
+	launch, hasLaunch := LaunchFrom(ctx)
+	if hasLaunch {
+		if launch.ToolName != "" {
+			profile = launch.ToolName
+		}
+		// First use of a pinned tool: download + verify into the bashy cache.
+		// A cache hit is free; a failure is this run's failure (no PATH
+		// fallback — see agentlaunch.EnsureManaged).
+		path, err := agentlaunch.EnsureManaged(ctx, toAgentLaunch(launch))
+		if err != nil {
+			return "", 127, err
+		}
+		if launch.ManagedTool != nil {
+			agent = path
+		}
+	}
 	// Preflight, so a missing CLI is reported as a missing CLI. Left to os/exec
 	// it surfaces as `exec: "claude": executable file not found in $PATH` — which
 	// names a $PATH the operator never set and cannot see, since the launcher is
@@ -475,10 +510,10 @@ func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd st
 		//
 		// Best-effort: an unwritable config is a reason to fall back on clearing
 		// the prompt, never a reason to refuse to launch the agent.
-		if p, ok := agentctl.ProfileFor(agent); ok && p.Preseed != "" {
+		if p, ok := agentctl.ProfileFor(profile); ok && p.Preseed != "" {
 			_ = agentctl.ApplyTrustPreseed(cmd.Dir, p.Preseed)
 		}
-		return r.runPTY(cmd, agent)
+		return judgeToolFailure(launch, hasLaunch)(r.runPTY(cmd, profile))
 	}
 
 	// Own process group, so cancelling this turn can reach the agent's CHILDREN.
@@ -547,7 +582,7 @@ func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd st
 		return appendStderr(out, stderr.String()), 124, err
 	}
 	if err == nil {
-		return out, 0, nil
+		return judgeToolFailure(launch, hasLaunch)(out, 0, nil)
 	}
 	out = appendStderr(out, stderr.String())
 	var exitErr *exec.ExitError
@@ -555,6 +590,32 @@ func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd st
 		return out, exitErr.ExitCode(), err
 	}
 	return out, 127, err
+}
+
+// ExitToolFailure is the exit code a clean-exiting tool is given when its own
+// stream said the turn failed (the recipe's events_fail). 1 rather than a
+// sysexits value: it is the tool's failure, reported the way the tool should
+// have reported it.
+const ExitToolFailure = 1
+
+// judgeToolFailure wraps a runner result: a zero exit whose captured stdout
+// carries a declared failure event becomes ExitToolFailure with the line as
+// the error. opencode 1.18.30 printed {"type":"error",...} and exited 0 on
+// every run (fleet/eventsfail.go); this is where that stops reading as success.
+func judgeToolFailure(l Launch, ok bool) func(out string, code int, err error) (string, int, error) {
+	return func(out string, code int, err error) (string, int, error) {
+		if !ok || err != nil || code != 0 {
+			return out, code, err
+		}
+		if line, failed := agentlaunch.ToolFailure(toAgentLaunch(l), []byte(out)); failed {
+			name := l.ToolName
+			if name == "" {
+				name = l.Tool
+			}
+			return out, ExitToolFailure, fmt.Errorf("%s reported a failure event and exited 0: %s", name, line)
+		}
+		return out, 0, nil
+	}
 }
 
 // agentCommand is the single child-process construction path for both a chat
@@ -568,7 +629,18 @@ func agentCommand(ctx context.Context, agent string, args []string, cwd string) 
 	// "" means unresolvable — left as the bare name so the caller's own preflight
 	// reports it, rather than substituting an empty argv[0].
 	bin := agent
-	if p := ResolveToolBinary(agent); p != "" {
+	// A managed install resolves to its pinned cache path — installed here on
+	// first use for the callers that reach agentCommand without going through
+	// execRunner.Run (ACP, steerable sessions). Best-effort: a failed install
+	// leaves the cache path in argv[0], and the spawn reports it.
+	if l, ok := LaunchFrom(ctx); ok && l.ManagedTool != nil {
+		if p, err := agentlaunch.EnsureManaged(ctx, toAgentLaunch(l)); err == nil {
+			bin = p
+		} else {
+			fmt.Fprintf(os.Stderr, "chat: %v\n", err)
+		}
+	}
+	if p := ResolveToolBinary(bin); p != "" {
 		bin = p
 	}
 	cmd := exec.CommandContext(ctx, bin, args...)
@@ -629,6 +701,8 @@ func agentChildEnv(ctx context.Context) []string {
 	// the firewall a security boundary rather than an outage.
 	if l, ok := LaunchFrom(ctx); ok {
 		env = secrets.ProjectAgentEnv(env, parent, l.PreserveEnv, l.CredentialEnvAliases)
+		// The recipe's own pairs (a managed install's self-update switch).
+		env = agentlaunch.ApplyLaunchEnv(env, toAgentLaunch(l))
 		if len(l.CredentialEnvAliases) == 0 && len(l.PreserveEnv) == 0 && l.ModelName != "" {
 			// Backward compatibility: callers may still construct Launch values
 			// manually. Resolve the same catalog declaration the old path used,

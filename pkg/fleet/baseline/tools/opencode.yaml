@@ -3,6 +3,53 @@ kind: cli
 display: OpenCode
 cli:
   binary: opencode
+  # MANAGED INSTALL (operator decision D12, 2026-10-09): the vendor's own
+  # prebuilt release asset, pinned and digest-verified into the bashy cache by
+  # pkg/binmgr on first launch. The launcher never falls back to a PATH or
+  # Homebrew opencode; BASHY_TOOL_BINARY_OPENCODE=/path is the explicit override.
+  #
+  # WHY 1.18.35 AND NOT 2.0.20: the Homebrew formula says 2.0.20, but that is a
+  # from-source build of a git TAG. Upstream (anomalyco/opencode) has tags
+  # v2.0.19..v2.0.26 and NO release, npm publish or binary for any 2.0.x as of
+  # 2026-10-09; the vendor's own install script downloads from GitHub releases,
+  # whose latest is v1.18.35 (2026-10-06). A pin needs a published artifact, so
+  # this is the newest one. Move the version + digests the day a 2.0.x release
+  # appears. The Homebrew 1.18.30 that failed every run (notes below) was also
+  # a from-source build, not this artifact.
+  #
+  # Digests: the five assets were downloaded on a trusted dev host on
+  # 2026-10-09 and hashed as a whole file; the vendor publishes no sha256
+  # sidecar. Out-of-band check: the `opencode` binary inside the darwin-arm64
+  # zip is byte-identical (sha256 8c3c351b…) to bin/opencode inside the npm
+  # platform package opencode-darwin-arm64@1.18.35.
+  managed:
+    source: github-release
+    version: 1.18.35
+    license: MIT
+    license_url: https://github.com/anomalyco/opencode/blob/v1.18.35/LICENSE
+    env:
+      - OPENCODE_DISABLE_AUTOUPDATE=1
+    assets:
+      darwin/arm64:
+        url: https://github.com/anomalyco/opencode/releases/download/v{version}/opencode-darwin-arm64.zip
+        sha256: 80b05124357a77cd57945bfde36082a028e829c198d222d5e146617f49a2c4b7
+        member: opencode
+      darwin/amd64:
+        url: https://github.com/anomalyco/opencode/releases/download/v{version}/opencode-darwin-x64.zip
+        sha256: 8127d69e8e94d7adc496e910435f2f73856d87d456e988d3a947f250c95c1be2
+        member: opencode
+      linux/amd64:
+        url: https://github.com/anomalyco/opencode/releases/download/v{version}/opencode-linux-x64.tar.gz
+        sha256: c8f888b451f5494a18f858fffb0e0b68f4e4baa9c241761c5f206884f0fa640d
+        member: opencode
+      linux/arm64:
+        url: https://github.com/anomalyco/opencode/releases/download/v{version}/opencode-linux-arm64.tar.gz
+        sha256: f7f2ba59ee8aa94d388f9696575a32d20e71c2ee48def9f80fc693a60fec6c72
+        member: opencode
+      windows/amd64:
+        url: https://github.com/anomalyco/opencode/releases/download/v{version}/opencode-windows-x64.zip
+        sha256: c90d248cca75e42fd15422a29b5f83a1b30c441af83565635d6b2682adc58dd1
+        member: opencode.exe
   launch:
     # OpenCode names z.ai's coding-plan key after the upstream provider. The
     # launcher resolves the model's api_key_ref (`zai`) from the host, then
@@ -14,6 +61,14 @@ cli:
     # text, and step_finish NDJSON records. A step_finish with reason=tool-calls
     # is intermediate, so do not declare a naive events_done matcher here.
     events_stdout: --format json
+    # MEASURED failure, 2026-09-29 and 2026-10-08 (opencode 1.18.30): every run
+    # printed {"type":"error","error":{"name":"UnknownError","data":{"message":
+    # "Unexpected server error. Check server logs for details."}}} on stdout and
+    # EXITED 0. A launcher that sees this kind on a clean exit reports exit 1
+    # with the line (fleet/eventsfail.go) instead of trusting the status.
+    events_fail:
+      field: type
+      values: [error]
     # OpenCode 1.18 exposes its unattended permission mode explicitly as
     # --auto. Config pre-seeding establishes project trust but does not answer
     # later tool permission requests, so governed acting sessions need both.
@@ -26,8 +81,8 @@ cli:
     supports_graceful_quit: true
     notes: |
       headless `run`; --auto is the explicit unattended permission mode; judge by committed artifacts, not exit code. --model takes provider/model.
-      opencode 1.18.30 (Homebrew 1.18.30_1) fails EVERY run with UnknownError "Unexpected server error" (err_*): `TypeError: undefined is not an object (evaluating 'a.name')` in SystemPrompt.environment while resolving the Reference service layer. It reproduces with an empty HOME, no config, no auth, any provider or --model, --pure, any cwd, so it is the installed build, not bashy config, credentials or the zai-coding-plan binding. Fix is an operator-approved opencode version change (the fleet pins CLI versions); agents must not reinstall it.
-      The failure is reported as a {"type":"error","error":{"name","data":{"message"}}} event on the --format json stream; weave records exit 0 + that error + no commits as failed, not no-op.
+      opencode 1.18.30 (Homebrew 1.18.30_1, a from-source build) failed EVERY run with UnknownError "Unexpected server error" (err_*): `TypeError: undefined is not an object (evaluating 'a.name')` in SystemPrompt.environment while resolving the Reference service layer. It reproduced with an empty HOME, no config, no auth, any provider or --model, --pure, any cwd, so it was the installed build, not bashy config, credentials or the zai-coding-plan binding. Since 2026-10-09 the fleet runs the vendor's own prebuilt release pinned under cli.managed (D12); agents must not reinstall or upgrade it, and the Homebrew copy is only reachable through BASHY_TOOL_BINARY_OPENCODE.
+      The failure is reported as a {"type":"error","error":{"name","data":{"message"}}} event on the --format json stream; events_fail turns that into exit 1 for every launcher, and weave additionally records exit 0 + that error + no commits as failed, not no-op.
     watchdog:
       max_runtime: 45m
       mem_limit: 12g

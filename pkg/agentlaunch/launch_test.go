@@ -28,7 +28,7 @@ func TestResolveWithCatalogRendersNicknameFromFleetTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if l.Tool != "claude" || l.Nick != "007" || l.Binding() != "claude:fable5" {
+	if exeName(l.Tool) != "claude" || l.Nick != "007" || l.Binding() != "claude:fable5" {
 		t.Fatalf("launch = %+v", l)
 	}
 	if strings.Join(l.Args, " ") != "--dangerously-skip-permissions --model claude-fable-5 -p" {
@@ -116,7 +116,9 @@ func TestResolveAgGeminiVariantsUsesRegistryIDsWithoutEffortFlag(t *testing.T) {
 			t.Fatalf("ResolveWithCatalog(%q): %v", tc.name, err)
 		}
 		want := []string{"agy", "--dangerously-skip-permissions", "--print-timeout", "40m", "--model", tc.model, "-p", "prompt"}
-		if got := l.Argv("prompt"); !slices.Equal(got, want) {
+		got := l.Argv("prompt")
+		got[0] = exeName(got[0]) // the pinned cache path, by its basename
+		if !slices.Equal(got, want) {
 			t.Errorf("argv for %s = %q, want %q", tc.name, got, want)
 		}
 		if slices.Contains(l.Args, "--effort") {
@@ -650,4 +652,11 @@ func TestCodexManagerAndWorkerWritableRoots(t *testing.T) {
 			}
 		})
 	}
+}
+
+// exeName is the executable's registry-facing name: a managed tool resolves
+// to its pinned cache path (…/<tool>/<version>/<tool>[.exe]), so tests compare
+// the basename, not the string the launcher execs.
+func exeName(p string) string {
+	return strings.TrimSuffix(filepath.Base(p), ".exe")
 }

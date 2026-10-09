@@ -385,6 +385,10 @@ func (w *Worker) startLocked(argv []string) error {
 	if len(argv) == 0 {
 		return errors.New("cligw: empty worker argv")
 	}
+	// A pinned tool is installed on first use; argv[0] is already its path.
+	if _, err := agentlaunch.EnsureManaged(context.Background(), w.launch); err != nil {
+		return err
+	}
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = w.cwd
 	cmd.Env = workerEnv(os.Environ(), w.launch)
@@ -972,5 +976,6 @@ func (b *lockedBuffer) String() string {
 // principal. The same order weave and chat use for the same CLIs.
 func workerEnv(parent []string, l agentlaunch.Launch) []string {
 	env := secrets.PreserveEnvNames(secrets.ScrubAgentEnv(parent), parent, l.PreserveEnv)
+	env = agentlaunch.ApplyLaunchEnv(env, l)
 	return agentlaunch.PrincipalEnv(env, l)
 }

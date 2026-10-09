@@ -4142,6 +4142,15 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	for k, v := range carrier {
 		env = append(env, fmt.Sprintf("%s=%s", strings.ToUpper(k), v))
 	}
+	// A pinned tool (cli.managed) is installed on first use, before anything
+	// execs its cache path: the preflight below and the worker itself. No PATH
+	// fallback — a failed install is a precondition failure with the reason.
+	if agentLaunch != nil {
+		if _, err := agentlaunch.EnsureManaged(ctx, agentlaunch.Launch(*agentLaunch)); err != nil {
+			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
+				weavecli.ExitPrecondFail, err))
+		}
+	}
 	if err := weaveRunWorkspacePreflight(agentLaunch, workspace, env); err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 			weavecli.ExitPrecondFail, err))

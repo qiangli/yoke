@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/qiangli/yoke/pkg/agentpty"
+	"github.com/qiangli/yoke/pkg/binmgr"
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/secrets"
 )
@@ -104,6 +105,23 @@ type Launch struct {
 	// agent. The launch argv does NOT carry it: the consumer that knows the
 	// tool's flag applies it (cligw's worker), and refuses a tool without one.
 	Effort string
+
+	// ManagedTool is the registry's pinned, binmgr-managed install for this
+	// tool (cli.managed): nil when the launch runs a PATH name or an explicit
+	// override. When set, Tool is already the pin's cache path, and
+	// EnsureManaged downloads + verifies it on first use. See fleet/managed.go.
+	ManagedTool *binmgr.Tool
+	// Env is KEY=VALUE pairs the registry asks every launch of this tool to
+	// set — a managed install's self-update switch. Applied by ApplyLaunchEnv
+	// at each consumer's child-environment build.
+	Env []string
+	// FailEvents is the recipe's events_fail matcher: an event kind that means
+	// the turn failed even when the tool exited 0.
+	FailEvents fleet.EventsDone
+
+	// overridden marks a managed tool launched through an explicit operator
+	// override (see resolveManaged), so later rendering keeps that path.
+	overridden bool
 }
 
 func (l Launch) Binding() string {
@@ -235,6 +253,10 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 	}
 	if known {
 		lnch.Tool = tool.Binary()
+		if err := resolveManaged(&lnch, tool); err != nil {
+			return lnch, err
+		}
+		lnch.FailEvents = tool.CLI.Launch.EventsFail
 		// A BOUND MODEL REFUSES ACP, and the caller falls to the rung below —
 		// which delivers the model the way it always has.
 		//
@@ -271,7 +293,12 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 			if err != nil {
 				return lnch, err
 			}
-			lnch.Tool, lnch.Args, lnch.TakesPrompt = bin, out, false
+			// bin is tool.Binary(), which lnch.Tool already is — unless the
+			// tool is managed, in which case lnch.Tool is the pin's path.
+			if lnch.ManagedTool == nil && !lnch.overridden {
+				lnch.Tool = bin
+			}
+			lnch.Args, lnch.TakesPrompt = out, false
 			return lnch, nil
 		}
 		render := func(m string) ([]string, bool) {

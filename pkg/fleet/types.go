@@ -188,8 +188,12 @@ type ToolCommandStep struct {
 type ToolCLI struct {
 	Binary   string        `yaml:"binary,omitempty" json:"binary,omitempty" doc:"executable to run"`
 	Versions []ToolVersion `yaml:"versions,omitempty" json:"versions,omitempty" doc:"known downloadable versions"`
-	Linux    ToolLinux     `yaml:"linux,omitempty" json:"linux,omitempty" doc:"Linux image installation recipe, separate from host installation"`
-	Launch   ToolLaunch    `yaml:"launch,omitempty" json:"launch" doc:"headless and interactive launch contract"`
+	// Managed pins a binmgr-managed install of the vendor's published artifact
+	// (version + per-platform digest). When present it is the ONLY binary a
+	// launch uses; see managed.go for the override and self-update rules.
+	Managed *ToolManaged `yaml:"managed,omitempty" json:"managed,omitempty" doc:"pinned binmgr-managed install: vendor artifact per platform, verified by digest"`
+	Linux   ToolLinux    `yaml:"linux,omitempty" json:"linux,omitempty" doc:"Linux image installation recipe, separate from host installation"`
+	Launch  ToolLaunch   `yaml:"launch,omitempty" json:"launch" doc:"headless and interactive launch contract"`
 }
 
 // ToolLinux describes how a CLI is installed in a sealed Linux image.
@@ -349,6 +353,11 @@ type ToolLaunch struct {
 	// learns nothing and reports success. The stream carries what the exit does
 	// not. See eventsoutcome.go for why only SUCCESS is declarable.
 	EventsOutcome EventsOutcome `yaml:"events_outcome,omitempty" json:"events_outcome,omitempty" doc:"terminal-event success rule"`
+
+	// EventsFail names the event kinds that mean the turn FAILED, so a launcher
+	// can turn a tool's "exit 0 with an error event" into a non-zero exit.
+	// Declared only from a MEASURED failure line (see eventsfail.go).
+	EventsFail EventsDone `yaml:"events_fail,omitempty" json:"events_fail,omitempty" doc:"event kinds that mean the turn failed, whatever the exit code"`
 
 	// SteerExec is the argv template that ACTUALLY accepts steering, and it is
 	// usually NOT Exec.

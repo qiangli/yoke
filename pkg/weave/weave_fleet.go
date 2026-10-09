@@ -427,6 +427,11 @@ func fleetRowForEntry(dir, name string, now time.Time, probe bool, cache map[str
 
 	row, dirty := fleetRowForBinary(dir, launch.ToolName, launch.Tool, now, probe, cache)
 	row.launch = launch
+	if launch.ManagedTool != nil && !row.Found && row.Reason == "" {
+		// A pinned tool that is not in the bashy cache yet: not missing, just
+		// not installed. `weave start` installs it on first use.
+		row.Reason = "managed install " + launch.ManagedTool.Version + " not cached yet; weave start downloads and verifies it"
+	}
 	row.Agent, row.Model, row.Binding = launch.Nick, launch.Model, launch.Binding()
 
 	// The model half. Structural and offline: a probe that dialed a provider on

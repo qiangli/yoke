@@ -5,6 +5,41 @@ aliases:
   - antigravity
 cli:
   binary: agy
+  # MANAGED INSTALL (D12, 2026-10-09): Google's own Antigravity CLI release
+  # from the public GCS bucket the vendor's install.sh reads, pinned and
+  # verified against the vendor's per-platform manifest, which publishes
+  # sha512 only (darwin/arm64 was downloaded and re-hashed on a trusted dev
+  # host on 2026-10-09 and matched). The unix archives hold one member named
+  # `antigravity`; binmgr caches it as `agy`. The build id in the URL path is
+  # the vendor's and does not derive from the version, so the URLs are spelled
+  # out. Proprietary: Google Terms of Service.
+  managed:
+    source: vendor-url
+    version: 1.3.2
+    license: Google Terms of Service (proprietary)
+    license_url: https://policies.google.com/terms
+    env:
+      - AGY_CLI_DISABLE_AUTO_UPDATE=1
+    assets:
+      darwin/arm64:
+        url: https://storage.googleapis.com/antigravity-public/antigravity-cli/1.3.2-5813501495738368/darwin-arm/cli_mac_arm64.tar.gz
+        sha512: 02dd409d8d40bdae4a97196c81ee009b90bbe4673ae380f0cd2b2b4eff05556d0668e9182d6d61f1cebc8a0b0c3594e11d514071175f41d71011e82bb31c9f22
+        member: antigravity
+      darwin/amd64:
+        url: https://storage.googleapis.com/antigravity-public/antigravity-cli/1.3.2-5813501495738368/darwin-x64/cli_mac_x64.tar.gz
+        sha512: fd7a26466bba15d4f858e9ecd455bd4d1da2ee49a31572b752c29e802332a087a9ed90365ca17b3455dd5786712405a148ac42c7a557b41c044c92559409b16e
+        member: antigravity
+      linux/amd64:
+        url: https://storage.googleapis.com/antigravity-public/antigravity-cli/1.3.2-5813501495738368/linux-x64/cli_linux_x64.tar.gz
+        sha512: 8dc2bb8471cfa6326e29e2896add767ad2d1f3714304b70fbae720d68af011182e7afde43964a7a3f54c604ab72c4fad772c8595608b059cfc582fb6798a25d2
+        member: antigravity
+      linux/arm64:
+        url: https://storage.googleapis.com/antigravity-public/antigravity-cli/1.3.2-5813501495738368/linux-arm/cli_linux_arm64.tar.gz
+        sha512: 44c33101f05efc925a12ca87a5c1c90c594da05dfa11eb4b747f22e7d478f4e9a6b596b92076266c46153eadc87d488e9dbfc3cae99f4f50d5208e6b8814a1d4
+        member: antigravity
+      windows/amd64:
+        url: https://storage.googleapis.com/antigravity-public/antigravity-cli/1.3.2-5813501495738368/windows-x64/cli_windows_x64.exe
+        sha512: 088f449e742a72444539088df261db30010c8dee16dc32920eede24c8ab497ce3da410dd42fe4d673a36eb0c5084411399ba44f77f96389130a36027696f2120
   launch:
     warm: stdin-stream-json
     # RUNG 2 via stdout. Measured on the wire 2026-07-31:

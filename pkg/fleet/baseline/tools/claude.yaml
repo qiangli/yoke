@@ -3,6 +3,39 @@ kind: cli
 display: Claude Code
 cli:
   binary: claude
+  # MANAGED INSTALL (D12, 2026-10-09): Anthropic's native Claude Code release
+  # binary from the same GCS bucket `claude install` uses, pinned and verified
+  # against the vendor's <version>/manifest.json sha256 (darwin/arm64 was
+  # downloaded and re-hashed on a trusted dev host on 2026-10-09 and matched).
+  # Raw executables, no archive. Linux uses the glibc build (the bucket also
+  # has -musl variants). The npm package @anthropic-ai/claude-code@2.1.295 is
+  # the same release; its licence field reads "SEE LICENSE IN README.md" —
+  # the Anthropic Commercial Terms of Service, a proprietary binary: download
+  # and run under those terms, never vendored. DISABLE_AUTOUPDATER keeps the
+  # pin from replacing itself.
+  managed:
+    source: vendor-url
+    version: 2.1.295
+    license: Anthropic Commercial Terms of Service (proprietary; SEE LICENSE IN README.md)
+    license_url: https://www.anthropic.com/legal/commercial-terms
+    env:
+      - DISABLE_AUTOUPDATER=1
+    assets:
+      darwin/arm64:
+        url: https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/{version}/darwin-arm64/claude
+        sha256: 0116ee2e0a513900b633d9951367f18747686478e2b462805b8c31609f047f70
+      darwin/amd64:
+        url: https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/{version}/darwin-x64/claude
+        sha256: a6066492288585a1ef5e482cb28ad22714ab12cd48e367c0cee988b00cff724c
+      linux/amd64:
+        url: https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/{version}/linux-x64/claude
+        sha256: 4503bfe11a6c7fcc1e0b39b5e0d347c04248f750b03b0977b3ad6b531fe6f358
+      linux/arm64:
+        url: https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/{version}/linux-arm64/claude
+        sha256: cfb9dc1332fb6f92a683f835823e91b3179a803398ca7852cd2381a3cb1dea3b
+      windows/amd64:
+        url: https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/{version}/win32-x64/claude.exe
+        sha256: a30012741c3d0b55e2a6c252dab3781134b75be95896ae89d40a93e10f83bcd6
   launch:
     warm: stdin-stream-json
     # -p is print mode, and it must be EXPLICIT. Without it claude infers

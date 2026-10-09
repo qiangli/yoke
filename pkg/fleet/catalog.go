@@ -246,6 +246,11 @@ func (c *Catalog) Tools(all bool) ([]Tool, []error) {
 		// but the tool itself stays: a bad command never hides its tool.
 		cmdErrs, _ := r.Entry.ValidateCommands()
 		errs = append(errs, cmdErrs...)
+		// Likewise a malformed managed pin: reported here, and REFUSED at
+		// launch (BinmgrTool validates again) — never quietly unpinned.
+		if err := r.Entry.CLI.Managed.Validate(r.Entry.Name); err != nil {
+			errs = append(errs, err)
+		}
 		out = append(out, r.Entry)
 	}
 	return out, errs

@@ -74,7 +74,7 @@ func TestWeaveResumeReassignsOwnerAndLaunchTogether(t *testing.T) {
 		// the durable launch spec still describe who the resume selected.
 		t.Fatalf("resumed item owner/tool = %q/%q", it.Owner, it.Tool)
 	}
-	if it.LaunchSpec == nil || it.LaunchSpec.Agent != "agy-gemini3.1" || it.LaunchSpec.Tool != "agy" {
+	if it.LaunchSpec == nil || it.LaunchSpec.Agent != "agy-gemini3.1" || strings.TrimSuffix(filepath.Base(it.LaunchSpec.Tool), ".exe") != "agy" {
 		t.Fatalf("resumed launch spec = %+v", it.LaunchSpec)
 	}
 	last := it.Comments[len(it.Comments)-1].Body

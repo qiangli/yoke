@@ -40,8 +40,11 @@ func TestExpandAgentSelectsTheModel(t *testing.T) {
 	if l == nil {
 		t.Fatal("a nickname must expand")
 	}
+	// argv[0] is claude's pinned cache path (cli.managed); the contract is
+	// judged by the executable's name and everything after it.
 	wantPrefix := "claude --dangerously-skip-permissions --model claude-fable-5 --output-format stream-json --verbose -p FIX THE GATE"
-	if got := strings.Join(argv, " "); !strings.HasPrefix(got, wantPrefix) {
+	named := append([]string{strings.TrimSuffix(filepath.Base(argv[0]), ".exe")}, argv[1:]...)
+	if got := strings.Join(named, " "); !strings.HasPrefix(got, wantPrefix) {
 		t.Fatalf("argv =\n  %q\nwant prefix\n  %q", got, wantPrefix)
 	}
 	// Every worker prompt carries the standard commit-or-it's-lost contract.

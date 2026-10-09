@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -116,7 +117,7 @@ func TestBareToolArgvFollowsSeededProfiles(t *testing.T) {
 	pinCatalog(t)
 	for name, want := range seededProfiles {
 		tool, args, model := argv(t, name, Options{})
-		if tool != name {
+		if exeName(tool) != name {
 			t.Errorf("%s: tool = %q", name, tool)
 		}
 		if model != "" {
@@ -149,7 +150,7 @@ func TestBindingPassesModel(t *testing.T) {
 	// `opus` is the family alias; what reaches the wire is the pinned id of
 	// whichever version it currently names.
 	tool, args, model := argv(t, "claude:opus", Options{})
-	if tool != "claude" || model != "claude-opus-5" {
+	if exeName(tool) != "claude" || model != "claude-opus-5" {
 		t.Fatalf("tool=%q model=%q", tool, model)
 	}
 	if strings.Join(args, " ") != "--dangerously-skip-permissions --model claude-opus-5 -p" {
@@ -164,7 +165,7 @@ func TestModelIsTheProviderSideID(t *testing.T) {
 	permitUnsafeLaunch(t)
 	pinCatalog(t)
 	tool, args, model := argv(t, "opencode:deepseek-v4-pro", Options{})
-	if tool != "opencode" || model != "deepseek/deepseek-v4-pro" {
+	if exeName(tool) != "opencode" || model != "deepseek/deepseek-v4-pro" {
 		t.Fatalf("tool=%q model=%q", tool, model)
 	}
 	if strings.Join(args, " ") != "run --auto --model deepseek/deepseek-v4-pro" {
@@ -189,7 +190,7 @@ func TestNicknameAndAliasSelectTheSameModel(t *testing.T) {
 
 	for _, nick := range []string{"007", "smarty"} {
 		tool, args, model := argv(t, nick, Options{})
-		if tool != "claude" || model != "claude-fable-5" {
+		if exeName(tool) != "claude" || model != "claude-fable-5" {
 			t.Fatalf("%s: tool=%q model=%q", nick, tool, model)
 		}
 		if !contains(args, "--model") || !contains(args, "claude-fable-5") {
@@ -396,7 +397,7 @@ func TestInvokeCarriesTheLaunchToTheRunner(t *testing.T) {
 	if _, err := Invoke(context.Background(), Options{Agent: "claude:opus", Instruction: "hi"}, r); err != nil {
 		t.Fatal(err)
 	}
-	if !ok || seen.Tool != "claude" || seen.Model != "claude-opus-5" {
+	if !ok || exeName(seen.Tool) != "claude" || seen.Model != "claude-opus-5" {
 		t.Fatalf("launch = %+v ok=%v", seen, ok)
 	}
 }
@@ -412,11 +413,12 @@ func TestResultRecordsNickAndModel(t *testing.T) {
 	// The registry seeds an agent for this binding, so the CANONICAL nickname
 	// is what gets recorded — a name that `whois` and `@mentions` can resolve,
 	// and one that names an exact version rather than a moving family.
-	if res.Agent != "claude" || res.Nick != "claude-opus5" || res.Model != "claude-opus-5" {
+	if exeName(res.Agent) != "claude" || res.Nick != "claude-opus5" || res.Model != "claude-opus-5" {
 		t.Fatalf("res = %+v", res)
 	}
-	// Agent stays the executable, so the dry-run line is still runnable.
-	if !strings.HasPrefix(res.Output, "claude --dangerously-skip-permissions --model claude-opus-5 -p ") {
+	// Agent stays the executable (the pinned cache path for a managed tool),
+	// so the dry-run line is still runnable.
+	if !strings.HasPrefix(res.Output, res.Agent+" --dangerously-skip-permissions --model claude-opus-5 -p ") {
 		t.Fatalf("dry run = %q", res.Output)
 	}
 }
@@ -429,7 +431,7 @@ func TestResultUnchangedForABareTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Agent != "codex" || res.Nick != "" || res.Model != "" {
+	if exeName(res.Agent) != "codex" || res.Nick != "" || res.Model != "" {
 		t.Fatalf("res = %+v", res)
 	}
 }
@@ -640,4 +642,11 @@ func stubContainerized(t *testing.T, v bool) {
 	prev := containerized
 	containerized = func() bool { return v }
 	t.Cleanup(func() { containerized = prev })
+}
+
+// exeName is the executable's registry-facing name: a managed tool resolves
+// to its pinned cache path (…/<tool>/<version>/<tool>[.exe]), so tests compare
+// the basename, not the string the launcher execs.
+func exeName(p string) string {
+	return strings.TrimSuffix(filepath.Base(p), ".exe")
 }

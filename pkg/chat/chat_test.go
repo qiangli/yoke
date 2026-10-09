@@ -119,7 +119,7 @@ func TestInvokeUsesSeededHeadlessContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.ExitCode != 0 || r.agent != "codex" {
+	if res.ExitCode != 0 || exeName(r.agent) != "codex" {
 		t.Fatalf("unexpected result=%+v runner.agent=%q", res, r.agent)
 	}
 	if len(r.args) != 4 || r.args[0] != "exec" || r.args[1] != "--skip-git-repo-check" ||

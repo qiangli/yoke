@@ -150,32 +150,64 @@ func CachedBinary(name string) string {
 	return best
 }
 
+// InstallPath is where Ensure lays out t's executable for the current
+// platform — <CacheDir>/<name>/<version>/<binary>, or the Tree entrypoint
+// under that version dir. It touches neither the network nor the filesystem,
+// so a launcher can name the pinned binary (argv[0]) before anything is
+// downloaded and a listing can ask "is this pin installed" without fetching
+// it. Errors exactly where Ensure would: no name/version, no asset for this
+// platform, a Tree asset without an entrypoint.
+func InstallPath(t Tool) (string, error) {
+	_, dest, err := installLayout(t)
+	return dest, err
+}
+
+// Cached reports the executable Ensure would return for t when it is already
+// installed, with no network. ("", false) when the pin is absent or the asset
+// cannot be resolved for this platform.
+func Cached(t Tool) (string, bool) {
+	dest, err := InstallPath(t)
+	if err != nil || !isExecutable(dest) {
+		return "", false
+	}
+	return dest, true
+}
+
+func installLayout(t Tool) (dir, dest string, err error) {
+	if t.Name == "" || t.Version == "" {
+		return "", "", fmt.Errorf("binmgr: tool name and version are required")
+	}
+	asset, ok := t.Assets[Platform()]
+	if !ok || asset.URL == "" {
+		return "", "", fmt.Errorf("binmgr: %s %s has no asset for %s", t.Name, t.Version, Platform())
+	}
+	root, err := CacheDir()
+	if err != nil {
+		return "", "", err
+	}
+	dir = filepath.Join(root, t.Name, t.Version)
+	dest = filepath.Join(dir, binaryName(t.Name))
+	if asset.Tree {
+		if asset.Entrypoint == "" {
+			return "", "", fmt.Errorf("binmgr: %s %s: Tree asset needs an Entrypoint", t.Name, t.Version)
+		}
+		dest = filepath.Join(dir, filepath.FromSlash(asset.Entrypoint))
+	}
+	return dir, dest, nil
+}
+
 // Ensure resolves the tool's asset for the current platform, downloading +
 // sha256-verifying + caching it if not already present, and returns the path to
 // the executable. Idempotent: a cache hit returns immediately with no network.
 func Ensure(ctx context.Context, t Tool) (string, error) {
-	if t.Name == "" || t.Version == "" {
-		return "", fmt.Errorf("binmgr: tool name and version are required")
-	}
-	if t.cachedName == t.Name && t.cachedPath != "" && isExecutable(t.cachedPath) {
+	if t.cachedName == t.Name && t.Name != "" && t.cachedPath != "" && isExecutable(t.cachedPath) {
 		return t.cachedPath, nil
 	}
-	asset, ok := t.Assets[Platform()]
-	if !ok || asset.URL == "" {
-		return "", fmt.Errorf("binmgr: %s %s has no asset for %s", t.Name, t.Version, Platform())
-	}
-	root, err := CacheDir()
+	dir, dest, err := installLayout(t)
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(root, t.Name, t.Version)
-	dest := filepath.Join(dir, binaryName(t.Name))
-	if asset.Tree {
-		if asset.Entrypoint == "" {
-			return "", fmt.Errorf("binmgr: %s %s: Tree asset needs an Entrypoint", t.Name, t.Version)
-		}
-		dest = filepath.Join(dir, filepath.FromSlash(asset.Entrypoint))
-	}
+	asset := t.Assets[Platform()]
 	if isExecutable(dest) {
 		return dest, nil // cache hit — no network
 	}

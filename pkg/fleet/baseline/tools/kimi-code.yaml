@@ -3,6 +3,40 @@ kind: cli
 display: Kimi Code
 cli:
   binary: kimi
+  # MANAGED INSTALL (D12, 2026-10-09): Moonshot's own Kimi Code CLI release
+  # (MoonshotAI/kimi-code, native single binary `kimi`), pinned and verified
+  # against the vendor's per-asset .sha256 sidecars (darwin/arm64 was
+  # downloaded and re-hashed on a trusted dev host on 2026-10-09 and matched).
+  # The release tag is "@moonshot-ai/kimi-code@<version>", URL-escaped below.
+  # Not the PyPI kimi-cli (a different, Python package).
+  managed:
+    source: github-release
+    version: 2.1.1
+    license: MIT
+    license_url: https://github.com/MoonshotAI/kimi-code/blob/main/LICENSE
+    env:
+      - KIMI_CODE_NO_AUTO_UPDATE=1
+    assets:
+      darwin/arm64:
+        url: https://github.com/MoonshotAI/kimi-code/releases/download/%40moonshot-ai%2Fkimi-code%40{version}/kimi-code-darwin-arm64.tar.gz
+        sha256: 8c3bad99571b16abd113ab5d511a98a36b852c0d5493991842a67b8c2bc4ecd0
+        member: kimi
+      darwin/amd64:
+        url: https://github.com/MoonshotAI/kimi-code/releases/download/%40moonshot-ai%2Fkimi-code%40{version}/kimi-code-darwin-x64.tar.gz
+        sha256: f6dc0289112c24119d070f9203d44bcd53580e380819db25b58be65643b75bd4
+        member: kimi
+      linux/amd64:
+        url: https://github.com/MoonshotAI/kimi-code/releases/download/%40moonshot-ai%2Fkimi-code%40{version}/kimi-code-linux-x64.tar.gz
+        sha256: b66cc3787bc9dfa6a06761305dc8878f98e7a24f79fa4494c00714229a1486e8
+        member: kimi
+      linux/arm64:
+        url: https://github.com/MoonshotAI/kimi-code/releases/download/%40moonshot-ai%2Fkimi-code%40{version}/kimi-code-linux-arm64.tar.gz
+        sha256: 5c68d74b139b47fb3457f3805a159cdfa942a6a98a159ab158a1baf93b024bbd
+        member: kimi
+      windows/amd64:
+        url: https://github.com/MoonshotAI/kimi-code/releases/download/%40moonshot-ai%2Fkimi-code%40{version}/kimi-code-win32-x64.tar.gz
+        sha256: 87756a53a9bb0915842d884eaf43f69a06b2e404bcbb05d41c519c12d4b410cb
+        member: kimi
   launch:
     exec: kimi -m {model} -p {prompt} --auto
     acp_exec: kimi acp

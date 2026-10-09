@@ -322,7 +322,10 @@ func weaveChildEnv(environ []string, workspace, branch, base, queueDir string, i
 	if l == nil {
 		return env
 	}
-	return secrets.ProjectAgentEnv(env, environ, l.PreserveEnv, l.CredentialEnvAliases)
+	env = secrets.ProjectAgentEnv(env, environ, l.PreserveEnv, l.CredentialEnvAliases)
+	// The recipe's own pairs last: a managed install's self-update switch
+	// holds whatever the launcher's shell inherited.
+	return agentlaunch.ApplyLaunchEnv(env, agentlaunch.Launch(*l))
 }
 
 // --- roster members ---------------------------------------------------------

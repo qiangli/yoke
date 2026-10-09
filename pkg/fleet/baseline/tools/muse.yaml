@@ -8,6 +8,34 @@ cli:
   # the versioned muse-bin-<ver> beside it. Installed by
   # `curl -fsSL https://dev.meta.ai/install.sh | sh`.
   binary: muse
+  # MANAGED INSTALL (D12, 2026-10-09): Meta's own versioned muse binary — the
+  # artifact the vendor's bash launcher (~/.local/bin/muse) downloads as
+  # muse-bin-<ver> — pinned and verified against the vendor's manifest.json
+  # (checksum_algorithm sha256; aarch64_macos was downloaded and re-hashed on a
+  # trusted dev host on 2026-10-09 and matched). Raw executables. The managed
+  # binary is the versioned muse-bin, NOT the self-updating launcher, so there
+  # is no auto-update to switch off. Proprietary: Meta's Muse Code terms.
+  managed:
+    source: vendor-url
+    version: 1.4.4-R5419.1
+    license: Meta Muse Code Terms of Service (proprietary)
+    license_url: https://dev.meta.ai/
+    assets:
+      darwin/arm64:
+        url: https://lookaside.facebook.com/lookaside/muse/download/?channel=muse&version={version}&file=muse-aarch64-macos
+        sha256: 7f708414207d1665858baa6ef2ef0f5c69c727f5b3c00243fa398c2f5d5b5cc0
+      darwin/amd64:
+        url: https://lookaside.facebook.com/lookaside/muse/download/?channel=muse&version={version}&file=muse-x86-macos
+        sha256: d88fc9da14cff06a5f40e209e8c3502451329d8d5143c147bb7b7609204d1aa2
+      linux/amd64:
+        url: https://lookaside.facebook.com/lookaside/muse/download/?channel=muse&version={version}&file=muse-x86-linux
+        sha256: cfc9d068441ff46036ad6bbf30dd794043b25b7efb69648c92c022ccf65f7d19
+      linux/arm64:
+        url: https://lookaside.facebook.com/lookaside/muse/download/?channel=muse&version={version}&file=muse-aarch64-linux
+        sha256: bc1196793927baaf07535e9199d053ea3754b3bc658da1fec13d37f089cccd11
+      windows/amd64:
+        url: https://lookaside.facebook.com/lookaside/muse/download/?channel=muse&version={version}&file=muse-x86-windows.exe
+        sha256: 5caacb02eea2734405786e50cb42aeea3eeb46b4fa9801cfa666cda225101749
   launch:
     # RUNG 2 via stdout. Measured against Muse Code 1.3.0 on 2026-09-23: one
     # MSP record per line, kind under the top-level `payload_type`. A success

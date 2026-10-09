@@ -283,6 +283,9 @@ func (s *StickySession) startLocked(argv []string) error {
 	if len(argv) == 0 {
 		return errors.New("cligw: empty sticky session argv")
 	}
+	if _, err := agentlaunch.EnsureManaged(context.Background(), s.launch); err != nil {
+		return err
+	}
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = s.cwd
 	cmd.Env = workerEnv(os.Environ(), s.launch)
