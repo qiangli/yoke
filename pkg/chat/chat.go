@@ -623,17 +623,13 @@ func agentChildEnv(ctx context.Context) []string {
 	// inherit the operator's keyring. But a metered model needs ONE key in order
 	// to answer, and the registry says which via `api_key_ref`. agentlaunch
 	// resolves that reference to names only; values remain opaque and are copied
-	// from this launcher's own environment.
+	// from this launcher's environment or its host secrets.map bindings.
 	//
 	// Preserving the model's own declared key — and only declared names — makes
 	// the firewall a security boundary rather than an outage.
 	if l, ok := LaunchFrom(ctx); ok {
-		if len(l.PreserveEnv) > 0 {
-			env = secrets.PreserveEnvNames(env, parent, l.PreserveEnv)
-		}
-		if len(l.CredentialEnvAliases) > 0 {
-			env = secrets.PreserveEnvAliases(env, parent, l.CredentialEnvAliases)
-		} else if len(l.PreserveEnv) == 0 && l.ModelName != "" {
+		env = secrets.ProjectAgentEnv(env, parent, l.PreserveEnv, l.CredentialEnvAliases)
+		if len(l.CredentialEnvAliases) == 0 && len(l.PreserveEnv) == 0 && l.ModelName != "" {
 			// Backward compatibility: callers may still construct Launch values
 			// manually. Resolve the same catalog declaration the old path used,
 			// and grant only its first matching credential rather than widening

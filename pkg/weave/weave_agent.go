@@ -316,21 +316,13 @@ func weaveChildEnv(environ []string, workspace, branch, base, queueDir string, i
 	// the vault-projected names; WEAVE_*/BASHY_*/YCODE_* stamped above are untouched.
 	// Opt back in with secrets.AllowAgentSecretsEnv.
 	env = secrets.ScrubAgentEnv(env)
-	// It is NEVER weave's job to hand out API keys — every agent is preconfigured
-	// with its own auth (ycode from the ambient env, opencode from its own
-	// auth.json, …) and must authenticate from that, not from anything weave
-	// injects. Weave used to look up the launched model's api_key_ref and inject
-	// that key back from the operator's own environment (grantAgentModelKey) —
-	// but that value can go stale (a stale DEEPSEEK_API_KEY once clobbered valid
-	// auth on every ycode/opencode agent with 401s), and reading a provider key
-	// at all is exactly the "weave hands out API keys" behavior this must not do.
-	// So weave injects nothing; it only preserves credential names declared by
-	// the generic resolved launch. Values remain opaque and come verbatim from
-	// the launcher's own environment.
+	// Restore only the resolved binding's contract. Missing parent values may
+	// come from the host secrets.map, just as in interactive shell startup;
+	// arbitrary operator secrets and noncredential map entries stay private.
 	if l == nil {
 		return env
 	}
-	return secrets.PreserveEnvNames(env, environ, l.PreserveEnv)
+	return secrets.ProjectAgentEnv(env, environ, l.PreserveEnv, l.CredentialEnvAliases)
 }
 
 // --- roster members ---------------------------------------------------------
