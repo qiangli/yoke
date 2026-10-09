@@ -3,14 +3,17 @@ id: 5a1e423d3801
 kind: bug
 title: dag Sources and Generates support globs and exclusions
 seq: 6
-status: todo
+status: done
 priority: p0
 labels:
     - dag
 created: 2026-09-30T06:36:19.037774Z
+assignee: muse-spark1.3
 sprint: 379
 sprint_id: 908c2ac2-e7bc-55fe-86bd-d25046ac4684
 sprint_title: 'bashy 1.0.0 feature list: bash + Bash# + Yoke'
+closed: 2026-10-09T09:05:30.065797Z
+closed_by: claude-opus5.5
 ---
 
 Finding: pkg/dag/cache.go Fingerprint and UpToDate pass each Sources/Inputs/Generates value to filepath.Join and os.Stat; hashPath handles files or directories, not glob patterns. Go Task taskfile/ast/task.go and website/src/next/docs/reference/schema.md support recursive source/output globs, exclusions and optional gitignore filtering. Acceptance: expand source and output globs deterministically; adding, deleting, or changing a matching file invalidates the target; excluded files do not; an unmatched required generated pattern does not produce a false cache hit; watch mode sees membership changes; regression tests cover all cases and work on Linux, macOS and Windows. Preserve literal path and directory behavior.
