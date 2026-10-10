@@ -24,6 +24,7 @@ import (
 // board, through the seam below, for the uuid and title of card N.
 
 func init() {
+	todopkg.PrepareMaintenance = prepareMaintenance
 	todopkg.SprintHandles = sprintHandlesForTodo
 	todopkg.SprintPreflight = sprintBoardPreflight
 	todopkg.SprintChanged = func(previous *issue.Issue) error {

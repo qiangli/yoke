@@ -138,7 +138,7 @@ func resolveSprintStoryFor(s *weaveStory, repo, ref string) (string, *issue.Issu
 	for _, root := range roots {
 		it, err := todopkg.ResolveRef(todopkg.RepoStore(root), ref)
 		if err == nil && it != nil {
-			if it.Sprint != s.ID {
+			if !storyBelongsToSprint(it, s) {
 				return "", nil, fmt.Errorf("story %s belongs to sprint #%d, not #%d", it.ID, it.Sprint, s.ID)
 			}
 			return root, it, nil

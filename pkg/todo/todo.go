@@ -165,6 +165,12 @@ func ResolveStore(owner string, forceRepo, forceUser bool, baseDir string) (*iss
 // births every issue "open" (triage is a separate act) — a todo, personal or checked
 // in, has no triage step, so it is born ready in its own vocabulary.
 func Add(st *issue.Store, title, body, priority string, due *time.Time, recurring, assignee string) (*issue.Issue, error) {
+	return addPrepared(st, title, body, priority, due, recurring, assignee, nil)
+}
+
+// addPrepared sets CLI metadata before the single save, so a failed save
+// never leaves behind an unlinked version of a maintenance story.
+func addPrepared(st *issue.Store, title, body, priority string, due *time.Time, recurring, assignee string, prepare func(*issue.Issue)) (*issue.Issue, error) {
 	if strings.TrimSpace(title) == "" {
 		return nil, fmt.Errorf("a title is required")
 	}
@@ -195,6 +201,9 @@ func Add(st *issue.Store, title, body, priority string, due *time.Time, recurrin
 		Assignee:  assignee,
 		Status:    status,
 		Created:   time.Now().UTC(),
+	}
+	if prepare != nil {
+		prepare(it)
 	}
 	if _, err := st.Save(it); err != nil {
 		return nil, err
@@ -416,6 +425,13 @@ var SprintChanged func(previous *issue.Issue) error
 // it nil (no board, nothing to prove); sprint-aware binaries probe the
 // board lock.
 var SprintPreflight func() error
+
+// MaintenanceSprint is the reserved default sprint. Zero remains unlinked.
+const MaintenanceSprint int64 = 9999
+
+// PrepareMaintenance links a store to the default board before a story is
+// written. Plain todo consumers leave this nil and retain standalone defaults.
+var PrepareMaintenance func(*issue.Store) (uuid, title string, err error)
 
 // LinkSprint sets the story's sprint fields from seq: all three when the seam
 // answers, the seq alone when it does not, and none when seq is 0 (unlink).

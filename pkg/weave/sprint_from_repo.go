@@ -183,6 +183,16 @@ func ensureSprintFromRepo(dir, handle string) (s *weaveStory, created bool, err 
 	if cand == nil {
 		return nil, false, fmt.Errorf("%w, and no story in %s names it (a story carries its sprint as sprint_id in docs/todo/ frontmatter — pull, or check the uuid)", ferr, root)
 	}
+	if strings.EqualFold(cand.UUID, maintenanceUUID) {
+		if _, _, err := prepareMaintenance(todopkg.RepoStore(root)); err != nil {
+			return nil, false, err
+		}
+		q, err := loadWeaveQueue(dir)
+		if err != nil {
+			return nil, false, err
+		}
+		return findWeaveStory(q, todopkg.MaintenanceSprint), true, nil
+	}
 	lerr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
 		// Re-check under the lock: a concurrent verb may have created it.
 		for _, have := range q.Stories {
@@ -195,8 +205,8 @@ func ensureSprintFromRepo(dir, handle string) (s *weaveStory, created bool, err 
 			q.NextStoryID = 1
 		}
 		id := cand.Seq
-		if id <= 0 || findWeaveStory(q, id) != nil {
-			id = q.NextStoryID
+		if id <= 0 || id == todopkg.MaintenanceSprint || findWeaveStory(q, id) != nil {
+			id = nextOrdinarySprintID(q)
 		}
 		if q.NextStoryID <= id {
 			q.NextStoryID = id + 1
