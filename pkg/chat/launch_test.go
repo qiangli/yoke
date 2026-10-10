@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -101,6 +102,34 @@ func pinCatalog(t *testing.T) {
 	t.Cleanup(func() { newCatalog = prev })
 }
 
+// fakeAider is a synthetic, supported test tool carrying the historical aider
+// launch contract. Production aider is retired (see
+// pkg/fleet/baseline/tools/aider.yaml), so the rendering tests that pinned
+// aider's argv shape — prompt as the value of --message, --yes-always as the
+// kill-switch — exercise the same template through this stand-in instead.
+const fakeAider = "fake-aider"
+
+// pinFakeAider publishes fakeAider through the read-only shared tools PATH,
+// the ring an operator overlay uses, so it resolves with or without a local
+// store. Call it after fleettest.Ring.
+func pinFakeAider(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	body := `name: fake-aider
+kind: cli
+display: Fake Aider
+cli:
+  binary: fake-aider
+  launch:
+    exec: fake-aider --yes-always --no-git --model {model} --message {prompt}
+    prompt_position: last
+`
+	if err := os.WriteFile(filepath.Join(dir, fakeAider+".yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BASHY_TOOLS_PATH", dir)
+}
+
 func argv(t *testing.T, name string, opt Options) (string, []string, string) {
 	t.Helper()
 	l, err := resolveLaunch(name, opt)
@@ -115,7 +144,12 @@ func argv(t *testing.T, name string, opt Options) (string, []string, string) {
 func TestBareToolArgvFollowsSeededProfiles(t *testing.T) {
 	permitUnsafeLaunch(t)
 	pinCatalog(t)
+	pinFakeAider(t)
 	for name, want := range seededProfiles {
+		if name == "aider" {
+			// aider is retired; its seeded profile is checked through fakeAider.
+			name = fakeAider
+		}
 		tool, args, model := argv(t, name, Options{})
 		if exeName(tool) != name {
 			t.Errorf("%s: tool = %q", name, tool)
@@ -302,7 +336,8 @@ func TestCodexSandboxOverrideCoexistsWithModel(t *testing.T) {
 func TestPromptRemainsTheFinalArgument(t *testing.T) {
 	permitUnsafeLaunch(t)
 	pinCatalog(t)
-	for _, name := range []string{"claude", "codex", "opencode", "aider", "agy", "claude:opus"} {
+	pinFakeAider(t)
+	for _, name := range []string{"claude", "codex", "opencode", fakeAider, "agy", "claude:opus"} {
 		l, err := resolveLaunch(name, Options{})
 		if err != nil {
 			t.Fatal(err)
@@ -313,10 +348,10 @@ func TestPromptRemainsTheFinalArgument(t *testing.T) {
 		}
 	}
 	// aider specifically: the prompt must land right after --message.
-	l, _ := resolveLaunch("aider", Options{})
+	l, _ := resolveLaunch(fakeAider, Options{})
 	full := append(l.Args, "THE PROMPT")
 	if !adjacent(full, "--message", "THE PROMPT") {
-		t.Fatalf("aider: %q", full)
+		t.Fatalf("%s: %q", fakeAider, full)
 	}
 }
 
@@ -356,17 +391,18 @@ func TestUnNicknamedBindingKeepsItsRawName(t *testing.T) {
 	// the same convention the other rendering tests follow.
 	permitUnsafeLaunch(t)
 	fleettest.Ring(t)
+	pinFakeAider(t)
 	root := t.TempDir()
 	prev := newCatalog
 	newCatalog = func() *fleet.Catalog { return fleet.New(fleet.WithRoot(root), fleet.WithoutLocalStore()) }
 	t.Cleanup(func() { newCatalog = prev })
 
-	// aider:opus is a legal binding with no seeded agent behind it.
-	l, err := resolveLaunch("aider:opus", Options{})
+	// fake-aider:opus is a legal binding with no seeded agent behind it.
+	l, err := resolveLaunch(fakeAider+":opus", Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if l.Nick != "aider:opus" || l.Tool != "aider" || l.Model != "claude-opus-5" {
+	if l.Nick != fakeAider+":opus" || l.Tool != fakeAider || l.Model != "claude-opus-5" {
 		t.Fatalf("launch = %+v", l)
 	}
 }
