@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/qiangli/yoke/pkg/assetring"
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/spacetime"
 )
 
@@ -59,11 +60,15 @@ type Listing struct {
 	Verdict Verdict
 	Shadows bool // this row hides a same-named skill in a lower ring
 	Warning string
+	fleet.RecordLifecycle
 }
 
 // Catalog merges sources; on a name collision the LAST source wins
 // (ring order: embedded first, local last — local shadows embedded).
-type Catalog struct{ Sources []Source }
+type Catalog struct {
+	Sources    []Source
+	RetiredDir string // sidecar retirements (see lifecycle.go); "" = none can be recorded
+}
 
 func (c *Catalog) ring() *assetring.Catalog[Skill] {
 	return &assetring.Catalog[Skill]{Sources: c.Sources, Parse: parseSkill}
@@ -82,7 +87,7 @@ func (c *Catalog) List(ps *ProbeSet) ([]Listing, error) {
 	}
 	out := make([]Listing, 0, len(rows))
 	for _, r := range rows {
-		l := Listing{Skill: r.Entry, Shadows: r.Shadows}
+		l := Listing{Skill: r.Entry, Shadows: r.Shadows, RecordLifecycle: c.Lifecycle(r.Name)}
 		l.Verdict = verdictOf(l.Skill, ps)
 		if l.RequiresErr != "" {
 			l.Warning = "requires unparsable: " + l.RequiresErr

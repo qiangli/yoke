@@ -99,20 +99,27 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 		Long:          "skills lists, inspects, and probes the tier-2 workspace skills available\non this host. `list` shows only skills applicable here (env-gated via each\nskill's metadata.requires); `probe` prints the host coordinate the gate\nevaluates against.",
 		SilenceErrors: true,
 		SilenceUsage:  true,
-		RunE:          func(cmd *cobra.Command, args []string) error { return runList(cmd, cfg, false, false) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runList(cmd, cfg, fleet.ListFilter{}, false, false)
+		},
 	}
 	// Mounted under `bashy`, so cobra's generated `completion` verb documents a
 	// `skills` binary that does not exist — and it is the one entry in an
 	// agent-facing listing that is not something the verb can do.
 	root.CompletionOptions.DisableDefaultCmd = true
 
-	var all, asJSON bool
+	var filter fleet.ListFilter
+	var inapplicable, asJSON bool
 	list := &cobra.Command{
 		Use:   "list",
-		Short: "list skills applicable at this coordinate (--all: everything, annotated)",
-		RunE:  func(cmd *cobra.Command, args []string) error { return runList(cmd, cfg, all, asJSON) },
+		Short: "list skills applicable at this coordinate (--inapplicable: everything, annotated)",
+		Long:  "list shows the skills applicable at this host's coordinate, from every ring,\nretired ones excluded. It takes the same view flags as every registry kind;\n--retired shows only retired skills. --inapplicable adds the skills whose\nmetadata.requires fails here, each with the failing clause.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runList(cmd, cfg, filter, inapplicable, asJSON)
+		},
 	}
-	list.Flags().BoolVar(&all, "all", false, "include inapplicable skills, with the failing clause")
+	filter.Flags(list)
+	list.Flags().BoolVar(&inapplicable, "inapplicable", false, "include inapplicable skills, with the failing clause")
 	list.Flags().BoolVar(&asJSON, "json", false, "machine-readable listing")
 
 	var refresh, probeJSON bool
@@ -268,7 +275,10 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 	// NOTE: the evidence ledger these runs write is READ by `bashy craft`
 	// (coreutils/pkg/craft), not here. skills manages the catalog; craft is
 	// what running it accumulates into.
-	root.AddCommand(list, probe, show, add, rm, set, edit, verify, run, learn, promote, export, newSyncCmd())
+	catalogStore := func() (fleet.Storage, error) { return cfg.catalog().Storage(), nil }
+	retire := fleet.NewRetireCmdFor(fleet.KindSkill, catalogStore)
+	unretire := fleet.NewUnretireCmdFor(fleet.KindSkill, catalogStore)
+	root.AddCommand(list, probe, show, add, rm, set, edit, verify, run, learn, promote, export, retire, unretire, newSyncCmd())
 	return root
 }
 
@@ -630,6 +640,9 @@ func runExport(cmd *cobra.Command, cfg *config, name, to string, tools []string,
 	if !ok {
 		return fmt.Errorf("skills: %q not found", name)
 	}
+	if err := cfg.catalog().CheckRetired(name); err != nil {
+		return err
+	}
 	var roots, instructions []string
 	if to != "" {
 		roots = append(roots, to)
@@ -725,6 +738,9 @@ func runExportRecord(cmd *cobra.Command, cfg *config, name, to string, user, rep
 	if !ok {
 		return fmt.Errorf("skills: %q not found", name)
 	}
+	if err := cfg.catalog().CheckRetired(name); err != nil {
+		return err
+	}
 	rec, err := RecordFrom(&sk, src, hostScrubber())
 	if err != nil {
 		return err
@@ -767,6 +783,7 @@ func (c *config) catalog() *Catalog {
 	cat := &Catalog{Sources: c.sources}
 	if c.cfgDir != "" {
 		cat.Sources = append(cat.Sources, DirSource(c.cfgDir))
+		cat.RetiredDir = filepath.Join(c.cfgDir, retiredDirName)
 	}
 	return cat
 }
@@ -791,44 +808,62 @@ func NewCatalog(opts ...Option) (*Catalog, *ProbeSet) {
 	return cfg.catalog(), ps
 }
 
-func runList(cmd *cobra.Command, cfg *config, all, asJSON bool) error {
+func runList(cmd *cobra.Command, cfg *config, filter fleet.ListFilter, inapplicable, asJSON bool) error {
+	selected, err := filter.Selected()
+	if err != nil {
+		return err
+	}
+	if inapplicable && filter.Active {
+		return fmt.Errorf("skills: --inapplicable and --active contradict; give one")
+	}
 	ps, _ := cfg.probes(false)
 	rows, err := cfg.catalog().List(ps)
 	if err != nil {
 		return err
 	}
+	// Applicability is a skill's own gate, separate from the view: a skill
+	// that fails its requires here is shown only on request, or when the view
+	// is the retired audit.
+	showInapplicable := inapplicable || filter.Retired
+	var kept []Listing
+	for _, r := range rows {
+		if !filter.Keep(selected, r.Ring, r.RecordLifecycle, func() bool { return r.Verdict.Applicable }) {
+			continue
+		}
+		if !r.Verdict.Applicable && !showInapplicable {
+			continue
+		}
+		kept = append(kept, r)
+	}
 	if asJSON {
 		type row struct {
-			Name        string `json:"name"`
-			Description string `json:"description,omitempty"`
-			Ring        string `json:"ring"`
-			Applicable  bool   `json:"applicable"`
-			Failing     string `json:"failing,omitempty"`
-			Unchecked   string `json:"unchecked_compat,omitempty"`
-			Shadows     bool   `json:"shadows,omitempty"`
-			HasDhnt     bool   `json:"dhnt,omitempty"`
-			Identity    string `json:"identity,omitempty"`
-			Warning     string `json:"warning,omitempty"`
+			Name        string            `json:"name"`
+			Description string            `json:"description,omitempty"`
+			Ring        string            `json:"ring"`
+			Applicable  bool              `json:"applicable"`
+			Failing     string            `json:"failing,omitempty"`
+			Unchecked   string            `json:"unchecked_compat,omitempty"`
+			Shadows     bool              `json:"shadows,omitempty"`
+			HasDhnt     bool              `json:"dhnt,omitempty"`
+			Identity    string            `json:"identity,omitempty"`
+			Warning     string            `json:"warning,omitempty"`
+			Retired     *fleet.Retirement `json:"retired,omitempty"`
 		}
-		out := make([]row, 0, len(rows))
-		for _, r := range rows {
-			if !all && !r.Verdict.Applicable {
-				continue
-			}
+		out := make([]row, 0, len(kept))
+		for _, r := range kept {
 			var id string
 			if r.Dhnt.Valid() {
 				id = r.Dhnt.Identity
 			}
 			out = append(out, row{r.Name, r.Description, r.Ring.String(), r.Verdict.Applicable,
-				r.Verdict.Failing, r.Verdict.Unchecked, r.Shadows, r.HasDhnt, id, r.Warning})
+				r.Verdict.Failing, r.Verdict.Unchecked, r.Shadows, r.HasDhnt, id, r.Warning, r.Retired})
 		}
-		return json.NewEncoder(cmd.OutOrStdout()).Encode(out)
+		return fleet.WriteListJSON(cmd.OutOrStdout(), fleet.KindSkill, filter.View(), out)
 	}
-	for _, r := range rows {
-		switch {
-		case r.Verdict.Applicable:
+	for _, r := range kept {
+		if r.Verdict.Applicable {
 			fmt.Fprintln(cmd.OutOrStdout(), r.Name)
-		case all:
+		} else {
 			fmt.Fprintf(cmd.OutOrStdout(), "%s\t# inapplicable: %s\n", r.Name, r.Verdict.Failing)
 		}
 	}
@@ -1071,6 +1106,9 @@ func runRun(cmd *cobra.Command, cfg *config, name string, asJSON, adapt bool, re
 	if !ok {
 		return fmt.Errorf("skills: %q not found", name)
 	}
+	if err := cfg.catalog().CheckRetired(name); err != nil {
+		return err
+	}
 	ps, _ := cfg.probes(false)
 
 	var rec AttestRecord
@@ -1123,6 +1161,9 @@ func runTarget(cmd *cobra.Command, cfg *config, name, target string, asJSON bool
 	sk, src, ok := cfg.catalog().Get(name)
 	if !ok {
 		return fmt.Errorf("skills: %q not found", name)
+	}
+	if err := cfg.catalog().CheckRetired(name); err != nil {
+		return err
 	}
 	ps, _ := cfg.probes(false)
 	rec, attested, err := runTargetSkill(cfg, sk, src, ps, target, mustGetwd(), cmd.ErrOrStderr())
@@ -1269,7 +1310,7 @@ func Applicable(opts ...Option) []Advertised {
 	}
 	var out []Advertised
 	for _, r := range rows {
-		if !r.Verdict.Applicable {
+		if !r.Verdict.Applicable || r.IsRetired() {
 			continue
 		}
 		out = append(out, Advertised{

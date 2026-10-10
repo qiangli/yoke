@@ -1,1 +1,13 @@
-[{"name":"alpha-notes","description":"ungated","ring":"embedded","applicable":true}]
+{
+  "schema_version": "bashy-registry-list-v1",
+  "kind": "skill",
+  "view": "default",
+  "items": [
+    {
+      "name": "alpha-notes",
+      "description": "ungated",
+      "ring": "embedded",
+      "applicable": true
+    }
+  ]
+}

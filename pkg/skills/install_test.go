@@ -142,16 +142,18 @@ func TestCLIAddVerify(t *testing.T) {
 	}
 
 	// Installed skill shows up in list (ring local) and verifies.
-	stdout, _, err = f.run("list", "--json", "--all")
+	stdout, _, err = f.run("list", "--json", "--inapplicable")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var rows []map[string]any
-	if err := json.Unmarshal([]byte(stdout), &rows); err != nil {
+	var env struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &env); err != nil {
 		t.Fatal(err)
 	}
 	found := false
-	for _, r := range rows {
+	for _, r := range env.Items {
 		if r["name"] == "port-check" {
 			found = true
 			if r["ring"] != "local" || r["identity"] == nil {

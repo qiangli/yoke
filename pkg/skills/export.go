@@ -141,6 +141,10 @@ func Provision(workspace string, names []string, log io.Writer, opts ...Option) 
 			fmt.Fprintf(log, "skills: provision: %q not found (skipped)\n", name)
 			continue
 		}
+		if err := cat.CheckRetired(name); err != nil {
+			fmt.Fprintf(log, "skills: provision: %v (skipped)\n", err)
+			continue
+		}
 		for _, root := range []string{
 			filepath.Join(workspace, ".agents", "skills"),
 			filepath.Join(workspace, ".claude", "skills"),

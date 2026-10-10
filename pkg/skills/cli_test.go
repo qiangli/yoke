@@ -19,7 +19,7 @@ func cliFixture(t *testing.T) *cobraRunner {
 		"omega-nowhere/SKILL.md":   {Data: []byte("---\nname: omega-nowhere\ndescription: never applicable\nmetadata:\n  requires: \"os=plan9\"\n---\nOMEGA BODY\n")},
 	}
 	dir := t.TempDir()
-	return &cobraRunner{t: t, opts: []Option{
+	return &cobraRunner{t: t, dir: dir, opts: []Option{
 		WithSource(EmbedSource(embedded, RingEmbedded)),
 		WithConfigDir(dir),
 	}}
@@ -27,6 +27,7 @@ func cliFixture(t *testing.T) *cobraRunner {
 
 type cobraRunner struct {
 	t    *testing.T
+	dir  string // the local ring / config dir
 	opts []Option
 }
 
@@ -59,30 +60,32 @@ func TestCLIListDefaultGates(t *testing.T) {
 	}
 }
 
-func TestCLIListAll(t *testing.T) {
+func TestCLIListInapplicableText(t *testing.T) {
 	f := cliFixture(t)
-	out, _, err := f.run("list", "--all")
+	out, _, err := f.run("list", "--inapplicable")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out, "alpha-notes") ||
 		!strings.Contains(out, "omega-nowhere\t# inapplicable: os=plan9: os=") {
-		t.Fatalf("list --all = %q", out)
+		t.Fatalf("list --inapplicable = %q", out)
 	}
 }
 
 func TestCLIListJSON(t *testing.T) {
 	f := cliFixture(t)
-	out, _, err := f.run("list", "--all", "--json")
+	out, _, err := f.run("list", "--inapplicable", "--json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var rows []map[string]any
-	if err := json.Unmarshal([]byte(out), &rows); err != nil {
+	var env struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
 		t.Fatalf("bad json: %v\n%s", err, out)
 	}
-	if len(rows) != 2 {
-		t.Fatalf("rows = %d", len(rows))
+	if len(env.Items) != 2 {
+		t.Fatalf("rows = %d", len(env.Items))
 	}
 }
 

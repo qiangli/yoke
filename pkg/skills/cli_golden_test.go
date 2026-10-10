@@ -17,13 +17,14 @@ var updateGolden = flag.Bool("update-golden", false, "rewrite testdata/golden/*.
 func TestSkillCLIGolden(t *testing.T) {
 	f := cliFixture(t)
 	for name, args := range map[string][]string{
-		"list":           {"list"},
-		"list-json":      {"list", "--json"},
-		"list-all":       {"list", "--all"},
-		"show":           {"show", "alpha-notes"},
-		"show-reference": {"show", "alpha-notes", "--reference"},
-		"show-yaml":      {"show", "alpha-notes", "--yaml"},
-		"show-json":      {"show", "alpha-notes", "--json"},
+		"list":              {"list"},
+		"list-json":         {"list", "--json"},
+		"list-all":          {"list", "--all"},
+		"list-inapplicable": {"list", "--inapplicable"},
+		"show":              {"show", "alpha-notes"},
+		"show-reference":    {"show", "alpha-notes", "--reference"},
+		"show-yaml":         {"show", "alpha-notes", "--yaml"},
+		"show-json":         {"show", "alpha-notes", "--json"},
 	} {
 		got, stderr, err := f.run(args...)
 		if err != nil {

@@ -314,12 +314,25 @@ func TestCLISyncUnpacksRecords(t *testing.T) {
 	shared := &cobraRunner{t: t, opts: []Option{
 		WithSource(SharedDirSource(ring)), WithConfigDir(DefaultStoreDir()),
 	}}
-	list, _, err := shared.run("list", "--all", "--json")
+	list, _, err := shared.run("list", "--inapplicable", "--json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(list, `"name":"dual"`) || !strings.Contains(list, `"dhnt":true`) ||
-		!strings.Contains(list, `"name":"plain-org"`) {
+	var listing struct {
+		Items []struct {
+			Name string `json:"name"`
+			Dhnt bool   `json:"dhnt"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(list), &listing); err != nil {
+		t.Fatalf("shared ring listing: %v\n%s", err, list)
+	}
+	var sawDual, sawPlain bool
+	for _, it := range listing.Items {
+		sawDual = sawDual || (it.Name == "dual" && it.Dhnt)
+		sawPlain = sawPlain || it.Name == "plain-org"
+	}
+	if !sawDual || !sawPlain {
 		t.Errorf("shared ring listing: %s", list)
 	}
 
