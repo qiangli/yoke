@@ -29,6 +29,27 @@ func pinAgentFleet(t *testing.T) *fleet.Catalog {
 	return cat
 }
 
+// saveMessageTool registers msgtool, a fake supported CLI whose prompt is the
+// value of --message and must stay last — the launch shape the retired aider
+// contract used to pin, without depending on aider's retirement state.
+func saveMessageTool(t *testing.T, cat *fleet.Catalog) {
+	t.Helper()
+	tool, err := fleet.ParseTool("msgtool", []byte(`name: msgtool
+kind: cli
+cli:
+  binary: msgtool
+  launch:
+    exec: msgtool --model {model} --message {prompt}
+    prompt_position: last
+`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.SaveTool(tool); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // THE ASK: `weave start -- 007` launches claude with 007's model, and the
 // issue body as the prompt.
 func TestExpandAgentSelectsTheModel(t *testing.T) {
@@ -150,16 +171,12 @@ func TestExpandAgentByAlias(t *testing.T) {
 // "executable" just because weave flags were placed after `--`. This exact
 // typo used to hydrate a full workspace and then fail with exec status 127.
 func TestExpandAgentRejectsArgumentsAfterNickname(t *testing.T) {
-	root := t.TempDir()
-	cat := fleet.New(fleet.WithRoot(root))
+	cat := pinAgentFleet(t)
 	if err := cat.SaveAgent(fleet.Agent{
-		Name: "worker", Nick: "Zephyr", Tool: "opencode", Model: "kimi-k2.7-code",
+		Name: "worker", Nick: "Zephyr", Tool: "opencode", Model: "glm-5.3",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	prev := fleetCatalog
-	fleetCatalog = func() *fleet.Catalog { return fleet.New(fleet.WithRoot(root)) }
-	t.Cleanup(func() { fleetCatalog = prev })
 
 	l, argv, err := weaveExpandAgent([]string{"Zephyr", "--json", "--quiet"}, "body", "title")
 	if err == nil || !strings.Contains(err.Error(), "registered agent") || !strings.Contains(err.Error(), "before `--`") {
@@ -262,15 +279,15 @@ func TestBindingResolvesToItsCanonicalNickname(t *testing.T) {
 }
 
 // A binding NOBODY has nicknamed still launches with the right model, but it
-// is not a principal: a mention cannot carry a colon, so `@aider:opus` would
+// is not a principal: a mention cannot carry a colon, so `@msgtool:opus` would
 // never resolve.
 func TestUnNicknamedBindingIsNotAPrincipal(t *testing.T) {
-	pinAgentFleet(t)
-	l, argv, err := weaveExpandAgent([]string{"aider:opus"}, "body", "title")
+	saveMessageTool(t, pinAgentFleet(t))
+	l, argv, err := weaveExpandAgent([]string{"msgtool:opus"}, "body", "title")
 	if err != nil || l == nil {
 		t.Fatalf("l=%+v err=%v", l, err)
 	}
-	if l.Nick != "aider:opus" {
+	if l.Nick != "msgtool:opus" {
 		t.Fatalf("nick = %q", l.Nick)
 	}
 	if !strings.Contains(strings.Join(argv, " "), "--model claude-opus-5") {
@@ -282,17 +299,14 @@ func TestUnNicknamedBindingIsNotAPrincipal(t *testing.T) {
 	}
 }
 
-// The issue body is the prompt, and it stays the final argument — aider takes
-// its prompt as the value of --message.
+// The issue body is the prompt, and it stays the final argument — msgtool
+// takes its prompt as the value of --message.
 func TestExpandedBodyIsTheFinalArgument(t *testing.T) {
-	root := t.TempDir()
-	cat := fleet.New(fleet.WithRoot(root))
-	if err := cat.SaveAgent(fleet.Agent{Name: "surgeon", Tool: "aider", Model: "deepseek-v4"}); err != nil {
+	cat := pinAgentFleet(t)
+	saveMessageTool(t, cat)
+	if err := cat.SaveAgent(fleet.Agent{Name: "surgeon", Tool: "msgtool", Model: "deepseek-v4-pro"}); err != nil {
 		t.Fatal(err)
 	}
-	prev := fleetCatalog
-	fleetCatalog = func() *fleet.Catalog { return fleet.New(fleet.WithRoot(root)) }
-	t.Cleanup(func() { fleetCatalog = prev })
 
 	_, argv, err := weaveExpandAgent([]string{"surgeon"}, "THE BODY", "title")
 	if err != nil {
@@ -302,7 +316,7 @@ func TestExpandedBodyIsTheFinalArgument(t *testing.T) {
 		t.Fatalf("body is not the leading content of the last arg: %q", argv)
 	}
 	if argv[len(argv)-2] != "--message" {
-		t.Fatalf("aider's prompt must be the value of --message: %q", argv)
+		t.Fatalf("msgtool's prompt must be the value of --message: %q", argv)
 	}
 }
 
