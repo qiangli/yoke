@@ -439,3 +439,24 @@ func TestBoardStoryEmptyIDMatchesItsSibling(t *testing.T) {
 			story, panel)
 	}
 }
+
+// The sprint filter bar (Story #1732) ships in the served artifacts: the page's
+// script carries the client-side filter and the stylesheet its rules. The
+// behaviour is pinned by board_filter_dom_test.go under -tags verifydom; this
+// keeps the plain suite from shipping a page without it.
+func TestBoardArtifactsCarrySprintFilterBar(t *testing.T) {
+	h, _ := newBoardTestServer(t)
+	js := do(h, "GET", "/board.js", "127.0.0.1:5555", nil)
+	if js.Code != http.StatusOK {
+		t.Fatalf("board.js = %d", js.Code)
+	}
+	for _, want := range []string{"bd-filter", "bashy.board.filter", "function renderFilterBar", "function sprintMatches", `key: "epic"`, `key: "mgr"`} {
+		if !strings.Contains(js.Body.String(), want) {
+			t.Errorf("board.js lacks %q: the sprint filter bar is missing", want)
+		}
+	}
+	css := do(h, "GET", "/app.css", "127.0.0.1:5555", nil)
+	if css.Code != http.StatusOK || !strings.Contains(css.Body.String(), "#bd-filter") {
+		t.Errorf("app.css = %d, want 200 carrying the #bd-filter rules", css.Code)
+	}
+}

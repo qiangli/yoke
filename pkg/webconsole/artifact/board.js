@@ -28,7 +28,7 @@ const el = (tag, cls, text) => {
 // with replaceChildren, so anything a reader opened lives here or it collapses
 // under them mid-read: `open` is the panels, `stories`/`cont` are a sprint
 // card's two disclosures, and `story` is the one story whose body is showing.
-const state = { all: false, open: {}, stories: {}, cont: {}, story: {}, runs: [], runbook: "", dutyTab: "all", dutyTool: "", dutyBand: "", dutyCost: false, dutyAgentOpen: {} };
+const state = { all: false, open: {}, stories: {}, cont: {}, story: {}, runs: [], runbook: "", dutyTab: "all", dutyTool: "", dutyBand: "", dutyCost: false, dutyAgentOpen: {}, filter: null, data: null };
 
 // The Runs and Leaderboard sections collapse through the same idiom as the
 // panels — a bd-panel-head button over a bd-panel-body — and the same state.open,
@@ -98,8 +98,281 @@ function writeHash() {
   const q = new URLSearchParams();
   if (state.all) q.set("all", "1");
   if (state.runbook) q.set("runbook", state.runbook);
+  filterToParams(state.filter, q);
   const h = q.toString();
   history.replaceState(null, "", h ? "#" + h : "#");
+}
+
+// ---- sprint filter -----------------------------------------------------------
+//
+// The filter bar narrows the SPRINTS section client-side, over the payload the
+// page already holds: no request, no server state, and — like everything else
+// here — no lease. Facets are DERIVED from the loaded sprints (an epic that no
+// sprint carries is not offered), so they recompute whenever the payload does,
+// including when "include history" changes what the server sends.
+//
+// Selection model: each facet is either null (= everything, the default, so a
+// value that appears tomorrow is shown tomorrow) or a Set of the values to
+// show. Facets combine as AND; values within a facet as OR. The absent value
+// ("(no epic)", "(unclaimed)", "(no gate)") is the empty string internally and
+// a real member of its facet, because "which sprints have nobody?" is one of
+// the questions the bar is for.
+const FILTER_STORE = "bashy.board.filter";
+
+// FACETS is the shape of the bar: one entry per checkbox group, each naming the
+// URL/storage key, the heading, how to read the value off a sprint, and what to
+// call the empty value. Order is display order.
+const FACETS = [
+  { key: "epic", title: "epic", none: "(no epic)", of: (sp) => sp.epic || "" },
+  { key: "col", title: "column", none: "(no column)", of: (sp) => sp.column || "" },
+  { key: "mgr", title: "manager", none: "(unclaimed)", of: (sp) => sp.manager || sp.conductor || sp.lease_holder || "" },
+  { key: "gate", title: "gate", none: "(no gate)", of: (sp) => sp.gate_state || "" },
+];
+
+function defaultFilter() {
+  const f = { stale: false, q: "" };
+  for (const fc of FACETS) f[fc.key] = null;
+  return f;
+}
+
+function filterIsDefault(f) {
+  return !f.stale && !f.q && FACETS.every((fc) => f[fc.key] === null);
+}
+
+// filterToParams / filterFromParams are the ONE codec, shared by the URL hash
+// and localStorage, so a link and a reload restore the same view. A facet is
+// written as repeated keys (epic=a&epic=b) and every value travels EXACTLY as
+// it is: URLSearchParams escapes it on the way out and restores it on the way
+// in, so no character is reserved and no sentinel can collide with a real
+// name. The absent value is the empty string in the state and the empty
+// string on the wire (epic=), and the one selection with no value to write —
+// "none", the empty Set — rides its own key (none=epic). So "no selection"
+// (key absent), "the absent value" (epic=), "nothing" (none=epic) and an epic
+// literally named "_" (epic=_) are four different strings, and each reads
+// back to the Set it was written from.
+const NONE_KEY = "none";
+
+function filterToParams(f, q) {
+  if (!f) return q;
+  for (const fc of FACETS) {
+    const sel = f[fc.key];
+    if (sel === null) continue;
+    if (!sel.size) { q.append(NONE_KEY, fc.key); continue; }
+    for (const v of [...sel].sort()) q.append(fc.key, v);
+  }
+  if (f.stale) q.set("stale", "1");
+  if (f.q) q.set("q", f.q);
+  return q;
+}
+
+// A none= mark beside values for the same facet is not a contradiction: it
+// says "this facet is selected", and the values say which — so the Set is the
+// values, and only an empty one is "none".
+function filterFromParams(q) {
+  const f = defaultFilter();
+  let any = false;
+  const none = new Set(q.getAll(NONE_KEY));
+  for (const fc of FACETS) {
+    if (!q.has(fc.key) && !none.has(fc.key)) continue;
+    any = true;
+    f[fc.key] = new Set(q.getAll(fc.key));
+  }
+  if (q.get("stale") === "1") { f.stale = true; any = true; }
+  if (q.get("q")) { f.q = q.get("q"); any = true; }
+  return any ? f : null;
+}
+
+// restoreFilter: the URL wins (it is what a shared link carries), then the
+// viewer's last choice, then the defaults. Storage throws in a private window
+// and is simply skipped.
+function restoreFilter(params) {
+  let f = filterFromParams(params);
+  if (!f) {
+    try {
+      const saved = localStorage.getItem(FILTER_STORE);
+      if (saved) f = filterFromParams(new URLSearchParams(saved));
+    } catch (_) {}
+  }
+  state.filter = f || defaultFilter();
+}
+
+function saveFilter() {
+  try {
+    if (filterIsDefault(state.filter)) localStorage.removeItem(FILTER_STORE);
+    else localStorage.setItem(FILTER_STORE, filterToParams(state.filter, new URLSearchParams()).toString());
+  } catch (_) {}
+}
+
+// setFilter is the one writer: it persists, mirrors the hash, and re-renders
+// the sprints from the payload already in hand — no fetch.
+function setFilter(mutate) {
+  mutate(state.filter);
+  saveFilter();
+  writeHash();
+  if (state.data) renderSprints(state.data);
+}
+
+// facetValues counts each value of one facet over the loaded sprints, sorted
+// by name with the absent value first so "(unclaimed)" is never lost mid-list.
+function facetValues(fc, sps) {
+  const counts = new Map();
+  for (const sp of sps) {
+    const v = fc.of(sp);
+    counts.set(v, (counts.get(v) || 0) + 1);
+  }
+  return [...counts.keys()].sort((a, b) => (a === "" ? -1 : b === "" ? 1 : a.localeCompare(b)))
+    .map((v) => ({ value: v, count: counts.get(v) }));
+}
+
+function sprintMatchesText(sp, q) {
+  if (!q) return true;
+  const needle = q.toLowerCase().replace(/^#/, "");
+  if (!needle) return true;
+  return String(sp.id).includes(needle) || String(sp.title || "").toLowerCase().includes(needle);
+}
+
+// sprintMatches is the AND across facets; a facet selection is OR within.
+function sprintMatches(sp, f) {
+  for (const fc of FACETS) {
+    const sel = f[fc.key];
+    if (sel !== null && !sel.has(fc.of(sp))) return false;
+  }
+  if (f.stale && !sp.lease_stale) return false;
+  return sprintMatchesText(sp, f.q);
+}
+
+// activeFilterNames lists the facets that are actually narrowing, so an empty
+// result can say which to clear rather than just that it is empty.
+function activeFilterNames(f) {
+  const names = FACETS.filter((fc) => f[fc.key] !== null).map((fc) => fc.title);
+  if (f.stale) names.push("stale only");
+  if (f.q) names.push("search");
+  return names;
+}
+
+// facetGroupEl renders one checkbox group. A checkbox adds or removes its
+// value; clicking the NAME beside it shows only that value — the gesture a
+// reader scanning for one epic wants, without unticking the other six first.
+// "all" / "none" set the whole group at once. A selection that covers every
+// value present collapses back to null (everything), so a value that appears
+// later is not silently excluded by a choice that never meant to exclude it.
+function facetGroupEl(fc, values) {
+  const sel = state.filter[fc.key];
+  const all = new Set(values.map((v) => v.value));
+  const normalise = (s) => ([...all].every((v) => s.has(v)) ? null : s);
+  const g = el("fieldset", "bd-facet");
+  g.dataset.facet = fc.key;
+  const legend = el("legend");
+  legend.append(el("span", "t", fc.title));
+  const allBtn = el("button", "lnk", "all");
+  allBtn.type = "button";
+  allBtn.addEventListener("click", () => setFilter((f) => { f[fc.key] = null; }));
+  const noneBtn = el("button", "lnk", "none");
+  noneBtn.type = "button";
+  noneBtn.addEventListener("click", () => setFilter((f) => { f[fc.key] = new Set(); }));
+  legend.append(allBtn, noneBtn);
+  g.append(legend);
+  const opts = el("div", "opts");
+  for (const { value, count } of values) {
+    const lab = el("label", "chk" + (value === "" ? " none" : ""));
+    const box = el("input");
+    box.type = "checkbox";
+    box.value = value;
+    box.checked = sel === null || sel.has(value);
+    box.addEventListener("change", () => setFilter((f) => {
+      const next = new Set(f[fc.key] === null ? all : f[fc.key]);
+      if (box.checked) next.add(value); else next.delete(value);
+      f[fc.key] = normalise(next);
+    }));
+    const name = el("span", "v", value === "" ? fc.none : value);
+    name.title = "show only " + (value === "" ? fc.none : value);
+    name.addEventListener("click", (e) => {
+      e.preventDefault();
+      setFilter((f) => { f[fc.key] = normalise(new Set([value])); });
+    });
+    lab.append(box, name, el("span", "n", String(count)));
+    opts.append(lab);
+  }
+  g.append(opts);
+  return g;
+}
+
+// renderFilterBar builds the bar's facet groups from the loaded sprints. The
+// bar's frame — the disclosure, the search box, the stale toggle, the reset —
+// is built ONCE and kept across the 15s refresh, so a reader mid-word in the
+// search box is not interrupted; only the facet groups are rebuilt, and only
+// when their values or counts changed.
+let filterBar = null;
+
+function filterBarEl() {
+  if (filterBar) return filterBar;
+  const bar = el("details", "bd-filter");
+  bar.id = "bd-filter";
+  // Open on a desk, collapsed on a phone — where seven rows of checkboxes
+  // would push the first card below the fold.
+  bar.open = !(window.matchMedia && window.matchMedia("(max-width: 46rem)").matches);
+  const sum = el("summary");
+  sum.append(el("span", "t", "Filter"), el("span", "state"));
+  bar.append(sum);
+  const body = el("div", "bd-filter-body");
+  const groups = el("div", "facets");
+  body.append(groups);
+  const row = el("div", "row");
+  const search = el("input", "inp");
+  search.type = "search";
+  search.id = "bd-filter-q";
+  search.placeholder = "title or #number";
+  search.setAttribute("aria-label", "match sprint title or number");
+  search.addEventListener("input", () => setFilter((f) => { f.q = search.value.trim(); }));
+  const staleLab = el("label", "chk");
+  const stale = el("input");
+  stale.type = "checkbox";
+  stale.id = "bd-filter-stale";
+  stale.addEventListener("change", () => setFilter((f) => { f.stale = stale.checked; }));
+  staleLab.append(stale, document.createTextNode(" stale lease only"));
+  const reset = el("button", "btn", "Reset filters");
+  reset.type = "button";
+  reset.id = "bd-filter-reset";
+  reset.addEventListener("click", () => setFilter((f) => Object.assign(f, defaultFilter())));
+  const note = el("span", "note");
+  row.append(search, staleLab, reset, note);
+  body.append(row);
+  bar.append(body);
+  filterBar = bar;
+  return bar;
+}
+
+function renderFilterBar(sps, shown) {
+  const bar = filterBarEl();
+  const f = state.filter;
+  const groups = bar.querySelector(".facets");
+  const want = FACETS.map((fc) => ({ fc, values: facetValues(fc, sps) }));
+  const next = [];
+  for (const { fc, values } of want) {
+    const sig = values.map((v) => v.value + "\u0001" + v.count).join("\u0000") + "\u0002" +
+      (f[fc.key] === null ? "*" : [...f[fc.key]].sort().join("\u0000"));
+    const cur = groups.querySelector(':scope > [data-facet="' + fc.key + '"]');
+    if (cur && cur.dataset.sig === sig) { next.push(cur); continue; }
+    const g = facetGroupEl(fc, values);
+    g.dataset.sig = sig;
+    next.push(g);
+  }
+  groups.replaceChildren(...next);
+  const search = bar.querySelector("#bd-filter-q");
+  if (search.value.trim() !== f.q) search.value = f.q;
+  bar.querySelector("#bd-filter-stale").checked = f.stale;
+  const active = activeFilterNames(f);
+  bar.querySelector("#bd-filter-reset").disabled = !active.length;
+  bar.querySelector("summary .state").textContent = active.length
+    ? shown + " of " + sps.length + " · " + active.join(", ")
+    : "";
+  bar.classList.toggle("active", active.length > 0);
+  // The lanes below are RUNS, keyed by run — a run does not name its sprint in
+  // the lane payload — so they do not follow this filter, and the bar says so
+  // rather than letting a narrowed sprint list imply a narrowed run list.
+  bar.querySelector(".note").textContent = active.length
+    ? "narrows the sprint cards and their stories; the Runs lanes below are not filtered"
+    : "";
 }
 
 // disclose wires a toggle button to its body and REMEMBERS the answer under
@@ -854,17 +1127,43 @@ function renderSprints(d) {
   const host = $("bd-sprints");
   const sps = d.sprints || [];
   const by = storiesBySprint(d.todos);
+  if (!state.filter) state.filter = defaultFilter();
+  const shown = sps.filter((sp) => sprintMatches(sp, state.filter));
   const h = el("header");
   h.append(el("span", "t", "Sprints"));
-  h.append(el("span", "n", sps.length + (d.all ? "" : " of " + d.sprint_total)));
+  // "N of M sprints": N is what the filter lets through, M what the page
+  // loaded; with history hidden the server's total is named too, so a reader
+  // never mistakes the live slice for the whole record.
+  const n = el("span", "n", shown.length + " of " + sps.length + " sprint" + (sps.length === 1 ? "" : "s") +
+    (d.all || d.sprint_total === sps.length ? "" : " · " + (d.sprint_total - sps.length) + " finished hidden"));
+  h.append(n);
   h.append(newSprintLink());
+  renderFilterBar(sps, shown.length);
   const body = el("div", "cards");
   if (!sps.length) {
     body.append(el("p", "empty", d.all ? "No sprints." : "No sprint is open. Tick “include history” for the finished ones."));
+  } else if (!shown.length) {
+    const p = el("p", "empty");
+    p.append(document.createTextNode("No sprint matches — clear " + activeFilterNames(state.filter).join(", ") + ". "));
+    const reset = el("button", "lnk", "Reset filters");
+    reset.type = "button";
+    reset.addEventListener("click", () => setFilter((f) => Object.assign(f, defaultFilter())));
+    p.append(reset);
+    body.append(p);
   } else {
-    for (const sp of sps) body.append(sprintEl(sp, by.get(sp.id)));
+    for (const sp of shown) body.append(sprintEl(sp, by.get(sp.id)));
   }
-  host.replaceChildren(h, body);
+  // The filter bar is the one child that survives the refresh (see
+  // renderFilterBar): a node that is removed and re-inserted loses focus, so
+  // the header and cards are replaced AROUND it rather than with it.
+  const bar = filterBarEl();
+  if (bar.parentNode !== host) {
+    host.replaceChildren(h, bar, body);
+    return;
+  }
+  for (const c of [...host.children]) if (c !== bar) c.remove();
+  host.prepend(h);
+  host.append(body);
 }
 
 function renderLanes(d) {
@@ -997,6 +1296,7 @@ async function load() {
   renderWarnings(d);
   renderSummary(d);
   state.runs = d.runs || [];
+  state.data = d;
   renderSprints(d);
   renderRunbooks();
   renderLanes(d);
@@ -1363,6 +1663,8 @@ function init() {
   const params = new URLSearchParams(location.hash.replace(/^#/, ""));
   state.all = params.get("all") === "1";
   state.runbook = params.get("runbook") || "";
+  restoreFilter(params);
+  writeHash();
   $("f-all").checked = state.all;
   $("f-all").addEventListener("change", () => {
     state.all = $("f-all").checked;
