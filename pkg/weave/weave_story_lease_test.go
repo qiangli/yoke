@@ -3,6 +3,7 @@ package weave
 import (
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -160,4 +161,35 @@ func retiredPID(t *testing.T) int {
 		t.Skipf("pid %d was recycled before the assertion could use it", pid)
 	}
 	return pid
+}
+
+// A stood-down seat (zero beat) and a dead attached watch must render as an
+// explicit unknown, never as time.Since(time.Time{}) — the 292-year
+// "no heartbeat for 2562047h47m0s" on Sprint 412's board. A genuinely old
+// beat still reports its real age.
+func TestSprintShowRendersUnknownHeartbeatNotAnAge(t *testing.T) {
+	now := time.Now().UTC()
+	old := &weaveStory{ID: 98, Lease: &weaveStoryLease{Holder: "m", At: now.Add(-3 * time.Hour)}}
+	zero := &weaveStory{ID: 98, Lease: &weaveStoryLease{Holder: "m"}}
+	dead := &weaveStory{ID: 98, Lease: &weaveStoryLease{Holder: "m", At: now.Add(-time.Second), AttachedPID: retiredPID(t)}}
+
+	if _, stale, _ := weaveStoryLeaseState(old); !stale {
+		t.Fatal("a three-hour-old beat is not stale")
+	}
+	if got := weaveStoryLeaseStatus(old, true, now); !strings.Contains(got, "no heartbeat for 3h0m0s") {
+		t.Errorf("genuinely old beat = %q, want its real age", got)
+	}
+	for name, s := range map[string]*weaveStory{"zero": zero, "deadPID": dead} {
+		_, stale, free := weaveStoryLeaseState(s)
+		if !stale || free {
+			t.Fatalf("%s: state stale=%v free=%v, want a stale held seat", name, stale, free)
+		}
+		got := weaveStoryLeaseStatus(s, stale, now)
+		if strings.Contains(got, "2562047h") || strings.Contains(got, "no heartbeat for") {
+			t.Errorf("%s rendered an age it does not have: %q", name, got)
+		}
+		if !strings.Contains(got, "no live heartbeat") {
+			t.Errorf("%s = %q, want an explicit no-live-heartbeat verdict", name, got)
+		}
+	}
 }

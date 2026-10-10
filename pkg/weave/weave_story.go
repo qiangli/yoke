@@ -799,6 +799,25 @@ func newWeaveStoryShowCmd() *cobra.Command {
 	return cmd
 }
 
+// weaveStoryLeaseStatus renders a held seat's liveness for `sprint show`.
+//
+// A ZERO BEAT IS NOT AN OLD BEAT. ReleaseSprintManagerLease stands a seat down
+// by clearing Lease.At, and seat() withdraws the heartbeat outright when a
+// named attached process is dead — on both paths time.Since(Lease.At) is the
+// distance from the zero instant, which rendered as "no heartbeat for
+// 2562047h47m0s" on Sprint 412's board (todo 4a18c41ef997). role.Seat.Live
+// already returns LivenessUnknown there; say so instead of inventing an age.
+func weaveStoryLeaseStatus(s *weaveStory, stale bool, now time.Time) string {
+	if !stale {
+		return "fresh"
+	}
+	if s.seat().Live(now) == role.LivenessUnknown {
+		return "STALE (no live heartbeat — the seat was stood down, its watch died, " +
+			"or it never beat; look before you seize it, then `sprint take`)"
+	}
+	return fmt.Sprintf("STALE (no heartbeat for %s — take it)", now.Sub(s.Lease.At).Round(time.Minute))
+}
+
 func runWeaveStoryShow(cmd *cobra.Command, id int64, flags *weaveOutputFlags, links bool) error {
 	mode := flags.mode()
 	dir, err := weaveStoryDir(cmd, mode, "sprint show")
@@ -862,11 +881,7 @@ func runWeaveStoryShow(cmd *cobra.Command, id int64, flags *weaveOutputFlags, li
 		renderSprintLinks(out, resolveSprintLinks(s))
 	}
 	if h, stale, free := weaveStoryLeaseState(s); !free {
-		st := "fresh"
-		if stale {
-			st = fmt.Sprintf("STALE (no heartbeat for %s — take it)", time.Since(s.Lease.At).Round(time.Minute))
-		}
-		fmt.Fprintf(out, "  conductor:  %s (%s)\n", h, st)
+		fmt.Fprintf(out, "  conductor:  %s (%s)\n", h, weaveStoryLeaseStatus(s, stale, time.Now()))
 	} else if s.Owner != "" {
 		// NAME THE LAST HOLDER, DO NOT INVITE ITS REUSE.
 		//
