@@ -387,34 +387,62 @@ func TestV1RecordsAreReadable(t *testing.T) {
 	}
 }
 
+// memBackend honours the Backend contract: a CAS on Rev, a Rev that never
+// repeats for a key, and an epoch high-water mark that survives deletion.
 type memBackend struct {
 	mu sync.Mutex
 	m  map[string]*Claim
+	// hwEpoch and hwRev are the per-key high-water marks kept across deletion.
+	hwEpoch, hwRev map[string]uint64
+	// afterLoad, when set, runs once right after the next Load returns its
+	// snapshot: it lets a test interleave another writer into the window
+	// between a caller's read and its commit.
+	afterLoad func()
 }
 
 func (b *memBackend) Load(k string) (*Claim, error) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
+	var out *Claim
 	if c := b.m[k]; c != nil {
 		cp := *c
-		return &cp, nil
+		out = &cp
 	}
-	return nil, nil
+	hook := b.afterLoad
+	b.afterLoad = nil
+	b.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return out, nil
 }
 
-func (b *memBackend) CommitIfEpoch(k string, prev uint64, next *Claim) error {
+func (b *memBackend) CommitIfRev(k string, prev uint64, next *Claim) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	var cur uint64
-	if c := b.m[k]; c != nil {
-		cur = c.Epoch
+	cur := b.m[k]
+	var curRev uint64
+	if cur != nil {
+		curRev = cur.Rev
 	}
-	if cur != prev {
+	if curRev != prev {
 		return ErrEpochMismatch
 	}
+	if b.hwEpoch == nil {
+		b.hwEpoch, b.hwRev = map[string]uint64{}, map[string]uint64{}
+	}
 	if next == nil {
-		delete(b.m, k)
+		if cur != nil {
+			b.hwEpoch[k] = max(b.hwEpoch[k], cur.Epoch)
+			b.hwRev[k] = max(b.hwRev[k], cur.Rev)
+			delete(b.m, k)
+		}
 		return nil
+	}
+	if cur == nil {
+		next.Epoch = max(next.Epoch, b.hwEpoch[k]+1)
+		next.Rev = b.hwRev[k] + 1
+	} else {
+		next.Rev = cur.Rev + 1
 	}
 	cp := *next
 	b.m[k] = &cp

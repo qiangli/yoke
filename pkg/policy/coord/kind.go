@@ -168,12 +168,23 @@ func kindOrDefault(name string) Kind {
 	return Kind{Name: name, Match: MatchName}
 }
 
-// Backend stores the claim for one key. CommitIfEpoch is a compare-and-swap on
-// the stored claim's epoch (0 when absent): it must fail with ErrEpochMismatch
-// when the stored epoch is not prevEpoch, and next == nil deletes.
+// Backend stores the claim for one key. The engine reads, decides and writes
+// without holding a lock a custom backend could honour, so the contract is what
+// makes that sequence safe:
+//
+//   - CommitIfRev is a compare-and-swap on the stored record's Rev (0 when no
+//     record exists). It must fail with ErrEpochMismatch when the stored Rev is
+//     not prevRev — a refresh that leaves the epoch alone still changes the Rev,
+//     so a decision made on a stale read cannot commit. next == nil deletes.
+//   - A successful commit assigns next.Rev in place, to a value greater than any
+//     Rev ever stored under the key, deletions included: a record that was
+//     released and recreated must never compare equal to a stale read.
+//   - The backend keeps the key's epoch high-water mark across deletion, and a
+//     commit that creates a record where none exists lifts next.Epoch above it
+//     (in place), so a released key never re-issues an epoch.
 type Backend interface {
 	Load(key string) (*Claim, error)
-	CommitIfEpoch(key string, prevEpoch uint64, next *Claim) error
+	CommitIfRev(key string, prevRev uint64, next *Claim) error
 }
 
 // RegisterBackend routes every claim of kind to b instead of the file store. A

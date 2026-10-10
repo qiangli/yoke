@@ -30,7 +30,7 @@ var (
 	// ErrNotHeld is returned when a claim to refresh does not exist.
 	ErrNotHeld = errors.New("coord: claim is not held")
 	// ErrEpochMismatch is a Backend's compare-and-swap failure: the stored
-	// epoch is not the one the caller read.
+	// record changed since the caller read it.
 	ErrEpochMismatch = errors.New("coord: stored epoch changed under the commit")
 )
 
@@ -48,8 +48,9 @@ type Request struct {
 	Force bool
 	// Wait retries a conflicted acquisition for up to this long.
 	Wait time.Duration
-	// Epoch, when set, must be the epoch this holder last held; a different
-	// one means the claim moved on and the request fails with ErrFenced.
+	// Epoch, when set, must be the epoch of the claim as it stands now; a
+	// different one — or no claim at all — means it moved on and the request
+	// fails with ErrFenced.
 	Epoch uint64
 }
 
@@ -150,11 +151,11 @@ func (s store) txn(b Backend, fn func(locked bool) error) error {
 	return fn(false)
 }
 
-func commit(b Backend, locked bool, key string, prev uint64, next *Claim) error {
+func commit(b Backend, locked bool, key string, prevRev uint64, next *Claim) error {
 	if fb, ok := b.(fileBackend); ok && locked {
-		return fb.commitLocked(key, prev, next)
+		return fb.commitLocked(key, prevRev, next)
 	}
-	return b.CommitIfEpoch(key, prev, next)
+	return b.CommitIfRev(key, prevRev, next)
 }
 
 func (s store) acquire(sp acquireSpec) (Grant, error) {
@@ -192,6 +193,9 @@ func (s store) acquire(sp acquireSpec) (Grant, error) {
 	if mode != "" && !kind.allows(mode) {
 		return Grant{}, fmt.Errorf("claim: kind %q does not permit mode %q", kind.Name, mode)
 	}
+	if mode == ModeAttached && !sp.attached {
+		return Grant{}, fmt.Errorf("claim: attached holds carry a kernel lock; use AcquireAttachedRef")
+	}
 	var members []string
 	if sp.legacy {
 		members = sp.roots
@@ -207,13 +211,12 @@ func (s store) acquire(sp acquireSpec) (Grant, error) {
 		b = fileBackend{dir: s.dir}
 	}
 	var grant Grant
-	var displaced []*Claim
 	err := s.txn(b, func(locked bool) error {
 		var last error
 		for range 3 {
-			g, forced, err := s.acquireOnce(b, locked, sp, ref, key, kind, mode, members)
+			g, err := s.acquireOnce(b, locked, sp, ref, key, kind, mode, members)
 			if err == nil {
-				grant, displaced = g, forced
+				grant = g
 				return nil
 			}
 			last = err
@@ -223,42 +226,48 @@ func (s store) acquire(sp acquireSpec) (Grant, error) {
 		}
 		return last
 	})
-	if err == nil && len(displaced) > 0 {
-		auditForce(ref, r, displaced)
-	}
 	return grant, err
 }
 
-func (s store) acquireOnce(b Backend, locked bool, sp acquireSpec, ref Ref, key string, kind Kind, mode string, members []string) (Grant, []*Claim, error) {
+// acquireOnce is one read-decide-write attempt. A forced grant that displaced
+// anyone is only real once its audit record is durable: if the record cannot
+// be written, every change this attempt made is undone and the call fails.
+func (s store) acquireOnce(b Backend, locked bool, sp acquireSpec, ref Ref, key string, kind Kind, mode string, members []string) (Grant, error) {
 	r := sp.req
 	now := time.Now().UTC()
-	prev, err := b.Load(key)
+	loaded, err := b.Load(key)
 	if err != nil {
-		return Grant{}, nil, err
+		return Grant{}, err
 	}
-	var prevEpoch uint64
-	if prev != nil {
-		prevEpoch = prev.Epoch
+	var prevRev, prevEpoch uint64
+	prev := loaded
+	if loaded != nil {
+		prevRev, prevEpoch = loaded.Rev, loaded.Epoch
 		// An attached record is diagnostic; the kernel lock is authoritative.
-		if prev.Mode == ModeAttached && (sp.attached || !s.attachedHeld(b, prev)) {
+		if loaded.Mode == ModeAttached && (sp.attached || !s.attachedHeld(b, loaded)) {
 			prev = nil
 		}
 	}
+	// A presented token names the claim as it stands now; an absent claim, or
+	// another holder's, never satisfies an old one.
+	if r.Epoch != 0 && (loaded == nil || r.Epoch != prevEpoch) {
+		return Grant{}, ErrFenced
+	}
 
-	var displaced []*Claim
+	var displaced []*Claim // everything this grant overrides, for the audit
+	var crossKey []*Claim  // the part of it stored under other keys
 	reuse := false
 	if prev != nil {
 		if sameHolder(prev.Holder, r.Holder) {
-			if prev.Mode == ModeAttached || (mode == ModeAttached) {
-				return Grant{}, nil, &Conflict{Claim: prev}
-			}
-			if r.Epoch != 0 && r.Epoch != prev.Epoch {
-				return Grant{}, nil, ErrFenced
+			// A genuinely live attached hold is never replaced; a detached lease
+			// of the same holder may become attached under the kernel lock.
+			if prev.Mode == ModeAttached {
+				return Grant{}, &Conflict{Claim: prev}
 			}
 			reuse = !sp.legacy || Intersects(prev.Roots, sp.roots)
 		} else if !prev.Liveness(now).Takeable() {
 			if prev.Mode == ModeAttached || !r.Force {
-				return Grant{}, nil, &Conflict{Claim: prev}
+				return Grant{}, &Conflict{Claim: prev}
 			}
 			displaced = append(displaced, prev)
 		}
@@ -266,10 +275,11 @@ func (s store) acquireOnce(b Backend, locked bool, sp acquireSpec, ref Ref, key 
 
 	// Cross-key matching needs the whole ledger, which only the file store
 	// can enumerate.
-	if _, ok := b.(fileBackend); ok {
+	fb, isFile := b.(fileBackend)
+	if isFile {
 		all, err := List(s.dir)
 		if err != nil {
-			return Grant{}, nil, err
+			return Grant{}, err
 		}
 		for _, o := range all {
 			if o.key() == key || sameHolder(o.Holder, r.Holder) || o.Liveness(now).Takeable() {
@@ -279,9 +289,10 @@ func (s store) acquireOnce(b Backend, locked bool, sp acquireSpec, ref Ref, key 
 				continue
 			}
 			if o.Mode == ModeAttached || !r.Force {
-				return Grant{}, nil, &Conflict{Claim: o}
+				return Grant{}, &Conflict{Claim: o}
 			}
 			displaced = append(displaced, o)
+			crossKey = append(crossKey, o)
 		}
 	}
 
@@ -316,10 +327,42 @@ func (s store) acquireOnce(b Backend, locked bool, sp acquireSpec, ref Ref, key 
 	} else {
 		c.Epoch = prevEpoch + 1
 	}
-	if err := commit(b, locked, key, prevEpoch, c); err != nil {
-		return Grant{}, nil, err
+
+	// Displace the claims stored under other keys first (the new grant owns
+	// their paths), then commit; any failure puts them back.
+	var removed []*Claim
+	restoreRemoved := func() error {
+		var errs []error
+		for _, o := range removed {
+			if err := writeClaim(fb.path(o.key()), o); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		return errors.Join(errs...)
 	}
-	return Grant{Claim: c, Epoch: c.Epoch}, displaced, nil
+	for _, o := range crossKey {
+		if err := fb.commitLocked(o.key(), o.Rev, nil); err != nil {
+			return Grant{}, errors.Join(err, restoreRemoved())
+		}
+		removed = append(removed, o)
+	}
+	if err := commit(b, locked, key, prevRev, c); err != nil {
+		return Grant{}, errors.Join(err, restoreRemoved())
+	}
+	if len(displaced) > 0 {
+		if err := auditForce(ref, r, displaced); err != nil {
+			var undo error
+			if loaded == nil {
+				undo = commit(b, locked, key, c.Rev, nil)
+			} else {
+				back := *loaded
+				undo = commit(b, locked, key, c.Rev, &back)
+			}
+			return Grant{}, fmt.Errorf("claim: forced acquisition of %s refused — the audit record could not be written, so nothing was changed: %w",
+				ref, errors.Join(err, undo, restoreRemoved()))
+		}
+	}
+	return Grant{Claim: c, Epoch: c.Epoch}, nil
 }
 
 // attachedHeld reports whether an attached record's kernel lock is still
@@ -350,7 +393,7 @@ func (s store) acquireAttached(r Request) (Grant, *lockfile.Lock, error) {
 		l, err = lockfile.TryAcquire(lockPath, h)
 	}
 	if err != nil {
-		if c, _ := (fileBackend{dir: s.dir}).Load(ref.String()); c != nil && c.Resource == ref.Name {
+		if c, _ := s.backend(ref.Kind).Load(ref.String()); c != nil && c.Resource == ref.Name {
 			return Grant{}, nil, &Conflict{Claim: c}
 		}
 		if owner, ok := lockfile.HeldBy(err); ok {
@@ -382,6 +425,9 @@ func (s store) refresh(ref Ref, holder principal.Ref, epoch uint64) (Grant, erro
 			return err
 		}
 		if prev == nil {
+			if epoch != 0 {
+				return fmt.Errorf("%w: %s no longer exists", ErrFenced, key)
+			}
 			return fmt.Errorf("%w: %s", ErrNotHeld, key)
 		}
 		if err := checkHeld(prev, holder, epoch); err != nil {
@@ -393,7 +439,7 @@ func (s store) refresh(ref Ref, holder principal.Ref, epoch uint64) (Grant, erro
 		}
 		next := *prev
 		next.Heartbeat = time.Now().UTC()
-		if err := commit(b, locked, key, prev.Epoch, &next); err != nil {
+		if err := commit(b, locked, key, prev.Rev, &next); err != nil {
 			return err
 		}
 		grant = Grant{Claim: &next, Epoch: next.Epoch}
@@ -417,7 +463,7 @@ func (s store) release(ref Ref, holder principal.Ref, epoch uint64) error {
 		if prev.Mode == ModeAttached {
 			return fmt.Errorf("claim: %s is attached to a live child and cannot be released separately", ref.Name)
 		}
-		return commit(b, locked, key, prev.Epoch, nil)
+		return commit(b, locked, key, prev.Rev, nil)
 	})
 }
 
@@ -565,30 +611,32 @@ func readClaimFile(path string) (*Claim, error) {
 
 func (f fileBackend) Load(key string) (*Claim, error) { return readClaimFile(f.path(key)) }
 
-func (f fileBackend) CommitIfEpoch(key string, prevEpoch uint64, next *Claim) error {
-	return withDirLock(f.dir, func() error { return f.commitLocked(key, prevEpoch, next) })
+func (f fileBackend) CommitIfRev(key string, prevRev uint64, next *Claim) error {
+	return withDirLock(f.dir, func() error { return f.commitLocked(key, prevRev, next) })
 }
 
-// commitLocked is CommitIfEpoch for a caller already holding claims.lock.
-func (f fileBackend) commitLocked(key string, prevEpoch uint64, next *Claim) error {
+// commitLocked is CommitIfRev for a caller already holding claims.lock.
+func (f fileBackend) commitLocked(key string, prevRev uint64, next *Claim) error {
 	path := f.path(key)
 	cur, err := readClaimFile(path)
 	if err != nil {
 		return err
 	}
-	var curEpoch uint64
+	var curRev uint64
 	if cur != nil {
-		curEpoch = cur.Epoch
+		curRev = cur.Rev
 	}
-	if curEpoch != prevEpoch {
+	if curRev != prevRev {
 		return ErrEpochMismatch
 	}
-	epochPath := strings.TrimSuffix(path, ".json") + ".epoch"
+	hwPath := strings.TrimSuffix(path, ".json") + ".epoch"
+	hwEpoch, hwRev := readHighWater(hwPath)
 	if next == nil {
 		if cur == nil {
 			return nil
 		}
-		if err := os.WriteFile(epochPath, []byte(strconv.FormatUint(cur.Epoch, 10)), 0o644); err != nil {
+		hw := strconv.FormatUint(max(hwEpoch, cur.Epoch), 10) + " " + strconv.FormatUint(max(hwRev, cur.Rev), 10)
+		if err := os.WriteFile(hwPath, []byte(hw), 0o644); err != nil {
 			return err
 		}
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -597,13 +645,31 @@ func (f fileBackend) commitLocked(key string, prevEpoch uint64, next *Claim) err
 		return nil
 	}
 	if cur == nil {
-		if b, err := os.ReadFile(epochPath); err == nil {
-			if hw, _ := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64); next.Epoch <= hw {
-				next.Epoch = hw + 1
-			}
+		if next.Epoch <= hwEpoch {
+			next.Epoch = hwEpoch + 1
 		}
+		next.Rev = hwRev + 1
+	} else {
+		next.Rev = cur.Rev + 1
 	}
 	return writeClaim(path, next)
+}
+
+// readHighWater reads the sidecar kept across deletion: "<epoch> <rev>". A
+// sidecar from before revisions holds the epoch alone.
+func readHighWater(path string) (epoch, rev uint64) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0, 0
+	}
+	f := strings.Fields(string(b))
+	if len(f) > 0 {
+		epoch, _ = strconv.ParseUint(f[0], 10, 64)
+	}
+	if len(f) > 1 {
+		rev, _ = strconv.ParseUint(f[1], 10, 64)
+	}
+	return epoch, rev
 }
 
 func withDirLock(dir string, fn func() error) error {

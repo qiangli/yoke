@@ -102,6 +102,9 @@ type Claim struct {
 	// Epoch is the fencing token: monotonic per key, bumped on every new
 	// acquisition and never on a refresh by the same holder.
 	Epoch uint64 `json:"epoch,omitempty"`
+	// Rev is the Backend's compare-and-swap token: it changes on every committed
+	// mutation of the record, unlike Epoch, which a refresh leaves alone.
+	Rev uint64 `json:"rev,omitempty"`
 
 	// Roots is the PATH SET. Conflict is intersection, not equality.
 	Roots []string `json:"roots"`
@@ -186,9 +189,13 @@ func (c *Claim) ConflictsResource(resource string, holder principal.Ref, now tim
 	return !sameHolder(c.Holder, holder)
 }
 
+// sameHolder: sessions are told apart by episode. Name and host identify a
+// holder only when one side carries no episode (a legacy or unattributed
+// identity) — two independently launched sessions with one tool name on one
+// host are different holders.
 func sameHolder(a, b principal.Ref) bool {
-	if a.Episode != "" && a.Episode == b.Episode {
-		return true
+	if a.Episode != "" && b.Episode != "" {
+		return a.Episode == b.Episode
 	}
 	return a.Name != "" && a.Name == b.Name && a.Host == b.Host
 }
@@ -323,17 +330,30 @@ func AcquireAttached(dir, resource string, holder principal.Ref, intent string, 
 }
 
 // ReleaseAttached removes the diagnostic record before releasing the kernel
-// lock, so a new holder never inherits the old row.
+// lock, so a new holder never inherits the old row. The record goes through the
+// claim's own backend and only if it is still this claim's — same holder, same
+// epoch — so a stale or repeated cleanup never deletes a successor's record.
 func ReleaseAttached(dir string, c *Claim, l *lockfile.Lock) error {
 	if c != nil {
-		b := fileBackend{dir: dir}
-		err := withDirLock(dir, func() error {
-			cur, err := b.Load(c.key())
-			if err != nil || cur == nil {
-				return err
+		s := store{dir}
+		key := c.Ref().String()
+		b := s.backend(c.Ref().Kind)
+		var err error
+		for range 3 {
+			err = s.txn(b, func(locked bool) error {
+				cur, err := b.Load(key)
+				if err != nil || cur == nil {
+					return err
+				}
+				if cur.Epoch != c.Epoch || !sameHolder(cur.Holder, c.Holder) {
+					return nil
+				}
+				return commit(b, locked, key, cur.Rev, nil)
+			})
+			if !errors.Is(err, ErrEpochMismatch) {
+				break
 			}
-			return b.commitLocked(c.key(), cur.Epoch, nil)
-		})
+		}
 		if err != nil {
 			_ = l.Release()
 			return err
@@ -409,7 +429,7 @@ func Prune(dir string, now time.Time, dryRun bool) ([]*Claim, error) {
 			return err
 		}
 		for _, c := range lapsed {
-			if err := b.commitLocked(c.key(), c.Epoch, nil); err != nil && !errors.Is(err, ErrEpochMismatch) {
+			if err := b.commitLocked(c.key(), c.Rev, nil); err != nil && !errors.Is(err, ErrEpochMismatch) {
 				return err
 			}
 			pruned = append(pruned, c)
@@ -431,7 +451,7 @@ func Release(dir string, holder principal.Ref) error {
 		if err != nil || cur == nil {
 			return err
 		}
-		return b.commitLocked(holderKey(holder), cur.Epoch, nil)
+		return b.commitLocked(holderKey(holder), cur.Rev, nil)
 	})
 }
 

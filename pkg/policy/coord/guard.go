@@ -39,12 +39,13 @@ func (s store) guard(ctx context.Context, holder principal.Ref, uses []Use) erro
 	for _, u := range uses {
 		ref := normRef(Ref{Kind: u.Kind, Name: u.Name})
 		kind := kindOrDefault(ref.Kind)
-		var members []string
-		switch {
-		case u.Member != "":
-			members = []string{u.Member}
-		case kind.Match != MatchName && ref.Name != "":
-			members = []string{ref.Name}
+		// Members resolve exactly as an acquisition's would, provider included.
+		members := []string{u.Member}
+		if u.Member == "" {
+			var err error
+			if members, err = resolveMembers(kind, ref, nil); err != nil {
+				return err
+			}
 		}
 		cands := all
 		if b := customBackend(ref.Kind); b != nil {
@@ -71,10 +72,9 @@ func (s store) guard(ctx context.Context, holder principal.Ref, uses []Use) erro
 }
 
 // auditForce records an acquisition that went past live claims held by others.
-// An override nobody can see is an override nobody can audit, so the record is
-// written for every forced pass; a log that cannot be written does not stop the
-// human who said "I know, do it anyway".
-func auditForce(ref Ref, r Request, displaced []*Claim) {
+// An override nobody can see is an override nobody can audit, so a forced grant
+// is only as real as its record: the caller undoes the grant when this fails.
+func auditForce(ref Ref, r Request, displaced []*Claim) error {
 	argv := []string{"claim", "force", ref.String()}
 	var who []string
 	for _, c := range displaced {
@@ -93,7 +93,7 @@ func auditForce(ref Ref, r Request, displaced []*Claim) {
 		actor.Session = r.Holder.Episode
 	}
 	host, _ := os.Hostname()
-	_, _ = audit.Append(audit.Record{
+	_, err := audit.Append(audit.Record{
 		Actor:    actor,
 		Action:   "claim.force",
 		Argv:     argv,
@@ -102,4 +102,5 @@ func auditForce(ref Ref, r Request, displaced []*Claim) {
 		Decision: "allow",
 		Effects:  []string{"claim:force"},
 	})
+	return err
 }
