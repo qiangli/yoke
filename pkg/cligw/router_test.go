@@ -427,3 +427,52 @@ func TestRouterServableMatchesThe503Rule(t *testing.T) {
 		t.Fatalf("marked ok-agent Servable = (%v, %q), want an ineligible reason", ok, reason)
 	}
 }
+
+// TestRouter429NamesEachRefusedCandidate pins #1807: the 429 reason must name
+// every refused candidate and its exact cause — the Preview reason string, or
+// headroom against the reserve floor — so the door is diagnosable from the
+// body alone.
+func TestRouter429NamesEachRefusedCandidate(t *testing.T) {
+	quota := &fakeQuota{
+		headroom: map[string]float64{"strong": .8, "small": .05},
+		refused:  map[string]string{"gamma": "daily token budget exhausted"},
+	}
+	router, cat, _ := newTestRouter(t, DefaultPolicy(), quota)
+	_, err := router.Route(context.Background(), selector(t, cat, "L4"), Filter{}, "", "")
+	var routeErr *RouteError
+	if !errors.As(err, &routeErr) || routeErr.Status != 429 {
+		t.Fatalf("error = %T %v, want RouteError 429", err, err)
+	}
+	for _, want := range []string{"gamma", "daily token budget exhausted", "x-cascade", "below reserve floor", "0.05", "0.15"} {
+		if !strings.Contains(routeErr.Reason, want) {
+			t.Fatalf("429 reason = %q, want it to contain %q", routeErr.Reason, want)
+		}
+	}
+}
+
+// TestRouterRefusalEvictsStaleHeadroom pins the self-healing half of #1807: a
+// cached low headroom must not stick past the refusal it caused. After a 429
+// the refused entries are dropped, so the next request recomputes headroom
+// instead of reusing the stale value for the rest of the TTL.
+func TestRouterRefusalEvictsStaleHeadroom(t *testing.T) {
+	quota := &fakeQuota{headroom: map[string]float64{"strong": .05, "small": .05}}
+	router, cat, _ := newTestRouter(t, DefaultPolicy(), quota)
+	if _, err := router.Route(context.Background(), selector(t, cat, "L4"), Filter{}, "", ""); err == nil {
+		t.Fatal("stale low headroom routed, want 429")
+	}
+	firstCalls := quota.headrooms("strong") + quota.headrooms("small")
+
+	quota.mu.Lock()
+	quota.headroom["strong"], quota.headroom["small"] = .8, .8
+	quota.mu.Unlock()
+	got, err := router.Route(context.Background(), selector(t, cat, "L4"), Filter{}, "", "")
+	if err != nil {
+		t.Fatalf("second route after headroom recovery = %v, want success without waiting out the TTL", err)
+	}
+	if got.Agent == "" {
+		t.Fatal("second route picked no agent")
+	}
+	if calls := quota.headrooms("strong") + quota.headrooms("small"); calls <= firstCalls {
+		t.Fatalf("headroom calls = %d after %d, want the refusal to have evicted the stale entries", calls, firstCalls)
+	}
+}

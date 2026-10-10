@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -148,6 +149,9 @@ type ServerOptions struct {
 	// and a negative value disables the bound.
 	RequestTimeout time.Duration
 
+	// Logger receives routing refusal diagnostics. Nil uses slog.Default().
+	Logger *slog.Logger
+
 	// Prewarm pre-creates the pool of each band's routing leader at
 	// startup instead of waiting for the first request to that band.
 	Prewarm bool
@@ -175,6 +179,7 @@ type Server struct {
 	usage    UsageRecorder
 	poolCfg  PoolConfig
 	timeout  time.Duration
+	log      *slog.Logger
 
 	router *Router
 	scaler *Autoscaler
@@ -251,12 +256,16 @@ func NewServer(opts ServerOptions) (*Server, error) {
 	if timeout == 0 {
 		timeout = DefaultRequestTimeout
 	}
+	log := opts.Logger
+	if log == nil {
+		log = slog.Default()
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Server{
 		catalog: catalog, policy: policy, token: token, quota: quota,
 		breaker: breaker, recorder: recorder, usage: usageSink,
-		poolCfg: poolCfg, timeout: timeout,
+		poolCfg: poolCfg, timeout: timeout, log: log,
 		history: sched.NewHistoryBuffer(),
 		ctx:     ctx, cancel: cancel,
 		ranked:      map[int]rankEntry{},
@@ -546,6 +555,10 @@ func (s *Server) route(next http.Handler) http.Handler {
 				if routeErr.Status == http.StatusServiceUnavailable || routeErr.Status == http.StatusTooManyRequests {
 					w.Header().Set("Retry-After", "5")
 				}
+				// The 429 body already names each refused candidate and its
+				// exact reason; mirror it to the door log so a stuck door is
+				// diagnosable without reproducing the request.
+				s.log.Warn("cligw: route refused", "status", routeErr.Status, "reason", routeErr.Reason, "model", model)
 				writeJSON(w, routeErr.Status, errorEnvelope(routeErr.Reason))
 				return
 			}

@@ -1,10 +1,12 @@
 package cligw
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -768,5 +770,55 @@ func TestServerRankIsRestrictedToLivePools(t *testing.T) {
 	}
 	if got := ts.Rank(2); got != nil {
 		t.Fatalf("Rank(2) = %v, want nil: no L2 pool exists", got)
+	}
+}
+
+// TestServer429BodyAndLogNameRefusedCandidates pins #1807 at the door: the
+// HTTP 429 body and the door log must each name every refused candidate and
+// its exact cause — the Preview reason string, or headroom vs the floor.
+func TestServer429BodyAndLogNameRefusedCandidates(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	catalog := installServerFleet(t)
+	quota := &fakeQuota{
+		headroom: map[string]float64{"sonnet-x": .8, "gpt-x": .05},
+		refused:  map[string]string{"warm-four": "account concurrency budget reserved"},
+	}
+	var logs bytes.Buffer
+	server, err := NewServer(ServerOptions{
+		Catalog: catalog,
+		Quota:   quota,
+		Breaker: sched.NewBreaker(),
+		Logger:  slog.New(slog.NewTextHandler(&logs, nil)),
+		Pool:    PoolConfig{StartServers: 0, MinSpare: 0, MaxSpare: 1, MaxWorkers: 2, IdleTTL: time.Minute},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	httpServer := httptest.NewServer(server.Handler())
+	t.Cleanup(httpServer.Close)
+
+	req, err := http.NewRequest(http.MethodPost, httpServer.URL+"/v1/chat/completions", strings.NewReader(fmt.Sprintf(chatBody, "L4")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+server.Token())
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := httpServer.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("exhausted band = %s, want 429: %s", resp.Status, body)
+	}
+	for _, want := range []string{"warm-four", "account concurrency budget reserved", "cold-four", "below reserve floor"} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("429 body = %s, want it to contain %q", body, want)
+		}
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("door log = %q, want it to contain %q", logs.String(), want)
+		}
 	}
 }

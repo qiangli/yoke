@@ -311,6 +311,8 @@ func (r *Router) decide(ctx context.Context, agents []Agent, sel Selector, polic
 		bands = append(bands, band)
 	}
 	sort.Ints(bands)
+	var refusals []string
+	var refusedAgents []Agent
 	for _, band := range bands {
 		candidates := byBand[band]
 		r.rank(candidates, policyName, sel, band)
@@ -318,6 +320,10 @@ func (r *Router) decide(ctx context.Context, agents []Agent, sel Selector, polic
 			if candidates[i].Score.BelowReserve {
 				candidates[i].Preview = previewBelowReserve
 				quotaRejected++
+				refusals = append(refusals, belowReserveRefusal(candidates[i], r.policy.ReserveFloor))
+				if agent, ok := byName[candidates[i].Agent]; ok {
+					refusedAgents = append(refusedAgents, agent)
+				}
 				continue
 			}
 			agent, ok := byName[candidates[i].Agent]
@@ -332,6 +338,8 @@ func (r *Router) decide(ctx context.Context, agents []Agent, sel Selector, polic
 			if !allowed {
 				candidates[i].Preview = previewRefused
 				quotaRejected++
+				refusals = append(refusals, previewRefusal(candidates[i], reason))
+				refusedAgents = append(refusedAgents, agent)
 				continue
 			}
 			candidates[i].Preview = previewAllowed
@@ -343,12 +351,42 @@ func (r *Router) decide(ctx context.Context, agents []Agent, sel Selector, polic
 		}
 	}
 	if quotaRejected > 0 && nonQuotaRejected == 0 {
-		return Decision{}, &RouteError{Status: 429, Reason: "all matching candidates were refused by quota or below the reserve floor"}
+		r.evictHeadroom(refusedAgents)
+		return Decision{}, &RouteError{Status: 429, Reason: "all matching candidates were refused by quota or below the reserve floor: " + strings.Join(refusals, "; ")}
 	}
 	if quotaRejected > 0 && len(byBand) > 0 {
-		return Decision{}, &RouteError{Status: 429, Reason: "remaining candidates were refused by quota or below the reserve floor"}
+		r.evictHeadroom(refusedAgents)
+		return Decision{}, &RouteError{Status: 429, Reason: "remaining candidates were refused by quota or below the reserve floor: " + strings.Join(refusals, "; ")}
 	}
 	return Decision{}, &RouteError{Status: 503, Reason: "no matching candidate is installed and outside breaker cooldown"}
+}
+
+// belowReserveRefusal names the refused candidate and the exact headroom
+// against the reserve floor, for the 429 body and the door log.
+func belowReserveRefusal(c Candidate, floor float64) string {
+	return fmt.Sprintf("%s: headroom %.2f below reserve floor %.2f", c.Agent, c.Score.Headroom, floor)
+}
+
+// previewRefusal names the refused candidate and the exact Preview reason
+// string, for the 429 body and the door log.
+func previewRefusal(c Candidate, reason string) string {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "no reason given"
+	}
+	return fmt.Sprintf("%s: preview refused: %s", c.Agent, reason)
+}
+
+// evictHeadroom drops cached headroom for agents just refused by quota so the
+// next request recomputes it instead of reusing a cached low value for the
+// rest of the TTL. A cached low headroom must never stick past the refusal
+// it caused.
+func (r *Router) evictHeadroom(agents []Agent) {
+	cache, ok := r.quota.(*headroomCache)
+	if !ok || len(agents) == 0 {
+		return
+	}
+	cache.evict(agents)
 }
 
 func (r *Router) rank(candidates []Candidate, policyName string, sel Selector, band int) {
@@ -692,6 +730,16 @@ func (c *headroomCache) Headroom(ctx context.Context, agent Agent) (float64, boo
 
 func (c *headroomCache) Preview(ctx context.Context, agent Agent) (bool, string) {
 	return c.source.Preview(ctx, agent)
+}
+
+// evict drops cached headroom for the named agents. The next Headroom call
+// for them recomputes from the source instead of reusing the cached value.
+func (c *headroomCache) evict(agents []Agent) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, agent := range agents {
+		delete(c.entries, agent.Provider+"\x00"+agent.Name+"\x00"+agent.Model)
+	}
 }
 
 func usagePath() string {
