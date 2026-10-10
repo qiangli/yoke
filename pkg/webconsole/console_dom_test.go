@@ -2127,7 +2127,16 @@ func TestDOMCloudSectionPairs(t *testing.T) {
 		chromedp.Sleep(800*time.Millisecond),
 		// The fourth section switch is Cloud; flip it off and the section goes.
 		chromedp.Evaluate(`(() => { const sw = document.querySelectorAll("#section-toggles input")[3]; sw.click(); return String(!document.getElementById("cloud-section")); })()`, &hidden),
-		chromedp.Evaluate(`(() => { const sw = document.querySelectorAll("#section-toggles input")[3]; sw.click(); document.getElementById("settings").close(); return "ok"; })()`, &status1),
+		// Closing the settings dialog queues its close event, which repaints
+		// the home grid. Wait for that repaint before typing into the Pair
+		// card so SendKeys cannot target the input it is about to replace.
+		chromedp.Evaluate(`new Promise(resolve => {
+			const sw = document.querySelectorAll("#section-toggles input")[3];
+			sw.click();
+			const dlg = document.getElementById("settings");
+			dlg.addEventListener("close", () => requestAnimationFrame(() => resolve("ok")), { once: true });
+			dlg.close();
+		})`, &status1, awaitPromise),
 	); err != nil {
 		t.Fatalf("chromedp: %v", err)
 	}
