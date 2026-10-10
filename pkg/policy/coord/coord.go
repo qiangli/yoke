@@ -97,6 +97,10 @@ type Claim struct {
 	// Kind is the class of resource (see Kind); v1 records read as repo for
 	// project claims and name for resources.
 	Kind string `json:"kind,omitempty"`
+	// Via is the kind the claim was requested under when that differs from Kind
+	// (a registry entry claiming under its declared kind): the address to type
+	// to reach this claim again.
+	Via string `json:"via,omitempty"`
 	// Members is what the claim covers, compared under the kind's MatchRule.
 	Members []string `json:"members,omitempty"`
 	// Epoch is the fencing token: monotonic per key, bumped on every new

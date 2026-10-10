@@ -344,6 +344,9 @@ func (s store) acquireOnce(b Backend, locked bool, sp acquireSpec, ref Ref, key 
 		c.Project = ref.Name
 	} else {
 		c.Resource = ref.Name
+		if ref.Kind != kind.Name {
+			c.Via = ref.Kind
+		}
 	}
 	if reuse {
 		// Preserve the original acquisition time across a refresh, so "since 3pm"
@@ -574,6 +577,17 @@ func (c *Claim) name() string {
 func (c *Claim) Ref() Ref {
 	c.normalize()
 	return Ref{Kind: c.Kind, Name: c.name()}
+}
+
+// Address is the ref a caller types to reach this claim: the kind it was
+// requested under, which differs from Ref's kind for a registry entry claimed
+// under its declared kind.
+func (c *Claim) Address() Ref {
+	r := c.Ref()
+	if c.Via != "" {
+		r.Kind = c.Via
+	}
+	return r
 }
 
 // key is the claim's storage key: its ref, or its holder for a project claim.
