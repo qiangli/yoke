@@ -16,7 +16,7 @@ func TestFleetListHelpDefinesEveryOutputField(t *testing.T) {
 		{
 			name: "tools", root: NewToolsCmd,
 			want: []string{"NAME", "KIND", "BINARY", "MODEL-SELECT", "RING", "selects_model",
-				"declared binary, otherwise NAME", "hidden CLI definitions", "not where an executable", "tools verify NAME"},
+				"declared binary, otherwise NAME", "hidden internal tools", "not where an executable", "tools verify NAME"},
 		},
 		{
 			name: "models", root: NewModelsCmd,

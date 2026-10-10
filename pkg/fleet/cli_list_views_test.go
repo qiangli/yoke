@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -123,6 +124,11 @@ func TestListBuiltinMatchesRingEmbedded(t *testing.T) {
 			_, opts := viewFixture(t, noun)
 			builtin, _ := listNames(t, root, opts, "--builtin")
 			embedded, _ := listNames(t, root, opts, "--ring", "embedded")
+			// --ring embedded is an inspection view and also lists hidden
+			// internal tools; --builtin is a user view and does not.
+			if noun == "tool" {
+				embedded = slices.DeleteFunc(embedded, func(n string) bool { return n == "herald" })
+			}
 			if strings.Join(builtin, ",") != strings.Join(embedded, ",") {
 				t.Errorf("--builtin = %v, --ring embedded = %v", builtin, embedded)
 			}
@@ -246,7 +252,7 @@ func TestHiddenToolHidesBoundAgentsToo(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, args := range [][]string{nil, {"--active"}} {
+	for _, args := range [][]string{nil, {"--active"}, {"--custom"}} {
 		tools, _ := listNames(t, NewToolsCmd, opts, args...)
 		if hasName(tools, "quiet-tool") || !hasName(tools, "loud-tool") {
 			t.Errorf("%v tools = %v", args, tools)
@@ -256,8 +262,8 @@ func TestHiddenToolHidesBoundAgentsToo(t *testing.T) {
 			t.Errorf("%v agents = %v", args, agents)
 		}
 	}
-	// Explicit views still show both.
-	for _, args := range [][]string{{"--all"}, {"--custom"}, {"--ring", "local"}} {
+	// The inspection views (--all, a pinned --ring) still show both.
+	for _, args := range [][]string{{"--all"}, {"--ring", "local"}} {
 		tools, _ := listNames(t, NewToolsCmd, opts, args...)
 		if !hasName(tools, "quiet-tool") {
 			t.Errorf("%v must show the hidden tool: %v", args, tools)
@@ -295,5 +301,28 @@ func TestSyncToolsSkipsHidden(t *testing.T) {
 	}
 	if _, ok := c.Tool("loud"); !ok {
 		t.Fatal("the visible tool must sync")
+	}
+}
+
+// The internal tools (herald) are built in but never listed by a user view:
+// not by default, not under --builtin; only --all and a pinned --ring show
+// them (plan section D: no public listing of herald).
+func TestBuiltinViewOmitsHiddenTools(t *testing.T) {
+	t.Setenv("BASHY_FLEET_SEEDS", "")
+	t.Setenv("BASHY_TOOLS_PATH", "")
+	opts := []Option{WithRoot(t.TempDir()), WithoutCloudOverlay()}
+	for _, args := range [][]string{nil, {"--builtin"}, {"--active"}} {
+		names, _ := listNames(t, NewToolsCmd, opts, args...)
+		if hasName(names, "herald") {
+			t.Errorf("tool list %v lists hidden herald: %v", args, names)
+		}
+		if args == nil && !hasName(names, "ycode") {
+			t.Errorf("tool list does not list ycode: %v", names)
+		}
+	}
+	for _, args := range [][]string{{"--all"}, {"--ring", "embedded"}} {
+		if names, _ := listNames(t, NewToolsCmd, opts, args...); !hasName(names, "herald") {
+			t.Errorf("tool list %v should show hidden herald for inspection: %v", args, names)
+		}
 	}
 }

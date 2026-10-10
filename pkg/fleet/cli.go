@@ -135,7 +135,8 @@ func newToolsList(opts []Option) *cobra.Command {
 		Long: "List agentic CLI tools.\n\n" +
 			"The asset registry's tool namespace is shared with MCP-style function kits;\n" +
 			"the default view contains visible kind:cli fleet tools. Explicit ring\n" +
-			"views also include hidden CLI definitions and non-CLI func/web/system entries.\n\n" +
+			"views also include non-CLI func/web/system entries; hidden internal tools\n" +
+			"appear only under --all and a pinned --ring.\n\n" +
 			"Fields:\n" +
 			"  NAME          canonical registry name used by --tool and agent bindings\n" +
 			"  KIND          cli = agent harness; func/web/system appear in explicit views\n" +
@@ -167,7 +168,7 @@ func newToolsList(opts []Option) *cobra.Command {
 				if !t.IsCLI() && !explicitView(selected) {
 					continue
 				}
-				if t.Hidden && !explicitView(selected) {
+				if t.Hidden && !filter.ShowsHidden() {
 					continue // kept in the registry (detected/resolvable), just not listed
 				}
 				if filter.Active && !t.Active() {
@@ -479,9 +480,9 @@ func newAgentsList(opts []Option) *cobra.Command {
 			}
 			standings := DeriveStandings(entries, ladder)
 			// Agents bound to a hidden tool are hidden with it, in the
-			// roster views. Explicit ring views still show them.
+			// user views. Only --all and a pinned --ring show them.
 			hiddenTools := map[string]bool{}
-			if !explicitView(selected) {
+			if !filter.ShowsHidden() {
 				tools, _ := cat.Tools(true)
 				for _, t := range tools {
 					if t.Hidden {

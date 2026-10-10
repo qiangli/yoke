@@ -74,6 +74,12 @@ func (f ListFilter) Keep(selected string, ring assetring.Ring, life RecordLifecy
 	return !f.Active || active()
 }
 
+// ShowsHidden reports whether the view lists hidden entries (internal
+// tools such as herald and genie): only --all and a pinned --ring, the
+// inspection views. --builtin, --custom and --active are user views and
+// never list them.
+func (f ListFilter) ShowsHidden() bool { return f.All || f.Ring != "" }
+
 // View names the view for the list envelope. A --ring value with a flag of
 // its own reports that flag's name; shared and cloud have none, so they
 // report as ring:<name>.
