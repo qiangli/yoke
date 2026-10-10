@@ -47,6 +47,7 @@
 package coord
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -64,7 +65,7 @@ import (
 )
 
 // SchemaVersion is the on-disk contract.
-const SchemaVersion = "bashy-claim-v1"
+const SchemaVersion = "bashy-claim-v2"
 
 // TTL is how long a claim survives without a heartbeat.
 //
@@ -84,11 +85,23 @@ var ErrLockUnsupported = errors.New(
 const (
 	ModeLease    = "lease"
 	ModeAttached = "attached"
+	// ModeAnnounce is advisory: no TTL, never blocks Guard, but a competing
+	// Acquire still conflicts with it.
+	ModeAnnounce = "announce"
 )
 
 // Claim is one agent's hold on a project or named resource.
 type Claim struct {
 	SchemaVersion string `json:"schema_version"`
+
+	// Kind is the class of resource (see Kind); v1 records read as repo for
+	// project claims and name for resources.
+	Kind string `json:"kind,omitempty"`
+	// Members is what the claim covers, compared under the kind's MatchRule.
+	Members []string `json:"members,omitempty"`
+	// Epoch is the fencing token: monotonic per key, bumped on every new
+	// acquisition and never on a refresh by the same holder.
+	Epoch uint64 `json:"epoch,omitempty"`
 
 	// Roots is the PATH SET. Conflict is intersection, not equality.
 	Roots []string `json:"roots"`
@@ -96,8 +109,9 @@ type Claim struct {
 	Project string `json:"project"`
 	// Resource is a host-local name. Exactly one of Resource and Roots is set.
 	Resource string `json:"resource,omitempty"`
-	// Mode is lease for a detached agent hold or attached for a child-scoped
-	// kernel lock. Project claims predate this field and leave it empty.
+	// Mode is lease for a detached agent hold, attached for a child-scoped
+	// kernel lock, or announce for an advisory one. Project claims predate this
+	// field and leave it empty.
 	Mode string `json:"mode,omitempty"`
 
 	Holder principal.Ref `json:"holder"`
@@ -119,8 +133,20 @@ func (c *Claim) Liveness(now time.Time) role.Liveness {
 		Holder:      c.Holder.Name,
 		AcquiredAt:  c.AcquiredAt,
 		HeartbeatAt: c.Heartbeat,
-		TTL:         TTL,
+		TTL:         c.ttl(),
 	}.Live(now)
+}
+
+// ttl is how long this claim survives without a heartbeat: none for an
+// announcement, the kind's override if it has one, else the package TTL.
+func (c *Claim) ttl() time.Duration {
+	if c.Mode == ModeAnnounce {
+		return 0
+	}
+	if k, ok := LookupKind(c.Kind); ok && k.TTL > 0 {
+		return k.TTL
+	}
+	return TTL
 }
 
 // Live reports whether the claim still holds. The heartbeat is the test; a dead PID
@@ -130,8 +156,10 @@ func (c *Claim) Live(now time.Time) bool {
 	return c.Liveness(now) == role.LivenessLive
 }
 
-// Stale is the inverse, named so the call sites read the way people think.
-func (c *Claim) Stale(now time.Time) bool { return !c.Live(now) }
+// Stale reports a claim a successor may take without the holder's consent:
+// lapsed or vacant. An UNKNOWN claim is not stale — nothing says its holder is
+// gone — so it is taken only with Force.
+func (c *Claim) Stale(now time.Time) bool { return c.Liveness(now).Takeable() }
 
 // Conflicts reports whether this claim blocks `other`. Two claims conflict when
 // their path sets INTERSECT and the holders differ.
@@ -219,21 +247,7 @@ func DefaultDir() string {
 // (enforced by Acquire). Keying by holder means a crashed agent leaves exactly one
 // stale file, and a heartbeat is a rewrite of that one file rather than a scan.
 func claimPath(dir string, h principal.Ref) string {
-	id := h.Episode
-	if id == "" {
-		id = h.Name + "@" + h.Host
-	}
-	if id == "" || id == "@" {
-		id = "unattributed"
-	}
-	safe := strings.Map(func(r rune) rune {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
-			return r
-		}
-		return '-'
-	}, id)
-	return filepath.Join(dir, safe+".json")
+	return filepath.Join(dir, holderID(h)+".json")
 }
 
 func resourceKey(resource string) string {
@@ -242,11 +256,11 @@ func resourceKey(resource string) string {
 }
 
 func resourceClaimPath(dir, resource string) string {
-	return filepath.Join(dir, "resource-"+resourceKey(resource)+".json")
+	return keyedClaimPath(dir, Ref{Kind: KindName, Name: resource})
 }
 
 func resourceLockPath(dir, resource string) string {
-	return filepath.Join(dir, "resource-"+resourceKey(resource)+".lock")
+	return keyedLockPath(dir, Ref{Kind: KindName, Name: resource})
 }
 
 // List returns every claim on this host, freshest first.
@@ -271,10 +285,11 @@ func List(dir string) ([]*Claim, error) {
 		if json.Unmarshal(b, &c) != nil || c.SchemaVersion == "" {
 			continue // a corrupt claim must not hide the healthy ones
 		}
+		c.normalize()
 		// An attached record is diagnostic; the kernel lock is authoritative.
 		// A SIGKILL cannot remove JSON, so omit the record once the lock is gone.
 		if c.Resource != "" && c.Mode == ModeAttached {
-			if _, held := lockfile.Owner(resourceLockPath(dir, c.Resource)); !held {
+			if _, held := lockfile.Owner(keyedLockPath(dir, c.Ref())); !held {
 				continue
 			}
 		}
@@ -326,134 +341,40 @@ func (c *Conflict) Error() string {
 
 // AcquireResource takes or refreshes a detached lease on a host-local name.
 func AcquireResource(dir, resource string, holder principal.Ref, intent string, force bool) (*Claim, error) {
-	resource = strings.TrimSpace(resource)
-	if resource == "" {
-		return nil, fmt.Errorf("claim: resource name is required")
-	}
-	now := time.Now().UTC()
-	return withLock(dir, func() (*Claim, error) {
-		claims, err := List(dir)
-		if err != nil {
-			return nil, err
-		}
-		if !force {
-			for _, other := range claims {
-				if other.ConflictsResource(resource, holder, now) {
-					return nil, &Conflict{Claim: other}
-				}
-			}
-		}
-		// A process-scoped kernel hold cannot be forced or refreshed into a
-		// detached lease. The process holding the fd is the authority.
-		for _, other := range claims {
-			if other.Resource == resource && other.Mode == ModeAttached {
-				return nil, &Conflict{Claim: other}
-			}
-		}
-		c := &Claim{SchemaVersion: SchemaVersion, Resource: resource, Mode: ModeLease,
-			Holder: holder, Intent: intent, AcquiredAt: now, Heartbeat: now, PID: os.Getpid()}
-		p := resourceClaimPath(dir, resource)
-		if b, err := os.ReadFile(p); err == nil {
-			var prev Claim
-			if json.Unmarshal(b, &prev) == nil && sameHolder(prev.Holder, holder) && !prev.AcquiredAt.IsZero() {
-				c.AcquiredAt = prev.AcquiredAt
-				if c.Intent == "" {
-					c.Intent = prev.Intent
-				}
-			}
-		}
-		return c, writeClaim(p, c)
-	})
+	return AcquireResourceWithin(dir, resource, holder, intent, force, 0)
 }
 
 // AcquireResourceWithin retries the complete detached acquisition cycle until
 // the bounded wait elapses. claims.lock only serializes each attempt; it is not
 // the resource hold.
 func AcquireResourceWithin(dir, resource string, holder principal.Ref, intent string, force bool, wait time.Duration) (*Claim, error) {
-	deadline := time.Now().Add(wait)
-	backoff := 20 * time.Millisecond
-	for {
-		c, err := AcquireResource(dir, resource, holder, intent, force)
-		var conflict *Conflict
-		if err == nil || wait <= 0 || !errors.As(err, &conflict) || !time.Now().Before(deadline) {
-			return c, err
-		}
-		d := time.Until(deadline)
-		if d > backoff {
-			d = backoff
-		}
-		if d > 0 {
-			time.Sleep(d)
-		}
-		if backoff < 2*time.Second {
-			backoff *= 2
-			if backoff > 2*time.Second {
-				backoff = 2 * time.Second
-			}
-		}
-	}
+	g, err := store{dir}.acquireWait(context.Background(), acquireSpec{req: Request{
+		Ref: Ref{Kind: KindName, Name: resource}, Holder: holder, Intent: intent, Mode: ModeLease, Force: force,
+	}}, wait)
+	return g.Claim, err
 }
 
 // AcquireAttached takes a kernel-backed hold for one child process.
 func AcquireAttached(dir, resource string, holder principal.Ref, intent string, wait time.Duration) (*Claim, *lockfile.Lock, error) {
-	resource = strings.TrimSpace(resource)
-	if resource == "" {
-		return nil, nil, fmt.Errorf("claim: resource name is required")
-	}
-	h := lockfile.Holder{Name: holder.Name, PID: os.Getpid(), Intent: intent, Since: time.Now()}
-	var l *lockfile.Lock
-	var err error
-	if wait > 0 {
-		l, err = lockfile.AcquireWithin(resourceLockPath(dir, resource), wait, h)
-	} else {
-		l, err = lockfile.TryAcquire(resourceLockPath(dir, resource), h)
-	}
-	if err != nil {
-		if b, readErr := os.ReadFile(resourceClaimPath(dir, resource)); readErr == nil {
-			var c Claim
-			if json.Unmarshal(b, &c) == nil && c.Resource == resource {
-				return nil, nil, &Conflict{Claim: &c}
-			}
-		}
-		if owner, ok := lockfile.HeldBy(err); ok {
-			return nil, nil, &Conflict{Claim: &Claim{
-				SchemaVersion: SchemaVersion, Resource: resource, Mode: ModeAttached,
-				Holder: principal.Ref{Name: owner.Name}, Intent: owner.Intent,
-				AcquiredAt: owner.Since, Heartbeat: owner.Since, PID: owner.PID,
-			}}
-		}
-		return nil, nil, err
-	}
-	now := time.Now().UTC()
-	c, err := withLock(dir, func() (*Claim, error) {
-		claims, listErr := List(dir)
-		if listErr != nil {
-			return nil, listErr
-		}
-		for _, other := range claims {
-			if other.Mode != ModeAttached && other.ConflictsResource(resource, holder, now) {
-				return nil, &Conflict{Claim: other}
-			}
-		}
-		claim := &Claim{SchemaVersion: SchemaVersion, Resource: resource, Mode: ModeAttached,
-			Holder: holder, Intent: intent, AcquiredAt: now, Heartbeat: now, PID: os.Getpid()}
-		return claim, writeClaim(resourceClaimPath(dir, resource), claim)
+	g, l, err := store{dir}.acquireAttached(Request{
+		Ref: Ref{Kind: KindName, Name: resource}, Holder: holder, Intent: intent, Mode: ModeAttached, Wait: wait,
 	})
-	if err != nil {
-		_ = l.Release()
-		return nil, nil, err
-	}
-	return c, l, nil
+	return g.Claim, l, err
 }
 
 // ReleaseAttached removes the diagnostic record before releasing the kernel
 // lock, so a new holder never inherits the old row.
 func ReleaseAttached(dir string, c *Claim, l *lockfile.Lock) error {
 	if c != nil {
-		_, err := withLock(dir, func() (*Claim, error) {
-			return nil, os.Remove(resourceClaimPath(dir, c.Resource))
+		b := fileBackend{dir: dir}
+		err := withDirLock(dir, func() error {
+			cur, err := b.Load(c.key())
+			if err != nil || cur == nil {
+				return err
+			}
+			return b.commitLocked(c.key(), cur.Epoch, nil)
 		})
-		if err != nil && !os.IsNotExist(err) {
+		if err != nil {
 			_ = l.Release()
 			return err
 		}
@@ -466,28 +387,7 @@ func ReleaseResource(dir, resource string, holder principal.Ref) error {
 	if strings.TrimSpace(resource) == "" {
 		return fmt.Errorf("claim: resource name is required")
 	}
-	_, err := withLock(dir, func() (*Claim, error) {
-		p := resourceClaimPath(dir, resource)
-		b, readErr := os.ReadFile(p)
-		if readErr != nil {
-			return nil, readErr
-		}
-		var c Claim
-		if json.Unmarshal(b, &c) != nil || c.Resource != resource {
-			return nil, fmt.Errorf("claim: invalid record for %s", resource)
-		}
-		if c.Mode == ModeAttached {
-			return nil, fmt.Errorf("claim: %s is attached to a live child and cannot be released separately", resource)
-		}
-		if !sameHolder(c.Holder, holder) {
-			return nil, &Conflict{Claim: &c}
-		}
-		return nil, os.Remove(p)
-	})
-	if os.IsNotExist(err) {
-		return nil
-	}
-	return err
+	return store{dir}.release(Ref{Kind: KindName, Name: resource}, holder, 0)
 }
 
 // Acquire takes or refreshes a claim over the given path set.
@@ -498,48 +398,11 @@ func ReleaseResource(dir, resource string, holder principal.Ref) error {
 // absence — friction that fires when you are alone is friction nobody accepts, and
 // a rule nobody accepts is a rule nobody follows.
 func Acquire(dir string, roots []string, holder principal.Ref, intent string, force bool) (*Claim, error) {
-	now := time.Now().UTC()
-
-	return withLock(dir, func() (*Claim, error) {
-		claims, err := List(dir)
-		if err != nil {
-			return nil, err
-		}
-		if !force {
-			for _, other := range claims {
-				if other.Conflicts(roots, holder, now) {
-					return nil, &Conflict{Claim: other}
-				}
-			}
-		}
-		project := ""
-		if len(roots) > 0 {
-			project = filepath.Base(roots[0])
-		}
-		c := &Claim{
-			SchemaVersion: SchemaVersion,
-			Roots:         roots,
-			Project:       project,
-			Holder:        holder,
-			Intent:        intent,
-			AcquiredAt:    now,
-			Heartbeat:     now,
-			PID:           os.Getpid(),
-		}
-		// Preserve the original acquisition time across a refresh, so "since 3pm"
-		// means when the work started, not when the last command ran.
-		p := claimPath(dir, holder)
-		if b, err := os.ReadFile(p); err == nil {
-			var prev Claim
-			if json.Unmarshal(b, &prev) == nil && !prev.AcquiredAt.IsZero() && Intersects(prev.Roots, roots) {
-				c.AcquiredAt = prev.AcquiredAt
-				if c.Intent == "" {
-					c.Intent = prev.Intent
-				}
-			}
-		}
-		return c, writeClaim(p, c)
+	g, err := store{dir}.acquire(acquireSpec{
+		req:    Request{Holder: holder, Intent: intent, Force: force},
+		legacy: true, roots: roots,
 	})
+	return g.Claim, err
 }
 
 // Prunable reports whether prune would remove this claim: a lapsed,
@@ -579,24 +442,19 @@ func Prune(dir string, now time.Time, dryRun bool) ([]*Claim, error) {
 		return Lapsed(dir, now)
 	}
 	var pruned []*Claim
-	_, err := withLock(dir, func() (*Claim, error) {
+	b := fileBackend{dir: dir}
+	err := withDirLock(dir, func() error {
 		lapsed, err := Lapsed(dir, now)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		for _, c := range lapsed {
-			var p string
-			if c.Resource != "" {
-				p = resourceClaimPath(dir, c.Resource)
-			} else {
-				p = claimPath(dir, c.Holder)
-			}
-			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
-				return nil, err
+			if err := b.commitLocked(c.key(), c.Epoch, nil); err != nil && !errors.Is(err, ErrEpochMismatch) {
+				return err
 			}
 			pruned = append(pruned, c)
 		}
-		return nil, nil
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -607,13 +465,14 @@ func Prune(dir string, now time.Time, dryRun bool) ([]*Claim, error) {
 // Release drops this holder's claim. A claim that is never released still expires;
 // releasing is a courtesy to whoever is waiting, not a correctness requirement.
 func Release(dir string, holder principal.Ref) error {
-	_, err := withLock(dir, func() (*Claim, error) {
-		return nil, os.Remove(claimPath(dir, holder))
+	b := fileBackend{dir: dir}
+	return withDirLock(dir, func() error {
+		cur, err := b.Load(holderKey(holder))
+		if err != nil || cur == nil {
+			return err
+		}
+		return b.commitLocked(holderKey(holder), cur.Epoch, nil)
 	})
-	if os.IsNotExist(err) {
-		return nil
-	}
-	return err
 }
 
 func writeClaim(path string, c *Claim) error {
