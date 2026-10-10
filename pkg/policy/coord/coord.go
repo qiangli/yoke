@@ -189,6 +189,13 @@ func (c *Claim) ConflictsResource(resource string, holder principal.Ref, now tim
 	return !sameHolder(c.Holder, holder)
 }
 
+// SameHolder reports whether two identities are the same logical agent, by the
+// one rule the ledger uses. Exported because a caller that keys its OWN durable
+// record on a holder — handoff stamps ResumedBy — must answer "is this me?"
+// identically to the claim it took first, or a replayed take would read as a
+// stranger's.
+func SameHolder(a, b principal.Ref) bool { return sameHolder(a, b) }
+
 // sameHolder: sessions are told apart by episode. Name and host identify a
 // holder only when one side carries no episode (a legacy or unattributed
 // identity) — two independently launched sessions with one tool name on one

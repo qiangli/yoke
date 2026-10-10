@@ -17,6 +17,7 @@ import (
 
 	yokegit "github.com/qiangli/yoke/git"
 	"github.com/qiangli/yoke/pkg/fleet"
+	"github.com/qiangli/yoke/pkg/policy/coord"
 	"github.com/qiangli/yoke/pkg/principal"
 )
 
@@ -384,20 +385,29 @@ live seat. Task handoffs may be many; if several are current it lists them.`,
 				return nil
 			}
 
-			// --claim: the ONLY side-effecting path — apply the work and stamp.
-			if !rec.Work.Clean {
+			// --claim: the ONLY side-effecting path — apply the work and stamp,
+			// both INSIDE a coord claim on the handoff id (see claim.go). Two
+			// successors racing for one parked seat therefore produce one winner
+			// and one refusal naming it, instead of two stamps over each other.
+			//
+			// coord.Self() rather than the bare resolver: it MINTS an episode
+			// when the ambient session has none, so a human-launched tool is a
+			// distinguishable holder of both the claim and the stamp.
+			self := coord.Self()
+			claimed, err := Claim(cmd.Context(), dir, rec, self, func() error {
+				if rec.Work.Clean {
+					return nil
+				}
 				if err := Apply(rec.Work, root); err != nil {
 					return err
 				}
 				fmt.Fprintf(out, "\n── work ──\nrestored into %s\n", root)
-			}
-			now := time.Now().UTC()
-			self, _ := principal.NewResolver(fleet.New(), principal.DefaultEnv()).Self()
-			rec.ResumedAt, rec.ResumedBy = &now, &self
-			if _, err := Save(dir, rec); err != nil {
+				return nil
+			})
+			if err != nil {
 				return err
 			}
-			fmt.Fprintf(out, "\nCLAIMED by %s. Re-run `bashy resume` to confirm the seat is held.\n", refName(self))
+			fmt.Fprintf(out, "\nCLAIMED by %s. Re-run `bashy resume` to confirm the seat is held.\n", refName(*claimed.ResumedBy))
 			return nil
 		},
 	}
