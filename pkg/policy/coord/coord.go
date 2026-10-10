@@ -299,46 +299,6 @@ func List(dir string) ([]*Claim, error) {
 	return out, nil
 }
 
-// Conflict is a live claim held by someone else over paths we want.
-type Conflict struct{ Claim *Claim }
-
-func (c *Conflict) Error() string {
-	who := c.Claim.Holder.Name
-	if who == "" {
-		who = string(c.Claim.Holder.Kind)
-	}
-	if who == "" {
-		who = "another agent"
-	}
-	var b strings.Builder
-	if c.Claim.Resource != "" {
-		host := c.Claim.Holder.Host
-		if host == "" {
-			host = "this host"
-		}
-		fmt.Fprintf(&b, "%s already holds %s on %s", who, c.Claim.Resource, host)
-	} else {
-		fmt.Fprintf(&b, "%s is already working in %s", who, c.Claim.Project)
-	}
-	if c.Claim.Intent != "" {
-		fmt.Fprintf(&b, " (%s)", c.Claim.Intent)
-	}
-	fmt.Fprintf(&b, ", since %s.\n\n", c.Claim.AcquiredAt.Format(time.Kitchen))
-	if c.Claim.Resource != "" {
-		fmt.Fprintf(&b, "This advisory hold coordinates agents on this host; it does not prove the remote resource is idle.\n\n")
-		fmt.Fprintf(&b, "  bashy claim list                # current project and named holds\n")
-		fmt.Fprintf(&b, "  bashy claim release %s          # the holder releases when finished\n", c.Claim.Resource)
-		return b.String()
-	}
-	fmt.Fprintf(&b, "Two agents writing one project is how an untested change reaches main: one session\n")
-	fmt.Fprintf(&b, "sweeps another's staged work into its commit, and nobody can tell whose edit was whose.\n\n")
-	fmt.Fprintf(&b, "  bashy claim list                # who is working, where, on what\n")
-	fmt.Fprintf(&b, "  bashy claim request -m <reason> # ask this owner to merge/sequence/release\n")
-	fmt.Fprintf(&b, "  bashy weave add \"<task>\"        # work in an ISOLATED workspace instead\n")
-	fmt.Fprintf(&b, "  BASHY_CLAIM_FORCE=1 <command>   # override (recorded in the audit log)\n")
-	return b.String()
-}
-
 // AcquireResource takes or refreshes a detached lease on a host-local name.
 func AcquireResource(dir, resource string, holder principal.Ref, intent string, force bool) (*Claim, error) {
 	return AcquireResourceWithin(dir, resource, holder, intent, force, 0)

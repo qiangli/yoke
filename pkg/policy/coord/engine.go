@@ -207,12 +207,13 @@ func (s store) acquire(sp acquireSpec) (Grant, error) {
 		b = fileBackend{dir: s.dir}
 	}
 	var grant Grant
+	var displaced []*Claim
 	err := s.txn(b, func(locked bool) error {
 		var last error
 		for range 3 {
-			g, err := s.acquireOnce(b, locked, sp, ref, key, kind, mode, members)
+			g, forced, err := s.acquireOnce(b, locked, sp, ref, key, kind, mode, members)
 			if err == nil {
-				grant = g
+				grant, displaced = g, forced
 				return nil
 			}
 			last = err
@@ -222,15 +223,18 @@ func (s store) acquire(sp acquireSpec) (Grant, error) {
 		}
 		return last
 	})
+	if err == nil && len(displaced) > 0 {
+		auditForce(ref, r, displaced)
+	}
 	return grant, err
 }
 
-func (s store) acquireOnce(b Backend, locked bool, sp acquireSpec, ref Ref, key string, kind Kind, mode string, members []string) (Grant, error) {
+func (s store) acquireOnce(b Backend, locked bool, sp acquireSpec, ref Ref, key string, kind Kind, mode string, members []string) (Grant, []*Claim, error) {
 	r := sp.req
 	now := time.Now().UTC()
 	prev, err := b.Load(key)
 	if err != nil {
-		return Grant{}, err
+		return Grant{}, nil, err
 	}
 	var prevEpoch uint64
 	if prev != nil {
@@ -241,20 +245,22 @@ func (s store) acquireOnce(b Backend, locked bool, sp acquireSpec, ref Ref, key 
 		}
 	}
 
+	var displaced []*Claim
 	reuse := false
 	if prev != nil {
 		if sameHolder(prev.Holder, r.Holder) {
 			if prev.Mode == ModeAttached || (mode == ModeAttached) {
-				return Grant{}, &Conflict{Claim: prev}
+				return Grant{}, nil, &Conflict{Claim: prev}
 			}
 			if r.Epoch != 0 && r.Epoch != prev.Epoch {
-				return Grant{}, ErrFenced
+				return Grant{}, nil, ErrFenced
 			}
 			reuse = !sp.legacy || Intersects(prev.Roots, sp.roots)
 		} else if !prev.Liveness(now).Takeable() {
 			if prev.Mode == ModeAttached || !r.Force {
-				return Grant{}, &Conflict{Claim: prev}
+				return Grant{}, nil, &Conflict{Claim: prev}
 			}
+			displaced = append(displaced, prev)
 		}
 	}
 
@@ -263,7 +269,7 @@ func (s store) acquireOnce(b Backend, locked bool, sp acquireSpec, ref Ref, key 
 	if _, ok := b.(fileBackend); ok {
 		all, err := List(s.dir)
 		if err != nil {
-			return Grant{}, err
+			return Grant{}, nil, err
 		}
 		for _, o := range all {
 			if o.key() == key || sameHolder(o.Holder, r.Holder) || o.Liveness(now).Takeable() {
@@ -273,8 +279,9 @@ func (s store) acquireOnce(b Backend, locked bool, sp acquireSpec, ref Ref, key 
 				continue
 			}
 			if o.Mode == ModeAttached || !r.Force {
-				return Grant{}, &Conflict{Claim: o}
+				return Grant{}, nil, &Conflict{Claim: o}
 			}
+			displaced = append(displaced, o)
 		}
 	}
 
@@ -310,9 +317,9 @@ func (s store) acquireOnce(b Backend, locked bool, sp acquireSpec, ref Ref, key 
 		c.Epoch = prevEpoch + 1
 	}
 	if err := commit(b, locked, key, prevEpoch, c); err != nil {
-		return Grant{}, err
+		return Grant{}, nil, err
 	}
-	return Grant{Claim: c, Epoch: c.Epoch}, nil
+	return Grant{Claim: c, Epoch: c.Epoch}, displaced, nil
 }
 
 // attachedHeld reports whether an attached record's kernel lock is still
