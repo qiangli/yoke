@@ -231,7 +231,7 @@ func newSprintStartCmd() *cobra.Command {
 					return fmt.Errorf("sprint #%d is already running (%s) — `sprint stop %d` first, or `sprint extend %d --by <dur>`",
 						id, before.currentBox().Status(now), id, id)
 				}
-				if prev, stale, free := weaveStoryLeaseState(before); !free && !stale && prev != who {
+				if prev, blocks := weaveStoryLeaseHeld(before); blocks && prev != who {
 					return fmt.Errorf("sprint #%d is held by %s — `sprint take %d` to assume delivery first", id, prev, id)
 				}
 				if err := checkSprintManagerBand(cmd, id, who); err != nil {
@@ -295,7 +295,7 @@ func newSprintStartCmd() *cobra.Command {
 					if strings.TrimSpace(s.Owner) != expectedOwner {
 						return "", fmt.Errorf("sprint #%d sprint manager changed concurrently from %s to %s", id, expectedOwner, s.Owner)
 					}
-					if prev, stale, free := weaveStoryLeaseState(s); !free && !stale && prev != who {
+					if prev, blocks := weaveStoryLeaseHeld(s); blocks && prev != who {
 						return "", fmt.Errorf("sprint #%d is held by %s — `sprint take %d` to assume delivery first",
 							id, prev, id)
 					}
@@ -307,6 +307,9 @@ func newSprintStartCmd() *cobra.Command {
 					// A sprint seated to a name with no process behind it accepts
 					// room messages and inbox mail that nobody will ever read.
 					if err := saveSprintLeaseToken(id, who, rawToken); err != nil {
+						return "", err
+					}
+					if err := sprintLeaseAcquire(s, who, false); err != nil {
 						return "", err
 					}
 					s.Lease = &weaveStoryLease{Holder: who, At: now, TokenHash: tokenHash}
@@ -694,7 +697,9 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 						who := weaveStoryConductorName(s, "")
 						s.Column = "done"
 						_ = closeSprintRoom(s, who)
-						s.Lease = nil
+						if err := sprintLeaseRelease(s); err != nil {
+							return "", err
+						}
 						msg += fmt.Sprintf("; lifecycle ended (%s → done), conductor lease released", from)
 						weaveStoryAppend(s, who, kindStage, msg)
 						// Ending is irreversible and closes the card, so if the

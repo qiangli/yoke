@@ -122,10 +122,10 @@ func writeSprintManagerLease(id int64, owner string, pid int) error {
 		if s.Lease == nil || !strings.EqualFold(s.Lease.Holder, owner) {
 			return fmt.Errorf("sprint #%d is not held by %s", id, owner)
 		}
-		now := time.Now().UTC()
-		s.Lease.At = now
-		s.Lease.AttachedPID = pid
-		s.UpdatedAt = now
+		if err := sprintLeaseRefresh(s, pid); err != nil {
+			return err
+		}
+		s.UpdatedAt = time.Now().UTC()
 		return nil
 	})
 }
@@ -174,12 +174,12 @@ func RefreshSprintOwnerActivity(name string) {
 	_ = withWeaveQueueLock(dir, func(q *weaveQueue) error {
 		for _, s := range q.Stories {
 			if s != nil && s.Lease != nil && strings.EqualFold(s.Lease.Holder, name) {
-				s.Lease.At = now
 				// An inbox read is an EVENT, not a tenancy: this command exits
 				// in a moment, so leaving a previous holder's pid on the lease
 				// would make the seat die with a process the reader never was.
-				s.Lease.AttachedPID = 0
-				s.UpdatedAt = now
+				if sprintLeaseRefresh(s, 0) == nil {
+					s.UpdatedAt = now
+				}
 			}
 		}
 		return nil

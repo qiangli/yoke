@@ -45,6 +45,8 @@ type weaveStory struct {
 	StoryRoots  []string         `json:"story_roots,omitempty"`  // repo todo stores contributing stories
 	Execution   sprintExecution  `json:"execution,omitempty"`    // policy + current focus, never a copied order
 	Lease       *weaveStoryLease `json:"lease,omitempty"`        // current conductor + heartbeat
+	LeaseEpoch  uint64           `json:"lease_epoch,omitempty"`  // fencing token: bumped each time the seat changes hands
+	LeaseRev    uint64           `json:"lease_rev,omitempty"`    // coord CAS token: bumped on every committed lease write, kept across release
 	Thread      []weaveComment   `json:"thread,omitempty"`       // sprint-level history
 	Runs        []sprintRun      `json:"runs,omitempty"`         // linked weave runs, CROSS-REPO
 	Arena       *sprintArena     `json:"arena,omitempty"`
@@ -1063,13 +1065,13 @@ you still gate, converge and report.`,
 				if err := sprintOrientationError(before); err != nil {
 					return err
 				}
-				prev, stale, free := weaveStoryLeaseState(before)
+				prev, blocks := weaveStoryLeaseHeld(before)
 				expectedOwner := strings.TrimSpace(before.Owner)
 				selfRename := false
-				if !free && !stale && prev != who && !force {
+				if blocks && prev != who && !force {
 					selfRename = StopSprintOwner != nil && expectedOwner != "" && strings.EqualFold(expectedOwner, prev) && !strings.EqualFold(expectedOwner, who)
 					if !selfRename {
-						return fmt.Errorf("sprint #%d lease is held by %s (fresh) — coordinate, or --force to take over", id, prev)
+						return sprintLeaseHeldError(id, before)
 					}
 				}
 				if err := checkSprintManagerBand(cmd, id, who); err != nil {
@@ -1080,7 +1082,7 @@ you still gate, converge and report.`,
 					cwd, _ := os.Getwd()
 					if err := retireSprintOwnerSession(cmd.Context(), id, expectedOwner, cwd); err != nil {
 						if selfRename {
-							return fmt.Errorf("sprint #%d lease is held by %s (fresh) — coordinate, or --force to take over", id, prev)
+							return sprintLeaseHeldError(id, before)
 						}
 						return fmt.Errorf("cannot transfer sprint #%d manager from %s to %s: %w", id, expectedOwner, who, err)
 					}
@@ -1093,8 +1095,8 @@ you still gate, converge and report.`,
 						return "", fmt.Errorf("sprint #%d sprint manager changed concurrently from %s to %s", id, expectedOwner, s.Owner)
 					}
 					prev, stale, free := weaveStoryLeaseState(s)
-					if !free && !stale && prev != who && !force && !retiredOld {
-						return "", fmt.Errorf("sprint #%d lease is held by %s (fresh) — coordinate, or --force to take over", id, prev)
+					if _, blocks := weaveStoryLeaseHeld(s); blocks && prev != who && !force && !retiredOld {
+						return "", sprintLeaseHeldError(id, s)
 					}
 					// REFUSE a competing owning session on the instance that
 					// already holds this seat, BEFORE anything is written — a
@@ -1131,6 +1133,9 @@ you still gate, converge and report.`,
 					// CLAIM-TIME: the seat must be RUNNING, not merely declared.
 					// A sprint seated to a name with no process behind it accepts
 					// room messages and inbox mail that nobody will ever read.
+					if err := sprintLeaseAcquire(s, who, force || retiredOld); err != nil {
+						return "", err
+					}
 					raw, hash, fresh, err := prepareSprintLeaseToken(s, who)
 					rawToken, minted = raw, fresh
 					if err != nil {
@@ -1260,7 +1265,9 @@ close the cadence, end when the sprint is finished.`,
 				// a heartbeat; the brief follows the same reasoning.
 				s.Continuity = message + sprintStateAddendum(s)
 				weaveStoryAppend(s, who, kindStage, "handed off — released conductor lease"+roomNote)
-				s.Lease = nil
+				if err := sprintLeaseRelease(s); err != nil {
+					return "", err
+				}
 				return fmt.Sprintf("sprint #%d: lease released; continuity recorded for the next conductor", id), nil
 			})
 		},
@@ -1317,7 +1324,9 @@ is still running. External managers remain the caller's responsibility.`,
 						}
 						killed = append(killed, fmt.Sprintf("%s#%d", r.Repo, r.ID))
 					}
-					s.Lease = nil
+					if err := sprintLeaseRelease(s); err != nil {
+						return "", err
+					}
 					s.Column = "backlog"
 					weaveStoryAppend(s, who, kindStage, fmt.Sprintf("ABORTED — killed %d run(s), cleared lease, parked in backlog", len(killed)))
 					msg := fmt.Sprintf("sprint #%d ABORTED — killed [%s]; lease cleared; parked in backlog", id, strings.Join(killed, " "))
@@ -1625,7 +1634,9 @@ successor can take over.
 					return "", fmt.Errorf("sprint #%d lease is STALE (was %s) — take it explicitly to recover", id, prev)
 				}
 				s.Continuity = message
-				s.Lease.At = time.Now().UTC()
+				if err := sprintLeaseRefresh(s, s.Lease.AttachedPID); err != nil {
+					return "", err
+				}
 				// AUTHOR WITH THE HOLDER THIS COMMAND JUST VALIDATED.
 				//
 				// It used to resolve the author BEFORE the sprint was loaded, through
