@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -304,6 +305,12 @@ func weavePruneOwnedRun(dir string, id int64, repo string, expectedBirth ...time
 	var acts []sprintPruneAction
 	failed := false
 	for _, kind := range weaveRunArtifactKinds {
+		// Windows cannot unlink the open lock handle. Keep its stable sentinel
+		// and release the kernel lock on return; closing and then deleting
+		// could race a new owner acquiring the same path. It is not reclaimed.
+		if kind == "lock" && runtime.GOOS == "windows" {
+			continue
+		}
 		path := weaveRunArtifactPath(dir, it, kind)
 		if path == "" {
 			continue

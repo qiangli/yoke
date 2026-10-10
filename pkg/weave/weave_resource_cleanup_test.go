@@ -3,6 +3,7 @@ package weave
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -35,12 +36,28 @@ func TestWeaveResourceCleanupCountsBytes(t *testing.T) {
 		t.Fatal(expected, e)
 	}
 	actions := weavePruneOwnedRun(dir, 1, repo)
-	// The workspace, then the lifecycle lock this very call created and held.
-	if len(actions) != 2 || !actions[0].Done || !actions[0].BytesComplete || actions[0].ExpectedBytes != expected || actions[0].ActualBytes == 0 {
+	// Windows keeps the stable lock sentinel rather than unlinking its open
+	// handle. Do not count retained lock bytes as reclaimed.
+	wantActions := 2
+	if runtime.GOOS == "windows" {
+		wantActions = 1
+	}
+	if len(actions) != wantActions || !actions[0].Done || !actions[0].BytesComplete || actions[0].ExpectedBytes != expected || actions[0].ActualBytes == 0 {
 		t.Fatalf("%+v", actions)
 	}
-	if actions[1].Kind != "lock" || !actions[1].Done {
+	if runtime.GOOS != "windows" && (actions[1].Kind != "lock" || !actions[1].Done) {
 		t.Fatalf("lock not reclaimed after full success: %+v", actions[1])
+	}
+	// Cleanup must release its kernel ownership. The next owner can acquire
+	// the same path, and a simultaneous contender must still be refused.
+	lock, err := weaveRunLifecycleLock(dir, it.ID)
+	if err != nil {
+		t.Fatalf("cleanup kept lifecycle ownership: %v", err)
+	}
+	defer lock.Release()
+	if contender, err := weaveRunLifecycleLock(dir, it.ID); err == nil {
+		contender.Release()
+		t.Fatal("cleanup broke lifecycle mutual exclusion")
 	}
 	q, e := loadWeaveQueue(dir)
 	if e != nil {
