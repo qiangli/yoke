@@ -232,8 +232,8 @@ func (c CloudClient) fetchTools() (map[string][]byte, int, error) {
 			continue
 		}
 		t, err := ParseTool(a.Name, []byte(a.Content), nil)
-		if err != nil || !t.IsCLI() {
-			skipped++ // a function kit, or a document we cannot read
+		if err != nil || !t.IsCLI() || t.Hidden {
+			skipped++ // a function kit, a hidden definition, or a document we cannot read
 			continue
 		}
 		out[a.Name] = []byte(a.Content)

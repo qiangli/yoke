@@ -157,22 +157,21 @@ func newToolsList(opts []Option) *cobra.Command {
 			c := New(opts...)
 			tools, errs := c.Tools(true)
 			rows := make([]toolRow, 0, len(tools))
-			hidden := 0
 			for _, t := range tools {
 				if !MatchRetirement(t, filter.retired) {
 					continue
 				}
 				if !filter.match(t.Ring, selected) {
-					if selected == "" && t.Ring == assetring.RingLocal {
-						hidden++
-					}
 					continue
 				}
-				if !t.IsCLI() && selected == "" {
+				if !t.IsCLI() && !explicitView(selected) {
 					continue
 				}
-				if t.Hidden && selected == "" {
+				if t.Hidden && !explicitView(selected) {
 					continue // kept in the registry (detected/resolvable), just not listed
+				}
+				if filter.active && !t.Active() {
+					continue
 				}
 				rows = append(rows, toolRow{
 					RecordLifecycle: t.RecordLifecycle,
@@ -189,7 +188,6 @@ func newToolsList(opts []Option) *cobra.Command {
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", r.Name, r.Kind, r.Binary, yesNo(r.Model), r.Ring)
 			}
 			tw.Flush()
-			hiddenCustomHint(cmd, hidden, selected)
 			return reportParseErrs(cmd.ErrOrStderr(), errs)
 		},
 	}
@@ -338,15 +336,14 @@ func newModelsList(opts []Option) *cobra.Command {
 			}
 			models, errs := New(opts...).Models()
 			rows := make([]modelRow, 0, len(models))
-			hidden := 0
 			for _, m := range models {
 				if !MatchRetirement(m, filter.retired) {
 					continue
 				}
 				if !filter.match(m.Ring, selected) {
-					if selected == "" && m.Ring == assetring.RingLocal {
-						hidden++
-					}
+					continue
+				}
+				if filter.active && !m.Active() {
 					continue
 				}
 				if band != 0 && m.Band != band {
@@ -370,7 +367,6 @@ func newModelsList(opts []Option) *cobra.Command {
 					r.Kind, r.Provider, r.Target, strings.Join(r.Aliases, ","), r.Ring)
 			}
 			tw.Flush()
-			hiddenCustomHint(cmd, hidden, selected)
 			if len(models) == 0 {
 				emptyRingHint(cmd.ErrOrStderr(), KindModel)
 			}
@@ -482,16 +478,31 @@ func newAgentsList(opts []Option) *cobra.Command {
 				}
 			}
 			standings := DeriveStandings(entries, ladder)
+			// Agents bound to a hidden tool are hidden with it, in the
+			// roster views. Explicit ring views still show them.
+			hiddenTools := map[string]bool{}
+			if !explicitView(selected) {
+				tools, _ := cat.Tools(true)
+				for _, t := range tools {
+					if t.Hidden {
+						for _, n := range t.Names() {
+							hiddenTools[n] = true
+						}
+					}
+				}
+			}
 			rows := make([]agentRow, 0, len(agents))
-			hidden := 0
 			for i, a := range agents {
 				if !MatchRetirement(a, filter.retired) {
 					continue
 				}
 				if !filter.match(a.Ring, selected) {
-					if selected == "" && a.Ring == assetring.RingLocal {
-						hidden++
-					}
+					continue
+				}
+				if hiddenTools[a.Tool] {
+					continue
+				}
+				if filter.active && !cat.AgentActive(a) {
 					continue
 				}
 				r := agentRow{
@@ -521,14 +532,14 @@ func newAgentsList(opts []Option) *cobra.Command {
 					r.Band, r.BandSource = a.Band, a.BandSource
 					r.Model = cascadeModelChain(cat, a)
 				}
-				if !r.Resolves && selected == "" {
+				if !r.Resolves && !explicitView(selected) {
 					continue
 				}
 				// An EPHEMERAL clone is a worker minted for one task, not a
 				// member of the roster. A fleet listing that grows a row per
 				// in-flight task is a listing nobody reads, and the roster is
 				// what an operator picks from.
-				if a.Ephemeral && selected == "" {
+				if a.Ephemeral && !explicitView(selected) {
 					continue
 				}
 				// An unpegged or dangling agent is never silently swept into a
@@ -559,7 +570,6 @@ func newAgentsList(opts []Option) *cobra.Command {
 					dashIfEmpty(r.Billing), dashIfEmpty(r.Reliability), agentResolution(r), r.Ring)
 			}
 			tw.Flush()
-			hiddenCustomHint(cmd, hidden, selected)
 			if len(agents) == 0 {
 				emptyRingHint(cmd.ErrOrStderr(), KindAgent)
 			}

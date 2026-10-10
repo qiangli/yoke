@@ -49,12 +49,27 @@ func TestListFilterKeepsSparseLocalOverrideAsLocalDefinition(t *testing.T) {
 			t.Fatalf("%v: missing overridden tool", args)
 		}
 	}
+	// The default view selects across ALL rings, so a sparse local override
+	// of a seeded name shows up as the local selected definition.
 	defaultOut, err := runCmd(t, NewToolsCmd(opts...), "--json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(defaultOut, `"name": "codex"`) {
-		t.Fatal("default view included the local selected definition")
+	var defaultRows []toolRow
+	if err := json.Unmarshal([]byte(defaultOut), &defaultRows); err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, row := range defaultRows {
+		if row.Name == "codex" {
+			found = true
+			if row.Ring != "local" {
+				t.Fatalf("default view selected = %+v, want the local override", row)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("default view hid the local selected definition")
 	}
 }
 
@@ -97,7 +112,7 @@ func TestFleetListRingViewsAgreeInTextAndJSON(t *testing.T) {
 				args                         []string
 				shared, cloud, local, hidden bool
 			}{
-				{nil, true, true, false, true},
+				{nil, true, true, true, false},
 				{[]string{"--custom"}, false, false, true, false},
 				{[]string{"--all"}, true, true, true, false},
 				{[]string{"--ring", "all"}, true, true, true, false},
@@ -170,13 +185,13 @@ func TestFleetListFilterHelpAndConflicts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, want := range []string{"--custom", "--all", "--ring", "embedded", "shared", "cloud", "local"} {
+			for _, want := range []string{"--custom", "--all", "--builtin", "--active", "--ring", "embedded", "shared", "cloud", "local"} {
 				if !strings.Contains(out, want) {
 					t.Errorf("%v help missing %q", args, want)
 				}
 			}
 		}
-		for _, args := range [][]string{{"list", "--ring", "bogus"}, {"list", "--all", "--custom"}, {"list", "--ring", "local", "--custom"}} {
+		for _, args := range [][]string{{"list", "--ring", "bogus"}, {"list", "--all", "--custom"}, {"list", "--ring", "local", "--custom"}, {"list", "--builtin", "--active"}, {"list", "--active", "--custom"}} {
 			if _, err := runCmd(t, root(WithRoot(t.TempDir())), args...); err == nil {
 				t.Errorf("%v accepted", args)
 			}
