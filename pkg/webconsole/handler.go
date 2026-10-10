@@ -115,6 +115,18 @@ type Options struct {
 	// and that is strictly more authority than sharing outpost's own `shell`
 	// app was. A consolidation must not widen a grant by accident.
 	Disable []string
+
+	// CloudApp is the app name outpost publishes this console under, which
+	// keys the SSO secret that signs tunnel-arrived requests. Empty means
+	// "apps". Only the Host tile's cloud-owner bridge reads it.
+	CloudApp string
+}
+
+func (s *server) cloudApp() string {
+	if s.opts.CloudApp != "" {
+		return s.opts.CloudApp
+	}
+	return defaultCloudApp
 }
 
 // disabled reports whether --disable named this panel, by its NAME or mount.
@@ -488,6 +500,9 @@ func (s *server) proxyTo(p Panel) http.Handler {
 	endpoint := net.JoinHostPort(host, strconv.Itoa(p.Port))
 	target := &url.URL{Scheme: "http", Host: endpoint}
 	rp := httputil.NewSingleHostReverseProxy(target)
+	if p.hostAdmin {
+		rp.Transport = loopbackOnlyTransport()
+	}
 
 	// The app must be able to build correct absolute URLs and correct redirects
 	// from BEHIND two hops (cloudbox -> outpost -> console -> app). coopauth.Mount
@@ -498,6 +513,9 @@ func (s *server) proxyTo(p Panel) http.Handler {
 		prefix := coopauth.BasePrefix(req)
 		host, proto := forwardedHostProto(req)
 		inner(req)
+		if p.hostAdmin {
+			applyHostAdminAuth(req, p, s.cloudApp())
+		}
 		if prefix != "" {
 			req.Header.Set(coopauth.HdrForwardedPrefix, prefix)
 		}
