@@ -100,7 +100,10 @@ function writeHash() {
   if (state.runbook) q.set("runbook", state.runbook);
   filterToParams(state.filter, q);
   const h = q.toString();
-  history.replaceState(null, "", h ? "#" + h : "#");
+  // A bare "#..." resolves against <base href> (the launcher root, or the cloud
+  // proxy prefix), which would move the page off /sprint/ and a reload would
+  // land on Apps. Anchor to the page's own path and query instead.
+  history.replaceState(null, "", location.pathname + location.search + (h ? "#" + h : "#"));
 }
 
 // ---- sprint filter -----------------------------------------------------------

@@ -60,7 +60,17 @@ import (
 // uncaught error is invisible unless something is listening for it.
 func domEnv(t *testing.T, opts Options) (string, context.Context, func() []string) {
 	t.Helper()
+	return domEnvWrapped(t, opts, nil)
+}
+
+// domEnvWrapped is domEnv with the console handler optionally wrapped, so a test
+// can put a path-rewriting front (the cloud proxy) in front of the real handler.
+func domEnvWrapped(t *testing.T, opts Options, wrap func(http.Handler) http.Handler) (string, context.Context, func() []string) {
+	t.Helper()
 	h := newTestHandler(t, opts)
+	if wrap != nil {
+		h = wrap(h)
+	}
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 

@@ -8,6 +8,7 @@ package webconsole
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/chromedp"
 	"github.com/qiangli/yoke/pkg/board"
+	"github.com/qiangli/yoke/pkg/coopauth"
 )
 
 // The sprint filter bar on /sprint/ (Story #1732) narrows the SPRINTS section
@@ -162,7 +164,9 @@ func clickFacetLink(t *testing.T, ctx context.Context, facet, text string) {
 
 func openSprintPage(t *testing.T, ctx context.Context, u string) {
 	t.Helper()
-	if err := chromedp.Run(ctx, chromedp.Navigate(u), chromedp.Sleep(2*time.Second)); err != nil {
+	// Via about:blank so a URL that differs only by fragment is a fresh load, as
+	// a link opened in a new tab is, not a same-document hash change.
+	if err := chromedp.Run(ctx, chromedp.Navigate("about:blank"), chromedp.Navigate(u), chromedp.Sleep(2*time.Second)); err != nil {
 		t.Fatalf("navigate %s: %v", u, err)
 	}
 }
@@ -692,4 +696,129 @@ func TestSprintFilterNoneAllReloadRoundtrip(t *testing.T) {
 		t.Fatalf("reload after all: cards=%v hash=%q", v.Cards, v.Hash)
 	}
 	assertNoJSErrors(t, "none/all", errs())
+}
+
+// cloudFront is the tunnel in front of the console: it strips the mount prefix
+// and stamps the vouched-identity headers the way outpost does, so the page is
+// served with <base href> = the prefix. Writing a bare "#..." into the URL then
+// resolves against that base and leaves /sprint/ — a reload lands on Apps.
+func cloudFront(prefix string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rest, ok := strings.CutPrefix(r.URL.Path, prefix)
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			if rest == "" {
+				rest = "/"
+			}
+			r2 := r.Clone(r.Context())
+			r2.URL.Path = rest
+			r2.URL.RawPath = ""
+			r2.Header.Set(coopauth.HdrForwardedPrefix, prefix)
+			r2.Header.Set(coopauth.HdrRemoteUser, "owner@example.com")
+			next.ServeHTTP(w, r2)
+		})
+	}
+}
+
+const locProbe = `JSON.stringify({path: location.pathname, search: location.search, hash: location.hash, board: !!document.getElementById('bd-sprints'), apps: !!document.getElementById('grid-host')})`
+
+type locView struct {
+	Path   string `json:"path"`
+	Search string `json:"search"`
+	Hash   string `json:"hash"`
+	Board  bool   `json:"board"`
+	Apps   bool   `json:"apps"`
+}
+
+func probeLoc(t *testing.T, ctx context.Context) locView {
+	t.Helper()
+	var raw string
+	if err := chromedp.Run(ctx, chromedp.Evaluate(locProbe, &raw)); err != nil {
+		t.Fatalf("probe location: %v", err)
+	}
+	var v locView
+	if err := json.Unmarshal([]byte(raw), &v); err != nil {
+		t.Fatalf("probe location: %v (%s)", err, raw)
+	}
+	return v
+}
+
+// Selecting a filter writes the hash onto the page's OWN path (and query), at the
+// launcher root and behind a nested proxy prefix; a real reload then lands on the
+// board with the selection and cards intact; reset and the defaults keep the path
+// too.
+func TestSprintFilterHashKeepsPagePathAndSurvivesReload(t *testing.T) {
+	const prefix = "/matrix/h/laptop/app/console"
+	for _, c := range []struct {
+		name, root string
+		wrap       func(http.Handler) http.Handler
+	}{
+		{"root", "", nil},
+		{"proxy", prefix, cloudFront(prefix)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			stubFilterBoard(t)
+			base, ctx, errs := domEnvWrapped(t, Options{}, c.wrap)
+			page := c.root + "/sprint/"
+			openSprintPage(t, ctx, base+page+"?x=1")
+
+			l := probeLoc(t, ctx)
+			if !l.Board || l.Path != page {
+				t.Fatalf("setup: loc=%+v, want the board at %s", l, page)
+			}
+
+			clickOnly(t, ctx, "mgr", "ada")
+			v := probeFilter(t, ctx)
+			if !eqStrings(v.Cards, []string{"#101", "#104"}) {
+				t.Fatalf("only mgr ada: cards=%v", v.Cards)
+			}
+			l = probeLoc(t, ctx)
+			if l.Path != page || l.Search != "?x=1" || l.Hash != "#mgr=ada" {
+				t.Fatalf("after selecting: loc=%+v, want path %s, query ?x=1, hash #mgr=ada", l, page)
+			}
+
+			// A real reload (same URL, hash included).
+			if err := chromedp.Run(ctx, chromedp.Reload(), chromedp.WaitVisible(`#bd-filter`, chromedp.ByID)); err != nil {
+				t.Fatalf("reload: %v", err)
+			}
+			l = probeLoc(t, ctx)
+			if !l.Board || l.Apps || l.Path != page || l.Hash != "#mgr=ada" {
+				t.Fatalf("after reload: loc=%+v, want the board at %s#mgr=ada", l, page)
+			}
+			v = probeFilter(t, ctx)
+			if !eqStrings(v.Cards, []string{"#101", "#104"}) || !v.opt(t, "mgr", "ada").Checked || v.opt(t, "mgr", "bea").Checked {
+				t.Fatalf("after reload: cards=%v facets=%+v, want the selection restored", v.Cards, v.Facets["mgr"])
+			}
+
+			// Reset returns to the defaults without leaving the page.
+			if err := chromedp.Run(ctx, chromedp.Click(`#bd-filter-reset`), chromedp.Sleep(300*time.Millisecond)); err != nil {
+				t.Fatal(err)
+			}
+			l = probeLoc(t, ctx)
+			v = probeFilter(t, ctx)
+			if l.Path != page || l.Search != "?x=1" || has(l.Hash, "mgr") || len(v.Cards) != 4 {
+				t.Fatalf("after reset: loc=%+v cards=%v, want defaults on %s", l, v.Cards, page)
+			}
+			if err := chromedp.Run(ctx, chromedp.Reload(), chromedp.WaitVisible(`#bd-filter`, chromedp.ByID)); err != nil {
+				t.Fatalf("reload after reset: %v", err)
+			}
+			l = probeLoc(t, ctx)
+			v = probeFilter(t, ctx)
+			if !l.Board || l.Path != page || len(v.Cards) != 4 {
+				t.Fatalf("reload after reset: loc=%+v cards=%v, want the default board", l, v.Cards)
+			}
+
+			// The history toggle shares the writer.
+			if err := chromedp.Run(ctx, chromedp.Click(`#f-all`), chromedp.Sleep(500*time.Millisecond)); err != nil {
+				t.Fatal(err)
+			}
+			if l = probeLoc(t, ctx); l.Path != page || !has(l.Hash, "all=1") {
+				t.Fatalf("after all toggle: loc=%+v", l)
+			}
+			assertNoJSErrors(t, "hash-path "+c.name, errs())
+		})
+	}
 }
