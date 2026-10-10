@@ -431,6 +431,12 @@ func newAdd(kind string, opts []Option) *cobra.Command {
 					return err
 				}
 			}
+			// Replacing an existing entry rewrites someone's asset: a live
+			// claim held by someone else refuses first, unchanged. Minting
+			// a new name passes untouched.
+			if err := guardExisting(cmd.Context(), cat, kind, *r.name(rec), true); err != nil {
+				return err
+			}
 			if err := r.save(cat, rec); err != nil {
 				return err
 			}
@@ -517,6 +523,12 @@ func newSet(kind string, opts []Option) *cobra.Command {
 		rec, ok := r.get(cat, args[0])
 		if !ok {
 			return fmt.Errorf("fleet: no %s %q", kind, args[0])
+		}
+		canon := *r.name(rec)
+		// The entry exists, so this write rewrites it: a live claim held by
+		// someone else refuses first, unchanged.
+		if err := guardExisting(cmd.Context(), cat, kind, canon, false); err != nil {
+			return err
 		}
 		from := r.ring(rec)
 		before := r.clone(rec)

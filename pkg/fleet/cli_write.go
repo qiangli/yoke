@@ -126,6 +126,11 @@ func newRm(noun string, opts []Option, remove func(*Catalog, string) error) *cob
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cat := New(opts...)
 			cat.WarnUnretired(cmd.ErrOrStderr(), noun, args[0])
+			// Removing an existing entry deletes someone's asset: a live
+			// claim held by someone else refuses first, unchanged.
+			if err := guardExisting(cmd.Context(), cat, noun, args[0], false); err != nil {
+				return err
+			}
 			if err := remove(cat, args[0]); err != nil {
 				return err
 			}
@@ -147,6 +152,12 @@ func newEdit(noun string, opts []Option, materialize func(*Catalog, string) (str
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cat := New(opts...)
+			// Materializing copies the entry into the writable store for an
+			// edit: a live claim held by someone else refuses first,
+			// unchanged.
+			if err := guardExisting(cmd.Context(), cat, noun, args[0], false); err != nil {
+				return err
+			}
 			path, err := materialize(cat, args[0])
 			if err != nil {
 				return err
