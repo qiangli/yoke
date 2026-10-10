@@ -729,7 +729,7 @@ func (s *Session) say(text string) error {
 // model is allowed to finish this turn, and the routing decision belongs to the
 // NEXT Start. Only Block and Queue stop a steer.
 func (s *Session) governTurn(text string) llmbudget.Decision {
-	if s.launch.ModelName == "" {
+	if s.launch.ModelName == "" && s.launch.Model == "" {
 		return llmbudget.Decision{Action: llmbudget.Allow}
 	}
 	r := opaqueBudgetRequest(s.launch, text, false)

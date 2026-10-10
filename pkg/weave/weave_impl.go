@@ -3589,16 +3589,26 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	if admissionErr != nil {
 		return admissionErr
 	}
-	admissionModel, admissionAgent := "", ""
+	admissionModel, admissionModelID, admissionAgent := "", "", ""
 	if launchSpec != nil {
 		admissionModel, admissionAgent = launchSpec.Model, launchSpec.Agent
+	}
+	// A fleet agent launch knows the model under both names: the binding's
+	// registry name (what the gate reads the catalog by, and what a claim
+	// typed against the registry says) and the provider-side id the tool is
+	// handed (what a claim typed against the tool says). Send both.
+	if agentLaunch != nil {
+		admissionModel, admissionModelID = agentLaunch.ModelName, agentLaunch.Model
+		if admissionModel == "" {
+			admissionModel = agentLaunch.Model
+		}
 	}
 	// Detach before admission, not just before the tool: the wrapper then leads
 	// the process group every provisioning subprocess inherits, and admission
 	// records it so a wrapper that dies mid-hydration is recoverable by proof.
 	weaveMaybeSetsid(weaveStdinIsTTY())
 	admission, admissionErr := beginWeaveAdmission(cmd.Context(), weaveResourceHooks(cmd.Context()), WeaveResourceDemand{
-		Run: filepath.Join(dir, strconv.FormatInt(it.ID, 10)), Queue: dir, Model: admissionModel, Agent: admissionAgent, Workspace: it.Workspace, MemoryBytes: uint64(memoryDemand),
+		Run: filepath.Join(dir, strconv.FormatInt(it.ID, 10)), Queue: dir, Model: admissionModel, ModelID: admissionModelID, Agent: admissionAgent, Workspace: it.Workspace, MemoryBytes: uint64(memoryDemand),
 	})
 	if admissionErr != nil {
 		return admissionErr

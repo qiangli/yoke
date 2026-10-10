@@ -27,10 +27,18 @@ var claimHolder = coord.Self
 // claimUses is what the (prepared) request touches. Each use carries its name
 // as Member too, so a claim of a member-matched kind in the same domain (a pool
 // whose Members list the model) blocks as well as a claim on the name itself.
+//
+// The model is used under BOTH names it goes by — the registry name the
+// request was made with and the provider-side id the tool is handed — because
+// a claim is typed by a human against whichever one they know ("model:gpt-
+// oss:20b" for a binding whose registry name is "gpt-oss-20b"), and a launch
+// that checked only one of them would walk past the other.
 func claimUses(r Request) []coord.Use {
 	var uses []coord.Use
-	for _, u := range [][2]string{{"model", r.Model}, {"provider", r.Provider}, {"account", r.Account}, {"agent", r.Agent}, {"host", r.Host}} {
-		if u[1] != "" {
+	seen := map[[2]string]bool{}
+	for _, u := range [][2]string{{"model", r.Model}, {"model", r.ModelID}, {"provider", r.Provider}, {"account", r.Account}, {"agent", r.Agent}, {"host", r.Host}} {
+		if u[1] != "" && !seen[u] {
+			seen[u] = true
 			uses = append(uses, coord.Use{Kind: u[0], Name: u[1], Member: u[1]})
 		}
 	}

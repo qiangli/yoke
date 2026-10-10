@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/qiangli/yoke/pkg/llmbudget"
+	"github.com/qiangli/yoke/pkg/policy/coord"
+	"github.com/qiangli/yoke/pkg/principal"
 	"github.com/spf13/cobra"
 )
 
@@ -260,5 +262,45 @@ func TestWeaveResourceStartRefusesPriorUnverifiedClaim(t *testing.T) {
 	}
 	if fresh.Items[0].ResourceReservationID != "prior-orphan" {
 		t.Fatal("prior reservation identity overwritten")
+	}
+}
+
+// A `weave start --tool` (and `sprint assign`, which launches through it) of
+// a binding whose model another episode holds is refused at admission, before
+// any reservation — under the registry name or the provider-side id.
+func TestWeaveResourceAdmissionRefusesClaimedModel(t *testing.T) {
+	isolateResourceLifecycle(t)
+	t.Setenv("BASHY_COORD_DIR", t.TempDir())
+	t.Setenv("BASHY_EPISODE", "ep-me")
+	other := principal.Ref{Name: "other", Episode: "ep-other", Host: "h"}
+	path := filepath.Join(t.TempDir(), "budget.json")
+	g := resourceTestGate(t, path)
+	h := WeaveResourceHooks{Budget: g}
+	demand := WeaveResourceDemand{Run: "a", Model: "gpt-oss-20b", ModelID: "gpt-oss:20b", Agent: "genie-gpt-oss-20b"}
+	for _, ref := range []string{"model:gpt-oss:20b", "model:gpt-oss-20b"} {
+		if _, e := coord.AcquireRef(context.Background(), coord.Request{Ref: coord.ParseRef(ref), Holder: other}); e != nil {
+			t.Fatal(e)
+		}
+		_, e := beginWeaveAdmission(context.Background(), h, demand)
+		var c *coord.Conflict
+		if !errors.As(e, &c) {
+			t.Fatalf("%s: err = %v, want *coord.Conflict", ref, e)
+		}
+		if c.Claim.Ref() != coord.ParseRef(ref) {
+			t.Fatalf("%s: conflict = %+v", ref, c.Claim)
+		}
+		if n := resourceReservationCount(t, path); n != 0 {
+			t.Fatal("refused launch reserved capacity", n)
+		}
+		if e := coord.ReleaseRef(context.Background(), coord.ParseRef(ref), other, 0); e != nil {
+			t.Fatal(e)
+		}
+	}
+	a, e := beginWeaveAdmission(context.Background(), h, demand)
+	if e != nil {
+		t.Fatalf("unclaimed model refused: %v", e)
+	}
+	if e = a.finish(true, false); e != nil {
+		t.Fatal(e)
 	}
 }

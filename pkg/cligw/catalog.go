@@ -90,8 +90,12 @@ func (c *FleetCatalog) Alias(_ context.Context, name string) (int, []string, boo
 
 // Agent is the gateway's flattened view of one launchable fleet agent.
 type Agent struct {
-	Name          string   `json:"name"`
-	Model         string   `json:"model"`
+	Name  string `json:"name"`
+	Model string `json:"model"`
+	// ModelID is the provider-side id the tool is handed for this binding,
+	// when it differs from Model (the registry name). The door's admission
+	// preview guards a coord claim on either.
+	ModelID       string   `json:"model_id,omitempty"`
 	Tool          string   `json:"tool"`
 	Band          int      `json:"band"`
 	BandSource    string   `json:"band_source"`
@@ -240,8 +244,12 @@ func (c *FleetCatalog) deriveInventory() []Agent {
 		if a.IsCascade() && a.Band > 0 {
 			band, source = a.Band, fleet.BandCascade
 		}
+		modelID := model.TargetFor(tool.Name)
+		if modelID == model.Name {
+			modelID = ""
+		}
 		out = append(out, Agent{
-			Name: a.Name, Model: model.Name, Tool: tool.Name,
+			Name: a.Name, Model: model.Name, ModelID: modelID, Tool: tool.Name,
 			Band: band, BandSource: source, Kind: model.Kind,
 			Provider: model.Provider, Warm: warmMode(tool), Effort: a.Effort,
 			Capabilities: cloneStrings(model.Capabilities),

@@ -19,7 +19,11 @@ import (
 // harness cannot promise a finite token/spend total; those estimates are unknown.
 type WeaveResourceDemand struct {
 	Run, Queue, Model, Agent, Workspace string
-	MemoryBytes                         uint64
+	// ModelID is the provider-side id the tool is handed, when the launch
+	// resolved one; Model is the binding's registry name. The gate guards a
+	// coord claim on either.
+	ModelID     string
+	MemoryBytes uint64
 }
 
 // WeaveResourceHooks keeps native host observation outside weave (resources
@@ -105,8 +109,8 @@ func beginWeaveAdmission(ctx context.Context, hooks WeaveResourceHooks, demand W
 		owner.Close()
 		return nil, err
 	}
-	req := llmbudget.Request{ID: "weave-" + owner.ID(), Owner: owner.ID(), Run: demand.Run, Host: host, Model: demand.Model, Agent: demand.Agent, HostSlots: 1, MemoryBytes: demand.MemoryBytes, TTL: 2 * time.Minute, UnknownMemory: demand.MemoryBytes == 0}
-	if demand.Model != "" {
+	req := llmbudget.Request{ID: "weave-" + owner.ID(), Owner: owner.ID(), Run: demand.Run, Host: host, Model: demand.Model, ModelID: demand.ModelID, Agent: demand.Agent, HostSlots: 1, MemoryBytes: demand.MemoryBytes, TTL: 2 * time.Minute, UnknownMemory: demand.MemoryBytes == 0}
+	if demand.Model != "" || demand.ModelID != "" {
 		req.Concurrency = 1
 		req.UnknownTokens = true
 	} // Opaque harness totals are unknown; hard token budgets fail closed

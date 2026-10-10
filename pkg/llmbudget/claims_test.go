@@ -164,3 +164,72 @@ func TestNoClaimLeavesAdmissionUnchanged(t *testing.T) {
 		t.Fatalf("empty request has uses: %v", uses)
 	}
 }
+
+// A request names its model under the registry name AND the provider-side id
+// the tool is handed. A claim typed against either refuses it, and a request
+// that knows only the id is still a model use.
+func TestClaimedModelIDRefuses(t *testing.T) {
+	ctx := context.Background()
+	as := claimLedger(t)
+	g := fixtureGate(t, fixturePolicy())
+	o := fixtureOwner(t, g)
+	if _, err := coord.AcquireRef(ctx, coord.Request{Ref: coord.Ref{Kind: "model", Name: "vendor/one-20b"}, Holder: claimA(), Intent: "eval run"}); err != nil {
+		t.Fatal(err)
+	}
+	as(claimB())
+	// Registry name "one", provider-side id claimed by A.
+	r := demand("a", o)
+	r.ModelID = "vendor/one-20b"
+	_, err := g.Reserve(ctx, r)
+	if c := conflictOf(t, err); c.Claim.Ref() != (coord.Ref{Kind: "model", Name: "vendor/one-20b"}) {
+		t.Fatalf("conflict = %+v", c.Claim)
+	}
+	if _, err := g.Preview(ctx, r); !errors.As(err, new(*coord.Conflict)) {
+		t.Fatalf("preview admitted a claimed model id: %v", err)
+	}
+	if len(g.state.Reservations) != 0 {
+		t.Fatal("refused request reserved capacity")
+	}
+	// The same binding under an unclaimed id is admitted.
+	r.ModelID = "vendor/one-other"
+	if a, err := g.Reserve(ctx, r); err != nil || a.Reservation == nil {
+		t.Fatalf("unclaimed id refused: %+v %v", a, err)
+	}
+	if err := g.Release(ctx, "a", o.ID()); err != nil {
+		t.Fatal(err)
+	}
+	// Only the id known: still a model use, still refused.
+	idOnly := Request{ID: "c", Owner: o.ID(), ModelID: "vendor/one-20b", UnknownTokens: true, Concurrency: 1, Run: "run-1", Host: "host-a"}
+	if _, err := g.Reserve(ctx, idOnly); !errors.As(err, new(*coord.Conflict)) {
+		t.Fatalf("id-only request admitted a claimed model: %v", err)
+	}
+	// The holder's own calls pass under either name.
+	as(claimA())
+	r.ID, r.ModelID = "d", "vendor/one-20b"
+	if a, err := g.Reserve(ctx, r); err != nil || a.Reservation == nil {
+		t.Fatalf("the holder was refused its own model id: %+v %v", a, err)
+	}
+}
+
+func TestClaimUsesNameEveryIdentityOnce(t *testing.T) {
+	uses := claimUses(Request{Model: "one", ModelID: "vendor/one", Provider: "vendor", Agent: "ag", Host: "h"})
+	want := []coord.Use{
+		{Kind: "model", Name: "one", Member: "one"},
+		{Kind: "model", Name: "vendor/one", Member: "vendor/one"},
+		{Kind: "provider", Name: "vendor", Member: "vendor"},
+		{Kind: "agent", Name: "ag", Member: "ag"},
+		{Kind: "host", Name: "h", Member: "h"},
+	}
+	if len(uses) != len(want) {
+		t.Fatalf("uses = %+v", uses)
+	}
+	for i := range want {
+		if uses[i] != want[i] {
+			t.Fatalf("uses[%d] = %+v, want %+v", i, uses[i], want[i])
+		}
+	}
+	// The same string under both names is one use.
+	if uses := claimUses(Request{Model: "same", ModelID: "same"}); len(uses) != 1 {
+		t.Fatalf("duplicate model use: %+v", uses)
+	}
+}

@@ -107,6 +107,10 @@ func (g *Gate) prepare(p *Policy, r Request, mutation bool) (Request, error) {
 	if r.TTL < time.Second || r.TTL > 24*time.Hour {
 		return r, errors.New("llmbudget: TTL must be between one second and 24 hours")
 	}
+	// A request that knows only the provider-side id still names a model.
+	if r.Model == "" {
+		r.Model = r.ModelID
+	}
 	// Host-only work has no model/account demand and must not consume LLM units.
 	if r.Model == "" && !r.UnknownTokens && r.Tokens == 0 && r.Concurrency == 0 && r.SpendMicroUSD == nil {
 		return r, nil

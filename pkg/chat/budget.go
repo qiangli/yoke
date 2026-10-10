@@ -26,9 +26,16 @@ type budgetWork struct {
 	once        sync.Once
 }
 
+// opaqueBudgetRequest is the gate's view of a launch. It names the model
+// under BOTH its registry name and the provider-side id the tool is handed,
+// so a coord claim on either refuses the launch before anything spawns —
+// whatever the model's billing lane, local and unmetered included.
 func opaqueBudgetRequest(l Launch, prompt string, launch bool) llmbudget.Request {
 	host, _ := os.Hostname()
-	r := llmbudget.Request{Model: l.ModelName, Agent: l.Nick, Host: host, Tokens: estimateTokens(prompt), UnknownTokens: true, TTL: 2 * time.Minute}
+	r := llmbudget.Request{Model: l.ModelName, ModelID: l.Model, Agent: l.Nick, Host: host, Tokens: estimateTokens(prompt), UnknownTokens: true, TTL: 2 * time.Minute}
+	if r.Model == "" {
+		r.Model = l.Model
+	}
 	if launch {
 		r.Concurrency = 1
 		r.HostSlots = 1

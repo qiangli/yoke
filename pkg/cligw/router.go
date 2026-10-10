@@ -641,7 +641,7 @@ func (llmBudgetQuota) Headroom(ctx context.Context, agent Agent) (float64, bool)
 
 func (llmBudgetQuota) Preview(ctx context.Context, agent Agent) (bool, string) {
 	admission, err := llmbudget.Preview(ctx, llmbudget.Request{
-		Model: agent.Model, Agent: agent.Name, Provider: agent.Provider, Concurrency: 1,
+		Model: agent.Model, ModelID: agent.ModelID, Agent: agent.Name, Provider: agent.Provider, Concurrency: 1,
 	})
 	if err != nil {
 		return false, err.Error()

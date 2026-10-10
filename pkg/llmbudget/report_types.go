@@ -70,14 +70,19 @@ type ReportOptions struct {
 // Request is a reservation, not a measurement. SpendMicroUSD=nil means no
 // trustworthy estimate; a hard spend policy must refuse that uncertainty.
 type Request struct {
-	UnknownTokens bool          `json:"unknown_tokens,omitempty"`
-	UnknownMemory bool          `json:"unknown_memory,omitempty"`
-	ID            string        `json:"id"`
-	Owner         string        `json:"owner"`
-	Provider      string        `json:"provider"`
-	Account       string        `json:"account"`
-	Pool          string        `json:"pool"`
-	Model         string        `json:"model"`
+	UnknownTokens bool   `json:"unknown_tokens,omitempty"`
+	UnknownMemory bool   `json:"unknown_memory,omitempty"`
+	ID            string `json:"id"`
+	Owner         string `json:"owner"`
+	Provider      string `json:"provider"`
+	Account       string `json:"account"`
+	Pool          string `json:"pool"`
+	Model         string `json:"model"`
+	// ModelID is the provider-side id the tool is actually handed (a launch's
+	// Model, where Model above is its registry name — "gpt-oss:20b" for the
+	// registry's "gpt-oss-20b"). A coord claim on either name refuses the
+	// request; the catalog is read through Model.
+	ModelID       string        `json:"model_id,omitempty"`
 	Agent         string        `json:"agent,omitempty"`
 	Run           string        `json:"run,omitempty"`
 	Host          string        `json:"host,omitempty"`

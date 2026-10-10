@@ -1422,7 +1422,9 @@ func taskLabel(opt Options) string {
 }
 
 func governLaunch(ctx context.Context, originalName string, l Launch, prompt string, opt Options) (Launch, llmbudget.Decision, error) {
-	if l.ModelName == "" {
+	// Only a launch that names NO model skips the gate; a binding known by
+	// its provider-side id alone is still an LLM use, and still claimable.
+	if l.ModelName == "" && l.Model == "" {
 		return l, llmbudget.Decision{Action: llmbudget.Allow, Model: l.ModelName}, nil
 	}
 	seen := map[string]bool{}
