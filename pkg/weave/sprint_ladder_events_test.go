@@ -47,6 +47,7 @@ func TestSprintLadderLifecycle(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			home, repo := t.TempDir(), t.TempDir()
 			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
 			t.Setenv("BASHY_HOME", filepath.Join(home, ".bashy"))
 			cat := pinFleetWith(t)
 			if err := cat.SaveAgent(fleet.Agent{Name: "agent-a", Tool: "tool-a", Model: "model-a"}); err != nil {
@@ -236,6 +237,7 @@ func TestSprintLadderLifecycle(t *testing.T) {
 func TestENOSPCGateFailureIsClassifiedEnvironment(t *testing.T) {
 	home, repo := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("BASHY_HOME", filepath.Join(home, ".bashy"))
 	cat := pinFleetWith(t)
 	if err := cat.SaveAgent(fleet.Agent{Name: "agent-a", Tool: "tool-a", Model: "model-a"}); err != nil {
@@ -312,6 +314,7 @@ func TestENOSPCGateFailureIsClassifiedEnvironment(t *testing.T) {
 func TestSprintLadderStreakBandAudit(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("BASHY_HOME", filepath.Join(home, ".bashy"))
 	cat := pinFleetWith(t)
 	if err := cat.SaveModel(fleet.Model{Name: "model-a", Band: 3}); err != nil {

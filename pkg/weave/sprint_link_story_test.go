@@ -35,6 +35,7 @@ func newSprintLinkStoryFixture(t *testing.T, crossRepo bool, runs ...*weaveItem)
 		f.runRepo = t.TempDir()
 	}
 	t.Setenv("HOME", f.home)
+	t.Setenv("USERPROFILE", f.home)
 	t.Setenv("BASHY_HOME", filepath.Join(f.home, ".bashy"))
 	cat := pinFleetWith(t)
 	if err := cat.SaveAgent(fleet.Agent{Name: "agent-a", Tool: "tool-a", Model: "model-a"}); err != nil {
