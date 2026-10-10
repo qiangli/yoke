@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,6 +69,20 @@ func TestNativeRevParse_IsInsideWorkTree(t *testing.T) {
 	}
 }
 
+func TestNativeRevParse_IsInsideWorkTree_OutsideRepo(t *testing.T) {
+	tempDir := t.TempDir()
+	result, err := nativeRevParse(context.Background(), tempDir, []string{"--is-inside-work-tree"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.ExitCode != 128 {
+		t.Errorf("got exit code %d, want 128", result.ExitCode)
+	}
+	if !strings.Contains(result.Stderr, "fatal: not a git repository") {
+		t.Errorf("got stderr %q, want fatal: not a git repository", result.Stderr)
+	}
+}
+
 func TestNativeRevParse_ShowToplevel(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping in short mode")
@@ -82,8 +97,143 @@ func TestNativeRevParse_ShowToplevel(t *testing.T) {
 	if r, err := filepath.EvalSymlinks(dir); err == nil {
 		want = r // go-git reports the physical root (macOS /var → /private/var)
 	}
+	want = filepath.Clean(want)
 	if got := strings.TrimSpace(result.Stdout); got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+	if strings.HasSuffix(result.Stdout, "/\n") {
+		t.Errorf("expected no trailing slash on show-toplevel, got %q", result.Stdout)
+	}
+}
+
+func TestNativeRevParse_ShowToplevel_Subdir(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode")
+	}
+	dir := setupTestRepo(t)
+	subdir := filepath.Join(dir, "sub", "dir")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	result, err := nativeRevParse(context.Background(), subdir, []string{"--show-toplevel"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := dir
+	if r, err := filepath.EvalSymlinks(dir); err == nil {
+		want = r
+	}
+	want = filepath.Clean(want)
+	if got := strings.TrimSpace(result.Stdout); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestNativeRevParse_ShowToplevel_OutsideRepo(t *testing.T) {
+	tempDir := t.TempDir()
+	result, err := nativeRevParse(context.Background(), tempDir, []string{"--show-toplevel"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.ExitCode != 128 {
+		t.Errorf("got exit code %d, want 128", result.ExitCode)
+	}
+	if !strings.Contains(result.Stderr, "fatal: not a git repository") {
+		t.Errorf("got stderr %q, want fatal: not a git repository", result.Stderr)
+	}
+}
+
+func TestNativeRevParse_ShowPrefix(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode")
+	}
+	dir := setupTestRepo(t)
+
+	// At repo root: show-prefix is empty string + \n
+	resRoot, err := nativeRevParse(context.Background(), dir, []string{"--show-prefix"})
+	if err != nil {
+		t.Fatalf("unexpected error at root: %v", err)
+	}
+	if resRoot.Stdout != "\n" {
+		t.Errorf("got root prefix %q, want %q", resRoot.Stdout, "\n")
+	}
+
+	// In subdirectory: show-prefix has trailing slash
+	subdir := filepath.Join(dir, "sub", "dir")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	resSub, err := nativeRevParse(context.Background(), subdir, []string{"--show-prefix"})
+	if err != nil {
+		t.Fatalf("unexpected error at subdir: %v", err)
+	}
+	if resSub.Stdout != "sub/dir/\n" {
+		t.Errorf("got subdir prefix %q, want %q", resSub.Stdout, "sub/dir/\n")
+	}
+
+	// Outside repo: fatal exit 128
+	tempDir := t.TempDir()
+	resOutside, err := nativeRevParse(context.Background(), tempDir, []string{"--show-prefix"})
+	if err != nil {
+		t.Fatalf("unexpected error outside repo: %v", err)
+	}
+	if resOutside.ExitCode != 128 || !strings.Contains(resOutside.Stderr, "fatal: not a git repository") {
+		t.Errorf("outside repo got code=%d stderr=%q", resOutside.ExitCode, resOutside.Stderr)
+	}
+}
+
+func TestNativeRevParse_GitDir(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode")
+	}
+	dir := setupTestRepo(t)
+	wantRoot := dir
+	if r, err := filepath.EvalSymlinks(dir); err == nil {
+		wantRoot = r
+	}
+	wantRoot = filepath.Clean(wantRoot)
+
+	// At repo root: git-dir is .git\n
+	resRoot, err := nativeRevParse(context.Background(), dir, []string{"--git-dir"})
+	if err != nil {
+		t.Fatalf("unexpected error at root: %v", err)
+	}
+	if resRoot.Stdout != ".git\n" {
+		t.Errorf("got root git-dir %q, want .git\n", resRoot.Stdout)
+	}
+
+	// In subdirectory: git-dir is absolute path to .git
+	subdir := filepath.Join(dir, "sub", "dir")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	resSub, err := nativeRevParse(context.Background(), subdir, []string{"--git-dir"})
+	if err != nil {
+		t.Fatalf("unexpected error at subdir: %v", err)
+	}
+	wantGitDir := filepath.Join(wantRoot, ".git") + "\n"
+	if resSub.Stdout != wantGitDir {
+		t.Errorf("got subdir git-dir %q, want %q", resSub.Stdout, wantGitDir)
+	}
+
+	// --absolute-git-dir always returns full path
+	resAbsRoot, err := nativeRevParse(context.Background(), dir, []string{"--absolute-git-dir"})
+	if err != nil {
+		t.Fatalf("unexpected error --absolute-git-dir: %v", err)
+	}
+	if resAbsRoot.Stdout != wantGitDir {
+		t.Errorf("got --absolute-git-dir %q, want %q", resAbsRoot.Stdout, wantGitDir)
+	}
+
+	// Outside repo: fatal exit 128
+	tempDir := t.TempDir()
+	resOutside, err := nativeRevParse(context.Background(), tempDir, []string{"--git-dir"})
+	if err != nil {
+		t.Fatalf("unexpected error outside repo: %v", err)
+	}
+	if resOutside.ExitCode != 128 || !strings.Contains(resOutside.Stderr, "fatal: not a git repository") {
+		t.Errorf("outside repo got code=%d stderr=%q", resOutside.ExitCode, resOutside.Stderr)
 	}
 }
 
@@ -116,6 +266,57 @@ func TestNativeRevParse_ShortHEAD(t *testing.T) {
 	got := strings.TrimSpace(result.Stdout)
 	if len(got) != 7 {
 		t.Errorf("expected 7-char short hash, got %q (len=%d)", got, len(got))
+	}
+}
+
+func TestNativeRevParse_BareRefAndVerify(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode")
+	}
+	dir := setupTestRepo(t)
+
+	// Bare ref HEAD
+	resHead, err := nativeRevParse(context.Background(), dir, []string{"HEAD"})
+	if err != nil {
+		t.Fatalf("unexpected error HEAD: %v", err)
+	}
+	if len(strings.TrimSpace(resHead.Stdout)) != 40 {
+		t.Errorf("got %q, expected 40-char SHA", resHead.Stdout)
+	}
+
+	// Verify HEAD
+	resVerify, err := nativeRevParse(context.Background(), dir, []string{"--verify", "HEAD"})
+	if err != nil {
+		t.Fatalf("unexpected error --verify HEAD: %v", err)
+	}
+	if resVerify.Stdout != resHead.Stdout {
+		t.Errorf("verify HEAD got %q, want %q", resVerify.Stdout, resHead.Stdout)
+	}
+
+	// Verify missing ref
+	resMissing, err := nativeRevParse(context.Background(), dir, []string{"--verify", "nonexistent"})
+	if err != nil {
+		t.Fatalf("unexpected error --verify nonexistent: %v", err)
+	}
+	if resMissing.ExitCode != 128 {
+		t.Errorf("got exit code %d, want 128", resMissing.ExitCode)
+	}
+
+	// Verify quiet missing ref
+	resQuiet, err := nativeRevParse(context.Background(), dir, []string{"--verify", "-q", "nonexistent"})
+	if err != nil {
+		t.Fatalf("unexpected error --verify -q nonexistent: %v", err)
+	}
+	if resQuiet.ExitCode != 1 || resQuiet.Stderr != "" {
+		t.Errorf("got exit code %d stderr %q, want 1 and empty stderr", resQuiet.ExitCode, resQuiet.Stderr)
+	}
+}
+
+func TestNativeRevParse_UnsupportedFlags(t *testing.T) {
+	dir := setupTestRepo(t)
+	_, err := nativeRevParse(context.Background(), dir, []string{"--unsupported-future-flag"})
+	if !errors.Is(err, ErrUnsupported) {
+		t.Errorf("got error %v, want ErrUnsupported", err)
 	}
 }
 

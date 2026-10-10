@@ -59,61 +59,233 @@ func nativeRevParse(_ context.Context, dir string, args []string) (*ExecResult, 
 		return nil, ErrUnsupported
 	}
 
-	repo, err := openRepo(dir)
-	if err != nil {
+	// Identify supported flag shapes first. Unrecognized flags return ErrUnsupported
+	// immediately so callers fall back to the host git binary.
+	switch {
+	case args[0] == "--show-toplevel" && len(args) == 1:
+	case args[0] == "--show-prefix" && len(args) == 1:
+	case args[0] == "--git-dir" && len(args) == 1:
+	case args[0] == "--absolute-git-dir" && len(args) == 1:
+	case args[0] == "--is-inside-work-tree" && len(args) == 1:
+	case args[0] == "--is-inside-git-dir" && len(args) == 1:
+	case args[0] == "--abbrev-ref" && len(args) == 2:
+	case (args[0] == "--short" || strings.HasPrefix(args[0], "--short=")) && len(args) <= 2:
+	case args[0] == "--verify" || (len(args) > 1 && (args[0] == "-q" || args[0] == "--quiet" || args[1] == "--verify")):
+	case len(args) == 1 && !strings.HasPrefix(args[0], "-"):
+	default:
 		return nil, ErrUnsupported
 	}
 
-	switch args[0] {
-	case "--is-inside-work-tree":
+	repo, err := openRepo(dir)
+	if err != nil {
+		return &ExecResult{
+			Stderr:   "fatal: not a git repository (or any of the parent directories): .git\n",
+			ExitCode: 128,
+		}, nil
+	}
+
+	absDir, aerr := filepath.Abs(dir)
+	if aerr == nil {
+		if r, rerr := filepath.EvalSymlinks(absDir); rerr == nil {
+			absDir = r
+		}
+	} else {
+		absDir = dir
+	}
+	absDir = filepath.Clean(absDir)
+
+	var worktreeRoot string
+	var wt *gogit.Worktree
+	var wtErr error
+	if repo != nil {
+		wt, wtErr = repo.Worktree()
+		if wtErr == nil && wt != nil && wt.Filesystem != nil {
+			worktreeRoot = wt.Filesystem.Root()
+			if r, rerr := filepath.EvalSymlinks(worktreeRoot); rerr == nil {
+				worktreeRoot = r
+			}
+			worktreeRoot = filepath.Clean(worktreeRoot)
+		}
+	}
+
+	var gitDir string
+	if s, ok := repo.Storer.(*filesystem.Storage); ok && s.Filesystem() != nil {
+		gitDir = s.Filesystem().Root()
+	} else if wt != nil && wt.Filesystem != nil {
+		gitDir = filepath.Join(wt.Filesystem.Root(), ".git")
+	}
+	if gitDir != "" {
+		if r, rerr := filepath.EvalSymlinks(gitDir); rerr == nil {
+			gitDir = r
+		}
+		gitDir = filepath.Clean(gitDir)
+	}
+
+	switch {
+	case args[0] == "--show-toplevel":
+		if wtErr != nil || worktreeRoot == "" {
+			return &ExecResult{
+				Stderr:   "fatal: this operation must be run in a work tree\n",
+				ExitCode: 128,
+			}, nil
+		}
+		return &ExecResult{Stdout: worktreeRoot + "\n"}, nil
+
+	case args[0] == "--show-prefix":
+		if wtErr != nil || worktreeRoot == "" {
+			return &ExecResult{Stdout: "\n"}, nil
+		}
+		rel, relErr := filepath.Rel(worktreeRoot, absDir)
+		if relErr != nil || rel == "." || rel == "" || strings.HasPrefix(rel, "..") {
+			return &ExecResult{Stdout: "\n"}, nil
+		}
+		prefix := filepath.ToSlash(rel)
+		if !strings.HasSuffix(prefix, "/") {
+			prefix += "/"
+		}
+		return &ExecResult{Stdout: prefix + "\n"}, nil
+
+	case args[0] == "--git-dir":
+		if absDir == worktreeRoot && filepath.Base(gitDir) == ".git" && filepath.Dir(gitDir) == worktreeRoot {
+			return &ExecResult{Stdout: ".git\n"}, nil
+		}
+		return &ExecResult{Stdout: gitDir + "\n"}, nil
+
+	case args[0] == "--absolute-git-dir":
+		return &ExecResult{Stdout: gitDir + "\n"}, nil
+
+	case args[0] == "--is-inside-work-tree":
+		if wtErr != nil || worktreeRoot == "" {
+			return &ExecResult{Stdout: "false\n"}, nil
+		}
+		if gitDir != "" && (absDir == gitDir || strings.HasPrefix(absDir, gitDir+string(filepath.Separator))) {
+			return &ExecResult{Stdout: "false\n"}, nil
+		}
 		return &ExecResult{Stdout: "true\n"}, nil
 
-	case "--show-toplevel":
-		wt, err := repo.Worktree()
-		if err != nil {
-			return nil, ErrUnsupported
+	case args[0] == "--is-inside-git-dir":
+		if gitDir != "" && (absDir == gitDir || strings.HasPrefix(absDir, gitDir+string(filepath.Separator))) {
+			return &ExecResult{Stdout: "true\n"}, nil
 		}
-		return &ExecResult{Stdout: wt.Filesystem.Root() + "\n"}, nil
+		return &ExecResult{Stdout: "false\n"}, nil
 
-	case "--abbrev-ref":
-		if len(args) < 2 || args[1] != "HEAD" {
-			return nil, ErrUnsupported
-		}
-		head, err := repo.Head()
-		if err != nil {
-			return nil, ErrUnsupported
-		}
-		if head.Name().IsBranch() {
-			return &ExecResult{Stdout: head.Name().Short() + "\n"}, nil
-		}
-		return &ExecResult{Stdout: "HEAD\n"}, nil
-
-	case "--short":
-		if len(args) < 2 || args[1] != "HEAD" {
-			return nil, ErrUnsupported
-		}
-		head, err := repo.Head()
-		if err != nil {
-			return nil, ErrUnsupported
-		}
-		return &ExecResult{Stdout: head.Hash().String()[:7] + "\n"}, nil
-
-	case "--verify":
-		if len(args) < 2 {
-			return nil, ErrUnsupported
-		}
-		ref := args[1]
-		if ref == "HEAD" {
-			head, err := repo.Head()
-			if err != nil {
-				return &ExecResult{Stderr: "fatal: not a git repository\n", ExitCode: 128}, nil
+	case args[0] == "--abbrev-ref":
+		refName := args[1]
+		if refName == "HEAD" {
+			head, herr := repo.Head()
+			if herr != nil {
+				return &ExecResult{Stderr: "fatal: HEAD not found\n", ExitCode: 128}, nil
 			}
-			return &ExecResult{Stdout: head.Hash().String() + "\n"}, nil
+			if head.Name().IsBranch() {
+				return &ExecResult{Stdout: head.Name().Short() + "\n"}, nil
+			}
+			return &ExecResult{Stdout: "HEAD\n"}, nil
 		}
-		// Try resolving as a reference
-		hash, err := repo.ResolveRevision(plumbing.Revision(ref))
-		if err != nil {
-			return &ExecResult{Stderr: fmt.Sprintf("fatal: Needed a single revision\n"), ExitCode: 128}, nil
+		ref, rerr := repo.Reference(plumbing.ReferenceName(refName), true)
+		if rerr == nil {
+			return &ExecResult{Stdout: ref.Name().Short() + "\n"}, nil
+		}
+		return &ExecResult{Stdout: refName + "\n"}, nil
+
+	case args[0] == "--short" || strings.HasPrefix(args[0], "--short="):
+		shortLen := 7
+		if strings.HasPrefix(args[0], "--short=") {
+			nStr := strings.TrimPrefix(args[0], "--short=")
+			var n int
+			if _, perr := fmt.Sscanf(nStr, "%d", &n); perr != nil || n <= 0 {
+				return nil, ErrUnsupported
+			}
+			shortLen = n
+		}
+		if len(args) < 2 {
+			return &ExecResult{Stderr: "fatal: Needed a single revision\n", ExitCode: 128}, nil
+		}
+		refName := args[1]
+		var hash plumbing.Hash
+		if refName == "HEAD" {
+			head, herr := repo.Head()
+			if herr != nil {
+				return &ExecResult{Stderr: "fatal: Needed a single revision\n", ExitCode: 128}, nil
+			}
+			hash = head.Hash()
+		} else {
+			h, rerr := repo.ResolveRevision(plumbing.Revision(refName))
+			if rerr != nil {
+				return &ExecResult{Stderr: "fatal: Needed a single revision\n", ExitCode: 128}, nil
+			}
+			hash = *h
+		}
+		hStr := hash.String()
+		if len(hStr) > shortLen {
+			hStr = hStr[:shortLen]
+		}
+		return &ExecResult{Stdout: hStr + "\n"}, nil
+
+	case args[0] == "--verify" || (len(args) > 1 && (args[0] == "-q" || args[0] == "--quiet" || args[1] == "--verify")):
+		quiet := false
+		var refName string
+		for _, a := range args {
+			switch a {
+			case "--verify":
+			case "-q", "--quiet":
+				quiet = true
+			default:
+				if strings.HasPrefix(a, "-") {
+					return nil, ErrUnsupported
+				}
+				if refName == "" {
+					refName = a
+				} else {
+					return nil, ErrUnsupported
+				}
+			}
+		}
+		if refName == "" {
+			return nil, ErrUnsupported
+		}
+		var hash plumbing.Hash
+		if refName == "HEAD" {
+			head, herr := repo.Head()
+			if herr != nil {
+				if quiet {
+					return &ExecResult{ExitCode: 1}, nil
+				}
+				return &ExecResult{Stderr: "fatal: Needed a single revision\n", ExitCode: 128}, nil
+			}
+			hash = head.Hash()
+		} else {
+			h, rerr := repo.ResolveRevision(plumbing.Revision(refName))
+			if rerr != nil {
+				if quiet {
+					return &ExecResult{ExitCode: 1}, nil
+				}
+				return &ExecResult{Stderr: "fatal: Needed a single revision\n", ExitCode: 128}, nil
+			}
+			hash = *h
+		}
+		return &ExecResult{Stdout: hash.String() + "\n"}, nil
+
+	case len(args) == 1 && !strings.HasPrefix(args[0], "-"):
+		refName := args[0]
+		var hash plumbing.Hash
+		if refName == "HEAD" {
+			head, herr := repo.Head()
+			if herr != nil {
+				return &ExecResult{
+					Stderr:   fmt.Sprintf("fatal: ambiguous argument '%s': unknown revision or path not in the working tree.\n", refName),
+					ExitCode: 128,
+				}, nil
+			}
+			hash = head.Hash()
+		} else {
+			h, rerr := repo.ResolveRevision(plumbing.Revision(refName))
+			if rerr != nil {
+				return &ExecResult{
+					Stderr:   fmt.Sprintf("fatal: ambiguous argument '%s': unknown revision or path not in the working tree.\n", refName),
+					ExitCode: 128,
+				}, nil
+			}
+			hash = *h
 		}
 		return &ExecResult{Stdout: hash.String() + "\n"}, nil
 
