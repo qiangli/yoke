@@ -5,6 +5,7 @@ package todo
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -111,6 +112,154 @@ func TestAddAssigneeMustBeARegisteredAgent(t *testing.T) {
 	}
 	if len(events) != 0 {
 		t.Errorf("unreachable assignee got %d events, want 0 (nothing to deliver)", len(events))
+	}
+}
+
+// TestAddNotifyFailureWarnsSingleLineAndPersistsOne is the feb0895bbc76
+// regression: a registered assignee whose bus delivery fails (no inbox
+// evidence, unknown to the bus resolver) must still create exactly one item
+// with exit 0, report its ID on stdout, and warn on ONE bounded line that
+// states the save succeeded and tells the operator not to re-add. The raw
+// multiline bus reason must not leak into the human warning.
+func TestAddNotifyFailureWarnsSingleLineAndPersistsOne(t *testing.T) {
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+	pinTodoAgents(t, "zzwarnfail")
+	sf := newTestStoreFunc(t)
+
+	var out, errOut bytes.Buffer
+	cmd := newAddCmd(sf)
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	cmd.SetArgs([]string{"warn me once", "--owner", "zzwarnfail"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("todo add with failing notify: %v (want exit 0, creation succeeds)", err)
+	}
+	if !strings.Contains(out.String(), "added ") {
+		t.Errorf("stdout = %q, want it to report the added ID before the warning", out.String())
+	}
+	warn := strings.TrimSpace(errOut.String())
+	if warn == "" {
+		t.Fatal("stderr warning is empty, want a single-line saved/not-notified warning")
+	}
+	if strings.Contains(warn, "\n") {
+		t.Errorf("stderr warning spans multiple lines: %q", errOut.String())
+	}
+	if len(warn) > 320 {
+		t.Errorf("stderr warning is %d bytes, want a bounded single line", len(warn))
+	}
+	for _, want := range []string{"warning", "saved", "zzwarnfail", "do not re-add", "already created"} {
+		if !strings.Contains(strings.ToLower(warn), strings.ToLower(want)) && !strings.Contains(warn, want) {
+			t.Errorf("stderr warning = %q, want it to contain %q", warn, want)
+		}
+	}
+
+	st, _, err := sf()
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := List(st, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("notify failure persisted %d todos, want exactly 1 (no duplicate, no rollback)", len(items))
+	}
+}
+
+// TestAddNotifyFailureJSONPreservesReasonAndPersistsOne keeps the machine
+// contract: --json still carries the full notify reason (assignee_reason)
+// with exit 0 and exactly one persisted item, even though the human warning
+// is folded to a single bounded line.
+func TestAddNotifyFailureJSONPreservesReasonAndPersistsOne(t *testing.T) {
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+	pinTodoAgents(t, "zzjsonfail")
+	sf := newTestStoreFunc(t)
+
+	var out, errOut bytes.Buffer
+	cmd := newAddCmd(sf)
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	cmd.SetArgs([]string{"json keeps reason", "--owner", "zzjsonfail", "--json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("todo add --json with failing notify: %v (want exit 0)", err)
+	}
+	var got struct {
+		ID               string `json:"id"`
+		AssigneeNotified bool   `json:"assignee_notified"`
+		AssigneeReason   string `json:"assignee_reason"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("stdout is not JSON: %v (%q)", err, out.String())
+	}
+	if got.ID == "" {
+		t.Error("json id is empty, want the created item's ID")
+	}
+	if got.AssigneeNotified {
+		t.Error("assignee_notified = true, want false for the failing delivery")
+	}
+	if strings.TrimSpace(got.AssigneeReason) == "" {
+		t.Error("assignee_reason is empty, want the full preserved bus reason")
+	}
+
+	st, _, err := sf()
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := List(st, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("notify failure persisted %d todos, want exactly 1", len(items))
+	}
+}
+
+// TestAddNotifySuccessReportsAndPersistsOne pins the happy path through the
+// same seams: a reachable assignee notifies, stdout reports added + notified,
+// stderr stays silent, and exactly one item persists.
+func TestAddNotifySuccessReportsAndPersistsOne(t *testing.T) {
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+	pinTodoAgents(t, "zzoknotify")
+	sf := newTestStoreFunc(t)
+	if err := bus.MarkNotificationsRead("zzoknotify", 0); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	cmd := newAddCmd(sf)
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	cmd.SetArgs([]string{"happy notify", "--owner", "zzoknotify"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("todo add: %v", err)
+	}
+	if !strings.Contains(out.String(), "added ") {
+		t.Errorf("stdout = %q, want added ID", out.String())
+	}
+	if !strings.Contains(out.String(), "notified zzoknotify") {
+		t.Errorf("stdout = %q, want notified confirmation", out.String())
+	}
+	if strings.TrimSpace(errOut.String()) != "" {
+		t.Errorf("stderr = %q, want silence on notify success", errOut.String())
+	}
+
+	st, _, err := sf()
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := List(st, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("notify success persisted %d todos, want exactly 1", len(items))
+	}
+	events, _, err := bus.UnreadNotifications("zzoknotify")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("inbox has %d events, want exactly 1", len(events))
 	}
 }
 

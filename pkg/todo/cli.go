@@ -13,6 +13,7 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
@@ -854,6 +855,13 @@ func newRmCmd(sf storeFunc) *cobra.Command {
 // assignee, so `todo add`/`todo edit --owner` are never silent about it.
 // A blank Assignee means the caller has nothing to report (no assignment
 // made) and prints nothing.
+//
+// A notify failure is a warning about delivery, never about the write: the
+// item is already saved by the time this prints (stdout already reported
+// `added <id>`), so the warning states that plainly and tells the operator
+// not to re-add. The raw multiline bus reason stays in full in the --json
+// envelope (assignee_reason); the human line folds it to one bounded line so
+// it cannot read as a failed creation.
 func printAssignmentNotice(cmd *cobra.Command, notice AssignmentNotice) {
 	if notice.Assignee == "" {
 		return
@@ -862,7 +870,22 @@ func printAssignmentNotice(cmd *cobra.Command, notice AssignmentNotice) {
 		fmt.Fprintf(cmd.OutOrStdout(), "  notified %s (bashy inbox --as %s)\n", notice.Assignee, notice.Assignee)
 		return
 	}
-	fmt.Fprintf(cmd.ErrOrStderr(), "  %s not notified: %s\n", notice.Assignee, notice.Reason)
+	fmt.Fprintf(cmd.ErrOrStderr(), "  warning: todo saved but %s not notified (do not re-add; item already created): %s\n", notice.Assignee, singleLineReason(notice.Reason))
+}
+
+// singleLineReason folds a possibly multiline notify reason into one bounded
+// line for the human warning. Empty stays empty; overlong reasons truncate.
+func singleLineReason(reason string) string {
+	s := strings.Join(strings.Fields(reason), " ")
+	const max = 200
+	if len(s) <= max {
+		return s
+	}
+	b := []byte(s)[:max]
+	for len(b) > 0 && !utf8.Valid(b) {
+		b = b[:len(b)-1]
+	}
+	return string(b) + "…"
 }
 
 func dash(s string) string {
