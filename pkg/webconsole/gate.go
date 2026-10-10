@@ -96,7 +96,15 @@ func (s *server) panelTier(r *http.Request) (string, bool) {
 // a LAN bind safe to offer at all.
 func (s *server) consoleGate(next http.Handler) http.Handler {
 	guard := s.guard
-	vouched := guard.RequireAuth(next)
+	// RequireAuth stays the cloud rung's gate. A verified owner additionally
+	// earns the Host bridge; everyone else it admits (a sharee, an unsigned
+	// stamp) reaches the tile exactly as before, with no local credential.
+	vouched := guard.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if cloudOwnerVerified(r, s.cloudApp()) {
+			r = markHostBridge(r, bridgeCloudOwner)
+		}
+		next.ServeHTTP(w, r)
+	}))
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.liveRegistered {
@@ -124,18 +132,18 @@ func (s *server) consoleGate(next http.Handler) http.Handler {
 						if !s.deviceAdmits(w, r, deviceID) {
 							return
 						}
-						// A paired device is admitted, but it is not the operator:
-						// the Host tile's local credential is never presented for it.
-						next.ServeHTTP(w, r)
+						// deviceAdmits has just re-checked liveness, expiry, the
+						// operator grant and that this path is in the device's scope.
+						next.ServeHTTP(w, markHostBridge(r, bridgeDevice))
 						return
 					}
-					next.ServeHTTP(w, markLocalOperator(r))
+					next.ServeHTTP(w, markHostBridge(r, bridgeOperator))
 					return
 				}
 			}
 		}
 		if !s.requireLogin && coopauth.IsLoopbackAddr(r.RemoteAddr) {
-			next.ServeHTTP(w, markLocalOperator(r))
+			next.ServeHTTP(w, markHostBridge(r, bridgeOperator))
 			return
 		}
 		s.denied(w, r)

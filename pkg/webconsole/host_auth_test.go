@@ -4,10 +4,15 @@
 package webconsole
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -16,7 +21,15 @@ import (
 	"github.com/qiangli/yoke/pkg/websession"
 )
 
-const synthHostToken = "synthetic-outpost-bearer-0123456789abcdef"
+const (
+	synthHostToken = "synthetic-outpost-bearer-0123456789abcdef"
+	synthSSOSecret = "synthetic-sso-secret-fedcba9876543210"
+	synthOwner     = "owner@example.test"
+	synthSharee    = "sharee@example.test"
+	synthCloudBase = "/matrix/h/synthhost/app/apps"
+	lanPeer        = "192.168.1.44:5555"
+	loPeer         = "127.0.0.1:5555"
+)
 
 type hostUpstream struct {
 	*httptest.Server
@@ -32,9 +45,56 @@ func (u *hostUpstream) requests() []seenReq {
 	return append([]seenReq(nil), u.seen...)
 }
 
-// newHostUpstream stands in for outpost's admin listener and records the path
-// and Authorization of every request that reaches it.
-func newHostUpstream(t *testing.T, token string, ok bool) *hostUpstream {
+func (u *hostUpstream) reset() {
+	u.mu.Lock()
+	u.seen = nil
+	u.mu.Unlock()
+}
+
+func (u *hostUpstream) addr() string { return strings.TrimPrefix(u.URL, "http://") }
+
+// writeOutpostConfig installs a synthetic outpost agent.json at the canonical
+// path under a private XDG_CONFIG_HOME. A nil map writes no config at all.
+func writeOutpostConfig(t *testing.T, cfg map[string]any, mode os.FileMode) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	p := filepath.Join(dir, "matrix", "agent.json")
+	if cfg == nil {
+		return p
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, b, mode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(p, mode); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// fullConfig is a healthy synthetic config: token, owner and a bashy_services
+// SSO secret for the console app. Mutate the returned map per test.
+func fullConfig() map[string]any {
+	return map[string]any{
+		"mcp_bearer_token": synthHostToken,
+		"oauth2_email":     synthOwner,
+		"bashy_services": []any{map[string]any{
+			"name": "apps", "enabled": true, "trust_cloud_identity": true, "sso_secret": synthSSOSecret,
+		}},
+	}
+}
+
+// newHostUpstream stands in for outpost's admin listener, records the path and
+// Authorization of every request that reaches it, points the Host panel at it
+// through $OUTPOST_ADMIN_ADDR and installs fullConfig() as the trusted config.
+func newHostUpstream(t *testing.T) *hostUpstream {
 	t.Helper()
 	u := &hostUpstream{}
 	u.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -44,11 +104,9 @@ func newHostUpstream(t *testing.T, token string, ok bool) *hostUpstream {
 		w.Write([]byte(`{"ok":true}`))
 	}))
 	t.Cleanup(u.Close)
-	t.Setenv("OUTPOST_ADMIN_ADDR", strings.TrimPrefix(u.URL, "http://"))
+	t.Setenv("OUTPOST_ADMIN_ADDR", u.addr())
 	withOutpostAdminResolver(t, outpostConfig{}, nil, "127.0.0.1:17777")
-	prev := hostAdminToken
-	hostAdminToken = func() (string, bool) { return token, ok }
-	t.Cleanup(func() { hostAdminToken = prev })
+	writeOutpostConfig(t, fullConfig(), 0o600)
 	return u
 }
 
@@ -62,17 +120,40 @@ func authOf(t *testing.T, u *hostUpstream, path string) (string, bool) {
 	return "", false
 }
 
+func wantBridged(t *testing.T, u *hostUpstream, what string) {
+	t.Helper()
+	if got, seen := authOf(t, u, "/api/status"); !seen || got != "Bearer "+synthHostToken {
+		t.Fatalf("%s: upstream Authorization = %q (seen=%v), want the host bearer", what, got, seen)
+	}
+}
+
+func wantNoCredential(t *testing.T, u *hostUpstream, what string) {
+	t.Helper()
+	if got, seen := authOf(t, u, "/api/status"); !seen || got != "" {
+		t.Fatalf("%s: upstream Authorization = %q (seen=%v), want none — not even the browser's", what, got, seen)
+	}
+}
+
+func operatorEnv(t *testing.T) (http.Handler, http.Header) {
+	t.Helper()
+	sessions := websession.NewStore(time.Hour, []byte("test-key-test-key-test-key-32byt"))
+	h := newTestHandler(t, Options{RequireLogin: true, Sessions: sessions})
+	cookie, err := sessions.Mint("operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h, http.Header{"Cookie": {sessionCookie + "=" + cookie}, "Authorization": {"Bearer browser-supplied"}}
+}
+
 func TestHostAdminBearerIsAttachedForTheLoopbackOperator(t *testing.T) {
-	u := newHostUpstream(t, synthHostToken, true)
+	u := newHostUpstream(t)
 	h := newTestHandler(t, Options{})
 	hdr := http.Header{"Authorization": {"Bearer browser-supplied"}}
-	w := do(h, "GET", "/host/api/status", "127.0.0.1:5555", hdr)
+	w := do(h, "GET", "/host/api/status", loPeer, hdr)
 	if w.Code != 200 {
 		t.Fatalf("host api = %d: %s", w.Code, w.Body.String())
 	}
-	if got, _ := authOf(t, u, "/api/status"); got != "Bearer "+synthHostToken {
-		t.Fatalf("upstream Authorization = %q, want the host bearer", got)
-	}
+	wantBridged(t, u, "ungated loopback operator")
 	if strings.Contains(w.Body.String(), synthHostToken) || strings.Contains(w.Header().Get("Authorization"), synthHostToken) {
 		t.Fatal("the token reached the browser")
 	}
@@ -85,16 +166,27 @@ func TestHostAdminBearerIsAttachedForTheLoopbackOperator(t *testing.T) {
 	}
 }
 
+func TestHostAdminBearerAdmittedOperatorSessionFromAnyBrowserPeer(t *testing.T) {
+	u := newHostUpstream(t)
+	h, hdr := operatorEnv(t)
+	for _, peer := range []string{loPeer, lanPeer} {
+		u.reset()
+		if w := do(h, "GET", "/host/api/status", peer, hdr); w.Code != 200 {
+			t.Fatalf("operator session from %s = %d", peer, w.Code)
+		}
+		wantBridged(t, u, "operator cookie from "+peer)
+	}
+}
+
 func TestHostAdminBearerStaysOnTheAdminAPI(t *testing.T) {
-	u := newHostUpstream(t, synthHostToken, true)
+	u := newHostUpstream(t)
 	h := newTestHandler(t, Options{})
 	hdr := http.Header{"Authorization": {"Bearer browser-supplied"}}
 	for _, p := range []string{"/host/", "/host/mcp/", "/host/_periscope/x", "/host/somapp/api/status", "/host/api"} {
-		do(h, "GET", p, "127.0.0.1:5555", hdr)
+		do(h, "GET", p, loPeer, hdr)
 	}
-	// Dot segments and doubled slashes must not pivot onto another surface.
-	do(h, "GET", "/host/api/%2e%2e/mcp/", "127.0.0.1:5555", hdr)
-	do(h, "GET", "/host/api//..//mcp/", "127.0.0.1:5555", hdr)
+	do(h, "GET", "/host/api/%2e%2e/mcp/", loPeer, hdr)
+	do(h, "GET", "/host/api//..//mcp/", loPeer, hdr)
 	for _, r := range u.requests() {
 		if !strings.HasPrefix(r.Path, "/api/") && r.Auth != "" {
 			t.Errorf("Authorization %q reached non-admin-API path %q", r.Auth, r.Path)
@@ -108,19 +200,60 @@ func TestHostAdminBearerStaysOnTheAdminAPI(t *testing.T) {
 	}
 }
 
-func TestHostAdminBearerAbsentOrUnreadableTokenSendsNothing(t *testing.T) {
-	u := newHostUpstream(t, "", false)
-	h := newTestHandler(t, Options{})
-	hdr := http.Header{"Authorization": {"Bearer browser-supplied"}}
-	if w := do(h, "GET", "/host/api/status", "127.0.0.1:5555", hdr); w.Code != 200 {
-		t.Fatalf("host api = %d", w.Code)
+func TestHostAdminBearerAbsentOrUnreadableConfigSendsNothing(t *testing.T) {
+	cases := map[string]func(*testing.T){
+		"no config file": func(t *testing.T) { writeOutpostConfig(t, nil, 0o600) },
+		"no token":       func(t *testing.T) { writeOutpostConfig(t, map[string]any{"oauth2_email": synthOwner}, 0o600) },
+		"short token":    func(t *testing.T) { writeOutpostConfig(t, map[string]any{"mcp_bearer_token": "abc"}, 0o600) },
+		"header-injection token": func(t *testing.T) {
+			writeOutpostConfig(t, map[string]any{"mcp_bearer_token": "aaaaaaaaaaaaaaaaaaaa\r\nX-Evil: 1"}, 0o600)
+		},
 	}
-	if got, seen := authOf(t, u, "/api/status"); !seen || got != "" {
-		t.Fatalf("Authorization = %q (seen=%v), want none — not even the browser's", got, seen)
+	if runtimeIsUnix() {
+		cases["group/world-readable"] = func(t *testing.T) { writeOutpostConfig(t, fullConfig(), 0o644) }
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			u := newHostUpstream(t)
+			setup(t)
+			h := newTestHandler(t, Options{})
+			hdr := http.Header{"Authorization": {"Bearer browser-supplied"}}
+			if w := do(h, "GET", "/host/api/status", loPeer, hdr); w.Code != 200 {
+				t.Fatalf("host api = %d", w.Code)
+			}
+			wantNoCredential(t, u, name)
+		})
+	}
+}
+
+func TestHostAdminBearerTokenRotationIsImmediate(t *testing.T) {
+	u := newHostUpstream(t)
+	h := newTestHandler(t, Options{})
+	do(h, "GET", "/host/api/status", loPeer, nil)
+	wantBridged(t, u, "before rotation")
+	u.reset()
+	cfg := fullConfig()
+	cfg["mcp_bearer_token"] = "rotated-" + synthHostToken
+	writeOutpostConfigAt(t, cfg)
+	do(h, "GET", "/host/api/status", loPeer, nil)
+	if got, _ := authOf(t, u, "/api/status"); got != "Bearer rotated-"+synthHostToken {
+		t.Fatalf("after rotation Authorization = %q", got)
+	}
+}
+
+// writeOutpostConfigAt rewrites the config already installed by the current
+// XDG_CONFIG_HOME, as `outpost` does on rotation.
+func writeOutpostConfigAt(t *testing.T, cfg map[string]any) {
+	t.Helper()
+	p := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "matrix", "agent.json")
+	b, _ := json.Marshal(cfg)
+	if err := os.WriteFile(p, b, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 
 func TestHostAdminBearerNeverGoesToAnExplicitRemoteEndpoint(t *testing.T) {
+	writeOutpostConfig(t, fullConfig(), 0o600)
 	for _, addr := range []string{"10.20.30.40:17777", "example.test:17777", "0.0.0.0:17777", "192.168.1.9:17777"} {
 		t.Setenv("OUTPOST_ADMIN_ADDR", addr)
 		withOutpostAdminResolver(t, outpostConfig{}, nil, "127.0.0.1:17777")
@@ -135,7 +268,6 @@ func TestHostAdminBearerNeverGoesToAnExplicitRemoteEndpoint(t *testing.T) {
 			t.Errorf("%s: same-host loopback endpoint should be eligible", addr)
 		}
 	}
-	// The address configured through outpost itself is a source too.
 	t.Setenv("OUTPOST_ADMIN_ADDR", "")
 	withOutpostAdminResolver(t, outpostConfig{AdminAddr: "10.0.0.5:17777"}, nil, "127.0.0.1:17777")
 	if p := hostBuiltinPanel(); p.hostAdmin {
@@ -143,39 +275,89 @@ func TestHostAdminBearerNeverGoesToAnExplicitRemoteEndpoint(t *testing.T) {
 	}
 }
 
+func TestHostAdminBearerBoundToTheConfiguredAdminEndpoint(t *testing.T) {
+	t.Run("default endpoint when the config names none", func(t *testing.T) {
+		u := newHostUpstream(t)
+		t.Setenv("OUTPOST_ADMIN_ADDR", "")
+		withOutpostAdminResolver(t, outpostConfig{}, nil, u.addr()) // default == upstream
+		h := newTestHandler(t, Options{})
+		do(h, "GET", "/host/api/status", loPeer, nil)
+		wantBridged(t, u, "default endpoint")
+	})
+	t.Run("file admin_addr matches the panel", func(t *testing.T) {
+		u := newHostUpstream(t)
+		t.Setenv("OUTPOST_ADMIN_ADDR", "")
+		cfg := fullConfig()
+		cfg["admin_addr"] = u.addr()
+		writeOutpostConfigAt(t, cfg)
+		withOutpostAdminResolver(t, outpostConfig{AdminAddr: u.addr()}, nil, "127.0.0.1:17777")
+		h := newTestHandler(t, Options{})
+		do(h, "GET", "/host/api/status", loPeer, nil)
+		wantBridged(t, u, "matching admin_addr")
+	})
+	t.Run("panel on an arbitrary other loopback port gets nothing", func(t *testing.T) {
+		u := newHostUpstream(t)
+		t.Setenv("OUTPOST_ADMIN_ADDR", "")
+		cfg := fullConfig()
+		cfg["admin_addr"] = "127.0.0.1:1" // the config says outpost lives elsewhere
+		writeOutpostConfigAt(t, cfg)
+		// The panel resolves a different loopback endpoint (a stale or foreign
+		// `outpost config show`), which is where the proxy dials.
+		withOutpostAdminResolver(t, outpostConfig{AdminAddr: u.addr()}, nil, "127.0.0.1:17777")
+		h := newTestHandler(t, Options{})
+		if w := do(h, "GET", "/host/api/status", loPeer, http.Header{"Authorization": {"Bearer browser-supplied"}}); w.Code != 200 {
+			t.Fatalf("host api = %d", w.Code)
+		}
+		wantNoCredential(t, u, "endpoint mismatch")
+	})
+	t.Run("env override wins like outpost's own precedence", func(t *testing.T) {
+		u := newHostUpstream(t) // env == upstream
+		cfg := fullConfig()
+		cfg["admin_addr"] = "127.0.0.1:1"
+		writeOutpostConfigAt(t, cfg)
+		h := newTestHandler(t, Options{})
+		do(h, "GET", "/host/api/status", loPeer, nil)
+		wantBridged(t, u, "env override")
+	})
+	t.Run("unusable file admin_addr fails closed", func(t *testing.T) {
+		u := newHostUpstream(t)
+		t.Setenv("OUTPOST_ADMIN_ADDR", "")
+		cfg := fullConfig()
+		cfg["admin_addr"] = "not-an-address"
+		writeOutpostConfigAt(t, cfg)
+		withOutpostAdminResolver(t, outpostConfig{}, nil, u.addr())
+		h := newTestHandler(t, Options{})
+		do(h, "GET", "/host/api/status", loPeer, nil)
+		wantNoCredential(t, u, "bad admin_addr")
+	})
+}
+
 func TestHostAdminBearerRequiresTheStockHostPanel(t *testing.T) {
-	u := newHostUpstream(t, synthHostToken, true)
+	u := newHostUpstream(t)
 	port := mustPort(t, u.URL)
-	// An --app / registered panel on the very same loopback port is not Host.
 	h := newTestHandler(t, Options{Panels: []Panel{
 		{Name: "other", Label: "Other", Path: "/other/", Mode: "proxy", Port: port, Available: true, Auth: AuthSystem, Source: "app"},
 	}})
-	if w := do(h, "GET", "/other/api/status", "127.0.0.1:5555", nil); w.Code != 200 {
+	if w := do(h, "GET", "/other/api/status", loPeer, nil); w.Code != 200 {
 		t.Fatalf("other = %d", w.Code)
 	}
-	if got, seen := authOf(t, u, "/api/status"); !seen || got != "" {
-		t.Fatalf("third-party panel received Authorization %q", got)
-	}
+	wantNoCredential(t, u, "third-party panel")
 }
 
 func TestHostAdminBearerDeniedWhereTheLauncherGateDenies(t *testing.T) {
-	u := newHostUpstream(t, synthHostToken, true)
-
-	// Login-required console, no session.
+	u := newHostUpstream(t)
 	locked := newTestHandler(t, Options{RequireLogin: true,
 		Sessions: websession.NewStore(time.Hour, []byte("test-key-test-key-test-key-32byt"))})
-	for _, peer := range []string{"127.0.0.1:5555", "192.168.1.44:5555"} {
+	for _, peer := range []string{loPeer, lanPeer} {
 		if w := do(locked, "GET", "/host/api/status", peer, http.Header{"Accept": {"application/json"}}); w.Code != http.StatusForbidden {
 			t.Errorf("login-required, no session, peer %s = %d, want 403", peer, w.Code)
 		}
 	}
-	// Ungated console reached from a non-loopback peer.
 	open := newTestHandler(t, Options{})
-	if w := do(open, "GET", "/host/api/status", "192.168.1.44:5555", nil); w.Code != http.StatusForbidden {
+	if w := do(open, "GET", "/host/api/status", lanPeer, nil); w.Code != http.StatusForbidden {
 		t.Errorf("non-loopback peer = %d, want 403", w.Code)
 	}
-	// A forged session cookie is not a session.
-	if w := do(locked, "GET", "/host/api/status", "127.0.0.1:5555", http.Header{"Cookie": {sessionCookie + "=forged"}}); w.Code != http.StatusForbidden {
+	if w := do(locked, "GET", "/host/api/status", loPeer, http.Header{"Cookie": {sessionCookie + "=forged"}}); w.Code != http.StatusForbidden {
 		t.Errorf("forged cookie = %d, want 403", w.Code)
 	}
 	if n := len(u.requests()); n != 0 {
@@ -183,129 +365,258 @@ func TestHostAdminBearerDeniedWhereTheLauncherGateDenies(t *testing.T) {
 	}
 }
 
-func TestHostAdminBearerOnlyForDirectLoopbackPeerWithSession(t *testing.T) {
-	u := newHostUpstream(t, synthHostToken, true)
-	sessions := websession.NewStore(time.Hour, []byte("test-key-test-key-test-key-32byt"))
-	h := newTestHandler(t, Options{RequireLogin: true, Sessions: sessions})
-	cookie, err := sessions.Mint("operator")
-	if err != nil {
-		t.Fatal(err)
-	}
-	hdr := http.Header{"Cookie": {sessionCookie + "=" + cookie}}
-
-	if w := do(h, "GET", "/host/api/status", "127.0.0.1:5555", hdr); w.Code != 200 {
-		t.Fatalf("operator session on loopback = %d", w.Code)
-	}
-	if got, _ := authOf(t, u, "/api/status"); got != "Bearer "+synthHostToken {
-		t.Fatalf("loopback operator Authorization = %q", got)
-	}
-
-	// Same valid session from the LAN: the gate admits, the credential is not
-	// presented — the request did not originate on this machine.
-	u.mu.Lock()
-	u.seen = nil
-	u.mu.Unlock()
-	if w := do(h, "GET", "/host/api/status", "192.168.1.44:5555", hdr); w.Code != 200 {
-		t.Fatalf("operator session from LAN = %d", w.Code)
-	}
-	if got, seen := authOf(t, u, "/api/status"); !seen || got != "" {
-		t.Fatalf("LAN peer got Authorization %q", got)
-	}
-}
-
-func TestHostAdminBearerNotPresentedViaCloudOrForSpoofedTrustHeaders(t *testing.T) {
-	u := newHostUpstream(t, synthHostToken, true)
-	h := newTestHandler(t, Options{})
-	// A tunnel-arrived request is vouched by outpost, not by the local-operator
-	// rows; the credential is not part of that path.
-	hdr := http.Header{"X-Forwarded-Prefix": {"/matrix/h/x/app/console"}, "X-Forwarded-For": {"127.0.0.1"}}
-	do(h, "GET", "/host/api/status", "127.0.0.1:5555", hdr)
-	for _, r := range u.requests() {
-		if r.Auth != "" {
-			t.Fatalf("credential attached to a cloud-arrived request: %q", r.Auth)
-		}
-	}
-}
-
-func TestHostAdminBearerDeviceSessions(t *testing.T) {
-	u := newHostUpstream(t, synthHostToken, true)
+func TestHostAdminBearerPairedDevice(t *testing.T) {
+	u := newHostUpstream(t)
 	h, store := pairEnv(t)
-	lan := "192.168.1.44:5555"
 
 	// Default scope does not include Host: refused by the gate, never forwarded.
 	cookie := redeemScan(t, h, store, nil, time.Hour)
-	if w := do(h, "GET", "/host/api/status", lan, withCookie(cookie)); w.Code != http.StatusForbidden {
+	if w := do(h, "GET", "/host/api/status", lanPeer, withCookie(cookie)); w.Code != http.StatusForbidden {
 		t.Fatalf("out-of-scope device = %d, want 403", w.Code)
 	}
-	// A device paired for Host is admitted — but it is not the operator, so the
-	// local credential is never presented for it, even from a loopback peer.
+	if n := len(u.requests()); n != 0 {
+		t.Fatalf("out-of-scope device forwarded %d request(s)", n)
+	}
+
+	// A device paired for Host uses the bridge, from the LAN and from loopback,
+	// and its own Authorization header is replaced rather than forwarded.
 	hostDev := redeemScan(t, h, store, []string{"host"}, time.Hour)
-	if w := do(h, "GET", "/host/api/status", "127.0.0.1:5555", withCookie(hostDev)); w.Code != 200 {
-		t.Fatalf("in-scope device = %d: %s", w.Code, w.Body.String())
+	for _, peer := range []string{lanPeer, loPeer} {
+		u.reset()
+		hdr := withCookie(hostDev)
+		hdr.Set("Authorization", "Bearer device-supplied")
+		if w := do(h, "GET", "/host/api/status", peer, hdr); w.Code != 200 {
+			t.Fatalf("in-scope device from %s = %d: %s", peer, w.Code, w.Body.String())
+		}
+		wantBridged(t, u, "in-scope device from "+peer)
 	}
-	if got, seen := authOf(t, u, "/api/status"); !seen || got != "" {
-		t.Fatalf("paired device received Authorization %q", got)
+	// Scope is per panel: the Host-scoped device is still refused elsewhere.
+	if w := do(h, "GET", "/sprint/", lanPeer, withCookie(hostDev)); w.Code != http.StatusForbidden {
+		t.Fatalf("host-scoped device on /sprint/ = %d, want 403", w.Code)
 	}
-	u.mu.Lock()
-	u.seen = nil
-	u.mu.Unlock()
-	// Revoked / expired devices are refused.
+}
+
+func TestHostAdminBearerDeniedDevicesAreNeverForwarded(t *testing.T) {
+	u := newHostUpstream(t)
+	h, store := pairEnv(t)
+
+	revoked := redeemScan(t, h, store, []string{"host"}, time.Hour)
+	expired := redeemScan(t, h, store, []string{"host"}, 50*time.Millisecond)
+	time.Sleep(80 * time.Millisecond)
+	if w := do(h, "GET", "/host/api/status", lanPeer, withCookie(expired)); w.Code != http.StatusForbidden {
+		t.Fatalf("expired device = %d, want 403", w.Code)
+	}
 	if _, err := store.revokeAll(); err != nil {
 		t.Fatal(err)
 	}
-	if w := do(h, "GET", "/host/api/status", lan, withCookie(cookie)); w.Code != http.StatusForbidden {
+	if w := do(h, "GET", "/host/api/status", lanPeer, withCookie(revoked)); w.Code != http.StatusForbidden {
 		t.Fatalf("revoked device = %d, want 403", w.Code)
 	}
-	expired := redeemScan(t, h, store, nil, 50*time.Millisecond)
-	time.Sleep(80 * time.Millisecond)
-	if w := do(h, "GET", "/host/api/status", lan, withCookie(expired)); w.Code != http.StatusForbidden {
-		t.Fatalf("expired device = %d, want 403", w.Code)
+
+	// The operator grant a device inherits ends: the device ends with it.
+	live := redeemScan(t, h, store, []string{"host"}, time.Hour)
+	if w := do(h, "GET", "/host/api/status", lanPeer, withCookie(live)); w.Code != 200 {
+		t.Fatalf("live device = %d", w.Code)
+	}
+	u.reset()
+	if err := store.mutate(func(st *pairState) error {
+		st.Grant.Expires = time.Now().Add(-time.Minute)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if w := do(h, "GET", "/host/api/status", lanPeer, withCookie(live)); w.Code != http.StatusForbidden {
+		t.Fatalf("device after operator grant ended = %d, want 403", w.Code)
 	}
 	if n := len(u.requests()); n != 0 {
 		t.Fatalf("%d request(s) reached outpost for denied devices", n)
 	}
 }
 
-func TestHostAdminTokenFileSafety(t *testing.T) {
-	dir := t.TempDir()
-	good := filepath.Join(dir, "agent.json")
-	write := func(p, body string, mode os.FileMode) {
-		t.Helper()
-		if err := os.WriteFile(p, []byte(body), mode); err != nil {
+// signedCloud builds headers exactly as outpost stamps them for a tunnel hop.
+func signedCloud(secret, user, groups string, ts int64) http.Header {
+	tsS := strconv.FormatInt(ts, 10)
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(user + "\n" + groups + "\n" + synthCloudBase + "\n" + tsS))
+	return http.Header{
+		"X-Forwarded-Prefix":     {synthCloudBase},
+		"Remote-User":            {user},
+		"Remote-Email":           {user},
+		"Remote-Groups":          {groups},
+		"X-Outpost-Identity-Ts":  {tsS},
+		"X-Outpost-Identity-Sig": {hex.EncodeToString(mac.Sum(nil))},
+	}
+}
+
+func cloudRequest(t *testing.T, h http.Handler, hdr http.Header) {
+	t.Helper()
+	hdr.Set("Authorization", "Bearer browser-supplied")
+	if w := do(h, "GET", "/host/api/status", loPeer, hdr); w.Code != 200 {
+		t.Fatalf("cloud request = %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHostAdminBearerTrustedSignedCloudOwner(t *testing.T) {
+	now := time.Now().Unix()
+	t.Run("owner by oauth2_email, secret from bashy_services", func(t *testing.T) {
+		u := newHostUpstream(t)
+		cloudRequest(t, newTestHandler(t, Options{}), signedCloud(synthSSOSecret, synthOwner, "admin", now))
+		wantBridged(t, u, "signed owner")
+	})
+	t.Run("owner is case-insensitive", func(t *testing.T) {
+		u := newHostUpstream(t)
+		cloudRequest(t, newTestHandler(t, Options{}), signedCloud(synthSSOSecret, strings.ToUpper(synthOwner), "admin", now))
+		wantBridged(t, u, "signed owner, upper case")
+	})
+	t.Run("secret from apps[]", func(t *testing.T) {
+		u := newHostUpstream(t)
+		cfg := fullConfig()
+		delete(cfg, "bashy_services")
+		cfg["apps"] = []any{map[string]any{"name": "apps", "enabled": true, "trust_cloud_identity": true, "sso_secret": synthSSOSecret}}
+		writeOutpostConfigAt(t, cfg)
+		cloudRequest(t, newTestHandler(t, Options{}), signedCloud(synthSSOSecret, synthOwner, "admin", now))
+		wantBridged(t, u, "signed owner, apps[] secret")
+	})
+	t.Run("admin_users is authoritative when populated", func(t *testing.T) {
+		u := newHostUpstream(t)
+		cfg := fullConfig()
+		cfg["admin_users"] = []any{"Second.Admin@example.test"}
+		writeOutpostConfigAt(t, cfg)
+		h := newTestHandler(t, Options{})
+		cloudRequest(t, h, signedCloud(synthSSOSecret, "second.admin@example.test", "user", now))
+		wantBridged(t, u, "admin_users member")
+		u.reset()
+		cloudRequest(t, h, signedCloud(synthSSOSecret, synthOwner, "admin", now))
+		wantNoCredential(t, u, "oauth2_email owner not in a populated admin_users")
+	})
+	t.Run("custom console app name", func(t *testing.T) {
+		u := newHostUpstream(t)
+		cfg := fullConfig()
+		cfg["bashy_services"] = []any{map[string]any{
+			"name": "svc", "app_name": "console", "trust_cloud_identity": true, "sso_secret": synthSSOSecret,
+		}}
+		writeOutpostConfigAt(t, cfg)
+		cloudRequest(t, newTestHandler(t, Options{CloudApp: "console"}), signedCloud(synthSSOSecret, synthOwner, "admin", now))
+		wantBridged(t, u, "custom app name")
+		u.reset()
+		cloudRequest(t, newTestHandler(t, Options{}), signedCloud(synthSSOSecret, synthOwner, "admin", now))
+		wantNoCredential(t, u, "secret of a different app")
+	})
+}
+
+func TestHostAdminBearerCloudNeverElevatesAnyoneElse(t *testing.T) {
+	now := time.Now().Unix()
+	mk := func(mod func(h http.Header)) http.Header {
+		h := signedCloud(synthSSOSecret, synthOwner, "admin", now)
+		if mod != nil {
+			mod(h)
+		}
+		return h
+	}
+	cases := map[string]http.Header{
+		"signed sharee holding cloud admin tier": signedCloud(synthSSOSecret, synthSharee, "admin", now),
+		"wrong secret":                           signedCloud("some-other-secret-0123456789", synthOwner, "admin", now),
+		"stale signature":                        signedCloud(synthSSOSecret, synthOwner, "admin", now-3600),
+		"future signature":                       signedCloud(synthSSOSecret, synthOwner, "admin", now+3600),
+		"unsigned owner stamp": mk(func(h http.Header) {
+			h.Del("X-Outpost-Identity-Sig")
+		}),
+		"missing timestamp": mk(func(h http.Header) { h.Del("X-Outpost-Identity-Ts") }),
+		"tampered user":     mk(func(h http.Header) { h.Set("Remote-User", synthSharee); h.Set("Remote-Email", synthSharee) }),
+		"tampered groups":   mk(func(h http.Header) { h.Set("Remote-Groups", "user") }),
+		"tampered prefix":   mk(func(h http.Header) { h.Set("X-Forwarded-Prefix", synthCloudBase+"x") }),
+		"signed sharee with owner forged into the unsigned email": func() http.Header {
+			h := signedCloud(synthSSOSecret, synthSharee, "admin", now)
+			h.Set("Remote-Email", synthOwner)
+			return h
+		}(),
+		"remote-groups fallback without any identity match": signedCloud(synthSSOSecret, "someone@example.test", "admin", now),
+	}
+	for name, hdr := range cases {
+		t.Run(name, func(t *testing.T) {
+			u := newHostUpstream(t)
+			cloudRequest(t, newTestHandler(t, Options{}), hdr)
+			wantNoCredential(t, u, name)
+		})
+	}
+}
+
+func TestHostAdminBearerCloudNeedsSecretAndOwnerFromTheSameConfig(t *testing.T) {
+	now := time.Now().Unix()
+	for name, mut := range map[string]func(map[string]any){
+		"no sso secret": func(c map[string]any) { delete(c, "bashy_services") },
+		"service not trusting cloud identity": func(c map[string]any) {
+			c["bashy_services"] = []any{map[string]any{"name": "apps", "sso_secret": synthSSOSecret}}
+		},
+		"service explicitly disabled": func(c map[string]any) {
+			c["bashy_services"] = []any{map[string]any{"name": "apps", "enabled": false, "trust_cloud_identity": true, "sso_secret": synthSSOSecret}}
+		},
+		"no owner identity": func(c map[string]any) { delete(c, "oauth2_email") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			u := newHostUpstream(t)
+			cfg := fullConfig()
+			mut(cfg)
+			writeOutpostConfigAt(t, cfg)
+			cloudRequest(t, newTestHandler(t, Options{}), signedCloud(synthSSOSecret, synthOwner, "admin", now))
+			wantNoCredential(t, u, name)
+		})
+	}
+	t.Run("no config at all", func(t *testing.T) {
+		u := newHostUpstream(t)
+		if err := os.Remove(filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "matrix", "agent.json")); err != nil {
 			t.Fatal(err)
 		}
-		_ = os.Chmod(p, mode)
+		cloudRequest(t, newTestHandler(t, Options{}), signedCloud(synthSSOSecret, synthOwner, "admin", now))
+		wantNoCredential(t, u, "no config")
+	})
+}
+
+func TestHostAdminBearerCloudSpoofFromANonLoopbackPeerIsRefused(t *testing.T) {
+	u := newHostUpstream(t)
+	h := newTestHandler(t, Options{})
+	hdr := signedCloud(synthSSOSecret, synthOwner, "admin", time.Now().Unix())
+	if w := do(h, "GET", "/host/api/status", lanPeer, hdr); w.Code != http.StatusForbidden {
+		t.Fatalf("LAN peer carrying a (replayed) tunnel stamp = %d, want 403", w.Code)
 	}
-	write(good, `{"mcp_bearer_token":"`+synthHostToken+`"}`, 0o600)
-	if tok, ok := readMCPTokenFile(good); !ok || tok != synthHostToken {
-		t.Fatalf("0600 file: ok=%v", ok)
+	if n := len(u.requests()); n != 0 {
+		t.Fatalf("%d request(s) reached outpost", n)
 	}
-	// Rotation is picked up (mtime/size change).
-	write(good, `{"mcp_bearer_token":"rotated-`+synthHostToken+`"}`, 0o600)
-	if tok, _ := readMCPTokenFile(good); tok != "rotated-"+synthHostToken {
-		t.Fatalf("rotated token not re-read: %q", tok)
+}
+
+func TestHostAdminBearerCloudBridgeStillStaysOnTheAdminAPI(t *testing.T) {
+	u := newHostUpstream(t)
+	h := newTestHandler(t, Options{})
+	for _, p := range []string{"/host/mcp/", "/host/api/%2e%2e/mcp/", "/host/"} {
+		hdr := signedCloud(synthSSOSecret, synthOwner, "admin", time.Now().Unix())
+		do(h, "GET", p, loPeer, hdr)
 	}
-	for name, body := range map[string]string{
-		"short":   `{"mcp_bearer_token":"abc"}`,
-		"crlf":    `{"mcp_bearer_token":"aaaaaaaaaaaaaaaaaaaa\r\nX-Evil: 1"}`,
-		"missing": `{}`,
-		"junk":    `not json`,
-	} {
-		p := filepath.Join(dir, name+".json")
-		write(p, body, 0o600)
-		if _, ok := readMCPTokenFile(p); ok {
-			t.Errorf("%s: unusable token accepted", name)
+	for _, r := range u.requests() {
+		if r.Auth != "" {
+			t.Errorf("credential attached to %q", r.Path)
 		}
 	}
-	if _, ok := readMCPTokenFile(filepath.Join(dir, "nope.json")); ok {
-		t.Error("missing file accepted")
+}
+
+func TestHostAdminTrustedConfigParsing(t *testing.T) {
+	writeOutpostConfig(t, fullConfig(), 0o600)
+	tr, ok := loadOutpostTrust("apps")
+	if !ok || tr.token != synthHostToken || len(tr.ssoSecrets) != 1 || !tr.owners[synthOwner] {
+		t.Fatalf("trust = %+v ok=%v", tr, ok)
 	}
-	if runtimeIsUnix() {
-		open := filepath.Join(dir, "open.json")
-		write(open, `{"mcp_bearer_token":"`+synthHostToken+`"}`, 0o644)
-		if _, ok := readMCPTokenFile(open); ok {
-			t.Error("group/world-readable config accepted")
-		}
+	writeOutpostConfigAt(t, map[string]any{"mcp_bearer_token": synthHostToken, "admin_users": []any{"A@x.test", " b@x.test "}, "oauth2_email": synthOwner})
+	tr, _ = loadOutpostTrust("apps")
+	if tr.owners[synthOwner] || !tr.owners["a@x.test"] || !tr.owners["b@x.test"] {
+		t.Fatalf("owners = %v", tr.owners)
+	}
+	if _, ok := loadOutpostTrust("apps"); !ok {
+		t.Fatal("config unexpectedly unreadable")
+	}
+	if err := os.WriteFile(filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "matrix", "agent.json"), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := loadOutpostTrust("apps"); ok {
+		t.Fatal("junk config accepted")
 	}
 }
 

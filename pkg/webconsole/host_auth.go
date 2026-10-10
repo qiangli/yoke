@@ -16,112 +16,204 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/qiangli/yoke/pkg/coopauth"
 )
 
-// The Host tile fronts outpost's admin UI, which has its own login. On the same
-// machine, for the OS user who already passed this console's gate, that second
-// prompt proves nothing. The console therefore presents outpost's local MCP
-// bearer (the credential `outpost` CLI subcommands read from the same 0600
-// file) on the operator's behalf.
+// The Host tile fronts outpost's admin UI, which has its own login. When the
+// console has already established who the caller is, that second prompt proves
+// nothing, so the console presents outpost's local MCP bearer on the caller's
+// behalf (outbound only; the browser never sees it).
 //
-// The credential is scoped by construction, every one of these must hold:
+// "Established" is exactly one of three things, decided by the console gate
+// and carried in the request context (never in a header a client can send):
 //
-//   - the panel is the stock Host tile AND its admin address is loopback
-//     (panel.hostAdmin, set only by hostBuiltinPanel). A registered or --app
-//     panel never carries it, and an explicit remote endpoint never gets it;
-//   - the console gate admitted an operator for this request (ctx value set by
-//     consoleGate for a session cookie or the ungated loopback row only — not
-//     cloud-vouched, public, open-path or paired-device requests);
-//   - the browser's TCP peer is itself loopback;
-//   - the outbound path is the admin REST surface (/api/…), cleaned.
+//   - bridgeOperator: a console session cookie for the OS user (or the ungated
+//     loopback dev row). The browser may be on the LAN: the console already
+//     authenticated it, and the hop to outpost is loopback either way.
+//   - bridgeDevice: a paired-device session that deviceAdmits accepted for this
+//     very request path — live, unexpired, operator grant intact, Host in scope.
+//   - bridgeCloudOwner: a tunnel-arrived request whose identity signature
+//     verifies under the SSO secret of THIS console's app in the outpost
+//     config AND whose signed identity is the owner named by that same config
+//     (admin_users, else oauth2_email). Remote-Groups and unsigned headers
+//     never count; a signed sharee is not an owner; no secret or no owner
+//     means no cloud bridge.
 //
-// The browser never sees the token: whatever Authorization header it sent is
-// discarded and ours is added to the outbound request only.
+// The credential itself is scoped by construction, every one of these holds:
+//
+//   - the panel is the stock Host tile (panel.hostAdmin, set only by
+//     hostBuiltinPanel) and its endpoint is same-host loopback;
+//   - the token, the admin endpoint and the owner/secret all come from ONE
+//     trusted outpost config file (single canonical path, 0600), and the
+//     panel's endpoint equals that config's effective admin endpoint
+//     ($OUTPOST_ADMIN_ADDR if valid, else admin_addr, else 127.0.0.1:17777);
+//   - the outbound path is the admin REST surface (/api/…), cleaned;
+//   - the dial is loopback-only (see loopbackOnlyTransport).
+//
+// Whatever Authorization the browser sent is discarded; ours is added to the
+// outbound request only.
 
-type localOperatorKey struct{}
+type bridgeVia string
 
-func markLocalOperator(r *http.Request) *http.Request {
-	return r.WithContext(context.WithValue(r.Context(), localOperatorKey{}, true))
+const (
+	bridgeOperator   bridgeVia = "operator"
+	bridgeDevice     bridgeVia = "device"
+	bridgeCloudOwner bridgeVia = "cloud-owner"
+)
+
+type hostBridgeKey struct{}
+
+func markHostBridge(r *http.Request, via bridgeVia) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), hostBridgeKey{}, via))
 }
 
-func isLocalOperator(r *http.Request) bool {
-	v, _ := r.Context().Value(localOperatorKey{}).(bool)
-	return v
+func hostBridgeOf(r *http.Request) (bridgeVia, bool) {
+	v, ok := r.Context().Value(hostBridgeKey{}).(bridgeVia)
+	return v, ok && v != ""
 }
 
-// hostAdminToken reads outpost's MCP bearer. A var so tests supply a
-// synthetic one without touching the real config.
-var hostAdminToken = readOutpostMCPToken
+// defaultCloudApp is the app name outpost publishes this console under; the
+// SSO secret that signs cloud requests for it is keyed by that name.
+const defaultCloudApp = "apps"
 
 var tokenShape = regexp.MustCompile(`^[A-Za-z0-9._~+/=-]{16,512}$`)
 
-var outpostTokenCache struct {
-	sync.Mutex
-	path  string
-	mtime time.Time
-	size  int64
-	token string
-}
-
-func outpostConfigCandidates() []string {
-	var dirs []string
+// outpostConfigPath is outpost's one canonical config file (conf.DefaultConfigPath).
+func outpostConfigPath() (string, bool) {
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		dirs = append(dirs, filepath.Join(xdg, "matrix"), filepath.Join(xdg, "outpost"))
+		return filepath.Join(xdg, "matrix", "agent.json"), true
 	}
-	if home, err := os.UserHomeDir(); err == nil {
-		dirs = append(dirs, filepath.Join(home, ".config", "matrix"), filepath.Join(home, ".config", "outpost"))
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", false
 	}
-	out := make([]string, 0, len(dirs))
-	for _, d := range dirs {
-		out = append(out, filepath.Join(d, "agent.json"))
-	}
-	return out
+	return filepath.Join(home, ".config", "matrix", "agent.json"), true
 }
 
-// readOutpostMCPToken returns the token from the first candidate config that
-// has one. It refuses a file other users can read, and a token of unexpected
-// shape (which also rules out header injection).
-func readOutpostMCPToken() (string, bool) {
-	for _, p := range outpostConfigCandidates() {
-		if tok, ok := readMCPTokenFile(p); ok {
-			return tok, true
-		}
-	}
-	return "", false
+// outpostTrust is the slice of outpost's FileConfig the bridge may rely on.
+type outpostTrust struct {
+	token      string
+	adminAddr  string // raw admin_addr from the file
+	owners     map[string]bool
+	ssoSecrets [][]byte // secrets for the console's app, from apps[] and bashy_services[]
 }
 
-func readMCPTokenFile(p string) (string, bool) {
+type trustFile struct {
+	Token       string   `json:"mcp_bearer_token"`
+	AdminAddr   string   `json:"admin_addr"`
+	OAuth2Email string   `json:"oauth2_email"`
+	AdminUsers  []string `json:"admin_users"`
+	Apps        []struct {
+		Name               string `json:"name"`
+		Enabled            *bool  `json:"enabled"`
+		TrustCloudIdentity bool   `json:"trust_cloud_identity"`
+		SSOSecret          string `json:"sso_secret"`
+	} `json:"apps"`
+	BashyServices []struct {
+		Name               string `json:"name"`
+		AppName            string `json:"app_name"`
+		Enabled            *bool  `json:"enabled"`
+		TrustCloudIdentity bool   `json:"trust_cloud_identity"`
+		SSOSecret          string `json:"sso_secret"`
+	} `json:"bashy_services"`
+}
+
+// loadOutpostTrust re-reads the config on every call (it is a few KB), so a
+// token rotation or an owner change takes effect on the next request. It
+// refuses a file other users can read. Fields that fail validation are left
+// empty rather than failing the whole read: each caller checks what it needs.
+func loadOutpostTrust(cloudApp string) (outpostTrust, bool) {
+	p, ok := outpostConfigPath()
+	if !ok {
+		return outpostTrust{}, false
+	}
 	st, err := os.Stat(p)
 	if err != nil || !st.Mode().IsRegular() {
-		return "", false
+		return outpostTrust{}, false
 	}
 	if runtime.GOOS != "windows" && st.Mode().Perm()&0o077 != 0 {
-		return "", false
+		return outpostTrust{}, false
 	}
-	c := &outpostTokenCache
-	c.Lock()
-	defer c.Unlock()
-	if c.path == p && c.mtime.Equal(st.ModTime()) && c.size == st.Size() {
-		return c.token, c.token != ""
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return outpostTrust{}, false
 	}
-	tok := ""
-	if b, err := os.ReadFile(p); err == nil {
-		var fc struct {
-			Token string `json:"mcp_bearer_token"`
+	var f trustFile
+	if json.Unmarshal(b, &f) != nil {
+		return outpostTrust{}, false
+	}
+	t := outpostTrust{adminAddr: strings.TrimSpace(f.AdminAddr)}
+	if tokenShape.MatchString(f.Token) {
+		t.token = f.Token
+	}
+	// Mirror outpost: a populated admin_users list is the authority for who is
+	// an admin; oauth2_email (the account owner) stands in only when it is empty.
+	if len(f.AdminUsers) > 0 {
+		t.owners = coopauth.AdminSet(f.AdminUsers...)
+	} else {
+		t.owners = coopauth.AdminSet(f.OAuth2Email)
+	}
+	addSecret := func(s string) {
+		if s = strings.TrimSpace(s); s != "" {
+			t.ssoSecrets = append(t.ssoSecrets, []byte(s))
 		}
-		if json.Unmarshal(b, &fc) == nil {
-			tok = fc.Token
+	}
+	for _, a := range f.Apps {
+		if a.Name == cloudApp && a.TrustCloudIdentity && (a.Enabled == nil || *a.Enabled) {
+			addSecret(a.SSOSecret)
 		}
 	}
-	if !tokenShape.MatchString(tok) {
-		tok = ""
+	for _, s := range f.BashyServices {
+		name := s.AppName
+		if name == "" {
+			name = s.Name
+		}
+		if name == cloudApp && s.TrustCloudIdentity && (s.Enabled == nil || *s.Enabled) {
+			addSecret(s.SSOSecret)
+		}
 	}
-	c.path, c.mtime, c.size, c.token = p, st.ModTime(), st.Size(), tok
-	return tok, tok != ""
+	return t, true
+}
+
+// adminEndpoint is the admin address outpost itself would use, minus the CLI
+// flag the console cannot see: $OUTPOST_ADMIN_ADDR when valid, else the
+// file's admin_addr, else the default. A present-but-unusable file value is
+// "unknown", never a fallback.
+func (t outpostTrust) adminEndpoint() (string, int, bool) {
+	if v := strings.TrimSpace(os.Getenv("OUTPOST_ADMIN_ADDR")); v != "" {
+		if h, p, err := splitAdminAddr(v); err == nil {
+			return h, p, true
+		}
+	}
+	addr := t.adminAddr
+	if addr == "" {
+		addr = outpostAdminDefaultAddr
+	}
+	h, p, err := splitAdminAddr(addr)
+	return h, p, err == nil
+}
+
+func loopbackIP(host string) net.IP {
+	host = strings.Trim(host, "[]")
+	if host == "" {
+		return nil
+	}
+	if strings.EqualFold(host, "localhost") {
+		return net.IPv4(127, 0, 0, 1)
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return ip
+	}
+	return nil
+}
+
+func sameLoopbackEndpoint(h1 string, p1 int, h2 string, p2 int) bool {
+	if p1 != p2 {
+		return false
+	}
+	a, b := loopbackIP(h1), loopbackIP(h2)
+	return a != nil && b != nil && a.Equal(b)
 }
 
 // hostAdminEligible is true when the resolved admin endpoint is a same-host
@@ -158,15 +250,65 @@ func loopbackOnlyTransport() *http.Transport {
 	return tr
 }
 
+// cloudOwnerVerified is true only for a tunnel-arrived request from the host
+// owner: loopback peer (outpost dials the console over loopback), a FRESH
+// signature that verifies under the console app's SSO secret from the trusted
+// config, and a SIGNED identity that is a configured owner. The signed value is
+// Remote-User, else Remote-Email; an unsigned Remote-Email that disagrees with
+// it is tampering and refuses the bridge. Remote-Groups is never consulted.
+func cloudOwnerVerified(r *http.Request, cloudApp string) bool {
+	if !coopauth.ArrivedViaCloud(r) || !coopauth.IsLoopbackAddr(r.RemoteAddr) {
+		return false
+	}
+	t, ok := loadOutpostTrust(cloudApp)
+	if !ok || len(t.owners) == 0 || len(t.ssoSecrets) == 0 {
+		return false
+	}
+	verified := false
+	for _, s := range t.ssoSecrets {
+		if coopauth.VerifyOutpost(r, s) {
+			verified = true
+			break
+		}
+	}
+	if !verified {
+		return false
+	}
+	signed := r.Header.Get(coopauth.HdrRemoteUser)
+	if signed == "" {
+		signed = r.Header.Get(coopauth.HdrRemoteEmail)
+	}
+	if signed == "" {
+		return false
+	}
+	if e := r.Header.Get(coopauth.HdrRemoteEmail); e != "" && !strings.EqualFold(e, signed) {
+		return false
+	}
+	return t.owners[strings.ToLower(strings.TrimSpace(signed))]
+}
+
 // applyHostAdminAuth runs in the Host proxy's director on the outbound clone,
-// which keeps the inbound request's RemoteAddr and context. It always discards the
-// browser's Authorization and adds ours only when every condition holds.
-func applyHostAdminAuth(out *http.Request) {
+// which keeps the inbound request's context. It always discards the browser's
+// Authorization and adds ours only when every condition holds.
+func applyHostAdminAuth(out *http.Request, p Panel, cloudApp string) {
 	out.Header.Del("Authorization")
-	if !isLocalOperator(out) || !coopauth.IsLoopbackAddr(out.RemoteAddr) || !adminAPIPath(out.URL.Path) {
+	if _, ok := hostBridgeOf(out); !ok || !p.hostAdmin || !adminAPIPath(out.URL.Path) {
 		return
 	}
-	if tok, ok := hostAdminToken(); ok {
-		out.Header.Set("Authorization", "Bearer "+tok)
+	t, ok := loadOutpostTrust(cloudApp)
+	if !ok || t.token == "" {
+		return
 	}
+	ah, ap, ok := t.adminEndpoint()
+	if !ok {
+		return
+	}
+	ph := p.ProxyHost
+	if ph == "" {
+		ph = "127.0.0.1"
+	}
+	if !sameLoopbackEndpoint(ph, p.Port, ah, ap) {
+		return
+	}
+	out.Header.Set("Authorization", "Bearer "+t.token)
 }
