@@ -2,7 +2,6 @@ package weave
 
 import (
 	"testing"
-	"time"
 
 	"github.com/qiangli/yoke/pkg/room"
 )
@@ -10,7 +9,7 @@ import (
 func TestOwnerNoticeIsDurableDeduplicatedAndRedacted(t *testing.T) {
 	dir, root := newQueueInTempRepo(t)
 	q := &weaveQueue{Root: root, Items: []*weaveItem{{ID: 7, Owner: "worker", State: "submitted", Head: "abc123"}}}
-	if err := saveConductorLock(dir, &ConductorLock{Holder: "accountable-conductor", HeartbeatAt: time.Now()}); err != nil {
+	if _, err := acquireConductorLock(dir, "accountable-conductor", false); err != nil {
 		t.Fatal(err)
 	}
 	weaveQueueOwnerNotice(dir, q, q.Items[0], "run-terminal")

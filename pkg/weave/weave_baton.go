@@ -1,7 +1,9 @@
 package weave
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +13,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/qiangli/coreutils/pkg/weavecli"
+	"github.com/qiangli/yoke/pkg/policy/coord"
+	"github.com/qiangli/yoke/pkg/principal"
 )
 
 // Baton is the CONDUCTOR handoff note for a local weave campaign: the intent,
@@ -37,85 +41,99 @@ func batonPath(queueDir string) string { return filepath.Join(queueDir, "baton.j
 // ratelimit drop), a successor may take over without --force.
 const conductorLockTTL = 30 * time.Minute
 
+// batonKind is the coord kind of the conductor lock, keyed by the queue dir.
+const batonKind = "baton"
+
+func init() {
+	coord.RegisterKind(coord.Kind{
+		Name: batonKind, Match: coord.MatchName, TTL: conductorLockTTL,
+		Modes: []string{coord.ModeLease},
+	})
+}
+
 // ConductorLock is the single-driver guard for a campaign: only its holder
-// should drive the sprint, so two conductors never double-drive one queue.
-// Stored at <queueDir>/conductor.lock. Epoch is a monotonically increasing
-// fencing token bumped on each take — a stale-epoch holder (an old conductor
-// that resumed after a takeover) can be detected and refused.
+// should drive the sprint, so two conductors never double-drive one queue. It
+// is a VIEW of the coord claim baton:<queueDir>; Epoch is the claim's fencing
+// token, bumped on each take — a stale-epoch holder (an old conductor that
+// resumed after a takeover) is refused by coord.
 type ConductorLock struct {
 	Holder      string    `json:"holder"`
 	Epoch       int       `json:"epoch"`
 	AcquiredAt  time.Time `json:"acquired_at"`
 	HeartbeatAt time.Time `json:"heartbeat_at"`
+
+	claim *coord.Claim
 }
 
-func conductorLockPath(queueDir string) string { return filepath.Join(queueDir, "conductor.lock") }
+func batonRef(queueDir string) coord.Ref { return coord.Ref{Kind: batonKind, Name: queueDir} }
+
+func conductorPrincipal(holder string) principal.Ref { return principal.Ref{Name: holder} }
+
+func conductorLockOf(c *coord.Claim) *ConductorLock {
+	return &ConductorLock{Holder: c.Holder.Name, Epoch: int(c.Epoch),
+		AcquiredAt: c.AcquiredAt, HeartbeatAt: c.Heartbeat, claim: c}
+}
 
 func loadConductorLock(queueDir string) (*ConductorLock, bool) {
-	b, err := os.ReadFile(conductorLockPath(queueDir))
+	claims, err := coord.List(coord.DefaultDir())
 	if err != nil {
 		return nil, false
 	}
-	var l ConductorLock
-	if json.Unmarshal(b, &l) != nil {
-		return nil, false
-	}
-	return &l, true
-}
-
-func saveConductorLock(queueDir string, l *ConductorLock) error {
-	if err := ensureWeaveQueueDirPath(queueDir); err != nil {
-		return err
-	}
-	b, err := json.MarshalIndent(l, "", "  ")
-	if err != nil {
-		return err
-	}
-	return weaveWriteFile(conductorLockPath(queueDir), b, 0o644)
-}
-
-func (l *ConductorLock) stale(now time.Time) bool {
-	return now.Sub(l.HeartbeatAt) > conductorLockTTL
-}
-
-// acquireConductorLock claims the lock for holder. It succeeds if the lock is
-// free, held by holder already, stale (heartbeat older than the TTL), or force
-// is set — bumping the fencing epoch on a real change of holder. It returns the
-// resulting lock and whether the claim succeeded; on refusal the current holder
-// is returned so the caller can report who is already driving.
-func acquireConductorLock(queueDir, holder string, force bool, now time.Time) (*ConductorLock, bool) {
-	cur, ok := loadConductorLock(queueDir)
-	if ok && cur.Holder != "" && cur.Holder != holder && !cur.stale(now) && !force {
-		return cur, false // someone else is actively driving
-	}
-	epoch := 1
-	if ok {
-		epoch = cur.Epoch
-		if cur.Holder != holder { // a real handoff bumps the fencing token
-			epoch++
+	for _, c := range claims {
+		if c.Kind == batonKind && c.Resource == queueDir {
+			return conductorLockOf(c), true
 		}
 	}
-	l := &ConductorLock{Holder: holder, Epoch: epoch, AcquiredAt: now, HeartbeatAt: now}
-	if ok && cur.Holder == holder && !cur.AcquiredAt.IsZero() {
-		l.AcquiredAt = cur.AcquiredAt
-	}
-	_ = saveConductorLock(queueDir, l)
-	return l, true
+	return nil, false
 }
 
-func heartbeatConductorLock(queueDir, holder string, now time.Time) {
-	cur, ok := loadConductorLock(queueDir)
-	if ok && cur.Holder == holder {
-		cur.HeartbeatAt = now
-		_ = saveConductorLock(queueDir, cur)
+// stale reports a lock a successor may take without --force. An unknown lock
+// (no heartbeat recorded) is not stale: nothing says its holder is gone.
+func (l *ConductorLock) stale(now time.Time) bool {
+	if l.claim == nil {
+		return now.Sub(l.HeartbeatAt) > conductorLockTTL
 	}
+	return l.claim.Stale(now)
 }
 
-func releaseConductorLock(queueDir, holder string) {
-	cur, ok := loadConductorLock(queueDir)
-	if ok && (holder == "" || cur.Holder == holder) {
-		_ = os.Remove(conductorLockPath(queueDir))
+// acquireConductorLock claims the lock for holder through the coord ledger. It
+// succeeds if the lock is free, held by holder already, lapsed, or force is
+// set — bumping the fencing epoch on a real change of holder. On refusal it
+// returns the current holder's lock and a *coord.Conflict so the caller can
+// report who is already driving.
+func acquireConductorLock(queueDir, holder string, force bool) (*ConductorLock, error) {
+	g, err := coord.AcquireRef(context.Background(), coord.Request{
+		Ref: batonRef(queueDir), Holder: conductorPrincipal(holder),
+		Intent: "conductor", Mode: coord.ModeLease, Force: force,
+	})
+	if err != nil {
+		var conflict *coord.Conflict
+		if errors.As(err, &conflict) {
+			return conductorLockOf(conflict.Claim), err
+		}
+		return nil, err
 	}
+	return conductorLockOf(g.Claim), nil
+}
+
+// heartbeatConductorLock refreshes holder's lock. epoch 0 means "my current
+// lock"; a non-zero epoch that is no longer the lock's is coord.ErrFenced.
+func heartbeatConductorLock(queueDir, holder string, epoch uint64) error {
+	_, err := coord.Refresh(context.Background(), batonRef(queueDir), conductorPrincipal(holder), epoch)
+	return err
+}
+
+// releaseConductorLock drops the lock. An empty holder releases whoever holds
+// it; releasing an absent lock is a no-op.
+func releaseConductorLock(queueDir, holder string, epoch uint64) error {
+	if holder == "" {
+		cur, ok := loadConductorLock(queueDir)
+		if !ok {
+			return nil
+		}
+		holder = cur.Holder
+	}
+	return coord.ReleaseRef(context.Background(), batonRef(queueDir), conductorPrincipal(holder), epoch)
 }
 
 func loadBaton(queueDir string) (*Baton, bool) {
@@ -231,8 +249,12 @@ func newWeaveBatonTakeCmd() *cobra.Command {
 			if err != nil {
 				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave baton take", weavecli.ExitGenericFail, err))
 			}
-			l, okk := acquireConductorLock(dir, as, force, time.Now())
-			if !okk {
+			l, err := acquireConductorLock(dir, as, force)
+			if err != nil {
+				var conflict *coord.Conflict
+				if !errors.As(err, &conflict) {
+					return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave baton take", weavecli.ExitGenericFail, err))
+				}
 				if mode != weavecli.OutputJSON {
 					fmt.Fprintf(cmd.OutOrStdout(), "REFUSED — %s is conducting (last heartbeat %s). Use --force only if they are truly gone.\n",
 						l.Holder, l.HeartbeatAt.Local().Format("15:04:05"))
@@ -263,6 +285,7 @@ func newWeaveBatonTakeCmd() *cobra.Command {
 func newWeaveBatonReleaseCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var as string
+	var epoch uint64
 	cmd := &cobra.Command{
 		Use:   "release",
 		Short: "Release the conductor lock (clean handoff)",
@@ -272,7 +295,9 @@ func newWeaveBatonReleaseCmd() *cobra.Command {
 			if err != nil {
 				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave baton release", weavecli.ExitGenericFail, err))
 			}
-			releaseConductorLock(dir, as)
+			if err := releaseConductorLock(dir, as, epoch); err != nil {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave baton release", weavecli.ExitPrecondFail, err))
+			}
 			if mode != weavecli.OutputJSON {
 				fmt.Fprintln(cmd.OutOrStdout(), "conductor lock released")
 			}
@@ -281,6 +306,7 @@ func newWeaveBatonReleaseCmd() *cobra.Command {
 	}
 	flags.attach(cmd)
 	cmd.Flags().StringVar(&as, "as", "", "Conductor name releasing (only releases if it matches the holder)")
+	cmd.Flags().Uint64Var(&epoch, "epoch", 0, "Epoch you hold; a stale one is refused (0 = current)")
 	return cmd
 }
 
@@ -351,6 +377,7 @@ func newWeaveBatonWriteCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var bt Baton
 	var next, lessons, done []string
+	var epoch uint64
 	cmd := &cobra.Command{
 		Use:   "write",
 		Short: "Write/update the conductor handoff note for this campaign",
@@ -394,14 +421,17 @@ func newWeaveBatonWriteCmd() *cobra.Command {
 			if len(lessons) > 0 {
 				cur.Lessons = append(cur.Lessons, lessons...)
 			}
-			if err := saveBaton(dir, cur); err != nil {
-				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave baton write", weavecli.ExitGenericFail, err))
-			}
 			// Writing the baton is a heartbeat — it refreshes the conductor lock
 			// so the holder's lock doesn't go stale while they are actively
-			// driving (and supervising → recording is the rhythm).
+			// driving (and supervising → recording is the rhythm). A fenced
+			// writer was taken over and must not overwrite its successor's note.
 			if cur.WrittenBy != "" {
-				heartbeatConductorLock(dir, cur.WrittenBy, time.Now())
+				if err := heartbeatConductorLock(dir, cur.WrittenBy, epoch); errors.Is(err, coord.ErrFenced) {
+					return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave baton write", weavecli.ExitPrecondFail, err))
+				}
+			}
+			if err := saveBaton(dir, cur); err != nil {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave baton write", weavecli.ExitGenericFail, err))
 			}
 			if mode != weavecli.OutputJSON {
 				fmt.Fprintln(cmd.OutOrStdout(), "baton written — next conductor: `bashy weave baton`")
@@ -415,6 +445,7 @@ func newWeaveBatonWriteCmd() *cobra.Command {
 	cmd.Flags().StringVar(&bt.Plan, "plan", "", "Sprint plan / decomposition strategy")
 	cmd.Flags().StringVar(&bt.Notes, "notes", "", "Free narrative")
 	cmd.Flags().StringVar(&bt.WrittenBy, "by", "", "Who is handing off (tool/agent name)")
+	cmd.Flags().Uint64Var(&epoch, "epoch", 0, "Conductor epoch you hold; a stale one is refused (0 = current)")
 	cmd.Flags().StringArrayVar(&done, "done", nil, "Append a merged/verified item (repeatable)")
 	cmd.Flags().StringArrayVar(&next, "next", nil, "Next action for the new conductor (repeatable; replaces prior)")
 	cmd.Flags().StringArrayVar(&lessons, "lesson", nil, "Append a lesson/routing note (repeatable)")
