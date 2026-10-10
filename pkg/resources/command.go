@@ -8,7 +8,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// NewCommand builds the singular host-resource front door.
+// NewCommand builds the singular host-resource front door: live utilization
+// (system/usage/utilization) beside the fleet registry of claimable
+// resources (add/rm/list/show/set/kind) from registry.go.
 func NewCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "resource",
@@ -24,6 +26,9 @@ func NewCommand() *cobra.Command {
 	// Hosts with a board reader should re-mount this with their provider:
 	//   cmd.AddCommand(resources.NewUtilizationCommand(board.PendingWork))
 	cmd.AddCommand(NewUtilizationCommand(nil))
+	for _, sub := range newRegistryCmds() {
+		cmd.AddCommand(sub)
+	}
 	return cmd
 }
 

@@ -182,6 +182,25 @@ func init() {
 			Names:     listed((*Catalog).Apps, func(a App) string { return a.Name }),
 			Record:    appRecord(),
 		},
+		// Registered resources and resourcekinds have NO embedded ring by
+		// design, for the same reason commands and apps have none: bashy
+		// ships the mechanism, never a catalog of them. Their write surface
+		// is the `bashy resource` tree in pkg/resources, so the table carries
+		// identity only — no record spec, no lifecycle.
+		{
+			Name: KindResource, Plural: dirResources, DirEnv: "BASHY_RESOURCES_DIR", PathEnv: "BASHY_RESOURCES_PATH",
+			Type:   reflect.TypeOf(Resource{}),
+			Lookup: holder((*Catalog).Resource, func(r Resource) string { return r.Name }),
+			Names: listed((*Catalog).Resources,
+				func(r Resource) string { return r.Name }),
+		},
+		{
+			Name: KindResourceKind, Plural: dirResourceKinds, DirEnv: "BASHY_RESOURCEKINDS_DIR", PathEnv: "BASHY_RESOURCEKINDS_PATH",
+			Type:   reflect.TypeOf(ResourceKind{}),
+			Lookup: holder((*Catalog).ResourceKind, func(r ResourceKind) string { return r.Name }),
+			Names: listed((*Catalog).ResourceKinds,
+				func(r ResourceKind) string { return r.Name }),
+		},
 	} {
 		registerKind(s)
 	}

@@ -94,6 +94,25 @@ type KindProvider interface {
 	Members(name string) ([]string, error)
 }
 
+// EffectiveKinder is an optional KindProvider extension for names whose
+// claim semantics come from somewhere else: a registry entry declaring
+// which kind it is held under. When the provider names an effective kind
+// for name, the engine matches, modes and TTLs under that kind while the
+// claim itself stays stored under the requested ref. Providers that do not
+// implement it claim under their own kind, exactly as before.
+type EffectiveKinder interface {
+	EffectiveKind(name string) (Kind, bool)
+}
+
+// BareMapper is an optional KindProvider extension for records addressable
+// without a kind prefix. When the provider claims a bare name, the engine
+// resolves the ref to the full one before anything else — key, backend,
+// members and conflicts all see the mapped ref. Providers that do not
+// implement it never see bare names.
+type BareMapper interface {
+	MapBare(name string) (Ref, bool)
+}
+
 var (
 	regMu     sync.RWMutex
 	kindReg   = map[string]Kind{}
@@ -157,6 +176,74 @@ func providerFor(kind string) (KindProvider, bool) {
 	defer regMu.RUnlock()
 	p, ok := providers[kind]
 	return p, ok
+}
+
+// providersSorted lists the registered providers in kind-name order, so a
+// scan across providers is deterministic no matter the registration order.
+func providersSorted() []KindProvider {
+	regMu.RLock()
+	names := make([]string, 0, len(providers))
+	for n := range providers {
+		names = append(names, n)
+	}
+	regMu.RUnlock()
+	sort.Strings(names)
+	regMu.RLock()
+	defer regMu.RUnlock()
+	out := make([]KindProvider, 0, len(names))
+	for _, n := range names {
+		if p, ok := providers[n]; ok {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// effectiveKind is the kind a ref claims as: the provider's effective kind
+// when it names one for this name, else the registered kind, else the plain
+// name-matched default for an unknown kind. The claim stays stored under
+// the requested ref either way — only matching, modes and TTL follow the
+// effective kind.
+func effectiveKind(ref Ref) Kind {
+	if p, ok := providerFor(ref.Kind); ok {
+		if ek, ok := p.(EffectiveKinder); ok {
+			if k, ok := ek.EffectiveKind(ref.Name); ok {
+				if k.Name == "" {
+					k.Name = ref.Kind
+				}
+				if k.Match == "" {
+					k.Match = MatchName
+				}
+				return k
+			}
+		}
+	}
+	return kindOrDefault(ref.Kind)
+}
+
+// mapBare resolves a bare name through the providers that claim bare names.
+// Anything else passes through unchanged, so names no provider claims keep
+// their long-standing meaning.
+func mapBare(ref Ref) Ref {
+	if ref.Kind != KindName || ref.Name == "" {
+		return ref
+	}
+	for _, p := range providersSorted() {
+		m, ok := p.(BareMapper)
+		if !ok {
+			continue
+		}
+		if full, ok := m.MapBare(ref.Name); ok {
+			full.Kind, full.Name = strings.TrimSpace(full.Kind), strings.TrimSpace(full.Name)
+			if full.Kind == "" {
+				full.Kind = KindName
+			}
+			if full.Name != "" {
+				return full
+			}
+		}
+	}
+	return ref
 }
 
 // kindOrDefault treats an unregistered kind as a plain name-matched kind in

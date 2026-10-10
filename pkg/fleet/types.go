@@ -26,6 +26,18 @@ const (
 	// KindApp is the registered-app noun (`bashy app add`): a local web
 	// server tiled by the Apps console. Like commands, no embedded ring.
 	KindApp = "app"
+	// KindResource is the registered-resource noun (`bashy resource add`):
+	// the operator's name for something agents must not use at the same
+	// time. A resource carries no claim logic of its own — its record names
+	// the claim kind its claims are taken under, and the fleetkinds provider
+	// turns the record into that kind's members. Like commands and apps, no
+	// embedded ring.
+	KindResource = "resource"
+	// KindResourceKind is the user-claim-kind noun (`bashy resource kind
+	// add`): a record declaring one coord kind — its match rule, domain,
+	// TTL, modes and hook commands — so user kinds work wherever builtin
+	// kinds do. Like resources, no embedded ring.
+	KindResourceKind = "resourcekind"
 )
 
 // Tool kind discriminators. The cloudbox Tool registry is shared between

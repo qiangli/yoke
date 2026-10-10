@@ -37,8 +37,8 @@ func (s store) guard(ctx context.Context, holder principal.Ref, uses []Use) erro
 	}
 	now := time.Now().UTC()
 	for _, u := range uses {
-		ref := normRef(Ref{Kind: u.Kind, Name: u.Name})
-		kind := kindOrDefault(ref.Kind)
+		ref := mapBare(normRef(Ref{Kind: u.Kind, Name: u.Name}))
+		kind := effectiveKind(ref)
 		// Members resolve exactly as an acquisition's would, provider included.
 		members := []string{u.Member}
 		if u.Member == "" {

@@ -51,13 +51,30 @@ func (p nounProvider) Members(name string) ([]string, error) {
 	return out, nil
 }
 
-// Sync registers one provider per noun currently in the fleet kind table.
-// Providers derive from the table, never from a hand-kept list, so call it
-// again after the table changes (a future noun, a test noun) to pick the
-// new noun up.
+// Sync registers one provider per noun currently in the fleet kind table,
+// plus one provider per resourcekind record. Providers derive from the
+// table, never from a hand-kept list, so call it again after the table
+// changes (a future noun, a test noun, a new resourcekind) to pick the new
+// noun up. The resource noun gets the resource provider — its records name
+// the kind they are held under — instead of the plain noun provider.
 func Sync() {
 	for _, n := range fleet.RegistryNouns() {
+		if n.Name == fleet.KindResource {
+			coord.RegisterProvider(resourceProvider{})
+			continue
+		}
 		coord.RegisterProvider(nounProvider{noun: n})
+	}
+	// User kinds: every resourcekind record registers its coord kind (and
+	// the provider that runs its hooks), so user kinds work wherever
+	// builtin kinds do.
+	if recs, _ := fleet.New().ResourceKinds(); len(recs) > 0 {
+		for _, r := range recs {
+			if r.Name == "" {
+				continue
+			}
+			coord.RegisterProvider(kindHook{rec: r})
+		}
 	}
 }
 

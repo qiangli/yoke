@@ -177,9 +177,15 @@ func (s store) acquire(sp acquireSpec) (Grant, error) {
 		if ref.Name == "" {
 			return Grant{}, fmt.Errorf("claim: resource name is required")
 		}
+		// A bare name a provider claims resolves to its full ref first, so
+		// the key, the backend and the members all see the same claim.
+		ref = mapBare(ref)
 		key = ref.String()
 	}
-	kind := kindOrDefault(ref.Kind)
+	// The kind a ref claims as may come from a provider (a registry entry
+	// declaring its kind), not from the ref's own kind token. The claim
+	// stays stored under the requested ref either way.
+	kind := effectiveKind(ref)
 	mode := r.Mode
 	if sp.attached {
 		mode = ModeAttached
@@ -303,14 +309,17 @@ func (s store) acquireOnce(b Backend, locked bool, sp acquireSpec, ref Ref, key 
 
 	c := &Claim{
 		SchemaVersion: SchemaVersion,
-		Kind:          ref.Kind,
-		Members:       members,
-		Mode:          mode,
-		Holder:        r.Holder,
-		Intent:        r.Intent,
-		AcquiredAt:    now,
-		Heartbeat:     now,
-		PID:           os.Getpid(),
+		// The effective kind, so later claims meet this one under the
+		// rule it was taken under. For every ref without a provider
+		// override this is the ref's own kind, unchanged.
+		Kind:       kind.Name,
+		Members:    members,
+		Mode:       mode,
+		Holder:     r.Holder,
+		Intent:     r.Intent,
+		AcquiredAt: now,
+		Heartbeat:  now,
+		PID:        os.Getpid(),
 	}
 	if sp.legacy {
 		c.Roots = sp.roots
@@ -402,6 +411,7 @@ func (s store) acquireAttached(r Request) (Grant, *lockfile.Lock, error) {
 	if ref.Name == "" {
 		return Grant{}, nil, fmt.Errorf("claim: resource name is required")
 	}
+	ref = mapBare(ref)
 	h := lockfile.Holder{Name: r.Holder.Name, PID: os.Getpid(), Intent: r.Intent, Since: time.Now()}
 	lockPath := keyedLockPath(s.dir, ref)
 	var l *lockfile.Lock
@@ -434,7 +444,7 @@ func (s store) acquireAttached(r Request) (Grant, *lockfile.Lock, error) {
 }
 
 func (s store) refresh(ref Ref, holder principal.Ref, epoch uint64) (Grant, error) {
-	ref = normRef(ref)
+	ref = mapBare(normRef(ref))
 	b := s.backend(ref.Kind)
 	key := ref.String()
 	var grant Grant
@@ -473,7 +483,7 @@ func (s store) refresh(ref Ref, holder principal.Ref, epoch uint64) (Grant, erro
 }
 
 func (s store) release(ref Ref, holder principal.Ref, epoch uint64) error {
-	ref = normRef(ref)
+	ref = mapBare(normRef(ref))
 	b := s.backend(ref.Kind)
 	key := ref.String()
 	return s.txn(b, func(locked bool) error {

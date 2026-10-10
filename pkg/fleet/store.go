@@ -23,6 +23,9 @@ const (
 	dirCommands = "commands"
 	dirApps     = "apps"
 	dirPlans    = "plans"
+
+	dirResources     = "resources"
+	dirResourceKinds = "resourcekinds"
 )
 
 // DefaultRoot is the parent of every noun's local store. $BASHY_FLEET_DIR
