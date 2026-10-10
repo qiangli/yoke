@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	"github.com/qiangli/yoke/pkg/llmgw/gateway"
 	"github.com/qiangli/yoke/pkg/llmgw/openai"
 	"github.com/qiangli/yoke/pkg/llmgw/resolve"
+	"github.com/qiangli/yoke/pkg/llmgw/responses"
 	"github.com/qiangli/yoke/pkg/llmgw/sched"
 )
 
@@ -432,6 +434,7 @@ func (s *Server) buildHandler() http.Handler {
 	mux := http.NewServeMux()
 	for _, prefix := range []string{"", gateway.AliasPrefix} {
 		mux.Handle("POST "+prefix+gateway.ChatCompletionsPath, routed)
+		mux.Handle("POST "+prefix+"/v1/responses", s.responsesHandler(routed))
 		mux.HandleFunc("GET "+prefix+gateway.ModelsPath, s.listModels)
 		mux.HandleFunc("GET "+prefix+gateway.HealthPath, s.serveHealth)
 		mux.HandleFunc("POST "+prefix+gateway.EmbeddingsPath, s.noEmbeddings)
@@ -440,6 +443,70 @@ func (s *Server) buildHandler() http.Handler {
 	mux.Handle("POST "+gateway.AnthropicMessagesPath, routed)
 	mux.Handle("/", gw)
 	return mux
+}
+
+// responsesHandler keeps routing, admission, worker execution and usage in the
+// existing chat spine. Only the wire shapes at either end are translated.
+func (s *Server) responsesHandler(chat http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, _, err := s.Authorize(r); err != nil {
+			writeJSON(w, http.StatusUnauthorized, errorEnvelope(err.Error()))
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBody+1))
+		_ = r.Body.Close()
+		if err != nil || len(body) > maxRequestBody {
+			writeJSON(w, http.StatusBadRequest, errorEnvelope("invalid Responses request body"))
+			return
+		}
+		converted, stream, err := responses.ToChat(body)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errorEnvelope(err.Error()))
+			return
+		}
+		chatBody, err := json.Marshal(converted)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, errorEnvelope(err.Error()))
+			return
+		}
+		chatReq := r.Clone(r.Context())
+		chatReq.URL.Path = gateway.ChatCompletionsPath
+		chatReq.Body = io.NopCloser(bytes.NewReader(chatBody))
+		chatReq.ContentLength = int64(len(chatBody))
+		capture := httptest.NewRecorder()
+		chat.ServeHTTP(capture, chatReq)
+		result := capture.Result()
+		defer result.Body.Close()
+		for key, values := range result.Header {
+			for _, value := range values {
+				w.Header().Add(key, value)
+			}
+		}
+		if result.StatusCode < http.StatusOK || result.StatusCode >= http.StatusMultipleChoices {
+			w.WriteHeader(result.StatusCode)
+			_, _ = io.Copy(w, result.Body)
+			return
+		}
+		var completion openai.ChatCompletion
+		if err := json.NewDecoder(result.Body).Decode(&completion); err != nil {
+			writeJSON(w, http.StatusBadGateway, errorEnvelope("invalid chat completion: "+err.Error()))
+			return
+		}
+		translated, err := responses.FromChat(&completion)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, errorEnvelope(err.Error()))
+			return
+		}
+		w.Header().Del("Content-Length")
+		if stream {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.WriteHeader(http.StatusOK)
+			_ = responses.WriteSSE(w, translated)
+			return
+		}
+		writeJSON(w, http.StatusOK, translated)
+	})
 }
 
 // Authorize implements the gateway's one required hook: the bearer token from

@@ -67,7 +67,7 @@ func newServeCmd() *cobra.Command {
 	var o serveOptions
 	cmd := &cobra.Command{
 		Use:   "serve",
-		Short: "serve /v1/chat/completions and /v1/models in the foreground",
+		Short: "serve /v1/chat/completions, /v1/responses and /v1/models in the foreground",
 		Long: `serve binds the gateway and stays in the foreground until interrupted.
 
 It binds LOOPBACK by default. --bind lan must be asked for explicitly: the
@@ -269,6 +269,7 @@ func runEnv(cmd *cobra.Command) error {
 	}
 	fmt.Fprintf(out, "OPENAI_BASE_URL=%s\n", endpoint.OpenAIBaseURL())
 	fmt.Fprintf(out, "OPENAI_API_KEY=%s\n", token)
+	fmt.Fprintln(out, "# OpenAI routes: /v1/chat/completions /v1/responses /v1/models")
 	if url := endpoint.AnthropicBaseURL(); url != "" {
 		fmt.Fprintf(out, "ANTHROPIC_BASE_URL=%s\n", url)
 		fmt.Fprintf(out, "ANTHROPIC_API_KEY=%s\n", token)

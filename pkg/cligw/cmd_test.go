@@ -33,6 +33,7 @@ func TestEnvCommandPrintsTheClientVariables(t *testing.T) {
 	want := []string{
 		fmt.Sprintf("OPENAI_BASE_URL=http://127.0.0.1:%d/v1", DefaultPort),
 		"OPENAI_API_KEY=" + token,
+		"/v1/responses",
 		fmt.Sprintf("ANTHROPIC_BASE_URL=http://127.0.0.1:%d/anthropic", DefaultPort),
 		"ANTHROPIC_API_KEY=" + token,
 		"export OPENAI_BASE_URL OPENAI_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_API_KEY",
