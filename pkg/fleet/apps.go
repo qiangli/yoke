@@ -22,15 +22,16 @@ import (
 
 // App is one registered app record: `name:` + `kind: app`.
 type App struct {
-	Name      string   `yaml:"name" json:"name" doc:"app name; also its mount (/<name>/) — one path segment"`
-	Kind      string   `yaml:"kind" json:"kind" doc:"always app"`
-	Label     string   `yaml:"label,omitempty" json:"label,omitempty" doc:"tile label; default the name"`
-	Icon      string   `yaml:"icon,omitempty" json:"icon,omitempty" doc:"SVG path data on a 24 grid, or one emoji"`
-	Tip       string   `yaml:"tip,omitempty" json:"tip,omitempty" doc:"tile tooltip"`
-	Port      int      `yaml:"port" json:"port" doc:"loopback port the app listens on; the console proxies /<name>/ to it"`
-	Start     []string `yaml:"start,omitempty" json:"start,omitempty" doc:"argv shown as the start hint when the app is down (never run by the console)"`
-	Auth      string   `yaml:"auth,omitempty" json:"auth,omitempty" doc:"auth tier: system (default), public or custom"`
-	LoginPath string   `yaml:"login_path,omitempty" json:"login_path,omitempty" doc:"custom auth only: app-relative login path"`
+	RecordLifecycle `yaml:",inline" schema:"-"`
+	Name            string   `yaml:"name" json:"name" doc:"app name; also its mount (/<name>/) — one path segment"`
+	Kind            string   `yaml:"kind" json:"kind" doc:"always app"`
+	Label           string   `yaml:"label,omitempty" json:"label,omitempty" doc:"tile label; default the name"`
+	Icon            string   `yaml:"icon,omitempty" json:"icon,omitempty" doc:"SVG path data on a 24 grid, or one emoji"`
+	Tip             string   `yaml:"tip,omitempty" json:"tip,omitempty" doc:"tile tooltip"`
+	Port            int      `yaml:"port" json:"port" doc:"loopback port the app listens on; the console proxies /<name>/ to it"`
+	Start           []string `yaml:"start,omitempty" json:"start,omitempty" doc:"argv shown as the start hint when the app is down (never run by the console)"`
+	Auth            string   `yaml:"auth,omitempty" json:"auth,omitempty" doc:"auth tier: system (default), public or custom"`
+	LoginPath       string   `yaml:"login_path,omitempty" json:"login_path,omitempty" doc:"custom auth only: app-relative login path"`
 
 	Ring assetring.Ring `yaml:"-" json:"ring"`
 }

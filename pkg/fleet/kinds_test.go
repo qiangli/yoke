@@ -88,11 +88,11 @@ func TestKindTableDeclaresEveryNoun(t *testing.T) {
 		KindTool:    {dirTools, "BASHY_TOOLS_DIR", "BASHY_TOOLS_PATH", true, true, true},
 		KindModel:   {dirModels, "BASHY_MODELS_DIR", "BASHY_MODELS_PATH", true, false, true},
 		KindAgent:   {dirAgents, "BASHY_AGENTS_DIR", "BASHY_AGENTS_PATH", true, false, true},
-		KindPerson:  {dirPeople, "BASHY_PEOPLE_DIR", "BASHY_PEOPLE_PATH", true, false, false},
-		KindHost:    {dirHosts, "BASHY_HOSTS_DIR", "BASHY_HOSTS_PATH", true, false, false},
-		"plan":      {dirPlans, "BASHY_PLANS_DIR", "BASHY_PLANS_PATH", true, false, false},
-		KindCommand: {dirCommands, "BASHY_COMMANDS_DIR", "BASHY_COMMANDS_PATH", false, false, false},
-		KindApp:     {dirApps, "BASHY_APPS_DIR", "BASHY_APPS_PATH", false, false, false},
+		KindPerson:  {dirPeople, "BASHY_PEOPLE_DIR", "BASHY_PEOPLE_PATH", true, false, true},
+		KindHost:    {dirHosts, "BASHY_HOSTS_DIR", "BASHY_HOSTS_PATH", true, false, true},
+		"plan":      {dirPlans, "BASHY_PLANS_DIR", "BASHY_PLANS_PATH", true, false, true},
+		KindCommand: {dirCommands, "BASHY_COMMANDS_DIR", "BASHY_COMMANDS_PATH", false, false, true},
+		KindApp:     {dirApps, "BASHY_APPS_DIR", "BASHY_APPS_PATH", false, false, true},
 	}
 	for name, w := range want {
 		s, ok := kindByName(name)

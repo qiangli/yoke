@@ -22,6 +22,7 @@ func NewCommandsCmd(opts ...Option) *cobra.Command {
 		newCommandsList(opts),
 		newCommandsShow(opts),
 		newSchema(KindCommand),
+		NewRetireCmd(KindCommand, opts...), NewUnretireCmd(KindCommand, opts...),
 		newCommandsAdd(opts),
 		newCommandsSet(opts),
 		newRm(KindCommand, opts, (*Catalog).RemoveCommand),
@@ -79,6 +80,7 @@ There is no embedded ring: bashy ships the mechanism, never a catalog. sync
 from an org catalog is not available yet.`
 
 type commandRow struct {
+	RecordLifecycle
 	Name     string   `json:"name"`
 	Mode     string   `json:"mode"`
 	Effects  []string `json:"effects"`
@@ -90,7 +92,7 @@ type commandRow struct {
 }
 
 func newCommandsList(opts []Option) *cobra.Command {
-	var asJSON, all bool
+	var asJSON, all, retired bool
 	c := &cobra.Command{
 		Use:           "list",
 		Short:         "List registered commands",
@@ -104,11 +106,14 @@ func newCommandsList(opts []Option) *cobra.Command {
 			shadows := cat.CommandShadows()
 			rows := make([]commandRow, 0, len(cmds))
 			for _, r := range cmds {
-				if r.Hidden && !all {
+				if !MatchRetirement(r, retired) {
+					continue
+				}
+				if r.Hidden && !all && !retired {
 					continue
 				}
 				rows = append(rows, commandRow{
-					Name: r.Name, Mode: r.Mode(), Effects: r.Effects, Aliases: r.Aliases,
+					RecordLifecycle: r.RecordLifecycle, Name: r.Name, Mode: r.Mode(), Effects: r.Effects, Aliases: r.Aliases,
 					Ring: r.Ring.String(), Hidden: r.Hidden, Shadowed: shadows[r.Name], Synopsis: r.Synopsis,
 				})
 			}
@@ -129,6 +134,7 @@ func newCommandsList(opts []Option) *cobra.Command {
 		},
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
+	c.Flags().BoolVar(&retired, "retired", false, "show only retired entries")
 	c.Flags().BoolVar(&all, "all", false, "include hidden entries")
 	return c
 }

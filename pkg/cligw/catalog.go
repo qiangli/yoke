@@ -229,7 +229,7 @@ func (c *FleetCatalog) deriveInventory() []Agent {
 	for _, raw := range rows {
 		// Match the default `bashy agent list`: task-local clones are not roster
 		// entries, while every persistent agent is eligible regardless of kind.
-		if raw.Ephemeral {
+		if raw.Ephemeral || raw.IsRetired() || raw.Unavailable != "" {
 			continue
 		}
 		a, tool, model, err := c.fleet.Binding(raw.Name)

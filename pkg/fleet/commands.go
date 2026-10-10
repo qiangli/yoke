@@ -38,10 +38,11 @@ import (
 
 // Command is one registered command record: `name:` + `kind: command`.
 type Command struct {
-	Name     string `yaml:"name" json:"name" doc:"canonical command name (a bare identifier)"`
-	Kind     string `yaml:"kind" json:"kind" doc:"always command"`
-	Synopsis string `yaml:"synopsis,omitempty" json:"synopsis,omitempty" doc:"one line for bashy commands"`
-	Long     string `yaml:"long,omitempty" json:"long,omitempty" doc:"help body for bashy commands NAME"`
+	RecordLifecycle `yaml:",inline" schema:"-"`
+	Name            string `yaml:"name" json:"name" doc:"canonical command name (a bare identifier)"`
+	Kind            string `yaml:"kind" json:"kind" doc:"always command"`
+	Synopsis        string `yaml:"synopsis,omitempty" json:"synopsis,omitempty" doc:"one line for bashy commands"`
+	Long            string `yaml:"long,omitempty" json:"long,omitempty" doc:"help body for bashy commands NAME"`
 
 	// Exactly one of exec / download / script.
 	Exec     []string         `yaml:"exec,omitempty" json:"exec,omitempty" doc:"argv template: an absolute path or PATH name plus fixed args; user args are appended, or spliced at a single {args} element"`

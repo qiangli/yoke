@@ -57,6 +57,9 @@ func discoverRegistered(taken map[string]bool) ([]Panel, []error) {
 	apps, errs := fleet.New().Apps()
 	var out []Panel
 	for _, a := range apps {
+		if a.IsRetired() {
+			continue
+		}
 		m := appMeta(a)
 		if err := m.Validate(taken); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", a.Name, err))

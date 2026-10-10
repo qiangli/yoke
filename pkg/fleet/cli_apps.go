@@ -13,6 +13,7 @@ func NewAppCmds(opts ...Option) []*cobra.Command {
 	return []*cobra.Command{
 		newAppsShow(opts),
 		newSchema(KindApp),
+		NewRetireCmd(KindApp, opts...), NewUnretireCmd(KindApp, opts...),
 		newAppsAdd(opts),
 		newAppsSet(opts),
 		newRm(KindApp, opts, (*Catalog).RemoveApp),

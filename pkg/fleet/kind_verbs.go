@@ -135,6 +135,12 @@ type typedRecord[T any] struct {
 	AddCheck func(T) error
 	// Saved echoes a completed write; set is false for add.
 	Saved func(cmd *cobra.Command, c *Catalog, rec T, set bool) error
+	// BeforeAdd vets a record `add` is about to save, with the command (for
+	// flags AddFlags binds) and the catalog (for cross-entry rules such as
+	// binding to retired entries); nil: no extra rule.
+	BeforeAdd func(cmd *cobra.Command, c *Catalog, rec T) error
+	// AddFlags binds the extra flags BeforeAdd reads onto `add`.
+	AddFlags func(*cobra.Command)
 }
 
 // recordSpec is typedRecord with T erased; every rec is a *T.
@@ -152,6 +158,8 @@ type recordSpec struct {
 	blank     func(string) any
 	addCheck  func(any) error
 	saved     func(*cobra.Command, *Catalog, any, bool) error
+	beforeAdd func(*cobra.Command, *Catalog, any) error
+	addFlags  func(*cobra.Command)
 	summary   func(*cobra.Command, *Catalog, any) error
 	yamlBlob  func(any) any
 	showShort string
@@ -207,6 +215,10 @@ func newRecordSpec[T any](t typedRecord[T]) *recordSpec {
 	if t.AddCheck != nil {
 		r.addCheck = func(rec any) error { return t.AddCheck(*rec.(*T)) }
 	}
+	if t.BeforeAdd != nil {
+		r.beforeAdd = func(cmd *cobra.Command, c *Catalog, rec any) error { return t.BeforeAdd(cmd, c, *rec.(*T)) }
+	}
+	r.addFlags = t.AddFlags
 	if t.Saved != nil {
 		r.saved = func(cmd *cobra.Command, c *Catalog, rec any, set bool) error {
 			return t.Saved(cmd, c, *rec.(*T), set)
@@ -394,6 +406,11 @@ func newAdd(kind string, opts []Option) *cobra.Command {
 			if err := claimRecord(cat, kind, r, rec, force); err != nil {
 				return err
 			}
+			if r.beforeAdd != nil {
+				if err := r.beforeAdd(cmd, cat, rec); err != nil {
+					return err
+				}
+			}
 			if err := r.save(cat, rec); err != nil {
 				return err
 			}
@@ -406,6 +423,9 @@ func newAdd(kind string, opts []Option) *cobra.Command {
 		return nil
 	}
 	c.Flags().BoolVar(&force, "force", false, "take a name that already belongs to another entry")
+	if r.addFlags != nil {
+		r.addFlags(c)
+	}
 	if r.nameFlag != "" {
 		c.Flags().StringVar(&name, "name", "", r.nameFlag)
 	}

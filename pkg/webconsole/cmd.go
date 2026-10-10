@@ -141,13 +141,16 @@ func newServeCmd() *cobra.Command {
 
 func newListCmd() *cobra.Command {
 	var apps, appAuth []string
-	var asJSON bool
+	var asJSON, retired bool
 	cmd := &cobra.Command{
 		Use:           "list",
 		Short:         "list the apps and whether each one is up",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(c *cobra.Command, _ []string) error {
+			if retired {
+				return listRetiredApps(c.OutOrStdout(), asJSON)
+			}
 			auth, err := ParseAppAuth(appAuth)
 			if err != nil {
 				return err
@@ -183,6 +186,7 @@ func newListCmd() *cobra.Command {
 			return w.Flush()
 		},
 	}
+	cmd.Flags().BoolVar(&retired, "retired", false, "show only retired registered apps")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the /api/apps projection as JSON")
 	cmd.Flags().StringArrayVar(&apps, "app", nil,
 		"publish a third-party program as a tile: <bin> or <bin>@<port>, repeatable")

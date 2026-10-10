@@ -39,6 +39,9 @@ func walkSchema(t reflect.Type, prefix string, out *[]schemaField) {
 	}
 	for i := 0; i < t.NumField(); i++ {
 		f := t.Field(i)
+		if f.Tag.Get("schema") == "-" {
+			continue
+		}
 		name := yamlName(f)
 		if name == "" || name == "-" {
 			continue

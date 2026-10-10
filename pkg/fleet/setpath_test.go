@@ -153,7 +153,7 @@ func TestShowFieldScalarAndSubtree(t *testing.T) {
 	}
 }
 
-func TestSchemaCoversEverySerializedField(t *testing.T) {
+func TestSchemaCoversEveryEditableSerializedField(t *testing.T) {
 	isolatedFleetRoot(t)
 	for _, noun := range []string{KindTool, KindModel, KindAgent} {
 		fields := schemaFields(noun)
@@ -176,6 +176,10 @@ func assertSchemaFields(t *testing.T, typ reflect.Type, prefix string, seen map[
 	}
 	for i := 0; i < typ.NumField(); i++ {
 		field := typ.Field(i)
+		// Lifecycle is managed by retire/unretire, not generic record edits.
+		if field.Tag.Get("schema") == "-" {
+			continue
+		}
 		name := yamlName(field)
 		if name == "-" || name == "" {
 			continue

@@ -30,14 +30,14 @@ func NewPeopleCmd(opts ...fleet.Option) *cobra.Command {
 	list := newPeopleList(opts)
 	root.RunE = list.RunE
 	root.Flags().AddFlagSet(list.Flags())
-	root.AddCommand(list, newPeopleShow(opts), newPeopleAdd(opts), newPeopleSet(opts),
+	root.AddCommand(fleet.NewRetireCmd(fleet.KindPerson, opts...), fleet.NewUnretireCmd(fleet.KindPerson, opts...), list, newPeopleShow(opts), newPeopleAdd(opts), newPeopleSet(opts),
 		fleet.NewEditCmd(fleet.KindPerson, opts, func(c *fleet.Catalog, n string) (string, error) { return c.MaterializePerson(n) }),
 		newPeopleRm(opts), fleet.NewSchemaCmd(fleet.KindPerson))
 	return root
 }
 
 func newPeopleList(opts []fleet.Option) *cobra.Command {
-	var asJSON bool
+	var asJSON, retired bool
 	c := &cobra.Command{
 		Use:           "list",
 		Short:         "List human principals",
@@ -46,6 +46,13 @@ func newPeopleList(opts []fleet.Option) *cobra.Command {
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			people, _ := fleet.New(opts...).People()
+			filtered := people[:0]
+			for _, p := range people {
+				if fleet.MatchRetirement(p, retired) {
+					filtered = append(filtered, p)
+				}
+			}
+			people = filtered
 			if asJSON {
 				return writeJSON(cmd.OutOrStdout(), people)
 			}
@@ -62,6 +69,7 @@ func newPeopleList(opts []fleet.Option) *cobra.Command {
 			return tw.Flush()
 		},
 	}
+	c.Flags().BoolVar(&retired, "retired", false, "show only retired entries")
 	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
 	return c
 }
@@ -203,7 +211,9 @@ func newPeopleRm(opts []fleet.Option) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := fleet.New(opts...).RemovePerson(args[0]); err != nil {
+			cat := fleet.New(opts...)
+			cat.WarnUnretired(cmd.ErrOrStderr(), fleet.KindPerson, args[0])
+			if err := cat.RemovePerson(args[0]); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "removed person %s\n", args[0])

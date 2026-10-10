@@ -20,8 +20,10 @@ import (
 // Options controls launch rendering for callers that need to layer local
 // policy such as read-only review or a codex sandbox override.
 type Options struct {
-	Sandbox  string
-	ReadOnly bool
+	// AllowRetired explicitly permits historical bindings for new launches.
+	AllowRetired bool
+	Sandbox      string
+	ReadOnly     bool
 	// WritableRoots adds explicitly granted paths only to workspace-write Codex launches.
 	WritableRoots []string
 	// Workspace is the orchestrator-allocated project directory. Tools opt in to
@@ -269,6 +271,11 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 	var toolName, modelName string
 	namedAgent := false
 	if a, ok := cat.Agent(name); ok {
+		if !opt.AllowRetired {
+			if err := a.CheckRetired(fleet.KindAgent, a.Name); err != nil {
+				return lnch, err
+			}
+		}
 		toolName, modelName, lnch.Nick = a.Tool, a.Model, a.Name
 		lnch.Effort = a.Effort
 		namedAgent = true
@@ -282,6 +289,11 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 	lnch.Tool, lnch.ToolName = toolName, toolName
 
 	tool, known := cat.Tool(toolName)
+	if !opt.AllowRetired {
+		if err := tool.CheckRetired(fleet.KindTool, tool.Name); err != nil {
+			return lnch, err
+		}
+	}
 
 	// The model id is resolved AFTER the tool is known, because the id a model
 	// answers to is a property of the TOOL: litellm wants `deepseek/deepseek-v4-pro`,
@@ -294,6 +306,11 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 	if modelName != "" {
 		lnch.Model, lnch.ModelName = modelName, modelName
 		if m, ok := cat.Model(modelName); ok {
+			if !opt.AllowRetired {
+				if err := m.CheckRetired(fleet.KindModel, m.Name); err != nil {
+					return lnch, err
+				}
+			}
 			boundBaseURL, boundContext = m.BaseURL, m.ContextLength
 			lnch.Model, lnch.ModelName = m.TargetFor(toolName), m.Name
 			// genie -m accepts a registry key, then resolves provider IDs itself.

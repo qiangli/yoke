@@ -131,10 +131,11 @@ func BindGOCache(s, cache string) string {
 // that was settled spell them `kit:` and `type:`; both are accepted on
 // parse and neither is emitted. See parse.go.
 type Tool struct {
-	Name    string   `yaml:"name" json:"name" doc:"canonical registry name"`
-	Kind    string   `yaml:"kind" json:"kind" doc:"tool kind: cli, func, web, or system"` // cli | func | web | system
-	Aliases []string `yaml:"aliases,omitempty" json:"aliases,omitempty" doc:"alternate accepted names"`
-	Display string   `yaml:"display,omitempty" json:"display,omitempty" doc:"human-facing label"`
+	RecordLifecycle `yaml:",inline" schema:"-"`
+	Name            string   `yaml:"name" json:"name" doc:"canonical registry name"`
+	Kind            string   `yaml:"kind" json:"kind" doc:"tool kind: cli, func, web, or system"` // cli | func | web | system
+	Aliases         []string `yaml:"aliases,omitempty" json:"aliases,omitempty" doc:"alternate accepted names"`
+	Display         string   `yaml:"display,omitempty" json:"display,omitempty" doc:"human-facing label"`
 	// Hidden keeps a tool in the registry (still detected, still resolvable by
 	// explicit name) but omits it from `bashy tool` list/help unless --all.
 	Hidden bool    `yaml:"hidden,omitempty" json:"hidden,omitempty" doc:"omit the tool from default listings"`
@@ -809,9 +810,10 @@ func (t Tool) ForkArgvPrefixWithWorkspace(workspace, modelID, session string) ([
 
 // Model is an inference backend.
 type Model struct {
-	Name    string   `yaml:"name" json:"name" doc:"canonical model name"` // the alias clients pass
-	Aliases []string `yaml:"aliases,omitempty" json:"aliases,omitempty" doc:"alternate accepted names"`
-	Display string   `yaml:"display,omitempty" json:"display,omitempty" doc:"human-facing label"`
+	RecordLifecycle `yaml:",inline" schema:"-"`
+	Name            string   `yaml:"name" json:"name" doc:"canonical model name"` // the alias clients pass
+	Aliases         []string `yaml:"aliases,omitempty" json:"aliases,omitempty" doc:"alternate accepted names"`
+	Display         string   `yaml:"display,omitempty" json:"display,omitempty" doc:"human-facing label"`
 	// Kind is HOW YOU AUTHENTICATE: subscription | api | local.
 	Kind string `yaml:"kind,omitempty" json:"kind,omitempty" doc:"authentication mode"`
 
@@ -966,10 +968,11 @@ type AgentFile struct {
 
 // Agent is a tool bound to a model, under a nickname.
 type Agent struct {
-	Name        string   `yaml:"name" json:"name" doc:"canonical agent name"` // the primary nickname
-	Aliases     []string `yaml:"aliases,omitempty" json:"aliases,omitempty" doc:"alternate accepted names"`
-	Display     string   `yaml:"display,omitempty" json:"display,omitempty" doc:"human-facing label"`
-	Description string   `yaml:"description,omitempty" json:"description,omitempty" doc:"purpose of the agent"`
+	RecordLifecycle `yaml:",inline" schema:"-"`
+	Name            string   `yaml:"name" json:"name" doc:"canonical agent name"` // the primary nickname
+	Aliases         []string `yaml:"aliases,omitempty" json:"aliases,omitempty" doc:"alternate accepted names"`
+	Display         string   `yaml:"display,omitempty" json:"display,omitempty" doc:"human-facing label"`
+	Description     string   `yaml:"description,omitempty" json:"description,omitempty" doc:"purpose of the agent"`
 
 	// Nick is the agent's human name — the one you say out loud. Leave it
 	// empty and the catalog assigns one deterministically from the binding,
@@ -1045,8 +1048,10 @@ type Agent struct {
 	// assigned human name (when Nick is empty) and the floating family
 	// alias (`claude-opus` for a binding on `opus5`). Both are functions
 	// of the whole catalog, so neither is ever persisted.
-	AutoNick string   `yaml:"-" json:"auto_nick,omitempty"`
-	Derived  []string `yaml:"-" json:"derived,omitempty"`
+	// Unavailable is derived from retired dependencies; it never retires this identity.
+	Unavailable string   `yaml:"-" json:"unavailable,omitempty"`
+	AutoNick    string   `yaml:"-" json:"auto_nick,omitempty"`
+	Derived     []string `yaml:"-" json:"derived,omitempty"`
 
 	Ring assetring.Ring `yaml:"-" json:"ring"`
 }
@@ -1080,10 +1085,11 @@ func (a Agent) MatrixKey() string { return a.Tool + ":" + a.Model }
 // Person is a human principal. Standalone-first: a local entry needs no
 // account. When the host is paired, Email is the authoritative identity.
 type Person struct {
-	Handle  string   `yaml:"handle" json:"handle"`
-	Aliases []string `yaml:"aliases,omitempty" json:"aliases,omitempty"`
-	Display string   `yaml:"display,omitempty" json:"display,omitempty"`
-	Email   string   `yaml:"email,omitempty" json:"email,omitempty"`
+	RecordLifecycle `yaml:",inline" schema:"-"`
+	Handle          string   `yaml:"handle" json:"handle"`
+	Aliases         []string `yaml:"aliases,omitempty" json:"aliases,omitempty"`
+	Display         string   `yaml:"display,omitempty" json:"display,omitempty"`
+	Email           string   `yaml:"email,omitempty" json:"email,omitempty"`
 
 	// OSUsers maps a host name to this person's account name there. It is
 	// deliberately per-host: assuming the local $USER exists on a remote

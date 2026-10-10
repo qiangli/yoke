@@ -68,14 +68,15 @@ const (
 // (~/.config/bashy/plans/<name>.yaml) or a shared dir on $BASHY_PLANS_PATH
 // replaces one when the seat changes. Go never branches on a plan name.
 type Plan struct {
-	Name       string   `yaml:"name" json:"name" doc:"plan id models reference with plan:"`
-	Display    string   `yaml:"display,omitempty" json:"display,omitempty" doc:"human-facing label"`
-	Vendor     string   `yaml:"vendor,omitempty" json:"vendor,omitempty" doc:"company selling the seat"`
-	VendorPlan string   `yaml:"vendor_plan,omitempty" json:"vendor_plan,omitempty" doc:"the vendor's own name for the plan"`
-	Tier       string   `yaml:"tier,omitempty" json:"tier,omitempty" doc:"normalized position on the vendor's ladder: free, entry, pro, or max"`
-	AsOf       string   `yaml:"as_of,omitempty" json:"as_of,omitempty" doc:"date (YYYY-MM-DD) the record was checked against its sources"`
-	Sources    []string `yaml:"sources,omitempty" json:"sources,omitempty" doc:"vendor pages the record was checked against"`
-	Notes      string   `yaml:"notes,omitempty" json:"notes,omitempty" doc:"what the sources say and do not say"`
+	RecordLifecycle `yaml:",inline" schema:"-"`
+	Name            string   `yaml:"name" json:"name" doc:"plan id models reference with plan:"`
+	Display         string   `yaml:"display,omitempty" json:"display,omitempty" doc:"human-facing label"`
+	Vendor          string   `yaml:"vendor,omitempty" json:"vendor,omitempty" doc:"company selling the seat"`
+	VendorPlan      string   `yaml:"vendor_plan,omitempty" json:"vendor_plan,omitempty" doc:"the vendor's own name for the plan"`
+	Tier            string   `yaml:"tier,omitempty" json:"tier,omitempty" doc:"normalized position on the vendor's ladder: free, entry, pro, or max"`
+	AsOf            string   `yaml:"as_of,omitempty" json:"as_of,omitempty" doc:"date (YYYY-MM-DD) the record was checked against its sources"`
+	Sources         []string `yaml:"sources,omitempty" json:"sources,omitempty" doc:"vendor pages the record was checked against"`
+	Notes           string   `yaml:"notes,omitempty" json:"notes,omitempty" doc:"what the sources say and do not say"`
 
 	// Limits holds only KNOWN limits. An absent limit is unknown, and unknown
 	// is fail-open: no consumer may invent a number for it.

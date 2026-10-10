@@ -19,9 +19,10 @@ import (
 //
 // Resolution merges these entries with live discovery; see pkg/principal.
 type Host struct {
-	Name    string   `yaml:"name" json:"name"`
-	Aliases []string `yaml:"aliases,omitempty" json:"aliases,omitempty"`
-	Display string   `yaml:"display,omitempty" json:"display,omitempty"`
+	RecordLifecycle `yaml:",inline" schema:"-"`
+	Name            string   `yaml:"name" json:"name"`
+	Aliases         []string `yaml:"aliases,omitempty" json:"aliases,omitempty"`
+	Display         string   `yaml:"display,omitempty" json:"display,omitempty"`
 
 	// Address is where the machine actually answers — a DNS name or an
 	// address literal. Empty means "resolve the name itself".

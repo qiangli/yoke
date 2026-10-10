@@ -13,10 +13,12 @@ import (
 // before an override was applied.
 type listFilter struct {
 	all, custom bool
+	retired     bool
 	ring        string
 }
 
 func (f *listFilter) flags(cmd *cobra.Command) {
+	cmd.Flags().BoolVar(&f.retired, "retired", false, "show only retired entries")
 	cmd.Flags().BoolVar(&f.custom, "custom", false, "show only local custom definitions")
 	cmd.Flags().BoolVar(&f.all, "all", false, "show every ring, including otherwise hidden entries")
 	cmd.Flags().StringVar(&f.ring, "ring", "", "show exactly one ring: all, embedded, shared, cloud, or local")
@@ -24,6 +26,9 @@ func (f *listFilter) flags(cmd *cobra.Command) {
 
 func (f listFilter) selected() (string, error) {
 	n := 0
+	if f.retired {
+		n++
+	}
 	if f.all {
 		n++
 	}
@@ -35,6 +40,9 @@ func (f listFilter) selected() (string, error) {
 	}
 	if n > 1 {
 		return "", fmt.Errorf("fleet: --all, --custom, and --ring are alternatives; give one")
+	}
+	if f.retired {
+		return "all", nil
 	}
 	if f.all {
 		return "all", nil

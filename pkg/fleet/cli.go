@@ -26,6 +26,7 @@ func NewToolsCmd(opts ...Option) *cobra.Command {
 		newToolsList(opts),
 		newShow(KindTool, opts),
 		newSchema(KindTool),
+		NewRetireCmd(KindTool, opts...), NewUnretireCmd(KindTool, opts...),
 		newAdd(KindTool, opts),
 		newSet(KindTool, opts),
 		newMigrateOverride(dirTools, opts),
@@ -44,6 +45,7 @@ func NewModelsCmd(opts ...Option) *cobra.Command {
 		newModelsList(opts),
 		newShow(KindModel, opts),
 		newSchema(KindModel),
+		NewRetireCmd(KindModel, opts...), NewUnretireCmd(KindModel, opts...),
 		newAdd(KindModel, opts),
 		newSet(KindModel, opts),
 		newMigrateOverride(dirModels, opts),
@@ -62,6 +64,7 @@ func NewAgentsCmd(opts ...Option) *cobra.Command {
 		newAgentsList(opts),
 		newShow(KindAgent, opts),
 		newSchema(KindAgent),
+		NewRetireCmd(KindAgent, opts...), NewUnretireCmd(KindAgent, opts...),
 		newAdd(KindAgent, opts),
 		newAgentsClone(opts),
 		newSet(KindAgent, opts),
@@ -114,6 +117,7 @@ an older full file remains a complete replacement until migrated.`
 // --- tools --------------------------------------------------------------
 
 type toolRow struct {
+	RecordLifecycle
 	Name    string   `json:"name"`
 	Kind    string   `json:"kind"`
 	Aliases []string `json:"aliases,omitempty"`
@@ -155,6 +159,9 @@ func newToolsList(opts []Option) *cobra.Command {
 			rows := make([]toolRow, 0, len(tools))
 			hidden := 0
 			for _, t := range tools {
+				if !MatchRetirement(t, filter.retired) {
+					continue
+				}
 				if !filter.match(t.Ring, selected) {
 					if selected == "" && t.Ring == assetring.RingLocal {
 						hidden++
@@ -168,7 +175,8 @@ func newToolsList(opts []Option) *cobra.Command {
 					continue // kept in the registry (detected/resolvable), just not listed
 				}
 				rows = append(rows, toolRow{
-					Name: t.Name, Kind: t.Kind, Aliases: t.Aliases,
+					RecordLifecycle: t.RecordLifecycle,
+					Name:            t.Name, Kind: t.Kind, Aliases: t.Aliases,
 					Binary: t.Binary(), Model: t.TakesModel(), Ring: t.Ring.String(),
 				})
 			}
@@ -276,6 +284,7 @@ func effectiveBandSource(band int, source string) string {
 }
 
 type modelRow struct {
+	RecordLifecycle
 	Name       string   `json:"name"`
 	Band       int      `json:"band,omitempty"`
 	BandSource string   `json:"band_source,omitempty"`
@@ -331,6 +340,9 @@ func newModelsList(opts []Option) *cobra.Command {
 			rows := make([]modelRow, 0, len(models))
 			hidden := 0
 			for _, m := range models {
+				if !MatchRetirement(m, filter.retired) {
+					continue
+				}
 				if !filter.match(m.Ring, selected) {
 					if selected == "" && m.Ring == assetring.RingLocal {
 						hidden++
@@ -344,7 +356,7 @@ func newModelsList(opts []Option) *cobra.Command {
 					continue
 				}
 				rows = append(rows, modelRow{
-					Name: m.Name, Band: m.Band, BandSource: effectiveBandSource(m.Band, m.BandSource), Kind: m.Kind, Source: m.Source, Provider: m.Provider,
+					RecordLifecycle: m.RecordLifecycle, Name: m.Name, Band: m.Band, BandSource: effectiveBandSource(m.Band, m.BandSource), Kind: m.Kind, Source: m.Source, Provider: m.Provider,
 					Target: m.Target(), Aliases: m.Names()[1:], Ring: m.Ring.String(),
 				})
 			}
@@ -375,6 +387,7 @@ func newModelsList(opts []Option) *cobra.Command {
 // --- agents -------------------------------------------------------------
 
 type agentRow struct {
+	RecordLifecycle
 	Name       string `json:"name"`
 	Nick       string `json:"nick,omitempty"`
 	Band       int    `json:"band,omitempty"`
@@ -392,6 +405,7 @@ type agentRow struct {
 	Aliases     []string `json:"aliases,omitempty"`
 	Resolves    bool     `json:"resolves"`
 	Reason      string   `json:"reason,omitempty"`
+	Unavailable string   `json:"unavailable,omitempty"`
 	Ring        string   `json:"ring"`
 	// DerivedBand is the band the ladder's gates award (0 = unplaced), and
 	// MissingGates the gates failing up to the next band or the seed's band.
@@ -471,6 +485,9 @@ func newAgentsList(opts []Option) *cobra.Command {
 			rows := make([]agentRow, 0, len(agents))
 			hidden := 0
 			for i, a := range agents {
+				if !MatchRetirement(a, filter.retired) {
+					continue
+				}
 				if !filter.match(a.Ring, selected) {
 					if selected == "" && a.Ring == assetring.RingLocal {
 						hidden++
@@ -478,7 +495,7 @@ func newAgentsList(opts []Option) *cobra.Command {
 					continue
 				}
 				r := agentRow{
-					Name: a.Name, Nick: a.NickName(), Tool: a.Tool, Model: a.Model,
+					RecordLifecycle: a.RecordLifecycle, Name: a.Name, Nick: a.NickName(), Tool: a.Tool, Model: a.Model,
 					Binding: a.MatrixKey(), Aliases: a.Aliases, Resolves: true,
 					Ring: a.Ring.String(),
 				}
@@ -489,6 +506,9 @@ func newAgentsList(opts []Option) *cobra.Command {
 					r.Resolves, r.Reason = false, err.Error()
 				} else {
 					r.Kind, r.Billing, r.Provider = m.Kind, m.BillingMode(), m.Provider
+				}
+				if a.Unavailable != "" {
+					r.Reason, r.Unavailable = a.Unavailable, a.Unavailable
 				}
 				st := standings[i]
 				r.Band, r.BandSource = st.Band, st.Source
@@ -536,7 +556,7 @@ func newAgentsList(opts []Option) *cobra.Command {
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 					r.Name, dashIfEmpty(r.Nick), BandLabelWithSource(r.Band, r.BandSource),
 					BandLabel(r.DerivedBand), dashIfEmpty(strings.Join(r.MissingGates, ",")), r.Tool, r.Model,
-					dashIfEmpty(r.Billing), dashIfEmpty(r.Reliability), yesNo(r.Resolves), r.Ring)
+					dashIfEmpty(r.Billing), dashIfEmpty(r.Reliability), agentResolution(r), r.Ring)
 			}
 			tw.Flush()
 			hiddenCustomHint(cmd, hidden, selected)
@@ -567,6 +587,12 @@ func dashIfEmpty(s string) string {
 func showAgentSummary(cmd *cobra.Command, cat *Catalog, a Agent) error {
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "%s  (%s)\n", a.Name, a.MatrixKey())
+	if err := a.CheckRetired(KindAgent, a.Name); err != nil {
+		fmt.Fprintln(out, err)
+	}
+	if a.Unavailable != "" {
+		fmt.Fprintln(out, a.Unavailable)
+	}
 	if len(a.Aliases) > 0 {
 		fmt.Fprintf(out, "aliases: %s\n", strings.Join(a.Aliases, " "))
 	}

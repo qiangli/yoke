@@ -155,7 +155,13 @@ func agentRecord() *recordSpec {
 			file, err := ParseAgentFile(fallback, body, nil)
 			return file.Agents, err
 		},
-		Save:      (*Catalog).SaveAgent,
+		Save: (*Catalog).SaveAgent,
+		// A new binding to a retired tool or model is refused unless asked
+		// for explicitly (plan section I).
+		BeforeAdd: checkNewAgentRetirement,
+		AddFlags: func(c *cobra.Command) {
+			c.Flags().Bool("allow-retired", false, "allow a binding to retired entries")
+		},
 		ShowShort: "Print an agent's binding",
 		ShowLong: "Print an agent's binding. <name> may be a nickname, an alias, or a bare tool:model.\n\n" +
 			"The summary includes the agent's place on the band ladder: the effective band,\n" +

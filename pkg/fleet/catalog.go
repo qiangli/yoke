@@ -339,6 +339,26 @@ func (c *Catalog) agentEntries() ([]Agent, []error) {
 	// `models list`, and here they already show up as a dangling binding.
 	models, _ := c.Models()
 	decorateAgents(out, models)
+	tools, _ := c.Tools(true)
+	dependencies := map[string]RecordLifecycle{}
+	for _, t := range tools {
+		for _, n := range t.Names() {
+			dependencies[KindTool+":"+n] = t.RecordLifecycle
+		}
+	}
+	for _, m := range models {
+		for _, n := range m.Names() {
+			dependencies[KindModel+":"+n] = m.RecordLifecycle
+		}
+	}
+	for i := range out {
+		for _, dep := range []struct{ kind, name string }{{KindTool, out[i].Tool}, {KindModel, out[i].Model}} {
+			if err := dependencies[dep.kind+":"+dep.name].CheckRetired(dep.kind, dep.name); err != nil {
+				out[i].Unavailable = "unavailable: dependency retired: " + err.Error()
+				break
+			}
+		}
+	}
 	return out, errs
 }
 

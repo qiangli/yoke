@@ -125,6 +125,7 @@ func newRm(noun string, opts []Option, remove func(*Catalog, string) error) *cob
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cat := New(opts...)
+			cat.WarnUnretired(cmd.ErrOrStderr(), noun, args[0])
 			if err := remove(cat, args[0]); err != nil {
 				return err
 			}
