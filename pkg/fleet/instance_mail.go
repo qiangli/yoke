@@ -186,7 +186,7 @@ func readLines(path string) ([]string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, checkMissingDir(filepath.Dir(path))
 		}
 		return nil, err
 	}

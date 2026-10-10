@@ -180,10 +180,16 @@ func redactHome(s string) string {
 	if err != nil {
 		return s
 	}
-	if home = strings.TrimRight(home, string(os.PathSeparator)); len(home) < 2 {
-		return s
+	// Paths reach the minutes through filepath.Join, which cleans them, so the
+	// cleaned home is the form that must match; a HOME/USERPROFILE set with
+	// mixed or doubled separators (e.g. "/tmp\x" on Windows) would otherwise
+	// leak verbatim. The raw form is redacted too, for text echoed unjoined.
+	for _, h := range []string{home, filepath.Clean(home)} {
+		if h = strings.TrimRight(h, string(os.PathSeparator)); len(h) >= 2 {
+			s = strings.ReplaceAll(s, h, "~")
+		}
 	}
-	return strings.ReplaceAll(s, home, "~")
+	return s
 }
 
 // writeTurnFile persists an event's full text under the session's turns/ dir and

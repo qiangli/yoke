@@ -391,6 +391,11 @@ func (s *InstanceStore) Get(id string) (Instance, error) {
 	b, err := os.ReadFile(s.path(canonical))
 	if err != nil {
 		if os.IsNotExist(err) {
+			// "Not found" is only an unknown id when the store itself is sound:
+			// Windows reports a lookup beneath a regular file as not-found too.
+			if derr := checkMissingDir(s.dir); derr != nil {
+				return Instance{}, derr
+			}
 			return Instance{}, fmt.Errorf("%w: %s", ErrInstanceUnknown, canonical)
 		}
 		return Instance{}, err
@@ -517,6 +522,12 @@ func (s *InstanceStore) SetHandle(id, handle string) (Instance, error) {
 
 // List returns every record, retired included, oldest first.
 func (s *InstanceStore) List() ([]Instance, error) {
+	// Checked up front, not only on a ReadDir error: on Windows, reading a
+	// regular file as a directory is not a reliable error, and a store that
+	// silently lists as empty turns a broken path into "no instances".
+	if err := checkMissingDir(s.dir); err != nil {
+		return nil, err
+	}
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -783,6 +794,37 @@ func (s *InstanceStore) withLock(intent string, fn func() error) error {
 	}
 	defer lock.Release()
 	return fn()
+}
+
+// checkMissingDir returns nil when dir is a directory or is genuinely absent
+// (it, or some ancestor, does not exist beneath an existing directory), and an
+// error when the path is broken: dir — or the nearest existing ancestor — is a
+// regular file, or a stat fails for any reason other than not-exist
+// (permission, I/O). Callers use it before reading "not found" as "empty".
+//
+// The ancestor walk is the load-bearing half on Windows: there a lookup
+// beneath a regular file fails with ERROR_PATH_NOT_FOUND, which os.IsNotExist
+// accepts, where unix reports ENOTDIR. Without it a store path whose parent is
+// a file is indistinguishable from a fresh host.
+func checkMissingDir(dir string) error {
+	p := filepath.Clean(dir)
+	for {
+		fi, err := os.Stat(p)
+		if err == nil {
+			if !fi.IsDir() {
+				return fmt.Errorf("fleet: store path %s: %s is not a directory", dir, p)
+			}
+			return nil
+		}
+		if !os.IsNotExist(err) {
+			return err
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return nil
+		}
+		p = parent
+	}
 }
 
 func (s *InstanceStore) path(id string) string {
