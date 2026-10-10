@@ -117,3 +117,28 @@ func TestBudgetAlternativeRequiresExplicitPaidPermission(t *testing.T) {
 		t.Fatal("explicit allowed fallback failed", res, e)
 	}
 }
+
+// A work lifetime settles against the authority that admitted it. Finishing
+// must not consult the process-wide default, which a later caller may already
+// have swapped (an ACP session closing after its creator moved on).
+func TestBudgetFinishSettlesAgainstRetainedGate(t *testing.T) {
+	g := chatCapacityGate(t, 1)
+	work, e := reserveBudgetWork(context.Background(), Launch{ModelName: "opus5", Nick: "claude", ToolName: "claude"}, "prompt", "run", true, false)
+	if e != nil {
+		t.Fatal(e)
+	}
+	other := llmbudget.New(llmbudget.Config{StatePath: filepath.Join(t.TempDir(), "other.json")})
+	swapped := make(chan struct{})
+	go func() {
+		defer close(swapped)
+		llmbudget.SetDefault(other)()
+	}()
+	if e = work.finish("reply", nil); e != nil {
+		t.Fatal(e)
+	}
+	<-swapped
+	report, e := g.CollectReport(context.Background(), llmbudget.ReportOptions{Model: "opus5"})
+	if e != nil || report.Accounts[0].ActiveReservations != 0 {
+		t.Fatal("completed work not settled on its retained gate", report, e)
+	}
+}

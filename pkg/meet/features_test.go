@@ -19,6 +19,7 @@ type scriptRunner struct {
 }
 
 func (s scriptRunner) Run(_ context.Context, agent string, _ []string, _ string) (string, int, error) {
+	agent = runnerAgent(agent)
 	return s.replies[agent], s.codes[agent], s.errs[agent]
 }
 
@@ -630,7 +631,8 @@ func TestFailedSecretaryFilesUnknownNotNoDecision(t *testing.T) {
 }
 
 // A meeting whose secretary died is recoverable by naming another one, without
-// re-running the deliberation.
+// re-running the deliberation. The replacement is a live (non-retired) tool so
+// the recovery path is exercised, not the retirement refusal.
 func TestOverrideSecretaryRecoversSynthesis(t *testing.T) {
 	st := newTestSession(t)
 	repo := t.TempDir()
@@ -644,14 +646,14 @@ func TestOverrideSecretaryRecoversSynthesis(t *testing.T) {
 		"codex": "ship the tap first", "opencode": "agreed",
 	}})
 
-	if err := overrideSecretary(st, "gemini"); err != nil {
+	if err := overrideSecretary(st, "agy"); err != nil {
 		t.Fatalf("override: %v", err)
 	}
-	if st.Secretary != "gemini" {
+	if st.Secretary != "agy" {
 		t.Fatalf("secretary = %q", st.Secretary)
 	}
 	syn, err := converge(context.Background(), st, scriptRunner{
-		replies: map[string]string{"gemini": "DECISIONS:\n- ship the homebrew tap first\nSUMMARY:\nClear."},
+		replies: map[string]string{"agy": "DECISIONS:\n- ship the homebrew tap first\nSUMMARY:\nClear."},
 	})
 	if err != nil {
 		t.Fatalf("converge: %v", err)

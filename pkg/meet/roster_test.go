@@ -309,6 +309,7 @@ func launchForMeeting(t *testing.T, tool string, readOnly bool) (agentlaunch.Lau
 func TestMeetingAgentsLaunchWithoutWeakeningTheHost(t *testing.T) {
 	t.Setenv(chat.UnsafeLaunchEnv, "") // an ordinary host: the guard is armed
 	t.Setenv("BASHY_FLEET_DIR", t.TempDir())
+	unretiredFakeTool(t, "aider")
 
 	for _, tool := range []string{"claude", "codex", "aider", "opencode"} {
 		l, err := launchForMeeting(t, tool, true) // exactly what invokeAgent passes
@@ -323,6 +324,35 @@ func TestMeetingAgentsLaunchWithoutWeakeningTheHost(t *testing.T) {
 			}
 		}
 	}
+}
+
+// unretiredFakeTool overlays a hermetic copy of a retired baseline tool with its
+// retirement stripped, so the launch shape it declares stays under test while
+// production keeps it retired. Only the overlay is changed; the baseline is not.
+func unretiredFakeTool(t *testing.T, name string) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "fleet", "baseline", "tools", name+".yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []string
+	skipping := false
+	for _, line := range strings.Split(string(raw), "\n") {
+		if line == "retired:" {
+			skipping = true
+			continue
+		}
+		if skipping && strings.HasPrefix(line, "  ") {
+			continue
+		}
+		skipping = false
+		kept = append(kept, line)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, name+".yaml"), []byte(strings.Join(kept, "\n")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BASHY_TOOLS_DIR", dir)
 }
 
 // And the converse, so the guard itself cannot quietly rot: WITHOUT read-only,
