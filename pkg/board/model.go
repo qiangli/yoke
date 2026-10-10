@@ -11,6 +11,7 @@ import (
 
 	"github.com/qiangli/yoke/pkg/policy/coord"
 	"github.com/qiangli/yoke/pkg/resources"
+	"github.com/qiangli/yoke/pkg/weave"
 )
 
 const SchemaVersion = "bashy-board-v1"
@@ -231,6 +232,9 @@ type Sprint struct {
 	LeaseHolder   string   `json:"lease_holder,omitempty"`
 	ContinuityRef string   `json:"continuity_ref,omitempty"`
 	RunRefs       []RunRef `json:"run_refs,omitempty"`
+	// UpdatedAt is the card's last mutation; a card untouched since before a
+	// run was created cannot have linked it (legacy links carry no Born).
+	UpdatedAt time.Time `json:"updated_at,omitempty,omitzero"`
 	// StoryRoots are the repo todo stores this sprint's stories live in.
 	//
 	// A sprint is USER-GLOBAL and spans repos by definition; its stories are
@@ -251,22 +255,31 @@ type Sprint struct {
 type RunRef struct {
 	Repo string `json:"repo"`
 	ID   int64  `json:"id"`
+	// Queue and Born name WHICH run generation the link is for: ids are
+	// queue-local and recycled after a reset, so (repo, id) alone lets a
+	// closed sprint claim a new run. See weave.SprintForRun.
+	Queue string    `json:"queue,omitempty"`
+	Born  time.Time `json:"born,omitempty,omitzero"`
 }
 
 type Run struct {
-	ID              int64     `json:"id"`
-	Label           string    `json:"label"`
-	Repo            string    `json:"repo"`
-	State           string    `json:"state"`
-	Tool            string    `json:"tool,omitempty"`
-	Agent           string    `json:"agent,omitempty"`
-	Model           string    `json:"model,omitempty"`
-	Band            int       `json:"band,omitempty"`
-	StartedAt       time.Time `json:"started_at,omitempty,omitzero"`
-	MaxRuntime      int64     `json:"max_runtime_seconds,omitempty"`
-	FinishedAt      time.Time `json:"finished_at,omitempty,omitzero"`
-	Points          int       `json:"points,omitempty"`
-	SprintID        int64     `json:"sprint_id,omitempty"`
+	ID         int64     `json:"id"`
+	Label      string    `json:"label"`
+	Repo       string    `json:"repo"`
+	State      string    `json:"state"`
+	Tool       string    `json:"tool,omitempty"`
+	Agent      string    `json:"agent,omitempty"`
+	Model      string    `json:"model,omitempty"`
+	Band       int       `json:"band,omitempty"`
+	StartedAt  time.Time `json:"started_at,omitempty,omitzero"`
+	MaxRuntime int64     `json:"max_runtime_seconds,omitempty"`
+	FinishedAt time.Time `json:"finished_at,omitempty,omitzero"`
+	Points     int       `json:"points,omitempty"`
+	SprintID   int64     `json:"sprint_id,omitempty"`
+	// Queue (opaque queue tag) and Created identify this run's generation;
+	// sprint attribution matches them against the link, never (repo, id) alone.
+	Queue           string    `json:"queue,omitempty"`
+	Created         time.Time `json:"created,omitempty,omitzero"`
 	TodoID          string    `json:"todo_id,omitempty"`
 	Blocked         bool      `json:"blocked,omitempty"`
 	Salvageable     bool      `json:"salvageable,omitempty"`
@@ -382,10 +395,11 @@ func (b *Board) finalize(now time.Time) {
 		b.Sprints[i].StoryTotal = counts[0] + counts[1]
 	}
 
-	linked := map[string]int64{}
+	var links []weave.SprintRunLink
 	for _, sprint := range b.Sprints {
 		for _, ref := range sprint.RunRefs {
-			linked[ref.Repo+"\x00"+itoa(ref.ID)] = sprint.ID
+			links = append(links, weave.SprintRunLink{Sprint: sprint.ID, Done: sprint.Column == "done", UpdatedAt: sprint.UpdatedAt,
+				Repo: ref.Repo, ID: ref.ID, Queue: ref.Queue, Born: ref.Born})
 		}
 	}
 	loads := map[int]int{}
@@ -402,7 +416,7 @@ func (b *Board) finalize(now time.Time) {
 	for i := range b.Runs {
 		r := &b.Runs[i]
 		if r.SprintID == 0 {
-			r.SprintID = linked[r.Repo+"\x00"+itoa(r.ID)]
+			r.SprintID = weave.SprintForRun(links, r.Repo, r.ID, r.Queue, r.Created)
 		}
 		elapsed, eta := int64(0), int64(0)
 		if !r.StartedAt.IsZero() {

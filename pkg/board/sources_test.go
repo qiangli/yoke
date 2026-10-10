@@ -331,3 +331,23 @@ func TestTodoStoresNeverAskForAnOwnerFlag(t *testing.T) {
 		}
 	}
 }
+
+// A queue reset recycles run numbers: a closed sprint's link to the retired
+// yoke#37 must not file the new yoke#37 under that sprint, and the current
+// sprint's explicit link to the new generation wins.
+func TestRunSprintAttributionSurvivesReusedIDs(t *testing.T) {
+	old := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
+	b := &Board{
+		Sprints: []Sprint{{ID: 331, Column: "done", UpdatedAt: old, RunRefs: []RunRef{{Repo: "yoke", ID: 37, Queue: "yoke-q", Born: old}, {Repo: "yoke", ID: 39, Queue: "yoke-q", Born: old}}}},
+		Runs:    []Run{{ID: 37, Repo: "yoke", Queue: "yoke-q", Created: now, State: "doing"}, {ID: 39, Repo: "yoke", Queue: "yoke-q", Created: now, State: "doing"}},
+	}
+	b.Sprints = append(b.Sprints, Sprint{ID: 329, Column: "doing", UpdatedAt: now, RunRefs: []RunRef{{Repo: "yoke", ID: 39, Queue: "yoke-q", Born: now}}})
+	b.finalize(now)
+	if got := b.Runs[0].SprintID; got != 0 {
+		t.Errorf("new yoke#37 attributed to sprint #%d, want unlinked", got)
+	}
+	if got := b.Runs[1].SprintID; got != 329 {
+		t.Errorf("new yoke#39 attributed to sprint #%d, want 329", got)
+	}
+}

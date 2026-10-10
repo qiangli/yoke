@@ -128,8 +128,10 @@ func (weaveSource) Load(ctx context.Context, b *Board, o Options) error {
 	var result struct {
 		Queues []struct {
 			Root  string `json:"root"`
+			Dir   string `json:"dir"`
 			Items []struct {
 				ID              int64     `json:"id"`
+				Created         time.Time `json:"created"`
 				Title           string    `json:"title"`
 				State           string    `json:"state"`
 				Tool            string    `json:"tool"`
@@ -158,7 +160,10 @@ func (weaveSource) Load(ctx context.Context, b *Board, o Options) error {
 		for _, x := range q.Items {
 			// Owner is the conductor principal and may be stale; it is not the
 			// launched agent. Agent identity comes only from launch_spec.
-			r := Run{ID: x.ID, Label: x.Title, Repo: q.Root, State: x.State, Tool: x.Tool, Points: x.Points, StartedAt: x.StartedAt, FinishedAt: x.FinishedAt, Blocked: x.Blocked, Salvageable: x.Salvageable, UnmergedCommits: x.UnmergedCommits, AgeSeconds: x.AgeSeconds, Stale: x.Stale, Workspace: x.Workspace}
+			r := Run{ID: x.ID, Label: x.Title, Repo: q.Root, State: x.State, Tool: x.Tool, Points: x.Points, StartedAt: x.StartedAt, FinishedAt: x.FinishedAt, Blocked: x.Blocked, Salvageable: x.Salvageable, UnmergedCommits: x.UnmergedCommits, AgeSeconds: x.AgeSeconds, Stale: x.Stale, Workspace: x.Workspace, Created: x.Created}
+			if q.Dir != "" {
+				r.Queue = filepath.Base(q.Dir)
+			}
 			if x.Launch != nil {
 				if x.Launch.Agent != "" {
 					r.Agent = x.Launch.Agent
@@ -235,16 +240,17 @@ func (sprintSource) Load(_ context.Context, b *Board, o Options) error {
 	}
 	var result struct {
 		Stories []struct {
-			ID         int64    `json:"id"`
-			Title      string   `json:"title"`
-			Epic       string   `json:"epic"`
-			Column     string   `json:"column"`
-			Continuity string   `json:"continuity"`
-			Acceptance string   `json:"acceptance"`
-			SpecRef    string   `json:"spec_ref"`
-			Owner      string   `json:"owner"`
-			Runs       []RunRef `json:"runs"`
-			StoryRoots []string `json:"story_roots"`
+			ID         int64     `json:"id"`
+			Title      string    `json:"title"`
+			Epic       string    `json:"epic"`
+			Column     string    `json:"column"`
+			Continuity string    `json:"continuity"`
+			Acceptance string    `json:"acceptance"`
+			SpecRef    string    `json:"spec_ref"`
+			Owner      string    `json:"owner"`
+			Runs       []RunRef  `json:"runs"`
+			UpdatedAt  time.Time `json:"updated_at"`
+			StoryRoots []string  `json:"story_roots"`
 			Contact    *struct {
 				Ref string `json:"ref"`
 			} `json:"contact"`
@@ -262,7 +268,7 @@ func (sprintSource) Load(_ context.Context, b *Board, o Options) error {
 		if !o.All && x.Column == "done" {
 			continue
 		}
-		s := Sprint{ID: x.ID, Title: x.Title, Epic: x.Epic, Column: x.Column, Continuity: x.Continuity, ContinuityRef: x.Continuity, Manager: x.Owner, SpecRef: x.SpecRef, RunRefs: x.Runs, StoryRoots: x.StoryRoots}
+		s := Sprint{ID: x.ID, Title: x.Title, Epic: x.Epic, Column: x.Column, Continuity: x.Continuity, ContinuityRef: x.Continuity, Manager: x.Owner, SpecRef: x.SpecRef, RunRefs: x.Runs, UpdatedAt: x.UpdatedAt, StoryRoots: x.StoryRoots}
 		if x.Contact != nil {
 			s.MeetRoomRef = x.Contact.Ref
 		}
