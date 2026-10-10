@@ -24,7 +24,7 @@ func (f fakeRunner) Run(_ context.Context, agent string, _ []string, _ string) (
 // runnerAgent names the agent a Runner was asked to start. chat.Invoke hands the
 // runner the launch binary, which may be a managed full path
 // (~/Library/Caches/bashy/bin/codex/<ver>/bin/codex); fixtures key by tool name.
-func runnerAgent(bin string) string { return filepath.Base(bin) }
+func runnerAgent(bin string) string { return strings.TrimSuffix(filepath.Base(bin), ".exe") }
 
 func fixedNow() time.Time { return time.Date(2026, 7, 8, 5, 40, 0, 0, time.UTC) }
 
