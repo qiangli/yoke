@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [host/page] Playbook: run a multi-agent planning meeting with bashy meet — How to run a design review / decision / cross-agent planning session with 'bashy meet' instead of separate one-off agent sessions: the start -> round -> /decision + /action -> close loop, a dedicated notes-only secretary, and minutes filed to docs/meetin  (kb:playbook-run-a-multi-agent-planning-meeting-with-bashy-meet)
+- [host/page] PCTS POSIX conformance: campaign plan to 100% — Ranked plan+blockers to take the bashy/coreutils userland from 86.6% of GNU PCTS toward 100%; triggers: posix, pcts, conformance, sed, grep, pkg/bre, NO-list, find -exec, cert #279890, 100% Plan of record to drive the bashy/coreutils pure-Go userland from 86.6% of GNU's PCTS pass count (2551/  (kb:posix-100-conformance-campaign-plan)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 
