@@ -37,6 +37,10 @@ type Panel struct {
 	// ProxyHost is the host half for proxy panels. Empty means 127.0.0.1, which
 	// is the historical convention for atlas panels that only declare a port.
 	ProxyHost string `json:"-"`
+	// hostAdmin marks the stock Host tile whose admin endpoint is same-host
+	// loopback: the only panel the console presents outpost's local credential
+	// to. See host_auth.go.
+	hostAdmin bool
 
 	// Start is the argv, after `bashy`, that starts a proxied service. It is the
 	// answer a stopped tile shows, so the reader never has to go find the
@@ -148,6 +152,7 @@ func hostBuiltinPanel() Panel {
 		return p
 	}
 	p.ProxyHost, p.Port, p.Available = host, port, true
+	p.hostAdmin = hostAdminEligible(host, port)
 	return p
 }
 

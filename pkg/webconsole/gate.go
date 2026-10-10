@@ -124,14 +124,18 @@ func (s *server) consoleGate(next http.Handler) http.Handler {
 						if !s.deviceAdmits(w, r, deviceID) {
 							return
 						}
+						// A paired device is admitted, but it is not the operator:
+						// the Host tile's local credential is never presented for it.
+						next.ServeHTTP(w, r)
+						return
 					}
-					next.ServeHTTP(w, r)
+					next.ServeHTTP(w, markLocalOperator(r))
 					return
 				}
 			}
 		}
 		if !s.requireLogin && coopauth.IsLoopbackAddr(r.RemoteAddr) {
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(w, markLocalOperator(r))
 			return
 		}
 		s.denied(w, r)
