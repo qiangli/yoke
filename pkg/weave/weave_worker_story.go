@@ -178,7 +178,11 @@ func weaveWorkerCommits(it *weaveItem) ([]*object.Commit, error) {
 	if err != nil {
 		return nil, err
 	}
-	base, err := repo.CommitObject(plumbing.NewHash(it.BaseSHA))
+	evidenceBase := it.BaseSHA
+	if it.HandoffBaseSHA != "" {
+		evidenceBase = it.HandoffBaseSHA
+	}
+	base, err := repo.CommitObject(plumbing.NewHash(evidenceBase))
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +232,7 @@ func weaveSubmitWorkerStories(cmd *cobra.Command, it *weaveItem) error {
 		var hashes []string
 		for _, c := range commits {
 			trace, err := parseCommitTrace(c.Message)
-			if err != nil || trace.Sprint != st.Sprint || trace.SprintID != "" && trace.SprintID != st.SprintID || trace.AgentPresent && !strings.EqualFold(trace.Agent, st.Actor) {
+			if err != nil || trace.Sprint != st.Sprint || trace.SprintID != "" && trace.SprintID != st.SprintID || (trace.AgentPresent && !strings.EqualFold(trace.Agent, st.Actor)) || it.HandoffBaseSHA != "" && !trace.AgentPresent {
 				continue
 			}
 			for _, ref := range trace.Stories {
