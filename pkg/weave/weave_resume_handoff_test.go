@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -271,7 +272,7 @@ func TestResumeHandoffChild(t *testing.T) {
 }
 
 func TestResumeHandoffLaunchAndRollback(t *testing.T) {
-	for _, scenario := range []string{"success", "spawn-failure", "story-success", "story-spawn-failure", "story-conflict", "busy-target"} {
+	for _, scenario := range []string{"success", "spawn-failure", "killed-story-success", "story-success", "story-spawn-failure", "story-conflict", "busy-target"} {
 		t.Run(scenario, func(t *testing.T) {
 			missing := strings.Contains(scenario, "spawn-failure")
 			root, dir, it, _ := handoffFixture(t)
@@ -295,7 +296,7 @@ func TestResumeHandoffLaunchAndRollback(t *testing.T) {
 				t.Fatal(err)
 			}
 			var storyID string
-			if strings.HasPrefix(scenario, "story-") {
+			if strings.Contains(scenario, "story-") {
 				stories, err := todopkg.List(todopkg.RepoStore(root), "")
 				if err != nil || len(stories) != 1 {
 					t.Fatalf("stories: %v %v", stories, err)
@@ -324,6 +325,51 @@ func TestResumeHandoffLaunchAndRollback(t *testing.T) {
 			t.Setenv("WEAVE_HANDOFF_EXPECT_WORKSPACE", it.Workspace)
 			t.Setenv("WEAVE_HANDOFF_OLD_INSTANCE", it.Instance)
 			t.Setenv("WEAVE_HANDOFF_EXPECT_HEAD", strings.TrimSpace(gitT(t, it.Workspace, "rev-parse", "HEAD")))
+			if scenario == "killed-story-success" {
+				ready := filepath.Join(t.TempDir(), "original-ready")
+				originalChild := exec.Command(exe, "-test.run=^TestResumeHandoffStoppedOriginalChild$")
+				originalChild.Env = append(os.Environ(), "WEAVE_HANDOFF_ORIGINAL_CHILD="+ready)
+				weavePrepareOwnedChild(originalChild)
+				if err := originalChild.Start(); err != nil {
+					t.Fatal(err)
+				}
+				done := make(chan struct{})
+				go func() { _ = originalChild.Wait(); close(done) }()
+				t.Cleanup(func() { _ = originalChild.Process.Kill(); <-done })
+				deadline := time.Now().Add(5 * time.Second)
+				for {
+					if _, err := os.Stat(ready); err == nil {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("original child did not start")
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				it.State, it.WrapperPid = "working", originalChild.Process.Pid
+				if err := saveWeaveQueue(dir, &weaveQueue{Root: root, Items: []*weaveItem{it}}); err != nil {
+					t.Fatal(err)
+				}
+				stagedBefore, _ := os.ReadFile(filepath.Join(it.Workspace, ".git", "index"))
+				out, code := runWeave(t, "kill", "1", "--yes", "--json")
+				if code != 0 {
+					t.Fatalf("native kill failed: %d %s", code, out)
+				}
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					t.Fatal("original process survived kill")
+				}
+				q, err := loadWeaveQueue(dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				it = findWeaveItem(q, 1)
+				stagedAfter, _ := os.ReadFile(filepath.Join(it.Workspace, ".git", "index"))
+				if it.State != "killed" || !bytes.Equal(stagedBefore, stagedAfter) {
+					t.Fatal("kill lost stopped state or staged work")
+				}
+			}
 			original, _ := json.Marshal(it)
 			index, _ := os.ReadFile(filepath.Join(it.Workspace, ".git", "index"))
 			out, code := runWeave(t, "start", "--run", "1", "--resume", "--handoff-to", "replacement", "--pty", "never", "--mem-limit", "0", "--json")
@@ -444,5 +490,19 @@ func TestResumeHandoffStoryRequiresNewAttributedCommit(t *testing.T) {
 				t.Fatalf("submission=%v for actor %s", submitted, actor)
 			}
 		})
+	}
+}
+
+// A real original process is stopped through weave kill before replacement launch.
+func TestResumeHandoffStoppedOriginalChild(t *testing.T) {
+	ready := os.Getenv("WEAVE_HANDOFF_ORIGINAL_CHILD")
+	if ready == "" {
+		return
+	}
+	if err := os.WriteFile(ready, []byte("ready"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		time.Sleep(time.Second)
 	}
 }
