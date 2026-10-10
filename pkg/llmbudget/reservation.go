@@ -141,6 +141,9 @@ func (g *Gate) Preview(ctx context.Context, r Request) (Admission, error) {
 	if err != nil {
 		return refused(r, err)
 	}
+	if err = guardClaims(ctx, r); err != nil {
+		return refused(r, err)
+	}
 	if err = ctx.Err(); err != nil {
 		return refused(r, err)
 	}
@@ -163,6 +166,10 @@ func (g *Gate) Reserve(ctx context.Context, r Request) (Admission, error) {
 	}
 	r, err = g.prepare(p, r, true)
 	if err != nil {
+		return refused(r, err)
+	}
+	// A claim held by another agent refuses before any capacity is reserved.
+	if err = guardClaims(ctx, r); err != nil {
 		return refused(r, err)
 	}
 	var out Admission
