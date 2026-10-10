@@ -1,0 +1,32 @@
+=== RUN   TestWorkerStoryFinalizeIntegration
+    weave_worker_story_test.go:177: finalize did not submit committed story
+--- FAIL: TestWorkerStoryFinalizeIntegration (0.34s)
+=== RUN   TestWorkerStoryLaunchClaimsBeforeExecution
+=== RUN   TestWorkerStoryLaunchClaimsBeforeExecution/false
+    weave_worker_story_test.go:220: actual launched actor not claimed: ""; exit 1 Flag --issue has been deprecated, use --run: a weave queue item is a run (one agent × one issue); `bashy issue` is now the issue register
+        {
+          "schema_version": "loom-v2",
+          "command": "weave start",
+          "status": "error",
+          "error": {
+            "code": "generic_failure",
+            "message": "tool exited with 19"
+          }
+        }
+=== RUN   TestWorkerStoryLaunchClaimsBeforeExecution/true
+    weave_worker_story_test.go:209: conflict: exit 1 Flag --issue has been deprecated, use --run: a weave queue item is a run (one agent × one issue); `bashy issue` is now the issue register
+        {
+          "schema_version": "loom-v2",
+          "command": "weave start",
+          "status": "error",
+          "error": {
+            "code": "generic_failure",
+            "message": "tool exited with 19"
+          }
+        }
+--- FAIL: TestWorkerStoryLaunchClaimsBeforeExecution (0.80s)
+    --- FAIL: TestWorkerStoryLaunchClaimsBeforeExecution/false (0.41s)
+    --- FAIL: TestWorkerStoryLaunchClaimsBeforeExecution/true (0.39s)
+FAIL
+FAIL	github.com/qiangli/yoke/pkg/weave	1.741s
+FAIL

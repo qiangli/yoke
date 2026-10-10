@@ -1,0 +1,15 @@
+--- FAIL: TestForcedAbandonWithSprintHook (1.31s)
+    --- FAIL: TestForcedAbandonWithSprintHook/true (0.74s)
+        weave_preservation_hook_test.go:65: forced abandon with real sprint hook: exit=2
+            {
+              "schema_version": "loom-v2",
+              "command": "weave abandon",
+              "status": "error",
+              "error": {
+                "code": "invalid_arg",
+                "message": "run #1: --force could not commit 2 uncommitted file(s) for preservation, refusing to destroy them: git commit: exit status 1: sprint commit-msg: commit provenance: final trailer paragraph contains a non-trailer line \"This tree was committed by `--force` so it could be preserved as a\"\n\nrequired form:\n\n  Sprint: #87\n  Story: #110\n  Story-ID: d1e86f29d7a7"
+              }
+            }
+FAIL
+FAIL	github.com/qiangli/yoke/pkg/weave	1.837s
+FAIL

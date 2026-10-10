@@ -1,0 +1,66 @@
+Sprint 413 / weave lifecycle delivery
+Stories: #1821 26a846d9db4e; #1833 0c5fddf0fefc
+Worker: codex-gpt6-astra; Dragon; branch agent/weave-issue-44
+Source baseline: bffcda988649ea3c4e765de3b29b211d5747a7f8
+
+Shared API/import trace before implementation:
+- Launch/finalize, runSprintStoryClaim, runSprintStorySubmit, commit trace parser,
+  and forced-preservation message builder are all in pkg/weave.
+- Claim/submit reuse those APIs in process with the run's bound agent, rather
+  than executing a CLI with manager --as overrides or mutating process identity.
+- Commit evidence uses the existing go-git dependency directly; no new module,
+  cross-package reverse dependency, or host-shell fallback was introduced.
+- No foreman, room, coord, stateaccess, or weave_story.go edits.
+
+Raw red evidence:
+- preservation-red.log: go test ./pkg/weave -run
+  '^TestForcedAbandonWithSprintHook' -short -count=1 -timeout=60s
+  Recorded before changing the preservation message resolver. The installed
+  commit-msg hook invokes the real NewSprintCmd commit-msg handler through a
+  test-binary shim, independent of the installed Bashy version. The valid-brief
+  case fails on the exact reported non-trailer preservation paragraph.
+- worker-red.log: go test -overlay .s413-checks/red-overlay.json ./pkg/weave
+  -run '^TestWorkerStory(LaunchClaimsBeforeExecution|FinalizeIntegration)$'
+  -short -count=1 -timeout=45s -v
+  Overlay used weave_impl.go from baseline above, adding ONLY the two passive
+  new schema fields so the candidate helpers/tests compiled. All baseline
+  lifecycle behavior was unchanged: neither launch nor finalize called the new
+  helper. Child exits 19 because no claim exists; claim-conflict preflight and
+  finalizer submission assertions fail. This is baseline lifecycle integration
+  evidence, not a claim that the new helper APIs existed on baseline.
+
+Final focused gate (focused-green.log):
+go test ./pkg/weave -run '^(TestWorkerStory|TestForcedAbandonWithSprintHook|TestForcedSalvage|TestWeaveFinalize|TestWeaveWrapperTerminal|TestSprintSubmitRefusesUnclaimedStoryWithoutMutation|TestSubmitDefaultsToTheStoryHolder)' -short -count=1 -timeout=60s -v
+PASS; 12.739s; every selected test passed, no skips.
+
+Verified behavior:
+- Explicit full brief trailers, including multiple story pairs, or registered
+  story IDs resolve against tracked sprint stores; numbers alone never select
+  an arbitrary story. Sprint links are used only with queue AND birth identity.
+- Worker binding takes precedence over the seat and inherited manager identity.
+  Claims occur before the live-tree baseline, so the tool's own story update is
+  not misclassified as an agent escape. A child checks its actual persisted
+  claim before committing; the normal wrapper then submits it.
+- Conflicting claims prevent execution and preserve an existing workspace.
+- Matching committed Story-ID/Sprint/Story evidence is required. Unrelated/no
+  commits, failure, kills, dirty trees, failed verification, preservation auto-
+  commits and mismatching explicit Agent trailers cannot auto-submit a story.
+  Native commit inspection checks measured HEAD and excludes base ancestry.
+- Matching repeated evidence and a worker's manual submission are deduplicated
+  under the existing sprint board lock. Submission errors remain on the run.
+- Finalize uses the same completion path. Forced abandon preserves both tracked
+  and new dirty files under refs/salvage/abandoned-1 through the real hook;
+  missing provenance is refused and files remain recoverable in the workspace.
+
+Launch-generated KB.md/WEAVE_MEMORY.md differences were present at entry. Their
+exact patch is retained as launch-memory.patch.gz (gzip-compressed, lossless); root files were restored to the
+baseline after saving it, keeping generated memory changes out of source edits.
+
+Remaining checks / limitations:
+- Manager must run package/full suites and applicable crossvet/platform checks
+  remotely as directed. No full build, full package suite, push, pin change,
+  canonical source edit, or door restart was performed by this worker.
+- 8821dca1 and 9e19af60 remain external attribution work. A storyless sprint run
+  link does not identify a story and is never guessed from roster labels. Tests
+  use explicit Story-ID/register linkage, queue identity and run birth time.
+- Sprint acceptance remains the manager's independent action.
