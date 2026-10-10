@@ -233,6 +233,9 @@ func toAgentLaunchOptions(opt Options) agentlaunch.Options {
 		Fork:          opt.Fork,
 		Session:       opt.Session,
 		ACP:           opt.ACP,
+		// The request carries chat's containment probe, so no invocation
+		// mutates the shared agentlaunch.Containerized (concurrent one-shots).
+		Containerized: containerized,
 	}
 }
 
@@ -872,9 +875,6 @@ var newCatalog = func() *fleet.Catalog { return fleet.New() }
 // label the launcher logged and threw away, and every run silently used
 // whatever model the tool's own config happened to name.
 func resolveLaunch(name string, opt Options) (Launch, error) {
-	prevContainerized := agentlaunch.Containerized
-	agentlaunch.Containerized = containerized
-	defer func() { agentlaunch.Containerized = prevContainerized }()
 	catalog := newCatalog
 	if opt.Catalog != nil {
 		catalog = func() *fleet.Catalog { return opt.Catalog }
@@ -1540,10 +1540,7 @@ var containerized = func() bool {
 // unsafeLaunchAllowed reports whether stripping an agent's safety systems is
 // permissible here, and why.
 func unsafeLaunchAllowed() (bool, string) {
-	prevContainerized := agentlaunch.Containerized
-	agentlaunch.Containerized = containerized
-	defer func() { agentlaunch.Containerized = prevContainerized }()
-	return agentlaunch.UnsafeLaunchAllowed()
+	return agentlaunch.UnsafeLaunchAllowedFor(agentlaunch.Options{Containerized: containerized})
 }
 
 // guardUnsafeArgs refuses a launch that would disable an agent CLI's own safety
@@ -1558,18 +1555,12 @@ func unsafeLaunchAllowed() (bool, string) {
 // headless agent blocking forever on an approval prompt nobody can answer, and
 // a hang is a worse failure than a clear error. The operator gets a one-line fix.
 func guardUnsafeArgs(tool string, args []string) error {
-	prevContainerized := agentlaunch.Containerized
-	agentlaunch.Containerized = containerized
-	defer func() { agentlaunch.Containerized = prevContainerized }()
-	return agentlaunch.GuardUnsafeArgs(tool, args)
+	return agentlaunch.GuardUnsafeArgsFor(tool, args, agentlaunch.Options{Containerized: containerized})
 }
 
 // finalizeArgs applies the --sandbox override, then gates the result. Both
 // launch paths (registry template and seeded fallback) go through here.
 func finalizeArgs(tool string, args []string, opt Options) ([]string, error) {
-	prevContainerized := agentlaunch.Containerized
-	agentlaunch.Containerized = containerized
-	defer func() { agentlaunch.Containerized = prevContainerized }()
 	return agentlaunch.FinalizeArgs(tool, args, toAgentLaunchOptions(opt))
 }
 
