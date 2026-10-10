@@ -78,6 +78,7 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 		Filter: func(w io.Writer) (io.Writer, func() error) {
 			sj := newWeaveStreamJSONLogWriter(w)
 			sj.errs = guards.streamErrs
+			sj.tracker = guards.resultTracker
 			return sj, sj.Flush
 		},
 	})

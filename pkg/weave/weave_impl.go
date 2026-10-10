@@ -305,6 +305,7 @@ type weaveItem struct {
 	FinalizerPID   int       `json:"finalizer_pid,omitempty"`
 	FinalizingAt   time.Time `json:"finalizing_at,omitempty"`
 	LogPath        string    `json:"log_path,omitempty"`
+	ResultPath     string    `json:"result_path,omitempty"`
 	Throttled      bool      `json:"throttled,omitempty"`
 	ThrottleSignal string    `json:"throttle_signal,omitempty"`
 	// WrapperPid is the PID of the `bashy weave start` process
@@ -3324,6 +3325,8 @@ type weaveGuards struct {
 	onStart    func() error
 	// streamErrs, when set, receives the worker's decoded error events.
 	streamErrs *weaveStreamErrorTracker
+	// resultTracker, when set, captures the agent's final report/message.
+	resultTracker *weaveResultTracker
 }
 
 // errWeaveWrapperLive is returned from inside the queue-lock callback
@@ -4214,6 +4217,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		coachee:       it.Tool,
 		eventsPath:    agentEventsPath,
 		streamErrs:    &weaveStreamErrorTracker{},
+		resultTracker: newWeaveResultTracker(),
 	}
 	if ctlSock != "" {
 		if err := os.MkdirAll(filepath.Dir(ctlSock), 0o755); err != nil {
@@ -4327,6 +4331,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			runErr = fmt.Errorf("flush redacted tool stdout: %w", err)
 		}
 		guards.streamErrs.ObserveAll(toolStdout.String())
+		if guards.resultTracker != nil {
+			guards.resultTracker.ObserveAll(toolStdout.String())
+		}
 		if err := stderrCapture.Close(); runErr == nil && err != nil {
 			runErr = fmt.Errorf("flush redacted tool stderr: %w", err)
 		}
@@ -4452,6 +4459,22 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		fmt.Fprintf(cmd.ErrOrStderr(), "weave start: publish booth attempt: %v\n", boothPushErr)
 	}
 	finalizationClaimed := false
+	resultText := ""
+	if guards.resultTracker != nil {
+		resultText = guards.resultTracker.Result()
+	}
+	if resultText == "" && logPath != "" {
+		if b, err := os.ReadFile(logPath); err == nil {
+			resultText = weaveExtractResult(string(b))
+		}
+	}
+	if resultText == "" && toolStdout.Len() > 0 {
+		resultText = weaveExtractResult(toolStdout.String())
+	}
+	resultPath, resultErr := weaveWriteRunResultFile(dir, it.ID, logPath, resultText, captureRedaction.secretsRendered, captureRedaction.redactor)
+	if resultErr != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "weave start: write result file: %v\n", resultErr)
+	}
 	lockErr := withWeaveQueueLock(dir, func(freshQ *weaveQueue) error {
 		freshIt := findWeaveItem(freshQ, it.ID)
 		if freshIt == nil {
@@ -4493,6 +4516,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		freshIt.AutoCommitError = autoCommitErr
 		if logPath != "" {
 			freshIt.LogPath = logPath
+		}
+		if resultPath != "" {
+			freshIt.ResultPath = resultPath
 		}
 		freshIt.State = terminalState
 		if freshIt.State == "no-op" {
@@ -4643,14 +4669,18 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 				weaveToolFailureTail(logPath, toolStderrTail.String(), toolStdout.String()))))
 	}
 	if mode == weavecli.OutputJSON {
-		return ec(emitOK(cmd.OutOrStdout(), mode, "weave start", map[string]any{
+		res := map[string]any{
 			"issue":     it.ID,
 			"workspace": workspace,
 			"branch":    branch,
 			"state":     it.State,
 			"exit_code": exitCode,
 			"log_path":  logPath,
-		}))
+		}
+		if resultPath != "" {
+			res["result_path"] = resultPath
+		}
+		return ec(emitOK(cmd.OutOrStdout(), mode, "weave start", res))
 	}
 	return nil
 }
@@ -4883,6 +4913,14 @@ func weaveLogSummary(cmd *cobra.Command, mode weavecli.OutputMode, root string, 
 	// Measured, not recorded: the recorded count is the dead wrapper's last
 	// word, and the branch may have moved past it (see weaveLiveAhead).
 	liveAhead, liveHead := weaveLiveAhead(base, it)
+	dir, _ := weaveQueueDir(root)
+	resultPath := it.ResultPath
+	if resultPath == "" && dir != "" {
+		conventional := filepath.Join(dir, "logs", fmt.Sprintf("issue-%d.result.md", it.ID))
+		if _, err := os.Stat(conventional); err == nil {
+			resultPath = conventional
+		}
+	}
 	if mode == weavecli.OutputJSON {
 		weaveComputeBlocked(it)
 		res := map[string]any{
@@ -4895,6 +4933,9 @@ func weaveLogSummary(cmd *cobra.Command, mode weavecli.OutputMode, root string, 
 			"duration":      weaveDurationCol(it),
 			"commits_ahead": liveAhead,
 			"merged":        merged,
+		}
+		if resultPath != "" {
+			res["result_path"] = resultPath
 		}
 		if liveHead != "" {
 			res["head"] = liveHead
@@ -4969,6 +5010,9 @@ func weaveLogSummary(cmd *cobra.Command, mode weavecli.OutputMode, root string, 
 		mergedStr = "yes — already in " + base
 	}
 	fmt.Fprintf(w, "  merged:   %s\n", mergedStr)
+	if resultPath != "" {
+		fmt.Fprintf(w, "  result:     %s\n", weaveTildePath(resultPath))
+	}
 	return nil
 }
 
@@ -5027,6 +5071,16 @@ func runWeaveLog(cmd *cobra.Command, id int64, follow bool, tailN int, summary b
 			"state":      it.State,
 			"log_path":   logPath,
 			"size_bytes": size,
+		}
+		resultPath := it.ResultPath
+		if resultPath == "" {
+			conventional := filepath.Join(dir, "logs", fmt.Sprintf("issue-%d.result.md", it.ID))
+			if _, err := os.Stat(conventional); err == nil {
+				resultPath = conventional
+			}
+		}
+		if resultPath != "" {
+			res["result_path"] = resultPath
 		}
 		if it.ExitCode != nil {
 			res["exit_code"] = *it.ExitCode
@@ -6030,6 +6084,13 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 			workspaceExists = true
 		}
 	}
+	resultPath := it.ResultPath
+	if resultPath == "" {
+		conventional := filepath.Join(dir, "logs", fmt.Sprintf("issue-%d.result.md", it.ID))
+		if _, err := os.Stat(conventional); err == nil {
+			resultPath = conventional
+		}
+	}
 
 	if mode == weavecli.OutputJSON {
 		res := map[string]any{
@@ -6100,6 +6161,9 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 		}
 		if it.KilledBy != "" {
 			res["killed_by"] = it.KilledBy
+		}
+		if resultPath != "" {
+			res["result_path"] = resultPath
 		}
 		return ec(emitOK(cmd.OutOrStdout(), mode, "weave status", res))
 	}
@@ -6177,6 +6241,9 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 			state = "gone on disk"
 		}
 		fmt.Fprintf(w, "  workspace:  %s (%s)\n", weaveTildePath(it.Workspace), state)
+	}
+	if resultPath != "" {
+		fmt.Fprintf(w, "  result:     %s\n", weaveTildePath(resultPath))
 	}
 	mergedStr := "no"
 	switch {
@@ -7364,6 +7431,9 @@ func runWeaveFinalize(cmd *cobra.Command, id int64, observedIdle bool, flags *we
 		it.FinishedAt = time.Now().UTC()
 		it.WrapperPid = 0
 		it.CtlSock = ""
+		if resPath := weaveEnsureRunResultSaved(dir, it, nil, false); resPath != "" {
+			it.ResultPath = resPath
+		}
 		weaveAppendComment(it, "conductor", "system", "finalized after explicit observed-idle attestation; terminal state measured from workspace evidence")
 		finalized = it
 		return nil
@@ -7375,6 +7445,9 @@ func runWeaveFinalize(cmd *cobra.Command, id int64, observedIdle bool, flags *we
 	// Fold the terminal gate evidence into the capability matrix (best-effort).
 	weaveRecordCapability(finalized)
 	result := map[string]any{"issue": id, "state": state, "completion": "conductor-finalized-observed-idle"}
+	if finalized != nil && finalized.ResultPath != "" {
+		result["result_path"] = finalized.ResultPath
+	}
 	if ev.VerifyExit != nil {
 		result["verify_exit"] = *ev.VerifyExit
 	}

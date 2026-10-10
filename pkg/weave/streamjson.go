@@ -15,9 +15,10 @@ const (
 )
 
 type weaveStreamJSONLogWriter struct {
-	w    io.Writer
-	buf  []byte
-	errs *weaveStreamErrorTracker
+	w       io.Writer
+	buf     []byte
+	errs    *weaveStreamErrorTracker
+	tracker *weaveResultTracker
 }
 
 func newWeaveStreamJSONLogWriter(w io.Writer) *weaveStreamJSONLogWriter {
@@ -60,6 +61,9 @@ func (w *weaveStreamJSONLogWriter) writeLine(line []byte) error {
 	body := strings.TrimSuffix(text, "\n")
 	body = strings.TrimSuffix(body, "\r")
 	w.errs.Observe(body)
+	if w.tracker != nil {
+		w.tracker.Observe(body)
+	}
 	summary, ok := weaveDistillStreamJSONLine(body)
 	if !ok {
 		_, err := w.w.Write(line)
