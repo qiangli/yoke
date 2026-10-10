@@ -118,6 +118,28 @@ func weaveResolveWorkerStories(queueDir string, it *weaveItem) ([]weaveWorkerSto
 	return out, nil
 }
 
+// weaveWorkerActor is the agent a run acts as: its launch spec's agent, else
+// the queue owner. Story claims and the worker's BASHY_AGENT both use it.
+func weaveWorkerActor(it *weaveItem) string {
+	if it == nil {
+		return ""
+	}
+	if it.LaunchSpec != nil && it.LaunchSpec.Agent != "" {
+		return it.LaunchSpec.Agent
+	}
+	return it.Owner
+}
+
+// weaveWorkerAgent is weaveWorkerActor in its canonical fleet spelling when
+// the registry knows it, so commit attribution matches the story claimant.
+func weaveWorkerAgent(it *weaveItem) string {
+	actor := strings.TrimSpace(weaveWorkerActor(it))
+	if canonical, ok := canonicalFleetAgentName(actor); ok {
+		return canonical
+	}
+	return actor
+}
+
 func weaveClaimWorkerStories(cmd *cobra.Command, queueDir string, it *weaveItem) error {
 	stories, err := weaveResolveWorkerStories(queueDir, it)
 	if err != nil {
@@ -126,10 +148,7 @@ func weaveClaimWorkerStories(cmd *cobra.Command, queueDir string, it *weaveItem)
 	if len(stories) == 0 {
 		return nil
 	}
-	actor := it.Owner
-	if it.LaunchSpec != nil && it.LaunchSpec.Agent != "" {
-		actor = it.LaunchSpec.Agent
-	}
+	actor := weaveWorkerActor(it)
 	if err := validateSprintClaimant(actor); err != nil {
 		return err
 	}

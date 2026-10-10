@@ -273,10 +273,15 @@ func weaveChildEnv(environ []string, workspace, branch, base, queueDir string, i
 	// to the workspace.
 	env := make([]string, 0, len(environ)+8)
 	for _, kv := range environ {
-		if strings.HasPrefix(kv, "PWD=") || strings.HasPrefix(kv, "OLDPWD=") {
+		// BASHY_AGENT is the launcher's identity (often the sprint manager);
+		// inherited, it would attribute the worker's commits to the manager.
+		if strings.HasPrefix(kv, "PWD=") || strings.HasPrefix(kv, "OLDPWD=") || strings.HasPrefix(kv, "BASHY_AGENT=") {
 			continue
 		}
 		env = append(env, kv)
+	}
+	if agent := weaveWorkerAgent(it); agent != "" {
+		env = append(env, "BASHY_AGENT="+agent)
 	}
 	env = append(env, "PWD="+workspace)
 	env = append(env,
