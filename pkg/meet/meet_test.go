@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -176,12 +177,22 @@ func TestCommandTreeWiring(t *testing.T) {
 // It also isolates shell shims from the real HOME so tests that reach
 // chat.ensureShims via agentChildEnv do not poison ~/.bashy/shims with a
 // go-build *.test binary.
+// testTempRoot keeps the isolated HOME under /tmp on unix, as before, and
+// native on Windows, where "/tmp" is not a path: MkdirTemp would hand back
+// "/tmp\yoke-…", a HOME that no filepath.Join-built path contains verbatim.
+func testTempRoot() string {
+	if runtime.GOOS == "windows" {
+		return ""
+	}
+	return "/tmp"
+}
+
 func TestMain(m *testing.M) {
-	home, err := os.MkdirTemp("/tmp", "yoke-meet-home-*")
+	home, err := os.MkdirTemp(testTempRoot(), "yoke-meet-home-*")
 	if err != nil {
 		panic(err)
 	}
-	shims, err := os.MkdirTemp("/tmp", "yoke-meet-shims-*")
+	shims, err := os.MkdirTemp(testTempRoot(), "yoke-meet-shims-*")
 	if err != nil {
 		panic(err)
 	}

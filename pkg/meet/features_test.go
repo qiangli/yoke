@@ -430,6 +430,27 @@ func TestRedactHome(t *testing.T) {
 	}
 }
 
+// A HOME/USERPROFILE spelled uncleanly (doubled or mixed separators — the
+// native-Windows "/tmp\x" case) must still be redacted from the cleaned paths
+// that filepath.Join produces.
+func TestRedactHomeMatchesTheCleanedHome(t *testing.T) {
+	home := t.TempDir()
+	sep := string(os.PathSeparator)
+	unclean := filepath.Dir(home) + sep + sep + filepath.Base(home) + sep
+	t.Setenv("HOME", unclean)
+	t.Setenv("USERPROFILE", unclean)
+	got := redactHome("workdir: " + filepath.Join(unclean, "projects", "x") + " model: gpt")
+	if strings.Contains(got, filepath.Clean(home)) {
+		t.Fatalf("home leaked: %q", got)
+	}
+	if !strings.Contains(filepath.ToSlash(got), "~/projects/x") {
+		t.Fatalf("want ~-relative path, got %q", got)
+	}
+	if got := redactHome("raw: " + unclean + "y"); strings.Contains(got, filepath.Base(home)) {
+		t.Fatalf("raw-form home leaked: %q", got)
+	}
+}
+
 // The minutes must carry the ARGUMENT, not a 240-char ellipsis of it — that was
 // the single loudest complaint about the old renderer.
 func TestMinutesCarryFullTurnsCoverageAndPolls(t *testing.T) {
