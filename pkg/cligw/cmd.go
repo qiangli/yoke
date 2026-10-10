@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -24,10 +25,11 @@ import (
 // be reading numbers that describe nothing that is serving traffic.
 
 type serveOptions struct {
-	bind    string
-	port    int
-	policy  string
-	prewarm bool
+	bind        string
+	port        int
+	policy      string
+	prewarm     bool
+	maxInFlight int
 }
 
 // NewCmd returns the `llm` command tree — the host-agnostic entry point a
@@ -76,7 +78,15 @@ so a LAN port is a way to spend someone else's quota. --bind unix:PATH creates
 an owner-only (0600) socket, which is the strongest of the three.
 
 The bearer token lives in the cligw state directory and is generated on first
-serve; ` + "`llm env`" + ` prints it in the form a client expects.`,
+serve; ` + "`llm env`" + ` prints it in the form a client expects.
+
+Parallel requests share one per-principal in-flight cap (default 4): past
+it the door answers 429 with Retry-After and records the refusal in
+usage.jsonl. A benchmark widening its lanes past the cap must either give
+each lane its own principal (its own seat: per-principal overrides live in
+max_in_flight_by_principal) or raise the cap with --max-in-flight (or
+CLIGW_MAX_IN_FLIGHT, or max_in_flight in policy.yaml) — lanes sharing one
+bearer token share one cap.`,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -87,11 +97,33 @@ serve; ` + "`llm env`" + ` prints it in the form a client expects.`,
 	f.IntVar(&o.port, "port", DefaultPort, "TCP port for a loopback or lan bind")
 	f.StringVar(&o.policy, "policy", "", "routing policy file (default: policy.yaml in the cligw state directory)")
 	f.BoolVar(&o.prewarm, "prewarm", false, "spawn each band leader's spare worker at startup instead of on first request")
+	f.IntVar(&o.maxInFlight, "max-in-flight", 0, "per-principal in-flight cap (default 4; overrides CLIGW_MAX_IN_FLIGHT and max_in_flight in policy.yaml)")
 	return cmd
 }
 
+// maxInFlightFromEnv reads the CLIGW_MAX_IN_FLIGHT fallback for serve: an
+// empty value keeps the policy default, a set one must parse positive.
+func maxInFlightFromEnv() (int, error) {
+	raw := strings.TrimSpace(os.Getenv("CLIGW_MAX_IN_FLIGHT"))
+	if raw == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 {
+		return 0, fmt.Errorf("cligw: invalid CLIGW_MAX_IN_FLIGHT %q (want a positive integer)", raw)
+	}
+	return n, nil
+}
+
 func runServe(cmd *cobra.Command, o *serveOptions) error {
-	server, err := NewServer(ServerOptions{PolicyFile: o.policy, Prewarm: o.prewarm})
+	maxInFlight := o.maxInFlight
+	if maxInFlight == 0 {
+		var err error
+		if maxInFlight, err = maxInFlightFromEnv(); err != nil {
+			return err
+		}
+	}
+	server, err := NewServer(ServerOptions{PolicyFile: o.policy, Prewarm: o.prewarm, MaxInFlight: maxInFlight})
 	if err != nil {
 		return err
 	}

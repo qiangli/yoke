@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/qiangli/yoke/pkg/llmgw/gateway"
 	"gopkg.in/yaml.v3"
 )
 
@@ -23,18 +24,26 @@ const (
 // Policy is the operator's routing policy. Weights accepts provider (vendor)
 // names; ProviderWeights is an explicit spelling of the same setting. When a
 // name occurs in both maps, ProviderWeights wins.
+//
+// MaxInFlight is the door's default per-principal in-flight cap: parallel
+// benchmark lanes sharing one Bearer [REDACTED] one cap, so raise it (or give each
+// lane its own principal) before widening a run. Zero means the gateway
+// default. MaxInFlightByPrincipal overrides it per principal (seat); the
+// "owner" key is today's single door principal.
 type Policy struct {
-	Default               string             `json:"default" yaml:"default"`
-	DefaultPolicy         string             `json:"default_policy,omitempty" yaml:"default_policy,omitempty"`
-	ReserveFloor          float64            `json:"reserve_floor" yaml:"reserve_floor"`
-	Weights               map[string]float64 `json:"weights,omitempty" yaml:"weights,omitempty"`
-	VendorWeights         map[string]float64 `json:"vendor_weights,omitempty" yaml:"vendor_weights,omitempty"`
-	ProviderWeights       map[string]float64 `json:"provider_weights,omitempty" yaml:"provider_weights,omitempty"`
-	Escalate              string             `json:"escalate" yaml:"escalate"`
-	Filter                Filter             `json:"filter,omitempty" yaml:"filter,omitempty"`
-	VendorConcurrencyCaps map[string]int     `json:"vendor_concurrency_caps,omitempty" yaml:"vendor_concurrency_caps,omitempty"`
-	VendorConcurrency     map[string]int     `json:"vendor_concurrency,omitempty" yaml:"vendor_concurrency,omitempty"`
-	ConcurrencyCaps       map[string]int     `json:"concurrency_caps,omitempty" yaml:"concurrency_caps,omitempty"`
+	Default                string             `json:"default" yaml:"default"`
+	DefaultPolicy          string             `json:"default_policy,omitempty" yaml:"default_policy,omitempty"`
+	ReserveFloor           float64            `json:"reserve_floor" yaml:"reserve_floor"`
+	Weights                map[string]float64 `json:"weights,omitempty" yaml:"weights,omitempty"`
+	VendorWeights          map[string]float64 `json:"vendor_weights,omitempty" yaml:"vendor_weights,omitempty"`
+	ProviderWeights        map[string]float64 `json:"provider_weights,omitempty" yaml:"provider_weights,omitempty"`
+	Escalate               string             `json:"escalate" yaml:"escalate"`
+	Filter                 Filter             `json:"filter,omitempty" yaml:"filter,omitempty"`
+	VendorConcurrencyCaps  map[string]int     `json:"vendor_concurrency_caps,omitempty" yaml:"vendor_concurrency_caps,omitempty"`
+	VendorConcurrency      map[string]int     `json:"vendor_concurrency,omitempty" yaml:"vendor_concurrency,omitempty"`
+	ConcurrencyCaps        map[string]int     `json:"concurrency_caps,omitempty" yaml:"concurrency_caps,omitempty"`
+	MaxInFlight            int                `json:"max_in_flight,omitempty" yaml:"max_in_flight,omitempty"`
+	MaxInFlightByPrincipal map[string]int     `json:"max_in_flight_by_principal,omitempty" yaml:"max_in_flight_by_principal,omitempty"`
 }
 
 // DefaultPolicy returns the routing defaults used when policy.yaml is absent.
@@ -160,7 +169,32 @@ func (p *Policy) Validate() error {
 			return fmt.Errorf("cligw: invalid vendor concurrency cap for %q", vendor)
 		}
 	}
+	if p.MaxInFlight < 0 {
+		return fmt.Errorf("cligw: max_in_flight must be positive (or zero for the gateway default)")
+	}
+	for principal, cap := range p.MaxInFlightByPrincipal {
+		if strings.TrimSpace(principal) == "" || cap < 1 {
+			return fmt.Errorf("cligw: invalid max_in_flight_by_principal cap for %q", principal)
+		}
+	}
+	if p.MaxInFlightByPrincipal == nil {
+		p.MaxInFlightByPrincipal = map[string]int{}
+	}
 	return nil
+}
+
+// AdmissionLimit resolves the per-principal in-flight cap: the seat's
+// override first, then the door default, then the gateway default. It is
+// the value NewServer hands the gateway's AdmissionLimit hook, so a zero
+// Policy keeps the historical cap of 4.
+func (p Policy) AdmissionLimit(principal string) int {
+	if n, ok := p.MaxInFlightByPrincipal[strings.TrimSpace(principal)]; ok && n > 0 {
+		return n
+	}
+	if p.MaxInFlight > 0 {
+		return p.MaxInFlight
+	}
+	return gateway.DefaultMaxInFlight
 }
 
 func validPolicyName(name string) bool {

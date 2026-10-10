@@ -32,7 +32,7 @@ func NewMetrics(registry *prometheus.Registry) *Metrics {
 		registry: registry,
 		dispatchTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "llm_dispatch_total",
-			Help: "Total LLM dispatch outcomes. outcome is one of: dispatched, rate_limited, overloaded, slot_saturated, failover.",
+			Help: "Total LLM dispatch outcomes. outcome is one of: dispatched, rate_limited, quota_exhausted, overloaded, slot_saturated, failover.",
 		}, []string{"backend", "model", "outcome"}),
 		slotInFlight: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "llm_slot_in_flight",

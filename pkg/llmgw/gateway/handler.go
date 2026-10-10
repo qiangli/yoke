@@ -117,6 +117,25 @@ type FallbackFunc func(w http.ResponseWriter, r *http.Request, principal, model 
 // picked). Called from the response-body close path, so it must not block.
 type OnUsageFunc func(principal, model, backend string, u openai.Usage, latency time.Duration)
 
+// Refusal is one rejected request: an admission 429 (the principal is at
+// its in-flight cap) or a quota 429 (host policy excluded every backend
+// that holds the model). Limit is the per-principal admission cap in force
+// and InFlight is the principal's live admitted count at refusal time, so
+// a usage log can tell "at the cap" from "quota-dry".
+type Refusal struct {
+	Principal string
+	Model     string
+	Reason    string
+	Status    int
+	Limit     int
+	InFlight  int
+}
+
+// OnRefusalFunc receives every admission and quota refusal, on the request
+// path before the 429 is written. It must not block; the gateway never
+// retries it.
+type OnRefusalFunc func(Refusal)
+
 // ListExtraFunc contributes entries to /v1/models beyond the catalog — a
 // host's remote or third-party models, say. Catalog entries win on a name
 // collision, so an extra can never shadow a model the pool actually serves.
@@ -172,6 +191,7 @@ type Config struct {
 	FilterCandidatesStatus FilterCandidatesStatusFunc
 	Fallback               FallbackFunc
 	OnUsage                OnUsageFunc
+	OnRefusal              OnRefusalFunc
 	ListExtra              ListExtraFunc
 	DecorateModel          DecorateModelFunc
 
@@ -364,11 +384,14 @@ func (g *gateway) inference(codec inferenceCodec, useAffinity bool) http.Handler
 			out := g.cfg.Admitter.TryAdmit(principal, g.admissionLimit(principal), retryOf)
 			switch out.Result {
 			case sched.AdmitRateLimited:
+				limit := g.admissionLimit(principal)
 				g.cfg.Metrics.ObserveDispatch("", "", "rate_limited")
+				g.reportRefusal(principal, model, "principal in-flight cap reached",
+					http.StatusTooManyRequests, limit, g.cfg.Admitter.InFlight(principal))
 				status := sched.ApplyAdmissionHeaders(w, out)
 				codec.writeError(w, status, map[string]any{
 					"error":         "principal in-flight cap reached",
-					"max_in_flight": g.admissionLimit(principal),
+					"max_in_flight": limit,
 					"hint":          "honor Retry-After and slow your concurrent request rate",
 				})
 				return
@@ -804,6 +827,11 @@ func (g *gateway) serveUnroutable(w http.ResponseWriter, r *http.Request, failur
 		if reason == "" {
 			reason = "every backend for " + model + " was excluded by host policy"
 		}
+		if failure.status == http.StatusTooManyRequests {
+			limit := g.admissionLimit(principal)
+			g.cfg.Metrics.ObserveDispatch("", model, "quota_exhausted")
+			g.reportRefusal(principal, model, reason, failure.status, limit, g.cfg.Admitter.InFlight(principal))
+		}
 		// A 404 wipe says the model is nowhere in the pool, which is
 		// exactly the routeNoBackends story — so it escalates to the
 		// host's fallback the same way. A 429 or 503 wipe does not: the
@@ -820,8 +848,12 @@ func (g *gateway) serveUnroutable(w http.ResponseWriter, r *http.Request, failur
 		// only answer that tells a well-behaved client to back off and
 		// that a later retry will likely work — a 404 would read as
 		// "this model does not exist."
+		reason := "every backend for " + model + " is over its shared-usage budget"
+		limit := g.admissionLimit(principal)
+		g.cfg.Metrics.ObserveDispatch("", model, "quota_exhausted")
+		g.reportRefusal(principal, model, reason, http.StatusTooManyRequests, limit, g.cfg.Admitter.InFlight(principal))
 		codec.writeError(w, http.StatusTooManyRequests, map[string]any{
-			"error": "every backend for " + model + " is over its shared-usage budget",
+			"error": reason,
 			"model": model,
 		})
 	case routeNoBackends:
@@ -850,6 +882,25 @@ func (g *gateway) admissionLimit(principal string) int {
 		}
 	}
 	return DefaultMaxInFlight
+}
+
+// reportRefusal delivers one 429 to the host's refusal hook, if any. A nil
+// hook (or a hook that panics) must never fail the refusal itself.
+func (g *gateway) reportRefusal(principal, model, reason string, status, limit, inFlight int) {
+	if g.cfg.OnRefusal == nil {
+		return
+	}
+	func() {
+		defer func() { _ = recover() }()
+		g.cfg.OnRefusal(Refusal{
+			Principal: principal,
+			Model:     model,
+			Reason:    reason,
+			Status:    status,
+			Limit:     limit,
+			InFlight:  inFlight,
+		})
+	}()
 }
 
 func (g *gateway) routeDefault(principal string) string {

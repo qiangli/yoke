@@ -151,6 +151,16 @@ type ServerOptions struct {
 	// and a negative value disables the bound.
 	RequestTimeout time.Duration
 
+	// MaxInFlight overrides the policy file's max_in_flight default: the
+	// per-principal in-flight cap handed to the gateway. Zero keeps the
+	// policy value (itself zero for the gateway default of 4); negative
+	// is rejected. The serve flag and CLIGW_MAX_IN_FLIGHT arrive here.
+	MaxInFlight int
+
+	// MaxInFlightByPrincipal overrides the policy file's per-seat caps,
+	// winning per key. Nil keeps the policy map.
+	MaxInFlightByPrincipal map[string]int
+
 	// Logger receives routing refusal diagnostics. Nil uses slog.Default().
 	Logger *slog.Logger
 
@@ -177,6 +187,7 @@ type Server struct {
 	token    string
 	quota    QuotaSource
 	breaker  *sched.Breaker
+	admitter *sched.Admitter
 	recorder Recorder
 	usage    UsageRecorder
 	poolCfg  PoolConfig
@@ -239,6 +250,35 @@ func NewServer(opts ServerOptions) (*Server, error) {
 	if breaker == nil {
 		breaker = sched.NewBreaker()
 	}
+	// The door's per-principal in-flight cap: the serve flag (or env)
+	// wins over the policy file, and per-seat overrides win per key. The
+	// admitter is owned here (not left to the gateway's private default)
+	// so the routing middleware can read the same live in-flight counts
+	// it reports on quota refusals.
+	if opts.MaxInFlight < 0 {
+		return nil, fmt.Errorf("cligw: max-in-flight must be positive (or zero for the policy default)")
+	}
+	for principal, cap := range opts.MaxInFlightByPrincipal {
+		if strings.TrimSpace(principal) == "" || cap < 1 {
+			return nil, fmt.Errorf("cligw: invalid max-in-flight override for %q", principal)
+		}
+	}
+	if opts.MaxInFlight > 0 {
+		policy.MaxInFlight = opts.MaxInFlight
+	}
+	if opts.MaxInFlightByPrincipal != nil {
+		// Copy: the caller's Policy (and its map) stays untouched, so a
+		// shared Policy value keeps its own seat overrides.
+		merged := make(map[string]int, len(policy.MaxInFlightByPrincipal)+len(opts.MaxInFlightByPrincipal))
+		for principal, cap := range policy.MaxInFlightByPrincipal {
+			merged[principal] = cap
+		}
+		for principal, cap := range opts.MaxInFlightByPrincipal {
+			merged[principal] = cap
+		}
+		policy.MaxInFlightByPrincipal = merged
+	}
+	admitter := sched.NewAdmitter()
 	recorder := opts.Recorder
 	usageSink := opts.Usage
 	if recorder == nil || usageSink == nil {
@@ -266,7 +306,7 @@ func NewServer(opts ServerOptions) (*Server, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Server{
 		catalog: catalog, policy: policy, token: token, quota: quota,
-		breaker: breaker, recorder: recorder, usage: usageSink,
+		breaker: breaker, admitter: admitter, recorder: recorder, usage: usageSink,
 		poolCfg: poolCfg, timeout: timeout, log: log,
 		history: sched.NewHistoryBuffer(),
 		ctx:     ctx, cancel: cancel,
@@ -422,12 +462,15 @@ func (s *Server) Close() error {
 
 func (s *Server) buildHandler() http.Handler {
 	gw := gateway.New(gateway.Config{
-		Catalog:   routingCatalog{s},
-		Backend:   s.lookupBackend,
-		Backends:  s.gatewayBackends,
-		Authorize: s.Authorize,
-		Breaker:   s.breaker,
-		OnUsage:   s.onUsage,
+		Catalog:        routingCatalog{s},
+		Backend:        s.lookupBackend,
+		Backends:       s.gatewayBackends,
+		Authorize:      s.Authorize,
+		AdmissionLimit: s.admissionLimit,
+		Breaker:        s.breaker,
+		Admitter:       s.admitter,
+		OnUsage:        s.onUsage,
+		OnRefusal:      s.onRefusal,
 	})
 	routed := s.route(gw)
 
@@ -626,6 +669,11 @@ func (s *Server) route(next http.Handler) http.Handler {
 				// exact reason; mirror it to the door log so a stuck door is
 				// diagnosable without reproducing the request.
 				s.log.Warn("cligw: route refused", "status", routeErr.Status, "reason", routeErr.Reason, "model", model)
+				if routeErr.Status == http.StatusTooManyRequests {
+					// A quota 429 is throttling all the same: it lands in
+					// usage.jsonl next to the admission 429s.
+					s.recordRefusal(Principal, model, routeErr.Reason, routeErr.Status)
+				}
 				writeJSON(w, routeErr.Status, errorEnvelope(routeErr.Reason))
 				return
 			}
@@ -990,6 +1038,75 @@ func (s *Server) pool(agent string) *Pool {
 }
 
 func (s *Server) agent(name string) (Agent, bool) { return s.catalog.Agent(name) }
+
+// admissionLimit hands the gateway the door's per-principal in-flight cap:
+// the seat's override first, then the door default, then the gateway's own
+// 4. Benchmark lanes sharing one Bearer [REDACTED] one cap.
+func (s *Server) admissionLimit(principal string) int {
+	return s.policy.AdmissionLimit(principal)
+}
+
+// RefusalSchemaVersion is the JSON envelope for refused requests in
+// usage.jsonl, next to the routing decisions and served-token usage.
+const RefusalSchemaVersion = "bashy-cligw-refusal-v1"
+
+// RefusalRecord is one 429's line in usage.jsonl: who was refused, for
+// which model, why, and the cap and live in-flight count at refusal time.
+type RefusalRecord struct {
+	SchemaVersion string    `json:"schema_version"`
+	At            time.Time `json:"at"`
+	Principal     string    `json:"principal"`
+	Model         string    `json:"model"`
+	Reason        string    `json:"reason"`
+	Status        int       `json:"status"`
+	Limit         int       `json:"limit"`
+	InFlight      int       `json:"in_flight"`
+}
+
+// recordRefusal appends one 429 to usage.jsonl so throttling is visible
+// where Sprint 322 found only headroom=unknown: every admission refusal
+// and every quota refusal lands next to the decisions and usage.
+func (s *Server) recordRefusal(principal, model, reason string, status int) {
+	if s.usage == nil {
+		return
+	}
+	limit := s.admissionLimit(principal)
+	inFlight := 0
+	if s.admitter != nil {
+		inFlight = s.admitter.InFlight(principal)
+	}
+	_ = s.usage.Append(context.Background(), RefusalRecord{
+		SchemaVersion: RefusalSchemaVersion,
+		At:            time.Now().UTC(),
+		Principal:     principal,
+		Model:         model,
+		Reason:        reason,
+		Status:        status,
+		Limit:         limit,
+		InFlight:      inFlight,
+	})
+}
+
+// onRefusal is the gateway's 429 hook: admission-cap and quota refusals
+// from inside the request spine land in usage.jsonl with the same shape
+// as the middleware's own quota refusals.
+func (s *Server) onRefusal(r gateway.Refusal) {
+	if s.usage == nil {
+		return
+	}
+	_ = s.usage.Append(context.Background(), RefusalRecord{
+		SchemaVersion: RefusalSchemaVersion,
+		At:            time.Now().UTC(),
+		Principal:     r.Principal,
+		Model:         r.Model,
+		Reason:        r.Reason,
+		Status:        r.Status,
+		Limit:         r.Limit,
+		InFlight:      r.InFlight,
+	})
+	s.log.Warn("cligw: request refused", "status", r.Status, "reason", r.Reason,
+		"principal", r.Principal, "model", r.Model, "limit", r.Limit, "in_flight", r.InFlight)
+}
 
 // onUsage appends one served request's accounting to usage.jsonl, next to the
 // routing decision the Router recorded for it.
