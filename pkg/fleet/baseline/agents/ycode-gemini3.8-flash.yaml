@@ -1,7 +1,5 @@
 agents:
   - name: ycode-gemini3.8-flash
-    aliases:
-      - genie-gemini
     description: 'genie on agy-gemini3.8-flash, served by the model door (sticky genie-gemini3.8-flash): same model as agy-gemini3.8-flash'
     tool: ycode
     model: door-agy-gemini3.8-flash
