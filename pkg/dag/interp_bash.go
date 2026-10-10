@@ -43,7 +43,11 @@ func (bashInterp) Run(ctx context.Context, t *Task, tio TaskIO) TaskResult {
 		// covered the same as real binaries.  No cap on ctx → pass-through.
 		// coreutils userland second; misses fall through to the default exec
 		// handler (real binaries: go, docker, …), so build DAGs work too.
-		interp.ExecHandlers(CapExecHandler(), shell.Handler()),
+		interp.ExecHandlers(CapExecHandler(), shell.Handler(), settleCancelledExec(ownProcessGroups(tio))),
+		// Each external command leads its own process group and a cancelled
+		// ctx signals that whole group, so cancelling a run reaps the tree
+		// (not just the direct child) and the body loop starts nothing more.
+		interp.ExecProcessGroups(ownProcessGroups(tio)),
 	)
 	if err != nil {
 		res.Status, res.ExitCode, res.Err = StatusFailed, 1, err

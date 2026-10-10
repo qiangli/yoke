@@ -296,9 +296,14 @@ routes any agentic tool to these targets through bashy dag.`,
 				}
 			}
 
-			report, err := eng.Run(cmd.Context(), targets...)
+			runCtx, stopSignals := runSignalContext(cmd.Context())
+			defer stopSignals()
+			report, err := eng.Run(runCtx, targets...)
 			if err != nil {
 				return emitErr(errOut, mode, err)
+			}
+			if sc, ok := cancelCause(runCtx); ok && !dryRunF {
+				return runCancelled(out, errOut, mode, path, targets, report, sc)
 			}
 			if cacheExport != "" {
 				if err := cache.ExportToDir(cacheExport); err != nil {
@@ -543,6 +548,8 @@ type runResult struct {
 	Targets []string  `json:"targets"`
 	Tasks   []runItem `json:"tasks"`
 	Failed  bool      `json:"failed"`
+	// Cancelled is set when SIGINT/SIGTERM stopped the run before it finished.
+	Cancelled bool `json:"cancelled,omitempty"`
 }
 
 type explainItem struct {
@@ -667,7 +674,21 @@ func runList(out io.Writer, mode weavecli.OutputMode, doc *Document) error {
 	return nil
 }
 
-func runReport(out, errOut io.Writer, mode weavecli.OutputMode, path string, targets []string, report RunReport) error {
+// runCancelled reports a run stopped by SIGINT/SIGTERM and returns an error
+// carrying the conventional 128+signal exit code.
+func runCancelled(out, errOut io.Writer, mode weavecli.OutputMode, path string, targets []string, report RunReport, sc signalCause) error {
+	res := buildRunResult(path, targets, report)
+	res.Failed, res.Cancelled = true, true
+	err := &Error{Code: sc.ExitCode(), Msg: fmt.Sprintf("run cancelled: %s", sc)}
+	if mode == weavecli.OutputJSON {
+		emitErrEnvelope(errOut, mode, err.Code, err, res)
+	} else if mode != weavecli.OutputQuiet {
+		fmt.Fprintf(errOut, "dag: %s (%d/%d targets did not complete)\n", err.Msg, countFailed(report), len(report.Results))
+	}
+	return err
+}
+
+func buildRunResult(path string, targets []string, report RunReport) runResult {
 	res := runResult{File: path, Targets: targets, Failed: report.Failed}
 	for _, r := range report.Results {
 		item := runItem{
@@ -681,6 +702,11 @@ func runReport(out, errOut io.Writer, mode weavecli.OutputMode, path string, tar
 		}
 		res.Tasks = append(res.Tasks, item)
 	}
+	return res
+}
+
+func runReport(out, errOut io.Writer, mode weavecli.OutputMode, path string, targets []string, report RunReport) error {
+	res := buildRunResult(path, targets, report)
 
 	if report.Failed {
 		if mode == weavecli.OutputJSON {

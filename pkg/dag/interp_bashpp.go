@@ -55,7 +55,11 @@ func (bashppInterp) Run(ctx context.Context, t *Task, tio TaskIO) TaskResult {
 		// declared-effects cap (set on ctx by WithTaskCap before Run).
 		// It runs BEFORE shell.Handler so in-process coreutils commands are
 		// covered the same as real binaries.  No cap on ctx → pass-through.
-		interp.ExecHandlers(CapExecHandler(), shell.Handler()),
+		interp.ExecHandlers(CapExecHandler(), shell.Handler(), settleCancelledExec(ownProcessGroups(tio))),
+		// Each external command leads its own process group and a cancelled
+		// ctx signals that whole group, so cancelling a run reaps the tree
+		// (not just the direct child) and the body loop starts nothing more.
+		interp.ExecProcessGroups(ownProcessGroups(tio)),
 	)
 	if err != nil {
 		res.Status, res.ExitCode, res.Err = StatusFailed, 1, err
