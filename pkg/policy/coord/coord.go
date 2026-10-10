@@ -486,11 +486,27 @@ func Prune(dir string, now time.Time, dryRun bool) ([]*Claim, error) {
 // Release drops this holder's claim. A claim that is never released still expires;
 // releasing is a courtesy to whoever is waiting, not a correctness requirement.
 func Release(dir string, holder principal.Ref) error {
+	return ReleaseEpoch(dir, holder, 0)
+}
+
+// ReleaseEpoch drops this holder's project claim only if it still stands at
+// epoch. epoch 0 is "my current claim", whatever its epoch, which is what a
+// plain release means; any other value is a fencing token.
+//
+// The check happens INSIDE the deletion transaction, not before it, for the
+// same reason the named release checks there (checkHeld under store.release):
+// a holder that released and re-acquired its project advanced the epoch, and a
+// delayed `claim release --epoch 1` arriving afterwards must fail with
+// ErrFenced rather than delete the newer claim it never held.
+func ReleaseEpoch(dir string, holder principal.Ref, epoch uint64) error {
 	b := fileBackend{dir: dir}
 	return withDirLock(dir, func() error {
 		cur, err := b.Load(holderKey(holder))
 		if err != nil || cur == nil {
 			return err
+		}
+		if epoch != 0 && epoch != cur.Epoch {
+			return ErrFenced
 		}
 		return b.commitLocked(holderKey(holder), cur.Rev, nil)
 	})

@@ -498,3 +498,199 @@ func TestClaimListKindEpochAndBackends(t *testing.T) {
 	}
 	_ = dir
 }
+
+// claimTarget resolves what a printed `bashy claim ...` line would act on,
+// through the real command: cobra finds the subcommand and parses its flags,
+// and targetRef reads the remaining argument exactly as the RunE does.
+func claimTarget(t *testing.T, words []string) (Ref, bool) {
+	t.Helper()
+	root := NewClaimCmd(func() []string { return []string{"/w/bashy"} })
+	sub, rest, err := root.Find(words)
+	if err != nil {
+		t.Fatalf("bashy claim %v: find: %v", words, err)
+	}
+	if err := sub.ParseFlags(rest); err != nil {
+		t.Fatalf("bashy claim %v: flags: %v", words, err)
+	}
+	pos := sub.Flags().Args()
+	if err := sub.ValidateArgs(pos); err != nil {
+		t.Fatalf("bashy claim %v: args: %v", words, err)
+	}
+	if len(pos) == 0 {
+		return Ref{}, false
+	}
+	return targetRef(sub, pos[0]), true
+}
+
+// Every `bashy claim` line a refusal prints must address the claim it was
+// printed for — parsed by the real command, resolved against the ledger by the
+// same lookup an acquisition uses, and from a directory that is not the
+// holder's. A bare "kind:name" cannot carry two of these forms: a kind of ONE
+// letter reads back as a drive-letter name, and a project claim has no ref at
+// all, so a line without a target silently means the CALLER's project.
+func TestContactsAddressTheConflictingClaim(t *testing.T) {
+	dir := cliEnv(t)
+	ctx := context.Background()
+
+	// A project claim somewhere else entirely: the caller's own roots are
+	// /w/bashy, so a target-less line would never reach this holder.
+	if _, err := Acquire(dir, []string{"/w/other"}, agentA(), "integrating", false); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []Ref{
+		{Kind: "x", Name: "foo"}, // a kind of one letter
+		{Kind: "name", Name: "do1"},
+		{Kind: "path", Name: "/w/my app"},
+		{Kind: "thing", Name: "a:b"},
+		{Kind: "clires", Name: "appdir"},
+	} {
+		if _, err := AcquireRef(ctx, Request{Ref: r, Holder: agentA()}); err != nil {
+			t.Fatalf("hold %s: %v", r, err)
+		}
+	}
+	claims, err := List(dir)
+	if err != nil || len(claims) != 6 {
+		t.Fatalf("claims = %d %v", len(claims), err)
+	}
+
+	for _, c := range claims {
+		conflict := &Conflict{Claim: c}
+		lines := 0
+		for _, line := range conflict.Contacts() {
+			f := shellFields(line)
+			if len(f) < 2 || f[0] != "bashy" || f[1] != "claim" {
+				continue
+			}
+			lines++
+			ref, ok := claimTarget(t, f[2:])
+			if !ok {
+				t.Fatalf("%s: %q names no target, so it acts on the caller's own project", shown(c), line)
+			}
+			// The parsed target must find THIS claim, by the acquisition's own
+			// conflict rules — same key, or an intersecting path set.
+			var got *Conflict
+			err := ConflictFor(ctx, Self(), Use{Kind: ref.Kind, Name: ref.Name})
+			if !errors.As(err, &got) {
+				t.Fatalf("%s: %q resolves to %s, which conflicts with nothing: %v", shown(c), line, ref, err)
+			}
+			if got.Claim.key() != c.key() {
+				t.Fatalf("%s: %q resolves to %s, which addresses %s", shown(c), line, ref, shown(got.Claim))
+			}
+		}
+		if lines != 2 {
+			t.Fatalf("%s: %d claim lines in %q", shown(c), lines, conflict.Contacts())
+		}
+	}
+}
+
+// A refusal by a project claim must be reachable from a DIFFERENT project: the
+// printed request has to carry the conflicting path set, or it asks about the
+// caller's own project and finds nobody.
+func TestProjectContactsReachHolderFromAnotherProject(t *testing.T) {
+	dir := cliEnv(t)
+	ctx := context.Background()
+	var sent []bus.Notification
+	old := claimPublish
+	claimPublish = func(n bus.Notification) error { sent = append(sent, n); return nil }
+	t.Cleanup(func() { claimPublish = old })
+
+	if _, err := Acquire(dir, []string{"/w/other"}, agentA(), "integrating", false); err != nil {
+		t.Fatal(err)
+	}
+	// The refusal a caller in /w/bashy gets when it reaches into /w/other.
+	err := ConflictFor(ctx, Self(), Use{Kind: "path", Name: "/w/other/file"})
+	var conflict *Conflict
+	if !errors.As(err, &conflict) {
+		t.Fatalf("reaching into another project's claim = %v, want a conflict", err)
+	}
+	for _, line := range conflict.Contacts() {
+		f := shellFields(line)
+		if len(f) < 3 || f[1] != "claim" || f[2] != "request" {
+			continue
+		}
+		sent = nil
+		if out, _, err := runClaim(ctx, f[2:]...); err != nil || !strings.Contains(out, "sent to claude-a") {
+			t.Fatalf("%q: out=%q err=%v", line, out, err)
+		}
+		if len(sent) != 1 || sent[0].To != "claude-a" {
+			t.Fatalf("%q: sent = %+v", line, sent)
+		}
+	}
+	// And the wait form holds off on the OTHER project, never the caller's own.
+	wctx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+	defer cancel()
+	if _, _, err := runClaim(wctx, "--kind", "path", "/w/other", "--wait", "30m"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("wait on the conflicting project = %v, want to wait on the holder", err)
+	}
+}
+
+// `claim request` answers "who do I ask?", which is the acquisition's question,
+// not Guard's: an announce-mode hold is advisory for a Guard and a hard refusal
+// for an Acquire, so the request has to see it.
+func TestClaimRequestReachesAnnounceHolder(t *testing.T) {
+	cliEnv(t)
+	ctx := context.Background()
+	var sent []bus.Notification
+	old := claimPublish
+	claimPublish = func(n bus.Notification) error { sent = append(sent, n); return nil }
+	t.Cleanup(func() { claimPublish = old })
+
+	if _, err := AcquireRef(ctx, Request{
+		Ref: ParseRef("do1"), Holder: agentA(), Mode: ModeAnnounce, Intent: "long eval",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The announcement still blocks an acquisition and still waves a Guard through.
+	if _, err := AcquireRef(ctx, Request{Ref: ParseRef("do1"), Holder: Self()}); !isConflict(err) {
+		t.Fatalf("acquire over an announcement = %v, want a conflict", err)
+	}
+	if err := Guard(ctx, Self(), Use{Kind: KindName, Name: "do1"}); err != nil {
+		t.Fatalf("announcements are advisory for Guard: %v", err)
+	}
+	out, _, err := runClaim(ctx, "request", "do1", "-m", "need it for a 5 minute eval")
+	if err != nil || !strings.Contains(out, "sent to claude-a") {
+		t.Fatalf("request to an announce holder: out=%q err=%v", out, err)
+	}
+	if len(sent) != 1 || sent[0].To != "claude-a" {
+		t.Fatalf("sent = %+v", sent)
+	}
+}
+
+// A project release carries the same fencing token a named one does: a release
+// delayed from a hold the caller has since released and retaken must fail
+// rather than drop the newer claim.
+func TestClaimProjectReleaseHonoursEpoch(t *testing.T) {
+	dir := cliEnv(t)
+	ctx := context.Background()
+	for _, args := range [][]string{nil, {"release"}, nil} {
+		if _, _, err := runClaim(ctx, args...); err != nil {
+			t.Fatalf("claim %v: %v", args, err)
+		}
+	}
+	claims, err := List(dir)
+	if err != nil || len(claims) != 1 || claims[0].Epoch != 2 {
+		t.Fatalf("retaken project claim = %+v %v", claims, err)
+	}
+	if _, _, err := runClaim(ctx, "release", "--epoch", "1"); !errors.Is(err, ErrFenced) {
+		t.Fatalf("stale project release = %v, want ErrFenced", err)
+	}
+	if claims, _ := List(dir); len(claims) != 1 {
+		t.Fatalf("a stale release dropped the live claim: %+v", claims)
+	}
+	if _, _, err := runClaim(ctx, "release", "--epoch", "2"); err != nil {
+		t.Fatalf("release at the current epoch: %v", err)
+	}
+	if claims, _ := List(dir); len(claims) != 0 {
+		t.Fatalf("claims after release: %+v", claims)
+	}
+	// Epoch 0 stays "my current claim", whatever its epoch.
+	if _, _, err := runClaim(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runClaim(ctx, "release"); err != nil {
+		t.Fatal(err)
+	}
+	if claims, _ := List(dir); len(claims) != 0 {
+		t.Fatalf("claims after a plain release: %+v", claims)
+	}
+}

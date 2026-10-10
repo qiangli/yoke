@@ -27,7 +27,29 @@ func Guard(ctx context.Context, holder principal.Ref, uses ...Use) error {
 	return store{DefaultDir()}.guard(ctx, holder, uses)
 }
 
+// ConflictFor answers "who stands in my way if I try to TAKE these?" — the
+// same scan as Guard, except that announce-mode claims count, because an
+// acquisition refuses them. Anything that reports the owner of what a caller
+// cannot have (`claim request`) has to read the ledger the way the
+// acquisition that refused it does, or it names no holder for an announced
+// target and sends nothing.
+func ConflictFor(ctx context.Context, holder principal.Ref, uses ...Use) error {
+	return store{DefaultDir()}.conflictFor(ctx, holder, uses)
+}
+
 func (s store) guard(ctx context.Context, holder principal.Ref, uses []Use) error {
+	return s.scan(ctx, holder, uses, false)
+}
+
+func (s store) conflictFor(ctx context.Context, holder principal.Ref, uses []Use) error {
+	return s.scan(ctx, holder, uses, true)
+}
+
+// scan walks the ledger for the first live claim of another holder that these
+// uses fall under. announce selects which question is being asked: false is
+// Guard's ("may I touch it?", where an announcement is advisory), true is an
+// acquisition's ("may I take it?", where it is not).
+func (s store) scan(ctx context.Context, holder principal.Ref, uses []Use, announce bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -70,7 +92,10 @@ func (s store) guard(ctx context.Context, holder principal.Ref, uses []Use) erro
 			// claims (the state a crash mid-displacement leaves) refuse everyone
 			// but their own holders.
 			for _, c := range cands {
-				if c.Mode == ModeAnnounce || sameHolder(c.Holder, holder) || c.Liveness(now).Takeable() {
+				if c.Mode == ModeAnnounce && !announce {
+					continue
+				}
+				if sameHolder(c.Holder, holder) || c.Liveness(now).Takeable() {
 					continue
 				}
 				c.normalize()

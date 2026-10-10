@@ -41,15 +41,65 @@ func (c *Conflict) holder() string {
 	return ""
 }
 
-// target is how the claim is addressed on the `bashy claim` command line, as
-// extra arguments: nothing for a project claim (the no-argument forms act on
-// the caller's own project), the quoted kind:name ref for a resource.
-func (c *Conflict) target() string {
+// targetArgs is how the claim is addressed on the `bashy claim` command line,
+// as the arguments that follow the verb. A printed command is only useful if it
+// reaches THIS claim when pasted anywhere, which rules out two shortcuts:
+//
+//   - "kind:name" is wrong whenever ParseRef would not read it back. A kind of
+//     one letter is indistinguishable from a Windows drive letter, so "x:foo"
+//     parses as the plain name "x:foo" — a different target, which `claim
+//     --wait` would happily acquire while the real holder keeps refusing. Those
+//     render as the explicit `--kind K NAME` form instead.
+//   - a project claim cannot render as nothing. The no-argument forms act on the
+//     CALLER's project, so a paste from another directory would address a
+//     different project — request nobody, or wait on the caller's own claim. It
+//     addresses the conflicting PATH SET instead, which is what made this a
+//     conflict in the first place and reads the same from anywhere.
+func (c *Conflict) targetArgs() []string {
 	if c.Claim.Resource == "" {
-		return ""
+		if root := c.projectRoot(); root != "" {
+			return []string{"--kind", "path", root}
+		}
+		return nil
 	}
-	return " " + shellQuote(c.Claim.Address().String())
+	return refArgs(c.Claim.Address())
 }
+
+// refArgs addresses one ref on the `bashy claim` command line: the plain
+// "kind:name" word when ParseRef reads it back as the same ref, the explicit
+// `--kind K NAME` pair when it would not.
+func refArgs(r Ref) []string {
+	if ParseRef(r.String()) == r {
+		return []string{r.String()}
+	}
+	return []string{"--kind", r.Kind, r.Name}
+}
+
+// shellWords renders command arguments as quoted shell words, each preceded by
+// a space, ready to append to a printed command.
+func shellWords(args []string) string {
+	var b strings.Builder
+	for _, a := range args {
+		b.WriteByte(' ')
+		b.WriteString(shellQuote(a))
+	}
+	return b.String()
+}
+
+// projectRoot is one path out of the conflicting project's path set. Any member
+// addresses the whole claim, since project claims conflict by intersection.
+func (c *Conflict) projectRoot() string {
+	c.Claim.normalize()
+	for _, p := range append(append([]string(nil), c.Claim.Roots...), c.Claim.Members...) {
+		if strings.TrimSpace(p) != "" {
+			return p
+		}
+	}
+	return ""
+}
+
+// target is targetArgs as shell words, ready to append to a printed command.
+func (c *Conflict) target() string { return shellWords(c.targetArgs()) }
 
 // shellQuote leaves a plain word as it is and single-quotes anything a shell
 // would split or expand, so a printed command parses back to the same argument.
@@ -138,7 +188,7 @@ func (c *Conflict) Error() string {
 	}
 	fmt.Fprintf(&b, "\n  bashy claim list                # who is working, where, on what\n")
 	if c.Claim.Resource != "" {
-		fmt.Fprintf(&b, "  bashy claim release %s          # the holder releases when finished\n", shellQuote(ref))
+		fmt.Fprintf(&b, "  bashy claim release%s          # the holder releases when finished\n", c.target())
 		return b.String()
 	}
 	fmt.Fprintf(&b, "  bashy weave add \"<task>\"        # work in an ISOLATED workspace instead\n")

@@ -285,8 +285,9 @@ the claim's fencing token.`,
 		Short: "drop this session's project claim or a held target",
 		Long: `release drops a claim you hold. With no argument it drops this session's
 project claim. --epoch N acts only if the claim is still at that epoch — if it
-was taken over since, release fails with a fencing error rather than dropping the
-new holder's claim; epoch 0 (the default) means your current claim.`,
+was taken over, or you released and re-acquired it since, release fails with a
+fencing error rather than dropping a claim you no longer held; epoch 0 (the
+default) means your current claim. Both forms honour it.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			epoch, _ := cmd.Flags().GetUint64("epoch")
@@ -297,7 +298,7 @@ new holder's claim; epoch 0 (the default) means your current claim.`,
 				what = ref.String()
 				err = ReleaseRef(ctxOf(cmd), ref, Self(), epoch)
 			} else {
-				err = Release(DefaultDir(), Self())
+				err = ReleaseEpoch(DefaultDir(), Self(), epoch)
 			}
 			if err != nil {
 				return refuse(cmd, err)
@@ -348,11 +349,14 @@ the claim keeps refusing.`,
 			if len(args) == 1 {
 				ref := targetRef(cmd, args[0])
 				var conflict *Conflict
-				if err := Guard(ctxOf(cmd), self, Use{Kind: ref.Kind, Name: ref.Name}); !errors.As(err, &conflict) {
+				// ConflictFor, not Guard: the question is who the caller cannot
+				// TAKE this from, and an acquisition refuses an announce-mode
+				// claim that a Guard would wave through.
+				if err := ConflictFor(ctxOf(cmd), self, Use{Kind: ref.Kind, Name: ref.Name}); !errors.As(err, &conflict) {
 					if err != nil {
 						return err
 					}
-					return fmt.Errorf("no live holder of %s other than you; take it with `bashy claim %s`", ref, shellQuote(ref.String()))
+					return fmt.Errorf("no live holder of %s other than you; take it with `bashy claim%s`", ref, shellWords(refArgs(ref)))
 				}
 				holder = conflict.holder()
 				body = fmt.Sprintf("CLAIM REQUEST: %s asks you to release or sequence %s", from, conflict.Claim.Address())
