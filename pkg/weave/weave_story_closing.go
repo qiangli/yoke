@@ -44,7 +44,8 @@ type repoState struct {
 	Repo string `json:"repo"`
 	Path string `json:"path,omitempty"`
 	// Shared names the other RUNNING sprints that also link this repo. When
-	// non-empty, repo-wide push/pin checks are exempt; owned dirty files are not.
+	// non-empty, the repo-wide push check is exempt; owned dirty files and
+	// stale pins are not (pins are scoped by sibling ownership instead).
 	Shared []int64 `json:"shared_with,omitempty"`
 
 	Dirty      int      `json:"dirty_files,omitempty"`
@@ -59,7 +60,7 @@ type repoState struct {
 
 // OK reports a repo that meets the closing bar, or is exempt from it.
 func (r *repoState) OK() bool {
-	if r.Exempt && r.Dirty == 0 && r.Unknown == "" {
+	if r.Exempt && r.Dirty == 0 && len(r.StalePins) == 0 && r.Unknown == "" {
 		return true
 	}
 	return r.Dirty == 0 && r.Unpushed == 0 && len(r.StalePins) == 0 && r.Unknown == ""
@@ -70,7 +71,7 @@ func (r *repoState) Describe() string {
 	switch {
 	case r.Unknown != "":
 		return fmt.Sprintf("%s: cannot check (%s)", r.Repo, r.Unknown)
-	case r.Exempt && r.Dirty == 0:
+	case r.Exempt && r.Dirty == 0 && len(r.StalePins) == 0:
 		ids := make([]string, 0, len(r.Shared))
 		for _, id := range r.Shared {
 			ids = append(ids, fmt.Sprintf("#%d", id))
@@ -134,6 +135,9 @@ func checkClosingConditions(s *weaveStory, others []*weaveStory, repoPath func(s
 			st.Unknown = err.Error()
 			st.Exempt = false
 		}
+		var pinWarnings []string
+		st.StalePins, pinWarnings = sprintStalePinOwnership(s, others, path, st.StalePins, repoPath)
+		st.Warnings = append(st.Warnings, pinWarnings...)
 		seen[hygieneRootKey(path)] = true
 		out = append(out, st)
 	}

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/qiangli/yoke/pkg/gomod"
 	"github.com/qiangli/yoke/pkg/issue"
 	todopkg "github.com/qiangli/yoke/pkg/todo"
 )
@@ -22,31 +23,15 @@ func sprintRunRoot(run sprintRun) (string, bool) {
 
 // Attribute individual paths, not the entire umbrella. Story membership wins
 // over repo ownership; otherwise the most specific linked repo owns its files
-// and its gitlink in the parent checkout. Equal owners still include our work.
+// and its gitlink in the parent checkout. Equal owners still include our work
+// unless the run records show ours delivered and theirs producing.
 func sprintDirtyOwnership(s *weaveStory, board []*weaveStory, root string, repoPath func(sprintRun) (string, bool)) (int, []string, error) {
 	root = hygieneRootKey(root)
 	out, err := exec.Command(gitBin(), "-C", root, "status", "--porcelain", "-z", "--untracked-files=all").Output()
 	if err != nil {
 		return 0, nil, err
 	}
-	candidates := []*weaveStory{s}
-	for _, other := range board {
-		if other != nil && other.ID != s.ID && other.currentBox() != nil {
-			candidates = append(candidates, other)
-		}
-	}
-	type ownedRoot struct {
-		path string
-		id   int64
-	}
-	var roots []ownedRoot
-	for _, owner := range candidates {
-		for _, run := range owner.Runs {
-			if path, ok := repoPath(run); ok {
-				roots = append(roots, ownedRoot{hygieneRootKey(path), owner.ID})
-			}
-		}
-	}
+	candidates, roots := sprintOwnedRoots(s, board, repoPath)
 	dirty := 0
 	var warnings []string
 	entries := strings.Split(string(out), "\x00")
@@ -80,21 +65,7 @@ func sprintDirtyOwnership(s *weaveStory, board []*weaveStory, root string, repoP
 					continue
 				}
 			}
-			longest := -1
-			pathOwners := map[int64]bool{}
-			for _, owned := range roots {
-				if abs != owned.path && !strings.HasPrefix(abs, owned.path+string(filepath.Separator)) {
-					continue
-				}
-				if len(owned.path) > longest {
-					longest = len(owned.path)
-					pathOwners = map[int64]bool{}
-				}
-				if len(owned.path) == longest {
-					pathOwners[owned.id] = true
-				}
-			}
-			for id := range pathOwners {
+			for id := range sprintRootOwners(s, roots, abs, true) {
 				owners[id] = true
 			}
 		}
@@ -102,16 +73,113 @@ func sprintDirtyOwnership(s *weaveStory, board []*weaveStory, root string, repoP
 			dirty++
 			continue
 		}
-		var names []string
-		for id := range owners {
-			names = append(names, fmt.Sprintf("sprint #%d", id))
-		}
-		sort.Strings(names)
-		owner := "unattributed"
-		if len(names) > 0 {
-			owner = strings.Join(names, ", ")
-		}
+		owner := sprintOwnerNames(owners)
 		warnings = append(warnings, fmt.Sprintf("WARNING: %s: uncommitted %s (%s)", root, strings.Join(paths, " <- "), owner))
 	}
 	return dirty, warnings, nil
+}
+
+type sprintOwnedRoot struct {
+	path string
+	id   int64
+	run  sprintRun
+}
+
+// sprintOwnedRoots lists the checkouts linked by s and every other active sprint.
+func sprintOwnedRoots(s *weaveStory, board []*weaveStory, repoPath func(sprintRun) (string, bool)) ([]*weaveStory, []sprintOwnedRoot) {
+	candidates := []*weaveStory{s}
+	for _, other := range board {
+		if other != nil && other.ID != s.ID && other.currentBox() != nil {
+			candidates = append(candidates, other)
+		}
+	}
+	var roots []sprintOwnedRoot
+	for _, owner := range candidates {
+		for _, run := range owner.Runs {
+			if path, ok := repoPath(run); ok {
+				roots = append(roots, sprintOwnedRoot{hygieneRootKey(path), owner.ID, run})
+			}
+		}
+	}
+	return candidates, roots
+}
+
+// sprintRootOwners names the sprints whose most specific linked checkout holds
+// abs. A checkout linked by s and another active sprint is ambiguous and stays
+// s's unless yield is set and the run records settle it (sprintYieldsRoot).
+func sprintRootOwners(s *weaveStory, roots []sprintOwnedRoot, abs string, yield bool) map[int64]bool {
+	longest, root := -1, ""
+	owners := map[int64]bool{}
+	for _, owned := range roots {
+		if abs != owned.path && !strings.HasPrefix(abs, owned.path+string(filepath.Separator)) {
+			continue
+		}
+		if len(owned.path) > longest {
+			longest, root = len(owned.path), owned.path
+			owners = map[int64]bool{}
+		}
+		if len(owned.path) == longest {
+			owners[owned.id] = true
+		}
+	}
+	if yield && owners[s.ID] && len(owners) > 1 && sprintYieldsRoot(s.ID, roots, root) {
+		delete(owners, s.ID)
+	}
+	return owners
+}
+
+// sprintYieldsRoot attributes a shared checkout's dirt to the other active
+// sprints only on run evidence: every run s linked there is finished with
+// nothing unmerged and nothing awaiting a decision, while another sprint still
+// has a run producing there. A run record that cannot be read keeps it ours.
+func sprintYieldsRoot(id int64, roots []sprintOwnedRoot, root string) bool {
+	producing := false
+	for _, owned := range roots {
+		if owned.path != root {
+			continue
+		}
+		it := sprintLinkedItem(owned.run)
+		if owned.id == id {
+			if it == nil || !isPrunableState(it.State) || it.UnmergedCommits > 0 || it.NeedsSteward || it.CleanupError != "" {
+				return false
+			}
+		} else if it != nil && !isPrunableState(it.State) {
+			producing = true
+		}
+	}
+	return producing
+}
+
+// sprintStalePinOwnership keeps the stale pins s answers for. A pin goes stale
+// when its sibling's HEAD moves, so it belongs to whoever produces in the
+// sibling: a pin on a sibling only other active sprints link is warned, while
+// one s links, or nobody links, still blocks.
+func sprintStalePinOwnership(s *weaveStory, board []*weaveStory, path string, pins []string, repoPath func(sprintRun) (string, bool)) ([]string, []string) {
+	ws, err := gomod.Load(path)
+	if err != nil || ws == nil {
+		return pins, nil
+	}
+	_, roots := sprintOwnedRoots(s, board, repoPath)
+	var own, warnings []string
+	for _, name := range pins {
+		owners := sprintRootOwners(s, roots, hygieneRootKey(filepath.Join(ws.Root, filepath.FromSlash(name))), false)
+		if len(owners) == 0 || owners[s.ID] {
+			own = append(own, name)
+			continue
+		}
+		warnings = append(warnings, fmt.Sprintf("WARNING: %s: stale pin %s (%s)", path, name, sprintOwnerNames(owners)))
+	}
+	return own, warnings
+}
+
+func sprintOwnerNames(owners map[int64]bool) string {
+	var names []string
+	for id := range owners {
+		names = append(names, fmt.Sprintf("sprint #%d", id))
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		return "unattributed"
+	}
+	return strings.Join(names, ", ")
 }
