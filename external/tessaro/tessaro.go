@@ -18,8 +18,10 @@ import (
 	"github.com/qiangli/yoke/external/meshagent"
 )
 
-// PortalURL is the Tessaro front door.
-const PortalURL = "https://tessaro.sh"
+// PortalURL is the Tessaro front door: the canonical host, where pairing,
+// cookies and auth live (tessaro.sh is a vanity alias of it, and outpost
+// register pairs against the same host by default).
+const PortalURL = "https://ai.dhnt.io"
 
 var errHandled = errors.New("tessaro: handled")
 
