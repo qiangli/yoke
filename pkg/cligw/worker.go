@@ -975,7 +975,10 @@ func (b *lockedBuffer) String() string {
 // inherit), then only the credentials the launch contract names, then the
 // principal. The same order weave and chat use for the same CLIs.
 func workerEnv(parent []string, l agentlaunch.Launch) []string {
-	env := secrets.PreserveEnvNames(secrets.ScrubAgentEnv(parent), parent, l.PreserveEnv)
+	// The binding's credential contract (preserved names and key_env/
+	// credential_env aliases), projected exactly as delegate, chat and weave
+	// project it; nothing else of the door's environment reaches the seat.
+	env := secrets.ProjectAgentEnv(secrets.ScrubAgentEnv(parent), parent, l.PreserveEnv, l.CredentialEnvAliases)
 	env = agentlaunch.ApplyLaunchEnv(env, l)
 	return agentlaunch.PrincipalEnv(env, l)
 }

@@ -35,3 +35,23 @@ func TestWorkerEnvDropsInheritedVendorKeys(t *testing.T) {
 		t.Errorf("keyed binding env wrong:\n%s", j2)
 	}
 }
+
+// A custom tool reads its key under a protocol name (key_env: OPENAI_API_KEY)
+// while the bound model's credential lives under its ref (ZAI_API_KEY). The
+// door's worker must project it exactly as delegate, chat and weave do, or a
+// custom tool:model agent cannot be served as a model (Sprint 406 live check).
+func TestWorkerEnvProjectsKeyEnvAliases(t *testing.T) {
+	t.Setenv("BASHY_ALLOW_AGENT_SECRETS", "")
+	parent := []string{"PATH=/usr/bin", "HOME=/home/u", "ZAI_API_KEY=zk-1", "OPENAI_API_KEY=sk-door"}
+	l := agentlaunch.Launch{
+		Nick: "qwen-glm", Tool: "qwen-code",
+		CredentialEnvAliases: map[string][]string{"OPENAI_API_KEY": {"ZAI_API_KEY"}},
+	}
+	joined := "\n" + strings.Join(workerEnv(parent, l), "\n") + "\n"
+	if !strings.Contains(joined, "\nOPENAI_API_KEY=zk-1\n") {
+		t.Errorf("worker env did not project the bound credential under OPENAI_API_KEY:\n%s", joined)
+	}
+	if strings.Contains(joined, "sk-door") {
+		t.Errorf("worker env leaked the door's own key:\n%s", joined)
+	}
+}
