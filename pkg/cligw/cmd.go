@@ -101,9 +101,11 @@ bearer token share one cap.`,
 	return cmd
 }
 
-// maxInFlightFromEnv reads the CLIGW_MAX_IN_FLIGHT fallback for serve: an
+// MaxInFlightFromEnv reads the CLIGW_MAX_IN_FLIGHT fallback for serve: an
 // empty value keeps the policy default, a set one must parse positive.
-func maxInFlightFromEnv() (int, error) {
+// Exported so the broker door (`bashy llm serve`) reuses the same spelling
+// instead of growing a second parser.
+func MaxInFlightFromEnv() (int, error) {
 	raw := strings.TrimSpace(os.Getenv("CLIGW_MAX_IN_FLIGHT"))
 	if raw == "" {
 		return 0, nil
@@ -119,7 +121,7 @@ func runServe(cmd *cobra.Command, o *serveOptions) error {
 	maxInFlight := o.maxInFlight
 	if maxInFlight == 0 {
 		var err error
-		if maxInFlight, err = maxInFlightFromEnv(); err != nil {
+		if maxInFlight, err = MaxInFlightFromEnv(); err != nil {
 			return err
 		}
 	}

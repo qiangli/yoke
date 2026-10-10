@@ -193,16 +193,16 @@ func TestServerQuota429LandsInUsageLog(t *testing.T) {
 // integer parses, anything else fails loudly.
 func TestMaxInFlightFromEnv(t *testing.T) {
 	t.Setenv("CLIGW_MAX_IN_FLIGHT", "")
-	if n, err := maxInFlightFromEnv(); err != nil || n != 0 {
+	if n, err := MaxInFlightFromEnv(); err != nil || n != 0 {
 		t.Fatalf("empty env = %d, %v; want 0, nil", n, err)
 	}
 	t.Setenv("CLIGW_MAX_IN_FLIGHT", "8")
-	if n, err := maxInFlightFromEnv(); err != nil || n != 8 {
+	if n, err := MaxInFlightFromEnv(); err != nil || n != 8 {
 		t.Fatalf("env 8 = %d, %v; want 8, nil", n, err)
 	}
 	for _, bad := range []string{"0", "-3", "many"} {
 		t.Setenv("CLIGW_MAX_IN_FLIGHT", bad)
-		if _, err := maxInFlightFromEnv(); err == nil {
+		if _, err := MaxInFlightFromEnv(); err == nil {
 			t.Fatalf("env %q parsed without error", bad)
 		}
 	}

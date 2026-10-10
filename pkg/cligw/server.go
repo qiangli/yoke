@@ -1046,6 +1046,13 @@ func (s *Server) admissionLimit(principal string) int {
 	return s.policy.AdmissionLimit(principal)
 }
 
+// AdmissionLimit reports the per-principal in-flight cap the gateway
+// enforces for this server. Exported so the broker door (which embeds the
+// server) can verify its --max-in-flight wiring reaches the gate.
+func (s *Server) AdmissionLimit(principal string) int {
+	return s.admissionLimit(principal)
+}
+
 // RefusalSchemaVersion is the JSON envelope for refused requests in
 // usage.jsonl, next to the routing decisions and served-token usage.
 const RefusalSchemaVersion = "bashy-cligw-refusal-v1"

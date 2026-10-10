@@ -50,7 +50,11 @@ type DoorOptions struct {
 	Prewarm  bool
 	NoEngine bool
 	NoCLI    bool
-	Out      io.Writer
+	// MaxInFlight overrides the policy file's max_in_flight default: the
+	// per-principal in-flight cap for fleet agents. Zero falls back to
+	// CLIGW_MAX_IN_FLIGHT, then the policy file.
+	MaxInFlight int
+	Out         io.Writer
 }
 
 // cliAdapter makes a cligw server a CLIBackend.
@@ -158,6 +162,23 @@ func Healthy() bool {
 // ErrAlreadyServing: a door already answers on the port.
 var ErrAlreadyServing = errors.New("the model door is already serving")
 
+// cliServerOptions maps the door's fleet-agent knobs onto cligw's: the
+// --max-in-flight flag wins, then CLIGW_MAX_IN_FLIGHT (parsed by cligw, so
+// both doors spell it the same way), then the policy file. Every request
+// through the door authorizes as the single "owner" principal — sessions
+// and sticky keys do not change it — so max_in_flight_by_principal
+// overrides must use the "owner" key.
+func cliServerOptions(token string, o DoorOptions) (cligw.ServerOptions, error) {
+	maxInFlight := o.MaxInFlight
+	if maxInFlight == 0 {
+		var err error
+		if maxInFlight, err = cligw.MaxInFlightFromEnv(); err != nil {
+			return cligw.ServerOptions{}, err
+		}
+	}
+	return cligw.ServerOptions{Token: token, PolicyFile: o.Policy, Prewarm: o.Prewarm, MaxInFlight: maxInFlight}, nil
+}
+
 // RunDoor serves the door in the foreground until ctx ends or SIGINT/SIGTERM.
 func RunDoor(ctx context.Context, o DoorOptions) error {
 	out := o.Out
@@ -190,7 +211,11 @@ func RunDoor(ctx context.Context, o DoorOptions) error {
 	opts := Options{Token: token, StateDir: stateDir}
 	var cli *cligw.Server
 	if !o.NoCLI {
-		cli, err = cligw.NewServer(cligw.ServerOptions{Token: token, PolicyFile: o.Policy, Prewarm: o.Prewarm})
+		cliOpts, err := cliServerOptions(token, o)
+		if err != nil {
+			return err
+		}
+		cli, err = cligw.NewServer(cliOpts)
 		if err != nil {
 			return err
 		}
@@ -307,7 +332,14 @@ func newServeCmd() *cobra.Command {
 loopback port and serves local models and fleet agents on port 24556 (loopback
 by default; --bind lan must be asked for), plus an owner-only unix socket.
 
-Only one door runs per host: when one already answers, serve says so and exits.`,
+Only one door runs per host: when one already answers, serve says so and exits.
+
+Parallel fleet-agent requests share one per-principal in-flight cap (default
+4): past it the door answers 429. Every request authorizes as the single
+"owner" principal — sessions (X-Bashy-Session, /s/...) and sticky keys do
+not change it — so max_in_flight_by_principal overrides must use the
+"owner" key. Raise the cap with --max-in-flight (or CLIGW_MAX_IN_FLIGHT,
+or max_in_flight in policy.yaml).`,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -325,6 +357,7 @@ Only one door runs per host: when one already answers, serve says so and exits.`
 	f.IntVar(&o.Port, "port", 0, "TCP port (default 24556 or $BASHY_LLM_PORT)")
 	f.StringVar(&o.Policy, "policy", "", "cligw routing policy file")
 	f.BoolVar(&o.Prewarm, "prewarm", false, "spawn each band leader's spare CLI worker at startup")
+	f.IntVar(&o.MaxInFlight, "max-in-flight", 0, "per-principal in-flight cap for fleet agents (default 4; overrides CLIGW_MAX_IN_FLIGHT and max_in_flight in policy.yaml; the principal is always \"owner\")")
 	f.BoolVar(&o.NoEngine, "no-engine", false, "serve fleet agents only (no local models)")
 	f.BoolVar(&o.NoCLI, "no-cli", false, "serve local models only (no fleet agents)")
 	return cmd
