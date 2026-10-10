@@ -510,6 +510,7 @@ func nativeDiff(_ context.Context, dir string, args []string) (*ExecResult, erro
 	quiet := false
 	nameOnly := false
 	diffFilter := ""
+	rev := ""
 	var paths []string
 	dashDash := false
 	for i := 0; i < len(args); i++ {
@@ -519,6 +520,9 @@ func nativeDiff(_ context.Context, dir string, args []string) (*ExecResult, erro
 			dashDash = true
 		case arg == "--cached" || arg == "--staged":
 			cached = true
+		case arg == "--binary" || arg == "-p" || arg == "--patch" || arg == "--no-color" || arg == "--no-ext-diff":
+			// --binary only matters for binary files, which stagedPatch
+			// refuses (ErrUnsupported) rather than emitting a stub.
 		case arg == "--stat":
 			stat = true
 		case arg == "--quiet":
@@ -537,8 +541,14 @@ func nativeDiff(_ context.Context, dir string, args []string) (*ExecResult, erro
 		default:
 			// A bare positional is a pathspec only when it names a
 			// file on disk or in the status; otherwise it is a commit
-			// revision, which this tier cannot diff.
+			// revision, which only the --cached form can diff.
 			if _, serr := os.Stat(filepath.Join(dir, filepath.FromSlash(arg))); serr != nil {
+				if cached && rev == "" {
+					if _, rerr := repo.ResolveRevision(plumbing.Revision(arg)); rerr == nil {
+						rev = arg
+						continue
+					}
+				}
 				st, serr := wt.Status()
 				if serr != nil {
 					return nil, ErrUnsupported
@@ -549,6 +559,10 @@ func nativeDiff(_ context.Context, dir string, args []string) (*ExecResult, erro
 			}
 			paths = append(paths, filepath.ToSlash(filepath.Clean(arg)))
 		}
+	}
+
+	if rev != "" && (quiet || nameOnly || stat) {
+		return nil, ErrUnsupported
 	}
 
 	// --quiet reports only via exit status: 0 = no differences, 1 =
@@ -608,8 +622,14 @@ func nativeDiff(_ context.Context, dir string, args []string) (*ExecResult, erro
 	}
 
 	if cached {
-		// Staged changes: diff between HEAD and index
-		return nil, ErrUnsupported // go-git staged diff is complex
+		patch, err := stagedPatch(repo, rev, paths)
+		if err != nil {
+			return nil, err
+		}
+		return &ExecResult{Stdout: patch}, nil
+	}
+	if rev != "" {
+		return nil, ErrUnsupported
 	}
 
 	// Unstaged changes: diff between index and working tree

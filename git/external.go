@@ -41,6 +41,33 @@ func RunExternal(ctx context.Context, dir string, args []string) (*ExecResult, e
 	if !errors.Is(err, ErrUnsupported) {
 		return nil, err
 	}
+	return runHost(ctx, dir, args)
+}
+
+// ErrNeedsExternal wraps ErrUnsupported with the actionable hint that
+// the verb or flag combination is outside the native engine and a host
+// git is reachable only via --external=true.
+func ErrNeedsExternal(args []string) error {
+	return fmt.Errorf("git %s is not served by the native git engine; retry with --external=true to run it on a host git: %w",
+		strings.Join(args, " "), ErrUnsupported)
+}
+
+// ExecOrExternal is the door contract in one call: the native engine
+// first; on ErrUnsupported, the verbatim argv goes to the host git when
+// external is true, otherwise the call fails with ErrNeedsExternal
+// (which names --external=true) instead of an engine-internal flag error.
+func ExecOrExternal(ctx context.Context, dir string, args []string, external bool) (*ExecResult, error) {
+	if external {
+		return RunExternal(ctx, dir, args)
+	}
+	res, err := Exec(ctx, dir, args)
+	if errors.Is(err, ErrUnsupported) {
+		return nil, ErrNeedsExternal(args)
+	}
+	return res, err
+}
+
+func runHost(ctx context.Context, dir string, args []string) (*ExecResult, error) {
 	path, lerr := exec.LookPath("git")
 	if lerr != nil {
 		return &ExecResult{

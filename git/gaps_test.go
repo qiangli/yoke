@@ -1107,7 +1107,7 @@ func TestNativeDiff_NameOnlyFilter(t *testing.T) {
 	for _, argv := range [][]string{
 		{"diff", "--stat"},
 		{"diff", "--name-only", "HEAD"},
-		{"diff", "--cached"},
+		{"diff", "--cached", "--word-diff"},
 	} {
 		if _, err := Exec(ctx, dir, argv); err != ErrUnsupported {
 			t.Errorf("diff %v err = %v, want ErrUnsupported", argv, err)
