@@ -38,7 +38,7 @@ func TestNoSupervisorDoesNotLaunchSummaryAndConverges(t *testing.T) {
 	calls := 0
 	r := funcRunner(func(_ context.Context, agent string, _ []string, _ string) (string, int, error) {
 		calls++
-		if agent != "agy" {
+		if fixtureAgent(agent) != "agy" {
 			t.Fatalf("unexpected final model invocation for %q", agent)
 		}
 		return "done", 0, nil
@@ -92,12 +92,21 @@ type scriptRunner struct {
 }
 
 func (s scriptRunner) Run(_ context.Context, agent string, _ []string, _ string) (string, int, error) {
-	reply, hasReply := s.reply[agent]
-	code, hasCode := s.code[agent]
+	name := fixtureAgent(agent)
+	reply, hasReply := s.reply[name]
+	code, hasCode := s.code[name]
 	if !hasReply && !hasCode {
 		return "", 1, fmt.Errorf("scriptRunner: unexpected agent %q", agent)
 	}
 	return reply, code, nil
+}
+
+// fixtureAgent maps the binary chat.Invoke actually resolved — a managed,
+// versioned install path on hosts with a populated binary cache — back to the
+// fleet name the fixtures key on. Only the synthetic runners normalize; the
+// production invocation is untouched.
+func fixtureAgent(agent string) string {
+	return strings.TrimSuffix(filepath.Base(filepath.FromSlash(agent)), ".exe")
 }
 
 type noProgress struct{}
@@ -210,7 +219,7 @@ func TestRetryRotatesFleet(t *testing.T) {
 		if attempts == 2 {
 			_ = os.WriteFile(gatefile, []byte("x"), 0o644)
 		}
-		return "turn by " + agent, 0, nil
+		return "turn by " + fixtureAgent(agent), 0, nil
 	})
 	p := &Plan{
 		Goal: "g", Supervisor: "claude", Fleet: []string{"codex", "opencode"}, MaxAttempts: 3, Cwd: os.TempDir(),
