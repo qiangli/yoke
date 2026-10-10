@@ -274,6 +274,12 @@ func (e *Engine) runSerial(ctx context.Context, order []*Node, fp map[string]str
 	// be flushed wrapped in ::group:: markers (mirrors the parallel scheduler).
 	capture := e.Capture || e.OutputGroup
 	for _, node := range order {
+		if ctx.Err() != nil {
+			// Cancelled (SIGTERM/SIGINT): never start the next target, even
+			// under --keep-going. Everything unstarted is reported skipped.
+			report.add(e.markCancelled(node))
+			continue
+		}
 		if blocker, blocked := firstUnmetDep(node); blocked {
 			res := e.markSkipped(node, blocker)
 			if e.OutputGroup {
@@ -383,8 +389,8 @@ func (e *Engine) runParallel(ctx context.Context, order []*Node, fp map[string]s
 				pushSkipped(n, StatusSkipped)
 				continue
 			}
-			if stopped {
-				continue // fail-fast: leave for the flush
+			if stopped || ctx.Err() != nil {
+				continue // fail-fast or cancelled: leave for the flush
 			}
 			queued[n.Task.Name] = true
 			wg.Add(1)
@@ -442,6 +448,11 @@ func (e *Engine) runParallel(ctx context.Context, order []*Node, fp map[string]s
 	for completed := 0; completed < len(order); completed++ {
 		n := <-done
 		mu.Lock()
+		if ctx.Err() != nil && !stopped {
+			stopped = true
+			failed = true
+			flushRemaining()
+		}
 		switch n.Result.Status {
 		case StatusFailed:
 			failed = true
@@ -775,6 +786,15 @@ func (e *Engine) runAttempt(ctx context.Context, node *Node, capture bool, worke
 	if capture {
 		res.Stdout, res.Stderr = ob.String(), eb.String()
 	}
+	// A body interrupted by the parent's cancellation is never a success, and
+	// is not cached as one, whatever status the interrupted shell reported.
+	if ctx.Err() != nil && res.Status == StatusDone {
+		res.Status = StatusFailed
+		if res.ExitCode == 0 {
+			res.ExitCode = 1
+		}
+		res.Err = context.Cause(ctx)
+	}
 	// A per-target deadline that fired (not a parent cancellation) is a timeout.
 	if node.Task.Timeout > 0 && ctx.Err() == nil && runCtx.Err() == context.DeadlineExceeded {
 		res.Status = StatusFailed
@@ -1059,6 +1079,16 @@ func copyArtifact(src, dst string) {
 
 func (e *Engine) upToDate(node *Node, fp map[string]string) bool {
 	return e.Cache != nil && !e.Force && e.Cache.UpToDate(node, e.Dir, fp[node.Task.Name])
+}
+
+// markCancelled records a target that never started because the run was
+// cancelled; it reads as skipped, so the run reports failed.
+func (e *Engine) markCancelled(node *Node) TaskResult {
+	node.Status = StatusSkipped
+	res := TaskResult{Name: node.Task.Name, Host: node.Task.Host, Status: StatusSkipped}
+	node.Result = &res
+	e.noteResult(node.Task.Name, res)
+	return res
 }
 
 func (e *Engine) markSkipped(node *Node, blocker string) TaskResult {
