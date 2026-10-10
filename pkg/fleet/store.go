@@ -38,34 +38,10 @@ func DefaultRoot() string {
 	return filepath.Join(home, ".config", "bashy")
 }
 
-// nounEnv maps a noun to its per-noun directory override.
-var nounEnv = map[string]string{
-	dirTools:    "BASHY_TOOLS_DIR",
-	dirModels:   "BASHY_MODELS_DIR",
-	dirAgents:   "BASHY_AGENTS_DIR",
-	dirPeople:   "BASHY_PEOPLE_DIR",
-	dirHosts:    "BASHY_HOSTS_DIR",
-	dirCommands: "BASHY_COMMANDS_DIR",
-	dirApps:     "BASHY_APPS_DIR",
-	dirPlans:    "BASHY_PLANS_DIR",
-}
-
-// nounPathEnv maps a noun to its PATH-list of read-only shared dirs.
-var nounPathEnv = map[string]string{
-	dirTools:    "BASHY_TOOLS_PATH",
-	dirModels:   "BASHY_MODELS_PATH",
-	dirAgents:   "BASHY_AGENTS_PATH",
-	dirPeople:   "BASHY_PEOPLE_PATH",
-	dirHosts:    "BASHY_HOSTS_PATH",
-	dirCommands: "BASHY_COMMANDS_PATH",
-	dirApps:     "BASHY_APPS_PATH",
-	dirPlans:    "BASHY_PLANS_PATH",
-}
-
 // NounDir resolves a noun's local store directory.
 func NounDir(root, noun string) string {
-	if env, ok := nounEnv[noun]; ok {
-		if d := os.Getenv(env); d != "" {
+	if k, ok := kindByDir(noun); ok && k.DirEnv != "" {
+		if d := os.Getenv(k.DirEnv); d != "" {
 			return d
 		}
 	}
@@ -90,12 +66,12 @@ func seedsOff() bool {
 
 // sharedDirs returns the read-only shared catalog dirs for a noun.
 func sharedDirs(noun string) []string {
-	env, ok := nounPathEnv[noun]
-	if !ok {
+	k, ok := kindByDir(noun)
+	if !ok || k.PathEnv == "" {
 		return nil
 	}
 	var out []string
-	for _, d := range filepath.SplitList(os.Getenv(env)) {
+	for _, d := range filepath.SplitList(os.Getenv(k.PathEnv)) {
 		if d != "" {
 			out = append(out, d)
 		}

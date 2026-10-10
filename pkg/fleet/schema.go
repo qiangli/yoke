@@ -19,22 +19,8 @@ type schemaField struct {
 }
 
 func nounType(noun string) reflect.Type {
-	switch noun {
-	case KindTool:
-		return reflect.TypeOf(Tool{})
-	case KindModel:
-		return reflect.TypeOf(Model{})
-	case KindAgent:
-		return reflect.TypeOf(Agent{})
-	case KindCommand:
-		return reflect.TypeOf(Command{})
-	case KindApp:
-		return reflect.TypeOf(App{})
-	case KindPerson:
-		return reflect.TypeOf(Person{})
-	default:
-		return nil
-	}
+	k, _ := kindByName(noun)
+	return k.Type
 }
 
 func schemaFields(noun string) []schemaField {

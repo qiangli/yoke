@@ -269,37 +269,12 @@ func (c *Catalog) claimName(kind, canonical string, aliases []string, force bool
 	if force {
 		return nil
 	}
-	lookup := func(n string) (string, bool) {
-		switch kind {
-		case KindAgent:
-			if a, ok := c.Agent(n); ok {
-				return a.Name, true
-			}
-		case KindTool:
-			if t, ok := c.Tool(n); ok {
-				return t.Name, true
-			}
-		case KindModel:
-			if m, ok := c.Model(n); ok {
-				return m.Name, true
-			}
-		case KindPerson:
-			if p, ok := c.Person(n); ok {
-				return p.Handle, true
-			}
-		case KindCommand:
-			if r, ok := c.Command(n); ok {
-				return r.Name, true
-			}
-		case KindApp:
-			if a, ok := c.App(n); ok {
-				return a.Name, true
-			}
-		}
-		return "", false
+	spec, ok := kindByName(kind)
+	if !ok || spec.Lookup == nil {
+		return nil
 	}
 	for _, n := range names(canonical, aliases) {
-		if holder, ok := lookup(n); ok && holder != canonical {
+		if holder, ok := spec.Lookup(c, n); ok && holder != canonical {
 			return fmt.Errorf("fleet: %s name %q already belongs to %q (use --force to take it)", kind, n, holder)
 		}
 	}

@@ -40,7 +40,7 @@ func TestEmptyRingListsHeaderAndHintsWithoutFailing(t *testing.T) {
 		if strings.Count(hint, "\n") != 0 || !strings.HasPrefix(hint, "hint:") {
 			t.Fatalf("%s list stderr = %q, want one hint line", tc.kind, errOut.String())
 		}
-		for _, want := range []string{"bashy " + tc.kind + " add", "bashy " + tc.kind + " sync", nounPathEnv[tc.kind+"s"]} {
+		for _, want := range []string{"bashy " + tc.kind + " add", "bashy " + tc.kind + " sync", pathEnvOf(tc.kind)} {
 			if !strings.Contains(hint, want) {
 				t.Errorf("%s hint %q does not mention %q", tc.kind, hint, want)
 			}

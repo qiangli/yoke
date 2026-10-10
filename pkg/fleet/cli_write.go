@@ -803,30 +803,11 @@ func newVerify(noun string, opts []Option, check func(*Catalog, string) Check) *
 }
 
 func allNames(c *Catalog, noun string) []string {
-	var out []string
-	switch noun {
-	case KindTool:
-		tools, _ := c.Tools(false)
-		for _, t := range tools {
-			out = append(out, t.Name)
-		}
-	case KindModel:
-		models, _ := c.Models()
-		for _, m := range models {
-			out = append(out, m.Name)
-		}
-	case KindAgent:
-		agents, _ := c.Agents()
-		for _, a := range agents {
-			out = append(out, a.Name)
-		}
-	case KindCommand:
-		cmds, _ := c.Commands()
-		for _, r := range cmds {
-			out = append(out, r.Name)
-		}
+	k, ok := kindByName(noun)
+	if !ok || k.Names == nil {
+		return nil
 	}
-	return out
+	return k.Names(c)
 }
 
 // --- helpers -------------------------------------------------------------

@@ -781,7 +781,7 @@ func yesNo(b bool) string {
 // the table header above it is the listing.
 func emptyRingHint(w io.Writer, kind string) {
 	fmt.Fprintf(w, "hint: no %ss in any ring — `bashy %s add NAME`, `bashy %s sync`, or mount a shared ring via $%s\n",
-		kind, kind, kind, nounPathEnv[kind+"s"])
+		kind, kind, kind, pathEnvOf(kind))
 }
 
 // reportParseErrs surfaces broken entries on stderr and fails the verb.

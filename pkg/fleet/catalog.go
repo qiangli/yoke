@@ -179,10 +179,10 @@ func (c *Catalog) sources(noun string) []assetring.Source {
 		base = baselineFS
 	}
 	// The seeded roster (models + agents) can be switched off; the tool
-	// launch contracts cannot — see SeedsEnv.
-	// Registered commands and apps have NO embedded ring by design (rod, not
-	// fish): bashy ships the mechanism and never a catalog of them.
-	seeded := (noun == dirTools || !seedsOff()) && noun != dirCommands && noun != dirApps
+	// launch contracts cannot — see SeedsEnv. Which kinds carry an embedded
+	// ring at all is declared in the kind table.
+	spec, _ := kindByDir(noun)
+	seeded := spec.Seeded && (spec.Mechanism || !seedsOff())
 	if sub, err := fs.Sub(base, baselineRoot+"/"+noun); err == nil && seeded {
 		out = append(out, assetring.FileFS(sub, assetring.RingEmbedded, ext))
 	}
@@ -198,7 +198,7 @@ func (c *Catalog) sources(noun string) []assetring.Source {
 	}
 	if !c.cfg.noLocal {
 		local := assetring.FileDir(c.nounDir(noun), assetring.RingLocal, ext)
-		if noun == dirTools || noun == dirModels || noun == dirAgents {
+		if spec.Overlay {
 			local = overlaySource{Source: local, lower: append([]assetring.Source(nil), out...), noun: noun}
 		}
 		out = append(out, local)
