@@ -915,8 +915,14 @@ deployment:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Status != "dry-run" || res.Conductor != "claude" || res.Chat.Agent != "claude" {
+	// The resolved binary may be a managed, versioned install path; compare
+	// its basename, and still pin the resolved invocation args.
+	agent := strings.TrimSuffix(filepath.Base(filepath.FromSlash(res.Chat.Agent)), ".exe")
+	if res.Status != "dry-run" || res.Conductor != "claude" || agent != "claude" {
 		t.Fatalf("unexpected delegate result: %+v", res)
+	}
+	if len(res.Chat.Args) == 0 || res.Chat.Args[0] != "--dangerously-skip-permissions" {
+		t.Fatalf("dry-run lost the conductor's resolved args: %q", res.Chat.Args)
 	}
 	if !strings.Contains(res.Chat.Output, "claude --dangerously-skip-permissions") {
 		t.Fatalf("dry-run output missing resolved conductor invocation: %q", res.Chat.Output)
