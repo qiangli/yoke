@@ -300,31 +300,74 @@ func customBackend(kind string) Backend {
 	return backends[kind]
 }
 
-// kindsConflict reports whether a claim on (ka, na, ma) and one on (kb, nb,
-// mb) collide: the kinds must share a domain, and a mixed-rule domain falls
-// back to member equality. Same-key exclusion is the caller's job — names are
-// not unique across paths (two repos can both be called "yoke").
-func kindsConflict(ka Kind, na string, ma []string, kb Kind, nb string, mb []string) bool {
-	if ka.domain() != kb.domain() {
+// party is one side of a conflict check: the kind it is matched under, what
+// it is called, and what it covers.
+type party struct {
+	kind    Kind
+	name    string
+	members []string
+	// set marks a claim requested under one kind and matched under another —
+	// a registry resource held under its declared kind. Its name lives in the
+	// requesting kind's namespace ("s408dbg" is a resource name, not a model
+	// name), so it is never compared: the members are the claim.
+	set bool
+}
+
+// names is what a party answers to under MatchName: its members, plus its
+// own name unless that name is only a label over them.
+func (p party) names() []string {
+	if p.set {
+		return p.members
+	}
+	out := []string{p.name}
+	for _, m := range p.members {
+		if m != p.name {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// shareName reports whether any non-empty string appears in both lists.
+func shareName(a, b []string) bool {
+	for _, x := range a {
+		for _, y := range b {
+			if x != "" && x == y {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// kindsConflict reports whether claims by a and b collide: the kinds must
+// share a domain, and a mixed-rule domain falls back to member equality. A
+// name-matched kind compares what each side answers to — its name and the
+// members it resolved to (a registry entry's canonical name and aliases, a
+// resource's members) — so a use of one model meets a resource whose members
+// list that model, and a resource claim meets a direct claim on a member.
+// Same-key exclusion is the caller's job — names are not unique across paths
+// (two repos can both be called "yoke").
+func kindsConflict(a, b party) bool {
+	if a.kind.domain() != b.kind.domain() {
 		return false
 	}
-	rule := ka.Match
-	if kb.Match != rule {
+	rule := a.kind.Match
+	if b.kind.Match != rule {
 		rule = MatchMember
 	}
 	switch rule {
 	case MatchName:
-		return na == nb
+		return shareName(a.names(), b.names())
 	case MatchPath:
-		return Intersects(ma, mb)
+		return Intersects(a.members, b.members)
 	default:
-		for _, x := range ma {
-			for _, y := range mb {
-				if x != "" && x == y {
-					return true
-				}
-			}
-		}
-		return false
+		return shareName(a.members, b.members)
 	}
+}
+
+// claimParty is a stored claim as one side of a conflict check. A claim
+// reached through another kind (Via) is a set: see party.set.
+func claimParty(c *Claim) party {
+	return party{kind: kindOrDefault(c.Kind), name: c.name(), members: c.Members, set: c.Via != ""}
 }

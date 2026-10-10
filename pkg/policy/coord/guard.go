@@ -88,6 +88,9 @@ func (s store) scan(ctx context.Context, holder principal.Ref, uses []Use, annou
 					}
 				}
 			}
+			// The use as one side of the check — a set when the ref claims
+			// under a kind other than its own, exactly as an acquisition is.
+			use := party{kind: kind, name: ref.Name, members: members, set: ref.Kind != kind.Name}
 			// Every live claim of another holder counts, so two overlapping live
 			// claims (the state a crash mid-displacement leaves) refuse everyone
 			// but their own holders.
@@ -99,8 +102,10 @@ func (s store) scan(ctx context.Context, holder principal.Ref, uses []Use, annou
 					continue
 				}
 				c.normalize()
-				sameKey := u.Member == "" && c.Resource != "" && c.Kind == ref.Kind && c.Resource == ref.Name
-				if sameKey || kindsConflict(kind, ref.Name, members, kindOrDefault(c.Kind), c.name(), c.Members) {
+				// Same key means the same ADDRESS: a resource stored under its
+				// declared kind is not the thing of that kind with its name.
+				sameKey := u.Member == "" && c.Resource != "" && c.Address() == ref
+				if sameKey || kindsConflict(use, claimParty(c)) {
 					return &Conflict{Claim: c}
 				}
 			}

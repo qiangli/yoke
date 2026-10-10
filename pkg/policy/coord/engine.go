@@ -310,11 +310,15 @@ func (s store) acquireOnce(b Backend, locked bool, sp acquireSpec, ref Ref, key 
 		if err != nil {
 			return Grant{}, err
 		}
+		// The request as one side of the check — a set when the ref claims
+		// under a kind other than its own (a resource under its declared
+		// kind), exactly as Guard sees it.
+		want := party{kind: kind, name: ref.Name, members: members, set: ref.Kind != kind.Name}
 		for _, o := range all {
 			if o.key() == key || sameHolder(o.Holder, r.Holder) || o.Liveness(now).Takeable() {
 				continue
 			}
-			if !kindsConflict(kind, ref.Name, members, kindOrDefault(o.Kind), o.name(), o.Members) {
+			if !kindsConflict(want, claimParty(o)) {
 				continue
 			}
 			if o.Mode == ModeAttached || !r.Force {
