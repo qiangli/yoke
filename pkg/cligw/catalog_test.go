@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/llmgw/resolve"
@@ -109,5 +110,34 @@ func TestModelListOrderingAndBandProvenance(t *testing.T) {
 	}
 	if _, found := byID["unlaunchable"]; found {
 		t.Fatal("model list included an agent without a launch contract")
+	}
+}
+
+func TestFleetCatalogModelNamesDoNotRefreshAgentInventory(t *testing.T) {
+	cat := testFleet(t)
+	if _, ok := cat.Agent("alpha"); !ok {
+		t.Fatal("fixture agent absent")
+	}
+	if err := cat.Registry().SaveAgent(fleet.Agent{Name: "new-agent", Tool: "alpha-tool", Model: "small"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"small", "strong", "frontier"} {
+		if _, ok := cat.listedAgent(name); ok {
+			t.Fatalf("model %q incorrectly resolved as agent", name)
+		}
+	}
+	for _, agent := range cat.inventory() {
+		if agent.Name == "new-agent" {
+			t.Fatal("model-name misses unnecessarily rebuilt fresh agent inventory")
+		}
+	}
+	if a, ok := cat.Agent("new-agent"); !ok || a.Model != "small" {
+		t.Fatal("explicit unknown-agent lookup did not discover registry change", a, ok)
+	}
+	cat.mu.Lock()
+	cat.cachedAt = time.Now().Add(-inventoryTTL - time.Second)
+	cat.mu.Unlock()
+	if _, ok := cat.Agent("alpha"); !ok {
+		t.Fatal("expired projection lost existing agent")
 	}
 }

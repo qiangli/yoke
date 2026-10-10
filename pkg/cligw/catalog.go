@@ -212,6 +212,18 @@ func (c *FleetCatalog) refreshLocked() []Agent {
 	return c.cached
 }
 
+// listedAgent looks up a row from the current inventory without interpreting
+// a model name as a missing agent that requires a new registry derivation.
+// Model listings use the bounded inventory refresh policy; explicit Agent
+// requests retain immediate discovery of new agents and launchable tools.
+func (c *FleetCatalog) listedAgent(name string) (Agent, bool) {
+	c.inventory()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	agent, ok := c.index[name]
+	return agent, ok
+}
+
 // Agent returns one launchable agent from the cached projection. It is the O(1)
 // lookup the HTTP surface needs: a scan per model-list row is what made the
 // uncached listing quadratic.

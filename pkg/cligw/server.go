@@ -1212,7 +1212,7 @@ func (s *Server) filterServable(entries []ModelEntry) []ModelEntry {
 // agent; a model row maps to every agent bound to that model, the same
 // aggregation quotaLabels uses to project model-level metadata.
 func (s *Server) modelServable(id string) (bool, string) {
-	if agent, ok := s.agent(id); ok {
+	if agent, ok := s.catalog.listedAgent(id); ok {
 		return s.router.Servable(agent)
 	}
 	reason := "no agent is bound to this model"
@@ -1243,7 +1243,7 @@ func (s *Server) quotaLabels(ctx context.Context) func(ModelEntry) string {
 		if _, _, isBand := parseBand(entry.ID); isBand {
 			return ""
 		}
-		agent, ok := s.agent(entry.ID)
+		agent, ok := s.catalog.listedAgent(entry.ID)
 		if !ok {
 			for _, candidate := range s.catalog.inventory() {
 				if candidate.Model == entry.ID {

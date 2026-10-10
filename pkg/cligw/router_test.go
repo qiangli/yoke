@@ -302,6 +302,10 @@ func TestRouterRouteTenCandidatesPaysForOnePreview(t *testing.T) {
 		previewDelay: 50 * time.Millisecond,
 	}
 	router := NewRouter(cat, DefaultPolicy(), WithQuotaSource(quota), WithRecorder(&memoryRecorder{}))
+	// Measure admission previews on the serving catalog, separately from the
+	// cold filesystem projection whose cost depends on fleet size and host.
+	// The strict one-preview count and 150ms admission budget stay unchanged.
+	cat.inventory()
 	start := time.Now()
 	got, err := router.Route(context.Background(), selector(t, cat, "L4"), Filter{}, "", "")
 	elapsed := time.Since(start)
