@@ -356,6 +356,27 @@ func runSprintStorySubmit(cmd *cobra.Command, id int64, ref, as, repo, evidence 
 		if message := strings.TrimSpace(evidence); message != "" {
 			note += ": " + message
 		}
+		// The terminal wrapper may replay after a crash. The board lock makes
+		// matching evidence idempotent without a second outbox or lock order.
+		for _, c := range s.Thread {
+			if c.Body == note && c.Author == who {
+				return "delivery already submitted", nil
+			}
+		}
+		if strings.HasPrefix(evidence, "weave worker Story-ID: ") {
+			// A worker may explicitly submit before its wrapper exits. Do not
+			// submit twice in the same claim lifecycle. A later claim/yield
+			// starts a new lifecycle and permits a new delivery.
+			for i := len(s.Thread) - 1; i >= 0; i-- {
+				c := s.Thread[i]
+				if strings.Contains(c.Body, " claimed story "+shortSprintStoryID(it.ID)) || strings.Contains(c.Body, " yielded story "+shortSprintStoryID(it.ID)) {
+					break
+				}
+				if c.Author == who && strings.Contains(c.Body, " submitted story "+shortSprintStoryID(it.ID)+" for ") {
+					return "worker already submitted this claim", nil
+				}
+			}
+		}
 		weaveStoryAppend(s, who, "decision", note)
 		delivery := ""
 		if err := releaseStoryClaim(id, it.ID, who); err != nil {

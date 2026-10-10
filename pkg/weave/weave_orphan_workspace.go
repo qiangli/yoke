@@ -160,11 +160,38 @@ func weaveForcedSalvageCommitMessage(it *weaveItem) string {
 	return msg
 }
 
-// weaveSalvageTrailers returns "Sprint: #N\nStory: #S\nStory-ID: ID" for the
-// sprint story a run registered, read from the story file in the run's own
-// workspace (docs/todo/<id>-*.md). It returns "" when the run has no story or
-// the file cannot be read; the commit then carries no trailers, as before.
+// weaveSalvageTrailers uses the frozen worker story, explicit brief trailers,
+// or the registered story file in the workspace. Without explicit identity it
+// emits no provenance; the installed hook remains free to refuse preservation.
 func weaveSalvageTrailers(it *weaveItem) string {
+	if it != nil {
+		if len(it.WorkerStories) > 0 {
+			var b strings.Builder
+			sprint := it.WorkerStories[0].Sprint
+			fmt.Fprintf(&b, "Sprint: #%d", sprint)
+			if id := it.WorkerStories[0].SprintID; id != "" {
+				fmt.Fprintf(&b, "\nSprint-ID: %s", id)
+			}
+			for _, st := range it.WorkerStories {
+				if st.Sprint != sprint {
+					return ""
+				}
+				fmt.Fprintf(&b, "\nStory: #%d\nStory-ID: %s", st.Seq, st.ID)
+			}
+			return b.String()
+		}
+		if trace, err := weaveBriefTrace(it.Body); err == nil && len(trace.Stories) > 0 {
+			var b strings.Builder
+			fmt.Fprintf(&b, "Sprint: #%d", trace.Sprint)
+			if trace.SprintID != "" {
+				fmt.Fprintf(&b, "\nSprint-ID: %s", trace.SprintID)
+			}
+			for _, st := range trace.Stories {
+				fmt.Fprintf(&b, "\nStory: #%d\nStory-ID: %s", st.Number, st.ID)
+			}
+			return b.String()
+		}
+	}
 	if it == nil || strings.TrimSpace(it.Register) == "" || strings.TrimSpace(it.Workspace) == "" {
 		return ""
 	}

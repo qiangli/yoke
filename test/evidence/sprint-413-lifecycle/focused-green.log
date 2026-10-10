@@ -1,0 +1,62 @@
+=== RUN   TestSprintSubmitRefusesUnclaimedStoryWithoutMutation
+--- PASS: TestSprintSubmitRefusesUnclaimedStoryWithoutMutation (0.02s)
+=== RUN   TestSubmitDefaultsToTheStoryHolder
+--- PASS: TestSubmitDefaultsToTheStoryHolder (0.02s)
+=== RUN   TestWeaveFinalizeObservedIdleSubmitsMeasuredCommit
+--- PASS: TestWeaveFinalizeObservedIdleSubmitsMeasuredCommit (5.26s)
+=== RUN   TestWeaveWrapperTerminalYieldsToFinalizeClaim
+--- PASS: TestWeaveWrapperTerminalYieldsToFinalizeClaim (0.00s)
+=== RUN   TestWeaveFinalizeCountsAgainstImmutableBase
+--- PASS: TestWeaveFinalizeCountsAgainstImmutableBase (0.29s)
+=== RUN   TestWeaveFinalizeRequiresObservedIdleAcknowledgment
+--- PASS: TestWeaveFinalizeRequiresObservedIdleAcknowledgment (0.08s)
+=== RUN   TestForcedSalvageCommitMessageSaysItWasNotGated
+--- PASS: TestForcedSalvageCommitMessageSaysItWasNotGated (0.00s)
+=== RUN   TestForcedSalvageCommitMessageCarriesStoryTrailers
+--- PASS: TestForcedSalvageCommitMessageCarriesStoryTrailers (0.00s)
+=== RUN   TestForcedAbandonWithSprintHook
+=== RUN   TestForcedAbandonWithSprintHook/true
+=== RUN   TestForcedAbandonWithSprintHook/false
+--- PASS: TestForcedAbandonWithSprintHook (1.91s)
+    --- PASS: TestForcedAbandonWithSprintHook/true (1.26s)
+    --- PASS: TestForcedAbandonWithSprintHook/false (0.65s)
+=== RUN   TestWorkerStoryActorAndTerminalEvidence
+=== RUN   TestWorkerStoryActorAndTerminalEvidence/matching
+=== RUN   TestWorkerStoryActorAndTerminalEvidence/nonmatching
+=== RUN   TestWorkerStoryActorAndTerminalEvidence/no-commits
+=== RUN   TestWorkerStoryActorAndTerminalEvidence/failed
+=== RUN   TestWorkerStoryActorAndTerminalEvidence/killed
+=== RUN   TestWorkerStoryActorAndTerminalEvidence/wrong-sprint
+=== RUN   TestWorkerStoryActorAndTerminalEvidence/dirty
+=== RUN   TestWorkerStoryActorAndTerminalEvidence/verify-failed
+=== RUN   TestWorkerStoryActorAndTerminalEvidence/preservation
+=== RUN   TestWorkerStoryActorAndTerminalEvidence/manual-submit
+--- PASS: TestWorkerStoryActorAndTerminalEvidence (2.48s)
+    --- PASS: TestWorkerStoryActorAndTerminalEvidence/matching (0.31s)
+    --- PASS: TestWorkerStoryActorAndTerminalEvidence/nonmatching (0.26s)
+    --- PASS: TestWorkerStoryActorAndTerminalEvidence/no-commits (0.22s)
+    --- PASS: TestWorkerStoryActorAndTerminalEvidence/failed (0.25s)
+    --- PASS: TestWorkerStoryActorAndTerminalEvidence/killed (0.24s)
+    --- PASS: TestWorkerStoryActorAndTerminalEvidence/wrong-sprint (0.24s)
+    --- PASS: TestWorkerStoryActorAndTerminalEvidence/dirty (0.24s)
+    --- PASS: TestWorkerStoryActorAndTerminalEvidence/verify-failed (0.24s)
+    --- PASS: TestWorkerStoryActorAndTerminalEvidence/preservation (0.24s)
+    --- PASS: TestWorkerStoryActorAndTerminalEvidence/manual-submit (0.26s)
+=== RUN   TestWorkerStoryExplicitIdentityAndConflict
+--- PASS: TestWorkerStoryExplicitIdentityAndConflict (0.17s)
+=== RUN   TestWorkerStoryFinalizeIntegration
+--- PASS: TestWorkerStoryFinalizeIntegration (0.34s)
+=== RUN   TestWorkerStoryLaunchClaimsBeforeExecution
+=== RUN   TestWorkerStoryLaunchClaimsBeforeExecution/false
+=== RUN   TestWorkerStoryLaunchClaimsBeforeExecution/true
+--- PASS: TestWorkerStoryLaunchClaimsBeforeExecution (0.75s)
+    --- PASS: TestWorkerStoryLaunchClaimsBeforeExecution/false (0.49s)
+    --- PASS: TestWorkerStoryLaunchClaimsBeforeExecution/true (0.26s)
+=== RUN   TestWorkerStoryLinkGenerationAndUUID
+--- PASS: TestWorkerStoryLinkGenerationAndUUID (0.18s)
+=== RUN   TestWorkerStorySubmissionRefusalIsDurable
+--- PASS: TestWorkerStorySubmissionRefusalIsDurable (0.25s)
+=== RUN   TestWorkerStoryCommitRangeIsNativeAndMeasured
+--- PASS: TestWorkerStoryCommitRangeIsNativeAndMeasured (0.20s)
+PASS
+ok  	github.com/qiangli/yoke/pkg/weave	12.739s

@@ -154,7 +154,9 @@ type weaveItem struct {
 	// travels with the repo; this queue is per-machine execution state. The back-ref
 	// is what keeps them one system instead of two: when this item merges, the
 	// register entry can be closed, and `issue show` can say what is in flight.
-	Register string `json:"register,omitempty"`
+	Register             string             `json:"register,omitempty"`
+	WorkerStories        []weaveWorkerStory `json:"worker_stories,omitempty"`
+	StorySubmissionError string             `json:"story_submission_error,omitempty"`
 	// DependsOn lists issues that must be DONE (merged) before this one may start.
 	// This is the conductor's "schedule by parallel safety" rule, moved out of the
 	// conductor's head and into the data — where a resumed conductor, or a second
@@ -3635,6 +3637,26 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			fmt.Fprintf(cmd.ErrOrStderr(), "weave: reservation retained: %v\n", finishErr)
 		}
 	}()
+	// Claim before the live-tree baseline: updating a tracked story is an
+	// authorized launch mutation, not a worker escaping its workspace.
+	if !opts.noSpawn {
+		storyRun := *it
+		storyRun.Owner = weaveAgentName(ownerBase, it.ID)
+		storyRun.LaunchSpec = launchSpec
+		if err := weaveClaimWorkerStories(cmd, dir, &storyRun); err != nil {
+			_ = withWeaveQueueLock(dir, func(q *weaveQueue) error {
+				if current := findWeaveItem(q, it.ID); current != nil {
+					current.State = "failed"
+					current.LaunchPhase = "story claim refused: " + err.Error()
+					current.FinishedAt = time.Now().UTC()
+					current.WrapperPid = 0
+					current.CtlSock = ""
+				}
+				return nil
+			})
+			return fmt.Errorf("weave start: claim worker story: %w", err)
+		}
+	}
 	base := weaveBaseBranch(root)
 	// Snapshot the actual source commit before provisioning. `--branch main`
 	// resolves through the clone's shared refs and can silently select a newer
@@ -4566,6 +4588,10 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		fmt.Fprintf(cmd.ErrOrStderr(), "weave start: queue write failed after tool exit: %v\n", lockErr)
 	} else {
 		weaveDeliverOwnerNotices(dir)
+		if err := weaveFinishWorkerStories(cmd, dir, it); err != nil {
+			runErr = errors.Join(runErr, err)
+			fmt.Fprintf(cmd.ErrOrStderr(), "weave start: story submission failed (work preserved): %v\n", err)
+		}
 		weaveReleaseManagedGOCache(cmd.ErrOrStderr(), "weave start", dir, it)
 		// Say it out loud at the moment it is found. A flag only `weave
 		// status` would show is a flag nobody reads until after the merge.
@@ -7440,6 +7466,9 @@ func runWeaveFinalize(cmd *cobra.Command, id int64, observedIdle bool, flags *we
 	})
 	if lockErr != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave finalize", weavecli.ExitGenericFail, lockErr))
+	}
+	if err := weaveFinishWorkerStories(cmd, dir, finalized); err != nil {
+		return fmt.Errorf("weave finalize: story submission failed (work preserved): %w", err)
 	}
 	weaveReleaseManagedGOCache(cmd.ErrOrStderr(), "weave finalize", dir, finalized)
 	// Fold the terminal gate evidence into the capability matrix (best-effort).
