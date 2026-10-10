@@ -44,6 +44,29 @@ type Completion struct {
 	Kind        string            `json:"kind"`
 }
 
+// expiredReapGrace is how long an expired reservation is retained pending
+// verified work termination before it is reaped as dead demand. An expired
+// reservation is not yet garbage: its slot stays reserved until the work is
+// settled, released or termination-verified (see TestHostAxesAndTerminationProof
+// and the "pending verified work termination" report limitation). Past this
+// grace no owner can still hold the lease — TTLs cap at 24 hours — so the
+// reservation is demand for work that will never reconcile.
+const expiredReapGrace = 7 * 24 * time.Hour
+
+// reapExpiredReservations drops reservations expired longer than
+// expiredReapGrace ago. Without reaping, dead reservations linger on disk and
+// keep consuming token, concurrency and spend budgets in admission as well as
+// slots in the active-reservation capacity check, refusing new work weeks
+// after the covered work ended. Completed and archived receipt records live in
+// separate maps and files; reaping never touches them.
+func reapExpiredReservations(s *State, now time.Time) {
+	for id, r := range s.Reservations {
+		if now.After(r.ExpiresAt.Add(expiredReapGrace)) {
+			delete(s.Reservations, id)
+		}
+	}
+}
+
 func normalizeState(s *State) {
 	if s.Unattributed == nil {
 		s.Unattributed = map[string]Counters{}
@@ -97,6 +120,7 @@ func readBounded(path string, limit int64) ([]byte, error) {
 func (g *Gate) reload() error {
 	if g.cfg.StatePath == "" {
 		normalizeState(&g.state)
+		reapExpiredReservations(&g.state, g.now())
 		g.loaded = true
 		return nil
 	}
@@ -133,6 +157,7 @@ func (g *Gate) reload() error {
 		return errors.New("llmbudget: unsupported meter version")
 	}
 	normalizeState(&s)
+	reapExpiredReservations(&s, g.now())
 	g.state = s
 	g.loaded = true
 	g.seenDisk = true

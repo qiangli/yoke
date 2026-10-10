@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -354,5 +355,103 @@ func TestMultiprocessLegacyRecordDoesNotLoseCounters(t *testing.T) {
 	s, e := g.stateSnapshot()
 	if e != nil || s.Models["one"].DayTokens != 80 {
 		t.Fatalf("lost concurrent writes: %+v %v", s.Models, e)
+	}
+}
+
+// TestExpiredReservationsReapedOnAdmission pins #1814: a reservation expired
+// past the termination-reconciliation grace must stop consuming budget at the
+// next admission. The fixture policy allows a single concurrent seat, so
+// without reaping the long-dead seat keeps refusing the next reserve with a
+// queue decision. Recently expired seats stay reserved pending verified work
+// termination (see TestHostAxesAndTerminationProof).
+func TestExpiredReservationsReapedOnAdmission(t *testing.T) {
+	ctx := context.Background()
+	g := fixtureGate(t, fixturePolicy())
+	o := fixtureOwner(t, g)
+	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	g.cfg.Now = func() time.Time { return now }
+
+	old := demand("old", o)
+	old.TTL = 2 * time.Minute
+	if a, e := g.Reserve(ctx, old); e != nil || a.Reservation == nil {
+		t.Fatalf("reserve old: %+v %v", a, e)
+	}
+
+	// The old seat expired weeks ago; the owner never renewed and no
+	// termination was ever verified.
+	now = now.Add(30 * 24 * time.Hour)
+	next := demand("new", o)
+	next.Tokens = 0
+	next.Concurrency = 0
+	next.SpendMicroUSD = nil
+	if a, e := g.Reserve(ctx, next); e != nil || a.Reservation == nil {
+		t.Fatalf("expired seat still refuses admission: %+v %v", a, e)
+	}
+
+	s, e := g.stateSnapshot()
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, ok := s.Reservations["old"]; ok {
+		t.Fatal("expired reservation survived admission")
+	}
+	if _, ok := s.Reservations["new"]; !ok {
+		t.Fatal("live reservation was reaped")
+	}
+}
+
+// TestExpiredReservationsDoNotConsumeCapacity pins the capacity half of #1814:
+// weeks-old expired reservations must not trip "active reservation capacity
+// reached" (maxCompletions). Seeding a full meter of expired reservations plus
+// one live seat still admits, drops the expired ones and keeps the live one.
+func TestExpiredReservationsDoNotConsumeCapacity(t *testing.T) {
+	ctx := context.Background()
+	g := fixtureGate(t, fixturePolicy())
+	o := fixtureOwner(t, g)
+	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	g.cfg.Now = func() time.Time { return now }
+
+	ancient := now.Add(-30 * 24 * time.Hour)
+	if e := g.transaction(ctx, func() error {
+		for i := 0; i < maxCompletions-1; i++ {
+			id := fmt.Sprintf("stale-%d", i)
+			r := demand(id, o)
+			g.state.Reservations[id] = Reservation{ID: id, Owner: o.ID(), Request: r, CreatedAt: ancient, RenewedAt: ancient, ExpiresAt: ancient.Add(2 * time.Minute)}
+		}
+		r := demand("live", o)
+		r.Tokens = 0
+		r.Concurrency = 0
+		r.SpendMicroUSD = nil
+		g.state.Reservations["live"] = Reservation{ID: "live", Owner: o.ID(), Request: r, CreatedAt: now, RenewedAt: now, ExpiresAt: now.Add(time.Hour)}
+		return nil
+	}); e != nil {
+		t.Fatal(e)
+	}
+
+	fresh := demand("fresh", o)
+	fresh.Tokens = 0
+	fresh.Concurrency = 0
+	fresh.SpendMicroUSD = nil
+	if a, e := g.Reserve(ctx, fresh); e != nil || a.Reservation == nil {
+		t.Fatalf("expired meter still refuses admission: %+v %v", a, e)
+	}
+
+	s, e := g.stateSnapshot()
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(s.Reservations) != 2 {
+		t.Fatalf("reservations after reap = %d, want live+fresh", len(s.Reservations))
+	}
+	if _, ok := s.Reservations["live"]; !ok {
+		t.Fatal("live reservation was reaped")
+	}
+	if _, ok := s.Reservations["fresh"]; !ok {
+		t.Fatal("fresh reservation missing")
+	}
+	for id := range s.Reservations {
+		if strings.HasPrefix(id, "stale-") {
+			t.Fatalf("expired reservation %q survived admission", id)
+		}
 	}
 }
