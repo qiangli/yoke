@@ -152,4 +152,8 @@ integration:
   instructions:
     - {file: "${CODEX_HOME:-~/.codex}/AGENTS.md"}
     - {file: AGENTS.md, scope: project}
-  mcp: {config: "${CODEX_HOME:-~/.codex}/config.toml", format: toml, key: mcp_servers}
+  mcp:
+    config: "${CODEX_HOME:-~/.codex}/config.toml"
+    format: toml
+    key: mcp_servers
+    cli: [codex, mcp, add, bashy, --, bashy, mcp, serve]

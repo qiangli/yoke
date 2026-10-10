@@ -129,5 +129,9 @@ integration:
   instructions:
     - {file: "${CLAUDE_CONFIG_DIR:-~/.claude}/CLAUDE.md"}
     - {file: CLAUDE.md, scope: project}
-  mcp: {config: ~/.claude.json, format: json, key: mcpServers}
+  mcp:
+    config: ~/.claude.json
+    format: json
+    key: mcpServers
+    cli: [claude, mcp, add, --scope, user, bashy, --, bashy, mcp, serve]
   shell_env: CLAUDE_CODE_SHELL
