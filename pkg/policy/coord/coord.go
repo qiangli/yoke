@@ -270,14 +270,38 @@ func resourceLockPath(dir, resource string) string {
 	return keyedLockPath(dir, Ref{Kind: KindName, Name: resource})
 }
 
-// List returns every claim on this host, freshest first.
+// List returns every claim on this host, including enumerable custom backends,
+// freshest first.
 func List(dir string) ([]*Claim, error) {
+	out, err := listFiles(dir)
+	if err != nil {
+		return nil, err
+	}
+	regMu.RLock()
+	var listed []Backend
+	for _, b := range backends {
+		listed = append(listed, b)
+	}
+	regMu.RUnlock()
+	for _, b := range listed {
+		if l, ok := b.(interface{ Claims() ([]*Claim, error) }); ok {
+			claims, err := l.Claims()
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, claims...)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Heartbeat.After(out[j].Heartbeat) })
+	return out, nil
+}
+
+func listFiles(dir string) ([]*Claim, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
+		if !os.IsNotExist(err) {
+			return nil, err
 		}
-		return nil, err
 	}
 	var out []*Claim
 	for _, e := range entries {
@@ -302,7 +326,6 @@ func List(dir string) ([]*Claim, error) {
 		}
 		out = append(out, &c)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Heartbeat.After(out[j].Heartbeat) })
 	return out, nil
 }
 

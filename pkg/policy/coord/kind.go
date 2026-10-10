@@ -182,6 +182,12 @@ func kindOrDefault(name string) Kind {
 //   - The backend keeps the key's epoch high-water mark across deletion, and a
 //     commit that creates a record where none exists lifts next.Epoch above it
 //     (in place), so a released key never re-issues an epoch.
+//
+// A backend that can enumerate its claims may also implement
+// Claims() ([]*Claim, error); List includes those claims.
+// A backend that requires a presented epoch may implement
+// MissingEpoch(current uint64) error. Coord calls it when a holder tries to
+// reuse, refresh, or release a held claim with epoch zero.
 type Backend interface {
 	Load(key string) (*Claim, error)
 	CommitIfRev(key string, prevRev uint64, next *Claim) error

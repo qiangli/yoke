@@ -259,6 +259,11 @@ func (s store) acquireOnce(b Backend, locked bool, sp acquireSpec, ref Ref, key 
 	reuse := false
 	if prev != nil {
 		if sameHolder(prev.Holder, r.Holder) {
+			if r.Epoch == 0 {
+				if e, ok := b.(interface{ MissingEpoch(uint64) error }); ok {
+					return Grant{}, e.MissingEpoch(prev.Epoch)
+				}
+			}
 			// A genuinely live attached hold is never replaced; a detached lease
 			// of the same holder may become attached under the kernel lock.
 			if prev.Mode == ModeAttached {
@@ -277,7 +282,7 @@ func (s store) acquireOnce(b Backend, locked bool, sp acquireSpec, ref Ref, key 
 	// can enumerate.
 	fb, isFile := b.(fileBackend)
 	if isFile {
-		all, err := List(s.dir)
+		all, err := listFiles(s.dir)
 		if err != nil {
 			return Grant{}, err
 		}
@@ -349,7 +354,11 @@ func (s store) acquireOnce(b Backend, locked bool, sp acquireSpec, ref Ref, key 
 	if err := commit(b, locked, key, prevRev, c); err != nil {
 		return Grant{}, errors.Join(err, restoreRemoved())
 	}
-	if len(displaced) > 0 {
+	// A backend with its own durable takeover journal has already recorded
+	// the transition atomically; attempting a file-audit rollback here could
+	// vacate a committed seat.
+	_, selfAudited := b.(interface{ AuditsForce() })
+	if len(displaced) > 0 && !selfAudited {
 		if err := auditForce(ref, r, displaced); err != nil {
 			var undo error
 			if loaded == nil {
@@ -361,6 +370,16 @@ func (s store) acquireOnce(b Backend, locked bool, sp acquireSpec, ref Ref, key 
 			return Grant{}, fmt.Errorf("claim: forced acquisition of %s refused — the audit record could not be written, so nothing was changed: %w",
 				ref, errors.Join(err, undo, restoreRemoved()))
 		}
+	}
+	if !isFile {
+		stored, err := b.Load(key)
+		if err != nil || stored == nil {
+			return Grant{}, fmt.Errorf("claim: backend did not return committed claim: %v", err)
+		}
+		if !sameHolder(stored.Holder, c.Holder) {
+			return Grant{}, ErrFenced
+		}
+		c = stored
 	}
 	return Grant{Claim: c, Epoch: c.Epoch}, nil
 }
@@ -430,6 +449,11 @@ func (s store) refresh(ref Ref, holder principal.Ref, epoch uint64) (Grant, erro
 			}
 			return fmt.Errorf("%w: %s", ErrNotHeld, key)
 		}
+		if epoch == 0 {
+			if e, ok := b.(interface{ MissingEpoch(uint64) error }); ok {
+				return e.MissingEpoch(prev.Epoch)
+			}
+		}
 		if err := checkHeld(prev, holder, epoch); err != nil {
 			return err
 		}
@@ -456,6 +480,11 @@ func (s store) release(ref Ref, holder principal.Ref, epoch uint64) error {
 		prev, err := b.Load(key)
 		if err != nil || prev == nil {
 			return err
+		}
+		if epoch == 0 {
+			if e, ok := b.(interface{ MissingEpoch(uint64) error }); ok {
+				return e.MissingEpoch(prev.Epoch)
+			}
 		}
 		if err := checkHeld(prev, holder, epoch); err != nil {
 			return err

@@ -49,12 +49,14 @@ func (s store) guard(ctx context.Context, holder principal.Ref, uses []Use) erro
 		}
 		cands := all
 		if b := customBackend(ref.Kind); b != nil {
-			c, err := b.Load(ref.String())
-			if err != nil {
-				return err
-			}
-			if c != nil {
-				cands = append(append([]*Claim(nil), all...), c)
+			if _, enumerable := b.(interface{ Claims() ([]*Claim, error) }); !enumerable {
+				c, err := b.Load(ref.String())
+				if err != nil {
+					return err
+				}
+				if c != nil {
+					cands = append(append([]*Claim(nil), all...), c)
+				}
 			}
 		}
 		for _, c := range cands {

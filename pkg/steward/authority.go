@@ -23,8 +23,10 @@ import (
 // fencing epoch makes a late-returning incumbent safe.
 const TTL = 30 * time.Minute
 
-// Liveness is what the heartbeat can honestly tell us. There is deliberately no
-// "dead" — see LivenessLapsed.
+// Liveness is what the heartbeat can honestly tell us. Keep this verdict
+// separate from role.Seat.Live: steward validates the cache against the journal
+// first and permits two minutes of clock skew, while role.Seat permits two
+// seconds. Replacing this logic would change when a seat becomes claimable.
 type Liveness string
 
 const (
@@ -88,6 +90,7 @@ type Seat struct {
 	SchemaVersion string        `json:"schema_version"`
 	Holder        principal.Ref `json:"holder"`
 	Epoch         uint64        `json:"epoch"`
+	Rev           uint64        `json:"rev,omitempty"`
 	AcquiredAt    time.Time     `json:"acquired_at"`
 	Heartbeat     time.Time     `json:"heartbeat"`
 	PID           int           `json:"pid,omitempty"`
@@ -104,6 +107,7 @@ type View struct {
 	Since         time.Time `json:"since,omitzero"`
 	PID           int       `json:"pid,omitempty"`
 	Intent        string    `json:"intent,omitempty"`
+	Rev           uint64    `json:"-"`
 
 	// LivenessReason says WHY liveness is unknown. An unexplained "unknown" is an
 	// invitation to guess, and the guess is always "it's probably fine".
@@ -459,6 +463,7 @@ func (s *Store) viewFrom(rep *Replay, now time.Time) View {
 	v.Heartbeat = seat.Heartbeat.UTC()
 	v.PID = seat.PID
 	v.Intent = seat.Intent
+	v.Rev = seat.Rev
 	if now.Sub(v.Heartbeat) < TTL {
 		v.Liveness = LivenessLive
 	} else {
@@ -519,6 +524,19 @@ func (s *Store) Claim(ctx context.Context, holder principal.Ref, req SeatRequest
 	}
 	var out View
 	err := s.withLock(func() error {
+		var err error
+		out, err = s.claimLocked(ctx, holder, req, now)
+		return err
+	})
+	return out, err
+}
+
+func (s *Store) claimLocked(ctx context.Context, holder principal.Ref, req SeatRequest, now time.Time) (View, error) {
+	if s.verifier == nil {
+		return View{}, &ErrNoVerifier{Action: ActionClaim}
+	}
+	var out View
+	err := func() error {
 		rep, err := s.Replay()
 		if err != nil {
 			return err
@@ -602,7 +620,7 @@ func (s *Store) Claim(ctx context.Context, holder principal.Ref, req SeatRequest
 		// cache does not un-claim it, and must not be reported as if it had — see
 		// ErrCommitted.
 		return committed("claim", stored.Seq, epoch, s.writeSeat(auth, req.Intent, now))
-	})
+	}()
 	return out, err
 }
 
@@ -649,6 +667,19 @@ func (s *Store) Takeover(ctx context.Context, holder principal.Ref, req SeatRequ
 	}
 	var out View
 	err := s.withLock(func() error {
+		var err error
+		out, err = s.takeoverLocked(ctx, holder, req, now)
+		return err
+	})
+	return out, err
+}
+
+func (s *Store) takeoverLocked(ctx context.Context, holder principal.Ref, req SeatRequest, now time.Time) (View, error) {
+	if s.verifier == nil {
+		return View{}, &ErrNoVerifier{Action: ActionTakeover}
+	}
+	var out View
+	err := func() error {
 		rep, err := s.Replay()
 		if err != nil {
 			return err
@@ -715,7 +746,7 @@ func (s *Store) Takeover(ctx context.Context, holder principal.Ref, req SeatRequ
 		// COMMITTED. See ErrCommitted: the seizure landed in the journal, and a failure to
 		// write the derived liveness cache must not be reported as if it had not.
 		return committed("takeover", stored.Seq, epoch, s.writeSeat(newAuth, req.Intent, now))
-	})
+	}()
 	return out, err
 }
 
@@ -732,47 +763,49 @@ func (s *Store) Takeover(ctx context.Context, holder principal.Ref, req SeatRequ
 // would vacate the seat of the steward that replaced it.
 func (s *Store) Release(holder principal.Ref, epoch uint64, note string, now time.Time) error {
 	now = mustUTC(now)
-	return s.withLock(func() error {
-		rep, err := s.Replay()
-		if err != nil {
-			return err
-		}
-		if !rep.Corrupt && deriveAuthority(rep).Vacant {
-			return nil // releasing a vacant seat is a no-op, not an error
-		}
-		e := Entry{
-			Actor:     holder,
-			Kind:      KindSeatReleased,
-			Rationale: note,
-			Outcome:   OutcomeSuccess,
-		}
-		auth, err := authorize(rep, holder, epoch)
-		if err != nil {
-			return err
-		}
-		e.Epoch = auth.Epoch
-		e.Summary = fmt.Sprintf("%s released the steward seat (epoch %d)", holderName(holder), auth.Epoch)
-		e.Evidence = []Evidence{{Kind: "seat", Ref: fmt.Sprintf("epoch:%d", auth.Epoch), Note: "release"}}
+	return s.withLock(func() error { return s.releaseLocked(holder, epoch, note, now) })
+}
 
-		// Release is a seat event, so it cannot go through appendAuthorized (which
-		// forbids them by design). The gate above is the same one, run explicitly.
-		stored, err := appendEntry(s.journalPath(), rep, e, now)
-		if err != nil {
-			return err
-		}
-		// The seat file is liveness only; with the seat vacated it has nothing left to
-		// say. Its removal loses no authority — that lives in the journal, which now says
-		// the seat is empty regardless of what this stale cache claims. So the release IS
-		// COMMITTED even if the removal fails, and reporting a bare error here would invite
-		// a retry that appends a second release.
-		if err := failpoint("seat.remove"); err != nil {
-			return committed("release", stored.Seq, auth.Epoch, err)
-		}
-		if err := os.Remove(s.seatPath()); err != nil && !os.IsNotExist(err) {
-			return committed("release", stored.Seq, auth.Epoch, err)
-		}
-		return nil
-	})
+func (s *Store) releaseLocked(holder principal.Ref, epoch uint64, note string, now time.Time) error {
+	rep, err := s.Replay()
+	if err != nil {
+		return err
+	}
+	if !rep.Corrupt && deriveAuthority(rep).Vacant {
+		return nil // releasing a vacant seat is a no-op, not an error
+	}
+	e := Entry{
+		Actor:     holder,
+		Kind:      KindSeatReleased,
+		Rationale: note,
+		Outcome:   OutcomeSuccess,
+	}
+	auth, err := authorize(rep, holder, epoch)
+	if err != nil {
+		return err
+	}
+	e.Epoch = auth.Epoch
+	e.Summary = fmt.Sprintf("%s released the steward seat (epoch %d)", holderName(holder), auth.Epoch)
+	e.Evidence = []Evidence{{Kind: "seat", Ref: fmt.Sprintf("epoch:%d", auth.Epoch), Note: "release"}}
+
+	// Release is a seat event, so it cannot go through appendAuthorized (which
+	// forbids them by design). The gate above is the same one, run explicitly.
+	stored, err := appendEntry(s.journalPath(), rep, e, now)
+	if err != nil {
+		return err
+	}
+	// The seat file is liveness only; with the seat vacated it has nothing left to
+	// say. Its removal loses no authority — that lives in the journal, which now says
+	// the seat is empty regardless of what this stale cache claims. So the release IS
+	// COMMITTED even if the removal fails, and reporting a bare error here would invite
+	// a retry that appends a second release.
+	if err := failpoint("seat.remove"); err != nil {
+		return committed("release", stored.Seq, auth.Epoch, err)
+	}
+	if err := os.Remove(s.seatPath()); err != nil && !os.IsNotExist(err) {
+		return committed("release", stored.Seq, auth.Epoch, err)
+	}
+	return nil
 }
 
 // Heartbeat refreshes the holder's liveness. It writes no journal entry: a heartbeat
@@ -787,17 +820,19 @@ func (s *Store) Release(holder principal.Ref, epoch uint64, note string, now tim
 // from it.
 func (s *Store) Heartbeat(holder principal.Ref, epoch uint64, now time.Time) error {
 	now = mustUTC(now)
-	return s.withLock(func() error {
-		rep, err := s.Replay()
-		if err != nil {
-			return err
-		}
-		auth, err := authorize(rep, holder, epoch)
-		if err != nil {
-			return err
-		}
-		return s.writeSeat(auth, "", now)
-	})
+	return s.withLock(func() error { return s.heartbeatLocked(holder, epoch, now) })
+}
+
+func (s *Store) heartbeatLocked(holder principal.Ref, epoch uint64, now time.Time) error {
+	rep, err := s.Replay()
+	if err != nil {
+		return err
+	}
+	auth, err := authorize(rep, holder, epoch)
+	if err != nil {
+		return err
+	}
+	return s.writeSeat(auth, "", now)
 }
 
 // writeSeat persists the liveness record, preserving the intent and the original
@@ -823,6 +858,7 @@ func (s *Store) writeSeat(auth Authority, intent string, now time.Time) error {
 	var prev Seat
 	if found, err := readJSON(s.seatPath(), &prev); err == nil && found {
 		if err := validateSeatCache(prev, auth, now); err == nil {
+			seat.Rev = prev.Rev + 1
 			if !prev.AcquiredAt.IsZero() {
 				seat.AcquiredAt = prev.AcquiredAt
 			}
@@ -830,6 +866,9 @@ func (s *Store) writeSeat(auth Authority, intent string, now time.Time) error {
 				seat.Intent = prev.Intent
 			}
 		}
+	}
+	if seat.Rev == 0 {
+		seat.Rev = 1
 	}
 	if seat.AcquiredAt.IsZero() {
 		seat.AcquiredAt = now
