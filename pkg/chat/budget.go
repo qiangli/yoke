@@ -96,7 +96,7 @@ func (b *budgetWork) finish(output string, runErr error) error {
 		}
 		input, out := estimateTokens(b.prompt), estimateTokens(output)
 		actual := llmbudget.Actual{InputTokens: input, OutputTokens: out, TokensEstimated: true, Source: "chat-text-estimate", ObservedAt: time.Now().UTC()}
-		if cost, known := llmbudget.EstimatedCostUSD(b.launch.ModelName, input+out); known && cost >= 0 && cost < float64(math.MaxInt64)/1e6 {
+		if cost, known := b.gate.EstimatedCostUSD(b.launch.ModelName, input+out); known && cost >= 0 && cost < float64(math.MaxInt64)/1e6 {
 			micro := int64(math.Ceil(cost * 1e6))
 			actual.SpendMicroUSD = &micro
 		}

@@ -222,10 +222,16 @@ func RecordContext(_ context.Context, model string, promptTokens, completionToke
 }
 
 func EstimatedCostUSD(model string, tokens int64) (float64, bool) {
-	defaultGate.mu.Lock()
-	defer defaultGate.mu.Unlock()
-	defaultGate.ensureLoaded()
-	m, ok := defaultGate.model(model)
+	return defaultGate.EstimatedCostUSD(model, tokens)
+}
+
+// EstimatedCostUSD prices tokens against this gate's catalog. Work that retained
+// its gate at admission settles through this, never through the swappable default.
+func (g *Gate) EstimatedCostUSD(model string, tokens int64) (float64, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.ensureLoaded()
+	m, ok := g.model(model)
 	if !ok {
 		return 0, false
 	}
