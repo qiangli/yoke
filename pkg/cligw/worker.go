@@ -79,6 +79,10 @@ type Worker struct {
 	mode   WarmMode
 	cwd    string
 
+	// effort is the reasoning effort a request asked for when the binding
+	// declared none; "" = launch.Effort governs.
+	effort string
+
 	// codexCatalog is a codex model catalog without apply_patch, written
 	// into cwd by prepareSystemPrompt; empty when codex has no cache to copy.
 	codexCatalog string
@@ -204,7 +208,16 @@ func (w *Worker) DoCompletion(ctx context.Context, input CompletionPrompt, onEve
 		w.mu.Unlock()
 		return Result{Outcome: OutcomeError}, errors.New("cligw: worker is one-shot and is already dead")
 	}
+	effective, err := w.checkEffortLocked(input.Effort)
+	if err != nil {
+		w.mu.Unlock()
+		return Result{Outcome: OutcomeError}, err
+	}
 	w.used = true
+	// A warm worker was started at the binding's effort; a request for another
+	// is a launch-time setting too, so it relaunches like a system override.
+	effortChanged := effective != w.effectiveEffort()
+	w.effort = effective
 	mode := w.mode
 	prompt := input.Prompt
 	if w.tool.Name == "muse" {
@@ -214,7 +227,7 @@ func (w *Worker) DoCompletion(ctx context.Context, input CompletionPrompt, onEve
 	}
 	// Native system overrides are launch-time settings. A worker prewarmed with
 	// the neutral prompt must be relaunched when this request adds instructions.
-	if mode != WarmCold && mode != WarmACP && input.System != "" && w.nativeSystemPrompt() {
+	if mode != WarmCold && mode != WarmACP && ((input.System != "" && w.nativeSystemPrompt()) || effortChanged) {
 		w.killAndWait(w.cmd, w.wait)
 		w.cmd, w.stdin, w.lines, w.wait, w.stderr = nil, nil, nil, nil, nil
 		if err := w.prepareSystemPrompt(input.System); err != nil {
@@ -391,7 +404,11 @@ func (w *Worker) startLocked(argv []string) error {
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = w.cwd
-	cmd.Env = workerEnv(os.Environ(), w.launch)
+	launch := w.launch
+	if eff := w.effectiveEffort(); eff != launch.Effort {
+		launch.Env = append(append([]string(nil), launch.Env...), agentlaunch.EffortEnv(w.tool.Name, eff)...)
+	}
+	cmd.Env = workerEnv(os.Environ(), launch)
 	prepareProcessGroup(cmd)
 	// Own both ends of stdout instead of using exec.Cmd.StdoutPipe. Wait closes
 	// a StdoutPipe as soon as the child exits, which can race the scanner and
@@ -504,11 +521,13 @@ func (w *Worker) argv(prompt, requestSystem string) []string {
 	return argv
 }
 
-// effortArgs is the argv that tells tool to run at a declared reasoning
-// effort. Unset effort = no argv at all (the tool's default, byte-for-byte the
-// argv an undeclared binding always had). A tool with no known effort flag is
-// an error, never a silent no-op. agy is deliberately absent: its bindings
-// carry effort in the model id, and passing both fails (see baseline agy.yaml).
+// effortArgs is the argv that tells tool to run at a reasoning effort. Unset
+// effort = no argv at all (the tool's default, byte-for-byte the argv an
+// undeclared binding always had). genie (ycode) takes its effort in the
+// environment (agentlaunch.EffortEnv), so it needs no argv. A tool with no
+// known effort mechanism is an error, never a silent no-op. agy is
+// deliberately absent: its bindings carry effort in the model id, and passing
+// both fails (see baseline agy.yaml).
 func effortArgs(tool, effort string) ([]string, error) {
 	if effort == "" {
 		return nil, nil
@@ -521,12 +540,53 @@ func effortArgs(tool, effort string) ([]string, error) {
 		return []string{"--effort", effort}, nil
 	case "codex":
 		return []string{"-c", "model_reasoning_effort=" + strconv.Quote(effort)}, nil
+	case agentlaunch.YcodeToolName, "genie":
+		return nil, nil
 	}
-	return nil, fmt.Errorf("cligw: the binding declares effort %q but tool %q has no known effort flag (supported: claude, codex); unset the agent's effort or encode it in the model id", effort, tool)
+	return nil, fmt.Errorf("cligw: reasoning effort %q cannot be applied: tool %q has no known effort flag (supported: claude, codex, ycode/genie); unset the effort or encode it in the model id", effort, tool)
+}
+
+// EffortError is a request-side effort the worker cannot serve: the door
+// answers it with HTTP 400, never a silent drop.
+type EffortError struct{ Msg string }
+
+func (e *EffortError) Error() string { return e.Msg }
+
+// effectiveEffort is the effort this worker runs at: the request's when it
+// asked for one, else the binding's.
+func (w *Worker) effectiveEffort() string {
+	if w.effort != "" {
+		return w.effort
+	}
+	return w.launch.Effort
+}
+
+// CheckEffort reports whether the worker can serve a request that asks for
+// requested ("" = no ask): the same per-tool rules as the binding's own
+// effort, and a request cannot contradict a declared one (the sticky identity
+// froze it).
+func (w *Worker) CheckEffort(requested string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	_, err := w.checkEffortLocked(requested)
+	return err
+}
+
+func (w *Worker) checkEffortLocked(requested string) (string, error) {
+	if requested == "" {
+		return w.effectiveEffort(), nil
+	}
+	if declared := w.launch.Effort; declared != "" && declared != requested {
+		return "", &EffortError{Msg: fmt.Sprintf("cligw: the request asks for reasoning effort %q but the binding declares %q and its sticky identity is frozen; ask for %q or use a binding declared at %q", requested, declared, declared, requested)}
+	}
+	if _, err := effortArgs(w.tool.Name, requested); err != nil {
+		return "", &EffortError{Msg: err.Error()}
+	}
+	return requested, nil
 }
 
 func (w *Worker) effortArgs() []string {
-	args, _ := effortArgs(w.tool.Name, w.launch.Effort) // validated in NewWorker
+	args, _ := effortArgs(w.tool.Name, w.effectiveEffort()) // validated in checkEffortLocked / NewWorker
 	return args
 }
 

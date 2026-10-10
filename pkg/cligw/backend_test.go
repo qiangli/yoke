@@ -212,3 +212,27 @@ type staticCatalog []resolve.ModelRow
 
 func (c staticCatalog) Rows(context.Context, string) []resolve.ModelRow   { return c }
 func (staticCatalog) Alias(context.Context, string) (int, []string, bool) { return 0, nil, false }
+
+// reasoning_effort decodes off the wire and rides the rendered prompt to the
+// worker.
+func TestChatRequestDecodesReasoningEffort(t *testing.T) {
+	var req openai.ChatRequest
+	body := `{"model":"m","reasoning_effort":"high","messages":[{"role":"user","content":"hi"}]}`
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.ReasoningEffort != "high" {
+		t.Fatalf("ReasoningEffort = %q", req.ReasoningEffort)
+	}
+	prompt, err := RenderCompletionPrompt(&req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prompt.Effort != "high" {
+		t.Fatalf("CompletionPrompt.Effort = %q", prompt.Effort)
+	}
+	req.ReasoningEffort = ""
+	if prompt, _ = RenderCompletionPrompt(&req); prompt.Effort != "" {
+		t.Fatalf("Effort = %q without a request effort", prompt.Effort)
+	}
+}

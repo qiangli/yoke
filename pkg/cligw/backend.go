@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/llmgw/gateway"
 	"github.com/qiangli/yoke/pkg/llmgw/openai"
 )
@@ -75,6 +76,9 @@ func (b *AgentBackend) Serve(w http.ResponseWriter, r *http.Request, body []byte
 	if err != nil {
 		return b.writeResponse(w, r, http.StatusBadRequest, "application/json", errorBody(err.Error()), modify)
 	}
+	if err := fleet.ValidEffort(prompt.Effort); err != nil {
+		return b.writeResponse(w, r, http.StatusBadRequest, "application/json", errorBody("reasoning_effort: "+err.Error()), modify)
+	}
 	if b.Pool == nil {
 		return gateway.Attempt{Status: http.StatusServiceUnavailable, CanRetry: true}
 	}
@@ -85,6 +89,12 @@ func (b *AgentBackend) Serve(w http.ResponseWriter, r *http.Request, body []byte
 		return gateway.Attempt{Status: http.StatusServiceUnavailable, CanRetry: true}
 	}
 	defer b.Pool.Release(worker)
+
+	// An effort this worker's binding or tool cannot serve is the caller's
+	// error: 400, and not retryable on another backend of the same identity.
+	if err := worker.CheckEffort(prompt.Effort); err != nil {
+		return b.writeResponse(w, r, http.StatusBadRequest, "application/json", errorBody(err.Error()), modify)
+	}
 
 	var deltas []string
 	result, err := worker.DoCompletion(r.Context(), prompt, func(event Event) {

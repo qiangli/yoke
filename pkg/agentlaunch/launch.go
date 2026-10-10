@@ -295,6 +295,9 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 		}
 	}
 
+	// genie has no effort flag; a declared effort travels in its environment.
+	lnch.Env = append(lnch.Env, EffortEnv(toolName, lnch.Effort)...)
+
 	// The model id is resolved AFTER the tool is known, because the id a model
 	// answers to is a property of the TOOL: litellm wants `deepseek/deepseek-v4-pro`,
 	// ycode wants the bare `deepseek-v4-pro`, agy wants `Gemini 3.1 Pro (High)`.

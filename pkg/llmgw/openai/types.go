@@ -17,6 +17,7 @@ type ChatRequest struct {
 	ToolChoice          any           `json:"tool_choice,omitempty"`
 	ParallelToolCalls   *bool         `json:"parallel_tool_calls,omitempty"`
 	Stream              bool          `json:"stream,omitempty"`
+	ReasoningEffort     string        `json:"reasoning_effort,omitempty"`
 }
 
 // ChatMessage is an input message. Content may be a string or an array of

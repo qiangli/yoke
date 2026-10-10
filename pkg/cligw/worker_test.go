@@ -51,7 +51,7 @@ func TestCLIHelper(t *testing.T) {
 		fmt.Println(`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"lo"}}}`)
 		fmt.Println(`{"type":"assistant","message":{"content":[{"type":"text","text":"hello"}]}}`)
 		fmt.Println(`{"type":"result","is_error":false,"usage":{"input_tokens":5,"output_tokens":1}}`)
-	case "system-prompt-claude", "system-prompt-codex", "system-prompt-agy", "system-prompt-muse":
+	case "system-prompt-claude", "system-prompt-codex", "system-prompt-agy", "system-prompt-muse", "system-prompt-ycode":
 		body, _ := io.ReadAll(os.Stdin)
 		instructions := ""
 		for i, arg := range args {
@@ -61,7 +61,7 @@ func TestCLIHelper(t *testing.T) {
 				instructions = string(contents)
 			}
 		}
-		capture, _ := json.Marshal(map[string]any{"args": args, "body": string(body), "instructions": instructions})
+		capture, _ := json.Marshal(map[string]any{"args": args, "body": string(body), "instructions": instructions, "genie_effort": os.Getenv("GENIE_EFFORT")})
 		_ = os.WriteFile(os.Getenv("CLIGW_CAPTURE_PATH"), capture, 0o600)
 		switch strings.TrimPrefix(args[0], "system-prompt-") {
 		case "muse":
@@ -72,7 +72,7 @@ func TestCLIHelper(t *testing.T) {
 		case "agy":
 			fmt.Println(`{"event":"delta","delta":{"text":"ok"}}`)
 			fmt.Println(`{"event":"result","result":{"status":"SUCCESS"},"usage":{"input_tokens":1,"output_tokens":1}}`)
-		case "codex":
+		case "codex", "ycode":
 			fmt.Println(`{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}`)
 			fmt.Println(`{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}`)
 		}
@@ -371,6 +371,11 @@ func TestWorkerSystemPromptMechanisms(t *testing.T) {
 
 func installFakeCatalog(t *testing.T, toolName string, warm WarmMode, mode string) {
 	t.Helper()
+	installFakeCatalogEffort(t, toolName, warm, mode, "")
+}
+
+func installFakeCatalogEffort(t *testing.T, toolName string, warm WarmMode, mode, effort string) {
+	t.Helper()
 	t.Setenv("CLIGW_TEST_HELPER", "1")
 	cat := fleet.New(fleet.WithRoot(t.TempDir()), fleet.WithBaselineFS(fstest.MapFS{}))
 	launch := fleet.ToolLaunch{
@@ -392,7 +397,7 @@ func installFakeCatalog(t *testing.T, toolName string, warm WarmMode, mode strin
 	if err := cat.SaveTool(fleet.Tool{Name: toolName, Kind: fleet.ToolKindCLI, CLI: fleet.ToolCLI{Binary: os.Args[0], Launch: launch}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := cat.SaveAgent(fleet.Agent{Name: "test-agent", Tool: toolName}); err != nil {
+	if err := cat.SaveAgent(fleet.Agent{Name: "test-agent", Tool: toolName, Effort: effort}); err != nil {
 		t.Fatal(err)
 	}
 	old := agentlaunch.NewCatalog

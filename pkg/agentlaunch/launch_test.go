@@ -660,3 +660,57 @@ func TestCodexManagerAndWorkerWritableRoots(t *testing.T) {
 func exeName(p string) string {
 	return strings.TrimSuffix(filepath.Base(p), ".exe")
 }
+
+// A binding's declared effort reaches genie (the ycode tool) as GENIE_EFFORT in
+// the launch env — genie has no effort flag — and only for ycode/genie.
+func TestResolveYcodeDeclaredEffortExportsGenieEffort(t *testing.T) {
+	fleettest.Ring(t)
+	t.Setenv(UnsafeLaunchEnv, "1")
+	root := t.TempDir()
+	cat := fleet.New(fleet.WithRoot(root))
+	if err := cat.SaveAgent(fleet.Agent{Name: "genie-hi", Tool: "ycode", Model: "glm-5.3", Effort: "high"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.SaveAgent(fleet.Agent{Name: "genie-lo", Tool: "ycode", Model: "glm-5.3"}); err != nil {
+		t.Fatal(err)
+	}
+	l, err := ResolveWithCatalog("genie-hi", Options{}, testCatalog(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(l.Env, "GENIE_EFFORT=high") {
+		t.Fatalf("env = %q, want GENIE_EFFORT=high", l.Env)
+	}
+	for _, a := range l.Args {
+		if strings.Contains(a, "effort") {
+			t.Fatalf("effort leaked into argv: %q", l.Args)
+		}
+	}
+	env := ApplyLaunchEnv([]string{"GENIE_EFFORT=low", "PATH=/bin"}, l)
+	if !slices.Contains(env, "GENIE_EFFORT=high") || slices.Contains(env, "GENIE_EFFORT=low") {
+		t.Fatalf("applied env = %q", env)
+	}
+	plain, err := ResolveWithCatalog("genie-lo", Options{}, testCatalog(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kv := range plain.Env {
+		if strings.HasPrefix(kv, "GENIE_EFFORT=") {
+			t.Fatalf("undeclared effort exported %q", kv)
+		}
+	}
+}
+
+func TestEffortEnvOnlyForGenieTools(t *testing.T) {
+	if got := EffortEnv("ycode", "xhigh"); !slices.Equal(got, []string{"GENIE_EFFORT=xhigh"}) {
+		t.Fatalf("ycode = %q", got)
+	}
+	if got := EffortEnv("genie", "low"); !slices.Equal(got, []string{"GENIE_EFFORT=low"}) {
+		t.Fatalf("genie = %q", got)
+	}
+	for _, c := range [][2]string{{"claude", "high"}, {"codex", "high"}, {"ycode", ""}} {
+		if got := EffortEnv(c[0], c[1]); got != nil {
+			t.Fatalf("EffortEnv(%q,%q) = %q", c[0], c[1], got)
+		}
+	}
+}

@@ -90,6 +90,20 @@ func ApplyLaunchEnv(env []string, l Launch) []string {
 	return out
 }
 
+// GenieEffortEnv is the environment variable bashy genie (the ycode tool) reads
+// its reasoning effort from; genie has no effort flag.
+const GenieEffortEnv = "GENIE_EFFORT"
+
+// EffortEnv is the launch env that tells tool to run at effort: GENIE_EFFORT
+// for genie (ycode), nil for every other tool (claude and codex take argv
+// flags, applied by the consumer) and for an undeclared effort.
+func EffortEnv(tool, effort string) []string {
+	if effort == "" || (tool != YcodeToolName && tool != "genie") {
+		return nil
+	}
+	return []string{GenieEffortEnv + "=" + effort}
+}
+
 // ToolFailure reports the first stdout line the launch's recipe declares as a
 // failure event, for a consumer that captured a clean exit and must decide
 // whether to believe it.

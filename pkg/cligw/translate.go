@@ -24,6 +24,8 @@ const neutralSystemPrompt = "You are a helpful assistant. Answer the user direct
 type CompletionPrompt struct {
 	System string
 	Prompt string
+	// Effort is the request's own reasoning effort ("" = none asked).
+	Effort string
 }
 
 // ErrUnsupportedContent is returned when a message contains an image or any
@@ -95,7 +97,7 @@ func RenderCompletionPrompt(req *openai.ChatRequest) (CompletionPrompt, error) {
 		// the system channel, which every CLI weighs as such.
 		systems = append(systems, block)
 	}
-	return CompletionPrompt{System: strings.Join(systems, "\n\n"), Prompt: strings.Join(sections, "\n\n")}, nil
+	return CompletionPrompt{System: strings.Join(systems, "\n\n"), Prompt: strings.Join(sections, "\n\n"), Effort: strings.TrimSpace(req.ReasoningEffort)}, nil
 }
 
 func inlineSystemPrompt(system, prompt string) string {

@@ -2,11 +2,16 @@ package cligw
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/qiangli/yoke/pkg/agentlaunch"
 	"github.com/qiangli/yoke/pkg/fleet"
@@ -118,4 +123,206 @@ func TestCatalogAgentCarriesEffort(t *testing.T) {
 	if a.Effort != "high" {
 		t.Fatalf("effort = %q", a.Effort)
 	}
+}
+
+type effortCapture struct {
+	Args        []string `json:"args"`
+	GenieEffort string   `json:"genie_effort"`
+}
+
+func readEffortCapture(t *testing.T, path string) effortCapture {
+	t.Helper()
+	var c effortCapture
+	data, err := os.ReadFile(path)
+	if err != nil || json.Unmarshal(data, &c) != nil {
+		t.Fatalf("capture: %s: %v", data, err)
+	}
+	return c
+}
+
+func effortFlagOf(tool string, args []string) string {
+	for i, a := range args {
+		switch {
+		case tool == "claude" && a == "--effort" && i+1 < len(args):
+			return args[i+1]
+		case tool == "codex" && a == "-c" && i+1 < len(args) && strings.HasPrefix(args[i+1], "model_reasoning_effort="):
+			v, _ := strconv.Unquote(strings.TrimPrefix(args[i+1], "model_reasoning_effort="))
+			return v
+		}
+	}
+	return ""
+}
+
+// A request's own effort reaches the CLI on a cold worker and on a warm worker
+// that was prewarmed without it (the warm one is relaunched).
+func TestRequestEffortReachesArgv(t *testing.T) {
+	for _, tt := range []struct {
+		tool string
+		warm WarmMode
+	}{
+		{"claude", WarmCold}, {"claude", WarmStdinStreamJSON},
+		{"codex", WarmCold}, {"codex", WarmStdin},
+	} {
+		t.Run(tt.tool+"/"+string(tt.warm), func(t *testing.T) {
+			capturePath := filepath.Join(t.TempDir(), "capture.json")
+			t.Setenv("CLIGW_CAPTURE_PATH", capturePath)
+			installFakeCatalog(t, tt.tool, tt.warm, "system-prompt-"+tt.tool)
+			w, err := NewWorker(context.Background(), "test-agent")
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := w.DoCompletion(context.Background(), CompletionPrompt{Prompt: "hello", Effort: "xhigh"}, nil)
+			if err != nil || got.Text != "ok" {
+				t.Fatalf("result=%+v err=%v", got, err)
+			}
+			if eff := effortFlagOf(tt.tool, readEffortCapture(t, capturePath).Args); eff != "xhigh" {
+				t.Fatalf("effort in argv = %q, want xhigh", eff)
+			}
+		})
+	}
+}
+
+// A request that names no effort leaves the argv exactly as before.
+func TestRequestWithoutEffortKeepsLaunchEffort(t *testing.T) {
+	capturePath := filepath.Join(t.TempDir(), "capture.json")
+	t.Setenv("CLIGW_CAPTURE_PATH", capturePath)
+	installFakeCatalogEffort(t, "claude", WarmStdinStreamJSON, "system-prompt-claude", "high")
+	w, err := NewWorker(context.Background(), "test-agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.DoCompletion(context.Background(), CompletionPrompt{Prompt: "hello"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if eff := effortFlagOf("claude", readEffortCapture(t, capturePath).Args); eff != "high" {
+		t.Fatalf("effort = %q, want the binding's high", eff)
+	}
+}
+
+// Naming the effort the binding already declares is not a conflict.
+func TestRequestEffortMatchingBindingIsServed(t *testing.T) {
+	capturePath := filepath.Join(t.TempDir(), "capture.json")
+	t.Setenv("CLIGW_CAPTURE_PATH", capturePath)
+	installFakeCatalogEffort(t, "codex", WarmStdin, "system-prompt-codex", "high")
+	w, err := NewWorker(context.Background(), "test-agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.DoCompletion(context.Background(), CompletionPrompt{Prompt: "hello", Effort: "high"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if eff := effortFlagOf("codex", readEffortCapture(t, capturePath).Args); eff != "high" {
+		t.Fatalf("effort = %q", eff)
+	}
+}
+
+// The sticky identity freezes the declared effort: a request for another is
+// refused naming both, before a worker is spent on it.
+func TestRequestEffortConflictingWithBindingIs400(t *testing.T) {
+	installFakeCatalogEffort(t, "claude", WarmCold, "system-prompt-claude", "high")
+	pool := NewPool(context.Background(), "test-agent", PoolConfig{StartServers: 1, MaxWorkers: 1, MaxSpare: 1})
+	defer pool.Close()
+	waitFor(t, 3*time.Second, func() bool { return pool.Stats().Idle == 1 })
+	backend := NewAgentBackend("test-agent", "test-model", pool)
+	rec, attempt := serveBackend(t, backend, `{"model":"test-model","reasoning_effort":"low","messages":[{"role":"user","content":"hi"}]}`, nil)
+	if attempt.Status != http.StatusBadRequest || attempt.CanRetry {
+		t.Fatalf("attempt = %+v", attempt)
+	}
+	body := errorMessage(t, rec.Body.Bytes())
+	if !strings.Contains(body, `"high"`) || !strings.Contains(body, `"low"`) {
+		t.Fatalf("400 body does not name both efforts: %s", body)
+	}
+}
+
+// A tool with no effort mechanism answers 400 to a request effort; it is never
+// silently served at its default.
+func TestRequestEffortUnsupportedToolIs400(t *testing.T) {
+	installFakeCatalog(t, "agy", WarmCold, "system-prompt-agy")
+	pool := NewPool(context.Background(), "test-agent", PoolConfig{StartServers: 1, MaxWorkers: 1, MaxSpare: 1})
+	defer pool.Close()
+	waitFor(t, 3*time.Second, func() bool { return pool.Stats().Idle == 1 })
+	backend := NewAgentBackend("test-agent", "test-model", pool)
+	rec, attempt := serveBackend(t, backend, `{"model":"test-model","reasoning_effort":"high","messages":[{"role":"user","content":"hi"}]}`, nil)
+	if attempt.Status != http.StatusBadRequest || attempt.CanRetry {
+		t.Fatalf("attempt = %+v", attempt)
+	}
+	if body := errorMessage(t, rec.Body.Bytes()); !strings.Contains(body, "no known effort flag") || !strings.Contains(body, `"agy"`) {
+		t.Fatalf("body = %s", body)
+	}
+}
+
+func TestRequestEffortInvalidIs400(t *testing.T) {
+	backend, cleanup := testBackend(t, "backend-text")
+	defer cleanup()
+	for _, bad := range []string{"High", "high --x"} {
+		_, attempt := serveBackend(t, backend, `{"model":"test-model","reasoning_effort":"`+bad+`","messages":[{"role":"user","content":"hi"}]}`, nil)
+		if attempt.Status != http.StatusBadRequest {
+			t.Errorf("effort %q: attempt = %+v", bad, attempt)
+		}
+	}
+}
+
+// A served request effort runs end to end through the door.
+func TestRequestEffortServedThroughBackend(t *testing.T) {
+	capturePath := filepath.Join(t.TempDir(), "capture.json")
+	t.Setenv("CLIGW_CAPTURE_PATH", capturePath)
+	installFakeCatalog(t, "claude", WarmCold, "system-prompt-claude")
+	pool := NewPool(context.Background(), "test-agent", PoolConfig{StartServers: 1, MaxWorkers: 1, MaxSpare: 1})
+	defer pool.Close()
+	waitFor(t, 3*time.Second, func() bool { return pool.Stats().Idle == 1 })
+	backend := NewAgentBackend("test-agent", "test-model", pool)
+	_, attempt := serveBackend(t, backend, `{"model":"test-model","reasoning_effort":"medium","messages":[{"role":"user","content":"hi"}]}`, nil)
+	if attempt.Status != http.StatusOK {
+		t.Fatalf("attempt = %+v", attempt)
+	}
+	if eff := effortFlagOf("claude", readEffortCapture(t, capturePath).Args); eff != "medium" {
+		t.Fatalf("effort = %q", eff)
+	}
+}
+
+// genie takes effort in its environment: from the binding at launch, and from
+// the request on a worker that was prewarmed without one.
+func TestGenieEffortEnvFromBindingAndRequest(t *testing.T) {
+	for _, tt := range []struct {
+		name, binding, request, want string
+	}{
+		{"binding", "high", "", "high"},
+		{"request", "", "low", "low"},
+		{"both-equal", "high", "high", "high"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			capturePath := filepath.Join(t.TempDir(), "capture.json")
+			t.Setenv("CLIGW_CAPTURE_PATH", capturePath)
+			installFakeCatalogEffort(t, "ycode", WarmStdin, "system-prompt-ycode", tt.binding)
+			w, err := NewWorker(context.Background(), "test-agent")
+			if err != nil {
+				t.Fatalf("a genie binding's effort must not be refused: %v", err)
+			}
+			if _, err := w.DoCompletion(context.Background(), CompletionPrompt{Prompt: "hello", Effort: tt.request}, nil); err != nil {
+				t.Fatal(err)
+			}
+			c := readEffortCapture(t, capturePath)
+			if c.GenieEffort != tt.want {
+				t.Fatalf("GENIE_EFFORT = %q, want %q", c.GenieEffort, tt.want)
+			}
+			for _, a := range c.Args {
+				if strings.Contains(a, "effort") {
+					t.Fatalf("genie got an effort flag: %q", c.Args)
+				}
+			}
+		})
+	}
+}
+
+func errorMessage(t *testing.T, body []byte) string {
+	t.Helper()
+	var e struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &e); err != nil {
+		t.Fatalf("error body %s: %v", body, err)
+	}
+	return e.Error.Message
 }
