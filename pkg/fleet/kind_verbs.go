@@ -350,6 +350,11 @@ func newShow(kind string, opts []Option) *cobra.Command {
 		if !ok {
 			return fmt.Errorf("fleet: no %s %q", kind, args[0])
 		}
+		if kind == KindTool && field == "" {
+			if t, ok := rec.(*Tool); ok {
+				checkToolHelpersWarning(cmd, *t)
+			}
+		}
 		val := r.value(rec)
 		switch {
 		case field != "":

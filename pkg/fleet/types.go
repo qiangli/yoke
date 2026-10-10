@@ -718,6 +718,17 @@ func (t Tool) Binary() string {
 	return t.Name
 }
 
+// IsPinned reports whether the tool's binary is set to a path rather than a bare name.
+func (t Tool) IsPinned() bool {
+	return isPathLike(strings.TrimSpace(t.CLI.Binary))
+}
+
+// MissingHelpers reports any known helper executables that are missing from a
+// pinned tool's directory, along with a recommended fix command.
+func (t Tool) MissingHelpers() ([]string, string) {
+	return ToolMissingHelpers(t)
+}
+
 // SteerArgvPrefix renders the STEERABLE launch — the interactive session, not the
 // headless one-shot.
 //

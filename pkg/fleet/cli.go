@@ -29,6 +29,7 @@ func NewToolsCmd(opts ...Option) *cobra.Command {
 		NewRetireCmd(KindTool, opts...), NewUnretireCmd(KindTool, opts...),
 		newAdd(KindTool, opts),
 		newSet(KindTool, opts),
+		newToolInstall(opts),
 		newMigrateOverride(dirTools, opts),
 		newRm(KindTool, opts, (*Catalog).RemoveTool),
 		newEdit(KindTool, opts, (*Catalog).MaterializeTool),
