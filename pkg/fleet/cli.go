@@ -24,10 +24,10 @@ func ExitCode(err error) int { return assetring.ExitCode(err) }
 func NewToolsCmd(opts ...Option) *cobra.Command {
 	return newRoot("tool", "Agentic CLI harnesses registered by the fleet",
 		newToolsList(opts),
-		newToolsShow(opts),
+		newShow(KindTool, opts),
 		newSchema(KindTool),
-		newToolsAdd(opts),
-		newToolsSet(opts),
+		newAdd(KindTool, opts),
+		newSet(KindTool, opts),
 		newMigrateOverride(dirTools, opts),
 		newRm(KindTool, opts, (*Catalog).RemoveTool),
 		newEdit(KindTool, opts, (*Catalog).MaterializeTool),
@@ -42,10 +42,10 @@ func NewToolsCmd(opts ...Option) *cobra.Command {
 func NewModelsCmd(opts ...Option) *cobra.Command {
 	return newRoot("model", "Inference backends the fleet can bind to",
 		newModelsList(opts),
-		newModelsShow(opts),
+		newShow(KindModel, opts),
 		newSchema(KindModel),
-		newModelsAdd(opts),
-		newModelsSet(opts),
+		newAdd(KindModel, opts),
+		newSet(KindModel, opts),
 		newMigrateOverride(dirModels, opts),
 		newRm(KindModel, opts, (*Catalog).RemoveModel),
 		newEdit(KindModel, opts, (*Catalog).MaterializeModel),
@@ -60,11 +60,11 @@ func NewModelsCmd(opts ...Option) *cobra.Command {
 func NewAgentsCmd(opts ...Option) *cobra.Command {
 	return newRoot("agent", "Named tool:model bindings — the enlistable unit",
 		newAgentsList(opts),
-		newAgentsShow(opts),
+		newShow(KindAgent, opts),
 		newSchema(KindAgent),
-		newAgentsAdd(opts),
+		newAdd(KindAgent, opts),
 		newAgentsClone(opts),
-		newAgentsSet(opts),
+		newSet(KindAgent, opts),
 		newMigrateOverride(dirAgents, opts),
 		newRm(KindAgent, opts, (*Catalog).RemoveAgent),
 		newEdit(KindAgent, opts, (*Catalog).MaterializeAgent),
@@ -187,38 +187,6 @@ func newToolsList(opts []Option) *cobra.Command {
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
 	filter.flags(c)
-	return c
-}
-
-func newToolsShow(opts []Option) *cobra.Command {
-	var asJSON, asYAML bool
-	var field string
-	c := &cobra.Command{
-		Use:           "show <name>",
-		Short:         "Print a tool's definition",
-		Args:          cobra.ExactArgs(1),
-		SilenceUsage:  true,
-		SilenceErrors: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := checkFormat(asJSON, asYAML); err != nil {
-				return err
-			}
-			t, ok := New(opts...).Tool(args[0])
-			if !ok {
-				return fmt.Errorf("fleet: no tool %q", args[0])
-			}
-			if field != "" {
-				if err := emitField(cmd.OutOrStdout(), t, KindTool, field, asJSON); err != nil {
-					return reportPathError(cmd, KindTool, err)
-				}
-				return nil
-			}
-			return emit(cmd.OutOrStdout(), t, asJSON)
-		},
-	}
-	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON instead of the canonical YAML")
-	c.Flags().BoolVar(&asYAML, "yaml", false, "emit the canonical YAML asset blob (the default)")
-	c.Flags().StringVar(&field, "field", "", "print one dotted path")
 	return c
 }
 
@@ -401,38 +369,6 @@ func newModelsList(opts []Option) *cobra.Command {
 	filter.flags(c)
 	c.Flags().IntVar(&band, "band", 0, "only models in exactly this band (1-5)")
 	c.Flags().IntVar(&minBand, "min-band", 0, "only models in this band or above (1-5)")
-	return c
-}
-
-func newModelsShow(opts []Option) *cobra.Command {
-	var asJSON, asYAML bool
-	var field string
-	c := &cobra.Command{
-		Use:           "show <name>",
-		Short:         "Print a model's definition",
-		Args:          cobra.ExactArgs(1),
-		SilenceUsage:  true,
-		SilenceErrors: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := checkFormat(asJSON, asYAML); err != nil {
-				return err
-			}
-			m, ok := New(opts...).Model(args[0])
-			if !ok {
-				return fmt.Errorf("fleet: no model %q", args[0])
-			}
-			if field != "" {
-				if err := emitField(cmd.OutOrStdout(), m, KindModel, field, asJSON); err != nil {
-					return reportPathError(cmd, KindModel, err)
-				}
-				return nil
-			}
-			return emit(cmd.OutOrStdout(), m, asJSON)
-		},
-	}
-	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON instead of the canonical YAML")
-	c.Flags().BoolVar(&asYAML, "yaml", false, "emit the canonical YAML asset blob (the default)")
-	c.Flags().StringVar(&field, "field", "", "print one dotted path")
 	return c
 }
 
@@ -627,73 +563,31 @@ func dashIfEmpty(s string) string {
 	return s
 }
 
-func newAgentsShow(opts []Option) *cobra.Command {
-	var asJSON, asYAML bool
-	var field string
-	c := &cobra.Command{
-		Use:   "show <name>",
-		Short: "Print an agent's binding",
-		Long: "Print an agent's binding. <name> may be a nickname, an alias, or a bare tool:model.\n\n" +
-			"The summary includes the agent's place on the band ladder: the effective band,\n" +
-			"the DERIVED band (highest n whose gates G1..Gn all hold), any seed peg and\n" +
-			"whether it still holds, each failed gate condition up to the next band, the\n" +
-			"code/manage/judge ratings (r ± RD, events), and each certificate's validity.\n" +
-			"--json and --yaml print the stored record, which never contains a band.",
-		Args:          cobra.ExactArgs(1),
-		SilenceUsage:  true,
-		SilenceErrors: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := checkFormat(asJSON, asYAML); err != nil {
-				return err
-			}
-			cat := New(opts...)
-			a, ok := cat.Agent(args[0])
-			if !ok {
-				return fmt.Errorf("fleet: no agent %q", args[0])
-			}
-			if field != "" {
-				if err := emitField(cmd.OutOrStdout(), a, KindAgent, field, asJSON); err != nil {
-					return reportPathError(cmd, KindAgent, err)
-				}
-				return nil
-			}
-			if asJSON {
-				return emit(cmd.OutOrStdout(), a, true)
-			}
-			// An agent's asset blob is the envelope, not the bare agent —
-			// that is the shape the store holds and the control plane serves.
-			if asYAML {
-				return emit(cmd.OutOrStdout(), AgentFile{Agents: []Agent{a}}, false)
-			}
-			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "%s  (%s)\n", a.Name, a.MatrixKey())
-			if len(a.Aliases) > 0 {
-				fmt.Fprintf(out, "aliases: %s\n", strings.Join(a.Aliases, " "))
-			}
-			ladder, err := cat.Ladder()
-			if err != nil {
-				return err
-			}
-			standings, _ := cat.Standings(ladder)
-			writeStanding(out, a, standings[a.Name])
-			_, tool, model, err := cat.Binding(a.Name)
-			if err != nil {
-				fmt.Fprintf(out, "resolves: no (%v)\n", err)
-				return nil
-			}
-			fmt.Fprintf(out, "tool:    %s (%s)\n", tool.Name, tool.Binary())
-			fmt.Fprintf(out, "model:   %s → %s\n", model.Name, model.TargetFor(tool.Name))
-			fmt.Fprintf(out, "launch:  %s\n", strings.Join(tool.Argv(model.TargetFor(tool.Name), PromptToken), " "))
-			if !tool.TakesModel() {
-				fmt.Fprintf(out, "warning: %s cannot select a model; the binding is a label, not a selection\n", tool.Name)
-			}
-			return nil
-		},
+// showAgentSummary is the human view `agent show` prints by default.
+func showAgentSummary(cmd *cobra.Command, cat *Catalog, a Agent) error {
+	out := cmd.OutOrStdout()
+	fmt.Fprintf(out, "%s  (%s)\n", a.Name, a.MatrixKey())
+	if len(a.Aliases) > 0 {
+		fmt.Fprintf(out, "aliases: %s\n", strings.Join(a.Aliases, " "))
 	}
-	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON instead of a summary")
-	c.Flags().BoolVar(&asYAML, "yaml", false, "emit the canonical YAML asset blob")
-	c.Flags().StringVar(&field, "field", "", "print one dotted path")
-	return c
+	ladder, err := cat.Ladder()
+	if err != nil {
+		return err
+	}
+	standings, _ := cat.Standings(ladder)
+	writeStanding(out, a, standings[a.Name])
+	_, tool, model, err := cat.Binding(a.Name)
+	if err != nil {
+		fmt.Fprintf(out, "resolves: no (%v)\n", err)
+		return nil
+	}
+	fmt.Fprintf(out, "tool:    %s (%s)\n", tool.Name, tool.Binary())
+	fmt.Fprintf(out, "model:   %s → %s\n", model.Name, model.TargetFor(tool.Name))
+	fmt.Fprintf(out, "launch:  %s\n", strings.Join(tool.Argv(model.TargetFor(tool.Name), PromptToken), " "))
+	if !tool.TakesModel() {
+		fmt.Fprintf(out, "warning: %s cannot select a model; the binding is a label, not a selection\n", tool.Name)
+	}
+	return nil
 }
 
 // writeStanding renders an agent's place on the band ladder for humans.

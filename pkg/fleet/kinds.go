@@ -25,6 +25,9 @@ type kindSpec struct {
 	Seeded, Mechanism bool
 	// Overlay: local files marked as overlays merge into the lower ring.
 	Overlay bool
+	// Record is the write surface the generic show / add / set verbs are
+	// built from (kind_verbs.go). Nil: the kind has no generic verbs yet.
+	Record *recordSpec
 }
 
 var (
@@ -103,6 +106,7 @@ func init() {
 			Names: listed(func(c *Catalog) ([]Tool, []error) { return c.Tools(false) },
 				func(t Tool) string { return t.Name }),
 			Seeded: true, Mechanism: true, Overlay: true,
+			Record: toolRecord(),
 		},
 		{
 			Name: KindModel, Plural: dirModels, DirEnv: "BASHY_MODELS_DIR", PathEnv: "BASHY_MODELS_PATH",
@@ -110,6 +114,7 @@ func init() {
 			Lookup: holder((*Catalog).Model, func(m Model) string { return m.Name }),
 			Names:  listed((*Catalog).Models, func(m Model) string { return m.Name }),
 			Seeded: true, Overlay: true,
+			Record: modelRecord(),
 		},
 		{
 			Name: KindAgent, Plural: dirAgents, DirEnv: "BASHY_AGENTS_DIR", PathEnv: "BASHY_AGENTS_PATH",
@@ -117,6 +122,7 @@ func init() {
 			Lookup: holder((*Catalog).Agent, func(a Agent) string { return a.Name }),
 			Names:  listed((*Catalog).Agents, func(a Agent) string { return a.Name }),
 			Seeded: true, Overlay: true,
+			Record: agentRecord(),
 		},
 		{
 			Name: KindPerson, Plural: dirPeople, DirEnv: "BASHY_PEOPLE_DIR", PathEnv: "BASHY_PEOPLE_PATH",

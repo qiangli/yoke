@@ -240,13 +240,8 @@ func (c *Catalog) saveChanged(noun, name string, before, after any, paths []stri
 	}
 	fileName, lower, found := c.lowerEntry(noun, name)
 	if !found {
-		switch v := after.(type) {
-		case Tool:
-			return c.SaveTool(v)
-		case Model:
-			return c.SaveModel(v)
-		case Agent:
-			return c.SaveAgent(v)
+		if spec, ok := kindByDir(noun); ok && spec.Record != nil {
+			return spec.Record.saveValue(c, after)
 		}
 	}
 	path, err := entryPath(c.nounDir(noun), fileName)
