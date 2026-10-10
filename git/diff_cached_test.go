@@ -200,3 +200,65 @@ func TestUnknownFlagUsesHostOnlyWhenExternal(t *testing.T) {
 		t.Fatalf("external run: %v", err)
 	}
 }
+
+// A staged zero-byte new file is a header-only entry in real git
+// (`new file mode 100644` + `index 0000000..e69de29`, no ---/+++ or
+// hunk); mixed with ordinary text changes the whole patch must still
+// match host git byte for byte and apply.
+func TestDiffCachedEmptyNewFileMatchesHostGit(t *testing.T) {
+	needHostGit(t)
+	dir := stagedRepo(t)
+	write(t, dir, "was-empty", "")
+	write(t, dir, "to-empty.txt", "text\n")
+	hostGit(t, dir, "add", "was-empty", "to-empty.txt")
+	hostGit(t, dir, "commit", "-q", "-m", "empties")
+	if err := os.Remove(filepath.Join(dir, "was-empty")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, "to-empty.txt", "")
+	write(t, dir, "empty.txt", "")
+	write(t, dir, "sub/deep/empty2", "")
+	ctx := context.Background()
+	if _, err := Exec(ctx, dir, []string{"add", "-A"}); err != nil {
+		t.Fatal(err)
+	}
+	want := hostGit(t, dir, "diff", "--cached", "--binary", "--no-renames", "HEAD")
+	hdr := "diff --git a/empty.txt b/empty.txt\nnew file mode 100644\nindex 0000000..e69de29\ndiff --git"
+	if !strings.Contains(want, hdr) {
+		t.Fatalf("fixture lost the header-only empty-file entry:\n%s", want)
+	}
+	if !strings.Contains(want, "deleted file mode 100644\nindex e69de29..0000000\n") || strings.Contains(want, "--- a/was-empty") {
+		t.Fatalf("fixture lost the header-only empty-file deletion:\n%s", want)
+	}
+	for _, args := range [][]string{
+		{"diff", "--cached", "--binary", "HEAD"},
+		{"diff", "--cached", "--", "empty.txt"},
+		{"diff", "--cached", "--", "sub"},
+		{"diff", "--cached", "--", "was-empty", "to-empty.txt"},
+	} {
+		g, err := Exec(ctx, dir, args)
+		if err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		w := hostGit(t, dir, append(append([]string{}, args[:1]...), append([]string{"--no-renames"}, args[1:]...)...)...)
+		if g.Stdout != w {
+			t.Fatalf("%v differs from host git\n--- native ---\n%s\n--- host ---\n%s", args, g.Stdout, w)
+		}
+	}
+	got, _ := Exec(ctx, dir, []string{"diff", "--cached", "--binary", "HEAD"})
+	clean := t.TempDir()
+	hostGit(t, clean, "clone", "-q", dir, ".")
+	patch := filepath.Join(t.TempDir(), "p.diff")
+	if err := os.WriteFile(patch, []byte(got.Stdout), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hostGit(t, clean, "apply", patch)
+	if _, err := os.Stat(filepath.Join(clean, "was-empty")); err == nil {
+		t.Fatal("empty-file deletion not applied")
+	}
+	for _, f := range []string{"empty.txt", "sub/deep/empty2", "to-empty.txt"} {
+		if b, err := os.ReadFile(filepath.Join(clean, f)); err != nil || len(b) != 0 {
+			t.Fatalf("%s after apply = %q (%v), want empty file", f, b, err)
+		}
+	}
+}

@@ -85,6 +85,9 @@ func indexTree(repo *gogit.Repository) (*object.Tree, error) {
 	return repo.TreeObject(h)
 }
 
+// emptyBlobHash is the id of the zero-byte blob (`git hash-object /dev/null`).
+var emptyBlobHash = plumbing.NewHash("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391")
+
 var indexLineRE = regexp.MustCompile(`(?m)^index ([0-9a-f]{40})\.\.([0-9a-f]{40})`)
 
 // stagedPatch renders `git diff --cached [REV] [-- paths]`: the index
@@ -146,12 +149,28 @@ func stagedPatch(repo *gogit.Repository, rev string, paths []string) (string, er
 	if err != nil {
 		return "", ErrUnsupported
 	}
+	// go-git calls any patch without chunks binary, so a zero-byte file
+	// added or deleted gets a "Binary files ... differ" stub; git prints
+	// that entry header-only (mode + index lines, no ---/+++ or hunk).
+	var stubs []string
 	for _, fp := range patch.FilePatches() {
-		if fp.IsBinary() {
+		if !fp.IsBinary() {
+			continue
+		}
+		from, to := fp.Files()
+		switch {
+		case from == nil && to != nil && to.Hash() == emptyBlobHash:
+			stubs = append(stubs, "Binary files /dev/null and b/"+to.Path()+" differ\n")
+		case to == nil && from != nil && from.Hash() == emptyBlobHash:
+			stubs = append(stubs, "Binary files a/"+from.Path()+" and /dev/null differ\n")
+		default:
 			return "", ErrUnsupported
 		}
 	}
 	out := patch.String()
+	for _, stub := range stubs {
+		out = strings.Replace(out, stub, "", 1)
+	}
 	// go-git prints full 40-char blob ids; git abbreviates to 7.
 	out = indexLineRE.ReplaceAllStringFunc(out, func(m string) string {
 		sm := indexLineRE.FindStringSubmatch(m)
