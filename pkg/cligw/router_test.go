@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/qiangli/yoke/pkg/fleet"
@@ -346,5 +349,81 @@ func TestRouterMarkIneligibleIsPermanentForRouter(t *testing.T) {
 	}
 	if got.Agent != "x-cascade" {
 		t.Fatalf("marked agent retried: %+v", got)
+	}
+}
+
+// servableFixture builds a tiny fleet with one agent in each of the states
+// Servable distinguishes: installed and reachable, bound to a tool whose
+// binary cannot be found, and marked ineligible. A fourth agent is put into
+// breaker cooldown by the caller, since that state is per-router, not
+// per-fleet.
+func servableFixture(t *testing.T) (*FleetCatalog, map[string]Agent) {
+	t.Helper()
+	root := t.TempDir()
+	fake := filepath.Join(root, "fake-cli")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cat := fleet.New(fleet.WithRoot(filepath.Join(root, "fleet")), fleet.WithBaselineFS(fstest.MapFS{}), fleet.WithoutCloudOverlay())
+	tools := []fleet.Tool{
+		{Name: "good-tool", Kind: fleet.ToolKindCLI, CLI: fleet.ToolCLI{Binary: fake, Launch: fleet.ToolLaunch{Exec: fake + " --model {model} {prompt}"}}},
+		{Name: "missing-tool", Kind: fleet.ToolKindCLI, CLI: fleet.ToolCLI{
+			Binary: filepath.Join(root, "does-not-exist"),
+			Launch: fleet.ToolLaunch{Exec: "does-not-exist {model} {prompt}"},
+		}},
+	}
+	for _, tool := range tools {
+		if err := cat.SaveTool(tool); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := cat.SaveModel(fleet.Model{Name: "mid", Band: 3, Kind: fleet.ModelKindAPI, Provider: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	agents := []fleet.Agent{
+		{Name: "ok-agent", Tool: "good-tool", Model: "mid"},
+		{Name: "missing-agent", Tool: "missing-tool", Model: "mid"},
+		{Name: "cooldown-agent", Tool: "good-tool", Model: "mid"},
+	}
+	for _, agent := range agents {
+		if err := cat.SaveAgent(agent); err != nil {
+			t.Fatal(err)
+		}
+	}
+	catalog := NewFleetCatalog(cat)
+	byName := map[string]Agent{}
+	for _, a := range catalog.inventory() {
+		byName[a.Name] = a
+	}
+	for _, name := range []string{"ok-agent", "missing-agent", "cooldown-agent"} {
+		if _, ok := byName[name]; !ok {
+			t.Fatalf("fixture inventory is missing %q", name)
+		}
+	}
+	return catalog, byName
+}
+
+// TestRouterServableMatchesThe503Rule pins S406/#1772: Servable must agree
+// with the router's own candidate filter in score, since listModels reuses
+// it to decide whether a model is worth advertising.
+func TestRouterServableMatchesThe503Rule(t *testing.T) {
+	catalog, agents := servableFixture(t)
+	breaker := sched.NewBreaker()
+	router := NewRouter(catalog, DefaultPolicy(), WithBreaker(breaker))
+	breaker.Trip("cooldown-agent", time.Minute)
+
+	if ok, reason := router.Servable(agents["ok-agent"]); !ok {
+		t.Fatalf("ok-agent Servable = (%v, %q), want servable", ok, reason)
+	}
+	if ok, reason := router.Servable(agents["missing-agent"]); ok || reason != "tool not installed" {
+		t.Fatalf("missing-agent Servable = (%v, %q), want (false, \"tool not installed\")", ok, reason)
+	}
+	if ok, reason := router.Servable(agents["cooldown-agent"]); ok || reason != "breaker cooldown" {
+		t.Fatalf("cooldown-agent Servable = (%v, %q), want (false, \"breaker cooldown\")", ok, reason)
+	}
+
+	router.MarkIneligible("ok-agent", "test-account", "incompatible binding")
+	if ok, reason := router.Servable(agents["ok-agent"]); ok || !strings.HasPrefix(reason, "ineligible:") {
+		t.Fatalf("marked ok-agent Servable = (%v, %q), want an ineligible reason", ok, reason)
 	}
 }

@@ -167,6 +167,101 @@ func TestServerModelListCoversBandsAndAgents(t *testing.T) {
 	}
 }
 
+// TestServerModelListExcludesUnservableModels pins S406/#1772: a model row
+// with no installed tool, or whose only agent is in breaker cooldown, must
+// not appear in /v1/models — a listed model must never be a request that is
+// guaranteed to hit the router's 503.
+func TestServerModelListExcludesUnservableModels(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	t.Setenv("CLIGW_TEST_HELPER", "1")
+	root := t.TempDir()
+	cat := fleet.New(fleet.WithRoot(root), fleet.WithBaselineFS(fstest.MapFS{}), fleet.WithoutCloudOverlay())
+
+	tools := []fleet.Tool{
+		{Name: "claude", Kind: fleet.ToolKindCLI, CLI: fleet.ToolCLI{
+			Binary: os.Args[0],
+			Launch: fleet.ToolLaunch{
+				Exec:         fmt.Sprintf("%s -test.run=TestCLIHelper -- warm {model} {prompt}", os.Args[0]),
+				EventsStdout: "--events-json",
+				EventsDone:   fleet.EventsDone{Field: "type", Values: []string{"result", "turn.completed"}},
+			},
+		}},
+		{Name: "ghost-tool", Kind: fleet.ToolKindCLI, CLI: fleet.ToolCLI{
+			Binary: filepath.Join(root, "does-not-exist"),
+			Launch: fleet.ToolLaunch{Exec: "does-not-exist {model} {prompt}"},
+		}},
+	}
+	for _, tool := range tools {
+		if err := cat.SaveTool(tool); err != nil {
+			t.Fatal(err)
+		}
+	}
+	models := []fleet.Model{
+		{Name: "sonnet-x", Band: 4, Kind: fleet.ModelKindSubscription, Provider: "anthropic", Domain: []string{"coding"}},
+		{Name: "ghost-model", Band: 4, Kind: fleet.ModelKindSubscription, Provider: "ghost", Domain: []string{"coding"}},
+		{Name: "frozen-model", Band: 4, Kind: fleet.ModelKindSubscription, Provider: "frozen", Domain: []string{"coding"}},
+	}
+	for _, model := range models {
+		if err := cat.SaveModel(model); err != nil {
+			t.Fatal(err)
+		}
+	}
+	agents := []fleet.Agent{
+		{Name: "warm-four", Tool: "claude", Model: "sonnet-x"},
+		{Name: "ghost-agent", Tool: "ghost-tool", Model: "ghost-model"},
+		{Name: "frozen-agent", Tool: "claude", Model: "frozen-model"},
+	}
+	for _, agent := range agents {
+		if err := cat.SaveAgent(agent); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := agentlaunch.NewCatalog
+	agentlaunch.NewCatalog = func() *fleet.Catalog { return cat }
+	t.Cleanup(func() { agentlaunch.NewCatalog = old })
+
+	catalog := NewFleetCatalog(cat)
+	quota := &fakeQuota{headroom: map[string]float64{}, refused: map[string]string{}}
+	breaker := sched.NewBreaker()
+	server, err := NewServer(ServerOptions{
+		Catalog: catalog, Quota: quota, Breaker: breaker,
+		Pool: PoolConfig{StartServers: 0, MinSpare: 0, MaxSpare: 1, MaxWorkers: 2, IdleTTL: time.Minute},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	breaker.Trip("frozen-agent", time.Minute)
+
+	httpServer := httptest.NewServer(server.Handler())
+	t.Cleanup(httpServer.Close)
+	ts := &testServer{Server: server, http: httpServer, quota: quota}
+
+	resp := ts.do(t, http.MethodGet, "/v1/models", ts.Token(), "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /v1/models = %s", resp.Status)
+	}
+	var list ModelListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		t.Fatal(err)
+	}
+	byID := make(map[string]ModelEntry, len(list.Data))
+	for _, entry := range list.Data {
+		byID[entry.ID] = entry
+	}
+	for _, want := range []string{"warm-four", "sonnet-x"} {
+		if _, ok := byID[want]; !ok {
+			t.Fatalf("servable row %q is missing from /v1/models: %v", want, list.Data)
+		}
+	}
+	for _, unwanted := range []string{"ghost-agent", "ghost-model", "frozen-agent", "frozen-model"} {
+		if _, ok := byID[unwanted]; ok {
+			t.Fatalf("/v1/models lists %q, which cannot currently be served: %v", unwanted, list.Data)
+		}
+	}
+}
+
 func TestServerRejectsBadToken(t *testing.T) {
 	ts := newTestServer(t, map[string]float64{"sonnet-x": .8, "gpt-x": .2})
 

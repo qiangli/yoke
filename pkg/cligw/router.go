@@ -539,6 +539,41 @@ func (r *Router) Rank(ctx context.Context, band int, filter Filter, policyName s
 	return out
 }
 
+// eligibilityReason reports why agent cannot be routed right now, given
+// marks — a snapshot of permanently ineligible agents taken under r.mu. It
+// returns "" when the agent is eligible. This is the one rule behind both
+// score's candidate filter and the public Servable check: a listed model
+// must never be a request guaranteed to hit the router's 503.
+func (r *Router) eligibilityReason(agent Agent, marks map[string]ineligibleMark) string {
+	if mark, marked := marks[agent.Name]; marked {
+		return "ineligible: " + mark.Reason
+	}
+	if r.breaker.InCooldown(agent.Name) {
+		return "breaker cooldown"
+	}
+	if !r.toolInstalled(agent) {
+		return "tool not installed"
+	}
+	return ""
+}
+
+// Servable reports whether agent is a reachable routing candidate right
+// now — not permanently marked ineligible, not inside a breaker cooldown,
+// and its tool binary resolves on PATH. Callers that list models reuse this
+// instead of duplicating the rule behind the router's 503 "no matching
+// candidate is installed and outside breaker cooldown".
+func (r *Router) Servable(agent Agent) (ok bool, reason string) {
+	r.mu.Lock()
+	mark, marked := r.ineligible[agent.Name]
+	r.mu.Unlock()
+	marks := map[string]ineligibleMark{}
+	if marked {
+		marks[agent.Name] = mark
+	}
+	reason = r.eligibilityReason(agent, marks)
+	return reason == "", reason
+}
+
 func (r *Router) score(ctx context.Context, agents []Agent, policyName, sessionID string) []Candidate {
 	r.mu.Lock()
 	affinity := r.affinity[sessionID]
@@ -553,7 +588,7 @@ func (r *Router) score(ctx context.Context, agents []Agent, policyName, sessionI
 		if ctx.Err() != nil {
 			return nil
 		}
-		if _, marked := marks[agent.Name]; marked || r.breaker.InCooldown(agent.Name) || !r.toolInstalled(agent) {
+		if r.eligibilityReason(agent, marks) != "" {
 			continue
 		}
 		headroom, known := r.quota.Headroom(ctx, agent)

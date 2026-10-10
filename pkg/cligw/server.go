@@ -974,12 +974,55 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errorEnvelope(err.Error()))
 		return
 	}
-	entries := s.catalog.ModelList(r.Context(), filter)
+	entries := s.filterServable(s.catalog.ModelList(r.Context(), filter))
 	labels := s.quotaLabels(r.Context())
 	for i := range entries {
 		entries[i].XQuota = labels(entries[i])
 	}
 	writeJSON(w, http.StatusOK, ModelListResponse{Object: "list", Data: entries})
+}
+
+// filterServable drops a model/agent row the fleet cannot currently serve —
+// not installed, in breaker cooldown, or marked ineligible — so /v1/models
+// never advertises a model that is guaranteed to 503. Band aliases (L1…L5
+// and their +variants) are virtual tiers spanning many agents, not one
+// candidate, so they are left as is.
+func (s *Server) filterServable(entries []ModelEntry) []ModelEntry {
+	out := make([]ModelEntry, 0, len(entries))
+	for _, entry := range entries {
+		if _, _, isBand := parseBand(entry.ID); isBand {
+			out = append(out, entry)
+			continue
+		}
+		if ok, _ := s.modelServable(entry.ID); ok {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+// modelServable reports whether id's row has at least one currently
+// reachable agent, reusing Router.Servable — the exact rule behind the
+// router's 503 "no matching candidate is installed and outside breaker
+// cooldown" — as the one source of truth. An agent row maps to exactly one
+// agent; a model row maps to every agent bound to that model, the same
+// aggregation quotaLabels uses to project model-level metadata.
+func (s *Server) modelServable(id string) (bool, string) {
+	if agent, ok := s.agent(id); ok {
+		return s.router.Servable(agent)
+	}
+	reason := "no agent is bound to this model"
+	for _, candidate := range s.catalog.inventory() {
+		if candidate.Model != id {
+			continue
+		}
+		ok, candidateReason := s.router.Servable(candidate)
+		if ok {
+			return true, ""
+		}
+		reason = candidateReason
+	}
+	return false, reason
 }
 
 // quotaLabels returns the x_quota renderer for one listing. A band alias spans
