@@ -1,4 +1,8 @@
 name: door-codex-gpt-5.5
+retired:
+  at: 2026-10-09
+  reason: not in the 1.0 curated list
+  replaced_by: gpt5.6-sol
 display: codex-gpt-5.5 via the model door (sticky genie-gpt-5.5)
 # The cligw model door: bashy's loopback openai-compat front of a CLI harness,
 # stable at 127.0.0.1:24556. The sticky path pins one CLI session per genie

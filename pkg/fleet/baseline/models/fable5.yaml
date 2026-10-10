@@ -1,4 +1,8 @@
 name: fable5
+retired:
+  at: 2026-10-09
+  reason: not in the 1.0 curated list
+  replaced_by: fable5.1
 family: fable
 version: "5"
 band: 4

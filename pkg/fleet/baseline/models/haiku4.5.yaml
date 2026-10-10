@@ -1,4 +1,8 @@
 name: haiku4.5
+retired:
+  at: 2026-10-09
+  reason: not in the 1.0 curated list
+  replaced_by: sonnet5
 family: haiku
 version: "4.5"
 band: 1

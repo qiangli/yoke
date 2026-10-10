@@ -2,6 +2,10 @@ agents:
   - name: codex-gpt5.4-mini
     tool: codex
     model: gpt5.4-mini
+    retired:
+      at: 2026-10-09
+      reason: not in the 1.0 curated list
+      replaced_by: codex-gpt5.6-sol
     display: "codex · gpt5.4-mini"
     ledger:
       reliability: unmeasured

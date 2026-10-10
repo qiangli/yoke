@@ -1,4 +1,8 @@
 name: gemini3.1
+retired:
+  at: 2026-10-09
+  reason: not in the 1.0 curated list
+  replaced_by: gemini3.8-flash
 family: gemini
 version: "3.1"
 band: 2

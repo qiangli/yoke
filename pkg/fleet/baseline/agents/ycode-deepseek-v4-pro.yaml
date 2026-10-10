@@ -1,6 +1,6 @@
 agents:
   - name: ycode-deepseek-v4-pro
-    tool: genie
+    tool: ycode
     model: deepseek-v4-pro
     display: "ycode · deepseek-v4-pro"
     ledger:

@@ -1,4 +1,8 @@
 name: sonnet4.6
+retired:
+  at: 2026-10-09
+  reason: not in the 1.0 curated list
+  replaced_by: sonnet5
 family: sonnet
 version: "4.6"
 band: 2

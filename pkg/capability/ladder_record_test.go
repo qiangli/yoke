@@ -339,6 +339,7 @@ func TestLadderRecordIDsUnique(t *testing.T) {
 // and the seedfit TSV names model-y, which no agent is bound to.
 func ladderSeedFleet(t *testing.T) string {
 	t.Helper()
+	isolateFleetEnv(t)
 	root := t.TempDir()
 	cat := fleet.New(fleet.WithRoot(root), fleet.WithBaselineFS(fstest.MapFS{}))
 	for _, tool := range []string{"tool-a", "tool-b", "tool-c"} {

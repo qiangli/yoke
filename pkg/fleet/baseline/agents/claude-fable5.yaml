@@ -2,6 +2,10 @@ agents:
   - name: claude-fable5
     tool: claude
     model: fable5
+    retired:
+      at: 2026-10-09
+      reason: not in the 1.0 curated list
+      replaced_by: claude-sonnet5
     display: "claude · fable5"
     ledger:
       reliability: high

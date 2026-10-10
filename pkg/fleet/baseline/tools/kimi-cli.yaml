@@ -1,6 +1,7 @@
-name: kimi-code
+name: kimi-cli
 kind: cli
 display: Kimi Code
+aliases: [kimi-code]
 cli:
   binary: kimi
   # MANAGED INSTALL (D12, 2026-10-09): Moonshot's own Kimi Code CLI release
@@ -50,8 +51,6 @@ cli:
     watchdog:
       max_runtime: 45m
       mem_limit: 12g
-    env_markers:
-      - KIMI_CODE
 quirks: Moonshot agentic CLI
 harness:
   operability: 0.8

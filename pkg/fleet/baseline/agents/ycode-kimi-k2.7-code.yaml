@@ -1,7 +1,11 @@
 agents:
   - name: ycode-kimi-k2.7-code
-    tool: genie
+    tool: ycode
     model: kimi-k2.7-code
+    retired:
+      at: 2026-10-09
+      reason: not in the 1.0 curated list
+      replaced_by: ycode-glm-5.3
     display: "ycode · kimi-k2.7-code"
     ledger:
       reliability: unmeasured

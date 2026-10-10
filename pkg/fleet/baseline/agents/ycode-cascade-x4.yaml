@@ -1,15 +1,15 @@
 agents:
   - name: ycode-cascade-x4
-    tool: genie
+    tool: ycode
     # Nominal binding (= the base's model) so the catalog resolves it like any
     # agent; the cascade behavior is driven by base + escalation below.
-    model: glm-5.2
+    model: glm-5.3
     display: "cascade · glm-5.2 → terra → sol (serves L4)"
     # A composite that SERVES at L4 by escalation, rendered X4 — cheap glm-5.2
     # does the work and calls in progressively senior help only when stuck.
     band: 4
     band_source: cascade
-    base: ycode-glm-5.2
+    base: ycode-glm-5.3
     escalation:
       - ycode-gpt5.6-terra   # L3 help — first rung when the reflex steer fails
       - ycode-gpt5.6-sol     # L4 help — last rung

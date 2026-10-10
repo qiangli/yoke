@@ -2,6 +2,10 @@ agents:
   - name: agy-gemini3.5-flash-low
     tool: agy
     model: gemini3.5-flash-low
+    retired:
+      at: 2026-10-09
+      reason: not in the 1.0 curated list
+      replaced_by: agy-gemini3.8-flash
     display: "agy · gemini3.5-flash-low"
     ledger:
       reliability: unmeasured

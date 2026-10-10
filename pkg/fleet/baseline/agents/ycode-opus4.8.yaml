@@ -1,7 +1,11 @@
 agents:
   - name: ycode-opus4.8
-    tool: genie
+    tool: ycode
     model: opus4.8
+    retired:
+      at: 2026-10-09
+      reason: not in the 1.0 curated list
+      replaced_by: ycode-glm-5.3
     display: "ycode · opus4.8"
     ledger:
       reliability: unmeasured

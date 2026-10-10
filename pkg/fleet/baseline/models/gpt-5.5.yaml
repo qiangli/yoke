@@ -1,4 +1,8 @@
 name: gpt-5.5
+retired:
+  at: 2026-10-09
+  reason: not in the 1.0 curated list
+  replaced_by: gpt5.6-sol
 family: gpt
 version: "5.5"
 band: 3

@@ -22,6 +22,16 @@ func bare(root string) *fleet.Catalog {
 	return fleet.New(fleet.WithRoot(root), fleet.WithBaselineFS(fstest.MapFS{}))
 }
 
+// isolateFleetEnv keeps unit fixtures independent of the operator's shared
+// fleet overlay. The baseline is intentionally exercised only by tests that
+// opt into fleettest.Ring.
+func isolateFleetEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{"BASHY_TOOLS_PATH", "BASHY_MODELS_PATH", "BASHY_AGENTS_PATH"} {
+		t.Setenv(key, "")
+	}
+}
+
 // The capability priors moved out of Go literals and into the fleet registry.
 // This pins every cell they produced, so the move is provably value-preserving
 // and any future edit to a baseline YAML shows up as an intentional diff.
@@ -79,6 +89,7 @@ func TestSeedPriorsMatchGolden(t *testing.T) {
 // Two nicknames for one binding must collapse to one row. Fragmenting the
 // matrix by nickname would split the evidence the router accumulates.
 func TestNicknamesDoNotFragmentTheMatrix(t *testing.T) {
+	isolateFleetEnv(t)
 	root := t.TempDir()
 	cat := fleet.New(fleet.WithRoot(root))
 	if err := cat.SaveTool(fleet.Tool{Name: "claude", Kind: fleet.ToolKindCLI,

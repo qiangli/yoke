@@ -1,0 +1,22 @@
+name: zcode
+kind: cli
+display: Z.ai Code
+cli:
+  binary: zcode
+  launch:
+    exec: zcode --mode yolo -p {prompt}
+    prompt_position: last
+    key_env: [ZCODE_API_KEY]
+    env:
+      - ZCODE_DATA_BASE_DIR={state_dir}/data
+      - ZCODE_PERSONAL_PROVIDER_CONFIG_FILE={state_dir}/provider_config.json
+    setup: |
+      mkdir -p "{state_dir}"
+      cat > "{state_dir}/provider_config.json" <<EOF
+      {"providers":[{"id":"bashy","name":"bashy","apiType":"openai-chat-completions","baseUrl":"{base_url}","access":{"type":"api-key","apiKey":"$ZCODE_API_KEY"},"personalModelIds":["{model}"]}]}
+      EOF
+    notes: Official Z.ai CLI; source-built installation is intentionally a follow-up.
+    watchdog:
+      max_runtime: 45m
+      mem_limit: 12g
+quirks: personal provider configuration supplies the API key and model.

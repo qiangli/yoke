@@ -12,7 +12,7 @@ func clearMarkers(t *testing.T) {
 	for _, k := range []string{
 		"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CODEX_SANDBOX", "CODEX_THREAD_ID",
 		"GEMINI_CLI", "CURSOR_AGENT", "CURSOR_TRACE_ID", "GOOSE_TERMINAL",
-		"OPENCODE_CLIENT", "CLINE_ACTIVE", "AGENT", "AI_AGENT",
+		"OPENCODE_CLIENT", "CLINE_ACTIVE", "HERMES_AGENT", "KIMI_CODE", "OPENCLAW", "AGENT", "AI_AGENT",
 	} {
 		t.Setenv(k, "")
 	}
@@ -56,19 +56,11 @@ func TestDetectToolUnattributed(t *testing.T) {
 	}
 }
 
-// Teaching bashy a new harness is a registry entry, not a code change.
-func TestDetectToolPicksUpANewlyRegisteredHarness(t *testing.T) {
+// Recognition stays available even after a tool leaves the curated roster.
+func TestDetectToolRecognizesRetiredToolMarker(t *testing.T) {
 	clearMarkers(t)
-	root := t.TempDir()
-	cat := New(WithRoot(root))
-	if err := cat.SaveTool(Tool{
-		Name: "newthing", Kind: ToolKindCLI,
-		CLI: ToolCLI{Launch: ToolLaunch{EnvMarkers: []string{"NEWTHING_ACTIVE"}}},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("NEWTHING_ACTIVE", "1")
-	if got, ok := New(WithRoot(root)).DetectTool(); !ok || got != "newthing" {
+	t.Setenv("OPENCLAW", "1")
+	if got, ok := detectCat(t).DetectTool(); !ok || got != "openclaw" {
 		t.Fatalf("got %q,%v", got, ok)
 	}
 }

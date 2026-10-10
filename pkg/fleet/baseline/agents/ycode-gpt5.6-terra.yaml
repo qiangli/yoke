@@ -1,7 +1,11 @@
 agents:
   - name: ycode-gpt5.6-terra
-    tool: genie
+    tool: ycode
     model: gpt5.6-terra
+    retired:
+      at: 2026-10-09
+      reason: not in the 1.0 curated list
+      replaced_by: ycode-glm-5.3
     display: "ycode · gpt5.6-terra"
     ledger:
       reliability: unmeasured

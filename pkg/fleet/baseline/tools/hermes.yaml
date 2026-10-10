@@ -1,6 +1,10 @@
 name: hermes
 kind: cli
 display: Hermes
+retired:
+  at: 2026-10-09
+  reason: moved to bashy examples/fleet as custom tools
+  replaced_by: none
 cli:
   binary: hermes
   launch:
@@ -10,6 +14,4 @@ cli:
       — the cleanest scripting contract in the fleet. hermes has native ACP (`hermes acp`),
       `hermes mcp serve`, and is the ONLY fleet harness implementing MCP sampling (default-on).
       This template is declared-not-measured (unverified locally).
-    env_markers:
-      - HERMES_AGENT
 quirks: registered; launch template declared-not-measured

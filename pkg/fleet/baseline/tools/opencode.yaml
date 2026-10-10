@@ -86,8 +86,6 @@ cli:
     watchdog:
       max_runtime: 45m
       mem_limit: 12g
-    env_markers:
-      - OPENCODE_CLIENT
 quirks: delivers committed work; pre-seed opencode.json or it silently no-ops (exit 0)
 harness:
   operability: 0.9

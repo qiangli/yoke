@@ -1,14 +1,14 @@
 agents:
   - name: ycode-cascade-x3
-    tool: genie
-    model: glm-5.2
+    tool: ycode
+    model: glm-5.3
     display: "cascade · glm-5.2 → terra (serves L3)"
     # Serves L3 by escalation, rendered X3 — glm-5.2 does the work and calls in
     # terra (L3) when stuck. A rung shorter than X4 (no sol): cheaper ceiling for
     # L3-class work.
     band: 3
     band_source: cascade
-    base: ycode-glm-5.2
+    base: ycode-glm-5.3
     escalation:
       - ycode-gpt5.6-terra   # L3 help — the only rung
     ledger:

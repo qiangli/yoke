@@ -17,6 +17,7 @@
 name: herald
 kind: cli
 display: Herald (A2A peer)
+hidden: true
 cli:
   binary: bashy
   launch:

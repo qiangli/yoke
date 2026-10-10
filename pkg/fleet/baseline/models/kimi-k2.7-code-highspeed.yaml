@@ -1,4 +1,8 @@
 name: kimi-k2.7-code-highspeed
+retired:
+  at: 2026-10-09
+  reason: not in the 1.0 curated list
+  replaced_by: glm-5.3
 # Its OWN family, not `kimi-code`: it shares version 2.7 with kimi-k2.7-code, and
 # two models at the same version in one family would tie the derived family
 # alias, which fails closed. Same weights class, higher-throughput serving tier.

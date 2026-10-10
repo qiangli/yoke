@@ -1,4 +1,8 @@
 name: gpt5.3-spark
+retired:
+  at: 2026-10-09
+  reason: not in the 1.0 curated list
+  replaced_by: gpt5.6-sol
 family: gpt-spark
 version: "5.3"
 band: 3

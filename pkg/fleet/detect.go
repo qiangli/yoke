@@ -2,26 +2,28 @@ package fleet
 
 import (
 	"os"
-	"sort"
 	"sync"
 )
 
 // marker pairs an environment variable with the tool whose presence it proves.
 type marker struct{ env, tool string }
 
-// markers returns the detection index in a deterministic order: a process that
-// somehow sets two harnesses' markers must resolve the same way on every host.
-func (c *Catalog) markers() []marker {
-	tools, _ := c.Tools(true)
-	sort.Slice(tools, func(i, j int) bool { return tools[i].Name < tools[j].Name })
-	var out []marker
-	for _, t := range tools {
-		for _, env := range t.CLI.Launch.EnvMarkers {
-			out = append(out, marker{env, t.Name})
-		}
-	}
-	return out
+// recognitionMarkers is deliberately separate from the launch catalog. A
+// release can retire a tool without making an already-running harness look
+// human, which would silently change help and safety behavior. Add a marker
+// here when supporting a new harness; keep it when that harness is retired.
+var recognitionMarkers = []marker{
+	{"CLAUDECODE", "claude"}, {"CLAUDE_CODE_ENTRYPOINT", "claude"},
+	{"CODEX_SANDBOX", "codex"}, {"CODEX_THREAD_ID", "codex"},
+	{"GEMINI_CLI", "gemini"}, {"GOOSE_TERMINAL", "goose"},
+	{"OPENCODE_CLIENT", "opencode"}, {"CLINE_ACTIVE", "cline"},
+	{"HERMES_AGENT", "hermes"}, {"KIMI_CODE", "kimi-cli"},
+	{"OPENCLAW", "openclaw"},
 }
+
+// markers returns a copy so callers cannot mutate the built-in recognition
+// table. Its order is deterministic when two harness markers are present.
+func (c *Catalog) markers() []marker { return append([]marker(nil), recognitionMarkers...) }
 
 // detectIn reads the environment against a marker index.
 func detectIn(index []marker) (string, bool) {
@@ -42,10 +44,6 @@ func detectIn(index []marker) (string, bool) {
 
 // DetectTool reports the agentic harness driving this process, from the
 // environment markers each one sets (the CI=true analog of the agent world).
-//
-// The marker table used to be a Go literal in pkg/skills. It now lives beside
-// every other fact about a tool, so teaching bashy to recognize a new harness
-// is `bashy tool add`, not a code change.
 //
 // Detection yields a TOOL, never an agent. A running claude is not `007` — a
 // nickname is minted by whoever launched it, and inventing one here would put
@@ -72,9 +70,7 @@ var (
 // MarkerEnvs lists every environment variable DetectTool consults, plus the two
 // name-valued conventions.
 //
-// Exported because the marker set is DATA (it comes from the tool registry, so
-// `bashy tool add` can extend it) and callers need to enumerate it rather than
-// hardcode it:
+// Exported so callers need to enumerate it rather than hardcode it:
 //
 //   - a test that wants a genuinely agent-free environment must clear all of them,
 //     and a hardcoded list would silently rot the first time a harness is added;

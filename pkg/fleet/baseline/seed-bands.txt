@@ -1,7 +1,7 @@
 # Seeded-band stamp for the fleet baseline (design section 4.5). The release
 # check (bashy scripts/check-seed-bands.sh) reads this file; regenerate it with
 # the seed table for every major bashy release.
-date: 2026-09-30
+date: 2026-10-09
 source: docs/research/fleet-seed-bands-2026-09-30.md (dhnt umbrella)
 generator: yoke-seedfit --reconcile --bands --anchors-l4 gpt5.6-sol,opus5
-models: 30
+models: 16

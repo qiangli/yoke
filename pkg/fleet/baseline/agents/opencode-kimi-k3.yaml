@@ -2,6 +2,10 @@ agents:
   - name: opencode-kimi-k3
     tool: opencode
     model: kimi-k3
+    retired:
+      at: 2026-10-09
+      reason: not in the 1.0 curated list
+      replaced_by: opencode-glm-5.3
     display: "opencode · kimi-k3"
     ledger:
       reliability: medium

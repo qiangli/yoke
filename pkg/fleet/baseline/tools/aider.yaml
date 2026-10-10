@@ -1,7 +1,10 @@
 name: aider
 kind: cli
 display: Aider
-hidden: true
+retired:
+  at: 2026-10-09
+  reason: moved to bashy examples/fleet as custom tools
+  replaced_by: none
 
 # RETIRED FROM THE FLEET — 2026-07-14. There are deliberately NO aider agents.
 #

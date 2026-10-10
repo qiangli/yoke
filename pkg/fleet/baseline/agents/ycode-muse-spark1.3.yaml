@@ -1,8 +1,12 @@
 agents:
-  - name: genie-muse-spark1.3
+  - name: ycode-muse-spark1.3
     description: 'genie on muse-spark1.3, served by the model door (sticky genie-muse-spark1.3): same model as muse-spark1.3'
-    tool: genie
+    tool: ycode
     model: door-muse-spark1.3
+    retired:
+      at: 2026-10-09
+      reason: not in the 1.0 curated list
+      replaced_by: ycode-glm-5.3
     display: "genie · door-muse-spark1.3"
     ledger:
       reliability: unmeasured

@@ -1,4 +1,8 @@
 name: door-agy-gemini3.8-flash
+retired:
+  at: 2026-10-09
+  reason: not in the 1.0 curated list
+  replaced_by: gemini3.8-flash
 display: agy-gemini3.8-flash via the model door (sticky genie-gemini3.8-flash)
 # The cligw model door: bashy's loopback openai-compat front of a CLI harness,
 # stable at 127.0.0.1:24556. The sticky path pins one CLI session per genie

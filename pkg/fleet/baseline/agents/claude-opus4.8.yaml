@@ -2,6 +2,10 @@ agents:
   - name: claude-opus4.8
     tool: claude
     model: opus4.8
+    retired:
+      at: 2026-10-09
+      reason: not in the 1.0 curated list
+      replaced_by: claude-sonnet5
     display: "claude · opus4.8"
     ledger:
       reliability: high

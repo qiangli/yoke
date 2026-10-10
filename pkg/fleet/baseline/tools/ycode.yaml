@@ -1,6 +1,7 @@
 name: ycode
 kind: cli
 display: ycode (genie backend)
+aliases: [genie]
 cli:
   binary: bashy
   launch:

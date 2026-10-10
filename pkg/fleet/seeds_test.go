@@ -119,7 +119,7 @@ func TestEmbeddedSeedsCurrentRoster(t *testing.T) {
 		{"claude-opus5.5", "claude", "opus5.5", ""},
 		{"claude-sonnet5.5", "claude", "sonnet5.5", ""},
 		{"claude-fable5.1", "claude", "fable5.1", ""},
-		{"claude-haiku4.5", "claude", "haiku4.5", ""},
+		{"claude-opus5", "claude", "opus5", ""},
 		{"codex-gpt6-astra", "codex", "gpt6-astra", ""},
 		{"codex-gpt6-sol", "codex", "gpt6-sol", ""},
 		{"codex-gpt6-luna", "codex", "gpt6-luna", ""},
@@ -128,11 +128,10 @@ func TestEmbeddedSeedsCurrentRoster(t *testing.T) {
 
 		{"opencode-glm-5.3", "opencode", "glm-5.3", "zai-coding-plan/glm-5.3"},
 		{"opencode-glm-5.3-flash", "opencode", "glm-5.3-flash", "zai-coding-plan/glm-5.3-flash"},
-		{"genie-glm-5.3", "genie", "glm-5.3", "glm-5.3"},
-		{"genie-gpt-5.5", "genie", "door-codex-gpt-5.5", "door-codex-gpt-5.5"},
-		{"genie-opus5", "genie", "door-claude-opus5", "door-claude-opus5"},
-		{"genie-gemini3.8-flash", "genie", "door-agy-gemini3.8-flash", "door-agy-gemini3.8-flash"},
-		{"genie-muse-spark1.3", "genie", "door-muse-spark1.3", "door-muse-spark1.3"},
+		{"ycode-glm-5.3", "ycode", "glm-5.3", "glm-5.3"},
+		{"ycode-glm-5.3-flash", "ycode", "glm-5.3-flash", "glm-5.3-flash"},
+		{"ycode-deepseek-v4-pro", "ycode", "deepseek-v4-pro", "deepseek-v4-pro"},
+		{"zcode-glm-5.3", "zcode", "glm-5.3", "glm-5.3"},
 	} {
 		a, tool, m, err := c.Binding(tc.agent)
 		if err != nil {

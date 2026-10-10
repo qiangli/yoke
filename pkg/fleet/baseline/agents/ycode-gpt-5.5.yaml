@@ -1,8 +1,12 @@
 agents:
-  - name: genie-gpt-5.5
+  - name: ycode-gpt-5.5
     description: 'genie on codex-gpt-5.5, served by the model door (sticky genie-gpt-5.5): same model as codex-gpt-5.5'
-    tool: genie
+    tool: ycode
     model: door-codex-gpt-5.5
+    retired:
+      at: 2026-10-09
+      reason: not in the 1.0 curated list
+      replaced_by: ycode-glm-5.3
     display: "genie · door-codex-gpt-5.5"
     ledger:
       reliability: unmeasured

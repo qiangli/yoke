@@ -1,10 +1,14 @@
 agents:
-  - name: genie-gemini3.8-flash
+  - name: ycode-gemini3.8-flash
     aliases:
       - genie-gemini
     description: 'genie on agy-gemini3.8-flash, served by the model door (sticky genie-gemini3.8-flash): same model as agy-gemini3.8-flash'
-    tool: genie
+    tool: ycode
     model: door-agy-gemini3.8-flash
+    retired:
+      at: 2026-10-09
+      reason: not in the 1.0 curated list
+      replaced_by: ycode-glm-5.3
     display: "genie · door-agy-gemini3.8-flash"
     ledger:
       reliability: unmeasured

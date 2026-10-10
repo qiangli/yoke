@@ -184,7 +184,7 @@ func TestManagedOverrideIsExplicitOnly(t *testing.T) {
 	if !ok || p != "/usr/local/bin/pinned" {
 		t.Fatalf("path override = %q, %v", p, ok)
 	}
-	if got := ToolBinaryOverrideEnv("kimi-code"); got != "BASHY_TOOL_BINARY_KIMI_CODE" {
+	if got := ToolBinaryOverrideEnv("kimi-cli"); got != "BASHY_TOOL_BINARY_KIMI_CLI" {
 		t.Fatalf("override env = %q", got)
 	}
 }
@@ -257,12 +257,12 @@ func TestBaselineManagedRecipesArePins(t *testing.T) {
 	}
 	platforms := []string{"darwin/arm64", "darwin/amd64", "linux/amd64", "linux/arm64", "windows/amd64"}
 	want := map[string]string{ // tool -> self-update switch (empty = the vendor has none)
-		"opencode":  "OPENCODE_DISABLE_AUTOUPDATE=1",
-		"codex":     "",
-		"claude":    "DISABLE_AUTOUPDATER=1",
-		"muse":      "",
-		"agy":       "AGY_CLI_DISABLE_AUTO_UPDATE=1",
-		"kimi-code": "KIMI_CODE_NO_AUTO_UPDATE=1",
+		"opencode": "OPENCODE_DISABLE_AUTOUPDATE=1",
+		"codex":    "",
+		"claude":   "DISABLE_AUTOUPDATER=1",
+		"muse":     "",
+		"agy":      "AGY_CLI_DISABLE_AUTO_UPDATE=1",
+		"kimi-cli": "KIMI_CODE_NO_AUTO_UPDATE=1",
 	}
 	seen := map[string]bool{}
 	for _, tl := range tools {

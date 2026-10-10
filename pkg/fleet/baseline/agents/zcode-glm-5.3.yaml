@@ -1,0 +1,8 @@
+agents:
+  - name: zcode-glm-5.3
+    tool: zcode
+    model: glm-5.3
+    display: "zcode · glm-5.3"
+    ledger:
+      reliability: unmeasured
+      notes: seeded from the verified zcode launch contract

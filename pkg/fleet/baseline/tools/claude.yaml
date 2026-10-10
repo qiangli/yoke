@@ -87,9 +87,6 @@ cli:
     watchdog:
       max_runtime: 45m
       mem_limit: 12g
-    env_markers:
-      - CLAUDECODE
-      - CLAUDE_CODE_ENTRYPOINT
 quirks: strongest deep / multi-file work; watch for API-timeout stalls on the hardest issue
 harness:
   operability: 0.95

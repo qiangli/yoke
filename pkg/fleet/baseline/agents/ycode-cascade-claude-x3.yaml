@@ -1,7 +1,11 @@
 agents:
   - name: ycode-cascade-claude-x3
-    tool: genie
+    tool: ycode
     model: glm-5.2
+    retired:
+      at: 2026-10-09
+      reason: not in the 1.0 curated list
+      replaced_by: ycode-glm-5.3
     display: "cascade · glm-5.2 → opus4.8 (serves L3)"
     band: 3
     band_source: cascade

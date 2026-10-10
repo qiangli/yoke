@@ -1,7 +1,11 @@
 agents:
   - name: ycode-fable5.1
-    tool: genie
+    tool: ycode
     model: fable5.1
+    retired:
+      at: 2026-10-09
+      reason: not in the 1.0 curated list
+      replaced_by: ycode-glm-5.3
     display: "ycode · fable5.1"
     ledger:
       reliability: unmeasured

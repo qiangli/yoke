@@ -1,4 +1,8 @@
 name: gpt5.4-mini
+retired:
+  at: 2026-10-09
+  reason: not in the 1.0 curated list
+  replaced_by: gpt5.6-sol
 family: gpt-mini
 version: "5.4"
 band: 2

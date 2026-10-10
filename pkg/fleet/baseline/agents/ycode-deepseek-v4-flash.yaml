@@ -1,7 +1,11 @@
 agents:
   - name: ycode-deepseek-v4-flash
-    tool: genie
+    tool: ycode
     model: deepseek-v4-flash
+    retired:
+      at: 2026-10-09
+      reason: not in the 1.0 curated list
+      replaced_by: ycode-glm-5.3
     display: "ycode · deepseek-v4-flash"
     ledger:
       reliability: unmeasured

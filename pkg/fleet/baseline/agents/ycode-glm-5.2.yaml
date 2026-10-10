@@ -1,7 +1,11 @@
 agents:
   - name: ycode-glm-5.2
-    tool: genie
+    tool: ycode
     model: glm-5.2
+    retired:
+      at: 2026-10-09
+      reason: not in the 1.0 curated list
+      replaced_by: ycode-glm-5.3
     display: "ycode · glm-5.2"
     ledger:
       reliability: unmeasured

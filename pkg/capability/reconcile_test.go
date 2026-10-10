@@ -13,6 +13,7 @@ import (
 // would route work to a model that no longer exists — and a missing row makes
 // a live agent invisible to the router.
 func TestReconcileRetiresStaleRowsAndSeedsNewOnes(t *testing.T) {
+	isolateFleetEnv(t)
 	root := t.TempDir()
 	cat := fleet.New(fleet.WithRoot(root), fleet.WithBaselineFS(fstest.MapFS{}))
 	if err := cat.SaveTool(fleet.Tool{Name: "claude", Kind: fleet.ToolKindCLI,
@@ -65,6 +66,7 @@ func TestReconcileRetiresStaleRowsAndSeedsNewOnes(t *testing.T) {
 // Reconciling a matrix that already matches the catalog must be a no-op, or
 // every Load would rewrite the file and clobber accumulated posteriors.
 func TestReconcileIsIdempotent(t *testing.T) {
+	isolateFleetEnv(t)
 	root := t.TempDir()
 	cat := fleet.New(fleet.WithRoot(root), fleet.WithBaselineFS(fstest.MapFS{}))
 	if err := cat.SaveTool(fleet.Tool{Name: "claude", Kind: fleet.ToolKindCLI}); err != nil {
@@ -99,6 +101,7 @@ func TestReconcileIsIdempotent(t *testing.T) {
 }
 
 func TestReconcileRetainsEvidenceForBindingSharedByNamedAgents(t *testing.T) {
+	isolateFleetEnv(t)
 	root := t.TempDir()
 	cat := fleet.New(fleet.WithRoot(root), fleet.WithBaselineFS(fstest.MapFS{}))
 	if err := cat.SaveTool(fleet.Tool{Name: "claude", Kind: fleet.ToolKindCLI}); err != nil {

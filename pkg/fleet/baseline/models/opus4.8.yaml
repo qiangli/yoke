@@ -1,4 +1,8 @@
 name: opus4.8
+retired:
+  at: 2026-10-09
+  reason: not in the 1.0 curated list
+  replaced_by: opus5
 family: opus
 version: "4.8"
 band: 3

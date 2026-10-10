@@ -2,6 +2,10 @@ agents:
   - name: codex-gpt5.3-spark
     tool: codex
     model: gpt5.3-spark
+    retired:
+      at: 2026-10-09
+      reason: not in the 1.0 curated list
+      replaced_by: codex-gpt5.6-sol
     display: "codex · gpt5.3-spark"
     ledger:
       reliability: unmeasured

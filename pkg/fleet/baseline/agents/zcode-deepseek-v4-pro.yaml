@@ -1,0 +1,8 @@
+agents:
+  - name: zcode-deepseek-v4-pro
+    tool: zcode
+    model: deepseek-v4-pro
+    display: "zcode · deepseek-v4-pro"
+    ledger:
+      reliability: unmeasured
+      notes: seeded from the verified zcode launch contract

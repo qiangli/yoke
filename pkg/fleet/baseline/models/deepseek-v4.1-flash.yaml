@@ -1,4 +1,8 @@
 name: deepseek-v4.1-flash
+retired:
+  at: 2026-10-09
+  reason: not in the 1.0 curated list
+  replaced_by: deepseek-v4-pro
 family: deepseek-flash
 version: "4.1"
 band: 2

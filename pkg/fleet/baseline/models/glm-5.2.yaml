@@ -1,4 +1,8 @@
 name: glm-5.2
+retired:
+  at: 2026-10-09
+  reason: not in the 1.0 curated list
+  replaced_by: glm-5.3
 family: glm
 version: "5.2"
 band: 2

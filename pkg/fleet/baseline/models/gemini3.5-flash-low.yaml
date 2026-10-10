@@ -1,4 +1,8 @@
 name: gemini3.5-flash-low
+retired:
+  at: 2026-10-09
+  reason: not in the 1.0 curated list
+  replaced_by: gemini3.8-flash
 family: gemini-flash-low
 version: "3.5"
 band: 1
