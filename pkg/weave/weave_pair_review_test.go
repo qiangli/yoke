@@ -262,11 +262,13 @@ git -c user.email=a@a -c user.name=a commit -qm "clean feature"`
 }
 
 func TestWeaveSelectReviewAgentReplacesCoder(t *testing.T) {
-	agents, _ := fleetCatalog().Agents()
-	if len(agents) < 2 {
-		t.Skip("fleet registry has fewer than two agents")
+	// A pinned fleet with a known supported coder, so neither a live roster's
+	// first entry nor its retirements decide what this test exercises.
+	pinAgentFleet(t)
+	coder, ok := fleetCatalog().Agent("007")
+	if !ok {
+		t.Fatal("pinned fleet lost agent 007")
 	}
-	coder := agents[0]
 	it := &weaveItem{Tool: coder.Tool, LaunchSpec: &weaveLaunchSpec{Tool: coder.Tool, Agent: coder.Name, Model: coder.Model}}
 	reviewer, coding, err := weaveSelectReviewAgent(coder.Name, it)
 	if err != nil {

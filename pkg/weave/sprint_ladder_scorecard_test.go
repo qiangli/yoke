@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/ladder"
 	"github.com/qiangli/yoke/pkg/ladder/blame"
 )
@@ -21,6 +20,12 @@ import (
 // seeded fleet) with every bashy store under one scratch home.
 func scorecardEndFixture(t *testing.T) (home string) {
 	t.Helper()
+	return scorecardEndFixtureOwnedBy(t, "Ada")
+}
+
+// scorecardEndFixtureOwnedBy is scorecardEndFixture with the manager named.
+func scorecardEndFixtureOwnedBy(t *testing.T, owner string) (home string) {
+	t.Helper()
 	home = t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -28,19 +33,19 @@ func scorecardEndFixture(t *testing.T) (home string) {
 	t.Setenv("BASHY_SPRINT_DIR", filepath.Join(home, ".bashy", "sprint"))
 	t.Setenv("BASHY_ROOM_DIR", filepath.Join(home, ".bashy", "room"))
 	t.Setenv("BASHY_AGENTIC", "")
-	t.Setenv("WEAVE_CONDUCTOR", "Ada")
-	seedLiveAgent(t, "Ada")
+	t.Setenv("WEAVE_CONDUCTOR", owner)
+	seedLiveAgent(t, owner)
 	if out, code := runSprint(t, "add", "scorecard test"); code != 0 {
 		t.Fatalf("add exit=%d: %s", code, out)
 	}
-	if out, code := runSprint(t, "start", "1", "--owner", "Ada", "--for", "1h"); code != 0 {
+	if out, code := runSprint(t, "start", "1", "--owner", owner, "--for", "1h"); code != 0 {
 		t.Fatalf("start exit=%d: %s", code, out)
 	}
 	// The manager's own `end` carries its lease token; without it the
 	// should-phase records a bypass, which the scorecard must (and does) zero.
-	raw := readSprintLeaseToken(1, "Ada")
+	raw := readSprintLeaseToken(1, owner)
 	if raw == "" {
-		t.Fatal("start minted no lease token for Ada")
+		t.Fatalf("start minted no lease token for %s", owner)
 	}
 	t.Setenv(sprintLeaseTokenEnv, raw)
 	return home
@@ -229,14 +234,14 @@ func TestSprintEndNoScorecardWritesNothing(t *testing.T) {
 }
 
 func TestSprintEndScorecardUnresolvableManagerWritesNothing(t *testing.T) {
-	scorecardEndFixture(t)
+	// A manager name no fleet ring can know: the embedded baseline's AutoNick
+	// resolves real nicknames (Ada included) to a seeded binding, so only a
+	// synthetic name stays unresolvable on every host.
+	const ghost = "zz-unresolvable-manager-0x5f3759df"
+	scorecardEndFixtureOwnedBy(t, ghost)
 	scorecardAppend(t, ladder.Event{ID: "d1", At: time.Now().UTC(), Season: 1, Kind: ladder.EventKindDelivery,
 		Agent: "agent-a", Story: "s1", Points: 3, Outcome: 1, Sprint: 1})
-	// The fleet registry no longer knows Ada: no tool:model to rate.
-	empty := t.TempDir()
-	prev := fleetCatalog
-	fleetCatalog = func() *fleet.Catalog { return fleet.New(fleet.WithRoot(empty)) }
-	t.Cleanup(func() { fleetCatalog = prev })
+	pinAgentFleet(t)
 
 	out, code := runSprint(t, "end", "1")
 	if code != 0 {
@@ -245,7 +250,7 @@ func TestSprintEndScorecardUnresolvableManagerWritesNothing(t *testing.T) {
 	if got := scorecardManageEvents(t); len(got) != 0 {
 		t.Fatalf("unresolvable manager must record nothing: %+v", got)
 	}
-	if !strings.Contains(out, "not recorded") || !strings.Contains(out, "Ada") {
+	if !strings.Contains(out, "not recorded") || !strings.Contains(out, ghost) {
 		t.Fatalf("end must say why nothing was recorded:\n%s", out)
 	}
 }
