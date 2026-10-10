@@ -139,6 +139,14 @@ func TestTransportStdioHTTPParity(t *testing.T) {
 					t.Errorf("stateless response has session ID %q", id)
 				}
 			}
+			// The client session holds a live streamable-HTTP connection to the
+			// server. Shutdown drains connections under a bounded grace, so the
+			// test closes its own client first; production shutdown still owns
+			// the deadline and timeout propagation.
+			if err := cs.Close(); err != nil {
+				t.Fatalf("close client session: %v", err)
+			}
+			httpClient.CloseIdleConnections()
 			stop()
 			done := make(chan error, 1)
 			go func() { done <- shutdown() }()
