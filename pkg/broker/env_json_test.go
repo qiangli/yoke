@@ -108,8 +108,8 @@ func TestEnvShellFormMatchesJSON(t *testing.T) {
 	}
 	lines := strings.Split(strings.TrimSpace(shell), "\n")
 	order := []string{"OPENAI_BASE_URL", "OPENAI_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "OLLAMA_HOST"}
-	if len(lines) != len(order)+1 {
-		t.Fatalf("shell form has %d lines, want %d:\n%s", len(lines), len(order)+1, shell)
+	if len(lines) != len(order)+2 {
+		t.Fatalf("shell form has %d lines, want %d:\n%s", len(lines), len(order)+2, shell)
 	}
 	for i, k := range order {
 		if want := k + "=" + got.Env[k]; lines[i] != want {
@@ -118,6 +118,9 @@ func TestEnvShellFormMatchesJSON(t *testing.T) {
 	}
 	if want := "export " + strings.Join(order, " "); lines[len(order)] != want {
 		t.Errorf("last line = %q, want %q", lines[len(order)], want)
+	}
+	if want := "# OpenAI routes: /v1/chat/completions /v1/responses /v1/models"; lines[len(order)+1] != want {
+		t.Errorf("route discovery = %q, want %q", lines[len(order)+1], want)
 	}
 	if strings.Contains(shell, "schema_version") {
 		t.Errorf("shell form must not carry the JSON envelope:\n%s", shell)

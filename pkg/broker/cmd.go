@@ -563,6 +563,7 @@ either, record only the schema name as evidence.`,
 				fmt.Fprintf(out, "%s=%s\n", k, env[k])
 			}
 			fmt.Fprintln(out, "export "+strings.Join(envVarOrder, " "))
+			fmt.Fprintln(out, "# OpenAI routes: /v1/chat/completions /v1/responses /v1/models")
 			return nil
 		},
 	}
