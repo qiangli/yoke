@@ -27,6 +27,30 @@ The host mounts it with `resources.NewCommand()` (cobra). The board wires
 itself: `board.DefaultSources()` includes the collector and
 `board.DefaultPanels()` includes the panel.
 
+## The resource registry (Sprint 408)
+
+The same `bashy resource` noun also manages the registry of things that need
+exclusive use. Resource vs command is the classic file vs binary, generalized:
+a resource is added and removed through a registry, and `bashy claim` holds it.
+`resource` is just another add/rm registry noun (fleet nouns `resource` and
+`resourcekind`), so its entries are claimable through the same registry-derived
+kind path as `model` or `command`; nothing gets special handling.
+
+```
+bashy resource add umb --kind repo bashy yoke     # register (members follow the kind)
+bashy resource add openai-models --kind model gpt-x gpt-y
+bashy resource list | show NAME | set NAME | rm NAME   # rm refuses while claimed
+bashy resource kind add lab --match member --resolve lab-members   # user kind
+bashy claim openai-models --intent "eval run"     # others are refused at use
+bashy claim list | refresh NAME | release NAME | request NAME -m why
+```
+
+A kind fixes the conflict rule (`name`, `member`, `path`) and an optional
+domain; `resolve`/`probe` hooks run registered commands only, never PATH.
+Enforcement happens where bashy mediates use (llmbudget admission, the git
+guard, front doors, the command chain): a non-holder exits 9 with the holder's
+contacts. See the umbrella's D13 in `docs/agent-lock-coordination-design.md`.
+
 ## How the numbers are obtained
 
 Pure Go, no cgo, no shelling out — the repo's two hard rules apply here as
