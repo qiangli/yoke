@@ -985,7 +985,13 @@ func TestStartWithExplicitRootURLRewritesAndSaysSo(t *testing.T) {
 	dir := t.TempDir()
 	const oldRoot = "https://ai.dhnt.io/matrix/h/dragon/app/loom/"
 	const newRoot = "https://git.example.test/loom/"
-	cfg, err := ensureConfig(dir, "127.0.0.1", 3000, oldRoot, true)
+	// StartDaemon proves the gitea port is free before it rewrites app.ini, so
+	// the port under test must be one this test owns: a fixed 3000 is refused
+	// as a foreign listener on any host that already serves something there,
+	// and the rewrite assertion would then fail for a reason unrelated to
+	// ROOT_URL handling.
+	port := freeTCPPort(t)
+	cfg, err := ensureConfig(dir, "127.0.0.1", port, oldRoot, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -995,7 +1001,7 @@ func TestStartWithExplicitRootURLRewritesAndSaysSo(t *testing.T) {
 	_, err = StartDaemon(ctx, Options{
 		DataDir:         dir,
 		Addr:            "127.0.0.1",
-		Port:            3000,
+		Port:            port,
 		ProxyPort:       freeTCPPort(t),
 		RootURL:         newRoot,
 		RootURLExplicit: true,
