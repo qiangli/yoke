@@ -189,7 +189,10 @@ type weaveItem struct {
 	// InstanceLabel is the display label the context holds ("Esme-2"). For
 	// RENDERING only — labels are released on retirement and reissued, so this
 	// must never be used to address anything.
-	InstanceLabel string `json:"instance_label,omitempty"`
+	InstanceLabel string               `json:"instance_label,omitempty"`
+	Handoffs      []weaveHandoffRecord `json:"handoffs,omitempty"`
+	// HandoffBaseSHA bounds replacement story evidence without changing BaseSHA.
+	HandoffBaseSHA string `json:"handoff_base_sha,omitempty"`
 	// SessionClaim is the run's stable one-way session digest. The worker and
 	// every per-turn command it spawns inherit it, which is what makes them one
 	// owning session rather than a competing one per turn.
@@ -3281,6 +3284,7 @@ func truncate(s string, n int) string {
 type weaveStartOptions struct {
 	noSpawn      bool
 	resume       bool
+	handoffTo    string
 	arena        string
 	blind        bool
 	heatTemplate boothTemplate // manager-only prepared source for a blind heat
@@ -3410,6 +3414,12 @@ func weaveResultTurns(s string) int64 {
 
 func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs []string, opts weaveStartOptions, flags *weaveOutputFlags) error {
 	mode := flags.mode()
+	if err := weaveHandoffOptions(issueID, toolFlag, toolArgs, opts); err != nil {
+		return err
+	}
+	if opts.handoffTo != "" {
+		toolArgs = []string{opts.handoffTo}
+	}
 	if len(toolArgs) == 0 && toolFlag != "" {
 		toolArgs = []string{toolFlag}
 	}
@@ -3486,6 +3496,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		return fmt.Errorf("blind booths require a registered agent so the story-only prompt can be enforced")
 	}
 
+	if opts.handoffTo != "" && agentLaunch == nil {
+		return fmt.Errorf("--handoff-to requires a registered agent")
+	}
 	// ONE AGENT, ONE LIVE ISSUE. Two issues under one identity mix context, and
 	// a worker answering about this issue using what it learned on another is
 	// wrong in the way that looks right. See weave_agent_singleton.go.
@@ -3590,6 +3603,28 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		return fmt.Errorf("run #%d is active or being reclaimed: %w", it.ID, admissionErr)
 	}
 	defer lifecycle.Release()
+	var handoffOriginal *weaveItem
+	var handoffClaims []weaveWorkerStory
+	if opts.handoffTo != "" {
+		fresh, err := loadWeaveQueue(dir)
+		if err != nil {
+			return err
+		}
+		current := findWeaveItem(fresh, it.ID)
+		if current == nil || !current.Created.Equal(it.Created) {
+			return fmt.Errorf("handoff run changed")
+		}
+		if _, err := weaveValidateHandoff(current); err != nil {
+			return err
+		}
+		it = current
+		copy := *it
+		handoffOriginal = &copy
+		handoffClaims, err = weaveHandoffNewClaims(dir, it, agentLaunch.Nick)
+		if err != nil {
+			return err
+		}
+	}
 	memoryDemand, admissionErr := parseWeaveMemLimit(opts.memLimit)
 	if admissionErr != nil {
 		return admissionErr
@@ -3624,6 +3659,28 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	}
 	childLaunched, childTerminated := false, false
 	defer func() {
+		if handoffOriginal != nil && !childLaunched {
+			if err := weaveRollbackHandoffClaims(cmd, handoffClaims); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "weave: handoff story rollback: %v\n", err)
+			}
+			if it.Instance != handoffOriginal.Instance {
+				if _, err := weaveRetireRunInstance(it); err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "weave: handoff instance rollback: %v\n", err)
+				}
+			}
+			if err := withWeaveQueueLock(dir, func(q *weaveQueue) error {
+				current := findWeaveItem(q, handoffOriginal.ID)
+				if current == nil || !current.Created.Equal(handoffOriginal.Created) {
+					return fmt.Errorf("handoff run changed during rollback")
+				}
+				*current = *handoffOriginal
+				return nil
+			}); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "weave: handoff rollback failed: %v\n", err)
+			}
+		}
+	}()
+	defer func() {
 		finishErr := admission.finish(childTerminated, childLaunched)
 		if finishErr == nil && (!childLaunched || childTerminated) {
 			_ = withWeaveQueueLock(dir, func(q *weaveQueue) error {
@@ -3637,10 +3694,14 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			fmt.Fprintf(cmd.ErrOrStderr(), "weave: reservation retained: %v\n", finishErr)
 		}
 	}()
+	var handoffWorkerStories []weaveWorkerStory
 	// Claim before the live-tree baseline: updating a tracked story is an
 	// authorized launch mutation, not a worker escaping its workspace.
 	if !opts.noSpawn {
 		storyRun := *it
+		if opts.handoffTo != "" {
+			storyRun.WorkerStories = nil
+		}
 		storyRun.Owner = weaveAgentName(ownerBase, it.ID)
 		storyRun.LaunchSpec = launchSpec
 		if err := weaveClaimWorkerStories(cmd, dir, &storyRun); err != nil {
@@ -3656,6 +3717,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			})
 			return fmt.Errorf("weave start: claim worker story: %w", err)
 		}
+		handoffWorkerStories = storyRun.WorkerStories
 	}
 	base := weaveBaseBranch(root)
 	// Snapshot the actual source commit before provisioning. `--branch main`
@@ -3758,6 +3820,19 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 				return fmt.Errorf("run #%d already has a live wrapper (pid %d); run `bashy weave kill --issue %d` first: %w",
 					it.ID, freshIt.WrapperPid, it.ID, errWeaveWrapperLive)
 			}
+			if opts.handoffTo != "" {
+				if !freshIt.Created.Equal(handoffOriginal.Created) || freshIt.Instance != handoffOriginal.Instance || freshIt.State != handoffOriginal.State || freshIt.Workspace != handoffOriginal.Workspace || freshIt.Branch != handoffOriginal.Branch || freshIt.BaseSHA != handoffOriginal.BaseSHA {
+					return fmt.Errorf("handoff run changed while preparing")
+				}
+				if busy := weaveAgentWorkingOn(freshQ, agentLaunch.Nick, freshIt.ID); busy != nil {
+					return weaveAgentBusyErr(agentLaunch.Nick, "", busy, freshIt)
+				}
+				if err := weaveOpenHandoff(freshIt, agentLaunch, handoffOriginal); err != nil {
+					return err
+				}
+				it = freshIt // retain minted identity for rollback if queue save fails
+				freshIt.WorkerStories = handoffWorkerStories
+			}
 			prevOwner := freshIt.Owner
 			freshIt.WrapperPid = os.Getpid()
 			weaveRecordAdmission(freshIt, admission)
@@ -3787,8 +3862,10 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 				// Bind the run to its conversation. A resume continues the
 				// recorded UUID; a reassignment to a different agent is a
 				// different family and therefore a different context.
-				if _, err := weaveOpenRunInstance(freshIt, agentLaunch, branch); err != nil {
-					return err
+				if opts.handoffTo == "" {
+					if _, err := weaveOpenRunInstance(freshIt, agentLaunch, branch); err != nil {
+						return err
+					}
 				}
 			}
 			if prevOwner == "" && freshIt.Owner != "" {
@@ -4098,12 +4175,12 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	if opts.resume {
 		memoryPrefix = weaveResumeMemoryPrefix(workspace)
 	}
-	if it.ArenaSprint == 0 {
+	if it.ArenaSprint == 0 && opts.handoffTo == "" {
 		if err := weaveInjectMemoryFileWithPrefix(dir, workspace, it, memoryPrefix); err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "weave start: memory inject failed (continuing): %v\n", err)
 		}
 	}
-	if it.ArenaSprint == 0 {
+	if it.ArenaSprint == 0 && opts.handoffTo == "" {
 		if err := weaveInjectKBFile(dir, workspace, it); err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "weave start: kb inject failed (continuing): %v\n", err)
 		}
@@ -4147,8 +4224,11 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		}
 		return nil
 	}
-	if err := weaveApplyTrustPreseed(workspace, trustLaunch.Preseed); err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "weave start: trust preseed failed (continuing): %v\n", err)
+	// A handoff must not rewrite project config such as opencode.json.
+	if opts.handoffTo == "" {
+		if err := weaveApplyTrustPreseed(workspace, trustLaunch.Preseed); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "weave start: trust preseed failed (continuing): %v\n", err)
+		}
 	}
 	ctx, span := telemetry.Tracer().Start(admission.ctx, "weave.run")
 	defer span.End()
@@ -4402,6 +4482,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	// landed while the tool was running.
 	childLaunched = tool.Process != nil
 	childTerminated = weaveWaitOwnedChildTerminated(tool)
+	if handoffOriginal != nil && !childLaunched {
+		return fmt.Errorf("handoff child did not start: %w", runErr)
+	}
 	finishedAt := time.Now().UTC()
 	// Measure the branch outside the lock: this is the substrate
 	// evidence for the terminal state. A non-zero exit (crash,

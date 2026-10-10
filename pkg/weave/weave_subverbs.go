@@ -93,6 +93,7 @@ func newWeaveStartCmd() *cobra.Command {
 	var issue int64
 	var tool string
 	var resume bool
+	var handoffTo string
 	var noSpawn bool
 	var cloneAgent bool
 	var autoCommit bool
@@ -175,6 +176,7 @@ blocks until N reaches a terminal state.`,
 				sealed:      sealed,
 				sealedAllow: sealedAllow,
 				resume:      resume,
+				handoffTo:   handoffTo,
 				clone:       cloneAgent,
 				pty:         ptyMode,
 				idleTimeout: idleTimeout,
@@ -187,6 +189,7 @@ blocks until N reaches a terminal state.`,
 	runFlag(cmd, &issue, "Claim a specific run instead of top-of-queue")
 	cmd.Flags().StringVar(&tool, "tool", "", "Agent nickname, tool:model, or tool name (alternative to trailing -- <agent>)")
 	cmd.Flags().BoolVar(&resume, "resume", false, "Reattach to an existing lease for the given issue")
+	cmd.Flags().StringVar(&handoffTo, "handoff-to", "", "With --resume --run N, transfer a stopped workspace to a new verified agent instance")
 	cmd.Flags().BoolVar(&noSpawn, "no-spawn", false, "Allocate the workspace but do not exec the tool")
 	cmd.Flags().StringVar(&arena, "arena", "", "Sprint arena for a private booth workspace")
 	cmd.Flags().BoolVar(&blind, "blind", false, "Give the booth a story-only prompt")
