@@ -492,8 +492,13 @@ const (
 
 func seedPriorsFrom(cat *fleet.Catalog) *Matrix {
 	tools, _ := cat.Tools(true)
+	hidden := make(map[string]bool, len(tools))
 	harness := make(map[string]map[Capability]float64, len(tools))
 	for _, t := range tools {
+		if t.Hidden {
+			hidden[t.Name] = true
+			continue // a hidden tool seeds no row, and neither do its agents
+		}
 		if len(t.Harness) == 0 {
 			continue
 		}
@@ -513,6 +518,9 @@ func seedPriorsFrom(cat *fleet.Catalog) *Matrix {
 	m := &Matrix{SchemaVersion: schemaVersion, Agents: map[string]map[Capability]Cell{}}
 	agents, _ := cat.Agents()
 	for _, a := range agents {
+		if hidden[a.Tool] {
+			continue
+		}
 		// One matrix row per binding. Several nicknames may name the same
 		// tool:model, and they must collapse to one row rather than
 		// fragmenting the evidence the router accumulates.
