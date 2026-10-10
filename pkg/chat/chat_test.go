@@ -376,10 +376,13 @@ func TestInvokeAiderHeadlessProfile(t *testing.T) {
 	// --yes-always is aider's approval-gate kill-switch, so it is emitted only
 	// when unsafe launches are permitted — this test asserts that full headless
 	// argv, so it opts in (the default now launches aider under its own gate).
+	// Production aider is retired; fakeAider carries its historical profile.
 	permitUnsafeLaunch(t)
+	pinCatalog(t)
+	pinFakeAider(t)
 	r := &fakeRunner{}
 	_, err := Invoke(context.Background(), Options{
-		Agent: "aider", Instruction: "review this",
+		Agent: fakeAider, Instruction: "review this",
 	}, r)
 	if err != nil {
 		t.Fatal(err)
