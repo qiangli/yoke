@@ -74,6 +74,22 @@ type Options struct {
 	// that failure as "not mine" and falls through to the rung below, so a tool
 	// that never declared ACP is untouched.
 	ACP bool
+
+	// Containerized, when non-nil, is this request's containment probe, used in
+	// place of the package-level Containerized. It lets a host (pkg/chat) supply
+	// its own probe per invocation instead of swapping the global, which races
+	// when invocations run concurrently. It only ever WIDENS what the env opt-in
+	// and AllowUnsafe already decide; ReadOnly still strips regardless.
+	Containerized func() bool
+}
+
+// containerized returns the request's containment probe result, falling back
+// to the package-level Containerized.
+func (opt Options) containerized() bool {
+	if opt.Containerized != nil {
+		return opt.Containerized()
+	}
+	return Containerized()
 }
 
 // Launch is a fully resolved agent invocation. Args excludes the prompt.
@@ -514,7 +530,7 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 	prof := SeededProfiles[toolName]
 	base := append([]string{}, prof.Args...)
 	if len(prof.UnsafeArgs) > 0 {
-		if ok, _ := UnsafeLaunchAllowed(); ok {
+		if ok, _ := UnsafeLaunchAllowedFor(opt); ok {
 			if prof.UnsafeArgsAfter {
 				base = append(base, prof.UnsafeArgs...)
 			} else {
@@ -542,13 +558,18 @@ var Containerized = func() bool {
 	return false
 }
 
-func UnsafeLaunchAllowed() (bool, string) {
+func UnsafeLaunchAllowed() (bool, string) { return UnsafeLaunchAllowedFor(Options{}) }
+
+// UnsafeLaunchAllowedFor is UnsafeLaunchAllowed with the request's own
+// containment probe (opt.Containerized), so concurrent callers never need to
+// mutate the package-level Containerized.
+func UnsafeLaunchAllowedFor(opt Options) (bool, string) {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(UnsafeLaunchEnv))) {
 	case "", "0", "false", "off", "no":
 	default:
 		return true, UnsafeLaunchEnv + " is set"
 	}
-	if Containerized() {
+	if opt.containerized() {
 		return true, "running inside a container"
 	}
 	return false, ""
@@ -578,7 +599,13 @@ var UnsafeLaunchFlags = map[string]string{
 }
 
 func GuardUnsafeArgs(tool string, args []string) error {
-	if ok, _ := UnsafeLaunchAllowed(); ok {
+	return GuardUnsafeArgsFor(tool, args, Options{})
+}
+
+// GuardUnsafeArgsFor is GuardUnsafeArgs with the request's own containment
+// probe (opt.Containerized).
+func GuardUnsafeArgsFor(tool string, args []string, opt Options) error {
+	if ok, _ := UnsafeLaunchAllowedFor(opt); ok {
 		return nil
 	}
 	for i, a := range args {
@@ -616,7 +643,7 @@ func FinalizeArgs(tool string, args []string, opt Options) ([]string, error) {
 		(strings.TrimSpace(opt.Sandbox) == "" || strings.TrimSpace(opt.Sandbox) == "danger-full-access")
 	allowed := opt.AllowUnsafe || codexDefaultYolo
 	if !allowed {
-		allowed, _ = UnsafeLaunchAllowed()
+		allowed, _ = UnsafeLaunchAllowedFor(opt)
 	}
 	switch {
 	case opt.ReadOnly:
@@ -631,7 +658,7 @@ func FinalizeArgs(tool string, args []string, opt Options) ([]string, error) {
 		return args, nil
 	}
 	if !allowed {
-		if err := GuardUnsafeArgs(tool, args); err != nil {
+		if err := GuardUnsafeArgsFor(tool, args, opt); err != nil {
 			return nil, err
 		}
 	}
