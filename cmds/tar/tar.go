@@ -1,7 +1,7 @@
 // Package tarcmd implements tar(1) — the GNU tar common surface:
 // -c create, -x extract, -t list, -f FILE ('-' = stdin/stdout),
 // -z gzip, -v verbose, -C DIR, --exclude=PATTERN (create), and
-// --strip-components=N (extract).
+// --strip-components=N (extract), -O/--to-stdout (extract).
 //
 // Portions adapted from https://github.com/u-root/u-root
 // pkg/tarutil/tar.go and cmds/core/tar/tar.go (BSD-3-Clause).
@@ -59,6 +59,7 @@ func run(rc *tool.RunContext, args []string) int {
 	chdir := fs.StringP("directory", "C", "", "change to DIR before performing any operations")
 	fs.StringArray("exclude", nil, "exclude files matching PATTERN when creating an archive")
 	strip := fs.Uint("strip-components", 0, "strip N leading components from file names on extraction")
+	toStdout := fs.BoolP("to-stdout", "O", false, "extract regular-file contents to standard output instead of the filesystem")
 
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
@@ -82,6 +83,9 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	if fs.Changed("strip-components") && !*extract {
 		return tool.UsageError(rc, cmd, "--strip-components is only supported with -x")
+	}
+	if *toStdout && !*extract {
+		return tool.UsageError(rc, cmd, "-O/--to-stdout is only supported with -x")
 	}
 	if fs.Changed("exclude") && !*create {
 		return tool.UsageError(rc, cmd, "--exclude is only supported with -c")
@@ -107,7 +111,7 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		return doCreate(rc, *file, base, orderedOperands, *gz, *verbose)
 	}
-	return doRead(rc, *file, base, operands, *gz, *verbose, *extract, int(*strip))
+	return doRead(rc, *file, base, operands, *gz, *verbose, *extract, *toStdout, int(*strip))
 }
 
 // expandOldStyle handles GNU tar's "old option style": a first operand
@@ -123,7 +127,7 @@ func expandOldStyle(args []string) []string {
 		return args
 	}
 	for _, r := range first {
-		if !strings.ContainsRune("cxtzvfC", r) {
+		if !strings.ContainsRune("cxtzvfCO", r) {
 			return args // not old-style; leave as an operand
 		}
 	}
@@ -153,7 +157,7 @@ type createOperand struct {
 var tarLongOptions = map[string]bool{
 	"create": true, "extract": true, "list": true, "file": true,
 	"gzip": true, "verbose": true, "directory": true, "exclude": true,
-	"strip-components": true, "help": true, "version": true,
+	"strip-components": true, "to-stdout": true, "help": true, "version": true,
 }
 
 var tarLongOptionsWithValue = map[string]bool{
@@ -548,7 +552,7 @@ func tarNamedClassContains(class string, c byte) bool {
 
 // ----------------------------------------------------------- list/extract
 
-func doRead(rc *tool.RunContext, archive, base string, operands []string, gz, verbose, extract bool, strip int) int {
+func doRead(rc *tool.RunContext, archive, base string, operands []string, gz, verbose, extract, toStdout bool, strip int) int {
 	var r io.Reader
 	if archive == "-" {
 		if rc.In == nil {
@@ -616,6 +620,21 @@ func doRead(rc *tool.RunContext, archive, base string, operands []string, gz, ve
 		name, ok := stripComponents(hdr.Name, strip)
 		if !ok {
 			continue // fewer components than --strip-components: GNU skips silently
+		}
+		if toStdout {
+			// GNU -O: stdout carries member data, so the verbose name list
+			// moves to stderr; only regular files have data to emit, and
+			// nothing touches the filesystem.
+			if verbose {
+				fmt.Fprintln(rc.Err, hdr.Name)
+			}
+			if hdr.Typeflag == tar.TypeReg || hdr.Typeflag == tar.TypeRegA {
+				if _, err := io.Copy(rc.Out, tr); err != nil {
+					fmt.Fprintf(rc.Err, "tar: %s: %v\n", hdr.Name, err)
+					failed = true
+				}
+			}
+			continue
 		}
 		if verbose {
 			fmt.Fprintln(rc.Out, hdr.Name)

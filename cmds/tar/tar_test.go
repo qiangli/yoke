@@ -722,3 +722,136 @@ func TestCreateZProducesGzip(t *testing.T) {
 		t.Fatalf("not a tar inside gzip: %v", err)
 	}
 }
+
+// writeOrderedArchive writes members in the given order (writeRawArchive's
+// map loses order), with explicit types, gzip-compressed when gz is set.
+func writeOrderedArchive(t *testing.T, path string, gz bool, hdrs []*tar.Header, bodies []string) {
+	t.Helper()
+	var buf bytes.Buffer
+	var w io.Writer = &buf
+	var zw *gzip.Writer
+	if gz {
+		zw = gzip.NewWriter(&buf)
+		w = zw
+	}
+	tw := tar.NewWriter(w)
+	for i, hdr := range hdrs {
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatal(err)
+		}
+		if bodies[i] != "" {
+			if _, err := tw.Write([]byte(bodies[i])); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if zw != nil {
+		if err := zw.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func stdoutFixture(t *testing.T, dir string, gz bool) string {
+	t.Helper()
+	name := "s.tar"
+	if gz {
+		name = "s.tgz"
+	}
+	hdrs := []*tar.Header{
+		{Name: "./", Typeflag: tar.TypeDir, Mode: 0o755},
+		{Name: "./z.txt", Typeflag: tar.TypeReg, Mode: 0o644, Size: 4},
+		{Name: "./agent.yaml", Typeflag: tar.TypeReg, Mode: 0o644, Size: 9},
+		{Name: "./lnk", Typeflag: tar.TypeSymlink, Linkname: "z.txt", Mode: 0o777},
+		{Name: "./d/", Typeflag: tar.TypeDir, Mode: 0o755},
+		{Name: "./d/a.txt", Typeflag: tar.TypeReg, Mode: 0o644, Size: 2},
+	}
+	bodies := []string{"", "zed\n", "name: x\n\n", "", "", "A\n"}
+	writeOrderedArchive(t, filepath.Join(dir, name), gz, hdrs, bodies)
+	return name
+}
+
+// assertNoExtraction fails if anything other than the archive itself
+// appeared in dir.
+func assertNoExtraction(t *testing.T, dir, archive string) {
+	t.Helper()
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range ents {
+		if e.Name() != archive {
+			t.Errorf("-O must not touch the filesystem; found %q", e.Name())
+		}
+	}
+}
+
+func TestExtractToStdoutSelectedMemberGzip(t *testing.T) {
+	dir := t.TempDir()
+	arc := stdoutFixture(t, dir, true)
+	// The reported invocation: tar -xzOf archive ./agent.yaml
+	out, errb, code := runTool(t, dir, nil, "-xzOf", arc, "./agent.yaml")
+	if code != 0 || out != "name: x\n\n" || errb != "" {
+		t.Fatalf("-xzOf member: code=%d out=%q err=%q", code, out, errb)
+	}
+	assertNoExtraction(t, dir, arc)
+}
+
+func TestExtractToStdoutArchiveOrderRegularOnly(t *testing.T) {
+	dir := t.TempDir()
+	arc := stdoutFixture(t, dir, false)
+	// All members: regular-file contents concatenated in archive order;
+	// dirs and symlinks contribute nothing.
+	for _, args := range [][]string{
+		{"-xOf", arc},
+		{"-x", "--to-stdout", "-f", arc},
+		{"xOf", arc},
+	} {
+		out, errb, code := runTool(t, dir, nil, args...)
+		if code != 0 || out != "zed\nname: x\n\nA\n" || errb != "" {
+			t.Errorf("%v: code=%d out=%q err=%q", args, code, out, errb)
+		}
+	}
+	// Operand order does not reorder output: archive order wins.
+	out, _, code := runTool(t, dir, nil, "-xOf", arc, "./d", "./z.txt")
+	if code != 0 || out != "zed\nA\n" {
+		t.Errorf("operand order: code=%d out=%q", code, out)
+	}
+	assertNoExtraction(t, dir, arc)
+}
+
+func TestExtractToStdoutVerboseNamesGoToStderr(t *testing.T) {
+	dir := t.TempDir()
+	arc := stdoutFixture(t, dir, false)
+	out, errb, code := runTool(t, dir, nil, "-xvOf", arc, "./z.txt")
+	if code != 0 || out != "zed\n" || errb != "./z.txt\n" {
+		t.Errorf("-xvO: code=%d out=%q err=%q", code, out, errb)
+	}
+	assertNoExtraction(t, dir, arc)
+}
+
+func TestExtractToStdoutMissingMemberAndModeErrors(t *testing.T) {
+	dir := t.TempDir()
+	arc := stdoutFixture(t, dir, false)
+	out, errb, code := runTool(t, dir, nil, "-xOf", arc, "./z.txt", "nope")
+	if code != 1 || out != "zed\n" || !strings.Contains(errb, "nope: Not found in archive") {
+		t.Errorf("missing member: code=%d out=%q err=%q", code, out, errb)
+	}
+	if _, errb, code := runTool(t, dir, nil, "-tOf", arc); code != 2 || !strings.Contains(errb, "only supported with -x") {
+		t.Errorf("-O without -x: code=%d err=%q", code, errb)
+	}
+	assertNoExtraction(t, dir, arc)
+	// Plain -x still extracts to the filesystem.
+	if _, errb, code := runTool(t, dir, nil, "-xf", arc, "./z.txt"); code != 0 {
+		t.Fatalf("plain extract: code=%d err=%q", code, errb)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "z.txt")); err != nil || string(b) != "zed\n" {
+		t.Errorf("plain extract content: %q %v", b, err)
+	}
+}
