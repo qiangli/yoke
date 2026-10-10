@@ -402,19 +402,19 @@ func TestSprintFilterPersistsInHashAndStorageAndResets(t *testing.T) {
 	}
 
 	// A link with its own filter wins over storage: the absent value travels as
-	// "_", and the "none" selection as an empty key.
-	openSprintPage(t, ctx, base+"/sprint/#mgr=_&mgr=bea")
+	// the empty string (mgr=), and the "none" selection on its own key.
+	openSprintPage(t, ctx, base+"/sprint/#mgr=&mgr=bea")
 	v = probeFilter(t, ctx)
 	if !eqStrings(v.Cards, []string{"#102", "#103"}) {
-		t.Fatalf("hash mgr=_,bea: cards = %v, want #102 #103", v.Cards)
+		t.Fatalf("hash mgr=,bea: cards = %v, want #102 #103", v.Cards)
 	}
 	if o := v.opt(t, "epic", "beta"); !o.Checked {
 		t.Errorf("a link's filter replaces the stored one, it does not merge: %+v", o)
 	}
-	openSprintPage(t, ctx, base+"/sprint/#gate=")
+	openSprintPage(t, ctx, base+"/sprint/#none=gate")
 	v = probeFilter(t, ctx)
 	if len(v.Cards) != 0 || !has(v.Empty, "gate") {
-		t.Fatalf("hash gate= (none selected): cards = %v empty = %q", v.Cards, v.Empty)
+		t.Fatalf("hash none=gate: cards = %v empty = %q", v.Cards, v.Empty)
 	}
 
 	// Reset: defaults, hash cleared, storage cleared, and it survives a reload.
@@ -526,4 +526,170 @@ func TestSprintFilterPhoneAndDarkTheme(t *testing.T) {
 		t.Errorf("the bar must take its surface from the theme: light=%q dark=%q", light, dark)
 	}
 	assertNoJSErrors(t, "phone/dark", errs())
+}
+
+// collisionBoard is the fixture for the codec: a sprint whose epic AND manager
+// are literally "_", one with neither, and one whose manager needs escaping on
+// the wire. The first codec wrote the absent value as "_", so #301 and #302
+// were the same string in a link.
+func collisionBoard() *board.Board {
+	return &board.Board{
+		SchemaVersion: board.SchemaVersion, Role: "steward", Scope: "machine-global",
+		Title: "Bashy Steward Board", GeneratedAt: time.Now().UTC(),
+		Sprints: []board.Sprint{
+			{ID: 301, Title: "underscore", Epic: "_", Column: "doing", Manager: "_"},
+			{ID: 302, Title: "nothing", Column: "doing"},
+			{ID: 303, Title: "escaped", Epic: "alpha", Column: "doing", Manager: "ops & co=1"},
+		},
+	}
+}
+
+// A value literally named "_" is a value, not the absent one: the two are
+// different checkboxes, different links, and each survives a reload as itself.
+// Every value travels exactly as it is — the one with a space, an ampersand
+// and an equals sign included — so a link made from the bar reads back to the
+// selection it was made from.
+func TestSprintFilterUnderscoreIsAValueNotTheAbsentOne(t *testing.T) {
+	stubBoardWith(t, collisionBoard)
+	base, ctx, errs := domEnv(t, Options{})
+	openSprintPage(t, ctx, base+"/sprint/")
+
+	v := probeFilter(t, ctx)
+	if o := v.opt(t, "epic", "_"); o.Label != "_" || o.Count != 1 {
+		t.Errorf("epic _ option = %+v, want its own box labelled _ with count 1", o)
+	}
+	if o := v.opt(t, "epic", ""); o.Label != "(no epic)" || o.Count != 1 {
+		t.Errorf("(no epic) option = %+v", o)
+	}
+
+	// Only the underscore epic: the link says epic=_ and reads back as #301.
+	clickOnly(t, ctx, "epic", "_")
+	v = probeFilter(t, ctx)
+	if !eqStrings(v.Cards, []string{"#301"}) || v.Hash != "#epic=_" || v.Stored != "epic=_" {
+		t.Fatalf("only epic _: cards=%v hash=%q stored=%q, want #301 / #epic=_ / epic=_", v.Cards, v.Hash, v.Stored)
+	}
+	openSprintPage(t, ctx, base+"/sprint/")
+	v = probeFilter(t, ctx)
+	if !eqStrings(v.Cards, []string{"#301"}) {
+		t.Fatalf("reload after only epic _: cards=%v, want #301 — not the no-epic sprint", v.Cards)
+	}
+	if o := v.opt(t, "epic", ""); o.Checked {
+		t.Errorf("(no epic) must stay unticked after the reload: %+v", o)
+	}
+
+	// Only the absent epic: the link says epic= and reads back as #302.
+	clickOnly(t, ctx, "epic", "")
+	v = probeFilter(t, ctx)
+	if !eqStrings(v.Cards, []string{"#302"}) || v.Hash != "#epic=" || v.Stored != "epic=" {
+		t.Fatalf("only (no epic): cards=%v hash=%q stored=%q, want #302 / #epic= / epic=", v.Cards, v.Hash, v.Stored)
+	}
+	openSprintPage(t, ctx, base+"/sprint/")
+	v = probeFilter(t, ctx)
+	if !eqStrings(v.Cards, []string{"#302"}) {
+		t.Fatalf("reload after only (no epic): cards=%v, want #302 — not the underscore sprint", v.Cards)
+	}
+	if o := v.opt(t, "epic", "_"); o.Checked {
+		t.Errorf("epic _ must stay unticked after the reload: %+v", o)
+	}
+
+	// Links written by hand, each to its own sprint; both together to both.
+	for _, c := range []struct {
+		hash string
+		want []string
+	}{
+		{"#epic=_", []string{"#301"}},
+		{"#epic=", []string{"#302"}},
+		{"#epic=&epic=_", []string{"#301", "#302"}},
+		{"#mgr=_", []string{"#301"}},
+		{"#mgr=", []string{"#302"}},
+		{"#mgr=ops+%26+co%3D1", []string{"#303"}},
+	} {
+		openSprintPage(t, ctx, base+"/sprint/"+c.hash)
+		v = probeFilter(t, ctx)
+		if !eqStrings(v.Cards, c.want) {
+			t.Errorf("link %s: cards=%v, want %v", c.hash, v.Cards, c.want)
+		}
+	}
+
+	// A value that needs escaping round-trips through the bar's own link.
+	clickOnly(t, ctx, "mgr", "ops & co=1")
+	v = probeFilter(t, ctx)
+	if !eqStrings(v.Cards, []string{"#303"}) || v.Hash != "#mgr=ops+%26+co%3D1" {
+		t.Fatalf("only mgr 'ops & co=1': cards=%v hash=%q", v.Cards, v.Hash)
+	}
+	openSprintPage(t, ctx, base+"/sprint/"+v.Hash)
+	v = probeFilter(t, ctx)
+	if !eqStrings(v.Cards, []string{"#303"}) {
+		t.Fatalf("the bar's own link read back: cards=%v, want #303", v.Cards)
+	}
+	if o := v.opt(t, "mgr", "ops & co=1"); !o.Checked {
+		t.Errorf("the escaped manager must come back ticked: %+v", o)
+	}
+	assertNoJSErrors(t, "underscore", errs())
+}
+
+// "none" is the one selection with nothing to write, so it rides its own key:
+// it is linkable, it survives a reload, "all" takes it out of the link and the
+// store again, and a hand-written none= beside values is the values.
+func TestSprintFilterNoneAllReloadRoundtrip(t *testing.T) {
+	stubFilterBoard(t)
+	base, ctx, errs := domEnv(t, Options{})
+	openSprintPage(t, ctx, base+"/sprint/")
+
+	clickFacetLink(t, ctx, "epic", "none")
+	v := probeFilter(t, ctx)
+	if len(v.Cards) != 0 || v.Hash != "#none=epic" || v.Stored != "none=epic" {
+		t.Fatalf("epic none: cards=%v hash=%q stored=%q, want none / #none=epic / none=epic", v.Cards, v.Hash, v.Stored)
+	}
+	// Reload with no hash: still none, every epic box unticked, the empty line
+	// names the facet to clear, and the link is mirrored back.
+	openSprintPage(t, ctx, base+"/sprint/")
+	v = probeFilter(t, ctx)
+	if len(v.Cards) != 0 || v.Hash != "#none=epic" || !has(v.Empty, "epic") {
+		t.Fatalf("reload after none: cards=%v hash=%q empty=%q", v.Cards, v.Hash, v.Empty)
+	}
+	for _, o := range v.Facets["epic"] {
+		if o.Checked {
+			t.Errorf("after none + reload every epic box must be unticked: %+v", o)
+		}
+	}
+	// The absent value is not "none": ticking it alone is epic= and shows #104.
+	clickBox(t, ctx, "epic", "")
+	v = probeFilter(t, ctx)
+	if !eqStrings(v.Cards, []string{"#104"}) || v.Hash != "#epic=" {
+		t.Fatalf("none then tick (no epic): cards=%v hash=%q, want #104 / #epic=", v.Cards, v.Hash)
+	}
+
+	// Hand-written links: two facets at none; none= beside values is the values.
+	openSprintPage(t, ctx, base+"/sprint/#none=epic&none=mgr")
+	v = probeFilter(t, ctx)
+	if len(v.Cards) != 0 || !has(v.Empty, "epic") || !has(v.Empty, "manager") {
+		t.Fatalf("none=epic&none=mgr: cards=%v empty=%q", v.Cards, v.Empty)
+	}
+	openSprintPage(t, ctx, base+"/sprint/#none=mgr&mgr=ada")
+	v = probeFilter(t, ctx)
+	if !eqStrings(v.Cards, []string{"#101", "#104"}) {
+		t.Fatalf("none=mgr&mgr=ada: cards=%v, want ada's #101 #104", v.Cards)
+	}
+	// The old sentinel is just a name now: no manager is called "_", so this
+	// link shows nothing rather than the unclaimed sprint.
+	openSprintPage(t, ctx, base+"/sprint/#mgr=_")
+	v = probeFilter(t, ctx)
+	if len(v.Cards) != 0 || !has(v.Empty, "manager") {
+		t.Fatalf("mgr=_ with no such manager: cards=%v empty=%q, want an empty result naming manager", v.Cards, v.Empty)
+	}
+
+	// "all" on a none'd facet: the key leaves the link and the store.
+	openSprintPage(t, ctx, base+"/sprint/#none=epic&q=one")
+	clickFacetLink(t, ctx, "epic", "all")
+	v = probeFilter(t, ctx)
+	if !eqStrings(v.Cards, []string{"#101", "#103"}) || has(v.Hash, "none") || has(v.Hash, "epic") || v.Stored != "q=one" {
+		t.Fatalf("epic all: cards=%v hash=%q stored=%q, want #101 #103 with no epic key anywhere", v.Cards, v.Hash, v.Stored)
+	}
+	openSprintPage(t, ctx, base+"/sprint/")
+	v = probeFilter(t, ctx)
+	if !eqStrings(v.Cards, []string{"#101", "#103"}) || has(v.Hash, "none") {
+		t.Fatalf("reload after all: cards=%v hash=%q", v.Cards, v.Hash)
+	}
+	assertNoJSErrors(t, "none/all", errs())
 }

@@ -141,31 +141,41 @@ function filterIsDefault(f) {
 
 // filterToParams / filterFromParams are the ONE codec, shared by the URL hash
 // and localStorage, so a link and a reload restore the same view. A facet is
-// written as repeated keys (epic=a&epic=b) — no separator to escape. The empty
-// value travels as "_" and an EMPTY selection (the "none" toggle) as a single
-// empty key, so both survive a round trip; an epic literally named "_" would
-// collide, which is accepted.
+// written as repeated keys (epic=a&epic=b) and every value travels EXACTLY as
+// it is: URLSearchParams escapes it on the way out and restores it on the way
+// in, so no character is reserved and no sentinel can collide with a real
+// name. The absent value is the empty string in the state and the empty
+// string on the wire (epic=), and the one selection with no value to write —
+// "none", the empty Set — rides its own key (none=epic). So "no selection"
+// (key absent), "the absent value" (epic=), "nothing" (none=epic) and an epic
+// literally named "_" (epic=_) are four different strings, and each reads
+// back to the Set it was written from.
+const NONE_KEY = "none";
+
 function filterToParams(f, q) {
   if (!f) return q;
   for (const fc of FACETS) {
     const sel = f[fc.key];
     if (sel === null) continue;
-    if (!sel.size) { q.append(fc.key, ""); continue; }
-    for (const v of [...sel].sort()) q.append(fc.key, v === "" ? "_" : v);
+    if (!sel.size) { q.append(NONE_KEY, fc.key); continue; }
+    for (const v of [...sel].sort()) q.append(fc.key, v);
   }
   if (f.stale) q.set("stale", "1");
   if (f.q) q.set("q", f.q);
   return q;
 }
 
+// A none= mark beside values for the same facet is not a contradiction: it
+// says "this facet is selected", and the values say which — so the Set is the
+// values, and only an empty one is "none".
 function filterFromParams(q) {
   const f = defaultFilter();
   let any = false;
+  const none = new Set(q.getAll(NONE_KEY));
   for (const fc of FACETS) {
-    if (!q.has(fc.key)) continue;
+    if (!q.has(fc.key) && !none.has(fc.key)) continue;
     any = true;
-    const vals = q.getAll(fc.key);
-    f[fc.key] = new Set(vals.length === 1 && vals[0] === "" ? [] : vals.map((v) => (v === "_" ? "" : v)));
+    f[fc.key] = new Set(q.getAll(fc.key));
   }
   if (q.get("stale") === "1") { f.stale = true; any = true; }
   if (q.get("q")) { f.q = q.get("q"); any = true; }
