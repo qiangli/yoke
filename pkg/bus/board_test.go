@@ -17,6 +17,12 @@ func boardInTempHome(t *testing.T) {
 	// the room store must be a temp dir or a test would read the host's.
 	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
 	t.Setenv("BASHY_PRINCIPAL", "")
+	// An injected instance identity is as attribution-bearing as a
+	// principal: without clearing it, a host that stamps BASHY_INSTANCE
+	// (a weave runner does) turns every "unattributed agent" scenario
+	// into a resolved instance/<uuid> and the refusal under test
+	// vanishes.
+	t.Setenv("BASHY_INSTANCE", "")
 	t.Setenv("USER", "tester")
 	// ResolveSendTarget's resolver fallback reads the fleet catalog and the
 	// observation stores; point all of them at empty temp dirs so no test

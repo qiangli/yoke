@@ -57,7 +57,8 @@ func ResolveAuthoredActor(explicit string) (string, error) {
 	if DetectHarness != nil {
 		if tool, detected := DetectHarness(); detected {
 			if requested == "" {
-				return "", fmt.Errorf("authored communication: %w: running under %s with no claimed agent identity", ErrUnattributed, tool)
+				return "", fmt.Errorf("authored communication: %w: running under %s with no claimed agent identity\n%s",
+					ErrUnattributed, tool, unattributedSessionGuidance())
 			}
 			claimed, registered := resolveAgentName(requested)
 			if !registered {

@@ -37,9 +37,23 @@ func holderPID(c Card) int {
 // A card with neither pid is NOT live. That is the safe direction: it cannot
 // prove an owner, and an unprovable owner must not fence out a newcomer
 // forever.
+//
+// Liveness alone is not identity: a pid is only the holder while the process
+// that STARTED at the recorded time (HolderStart) still wears it. A recycled
+// pid is a stranger answering for a dead holder, and treating it as the
+// holder is the same defect as the zombie — a claim that fences forever on
+// a process that no longer exists.
 func cardAlive(c Card) bool {
 	pid := holderPID(c)
-	return pid != 0 && PidAlive(pid)
+	if pid == 0 || !PidAlive(pid) {
+		return false
+	}
+	if c.HolderStart != "" {
+		if start, ok := pidStart(pid); ok && start != c.HolderStart {
+			return false
+		}
+	}
+	return true
 }
 
 // heldByOtherThan reports whether a LIVE card is held by somebody other than

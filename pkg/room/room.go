@@ -76,10 +76,19 @@ type Card struct {
 	// inherited by the agent and its command subprocesses. The raw vendor
 	// session identifier must never enter this public room card.
 	SessionClaim string `json:"session_claim,omitempty"`
-	Cwd          string `json:"cwd,omitempty"`
-	Native       bool   `json:"native,omitempty"` // self-governing harness (ycode)
-	Events       bool   `json:"events,omitempty"` // speaks a structured event channel
-	Joined       string `json:"joined"`
+	// HolderStart is the OS-reported start time of the holder process at
+	// claim time — "1791590579.207208" on darwin, boot ticks on Linux. A
+	// liveness probe answers for a pid, and pids are recycled; the start
+	// time is what says the pid now wearing the number is the same process
+	// that claimed the card. Opaque by design: only ever compared against
+	// the same OS's fresh answer, never interpreted. Empty when the OS
+	// cannot answer, and the identity proof is then skipped rather than
+	// fenced on nothing.
+	HolderStart string `json:"holder_start,omitempty"`
+	Cwd         string `json:"cwd,omitempty"`
+	Native      bool   `json:"native,omitempty"` // self-governing harness (ycode)
+	Events      bool   `json:"events,omitempty"` // speaks a structured event channel
+	Joined      string `json:"joined"`
 	// Updated is the last publisher heartbeat. Joined is the assignment start
 	// and must not be rewritten by a heartbeat; consumers need both elapsed
 	// work time and liveness freshness.
@@ -369,7 +378,14 @@ func Join(c Card) error {
 // The staging file is deliberately OUTSIDE members/: that directory is the
 // public membership set and consumers are entitled to treat every entry in it
 // as a card (same reasoning as memberClaimsLockPath).
+//
+// It also stamps HolderStart, here for the same anti-drift reason: the stamp
+// and the cardAlive check that judges it are two halves of one rule, and two
+// claim paths stamping independently is how they would come to disagree.
 func writeCardFile(path string, c Card) error {
+	if start, ok := pidStart(holderPID(c)); ok {
+		c.HolderStart = start
+	}
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err

@@ -604,6 +604,30 @@ var DetectHarness func() (string, bool)
 // resolved to a fleet identity.
 var ErrUnattributed = errors.New("unattributed agent session")
 
+// unattributedSessionGuidance is the ONE complete working sequence for a
+// caller that just hit ErrUnattributed, shared by the read side
+// (BoardIdentity) and the send side (ResolveAuthoredActor) so the two halves
+// of the board cannot drift back to telling half the story.
+//
+// The half-story was the cost: reaching a working `mb send` from an agent
+// session with no claimed identity took four failed tries — --as needs a
+// REGISTERED agent or person; `agent add` alone still needs a live claim;
+// the claim is taken by `bashy inbox --peek --as NAME` or by exporting
+// BASHY_AGENT; and the send that finally works is still bounded by the
+// board's body cap. Being told one step per attempt turns the board's one
+// guarantee — a post names who sent it — into a toll paid in refusals.
+func unattributedSessionGuidance() string {
+	return fmt.Sprintf(
+		"the complete sequence, in one place:\n"+
+			"  register the agent once:   bashy agent add NAME --tool T --model M\n"+
+			"  claim it in this session:  export BASHY_AGENT=NAME\n"+
+			"  or take the live claim:    bashy inbox --peek --as NAME\n"+
+			"  then send as it:           bashy mb send --as NAME <target> \"...\"\n"+
+			"  a body is capped at %d UTF-8 bytes and is never auto-split\n"+
+			"  a human meaning to speak as themselves here passes --as %s",
+		MaxCoordinationBodyBytes, loginName())
+}
+
 // BoardIdentity is WHO YOU ARE on the board, and it exists because the send and
 // read sides used to disagree.
 //
@@ -670,11 +694,9 @@ func BoardIdentity(as string) (string, error) {
 	}
 	if DetectHarness != nil {
 		if tool, ok := DetectHarness(); ok {
-			return "", fmt.Errorf("%w: running under %s, with no agent identity to sign with\n"+
-				"  pass --as <agent>   (`bashy agent list` names them; `--as %s-<model>` if unsure)\n"+
-				"  a human meaning to speak as themselves here passes --as %s\n"+
+			return "", fmt.Errorf("%w: running under %s, with no agent identity to sign with\n%s\n"+
 				"  refusing rather than signing as the login user: the board's one guarantee is that a post names who sent it",
-				ErrUnattributed, tool, tool, loginName())
+				ErrUnattributed, tool, unattributedSessionGuidance())
 		}
 	}
 	if n := loginName(); n != "" {

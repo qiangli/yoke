@@ -120,6 +120,9 @@ func TestNotifyRequiresAnAttributedSender(t *testing.T) {
 	isolate(t)
 	withNotifyTargets(t, "alice")
 	t.Setenv("BASHY_PRINCIPAL", "")
+	// An injected instance identity would attribute the sender where no
+	// principal does; this scenario is the empty-handed one.
+	t.Setenv("BASHY_INSTANCE", "")
 	t.Setenv("USER", "")
 	t.Setenv("LOGNAME", "")
 	_, _, err := runNotifyCommand(t, "alice", "gate finished")

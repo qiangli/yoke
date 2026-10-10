@@ -15,6 +15,10 @@ func newSharedBoard(t *testing.T) *State {
 	t.Helper()
 	t.Setenv("BASHY_MEET_DIR", t.TempDir())
 	t.Setenv("BASHY_CAPABILITY_DIR", t.TempDir())
+	// The convening human has no agent principal; an ambient one (a weave
+	// runner injects its session's) would make the seated agents' posts
+	// read as identity-claim refusals instead of relayed speech.
+	t.Setenv("BASHY_PRINCIPAL", "")
 	fleettest.Ring(t)
 	t.Setenv("USER", "qiangli")
 	old := nowFn

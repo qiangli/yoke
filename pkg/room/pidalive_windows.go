@@ -2,7 +2,10 @@
 
 package room
 
-import "syscall"
+import (
+	"strconv"
+	"syscall"
+)
 
 // Windows access rights / exit-code sentinels not exported by the std syscall
 // package. PROCESS_QUERY_LIMITED_INFORMATION is the least-privileged right that
@@ -34,4 +37,25 @@ func PidAlive(pid int) bool {
 		return true
 	}
 	return code == stillActive
+}
+
+// pidStart is the process creation time, as the same-process half of a
+// holder's identity: a pid is only the recorded holder while the process
+// that was created at the recorded time still wears it. The encoding is
+// opaque on purpose — it is only ever compared against another answer to
+// this same question, never interpreted.
+func pidStart(pid int) (string, bool) {
+	if pid <= 0 {
+		return "", false
+	}
+	h, err := syscall.OpenProcess(processQueryLimitedInformation, false, uint32(pid))
+	if err != nil {
+		return "", false
+	}
+	defer syscall.CloseHandle(h)
+	var created, exited, kernel, user syscall.Filetime
+	if err := syscall.GetProcessTimes(h, &created, &exited, &kernel, &user); err != nil {
+		return "", false
+	}
+	return strconv.FormatUint(uint64(created.HighDateTime)<<32|uint64(created.LowDateTime), 10), true
 }

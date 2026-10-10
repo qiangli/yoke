@@ -25,8 +25,11 @@ func newRoom(t *testing.T) *State {
 	// The fixture names its organizer "qiangli", and humanName() reads $USER. Any
 	// path that compares the two — the organizer check, and every transport that
 	// defaults an actor to the host's human — would otherwise pass or fail
-	// depending on who is running the suite.
+	// depending on who is running the suite. An ambient agent principal (a
+	// weave runner injects its session's) has the same shape: it turns the
+	// seated agents' own posts into identity-claim refusals.
 	t.Setenv("USER", "qiangli")
+	t.Setenv("BASHY_PRINCIPAL", "")
 	old := nowFn
 	nowFn = fixedNow
 	t.Cleanup(func() { nowFn = old })
