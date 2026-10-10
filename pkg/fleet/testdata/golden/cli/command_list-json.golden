@@ -1,11 +1,16 @@
-[
-  {
-    "name": "gt-cmd",
-    "mode": "exec",
-    "effects": [
-      "read"
-    ],
-    "ring": "local",
-    "synopsis": "golden fixture command"
-  }
-]
+{
+  "schema_version": "bashy-registry-list-v1",
+  "kind": "command",
+  "view": "default",
+  "items": [
+    {
+      "name": "gt-cmd",
+      "mode": "exec",
+      "effects": [
+        "read"
+      ],
+      "ring": "local",
+      "synopsis": "golden fixture command"
+    }
+  ]
+}

@@ -2,7 +2,6 @@ package fleet
 
 import (
 	"bytes"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,10 +31,7 @@ func TestListFilterKeepsSparseLocalOverrideAsLocalDefinition(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var rows []toolRow
-		if err := json.Unmarshal([]byte(out), &rows); err != nil {
-			t.Fatal(err)
-		}
+		rows := decodeListItems[toolRow](t, []byte(out))
 		var found bool
 		for _, row := range rows {
 			if row.Name == "codex" {
@@ -55,10 +51,7 @@ func TestListFilterKeepsSparseLocalOverrideAsLocalDefinition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var defaultRows []toolRow
-	if err := json.Unmarshal([]byte(defaultOut), &defaultRows); err != nil {
-		t.Fatal(err)
-	}
+	defaultRows := decodeListItems[toolRow](t, []byte(defaultOut))
 	var found bool
 	for _, row := range defaultRows {
 		if row.Name == "codex" {
@@ -136,10 +129,7 @@ func TestFleetListRingViewsAgreeInTextAndJSON(t *testing.T) {
 					}
 					found := map[string]string{}
 					if format == "json" {
-						var rows []struct{ Name, Ring, Source string }
-						if err := json.Unmarshal(out.Bytes(), &rows); err != nil {
-							t.Fatalf("%v: %v", args, err)
-						}
+						rows := decodeListItems[struct{ Name, Ring, Source string }](t, out.Bytes())
 						for _, row := range rows {
 							found[row.Name] = row.Ring
 							if tc.noun == "model" && (row.Name == tc.local || row.Name == tc.shared || row.Name == tc.cloud) && row.Source != ModelSourceCloud {

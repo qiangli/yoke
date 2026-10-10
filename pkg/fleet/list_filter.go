@@ -8,27 +8,28 @@ import (
 	"github.com/qiangli/yoke/pkg/assetring"
 )
 
-// listFilter is the common view contract for the three fleet nouns. A ring
-// describes the selected definition after overlay resolution, not its origin
-// before an override was applied.
-type listFilter struct {
-	all, custom, builtin, active bool
-	retired                      bool
-	ring                         string
+// ListFilter is the common view contract of every registry kind's `list`. A
+// ring describes the selected definition after overlay resolution, not its
+// origin before an override was applied. Kinds outside this package (skills)
+// bind the same flags, so one view means one thing everywhere.
+type ListFilter struct {
+	All, Custom, Builtin, Active bool
+	Retired                      bool
+	Ring                         string
 }
 
-func (f *listFilter) flags(cmd *cobra.Command) {
-	cmd.Flags().BoolVar(&f.retired, "retired", false, "show only retired entries")
-	cmd.Flags().BoolVar(&f.custom, "custom", false, "show only local custom definitions")
-	cmd.Flags().BoolVar(&f.builtin, "builtin", false, "show only embedded definitions")
-	cmd.Flags().BoolVar(&f.active, "active", false, "show only entries usable on this host now")
-	cmd.Flags().BoolVar(&f.all, "all", false, "show every ring, including otherwise hidden entries")
-	cmd.Flags().StringVar(&f.ring, "ring", "", "show exactly one ring: all, embedded, shared, cloud, or local")
+func (f *ListFilter) Flags(cmd *cobra.Command) {
+	cmd.Flags().BoolVar(&f.Retired, "retired", false, "show only retired entries")
+	cmd.Flags().BoolVar(&f.Custom, "custom", false, "show only local custom definitions")
+	cmd.Flags().BoolVar(&f.Builtin, "builtin", false, "show only embedded definitions")
+	cmd.Flags().BoolVar(&f.Active, "active", false, "show only entries usable on this host now")
+	cmd.Flags().BoolVar(&f.All, "all", false, "show every ring, including otherwise hidden entries")
+	cmd.Flags().StringVar(&f.Ring, "ring", "", "show exactly one ring: all, embedded, shared, cloud, or local")
 }
 
-func (f listFilter) selected() (string, error) {
+func (f ListFilter) Selected() (string, error) {
 	n := 0
-	for _, set := range []bool{f.retired, f.all, f.custom, f.builtin, f.active, f.ring != ""} {
+	for _, set := range []bool{f.Retired, f.All, f.Custom, f.Builtin, f.Active, f.Ring != ""} {
 		if set {
 			n++
 		}
@@ -36,32 +37,70 @@ func (f listFilter) selected() (string, error) {
 	if n > 1 {
 		return "", fmt.Errorf("fleet: --retired, --all, --custom, --builtin, --active, and --ring are alternatives; give one")
 	}
-	if f.retired || f.all {
+	if f.Retired || f.All {
 		return "all", nil
 	}
-	if f.custom {
+	if f.Custom {
 		return "local", nil
 	}
-	if f.builtin {
+	if f.Builtin {
 		return "embedded", nil
 	}
-	if f.active {
+	if f.Active {
 		return "active", nil
 	}
-	switch f.ring {
+	switch f.Ring {
 	case "", "all", "embedded", "shared", "cloud", "local":
-		return f.ring, nil
+		return f.Ring, nil
 	default:
-		return "", fmt.Errorf("fleet: invalid --ring %q (want all, embedded, shared, cloud, or local)", f.ring)
+		return "", fmt.Errorf("fleet: invalid --ring %q (want all, embedded, shared, cloud, or local)", f.Ring)
 	}
 }
 
-func (f listFilter) match(r assetring.Ring, selected string) bool {
+func (f ListFilter) Match(r assetring.Ring, selected string) bool {
 	switch selected {
 	case "all", "active", "":
 		return true
 	}
 	return r.String() == selected
+}
+
+// Keep applies the view to one entry: its retirement, its ring, and — under
+// --active — whether it is usable here now. active is only called for that.
+func (f ListFilter) Keep(selected string, ring assetring.Ring, life RecordLifecycle, active func() bool) bool {
+	if !MatchRetirement(life, f.Retired) || !f.Match(ring, selected) {
+		return false
+	}
+	return !f.Active || active()
+}
+
+// View names the view for the list envelope. A --ring value with a flag of
+// its own reports that flag's name; shared and cloud have none, so they
+// report as ring:<name>.
+func (f ListFilter) View() string {
+	switch {
+	case f.Retired:
+		return "retired"
+	case f.All:
+		return "all"
+	case f.Custom:
+		return "custom"
+	case f.Builtin:
+		return "builtin"
+	case f.Active:
+		return "active"
+	}
+	switch f.Ring {
+	case "":
+		return "default"
+	case "all":
+		return "all"
+	case "embedded":
+		return "builtin"
+	case "local":
+		return "custom"
+	}
+	return "ring:" + f.Ring
 }
 
 // explicitView reports a ring-pinned or show-everything view. Those show

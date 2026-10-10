@@ -1,18 +1,23 @@
-[
-  {
-    "handle": "gt-person",
-    "aliases": [
-      "goldie"
-    ],
-    "display": "Golden Person",
-    "email": "gt@example.test",
-    "os_users": {
-      "gt-host": "gtuser"
-    },
-    "hosts": [
-      "gt-host"
-    ],
-    "source": "local",
-    "ring": 2
-  }
-]
+{
+  "schema_version": "bashy-registry-list-v1",
+  "kind": "person",
+  "view": "default",
+  "items": [
+    {
+      "handle": "gt-person",
+      "aliases": [
+        "goldie"
+      ],
+      "display": "Golden Person",
+      "email": "gt@example.test",
+      "os_users": {
+        "gt-host": "gtuser"
+      },
+      "hosts": [
+        "gt-host"
+      ],
+      "source": "local",
+      "ring": 2
+    }
+  ]
+}

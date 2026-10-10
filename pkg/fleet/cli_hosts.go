@@ -41,7 +41,7 @@ func newHostsList(opts []Option) *cobra.Command {
 				}
 			}
 			if asJSON {
-				return writeJSON(cmd.OutOrStdout(), hosts)
+				return WriteListJSON(cmd.OutOrStdout(), KindHost, BasicView(retired, false), hosts)
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 			fmt.Fprintln(tw, "NAME\tADDRESS\tUSER\tPORT\tRING")

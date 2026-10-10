@@ -98,10 +98,13 @@ func matrixRingLocalRow(t *testing.T, newList func(...Option) *cobra.Command, ro
 }
 
 func decodeToolRow(name string, data []byte) (bool, string) {
-	var rows []toolRow
-	if err := json.Unmarshal(data, &rows); err != nil {
+	var env struct {
+		Items []toolRow `json:"items"`
+	}
+	if err := json.Unmarshal(data, &env); err != nil {
 		return false, "unparseable: " + err.Error()
 	}
+	rows := env.Items
 	for _, r := range rows {
 		if r.Name == name {
 			return true, r.Ring
@@ -111,10 +114,13 @@ func decodeToolRow(name string, data []byte) (bool, string) {
 }
 
 func decodeModelRow(name string, data []byte) (bool, string) {
-	var rows []modelRow
-	if err := json.Unmarshal(data, &rows); err != nil {
+	var env struct {
+		Items []modelRow `json:"items"`
+	}
+	if err := json.Unmarshal(data, &env); err != nil {
 		return false, "unparseable: " + err.Error()
 	}
+	rows := env.Items
 	for _, r := range rows {
 		if r.Name == name {
 			return true, r.Ring
@@ -124,10 +130,13 @@ func decodeModelRow(name string, data []byte) (bool, string) {
 }
 
 func decodeAgentRow(name string, data []byte) (bool, string) {
-	var rows []agentRow
-	if err := json.Unmarshal(data, &rows); err != nil {
+	var env struct {
+		Items []agentRow `json:"items"`
+	}
+	if err := json.Unmarshal(data, &env); err != nil {
 		return false, "unparseable: " + err.Error()
 	}
+	rows := env.Items
 	for _, r := range rows {
 		if r.Name == name {
 			return true, r.Ring

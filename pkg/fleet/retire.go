@@ -54,7 +54,12 @@ func MatchRetirement(v interface{ IsRetired() bool }, retiredOnly bool) bool {
 // Retire preserves the definition and writes only its lifecycle in a lower-ring
 // overlay. Existing local edits (including full-copy overrides) are preserved.
 func (c *Catalog) Retire(kind, name, reason, replacedBy string) error {
-	return c.setRetirement(kind, name, &Retirement{At: time.Now().UTC().Format(time.RFC3339), Reason: reason, ReplacedBy: replacedBy})
+	return c.setRetirement(kind, name, NewRetirement(reason, replacedBy))
+}
+
+// NewRetirement stamps a retirement with the current time.
+func NewRetirement(reason, replacedBy string) *Retirement {
+	return &Retirement{At: time.Now().UTC().Format(time.RFC3339), Reason: reason, ReplacedBy: replacedBy}
 }
 func (c *Catalog) Unretire(kind, name string) error { return c.setRetirement(kind, name, nil) }
 
@@ -161,14 +166,45 @@ func (c *Catalog) setRetirement(kind, name string, retired *Retirement) error {
 	return fmt.Errorf("fleet: no stored %s %q", kind, name)
 }
 
+// Storage is what the generic lifecycle verbs need of a kind's persistence.
+// The fleet kinds keep YAML entries in the catalog's noun dirs; a kind with
+// another layout (skills: a folder per entry) supplies its own adapter and
+// gets the same retire/unretire verbs. SetRetirement(name, nil) clears.
+type Storage interface {
+	SetRetirement(name string, r *Retirement) error
+}
+
+type catalogStorage struct {
+	cat  *Catalog
+	kind string
+}
+
+func (s catalogStorage) SetRetirement(name string, r *Retirement) error {
+	return s.cat.setRetirement(s.kind, name, r)
+}
+
 // NewRetireCmd and NewUnretireCmd are also used by noun roots outside fleet.
 func NewRetireCmd(kind string, opts ...Option) *cobra.Command {
-	return newRetirementCmd(kind, false, opts)
+	return NewRetireCmdFor(kind, catalogStore(kind, opts))
 }
 func NewUnretireCmd(kind string, opts ...Option) *cobra.Command {
-	return newRetirementCmd(kind, true, opts)
+	return NewUnretireCmdFor(kind, catalogStore(kind, opts))
 }
-func newRetirementCmd(kind string, undo bool, opts []Option) *cobra.Command {
+
+func catalogStore(kind string, opts []Option) func() (Storage, error) {
+	return func() (Storage, error) { return catalogStorage{New(opts...), kind}, nil }
+}
+
+// NewRetireCmdFor and NewUnretireCmdFor build the lifecycle verbs over any
+// kind's Storage. store is called per run, so a verb tree can be built before
+// the store's configuration is final.
+func NewRetireCmdFor(kind string, store func() (Storage, error)) *cobra.Command {
+	return newRetirementCmd(kind, false, store)
+}
+func NewUnretireCmdFor(kind string, store func() (Storage, error)) *cobra.Command {
+	return newRetirementCmd(kind, true, store)
+}
+func newRetirementCmd(kind string, undo bool, store func() (Storage, error)) *cobra.Command {
 	verb := "retire"
 	if undo {
 		verb = "unretire"
@@ -176,12 +212,14 @@ func newRetirementCmd(kind string, undo bool, opts []Option) *cobra.Command {
 	var reason, replacement string
 	cmd := &cobra.Command{Use: verb + " NAME", Short: verb + " a registry entry", Args: cobra.ExactArgs(1), SilenceUsage: true, SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cat := New(opts...)
-			var err error
+			st, err := store()
+			if err != nil {
+				return err
+			}
 			if undo {
-				err = cat.Unretire(kind, args[0])
+				err = st.SetRetirement(args[0], nil)
 			} else {
-				err = cat.Retire(kind, args[0], reason, replacement)
+				err = st.SetRetirement(args[0], NewRetirement(reason, replacement))
 			}
 			if err != nil {
 				return err

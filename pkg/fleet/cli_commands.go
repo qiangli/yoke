@@ -118,7 +118,7 @@ func newCommandsList(opts []Option) *cobra.Command {
 				})
 			}
 			if asJSON {
-				return writeJSON(cmd.OutOrStdout(), rows)
+				return WriteListJSON(cmd.OutOrStdout(), KindCommand, BasicView(retired, all), rows)
 			}
 			if len(rows) == 0 {
 				fmt.Fprintln(cmd.OutOrStdout(), "no registered commands — `bashy commands add NAME --set exec.0=/path/to/prog` (or --set script=…, --set download.url=…)")

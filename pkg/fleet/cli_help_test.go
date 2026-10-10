@@ -1,7 +1,6 @@
 package fleet
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -64,10 +63,7 @@ func TestAgentsListReportsAPIKeyFlatBillingSeparately(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var rows []agentRow
-	if err := json.Unmarshal([]byte(out), &rows); err != nil {
-		t.Fatal(err)
-	}
+	rows := decodeListItems[agentRow](t, []byte(out))
 	for _, row := range rows {
 		if row.Name != "ycode-glm" {
 			continue
@@ -105,10 +101,7 @@ func TestToolsListReportsEffectiveBinaryFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var rows []toolRow
-	if err := json.Unmarshal([]byte(out), &rows); err != nil {
-		t.Fatal(err)
-	}
+	rows := decodeListItems[toolRow](t, []byte(out))
 	for _, row := range rows {
 		if row.Name == "fallback-tool" {
 			if row.Binary != "fallback-tool" {
@@ -130,10 +123,7 @@ func TestModelsJSONMakesLegacyDeclaredBandSourceExplicit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var rows []modelRow
-	if err := json.Unmarshal([]byte(out), &rows); err != nil {
-		t.Fatal(err)
-	}
+	rows := decodeListItems[modelRow](t, []byte(out))
 	for _, row := range rows {
 		if row.Name == "prior-model" {
 			if row.BandSource != BandDeclared {

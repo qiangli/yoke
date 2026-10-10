@@ -1,22 +1,27 @@
-[
-  {
-    "name": "gt-agent",
-    "nick": "Goldie",
-    "band": 3,
-    "band_source": "declared",
-    "tool": "gt-tool",
-    "model": "gt-model",
-    "binding": "gt-tool:gt-model",
-    "kind": "api",
-    "billing": "metered",
-    "provider": "openai-compat",
-    "resolves": true,
-    "ring": "local",
-    "derived_band": 0,
-    "missing_gates": [
-      "G1",
-      "G2",
-      "G3"
-    ]
-  }
-]
+{
+  "schema_version": "bashy-registry-list-v1",
+  "kind": "agent",
+  "view": "custom",
+  "items": [
+    {
+      "name": "gt-agent",
+      "nick": "Goldie",
+      "band": 3,
+      "band_source": "declared",
+      "tool": "gt-tool",
+      "model": "gt-model",
+      "binding": "gt-tool:gt-model",
+      "kind": "api",
+      "billing": "metered",
+      "provider": "openai-compat",
+      "resolves": true,
+      "ring": "local",
+      "derived_band": 0,
+      "missing_gates": [
+        "G1",
+        "G2",
+        "G3"
+      ]
+    }
+  ]
+}

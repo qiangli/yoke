@@ -50,6 +50,9 @@ func TestRetireOverlayRoundTrip(t *testing.T) {
 
 func TestRetirementEveryKind(t *testing.T) {
 	for _, spec := range kinds {
+		if spec.Lifecycle == nil {
+			continue // storage-backed kinds (skill) retire through their own adapter
+		}
 		t.Run(spec.Name, func(t *testing.T) {
 			shared := t.TempDir()
 			root := t.TempDir()

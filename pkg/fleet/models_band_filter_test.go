@@ -1,7 +1,6 @@
 package fleet
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -24,10 +23,7 @@ func bandFilterCatalog(t *testing.T) []Option {
 
 func modelNames(t *testing.T, out string) []string {
 	t.Helper()
-	var rows []modelRow
-	if err := json.Unmarshal([]byte(out), &rows); err != nil {
-		t.Fatalf("unmarshal %q: %v", out, err)
-	}
+	rows := decodeListItems[modelRow](t, []byte(out))
 	var names []string
 	for _, r := range rows {
 		names = append(names, r.Name)

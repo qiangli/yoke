@@ -2,7 +2,6 @@ package fleet
 
 import (
 	"bytes"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,10 +63,7 @@ func listNames(t *testing.T, root func(...Option) *cobra.Command, opts []Option,
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("%v: %v; stderr: %s", args, err, errOut.String())
 	}
-	var rows []struct{ Name string }
-	if err := json.Unmarshal(out.Bytes(), &rows); err != nil {
-		t.Fatalf("%v: %v\n%s", args, err, out.String())
-	}
+	rows := decodeListItems[struct{ Name string }](t, out.Bytes())
 	for _, r := range rows {
 		names = append(names, r.Name)
 	}

@@ -128,7 +128,7 @@ type toolRow struct {
 
 func newToolsList(opts []Option) *cobra.Command {
 	var asJSON bool
-	var filter listFilter
+	var filter ListFilter
 	c := &cobra.Command{
 		Use:   "list",
 		Short: "List agentic CLI tools",
@@ -150,7 +150,7 @@ func newToolsList(opts []Option) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			selected, err := filter.selected()
+			selected, err := filter.Selected()
 			if err != nil {
 				return err
 			}
@@ -158,10 +158,10 @@ func newToolsList(opts []Option) *cobra.Command {
 			tools, errs := c.Tools(true)
 			rows := make([]toolRow, 0, len(tools))
 			for _, t := range tools {
-				if !MatchRetirement(t, filter.retired) {
+				if !MatchRetirement(t, filter.Retired) {
 					continue
 				}
-				if !filter.match(t.Ring, selected) {
+				if !filter.Match(t.Ring, selected) {
 					continue
 				}
 				if !t.IsCLI() && !explicitView(selected) {
@@ -170,7 +170,7 @@ func newToolsList(opts []Option) *cobra.Command {
 				if t.Hidden && !explicitView(selected) {
 					continue // kept in the registry (detected/resolvable), just not listed
 				}
-				if filter.active && !t.Active() {
+				if filter.Active && !t.Active() {
 					continue
 				}
 				rows = append(rows, toolRow{
@@ -180,7 +180,7 @@ func newToolsList(opts []Option) *cobra.Command {
 				})
 			}
 			if asJSON {
-				return writeJSON(cmd.OutOrStdout(), rows)
+				return WriteListJSON(cmd.OutOrStdout(), KindTool, filter.View(), rows)
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 			fmt.Fprintln(tw, "NAME\tKIND\tBINARY\tMODEL-SELECT\tRING")
@@ -192,7 +192,7 @@ func newToolsList(opts []Option) *cobra.Command {
 		},
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
-	filter.flags(c)
+	filter.Flags(c)
 	return c
 }
 
@@ -296,7 +296,7 @@ type modelRow struct {
 
 func newModelsList(opts []Option) *cobra.Command {
 	var asJSON bool
-	var filter listFilter
+	var filter ListFilter
 	var band, minBand int
 	c := &cobra.Command{
 		Use:   "list",
@@ -321,7 +321,7 @@ func newModelsList(opts []Option) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			selected, err := filter.selected()
+			selected, err := filter.Selected()
 			if err != nil {
 				return err
 			}
@@ -337,13 +337,13 @@ func newModelsList(opts []Option) *cobra.Command {
 			models, errs := New(opts...).Models()
 			rows := make([]modelRow, 0, len(models))
 			for _, m := range models {
-				if !MatchRetirement(m, filter.retired) {
+				if !MatchRetirement(m, filter.Retired) {
 					continue
 				}
-				if !filter.match(m.Ring, selected) {
+				if !filter.Match(m.Ring, selected) {
 					continue
 				}
-				if filter.active && !m.Active() {
+				if filter.Active && !m.Active() {
 					continue
 				}
 				if band != 0 && m.Band != band {
@@ -358,7 +358,7 @@ func newModelsList(opts []Option) *cobra.Command {
 				})
 			}
 			if asJSON {
-				return writeJSON(cmd.OutOrStdout(), rows)
+				return WriteListJSON(cmd.OutOrStdout(), KindModel, filter.View(), rows)
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 			fmt.Fprintln(tw, "NAME\tBAND\tKIND\tPROVIDER\tTARGET\tALIASES\tRING")
@@ -374,7 +374,7 @@ func newModelsList(opts []Option) *cobra.Command {
 		},
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
-	filter.flags(c)
+	filter.Flags(c)
 	c.Flags().IntVar(&band, "band", 0, "only models in exactly this band (1-5)")
 	c.Flags().IntVar(&minBand, "min-band", 0, "only models in this band or above (1-5)")
 	return c
@@ -412,7 +412,7 @@ type agentRow struct {
 
 func newAgentsList(opts []Option) *cobra.Command {
 	var asJSON bool
-	var filter listFilter
+	var filter ListFilter
 	var band, minBand int
 	c := &cobra.Command{
 		Use:   "list",
@@ -454,7 +454,7 @@ func newAgentsList(opts []Option) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			selected, err := filter.selected()
+			selected, err := filter.Selected()
 			if err != nil {
 				return err
 			}
@@ -493,16 +493,16 @@ func newAgentsList(opts []Option) *cobra.Command {
 			}
 			rows := make([]agentRow, 0, len(agents))
 			for i, a := range agents {
-				if !MatchRetirement(a, filter.retired) {
+				if !MatchRetirement(a, filter.Retired) {
 					continue
 				}
-				if !filter.match(a.Ring, selected) {
+				if !filter.Match(a.Ring, selected) {
 					continue
 				}
 				if hiddenTools[a.Tool] {
 					continue
 				}
-				if filter.active && !cat.AgentActive(a) {
+				if filter.Active && !cat.AgentActive(a) {
 					continue
 				}
 				r := agentRow{
@@ -559,7 +559,7 @@ func newAgentsList(opts []Option) *cobra.Command {
 				if err := reportParseErrs(cmd.ErrOrStderr(), errs); err != nil {
 					return err
 				}
-				return writeJSON(cmd.OutOrStdout(), rows)
+				return WriteListJSON(cmd.OutOrStdout(), KindAgent, filter.View(), rows)
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 			fmt.Fprintln(tw, "NAME\tNICK\tBAND\tDERIVED\tMISSING\tTOOL\tMODEL\tBILLING\tRELIAB\tRESOLVES\tRING")
@@ -580,7 +580,7 @@ func newAgentsList(opts []Option) *cobra.Command {
 		},
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
-	filter.flags(c)
+	filter.Flags(c)
 	c.Flags().IntVar(&band, "band", 0, "only agents in exactly this band (1-5)")
 	c.Flags().IntVar(&minBand, "min-band", 0, "only agents in this band or above (1-5)")
 	return c

@@ -15,6 +15,9 @@ const (
 	KindAgent  = "agent"
 	KindPerson = "person"
 	KindHost   = "host"
+	// KindSkill is held by pkg/skills (a folder per entry), which supplies
+	// its own Storage; the table knows the kind, not its records.
+	KindSkill = "skill"
 	// KindCommand is the registered-command noun (`bashy commands add`): a
 	// host asset whose FACET is an action (docs/bashy-action-model.md). It is
 	// the sixth fleet noun and the only one with no embedded ring — bashy

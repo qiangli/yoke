@@ -1,16 +1,21 @@
-[
-  {
-    "name": "gt-model",
-    "band": 3,
-    "band_source": "declared",
-    "kind": "api",
-    "source": "cloud",
-    "provider": "openai-compat",
-    "target": "gt-upstream-1",
-    "aliases": [
-      "gt-alias",
-      "gt"
-    ],
-    "ring": "local"
-  }
-]
+{
+  "schema_version": "bashy-registry-list-v1",
+  "kind": "model",
+  "view": "custom",
+  "items": [
+    {
+      "name": "gt-model",
+      "band": 3,
+      "band_source": "declared",
+      "kind": "api",
+      "source": "cloud",
+      "provider": "openai-compat",
+      "target": "gt-upstream-1",
+      "aliases": [
+        "gt-alias",
+        "gt"
+      ],
+      "ring": "local"
+    }
+  ]
+}

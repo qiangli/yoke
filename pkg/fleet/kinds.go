@@ -152,6 +152,10 @@ func init() {
 			Seeded:    true,
 			Record:    hostRecord(),
 		},
+		// Skills are folders, not YAML entries: pkg/skills holds the records
+		// behind a Storage adapter, so the table carries identity only — no
+		// env knobs, which would redirect the sync ring fleet already writes.
+		{Name: KindSkill, Plural: dirSkills},
 		{
 			Name: "plan", Plural: dirPlans, DirEnv: "BASHY_PLANS_DIR", PathEnv: "BASHY_PLANS_PATH",
 			Type:      reflect.TypeOf(Plan{}),

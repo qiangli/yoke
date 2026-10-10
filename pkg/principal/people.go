@@ -54,7 +54,7 @@ func newPeopleList(opts []fleet.Option) *cobra.Command {
 			}
 			people = filtered
 			if asJSON {
-				return writeJSON(cmd.OutOrStdout(), people)
+				return fleet.WriteListJSON(cmd.OutOrStdout(), fleet.KindPerson, fleet.BasicView(retired, false), people)
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 			fmt.Fprintln(tw, "HANDLE\tDISPLAY\tEMAIL\tACCOUNTS\tRING")

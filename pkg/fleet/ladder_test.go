@@ -1,7 +1,6 @@
 package fleet
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -412,10 +411,7 @@ func TestAgentListShowsDerivedBandAndMissingGates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	var rows []agentRow
-	if err := json.Unmarshal([]byte(out), &rows); err != nil {
-		t.Fatalf("%v\n%s", err, out)
-	}
+	rows := decodeListItems[agentRow](t, []byte(out))
 	if len(rows) != 1 {
 		t.Fatalf("rows = %+v", rows)
 	}

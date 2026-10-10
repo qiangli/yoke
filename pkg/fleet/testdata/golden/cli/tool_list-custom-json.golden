@@ -1,9 +1,14 @@
-[
-  {
-    "name": "gt-tool",
-    "kind": "cli",
-    "binary": "gt-tool",
-    "selects_model": true,
-    "ring": "local"
-  }
-]
+{
+  "schema_version": "bashy-registry-list-v1",
+  "kind": "tool",
+  "view": "custom",
+  "items": [
+    {
+      "name": "gt-tool",
+      "kind": "cli",
+      "binary": "gt-tool",
+      "selects_model": true,
+      "ring": "local"
+    }
+  ]
+}
