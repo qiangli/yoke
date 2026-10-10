@@ -24,8 +24,10 @@ type ToolIntegration struct {
 	// QWEN.md, .goosehints, ...). An export appends one bashy-managed block,
 	// replaced in place on re-export, never touching the rest of the file.
 	Instructions []IntegrationFile `yaml:"instructions,omitempty" json:"instructions,omitempty" doc:"instruction files the tool loads"`
-	// MCP is where the tool's MCP server map lives. Declared data; the
-	// writer is not wired yet (a user's own config is not rewritten blind).
+	// MCP is where the tool's MCP server map lives. `skill export --mcp`
+	// registers the bashy server through the tool's OWN command when cli is
+	// declared, and otherwise prints the entry for config/key; a tool's
+	// config file is never rewritten blind (see pkg/skills integrate.go).
 	MCP *IntegrationMCP `yaml:"mcp,omitempty" json:"mcp,omitempty" doc:"the tool's MCP server configuration (declared)"`
 	// ShellEnv is the environment variable that makes the tool run its shell
 	// commands through a given shell (CLAUDE_CODE_SHELL, GOOSE_SHELL, SHELL).

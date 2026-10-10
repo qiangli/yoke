@@ -303,6 +303,7 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 	// until an agent tries to speak.
 	var boundBaseURL string // the bound model's endpoint, for the tool's launch env
 	var boundContext int64  // the bound model's declared context window (0 = undeclared)
+	var boundLocal bool     // the bound model is local-engine inference (door-served)
 	if modelName != "" {
 		lnch.Model, lnch.ModelName = modelName, modelName
 		if m, ok := cat.Model(modelName); ok {
@@ -312,6 +313,7 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 				}
 			}
 			boundBaseURL, boundContext = m.BaseURL, m.ContextLength
+			boundLocal = m.Kind == fleet.ModelKindLocal
 			lnch.Model, lnch.ModelName = m.TargetFor(toolName), m.Name
 			// genie -m accepts a registry key, then resolves provider IDs itself.
 			// The ycode alias invokes genie too, so do not pass ycode's
@@ -345,6 +347,27 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 		lnch.Tool = tool.Binary()
 		if err := resolveManaged(&lnch, tool); err != nil {
 			return lnch, err
+		}
+		// F17: a tool that declares a minimum context window can ASK the
+		// model door for it when the door serves the bound model from the
+		// local engine — the base URL is rendered through a sticky binding
+		// created with num_ctx (the `bashy llm sticky create --num-ctx` call),
+		// so the tool asks without knowing the door exists. A door URL
+		// already on a sticky binding is a frozen identity the door cannot
+		// raise, and any other endpoint is not ours to reconfigure; there
+		// F16's refusal below stays the authority.
+		doorCtx := false
+		if min := tool.CLI.Launch.MinContext; min > 0 && boundLocal {
+			if key, rewritten, ok := fleet.DoorContextBinding(boundBaseURL, lnch.Model, min); ok {
+				if !opt.DryRun {
+					if err := ensureDoorContextBinding(key, lnch.Model, min); err != nil {
+						return lnch, fmt.Errorf("agent launch: tool %q needs a context window of at least %d tokens; asking the model door for it: %w",
+							tool.Name, min, err)
+					}
+				}
+				boundBaseURL = rewritten
+				doorCtx = true
+			}
 		}
 		// The recipe's own launch env, after the managed install's pairs: the
 		// bound model's id and endpoint for a tool that reads them from the
@@ -383,7 +406,7 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 			return lnch, fmt.Errorf("agent launch: %q binds model %q, which cannot be delivered over ACP — the protocol has no model selection and %q takes no model flag in ACP mode; use a rung that can carry it",
 				name, lnch.Model, tool.Name)
 		}
-		if min := tool.CLI.Launch.MinContext; min > 0 && boundContext > 0 && boundContext < min {
+		if min := tool.CLI.Launch.MinContext; min > 0 && !doorCtx && boundContext > 0 && boundContext < min {
 			return lnch, fmt.Errorf("agent launch: tool %q needs a context window of at least %d tokens, but model %q declares %d; bind a model with a larger window (or raise context_length if the server is configured for more)",
 				tool.Name, min, lnch.ModelName, boundContext)
 		}

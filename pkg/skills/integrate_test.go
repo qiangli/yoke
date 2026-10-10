@@ -135,7 +135,7 @@ func TestExportToolWritesDeclaredRootsAndInstructions(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetOut(&out)
 	cmd.SetErr(&errb)
-	if err := runExport(cmd, cfg, "guide", "", []string{"absent", "qwenish"}, false, false, false); err != nil {
+	if err := runExport(cmd, cfg, "guide", "", []string{"absent", "qwenish"}, false, false, false, false, false); err != nil {
 		t.Fatalf("export: %v\n%s", err, errb.String())
 	}
 	for _, dir := range []string{".absent/skills/guide", ".qwenish/skills/guide", ".agents/skills/guide"} {
