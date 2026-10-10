@@ -278,8 +278,15 @@ func resourceLockPath(dir, resource string) string {
 }
 
 // List returns every claim on this host, including enumerable custom backends,
-// freshest first.
+// freshest first. It reads without claims.lock — a listing is a report, and
+// Prune calls it from inside the lock — so a caller that must not observe a
+// displacement half-done uses Guard, which takes the same snapshot under it.
 func List(dir string) ([]*Claim, error) {
+	return snapshot(dir)
+}
+
+// snapshot is List's body: the file ledger plus every enumerable backend.
+func snapshot(dir string) ([]*Claim, error) {
 	out, err := listFiles(dir)
 	if err != nil {
 		return nil, err

@@ -10,6 +10,8 @@ import (
 )
 
 func TestCoordSeatProjectsJournalAndFences(t *testing.T) {
+	// Guard reads under the host ledger's claims.lock; keep that out of ~/.bashy.
+	t.Setenv("BASHY_COORD_DIR", t.TempDir())
 	s := newStore(t)
 	b := RegisterSeatBackend(s, SeatRequest{})
 	t.Cleanup(func() { coord.RegisterBackend("seat", nil) })

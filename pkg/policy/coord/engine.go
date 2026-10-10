@@ -226,7 +226,12 @@ func (s store) acquire(sp acquireSpec) (Grant, error) {
 				return nil
 			}
 			last = err
-			if !errors.Is(err, ErrEpochMismatch) || locked {
+			// Only an unforced request on an unlocked backend retries a lost
+			// compare-and-swap. A forced acquisition never retries silently:
+			// its audit record names exactly one attempt, and a fresh attempt
+			// over a state the first one did not see is a new takeover the
+			// caller must ask for.
+			if locked || r.Force || !errors.Is(err, ErrEpochMismatch) {
 				break
 			}
 		}
@@ -235,9 +240,22 @@ func (s store) acquire(sp acquireSpec) (Grant, error) {
 	return grant, err
 }
 
-// acquireOnce is one read-decide-write attempt. A forced grant that displaced
-// anyone is only real once its audit record is durable: if the record cannot
-// be written, every change this attempt made is undone and the call fails.
+// forceStepHook is a test seam. When set, it runs at the named stage of a
+// forced displacement: "audited" — the record is durable, nothing published
+// yet; "published" — the replacement is live, the displaced cross-key claims
+// not yet removed. nil in production.
+var forceStepHook func(stage string)
+
+func forceStep(stage string) {
+	if forceStepHook != nil {
+		forceStepHook(stage)
+	}
+}
+
+// acquireOnce is one read-decide-write attempt. A forced grant that displaces
+// anyone is only real once its audit record is durable, so the record is
+// written FIRST and nothing changes if it cannot be; then the replacement is
+// published; then the displaced claims are removed. There is no rollback.
 func (s store) acquireOnce(b Backend, locked bool, sp acquireSpec, ref Ref, key string, kind Kind, mode string, members []string) (Grant, error) {
 	r := sp.req
 	now := time.Now().UTC()
@@ -342,42 +360,46 @@ func (s store) acquireOnce(b Backend, locked bool, sp acquireSpec, ref Ref, key 
 		c.Epoch = prevEpoch + 1
 	}
 
-	// Displace the claims stored under other keys first (the new grant owns
-	// their paths), then commit; any failure puts them back.
-	var removed []*Claim
-	restoreRemoved := func() error {
-		var errs []error
-		for _, o := range removed {
-			if err := writeClaim(fb.path(o.key()), o); err != nil {
-				errs = append(errs, err)
-			}
+	// Order of the forced path — audit, publish, remove — and why:
+	//
+	//   1. The audit record goes first, fsynced. An override nobody can see is
+	//      an override nobody can audit, so if the record cannot be written
+	//      the takeover does not happen: nothing has been changed yet.
+	//   2. The replacement is published. A same-key displacement is this one
+	//      commit. If it fails after a successful audit there is no
+	//      compensation: a second record marks the takeover aborted (best
+	//      effort) and the commit error is returned. The caller's retry loop
+	//      never re-runs a forced attempt.
+	//   3. The displaced cross-key claims are removed, still inside the
+	//      transaction. A crash between 2 and 3 leaves both claims live, which
+	//      still excludes every third party — Guard treats overlapping live
+	//      claims as conflicting for everyone but their holders — and prune or
+	//      the next forced acquisition heals it. Publishing first means no
+	//      moment exists in which the resource is unclaimed.
+	//
+	// A backend with its own durable takeover journal records the transition
+	// inside its commit, so step 1 is its own.
+	_, selfAudited := b.(interface{ AuditsForce() })
+	audited := len(displaced) > 0 && !selfAudited
+	if audited {
+		if err := auditForce(ref, r, displaced); err != nil {
+			return Grant{}, fmt.Errorf("claim: forced acquisition of %s refused — the audit record could not be written, so nothing was changed: %w", ref, err)
 		}
-		return errors.Join(errs...)
-	}
-	for _, o := range crossKey {
-		if err := fb.commitLocked(o.key(), o.Rev, nil); err != nil {
-			return Grant{}, errors.Join(err, restoreRemoved())
-		}
-		removed = append(removed, o)
+		forceStep("audited")
 	}
 	if err := commit(b, locked, key, prevRev, c); err != nil {
-		return Grant{}, errors.Join(err, restoreRemoved())
+		if audited {
+			auditForceAborted(ref, r, displaced, err)
+			return Grant{}, fmt.Errorf("claim: forced acquisition of %s aborted — the takeover was audited but its commit failed, and a forced acquisition is never retried silently: %w", ref, err)
+		}
+		return Grant{}, err
 	}
-	// A backend with its own durable takeover journal has already recorded
-	// the transition atomically; attempting a file-audit rollback here could
-	// vacate a committed seat.
-	_, selfAudited := b.(interface{ AuditsForce() })
-	if len(displaced) > 0 && !selfAudited {
-		if err := auditForce(ref, r, displaced); err != nil {
-			var undo error
-			if loaded == nil {
-				undo = commit(b, locked, key, c.Rev, nil)
-			} else {
-				back := *loaded
-				undo = commit(b, locked, key, c.Rev, &back)
+	if len(crossKey) > 0 {
+		forceStep("published")
+		for _, o := range crossKey {
+			if err := fb.commitLocked(o.key(), o.Rev, nil); err != nil {
+				return Grant{}, fmt.Errorf("claim: %s is held, but the displaced claim %s could not be removed (both stay live until the next forced acquisition or prune): %w", ref, o.key(), err)
 			}
-			return Grant{}, fmt.Errorf("claim: forced acquisition of %s refused — the audit record could not be written, so nothing was changed: %w",
-				ref, errors.Join(err, undo, restoreRemoved()))
 		}
 	}
 	if !isFile {

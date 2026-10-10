@@ -398,6 +398,9 @@ type memBackend struct {
 	// snapshot: it lets a test interleave another writer into the window
 	// between a caller's read and its commit.
 	afterLoad func()
+	// commits counts CommitIfRev calls, so a test can prove an attempt
+	// published nothing.
+	commits int
 }
 
 func (b *memBackend) Load(k string) (*Claim, error) {
@@ -419,6 +422,7 @@ func (b *memBackend) Load(k string) (*Claim, error) {
 func (b *memBackend) CommitIfRev(k string, prev uint64, next *Claim) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.commits++
 	cur := b.m[k]
 	var curRev uint64
 	if cur != nil {

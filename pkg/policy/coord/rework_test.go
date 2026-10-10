@@ -343,7 +343,9 @@ func TestSameHolderLeaseToAttachedTransition(t *testing.T) {
 	l.Release()
 }
 
-func TestForceFailsAndRollsBackWhenAuditCannotBeWritten(t *testing.T) {
+// The audit record is written before anything is published, so an audit
+// failure leaves the ledger exactly as it was — there is nothing to roll back.
+func TestForceFailsWhenAuditCannotBeWritten(t *testing.T) {
 	dir := ledger(t)
 	notDir := filepath.Join(t.TempDir(), "file")
 	if err := os.WriteFile(notDir, []byte("x"), 0o644); err != nil {
@@ -379,7 +381,7 @@ func TestForceFailsAndRollsBackWhenAuditCannotBeWritten(t *testing.T) {
 		t.Fatalf("the failed forced grant remained: %+v", c)
 	}
 	if err := Guard(ctx, agentB(), Use{Kind: "path", Name: "/w/app/f"}); !isConflict(err) {
-		t.Fatalf("Guard after rollback = %v", err)
+		t.Fatalf("Guard after the refused force = %v", err)
 	}
 
 	// An unforced or non-displacing acquisition needs no audit.

@@ -176,8 +176,19 @@ func (w *Writer) Append(r Record) (Record, error) {
 	if _, err := f.Write(append(line, '\n')); err != nil {
 		return Record{}, err
 	}
+	// A caller acts on a successful Append — a forced claim takeover publishes
+	// itself only once its record is down — so the record must be on disk, not
+	// in the page cache, before success is reported.
+	if err := syncFile(f); err != nil {
+		return Record{}, fmt.Errorf("audit: sync: %w", err)
+	}
 	return r, nil
 }
+
+// syncFile is Append's durability step, a package variable so a test can
+// prove the fsync happens before Append returns and that its failure fails
+// the append.
+var syncFile = (*os.File).Sync
 
 // lastHead returns the hash and seq of the last record in the open file, or the
 // genesis hash and seq 0 for an empty log. It reads only the file's tail, so

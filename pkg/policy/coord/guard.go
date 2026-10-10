@@ -31,53 +31,81 @@ func (s store) guard(ctx context.Context, holder principal.Ref, uses []Use) erro
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	all, err := List(s.dir)
-	if err != nil {
-		return err
-	}
-	now := time.Now().UTC()
-	for _, u := range uses {
-		ref := mapBare(normRef(Ref{Kind: u.Kind, Name: u.Name}))
-		kind := effectiveKind(ref)
-		// Members resolve exactly as an acquisition's would, provider included.
-		members := []string{u.Member}
-		if u.Member == "" {
-			var err error
-			if members, err = resolveMembers(kind, ref, nil); err != nil {
-				return err
-			}
+	// Read under claims.lock — the writers' transaction — so a forced
+	// displacement is observed whole or not at all, never the replacement
+	// without the displaced claim or the reverse. Custom backends are
+	// enumerated under the same lock, in the order a writer takes them
+	// (claims.lock first, the backend's own lock inside), so no reader sees a
+	// half-done displacement on either side.
+	return withDirLock(s.dir, func() error {
+		all, err := snapshot(s.dir)
+		if err != nil {
+			return err
 		}
-		cands := all
-		if b := customBackend(ref.Kind); b != nil {
-			if _, enumerable := b.(interface{ Claims() ([]*Claim, error) }); !enumerable {
-				c, err := b.Load(ref.String())
-				if err != nil {
+		now := time.Now().UTC()
+		for _, u := range uses {
+			ref := mapBare(normRef(Ref{Kind: u.Kind, Name: u.Name}))
+			kind := effectiveKind(ref)
+			// Members resolve exactly as an acquisition's would, provider included.
+			members := []string{u.Member}
+			if u.Member == "" {
+				var err error
+				if members, err = resolveMembers(kind, ref, nil); err != nil {
 					return err
 				}
-				if c != nil {
-					cands = append(append([]*Claim(nil), all...), c)
+			}
+			cands := all
+			if b := customBackend(ref.Kind); b != nil {
+				if _, enumerable := b.(interface{ Claims() ([]*Claim, error) }); !enumerable {
+					c, err := b.Load(ref.String())
+					if err != nil {
+						return err
+					}
+					if c != nil {
+						cands = append(append([]*Claim(nil), all...), c)
+					}
+				}
+			}
+			// Every live claim of another holder counts, so two overlapping live
+			// claims (the state a crash mid-displacement leaves) refuse everyone
+			// but their own holders.
+			for _, c := range cands {
+				if c.Mode == ModeAnnounce || sameHolder(c.Holder, holder) || c.Liveness(now).Takeable() {
+					continue
+				}
+				c.normalize()
+				sameKey := u.Member == "" && c.Resource != "" && c.Kind == ref.Kind && c.Resource == ref.Name
+				if sameKey || kindsConflict(kind, ref.Name, members, kindOrDefault(c.Kind), c.name(), c.Members) {
+					return &Conflict{Claim: c}
 				}
 			}
 		}
-		for _, c := range cands {
-			if c.Mode == ModeAnnounce || sameHolder(c.Holder, holder) || c.Liveness(now).Takeable() {
-				continue
-			}
-			c.normalize()
-			sameKey := u.Member == "" && c.Resource != "" && c.Kind == ref.Kind && c.Resource == ref.Name
-			if sameKey || kindsConflict(kind, ref.Name, members, kindOrDefault(c.Kind), c.name(), c.Members) {
-				return &Conflict{Claim: c}
-			}
-		}
-	}
-	return nil
+		return nil
+	})
 }
 
-// auditForce records an acquisition that went past live claims held by others.
-// An override nobody can see is an override nobody can audit, so a forced grant
-// is only as real as its record: the caller undoes the grant when this fails.
+// auditForce records an acquisition that is about to go past live claims held
+// by others: the holder, the ref, each displaced claim and the reason. An
+// override nobody can see is an override nobody can audit, so the record is
+// written — and fsynced — BEFORE the grant is published; a failure here means
+// the takeover does not happen.
 func auditForce(ref Ref, r Request, displaced []*Claim) error {
-	argv := []string{"claim", "force", ref.String()}
+	_, err := audit.Append(forceRecord("claim.force", ref, r, displaced))
+	return err
+}
+
+// auditForceAborted follows an auditForce whose publish then failed: the
+// takeover was recorded but never happened. Best effort — the commit error is
+// what the caller reports, and the first record already says what was tried.
+func auditForceAborted(ref Ref, r Request, displaced []*Claim, cause error) {
+	rec := forceRecord("claim.force-aborted", ref, r, displaced)
+	rec.Argv = append(rec.Argv, "error="+cause.Error())
+	rec.Exit = 1
+	_, _ = audit.Append(rec)
+}
+
+func forceRecord(action string, ref Ref, r Request, displaced []*Claim) audit.Record {
+	argv := []string{"claim", strings.TrimPrefix(action, "claim."), ref.String(), "holder=" + r.Holder.Name, "reason=force"}
 	var who []string
 	for _, c := range displaced {
 		who = append(who, c.Holder.Name+"@"+c.Ref().String())
@@ -95,14 +123,13 @@ func auditForce(ref Ref, r Request, displaced []*Claim) error {
 		actor.Session = r.Holder.Episode
 	}
 	host, _ := os.Hostname()
-	_, err := audit.Append(audit.Record{
+	return audit.Record{
 		Actor:    actor,
-		Action:   "claim.force",
+		Action:   action,
 		Argv:     argv,
 		Binary:   "bashy claim",
 		Host:     host,
 		Decision: "allow",
 		Effects:  []string{"claim:force"},
-	})
-	return err
+	}
 }

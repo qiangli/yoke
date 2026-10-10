@@ -207,3 +207,47 @@ func TestRedactMasksSecretsNotPaths(t *testing.T) {
 		}
 	}
 }
+
+// Append fsyncs the record before reporting success: a caller that acts on a
+// successful append (a forced claim takeover publishes only after its record is
+// down) must not find the record missing after a crash. The seam shows the
+// sync ran, ran once, saw the record already written, and ran before return.
+func TestAppendSyncsBeforeReturning(t *testing.T) {
+	w, p := newLog(t)
+	var synced int
+	var sawRecord bool
+	var returned bool
+	orig := syncFile
+	syncFile = func(f *os.File) error {
+		synced++
+		b, _ := os.ReadFile(p)
+		sawRecord = strings.Contains(string(b), `"argv":["git","push"]`)
+		if returned {
+			t.Error("sync ran after Append returned")
+		}
+		return orig(f)
+	}
+	t.Cleanup(func() { syncFile = orig })
+	if _, err := w.Append(rec("git", "push")); err != nil {
+		t.Fatal(err)
+	}
+	returned = true
+	if synced != 1 {
+		t.Fatalf("sync calls = %d, want 1", synced)
+	}
+	if !sawRecord {
+		t.Fatal("sync ran before the record was written")
+	}
+}
+
+// A sync that fails fails the append: the caller must not be told a record is
+// durable when it is not.
+func TestAppendFailsWhenSyncFails(t *testing.T) {
+	w, _ := newLog(t)
+	orig := syncFile
+	syncFile = func(*os.File) error { return os.ErrClosed }
+	t.Cleanup(func() { syncFile = orig })
+	if _, err := w.Append(rec("true")); err == nil || !strings.Contains(err.Error(), "sync") {
+		t.Fatalf("append with a failing sync = %v, want a sync error", err)
+	}
+}
