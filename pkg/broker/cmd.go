@@ -420,9 +420,43 @@ const EnvSchemaVersion = "bashy-llm-env-v1"
 // envVarOrder is the shell form's line order and its export list.
 var envVarOrder = []string{"OPENAI_BASE_URL", "OPENAI_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "OLLAMA_HOST"}
 
+// bindStickySession finds the session that owns the principal's sticky KEY, so
+// the minted URL can name it: the binding is then reachable from any shell,
+// whatever session that shell has. With spec.Model set it also creates the
+// binding (in the caller's session) when the key does not exist yet. found
+// is false when the key is unknown or the door cannot be asked; the caller
+// then keeps its own session, which still lets the first request create the
+// binding implicitly with an X-Bashy-Sticky header.
+func bindStickySession(ctx context.Context, spec StickySpec) (session string, found bool, err error) {
+	var view map[string]any
+	err = doorJSON(ctx, http.MethodGet, "/v1/sticky/"+spec.Key+principalScopePath, nil, &view)
+	var se *doorStatusError
+	var un *doorUnreachable
+	switch {
+	case err == nil:
+		return str(view["session"]), true, nil
+	case errors.As(err, &un):
+		if spec.Model != "" {
+			return "", false, err
+		}
+		return "", false, nil
+	case errors.As(err, &se) && se.Status == http.StatusNotFound:
+		if spec.Model == "" {
+			return "", false, nil
+		}
+	default:
+		return "", false, err
+	}
+	if err := doorJSON(ctx, http.MethodPost, "/v1/sticky", spec, &view); err != nil {
+		return "", false, err
+	}
+	return str(view["session"]), true, nil
+}
+
 func newEnvCmd() *cobra.Command {
 	var sticky string
 	var asJSON bool
+	var spec StickySpec
 	cmd := &cobra.Command{
 		Use:   "env",
 		Short: "print the environment a client needs (OpenAI, Anthropic and Ollama clients)",
@@ -434,8 +468,11 @@ func newEnvCmd() *cobra.Command {
 
 The key is the owner token, not a vendor key. With --sticky KEY the base URLs
 carry the binding, so a client that only takes a base URL (mini-swe-agent via
-litellm) is bound without code changes. The caller's $BASHY_MODEL_SESSION, if
-set, is carried in the URLs too.
+litellm) is bound without code changes. If the sticky already exists, the URLs
+name the session that owns it, so this works from any shell or agent tool call
+of the same principal: create it in one, bind to it in the next. With --model
+M the sticky is created first when it does not exist (one step: freeze + URL).
+Otherwise the caller's $BASHY_MODEL_SESSION, if set, is carried in the URLs.
 
 --json emits the bashy-llm-env-v1 envelope (base_url, session, sticky, env)
 instead of shell assignments. Both forms carry the owner token: never commit
@@ -448,14 +485,23 @@ either, record only the schema name as evidence.`,
 			if err != nil {
 				return err
 			}
+			session := strings.TrimSpace(os.Getenv(SessionEnv))
 			if sticky != "" {
-				if err := validateKey(sticky); err != nil {
+				spec.Key = sticky
+				if err := spec.validate(); err != nil {
 					return err
+				}
+				owner, found, err := bindStickySession(c.Context(), spec)
+				if err != nil {
+					return err
+				}
+				if found {
+					session = owner
 				}
 			}
 			prefix := ""
-			if s := strings.TrimSpace(os.Getenv(SessionEnv)); s != "" {
-				prefix += "/s/" + s
+			if session != "" {
+				prefix += "/s/" + session
 			}
 			if sticky != "" {
 				prefix += "/sticky/" + sticky
@@ -478,7 +524,7 @@ either, record only the schema name as evidence.`,
 					Session       string            `json:"session"`
 					Sticky        string            `json:"sticky"`
 					Env           map[string]string `json:"env"`
-				}{EnvSchemaVersion, base, strings.TrimSpace(os.Getenv(SessionEnv)), sticky, env})
+				}{EnvSchemaVersion, base, session, sticky, env})
 			}
 			for _, k := range envVarOrder {
 				fmt.Fprintf(out, "%s=%s\n", k, env[k])
@@ -487,10 +533,33 @@ either, record only the schema name as evidence.`,
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&sticky, "sticky", "", "bind the printed base URLs to this sticky key")
+	cmd.Flags().StringVar(&sticky, "sticky", "", "bind the printed base URLs to this sticky key (any session's)")
+	cmd.Flags().StringVar(&spec.Model, "model", "", "with --sticky: create the sticky from this model/band/agent if KEY does not exist")
+	cmd.Flags().IntVar(&spec.Uses, "uses", 0, "with --model: number of requests (0 = unbounded)")
+	cmd.Flags().StringVar(&spec.TTL, "ttl", "", "with --model: idle expiry (default 30m; 0 = never)")
+	cmd.Flags().StringVar(&spec.Bind, "bind", "", "with --model: identity|worker")
+	cmd.Flags().StringVar(&spec.Reset, "reset", "", "with --model: each|none")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the "+EnvSchemaVersion+" envelope instead of shell assignments")
 	return cmd
 }
+
+// doorStatusError is a non-2xx answer from the door.
+type doorStatusError struct {
+	Status int
+	Msg    string
+}
+
+func (e *doorStatusError) Error() string { return e.Msg }
+
+// doorUnreachable marks a failure to reach the door at all (not an answer).
+type doorUnreachable struct{ err error }
+
+func (e *doorUnreachable) Error() string { return e.err.Error() }
+func (e *doorUnreachable) Unwrap() error { return e.err }
+
+// principalScopePath asks the door for the owner's view: every session of the
+// principal, not just the ones the caller's session can see.
+const principalScopePath = "?scope=principal"
 
 // doorJSON calls the door with the owner token and the caller's session.
 func doorJSON(ctx context.Context, method, path string, body, out any) error {
@@ -517,7 +586,7 @@ func doorJSON(ctx context.Context, method, path string, body, out any) error {
 	}
 	resp, err := (&http.Client{Timeout: 2 * time.Minute}).Do(req)
 	if err != nil {
-		return fmt.Errorf("reach the model door at %s: %w (start it: bashy llm up)", door.BaseURL(), err)
+		return &doorUnreachable{fmt.Errorf("reach the model door at %s: %w (start it: bashy llm up)", door.BaseURL(), err)}
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
@@ -528,9 +597,9 @@ func doorJSON(ctx context.Context, method, path string, body, out any) error {
 			} `json:"error"`
 		}
 		if json.Unmarshal(data, &e) == nil && e.Error.Message != "" {
-			return errors.New(e.Error.Message)
+			return &doorStatusError{Status: resp.StatusCode, Msg: e.Error.Message}
 		}
-		return fmt.Errorf("%s %s: HTTP %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(data)))
+		return &doorStatusError{Status: resp.StatusCode, Msg: fmt.Sprintf("%s %s: HTTP %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(data)))}
 	}
 	if out != nil {
 		return json.Unmarshal(data, out)
@@ -557,7 +626,18 @@ shared across arms by digest:
 Attributes: --uses N (0 = unbounded; request N+1 is refused), --bind
 identity|worker, --reset each|none (none = multi-turn on one worker, needs
 bind=worker), --ttl (idle expiry, default 30m, 0 = never), --export (visible
-to child processes' sessions). Requests may also bind on the fly with the
+to child processes' sessions).
+
+Across shells: every agent tool call is a new shell, hence a new door session,
+and a sticky lives in the session that created it. The owner token manages all
+of the principal's stickies from any session: ls lists them with their owning
+session, show and rm reach any of them, and
+
+  bashy llm env --sticky KEY            # URLs name the owning session
+  bashy llm env --sticky KEY --model M  # create (if new) + URLs, one step
+
+mint a /k/<token> URL bound to the sticky whatever shell runs them. Creating a
+key another session owns is refused with the owner's session id. Requests may also bind on the fly with the
 header X-Bashy-Sticky: KEY; uses=N; ... or the body field "bashy": {"sticky": {...}}.`,
 	}
 	cmd.AddCommand(newStickyCreateCmd(), newStickyShowCmd(), newStickyListCmd(), newStickyRmCmd())
@@ -621,7 +701,7 @@ func newStickyShowCmd() *cobra.Command {
 		SilenceUsage: true, SilenceErrors: true,
 		RunE: func(c *cobra.Command, args []string) error {
 			var view map[string]any
-			if err := doorJSON(c.Context(), http.MethodGet, "/v1/sticky/"+args[0], nil, &view); err != nil {
+			if err := doorJSON(c.Context(), http.MethodGet, "/v1/sticky/"+args[0]+principalScopePath, nil, &view); err != nil {
 				return err
 			}
 			return printSticky(c.OutOrStdout(), view, asJSON)
@@ -634,24 +714,24 @@ func newStickyShowCmd() *cobra.Command {
 func newStickyListCmd() *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
-		Use: "ls", Short: "list the bindings visible to this session", Args: cobra.NoArgs,
+		Use: "ls", Short: "list this principal's bindings across all sessions (marks the owning session)", Args: cobra.NoArgs,
 		SilenceUsage: true, SilenceErrors: true,
 		RunE: func(c *cobra.Command, _ []string) error {
 			var list struct {
 				Bindings []map[string]any `json:"bindings"`
 			}
-			if err := doorJSON(c.Context(), http.MethodGet, "/v1/sticky", nil, &list); err != nil {
+			if err := doorJSON(c.Context(), http.MethodGet, "/v1/sticky"+principalScopePath, nil, &list); err != nil {
 				return err
 			}
 			if asJSON {
 				return json.NewEncoder(c.OutOrStdout()).Encode(list)
 			}
 			tw := tabwriter.NewWriter(c.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "KEY\tIDENTITY\tBACKEND\tMODEL\tUSED\tREMAINING")
+			fmt.Fprintln(tw, "KEY\tIDENTITY\tBACKEND\tMODEL\tUSED\tREMAINING\tSESSION")
 			for _, v := range list.Bindings {
 				id, _ := v["identity"].(map[string]any)
 				model := firstNonEmpty(str(id["agent"]), str(id["model"]))
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%v\t%v\n", str(v["key"]), str(v["short"]), str(id["backend"]), model, v["used"], remainingText(v["remaining"]))
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%v\t%v\t%s\n", str(v["key"]), str(v["short"]), str(id["backend"]), model, v["used"], remainingText(v["remaining"]), sessionText(v))
 			}
 			return tw.Flush()
 		},
@@ -662,10 +742,10 @@ func newStickyListCmd() *cobra.Command {
 
 func newStickyRmCmd() *cobra.Command {
 	return &cobra.Command{
-		Use: "rm KEY", Short: "delete a binding", Args: cobra.ExactArgs(1),
+		Use: "rm KEY", Short: "delete a binding (from any session of this principal)", Args: cobra.ExactArgs(1),
 		SilenceUsage: true, SilenceErrors: true,
 		RunE: func(c *cobra.Command, args []string) error {
-			if err := doorJSON(c.Context(), http.MethodDelete, "/v1/sticky/"+args[0], nil, nil); err != nil {
+			if err := doorJSON(c.Context(), http.MethodDelete, "/v1/sticky/"+args[0]+principalScopePath, nil, nil); err != nil {
 				return err
 			}
 			fmt.Fprintf(c.OutOrStdout(), "deleted %s\n", args[0])
@@ -682,6 +762,7 @@ func printSticky(w io.Writer, view map[string]any, asJSON bool) error {
 	}
 	id, _ := view["identity"].(map[string]any)
 	fmt.Fprintf(w, "key       %s\n", str(view["key"]))
+	fmt.Fprintf(w, "session   %s\n", sessionText(view))
 	fmt.Fprintf(w, "identity  %s\n", str(view["digest"]))
 	fmt.Fprintf(w, "backend   %s\n", str(id["backend"]))
 	if a := str(id["agent"]); a != "" {
@@ -698,6 +779,20 @@ func printSticky(w io.Writer, view map[string]any, asJSON bool) error {
 	}
 	fmt.Fprintf(w, "used      %v (remaining %s)\n", view["used"], remainingText(view["remaining"]))
 	return nil
+}
+
+// sessionText marks a listing row's owning session; "(here)" = the caller's
+// session can serve it directly, anything else is reached with
+// `llm env --sticky KEY`.
+func sessionText(v map[string]any) string {
+	owner := str(v["session"])
+	if owner == "" {
+		owner = "(principal)"
+	}
+	if vis, _ := v["visible"].(bool); vis && str(v["session"]) != "" {
+		return owner + " (here)"
+	}
+	return owner
 }
 
 func remainingText(v any) string {

@@ -3,11 +3,25 @@ package broker
 import (
 	"bytes"
 	"encoding/json"
+	"net"
 	"strings"
 	"testing"
 
 	"github.com/qiangli/yoke/pkg/broker/door"
 )
+
+// deadDoorPort points the door port at a closed one: env --sticky asks the door
+// who owns a key and must never reach a real door running on this host.
+func deadDoorPort(t *testing.T) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	ln.Close()
+	t.Setenv(door.PortEnv, port)
+}
 
 // runEnv runs `llm env` with args against an isolated BASHY_HOME and returns
 // its stdout. The door is never contacted: env only mints the owner token.
@@ -30,7 +44,7 @@ func runEnv(t *testing.T, args ...string) string {
 func TestEnvJSONEnvelope(t *testing.T) {
 	t.Setenv("BASHY_HOME", t.TempDir())
 	t.Setenv(SessionEnv, "sess-1")
-	t.Setenv(door.PortEnv, "")
+	deadDoorPort(t)
 
 	var got struct {
 		SchemaVersion string            `json:"schema_version"`

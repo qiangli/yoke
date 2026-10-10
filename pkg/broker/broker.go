@@ -785,6 +785,9 @@ func (b *Broker) stickyFor(ctx context.Context, r *http.Request, ri *reqInfo, pa
 		return bnd, spec, nil
 	}
 	if spec == nil {
+		if other := b.sticky.owned(ri.principal, key); other != nil {
+			return nil, nil, stickyErr(404, "%s", ownedElsewhereMsg(other))
+		}
 		return nil, nil, stickyErr(404, "sticky: no binding %q in this scope; create it (bashy llm sticky create %s --model M) or send %s with a model", key, key, StickyHeader)
 	}
 	spec.Key = key
@@ -901,9 +904,12 @@ func firstNonEmpty(v ...string) string {
 }
 
 // serveStickyAPI: POST /v1/sticky (create), GET /v1/sticky (list),
-// GET|DELETE /v1/sticky/<key>.
+// GET|DELETE /v1/sticky/<key>. Reads and deletes are session-scoped unless the
+// request asks for ?scope=principal: management by the owner token covers every
+// session of the principal (serving a key never does).
 func (b *Broker) serveStickyAPI(w http.ResponseWriter, r *http.Request, ri *reqInfo) {
 	key := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/v1/sticky"), "/")
+	principalScope := r.URL.Query().Get("scope") == "principal"
 	switch {
 	case key == "" && r.Method == http.MethodPost:
 		body, err := readBody(r)
@@ -921,23 +927,39 @@ func (b *Broker) serveStickyAPI(w http.ResponseWriter, r *http.Request, ri *reqI
 			writeStickyErr(w, r.URL.Path, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, stickyView(bnd))
+		writeJSON(w, http.StatusOK, stickyView(bnd, ri.session))
 	case key == "" && r.Method == http.MethodGet:
-		list := b.sticky.list(ri.principal, ri.session)
+		var list []Binding
+		if principalScope {
+			list = b.sticky.listOwned(ri.principal)
+		} else {
+			list = b.sticky.list(ri.principal, ri.session)
+		}
 		out := make([]map[string]any, 0, len(list))
 		for i := range list {
-			out = append(out, stickyView(&list[i]))
+			out = append(out, stickyView(&list[i], ri.session))
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"schema_version": "bashy-sticky-list-v1", "bindings": out})
 	case key != "" && r.Method == http.MethodGet:
-		bnd := b.sticky.get(ri.principal, ri.session, key)
+		var bnd *Binding
+		if principalScope {
+			bnd = b.sticky.owned(ri.principal, key)
+		} else {
+			bnd = b.sticky.get(ri.principal, ri.session, key)
+		}
 		if bnd == nil {
 			writeErr(w, r.URL.Path, http.StatusNotFound, "sticky: no binding "+key+" in this scope")
 			return
 		}
-		writeJSON(w, http.StatusOK, stickyView(bnd))
+		writeJSON(w, http.StatusOK, stickyView(bnd, ri.session))
 	case key != "" && r.Method == http.MethodDelete:
-		if !b.sticky.delete(ri.principal, ri.session, key) {
+		var deleted bool
+		if principalScope {
+			deleted = b.sticky.deleteOwned(ri.principal, key)
+		} else {
+			deleted = b.sticky.delete(ri.principal, ri.session, key)
+		}
+		if !deleted {
 			writeErr(w, r.URL.Path, http.StatusNotFound, "sticky: no binding "+key+" in this scope")
 			return
 		}
@@ -947,8 +969,11 @@ func (b *Broker) serveStickyAPI(w http.ResponseWriter, r *http.Request, ri *reqI
 	}
 }
 
-func stickyView(b *Binding) map[string]any {
+// stickyView renders a binding for a caller in session: "session" is the
+// owning session and "visible" says whether the caller can serve it directly.
+func stickyView(b *Binding, session string) map[string]any {
 	return map[string]any{
+		"visible":        b.visibleTo(b.Principal, session),
 		"schema_version": "bashy-sticky-v1",
 		"key":            b.Spec.Key,
 		"spec":           b.Spec,

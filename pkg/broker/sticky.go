@@ -370,7 +370,7 @@ func (s *stickyStore) put(b *Binding) (*Binding, error) {
 	k := storeKey(b.Principal, b.Spec.Key)
 	if old := s.m[k]; old != nil {
 		if !old.visibleTo(b.Principal, b.Session) {
-			return nil, stickyErr(409, "sticky: key is owned by another session")
+			return nil, stickyErr(409, "%s", ownedElsewhereMsg(old))
 		}
 		if old.Digest != b.Digest {
 			return nil, stickyErr(409, "sticky: key %q is already bound to identity %s (this spec resolves to %s); delete it first",
@@ -412,12 +412,71 @@ func (s *stickyStore) use(principal, session, key string, messages []json.RawMes
 	return b.Used, nil
 }
 
+// ownerText names the session a binding lives in, for humans.
+func ownerText(b *Binding) string {
+	if b.Session == "" {
+		return "the principal scope (no session)"
+	}
+	return "session " + b.Session
+}
+
+// ownedElsewhereMsg is the refusal for a key that exists in a session the
+// caller cannot see: it names the owner and the way in, so the caller binds to
+// the existing sticky instead of fighting it.
+func ownedElsewhereMsg(b *Binding) string {
+	key := b.Spec.Key
+	return fmt.Sprintf("sticky: key %q is owned by %s, not this one; bind to it with `bashy llm env --sticky %s` (the URL carries the owning session) or remove it with `bashy llm sticky rm %s`",
+		key, ownerText(b), key, key)
+}
+
+// owned returns the principal's binding under key whatever session owns it:
+// management (show/env/rm) is per principal, only serving is per session.
+func (s *stickyStore) owned(principal, key string) *Binding {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sweepLocked()
+	b := s.m[storeKey(principal, key)]
+	if b == nil {
+		return nil
+	}
+	cp := *b
+	return &cp
+}
+
+// listOwned lists every binding of the principal across all sessions.
+func (s *stickyStore) listOwned(principal string) []Binding {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sweepLocked()
+	var out []Binding
+	for _, b := range s.m {
+		if b.Principal == principal {
+			out = append(out, *b)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Spec.Key < out[j].Spec.Key })
+	return out
+}
+
+// deleteOwned removes the principal's binding under key from any session.
+func (s *stickyStore) deleteOwned(principal, key string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.deleteLocked(principal, "", key, false)
+}
+
 func (s *stickyStore) delete(principal, session, key string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.deleteLocked(principal, session, key, true)
+}
+
+// deleteLocked deletes principal's key; when sessionScoped the binding must be
+// visible to (principal, session).
+func (s *stickyStore) deleteLocked(principal, session, key string, sessionScoped bool) bool {
 	k := storeKey(principal, key)
 	b := s.m[k]
-	if b == nil || !b.visibleTo(principal, session) {
+	if b == nil || (sessionScoped && !b.visibleTo(principal, session)) {
 		return false
 	}
 	delete(s.m, k)
