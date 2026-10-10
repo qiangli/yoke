@@ -36,6 +36,7 @@ package weave
 // died — is the worse failure. The real isolation is the weave workspace.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -48,9 +49,43 @@ import (
 	"github.com/qiangli/yoke/pkg/bus"
 	"github.com/qiangli/yoke/pkg/issue"
 	"github.com/qiangli/yoke/pkg/ladder"
+	"github.com/qiangli/yoke/pkg/policy/coord"
+	"github.com/qiangli/yoke/pkg/principal"
 	"github.com/qiangli/yoke/pkg/role"
 	todopkg "github.com/qiangli/yoke/pkg/todo"
 )
+
+// storyKind is the coord kind of a story claim: an announce-mode record, with
+// no TTL, so a claim shows in `bashy claim list` for as long as the story is
+// held. The todo Assignee stays the visible record; the claim mirrors it.
+const storyKind = "story"
+
+func init() {
+	coord.RegisterKind(coord.Kind{
+		Name: storyKind, Match: coord.MatchName, Modes: []string{coord.ModeAnnounce},
+	})
+}
+
+func storyClaimRef(sprint int64, storyID string) coord.Ref {
+	return coord.Ref{Kind: storyKind, Name: fmt.Sprintf("%d/%s", sprint, storyID)}
+}
+
+// recordStoryClaim mirrors a claim the todo gate already admitted into the
+// ledger. Force is set because the Assignee check has decided who may hold the
+// story: a leftover record for anyone else is an orphan, not a competitor.
+func recordStoryClaim(sprint int64, storyID, who, intent string) error {
+	_, err := coord.AcquireRef(context.Background(), coord.Request{
+		Ref: storyClaimRef(sprint, storyID), Holder: principal.Ref{Name: who},
+		Intent: intent, Mode: coord.ModeAnnounce, Force: true,
+	})
+	return err
+}
+
+// releaseStoryClaim drops who's claim; the caller has already proven who holds
+// the story, so a record for another holder is left alone and reported.
+func releaseStoryClaim(sprint int64, storyID, who string) error {
+	return coord.ReleaseRef(context.Background(), storyClaimRef(sprint, storyID), principal.Ref{Name: who}, 0)
+}
 
 // notifySprintOwner tells the manager that its picture of the sprint changed.
 //
@@ -179,11 +214,14 @@ func runSprintStoryClaim(cmd *cobra.Command, id int64, ref, as, repo string, for
 		}
 		weaveStoryAppend(s, who, "system", note)
 		delivery := ""
+		if err := recordStoryClaim(id, it.ID, who, it.Title); err != nil {
+			delivery = fmt.Sprintf("; claim ledger NOT updated (%v)", err)
+		}
 		if err := notifySprintOwner(s, who, note+" (sprint #"+strconv.FormatInt(id, 10)+")"); err != nil {
 			// Reported, never swallowed: a manager that was not told is a
 			// manager that will be surprised, and silence here reads exactly
 			// like a delivered message.
-			delivery = fmt.Sprintf("; manager NOT notified (%v) — tell %s yourself", err, s.Owner)
+			delivery += fmt.Sprintf("; manager NOT notified (%v) — tell %s yourself", err, s.Owner)
 		}
 		return fmt.Sprintf("sprint #%d: %s claimed %s — submit when ready, yield to hand it back%s",
 			id, who, shortSprintStoryID(it.ID), delivery), nil
@@ -235,19 +273,25 @@ func runSprintStoryYield(cmd *cobra.Command, id int64, ref, as, repo, reason str
 		if held == "" {
 			return "", fmt.Errorf("story %s is not claimed by anyone", it.ID)
 		}
+		if !strings.EqualFold(held, who) {
+			return "", fmt.Errorf("story %s is held by %s, not %s — only the holder can yield it", it.ID, held, who)
+		}
 		it.Assignee = ""
 		it.Status = todopkg.StatusTodo
 		if _, err := todopkg.RepoStore(root).Save(it); err != nil {
 			return "", fmt.Errorf("record the yield: %w", err)
+		}
+		delivery := ""
+		if err := releaseStoryClaim(id, it.ID, who); err != nil {
+			delivery = fmt.Sprintf("; claim ledger NOT released (%v)", err)
 		}
 		note := fmt.Sprintf("%s yielded story %s back to the queue", who, shortSprintStoryID(it.ID))
 		if r := strings.TrimSpace(reason); r != "" {
 			note += ": " + r
 		}
 		weaveStoryAppend(s, who, "decision", note)
-		delivery := ""
 		if err := notifySprintOwner(s, who, note+" (sprint #"+strconv.FormatInt(id, 10)+")"); err != nil {
-			delivery = fmt.Sprintf("; manager NOT notified (%v)", err)
+			delivery += fmt.Sprintf("; manager NOT notified (%v)", err)
 		}
 		return fmt.Sprintf("sprint #%d: %s yielded %s — it is open again%s",
 			id, who, shortSprintStoryID(it.ID), delivery), nil
@@ -314,8 +358,11 @@ func runSprintStorySubmit(cmd *cobra.Command, id int64, ref, as, repo, evidence 
 		}
 		weaveStoryAppend(s, who, "decision", note)
 		delivery := ""
+		if err := releaseStoryClaim(id, it.ID, who); err != nil {
+			delivery = fmt.Sprintf("; claim ledger NOT released (%v)", err)
+		}
 		if err := notifySprintOwner(s, who, note+" (sprint #"+strconv.FormatInt(id, 10)+")"); err != nil {
-			delivery = fmt.Sprintf("; manager NOT notified (%v) — tell %s yourself", err, s.Owner)
+			delivery += fmt.Sprintf("; manager NOT notified (%v) — tell %s yourself", err, s.Owner)
 		}
 		owner := s.Owner
 		if owner == "" {
