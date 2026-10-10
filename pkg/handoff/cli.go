@@ -534,35 +534,7 @@ func resolveProject(root string) Project {
 func ProjectRoots(root string) []string { return projectRoots(root) }
 
 func projectRoots(root string) []string {
-	roots := []string{root}
-	data, err := os.ReadFile(filepath.Join(root, "go.mod"))
-	if err != nil {
-		return roots
-	}
-	seen := map[string]bool{root: true}
-	for _, line := range strings.Split(string(data), "\n") {
-		i := strings.Index(line, "=>")
-		if i < 0 {
-			continue
-		}
-		rhs := strings.TrimSpace(line[i+2:])
-		if sp := strings.IndexAny(rhs, " \t"); sp >= 0 {
-			rhs = rhs[:sp]
-		}
-		if !strings.HasPrefix(rhs, "../") {
-			continue
-		}
-		parts := strings.Split(filepath.ToSlash(rhs), "/")
-		if len(parts) < 2 || parts[1] == "" || parts[1] == ".." {
-			continue
-		}
-		abs := filepath.Clean(filepath.Join(root, "..", parts[1]))
-		if fi, err := os.Stat(abs); err == nil && fi.IsDir() && !seen[abs] {
-			seen[abs] = true
-			roots = append(roots, abs)
-		}
-	}
-	return roots
+	return RepoMembers(root)
 }
 
 func repoRoot(dir string) (string, error) {
