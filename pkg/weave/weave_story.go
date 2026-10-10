@@ -1,6 +1,7 @@
 package weave
 
 import (
+	"errors"
 	"fmt"
 	todopkg "github.com/qiangli/yoke/pkg/todo"
 	"os"
@@ -87,6 +88,11 @@ type sprintRun struct {
 	// records written before this field existed; see sameSprintRun for how
 	// those are handled.
 	Born time.Time `json:"born,omitempty"`
+	// Story is the sprint story this run delivers, recorded by
+	// `sprint link --story`. It is the explicit, cross-repo join acceptance
+	// rates from; empty means the link names no story (see
+	// sprintLadderDelivery for the legacy joins still honored).
+	Story string `json:"story,omitempty"`
 }
 
 // weaveStoryLease is the conductor lease on a sprint. Liveness is a
@@ -904,6 +910,9 @@ func runWeaveStoryShow(cmd *cobra.Command, id int64, flags *weaveOutputFlags, li
 		strs := make([]string, len(s.Runs))
 		for i, r := range s.Runs {
 			strs[i] = fmt.Sprintf("%s#%d", r.Repo, r.ID)
+			if r.Story != "" {
+				strs[i] += "(story " + shortSprintStoryID(r.Story) + ")"
+			}
 		}
 		fmt.Fprintf(out, "  runs:       %s\n", strings.Join(strs, " "))
 	}
@@ -1401,11 +1410,21 @@ func newWeaveStoryCommentCmd() *cobra.Command {
 func newWeaveStoryLinkCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var task int64
-	var repo, queue string
+	var repo, queue, storyRef string
 	cmd := &cobra.Command{
-		Use:   "link <sprint> --repo <name> --task <issue>",
+		Use:   "link <sprint> --repo <name> --task <issue> [--story <id>]",
 		Short: "Link a pointed weave run (repo + issue) to a sprint — runs are cross-repo",
-		Args:  cobra.ExactArgs(1),
+		Long: `Link a pointed weave run (repo + issue) to a sprint. Runs are cross-repo:
+the run may live in a different repo from the sprint's stories.
+
+--story names the sprint story the run delivers. The run is registered to that
+story, so "sprint accept" rates the delivery from the run (agent, points, wall
+time) even when a worker claimed and submitted the story itself. Without it the
+link names no story, and accept needs --agent and --points unless the run was
+seeded by "sprint assign". The association is refused, without mutation, when
+the run is registered to another story, the story is closed or not on this
+sprint, or another live linked run already delivers it.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := strconv.ParseInt(args[0], 10, 64)
 			if err != nil {
@@ -1423,6 +1442,9 @@ func newWeaveStoryLinkCmd() *cobra.Command {
 					weavecli.ExitInvalidArg, err))
 			}
 			return runWeaveStoryMutate(cmd, id, "sprint link", &flags, func(s *weaveStory) (string, error) {
+				if strings.TrimSpace(storyRef) != "" {
+					return sprintLinkStory(s, currentBoard, linked, storyRef)
+				}
 				for _, story := range currentBoard {
 					// A DONE sprint's links are a historical record, not a live
 					// claim. Blocking on them means a run can never be worked
@@ -1456,6 +1478,7 @@ func newWeaveStoryLinkCmd() *cobra.Command {
 	cmd.Flags().StringVar(&repo, "repo", "", "repo the run lives in")
 	cmd.Flags().StringVar(&queue, "queue", "", "exact opaque queue tag when multiple same-named checkouts contain the run")
 	cmd.Flags().Int64Var(&task, "task", 0, "pointed weave run/issue id in that repo (points must be 1,2,3,5,8)")
+	cmd.Flags().StringVar(&storyRef, "story", "", "sprint story the run delivers (registers the run to it for accept rating)")
 	flags.attach(cmd)
 	return cmd
 }
@@ -1546,6 +1569,9 @@ share a repo and id across different checkouts, name the one you mean with
 				i := matched[0]
 				removed := s.Runs[i]
 				s.Runs = append(s.Runs[:i], s.Runs[i+1:]...)
+				if note := sprintUnlinkStory(removed); note != "" {
+					return fmt.Sprintf("sprint #%d unlinked %s#%d; %s", id, repo, task, note), nil
+				}
 				if removed.Queue != "" {
 					return fmt.Sprintf("sprint #%d unlinked %s#%d (queue %s)", id, repo, task, removed.Queue), nil
 				}
@@ -1760,7 +1786,8 @@ func runWeaveStoryMutate(cmd *cobra.Command, id int64, op string, flags *weaveOu
 	})
 	if lockErr != nil {
 		code := weavecli.ExitGenericFail
-		if strings.Contains(lockErr.Error(), "not found") {
+		var invalid sprintInvalidArg
+		if strings.Contains(lockErr.Error(), "not found") || errors.As(lockErr, &invalid) {
 			code = weavecli.ExitInvalidArg
 		}
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, op, code, lockErr))

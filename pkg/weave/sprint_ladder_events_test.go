@@ -157,7 +157,7 @@ func TestSprintLadderLifecycle(t *testing.T) {
 				t.Fatal(out.String())
 			}
 			if tc.name == "no-run" {
-				want := "ladder: not rated — story has no linked run; pass --agent and --points to rate"
+				want := "ladder: not rated — story has no linked run; link one with `sprint link 1 --repo R --task T --story " + shortSprintStoryID(it.ID) + "`, or pass --agent and --points to rate"
 				if !strings.Contains(out.String(), want) {
 					t.Fatalf("missing no-run notice: stdout=%s stderr=%s", out.String(), stderr.String())
 				}

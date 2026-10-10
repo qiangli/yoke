@@ -41,7 +41,16 @@ func sprintLadderDelivery(cmd *cobra.Command, s *weaveStory, story *issue.Issue,
 		if run == nil || (!link.Born.IsZero() && !link.Born.Equal(run.Created)) {
 			continue
 		}
-		if run.Register != story.ID && !(run.Register == "" && story.Weave == run.ID && filepath.Clean(q.Root) == filepath.Clean(root)) {
+		// An explicit `link --story` is the join of record, and it is
+		// cross-repo; a run registered to a different story is stale for it.
+		// Without one, fall back to the run's own registration, then the
+		// legacy same-root story.Weave pointer. Never guess from claimant or
+		// branch.
+		if link.Story != "" {
+			if link.Story != story.ID || (run.Register != "" && run.Register != story.ID) {
+				continue
+			}
+		} else if run.Register != story.ID && !(run.Register == "" && story.Weave == run.ID && filepath.Clean(q.Root) == filepath.Clean(root)) {
 			continue
 		}
 		if matched != nil {
@@ -83,7 +92,7 @@ func sprintLadderDelivery(cmd *cobra.Command, s *weaveStory, story *issue.Issue,
 		if story.Weave != 0 {
 			return nil, fmt.Errorf("no canonical agent identity for the linked run; pass --agent tool:model")
 		}
-		return nil, fmt.Errorf("story has no linked run; pass --agent and --points to rate")
+		return nil, fmt.Errorf("story has no linked run; link one with `sprint link %d --repo R --task T --story %s`, or pass --agent and --points to rate", s.ID, shortSprintStoryID(story.ID))
 	}
 	if !ladder.ValidPoints(ladder.Points(points)) {
 		return nil, fmt.Errorf("delivery needs valid --points (1, 2, 3, 5 or 8)")
