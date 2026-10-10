@@ -6,6 +6,7 @@ package weave
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -40,7 +41,13 @@ func weaveOwnerFor(dir string, q *weaveQueue, it *weaveItem) string {
 	if q != nil && it != nil {
 		for _, s := range q.Stories {
 			for _, r := range s.Runs {
-				if r.ID == it.ID && s.Lease != nil && strings.TrimSpace(s.Lease.Holder) != "" {
+				// Ids are queue-local and recycled: only a link to THIS queue
+				// and THIS generation names the run (see SprintForRun).
+				if r.ID != it.ID || r.Queue != "" && r.Queue != filepath.Base(dir) ||
+					!r.Born.IsZero() && !it.Created.IsZero() && !r.Born.Equal(it.Created) {
+					continue
+				}
+				if s.Lease != nil && strings.TrimSpace(s.Lease.Holder) != "" {
 					return strings.TrimSpace(s.Lease.Holder)
 				}
 			}
