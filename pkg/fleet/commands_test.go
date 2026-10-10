@@ -310,7 +310,7 @@ func TestCommandsSharedRingIsReadOnlyAndMaterializes(t *testing.T) {
 		t.Error("rm of a shared entry must be refused")
 	}
 	out, err := runCmd(t, NewCommandsCmd(opts...), "set", "org", "--set", "hidden=true")
-	if err != nil || !strings.Contains(out, "copied org from the shared ring") {
+	if err != nil || !strings.Contains(out, "overlaid org from the shared ring") {
 		t.Errorf("set on shared: %v %q", err, out)
 	}
 	if r, _ := cat.Command("org"); r.Ring != assetring.RingLocal || !r.Hidden {

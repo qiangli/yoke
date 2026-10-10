@@ -93,6 +93,7 @@ func listFlag[T any](name, path, add, set string, apply func(*T, []string) error
 // verbDoc is a verb's help. Use defaults per verb when empty.
 type verbDoc struct {
 	Use, Short, Long, Example string
+	Aliases                   []string // other spellings of the verb
 }
 
 // aliasDoc is the help of the alias flags. Add is the `add --alias` text;
@@ -141,6 +142,12 @@ type typedRecord[T any] struct {
 	BeforeAdd func(cmd *cobra.Command, c *Catalog, rec T) error
 	// AddFlags binds the extra flags BeforeAdd reads onto `add`.
 	AddFlags func(*cobra.Command)
+	// Check vets a record a sparse overlay is about to be written for: the
+	// rules Save enforces on a whole record, which an overlay would
+	// otherwise bypass. Nil: parsing the merged document is enough.
+	Check func(*Catalog, T) error
+	// ForceDoc is the help of `--force`; empty means the generic text.
+	ForceDoc string
 }
 
 // recordSpec is typedRecord with T erased; every rec is a *T.
@@ -160,6 +167,8 @@ type recordSpec struct {
 	saved     func(*cobra.Command, *Catalog, any, bool) error
 	beforeAdd func(*cobra.Command, *Catalog, any) error
 	addFlags  func(*cobra.Command)
+	check     func(*Catalog, any) error
+	forceDoc  string
 	summary   func(*cobra.Command, *Catalog, any) error
 	yamlBlob  func(any) any
 	showShort string
@@ -219,6 +228,10 @@ func newRecordSpec[T any](t typedRecord[T]) *recordSpec {
 		r.beforeAdd = func(cmd *cobra.Command, c *Catalog, rec any) error { return t.BeforeAdd(cmd, c, *rec.(*T)) }
 	}
 	r.addFlags = t.AddFlags
+	r.forceDoc = t.ForceDoc
+	if t.Check != nil {
+		r.check = func(c *Catalog, rec any) error { return t.Check(c, *rec.(*T)) }
+	}
 	if t.Saved != nil {
 		r.saved = func(cmd *cobra.Command, c *Catalog, rec any, set bool) error {
 			return t.Saved(cmd, c, *rec.(*T), set)
@@ -301,13 +314,20 @@ func recordFlagGiven(cmd *cobra.Command, bound []boundFlag, paths pathFlags) boo
 	return false
 }
 
+func (r *recordSpec) forceHelp() string {
+	if r.forceDoc != "" {
+		return r.forceDoc
+	}
+	return "take a name that already belongs to another entry"
+}
+
 func (r *recordSpec) usage(d verbDoc, verb string) *cobra.Command {
 	use := d.Use
 	if use == "" {
 		use = verb + " <name>"
 	}
 	return &cobra.Command{
-		Use: use, Short: d.Short, Long: d.Long, Example: d.Example,
+		Use: use, Short: d.Short, Long: d.Long, Example: d.Example, Aliases: d.Aliases,
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -422,7 +442,7 @@ func newAdd(kind string, opts []Option) *cobra.Command {
 		}
 		return nil
 	}
-	c.Flags().BoolVar(&force, "force", false, "take a name that already belongs to another entry")
+	c.Flags().BoolVar(&force, "force", false, r.forceHelp())
 	if r.addFlags != nil {
 		r.addFlags(c)
 	}
@@ -525,7 +545,7 @@ func newSet(kind string, opts []Option) *cobra.Command {
 		}
 		return nil
 	}
-	c.Flags().BoolVar(&force, "force", false, "take a name that already belongs to another entry")
+	c.Flags().BoolVar(&force, "force", false, r.forceHelp())
 	if r.aliases != nil {
 		c.Flags().StringArrayVar(&addAlias, "add-alias", nil, r.aliasDoc.AddAlias)
 		c.Flags().StringArrayVar(&rmAlias, "rm-alias", nil, r.aliasDoc.RmAlias)

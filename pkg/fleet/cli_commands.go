@@ -20,11 +20,11 @@ import (
 func NewCommandsCmd(opts ...Option) *cobra.Command {
 	root := newRoot("commands", "Registered commands — the ring bashy commands add writes",
 		newCommandsList(opts),
-		newCommandsShow(opts),
+		newShow(KindCommand, opts),
 		newSchema(KindCommand),
 		NewRetireCmd(KindCommand, opts...), NewUnretireCmd(KindCommand, opts...),
-		newCommandsAdd(opts),
-		newCommandsSet(opts),
+		newAdd(KindCommand, opts),
+		newSet(KindCommand, opts),
 		newRm(KindCommand, opts, (*Catalog).RemoveCommand),
 		newEdit(KindCommand, opts, (*Catalog).MaterializeCommand),
 		newVerify(KindCommand, opts, func(c *Catalog, n string) Check {
@@ -136,151 +136,5 @@ func newCommandsList(opts []Option) *cobra.Command {
 	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
 	c.Flags().BoolVar(&retired, "retired", false, "show only retired entries")
 	c.Flags().BoolVar(&all, "all", false, "include hidden entries")
-	return c
-}
-
-func newCommandsShow(opts []Option) *cobra.Command {
-	var asJSON, asYAML bool
-	var field string
-	c := &cobra.Command{
-		Use:           "show <name>",
-		Short:         "Print a registered command's record",
-		Args:          cobra.ExactArgs(1),
-		SilenceUsage:  true,
-		SilenceErrors: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := checkFormat(asJSON, asYAML); err != nil {
-				return err
-			}
-			r, ok := New(opts...).Command(args[0])
-			if !ok {
-				return fmt.Errorf("fleet: no registered command %q", args[0])
-			}
-			if field != "" {
-				if err := emitField(cmd.OutOrStdout(), r, KindCommand, field, asJSON); err != nil {
-					return reportPathError(cmd, KindCommand, err)
-				}
-				return nil
-			}
-			return emit(cmd.OutOrStdout(), r, asJSON)
-		},
-	}
-	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON instead of the canonical YAML")
-	c.Flags().BoolVar(&asYAML, "yaml", false, "emit the canonical YAML record (the default)")
-	c.Flags().StringVar(&field, "field", "", "print one dotted path")
-	return c
-}
-
-func newCommandsAdd(opts []Option) *cobra.Command {
-	var name string
-	var hidden, force bool
-	var paths pathFlags
-	c := &cobra.Command{
-		Use:     "add (<name> --set path=value… | <file>|-)",
-		Aliases: []string{"register"}, // the verb's own name for what it does: a fence runner is registered, then named
-		Short:   "Register a command in the local store",
-		Long: "Register a command in the local store, from --set paths on an empty record\n" +
-			"or from a YAML record file (- = stdin). Exactly one of exec / download /\n" +
-			"script is required; `commands schema` lists every path.\n\n" +
-			"A name that already resolves to a builtin, applet, verb, managed external,\n" +
-			"alias or skill is REFUSED — there is no --force for that: a registered\n" +
-			"command may shadow a PATH program, never a command bashy ships.",
-		Example: "  bashy commands add gl --set script='git log --oneline -n \"${1:-10}\"' --set effects.0=read\n" +
-			"  bashy commands add paint --set script='echo \"$@\"' --set effects.0=pure \\\n" +
-			"      --set args.positionals.0.name=color --set args.positionals.0.enum.0=red --set args.positionals.0.enum.1=blue \\\n" +
-			"      --set args.flags.0.name=count --set args.flags.0.type=int --set args.flags.0.required=true\n" +
-			"  bashy commands add jqs --set exec.0=/usr/local/bin/jq --set exec.1=-S\n" +
-			"  bashy commands add witr --set download.github=owner/repo --set download.version=v0.3.3 \\\n" +
-			"      --set download.sha256.linux/amd64=<hex>\n" +
-			"  bashy commands add ./witr.yaml",
-		Args:          cobra.ExactArgs(1),
-		SilenceUsage:  true,
-		SilenceErrors: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cat := New(opts...)
-			var r Command
-			if looksLikePath(args[0]) && len(paths.set) == 0 && len(paths.unset) == 0 && !cmd.Flags().Changed("hidden") {
-				data, err := readSource(args[0], cmd.InOrStdin())
-				if err != nil {
-					return err
-				}
-				fallback := name
-				if fallback == "" {
-					fallback = baseName(args[0])
-				}
-				r, err = ParseCommand(fallback, data, nil)
-				if err != nil {
-					return err
-				}
-				if name != "" {
-					r.Name = name
-				}
-			} else {
-				r = Command{Name: args[0], Kind: KindCommand, Hidden: hidden}
-				if err := applyPathFlags(cmd, KindCommand, &r, paths); err != nil {
-					return err
-				}
-			}
-			if err := cat.claimName(KindCommand, r.Name, r.Aliases, force); err != nil {
-				return err
-			}
-			if err := cat.SaveCommand(r); err != nil {
-				return err
-			}
-			r.applyDefaults()
-			fmt.Fprintf(cmd.OutOrStdout(), "%s (%s: %s)\n", r.Name, r.Mode(), strings.Join(r.Effects, ","))
-			return nil
-		},
-	}
-	c.Flags().StringVar(&name, "name", "", "store under this name instead of the document's own")
-	c.Flags().BoolVar(&hidden, "hidden", false, "omit this command from default listings")
-	c.Flags().BoolVar(&force, "force", false, "take a name that already belongs to another registered command (never a builtin)")
-	paths.bind(c)
-	return c
-}
-
-func newCommandsSet(opts []Option) *cobra.Command {
-	var addAlias, rmAlias []string
-	var hidden, force bool
-	var paths pathFlags
-	c := &cobra.Command{
-		Use:           "set <name>",
-		Short:         "Modify a registered command",
-		Long:          "Modify a registered command. An entry from a shared ring is copied into the local store first.",
-		Args:          cobra.ExactArgs(1),
-		SilenceUsage:  true,
-		SilenceErrors: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cat := New(opts...)
-			r, ok := cat.Command(args[0])
-			if !ok {
-				return fmt.Errorf("fleet: no registered command %q", args[0])
-			}
-			from := r.Ring
-			r.Aliases = mergeAliases(r.Aliases, addAlias, rmAlias)
-			if cmd.Flags().Changed("hidden") {
-				r.Hidden = hidden
-			}
-			if err := applyPathFlags(cmd, KindCommand, &r, paths); err != nil {
-				return err
-			}
-			if err := cat.claimName(KindCommand, r.Name, r.Aliases, force); err != nil {
-				return err
-			}
-			if err := cat.SaveCommand(r); err != nil {
-				return err
-			}
-			if from != ringLocal() {
-				fmt.Fprintf(cmd.ErrOrStderr(), "note: copied %s from the %s ring into the local store\n", r.Name, from)
-			}
-			fmt.Fprintln(cmd.OutOrStdout(), r.Name)
-			return nil
-		},
-	}
-	c.Flags().StringArrayVar(&addAlias, "add-alias", nil, "add an alias (repeatable)")
-	c.Flags().StringArrayVar(&rmAlias, "rm-alias", nil, "drop an alias (repeatable)")
-	c.Flags().BoolVar(&hidden, "hidden", false, "omit this command from default listings")
-	c.Flags().BoolVar(&force, "force", false, "take a name that already belongs to another registered command (never a builtin)")
-	paths.bind(c)
 	return c
 }

@@ -118,3 +118,18 @@ func (c *Catalog) SaveHost(h Host) error {
 func (c *Catalog) RemoveHost(name string) error {
 	return removeEntry(c.nounDir(dirHosts), dirHosts, name)
 }
+
+// MaterializeHost returns the local-store file for a host alias, copying an
+// entry from another ring into the local store first (what edit opens).
+func (c *Catalog) MaterializeHost(name string) (string, error) {
+	h, ok := c.Host(name)
+	if !ok {
+		return "", fmt.Errorf("fleet: no host %q", name)
+	}
+	if h.Ring != ringLocal() {
+		if err := c.SaveHost(h); err != nil {
+			return "", err
+		}
+	}
+	return entryPath(c.nounDir(dirHosts), h.Name)
+}

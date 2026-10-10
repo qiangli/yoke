@@ -325,16 +325,18 @@ func (c *Catalog) saveChanged(noun, name string, before, after any, paths []stri
 	if err != nil {
 		return err
 	}
-	switch noun {
-	case dirTools:
-		_, err = ParseTool(name, merged, nil)
-	case dirModels:
-		_, err = ParseModel(name, merged, nil)
-	case dirAgents:
-		_, err = ParseAgentFile(name, merged, nil)
-	}
-	if err != nil {
-		return err
+	if spec, ok := kindByDir(noun); ok && spec.Record != nil {
+		recs, err := spec.Record.parse(name, merged)
+		if err != nil {
+			return err
+		}
+		if spec.Record.check != nil {
+			for _, rec := range recs {
+				if err := spec.Record.check(c, rec); err != nil {
+					return err
+				}
+			}
+		}
 	}
 	return writeEntry(c.nounDir(noun), fileName, data)
 }

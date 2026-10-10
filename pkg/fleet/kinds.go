@@ -141,6 +141,7 @@ func init() {
 			Lookup:    holder((*Catalog).Person, func(p Person) string { return p.Handle }),
 			Names:     listed((*Catalog).People, func(p Person) string { return p.Handle }),
 			Seeded:    true,
+			Record:    personRecord(),
 		},
 		{
 			Name: KindHost, Plural: dirHosts, DirEnv: "BASHY_HOSTS_DIR", PathEnv: "BASHY_HOSTS_PATH",
@@ -149,6 +150,7 @@ func init() {
 			Lookup:    holder((*Catalog).Host, func(h Host) string { return h.Name }),
 			Names:     listed((*Catalog).Hosts, func(h Host) string { return h.Name }),
 			Seeded:    true,
+			Record:    hostRecord(),
 		},
 		{
 			Name: "plan", Plural: dirPlans, DirEnv: "BASHY_PLANS_DIR", PathEnv: "BASHY_PLANS_PATH",
@@ -166,6 +168,7 @@ func init() {
 			Lifecycle: lifecycleOf((*Catalog).Command),
 			Lookup:    holder((*Catalog).Command, func(r Command) string { return r.Name }),
 			Names:     listed((*Catalog).Commands, func(r Command) string { return r.Name }),
+			Record:    commandRecord(),
 		},
 		{
 			Name: KindApp, Plural: dirApps, DirEnv: "BASHY_APPS_DIR", PathEnv: "BASHY_APPS_PATH",
@@ -173,6 +176,7 @@ func init() {
 			Lifecycle: lifecycleOf((*Catalog).App),
 			Lookup:    holder((*Catalog).App, func(a App) string { return a.Name }),
 			Names:     listed((*Catalog).Apps, func(a App) string { return a.Name }),
+			Record:    appRecord(),
 		},
 	} {
 		registerKind(s)

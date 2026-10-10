@@ -498,11 +498,18 @@ func (c *Catalog) CommandShadows() map[string]string {
 
 // --- writes ----------------------------------------------------------------
 
+// checkCommand is every rule a command write answers to: the closed
+// vocabularies, the one-implementation rule, and the embedding shell's
+// reserved names (a registered command may shadow PATH, never a shipped one).
+func (c *Catalog) checkCommand(r Command) error {
+	return r.Validate(c.cfg.reservedName)
+}
+
 // SaveCommand validates and writes a command into the local store as
 // canonical YAML.
 func (c *Catalog) SaveCommand(r Command) error {
 	r.applyDefaults()
-	if err := r.Validate(c.cfg.reservedName); err != nil {
+	if err := c.checkCommand(r); err != nil {
 		return err
 	}
 	r.Kind = KindCommand

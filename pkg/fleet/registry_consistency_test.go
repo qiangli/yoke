@@ -67,7 +67,7 @@ func TestCommandAndAppAddHonourForce(t *testing.T) {
 	if json.Unmarshal([]byte(out), &rec) != nil || rec["name"] != "two" {
 		t.Fatalf("show two = %s", out)
 	}
-	for _, c := range []*cobra.Command{newCommandsAdd(opts), newCommandsSet(opts), newAppsAdd(opts), newAppsSet(opts)} {
+	for _, c := range []*cobra.Command{newAdd(KindCommand, opts), newSet(KindCommand, opts), newAdd(KindApp, opts), newSet(KindApp, opts)} {
 		if c.Flags().Lookup("force") == nil {
 			t.Errorf("%q has no --force", c.Use)
 		}

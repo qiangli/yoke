@@ -13,15 +13,22 @@ import (
 // follows; force takes the name anyway.
 func (c *Catalog) CreatePerson(p Person, force bool) error {
 	if !force {
-		if existing, ok := c.Person(p.Handle); ok {
-			return fmt.Errorf("fleet: person %q already exists (%s ring); change it with `bashy person set`, or pass --force to replace it",
-				p.Handle, existing.Ring)
+		if err := c.refuseExistingPerson(p.Handle); err != nil {
+			return err
 		}
 		if err := c.claimName(KindPerson, p.Handle, p.Aliases, false); err != nil {
 			return err
 		}
 	}
 	return c.SavePerson(p)
+}
+
+func (c *Catalog) refuseExistingPerson(handle string) error {
+	if existing, ok := c.Person(handle); ok {
+		return fmt.Errorf("fleet: person %q already exists (%s ring); change it with `bashy person set`, or pass --force to replace it",
+			handle, existing.Ring)
+	}
+	return nil
 }
 
 // MaterializePerson returns the local-store file for a person, copying an
@@ -41,7 +48,13 @@ func (c *Catalog) MaterializePerson(name string) (string, error) {
 
 // The generic verb builders, exported for registry nouns whose CLI lives
 // outside this package (person in pkg/principal), so every noun shares one
-// implementation of edit, schema and show output.
+// implementation of show, add, set, edit and schema.
+
+// NewShowCmd, NewAddCmd and NewSetCmd are the verbs built from a kind's
+// record spec on the kind table.
+func NewShowCmd(kind string, opts []Option) *cobra.Command { return newShow(kind, opts) }
+func NewAddCmd(kind string, opts []Option) *cobra.Command  { return newAdd(kind, opts) }
+func NewSetCmd(kind string, opts []Option) *cobra.Command  { return newSet(kind, opts) }
 
 // NewEditCmd is the shared `edit <name>` verb: materialize, then $EDITOR.
 func NewEditCmd(noun string, opts []Option, materialize func(*Catalog, string) (string, error)) *cobra.Command {

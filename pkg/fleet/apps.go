@@ -118,9 +118,9 @@ func (c *Catalog) App(name string) (App, bool) {
 	return App{}, false
 }
 
-// SaveApp validates and writes an app into the local store.
-func (c *Catalog) SaveApp(a App) error {
-	a.Kind = KindApp
+// checkApp is every rule an app write answers to: the structural check and
+// the embedding console's own (reserved mounts, icon safety, ports, tiers).
+func (c *Catalog) checkApp(a App) error {
 	if err := a.Validate(); err != nil {
 		return err
 	}
@@ -128,6 +128,15 @@ func (c *Catalog) SaveApp(a App) error {
 		if err := c.cfg.appValidate(a); err != nil {
 			return fmt.Errorf("fleet: app %q: %w", a.Name, err)
 		}
+	}
+	return nil
+}
+
+// SaveApp validates and writes an app into the local store.
+func (c *Catalog) SaveApp(a App) error {
+	a.Kind = KindApp
+	if err := c.checkApp(a); err != nil {
+		return err
 	}
 	data, err := Marshal(a)
 	if err != nil {
