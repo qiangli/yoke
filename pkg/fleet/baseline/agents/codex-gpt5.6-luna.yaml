@@ -2,10 +2,6 @@ agents:
   - name: codex-gpt5.6-luna
     tool: codex
     model: gpt5.6-luna
-    retired:
-      at: 2026-10-09
-      reason: not in the 1.0 curated list
-      replaced_by: codex-gpt5.6-sol
     display: "codex · gpt5.6-luna"
     ledger:
       reliability: unmeasured
