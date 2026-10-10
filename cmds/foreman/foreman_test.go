@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/qiangli/coreutils/tool"
+	"github.com/qiangli/yoke/pkg/fleet/fleettest"
 	"github.com/qiangli/yoke/pkg/foreman"
+	"github.com/qiangli/yoke/pkg/llmbudget"
 )
 
 type stubRunner struct {
@@ -320,5 +322,88 @@ func TestStatusRejectsBadWaitFlags(t *testing.T) {
 	rc := &tool.RunContext{Ctx: context.Background(), Dir: t.TempDir(), Stdio: tool.Stdio{Out: &out, Err: &errb}}
 	if code := run(rc, []string{"status", "--wait", "1s", "missing"}); code != 1 {
 		t.Fatalf("missing session: code %d, err %q", code, errb.String())
+	}
+}
+
+// Sprint: #413; Story: #1829; Story-ID: ce5985c75042
+// Observe the final invocation for each CLI surface: persisting options alone
+// does not prove that the launched agent actually receives its grants.
+func TestLaunchSurfacesPreserveExplicitSandboxAndRoots(t *testing.T) {
+	for _, sandbox := range []string{"workspace-write", "read-only"} {
+		for _, surface := range []string{"once", "dag", "repl", "start"} {
+			t.Run(sandbox+"/"+surface, func(t *testing.T) {
+				fleettest.Ring(t)
+				home := t.TempDir()
+				t.Setenv("BASHY_HOME", home)
+				t.Setenv("BASHY_KB_DIR", filepath.Join(home, "kb"))
+				t.Setenv("BASHY_ROOM_DIR", filepath.Join(home, "room"))
+				t.Setenv("BASHY_LLM_BUDGET_STATE", filepath.Join(home, "budget.json"))
+				t.Setenv("BASHY_LLM_BUDGET_POLICY", "")
+				t.Setenv("BASHY_COORD_DIR", filepath.Join(home, "coord"))
+				t.Cleanup(llmbudget.SetDefault(llmbudget.DefaultFromEnv()))
+				t.Setenv("BASHY_FOREMAN_DIR", filepath.Join(home, "foreman"))
+				t.Setenv("BASHY_FOREMAN_NO_SPAWN", "1")
+				old := runner
+				r := &stubRunner{out: "ack"}
+				runner = r
+				t.Cleanup(func() { runner = old })
+				var out, errb bytes.Buffer
+				workspace := t.TempDir()
+				grant := filepath.Join(home, "coordination state")
+				var args []string
+				flags := []string{"--agent", "codex", "--sandbox", sandbox, "--writable-root", grant}
+				input := "hello\nstop\n"
+				switch surface {
+				case "once":
+					args = append([]string{"--once"}, flags...)
+					args = append(args, "--instruction", "hello")
+				case "dag":
+					if err := os.WriteFile(filepath.Join(workspace, "tasks.md"), []byte("## Tasks\n\n### probe\n```bash\necho probe\n```\n"), 0600); err != nil {
+						t.Fatal(err)
+					}
+					args = append([]string{"run"}, flags...)
+					args = append(args, "tasks.md")
+				case "repl":
+					args = append([]string{"run"}, flags...)
+				case "start":
+					args = append([]string{"start", "--id", "profile", "--detach", "--goal", "manage"}, flags...)
+				}
+				rc := &tool.RunContext{Ctx: context.Background(), Dir: workspace, Stdio: tool.Stdio{In: strings.NewReader(input), Out: &out, Err: &errb}}
+				if code := run(rc, args); code != 0 {
+					t.Fatalf("exit %d: %s", code, errb.String())
+				}
+				if surface == "start" {
+					session, err := foreman.Open("", "profile", r)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer session.Close()
+					if err := session.Apply(context.Background(), foreman.Command{Verb: foreman.CommandTell, Message: "hello"}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if len(r.args) != 1 {
+					t.Fatalf("launches=%d, want 1", len(r.args))
+				}
+				argv := strings.Join(r.args[0], "\x00")
+				if !strings.Contains(argv, "--sandbox\x00"+sandbox) || (sandbox == "workspace-write" && !strings.Contains(argv, "--add-dir\x00"+grant)) {
+					t.Fatalf("explicit profile or grant dropped: %q", r.args[0])
+				}
+				if sandbox == "read-only" && strings.Contains(argv, "--add-dir") {
+					t.Fatalf("read-only launch received write grant: %q", r.args[0])
+				}
+				if strings.Contains(argv, "--dangerously-bypass-approvals-and-sandbox") {
+					t.Fatalf("explicit sandbox replaced by bypass: %q", r.args[0])
+				}
+			})
+		}
+	}
+}
+
+func TestRepeatedWritableRootsPreserveEachExplicitGrant(t *testing.T) {
+	flags, _ := parseKVFlags([]string{"--writable-root", "/state with spaces", "--writable-root=/repo/.git"})
+	roots := splitWritableRoots(flags["writable-root"])
+	if len(roots) != 2 || roots[0] != "/state with spaces" || roots[1] != "/repo/.git" {
+		t.Fatalf("explicit grants lost: %q", roots)
 	}
 }

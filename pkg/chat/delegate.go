@@ -119,6 +119,7 @@ merge), route to 'bashy weave' / the conductor; delegating a tracked todo with
 	cmd.Flags().StringVar(&opt.Cwd, "cwd", "", "working directory for the agent process")
 	cmd.Flags().DurationVar(&opt.Timeout, "timeout", 0, "agent timeout, e.g. 30m")
 	cmd.Flags().StringVar(&opt.Sandbox, "sandbox", "", "sandbox override, e.g. workspace-write or danger-full-access")
+	cmd.Flags().StringArrayVar(&opt.WritableRoots, "writable-root", nil, "explicitly grant an extra writable path to a --sandbox workspace-write launch (repeatable)")
 	cmd.Flags().BoolVar(&opt.JSON, "json", false, "print a bashy-chat-v1 JSON result envelope")
 	cmd.Flags().BoolVar(&opt.DryRun, "dry-run", false, "print the resolved invocation (incl. a self-fork) without running it")
 	cmd.Flags().Bool("plain", false, "force plain output even under BASHY_AGENTIC")

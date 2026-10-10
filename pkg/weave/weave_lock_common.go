@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/lockfile"
+	"github.com/qiangli/yoke/pkg/stateaccess"
 )
 
 // LOCK DISCIPLINE — why this file exists.
@@ -139,14 +140,15 @@ var weaveReapLockWait = 250 * time.Millisecond
 // merges must happen outside this call and re-enter it to record the outcome —
 // see the lock-discipline note above.
 func withWeaveQueueLockWait(dir string, wait time.Duration, fn func(*weaveQueue) error) error {
-	l, err := lockfile.AcquireWithin(filepath.Join(dir, "queue.lock"), wait, lockfile.Holder{
+	path := filepath.Join(dir, "queue.lock")
+	l, err := lockfile.AcquireWithin(path, wait, lockfile.Holder{
 		Name: "weave-queue", PID: os.Getpid(), Intent: "update queue", Since: time.Now(),
 	})
 	if err != nil {
 		if errors.Is(err, lockfile.ErrHeld) {
 			return weaveLockBusy{lock: "queue.lock", cause: err}
 		}
-		return fmt.Errorf("queue %w", err)
+		return fmt.Errorf("queue %w", stateaccess.Diagnose("weave/sprint queue", path, err))
 	}
 	defer l.Release()
 

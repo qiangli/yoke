@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/lockfile"
+	"github.com/qiangli/yoke/pkg/stateaccess"
 )
 
 // Card is one live member's record — who it is, what it is bound to, and how to
@@ -254,6 +255,28 @@ func membersDir() (string, error) {
 // invariant while still coordinating every Join process on the host.
 func memberClaimsLockPath() string { return filepath.Join(Dir(), "member-claims.lock") }
 
+const memberClaimsStore = "room member registry"
+
+// lockMemberClaims takes the member-claims lock, diagnosing a sandbox denial
+// as such rather than reporting it like an ordinary I/O failure.
+func lockMemberClaims(h lockfile.Holder, try bool) (*lockfile.Lock, error) {
+	acquire := lockfile.Acquire
+	if try {
+		acquire = lockfile.TryAcquire
+	}
+	l, err := acquire(memberClaimsLockPath(), h)
+	return l, stateaccess.Diagnose(memberClaimsStore, memberClaimsLockPath(), err)
+}
+
+// Preflight proves this session may write the room's member registry and
+// timeline, without locking either.
+func Preflight() error {
+	if err := stateaccess.CheckLock(memberClaimsStore, memberClaimsLockPath()); err != nil {
+		return err
+	}
+	return stateaccess.CheckLock("room timeline", filepath.Join(Dir(), "timeline.jsonl"))
+}
+
 func timelinePath() (string, error) {
 	if err := os.MkdirAll(Dir(), 0o700); err != nil {
 		return "", err
@@ -309,9 +332,9 @@ func Join(c Card) error {
 	if err != nil {
 		return err
 	}
-	claimLock, err := lockfile.Acquire(memberClaimsLockPath(), lockfile.Holder{
+	claimLock, err := lockMemberClaims(lockfile.Holder{
 		Name: c.ID, PID: c.PID, Intent: "claim room member identity",
-	})
+	}, false)
 	if err != nil {
 		return fmt.Errorf("room: serialize member claim: %w", err)
 	}
@@ -459,9 +482,9 @@ func LeavePID(id string, pid int) {
 	if err != nil {
 		return
 	}
-	claimLock, err := lockfile.Acquire(memberClaimsLockPath(), lockfile.Holder{
+	claimLock, err := lockMemberClaims(lockfile.Holder{
 		Name: id, PID: os.Getpid(), Intent: "retire room member identity",
-	})
+	}, false)
 	if err != nil {
 		return
 	}
@@ -541,9 +564,9 @@ func pruneStaleCards(paths []string) {
 	if len(paths) == 0 {
 		return
 	}
-	claimLock, err := lockfile.TryAcquire(memberClaimsLockPath(), lockfile.Holder{
+	claimLock, err := lockMemberClaims(lockfile.Holder{
 		Name: "room-prune", PID: os.Getpid(), Intent: "prune stale member cards",
-	})
+	}, true)
 	if err != nil {
 		return // held: a claim is in flight, or this process already holds it
 	}

@@ -97,12 +97,14 @@ func run(rc *tool.RunContext, args []string) int {
 
 func runOnce(rc *tool.RunContext, flags map[string]string) int {
 	res, err := chat.Invoke(rc.Ctx, chat.Options{
-		Agent:       flags["agent"],
-		Role:        flags["role"],
-		Instruction: flags["instruction"],
-		Cwd:         rc.Dir,
-		JSON:        flags["json"] == "true",
-		AllowUnsafe: flags["yolo"] == "true",
+		Agent:         flags["agent"],
+		Role:          flags["role"],
+		Instruction:   flags["instruction"],
+		Cwd:           rc.Dir,
+		JSON:          flags["json"] == "true",
+		AllowUnsafe:   flags["yolo"] == "true",
+		Sandbox:       flags["sandbox"],
+		WritableRoots: splitWritableRoots(flags["writable-root"]),
 	}, runner)
 	if flags["json"] == "true" {
 		return emitJSON(rc, res)
@@ -165,10 +167,14 @@ func runStart(rc *tool.RunContext, flags map[string]string, args []string, jsonO
 }
 
 func splitWritableRoots(value string) []string {
-	if value = strings.TrimSpace(value); value == "" {
-		return nil
+	var roots []string
+	// NUL cannot occur in a path, so repeated flags preserve spaces and newlines.
+	for _, root := range strings.Split(value, "\x00") {
+		if root = strings.TrimSpace(root); root != "" {
+			roots = append(roots, root)
+		}
 	}
-	return []string{value}
+	return roots
 }
 
 func runServe(rc *tool.RunContext, args []string) int {
@@ -456,12 +462,15 @@ func runDAG(rc *tool.RunContext, flags map[string]string, args []string, jsonOut
 		goal = "run " + args[0]
 	}
 	s, err := foreman.Start(rc.Ctx, foreman.Options{
-		ID:     flags["id"],
-		Goal:   goal,
-		Agent:  flags["agent"],
-		Role:   flags["role"],
-		Cwd:    rc.Dir,
-		Runner: runner,
+		ID:            flags["id"],
+		Goal:          goal,
+		Agent:         flags["agent"],
+		Role:          flags["role"],
+		Cwd:           rc.Dir,
+		Runner:        runner,
+		AllowUnsafe:   flags["yolo"] == "true",
+		Sandbox:       flags["sandbox"],
+		WritableRoots: splitWritableRoots(flags["writable-root"]),
 	})
 	if err != nil {
 		return fail(rc, jsonOut, err)
@@ -523,6 +532,13 @@ func spawnServe(id string) error {
 
 func parseKVFlags(args []string) (map[string]string, []string) {
 	flags := map[string]string{}
+	set := func(name, value string) {
+		if name == "writable-root" && flags[name] != "" {
+			flags[name] += "\x00" + value
+		} else {
+			flags[name] = value
+		}
+	}
 	var rest []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -533,7 +549,7 @@ func parseKVFlags(args []string) (map[string]string, []string) {
 		name := strings.TrimPrefix(a, "--")
 		if strings.Contains(name, "=") {
 			parts := strings.SplitN(name, "=", 2)
-			flags[parts[0]] = parts[1]
+			set(parts[0], parts[1])
 			continue
 		}
 		switch name {
@@ -544,7 +560,7 @@ func parseKVFlags(args []string) (map[string]string, []string) {
 				flags[name] = ""
 				continue
 			}
-			flags[name] = args[i+1]
+			set(name, args[i+1])
 			i++
 		}
 	}

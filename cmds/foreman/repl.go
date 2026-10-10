@@ -20,12 +20,15 @@ func runREPLWithFlags(rc *tool.RunContext, flags map[string]string, args []strin
 		goal = "interactive foreman session"
 	}
 	s, err := foreman.Start(rc.Ctx, foreman.Options{
-		ID:     flags["id"],
-		Goal:   goal,
-		Agent:  flags["agent"],
-		Role:   flags["role"],
-		Cwd:    rc.Dir,
-		Runner: runner,
+		ID:            flags["id"],
+		Goal:          goal,
+		Agent:         flags["agent"],
+		Role:          flags["role"],
+		Cwd:           rc.Dir,
+		Runner:        runner,
+		AllowUnsafe:   flags["yolo"] == "true",
+		Sandbox:       flags["sandbox"],
+		WritableRoots: splitWritableRoots(flags["writable-root"]),
 	})
 	if err != nil {
 		return fail(rc, flags["json"] == "true", err)

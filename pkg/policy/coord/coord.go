@@ -62,6 +62,7 @@ import (
 	"github.com/qiangli/coreutils/pkg/lockfile"
 	"github.com/qiangli/yoke/pkg/principal"
 	"github.com/qiangli/yoke/pkg/role"
+	"github.com/qiangli/yoke/pkg/stateaccess"
 )
 
 // SchemaVersion is the on-disk contract.
@@ -534,14 +535,27 @@ func withLock(dir string, fn func() (*Claim, error)) (*Claim, error) {
 		}
 		return nil, ErrLockUnsupported
 	}
-	l, err := lockfile.Acquire(filepath.Join(dir, "claims.lock"), lockfile.Holder{
+	path := filepath.Join(dir, "claims.lock")
+	l, err := lockfile.Acquire(path, lockfile.Holder{
 		Name: "coord-claims", PID: os.Getpid(), Intent: "update claims", Since: time.Now(),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("claim lock: %w", err)
+		return nil, fmt.Errorf("claim lock: %w", stateaccess.Diagnose(claimLedgerStore, path, err))
 	}
 	defer l.Release()
 	return fn()
+}
+
+const claimLedgerStore = "coord claim ledger"
+
+// Preflight proves this session may write the claim ledger, without locking it.
+// A caller that mutates another store before recording a claim runs it first,
+// so a sandbox-denied ledger fails the command before anything has changed.
+func Preflight() error {
+	if !lockPlatformSupported() {
+		return nil // withLock reports ErrLockUnsupported itself
+	}
+	return stateaccess.CheckLock(claimLedgerStore, filepath.Join(DefaultDir(), "claims.lock"))
 }
 
 func lockPlatformSupported() bool {
