@@ -90,3 +90,12 @@ harness:
   shell: 0.75
   tool-use: 0.75
   isolation: 0.7
+# Where this tool reads skills, instructions and MCP servers (dhnt research
+# agentic-cli-integration-surfaces-2026-10): bashy skill export --tool reads it.
+integration:
+  detect: ${XDG_CONFIG_HOME:-~/.config}/muse
+  skills:
+    user: ["${XDG_CONFIG_HOME:-~/.config}/muse/skills"]
+  instructions:
+    - {file: AGENTS.md, scope: project}
+  mcp: {config: "${XDG_CONFIG_HOME:-~/.config}/muse/settings.json", format: json, key: mcpServers}

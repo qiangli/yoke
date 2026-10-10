@@ -48,3 +48,12 @@ harness:
   shell: 0.95
   tool-use: 0.9
   isolation: 0.85
+# Where this tool reads skills, instructions and MCP servers (dhnt research
+# agentic-cli-integration-surfaces-2026-10): bashy skill export --tool reads it.
+integration:
+  detect: ~/.agents
+  skills:
+    user: [~/.agents/skills]
+    project: [.agents/skills]
+  instructions:
+    - {file: AGENTS.md, scope: project}

@@ -57,3 +57,13 @@ harness:
   shell: 0.8
   tool-use: 0.8
   isolation: 0.7
+# Where this tool reads skills, instructions and MCP servers (dhnt research
+# agentic-cli-integration-surfaces-2026-10): bashy skill export --tool reads it.
+integration:
+  detect: ~/.kimi
+  skills:
+    user: [~/.kimi/skills, ~/.agents/skills]
+    project: [.agents/skills]
+  instructions:
+    - {file: AGENTS.md, scope: project}
+  mcp: {config: ~/.kimi/mcp.json, format: json, key: mcpServers}

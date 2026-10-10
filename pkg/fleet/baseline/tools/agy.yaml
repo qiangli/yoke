@@ -124,3 +124,13 @@ harness:
   shell: 0.85
   tool-use: 0.8
   isolation: 0.75
+# Where this tool reads skills, instructions and MCP servers (dhnt research
+# agentic-cli-integration-surfaces-2026-10): bashy skill export --tool reads it.
+integration:
+  detect: ~/.gemini
+  skills:
+    user: [~/.gemini/config/skills]
+  instructions:
+    - {file: ~/.gemini/GEMINI.md}
+    - {file: AGENTS.md, scope: project}
+  mcp: {config: ~/.gemini/config/mcp_config.json, format: json, key: mcpServers}

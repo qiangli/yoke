@@ -59,3 +59,21 @@ func TestSeedLint(t *testing.T) {
 		t.Errorf("%d agent seed(s) break the curation rule (retire them or fix the binding):\n  %s", len(bad), strings.Join(bad, "\n  "))
 	}
 }
+
+// TestSeedLintToolsDeclareIntegration: every curated built-in tool says where
+// it reads skills and instructions, so `bashy skill export bashy --tool X`
+// works for it exactly as for a custom tool.
+func TestSeedLintToolsDeclareIntegration(t *testing.T) {
+	t.Setenv("BASHY_FLEET_SEEDS", "")
+	t.Setenv("BASHY_TOOLS_PATH", "")
+	cat := New(WithBaselineFS(baselineFS), WithoutLocalStore(), WithoutCloudOverlay())
+	tools, _ := cat.Tools(true)
+	for _, tl := range tools {
+		if tl.IsRetired() || tl.Hidden {
+			continue
+		}
+		if !tl.Integrated() {
+			t.Errorf("curated tool %s declares no integration: block (skills roots / instruction files)", tl.Name)
+		}
+	}
+}

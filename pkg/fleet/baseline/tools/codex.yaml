@@ -142,3 +142,14 @@ commands:
     capability: code-review
     output: turn
     exec: codex exec review --json --skip-git-repo-check {args}
+# Where this tool reads skills, instructions and MCP servers (dhnt research
+# agentic-cli-integration-surfaces-2026-10): bashy skill export --tool reads it.
+integration:
+  detect: ${CODEX_HOME:-~/.codex}
+  skills:
+    user: ["${CODEX_HOME:-~/.codex}/skills", ~/.agents/skills]
+    project: [.agents/skills]
+  instructions:
+    - {file: "${CODEX_HOME:-~/.codex}/AGENTS.md"}
+    - {file: AGENTS.md, scope: project}
+  mcp: {config: "${CODEX_HOME:-~/.codex}/config.toml", format: toml, key: mcp_servers}

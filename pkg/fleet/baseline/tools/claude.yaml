@@ -119,3 +119,15 @@ commands:
       - key: esc
       - wait_idle: 3s
     quit: /exit
+# Where this tool reads skills, instructions and MCP servers (dhnt research
+# agentic-cli-integration-surfaces-2026-10): bashy skill export --tool reads it.
+integration:
+  detect: ${CLAUDE_CONFIG_DIR:-~/.claude}
+  skills:
+    user: ["${CLAUDE_CONFIG_DIR:-~/.claude}/skills"]
+    project: [.claude/skills]
+  instructions:
+    - {file: "${CLAUDE_CONFIG_DIR:-~/.claude}/CLAUDE.md"}
+    - {file: CLAUDE.md, scope: project}
+  mcp: {config: ~/.claude.json, format: json, key: mcpServers}
+  shell_env: CLAUDE_CODE_SHELL

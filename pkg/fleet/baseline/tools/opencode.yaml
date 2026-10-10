@@ -92,3 +92,14 @@ harness:
   shell: 0.9
   tool-use: 0.8
   isolation: 0.75
+# Where this tool reads skills, instructions and MCP servers (dhnt research
+# agentic-cli-integration-surfaces-2026-10): bashy skill export --tool reads it.
+integration:
+  detect: ${OPENCODE_CONFIG_DIR:-~/.config/opencode}
+  skills:
+    user: ["${OPENCODE_CONFIG_DIR:-~/.config/opencode}/skills", ~/.agents/skills]
+    project: [.opencode/skills, .agents/skills]
+  instructions:
+    - {file: "${OPENCODE_CONFIG_DIR:-~/.config/opencode}/AGENTS.md"}
+    - {file: AGENTS.md, scope: project}
+  mcp: {config: "${OPENCODE_CONFIG_DIR:-~/.config/opencode}/opencode.json", format: json, key: mcp}

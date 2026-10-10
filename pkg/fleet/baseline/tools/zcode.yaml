@@ -20,3 +20,14 @@ cli:
       max_runtime: 45m
       mem_limit: 12g
 quirks: personal provider configuration supplies the API key and model.
+# Where this tool reads skills, instructions and MCP servers (dhnt research
+# agentic-cli-integration-surfaces-2026-10): bashy skill export --tool reads it.
+integration:
+  detect: ~/.zcode
+  skills:
+    user: [~/.zcode/skills, ~/.agents/skills]
+    project: [.agents/skills]
+  instructions:
+    - {file: ~/.zcode/AGENTS.md}
+    - {file: AGENTS.md, scope: project}
+  mcp: {config: ~/.zcode/cli/config.json, format: json, key: mcp.servers}
