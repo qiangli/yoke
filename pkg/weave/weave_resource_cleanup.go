@@ -129,6 +129,16 @@ func weaveItemSettled(root, base string, it *weaveItem) (string, bool) {
 	if it == nil {
 		return "", false
 	}
+	// HEAD is not the only thing a workspace holds. A manager that parks
+	// generated or metadata commits on a private side branch and resets HEAD
+	// to the source-only commit leaves a workspace whose HEAD is merged while
+	// the side branch is unique; checked before the merged early return so no
+	// path settles past it.
+	if it.Workspace != "" {
+		if st, err := os.Stat(it.Workspace); err == nil && st.IsDir() && len(weaveUnsettledLocalRefs(root, base, it)) > 0 {
+			return "", false
+		}
+	}
 	if weaveItemMerged(root, base, it) {
 		return weaveDispositionMerged, true
 	}
@@ -172,6 +182,57 @@ func weaveItemSettled(root, base string, it *weaveItem) (string, bool) {
 		return weaveDispositionSuperseded, true
 	}
 	return weaveDispositionRejected, true
+}
+
+// weaveUnsettledLocalRefs names every local ref in the run's workspace (side
+// branches, tags, stash — anything but refs/remotes) that reaches a commit the
+// user repo cannot reach from base or from the run's salvage ref. Commits on
+// the immutable run baseline
+// and tags the user repo holds at the same object are not the workspace's to
+// lose and never block. Any git failure answers with a sentinel entry: this
+// stands in front of rm -rf, so "could not measure" refuses.
+func weaveUnsettledLocalRefs(root, base string, it *weaveItem) []string {
+	ws := it.Workspace
+	out, err := exec.Command(gitBin(), "-C", ws, "for-each-ref", "--format=%(objectname) %(refname)").Output()
+	if err != nil {
+		return []string{"(refs unreadable)"}
+	}
+	var unsettled []string
+	covered := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		obj, ref, ok := strings.Cut(line, " ")
+		if !ok || strings.HasPrefix(ref, "refs/remotes/") {
+			continue
+		}
+		if strings.HasPrefix(ref, "refs/tags/") {
+			if o, e := exec.Command(gitBin(), "-C", root, "rev-parse", "--verify", "-q", ref).Output(); e == nil && strings.TrimSpace(string(o)) == obj {
+				continue
+			}
+		}
+		shas, err := exec.Command(gitBin(), "-C", ws, "rev-list", ref, "--not", weaveCountRef(it, base)).Output()
+		if err != nil {
+			unsettled = append(unsettled, ref)
+			continue
+		}
+		for _, sha := range strings.Fields(string(shas)) {
+			if c, seen := covered[sha]; seen {
+				if !c {
+					unsettled = append(unsettled, ref)
+					break
+				}
+				continue
+			}
+			c := root != "" && base != "" &&
+				(exec.Command(gitBin(), "-C", root, "merge-base", "--is-ancestor", sha, base).Run() == nil ||
+					(it.SalvageRef != "" && exec.Command(gitBin(), "-C", root, "merge-base", "--is-ancestor", sha, it.SalvageRef).Run() == nil))
+			covered[sha] = c
+			if !c {
+				unsettled = append(unsettled, ref)
+				break
+			}
+		}
+	}
+	return unsettled
 }
 
 // weaveRunArtifactKinds is the ordered list of everything a run owns on disk.

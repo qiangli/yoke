@@ -177,3 +177,116 @@ func TestWeaveResourceCleanupRejectsCleanCommitAfterClaim(t *testing.T) {
 		t.Fatal("shared dependency accepted as run workspace")
 	}
 }
+
+// sideBranchCommit parks a commit on a private side branch of the workspace
+// and returns HEAD to the source-only branch — the manager's preserve-then-
+// reset move that the measured S413 teardown lost.
+func sideBranchCommit(t *testing.T, ws, branch string) string {
+	t.Helper()
+	gitE2E(t, ws, "config", "user.email", "fixture@test.local")
+	gitE2E(t, ws, "config", "user.name", "fixture")
+	gitE2E(t, ws, "checkout", "-q", "-b", branch)
+	if e := os.WriteFile(filepath.Join(ws, "WEAVE_MEMORY.md"), []byte("generated only\n"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	gitE2E(t, ws, "add", ".")
+	gitE2E(t, ws, "commit", "-qm", "generated metadata")
+	sha := weaveTestGit(t, ws, "rev-parse", "HEAD")
+	gitE2E(t, ws, "checkout", "-q", "-")
+	return sha
+}
+
+func TestWeaveResourceCleanupKeepsUniqueSideBranch(t *testing.T) {
+	dir, repo, it := resourceCleanupFixture(t)
+	sha := sideBranchCommit(t, it.Workspace, "preserved/s413-run1-generated")
+	if !weaveItemMerged(repo, "main", it) {
+		t.Fatal("fixture: source HEAD should read merged")
+	}
+	if _, ok := weaveItemSettled(repo, "main", it); ok {
+		t.Fatal("merged HEAD settled past a unique side branch")
+	}
+	actions := weavePruneOwnedRun(dir, it.ID, repo)
+	for _, a := range actions {
+		if a.Done && a.Kind != "lock" {
+			t.Fatalf("unsafe action %+v", a)
+		}
+	}
+	if got := weaveTestGit(t, it.Workspace, "rev-parse", "preserved/s413-run1-generated"); got != sha {
+		t.Fatalf("side branch lost: %q", got)
+	}
+	if out := weaveTestGit(t, it.Workspace, "show", sha+":WEAVE_MEMORY.md"); out != "generated only" {
+		t.Fatalf("side commit unreadable: %q", out)
+	}
+	q, e := loadWeaveQueue(dir)
+	if e != nil || q.Items[0].Workspace == "" {
+		t.Fatalf("row compacted while workspace kept: %+v %v", q.Items[0], e)
+	}
+}
+
+func TestWeaveResourceCleanupKeepsUniqueTagAfterClaim(t *testing.T) {
+	_, repo, it := resourceCleanupFixture(t)
+	claim := it.Workspace + ".reclaim-fixture"
+	if e := os.Rename(it.Workspace, claim); e != nil {
+		t.Fatal(e)
+	}
+	if e := weaveVerifyReclaimWorkspace(repo, "main", it, claim); e != nil {
+		t.Fatalf("clean claim refused: %v", e)
+	}
+	sha := sideBranchCommit(t, claim, "scratch")
+	gitE2E(t, claim, "tag", "private-generated", sha)
+	gitE2E(t, claim, "branch", "-D", "scratch")
+	if e := weaveVerifyReclaimWorkspace(repo, "main", it, claim); e == nil {
+		t.Fatal("quarantine-time check accepted a unique tag")
+	}
+}
+
+func TestWeaveResourceCleanupCoveredRefsDoNotBlock(t *testing.T) {
+	for _, scenario := range []string{"merged-branch", "upstream-tag", "salvaged"} {
+		t.Run(scenario, func(t *testing.T) {
+			dir, repo, it := resourceCleanupFixture(t)
+			ws := it.Workspace
+			switch scenario {
+			case "merged-branch":
+				gitE2E(t, ws, "branch", "old-feature", it.BaseSHA)
+				gitE2E(t, ws, "tag", "local-base", it.BaseSHA)
+			case "upstream-tag":
+				// A tag the user repo holds off its base branch, fetched as-is.
+				gitE2E(t, repo, "checkout", "-q", "-b", "release")
+				_ = os.WriteFile(filepath.Join(repo, "rel.txt"), []byte("rel"), 0600)
+				gitE2E(t, repo, "add", ".")
+				gitE2E(t, repo, "commit", "-qm", "release")
+				gitE2E(t, repo, "tag", "v1")
+				gitE2E(t, repo, "checkout", "-q", "main")
+				gitE2E(t, repo, "branch", "-D", "release")
+				gitE2E(t, ws, "fetch", "-q", "origin", "refs/tags/v1:refs/tags/v1")
+			case "salvaged":
+				sha := sideBranchCommit(t, ws, "preserved/s413-run1-generated")
+				gitE2E(t, repo, "fetch", "-q", ws, sha+":refs/weave/salvage/1")
+				it.SalvageRef = "refs/weave/salvage/1"
+				if e := saveWeaveQueue(dir, &weaveQueue{Root: repo, Items: []*weaveItem{it}}); e != nil {
+					t.Fatal(e)
+				}
+			}
+			if refs := weaveUnsettledLocalRefs(repo, "main", it); len(refs) > 0 {
+				t.Fatalf("covered refs blocked: %v", refs)
+			}
+			actions := weavePruneOwnedRun(dir, it.ID, repo)
+			if len(actions) == 0 || !actions[0].Done {
+				t.Fatalf("covered workspace not reclaimed: %+v", actions)
+			}
+			if _, e := os.Stat(ws); !os.IsNotExist(e) {
+				t.Fatal("workspace remains", e)
+			}
+		})
+	}
+}
+
+func TestWeaveResourceCleanupRemoteRefCannotHideUniqueLocalBranch(t *testing.T) {
+	_, repo, it := resourceCleanupFixture(t)
+	sha := sideBranchCommit(t, it.Workspace, "private-recovery")
+	// Remote-tracking refs in a disposable clone are not a canonical backup.
+	gitE2E(t, it.Workspace, "update-ref", "refs/remotes/cache/private", sha)
+	if _, ok := weaveItemSettled(repo, "main", it); ok {
+		t.Fatal("workspace remote ref concealed unique local branch")
+	}
+}
