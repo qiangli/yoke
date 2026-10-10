@@ -77,9 +77,9 @@ func ClaimSession(c Card) error {
 	if err != nil {
 		return err
 	}
-	claimLock, err := lockfile.Acquire(memberClaimsLockPath(), lockfile.Holder{
+	claimLock, err := lockMemberClaims(lockfile.Holder{
 		Name: c.ID, PID: c.PID, Intent: "claim owning session",
-	})
+	}, false)
 	if err != nil {
 		return fmt.Errorf("room: serialize session claim: %w", err)
 	}
@@ -164,9 +164,9 @@ func ReleaseSession(id, sessionClaim string) {
 	if err != nil {
 		return
 	}
-	claimLock, err := lockfile.Acquire(memberClaimsLockPath(), lockfile.Holder{
+	claimLock, err := lockMemberClaims(lockfile.Holder{
 		Name: id, PID: os.Getpid(), Intent: "release owning session",
-	})
+	}, false)
 	if err != nil {
 		return
 	}

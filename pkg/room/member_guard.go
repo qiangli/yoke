@@ -13,9 +13,9 @@ func WithMemberClaimsGuard(fn func() error) error {
 	if _, err := membersDir(); err != nil {
 		return err
 	}
-	held, err := lockfile.TryAcquire(memberClaimsLockPath(), lockfile.Holder{
+	held, err := lockMemberClaims(lockfile.Holder{
 		Name: "room-maintenance", PID: os.Getpid(), Intent: "guard member lifecycle",
-	})
+	}, true)
 	if err != nil {
 		return err
 	}

@@ -310,6 +310,8 @@ var packages = map[string]Package{
 	"lockfile": supPkg("the ONE process file-lock primitive — Acquire/TryAcquire/AcquireWithin, " +
 		"one platform pair for the whole tree. Five packages hand-rolled their own and " +
 		"three of five had been ported to Windows while two were no-ops"),
+	"stateaccess": supPkg("tells a sandbox-DENIED coordination store from a BUSY one: a no-lock " +
+		"preflight before the first mutation and an actionable denial that never wraps lockfile.ErrHeld"),
 	"nudge":     supPkg("the proactive half of the agent-hint subsystem; emitted, never invoked"),
 	"oci":       supPkg("separate module wrapping podman's OCI bindings for external/podman"),
 	"ollm":      supPkg("Ollama API client wrapper, isolating the SDK from the rest of the tree"),

@@ -1117,6 +1117,7 @@ func NewChatCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opt.Cwd, "cwd", "", "working directory for the agent process")
 	cmd.Flags().DurationVar(&opt.Timeout, "timeout", 0, "agent timeout, for example 30m")
 	cmd.Flags().StringVar(&opt.Sandbox, "sandbox", "", "agent sandbox override, for example workspace-write or danger-full-access")
+	cmd.Flags().StringArrayVar(&opt.WritableRoots, "writable-root", nil, "explicitly grant an extra writable path to a --sandbox workspace-write launch (repeatable)")
 	cmd.Flags().BoolVar(&opt.JSON, "json", false, "print a bashy-chat-v1 JSON result envelope")
 	cmd.Flags().Bool("plain", false, "force plain output even under BASHY_AGENTIC")
 	cmd.Flags().BoolVar(&opt.DryRun, "dry-run", false, "print the resolved invocation without running the agent")

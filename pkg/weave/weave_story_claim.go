@@ -81,6 +81,14 @@ func recordStoryClaim(sprint int64, storyID, who, intent string) error {
 	return err
 }
 
+// preflightStoryClaimLedger runs before a claim/yield/submit changes the story:
+// the todo assignment and the claim ledger are two stores, and a ledger the
+// session may not write (a sandbox denial, not contention) must fail the command
+// while both still agree — not after the assignment already moved.
+func preflightStoryClaimLedger() error {
+	return coord.Preflight()
+}
+
 // releaseStoryClaim drops who's claim; the caller has already proven who holds
 // the story, so a record for another holder is left alone and reported.
 func releaseStoryClaim(sprint int64, storyID, who string) error {
@@ -202,6 +210,9 @@ func runSprintStoryClaim(cmd *cobra.Command, id int64, ref, as, repo string, for
 			return "", fmt.Errorf("story %s is held by %s — coordinate with them (`bashy mb send %s ...`), or --force to take it",
 				it.ID, held, held)
 		}
+		if err := preflightStoryClaimLedger(); err != nil {
+			return "", err
+		}
 		prev := strings.TrimSpace(it.Assignee)
 		it.Assignee = who
 		it.Status = todopkg.StatusAssigned
@@ -275,6 +286,9 @@ func runSprintStoryYield(cmd *cobra.Command, id int64, ref, as, repo, reason str
 		}
 		if !strings.EqualFold(held, who) {
 			return "", fmt.Errorf("story %s is held by %s, not %s — only the holder can yield it", it.ID, held, who)
+		}
+		if err := preflightStoryClaimLedger(); err != nil {
+			return "", err
 		}
 		it.Assignee = ""
 		it.Status = todopkg.StatusTodo
@@ -351,6 +365,9 @@ func runSprintStorySubmit(cmd *cobra.Command, id int64, ref, as, repo, evidence 
 		}
 		if strings.TrimSpace(it.Assignee) == "" {
 			return "", errors.New(unclaimedSubmitHint(id, it.ID, who))
+		}
+		if err := preflightStoryClaimLedger(); err != nil {
+			return "", err
 		}
 		note := fmt.Sprintf("%s submitted story %s for merge/closure", who, shortSprintStoryID(it.ID))
 		if message := strings.TrimSpace(evidence); message != "" {
