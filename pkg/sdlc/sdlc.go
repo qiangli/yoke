@@ -805,7 +805,7 @@ bashy sdlc deploy-status --repo owner/repo --branch main
 		newGuideCmd(), newInitCmd(), newDoctorCmd(), newConfigCmd(), newStatusCmd(), newIssueCmd(),
 		newBriefCmd(), newDelegateCmd(), newTickCmd(), newRunsCmd(), newWatchCmd(), newQACmd(),
 		newApproveCmd(), newRolloutCmd(), newPromoteCmd(), newResolveCmd(), newVerifyCmd(), newDeployStatusCmd(), newGuardCmd(),
-		newWorkspaceCmd(), newPublishCmd(), newPagesCmd(), newSuperviseCmd(), newServiceCmd(), newMirrorCmd(),
+		newWorkspaceCmd(), newPublishCmd(), newPagesCmd(), newSuperviseCmd(), newServeCmd(), newMirrorCmd(),
 		newPushSourceCmd(), newDeployOnceCmd(), newChangesCmd(),
 	)
 	return cmd

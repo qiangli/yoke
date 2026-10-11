@@ -68,6 +68,12 @@ func TestBuiltinServiceSeedsAreEmbeddedAndValid(t *testing.T) {
 	if ev, _ := cat.Service("events"); ev.ProviderName() != ServiceProviderInternal || ev.Owner != "meet" {
 		t.Errorf("events = %+v, want internal capability hosted by meet", ev)
 	}
+	if meet, _ := cat.Service("meet"); !reflect.DeepEqual(meet.Exec, []string{"bashy", "meet", "serve", "--port", "{port}", "--bind", "{bind}"}) {
+		t.Errorf("meet exec = %v, want foreground serve", meet.Exec)
+	}
+	if sdlc, _ := cat.Service("sdlc"); !reflect.DeepEqual(sdlc.Exec, []string{"bashy", "sdlc", "serve", "--interval", "{settings.interval}"}) {
+		t.Errorf("sdlc exec = %v, want foreground serve", sdlc.Exec)
+	}
 	// Seeds are never copied: nothing appears in the local store.
 	if _, err := os.Stat(filepath.Join(root, dirServices)); err == nil {
 		t.Fatal("reading seeds wrote the local store")
