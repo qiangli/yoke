@@ -678,6 +678,65 @@ func fleetTokenEnv(env []string) []string {
 	return env
 }
 
+// sprintLeaseTokenEnv is the wire name of a managed sprint-owner session's
+// lease token — the same name weave's gate mints and checks (pkg/weave). It
+// travels in the MANAGER process environment only: Foreman's persisted state
+// has no environment field, so the launcher's own environ is the one place the
+// binding child can inherit it from.
+const sprintLeaseTokenEnv = "BASHY_SPRINT_LEASE_TOKEN"
+
+// sprintOwnerSeatEnv restores a managed sprint-owner session's lease and seat
+// for the binding child.
+//
+// The credential firewall above removes BASHY_SPRINT_LEASE_TOKEN by SHAPE —
+// its name ends in _TOKEN — even though it is bashy's own session authority,
+// not an operator vault secret. Same hole, same fix as BASHY_FLEET_TOKEN: the
+// value is copied back from the launcher's pre-scrub environment (parent),
+// never invented here. Without it every gated sprint verb the manager's agent
+// ran logged "conductor (bypass)" because the lease never reached the child.
+//
+// The seat is stamped, not inherited. The manager process may itself carry a
+// BASHY_AGENT from whoever started it (an operator shell, another agent), and
+// an inherited seat would have the manager's bus and board verbs speak as that
+// caller — or as nobody, when the environment declares none and sends arrive
+// anonymous. The launch's own nick IS the sprint's owner (foreman starts the
+// session with --agent <owner>), so the child claims exactly that seat, under
+// the same Named() discipline PrincipalEnv uses: a bare tool resolves to no
+// owner and gets nothing stamped.
+//
+// A chat launch is the MANAGER side only. Weave workers never pass through
+// here (pkg/weave builds their env itself and its booths keep blocking the
+// token), so this cannot hand a worker the manager's lease.
+func sprintOwnerSeatEnv(env, parent []string, l Launch) []string {
+	token := ""
+	for _, kv := range parent {
+		if strings.HasPrefix(kv, sprintLeaseTokenEnv+"=") {
+			token = strings.TrimPrefix(kv, sprintLeaseTokenEnv+"=")
+		}
+	}
+	if token == "" {
+		return env // not a managed sprint-owner session; nothing to inherit
+	}
+	env = withChildEnvKV(env, sprintLeaseTokenEnv, token)
+	if toAgentLaunch(l).Named() {
+		env = withChildEnvKV(env, "BASHY_AGENT", l.Nick)
+	}
+	return env
+}
+
+// withChildEnvKV sets one NAME=value entry in a child environment, replacing
+// any inherited entry so the child never sees two claims for one name.
+func withChildEnvKV(env []string, name, value string) []string {
+	prefix := name + "="
+	out := make([]string, 0, len(env)+1)
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, prefix) {
+			out = append(out, kv)
+		}
+	}
+	return append(out, prefix+value)
+}
+
 // agentChildEnv builds the environment for a spawned agent process.
 //
 // It starts from the launcher's own environment, then, in order:
@@ -739,6 +798,10 @@ func agentChildEnv(ctx context.Context) []string {
 	}
 	if l, ok := LaunchFrom(ctx); ok {
 		env = principalEnv(env, l)
+		// A managed sprint-owner session's binding child keeps the manager's
+		// lease (removed above by credential shape) and claims the owner's
+		// seat, so its sprint and bus verbs run as the sprint's manager.
+		env = sprintOwnerSeatEnv(env, parent, l)
 		// PER-AGENT conversation store, keyed by the agent's identity.
 		//
 		// ycode locks its data dir, so two ycode processes sharing one store die

@@ -31,3 +31,20 @@ func TestWeaveChildEnvDropsLauncherBashyAgentWithoutWorkerIdentity(t *testing.T)
 		}
 	}
 }
+
+// The manager-side fix (chat restores BASHY_SPRINT_LEASE_TOKEN for a managed
+// owner session's binding child) must not bleed here: a worker is NOT the
+// manager, and a worker holding the manager's lease could drive every gated
+// sprint verb the admission gate exists to refuse. The credential firewall in
+// the worker's own env build drops the token by shape; booths block it by
+// name as well (TestBoothScrubEnv).
+func TestWeaveChildEnvDropsSprintLeaseToken(t *testing.T) {
+	launcher := []string{"PATH=/bin", "BASHY_SPRINT_LEASE_TOKEN=lease-secret", "BASHY_MINT_SPRINT=story-uuid"}
+	it := &weaveItem{ID: 64, Owner: "codex-gpt6-sol-j", LaunchSpec: &weaveLaunchSpec{Agent: "worker-fixture-agent"}}
+	env := weaveChildEnv(launcher, "/workspace", "agent/test", "main", t.TempDir(), it, nil)
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "BASHY_SPRINT_LEASE_TOKEN=") {
+			t.Fatalf("manager lease leaked into the worker: %s", kv)
+		}
+	}
+}
