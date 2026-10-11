@@ -74,7 +74,29 @@ func (c *FleetCatalog) ParseModelSelector(s string) (Selector, error) {
 		c.Agent(a.Name) // Refresh a missing projection before routing the new binding.
 		return Selector{Raw: s, Kind: SelectorAgent, Name: a.Name, catalog: c}, nil
 	}
+	if m, ok := c.vendorModel(s); ok {
+		return Selector{Raw: s, Kind: SelectorModel, Name: m.Name, catalog: c}, nil
+	}
 	return Selector{}, c.unknownSelector(s)
+}
+
+// vendorModel matches a provider-side model id — the value a fleet tool is
+// handed for --model (UpstreamID, or a per-tool ToolIDs spelling). A CLI
+// pointed at the door sends that id back, so it must select the same model.
+// Models are name-sorted, so an id shared by two models resolves stably.
+func (c *FleetCatalog) vendorModel(id string) (fleet.Model, bool) {
+	models, _ := c.fleet.Models()
+	for _, m := range models {
+		if m.UpstreamID != "" && strings.EqualFold(m.UpstreamID, id) {
+			return m, true
+		}
+		for _, tid := range m.ToolIDs {
+			if tid != "" && strings.EqualFold(tid, id) {
+				return m, true
+			}
+		}
+	}
+	return fleet.Model{}, false
 }
 
 func parseBand(s string) (band int, plus bool, ok bool) {

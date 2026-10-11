@@ -88,3 +88,17 @@ func TestHostedToolsAreNotOffered(t *testing.T) {
 		t.Fatalf("unnamed function err = %v", err)
 	}
 }
+
+func TestAdditionalToolsItemJoinsTools(t *testing.T) {
+	body := `{"model":"gpt-5.6-terra","input":[{"type":"additional_tools","tools":[{"type":"function","name":"shell","parameters":{"type":"object"}},{"type":"web_search"}]},{"role":"user","content":"hi"}],"store":false}`
+	req, _, err := ToChat([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(req.Messages) != 1 || req.Messages[0].Role != "user" {
+		t.Fatalf("messages = %+v", req.Messages)
+	}
+	if len(req.Tools) != 1 || req.Tools[0].Function.Name != "shell" {
+		t.Fatalf("tools = %+v", req.Tools)
+	}
+}

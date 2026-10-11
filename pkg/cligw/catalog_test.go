@@ -32,7 +32,7 @@ func testFleet(t *testing.T) *FleetCatalog {
 	}
 	models := []fleet.Model{
 		{Name: "small", Aliases: []string{"swift"}, Family: "small-family", Version: "1", Band: 2, Kind: fleet.ModelKindSubscription, Provider: "anthropic", Capabilities: []string{"completion", "tools"}, Domain: []string{"general"}},
-		{Name: "strong", Aliases: []string{"power"}, Band: 4, BandSource: fleet.BandMeasured, Kind: fleet.ModelKindAPI, Provider: "openai", Domain: []string{"coding"}},
+		{Name: "strong", Aliases: []string{"power"}, UpstreamID: "vendor-strong-4", ToolIDs: map[string]string{"beta-tool": "Strong (High)"}, Band: 4, BandSource: fleet.BandMeasured, Kind: fleet.ModelKindAPI, Provider: "openai", Domain: []string{"coding"}},
 		{Name: "frontier", Band: 5, BandSource: fleet.BandDeclared, Kind: fleet.ModelKindSubscription, Provider: "openai", Domain: []string{"reasoning"}},
 	}
 	for _, model := range models {

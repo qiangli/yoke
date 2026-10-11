@@ -16,12 +16,7 @@ type Request struct {
 	Model        string          `json:"model"`
 	Input        json.RawMessage `json:"input"`
 	Instructions string          `json:"instructions,omitempty"`
-	Tools        []struct {
-		Type        string          `json:"type"`
-		Name        string          `json:"name"`
-		Description string          `json:"description,omitempty"`
-		Parameters  json.RawMessage `json:"parameters,omitempty"`
-	} `json:"tools,omitempty"`
+	Tools        []toolSpec      `json:"tools,omitempty"`
 	ToolChoice      json.RawMessage `json:"tool_choice,omitempty"`
 	MaxOutputTokens int             `json:"max_output_tokens,omitempty"`
 	Reasoning       struct {
@@ -32,7 +27,15 @@ type Request struct {
 	PreviousResponseID string `json:"previous_response_id,omitempty"`
 }
 
+type toolSpec struct {
+	Type        string          `json:"type"`
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
+}
+
 type inputItem struct {
+	Tools     []toolSpec      `json:"tools"`
 	Type      string          `json:"type"`
 	Role      string          `json:"role"`
 	Content   json.RawMessage `json:"content"`
@@ -91,6 +94,10 @@ func ToChat(body []byte) (*openai.ChatRequest, bool, error) {
 					role = "system"
 				}
 				out.Messages = append(out.Messages, openai.ChatMessage{Role: role, Content: content})
+			case "additional_tools":
+				// Codex declares further tools as an input item; they join the
+				// request's tool list under the same rules.
+				req.Tools = append(req.Tools, item.Tools...)
 			case "function_call":
 				if item.CallID == "" || item.Name == "" {
 					return nil, false, fmt.Errorf("input[%d]: function_call needs call_id and name", i)

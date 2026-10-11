@@ -101,3 +101,19 @@ func agentNames(in []Agent) []string {
 	}
 	return out
 }
+
+func TestVendorModelIDSelectsItsFleetModel(t *testing.T) {
+	cat := testFleet(t)
+	for _, id := range []string{"vendor-strong-4", "VENDOR-STRONG-4", "Strong (High)"} {
+		sel, err := cat.ParseModelSelector(id)
+		if err != nil {
+			t.Fatalf("ParseModelSelector(%q): %v", id, err)
+		}
+		if sel.Kind != SelectorModel || sel.Name != "strong" {
+			t.Fatalf("ParseModelSelector(%q) = %+v, want model strong", id, sel)
+		}
+	}
+	if _, err := cat.ParseModelSelector("vendor-unknown-9"); err == nil {
+		t.Fatal("an id no model declares must stay unknown")
+	}
+}
