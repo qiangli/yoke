@@ -149,3 +149,59 @@ func TestRemoteApprovalRejectsForgedSeatWithCorrectToken(t *testing.T) {
 		t.Fatal("forged account settled an approval despite the correct token and claimed person seat")
 	}
 }
+
+// A distinct Cloudbox principal (not the task owner) settles an approval only
+// when listed in BASHY_REMOTE_APPROVERS AND joined as the claimed person seat
+// under that same account; either gap yields a rejected receipt.
+func TestRemoteApprovalDistinctPrincipalNeedsAllowlistAndOwnSeat(t *testing.T) {
+	const owner, approver = "owner@example.test", "Approver@Example.Test"
+	cases := []struct {
+		name      string
+		allowlist string
+		joinedBy  string
+		wantAllow bool
+	}{
+		{"allowlisted and joined", " other@example.test , approver@example.test ", approver, true},
+		{"not allowlisted", "", approver, false},
+		{"allowlisted but seat joined by another account", "approver@example.test", "attacker@example.test", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeSessionClient{
+				tasks:        []TaskSummary{{ID: "task-1", Owner: owner, TargetRepo: "github.com/qiangli/bashy", Status: "active"}},
+				rosterEvents: []Event{{Kind: "join", Author: tc.joinedBy, Detail: json.RawMessage(`{"participant":"person:bob@hostB"}`)}},
+			}
+			repo := sessionTestEnv(t, "git@github.com:qiangli/bashy.git", fake)
+			t.Setenv("BASHY_MB_DIR", t.TempDir())
+			t.Setenv(ask.DirEnv, t.TempDir())
+			t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+			t.Setenv(RemoteApproversEnv, tc.allowlist)
+			r, err := ask.Raise(ask.ApprovalSpec{Source: ask.SourceConfirm, Session: "distinct", Argv: []string{"make", "deploy"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			d := ask.RemoteDirective{ID: "dir-1", Approval: r.ID, Host: sessionHostName(), Token: r.Approval.Token,
+				Verdict: ask.VerdictAllow, By: "person:bob@hostB"}
+			detail, _ := json.Marshal(d)
+			sc, err := EnsureRepoSession(context.Background(), repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if applied, err := applyApprovalEvent(context.Background(), sc, repo, "task-1",
+				Event{ID: "ev-1", Kind: ApprovalDirectiveKind, Author: approver, Detail: detail}); err != nil || !applied {
+				t.Fatalf("receipt posted=%v err=%v", applied, err)
+			}
+			var receipt ask.RemoteReceipt
+			if err := json.Unmarshal(fake.appends[0].Detail, &receipt); err != nil {
+				t.Fatal(err)
+			}
+			_, decided := ask.LoadDecision(r.ID)
+			if tc.wantAllow && (receipt.Status != ask.RemoteApplied || !decided) {
+				t.Fatalf("want applied, got %+v decided=%v", receipt, decided)
+			}
+			if !tc.wantAllow && (receipt.Status != ask.RemoteRejected || decided) {
+				t.Fatalf("want rejected and pending, got %+v decided=%v", receipt, decided)
+			}
+		})
+	}
+}
