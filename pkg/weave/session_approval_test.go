@@ -13,7 +13,7 @@ import (
 func feedOf(reqs []AppendEventReq, ids ...string) []Event {
 	out := make([]Event, len(reqs))
 	for i, r := range reqs {
-		out[i] = Event{ID: ids[i], Kind: r.Kind, Summary: r.Summary, Detail: r.Detail}
+		out[i] = Event{ID: ids[i], Author: "owner@example.test", Kind: r.Kind, Summary: r.Summary, Detail: r.Detail}
 	}
 	return out
 }
@@ -24,7 +24,8 @@ func feedOf(reqs []AppendEventReq, ids ...string) []Event {
 // token are rejected with explicit receipts and change nothing.
 func TestRemoteApprovalDirectiveAppliesOnOwnerAndReplaysFailClosed(t *testing.T) {
 	fake := &fakeSessionClient{
-		tasks: []TaskSummary{{ID: "task-1", TargetRepo: "github.com/qiangli/bashy", Status: "active"}},
+		tasks:        []TaskSummary{{ID: "task-1", Owner: "owner@example.test", TargetRepo: "github.com/qiangli/bashy", Status: "active"}},
+		rosterEvents: []Event{{Kind: "join", Author: "owner@example.test", Detail: json.RawMessage(`{"participant":"person:qiangli@hostB"}`)}},
 	}
 	repo := sessionTestEnv(t, "git@github.com:qiangli/bashy.git", fake)
 	t.Setenv("BASHY_MB_DIR", t.TempDir())
@@ -44,7 +45,7 @@ func TestRemoteApprovalDirectiveAppliesOnOwnerAndReplaysFailClosed(t *testing.T)
 	// Host B: the operator answers it remotely.
 	sent, err := SendApprovalDirective(context.Background(), repo, ask.RemoteDirective{
 		Approval: r.ID, Host: ownerHost, Token: r.Approval.Token, Verdict: ask.VerdictAllow,
-		By: "person:qiangli@hostB", TraceID: "trace-9",
+		By: "person:qiangli@hostB", ByURN: "forged-client-urn", TraceID: "trace-9",
 	})
 	if err != nil || sent.ID == "" || sent.At == "" {
 		t.Fatalf("send: %+v %v", sent, err)
@@ -72,7 +73,8 @@ func TestRemoteApprovalDirectiveAppliesOnOwnerAndReplaysFailClosed(t *testing.T)
 		t.Fatalf("want exactly one receipt, got %+v", fake.appends)
 	}
 	d, ok := ask.LoadDecision(r.ID)
-	if !ok || !d.Allowed() || d.Via != ask.ViaRemote || !strings.Contains(d.By, "person:qiangli@hostB") {
+	if !ok || !d.Allowed() || d.Via != ask.ViaRemote || !strings.Contains(d.By, "person:qiangli@hostB") ||
+		!strings.Contains(d.By, "owner@example.test") || strings.Contains(d.By, "forged-client-urn") {
 		t.Fatalf("A's decision = %+v %v", d, ok)
 	}
 	if got, ok := ask.Resolve(ask.SourceConfirm, r.Approval.Token, "card-a", argv); !ok || !got.Allowed() {
@@ -92,8 +94,8 @@ func TestRemoteApprovalDirectiveAppliesOnOwnerAndReplaysFailClosed(t *testing.T)
 	forgedDetail, _ := json.Marshal(forged)
 	fake.appends = nil
 	fake.eventsPolls = []EventsResponse{{Events: []Event{
-		{ID: "ev-3", Kind: replay.Kind, Detail: replay.Detail},
-		{ID: "ev-4", Kind: ApprovalDirectiveKind, Detail: forgedDetail},
+		{ID: "ev-3", Author: "owner@example.test", Kind: replay.Kind, Detail: replay.Detail},
+		{ID: "ev-4", Author: "owner@example.test", Kind: ApprovalDirectiveKind, Detail: forgedDetail},
 	}, Cursor: "c3"}}
 	if rep, err := DeliverRemoteMail(context.Background(), repo, "plinth"); err != nil || rep.Approvals != 2 {
 		t.Fatalf("replay drain: %+v %v", rep, err)
@@ -107,5 +109,43 @@ func TestRemoteApprovalDirectiveAppliesOnOwnerAndReplaysFailClosed(t *testing.T)
 	}
 	if d2, _ := ask.LoadDecision(r.ID); d2.Verdict != ask.VerdictAllow || !d2.At.Equal(d.At) {
 		t.Fatalf("decision changed: %+v", d2)
+	}
+}
+
+func TestRemoteApprovalRejectsForgedSeatWithCorrectToken(t *testing.T) {
+	const owner = "owner@example.test"
+	fake := &fakeSessionClient{
+		tasks:        []TaskSummary{{ID: "task-1", Owner: owner, TargetRepo: "github.com/qiangli/bashy", Status: "active"}},
+		rosterEvents: []Event{{Kind: "join", Author: "attacker@example.test", Detail: json.RawMessage(`{"participant":"person:qiangli@hostB"}`)}},
+	}
+	repo := sessionTestEnv(t, "git@github.com:qiangli/bashy.git", fake)
+	t.Setenv("BASHY_MB_DIR", t.TempDir())
+	t.Setenv(ask.DirEnv, t.TempDir())
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+	t.Setenv(RemoteApproversEnv, "")
+	r, err := ask.Raise(ask.ApprovalSpec{Source: ask.SourceConfirm, Session: "forged-seat", Argv: []string{"make", "deploy"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := ask.RemoteDirective{ID: "forged-seat", Approval: r.ID, Host: sessionHostName(), Token: r.Approval.Token,
+		Verdict: ask.VerdictAllow, By: "person:qiangli@hostB", ByURN: owner}
+	detail, _ := json.Marshal(d)
+	sc, err := EnsureRepoSession(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, author := range []string{"attacker@example.test", ""} {
+		applied, err := applyApprovalEvent(context.Background(), sc, repo, "task-1",
+			Event{ID: "forgery-" + string(rune('a'+i)), Kind: ApprovalDirectiveKind, Author: author, Detail: detail})
+		if err != nil || !applied {
+			t.Fatalf("forged event author=%q: receipt=%v err=%v", author, applied, err)
+		}
+		var receipt ask.RemoteReceipt
+		if err := json.Unmarshal(fake.appends[i].Detail, &receipt); err != nil || receipt.Status != ask.RemoteRejected {
+			t.Fatalf("forged event author=%q receipt=%+v err=%v", author, receipt, err)
+		}
+	}
+	if _, decided := ask.LoadDecision(r.ID); decided {
+		t.Fatal("forged account settled an approval despite the correct token and claimed person seat")
 	}
 }

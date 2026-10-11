@@ -57,6 +57,7 @@ func NewHTTPSessionClient(base, token string) *httpSessionClient {
 
 type TaskSummary struct {
 	ID           string    `json:"id"`
+	Owner        string    `json:"owner"`
 	Name         string    `json:"name"`
 	Display      string    `json:"display"`
 	Goal         string    `json:"goal"`
@@ -126,6 +127,7 @@ type CreateTaskReq struct {
 
 type Event struct {
 	ID         string          `json:"id"`
+	Author     string          `json:"author"`
 	Kind       string          `json:"kind"`
 	Summary    string          `json:"summary"`
 	Detail     json.RawMessage `json:"detail"`

@@ -36,24 +36,73 @@ const (
 	ApprovalReceiptKind   = "approval-receipt"
 )
 
-// RemoteApproversEnv lists, comma-separated, who besides this host's own
-// operator may answer its approvals from another host: person names
-// (`qiangli`) or full seats (`person:qiangli@laptop`).
+// RemoteApproversEnv lists additional Cloudbox account emails allowed to
+// answer this host's approvals. Seat names in event detail are untrusted.
 const RemoteApproversEnv = "BASHY_REMOTE_APPROVERS"
 
-// remoteApprovalPolicy admits this host's operator by name — the same human
-// on their other paired host — plus whoever RemoteApproversEnv names.
-func remoteApprovalPolicy() ask.RemotePolicy {
-	var p ask.RemotePolicy
-	if u := principalLocalUser(); u != "unknown" {
-		p.Approvers = append(p.Approvers, u)
+func allowedRemoteAuthor(author, owner string) bool {
+	if author == "" || !strings.Contains(author, "@") {
+		return false
 	}
-	for _, a := range strings.Split(os.Getenv(RemoteApproversEnv), ",") {
-		if a = strings.TrimSpace(a); a != "" {
-			p.Approvers = append(p.Approvers, a)
+	if owner != "" && strings.EqualFold(author, owner) {
+		return true
+	}
+	for _, email := range strings.Split(os.Getenv(RemoteApproversEnv), ",") {
+		email = strings.TrimSpace(email)
+		if strings.Contains(email, "@") && strings.EqualFold(author, email) {
+			return true
 		}
 	}
-	return p
+	return false
+}
+
+// bindApprovalAuthor checks the server-stamped account against the task owner
+// (or an explicit account allowlist), then proves that this same account
+// joined the session as the person seat named in the directive. Neither By nor
+// ByURN can grant authority: both arrived in client-controlled event detail.
+func bindApprovalAuthor(ctx context.Context, sc *sessionRepoClient, taskID string, ev Event, d *ask.RemoteDirective) string {
+	author := strings.TrimSpace(ev.Author)
+	if author == "" {
+		return "approval event has no server-stamped author"
+	}
+	tasks, err := sc.client.ListTasks(ctx)
+	if err != nil {
+		return "cannot verify approval task owner: " + err.Error()
+	}
+	owner := ""
+	for _, task := range tasks {
+		if task.ID == taskID {
+			owner = strings.TrimSpace(task.Owner)
+			break
+		}
+	}
+	if owner == "" || !allowedRemoteAuthor(author, owner) {
+		return "approval author is not an allowed account"
+	}
+	if !strings.HasPrefix(d.By, "person:") || !strings.Contains(d.By, "@") {
+		return "approval directive has no person seat"
+	}
+	roster, err := sc.client.GetEvents(ctx, taskID, "", 0)
+	if err != nil {
+		return "cannot verify approval roster: " + err.Error()
+	}
+	joined := false
+	for _, presence := range roster.Events {
+		if !strings.EqualFold(presence.Author, author) || !strings.EqualFold(joinParticipant(presence), d.By) {
+			continue
+		}
+		switch presence.Kind {
+		case "join":
+			joined = true
+		case "leave":
+			joined = false
+		}
+	}
+	if !joined {
+		return "approval author has no active join for the claimed person seat"
+	}
+	d.ByURN = author // audit the account proved by cloudbox, never payload ByURN
+	return ""
 }
 
 // SendApprovalDirective appends an answer for an approval owned by d.Host to
@@ -157,7 +206,12 @@ func applyApprovalEvent(ctx context.Context, sc *sessionRepoClient, repoRoot, ta
 	case err == nil:
 		// First sight: decide, record the answer, then post it.
 		_ = f.Close()
-		entry.Receipt, _ = ask.ApplyRemote(d, remoteApprovalPolicy())
+		if reason := bindApprovalAuthor(ctx, sc, taskID, ev, &d); reason != "" {
+			entry.Receipt = ask.RemoteReceipt{Directive: d.ID, Approval: d.Approval, Host: d.Host,
+				Token: d.Token, Status: ask.RemoteRejected, Reason: reason, TraceID: d.TraceID, At: time.Now().UTC()}
+		} else {
+			entry.Receipt, _ = ask.ApplyRemote(d, ask.RemotePolicy{Approvers: []string{d.By}})
+		}
 		entry.Receipt.Host = sessionHostName()
 		if err := writeApprovalLedger(path, entry); err != nil {
 			return false, err
