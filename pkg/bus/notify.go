@@ -6,6 +6,7 @@ package bus
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -45,6 +46,10 @@ func NotifyEvent(principal, target, subject string) error {
 	if err := validateNotifySubject(subject); err != nil {
 		return err
 	}
+	if isMailboxSink(target) {
+		_, _, err := notifyMailbox(principal, target, subject)
+		return err
+	}
 	addr, _, ok, err := resolveNotifyTarget(target)
 	if err != nil {
 		return err
@@ -53,6 +58,44 @@ func NotifyEvent(principal, target, subject string) error {
 		return unresolvedTargetError(target)
 	}
 	return Publish(Notification{Principal: principal, To: addr, Body: subject})
+}
+
+// MailboxSinkPrefix marks an explicit cross-host sink, `mb:PERSON@HOST`. It is
+// never resolved against local readers, roles or cursors: the roster is the only
+// authority, and a miss refuses rather than falling back to a local name.
+const MailboxSinkPrefix = "mb:"
+
+func isMailboxSink(target string) bool {
+	return strings.HasPrefix(strings.TrimSpace(target), MailboxSinkPrefix)
+}
+
+// notifyMailbox relays one subject-only doorbell to an explicit PERSON@HOST on
+// the session relay (topic "notify"). Unknown, ambiguous or unwired targets are
+// refused before anything is posted anywhere. The result is queued, never
+// delivered: the relay accepting the envelope is not proof the host read it.
+func notifyMailbox(principal, target, subject string) (SendResult, RemoteRoute, error) {
+	addr := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(target), MailboxSinkPrefix))
+	if !IsRemoteAddress(addr) {
+		return SendResult{}, RemoteRoute{}, fmt.Errorf("notify: %q is not a PERSON@HOST address (use mb:PERSON@HOST)", target)
+	}
+	if RemoteResolve == nil || RemoteSend == nil {
+		return SendResult{}, RemoteRoute{}, fmt.Errorf("notify: %s: no relay is wired on this host; nothing was posted", target)
+	}
+	route, err := RemoteResolve(addr)
+	if err != nil {
+		if errors.Is(err, ErrRemoteAmbiguous) || errors.Is(err, ErrRemoteUnknown) {
+			return SendResult{}, RemoteRoute{}, fmt.Errorf("notify: %s: %w; nothing was posted", target, err)
+		}
+		return SendResult{}, RemoteRoute{}, fmt.Errorf("notify: %s: roster lookup failed: %w; nothing was posted", target, err)
+	}
+	if !strings.EqualFold(route.Participant, addr) {
+		return SendResult{}, RemoteRoute{}, fmt.Errorf("notify: %s resolved to %q, not the address given; nothing was posted", target, route.Participant)
+	}
+	res, err := sendRemote(SendRequest{From: principal, To: addr, Topic: "notify", Body: subject}, route)
+	if err != nil {
+		return SendResult{}, RemoteRoute{}, err
+	}
+	return res, route, nil
 }
 
 // ScheduleNotify records a one-shot notification in the shared scheduler.
@@ -130,6 +173,22 @@ deliberately absent.`,
 			if strings.TrimSpace(principal) == "" || principal == "anonymous" {
 				return notifyFailure(cmd, jsonOut, "", target, subject,
 					fmt.Errorf("notify: sender identity is required; pass --as or set BASHY_PRINCIPAL"))
+			}
+			if isMailboxSink(target) {
+				if in != "" || at != "" {
+					return notifyFailure(cmd, jsonOut, principal, target, subject,
+						fmt.Errorf("notify: --in/--at cannot schedule a notification for a mailbox sink on another host"))
+				}
+				res, route, err := notifyMailbox(principal, target, subject)
+				if err != nil {
+					return notifyFailure(cmd, jsonOut, principal, target, subject, err)
+				}
+				receipt := NotifyReceipt{SchemaVersion: SchemaVersion, State: StateQueued, Principal: principal, To: route.Participant, Subject: subject}
+				if jsonOut {
+					return json.NewEncoder(cmd.OutOrStdout()).Encode(receipt)
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(), "%s: %s (relayed, id %s)\n", receipt.State, receipt.To, res.ID)
+				return nil
 			}
 			addr, kind, ok, err := resolveNotifyTarget(target)
 			if err != nil {
