@@ -18,7 +18,7 @@ import (
 // newACPCmd serves this host as an ACP agent over the protocol's standard
 // newline-delimited JSON-RPC stdin/stdout transport.
 func newACPCmd() *cobra.Command {
-	var agent, role, gateCmd, gateDir string
+	var agent, role, gateCmd, gateDir, sandbox string
 	var timeout time.Duration
 	var readOnly, allowPremium bool
 
@@ -27,12 +27,15 @@ func newACPCmd() *cobra.Command {
 		Short: "Serve this machine as an ACP agent over stdin/stdout",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := validateACPSandbox(sandbox, readOnly); err != nil {
+				return err
+			}
 			binding, err := chat.ResolveAgent(agent, role)
 			if err != nil {
 				return err
 			}
 
-			runner := newChatRunner(cmd.Context(), binding, timeout, readOnly, allowPremium)
+			runner := newChatRunner(cmd.Context(), binding, timeout, readOnly, allowPremium, sandbox)
 			defer runner.Close()
 
 			// This process is already the ACP endpoint. Letting chat select its
@@ -65,8 +68,26 @@ func newACPCmd() *cobra.Command {
 	c.Flags().StringVar(&gateDir, "gate-dir", "", "directory for the gate (default: the ACP session cwd)")
 	c.Flags().DurationVar(&timeout, "timeout", 0, "maximum time for each local turn")
 	c.Flags().BoolVar(&readOnly, "read-only", false, "run the local agent without write authority")
+	c.Flags().StringVar(&sandbox, "sandbox", "", "agent sandbox profile; only workspace-write is supported (incompatible with --read-only)")
 	c.Flags().BoolVar(&allowPremium, "allow-premium", false, "allow premium-model turns past the normal budget gate")
 	return c
+}
+
+// validateACPSandbox admits only the safe writable profile. Full access is
+// never selectable here, and a read-only server cannot also be given write
+// authority.
+func validateACPSandbox(sandbox string, readOnly bool) error {
+	switch sandbox {
+	case "":
+		return nil
+	case "workspace-write":
+		if readOnly {
+			return errors.New("herald acp: --sandbox workspace-write is incompatible with --read-only")
+		}
+		return nil
+	default:
+		return fmt.Errorf("herald acp: unsupported --sandbox %q (supported: workspace-write)", sandbox)
+	}
 }
 
 // eofGraceReader gives the SDK's request handler time to flush the response to
@@ -93,6 +114,7 @@ type chatRunner struct {
 	timeout      time.Duration
 	readOnly     bool
 	allowPremium bool
+	sandbox      string
 
 	mu       sync.Mutex
 	sessions map[string]*chatSession
@@ -103,13 +125,14 @@ type chatSession struct {
 	mu      sync.Mutex
 }
 
-func newChatRunner(ctx context.Context, agent string, timeout time.Duration, readOnly, allowPremium bool) *chatRunner {
+func newChatRunner(ctx context.Context, agent string, timeout time.Duration, readOnly, allowPremium bool, sandbox string) *chatRunner {
 	return &chatRunner{
 		ctx:          ctx,
 		agent:        agent,
 		timeout:      timeout,
 		readOnly:     readOnly,
 		allowPremium: allowPremium,
+		sandbox:      sandbox,
 		sessions:     make(map[string]*chatSession),
 	}
 }
@@ -184,6 +207,7 @@ func (r *chatRunner) session(req acp.TurnRequest, prompt string) (*chatSession, 
 		Prompt:       prompt,
 		Cwd:          req.Cwd,
 		ReadOnly:     r.readOnly,
+		Sandbox:      r.sandbox,
 		AllowPremium: r.allowPremium,
 		Mode:         "herald-acp",
 	})
