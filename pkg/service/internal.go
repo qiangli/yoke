@@ -87,8 +87,9 @@ type Internal struct {
 }
 
 type internalUnit struct {
-	capID  string
-	status Status
+	capID   string
+	status  Status
+	settled bool // the capability was told it is off while the unit never ran
 }
 
 // NewInternal returns the internal provider for the process named self.
@@ -133,7 +134,7 @@ func (p *Internal) Activate(ctx context.Context, unit fleet.Service, rt Runtime)
 			p.mu.Unlock()
 			return ErrRestartRequired
 		}
-		existing.capID = unit.Capability
+		existing.capID, existing.settled = unit.Capability, false
 		existing.status.Enabled = unit.Enabled
 	} else {
 		p.units[unit.Name] = &internalUnit{capID: unit.Capability,
@@ -188,6 +189,42 @@ func (p *Internal) Deactivate(ctx context.Context, unit string) error {
 		}
 	}
 	p.transition(unit, Inactive, "", Runtime{})
+	return nil
+}
+
+// Settle makes sure the capability behind a unit that is not wanted is off,
+// even if this process never activated it (a capability that is live by
+// default until its owner is told otherwise). It tells the capability once;
+// a unit that is running is deactivated normally. Capability.Deactivate must
+// be idempotent.
+func (p *Internal) Settle(ctx context.Context, unit fleet.Service) error {
+	p.mu.Lock()
+	u, ok := p.units[unit.Name]
+	if ok && u.status.State != Inactive {
+		p.mu.Unlock()
+		return p.Deactivate(ctx, unit.Name)
+	}
+	if ok && u.settled && u.capID == unit.Capability {
+		p.mu.Unlock()
+		return nil
+	}
+	p.mu.Unlock()
+	c, err := p.capability(unit)
+	if err != nil {
+		return err
+	}
+	if err := c.Deactivate(ctx); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if u, ok := p.units[unit.Name]; ok {
+		u.capID, u.settled = unit.Capability, true
+		u.status.Enabled = unit.Enabled
+	} else {
+		p.units[unit.Name] = &internalUnit{capID: unit.Capability, settled: true,
+			status: Status{Unit: unit.Name, Provider: p.Name(), Enabled: unit.Enabled, State: Inactive, Since: p.now()}}
+	}
 	return nil
 }
 
