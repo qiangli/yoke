@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [host/page] PCTS POSIX conformance: campaign plan to 100% — Ranked plan+blockers to take the bashy/coreutils userland from 86.6% of GNU PCTS toward 100%; triggers: posix, pcts, conformance, sed, grep, pkg/bre, NO-list, find -exec, cert #279890, 100% Plan of record to drive the bashy/coreutils pure-Go userland from 86.6% of GNU's PCTS pass count (2551/  (kb:posix-100-conformance-campaign-plan)
+- [repo/page] CLI stdout ownership must outlive process wait — WHEN streaming events from a short-lived CLI with os/exec, do not let exec.Cmd.Wait own and close StdoutPipe while a separate scanner drains terminal events. Attach an explicitly owned os.Pipe writer to Cmd.Stdout, close the parent's writer after Start, and let the scanner close t  (kb:cli-stdout-ownership-must-outlive-process-wait)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 
