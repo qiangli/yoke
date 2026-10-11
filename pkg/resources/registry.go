@@ -4,10 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 
 	// Registering a resourcekind is registering a coord kind, and guarding a
 	// removal reads live claims through the registry-derived providers: both
@@ -31,15 +34,60 @@ func newRegistryCmds() []*cobra.Command {
 		newResourceList(),
 		newResourceShow(),
 		newResourceSet(),
+		newResourceVerify(),
 		newResourceKindCmd(),
 	}
 }
 
+func newResourceVerify() *cobra.Command {
+	var asJSON bool
+	c := &cobra.Command{
+		Use: "verify [NAME]", Short: "Check registered resource records",
+		Args: cobra.MaximumNArgs(1), SilenceUsage: true, SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rows, errs := fleet.New().Resources()
+			checks := make([]map[string]any, 0, len(rows))
+			for _, rec := range rows {
+				if len(args) != 0 && rec.Name != args[0] {
+					continue
+				}
+				check := map[string]any{"kind": "resource", "name": rec.Name, "ok": true}
+				if err := rec.Validate(); err != nil {
+					check["ok"], check["reason"] = false, err.Error()
+				}
+				checks = append(checks, check)
+			}
+			if len(args) != 0 && len(checks) == 0 {
+				return fmt.Errorf("resource: no resource %q", args[0])
+			}
+			if asJSON {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(checks)
+			}
+			bad := false
+			for _, check := range checks {
+				ok := check["ok"].(bool)
+				mark := "ok"
+				if !ok {
+					mark, bad = "FAIL", true
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%s %-24s %v\n", mark, check["name"], check["reason"])
+			}
+			if bad {
+				return fmt.Errorf("resource: one or more records are invalid")
+			}
+			return reportResourceErrs(cmd, errs)
+		},
+	}
+	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
+	return c
+}
+
 func newResourceAdd() *cobra.Command {
 	var kind, title, notes, ttl, mode string
+	var file string
 	var aliases, guards []string
 	c := &cobra.Command{
-		Use:   "add NAME --kind KIND [--title T] [--alias A]... [--guard PREFIX]... [MEMBER...]",
+		Use:   "add (-f FILE|- | NAME --kind KIND [--title T] [MEMBER...])",
 		Short: "Register a resource: a name for something agents must not share",
 		Long: "Register a resource: a name for something agents must not share.\n\n" +
 			"A resource declares which claim kind it is held under (--kind: a builtin\n" +
@@ -49,11 +97,47 @@ func newResourceAdd() *cobra.Command {
 			"verbatim for another lane to enforce; this command never interprets them.",
 		Example: "  bashy resource add gpu0 --kind gpunode --title \"GPU node 0\" gpu:0\n" +
 			"  bashy resource add stagedir --kind path --alias stage /w/stage",
-		Args:          cobra.MinimumNArgs(1),
+		Args: func(cmd *cobra.Command, args []string) error {
+			if cmd.Flags().Changed("file") {
+				return cobra.MaximumNArgs(1)(cmd, args)
+			}
+			return cobra.MinimumNArgs(1)(cmd, args)
+		},
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cat := fleet.New()
+			if file != "" {
+				var body []byte
+				var err error
+				if file == "-" {
+					body, err = io.ReadAll(cmd.InOrStdin())
+				} else {
+					body, err = os.ReadFile(file)
+				}
+				if err != nil {
+					return err
+				}
+				name := ""
+				if len(args) > 0 {
+					name = args[0]
+				}
+				rec, err := fleet.ParseResource(name, body, nil)
+				if err != nil {
+					return err
+				}
+				if err := rec.Validate(); err != nil {
+					return err
+				}
+				if err := cat.SaveResource(rec); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%s (kind %s)\n", rec.Name, rec.Kind)
+				return nil
+			}
+			if len(args) == 0 {
+				return fmt.Errorf("resource: add requires a name or -f FILE")
+			}
 			rec := fleet.Resource{
 				Name: args[0], Kind: kind, Members: append([]string(nil), args[1:]...),
 				Title: title, Notes: notes, Aliases: aliases, TTL: ttl, Mode: mode, Guard: guards,
@@ -74,6 +158,7 @@ func newResourceAdd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&kind, "kind", "", "claim kind the resource is held under (required): a builtin like path, or a resourcekind name")
+	c.Flags().StringVarP(&file, "file", "f", "", "read a resource YAML document (use - for stdin)")
 	c.Flags().StringVar(&title, "title", "", "human-facing label")
 	c.Flags().StringVar(&notes, "notes", "", "free-form notes")
 	c.Flags().StringVar(&ttl, "ttl", "", "Go duration overriding the kind's claim TTL (e.g. 2h)")
@@ -161,7 +246,7 @@ func newResourceList() *cobra.Command {
 }
 
 func newResourceShow() *cobra.Command {
-	var asJSON bool
+	var asJSON, asYAML bool
 	c := &cobra.Command{
 		Use:           "show NAME",
 		Short:         "Print a resource's record",
@@ -169,6 +254,9 @@ func newResourceShow() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if asJSON && asYAML {
+				return fmt.Errorf("resource: choose one of --json or --yaml")
+			}
 			rec, ok := fleet.New().Resource(args[0])
 			if !ok {
 				return fmt.Errorf("resource: no resource %q", args[0])
@@ -176,6 +264,11 @@ func newResourceShow() *cobra.Command {
 			if asJSON {
 				enc := json.NewEncoder(cmd.OutOrStdout())
 				enc.SetIndent("", "  ")
+				return enc.Encode(rec)
+			}
+			if asYAML {
+				enc := yaml.NewEncoder(cmd.OutOrStdout())
+				defer enc.Close()
 				return enc.Encode(rec)
 			}
 			out := cmd.OutOrStdout()
@@ -205,6 +298,7 @@ func newResourceShow() *cobra.Command {
 		},
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
+	c.Flags().BoolVar(&asYAML, "yaml", false, "emit the importable YAML record")
 	return c
 }
 
