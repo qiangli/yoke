@@ -195,6 +195,7 @@ const (
 type ToolCommand struct {
 	Name       string                 `yaml:"name" json:"name" doc:"canonical cross-tool command name (plan, review, deep-research, ...); unique per tool"`
 	Effects    []string               `yaml:"effects,omitempty" json:"effects,omitempty" doc:"declared effect atoms for guarded callers"`
+	Confirm    bool                   `yaml:"confirm,omitempty" json:"confirm,omitempty" doc:"require explicit operator confirmation (--yes) even without a mutating effect; see NeedsConfirmation"`
 	Slash      string                 `yaml:"slash" json:"slash" doc:"the tool-specific line to send; {args} is replaced by the caller's text"`
 	Mode       string                 `yaml:"mode" json:"mode" doc:"print (one-shot via the exec template), tui (steered session), or http (typed JSON request)"`
 	Capability string                 `yaml:"capability,omitempty" json:"capability,omitempty" doc:"capability tag for --capability routing"`
@@ -211,16 +212,54 @@ type ToolCommand struct {
 // values may contain {args}, which is replaced verbatim by the caller's text
 // before encoding; it is never parsed or evaluated as JSON or shell source.
 //
+// Args, when declared, replaces {args} with typed binding: each caller word is
+// bound to one declared argument (positionally, or by --name / --name=value)
+// and set as its own JSON value at the argument's body field. A declaration
+// with args may not also use {args}, and a caller word that binds to nothing
+// is an error raised before any request is made.
+//
 // URL is an absolute base URL and Path is an optional endpoint path. A URL may
 // instead include its endpoint path directly. TokenFile reads a local secret
 // file; TokenRef resolves one credential through the host secret bindings.
 type ToolCommandHTTPAction struct {
-	Method    string         `yaml:"method" json:"method" doc:"HTTP method (GET, POST, PUT, PATCH or DELETE)"`
-	URL       string         `yaml:"url" json:"url" doc:"absolute HTTP base URL; loopback only unless effects include net and remote"`
-	Path      string         `yaml:"path,omitempty" json:"path,omitempty" doc:"optional endpoint path appended to url"`
-	Body      map[string]any `yaml:"body,omitempty" json:"body,omitempty" doc:"JSON object encoded by encoding/json; string values may use {args}"`
-	TokenFile string         `yaml:"token_file,omitempty" json:"token_file,omitempty" doc:"owner-managed file containing the bearer token"`
-	TokenRef  string         `yaml:"token_ref,omitempty" json:"token_ref,omitempty" doc:"secret credential ref resolved through the host secrets map"`
+	Method    string               `yaml:"method" json:"method" doc:"HTTP method (GET, POST, PUT, PATCH or DELETE)"`
+	URL       string               `yaml:"url" json:"url" doc:"absolute HTTP base URL; loopback only unless effects include net and remote"`
+	Path      string               `yaml:"path,omitempty" json:"path,omitempty" doc:"optional endpoint path appended to url"`
+	Body      map[string]any       `yaml:"body,omitempty" json:"body,omitempty" doc:"JSON object encoded by encoding/json; string values may use {args}"`
+	TokenFile string               `yaml:"token_file,omitempty" json:"token_file,omitempty" doc:"owner-managed file containing the bearer token"`
+	TokenRef  string               `yaml:"token_ref,omitempty" json:"token_ref,omitempty" doc:"secret credential ref resolved through the host secrets map"`
+	Args      []ToolCommandHTTPArg `yaml:"args,omitempty" json:"args,omitempty" doc:"typed caller arguments bound into the JSON body, in positional order"`
+}
+
+// ToolCommandHTTPArg binds one caller argument into an HTTP command's JSON
+// body. Values are typed by the runner and set with encoding/json; nothing
+// is interpolated into a string or evaluated.
+type ToolCommandHTTPArg struct {
+	Name     string         `yaml:"name" json:"name" doc:"argument name; also accepted as --name VALUE or --name=VALUE"`
+	Field    string         `yaml:"field,omitempty" json:"field,omitempty" doc:"dotted JSON body path the value is set at; empty = name"`
+	Type     string         `yaml:"type,omitempty" json:"type,omitempty" doc:"string (default), integer or boolean; ignored when enum is set"`
+	Required bool           `yaml:"required,omitempty" json:"required,omitempty" doc:"the caller must supply a value"`
+	Default  string         `yaml:"default,omitempty" json:"default,omitempty" doc:"value used when the caller omits an optional argument; bound like caller input"`
+	Enum     map[string]any `yaml:"enum,omitempty" json:"enum,omitempty" doc:"closed projection: caller value -> JSON value sent; any other value is refused"`
+	MaxLen   int            `yaml:"max_len,omitempty" json:"max_len,omitempty" doc:"maximum caller value length in bytes; 0 = 4096"`
+}
+
+// Typed HTTP argument kinds.
+const (
+	ToolCommandArgString  = "string"
+	ToolCommandArgInteger = "integer"
+	ToolCommandArgBoolean = "boolean"
+)
+
+// ToolCommandArgMaxLen bounds a caller value whose declaration sets no max_len.
+const ToolCommandArgMaxLen = 4096
+
+// BodyField is the dotted body path the argument is set at.
+func (a ToolCommandHTTPArg) BodyField() string {
+	if a.Field != "" {
+		return a.Field
+	}
+	return a.Name
 }
 
 // ToolCommandStep is one scripted TUI frame. Exactly one field is set.

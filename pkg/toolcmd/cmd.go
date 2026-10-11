@@ -157,7 +157,7 @@ func shellQuote(argv []string) string {
 
 func newRunCmd() *cobra.Command {
 	var (
-		asJSON, dryRun, async                     bool
+		asJSON, dryRun, async, yes                bool
 		dir, model, agent, capabilityName, caller string
 		timeout                                   time.Duration
 	)
@@ -181,7 +181,7 @@ func newRunCmd() *cobra.Command {
 				}
 				rest = args
 			}
-			opts := Options{Dir: dir, Timeout: timeout, Model: model, Agent: agent, Caller: caller, DryRun: dryRun}
+			opts := Options{Dir: dir, Timeout: timeout, Model: model, Agent: agent, Caller: caller, DryRun: dryRun, Yes: yes}
 			if len(rest) > 0 {
 				opts.Argv = rest
 			}
@@ -261,6 +261,7 @@ func newRunCmd() *cobra.Command {
 	f.BoolVar(&asJSON, "json", false, "emit the structured result envelope")
 	f.BoolVar(&dryRun, "dry-run", false, "print the rendered argv (print) or steps (tui) without running")
 	f.BoolVar(&async, "async", false, "start a detached job and print its id")
+	f.BoolVar(&yes, "yes", false, "confirm a command that declares a mutating effect or confirm: true")
 	f.StringVar(&dir, "dir", "", "working directory (default: a fresh temp dir)")
 	f.StringVar(&model, "model", "", "model to bind (TOOL:MODEL)")
 	f.StringVar(&agent, "agent", "", "agent nick to resolve the launch from (default: the tool)")

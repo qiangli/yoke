@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -154,6 +156,183 @@ func (h ToolCommandHTTPAction) Validate(effects []string) error {
 	}
 	if !loopbackHost(u.Hostname()) && !(slices.Contains(effects, atlas.EffNet) && slices.Contains(effects, atlas.EffRemote)) {
 		return fmt.Errorf("http.url %q is not loopback; remote HTTP requires declared effects net and remote for approval policy", h.URL)
+	}
+	return h.validateArgs()
+}
+
+// MutatingEffects are the effect atoms that change state the caller cannot
+// take back by not looking: a command declaring any of them is admitted only
+// with explicit operator confirmation (NeedsConfirmation).
+var MutatingEffects = []string{atlas.EffWrite, atlas.EffDestroy, atlas.EffPersist, atlas.EffPriv, atlas.EffSpend}
+
+// NeedsConfirmation is the ONE admission rule for a tool command, shared by
+// toolcmd's runner and every front door that offers --yes: a command that
+// declares confirm: true or a mutating effect runs only when the operator
+// confirmed it. reason names why, for the refusal message.
+func (c ToolCommand) NeedsConfirmation() (need bool, reason string) {
+	var hit []string
+	for _, e := range c.Effects {
+		if slices.Contains(MutatingEffects, e) {
+			hit = append(hit, e)
+		}
+	}
+	switch {
+	case len(hit) > 0:
+		return true, "declares mutating effect " + strings.Join(hit, ",")
+	case c.Confirm:
+		return true, "declares confirm: true"
+	}
+	return false, ""
+}
+
+var (
+	httpArgName  = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*$`)
+	httpArgField = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+)
+
+func (h ToolCommandHTTPAction) validateArgs() error {
+	if len(h.Args) == 0 {
+		return nil
+	}
+	if bodyHasArgsToken(h.Body) {
+		return fmt.Errorf("http.body uses {args} but http.args is declared; bind each value through args")
+	}
+	names := map[string]bool{}
+	var fields []string
+	for i, a := range h.Args {
+		if !httpArgName.MatchString(a.Name) {
+			return fmt.Errorf("http.args[%d]: name %q must match %s", i, a.Name, httpArgName)
+		}
+		if names[a.Name] {
+			return fmt.Errorf("http.args[%d]: duplicate name %q", i, a.Name)
+		}
+		names[a.Name] = true
+		field := a.BodyField()
+		for _, seg := range strings.Split(field, ".") {
+			if !httpArgField.MatchString(seg) {
+				return fmt.Errorf("http.args %s: field %q must be dotted segments of [A-Za-z0-9_-]", a.Name, field)
+			}
+		}
+		for _, f := range fields {
+			if f == field || strings.HasPrefix(f, field+".") || strings.HasPrefix(field, f+".") {
+				return fmt.Errorf("http.args %s: field %q overlaps field %q", a.Name, field, f)
+			}
+		}
+		fields = append(fields, field)
+		if err := bodyFieldFree(h.Body, field); err != nil {
+			return fmt.Errorf("http.args %s: %v", a.Name, err)
+		}
+		switch a.Type {
+		case "", ToolCommandArgString, ToolCommandArgInteger, ToolCommandArgBoolean:
+		default:
+			return fmt.Errorf("http.args %s: type %q (want string, integer or boolean)", a.Name, a.Type)
+		}
+		if len(a.Enum) > 0 && a.Type != "" {
+			return fmt.Errorf("http.args %s: set type or enum, not both (enum values carry their own JSON type)", a.Name)
+		}
+		for k, v := range a.Enum {
+			if k == "" {
+				return fmt.Errorf("http.args %s: enum has an empty key", a.Name)
+			}
+			switch v.(type) {
+			case string, bool, int, int64, uint64, float64:
+			default:
+				return fmt.Errorf("http.args %s: enum %q maps to %T (want a string, number or boolean)", a.Name, k, v)
+			}
+		}
+		if a.MaxLen < 0 {
+			return fmt.Errorf("http.args %s: max_len %d is negative", a.Name, a.MaxLen)
+		}
+		if a.Default != "" {
+			if a.Required {
+				return fmt.Errorf("http.args %s: required and default are exclusive", a.Name)
+			}
+			if _, err := a.Project(a.Default); err != nil {
+				return fmt.Errorf("http.args %s: default: %v", a.Name, err)
+			}
+		}
+	}
+	return nil
+}
+
+// Project converts one caller value into the JSON value the argument sends:
+// the enum's mapped value, or the value parsed as the declared type. It is
+// the whole of the argument's input language — nothing else is accepted.
+func (a ToolCommandHTTPArg) Project(v string) (any, error) {
+	limit := a.MaxLen
+	if limit == 0 {
+		limit = ToolCommandArgMaxLen
+	}
+	if len(v) > limit {
+		return nil, fmt.Errorf("value is %d bytes (max %d)", len(v), limit)
+	}
+	if len(a.Enum) > 0 {
+		out, ok := a.Enum[v]
+		if !ok {
+			allowed := make([]string, 0, len(a.Enum))
+			for k := range a.Enum {
+				allowed = append(allowed, k)
+			}
+			slices.Sort(allowed)
+			return nil, fmt.Errorf("value %q is not one of %s", v, strings.Join(allowed, "|"))
+		}
+		return out, nil
+	}
+	switch a.Type {
+	case ToolCommandArgInteger:
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("value %q is not an integer", v)
+		}
+		return n, nil
+	case ToolCommandArgBoolean:
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("value %q is not a boolean", v)
+		}
+		return b, nil
+	}
+	return v, nil
+}
+
+func bodyHasArgsToken(v any) bool {
+	switch x := v.(type) {
+	case string:
+		return strings.Contains(x, "{args}")
+	case map[string]any:
+		for _, v := range x {
+			if bodyHasArgsToken(v) {
+				return true
+			}
+		}
+	case []any:
+		for _, v := range x {
+			if bodyHasArgsToken(v) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// bodyFieldFree reports an error when setting the dotted field would
+// overwrite a literal body value or descend through a non-object.
+func bodyFieldFree(body map[string]any, field string) error {
+	cur := body
+	segs := strings.Split(field, ".")
+	for i, seg := range segs {
+		v, ok := cur[seg]
+		if !ok {
+			return nil
+		}
+		if i == len(segs)-1 {
+			return fmt.Errorf("field %q would overwrite a literal body value", field)
+		}
+		next, ok := v.(map[string]any)
+		if !ok {
+			return fmt.Errorf("field %q descends through a non-object body value", field)
+		}
+		cur = next
 	}
 	return nil
 }
