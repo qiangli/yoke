@@ -43,6 +43,7 @@ type Job struct {
 	Command string    `json:"command"`
 	Args    string    `json:"args,omitempty"`
 	Argv    []string  `json:"argv,omitempty"`
+	Yes     bool      `json:"yes,omitempty"` // operator confirmation captured at start (Options.Yes)
 	Dir     string    `json:"dir,omitempty"`
 	Model   string    `json:"model,omitempty"`
 	Agent   string    `json:"agent,omitempty"`
@@ -222,8 +223,13 @@ func StartJob(ref, args string, opts Options) (Job, error) {
 	if err != nil {
 		return Job{}, err
 	}
+	// Refuse an unconfirmed mutating command here, not in the detached runner,
+	// so the caller sees the refusal instead of a failed job.
+	if err := Admit(cmd, opts); err != nil {
+		return Job{}, err
+	}
 	j := Job{
-		ID: newJobID(), Tool: tool.Name, Command: cmd.Name, Args: args, Argv: opts.Argv,
+		ID: newJobID(), Tool: tool.Name, Command: cmd.Name, Args: args, Argv: opts.Argv, Yes: opts.Yes,
 		Dir: opts.Dir, Model: opts.Model, Agent: opts.Agent,
 		Status: JobQueued, Created: time.Now().UTC(),
 	}
@@ -280,7 +286,7 @@ func RunJob(ctx context.Context, id string) error {
 		return err
 	}
 
-	opts := Options{Dir: j.Dir, Model: j.Model, Agent: j.Agent, Argv: j.Argv}
+	opts := Options{Dir: j.Dir, Model: j.Model, Agent: j.Agent, Argv: j.Argv, Yes: j.Yes}
 	if j.Timeout != "" {
 		if d, err := time.ParseDuration(j.Timeout); err == nil {
 			opts.Timeout = d

@@ -525,6 +525,11 @@
     "description": "capability tag for --capability routing"
   },
   {
+    "path": "commands.\u003cindex\u003e.confirm",
+    "type": "bool",
+    "description": "require explicit operator confirmation (--yes) even without a mutating effect; see NeedsConfirmation"
+  },
+  {
     "path": "commands.\u003cindex\u003e.effects",
     "type": "[]string",
     "description": "declared effect atoms for guarded callers"
@@ -543,6 +548,101 @@
     "path": "commands.\u003cindex\u003e.http",
     "type": "object",
     "description": "http only: typed request declaration; JSON is encoded by the runner, never by a shell"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.http.args",
+    "type": "[]object",
+    "description": "typed caller arguments bound into the JSON body, in positional order"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.http.args.\u003cindex\u003e",
+    "type": "object",
+    "description": "list element"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.http.args.\u003cindex\u003e.default",
+    "type": "string",
+    "description": "value used when the caller omits an optional argument; bound like caller input"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.http.args.\u003cindex\u003e.enum",
+    "type": "map[string]interface {}",
+    "description": "closed projection: caller value -\u003e JSON value sent; any other value is refused"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.http.args.\u003cindex\u003e.enum.\u003ckey\u003e",
+    "type": "interface {}",
+    "description": "map value"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.http.args.\u003cindex\u003e.field",
+    "type": "string",
+    "description": "dotted JSON body path the value is set at; empty = name"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.http.args.\u003cindex\u003e.max_len",
+    "type": "int",
+    "description": "maximum caller value length in bytes; 0 = 4096"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.http.args.\u003cindex\u003e.name",
+    "type": "string",
+    "description": "argument name; also accepted as --name VALUE or --name=VALUE"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.http.args.\u003cindex\u003e.required",
+    "type": "bool",
+    "description": "the caller must supply a value"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.http.args.\u003cindex\u003e.type",
+    "type": "string",
+    "description": "string (default), integer or boolean; ignored when enum is set"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.http.args.name=\u003cvalue\u003e",
+    "type": "object",
+    "description": "named list element"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.http.args.name=\u003cvalue\u003e.default",
+    "type": "string",
+    "description": "value used when the caller omits an optional argument; bound like caller input"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.http.args.name=\u003cvalue\u003e.enum",
+    "type": "map[string]interface {}",
+    "description": "closed projection: caller value -\u003e JSON value sent; any other value is refused"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.http.args.name=\u003cvalue\u003e.enum.\u003ckey\u003e",
+    "type": "interface {}",
+    "description": "map value"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.http.args.name=\u003cvalue\u003e.field",
+    "type": "string",
+    "description": "dotted JSON body path the value is set at; empty = name"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.http.args.name=\u003cvalue\u003e.max_len",
+    "type": "int",
+    "description": "maximum caller value length in bytes; 0 = 4096"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.http.args.name=\u003cvalue\u003e.name",
+    "type": "string",
+    "description": "argument name; also accepted as --name VALUE or --name=VALUE"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.http.args.name=\u003cvalue\u003e.required",
+    "type": "bool",
+    "description": "the caller must supply a value"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.http.args.name=\u003cvalue\u003e.type",
+    "type": "string",
+    "description": "string (default), integer or boolean; ignored when enum is set"
   },
   {
     "path": "commands.\u003cindex\u003e.http.body",
@@ -645,6 +745,11 @@
     "description": "capability tag for --capability routing"
   },
   {
+    "path": "commands.name=\u003cvalue\u003e.confirm",
+    "type": "bool",
+    "description": "require explicit operator confirmation (--yes) even without a mutating effect; see NeedsConfirmation"
+  },
+  {
     "path": "commands.name=\u003cvalue\u003e.effects",
     "type": "[]string",
     "description": "declared effect atoms for guarded callers"
@@ -663,6 +768,101 @@
     "path": "commands.name=\u003cvalue\u003e.http",
     "type": "object",
     "description": "http only: typed request declaration; JSON is encoded by the runner, never by a shell"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.http.args",
+    "type": "[]object",
+    "description": "typed caller arguments bound into the JSON body, in positional order"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.http.args.\u003cindex\u003e",
+    "type": "object",
+    "description": "list element"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.http.args.\u003cindex\u003e.default",
+    "type": "string",
+    "description": "value used when the caller omits an optional argument; bound like caller input"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.http.args.\u003cindex\u003e.enum",
+    "type": "map[string]interface {}",
+    "description": "closed projection: caller value -\u003e JSON value sent; any other value is refused"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.http.args.\u003cindex\u003e.enum.\u003ckey\u003e",
+    "type": "interface {}",
+    "description": "map value"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.http.args.\u003cindex\u003e.field",
+    "type": "string",
+    "description": "dotted JSON body path the value is set at; empty = name"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.http.args.\u003cindex\u003e.max_len",
+    "type": "int",
+    "description": "maximum caller value length in bytes; 0 = 4096"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.http.args.\u003cindex\u003e.name",
+    "type": "string",
+    "description": "argument name; also accepted as --name VALUE or --name=VALUE"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.http.args.\u003cindex\u003e.required",
+    "type": "bool",
+    "description": "the caller must supply a value"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.http.args.\u003cindex\u003e.type",
+    "type": "string",
+    "description": "string (default), integer or boolean; ignored when enum is set"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.http.args.name=\u003cvalue\u003e",
+    "type": "object",
+    "description": "named list element"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.http.args.name=\u003cvalue\u003e.default",
+    "type": "string",
+    "description": "value used when the caller omits an optional argument; bound like caller input"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.http.args.name=\u003cvalue\u003e.enum",
+    "type": "map[string]interface {}",
+    "description": "closed projection: caller value -\u003e JSON value sent; any other value is refused"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.http.args.name=\u003cvalue\u003e.enum.\u003ckey\u003e",
+    "type": "interface {}",
+    "description": "map value"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.http.args.name=\u003cvalue\u003e.field",
+    "type": "string",
+    "description": "dotted JSON body path the value is set at; empty = name"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.http.args.name=\u003cvalue\u003e.max_len",
+    "type": "int",
+    "description": "maximum caller value length in bytes; 0 = 4096"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.http.args.name=\u003cvalue\u003e.name",
+    "type": "string",
+    "description": "argument name; also accepted as --name VALUE or --name=VALUE"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.http.args.name=\u003cvalue\u003e.required",
+    "type": "bool",
+    "description": "the caller must supply a value"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.http.args.name=\u003cvalue\u003e.type",
+    "type": "string",
+    "description": "string (default), integer or boolean; ignored when enum is set"
   },
   {
     "path": "commands.name=\u003cvalue\u003e.http.body",

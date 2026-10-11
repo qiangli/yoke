@@ -60,8 +60,12 @@ type Options struct {
 	// Argv is the caller's args as an argv (e.g. the words after `--` on the
 	// CLI). A print command's `exec` template expands {args} to these tokens
 	// verbatim; when nil, the args string is split with shell quoting rules.
-	// Slash lines always use the args string.
+	// Slash lines always use the args string. An http command with declared
+	// http.args binds these words (or the split args string when nil).
 	Argv []string
+	// Yes is the operator's explicit confirmation. A command whose
+	// declaration NeedsConfirmation is refused without it (dry-run excepted).
+	Yes bool
 }
 
 // Result is the structured envelope of one command run.
@@ -128,6 +132,12 @@ func Run(ctx context.Context, tool fleet.Tool, cmd fleet.ToolCommand, args strin
 		res.Outcome, res.Error = OutcomeError, err.Error()
 		return res, err
 	}
+	if err := Admit(cmd, opts); err != nil {
+		res := resultFor(tool, cmd)
+		res.Outcome, res.Error = OutcomeError, err.Error()
+		res.Refusal, res.Hint = RefusalConfirm, hintConfirm
+		return res, err
+	}
 	var res Result
 	var err error
 	switch cmd.Mode {
@@ -162,7 +172,23 @@ const (
 	// RefusalAgentLive: the agent identity already has a live session; an
 	// agent is a singleton, so a second one is refused, not queued.
 	RefusalAgentLive = "agent-live"
+	// RefusalConfirm: the command NeedsConfirmation (a mutating effect or
+	// confirm: true) and the operator did not pass --yes (Options.Yes).
+	RefusalConfirm = "confirm"
 )
+
+// ErrNeedsConfirmation is wrapped by the RefusalError Admit returns.
+var ErrNeedsConfirmation = errors.New("command needs explicit confirmation")
+
+// Admit applies fleet's shared admission rule (ToolCommand.NeedsConfirmation)
+// to one run. A dry-run touches nothing and is always admitted.
+func Admit(cmd fleet.ToolCommand, opts Options) error {
+	need, why := cmd.NeedsConfirmation()
+	if !need || opts.Yes || opts.DryRun {
+		return nil
+	}
+	return &RefusalError{Kind: RefusalConfirm, Hint: hintConfirm, Err: fmt.Errorf("%w: %s %s", ErrNeedsConfirmation, cmd.Name, why)}
+}
 
 // RefusalError is a launch a guard refused, with the ways forward.
 type RefusalError struct {
@@ -180,6 +206,7 @@ const (
 	hintLaunchGuard = "ways out: run it contained (bashy contain -- bashy tool cmd run ..., or a Bash# @contain fence), " +
 		"or the operator explicitly accepts the risk by setting BASHY_ALLOW_UNSAFE_AGENT_LAUNCH=1 in the environment. " +
 		"bashy tool cmd has no flag that bypasses the guard."
+	hintConfirm   = "ways out: rerun with --yes to confirm the change, or --dry-run to check the arguments without running it."
 	hintAgentLive = "ways out: pass --agent NAME with a clone identity (bashy agent clone AGENT), " +
 		"or attach to the live session (bashy chat --agent AGENT --attach), or wait for it to end."
 )
