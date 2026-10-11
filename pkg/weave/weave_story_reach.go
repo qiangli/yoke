@@ -52,6 +52,7 @@ import (
 
 	"github.com/qiangli/yoke/pkg/bus"
 	"github.com/qiangli/yoke/pkg/room"
+	todopkg "github.com/qiangli/yoke/pkg/todo"
 
 	"github.com/qiangli/yoke/pkg/fleet"
 )
@@ -169,6 +170,41 @@ func validateSprintClaimant(name string) error {
 // message with a sender waiting on it is the actual failure — and it is
 // observable without a daemon, because the bus already records ReadAt.
 func sprintOwnerUnanswered(name string) (count int, oldest time.Duration) {
+	return sprintOwnerUnansweredInScope(name, nil)
+}
+
+// sprintOwnerUnansweredForSprint applies the shared bus relevance rule to a
+// sprint's unread mail. The start boundary prevents older mail from being
+// attributed to a sprint that did not yet exist as active work.
+func sprintOwnerUnansweredForSprint(name string, s *weaveStory) (count int, oldest time.Duration) {
+	if s == nil {
+		return 0, 0
+	}
+	scope := bus.SprintScope{ID: s.ID, UUID: s.UUID}
+	if s.Contact != nil {
+		scope.RoomRef, scope.ContactTopic = s.Contact.Ref, s.Contact.Topic
+	}
+	for _, box := range s.Boxes {
+		if !box.StartedAt.IsZero() && (scope.Since.IsZero() || box.StartedAt.Before(scope.Since)) {
+			scope.Since = box.StartedAt
+		}
+	}
+	for _, root := range sprintStoryRoots(s) {
+		stories, err := todopkg.List(todopkg.RepoStore(root), "")
+		if err != nil {
+			continue
+		}
+		for _, story := range stories {
+			if storyBelongsToSprint(story, s) {
+				scope.StoryIDs = append(scope.StoryIDs, story.ID)
+				scope.StoryNumbers = append(scope.StoryNumbers, story.Seq)
+			}
+		}
+	}
+	return sprintOwnerUnansweredInScope(name, &scope)
+}
+
+func sprintOwnerUnansweredInScope(name string, scope *bus.SprintScope) (count int, oldest time.Duration) {
 	n := strings.TrimSpace(name)
 	if n == "" {
 		return 0, 0
@@ -183,6 +219,9 @@ func sprintOwnerUnanswered(name string) (count int, oldest time.Duration) {
 	now := time.Now().UTC()
 	for _, it := range items {
 		if strings.TrimSpace(it.ReadAt) != "" {
+			continue
+		}
+		if scope != nil && !scope.RelevantPending(it) {
 			continue
 		}
 		count++
@@ -308,7 +347,7 @@ func sprintCheckReachability(s *weaveStory) sprintReachability {
 		// whether somebody COULD answer; this is whether anybody DID. A sender
 		// blocked on a question nobody read waits forever, and until now
 		// nothing on any surface said so.
-		if n, oldest := sprintOwnerUnanswered(r.Owner); n > 0 {
+		if n, oldest := sprintOwnerUnansweredForSprint(r.Owner, s); n > 0 {
 			r.Unanswered, r.OldestUnanswered = n, oldest.Round(time.Minute).String()
 			if oldest > sprintUnansweredAge {
 				r.Problems = append(r.Problems, fmt.Sprintf(
