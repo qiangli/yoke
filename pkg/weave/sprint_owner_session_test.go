@@ -511,3 +511,173 @@ func TestSprintAbortRefusesToParkWhileManagedManagerStillRuns(t *testing.T) {
 		t.Fatalf("failed teardown parked sprint: %+v", s)
 	}
 }
+
+func TestSprintSeatChangeFromInsideOwnerSessionRefusedAndSessionNotStopped(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		verb      string
+		force     bool
+		setInside func(t *testing.T, token string)
+	}{
+		{
+			name: "take with lease token",
+			verb: "take",
+			setInside: func(t *testing.T, token string) {
+				t.Setenv("BASHY_SPRINT_LEASE_TOKEN", token)
+			},
+		},
+		{
+			name:  "take with force and lease token",
+			verb:  "take",
+			force: true,
+			setInside: func(t *testing.T, token string) {
+				t.Setenv("BASHY_SPRINT_LEASE_TOKEN", token)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			t.Setenv("BASHY_SPRINT_DIR", t.TempDir())
+			seedAgent(t, "current-manager")
+			seedAgent(t, "other-manager")
+
+			if out, code := runSprint(t, "add", "inside seat change test"); code != 0 {
+				t.Fatal(out)
+			}
+			if out, code := runSprint(t, "start", "1", "--owner", "current-manager", "--for", "1h"); code != 0 {
+				t.Fatal(out)
+			}
+
+			token := readSprintLeaseToken(1, "current-manager")
+			if token == "" {
+				t.Fatal("expected lease token to be saved for current-manager")
+			}
+
+			var stopped []SprintOwnerRequest
+			withSprintOwnerStopper(t, func(_ context.Context, req SprintOwnerRequest) error {
+				stopped = append(stopped, req)
+				return nil
+			})
+
+			tc.setInside(t, token)
+
+			args := []string{tc.verb, "1", "--owner", "other-manager"}
+			if tc.force {
+				args = append(args, "--force")
+			}
+			if tc.verb == "start" {
+				args = append(args, "--for", "1h")
+			}
+			out, code := runSprint(t, args...)
+			if code == 0 {
+				t.Fatalf("%s from inside owner session succeeded unexpectedly; output: %s", tc.verb, out)
+			}
+			if !strings.Contains(out, "seat change from inside the owner's session would stop itself") {
+				t.Fatalf("%s output missing self-stop explanation: %s", tc.verb, out)
+			}
+			if !strings.Contains(out, "identity should be chosen at sprint start") {
+				t.Fatalf("%s output missing sprint start identity advice: %s", tc.verb, out)
+			}
+			if len(stopped) != 0 {
+				t.Fatalf("%s from inside owner session called stop: %+v", tc.verb, stopped)
+			}
+
+			dir, _ := sprintStoreDir()
+			q, err := readWeaveQueue(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := findWeaveStory(q, 1)
+			if s.Owner != "current-manager" {
+				t.Fatalf("owner changed to %q despite refusal", s.Owner)
+			}
+		})
+	}
+}
+
+func TestSprintSeatChangeFromOutsideOwnerSessionAllowed(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("BASHY_SPRINT_DIR", t.TempDir())
+	t.Setenv("BASHY_SPRINT_LEASE_TOKEN", "")
+	t.Setenv("BASHY_FOREMAN_SESSION", "")
+	t.Setenv("FOREMAN_SESSION_ID", "")
+	seedAgent(t, "current-manager")
+	seedAgent(t, "other-manager")
+
+	if out, code := runSprint(t, "add", "outside seat change test"); code != 0 {
+		t.Fatal(out)
+	}
+	if out, code := runSprint(t, "start", "1", "--owner", "current-manager", "--for", "1h"); code != 0 {
+		t.Fatal(out)
+	}
+
+	var stopped []SprintOwnerRequest
+	withSprintOwnerStopper(t, func(_ context.Context, req SprintOwnerRequest) error {
+		stopped = append(stopped, req)
+		return nil
+	})
+
+	out, code := runSprint(t, "take", "1", "--owner", "other-manager")
+	if code != 0 {
+		t.Fatalf("take from outside failed: exit=%d output=%s", code, out)
+	}
+	if len(stopped) != 1 || stopped[0].Owner != "current-manager" {
+		t.Fatalf("expected current-manager to be stopped, got: %+v", stopped)
+	}
+
+	dir, _ := sprintStoreDir()
+	q, err := readWeaveQueue(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := findWeaveStory(q, 1)
+	if s.Owner != "other-manager" || s.Lease == nil || s.Lease.Holder != "other-manager" {
+		t.Fatalf("owner not updated to other-manager: %+v", s)
+	}
+}
+
+func TestSprintSeatChangeWithForeignLeaseTokenAllowedFromOutside(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("BASHY_SPRINT_DIR", t.TempDir())
+	t.Setenv("BASHY_SPRINT_LEASE_TOKEN", "foreign-token-from-another-sprint")
+	t.Setenv("BASHY_FOREMAN_SESSION", "sprint-999-manager")
+	seedAgent(t, "current-manager")
+	seedAgent(t, "other-manager")
+
+	if out, code := runSprint(t, "add", "foreign token outside test"); code != 0 {
+		t.Fatal(out)
+	}
+	if out, code := runSprint(t, "start", "1", "--owner", "current-manager", "--for", "1h"); code != 0 {
+		t.Fatal(out)
+	}
+
+	var stopped []SprintOwnerRequest
+	withSprintOwnerStopper(t, func(_ context.Context, req SprintOwnerRequest) error {
+		stopped = append(stopped, req)
+		return nil
+	})
+
+	out, code := runSprint(t, "take", "1", "--owner", "other-manager")
+	if code != 0 {
+		t.Fatalf("take from outside with foreign token failed: exit=%d output=%s", code, out)
+	}
+	if len(stopped) != 1 || stopped[0].Owner != "current-manager" {
+		t.Fatalf("expected current-manager to be stopped, got: %+v", stopped)
+	}
+
+	dir, _ := sprintStoreDir()
+	q, err := readWeaveQueue(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := findWeaveStory(q, 1)
+	if s.Owner != "other-manager" || s.Lease == nil || s.Lease.Holder != "other-manager" {
+		t.Fatalf("owner not updated to other-manager: %+v", s)
+	}
+}

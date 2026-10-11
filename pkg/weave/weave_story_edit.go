@@ -145,6 +145,9 @@ conductor lease; use sprint take.`,
 					return fmt.Errorf("sprint #%d is active — change its sprint manager with `sprint take %d --owner %s`", id, id, owner)
 				}
 				if expectedOwner != "" && !strings.EqualFold(expectedOwner, owner) {
+					if isCurrentOwnerManagedSession(id, before, expectedOwner) {
+						return sprintOwnerSelfStopError(id, expectedOwner, owner)
+					}
 					cwd, _ := os.Getwd()
 					if err := retireSprintOwnerSession(cmd.Context(), id, expectedOwner, cwd); err != nil {
 						return fmt.Errorf("cannot transfer sprint #%d manager from %s to %s: %w", id, expectedOwner, owner, err)

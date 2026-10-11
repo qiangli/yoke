@@ -245,6 +245,9 @@ func newSprintStartCmd() *cobra.Command {
 				}
 				expectedOwner := strings.TrimSpace(before.Owner)
 				if expectedOwner != "" && !strings.EqualFold(expectedOwner, who) {
+					if isCurrentOwnerManagedSession(id, before, expectedOwner) {
+						return sprintOwnerSelfStopError(id, expectedOwner, who)
+					}
 					if err := retireSprintOwnerSession(cmd.Context(), id, expectedOwner, cwd); err != nil {
 						return fmt.Errorf("cannot transfer sprint #%d manager from %s to %s: %w", id, expectedOwner, who, err)
 					}

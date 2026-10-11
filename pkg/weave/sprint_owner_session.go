@@ -2,7 +2,9 @@ package weave
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -131,4 +133,40 @@ func retireSprintOwnerSession(ctx context.Context, id int64, owner, cwd string) 
 		return nil
 	}
 	return StopSprintOwner(ctx, SprintOwnerRequest{Sprint: id, Owner: owner, Cwd: cwd})
+}
+
+// isCurrentOwnerManagedSession detects whether the calling process is running
+// inside the current owner's managed session for sprint id.
+//
+// A managed owner session carries the lease token in BASHY_SPRINT_LEASE_TOKEN
+// (sprint_owner_session.go starts it with req.Env); a caller holding the token
+// that seals the current lease, or the owner's saved token, is that session.
+func isCurrentOwnerManagedSession(id int64, before *weaveStory, owner string) bool {
+	owner = strings.TrimSpace(owner)
+	if owner == "" {
+		return false
+	}
+
+	if raw := strings.TrimSpace(os.Getenv(sprintLeaseTokenEnv)); raw != "" {
+		rawHash := sprintLeaseTokenHash(raw)
+		if before != nil && before.Lease != nil && before.Lease.TokenHash != "" {
+			holder := strings.TrimSpace(before.Lease.Holder)
+			if holder == "" || strings.EqualFold(holder, owner) {
+				if subtle.ConstantTimeCompare([]byte(rawHash), []byte(before.Lease.TokenHash)) == 1 {
+					return true
+				}
+			}
+		}
+		if saved := readSprintLeaseToken(id, owner); saved != "" {
+			if subtle.ConstantTimeCompare([]byte(raw), []byte(saved)) == 1 {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func sprintOwnerSelfStopError(id int64, currentOwner, newOwner string) error {
+	return fmt.Errorf("cannot transfer sprint #%d manager from %s to %s: seat change from inside the owner's session would stop itself; identity should be chosen at sprint start", id, currentOwner, newOwner)
 }
