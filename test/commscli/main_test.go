@@ -32,10 +32,13 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/qiangli/yoke/pkg/agentcmd"
+	"github.com/qiangli/yoke/pkg/ask"
 	"github.com/qiangli/yoke/pkg/bus"
 	"github.com/qiangli/yoke/pkg/fleet"
+	"github.com/qiangli/yoke/pkg/meet"
 	"github.com/qiangli/yoke/pkg/principal"
 	"github.com/qiangli/yoke/pkg/weave"
+	"github.com/qiangli/yoke/pkg/webconsole"
 )
 
 func TestMain(m *testing.M) {
@@ -84,6 +87,12 @@ func runAuditTool() {
 		bus.NewInboxCmd(),
 		bus.NewNotifyCmd(),
 		weave.NewWeaveCmd(),
+		// The messenger front door and the two surfaces it hands off to: the
+		// app-pair store that admits a sender (linking webconsole is what
+		// installs it into meet) and the shared approval queue.
+		meet.NewMeetCmd(),
+		webconsole.NewAppsCmd(),
+		ask.NewApproveCmd(),
 	)
 	err := root.Execute()
 	if err == nil {

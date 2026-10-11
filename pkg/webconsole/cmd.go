@@ -421,7 +421,7 @@ func runPairGatedListenerWithAddr(ctx context.Context, out io.Writer, srv *http.
 				continue
 			}
 			now := time.Now()
-			devices := len(st.liveDevices(now))
+			devices := st.browserDevices(now)
 			pending := st.openTickets(now)
 			switch {
 			case devices > 0:

@@ -140,10 +140,15 @@ type ticket struct {
 	Expires  time.Time  `json:"expires"`
 	Redeemed *time.Time `json:"redeemed,omitempty"`
 	DeviceID string     `json:"device_id,omitempty"`
+	// Peer marks a ticket a messenger sender asked for through `bashy meet
+	// dm` rather than one the operator minted for a browser. See
+	// pair_peer.go; Denied closes such a ticket on the operator's refusal.
+	Peer   *peer      `json:"peer,omitempty"`
+	Denied *time.Time `json:"denied,omitempty"`
 }
 
 func (t ticket) open(now time.Time) bool {
-	return t.Redeemed == nil && now.Before(t.Expires)
+	return t.Redeemed == nil && t.Denied == nil && now.Before(t.Expires)
 }
 
 // device is a redeemed pairing: one phone, one scope, one deadline.
@@ -158,6 +163,10 @@ type device struct {
 	UserAgent string    `json:"user_agent,omitempty"`
 	Revoked   bool      `json:"revoked,omitempty"`
 	RevokedAt time.Time `json:"revoked_at,omitempty"`
+	// Peer binds the device to one messenger identity. Such a device never
+	// holds a browser session: the gate refuses it (deviceAdmits) and its
+	// scope is drawn from peerScopes, not from the panel names.
+	Peer *peer `json:"peer,omitempty"`
 }
 
 // pairStore is the file-backed pairing state, safe for one process. Two
@@ -350,12 +359,27 @@ func (st *pairState) deviceLive(d device, now time.Time) bool {
 	return st.Grant != nil && st.Grant.ID == d.Grant && st.Grant.live(now)
 }
 
+// browserDevices counts the live devices that reach the console over the LAN.
+// A messenger peer never dials the console, so it must not hold a LAN
+// listener open.
+func (st *pairState) browserDevices(now time.Time) int {
+	n := 0
+	for _, d := range st.liveDevices(now) {
+		if d.Peer == nil {
+			n++
+		}
+	}
+	return n
+}
+
 // openTickets counts the pairings still in flight — a LAN listener opened for
-// pairing must stay up long enough for an outstanding QR to be scanned.
+// pairing must stay up long enough for an outstanding QR to be scanned. A
+// messenger peer's code is approved on this host, not scanned, so it does not
+// count.
 func (st *pairState) openTickets(now time.Time) int {
 	n := 0
 	for _, t := range st.Tickets {
-		if t.open(now) {
+		if t.open(now) && t.Peer == nil {
 			n++
 		}
 	}
@@ -454,6 +478,11 @@ func (s *pairStore) redeem(secret, name, userAgent string) (device, error) {
 			t := &st.Tickets[i]
 			if t.Hash != want {
 				continue
+			}
+			if t.Peer != nil {
+				// A messenger sender's code is the operator's to approve
+				// (approvePeer), never a browser's to redeem.
+				return errNoTicket
 			}
 			if t.Redeemed != nil {
 				return errTicketUsed

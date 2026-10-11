@@ -191,7 +191,7 @@ func (s *server) deviceAdmits(w http.ResponseWriter, r *http.Request, deviceID s
 		return false
 	}
 	d, live := st.findDevice(deviceID, time.Now())
-	if !live {
+	if !live || d.Peer != nil {
 		s.clearSession(w, r)
 		http.Error(w, "this device pairing has ended (revoked or expired); scan a fresh code from `bashy app pair`", http.StatusForbidden)
 		return false

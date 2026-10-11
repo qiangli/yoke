@@ -1857,25 +1857,35 @@ func newDMCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "dm <agent>",
 		Short: "open or reuse a direct conversation using derived peer presence, or relay an external channel message with --channel/--sender",
+		Long: "With --channel/--sender, dm is the external messenger front door: `dm [AGENT] --channel C --sender S [--thread T] [TEXT...]`\n" +
+			"reads TEXT from argv or one JSON object ({\"text\":...,\"thread\":...}) on stdin and prints the reply on stdout.\n" +
+			"An empty AGENT (\"\") routes to the sender's fleet binding. The sender must hold a live app-pair device:\n" +
+			"an unknown sender gets a single-use code for `bashy app pair approve CODE --allow ask|control|approve`.\n" +
+			"/approve ID and /deny ID settle the shared approval queue (scope approve); /meet ROOM TEXT posts to a room (scope control).\n" +
+			"--revoke ends the sender's pairing.",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if sender != "" {
-				return cobra.MinimumNArgs(1)(cmd, args)
+				return nil
 			}
 			return cobra.ExactArgs(1)(cmd, args)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if sender != "" {
 				if revoke {
-					return runDMFrontDoorRevoke(cmd, args[0], channel, sender)
+					return runDMFrontDoorRevoke(cmd, channel, sender)
 				}
-				text, stdinThread, err := readDMFrontDoorText(cmd.InOrStdin(), args[1:])
+				agent := ""
+				if len(args) > 0 {
+					agent, args = args[0], args[1:]
+				}
+				text, stdinThread, err := readDMFrontDoorText(cmd.InOrStdin(), args)
 				if err != nil {
 					return err
 				}
 				if thread == "" {
 					thread = stdinThread
 				}
-				return runDMFrontDoor(cmd, args[0], channel, sender, thread, text)
+				return runDMFrontDoor(cmd, agent, channel, sender, thread, text)
 			}
 			if revoke {
 				return fmt.Errorf("meet: dm --revoke needs --channel and --sender")

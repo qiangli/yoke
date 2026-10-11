@@ -34,7 +34,6 @@ const (
 	SourceConfirm = "confirm" // a yielded @confirm (exit 6, input_required)
 	SourceACP     = "acp"     // an ACP session/request_permission
 	SourceChat    = "chat"    // a `chat grant` on a live session
-	SourceMeetDM  = "meet-dm" // an unrecognised sender on `bashy meet dm --channel --sender`
 )
 
 // How a Decision was reached.
