@@ -3,17 +3,19 @@ id: abc4ce65c606
 kind: feature
 title: 'S10 ACP everywhere: claude/codex/gemini acp_exec, updates as events, bashy acp with permission relay'
 seq: 1872
-status: assigned
+status: done
 priority: p2
 labels:
     - yoke
     - bashy
 created: 2026-10-11T03:52:03.478684Z
-weave: 126
-assignee: agy-gemini3.8-flash
+weave: 136
+assignee: claude-sonnet5.5
 sprint: 418
 sprint_id: 9891800f-8da5-5338-92bc-1d75755ca548
 sprint_title: 'Agent ecosystem synergy: agentic tools compose like a|b|c through bashy extension points'
+closed: 2026-10-11T22:47:36.811512Z
+closed_by: claude-opus5.5
 ---
 
 Add acp_exec to yoke/pkg/fleet/baseline/tools claude, codex and gemini via pinned ACP adapters (download records, sha256); map tool_call, plan, thought and usage updates into S3 entry events instead of dropping them (yoke/pkg/chat/acp.go); bashy acp = herald acp, relaying request_permission from S4; publish an ACP-registry manifest. Acceptance: Zed and a Codync bot whose command is bashy acp each complete a prompt; a permission request reaches bashy approve. Refs docs/herald-agent-interop-design.md.
@@ -105,4 +107,6 @@ Conductor continuation 2026-10-11 20:03 UTC: user orders a bounded S10 qualified
 
 Run `yoke#120` finished/merged its source slice (`f30d2b7`) and was unlinked before this Zed continuation. The real Codync allow/deny/once acceptance remains preserved. Original S10 was reopened because an attended Zed permission roundtrip is still unproved; do not redo the merged ACP source without a concrete defect.
 
-Manager claude-opus5.5 2026-10-11 21:48 UTC: STILL OPEN, waiting on one attended operator prompt. Zed 1.23.2 is installed on Dragon (Homebrew cask) with `~/.config/zed/settings.json` agent server `bashy-s418` → `~/.bashy/s418-zed/bashy` (Bashy b51cf904, sha256 b0f0ea84…) `herald acp --agent codex-gpt6-luna --read-only --timeout 180s`; the ACP `initialize` smoke returned protocolVersion 1. Action: open the Zed Agent panel, pick `bashy-s418`, send "Reply with the single word OK"; then read `~/Library/Logs/Zed/Zed.log` and accept if the turn completed. Codync prompt and the approve relay already passed. AGY run #126 failed while looking for the then-absent Zed; not reassigned.
+Manager claude-opus5.5 2026-10-11 21:48 UTC: STILL OPEN, waiting on one attended operator prompt. Zed 1.23.2 is installed on <door-host> (Homebrew cask) with `~/.config/zed/settings.json` agent server `bashy-s418` → `~/.bashy/s418-zed/bashy` (Bashy b51cf904, sha256 b0f0ea84…) `herald acp --agent codex-gpt6-luna --read-only --timeout 180s`; the ACP `initialize` smoke returned protocolVersion 1. Action: open the Zed Agent panel, pick `bashy-s418`, send "Reply with the single word OK"; then read `~/Library/Logs/Zed/Zed.log` and accept if the turn completed. Codync prompt and the approve relay already passed. AGY run #126 failed while looking for the then-absent Zed; not reassigned.
+
+Manager claude-opus5.5 continuation 2026-10-11 22:27 UTC (cutoff 2026-10-12 00:00 UTC; hard stop 23:25 UTC). Operator: CLI only, no GUI. Prior-doc audit: herald-agent-interop-design.md:163-167 says the Zed CLI only opens files. Bashy #41 (merged as bashy examples/dag/zed, edits in `79281e32`) confirmed that installed Zed has no headless prompt and that `zed://agent?prompt=` never auto-submits (thread_view.rs:846-854). The genuine headless route is Zed's OWN `agent_servers::e2e_tests` harness, the same `AgentServer::connect` → `AcpConnection` subprocess client the editor uses. The manager built it in <windows-test-host> WSL at `/root/s418-zed/zed` (upstream 93d745668805, toolchain 1.98.1) with a 25-line LOCAL patch: test `custom::tests::external_command_basic` runs `e2e_tests::test_basic` against a `CustomAgentServer` whose argv is `$ZED_E2E_AGENT_COMMAND`. `cargo test -j6 -p agent_servers --features e2e,test-support --lib --no-run` has already compiled. Task: (1) Reproduce the S12 #133/#135 door setup in WSL with a NEW throwaway paired outpost `s418-s10-wsl` (<door-host> `outpost mesh service add llm 127.0.0.1:24556`, minted invite only in a 0600 file, mesh dial, `llm env --via mesh` 0600, `BASHY_ALLOW_AGENT_SECRETS=1`). (2) Copy `/tmp/s418-s9-remote/bashy-linux` (sha256 446e6dfd…, carries the ACP + door fixes) into WSL. (3) In ONE session, run: `ZED_E2E_AGENT_COMMAND="<that bashy> acp --agent claude-fable5.1 --read-only --timeout 180s" cargo test -j6 -p agent_servers --features e2e,test-support --lib external_command_basic -- --nocapture`, with the door env exported. PASS means Zed's AcpThread recorded a UserMessage then an AssistantMessage from bashy acp. If time permits, also instantiate `e2e_tests::test_tool_call_with_permission` the same way (permission request reaching bashy approve). (4) Save raw output and `git diff` of the local patch under /tmp/s418-s10-zed/ on <door-host>, plus a sanitized REPORT.md that discloses the local test-only patch. Teardown: remove the <door-host> llm exposure, stop and unpair s418-s10-wsl, delete env files. No GUI, no osascript, no fake ACP client.
