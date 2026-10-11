@@ -180,6 +180,33 @@ func sprintOwnerUnansweredForSprint(name string, s *weaveStory) (count int, olde
 	if s == nil {
 		return 0, 0
 	}
+	scope := sprintScope(s)
+	return sprintOwnerUnansweredInScope(name, &scope)
+}
+
+// ResolveSprintScope builds the same scope used by sprint reachability from
+// the persisted sprint card. Readers can select records without copying the
+// card's room, start time, or story lookup rules.
+func ResolveSprintScope(id int64) (bus.SprintScope, error) {
+	if id <= 0 {
+		return bus.SprintScope{}, fmt.Errorf("sprint number must be positive")
+	}
+	dir, err := sprintStoreDir()
+	if err != nil {
+		return bus.SprintScope{}, err
+	}
+	q, err := loadWeaveQueue(dir)
+	if err != nil {
+		return bus.SprintScope{}, err
+	}
+	s := findWeaveStory(q, id)
+	if s == nil {
+		return bus.SprintScope{}, fmt.Errorf("sprint #%d not found", id)
+	}
+	return sprintScope(s), nil
+}
+
+func sprintScope(s *weaveStory) bus.SprintScope {
 	scope := bus.SprintScope{ID: s.ID, UUID: s.UUID}
 	if s.Contact != nil {
 		scope.RoomRef, scope.ContactTopic = s.Contact.Ref, s.Contact.Topic
@@ -201,7 +228,7 @@ func sprintOwnerUnansweredForSprint(name string, s *weaveStory) (count int, olde
 			}
 		}
 	}
-	return sprintOwnerUnansweredInScope(name, &scope)
+	return scope
 }
 
 func sprintOwnerUnansweredInScope(name string, scope *bus.SprintScope) (count int, oldest time.Duration) {

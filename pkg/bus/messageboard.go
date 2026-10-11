@@ -56,11 +56,15 @@ import (
 //
 // Bare `bashy mb` READS, because reading is what an agent does at the start of
 // every turn and the common case should cost the fewest words.
-func NewMessageBoardCmd() *cobra.Command {
+func NewMessageBoardCmd() *cobra.Command { return NewMessageBoardCmdWithSprintResolver(nil) }
+
+// NewMessageBoardCmdWithSprintResolver enables the host's sprint card lookup.
+func NewMessageBoardCmdWithSprintResolver(scopeResolver func(int64) (SprintScope, error)) *cobra.Command {
 	var jsonOut, peek, history, seenBy bool
 	var as string
 	var limit int
 	var wait time.Duration
+	var sprint int64
 	cmd := &cobra.Command{
 		Use:     "mb",
 		Aliases: []string{"messages"},
@@ -98,11 +102,25 @@ through one cursor-safe view.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			var scope *SprintScope
+			if sprint != 0 {
+				if sprint < 0 || scopeResolver == nil {
+					return fmt.Errorf("mb: --sprint requires a positive sprint number and a scope resolver")
+				}
+				s, err := scopeResolver(sprint)
+				if err != nil {
+					return err
+				}
+				scope = &s
+			}
 			if wait < 0 {
 				return fmt.Errorf("mb: --wait must not be negative")
 			}
 			if wait > 0 && history {
 				return fmt.Errorf("mb: --wait cannot be combined with --history")
+			}
+			if wait > 0 && scope != nil {
+				return fmt.Errorf("mb: --wait cannot be combined with --sprint")
 			}
 			if wait > 0 {
 				who, err := BoardIdentity(as)
@@ -113,7 +131,7 @@ through one cursor-safe view.`,
 					return err
 				}
 			}
-			return readBoard(cmd, boardRead{as: as, limit: limit, peek: peek, history: history, jsonOut: jsonOut, seenBy: seenBy})
+			return readBoard(cmd, boardRead{as: as, limit: limit, peek: peek || scope != nil, history: history, jsonOut: jsonOut, seenBy: seenBy, scope: scope})
 		},
 	}
 	f := cmd.Flags()
@@ -125,6 +143,7 @@ through one cursor-safe view.`,
 	f.IntVarP(&limit, "limit", "n", DefaultBoardLimit,
 		"cap posts NOT addressed to you by name (0 = no cap); directed posts and declared concerns are never capped")
 	f.DurationVar(&wait, "wait", 0, "wait up to this duration for a new relevant post")
+	f.Int64Var(&sprint, "sprint", 0, "show only posts about this sprint without advancing the board cursor")
 	cmd.AddCommand(newMBSendCmd(), newMBPostCmd(), newMBShowCmd())
 	cmd.CompletionOptions.DisableDefaultCmd = true
 	return cmd
@@ -168,6 +187,7 @@ type boardRead struct {
 	history bool
 	jsonOut bool
 	seenBy  bool
+	scope   *SprintScope
 }
 
 // boardEmptyEnvelope is the one line an empty `mb --json` read prints: a
@@ -194,6 +214,11 @@ func readBoard(cmd *cobra.Command, o boardRead) error {
 		var older int
 		if history {
 			posts, err = Posts()
+		} else if o.scope != nil {
+			// Scope before the cap, so unrelated posts cannot hide sprint mail.
+			var directed, other []Post
+			directed, other, _, err = unseen(who, 0, audiences)
+			posts = append(directed, other...)
 		} else {
 			var directed, other []Post
 			directed, other, older, err = unseen(who, limit, audiences)
@@ -203,6 +228,15 @@ func readBoard(cmd *cobra.Command, o boardRead) error {
 		}
 		if err != nil {
 			return err
+		}
+		if o.scope != nil {
+			filtered := make([]Post, 0, len(posts))
+			for _, p := range posts {
+				if o.scope.Relevant(SprintMessage{TS: p.At, To: p.To, Topic: p.Topic, Body: p.Body}) {
+					filtered = append(filtered, p)
+				}
+			}
+			posts = filtered
 		}
 		// RESOLVE THE SIDE EFFECTS BEFORE RENDERING ANY OF THEM.
 		//
