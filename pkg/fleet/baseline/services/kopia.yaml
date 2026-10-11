@@ -1,9 +1,10 @@
 name: kopia
 kind: service
 description: Kopia — snapshot backup repository server
-exec: [bashy, kopia, serve, --port, "{port}", --addr, "{bind}", "--data={settings.data_dir}"]
+exec: [bashy, kopia, serve, --port, "{port}", --addr, "{bind}", "--data={settings.data_dir}", --version, "{settings.version}"]
 settings:
   data_dir: ""
+  version: v0.23.1
 ports:
   - name: http
     port: 51515

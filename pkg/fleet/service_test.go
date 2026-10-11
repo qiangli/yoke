@@ -78,13 +78,13 @@ func TestBuiltinServiceSeedsAreEmbeddedAndValid(t *testing.T) {
 	if sdlc, _ := cat.Service("sdlc"); !reflect.DeepEqual(sdlc.Exec, []string{"bashy", "sdlc", "serve", "--interval", "{settings.interval}"}) {
 		t.Errorf("sdlc exec = %v, want foreground serve", sdlc.Exec)
 	}
-	if zot, _ := cat.Service("zot"); !reflect.DeepEqual(zot.Exec, []string{"bashy", "zot", "serve", "--port", "{port}", "--addr", "{bind}", "--data={settings.data_dir}"}) {
+	if zot, _ := cat.Service("zot"); !reflect.DeepEqual(zot.Exec, []string{"bashy", "zot", "serve", "--port", "{port}", "--addr", "{bind}", "--data={settings.data_dir}", "--zot-version", "{settings.version}"}) {
 		t.Errorf("zot exec = %v, want foreground serve", zot.Exec)
 	}
-	if sw, _ := cat.Service("seaweedfs"); !reflect.DeepEqual(sw.Exec, []string{"bashy", "seaweedfs", "serve", "--port", "{port}", "--addr", "{bind}", "--data={settings.data_dir}"}) {
+	if sw, _ := cat.Service("seaweedfs"); !reflect.DeepEqual(sw.Exec, []string{"bashy", "seaweedfs", "serve", "--port", "{port}", "--addr", "{bind}", "--data={settings.data_dir}", "--version", "{settings.version}"}) {
 		t.Errorf("seaweedfs exec = %v, want foreground serve", sw.Exec)
 	}
-	if kopia, _ := cat.Service("kopia"); !reflect.DeepEqual(kopia.Exec, []string{"bashy", "kopia", "serve", "--port", "{port}", "--addr", "{bind}", "--data={settings.data_dir}"}) {
+	if kopia, _ := cat.Service("kopia"); !reflect.DeepEqual(kopia.Exec, []string{"bashy", "kopia", "serve", "--port", "{port}", "--addr", "{bind}", "--data={settings.data_dir}", "--version", "{settings.version}"}) {
 		t.Errorf("kopia exec = %v, want foreground serve", kopia.Exec)
 	}
 	// Seeds are never copied: nothing appears in the local store.
@@ -296,9 +296,9 @@ func TestExternalServiceSeeds_ParseValidateExpandExec(t *testing.T) {
 			mesh:        "registry",
 			healthHTTP:  "/v2/",
 			startPeriod: "30s",
-			defaultArgv: "bashy zot serve --port 5000 --addr 127.0.0.1 --data=",
+			defaultArgv: "bashy zot serve --port 5000 --addr 127.0.0.1 --data= --zot-version v2.1.21",
 			customData:  "/var/lib/zot",
-			customArgv:  "bashy zot serve --port 5001 --addr 0.0.0.0 --data=/var/lib/zot",
+			customArgv:  "bashy zot serve --port 5001 --addr 0.0.0.0 --data=/var/lib/zot --zot-version v2.1.21",
 		},
 		{
 			name:        "seaweedfs",
@@ -306,9 +306,9 @@ func TestExternalServiceSeeds_ParseValidateExpandExec(t *testing.T) {
 			mesh:        "s3",
 			healthHTTP:  "/",
 			startPeriod: "45s",
-			defaultArgv: "bashy seaweedfs serve --port 8333 --addr 127.0.0.1 --data=",
+			defaultArgv: "bashy seaweedfs serve --port 8333 --addr 127.0.0.1 --data= --version 4.48",
 			customData:  "/var/lib/seaweedfs",
-			customArgv:  "bashy seaweedfs serve --port 8334 --addr 0.0.0.0 --data=/var/lib/seaweedfs",
+			customArgv:  "bashy seaweedfs serve --port 8334 --addr 0.0.0.0 --data=/var/lib/seaweedfs --version 4.48",
 		},
 		{
 			name:        "kopia",
@@ -316,9 +316,9 @@ func TestExternalServiceSeeds_ParseValidateExpandExec(t *testing.T) {
 			mesh:        "backup",
 			healthHTTP:  "/",
 			startPeriod: "30s",
-			defaultArgv: "bashy kopia serve --port 51515 --addr 127.0.0.1 --data=",
+			defaultArgv: "bashy kopia serve --port 51515 --addr 127.0.0.1 --data= --version v0.23.1",
 			customData:  "/var/lib/kopia",
-			customArgv:  "bashy kopia serve --port 51516 --addr 0.0.0.0 --data=/var/lib/kopia",
+			customArgv:  "bashy kopia serve --port 51516 --addr 0.0.0.0 --data=/var/lib/kopia --version v0.23.1",
 		},
 	}
 

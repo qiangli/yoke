@@ -265,7 +265,7 @@ The seeds for Zot, SeaweedFS, and Kopia (`pkg/fleet/baseline/services/{zot,seawe
    - **Zot:** The upstream raw `zot` binary only accepts a JSON configuration file path (`zot serve <config.json>`); it does not accept CLI flags `--port`, `--addr`, or `--data`. The `bashy zot serve` launcher generates and provisions the required configuration on first run.
    - **Kopia:** The upstream raw `kopia` binary requires repository creation (`repository create filesystem`), configuration persistence (`--config-file`), and repository password management (`KOPIA_PASSWORD`) before `server start`. The `bashy kopia serve` launcher performs first-run repository initialization and password generation.
    - **SeaweedFS:** Upstream `weed` binary uses Go `flag` syntax (`-flag=val`), e.g., `-dir=... -ip.bind=... -s3 -s3.port=...`. The `bashy seaweedfs serve` launcher wraps this with standard POSIX/GNU flags (`--port`, `--addr`, `--data`).
-   - Consequently, the unit seeds invoke the pinned launcher commands (`bashy {zot,seaweedfs,kopia} serve --port {port} --addr {bind} --data={settings.data_dir}`), maintaining lifecycle and provisioning parity without requiring name-specific supervisor or outpost branches.
+   - Consequently, the unit seeds invoke the existing launcher commands (`bashy {zot,seaweedfs,kopia} serve --port {port} --addr {bind} --data={settings.data_dir}`) with a declared `settings.version` pin, maintaining lifecycle and provisioning parity without name-specific supervisor or outpost branches.
 
 2. **Launcher Flag Inconsistencies:**
    - Version flags: Zot uses `--zot-version`, while SeaweedFS and Kopia use `--version`.
@@ -274,8 +274,8 @@ The seeds for Zot, SeaweedFS, and Kopia (`pkg/fleet/baseline/services/{zot,seawe
 
 3. **Dynamic binmgr Resolution vs S15 Static `CommandDownload` Digests:**
    - S15 `CommandDownload` requires a static version (strictly rejecting `"latest"`) and a map of static 64-hex SHA256 digests per platform.
-   - `yoke/external/{zot,seaweedfs,kopia}` uses binmgr dynamic GitHub release resolution with `DefaultVersion = "latest"` and matches release assets at runtime.
-   - Version and digest provisioning are handled by the launcher via binmgr and can be overridden via `settings` and environment variables (`ZOT_VERSION`, `SEAWEEDFS_VERSION`, `KOPIA_VERSION`). Operators wishing to pin static digests via S15's `{download}` can supply the per-platform SHA256 map in custom overlays.
+   - The seeds pin Zot `v2.1.21`, SeaweedFS `4.48` and Kopia `v0.23.1` through their launcher version flags and `settings.version`; the launchers resolve those exact release assets through binmgr. An operator may change the version with the normal service setting override. The upstream release pages were checked on 2026-10-11.
+   - Operators who require static per-platform digests can declare S15's generic `{download}` with a SHA256 map in a custom unit. The default launcher path keeps the existing wrapper's download behavior while avoiding its floating `latest` default.
 
 ## S15 acceptance evidence
 
