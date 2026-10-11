@@ -296,6 +296,10 @@ func (a *Agent) Prompt(ctx context.Context, req sdk.PromptRequest) (sdk.PromptRe
 		Cwd:          cwd,
 		Prompt:       prompt,
 		Capabilities: caps,
+		RequestPermission: func(ctx context.Context, p PermissionRequest) (PermissionResponse, error) {
+			p.SessionID = sessionID
+			return a.requestPermission(ctx, p)
+		},
 	})
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
@@ -335,6 +339,15 @@ func (a *Agent) Prompt(ctx context.Context, req sdk.PromptRequest) (sdk.PromptRe
 		a.opts.OnResult(result)
 	}
 	return sdk.PromptResponse{StopReason: sdk.StopReason(result.StopReason)}, nil
+}
+
+// requestPermission sends session/request_permission to the connected host.
+func (a *Agent) requestPermission(ctx context.Context, p PermissionRequest) (PermissionResponse, error) {
+	resp, err := a.conn.RequestPermission(ctx, toSDKPermissionRequest(p))
+	if err != nil {
+		return PermissionResponse{}, fmt.Errorf("acp: request permission: %w", err)
+	}
+	return fromSDKPermissionResponse(resp), nil
 }
 
 func (a *Agent) verifyTurn(ctx context.Context, sessionID, cwd string, claimed TurnResponse) AgentResult {
@@ -681,4 +694,48 @@ func toSDKPermissionResponse(r PermissionResponse) sdk.RequestPermissionResponse
 			Selected: &sdk.RequestPermissionOutcomeSelected{OptionId: sdk.PermissionOptionId(r.OptionID)},
 		},
 	}
+}
+
+func toSDKPermissionRequest(p PermissionRequest) sdk.RequestPermissionRequest {
+	tc := sdk.ToolCallUpdate{ToolCallId: sdk.ToolCallId(p.ToolCall.ID)}
+	if p.ToolCall.Title != "" {
+		title := p.ToolCall.Title
+		tc.Title = &title
+	}
+	if p.ToolCall.Kind != "" {
+		kind := sdk.ToolKind(p.ToolCall.Kind)
+		tc.Kind = &kind
+	}
+	if p.ToolCall.Status != "" {
+		status := sdk.ToolCallStatus(p.ToolCall.Status)
+		tc.Status = &status
+	}
+	for _, l := range p.ToolCall.Locations {
+		loc := sdk.ToolCallLocation{Path: l.Path}
+		if l.Line != 0 {
+			line := l.Line
+			loc.Line = &line
+		}
+		tc.Locations = append(tc.Locations, loc)
+	}
+	req := sdk.RequestPermissionRequest{
+		SessionId: sdk.SessionId(p.SessionID),
+		ToolCall:  tc,
+		Options:   make([]sdk.PermissionOption, 0, len(p.Options)),
+	}
+	for _, o := range p.Options {
+		req.Options = append(req.Options, sdk.PermissionOption{
+			OptionId: sdk.PermissionOptionId(o.ID),
+			Name:     o.Name,
+			Kind:     sdk.PermissionOptionKind(o.Kind),
+		})
+	}
+	return req
+}
+
+func fromSDKPermissionResponse(r sdk.RequestPermissionResponse) PermissionResponse {
+	if s := r.Outcome.Selected; s != nil && r.Outcome.Cancelled == nil {
+		return PermissionResponse{OptionID: string(s.OptionId)}
+	}
+	return PermissionResponse{Cancelled: true}
 }

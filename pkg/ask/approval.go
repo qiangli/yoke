@@ -42,6 +42,7 @@ const (
 	ViaReview  = "review"
 	ViaTimeout = "timeout" // nobody answered: denied, never guessed
 	ViaChat    = "chat"
+	ViaACP     = "acp" // answered by the ACP host a `bashy acp` server relayed it to
 )
 
 // DefaultApprovalTTL is how long a pending approval waits for a human. It is far

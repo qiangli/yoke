@@ -133,6 +133,20 @@ func (r *chatRunner) Run(ctx context.Context, req acp.TurnRequest) (acp.TurnResp
 	}
 	defer cs.mu.Unlock()
 
+	// Approvals the local session raises in the S4 queue while this turn runs
+	// go to the ACP host as session/request_permission; its answer is decided
+	// on the same record `bashy approve` lists.
+	if req.RequestPermission != nil {
+		relayCtx, stopRelay := context.WithCancel(turnCtx)
+		relayed := make(chan struct{})
+		go func() {
+			defer close(relayed)
+			acp.RelayApprovals(relayCtx, cs.session.Card(), req.RequestPermission)
+		}()
+		// Withdraw any open host question before the prompt response is sent.
+		defer func() { stopRelay(); <-relayed }()
+	}
+
 	if !fresh {
 		if err := cs.session.Say(prompt); err != nil {
 			return cancelledResponse(turnCtx, err)
