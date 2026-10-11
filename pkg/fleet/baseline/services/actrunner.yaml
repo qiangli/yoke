@@ -1,0 +1,24 @@
+name: actrunner
+kind: service
+description: Gitea act_runner CI executor — host lane (runs-on host) and optional container sandbox lane; dials out, serves nothing
+provider: internal
+capability: outpost.actrunner
+owner: outpost
+secrets:
+  - env: ACTRUNNER_TOKEN
+    ref: actrunner-registration-token
+settings:
+  instance: ""
+  forge_unit: loom
+  labels: host:host
+  name: ""
+  version: ""
+  data_dir: ""
+  sandbox: "false"
+  sandbox_image: docker.io/library/node:20-bookworm
+  docker_host: ""
+restart:
+  policy: on-failure
+  backoff: {min: 5s, max: 2m, healthy_after: 2m}
+  start_limit: {burst: 5, interval: 10m}
+enabled: false

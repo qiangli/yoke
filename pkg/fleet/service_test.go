@@ -13,7 +13,7 @@ import (
 
 // Sprint 418 S15 (story d1d045dd536f): service units in the registry rings.
 
-var builtinUnits = []string{"apps", "events", "llm", "loom", "meet", "schedule", "sdlc"}
+var builtinUnits = []string{"actrunner", "apps", "events", "headlamp", "llm", "loom", "meet", "schedule", "sdlc"}
 
 func serviceOpts(root string) []Option {
 	return []Option{WithRoot(root), WithoutCloudOverlay()}

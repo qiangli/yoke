@@ -97,6 +97,33 @@ shared (`$BASHY_SERVICES_PATH`) → org cache → local
 | `schedule` | process | `bashy schedule daemon` | none | process alive | none |
 | `llm` | process | `bashy llm serve --port {port} --bind {bind}` | 24556 loopback | tcp | none (the mesh door is S5/S13) |
 | `events` | internal | `meet.events`, hosted by `meet` | meet's listener | capability health | rides meet's route |
+| `headlamp` | process | `bashy kubectl --kubeconfig={settings.kubeconfig} -n {settings.namespace} port-forward --address 127.0.0.1 {settings.target} {port}:80` | 18466 loopback | tcp | mesh `headlamp` |
+| `actrunner` | internal | `outpost.actrunner`, hosted by `outpost` | none | capability health | none (it dials out) |
+
+**`headlamp`** settings: `kubeconfig` (empty = kubectl's own resolution, with
+`DKS_PROFILE=peer` in `env` so `bashy kubectl` targets the peer plane and
+fails closed), `namespace` (`headlamp`), `target` (`svc/headlamp`). The
+forward address is pinned to `127.0.0.1` in `exec`, not read from `{bind}`:
+the loopback-only rule of outpost's `headlamp.ForwardArgs` is not a
+setting. The install prerequisite (`outpost bundle install headlamp`) is in
+the unit's description, because the schema has no pre-start hook: until the
+service is installed `kubectl port-forward` exits non-zero and the monitor
+reports the restart/backoff reason. The mesh name `headlamp` is withdrawn
+whenever the unit is not active.
+
+**`actrunner`** has no `exec`, ports or exposure and never gets a fake pid.
+Settings: `instance` (empty = the `forge_unit` unit's loopback listener),
+`forge_unit` (`loom`), `labels` (`host:host`, the host lane), `sandbox`
+(`false`; `true` adds the container lane), `sandbox_image` (the runner's
+default node image), `docker_host` (empty = resolved from `bashy podman`),
+and the optional `name`, `version`, `data_dir`. The registration token is
+the vault reference `ACTRUNNER_TOKEN` → `actrunner-registration-token`; a
+plaintext `settings.token` is read by the capability but is not seeded and
+should not be used. The operator's vault secrets reach job env inside the
+capability. `restart` mirrors the capability's own 5 s to 2 min register
+backoff. `requires: [loom]` is deliberately not seeded, since build-only
+nodes reach their forge over a mesh forward; set it with
+`bashy service set actrunner --require loom` when the forge is local.
 
 Seeds ship **disabled**. Turning a daemon on is an operator decision
 (`bashy service enable`), and S18 removes the agent.json `*_enabled` keys
@@ -223,8 +250,8 @@ Paths: `O` = outpost, `Y` = yoke, `B` = bashy, `C` = coreutils.
 | Zot registry | recipe unit (S18) | `{download}` pin. Port 5000. Data dir in `settings`. Mesh `registry`. Gains restart, which it lacks today. | `Y/external/zot/zot_test.go` |
 | SeaweedFS S3 | recipe unit (S18) | `{download}` pin. Port 8333. Mesh `s3`. | `Y/external/seaweedfs/seaweedfs_test.go` |
 | Kopia backup | recipe unit (S18) | `{download}` pin. Port 51515. Mesh `backup`. | `Y/external/kopia/kopia_test.go` |
-| act_runner (host and sandbox lanes) | recipe unit, no ports or exposure (consumer only) (S18) | `settings`: instance (default local loom), labels (default `host:host`), sandbox, sandbox_image, docker_host. Registration token in `secrets`. `requires: [loom]` when the forge is local. `mesh_consumes` stays a mesh setting. | `Y/external/actrunner/actrunner_test.go` (TestSandboxLabel, TestRegisterOptionsSandboxLabels) |
-| Headlamp port-forward | recipe unit `exec: [bashy, kubectl, port-forward, …]` with `bind: loopback`. `requires` names the control-plane unit. Mesh `headlamp`. (S18) | Port 18466. **Today it is configured but never started** (`O/internal/agent/headlamp` has no importer), so the unit is its first working lifecycle. | `O/internal/agent/headlamp/{headlamp,deploy,posture}_test.go`; TestSetBuiltinsHeadlampParity |
+| act_runner (host and sandbox lanes) | seed `actrunner`: internal `outpost.actrunner`, no ports or exposure (consumer only) (S17) | `settings`: instance (default local loom), labels (default `host:host`), sandbox, sandbox_image, docker_host. Registration token in `secrets`. `requires: [loom]` when the forge is local. `mesh_consumes` stays a mesh setting. | `Y/external/actrunner/actrunner_test.go` (TestSandboxLabel, TestRegisterOptionsSandboxLabels) |
+| Headlamp port-forward | seed `headlamp`: process unit `exec: [bashy, kubectl, port-forward, …]` with `bind: loopback`. Mesh `headlamp`. (S17) | Port 18466. **Today it is configured but never started** (`O/internal/agent/headlamp` has no importer), so the unit is its first working lifecycle. | `O/internal/agent/headlamp/{headlamp,deploy,posture}_test.go`; TestSetBuiltinsHeadlampParity |
 | Custom supervised programs (`supervised[]`) | operator units (`add -f`) | path/args → `exec`; `dir` → `workdir`; `env`; `log_path` → the monitor's log dir. `enabled`. | `O/internal/agent/supervisor/manager_test.go`; `conf/file_test.go` TestSupervisedPrograms* (ported to unit tests by S16) |
 | Custom bashy services (`bashy_services[]`) | operator units | `command`/`args` → `exec`. app_name/app_port, require_login, elevation_required, trust_cloud_identity → `expose.app`. mesh_service → `expose.mesh`. root_url → `settings`. sso_secret and secrets_env → `secrets`. | `O/cmd/outpost/bashy_service_supervisor_test.go`; `admincore/builtins_test.go` TestSetBuiltinsPersistsGenericBashyServices |
 | outpost files (File Browser) | internal `outpost.files` (S18) | `settings`: allow_write, scope. App with login. | `O/cmd/outpost/files_archive_formats_test.go` |

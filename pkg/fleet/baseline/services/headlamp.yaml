@@ -1,0 +1,27 @@
+name: headlamp
+kind: service
+description: Headlamp loopback port-forward to the peer DKS plane — install it first with `outpost bundle install headlamp`
+exec: [bashy, kubectl, "--kubeconfig={settings.kubeconfig}", -n, "{settings.namespace}", port-forward, --address, 127.0.0.1, "{settings.target}", "{port}:80"]
+env:
+  DKS_PROFILE: peer
+settings:
+  kubeconfig: ""
+  namespace: headlamp
+  target: svc/headlamp
+ports:
+  - name: http
+    port: 18466
+    bind: loopback
+health:
+  tcp: true
+  interval: 10s
+  timeout: 2s
+  failures: 3
+restart:
+  policy: on-failure
+  backoff: {min: 1s, max: 30s, healthy_after: 30s}
+  start_limit: {burst: 5, interval: 5m}
+expose:
+  mesh:
+    - name: headlamp
+enabled: false
