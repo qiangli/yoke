@@ -417,11 +417,64 @@ func sprintGradeTrailers(s *weaveStory, runs *weaveQueue, it *weaveItem) (map[st
 			return nil, fmt.Errorf("linked story has no sequence number")
 		}
 		trailers = map[string]string{"Sprint": fmt.Sprintf("#%d", s.ID), "Story": fmt.Sprintf("#%d", story.Seq), "Story-ID": story.ID}
+		if s.UUID != "" {
+			trailers["Sprint-ID"] = strings.ToLower(s.UUID)
+		}
 	}
 	if trailers == nil {
 		return nil, fmt.Errorf("run is not linked to a story; link it before merge")
 	}
 	return trailers, nil
+}
+
+// sprintGradeProvenance checks the attempt's own provenance trailers with the
+// repository's commit parser and returns every story pair the merge carries,
+// the run's linked story first. A delivery may cite several stories of the
+// one sprint; it must cite the linked one, consistently. An attempt without
+// provenance trailers takes the linkage alone.
+func sprintGradeProvenance(message string, trailers map[string]string) ([]commitStoryRef, error) {
+	linkedNumber, err := strconv.Atoi(strings.TrimPrefix(trailers["Story"], "#"))
+	if err != nil {
+		return nil, fmt.Errorf("run story linkage has an invalid number %q", trailers["Story"])
+	}
+	linked := commitStoryRef{Number: linkedNumber, ID: trailers["Story-ID"]}
+	cited := false
+	for _, line := range strings.Split(message, "\n") {
+		key, _, ok := strings.Cut(line, ":")
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "sprint", "sprint-id", "story", "story-id":
+			cited = cited || ok
+		}
+	}
+	if !cited {
+		return []commitStoryRef{linked}, nil
+	}
+	trace, err := parseCommitTrace(message)
+	if err != nil {
+		return nil, fmt.Errorf("attempt provenance trailers are invalid: %w", err)
+	}
+	if fmt.Sprintf("#%d", trace.Sprint) != trailers["Sprint"] {
+		return nil, fmt.Errorf("attempt Sprint trailer disagrees with run story linkage")
+	}
+	if trace.SprintID != "" && trailers["Sprint-ID"] != "" && trace.SprintID != trailers["Sprint-ID"] {
+		return nil, fmt.Errorf("attempt Sprint-ID trailer disagrees with run story linkage")
+	}
+	stories := []commitStoryRef{linked}
+	found := false
+	for _, story := range trace.Stories {
+		if story.ID != linked.ID {
+			stories = append(stories, story)
+			continue
+		}
+		if story.Number != linked.Number {
+			return nil, fmt.Errorf("attempt Story trailer for %s disagrees with run story linkage", linked.ID)
+		}
+		found = true
+	}
+	if !found {
+		return nil, fmt.Errorf("attempt trailers do not cite the run's linked story %s", linked.ID)
+	}
+	return stories, nil
 }
 
 func sprintGradeMerge(ctx context.Context, into, source, branch string, auth transport.AuthMethod, ev sprintGradeEvent, agent string, trailers map[string]string) (string, error) {
@@ -469,25 +522,21 @@ func sprintGradeMerge(ctx context.Context, into, source, branch string, auth tra
 	}
 	// The manager supplies provenance; retaining the attempt as a parent
 	// preserves every original commit, signature, author and trailer.
-	seen := map[string]bool{}
-	for _, line := range strings.Split(c.Message, "\n") {
-		key, value, ok := strings.Cut(line, ":")
-		if ok && (key == "Sprint" || key == "Story" || key == "Story-ID") {
-			if seen[key] {
-				return "", fmt.Errorf("duplicate %s trailer", key)
-			}
-			seen[key] = true
-			if strings.TrimSpace(value) != trailers[key] {
-				return "", fmt.Errorf("attempt %s trailer disagrees with run story linkage", key)
-			}
-		}
-	}
-	message := "Merge graded attempt " + ev.Run + "\n\n"
 	for _, key := range []string{"Sprint", "Story", "Story-ID"} {
 		if trailers[key] == "" {
 			return "", fmt.Errorf("run is not linked to a story; link it before merge")
 		}
-		message += key + ": " + trailers[key] + "\n"
+	}
+	stories, err := sprintGradeProvenance(c.Message, trailers)
+	if err != nil {
+		return "", err
+	}
+	message := "Merge graded attempt " + ev.Run + "\n\nSprint: " + trailers["Sprint"] + "\n"
+	if trailers["Sprint-ID"] != "" {
+		message += "Sprint-ID: " + trailers["Sprint-ID"] + "\n"
+	}
+	for _, story := range stories {
+		message += fmt.Sprintf("Story: #%d\nStory-ID: %s\n", story.Number, story.ID)
 	}
 	message += "Agent: " + agent + "\n"
 	if _, err = yokegit.Merge(yokegit.MergeOptions{RepoPath: into, Ref: hash.String(), NoFF: true, Message: message}); err != nil {

@@ -148,9 +148,10 @@ func TestGradeMergeCommands(t *testing.T) {
 		{"blind-register", "Blind implementation", "register", ""},
 		{"blind-story", "Blind implementation", "story", ""},
 		{"matching", "Implement\n\nSprint: #331\nStory: #1217\nStory-ID: 4474b08d8299\n", "register", ""},
-		{"sprint-mismatch", "Implement\n\nSprint: #332", "register", "Sprint trailer disagrees"},
-		{"story-mismatch", "Implement\n\nStory: #1218", "register", "Story trailer disagrees"},
-		{"id-mismatch", "Implement\n\nStory-ID: other", "register", "Story-ID trailer disagrees"},
+		{"sprint-mismatch", "Implement\n\nSprint: #332\nStory: #1217\nStory-ID: 4474b08d8299\n", "register", "Sprint trailer disagrees"},
+		{"story-mismatch", "Implement\n\nSprint: #331\nStory: #1218\nStory-ID: 4474b08d8299\n", "register", "Story trailer for 4474b08d8299 disagrees"},
+		{"id-mismatch", "Implement\n\nSprint: #331\nStory: #1217\nStory-ID: 0123456789ab\n", "register", "do not cite the run's linked story"},
+		{"partial-trailers", "Implement\n\nStory-ID: other", "register", "provenance trailers are invalid"},
 		{"unlinked", "Blind implementation", "", "run is not linked to a story; link it before merge"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -567,5 +568,74 @@ func TestGradeAllowTestChangeScope(t *testing.T) {
 		if (err != nil) != tc.invalid || got != tc.tamper {
 			t.Fatalf("%q: %t %v", tc.allow, got, err)
 		}
+	}
+}
+
+// A delivery may cite several stories of one sprint (the commit-msg contract
+// allows one Sprint plus many Story/Story-ID pairs). Merge keeps every pair,
+// the linked story first, and still refuses inconsistent provenance.
+func TestMergeMultiStoryProvenance(t *testing.T) {
+	linkage := map[string]string{"Sprint": "#331", "Story": "#1217", "Story-ID": "4474b08d8299", "Sprint-ID": "559b491b-4bab-57d3-bad4-5ceb9acbb9da"}
+	for _, tc := range []struct {
+		name, message, want string
+	}{
+		{name: "multi-story", message: "Deliver two stories\n\nSprint: #331\nStory: #1300\nStory-ID: 0123456789ab\nStory: #1217\nStory-ID: 4474b08d8299\n"},
+		{name: "sprint-id", message: "Deliver\n\nSprint: #331\nSprint-ID: 559b491b-4bab-57d3-bad4-5ceb9acbb9da\nStory: #1217\nStory-ID: 4474b08d8299\nAgent: agent-a\n"},
+		{name: "no-trailers", message: "Deliver without provenance\n"},
+		{name: "wrong-sprint", message: "Deliver\n\nSprint: #332\nStory: #1217\nStory-ID: 4474b08d8299\n", want: "Sprint trailer disagrees"},
+		{name: "wrong-sprint-id", message: "Deliver\n\nSprint: #331\nSprint-ID: 00000000-0000-0000-0000-000000000000\nStory: #1217\nStory-ID: 4474b08d8299\n", want: "Sprint-ID trailer disagrees"},
+		{name: "inconsistent-id", message: "Deliver\n\nSprint: #331\nStory: #1300\nStory-ID: 4474b08d8299\n", want: "Story trailer for 4474b08d8299 disagrees"},
+		{name: "missing-linkage", message: "Deliver\n\nSprint: #331\nStory: #1300\nStory-ID: 0123456789ab\nStory: #1301\nStory-ID: ba9876543210\n", want: "do not cite the run's linked story"},
+		{name: "unpaired", message: "Deliver\n\nSprint: #331\nStory: #1217\nStory-ID: 4474b08d8299\nStory: #1300\n", want: "provenance trailers are invalid"},
+		{name: "duplicate-pair", message: "Deliver\n\nSprint: #331\nStory: #1217\nStory-ID: 4474b08d8299\nStory: #1217\nStory-ID: 4474b08d8299\n", want: "provenance trailers are invalid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, base, _ := sprintGradeFixture(t)
+			head := sprintGradeCommit(t, dir, "more.go", "more", tc.message)
+			r, _ := gogit.PlainOpen(dir)
+			w, _ := r.Worktree()
+			if err := w.Reset(&gogit.ResetOptions{Mode: gogit.HardReset, Commit: plumbing.NewHash(base)}); err != nil {
+				t.Fatal(err)
+			}
+			source := filepath.Join(t.TempDir(), "source.git")
+			sr, err := gogit.PlainClone(source, true, &gogit.CloneOptions{URL: dir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = sr.Storer.SetReference(plumbing.NewHashReference("refs/heads/attempt", plumbing.NewHash(head))); err != nil {
+				t.Fatal(err)
+			}
+			ev := sprintGradeEvent{Run: "repo#1", Commit: head, Verdict: "pass"}
+			merged, err := sprintGradeMerge(context.Background(), dir, source, "attempt", nil, ev, "agent-a", linkage)
+			if tc.want != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("err = %v, want %q", err, tc.want)
+				}
+				if ref, _ := r.Head(); ref.Hash().String() != base {
+					t.Fatal("real branch moved on rejection")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			c, err := r.CommitObject(plumbing.NewHash(merged))
+			if err != nil {
+				t.Fatal(err)
+			}
+			trace, err := parseCommitTrace(c.Message)
+			if err != nil {
+				t.Fatalf("merge message fails the commit contract: %v\n%s", err, c.Message)
+			}
+			if trace.Sprint != 331 || trace.SprintID != linkage["Sprint-ID"] || trace.Agent != "agent-a" {
+				t.Fatalf("merge trace = %+v", trace)
+			}
+			if trace.Stories[0] != (commitStoryRef{Number: 1217, ID: "4474b08d8299"}) {
+				t.Fatalf("linked story not first: %+v", trace.Stories)
+			}
+			if tc.name == "multi-story" && (len(trace.Stories) != 2 || trace.Stories[1] != (commitStoryRef{Number: 1300, ID: "0123456789ab"})) {
+				t.Fatalf("co-cited story lost: %+v", trace.Stories)
+			}
+		})
 	}
 }
