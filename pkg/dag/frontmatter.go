@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/qiangli/yoke/pkg/unit/frontmatter"
 )
 
 // A dag.md frontmatter block is meant to be read by more than bashy: an Agent
@@ -33,27 +35,24 @@ import (
 //
 // A top-level key wins over the same key under `metadata:`.
 
-// applyYAMLFrontmatter reads block (the lines between the `---` fences) as
-// YAML. On a parse error it records why in doc.FrontmatterYAMLErr and leaves
-// the line reading's result alone.
+// applyYAMLFrontmatter layers the shared reader's strict-YAML read
+// (pkg/unit/frontmatter — name, description, type, metadata and every key
+// as a node) over the line reading's result. dag's own keys (default,
+// include, vars) are picked from that read here. On a parse error it
+// records why in doc.FrontmatterYAMLErr and leaves the line reading's
+// result alone.
 func applyYAMLFrontmatter(doc *Document, block string) {
 	doc.hasFrontmatter = true
-	var root yaml.Node
-	if err := yaml.Unmarshal([]byte(block), &root); err != nil {
-		doc.FrontmatterYAMLErr = strings.TrimPrefix(err.Error(), "yaml: ")
+	fm := frontmatter.Read(block)
+	if fm.YAMLErr != "" {
+		doc.FrontmatterYAMLErr = fm.YAMLErr
 		return
 	}
-	if len(root.Content) == 0 {
+	if fm.Top == nil {
 		return // empty block
 	}
-	top := keyedMapping(root.Content[0])
-	if top == nil {
-		doc.FrontmatterYAMLErr = "frontmatter is not a key: value mapping"
-		return
-	}
-	meta := keyedMapping(top["metadata"])
 	pick := func(keys ...string) *yaml.Node {
-		for _, m := range []map[string]*yaml.Node{top, meta} {
+		for _, m := range []map[string]*yaml.Node{fm.Top, fm.Meta} {
 			for _, k := range keys {
 				if n, ok := m[k]; ok {
 					return n
@@ -63,17 +62,17 @@ func applyYAMLFrontmatter(doc *Document, block string) {
 		return nil
 	}
 
-	doc.Name = scalarValue(top["name"])
-	doc.Desc = strings.TrimSpace(scalarValue(top["description"]))
-	doc.Type = scalarValue(top["type"])
-	doc.Default = scalarValue(pick("default", "default_goal"))
+	doc.Name = fm.Name
+	doc.Desc = fm.Description
+	doc.Type = fm.Type
+	doc.Default = frontmatter.Scalar(pick("default", "default_goal"))
 
 	doc.Includes = nil
 	if n := pick("include", "includes"); n != nil {
 		switch n.Kind {
 		case yaml.SequenceNode:
 			for _, it := range n.Content {
-				if v := strings.TrimSpace(scalarValue(it)); v != "" {
+				if v := strings.TrimSpace(frontmatter.Scalar(it)); v != "" {
 					doc.Includes = append(doc.Includes, v)
 				}
 			}
@@ -85,9 +84,9 @@ func applyYAMLFrontmatter(doc *Document, block string) {
 	// A top-level `vars:` block of `NAME ?= value` lines is a plain multi-line
 	// scalar to YAML — its line breaks folded away — so the line reading, which
 	// saw the lines, stays authoritative for that one shape.
-	topVars := top["vars"]
+	topVars := fm.Top["vars"]
 	if topVars == nil {
-		topVars = top["variables"]
+		topVars = fm.Top["variables"]
 	}
 	n := pick("vars", "variables")
 	if n == nil || (n == topVars && n.Kind == yaml.ScalarNode && !strings.Contains(n.Value, "\n")) {
@@ -105,11 +104,11 @@ func applyYAMLFrontmatter(doc *Document, block string) {
 	switch n.Kind {
 	case yaml.SequenceNode:
 		for _, it := range n.Content {
-			add(scalarValue(it))
+			add(frontmatter.Scalar(it))
 		}
 	case yaml.MappingNode:
 		for i := 0; i+1 < len(n.Content); i += 2 {
-			doc.Vars = append(doc.Vars, DocVar{Name: n.Content[i].Value, Op: "=", Value: scalarValue(n.Content[i+1])})
+			doc.Vars = append(doc.Vars, DocVar{Name: n.Content[i].Value, Op: "=", Value: frontmatter.Scalar(n.Content[i+1])})
 		}
 	case yaml.ScalarNode:
 		if strings.Contains(n.Value, "\n") { // `vars: |` literal block
@@ -122,26 +121,6 @@ func applyYAMLFrontmatter(doc *Document, block string) {
 			}
 		}
 	}
-}
-
-// keyedMapping indexes a YAML mapping node by lower-cased key (the line
-// reading is case-insensitive about keys too). nil for anything else.
-func keyedMapping(n *yaml.Node) map[string]*yaml.Node {
-	if n == nil || n.Kind != yaml.MappingNode {
-		return nil
-	}
-	m := make(map[string]*yaml.Node, len(n.Content)/2)
-	for i := 0; i+1 < len(n.Content); i += 2 {
-		m[strings.ToLower(n.Content[i].Value)] = n.Content[i+1]
-	}
-	return m
-}
-
-func scalarValue(n *yaml.Node) string {
-	if n == nil || n.Kind != yaml.ScalarNode {
-		return ""
-	}
-	return n.Value
 }
 
 // skillNameRE is the Agent Skills `name` shape: lowercase letters, digits and

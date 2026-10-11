@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/qiangli/coreutils/pkg/weavecli"
+	"github.com/qiangli/yoke/pkg/unit/frontmatter"
 )
 
 // Task is one target parsed from the markdown source.
@@ -196,7 +197,7 @@ func Parse(r io.Reader, path string) (*Document, error) {
 				}
 				inVars = false // dedent (or blank handled below) ends the block
 			}
-			if k, v, ok := frontmatterKV(ln); ok {
+			if k, v, ok := frontmatter.LineKV(ln); ok {
 				switch k {
 				case "name":
 					doc.Name = v
@@ -717,15 +718,6 @@ func parseMemoryBytes(v string) (uint64, bool) {
 
 func parseCapacityQuantity(v string) (uint64, bool) {
 	return parseMemoryBytes(v)
-}
-
-func frontmatterKV(line string) (key, value string, ok bool) {
-	i := strings.IndexByte(line, ':')
-	if i <= 0 {
-		return "", "", false
-	}
-	return strings.ToLower(strings.TrimSpace(line[:i])),
-		strings.Trim(strings.TrimSpace(line[i+1:]), `"'`), true
 }
 
 func splitList(v string) []string {

@@ -1,12 +1,13 @@
 package skills
 
 // Writing SKILL.md frontmatter back. ParseFrontmatter (skill.go) reads the
-// block permissively — bashy consumes the world's skills — and that is the
-// constraint on writing it: a `skill set` that re-marshalled the block from
-// the struct it parsed would drop every key the struct does not know and
-// re-flow every one it does. So the block is edited as a yaml.Node tree —
-// unknown keys, their order, quoting and comments survive — and the body
-// after the closing `---` is copied byte for byte.
+// block through the one shared reader (pkg/unit/frontmatter) — bashy
+// consumes the world's skills — and that is the constraint on writing it: a
+// `skill set` that re-marshalled the block from the struct it parsed would
+// drop every key the struct does not know and re-flow every one it does. So
+// the block is edited as a yaml.Node tree — unknown keys, their order,
+// quoting and comments survive — and the body after the closing `---` is
+// copied byte for byte.
 
 import (
 	"bytes"
@@ -15,6 +16,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/qiangli/yoke/pkg/unit/frontmatter"
 )
 
 // FrontmatterEdit is one set of changes to a SKILL.md frontmatter block. A
@@ -26,20 +29,12 @@ type FrontmatterEdit struct {
 	UnsetMeta   []string          // metadata keys to drop
 }
 
-// splitFrontmatter cuts a SKILL.md into its YAML block and the rest, with the
-// same cut ParseFrontmatter makes. rest starts at the closing `---` line, so
-// "---\n" + block' + rest is the file with only the block replaced.
+// splitFrontmatter cuts a SKILL.md the one way every reader cuts it
+// (pkg/unit/frontmatter.Split): block plus rest, rest starting at the
+// closing `---` line, so "---\n" + block' + rest is the file with only the
+// block replaced.
 func splitFrontmatter(b []byte) (block, rest string, err error) {
-	s := string(b)
-	if !strings.HasPrefix(s, "---\n") && !strings.HasPrefix(s, "---\r\n") {
-		return "", "", fmt.Errorf("skills: no frontmatter block")
-	}
-	_, after, _ := strings.Cut(s, "\n")
-	end := strings.Index(after, "\n---")
-	if end < 0 {
-		return "", "", fmt.Errorf("skills: unterminated frontmatter block")
-	}
-	return after[:end], after[end+1:], nil
+	return frontmatter.Split(b)
 }
 
 // WriteFrontmatter applies edit to the frontmatter block of skillMD and
