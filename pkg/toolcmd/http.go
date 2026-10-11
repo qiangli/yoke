@@ -53,7 +53,11 @@ func runHTTP(ctx context.Context, tool fleet.Tool, cmd fleet.ToolCommand, args s
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := httpClient(CommandTimeout(cmd, opts)).Do(req)
+	// A configured loopback endpoint must not be able to forward its bearer
+	// token or command body to a different host through an HTTP redirect.
+	client := *httpClient(CommandTimeout(cmd, opts))
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := client.Do(req)
 	if err != nil {
 		if runCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
 			return finish(OutcomeTimeout, fmt.Errorf("toolcmd: %s:%s: timed out after %s", tool.Name, cmd.Name, CommandTimeout(cmd, opts)))

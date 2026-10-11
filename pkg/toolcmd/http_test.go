@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/qiangli/yoke/pkg/fleet"
@@ -94,5 +95,30 @@ func TestHTTPCommandResolvesTokenRef(t *testing.T) {
 	res, err := Run(context.Background(), fleet.Tool{Name: "codync"}, cmd, "", Options{})
 	if err != nil || res.Outcome != OutcomeSuccess || res.HTTPStatus != http.StatusNoContent {
 		t.Fatalf("result=%+v err=%v", res, err)
+	}
+}
+
+func TestHTTPCommandDoesNotForwardBearerOnRedirect(t *testing.T) {
+	const token = "redirect-secret"
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenFile, []byte(token), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var forwarded atomic.Bool
+	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		forwarded.Store(true)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer destination.Close()
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, destination.URL, http.StatusTemporaryRedirect)
+	}))
+	defer source.Close()
+	cmd := fleet.ToolCommand{Name: "send", Mode: fleet.ToolCommandHTTP, HTTP: &fleet.ToolCommandHTTPAction{
+		Method: "POST", URL: source.URL, TokenFile: tokenFile, Body: map[string]any{"message": "private"},
+	}}
+	res, err := Run(context.Background(), fleet.Tool{Name: "codync"}, cmd, "", Options{})
+	if err == nil || res.HTTPStatus != http.StatusTemporaryRedirect || forwarded.Load() {
+		t.Fatalf("redirect result=%+v err=%v forwarded=%v", res, err, forwarded.Load())
 	}
 }
