@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [repo/page] Agy model-door text lives in step updates — For cligw stdin-stream-json workers, extract only agent_response step_update.text_delta and use result.response only when no deltas arrived. Select a fresh Agy project explicitly; cwd alone can reuse remembered context. Keep raw provider stderr out of HTTP headers. See docs/validation/cligw  (kb:agy-model-door-text-lives-in-step-updates)
+- [host/page] Do not create bookkeeping-only sprints — Operator rule for filing work and commit provenance — WHEN a task needs a story/todo or a commit hook requests sprint trailers: reuse a relevant open sprint, otherwise file a repo todo, and ask before bypassing verification Before filing work, inspect the open sprint board and choose a genuinely relevant activ  (kb:sprint-story-placement)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 
