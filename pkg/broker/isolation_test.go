@@ -182,3 +182,36 @@ func TestRestoredStickyContextIsOwnerSessionOnly(t *testing.T) {
 		t.Fatal("expired context recovered after restart")
 	}
 }
+
+// A peer host holds no share of this door: until per-peer admission (Sprint
+// 308 A5, 53fde6fa2d0d) exists, any bearer other than the owner's is refused
+// on every surface before routing, and the refusal never echoes what the peer
+// presented. toolcmd's --peer refusal relies on this door contract.
+func TestPeerBearerIsNotAShare(t *testing.T) {
+	h := newHarness(t, nil)
+	const peerToken = "peer-seat-token-not-shared"
+	for _, tc := range []struct{ path, header, value string }{
+		{"/v1/chat/completions", "Authorization", "Bearer " + peerToken},
+		{"/v1/messages", "x-api-key", peerToken},
+		{"/k/" + peerToken + "/v1/chat/completions", "", ""},
+		{"/cligw/health", "Authorization", "Bearer " + peerToken},
+	} {
+		r := httptest.NewRequest("POST", tc.path, strings.NewReader(`{"model":"claude:opus","messages":[]}`))
+		if tc.header != "" {
+			r.Header.Set(tc.header, tc.value)
+		}
+		w := httptest.NewRecorder()
+		h.b.ServeHTTP(w, r)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("%s: peer bearer admitted: %d", tc.path, w.Code)
+		}
+		if strings.Contains(w.Body.String(), peerToken) {
+			t.Fatalf("%s: refusal echoes the peer token: %s", tc.path, w.Body.String())
+		}
+	}
+	h.eng.mu.Lock()
+	defer h.eng.mu.Unlock()
+	if h.eng.maxSeen.Load() != 0 || h.eng.lastBody != nil {
+		t.Fatalf("peer refusal reached the engine: body %v", h.eng.lastBody)
+	}
+}
