@@ -28,6 +28,11 @@ func TestAssetMatch_PicksStandardArchive(t *testing.T) {
 		{"linux_amd64_large_disk.tar.gz", "linux", "amd64", false}, // _large_disk excluded
 		{"darwin_arm64.tar.gz", "darwin", "arm64", true},
 		{"linux_arm64.tar.gz", "linux", "amd64", false}, // wrong arch
+		{"windows_amd64.zip", "windows", "amd64", true},
+		{"linux_amd64_full.tar.gz", "linux", "amd64", false},
+		{"linux_arm64.tar.gz", "linux", "amd64", false},
+		{"linux_amd64.tar.gz", "darwin", "amd64", false},
+		{"linux_amd64.tar.gz.md5", "linux", "amd64", false},
 	}
 	for _, c := range cases {
 		if got := assetMatch(c.name, c.goos, c.goarch); got != c.want {

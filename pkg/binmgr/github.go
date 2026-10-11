@@ -52,6 +52,10 @@ type GitHubSpec struct {
 type ghAsset struct {
 	Name string `json:"name"`
 	URL  string `json:"browser_download_url"`
+	// Digest is GitHub's SHA-256 for this exact release asset. Unlike parsing
+	// a release-wide checksum list, this cannot accidentally select a sibling
+	// variant with a similar filename.
+	Digest string `json:"digest"`
 }
 
 type ghRelease struct {
@@ -96,9 +100,12 @@ func ResolveGitHub(ctx context.Context, spec GitHubSpec) (Tool, error) {
 	if asset.URL == "" {
 		return Tool{}, fmt.Errorf("binmgr: %s %s has no asset for %s", spec.Repo, rel.TagName, Platform())
 	}
-	sha, md5sum, err := resolveChecksum(ctx, rel, asset)
-	if err != nil {
-		return Tool{}, err
+	sha, md5sum := githubAssetSHA256(asset.Digest), ""
+	if sha == "" {
+		sha, md5sum, err = resolveChecksum(ctx, rel, asset)
+		if err != nil {
+			return Tool{}, err
+		}
 	}
 	tool := Tool{
 		Name:    spec.Name,
@@ -109,6 +116,18 @@ func ResolveGitHub(ctx context.Context, spec GitHubSpec) (Tool, error) {
 	}
 	rememberGitHubTool(spec, tool)
 	return tool, nil
+}
+
+func githubAssetSHA256(digest string) string {
+	const prefix = "sha256:"
+	if !strings.HasPrefix(strings.ToLower(digest), prefix) {
+		return ""
+	}
+	h := strings.TrimSpace(digest[len(prefix):])
+	if len(h) != 64 || !hex64.MatchString(h) {
+		return ""
+	}
+	return strings.ToLower(h)
 }
 
 func fetchRelease(ctx context.Context, repo, version string) (*ghRelease, error) {

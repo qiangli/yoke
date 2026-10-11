@@ -48,11 +48,14 @@ func Spec(version string) binmgr.GitHubSpec {
 // assetMatch picks the standard `<os>_<arch>.tar.gz`, excluding the _full and
 // _large_disk variants that also carry the os/arch tokens.
 func assetMatch(name, goos, goarch string) bool {
-	n := strings.ToLower(name)
-	if strings.Contains(n, "full") || strings.Contains(n, "large_disk") {
-		return false
+	// Releases also publish _full and _large_disk variants. Match the complete
+	// canonical archive name so a platform token embedded in a variant cannot
+	// shadow the standard server archive.
+	ext := ".tar.gz"
+	if goos == "windows" {
+		ext = ".zip"
 	}
-	return strings.Contains(n, goos) && strings.Contains(n, goarch)
+	return strings.EqualFold(name, goos+"_"+goarch+ext)
 }
 
 // DefaultDataDir is SeaweedFS's storage root.
