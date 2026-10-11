@@ -98,6 +98,26 @@ func TestHTTPCommandResolvesTokenRef(t *testing.T) {
 	}
 }
 
+func TestHTTPTokenFileExpandsHomeOnly(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if err := os.MkdirAll(filepath.Join(home, ".codync"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".codync", "token"), []byte("  host-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := httpToken(fleet.ToolCommandHTTPAction{TokenFile: "~/.codync/token"})
+	if err != nil || got != "host-token" {
+		t.Fatalf("home token = %q, %v", got, err)
+	}
+	_, err = httpToken(fleet.ToolCommandHTTPAction{TokenFile: "~/.codync/missing"})
+	if err == nil || !strings.Contains(err.Error(), "read token file") {
+		t.Fatalf("missing home token error = %v", err)
+	}
+}
+
 func TestHTTPCommandDoesNotForwardBearerOnRedirect(t *testing.T) {
 	const token = "redirect-secret"
 	tokenFile := filepath.Join(t.TempDir(), "token")

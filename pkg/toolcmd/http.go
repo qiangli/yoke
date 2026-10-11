@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -99,7 +100,15 @@ func httpTarget(h fleet.ToolCommandHTTPAction) (string, error) {
 
 func httpToken(h fleet.ToolCommandHTTPAction) (string, error) {
 	if h.TokenFile != "" {
-		b, err := os.ReadFile(h.TokenFile)
+		path := h.TokenFile
+		if strings.HasPrefix(path, "~/") {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return "", fmt.Errorf("resolve token file home: %w", err)
+			}
+			path = filepath.Join(home, path[2:])
+		}
+		b, err := os.ReadFile(path)
 		if err != nil {
 			return "", fmt.Errorf("read token file: %w", err)
 		}
