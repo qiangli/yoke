@@ -3,14 +3,12 @@ id: abc4ce65c606
 kind: feature
 title: 'S10 ACP everywhere: claude/codex/gemini acp_exec, updates as events, bashy acp with permission relay'
 seq: 1872
-status: assigned
+status: todo
 priority: p2
 labels:
     - yoke
     - bashy
 created: 2026-10-11T03:52:03.478684Z
-weave: 120
-assignee: codex-gpt6-sol
 sprint: 418
 sprint_id: 9891800f-8da5-5338-92bc-1d75755ca548
 sprint_title: 'Agent ecosystem synergy: agentic tools compose like a|b|c through bashy extension points'
@@ -102,3 +100,5 @@ Manager partial verdict 2026-10-11 13:25 UTC: Opus5.5 run #118 source `e8feee6` 
 Manager 2026-10-11 14:29 UTC continuation: genuine Codync v2.13.2 bot and Codex turn at exact Bashy `974d9490`/Yoke `a0cf54c` reached `bashy confirm.bsh` and its destroy-effect guard, but `bashy acp --read-only` made Codex unable to create the S4 approval record (`operation not permitted`); no queue/card was raised. Without `--read-only`, the current default advertised YOLO mode and is not an acceptable acceptance path. Sanitized `/tmp/s418-s10-agent-origin-redacted.json`; private bot/token/host/children cleaned. Add only an explicit safe `--sandbox workspace-write` option to `pkg/herald/acp.go`, validate supported values and feed `chat.SessionOptions.Sandbox` through the existing `agentlaunch.ApplySandbox`. Preserve `--read-only` behavior, reject incompatible flags, and keep the no-bypass launch guard. Add a focused test that the real ACP command launches Codex with workspace-write and without bypass/YOLO argv; use current `pkg/herald` test fixtures rather than a new launcher layer. Verify `GOWORK=off go test -short -count=1 -timeout 5m ./pkg/herald/... ./pkg/acp/... ./pkg/chat/...`, `git diff --check`. Submit bounded source; manager owns fresh genuine Codync `@confirm` → S4 queue → permission card → allow/deny/replay gate and Zed native proof. Do not close original S10 for source alone. No edits in Bashy/Cloudbox/Outpost or Sprint420 files.
 
 Conductor continuation 2026-10-11 20:03 UTC: user orders a bounded S10 qualified Mac Zed/Accessibility recovery. Source already passed genuine Codync allow/deny/once resume. Check actual claimed Mac GUI venue for installed Zed and usable Accessibility permission; perform a real permission roundtrip only with legitimate OS authority. Do not simulate GUI approval or weaken admission. Own S10 ACP/Zed evidence and a narrow fix only if a source defect is found; no edits to S9/S13 toolcmd/comms paths. Record exact venue, app/version, permission state, commands, raw outcome and blocker if operator elevation is needed. Commit/push any code in private Yoke with S10 trailers; manager reviews/integrates. Keep original S10 open if attended Zed is unproved.
+
+Run `yoke#120` finished/merged its source slice (`f30d2b7`) and was unlinked before this Zed continuation. The real Codync allow/deny/once acceptance remains preserved. Original S10 was reopened because an attended Zed permission roundtrip is still unproved; do not redo the merged ACP source without a concrete defect.
