@@ -3,7 +3,7 @@ id: c06814664e20
 kind: feature
 title: 'S13 Sphere and cloudbox reach for the synergy primitives: mesh-exposed services, cross-host approvals and notices, remote sink'
 seq: 1880
-status: todo
+status: doing
 priority: p2
 labels:
     - outpost
@@ -21,3 +21,5 @@ Manager continuation 2026-10-11 11:50 UTC: this original UUID moved from umbrell
 Manager verdict 2026-10-11 12:19 UTC: worker run #116 delivered the task-feed directive/receipt adapter at `9acd8d5`, but its client-supplied `By` and `ByURN` were not authentication. Manager added server-stamped Cloudbox event-author, task-owner/explicit-email, and same-account person-seat join checks at `7a36f3d`; forged account with the correct plan token now gets a rejected receipt. Focused remote approval tests, `pkg/ask` tests and `go vet ./pkg/weave ./pkg/ask` passed. The whole `pkg/weave` suite timed out twice in an unrelated sprint lifecycle test; the manager stopped a third 30-minute retry on Dragon and retained the timeout evidence. The run merged at `1b73883`. This is partial source delivery: paired host B to A decision/receipt, mesh service exposure and Sprint 308 A3/A5 policy remain unverified. Original S13 stays open.
 
 Manager continuation 2026-10-11 12:21 UTC for the same original story: `SendApprovalDirective` and `FindApprovalReceipt` have no product caller yet. Add one thin user command on the existing repo-session surface so a person on host B can name the full pending approval ID, owner host, exact plan token and allow/deny, append the existing directive, and see an explicit receipt or pending state. Reuse the exported Yoke functions and existing session pointer; do not add a transport, account bypass, framework or new story. Preserve the server-author/roster gate and add focused command tests including a rejected forged account. Run only focused Yoke tests on Dragon (the full weave suite repeatedly timed out in a separate lifecycle test). Submit partial source with exact limitations; manager owns the claimed two-host gate and Sprint 308 external blockers.
+
+Manager verdict 2026-10-11 12:28 UTC: run #117 delivered the thin `sprint session approve` caller at `c59e277`, merged by managed Weave at `0fb2f5b`. Direct source review and independent focused `TestSessionApproveCommand|TestRemoteApproval|TestApprovalDirective` passed. Weave's automatic done transition reflected code merge, not original acceptance. This original remains open for paired B-to-A same-token decision/receipt, replay refusal, mesh exposure, and Sprint 308 A3/A5 policy. The worker's explicit partial-delivery receipt is retained in run #117; no worker failure is attributed.
