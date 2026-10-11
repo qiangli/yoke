@@ -65,7 +65,13 @@ func (ws *Workspace) Sync(ctx context.Context, m *Module, only []string, resolve
 	for _, r := range ws.SiblingRequires(m) {
 		reqs[r.Path] = r
 	}
-	var changes []Change
+	// Plan every edit first, resolving each fork's pseudo-version, so a
+	// resolution failure aborts before go.mod is touched.
+	type step struct {
+		args   []string
+		change Change
+	}
+	var steps []step
 	for _, d := range ws.Drift(m, resolve) {
 		r := reqs[d.Sibling]
 		if d.State == InSync || d.State == Cycle || d.Head == "" || r.Local || (len(want) > 0 && !want[d.Sibling] && !want[d.Name]) {
@@ -73,12 +79,20 @@ func (ws *Workspace) Sync(ctx context.Context, m *Module, only []string, resolve
 		}
 		args := []string{"get", d.Sibling + "@" + d.Head}
 		if r.Via != "" {
-			args = []string{"mod", "edit", "-replace=" + d.Sibling + "=" + r.Via + "@" + d.Head}
+			v, err := forkVersion(ctx, r.Via, d.Head, run)
+			if err != nil {
+				return nil, err
+			}
+			args = []string{"mod", "edit", "-replace=" + d.Sibling + "=" + r.Via + "@" + v}
 		}
-		if _, err := run(ctx, m.Dir, pinnedEnv, args...); err != nil {
+		steps = append(steps, step{args, Change{Module: m.Path, Sibling: d.Sibling, From: d.Version}})
+	}
+	var changes []Change
+	for _, s := range steps {
+		if _, err := run(ctx, m.Dir, pinnedEnv, s.args...); err != nil {
 			return changes, err
 		}
-		changes = append(changes, Change{Module: m.Path, Sibling: d.Sibling, From: d.Version})
+		changes = append(changes, s.change)
 	}
 	if len(changes) == 0 {
 		return nil, nil
@@ -98,6 +112,21 @@ func (ws *Workspace) Sync(ctx context.Context, m *Module, only []string, resolve
 		}
 	}
 	return changes, nil
+}
+
+// forkVersion resolves commit sha of the replacement module via to the
+// canonical module version the go command assigns it (a pseudo-version
+// honouring a /vN major), outside the consumer module. go.mod can never hold
+// a raw commit hash.
+func forkVersion(ctx context.Context, via, sha string, run Runner) (string, error) {
+	info, err := ModuleDir(ctx, via+"@"+sha, false, run)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s@%s: %w", via, short(sha), err)
+	}
+	if err := module.Check(via, info.Version); err != nil || !semver.IsValid(info.Version) {
+		return "", &Error{Code: weavecli.ExitDepUnhealthy, Msg: fmt.Sprintf("resolve %s@%s: go resolved %q, not a valid module version", via, short(sha), info.Version)}
+	}
+	return info.Version, nil
 }
 
 // Info is `go mod download -json` for one module version.
