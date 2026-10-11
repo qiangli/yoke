@@ -3,13 +3,14 @@ id: eae40495aac7
 kind: refactor
 title: S17 Reimplement all supported built-in daemons as units; delete the four duplicated start/status/stop lifecycles; add llm and events units
 seq: 1886
-status: todo
+status: assigned
 priority: p1
 labels:
     - yoke
     - coreutils
     - bashy
 created: 2026-10-11T05:07:47.965699Z
+assignee: codex-gpt6-sol
 sprint: 418
 sprint_id: 9891800f-8da5-5338-92bc-1d75755ca548
 sprint_title: 'Agent ecosystem synergy: agentic tools compose like a|b|c through bashy extension points'
@@ -32,3 +33,5 @@ Manager integration 2026-10-11 11:05 UTC: Luna #106 source `641961e` removed the
 Bounded Yoke continuation 2026-10-11 11:06 UTC: implement the missing generic internal-owner client for Bashy's existing JSON control socket (`desired`/`report`, documented in `bashy/internal/agentos/supervisord_ipc.go`) in `pkg/service`, then wire the `meet` owner to apply the `events` unit's enabled state and report active/disabled/failed status while `meet serve` runs. Keep the `/api/events` feature and owner restart/re-adoption behavior; do not special-case the monitor or add a second feature flag/config format. The client must be usable by Outpost's other internal capabilities later. Own Yoke `pkg/service` and `pkg/meet` only; coordinate the exact wire shape with existing Bashy source, do not edit Bashy or Outpost in this run. Add a fake-socket/foreground test and verify `GOWORK=off go test -short ./pkg/service ./pkg/meet`; manager will independently run that gate and the real Linux monitor test. This is source progress on original S17, not full acceptance.
 
 Manager integration 2026-10-11 11:15 UTC: Sonnet #108 source `aa8fb71` passed manager review and an independent private-tree `GOWORK=off go test -short -timeout 5m ./pkg/service ./pkg/meet ./pkg/fleet` (service 0.249s, meet 23.415s, fleet 38.426s); managed pull merged at `922e6e6`. The original S17 was reopened after Weave's bounded-run auto-close. Linux live owner report, all seven built-ins, full inventory and paired gates are still required. The `llm` first-run engine fetch also needs the existing health startup grace field, since the monitor's 20-second failure window interrupts a 1.44 GB verified Ollama runtime download; keep local engine capability.
+
+Manager partial live verification 2026-10-11 16:22 UTC: an isolated DO private Outpost/Bashy pair built from pushed Bashy `dc8ce79e`, Yoke `4c10855`, and Outpost `229d091` ran an actual Gitea `runs-on: sandbox` workflow in disposable repo 73. Run 854/job 1665/task 76 completed successfully on fresh runner 10; the downloaded job log emitted `S418_SANDBOX_RUNNER_PASS` after checks inside a Node 20 container, and the matching Podman container was observed live. The manager independently reviewed the sanitized receipt `/tmp/s418-s17-sandbox-gate/evidence/REPORT.md`, job log, API success and exact-ID cleanup. Disposable runner, repo, tokens, host, forward, unit and container were removed; primary services remained live. This verifies the sandbox lane separately from the earlier host-lane pass. Original S17 remains assigned and open: Headlamp's cloud physical nodes are all Ready=Unknown with 0/2 ready endpoints, peer localhost:16443 refuses connections, and full seven-built-in/retained-service native acceptance is still missing. No cloud/peer substitution or full-coverage success is claimed.
