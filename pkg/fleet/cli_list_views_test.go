@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -78,6 +79,22 @@ func hasName(names []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// writeRunnableToolFixture creates a PATH-resolvable no-op command on the
+// current platform. Windows does not launch extensionless shell scripts, so
+// use a batch file there; Unix can use the existing shebang script fixture.
+func writeRunnableToolFixture(t *testing.T, dir, name string) {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	data := []byte("#!/bin/sh\nexit 0\n")
+	if runtime.GOOS == "windows" {
+		path += ".cmd"
+		data = []byte("@echo off\r\nexit /b 0\r\n")
+	}
+	if err := os.WriteFile(path, data, 0o755); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // The default view is the selected entry per name across ALL rings: a local
@@ -165,10 +182,7 @@ func TestListViewsAreMutuallyExclusive(t *testing.T) {
 // resolves, a model whose credential is present, an agent whose halves are.
 func TestListActiveShowsOnlyUsableEntries(t *testing.T) {
 	binDir := t.TempDir()
-	present := filepath.Join(binDir, "present-tool")
-	if err := os.WriteFile(present, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeRunnableToolFixture(t, binDir, "present-tool")
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("VIEWACTIVE_API_KEY", "test-credential")
 
@@ -228,9 +242,7 @@ func TestHiddenToolHidesBoundAgentsToo(t *testing.T) {
 	// loud-tool resolves on PATH so the --active leg can tell hidden apart
 	// from merely uninstalled.
 	binDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(binDir, "loud-tool"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeRunnableToolFixture(t, binDir, "loud-tool")
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	root := t.TempDir()
