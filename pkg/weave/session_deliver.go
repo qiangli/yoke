@@ -32,9 +32,12 @@ import (
 // DeliveryReport says what one pass did, and WHEN the feed answered — a
 // shared view that does not say how fresh it is reads as truth.
 type DeliveryReport struct {
-	Session   string    `json:"session,omitempty"`
-	Delivered int       `json:"delivered"`
-	Cursor    string    `json:"cursor,omitempty"`
+	Session   string `json:"session,omitempty"`
+	Delivered int    `json:"delivered"`
+	Cursor    string `json:"cursor,omitempty"`
+	// Approvals counts remote approval directives this host answered (a
+	// receipt posted, applied or rejected) — see session_approval.go.
+	Approvals int       `json:"approvals,omitempty"`
 	AsOf      time.Time `json:"as_of"`
 	// Skipped is set when there is no relay to drain (not paired, no origin):
 	// an unpaired host reads its inbox exactly as before, silently.
@@ -161,6 +164,16 @@ func DeliverRemoteMail(ctx context.Context, repoRoot, reader string) (DeliveryRe
 		}
 		rep.AsOf = time.Now().UTC()
 		for _, ev := range resp.Events {
+			if ev.Kind == ApprovalDirectiveKind {
+				answered, err := applyApprovalEvent(ctx, sc, repoRoot, taskID, ev)
+				if err != nil {
+					return rep, err
+				}
+				if answered {
+					rep.Approvals++
+				}
+				continue
+			}
 			if ev.Kind != MessageEventKind {
 				continue
 			}
