@@ -294,7 +294,7 @@ default) means your current claim. Both forms honour it.`,
 			var err error
 			what := "project claim"
 			if len(args) == 1 {
-				ref := targetRef(cmd, args[0])
+				ref := mapBare(normRef(targetRef(cmd, args[0])))
 				what = ref.String()
 				err = ReleaseRef(ctxOf(cmd), ref, Self(), epoch)
 			} else {

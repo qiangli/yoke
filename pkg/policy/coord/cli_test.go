@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -692,5 +693,80 @@ func TestClaimProjectReleaseHonoursEpoch(t *testing.T) {
 	}
 	if claims, _ := List(dir); len(claims) != 0 {
 		t.Fatalf("claims after a plain release: %+v", claims)
+	}
+}
+
+func TestRegisteredResourceLabelIdenticalInClaimListRelease(t *testing.T) {
+	dir := cliEnv(t)
+	ctx := context.Background()
+
+	// "appdir" is registered via cliProvider (kind "clires").
+	// 1. Claim using bare registered resource name:
+	outClaim, _, err := runClaim(ctx, "appdir")
+	if err != nil {
+		t.Fatalf("claim appdir: %v", err)
+	}
+	wantLabel := "clires:appdir"
+	if !strings.Contains(outClaim, "claim: "+wantLabel+" held on") {
+		t.Fatalf("claim output = %q, want label %q", outClaim, wantLabel)
+	}
+
+	// 2. List shows the identical registered resource label:
+	outList, _, err := runClaim(ctx, "list")
+	if err != nil {
+		t.Fatalf("claim list: %v", err)
+	}
+	if !strings.Contains(outList, wantLabel) {
+		t.Fatalf("list output = %q, want label %q", outList, wantLabel)
+	}
+
+	// 3. Release using bare registered resource name renders the identical label:
+	outRelease, _, err := runClaim(ctx, "release", "appdir")
+	if err != nil {
+		t.Fatalf("claim release appdir: %v", err)
+	}
+	wantRelease := fmt.Sprintf("claim: released %s\n", wantLabel)
+	if outRelease != wantRelease {
+		t.Fatalf("release output = %q, want %q", outRelease, wantRelease)
+	}
+	if claims, err := List(dir); err != nil || len(claims) != 0 {
+		t.Fatalf("claims after release = %+v %v, want 0", claims, err)
+	}
+
+	// 4. Also verify explicit kind:name form:
+	if _, _, err := runClaim(ctx, "clires:appdir"); err != nil {
+		t.Fatalf("claim clires:appdir: %v", err)
+	}
+	outRelExplicit, _, err := runClaim(ctx, "release", "clires:appdir")
+	if err != nil {
+		t.Fatalf("release clires:appdir: %v", err)
+	}
+	if outRelExplicit != wantRelease {
+		t.Fatalf("explicit release output = %q, want %q", outRelExplicit, wantRelease)
+	}
+
+	// 5. Ad-hoc and --kind targets remain preserved:
+	// Ad-hoc bare name "do1":
+	if _, _, err := runClaim(ctx, "do1"); err != nil {
+		t.Fatalf("claim do1: %v", err)
+	}
+	outRelAdHoc, _, err := runClaim(ctx, "release", "do1")
+	if err != nil {
+		t.Fatalf("release do1: %v", err)
+	}
+	if outRelAdHoc != "claim: released name:do1\n" {
+		t.Fatalf("ad-hoc release output = %q, want 'claim: released name:do1\\n'", outRelAdHoc)
+	}
+
+	// --kind path /w/app:
+	if _, _, err := runClaim(ctx, "--kind", "path", "/w/app"); err != nil {
+		t.Fatalf("claim --kind path /w/app: %v", err)
+	}
+	outRelKind, _, err := runClaim(ctx, "release", "--kind", "path", "/w/app")
+	if err != nil {
+		t.Fatalf("release --kind path /w/app: %v", err)
+	}
+	if outRelKind != "claim: released path:/w/app\n" {
+		t.Fatalf("--kind release output = %q, want 'claim: released path:/w/app\\n'", outRelKind)
 	}
 }
