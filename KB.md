@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [repo/page] CLI stdout ownership must outlive process wait — WHEN streaming events from a short-lived CLI with os/exec, do not let exec.Cmd.Wait own and close StdoutPipe while a separate scanner drains terminal events. Attach an explicitly owned os.Pipe writer to Cmd.Stdout, close the parent's writer after Start, and let the scanner close t  (kb:cli-stdout-ownership-must-outlive-process-wait)
+- [host/note] Model cmd/cgo C without a Go scope binding When go/types FakeImportC collides with a legal package-scope declaration named C, hygienically rename the user's Go object only in the checker tree while leaving syntactic C.name selector bases bound to FakeImportC; restore the source spelling during conversion. Native-unit validation needs  (kb:model-cmd-cgo-c-without-a-go-scope-binding)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 
