@@ -34,6 +34,22 @@ func TestSubscriptionHeadroomUsesMeasuredAccountWindow(t *testing.T) {
 	}
 }
 
+func TestMeasuredHeadroomResolvesOnlyAnObservedSubscriptionBinding(t *testing.T) {
+	now := time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)
+	used := 40.0
+	g := New(Config{Now: func() time.Time { return now }, Adapters: []Adapter{headroomAdapter{metrics: []Metric{{Name: "quota.used_percent", Value: &used, Classification: "actual", Source: "fixture", ObservedAt: now}}}}, Policy: &Policy{Version: 1,
+		Bindings: []Binding{{Model: "model-b", Agent: "vendor-b:model-b", Provider: "vendor-b", Account: "seat", Pool: "primary", Lane: LaneSubscription}},
+		Sources:  []SourceConfig{{ID: "seat", Kind: "headroom-fixture", Provider: "vendor-b", Account: "seat", Pool: "primary", Lane: LaneSubscription, Enabled: true}},
+	}})
+	remaining, binding, known, err := g.MeasuredHeadroom(context.Background(), "model-b", "vendor-b:model-b")
+	if err != nil || !known || remaining != .6 || binding.Account != "seat" {
+		t.Fatalf("MeasuredHeadroom() = %v, %+v, %v, %v", remaining, binding, known, err)
+	}
+	if _, _, known, err = g.MeasuredHeadroom(context.Background(), "missing", "vendor-b:missing"); err != nil || known {
+		t.Fatalf("missing binding = known=%v err=%v; want false, nil", known, err)
+	}
+}
+
 func TestSubscriptionHeadroomRejectsUnknownAndStaleMetrics(t *testing.T) {
 	now := time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)
 	used := 25.0
