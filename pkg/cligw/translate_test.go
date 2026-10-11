@@ -58,3 +58,21 @@ func TestRenderPromptRejectsImage(t *testing.T) {
 		t.Fatalf("error = %v, want ErrUnsupportedContent", err)
 	}
 }
+
+func TestCodexSeatIsFramedOnlyWithCallerTools(t *testing.T) {
+	withTools := CompletionPrompt{Prompt: "User: make the file", CallerTools: true}
+	plain := CompletionPrompt{Prompt: "User: hi"}
+	if !completionFramed("muse", plain) || !completionFramed("codex", withTools) {
+		t.Fatal("muse always, and codex with caller tools, must be framed")
+	}
+	if completionFramed("codex", plain) || completionFramed("claude", withTools) {
+		t.Fatal("codex without caller tools and other seats keep their prompt")
+	}
+	got := framedPrompt("codex", withTools)
+	if !strings.Contains(got, "Your local Codex tools remain disabled") || !strings.Contains(got, `{"tool_calls":[`) || !strings.Contains(got, "User: make the file") {
+		t.Fatalf("codex frame = %q", got)
+	}
+	if !strings.Contains(framedPrompt("muse", plain), "Your local Muse tools remain disabled") {
+		t.Fatal("muse frame text changed")
+	}
+}

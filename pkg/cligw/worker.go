@@ -220,8 +220,8 @@ func (w *Worker) DoCompletion(ctx context.Context, input CompletionPrompt, onEve
 	w.effort = effective
 	mode := w.mode
 	prompt := input.Prompt
-	if w.tool.Name == "muse" {
-		prompt = museCompletionPrompt(input)
+	if completionFramed(w.tool.Name, input) {
+		prompt = framedPrompt(w.tool.Name, input)
 	} else if !w.nativeSystemPrompt() {
 		prompt = inlineSystemPrompt(systemPrompt(input.System), prompt)
 	}

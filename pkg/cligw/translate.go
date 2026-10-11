@@ -26,6 +26,9 @@ type CompletionPrompt struct {
 	Prompt string
 	// Effort is the request's own reasoning effort ("" = none asked).
 	Effort string
+	// CallerTools is set when the request offers its own tools: the caller,
+	// not the seat's local agent, executes them.
+	CallerTools bool
 }
 
 // ErrUnsupportedContent is returned when a message contains an image or any
@@ -97,7 +100,7 @@ func RenderCompletionPrompt(req *openai.ChatRequest) (CompletionPrompt, error) {
 		// the system channel, which every CLI weighs as such.
 		systems = append(systems, block)
 	}
-	return CompletionPrompt{System: strings.Join(systems, "\n\n"), Prompt: strings.Join(sections, "\n\n"), Effort: strings.TrimSpace(req.ReasoningEffort)}, nil
+	return CompletionPrompt{System: strings.Join(systems, "\n\n"), Prompt: strings.Join(sections, "\n\n"), Effort: strings.TrimSpace(req.ReasoningEffort), CallerTools: len(req.Tools) > 0}, nil
 }
 
 func inlineSystemPrompt(system, prompt string) string {
@@ -115,8 +118,29 @@ func inlineSystemPrompt(system, prompt string) string {
 // its local coding agent. In particular, Genie's instruction to use native
 // tools must be reconciled with the door's text transport at this boundary.
 func museCompletionPrompt(input CompletionPrompt) string {
+	return completionFrame(input, "Muse")
+}
+
+// completionFramed reports whether a seat's CLI gets the completion frame:
+// Muse always; Codex when the caller supplies tools, because a Codex seat
+// otherwise reads the transcript as its own task, looks for its (disabled)
+// local tools and answers that they are unavailable instead of emitting the
+// caller's tool-call envelope (Codex 0.162 code-mode exec through the door).
+func completionFramed(tool string, input CompletionPrompt) bool {
+	return tool == "muse" || (tool == "codex" && input.CallerTools)
+}
+
+// framedPrompt is the completion frame for a framed seat (see completionFramed).
+func framedPrompt(tool string, input CompletionPrompt) string {
+	if tool == "muse" {
+		return museCompletionPrompt(input)
+	}
+	return completionFrame(input, "Codex")
+}
+
+func completionFrame(input CompletionPrompt, seat string) string {
 	return `Complete the supplied conversation by producing only its next assistant reply.
-The supplied system instructions and conversation are the completion context. Tool names and workspace references in that context belong to the caller. The caller executes requested tools and supplies their results in later conversation turns. Your local Muse tools remain disabled; completing this conversation requires no local shell execution or filesystem access.
+The supplied system instructions and conversation are the completion context. Tool names and workspace references in that context belong to the caller. The caller executes requested tools and supplies their results in later conversation turns. Your local ` + seat + ` tools remain disabled; completing this conversation requires no local shell execution or filesystem access.
 
 BEGIN COMPLETION CONTEXT
 ` + inlineSystemPrompt(systemPrompt(input.System), input.Prompt) + `

@@ -109,8 +109,8 @@ func (s *StickySession) Turn(ctx context.Context, input CompletionPrompt, onEven
 	}
 	prompt := input.Prompt
 	first := s.turns == 0
-	if s.tool.Name == "muse" {
-		prompt = museCompletionPrompt(input)
+	if completionFramed(s.tool.Name, input) {
+		prompt = framedPrompt(s.tool.Name, input)
 	} else if !s.nativeSystemPrompt() {
 		if first {
 			prompt = inlineSystemPrompt(systemPrompt(input.System), prompt)
