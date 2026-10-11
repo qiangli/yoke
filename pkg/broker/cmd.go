@@ -489,6 +489,8 @@ func bindStickySession(ctx context.Context, spec StickySpec) (session string, fo
 func newEnvCmd() *cobra.Command {
 	var sticky string
 	var asJSON bool
+	var client string
+	var via string
 	var spec StickySpec
 	cmd := &cobra.Command{
 		Use:   "env",
@@ -507,6 +509,23 @@ of the same principal: create it in one, bind to it in the next. With --model
 M the sticky is created first when it does not exist (one step: freeze + URL).
 Otherwise the caller's $BASHY_MODEL_SESSION, if set, is carried in the URLs.
 
+--client generic prints the shell environment (and is the default). OpenClaw
+prints a complete JSON provider block selecting bashy/L4. Codync prints the
+env block for its service unit; codync-host passes that environment to the ACP
+agents it starts.
+
+--via mesh is configuration-only. First expose the door on its host and bind
+the remote service to this host's ordinary door address, then print the same
+client block with that dialed loopback address:
+
+  door$ outpost mesh service add llm 127.0.0.1:24556
+  door$ bashy llm env --client openclaw --via mesh >openclaw-bashy.json
+  client$ outpost mesh dial --local 127.0.0.1:24556 llm
+
+Generate the block on the door host so it contains that door's owner token,
+then transfer it securely to the client. Set BASHY_LLM_PORT while printing
+when the mesh dial uses another local port.
+
 --json emits the bashy-llm-env-v1 envelope (base_url, session, sticky, env)
 instead of shell assignments. Both forms carry the owner token: never commit
 either, record only the schema name as evidence.`,
@@ -514,6 +533,25 @@ either, record only the schema name as evidence.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(c *cobra.Command, _ []string) error {
+			client = strings.ToLower(strings.TrimSpace(client))
+			switch client {
+			case "", "generic", "openclaw", "codync":
+			case "openai":
+				client = "generic"
+			default:
+				return fmt.Errorf("llm env: unknown client %q (want generic, openclaw, or codync)", client)
+			}
+			via = strings.ToLower(strings.TrimSpace(via))
+			switch via {
+			case "", "local":
+				via = "local"
+			case "mesh":
+			default:
+				return fmt.Errorf("llm env: unknown route %q (want local or mesh)", via)
+			}
+			if asJSON && client != "" && client != "generic" {
+				return errors.New("llm env: --json cannot be combined with --client openclaw or codync")
+			}
 			token, err := door.Token()
 			if err != nil {
 				return err
@@ -559,12 +597,7 @@ either, record only the schema name as evidence.`,
 					Env           map[string]string `json:"env"`
 				}{EnvSchemaVersion, base, session, sticky, env})
 			}
-			for _, k := range envVarOrder {
-				fmt.Fprintf(out, "%s=%s\n", k, env[k])
-			}
-			fmt.Fprintln(out, "export "+strings.Join(envVarOrder, " "))
-			fmt.Fprintln(out, "# OpenAI routes: /v1/chat/completions /v1/responses /v1/models")
-			return nil
+			return writeClientEnv(out, client, via, env)
 		},
 	}
 	cmd.Flags().StringVar(&sticky, "sticky", "", "bind the printed base URLs to this sticky key (any session's)")
@@ -573,8 +606,62 @@ either, record only the schema name as evidence.`,
 	cmd.Flags().StringVar(&spec.TTL, "ttl", "", "with --model: idle expiry (default 30m; 0 = never)")
 	cmd.Flags().StringVar(&spec.Bind, "bind", "", "with --model: identity|worker")
 	cmd.Flags().StringVar(&spec.Reset, "reset", "", "with --model: each|none")
+	cmd.Flags().StringVar(&client, "client", "generic", "ready configuration for generic|openclaw|codync")
+	cmd.Flags().StringVar(&via, "via", "local", "reach the door through local|mesh (mesh uses the dialed local BASHY_LLM_PORT)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the "+EnvSchemaVersion+" envelope instead of shell assignments")
 	return cmd
+}
+
+func writeClientEnv(out io.Writer, client, via string, env map[string]string) error {
+	if client == "" {
+		client = "generic"
+	}
+	switch client {
+	case "generic":
+		if via == "mesh" {
+			fmt.Fprintf(out, "# mesh dial: %s\n", strings.TrimSuffix(env["OPENAI_BASE_URL"], "/v1"))
+		}
+		for _, k := range envVarOrder {
+			fmt.Fprintf(out, "%s=%s\n", k, env[k])
+		}
+		fmt.Fprintln(out, "export "+strings.Join(envVarOrder, " "))
+		fmt.Fprintln(out, "# OpenAI routes: /v1/chat/completions /v1/responses /v1/models")
+		return nil
+	case "openclaw":
+		block := map[string]any{
+			"models": map[string]any{
+				"mode": "merge",
+				"providers": map[string]any{
+					"bashy": map[string]any{
+						"baseUrl": env["OPENAI_BASE_URL"],
+						"apiKey":  env["OPENAI_API_KEY"],
+						"api":     "openai-completions",
+						"models": []map[string]any{{
+							"id": "L4", "name": "Bashy fleet L4", "reasoning": true,
+							"input": []string{"text"}, "cost": map[string]int{"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+							"contextWindow": 200000, "maxTokens": 32000,
+						}},
+					},
+				},
+			},
+			"agents": map[string]any{"defaults": map[string]any{"model": map[string]string{"primary": "bashy/L4"}}},
+		}
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		return enc.Encode(block)
+	case "codync":
+		fmt.Fprintln(out, "# codync-host service env; inherited by the ACP agents it starts")
+		if via == "mesh" {
+			fmt.Fprintf(out, "# mesh dial: %s\n", strings.TrimSuffix(env["OPENAI_BASE_URL"], "/v1"))
+		}
+		fmt.Fprintln(out, "env:")
+		for _, k := range envVarOrder[:4] {
+			fmt.Fprintf(out, "  %s: %s\n", k, strconv.Quote(env[k]))
+		}
+		return nil
+	default:
+		return fmt.Errorf("llm env: unsupported client %q", client)
+	}
 }
 
 // doorStatusError is a non-2xx answer from the door.
