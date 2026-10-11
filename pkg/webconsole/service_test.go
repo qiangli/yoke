@@ -4,91 +4,196 @@
 package webconsole
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
 	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/qiangli/yoke/pkg/svcd"
+	"github.com/qiangli/yoke/pkg/fleet"
+	"github.com/qiangli/yoke/pkg/service"
 )
 
-// outpost restarts any service whose `status` output contains "stopped" or
-// "not running". Those two strings are therefore a wire format with a
-// supervisor on the other end, and a RUNNING console printing either would be
-// restarted on a 30s timer forever.
-func TestServiceStatusWordsAreTheSupervisorContract(t *testing.T) {
-	var b strings.Builder
-	printServiceStatus(&b, svcd.Status{Running: true, Addr: "127.0.0.1:8639", PID: 42}, false, "status")
-	got := strings.ToLower(b.String())
-	for _, forbidden := range []string{"stopped", "not running"} {
-		if strings.Contains(got, forbidden) {
-			t.Fatalf("a RUNNING console printed %q (%q) — outpost greps for it and would restart on every tick",
-				forbidden, b.String())
-		}
-	}
-	if !strings.Contains(got, "running") {
-		t.Fatalf("status of a running console = %q, want it to say so", b.String())
-	}
-
-	b.Reset()
-	printServiceStatus(&b, svcd.Status{State: svcd.StateNotRunning}, false, "status")
-	if !strings.Contains(strings.ToLower(b.String()), "stopped") {
-		t.Fatalf("status of a stopped console = %q, want the word outpost restarts on", b.String())
-	}
-}
-
-// The console's spec must name its own /healthz identity, or stop cannot tell
-// "our console holds this port" from "an unrelated process does" — and would
-// either refuse to stop a console it owns or signal something it does not.
-func TestServiceSpecMatchesTheHealthEndpoint(t *testing.T) {
-	if spec.Health != otelServiceName {
-		t.Fatalf("spec.Health = %q, want the value /healthz reports (%q)", spec.Health, otelServiceName)
-	}
-	if spec.DefaultPort != DefaultPort {
-		t.Fatalf("spec.DefaultPort = %d, want the console's own default %d", spec.DefaultPort, DefaultPort)
-	}
-	h := newTestHandler(t, Options{})
-	w := do(h, "GET", "/healthz", "127.0.0.1:5555", nil)
-	if !strings.Contains(w.Body.String(), `"service":"`+spec.Health+`"`) {
-		t.Fatalf("/healthz = %s, want it to report service %q", strings.TrimSpace(w.Body.String()), spec.Health)
-	}
-}
-
-func TestServicePairingIsExplicitAndDoesNotMutateTheBaseSpec(t *testing.T) {
-	plain := serviceSpec(false)
-	paired := serviceSpec(true)
-	if got := strings.Join(plain.Argv, " "); got != "apps serve" {
-		t.Fatalf("plain service argv = %q", got)
-	}
-	if got := strings.Join(paired.Argv, " "); got != "apps serve --pair" {
-		t.Fatalf("paired service argv = %q", got)
-	}
-	if got := strings.Join(spec.Argv, " "); got != "apps serve" {
-		t.Fatalf("base service spec mutated to %q", got)
-	}
-}
-
-func TestBareServiceStartReusesTheSavedPairingProfile(t *testing.T) {
+// serviceEnv isolates the unit store and console state from the developer's.
+func serviceEnv(t *testing.T) {
+	t.Helper()
 	t.Setenv("BASHY_HOME", t.TempDir())
-	want := svcd.Options{Bind: "192.0.2.55", Port: 23456}
-	if err := saveServiceProfile(want, true); err != nil {
-		t.Fatal(err)
-	}
+	t.Setenv("BASHY_SERVICES_DIR", t.TempDir())
+	t.Setenv("BASHY_SERVICES_PATH", "")
+}
 
-	gotOpt, gotPair, err := serviceStartPlan(svcd.Options{}, false, false)
+func appsUnit(t *testing.T) fleet.Service {
+	t.Helper()
+	u, err := loadServiceUnit()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !gotPair {
-		t.Fatal("bare service start did not reuse the saved --pair profile")
+	return u
+}
+
+func runAppService(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+	cmd := NewAppsCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs(append([]string{"service"}, args...))
+	err := cmd.Execute()
+	return out.String(), err
+}
+
+// The seeded unit's exec must expand to flags `apps serve` really accepts, and
+// its default launch shape must be what a bare console has always been:
+// loopback, stock launcher, pairing off.
+func TestAppsUnitExecMatchesServeFlags(t *testing.T) {
+	serviceEnv(t)
+	u := appsUnit(t)
+	if u.Enabled || u.ProviderName() != fleet.ServiceProviderProcess {
+		t.Fatalf("seed = enabled %v provider %s, want disabled process", u.Enabled, u.ProviderName())
 	}
-	if gotOpt.Bind != want.Bind || gotOpt.Port != want.Port {
-		t.Fatalf("start options = %+v, want %+v", gotOpt, want)
+	argv, err := u.ExpandExec("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(argv, " "), "bashy apps serve --port 22749 --bind 127.0.0.1 --pair=false --launcher="; got != want {
+		t.Fatalf("argv = %q, want %q", got, want)
+	}
+	serve := newServeCmd()
+	if err := serve.ParseFlags(argv[3:]); err != nil {
+		t.Fatalf("serve rejects the unit's argv: %v", err)
+	}
+	if p, _ := serve.Flags().GetBool("pair"); p {
+		t.Fatal("seed arms pairing")
+	}
+	if a := u.Expose.App; a == nil || !a.RequireLogin || !a.Elevation || !a.TrustCloudIdentity {
+		t.Fatalf("expose.app = %+v, want login+elevation+cloud identity", a)
+	}
+	if h := do(newTestHandler(t, Options{}), "GET", "/healthz", "127.0.0.1:5555", nil); !strings.Contains(h.Body.String(), `"service":"`+otelServiceName+`"`) {
+		t.Fatalf("/healthz = %s, want service %q", h.Body.String(), otelServiceName)
+	}
+}
+
+func TestServiceStartWritesTheUnitAndStopDisablesIt(t *testing.T) {
+	serviceEnv(t)
+	port := freePort(t)
+	out, err := runAppService(t, "start", "--pair", "--bind", "192.0.2.55", "--port", strconv.Itoa(port), "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st service.Status
+	if err := json.Unmarshal([]byte(out), &st); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	if st.Unit != "apps" || !st.Enabled || st.State != service.Inactive || st.Provider != "process" {
+		t.Fatalf("status = %+v", st)
+	}
+	u := appsUnit(t)
+	argv, err := u.ExpandExec("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "bashy apps serve --port " + strconv.Itoa(port) + " --bind 192.0.2.55 --pair=true --launcher="
+	if got := strings.Join(argv, " "); got != want {
+		t.Fatalf("argv = %q, want %q", got, want)
+	}
+	if !u.Enabled {
+		t.Fatal("start did not enable the unit")
+	}
+
+	out, err = runAppService(t, "stop", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u := appsUnit(t); u.Enabled {
+		t.Fatal("stop left the unit enabled")
+	}
+	if plan := planOf(appsUnit(t)); !plan.Pair || plan.Port != port {
+		t.Fatalf("stop dropped the launch shape: %+v", plan)
+	}
+}
+
+// Status reports the monitor's states from the unit's own /healthz probe, and
+// a port held by something else is Failed, never mistaken for the console.
+func TestServiceStatusFollowsTheHealthProbe(t *testing.T) {
+	serviceEnv(t)
+	if _, err := runAppService(t, "start", "--port", strconv.Itoa(freePort(t))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runAppService(t, "stop"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runAppService(t, "status")
+	if !errors.Is(err, errInactive) {
+		t.Fatalf("status of a disabled idle unit = %v, want errInactive", err)
+	}
+
+	console := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]any{"ok": true, "service": otelServiceName})
+	}))
+	defer console.Close()
+	port := console.Listener.Addr().(*net.TCPAddr).Port
+	if _, err := runAppService(t, "start", "--port", strconv.Itoa(port), "--bind", "127.0.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runAppService(t, "status")
+	if err != nil {
+		t.Fatalf("status of a serving console = %v", err)
+	}
+	if !strings.Contains(out, "active") {
+		t.Fatalf("status = %q", out)
+	}
+
+	foreign := httptest.NewServer(http.NotFoundHandler())
+	defer foreign.Close()
+	fport := foreign.Listener.Addr().(*net.TCPAddr).Port
+	if _, err := runAppService(t, "start", "--port", strconv.Itoa(fport), "--bind", "127.0.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	out, err = runAppService(t, "status", "--json")
+	if !errors.Is(err, errInactive) {
+		t.Fatalf("status of a foreign listener = %v", err)
+	}
+	var st service.Status
+	if jerr := json.Unmarshal([]byte(out), &st); jerr != nil || st.State != service.Failed {
+		t.Fatalf("foreign listener status = %+v (%v)", st, jerr)
+	}
+}
+
+func freePort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port
+}
+
+func TestBareServiceStartReusesThePairingShapeOnTheUnit(t *testing.T) {
+	serviceEnv(t)
+	port := freePort(t)
+	if _, err := runAppService(t, "start", "--pair", "--bind", "192.0.2.55", "--port", strconv.Itoa(port)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runAppService(t, "stop"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runAppService(t, "start"); err != nil {
+		t.Fatal(err)
+	}
+	if got := planOf(appsUnit(t)); got != (servicePlan{Port: port, Bind: "192.0.2.55", Pair: true}) {
+		t.Fatalf("bare start changed the shape: %+v", got)
 	}
 }
 
 func TestBareServiceStartRefusesToDisarmLivePairingState(t *testing.T) {
-	t.Setenv("BASHY_HOME", t.TempDir())
+	serviceEnv(t)
 	store, err := openPairStore()
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +206,7 @@ func TestBareServiceStartRefusesToDisarmLivePairingState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, err = serviceStartPlan(svcd.Options{}, false, false)
+	_, err = runAppService(t, "start")
 	if err == nil {
 		t.Fatal("bare service start with live paired devices succeeded")
 	}
@@ -110,29 +215,19 @@ func TestBareServiceStartRefusesToDisarmLivePairingState(t *testing.T) {
 		!strings.Contains(msg, "bashy app service start --pair --bind") {
 		t.Fatalf("error did not name the recurring pairing repair: %v", err)
 	}
+	if appsUnit(t).Enabled {
+		t.Fatal("a refused start still enabled the unit")
+	}
 }
 
-func TestExplicitServiceStartMayChooseANewProfileEvenWithLiveDevices(t *testing.T) {
-	t.Setenv("BASHY_HOME", t.TempDir())
-	store, err := openPairStore()
+func TestExplicitServiceStartMayChooseANewShapeEvenWithLiveDevices(t *testing.T) {
+	serviceEnv(t)
+	want, err := serviceStartPlan(servicePlan{Port: 1, Bind: "x", Pair: true}, servicePlan{Bind: "127.0.0.1"}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, secret, err := store.issueTicket(nil, time.Hour, time.Minute)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.redeem(secret, "phone", ""); err != nil {
-		t.Fatal(err)
-	}
-
-	want := svcd.Options{Bind: "127.0.0.1", Port: DefaultPort}
-	gotOpt, gotPair, err := serviceStartPlan(want, false, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if gotPair || gotOpt != want {
-		t.Fatalf("explicit start plan = %+v pair=%v, want %+v pair=false", gotOpt, gotPair, want)
+	if want != (servicePlan{Port: DefaultPort, Bind: "127.0.0.1"}) {
+		t.Fatalf("explicit start plan = %+v", want)
 	}
 }
 

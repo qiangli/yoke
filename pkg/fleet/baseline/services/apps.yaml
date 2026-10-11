@@ -1,7 +1,10 @@
 name: apps
 kind: service
 description: Apps console — the web board that tiles bashy panels and registered apps
-exec: [bashy, apps, serve, --port, "{port}", --bind, "{bind}"]
+exec: [bashy, apps, serve, --port, "{port}", --bind, "{bind}", "--pair={settings.pair}", "--launcher={settings.launcher}"]
+settings:
+  pair: "false"
+  launcher: ""
 ports:
   - name: http
     port: 22749
@@ -15,5 +18,5 @@ restart:
   backoff: {min: 1s, max: 30s, healthy_after: 30s}
   start_limit: {burst: 5, interval: 5m}
 expose:
-  app: {name: apps, require_login: true}
+  app: {name: apps, require_login: true, elevation: true, trust_cloud_identity: true}
 enabled: false

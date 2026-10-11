@@ -165,13 +165,9 @@ var packages = map[string]Package{
 		"and so outpost's /shell can later collapse onto it instead of keeping a second implementation"),
 	"websession": libPkg("app", "stateless HMAC session cookie + per-IP login throttle for a locally "+
 		"served web surface; copied from outpost's adminui, which is internal/ and so unimportable"),
-	"svcd": libPkg("app", "the start/status/stop daemon lifecycle a supervised bashy service exposes: "+
-		"pidfile, a port probe that identifies the listener via /healthz before signalling it, and a "+
-		"stop that escalates so the port is actually freed. Adopted by the web console first; pkg/meet, "+
-		"pkg/sdlc and pkg/schedule still carry private copies and should migrate onto it"),
-	"service": {Role: RoleUnwired, Note: "the service-unit runtime contract (states, events, Provider, the " +
-		"internal capability registry and provider) behind `bashy service`; the monitor (S16) and outpost's " +
-		"internal providers (S18) are its first consumers, so nothing imports it yet"},
+	"service": libPkg("app", "the service-unit runtime contract (states, events, Provider, the "+
+		"internal capability registry and provider) behind `bashy service`; the web console reports its "+
+		"`apps` unit in this shape, and the monitor (S16) and outpost's internal providers (S18) drive it"),
 	"sshclient": libPkg("peer", "SSH client transport (dial, known-hosts, pty resize) shared by bashy's "+
 		"peer channel/remote exec and outpost's ssh commands; moved here from outpost so bashy does not import outpost"),
 	"sshserver": libPkg("peer", "SSH server (sessions, port forwards, authorized_keys) that outpost embeds and "+
