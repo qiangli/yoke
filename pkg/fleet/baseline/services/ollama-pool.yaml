@@ -1,0 +1,12 @@
+name: ollama-pool
+kind: service
+description: cloudbox LLM pool participation — pushes this host's model inventory and the ollama proxy's capacity; dials out, serves nothing
+provider: internal
+capability: outpost.ollama-pool
+owner: outpost
+requires: [ollama]
+restart:
+  policy: on-failure
+  backoff: {min: 5s, max: 2m, healthy_after: 2m}
+  start_limit: {burst: 5, interval: 10m}
+enabled: false

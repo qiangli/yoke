@@ -1,0 +1,13 @@
+name: otel
+kind: service
+description: ycode observability surfaces — apps otel-prometheus, otel-logs, otel-alerts, otel-traces, otel-dashboard behind a bearer-injecting proxy
+provider: internal
+capability: outpost.otel
+owner: outpost
+settings:
+  pool: "true"
+restart:
+  policy: on-failure
+  backoff: {min: 5s, max: 2m, healthy_after: 2m}
+  start_limit: {burst: 5, interval: 10m}
+enabled: false

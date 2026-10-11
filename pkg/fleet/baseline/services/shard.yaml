@@ -1,0 +1,17 @@
+name: shard
+kind: service
+description: intra-home model sharding over the mesh and peer plane — enabling it brings both up
+provider: internal
+capability: outpost.shard
+owner: outpost
+settings:
+  role: auto
+  peers: ""
+  node_bytes: "0"
+  server_bin: ""
+  worker_bin: ""
+restart:
+  policy: on-failure
+  backoff: {min: 5s, max: 2m, healthy_after: 2m}
+  start_limit: {burst: 5, interval: 10m}
+enabled: false

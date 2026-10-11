@@ -1,0 +1,13 @@
+name: warm
+kind: service
+description: considerate warm plane — keeps preferred models resident in the local daemon within a fraction of usable memory
+provider: internal
+capability: outpost.warm
+owner: outpost
+settings:
+  budget_frac: "0.33"
+restart:
+  policy: on-failure
+  backoff: {min: 5s, max: 2m, healthy_after: 2m}
+  start_limit: {burst: 5, interval: 10m}
+enabled: false

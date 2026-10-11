@@ -1,0 +1,20 @@
+name: sandbox
+kind: service
+description: filtered container sandbox over the podman socket — escape knobs always stripped, caps and image allowlist from settings, images prewarmed
+provider: internal
+capability: outpost.sandbox
+owner: outpost
+settings:
+  socket: ""
+  max_memory_mb: "0"
+  cpus: "0"
+  pids_limit: "0"
+  max_containers: "0"
+  allowed_images: ""
+  scratch_dir: ""
+  prewarm_images: ""
+restart:
+  policy: on-failure
+  backoff: {min: 5s, max: 2m, healthy_after: 2m}
+  start_limit: {burst: 5, interval: 10m}
+enabled: false
