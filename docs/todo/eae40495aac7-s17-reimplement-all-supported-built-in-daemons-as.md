@@ -10,8 +10,6 @@ labels:
     - coreutils
     - bashy
 created: 2026-10-11T05:07:47.965699Z
-weave: 104
-assignee: claude-opus5.5
 sprint: 418
 sprint_id: 9891800f-8da5-5338-92bc-1d75755ca548
 sprint_title: 'Agent ecosystem synergy: agentic tools compose like a|b|c through bashy extension points'
