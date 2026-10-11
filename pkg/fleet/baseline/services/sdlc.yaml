@@ -1,7 +1,7 @@
 name: sdlc
 kind: service
 description: SDLC intake-to-conductor loop driven by durable triggers
-exec: [bashy, sdlc, service, run, --interval, "{settings.interval}"]
+exec: [bashy, sdlc, serve, --interval, "{settings.interval}"]
 settings:
   interval: 60s
 restart:
