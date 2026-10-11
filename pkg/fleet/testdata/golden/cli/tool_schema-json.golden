@@ -540,9 +540,49 @@
     "description": "print only: argv template used instead of cli.launch.exec, for a feature that is a subcommand ({args}, {model}, {workspace})"
   },
   {
+    "path": "commands.\u003cindex\u003e.http",
+    "type": "object",
+    "description": "http only: typed request declaration; JSON is encoded by the runner, never by a shell"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.http.body",
+    "type": "map[string]interface {}",
+    "description": "JSON object encoded by encoding/json; string values may use {args}"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.http.body.\u003ckey\u003e",
+    "type": "interface {}",
+    "description": "map value"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.http.method",
+    "type": "string",
+    "description": "HTTP method (GET, POST, PUT, PATCH or DELETE)"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.http.path",
+    "type": "string",
+    "description": "optional endpoint path appended to url"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.http.token_file",
+    "type": "string",
+    "description": "owner-managed file containing the bearer token"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.http.token_ref",
+    "type": "string",
+    "description": "secret credential ref resolved through the host secrets map"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.http.url",
+    "type": "string",
+    "description": "absolute HTTP base URL; loopback only unless effects include net and remote"
+  },
+  {
     "path": "commands.\u003cindex\u003e.mode",
     "type": "string",
-    "description": "print (one-shot via the exec template) or tui (steered session via steer_exec)"
+    "description": "print (one-shot via the exec template), tui (steered session), or http (typed JSON request)"
   },
   {
     "path": "commands.\u003cindex\u003e.name",
@@ -620,9 +660,49 @@
     "description": "print only: argv template used instead of cli.launch.exec, for a feature that is a subcommand ({args}, {model}, {workspace})"
   },
   {
+    "path": "commands.name=\u003cvalue\u003e.http",
+    "type": "object",
+    "description": "http only: typed request declaration; JSON is encoded by the runner, never by a shell"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.http.body",
+    "type": "map[string]interface {}",
+    "description": "JSON object encoded by encoding/json; string values may use {args}"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.http.body.\u003ckey\u003e",
+    "type": "interface {}",
+    "description": "map value"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.http.method",
+    "type": "string",
+    "description": "HTTP method (GET, POST, PUT, PATCH or DELETE)"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.http.path",
+    "type": "string",
+    "description": "optional endpoint path appended to url"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.http.token_file",
+    "type": "string",
+    "description": "owner-managed file containing the bearer token"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.http.token_ref",
+    "type": "string",
+    "description": "secret credential ref resolved through the host secrets map"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.http.url",
+    "type": "string",
+    "description": "absolute HTTP base URL; loopback only unless effects include net and remote"
+  },
+  {
     "path": "commands.name=\u003cvalue\u003e.mode",
     "type": "string",
-    "description": "print (one-shot via the exec template) or tui (steered session via steer_exec)"
+    "description": "print (one-shot via the exec template), tui (steered session), or http (typed JSON request)"
   },
   {
     "path": "commands.name=\u003cvalue\u003e.name",
