@@ -23,6 +23,7 @@ const (
 	dirCommands = "commands"
 	dirApps     = "apps"
 	dirPlans    = "plans"
+	dirServices = "services"
 
 	dirResources     = "resources"
 	dirResourceKinds = "resourcekinds"

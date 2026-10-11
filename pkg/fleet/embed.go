@@ -29,6 +29,9 @@ const baselineRoot = "baseline"
 // URLs and only known limits. Like the roster they are data a same-named
 // local or shared file replaces, and BASHY_FLEET_SEEDS=off drops them.
 //
+// baseline/services holds the built-in service units (service.go). They are
+// launch contracts, not roster data, so BASHY_FLEET_SEEDS=off keeps them.
+//
 // pkg/fleet/testdata/ring holds the roster the tests resolve against (see
 // fleettest.Ring); it is deliberately separate from the shipped seeds so a
 // roster edit never rewrites a test expectation.
@@ -37,5 +40,5 @@ const baselineRoot = "baseline"
 // capability priors, and env markers that used to be duplicated across
 // pkg/chat, pkg/weave, pkg/capability, and pkg/skills.
 //
-//go:embed baseline/tools/*.yaml baseline/models/*.yaml baseline/agents/*.yaml baseline/plans/*.yaml
+//go:embed baseline/tools/*.yaml baseline/models/*.yaml baseline/agents/*.yaml baseline/plans/*.yaml baseline/services/*.yaml
 var baselineFS embed.FS

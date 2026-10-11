@@ -1,0 +1,11 @@
+name: sdlc
+kind: service
+description: SDLC intake-to-conductor loop driven by durable triggers
+exec: [bashy, sdlc, service, run, --interval, "{settings.interval}"]
+settings:
+  interval: 60s
+restart:
+  policy: on-failure
+  backoff: {min: 5s, max: 5m, healthy_after: 5m}
+  start_limit: {burst: 5, interval: 30m}
+enabled: false

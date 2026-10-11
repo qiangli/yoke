@@ -1,0 +1,19 @@
+name: apps
+kind: service
+description: Apps console — the web board that tiles bashy panels and registered apps
+exec: [bashy, apps, serve, --port, "{port}", --bind, "{bind}"]
+ports:
+  - name: http
+    port: 22749
+health:
+  http: /healthz
+  interval: 10s
+  timeout: 2s
+  failures: 3
+restart:
+  policy: on-failure
+  backoff: {min: 1s, max: 30s, healthy_after: 30s}
+  start_limit: {burst: 5, interval: 5m}
+expose:
+  app: {name: apps, require_login: true}
+enabled: false
