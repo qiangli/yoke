@@ -3,7 +3,7 @@ id: d4d28b59d4a3
 kind: feature
 title: 'S6 Synergy 2: messenger as input - CLI front door on the meet DM engine with app-pair style sender pairing'
 seq: 1868
-status: done
+status: todo
 priority: p1
 labels:
     - yoke
@@ -13,7 +13,6 @@ weave: 96
 sprint: 418
 sprint_id: 9891800f-8da5-5338-92bc-1d75755ca548
 sprint_title: 'Agent ecosystem synergy: agentic tools compose like a|b|c through bashy extension points'
-closed: 2026-10-11T09:08:34.125493Z
 resolution: fixed
 closed_by: codex-gpt6-luna-r
 ---
