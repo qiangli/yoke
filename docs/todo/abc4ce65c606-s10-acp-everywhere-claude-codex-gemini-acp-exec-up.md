@@ -9,7 +9,6 @@ labels:
     - yoke
     - bashy
 created: 2026-10-11T03:52:03.478684Z
-weave: 136
 assignee: claude-sonnet5.5
 sprint: 418
 sprint_id: 9891800f-8da5-5338-92bc-1d75755ca548

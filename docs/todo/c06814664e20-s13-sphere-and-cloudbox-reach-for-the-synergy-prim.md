@@ -9,7 +9,6 @@ labels:
     - outpost
     - yoke
 created: 2026-10-11T04:12:45.529982Z
-weave: 125
 assignee: claude-sonnet5.5
 sprint: 418
 sprint_id: 9891800f-8da5-5338-92bc-1d75755ca548

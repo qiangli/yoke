@@ -8,7 +8,6 @@ priority: p2
 labels:
     - yoke
 created: 2026-10-11T03:52:01.134948Z
-weave: 140
 assignee: claude-opus5.5
 sprint: 418
 sprint_id: 9891800f-8da5-5338-92bc-1d75755ca548
