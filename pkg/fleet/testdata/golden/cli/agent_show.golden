@@ -1,4 +1,5 @@
 gt-agent  (gt-tool:gt-model)
+permission: auto
 band:    L3~, derived -
 seed:    L3 declared, active (unclocked: no season recorded)
 missing:

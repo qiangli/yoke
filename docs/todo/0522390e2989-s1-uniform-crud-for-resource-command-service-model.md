@@ -3,12 +3,13 @@ id: 0522390e2989
 kind: feature
 title: 'S1 Uniform CRUD for resource/command/service/model/tool/agent/skill: YAML round-trip and --json'
 seq: 1863
-status: todo
+status: assigned
 priority: p1
 labels:
     - yoke
     - bashy
 created: 2026-10-11T03:51:42.16684Z
+assignee: codex-gpt6-luna
 sprint: 418
 sprint_id: 9891800f-8da5-5338-92bc-1d75755ca548
 sprint_title: 'Agent ecosystem synergy: agentic tools compose like a|b|c through bashy extension points'

@@ -90,6 +90,9 @@ func appRoot(opts []Option) *cobra.Command {
 }
 
 func TestRegistryCLIGolden(t *testing.T) {
+	// Agent writes mint lifecycle ownership from the ambient sprint. These are
+	// output goldens for fixed records, so keep the host's active story out.
+	t.Setenv("BASHY_MINT_SPRINT", "")
 	root, opts := goldenEnv(t)
 	goldenFixtures(t, root, opts)
 

@@ -110,7 +110,7 @@ func TestCLIShowRecordAddRoundTrip(t *testing.T) {
 				t.Fatalf("record header:\n%s", rec)
 			}
 
-			out, _, err := f.runIn(rec, "add", "-")
+			out, _, err := f.runIn(rec, "add", "-f", "-")
 			if err != nil {
 				t.Fatalf("add -: %v\n%s", err, out)
 			}

@@ -3,6 +3,8 @@ package resources
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -17,6 +19,51 @@ func run(t *testing.T, args ...string) (string, error) {
 	cmd.SetArgs(args)
 	err := cmd.Execute()
 	return out.String(), err
+}
+
+func TestResourceYAMLImportExportIdentity(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BASHY_RESOURCES_DIR", root)
+	if _, err := run(t, "add", "matrix-resource", "--kind", "path", "--title", "matrix", "/tmp/matrix"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := run(t, "show", "matrix-resource", "--yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := NewCommand()
+	cmd.SetIn(bytes.NewBufferString(before))
+	cmd.SetArgs([]string{"add", "-f", "-"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("add -f -: %v", err)
+	}
+	after, err := run(t, "show", "matrix-resource", "--yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before != after {
+		t.Fatalf("resource YAML round-trip changed record:\n%s\n---\n%s", before, after)
+	}
+
+	path := filepath.Join(t.TempDir(), "resource.yaml")
+	if err := os.WriteFile(path, []byte(before), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run(t, "add", "-f", path); err != nil {
+		t.Fatalf("add -f FILE: %v", err)
+	}
+	if _, err := run(t, "list", "--json"); err != nil {
+		t.Fatalf("list --json: %v", err)
+	}
+	if _, err := run(t, "verify", "matrix-resource"); err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if _, err := run(t, "set", "matrix-resource", "--title", "updated"); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if _, err := run(t, "rm", "matrix-resource"); err != nil {
+		t.Fatalf("rm: %v", err)
+	}
 }
 
 func TestSystemCommandJSON(t *testing.T) {

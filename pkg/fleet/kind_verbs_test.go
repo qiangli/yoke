@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -197,6 +198,65 @@ func TestToolModelAgentDeclareTheirVerbsOnTheKindTable(t *testing.T) {
 				t.Errorf("%s %s: no --force", kind, verb.Name())
 			}
 		}
+		if newAdd(kind, nil).Flags().Lookup("file") == nil {
+			t.Errorf("%s add: missing -f/--file YAML import flag", kind)
+		}
+	}
+}
+
+func TestGenericExtensionAddFileRoundTripMatrix(t *testing.T) {
+	isolatedFleetRoot(t)
+	t.Setenv("BASHY_MINT_SPRINT", "")
+	for _, tc := range []struct {
+		name string
+		root func(...Option) *cobra.Command
+		seed func(*Catalog) error
+	}{
+		{"tool", NewToolsCmd, func(c *Catalog) error {
+			return c.SaveTool(Tool{Name: "rt-tool", Kind: ToolKindCLI, CLI: ToolCLI{Binary: "/bin/true"}})
+		}},
+		{"model", NewModelsCmd, func(c *Catalog) error {
+			return c.SaveModel(Model{Name: "rt-model", Provider: "openai", Kind: ModelKindAPI, UpstreamID: "rt-model"})
+		}},
+		{"agent", NewAgentsCmd, func(c *Catalog) error {
+			if err := c.SaveTool(Tool{Name: "rt-agent-tool", Kind: ToolKindCLI, CLI: ToolCLI{Binary: "/bin/true"}}); err != nil {
+				return err
+			}
+			if err := c.SaveModel(Model{Name: "rt-agent-model", Provider: "openai", Kind: ModelKindAPI, UpstreamID: "rt-agent-model"}); err != nil {
+				return err
+			}
+			return c.SaveAgent(Agent{Name: "rt-agent", Tool: "rt-agent-tool", Model: "rt-agent-model", Permission: PermissionAuto})
+		}},
+		{"command", NewCommandsCmd, func(c *Catalog) error {
+			return c.SaveCommand(Command{Name: "rt-command", Kind: KindCommand, Exec: []string{"/bin/true"}, Effects: []string{"read"}})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			opts := []Option{WithRoot(root), WithoutCloudOverlay(), WithBaselineFS(fstest.MapFS{})}
+			cat := New(opts...)
+			if err := tc.seed(cat); err != nil {
+				t.Fatal(err)
+			}
+			name := map[string]string{"tool": "rt-tool", "model": "rt-model", "agent": "rt-agent", "command": "rt-command"}[tc.name]
+			before, err := runCmd(t, tc.root(opts...), "show", name, "--yaml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmd := tc.root(opts...)
+			cmd.SetIn(strings.NewReader(before))
+			cmd.SetArgs([]string{"add", "-f", "-"})
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("add -f -: %v", err)
+			}
+			after, err := runCmd(t, tc.root(opts...), "show", name, "--yaml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if before != after {
+				t.Fatalf("show|add -f - changed record:\n%s\n---\n%s", before, after)
+			}
+		})
 	}
 }
 

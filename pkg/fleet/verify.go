@@ -35,6 +35,24 @@ func Probes(cache spacetime.Cache) *spacetime.ProbeSet {
 	return spacetime.DefaultProbes(cache)
 }
 
+// VerifyService checks a unit's structural declaration and enabled-port
+// conflicts using the same rules its writes enforce.
+func (c *Catalog) VerifyService(name string) Check {
+	check := Check{Kind: KindService, Name: name}
+	s, ok := c.Service(name)
+	if !ok {
+		check.Reason = "not found"
+		return check
+	}
+	if err := c.checkService(s); err != nil {
+		check.Reason = err.Error()
+		return check
+	}
+	check.OK = true
+	check.Reason = "unit declaration is valid"
+	return check
+}
+
 // VerifyTool reports whether a tool is installed and has a launch declaration.
 //
 // Standalone and offline: it asks the PATH whether the binary exists and

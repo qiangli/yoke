@@ -10,6 +10,11 @@
     "description": "list element"
   },
   {
+    "path": "avatar",
+    "type": "string",
+    "description": "avatar URL or asset reference"
+  },
+  {
     "path": "band",
     "type": "int",
     "description": "served capability band for a cascade"
@@ -23,6 +28,31 @@
     "path": "base",
     "type": "string",
     "description": "base agent for a cascade"
+  },
+  {
+    "path": "bindings",
+    "type": "[]object",
+    "description": "inbound channel and sender routing rules"
+  },
+  {
+    "path": "bindings.\u003cindex\u003e",
+    "type": "object",
+    "description": "list element"
+  },
+  {
+    "path": "bindings.\u003cindex\u003e.agent",
+    "type": "string",
+    "description": "agent name to route to"
+  },
+  {
+    "path": "bindings.\u003cindex\u003e.channel",
+    "type": "string",
+    "description": "chat channel name"
+  },
+  {
+    "path": "bindings.\u003cindex\u003e.sender",
+    "type": "string",
+    "description": "peer identity within the channel"
   },
   {
     "path": "certificates",
@@ -190,6 +220,16 @@
     "description": "human name used in conversation"
   },
   {
+    "path": "notify",
+    "type": "bool",
+    "description": "notify this agent about inbound work"
+  },
+  {
+    "path": "permission",
+    "type": "string",
+    "description": "permission mode: auto, ask, review, or deny"
+  },
+  {
     "path": "ratings",
     "type": "object",
     "description": "duty ratings (code, manage, judge)"
@@ -313,5 +353,10 @@
     "path": "tool",
     "type": "string",
     "description": "bound tool name"
+  },
+  {
+    "path": "workdir",
+    "type": "string",
+    "description": "default working directory for launches"
   }
 ]
