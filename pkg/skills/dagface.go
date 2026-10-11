@@ -35,22 +35,60 @@ var errNoTasksFace = errors.New("skills: no tasks face")
 
 // materializeTasks resolves the skill's tasks face to an on-disk path:
 // a bundled tasks.md wins (the real file for directory-backed skills, a
-// temp file for embedded ones); otherwise a `metadata.tasks` POINTER —
+// temp file for embedded ones); an inline '## Tasks' section in SKILL.md
+// is parsed directly by the dag parser; otherwise a `metadata.tasks` POINTER —
 // a repo-relative path resolved under cwd, so a skill can package
 // discovery/gating/attestation for a dag file the repo already has
-// (every dag file is a latent skill). The returned document comes from
-// the dag engine's own parser, so target names match execution exactly.
+// (every dag file is a latent skill). If a SKILL.md has BOTH an inline
+// '## Tasks' section and metadata.tasks: (or bundled tasks.md), it refuses
+// with a clear error and never merges silently. The returned document comes
+// from the dag engine's own parser, so target names match execution exactly.
 func materializeTasks(sk Skill, src Source, cwd string) (path string, doc *dag.Document, cleanup func(), err error) {
 	cleanup = func() {}
-	switch data, ok := src.File(sk.Name, "tasks.md"); {
-	case ok && sk.Dir != "":
+
+	var (
+		bundledData []byte
+		hasBundled  bool
+		skillData   []byte
+		hasSkill    bool
+	)
+	if src != nil {
+		bundledData, hasBundled = src.File(sk.Name, "tasks.md")
+		skillData, hasSkill = src.Body(sk.Name)
+		if !hasSkill {
+			skillData, hasSkill = src.File(sk.Name, "SKILL.md")
+		}
+	}
+	if !hasBundled && sk.Dir != "" {
+		if b, err := os.ReadFile(filepath.Join(sk.Dir, "tasks.md")); err == nil {
+			bundledData, hasBundled = b, true
+		}
+	}
+	if !hasSkill && sk.Dir != "" {
+		if b, err := os.ReadFile(filepath.Join(sk.Dir, "SKILL.md")); err == nil {
+			skillData, hasSkill = b, true
+		}
+	}
+
+	hasInlineTasks := hasSkill && dag.HasTasksSection(skillData)
+	hasMetaTasks := sk.Meta != nil && sk.Meta["tasks"] != ""
+
+	if hasInlineTasks && hasMetaTasks {
+		return "", nil, cleanup, fmt.Errorf("skills: %q has both an inline '## Tasks' section and metadata.tasks: pointer (refusing to merge)", sk.Name)
+	}
+	if hasInlineTasks && hasBundled {
+		return "", nil, cleanup, fmt.Errorf("skills: %q has both an inline '## Tasks' section and bundled tasks.md (refusing to merge)", sk.Name)
+	}
+
+	switch {
+	case hasBundled && sk.Dir != "":
 		path = filepath.Join(sk.Dir, "tasks.md")
-	case ok:
+	case hasBundled:
 		f, err := os.CreateTemp("", "bashy-skill-"+sk.Name+"-*.md")
 		if err != nil {
 			return "", nil, cleanup, err
 		}
-		if _, err := f.Write(data); err != nil {
+		if _, err := f.Write(bundledData); err != nil {
 			f.Close()
 			return "", nil, cleanup, err
 		}
@@ -59,7 +97,23 @@ func materializeTasks(sk Skill, src Source, cwd string) (path string, doc *dag.D
 		}
 		path = f.Name()
 		cleanup = func() { _ = os.Remove(f.Name()) }
-	case sk.Meta["tasks"] != "":
+	case hasInlineTasks && sk.Dir != "":
+		path = filepath.Join(sk.Dir, "SKILL.md")
+	case hasInlineTasks:
+		f, err := os.CreateTemp("", "bashy-skill-"+sk.Name+"-*.md")
+		if err != nil {
+			return "", nil, cleanup, err
+		}
+		if _, err := f.Write(skillData); err != nil {
+			f.Close()
+			return "", nil, cleanup, err
+		}
+		if err := f.Close(); err != nil {
+			return "", nil, cleanup, err
+		}
+		path = f.Name()
+		cleanup = func() { _ = os.Remove(f.Name()) }
+	case hasMetaTasks:
 		rel := filepath.FromSlash(sk.Meta["tasks"])
 		if filepath.IsAbs(rel) || strings.Contains(rel, "..") {
 			return "", nil, cleanup, fmt.Errorf("skills: %q metadata tasks pointer %q must be a repo-relative path (no absolute, no ..)", sk.Name, sk.Meta["tasks"])
@@ -69,7 +123,7 @@ func materializeTasks(sk Skill, src Source, cwd string) (path string, doc *dag.D
 			return "", nil, cleanup, fmt.Errorf("skills: %q tasks pointer %q not found under %s", sk.Name, sk.Meta["tasks"], cwd)
 		}
 	default:
-		return "", nil, cleanup, fmt.Errorf("skills: %q has no tasks face (bundle a tasks.md, or point at one via metadata tasks: <repo-relative path>): %w", sk.Name, errNoTasksFace)
+		return "", nil, cleanup, fmt.Errorf("skills: %q has no tasks face (bundle a tasks.md, point at one via metadata tasks: <repo-relative path>, or inline a '## Tasks' section in SKILL.md): %w", sk.Name, errNoTasksFace)
 	}
 	doc, err = dag.ParseFile(path)
 	if err != nil {

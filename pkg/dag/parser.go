@@ -464,13 +464,30 @@ func dagNameRank(name string) int {
 	return 2
 }
 
-func hasTasksSection(data []byte) bool {
-	for _, ln := range strings.Split(string(data), "\n") {
+// HasTasksSection reports whether data contains an ATX heading `## Tasks`
+// outside frontmatter.
+func HasTasksSection(data []byte) bool {
+	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	start := 0
+	if len(lines) > 0 && strings.TrimSpace(lines[0]) == "---" {
+		j := 1
+		for j < len(lines) && strings.TrimSpace(lines[j]) != "---" {
+			j++
+		}
+		if j < len(lines) {
+			start = j + 1
+		}
+	}
+	for _, ln := range lines[start:] {
 		if lvl, text, ok := parseHeading(ln); ok && lvl == 2 && strings.EqualFold(text, "Tasks") {
 			return true
 		}
 	}
 	return false
+}
+
+func hasTasksSection(data []byte) bool {
+	return HasTasksSection(data)
 }
 
 // absorb splits a target's raw lines into description, metadata, and body.
