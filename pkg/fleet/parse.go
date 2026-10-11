@@ -100,6 +100,15 @@ func ParseAgentFile(name string, body []byte, src assetring.Source) (AgentFile, 
 		if f.Agents[i].Name == "" {
 			f.Agents[i].Name = name
 		}
+		// Permission was added after agents had already been persisted. Missing
+		// is therefore the historical, permissive behaviour rather than a new
+		// invalid record.
+		if f.Agents[i].Permission == "" {
+			f.Agents[i].Permission = PermissionAuto
+		}
+		if !ValidPermission(f.Agents[i].Permission) {
+			return AgentFile{}, fmt.Errorf("fleet: agent %q has invalid permission %q (want auto, ask, review, or deny)", f.Agents[i].Name, f.Agents[i].Permission)
+		}
 		if src != nil {
 			f.Agents[i].Ring = src.Ring()
 		}

@@ -153,6 +153,12 @@ func (c *Catalog) SaveAgent(a Agent) error {
 	if err := ValidEffort(a.Effort); err != nil {
 		return err
 	}
+	if a.Permission == "" {
+		a.Permission = PermissionAuto
+	}
+	if !ValidPermission(a.Permission) {
+		return fmt.Errorf("fleet: agent %q has invalid permission %q (want auto, ask, review, or deny)", a.Name, a.Permission)
+	}
 	if err := ValidLadderEvidence(a); err != nil {
 		return err
 	}

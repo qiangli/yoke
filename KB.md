@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [host/page] PCTS POSIX conformance: campaign plan to 100% — Ranked plan+blockers to take the bashy/coreutils userland from 86.6% of GNU PCTS toward 100%; triggers: posix, pcts, conformance, sed, grep, pkg/bre, NO-list, find -exec, cert #279890, 100% Plan of record to drive the bashy/coreutils pure-Go userland from 86.6% of GNU's PCTS pass count (2551/  (kb:posix-100-conformance-campaign-plan)
+- [repo/page] Agy model-door text lives in step updates — For cligw stdin-stream-json workers, extract only agent_response step_update.text_delta and use result.response only when no deltas arrived. Select a fresh Agy project explicitly; cwd alone can reuse remembered context. Keep raw provider stderr out of HTTP headers. See docs/validation/cligw  (kb:agy-model-door-text-lives-in-step-updates)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 
