@@ -1039,6 +1039,31 @@ time the answer was fetched. 'open' is the same command.`,
 	return cmd
 }
 
+func newWeaveSessionApproveCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	var host, token, verdict string
+	cmd := &cobra.Command{
+		Use:   `approve <full-approval-id>`,
+		Short: "Answer an approval owned by another host through the shared session",
+		Long: `Append an approval directive to this repository's existing Cloudbox
+session feed, then show the owner's receipt when available (or pending). The
+approval id must be complete; --token must be the exact plan token shown by the
+owner. The owner host validates the joined person seat and settles the queue.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runWeaveSessionApprove(cmd, args[0], host, token, verdict)
+		},
+	}
+	flags.attach(cmd)
+	cmd.Flags().StringVar(&host, "host", "", "Owner host for the pending approval")
+	cmd.Flags().StringVar(&token, "token", "", "Exact plan token shown by the owner")
+	cmd.Flags().StringVar(&verdict, "verdict", "", "Decision: allow or deny")
+	_ = cmd.MarkFlagRequired("host")
+	_ = cmd.MarkFlagRequired("token")
+	_ = cmd.MarkFlagRequired("verdict")
+	return cmd
+}
+
 func newWeaveJoinCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var observer bool

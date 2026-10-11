@@ -727,6 +727,7 @@ func newSprintSessionCmd() *cobra.Command {
 	cmd.AddCommand(
 		newWeaveSessionsCmd(),      // `session list`
 		newWeaveSessionStatusCmd(), // `session status` / `session open`
+		newWeaveSessionApproveCmd(),
 		newWeaveJoinCmd(),
 		newWeaveTakeCmd(),
 		newWeaveHandoffCmd(),

@@ -2,6 +2,7 @@ package weave
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,7 +18,44 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/qiangli/coreutils/pkg/weavecli"
+	"github.com/qiangli/yoke/pkg/ask"
 )
+
+func runWeaveSessionApprove(cmd *cobra.Command, approvalID, host, token, verdict string) error {
+	if len(approvalID) != 32 {
+		return fmt.Errorf("approval id must be the full 32-character id")
+	}
+	if _, err := hex.DecodeString(approvalID); err != nil {
+		return fmt.Errorf("approval id must be a full hexadecimal id")
+	}
+	if verdict != ask.VerdictAllow && verdict != ask.VerdictDeny {
+		return fmt.Errorf("verdict must be allow or deny")
+	}
+	repo, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	d, err := SendApprovalDirective(cmd.Context(), repo, ask.RemoteDirective{
+		Approval: approvalID, Host: host, Token: token, Verdict: verdict,
+	})
+	if err != nil {
+		return err
+	}
+	rc, found, err := FindApprovalReceipt(cmd.Context(), repo, d.ID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "directive %s: pending (owner host %s has not replied)\n", d.ID, host)
+		return err
+	}
+	if rc.Reason != "" {
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "directive %s: %s on %s: %s\n", d.ID, rc.Status, rc.Host, rc.Reason)
+	} else {
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "directive %s: %s on %s\n", d.ID, rc.Status, rc.Host)
+	}
+	return err
+}
 
 var (
 	newSessionClient = func(base, token string) SessionClient {
