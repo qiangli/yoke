@@ -1,0 +1,9 @@
+name: schedule
+kind: service
+description: bashy's modern cron — runs registered scheduled jobs
+exec: [bashy, schedule, daemon]
+restart:
+  policy: always
+  backoff: {min: 1s, max: 30s, healthy_after: 30s}
+  start_limit: {burst: 5, interval: 5m}
+enabled: false

@@ -38,6 +38,11 @@ const (
 	// TTL, modes and hook commands — so user kinds work wherever builtin
 	// kinds do. Like resources, no embedded ring.
 	KindResourceKind = "resourcekind"
+	// KindService is the service-unit noun (`bashy service add`): a daemon
+	// declaration `bashy supervisord` keeps running. Unlike commands and
+	// apps it HAS an embedded ring — the built-in units are compiled-in seeds
+	// (docs/bashy-service-design.md).
+	KindService = "service"
 )
 
 // Tool kind discriminators. The cloudbox Tool registry is shared between

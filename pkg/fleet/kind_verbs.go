@@ -148,6 +148,9 @@ type typedRecord[T any] struct {
 	Check func(*Catalog, T) error
 	// ForceDoc is the help of `--force`; empty means the generic text.
 	ForceDoc string
+	// FileFlag gives `add` a -f/--file FILE|- spelling of the document
+	// import, kubectl-style, in place of the positional path.
+	FileFlag bool
 }
 
 // recordSpec is typedRecord with T erased; every rec is a *T.
@@ -178,6 +181,7 @@ type recordSpec struct {
 	flags     []kindFlag
 	aliasDoc  aliasDoc
 	nameFlag  string
+	fileFlag  bool
 }
 
 func newRecordSpec[T any](t typedRecord[T]) *recordSpec {
@@ -208,6 +212,7 @@ func newRecordSpec[T any](t typedRecord[T]) *recordSpec {
 		showShort: t.ShowShort, showLong: t.ShowLong,
 		addDoc: t.AddDoc, setDoc: t.SetDoc,
 		flags: t.Flags, aliasDoc: t.AliasDoc, nameFlag: t.NameFlag,
+		fileFlag: t.FileFlag,
 	}
 	if t.Aliases != nil {
 		r.aliases = func(rec any) *[]string { return t.Aliases(rec.(*T)) }
@@ -394,13 +399,28 @@ func newAdd(kind string, opts []Option) *cobra.Command {
 	var name string
 	var aliases []string
 	var paths pathFlags
+	var file string
 	c := r.usage(r.addDoc, "add")
+	if r.fileFlag {
+		c.Args = func(cmd *cobra.Command, args []string) error {
+			if file != "" {
+				return cobra.NoArgs(cmd, args)
+			}
+			return cobra.ExactArgs(1)(cmd, args)
+		}
+		c.Flags().StringVarP(&file, "file", "f", "", "import the document in FILE (- = stdin)")
+	}
 	bound := bindFlags(c, r.flags, false)
 	c.RunE = func(cmd *cobra.Command, args []string) error {
 		cat := New(opts...)
-		arg := args[0]
+		var arg string
+		if file != "" {
+			arg = file
+		} else {
+			arg = args[0]
+		}
 		var recs []any
-		if looksLikePath(arg) && !recordFlagGiven(cmd, bound, paths) {
+		if file != "" || looksLikePath(arg) && !recordFlagGiven(cmd, bound, paths) {
 			fallback := baseName(arg)
 			if name != "" {
 				fallback = name
