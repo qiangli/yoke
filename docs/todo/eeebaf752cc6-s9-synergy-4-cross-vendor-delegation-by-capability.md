@@ -3,14 +3,18 @@ id: eeebaf752cc6
 kind: feature
 title: 'S9 Synergy 4: cross-vendor delegation by capability - tool cmd run --capability deep-research'
 seq: 1871
-status: todo
+status: blocked
 priority: p2
 labels:
     - yoke
 created: 2026-10-11T03:52:01.134948Z
+weave: 119
+assignee: claude-opus5.5
 sprint: 418
 sprint_id: 9891800f-8da5-5338-92bc-1d75755ca548
 sprint_title: 'Agent ecosystem synergy: agentic tools compose like a|b|c through bashy extension points'
+resolution: fixed
+closed_by: claude-opus5.5-o
 ---
 
 Reinspection 2026-10-11 (docs/agent-ecosystem-synergy.md section Reuse map): extend existing machinery, no second log or verb. Capability-addressed calls building on Sprint 324 capability: and chat --capability: bashy tool cmd run --capability deep-research -- QUESTION selects a measured provider (claude, gemini, openclaw where measured), quota-aware via llmbudget. Remote variant: an agent on another sphere host is reached as a band request to that peer bashy llm door over the outpost mesh forwarder (Sprint 308 MVP proved outpost mesh service add llm plus mesh dial), not a new A2A plane; depends on 308 A3/A5 (advertise door, per-peer bearer/share). Acceptance: from a codex session it returns a report produced by another vendor; the selection is an S3 event; unmeasured commands are never seeded.
