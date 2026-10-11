@@ -3,15 +3,20 @@ id: d1d045dd536f
 kind: feature
 title: 'S15 service as a resource kind: unit YAML in the registry rings with CRUD and seeded built-in units'
 seq: 1884
-status: todo
+status: done
 priority: p1
 labels:
     - yoke
     - bashy
 created: 2026-10-11T05:07:43.3467Z
+weave: 72
+assignee: claude-opus5.5
 sprint: 418
 sprint_id: 9891800f-8da5-5338-92bc-1d75755ca548
 sprint_title: 'Agent ecosystem synergy: agentic tools compose like a|b|c through bashy extension points'
+closed: 2026-10-11T06:55:21.342036Z
+resolution: fixed
+closed_by: claude-opus5.5-t
 ---
 
 Design docs/bashy-service-design.md: inetd/systemd split - bashy service owns unit definitions and per-unit verbs; bashy supervisord (a bashy command, like inetd) is the service monitor; outpost supervisord (init, like systemd) starts and watches only the outpost daemon and bashy supervisord. Add service to the extension kinds (resource/command/service/model/tool/agent/skill); the S1 matrix covers seven kinds. bashy service add -f unit.yaml, show --yaml, set, rm, list --json; units live in the registry rings (embedded built-ins, shared, local), built-ins seeded as compiled-in definitions never copied: apps (console 22749), meet (8637), loom, sdlc, schedule, llm (door 24556, new), events (S3, new). Port conflicts against other units are refused at add/enable. Acceptance: show --yaml piped to add -f - is identity for a built-in and a custom unit; a conflicting port is refused with the holder named; every verb is an MCP tool via bashy mcp.
