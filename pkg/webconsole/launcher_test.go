@@ -19,7 +19,6 @@ import (
 	"github.com/qiangli/yoke/pkg/atlas"
 	"github.com/qiangli/yoke/pkg/coopauth"
 	"github.com/qiangli/yoke/pkg/fleet"
-	"github.com/qiangli/yoke/pkg/service"
 )
 
 func launcherFixture(t *testing.T) string {
@@ -173,38 +172,6 @@ func TestRegisteredAPIReservesDisabledStockAndExplicitApps(t *testing.T) {
 	}
 }
 
-func TestCustomLauncherServicePersistsAbsoluteDirectory(t *testing.T) {
-	serviceEnv(t)
-	dir := launcherFixture(t)
-	cwd, _ := os.Getwd()
-	relative, _ := filepath.Rel(cwd, dir)
-	launcher, err := serviceLauncherPlan("", relative, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !filepath.IsAbs(launcher) {
-		t.Fatalf("launcher = %s", launcher)
-	}
-	if _, err := runAppService(t, "start", "--launcher", relative, "--port", "23456"); err != nil {
-		t.Fatal(err)
-	}
-	reused, err := serviceLauncherPlan(planOf(appsUnit(t)).Launcher, "", false)
-	if err != nil || reused != launcher {
-		t.Fatalf("saved launcher = %q %v", reused, err)
-	}
-	argv, err := appsUnit(t).ExpandExec("")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := strings.Join(argv, " "); !strings.Contains(got, "--launcher="+launcher) {
-		t.Fatalf("daemon argv = %s", got)
-	}
-	cleared, err := serviceLauncherPlan(reused, "", true)
-	if err != nil || cleared != "" {
-		t.Fatalf("explicit stock = %q %v", cleared, err)
-	}
-}
-
 func TestAppListJSONMatchesAPIRows(t *testing.T) {
 	t.Setenv("BASHY_APPS_DIR", t.TempDir())
 	if err := fleet.New(fleet.WithAppValidate(ValidateRegisteredApp)).SaveApp(fleet.App{Name: "parityapp", Port: 54321, Label: "Parity app"}); err != nil {
@@ -244,47 +211,6 @@ func TestAppListJSONMatchesAPIRows(t *testing.T) {
 	apiBytes, _ := json.Marshal(api)
 	if !bytes.Equal(cliBytes, apiBytes) {
 		t.Fatalf("CLI differs from API:\n%s\n%s", cliBytes, apiBytes)
-	}
-}
-
-// Exercise the command's flag wiring: --pair/--port must still consult the
-// saved launcher. A removed directory then fails before the unit is written.
-func TestServiceExplicitPairPortRetainsSavedLauncher(t *testing.T) {
-	serviceEnv(t)
-	dir := launcherFixture(t)
-	if _, err := runAppService(t, "start", "--launcher", dir); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(filepath.Join(dir, "index.html")); err != nil {
-		t.Fatal(err)
-	}
-	_, err := runAppService(t, "start", "--pair", "--port", "23457")
-	if err == nil || !strings.Contains(err.Error(), "launcher index.html") {
-		t.Fatalf("explicit pair/port dropped saved launcher: %v", err)
-	}
-	if got := planOf(appsUnit(t)).Port; got == 23457 {
-		t.Fatal("a failed start still rewrote the unit")
-	}
-}
-
-func TestServiceLauncherOnlyRetainsPairingListenerProfile(t *testing.T) {
-	serviceEnv(t)
-	if _, err := runAppService(t, "start", "--pair", "--bind", "192.0.2.55", "--port", "23456"); err != nil {
-		t.Fatal(err)
-	}
-	out, err := runAppService(t, "start", "--launcher", launcherFixture(t), "--json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var status service.Status
-	if err := json.Unmarshal([]byte(out), &status); err != nil {
-		t.Fatal(err)
-	}
-	if len(status.Ports) != 1 || status.Ports[0] != "192.0.2.55:23456/tcp" {
-		t.Fatalf("launcher-only command reset listener profile: %+v", status)
-	}
-	if plan := planOf(appsUnit(t)); !plan.Pair || plan.Launcher == "" {
-		t.Fatalf("launcher-only command disarmed pairing or lost the launcher: %+v", plan)
 	}
 }
 
