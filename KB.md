@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [host/page] PCTS POSIX conformance: campaign plan to 100% — Ranked plan+blockers to take the bashy/coreutils userland from 86.6% of GNU PCTS toward 100%; triggers: posix, pcts, conformance, sed, grep, pkg/bre, NO-list, find -exec, cert #279890, 100% Plan of record to drive the bashy/coreutils pure-Go userland from 86.6% of GNU's PCTS pass count (2551/  (kb:posix-100-conformance-campaign-plan)
+- [host/page] dhnt umbrella orientation: what it is, tier vocabulary, working rules, current direction — Distilled agent-memory map of the dhnt umbrella (dhnt/Tessaro naming, 6 execution tiers, submodule pin workflow, hard working rules, 2026-07 direction) — WHEN starting any task in the dhnt umbrella or its submodules (keywords: dhnt, tessaro, umbrella, submod  (kb:dhnt-umbrella-orientation)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 
