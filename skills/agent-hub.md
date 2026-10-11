@@ -14,8 +14,9 @@ deliver them to channels outside bashy.
 
 ## Constraints & Security
 
-- **Subject-only:** Only subject/summary and event coordinates (type, target, actor, topic)
-  leave the host. Bodies, full transcripts, and sensitive operation payloads never leave the host.
+- **Subject-only:** Only the explicit `subject`/`summary` field and event coordinates (type, target)
+  leave the host. The sinks never read `body`: bodies, full transcripts, and sensitive operation
+  payloads never leave the host, and an event with no subject is delivered as its type/target title.
 - **Behind exec:** Designed to be run as an argv target from `--sink exec -- ...`, receiving
   the event JSON on stdin, or from a piped stream like `bashy events --follow --kind approval,notice --json`.
 
@@ -61,6 +62,16 @@ turn authority and may `/meet ROOM TEXT`, `approve` may `/approve ID` and
 `bashy meet dm --channel C --sender S --revoke` ends one.
 
 ~~~bash
+# agent_hub_subject prints the explicit subject of one event JSON on stdin:
+# .subject, else .summary, string-valued only, clipped to one line / 256 bytes.
+# It never reads .body (or any other field): bodies carry operation and message
+# contents and must not leave the host. No subject prints nothing, and the
+# caller falls back to its type/target title.
+agent_hub_subject() {
+	jq -r '(.subject // .summary // "") | if type == "string" then . else "" end' 2>/dev/null \
+		| head -n 1 | cut -c 1-256
+}
+
 # desktop delivers a notification to the local desktop environment.
 # Uses osascript on macOS and notify-send on Linux/FreeBSD.
 desktop() {
@@ -68,10 +79,10 @@ desktop() {
 	input="$(cat)"
 	[ -z "$input" ] && return 0
 
-	local kind target body title
+	local kind target subject title
 	kind="$(printf '%s' "$input" | jq -r '.type // .kind // "notice"' 2>/dev/null || echo "notice")"
 	target="$(printf '%s' "$input" | jq -r '.target // ""' 2>/dev/null || true)"
-	body="$(printf '%s' "$input" | jq -r '.body // .summary // ""' 2>/dev/null || true)"
+	subject="$(printf '%s' "$input" | agent_hub_subject)"
 
 	if [ -n "$target" ]; then
 		title="bashy [$kind] $target"
@@ -79,18 +90,16 @@ desktop() {
 		title="bashy [$kind]"
 	fi
 
-	# Subject-only: clip to single line and max 256 bytes
-	body="$(printf '%s' "$body" | head -n 1 | cut -c 1-256)"
-	[ -z "$body" ] && body="$title"
+	[ -z "$subject" ] && subject="$title"
 
 	if command -v osascript >/dev/null 2>&1; then
-		osascript - "$title" "$body" <<'APPLESCRIPT'
+		osascript - "$title" "$subject" <<'APPLESCRIPT'
 on run argv
 	display notification (item 2 of argv) with title (item 1 of argv)
 end run
 APPLESCRIPT
 	elif command -v notify-send >/dev/null 2>&1; then
-		notify-send "$title" "$body"
+		notify-send "$title" "$subject"
 	else
 		printf 'agent-hub: neither osascript nor notify-send is available\n' >&2
 		return 127
@@ -104,18 +113,17 @@ ntfy() {
 	input="$(cat)"
 	[ -z "$input" ] && return 0
 
-	local kind target body title topic_url
+	local kind target subject title topic_url
 	kind="$(printf '%s' "$input" | jq -r '.type // .kind // "notice"' 2>/dev/null || echo "notice")"
 	target="$(printf '%s' "$input" | jq -r '.target // ""' 2>/dev/null || true)"
-	body="$(printf '%s' "$input" | jq -r '.body // .summary // ""' 2>/dev/null || true)"
+	subject="$(printf '%s' "$input" | agent_hub_subject)"
 
 	if [ -n "$target" ]; then
 		title="bashy [$kind] $target"
 	else
 		title="bashy [$kind]"
 	fi
-	body="$(printf '%s' "$body" | head -n 1 | cut -c 1-256)"
-	[ -z "$body" ] && body="$title"
+	[ -z "$subject" ] && subject="$title"
 
 	topic_url="${NTFY_URL:-}"
 	if [ -z "$topic_url" ] && [ -n "${NTFY_TOPIC:-}" ]; then
@@ -127,7 +135,7 @@ ntfy() {
 		return 2
 	fi
 	command -v curl >/dev/null 2>&1 || { printf 'agent-hub: curl is required for ntfy\n' >&2; return 127; }
-	curl --fail --silent --show-error -H "Title: $title" -d "$body" "$topic_url" >/dev/null
+	curl --fail --silent --show-error -H "Title: $title" -d "$subject" "$topic_url" >/dev/null
 }
 
 # webhook delivers a subject notification payload via HTTP POST to WEBHOOK_URL.
@@ -136,18 +144,17 @@ webhook() {
 	input="$(cat)"
 	[ -z "$input" ] && return 0
 
-	local kind target body title url
+	local kind target subject title url
 	kind="$(printf '%s' "$input" | jq -r '.type // .kind // "notice"' 2>/dev/null || echo "notice")"
 	target="$(printf '%s' "$input" | jq -r '.target // ""' 2>/dev/null || true)"
-	body="$(printf '%s' "$input" | jq -r '.body // .summary // ""' 2>/dev/null || true)"
+	subject="$(printf '%s' "$input" | agent_hub_subject)"
 
 	if [ -n "$target" ]; then
 		title="bashy [$kind] $target"
 	else
 		title="bashy [$kind]"
 	fi
-	body="$(printf '%s' "$body" | head -n 1 | cut -c 1-256)"
-	[ -z "$body" ] && body="$title"
+	[ -z "$subject" ] && subject="$title"
 
 	url="${WEBHOOK_URL:-}"
 	if [ -z "$url" ]; then
@@ -157,7 +164,7 @@ webhook() {
 	command -v jq >/dev/null 2>&1 || { printf 'agent-hub: jq is required for webhook\n' >&2; return 127; }
 	command -v curl >/dev/null 2>&1 || { printf 'agent-hub: curl is required for webhook\n' >&2; return 127; }
 	local payload
-	payload="$(jq -n --arg title "$title" --arg kind "$kind" --arg target "$target" --arg subject "$body" \
+	payload="$(jq -n --arg title "$title" --arg kind "$kind" --arg target "$target" --arg subject "$subject" \
 		'{title: $title, kind: $kind, target: $target, subject: $subject}')" || return
 	curl --fail --silent --show-error -H "Content-Type: application/json" -d "$payload" "$url" >/dev/null
 }
