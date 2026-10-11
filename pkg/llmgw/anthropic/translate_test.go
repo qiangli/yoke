@@ -89,3 +89,27 @@ func TestConvertStream_TextAndToolUse(t *testing.T) {
 		}
 	}
 }
+
+func TestToOpenAI_SystemRoleInsideMessages(t *testing.T) {
+	var req MessagesRequest
+	body := `{"model":"L4","max_tokens":64,"messages":[
+      {"role":"system","content":"cwd is /work"},
+      {"role":"user","content":"hi"}]}`
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ToOpenAI(&req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Messages) != 2 || got.Messages[0].Role != "system" || got.Messages[1].Role != "user" {
+		t.Fatalf("messages = %#v", got.Messages)
+	}
+	if text := openai.FlattenContent(got.Messages[0].Content); text != "cwd is /work" {
+		t.Fatalf("system text = %q", text)
+	}
+	req.Messages[0].Role = "developer"
+	if _, err := ToOpenAI(&req); err == nil || !strings.Contains(err.Error(), `unsupported role "developer"`) {
+		t.Fatalf("unknown role err = %v", err)
+	}
+}

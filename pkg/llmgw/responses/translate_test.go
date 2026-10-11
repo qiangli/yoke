@@ -74,3 +74,17 @@ func TestChatCompletionToResponseAndSSE(t *testing.T) {
 		t.Fatalf("final event = %v", final)
 	}
 }
+
+func TestHostedToolsAreNotOffered(t *testing.T) {
+	body := `{"model":"gpt-6-sol","input":[{"role":"user","content":"hi"}],"tools":[{"type":"function","name":"shell","parameters":{"type":"object"}},{"type":"web_search"},{"type":"custom","name":"apply_patch"}],"store":false}`
+	req, _, err := ToChat([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(req.Tools) != 1 || req.Tools[0].Function.Name != "shell" {
+		t.Fatalf("tools = %+v", req.Tools)
+	}
+	if _, _, err := ToChat([]byte(`{"model":"m","input":[{"role":"user","content":"hi"}],"tools":[{"type":"function"}],"store":false}`)); err == nil || !strings.Contains(err.Error(), "needs a name") {
+		t.Fatalf("unnamed function err = %v", err)
+	}
+}

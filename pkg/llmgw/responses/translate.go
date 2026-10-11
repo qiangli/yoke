@@ -111,8 +111,14 @@ func ToChat(body []byte) (*openai.ChatRequest, bool, error) {
 		}
 	}
 	for i, tool := range req.Tools {
-		if tool.Type != "function" || tool.Name == "" {
-			return nil, false, fmt.Errorf("tools[%d]: only named function tools are supported", i)
+		// Hosted and freeform tools (web_search, custom, local_shell, ...) have
+		// no chat-completions equivalent and the door cannot execute them, so
+		// they are not offered to the model; Codex sends them by default.
+		if tool.Type != "function" {
+			continue
+		}
+		if tool.Name == "" {
+			return nil, false, fmt.Errorf("tools[%d]: function tool needs a name", i)
 		}
 		out.Tools = append(out.Tools, openai.Tool{Type: "function", Function: openai.ToolFunction{Name: tool.Name, Description: tool.Description, Parameters: tool.Parameters}})
 	}

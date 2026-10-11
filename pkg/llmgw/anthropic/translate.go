@@ -64,6 +64,15 @@ func ToOpenAI(req *MessagesRequest) (*openai.ChatRequest, error) {
 }
 
 func convertMessage(message Message) ([]openai.ChatMessage, error) {
+	// Claude Code sends an environment turn as role "system" inside messages,
+	// not only in the top-level system field; it maps to an OpenAI system turn.
+	if message.Role == "system" {
+		content, err := openAIContent(message.Content.Blocks)
+		if err != nil {
+			return nil, fmt.Errorf("system: %w", err)
+		}
+		return []openai.ChatMessage{{Role: "system", Content: content}}, nil
+	}
 	if message.Role != "user" && message.Role != "assistant" {
 		return nil, fmt.Errorf("unsupported role %q", message.Role)
 	}
