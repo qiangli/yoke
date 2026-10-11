@@ -3,11 +3,13 @@ id: 27235a3ad302
 kind: feature
 title: S11 generic typed HTTP tool-command transport for declarative Codync actions
 seq: 1891
-status: todo
+status: assigned
 priority: p1
 labels:
     - yoke
 created: 2026-10-11T08:21:16.691398Z
+weave: 89
+assignee: codex-gpt5.6-terra
 sprint: 418
 sprint_id: 9891800f-8da5-5338-92bc-1d75755ca548
 sprint_title: 'Agent ecosystem synergy: agentic tools compose like a|b|c through bashy extension points'
