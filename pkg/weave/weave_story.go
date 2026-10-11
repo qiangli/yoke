@@ -1125,6 +1125,9 @@ you still gate, converge and report.`,
 				}
 				retiredOld := false
 				if expectedOwner != "" && !strings.EqualFold(expectedOwner, who) {
+					if isCurrentOwnerManagedSession(id, before, expectedOwner) {
+						return sprintOwnerSelfStopError(id, expectedOwner, who)
+					}
 					cwd, _ := os.Getwd()
 					if err := retireSprintOwnerSession(cmd.Context(), id, expectedOwner, cwd); err != nil {
 						if selfRename {
