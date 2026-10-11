@@ -1,6 +1,11 @@
 package bus
 
 import (
+	"context"
+	"encoding/json"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +17,12 @@ import (
 type recorder struct {
 	got  []Pending
 	fail error
+}
+
+type sinkRecorder struct{ fail error }
+
+func (r sinkRecorder) RunSink(context.Context, Subscription, room.Event, []byte) error {
+	return r.fail
 }
 
 func (r *recorder) Interrupt(_ Subscription, p Pending) error {
@@ -134,6 +145,159 @@ func TestSidecarDoesNotRedeliver(t *testing.T) {
 	}
 	if items, _ := ReadPending("dev-a"); len(items) != 1 {
 		t.Errorf("pending has %d items, want 1", len(items))
+	}
+}
+
+// TestSinkProcessHelper is an actual child process target. The parent test
+// invokes the package test binary with -test.run so stdin crosses the same
+// os/exec boundary as a production sink instead of stopping at a mock.
+func TestSinkProcessHelper(t *testing.T) {
+	if os.Getenv("BASHY_TEST_SINK_HELPER") != "1" {
+		return
+	}
+	b, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		os.Exit(2)
+	}
+	f, err := os.OpenFile(os.Getenv("BASHY_TEST_SINK_CAPTURE"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		os.Exit(2)
+	}
+	_, werr := f.Write(append(b, '\n'))
+	cerr := f.Close()
+	if werr != nil || cerr != nil {
+		os.Exit(2)
+	}
+	os.Exit(0)
+}
+
+func TestExecSinkReceivesApprovalAndSprintBlockerJSON(t *testing.T) {
+	isolate(t)
+	capture := filepath.Join(t.TempDir(), "events.jsonl")
+	t.Setenv("BASHY_TEST_SINK_HELPER", "1")
+	t.Setenv("BASHY_TEST_SINK_CAPTURE", capture)
+	subscribe(t, Subscription{
+		Subscriber: "human",
+		Kinds:      []string{room.EventApproval, room.EventSprint},
+		Sink:       "exec",
+		SinkArgs:   []string{os.Args[0], "-test.run=^TestSinkProcessHelper$", "-test.v=false"},
+	})
+
+	if err := room.Emit(room.Event{
+		Type: room.EventApproval, Actor: "operator", Target: "approval:7",
+		Topic: "requested", Body: "approve release\nprivate approval request body",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := room.Emit(room.Event{
+		Type: room.EventSprint, Actor: "manager", Target: "sprint:#418",
+		Topic: "blocker", Body: "native venue unavailable\nprivate blocker detail",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := testSidecar(t, &recorder{}).Once()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Sinks != 2 || res.Demoted != 0 {
+		t.Fatalf("result = %+v, want two successful sinks", res)
+	}
+	b, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("sink captured %d lines, want 2:\n%s", len(lines), b)
+	}
+	wants := []struct{ typ, topic, subject string }{
+		{room.EventApproval, "requested", "approve release"},
+		{room.EventSprint, "blocker", "native venue unavailable"},
+	}
+	for i, line := range lines {
+		var got EventsLine
+		if err := json.Unmarshal([]byte(line), &got); err != nil {
+			t.Fatalf("sink line %d is not event JSON: %v\n%s", i, err, line)
+		}
+		if got.SchemaVersion != EventsSchemaVersion || got.Type != wants[i].typ || got.Topic != wants[i].topic || got.Body != wants[i].subject {
+			t.Errorf("sink line %d = %+v, want type=%q topic=%q subject=%q", i, got, wants[i].typ, wants[i].topic, wants[i].subject)
+		}
+		if strings.Contains(line, "private") {
+			t.Errorf("sink line %d leaked an event body: %s", i, line)
+		}
+	}
+}
+
+func TestFailedSinkFallsBackToTheLocalQueue(t *testing.T) {
+	isolate(t)
+	subscribe(t, Subscription{
+		Subscriber: "human", Kinds: []string{room.EventApproval},
+		Sink: "exec", SinkArgs: []string{"unused"},
+	})
+	if err := room.Emit(room.Event{Type: room.EventApproval, Body: "needs attention"}); err != nil {
+		t.Fatal(err)
+	}
+	sc := testSidecar(t, &recorder{})
+	sc.SinkRunner = sinkRecorder{fail: errTest}
+	res, err := sc.Once()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Sinks != 0 || res.Demoted != 1 || res.Queued != 1 {
+		t.Fatalf("result = %+v, want one demoted queued delivery", res)
+	}
+	items, err := ReadPending("human")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Delivery != DeliveryQueued || !strings.Contains(items[0].Demoted, "sink failed") {
+		t.Fatalf("failed sink did not leave an honest local record: %+v", items)
+	}
+}
+
+func TestSubscribeSinkSyntaxPreservesExecArgv(t *testing.T) {
+	isolate(t)
+	if _, _, err := run(t, "subscribe", "--as", "human", "--kind", "approval,sprint", "--sink", "exec", "--", "notifier", "two words"); err != nil {
+		t.Fatal(err)
+	}
+	sub, err := LoadSubscription("human")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sub.Sink != "exec" || len(sub.SinkArgs) != 2 || sub.SinkArgs[0] != "notifier" || sub.SinkArgs[1] != "two words" {
+		t.Fatalf("subscription lost argv boundaries: %+v", sub)
+	}
+	if len(sub.Kinds) != 2 || sub.Kinds[0] != room.EventApproval || sub.Kinds[1] != room.EventSprint {
+		t.Fatalf("subscription kinds = %q", sub.Kinds)
+	}
+}
+
+func TestSubscribeToolCmdSyntax(t *testing.T) {
+	isolate(t)
+	if _, _, err := run(t, "subscribe", "--as", "human", "--kind", "approval", "--sink", "tool-cmd", "stub:send"); err != nil {
+		t.Fatal(err)
+	}
+	sub, err := LoadSubscription("human")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sub.Sink != "tool-cmd" || sub.SinkTarget != "stub:send" || len(sub.SinkArgs) != 0 {
+		t.Fatalf("tool-cmd subscription = %+v", sub)
+	}
+}
+
+func TestSinkSubjectIsOneLineAndByteBounded(t *testing.T) {
+	long := strings.Repeat("界", 100) + "\nnever leaves"
+	subject := firstLineSubject(long)
+	if len(subject) > MaxNotifySubjectBytes {
+		t.Fatalf("subject is %d bytes, limit is %d: %q", len(subject), MaxNotifySubjectBytes, subject)
+	}
+	if !strings.HasSuffix(subject, "...") || strings.Contains(subject, "never leaves") {
+		t.Fatalf("subject was not safely clipped: %q", subject)
+	}
+	if !json.Valid([]byte(`"` + subject + `"`)) {
+		t.Fatalf("subject ends with broken UTF-8: %q", subject)
 	}
 }
 

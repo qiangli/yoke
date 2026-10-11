@@ -1,8 +1,13 @@
 package bus
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/qiangli/yoke/pkg/agentctl"
@@ -23,6 +28,11 @@ import (
 // buffer, needs nothing live, and must keep working when no agent is running.
 type Deliverer interface {
 	Interrupt(sub Subscription, p Pending) error
+}
+
+// SinkRunner delivers an event to an external sink process or tool command.
+type SinkRunner interface {
+	RunSink(ctx context.Context, sub Subscription, e room.Event, eventJSON []byte) error
 }
 
 // ctlSockDeliverer steers a live agent over the control socket agentpty serves —
@@ -70,8 +80,9 @@ func (ctlSockDeliverer) Interrupt(sub Subscription, p Pending) error {
 // agent's cognition: this process watches continuously, and the agent reads a
 // buffer that is already correct.
 type Sidecar struct {
-	Poll      time.Duration
-	Deliverer Deliverer
+	Poll       time.Duration
+	Deliverer  Deliverer
+	SinkRunner SinkRunner
 	// Now is injectable so rate-limit behaviour is testable without sleeping.
 	Now func() time.Time
 
@@ -79,12 +90,17 @@ type Sidecar struct {
 	sent map[string][]time.Time
 }
 
-// NewSidecar returns a sidecar with the real control-socket deliverer.
+// NewSidecar returns a sidecar with the real control-socket deliverer and default sink runner.
 func NewSidecar(poll time.Duration) *Sidecar {
 	if poll <= 0 {
 		poll = defaultPoll
 	}
-	return &Sidecar{Poll: poll, Deliverer: ctlSockDeliverer{}, Now: time.Now}
+	return &Sidecar{
+		Poll:       poll,
+		Deliverer:  ctlSockDeliverer{},
+		SinkRunner: defaultSinkRunner{},
+		Now:        time.Now,
+	}
 }
 
 func (s *Sidecar) now() time.Time {
@@ -110,7 +126,7 @@ func (s *Sidecar) Run(ctx context.Context) error {
 	defer t.Stop()
 	for {
 		if read, sum, ok := gate.Due(s.now()); read {
-			if _, err := s.Once(); err != nil {
+			if _, err := s.OnceContext(ctx); err != nil {
 				return err
 			}
 			gate.Commit(sum, ok, s.now())
@@ -129,6 +145,7 @@ type Result struct {
 	Queued     int `json:"queued"`
 	Interrupts int `json:"interrupts"`
 	Demoted    int `json:"demoted"`
+	Sinks      int `json:"sinks,omitempty"`
 }
 
 // Once performs a single pass: read the timeline, and for every subscription
@@ -139,6 +156,12 @@ type Result struct {
 // then failing to append would consume a notification the agent never learns
 // existed — a silent drop, which leaves it acting on stale assumptions.
 func (s *Sidecar) Once() (Result, error) {
+	return s.OnceContext(context.Background())
+}
+
+// OnceContext performs one pass and lets a supervised sidecar cancel an
+// in-flight external sink during shutdown.
+func (s *Sidecar) OnceContext(ctx context.Context) (Result, error) {
 	var res Result
 
 	subs, err := Subscriptions()
@@ -171,37 +194,65 @@ func (s *Sidecar) Once() (Result, error) {
 				Body:     e.Body,
 				Delivery: DeliveryQueued,
 			}
-
-			// Resolve the delivery tier COMPLETELY — including actually attempting
-			// the interrupt — before writing anything down.
-			//
-			// The append used to come first, which meant a failed interrupt could
-			// only be recorded by mutating a struct already on disk: the buffer
-			// kept `delivery: interrupt` for a delivery that never happened, and
-			// the only trace of the failure was a counter. That is a record
-			// asserting success because nothing recorded the failure — the exact
-			// shape this codebase refuses. Decide first, then write once, and the
-			// entry cannot disagree with what occurred.
-			if e.Priority == DeliveryInterrupt {
-				if reason := s.interruptRefusal(sub, e); reason != "" {
-					// DEMOTE, never drop. Governance and rate limiting reduce
-					// URGENCY; they do not decide whether the agent gets to know.
-					// A notification that vanishes leaves an agent on stale
-					// assumptions, and it cannot ask for what it never saw.
-					p.Demoted = reason
-					res.Demoted++
-				} else if derr := s.Deliverer.Interrupt(sub, p); derr != nil {
-					// A failed interrupt costs urgency, not the message.
-					p.Demoted = "interrupt failed: " + derr.Error()
-					res.Demoted++
-				} else {
-					p.Delivery = DeliveryInterrupt
-					s.record(sub.Subscriber)
-					res.Interrupts++
-				}
+			if p.Principal == "" && e.Actor != "" {
+				p.Principal = e.Actor
 			}
-			if p.Delivery == DeliveryQueued {
-				res.Queued++
+			if p.Topic == "" && e.Type != "" {
+				p.Topic = e.Type
+			}
+
+			if sub.Sink != "" {
+				eventJSON, ferr := FormatSinkEventJSON(e)
+				if ferr != nil {
+					p.Demoted = "sink format failed: " + ferr.Error()
+					res.Demoted++
+					res.Queued++
+				} else {
+					runner := s.SinkRunner
+					if runner == nil {
+						runner = defaultSinkRunner{}
+					}
+					if serr := runner.RunSink(ctx, sub, e, eventJSON); serr != nil {
+						p.Demoted = "sink failed: " + serr.Error()
+						res.Demoted++
+						res.Queued++
+					} else {
+						p.Delivery = DeliverySink
+						res.Sinks++
+					}
+				}
+			} else {
+				// Resolve the delivery tier COMPLETELY — including actually attempting
+				// the interrupt — before writing anything down.
+				//
+				// The append used to come first, which meant a failed interrupt could
+				// only be recorded by mutating a struct already on disk: the buffer
+				// kept `delivery: interrupt` for a delivery that never happened, and
+				// the only trace of the failure was a counter. That is a record
+				// asserting success because nothing recorded the failure — the exact
+				// shape this codebase refuses. Decide first, then write once, and the
+				// entry cannot disagree with what occurred.
+				if e.Priority == DeliveryInterrupt {
+					if reason := s.interruptRefusal(sub, e); reason != "" {
+						// DEMOTE, never drop. Governance and rate limiting reduce
+						// URGENCY; they do not decide whether the agent gets to know.
+						// A notification that vanishes leaves an agent on stale
+						// assumptions, and it cannot ask for what it never saw.
+						p.Demoted = reason
+						res.Demoted++
+					} else if derr := s.Deliverer.Interrupt(sub, p); derr != nil {
+						// A failed interrupt costs urgency, not the message.
+						p.Demoted = "interrupt failed: " + derr.Error()
+						res.Demoted++
+					} else {
+						p.Delivery = DeliveryInterrupt
+						s.record(sub.Subscriber)
+						res.Interrupts++
+					}
+				}
+				if p.Delivery == DeliveryQueued {
+					res.Queued++
+				}
 			}
 
 			// The offset advances only after this succeeds (below), so an append
@@ -261,4 +312,105 @@ func (s *Sidecar) record(subscriber string) {
 		s.sent = map[string][]time.Time{}
 	}
 	s.sent[subscriber] = append(s.sent[subscriber], s.now())
+}
+
+type defaultSinkRunner struct{}
+
+func (defaultSinkRunner) RunSink(ctx context.Context, sub Subscription, e room.Event, eventJSON []byte) error {
+	argv, err := ResolveSinkArgv(sub, e)
+	if err != nil {
+		return err
+	}
+	if len(argv) == 0 {
+		return fmt.Errorf("bus: sink argv is empty")
+	}
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Stdin = bytes.NewReader(eventJSON)
+	cmd.Env = os.Environ()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("sink %s failed: %w (output: %s)", argv[0], err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// FormatSinkEventJSON renders an event as the canonical events JSON envelope
+// for stdin delivery to a sink. The event's Body is reduced to a one-line,
+// bounded subject: operation bodies and multiline detail never leave the host.
+func FormatSinkEventJSON(e room.Event) ([]byte, error) {
+	sanitized := e
+	sanitized.Body = sinkSubject(e)
+	if e.Activity != nil {
+		activity := *e.Activity
+		activity.Summary = firstLineSubject(activity.Summary)
+		sanitized.Activity = &activity
+	}
+	return json.Marshal(EventsLine{
+		SchemaVersion: EventsSchemaVersion,
+		Event:         sanitized,
+	})
+}
+
+func sinkSubject(e room.Event) string {
+	if subject := firstLineSubject(e.Body); subject != "" {
+		return subject
+	}
+	if e.Activity != nil {
+		return firstLineSubject(e.Activity.Summary)
+	}
+	return ""
+}
+
+func firstLineSubject(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
+		s = strings.TrimSpace(s[:i])
+	}
+	if len(s) <= MaxNotifySubjectBytes {
+		return s
+	}
+	// room.Brief adds a three-byte ellipsis, so reserve room for it. This
+	// keeps the notify contract's byte bound true even for multibyte UTF-8.
+	return room.Brief(s, MaxNotifySubjectBytes-3)
+}
+
+// ResolveSinkArgv returns the command argv for a subscription's sink. Tool
+// commands receive the same bounded subject as an argv operand; the complete
+// sanitized event envelope is also available on stdin.
+func ResolveSinkArgv(sub Subscription, e room.Event) ([]string, error) {
+	switch sub.Sink {
+	case "exec":
+		if len(sub.SinkArgs) == 0 {
+			return nil, fmt.Errorf("bus: exec sink has no command argv")
+		}
+		return sub.SinkArgs, nil
+	case "tool-cmd":
+		target := sub.SinkTarget
+		if target == "" {
+			return nil, fmt.Errorf("bus: tool-cmd sink has no target")
+		}
+		if tool, name, ok := strings.Cut(target, ":"); !ok || tool == "" || name == "" {
+			return nil, fmt.Errorf("bus: tool-cmd sink wants TOOL:NAME, got %q", target)
+		}
+		argv := []string{resolveBashy(), "tool", "cmd", "run", target}
+		if subject := sinkSubject(e); subject != "" {
+			argv = append(argv, "--", subject)
+		}
+		return argv, nil
+	default:
+		return nil, fmt.Errorf("bus: unknown sink type %q", sub.Sink)
+	}
+}
+
+func resolveBashy() string {
+	if bin := os.Getenv("BASHY_BIN"); bin != "" {
+		return bin
+	}
+	if exe, err := os.Executable(); err == nil && exe != "" {
+		return exe
+	}
+	if path, err := exec.LookPath("bashy"); err == nil {
+		return path
+	}
+	return "bashy"
 }
