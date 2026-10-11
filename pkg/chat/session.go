@@ -58,6 +58,7 @@ type Session struct {
 	Agent         string // the canonical binding, as recorded
 	Nick          string // the name the caller used
 	CtlSock       string // where a steer lands
+	card          string // the host-room card a pty session joined (see Card)
 	// inboxAgent is used only by transports such as ACP that have an
 	// authenticated protocol session but no PTY control socket.
 	inboxAgent string
@@ -99,6 +100,16 @@ type Session struct {
 	exit      int
 	err       error
 	killed    string
+}
+
+// Card is the host-room member id the session joined. It is the session an
+// approval names (ask.ApprovalSpec.Session), so `chat grant`, `bashy approve`
+// and an ACP relay all settle the same record.
+func (s *Session) Card() string {
+	if s.acpCard != "" {
+		return s.acpCard
+	}
+	return s.card
 }
 
 // SessionOptions configures a live agent session.
@@ -324,6 +335,7 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 		Agent:        l.Binding(),
 		Nick:         l.Nick,
 		CtlSock:      sock,
+		card:         id,
 		inboxAgent:   name,
 		ptyInbox:     newPTYInbox(name),
 		events:       tail,

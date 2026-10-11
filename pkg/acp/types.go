@@ -94,6 +94,10 @@ type TurnRequest struct {
 	Cwd          string
 	Prompt       []ContentBlock
 	Capabilities ClientCapabilities
+	// RequestPermission asks the connected ACP host (session/request_permission)
+	// on this turn's session. Agent sets it for every prompt; it is nil only for
+	// a TurnRequest built outside an Agent. See RelayApprovals.
+	RequestPermission func(context.Context, PermissionRequest) (PermissionResponse, error)
 }
 
 // TurnResponse is the runner's self-reported result before verification.
