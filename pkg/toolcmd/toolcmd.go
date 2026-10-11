@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -62,26 +63,46 @@ type Options struct {
 
 // Result is the structured envelope of one command run.
 type Result struct {
-	Tool      string   `json:"tool"`
-	Command   string   `json:"command"`
-	Mode      string   `json:"mode"`
-	Slash     string   `json:"slash,omitempty"`   // the rendered slash line
-	Argv      []string `json:"argv,omitempty"`    // print: the rendered argv (dry-run and real)
-	Steps     []string `json:"steps,omitempty"`   // tui: the rendered frames (dry-run)
-	Dir       string   `json:"dir,omitempty"`     // the workdir used
-	Outcome   string   `json:"outcome"`           // success | error | unavailable | timeout | cancelled | dry-run
-	Verdict   string   `json:"verdict,omitempty"` // the tool's own terminal verdict (events_outcome): succeeded | unverified
-	Text      string   `json:"text,omitempty"`    // turn: final message; transcript: whole session text
-	Artifacts []string `json:"artifacts,omitempty"`
-	Session   string   `json:"session,omitempty"` // tool session id when known
-	ExitCode  int      `json:"exit_code"`
-	Error     string   `json:"error,omitempty"`
+	Tool    string `json:"tool"`
+	Command string `json:"command"`
+	// Capability is the declared cross-tool capability, rather than a
+	// vendor-specific slash spelling. It lets a saved result be handed to a
+	// different vendor without asking the receiver to reinterpret it.
+	Capability string   `json:"capability,omitempty"`
+	Mode       string   `json:"mode"`
+	Slash      string   `json:"slash,omitempty"`   // the rendered slash line
+	Argv       []string `json:"argv,omitempty"`    // print: the rendered argv (dry-run and real)
+	Steps      []string `json:"steps,omitempty"`   // tui: the rendered frames (dry-run)
+	Dir        string   `json:"dir,omitempty"`     // the workdir used
+	Outcome    string   `json:"outcome"`           // success | error | unavailable | timeout | cancelled | dry-run
+	Verdict    string   `json:"verdict,omitempty"` // the tool's own terminal verdict (events_outcome): succeeded | unverified
+	Text       string   `json:"text,omitempty"`    // turn: final message; transcript: whole session text
+	Artifacts  []string `json:"artifacts,omitempty"`
+	Session    string   `json:"session,omitempty"` // tool session id when known
+	// Episode ties this envelope to the invoking bashy session. It is data in
+	// the envelope, not a pointer to a vendor-private transcript.
+	Episode  string `json:"episode,omitempty"`
+	ExitCode int    `json:"exit_code"`
+	Error    string `json:"error,omitempty"`
 	// Refusal names a guard that refused the launch (RefusalLaunchGuard,
 	// RefusalAgentLive) and Hint the legitimate ways forward. Set by Run.
 	Refusal  string    `json:"refusal,omitempty"`
 	Hint     string    `json:"hint,omitempty"`
 	Started  time.Time `json:"started"`
 	Duration string    `json:"duration,omitempty"`
+}
+
+// resultFor starts the portable envelope common to every outcome, including a
+// declaration or launch failure that never reaches a runner.
+func resultFor(tool fleet.Tool, cmd fleet.ToolCommand) Result {
+	r := Result{Tool: tool.Name, Command: cmd.Name, Capability: cmd.Capability, Mode: cmd.Mode}
+	for _, key := range []string{"BASHY_EPISODE", "BASHY_SESSION", "WEAVE_ID"} {
+		if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+			r.Episode = v
+			break
+		}
+	}
+	return r
 }
 
 // ErrUnavailable marks a command the tool refused in the requested mode.
@@ -96,7 +117,9 @@ func Run(ctx context.Context, tool fleet.Tool, cmd fleet.ToolCommand, args strin
 	one.Commands = []fleet.ToolCommand{cmd}
 	if errs, _ := one.ValidateCommands(); len(errs) > 0 {
 		err := errors.Join(errs...)
-		return Result{Tool: tool.Name, Command: cmd.Name, Mode: cmd.Mode, Outcome: OutcomeError, Error: err.Error()}, err
+		res := resultFor(tool, cmd)
+		res.Outcome, res.Error = OutcomeError, err.Error()
+		return res, err
 	}
 	var res Result
 	var err error
@@ -107,7 +130,9 @@ func Run(ctx context.Context, tool fleet.Tool, cmd fleet.ToolCommand, args strin
 		res, err = runTUI(ctx, tool, cmd, args, opts)
 	default:
 		err := fmt.Errorf("toolcmd: %s:%s: unknown mode %q", tool.Name, cmd.Name, cmd.Mode)
-		return Result{Tool: tool.Name, Command: cmd.Name, Mode: cmd.Mode, Outcome: OutcomeError, Error: err.Error()}, err
+		res := resultFor(tool, cmd)
+		res.Outcome, res.Error = OutcomeError, err.Error()
+		return res, err
 	}
 	if err != nil {
 		if refusal, hint := classifyRefusal(err); refusal != "" {

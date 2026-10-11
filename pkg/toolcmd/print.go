@@ -173,7 +173,8 @@ func SplitArgs(s string) ([]string, error) {
 // runPrint runs a print-mode command once through chat.Invoke.
 func runPrint(ctx context.Context, tool fleet.Tool, cmd fleet.ToolCommand, args string, opts Options) (Result, error) {
 	started := time.Now()
-	res := Result{Tool: tool.Name, Command: cmd.Name, Mode: cmd.Mode, Started: started}
+	res := resultFor(tool, cmd)
+	res.Started = started
 	finish := func(outcome string, err error) (Result, error) {
 		res.Outcome, res.Duration = outcome, time.Since(started).Round(time.Millisecond).String()
 		if err != nil {
