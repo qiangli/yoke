@@ -19,6 +19,7 @@ import (
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/policy/coord"
 	"github.com/qiangli/yoke/pkg/principal"
+	"github.com/qiangli/yoke/pkg/room"
 )
 
 // NewHandoffCmd builds `bashy handoff`: pause a live session and pass the work on.
@@ -137,6 +138,7 @@ The record is a FILE. It travels — scp it, mesh it, paste it in an issue.`,
 			if err != nil {
 				return err
 			}
+			recordEvent(rec, "created", refName(self), rec.Continuity)
 
 			// A role (seat) handoff is SINGULAR: retire any prior UNCLAIMED
 			// handoff of the SAME role in this project, so a bare `bashy resume`
@@ -281,6 +283,7 @@ live seat. Task handoffs may be many; if several are current it lists them.`,
 				if _, err := Save(dir, rec); err != nil {
 					return err
 				}
+				recordEvent(rec, "cancelled", refName(self), "")
 				fmt.Fprintf(out, "cancelled %s (kept for the record; `resume --prune` to delete)\n", rec.ID)
 				return nil
 			}
@@ -407,6 +410,7 @@ live seat. Task handoffs may be many; if several are current it lists them.`,
 			if err != nil {
 				return err
 			}
+			recordEvent(claimed, "claimed", refName(*claimed.ResumedBy), claimed.Continuity)
 			fmt.Fprintf(out, "\nCLAIMED by %s. Re-run `bashy resume` to confirm the seat is held.\n", refName(*claimed.ResumedBy))
 			return nil
 		},
@@ -618,4 +622,10 @@ func resolveAgent(name string) (string, error) {
 	return "", fmt.Errorf("%q is not an agent on this host.\n\nValid: %s (or a binding: try `bashy agent list`).\n"+
 		"On this machine those words name a CLI plus the model bound to it -- not a vendor's product.",
 		name, strings.Join(legal, ", "))
+}
+
+// recordEvent puts a handoff transition on the host event log (bashy events).
+// Best effort: the record is already saved, which is the transaction.
+func recordEvent(rec *Record, verb, actor, brief string) {
+	room.Record(room.EventHandoff, actor, "handoff:"+rec.ID, verb, brief)
 }

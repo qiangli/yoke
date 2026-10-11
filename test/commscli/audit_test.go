@@ -262,6 +262,29 @@ func TestBusWatchDrainWaitTimeoutIsAnEmptySuccessfulRead(t *testing.T) {
 	}
 }
 
+// --- events: the host event log, one log for every producer -----------------
+
+func TestEventsShowsPublishedNotificationWithContiguousSeq(t *testing.T) {
+	w := newWorld(t)
+	for _, body := range []string{"EVENTS-ONE", "EVENTS-TWO"} {
+		if res := w.run(t, nil, "bus", "publish", "--as", "sender", "--to", "audit-reader", body); res.code != 0 {
+			t.Fatalf("publish failed: %s", res.err)
+		}
+	}
+	res := w.run(t, nil, "events", "--json", "--kind", "notify")
+	if res.code != 0 {
+		t.Fatalf("events exit %d: %s", res.code, res.err)
+	}
+	lines := strings.Split(strings.TrimSpace(res.out), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[0], `"seq":1`) || !strings.Contains(lines[1], `"seq":2`) ||
+		!strings.Contains(res.out, "EVENTS-ONE") || !strings.Contains(res.out, "EVENTS-TWO") {
+		t.Fatalf("events --json = %q", res.out)
+	}
+	if res := w.run(t, nil, "events", "--json", "--since", "99"); !strings.Contains(res.out, `"type":"resync"`) {
+		t.Fatalf("a position past the head must resync, got %q", res.out)
+	}
+}
+
 // --- weave fleet ------------------------------------------------------------
 
 // gitWorld prepares a world whose work dir is a git repo and whose PATH also

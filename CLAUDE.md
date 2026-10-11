@@ -264,7 +264,13 @@ registry, three consumption surfaces, imported by bashy/ycode/outpost.
   turn-boundary hook is `bus.Prepend` in `chat.Session.Say` — the one control
   surface every steer lands on, so meet/weave/foreman/operator all get it once;
   sessions are matched by CONTROL SOCKET, never by name, since names are reused
-  across runs and a stale subscription would cross-deliver),
+  across runs and a stale subscription would cross-deliver.
+  **`bashy events`** (`bus.NewEventsCmd`, over `room.Stream`) is the host event
+  log reader and the SSE feed (`GET /api/events?from=SEQ` on `meet serve`) is the
+  same stream: the room timeline is THE log — never add a second one under
+  BASHY_HOME. Producers call `room.Record` (sprint thread via `weaveStoryAppend`,
+  handoff create/claim/cancel, todo status); a position retention archived past,
+  or a replaced stream, yields a `resync` item rather than a silent gap),
   `pkg/chat` + `pkg/ollm` (agent chat / Ollama
   client isolation), `pkg/browser` + `pkg/webinspect` (browser automation
   for `cmds/browser`/`fetch`, three modes: `probe` = attach to a Chrome on
