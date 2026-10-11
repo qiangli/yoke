@@ -1,0 +1,37 @@
+{
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "bashy/L4"
+      }
+    }
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "bashy": {
+        "api": "openai-completions",
+        "apiKey": "{{TOKEN}}",
+        "baseUrl": "{{BASE_URL}}/v1",
+        "models": [
+          {
+            "contextWindow": 200000,
+            "cost": {
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "input": 0,
+              "output": 0
+            },
+            "id": "L4",
+            "input": [
+              "text"
+            ],
+            "maxTokens": 32000,
+            "name": "Bashy fleet L4",
+            "reasoning": true
+          }
+        ]
+      }
+    }
+  }
+}

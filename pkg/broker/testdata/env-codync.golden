@@ -1,0 +1,6 @@
+# codync-host service env; inherited by the ACP agents it starts
+env:
+  OPENAI_BASE_URL: "{{BASE_URL}}/v1"
+  OPENAI_API_KEY: "{{TOKEN}}"
+  ANTHROPIC_BASE_URL: "{{BASE_URL}}/anthropic"
+  ANTHROPIC_API_KEY: "{{TOKEN}}"
