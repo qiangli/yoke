@@ -34,6 +34,7 @@ func toolRecord() *recordSpec {
 			return []Tool{t}, nil
 		},
 		Save:      (*Catalog).SaveTool,
+		FileFlag:  true,
 		ShowShort: "Print a tool's definition",
 		AddDoc: verbDoc{
 			Use:   "add (<name> --set path=value | <file>|-)",
@@ -79,6 +80,7 @@ func modelRecord() *recordSpec {
 			return []Model{m}, nil
 		},
 		Save:      (*Catalog).SaveModel,
+		FileFlag:  true,
 		ShowShort: "Print a model's definition",
 		AddDoc: verbDoc{
 			Use:   "add (<name> --provider P --kind K | <file>|-)",
@@ -155,7 +157,8 @@ func agentRecord() *recordSpec {
 			file, err := ParseAgentFile(fallback, body, nil)
 			return file.Agents, err
 		},
-		Save: (*Catalog).SaveAgent,
+		Save:     (*Catalog).SaveAgent,
+		FileFlag: true,
 		// A new binding to a retired tool or model is refused unless asked
 		// for explicitly (plan section I).
 		BeforeAdd: checkNewAgentRetirement,
@@ -232,7 +235,8 @@ func commandRecord() *recordSpec {
 			}
 			return []Command{r}, nil
 		},
-		Save: (*Catalog).SaveCommand,
+		Save:     (*Catalog).SaveCommand,
+		FileFlag: true,
 		// The shadow refusal and the reserved words live in checkCommand, which
 		// Save and every overlay write both answer to; --force never reaches it.
 		Check:     (*Catalog).checkCommand,

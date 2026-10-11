@@ -4,6 +4,7 @@
   "nick": "Goldie",
   "tool": "gt-tool",
   "model": "gt-model",
+  "permission": "auto",
   "derived": [
     "gt-tool-gt"
   ],

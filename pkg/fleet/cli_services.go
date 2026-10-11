@@ -31,6 +31,7 @@ func NewServiceCmd(opts ...Option) *cobra.Command {
 		newSet(KindService, opts),
 		newRm(KindService, opts, (*Catalog).RemoveService),
 		newEdit(KindService, opts, (*Catalog).MaterializeService),
+		newVerify(KindService, opts, func(c *Catalog, n string) Check { return c.VerifyService(n) }),
 		newServiceToggle(true, opts),
 		newServiceToggle(false, opts),
 	)

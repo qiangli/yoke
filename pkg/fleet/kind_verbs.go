@@ -413,6 +413,7 @@ func newAdd(kind string, opts []Option) *cobra.Command {
 	bound := bindFlags(c, r.flags, false)
 	c.RunE = func(cmd *cobra.Command, args []string) error {
 		cat := New(opts...)
+		fileImport := file != ""
 		var arg string
 		if file != "" {
 			arg = file
@@ -448,7 +449,10 @@ func newAdd(kind string, opts []Option) *cobra.Command {
 			if err := applyFinish(bound, rec); err != nil {
 				return err
 			}
-			if err := claimRecord(cat, kind, r, rec, force); err != nil {
+			// -f is the declarative import/upsert form: piping `show --yaml`
+			// back into `add -f -` must reproduce the record without requiring
+			// an extra force flag. Live claims are still checked below.
+			if err := claimRecord(cat, kind, r, rec, force || fileImport); err != nil {
 				return err
 			}
 			if r.beforeAdd != nil {

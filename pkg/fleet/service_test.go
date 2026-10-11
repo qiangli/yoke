@@ -123,6 +123,16 @@ func TestServiceShowYAMLAddFileIsIdentity(t *testing.T) {
 	}
 }
 
+func TestServiceVerifyVerbUsesUnitWriteValidation(t *testing.T) {
+	root := t.TempDir()
+	opts := serviceOpts(root)
+	mustSvc(t, opts, "name: verify-unit\nkind: service\nexec: [/bin/true]\nenabled: false\n", "add", "-f", "-")
+	out := mustSvc(t, opts, "", "verify", "verify-unit")
+	if !strings.Contains(out, "ok   verify-unit") {
+		t.Fatalf("verify output = %q", out)
+	}
+}
+
 // Acceptance: a conflicting port is refused with the holder named, at add,
 // set and enable; a disabled alternative may declare the same port.
 func TestServicePortConflictNamesHolder(t *testing.T) {

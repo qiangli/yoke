@@ -145,13 +145,23 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 	show.Flags().BoolVar(&showJSON, "json", false, "print the skill's record as JSON")
 
 	var force, addJSON bool
+	var addFile string
 	var create createFlags
 	add := &cobra.Command{
-		Use:   "add <dir>|<file.yaml>|- | <name> --description TEXT",
+		Use:   "add (-f FILE|- | <dir>|<file.yaml>|- | <name> --description TEXT)",
 		Short: "install a skill folder or record into the host-local store (verified admission)",
 		Long:  "add installs a skill folder (SKILL.md + optional reference.md/skill.dhnt),\nor a `kind: skill` record (the projection `show --yaml` prints; a file, or -\nfor stdin) rebuilt into the same folder, into the host-local store after a\nverified-admission gate: frontmatter must parse with name+description,\nmetadata.requires must parse, and a skill.dhnt canonical face must be valid\n(transpilable, content-addressed). Inapplicable-here is reported, not\nrefused — a skill may be installed for a tool you have not provisioned yet.\n\nGiven a name and --description instead of a path, add writes a minimal\nSKILL.md — name, description, metadata.requires if given, and the --body\nverbatim — and installs it through the same gate. No template beyond that.",
-		Args:  cobra.ExactArgs(1),
+		Args: func(cmd *cobra.Command, args []string) error {
+			if cmd.Flags().Changed("file") {
+				return cobra.NoArgs(cmd, args)
+			}
+			return cobra.ExactArgs(1)(cmd, args)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if addFile != "" {
+				args = []string{addFile}
+				force = true // YAML import is an upsert so show | add -f - is idempotent.
+			}
 			if create.given(cmd) {
 				return runCreate(cmd, cfg, args[0], create, force, addJSON)
 			}
@@ -159,6 +169,7 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 		},
 	}
 	add.Flags().BoolVar(&force, "force", false, "replace an already-installed skill of the same name")
+	add.Flags().StringVarP(&addFile, "file", "f", "", "import a skill record or folder from FILE (- = stdin)")
 	add.Flags().BoolVar(&addJSON, "json", false, "machine-readable admission report")
 	create.bind(add)
 
