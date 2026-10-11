@@ -120,6 +120,16 @@ func TestPeerCredentialShareAllowDenyRevoke(t *testing.T) {
 			t.Fatalf("peer reached %s: %d", p, code)
 		}
 	}
+	// The Responses route (Codex's only wire since 0.162) is inference: the
+	// gate must not 403 it. It is delegated to cligw, not served by the broker.
+	for _, p := range []string{"/v1/responses", "/openai/v1/responses"} {
+		if code, body := peerPost(t, h, p, cred, nil); code == http.StatusForbidden || code == http.StatusUnauthorized {
+			t.Fatalf("shared peer refused on %s: %d %s", p, code, body)
+		}
+	}
+	if code, _ := peerPost(t, h, "/v1/responses", "not-a-credential", nil); code != http.StatusUnauthorized {
+		t.Fatalf("unknown bearer on /v1/responses: %d", code)
+	}
 	// The owner token is unchanged.
 	if code, _ := peerPost(t, h, "/v1/chat/completions", testToken, capHdr); code != http.StatusOK {
 		t.Fatalf("owner refused: %d", code)

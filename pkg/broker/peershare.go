@@ -201,9 +201,18 @@ func (b *Broker) authorizePeer(presented string) (string, error) {
 // peerRouteAllowed is the whole surface a shared peer may reach: inference
 // (including slash / capability tool-command runs) and health. Sticky
 // management, the native engine API and cligw's own surface stay owner-only.
+//
+// The Responses route is inference too, although the broker does not serve it
+// itself (it is delegated to cligw's responsesHandler, so it is deliberately
+// absent from isInferencePath). Codex ≥0.162 speaks only wire_api=responses,
+// so without it a Codex client on a peer credential is refused 403 — observed
+// live on 2026-10-11 (Sprint 418 S9 two-host proof).
 func peerRouteAllowed(method, path string) bool {
 	if path == "/health" {
 		return method == "GET"
 	}
-	return method == "POST" && isInferencePath(path)
+	if method != "POST" {
+		return false
+	}
+	return isInferencePath(path) || strings.TrimPrefix(path, "/openai") == "/v1/responses"
 }
