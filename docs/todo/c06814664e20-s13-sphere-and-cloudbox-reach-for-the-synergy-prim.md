@@ -1,0 +1,19 @@
+---
+id: c06814664e20
+kind: feature
+title: 'S13 Sphere and cloudbox reach for the synergy primitives: mesh-exposed services, cross-host approvals and notices, remote sink'
+seq: 1880
+status: todo
+priority: p2
+labels:
+    - outpost
+    - yoke
+created: 2026-10-11T04:12:45.529982Z
+sprint: 418
+sprint_id: 9891800f-8da5-5338-92bc-1d75755ca548
+sprint_title: 'Agent ecosystem synergy: agentic tools compose like a|b|c through bashy extension points'
+---
+
+Reinspection 2026-10-11 (docs/agent-ecosystem-synergy.md section Tiers): decisions, sinks and stores stay on the owning host; cloudbox stays a carrier with no new scope or endpoint; the mesh carries services, not messages. (1) Sphere: expose the S3 events SSE, the meet DM front door (S6) and the llm door as outpost mesh services by configuration (mesh service add + mesh dial, the Sprint 308 recipe; per-peer bearer/share from 308 A5). (2) Cloudbox: write only cross-host kinds (approval, notice, inbound) to the existing repo-session task feed that remote mb/notify already ride (yoke/pkg/weave/session_remote.go, POST /api/v1/tasks/ID/events; TaskEvent kind is at most 16 chars); never mirror the whole log. (3) Remote approval: /approve ID arriving as remote mail to name@host or as a directive task event is applied on the host owning the queue, checked against the plan hash and the approver principal; the meet/app web page via the matrix tunnel is the browser path. (4) Sink kind mb:PERSON@HOST reusing the bus remote send so a headless host forwards needs-input/done/failed to the human chosen host, whose desktop/ntfy sink fires. (5) Remote mail keys sessions by git origin: give a gateway running outside any checkout an explicit session pointer flag. Record trace_id on events for correlation but never use OTel as the transport. Web push/VAPID stays in standalone todo 584bc1e966e5. Acceptance: on two paired hosts, an approval raised on host A is announced on host B through the mb sink and resolved from host B, applied on A with the same token; events SSE dialed over the mesh resumes with from=N; no cloudbox code change.
+
+Manager continuation 2026-10-11 11:50 UTC: this original UUID moved from umbrella `docs/todo` into Yoke `docs/todo` without duplication so a pointed private Yoke run can implement the missing remote acceptance. Read-only source audit found `ask.Decide` and meet `/approve` operate only on the local store; `pkg/weave/session_remote.go` has message task events but no authenticated approval directive consumer. A remote B decision cannot apply on A by product path today. Implement the smallest Yoke-side use of existing repo-session task event/remote-mail ingress for approval directives: owner A validates the approver principal and exact plan token against its pending ask record, settles once with `ask.Decide`, records an S3 event, and replies with an explicit receipt; rejected/mismatched/replayed directives fail closed. Reuse existing remote session task feed and ask types, no new transport or cloudbox endpoint. Own `pkg/weave/session_remote.go`, `pkg/ask` remote adapter/tests, and only adjacent Yoke glue; coordinate with active S6 run #115, which owns local meet front door. The manager owns any thin Bashy sink/CLI glue and paired A→B→A live gate. Verify with focused `GOWORK=off go test -short -timeout 5m ./pkg/weave/... ./pkg/ask/... ./pkg/bus/...` plus a fake remote task-feed A/B decision/token/replay test; manager will run exact native and paired SSE/from=N gates. Sprint 308 A3/A5 remain external blockers for advertised/share-policy mesh service, but do not block the already-paired same-owner task-feed directive path. Keep S13 original open until two-host same-token and SSE resume are observed; no child story or framework expansion.
