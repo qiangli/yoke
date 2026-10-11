@@ -11,6 +11,7 @@ health:
   interval: 10s
   timeout: 2s
   failures: 3
+  start_period: 3m
 restart:
   policy: on-failure
   backoff: {min: 1s, max: 30s, healthy_after: 30s}
