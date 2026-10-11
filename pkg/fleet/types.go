@@ -38,6 +38,11 @@ const (
 	// TTL, modes and hook commands — so user kinds work wherever builtin
 	// kinds do. Like resources, no embedded ring.
 	KindResourceKind = "resourcekind"
+	// KindService is the service-unit noun (`bashy service add`): a daemon
+	// declaration `bashy supervisord` keeps running. Unlike commands and
+	// apps it HAS an embedded ring — the built-in units are compiled-in seeds
+	// (docs/bashy-service-design.md).
+	KindService = "service"
 )
 
 // Tool kind discriminators. The cloudbox Tool registry is shared between
@@ -992,6 +997,24 @@ type AgentFile struct {
 	Agents   []Agent `yaml:"agents" json:"agents"`
 }
 
+// AgentBinding routes an inbound chat identity to an agent. Channel-only rows
+// are defaults for that channel; a row with both Channel and Sender wins for
+// that peer. A row with neither is the global default. The shape intentionally
+// matches the body of an agent fence, so the fence can be passed to the fleet
+// parser without translation.
+type AgentBinding struct {
+	Channel string `yaml:"channel,omitempty" json:"channel,omitempty" doc:"chat channel name"`
+	Sender  string `yaml:"sender,omitempty" json:"sender,omitempty" doc:"peer identity within the channel"`
+	Agent   string `yaml:"agent" json:"agent" doc:"agent name to route to"`
+}
+
+const (
+	PermissionAuto   = "auto"
+	PermissionAsk    = "ask"
+	PermissionReview = "review"
+	PermissionDeny   = "deny"
+)
+
 // Agent is a tool bound to a model, under a nickname.
 type Agent struct {
 	RecordLifecycle `yaml:",inline" schema:"-"`
@@ -1007,6 +1030,14 @@ type Agent struct {
 
 	Tool  string `yaml:"tool" json:"tool" doc:"bound tool name"`    // → Tool.Name
 	Model string `yaml:"model" json:"model" doc:"bound model name"` // → Model.Name
+
+	// Workdir is the default directory for chat/delegate launches. An explicit
+	// --cwd still wins, which lets a caller temporarily work elsewhere.
+	Workdir    string         `yaml:"workdir,omitempty" json:"workdir,omitempty" doc:"default working directory for launches"`
+	Permission string         `yaml:"permission" json:"permission" doc:"permission mode: auto, ask, review, or deny"`
+	Notify     bool           `yaml:"notify,omitempty" json:"notify,omitempty" doc:"notify this agent about inbound work"`
+	Bindings   []AgentBinding `yaml:"bindings,omitempty" json:"bindings,omitempty" doc:"inbound channel and sender routing rules"`
+	Avatar     string         `yaml:"avatar,omitempty" json:"avatar,omitempty" doc:"avatar URL or asset reference"`
 
 	// Effort is the reasoning-effort level this binding is DECLARED to run at
 	// (e.g. low, medium, high). It is a property of the binding, not of the

@@ -1,0 +1,26 @@
+name: loom
+kind: service
+description: loom — the Gitea forge (binmgr-provisioned) behind git clone and Actions
+exec: [bashy, loom, serve, --port, "{port}", --addr, "{bind}", --root-url, "{settings.root_url}"]
+settings:
+  root_url: ""
+ports:
+  - name: http
+    port: 31880
+  - name: proxy
+    port: 31881
+health:
+  http: /api/healthz
+  interval: 15s
+  timeout: 3s
+  failures: 3
+  start_period: 60s
+restart:
+  policy: on-failure
+  backoff: {min: 2s, max: 60s, healthy_after: 60s}
+  start_limit: {burst: 5, interval: 10m}
+expose:
+  app: {name: loom, require_login: true}
+  mesh:
+    - name: git
+enabled: false

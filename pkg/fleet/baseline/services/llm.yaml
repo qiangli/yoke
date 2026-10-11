@@ -1,0 +1,18 @@
+name: llm
+kind: service
+description: the host's model door — local models and fleet agents on one OpenAI/Anthropic-compatible port
+exec: [bashy, llm, serve, --port, "{port}", --bind, "{bind}"]
+ports:
+  - name: http
+    port: 24556
+    bind: loopback
+health:
+  tcp: true
+  interval: 10s
+  timeout: 2s
+  failures: 3
+restart:
+  policy: on-failure
+  backoff: {min: 1s, max: 30s, healthy_after: 30s}
+  start_limit: {burst: 5, interval: 5m}
+enabled: false

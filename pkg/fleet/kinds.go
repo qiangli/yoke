@@ -182,6 +182,18 @@ func init() {
 			Names:     listed((*Catalog).Apps, func(a App) string { return a.Name }),
 			Record:    appRecord(),
 		},
+		// Service units are the one write-surface noun besides tools whose
+		// seeds are mechanism: the built-in units ship compiled in and survive
+		// BASHY_FLEET_SEEDS=off, because a host without them has no daemons.
+		{
+			Name: KindService, Plural: dirServices, DirEnv: "BASHY_SERVICES_DIR", PathEnv: "BASHY_SERVICES_PATH",
+			Type:      reflect.TypeOf(Service{}),
+			Lifecycle: lifecycleOf((*Catalog).Service),
+			Lookup:    holder((*Catalog).Service, func(s Service) string { return s.Name }),
+			Names:     listed((*Catalog).Services, func(s Service) string { return s.Name }),
+			Seeded:    true, Mechanism: true, Overlay: true,
+			Record: serviceRecord(),
+		},
 		// Registered resources and resourcekinds have NO embedded ring by
 		// design, for the same reason commands and apps have none: bashy
 		// ships the mechanism, never a catalog of them. Their write surface

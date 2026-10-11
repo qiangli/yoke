@@ -202,6 +202,10 @@ func agentRecord() *recordSpec {
 		Flags: []kindFlag{
 			strFlag("tool", "tool", "the agentic CLI half of the binding", "the agentic CLI half of the binding", func(a *Agent) *string { return &a.Tool }),
 			strFlag("model", "model", "the inference-backend half of the binding", "the inference-backend half of the binding", func(a *Agent) *string { return &a.Model }),
+			strFlag("workdir", "workdir", "default working directory for chat/delegate launches", "default working directory for chat/delegate launches", func(a *Agent) *string { return &a.Workdir }),
+			strFlag("permission", "permission", "permission mode: auto, ask, review, or deny", "permission mode: auto, ask, review, or deny", func(a *Agent) *string { return &a.Permission }),
+			boolFlag("notify", "notify", "notify this agent about inbound work", "notify this agent about inbound work", func(a *Agent) *bool { return &a.Notify }),
+			strFlag("avatar", "avatar", "avatar URL or asset reference", "avatar URL or asset reference", func(a *Agent) *string { return &a.Avatar }),
 			strFlag("display", "display", helpDisplay, helpDisplay, func(a *Agent) *string { return &a.Display }),
 			strFlag("description", "description", "what this agent is for", "what this agent is for", func(a *Agent) *string { return &a.Description }),
 			strFlag("nick", "nick", "the agent's human name; empty means one is assigned from the binding", "the agent's human name; empty means one is assigned from the binding", func(a *Agent) *string { return &a.Nick }),

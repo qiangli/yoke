@@ -1,0 +1,7 @@
+name: events
+kind: service
+description: the host event log (room timeline) as SSE at GET /api/events on meet's listener
+provider: internal
+capability: meet.events
+owner: meet
+enabled: false
