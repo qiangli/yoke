@@ -1,0 +1,25 @@
+name: kopia
+kind: service
+description: Kopia — snapshot backup repository server
+exec: [bashy, kopia, serve, --port, "{port}", --addr, "{bind}", "--data={settings.data_dir}", --version, "{settings.version}"]
+settings:
+  data_dir: ""
+  version: v0.23.1
+ports:
+  - name: http
+    port: 51515
+health:
+  http: /
+  interval: 10s
+  timeout: 3s
+  failures: 3
+  start_period: 30s
+restart:
+  policy: on-failure
+  backoff: {min: 1s, max: 30s, healthy_after: 30s}
+  start_limit: {burst: 5, interval: 5m}
+expose:
+  mesh:
+    - name: backup
+upgrade: restart
+enabled: false

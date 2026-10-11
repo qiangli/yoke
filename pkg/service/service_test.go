@@ -3,7 +3,14 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/qiangli/yoke/pkg/fleet"
 )
@@ -142,5 +149,257 @@ func TestInternalProviderSwitchesCapabilityAfterRestart(t *testing.T) {
 	}
 	if err := p.Deactivate(ctx, newUnit.Name); err != nil || newCap.active {
 		t.Fatalf("new capability was not stopped: %v", err)
+	}
+}
+
+type fakeProcUnit struct {
+	unit    fleet.Service
+	rt      Runtime
+	state   State
+	pid     int
+	healthy bool
+	argv    []string
+}
+
+type fakeProcessProvider struct {
+	mu      sync.Mutex
+	units   map[string]*fakeProcUnit
+	nextPID int
+}
+
+func newFakeProcessProvider() *fakeProcessProvider {
+	return &fakeProcessProvider{
+		units:   make(map[string]*fakeProcUnit),
+		nextPID: 1000,
+	}
+}
+
+func (p *fakeProcessProvider) Name() string { return fleet.ServiceProviderProcess }
+
+func (p *fakeProcessProvider) Activate(ctx context.Context, unit fleet.Service, rt Runtime) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	argv, err := unit.ExpandExec(rt.Download)
+	if err != nil {
+		return err
+	}
+	p.nextPID++
+	u := &fakeProcUnit{
+		unit:    unit,
+		rt:      rt,
+		state:   Starting,
+		pid:     p.nextPID,
+		healthy: true,
+		argv:    argv,
+	}
+	p.units[unit.Name] = u
+	if rt.Emit != nil {
+		rt.Emit(Event{Unit: unit.Name, From: Inactive, To: Starting, At: time.Now()})
+		u.state = Active
+		rt.Emit(Event{Unit: unit.Name, From: Starting, To: Active, At: time.Now()})
+	} else {
+		u.state = Active
+	}
+	return nil
+}
+
+func (p *fakeProcessProvider) Configure(ctx context.Context, unit fleet.Service, rt Runtime) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	u, ok := p.units[unit.Name]
+	if !ok || u.state != Active {
+		return errors.New("unit not active")
+	}
+	newArgv, err := unit.ExpandExec(rt.Download)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(u.argv, newArgv) {
+		return ErrRestartRequired
+	}
+	u.unit = unit
+	u.rt = rt
+	return nil
+}
+
+func (p *fakeProcessProvider) Deactivate(ctx context.Context, unit string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	u, ok := p.units[unit]
+	if !ok {
+		return nil
+	}
+	if u.rt.Emit != nil && u.state != Inactive {
+		u.rt.Emit(Event{Unit: unit, From: u.state, To: Inactive, At: time.Now()})
+	}
+	u.state = Inactive
+	u.pid = 0
+	return nil
+}
+
+func (p *fakeProcessProvider) Health(ctx context.Context, unit string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	u, ok := p.units[unit]
+	if !ok || u.state != Active || !u.healthy {
+		return errors.New("unhealthy")
+	}
+	return nil
+}
+
+func (p *fakeProcessProvider) Status(unit string) Status {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	u, ok := p.units[unit]
+	if !ok {
+		return Status{Unit: unit, Provider: fleet.ServiceProviderProcess, State: Inactive}
+	}
+	return Status{
+		Unit:     unit,
+		Provider: fleet.ServiceProviderProcess,
+		Enabled:  u.unit.Enabled,
+		State:    u.state,
+		PID:      u.pid,
+	}
+}
+
+func fakeExternalUnit(name string, port int, healthPath string) fleet.Service {
+	return fleet.Service{
+		Name:     name,
+		Kind:     fleet.KindService,
+		Provider: fleet.ServiceProviderProcess,
+		Exec:     []string{"bashy", name, "serve", "--port", "{port}", "--addr", "{bind}", "--data={settings.data_dir}"},
+		Settings: map[string]string{"data_dir": ""},
+		Ports:    []fleet.ServicePort{{Name: "http", Port: port}},
+		Health:   fleet.ServiceHealth{HTTP: healthPath},
+		Enabled:  true,
+	}
+}
+
+func TestProcessProviderDispatchAndManagerRuntime(t *testing.T) {
+	proc := newFakeProcessProvider()
+	in := NewInternal("meet", NewRegistry())
+	ps := Providers{
+		fleet.ServiceProviderProcess:  proc,
+		fleet.ServiceProviderInternal: in,
+	}
+
+	services := []struct {
+		name string
+		port int
+		path string
+	}{
+		{"zot", 5000, "/v2/"},
+		{"seaweedfs", 8333, "/"},
+		{"kopia", 51515, "/"},
+	}
+
+	for _, tc := range services {
+		u := fakeExternalUnit(tc.name, tc.port, tc.path)
+
+		// 1. Dispatch selects process provider
+		p, err := ps.For(u)
+		if err != nil || p != proc {
+			t.Fatalf("%s: expected process provider, got %v (%v)", tc.name, p, err)
+		}
+
+		// 2. Lifecycle activation
+		var events []Event
+		rt := Runtime{
+			Env:  map[string]string{"ENV_TEST": "1"},
+			Emit: func(e Event) { events = append(events, e) },
+		}
+		ctx := context.Background()
+		if err := p.Activate(ctx, u, rt); err != nil {
+			t.Fatalf("%s activate: %v", tc.name, err)
+		}
+
+		st := p.Status(tc.name)
+		if st.State != Active || st.PID <= 0 || !st.State.Exposed() {
+			t.Fatalf("%s status after activate: %+v", tc.name, st)
+		}
+		if len(events) != 2 || events[0].To != Starting || events[1].To != Active {
+			t.Fatalf("%s events = %+v", tc.name, events)
+		}
+
+		// 3. Health check
+		if err := p.Health(ctx, tc.name); err != nil {
+			t.Fatalf("%s health: %v", tc.name, err)
+		}
+
+		// 4. Configure with same argv succeeds
+		if err := p.Configure(ctx, u, rt); err != nil {
+			t.Fatalf("%s configure unchanged: %v", tc.name, err)
+		}
+
+		// 5. Configure with changed port requires restart
+		uChanged := u
+		uChanged.Ports = []fleet.ServicePort{{Name: "http", Port: tc.port + 1}}
+		if err := p.Configure(ctx, uChanged, rt); !errors.Is(err, ErrRestartRequired) {
+			t.Fatalf("%s configure changed port: want ErrRestartRequired, got %v", tc.name, err)
+		}
+
+		// 6. Deactivate takes unit down
+		if err := p.Deactivate(ctx, tc.name); err != nil {
+			t.Fatalf("%s deactivate: %v", tc.name, err)
+		}
+		st = p.Status(tc.name)
+		if st.State != Inactive || st.PID != 0 || st.State.Exposed() {
+			t.Fatalf("%s status after deactivate: %+v", tc.name, st)
+		}
+	}
+}
+
+func TestManagerRuntime_LocalFakeServiceLiveHTTPHealth(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v2/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"repositories":[]}`))
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`ok`))
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	// Parse host and port from server URL
+	srvURL := server.URL // e.g. http://127.0.0.1:xxxxx
+	parts := strings.Split(strings.TrimPrefix(srvURL, "http://"), ":")
+	if len(parts) != 2 {
+		t.Fatalf("unexpected server url: %s", srvURL)
+	}
+	var port int
+	fmt.Sscanf(parts[1], "%d", &port)
+
+	proc := newFakeProcessProvider()
+	ctx := context.Background()
+
+	for _, name := range []string{"zot", "seaweedfs", "kopia"} {
+		healthPath := "/"
+		if name == "zot" {
+			healthPath = "/v2/"
+		}
+		u := fakeExternalUnit(name, port, healthPath)
+		rt := Runtime{
+			Emit: func(e Event) {},
+		}
+		if err := proc.Activate(ctx, u, rt); err != nil {
+			t.Fatalf("activate %s: %v", name, err)
+		}
+
+		// Probe the local fake server endpoint
+		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d%s", port, healthPath))
+		if err != nil {
+			t.Fatalf("%s live health probe: %v", name, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s status code = %d, want 200", name, resp.StatusCode)
+		}
+
+		if err := proc.Deactivate(ctx, name); err != nil {
+			t.Fatalf("deactivate %s: %v", name, err)
+		}
 	}
 }

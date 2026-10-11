@@ -1,0 +1,25 @@
+name: zot
+kind: service
+description: Zot OCI registry — image and artifact storage for the dhnt mesh
+exec: [bashy, zot, serve, --port, "{port}", --addr, "{bind}", "--data={settings.data_dir}", --zot-version, "{settings.version}"]
+settings:
+  data_dir: ""
+  version: v2.1.21
+ports:
+  - name: http
+    port: 5000
+health:
+  http: /v2/
+  interval: 10s
+  timeout: 3s
+  failures: 3
+  start_period: 30s
+restart:
+  policy: on-failure
+  backoff: {min: 1s, max: 30s, healthy_after: 30s}
+  start_limit: {burst: 5, interval: 5m}
+expose:
+  mesh:
+    - name: registry
+upgrade: restart
+enabled: false

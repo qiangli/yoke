@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,7 +14,7 @@ import (
 
 // Sprint 418 S15 (story d1d045dd536f): service units in the registry rings.
 
-var builtinUnits = []string{"apps", "events", "llm", "loom", "meet", "schedule", "sdlc"}
+var builtinUnits = []string{"apps", "events", "kopia", "llm", "loom", "meet", "schedule", "sdlc", "seaweedfs", "zot"}
 
 func serviceOpts(root string) []Option {
 	return []Option{WithRoot(root), WithoutCloudOverlay()}
@@ -57,7 +58,10 @@ func TestBuiltinServiceSeedsAreEmbeddedAndValid(t *testing.T) {
 	if !reflect.DeepEqual(names, builtinUnits) {
 		t.Fatalf("seeded units = %v, want %v", names, builtinUnits)
 	}
-	ports := map[string]int{"apps": 22749, "meet": 8637, "llm": 24556, "loom": 31880}
+	ports := map[string]int{
+		"apps": 22749, "meet": 8637, "llm": 24556, "loom": 31880,
+		"zot": 5000, "seaweedfs": 8333, "kopia": 51515,
+	}
 	cat := New(serviceOpts(root)...)
 	for name, want := range ports {
 		s, _ := cat.Service(name)
@@ -73,6 +77,15 @@ func TestBuiltinServiceSeedsAreEmbeddedAndValid(t *testing.T) {
 	}
 	if sdlc, _ := cat.Service("sdlc"); !reflect.DeepEqual(sdlc.Exec, []string{"bashy", "sdlc", "serve", "--interval", "{settings.interval}"}) {
 		t.Errorf("sdlc exec = %v, want foreground serve", sdlc.Exec)
+	}
+	if zot, _ := cat.Service("zot"); !reflect.DeepEqual(zot.Exec, []string{"bashy", "zot", "serve", "--port", "{port}", "--addr", "{bind}", "--data={settings.data_dir}", "--zot-version", "{settings.version}"}) {
+		t.Errorf("zot exec = %v, want foreground serve", zot.Exec)
+	}
+	if sw, _ := cat.Service("seaweedfs"); !reflect.DeepEqual(sw.Exec, []string{"bashy", "seaweedfs", "serve", "--port", "{port}", "--addr", "{bind}", "--data={settings.data_dir}", "--version", "{settings.version}"}) {
+		t.Errorf("seaweedfs exec = %v, want foreground serve", sw.Exec)
+	}
+	if kopia, _ := cat.Service("kopia"); !reflect.DeepEqual(kopia.Exec, []string{"bashy", "kopia", "serve", "--port", "{port}", "--addr", "{bind}", "--data={settings.data_dir}", "--version", "{settings.version}"}) {
+		t.Errorf("kopia exec = %v, want foreground serve", kopia.Exec)
 	}
 	// Seeds are never copied: nothing appears in the local store.
 	if _, err := os.Stat(filepath.Join(root, dirServices)); err == nil {
@@ -259,5 +272,138 @@ func TestServiceExpandExec(t *testing.T) {
 	}
 	if _, err := s.ExpandExec(""); err == nil {
 		t.Fatal("unprovisioned {download} expanded")
+	}
+}
+
+func TestExternalServiceSeeds_ParseValidateExpandExec(t *testing.T) {
+	cat := New(serviceOpts(t.TempDir())...)
+
+	type testCase struct {
+		name        string
+		port        int
+		mesh        string
+		healthHTTP  string
+		startPeriod string
+		defaultArgv string
+		customData  string
+		customArgv  string
+	}
+
+	cases := []testCase{
+		{
+			name:        "zot",
+			port:        5000,
+			mesh:        "registry",
+			healthHTTP:  "/v2/",
+			startPeriod: "30s",
+			defaultArgv: "bashy zot serve --port 5000 --addr 127.0.0.1 --data= --zot-version v2.1.21",
+			customData:  "/var/lib/zot",
+			customArgv:  "bashy zot serve --port 5001 --addr 0.0.0.0 --data=/var/lib/zot --zot-version v2.1.21",
+		},
+		{
+			name:        "seaweedfs",
+			port:        8333,
+			mesh:        "s3",
+			healthHTTP:  "/",
+			startPeriod: "45s",
+			defaultArgv: "bashy seaweedfs serve --port 8333 --addr 127.0.0.1 --data= --version 4.48",
+			customData:  "/var/lib/seaweedfs",
+			customArgv:  "bashy seaweedfs serve --port 8334 --addr 0.0.0.0 --data=/var/lib/seaweedfs --version 4.48",
+		},
+		{
+			name:        "kopia",
+			port:        51515,
+			mesh:        "backup",
+			healthHTTP:  "/",
+			startPeriod: "30s",
+			defaultArgv: "bashy kopia serve --port 51515 --addr 127.0.0.1 --data= --version v0.23.1",
+			customData:  "/var/lib/kopia",
+			customArgv:  "bashy kopia serve --port 51516 --addr 0.0.0.0 --data=/var/lib/kopia --version v0.23.1",
+		},
+	}
+
+	for _, tc := range cases {
+		s, ok := cat.Service(tc.name)
+		if !ok {
+			t.Fatalf("seed %q not found", tc.name)
+		}
+		if err := s.Validate(); err != nil {
+			t.Fatalf("%s validate: %v", tc.name, err)
+		}
+		if s.ProviderName() != ServiceProviderProcess {
+			t.Errorf("%s provider = %q, want process", tc.name, s.ProviderName())
+		}
+		p, ok := s.PrimaryPort()
+		if !ok || p.Port != tc.port || (p.Bind != "" && p.Bind != "loopback") {
+			t.Errorf("%s primary port = %+v, want %d loopback", tc.name, p, tc.port)
+		}
+		if s.Health.HTTP != tc.healthHTTP || s.Health.StartPeriod != tc.startPeriod {
+			t.Errorf("%s health = %+v, want http=%q start_period=%q", tc.name, s.Health, tc.healthHTTP, tc.startPeriod)
+		}
+		if len(s.Expose.Mesh) != 1 || s.Expose.Mesh[0].Name != tc.mesh {
+			t.Errorf("%s mesh = %+v, want [%s]", tc.name, s.Expose.Mesh, tc.mesh)
+		}
+		if s.Upgrade != "restart" {
+			t.Errorf("%s upgrade = %q, want restart", tc.name, s.Upgrade)
+		}
+		if s.Enabled {
+			t.Errorf("%s enabled = true, want false", tc.name)
+		}
+
+		// ExpandExec default
+		argv, err := s.ExpandExec("")
+		if err != nil {
+			t.Fatalf("%s ExpandExec default: %v", tc.name, err)
+		}
+		if strings.Join(argv, " ") != tc.defaultArgv {
+			t.Errorf("%s ExpandExec default = %q, want %q", tc.name, strings.Join(argv, " "), tc.defaultArgv)
+		}
+
+		// ExpandExec with overrides
+		s.Ports[0].Port = tc.port + 1
+		s.Ports[0].Bind = "0.0.0.0"
+		s.Settings["data_dir"] = tc.customData
+		argv, err = s.ExpandExec("")
+		if err != nil {
+			t.Fatalf("%s ExpandExec custom: %v", tc.name, err)
+		}
+		if strings.Join(argv, " ") != tc.customArgv {
+			t.Errorf("%s ExpandExec custom = %q, want %q", tc.name, strings.Join(argv, " "), tc.customArgv)
+		}
+	}
+}
+
+func TestExternalServiceSeeds_PortConflictAndIdentity(t *testing.T) {
+	root := t.TempDir()
+	opts := serviceOpts(root)
+
+	// Round-trip show --yaml | add -f - identity for external seeds
+	for _, name := range []string{"zot", "seaweedfs", "kopia"} {
+		before := mustSvc(t, opts, "", "show", name, "--yaml")
+		mustSvc(t, opts, before, "add", "-f", "-")
+		after := mustSvc(t, opts, "", "show", name, "--yaml")
+		if before != after {
+			t.Fatalf("%s: show|add -f - is not identity:\n--- before\n%s--- after\n%s", name, before, after)
+		}
+		mustSvc(t, opts, "", "rm", name)
+	}
+
+	// Port conflict checks for each external seed when enabled
+	conflicts := []struct {
+		name string
+		port int
+	}{
+		{"zot", 5000},
+		{"seaweedfs", 8333},
+		{"kopia", 51515},
+	}
+	for _, c := range conflicts {
+		mustSvc(t, opts, "", "enable", c.name)
+		clashYAML := fmt.Sprintf("name: fake-%s\nkind: service\nexec: [fake, --port, '{port}']\nports:\n  - port: %d\nenabled: true\n", c.name, c.port)
+		out, err := svcRun(t, opts, clashYAML, "add", "-f", "-")
+		if err == nil || !strings.Contains(err.Error(), fmt.Sprintf(`held by service %q`, c.name)) {
+			t.Fatalf("add over %s's port: err=%v out=%s", c.name, err, out)
+		}
+		mustSvc(t, opts, "", "disable", c.name)
 	}
 }

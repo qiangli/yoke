@@ -219,10 +219,9 @@ Paths: `O` = outpost, `Y` = yoke, `B` = bashy, `C` = coreutils.
 | schedule daemon | seed `schedule` (S17). The service code moves above coreutils (import rule). | `--interval` through exec. The kernel lease stays inside the daemon. | `C/pkg/schedule/service_concurrency_unix_test.go`, `schedule_test.go` |
 | LLM door (`llm up/down`, `EnsureUp`) | seed `llm` (S17) | Port 24556. Bind loopback or lan. `--policy`, `--max-in-flight`, `--no-engine` and `--no-cli` through exec. Owner socket unchanged. | `Y/pkg/broker/broker_test.go`, `stop_test.go`, `sticky_live_test.go` (live) |
 | events (S3, new) | seed `events`: internal `meet.events` on meet (S3/S17) | No port. Rides meet's route. | S3 acceptance (contiguous Seq, SSE resume, resync) |
-| DAG-root `bashy supervisord DAG TARGET` | recipe unit `exec: [bashy, dag, DAG.md, TARGET]`. PID1 behaviour moves to `supervisord --pid1` (S16/S19). | Restart and backoff in `restart` (1–30 s, healthy after 30 s). Grace in `stop.timeout`. | `B/internal/agentos/supervisord_test.go` (11) and `_unix`/`_linux`/`_windows` variants; `bashy/scripts/verify-bashy-scratch.sh` |
-| Zot registry | recipe unit (S18) | `{download}` pin. Port 5000. Data dir in `settings`. Mesh `registry`. Gains restart, which it lacks today. | `Y/external/zot/zot_test.go` |
-| SeaweedFS S3 | recipe unit (S18) | `{download}` pin. Port 8333. Mesh `s3`. | `Y/external/seaweedfs/seaweedfs_test.go` |
-| Kopia backup | recipe unit (S18) | `{download}` pin. Port 51515. Mesh `backup`. | `Y/external/kopia/kopia_test.go` |
+| Zot registry | seed `zot` (S17) | Port 5000. Data dir in `settings`. Mesh `registry`. Gains restart, which it lacks today. Launcher parity with `bashy zot serve`. | `Y/external/zot/zot_test.go`; `Y/pkg/fleet/service_test.go` |
+| SeaweedFS S3 | seed `seaweedfs` (S17) | Port 8333. Data dir in `settings`. Mesh `s3`. Launcher parity with `bashy seaweedfs serve`. | `Y/external/seaweedfs/seaweedfs_test.go`; `Y/pkg/fleet/service_test.go` |
+| Kopia backup | seed `kopia` (S17) | Port 51515. Data dir in `settings`. Mesh `backup`. Launcher parity with `bashy kopia serve`. | `Y/external/kopia/kopia_test.go`; `Y/pkg/fleet/service_test.go` |
 | act_runner (host and sandbox lanes) | recipe unit, no ports or exposure (consumer only) (S18) | `settings`: instance (default local loom), labels (default `host:host`), sandbox, sandbox_image, docker_host. Registration token in `secrets`. `requires: [loom]` when the forge is local. `mesh_consumes` stays a mesh setting. | `Y/external/actrunner/actrunner_test.go` (TestSandboxLabel, TestRegisterOptionsSandboxLabels) |
 | Headlamp port-forward | recipe unit `exec: [bashy, kubectl, port-forward, …]` with `bind: loopback`. `requires` names the control-plane unit. Mesh `headlamp`. (S18) | Port 18466. **Today it is configured but never started** (`O/internal/agent/headlamp` has no importer), so the unit is its first working lifecycle. | `O/internal/agent/headlamp/{headlamp,deploy,posture}_test.go`; TestSetBuiltinsHeadlampParity |
 | Custom supervised programs (`supervised[]`) | operator units (`add -f`) | path/args → `exec`; `dir` → `workdir`; `env`; `log_path` → the monitor's log dir. `enabled`. | `O/internal/agent/supervisor/manager_test.go`; `conf/file_test.go` TestSupervisedPrograms* (ported to unit tests by S16) |
@@ -252,6 +251,31 @@ Paths: `O` = outpost, `Y` = yoke, `B` = bashy, `C` = coreutils.
 - **Other:** the "stopped" / "not running" status-text wire format.
 
 S17 removes the bashy-side items and S18 the outpost-side ones.
+
+## External service seeds: launcher parity, binary CLI mismatches, and schema gaps (Sprint 418 S17)
+
+The seeds for Zot, SeaweedFS, and Kopia (`pkg/fleet/baseline/services/{zot,seaweedfs,kopia}.yaml`) provide generic process-provider service units preserving the options and defaults from `yoke/external/{zot,seaweedfs,kopia}` and Outpost startup:
+- **Zot (`zot`):** Port 5000, loopback bind, health probe `http: /v2/` (start period 30s), mesh service `registry`, data dir in `settings.data_dir`.
+- **SeaweedFS (`seaweedfs`):** Port 8333, loopback bind, health probe `http: /` (start period 45s), mesh service `s3`, data dir in `settings.data_dir`.
+- **Kopia (`kopia`):** Port 51515, loopback bind, health probe `http: /` (start period 30s), mesh service `backup`, data dir in `settings.data_dir`.
+
+### Documented binary CLI mismatches & schema gaps:
+
+1. **Raw binary CLI vs Pinned Launcher Parity:**
+   - **Zot:** The upstream raw `zot` binary only accepts a JSON configuration file path (`zot serve <config.json>`); it does not accept CLI flags `--port`, `--addr`, or `--data`. The `bashy zot serve` launcher generates and provisions the required configuration on first run.
+   - **Kopia:** The upstream raw `kopia` binary requires repository creation (`repository create filesystem`), configuration persistence (`--config-file`), and repository password management (`KOPIA_PASSWORD`) before `server start`. The `bashy kopia serve` launcher performs first-run repository initialization and password generation.
+   - **SeaweedFS:** Upstream `weed` binary uses Go `flag` syntax (`-flag=val`), e.g., `-dir=... -ip.bind=... -s3 -s3.port=...`. The `bashy seaweedfs serve` launcher wraps this with standard POSIX/GNU flags (`--port`, `--addr`, `--data`).
+   - Consequently, the unit seeds invoke the existing launcher commands (`bashy {zot,seaweedfs,kopia} serve --port {port} --addr {bind} --data={settings.data_dir}`) with a declared `settings.version` pin, maintaining lifecycle and provisioning parity without name-specific supervisor or outpost branches.
+
+2. **Launcher Flag Inconsistencies:**
+   - Version flags: Zot uses `--zot-version`, while SeaweedFS and Kopia use `--version`.
+   - Bind flags: Zot, SeaweedFS, and Kopia launchers use `--addr`, whereas `apps` and `llm` use `--bind`.
+   - The YAML seeds faithfully use the actual launcher flags supported by each binary rather than inventing nonexistent flags.
+
+3. **Dynamic binmgr Resolution vs S15 Static `CommandDownload` Digests:**
+   - S15 `CommandDownload` requires a static version (strictly rejecting `"latest"`) and a map of static 64-hex SHA256 digests per platform.
+   - The seeds pin Zot `v2.1.21`, SeaweedFS `4.48` and Kopia `v0.23.1` through their launcher version flags and `settings.version`; the launchers resolve those exact release assets through binmgr. An operator may change the version with the normal service setting override. The upstream release pages were checked on 2026-10-11.
+   - Operators who require static per-platform digests can declare S15's generic `{download}` with a SHA256 map in a custom unit. The default launcher path keeps the existing wrapper's download behavior while avoiding its floating `latest` default.
 
 ## S15 acceptance evidence
 
