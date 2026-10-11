@@ -59,14 +59,9 @@ events=$(mktemp)
 trap 'rm -f "$events" "$events".*' EXIT
 # -json so a test name is attributed to its package even when packages run in
 # parallel. Failure is expected here; the ratchet below decides the verdict.
-#
-# -timeout 45m is the per-package bound, and it is explicit because Go's
-# default of 10m is below the measured gate: pkg/weave runs its suite serially
-# and takes ~18 minutes, so under the default every CI OS job died on the
-# package timeout before the ratchet could score anything. 45m is the bound the
-# full, unchanged CI scope was measured to pass under (0 failures); it is a
-# ceiling against a hung package, not a target, and the runner's job-level
-# timeout (GitHub's 6h default; the workflow sets none) still caps the run.
+# Serial pkg/weave exceeded Go's default 10m package timeout.
+# It measured 950.18s (~16m) on Linux; -timeout 45m bounds the primary package run.
+# This 45m limit matches the verified CI scope.
 # shellcheck disable=SC2086
 go test -json -timeout 45m $pkgs >"$events" 2>&1
 gotest_rc=$?
