@@ -3,18 +3,22 @@ id: abc4ce65c606
 kind: feature
 title: 'S10 ACP everywhere: claude/codex/gemini acp_exec, updates as events, bashy acp with permission relay'
 seq: 1872
-status: todo
+status: assigned
 priority: p2
 labels:
     - yoke
     - bashy
 created: 2026-10-11T03:52:03.478684Z
+weave: 120
+assignee: codex-gpt6-sol
 sprint: 418
 sprint_id: 9891800f-8da5-5338-92bc-1d75755ca548
 sprint_title: 'Agent ecosystem synergy: agentic tools compose like a|b|c through bashy extension points'
 ---
 
 Add acp_exec to yoke/pkg/fleet/baseline/tools claude, codex and gemini via pinned ACP adapters (download records, sha256); map tool_call, plan, thought and usage updates into S3 entry events instead of dropping them (yoke/pkg/chat/acp.go); bashy acp = herald acp, relaying request_permission from S4; publish an ACP-registry manifest. Acceptance: Zed and a Codync bot whose command is bashy acp each complete a prompt; a permission request reaches bashy approve. Refs docs/herald-agent-interop-design.md.
+
+Manager direct review 2026-10-11 14:35 UTC: Sonnet5.5 run #120 committed `f30d2b7` adding explicit `bashy acp --sandbox workspace-write` through the existing chat session/launcher path. The manager independently passed `GOWORK=off go test -short -count=1 -timeout 5m ./pkg/herald/... ./pkg/acp/... ./pkg/chat/...` and `git diff --check`, then pulled the run. The automatic `done` transition was reopened immediately: the required genuine Codync agent-originated S4 approval and Zed native prompt remain unverified. Keep the story open until those live gates pass; the prior read-only Codync attempt failed to create an approval record and is preserved in the sprint evidence.
 
 Manager verdict 2026-10-11 12:35 UTC: Opus5 run #37 delivered top-level `bashy acp` at `9af12996`, merged by managed Weave at `9ec0ec62` after direct diff review, exact focused ACP JSON-RPC initialize/session/prompt process tests PASS, and required repository gate `go build ./... && go test ./internal/... ./tools/... && make test-bash` PASS (Bash 86/86). The first pull completed the gate but encountered only live generated assignment metadata in this story file; the manager backed it up to `/tmp/s418-s10-story-before-pull.md`, restored that metadata-only diff, and reran the gate. The old isolation warning remains in the pull record. Weave's automatic done transition marks this code merge; original S10 remains open for actual Zed and Codync prompts and a permission request reaching `bashy approve`. Earlier Yoke ACP adapters/selection event code remains integrated; do not claim live acceptance from this merge alone.
 
