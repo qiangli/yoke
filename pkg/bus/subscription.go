@@ -21,6 +21,8 @@ const (
 	// DeliveryInterrupt additionally breaks into a running turn (ESC + text over
 	// the control socket). Reserved for direction-changers.
 	DeliveryInterrupt = "interrupt"
+	// DeliverySink delivers to an external sink process or tool command.
+	DeliverySink = "sink"
 )
 
 const subsDir = "subs"
@@ -44,6 +46,8 @@ type Subscription struct {
 	// concern list that routed board posts would be two spellings of one
 	// interest, free to drift.
 	Topics []string `json:"topics,omitempty"`
+	// Kinds restricts which event types match (e.g. "approval", "sprint", "notify").
+	Kinds []string `json:"kinds,omitempty"`
 	// To also accepts 1:1 notifications addressed to this id.
 	To string `json:"to,omitempty"`
 	// Room also accepts room-scoped notifications for this room.
@@ -69,6 +73,16 @@ type Subscription struct {
 
 	// Since is the sidecar's read offset into the timeline.
 	Since int64 `json:"since,omitempty"`
+
+	// Sink selects an external delivery sink: "exec" or "tool-cmd".
+	// An empty sink uses the default pending buffer / control socket.
+	Sink string `json:"sink,omitempty"`
+
+	// SinkArgs holds the command line argv for "exec", or command arguments.
+	SinkArgs []string `json:"sink_args,omitempty"`
+
+	// SinkTarget holds the target tool command for "tool-cmd" (e.g. "openclaw:send").
+	SinkTarget string `json:"sink_target,omitempty"`
 }
 
 // DefaultMaxPerMin bounds interrupt delivery.
@@ -87,13 +101,25 @@ func (s Subscription) maxPerMin() int {
 }
 
 // Matches reports whether an event is one this subscription asked for.
-//
-// Only notify events ever match: the timeline also carries join/leave/steer
-// bookkeeping, which is addressed to nobody and would be pure noise on a bus.
 func (s Subscription) Matches(e room.Event) bool {
-	if e.Type != room.EventNotify {
-		return false
+	if len(s.Kinds) > 0 {
+		matchedKind := false
+		for _, k := range s.Kinds {
+			if k == "*" || k == e.Type {
+				matchedKind = true
+				break
+			}
+		}
+		if !matchedKind {
+			return false
+		}
+	} else if s.Sink == "" {
+		// Non-sink subscription: only notify events ever match.
+		if e.Type != room.EventNotify {
+			return false
+		}
 	}
+
 	if s.To != "" && e.To == s.To {
 		return true
 	}
@@ -101,9 +127,15 @@ func (s Subscription) Matches(e room.Event) bool {
 		return true
 	}
 	for _, pat := range s.Topics {
+		if pat == "*" {
+			return true
+		}
 		if topicMatch(pat, e.Topic) {
 			return true
 		}
+	}
+	if len(s.Kinds) > 0 && len(s.Topics) == 0 && s.To == "" && s.Room == "" {
+		return true
 	}
 	return false
 }

@@ -1,0 +1,158 @@
+---
+name: agent-hub
+description: Human notification sinks and external messenger dispatch (desktop, ntfy, webhook)
+metadata:
+  requires: "has=bashy"
+---
+
+# agent-hub — human notification sinks outside bashy
+
+`agent-hub` provides external delivery sinks for bashy bus subscriptions and events streams.
+When bus sidecar subscriptions or `bashy events` emit events requiring human attention
+(such as operator approvals, sprint blockers, or critical notices), these Bash# functions
+deliver them to channels outside bashy.
+
+## Constraints & Security
+
+- **Subject-only:** Only subject/summary and event coordinates (type, target, actor, topic)
+  leave the host. Bodies, full transcripts, and sensitive operation payloads never leave the host.
+- **Behind exec:** Designed to be run as an argv target from `--sink exec -- ...`, receiving
+  the event JSON on stdin, or from a piped stream like `bashy events --follow --kind approval,notice --json`.
+
+## Bash# Functions
+
+~~~bash
+# desktop delivers a notification to the local desktop environment.
+# Uses osascript on macOS and notify-send on Linux/FreeBSD.
+desktop() {
+	local input
+	input="$(cat)"
+	[ -z "$input" ] && return 0
+
+	local kind target body title
+	kind="$(printf '%s' "$input" | jq -r '.type // .kind // "notice"' 2>/dev/null || echo "notice")"
+	target="$(printf '%s' "$input" | jq -r '.target // ""' 2>/dev/null || true)"
+	body="$(printf '%s' "$input" | jq -r '.body // .summary // ""' 2>/dev/null || true)"
+
+	if [ -n "$target" ]; then
+		title="bashy [$kind] $target"
+	else
+		title="bashy [$kind]"
+	fi
+
+	# Subject-only: clip to single line and max 256 bytes
+	body="$(printf '%s' "$body" | head -n 1 | cut -c 1-256)"
+	[ -z "$body" ] && body="$title"
+
+	if command -v osascript >/dev/null 2>&1; then
+		osascript - "$title" "$body" <<'APPLESCRIPT'
+on run argv
+	display notification (item 2 of argv) with title (item 1 of argv)
+end run
+APPLESCRIPT
+	elif command -v notify-send >/dev/null 2>&1; then
+		notify-send "$title" "$body"
+	else
+		printf 'agent-hub: neither osascript nor notify-send is available\n' >&2
+		return 127
+	fi
+}
+
+# ntfy delivers a subject notification via ntfy.sh or a self-hosted ntfy instance.
+# Configured via NTFY_URL or NTFY_TOPIC.
+ntfy() {
+	local input
+	input="$(cat)"
+	[ -z "$input" ] && return 0
+
+	local kind target body title topic_url
+	kind="$(printf '%s' "$input" | jq -r '.type // .kind // "notice"' 2>/dev/null || echo "notice")"
+	target="$(printf '%s' "$input" | jq -r '.target // ""' 2>/dev/null || true)"
+	body="$(printf '%s' "$input" | jq -r '.body // .summary // ""' 2>/dev/null || true)"
+
+	if [ -n "$target" ]; then
+		title="bashy [$kind] $target"
+	else
+		title="bashy [$kind]"
+	fi
+	body="$(printf '%s' "$body" | head -n 1 | cut -c 1-256)"
+	[ -z "$body" ] && body="$title"
+
+	topic_url="${NTFY_URL:-}"
+	if [ -z "$topic_url" ] && [ -n "${NTFY_TOPIC:-}" ]; then
+		topic_url="https://ntfy.sh/$NTFY_TOPIC"
+	fi
+
+	if [ -z "$topic_url" ]; then
+		printf 'agent-hub: set NTFY_URL or NTFY_TOPIC\n' >&2
+		return 2
+	fi
+	command -v curl >/dev/null 2>&1 || { printf 'agent-hub: curl is required for ntfy\n' >&2; return 127; }
+	curl --fail --silent --show-error -H "Title: $title" -d "$body" "$topic_url" >/dev/null
+}
+
+# webhook delivers a subject notification payload via HTTP POST to WEBHOOK_URL.
+webhook() {
+	local input
+	input="$(cat)"
+	[ -z "$input" ] && return 0
+
+	local kind target body title url
+	kind="$(printf '%s' "$input" | jq -r '.type // .kind // "notice"' 2>/dev/null || echo "notice")"
+	target="$(printf '%s' "$input" | jq -r '.target // ""' 2>/dev/null || true)"
+	body="$(printf '%s' "$input" | jq -r '.body // .summary // ""' 2>/dev/null || true)"
+
+	if [ -n "$target" ]; then
+		title="bashy [$kind] $target"
+	else
+		title="bashy [$kind]"
+	fi
+	body="$(printf '%s' "$body" | head -n 1 | cut -c 1-256)"
+	[ -z "$body" ] && body="$title"
+
+	url="${WEBHOOK_URL:-}"
+	if [ -z "$url" ]; then
+		printf 'agent-hub: set WEBHOOK_URL\n' >&2
+		return 2
+	fi
+	command -v jq >/dev/null 2>&1 || { printf 'agent-hub: jq is required for webhook\n' >&2; return 127; }
+	command -v curl >/dev/null 2>&1 || { printf 'agent-hub: curl is required for webhook\n' >&2; return 127; }
+	local payload
+	payload="$(jq -n --arg title "$title" --arg kind "$kind" --arg target "$target" --arg subject "$body" \
+		'{title: $title, kind: $kind, target: $target, subject: $subject}')" || return
+	curl --fail --silent --show-error -H "Content-Type: application/json" -d "$payload" "$url" >/dev/null
+}
+
+# agent_hub_dispatch reads line-delimited events JSON (e.g. from bashy events --follow --json)
+# and routes each event to the specified sink (default: desktop).
+agent_hub_dispatch() {
+	local sink="${1:-desktop}"
+	while IFS= read -r line || [ -n "$line" ]; do
+		[ -z "$line" ] && continue
+		case "$sink" in
+			desktop) printf '%s\n' "$line" | desktop ;;
+			ntfy)    printf '%s\n' "$line" | ntfy ;;
+			webhook) printf '%s\n' "$line" | webhook ;;
+			*)       printf '%s\n' "$line" | desktop ;;
+		esac
+	done
+}
+~~~
+
+## Usage
+
+Behind an exec sink on bus sidecar:
+```bash
+bashy bus subscribe --as operator --kind approval,sprint \
+    --sink exec -- bashy -lc desktop
+```
+
+Piped from `bashy events`:
+```bash
+bashy events --follow --kind approval,notice --json | bashy -lc 'agent_hub_dispatch desktop'
+```
+
+Install the fenced functions in the supervised Bash# process's startup file
+before using these recipes. A non-zero function exit is intentional: the
+sidecar records a failed sink as a local queued delivery instead of claiming an
+external notification succeeded.

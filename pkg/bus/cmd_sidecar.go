@@ -13,10 +13,10 @@ import (
 
 func newSubscribeCmd() *cobra.Command {
 	var s Subscription
-	var as string
+	var as, sink string
 
 	cmd := &cobra.Command{
-		Use:   "subscribe [flags]",
+		Use:   "subscribe [flags] [-- CMD...]",
 		Short: "register a standing interest the sidecar holds on your behalf",
 		Long: `subscribe records what an agent cares about, so the sidecar can decide —
 off that agent's critical path — which notifications are its business.
@@ -32,13 +32,40 @@ publish to you (it arrives queued, read at your next turn boundary); only the
 principals you name may break into a running turn. Interrupts from anyone else
 are demoted to queued, never dropped.
 
+--sink delivers matching events outside bashy:
+  --sink exec -- CMD
+  --sink tool-cmd TOOL:NAME
+
 Subscriptions are meant to be scoped to a piece of work: set one up when an agent
 starts an issue, remove it when the agent finishes.`,
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		Args: cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
 			s.Subscriber = resolveSubscriber(as)
-			if len(s.Topics) == 0 && s.To == "" && s.Room == "" {
-				return fmt.Errorf("subscribe: nothing to subscribe to — pass --topic, --to, or --room")
+			switch sink {
+			case "":
+				if len(args) != 0 {
+					return fmt.Errorf("subscribe: unexpected operands %q", args)
+				}
+			case "exec":
+				if len(args) == 0 {
+					return fmt.Errorf("subscribe: --sink exec requires a command (--sink exec -- CMD)")
+				}
+				s.Sink = sink
+				s.SinkArgs = append([]string(nil), args...)
+			case "tool-cmd":
+				if len(args) != 1 {
+					return fmt.Errorf("subscribe: --sink tool-cmd requires exactly one TOOL:NAME")
+				}
+				if tool, name, ok := strings.Cut(args[0], ":"); !ok || tool == "" || name == "" {
+					return fmt.Errorf("subscribe: --sink tool-cmd wants TOOL:NAME, got %q", args[0])
+				}
+				s.Sink = sink
+				s.SinkTarget = args[0]
+			default:
+				return fmt.Errorf("subscribe: unsupported sink %q (supported: exec, tool-cmd)", sink)
+			}
+			if len(s.Topics) == 0 && s.To == "" && s.Room == "" && len(s.Kinds) == 0 {
+				return fmt.Errorf("subscribe: nothing to subscribe to — pass --topic, --to, --room, or --kind")
 			}
 			if err := SaveSubscription(s); err != nil {
 				return err
@@ -51,6 +78,7 @@ starts an issue, remove it when the agent finishes.`,
 	f := cmd.Flags()
 	f.StringVar(&as, "as", "", "subscriber name (default: your principal)")
 	f.StringArrayVar(&s.Topics, "topic", nil, "topic or dotted prefix (repeatable): code.api.*")
+	f.StringSliceVar(&s.Kinds, "kind", nil, "event kinds to match (repeatable; e.g. approval, sprint, notify)")
 	f.StringVar(&s.To, "to", "", "also accept notifications addressed to this id")
 	f.StringVar(&s.Room, "room", "", "also accept notifications for this room")
 	f.StringVar(&s.Instance, "instance", "", "room member id to steer when an interrupt is authorized")
@@ -58,6 +86,7 @@ starts an issue, remove it when the agent finishes.`,
 		"principal allowed to interrupt a running turn (repeatable; default: nobody)")
 	f.IntVar(&s.MaxPerMin, "max-per-min", 0,
 		fmt.Sprintf("interrupts per minute before the surplus is demoted to queued (default %d)", DefaultMaxPerMin))
+	f.StringVar(&sink, "sink", "", "delivery sink: exec or tool-cmd")
 	return cmd
 }
 
@@ -66,11 +95,25 @@ func describeInterest(s Subscription) []string {
 	for _, t := range s.Topics {
 		out = append(out, "#"+t)
 	}
+	for _, k := range s.Kinds {
+		out = append(out, "~"+k)
+	}
 	if s.To != "" {
 		out = append(out, "→"+s.To)
 	}
 	if s.Room != "" {
 		out = append(out, "@"+s.Room)
+	}
+	if s.Sink != "" {
+		if s.Sink == "tool-cmd" {
+			target := s.SinkTarget
+			if target == "" && len(s.SinkArgs) > 0 {
+				target = s.SinkArgs[0]
+			}
+			out = append(out, fmt.Sprintf("sink:tool-cmd(%s)", target))
+		} else {
+			out = append(out, fmt.Sprintf("sink:exec(%s)", strings.Join(s.SinkArgs, " ")))
+		}
 	}
 	return out
 }
@@ -202,8 +245,13 @@ turn over the same control socket the coach uses. Everything else queues.
 					enc.SetIndent("", "  ")
 					return enc.Encode(res)
 				}
-				fmt.Fprintf(cmd.ErrOrStderr(), "queued %d, interrupted %d, demoted %d\n",
-					res.Queued, res.Interrupts, res.Demoted)
+				if res.Sinks > 0 {
+					fmt.Fprintf(cmd.ErrOrStderr(), "queued %d, interrupted %d, demoted %d, sinks %d\n",
+						res.Queued, res.Interrupts, res.Demoted, res.Sinks)
+				} else {
+					fmt.Fprintf(cmd.ErrOrStderr(), "queued %d, interrupted %d, demoted %d\n",
+						res.Queued, res.Interrupts, res.Demoted)
+				}
 				return nil
 			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
