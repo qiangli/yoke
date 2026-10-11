@@ -125,6 +125,15 @@ func runMeetServe(ctx context.Context, out io.Writer, surface, bind string, port
 		fmt.Fprintf(out, "%s serve → ⚠ built without the web UI; the API and live streams work, `/` explains how to get the SPA\n", surface)
 	}
 
+	owner, err := newServiceOwner(out)
+	if err != nil {
+		return err
+	}
+	ownerCtx, stopOwner := context.WithCancel(ctx)
+	ownerDone := make(chan struct{})
+	go func() { defer close(ownerDone); owner.Run(ownerCtx) }()
+	defer func() { stopOwner(); <-ownerDone }()
+
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
 	select {
@@ -174,7 +183,7 @@ func newServeHandler(ctx context.Context, opts MountOptions) http.Handler {
 	route("/observe", handleObserveWS)
 	route("GET /api/rooms", handleRoomList)
 	route("GET /api/agents", handleAgentList)
-	route("GET /api/events", handleEvents)
+	route("GET /api/events", eventsGate(handleEvents))
 	route("GET /api/dms", handleRelayDMList)
 	route("POST /api/dms", handleRelayDMList)
 	route("GET /api/dms/{agent}", handleRelayDMGet)
