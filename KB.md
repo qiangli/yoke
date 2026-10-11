@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [host/page] Do not create bookkeeping-only sprints — Operator rule for filing work and commit provenance — WHEN a task needs a story/todo or a commit hook requests sprint trailers: reuse a relevant open sprint, otherwise file a repo todo, and ask before bypassing verification Before filing work, inspect the open sprint board and choose a genuinely relevant activ  (kb:sprint-story-placement)
+- [host/note] Model cmd/cgo C without a Go scope binding When go/types FakeImportC collides with a legal package-scope declaration named C, hygienically rename the user's Go object only in the checker tree while leaving syntactic C.name selector bases bound to FakeImportC; restore the source spelling during conversion. Native-unit validation needs  (kb:model-cmd-cgo-c-without-a-go-scope-binding)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 
