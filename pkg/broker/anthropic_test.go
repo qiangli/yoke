@@ -211,7 +211,7 @@ func TestAnthropicMessagesLocalErrors(t *testing.T) {
 	resp, body = h.raw("/anthropic/v1/messages", anthReq(map[string]any{"tool_choice": map[string]any{"type": "bogus"}}))
 	check("bad tool_choice", resp, body, 400, "invalid_request_error")
 
-	resp, body = h.raw("/anthropic/v1/messages", anthReq(map[string]any{"messages": []map[string]any{{"role": "system", "content": "x"}}}))
+	resp, body = h.raw("/anthropic/v1/messages", anthReq(map[string]any{"messages": []map[string]any{{"role": "developer", "content": "x"}}}))
 	check("bad role", resp, body, 400, "invalid_request_error")
 }
 
