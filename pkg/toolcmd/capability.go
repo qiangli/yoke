@@ -3,6 +3,7 @@ package toolcmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,6 +28,24 @@ type Selection struct {
 }
 
 var publishSelection = room.Emit
+
+// ErrPeerDispatchUnavailable refuses a capability call addressed to another
+// sphere host. A peer door today authenticates only its owner bearer and
+// advertises no command catalog or measured quota, so a peer candidate could
+// not be ranked from authentic evidence nor admitted as a peer: dispatch
+// waits on Sprint 308 A3 (7a5f32dbaafa, peer door catalog/capacity
+// advertisement and authenticated dispatch) and A5 (53fde6fa2d0d, per-peer
+// bearer and share: allow/deny). Forwarding the owner token is not a share.
+var ErrPeerDispatchUnavailable = errors.New("toolcmd: peer capability dispatch is unavailable until Sprint 308 A3 (7a5f32dbaafa: peer door advertisement and authenticated dispatch) and A5 (53fde6fa2d0d: per-peer bearer and share policy) land; refusing before selection, credentials or network")
+
+// checkPeerDispatch fails closed for any non-empty peer. The peer value is
+// deliberately not echoed: an operator may pass a URL carrying credentials.
+func checkPeerDispatch(peer string) error {
+	if strings.TrimSpace(peer) == "" {
+		return nil
+	}
+	return ErrPeerDispatchUnavailable
+}
 
 // SelectMeasuredCommand chooses a declared vendor command only from host
 // measurements with a currently measured remaining subscription quota.  It

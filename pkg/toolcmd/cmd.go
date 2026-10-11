@@ -157,9 +157,9 @@ func shellQuote(argv []string) string {
 
 func newRunCmd() *cobra.Command {
 	var (
-		asJSON, dryRun, async, yes                bool
-		dir, model, agent, capabilityName, caller string
-		timeout                                   time.Duration
+		asJSON, dryRun, async, yes                      bool
+		dir, model, agent, capabilityName, caller, peer string
+		timeout                                         time.Duration
 	)
 	c := &cobra.Command{
 		Use:   "run [TOOL:NAME] [--capability CAPABILITY] [-- ARGS...]",
@@ -168,6 +168,9 @@ func newRunCmd() *cobra.Command {
   bashy tool cmd run claude:deep-research --async -- "why do tides lag the moon"`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkPeerDispatch(peer); err != nil {
+				return err
+			}
 			var ref string
 			var rest []string
 			if capabilityName == "" {
@@ -266,6 +269,7 @@ func newRunCmd() *cobra.Command {
 	f.StringVar(&model, "model", "", "model to bind (TOOL:MODEL)")
 	f.StringVar(&agent, "agent", "", "agent nick to resolve the launch from (default: the tool)")
 	f.StringVar(&capabilityName, "capability", "", "route through a measured non-caller provider for this capability")
+	f.StringVar(&peer, "peer", "", "sphere peer to dispatch to (fails closed until peer door admission exists)")
 	f.StringVar(&caller, "caller", "", "requesting vendor, excluded from --capability selection (default: BASHY_AGENT)")
 	f.DurationVar(&timeout, "timeout", 0, "override the command's timeout")
 	return c
