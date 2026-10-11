@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [host/page] Do not create bookkeeping-only sprints — Operator rule for filing work and commit provenance — WHEN a task needs a story/todo or a commit hook requests sprint trailers: reuse a relevant open sprint, otherwise file a repo todo, and ask before bypassing verification Before filing work, inspect the open sprint board and choose a genuinely relevant activ  (kb:sprint-story-placement)
+- [repo/page] CLI stdout ownership must outlive process wait — WHEN streaming events from a short-lived CLI with os/exec, do not let exec.Cmd.Wait own and close StdoutPipe while a separate scanner drains terminal events. Attach an explicitly owned os.Pipe writer to Cmd.Stdout, close the parent's writer after Start, and let the scanner close t  (kb:cli-stdout-ownership-must-outlive-process-wait)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 
