@@ -475,7 +475,7 @@ func sprintUnansweredGate(s *weaveStory, verb string) error {
 	if s == nil || strings.TrimSpace(s.Owner) == "" {
 		return nil
 	}
-	n, oldest := sprintOwnerUnanswered(s.Owner)
+	n, oldest := sprintOwnerUnansweredForSprint(s.Owner, s)
 	if n == 0 {
 		return nil
 	}
