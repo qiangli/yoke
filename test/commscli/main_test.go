@@ -80,6 +80,7 @@ func runAuditTool() {
 		agentcmd.NewAgentCmd(),
 		bus.NewMessageBoardCmd(),
 		bus.NewBusCmd(),
+		bus.NewEventsCmd(),
 		bus.NewInboxCmd(),
 		bus.NewNotifyCmd(),
 		weave.NewWeaveCmd(),

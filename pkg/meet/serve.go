@@ -174,6 +174,7 @@ func newServeHandler(ctx context.Context, opts MountOptions) http.Handler {
 	route("/observe", handleObserveWS)
 	route("GET /api/rooms", handleRoomList)
 	route("GET /api/agents", handleAgentList)
+	route("GET /api/events", handleEvents)
 	route("GET /api/dms", handleRelayDMList)
 	route("POST /api/dms", handleRelayDMList)
 	route("GET /api/dms/{agent}", handleRelayDMGet)

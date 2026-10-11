@@ -344,3 +344,7 @@ func rotateTimelineOpportunistic() {
 	touchRotationMarker()
 	_, _ = RotateTimeline(now)
 }
+
+// ArchivedThrough is the highest event sequence already moved out of the live
+// timeline; a reader whose position is below it has lost events to retention.
+func ArchivedThrough() int64 { return archivedThrough() }

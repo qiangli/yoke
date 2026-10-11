@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/qiangli/coreutils/pkg/lockfile"
 	"github.com/qiangli/yoke/pkg/stateaccess"
@@ -124,7 +125,7 @@ func HasCapability(c Card, capability string) bool {
 type Event struct {
 	Seq       int64  `json:"seq"`
 	TS        string `json:"ts"`
-	Type      string `json:"type"` // join | leave | steer | interrupt | status | note | notify
+	Type      string `json:"type"` // join | leave | steer | interrupt | status | note | notify | sprint | handoff | todo | approval | usage | inbound
 	Actor     string `json:"actor,omitempty"`
 	Target    string `json:"target,omitempty"`
 	Body      string `json:"body,omitempty"`
@@ -192,7 +193,41 @@ const (
 	EventNote      = "note"
 	EventNotify    = "notify"
 	EventAck       = "ack"
+
+	// The host event log's domain types (bashy events). They ride the same
+	// timeline as join/leave/notify — there is no second log — and are told apart
+	// by Type: Target names the object ("sprint:#418", "todo:9ba6d26c",
+	// "handoff:<id>"), Topic the sub-kind (a thread kind, a status, a verb), Body
+	// a short clipped summary. Details stay in the owning store.
+	EventSprint   = "sprint"   // a sprint thread entry, every kind (stage, progress, decision, ...)
+	EventHandoff  = "handoff"  // a handoff created, claimed (resume --claim) or cancelled
+	EventTodo     = "todo"     // a todo item changed status
+	EventApproval = "approval" // a human/operator approval decision
+	EventUsage    = "usage"    // a model/tool usage record
+	EventInbound  = "inbound"  // a message that arrived from outside the host
 )
+
+// Brief clips a free-text body to at most max bytes without splitting a UTF-8
+// sequence, so a producer can attach a summary without copying an operation's
+// whole output onto the host log.
+func Brief(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "..."
+}
+
+// Record appends a domain event to the host log. It is best effort by design:
+// the state change a producer just committed is the transaction, and an event
+// log that could fail it would be worse than one that occasionally lags.
+func Record(typ, actor, target, topic, body string) {
+	_ = Emit(Event{Type: typ, Actor: actor, Target: target, Topic: topic, Body: Brief(body, 280)})
+}
 
 var appendMu sync.Mutex
 

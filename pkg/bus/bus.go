@@ -65,7 +65,10 @@ reaches an agent that was not looking.
 
 The transport is the host room's append-only timeline, the same log
 'bashy chat timeline' renders. There is no daemon and no broker, so nothing can
-be down and silently swallow a message.`,
+be down and silently swallow a message.
+
+'bashy events' (NewEventsCmd, mounted top level by the host) reads that same log
+for every producer -- sprint threads, handoffs, todo status, notifications.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}

@@ -680,6 +680,7 @@ func newStatusCmd(sf storeFunc) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			recordStatusEvent(it)
 			fmt.Fprintf(cmd.OutOrStdout(), "%s -> %s — %s\n", it.ID[:8], it.Status, it.Title)
 			return nil
 		},
@@ -700,6 +701,7 @@ func newDoneCmd(sf storeFunc) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			recordStatusEvent(it)
 			fmt.Fprintf(cmd.OutOrStdout(), "done %s — %s\n", it.ID[:8], it.Title)
 			return nil
 		},
@@ -720,6 +722,7 @@ func newStartCmd(sf storeFunc) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			recordStatusEvent(it)
 			fmt.Fprintf(cmd.OutOrStdout(), "doing %s — %s\n", it.ID[:8], it.Title)
 			return nil
 		},
@@ -844,6 +847,9 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 					}
 					return fmt.Errorf("story left unchanged: retiring its former sprint goals failed: %w", err)
 				}
+			}
+			if it.Status != previous.Status {
+				recordStatusEvent(it)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "edited %s — %s\n", it.ID[:8], it.Title)
 			if reassigned {

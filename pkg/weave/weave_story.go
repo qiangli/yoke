@@ -1747,6 +1747,11 @@ func weaveStoryAppend(s *weaveStory, author, kind, body string) {
 	// call in each verb, so a stage verb added later is announced for free and
 	// the board can never disagree with the thread. See sprint_stage_announce.go
 	// for the kind taxonomy and why re-taking your own lease is not a stage.
+	//
+	// The host event log (bashy events) is the same projection, wider: it takes
+	// EVERY thread kind, since a comment or a verdict is as much a fact to a
+	// watcher as a stage change.
+	room.Record(room.EventSprint, author, fmt.Sprintf("sprint:#%d", s.ID), kind, body)
 	if kind == kindStage {
 		announceStage(s, author, body)
 	}
