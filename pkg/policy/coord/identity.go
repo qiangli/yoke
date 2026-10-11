@@ -5,8 +5,10 @@ package coord
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"os"
+	"strings"
 
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/principal"
@@ -37,6 +39,9 @@ func Self() principal.Ref {
 	if ref.Episode == "" {
 		ep := os.Getenv(EpisodeEnv)
 		if ep == "" {
+			ep = harnessEpisode()
+		}
+		if ep == "" {
 			ep = mintEpisode()
 			// Export it: every child of this process — a subagent, a hook, a
 			// `bashy git commit` — must be recognised as the SAME agent, or a
@@ -55,6 +60,31 @@ func Self() principal.Ref {
 		ref.Host, _ = os.Hostname()
 	}
 	return ref
+}
+
+// harnessSessionEnv names the variables an agent harness exports with ONE
+// value for the whole session, in every process it starts. Minting is not
+// enough under such a harness: Claude Code runs each tool call in a FRESH
+// shell, so the episode a `git commit` exported never reaches the `git push`
+// that follows, and the session collided with itself — its own commit claim
+// refused its next push, and `claim release` (a third episode) dropped nothing.
+// Add a harness here only after observing its variable in a live session.
+var harnessSessionEnv = []struct{ tool, env string }{
+	// Observed 2026-10-11, Claude Code 2.1.284: stable across every Bash call.
+	{"claude", "CLAUDE_CODE_SESSION_ID"},
+}
+
+// harnessEpisode derives a stable episode from the harness session id, or ""
+// when no known harness session is present. Deterministic: every process of
+// one session derives the same value, and distinct sessions never share one.
+func harnessEpisode() string {
+	for _, h := range harnessSessionEnv {
+		if id := strings.TrimSpace(os.Getenv(h.env)); id != "" {
+			sum := sha256.Sum256([]byte(h.tool + ":" + id))
+			return "ep-" + hex.EncodeToString(sum[:8])
+		}
+	}
+	return ""
 }
 
 func mintEpisode() string {
