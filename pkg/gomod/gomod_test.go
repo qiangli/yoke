@@ -174,6 +174,9 @@ func TestSyncRunsGoGetAndReplaceEdit(t *testing.T) {
 	root, ws := fixture(t)
 	var calls []string
 	run := func(_ context.Context, dir string, env []string, args ...string) ([]byte, error) {
+		if args[0] == "mod" && args[1] == "download" {
+			return forkDownload(t, root, dir, args)
+		}
 		if dir != filepath.Join(root, "a") || !reflect.DeepEqual(env, pinnedEnv) {
 			t.Errorf("run in %s env %v", dir, env)
 		}
@@ -194,7 +197,7 @@ func TestSyncRunsGoGetAndReplaceEdit(t *testing.T) {
 	}
 	want := []string{
 		"get example.com/b@" + headB,
-		"mod edit -replace=upstream.example/f/v3=example.com/f/v3@999999999999" + strings.Repeat("0", 28),
+		"mod edit -replace=upstream.example/f/v3=example.com/f/v3@" + forkPseudo,
 		"mod tidy",
 	}
 	if !reflect.DeepEqual(calls, want) {
@@ -207,6 +210,87 @@ func TestSyncRunsGoGetAndReplaceEdit(t *testing.T) {
 	calls = nil
 	if ch, err := ws.Sync(context.Background(), ws.Module(filepath.Join(root, "a")), []string{"c"}, git, run); err != nil || ch != nil || calls != nil {
 		t.Fatalf("only c (local replace): %v %v %v", ch, err, calls)
+	}
+}
+
+const forkPseudo = "v3.0.0-20260103000000-999999999999"
+
+// forkDownload answers `go mod download -json example.com/f/v3@<sha>` the way
+// the go command does: with the canonical pseudo-version, run outside the
+// consumer module.
+func forkDownload(t *testing.T, root, dir string, args []string) ([]byte, error) {
+	t.Helper()
+	if strings.HasPrefix(dir, root) {
+		t.Errorf("download ran inside the workspace: %s", dir)
+	}
+	spec := args[len(args)-1]
+	if !strings.HasPrefix(spec, "example.com/f/v3@9999") || strings.Contains(spec, forkPseudo) {
+		t.Errorf("download spec %q", spec)
+	}
+	return []byte(`{"Path":"example.com/f/v3","Version":"` + forkPseudo + `","Dir":"/cache/f"}`), nil
+}
+
+func staleFork(root string) ResolveFunc {
+	git := fakeGit(root)
+	return func(dir, rev string) (string, error) {
+		if filepath.Base(dir) == "f" && rev == "HEAD" {
+			return "999999999999" + strings.Repeat("0", 28), nil
+		}
+		return git(dir, rev)
+	}
+}
+
+func TestSyncForkReplaceResolvesPseudoVersionBeforeMutation(t *testing.T) {
+	root, ws := fixture(t)
+	a := ws.Module(filepath.Join(root, "a"))
+	sha := "999999999999" + strings.Repeat("0", 28)
+	for name, bad := range map[string]func(args []string) ([]byte, error){
+		"go fails": func([]string) ([]byte, error) {
+			return []byte(`{"Path":"example.com/f/v3","Error":"unknown revision"}`), errors.New("exit 1")
+		},
+		"raw sha version": func([]string) ([]byte, error) {
+			return []byte(`{"Path":"example.com/f/v3","Version":"` + sha + `"}`), nil
+		},
+		"wrong major": func([]string) ([]byte, error) {
+			return []byte(`{"Path":"example.com/f/v3","Version":"v1.0.0-20260103000000-999999999999"}`), nil
+		},
+	} {
+		var calls []string
+		run := func(_ context.Context, dir string, _ []string, args ...string) ([]byte, error) {
+			if args[0] == "mod" && args[1] == "download" {
+				return bad(args)
+			}
+			calls = append(calls, strings.Join(args, " "))
+			return nil, nil
+		}
+		ch, err := ws.Sync(context.Background(), a, nil, staleFork(root), run)
+		if err == nil || ch != nil {
+			t.Errorf("%s: want error and no changes, got %v %v", name, ch, err)
+		}
+		if len(calls) != 0 {
+			t.Errorf("%s: go.mod mutated before the error (stale sibling b included): %q", name, calls)
+		}
+	}
+	// --only the fork: the edit carries the resolved version, never the SHA.
+	var calls []string
+	run := func(_ context.Context, dir string, _ []string, args ...string) ([]byte, error) {
+		if args[0] == "mod" && args[1] == "download" {
+			return forkDownload(t, root, dir, args)
+		}
+		calls = append(calls, strings.Join(args, " "))
+		return nil, nil
+	}
+	if _, err := ws.Sync(context.Background(), a, []string{"f"}, staleFork(root), run); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"mod edit -replace=upstream.example/f/v3=example.com/f/v3@" + forkPseudo, "mod tidy"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls\n got %q\nwant %q", calls, want)
+	}
+	for _, c := range calls {
+		if strings.Contains(c, sha) {
+			t.Errorf("raw sha reached go mod edit: %s", c)
+		}
 	}
 }
 
