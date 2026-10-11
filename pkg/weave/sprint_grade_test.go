@@ -148,6 +148,7 @@ func TestGradeMergeCommands(t *testing.T) {
 		{"blind-register", "Blind implementation", "register", ""},
 		{"blind-story", "Blind implementation", "story", ""},
 		{"matching", "Implement\n\nSprint: #331\nStory: #1217\nStory-ID: 4474b08d8299\n", "register", ""},
+		{"multi-story", "Implement\n\nSprint: #331\nStory: #1300\nStory-ID: 0123456789ab\nStory: #1217\nStory-ID: 4474b08d8299\n", "register", ""},
 		{"sprint-mismatch", "Implement\n\nSprint: #332\nStory: #1217\nStory-ID: 4474b08d8299\n", "register", "Sprint trailer disagrees"},
 		{"story-mismatch", "Implement\n\nSprint: #331\nStory: #1218\nStory-ID: 4474b08d8299\n", "register", "Story trailer for 4474b08d8299 disagrees"},
 		{"id-mismatch", "Implement\n\nSprint: #331\nStory: #1217\nStory-ID: 0123456789ab\n", "register", "do not cite the run's linked story"},
@@ -265,6 +266,14 @@ func TestGradeMergeCommands(t *testing.T) {
 			}
 			if out, code := runSprint(t, "merge", "331", "--run", run, "--into", target, "--reviewer", "agent-b"); code != 0 {
 				t.Fatalf("reviewer fallback blocked merge: %d %s", code, out)
+			}
+			if tc.name == "multi-story" {
+				ref, _ := r.Head()
+				mc, _ := r.CommitObject(ref.Hash())
+				trace, err := parseCommitTrace(mc.Message)
+				if err != nil || len(trace.Stories) != 2 || trace.Stories[0].ID != "4474b08d8299" || trace.Stories[1].ID != "0123456789ab" {
+					t.Fatalf("merge commit provenance = %+v %v\n%s", trace, err, mc.Message)
+				}
 			}
 			t.Setenv(sprintLeaseTokenEnv, "wrong")
 			if out, code := runSprint(t, "merge", "331", "--run", run, "--into", target); code == 0 {
