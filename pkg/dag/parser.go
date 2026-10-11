@@ -24,6 +24,16 @@ type Task struct {
 	Lang string // interpreter tag from the fenced-code info string ("" => bash)
 	Body string
 
+	// Identity is the target's canonical identity hash ("h" + sha256).
+	Identity string
+	// Capability is the target's contract projection hash ("k" + sha256).
+	Capability string
+
+	// Heading is the source heading line (e.g. "## build" or "### build").
+	Heading string
+	// MetaLines holds the unparsed metadata lines in declaration order.
+	MetaLines []string
+
 	Requires  []string
 	Inputs    []string
 	Sources   []string
@@ -309,7 +319,7 @@ func Parse(r io.Reader, path string) (*Document, error) {
 			}
 			if lvl == taskLevel && inTasks {
 				flush()
-				cur = &Task{Name: text, Line: idx + 1}
+				cur = &Task{Name: text, Heading: ln, Line: idx + 1}
 				continue
 			}
 			if !nested && lvl <= taskLevel {
@@ -515,6 +525,7 @@ func (t *Task) absorb(lines []string) {
 			continue
 		}
 		if k, v, ok := parseMeta(ln); ok {
+			t.MetaLines = append(t.MetaLines, ln)
 			switch k {
 			case "requires":
 				t.Requires = append(t.Requires, splitList(v)...)
@@ -657,6 +668,8 @@ func (t *Task) absorb(lines []string) {
 		t.Body += "\n"
 	}
 	t.Desc = strings.TrimSpace(strings.Join(desc, "\n"))
+	t.Identity = TargetIdentity(t)
+	t.Capability = TargetCapability(t)
 }
 
 // parseHeading parses an ATX heading ("##  Name"), returning the level (1-6)
@@ -785,6 +798,7 @@ func (t *Task) clone() *Task {
 	c.Require = append([]string(nil), t.Require...)
 	c.Ensure = append([]string(nil), t.Ensure...)
 	c.Effects = append([]string(nil), t.Effects...)
+	c.MetaLines = append([]string(nil), t.MetaLines...)
 	if t.ExitCodes != nil {
 		c.ExitCodes = make(map[int]string, len(t.ExitCodes))
 		for k, v := range t.ExitCodes {
