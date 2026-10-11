@@ -207,6 +207,61 @@ func TestConflictHolderFallbacks(t *testing.T) {
 	}
 }
 
+func TestConflictErrorAcquisitionTimeLocalVsUTCJSON(t *testing.T) {
+	origLocal := time.Local
+	defer func() { time.Local = origLocal }()
+
+	// Smoke case: 2026-10-10 05:08:00 UTC was acquired at 22:08 PDT (UTC-7) on 2026-10-09.
+	// In PDT: time.Kitchen is "10:08PM". In UTC: time.Kitchen is "5:08AM".
+	acquiredUTC := time.Date(2026, 10, 10, 5, 8, 0, 0, time.UTC)
+	c := &Conflict{
+		Claim: &Claim{
+			SchemaVersion: SchemaVersion,
+			Kind:          "repo",
+			Resource:      "yoke",
+			Mode:          ModeLease,
+			Holder:        agentA(),
+			Intent:        "sprint smoke",
+			AcquiredAt:    acquiredUTC,
+			Heartbeat:     acquiredUTC,
+		},
+		now: acquiredUTC.Add(time.Minute),
+	}
+
+	// 1. Under PDT (UTC-7): local time is 10:08PM
+	time.Local = time.FixedZone("PDT", -7*3600)
+	msgPDT := c.Error()
+	if !strings.Contains(msgPDT, "since 10:08PM") {
+		t.Fatalf("PDT Conflict.Error() = %q, want 'since 10:08PM'", msgPDT)
+	}
+	if strings.Contains(msgPDT, "since 5:08AM") {
+		t.Fatalf("PDT Conflict.Error() incorrectly printed UTC time 'since 5:08AM': %q", msgPDT)
+	}
+
+	// 2. Under JST (UTC+9): local time is 2:08PM (14:08)
+	time.Local = time.FixedZone("JST", 9*3600)
+	msgJST := c.Error()
+	if !strings.Contains(msgJST, "since 2:08PM") {
+		t.Fatalf("JST Conflict.Error() = %q, want 'since 2:08PM'", msgJST)
+	}
+	if strings.Contains(msgJST, "since 5:08AM") {
+		t.Fatalf("JST Conflict.Error() incorrectly printed UTC time 'since 5:08AM': %q", msgJST)
+	}
+
+	// 3. JSON retains UTC RFC3339 timestamp regardless of local timezone
+	jsonBytes, err := c.JSON()
+	if err != nil {
+		t.Fatalf("c.JSON() failed: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(jsonBytes, &doc); err != nil {
+		t.Fatalf("unmarshal json: %v", err)
+	}
+	if doc["since"] != "2026-10-10T05:08:00Z" {
+		t.Fatalf("JSON 'since' = %v, want UTC timestamp '2026-10-10T05:08:00Z'", doc["since"])
+	}
+}
+
 func readAudit(t *testing.T, path string) []audit.Record {
 	t.Helper()
 	b, err := os.ReadFile(path)

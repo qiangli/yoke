@@ -175,7 +175,7 @@ func (c *Conflict) Error() string {
 	if c.Claim.Intent != "" {
 		fmt.Fprintf(&b, " (%s)", c.Claim.Intent)
 	}
-	fmt.Fprintf(&b, ", since %s, %s.\n\n", c.Claim.AcquiredAt.Format(time.Kitchen), c.Claim.Liveness(c.at()))
+	fmt.Fprintf(&b, ", since %s, %s.\n\n", c.Claim.AcquiredAt.Local().Format(time.Kitchen), c.Claim.Liveness(c.at()))
 	if c.Claim.Resource != "" {
 		fmt.Fprintf(&b, "This advisory hold coordinates agents on this host; it does not prove the remote resource is idle.\n\n")
 	} else {
