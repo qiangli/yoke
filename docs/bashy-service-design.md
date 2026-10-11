@@ -117,8 +117,9 @@ Settings: `instance` (empty = the `forge_unit` unit's loopback listener),
 (`false`; `true` adds the container lane), `sandbox_image` (the runner's
 default node image), `docker_host` (empty = resolved from `bashy podman`),
 and the optional `name`, `version`, `data_dir`. The registration token is
-the vault reference `ACTRUNNER_TOKEN` → `actrunner-registration-token`; a
-plaintext `settings.token` is read by the capability but is not seeded and
+the optional vault reference `ACTRUNNER_TOKEN` → `actrunner-registration-token`.
+An already registered runner can restart without that token; first registration
+still requires a bound token. A plaintext `settings.token` is read by the capability but is not seeded and
 should not be used. The operator's vault secrets reach job env inside the
 capability. `restart` mirrors the capability's own 5 s to 2 min register
 backoff. `requires: [loom]` is deliberately not seeded, since build-only

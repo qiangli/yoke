@@ -82,8 +82,9 @@ type Service struct {
 
 // ServiceSecret injects one vault entry as an environment variable.
 type ServiceSecret struct {
-	Env string `yaml:"env" json:"env" doc:"environment variable to set"`
-	Ref string `yaml:"ref" json:"ref" doc:"vault key name (bashy secrets)"`
+	Env      string `yaml:"env" json:"env" doc:"environment variable to set"`
+	Ref      string `yaml:"ref" json:"ref" doc:"vault key name (bashy secrets)"`
+	Optional bool   `yaml:"optional,omitempty" json:"optional,omitempty" doc:"omit this environment variable when the vault key is not bound"`
 }
 
 // ServicePort is one declared listener.

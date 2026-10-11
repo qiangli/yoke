@@ -182,7 +182,7 @@ func TestActrunnerTokenIsAVaultReferenceNeverInline(t *testing.T) {
 	root := t.TempDir()
 	opts := serviceOpts(root)
 	a, _ := New(opts...).Service("actrunner")
-	if !reflect.DeepEqual(a.Secrets, []ServiceSecret{{Env: "ACTRUNNER_TOKEN", Ref: "actrunner-registration-token"}}) {
+	if !reflect.DeepEqual(a.Secrets, []ServiceSecret{{Env: "ACTRUNNER_TOKEN", Ref: "actrunner-registration-token", Optional: true}}) {
 		t.Fatalf("secrets = %+v", a.Secrets)
 	}
 	if _, inline := a.Settings["token"]; inline {
@@ -191,9 +191,15 @@ func TestActrunnerTokenIsAVaultReferenceNeverInline(t *testing.T) {
 	if _, inline := a.Env["ACTRUNNER_TOKEN"]; inline {
 		t.Error("seed declares the token in env")
 	}
+	// A previously registered runner can restart without a registration token.
+	// Fresh registration still receives the same vault reference when bound.
+	shown := mustSvc(t, opts, "", "show", "actrunner", "--yaml")
+	if !strings.Contains(shown, "optional: true") {
+		t.Fatalf("show lost the optional registration-token contract:\n%s", shown)
+	}
 	// A secret entry without a vault ref is refused, and the shown record
 	// carries the reference, never a value.
-	bad := strings.Replace(mustSvc(t, opts, "", "show", "actrunner", "--yaml"), "ref: actrunner-registration-token", "ref: \"\"", 1)
+	bad := strings.Replace(shown, "ref: actrunner-registration-token", "ref: \"\"", 1)
 	if _, err := svcRun(t, opts, bad, "add", "-f", "-"); err == nil {
 		t.Fatal("secret without a vault ref accepted")
 	}

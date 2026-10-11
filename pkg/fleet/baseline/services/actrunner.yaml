@@ -7,6 +7,7 @@ owner: outpost
 secrets:
   - env: ACTRUNNER_TOKEN
     ref: actrunner-registration-token
+    optional: true
 settings:
   instance: ""
   forge_unit: loom
