@@ -25,7 +25,7 @@ func TestResolveToolBinaryFindsUserBinHomeOffPath(t *testing.T) {
 	if err := os.WriteFile(tool, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	t.Setenv("DHNT_BIN_DIR", "")
 	// A service PATH: nothing of the operator's own in it.
 	t.Setenv("PATH", "/usr/bin:/bin")
@@ -66,7 +66,7 @@ func TestResolveToolBinaryPassesAPathThrough(t *testing.T) {
 // Unresolvable is reported as unresolvable — the caller preflights on it rather
 // than handing os/exec a name it will fail on with a $PATH the operator cannot see.
 func TestResolveToolBinaryReportsMissing(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	t.Setenv("DHNT_BIN_DIR", "")
 	t.Setenv("PATH", t.TempDir())
 	if got := ResolveToolBinary("definitely-not-installed-anywhere"); got != "" {
@@ -78,7 +78,7 @@ func TestResolveToolBinaryReportsMissing(t *testing.T) {
 // operator's own PATH order must survive.
 func TestToolPathEnvAppendsUserBinHomes(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	t.Setenv("DHNT_BIN_DIR", "")
 	t.Setenv("GOBIN", "")
 	t.Setenv("GOPATH", "")
@@ -105,7 +105,7 @@ func TestToolPathEnvAppendsUserBinHomes(t *testing.T) {
 // Applied twice — a launcher that already inherited an augmented PATH — must not
 // grow the variable on every hop.
 func TestToolPathEnvIsIdempotent(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	t.Setenv("DHNT_BIN_DIR", "")
 
 	once := toolPathEnv([]string{"PATH=/usr/bin"})
@@ -117,7 +117,7 @@ func TestToolPathEnvIsIdempotent(t *testing.T) {
 
 // A child env with no PATH at all still gets one.
 func TestToolPathEnvAddsPathWhenAbsent(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	t.Setenv("DHNT_BIN_DIR", "")
 	out := toolPathEnv([]string{"FOO=1"})
 	found := false

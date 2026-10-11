@@ -135,7 +135,7 @@ func TestInvokeReducesOversizeAgentTurnAndSpillsFullOutput(t *testing.T) {
 	permitUnsafeLaunch(t)
 	pinCatalog(t)
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	full := strings.Repeat("agent progress at "+filepath.Join(home, "fixture", "result")+" must remain recoverable\n", 1400)
 	canonical := strings.ReplaceAll(full, home, "$HOME")
 	r := &fakeRunner{output: full}
@@ -183,7 +183,7 @@ func TestInvokeDeduplicatesTelemetryHintsWithRecoverableArtifact(t *testing.T) {
 	permitUnsafeLaunch(t)
 	pinCatalog(t)
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
 	if err := os.MkdirAll(filepath.Join(home, "config", "bashy"), 0o700); err != nil {
 		t.Fatal(err)
@@ -232,7 +232,7 @@ func TestInvokeKeepsSmallAgentTurnInline(t *testing.T) {
 	permitUnsafeLaunch(t)
 	pinCatalog(t)
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	r := &fakeRunner{output: "small answer at " + filepath.Join(home, "fixture") + "\n"}
 
 	res, err := Invoke(context.Background(), Options{
@@ -254,7 +254,7 @@ func TestInvokeRedactsBeforeInlineSpillAndStream(t *testing.T) {
 	permitUnsafeLaunch(t)
 	pinCatalog(t)
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
 	if err := os.MkdirAll(filepath.Join(home, "config", "bashy"), 0o700); err != nil {
 		t.Fatal(err)
@@ -298,7 +298,7 @@ func TestInvokeReductionOptOutStillRedacts(t *testing.T) {
 	permitUnsafeLaunch(t)
 	pinCatalog(t)
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	t.Setenv("BASHY_OUTPUT_REDUCE", "off")
 	full := strings.Repeat("complete answer\n", 4000)
 	res, err := Invoke(context.Background(), Options{Agent: "codex", Instruction: "summarize", Cwd: t.TempDir()}, &fakeRunner{output: full})
@@ -314,7 +314,7 @@ func TestInvokeBoundsEventStream(t *testing.T) {
 	permitUnsafeLaunch(t)
 	pinEventFileCatalog(t)
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	var events bytes.Buffer
 	full := strings.Repeat("{\"type\":\"tool.call\",\"path\":\""+filepath.Join(home, "fixture")+"\"}\n", 2000)
 	_, err := Invoke(context.Background(), Options{Agent: "evfile:glm-5.2", Instruction: "summarize", Cwd: t.TempDir(), EventStream: &events}, eventRunner{output: "ok\n", events: full})

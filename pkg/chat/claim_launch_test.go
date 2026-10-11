@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/qiangli/yoke/pkg/fleet"
@@ -12,6 +13,16 @@ import (
 	"github.com/qiangli/yoke/pkg/policy/coord"
 	"github.com/qiangli/yoke/pkg/principal"
 )
+
+// claimLocalModel is the registry name of the local model: the model store
+// keeps one <name>.yaml per model and ":" is not a legal filename byte on
+// Windows, so the colon-free spelling stands in there.
+var claimLocalModel = func() string {
+	if runtime.GOOS == "windows" {
+		return "gpt-oss-20b"
+	}
+	return "gpt-oss:20b"
+}()
 
 // pinClaimCatalog is pinCatalog plus two bindings whose models another
 // episode may claim, in the SAME store llmbudget's catalog reads (the test
@@ -25,10 +36,10 @@ func pinClaimCatalog(t *testing.T) {
 	t.Helper()
 	root := fleettest.Ring(t)
 	cat := fleet.New(fleet.WithRoot(root))
-	if err := cat.SaveModel(fleet.Model{Name: "gpt-oss:20b", Kind: fleet.ModelKindLocal, Provider: "ollama"}); err != nil {
+	if err := cat.SaveModel(fleet.Model{Name: claimLocalModel, Kind: fleet.ModelKindLocal, Provider: "ollama"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := cat.SaveAgent(fleet.Agent{Name: "genie-gpt-oss-20b", Tool: "genie", Model: "gpt-oss:20b"}); err != nil {
+	if err := cat.SaveAgent(fleet.Agent{Name: "genie-gpt-oss-20b", Tool: "genie", Model: claimLocalModel}); err != nil {
 		t.Fatal(err)
 	}
 	if err := cat.SaveTool(fleet.Tool{
@@ -76,7 +87,7 @@ func TestInvokeRefusesClaimedLocalModelBeforeRunner(t *testing.T) {
 	pinClaimCatalog(t)
 	isolatedRoom(t)
 	other := claimLedger(t)
-	mustClaim(t, other, "model:gpt-oss:20b")
+	mustClaim(t, other, "model:"+claimLocalModel)
 
 	r := &fakeRunner{}
 	res, err := Invoke(context.Background(), Options{Agent: "genie-gpt-oss-20b", Instruction: "reply OK", Cwd: t.TempDir()}, r)
@@ -84,7 +95,7 @@ func TestInvokeRefusesClaimedLocalModelBeforeRunner(t *testing.T) {
 	if !errors.As(err, &c) {
 		t.Fatalf("err = %v, want *coord.Conflict", err)
 	}
-	if c.Claim.Holder.Episode != "ep-other" || c.Claim.Ref() != (coord.Ref{Kind: "model", Name: "gpt-oss:20b"}) {
+	if c.Claim.Holder.Episode != "ep-other" || c.Claim.Ref() != (coord.Ref{Kind: "model", Name: claimLocalModel}) {
 		t.Fatalf("conflict = %+v", c.Claim)
 	}
 	if r.agent != "" {
