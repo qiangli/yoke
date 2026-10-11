@@ -267,3 +267,128 @@ func TestNotifyRefusalNeverFallsBackToLabelCursor(t *testing.T) {
 		})
 	}
 }
+
+func timelineLen(t *testing.T) int {
+	t.Helper()
+	events, err := room.Timeline(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(events)
+}
+
+func TestNotifyMailboxSinkRelaysQueuedWithExactSubjectAndPrincipal(t *testing.T) {
+	isolate(t)
+	withNotifyTargets(t, "alice")
+	sent, _ := wireRemote(t, nil)
+	out, errOut, err := runNotifyCommand(t, "--as", "scheduler", "--json", "mb:plinth@noviwin1", "gate finished")
+	if err != nil {
+		t.Fatalf("%v %s", err, errOut)
+	}
+	var r NotifyReceipt
+	if err := json.Unmarshal([]byte(out), &r); err != nil {
+		t.Fatal(err)
+	}
+	if r.State != StateQueued || r.State == StateRead || r.To != "plinth@noviwin1" || r.Principal != "scheduler" || r.Subject != "gate finished" {
+		t.Fatalf("receipt = %+v", r)
+	}
+	if len(*sent) != 1 {
+		t.Fatalf("relay got %d envelopes", len(*sent))
+	}
+	m := (*sent)[0]
+	if m.To != "plinth@noviwin1" || m.Body != "gate finished" || m.Topic != "notify" || m.From != "tester@dragon" || m.FromURN == "" {
+		t.Fatalf("envelope = %+v", m)
+	}
+}
+
+func TestNotifyEventMailboxSinkQueuesAndKeepsLocalTargetsUnchanged(t *testing.T) {
+	isolate(t)
+	withNotifyTargets(t, "alice")
+	sent, _ := wireRemote(t, nil)
+	if err := NotifyEvent("scheduler", "mb:rafter@dragon", "backup done"); err != nil {
+		t.Fatal(err)
+	}
+	if len(*sent) != 1 || (*sent)[0].Body != "backup done" || (*sent)[0].To != "rafter@dragon" {
+		t.Fatalf("relay = %+v", *sent)
+	}
+	if err := NotifyEvent("scheduler", "alice", "local still local"); err != nil {
+		t.Fatal(err)
+	}
+	if len(*sent) != 1 {
+		t.Fatalf("local target leaked to relay: %+v", *sent)
+	}
+	events, _ := room.Timeline(0)
+	last := events[len(events)-1]
+	if last.Type != room.EventNotify || last.To != "alice" || last.Body != "local still local" {
+		t.Fatalf("local notification = %+v", last)
+	}
+}
+
+func TestNotifyMailboxSinkRefusalsPostNothing(t *testing.T) {
+	isolate(t)
+	withNotifyTargets(t, "alice", "twin")
+	sent, _ := wireRemote(t, nil)
+	for name, target := range map[string]string{
+		"unknown":   "mb:ghost@dragon",
+		"ambiguous": "mb:twin@",
+		"no host":   "mb:plinth",
+		"empty":     "mb:",
+	} {
+		if err := NotifyEvent("scheduler", target, "hi"); err == nil {
+			t.Errorf("%s: want refusal", name)
+		}
+	}
+	// A bare name the roster would match must not satisfy an explicit address
+	// that names a different seat.
+	RemoteResolve = func(string) (RemoteRoute, error) {
+		return RemoteRoute{Participant: "other@dragon", Host: "dragon", Session: "s"}, nil
+	}
+	if err := NotifyEvent("scheduler", "mb:plinth@noviwin1", "hi"); err == nil {
+		t.Error("mismatched route: want refusal")
+	}
+	// Ambiguity from the roster itself.
+	RemoteResolve = func(string) (RemoteRoute, error) { return RemoteRoute{}, ErrRemoteAmbiguous }
+	if err := NotifyEvent("scheduler", "mb:twin@dragon", "hi"); !errors.Is(err, ErrRemoteAmbiguous) {
+		t.Errorf("ambiguous err = %v", err)
+	}
+	if len(*sent) != 0 || timelineLen(t) != 0 {
+		t.Fatalf("refusals posted: relay %d, timeline %d", len(*sent), timelineLen(t))
+	}
+}
+
+func TestNotifyMailboxSinkNoRelayRefusesWithoutPosting(t *testing.T) {
+	isolate(t)
+	withNotifyTargets(t, "alice")
+	prevR, prevS := RemoteResolve, RemoteSend
+	RemoteResolve, RemoteSend = nil, nil
+	t.Cleanup(func() { RemoteResolve, RemoteSend = prevR, prevS })
+	_, _, err := runNotifyCommand(t, "--as", "scheduler", "mb:plinth@noviwin1", "hi")
+	if err == nil || !strings.Contains(err.Error(), "no relay") {
+		t.Fatalf("err = %v", err)
+	}
+	if timelineLen(t) != 0 {
+		t.Fatal("no-relay refusal posted locally")
+	}
+}
+
+func TestNotifyMailboxSinkRelayRefusalAndLimitsPostNothing(t *testing.T) {
+	isolate(t)
+	withNotifyTargets(t, "alice")
+	wireRemote(t, errors.New("503 relay down"))
+	if err := NotifyEvent("scheduler", "mb:plinth@noviwin1", "hi"); err == nil || !strings.Contains(err.Error(), "nothing was posted") {
+		t.Fatalf("relay refusal = %v", err)
+	}
+	sent, _ := wireRemote(t, nil)
+	if err := NotifyEvent("scheduler", "mb:plinth@noviwin1", strings.Repeat("x", MaxNotifySubjectBytes+1)); err == nil || !strings.Contains(err.Error(), "refused, not truncated") {
+		t.Fatalf("overlong = %v", err)
+	}
+	if err := NotifyEvent("anonymous", "mb:plinth@noviwin1", "hi"); err == nil {
+		t.Fatal("anonymous principal accepted")
+	}
+	if _, _, err := runNotifyCommand(t, "--as", "scheduler", "--in", "5m", "mb:plinth@noviwin1", "hi"); err == nil {
+		t.Fatal("--in accepted for a mailbox sink")
+	}
+	if len(*sent) != 0 || timelineLen(t) != 0 {
+		t.Fatalf("refusals posted: relay %d, timeline %d", len(*sent), timelineLen(t))
+	}
+}
