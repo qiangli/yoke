@@ -79,15 +79,13 @@ func writeOutpostConfig(t *testing.T, cfg map[string]any, mode os.FileMode) stri
 	return p
 }
 
-// fullConfig is a healthy synthetic config: token, owner and a bashy_services
-// SSO secret for the console app. Mutate the returned map per test.
+// fullConfig models outpost's current config, including the service_sso key
+// minted and persisted for the console route. Mutate the returned map per test.
 func fullConfig() map[string]any {
 	return map[string]any{
 		"mcp_bearer_token": synthHostToken,
 		"oauth2_email":     synthOwner,
-		"bashy_services": []any{map[string]any{
-			"name": "apps", "enabled": true, "trust_cloud_identity": true, "sso_secret": synthSSOSecret,
-		}},
+		"service_sso":      map[string]any{"apps": synthSSOSecret},
 	}
 }
 
@@ -458,7 +456,7 @@ func cloudRequest(t *testing.T, h http.Handler, hdr http.Header) {
 
 func TestHostAdminBearerTrustedSignedCloudOwner(t *testing.T) {
 	now := time.Now().Unix()
-	t.Run("owner by oauth2_email, secret from bashy_services", func(t *testing.T) {
+	t.Run("owner by oauth2_email, secret from service_sso", func(t *testing.T) {
 		u := newHostUpstream(t)
 		cloudRequest(t, newTestHandler(t, Options{}), signedCloud(synthSSOSecret, synthOwner, "admin", now))
 		wantBridged(t, u, "signed owner")
@@ -467,15 +465,6 @@ func TestHostAdminBearerTrustedSignedCloudOwner(t *testing.T) {
 		u := newHostUpstream(t)
 		cloudRequest(t, newTestHandler(t, Options{}), signedCloud(synthSSOSecret, strings.ToUpper(synthOwner), "admin", now))
 		wantBridged(t, u, "signed owner, upper case")
-	})
-	t.Run("secret from apps[]", func(t *testing.T) {
-		u := newHostUpstream(t)
-		cfg := fullConfig()
-		delete(cfg, "bashy_services")
-		cfg["apps"] = []any{map[string]any{"name": "apps", "enabled": true, "trust_cloud_identity": true, "sso_secret": synthSSOSecret}}
-		writeOutpostConfigAt(t, cfg)
-		cloudRequest(t, newTestHandler(t, Options{}), signedCloud(synthSSOSecret, synthOwner, "admin", now))
-		wantBridged(t, u, "signed owner, apps[] secret")
 	})
 	t.Run("admin_users is authoritative when populated", func(t *testing.T) {
 		u := newHostUpstream(t)
@@ -492,9 +481,7 @@ func TestHostAdminBearerTrustedSignedCloudOwner(t *testing.T) {
 	t.Run("custom console app name", func(t *testing.T) {
 		u := newHostUpstream(t)
 		cfg := fullConfig()
-		cfg["bashy_services"] = []any{map[string]any{
-			"name": "svc", "app_name": "console", "trust_cloud_identity": true, "sso_secret": synthSSOSecret,
-		}}
+		cfg["service_sso"] = map[string]any{"console": synthSSOSecret}
 		writeOutpostConfigAt(t, cfg)
 		cloudRequest(t, newTestHandler(t, Options{CloudApp: "console"}), signedCloud(synthSSOSecret, synthOwner, "admin", now))
 		wantBridged(t, u, "custom app name")
@@ -544,12 +531,12 @@ func TestHostAdminBearerCloudNeverElevatesAnyoneElse(t *testing.T) {
 func TestHostAdminBearerCloudNeedsSecretAndOwnerFromTheSameConfig(t *testing.T) {
 	now := time.Now().Unix()
 	for name, mut := range map[string]func(map[string]any){
-		"no sso secret": func(c map[string]any) { delete(c, "bashy_services") },
-		"service not trusting cloud identity": func(c map[string]any) {
-			c["bashy_services"] = []any{map[string]any{"name": "apps", "sso_secret": synthSSOSecret}}
+		"no sso secret": func(c map[string]any) { delete(c, "service_sso") },
+		"secret belongs to another route": func(c map[string]any) {
+			c["service_sso"] = map[string]any{"console": synthSSOSecret}
 		},
-		"service explicitly disabled": func(c map[string]any) {
-			c["bashy_services"] = []any{map[string]any{"name": "apps", "enabled": false, "trust_cloud_identity": true, "sso_secret": synthSSOSecret}}
+		"empty route secret": func(c map[string]any) {
+			c["service_sso"] = map[string]any{"apps": "  "}
 		},
 		"no owner identity": func(c map[string]any) { delete(c, "oauth2_email") },
 	} {
@@ -601,7 +588,7 @@ func TestHostAdminBearerCloudBridgeStillStaysOnTheAdminAPI(t *testing.T) {
 func TestHostAdminTrustedConfigParsing(t *testing.T) {
 	writeOutpostConfig(t, fullConfig(), 0o600)
 	tr, ok := loadOutpostTrust("apps")
-	if !ok || tr.token != synthHostToken || len(tr.ssoSecrets) != 1 || !tr.owners[synthOwner] {
+	if !ok || tr.token != synthHostToken || string(tr.ssoSecret) != synthSSOSecret || !tr.owners[synthOwner] {
 		t.Fatalf("trust = %+v ok=%v", tr, ok)
 	}
 	writeOutpostConfigAt(t, map[string]any{"mcp_bearer_token": synthHostToken, "admin_users": []any{"A@x.test", " b@x.test "}, "oauth2_email": synthOwner})
