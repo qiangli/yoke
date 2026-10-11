@@ -18,6 +18,7 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/weavecli"
 	"github.com/qiangli/coreutils/shell"
+	"github.com/qiangli/yoke/pkg/unit"
 )
 
 // Effects: on a target declares the capabilities its body may use. The
@@ -34,26 +35,20 @@ import (
 // check runs at the ExecHandler seam — every leaf dispatch is checked. A
 // target with no Effects declaration reports nothing (cap absent).
 
-// CheckResult is the outcome of one Ensure postcondition.
-type CheckResult struct {
-	Expr   string `json:"expr"`
-	Pass   bool   `json:"pass"`
-	Detail string `json:"detail,omitempty"`
-}
+// CheckResult is the outcome of one Ensure postcondition — the shared
+// unit vocabulary (pkg/unit), aliased so a dag receipt and a skill receipt
+// carry one Go type.
+type CheckResult = unit.CheckResult
 
 // Attestation is the sealed verdict for a target: did its body exit cleanly AND
 // do all its Ensure postconditions hold, with its declared Effects recorded.
 // Valid is the agent-trustable bit — success judged by world-state, not just the
 // exit code (which is what make stops at).
-type Attestation struct {
-	Target  string        `json:"target"`
-	Valid   bool          `json:"valid"`
-	Checks  []CheckResult `json:"checks,omitempty"`
-	Effects []string      `json:"effects,omitempty"`
-	// Clause is "require" when a precondition sealed this verdict before the
-	// body ran; empty for the postcondition verdict (the shape shipped today).
-	Clause string `json:"clause,omitempty"`
-}
+//
+// It is an alias of unit.Attestation: the canonical contract (Require: /
+// Ensure: / Effects:, evaluated below) seals the ONE receipt vocabulary,
+// shared with skills run receipts.
+type Attestation = unit.Attestation
 
 // requireHolds evaluates a target's Require preconditions BEFORE its body runs.
 // The first failing check seals an invalid Attestation naming it and the body

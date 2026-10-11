@@ -13,6 +13,7 @@ import (
 	"time"
 
 	dhntskills "github.com/dhnt/dhnt/skills"
+	"github.com/qiangli/yoke/pkg/unit"
 )
 
 // P2 — run + attest. The dhnt spec's L3 says an executor binds
@@ -50,6 +51,20 @@ type AttestRecord struct {
 	// the reader leaves those empty rather than inferring one.
 	Capability string                 `json:"capability,omitempty"`
 	Attest     dhntskills.Attestation `json:"attest"`
+	// unit.Attestation is THE receipt vocabulary, sealed by the same
+	// contract grammar dag targets use (Require/Ensure/Effects). It is
+	// embedded, so its fields inline into the stored JSON additively — a
+	// receipt written before it decodes with these fields at their zero
+	// values, and a reader written against it reads dag target receipts
+	// too: one type, both surfaces. The dhnt attestation above stays
+	// wrapped exactly as the external module ships it (never forked), and
+	// this projection is derived from it by Receipt at seal time.
+	//
+	// Its Capability is shadowed by the record's own field above (Go's
+	// shallower-field rule): one `capability` key in the JSON, the one that
+	// has always shipped. Its Identity is empty for now; story #1897
+	// stamps it.
+	unit.Attestation
 	// Status and StoreRevision are stamped when the receipt attests a Bash#
 	// FUNCTION CALL completing under bashy's decorator seam — a @require /
 	// @ensure / @guard-decorated or agentic{} function — rather than a
@@ -64,6 +79,28 @@ type AttestRecord struct {
 	// leave both absent, as every receipt written before them does.
 	Status        *int   `json:"status,omitempty"`
 	StoreRevision string `json:"store_revision,omitempty"`
+}
+
+// Receipt projects the dhnt executor's attestation for one named unit into
+// the ONE receipt vocabulary (unit.Attestation) shared with dag target
+// receipts — the wrap boundary to the external module: dhnt's shape is
+// converted, never forked or edited. The wrapped original stays in
+// AttestRecord.Attest, so nothing the projection cannot spell yet (the
+// dhnt tier, already the record's Tier; the opaque WorldDiff) is lost from
+// storage. Identity and Capability are left empty here; story #1897
+// stamps them.
+func Receipt(name string, att dhntskills.Attestation) unit.Attestation {
+	a := unit.Attestation{Target: name, Valid: att.Valid}
+	for _, p := range att.Passed {
+		a.Checks = append(a.Checks, unit.CheckResult{Expr: p, Pass: true})
+	}
+	for _, f := range att.Failed {
+		a.Checks = append(a.Checks, unit.CheckResult{Expr: f, Pass: false})
+	}
+	for _, e := range att.Effects {
+		a.Effects = append(a.Effects, e.String())
+	}
+	return a
 }
 
 // AttestYield is the exit status of an agentic yield — the callee handed
@@ -345,14 +382,18 @@ func runEffective(name string, effective dhntskills.Skill, p runPrep, dir string
 	// skill has no capability key, and that is recorded as absence rather
 	// than failing the run — the receipt is still evidence.
 	capKey, _ := CapabilityKey(effective)
-	return AttestRecord{
+	rec := AttestRecord{
 		At:         time.Now().UTC(),
 		Name:       name,
 		Tier:       p.tier,
 		ContextKey: p.ctxKey,
 		Capability: capKey,
 		Attest:     att,
-	}, nil
+	}
+	// The unified receipt: the same verdict in the one vocabulary dag
+	// target receipts use, sealed beside the wrapped dhnt original.
+	rec.Attestation = Receipt(name, att)
+	return rec, nil
 }
 
 // runSkill is the plain run engine: gate → resolve the host's overlay
