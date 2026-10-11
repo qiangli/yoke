@@ -225,7 +225,7 @@ func TestOwnerWithoutMonitorIsErrNoMonitor(t *testing.T) {
 func TestSupervisordSocketPath(t *testing.T) {
 	t.Setenv("BASHY_SUPERVISORD_SOCKET", "")
 	t.Setenv("BASHY_HOME", "/h")
-	if got := SupervisordSocket(); got != "/h/service/supervisord.sock" {
+	if got := SupervisordSocket(); got != filepath.Join("/h", "service", "supervisord.sock") {
 		t.Fatal(got)
 	}
 	t.Setenv("BASHY_SUPERVISORD_SOCKET", "/s.sock")
