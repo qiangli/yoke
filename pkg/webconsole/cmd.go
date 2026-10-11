@@ -43,7 +43,7 @@ func NewAppsCmd() *cobra.Command {
 		// prints its own copy first and every failure is reported twice.
 		SilenceErrors: true,
 	}
-	cmd.AddCommand(newServeCmd(), newListCmd(), newServiceCmd(),
+	cmd.AddCommand(newServeCmd(), newListCmd(),
 		newPairCmd(), newDevicesCmd(), newRevokeCmd())
 	// Registered apps: the operator's own tiles (add · show · set · rm · edit
 	// · schema), persisted in the fleet ring beside the stock panels.

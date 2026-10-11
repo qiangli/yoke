@@ -677,15 +677,6 @@ func TestCurrentPairListenerAddrResolvesSymbolicLAN(t *testing.T) {
 	}
 }
 
-func TestServiceRearmCommandNamesTheSymbolicBind(t *testing.T) {
-	if got, want := serviceRearmCommand(DefaultPort), "bashy app service start --pair --bind lan"; got != want {
-		t.Fatalf("re-arm hint = %q, want %q", got, want)
-	}
-	if got, want := serviceRearmCommand(4242), "bashy app service start --pair --bind lan --port 4242"; got != want {
-		t.Fatalf("re-arm hint = %q, want %q", got, want)
-	}
-}
-
 func dialable(addr string) bool {
 	c, err := net.DialTimeout("tcp", addr, 300*time.Millisecond)
 	if err != nil {

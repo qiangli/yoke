@@ -36,7 +36,7 @@ func (s *server) handlePairRedeem(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.pairing == nil || s.sessions == nil {
 		s.pairFailure(w, host, "pairing is not enabled on this console",
-			"This console is not accepting pairings. Start it with `bashy app serve --bind lan --pair`.",
+			"This console is not accepting pairings. Set the apps unit with `bashy service set apps --set settings.pair=true --set ports.0.bind=lan` and enable it.",
 			http.StatusNotFound)
 		return
 	}
