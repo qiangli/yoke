@@ -32,10 +32,58 @@ type toolSpec struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
+	Tools       []toolSpec      `json:"tools,omitempty"` // type "namespace"
+}
+
+// customInputSchema is the function schema a freeform custom tool is offered
+// under: its raw text input travels as the one string argument.
+var customInputSchema = json.RawMessage(`{"type":"object","properties":{"input":{"type":"string","description":"the tool's raw text input, verbatim (not JSON-encoded)"}},"required":["input"]}`)
+
+// flattenTools expands namespace groups (Codex nests its tools in one) and
+// keeps the kinds the door can express: function tools as they are, and
+// custom (freeform) tools as one-string-argument functions. Hosted tools
+// (web_search, local_shell, ...) cannot run here and are not offered.
+func flattenTools(tools []toolSpec) []toolSpec {
+	var out []toolSpec
+	for _, t := range tools {
+		switch t.Type {
+		case "namespace":
+			out = append(out, flattenTools(t.Tools)...)
+		case "function", "custom":
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// CustomToolNames lists the freeform custom tools a Responses request offers,
+// so FromChatWithCustom can answer a call to one as a custom_tool_call.
+func CustomToolNames(body []byte) map[string]bool {
+	var req Request
+	if json.Unmarshal(body, &req) != nil {
+		return nil
+	}
+	all := req.Tools
+	var items []inputItem
+	if json.Unmarshal(bytes.TrimSpace(req.Input), &items) == nil {
+		for _, item := range items {
+			if item.Type == "additional_tools" {
+				all = append(all, item.Tools...)
+			}
+		}
+	}
+	names := map[string]bool{}
+	for _, t := range flattenTools(all) {
+		if t.Type == "custom" && t.Name != "" {
+			names[t.Name] = true
+		}
+	}
+	return names
 }
 
 type inputItem struct {
 	Tools     []toolSpec      `json:"tools"`
+	Input     string          `json:"input"`
 	Type      string          `json:"type"`
 	Role      string          `json:"role"`
 	Content   json.RawMessage `json:"content"`
@@ -98,6 +146,21 @@ func ToChat(body []byte) (*openai.ChatRequest, bool, error) {
 				// Codex declares further tools as an input item; they join the
 				// request's tool list under the same rules.
 				req.Tools = append(req.Tools, item.Tools...)
+			case "custom_tool_call":
+				if item.CallID == "" || item.Name == "" {
+					return nil, false, fmt.Errorf("input[%d]: custom_tool_call needs call_id and name", i)
+				}
+				args, _ := json.Marshal(map[string]string{"input": item.Input})
+				out.Messages = append(out.Messages, openai.ChatMessage{Role: "assistant", Content: mustJSON(""), ToolCalls: []openai.ToolCall{{ID: item.CallID, Type: "function", Function: openai.ToolFunction{Name: item.Name, Arguments: string(args)}}}})
+			case "custom_tool_call_output":
+				if item.CallID == "" {
+					return nil, false, fmt.Errorf("input[%d]: custom_tool_call_output needs call_id", i)
+				}
+				content := item.Output
+				if len(content) == 0 {
+					content = mustJSON("")
+				}
+				out.Messages = append(out.Messages, openai.ChatMessage{Role: "tool", ToolCallID: item.CallID, Content: content})
 			case "function_call":
 				if item.CallID == "" || item.Name == "" {
 					return nil, false, fmt.Errorf("input[%d]: function_call needs call_id and name", i)
@@ -117,17 +180,15 @@ func ToChat(body []byte) (*openai.ChatRequest, bool, error) {
 			}
 		}
 	}
-	for i, tool := range req.Tools {
-		// Hosted and freeform tools (web_search, custom, local_shell, ...) have
-		// no chat-completions equivalent and the door cannot execute them, so
-		// they are not offered to the model; Codex sends them by default.
-		if tool.Type != "function" {
-			continue
-		}
+	for i, tool := range flattenTools(req.Tools) {
 		if tool.Name == "" {
-			return nil, false, fmt.Errorf("tools[%d]: function tool needs a name", i)
+			return nil, false, fmt.Errorf("tools[%d]: %s tool needs a name", i, tool.Type)
 		}
-		out.Tools = append(out.Tools, openai.Tool{Type: "function", Function: openai.ToolFunction{Name: tool.Name, Description: tool.Description, Parameters: tool.Parameters}})
+		params := tool.Parameters
+		if tool.Type == "custom" {
+			params = customInputSchema
+		}
+		out.Tools = append(out.Tools, openai.Tool{Type: "function", Function: openai.ToolFunction{Name: tool.Name, Description: tool.Description, Parameters: params}})
 	}
 	if len(req.ToolChoice) != 0 {
 		var choice string
@@ -184,6 +245,7 @@ type OutputItem struct {
 	CallID    string              `json:"call_id,omitempty"`
 	Name      string              `json:"name,omitempty"`
 	Arguments string              `json:"arguments,omitempty"`
+	Input     string              `json:"input,omitempty"` // custom_tool_call
 }
 type Response struct {
 	ID        string       `json:"id"`
@@ -200,6 +262,13 @@ type Response struct {
 }
 
 func FromChat(comp *openai.ChatCompletion) (*Response, error) {
+	return FromChatWithCustom(comp, nil)
+}
+
+// FromChatWithCustom is FromChat for a request that offered custom tools: a
+// call to one of those names is answered as a custom_tool_call whose input is
+// the call's "input" argument (or the raw arguments if they are not that shape).
+func FromChatWithCustom(comp *openai.ChatCompletion, custom map[string]bool) (*Response, error) {
 	if comp == nil {
 		return nil, fmt.Errorf("empty chat completion")
 	}
@@ -225,6 +294,17 @@ func FromChat(comp *openai.ChatCompletion) (*Response, error) {
 		id := call.ID
 		if id == "" {
 			id = fmt.Sprintf("%s_call_%d", resp.ID, i)
+		}
+		if custom[call.Function.Name] {
+			var args struct {
+				Input *string `json:"input"`
+			}
+			input := call.Function.Arguments
+			if json.Unmarshal([]byte(call.Function.Arguments), &args) == nil && args.Input != nil {
+				input = *args.Input
+			}
+			resp.Output = append(resp.Output, OutputItem{ID: resp.ID + fmt.Sprintf("_ctc_%d", i), Type: "custom_tool_call", Status: "completed", CallID: id, Name: call.Function.Name, Input: input})
+			continue
 		}
 		resp.Output = append(resp.Output, OutputItem{ID: resp.ID + fmt.Sprintf("_fc_%d", i), Type: "function_call", Status: "completed", CallID: id, Name: call.Function.Name, Arguments: call.Function.Arguments})
 	}

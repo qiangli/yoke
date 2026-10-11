@@ -535,7 +535,7 @@ func (s *Server) responsesHandler(chat http.Handler) http.Handler {
 			writeJSON(w, http.StatusBadGateway, errorEnvelope("invalid chat completion: "+err.Error()))
 			return
 		}
-		translated, err := responses.FromChat(&completion)
+		translated, err := responses.FromChatWithCustom(&completion, responses.CustomToolNames(body))
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, errorEnvelope(err.Error()))
 			return

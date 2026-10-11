@@ -81,8 +81,8 @@ func TestHostedToolsAreNotOffered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(req.Tools) != 1 || req.Tools[0].Function.Name != "shell" {
-		t.Fatalf("tools = %+v", req.Tools)
+	if len(req.Tools) != 2 || req.Tools[0].Function.Name != "shell" || req.Tools[1].Function.Name != "apply_patch" {
+		t.Fatalf("tools = %+v (web_search is hosted and dropped; custom apply_patch is offered)", req.Tools)
 	}
 	if _, _, err := ToChat([]byte(`{"model":"m","input":[{"role":"user","content":"hi"}],"tools":[{"type":"function"}],"store":false}`)); err == nil || !strings.Contains(err.Error(), "needs a name") {
 		t.Fatalf("unnamed function err = %v", err)
@@ -100,5 +100,42 @@ func TestAdditionalToolsItemJoinsTools(t *testing.T) {
 	}
 	if len(req.Tools) != 1 || req.Tools[0].Function.Name != "shell" {
 		t.Fatalf("tools = %+v", req.Tools)
+	}
+}
+
+// Codex 0.162 "code mode": every tool is a custom tool inside a namespace in
+// an additional_tools input item, and the model answers with custom_tool_call.
+func TestCodexNamespacedCustomToolsRoundTrip(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.6-terra","tools":[],"store":false,"input":[
+	  {"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"functions","tools":[
+	    {"type":"custom","name":"exec","description":"run JS"},
+	    {"type":"function","name":"wait","parameters":{"type":"object"}}]}]},
+	  {"role":"user","content":"make the file"},
+	  {"type":"custom_tool_call","call_id":"c1","name":"exec","input":"await tools.exec_command('touch f')"},
+	  {"type":"custom_tool_call_output","call_id":"c1","output":"ok"}]}`)
+	req, _, err := ToChat(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(req.Tools) != 2 || req.Tools[0].Function.Name != "exec" || !strings.Contains(string(req.Tools[0].Function.Parameters), `"input"`) || req.Tools[1].Function.Name != "wait" {
+		t.Fatalf("tools = %+v", req.Tools)
+	}
+	if len(req.Messages) != 3 || req.Messages[1].ToolCalls[0].Function.Arguments != `{"input":"await tools.exec_command('touch f')"}` || req.Messages[2].ToolCallID != "c1" {
+		t.Fatalf("messages = %+v", req.Messages)
+	}
+	custom := CustomToolNames(body)
+	if !custom["exec"] || custom["wait"] {
+		t.Fatalf("custom names = %v", custom)
+	}
+	comp := &openai.ChatCompletion{ID: "r", Choices: []openai.ChatChoice{{Message: &openai.ChatResponseMessage{ToolCalls: []openai.ToolCallDelta{
+		{ID: "c2", Type: "function", Function: openai.ToolFunction{Name: "exec", Arguments: `{"input":"text()"}`}},
+		{ID: "c3", Type: "function", Function: openai.ToolFunction{Name: "wait", Arguments: `{}`}},
+	}}}}}
+	resp, err := FromChatWithCustom(comp, custom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Output) != 2 || resp.Output[0].Type != "custom_tool_call" || resp.Output[0].Input != "text()" || resp.Output[0].CallID != "c2" || resp.Output[1].Type != "function_call" {
+		t.Fatalf("output = %+v", resp.Output)
 	}
 }
