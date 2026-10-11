@@ -134,7 +134,8 @@ func quitLine(tool fleet.Tool, cmd fleet.ToolCommand) (line string, graceful boo
 func runTUI(ctx context.Context, tool fleet.Tool, cmd fleet.ToolCommand, args string, opts Options) (res Result, err error) {
 	started := time.Now()
 	slash := RenderSlash(cmd.Slash, args)
-	res = Result{Tool: tool.Name, Command: cmd.Name, Mode: cmd.Mode, Slash: slash, Started: started}
+	res = resultFor(tool, cmd)
+	res.Slash, res.Started = slash, started
 	fail := func(outcome string, e error) (Result, error) {
 		res.Outcome, res.Error = outcome, e.Error()
 		res.Duration = time.Since(started).String()

@@ -2,6 +2,7 @@ package toolcmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -123,6 +124,29 @@ func TestPrintTemplateUsesSlashAsPrompt(t *testing.T) {
 	}
 	if res.Outcome != OutcomeDryRun || res.Slash != "/deep-research tides" {
 		t.Fatalf("res: %+v", res)
+	}
+}
+
+func TestResultEnvelopeCarriesCapabilityAndEpisode(t *testing.T) {
+	t.Setenv("BASHY_EPISODE", "ep-plan-123")
+	stubInvoke(t, "plan body", 0, nil)
+	tool := claudeTool()
+	cmd := fleet.ToolCommand{Name: "plan", Capability: "planning", Slash: "/plan {args}", Mode: "print"}
+	res, err := Run(context.Background(), tool, cmd, "ship it", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Tool != "claude" || res.Command != "plan" || res.Capability != "planning" || res.Outcome != OutcomeSuccess || res.Text != "plan body" || res.Episode != "ep-plan-123" {
+		t.Fatalf("portable envelope = %+v", res)
+	}
+	b, err := json.Marshal(res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{`"tool":"claude"`, `"command":"plan"`, `"capability":"planning"`, `"outcome":"success"`, `"text":"plan body"`, `"episode":"ep-plan-123"`} {
+		if !strings.Contains(string(b), field) {
+			t.Fatalf("envelope missing %s: %s", field, b)
+		}
 	}
 }
 

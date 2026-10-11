@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -64,7 +65,10 @@ Where it goes:
 
 The record is a FILE. It travels — scp it, mesh it, paste it in an issue.`,
 		Example: `  # stop for the day; anyone (or any tool) can pick it up
-  bashy handoff -m "refactored the atlas; next: wire the sdlc view" --next "run go test ./..."
+	  bashy handoff -m "refactored the atlas; next: wire the sdlc view" --next "run go test ./..."
+
+  # carry a typed tool result directly; the record remains a portable file
+  bashy tool cmd run claude:plan --json -- "plan the migration" | bashy handoff -m - --next "implement the cited plan"
 
   # hand the work to codex, keep watching from here
   bashy handoff --to codex -m "chunking work; the fixture race is fixed"
@@ -75,6 +79,13 @@ The record is a FILE. It travels — scp it, mesh it, paste it in an issue.`,
   # wake an agent tomorrow morning with the task in hand
   bashy handoff --to schedule --at 09:00 -m "resume the naming pass"`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if brief == "-" {
+				body, err := io.ReadAll(cmd.InOrStdin())
+				if err != nil {
+					return fmt.Errorf("read handoff brief: %w", err)
+				}
+				brief = strings.TrimSpace(string(body))
+			}
 			cwd, err := os.Getwd()
 			if err != nil {
 				return err
@@ -197,7 +208,7 @@ The record is a FILE. It travels — scp it, mesh it, paste it in an issue.`,
 			return nil
 		},
 	}
-	cmd.Flags().StringVarP(&brief, "message", "m", "", "the continuity brief a successor reads first (required)")
+	cmd.Flags().StringVarP(&brief, "message", "m", "", "the continuity brief a successor reads first (required; '-' reads stdin)")
 	cmd.Flags().StringVar(&next, "next", "", "the one next action, stated for a cold agent in another tool")
 	cmd.Flags().StringSliceVar(&blockers, "blocker", nil, "a blocker the successor must know about (repeatable)")
 	cmd.Flags().StringVar(&role, "as", "", "hand off a ROLE, not just the task: the skill the successor assumes (e.g. 'steward', 'conductor'). It loads the skill, becomes that role, and decides how to drive — including whether to delegate the work back.")

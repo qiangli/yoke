@@ -76,6 +76,50 @@ go vet $(go list ./... | grep -v /external/)
 go test $(go list ./... | grep -v /external/)
 ```
 
+### synergy-s8
+Run the Sprint 418 S8 shared-context handoff recipe. This is an integration
+target: it deliberately uses the existing tool-command envelope, repo KB,
+todo, handoff, git, and message board; it does not introduce a second context
+log or a special handoff verb.
+
+Set `S8_PLAN_PROMPT` to the request, `S8_KB_SLUG` to a fresh, portable KB
+slug, `S8_TODO_UUID` to the todo created for the plan, and `S8_REMOTE_AGENT`
+to the paired-host recipient (for example `coder@hostB`). The conductor runs
+the two-vendor plan/implement sequence first, preserves the raw JSON records
+under `docs/validation/s8/`, commits and pushes the KB/todo carrier, then runs
+the paired-host pickup. A remote driver lease is only acquired by the
+conductor after `Sprint.CanConverge` allows it.
+
+The codex prompt cites `kb:$S8_KB_SLUG`; the remote message carries that same
+slug and the globally resolvable todo UUID. `resume --claim` consumes the
+portable handoff file on the paired host.
+Effects: exec,net,write
+
+```bash
+set -eu
+: "${S8_PLAN_PROMPT:?set S8_PLAN_PROMPT}"
+: "${S8_KB_SLUG:?set S8_KB_SLUG}"
+: "${S8_TODO_UUID:?set S8_TODO_UUID}"
+: "${S8_REMOTE_AGENT:?set S8_REMOTE_AGENT}"
+mkdir -p docs/validation/s8
+
+# Vendor 1 plans. The exact typed envelope is both the raw evidence and the
+# artifact piped into the existing todo/KB/handoff inputs.
+bashy tool cmd run claude:plan --json -- "$S8_PLAN_PROMPT" | tee docs/validation/s8/two-vendor-plan.json | bashy todo edit "$S8_TODO_UUID" --note -
+bashy kb note add --candidate --type decision --slug "$S8_KB_SLUG" --title "S8 shared plan" --file docs/validation/s8/two-vendor-plan.json
+
+# Vendor 2 receives only the portable KB address, not a private Claude session.
+bashy delegate codex --json "Implement the plan in kb:$S8_KB_SLUG and record the result against todo:$S8_TODO_UUID" | tee docs/validation/s8/two-vendor-implement.json
+
+# Cross-host pickup: git carries shared KB/todo; MB carries durable pointers;
+# handoff carries any uncommitted diff/untracked content as a portable file.
+git add docs/kb docs/todo docs/validation/s8
+git commit -m "docs: preserve S8 shared-context recipe evidence"
+git push
+cat docs/validation/s8/two-vendor-plan.json | bashy handoff --json -m - --next "Resume kb:$S8_KB_SLUG and todo:$S8_TODO_UUID"
+bashy mb send "$S8_REMOTE_AGENT" "S8 pickup: kb:$S8_KB_SLUG todo:$S8_TODO_UUID; pull the carrier, then bashy resume --claim."
+```
+
 ### crossvet
 Cross-OS typecheck of the CI scope WITHOUT needing a Windows/Linux box —
 `go vet` compiles every package (tests included) for the target GOOS, which
