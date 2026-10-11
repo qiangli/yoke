@@ -25,7 +25,7 @@ type Skill struct {
 	RequiresErr   string            // non-empty when Meta["requires"] did not parse
 	HasDhnt       bool              // a skill.dhnt sits beside SKILL.md
 	Dhnt          *DhntInfo         // parsed canonical face (nil when absent)
-	HasTasks      bool              // a tasks.md (dag task file) sits beside SKILL.md
+	HasTasks      bool              // a tasks face (tasks.md, metadata.tasks pointer, or inline ## Tasks) exists
 }
 
 // ParseFrontmatter reads the YAML frontmatter block of a SKILL.md through

@@ -226,3 +226,44 @@ func TestParseDuplicateTarget(t *testing.T) {
 		t.Errorf("want exit 2, got %d", ExitCodeOf(err))
 	}
 }
+
+func TestHasTasksSection(t *testing.T) {
+	cases := []struct {
+		name string
+		md   string
+		want bool
+	}{
+		{
+			name: "plain heading",
+			md:   "# Title\n\n## Tasks\n\n### build\n",
+			want: true,
+		},
+		{
+			name: "case insensitive",
+			md:   "## tasks\n\n### build\n",
+			want: true,
+		},
+		{
+			name: "frontmatter and tasks",
+			md:   "---\nname: foo\ndescription: bar\n---\n\n## Tasks\n\n### a\n",
+			want: true,
+		},
+		{
+			name: "frontmatter comment not mistaken for section",
+			md:   "---\nname: foo\n# ## Tasks inside comment\n---\n\n# Body without tasks\n",
+			want: false,
+		},
+		{
+			name: "no tasks section",
+			md:   "# Title\n\n## Overview\n\n## Usage\n",
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := HasTasksSection([]byte(tc.md)); got != tc.want {
+				t.Fatalf("HasTasksSection() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

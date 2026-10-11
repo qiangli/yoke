@@ -305,3 +305,210 @@ func TestRunTargetPointer(t *testing.T) {
 		}
 	}
 }
+
+func writeInlineTasksSkill(t *testing.T, root, name, frontmatter, canon, tasks string) string {
+	t.Helper()
+	dir := filepath.Join(root, name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := frontmatter + "\n\n" + tasks
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if canon != "" {
+		if err := os.WriteFile(filepath.Join(dir, "skill.dhnt"), []byte(canon), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// Inline Tasks parity: a SKILL.md with a '## Tasks' section exposes the exact
+// same targets, effects, and execution behavior as the tasks.md form.
+func TestRunTargetInlineParity(t *testing.T) {
+	store := t.TempDir()
+	src := t.TempDir()
+	workTasksMD, workInline := t.TempDir(), t.TempDir()
+
+	// 1. Target listing parity between tasks.md and inline Tasks.
+	tasksMDDir := writeTasksSkill(t, src, "task-md-skill",
+		"---\nname: task-md-skill\ndescription: tasks.md form\n---", "", tasksFixture(workTasksMD))
+	inlineDir := writeInlineTasksSkill(t, src, "inline-skill",
+		"---\nname: inline-skill\ndescription: inline tasks form\n---", "", tasksFixture(workInline))
+
+	f := &cobraRunner{t: t, opts: []Option{WithConfigDir(store)}}
+	if _, _, err := f.run("add", tasksMDDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.run("add", inlineDir); err != nil {
+		t.Fatal(err)
+	}
+
+	stdoutMD, _, err := f.run("run", "task-md-skill", "--list")
+	if err != nil {
+		t.Fatalf("tasks.md list: %v", err)
+	}
+	stdoutInline, _, err := f.run("run", "inline-skill", "--list")
+	if err != nil {
+		t.Fatalf("inline list: %v", err)
+	}
+	if stdoutMD != stdoutInline {
+		t.Fatalf("listing mismatch:\ntasks.md form:\n%s\ninline form:\n%s", stdoutMD, stdoutInline)
+	}
+
+	// Declared effects listing parity
+	workAuditedMD, workAuditedInline := t.TempDir(), t.TempDir()
+	auditedMD := writeTasksSkill(t, src, "audited-md",
+		"---\nname: audited-md\ndescription: declared effects\nmetadata:\n  check-tests: \"true\"\n---",
+		"sokilili demo efefecato reada fini enisure gereeni fini fini\n",
+		effectsFixture(workAuditedMD))
+	auditedInline := writeInlineTasksSkill(t, src, "audited-inline",
+		"---\nname: audited-inline\ndescription: declared effects\nmetadata:\n  check-tests: \"true\"\n---",
+		"sokilili demo efefecato reada fini enisure gereeni fini fini\n",
+		effectsFixture(workAuditedInline))
+	if _, _, err := f.run("add", auditedMD); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.run("add", auditedInline); err != nil {
+		t.Fatal(err)
+	}
+
+	stdoutAuditedMD, _, err := f.run("run", "audited-md", "--list")
+	if err != nil {
+		t.Fatalf("audited-md --list: %v", err)
+	}
+	stdoutAuditedInline, _, err := f.run("run", "audited-inline", "--list")
+	if err != nil {
+		t.Fatalf("audited-inline --list: %v", err)
+	}
+	if stdoutAuditedMD != stdoutAuditedInline {
+		t.Fatalf("declared effects listing mismatch:\ntasks.md:\n%s\ninline:\n%s", stdoutAuditedMD, stdoutAuditedInline)
+	}
+
+	// 2. Uncontracted inline target execution
+	stdout, _, err := f.run("run", "inline-skill", "--target", "hello")
+	if err != nil {
+		t.Fatalf("inline target hello: %v\n%s", err, stdout)
+	}
+	if !strings.Contains(stdout, "ok: true") {
+		t.Fatalf("stdout: %q", stdout)
+	}
+	if _, err := os.Stat(filepath.Join(workInline, "made.txt")); err != nil {
+		t.Fatal("inline target did not run")
+	}
+	if _, err := os.Stat(filepath.Join(store, "attest", "inline-skill.jsonl")); err == nil {
+		t.Fatal("uncontracted target run attested")
+	}
+
+	// Failing target propagates
+	if _, _, err := f.run("run", "inline-skill", "--target", "boom"); err == nil {
+		t.Fatal("boom target exited 0")
+	}
+
+	// Unknown target errors with the inventory
+	_, _, err = f.run("run", "inline-skill", "--target", "nope")
+	if err == nil || !strings.Contains(err.Error(), "hello") {
+		t.Fatalf("unknown target: %v", err)
+	}
+
+	// 3. Contracted inline target execution
+	workContracted := t.TempDir()
+	flagContracted := filepath.ToSlash(filepath.Join(workContracted, "made.txt"))
+	contractedDir := writeInlineTasksSkill(t, src, "contracted-inline",
+		"---\nname: contracted-inline\ndescription: contracted inline\nmetadata:\n  check-tests: \"test -f "+flagContracted+"\"\n---",
+		"sokilili demo efefecato reada wurite fini enisure gereeni fini fini\n",
+		tasksFixture(workContracted))
+	if _, _, err := f.run("add", contractedDir); err != nil {
+		t.Fatal(err)
+	}
+	stdout, _, err = f.run("run", "contracted-inline", "--target", "hello")
+	if err != nil {
+		t.Fatalf("contracted inline target: %v\n%s", err, stdout)
+	}
+	if !strings.Contains(stdout, "valid: true") || !strings.Contains(stdout, "outcome: target:hello") ||
+		!strings.Contains(stdout, "effects: read write") {
+		t.Fatalf("contracted receipt: %q", stdout)
+	}
+	if _, err := os.Stat(filepath.Join(store, "attest", "contracted-inline.jsonl")); err != nil {
+		t.Fatal("contracted target run not attested")
+	}
+
+	// 4. Declared effects narrow the audit for inline tasks
+	stdout, _, err = f.run("run", "audited-inline", "--target", "pure")
+	if err != nil {
+		t.Fatalf("audited-inline pure: %v\n%s", err, stdout)
+	}
+	if !strings.Contains(stdout, "effects: read\n") {
+		t.Fatalf("receipt effects: %q", stdout)
+	}
+	_, _, err = f.run("run", "audited-inline", "--target", "checkup")
+	if err == nil || !strings.Contains(err.Error(), "pre-flight") {
+		t.Fatalf("audited-inline closure refusal: %v", err)
+	}
+
+	// 5. Embedded skill with inline Tasks in SKILL.md
+	workEmbedded := t.TempDir()
+	embedded := fstest.MapFS{
+		"embed-inline/SKILL.md": {Data: []byte("---\nname: embed-inline\ndescription: embedded inline\n---\n\n" + tasksFixture(workEmbedded))},
+	}
+	fEmbed := &cobraRunner{t: t, opts: []Option{
+		WithSource(EmbedSource(embedded, RingEmbedded)),
+		WithConfigDir(t.TempDir()),
+	}}
+	stdout, _, err = fEmbed.run("run", "embed-inline", "--target", "hello")
+	if err != nil {
+		t.Fatalf("embedded inline target: %v\n%s", err, stdout)
+	}
+	if _, err := os.Stat(filepath.Join(workEmbedded, "made.txt")); err != nil {
+		t.Fatal("embedded inline target did not run")
+	}
+}
+
+// Both forms present: a SKILL.md with BOTH an inline '## Tasks' section AND
+// metadata.tasks: (or bundled tasks.md) must refuse loudly, never merging silently.
+func TestRunTargetBothFormsRefusal(t *testing.T) {
+	store, work := t.TempDir(), t.TempDir()
+	src := t.TempDir()
+
+	// Form 1: Inline Tasks + metadata.tasks pointer
+	bothMetaDir := writeInlineTasksSkill(t, src, "both-meta",
+		"---\nname: both-meta\ndescription: has inline and meta pointer\nmetadata:\n  tasks: \"tasks.md\"\n---",
+		"", tasksFixture(work))
+	f := &cobraRunner{t: t, opts: []Option{WithConfigDir(store)}}
+	if _, _, err := f.run("add", bothMetaDir); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err := f.run("run", "both-meta", "--target", "hello")
+	if err == nil || !strings.Contains(err.Error(), "both") {
+		t.Fatalf("want refusal for inline + metadata.tasks on --target, got err=%v", err)
+	}
+	_, _, err = f.run("run", "both-meta", "--list")
+	if err == nil || !strings.Contains(err.Error(), "both") {
+		t.Fatalf("want refusal for inline + metadata.tasks on --list, got err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(work, "made.txt")); err == nil {
+		t.Fatal("refused target still ran")
+	}
+
+	// Form 2: Inline Tasks + bundled tasks.md file
+	bothBundledDir := writeInlineTasksSkill(t, src, "both-bundled",
+		"---\nname: both-bundled\ndescription: has inline and bundled tasks.md\n---",
+		"", tasksFixture(work))
+	if err := os.WriteFile(filepath.Join(bothBundledDir, "tasks.md"), []byte(tasksFixture(work)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.run("add", bothBundledDir, "--force"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = f.run("run", "both-bundled", "--target", "hello")
+	if err == nil || !strings.Contains(err.Error(), "both") {
+		t.Fatalf("want refusal for inline + bundled tasks.md on --target, got err=%v", err)
+	}
+	_, _, err = f.run("run", "both-bundled", "--list")
+	if err == nil || !strings.Contains(err.Error(), "both") {
+		t.Fatalf("want refusal for inline + bundled tasks.md on --list, got err=%v", err)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/qiangli/yoke/pkg/assetring"
+	"github.com/qiangli/yoke/pkg/dag"
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/spacetime"
 )
@@ -117,6 +118,9 @@ func parseSkill(dirName string, body []byte, src Source) Skill {
 	_, sk.HasTasks = src.File(dirName, "tasks.md")
 	if !sk.HasTasks && sk.Meta["tasks"] != "" {
 		sk.HasTasks = true // tasks POINTER (resolved under cwd at run time)
+	}
+	if !sk.HasTasks && dag.HasTasksSection(body) {
+		sk.HasTasks = true // inline ## Tasks section in SKILL.md
 	}
 	return sk
 }
