@@ -1,37 +1,41 @@
 package meet
 
-// bashy meet dm AGENT --channel C --sender S [--thread T] is the external
+// bashy meet dm [AGENT] --channel C --sender S [--thread T] is the external
 // channel front door: a webhook relay, bot, or gateway process feeds a
-// message in on argv or stdin and reads the agent's reply on stdout. It
-// shares the agent's EXISTING dm-<human>-<agent> room and the chat.Invoke
-// transcript path the web relay DM already uses (relay_dm.go, POST
-// /api/dms/AGENT/messages) rather than keeping a second log — each distinct
-// (channel, sender) just gets its own "human" identity in that same
-// mechanism.
+// message in on argv or stdin and reads the reply on stdout. It shares the
+// agent's EXISTING dm-<human>-<agent> room and the chat.Invoke transcript path
+// the web relay DM already uses (relay_dm.go, POST /api/dms/AGENT/messages)
+// rather than keeping a second log — each distinct (channel, sender) just gets
+// its own "human" identity in that same mechanism.
 //
-// A sender nobody has admitted gets a pair code and NOTHING is invoked: the
-// pairing request is the SAME /approve|/deny queue (pkg/ask) a yielded
-// @confirm or an ACP permission request already uses. An operator runs
-// `bashy approve allow|deny <code>`; the next message from that sender
-// resolves the decision, and only then does chat.Invoke ever run. The
-// admission is remembered so later messages skip the pairing check — scoped
-// to exactly the (agent, channel, sender) that was admitted, and revocable
-// with `bashy meet dm AGENT --channel C --sender S --revoke`.
+// WHO MAY SPEAK is decided by the app-pair ticket/device store (`bashy app
+// pair`, pkg/webconsole), not by a list of its own. A sender with no live
+// device gets a single-use code minted by that store and NOTHING is invoked;
+// the operator approves it with `bashy app pair approve CODE --allow
+// ask|control|approve`, which turns it into a device bound to exactly that
+// (channel, sender), with an expiry, listed by `bashy app devices` and ended
+// by `bashy app revoke` or `meet dm --revoke`. The scope is what the sender
+// may do here:
+//
+//	ask      message an agent; the turn runs read-only
+//	control  message an agent with the host's ordinary turn authority, and
+//	         post into a room with /meet ROOM TEXT
+//	approve  settle the shared approval queue (pkg/ask) with /approve ID and
+//	         /deny ID — the same queue `bashy approve` reads
+//
+// Every message, paired or not, is one S3 room timeline event.
 import (
 	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/qiangli/yoke/pkg/ask"
 	"github.com/qiangli/yoke/pkg/chat"
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/room"
 	"github.com/spf13/cobra"
 )
@@ -44,176 +48,67 @@ func dmChannelHuman(channel, sender string) string {
 	return channel + ":" + sender
 }
 
-// --- sender allowlist --------------------------------------------------------
+// --- sender pairing (the app-pair store, through a seam) ---------------------
 
-// dmSenderGrant is one admitted (agent, channel, sender) triple. Revoked
-// grants are kept, not deleted, so `meet dm --revoke` is answerable and
-// re-admitting the same sender does not need a fresh pairing.
-type dmSenderGrant struct {
-	Agent   string    `json:"agent"`
-	Channel string    `json:"channel"`
-	Sender  string    `json:"sender"`
-	By      string    `json:"by,omitempty"`
-	Granted time.Time `json:"granted"`
-	Revoked bool      `json:"revoked,omitempty"`
+// The scopes a messenger sender can be paired with.
+const (
+	PeerScopeAsk     = "ask"
+	PeerScopeControl = "control"
+	PeerScopeApprove = "approve"
+)
+
+// PeerScopes lists every valid sender scope, in display order.
+var PeerScopes = []string{PeerScopeAsk, PeerScopeControl, PeerScopeApprove}
+
+// PairedPeer is a sender's live app-pair device.
+type PairedPeer struct {
+	Device  string
+	Scope   []string
+	Expires time.Time
 }
 
-type dmSenderAllowDoc struct {
-	Grants []dmSenderGrant `json:"grants,omitempty"`
+// PeerRequest is the state of an unpaired sender's pairing ticket. Code is
+// set only when this call minted the ticket: the store keeps a hash, so an
+// outstanding code can never be shown twice.
+type PeerRequest struct {
+	Code    string
+	Ticket  string
+	Expires time.Time
+	Pending bool
+	Denied  bool
 }
 
-// dmSenderAllowMu serializes this process's reads and writes of the allowlist
-// file. It does not coordinate across processes; the gateway front door is
-// expected to run one sender's messages through sequentially.
-var dmSenderAllowMu sync.Mutex
-
-func dmSenderAllowPath() (string, error) {
-	base, err := baseDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(base, "dm-senders.json"), nil
+// PeerPairing is the app-pair ticket/device store as this front door sees it.
+// pkg/webconsole owns the one implementation and installs it at init — it
+// imports this package, so this package cannot import it.
+type PeerPairing interface {
+	Paired(channel, sender string) (PairedPeer, bool, error)
+	Request(channel, sender string) (PeerRequest, error)
+	Revoke(channel, sender string) (int, error)
 }
 
-func loadDMSenderAllowDoc() (*dmSenderAllowDoc, string, error) {
-	path, err := dmSenderAllowPath()
-	if err != nil {
-		return nil, "", err
+var peerPairing PeerPairing
+
+// SetPeerPairing installs the sender pairing store. With none installed every
+// external sender is refused: there is nothing that could vouch for one.
+func SetPeerPairing(p PeerPairing) { peerPairing = p }
+
+func pairingStore() (PeerPairing, error) {
+	if peerPairing == nil {
+		return nil, fmt.Errorf("meet: dm has no sender pairing store in this binary (it is pkg/webconsole's app-pair store); refusing the external sender")
 	}
-	doc := &dmSenderAllowDoc{}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return doc, path, nil
-		}
-		return nil, "", err
-	}
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, doc); err != nil {
-			return nil, "", fmt.Errorf("meet: dm sender allowlist %s is unreadable: %w", path, err)
-		}
-	}
-	return doc, path, nil
+	return peerPairing, nil
 }
 
-func saveDMSenderAllowDoc(doc *dmSenderAllowDoc, path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
+// boundAgentFor is the S2 sender binding: the agent the fleet routes this
+// (channel, sender) to when the message names none.
+var boundAgentFor = func(channel, sender string) (string, bool) {
+	agents, _ := fleet.New().Agents()
+	var bindings []fleet.AgentBinding
+	for _, a := range agents {
+		bindings = append(bindings, a.Bindings...)
 	}
-	raw, err := json.MarshalIndent(doc, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(raw, '\n'), 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
-}
-
-// dmSenderAllowed reports whether sender currently has a live, unrevoked
-// grant to DM agent over channel.
-func dmSenderAllowed(agent, channel, sender string) (bool, error) {
-	dmSenderAllowMu.Lock()
-	defer dmSenderAllowMu.Unlock()
-	doc, _, err := loadDMSenderAllowDoc()
-	if err != nil {
-		return false, err
-	}
-	for _, g := range doc.Grants {
-		if g.Agent == agent && g.Channel == channel && g.Sender == sender {
-			return !g.Revoked, nil
-		}
-	}
-	return false, nil
-}
-
-// dmSenderGrantAccess records that an operator's approval admitted sender on
-// channel to DM agent. Granting again (after a revoke) un-revokes.
-func dmSenderGrantAccess(agent, channel, sender, by string) error {
-	dmSenderAllowMu.Lock()
-	defer dmSenderAllowMu.Unlock()
-	doc, path, err := loadDMSenderAllowDoc()
-	if err != nil {
-		return err
-	}
-	for i := range doc.Grants {
-		g := &doc.Grants[i]
-		if g.Agent == agent && g.Channel == channel && g.Sender == sender {
-			g.Revoked = false
-			g.By = by
-			g.Granted = nowFn()
-			return saveDMSenderAllowDoc(doc, path)
-		}
-	}
-	doc.Grants = append(doc.Grants, dmSenderGrant{
-		Agent: agent, Channel: channel, Sender: sender, By: by, Granted: nowFn(),
-	})
-	sort.Slice(doc.Grants, func(i, j int) bool { return doc.Grants[i].Granted.Before(doc.Grants[j].Granted) })
-	return saveDMSenderAllowDoc(doc, path)
-}
-
-// dmSenderRevokeAccess ends a sender's standing admission. Idempotent:
-// revoking an unknown or already-revoked sender reports found=false rather
-// than an error.
-func dmSenderRevokeAccess(agent, channel, sender string) (bool, error) {
-	dmSenderAllowMu.Lock()
-	defer dmSenderAllowMu.Unlock()
-	doc, path, err := loadDMSenderAllowDoc()
-	if err != nil {
-		return false, err
-	}
-	found := false
-	for i := range doc.Grants {
-		g := &doc.Grants[i]
-		if g.Agent == agent && g.Channel == channel && g.Sender == sender && !g.Revoked {
-			g.Revoked = true
-			found = true
-		}
-	}
-	if !found {
-		return false, nil
-	}
-	return true, saveDMSenderAllowDoc(doc, path)
-}
-
-// --- pairing request (the /approve, /deny queue) -----------------------------
-
-// dmPairArgv is the pairing operation's shape for ask.PlanToken: the same
-// (agent, channel, sender) always hashes to the same approval, which is what
-// keeps a sender resending the same message while pairing is pending from
-// raising a second request.
-func dmPairArgv(agent, channel, sender string) []string {
-	return []string{"meet", "dm", "pair", agent, channel, sender}
-}
-
-func dmPairSession(channel, sender string) string {
-	return "meet-dm:" + channel + ":" + sender
-}
-
-// findDMPairRequest returns the newest approval this front door raised for
-// (agent, channel, sender), pending or already decided.
-func findDMPairRequest(agent, channel, sender string) (ask.Request, bool, error) {
-	all, err := ask.ListApprovals()
-	if err != nil {
-		return ask.Request{}, false, err
-	}
-	argv := dmPairArgv(agent, channel, sender)
-	session := dmPairSession(channel, sender)
-	var best ask.Request
-	found := false
-	for _, r := range all {
-		if r.Approval == nil || r.Approval.Source != ask.SourceMeetDM || r.Approval.Session != session {
-			continue
-		}
-		if !slices.Equal(r.Approval.Argv, argv) {
-			continue
-		}
-		if !found || r.Created.After(best.Created) {
-			best, found = r, true
-		}
-	}
-	return best, found, nil
+	return fleet.BindingFor(bindings, channel, sender)
 }
 
 // --- the front door itself ---------------------------------------------------
@@ -250,16 +145,25 @@ func readDMFrontDoorText(stdin io.Reader, argvText []string) (text, thread strin
 	return in.Text, in.Thread, nil
 }
 
-// runDMFrontDoor is `bashy meet dm AGENT --channel C --sender S`'s RunE body.
-// An unpaired sender is turned back with a pair code and nothing is invoked:
-// chat.Invoke is reached only after dmSenderAllowed is true, so a message
-// from a sender nobody admitted can never reach — let alone launch — the
-// agent.
-func runDMFrontDoor(cmd *cobra.Command, agent, channel, sender, thread, text string) error {
-	agent = canonAgent(agent)
-	if err := routableSeat(agent); err != nil {
-		return err
+// dmCommand splits a leading front-door command (/approve, /deny, /meet) off
+// the text. Anything else is a message for the agent.
+func dmCommand(text string) (verb, rest string) {
+	if !strings.HasPrefix(text, "/") {
+		return "", text
 	}
+	verb, rest, _ = strings.Cut(text, " ")
+	switch verb {
+	case "/approve", "/deny", "/meet":
+		return verb, strings.TrimSpace(rest)
+	}
+	return "", text
+}
+
+// runDMFrontDoor is `bashy meet dm [AGENT] --channel C --sender S`'s RunE
+// body. chat.Invoke is reached only for a sender with a live app-pair device
+// whose scope covers the request, so a message from a sender nobody admitted
+// can never reach — let alone launch — an agent.
+func runDMFrontDoor(cmd *cobra.Command, agent, channel, sender, thread, text string) error {
 	channel = strings.TrimSpace(channel)
 	sender = strings.TrimSpace(sender)
 	if channel == "" || sender == "" {
@@ -270,6 +174,12 @@ func runDMFrontDoor(cmd *cobra.Command, agent, channel, sender, thread, text str
 		return fmt.Errorf("meet: dm needs message text")
 	}
 	human := dmChannelHuman(channel, sender)
+	agent = canonAgent(strings.TrimPrefix(strings.TrimSpace(agent), "@"))
+	if agent == "" {
+		if bound, ok := boundAgentFor(channel, sender); ok {
+			agent = canonAgent(bound)
+		}
+	}
 
 	body := text
 	if thread = strings.TrimSpace(thread); thread != "" {
@@ -278,46 +188,87 @@ func runDMFrontDoor(cmd *cobra.Command, agent, channel, sender, thread, text str
 	// S3: one room event per message, paired or not — the audit trail an
 	// operator reads to decide a pairing, and the evidence that the message
 	// arrived at all.
-	room.Record(room.EventInbound, human, agent, channel, body)
+	target := agent
+	if target == "" {
+		target = channel
+	}
+	room.Record(room.EventInbound, human, target, channel, body)
 
-	allowed, err := dmSenderAllowed(agent, channel, sender)
+	pairing, err := pairingStore()
 	if err != nil {
 		return err
 	}
-	if !allowed {
-		req, pending, err := findDMPairRequest(agent, channel, sender)
+	peer, paired, err := pairing.Paired(channel, sender)
+	if err != nil {
+		return err
+	}
+	out := cmd.OutOrStdout()
+	if !paired {
+		req, err := pairing.Request(channel, sender)
 		if err != nil {
 			return err
 		}
-		if !pending {
-			req, err = ask.Raise(ask.ApprovalSpec{
-				Source:  ask.SourceMeetDM,
-				Argv:    dmPairArgv(agent, channel, sender),
-				Session: dmPairSession(channel, sender),
-				Prompt:  fmt.Sprintf("meet dm: pair sender %s on channel %s to message %s", sender, channel, agent),
-			})
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(cmd.OutOrStdout(),
-				"unknown sender %s on channel %s; pair code %s — ask an operator to run `bashy approve allow %s` to admit, or `bashy approve deny %s` to refuse; the message was not delivered\n",
-				sender, channel, req.ID, req.ID, req.ID)
-			return nil
+		switch {
+		case req.Denied:
+			fmt.Fprintf(out, "pairing for %s on channel %s was denied; message not delivered\n", sender, channel)
+		case req.Pending:
+			fmt.Fprintf(out, "pairing pending for %s on channel %s (ticket %s, expires %s) — ask the operator to approve the code you were sent; message not delivered\n",
+				sender, channel, req.Ticket, req.Expires.Local().Format("15:04"))
+		default:
+			fmt.Fprintf(out, "unknown sender %s on channel %s; pair code %s (single use, expires %s) — ask the operator to run `bashy app pair approve %s`; message not delivered\n",
+				sender, channel, req.Code, req.Expires.Local().Format("15:04"), req.Code)
 		}
-		d, decided := ask.LoadDecision(req.ID)
-		if !decided {
-			fmt.Fprintf(cmd.OutOrStdout(),
-				"pairing pending for %s on channel %s (code %s) — ask an operator to run `bashy approve allow %s` or `bashy approve deny %s`\n",
-				sender, channel, req.ID, req.ID, req.ID)
-			return nil
+		return nil
+	}
+
+	verb, rest := dmCommand(text)
+	switch verb {
+	case "/approve", "/deny":
+		if !slices.Contains(peer.Scope, PeerScopeApprove) {
+			return dmScopeRefusal(out, sender, channel, verb, PeerScopeApprove)
 		}
-		if !d.Allowed() {
-			fmt.Fprintf(cmd.OutOrStdout(), "pairing for %s on channel %s was denied; message not delivered\n", sender, channel)
-			return nil
+		id, _, _ := strings.Cut(rest, " ")
+		if id == "" {
+			return fmt.Errorf("meet: %s needs an approval id", verb)
 		}
-		if err := dmSenderGrantAccess(agent, channel, sender, d.By); err != nil {
+		verdict := ask.VerdictAllow
+		if verb == "/deny" {
+			verdict = ask.VerdictDeny
+		}
+		r, err := ask.Decide(id, ask.Decision{Verdict: verdict, By: human}, ask.DecideOpts{})
+		if err != nil {
 			return err
 		}
+		fmt.Fprintf(out, "%s %s (%s)\n", verdict, r.ID, r.ApprovalSummary())
+		return nil
+	case "/meet":
+		if !slices.Contains(peer.Scope, PeerScopeControl) {
+			return dmScopeRefusal(out, sender, channel, verb, PeerScopeControl)
+		}
+		ref, msg, _ := strings.Cut(rest, " ")
+		if ref == "" || strings.TrimSpace(msg) == "" {
+			return fmt.Errorf("meet: /meet needs a room and text")
+		}
+		ev, err := PostAs(ref, human, "", strings.TrimSpace(msg))
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "posted to %s\n", ref)
+		if ev.Warning != "" {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", ev.Warning)
+		}
+		return nil
+	}
+
+	control := slices.Contains(peer.Scope, PeerScopeControl)
+	if !control && !slices.Contains(peer.Scope, PeerScopeAsk) {
+		return dmScopeRefusal(out, sender, channel, "a message", PeerScopeAsk)
+	}
+	if agent == "" {
+		return fmt.Errorf("meet: %s on channel %s has no bound agent; address one with @agent or a fleet binding", sender, channel)
+	}
+	if err := routableSeat(agent); err != nil {
+		return err
 	}
 
 	if err := appendDMFrontDoorEvent(agent, human, relayDMEvent{Speaker: human, Role: "human", Text: body, TS: nowFn()}); err != nil {
@@ -325,6 +276,10 @@ func runDMFrontDoor(cmd *cobra.Command, agent, channel, sender, thread, text str
 	}
 
 	readOnly, allowUnsafe := turnAuthority()
+	if !control {
+		// ask scope: the sender may talk to the agent, not act through it.
+		readOnly, allowUnsafe = true, false
+	}
 	res, invokeErr := invokeRelayDM(cmd.Context(), chat.Options{
 		Agent: agent, Instruction: text, ReadOnly: readOnly, AllowUnsafe: allowUnsafe,
 	}, nil)
@@ -342,10 +297,17 @@ func runDMFrontDoor(cmd *cobra.Command, agent, channel, sender, thread, text str
 	if err := appendDMFrontDoorEvent(agent, human, relayDMEvent{Speaker: agent, Role: "assistant", Text: reply, Status: status, TS: nowFn()}); err != nil {
 		return err
 	}
-	fmt.Fprintln(cmd.OutOrStdout(), reply)
+	fmt.Fprintln(out, reply)
 	if invokeErr != nil {
 		return fmt.Errorf("meet: %s: %w", agent, invokeErr)
 	}
+	return nil
+}
+
+// dmScopeRefusal answers a paired sender whose device scope does not cover
+// the request. It is a reply, not an error: the gateway relays it back.
+func dmScopeRefusal(out io.Writer, sender, channel, what, need string) error {
+	fmt.Fprintf(out, "%s on channel %s is not paired for %s (needs scope %q); nothing was done\n", sender, channel, what, need)
 	return nil
 }
 
@@ -373,23 +335,26 @@ func appendDMFrontDoorEvent(agent, human string, event relayDMEvent) error {
 	})
 }
 
-// runDMFrontDoorRevoke is `bashy meet dm AGENT --channel C --sender S
-// --revoke`: it ends a sender's standing admission without touching the
-// transcript or invoking the agent.
-func runDMFrontDoorRevoke(cmd *cobra.Command, agent, channel, sender string) error {
-	agent = canonAgent(agent)
+// runDMFrontDoorRevoke is `bashy meet dm --channel C --sender S --revoke`:
+// it ends the sender's app-pair device(s) without touching the transcript or
+// invoking an agent.
+func runDMFrontDoorRevoke(cmd *cobra.Command, channel, sender string) error {
 	channel, sender = strings.TrimSpace(channel), strings.TrimSpace(sender)
 	if channel == "" || sender == "" {
 		return fmt.Errorf("meet: dm --revoke needs both --channel and --sender")
 	}
-	found, err := dmSenderRevokeAccess(agent, channel, sender)
+	pairing, err := pairingStore()
 	if err != nil {
 		return err
 	}
-	if !found {
-		fmt.Fprintf(cmd.OutOrStdout(), "%s on channel %s was not paired with %s\n", sender, channel, agent)
+	n, err := pairing.Revoke(channel, sender)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "%s on channel %s was not paired\n", sender, channel)
 		return nil
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "revoked %s on channel %s for %s\n", sender, channel, agent)
+	fmt.Fprintf(cmd.OutOrStdout(), "revoked %s on channel %s\n", sender, channel)
 	return nil
 }

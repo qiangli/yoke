@@ -88,6 +88,7 @@ func newPairCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the ticket as a typed object instead of a QR")
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "print the code and exit instead of waiting for a scan")
 	cmd.Flags().BoolVar(&noQR, "no-qr", false, "print the URL only, no QR block")
+	cmd.AddCommand(newPairApproveCmd(), newPairDenyCmd())
 	return cmd
 }
 
@@ -368,12 +369,16 @@ func newDevicesCmd() *cobra.Command {
 				enc.SetIndent("", "  ")
 				out := make([]map[string]any, 0, len(list))
 				for _, d := range list {
-					out = append(out, map[string]any{
+					row := map[string]any{
 						"id": d.ID, "name": d.Name, "scope": d.Scope,
 						"issued": d.Issued, "expires": d.Expires,
 						"last_seen": d.LastSeen, "user_agent": d.UserAgent,
 						"live": st.deviceLive(d, now), "revoked": d.Revoked,
-					})
+					}
+					if d.Peer != nil {
+						row["channel"], row["sender"] = d.Peer.Channel, d.Peer.Sender
+					}
+					out = append(out, row)
 				}
 				return enc.Encode(out)
 			}

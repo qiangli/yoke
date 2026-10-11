@@ -25,25 +25,24 @@ deliver them to channels outside bashy.
 ycode, or a bot script). The gateway supplies its channel and stable sender
 id; store gateway tokens with `bashy secret set NAME` and let the gateway
 resolve them with `bashy secret get NAME`, not from this skill or a checked-in
-config. Each ordinary message enters the existing
-`bashy meet dm` front door, which records the S3 event and requires pairing
-before it invokes an agent.
+config. EVERY message — including `/approve`, `/deny` and `/meet` — enters the
+`bashy meet dm` front door, which records the S3 event and checks the
+sender's app-pair device before anything happens. The router only picks the
+agent; it never decides on its own.
 
 ~~~bash
-# Route one inbound message. Set MEET_CHANNEL, MEET_SENDER, and
-# MEET_AGENT from the gateway's account and the S2 sender binding.
+# Route one inbound message. Set MEET_CHANNEL and MEET_SENDER from the
+# gateway's account. MEET_AGENT is optional: left empty, the front door
+# routes to the sender's S2 fleet binding.
 meet_dm() {
-	local text="$*" agent="${MEET_AGENT:-${BASHY_AGENT_ID:-}}" room rest id
+	local text="$*" agent="${MEET_AGENT:-}" rest
 	[ -n "$MEET_CHANNEL" ] && [ -n "$MEET_SENDER" ] || return 2
-	[ -n "$agent" ] || { printf 'agent-hub: sender has no bound agent\n' >&2; return 2; }
 	case "$text" in
-		/approve\ *) id="${text#/approve }"; bashy approve allow "$id"; return $? ;;
-		/deny\ *) id="${text#/deny }"; bashy approve deny "$id"; return $? ;;
+		/approve\ *|/deny\ *|/meet\ *)
+			# Front-door commands: scope approve settles the shared approval
+			# queue, scope control posts into a room. No agent is involved.
+			agent="" ;;
 		/status)  text="/status" ;;
-		/meet\ *)
-			rest="${text#/meet }"; room="${rest%% *}"; rest="${rest#* }"
-			[ -n "$room" ] && [ -n "$rest" ] || return 2
-			bashy meet tell "$room" --as "$MEET_SENDER" "$rest"; return $? ;;
 		@*)
 			rest="${text#@}"; agent="${rest%% *}"; text="${rest#* }"
 			[ -n "$text" ] || return 2 ;;
@@ -52,9 +51,14 @@ meet_dm() {
 }
 ~~~
 
-An unpaired sender receives a one-use code and the message is not delivered.
-After the operator approves that code with the shared approval queue, the
-sender retries the same message; the agent reply is returned on stdout.
+An unpaired sender receives a single-use code and the message is not
+delivered. The operator admits it with the app-pair store — `bashy app pair
+approve CODE --allow ask|control|approve [--ttl 24h]` (or `bashy app pair deny
+CODE`) — and the sender retries the same message; the agent reply is returned
+on stdout. `ask` talks to an agent read-only, `control` runs with ordinary
+turn authority and may `/meet ROOM TEXT`, `approve` may `/approve ID` and
+`/deny ID`. `bashy app devices` lists paired senders; `bashy app revoke ID` or
+`bashy meet dm --channel C --sender S --revoke` ends one.
 
 ~~~bash
 # desktop delivers a notification to the local desktop environment.

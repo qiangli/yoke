@@ -52,7 +52,7 @@ func servicePairingCounts() (live, pending int, err error) {
 		return 0, 0, err
 	}
 	now := time.Now()
-	return len(st.liveDevices(now)), st.openTickets(now), nil
+	return st.browserDevices(now), st.openTickets(now), nil
 }
 
 func serviceRearmCommand(port int) string {
