@@ -59,12 +59,12 @@ import (
 func NewMessageBoardCmd() *cobra.Command { return NewMessageBoardCmdWithSprintResolver(nil) }
 
 // NewMessageBoardCmdWithSprintResolver enables the host's sprint card lookup.
-func NewMessageBoardCmdWithSprintResolver(scopeResolver func(int64) (SprintScope, error)) *cobra.Command {
+func NewMessageBoardCmdWithSprintResolver(scopeResolver func(string) (SprintScope, error)) *cobra.Command {
 	var jsonOut, peek, history, seenBy bool
 	var as string
 	var limit int
 	var wait time.Duration
-	var sprint int64
+	var sprint string
 	cmd := &cobra.Command{
 		Use:     "mb",
 		Aliases: []string{"messages"},
@@ -103,9 +103,9 @@ through one cursor-safe view.`,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			var scope *SprintScope
-			if sprint != 0 {
-				if sprint < 0 || scopeResolver == nil {
-					return fmt.Errorf("mb: --sprint requires a positive sprint number and a scope resolver")
+			if sprint != "" {
+				if scopeResolver == nil {
+					return fmt.Errorf("mb: --sprint requires a scope resolver")
 				}
 				s, err := scopeResolver(sprint)
 				if err != nil {
@@ -143,7 +143,7 @@ through one cursor-safe view.`,
 	f.IntVarP(&limit, "limit", "n", DefaultBoardLimit,
 		"cap posts NOT addressed to you by name (0 = no cap); directed posts and declared concerns are never capped")
 	f.DurationVar(&wait, "wait", 0, "wait up to this duration for a new relevant post")
-	f.Int64Var(&sprint, "sprint", 0, "show only posts about this sprint without advancing the board cursor")
+	f.StringVar(&sprint, "sprint", "", "show only posts about this sprint number or UUID without advancing the board cursor")
 	cmd.AddCommand(newMBSendCmd(), newMBPostCmd(), newMBShowCmd())
 	cmd.CompletionOptions.DisableDefaultCmd = true
 	return cmd

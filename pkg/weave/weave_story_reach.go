@@ -47,6 +47,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -191,6 +192,11 @@ func ResolveSprintScope(id int64) (bus.SprintScope, error) {
 	if id <= 0 {
 		return bus.SprintScope{}, fmt.Errorf("sprint number must be positive")
 	}
+	return ResolveSprintScopeByHandle(strconv.FormatInt(id, 10))
+}
+
+// ResolveSprintScopeByHandle accepts the sprint number or UUID used by readers.
+func ResolveSprintScopeByHandle(handle string) (bus.SprintScope, error) {
 	dir, err := sprintStoreDir()
 	if err != nil {
 		return bus.SprintScope{}, err
@@ -199,9 +205,9 @@ func ResolveSprintScope(id int64) (bus.SprintScope, error) {
 	if err != nil {
 		return bus.SprintScope{}, err
 	}
-	s := findWeaveStory(q, id)
-	if s == nil {
-		return bus.SprintScope{}, fmt.Errorf("sprint #%d not found", id)
+	s, err := findSprintByHandle(q, handle)
+	if err != nil {
+		return bus.SprintScope{}, err
 	}
 	return sprintScope(s), nil
 }
