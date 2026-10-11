@@ -185,6 +185,7 @@ type Tool struct {
 const (
 	ToolCommandPrint = "print" // one-shot through the exec template (or the command's own exec)
 	ToolCommandTUI   = "tui"   // typed into a steered interactive session (steer_exec)
+	ToolCommandHTTP  = "http"  // a typed JSON HTTP request; no shell or process is involved
 )
 
 // ToolCommand is one vendor feature of a tool exposed as a bashy command
@@ -192,16 +193,34 @@ const (
 // registers the same feature under the same name (CanonicalToolCommands) —
 // and Slash is this tool's own spelling of it.
 type ToolCommand struct {
-	Name       string            `yaml:"name" json:"name" doc:"canonical cross-tool command name (plan, review, deep-research, ...); unique per tool"`
-	Effects    []string          `yaml:"effects,omitempty" json:"effects,omitempty" doc:"declared effect atoms for guarded callers"`
-	Slash      string            `yaml:"slash" json:"slash" doc:"the tool-specific line to send; {args} is replaced by the caller's text"`
-	Mode       string            `yaml:"mode" json:"mode" doc:"print (one-shot via the exec template) or tui (steered session via steer_exec)"`
-	Capability string            `yaml:"capability,omitempty" json:"capability,omitempty" doc:"capability tag for --capability routing"`
-	Timeout    string            `yaml:"timeout,omitempty" json:"timeout,omitempty" doc:"Go duration bounding the whole command; empty = runner default"`
-	Output     string            `yaml:"output,omitempty" json:"output,omitempty" doc:"turn (final message, default), transcript, or file:<glob> (artifacts in the workdir)"`
-	Exec       string            `yaml:"exec,omitempty" json:"exec,omitempty" doc:"print only: argv template used instead of cli.launch.exec, for a feature that is a subcommand ({args}, {model}, {workspace})"`
-	Steps      []ToolCommandStep `yaml:"steps,omitempty" json:"steps,omitempty" doc:"tui only: scripted frames after the slash line"`
-	Quit       string            `yaml:"quit,omitempty" json:"quit,omitempty" doc:"tui only: line that ends the session; empty = the tool's graceful quit"`
+	Name       string                 `yaml:"name" json:"name" doc:"canonical cross-tool command name (plan, review, deep-research, ...); unique per tool"`
+	Effects    []string               `yaml:"effects,omitempty" json:"effects,omitempty" doc:"declared effect atoms for guarded callers"`
+	Slash      string                 `yaml:"slash" json:"slash" doc:"the tool-specific line to send; {args} is replaced by the caller's text"`
+	Mode       string                 `yaml:"mode" json:"mode" doc:"print (one-shot via the exec template), tui (steered session), or http (typed JSON request)"`
+	Capability string                 `yaml:"capability,omitempty" json:"capability,omitempty" doc:"capability tag for --capability routing"`
+	Timeout    string                 `yaml:"timeout,omitempty" json:"timeout,omitempty" doc:"Go duration bounding the whole command; empty = runner default"`
+	Output     string                 `yaml:"output,omitempty" json:"output,omitempty" doc:"turn (final message, default), transcript, or file:<glob> (artifacts in the workdir)"`
+	Exec       string                 `yaml:"exec,omitempty" json:"exec,omitempty" doc:"print only: argv template used instead of cli.launch.exec, for a feature that is a subcommand ({args}, {model}, {workspace})"`
+	Steps      []ToolCommandStep      `yaml:"steps,omitempty" json:"steps,omitempty" doc:"tui only: scripted frames after the slash line"`
+	Quit       string                 `yaml:"quit,omitempty" json:"quit,omitempty" doc:"tui only: line that ends the session; empty = the tool's graceful quit"`
+	HTTP       *ToolCommandHTTPAction `yaml:"http,omitempty" json:"http,omitempty" doc:"http only: typed request declaration; JSON is encoded by the runner, never by a shell"`
+}
+
+// ToolCommandHTTPAction is the declarative transport for a tool command that talks
+// directly to a local service. Body is encoded with encoding/json. String
+// values may contain {args}, which is replaced verbatim by the caller's text
+// before encoding; it is never parsed or evaluated as JSON or shell source.
+//
+// URL is an absolute base URL and Path is an optional endpoint path. A URL may
+// instead include its endpoint path directly. TokenFile reads a local secret
+// file; TokenRef resolves one credential through the host secret bindings.
+type ToolCommandHTTPAction struct {
+	Method    string         `yaml:"method" json:"method" doc:"HTTP method (GET, POST, PUT, PATCH or DELETE)"`
+	URL       string         `yaml:"url" json:"url" doc:"absolute HTTP base URL; loopback only unless effects include net and remote"`
+	Path      string         `yaml:"path,omitempty" json:"path,omitempty" doc:"optional endpoint path appended to url"`
+	Body      map[string]any `yaml:"body,omitempty" json:"body,omitempty" doc:"JSON object encoded by encoding/json; string values may use {args}"`
+	TokenFile string         `yaml:"token_file,omitempty" json:"token_file,omitempty" doc:"owner-managed file containing the bearer token"`
+	TokenRef  string         `yaml:"token_ref,omitempty" json:"token_ref,omitempty" doc:"secret credential ref resolved through the host secrets map"`
 }
 
 // ToolCommandStep is one scripted TUI frame. Exactly one field is set.

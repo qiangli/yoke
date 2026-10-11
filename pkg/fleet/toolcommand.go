@@ -2,10 +2,13 @@ package fleet
 
 import (
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/qiangli/yoke/pkg/atlas"
 )
 
 // CanonicalToolCommands is the cross-tool command vocabulary, listed once
@@ -73,7 +76,7 @@ func (t Tool) ValidateCommands() (errs []error, warns []string) {
 					t.Name, c.Name, strings.Join(CanonicalToolCommands, ", ")))
 			}
 		}
-		if strings.TrimSpace(c.Slash) == "" {
+		if c.Mode != ToolCommandHTTP && strings.TrimSpace(c.Slash) == "" {
 			bad("slash is empty")
 		}
 		switch c.Mode {
@@ -88,8 +91,19 @@ func (t Tool) ValidateCommands() (errs []error, warns []string) {
 			if c.Exec != "" {
 				bad("exec is print only")
 			}
+		case ToolCommandHTTP:
+			if c.HTTP == nil {
+				bad("http mode needs http")
+				break
+			}
+			if c.Exec != "" || len(c.Steps) > 0 || c.Quit != "" {
+				bad("exec, steps and quit are not http")
+			}
+			if err := c.HTTP.Validate(c.Effects); err != nil {
+				bad("%v", err)
+			}
 		default:
-			bad("mode %q (want print or tui)", c.Mode)
+			bad("mode %q (want print, tui or http)", c.Mode)
 		}
 		if c.Timeout != "" {
 			if _, err := time.ParseDuration(c.Timeout); err != nil {
@@ -118,6 +132,38 @@ func (t Tool) ValidateCommands() (errs []error, warns []string) {
 		}
 	}
 	return errs, warns
+}
+
+// Validate checks the transport declaration without opening a connection.
+func (h ToolCommandHTTPAction) Validate(effects []string) error {
+	method := strings.ToUpper(strings.TrimSpace(h.Method))
+	switch method {
+	case "GET", "POST", "PUT", "PATCH", "DELETE":
+	default:
+		return fmt.Errorf("http.method %q (want GET, POST, PUT, PATCH or DELETE)", h.Method)
+	}
+	u, err := url.Parse(strings.TrimSpace(h.URL))
+	if err != nil || u.Scheme != "http" || u.Hostname() == "" || u.User != nil {
+		return fmt.Errorf("http.url %q must be an absolute http URL without userinfo", h.URL)
+	}
+	if h.Path != "" && (!strings.HasPrefix(h.Path, "/") || strings.ContainsAny(h.Path, "?#")) {
+		return fmt.Errorf("http.path %q must begin with / and have no query or fragment", h.Path)
+	}
+	if (strings.TrimSpace(h.TokenFile) == "") == (strings.TrimSpace(h.TokenRef) == "") {
+		return fmt.Errorf("http needs exactly one of token_file or token_ref")
+	}
+	if !loopbackHost(u.Hostname()) && !(slices.Contains(effects, atlas.EffNet) && slices.Contains(effects, atlas.EffRemote)) {
+		return fmt.Errorf("http.url %q is not loopback; remote HTTP requires declared effects net and remote for approval policy", h.URL)
+	}
+	return nil
+}
+
+func loopbackHost(host string) bool {
+	switch strings.ToLower(host) {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
 }
 
 func validateToolCommandOutput(out string) error {

@@ -86,6 +86,11 @@ func TestToolCommandsValidate(t *testing.T) {
 		{"empty slash", printOnly, []ToolCommand{{Name: "review", Mode: "print"}}, "slash is empty"},
 		{"blank slash", printOnly, []ToolCommand{{Name: "review", Slash: "  ", Mode: "print"}}, "slash is empty"},
 		{"bad mode", printOnly, []ToolCommand{{Name: "review", Slash: "/r", Mode: "batch"}}, `mode "batch"`},
+		{"ok http", printOnly, []ToolCommand{{Name: "send", Mode: "http", HTTP: &ToolCommandHTTPAction{Method: "POST", URL: "http://127.0.0.1:8080", Path: "/send", TokenFile: "/tmp/token", Body: map[string]any{"message": "{args}"}}}}, ""},
+		{"http needs declaration", printOnly, []ToolCommand{{Name: "send", Mode: "http"}}, "needs http"},
+		{"http rejects remote by default", printOnly, []ToolCommand{{Name: "send", Mode: "http", HTTP: &ToolCommandHTTPAction{Method: "POST", URL: "http://example.test", TokenFile: "/tmp/token"}}}, "not loopback"},
+		{"http remote is effect declared", printOnly, []ToolCommand{{Name: "send", Mode: "http", Effects: []string{"net", "remote"}, HTTP: &ToolCommandHTTPAction{Method: "POST", URL: "http://example.test", TokenFile: "/tmp/token"}}}, ""},
+		{"http token selector", printOnly, []ToolCommand{{Name: "send", Mode: "http", HTTP: &ToolCommandHTTPAction{Method: "POST", URL: "http://127.0.0.1", TokenFile: "/tmp/token", TokenRef: "codync"}}}, "exactly one"},
 		{"missing mode", printOnly, []ToolCommand{{Name: "review", Slash: "/r"}}, `mode ""`},
 		{"tui needs steer_exec", printOnly, []ToolCommand{{Name: "plan", Slash: "/plan", Mode: "tui"}}, "steer_exec"},
 		{"duplicate", printOnly, []ToolCommand{
@@ -222,6 +227,8 @@ func TestToolSchemaListsCommandFields(t *testing.T) {
 		"commands.<index>.exec", "commands.<index>.steps", "commands.<index>.steps.<index>.say",
 		"commands.<index>.steps.<index>.key", "commands.<index>.steps.<index>.wait_idle",
 		"commands.<index>.quit",
+		"commands.<index>.http", "commands.<index>.http.method", "commands.<index>.http.url",
+		"commands.<index>.http.path", "commands.<index>.http.body", "commands.<index>.http.token_file", "commands.<index>.http.token_ref",
 	} {
 		d, ok := got[p]
 		if !ok {
