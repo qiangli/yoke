@@ -14,19 +14,20 @@ import (
 )
 
 type fakeSessionClient struct {
-	tasks       []TaskSummary
-	eventsPolls []EventsResponse
-	joins       []JoinReq
-	appends     []AppendEventReq
-	appendTasks []string
-	sprints     []CreateSprintReq
-	runs        []UpsertRunReq
-	runSprints  []string
-	leases      []LeaseReq
-	shares      []GrantShareReq
-	revokes     []string
-	leaseErr    error
-	creates     []CreateTaskReq
+	tasks        []TaskSummary
+	eventsPolls  []EventsResponse
+	rosterEvents []Event // when set, the complete presence feed (limit=0)
+	joins        []JoinReq
+	appends      []AppendEventReq
+	appendTasks  []string
+	sprints      []CreateSprintReq
+	runs         []UpsertRunReq
+	runSprints   []string
+	leases       []LeaseReq
+	shares       []GrantShareReq
+	revokes      []string
+	leaseErr     error
+	creates      []CreateTaskReq
 	// repoSessions answers ListTasksByRepo when set; nil means the server
 	// does not know ?repo= (ErrRepoQueryUnsupported).
 	repoSessions *RepoSessions
@@ -73,6 +74,9 @@ func (f *fakeSessionClient) ListTasks(ctx context.Context) ([]TaskSummary, error
 }
 
 func (f *fakeSessionClient) GetEvents(ctx context.Context, taskID, since string, limit int) (EventsResponse, error) {
+	if since == "" && limit == 0 && f.rosterEvents != nil {
+		return EventsResponse{Events: f.rosterEvents}, nil
+	}
 	if len(f.eventsPolls) == 0 {
 		return EventsResponse{}, nil
 	}
