@@ -3,12 +3,14 @@ id: 53d8ad7c0e7a
 kind: bug
 title: 'S2 Windows chat native gate: attach socket timeout and path/redaction failures'
 seq: 1895
-status: todo
+status: assigned
 priority: p1
 labels:
     - windows
     - chat
 created: 2026-10-11T08:44:25.218206Z
+weave: 94
+assignee: claude-sonnet5.5
 sprint: 418
 sprint_id: 9891800f-8da5-5338-92bc-1d75755ca548
 sprint_title: 'Agent ecosystem synergy: agentic tools compose like a|b|c through bashy extension points'

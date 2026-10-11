@@ -3,12 +3,14 @@ id: 426ca53dc1b8
 kind: test
 title: 'S1 Windows native fleet gate: portable active-list fake tool fixtures'
 seq: 1894
-status: todo
+status: assigned
 priority: p1
 labels:
     - windows
     - fleet
 created: 2026-10-11T08:41:52.972047Z
+weave: 93
+assignee: codex-gpt6-luna
 sprint: 418
 sprint_id: 9891800f-8da5-5338-92bc-1d75755ca548
 sprint_title: 'Agent ecosystem synergy: agentic tools compose like a|b|c through bashy extension points'
