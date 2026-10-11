@@ -883,6 +883,22 @@ func resolveLaunch(name string, opt Options) (Launch, error) {
 	return fromAgentLaunch(l), err
 }
 
+// defaultWorkdir applies an agent record's declared launch directory only when
+// the caller did not explicitly choose --cwd. Bare tools and tool:model
+// bindings have no record-level directory and keep the process directory.
+func defaultWorkdir(name string, opt *Options) {
+	if opt == nil || strings.TrimSpace(opt.Cwd) != "" {
+		return
+	}
+	catalog := opt.Catalog
+	if catalog == nil {
+		catalog = newCatalog()
+	}
+	if a, ok := catalog.Agent(name); ok {
+		opt.Cwd = a.Workdir
+	}
+}
+
 // forceAgentShell reports whether the launcher routes a spawned agent's shell
 // through bashy. On by default; BASHY_FORCE_AGENT_SHELL=0 disables (and --posix
 // hosts / the lean `bash` binary never reach this path).
@@ -1039,6 +1055,11 @@ func NewChatCmd() *cobra.Command {
 					opt.Agent = picked
 				}
 			}
+			// Interact bypasses Invoke, so give it the same record-level default
+			// working directory as a one-shot launch.
+			if name, err := ResolveAgent(opt.Agent, opt.Role); err == nil {
+				defaultWorkdir(name, &opt)
+			}
 
 			// A question (--instruction/--file/--context) is a one-shot Invoke. No
 			// question, at a terminal, is a CONVERSATION — the native interactive
@@ -1155,6 +1176,7 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 	if err != nil {
 		return Result{SchemaVersion: schemaVersion, Agent: opt.Agent, Role: opt.Role, ExitCode: 2}, err
 	}
+	defaultWorkdir(name, &opt)
 	lnch, err := resolveLaunch(name, opt)
 	if err != nil {
 		return Result{SchemaVersion: schemaVersion, Agent: lnch.Tool, Nick: name, Role: opt.Role, ExitCode: 2}, err
