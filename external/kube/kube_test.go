@@ -265,3 +265,21 @@ func TestExecEnvFor(t *testing.T) {
 		t.Fatalf("ExecEnvFor(path) did not inject KUBECONFIG, env = %v", env)
 	}
 }
+
+func TestExplicitKubeconfigFlag(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want bool
+	}{
+		{[]string{"--kubeconfig=/tmp/k.yaml", "get", "nodes"}, true},
+		{[]string{"-n", "x", "--kubeconfig", "/tmp/k.yaml", "get", "pods"}, true},
+		{[]string{"--kubeconfig=", "-n", "headlamp", "port-forward"}, false}, // unset unit setting
+		{[]string{"--kubeconfig"}, false},
+		{[]string{"exec", "pod", "--", "--kubeconfig=/x"}, false}, // after -- belongs to the child
+		{[]string{"get", "nodes"}, false},
+	} {
+		if got := ExplicitKubeconfigFlag(tc.args); got != tc.want {
+			t.Errorf("ExplicitKubeconfigFlag(%q) = %v, want %v", tc.args, got, tc.want)
+		}
+	}
+}

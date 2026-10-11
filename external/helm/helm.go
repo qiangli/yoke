@@ -116,12 +116,15 @@ through to helm.`,
 		DisableFlagParsing: true,
 		SilenceUsage:       true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			res, err := kube.ResolveKubeconfig()
-			if err != nil {
-				return err
-			}
-			if res.Refresh {
-				kube.RefreshKubeconfig(cmd.Context(), os.Stderr, res.KUBECONFIG)
+			var res kube.Resolution
+			if !kube.ExplicitKubeconfigFlag(args) {
+				var err error
+				if res, err = kube.ResolveKubeconfig(); err != nil {
+					return err
+				}
+				if res.Refresh {
+					kube.RefreshKubeconfig(cmd.Context(), os.Stderr, res.KUBECONFIG)
+				}
 			}
 			bin, err := Ensure(cmd.Context(), strings.TrimSpace(os.Getenv(EnvVersion)))
 			if err != nil {

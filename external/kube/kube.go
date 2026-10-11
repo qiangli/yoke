@@ -226,3 +226,27 @@ func fileFresh(path string, maxAge time.Duration) bool {
 	st, err := os.Stat(path)
 	return err == nil && time.Since(st.ModTime()) < maxAge
 }
+
+// ExplicitKubeconfigFlag reports whether argv already names a kubeconfig with a
+// non-empty --kubeconfig flag. Like a non-empty $KUBECONFIG, that is the
+// caller's explicit choice, so profile resolution must not run (it would fail
+// closed on a default peer path the caller is not using). An empty
+// "--kubeconfig=" — what a unit's unset settings.kubeconfig expands to — is not
+// a choice and leaves the profile in charge.
+func ExplicitKubeconfigFlag(args []string) bool {
+	for i, a := range args {
+		if a == "--" {
+			return false
+		}
+		if v, ok := strings.CutPrefix(a, "--kubeconfig="); ok {
+			if strings.TrimSpace(v) != "" {
+				return true
+			}
+			continue
+		}
+		if a == "--kubeconfig" && i+1 < len(args) && strings.TrimSpace(args[i+1]) != "" {
+			return true
+		}
+	}
+	return false
+}
