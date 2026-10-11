@@ -58,7 +58,7 @@ func requireHolds(ctx context.Context, t *Task, dir string, env []string) *Attes
 	for _, expr := range t.Require {
 		cr := evalCheck(ctx, dir, env, expr)
 		if !cr.Pass {
-			return &Attestation{Target: t.Name, Valid: false, Checks: []CheckResult{cr}, Effects: t.Effects, Clause: "require"}
+			return &Attestation{Target: t.Name, Valid: false, Checks: []CheckResult{cr}, Effects: t.Effects, Clause: "require", Identity: t.Identity, Capability: t.Capability}
 		}
 	}
 	return nil
@@ -70,7 +70,7 @@ func attest(ctx context.Context, t *Task, dir string, env []string, bodyOK bool)
 	if len(t.Ensure) == 0 && len(t.Effects) == 0 {
 		return nil
 	}
-	a := &Attestation{Target: t.Name, Effects: t.Effects}
+	a := &Attestation{Target: t.Name, Effects: t.Effects, Identity: t.Identity, Capability: t.Capability}
 	allPass := bodyOK
 	for _, expr := range t.Ensure {
 		cr := evalCheck(ctx, dir, env, expr)
