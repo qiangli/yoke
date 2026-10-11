@@ -17,6 +17,28 @@ func SubscriptionHeadroom(ctx context.Context, binding Binding) (remaining float
 	return defaultGate.SubscriptionHeadroom(ctx, binding)
 }
 
+// MeasuredHeadroom resolves a policy binding and returns its observed remaining
+// subscription quota.  Unlike a configured limit, a true result means an
+// enabled provider source supplied an actual quota measurement.  Capability
+// routing uses this to refuse an unmeasured seat rather than inventing capacity.
+func MeasuredHeadroom(ctx context.Context, model, agent string) (remaining float64, binding Binding, known bool, err error) {
+	return defaultGate.MeasuredHeadroom(ctx, model, agent)
+}
+
+// MeasuredHeadroom is the Gate-scoped form used by embedders and tests.
+func (g *Gate) MeasuredHeadroom(ctx context.Context, model, agent string) (remaining float64, binding Binding, known bool, err error) {
+	p, err := g.policy()
+	if err != nil {
+		return 0, Binding{}, false, err
+	}
+	binding, ok := bindingFor(p, model, agent)
+	if !ok || binding.Lane != LaneSubscription {
+		return 0, binding, false, nil
+	}
+	remaining, known, err = g.SubscriptionHeadroom(ctx, binding)
+	return remaining, binding, known, err
+}
+
 // SubscriptionHeadroom is the Gate-scoped form used by tests and embedders.
 func (g *Gate) SubscriptionHeadroom(ctx context.Context, binding Binding) (remaining float64, known bool, err error) {
 	report, err := g.CollectReport(ctx, ReportOptions{Roster: []Binding{binding}})

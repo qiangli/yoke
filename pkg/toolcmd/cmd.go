@@ -157,24 +157,64 @@ func shellQuote(argv []string) string {
 
 func newRunCmd() *cobra.Command {
 	var (
-		asJSON, dryRun, async bool
-		dir, model, agent     string
-		timeout               time.Duration
+		asJSON, dryRun, async                     bool
+		dir, model, agent, capabilityName, caller string
+		timeout                                   time.Duration
 	)
 	c := &cobra.Command{
-		Use:   "run TOOL:NAME [-- ARGS...]",
+		Use:   "run [TOOL:NAME] [--capability CAPABILITY] [-- ARGS...]",
 		Short: "Run one tool command (sync, --dry-run, or --async)",
 		Example: `  bashy tool cmd run codex:review --dry-run -- --uncommitted
   bashy tool cmd run claude:deep-research --async -- "why do tides lag the moon"`,
-		Args: cobra.MinimumNArgs(1),
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ref, rest := args[0], args[1:]
-			opts := Options{Dir: dir, Timeout: timeout, Model: model, Agent: agent, DryRun: dryRun}
+			var ref string
+			var rest []string
+			if capabilityName == "" {
+				if len(args) == 0 {
+					return fmt.Errorf("toolcmd: give TOOL:NAME or --capability")
+				}
+				ref, rest = args[0], args[1:]
+			} else {
+				if len(args) > 0 && strings.Contains(args[0], ":") {
+					return fmt.Errorf("toolcmd: give TOOL:NAME or --capability, not both")
+				}
+				rest = args
+			}
+			opts := Options{Dir: dir, Timeout: timeout, Model: model, Agent: agent, Caller: caller, DryRun: dryRun}
 			if len(rest) > 0 {
 				opts.Argv = rest
 			}
 			text := strings.Join(rest, " ")
 			out := cmd.OutOrStdout()
+			if async && capabilityName != "" {
+				return fmt.Errorf("toolcmd: --capability does not support --async; the synchronous typed outcome records the selected vendor")
+			}
+			var selection *Selection
+			var tool fleet.Tool
+			var tc fleet.ToolCommand
+			var err error
+			if capabilityName != "" {
+				var selectedModel string
+				var chosen Selection
+				tool, tc, selectedModel, chosen, err = SelectMeasuredCommand(cmd.Context(), capabilityName, caller, nil)
+				if err != nil {
+					return err
+				}
+				if model != "" || agent != "" {
+					return fmt.Errorf("toolcmd: --capability selects its own measured binding; do not pass --model or --agent")
+				}
+				opts.Model, opts.Agent = selectedModel, chosen.Binding
+				selection = &chosen
+				if err := recordSelection(chosen); err != nil {
+					return fmt.Errorf("toolcmd: publish capability selection: %w", err)
+				}
+			} else {
+				tool, tc, err = lookupCommand(ref)
+				if err != nil {
+					return err
+				}
+			}
 			if async && !dryRun {
 				j, err := StartJob(ref, text, opts)
 				if err != nil {
@@ -186,13 +226,10 @@ func newRunCmd() *cobra.Command {
 				fmt.Fprintln(out, j.ID)
 				return nil
 			}
-			tool, tc, err := lookupCommand(ref)
-			if err != nil {
-				return err
-			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			res, runErr := runCommand(ctx, tool, tc, text, opts)
+			res.Selection = selection
 			if asJSON {
 				if err := writeJSON(out, res); err != nil {
 					return err
@@ -227,6 +264,8 @@ func newRunCmd() *cobra.Command {
 	f.StringVar(&dir, "dir", "", "working directory (default: a fresh temp dir)")
 	f.StringVar(&model, "model", "", "model to bind (TOOL:MODEL)")
 	f.StringVar(&agent, "agent", "", "agent nick to resolve the launch from (default: the tool)")
+	f.StringVar(&capabilityName, "capability", "", "route through a measured non-caller provider for this capability")
+	f.StringVar(&caller, "caller", "", "requesting vendor, excluded from --capability selection (default: BASHY_AGENT)")
 	f.DurationVar(&timeout, "timeout", 0, "override the command's timeout")
 	return c
 }

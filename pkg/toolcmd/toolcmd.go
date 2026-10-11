@@ -48,6 +48,9 @@ type Options struct {
 	Model string
 	// Agent overrides the agent nick used to resolve the launch (default: the tool name).
 	Agent string
+	// Caller identifies the requesting vendor for capability routing. It is
+	// used only to ensure a capability delegation cannot select its caller.
+	Caller string
 	// Stdout, when set, receives the tool's stdout as it is written (tee).
 	Stdout io.Writer
 	// Stderr, when set, receives diagnostics.
@@ -68,17 +71,20 @@ type Result struct {
 	// Capability is the declared cross-tool capability, rather than a
 	// vendor-specific slash spelling. It lets a saved result be handed to a
 	// different vendor without asking the receiver to reinterpret it.
-	Capability string   `json:"capability,omitempty"`
-	Mode       string   `json:"mode"`
-	Slash      string   `json:"slash,omitempty"`   // the rendered slash line
-	Argv       []string `json:"argv,omitempty"`    // print: the rendered argv (dry-run and real)
-	Steps      []string `json:"steps,omitempty"`   // tui: the rendered frames (dry-run)
-	Dir        string   `json:"dir,omitempty"`     // the workdir used
-	Outcome    string   `json:"outcome"`           // success | error | unavailable | timeout | cancelled | dry-run
-	Verdict    string   `json:"verdict,omitempty"` // the tool's own terminal verdict (events_outcome): succeeded | unverified
-	Text       string   `json:"text,omitempty"`    // turn: final message; transcript: whole session text
-	Artifacts  []string `json:"artifacts,omitempty"`
-	Session    string   `json:"session,omitempty"` // tool session id when known
+	Capability string `json:"capability,omitempty"`
+	// Selection is set for --capability runs and names the measured vendor that
+	// actually received the command.
+	Selection *Selection `json:"selection,omitempty"`
+	Mode      string     `json:"mode"`
+	Slash     string     `json:"slash,omitempty"`   // the rendered slash line
+	Argv      []string   `json:"argv,omitempty"`    // print: the rendered argv (dry-run and real)
+	Steps     []string   `json:"steps,omitempty"`   // tui: the rendered frames (dry-run)
+	Dir       string     `json:"dir,omitempty"`     // the workdir used
+	Outcome   string     `json:"outcome"`           // success | error | unavailable | timeout | cancelled | dry-run
+	Verdict   string     `json:"verdict,omitempty"` // the tool's own terminal verdict (events_outcome): succeeded | unverified
+	Text      string     `json:"text,omitempty"`    // turn: final message; transcript: whole session text
+	Artifacts []string   `json:"artifacts,omitempty"`
+	Session   string     `json:"session,omitempty"` // tool session id when known
 	// Episode ties this envelope to the invoking bashy session. It is data in
 	// the envelope, not a pointer to a vendor-private transcript.
 	Episode  string `json:"episode,omitempty"`
