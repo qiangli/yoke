@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [host/page] PCTS POSIX conformance: campaign plan to 100% — Ranked plan+blockers to take the bashy/coreutils userland from 86.6% of GNU PCTS toward 100%; triggers: posix, pcts, conformance, sed, grep, pkg/bre, NO-list, find -exec, cert #279890, 100% Plan of record to drive the bashy/coreutils pure-Go userland from 86.6% of GNU's PCTS pass count (2551/  (kb:posix-100-conformance-campaign-plan)
+- [host/page] SOTA — What is the state of the art in SELF-INSPECTION and INTROSPECTION for agentic coding tools and LLM agent harnesses? Cover: (1) how an agent enumerates and manages its own background/concurrent work (tasks, shells, subagents); (2) runtime introspection of its own tool surface and capabilities (tool disco  (kb:sota-what-is-the-state-of-the-art-in-self-inspection-and-introspe)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 
