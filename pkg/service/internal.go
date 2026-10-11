@@ -128,7 +128,14 @@ func (p *Internal) Activate(ctx context.Context, unit fleet.Service, rt Runtime)
 		return err
 	}
 	p.mu.Lock()
-	if _, ok := p.units[unit.Name]; !ok {
+	if existing, ok := p.units[unit.Name]; ok {
+		if existing.status.State != Inactive && existing.capID != unit.Capability {
+			p.mu.Unlock()
+			return ErrRestartRequired
+		}
+		existing.capID = unit.Capability
+		existing.status.Enabled = unit.Enabled
+	} else {
 		p.units[unit.Name] = &internalUnit{capID: unit.Capability,
 			status: Status{Unit: unit.Name, Provider: p.Name(), Enabled: unit.Enabled, State: Inactive}}
 	}
@@ -142,8 +149,16 @@ func (p *Internal) Activate(ctx context.Context, unit fleet.Service, rt Runtime)
 	return nil
 }
 
-// Configure implements Provider: a capability is always reconfigured live.
+// Configure implements Provider. Changing the implementation or owner needs a
+// stop/start cycle so the old capability is deactivated before the new one runs.
 func (p *Internal) Configure(ctx context.Context, unit fleet.Service, rt Runtime) error {
+	p.mu.Lock()
+	old, exists := p.units[unit.Name]
+	changed := exists && (old.capID != unit.Capability || unit.Owner != p.self)
+	p.mu.Unlock()
+	if changed {
+		return ErrRestartRequired
+	}
 	c, err := p.capability(unit)
 	if err != nil {
 		return err
@@ -155,11 +170,16 @@ func (p *Internal) Configure(ctx context.Context, unit fleet.Service, rt Runtime
 func (p *Internal) Deactivate(ctx context.Context, unit string) error {
 	p.mu.Lock()
 	u, ok := p.units[unit]
+	state := Inactive
+	capID := ""
+	if ok {
+		state, capID = u.status.State, u.capID
+	}
 	p.mu.Unlock()
-	if !ok || u.status.State == Inactive {
+	if !ok || state == Inactive {
 		return nil
 	}
-	c, _ := p.reg.get(u.capID)
+	c, _ := p.reg.get(capID)
 	p.transition(unit, Stopping, "", Runtime{})
 	if c != nil {
 		if err := c.Deactivate(ctx); err != nil {
@@ -175,13 +195,17 @@ func (p *Internal) Deactivate(ctx context.Context, unit string) error {
 func (p *Internal) Health(ctx context.Context, unit string) error {
 	p.mu.Lock()
 	u, ok := p.units[unit]
+	capID := ""
+	if ok {
+		capID = u.capID
+	}
 	p.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("service: %s is not active here", unit)
 	}
-	c, ok := p.reg.get(u.capID)
+	c, ok := p.reg.get(capID)
 	if !ok {
-		return fmt.Errorf("service: %s: capability %q gone", unit, u.capID)
+		return fmt.Errorf("service: %s: capability %q gone", unit, capID)
 	}
 	return c.Health(ctx)
 }

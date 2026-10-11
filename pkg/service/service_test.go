@@ -103,3 +103,44 @@ func TestInternalProviderRefusesForeignOwnerAndReportsFailure(t *testing.T) {
 		t.Fatalf("status = %+v", st)
 	}
 }
+
+func TestInternalProviderSwitchesCapabilityAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	reg := NewRegistry()
+	oldCap, newCap := &fakeCap{}, &fakeCap{}
+	if err := reg.Register("meet.old", oldCap); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register("meet.new", newCap); err != nil {
+		t.Fatal(err)
+	}
+	p := NewInternal("meet", reg)
+	oldUnit := eventsUnit()
+	oldUnit.Capability = "meet.old"
+	if err := p.Activate(ctx, oldUnit, Runtime{}); err != nil {
+		t.Fatal(err)
+	}
+	newUnit := oldUnit
+	newUnit.Capability = "meet.new"
+	if err := p.Configure(ctx, newUnit, Runtime{}); !errors.Is(err, ErrRestartRequired) {
+		t.Fatalf("capability change: got %v, want restart", err)
+	}
+	if !oldCap.active || newCap.active {
+		t.Fatal("configure changed the live capability")
+	}
+	if err := p.Deactivate(ctx, oldUnit.Name); err != nil || oldCap.active {
+		t.Fatalf("old capability was not stopped: %v", err)
+	}
+	if err := p.Activate(ctx, newUnit, Runtime{}); err != nil {
+		t.Fatal(err)
+	}
+	if !newCap.active || oldCap.active {
+		t.Fatal("restart did not bind the new capability")
+	}
+	if err := p.Health(ctx, newUnit.Name); err != nil {
+		t.Fatalf("health did not use new capability: %v", err)
+	}
+	if err := p.Deactivate(ctx, newUnit.Name); err != nil || newCap.active {
+		t.Fatalf("new capability was not stopped: %v", err)
+	}
+}
