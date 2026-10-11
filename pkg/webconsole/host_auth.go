@@ -93,30 +93,18 @@ func outpostConfigPath() (string, bool) {
 
 // outpostTrust is the slice of outpost's FileConfig the bridge may rely on.
 type outpostTrust struct {
-	token      string
-	adminAddr  string // raw admin_addr from the file
-	owners     map[string]bool
-	ssoSecrets [][]byte // secrets for the console's app, from apps[] and bashy_services[]
+	token     string
+	adminAddr string // raw admin_addr from the file
+	owners    map[string]bool
+	ssoSecret []byte // outpost's per-route service_sso key
 }
 
 type trustFile struct {
-	Token       string   `json:"mcp_bearer_token"`
-	AdminAddr   string   `json:"admin_addr"`
-	OAuth2Email string   `json:"oauth2_email"`
-	AdminUsers  []string `json:"admin_users"`
-	Apps        []struct {
-		Name               string `json:"name"`
-		Enabled            *bool  `json:"enabled"`
-		TrustCloudIdentity bool   `json:"trust_cloud_identity"`
-		SSOSecret          string `json:"sso_secret"`
-	} `json:"apps"`
-	BashyServices []struct {
-		Name               string `json:"name"`
-		AppName            string `json:"app_name"`
-		Enabled            *bool  `json:"enabled"`
-		TrustCloudIdentity bool   `json:"trust_cloud_identity"`
-		SSOSecret          string `json:"sso_secret"`
-	} `json:"bashy_services"`
+	Token       string            `json:"mcp_bearer_token"`
+	AdminAddr   string            `json:"admin_addr"`
+	OAuth2Email string            `json:"oauth2_email"`
+	AdminUsers  []string          `json:"admin_users"`
+	ServiceSSO  map[string]string `json:"service_sso"`
 }
 
 // loadOutpostTrust re-reads the config on every call (it is a few KB), so a
@@ -154,24 +142,8 @@ func loadOutpostTrust(cloudApp string) (outpostTrust, bool) {
 	} else {
 		t.owners = coopauth.AdminSet(f.OAuth2Email)
 	}
-	addSecret := func(s string) {
-		if s = strings.TrimSpace(s); s != "" {
-			t.ssoSecrets = append(t.ssoSecrets, []byte(s))
-		}
-	}
-	for _, a := range f.Apps {
-		if a.Name == cloudApp && a.TrustCloudIdentity && (a.Enabled == nil || *a.Enabled) {
-			addSecret(a.SSOSecret)
-		}
-	}
-	for _, s := range f.BashyServices {
-		name := s.AppName
-		if name == "" {
-			name = s.Name
-		}
-		if name == cloudApp && s.TrustCloudIdentity && (s.Enabled == nil || *s.Enabled) {
-			addSecret(s.SSOSecret)
-		}
+	if secret := strings.TrimSpace(f.ServiceSSO[cloudApp]); secret != "" {
+		t.ssoSecret = []byte(secret)
 	}
 	return t, true
 }
@@ -261,17 +233,10 @@ func cloudOwnerVerified(r *http.Request, cloudApp string) bool {
 		return false
 	}
 	t, ok := loadOutpostTrust(cloudApp)
-	if !ok || len(t.owners) == 0 || len(t.ssoSecrets) == 0 {
+	if !ok || len(t.owners) == 0 || len(t.ssoSecret) == 0 {
 		return false
 	}
-	verified := false
-	for _, s := range t.ssoSecrets {
-		if coopauth.VerifyOutpost(r, s) {
-			verified = true
-			break
-		}
-	}
-	if !verified {
+	if !coopauth.VerifyOutpost(r, t.ssoSecret) {
 		return false
 	}
 	signed := r.Header.Get(coopauth.HdrRemoteUser)
