@@ -168,8 +168,8 @@ func newRunCmd() *cobra.Command {
   bashy tool cmd run claude:deep-research --async -- "why do tides lag the moon"`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := checkPeerDispatch(peer); err != nil {
-				return err
+			if strings.TrimSpace(peer) != "" {
+				return runPeer(cmd, args, peer, capabilityName, caller, model, agent, async, dryRun, asJSON, timeout)
 			}
 			var ref string
 			var rest []string
@@ -269,10 +269,47 @@ func newRunCmd() *cobra.Command {
 	f.StringVar(&model, "model", "", "model to bind (TOOL:MODEL)")
 	f.StringVar(&agent, "agent", "", "agent nick to resolve the launch from (default: the tool)")
 	f.StringVar(&capabilityName, "capability", "", "route through a measured non-caller provider for this capability")
-	f.StringVar(&peer, "peer", "", "sphere peer to dispatch to (fails closed until peer door admission exists)")
+	f.StringVar(&peer, "peer", "", "sphere peer whose door runs --capability (a name in the 0600 toolcmd peers file)")
 	f.StringVar(&caller, "caller", "", "requesting vendor, excluded from --capability selection (default: BASHY_AGENT)")
 	f.DurationVar(&timeout, "timeout", 0, "override the command's timeout")
 	return c
+}
+
+// runPeer is `run --capability X --peer NAME`: the peer's door selects and
+// runs; this host records the selection and prints the peer's report.
+func runPeer(cmd *cobra.Command, args []string, peer, capabilityName, caller, model, agent string, async, dryRun, asJSON bool, timeout time.Duration) error {
+	switch {
+	case capabilityName == "":
+		return fmt.Errorf("toolcmd: --peer dispatches a --capability request; name a capability")
+	case len(args) > 0 && strings.Contains(args[0], ":"):
+		return fmt.Errorf("toolcmd: give TOOL:NAME or --capability, not both")
+	case model != "" || agent != "":
+		return fmt.Errorf("toolcmd: --capability selects its own measured binding; do not pass --model or --agent")
+	case async:
+		return fmt.Errorf("toolcmd: --peer does not support --async")
+	case dryRun:
+		return fmt.Errorf("toolcmd: --peer has no dry run; the peer door makes the selection")
+	}
+	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	res, err := DispatchPeerCapability(ctx, peer, capabilityName, caller, strings.Join(args, " "), timeout)
+	out := cmd.OutOrStdout()
+	if asJSON && res.Selection != nil {
+		if werr := writeJSON(out, res); werr != nil {
+			return werr
+		}
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	if res.Text != "" {
+		fmt.Fprintln(out, res.Text)
+	}
+	for _, a := range res.Artifacts {
+		fmt.Fprintln(out, a)
+	}
+	return nil
 }
 
 func printJob(w io.Writer, j Job, asJSON bool) error {

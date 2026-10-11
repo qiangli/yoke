@@ -116,3 +116,14 @@ func OllamaHost() (string, error) {
 	}
 	return u, nil
 }
+
+// PeersPath holds the owner's per-peer door credentials, hashed, beside the
+// owner token. A peer credential is not the owner token: it authenticates as
+// principal "peer:<name>" and is admitted only under an explicit share policy.
+func PeersPath() (string, error) {
+	h, err := home()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(h, "cligw", "peers.json"), nil
+}

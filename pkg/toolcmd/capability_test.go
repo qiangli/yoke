@@ -3,7 +3,6 @@ package toolcmd
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -99,8 +98,25 @@ func TestSelectMeasuredCommandDoesNotSeedMissingMatrix(t *testing.T) {
 	}
 }
 
-func TestRunPeerCapabilityFailsClosedBeforeSelectionOrNetwork(t *testing.T) {
+func writePeers(t *testing.T, mode os.FileMode, peers map[string]PeerDoor) {
+	t.Helper()
+	dir := filepath.Join(os.Getenv("BASHY_HOME"), "toolcmd")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(map[string]any{"peers": peers})
+	path := filepath.Join(dir, "peers.json")
+	if err := os.WriteFile(path, data, mode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, mode); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunPeerCapabilityFailsClosedBeforeNetwork(t *testing.T) {
 	t.Setenv("BASHY_CAPABILITY_DIR", t.TempDir())
+	t.Setenv("BASHY_HOME", t.TempDir())
 	var hits atomic.Int32
 	peer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits.Add(1) }))
 	defer peer.Close()
@@ -109,39 +125,139 @@ func TestRunPeerCapabilityFailsClosedBeforeSelectionOrNetwork(t *testing.T) {
 	publishSelection = func(room.Event) error { events++; return nil }
 	t.Cleanup(func() { publishSelection = oldPublish })
 
+	const secret = "bpeer_secret_credential"
 	peerURL := strings.Replace(peer.URL, "http://", "http://owner-secret-token@", 1)
-	for _, args := range [][]string{
-		{"--capability", "deep-research", "--peer", peerURL, "--", "question"},
-		{"vendor-b:research", "--peer", "dragon", "--", "question"},
-	} {
+	run := func(args ...string) error {
 		c := newRunCmd()
 		c.SetArgs(args)
 		c.SetOut(io.Discard)
 		c.SetErr(io.Discard)
-		err := c.Execute()
-		if !errors.Is(err, ErrPeerDispatchUnavailable) {
-			t.Fatalf("%v: err = %v, want ErrPeerDispatchUnavailable", args, err)
+		return c.Execute()
+	}
+	check := func(label string, err error, want string) {
+		t.Helper()
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("%s: err = %v, want %q", label, err, want)
 		}
-		if strings.Contains(err.Error(), "owner-secret-token") || strings.Contains(err.Error(), peer.URL[len("http://"):]) {
-			t.Fatalf("refusal echoes the peer address: %v", err)
-		}
-		for _, want := range []string{"7a5f32dbaafa", "53fde6fa2d0d"} {
-			if !strings.Contains(err.Error(), want) {
-				t.Fatalf("refusal %q does not name prerequisite %s", err, want)
+		for _, leak := range []string{"owner-secret-token", secret, peer.URL[len("http://"):]} {
+			if strings.Contains(err.Error(), leak) {
+				t.Fatalf("%s: refusal echoes %q: %v", label, leak, err)
 			}
 		}
 	}
+	check("address as peer", run("--capability", "deep-research", "--peer", peerURL, "--", "q"), "not an address")
+	check("no peers file", run("--capability", "deep-research", "--peer", "dragon", "--", "q"), "no peers file")
+	check("ref instead of capability", run("vendor-b:research", "--peer", "dragon", "--", "q"), "name a capability")
+
+	writePeers(t, 0o644, map[string]PeerDoor{"dragon": {URL: peer.URL, Credential: secret}})
+	check("group-readable peers file", run("--capability", "deep-research", "--peer", "dragon", "--", "q"), "must be 0600")
+
+	writePeers(t, 0o600, map[string]PeerDoor{"dragon": {URL: peerURL, Credential: secret}, "bare": {URL: peer.URL}})
+	check("unknown peer", run("--capability", "deep-research", "--peer", "other", "--", "q"), "unknown peer")
+	check("credential in url", run("--capability", "deep-research", "--peer", "dragon", "--", "q"), "never the url")
+	check("no credential", run("--capability", "deep-research", "--peer", "bare", "--", "q"), "no credential")
+	check("unknown capability", run("--capability", "nope", "--peer", "bare", "--", "q"), "unknown capability")
+	check("async", run("--capability", "deep-research", "--peer", "bare", "--async", "--", "q"), "--async")
+
 	if hits.Load() != 0 || events != 0 {
-		t.Fatalf("peer refusal reached the wire (%d requests) or published %d selection events", hits.Load(), events)
+		t.Fatalf("refusals reached the wire (%d requests) or published %d selection events", hits.Load(), events)
 	}
 
 	// The local path is unchanged: an empty peer proceeds to measured
 	// selection, which still refuses an unmeasured host without seeding.
-	c := newRunCmd()
-	c.SetArgs([]string{"--capability", "deep-research", "--peer", " ", "--", "question"})
-	c.SetOut(io.Discard)
-	c.SetErr(io.Discard)
-	if err := c.Execute(); err == nil || errors.Is(err, ErrPeerDispatchUnavailable) || !strings.Contains(err.Error(), "no measured provider matrix") {
+	if err := run("--capability", "deep-research", "--peer", " ", "--", "question"); err == nil || !strings.Contains(err.Error(), "no measured provider matrix") {
 		t.Fatalf("local selection err = %v", err)
+	}
+}
+
+// fakePeerDoor answers like a peer door: denied for a wrong credential, else
+// the slash reply with the peer-side selection.
+func fakePeerDoor(t *testing.T, cred string, sel *Selection, tool string) (*httptest.Server, *atomic.Int32) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if r.Header.Get("Authorization") != "Bearer "+cred {
+			w.WriteHeader(http.StatusForbidden)
+			io.WriteString(w, `{"error":{"message":"peer credential is valid but this door does not share with that peer (share: deny)"}}`)
+			return
+		}
+		if r.URL.Path != "/v1/chat/completions" || r.Header.Get(CapabilityHeader) != "deep-research" || r.Header.Get(CallerHeader) != "codex" {
+			t.Errorf("door got %s cap=%q caller=%q", r.URL.Path, r.Header.Get(CapabilityHeader), r.Header.Get(CallerHeader))
+		}
+		var body struct {
+			Model    string
+			Messages []struct{ Role, Content string }
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Model != "auto" || len(body.Messages) != 1 || body.Messages[0].Content != "why ULA" {
+			t.Errorf("door body %+v", body)
+		}
+		res := Result{Tool: tool, Command: "deep-research", Outcome: OutcomeSuccess, Text: "peer report [RFC 4193]", Selection: sel}
+		json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": res.Text}}}, "x_bashy_tool_command": res})
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &hits
+}
+
+func TestRunPeerCapabilityRoundTripRecordsPeerSelection(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	var got []room.Event
+	oldPublish := publishSelection
+	publishSelection = func(e room.Event) error { got = append(got, e); return nil }
+	t.Cleanup(func() { publishSelection = oldPublish })
+
+	sel := &Selection{Capability: "deep-research", Vendor: "claude", Binding: "claude:opus5.5", Command: "deep-research", RemainingQuota: .5, MeasuredSamples: 1}
+	door, _ := fakePeerDoor(t, "bpeer_ok", sel, "claude")
+	writePeers(t, 0o600, map[string]PeerDoor{"dragon": {URL: door.URL, Credential: "bpeer_ok"}, "stale": {URL: door.URL, Credential: "bpeer_revoked"}})
+
+	var out strings.Builder
+	c := newRunCmd()
+	c.SetArgs([]string{"--capability", "deep-research", "--peer", "dragon", "--caller", "codex", "--json", "--", "why", "ULA"})
+	c.SetOut(&out)
+	c.SetErr(io.Discard)
+	if err := c.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var res Result
+	if err := json.Unmarshal([]byte(out.String()), &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.Text != "peer report [RFC 4193]" || res.Selection == nil || res.Selection.Peer != "dragon" || res.Selection.Vendor != "claude" {
+		t.Fatalf("result %+v", res)
+	}
+	if len(got) != 1 || got[0].Topic != "capability-selection" || !strings.Contains(got[0].Body, "peer=dragon") || !strings.Contains(got[0].Body, "binding=claude:opus5.5") || got[0].Actor != "claude" {
+		t.Fatalf("selection events %+v", got)
+	}
+
+	// A denied/revoked credential is the door's refusal, with no event and no echo.
+	_, err := DispatchPeerCapability(t.Context(), "stale", "deep-research", "codex", "why ULA", 0)
+	if err == nil || !strings.Contains(err.Error(), "HTTP 403") || strings.Contains(err.Error(), "bpeer_revoked") || len(got) != 1 {
+		t.Fatalf("denied dispatch err = %v events=%d", err, len(got))
+	}
+}
+
+func TestPeerReplyMustBeAttributedToAnotherVendor(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	var events int
+	oldPublish := publishSelection
+	publishSelection = func(room.Event) error { events++; return nil }
+	t.Cleanup(func() { publishSelection = oldPublish })
+	for label, tc := range map[string]struct {
+		sel  *Selection
+		tool string
+		want string
+	}{
+		"unattributed":  {nil, "claude", "no measured selection"},
+		"caller vendor": {&Selection{Capability: "deep-research", Vendor: "codex", Binding: "codex:gpt", Command: "x"}, "codex", "caller's own vendor"},
+		"mismatch":      {&Selection{Capability: "deep-research", Vendor: "claude", Binding: "claude:opus", Command: "x"}, "gemini", "served the command"},
+	} {
+		door, _ := fakePeerDoor(t, "bpeer_ok", tc.sel, tc.tool)
+		writePeers(t, 0o600, map[string]PeerDoor{"dragon": {URL: door.URL, Credential: "bpeer_ok"}})
+		if _, err := DispatchPeerCapability(t.Context(), "dragon", "deep-research", "codex", "why ULA", 0); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%s: err = %v", label, err)
+		}
+	}
+	if events != 0 {
+		t.Fatalf("unaccepted replies published %d events", events)
 	}
 }

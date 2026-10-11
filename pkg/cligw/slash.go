@@ -336,7 +336,7 @@ type slashRun struct {
 // serveSlash runs the routed agent's tool command and answers the request.
 // It is bounded by the COMMAND's timeout, not the server's request timeout:
 // a deep-research run legitimately outlives a completion.
-func (s *Server) serveSlash(w http.ResponseWriter, r *http.Request, body []byte, model string, decision Decision, name string) {
+func (s *Server) serveSlash(w http.ResponseWriter, r *http.Request, body []byte, model string, decision Decision, name string, capSel *toolcmd.Selection) {
 	anth := isAnthropicPath(r.URL.Path)
 	fail := func(f slashFailure) { writeSlashError(w, anth, f) }
 
@@ -435,6 +435,9 @@ func (s *Server) serveSlash(w http.ResponseWriter, r *http.Request, body []byte,
 	}
 
 	res := run.res
+	if capSel != nil {
+		res.Selection = capSel
+	}
 	comp := slashCompletionOf(jobID, model, res)
 	if !req.Stream {
 		if anth {

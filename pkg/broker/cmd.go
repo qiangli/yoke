@@ -208,7 +208,11 @@ func RunDoor(ctx context.Context, o DoorOptions) error {
 		return err
 	}
 
-	opts := Options{Token: token, StateDir: stateDir}
+	peersFile, err := door.PeersPath()
+	if err != nil {
+		return err
+	}
+	opts := Options{Token: token, StateDir: stateDir, PeersFile: peersFile}
 	var cli *cligw.Server
 	if !o.NoCLI {
 		cliOpts, err := cliServerOptions(token, o)
@@ -313,13 +317,15 @@ launch fingerprint, options) for N requests, so benchmark arms compare
 harnesses, not routing luck: see ` + "`llm sticky --help`" + `.
 
 Clients authenticate with the owner token (bearer, or the /k/<token> URL form
-for clients that only take a base URL) or the owner-only unix socket.`
+for clients that only take a base URL) or the owner-only unix socket. A sphere
+peer gets its own credential (` + "`llm peer add NAME`" + `), admitted only while
+its share policy is allow.`
 	for _, c := range cmd.Commands() {
 		if c.Name() == "serve" || c.Name() == "env" {
 			cmd.RemoveCommand(c)
 		}
 	}
-	cmd.AddCommand(newServeCmd(), newUpCmd(), newDownCmd(), newEnvCmd(), newStickyCmd())
+	cmd.AddCommand(newServeCmd(), newUpCmd(), newDownCmd(), newEnvCmd(), newStickyCmd(), newPeerCmd())
 	return cmd
 }
 

@@ -95,6 +95,9 @@ type Options struct {
 	Token string
 	// Principal names the owner (default "owner").
 	Principal string
+	// PeersFile holds hashed per-peer credentials and their share policy
+	// ("" = no peer is ever admitted). See peershare.go.
+	PeersFile string
 	// QueueLimit bounds the local run queue (0 = DefaultQueueLimit).
 	QueueLimit int
 	// MemoryBytes is the host's physical memory for admission (0 = unknown,
@@ -258,10 +261,17 @@ func (b *Broker) authorize(r *http.Request, pathToken string) (string, error) {
 	if presented == "" {
 		return "", errors.New("missing token: use the owner-only socket, a bearer token, or the /k/<token> URL form (see `bashy llm env`)")
 	}
-	if subtle.ConstantTimeCompare([]byte(presented), []byte(b.opts.Token)) != 1 {
+	if subtle.ConstantTimeCompare([]byte(presented), []byte(b.opts.Token)) == 1 {
+		return b.opts.Principal, nil
+	}
+	peer, err := b.authorizePeer(presented)
+	if err != nil {
+		return peer, err
+	}
+	if peer == "" {
 		return "", errors.New("invalid token (see `bashy llm env`)")
 	}
-	return b.opts.Principal, nil
+	return peer, nil
 }
 
 // ---- HTTP surface ----------------------------------------------------------
@@ -284,11 +294,20 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}()
 	principal, err := b.authorize(r, params["k"])
 	if err != nil {
-		writeErr(w, rest, http.StatusUnauthorized, err.Error())
+		status := http.StatusUnauthorized
+		if errors.Is(err, errPeerNotShared) {
+			status = http.StatusForbidden
+			ri.rec.Principal = principal
+		}
+		writeErr(w, rest, status, err.Error())
 		return
 	}
 	ri.principal = principal
 	ri.rec.Principal = principal
+	if strings.HasPrefix(principal, PeerPrincipalPrefix) && !peerRouteAllowed(r.Method, rest) {
+		writeErr(w, rest, http.StatusForbidden, fmt.Sprintf("%s may reach only inference routes on this door, not %s %s", principal, r.Method, rest))
+		return
+	}
 	ri.session = params["s"]
 	if ri.session == "" {
 		ri.session = strings.TrimSpace(r.Header.Get(SessionHeader))
@@ -391,6 +410,11 @@ func (b *Broker) dispatch(w http.ResponseWriter, r *http.Request, ri *reqInfo, b
 	// a completion from a frozen identity. Refuse it on a sticky binding so a
 	// benchmark identity only ever serves completions (Sprint #324 S5).
 	slash := slashOf(r.Header.Get(cligw.FilterHeader))
+	if slash == "" {
+		// A capability request is a slash request whose command the door
+		// picks from its own measurements (cligw.CapabilityHeader).
+		slash = strings.TrimSpace(r.Header.Get(cligw.CapabilityHeader))
+	}
 	if slash != "" && (ri.params["sticky"] != "" || strings.TrimSpace(r.Header.Get(StickyHeader)) != "") {
 		writeErr(w, r.URL.Path, http.StatusBadRequest, fmt.Sprintf(
 			"sticky: slash=%s runs a tool command and is not served from a sticky binding (identities serve completions only); send it without %s or /sticky/<key>",

@@ -615,6 +615,12 @@ func (s *Server) route(next http.Handler) http.Handler {
 			writeJSON(w, http.StatusBadRequest, errorEnvelope(err.Error()))
 			return
 		}
+		anthropicSurface := isAnthropicPath(r.URL.Path)
+		capSel, failed := s.capabilitySelection(r, &filter, &model)
+		if failed != nil {
+			writeSlashError(w, anthropicSurface, *failed)
+			return
+		}
 		sel, err := s.catalog.ParseModelSelector(model)
 		if err != nil {
 			var unknown *UnknownSelectorError
@@ -625,7 +631,6 @@ func (s *Server) route(next http.Handler) http.Handler {
 			writeJSON(w, status, errorEnvelope(err.Error()))
 			return
 		}
-		anthropicSurface := isAnthropicPath(r.URL.Path)
 		if filter.Slash != "" {
 			if err := s.catalog.CheckSlash(filter.Slash); err != nil {
 				writeSlashError(w, anthropicSurface, slashFailure{Status: http.StatusBadRequest,
@@ -684,7 +689,7 @@ func (s *Server) route(next http.Handler) http.Handler {
 			// A slash request runs the agent's vendor command; it takes no
 			// completion worker, so no pool is created or consulted.
 			w.Header().Set(RoutedHeader, decision.HeaderValue())
-			s.serveSlash(w, r, body, model, decision, filter.Slash)
+			s.serveSlash(w, r, body, model, decision, filter.Slash, capSel)
 			return
 		}
 		if _, err := s.Backend(decision.Agent); err != nil {
