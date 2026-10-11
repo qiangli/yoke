@@ -608,6 +608,19 @@ func showAgentSummary(cmd *cobra.Command, cat *Catalog, a Agent) error {
 	if len(a.Aliases) > 0 {
 		fmt.Fprintf(out, "aliases: %s\n", strings.Join(a.Aliases, " "))
 	}
+	if a.Workdir != "" {
+		fmt.Fprintf(out, "workdir: %s\n", a.Workdir)
+	}
+	fmt.Fprintf(out, "permission: %s\n", a.Permission)
+	if a.Notify {
+		fmt.Fprintln(out, "notify: true")
+	}
+	if a.Avatar != "" {
+		fmt.Fprintf(out, "avatar: %s\n", a.Avatar)
+	}
+	for _, b := range a.Bindings {
+		fmt.Fprintf(out, "binding: channel=%s sender=%s → %s\n", dashIfEmpty(b.Channel), dashIfEmpty(b.Sender), b.Agent)
+	}
 	ladder, err := cat.Ladder()
 	if err != nil {
 		return err

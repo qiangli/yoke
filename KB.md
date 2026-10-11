@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [host/page] SOTA — What is the state of the art in SELF-INSPECTION and INTROSPECTION for agentic coding tools and LLM agent harnesses? Cover: (1) how an agent enumerates and manages its own background/concurrent work (tasks, shells, subagents); (2) runtime introspection of its own tool surface and capabilities (tool disco  (kb:sota-what-is-the-state-of-the-art-in-self-inspection-and-introspe)
+- [repo/page] Agy model-door text lives in step updates — For cligw stdin-stream-json workers, extract only agent_response step_update.text_delta and use result.response only when no deltas arrived. Select a fresh Agy project explicitly; cwd alone can reuse remembered context. Keep raw provider stderr out of HTTP headers. See docs/validation/cligw  (kb:agy-model-door-text-lives-in-step-updates)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 
