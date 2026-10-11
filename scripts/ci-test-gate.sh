@@ -59,8 +59,11 @@ events=$(mktemp)
 trap 'rm -f "$events" "$events".*' EXIT
 # -json so a test name is attributed to its package even when packages run in
 # parallel. Failure is expected here; the ratchet below decides the verdict.
+# Serial pkg/weave exceeded Go's default 10m package timeout.
+# It measured 950.18s (~16m) on Linux; -timeout 45m bounds the primary package run.
+# This 45m limit matches the verified CI scope.
 # shellcheck disable=SC2086
-go test -json $pkgs >"$events" 2>&1
+go test -json -timeout 45m $pkgs >"$events" 2>&1
 gotest_rc=$?
 
 # One line per event: extract Action/Package/Test without a jq dependency.
