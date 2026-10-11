@@ -105,8 +105,10 @@ mkdir -p docs/validation/s8
 
 # Vendor 1 plans. The exact typed envelope is both the raw evidence and the
 # artifact piped into the existing todo/KB/handoff inputs.
-bashy tool cmd run claude:plan --json -- "$S8_PLAN_PROMPT" | tee docs/validation/s8/two-vendor-plan.json | bashy todo edit "$S8_TODO_UUID" --note -
+bashy tool cmd run claude:plan --json -- "$S8_PLAN_PROMPT" | tee docs/validation/s8/two-vendor-plan.json
 bashy kb note add --candidate --type decision --slug "$S8_KB_SLUG" --title "S8 shared plan" --file docs/validation/s8/two-vendor-plan.json
+existing_todo_body=$(bashy todo show "$S8_TODO_UUID" --json | jq -r '.body')
+printf '%s\n\nPlan artifact: kb:%s\n' "$existing_todo_body" "$S8_KB_SLUG" | bashy todo edit "$S8_TODO_UUID" --note -
 
 # Vendor 2 receives only the portable KB address, not a private Claude session.
 bashy delegate codex --json "Implement the plan in kb:$S8_KB_SLUG and record the result against todo:$S8_TODO_UUID" | tee docs/validation/s8/two-vendor-implement.json
@@ -114,7 +116,15 @@ bashy delegate codex --json "Implement the plan in kb:$S8_KB_SLUG and record the
 # Cross-host pickup: git carries shared KB/todo; MB carries durable pointers;
 # handoff carries any uncommitted diff/untracked content as a portable file.
 git add docs/kb docs/todo docs/validation/s8
-git commit -m "docs: preserve S8 shared-context recipe evidence"
+cat > /tmp/s418-s8-recipe-commit-msg <<EOF
+docs: preserve S8 shared-context recipe evidence
+
+Sprint: #418
+Story: #1870
+Story-ID: 5fc8a1fc267e
+Agent: ${BASHY_AGENT:?set BASHY_AGENT for the conductor}
+EOF
+git commit -F /tmp/s418-s8-recipe-commit-msg
 git push
 cat docs/validation/s8/two-vendor-plan.json | bashy handoff --json -m - --next "Resume kb:$S8_KB_SLUG and todo:$S8_TODO_UUID"
 bashy mb send "$S8_REMOTE_AGENT" "S8 pickup: kb:$S8_KB_SLUG todo:$S8_TODO_UUID; pull the carrier, then bashy resume --claim."
