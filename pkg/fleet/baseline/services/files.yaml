@@ -1,0 +1,14 @@
+name: files
+kind: service
+description: File Browser — the embedded file manager, published as app files (login required); read-only and download-only unless allow_write
+provider: internal
+capability: outpost.files
+owner: outpost
+settings:
+  scope: ""
+  allow_write: "false"
+restart:
+  policy: on-failure
+  backoff: {min: 5s, max: 2m, healthy_after: 2m}
+  start_limit: {burst: 5, interval: 10m}
+enabled: false

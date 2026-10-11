@@ -1,0 +1,13 @@
+name: ollama
+kind: service
+description: per-host Ollama proxy — app ollama (admin role) with the llm capability descriptor and pool capacity probe over the detected daemon
+provider: internal
+capability: outpost.ollama
+owner: outpost
+settings:
+  url: ""
+restart:
+  policy: on-failure
+  backoff: {min: 5s, max: 2m, healthy_after: 2m}
+  start_limit: {burst: 5, interval: 10m}
+enabled: false

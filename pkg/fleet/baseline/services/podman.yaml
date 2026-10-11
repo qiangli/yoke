@@ -1,0 +1,13 @@
+name: podman
+kind: service
+description: raw libpod passthrough to the detected podman socket, published as app podman (admin role, login required)
+provider: internal
+capability: outpost.podman
+owner: outpost
+settings:
+  socket: ""
+restart:
+  policy: on-failure
+  backoff: {min: 5s, max: 2m, healthy_after: 2m}
+  start_limit: {burst: 5, interval: 10m}
+enabled: false

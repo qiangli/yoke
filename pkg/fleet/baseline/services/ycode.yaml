@@ -1,0 +1,14 @@
+name: ycode
+kind: service
+description: ycode UI surfaces — apps ycode, ycode-canvas, ycode-classic over ycode's own proxy; outpost never starts ycode
+provider: internal
+capability: outpost.ycode
+owner: outpost
+settings:
+  share: ""
+  require_login: "false"
+restart:
+  policy: on-failure
+  backoff: {min: 5s, max: 2m, healthy_after: 2m}
+  start_limit: {burst: 5, interval: 10m}
+enabled: false

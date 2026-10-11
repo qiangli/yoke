@@ -1,0 +1,17 @@
+name: lan-inference
+kind: service
+description: same-LAN direct inference — an UNAUTHENTICATED LAN-trust reverse proxy to the local inference server's /v1 and /api surface
+provider: internal
+capability: outpost.lan-inference
+owner: outpost
+settings:
+  target: ""
+ports:
+  - name: http
+    port: 11436
+    bind: lan
+restart:
+  policy: on-failure
+  backoff: {min: 5s, max: 2m, healthy_after: 2m}
+  start_limit: {burst: 5, interval: 10m}
+enabled: false
