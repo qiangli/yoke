@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/qiangli/yoke/pkg/agentpty"
+	"github.com/qiangli/yoke/pkg/ask"
 	"github.com/qiangli/yoke/pkg/bus"
 	"github.com/qiangli/yoke/pkg/room"
 )
@@ -275,6 +276,21 @@ func newChatGrantCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			mode := "always-allow"
+			if once {
+				mode = "allow-once"
+			}
+			// A prompt the session raised through the approval queue (an ACP
+			// permission request) is settled on the record itself: the agent is
+			// blocked on that decision, not on a keystroke.
+			if queued, qerr := ask.PendingForSession(c.ID); qerr == nil && len(queued) > 0 {
+				if _, err := ask.Grant(c.ID, principalName(), !once, nil); err != nil {
+					return fmt.Errorf("chat: could not grant %s: %w", c.ID, err)
+				}
+				_ = room.Emit(room.Event{Type: room.EventGrant, Actor: principalName(), Target: c.ID, Body: mode})
+				fmt.Fprintf(cmd.ErrOrStderr(), "chat: granted %s (%s) — %d queued approval(s)\n", c.ID, mode, len(queued))
+				return nil
+			}
 			keys := grantKeys(c.Tool, !once)
 			if keys == "" {
 				return fmt.Errorf("chat: don't know how to grant approval for tool %q — approve at its terminal", c.Tool)
@@ -282,10 +298,8 @@ func newChatGrantCmd() *cobra.Command {
 			if err := agentpty.SendFrame(c.CtlSock, agentpty.VerbatimFrame([]byte(keys))); err != nil {
 				return fmt.Errorf("chat: could not grant %s: %w", c.ID, err)
 			}
-			mode := "always-allow"
-			if once {
-				mode = "allow-once"
-			}
+			// Leave the grant on the books: the keystroke has no record of its own.
+			_, _ = ask.Grant(c.ID, principalName(), !once, []string{"chat", "grant", c.ID, mode})
 			_ = room.Emit(room.Event{Type: room.EventGrant, Actor: principalName(), Target: c.ID, Body: mode})
 			fmt.Fprintf(cmd.ErrOrStderr(), "chat: granted %s (%s)\n", c.ID, mode)
 			return nil

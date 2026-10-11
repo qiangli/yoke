@@ -197,6 +197,9 @@ func List() ([]Request, error) {
 // gone" would therefore delete every delivered value the instant it was delivered.
 // So the pid check only applies while the request is still waiting.
 func expired(r Request, now time.Time) bool {
+	if r.IsApproval() {
+		return approvalExpired(r, now)
+	}
 	if hasValue(r.ID) {
 		return now.After(r.ValueExpires)
 	}

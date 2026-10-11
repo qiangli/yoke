@@ -45,7 +45,17 @@ type Request struct {
 
 	Sink      Sink      `json:"sink"`
 	Requester Requester `json:"requester"`
+
+	// Kind separates a value request ("", the original ask) from an approval
+	// (KindApproval). An approval shares the pending directory, the id space, the
+	// prefix lookup and the reaping — it is one queue — but carries no value: its
+	// answer is a Decision, and Approval says what is being decided.
+	Kind     string    `json:"kind,omitempty"`
+	Approval *Approval `json:"approval,omitempty"`
 }
+
+// IsApproval reports whether this record is an approval rather than a value ask.
+func (r Request) IsApproval() bool { return r.Kind == KindApproval }
 
 // Sink says where the answer goes. It is recorded on the request specifically so
 // the human can see it BEFORE they type: a request that would print the value

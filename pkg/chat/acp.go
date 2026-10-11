@@ -14,6 +14,7 @@ import (
 	"github.com/qiangli/yoke/pkg/agentctl"
 	"github.com/qiangli/yoke/pkg/agentlaunch"
 	"github.com/qiangli/yoke/pkg/bus"
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/llmbudget"
 	"github.com/qiangli/yoke/pkg/room"
 )
@@ -174,7 +175,14 @@ func startACPSession(ctx context.Context, agent string, opt SessionOptions) (*Se
 		return nil, true, budgetErr
 	}
 	s.budgetWorks = append(s.budgetWorks, budgetWork)
-	client, err := acp.NewClient(ctx, &acpHandler{d: drv}, cmd)
+	handler := &acpHandler{d: drv}
+	if perm := agentPermission(name, catalog); perm != "" && perm != fleet.PermissionAuto {
+		handler.approvals = &acp.ApprovalHandler{
+			Mode:    perm,
+			Session: func() string { return agentID(l) },
+		}
+	}
+	client, err := acp.NewClient(ctx, handler, cmd)
 	if err != nil {
 		if cmd.Process == nil {
 			_ = budgetWork.abort()
@@ -375,6 +383,28 @@ func (s *Session) closeACP() {
 type acpHandler struct {
 	acp.BaseHandler
 	d *acpDriver
+	// approvals answers permission requests when the agent's permission mode is
+	// not auto. Nil keeps BaseHandler's auto-allow — the default, unchanged.
+	approvals acp.Handler
+}
+
+func (h *acpHandler) RequestPermission(ctx context.Context, req acp.PermissionRequest) (acp.PermissionResponse, error) {
+	if h.approvals != nil {
+		return h.approvals.RequestPermission(ctx, req)
+	}
+	return h.BaseHandler.RequestPermission(ctx, req)
+}
+
+// agentPermission is the permission mode a named agent record declares; "" for a
+// bare tool or tool:model binding, which have no record.
+func agentPermission(name string, catalog *fleet.Catalog) string {
+	if catalog == nil {
+		catalog = newCatalog()
+	}
+	if a, ok := catalog.Agent(name); ok {
+		return strings.ToLower(strings.TrimSpace(a.Permission))
+	}
+	return ""
 }
 
 func (h *acpHandler) SessionUpdate(_ context.Context, n acp.SessionNotification) error {
