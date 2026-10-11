@@ -7,6 +7,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -183,15 +184,32 @@ func adapterTool(bin string, args ...string) fleet.Tool {
 	}
 }
 
-// fakeNPMInstall lays out a global npm install: PATH/bin -> node_modules/pkg.
+// fakeNPMInstall lays out a global npm install and returns the PATH directory.
+// POSIX: PATH/bin -> lib/node_modules/pkg via a symlink. Windows: npm drops a
+// <bin>.cmd shim into the prefix beside its node_modules directory.
 func fakeNPMInstall(t *testing.T, version string) string {
 	t.Helper()
 	root := t.TempDir()
+	manifest := []byte(`{"name":"@test/fakeacp","version":"` + version + `"}`)
+	if runtime.GOOS == "windows" {
+		pkg := filepath.Join(root, "node_modules", "@test", "fakeacp")
+		if err := os.MkdirAll(filepath.Join(pkg, "dist"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(pkg, "package.json"), manifest, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		shim := "@ECHO off\r\nnode \"%~dp0node_modules\\@test\\fakeacp\\dist\\index.js\" %*\r\n"
+		if err := os.WriteFile(filepath.Join(root, "fakeacp-adapter.cmd"), []byte(shim), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return root
+	}
 	pkg := filepath.Join(root, "lib", "node_modules", "@test", "fakeacp")
 	if err := os.MkdirAll(filepath.Join(pkg, "dist"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	_ = os.WriteFile(filepath.Join(pkg, "package.json"), []byte(`{"name":"@test/fakeacp","version":"`+version+`"}`), 0o644)
+	_ = os.WriteFile(filepath.Join(pkg, "package.json"), manifest, 0o644)
 	script := filepath.Join(pkg, "dist", "index.js")
 	_ = os.WriteFile(script, []byte("#!/bin/sh\n"), 0o755)
 	bin := filepath.Join(root, "bin")
@@ -219,7 +237,7 @@ func TestCheckACPAdapterAvailability(t *testing.T) {
 	})
 	t.Run("not installed", func(t *testing.T) {
 		t.Setenv("PATH", t.TempDir())
-		t.Setenv("HOME", t.TempDir())
+		setTestHome(t, t.TempDir())
 		st := CheckACPAdapter(adapterTool("fakeacp-adapter-missing"))
 		if st.Available || !strings.Contains(st.Reason, "npm install -g @test/fakeacp@1.2.3") {
 			t.Errorf("status = %+v", st)
@@ -265,7 +283,7 @@ func TestCheckACPAdapterAvailability(t *testing.T) {
 // have been driven through the adapter.
 func pinACPAdapterCatalog(t *testing.T, adapterBin string) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	t.Setenv("BASHY_FORCE_AGENT_SHELL", "0")
 	t.Setenv("CHAT_FAKE_ACP_AGENT", "1")
 	root := t.TempDir()

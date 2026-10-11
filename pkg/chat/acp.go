@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -680,7 +681,9 @@ func CheckACPAdapter(t fleet.Tool) ACPAdapterStatus {
 
 // installedNPMVersion finds the package.json named pkg that owns bin — npm
 // links a bin into PATH, so the real file is resolved first — and returns its
-// version, or "" when bin is not inside that package.
+// version, or "" when bin is not inside that package. On Windows npm writes a
+// <bin>.cmd shim into the prefix directory instead of a symlink, with the
+// package under <prefix>\node_modules, so that layout is read as well.
 func installedNPMVersion(bin, pkg string) string {
 	real, err := filepath.EvalSymlinks(bin)
 	if err != nil {
@@ -688,17 +691,30 @@ func installedNPMVersion(bin, pkg string) string {
 	}
 	dir := filepath.Dir(real)
 	for i := 0; i < 6; i++ {
-		if b, err := os.ReadFile(filepath.Join(dir, "package.json")); err == nil {
-			var m struct{ Name, Version string }
-			if json.Unmarshal(b, &m) == nil && m.Name == pkg {
-				return m.Version
-			}
+		if v := npmPackageVersion(dir, pkg); v != "" {
+			return v
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
 			break
 		}
 		dir = parent
+	}
+	if runtime.GOOS == "windows" {
+		return npmPackageVersion(filepath.Join(filepath.Dir(real), "node_modules", filepath.FromSlash(pkg)), pkg)
+	}
+	return ""
+}
+
+// npmPackageVersion returns the version in dir/package.json when it names pkg.
+func npmPackageVersion(dir, pkg string) string {
+	b, err := os.ReadFile(filepath.Join(dir, "package.json"))
+	if err != nil {
+		return ""
+	}
+	var m struct{ Name, Version string }
+	if json.Unmarshal(b, &m) == nil && m.Name == pkg {
+		return m.Version
 	}
 	return ""
 }

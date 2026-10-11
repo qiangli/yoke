@@ -13,7 +13,7 @@ import (
 // interrupted before a steer, or a mid-turn STOP lands after the work
 // (agent-bench l4/t3-stop, 2026-09-28). Other CLIs get the line alone.
 func TestDeliverSteerInterruptsFirstOnlyWhenTheToolNeedsIt(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // deliverSteer emits room events: keep them out of the host room
+	setTestHome(t, t.TempDir()) // deliverSteer emits room events: keep them out of the host room
 	var sent []string
 	oldSend, oldFirst, oldSettle := steerSend, steerInterruptFirst, steerInterruptSettle
 	t.Cleanup(func() { steerSend, steerInterruptFirst, steerInterruptSettle = oldSend, oldFirst, oldSettle })
@@ -43,7 +43,7 @@ func TestDeliverSteerInterruptsFirstOnlyWhenTheToolNeedsIt(t *testing.T) {
 // No baseline tool declares it today — Muse needed a second Enter, not an ESC
 // (agentpty steerResubmitDelay) — so the test registers its own.
 func TestSteerInterruptFirstReadsTheToolBinding(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	root := t.TempDir()
 	prev := newCatalog
 	newCatalog = func() *fleet.Catalog { return fleet.New(fleet.WithRoot(root)) }

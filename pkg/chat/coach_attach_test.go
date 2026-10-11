@@ -78,6 +78,20 @@ func newCtlSockServer(t *testing.T) *ctlSockServer {
 	return s
 }
 
+// retryFS retries a rename/unlink for a moment: on Windows the watcher's brief
+// poll-time open of the same path (no FILE_SHARE_DELETE) makes it fail with a
+// sharing violation that clears as soon as the poll closes the file.
+func retryFS(op func() error) error {
+	var err error
+	for i := 0; i < 50; i++ {
+		if err = op(); err == nil {
+			return nil
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return err
+}
+
 func countEsc(b []byte) int { return bytes.Count(b, []byte("\x00R")) }
 
 // settle waits for the server's recorded byte count to stop growing — i.e. for
@@ -191,7 +205,9 @@ func TestAttachCoachSteersThroughSocket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("attachCoach: %v", err)
 	}
-	defer coach.Wait()
+	// Detach before waiting: a Fatalf unwinds the deferred cancel only after a
+	// plain deferred Wait, which would then block forever on a live watcher.
+	defer func() { cancel(); coach.Wait() }()
 
 	// Feed the coachee's loop AFTER attaching: the watcher's file offset is at EOF,
 	// so it picks these appends up on its next poll, just like a live run.
@@ -748,7 +764,8 @@ func TestAttachCoachPtyRecoversWhenSourceDisappears(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(card.LogPath); err != nil {
+	logF.Close() // Windows refuses to unlink a file this test still holds open
+	if err := retryFS(func() error { return os.Remove(card.LogPath) }); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(650 * time.Millisecond)
@@ -758,7 +775,6 @@ func TestAttachCoachPtyRecoversWhenSourceDisappears(t *testing.T) {
 	rep := waitForAttachReport(t, coach, 1)
 	cancel()
 	coach.Wait()
-	logF.Close()
 	if rep.Total != 1 || rep.Distinct != 1 {
 		t.Fatalf("PTY tail did not recover after its path reappeared: total=%d distinct=%d", rep.Total, rep.Distinct)
 	}
@@ -785,7 +801,7 @@ func TestAttachCoachEventsRecoversWhenSourceDisappears(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(evPath); err != nil {
+	if err := retryFS(func() error { return os.Remove(evPath) }); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(400 * time.Millisecond)
@@ -821,7 +837,8 @@ func TestAttachCoachPtyFollowsTruncationAndRotation(t *testing.T) {
 	waitForAttachReport(t, coach, 2)
 
 	rotated := card.LogPath + ".old"
-	if err := os.Rename(card.LogPath, rotated); err != nil {
+	logF.Close() // Windows refuses to rename a file this test still holds open
+	if err := retryFS(func() error { return os.Rename(card.LogPath, rotated) }); err != nil {
 		t.Fatal(err)
 	}
 	defer os.Remove(rotated)
@@ -871,7 +888,7 @@ func TestAttachCoachEventsFollowsTruncationAndRotation(t *testing.T) {
 	waitForAttachReport(t, coach, 2)
 
 	rotated := evPath + ".old"
-	if err := os.Rename(evPath, rotated); err != nil {
+	if err := retryFS(func() error { return os.Rename(evPath, rotated) }); err != nil {
 		t.Fatal(err)
 	}
 	defer os.Remove(rotated)

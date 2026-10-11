@@ -53,7 +53,7 @@ func pinACPCatalog(t *testing.T) {
 	t.Helper()
 	// Keep the launcher off the developer's own home: room cards, shims and the
 	// event dir all resolve from it.
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	t.Setenv("BASHY_FORCE_AGENT_SHELL", "0")
 	t.Setenv("CHAT_FAKE_ACP_AGENT", "1")
 

@@ -288,17 +288,16 @@ func (t *attachLineTail) next() ([][]byte, error) {
 		// produced earlier and can trip a steer on already-finished work. A
 		// truncation is less data, never new data. (Reporting it as prior history
 		// would be a second lie: the coach did observe it, once, already.)
-		data, err := io.ReadAll(f)
-		if err != nil {
-			return nil, err
-		}
-		t.file = fi
-		t.off = int64(len(data))
-		t.rem = nil
-		t.end = nil
-		t.rememberEnd(data)
-		return nil, nil
+		return nil, t.reanchor(f, fi)
 	case t.file == nil || !os.SameFile(t.file, fi) || !t.sameEnd(f):
+		// A truncation that lands between the Stat above and the anchor probe
+		// makes the probe read past the new end and look like a rewrite. Look
+		// again before calling it one.
+		if t.file != nil && os.SameFile(t.file, fi) {
+			if now, err := f.Stat(); err == nil && now.Size() < t.off {
+				return nil, t.reanchor(f, now)
+			}
+		}
 		// A REPLACEMENT: either a new inode (rotation), or the same inode whose
 		// content no longer matches our anchor (rewritten in place). These bytes
 		// are content we have never delivered, so the new generation is read from
@@ -319,6 +318,24 @@ func (t *attachLineTail) next() ([][]byte, error) {
 	t.off += int64(len(chunk))
 	t.rememberEnd(chunk)
 	return t.split(chunk), nil
+}
+
+// reanchor positions the tail at the current end of f without delivering
+// anything, discarding any unfinished record from the old generation.
+func (t *attachLineTail) reanchor(f *os.File, fi os.FileInfo) error {
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return err
+	}
+	t.file = fi
+	t.off = int64(len(data))
+	t.rem = nil
+	t.end = nil
+	t.rememberEnd(data)
+	return nil
 }
 
 func (t *attachLineTail) sameEnd(f *os.File) bool {

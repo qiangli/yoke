@@ -12,7 +12,13 @@ import (
 
 func isolateHome(t *testing.T) {
 	t.Helper()
-	home := t.TempDir()
+	setTestHome(t, t.TempDir())
+}
+
+// setTestHome points os.UserHomeDir at home on every platform: POSIX reads
+// HOME, Windows reads USERPROFILE.
+func setTestHome(t *testing.T, home string) {
+	t.Helper()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 }
