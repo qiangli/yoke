@@ -272,8 +272,10 @@ type Handler interface {
 
 // BaseHandler provides default callback behavior: it ignores session updates
 // and answers permission requests by selecting an "allow once" option when
-// offered, otherwise cancelling. Embed it and override SessionUpdate (and/or
-// RequestPermission) as needed.
+// offered, otherwise cancelling. This auto-allow is the permission mode "auto"
+// and stays the default; an agent whose permission mode is ask, review or deny
+// is served by ApprovalHandler instead (approval.go). Embed it and override
+// SessionUpdate (and/or RequestPermission) as needed.
 type BaseHandler struct{}
 
 // Compile-time check that BaseHandler satisfies Handler.

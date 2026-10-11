@@ -56,7 +56,7 @@ func pick(args []string) (Request, error) {
 	pending := make([]Request, 0, len(all))
 	now := time.Now()
 	for _, r := range all {
-		if r.Pending(now) && !hasValue(r.ID) {
+		if !r.IsApproval() && r.Pending(now) && !hasValue(r.ID) {
 			pending = append(pending, r)
 		}
 	}
@@ -83,6 +83,9 @@ func pick(args []string) (Request, error) {
 // provenance is displayed. Only the prompt is its text, and it arrives sanitized
 // and clearly labelled as untrusted.
 func claim(c *cobra.Command, r Request) error {
+	if r.IsApproval() {
+		return fmt.Errorf("ask: %s is an approval, not a value request — `bashy approve show %s`", shortID(r.ID), shortID(r.ID))
+	}
 	if hasValue(r.ID) {
 		return fmt.Errorf("ask: request %s has already been answered", shortID(r.ID))
 	}
@@ -149,6 +152,9 @@ its own UI (see the BASHY-ASK-V1 line ask prints on stderr).`,
 			if err != nil {
 				return err
 			}
+			if r.IsApproval() {
+				return fmt.Errorf("ask: %s is an approval, not a value request — `bashy approve allow|deny %s`", shortID(r.ID), shortID(r.ID))
+			}
 			b, err := io.ReadAll(c.InOrStdin())
 			if err != nil {
 				return err
@@ -190,9 +196,17 @@ func newLsCmd() *cobra.Command {
 		RunE: func(c *cobra.Command, _ []string) error {
 			// Listing reaps: reading IS the reconciliation, so the board never
 			// asserts that an expired request is live.
-			all, err := List()
+			listed, err := List()
 			if err != nil {
 				return err
+			}
+			// Approvals have their own verb; showing them here would offer a value
+			// prompt for something that has no value.
+			var all []Request
+			for _, r := range listed {
+				if !r.IsApproval() {
+					all = append(all, r)
+				}
 			}
 			w := c.OutOrStdout()
 			if asJSON {
