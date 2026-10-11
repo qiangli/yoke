@@ -1852,11 +1852,34 @@ var dmPeerLive = func(agent string) (bool, error) {
 
 func newDMCmd() *cobra.Command {
 	var as string
+	var channel, sender, thread string
+	var revoke bool
 	cmd := &cobra.Command{
 		Use:   "dm <agent>",
-		Short: "open or reuse a direct conversation using derived peer presence",
-		Args:  cobra.ExactArgs(1),
+		Short: "open or reuse a direct conversation using derived peer presence, or relay an external channel message with --channel/--sender",
+		Args: func(cmd *cobra.Command, args []string) error {
+			if sender != "" {
+				return cobra.MinimumNArgs(1)(cmd, args)
+			}
+			return cobra.ExactArgs(1)(cmd, args)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if sender != "" {
+				if revoke {
+					return runDMFrontDoorRevoke(cmd, args[0], channel, sender)
+				}
+				text, stdinThread, err := readDMFrontDoorText(cmd.InOrStdin(), args[1:])
+				if err != nil {
+					return err
+				}
+				if thread == "" {
+					thread = stdinThread
+				}
+				return runDMFrontDoor(cmd, args[0], channel, sender, thread, text)
+			}
+			if revoke {
+				return fmt.Errorf("meet: dm --revoke needs --channel and --sender")
+			}
 			target, err := resolveSeatTarget(args[0])
 			if err != nil {
 				return err
@@ -1920,6 +1943,10 @@ func newDMCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&as, "as", "", "agent identity opening the DM (default: BASHY_AGENT_ID)")
+	cmd.Flags().StringVar(&channel, "channel", "", "external channel the message arrived on (gateway/webhook front door)")
+	cmd.Flags().StringVar(&sender, "sender", "", "external sender identity on --channel (gateway/webhook front door)")
+	cmd.Flags().StringVar(&thread, "thread", "", "external thread id, carried through for traceability")
+	cmd.Flags().BoolVar(&revoke, "revoke", false, "revoke a previously paired --channel/--sender's access instead of sending a message")
 	return cmd
 }
 
