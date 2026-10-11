@@ -21,6 +21,41 @@ deliver them to channels outside bashy.
 
 ## Bash# Functions
 
+`meet_dm` is the inbound adapter used by gateway hooks (OpenClaw, Codync,
+ycode, or a bot script). The gateway supplies its channel and stable sender
+id; store gateway tokens with `bashy secret set NAME` and let the gateway
+resolve them with `bashy secret get NAME`, not from this skill or a checked-in
+config. Each ordinary message enters the existing
+`bashy meet dm` front door, which records the S3 event and requires pairing
+before it invokes an agent.
+
+~~~bash
+# Route one inbound message. Set MEET_CHANNEL, MEET_SENDER, and
+# MEET_AGENT from the gateway's account and the S2 sender binding.
+meet_dm() {
+	local text="$*" agent="${MEET_AGENT:-${BASHY_AGENT_ID:-}}" room rest id
+	[ -n "$MEET_CHANNEL" ] && [ -n "$MEET_SENDER" ] || return 2
+	[ -n "$agent" ] || { printf 'agent-hub: sender has no bound agent\n' >&2; return 2; }
+	case "$text" in
+		/approve\ *) id="${text#/approve }"; bashy approve allow "$id"; return $? ;;
+		/deny\ *) id="${text#/deny }"; bashy approve deny "$id"; return $? ;;
+		/status)  text="/status" ;;
+		/meet\ *)
+			rest="${text#/meet }"; room="${rest%% *}"; rest="${rest#* }"
+			[ -n "$room" ] && [ -n "$rest" ] || return 2
+			bashy meet tell "$room" --as "$MEET_SENDER" "$rest"; return $? ;;
+		@*)
+			rest="${text#@}"; agent="${rest%% *}"; text="${rest#* }"
+			[ -n "$text" ] || return 2 ;;
+	esac
+	bashy meet dm "$agent" --channel "$MEET_CHANNEL" --sender "$MEET_SENDER" "$text"
+}
+~~~
+
+An unpaired sender receives a one-use code and the message is not delivered.
+After the operator approves that code with the shared approval queue, the
+sender retries the same message; the agent reply is returned on stdout.
+
 ~~~bash
 # desktop delivers a notification to the local desktop environment.
 # Uses osascript on macOS and notify-send on Linux/FreeBSD.
