@@ -3,11 +3,13 @@ id: ebc94985bf78
 kind: feature
 title: S9 measured capability routing in toolcmd and selection events
 seq: 1889
-status: todo
+status: assigned
 priority: p1
 labels:
     - yoke
 created: 2026-10-11T07:57:01.40741Z
+weave: 86
+assignee: codex-gpt5.6-terra
 sprint: 418
 sprint_id: 9891800f-8da5-5338-92bc-1d75755ca548
 sprint_title: 'Agent ecosystem synergy: agentic tools compose like a|b|c through bashy extension points'
