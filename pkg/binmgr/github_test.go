@@ -107,6 +107,68 @@ func TestResolveGitHub_ChecksumsFile(t *testing.T) {
 	}
 }
 
+func TestResolveGitHub_ExactAssetDigestBeatsSiblingChecksum(t *testing.T) {
+	goos, goarch := splitPlatform(Platform())
+	asset := "zot-" + goos + "-" + goarch
+	fullSHA := strings.Repeat("8", 64)
+	wrongSiblingSHA := strings.Repeat("d", 64)
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	mux.HandleFunc("/repos/project-zot/zot/releases/tags/v2.1.21", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghRelease{TagName: "v2.1.21", Assets: []ghAsset{
+			{Name: asset, URL: srv.URL + "/dl/" + asset, Digest: "sha256:" + fullSHA},
+			{Name: asset + "-minimal", URL: srv.URL + "/dl/minimal", Digest: "sha256:" + wrongSiblingSHA},
+			{Name: "checksums.sha256.txt", URL: srv.URL + "/dl/checksums"},
+		}})
+	})
+	mux.HandleFunc("/dl/checksums", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprintf(w, "%s  %s\n", wrongSiblingSHA, asset)
+	})
+	old := githubAPI
+	githubAPI = srv.URL
+	defer func() { githubAPI = old }()
+	tool, err := ResolveGitHub(context.Background(), GitHubSpec{
+		Name: "zot-test", Repo: "project-zot/zot", Version: "v2.1.21",
+		AssetMatch: func(name, os, arch string) bool { return name == "zot-"+os+"-"+arch },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tool.Assets[Platform()].SHA256; got != fullSHA {
+		t.Fatalf("resolved digest = %s, want exact asset digest %s", got, fullSHA)
+	}
+}
+
+// GitHub's per-asset digest must take precedence over a release checksum list:
+// Zot v2.1.21's list can otherwise associate the minimal sibling's digest with
+// the full binary. SeaweedFS 4.48 similarly exposes the archive digest in API
+// metadata although its downloadable sidecar is MD5 only.
+func TestResolveGitHub_UsesExactAssetDigest(t *testing.T) {
+	for _, tc := range []struct {
+		name, want string
+	}{
+		{"zot-linux-amd64", "8751cc0daf739634835a3bd8206e3094c84d552e2c462e4a4baf80f40dd92685"},
+		{"linux_amd64.tar.gz", "4a7d108384d044d95212d1342cdda9533fa55842c1c9b41f606ca3c8a9561124"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			asset := ghAsset{Name: tc.name, URL: "https://example.invalid/" + tc.name, Digest: "sha256:" + tc.want}
+			got := githubAssetSHA256(asset.Digest)
+			if got != tc.want {
+				t.Fatalf("digest = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestGitHubAssetSHA256RejectsMalformedDigest(t *testing.T) {
+	for _, digest := range []string{"", "md5:0123", "sha256:abc", "sha256:" + strings.Repeat("z", 64)} {
+		if got := githubAssetSHA256(digest); got != "" {
+			t.Errorf("githubAssetSHA256(%q) = %q, want empty", digest, got)
+		}
+	}
+}
+
 func TestDefaultAssetMatch(t *testing.T) {
 	cases := []struct {
 		name, goos, goarch string
