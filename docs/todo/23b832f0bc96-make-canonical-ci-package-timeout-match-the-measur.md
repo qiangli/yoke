@@ -3,11 +3,13 @@ id: 23b832f0bc96
 kind: test
 title: Make canonical CI package timeout match the measured serial weave suite
 seq: 40
-status: todo
+status: assigned
 priority: p2
 labels:
     - ci
 created: 2026-10-11T00:17:44.788625Z
+weave: 66
+assignee: codex-gpt6-sol
 sprint: 9999
 sprint_id: 559b491b-4bab-57d3-bad4-5ceb9acbb9da
 sprint_title: Maintenance
