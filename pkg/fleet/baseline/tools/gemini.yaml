@@ -10,5 +10,30 @@ cli:
   launch:
     notes: >-
       Recognized so a running gemini session identifies itself, but not driven by the
-      fleet: gemini was removed from the roster (2026-06-18). No launch template.
+      fleet: gemini was removed from the roster (2026-06-18). No headless or steer
+      template; the ACP declaration below is the registry pin only (the tool stays
+      retired, so a launch still needs an explicit un-retire).
+    # ACP (Sprint 418 S10): gemini speaks ACP NATIVELY behind --acp, so the
+    # "adapter" is gemini's own release — the ACP registry's `gemini` entry.
+    # Pinned 2026-10-11: tarball sha256 computed, sha512 re-hashed to the npm
+    # integrity below (match). Apache-2.0.
+    acp_exec: gemini --acp
+    acp_adapter:
+      id: gemini
+      name: Gemini CLI
+      description: Google's official CLI for Gemini
+      repository: https://github.com/google-gemini/gemini-cli
+      authors: [Google]
+      source: npm
+      package: "@google/gemini-cli"
+      version: 0.63.0
+      license: Apache-2.0
+      license_url: https://github.com/google-gemini/gemini-cli/blob/main/LICENSE
+      bin: gemini
+      args: [--acp]
+      requires: [node]
+      tarball:
+        url: https://registry.npmjs.org/@google/gemini-cli/-/gemini-cli-0.63.0.tgz
+        sha256: 97a6edfc10645463b517f0518d46a8c72efbdc12558a9a948607f726284a0420
+        integrity: sha512-mmhqMmAdsoplCzrLQQC4yJBqr4uSKXghnrLspgUU6N9drmsaq7pi7oF09skRYzEq2dYK6eMT4UpFQP6rG2o/ew==
 quirks: not in the fleet roster; detection only

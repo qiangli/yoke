@@ -1,0 +1,79 @@
+[
+  {
+    "seq": 0,
+    "ts": "",
+    "type": "acp",
+    "actor": "claude-opus",
+    "target": "acp:claude-opus",
+    "body": "Look at the failing test first.",
+    "principal": "alice",
+    "topic": "thought",
+    "to": "sess-1"
+  },
+  {
+    "seq": 0,
+    "ts": "",
+    "type": "acp",
+    "actor": "claude-opus",
+    "target": "acp:claude-opus",
+    "body": "1/2 done: [completed] reproduce; [in_progress] fix",
+    "principal": "alice",
+    "topic": "plan",
+    "to": "sess-1"
+  },
+  {
+    "seq": 0,
+    "ts": "",
+    "type": "acp",
+    "actor": "claude-opus",
+    "target": "acp:claude-opus/tool:t1",
+    "body": "pending execute go test ./pkg/x pkg/x/x_test.go:12",
+    "principal": "alice",
+    "topic": "tool_call",
+    "to": "sess-1"
+  },
+  {
+    "seq": 0,
+    "ts": "",
+    "type": "acp",
+    "actor": "claude-opus",
+    "target": "acp:claude-opus/tool:t1",
+    "body": "execute go test ./pkg/x -\u003e allow_once (offered allow_once,reject_once)",
+    "principal": "alice",
+    "topic": "permission",
+    "to": "sess-1"
+  },
+  {
+    "seq": 0,
+    "ts": "",
+    "type": "acp",
+    "actor": "claude-opus",
+    "target": "acp:claude-opus/tool:t1",
+    "body": "completed",
+    "principal": "alice",
+    "topic": "tool_call_update",
+    "to": "sess-1"
+  },
+  {
+    "seq": 0,
+    "ts": "",
+    "type": "usage",
+    "actor": "claude-opus",
+    "target": "acp:claude-opus",
+    "body": "context 1200/200000 tokens, cost 0.2500 USD",
+    "principal": "alice",
+    "topic": "acp",
+    "to": "sess-1"
+  },
+  {
+    "seq": 0,
+    "ts": "",
+    "type": "acp",
+    "actor": "claude-opus",
+    "target": "acp:claude-opus",
+    "body": "done",
+    "principal": "alice",
+    "topic": "thought",
+    "to": "sess-1"
+  }
+]

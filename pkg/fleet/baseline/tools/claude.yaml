@@ -75,6 +75,35 @@ cli:
     # inherited context onto a different model (best-effort — claude may honor or
     # reject a model change on a resumed session).
     fork_exec: claude --resume {session} --fork-session --dangerously-skip-permissions --model {model} -p {prompt}
+    # ACP rung (Sprint 418 S10): claude speaks stream-json, not ACP, so the ACP
+    # agent process is the registry's bridge, claude-agent-acp — the release
+    # the ACP registry's `claude-acp` entry distributes. Pinned 2026-10-11:
+    # tarball downloaded, sha256 computed, and its sha512 re-hashed to the
+    # npm-published integrity below (match). The bridge's own code is
+    # Apache-2.0, but it runs @anthropic-ai/claude-agent-sdk under Anthropic's
+    # Commercial Terms, so the registry (and this pin) say proprietary.
+    # Installed by the operator (`npm i -g PACKAGE@VERSION`); bashy checks the
+    # installed package.json version against the pin and node on PATH before
+    # it drives it, and falls to the stream-json rung otherwise. Gated by
+    # BASHY_ACP=1 like every ACP launch.
+    acp_exec: claude-agent-acp
+    acp_adapter:
+      id: claude-acp
+      name: Claude Agent
+      description: ACP wrapper for Anthropic's Claude
+      repository: https://github.com/agentclientprotocol/claude-agent-acp
+      authors: [Anthropic, Zed Industries, JetBrains]
+      source: npm
+      package: "@agentclientprotocol/claude-agent-acp"
+      version: 0.89.1
+      license: proprietary
+      license_url: https://github.com/agentclientprotocol/claude-agent-acp/blob/main/LICENSE
+      bin: claude-agent-acp
+      requires: [node]
+      tarball:
+        url: https://registry.npmjs.org/@agentclientprotocol/claude-agent-acp/-/claude-agent-acp-0.89.1.tgz
+        sha256: 0df9fa22a5e1ccc39bfba37c0c58f272febed6884fb51a2df970840796ea2acb
+        integrity: sha512-t1k8YPDvo/zUghL3x2pFs40tWfYTLhYmK8jt37CVBpY7eq1Ztj2hLZBAmy9ZX++tUyJaGfuuMrzvJGvU9tjBsg==
     session_env:
       - CLAUDE_CODE_SESSION_ID
       - CLAUDE_SESSION_ID

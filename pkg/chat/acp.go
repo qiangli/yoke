@@ -2,10 +2,13 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -57,9 +60,16 @@ type acpDriver struct {
 	// signalling, would be a poor trade for a real protocol.
 	end chan acpTurn
 
-	mu     sync.Mutex
-	turn   strings.Builder // the current turn's streamed message chunks
-	active bool            // exactly one ACP prompt may be in flight
+	mu      sync.Mutex
+	turn    strings.Builder // the current turn's streamed message chunks
+	thought strings.Builder // reasoning chunks not yet recorded as one event
+	active  bool            // exactly one ACP prompt may be in flight
+
+	// card and principal are the identity every timeline event carries: the
+	// room card is the same session key the approval queue settles by, so an
+	// event and the approval it led to name the same session.
+	card      string
+	principal string
 
 	closeOnce sync.Once
 }
@@ -118,6 +128,21 @@ func startACPSession(ctx context.Context, agent string, opt SessionOptions) (*Se
 	if !known || !agentlaunch.EffectiveRung(tool.CLI.Launch).IsACP() {
 		return nil, false, nil
 	}
+	// A pinned adapter is the process the ACP rung execs. One that is missing,
+	// at the wrong release, or without its runtime is not driven: the tool falls
+	// to the rung below, the way it did before it declared one — said out loud,
+	// because an operator who set BASHY_ACP=1 expects to know why it did not
+	// take.
+	if tool.CLI.Launch.ACPAdapter != nil {
+		st := CheckACPAdapter(tool)
+		if !st.Available {
+			fmt.Fprintf(os.Stderr, "chat: %s: ACP adapter %s unavailable (%s); using the next rung\n", l.Binding(), st.Spec, st.Reason)
+			return nil, false, nil
+		}
+		if !st.Native {
+			l.Tool, l.ManagedTool = st.Path, nil
+		}
+	}
 	var preparedInbox bus.PreparedPreamble
 	if strings.TrimSpace(opt.Prompt) != "" {
 		preparedInbox = bus.PrepareForAgent(name, opt.Prompt)
@@ -159,7 +184,8 @@ func startACPSession(ctx context.Context, agent string, opt SessionOptions) (*Se
 	if opt.Stream != nil {
 		sink = io.MultiWriter(sink, opt.Stream)
 	}
-	drv := &acpDriver{ctx: ctx, sink: sink, launch: l, end: make(chan acpTurn, 1)}
+	drv := &acpDriver{ctx: ctx, sink: sink, launch: l, end: make(chan acpTurn, 1),
+		card: agentID(l), principal: principalName()}
 
 	// Same trust preseed as the pty path: an ACP agent that stops to ask about
 	// trust on stdio would deadlock the protocol rather than merely stall a TUI.
@@ -175,13 +201,7 @@ func startACPSession(ctx context.Context, agent string, opt SessionOptions) (*Se
 		return nil, true, budgetErr
 	}
 	s.budgetWorks = append(s.budgetWorks, budgetWork)
-	handler := &acpHandler{d: drv}
-	if perm := agentPermission(name, catalog); perm != "" && perm != fleet.PermissionAuto {
-		handler.approvals = &acp.ApprovalHandler{
-			Mode:    perm,
-			Session: func() string { return agentID(l) },
-		}
-	}
+	handler := newACPHandler(drv, agentPermission(name, catalog))
 	client, err := acp.NewClient(ctx, handler, cmd)
 	if err != nil {
 		if cmd.Process == nil {
@@ -198,7 +218,9 @@ func startACPSession(ctx context.Context, agent string, opt SessionOptions) (*Se
 		_ = budgetWork.finish("", err)
 		return nil, true, fmt.Errorf("chat: %s would not open an ACP session: %w", l.Binding(), err)
 	}
+	drv.mu.Lock()
 	drv.session = sid
+	drv.mu.Unlock()
 	s.acp = drv
 
 	// Join the host room like any other member. CtlSock is empty: an ACP session
@@ -289,6 +311,7 @@ func (d *acpDriver) prompt(text string) error {
 	go func() {
 		callCtx, endObservation := startGenAIObservation(d.ctx, d.launch)
 		reason, err := d.client.Prompt(callCtx, d.session, text)
+		d.flushThought()
 		d.mu.Lock()
 		said := d.turn.String()
 		d.turn.Reset()
@@ -376,10 +399,15 @@ func (s *Session) closeACP() {
 	})
 }
 
-// acpHandler bridges ACP session updates into the ONE thing a Session does with
-// streamed output: write it to the sink, which is the same sessionWriter (plus
-// the caller's optional tee) the pty path writes through. Callers that watch a
-// session see an ACP agent exactly as they see a scraped one.
+// acpHandler bridges ACP session updates into the two things a Session does
+// with them. The agent's ANSWER goes to the sink, which is the same
+// sessionWriter (plus the caller's optional tee) the pty path writes through,
+// so callers that watch a session see an ACP agent exactly as they see a
+// scraped one. Everything else the protocol reports — tool calls, plans,
+// reasoning, usage, permission requests — goes to the host event log (the room
+// timeline, bashy events) as structured entries, and never into the transcript:
+// inventing chrome the agent did not print would corrupt the very thing ACP is
+// supposed to give us, a clean answer.
 type acpHandler struct {
 	acp.BaseHandler
 	d *acpDriver
@@ -388,11 +416,36 @@ type acpHandler struct {
 	approvals acp.Handler
 }
 
-func (h *acpHandler) RequestPermission(ctx context.Context, req acp.PermissionRequest) (acp.PermissionResponse, error) {
-	if h.approvals != nil {
-		return h.approvals.RequestPermission(ctx, req)
+// newACPHandler wires a driver to the approval queue for permission mode perm.
+// The approval's session is the driver's room card, so `chat grant`, `bashy
+// approve` and the timeline all name the same session.
+func newACPHandler(d *acpDriver, perm string) *acpHandler {
+	h := &acpHandler{d: d}
+	if perm != "" && perm != fleet.PermissionAuto {
+		h.approvals = &acp.ApprovalHandler{
+			Mode:    perm,
+			Session: func() string { return d.card },
+		}
 	}
-	return h.BaseHandler.RequestPermission(ctx, req)
+	return h
+}
+
+func (h *acpHandler) RequestPermission(ctx context.Context, req acp.PermissionRequest) (acp.PermissionResponse, error) {
+	var (
+		resp acp.PermissionResponse
+		err  error
+	)
+	if h.approvals != nil {
+		resp, err = h.approvals.RequestPermission(ctx, req)
+	} else {
+		resp, err = h.BaseHandler.RequestPermission(ctx, req)
+	}
+	// Recorded in EVERY mode, auto included: an auto-allowed request is still a
+	// request the agent made, and it is the one an operator most needs to see.
+	if h.d != nil {
+		h.d.recordPermission(req, resp, err)
+	}
+	return resp, err
 }
 
 // agentPermission is the permission mode a named agent record declares; "" for a
@@ -409,6 +462,12 @@ func agentPermission(name string, catalog *fleet.Catalog) string {
 
 func (h *acpHandler) SessionUpdate(_ context.Context, n acp.SessionNotification) error {
 	u := n.Update
+	if u.AgentThoughtChunk == nil {
+		// Reasoning streams in many small chunks; it is recorded as ONE entry
+		// when something else happens (or the turn ends), so the log carries a
+		// thought per step rather than a token per line.
+		h.d.flushThought()
+	}
 	switch {
 	case u.AgentMessageChunk != nil:
 		text := u.AgentMessageChunk.Text
@@ -419,14 +478,227 @@ func (h *acpHandler) SessionUpdate(_ context.Context, n acp.SessionNotification)
 		h.d.turn.WriteString(text)
 		h.d.mu.Unlock()
 		_, _ = io.WriteString(h.d.sink, text)
-	case u.ToolCall != nil, u.ToolCallUpdate != nil:
-		// A tool call as STRUCTURED DATA — the other half of the prize, and what
-		// the fleet-evidence rule has been asking for. Nothing consumes it yet;
-		// it deliberately does NOT go into the transcript, because inventing
-		// chrome the agent did not print would corrupt the very thing ACP is
-		// supposed to give us: a clean answer.
+	case u.AgentThoughtChunk != nil:
+		h.d.mu.Lock()
+		h.d.thought.WriteString(u.AgentThoughtChunk.Text)
+		h.d.mu.Unlock()
+	case u.ToolCall != nil:
+		h.d.recordToolCall(acpTopicToolCall, *u.ToolCall)
+	case u.ToolCallUpdate != nil:
+		h.d.recordToolCall(acpTopicToolCallUpdate, *u.ToolCallUpdate)
+	case u.Plan != nil:
+		h.d.recordPlan(*u.Plan)
+	case u.Usage != nil:
+		h.d.recordUsage(*u.Usage)
 	}
-	// Thought chunks are dropped: reasoning is not the answer, and rung 4 never
-	// saw it either.
 	return nil
+}
+
+// THE ENTRY EVENT CONTRACT for ACP updates (Sprint 418 S3: one host log, Type
+// tells domains apart, Target names the object, Topic the sub-kind, Body a short
+// clipped summary — details stay with their owner).
+//
+//	update            Type   Topic             Target
+//	tool_call         acp    tool_call         acp:<card>/tool:<id>
+//	tool_call_update  acp    tool_call_update  acp:<card>/tool:<id>
+//	plan              acp    plan              acp:<card>
+//	thought           acp    thought           acp:<card>
+//	permission        acp    permission        acp:<card>/tool:<id>
+//	usage             usage  acp               acp:<card>
+//
+// Every entry carries Actor = the room card (the session key the approval
+// queue uses), Principal = the human the session runs for, and To = the
+// protocol's own session id, so an entry can be joined to both.
+const (
+	acpEventType           = "acp"
+	acpTopicToolCall       = "tool_call"
+	acpTopicToolCallUpdate = "tool_call_update"
+	acpTopicPlan           = "plan"
+	acpTopicThought        = "thought"
+	acpTopicPermission     = "permission"
+	acpUsageTopic          = "acp"
+	acpEventBodyMax        = 280
+)
+
+// acpEmit appends one entry to the host log. A variable so a test can read the
+// entries without parsing the timeline file.
+var acpEmit = room.Emit
+
+func (d *acpDriver) record(typ, topic, object, body string) {
+	d.mu.Lock()
+	session := d.session
+	d.mu.Unlock()
+	target := "acp:" + d.card
+	if object != "" {
+		target += "/" + object
+	}
+	// Best effort, like room.Record: the turn is the transaction, and a log
+	// that could fail it would be worse than one that occasionally lags.
+	_ = acpEmit(room.Event{
+		Type:      typ,
+		Actor:     d.card,
+		Principal: d.principal,
+		Target:    target,
+		Topic:     topic,
+		To:        session,
+		Body:      room.Brief(body, acpEventBodyMax),
+	})
+}
+
+func (d *acpDriver) flushThought() {
+	d.mu.Lock()
+	text := strings.TrimSpace(d.thought.String())
+	d.thought.Reset()
+	d.mu.Unlock()
+	if text != "" {
+		d.record(acpEventType, acpTopicThought, "", text)
+	}
+}
+
+func (d *acpDriver) recordToolCall(topic string, tc acp.ToolCall) {
+	parts := []string{}
+	for _, f := range []string{string(tc.Status), tc.Kind, tc.Title} {
+		if f = strings.TrimSpace(f); f != "" {
+			parts = append(parts, f)
+		}
+	}
+	for _, loc := range tc.Locations {
+		p := loc.Path
+		if loc.Line > 0 {
+			p = fmt.Sprintf("%s:%d", p, loc.Line)
+		}
+		parts = append(parts, p)
+	}
+	d.record(acpEventType, topic, "tool:"+tc.ID, strings.Join(parts, " "))
+}
+
+func (d *acpDriver) recordPlan(p acp.Plan) {
+	done := 0
+	items := make([]string, 0, len(p.Entries))
+	for _, e := range p.Entries {
+		if e.Status == "completed" {
+			done++
+		}
+		items = append(items, fmt.Sprintf("[%s] %s", e.Status, e.Content))
+	}
+	d.record(acpEventType, acpTopicPlan, "", fmt.Sprintf("%d/%d done: %s", done, len(p.Entries), strings.Join(items, "; ")))
+}
+
+func (d *acpDriver) recordUsage(u acp.Usage) {
+	body := fmt.Sprintf("context %d/%d tokens", u.Used, u.Size)
+	if u.CostCurrency != "" {
+		body += fmt.Sprintf(", cost %.4f %s", u.CostAmount, u.CostCurrency)
+	}
+	d.record(room.EventUsage, acpUsageTopic, "", body)
+}
+
+// recordPermission records the TYPED request — tool kind, title, locations, the
+// options offered — and what was answered, by option kind.
+func (d *acpDriver) recordPermission(req acp.PermissionRequest, resp acp.PermissionResponse, err error) {
+	offered := make([]string, 0, len(req.Options))
+	outcome := "cancelled"
+	for _, o := range req.Options {
+		offered = append(offered, string(o.Kind))
+		if !resp.Cancelled && o.ID == resp.OptionID {
+			outcome = string(o.Kind)
+		}
+	}
+	if err != nil {
+		outcome = "error: " + err.Error()
+	}
+	what := strings.TrimSpace(strings.Join([]string{req.ToolCall.Kind, req.ToolCall.Title}, " "))
+	for _, loc := range req.ToolCall.Locations {
+		what += " " + loc.Path
+	}
+	d.record(acpEventType, acpTopicPermission, "tool:"+req.ToolCall.ID,
+		fmt.Sprintf("%s -> %s (offered %s)", what, outcome, strings.Join(offered, ",")))
+}
+
+// ACPAdapterStatus is the availability check for a tool's pinned ACP adapter.
+type ACPAdapterStatus struct {
+	Tool string `json:"tool"`
+	// Spec is the pinned npm spec (package@version).
+	Spec string `json:"spec"`
+	// Native means the adapter is the tool's own binary (gemini --acp).
+	Native bool `json:"native"`
+	// Path is the resolved executable, "" when not found.
+	Path string `json:"path,omitempty"`
+	// Installed is the version read from the installed package.json, "" when
+	// the executable is not inside an npm package bashy can read.
+	Installed string `json:"installed,omitempty"`
+	// Verified is true when Installed equals the pin.
+	Verified  bool   `json:"verified"`
+	Available bool   `json:"available"`
+	Reason    string `json:"reason,omitempty"`
+}
+
+// CheckACPAdapter reports whether the tool's pinned adapter can be driven
+// here: the pin is valid, its executable resolves (the per-adapter
+// BASHY_TOOL_BINARY_<ID> override first, then PATH and the user binary homes),
+// its runtime requirements are on PATH, and — when the executable lives in an
+// npm package — the installed release IS the pinned one. A different release
+// is unavailable, never "close enough": the digest pinned is for that release.
+func CheckACPAdapter(t fleet.Tool) ACPAdapterStatus {
+	a := t.CLI.Launch.ACPAdapter
+	st := ACPAdapterStatus{Tool: t.Name}
+	if a == nil {
+		st.Reason = "no acp_adapter declared"
+		return st
+	}
+	st.Spec = a.PackageSpec()
+	st.Native = a.Bin == t.Binary()
+	if err := t.ValidateACPAdapter(); err != nil {
+		st.Reason = err.Error()
+		return st
+	}
+	if p := strings.TrimSpace(os.Getenv(fleet.ToolBinaryOverrideEnv(a.ID))); p != "" {
+		st.Path = p
+	} else if p, err := exec.LookPath(a.Bin); err == nil {
+		st.Path = p
+	} else {
+		st.Path = ResolveToolBinary(a.Bin)
+	}
+	if st.Path == "" {
+		st.Reason = fmt.Sprintf("%s not found; install with: npm install -g %s", a.Bin, st.Spec)
+		return st
+	}
+	for _, req := range a.Requires {
+		if _, err := exec.LookPath(req); err != nil {
+			st.Reason = fmt.Sprintf("%s needs %s on PATH", a.Bin, req)
+			return st
+		}
+	}
+	st.Installed = installedNPMVersion(st.Path, a.Package)
+	if st.Installed != "" && st.Installed != a.Version {
+		st.Reason = fmt.Sprintf("installed %s@%s, pinned %s", a.Package, st.Installed, a.Version)
+		return st
+	}
+	st.Verified = st.Installed == a.Version
+	st.Available = true
+	return st
+}
+
+// installedNPMVersion finds the package.json named pkg that owns bin — npm
+// links a bin into PATH, so the real file is resolved first — and returns its
+// version, or "" when bin is not inside that package.
+func installedNPMVersion(bin, pkg string) string {
+	real, err := filepath.EvalSymlinks(bin)
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Dir(real)
+	for i := 0; i < 6; i++ {
+		if b, err := os.ReadFile(filepath.Join(dir, "package.json")); err == nil {
+			var m struct{ Name, Version string }
+			if json.Unmarshal(b, &m) == nil && m.Name == pkg {
+				return m.Version
+			}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return ""
 }

@@ -141,10 +141,8 @@ func TestBaselineToolsStayOnTheRungTheyAreOnToday(t *testing.T) {
 	t.Setenv(ACPEnv, "1") // even with ACP fully on
 	cat := fleet.New(fleet.WithRoot(t.TempDir()))
 	for name, want := range map[string]Rung{
-		"agy":    RungPTY,
-		"claude": RungPTY,
-		"codex":  RungPTY,
-		"aider":  RungPTY,
+		"agy":   RungPTY,
+		"aider": RungPTY,
 	} {
 		tool, ok := cat.Tool(name)
 		if !ok {
@@ -159,6 +157,34 @@ func TestBaselineToolsStayOnTheRungTheyAreOnToday(t *testing.T) {
 		}
 		if _, _, ok := ACPArgv(tool, ""); ok {
 			t.Errorf("%s: renders an ACP argv but declares no acp_exec", name)
+		}
+	}
+}
+
+// claude and codex reach ACP through PINNED ADAPTERS (Sprint 418 S10:
+// claude-agent-acp, codex-acp — fleet acp_adapter, which chat's ACP branch
+// execs after an availability check). They are on the ACP rung only behind the
+// gate: with BASHY_ACP off they are driven exactly as before.
+func TestAdapterToolsReachACPOnlyBehindTheGate(t *testing.T) {
+	cat := fleet.New(fleet.WithRoot(t.TempDir()))
+	for _, name := range []string{"claude", "codex"} {
+		tool, ok := cat.Tool(name)
+		if !ok {
+			t.Fatalf("%s is not in the baseline catalog", name)
+		}
+		if tool.CLI.Launch.ACPAdapter == nil {
+			t.Errorf("%s declares acp_exec without a pinned adapter", name)
+		}
+		if got := RungFor(tool.CLI.Launch); got != RungACPNative {
+			t.Errorf("%s: RungFor = %s, want %s", name, got, RungACPNative)
+		}
+		t.Setenv(ACPEnv, "")
+		if got := EffectiveRung(tool.CLI.Launch); got.IsACP() {
+			t.Errorf("%s: gate off, EffectiveRung = %s — the default moved", name, got)
+		}
+		t.Setenv(ACPEnv, "1")
+		if got := EffectiveRung(tool.CLI.Launch); !got.IsACP() {
+			t.Errorf("%s: gate on, EffectiveRung = %s", name, got)
 		}
 	}
 }

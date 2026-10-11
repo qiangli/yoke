@@ -209,6 +209,39 @@ type SessionUpdate struct {
 	ToolCall *ToolCall
 	// ToolCallUpdate carries a status/locations change to an existing call.
 	ToolCallUpdate *ToolCall
+	// Plan is the agent's whole execution plan; each one replaces the last.
+	Plan *Plan
+	// Usage is the session's context-window fill and cumulative cost.
+	Usage *Usage
+}
+
+// PlanEntry is one task of an agent's execution plan.
+type PlanEntry struct {
+	// Content is what the task aims to accomplish.
+	Content string
+	// Priority is "high", "medium" or "low".
+	Priority string
+	// Status is "pending", "in_progress" or "completed".
+	Status string
+}
+
+// Plan is a complete execution plan as the agent last reported it.
+type Plan struct {
+	Entries []PlanEntry
+}
+
+// Usage is the session's context window and spend as the agent reports it.
+type Usage struct {
+	// Used is the number of tokens currently in context.
+	Used int
+	// Size is the total context window in tokens.
+	Size int
+	// CostAmount is the cumulative session cost; meaningful only when
+	// CostCurrency is set.
+	CostAmount float64
+	// CostCurrency is the ISO 4217 code of CostAmount, or "" when the agent
+	// reported no cost.
+	CostCurrency string
 }
 
 // SessionNotification wraps a SessionUpdate with the session it pertains to.
