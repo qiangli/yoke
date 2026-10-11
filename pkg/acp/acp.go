@@ -581,6 +581,18 @@ func fromSDKNotification(n sdk.SessionNotification) SessionNotification {
 	case u.ToolCallUpdate != nil:
 		tc := fromSDKSessionToolCallUpdate(u.ToolCallUpdate)
 		out.ToolCallUpdate = &tc
+	case u.Plan != nil:
+		plan := Plan{Entries: make([]PlanEntry, 0, len(u.Plan.Entries))}
+		for _, e := range u.Plan.Entries {
+			plan.Entries = append(plan.Entries, PlanEntry{Content: e.Content, Priority: string(e.Priority), Status: string(e.Status)})
+		}
+		out.Plan = &plan
+	case u.UsageUpdate != nil:
+		usage := Usage{Used: u.UsageUpdate.Used, Size: u.UsageUpdate.Size}
+		if c := u.UsageUpdate.Cost; c != nil {
+			usage.CostAmount, usage.CostCurrency = c.Amount, c.Currency
+		}
+		out.Usage = &usage
 	}
 	return SessionNotification{SessionID: string(n.SessionId), Update: out}
 }

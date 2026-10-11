@@ -25,6 +25,111 @@
     "description": "headless and interactive launch contract"
   },
   {
+    "path": "cli.launch.acp_adapter",
+    "type": "object",
+    "description": "pinned ACP adapter release behind acp_exec"
+  },
+  {
+    "path": "cli.launch.acp_adapter.args",
+    "type": "[]string",
+    "description": "arguments after bin, as in acp_exec"
+  },
+  {
+    "path": "cli.launch.acp_adapter.args.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "cli.launch.acp_adapter.authors",
+    "type": "[]string",
+    "description": "adapter authors"
+  },
+  {
+    "path": "cli.launch.acp_adapter.authors.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "cli.launch.acp_adapter.bin",
+    "type": "string",
+    "description": "executable the package installs (the ACP agent process)"
+  },
+  {
+    "path": "cli.launch.acp_adapter.description",
+    "type": "string",
+    "description": "registry one-line description"
+  },
+  {
+    "path": "cli.launch.acp_adapter.id",
+    "type": "string",
+    "description": "ACP-registry agent id"
+  },
+  {
+    "path": "cli.launch.acp_adapter.license",
+    "type": "string",
+    "description": "adapter licence (SPDX id or terms)"
+  },
+  {
+    "path": "cli.launch.acp_adapter.license_url",
+    "type": "string",
+    "description": "where the adapter licence is published"
+  },
+  {
+    "path": "cli.launch.acp_adapter.name",
+    "type": "string",
+    "description": "registry display name"
+  },
+  {
+    "path": "cli.launch.acp_adapter.package",
+    "type": "string",
+    "description": "npm package name, unversioned"
+  },
+  {
+    "path": "cli.launch.acp_adapter.repository",
+    "type": "string",
+    "description": "adapter source repository URL"
+  },
+  {
+    "path": "cli.launch.acp_adapter.requires",
+    "type": "[]string",
+    "description": "host commands the adapter needs on PATH"
+  },
+  {
+    "path": "cli.launch.acp_adapter.requires.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "cli.launch.acp_adapter.source",
+    "type": "string",
+    "description": "where the release is published: npm"
+  },
+  {
+    "path": "cli.launch.acp_adapter.tarball",
+    "type": "object",
+    "description": "the pinned release tarball and its digests"
+  },
+  {
+    "path": "cli.launch.acp_adapter.tarball.integrity",
+    "type": "string",
+    "description": "registry SRI digest (sha512-base64) npm verifies on install"
+  },
+  {
+    "path": "cli.launch.acp_adapter.tarball.sha256",
+    "type": "string",
+    "description": "hex sha256 of the tarball"
+  },
+  {
+    "path": "cli.launch.acp_adapter.tarball.url",
+    "type": "string",
+    "description": "release tarball URL"
+  },
+  {
+    "path": "cli.launch.acp_adapter.version",
+    "type": "string",
+    "description": "pinned adapter release (X.Y.Z)"
+  },
+  {
     "path": "cli.launch.acp_exec",
     "type": "string",
     "description": "ACP agent argv template"

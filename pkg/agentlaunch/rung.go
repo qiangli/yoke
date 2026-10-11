@@ -37,6 +37,13 @@ import (
 // A tool that cannot speak ACP itself takes rung 3, like any other tool that
 // says nothing. That is the ladder working, not a gap in it.
 //
+// Sprint 418 S10 revisits the second point without adding a rung: claude and
+// codex now declare acp_exec WITH a pinned fleet acp_adapter (registry id, npm
+// release, tarball sha256). ACPArgv still renders the tool's binary; chat's ACP
+// branch swaps in the adapter executable only after CheckACPAdapter finds the
+// pinned release installed, and otherwise falls to the rung below. The process
+// that runs is therefore named and pinned by the tool's own entry.
+//
 // The declaration is the whole input: a tool lands on the highest rung its
 // fleet entry can support, and a tool that declares nothing new lands on the
 // rung it was already on.

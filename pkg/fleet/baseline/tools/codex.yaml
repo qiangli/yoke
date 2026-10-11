@@ -53,6 +53,31 @@ cli:
     binary: codex
   launch:
     warm: stdin
+    # ACP rung (Sprint 418 S10): codex speaks its own JSON events, not ACP; the
+    # ACP agent process is the registry's `codex-acp` bridge (it moved from
+    # zed-industries to agentclientprotocol and from Rust release binaries to
+    # npm at 2.x). Pinned 2026-10-11: tarball sha256 computed, sha512
+    # re-hashed to the npm integrity below (match). Apache-2.0. Installed by
+    # the operator; bashy checks version + node before driving it and falls
+    # to the --json events rung otherwise. Gated by BASHY_ACP=1.
+    acp_exec: codex-acp
+    acp_adapter:
+      id: codex-acp
+      name: Codex
+      description: ACP adapter for OpenAI's coding assistant
+      repository: https://github.com/agentclientprotocol/codex-acp
+      authors: [OpenAI, JetBrains s.r.o, Zed Industries]
+      source: npm
+      package: "@agentclientprotocol/codex-acp"
+      version: 2.2.2
+      license: Apache-2.0
+      license_url: https://github.com/agentclientprotocol/codex-acp/blob/main/LICENSE
+      bin: codex-acp
+      requires: [node]
+      tarball:
+        url: https://registry.npmjs.org/@agentclientprotocol/codex-acp/-/codex-acp-2.2.2.tgz
+        sha256: 5f4fa33c94959c928db11687376a050e9a5e7b72dba51963b571fa55ddb86168
+        integrity: sha512-vNdeNV3jxbqaH7MYvVWzyB6cMOz+YGIV9W1xyBDsQfoii92DulZLM+ahCL2T2G6uohlaB1Yma347p2kLfAab2w==
     session_env:
       - CODEX_SESSION_ID
       - CODEX_THREAD_ID

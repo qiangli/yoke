@@ -330,6 +330,11 @@ type ToolLaunch struct {
 	// (see agentlaunch.ACPArgv). A {model} token here renders LITERALLY.
 	ACPExec string `yaml:"acp_exec,omitempty" json:"acp_exec,omitempty" doc:"ACP agent argv template"`
 
+	// ACPAdapter pins the process acp_exec runs when the tool needs a bridge
+	// to speak ACP (or the release that speaks it natively): registry id,
+	// npm release, tarball digest. See acpadapter.go.
+	ACPAdapter *ToolACPAdapter `yaml:"acp_adapter,omitempty" json:"acp_adapter,omitempty" doc:"pinned ACP adapter release behind acp_exec"`
+
 	// EventsArg is how this tool is told to stream STRUCTURED EVENTS, if it can.
 	//
 	// This is the difference between a first-party harness and a third-party one,

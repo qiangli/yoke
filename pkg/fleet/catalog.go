@@ -251,6 +251,9 @@ func (c *Catalog) Tools(all bool) ([]Tool, []error) {
 		if err := r.Entry.CLI.Managed.Validate(r.Entry.Name); err != nil {
 			errs = append(errs, err)
 		}
+		if err := r.Entry.ValidateACPAdapter(); err != nil {
+			errs = append(errs, err)
+		}
 		out = append(out, r.Entry)
 	}
 	return out, errs
