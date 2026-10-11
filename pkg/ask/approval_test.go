@@ -60,6 +60,26 @@ func TestPlanTokenMatchesConfirm(t *testing.T) {
 	}
 }
 
+func TestResolveRequiresExactSessionAndArgv(t *testing.T) {
+	isolateApprovals(t)
+	r, err := Raise(ApprovalSpec{Source: SourceConfirm, Token: "deadbeef", Session: "card-a", Argv: []string{"rm", "target-a"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Decide(r.ID, Decision{Verdict: VerdictAllow}, DecideOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := Resolve(SourceConfirm, "deadbeef", "card-b", []string{"rm", "target-a"}); ok {
+		t.Fatal("approval escaped its session")
+	}
+	if _, ok := Resolve(SourceConfirm, "deadbeef", "card-a", []string{"rm", "target-b"}); ok {
+		t.Fatal("short-token collision approved different argv")
+	}
+	if d, ok := Resolve(SourceConfirm, "deadbeef", "card-a", []string{"rm", "target-a"}); !ok || !d.Allowed() {
+		t.Fatalf("matching operation was refused: %+v, %v", d, ok)
+	}
+}
+
 // A yielded @confirm becomes a listed approval; allow resumes it with the same
 // token; the decision and the raise are both evented.
 func TestYieldedConfirmListedAllowedResumed(t *testing.T) {
@@ -92,7 +112,7 @@ func TestYieldedConfirmListedAllowedResumed(t *testing.T) {
 	}
 
 	// Before a decision, the resume finds nothing.
-	if _, ok := Resolve(SourceConfirm, token); ok {
+	if _, ok := Resolve(SourceConfirm, token, "", argv); ok {
 		t.Fatal("Resolve found a decision for an undecided approval")
 	}
 
@@ -104,12 +124,12 @@ func TestYieldedConfirmListedAllowedResumed(t *testing.T) {
 		t.Fatalf("allow printed %q, want %q", out, want)
 	}
 
-	d, ok := Resolve(SourceConfirm, token)
+	d, ok := Resolve(SourceConfirm, token, "", argv)
 	if !ok || !d.Allowed() {
 		t.Fatalf("Resolve = %+v, %v", d, ok)
 	}
 	// A once-allow is single use.
-	if _, ok := Resolve(SourceConfirm, token); ok {
+	if _, ok := Resolve(SourceConfirm, token, "", argv); ok {
 		t.Fatal("a once-allow resumed twice")
 	}
 
@@ -149,7 +169,7 @@ func TestDecideFirstWinsAndTokenCheck(t *testing.T) {
 	}
 	// A deny stays a deny on every replay.
 	for i := 0; i < 2; i++ {
-		if d, ok := Resolve(SourceConfirm, r.Approval.Token); !ok || d.Allowed() {
+		if d, ok := Resolve(SourceConfirm, r.Approval.Token, r.Approval.Session, r.Approval.Argv); !ok || d.Allowed() {
 			t.Fatalf("replay %d = %+v, %v", i, d, ok)
 		}
 	}
@@ -165,7 +185,7 @@ func TestAlwaysAllowIsReusable(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 3; i++ {
-		if d, ok := Resolve(SourceConfirm, r.Approval.Token); !ok || !d.Allowed() {
+		if d, ok := Resolve(SourceConfirm, r.Approval.Token, r.Approval.Session, r.Approval.Argv); !ok || !d.Allowed() {
 			t.Fatalf("always-allow use %d = %+v, %v", i, d, ok)
 		}
 	}

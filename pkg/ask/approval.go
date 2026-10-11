@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -140,7 +141,7 @@ func Raise(spec ApprovalSpec) (Request, error) {
 	if token == "" {
 		token = PlanToken(spec.Argv)
 	}
-	if existing, ok := findPending(spec.Source, token, spec.Session); ok {
+	if existing, ok := findPending(spec.Source, token, spec.Session, spec.Argv); ok {
 		return existing, nil
 	}
 	id, err := newID()
@@ -211,14 +212,14 @@ func (r Request) ApprovalSummary() string {
 	return r.Approval.summary()
 }
 
-func findPending(source, token, session string) (Request, bool) {
+func findPending(source, token, session string, argv []string) (Request, bool) {
 	all, err := List()
 	if err != nil {
 		return Request{}, false
 	}
 	for _, r := range all {
 		a := r.Approval
-		if !r.IsApproval() || a == nil || a.Source != source || a.Token != token || a.Session != session {
+		if !r.IsApproval() || a == nil || a.Source != source || a.Token != token || a.Session != session || !slices.Equal(a.Argv, argv) {
 			continue
 		}
 		if _, decided := LoadDecision(r.ID); !decided {
@@ -385,20 +386,20 @@ func DenyUnanswered(id, reason string) Decision {
 	return d
 }
 
-// Resolve is the resume side of a yielded @confirm: given the token the operation
-// hashes to, it returns the standing decision for it and redeems it.
+// Resolve is the resume side of a yielded @confirm. The token is only a short
+// hash, so session and exact argv must also match before a decision is used.
 //
 // An allow without Always is single-use — the first Resolve consumes it, so one
 // "yes" cannot authorise the same operation twice. A deny is reported every time
 // until it ages out, so a refused operation stays refused on replay. Only decided
 // approvals raised by source are considered; the newest wins.
-func Resolve(source, token string) (Decision, bool) {
+func Resolve(source, token, session string, argv []string) (Decision, bool) {
 	all, err := ListApprovals()
 	if err != nil {
 		return Decision{}, false
 	}
 	for _, r := range all { // newest first
-		if r.Approval == nil || r.Approval.Source != source || r.Approval.Token != token {
+		if r.Approval == nil || r.Approval.Source != source || r.Approval.Token != token || r.Approval.Session != session || !slices.Equal(r.Approval.Argv, argv) {
 			continue
 		}
 		d, ok := LoadDecision(r.ID)
