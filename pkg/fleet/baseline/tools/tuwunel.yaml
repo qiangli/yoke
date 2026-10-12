@@ -24,9 +24,8 @@
 # both matched.
 #
 # ARTIFACT FORMAT: each asset is the raw ELF executable compressed with zstd
-# as a single file (".zst", not a tarball). binmgr's raw-binary path does not
-# decompress yet, so the installer must zstd-decompress the verified download
-# before exec (follow-up: single-file .zst support in pkg/binmgr).
+# as a single file (".zst", not a tarball). binmgr verifies the sha256 of the
+# compressed download, then stream-decompresses it into place (size-capped).
 name: tuwunel
 kind: system
 display: Matrix chat homeserver (tuwunel)
