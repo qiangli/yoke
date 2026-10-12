@@ -1158,6 +1158,11 @@ func init() {
 	// reachable `notify`: the subscriber could not be `bashy watch`, because that
 	// name belongs to the classic watch(1), so both halves live under one parent.
 	addVerb("bus", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapJSON}})
+	// feed — the federated signed feed: post to sinks you own (git/GitHub,
+	// rclone), follow other people's sinks, fetch + verify, read. The PUBLISH
+	// half of how agents and people share knowledge beyond this host, where
+	// kb is the host-local store and bus the host-local push.
+	addVerb("feed", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON, CapNeedsNetwork}})
 	// herald — reach an agent that is NOT on this host, over A2A.
 	//
 	// The stage question this verb has to answer ("which stage do you serve
@@ -1531,7 +1536,7 @@ func init() {
 		"ask",
 		// verbs
 		"weave", "genie", "ycode", "sprint", "dag", "sdlc", "supervise", "capability", "leaderboard", "agent", "dks",
-		"tool", "model", "person", "kb", "skill", "lexicon", "claim", "mirror", "git",
+		"tool", "model", "person", "kb", "skill", "lexicon", "claim", "mirror", "feed", "git",
 		"git-scm", "gh", "curl", "helm", "self", "bootstrap", "upgrade",
 		// commands add/set write the registered-command ring (Sprint 179).
 		"commands",
@@ -1739,6 +1744,7 @@ func init() {
 		// operations. No per-invocation prior state or recovery guarantee exists.
 		"graph", "sprint", "capability", "leaderboard", "person", "handoff", "resume",
 		"kb", "lexicon", "claim", "steward", "todo", "secret", "ask",
+		"feed", // a published post cannot be recalled from the sinks that mirrored it
 		"self", "bootstrap", "upgrade",
 		// destructive data loss
 		"dd", "rm", "shred", "truncate", "unlink", "mail", "mailx",
@@ -1826,7 +1832,7 @@ func init() {
 		"bootstrap", "upgrade", "web",
 		// v1.0.0 list, consumer or envelope still missing on the bar
 		"ping", "bus", "notify", "app", "model", "tool", "chat", "invoke",
-		"llm", "kb", "graph", "craft", "ask", "oci", "sandbox", "loom", "ycode",
+		"llm", "kb", "graph", "craft", "ask", "oci", "sandbox", "loom", "ycode", "feed",
 		// orchestration / knowledge / fleet verbs outside the v1.0.0 table
 		"agentic", "capability", "claim", "coach", "define", "delegate", "dks",
 		"gate", "handoff", "leaderboard", "login", "mirror", "otel", "peer",
