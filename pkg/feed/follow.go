@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -267,4 +268,66 @@ func isNotFound(err error) bool {
 		}
 	}
 	return false
+}
+
+// parseFollowSyncTarget reports whether ref should be synced to the server.
+// A cloudbox author URL https://<host>/u/<uid>/ (or http variant), or a
+// compact uid:<uid> or label:<name> reference, maps to a server follow.
+// It returns the JSON kind ("author" or "label"), the target value, and ok.
+func parseFollowSyncTarget(ref string) (kind, target string, ok bool) {
+	ref = strings.TrimSpace(ref)
+	if strings.HasPrefix(ref, "uid:") {
+		uid := strings.TrimSpace(strings.TrimPrefix(ref, "uid:"))
+		uid = strings.Trim(uid, "/")
+		if uid == "" || strings.Contains(uid, "/") {
+			return "", "", false
+		}
+		return "author", uid, true
+	}
+	if strings.HasPrefix(ref, "label:") {
+		label := strings.TrimSpace(strings.TrimPrefix(ref, "label:"))
+		label = strings.Trim(label, "/")
+		if label == "" {
+			return "", "", false
+		}
+		return "label", label, true
+	}
+	if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
+		if uid, ok := authorUIDFromURL(ref); ok {
+			return "author", uid, true
+		}
+	}
+	return "", "", false
+}
+
+func authorUIDFromURL(raw string) (string, bool) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", false
+	}
+	if u.Host == "" {
+		return "", false
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return "", false
+	}
+	path := strings.Trim(u.Path, "/")
+	if path == "" {
+		return "", false
+	}
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 {
+		return "", false
+	}
+	if parts[0] != "u" {
+		return "", false
+	}
+	uid := strings.TrimSpace(parts[1])
+	if uid == "" || strings.Contains(uid, "/") {
+		return "", false
+	}
+	return uid, true
 }

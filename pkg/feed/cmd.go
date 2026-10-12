@@ -1,6 +1,7 @@
 package feed
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -453,6 +454,8 @@ func indexPublishedPost(ctx context.Context, env Env, dir string, warn io.Writer
 
 // ---- follow ----
 
+const followSyncTimeout = 10 * time.Second
+
 func newFollowCmd(env Env) *cobra.Command {
 	return &cobra.Command{
 		Use:   "follow URL",
@@ -472,6 +475,7 @@ func newFollowCmd(env Env) *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(c.OutOrStdout(), "following %s\n", ref)
+			syncFollowIfNeeded(ctxOf(c), env, http.MethodPost, ref, c.ErrOrStderr())
 			return nil
 		},
 	}
@@ -505,8 +509,74 @@ func newUnfollowCmd(env Env) *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(c.OutOrStdout(), "unfollowed %s\n", ref)
+			syncFollowIfNeeded(ctxOf(c), env, http.MethodDelete, ref, c.ErrOrStderr())
 			return nil
 		},
+	}
+}
+
+func syncFollowIfNeeded(ctx context.Context, env Env, method, ref string, warn io.Writer) {
+	kind, target, ok := parseFollowSyncTarget(ref)
+	if !ok {
+		return
+	}
+	cloud := env.Cloud
+	if cloud == nil {
+		cloud = func() (string, string) { return fleet.ResolveCloud("", "") }
+	}
+	base, token := cloud()
+	if token == "" {
+		fmt.Fprintln(warn, "warning: not paired; follow not synced to server")
+		return
+	}
+	bodyMap := map[string]string{kind: target}
+	data, err := json.Marshal(bodyMap)
+	if err != nil {
+		fmt.Fprintf(warn, "warning: follow sync failed: %v\n", oneLine(err.Error()))
+		return
+	}
+	u := strings.TrimRight(base, "/") + "/api/v1/feed/follows"
+	req, err := http.NewRequestWithContext(ctx, method, u, bytes.NewReader(data))
+	if err != nil {
+		fmt.Fprintf(warn, "warning: follow sync failed: %v\n", oneLine(err.Error()))
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	client := env.HTTP
+	if client == nil {
+		client = &http.Client{Timeout: followSyncTimeout}
+	}
+	cctx, cancel := context.WithTimeout(ctx, followSyncTimeout)
+	defer cancel()
+	req = req.WithContext(cctx)
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Fprintf(warn, "warning: follow sync failed: %v\n", oneLine(err.Error()))
+		return
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if resp.StatusCode != http.StatusOK {
+		reason := strings.TrimSpace(string(raw))
+		if reason == "" {
+			reason = resp.Status
+		}
+		var m struct {
+			Reason  string `json:"reason"`
+			Error   string `json:"error"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(raw, &m) == nil {
+			for _, s := range []string{m.Reason, m.Error, m.Message} {
+				if strings.TrimSpace(s) != "" {
+					reason = strings.TrimSpace(s)
+					break
+				}
+			}
+		}
+		fmt.Fprintf(warn, "warning: follow sync failed: %s: %s\n", resp.Status, oneLine(reason))
+		return
 	}
 }
 
