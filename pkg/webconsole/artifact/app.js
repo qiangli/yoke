@@ -69,6 +69,7 @@ let search = "";
 // reached) navigates this window; "new-tab" opens each app in its own tab
 // with rel=noopener.
 let openApps = "same-tab";
+if (document.body.dataset.openApps === "new-tab") openApps = "new-tab";
 
 // ------------------------------------------------------------------ config --
 // localStorage only: this is per-viewer chrome, not state anything else reads.

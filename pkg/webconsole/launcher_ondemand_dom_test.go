@@ -218,7 +218,19 @@ func probeClick(button, ctrl, meta, shift string) string {
 
 func TestDOMLauncherKeepsLinkSemantics(t *testing.T) {
 	slowApp(t, "slowapp", 3*time.Second, nil)
-	base, ctx, errs := domEnv(t, Options{Ctx: context.Background()})
+	var delayedLook atomic.Bool
+	base, ctx, errs := domEnvWrapped(t, Options{Ctx: context.Background()}, func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == "GET" && r.URL.Path == "/api/look" && delayedLook.Load() {
+				select {
+				case <-time.After(6 * time.Second):
+				case <-r.Context().Done():
+					return
+				}
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
 	if err := chromedp.Run(ctx,
 		chromedp.Navigate(base+"/"),
 		chromedp.WaitVisible(`a.tile[data-app="slowapp"]`, chromedp.ByQuery),
@@ -240,15 +252,21 @@ func TestDOMLauncherKeepsLinkSemantics(t *testing.T) {
 		}
 	}
 
-	// New tab mode: a real target=_blank link the launcher never takes over.
+	// New-tab mode must apply before the delayed look answer arrives.
 	var got string
+	var elapsed float64
 	if err := chromedp.Run(ctx,
 		chromedp.Evaluate(`fetch("api/look",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({open_apps:"new-tab"})}).then(r=>r.status)`, nil, awaitPromise),
+		chromedp.ActionFunc(func(context.Context) error { delayedLook.Store(true); return nil }),
 		chromedp.Reload(),
 		chromedp.WaitVisible(`a.tile[data-app="slowapp"][target="_blank"]`, chromedp.ByQuery),
 		chromedp.Evaluate(probeClick("0", "false", "false", "false"), &got),
+		chromedp.Evaluate(`performance.now()`, &elapsed),
 	); err != nil {
 		t.Fatal(err)
+	}
+	if elapsed > 3000 {
+		t.Errorf("stored new-tab mode waited %.0fms for look", elapsed)
 	}
 	if !strings.Contains(got, `"taken":false`) || !strings.Contains(got, `"rel":"noopener"`) {
 		t.Errorf("new-tab click: %s", got)

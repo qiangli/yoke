@@ -188,6 +188,13 @@ func (s *server) servePageFile(w http.ResponseWriter, r *http.Request, name stri
 // place.
 func injectChrome(doc []byte, name, openApps string) []byte {
 	if name == "index.html" {
+		// Seed the cheap persisted mode before catalog tiles become clickable;
+		// the independent look request may arrive later.
+		mode := OpenSameTab
+		if openApps == OpenNewTab {
+			mode = OpenNewTab
+		}
+		doc = bytes.Replace(doc, []byte("<body>"), []byte(`<body data-open-apps="`+mode+`">`), 1)
 		// index.html's own <footer id="foot"> already carries the version
 		// detail (#foot-left / #foot-build / #foot-right) — leave it alone
 		// and only append the copyright line inside it.
