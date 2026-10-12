@@ -271,6 +271,44 @@ func applySetup(l *Launch, tool fleet.Tool, vars fleet.LaunchVars) error {
 	return nil
 }
 
+// ExecBinary resolves the tool's own binary for a per-command exec override
+// (a print command with its own `exec:`, e.g. `openclaw message send
+// --json ...`).
+//
+// Such a command is the tool's own subcommand, not an agent turn: the caller
+// runs this binary directly with the rendered exec argv — no setup wrapper
+// (applySetup) and no launch-declared env/state_dir redirect (cli.launch.env)
+// — so the subcommand sees the user's own tool config. Managed-binary
+// resolution still applies: a managed tool resolves to its pinned cache path
+// (or an explicit override) and carries the managed install's env; an
+// explicit override wins out loud, as in resolveManaged. An unknown tool
+// resolves to its own name, leaving the PATH lookup downstream.
+func ExecBinary(toolName string, newCatalog CatalogFunc) (bin string, env []string, managed *binmgr.Tool, err error) {
+	if newCatalog == nil {
+		newCatalog = NewCatalog
+	}
+	tool, known := newCatalog().Tool(toolName)
+	if !known {
+		return toolName, nil, nil, nil
+	}
+	if p, ok := tool.ManagedOverride(os.Getenv); ok {
+		return p, nil, nil, nil
+	}
+	if tool.IsManaged() {
+		bt, err := tool.BinmgrTool()
+		if err != nil {
+			return "", nil, nil, err
+		}
+		path, err := binmgr.InstallPath(bt)
+		if err != nil {
+			return "", nil, nil, fmt.Errorf("agent launch: tool %q managed install %s: %w (set %s to launch another binary explicitly)",
+				tool.Name, bt.Version, err, fleet.ToolBinaryOverrideEnv(tool.Name))
+		}
+		return path, append([]string(nil), tool.CLI.Managed.Env...), &bt, nil
+	}
+	return tool.Binary(), nil, nil, nil
+}
+
 type CatalogFunc func() *fleet.Catalog
 
 func Resolve(name string, opt Options) (Launch, error) {

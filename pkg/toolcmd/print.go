@@ -226,6 +226,10 @@ func runPrint(ctx context.Context, tool fleet.Tool, cmd fleet.ToolCommand, args 
 			return finish(OutcomeError, err)
 		}
 		copt.ExecArgv = fin
+		// The exec override is this tool's own subcommand: tell chat which
+		// tool owns it, so it runs this binary directly even when the launch
+		// resolves from an agent-nick override.
+		copt.ExecTool = tool.Name
 	}
 
 	timeout := CommandTimeout(cmd, opts)
