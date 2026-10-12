@@ -74,12 +74,17 @@ func installDefaultSprintArgs(root *cobra.Command) {
 			}
 		}
 		normalize := func(args []string) ([]string, error) {
-			if len(args) != required-1 {
+			omitted := len(args) == required-1
+			last := !omitted && len(args) > 0 && args[0] == "last"
+			if !omitted && !last {
 				return args, nil
 			}
 			n, err := defaultSprintNumber()
 			if err != nil {
 				return nil, err
+			}
+			if last {
+				args = args[1:]
 			}
 			return append([]string{strconv.FormatInt(n, 10)}, args...), nil
 		}
@@ -105,6 +110,6 @@ func installDefaultSprintArgs(root *cobra.Command) {
 		if cmd.Long == "" {
 			cmd.Long = cmd.Short
 		}
-		cmd.Long += "\n\nOmitted sprint defaults to the most recently created existing sprint (an empty board is an error; nothing is created). Explicit sprint arguments take precedence; normal lifecycle and authorization rules apply."
+		cmd.Long += "\n\nUse a sprint number or last. Omitted sprint defaults to the most recently created existing sprint (an empty board is an error; nothing is created). Explicit sprint arguments take precedence; normal lifecycle and authorization rules apply."
 	}
 }

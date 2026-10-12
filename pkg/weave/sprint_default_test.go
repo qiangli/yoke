@@ -82,6 +82,7 @@ func TestTodoAddDefaultsToLatestCreatedSprint(t *testing.T) {
 		want  int64
 	}{
 		{"default", nil, 7},
+		{"last", []string{"--sprint", "last"}, 7},
 		{"explicit", []string{"--sprint", "30"}, 30},
 		{"opt-out", []string{"--no-sprint"}, 0},
 		{"ordinary-9999", []string{"--sprint", "9999"}, 9999},
@@ -185,6 +186,8 @@ func TestOmittedOperandsReachHostAdaptersAsLatest(t *testing.T) {
 		want string
 	}{
 		{[]string{"show"}, nil, "7"},
+		{[]string{"show"}, []string{"last"}, "7"},
+		{[]string{"claim"}, []string{"last", "story-id"}, "7,story-id"},
 		{[]string{"show"}, []string{"30"}, "30"},
 		{[]string{"claim"}, []string{"story-id"}, "7,story-id"},
 		{[]string{"claim"}, []string{"30", "story-id"}, "30,story-id"},
