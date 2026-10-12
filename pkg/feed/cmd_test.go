@@ -68,6 +68,9 @@ func newTestEnv(t *testing.T, ex Excerpter) *testEnv {
 		OpenSink: func(c SinkConfig) (Sink, error) {
 			return &dirSink{name: c.Name, root: c.Target, fail: te.fail[c.Name]}, nil
 		},
+		// Unpaired by default so posts never touch the network; index
+		// tests override Cloud to point at httptest.
+		Cloud: func() (string, string) { return "", "" },
 	}
 	return te
 }

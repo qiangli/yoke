@@ -14,6 +14,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
+
+	"github.com/qiangli/yoke/pkg/fleet"
 )
 
 // Env carries the seams `feed` reaches the outside world through. The zero
@@ -30,8 +32,15 @@ type Env struct {
 	OpenSource func(ref string) (Source, error)
 	// Now is the clock. Default time.Now.
 	Now func() time.Time
+	// Retention overrides RetentionPeriod (30 days) when positive. Tests
+	// set a short window; production leaves it unset.
+	Retention time.Duration
 	// HTTP is the client for https follows. Default has a 30s timeout.
 	HTTP *http.Client
+	// Cloud resolves the registry base URL and auth credential. Default
+	// fleet.ResolveCloud (the paired outpost token); an empty token means
+	// the host is not paired. Tests override it to point at httptest.
+	Cloud func() (base, token string)
 }
 
 func (e Env) dir() string {
@@ -46,6 +55,13 @@ func (e Env) now() time.Time {
 		return e.Now()
 	}
 	return time.Now()
+}
+
+func (e Env) retention() time.Duration {
+	if e.Retention > 0 {
+		return e.Retention
+	}
+	return RetentionPeriod
 }
 
 func (e Env) openSink(c SinkConfig) (Sink, error) {
@@ -193,18 +209,21 @@ func newSinkCmd(env Env) *cobra.Command {
 func newPostCmd(env Env) *cobra.Command {
 	var headline, dek, replyTo, relPath string
 	var labels []string
+	var forceKey, noIndex bool
 	cmd := &cobra.Command{
 		Use:   "post FILE|-",
 		Short: "sign a markdown body and publish it to every sink",
 		Long: `post reads a markdown body from FILE (or stdin for "-"), writes the excerpt
 (headline, dek, labels) with your LLM unless you pass them, signs the post, and
 publishes it to every configured sink, appending it to each sink's index.txt.
+It then registers the post with the feed registry, unless --no-index is set
+or the host is not paired.
 
 Budgets are weighted (CJK counts 2): headline <= 90, dek <= 240, up to 8
 labels of <= 32. It exits non-zero only when EVERY sink failed.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, a []string) error {
-			return runPost(c, env, a[0], Excerpt{Headline: headline, Dek: dek, Labels: labels}, replyTo, relPath)
+			return runPost(c, env, a[0], Excerpt{Headline: headline, Dek: dek, Labels: labels}, replyTo, relPath, forceKey, noIndex)
 		},
 	}
 	f := cmd.Flags()
@@ -213,10 +232,12 @@ labels of <= 32. It exits non-zero only when EVERY sink failed.`,
 	f.StringArrayVar(&labels, "label", nil, "label (repeatable)")
 	f.StringVar(&replyTo, "reply-to", "", "id of the post this replies to")
 	f.StringVar(&relPath, "path", "", "sink-relative path (default posts/<yyyy>/<id>.md)")
+	f.BoolVar(&forceKey, "force-key", false, "replace the registry's stored public key for this host")
+	f.BoolVar(&noIndex, "no-index", false, "skip registering the post with the feed registry")
 	return cmd
 }
 
-func runPost(c *cobra.Command, env Env, file string, have Excerpt, replyTo, relPath string) error {
+func runPost(c *cobra.Command, env Env, file string, have Excerpt, replyTo, relPath string, forceKey, noIndex bool) error {
 	var raw []byte
 	var err error
 	if file == "-" {
@@ -317,7 +338,40 @@ func runPost(c *cobra.Command, env Env, file string, have Excerpt, replyTo, relP
 	if failed > 0 {
 		fmt.Fprintf(errw, "warning: %d of %d sinks failed; the post is live on the rest\n", failed, len(results))
 	}
+	if !noIndex {
+		indexPublishedPost(ctx, env, dir, errw, p, rel, data, results, forceKey)
+	}
 	return nil
+}
+
+// indexPublishedPost registers a post that landed on at least one sink with
+// the feed registry. Every outcome is a stderr note and a nil return: the
+// post is live on the sinks whatever the registry says.
+func indexPublishedPost(ctx context.Context, env Env, dir string, warn io.Writer, p *Post, rel string, data []byte, results []SinkResult, forceKey bool) {
+	var urls []string
+	for _, r := range results {
+		if r.Err == nil {
+			urls = append(urls, r.URL)
+		}
+	}
+	if len(urls) == 0 {
+		return
+	}
+	cloud := env.Cloud
+	if cloud == nil {
+		cloud = func() (string, string) { return fleet.ResolveCloud("", "") }
+	}
+	base, token := cloud()
+	if token == "" {
+		fmt.Fprintln(warn, "index: skipped (host not paired)")
+		return
+	}
+	req := buildIndexRequest(p, rel, data, urls, forceKey)
+	resp, err := HTTPIndexer{Base: base, Token: token}.Index(ctx, req)
+	if err == nil && resp.Indexed != "deferred" {
+		noteRegistryKey(dir, base, p.Pubkey)
+	}
+	reportIndexResult(warn, resp, err)
 }
 
 // ---- follow ----
@@ -446,6 +500,9 @@ inside a fence naming the post's content hash.`,
 }
 
 func fetchAll(ctx context.Context, env Env, dir string, warn io.Writer) ([]SpoolEntry, error) {
+	if _, _, err := PruneRetention(dir, env.now(), env.retention()); err != nil {
+		fmt.Fprintf(warn, "warning: pruning expired spool entries: %v\n", oneLine(err.Error()))
+	}
 	follows, err := LoadFollows(dir)
 	if err != nil {
 		return nil, err
