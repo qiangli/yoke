@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/qiangli/yoke/external/kube"
+	"github.com/qiangli/yoke/external/notrack"
 	"github.com/qiangli/yoke/pkg/binmgr"
 )
 
@@ -96,6 +97,9 @@ func Ensure(ctx context.Context, version string) (string, error) {
 	return binmgr.Ensure(ctx, tool)
 }
 
+// ChildEnv returns env with helm tracking/update checks disabled.
+func ChildEnv(env []string) []string { return notrack.Env(env) }
+
 // NewHelmCmd is the `bashy helm` front-door: a transparent passthrough to the
 // managed helm binary. $HELM_VERSION pins the release; all args pass through
 // unchanged. See kube.ResolveKubeconfig for the full kubeconfig precedence.
@@ -131,7 +135,7 @@ through to helm.`,
 				return err
 			}
 			c := binmgr.Command(cmd.Context(), bin, args...)
-			c.Env = kube.ExecEnvFor(res.KUBECONFIG)
+			c.Env = notrack.Env(kube.ExecEnvFor(res.KUBECONFIG))
 			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 			return c.Run()
 		},

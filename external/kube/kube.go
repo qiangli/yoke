@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiangli/yoke/external/notrack"
 	"github.com/qiangli/yoke/pkg/binmgr"
 )
 
@@ -194,14 +195,17 @@ func RefreshKubeconfig(ctx context.Context, stderr io.Writer, path string) {
 
 // ExecEnvFor is the process env for a kubectl/helm passthrough: the inherited
 // env plus KUBECONFIG=path when path is non-empty (as resolved by
-// ResolveKubeconfig).
+// ResolveKubeconfig), with generic tracking opt-outs (DO_NOT_TRACK, etc).
 func ExecEnvFor(path string) []string {
 	env := os.Environ()
 	if path != "" {
 		env = append(env, "KUBECONFIG="+path)
 	}
-	return env
+	return notrack.Env(env)
 }
+
+// ChildEnv returns env with tracking disabled (DO_NOT_TRACK, CHECKPOINT_DISABLE, etc).
+func ChildEnv(env []string) []string { return notrack.Env(env) }
 
 func fileExists(p string) bool {
 	if p == "" {

@@ -17,6 +17,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/yoke/external/notrack"
 	"github.com/qiangli/yoke/pkg/binmgr"
 	"github.com/qiangli/yoke/pkg/muslrt"
 )
@@ -201,7 +202,9 @@ func hasEnvKey(env []string, want string) bool {
 	return false
 }
 
-// Environ is base with Overrides applied (existing spellings replaced).
+// Environ is base with Overrides applied (existing spellings replaced) and
+// generic tracking opt-outs via notrack (DOTNET_CLI_TELEMETRY_OPTOUT,
+// DOTNET_NOLOGO, GOTELEMETRY, DO_NOT_TRACK, etc).
 func (l Launch) Environ(base []string) []string {
 	over := l.Overrides(base)
 	names := map[string]bool{}
@@ -216,7 +219,8 @@ func (l Launch) Environ(base []string) []string {
 		}
 		out = append(out, kv)
 	}
-	return append(out, over...)
+	out = append(out, over...)
+	return notrack.Env(out)
 }
 
 func lookup(env []string, name string) string {

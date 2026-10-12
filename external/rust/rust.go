@@ -18,6 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/yoke/external/notrack"
 	"github.com/qiangli/yoke/pkg/binmgr"
 )
 
@@ -116,8 +117,8 @@ func ensureToolchain(ctx context.Context) (binDir string, env []string, err erro
 		return "", nil, err
 	}
 	binDir = filepath.Join(cargoHome, "bin")
-	env = append(os.Environ(), "CARGO_HOME="+cargoHome, "RUSTUP_HOME="+rustupHome,
-		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	env = notrack.Env(append(os.Environ(), "CARGO_HOME="+cargoHome, "RUSTUP_HOME="+rustupHome,
+		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH")))
 	cargo := filepath.Join(binDir, "cargo")
 	if runtime.GOOS == "windows" {
 		cargo += ".exe"
@@ -169,11 +170,14 @@ func newCmd(use, short, tool string) *cobra.Command {
 			}
 			c := binmgr.Command(cmd.Context(), filepath.Join(binDir, exe), args...)
 			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
-			c.Env = env
+			c.Env = notrack.Env(env)
 			return c.Run()
 		},
 	}
 }
+
+// ChildEnv returns env with rustup tracking disabled.
+func ChildEnv(env []string) []string { return notrack.Env(env) }
 
 // EnsureRustc provisions the bashy-owned Rust toolchain (rustup-init, one
 // time) and returns the absolute path of the REAL rustc inside it — the

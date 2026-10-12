@@ -3,6 +3,7 @@ package python
 import (
 	"context"
 
+	"github.com/qiangli/yoke/external/notrack"
 	"github.com/qiangli/yoke/pkg/muslrt"
 )
 
@@ -34,6 +35,9 @@ func uvEnv(env []string) []string {
 	}
 	return env
 }
+
+// ChildEnv returns env with pip/uv tracking disabled (PIP_DISABLE_PIP_VERSION_CHECK=1, etc).
+func ChildEnv(env []string) []string { return notrack.Env(env) }
 
 // EnsureMuslLoader installs musl's loader at /lib when this host needs it and
 // it is missing. A no-op everywhere else.

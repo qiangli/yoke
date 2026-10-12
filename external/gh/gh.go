@@ -18,6 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/yoke/external/notrack"
 	"github.com/qiangli/yoke/pkg/binmgr"
 )
 
@@ -62,6 +63,9 @@ func Ensure(ctx context.Context, version string) (string, error) {
 	return binmgr.Ensure(ctx, tool)
 }
 
+// ChildEnv returns env with gh tracking disabled (GH_NO_UPDATE_NOTIFIER=1, etc).
+func ChildEnv(env []string) []string { return notrack.Env(env) }
+
 // NewGhCmd is the `bashy gh` front-door: a transparent passthrough to the managed
 // GitHub CLI. $GH_VERSION pins the release; all args pass through to gh.
 func NewGhCmd() *cobra.Command {
@@ -80,6 +84,7 @@ With bashy act + go + git it closes the CI/CD loop without any system tooling.`,
 			}
 			c := binmgr.Command(cmd.Context(), bin, args...)
 			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+			c.Env = notrack.Env(os.Environ())
 			return c.Run()
 		},
 	}

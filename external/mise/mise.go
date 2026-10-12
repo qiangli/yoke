@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/yoke/external/notrack"
 	"github.com/qiangli/yoke/pkg/binmgr"
 )
 
@@ -70,6 +71,9 @@ func Ensure(ctx context.Context, version string) (string, error) {
 	return binmgr.Ensure(ctx, tool)
 }
 
+// ChildEnv returns env with mise tracking disabled.
+func ChildEnv(env []string) []string { return notrack.Env(env) }
+
 // NewMiseCmd is the `bashy mise` front-door: a transparent passthrough.
 func NewMiseCmd() *cobra.Command {
 	return &cobra.Command{
@@ -85,6 +89,7 @@ func NewMiseCmd() *cobra.Command {
 			}
 			c := binmgr.Command(cmd.Context(), bin, args...)
 			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+			c.Env = notrack.Env(os.Environ())
 			return c.Run()
 		},
 	}

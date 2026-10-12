@@ -28,6 +28,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/yoke/external/notrack"
 	"github.com/qiangli/yoke/pkg/binmgr"
 	"mvdan.cc/sh/v3/pathconv"
 )
@@ -220,10 +221,10 @@ func newCorepackCmd(pm string) *cobra.Command {
 			}
 			c := binmgr.Command(cmd.Context(), corepack, append([]string{pm}, args...)...)
 			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
-			c.Env = append(os.Environ(),
+			c.Env = notrack.Env(append(os.Environ(),
 				"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 				"COREPACK_ENABLE_DOWNLOAD_PROMPT=0",
-			)
+			))
 			return c.Run()
 		},
 	}
@@ -253,7 +254,7 @@ func newExecCmd(use, short, tool string) *cobra.Command {
 			}
 			c := binmgr.Command(cmd.Context(), target, args...)
 			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
-			c.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			c.Env = notrack.Env(append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH")))
 			return c.Run()
 		},
 	}
@@ -300,7 +301,7 @@ func EnsureTypeScript(ctx context.Context) (string, error) {
 		[]string{"install", "--prefix", prefix, "--no-audit", "--no-fund", "--no-package-lock", "--loglevel=error", "typescript@" + version})
 	c := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	c.Stdout, c.Stderr = os.Stderr, os.Stderr
-	c.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	c.Env = notrack.Env(append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH")))
 	if err := c.Run(); err != nil {
 		return "", fmt.Errorf("node: npm install typescript@%s: %w", version, err)
 	}
@@ -309,6 +310,9 @@ func EnsureTypeScript(ctx context.Context) (string, error) {
 	}
 	return pkg, nil
 }
+
+// ChildEnv returns env with npm/node tracking disabled. Exported for tests.
+func ChildEnv(env []string) []string { return notrack.Env(env) }
 
 // npmArgv is the argv that runs npm with args. The managed-tool drive-path
 // adaptation (binmgr.PrepareArgs) applies to npm and its arguments only: on
