@@ -255,3 +255,23 @@ func TestHistoricalUUIDHydratesLikeAnyOther(t *testing.T) {
 		t.Fatalf("collision: %v %+v", err, s)
 	}
 }
+
+func TestSprintSelectionFlag(t *testing.T) {
+	board, _ := defaultFixture(t)
+	seedSprints(t, board)
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"show", "--sprint", "last"}, "sprint #7 "},
+		{[]string{"show", "--sprint", "30"}, "sprint #30 "},
+	} {
+		out, err := runSprintErr(t, tc.args...)
+		if err != nil || !strings.Contains(out, tc.want) {
+			t.Fatalf("%v: %v %s", tc.args, err, out)
+		}
+	}
+	if out, err := runSprintErr(t, "show", "30", "--sprint", "last"); err == nil {
+		t.Fatalf("ambiguous selection accepted: %s", out)
+	}
+}

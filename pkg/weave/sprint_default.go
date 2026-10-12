@@ -73,7 +73,18 @@ func installDefaultSprintArgs(root *cobra.Command) {
 				required++
 			}
 		}
+		var selection string
+		cmd.Flags().StringVar(&selection, "sprint", "", "select a sprint number or last; alternative to the sprint operand")
 		normalize := func(args []string) ([]string, error) {
+			if cmd.Flags().Changed("sprint") {
+				if len(args) != required-1 {
+					return nil, fmt.Errorf("use either --sprint or a sprint operand, not both")
+				}
+				if selection == "" {
+					return nil, fmt.Errorf("--sprint requires a sprint number or last")
+				}
+				args = append([]string{selection}, args...)
+			}
 			omitted := len(args) == required-1
 			last := !omitted && len(args) > 0 && args[0] == "last"
 			if !omitted && !last {
