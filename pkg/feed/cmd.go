@@ -1001,7 +1001,23 @@ func newGroupCmd(env Env) *cobra.Command {
 		}
 		return nil
 	}}
-	group.AddCommand(create, add, rm, ls)
+	key := &cobra.Command{Use: "key", Short: "register this host's group encryption key so owners can add you", Args: cobra.NoArgs, RunE: func(c *cobra.Command, _ []string) error {
+		priv, err := LoadOrCreateEncKey(env.dir())
+		if err != nil {
+			return err
+		}
+		client, err := NewGroupClient(env)
+		if err != nil {
+			return err
+		}
+		pub := EncPubkeyB64(priv)
+		if err := client.PutEncKey(ctxOf(c), pub); err != nil {
+			return err
+		}
+		fmt.Fprintln(c.OutOrStdout(), pub)
+		return nil
+	}}
+	group.AddCommand(create, add, rm, ls, key)
 	return group
 }
 

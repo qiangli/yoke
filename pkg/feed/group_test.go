@@ -204,3 +204,31 @@ func TestPublicGroupPostStaysPlaintext(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A would-be member registers an encryption key before an owner can wrap
+// the group key for them; `feed group key` does that and prints the pubkey.
+func TestGroupKeyRegistersEncKey(t *testing.T) {
+	te := newTestEnv(t, &fakeExcerpter{})
+	var registered string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "PUT" || r.URL.Path != "/api/v1/feed/enckey" {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(404)
+			return
+		}
+		var body map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		registered = body["pubkey"]
+		w.WriteHeader(200)
+	}))
+	defer server.Close()
+	te.env.Cloud = func() (string, string) { return server.URL, "test-token" }
+	out := strings.TrimSpace(te.mustRun("group", "key"))
+	priv, err := LoadOrCreateEncKey(te.env.dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != EncPubkeyB64(priv) || registered != out {
+		t.Fatalf("printed %q registered %q want %q", out, registered, EncPubkeyB64(priv))
+	}
+}
