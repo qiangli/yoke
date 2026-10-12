@@ -178,7 +178,7 @@ func TestDOMLauncherOpenFailureIsRecoverable(t *testing.T) {
 		chromedp.Navigate(base+"/"),
 		chromedp.WaitVisible(`a.tile[data-app="slowapp"]`, chromedp.ByQuery),
 		chromedp.Click(`a.tile[data-app="slowapp"]`, chromedp.ByQuery),
-		chromedp.Poll(`location.pathname === "/slowapp/"`, nil),
+		chromedp.WaitVisible(`body > pre`, chromedp.ByQuery),
 		chromedp.Text(`body`, &body, chromedp.ByQuery),
 	); err != nil {
 		t.Fatal(err)
