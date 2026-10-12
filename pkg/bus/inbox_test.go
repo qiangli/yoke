@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -364,5 +366,45 @@ func TestMarkNotificationsReadStaysMonotonic(t *testing.T) {
 	}
 	if cur, _ := inboxCursorSeq("mono"); cur != 9 {
 		t.Fatalf("forward ack left cursor at %d, want 9", cur)
+	}
+}
+
+// A cursor that exists but cannot be read must surface the read error, not be
+// treated as absent and replaced: replacing it would reset the reader's
+// high-water mark. A directory at the cursor path is a deterministic read
+// failure on every platform and needs no permission tricks.
+func TestMarkNotificationsReadUnreadableCursorIsAnErrorNotAReset(t *testing.T) {
+	isolate(t)
+	path, err := cursorPath("blocked")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(path, "keep")
+	if err := os.WriteFile(sentinel, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, through := range []int64{0, 7} {
+		err := MarkNotificationsRead("blocked", through)
+		if err == nil {
+			t.Fatalf("ack through %d on an unreadable cursor succeeded; want the read error", through)
+		}
+		if strings.Contains(err.Error(), "writing the drain cursor") {
+			t.Fatalf("ack through %d reached the write path instead of failing on read: %v", through, err)
+		}
+		if st, statErr := os.Stat(path); statErr != nil || !st.IsDir() {
+			t.Fatalf("cursor path was replaced (stat=%v, err=%v); want the directory left alone", st, statErr)
+		}
+		if _, statErr := os.Stat(sentinel); statErr != nil {
+			t.Fatalf("cursor directory contents were disturbed: %v", statErr)
+		}
+		if _, statErr := os.Stat(path + ".tmp"); !os.IsNotExist(statErr) {
+			t.Fatalf("a temp cursor was left behind after a failed read: %v", statErr)
+		}
+	}
+	if _, ok := inboxCursorSeq("blocked"); ok {
+		t.Fatal("an unreadable cursor must not read as established")
 	}
 }

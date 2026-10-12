@@ -261,14 +261,18 @@ func MarkNotificationsRead(reader string, through int64) error {
 	if through < 0 {
 		through = 0
 	}
-	if _, exists := inboxCursorSeq(reader); exists {
-		current, err := readCursor(reader)
-		if err != nil {
-			return err
-		}
-		if through <= current {
-			return nil
-		}
+	// Read FIRST and fail on a read error. inboxCursorSeq folds every failure
+	// into "no cursor", so consulting it before the read would turn an
+	// unreadable cursor (EISDIR, EACCES, ...) into a fresh establishment and
+	// let the write below replace the file and reset the reader's high-water
+	// mark. A missing or unparseable cursor still reads as 0 and is written
+	// even at 0, because that file is the reader's addressability proof.
+	current, err := readCursor(reader)
+	if err != nil {
+		return err
+	}
+	if _, exists := inboxCursorSeq(reader); exists && through <= current {
+		return nil
 	}
 	return writeCursor(reader, through)
 }
