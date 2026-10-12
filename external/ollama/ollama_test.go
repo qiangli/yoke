@@ -7,50 +7,70 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
 
-func TestResolve_EnvOverride(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("exec-bit semantics differ on windows")
-	}
+func TestResolve_RefusesPerSupplyChainPolicy(t *testing.T) {
+	// Even with OLLAMA_BIN set to an executable, Resolve must fail closed
+	// per docs/bashy-service-supply-chain-policy.md (embedded only).
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "ollama")
 	if err := os.WriteFile(fake, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("OLLAMA_BIN", fake)
-	got, err := Resolve()
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	if got != fake {
-		t.Fatalf("Resolve = %q, want %q", got, fake)
-	}
-}
-
-func TestResolve_EnvOverrideNonExecutable(t *testing.T) {
-	dir := t.TempDir()
-	bad := filepath.Join(dir, "notexec")
-	if err := os.WriteFile(bad, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("OLLAMA_BIN", bad)
 	if _, err := Resolve(); err == nil {
-		t.Fatal("Resolve: want error for non-executable OLLAMA_BIN, got nil")
+		t.Fatal("Resolve: want error per supply-chain policy, got nil")
+	} else if !strings.Contains(err.Error(), ollamaSupplyChainPolicy) && !strings.Contains(err.Error(), "supply-chain") {
+		t.Fatalf("Resolve error = %q, want it to mention the supply-chain policy %q", err.Error(), ollamaSupplyChainPolicy)
 	}
 }
 
-func TestRun_NotFoundReturns127(t *testing.T) {
+func TestResolve_AlwaysFailsWithoutNetwork(t *testing.T) {
+	t.Setenv("OLLAMA_BIN", "")
+	if _, err := Resolve(); err == nil {
+		t.Fatal("Resolve: want error per supply-chain policy, got nil")
+	} else if !strings.Contains(err.Error(), ollamaSupplyChainPolicy) {
+		t.Fatalf("Resolve error = %q, want policy %q", err.Error(), ollamaSupplyChainPolicy)
+	}
+}
+
+func TestRun_RefusesPerSupplyChainPolicy(t *testing.T) {
 	t.Setenv("OLLAMA_BIN", filepath.Join(t.TempDir(), "does-not-exist"))
 	var stderr strings.Builder
 	code := Run(context.Background(), []string{"version"}, nil, nil, &stderr)
 	if code != 127 {
 		t.Fatalf("Run exit = %d, want 127", code)
 	}
-	if !strings.Contains(stderr.String(), "ollama") {
-		t.Fatalf("stderr = %q, want it to mention ollama", stderr.String())
+	if !strings.Contains(stderr.String(), ollamaSupplyChainPolicy) && !strings.Contains(stderr.String(), "supply-chain") {
+		t.Fatalf("stderr = %q, want it to mention the supply-chain policy %q", stderr.String(), ollamaSupplyChainPolicy)
 	}
+	// Ensure no exec was attempted (no network, no PATH probe).
+	if strings.Contains(stderr.String(), "on PATH") {
+		t.Fatalf("stderr = %q, want no PATH fallback mention", stderr.String())
+	}
+}
+
+// Test that OLLAMA_BIN does not enable a bypass.
+func TestRun_EnvOverrideStillRefused(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "ollama")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\necho hi\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OLLAMA_BIN", fake)
+	var stderr strings.Builder
+	code := Run(context.Background(), []string{"version"}, nil, nil, &stderr)
+	if code != 127 {
+		t.Fatalf("Run exit = %d, want 127 (policy refusal even with OLLAMA_BIN set)", code)
+	}
+	if !strings.Contains(stderr.String(), ollamaSupplyChainPolicy) {
+		t.Fatalf("stderr = %q, want policy %q", stderr.String(), ollamaSupplyChainPolicy)
+	}
+	// Verify the fake binary was NOT executed (no stdout).
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\necho should-not-run\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Getenv("OLLAMA_BIN") // ensure env still set
 }

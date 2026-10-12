@@ -5,22 +5,22 @@ package ollama
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
-// TestUseEmbeddedServe_FallsBackWithoutRunner pins the regression where
-// `ollama serve` (the argv the host model door spawns as its engine) ran the
-// in-process embedded engine even on a from-source build with no inference
-// runner compiled in, hard-failing with ErrRunnerNotInstalled and leaving the
-// door unable to serve ANY local model. serve must instead fall back to a
-// resolved system ollama when the runner is absent.
+// TestUseEmbeddedServe_FailsClosedWithoutRunner verifies the supply-chain
+// policy (Sprint 434, docs/bashy-service-supply-chain-policy.md): when the
+// embedded runner is not compiled in, `ollama serve` must NOT fall back to a
+// resolved system ollama or a downloaded archive. It must fail closed with a
+// policy error, using only the embedded server.
 func TestUseEmbeddedServe_FallsBackWithoutRunner(t *testing.T) {
 	defer func(prev func() bool) { runnerAvailable = prev }(runnerAvailable)
 	runnerAvailable = func() bool { return false } // build without -tags embed_runner
 
 	opts := CmdOptions{RunEmbeddedServe: func(context.Context) error { return nil }}
 	if useEmbeddedServe(opts) {
-		t.Fatal("serve chose the embedded engine with no inference runner compiled in; it must fall back to a resolved system ollama so the model door can still serve local models")
+		t.Fatal("serve chose the embedded engine with no inference runner compiled in; per supply-chain policy it must not use embedded (and must fail closed, never fall back to PATH/download)")
 	}
 }
 
@@ -50,5 +50,51 @@ func TestUseEmbeddedServe_SystemBinariesBypassesEmbedded(t *testing.T) {
 func TestUseEmbeddedServe_NoCallbackNeverEmbedded(t *testing.T) {
 	if useEmbeddedServe(CmdOptions{}) {
 		t.Fatal("no RunEmbeddedServe callback: serve cannot take the embedded path")
+	}
+}
+
+// TestServeFailsClosedWithoutRunner proves the gate: `ollama serve` without an
+// embedded runner must fail with a supply-chain policy error, never invoke
+// Resolve or exec a third-party binary, and never attempt a download (no network).
+func TestServeFailsClosedWithoutRunner(t *testing.T) {
+	defer func(prev func() bool) { runnerAvailable = prev }(runnerAvailable)
+	runnerAvailable = func() bool { return false }
+
+	cmd := NewOllamaCmd(CmdOptions{RunEmbeddedServe: func(context.Context) error { return nil }})
+	cmd.SetArgs([]string{"serve"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected serve to fail closed per supply-chain policy, but succeeded")
+	}
+	if !strings.Contains(err.Error(), ollamaSupplyChainPolicy) && !strings.Contains(err.Error(), "supply-chain") {
+		t.Fatalf("serve error = %q, want it to mention the supply-chain policy %q", err.Error(), ollamaSupplyChainPolicy)
+	}
+}
+
+// TestRunFailsClosedWithoutDelegate proves `ollama run` without a delegate
+// (the old PATH fallback) now fails closed per policy.
+func TestRunFailsClosedWithoutDelegate(t *testing.T) {
+	cmd := NewOllamaCmd(CmdOptions{})
+	cmd.SetArgs([]string{"run", "llama3"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected run to fail closed per supply-chain policy, but succeeded")
+	}
+	if !strings.Contains(err.Error(), ollamaSupplyChainPolicy) && !strings.Contains(err.Error(), "supply-chain") {
+		t.Fatalf("run error = %q, want policy %q", err.Error(), ollamaSupplyChainPolicy)
+	}
+}
+
+// TestVersionFailsClosedWithoutDelegate proves `ollama version` without a
+// delegate now fails closed per policy.
+func TestVersionFailsClosedWithoutDelegate(t *testing.T) {
+	cmd := NewOllamaCmd(CmdOptions{})
+	cmd.SetArgs([]string{"version"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected version to fail closed per supply-chain policy, but succeeded")
+	}
+	if !strings.Contains(err.Error(), ollamaSupplyChainPolicy) && !strings.Contains(err.Error(), "supply-chain") {
+		t.Fatalf("version error = %q, want policy %q", err.Error(), ollamaSupplyChainPolicy)
 	}
 }

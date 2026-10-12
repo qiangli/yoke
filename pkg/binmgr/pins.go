@@ -120,13 +120,6 @@ var pinnedDigests = map[string]string{
 	"goreleaser@v2.18.2-bashy.1/windows/amd64": "6e9ff7dd2d9d88810b26c25d0fafcacca2f0df341209bdf7c6c4c4ab1fbf52cd",
 	"goreleaser@v2.18.2-bashy.1/windows/arm64": "c6d83c623d3b5b4ecb4b5bbe2dd18b9a00aded82be536bc9e26d69a733be6eb1",
 
-	// ollama@v0.40.1 — official ollama/ollama release sha256sum.txt
-	"ollama@v0.40.1/darwin/amd64":  "66e1587711f3a06315b23782ba74897001da6c8b8edf6c0371f7533015a076dd",
-	"ollama@v0.40.1/darwin/arm64":  "66e1587711f3a06315b23782ba74897001da6c8b8edf6c0371f7533015a076dd",
-	"ollama@v0.40.1/linux/amd64":   "a7aebbe3dd76ccf1351a56a3e57218ad4863cb5f9a9938c58de87a37555e355d",
-	"ollama@v0.40.1/linux/arm64":   "f5cbd9a97e0de9502ef928cb993f6d16468e25be6d55a8529d7fd2b67a130bcb",
-	"ollama@v0.40.1/windows/amd64": "b394d14436d38032f23190e3f14eb2c6dad5ebbe4e192414f74c8fdca01703ab",
-	"ollama@v0.40.1/windows/arm64": "68681e6822160121c3384ba99c91025cfea2d14dcc7d166af0f94263b69407a9",
 }
 
 // PinnedSHA256 returns the committed sha256 for a tool tuple, if one exists.

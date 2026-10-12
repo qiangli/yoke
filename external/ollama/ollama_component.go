@@ -31,8 +31,10 @@ import (
 )
 
 // ErrRunnerNotInstalled is returned when the embedded inference runner
-// is not compiled into this binary.
-var ErrRunnerNotInstalled = errors.New("missing the embedded inference runner; please reinstall the binary or set inference.enabled: false to opt out")
+// is not compiled into this binary. Per docs/bashy-service-supply-chain-policy.md
+// (Sprint 434) bashy never falls back to a third-party ollama binary or archive;
+// the embedded runner compiled from source is the only allowed runtime.
+var ErrRunnerNotInstalled = errors.New("missing the embedded inference runner; per docs/bashy-service-supply-chain-policy.md (supply-chain policy) the embedded runner is the only allowed runtime — reinstall the binary with -tags embed_runner (external/ollama/runner_embed) or set inference.enabled: false to opt out")
 
 // Config holds configuration parameters for the Ollama component.
 type Config struct {
