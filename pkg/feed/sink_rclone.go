@@ -15,9 +15,14 @@ type rcloneSink struct {
 	name   string
 	target string
 	public string
+	run    func(context.Context, ...string) ([]byte, error)
 }
 
 func openRcloneSink(cfg SinkConfig) (Sink, error) {
+	return openRcloneSinkWithRunner(cfg, runRclone)
+}
+
+func openRcloneSinkWithRunner(cfg SinkConfig, run func(context.Context, ...string) ([]byte, error)) (Sink, error) {
 	if cfg.Name == "" {
 		return nil, fmt.Errorf("feed: rclone sink name is required")
 	}
@@ -31,7 +36,7 @@ func openRcloneSink(cfg SinkConfig) (Sink, error) {
 	if err != nil {
 		return nil, fmt.Errorf("feed: rclone sink %q: %w", cfg.Name, err)
 	}
-	return &rcloneSink{name: cfg.Name, target: cfg.Target, public: public}, nil
+	return &rcloneSink{name: cfg.Name, target: cfg.Target, public: public, run: run}, nil
 }
 
 func (s *rcloneSink) Name() string { return s.name }
@@ -82,17 +87,10 @@ func (s *rcloneSink) Put(ctx context.Context, relPath string, data []byte) (stri
 		return "", fmt.Errorf("feed: rclone sink %q: temp file: %w", s.name, err)
 	}
 	dest := s.dest(rp)
-	if _, err := runRclone(ctx, "copyto", tmpName, dest); err != nil {
+	if _, err := s.run(ctx, "copyto", tmpName, dest); err != nil {
 		return "", err
 	}
-	if s.public != "" {
-		return s.public + "/" + rp, nil
-	}
-	out, err := runRclone(ctx, "link", dest)
-	if err != nil {
-		return dest, nil
-	}
-	if u := strings.TrimSpace(string(out)); u != "" {
+	if u := rclonePublicURL(ctx, s.run, dest, s.public, rp); u != "" {
 		return u, nil
 	}
 	return dest, nil
@@ -122,7 +120,7 @@ func (s *rcloneSink) Get(ctx context.Context, ref string) ([]byte, error) {
 		}
 		dest = base + "/" + rp
 	}
-	out, err := runRclone(ctx, "cat", dest)
+	out, err := s.run(ctx, "cat", dest)
 	if err != nil {
 		return nil, err
 	}

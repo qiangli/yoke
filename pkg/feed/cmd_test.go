@@ -68,6 +68,12 @@ func newTestEnv(t *testing.T, ex Excerpter) *testEnv {
 		OpenSink: func(c SinkConfig) (Sink, error) {
 			return &dirSink{name: c.Name, root: c.Target, fail: te.fail[c.Name]}, nil
 		},
+		RcloneRun: func(_ context.Context, args ...string) ([]byte, error) {
+			if len(args) == 1 && args[0] == "listremotes" {
+				return []byte("remote:\n"), nil
+			}
+			return nil, fmt.Errorf("unexpected rclone command: %v", args)
+		},
 		// Unpaired by default so posts never touch the network; index
 		// tests override Cloud to point at httptest.
 		Cloud: func() (string, string) { return "", "" },

@@ -28,6 +28,8 @@ type Env struct {
 	Excerpter Excerpter
 	// OpenSink builds a publish sink. Default OpenSink.
 	OpenSink func(SinkConfig) (Sink, error)
+	// RcloneRun overrides the rclone command runner for sink setup and publishing.
+	RcloneRun func(context.Context, ...string) ([]byte, error)
 	// OpenSource builds a follow reader. Default OpenSource.
 	OpenSource func(ref string) (Source, error)
 	// Now is the clock. Default time.Now.
@@ -75,7 +77,17 @@ func (e Env) openSink(c SinkConfig) (Sink, error) {
 	if e.OpenSink != nil {
 		return e.OpenSink(c)
 	}
+	if c.Kind == "rclone" && e.RcloneRun != nil {
+		return openRcloneSinkWithRunner(c, e.RcloneRun)
+	}
 	return OpenSink(c)
+}
+
+func (e Env) rcloneRun(ctx context.Context, args ...string) ([]byte, error) {
+	if e.RcloneRun != nil {
+		return e.RcloneRun(ctx, args...)
+	}
+	return runRclone(ctx, args...)
 }
 
 func (e Env) openSource(ref string) (Source, error) {
@@ -150,6 +162,11 @@ func newSinkCmd(env Env) *cobra.Command {
 			}
 			if cfg.Kind != "github" && branch != "" {
 				return errors.New("feed: --branch applies to github sinks only")
+			}
+			if cfg.Kind == "rclone" {
+				if err := checkRcloneRemote(ctxOf(c), cfg.Target, env.rcloneRun); err != nil {
+					return err
+				}
 			}
 			dir := env.dir()
 			cfgs, err := LoadSinks(dir)

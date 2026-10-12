@@ -1,0 +1,46 @@
+package feed
+
+import (
+	"context"
+	"fmt"
+	"strings"
+)
+
+type rcloneRunner func(context.Context, ...string) ([]byte, error)
+
+// checkRcloneRemote verifies a named remote before saving a sink. Bare local
+// paths remain valid rclone targets and need no configuration.
+func checkRcloneRemote(ctx context.Context, target string, run rcloneRunner) error {
+	name, _, remote := strings.Cut(target, ":")
+	if remote && name == "" {
+		return fmt.Errorf("feed: rclone target %q needs a remote name; run `bashy rclone config` to add one", target)
+	}
+	if !remote || strings.ContainsAny(name, `/\`) {
+		return nil
+	}
+	out, err := run(ctx, "listremotes")
+	if err != nil {
+		return fmt.Errorf("feed: cannot list rclone remotes: %w", err)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.TrimSpace(line) == name+":" {
+			return nil
+		}
+	}
+	return fmt.Errorf("feed: rclone remote %q is not configured; run `bashy rclone config` to add it", name)
+}
+
+// rclonePublicURL derives a published file's public URL. Some backends cannot
+// create public links, so a configured public base is used when link fails or
+// returns a non-public ref. An empty result keeps the post out of the registry.
+func rclonePublicURL(ctx context.Context, run rcloneRunner, dest, publicBase, relPath string) string {
+	if out, err := run(ctx, "link", dest); err == nil {
+		if link := strings.TrimSpace(string(out)); isPublicSinkURL(link) {
+			return link
+		}
+	}
+	if publicBase != "" {
+		return publicBase + "/" + relPath
+	}
+	return ""
+}
