@@ -41,6 +41,10 @@ type Env struct {
 	// fleet.ResolveCloud (the paired outpost token); an empty token means
 	// the host is not paired. Tests override it to point at httptest.
 	Cloud func() (base, token string)
+	// serverRead returns post ids read elsewhere (the web inbox). nil = none.
+	serverRead func(ctx context.Context) (map[string]bool, error)
+	// inboxURL is the reader's web inbox, "" when not paired.
+	inboxURL func(ctx context.Context) string
 }
 
 func (e Env) dir() string {
@@ -106,6 +110,7 @@ inside a fence.`,
 		newSinkCmd(env), newPostCmd(env),
 		newFollowCmd(env), newUnfollowCmd(env), newFollowingCmd(env),
 		newFetchCmd(env), newReadCmd(env),
+		newChannelCmd(env), newDeliverCmd(env),
 	)
 	return root
 }
