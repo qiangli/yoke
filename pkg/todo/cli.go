@@ -378,6 +378,11 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 					return err
 				}
 			}
+			if selected != 0 && PrepareSprint != nil {
+				if err := PrepareSprint(st, selected); err != nil {
+					return err
+				}
+			}
 			it, err := addPrepared(st, strings.Join(args, " "), note, priority, due, recurring, assignee, func(it *issue.Issue) {
 				if selected != 0 {
 					LinkSprint(it, selected)
@@ -822,6 +827,11 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 				selected, err := parseSprintSelector(sprintSelector, true)
 				if err != nil {
 					return err
+				}
+				if selected != 0 && PrepareSprint != nil {
+					if err := PrepareSprint(st, selected); err != nil {
+						return err
+					}
 				}
 				LinkSprint(it, selected)
 			}

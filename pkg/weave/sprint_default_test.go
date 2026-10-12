@@ -111,6 +111,12 @@ func TestTodoAddDefaultsToLatestCreatedSprint(t *testing.T) {
 	if len(q.Stories) != 3 {
 		t.Fatalf("todo add changed the board: %d cards", len(q.Stories))
 	}
+	for _, n := range []int64{7, 30} {
+		card := findWeaveStory(q, n)
+		if len(card.StoryRoots) != 1 || card.StoryRoots[0] != root {
+			t.Fatalf("selected sprint %d does not index its stories: %+v", n, card)
+		}
+	}
 }
 
 func TestTodoAddPersonalStaysStandalone(t *testing.T) {
@@ -273,5 +279,28 @@ func TestSprintSelectionFlag(t *testing.T) {
 	}
 	if out, err := runSprintErr(t, "show", "30", "--sprint", "last"); err == nil {
 		t.Fatalf("ambiguous selection accepted: %s", out)
+	}
+}
+
+func TestTodoEditLastAndUnlink(t *testing.T) {
+	board, root := defaultFixture(t)
+	seedSprints(t, board)
+	if out, err := defaultTodo(t, root, "add", "move me", "--no-sprint"); err != nil {
+		t.Fatalf("add: %v %s", err, out)
+	}
+	it := storyByTitle(t, root, "move me")
+	if out, err := defaultTodo(t, root, "edit", it.ID, "--sprint", "last"); err != nil {
+		t.Fatalf("edit last: %v %s", err, out)
+	}
+	it = storyByTitle(t, root, "move me")
+	if it.Sprint != 7 || it.SprintID == "" {
+		t.Fatalf("last not linked: %+v", it)
+	}
+	if out, err := defaultTodo(t, root, "edit", it.ID, "--sprint", "0"); err != nil {
+		t.Fatalf("unlink: %v %s", err, out)
+	}
+	it = storyByTitle(t, root, "move me")
+	if it.Sprint != 0 || it.SprintID != "" || it.SprintTitle != "" {
+		t.Fatalf("unlink left sprint fields: %+v", it)
 	}
 }

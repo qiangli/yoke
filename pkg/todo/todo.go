@@ -432,6 +432,10 @@ var SprintPreflight func() error
 // the standalone default.
 var DefaultSprint func() (int64, error)
 
+// PrepareSprint registers a repository store with an existing selected card
+// before writing a linked story. Plain todo hosts leave it nil.
+var PrepareSprint func(*issue.Store, int64) error
+
 // LinkSprint sets the story's sprint fields from seq: all three when the seam
 // answers, the seq alone when it does not, and none when seq is 0 (unlink).
 // The seq is a label scoped to the filer's host; the uuid is the identity.
