@@ -528,7 +528,7 @@ func (t *Task) absorb(lines []string) {
 			t.MetaLines = append(t.MetaLines, ln)
 			switch k {
 			case "requires":
-				t.Requires = append(t.Requires, splitList(v)...)
+				t.Requires = append(t.Requires, splitRequires(v)...)
 			case "inputs":
 				t.Inputs = append(t.Inputs, splitList(v)...)
 			case "sources":
@@ -754,6 +754,63 @@ func splitList(v string) []string {
 	return strings.FieldsFunc(v, func(r rune) bool {
 		return r == ',' || unicode.IsSpace(r)
 	})
+}
+
+// splitRequires splits a Requires value like splitList, except that a comma
+// inside a matrix-child reference (`<target>:<k>=<v>,<k2>=<v2>`, the name
+// comboSuffix produces) is part of the name: the comma joins only when the
+// token so far already reads `name:key=value` and what follows the comma
+// (up to the next comma or space) is another `key=value`. `build:os=linux,
+// arch=amd64` (comma-space) and `build:os=linux,clean` still split.
+func splitRequires(v string) []string {
+	var out []string
+	var cur []rune
+	flush := func() {
+		if len(cur) > 0 {
+			out = append(out, string(cur))
+			cur = cur[:0]
+		}
+	}
+	rs := []rune(v)
+	for i := 0; i < len(rs); i++ {
+		r := rs[i]
+		switch {
+		case unicode.IsSpace(r):
+			flush()
+		case r == ',':
+			if isMatrixRef(cur) && isKeyValue(rs[i+1:]) {
+				cur = append(cur, r)
+			} else {
+				flush()
+			}
+		default:
+			cur = append(cur, r)
+		}
+	}
+	flush()
+	return out
+}
+
+// isMatrixRef reports whether tok reads `name:key=value[,key=value...]`.
+func isMatrixRef(tok []rune) bool {
+	s := string(tok)
+	colon := strings.IndexByte(s, ':')
+	if colon <= 0 {
+		return false
+	}
+	return isKeyValue([]rune(s[colon+1:]))
+}
+
+// isKeyValue reports whether the run of non-separator runes at the start of
+// rest is `key=value` with a non-empty key and value.
+func isKeyValue(rest []rune) bool {
+	end := 0
+	for end < len(rest) && rest[end] != ',' && !unicode.IsSpace(rest[end]) {
+		end++
+	}
+	seg := string(rest[:end])
+	eq := strings.IndexByte(seg, '=')
+	return eq > 0 && eq < len(seg)-1
 }
 
 // indented reports whether a line begins with a space or tab.

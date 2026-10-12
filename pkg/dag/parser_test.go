@@ -267,3 +267,59 @@ func TestHasTasksSection(t *testing.T) {
 		})
 	}
 }
+
+// A multi-key matrix child is named `<target>:<k>=<v>,<k2>=<v2>` (see
+// comboSuffix), so a comma inside that reference is part of the name, not a
+// list separator. Plain comma-separated Requires lists must keep splitting.
+func TestParseRequiresMatrixChildReference(t *testing.T) {
+	md := "## Tasks\n\n" +
+		"### build\nMatrix: arch=amd64,arm64 os=linux,darwin\n" + block("bash", "echo $arch $os") +
+		"\n### ship\nRequires: clean, build:arch=amd64,os=linux, deps build:arch=arm64,os=darwin\n" +
+		block("bash", "echo ship") +
+		"\n### clean\n" + block("bash", "true") +
+		"\n### deps\n" + block("bash", "true")
+
+	doc, err := Parse(strings.NewReader(md), "DAG.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ship, ok := doc.Lookup("ship")
+	if !ok {
+		t.Fatal("ship missing")
+	}
+	want := []string{"clean", "build:arch=amd64,os=linux", "deps", "build:arch=arm64,os=darwin"}
+	if !reflect.DeepEqual(ship.Requires, want) {
+		t.Fatalf("requires = %q, want %q", ship.Requires, want)
+	}
+
+	// The reference resolves to a concrete node after expansion.
+	doc.expandMatrix()
+	for _, name := range []string{"build:arch=amd64,os=linux", "build:arch=arm64,os=darwin"} {
+		if _, ok := doc.Lookup(name); !ok {
+			t.Errorf("matrix child %q not found after expansion", name)
+		}
+	}
+}
+
+func TestSplitRequires(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"clean, deps", []string{"clean", "deps"}},
+		{"clean,deps", []string{"clean", "deps"}},
+		{"clean deps", []string{"clean", "deps"}},
+		{"build:os=linux", []string{"build:os=linux"}},
+		{"build:os=linux,arch=amd64", []string{"build:os=linux,arch=amd64"}},
+		{"build:os=linux,arch=amd64,clean", []string{"build:os=linux,arch=amd64", "clean"}},
+		{"build:os=linux, arch=amd64", []string{"build:os=linux", "arch=amd64"}},
+		{"a:b=c,d", []string{"a:b=c", "d"}},
+		{"a=b,c=d", []string{"a=b", "c=d"}},
+		{"", nil},
+	}
+	for _, c := range cases {
+		if got := splitRequires(c.in); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("splitRequires(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
