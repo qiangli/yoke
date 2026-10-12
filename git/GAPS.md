@@ -139,15 +139,22 @@ Abbreviated object names (`log --oneline`, `%h`, `rev-parse --short`,
 rule — `ceil((msb(packed objects)+1)/2)`, at least 7, extended to a
 unique prefix (`abbrev.go`); a multi-pack-index declines.
 
-**Known exception — patch hunk placement.** Native patches (`diff
---cached`, `show <commit>`) carry host git's headers, abbreviations and
-function context, but hunks come from go-git's line diff, not xdiff:
-where a change is ambiguous (a moved closing brace, a repeated line)
-host git's compaction and indent heuristic can place the hunk
-differently. Both patches are valid and apply identically; they are not
-always byte-identical. They stay native because the FROM-scratch bashy
-image (SWE-bench prediction extraction) has no host git; closing this
-needs a port of xdiff's Myers + `xdl_change_compact` + indent heuristic.
+**Patches — clean-room line diff.** Native patches (`diff --cached`,
+`show <commit>`) take their hunks from `linediff.go`, written from the
+published Myers algorithm and git's documented behavior and fitted to
+host git black-box (`linediff_oracle_test.go`; git's xdiff is LGPL and
+was not used). Established rules: Myers bisection with git's
+tie-breaks; lines unique to one side dropped before the search;
+"frequent" lines (>= 2^(floor(log4 n)+1) equals) dropped inside long
+runs of changed lines; group compaction; and the indent-heuristic slider
+choice (a size+1 window, top-down scan, sign-of-indent comparator,
+fitted penalties). Measured: random edits 100% (no heuristic) / 99.9%
+(default); real history of six dhnt repositories 99.5% byte-identical
+(`LINEDIFF_REAL_REPOS=... go test -run TestLineDiffRealHistory`), up from
+85% with go-git's diff. **Known residual (~0.5% of real files):** some
+interactions of frequent lines with changed-line runs and a few slider
+choices on larger groups still differ; such patches stay valid and
+apply identically.
 
 Declined by design (host git via `--external`): long-form `status`,
 `status -b`/`--ignored`/pathspecs, any `status`/`diff`/`ls-files` over an

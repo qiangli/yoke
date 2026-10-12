@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 
 	gogit "github.com/go-git/go-git/v5"
@@ -290,71 +289,61 @@ func treePatch(root string, base, target *object.Tree, paths []string, noRenames
 	if diffDriversConfigured(root, changes) {
 		return "", ErrUnsupported // a userdiff driver changes hunk headers
 	}
-	old := map[string][]string{}
-	for _, c := range changes {
-		if c.From.Name == "" {
+	// Headers come from go-git (adjusted above); every file's hunks come
+	// from lineDiff, which reproduces host git's edit script, hunk
+	// placement and function context (linediff.go).
+	blocks := splitFilePatches(out)
+	if len(blocks) != len(changes) {
+		return "", ErrUnsupported
+	}
+	var b strings.Builder
+	for i, c := range changes {
+		block := blocks[i]
+		at := strings.Index(block, "\n@@ ")
+		if at < 0 {
+			b.WriteString(block) // header-only entry (mode change, empty file)
 			continue
 		}
-		f, err := c.From.Tree.TreeEntryFile(&c.From.TreeEntry)
+		from, err := changeSideContent(c.From)
 		if err != nil {
 			return "", ErrUnsupported
 		}
-		content, err := f.Contents()
+		to, err := changeSideContent(c.To)
 		if err != nil {
 			return "", ErrUnsupported
 		}
-		old[c.From.Name] = strings.Split(content, "\n")
+		la, lb := diffSplitLines(from), diffSplitLines(to)
+		b.WriteString(block[:at+1])
+		b.WriteString(newLineDiff(la, lb, true).unified(3, funcNamer(la)))
 	}
-	return withFuncNames(out, old), nil
+	return b.String(), nil
 }
 
-// hunkHeaderRE matches a hunk header; go-git appends its own context
-// (the line above the hunk, untruncated), which group 3 captures so it
-// can be replaced with host git's.
-var hunkHeaderRE = regexp.MustCompile(`^(@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@)(.*)$`)
-
-// withFuncNames appends host git's default hunk-header function context:
-// the nearest pre-image line above the hunk (searching no further than
-// the previous hunk's start) that begins with a letter, '_' or '$', cut
-// to 80 bytes and right-trimmed (xdiff def_ff). A hunk with no match
-// reuses the previous one's, as xdiff does.
-func withFuncNames(patch string, old map[string][]string) string {
-	lines := strings.SplitAfter(patch, "\n")
-	var pre []string
-	limit, fn := -1, ""
-	inHeader := false
-	for i, l := range lines {
-		switch {
-		case strings.HasPrefix(l, "diff --git "):
-			inHeader, pre, limit, fn = true, nil, -1, ""
-		case inHeader && strings.HasPrefix(l, "--- "):
-			name := strings.TrimSuffix(strings.TrimSuffix(l, "\n"), "\t")
-			pre = old[strings.TrimPrefix(name, "--- a/")]
-		case strings.HasPrefix(l, "@@"):
-			inHeader = false
-			m := hunkHeaderRE.FindStringSubmatch(strings.TrimSuffix(l, "\n"))
-			if m == nil {
-				continue
-			}
-			start, _ := strconv.Atoi(m[2])
-			s1 := start - 1
-			if m[3] == "0" {
-				s1 = start
-			}
-			for ln := s1 - 1; ln > limit && ln >= 0 && ln < len(pre); ln-- {
-				if f, ok := defFuncName(pre[ln]); ok {
-					fn = f
-					break
-				}
-			}
-			limit = s1 - 1
-			lines[i] = m[1] + "\n"
-			if fn != "" {
-				lines[i] = m[1] + " " + fn + "\n"
-			}
+// splitFilePatches cuts a multi-file patch at its "diff --git" headers.
+func splitFilePatches(p string) []string {
+	var out []string
+	for len(p) > 0 {
+		next := strings.Index(p[1:], "\ndiff --git ")
+		if next < 0 {
+			out = append(out, p)
+			break
 		}
+		out = append(out, p[:next+2])
+		p = p[next+2:]
 	}
-	return strings.Join(lines, "")
+	return out
+}
+
+// changeSideContent is one side's blob content ("" for a missing side).
+func changeSideContent(e object.ChangeEntry) (string, error) {
+	if e.Name == "" {
+		return "", nil
+	}
+	f, err := e.Tree.TreeEntryFile(&e.TreeEntry)
+	if err != nil {
+		return "", err
+	}
+	return f.Contents()
 }
 
 func defFuncName(line string) (string, bool) {
