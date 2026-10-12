@@ -69,7 +69,7 @@ func NewMeetCmd() *cobra.Command {
 	}
 	cmd.CompletionOptions.DisableDefaultCmd = true
 	cmd.AddCommand(
-		newOpenCmd(), newConsultCmd(), newDMCmd(), newReadCmd(), newTellCmd(), newDispatchCmd(), newRoundCmd(),
+		newOpenCmd(), newConsultCmd(), newDMCmd(), newDMPostCmd(), newReadCmd(), newTellCmd(), newDispatchCmd(), newRoundCmd(),
 		newPollCmd(), newAskCmd(), newInviteCmd(), newKickCmd(),
 		newConvergeCmd(), newCloseCmd(), newAbandonCmd(), newAmendCmd(), newApplyCmd(),
 		newShowCmd(), newContributionsCmd(), newListCmd(), newResumeCmd(), newReferenceCmd(),
@@ -1854,14 +1854,17 @@ func newDMCmd() *cobra.Command {
 	var as string
 	var channel, sender, thread string
 	var revoke bool
+	var attaches []string
 	cmd := &cobra.Command{
 		Use:   "dm <agent>",
 		Short: "open or reuse a direct conversation using derived peer presence, or relay an external channel message with --channel/--sender",
-		Long: "With --channel/--sender, dm is the external messenger front door: `dm [AGENT] --channel C --sender S [--thread T] [TEXT...]`\n" +
-			"reads TEXT from argv or one JSON object ({\"text\":...,\"thread\":...}) on stdin and prints the reply on stdout.\n" +
-			"An empty AGENT (\"\") routes to the sender's fleet binding. The sender must hold a live app-pair device:\n" +
+		Long: "With --channel/--sender, dm is the external messenger front door: `dm [AGENT] --channel C --sender S [--thread T] [--attach FILE...] [TEXT...]`\n" +
+			"reads TEXT from argv or one JSON object ({\"text\":...,\"thread\":...,\"attachments\":...}) on stdin and prints the reply on stdout.\n" +
+			"--attach (repeatable) names photo files the gateway already downloaded on this host; they reach the agent turn as paths only,\n" +
+			"never as contents, and are never executed. An empty AGENT (\"\") routes to the sender's fleet binding. The sender must hold a live app-pair device:\n" +
 			"an unknown sender gets a single-use code for `bashy app pair approve CODE --allow ask|control|approve`.\n" +
 			"/approve ID and /deny ID settle the shared approval queue (scope approve); /meet ROOM TEXT posts to a room (scope control).\n" +
+			"A /approve that settles a feed-post draft publishes it with its photos, cross-posts to its destinations, and prints the viewer link.\n" +
 			"--revoke ends the sender's pairing.",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if sender != "" {
@@ -1878,14 +1881,14 @@ func newDMCmd() *cobra.Command {
 				if len(args) > 0 {
 					agent, args = args[0], args[1:]
 				}
-				text, stdinThread, err := readDMFrontDoorText(cmd.InOrStdin(), args)
+				text, stdinThread, stdinAttach, err := readDMFrontDoorRequest(cmd.InOrStdin(), args)
 				if err != nil {
 					return err
 				}
 				if thread == "" {
 					thread = stdinThread
 				}
-				return runDMFrontDoor(cmd, agent, channel, sender, thread, text)
+				return runDMFrontDoor(cmd, agent, channel, sender, thread, text, append(stdinAttach, attaches...))
 			}
 			if revoke {
 				return fmt.Errorf("meet: dm --revoke needs --channel and --sender")
@@ -1956,6 +1959,7 @@ func newDMCmd() *cobra.Command {
 	cmd.Flags().StringVar(&channel, "channel", "", "external channel the message arrived on (gateway/webhook front door)")
 	cmd.Flags().StringVar(&sender, "sender", "", "external sender identity on --channel (gateway/webhook front door)")
 	cmd.Flags().StringVar(&thread, "thread", "", "external thread id, carried through for traceability")
+	cmd.Flags().StringArrayVar(&attaches, "attach", nil, "photo file downloaded on this host, passed to the agent turn as data only (repeatable)")
 	cmd.Flags().BoolVar(&revoke, "revoke", false, "revoke a previously paired --channel/--sender's access instead of sending a message")
 	return cmd
 }

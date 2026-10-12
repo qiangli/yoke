@@ -294,126 +294,22 @@ func runPost(c *cobra.Command, env Env, file string, have Excerpt, replyTo, relP
 	if err != nil {
 		return fmt.Errorf("feed: reading post body: %w", err)
 	}
-	body := strings.TrimSpace(string(raw))
-	if body == "" {
-		return errors.New("feed: post body is empty")
-	}
-	dir := env.dir()
-	cfgs, err := LoadSinks(dir)
-	if err != nil {
-		return err
-	}
-	if len(cfgs) == 0 {
-		return errors.New("feed: no sinks configured; add one with `feed sink add github|rclone NAME TARGET`")
-	}
-	sinks := make([]Sink, 0, len(cfgs))
-	for _, cfg := range cfgs {
-		s, err := env.openSink(cfg)
-		if err != nil {
-			return err
-		}
-		sinks = append(sinks, s)
-	}
-
-	ctx := ctxOf(c)
-	ex, err := ResolveExcerpt(ctx, env.excerpter(), body, have)
-	if err != nil {
-		return err
-	}
-	id, err := uuid.NewV7()
-	if err != nil {
-		return fmt.Errorf("feed: generating post id: %w", err)
-	}
-	now := env.now().UTC()
-	p := &Post{
-		ID:       id.String(),
-		Author:   subscriberName(asFlag(c)),
-		Created:  now.Format(time.RFC3339),
-		Headline: ex.Headline,
-		Dek:      ex.Dek,
-		Labels:   ex.Labels,
-		ReplyTo:  replyTo,
-		Body:     body,
-	}
-	if relPath == "" {
-		relPath = fmt.Sprintf("posts/%04d/%s.md", now.Year(), p.ID)
-	}
-	rel, err := validateRelPath(relPath)
-	if err != nil {
-		return err
-	}
-	if rel == IndexName {
-		return fmt.Errorf("feed: %s is reserved for the post index", IndexName)
-	}
-	attachEntries, uploads, err := collectAttachments(attaches, rel, env.maxAttachBytes())
-	if err != nil {
-		return err
-	}
-	p.Attachments = attachEntries
-	if err := prepareGroupPost(ctx, c, env, p); err != nil {
-		return err
-	}
-	priv, err := LoadOrCreateKey(dir)
-	if err != nil {
-		return err
-	}
-	if err := SignPost(priv, p); err != nil {
-		return err
-	}
-	data, err := p.Marshal()
-	if err != nil {
-		return err
-	}
-
-	results := PutAll(ctx, sinks, rel, data)
-	byName := map[string]Sink{}
-	for _, s := range sinks {
-		byName[s.Name()] = s
-	}
-	out, errw := c.OutOrStdout(), c.ErrOrStderr()
-	failed := 0
-	for _, r := range results {
-		if r.Err == nil {
-			if ierr := appendIndex(ctx, byName[r.Name], rel); ierr != nil {
-				r.Err = fmt.Errorf("posted to %s but not indexed: %w", r.URL, ierr)
-			}
-		}
-		if r.Err != nil {
-			failed++
-			fmt.Fprintf(out, "FAILED\t%s\t%s\n", r.Name, oneLine(r.Err.Error()))
-			continue
-		}
-		fmt.Fprintf(out, "ok\t%s\t%s\n", r.Name, r.URL)
-	}
-	fmt.Fprintf(errw, "post %s -> %s\n", p.ID, rel)
-	if failed == len(results) {
-		return fmt.Errorf("feed: post %s was not published: all %d sinks failed", p.ID, failed)
-	}
-	for _, u := range uploads {
-		ures := PutAll(ctx, sinks, u.rel, u.data)
-		ufailed := 0
-		for _, r := range ures {
-			if r.Err != nil {
-				ufailed++
-				fmt.Fprintf(out, "FAILED\t%s\t%s\t%s\n", r.Name, u.entry.Path, oneLine(r.Err.Error()))
-				continue
-			}
-			fmt.Fprintf(out, "ok\t%s\t%s\n", r.Name, r.URL)
-		}
-		if ufailed == len(ures) {
-			return fmt.Errorf("feed: post %s published but attachment %q reached no sink", p.ID, u.entry.Path)
-		}
-		if ufailed > 0 {
-			fmt.Fprintf(errw, "warning: attachment %q missed %d of %d sinks; fetchers there will see drift\n", u.entry.Path, ufailed, len(ures))
-		}
-	}
-	if failed > 0 {
-		fmt.Fprintf(errw, "warning: %d of %d sinks failed; the post is live on the rest\n", failed, len(results))
-	}
-	if !noIndex {
-		indexPublishedPost(ctx, env, dir, errw, p, rel, data, results, forceKey)
-	}
-	return nil
+	group, _ := c.Flags().GetString("group")
+	res, pubErr := Publish(ctxOf(c), env, PublishRequest{
+		Body:        string(raw),
+		Headline:    have.Headline,
+		Dek:         have.Dek,
+		Labels:      have.Labels,
+		ReplyTo:     replyTo,
+		Path:        relPath,
+		Group:       group,
+		Attachments: attaches,
+		Author:      subscriberName(asFlag(c)),
+		ForceKey:    forceKey,
+		NoIndex:     noIndex,
+	})
+	PrintPublishResult(c.OutOrStdout(), c.ErrOrStderr(), res)
+	return pubErr
 }
 
 // indexPublishedPost registers a post that landed on at least one sink with
@@ -1033,6 +929,12 @@ func newGroupCmd(env Env) *cobra.Command {
 
 func prepareGroupPost(ctx context.Context, c *cobra.Command, env Env, p *Post) error {
 	id, _ := c.Flags().GetString("group")
+	return prepareGroupPostFor(ctx, env, id, p)
+}
+
+// prepareGroupPostFor is the cobra-free form of prepareGroupPost: an empty
+// group id is a no-op so programmatic publishers (Publish) share the path.
+func prepareGroupPostFor(ctx context.Context, env Env, id string, p *Post) error {
 	if id == "" {
 		return nil
 	}
