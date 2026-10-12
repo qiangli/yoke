@@ -966,3 +966,150 @@ func TestRenderEventClearsRawWhenDebugIsOff(t *testing.T) {
 		t.Errorf("renderEvent = (%q, %q), want prose with raw withheld", got.Text, got.Raw)
 	}
 }
+
+// --- Muse Code MSP records and AGY step updates ----------------------------
+
+func museRecord(payloadType, payload string) string {
+	return `{"schema_version":1,"id":"00000000-0000-7000-8000-000000000001","stream":{"kind":"session","id":"00000000-0000-7000-8000-000000000002"},"sequence":4,"recorded_at":1780531400000000,"record_type":"event","durability":"durable","payload_type":"` + payloadType + `","payload_schema_version":1,"payload":` + payload + `}`
+}
+
+func museDeltaRec(text string) string {
+	b, _ := json.Marshal(text)
+	return museRecord("run.output.delta", `{"kind":"run_output_delta","text":`+string(b)+`}`)
+}
+
+func agyStep(stepType, delta string) string {
+	b, _ := json.Marshal(delta)
+	return `{"event":"step_update","step_update":{"step_index":2,"state":"ACTIVE","step_type":"` + stepType + `","text_delta":` + string(b) + `}}`
+}
+
+func TestNormalizeTurnTextMuseJoinsDeltasAndDropsMachinery(t *testing.T) {
+	raw := strings.Join([]string{
+		museRecord("runtime.command.accepted", `{"kind":"command_accepted"}`),
+		museRecord("turn.input.user", `{"kind":"turn_input_user","prompt":"PRIVATE_PROMPT"}`),
+		museRecord("task.lifecycle.started", `{"kind":"task_lifecycle","event":{"kind":"started"}}`),
+		museDeltaRec("The cache should "),
+		museRecord("task.lifecycle.status", `{"kind":"task_lifecycle","event":{"kind":"status","message":"tool call: bash rm -rf"}}`),
+		museDeltaRec("be write-through.\nNo reconciliation needed."),
+		museRecord("run.terminal.completed", `{"kind":"run_terminal","terminal":"completed","text":"The cache should be write-through.\nNo reconciliation needed."}`),
+	}, "\n")
+	want := "The cache should be write-through.\nNo reconciliation needed."
+	if got := normalizeTurnText(raw); got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestNormalizeTurnTextMuseTerminalOnlyWhenNothingStreamed(t *testing.T) {
+	raw := museRecord("run.lifecycle.started", `{"kind":"run_started"}`) + "\n" +
+		museRecord("run.terminal.completed", `{"kind":"run_terminal","terminal":"completed","text":"final only"}`)
+	if got := normalizeTurnText(raw); got != "final only" {
+		t.Fatalf("terminal snapshot must stand in when nothing streamed, got %q", got)
+	}
+}
+
+func TestNormalizeTurnTextAGYJoinsAgentResponseOnly(t *testing.T) {
+	raw := strings.Join([]string{
+		`{"event":"init","init":{"model":"m"}}`,
+		agyStep("user_input", "PRIVATE_PROMPT"),
+		agyStep("thinking", "PRIVATE_THINKING"),
+		agyStep("tool_call", "PRIVATE_TOOL"),
+		agyStep("agent_response", "Write-"),
+		agyStep("agent_response", "through."),
+		`{"event":"result","result":{"status":"SUCCESS","response":"Write-through.","usage":{"output_tokens":2}}}`,
+	}, "\n")
+	if got := normalizeTurnText(raw); got != "Write-through." {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestNormalizeTurnTextAGYResultWhenNoDeltas(t *testing.T) {
+	raw := agyStep("thinking", "PRIVATE_THINKING") + "\n" +
+		`{"event":"result","result":{"status":"SUCCESS","response":"just the result"}}`
+	if got := normalizeTurnText(raw); got != "just the result" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+// A real JSON answer that borrows the vocabulary but not the envelope survives.
+func TestNormalizeTurnTextPreservesForeignMuseAGYLookAlikes(t *testing.T) {
+	for _, raw := range []string{
+		`{"payload_type":"run.output.delta","payload":{"text":"real answer"}}`,
+		`{"event":"step_update","note":"deploy finished"}`,
+		`{"event":"result","status":"ok","response":"42"}`,
+		`{"answer":"42","sequence":3}`,
+	} {
+		if got := normalizeTurnText(raw); got != raw {
+			t.Errorf("foreign JSON was rewritten:\n got %q\nwant %q", got, raw)
+		}
+	}
+}
+
+// A delta run is closed by any other kept line, so prose around it stays separate.
+func TestNormalizeTurnTextDeltaRunDoesNotGlueOntoPlainLines(t *testing.T) {
+	raw := "banner line\n" + museDeltaRec("first ") + "\n" + museDeltaRec("answer") + "\nfooter line"
+	if got, want := normalizeTurnText(raw), "banner line\nfirst answer\nfooter line"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestNormalizeLiveLineMuseAGYFragmentsAreNotLines(t *testing.T) {
+	for _, ln := range []string{
+		museDeltaRec("frag"),
+		museRecord("run.terminal.completed", `{"text":"whole"}`),
+		agyStep("agent_response", "frag"),
+		`{"event":"result","result":{"response":"whole"}}`,
+		museRecord("task.lifecycle.started", `{"kind":"task_lifecycle"}`),
+	} {
+		if text, keep := normalizeLiveLine(ln); keep || text != "" {
+			t.Errorf("%.60s... must not render as a standalone live line, got keep=%v %q", ln, keep, text)
+		}
+	}
+}
+
+func TestLiveWriterReassemblesMuseDeltasIntoLines(t *testing.T) {
+	st := testState()
+	pinStore(t, st)
+	st.Round = 1
+
+	w := newLiveWriter(st, "muse-spark1.3", "", "")
+	w.Write([]byte(museRecord("run.lifecycle.started", `{"kind":"run_started"}`) + "\n"))
+	w.Write([]byte(museDeltaRec("Implemented the pars") + "\n"))
+	w.Write([]byte(museDeltaRec("er.\nTests pass") + "\n"))
+	w.Write([]byte(museRecord("run.terminal.completed", `{"terminal":"completed","text":"Implemented the parser.\nTests pass"}`) + "\n"))
+	w.close(statusOK)
+
+	got := liveTexts(t, st.ID)
+	if len(got) != 2 || got[0] != "Implemented the parser." || got[1] != "Tests pass" {
+		t.Fatalf("live view = %q", got)
+	}
+	for _, l := range got {
+		if strings.Contains(l, "payload") || strings.Contains(l, "schema_version") {
+			t.Errorf("transport leaked: %q", l)
+		}
+	}
+}
+
+func TestLiveWriterShowsAGYResultOnlyWhenNothingStreamed(t *testing.T) {
+	st := testState()
+	pinStore(t, st)
+	st.Round = 1
+
+	w := newLiveWriter(st, "agy", "", "")
+	w.Write([]byte(agyStep("thinking", "PRIVATE_THINKING") + "\n"))
+	w.Write([]byte(`{"event":"result","result":{"status":"SUCCESS","response":"snapshot answer"}}` + "\n"))
+	w.close(statusOK)
+	if got := liveTexts(t, st.ID); len(got) != 1 || got[0] != "snapshot answer" {
+		t.Fatalf("live view = %q", got)
+	}
+
+	st2 := testState()
+	pinStore(t, st2)
+	st2.Round = 1
+	w2 := newLiveWriter(st2, "agy", "", "")
+	w2.Write([]byte(agyStep("agent_response", "streamed") + "\n"))
+	w2.Write([]byte(`{"event":"result","result":{"status":"SUCCESS","response":"streamed"}}` + "\n"))
+	w2.close(statusOK)
+	if got := liveTexts(t, st2.ID); len(got) != 1 || got[0] != "streamed" {
+		t.Fatalf("snapshot must not repeat streamed answer, live view = %q", got)
+	}
+}

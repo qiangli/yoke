@@ -182,6 +182,15 @@ type liveWriter struct {
 	// still survives as the reconciled remainder. Guarded by mu.
 	eventPending []string
 
+	// deltaTail holds, per channel, the answer fragments (Muse/AGY deltas) not yet
+	// closed by a newline: a token boundary is not a line boundary, so fragments are
+	// reassembled into the lines a watcher would read. answered records that some
+	// assistant text reached the view, and final the last terminal snapshot — shown
+	// at close only when nothing else answered. Guarded by mu.
+	deltaTail [2]string
+	answered  bool
+	final     string
+
 	// closeOnce makes `spoke` exactly-once. Every path out of a turn now closes
 	// the floor — including a deferred close that fires on a panic or an early
 	// return someone adds later — and a floor freed twice would show a watcher two
@@ -311,9 +320,42 @@ func (w *liveWriter) emit(line string, ch liveChannel) {
 			w.publish(activity)
 		}
 	}
-	if class == lineDrop {
+	switch class {
+	case lineDrop:
 		return
+	case lineFinal:
+		w.final = human
+		return
+	case lineDelta:
+		w.answered = true
+		w.deltaTail[ch] += human
+		for {
+			i := strings.IndexByte(w.deltaTail[ch], '\n')
+			if i < 0 {
+				return
+			}
+			complete := w.deltaTail[ch][:i]
+			w.deltaTail[ch] = w.deltaTail[ch][i+1:]
+			w.emitText(complete, ch)
+		}
+	case lineText:
+		w.answered = true
 	}
+	w.flushDelta(ch)
+	w.emitText(human, ch)
+}
+
+// flushDelta emits the open fragment run on one channel as a line. Callers hold w.mu.
+func (w *liveWriter) flushDelta(ch liveChannel) {
+	if rest := w.deltaTail[ch]; rest != "" {
+		w.deltaTail[ch] = ""
+		w.emitText(rest, ch)
+	}
+}
+
+// emitText shows one already-extracted human text blob: sanitized, then either
+// held (event channel) or published and credited (prose channel).
+func (w *liveWriter) emitText(human string, ch liveChannel) {
 	text := strings.TrimRight(sanitizeTurn(human), "\n")
 	if strings.TrimSpace(text) == "" {
 		return
@@ -417,6 +459,13 @@ func (w *liveWriter) close(status string) {
 		if rest := w.eventBuf.String(); rest != "" {
 			w.eventBuf.Reset()
 			w.emit(rest, chanEvent)
+		}
+		w.flushDelta(chanProse)
+		w.flushDelta(chanEvent)
+		if !w.answered && strings.TrimSpace(w.final) != "" {
+			final := w.final
+			w.final = ""
+			w.emitText(final, chanProse)
 		}
 		// Now that the whole prose stream is out and its lines are credited,
 		// reconcile the deferred event channel: drop the cross-channel echo, keep

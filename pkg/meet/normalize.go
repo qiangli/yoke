@@ -3,6 +3,8 @@ package meet
 import (
 	"encoding/json"
 	"strings"
+
+	"github.com/qiangli/yoke/pkg/chat"
 )
 
 // An agent CLI does not always speak prose on its stdout. When bashy asks a tool
@@ -22,8 +24,8 @@ import (
 // the minutes with machine noise.
 //
 // So this is the normalization seam every meet turn passes through. It recognizes
-// the two configured transports — Claude stream-json and ycode/first-party NDJSON
-// — extracts only the assistant text, and DROPS the rest. It is fail-closed for
+// the configured transports — Claude stream-json, ycode/first-party NDJSON, codex,
+// opencode, Muse Code MSP records and AGY step updates — extracts only the assistant text, and DROPS the rest. It is fail-closed for
 // exactly those shapes: an unrecognized event type inside a recognized stream is
 // dropped rather than shown raw, and a line that opens like a JSON object but does
 // not parse is treated as a torn transport line and dropped, never leaked as half
@@ -45,6 +47,15 @@ const (
 	// lineDrop is recognized transport with no human text — a system/thinking/
 	// tool-call/tool-result/usage/control/result event, or a torn transport line.
 	lineDrop
+	// lineDelta is a recognized envelope carrying a FRAGMENT of the answer
+	// (Muse run.output.delta, AGY agent_response text_delta). The text is verbatim,
+	// not trimmed, and fragments join with no separator: a token boundary is not a
+	// line boundary.
+	lineDelta
+	// lineFinal is a recognized terminal envelope carrying the WHOLE answer again
+	// (Muse run.terminal.*, AGY result.response). It is used only when no text or
+	// delta of the turn was recognized, never appended to a streamed answer.
+	lineFinal
 )
 
 // claudeMessage is the Anthropic Messages payload on a Claude `assistant` event.
@@ -160,10 +171,32 @@ func classifyEventLine(line string) (string, lineClass, string) {
 		return t, class, opencodeKey(p)
 	}
 
+	// Muse Code MSP records and AGY step updates have no `type` key at all; the
+	// decoder (shared with the coach) binds each to its own envelope fingerprint.
+	if t, class, ok := classifyMuseAGY(line); ok {
+		return t, class, ""
+	}
+
 	// A JSON object that is neither configured transport. It may be an agent's own
 	// JSON answer or another harness's output; preserving it is the safe default,
 	// since eating a real answer is worse than showing one machine-shaped line.
 	return line, linePlain, ""
+}
+
+// classifyMuseAGY maps the shared vendor stream decoder onto the line classes.
+// Only fingerprinted Muse/AGY envelopes are claimed; a tool, thinking, usage,
+// lifecycle or prompt-echo record is dropped, and the answer text is extracted.
+func classifyMuseAGY(line string) (text string, class lineClass, ok bool) {
+	d := chat.DecodeStreamLine(line)
+	switch d.Kind {
+	case chat.StreamMeta:
+		return "", lineDrop, true
+	case chat.StreamDelta:
+		return d.Text, lineDelta, true
+	case chat.StreamFinal:
+		return d.Text, lineFinal, true
+	}
+	return "", linePlain, false
 }
 
 // codexItem is the `item` envelope on codex's item.* events. `agent_message` is
@@ -394,7 +427,9 @@ func claudeAssistantText(raw json.RawMessage) string {
 // the observer's idle notice can still tell a quiet meeting from a busy one.
 func normalizeLiveLine(line string) (text string, keep bool) {
 	t, class, _ := classifyEventLine(line)
-	if class == lineDrop {
+	// A fragment or a repeated snapshot is meaningless on its own line; the whole-
+	// turn seam (normalizeTurnText) is what assembles them.
+	if class == lineDrop || class == lineDelta || class == lineFinal {
 		return "", false
 	}
 	return t, true
@@ -419,11 +454,34 @@ func normalizeTurnText(raw string) string {
 	// end when its final, complete form arrives.
 	at := map[string]int{}
 	recognized := false
+	// run is the slot of the delta run being assembled, -1 when none is open.
+	// Fragments extend it in place; any other kept line closes it, so a later
+	// fragment starts a fresh line instead of gluing onto unrelated prose.
+	run := -1
+	answered := false // some assistant text or delta of the turn was recognized
+	final := ""       // last terminal snapshot, used only if nothing else answered
 	for _, line := range lines {
 		text, class, key := classifyEventLine(line)
 		switch class {
-		case lineText:
+		case lineDelta:
+			recognized, answered = true, true
+			if run < 0 {
+				out = append(out, text)
+				run = len(out) - 1
+			} else {
+				out[run] += text
+			}
+			continue
+		case lineFinal:
 			recognized = true
+			final = text
+			continue
+		case lineDrop:
+			recognized = true
+			continue
+		case lineText:
+			recognized, answered = true, true
+			run = -1
 			if key != "" {
 				if i, seen := at[key]; seen {
 					out[i] = text
@@ -432,14 +490,16 @@ func normalizeTurnText(raw string) string {
 				at[key] = len(out)
 			}
 			out = append(out, text)
-		case lineDrop:
-			recognized = true
 		default: // linePlain
+			run = -1
 			out = append(out, line)
 		}
 	}
 	if !recognized {
 		return raw // no transport seen — preserve the original exactly.
+	}
+	if !answered && strings.TrimSpace(final) != "" {
+		out = append(out, final)
 	}
 	return strings.TrimRight(strings.Join(out, "\n"), "\n")
 }

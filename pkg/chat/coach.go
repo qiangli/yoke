@@ -216,6 +216,7 @@ type Coach struct {
 	ptyOffset  int                 // byte cursor into Session.Output()
 	ptyPartial string              // trailing incomplete line carried between polls
 	ptyLast    string              // last KEPT normalized line (consecutive-dedup)
+	deltaTail  string              // answer-text fragments not yet closed by a newline
 	window     []string            // sliding window of significant normalized lines
 	winCount   map[string]int      // multiset count for the window
 	ptySeen    map[string]struct{} // CUMULATIVE distinct lines, for the report
@@ -278,7 +279,6 @@ func NewLineCoach(pol CoachPolicy, steer Steerer) *Coach {
 // the partial-line buffer is guarded, and feedPty locks the shared counters.
 func (c *Coach) Write(p []byte) (int, error) {
 	c.mu.Lock()
-	c.outBytes += len(p) // ALL output bytes, for the token/spend estimate
 	c.ptyPartial += string(p)
 	idx := strings.LastIndexByte(c.ptyPartial, '\n')
 	if idx < 0 {
@@ -289,7 +289,7 @@ func (c *Coach) Write(p []byte) (int, error) {
 	c.ptyPartial = c.ptyPartial[idx+1:]
 	c.mu.Unlock()
 	for _, ln := range strings.Split(complete, "\n") {
-		if rec := c.feedPty(ln); rec != nil {
+		for _, rec := range c.feedLine(ln, true) {
 			c.intervene(rec)
 		}
 	}
@@ -398,16 +398,103 @@ func (c *Coach) watchPty(ctx context.Context) {
 // "burning budget without converging", the catch-all for a brute-forcer that
 // makes distinct, error-free, progress-free moves). All share the trip machinery.
 func (c *Coach) feedPty(raw string) *SteerRecord {
-	norm := normalizeLine(raw)
-	if !significant(norm) {
-		return nil
+	if recs := c.feedLine(raw, false); len(recs) > 0 {
+		return recs[0]
 	}
+	return nil
+}
+
+// maxDeltaTail bounds an answer that streams without ever emitting a newline.
+const maxDeltaTail = 4096
+
+// feedLine measures one line of output by what it SAYS, not by how it is wrapped.
+//
+// A structured event stream (Muse MSP records, AGY step updates, any NDJSON
+// harness) wraps every event in an envelope of ids, sequence numbers and
+// timestamps. Counting those as distinct content made a productive run look like
+// a 1100-line burn — and a real loop of structured events look like endless
+// novelty, since no two envelopes are ever equal. So a recognized envelope with no
+// answer text is transport and measures nothing; answer-text fragments are
+// reassembled into the lines a reader would see; and any other JSON object is
+// reduced to a signature with its volatile fields removed. count adds the line's
+// semantic bytes to the spend estimate (Write only: watchPty never has).
+//
+// Several records can come back: a delta tail flushed by the arrival of the next
+// line is its own observation, and each may trip a signal.
+func (c *Coach) feedLine(raw string, count bool) []*SteerRecord {
+	type seg struct {
+		norm  string
+		err   bool
+		event bool // a structured event, not terminal text that may be a redraw
+	}
+	var segs []seg
+	addProse := func(line string) {
+		norm := normalizeLine(line)
+		segs = append(segs, seg{norm: norm, err: isErrorLine(norm)})
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	d := DecodeStreamLine(raw)
+	switch d.Kind {
+	case StreamMeta, StreamFinal:
+		return nil // transport, or a repeat of deltas already measured
+	case StreamDelta:
+		if count {
+			c.outBytes += len(d.Text)
+		}
+		c.deltaTail += d.Text
+		for {
+			i := strings.IndexByte(c.deltaTail, '\n')
+			if i < 0 {
+				break
+			}
+			addProse(c.deltaTail[:i])
+			c.deltaTail = c.deltaTail[i+1:]
+		}
+		if len(c.deltaTail) > maxDeltaTail {
+			addProse(c.deltaTail)
+			c.deltaTail = ""
+		}
+	default:
+		if c.deltaTail != "" {
+			addProse(c.deltaTail)
+			c.deltaTail = ""
+		}
+		if sig, size, isErr, ok := semanticJSONLine(raw); ok {
+			if count {
+				c.outBytes += size
+			}
+			segs = append(segs, seg{norm: normalizeEvent(sig), err: isErr, event: true})
+		} else {
+			if count {
+				c.outBytes += len(raw) + 1
+			}
+			addProse(raw)
+		}
+	}
+
+	var recs []*SteerRecord
+	for _, sg := range segs {
+		if !significant(sg.norm) {
+			continue
+		}
+		if rec := c.feedNormLocked(sg.norm, sg.err, sg.event); rec != nil {
+			recs = append(recs, rec)
+		}
+	}
+	return recs
+}
+
+// feedNormLocked is the signal panel over one already-normalized significant
+// line. Caller holds c.mu. A repeated terminal line is an in-place redraw; a
+// repeated structured event is the same action done again, so only the former is
+// collapsed.
+func (c *Coach) feedNormLocked(norm string, isErr, event bool) *SteerRecord {
 	if c.started.IsZero() {
 		c.started = time.Now()
 	}
-	if norm == c.ptyLast {
+	if !event && norm == c.ptyLast {
 		return nil // an in-place redraw of the same line — not progress, not a loop
 	}
 	c.ptyLast = norm
@@ -420,7 +507,7 @@ func (c *Coach) feedPty(raw string) *SteerRecord {
 	c.window = append(c.window, norm)
 	c.winCount[norm]++
 	c.total++
-	c.pushErr(isErrorLine(norm))
+	c.pushErr(isErr)
 	w := c.pol.PtyWindow
 	if w <= 0 {
 		w = 40
@@ -683,6 +770,14 @@ func normalizeLine(raw string) string {
 	s = reDigits.ReplaceAllString(s, "N")
 	s = reSpace.ReplaceAllString(s, " ")
 	return strings.TrimSpace(s)
+}
+
+// normalizeEvent is normalizeLine for a structured-event signature: strip control
+// bytes and collapse whitespace, but keep digit runs. semanticJSONLine has already
+// zeroed numeric fields, so the digits left are part of a name (file12.go) and
+// scrubbing them would make distinct work look like a repeat.
+func normalizeEvent(sig string) string {
+	return strings.TrimSpace(reSpace.ReplaceAllString(SanitizeLine(sig), " "))
 }
 
 // significant drops the noise that must not fill the window: blanks, decoration
