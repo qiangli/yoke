@@ -223,7 +223,7 @@ interval, item cap, quiet hours and authors that break through them.`,
 	add := &cobra.Command{
 		Use:   "add NAME --cmd TOOL:NAME [--args '<extra args>']",
 		Short: "add a delivery channel over a registered tool command",
-		Example: `  bashy feed channel add phone --cmd openclaw:send --args '--channel signal --target me' \
+		Example: `  bashy feed channel add phone --cmd openclaw:send --args '--channel telegram --target me' \
       --interval 4h --max 10 --quiet 22:00-07:00 --immediate alice`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, a []string) error {

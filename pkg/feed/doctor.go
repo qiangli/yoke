@@ -45,8 +45,11 @@ const doctorProbeTimeout = 5 * time.Second
 // command that moves a missing check forward. Detail never carries a secret
 // value — at most a NAME.
 type DoctorCheck struct {
-	Area   string `json:"area"`
-	Name   string `json:"name,omitempty"`
+	Area string `json:"area"`
+	Name string `json:"name,omitempty"`
+	// Label is the user-facing messaging channel name ("Matrix chat", never
+	// bare "matrix", which means the cloudbox matrix tunnel).
+	Label  string `json:"label,omitempty"`
 	Status string `json:"status"`
 	Detail string `json:"detail,omitempty"`
 	Next   string `json:"next,omitempty"`
@@ -201,6 +204,32 @@ func doctorSinks(ctx context.Context, env Env, p doctorProbes, dir string) []Doc
 	return out
 }
 
+// firstReleaseChannels maps each OpenClaw --channel value the first release
+// supports to its user-facing label.
+var firstReleaseChannels = map[string]string{
+	"telegram": "Telegram",
+	"discord":  "Discord",
+	"slack":    "Slack",
+	"matrix":   "Matrix chat",
+}
+
+const firstReleaseSet = "Telegram, Discord, Slack, Matrix chat"
+
+// openclawChannelArg returns the --channel value in a channel's args
+// ("--channel X" or "--channel=X"), or "" when there is none.
+func openclawChannelArg(args string) string {
+	f := strings.Fields(args)
+	for i, a := range f {
+		if v, ok := strings.CutPrefix(a, "--channel="); ok {
+			return v
+		}
+		if a == "--channel" && i+1 < len(f) {
+			return f[i+1]
+		}
+	}
+	return ""
+}
+
 // doctorChannel pairs a channel with its resolved tool command, for the
 // secrets area.
 type doctorChannel struct {
@@ -229,6 +258,19 @@ func doctorChannels(ctx context.Context, p doctorProbes, dir string) ([]doctorCh
 		}
 		resolved = append(resolved, doctorChannel{ch: ch, cmd: tc})
 		if strings.EqualFold(tool.Name, "openclaw") {
+			kind := openclawChannelArg(ch.Args)
+			label, ok := firstReleaseChannels[strings.ToLower(kind)]
+			if !ok {
+				c.Status, c.Next = DoctorMissing, "bashy feed channel rm "+ch.Name
+				if kind == "" {
+					c.Detail = "no --channel in args; the first-release messaging set is " + firstReleaseSet
+				} else {
+					c.Detail = kind + " is not in the first-release messaging set (" + firstReleaseSet + ")"
+				}
+				out = append(out, c)
+				continue
+			}
+			c.Label = label
 			if miss := doctorOpenClaw(ctx, p, tc); miss != nil {
 				c.Status, c.Detail, c.Next = DoctorMissing, miss.Detail, miss.Next
 			}
@@ -375,6 +417,9 @@ func printDoctor(w io.Writer, rep DoctorReport) {
 		area := c.Area
 		if c.Name != "" {
 			area += " " + c.Name
+		}
+		if c.Label != "" {
+			area += " (" + c.Label + ")"
 		}
 		line := fmt.Sprintf("%-10s %s", c.Status, area)
 		if c.Detail != "" {

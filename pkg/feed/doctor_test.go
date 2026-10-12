@@ -59,7 +59,7 @@ func newDoctorFixture(t *testing.T) *doctorFixture {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := SaveChannels(f.dir, []Channel{{Name: "phone", Cmd: "openclaw:send", Args: "--channel signal"}}); err != nil {
+	if err := SaveChannels(f.dir, []Channel{{Name: "phone", Cmd: "openclaw:send", Args: "--channel telegram"}}); err != nil {
 		t.Fatal(err)
 	}
 	return f
@@ -278,5 +278,58 @@ func TestNodeAtLeast(t *testing.T) {
 		if got := nodeAtLeast(v, openclawMinNode); got != want {
 			t.Errorf("nodeAtLeast(%q) = %v, want %v", v, got, want)
 		}
+	}
+}
+
+func TestDoctorChannelKinds(t *testing.T) {
+	cases := []struct {
+		args       string
+		wantStatus string
+		wantLabel  string
+		wantDetail string
+	}{
+		{"--channel telegram --target me", DoctorConfigured, "Telegram", ""},
+		{"--channel discord", DoctorConfigured, "Discord", ""},
+		{"--channel=slack", DoctorConfigured, "Slack", ""},
+		{"--target me --channel matrix", DoctorConfigured, "Matrix chat", ""},
+		{"--channel signal --target me", DoctorMissing, "",
+			"signal is not in the first-release messaging set (Telegram, Discord, Slack, Matrix chat)"},
+		{"--target me", DoctorMissing, "", "no --channel in args"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.args, func(t *testing.T) {
+			f := newDoctorFixture(t)
+			if err := SaveChannels(f.dir, []Channel{{Name: "phone", Cmd: "openclaw:send", Args: tc.args}}); err != nil {
+				t.Fatal(err)
+			}
+			rep := RunDoctor(context.Background(), f.env)
+			var got *DoctorCheck
+			for i, c := range rep.Checks {
+				if c.Area == "channels" {
+					got = &rep.Checks[i]
+				} else if c.Status != DoctorConfigured {
+					t.Errorf("unrelated check failed: %+v", c)
+				}
+			}
+			if got == nil {
+				t.Fatal("no channel check")
+			}
+			if got.Status != tc.wantStatus || got.Label != tc.wantLabel {
+				t.Errorf("channel check = %+v, want status %s label %q", got, tc.wantStatus, tc.wantLabel)
+			}
+			if tc.wantStatus == DoctorMissing {
+				if !strings.HasPrefix(got.Detail, tc.wantDetail) || got.Next != "bashy feed channel rm phone" {
+					t.Errorf("channel check = %+v, want detail %q", got, tc.wantDetail)
+				}
+				if rep.OK {
+					t.Error("want not OK")
+				}
+				return
+			}
+			out, err := runDoctorCmd(t, f.env)
+			if err != nil || !strings.Contains(out, "channels phone ("+tc.wantLabel+")") {
+				t.Errorf("text output lacks label %q (err %v):\n%s", tc.wantLabel, err, out)
+			}
+		})
 	}
 }
