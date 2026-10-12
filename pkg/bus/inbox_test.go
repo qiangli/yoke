@@ -52,6 +52,26 @@ func TestInboxReadsOnlyMineAndUsesTheBusCursor(t *testing.T) {
 	}
 }
 
+func TestDirectDrainDoesNotReappearInUnifiedInbox(t *testing.T) {
+	isolate(t)
+	notifyForInbox(t, "alice", "shown by direct drain")
+	notifyForInbox(t, "bob", "another subscriber")
+	if _, err := SnapshotInbox("alice"); err != nil {
+		t.Fatal(err)
+	}
+	if out, _, err := runInboxCommand(t, context.Background(), "--as", "alice"); err != nil || !strings.Contains(out, "shown by direct drain") {
+		t.Fatalf("direct drain = %q, %v", out, err)
+	}
+	again, err := SnapshotInbox("alice")
+	if err != nil || len(again.Items) != 0 {
+		t.Fatalf("direct drain reappeared in unified inbox: %+v, %v", again.Items, err)
+	}
+	other, err := SnapshotInbox("bob")
+	if err != nil || len(other.Items) != 1 || other.Items[0].Body != "another subscriber" {
+		t.Fatalf("cross-subscriber mail was consumed: %+v, %v", other.Items, err)
+	}
+}
+
 func TestUnreadNotificationsAcknowledgesOnlyTheRenderedSnapshot(t *testing.T) {
 	isolate(t)
 	notifyForInbox(t, "alice", "first")
@@ -93,6 +113,70 @@ func TestSnapshotInboxReconcilesTimelineAndPendingByProvenanceOnly(t *testing.T)
 	again, err := SnapshotInbox("alice")
 	if err != nil || len(again.Items) != 0 {
 		t.Fatalf("committed snapshot reappeared: %+v err=%v", again.Items, err)
+	}
+}
+
+func TestSnapshotInboxCommitPrefixKeepsUnshownBusAndRoleMail(t *testing.T) {
+	for _, reader := range []string{"alice", "conductor.408"} {
+		t.Run(reader, func(t *testing.T) {
+			isolate(t)
+			for i := 0; i < 13; i++ {
+				notifyForInbox(t, reader, "batch "+strconv.Itoa(i))
+			}
+			notifyForInbox(t, "other", "other reader's mail")
+			shown, err := SnapshotInbox(reader)
+			if err != nil || len(shown.Items) != 13 {
+				t.Fatalf("snapshot: %d items, %v", len(shown.Items), err)
+			}
+			peek, err := SnapshotInbox(reader)
+			if err != nil || len(peek.Items) != 13 {
+				t.Fatalf("peek consumed mail: %d items, %v", len(peek.Items), err)
+			}
+			// This arrival is newer than the batch captured above.
+			notifyForInbox(t, reader, "new arrival")
+			if err := shown.CommitPrefix(12); err != nil {
+				t.Fatal(err)
+			}
+			again, err := SnapshotInbox(reader)
+			if err != nil || len(again.Items) != 2 || again.Items[0].Body != "batch 12" || again.Items[1].Body != "new arrival" {
+				t.Fatalf("unshown mail lost or shown mail repeated: %+v, %v", again.Items, err)
+			}
+			if err := again.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			empty, err := SnapshotInbox(reader)
+			if err != nil || len(empty.Items) != 0 {
+				t.Fatalf("second drain repeated mail: %+v, %v", empty.Items, err)
+			}
+			other, err := SnapshotInbox("other")
+			if err != nil || len(other.Items) != 1 || other.Items[0].Body != "other reader's mail" {
+				t.Fatalf("another subscriber was consumed: %+v, %v", other.Items, err)
+			}
+		})
+	}
+}
+
+func TestSnapshotInboxOlderAckCannotRewindSubscriber(t *testing.T) {
+	isolate(t)
+	notifyForInbox(t, "alice", "first")
+	older, err := SnapshotInbox("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	notifyForInbox(t, "alice", "second")
+	newer, err := SnapshotInbox("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := newer.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := older.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	again, err := SnapshotInbox("alice")
+	if err != nil || len(again.Items) != 0 {
+		t.Fatalf("older ack rewound cursor: %+v, %v", again.Items, err)
 	}
 }
 

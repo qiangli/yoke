@@ -88,21 +88,39 @@ type inboxOptions struct {
 // they are the same timeline event (same sequence and fields), never because
 // two senders happened to repeat text.
 type InboxSnapshot struct {
-	Items       []Pending
-	reader      string
-	through     int64
-	pendingHigh int64
+	Items   []Pending
+	reader  string
+	through int64
 }
 
 // Commit acknowledges both bus views after Items were delivered successfully.
 func (s InboxSnapshot) Commit() error {
-	if s.pendingHigh > 0 {
-		if err := MarkRead(s.reader, s.pendingHigh); err != nil {
-			return err
+	return s.CommitPrefix(len(s.Items))
+}
+
+// CommitPrefix acknowledges exactly the first count items of this snapshot.
+// A capped reader can commit what it rendered without consuming later items.
+// Items are ordered by timeline sequence, so a prefix cannot skip unread mail.
+func (s InboxSnapshot) CommitPrefix(count int) error {
+	if count < 0 || count > len(s.Items) {
+		return fmt.Errorf("bus: invalid inbox prefix %d of %d", count, len(s.Items))
+	}
+	through := s.through
+	if count < len(s.Items) {
+		through = 0
+		if count > 0 {
+			through = s.Items[count-1].Seq
 		}
 	}
-	if s.through > 0 {
-		return MarkNotificationsRead(s.reader, s.through)
+	if count > 0 {
+		for _, item := range s.Items[:count] {
+			if err := MarkPendingRead(s.reader, item.Seq); err != nil {
+				return err
+			}
+		}
+	}
+	if through > 0 {
+		return MarkNotificationsRead(s.reader, through)
 	}
 	return nil
 }
@@ -166,9 +184,6 @@ func SnapshotInbox(reader string) (InboxSnapshot, error) {
 	for _, p := range allPending {
 		if !p.Unread() {
 			continue
-		}
-		if p.Seq > snap.pendingHigh {
-			snap.pendingHigh = p.Seq
 		}
 		snap.Items = append(snap.Items, p)
 	}
@@ -240,6 +255,13 @@ func unreadNotificationsFrom(reader string, events []room.Event) ([]room.Event, 
 
 // MarkNotificationsRead acknowledges a previously rendered bus snapshot.
 func MarkNotificationsRead(reader string, through int64) error {
+	current, err := readCursor(reader)
+	if err != nil {
+		return err
+	}
+	if through <= current {
+		return nil
+	}
 	return writeCursor(reader, through)
 }
 
@@ -308,7 +330,15 @@ func runInbox(cmd *cobra.Command, opt inboxOptions) error {
 		}
 	}
 	if !opt.peek && high > from {
-		if err := writeCursor(opt.reader, high); err != nil {
+		// The direct bus drain and unified inbox share the pending view. Stamp
+		// only events actually printed; a topic-matched pending record that this
+		// addressed-only command did not print must stay unread.
+		for _, e := range matched {
+			if err := MarkPendingRead(opt.reader, e.Seq); err != nil {
+				return err
+			}
+		}
+		if err := MarkNotificationsRead(opt.reader, high); err != nil {
 			return err
 		}
 	}

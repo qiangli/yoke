@@ -10,9 +10,10 @@ import (
 )
 
 // DefaultTurnAdmissionBytes is the combined automatic Bus and host-inbox
-// ceiling. It aliases the store-neutral primitive's default for discoverability
-// at the integration boundary.
-const DefaultTurnAdmissionBytes = admission.DefaultTurnBytes
+// ceiling. Managed PTY sessions can accept at most 1024 bytes in one injected
+// inbox block; exceeding that limit would withhold every source receipt and
+// replay the same batch on the next turn.
+const DefaultTurnAdmissionBytes = 1024
 
 // PreparedPreamble is a rendered inbox snapshot whose cursor acknowledgements
 // are deliberately deferred until the embedding host has injected Text into a
