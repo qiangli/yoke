@@ -251,6 +251,31 @@ func Commit(opts CommitOptions) (*Result, error) {
 		return nil, fmt.Errorf("worktree: %w", err)
 	}
 	commitOpts := &gogit.CommitOptions{All: opts.All, Amend: opts.Amend}
+	if mode := coreAutoCRLF(r); opts.All && (mode == "true" || mode == "input") {
+		// go-git's All stages raw worktree bytes; stage tracked changes
+		// here so core.autocrlf converts them as host git's -a would.
+		st, err := worktreeStatus(w)
+		if err != nil {
+			return nil, fmt.Errorf("status: %w", err)
+		}
+		before := indexSnapshot(r)
+		for path, fs := range st {
+			switch fs.Worktree {
+			case gogit.Modified:
+				if _, err := w.Add(path); err != nil {
+					return nil, fmt.Errorf("add %s: %w", path, err)
+				}
+			case gogit.Deleted:
+				if _, err := w.Remove(path); err != nil {
+					return nil, fmt.Errorf("rm %s: %w", path, err)
+				}
+			}
+		}
+		if err := applyAutoCRLFToAdded(r, w.Filesystem.Root(), before); err != nil {
+			return nil, fmt.Errorf("autocrlf: %w", err)
+		}
+		commitOpts.All = false
+	}
 	if opts.AuthorName != "" || opts.AuthorEmail != "" {
 		// go-git uses the signature verbatim — without When the commit
 		// is stamped at the Unix epoch.

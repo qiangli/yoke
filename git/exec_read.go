@@ -999,6 +999,19 @@ func nativeAdd(_ context.Context, dir string, args []string) (*ExecResult, error
 	if err != nil {
 		return nil, ErrUnsupported
 	}
+	root := wt.Filesystem.Root()
+	// core.autocrlf: what go-git stages raw is converted afterwards, the
+	// way host git's add stores it; gitattributes eol rules decline.
+	if ps, perr := loadPorcelainState(repo, wt); perr != nil || ps.unsupported == "gitattributes eol rules" {
+		return nil, ErrUnsupported
+	}
+	before := indexSnapshot(repo)
+	staged := func() (*ExecResult, error) {
+		if err := applyAutoCRLFToAdded(repo, root, before); err != nil {
+			return nil, ErrUnsupported
+		}
+		return &ExecResult{Stdout: ""}, nil
+	}
 
 	for _, arg := range args {
 		if arg == "-A" || arg == "--all" || arg == "." {
@@ -1012,7 +1025,7 @@ func nativeAdd(_ context.Context, dir string, args []string) (*ExecResult, error
 					return nil, ErrUnsupported
 				}
 			}
-			return &ExecResult{Stdout: ""}, nil
+			return staged()
 		}
 	}
 
@@ -1021,13 +1034,12 @@ func nativeAdd(_ context.Context, dir string, args []string) (*ExecResult, error
 		if strings.HasPrefix(arg, "-") {
 			return nil, ErrUnsupported
 		}
-		relPath := relToRepoRoot(wt.Filesystem.Root(), dir, arg)
+		relPath := relToRepoRoot(root, dir, arg)
 		if _, err := wt.Add(relPath); err != nil {
 			return nil, ErrUnsupported
 		}
 	}
-
-	return &ExecResult{Stdout: ""}, nil
+	return staged()
 }
 
 func nativeCommit(_ context.Context, dir string, args []string) (*ExecResult, error) {

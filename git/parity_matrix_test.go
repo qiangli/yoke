@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The native engine's contract with host git: for every argv it serves,
@@ -276,6 +277,11 @@ var parityScenarios = []parityScenario{
 			t.Fatal(err)
 		}
 		pgit(t, r, "checkout", "--", "lf.txt")
+		// Defeat the stat shortcut so the comparison is by content.
+		later := time.Now().Add(2 * time.Second)
+		if err := os.Chtimes(filepath.Join(r, "lf.txt"), later, later); err != nil {
+			t.Fatal(err)
+		}
 		pwrite(t, filepath.Join(r, "b.txt"), "b2\r\n") // a real edit, CRLF on disk
 		return r
 	}, false},
@@ -419,5 +425,50 @@ func TestParityMatrix(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestNativeAdd_AutoCRLFMatchesHostGit: with core.autocrlf=true (Git for
+// Windows' default) a native add stores the blobs host git stores — CRLF
+// text converted to LF, binary and mixed-ending content untouched.
+func TestNativeAdd_AutoCRLFMatchesHostGit(t *testing.T) {
+	if _, err := osexec.LookPath("git"); err != nil {
+		t.Skip("no host git on PATH")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_AUTHOR_NAME", "t")
+	t.Setenv("GIT_AUTHOR_EMAIL", "t@example.com")
+	t.Setenv("GIT_COMMITTER_NAME", "t")
+	t.Setenv("GIT_COMMITTER_EMAIL", "t@example.com")
+	files := map[string]string{
+		"crlf.txt":   "one\r\ntwo\r\n",
+		"mixed.txt":  "a\r\nb\nc\r\n",
+		"lonecr.txt": "a\rb\r\n",
+		"bin.dat":    "x\x00y\r\n",
+		"lf.txt":     "plain\n",
+	}
+	repos := map[string]string{}
+	for _, side := range []string{"host", "native"} {
+		r := pRepo(t, filepath.Join(t.TempDir(), side))
+		pgit(t, r, "config", "core.autocrlf", "true")
+		for name, body := range files {
+			pwrite(t, filepath.Join(r, name), body)
+		}
+		repos[side] = r
+	}
+	pgit(t, repos["host"], "add", "-A")
+	if _, err := Exec(context.Background(), repos["native"], []string{"add", "-A"}); err != nil {
+		t.Fatalf("native add: %v", err)
+	}
+	want := pgit(t, repos["host"], "ls-files", "-s")
+	got := pgit(t, repos["native"], "ls-files", "-s")
+	if got != want {
+		t.Errorf("index after native add:\n%s\nhost git:\n%s", got, want)
+	}
+	if got, want := pgit(t, repos["native"], "status", "--porcelain"), pgit(t, repos["host"], "status", "--porcelain"); got != want {
+		t.Errorf("host git status after native add %q; after host add %q", got, want)
 	}
 }

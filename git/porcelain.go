@@ -66,6 +66,24 @@ func loadPorcelainState(repo *gogit.Repository, wt *gogit.Worktree) (*porcelainS
 	}
 	sort.Strings(ps.untracked)
 
+	// gitattributes text/eol rules normalize line endings in ways not
+	// reproduced here; they only matter for a changed file holding CR.
+	root0 := wt.Filesystem.Root()
+	if eolAttributesSet(root0) {
+		for path, xy := range ps.tracked {
+			if xy[1] == 'M' && fileHasCR(filepath.Join(root0, filepath.FromSlash(path))) {
+				ps.unsupported = "gitattributes eol rules"
+				return ps, nil
+			}
+		}
+		for _, path := range ps.untracked {
+			if fileHasCR(filepath.Join(root0, filepath.FromSlash(path))) {
+				ps.unsupported = "gitattributes eol rules"
+				return ps, nil
+			}
+		}
+	}
+
 	// Submodule content: " m" modified tracked content, " ?" untracked
 	// content only. A moved pin (" M") is already in st.
 	root := wt.Filesystem.Root()
@@ -109,6 +127,11 @@ func loadPorcelainState(repo *gogit.Repository, wt *gogit.Worktree) (*porcelainS
 
 // unsupportedRenames is the reason a diff given --no-renames may ignore.
 const unsupportedRenames = "staged renames"
+
+func fileHasCR(path string) bool {
+	data, err := os.ReadFile(path)
+	return err == nil && strings.IndexByte(string(data), '\r') >= 0
+}
 
 func statusLetter(c gogit.StatusCode) byte {
 	switch c {
