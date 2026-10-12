@@ -387,10 +387,15 @@ func (s *stickyStore) put(b *Binding) (*Binding, error) {
 }
 
 // replace swaps the binding under old's key for next, provided the stored
-// binding is still exactly old (same digest): a re-pin resolves outside the
-// lock, so a concurrent delete or re-pin must fail the swap rather than be
-// overwritten. next inherits old's scope; its worker (if any) is evicted
-// because the old identity's warm CLI must never serve the new identity.
+// binding is still exactly old: same digest AND same scope (owner session,
+// export flag, creation time). A re-pin resolves outside the lock, so a
+// concurrent delete or re-pin must fail the swap rather than be overwritten —
+// and the digest alone cannot tell: a key deleted and created again by another
+// session with the same spec resolves to the same identity, yet it is a
+// different binding the caller was never authorized against (a session-scoped
+// re-pin would otherwise reach a stranger's key, reset its uses and retire its
+// worker). next inherits old's scope; its worker (if any) is evicted because
+// the old identity's warm CLI must never serve the new identity.
 func (s *stickyStore) replace(old, next *Binding) (*Binding, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -403,6 +408,9 @@ func (s *stickyStore) replace(old, next *Binding) (*Binding, error) {
 	if cur.Digest != old.Digest {
 		return nil, stickyErr(409, "sticky: key %q changed while re-pinning (now identity %s); retry", old.Spec.Key, ShortDigest(cur.Digest))
 	}
+	if !sameScope(cur.scoped, old.scoped) {
+		return nil, stickyErr(409, "sticky: key %q was deleted and created again while re-pinning (now %s); retry", old.Spec.Key, scopeText(cur.scoped))
+	}
 	next.scoped = scoped{Principal: cur.Principal, Session: cur.Session, Exported: cur.Exported, Created: s.now()}
 	next.Used, next.Transcript = 0, nil
 	next.LastUsed = s.now()
@@ -413,6 +421,21 @@ func (s *stickyStore) replace(old, next *Binding) (*Binding, error) {
 	}
 	cp := *next
 	return &cp, nil
+}
+
+// sameScope reports whether a and b are the same stored binding's scope: the
+// owner, the export flag and the creation instant. Two bindings under one key
+// with equal digests but different scope are different bindings.
+func sameScope(a, b scoped) bool {
+	return a.Principal == b.Principal && a.Session == b.Session && a.Exported == b.Exported && a.Created.Equal(b.Created)
+}
+
+// scopeText names a binding's owner for refusals.
+func scopeText(sc scoped) string {
+	if sc.Session == "" {
+		return "principal-scoped"
+	}
+	return "owned by session " + sc.Session
 }
 
 // use consumes one use, checking the uses budget and, for reset=none, that

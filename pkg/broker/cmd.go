@@ -1005,21 +1005,28 @@ request. Recover a stale key with repin.`,
 					missing = append(missing, k)
 				}
 			}
+			// The envelope and the exit status are one contract: a run that
+			// gates on `check --json` reads the JSON AND the status, so the
+			// report is written first and the stale/missing verdict decides
+			// the exit afterwards, exactly as the table form does.
 			if asJSON {
-				return json.NewEncoder(c.OutOrStdout()).Encode(map[string]any{
+				if err := json.NewEncoder(c.OutOrStdout()).Encode(map[string]any{
 					"schema_version": "bashy-sticky-check-v1", "bindings": rows, "stale": stale, "missing": missing, "ok": len(stale) == 0 && len(missing) == 0,
-				})
-			}
-			tw := tabwriter.NewWriter(c.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "KEY\tIDENTITY\tSESSION\tSTATUS")
-			for _, v := range rows {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", str(v["key"]), str(v["short"]), sessionText(v), statusText(v))
-			}
-			for _, k := range missing {
-				fmt.Fprintf(tw, "%s\t-\t-\tmissing: no binding of this principal; create it (bashy llm sticky create %s --model M)\n", k, k)
-			}
-			if err := tw.Flush(); err != nil {
-				return err
+				}); err != nil {
+					return err
+				}
+			} else {
+				tw := tabwriter.NewWriter(c.OutOrStdout(), 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "KEY\tIDENTITY\tSESSION\tSTATUS")
+				for _, v := range rows {
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", str(v["key"]), str(v["short"]), sessionText(v), statusText(v))
+				}
+				for _, k := range missing {
+					fmt.Fprintf(tw, "%s\t-\t-\tmissing: no binding of this principal; create it (bashy llm sticky create %s --model M)\n", k, k)
+				}
+				if err := tw.Flush(); err != nil {
+					return err
+				}
 			}
 			if len(stale) > 0 || len(missing) > 0 {
 				return fmt.Errorf("%d stale, %d missing: re-pin stale keys with `bashy llm sticky repin KEY`", len(stale), len(missing))
@@ -1027,7 +1034,7 @@ request. Recover a stale key with repin.`,
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the bashy-sticky-check-v1 envelope")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the bashy-sticky-check-v1 envelope (the exit status still reports stale/missing)")
 	return cmd
 }
 
