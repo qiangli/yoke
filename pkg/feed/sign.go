@@ -65,7 +65,7 @@ func VerifyPayload(pubB64, sigB64 string, payload []byte) error {
 	if len(sig) != ed25519.SignatureSize {
 		return fmt.Errorf("feed: signature has wrong length: want %d bytes, got %d", ed25519.SignatureSize, len(sig))
 	}
-	if !ed25519.Verify(ed25519.PublicKey(pub), sig, payload) {
+	if !ed25519.Verify(ed25519.PublicKey(pub), payload, sig) {
 		return errors.New("feed: signature verification failed")
 	}
 	return nil
