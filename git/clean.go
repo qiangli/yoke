@@ -80,7 +80,7 @@ func nativeClean(_ context.Context, dir string, args []string) (*ExecResult, err
 		return nil, ErrUnsupported
 	}
 	root := w.Filesystem.Root()
-	st, err := w.Status()
+	st, err := worktreeStatus(w)
 	if err != nil {
 		return nil, ErrUnsupported
 	}

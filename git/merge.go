@@ -74,7 +74,7 @@ func treeChanges(r *gogit.Repository, a, b plumbing.Hash) (object.Changes, error
 // applies. A conflicting local change aborts with a git-style error
 // before anything is mutated.
 func ffUpdate(r *gogit.Repository, w *gogit.Worktree, branch plumbing.ReferenceName, oldHash, target plumbing.Hash) error {
-	st, err := w.Status()
+	st, err := worktreeStatus(w)
 	if err != nil {
 		return fmt.Errorf("status: %w", err)
 	}
@@ -322,7 +322,7 @@ func Merge(opts MergeOptions) (*Result, error) {
 	// with both parents. Requires a clean tree (the commit captures the
 	// index verbatim) and a configured identity (checked up front so we
 	// don't move the branch and then fail to commit).
-	st, err := w.Status()
+	st, err := worktreeStatus(w)
 	if err != nil {
 		return nil, fmt.Errorf("status: %w", err)
 	}

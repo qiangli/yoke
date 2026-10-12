@@ -308,7 +308,7 @@ func Status(repoPath string) (*Result, []StatusEntry, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("worktree: %w", err)
 	}
-	status, err := w.Status()
+	status, err := worktreeStatus(w)
 	if err != nil {
 		return nil, nil, fmt.Errorf("status: %w", err)
 	}
@@ -472,7 +472,7 @@ func RevParse(opts RevParseOptions) (*RevParseResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("worktree: %w", err)
 	}
-	st, err := w.Status()
+	st, err := worktreeStatus(w)
 	if err != nil {
 		return nil, fmt.Errorf("status: %w", err)
 	}

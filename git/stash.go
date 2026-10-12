@@ -105,7 +105,7 @@ func nativeStash(_ context.Context, dir string, args []string) (*ExecResult, err
 // changedTrackedFiles returns worktree-relative paths with staged or
 // unstaged changes, excluding untracked files (like default git stash).
 func changedTrackedFiles(w *gogit.Worktree) ([]string, error) {
-	st, err := w.Status()
+	st, err := worktreeStatus(w)
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +127,7 @@ func changedTrackedFiles(w *gogit.Worktree) ([]string, error) {
 // (which deletes them — a go-git divergence from host git that real
 // stash must not inherit) can be followed by an exact restore.
 func shelterUntracked(w *gogit.Worktree) (map[string][]byte, error) {
-	st, err := w.Status()
+	st, err := worktreeStatus(w)
 	if err != nil {
 		return nil, err
 	}

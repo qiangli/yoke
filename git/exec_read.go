@@ -305,7 +305,7 @@ func nativeStatus(_ context.Context, dir string, args []string) (*ExecResult, er
 		return nil, ErrUnsupported
 	}
 
-	status, err := wt.Status()
+	status, err := worktreeStatus(wt)
 	if err != nil {
 		return nil, ErrUnsupported
 	}
@@ -549,7 +549,7 @@ func nativeDiff(_ context.Context, dir string, args []string) (*ExecResult, erro
 						continue
 					}
 				}
-				st, serr := wt.Status()
+				st, serr := worktreeStatus(wt)
 				if serr != nil {
 					return nil, ErrUnsupported
 				}
@@ -570,7 +570,7 @@ func nativeDiff(_ context.Context, dir string, args []string) (*ExecResult, erro
 	// changes?" predicate loom uses to skip empty commits. --diff-filter
 	// narrows the predicate like host git.
 	if quiet {
-		status, err := wt.Status()
+		status, err := worktreeStatus(wt)
 		if err != nil {
 			return nil, ErrUnsupported
 		}
@@ -595,7 +595,7 @@ func nativeDiff(_ context.Context, dir string, args []string) (*ExecResult, erro
 	}
 
 	if nameOnly {
-		status, err := wt.Status()
+		status, err := worktreeStatus(wt)
 		if err != nil {
 			return nil, ErrUnsupported
 		}
@@ -633,7 +633,7 @@ func nativeDiff(_ context.Context, dir string, args []string) (*ExecResult, erro
 	}
 
 	// Unstaged changes: diff between index and working tree
-	status, err := wt.Status()
+	status, err := worktreeStatus(wt)
 	if err != nil {
 		return nil, ErrUnsupported
 	}
@@ -845,7 +845,7 @@ func nativeAdd(_ context.Context, dir string, args []string) (*ExecResult, error
 	for _, arg := range args {
 		if arg == "-A" || arg == "--all" || arg == "." {
 			// Add all: get status and add each file
-			status, err := wt.Status()
+			status, err := worktreeStatus(wt)
 			if err != nil {
 				return nil, ErrUnsupported
 			}
@@ -1245,7 +1245,7 @@ func nativeCheckout(_ context.Context, dir string, args []string) (*ExecResult, 
 			return nil, checkoutUnsupported("cannot inspect worktree status: %v", err)
 		}
 		if !force && !populate {
-			status, err := wt.Status()
+			status, err := worktreeStatus(wt)
 			if err != nil {
 				return nil, checkoutUnsupported("cannot inspect worktree status: %v", err)
 			}
@@ -1294,7 +1294,7 @@ func nativeCheckout(_ context.Context, dir string, args []string) (*ExecResult, 
 			return nil, checkoutUnsupported("cannot inspect worktree status: %v", err)
 		}
 		if !force && !populate {
-			status, err := wt.Status()
+			status, err := worktreeStatus(wt)
 			if err != nil {
 				return nil, checkoutUnsupported("cannot inspect worktree status: %v", err)
 			}
@@ -1398,7 +1398,7 @@ func checkoutUnsupported(format string, args ...any) error {
 // --no-checkout`: depending on the index implementation, go-git reports each
 // path as either deleted from the worktree or deleted from the index.
 func checkoutNeedsPopulate(wt *gogit.Worktree) (bool, error) {
-	status, err := wt.Status()
+	status, err := worktreeStatus(wt)
 	if err != nil {
 		return false, err
 	}
@@ -1638,7 +1638,7 @@ func nativeReset(_ context.Context, dir string, args []string) (*ExecResult, err
 		}
 
 		// Get status first to determine which files are staged
-		status, err := wt.Status()
+		status, err := worktreeStatus(wt)
 		if err != nil {
 			return nil, ErrUnsupported
 		}
@@ -2189,7 +2189,7 @@ func nativeLsFiles(_ context.Context, dir string, args []string) (*ExecResult, e
 
 	_ = showIgnored // go-git doesn't easily support this, return empty for now
 
-	status, err := wt.Status()
+	status, err := worktreeStatus(wt)
 	if err != nil {
 		return nil, ErrUnsupported
 	}

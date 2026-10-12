@@ -76,7 +76,7 @@ func collectChanges(r *gogit.Repository, base, tip plumbing.Hash) (map[string]ch
 // two text edits merges cleanly (no overlapping hunks). Delete/modify
 // disagreements and divergent binary edits always conflict.
 func threeWayMerge(r *gogit.Repository, w *gogit.Worktree, ours, theirs plumbing.Hash, message string, sig *object.Signature) (*Result, error) {
-	st, err := w.Status()
+	st, err := worktreeStatus(w)
 	if err != nil {
 		return nil, fmt.Errorf("status: %w", err)
 	}

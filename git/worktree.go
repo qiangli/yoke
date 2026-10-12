@@ -413,7 +413,7 @@ func worktreeRemove(dir string, args []string) (*ExecResult, error) {
 		if werr != nil {
 			return nil, ErrUnsupported
 		}
-		st, serr := w.Status()
+		st, serr := worktreeStatus(w)
 		if serr != nil {
 			return nil, ErrUnsupported
 		}

@@ -485,7 +485,7 @@ func nativeRebase(_ context.Context, dir string, args []string) (*ExecResult, er
 		}
 
 		// Stage and commit
-		status, stErr := wt.Status()
+		status, stErr := worktreeStatus(wt)
 		if stErr != nil {
 			return nil, ErrUnsupported
 		}
@@ -792,7 +792,7 @@ func writePatchPlans(wt *gogit.Worktree, root string, plans map[string]*string) 
 			return err
 		}
 	}
-	status, err := wt.Status()
+	status, err := worktreeStatus(wt)
 	if err != nil {
 		return err
 	}

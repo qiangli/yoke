@@ -185,7 +185,7 @@ func LsFiles(repoPath string, mode LsFilesMode) ([]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("worktree: %w", err)
 		}
-		st, err := w.Status()
+		st, err := worktreeStatus(w)
 		if err != nil {
 			return nil, fmt.Errorf("status: %w", err)
 		}
