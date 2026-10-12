@@ -30,11 +30,23 @@ func (s *server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 // handleApps is the tile list: what exists, whether it is up right now, and the
 // command that would start it if it is not. It is the same data
 // `bashy commands --view web` prints — one source, two renderers.
+//
+// ?catalog=1 is the launcher's FIRST paint: the same list with no dialling, so
+// tiles appear before any liveness probe answers. A status that needs no dial
+// (an in-process panel is ready, an absent one unavailable) is stated; a
+// proxied service is "pending" until the probed list replaces it.
 func (s *server) handleApps(w http.ResponseWriter, r *http.Request) {
+	panels := s.requestPanels(r)
+	var apps []Status
+	if r.URL.Query().Get("catalog") == "1" {
+		apps = catalogStatus(panels)
+	} else {
+		apps = s.probes.Probe(r.Context(), panels)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"schema_version": appsSchemaVersion,
 		"base":           coopauth.BaseHref(r),
-		"apps":           s.probes.Probe(r.Context(), s.requestPanels(r)),
+		"apps":           apps,
 	})
 }
 

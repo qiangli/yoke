@@ -2229,9 +2229,8 @@ func TestDOMRegisteredAppTile(t *testing.T) {
 	var tile, landed string
 	if err := chromedp.Run(ctx,
 		chromedp.Navigate(base+"/"),
-		// Wait for the tile, not a fixed sleep: the first paint waits on every
-		// launcher ride-along, and /api/neighborhood can take seconds.
-		chromedp.WaitVisible(`a.tile[href$="pyhttp/"]`, chromedp.ByQuery),
+		// The catalog paints the tile as pending; wait for the probed answer.
+		chromedp.WaitReady(`a.tile[href$="pyhttp/"] .badge.ready`, chromedp.ByQuery),
 		chromedp.Evaluate(`(()=>{const a=[...document.querySelectorAll("a.tile")].find(e=>e.querySelector(".label")?.textContent==="Py HTTP");
 			if(!a) return "NONE";
 			return JSON.stringify({href:new URL(a.href).pathname, glyph:a.querySelector(".icon").textContent,

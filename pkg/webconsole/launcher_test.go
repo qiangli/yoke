@@ -231,3 +231,29 @@ func TestRegisteredAPIRejectsSimpleFormContentType(t *testing.T) {
 		t.Fatal("form content saved app")
 	}
 }
+
+// The catalog is the launcher's first paint: the same tiles with no dial, so a
+// proxied app is pending (even when its port is dead) and an in-process panel
+// is already ready.
+func TestAppsCatalogDoesNotProbe(t *testing.T) {
+	writeAppRecord(t, "deadapp", "name: deadapp\nlabel: Dead\nport: 1\n")
+	h := newTestHandler(t, Options{})
+	w := do(h, "GET", "/api/apps?catalog=1", "127.0.0.1:1", nil)
+	var got struct {
+		Apps []struct{ Name, Status string } `json:"apps"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != 200 {
+		t.Fatalf("catalog = %d %s", w.Code, w.Body.String())
+	}
+	status := map[string]string{}
+	for _, a := range got.Apps {
+		status[a.Name] = a.Status
+	}
+	if status["deadapp"] != StatusPending || status["terminal"] != StatusReady {
+		t.Fatalf("catalog statuses = %v", status)
+	}
+	w = do(h, "GET", "/api/apps", "127.0.0.1:1", nil)
+	if !strings.Contains(w.Body.String(), `"name":"deadapp"`) || strings.Contains(w.Body.String(), StatusPending) {
+		t.Fatalf("probed list still pending: %s", w.Body.String())
+	}
+}
