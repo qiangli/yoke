@@ -295,3 +295,160 @@ func trimNL(s string) string {
 	}
 	return s
 }
+
+// nestedFixture builds super -> external/podman/src -> vendor/sub2 with every
+// level populated in the SOURCE, then deletes the upstream origins so any
+// network-style clone of a canonical URL must fail.
+func nestedFixture(t *testing.T) (base, superOrigin, sub1Origin, sub2Origin string) {
+	t.Helper()
+	base = t.TempDir()
+	sub2Origin = filepath.Join(base, "sub2origin")
+	mustMkdir(t, sub2Origin)
+	gitRun(t, sub2Origin, "init", "-q")
+	gitIdent(t, sub2Origin)
+	gitWriteAndCommit(t, sub2Origin, "nested.txt", "nested\n", "init sub2")
+	sub1Origin = filepath.Join(base, "sub1origin")
+	mustMkdir(t, sub1Origin)
+	gitRun(t, sub1Origin, "init", "-q")
+	gitIdent(t, sub1Origin)
+	gitWriteAndCommit(t, sub1Origin, "podman.txt", "podman\n", "init sub1")
+	gitRun(t, sub1Origin, "-c", "protocol.file.allow=always", "submodule", "add", sub2Origin, "vendor/sub2")
+	gitRun(t, sub1Origin, "commit", "-qm", "add sub2")
+	superOrigin = filepath.Join(base, "superorigin")
+	mustMkdir(t, superOrigin)
+	gitRun(t, superOrigin, "init", "-q")
+	gitIdent(t, superOrigin)
+	gitWriteAndCommit(t, superOrigin, "root.txt", "root\n", "root")
+	gitRun(t, superOrigin, "-c", "protocol.file.allow=always", "submodule", "add", sub1Origin, "external/podman/src")
+	gitRun(t, superOrigin, "commit", "-qm", "add sub1")
+	gitRun(t, superOrigin, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive")
+	return
+}
+
+func cloneWorkspace(t *testing.T, base, superOrigin string) string {
+	t.Helper()
+	ws := filepath.Join(base, "workspace")
+	gitRun(t, base, "clone", "--local", "--no-hardlinks", superOrigin, ws)
+	return ws
+}
+
+// Nested forks must hydrate from the SOURCE root even when their canonical
+// upstreams are unreachable, and canonical URLs must be restored at every level.
+func TestWeaveHydrateNestedOfflineFromSource(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	base, superOrigin, sub1Origin, sub2Origin := nestedFixture(t)
+	ws := cloneWorkspace(t, base, superOrigin)
+	if err := os.RemoveAll(sub1Origin); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(sub2Origin); err != nil {
+		t.Fatal(err)
+	}
+	if err := weaveHydrateSubmodules(superOrigin, ws, io.Discard, io.Discard); err != nil {
+		t.Fatalf("offline nested hydrate: %v", err)
+	}
+	nested := filepath.Join(ws, "external", "podman", "src", "vendor", "sub2")
+	if _, err := os.Stat(filepath.Join(nested, "nested.txt")); err != nil {
+		t.Fatalf("nested submodule not hydrated offline: %v", err)
+	}
+	if got := string(gitT(t, ws, "status", "--porcelain")); got != "" {
+		t.Fatalf("workspace dirty: %q", got)
+	}
+	l1 := filepath.Join(ws, "external", "podman", "src")
+	for dir, want := range map[string]string{ws: sub1Origin, l1: sub2Origin} {
+		var key string
+		if dir == ws {
+			key = "submodule.external/podman/src.url"
+		} else {
+			key = "submodule.vendor/sub2.url"
+		}
+		got := trimNL(string(gitT(t, dir, "config", key)))
+		if got != want {
+			t.Fatalf("%s in %s = %q, want canonical %q", key, dir, got, want)
+		}
+	}
+	if got := trimNL(string(gitT(t, nested, "config", "remote.origin.url"))); got != sub2Origin {
+		t.Fatalf("nested remote.origin.url = %q, want canonical %q", got, sub2Origin)
+	}
+}
+
+// Unchanged gitlinks hiding modified, untracked and committed nested work must
+// be preserved (innermost first) before an abandon --force may delete anything.
+func TestWeavePreserveNestedWork(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	base, superOrigin, _, _ := nestedFixture(t)
+	ws := cloneWorkspace(t, base, superOrigin)
+	gitIdent(t, ws)
+	if err := weaveHydrateSubmodules(superOrigin, ws, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(ws, "external", "podman", "src", "vendor", "sub2")
+	mustWrite(t, filepath.Join(nested, "nested.txt"), "edited nested\n")
+	mustWrite(t, filepath.Join(nested, "new.txt"), "untracked nested\n")
+	mustWrite(t, filepath.Join(ws, "external", "podman", "src", "mid.txt"), "mid work\n")
+
+	dirty, _, _ := weaveMeasureDirtiness(ws)
+	if !dirty {
+		t.Fatal("precondition: nested edits must read as dirty")
+	}
+	if c, err := maybeAutoCommit(ws, "naive"); err == nil && c {
+		t.Fatal("precondition: plain auto-commit cannot capture an unchanged gitlink's content")
+	}
+
+	refs, err := weavePreserveNestedWork(superOrigin, ws, 186)
+	if err != nil {
+		t.Fatalf("preserve nested: %v", err)
+	}
+	if len(refs) != 2 {
+		t.Fatalf("want 2 nested refs, got %v", refs)
+	}
+	for _, r := range refs {
+		if _, err := exec.Command("git", "-C", superOrigin, "rev-parse", "--verify", r).Output(); err != nil {
+			t.Fatalf("ref %s missing in source: %v", r, err)
+		}
+	}
+	got := string(gitT(t, superOrigin, "show", refs[0]+":new.txt"))
+	if strings.TrimSpace(got) != "untracked nested" {
+		t.Fatalf("untracked nested content not preserved: %q", got)
+	}
+	// With nested work committed, the superproject can now record the bumped gitlinks.
+	if c, err := maybeAutoCommit(ws, "salvage"); err != nil || !c {
+		t.Fatalf("superproject commit after nested preserve: committed=%v err=%v", c, err)
+	}
+	if got := string(gitT(t, ws, "status", "--porcelain")); got != "" {
+		t.Fatalf("still dirty after preservation: %q", got)
+	}
+}
+
+// An interrupted hydration leaves empty submodule directories: that is not work,
+// must not trip the guard or create refs, and a later hydration must complete.
+func TestWeaveInterruptedHydrationRecovery(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	base, superOrigin, _, _ := nestedFixture(t)
+	ws := cloneWorkspace(t, base, superOrigin)
+	if dirty, _, _ := weaveMeasureDirtiness(ws); dirty {
+		t.Fatal("empty submodule dirs must not read as dirty")
+	}
+	refs, err := weavePreserveNestedWork(superOrigin, ws, 186)
+	if err != nil || len(refs) != 0 {
+		t.Fatalf("empty workspace: refs=%v err=%v, want none", refs, err)
+	}
+	// Half-done level 1: populated, nested level still empty.
+	gitRun(t, ws, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "external/podman/src")
+	refs, err = weavePreserveNestedWork(superOrigin, ws, 186)
+	if err != nil || len(refs) != 0 {
+		t.Fatalf("half-hydrated workspace: refs=%v err=%v, want none", refs, err)
+	}
+	if err := weaveHydrateSubmodules(superOrigin, ws, io.Discard, io.Discard); err != nil {
+		t.Fatalf("recovery hydrate: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(ws, "external", "podman", "src", "vendor", "sub2", "nested.txt")); err != nil {
+		t.Fatalf("recovery did not hydrate nested: %v", err)
+	}
+}

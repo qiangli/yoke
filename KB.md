@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [host/page] Do not create bookkeeping-only sprints — Operator rule for filing work and commit provenance — WHEN a task needs a story/todo or a commit hook requests sprint trailers: reuse a relevant open sprint, otherwise file a repo todo, and ask before bypassing verification Before filing work, inspect the open sprint board and choose a genuinely relevant activ  (kb:sprint-story-placement)
+- [host/page] Weave conductor gate + convergence guardrails — Failure modes to design around when authoring weave verify gates and converging sprint work — WHEN conducting any bashy weave sprint (keywords: verify gate, auto-commit litter, escaped commit, salvage, case-insensitive) Gate authoring: (1) case-INSENSITIVE filesystems (macOS APFS) make out-f.tx  (kb:weave-conductor-gate-guardrails)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 

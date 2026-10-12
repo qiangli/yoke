@@ -1086,7 +1086,9 @@ func weaveMeasureDirtiness(workspace string) (dirty bool, dirtyFiles, untrackedF
 	if workspace == "" {
 		return false, 0, 0
 	}
-	out, err := exec.Command(gitBin(), "-C", workspace, "status", "--porcelain", "--untracked-files=all").Output()
+	// ignore-submodules=none: a repo-level ignore=all/dirty setting must not hide
+	// nested edits from the guard that decides whether work may be destroyed.
+	out, err := exec.Command(gitBin(), "-C", workspace, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none").Output()
 	if err != nil {
 		return false, 0, 0
 	}
@@ -1292,45 +1294,14 @@ func weaveHydrateSubmodules(root, workspace string, out, errw io.Writer) error {
 	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
 
-	anyLocal := false
-	// Configure local origin URL overrides for submodules at all levels.
-	_ = filepath.WalkDir(workspace, func(p string, d os.DirEntry, err error) error {
-		if err != nil || d.Name() != ".gitmodules" {
-			return nil
-		}
-		subDir := filepath.Dir(p)
-		listed, err := exec.Command(gitBin(), "-C", subDir, "config", "-f", ".gitmodules",
-			"--get-regexp", `^submodule\..*\.path$`).Output()
-		if err != nil {
-			return nil
-		}
-		relSubDir, err := filepath.Rel(workspace, subDir)
-		if err != nil || relSubDir == "." {
-			relSubDir = ""
-		}
-		for _, line := range strings.Split(strings.TrimSpace(string(listed)), "\n") {
-			key, path, ok := strings.Cut(strings.TrimSpace(line), " ")
-			if !ok {
-				continue
-			}
-			name := strings.TrimSuffix(strings.TrimPrefix(key, "submodule."), ".path")
-			relPath := filepath.Join(relSubDir, path)
-			localSrc := filepath.Join(root, relPath)
-			if _, err := os.Stat(filepath.Join(localSrc, ".git")); err == nil {
-				_ = exec.Command(gitBin(), "-C", subDir, "config", "submodule."+name+".url", localSrc).Run()
-				anyLocal = true
-			}
-		}
-		return nil
-	})
-
-	// A local checkout must never wait forever on a broken submodule transport.
-	// The queue has already recorded the hydration phase before reaching here,
-	// so timeout failure is both bounded and diagnosable by the conductor.
-	up := exec.CommandContext(ctx, gitBin(), "-C", workspace, "-c", "protocol.file.allow=always",
-		"submodule", "update", "--init", "--recursive")
-	up.Stdout, up.Stderr = out, errw
-	if err := up.Run(); err != nil {
+	// Hydrate level by level. A freshly cloned workspace has only the top
+	// .gitmodules; nested ones appear once their parent is populated, so a walk
+	// over the initially empty workspace can never see them. Each level's
+	// override comes from the SOURCE root's populated tree at the same relative
+	// path, and the nested level is only enumerated after its parent is checked
+	// out. Without that, nested forks were cloned over the network.
+	anyLocal, err := weaveHydrateLevel(ctx, root, workspace, "", out, errw)
+	if err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf("git submodule update --init timed out after %s (BASHY_WEAVE_PROVISION_TIMEOUT): %w", limit, ctx.Err())
 		}
@@ -1339,7 +1310,10 @@ func weaveHydrateSubmodules(root, workspace string, out, errw io.Writer) error {
 	if anyLocal {
 		// Restore canonical .gitmodules URLs recursively so local-origin paths are not
 		// left as breadcrumbs in any submodule config.
-		_ = exec.CommandContext(ctx, gitBin(), "-C", workspace, "submodule", "sync", "--recursive").Run()
+		sync := exec.CommandContext(ctx, gitBin(), "-C", workspace, "submodule", "sync", "--recursive")
+		if so, err := sync.CombinedOutput(); err != nil {
+			return fmt.Errorf("restore canonical submodule urls: %w: %s", err, strings.TrimSpace(string(so)))
+		}
 	}
 	// Hydration runs before an agent exists, so it must leave the freshly
 	// allocated workspace clean. In particular, nested submodule checkout
@@ -1375,6 +1349,53 @@ func weaveHydrateSubmodules(root, workspace string, out, errw io.Writer) error {
 		return fmt.Errorf("reset hydrated workspace: %w", err)
 	}
 	return nil
+}
+
+// weaveHydrateLevel populates the submodules declared by <workspace>/<rel>/.gitmodules
+// (non-recursively), pointing each at the source root's populated tree when one
+// exists, then descends into each populated submodule that declares its own.
+// It reports whether any local override was configured anywhere below.
+func weaveHydrateLevel(ctx context.Context, root, workspace, rel string, out, errw io.Writer) (bool, error) {
+	dir := filepath.Join(workspace, rel)
+	if _, err := os.Stat(filepath.Join(dir, ".gitmodules")); err != nil {
+		return false, nil
+	}
+	listed, err := exec.CommandContext(ctx, gitBin(), "-C", dir, "config", "-f", ".gitmodules",
+		"--get-regexp", `^submodule\..*\.path$`).Output()
+	if err != nil {
+		return false, nil
+	}
+	anyLocal := false
+	var paths []string
+	for _, line := range strings.Split(strings.TrimSpace(string(listed)), "\n") {
+		key, path, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok {
+			continue
+		}
+		name := strings.TrimSuffix(strings.TrimPrefix(key, "submodule."), ".path")
+		paths = append(paths, path)
+		localSrc := filepath.Join(root, rel, path)
+		if _, err := os.Stat(filepath.Join(localSrc, ".git")); err == nil {
+			if err := exec.CommandContext(ctx, gitBin(), "-C", dir, "config", "submodule."+name+".url", localSrc).Run(); err == nil {
+				anyLocal = true
+			}
+		}
+	}
+	up := exec.CommandContext(ctx, gitBin(), "-C", dir, "-c", "protocol.file.allow=always",
+		"submodule", "update", "--init")
+	up.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	up.Stdout, up.Stderr = out, errw
+	if err := up.Run(); err != nil {
+		return anyLocal, err
+	}
+	for _, path := range paths {
+		local, err := weaveHydrateLevel(ctx, root, workspace, filepath.Join(rel, path), out, errw)
+		if err != nil {
+			return anyLocal || local, err
+		}
+		anyLocal = anyLocal || local
+	}
+	return anyLocal, nil
 }
 
 // weaveMarkLaunchFailed makes provisioning failures durable and removes
@@ -5931,6 +5952,7 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason, disposition string, y
 	base := weaveBaseBranch(root)
 	var it *weaveItem
 	var preservedRef string
+	var nestedRefs []string
 	notFoundHint := weaveOtherActiveQueuesHintSuffix(dir)
 	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
 		it = findWeaveItem(q, id)
@@ -5973,6 +5995,17 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason, disposition string, y
 						// the working tree on the floor — silently, because the
 						// success line only ever named the commits.
 						if dirty {
+							// A gitlink whose commit is unchanged still hides
+							// modified, untracked or newly committed nested
+							// content that `git add -A` in the superproject can
+							// never stage. Capture it inside each submodule first
+							// (innermost first) so the superproject commit below
+							// records the bumped gitlinks.
+							refs, nerr := weavePreserveNestedWork(root, it.Workspace, id)
+							nestedRefs = append(nestedRefs, refs...)
+							if nerr != nil {
+								return fmt.Errorf("run #%d: --force could not preserve nested submodule work, refusing to destroy it: %w", id, nerr)
+							}
 							committed, cerr := maybeAutoCommit(it.Workspace, weaveForcedSalvageCommitMessage(it))
 							if cerr != nil {
 								return fmt.Errorf("run #%d: --force could not commit %d uncommitted file(s) for preservation, refusing to destroy them: %w", id, dirtyFiles+untracked, cerr)
@@ -6068,6 +6101,9 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason, disposition string, y
 		if preservedRef != "" {
 			res["preserved_ref"] = preservedRef
 		}
+		if len(nestedRefs) > 0 {
+			res["preserved_nested_refs"] = nestedRefs
+		}
 		if len(leftovers) > 0 {
 			res["leftovers"] = leftovers
 		}
@@ -6077,6 +6113,9 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason, disposition string, y
 		fmt.Fprintf(cmd.OutOrStdout(), "weave abandon: run #%d abandoned as %s (unmerged commits preserved at %s)\n", it.ID, it.Disposition, preservedRef)
 	} else {
 		fmt.Fprintf(cmd.OutOrStdout(), "weave abandon: run #%d abandoned as %s\n", it.ID, it.Disposition)
+	}
+	for _, r := range nestedRefs {
+		fmt.Fprintf(cmd.OutOrStdout(), "weave abandon: nested submodule work preserved at %s\n", r)
 	}
 	for _, l := range leftovers {
 		fmt.Fprintf(cmd.ErrOrStderr(), "weave abandon: left alone: %s\n", l)
@@ -6091,7 +6130,10 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason, disposition string, y
 // Never move an existing salvage ref; a distinct tip receives a deterministic
 // SHA-qualified name instead.
 func weavePreserveAbandonedTip(root, workspace string, id int64, head string) (string, error) {
-	base := fmt.Sprintf("refs/salvage/abandoned-%d", id)
+	return weavePreserveTipAs(root, workspace, fmt.Sprintf("refs/salvage/abandoned-%d", id), head)
+}
+
+func weavePreserveTipAs(root, workspace, base, head string) (string, error) {
 	if _, err := gitOut(root, "fetch", "--no-tags", workspace, "HEAD"); err != nil {
 		return base, err
 	}
