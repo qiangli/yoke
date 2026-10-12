@@ -774,9 +774,25 @@ session, show and rm reach any of them, and
 
 mint a /k/<token> URL bound to the sticky whatever shell runs them. Creating a
 key another session owns is refused with the owner's session id. Requests may also bind on the fly with the
-header X-Bashy-Sticky: KEY; uses=N; ... or the body field "bashy": {"sticky": {...}}.`,
+header X-Bashy-Sticky: KEY; uses=N; ... or the body field "bashy": {"sticky": {...}}.
+
+Principal scope: a service key that every shell and every nested session must
+reach (genie's per-model keys genie-<model>, created once, ttl 0) belongs to no
+session. Create it with --scope principal; a session-owned key of the same name
+is refused until it is removed.
+
+After a CLI upgrade: a frozen key is refused with 409 ("<tool> is now X (was
+Y)") — never served by the new version silently. check reports every such key
+before a run hits the refusal, and repin re-resolves the key's own spec in
+place, keeping its scope (principal stays principal) and refusing to move the
+seat (a different agent, vendor model or provider is a model switch: rm and
+create it on purpose):
+
+  bashy llm sticky check                      # exit 1 lists the stale keys
+  bashy llm sticky repin genie-muse-spark1.3  # same key, same scope, new CLI version
+  bashy llm sticky create genie-X --model X --ttl 0 --scope principal   # recreate an absent one`,
 	}
-	cmd.AddCommand(newStickyCreateCmd(), newStickyShowCmd(), newStickyListCmd(), newStickyRmCmd())
+	cmd.AddCommand(newStickyCreateCmd(), newStickyShowCmd(), newStickyListCmd(), newStickyRmCmd(), newStickyRepinCmd(), newStickyCheckCmd())
 	return cmd
 }
 
@@ -785,6 +801,7 @@ func newStickyCreateCmd() *cobra.Command {
 	var numCtx, seed int
 	var temperature float64
 	var asJSON bool
+	var scope string
 	cmd := &cobra.Command{
 		Use:           "create KEY",
 		Short:         "resolve a model once and freeze it under KEY",
@@ -807,14 +824,23 @@ func newStickyCreateCmd() *cobra.Command {
 			if len(opts) > 0 {
 				spec.Options = opts
 			}
+			path := "/v1/sticky"
+			switch scope {
+			case "session":
+			case "principal":
+				path += principalScopePath
+			default:
+				return fmt.Errorf("--scope %q: want session or principal", scope)
+			}
 			var view map[string]any
-			if err := doorJSON(c.Context(), http.MethodPost, "/v1/sticky", spec, &view); err != nil {
+			if err := doorJSON(c.Context(), http.MethodPost, path, spec, &view); err != nil {
 				return err
 			}
 			return printSticky(c.OutOrStdout(), view, asJSON)
 		},
 	}
 	f := cmd.Flags()
+	f.StringVar(&scope, "scope", "session", "session (this shell's) or principal (no session: reachable from every shell and nested session)")
 	f.StringVar(&spec.Model, "model", "", "model, band (L4), registry model or agent to freeze")
 	f.StringVar(&spec.Identity, "identity", "", "require (or copy) this identity digest")
 	f.StringVar(&spec.Filter, "filter", "", "cligw filter for band/model resolution")
@@ -863,11 +889,11 @@ func newStickyListCmd() *cobra.Command {
 				return json.NewEncoder(c.OutOrStdout()).Encode(list)
 			}
 			tw := tabwriter.NewWriter(c.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "KEY\tIDENTITY\tBACKEND\tMODEL\tUSED\tREMAINING\tSESSION")
+			fmt.Fprintln(tw, "KEY\tIDENTITY\tBACKEND\tMODEL\tUSED\tREMAINING\tSESSION\tSTATUS")
 			for _, v := range list.Bindings {
 				id, _ := v["identity"].(map[string]any)
 				model := firstNonEmpty(str(id["agent"]), str(id["model"]))
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%v\t%v\t%s\n", str(v["key"]), str(v["short"]), str(id["backend"]), model, v["used"], remainingText(v["remaining"]), sessionText(v))
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%v\t%v\t%s\t%s\n", str(v["key"]), str(v["short"]), str(id["backend"]), model, v["used"], remainingText(v["remaining"]), sessionText(v), statusText(v))
 			}
 			return tw.Flush()
 		},
@@ -888,6 +914,133 @@ func newStickyRmCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func newStickyRepinCmd() *cobra.Command {
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:   "repin KEY",
+		Short: "re-resolve a binding's own spec in place after a CLI upgrade (same key, same scope, same seat)",
+		Long: `repin re-resolves KEY's own spec (model, filter, options, bind, reset, ttl,
+export) and freezes the result under the same key in the same scope: a
+principal-owned key stays principal-owned, a session-owned key stays with its
+session. It is the supported recovery for a key refused with 409 after the
+CLI behind it upgraded. The seat never moves: when the spec now resolves to a
+different agent, vendor model, provider, backend or location the re-pin is
+refused and nothing changes — rm and create to switch models on purpose. The
+use count and any held conversation start over; the old identity is reported
+beside the new one. Re-pinning an up-to-date key changes nothing.`,
+		Args:          cobra.ExactArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(c *cobra.Command, args []string) error {
+			var view map[string]any
+			if err := doorJSON(c.Context(), http.MethodPut, "/v1/sticky/"+args[0]+principalScopePath, nil, &view); err != nil {
+				return err
+			}
+			if asJSON {
+				return printSticky(c.OutOrStdout(), view, true)
+			}
+			w := c.OutOrStdout()
+			if re, _ := view["repinned"].(bool); !re {
+				fmt.Fprintf(w, "%s is already served exactly as identity %s; nothing to re-pin\n", str(view["key"]), str(view["short"]))
+				return nil
+			}
+			prev, _ := view["previous_identity"].(map[string]any)
+			id, _ := view["identity"].(map[string]any)
+			fmt.Fprintf(w, "re-pinned %s: identity %s -> %s\n", str(view["key"]), str(view["previous_short"]), str(view["short"]))
+			for _, f := range []struct{ label, key string }{{"tool_version", "tool_version"}, {"launch", "launch"}, {"effort", "effort"}, {"model_digest", "model_digest"}} {
+				if was, now := str(prev[f.key]), str(id[f.key]); was != now {
+					fmt.Fprintf(w, "  %-13s %q -> %q\n", f.label, was, now)
+				}
+			}
+			return printSticky(w, view, false)
+		},
+	}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the bashy-sticky-v1 envelope (with previous_identity)")
+	return cmd
+}
+
+func newStickyCheckCmd() *cobra.Command {
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:   "check [KEY...]",
+		Short: "verify each binding can still be served exactly (the CLI behind it did not self-update)",
+		Long: `check asks the door, for every binding of this principal (or the KEYs given),
+whether a request would be served exactly today or refused: a CLI that
+self-updated under a frozen key, a local model re-pulled with a new digest, an
+agent whose declared effort changed. Stale keys are listed with the refusal
+text and the exit status is 1, so a run can gate on it before its first
+request. Recover a stale key with repin.`,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(c *cobra.Command, args []string) error {
+			var list struct {
+				Bindings []map[string]any `json:"bindings"`
+			}
+			if err := doorJSON(c.Context(), http.MethodGet, "/v1/sticky"+principalScopePath, nil, &list); err != nil {
+				return err
+			}
+			want := map[string]bool{}
+			for _, k := range args {
+				want[k] = true
+			}
+			var rows []map[string]any
+			var stale []string
+			seen := map[string]bool{}
+			for _, v := range list.Bindings {
+				key := str(v["key"])
+				if len(want) > 0 && !want[key] {
+					continue
+				}
+				seen[key] = true
+				rows = append(rows, v)
+				if ok, _ := v["serviceable"].(bool); !ok {
+					stale = append(stale, key)
+				}
+			}
+			var missing []string
+			for _, k := range args {
+				if !seen[k] {
+					missing = append(missing, k)
+				}
+			}
+			if asJSON {
+				return json.NewEncoder(c.OutOrStdout()).Encode(map[string]any{
+					"schema_version": "bashy-sticky-check-v1", "bindings": rows, "stale": stale, "missing": missing, "ok": len(stale) == 0 && len(missing) == 0,
+				})
+			}
+			tw := tabwriter.NewWriter(c.OutOrStdout(), 0, 4, 2, ' ', 0)
+			fmt.Fprintln(tw, "KEY\tIDENTITY\tSESSION\tSTATUS")
+			for _, v := range rows {
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", str(v["key"]), str(v["short"]), sessionText(v), statusText(v))
+			}
+			for _, k := range missing {
+				fmt.Fprintf(tw, "%s\t-\t-\tmissing: no binding of this principal; create it (bashy llm sticky create %s --model M)\n", k, k)
+			}
+			if err := tw.Flush(); err != nil {
+				return err
+			}
+			if len(stale) > 0 || len(missing) > 0 {
+				return fmt.Errorf("%d stale, %d missing: re-pin stale keys with `bashy llm sticky repin KEY`", len(stale), len(missing))
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the bashy-sticky-check-v1 envelope")
+	return cmd
+}
+
+// statusText is a listing row's live status: ok, or the refusal a request
+// would get today.
+func statusText(v map[string]any) string {
+	if ok, _ := v["serviceable"].(bool); ok {
+		return "ok"
+	}
+	if s := str(v["stale"]); s != "" {
+		return "stale: " + strings.TrimPrefix(s, "sticky: ")
+	}
+	return "unknown"
 }
 
 func printSticky(w io.Writer, view map[string]any, asJSON bool) error {
@@ -914,6 +1067,9 @@ func printSticky(w io.Writer, view map[string]any, asJSON bool) error {
 		fmt.Fprintf(w, "options   %s\n", data)
 	}
 	fmt.Fprintf(w, "used      %v (remaining %s)\n", view["used"], remainingText(view["remaining"]))
+	if _, checked := view["serviceable"]; checked {
+		fmt.Fprintf(w, "status    %s\n", statusText(view))
+	}
 	return nil
 }
 

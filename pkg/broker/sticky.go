@@ -386,6 +386,35 @@ func (s *stickyStore) put(b *Binding) (*Binding, error) {
 	return &cp, nil
 }
 
+// replace swaps the binding under old's key for next, provided the stored
+// binding is still exactly old (same digest): a re-pin resolves outside the
+// lock, so a concurrent delete or re-pin must fail the swap rather than be
+// overwritten. next inherits old's scope; its worker (if any) is evicted
+// because the old identity's warm CLI must never serve the new identity.
+func (s *stickyStore) replace(old, next *Binding) (*Binding, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sweepLocked()
+	k := storeKey(old.Principal, old.Spec.Key)
+	cur := s.m[k]
+	if cur == nil {
+		return nil, stickyErr(404, "sticky: key %q is gone (expired or deleted)", old.Spec.Key)
+	}
+	if cur.Digest != old.Digest {
+		return nil, stickyErr(409, "sticky: key %q changed while re-pinning (now identity %s); retry", old.Spec.Key, ShortDigest(cur.Digest))
+	}
+	next.scoped = scoped{Principal: cur.Principal, Session: cur.Session, Exported: cur.Exported, Created: s.now()}
+	next.Used, next.Transcript = 0, nil
+	next.LastUsed = s.now()
+	s.m[k] = next
+	s.saveLocked()
+	if s.onEvict != nil {
+		s.onEvict(cur.Principal, cur.Spec.Key)
+	}
+	cp := *next
+	return &cp, nil
+}
+
 // use consumes one use, checking the uses budget and, for reset=none, that
 // messages extend the recorded transcript. It returns the use number.
 func (s *stickyStore) use(principal, session, key string, messages []json.RawMessage) (int, error) {

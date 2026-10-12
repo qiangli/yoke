@@ -922,6 +922,93 @@ func (b *Broker) checkIdentity(ctx context.Context, bnd *Binding) error {
 	return nil
 }
 
+// repinBinding re-resolves an existing binding's own spec and freezes the
+// result under the same key, in the same scope (a principal-owned key stays
+// principal-owned): the supported recovery after a CLI upgrade, which
+// otherwise leaves the key refused with 409 forever. A re-pin never moves the
+// seat — the agent, vendor model, provider, backend and location must come
+// out identical; only the version-like parts (CLI version, launch
+// fingerprint, declared effort) may differ. Anything else is a model switch,
+// refused with 409 so the operator deletes and creates on purpose. The
+// returned old is the binding as it was; when nothing changed it is also the
+// result (idempotent).
+func (b *Broker) repinBinding(ctx context.Context, principal, session, key string, principalScope bool) (old, next *Binding, err error) {
+	if principalScope {
+		old = b.sticky.owned(principal, key)
+	} else {
+		old = b.sticky.get(principal, session, key)
+	}
+	if old == nil {
+		if other := b.sticky.owned(principal, key); other != nil {
+			return nil, nil, stickyErr(404, "%s", ownedElsewhereMsg(other))
+		}
+		return nil, nil, stickyErr(404, "sticky: no binding %q to re-pin; create it (bashy llm sticky create %s --model M)", key, key)
+	}
+	spec := old.Spec
+	// A binding made by copying another's identity (--identity) has no model
+	// of its own; its frozen identity names the seat it sits on, and that seat
+	// is what a re-pin resolves. The digest requirement cannot survive a
+	// re-pin by definition, so it is dropped from the stored spec.
+	spec.Identity = ""
+	seat := firstNonEmpty(spec.Model, old.Identity.Agent, old.Identity.Model)
+	id, err := b.resolveIdentity(ctx, principal, old.Session, spec, seat)
+	if err != nil {
+		return nil, nil, err
+	}
+	if why := seatMoved(old.Identity, id); why != "" {
+		return nil, nil, stickyErr(409, "sticky: key %q not re-pinned: %q now resolves to %s; a re-pin keeps the seat and adopts only the CLI version, launch and effort — delete the key and create it again to move it on purpose", key, seat, why)
+	}
+	digest := id.Digest()
+	if digest == old.Digest {
+		return old, old, nil
+	}
+	next, err = b.sticky.replace(old, &Binding{Spec: spec, Identity: id, Digest: digest})
+	if err != nil {
+		return nil, nil, err
+	}
+	return old, next, nil
+}
+
+// seatMoved names what makes next a different seat from prev — backend,
+// location, model, agent, vendor model or provider — or "" when it is the
+// same seat on a possibly newer CLI.
+func seatMoved(prev, next Identity) string {
+	var moved []string
+	add := func(what, was, now string) {
+		if was != now {
+			moved = append(moved, fmt.Sprintf("%s %q (was %q)", what, now, was))
+		}
+	}
+	add("backend", prev.Backend, next.Backend)
+	add("location", prev.Location, next.Location)
+	add("model", prev.Model, next.Model)
+	add("agent", prev.Agent, next.Agent)
+	add("vendor model", prev.VendorModel, next.VendorModel)
+	add("provider", prev.Provider, next.Provider)
+	return strings.Join(moved, ", ")
+}
+
+// stickyStatus is the management view of checkIdentity: "" when the binding
+// is served exactly today, otherwise the refusal a request would get. It is
+// how an operator sees that a CLI self-updated under a frozen key before a
+// run hits the 409.
+func (b *Broker) stickyStatus(ctx context.Context, bnd *Binding) string {
+	if err := b.checkIdentity(ctx, bnd); err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+// viewWithStatus is stickyView plus the live status: serviceable (bool) and
+// stale (the refusal text, "" when serviceable).
+func (b *Broker) viewWithStatus(ctx context.Context, bnd *Binding, session string) map[string]any {
+	view := stickyView(bnd, session)
+	stale := b.stickyStatus(ctx, bnd)
+	view["serviceable"] = stale == ""
+	view["stale"] = stale
+	return view
+}
+
 func nilIfEmpty(m map[string]any) map[string]any {
 	if len(m) == 0 {
 		return nil
@@ -939,9 +1026,11 @@ func firstNonEmpty(v ...string) string {
 }
 
 // serveStickyAPI: POST /v1/sticky (create), GET /v1/sticky (list),
-// GET|DELETE /v1/sticky/<key>. Reads and deletes are session-scoped unless the
-// request asks for ?scope=principal: management by the owner token covers every
-// session of the principal (serving a key never does).
+// GET|PUT|DELETE /v1/sticky/<key> (show, re-pin, delete). Reads, re-pins and
+// deletes are session-scoped unless the request asks for ?scope=principal:
+// management by the owner token covers every session of the principal
+// (serving a key never does). On POST, ?scope=principal creates the binding
+// at principal scope instead of in the caller's session.
 func (b *Broker) serveStickyAPI(w http.ResponseWriter, r *http.Request, ri *reqInfo) {
 	key := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/v1/sticky"), "/")
 	principalScope := r.URL.Query().Get("scope") == "principal"
@@ -957,12 +1046,32 @@ func (b *Broker) serveStickyAPI(w http.ResponseWriter, r *http.Request, ri *reqI
 			writeErr(w, r.URL.Path, http.StatusBadRequest, "sticky: "+err.Error())
 			return
 		}
-		bnd, err := b.createBinding(r.Context(), ri.principal, ri.session, spec, "")
+		session := ri.session
+		if principalScope {
+			// A principal-owned binding (no session) is visible to every
+			// session of the principal — the shape a long-lived service key
+			// (genie's per-model stickies) needs, and the one a shell cannot
+			// otherwise mint because its request always carries a session.
+			session = ""
+		}
+		bnd, err := b.createBinding(r.Context(), ri.principal, session, spec, "")
 		if err != nil {
 			writeStickyErr(w, r.URL.Path, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, stickyView(bnd, ri.session))
+	case key != "" && r.Method == http.MethodPut:
+		old, bnd, err := b.repinBinding(r.Context(), ri.principal, ri.session, key, principalScope)
+		if err != nil {
+			writeStickyErr(w, r.URL.Path, err)
+			return
+		}
+		view := b.viewWithStatus(r.Context(), bnd, ri.session)
+		view["repinned"] = old.Digest != bnd.Digest
+		view["previous_digest"] = old.Digest
+		view["previous_short"] = ShortDigest(old.Digest)
+		view["previous_identity"] = old.Identity
+		writeJSON(w, http.StatusOK, view)
 	case key == "" && r.Method == http.MethodGet:
 		var list []Binding
 		if principalScope {
@@ -972,7 +1081,7 @@ func (b *Broker) serveStickyAPI(w http.ResponseWriter, r *http.Request, ri *reqI
 		}
 		out := make([]map[string]any, 0, len(list))
 		for i := range list {
-			out = append(out, stickyView(&list[i], ri.session))
+			out = append(out, b.viewWithStatus(r.Context(), &list[i], ri.session))
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"schema_version": "bashy-sticky-list-v1", "bindings": out})
 	case key != "" && r.Method == http.MethodGet:
@@ -986,7 +1095,7 @@ func (b *Broker) serveStickyAPI(w http.ResponseWriter, r *http.Request, ri *reqI
 			writeErr(w, r.URL.Path, http.StatusNotFound, "sticky: no binding "+key+" in this scope")
 			return
 		}
-		writeJSON(w, http.StatusOK, stickyView(bnd, ri.session))
+		writeJSON(w, http.StatusOK, b.viewWithStatus(r.Context(), bnd, ri.session))
 	case key != "" && r.Method == http.MethodDelete:
 		var deleted bool
 		if principalScope {
