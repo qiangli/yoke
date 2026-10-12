@@ -231,17 +231,18 @@ func TestNativeCheckoutFailureRestoresOriginalIndex(t *testing.T) {
 		t.Fatalf("read index: %v", err)
 	}
 
-	// Make the worktree prevent writing `sub/c.txt` by making `sub` a read-only directory
-	subDir := filepath.Join(src, "sub")
-	if err := os.MkdirAll(subDir, 0o500); err != nil {
-		t.Fatalf("mkdir sub: %v", err)
+	// Make writing `sub/c.txt` fail mid-checkout, after the index is
+	// written: a non-empty directory where the file must go cannot be
+	// opened for writing on any OS or by any user (a read-only directory
+	// stops neither Windows nor root).
+	if err := os.MkdirAll(filepath.Join(src, "sub", "c.txt", "blocker"), 0o755); err != nil {
+		t.Fatalf("mkdir blocker: %v", err)
 	}
-	defer os.Chmod(subDir, 0o755)
 
 	// Attempt checkout -b to the second commit which needs to create sub/c.txt
 	res, err := Exec(ctx, src, []string{"checkout", "-b", "agent/blocked", strings.TrimSpace(sha)})
 	if err == nil && (res == nil || res.ExitCode == 0) {
-		t.Fatalf("expected checkout to fail on unwritable dir")
+		t.Fatalf("expected checkout to fail when sub/c.txt cannot be written")
 	}
 
 	// Verify that index file was restored to origResetBytes
