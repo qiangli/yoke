@@ -668,10 +668,30 @@ a unique prefix.`,
 				return err
 			}
 			if target > cur {
+				oldCur := cur
 				if err := WriteCursor(dir, sub, target); err != nil {
 					return err
 				}
 				cur = target
+				var covered []string
+				seen := map[string]bool{}
+				for _, e := range entries {
+					if e.Seq > oldCur && e.Seq <= target && e.ID != "" && !seen[e.ID] {
+						seen[e.ID] = true
+						covered = append(covered, e.ID)
+					}
+				}
+				if len(covered) > 0 {
+					ctx := c.Context()
+					if ctx == nil {
+						ctx = context.Background()
+					}
+					sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+					if err := SyncReadEnv(sctx, env, covered); err != nil {
+						fmt.Fprintf(c.ErrOrStderr(), "feed: read sync failed: %v\n", err)
+					}
+					cancel()
+				}
 			}
 			fmt.Fprintf(c.OutOrStdout(), "cursor %d\n", cur)
 			return nil
