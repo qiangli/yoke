@@ -97,7 +97,7 @@ func TestNativeRevParse_ShowToplevel(t *testing.T) {
 	if r, err := filepath.EvalSymlinks(dir); err == nil {
 		want = r // go-git reports the physical root (macOS /var → /private/var)
 	}
-	want = filepath.Clean(want)
+	want = filepath.ToSlash(filepath.Clean(want)) // host git prints C:/... on Windows
 	if got := strings.TrimSpace(result.Stdout); got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -124,7 +124,7 @@ func TestNativeRevParse_ShowToplevel_Subdir(t *testing.T) {
 	if r, err := filepath.EvalSymlinks(dir); err == nil {
 		want = r
 	}
-	want = filepath.Clean(want)
+	want = filepath.ToSlash(filepath.Clean(want)) // host git prints C:/... on Windows
 	if got := strings.TrimSpace(result.Stdout); got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -212,7 +212,7 @@ func TestNativeRevParse_GitDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error at subdir: %v", err)
 	}
-	wantGitDir := filepath.Join(wantRoot, ".git") + "\n"
+	wantGitDir := filepath.ToSlash(filepath.Join(wantRoot, ".git")) + "\n"
 	if resSub.Stdout != wantGitDir {
 		t.Errorf("got subdir git-dir %q, want %q", resSub.Stdout, wantGitDir)
 	}
