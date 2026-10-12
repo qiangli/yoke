@@ -43,7 +43,7 @@ func runEnv(t *testing.T, args ...string) string {
 // exports must be under env, so a client that reads JSON needs no second call.
 func TestEnvJSONEnvelope(t *testing.T) {
 	t.Setenv("BASHY_HOME", t.TempDir())
-	t.Setenv(SessionEnv, "sess-1")
+	t.Setenv(SessionEnv, "s-envjson")
 	deadDoorPort(t)
 
 	var got struct {
@@ -68,19 +68,19 @@ func TestEnvJSONEnvelope(t *testing.T) {
 	if got.BaseURL != door.BaseURL() {
 		t.Errorf("base_url = %q, want %q", got.BaseURL, door.BaseURL())
 	}
-	if got.Session != "sess-1" || got.Sticky != "k1" {
-		t.Errorf("session/sticky = %q/%q, want sess-1/k1", got.Session, got.Sticky)
+	if got.Session != "s-envjson" || got.Sticky != "k1" {
+		t.Errorf("session/sticky = %q/%q, want s-envjson/k1", got.Session, got.Sticky)
 	}
 	token, err := door.Token()
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := map[string]string{
-		"OPENAI_BASE_URL":    door.BaseURL() + "/s/sess-1/sticky/k1/v1",
+		"OPENAI_BASE_URL":    door.BaseURL() + "/s/s-envjson/sticky/k1/v1",
 		"OPENAI_API_KEY":     token,
-		"ANTHROPIC_BASE_URL": door.BaseURL() + "/s/sess-1/sticky/k1/anthropic",
+		"ANTHROPIC_BASE_URL": door.BaseURL() + "/s/s-envjson/sticky/k1/anthropic",
 		"ANTHROPIC_API_KEY":  token,
-		"OLLAMA_HOST":        door.BaseURL() + "/k/" + token + "/s/sess-1/sticky/k1",
+		"OLLAMA_HOST":        door.BaseURL() + "/k/" + token + "/s/s-envjson/sticky/k1",
 	}
 	if len(got.Env) != len(want) {
 		t.Errorf("env has %d keys, want %d: %v", len(got.Env), len(want), got.Env)
