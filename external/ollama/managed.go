@@ -21,6 +21,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/yoke/external/internal/serviceenv"
 	"github.com/qiangli/yoke/pkg/broker/door"
 )
 
@@ -86,6 +87,16 @@ func applyManagedEnv(port int) string {
 	if strings.TrimSpace(os.Getenv("OLLAMA_MODELS")) == "" {
 		os.Setenv("OLLAMA_MODELS", ManagedModelsDir())
 	}
+	// The server path does not start Ollama Desktop's updater. OLLAMA_NO_CLOUD
+	// additionally disables remote inference and web search:
+	// https://github.com/ollama/ollama/blob/main/docs/faq.mdx#how-can-i-disable-ollama-cloud
+	os.Setenv("OLLAMA_NO_CLOUD", "1")
+	for _, entry := range serviceenv.LocalOTLP(os.Environ(), "ollama") {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok && strings.HasPrefix(key, "OTEL_") {
+			os.Setenv(key, value)
+		}
+	}
 	return DefaultURL()
 }
 
@@ -116,15 +127,27 @@ func isDoorHost(host string) bool {
 // managedServeEnv produces an explicit child environment for a system ollama
 // serve. It mirrors applyManagedEnv without mutating the parent environment.
 func managedServeEnv(env []string, port int) []string {
-	const prefix = "OLLAMA_HOST="
-	for i, entry := range env {
-		if strings.HasPrefix(entry, prefix) {
-			out := append([]string(nil), env...)
-			out[i] = prefix + managedServeHost(strings.TrimPrefix(entry, prefix), port)
-			return out
+	host := ""
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "OLLAMA_HOST=") {
+			host = strings.TrimPrefix(entry, "OLLAMA_HOST=")
+			break
 		}
 	}
-	return append(env, prefix+managedServeHost("", port))
+	env = replaceEnv(env, "OLLAMA_HOST", managedServeHost(host, port))
+	env = replaceEnv(env, "OLLAMA_NO_CLOUD", "1")
+	return serviceenv.LocalOTLP(env, "ollama")
+}
+
+func replaceEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	out := make([]string, 0, len(env)+1)
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, prefix) {
+			out = append(out, entry)
+		}
+	}
+	return append(out, prefix+value)
 }
 
 // applyClientEnv points a client verb (list, run, pull, ps, ...) at the

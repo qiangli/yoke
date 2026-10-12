@@ -28,6 +28,9 @@ func TestEnsureConfig_SeedsAndIsIdempotent(t *testing.T) {
 	if _, ok := parsed["storage"]; !ok {
 		t.Fatal("config missing storage")
 	}
+	if ext, ok := parsed["extensions"].(map[string]any); !ok || len(ext) != 0 {
+		t.Fatalf("extensions = %#v, want empty (optional outbound integrations off)", parsed["extensions"])
+	}
 	// idempotent: second call must not overwrite
 	first := string(b)
 	if _, err := ensureConfig(dir, "127.0.0.1", 5000); err != nil {

@@ -1,6 +1,18 @@
 package kopia
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
+
+func TestPrivacyArgsDisableUpdatesAndEnableOTLP(t *testing.T) {
+	args := kopiaPrivacyArgs()
+	for _, want := range []string{"--no-check-for-updates", "--otlp-trace"} {
+		if !slices.Contains(args, want) {
+			t.Fatalf("missing %s in %v", want, args)
+		}
+	}
+}
 
 func TestSpec(t *testing.T) {
 	s := Spec("")

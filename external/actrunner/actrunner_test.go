@@ -5,7 +5,20 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/qiangli/yoke/external/internal/serviceenv"
 )
+
+func TestManagedEnvPinsLocalCollector(t *testing.T) {
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "https://vendor.example")
+	got := strings.Join(managedEnv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=https://traces.vendor.example"), "\n")
+	if strings.Contains(got, "vendor.example") {
+		t.Fatalf("vendor endpoint survived:\n%s", got)
+	}
+	if !strings.Contains(got, "OTEL_EXPORTER_OTLP_ENDPOINT="+serviceenv.LocalCollectorEndpoint) {
+		t.Fatalf("local collector missing:\n%s", got)
+	}
+}
 
 func TestSpec(t *testing.T) {
 	s := Spec("")

@@ -125,6 +125,7 @@ func (s *execStore) Start(ctx context.Context) error {
 	watchCtx, cancel := context.WithCancel(ctx)
 	proc, err := binmgr.Launch(watchCtx, bin, binmgr.RunSpec{
 		Args:       s.buildArgv(s.port, s.dataDir, pathPrefix),
+		Env:        localOTLPEnv(s.name),
 		HealthURL:  s.healthURL(pathPrefix),
 		HealthWait: 30 * time.Second,
 	})
@@ -143,6 +144,22 @@ func (s *execStore) Start(ctx context.Context) error {
 	slog.Info(s.name+": started", "port", s.port, "dataDir", s.dataDir, "version", tool.Version)
 	go s.watch(watchCtx)
 	return nil
+}
+
+const localCollectorEndpoint = "http://127.0.0.1:31415"
+
+func localOTLPEnv(serviceName string) []string {
+	return []string{
+		"OTEL_EXPORTER_OTLP_ENDPOINT=" + localCollectorEndpoint,
+		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=" + localCollectorEndpoint + "/v1/traces",
+		"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=" + localCollectorEndpoint + "/v1/metrics",
+		"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=" + localCollectorEndpoint + "/v1/logs",
+		"OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf",
+		"OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf",
+		"OTEL_EXPORTER_OTLP_METRICS_PROTOCOL=http/protobuf",
+		"OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/protobuf",
+		"OTEL_SERVICE_NAME=" + serviceName,
+	}
 }
 
 func (s *execStore) Stop(_ context.Context) error {
@@ -222,7 +239,12 @@ func victoriaLogsArgs(port int, dataDir, pathPrefix string) []string {
 }
 
 func victoriaMetricsArgs(port int, dataDir, pathPrefix string) []string {
-	return victoriaArgs(port, dataDir, pathPrefix)
+	args := victoriaArgs(port, dataDir, pathPrefix)
+	// VictoriaMetrics only self-scrapes when this interval is positive and only
+	// pushes metrics when -pushmetrics.url is supplied. Keep both outbound paths
+	// explicitly inactive. Upstream reference:
+	// https://docs.victoriametrics.com/victoriametrics/#push-metrics
+	return append(args, "-selfScrapeInterval=0")
 }
 
 func victoriaTracesArgs(port int, dataDir, pathPrefix string) []string {
