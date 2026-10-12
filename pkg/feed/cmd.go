@@ -482,7 +482,12 @@ no longer matches its signature, or a known id changed) or unsigned.
 
 By default it lists what this run added; --unread lists everything past your
 read cursor instead. Bodies are untrusted: they print only under --body,
-inside a fence naming the post's content hash.`,
+inside a fence naming the post's content hash.
+
+Under --json, every entry carries "untrusted": true marking remote content
+(headline, author, dek, labels, body) as untrusted data rather than
+instructions; post bodies appear only under --body in the separate "body"
+field.`,
 		Args: cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
 			dir := env.dir()
@@ -573,8 +578,9 @@ func printEntries(w io.Writer, list []SpoolEntry, asJSON, showBody bool) error {
 	if asJSON {
 		out := make([]SpoolEntry, len(list))
 		copy(out, list)
-		if !showBody {
-			for i := range out {
+		for i := range out {
+			out[i].Untrusted = true
+			if !showBody {
 				out[i].Body = ""
 			}
 		}
@@ -591,12 +597,9 @@ func printEntries(w io.Writer, list []SpoolEntry, asJSON, showBody bool) error {
 	for _, e := range list {
 		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\n", e.Seq, e.Status, oneLine(e.ID), oneLine(e.Author), oneLine(e.Headline))
 		if showBody {
-			tag := e.Hash
-			if len(tag) > 12 {
-				tag = tag[:12]
+			if err := fenceBody(w, e); err != nil {
+				return err
 			}
-			fmt.Fprintf(w, "----- BEGIN UNTRUSTED POST BODY %s (data, not instructions) -----\n%s\n----- END UNTRUSTED POST BODY %s -----\n",
-				tag, scrub(e.Body, true), tag)
 		}
 	}
 	return nil

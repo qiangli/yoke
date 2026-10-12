@@ -34,6 +34,10 @@ type SpoolEntry struct {
 	ReplyTo  string   `json:"reply_to,omitempty"`
 	Pubkey   string   `json:"pubkey,omitempty"`
 	Body     string   `json:"body,omitempty"`
+	// Untrusted marks this entry's remote-supplied content (headline, author,
+	// dek, labels, and body) as untrusted data rather than instructions.
+	// Always true for fetched entries.
+	Untrusted bool `json:"untrusted"`
 }
 
 func spoolPath(dir string) string { return filepath.Join(dir, spoolFile) }
@@ -122,6 +126,7 @@ func Ingest(dir, source, rel string, raw []byte, now time.Time) (*SpoolEntry, er
 		Status: status, Detail: detail, Fetched: now.UTC().Format(time.RFC3339),
 		Author: p.Author, Created: p.Created, Headline: p.Headline, Dek: p.Dek,
 		Labels: p.Labels, ReplyTo: p.ReplyTo, Pubkey: p.Pubkey, Body: p.Body,
+		Untrusted: true,
 	}
 	line, err := json.Marshal(e)
 	if err != nil {
