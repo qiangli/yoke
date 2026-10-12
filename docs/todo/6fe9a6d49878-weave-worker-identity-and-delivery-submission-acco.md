@@ -6,7 +6,6 @@ seq: 1970
 status: done
 priority: p1
 created: 2026-10-12T08:01:02.398399Z
-weave: 191
 assignee: s9999-identity
 sprint: 9999
 sprint_id: 559b491b-4bab-57d3-bad4-5ceb9acbb9da

@@ -6,7 +6,6 @@ seq: 1905
 status: done
 priority: p1
 created: 2026-10-11T10:40:29.488728Z
-weave: 186
 assignee: s9999-workspace-rework
 sprint: 9999
 sprint_id: 559b491b-4bab-57d3-bad4-5ceb9acbb9da

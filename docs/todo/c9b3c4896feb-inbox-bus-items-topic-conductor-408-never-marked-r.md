@@ -6,7 +6,6 @@ seq: 1900
 status: done
 priority: p1
 created: 2026-10-11T09:30:44.374309Z
-weave: 190
 assignee: s9999-inbox-cap
 sprint: 9999
 sprint_id: 559b491b-4bab-57d3-bad4-5ceb9acbb9da

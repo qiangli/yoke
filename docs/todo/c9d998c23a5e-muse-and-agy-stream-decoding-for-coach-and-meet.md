@@ -6,7 +6,6 @@ seq: 1961
 status: done
 priority: p2
 created: 2026-10-12T07:21:43.860424Z
-weave: 189
 assignee: s9999-stream-rework
 sprint: 9999
 sprint_id: 559b491b-4bab-57d3-bad4-5ceb9acbb9da

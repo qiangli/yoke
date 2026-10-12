@@ -6,7 +6,6 @@ seq: 1994
 status: done
 priority: p1
 created: 2026-10-12T15:26:15.583596Z
-weave: 197
 assignee: s9999-fmt
 sprint: 9999
 sprint_id: 559b491b-4bab-57d3-bad4-5ceb9acbb9da

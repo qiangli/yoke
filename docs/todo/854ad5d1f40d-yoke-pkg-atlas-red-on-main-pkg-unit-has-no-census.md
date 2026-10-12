@@ -5,7 +5,6 @@ title: 'yoke pkg/atlas red on main: pkg/unit has no census entry; seaweedfs wind
 seq: 1907
 status: done
 created: 2026-10-12T06:53:05.13533Z
-weave: 185
 assignee: agy-gemini3.8-flash
 sprint: 9999
 sprint_id: 559b491b-4bab-57d3-bad4-5ceb9acbb9da
