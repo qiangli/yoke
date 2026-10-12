@@ -119,7 +119,9 @@ func (s *gitSink) sync(ctx context.Context) error {
 
 // Put writes data to relPath in the cache clone, commits
 // "feed: post <relPath>" (skipped when already up to date), pushes the
-// branch, and returns the public URL.
+// branch, and returns the public URL. A failed push is retried once: it
+// fetches, rebases onto the remote branch, then pushes again with the SAME
+// post id instead of failing the post.
 func (s *gitSink) Put(ctx context.Context, relPath string, data []byte) (string, error) {
 	rp, err := validateRelPath(relPath)
 	if err != nil {
@@ -147,13 +149,35 @@ func (s *gitSink) Put(ctx context.Context, relPath string, data []byte) (string,
 			return "", err
 		}
 	}
-	if _, err := runGit(ctx, s.dir, "push", "origin", s.branch); err != nil {
-		return "", err
+	pushErr := func() error {
+		_, err := runGit(ctx, s.dir, "push", "origin", s.branch)
+		return err
+	}()
+	if pushErr != nil {
+		if err := s.retryPush(ctx); err != nil {
+			return "", pushErr
+		}
+		if _, err := runGit(ctx, s.dir, "push", "origin", s.branch); err != nil {
+			return "", err
+		}
 	}
 	if s.public != "" {
 		return s.public + "/" + rp, nil
 	}
 	return buildGitURL(s.remote, s.branch, rp), nil
+}
+
+func (s *gitSink) retryPush(ctx context.Context) error {
+	if _, err := runGit(ctx, s.dir, "fetch", "origin"); err != nil {
+		return err
+	}
+	if gitRemoteRefExists(ctx, s.dir, "origin/"+s.branch) {
+		if _, err := runGit(ctx, s.dir, "rebase", "origin/"+s.branch); err != nil {
+			_, _ = runGit(ctx, s.dir, "rebase", "--abort")
+			return err
+		}
+	}
+	return nil
 }
 
 // Get reads ref (a relPath or a URL Put returned) from the cache clone
