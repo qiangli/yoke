@@ -1,6 +1,7 @@
 package notrack
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -26,31 +27,17 @@ func TestEnvContainsRequiredCategories(t *testing.T) {
 			t.Fatalf("Env missing %s=%s, got %q", c.key, c.want, env)
 		}
 	}
-	// Lowercase npm forms also present (task wording is lowercase).
-	if !Has(env, "npm_config_update_notifier", "false") {
-		t.Fatalf("Env missing lowercase npm_config_update_notifier=false, got %q", env)
-	}
-	if !Has(env, "npm_config_fund", "false") {
-		t.Fatalf("Env missing lowercase npm_config_fund=false, got %q", env)
-	}
-	// Overrides existing value exactly once.
-	if strings.Count(strings.Join(env, "\n"), "DOTNET_NOLOGO=") != 1 {
-		t.Fatalf("DOTNET_NOLOGO not deduped: %q", env)
-	}
-	if strings.Count(strings.Join(env, "\n"), "npm_config_update_notifier=") != 1 &&
-		strings.Count(strings.Join(env, "\n"), "NPM_CONFIG_UPDATE_NOTIFIER=") != 1 {
-		// accounted via Has above, but ensure at most one of each key
+	// The lowercase spelling is replaced, not duplicated.
+	if n := strings.Count(strings.ToLower(strings.Join(env, "\n")), "npm_config_update_notifier="); n != 1 {
+		t.Fatalf("npm_config_update_notifier appears %d times: %q", n, env)
 	}
 	// Preserves unrelated vars.
 	if !Has(env, "A", "1") {
 		t.Fatalf("Env dropped unrelated var: %q", env)
 	}
-	// Idempotent: applying twice keeps single entries.
-	again := Env(env)
-	for _, c := range cases {
-		if strings.Count(strings.Join(again, "\n"), c.key+"=") != 1 && strings.Count(strings.ToUpper(strings.Join(again, "\n")), strings.ToUpper(c.key)+"=") != 1 {
-			// At least case-insensitive single
-		}
+	// Idempotent: applying twice yields the same env.
+	if again := Env(env); !reflect.DeepEqual(again, env) {
+		t.Fatalf("Env not idempotent:\n%q\n%q", env, again)
 	}
 }
 
@@ -61,5 +48,16 @@ func TestEnvCaseInsensitiveOverride(t *testing.T) {
 	}
 	if !Has(env, "GH_NO_UPDATE_NOTIFIER", "1") {
 		t.Fatalf("GH_NO_UPDATE_NOTIFIER not overridden: %q", env)
+	}
+}
+
+func TestVarsHaveNoCaseCollisions(t *testing.T) {
+	seen := map[string]string{}
+	for k := range Vars {
+		u := strings.ToUpper(k)
+		if prev, ok := seen[u]; ok {
+			t.Fatalf("Vars keys %q and %q collide case-insensitively", prev, k)
+		}
+		seen[u] = k
 	}
 }

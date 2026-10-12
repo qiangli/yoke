@@ -38,7 +38,7 @@ func TestMuseRealBindingLaunchesPureCompletion(t *testing.T) {
 	w := &Worker{launch: launch, tool: tool, mode: mode, cwd: cwd}
 	argv := w.argv("PROMPT", "")
 	argv[0] = strings.TrimSuffix(filepath.Base(argv[0]), ".exe") // the pinned cache path, by name
-	want := []string{"muse", "exec", "--model", "muse-spark-1.3", "--json",
+	want := []string{"muse", "exec", "-c", "telemetry.enabled=false", "--model", "muse-spark-1.3", "--json",
 		"--no-session-log", "--no-foreign-personal-context", "--disable-web-tools",
 		"--disable-shell", "--disable-write", "PROMPT"}
 	if !reflect.DeepEqual(argv, want) {

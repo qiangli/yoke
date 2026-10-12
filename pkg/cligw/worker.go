@@ -493,6 +493,7 @@ func (w *Worker) argv(prompt, requestSystem string) []string {
 			args = insertBeforePromptFlag(args, events)
 		}
 	case "muse":
+		args = insertAfter(args, "exec", []string{"-c", "telemetry.enabled=false"})
 		args = insertBeforePromptFlag(args, events)
 		args = append(args, "--no-session-log", "--no-foreign-personal-context", "--disable-web-tools", "--disable-shell", "--disable-write")
 	case "codex":
@@ -503,7 +504,7 @@ func (w *Worker) argv(prompt, requestSystem string) []string {
 		// saved session.
 		args = insertAfter(args, "exec", append([]string{"--ephemeral", "--ignore-user-config",
 			"--disable", "shell_tool", "--disable", "apps", "--disable", "browser_use", "--disable", "computer_use",
-			"-c", `web_search="disabled"`}, codexToolsOffConfig()...))
+			"-c", `web_search="disabled"`}, append(codexNoTrackConfig(), codexToolsOffConfig()...)...))
 		args = insertAfter(args, "exec", []string{"-c", "model_instructions_file=" + strconv.Quote(w.codexInstructionsPath())})
 		if w.codexCatalog != "" {
 			args = insertAfter(args, "exec", []string{"-c", "model_catalog_json=" + strconv.Quote(w.codexCatalog)})
@@ -613,6 +614,13 @@ func (w *Worker) codexInstructionsPath() string {
 // in multiples of the ~6.7k base). Written as -c keys, not --disable: an
 // unknown --disable name is fatal on an older codex, an unknown key is a
 // warning. apply_patch has no switch; see writeCodexCatalog.
+// codexNoTrackConfig pins the vendor-telemetry switches env cannot express
+// (codex 0.162.0): the startup update check and the otel exporter (statsig),
+// so an operator config.toml cannot re-enable them.
+func codexNoTrackConfig() []string {
+	return []string{"-c", "check_for_update_on_startup=false", "-c", "otel.exporter=none"}
+}
+
 func codexToolsOffConfig() []string {
 	var args []string
 	for _, feature := range []string{"goals", "image_generation", "view_image", "tool_suggest", "skill_search",

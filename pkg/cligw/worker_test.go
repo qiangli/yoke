@@ -278,7 +278,7 @@ func TestMeasuredWarmArgv(t *testing.T) {
 			// and turn.completed sums them all.
 			want: append([]string{"codex", "exec", "-c", `model_instructions_file="/tmp/cligw-test/instructions.md"`,
 				"--ephemeral", "--ignore-user-config", "--disable", "shell_tool", "--disable", "apps", "--disable", "browser_use", "--disable", "computer_use",
-				"-c", `web_search="disabled"`}, append(codexToolsOffConfig(),
+				"-c", `web_search="disabled"`}, append(append(codexNoTrackConfig(), codexToolsOffConfig()...),
 				"--json", "--skip-git-repo-check", "-s", "read-only")...),
 		},
 		{
@@ -286,7 +286,7 @@ func TestMeasuredWarmArgv(t *testing.T) {
 			w:    &Worker{cwd: "/tmp/cligw-test", mode: WarmStdin, codexCatalog: "/tmp/cligw-test/models.json", launch: agentlaunch.Launch{Tool: "codex", Args: []string{"exec", "--sandbox", "read-only"}}, tool: fleet.Tool{Name: "codex", CLI: fleet.ToolCLI{Launch: fleet.ToolLaunch{EventsStdout: "--json"}}}},
 			want: append([]string{"codex", "exec", "-c", `model_catalog_json="/tmp/cligw-test/models.json"`, "-c", `model_instructions_file="/tmp/cligw-test/instructions.md"`,
 				"--ephemeral", "--ignore-user-config", "--disable", "shell_tool", "--disable", "apps", "--disable", "browser_use", "--disable", "computer_use",
-				"-c", `web_search="disabled"`}, append(codexToolsOffConfig(),
+				"-c", `web_search="disabled"`}, append(append(codexNoTrackConfig(), codexToolsOffConfig()...),
 				"--json", "-s", "read-only")...),
 		},
 	}

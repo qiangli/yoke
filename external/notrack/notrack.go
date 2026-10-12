@@ -14,7 +14,7 @@
 //
 //	NPM_CONFIG_UPDATE_NOTIFIER=false, NPM_CONFIG_FUND=false
 //	  npm config docs: update-notifier and fund (https://docs.npmjs.com/cli/v10/using-npm/config)
-//	  Env form NPM_CONFIG_<key> maps to npm config `update-notifier` and `fund`.
+//	  Env form NPM_CONFIG_<key> (one spelling only: Env matches keys case-insensitively) maps to npm config `update-notifier` and `fund`.
 //
 //	PIP_DISABLE_PIP_VERSION_CHECK=1
 //	  pip docs: https://pip.pypa.io/en/stable/cli/pip/#cmdoption-disable-pip-version-check
@@ -48,11 +48,9 @@
 //	CHECKPOINT_DISABLE=1
 //	  HashiCorp checkpoint (used by OpenTofu/terraform via checkpoint API):
 //	  https://developer.hashicorp.com/terraform/cli/config/environment-variables (CHECKPOINT_DISABLE).
-//	  Also covers tofu/doctl/helm update phoning via checkpoint.
 //
-//	Generic DO_NOT_TRACK=1 also suppresses rclone/helm/mise update checks where
-//	  no tool-specific env exists; keep config-only and add tool-specific vars
-//	  only when upstream documents one.
+//	Tools with no documented env opt-out (rclone, helm, mise, doctl, rustup)
+//	  get nothing here; add a tool-specific var only when upstream documents one.
 package notrack
 
 import (
@@ -75,17 +73,11 @@ var Vars = map[string]string{
 	"POWERSHELL_UPDATECHECK":        "Off",
 	"GH_NO_UPDATE_NOTIFIER":         "1",
 	"CHECKPOINT_DISABLE":            "1",
-	// Lowercase npm forms for tools that read npm_config_* verbatim (task wording).
-	"npm_config_update_notifier": "false",
-	"npm_config_fund":            "false",
 	// COREPACK and pnpm update checks: COREPACK_ENABLE_DOWNLOAD_PROMPT=0 is
 	// set per-wrapper; keep it here as well for any direct corepack/pnpm
 	// invocation. See https://nodejs.org/api/corepack.html and pnpm docs
 	// (PNPM update notifier is gated by npm_config_update_notifier).
 	"COREPACK_ENABLE_DOWNLOAD_PROMPT": "0",
-	// Rustup/bun generic coverage: no stable rustup env for update check;
-	// DO_NOT_TRACK and CHECKPOINT_DISABLE cover it. Include explicit
-	// RUSTUP variant if toolchain documents one later.
 }
 
 // Env returns a copy of base with Vars applied. Existing entries whose key
