@@ -13,10 +13,10 @@ import (
 )
 
 type Request struct {
-	Model        string          `json:"model"`
-	Input        json.RawMessage `json:"input"`
-	Instructions string          `json:"instructions,omitempty"`
-	Tools        []toolSpec      `json:"tools,omitempty"`
+	Model           string          `json:"model"`
+	Input           json.RawMessage `json:"input"`
+	Instructions    string          `json:"instructions,omitempty"`
+	Tools           []toolSpec      `json:"tools,omitempty"`
 	ToolChoice      json.RawMessage `json:"tool_choice,omitempty"`
 	MaxOutputTokens int             `json:"max_output_tokens,omitempty"`
 	Reasoning       struct {

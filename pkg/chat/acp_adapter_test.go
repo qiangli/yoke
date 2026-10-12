@@ -74,7 +74,7 @@ func TestACPUpdatesMapToEntryEvents(t *testing.T) {
 		Locations: []acp.ToolCallLocation{{Path: "pkg/x/x_test.go", Line: 12}}}})
 	if _, err := h.RequestPermission(ctx, acp.PermissionRequest{SessionID: "sess-1",
 		ToolCall: acp.ToolCall{ID: "t1", Title: "go test ./pkg/x", Kind: "execute"},
-		Options: []acp.PermissionOption{{ID: "ao", Kind: acp.PermissionAllowOnce}, {ID: "ro", Kind: acp.PermissionRejectOnce}},
+		Options:  []acp.PermissionOption{{ID: "ao", Kind: acp.PermissionAllowOnce}, {ID: "ro", Kind: acp.PermissionRejectOnce}},
 	}); err != nil {
 		t.Fatal(err)
 	}
