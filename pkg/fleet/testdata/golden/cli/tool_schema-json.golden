@@ -455,6 +455,31 @@
     "description": "provenance and verification notes"
   },
   {
+    "path": "cli.managed.service",
+    "type": "bool",
+    "description": "the binary is a server bashy starts; requires sigstore"
+  },
+  {
+    "path": "cli.managed.sigstore",
+    "type": "object",
+    "description": "keyless Sigstore identity every asset must be signed by"
+  },
+  {
+    "path": "cli.managed.sigstore.bundle",
+    "type": "string",
+    "description": "bundle URL ({version} {asset}) or asset-URL suffix; default .sigstore.json"
+  },
+  {
+    "path": "cli.managed.sigstore.identity",
+    "type": "string",
+    "description": "exact certificate SAN: https://github.com/OWNER/REPO/.github/workflows/FILE@refs/..."
+  },
+  {
+    "path": "cli.managed.sigstore.issuer",
+    "type": "string",
+    "description": "exact OIDC issuer: https://token.actions.githubusercontent.com"
+  },
+  {
     "path": "cli.managed.source",
     "type": "string",
     "description": "where the vendor publishes: github-release, vendor-url, npm, pypi"

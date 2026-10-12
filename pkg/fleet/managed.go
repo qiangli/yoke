@@ -61,6 +61,80 @@ type ToolManaged struct {
 	// Notes is free text: how the digests were verified, what the artifact
 	// contains, why a platform is missing.
 	Notes string `yaml:"notes,omitempty" json:"notes,omitempty" doc:"provenance and verification notes"`
+	// Service marks a pin whose binary is a server bashy or outpost STARTS
+	// (a homeserver, a gateway). Service pins answer to the supply-chain
+	// policy: only bashy-CI builds signed keylessly with Sigstore run, so a
+	// service pin without Sigstore is UNVERIFIED and is refused at install
+	// and at service enable/start.
+	Service bool `yaml:"service,omitempty" json:"service,omitempty" doc:"the binary is a server bashy starts; requires sigstore"`
+	// Sigstore is the keyless signing identity every asset must carry.
+	// binmgr verifies the bundle over the downloaded bytes before install.
+	Sigstore *ToolSigstore `yaml:"sigstore,omitempty" json:"sigstore,omitempty" doc:"keyless Sigstore identity every asset must be signed by"`
+}
+
+// ToolSigstore is a pin's keyless signing identity (cosign keyless, GitHub
+// Actions OIDC). Identity and issuer are compared EXACTLY.
+type ToolSigstore struct {
+	Identity string `yaml:"identity" json:"identity" doc:"exact certificate SAN: https://github.com/OWNER/REPO/.github/workflows/FILE@refs/..."`
+	Issuer   string `yaml:"issuer" json:"issuer" doc:"exact OIDC issuer: https://token.actions.githubusercontent.com"`
+	// Bundle locates each asset's bundle: empty = asset URL + ".sigstore.json";
+	// a suffix starting with "." is appended to the asset URL; an https URL
+	// expands {version} and {asset} (the asset URL's basename).
+	Bundle string `yaml:"bundle,omitempty" json:"bundle,omitempty" doc:"bundle URL ({version} {asset}) or asset-URL suffix; default .sigstore.json"`
+}
+
+// ErrUnsignedServiceBuild is the refusal for a service whose binary is not a
+// verified bashy-signed build.
+var ErrUnsignedServiceBuild = errors.New("bashy only runs bashy-signed server builds")
+
+// Unverified reports a service pin without a Sigstore identity.
+func (m *ToolManaged) Unverified() bool { return m != nil && m.Service && m.Sigstore == nil }
+
+// ServiceBuildCheck refuses a tool that may not run as a server: a managed
+// pin must exist and declare Sigstore. Nil means binmgr will only ever
+// install a build signed by the pinned identity.
+func (t Tool) ServiceBuildCheck() error {
+	m := t.CLI.Managed
+	switch {
+	case m == nil:
+		return fmt.Errorf("%w: tool %q has no managed pin to verify", ErrUnsignedServiceBuild, t.Name)
+	case m.Sigstore == nil:
+		return fmt.Errorf("%w: tool %q pin %s declares no sigstore identity (unverified)", ErrUnsignedServiceBuild, t.Name, m.Version)
+	}
+	return m.Validate(t.Name)
+}
+
+func (s *ToolSigstore) validate(bad func(string, ...any), assets int) {
+	id := strings.TrimSpace(s.Identity)
+	if !strings.HasPrefix(id, "https://github.com/") || !strings.Contains(id, "/.github/workflows/") || !strings.Contains(id, "@refs/") {
+		bad("sigstore identity %q is not an exact GitHub Actions workflow ref (https://github.com/OWNER/REPO/.github/workflows/FILE@refs/...)", s.Identity)
+	}
+	if strings.TrimSpace(s.Issuer) != binmgr.GitHubActionsIssuer {
+		bad("sigstore issuer %q, want %s", s.Issuer, binmgr.GitHubActionsIssuer)
+	}
+	b := strings.TrimSpace(s.Bundle)
+	switch {
+	case b == "", strings.HasPrefix(b, "."):
+	case strings.HasPrefix(strings.ToLower(b), "https://"):
+		if assets > 1 && !strings.Contains(b, "{asset}") {
+			bad("sigstore bundle %q names one bundle for %d assets; use {asset} or a suffix", b, assets)
+		}
+	default:
+		bad("sigstore bundle %q is neither an https URL nor an asset-URL suffix", b)
+	}
+}
+
+// bundleFor renders the bundle location for one expanded asset URL.
+func (s *ToolSigstore) bundleFor(assetURL, version string) string {
+	b := strings.TrimSpace(s.Bundle)
+	switch {
+	case b == "":
+		return assetURL + binmgr.DefaultBundleSuffix
+	case strings.HasPrefix(b, "."):
+		return assetURL + b
+	}
+	b = strings.ReplaceAll(b, "{version}", version)
+	return strings.ReplaceAll(b, "{asset}", assetURL[strings.LastIndex(assetURL, "/")+1:])
 }
 
 // ToolManagedAsset is one platform's artifact.
@@ -128,6 +202,9 @@ func (m *ToolManaged) Validate(tool string) error {
 	if len(m.Assets) == 0 {
 		bad("no assets")
 	}
+	if m.Sigstore != nil {
+		m.Sigstore.validate(bad, len(m.Assets))
+	}
 	keys := make([]string, 0, len(m.Assets))
 	for k := range m.Assets {
 		keys = append(keys, k)
@@ -154,6 +231,9 @@ func (m *ToolManaged) Validate(tool string) error {
 			bad("asset %s sha256 is not 64 hex chars", k)
 		case s512 != "" && !hexSHA512.MatchString(s512):
 			bad("asset %s sha512 is not 128 hex chars", k)
+		}
+		if m.Sigstore != nil && s256 == "" {
+			bad("asset %s is signed but has no sha256; the bundle digest is checked against it", k)
 		}
 		if a.Tree && strings.TrimSpace(a.Entrypoint) == "" {
 			bad("asset %s is a tree without an entrypoint", k)
@@ -202,14 +282,23 @@ func (t Tool) BinmgrTool() (binmgr.Tool, error) {
 	}
 	version := strings.TrimSpace(m.Version)
 	out := binmgr.Tool{Name: t.managedBinaryName(), Version: version, Assets: map[string]binmgr.Asset{}}
+	if s := m.Sigstore; s != nil {
+		out.Sigstore = &binmgr.Sigstore{Identity: strings.TrimSpace(s.Identity), Issuer: strings.TrimSpace(s.Issuer)}
+	}
 	for k, a := range m.Assets {
+		u := strings.ReplaceAll(strings.TrimSpace(a.URL), "{version}", version)
+		var bundle string
+		if m.Sigstore != nil {
+			bundle = m.Sigstore.bundleFor(u, version)
+		}
 		out.Assets[k] = binmgr.Asset{
-			URL:        strings.ReplaceAll(strings.TrimSpace(a.URL), "{version}", version),
-			SHA256:     strings.ToLower(strings.TrimSpace(a.SHA256)),
-			SHA512:     strings.ToLower(strings.TrimSpace(a.SHA512)),
-			Binary:     strings.TrimSpace(a.Member),
-			Tree:       a.Tree,
-			Entrypoint: strings.TrimSpace(a.Entrypoint),
+			SigstoreBundle: bundle,
+			URL:            u,
+			SHA256:         strings.ToLower(strings.TrimSpace(a.SHA256)),
+			SHA512:         strings.ToLower(strings.TrimSpace(a.SHA512)),
+			Binary:         strings.TrimSpace(a.Member),
+			Tree:           a.Tree,
+			Entrypoint:     strings.TrimSpace(a.Entrypoint),
 		}
 	}
 	return out, nil
