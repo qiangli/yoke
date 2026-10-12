@@ -4,7 +4,9 @@
 package weave
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,7 +39,10 @@ func weavePreserveNestedLevel(root, workspace, rel string, id int64) ([]string, 
 		subRel := filepath.Join(rel, path)
 		subDir := filepath.Join(workspace, subRel)
 		if _, err := os.Stat(filepath.Join(subDir, ".git")); err != nil {
-			continue // never populated: nothing to lose
+			if errors.Is(err, fs.ErrNotExist) {
+				continue // never populated (interrupted hydration): nothing to lose
+			}
+			return refs, fmt.Errorf("stat .git of %s: %w", subRel, err)
 		}
 		inner, err := weavePreserveNestedLevel(root, workspace, subRel, id)
 		refs = append(refs, inner...)

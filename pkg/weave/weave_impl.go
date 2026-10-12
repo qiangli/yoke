@@ -1325,7 +1325,7 @@ func weaveHydrateSubmodules(root, workspace string, out, errw io.Writer) error {
 	clean.Stdout, clean.Stderr = out, errw
 	if err := clean.Run(); err != nil {
 		if ctx.Err() != nil {
-			return fmt.Errorf("clean hydrated submodules timed out after 2m: %w", ctx.Err())
+			return fmt.Errorf("clean hydrated submodules timed out after %s (BASHY_WEAVE_PROVISION_TIMEOUT): %w", limit, ctx.Err())
 		}
 		return fmt.Errorf("clean hydrated submodules: %w", err)
 	}
@@ -1337,7 +1337,7 @@ func weaveHydrateSubmodules(root, workspace string, out, errw io.Writer) error {
 	resetSubs.Stdout, resetSubs.Stderr = out, errw
 	if err := resetSubs.Run(); err != nil {
 		if ctx.Err() != nil {
-			return fmt.Errorf("reset hydrated submodules timed out after 2m: %w", ctx.Err())
+			return fmt.Errorf("reset hydrated submodules timed out after %s (BASHY_WEAVE_PROVISION_TIMEOUT): %w", limit, ctx.Err())
 		}
 		return fmt.Errorf("reset hydrated submodules: %w", err)
 	}
@@ -1346,6 +1346,9 @@ func weaveHydrateSubmodules(root, workspace string, out, errw io.Writer) error {
 	reset := exec.CommandContext(ctx, gitBin(), "-C", workspace, "reset", "--hard", "--quiet")
 	reset.Stdout, reset.Stderr = out, errw
 	if err := reset.Run(); err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("reset hydrated workspace timed out after %s (BASHY_WEAVE_PROVISION_TIMEOUT): %w", limit, ctx.Err())
+		}
 		return fmt.Errorf("reset hydrated workspace: %w", err)
 	}
 	return nil
@@ -6134,7 +6137,7 @@ func weavePreserveAbandonedTip(root, workspace string, id int64, head string) (s
 }
 
 func weavePreserveTipAs(root, workspace, base, head string) (string, error) {
-	if _, err := gitOut(root, "fetch", "--no-tags", workspace, "HEAD"); err != nil {
+	if _, err := gitOut(root, "fetch", "--no-tags", "--recurse-submodules=no", workspace, "HEAD"); err != nil {
 		return base, err
 	}
 
