@@ -109,6 +109,8 @@ type Options struct {
 	EngineContext int
 	// StateDir holds sticky.json and audit.jsonl ("" = memory only).
 	StateDir string
+	// Capture records bounded, redacted inference bodies under cligw/capture.
+	Capture bool
 	// ToolVersion reports a CLI tool's version for identities (nil = none).
 	ToolVersion func(tool string) string
 	// Now is the clock (tests).
@@ -282,6 +284,12 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ri := &reqInfo{params: params, started: b.opts.Now()}
 	ri.rec = Record{Time: ri.started, Method: r.Method, Path: rest, Class: ClassInteractive.String()}
 	cw := newCaptureWriter(w)
+	capture := b.opts.Capture && r.Method == http.MethodPost && (isInferencePath(rest) || strings.TrimPrefix(rest, "/openai") == "/v1/responses" || rest == "/api/chat" || rest == "/api/generate")
+	cw.capture = capture
+	var requestBody boundedBody
+	if capture && r.Body != nil {
+		r.Body = &teeReadCloser{ReadCloser: r.Body, dst: &requestBody}
+	}
 	w = cw
 	defer func() {
 		if !ri.finished {
@@ -290,6 +298,9 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			ri.rec.PromptTok, ri.rec.OutputTok = parseTokens(cw.tail)
 			b.finish(ri, cw.status, 0, "")
+		}
+		if capture && ri.principal != "" {
+			b.appendCapture(ri, rest, &requestBody, cw)
 		}
 	}()
 	principal, err := b.authorize(r, params["k"])

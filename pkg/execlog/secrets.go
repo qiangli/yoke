@@ -27,6 +27,9 @@ import (
 // fragmented template; an unmasked one that was costs a credential.
 const secretMask = "<SECRET>"
 
+// MaskSecrets removes recognizable credentials from text before it is persisted.
+func MaskSecrets(s string) string { return maskInline(s) }
+
 func maskSecrets(argv []string) []string {
 	out := make([]string, len(argv))
 	copy(out, argv)

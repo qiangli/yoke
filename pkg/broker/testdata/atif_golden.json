@@ -1,0 +1,36 @@
+{
+  "schema_version": "ATIF-v1.7",
+  "session_id": "s-abcdef123456",
+  "agent": {
+    "name": "bashy",
+    "version": "1",
+    "model_name": "L4"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-10-11T12:00:00Z",
+      "source": "agent",
+      "model_name": "L4",
+      "message": "hello",
+      "tool_calls": [
+        {
+          "tool_call_id": "call_1",
+          "function_name": "lookup",
+          "arguments": {
+            "q": "x"
+          }
+        }
+      ],
+      "metrics": {
+        "prompt_tokens": 3,
+        "completion_tokens": 2
+      }
+    }
+  ],
+  "final_metrics": {
+    "total_prompt_tokens": 3,
+    "total_completion_tokens": 2,
+    "total_steps": 1
+  }
+}

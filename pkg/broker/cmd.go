@@ -54,6 +54,7 @@ type DoorOptions struct {
 	// per-principal in-flight cap for fleet agents. Zero falls back to
 	// CLIGW_MAX_IN_FLIGHT, then the policy file.
 	MaxInFlight int
+	Capture     bool
 	Out         io.Writer
 }
 
@@ -212,7 +213,7 @@ func RunDoor(ctx context.Context, o DoorOptions) error {
 	if err != nil {
 		return err
 	}
-	opts := Options{Token: token, StateDir: stateDir, PeersFile: peersFile}
+	opts := Options{Token: token, StateDir: stateDir, PeersFile: peersFile, Capture: o.Capture || os.Getenv("BASHY_LLM_CAPTURE") == "1"}
 	var cli *cligw.Server
 	if !o.NoCLI {
 		cliOpts, err := cliServerOptions(token, o)
@@ -325,7 +326,7 @@ its share policy is allow.`
 			cmd.RemoveCommand(c)
 		}
 	}
-	cmd.AddCommand(newServeCmd(), newUpCmd(), newDownCmd(), newEnvCmd(), newStickyCmd(), newPeerCmd())
+	cmd.AddCommand(newServeCmd(), newUpCmd(), newDownCmd(), newEnvCmd(), newStickyCmd(), newPeerCmd(), newCaptureCmd())
 	return cmd
 }
 
@@ -366,6 +367,7 @@ or max_in_flight in policy.yaml).`,
 	f.IntVar(&o.MaxInFlight, "max-in-flight", 0, "per-principal in-flight cap for fleet agents (default 4; overrides CLIGW_MAX_IN_FLIGHT and max_in_flight in policy.yaml; the principal is always \"owner\")")
 	f.BoolVar(&o.NoEngine, "no-engine", false, "serve fleet agents only (no local models)")
 	f.BoolVar(&o.NoCLI, "no-cli", false, "serve local models only (no fleet agents)")
+	f.BoolVar(&o.Capture, "capture", false, "record redacted inference turns by session")
 	return cmd
 }
 
@@ -574,6 +576,13 @@ either, record only the schema name as evidence.`,
 				}
 				if found {
 					session = owner
+				}
+			}
+			if session != "" {
+				if episode := firstNonEmpty(os.Getenv("BASHY_EPISODE"), os.Getenv("WEAVE_EPISODE")); episode != "" {
+					if err := writeCaptureSession(session, episode); err != nil {
+						return err
+					}
 				}
 			}
 			prefix := ""
