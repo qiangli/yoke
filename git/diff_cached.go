@@ -3,8 +3,11 @@ package git
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	gogit "github.com/go-git/go-git/v5"
@@ -184,7 +187,15 @@ func stagedPatch(repo *gogit.Repository, rev string, paths []string, noRenames b
 	if err != nil {
 		return "", ErrUnsupported
 	}
-	return treePatch(base, idxTree, paths, noRenames)
+	abbr, err := newAbbreviator(repo)
+	if err != nil {
+		return "", ErrUnsupported
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		return "", ErrUnsupported
+	}
+	return treePatch(wt.Filesystem.Root(), base, idxTree, paths, noRenames, abbr)
 }
 
 // treePatch renders `git diff base target` the way host git prints it
@@ -192,7 +203,7 @@ func stagedPatch(repo *gogit.Repository, rev string, paths []string, noRenames b
 // names), declining (ErrUnsupported) on what it cannot match: binary
 // hunks, C-quoted names, and — unless noRenames — any pair host git's
 // rename detection would join.
-func treePatch(base, target *object.Tree, paths []string, noRenames bool) (string, error) {
+func treePatch(root string, base, target *object.Tree, paths []string, noRenames bool, abbr *abbreviator) (string, error) {
 	changes, err := object.DiffTree(base, target)
 	if err != nil {
 		return "", ErrUnsupported
@@ -269,10 +280,127 @@ func treePatch(base, target *object.Tree, paths []string, noRenames bool) (strin
 		}
 	}
 	out = strings.Join(lines, "")
-	// go-git prints full 40-char blob ids; git abbreviates to 7.
+	// go-git prints full 40-char blob ids; git abbreviates them like any
+	// object name (repository default length, unique prefix) — the null
+	// id of an added/deleted side included.
 	out = indexLineRE.ReplaceAllStringFunc(out, func(m string) string {
 		sm := indexLineRE.FindStringSubmatch(m)
-		return "index " + sm[1][:7] + ".." + sm[2][:7]
+		return "index " + abbr.abbrev(plumbing.NewHash(sm[1]), 0) + ".." + abbr.abbrev(plumbing.NewHash(sm[2]), 0)
 	})
-	return out, nil
+	if diffDriversConfigured(root, changes) {
+		return "", ErrUnsupported // a userdiff driver changes hunk headers
+	}
+	old := map[string][]string{}
+	for _, c := range changes {
+		if c.From.Name == "" {
+			continue
+		}
+		f, err := c.From.Tree.TreeEntryFile(&c.From.TreeEntry)
+		if err != nil {
+			return "", ErrUnsupported
+		}
+		content, err := f.Contents()
+		if err != nil {
+			return "", ErrUnsupported
+		}
+		old[c.From.Name] = strings.Split(content, "\n")
+	}
+	return withFuncNames(out, old), nil
+}
+
+// hunkHeaderRE matches a hunk header; go-git appends its own context
+// (the line above the hunk, untruncated), which group 3 captures so it
+// can be replaced with host git's.
+var hunkHeaderRE = regexp.MustCompile(`^(@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@)(.*)$`)
+
+// withFuncNames appends host git's default hunk-header function context:
+// the nearest pre-image line above the hunk (searching no further than
+// the previous hunk's start) that begins with a letter, '_' or '$', cut
+// to 80 bytes and right-trimmed (xdiff def_ff). A hunk with no match
+// reuses the previous one's, as xdiff does.
+func withFuncNames(patch string, old map[string][]string) string {
+	lines := strings.SplitAfter(patch, "\n")
+	var pre []string
+	limit, fn := -1, ""
+	inHeader := false
+	for i, l := range lines {
+		switch {
+		case strings.HasPrefix(l, "diff --git "):
+			inHeader, pre, limit, fn = true, nil, -1, ""
+		case inHeader && strings.HasPrefix(l, "--- "):
+			name := strings.TrimSuffix(strings.TrimSuffix(l, "\n"), "\t")
+			pre = old[strings.TrimPrefix(name, "--- a/")]
+		case strings.HasPrefix(l, "@@"):
+			inHeader = false
+			m := hunkHeaderRE.FindStringSubmatch(strings.TrimSuffix(l, "\n"))
+			if m == nil {
+				continue
+			}
+			start, _ := strconv.Atoi(m[2])
+			s1 := start - 1
+			if m[3] == "0" {
+				s1 = start
+			}
+			for ln := s1 - 1; ln > limit && ln >= 0 && ln < len(pre); ln-- {
+				if f, ok := defFuncName(pre[ln]); ok {
+					fn = f
+					break
+				}
+			}
+			limit = s1 - 1
+			lines[i] = m[1] + "\n"
+			if fn != "" {
+				lines[i] = m[1] + " " + fn + "\n"
+			}
+		}
+	}
+	return strings.Join(lines, "")
+}
+
+func defFuncName(line string) (string, bool) {
+	if line == "" {
+		return "", false
+	}
+	c := line[0]
+	if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_' || c == '$') {
+		return "", false
+	}
+	rec := line + "\n"
+	if len(rec) > 80 {
+		rec = rec[:80]
+	}
+	return strings.TrimRight(rec, " \t\n\v\f\r"), true
+}
+
+// diffDriversConfigured reports whether a gitattributes file that could
+// apply to a changed path (the root's, an ancestor directory's, or
+// $GIT_DIR/info/attributes) sets diff or binary attributes.
+func diffDriversConfigured(root string, changes object.Changes) bool {
+	if root == "" {
+		return true
+	}
+	files := map[string]bool{}
+	if gitDir, err := resolveGitDir(root); err == nil {
+		files[filepath.Join(gitDir, "info", "attributes")] = true
+	}
+	for _, c := range changes {
+		for _, name := range []string{c.From.Name, c.To.Name} {
+			for d := pathDir(name); ; d = pathDir(d) {
+				files[filepath.Join(root, filepath.FromSlash(d), ".gitattributes")] = true
+				if d == "" {
+					break
+				}
+			}
+		}
+	}
+	for f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		if strings.Contains(string(data), "diff") || strings.Contains(string(data), "binary") {
+			return true
+		}
+	}
+	return false
 }

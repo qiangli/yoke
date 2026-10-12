@@ -134,12 +134,28 @@ The matrix also covers the read verbs agents inspect history with:
 `rev-parse`, `merge-base`, `rev-list`, `log`, `show`, `cat-file`,
 `symbolic-ref`, `branch`, `remote`, `grep`, `blame`, `config --get`.
 
+Abbreviated object names (`log --oneline`, `%h`, `rev-parse --short`,
+`branch -v`, patch `index` lines) follow host git's `core.abbrev=auto`
+rule — `ceil((msb(packed objects)+1)/2)`, at least 7, extended to a
+unique prefix (`abbrev.go`); a multi-pack-index declines.
+
+**Known exception — patch hunk placement.** Native patches (`diff
+--cached`, `show <commit>`) carry host git's headers, abbreviations and
+function context, but hunks come from go-git's line diff, not xdiff:
+where a change is ambiguous (a moved closing brace, a repeated line)
+host git's compaction and indent heuristic can place the hunk
+differently. Both patches are valid and apply identically; they are not
+always byte-identical. They stay native because the FROM-scratch bashy
+image (SWE-bench prediction extraction) has no host git; closing this
+needs a port of xdiff's Myers + `xdl_change_compact` + indent heuristic.
+
 Declined by design (host git via `--external`): long-form `status`,
 `status -b`/`--ignored`/pathspecs, any `status`/`diff`/`ls-files` over an
 index with merge conflicts, staged renames (unless `diff --no-renames`),
 bare `ls-files --others` (lists ignored files), submodule patch hunks,
-`branch` on a detached HEAD, `branch -v` on a tracking branch (no
-ahead/behind), `show` with flags, `rev:path`, merges or renames, `grep`
+`branch` on a detached HEAD, `log` once a merge enters the walk,
+`show` with flags other than `-s`/`--format`, `rev:path`, merges or
+renames, `diff`/`show` patches under gitattributes diff drivers, `grep`
 with a BRE metacharacter or with tracked changes on disk, and `blame`.
 - [ ] `fetch --tags` / `--prune` — accepted, no effect.
 

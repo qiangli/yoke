@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -225,7 +226,7 @@ func nativeRevParse(_ context.Context, dir string, args []string) (*ExecResult, 
 		return &ExecResult{Stdout: refName + "\n"}, nil
 
 	case args[0] == "--short" || strings.HasPrefix(args[0], "--short="):
-		shortLen := 7
+		shortLen := 0 // the repository's default abbreviation
 		if strings.HasPrefix(args[0], "--short=") {
 			nStr := strings.TrimPrefix(args[0], "--short=")
 			var n int
@@ -252,11 +253,11 @@ func nativeRevParse(_ context.Context, dir string, args []string) (*ExecResult, 
 			}
 			hash = *h
 		}
-		hStr := hash.String()
-		if len(hStr) > shortLen {
-			hStr = hStr[:shortLen]
+		abbr, aerr := newAbbreviator(repo)
+		if aerr != nil {
+			return nil, ErrUnsupported
 		}
-		return &ExecResult{Stdout: hStr + "\n"}, nil
+		return &ExecResult{Stdout: abbr.abbrev(hash, shortLen) + "\n"}, nil
 
 	case args[0] == "--verify" || (len(args) > 1 && (args[0] == "-q" || args[0] == "--quiet" || args[1] == "--verify")):
 		quiet := false
@@ -466,29 +467,45 @@ func nativeLog(_ context.Context, dir string, args []string) (*ExecResult, error
 
 	var b strings.Builder
 	count := 0
+	var abbr *abbreviator
+	var abbrErr error
 	err = iter.ForEach(func(c *object.Commit) error {
 		if limit > 0 && count >= limit {
 			return fmt.Errorf("stop")
 		}
 		count++
+		if c.NumParents() > 1 {
+			// Past a merge host git orders by commit date with its own
+			// tie rules (and the default format adds a "Merge:" line);
+			// go-git walks depth-first. Decline rather than reorder.
+			return ErrUnsupported
+		}
 
 		if oneline {
-			b.WriteString(c.Hash.String()[:7])
+			if abbr == nil {
+				if abbr, abbrErr = newAbbreviator(repo); abbrErr != nil {
+					return ErrUnsupported
+				}
+			}
+			b.WriteString(abbr.abbrev(c.Hash, 0))
 			b.WriteByte(' ')
 			// First line of commit message
 			msg := strings.SplitN(c.Message, "\n", 2)[0]
 			b.WriteString(msg)
 			b.WriteByte('\n')
 		} else if formatStr != "" {
-			line := formatCommit(formatStr, c)
+			if abbr == nil && strings.Contains(formatStr, "%h") {
+				if abbr, abbrErr = newAbbreviator(repo); abbrErr != nil {
+					return ErrUnsupported
+				}
+			}
+			line, ok := formatCommitExact(formatStr, c, abbr)
+			if !ok {
+				return ErrUnsupported
+			}
 			b.WriteString(line)
 			b.WriteByte('\n')
 		} else {
-			if c.NumParents() > 1 {
-				// "Merge: <abbrev> <abbrev>" uses unique-prefix
-				// abbreviations host git computes; not reproduced.
-				return ErrUnsupported
-			}
 			if count > 1 {
 				b.WriteByte('\n')
 			}
@@ -514,8 +531,8 @@ func formatCommit(format string, c *object.Commit) string {
 		"%ae", c.Author.Email,
 		"%cn", c.Committer.Name,
 		"%ce", c.Committer.Email,
-		"%ad", c.Author.When.Format(time.RFC3339),
-		"%cd", c.Committer.When.Format(time.RFC3339),
+		"%ad", c.Author.When.Format(gitDefaultDate),
+		"%cd", c.Committer.When.Format(gitDefaultDate),
 	)
 	return r.Replace(format)
 }
@@ -798,66 +815,119 @@ func nativeMergeBase(_ context.Context, dir string, args []string) (*ExecResult,
 	return &ExecResult{Stdout: bases[0].Hash.String() + "\n"}, nil
 }
 
+// nativeRevList serves git's revision model: positive revisions, ^neg
+// exclusions and A..B ranges, with --count for any shape. Listing hashes
+// is served for linear history only (host git orders merges by commit
+// date with its own tie rules); A...B and other flags decline.
 func nativeRevList(_ context.Context, dir string, args []string) (*ExecResult, error) {
-	// Handle --count ref1..ref2 or --count ref1...ref2
-	countMode := false
-	var rangeSpec string
+	count := false
+	var pos, neg []string
 	for _, arg := range args {
-		if arg == "--count" {
-			countMode = true
-		} else if !strings.HasPrefix(arg, "-") {
-			rangeSpec = arg
+		switch {
+		case arg == "--count":
+			count = true
+		case strings.HasPrefix(arg, "-"), strings.Contains(arg, "..."):
+			return nil, ErrUnsupported
+		case strings.HasPrefix(arg, "^"):
+			neg = append(neg, arg[1:])
+		case strings.Contains(arg, ".."):
+			parts := strings.SplitN(arg, "..", 2)
+			if parts[0] == "" {
+				parts[0] = "HEAD"
+			}
+			if parts[1] == "" {
+				parts[1] = "HEAD"
+			}
+			neg = append(neg, parts[0])
+			pos = append(pos, parts[1])
+		default:
+			pos = append(pos, arg)
 		}
 	}
-
-	if !countMode || rangeSpec == "" {
+	if len(pos) == 0 {
 		return nil, ErrUnsupported
 	}
-
 	repo, err := openRepo(dir)
 	if err != nil {
 		return nil, ErrUnsupported
 	}
-
-	// Parse ref1..ref2 or ref1...ref2
-	var from, to string
-	if parts := strings.SplitN(rangeSpec, "...", 2); len(parts) == 2 {
-		from, to = parts[0], parts[1]
-	} else if parts := strings.SplitN(rangeSpec, "..", 2); len(parts) == 2 {
-		from, to = parts[0], parts[1]
-	} else {
-		return nil, ErrUnsupported
-	}
-
-	fromHash, err := repo.ResolveRevision(plumbing.Revision(from))
-	if err != nil {
-		return nil, ErrUnsupported
-	}
-
-	toHash, err := repo.ResolveRevision(plumbing.Revision(to))
-	if err != nil {
-		return nil, ErrUnsupported
-	}
-
-	// Count commits reachable from 'to' but not from 'from'
-	iter, err := repo.Log(&gogit.LogOptions{From: *toHash})
-	if err != nil {
-		return nil, ErrUnsupported
-	}
-
-	count := 0
-	err = iter.ForEach(func(c *object.Commit) error {
-		if c.Hash == *fromHash {
-			return fmt.Errorf("stop")
+	resolve := func(revs []string) ([]plumbing.Hash, error) {
+		var out []plumbing.Hash
+		for _, r := range revs {
+			h, err := repo.ResolveRevision(plumbing.Revision(r))
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, *h)
 		}
-		count++
-		return nil
-	})
-	if err != nil && err.Error() != "stop" {
+		return out, nil
+	}
+	posH, err := resolve(pos)
+	if err != nil {
 		return nil, ErrUnsupported
 	}
+	negH, err := resolve(neg)
+	if err != nil {
+		return nil, ErrUnsupported
+	}
+	excluded := map[plumbing.Hash]bool{}
+	for _, h := range negH {
+		if err := walkAncestors(repo, h, func(c *object.Commit) { excluded[c.Hash] = true }); err != nil {
+			return nil, ErrUnsupported
+		}
+	}
+	seen := map[plumbing.Hash]bool{}
+	var commits []*object.Commit
+	merges := false
+	for _, h := range posH {
+		err := walkAncestors(repo, h, func(c *object.Commit) {
+			if excluded[c.Hash] || seen[c.Hash] {
+				return
+			}
+			seen[c.Hash] = true
+			commits = append(commits, c)
+			merges = merges || c.NumParents() > 1
+		})
+		if err != nil {
+			return nil, ErrUnsupported
+		}
+	}
+	if count {
+		return &ExecResult{Stdout: fmt.Sprintf("%d\n", len(commits))}, nil
+	}
+	if merges || len(posH) > 1 {
+		return nil, ErrUnsupported
+	}
+	var b strings.Builder
+	for _, c := range commits { // first-parent walk of linear history: newest first
+		b.WriteString(c.Hash.String())
+		b.WriteByte('\n')
+	}
+	return &ExecResult{Stdout: b.String()}, nil
+}
 
-	return &ExecResult{Stdout: fmt.Sprintf("%d\n", count)}, nil
+// walkAncestors visits from and every commit reachable from it, once each,
+// newest-first along first parents for linear history.
+func walkAncestors(repo *gogit.Repository, from plumbing.Hash, visit func(*object.Commit)) error {
+	seen := map[plumbing.Hash]bool{}
+	stack := []plumbing.Hash{from}
+	for len(stack) > 0 {
+		h := stack[0]
+		stack = stack[1:]
+		if seen[h] {
+			continue
+		}
+		seen[h] = true
+		c, err := repo.CommitObject(h)
+		if err != nil {
+			return err
+		}
+		visit(c)
+		next := make([]plumbing.Hash, 0, len(c.ParentHashes)+len(stack))
+		next = append(next, c.ParentHashes...)
+		stack = append(next, stack...)
+	}
+	return nil
 }
 
 func nativeConfig(_ context.Context, dir string, args []string) (*ExecResult, error) {
@@ -1079,6 +1149,12 @@ func nativeBranch(_ context.Context, dir string, args []string) (*ExecResult, er
 	// branchVerbose decorates one branch line with tip hash + subject.
 	// Resolution failures degrade to the plain line: verbosity must
 	// never break listing.
+	var abbr *abbreviator
+	if verbose {
+		if abbr, err = newAbbreviator(repo); err != nil {
+			return nil, ErrUnsupported
+		}
+	}
 	branchVerbose := func(ref *plumbing.Reference) string {
 		if !verbose {
 			return ""
@@ -1088,7 +1164,7 @@ func nativeBranch(_ context.Context, dir string, args []string) (*ExecResult, er
 			return ""
 		}
 		subj, _, _ := strings.Cut(strings.TrimSpace(c.Message), "\n")
-		return " " + shortHash(ref.Hash()) + " " + subj
+		return " " + abbr.abbrev(ref.Hash(), 0) + " " + subj
 	}
 
 	// Listing mode: no non-flag args, or only -v/-r/-a/--contains
@@ -1119,8 +1195,8 @@ func nativeBranch(_ context.Context, dir string, args []string) (*ExecResult, er
 		// "remotes/"-prefixed under -a — with a symbolic remote ref as
 		// "origin/HEAD -> origin/main".
 		type row struct {
-			mark, name, sym string
-			ref             *plumbing.Reference
+			mark, name, sym, track string
+			ref                    *plumbing.Reference
 		}
 		var rows []row
 		contains := func(ref *plumbing.Reference) bool {
@@ -1146,20 +1222,24 @@ func nativeBranch(_ context.Context, dir string, args []string) (*ExecResult, er
 					continue
 				}
 				name := ref.Name().Short()
+				track := ""
 				if verbose {
-					// -v adds "[ahead N, behind M]" for a tracked branch.
 					if cerr != nil {
 						return nil, ErrUnsupported
 					}
 					if bc, ok := cfg.Branches[name]; ok && bc.Merge != "" {
-						return nil, ErrUnsupported
+						t, ok := trackingNote(repo, ref, bc.Remote, bc.Merge)
+						if !ok {
+							return nil, ErrUnsupported
+						}
+						track = t
 					}
 				}
 				mark := "  "
 				if head != nil && ref.Name() == head.Name() {
 					mark = "* "
 				}
-				rows = append(rows, row{mark: mark, name: name, ref: ref})
+				rows = append(rows, row{mark: mark, name: name, ref: ref, track: track})
 			}
 		}
 
@@ -1212,7 +1292,14 @@ func nativeBranch(_ context.Context, dir string, args []string) (*ExecResult, er
 			case r.sym != "":
 				fmt.Fprintf(&b, "%s -> %s", r.name, r.sym)
 			case verbose:
-				fmt.Fprintf(&b, "%-*s%s", width, r.name, branchVerbose(r.ref))
+				v := branchVerbose(r.ref)
+				if r.track != "" {
+					// " <abbrev> <subject>" → " <abbrev> [ahead N] <subject>"
+					if sp := strings.Index(v[1:], " "); sp >= 0 {
+						v = v[:sp+1] + " " + r.track + v[sp+1:]
+					}
+				}
+				fmt.Fprintf(&b, "%-*s%s", width, r.name, v)
 			default:
 				b.WriteString(r.name)
 			}
@@ -1830,26 +1917,62 @@ func nativeReset(_ context.Context, dir string, args []string) (*ExecResult, err
 // git's medium header and the patch from treePatch (renames, binary and
 // C-quoted names decline there). Flags, rev:path, tags and merges decline.
 func nativeShow(_ context.Context, dir string, args []string) (*ExecResult, error) {
-	if len(args) == 0 {
-		args = []string{"HEAD"}
+	noPatch := false
+	format := ""
+	var revs []string
+	for _, a := range args {
+		switch {
+		case a == "-s" || a == "--no-patch":
+			noPatch = true
+		case strings.HasPrefix(a, "--format="):
+			format = strings.TrimPrefix(a, "--format=")
+		case strings.HasPrefix(a, "--pretty=format:"):
+			format = strings.TrimPrefix(a, "--pretty=format:")
+		case strings.HasPrefix(a, "-"):
+			return nil, ErrUnsupported
+		default:
+			revs = append(revs, a)
+		}
 	}
-	if len(args) != 1 || strings.HasPrefix(args[0], "-") || strings.Contains(args[0], ":") {
+	if len(revs) == 0 {
+		revs = []string{"HEAD"}
+	}
+	if len(revs) != 1 || strings.Contains(revs[0], ":") || (format != "" && !noPatch) {
 		return nil, ErrUnsupported
 	}
 	repo, err := openRepo(dir)
 	if err != nil {
 		return nil, ErrUnsupported
 	}
-	hash, err := repo.ResolveRevision(plumbing.Revision(args[0]))
+	hash, err := repo.ResolveRevision(plumbing.Revision(revs[0]))
 	if err != nil {
-		return nil, ErrUnsupported
+		return &ExecResult{
+			Stderr:   fmt.Sprintf("fatal: ambiguous argument '%s': unknown revision or path not in the working tree.\n", revs[0]),
+			ExitCode: 128,
+		}, nil
 	}
 	commit, err := repo.CommitObject(*hash)
 	if err != nil || commit.NumParents() > 1 {
 		return nil, ErrUnsupported
 	}
+	if format != "" {
+		var abbr *abbreviator
+		if strings.Contains(format, "%h") {
+			if abbr, err = newAbbreviator(repo); err != nil {
+				return nil, ErrUnsupported
+			}
+		}
+		line, ok := formatCommitExact(format, commit, abbr)
+		if !ok {
+			return nil, ErrUnsupported
+		}
+		return &ExecResult{Stdout: line + "\n"}, nil
+	}
 	var b strings.Builder
 	b.WriteString(mediumHeader(commit))
+	if noPatch {
+		return &ExecResult{Stdout: b.String()}, nil
+	}
 	parentTree := &object.Tree{}
 	if commit.NumParents() == 1 {
 		parent, err := commit.Parent(0)
@@ -1864,7 +1987,15 @@ func nativeShow(_ context.Context, dir string, args []string) (*ExecResult, erro
 	if err != nil {
 		return nil, ErrUnsupported
 	}
-	patch, err := treePatch(parentTree, commitTree, nil, false)
+	abbr, err := newAbbreviator(repo)
+	if err != nil {
+		return nil, ErrUnsupported
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		return nil, ErrUnsupported
+	}
+	patch, err := treePatch(wt.Filesystem.Root(), parentTree, commitTree, nil, false, abbr)
 	if err != nil {
 		return nil, ErrUnsupported
 	}
@@ -2433,4 +2564,85 @@ func mediumHeader(c *object.Commit) string {
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+// gitDefaultDate is host git's --date=default layout (%ad/%cd).
+const gitDefaultDate = "Mon Jan 2 15:04:05 2006 -0700"
+
+// formatPlaceholder matches one --format placeholder.
+var formatPlaceholder = regexp.MustCompile(`%(an|ae|cn|ce|ad|cd|[Hhsn%]|.)`)
+
+// formatCommitExact expands a --format string only when every placeholder
+// is one formatCommit renders exactly as host git does (%H %h %s %an %ae
+// %cn %ce %ad %cd %n %%); ok is false otherwise and the caller declines.
+func formatCommitExact(format string, c *object.Commit, abbr *abbreviator) (string, bool) {
+	ok := true
+	out := formatPlaceholder.ReplaceAllStringFunc(format, func(m string) string {
+		switch m {
+		case "%n":
+			return "\n"
+		case "%%":
+			return "%"
+		case "%H", "%h", "%s", "%an", "%ae", "%cn", "%ce", "%ad", "%cd":
+			if m == "%h" {
+				if abbr == nil {
+					ok = false
+					return m
+				}
+				return abbr.abbrev(c.Hash, 0)
+			}
+			return formatCommit(m, c)
+		}
+		ok = false
+		return m
+	})
+	return out, ok
+}
+
+// trackingNote is `branch -v`'s upstream annotation: "[ahead N, behind
+// M]", "[ahead N]", "[behind M]", "[gone]" when the upstream ref is
+// missing, or "" when in sync. ok is false for an upstream it cannot
+// resolve the way host git does (a local "." remote, an odd merge ref).
+func trackingNote(repo *gogit.Repository, ref *plumbing.Reference, remote string, merge plumbing.ReferenceName) (string, bool) {
+	if remote == "" || remote == "." || !merge.IsBranch() {
+		return "", false
+	}
+	upName := plumbing.NewRemoteReferenceName(remote, merge.Short())
+	up, err := repo.Reference(upName, true)
+	if err != nil {
+		return "[gone]", true
+	}
+	reach := func(h plumbing.Hash) (map[plumbing.Hash]bool, error) {
+		set := map[plumbing.Hash]bool{}
+		err := walkAncestors(repo, h, func(c *object.Commit) { set[c.Hash] = true })
+		return set, err
+	}
+	mine, err := reach(ref.Hash())
+	if err != nil {
+		return "", false
+	}
+	theirs, err := reach(up.Hash())
+	if err != nil {
+		return "", false
+	}
+	ahead, behind := 0, 0
+	for h := range mine {
+		if !theirs[h] {
+			ahead++
+		}
+	}
+	for h := range theirs {
+		if !mine[h] {
+			behind++
+		}
+	}
+	switch {
+	case ahead > 0 && behind > 0:
+		return fmt.Sprintf("[ahead %d, behind %d]", ahead, behind), true
+	case ahead > 0:
+		return fmt.Sprintf("[ahead %d]", ahead), true
+	case behind > 0:
+		return fmt.Sprintf("[behind %d]", behind), true
+	}
+	return "", true
 }

@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
@@ -63,6 +64,8 @@ var parityCommands = [][]string{
 	{"ls-files", "-o", "--exclude-standard"},
 	{"log"},
 	{"show"},
+	{"show", "HEAD~1"},
+	{"diff", "--cached", "--no-renames", "HEAD"},
 	{"log", "--oneline"},
 	{"log", "--oneline", "-1"},
 	{"log", "-1", "--format=%H"},
@@ -77,6 +80,8 @@ var parityCommands = [][]string{
 	{"rev-list", "HEAD"},
 	{"rev-list", "--count", "HEAD", "^HEAD"},
 	{"log", "--format=%H %s"},
+	{"log", "--format=%h %an %ad"},
+	{"diff", "--cached", "--no-renames"},
 	{"log", "--oneline", "--", "a.txt"},
 	{"show", "-s", "--format=%H", "HEAD"},
 	{"show", "--stat", "HEAD"},
@@ -117,6 +122,8 @@ var parityMustServe = map[string]bool{
 	"ls-files":                  true,
 	"ls-files -m":               true,
 	"rev-parse HEAD":            true,
+	"rev-parse --short HEAD":    true,
+	"log --oneline":             true,
 }
 
 func pgit(t *testing.T, dir string, args ...string) string {
@@ -212,6 +219,49 @@ var parityScenarios = []parityScenario{
 		pgit(t, r, "commit", "-q", "-am", "subject line\n\nbody one\n  indented two\n\ntrailer: x")
 		return r
 	}, false},
+	{"core-abbrev-12", func(t *testing.T, root string) string {
+		r := pRepo(t, filepath.Join(root, "r"))
+		pgit(t, r, "config", "core.abbrev", "12")
+		pwrite(t, filepath.Join(r, "a.txt"), "a2\n")
+		pgit(t, r, "add", "a.txt")
+		return r
+	}, false},
+	{"hunk-function-context", func(t *testing.T, root string) string {
+		r := pRepo(t, filepath.Join(root, "r"))
+		var src strings.Builder
+		src.WriteString("package p\n\nfunc averyveryveryveryveryveryveryveryveryveryverylongfunctionname(argumentone, argumenttwo int) {\n")
+		for i := 0; i < 12; i++ {
+			fmt.Fprintf(&src, "\tx%d := %d\n", i, i)
+		}
+		src.WriteString("}\n\n_private := 1\n\nfunc second() {\n")
+		for i := 0; i < 12; i++ {
+			fmt.Fprintf(&src, "\ty%d := %d\n", i, i)
+		}
+		src.WriteString("}\n")
+		pwrite(t, filepath.Join(r, "p.go"), src.String())
+		pgit(t, r, "add", "p.go")
+		pgit(t, r, "commit", "-q", "-m", "p")
+		edited := strings.Replace(src.String(), "\tx9 := 9", "\tx9 := 99", 1)
+		edited = strings.Replace(edited, "\ty10 := 10", "\ty10 := 100", 1)
+		pwrite(t, filepath.Join(r, "p.go"), edited)
+		pgit(t, r, "commit", "-q", "-am", "edit")
+		pwrite(t, filepath.Join(r, "p.go"), strings.Replace(edited, "\ty3 := 3", "\ty3 := 33", 1))
+		pgit(t, r, "add", "p.go")
+		return r
+	}, false},
+	{"merged-history", func(t *testing.T, root string) string {
+		r := pRepo(t, filepath.Join(root, "r"))
+		pgit(t, r, "checkout", "-q", "-b", "side")
+		pwrite(t, filepath.Join(r, "side.txt"), "s\n")
+		pgit(t, r, "add", "side.txt")
+		pgit(t, r, "commit", "-q", "-m", "side")
+		pgit(t, r, "checkout", "-q", "main")
+		pwrite(t, filepath.Join(r, "main.txt"), "m\n")
+		pgit(t, r, "add", "main.txt")
+		pgit(t, r, "commit", "-q", "-m", "main")
+		pgit(t, r, "merge", "-q", "--no-edit", "side")
+		return r
+	}, true},
 	{"both-staged-and-unstaged", func(t *testing.T, root string) string {
 		r := pRepo(t, filepath.Join(root, "r"))
 		pwrite(t, filepath.Join(r, "a.txt"), "a2\n")
