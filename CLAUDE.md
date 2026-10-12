@@ -7,11 +7,12 @@ code in this repository.
 
 ## Overview
 
-Quick unrelated fixes use the reserved default **Sprint #9999 — Maintenance**.
-Repository `bashy todo add` selects it unless `--sprint N` or `--no-sprint`
-is given. Commands addressing one sprint select #9999 when the sprint operand
-is omitted; explicit operands win. It follows ordinary lifecycle, manager
-lease, evidence and acceptance rules. Read `bashy sprint --help` for details.
+Sprint defaulting is uniform: no sprint number is special and no card is created
+implicitly. Commands addressing one sprint use the most recently created
+existing sprint when the operand is omitted, and repository `bashy todo add`
+joins it unless `--sprint N` or `--no-sprint` is given; personal todos stay
+standalone. Explicit operands always win. An empty board is an error — create
+or select a sprint explicitly. See `bashy sprint --help`.
 
 `yoke` is bashy's **agentic userland**: everything the bashy shell adds on
 top of the certified POSIX package that is not itself a POSIX-required or

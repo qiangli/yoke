@@ -169,7 +169,7 @@ func Add(st *issue.Store, title, body, priority string, due *time.Time, recurrin
 }
 
 // addPrepared sets CLI metadata before the single save, so a failed save
-// never leaves behind an unlinked version of a maintenance story.
+// never leaves behind an unlinked version of a sprint story.
 func addPrepared(st *issue.Store, title, body, priority string, due *time.Time, recurring, assignee string, prepare func(*issue.Issue)) (*issue.Issue, error) {
 	if strings.TrimSpace(title) == "" {
 		return nil, fmt.Errorf("a title is required")
@@ -426,12 +426,11 @@ var SprintChanged func(previous *issue.Issue) error
 // board lock.
 var SprintPreflight func() error
 
-// MaintenanceSprint is the reserved default sprint. Zero remains unlinked.
-const MaintenanceSprint int64 = 9999
-
-// PrepareMaintenance links a store to the default board before a story is
-// written. Plain todo consumers leave this nil and retain standalone defaults.
-var PrepareMaintenance func(*issue.Store) (uuid, title string, err error)
+// DefaultSprint answers which existing sprint a repository `todo add` joins
+// when neither --sprint nor --no-sprint is given. It must fail rather than
+// create a card when none exists. Plain todo consumers leave it nil and keep
+// the standalone default.
+var DefaultSprint func() (int64, error)
 
 // LinkSprint sets the story's sprint fields from seq: all three when the seam
 // answers, the seq alone when it does not, and none when seq is 0 (unlink).
