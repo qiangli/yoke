@@ -40,6 +40,15 @@ const footLeft = document.getElementById("foot-left");
 const verEl = document.getElementById("ver");
 
 let apps = [];
+// Whether a PROBED list (api/apps) has landed. Until it has, the tiles come from
+// the catalog (api/apps?catalog=1), and a late catalog answer must never
+// overwrite fresher liveness.
+let appsLive = false;
+// Whether the last probed request failed — the tiles stay (they are still
+// links), the header says the console is not answering.
+let appsOffline = false;
+// api/session's answer, or null before it arrives.
+let session = null;
 // The Inbox tile's numbers, or null when this session may not read them.
 let inboxCounts = null;
 // The host's relationship to the control plane (api/cloud), or null when the
@@ -291,9 +300,13 @@ function tile(a, opts = {}) {
   // "Open apps" mode — same tab (the default) navigates this window, and
   // new tab gives the app a window of its own with rel=noopener, so it
   // cannot reach back into this page.
-  const open = a.status === "ready";
+  // A pending app (catalog paint, liveness not yet probed) is a link too:
+  // clicking it asks the app itself, which is the better probe anyway.
+  const open = a.status === "ready" || a.status === "pending";
   const btn = document.createElement(open ? "a" : "button");
   btn.className = "tile";
+  btn.dataset.app = a.name;
+  btn.dataset.focusKey = "tile:" + (opts.section || "") + ":" + a.name;
   if (open) {
     btn.href = url(a.path.replace(/^\//, ""));
     if (openApps === "new-tab") {
@@ -306,6 +319,8 @@ function tile(a, opts = {}) {
   if (a.status === "unavailable") {
     btn.disabled = true;
     btn.title = a.note || "unavailable on this host";
+  } else if (a.status === "pending") {
+    btn.title = (a.tip ? a.tip + " · " : "") + "checking whether it is running";
   } else if (a.status === "stopped") {
     btn.title = a.start_hint ? "Not running. Start it with: " + a.start_hint : "not running";
   } else if (a.tip) {
@@ -327,8 +342,30 @@ function tile(a, opts = {}) {
   label.textContent = a.label;
   btn.append(label);
 
+  const o = opening && opening.name === a.name ? opening : null;
+  if (o && o.state === "loading") {
+    btn.setAttribute("aria-busy", "true");
+    wrap.classList.add("opening");
+    const spin = document.createElement("span");
+    spin.className = "spinner";
+    spin.setAttribute("aria-hidden", "true");
+    icon.append(spin);
+    const sub = document.createElement("span");
+    sub.className = "sub";
+    sub.textContent = "Opening…";
+    btn.append(sub);
+  }
 
-  btn.addEventListener("click", () => { if (open) recordVisit(a.name); });
+  btn.addEventListener("click", (e) => {
+    if (!open) return;
+    recordVisit(a.name);
+    // Only a plain same-tab click is taken over. A modifier or middle click,
+    // or the New tab mode, is the browser's own link behaviour, untouched.
+    if (openApps === "new-tab" || e.defaultPrevented || e.button !== 0 ||
+        e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    openApp(a, btn.href);
+  });
   wrap.append(btn);
 
   if (!opts.noStar) {
@@ -475,7 +512,28 @@ function sectionEl(title, nodes) {
 // render is the single repaint entry point. Everything that changes what the
 // page shows — a search keystroke, a settings toggle, a liveness poll — calls
 // this rather than reaching into the DOM itself.
-function render() { renderHome(); }
+function render() {
+  // A repaint replaces every tile, so keep keyboard focus on the same control.
+  const key = document.activeElement && document.activeElement.dataset
+    ? document.activeElement.dataset.focusKey : "";
+  renderHome();
+  renderStatusLine();
+  if (key) {
+    const again = [...view.querySelectorAll("[data-focus-key]")].find((n) => n.dataset.focusKey === key);
+    if (again) again.focus();
+  }
+}
+
+function renderStatusLine() {
+  if (appsOffline) {
+    whoEl.textContent = "offline";
+    return;
+  }
+  if (!session) return;
+  whoEl.textContent = session.user + " · " + session.via;
+  const ready = apps.filter((x) => x.status === "ready").length;
+  footLeft.textContent = `${ready}/${apps.length} ready · signed in as ${session.user} (${session.via})`;
+}
 
 function matches(a) {
   const t = search.trim().toLowerCase();
@@ -493,6 +551,7 @@ function renderHome() {
     const ready = apps.filter((a) => a.status === "ready").length;
     const stopped = apps.filter((a) => a.status === "stopped").length;
     const na = apps.filter((a) => a.status === "unavailable").length;
+    const checking = apps.filter((a) => a.status === "pending").length;
     const s = document.createElement("section");
     s.className = "sect";
     const head = document.createElement("div");
@@ -501,7 +560,9 @@ function renderHome() {
     s.append(head);
     const card = document.createElement("div");
     card.className = "summary";
-    for (const [n, l] of [[apps.length, "Apps"], [ready, "Ready"], [stopped, "Stopped"], [na, "Unavailable"]]) {
+    const stats = [[apps.length, "Apps"], [ready, "Ready"], [stopped, "Stopped"], [na, "Unavailable"]];
+    if (checking) stats.push([checking, "Checking"]);
+    for (const [n, l] of stats) {
       const d = document.createElement("div");
       const b = document.createElement("b"); b.textContent = String(n);
       const sp = document.createElement("span"); sp.textContent = l;
@@ -513,13 +574,13 @@ function renderHome() {
 
   if (cfg.showFavorites) {
     const favs = cfg.favorites.map((n) => byName.get(n)).filter(Boolean).filter(matches);
-    if (favs.length) pad.append(sectionEl("Favorites", favs.map((a) => tile(a))));
+    if (favs.length) pad.append(sectionEl("Favorites", favs.map((a) => tile(a, { section: "fav" }))));
   }
 
   if (cfg.showRecents) {
     const rec = cfg.recents.map((n) => byName.get(n)).filter(Boolean).filter(matches)
       .slice(0, Math.max(1, cfg.recentLimit | 0));
-    if (rec.length) pad.append(sectionEl("Recent", rec.map((a) => tile(a, { noStar: true }))));
+    if (rec.length) pad.append(sectionEl("Recent", rec.map((a) => tile(a, { noStar: true, section: "recent" }))));
   }
 
   if (cfg.showCloud && cloud && !search.trim()) {
@@ -531,7 +592,7 @@ function renderHome() {
   }
 
   if (shown.length) {
-    pad.append(sectionEl("Apps", shown.map((a) => tile(a))));
+    pad.append(sectionEl("Apps", shown.map((a) => tile(a, { section: "apps" }))));
   } else {
     const s = document.createElement("section");
     s.className = "sect";
@@ -1105,63 +1166,93 @@ document.getElementById("theme-btn").addEventListener("click", () => {
   saveCfg({ theme: order[(order.indexOf(cfg.theme) + 1) % order.length] });
 });
 
-async function refresh() {
-  // The slow ride-alongs (api/cloud, api/neighborhood) never gate the grid:
-  // neighborhood discovery can take seconds on a LAN, and the tiles must not
-  // wait for it. Each fills its own section when it lands.
-  refreshSlow();
-  try {
-    const [a, s, l, i] = await Promise.all([
-      fetch(url("api/apps")).then((r) => r.json()),
-      fetch(url("api/session")).then((r) => r.json()).catch(() => null),
-      fetch(url("api/look")).then((r) => r.json()).catch(() => null),
-      // ?summary=1 is six numbers, not 175 holder rows. It rides along and
-      // fails soft: a session whose scope excludes the Inbox panel is REFUSED
-      // this, and the right answer to that is a tile with no badge — not a
-      // broken start page.
-      fetch(url("api/inbox?summary=1")).then((r) => (r.ok ? r.json() : null)).catch(() => null),
-    ]);
-    apps = a.apps || [];
-    inboxCounts = i && !i.error ? i : null;
-    // The look ride-along fails soft: no answer leaves the mode at the
-    // same-tab default, which is exactly the server's own fallback.
-    if (l && l.open_apps) openApps = l.open_apps === "new-tab" ? "new-tab" : "same-tab";
-    if (s) {
-      serverPairing = !!s.pairing;
-      whoEl.textContent = s.user + " · " + s.via;
-      renderBuild(s.build);
-      renderSession(s);
-      const ready = apps.filter((x) => x.status === "ready").length;
-      footLeft.textContent = `${ready}/${apps.length} ready · signed in as ${s.user} (${s.via})`;
-    }
-  } catch (e) {
-    apps = [];
-    inboxCounts = null;
-    whoEl.textContent = "offline";
-  }
-  // Only the home grid reflects liveness; repainting under a live terminal
-  // would tear down the session every few seconds.
-  render();
+// ---------------------------------------------------------------- loading --
+// NOTHING gates the tiles but the catalog. The first paint comes from
+// api/apps?catalog=1 — the list with no dialling — and every other answer
+// (probed liveness, session, look, the Inbox badge, Cloud, Neighborhood)
+// lands on its own and repaints only what it knows. These used to ride one
+// Promise.all, so the slowest of them held the whole grid: on a busy host the
+// Inbox summary alone takes seconds.
+//
+// One request per kind is in flight at a time, so an endpoint slower than the
+// 5-second poll never piles up behind it. A failed supplemental answer fails
+// soft: the tile simply goes without what it would have added.
+const inFlight = {};
+function load(key, path, apply) {
+  if (inFlight[key]) return;
+  inFlight[key] = true;
+  fetch(url(path))
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null)
+    .then((v) => { apply(v); render(); })
+    .finally(() => { inFlight[key] = false; });
 }
 
-// refreshSlow fetches the Cloud and Neighborhood sections off the grid's
-// critical path. One request of each kind is in flight at a time, so a slow
-// discovery never piles up behind the 5-second refresh.
-const slowInFlight = {};
-function refreshSlow() {
-  const load = (key, path, set) => {
-    if (slowInFlight[key]) return;
-    slowInFlight[key] = true;
-    fetch(url(path))
-      .then((r) => (r.ok ? r.json() : null))
-      .catch(() => null)
-      .then((v) => { set(v); render(); })
-      .finally(() => { slowInFlight[key] = false; });
-  };
+function loadCatalog() {
+  load("catalog", "api/apps?catalog=1", (v) => {
+    if (v && !appsLive) apps = v.apps || [];
+  });
+}
+
+function refresh() {
+  load("apps", "api/apps", (v) => {
+    appsOffline = !v;
+    if (!v) return; // keep the last tiles: they are links, and a click reports
+    apps = v.apps || [];
+    appsLive = true;
+  });
+  load("session", "api/session", (s) => {
+    if (!s) return;
+    session = s;
+    serverPairing = !!s.pairing;
+    renderBuild(s.build);
+    renderSession(s);
+  });
+  // The look answer fails soft: no answer leaves the mode at the same-tab
+  // default, which is exactly the server's own fallback.
+  load("look", "api/look", (l) => {
+    if (l && l.open_apps) openApps = l.open_apps === "new-tab" ? "new-tab" : "same-tab";
+  });
+  // ?summary=1 is six numbers, not 175 holder rows. A session whose scope
+  // excludes the Inbox panel is REFUSED this, and the right answer to that is a
+  // tile with no badge — not a broken start page.
+  load("inbox", "api/inbox?summary=1", (i) => { inboxCounts = i && !i.error ? i : null; });
   load("cloud", "api/cloud", (v) => { cloud = v; });
   load("hood", "api/neighborhood", (v) => { hood = v; });
 }
 
+// ------------------------------------------------------------------ opening --
+// Paint the loading state before ordinary navigation. The browser keeps this
+// document visible while the selected app answers, and requests that page once.
+// App authentication, redirects and errors retain their native page behavior.
+let opening = null;
+
+const liveEl = document.createElement("div");
+liveEl.id = "launch-status";
+liveEl.className = "sr-only";
+liveEl.setAttribute("role", "status");
+liveEl.setAttribute("aria-live", "polite");
+document.body.append(liveEl);
+function announce(text) { liveEl.textContent = text; }
+
+function openApp(a, href) {
+  if (opening && opening.name === a.name) return;
+  const o = { name: a.name, state: "loading" };
+  opening = o;
+  announce("Opening " + (a.label || a.name) + "…");
+  render();
+  // Two frames let the spinner paint before navigation starts.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (opening === o) location.assign(href);
+  }));
+}
+
+// Back from the app (bfcache) must not show a tile still spinning.
+addEventListener("pageshow", (e) => {
+  if (e.persisted && opening) { opening = null; render(); }
+});
+
 applyChrome();
+loadCatalog();
 refresh();
 setInterval(refresh, 5000);

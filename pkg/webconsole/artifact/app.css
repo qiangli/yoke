@@ -191,6 +191,24 @@ section.sect:first-child { margin-top: 0; }
    want attention get a dot. */
 .badge.ready { display: none; }
 .badge.stopped { background: var(--warn); }
+/* Pending: the catalog painted the tile before liveness was probed. */
+.badge.pending { background: var(--off); animation: pending-pulse 1.2s ease-in-out infinite; }
+@keyframes pending-pulse { 50% { opacity: .35; } }
+
+/* Opening an app on demand: a ring over the icon until the app's page answers. */
+.spinner {
+  position: absolute; inset: 0; margin: auto; width: 28px; height: 28px;
+  border-radius: 50%; border: 3px solid rgba(255,255,255,.35); border-top-color: #fff;
+  animation: spin .8s linear infinite;
+}
+.tile-wrap.opening .icon > svg { opacity: .25; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation-duration: 2.4s; }
+  .badge.pending { animation: none; }
+}
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 
 /* The Inbox tile's unread count. Its OWN corner, opposite the status dot:
    "is this app running" and "is something waiting for me" are unrelated

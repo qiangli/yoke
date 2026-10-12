@@ -320,6 +320,28 @@ const (
 	StatusUnavailable = "unavailable"
 )
 
+// StatusPending is the catalog's answer for a proxied service: it exists, and
+// whether it is listening is not known until a probe dials it.
+const StatusPending = "pending"
+
+// catalogStatus is Probe without the network: every status that can be known
+// without dialling, and StatusPending for the rest.
+func catalogStatus(panels []Panel) []Status {
+	out := make([]Status, len(panels))
+	for i, p := range panels {
+		out[i] = Status{Panel: p, StartHint: p.StartHint()}
+		switch {
+		case !p.Available:
+			out[i].Status = StatusUnavailable
+		case p.Mode != atlas.WebProxy:
+			out[i].Status = StatusReady
+		default:
+			out[i].Status = StatusPending
+		}
+	}
+	return out
+}
+
 // probeTTL keeps a start-page repaint from re-dialling every service.
 const probeTTL = 3 * time.Second
 
