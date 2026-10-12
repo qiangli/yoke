@@ -324,6 +324,30 @@ func Status(repoPath string) (*Result, []StatusEntry, error) {
 	// objects before reporting it. Real additions/modifications still differ.
 	stagedClean := indexHeadMatches(r)
 	var entries []StatusEntry
+	// The corrected change model (staged deletes still on disk, dirty
+	// submodule content) whenever it can render the tree; go-git's raw
+	// status otherwise (merge conflicts, staged renames).
+	if ps, perr := loadPorcelainState(r, w); perr == nil && ps.unsupported == "" {
+		for _, file := range ps.sortedTracked() {
+			xy := ps.tracked[file]
+			if xy[0] != ' ' && !stagedClean[file] {
+				entries = append(entries, StatusEntry{File: file, Status: StatusCode(gogit.StatusCode(xy[0])), Staged: true})
+			}
+			if y := xy[1]; y != ' ' {
+				if y == 'm' || y == '?' {
+					y = 'M' // submodule content
+				}
+				entries = append(entries, StatusEntry{File: file, Status: StatusCode(gogit.StatusCode(y)), Staged: false})
+			}
+		}
+		for _, file := range ps.untracked {
+			entries = append(entries, StatusEntry{File: file, Status: "??", Staged: false})
+		}
+		if len(entries) == 0 {
+			return &Result{Success: true, Message: "nothing to commit, working tree clean"}, nil, nil
+		}
+		return &Result{Success: true}, entries, nil
+	}
 	for file, s := range status {
 		// go-git marks untracked files in BOTH columns; without this
 		// they'd surface as "staged" and render under "Changes to be

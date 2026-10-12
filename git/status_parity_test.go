@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -143,5 +144,61 @@ func TestNativeClean_KeepsInfoExcludedFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "junk.txt")); !os.IsNotExist(err) {
 		t.Errorf("clean -f kept untracked junk.txt (err=%v)", err)
+	}
+}
+
+// Status (the typed API behind human status views and sprint closure)
+// reads the same corrected model as the porcelain verbs: a staged delete
+// of a file still on disk and dirty submodule content are both reported.
+func TestStatus_CorrectedModel(t *testing.T) {
+	top := setupSuperproject(t)
+	repo, err := gogit.PlainOpen(top)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Re-pin the gitlink at the submodule's HEAD, then dirty its content.
+	sub, _ := gogit.PlainOpen(filepath.Join(top, "sub"))
+	head, _ := sub.Head()
+	idx, _ := repo.Storer.Index()
+	for _, e := range idx.Entries {
+		if e.Name == "sub" {
+			e.Hash = head.Hash()
+		}
+	}
+	if err := repo.Storer.SetIndex(idx); err != nil {
+		t.Fatal(err)
+	}
+	commitAll(t, repo, "re-pin")
+	if err := os.WriteFile(filepath.Join(top, "sub", "a"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wt, _ := repo.Worktree()
+	if _, err := wt.Remove("hello.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(top, "hello.txt"), []byte("back\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, entries, err := Status(top)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, e := range entries {
+		got[fmt.Sprintf("%s|%s|%v", e.File, e.Status, e.Staged)] = true
+	}
+	for _, want := range []string{"hello.txt|??|false", "sub| M|false"} {
+		if !got[want] {
+			t.Errorf("Status entries %v: missing %s", entries, want)
+		}
+	}
+	staged := false
+	for _, e := range entries {
+		if e.File == "hello.txt" && e.Staged {
+			staged = true
+		}
+	}
+	if !staged {
+		t.Errorf("Status entries %v: missing the staged delete of hello.txt", entries)
 	}
 }

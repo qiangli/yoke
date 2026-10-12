@@ -259,6 +259,20 @@ var parityScenarios = []parityScenario{
 		advanceSub(t, top)
 		return top
 	}, false},
+	{"alternates-clone", func(t *testing.T, root string) string {
+		// Objects borrowed through an absolute objects/info/alternates
+		// path outside the repository (clone --reference, submodules).
+		origin := pRepo(t, filepath.Join(root, "origin"))
+		pgit(t, root, "clone", "-q", "--no-local", "--reference", origin, origin, "clone")
+		return filepath.Join(root, "clone")
+	}, false},
+	{"submodule-via-alternates", func(t *testing.T, root string) string {
+		sub := pRepo(t, filepath.Join(root, "subsrc"))
+		top := pRepo(t, filepath.Join(root, "top"))
+		pgit(t, top, "-c", "protocol.file.allow=always", "submodule", "add", "-q", "--reference", sub, "file://"+filepath.ToSlash(sub), "sub")
+		pgit(t, top, "commit", "-q", "-m", "add sub")
+		return top
+	}, false},
 	{"submodule-dirty-content", func(t *testing.T, root string) string {
 		top := hostSuperproject(t, root)
 		pwrite(t, filepath.Join(top, "sub", "a.txt"), "dirty\n")

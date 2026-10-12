@@ -154,7 +154,7 @@ func submoduleDirt(dir string) byte {
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
 		return ' '
 	}
-	sub, err := gogit.PlainOpenWithOptions(dir, &gogit.PlainOpenOptions{EnableDotGitCommonDir: true})
+	sub, err := openCheckout(dir)
 	if err != nil {
 		return ' '
 	}

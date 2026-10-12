@@ -27,15 +27,51 @@ import (
 // store; without it every read in a linked worktree fails with
 // "object not found". Plain directories are unaffected.
 func openRepo(dir string) (*gogit.Repository, error) {
-	if fi, err := os.Stat(filepath.Join(dir, ".git")); err == nil && !fi.IsDir() {
-		return gogit.PlainOpenWithOptions(dir, &gogit.PlainOpenOptions{
+	var (
+		r   *gogit.Repository
+		err error
+	)
+	if fi, serr := os.Stat(filepath.Join(dir, ".git")); serr == nil && !fi.IsDir() {
+		r, err = gogit.PlainOpenWithOptions(dir, &gogit.PlainOpenOptions{
 			DetectDotGit:          true,
 			EnableDotGitCommonDir: true,
 		})
+	} else {
+		r, err = gogit.PlainOpenWithOptions(dir, &gogit.PlainOpenOptions{
+			DetectDotGit: true,
+		})
 	}
-	return gogit.PlainOpenWithOptions(dir, &gogit.PlainOpenOptions{
-		DetectDotGit: true,
-	})
+	if err != nil {
+		return nil, err
+	}
+	return withAlternates(r), nil
+}
+
+// withAlternates reopens r with an unconfined alternates reader when its
+// object store borrows objects through objects/info/alternates (clone
+// --reference, submodules). Without it go-git cannot see those objects
+// and reports every file as a staged addition; see openStatusRepository.
+// Linked worktrees (commondir) keep the plain open.
+func withAlternates(r *gogit.Repository) *gogit.Repository {
+	wt, err := r.Worktree()
+	if err != nil {
+		return r
+	}
+	root := wt.Filesystem.Root()
+	gitDir, err := resolveGitDir(root)
+	if err != nil {
+		return r
+	}
+	if _, err := os.Stat(filepath.Join(gitDir, "commondir")); err == nil {
+		return r
+	}
+	if _, err := os.Stat(filepath.Join(gitDir, "objects", "info", "alternates")); err != nil {
+		return r
+	}
+	if alt, err := openStatusRepository(root); err == nil {
+		return alt
+	}
+	return r
 }
 
 // resolveAuthor reads the git user.name/user.email config from the repository.

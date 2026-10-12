@@ -90,7 +90,7 @@ func markMovedSubmodules(root string, st gogit.Status) {
 		if _, err := os.Stat(filepath.Join(subDir, ".git")); err != nil {
 			continue
 		}
-		sub, err := gogit.PlainOpenWithOptions(subDir, &gogit.PlainOpenOptions{EnableDotGitCommonDir: true})
+		sub, err := openCheckout(subDir)
 		if err != nil {
 			continue
 		}
@@ -105,4 +105,15 @@ func markMovedSubmodules(root string, st gogit.Status) {
 		}
 		fs.Worktree = gogit.Modified
 	}
+}
+
+// openCheckout opens the repository whose worktree root is exactly dir
+// (no upward search — a submodule path without a checkout must not
+// resolve to the superproject), alternates-aware like openRepo.
+func openCheckout(dir string) (*gogit.Repository, error) {
+	r, err := gogit.PlainOpenWithOptions(dir, &gogit.PlainOpenOptions{EnableDotGitCommonDir: true})
+	if err != nil {
+		return nil, err
+	}
+	return withAlternates(r), nil
 }
