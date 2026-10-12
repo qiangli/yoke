@@ -320,6 +320,7 @@ var packages = map[string]Package{
 	"procguard": supPkg("parent-death process-group containment shared by agentpty and chat"),
 	"recommend": supPkg("the shell's did-you-mean; reached on command-not-found, never typed"),
 	"scope":     supPkg("the git-repo-aware store resolver shared by every store"),
+	"unit":      supPkg("the one contract and receipt vocabulary shared by skills and dag"),
 	"weavecli":  supPkg("the agent-friendly CLI conventions every front-door verb tree adopts"),
 
 	// --- unwired: capability that reaches nothing ---------------------------

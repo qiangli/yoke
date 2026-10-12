@@ -146,7 +146,7 @@ var externalPlatforms = map[string]ExternalPlatform{
 	"loom":       {OS: allOS, WindowsAsset: "gitea-1.0.0-windows-4.0-amd64.exe"},
 	"mirror":     {OS: allOS, WindowsAsset: "pure-Go orchestration over rclone (pkg/mirror); no download"},
 	"rclone":     {OS: allOS, WindowsAsset: "rclone-v1.0.0-windows-amd64.zip"},
-	"seaweedfs":  {OS: allOS, WindowsAsset: "windows_amd64.tar.gz"},
+	"seaweedfs":  {OS: allOS, WindowsAsset: "windows_amd64.zip"},
 	"zot":        {OS: allOS, WindowsAsset: "zot-windows-amd64"},
 	// toolchain provisioners (external/<lang>): each resolves a windows build;
 	// git-scm IS the windows path (git-for-windows MinGit; unix uses system git)
