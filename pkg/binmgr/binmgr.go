@@ -59,6 +59,10 @@ type Asset struct {
 	// Entrypoint is the executable's slash-separated path within the extracted
 	// tree (e.g. "go/bin/go"); required when Tree is set, ignored otherwise.
 	Entrypoint string `json:"entrypoint,omitempty"`
+	// SigstoreBundle is where this asset's Sigstore bundle is published;
+	// empty = URL + DefaultBundleSuffix. Read only when the Tool declares
+	// Sigstore.
+	SigstoreBundle string `json:"sigstore_bundle,omitempty"`
 }
 
 // Tool is a managed external binary: a logical name, a version (the cache key),
@@ -69,6 +73,10 @@ type Tool struct {
 	Name       string           `json:"name"`
 	Version    string           `json:"version"`
 	Assets     map[string]Asset `json:"assets"`
+	// Sigstore, when set, requires every download to carry a keyless
+	// Sigstore bundle signed by exactly this identity and issuer, verified
+	// before the digest check and before anything is unpacked (sigstore.go).
+	Sigstore *Sigstore `json:"sigstore,omitempty"`
 }
 
 // Platform returns the current "goos/goarch" key.
@@ -238,6 +246,15 @@ func Ensure(ctx context.Context, t Tool) (string, error) {
 	// against the release itself being tampered with.
 	if pin, ok := pinnedSHA256(t.Name, t.Version, Platform()); ok {
 		asset.SHA256, asset.SHA512, asset.MD5 = pin, "", ""
+	}
+
+	// A signed tool is verified keylessly over the downloaded bytes FIRST —
+	// exact identity, exact issuer, signature, bundle digest == pin — and a
+	// failure refuses before any decompress/install (sigstore.go).
+	if t.Sigstore != nil {
+		if err := verifySigstore(ctx, t, asset, tmpName, sum); err != nil {
+			return "", err
+		}
 	}
 
 	// Integrity is the supply-chain trust boundary — bashy is OSS and its
