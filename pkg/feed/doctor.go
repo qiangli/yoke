@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -230,6 +232,34 @@ func openclawChannelArg(args string) string {
 	return ""
 }
 
+// localHomeserver returns a Matrix chat channel's homeserver URL when it is
+// on this host (loopback), or "". A local homeserver is a server bashy would
+// start, so it answers to the signed-build policy; a remote one does not.
+func localHomeserver(args string) string {
+	f := strings.Fields(args)
+	for i, a := range f {
+		v, ok := strings.CutPrefix(a, "--homeserver=")
+		if !ok && a == "--homeserver" && i+1 < len(f) {
+			v, ok = f[i+1], true
+		}
+		if !ok {
+			continue
+		}
+		u, err := url.Parse(v)
+		if err != nil {
+			continue
+		}
+		h := u.Hostname()
+		if h == "localhost" || strings.HasSuffix(h, ".localhost") {
+			return v
+		}
+		if ip := net.ParseIP(h); ip != nil && ip.IsLoopback() {
+			return v
+		}
+	}
+	return ""
+}
+
 // doctorChannel pairs a channel with its resolved tool command, for the
 // secrets area.
 type doctorChannel struct {
@@ -274,17 +304,33 @@ func doctorChannels(ctx context.Context, p doctorProbes, dir string) ([]doctorCh
 			if miss := doctorOpenClaw(ctx, p, tc); miss != nil {
 				c.Status, c.Detail, c.Next = DoctorMissing, miss.Detail, miss.Next
 			}
+			if hs := localHomeserver(ch.Args); kind == "matrix" && hs != "" {
+				out = append(out, c)
+				c = DoctorCheck{Area: "homeserver", Name: ch.Name, Label: label, Status: DoctorMissing,
+					Detail: blockedMatrixChat + " (local homeserver " + hs + ")"}
+			}
 		}
 		out = append(out, c)
 	}
 	return resolved, out
 }
 
+// Service supply-chain policy (docs/bashy-service-supply-chain-policy.md):
+// bashy never starts a server built by a third party, only a bashy-CI build
+// signed keylessly with Sigstore. Until those builds exist, doctor reports a
+// missing gateway or local homeserver as BLOCKED with no next command —
+// never an npm install or a `gateway start` that would run a third-party
+// build.
+const (
+	blockedOpenClaw   = "blocked: waiting for the bashy-signed OpenClaw build"
+	blockedMatrixChat = "blocked: waiting for the bashy-signed Matrix chat homeserver build"
+)
+
 // doctorOpenClaw checks the OpenClaw prerequisites in dependency order and
 // returns the first one missing, or nil.
 func doctorOpenClaw(ctx context.Context, p doctorProbes, tc fleet.ToolCommand) *DoctorCheck {
 	if _, err := p.lookPath("openclaw"); err != nil {
-		return &DoctorCheck{Detail: "openclaw binary is not on PATH", Next: "npm install -g openclaw@latest"}
+		return &DoctorCheck{Detail: blockedOpenClaw + " (openclaw is not installed)"}
 	}
 	want := fmt.Sprintf("%d.%d.%d", openclawMinNode[0], openclawMinNode[1], openclawMinNode[2])
 	nctx, cancel := context.WithTimeout(ctx, doctorProbeTimeout)
@@ -304,7 +350,7 @@ func doctorOpenClaw(ctx context.Context, p doctorProbes, tc fleet.ToolCommand) *
 	err = p.gatewayUp(gctx, url)
 	cancel()
 	if err != nil {
-		return &DoctorCheck{Detail: "openclaw gateway does not answer at " + url, Next: "openclaw gateway start"}
+		return &DoctorCheck{Detail: blockedOpenClaw + " (the gateway does not answer at " + url + "; bashy does not start an unsigned gateway)"}
 	}
 	return nil
 }

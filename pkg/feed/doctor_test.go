@@ -212,22 +212,23 @@ func TestDoctorSecretMissingNamesRefOnly(t *testing.T) {
 
 func TestDoctorOpenClaw(t *testing.T) {
 	cases := []struct {
-		name     string
-		mutate   func(*doctorProbes)
-		wantNext string
+		name       string
+		mutate     func(*doctorProbes)
+		wantNext   string
+		wantDetail string
 	}{
 		{"binary missing", func(p *doctorProbes) {
 			p.lookPath = func(string) (string, error) { return "", errors.New("not found") }
-		}, "npm install -g openclaw@latest"},
+		}, "", blockedOpenClaw},
 		{"node missing", func(p *doctorProbes) {
 			p.nodeVersion = func(context.Context) (string, error) { return "", errors.New("not found") }
-		}, "bashy mise use -g node@24"},
+		}, "bashy mise use -g node@24", ""},
 		{"node too old", func(p *doctorProbes) {
 			p.nodeVersion = func(context.Context) (string, error) { return "v24.15.9", nil }
-		}, "bashy mise use -g node@24"},
+		}, "bashy mise use -g node@24", ""},
 		{"gateway down", func(p *doctorProbes) {
 			p.gatewayUp = func(context.Context, string) error { return errors.New("connection refused") }
-		}, "openclaw gateway start"},
+		}, "", blockedOpenClaw},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -241,8 +242,8 @@ func TestDoctorOpenClaw(t *testing.T) {
 				if c.Area != "channels" {
 					continue
 				}
-				if c.Status != DoctorMissing || c.Next != tc.wantNext {
-					t.Errorf("channel check = %+v, want next %q", c, tc.wantNext)
+				if c.Status != DoctorMissing || c.Next != tc.wantNext || !strings.HasPrefix(c.Detail, tc.wantDetail) {
+					t.Errorf("channel check = %+v, want next %q detail %q", c, tc.wantNext, tc.wantDetail)
 				}
 				return
 			}
@@ -331,5 +332,77 @@ func TestDoctorChannelKinds(t *testing.T) {
 				t.Errorf("text output lacks label %q (err %v):\n%s", tc.wantLabel, err, out)
 			}
 		})
+	}
+}
+
+// Service supply-chain policy: doctor never tells anyone to install or start
+// a third-party OpenClaw or Matrix chat build — a missing gateway or a local
+// homeserver is reported blocked with no next command.
+func TestDoctorNeverSuggestsThirdPartyServerBuilds(t *testing.T) {
+	mutations := map[string]func(*doctorProbes){
+		"binary missing": func(p *doctorProbes) {
+			p.lookPath = func(string) (string, error) { return "", errors.New("not found") }
+		},
+		"gateway down": func(p *doctorProbes) {
+			p.gatewayUp = func(context.Context, string) error { return errors.New("connection refused") }
+		},
+		"healthy": func(*doctorProbes) {},
+	}
+	argsSet := []string{
+		"--channel telegram --target me",
+		"--channel matrix --target @me:localhost --homeserver http://127.0.0.1:6167",
+		"--channel matrix --homeserver=http://localhost:6167",
+	}
+	for name, mutate := range mutations {
+		for _, args := range argsSet {
+			f := newDoctorFixture(t)
+			if err := SaveChannels(f.dir, []Channel{{Name: "phone", Cmd: "openclaw:send", Args: args}}); err != nil {
+				t.Fatal(err)
+			}
+			mutate(&f.env.doctor)
+			rep := RunDoctor(context.Background(), f.env)
+			var buf bytes.Buffer
+			printDoctor(&buf, rep)
+			blob, _ := json.Marshal(rep)
+			for _, text := range []string{buf.String(), string(blob)} {
+				low := strings.ToLower(text)
+				for _, bad := range []string{"npm install", "npm i ", "gateway start", "openclaw@"} {
+					if strings.Contains(low, bad) {
+						t.Errorf("%s / %s: doctor suggests %q:\n%s", name, args, bad, text)
+					}
+				}
+			}
+			for _, c := range rep.Checks {
+				if strings.HasPrefix(c.Detail, "blocked:") && (c.Status != DoctorMissing || c.Next != "") {
+					t.Errorf("%s / %s: blocked check %+v must be missing with no next", name, args, c)
+				}
+			}
+			hs := false
+			for _, c := range rep.Checks {
+				if c.Area == "homeserver" {
+					hs = true
+					if c.Label != "Matrix chat" || !strings.HasPrefix(c.Detail, blockedMatrixChat) {
+						t.Errorf("%s / %s: homeserver check %+v", name, args, c)
+					}
+				}
+			}
+			if want := strings.Contains(args, "matrix"); hs != want {
+				t.Errorf("%s / %s: homeserver check present=%v, want %v", name, args, hs, want)
+			}
+		}
+	}
+}
+
+func TestLocalHomeserver(t *testing.T) {
+	for args, want := range map[string]string{
+		"--channel matrix --homeserver http://127.0.0.1:6167": "http://127.0.0.1:6167",
+		"--homeserver=http://[::1]:8008":                      "http://[::1]:8008",
+		"--homeserver https://chat.localhost":                 "https://chat.localhost",
+		"--homeserver https://matrix.org":                     "",
+		"--channel matrix":                                    "",
+	} {
+		if got := localHomeserver(args); got != want {
+			t.Errorf("localHomeserver(%q) = %q, want %q", args, got, want)
+		}
 	}
 }
