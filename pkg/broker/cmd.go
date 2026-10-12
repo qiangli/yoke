@@ -326,7 +326,7 @@ its share policy is allow.`
 			cmd.RemoveCommand(c)
 		}
 	}
-	cmd.AddCommand(newServeCmd(), newUpCmd(), newDownCmd(), newEnvCmd(), newStickyCmd(), newPeerCmd())
+	cmd.AddCommand(newServeCmd(), newUpCmd(), newDownCmd(), newEnvCmd(), newStickyCmd(), newPeerCmd(), newCaptureCmd())
 	return cmd
 }
 
