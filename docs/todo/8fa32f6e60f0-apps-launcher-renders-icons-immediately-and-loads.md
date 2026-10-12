@@ -3,7 +3,7 @@ id: 8fa32f6e60f0
 kind: bug
 title: Apps launcher renders icons immediately and loads app content on demand
 seq: 1997
-status: assigned
+status: done
 priority: p1
 created: 2026-10-12T16:45:14.558767Z
 weave: 204
@@ -11,6 +11,11 @@ assignee: s9999-maintenance-manager
 sprint: 9999
 sprint_id: 559b491b-4bab-57d3-bad4-5ceb9acbb9da
 sprint_title: Maintenance
+closed: 2026-10-12T17:12:58.203329Z
+resolution: fixed
+closed_by: s9999-launcher-v
 ---
 
 Operator request: app landing page is slow, likely peer detection/sprint loading. Show app icons immediately after page load without fully loading each app; clicking an app not yet loaded shows a spinner until its page is ready. Scope: fast catalog/bootstrap, independent background status/session/look/inbox/peer updates, on-demand selected app navigation with accessible loading state and failure/retry. Preserve same/new-tab preferences, true links/modifier clicks, auth/device scopes, custom launchers and base-prefix mounts; no eager sprint/app-content requests. Verify with browser tests that delayed supplemental endpoints cannot delay tiles, selected slow app shows spinner and opens correctly, errors remain recoverable. Measure installed actual landing page. Do not close sprint/admin2005 or create unrelated stories.
+
+Manager verification: source 4f9b5152, consumed and installed by Bashy 56ab87d6. Catalog tiles render independently of inbox/session/settings/peer requests; selected apps navigate once after an accessible spinner paints. Persisted new-tab mode is seeded in the page before background settings arrive. Browser regressions cover six-second delayed endpoints, no eager app/Sprint content, a slow selected app, one GET per opening, error-page reload, modifier links and base-prefix mounts. Package tests and four-platform crossvet passed. Installed live launcher showed all eight apps within 56 ms while inbox requests still took about 11 seconds. Sprint and administrative story remain open at the operator's direction.
