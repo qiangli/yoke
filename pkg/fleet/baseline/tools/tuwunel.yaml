@@ -1,0 +1,53 @@
+# tuwunel — the OPTIONAL self-hosted "Matrix chat" homeserver for bashy feed
+# (Sprint 433). User-facing name is always "Matrix chat"; bare "matrix" is the
+# cloudbox matrix tunnel and is not this.
+#
+# Why tuwunel: it is the maintained, Apache-2.0 successor of conduwuit (itself
+# a Conduit fork) — conduwuit's upstream repository was archived in 2025, while
+# tuwunel ships releases on a steady cadence (v1.9.4 on 2026-10-10). It is a
+# single static-ish Rust binary with an embedded RocksDB, so a homeserver is
+# one process and one data directory.
+#
+# Not an agent CLI: kind system keeps it out of the fleet roster, staffing and
+# the managed-recipe roster test; the pin below is what bashy downloads.
+# Nothing is vendored or built here: download + exec of the project's own
+# release artifact, under its licence.
+#
+# PLATFORMS: the project publishes official binaries for LINUX ONLY
+# (x86_64 glibc, aarch64 glibc). There is NO macOS or Windows binary; macOS
+# users run it in the bashy podman Linux venue. x86_64 is the "v1" (baseline
+# x86-64) build so it runs on every amd64 host; aarch64 is the "v8" build.
+# The "all" feature flavour is the one the project recommends for general use.
+#
+# DIGESTS: each sha256 is GitHub's published asset digest for the v1.9.4
+# release, and both assets were downloaded and re-hashed on 2026-10-12 —
+# both matched.
+#
+# ARTIFACT FORMAT: each asset is the raw ELF executable compressed with zstd
+# as a single file (".zst", not a tarball). binmgr verifies the sha256 of the
+# compressed download, then stream-decompresses it into place (size-capped).
+name: tuwunel
+kind: system
+display: Matrix chat homeserver (tuwunel)
+hidden: true
+cli:
+  binary: tuwunel
+  managed:
+    source: github-release
+    version: v1.9.4
+    license: Apache-2.0
+    license_url: https://github.com/matrix-construct/tuwunel/blob/main/LICENSE
+    assets:
+      linux/amd64:
+        url: https://github.com/matrix-construct/tuwunel/releases/download/{version}/{version}-release-all-x86_64-v1-linux-gnu-tuwunel.zst
+        sha256: 78628e6d13deda9e4832aeb93f2d10332e3c4e70a8815b45e6ef773404edd5a3
+      linux/arm64:
+        url: https://github.com/matrix-construct/tuwunel/releases/download/{version}/{version}-release-all-aarch64-v8-linux-gnu-tuwunel.zst
+        sha256: 67295bb052d5973e51ce63620bbb0d7864cced19f7ad3018b1fc6e10062b97f7
+    notes: >-
+      Official GitHub release assets of matrix-construct/tuwunel v1.9.4 (Linux
+      only; no macOS/Windows binary is published). sha256 = GitHub's published
+      asset digest, re-hashed after download on 2026-10-12 (match). Each asset
+      is a zstd-compressed single executable. Service unit:
+      pkg/fleet/optional/matrix-chat.yaml.
+quirks: optional Matrix chat homeserver; Linux-only binary; not an agent CLI

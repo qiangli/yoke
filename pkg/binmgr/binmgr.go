@@ -21,7 +21,6 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 	"fmt"
-	"github.com/klauspost/compress/zstd"
 	"io"
 	"net/http"
 	"os"
@@ -29,12 +28,14 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/ulikunitz/xz"
 )
 
 // Asset is one platform's download for a tool.
 type Asset struct {
-	// URL is the download URL (a raw binary, or a .tar.gz/.tgz/.tar.xz/.zip archive).
+	// URL is the download URL (a raw binary, a single zstd-compressed binary
+	// ".zst", or a .tar.gz/.tgz/.tar.xz/.tar.zst/.zip archive).
 	URL string `json:"url"`
 	// SHA256 is the expected hex digest of the downloaded file (preferred).
 	SHA256 string `json:"sha256"`
@@ -286,6 +287,12 @@ func Ensure(ctx context.Context, t Tool) (string, error) {
 		if err := extract(tmpName, asset.URL, asset.Binary, dest); err != nil {
 			return "", err
 		}
+	case isSingleZst(asset.URL):
+		// A single executable compressed with zstd (tuwunel ships these): the
+		// digest above covered the compressed download; decompress it into place.
+		if err := decompressZst(tmpName, dest, maxDecompressedSize); err != nil {
+			return "", fmt.Errorf("binmgr: %s %s: %w", t.Name, t.Version, err)
+		}
 	default:
 		if err := os.Rename(tmpName, dest); err != nil {
 			// cross-device fallback
@@ -402,6 +409,62 @@ func writeFrom(r io.Reader, dest string) error {
 		return err
 	}
 	return os.Rename(tmp, dest)
+}
+
+// maxDecompressedSize bounds a single-file .zst install so a hostile asset (a
+// small zstd bomb) cannot fill the disk. A var so tests can lower it.
+var maxDecompressedSize int64 = 512 << 20
+
+// isSingleZst reports a single zstd-compressed file (".zst" but not a tarball).
+func isSingleZst(url string) bool {
+	return strings.HasSuffix(url, ".zst") && !strings.HasSuffix(url, ".tar.zst")
+}
+
+// decompressZst stream-decompresses src into dest (0755), refusing output
+// larger than limit. It writes a temp file beside dest and renames it into
+// place, so a corrupt, truncated or over-cap stream leaves nothing behind.
+func decompressZst(src, dest string, limit int64) error {
+	f, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	zr, err := zstd.NewReader(f)
+	if err != nil {
+		return fmt.Errorf("zstd: %w", err)
+	}
+	defer zr.Close()
+
+	out, err := os.CreateTemp(filepath.Dir(dest), ".zst-*")
+	if err != nil {
+		return err
+	}
+	tmp := out.Name()
+	ok := false
+	defer func() {
+		if !ok {
+			_ = out.Close()
+			_ = os.Remove(tmp)
+		}
+	}()
+	n, err := io.Copy(out, io.LimitReader(zr, limit+1))
+	if err != nil {
+		return fmt.Errorf("zstd decompress: %w", err)
+	}
+	if n > limit {
+		return fmt.Errorf("zstd decompress: output exceeds %d bytes, refusing", limit)
+	}
+	if err := out.Chmod(0o755); err != nil {
+		return err
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, dest); err != nil {
+		return err
+	}
+	ok = true
+	return nil
 }
 
 // extractTree unpacks an entire .tar.gz/.zip into destDir, preserving the

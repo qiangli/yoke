@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -151,6 +152,9 @@ type typedRecord[T any] struct {
 	// FileFlag gives `add` a -f/--file FILE|- spelling of the document
 	// import, kubectl-style, in place of the positional path.
 	FileFlag bool
+	// Optional returns a shipped-but-not-seeded document by name, which
+	// `add --optional NAME` imports exactly as -f would. Nil: no such flag.
+	Optional func(name string) ([]byte, error)
 }
 
 // recordSpec is typedRecord with T erased; every rec is a *T.
@@ -182,6 +186,7 @@ type recordSpec struct {
 	aliasDoc  aliasDoc
 	nameFlag  string
 	fileFlag  bool
+	optional  func(string) ([]byte, error)
 }
 
 func newRecordSpec[T any](t typedRecord[T]) *recordSpec {
@@ -212,7 +217,7 @@ func newRecordSpec[T any](t typedRecord[T]) *recordSpec {
 		showShort: t.ShowShort, showLong: t.ShowLong,
 		addDoc: t.AddDoc, setDoc: t.SetDoc,
 		flags: t.Flags, aliasDoc: t.AliasDoc, nameFlag: t.NameFlag,
-		fileFlag: t.FileFlag,
+		fileFlag: t.FileFlag, optional: t.Optional,
 	}
 	if t.Aliases != nil {
 		r.aliases = func(rec any) *[]string { return t.Aliases(rec.(*T)) }
@@ -399,20 +404,27 @@ func newAdd(kind string, opts []Option) *cobra.Command {
 	var name string
 	var aliases []string
 	var paths pathFlags
-	var file string
+	var file, optional string
 	c := r.usage(r.addDoc, "add")
 	if r.fileFlag {
 		c.Args = func(cmd *cobra.Command, args []string) error {
-			if file != "" {
+			if file != "" || optional != "" {
 				return cobra.NoArgs(cmd, args)
 			}
 			return cobra.ExactArgs(1)(cmd, args)
 		}
 		c.Flags().StringVarP(&file, "file", "f", "", "import the document in FILE (- = stdin)")
 	}
+	if r.optional != nil {
+		c.Flags().StringVar(&optional, "optional", "", "import the shipped optional "+kind+" NAME (as -f would)")
+		c.MarkFlagsMutuallyExclusive("file", "optional")
+	}
 	bound := bindFlags(c, r.flags, false)
 	c.RunE = func(cmd *cobra.Command, args []string) error {
 		cat := New(opts...)
+		if optional != "" {
+			return addOptional(cmd, cat, kind, r, optional, name, paths, force)
+		}
 		fileImport := file != ""
 		var arg string
 		if file != "" {
@@ -489,6 +501,80 @@ func newAdd(kind string, opts []Option) *cobra.Command {
 	}
 	paths.bind(c)
 	return c
+}
+
+// addOptional imports a shipped optional document through the -f path: same
+// parse, same --name and --set/--unset, same claim, guard and validating save.
+// Re-adding an identical record is a no-op; replacing a different existing
+// one needs --force.
+func addOptional(cmd *cobra.Command, cat *Catalog, kind string, r *recordSpec, optional, name string, paths pathFlags, force bool) error {
+	data, err := r.optional(optional)
+	if err != nil {
+		return err
+	}
+	fallback := optional
+	if name != "" {
+		fallback = name
+	}
+	recs, err := r.parse(fallback, data)
+	if err != nil {
+		return err
+	}
+	for _, rec := range recs {
+		if name != "" {
+			*r.name(rec) = name
+		}
+		if err := applyPathFlags(cmd, kind, rec, paths); err != nil {
+			return err
+		}
+		n := *r.name(rec)
+		if old, ok := r.get(cat, n); ok && *r.name(old) == n {
+			same, err := sameRecord(r.value(old), r.value(rec))
+			if err != nil {
+				return err
+			}
+			if same {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s unchanged\n", n)
+				continue
+			}
+			if !force {
+				return fmt.Errorf("fleet: %s %q already exists and differs from optional %q; pass --force to replace it", kind, n, optional)
+			}
+		}
+		if err := claimRecord(cat, kind, r, rec, true); err != nil {
+			return err
+		}
+		if r.beforeAdd != nil {
+			if err := r.beforeAdd(cmd, cat, rec); err != nil {
+				return err
+			}
+		}
+		if err := guardExisting(cmd.Context(), cat, kind, n, true); err != nil {
+			return err
+		}
+		if err := r.save(cat, rec); err != nil {
+			return err
+		}
+		if r.saved != nil {
+			if err := r.saved(cmd, cat, rec, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// sameRecord compares two records by their canonical YAML.
+func sameRecord(a, b any) (bool, error) {
+	x, err := Marshal(a)
+	if err != nil {
+		return false, err
+	}
+	y, err := Marshal(b)
+	if err != nil {
+		return false, err
+	}
+	return bytes.Equal(x, y), nil
 }
 
 // build makes the record a flag-built `add` saves.
