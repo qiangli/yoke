@@ -61,6 +61,8 @@ var parityCommands = [][]string{
 	{"ls-files", "-s"},
 	{"ls-files", "--others"},
 	{"ls-files", "-o", "--exclude-standard"},
+	{"log"},
+	{"show"},
 	{"log", "--oneline"},
 	{"log", "--oneline", "-1"},
 	{"log", "-1", "--format=%H"},
@@ -202,6 +204,12 @@ var parityScenarios = []parityScenario{
 		r := pRepo(t, filepath.Join(root, "r"))
 		pgit(t, r, "rm", "-q", "--cached", "with space.txt")
 		writeFileQuoted(t, r)
+		return r
+	}, false},
+	{"multiline-message", func(t *testing.T, root string) string {
+		r := pRepo(t, filepath.Join(root, "r"))
+		pwrite(t, filepath.Join(r, "a.txt"), "a2\n")
+		pgit(t, r, "commit", "-q", "-am", "subject line\n\nbody one\n  indented two\n\ntrailer: x")
 		return r
 	}, false},
 	{"both-staged-and-unstaged", func(t *testing.T, root string) string {

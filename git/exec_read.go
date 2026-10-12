@@ -484,19 +484,15 @@ func nativeLog(_ context.Context, dir string, args []string) (*ExecResult, error
 			b.WriteString(line)
 			b.WriteByte('\n')
 		} else {
-			b.WriteString("commit ")
-			b.WriteString(c.Hash.String())
-			b.WriteByte('\n')
-			b.WriteString("Author: ")
-			b.WriteString(c.Author.Name)
-			b.WriteString(" <")
-			b.WriteString(c.Author.Email)
-			b.WriteString(">\n")
-			b.WriteString("Date:   ")
-			b.WriteString(c.Author.When.Format("Mon Jan 2 15:04:05 2006 -0700"))
-			b.WriteString("\n\n    ")
-			b.WriteString(strings.TrimRight(c.Message, "\n"))
-			b.WriteString("\n\n")
+			if c.NumParents() > 1 {
+				// "Merge: <abbrev> <abbrev>" uses unique-prefix
+				// abbreviations host git computes; not reproduced.
+				return ErrUnsupported
+			}
+			if count > 1 {
+				b.WriteByte('\n')
+			}
+			b.WriteString(mediumHeader(c))
 		}
 		return nil
 	})
@@ -1834,6 +1830,9 @@ func nativeReset(_ context.Context, dir string, args []string) (*ExecResult, err
 // git's medium header and the patch from treePatch (renames, binary and
 // C-quoted names decline there). Flags, rev:path, tags and merges decline.
 func nativeShow(_ context.Context, dir string, args []string) (*ExecResult, error) {
+	if len(args) == 0 {
+		args = []string{"HEAD"}
+	}
 	if len(args) != 1 || strings.HasPrefix(args[0], "-") || strings.Contains(args[0], ":") {
 		return nil, ErrUnsupported
 	}
@@ -1850,16 +1849,7 @@ func nativeShow(_ context.Context, dir string, args []string) (*ExecResult, erro
 		return nil, ErrUnsupported
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "commit %s\nAuthor: %s <%s>\nDate:   %s\n\n",
-		commit.Hash, commit.Author.Name, commit.Author.Email,
-		commit.Author.When.Format("Mon Jan 2 15:04:05 2006 -0700"))
-	for _, line := range strings.Split(strings.TrimRight(commit.Message, "\n"), "\n") {
-		if line != "" {
-			b.WriteString("    ")
-			b.WriteString(line)
-		}
-		b.WriteByte('\n')
-	}
+	b.WriteString(mediumHeader(commit))
 	parentTree := &object.Tree{}
 	if commit.NumParents() == 1 {
 		parent, err := commit.Parent(0)
@@ -2428,4 +2418,19 @@ func branchContainsCommit(repo *gogit.Repository, branchTip, target plumbing.Has
 		return nil
 	})
 	return found
+}
+
+// mediumHeader is git's default ("medium") commit header: hash, author,
+// date, then every message line indented four spaces — blank lines too.
+func mediumHeader(c *object.Commit) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "commit %s\nAuthor: %s <%s>\nDate:   %s\n\n",
+		c.Hash, c.Author.Name, c.Author.Email,
+		c.Author.When.Format("Mon Jan 2 15:04:05 2006 -0700"))
+	for _, line := range strings.Split(strings.TrimRight(c.Message, "\n"), "\n") {
+		b.WriteString("    ")
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
