@@ -105,10 +105,13 @@ func (a *auditLog) turns(principal, session string) []Record {
 // streaming response is never buffered behind it.
 type captureWriter struct {
 	http.ResponseWriter
-	status int
-	tail   []byte
-	max    int
-	wrote  bool
+	status    int
+	tail      []byte
+	max       int
+	wrote     bool
+	full      []byte
+	truncated bool
+	capture   bool
 }
 
 func newCaptureWriter(w http.ResponseWriter) *captureWriter {
@@ -127,6 +130,15 @@ func (c *captureWriter) Write(p []byte) (int, error) {
 		c.status = http.StatusOK
 	}
 	c.wrote = true
+	if c.capture {
+		remaining := captureLimit - len(c.full)
+		if len(p) > remaining {
+			c.truncated = true
+			c.full = append(c.full, p[:remaining]...)
+		} else {
+			c.full = append(c.full, p...)
+		}
+	}
 	c.tail = append(c.tail, p...)
 	if len(c.tail) > c.max {
 		c.tail = c.tail[len(c.tail)-c.max:]
