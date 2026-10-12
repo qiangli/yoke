@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -83,31 +84,29 @@ func TestSyncRead_UnpairedIsNoop(t *testing.T) {
 	}
 }
 
-func TestFetchServerUnread_And_ServerReadSet(t *testing.T) {
+func TestServerReadSet_ExactSetAndBearer(t *testing.T) {
+	const inbox = "https://inbox.example/u/7"
+	var gotIDs []string
+	var gotAuth string
+	var calls int
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
 		if r.Method != http.MethodGet {
 			t.Errorf("expected GET, got %s", r.Method)
 		}
-		if r.URL.Path != "/api/v1/feed" {
-			t.Errorf("expected /api/v1/feed, got %s", r.URL.Path)
+		if r.URL.Path != "/api/v1/feed/read" {
+			t.Errorf("expected /api/v1/feed/read, got %s", r.URL.Path)
 		}
-		if r.URL.Query().Get("unread") != "1" {
-			t.Errorf("expected unread=1, got %q", r.URL.Query().Get("unread"))
-		}
-		if r.Header.Get("Authorization") != "Bearer token-feed-read" {
-			t.Errorf("expected Bearer token-feed-read, got %q", r.Header.Get("Authorization"))
-		}
+		gotIDs = r.URL.Query()["ids"]
+		gotAuth = r.Header.Get("Authorization")
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{
-			"timeline": "home",
-			"posts": [
-				{"id": "post-unread-1"},
-				{"id": "post-unread-2"}
-			],
-			"next": ""
-		}`))
+		json.NewEncoder(w).Encode(ServerReadResponse{
+			Read:  []string{"post-read-3"},
+			Inbox: inbox,
+		})
 	}))
 	defer srv.Close()
 
@@ -118,51 +117,59 @@ func TestFetchServerUnread_And_ServerReadSet(t *testing.T) {
 			return srv.URL, "token-feed-read"
 		},
 	}
+	dlvSpool(t, dir,
+		dlvPost{"post-unread-1", "alice", "P1"},
+		dlvPost{"post-unread-2", "bob", "P2"},
+		dlvPost{"post-read-3", "carol", "P3"})
 
-	// 1. Test unread parsing via FetchServerUnread
-	unread, err := FetchServerUnread(context.Background(), env)
+	// 1. FetchServerRead sends the spool's candidate ids and the bearer.
+	read, gotInbox, err := FetchServerRead(context.Background(), env,
+		[]string{"post-unread-1", "post-unread-2", "post-read-3"})
 	if err != nil {
-		t.Fatalf("FetchServerUnread failed: %v", err)
+		t.Fatalf("FetchServerRead failed: %v", err)
 	}
-	if !unread["post-unread-1"] || !unread["post-unread-2"] {
-		t.Errorf("expected post-unread-1 and post-unread-2 in unread set: %v", unread)
+	if gotAuth != "Bearer token-feed-read" {
+		t.Errorf("expected Bearer token-feed-read, got %q", gotAuth)
 	}
-	if unread["post-read-3"] {
-		t.Errorf("post-read-3 should not be in unread set")
+	wantIDs := map[string]bool{"post-unread-1": true, "post-unread-2": true, "post-read-3": true}
+	if len(gotIDs) != len(wantIDs) {
+		t.Fatalf("expected ids %v, got %v", wantIDs, gotIDs)
 	}
-
-	// 2. Populate spool with post-unread-1, post-unread-2, and post-read-3
-	now := time.Now()
-	for _, p := range []*Post{
-		{ID: "post-unread-1", Headline: "P1", Created: now.Format(time.RFC3339)},
-		{ID: "post-unread-2", Headline: "P2", Created: now.Format(time.RFC3339)},
-		{ID: "post-read-3", Headline: "P3", Created: now.Format(time.RFC3339)},
-	} {
-		raw, err := p.Marshal()
-		if err != nil {
-			t.Fatalf("Marshal failed: %v", err)
-		}
-		if _, err := Ingest(dir, "src", "posts/p.md", raw, now); err != nil {
-			t.Fatalf("Ingest failed: %v", err)
+	for _, id := range gotIDs {
+		if !wantIDs[id] {
+			t.Fatalf("unexpected id %q in %v", id, gotIDs)
 		}
 	}
+	if gotInbox != inbox {
+		t.Errorf("expected inbox %q, got %q", inbox, gotInbox)
+	}
+	if len(read) != 1 || !read["post-read-3"] {
+		t.Errorf("expected exactly {post-read-3}, got %v", read)
+	}
 
-	// 3. Test ServerReadSetEnv: known posts NOT in unread list should be in readSet
+	// 2. ServerReadSetEnv returns exactly the server's "read" set: older
+	// unread posts and locally-followed posts are never marked read.
 	readSet, err := ServerReadSetEnv(context.Background(), env)
 	if err != nil {
 		t.Fatalf("ServerReadSetEnv failed: %v", err)
 	}
-	if !readSet["post-read-3"] {
-		t.Errorf("expected post-read-3 to be marked read in ServerReadSet")
-	}
-	if readSet["post-unread-1"] {
-		t.Errorf("post-unread-1 should not be marked read in ServerReadSet")
-	}
-	if readSet["post-unread-2"] {
-		t.Errorf("post-unread-2 should not be marked read in ServerReadSet")
+	if len(readSet) != 1 || !readSet["post-read-3"] {
+		t.Errorf("expected exactly {post-read-3}, got %v", readSet)
 	}
 
-	// 4. Test ServerReadFunc predicate
+	// 3. ServerReadAndInboxEnv carries the inbox alongside the read set.
+	r2, in2, err := ServerReadAndInboxEnv(context.Background(), env)
+	if err != nil {
+		t.Fatalf("ServerReadAndInboxEnv failed: %v", err)
+	}
+	if len(r2) != 1 || !r2["post-read-3"] {
+		t.Errorf("expected exactly {post-read-3}, got %v", r2)
+	}
+	if in2 != inbox {
+		t.Errorf("expected inbox %q, got %q", inbox, in2)
+	}
+
+	// 4. ServerReadFunc predicate over the same set.
 	pred, err := ServerReadFunc(context.Background(), env)
 	if err != nil {
 		t.Fatalf("ServerReadFunc failed: %v", err)
@@ -173,15 +180,134 @@ func TestFetchServerUnread_And_ServerReadSet(t *testing.T) {
 	if pred("post-unread-1") {
 		t.Errorf("pred(post-unread-1) should be false (unread)")
 	}
+	if pred("never-spooled") {
+		t.Errorf("pred(never-spooled) should be false (unknown, not read)")
+	}
 
-	// 5. Test NewServerReadFunc constructor
+	// 5. NewServerReadFunc constructor.
 	constructor := NewServerReadFunc(env)
 	cReadSet, err := constructor(context.Background())
 	if err != nil {
 		t.Fatalf("NewServerReadFunc constructor failed: %v", err)
 	}
-	if !cReadSet["post-read-3"] {
-		t.Errorf("expected post-read-3 in constructor readSet")
+	if len(cReadSet) != 1 || !cReadSet["post-read-3"] {
+		t.Errorf("expected exactly {post-read-3}, got %v", cReadSet)
+	}
+
+	// 6. NewServerReadAndInbox shares one round trip per chunk.
+	dfltRead, dfltInbox := NewServerReadAndInbox(env)
+	before := calls
+	shared, err := dfltRead(context.Background())
+	if err != nil {
+		t.Fatalf("shared serverRead failed: %v", err)
+	}
+	if !shared["post-read-3"] {
+		t.Errorf("expected post-read-3 in shared readSet, got %v", shared)
+	}
+	if got := dfltInbox(context.Background()); got != inbox {
+		t.Errorf("expected shared inbox %q, got %q", inbox, got)
+	}
+	if calls-before != 1 {
+		t.Errorf("expected one shared round trip, got %d calls", calls-before)
+	}
+}
+
+func TestServerReadSet_ChunksAt500(t *testing.T) {
+	var mu sync.Mutex
+	var calls int
+	var seen []string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ids := r.URL.Query()["ids"]
+		if r.Header.Get("Authorization") != "Bearer chunk-token" {
+			t.Errorf("expected Bearer chunk-token, got %q", r.Header.Get("Authorization"))
+		}
+		if len(ids) > 500 {
+			t.Errorf("chunk of %d ids exceeds the 500 limit", len(ids))
+		}
+		mu.Lock()
+		calls++
+		seen = append(seen, ids...)
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(ServerReadResponse{Read: ids, Inbox: "https://inbox.example/x"})
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	env := Env{
+		Dir: func() string { return dir },
+		Cloud: func() (string, string) {
+			return srv.URL, "chunk-token"
+		},
+	}
+	var posts []dlvPost
+	for i := 0; i < 1200; i++ {
+		posts = append(posts, dlvPost{fmt.Sprintf("p-%04d", i), "alice", "H"})
+	}
+	dlvSpool(t, dir, posts...)
+
+	read, inbox, err := ServerReadAndInboxEnv(context.Background(), env)
+	if err != nil {
+		t.Fatalf("ServerReadAndInboxEnv failed: %v", err)
+	}
+	if calls != 3 {
+		t.Errorf("expected 3 chunked calls for 1200 ids, got %d", calls)
+	}
+	if len(seen) != 1200 {
+		t.Errorf("expected 1200 ids queried, got %d", len(seen))
+	}
+	if len(read) != 1200 {
+		t.Errorf("expected 1200 read ids, got %d", len(read))
+	}
+	if inbox != "https://inbox.example/x" {
+		t.Errorf("expected inbox URL, got %q", inbox)
+	}
+}
+
+func TestServerReadSet_UnpairedIsNoop(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected HTTP call when unpaired")
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	// Empty token means unpaired.
+	env := Env{
+		Dir: func() string { return dir },
+		Cloud: func() (string, string) {
+			return srv.URL, ""
+		},
+	}
+	dlvSpool(t, dir, dlvPost{"post-1", "alice", "P1"})
+
+	read, inbox, err := FetchServerRead(context.Background(), env, []string{"post-1"})
+	if err != nil {
+		t.Fatalf("expected nil error when unpaired, got: %v", err)
+	}
+	if read != nil {
+		t.Errorf("expected nil map when unpaired, got %v", read)
+	}
+	if inbox != "" {
+		t.Errorf("expected empty inbox when unpaired, got %q", inbox)
+	}
+
+	set, err := ServerReadSetEnv(context.Background(), env)
+	if err != nil {
+		t.Fatalf("expected nil error when unpaired, got: %v", err)
+	}
+	if set != nil {
+		t.Errorf("expected nil map when unpaired, got %v", set)
+	}
+
+	dfltRead, dfltInbox := NewServerReadAndInbox(env)
+	if r, err := dfltRead(context.Background()); err != nil || r != nil {
+		t.Errorf("expected nil map and nil error when unpaired, got %v %v", r, err)
+	}
+	if got := dfltInbox(context.Background()); got != "" {
+		t.Errorf("expected empty inbox when unpaired, got %q", got)
 	}
 }
 

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -382,6 +384,101 @@ func TestDeliverQuietHoursImmediateAuthor(t *testing.T) {
 	te.mustRun("deliver")
 	if n := len(fx.calls(t)); n != 2 {
 		t.Fatalf("everything was consumed, yet %d calls", n)
+	}
+}
+
+func TestDeliverDefaultWiring_ServerReadAndInboxDryRun(t *testing.T) {
+	te := newTestEnv(t, nil)
+	fx := newDeliverFixture(t, te)
+	const srvInbox = "https://inbox.example/u/9"
+	var calls int
+	var gotIDs []string
+	var gotAuth string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		if r.URL.Path != "/api/v1/feed/read" {
+			t.Errorf("expected /api/v1/feed/read, got %s", r.URL.Path)
+		}
+		gotIDs = r.URL.Query()["ids"]
+		gotAuth = r.Header.Get("Authorization")
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(ServerReadResponse{
+			Read:  []string{"p4"},
+			Inbox: srvInbox,
+		})
+	}))
+	defer srv.Close()
+
+	// Default wiring: no explicit serverRead/inboxURL funcs.
+	te.env.Cloud = func() (string, string) { return srv.URL, "deliver-token" }
+	te.env.serverRead = nil
+	te.env.inboxURL = nil
+
+	addChannel(te, "c", "--max", "2")
+	dlvSpool(t, te.env.dir(),
+		dlvPost{"p1", "alice", "First post"},
+		dlvPost{"p2", "bob", "Second post"},
+		dlvPost{"p3", "carol", "Third post"},
+		dlvPost{"p4", "dave", "Fourth read on web"})
+
+	out := te.mustRun("deliver", "--dry-run")
+	if calls != 1 {
+		t.Errorf("expected one shared server round trip, got %d calls", calls)
+	}
+	if gotAuth != "Bearer deliver-token" {
+		t.Errorf("expected Bearer deliver-token, got %q", gotAuth)
+	}
+	if len(gotIDs) != 4 {
+		t.Errorf("expected 4 candidate ids queried, got %v", gotIDs)
+	}
+	if !strings.Contains(out, "First post") || !strings.Contains(out, "Second post") {
+		t.Errorf("dry-run missing visible items:\n%s", out)
+	}
+	if strings.Contains(out, "Fourth read on web") {
+		t.Errorf("server-read post was not dropped:\n%s", out)
+	}
+	if !strings.Contains(out, "+1 more → "+srvInbox) {
+		t.Errorf("inbox URL did not flow into the +N more link:\n%s", out)
+	}
+	if n := len(fx.calls(t)); n != 0 {
+		t.Fatalf("dry-run ran the command %d times", n)
+	}
+}
+
+func TestDeliverDefaultWiring_Server500WarnsAndFallsBack(t *testing.T) {
+	te := newTestEnv(t, nil)
+	fx := newDeliverFixture(t, te)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "server boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	te.env.Cloud = func() (string, string) { return srv.URL, "deliver-token" }
+	te.env.serverRead = nil
+	te.env.inboxURL = nil
+
+	addChannel(te, "c")
+	dlvSpool(t, te.env.dir(), dlvPost{"p1", "alice", "Only post"})
+
+	out, stderr, err := te.run("deliver", "--dry-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr, "server read set unavailable") {
+		t.Errorf("expected a warning about the unavailable server set, got %q", stderr)
+	}
+	if !strings.Contains(out, "Only post") {
+		t.Errorf("fallback to the local cursor dropped the post:\n%s", out)
+	}
+	if n := len(fx.calls(t)); n != 0 {
+		t.Fatalf("dry-run ran the command %d times", n)
 	}
 }
 

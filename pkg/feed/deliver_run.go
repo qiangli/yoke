@@ -309,17 +309,22 @@ func runDeliver(c *cobra.Command, env Env, only string, dryRun bool) error {
 	if err != nil {
 		return err
 	}
-	var serverRead map[string]bool
-	if env.serverRead != nil {
-		if serverRead, err = env.serverRead(ctx); err != nil {
-			fmt.Fprintf(warn, "warning: server read set unavailable (%s); using the local read cursor only\n", oneLine(err.Error()))
-			serverRead = nil
+	serverReadFn, inboxFn := env.serverRead, env.inboxURL
+	if serverReadFn == nil || inboxFn == nil {
+		dfltRead, dfltInbox := NewServerReadAndInbox(env)
+		if serverReadFn == nil {
+			serverReadFn = dfltRead
+		}
+		if inboxFn == nil {
+			inboxFn = dfltInbox
 		}
 	}
-	inbox := ""
-	if env.inboxURL != nil {
-		inbox = env.inboxURL(ctx)
+	var serverRead map[string]bool
+	if serverRead, err = serverReadFn(ctx); err != nil {
+		fmt.Fprintf(warn, "warning: server read set unavailable (%s); using the local read cursor only\n", oneLine(err.Error()))
+		serverRead = nil
 	}
+	inbox := inboxFn(ctx)
 	st, err := loadChannelState(dir)
 	if err != nil {
 		return err
