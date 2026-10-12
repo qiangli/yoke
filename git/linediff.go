@@ -31,6 +31,9 @@ type lineDiff struct {
 	ca, cb []bool // changed flags
 	la, lb []string
 	indent bool // use the indent heuristic when sliding
+	// declined is set when the search gave up on a box too large for
+	// the verified give-up rule; the result may differ from host git's.
+	declined bool
 }
 
 func newLineDiff(a, b []string, indent bool) *lineDiff {
@@ -145,8 +148,51 @@ func (d *lineDiff) middleSnake(aLo, aHi, bLo, bHi int) (int, int, int, int) {
 				return aLo + x0, bLo + y0, aLo + x, bLo + y
 			}
 		}
+		if D >= searchCostLimit {
+			if n+m > giveUpVerifiedSize {
+				d.declined = true
+			}
+			return d.giveUpSplit(D, n, m, delta, off, fwd, bwd, aLo, bLo)
+		}
 	}
 	return aLo + n, bLo + m, aLo + n, bLo + m
+}
+
+// searchCostLimit bounds the search like host git's default (non
+// --minimal) mode: once a middle-snake search has run this many rounds
+// without the passes meeting, it stops and splits at the furthest point
+// either pass has reached (giveUpSplit). Established black-box on
+// boxes of up to giveUpVerifiedSize lines (both sides together); beyond
+// that host git splits differently, so a give-up there marks the diff
+// declined and callers defer to host git.
+const (
+	searchCostLimit    = 256
+	giveUpVerifiedSize = 64000
+)
+
+// giveUpSplit picks the split for a search that hit searchCostLimit: the
+// forward point with the largest x+y (the highest diagonal on ties) or
+// the backward point with the smallest x+y (likewise), whichever got
+// further from its corner; ties go to the backward point.
+func (d *lineDiff) giveUpSplit(D, n, m, delta, off int, fwd, bwd []int, aLo, bLo int) (int, int, int, int) {
+	fx, fy, fbest := 0, 0, -1
+	for k := D; k >= -D; k -= 2 {
+		x := min(fwd[off+k], n)
+		if y := x - k; y >= 0 && y <= m && x+y > fbest {
+			fx, fy, fbest = x, y, x+y
+		}
+	}
+	bx, by, bbest := n, m, n+m+1
+	for k := delta + D; k >= delta-D; k -= 2 {
+		x := max(bwd[off+k], 0)
+		if y := x - k; y >= 0 && y <= m && x+y < bbest {
+			bx, by, bbest = x, y, x+y
+		}
+	}
+	if fbest > n+m-bbest {
+		return aLo + fx, bLo + fy, aLo + fx, bLo + fy
+	}
+	return aLo + bx, bLo + by, aLo + bx, bLo + by
 }
 
 // compact slides each group of changed lines in x (ids xs, flags cx)
@@ -358,55 +404,39 @@ func lineIndent(s string) int {
 //     difference of their summed edge indents, plus the difference of
 //     their summed edge penalties;
 //   - an edge's indent is that of the line after the split, of the next
-//     non-blank line when that line is blank, and -1 at end of file;
-//   - an edge's penalty is a weighted sum of the categorical features
-//     sliderEdgeFeatures reports (blank runs around the split, and how
-//     the indent moves into and out of the split line).
-const indentSignWeight = 107
+//     non-blank line when that line is blank, and -1 when only blank
+//     lines or the end of file follow;
+//   - an edge's penalty is a weighted sum of the features
+//     sliderEdgeFeatures reports: the blank runs around the split, and
+//     whether the indent rises, holds or falls into the split line (a
+//     fall further split by whether the following line goes back in).
+const indentSignWeight = 446
 
 var sliderPenaltyWeights = map[string]int{
-	"down:b":            21,
-	"down:b:blankat":    15,
-	"down:b:deeper":     -1,
-	"down:b:level":      2,
-	"down:b:shallower":  5,
-	"down:nb":           28,
-	"down:nb:deeper":    9,
-	"down:nb:end":       7,
-	"down:nb:level":     8,
-	"down:nb:shallower": 4,
-	"eof":               -6,
-	"post=0":            7,
-	"post=1":            -3,
-	"post=2":            -3,
-	"post=3":            -1,
-	"postBlankN":        -12,
-	"pre=0":             4,
-	"pre=3":             -4,
-	"preBlankN":         -20,
-	"preNone":           -3,
-	"same:b":            4,
-	"same:b:blankat":    4,
-	"same:b:deeper":     -2,
-	"same:b:end":        1,
-	"same:b:level":      -1,
-	"same:b:shallower":  2,
-	"same:nb":           -4,
-	"same:nb:end":       -2,
-	"same:nb:level":     1,
-	"same:nb:shallower": -3,
-	"sof":               3,
-	"totBlankN":         -32,
-	"up:b":              11,
-	"up:b:blankat":      6,
-	"up:b:deeper":       7,
-	"up:b:end":          -4,
-	"up:b:level":        1,
-	"up:b:shallower":    1,
-	"up:nb":             -10,
-	"up:nb:end":         -4,
-	"up:nb:level":       -3,
-	"up:nb:shallower":   -3,
+	"down:b":          101,
+	"down:b:dedent":   50,
+	"down:b:outdent":  51,
+	"down:nb":         134,
+	"down:nb:dedent":  65,
+	"down:nb:outdent": 69,
+	"eof":             24,
+	"post=0":          13,
+	"post=1":          3,
+	"post=2":          -5,
+	"post=3":          -11,
+	"postBlankN":      -39,
+	"pre=0":           9,
+	"pre=1":           2,
+	"pre=2":           -2,
+	"pre=3":           -9,
+	"preBlankN":       -88,
+	"preNone":         30,
+	"same:b":          27,
+	"same:nb":         22,
+	"sof":             3,
+	"totBlankN":       -127,
+	"up:b":            97,
+	"up:nb":           -7,
 }
 
 // edgeFacts are the observations around a split between lines[s-1] and
@@ -450,7 +480,7 @@ func edgeIndent(f edgeFacts) int {
 	case f.postIndent >= 0:
 		return f.postIndent
 	}
-	return 0
+	return -1
 }
 
 // sliderEdgeFeatures names the categorical features of an edge.
@@ -486,27 +516,21 @@ func sliderEdgeFeatures(f edgeFacts, add func(string, int)) {
 	if tot > 0 {
 		any = "b"
 	}
-	rel := "same"
-	if eff > f.preIndent {
-		rel = "up"
-	} else if eff < f.preIndent {
-		rel = "down"
-	}
-	nxt := "end"
-	if f.postIndent >= 0 && f.at >= 0 {
-		switch {
-		case f.postIndent > eff:
-			nxt = "deeper"
-		case f.postIndent < eff:
-			nxt = "shallower"
-		default:
-			nxt = "level"
+	switch {
+	case eff > f.preIndent:
+		add("up:"+any, 1)
+	case eff == f.preIndent:
+		add("same:"+any, 1)
+	default:
+		// A dedent into the split line is weighed by whether the line
+		// after it goes back in (an outdent inside a block) or not.
+		add("down:"+any, 1)
+		if f.at >= 0 && f.postIndent > eff {
+			add("down:"+any+":outdent", 1)
+		} else {
+			add("down:"+any+":dedent", 1)
 		}
-	} else if f.at < 0 {
-		nxt = "blankat"
 	}
-	add(rel+":"+any, 1)
-	add(rel+":"+any+":"+nxt, 1)
 }
 
 type sliderScore struct{ indent, penalty int }
@@ -582,7 +606,8 @@ func abs(x int) int {
 //   - a line with at least frequentLimit(len(own file)) equals in the
 //     other file is "frequent"; a frequent line is dropped too when,
 //     scanning outward from it through dropped-unique and frequent lines
-//     up to the nearest ordinary line, unique lines lie on both sides
+//     up to the nearest ordinary line (at most scanLimit lines each way),
+//     unique lines lie on both sides
 //     and number at least 3 x (frequent lines met, itself included) + 4;
 //   - everything else is kept.
 //
@@ -596,26 +621,39 @@ func (d *lineDiff) compareDiscarding() {
 	for _, v := range d.b {
 		cntB[v]++
 	}
-	ka := keptLines(d.a, cntB, d.ca)
-	kb := keptLines(d.b, cntA, d.cb)
+	// The common prefix and suffix match outright; classification and its
+	// scans see only the middle (their edges act as file edges), while
+	// counts and limits come from the whole files.
+	lo := 0
+	for lo < len(d.a) && lo < len(d.b) && d.a[lo] == d.b[lo] {
+		lo++
+	}
+	hiA, hiB := len(d.a), len(d.b)
+	for hiA > lo && hiB > lo && d.a[hiA-1] == d.b[hiB-1] {
+		hiA--
+		hiB--
+	}
+	ka := keptLines(d.a[lo:hiA], cntB, frequentLimit(len(d.a)), d.ca[lo:hiA])
+	kb := keptLines(d.b[lo:hiB], cntA, frequentLimit(len(d.b)), d.cb[lo:hiB])
 	sub := &lineDiff{a: make([]int, len(ka)), b: make([]int, len(kb))}
 	for i, p := range ka {
-		sub.a[i] = d.a[p]
+		sub.a[i] = d.a[lo+p]
 	}
 	for j, p := range kb {
-		sub.b[j] = d.b[p]
+		sub.b[j] = d.b[lo+p]
 	}
 	sub.ca = make([]bool, len(ka))
 	sub.cb = make([]bool, len(kb))
 	sub.compare(0, len(ka), 0, len(kb))
+	d.declined = sub.declined
 	for i, c := range sub.ca {
 		if c {
-			d.ca[ka[i]] = true
+			d.ca[lo+ka[i]] = true
 		}
 	}
 	for j, c := range sub.cb {
 		if c {
-			d.cb[kb[j]] = true
+			d.cb[lo+kb[j]] = true
 		}
 	}
 }
@@ -631,37 +669,31 @@ func frequentLimit(n int) int {
 }
 
 // scanDropped walks from i in direction step over unique (1) and
-// frequent (2) lines until an ordinary one or the file edge, returning
-// the unique lines met and the frequent lines counted: those with a
-// unique line beyond them, plus trailing ones when the walk ends at the
-// file edge (trailing ones before an ordinary line do not count).
+// frequent (2) lines until an ordinary one, the trimmed edge (the caller
+// has removed the common prefix and suffix) or scanLimit lines, and
+// returns the unique and frequent lines met.
 func scanDropped(class []int, i, step int) (uniq, freq int) {
-	pending := 0
-	j := i + step
-	for ; j >= 0 && j < len(class) && class[j] != 0; j += step {
+	for j, n := i+step, 0; j >= 0 && j < len(class) && class[j] != 0 && n < scanLimit; j, n = j+step, n+1 {
 		if class[j] == 1 {
 			uniq++
-			freq += pending
-			pending = 0
 		} else {
-			pending++
+			freq++
 		}
-	}
-	if j < 0 || j >= len(class) {
-		freq += pending
 	}
 	return uniq, freq
 }
 
+// scanLimit caps each scanDropped walk; host git looks no further.
+const scanLimit = 100
+
 // keptLines classifies xs against the other file's counts, marks the
 // dropped lines changed, and returns the positions it keeps.
-func keptLines(xs []int, other map[int]int, cx []bool) []int {
+func keptLines(xs []int, other map[int]int, limit int, cx []bool) []int {
 	const (
 		keep = iota
 		unique
 		frequent
 	)
-	limit := frequentLimit(len(xs))
 	class := make([]int, len(xs))
 	for i, v := range xs {
 		switch n := other[v]; {
@@ -675,8 +707,6 @@ func keptLines(xs []int, other map[int]int, cx []bool) []int {
 	for i, c := range class {
 		drop := c == unique
 		if c == frequent {
-			// Frequent lines count only when a unique line lies beyond
-			// them in the scan; trailing ones before the stop do not.
 			u0, f0 := scanDropped(class, i, -1)
 			u1, f1 := scanDropped(class, i, +1)
 			drop = u0 > 0 && u1 > 0 && u0+u1 >= 3*(1+f0+f1)+4

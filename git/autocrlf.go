@@ -28,9 +28,26 @@ import (
 // then global ($XDG_CONFIG_HOME/git/config, ~/.gitconfig), then system
 // (unless GIT_CONFIG_NOSYSTEM) — normalized to "true", "input" or "false".
 func coreAutoCRLF(repo *gogit.Repository) string {
+	if v, ok := configValue(repo, "core", "autocrlf"); ok {
+		return autocrlfValue(v)
+	}
+	return "false"
+}
+
+// configValue resolves section.name with git's precedence — local, then
+// global, then system (gitConfigFiles). A key present with an empty
+// value reports ok with "".
+func configValue(repo *gogit.Repository, section, name string) (string, bool) {
+	lookup := func(c *config.Config) (string, bool) {
+		sec := c.Raw.Section(section)
+		if !sec.HasOption(name) {
+			return "", false
+		}
+		return sec.Option(name), true
+	}
 	if cfg, err := repo.Config(); err == nil {
-		if v := cfg.Raw.Section("core").Option("autocrlf"); v != "" {
-			return autocrlfValue(v)
+		if v, ok := lookup(cfg); ok {
+			return v, true
 		}
 	}
 	for _, p := range gitConfigFiles() {
@@ -42,11 +59,11 @@ func coreAutoCRLF(repo *gogit.Repository) string {
 		if c.Unmarshal(data) != nil {
 			continue
 		}
-		if v := c.Raw.Section("core").Option("autocrlf"); v != "" {
-			return autocrlfValue(v)
+		if v, ok := lookup(c); ok {
+			return v, true
 		}
 	}
-	return "false"
+	return "", false
 }
 
 func autocrlfValue(v string) string {

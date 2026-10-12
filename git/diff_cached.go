@@ -191,7 +191,36 @@ func stagedPatch(repo *gogit.Repository, rev string, paths []string, noRenames b
 	if err != nil {
 		return "", ErrUnsupported
 	}
-	return treePatch(wt.Filesystem.Root(), base, idxTree, paths, noRenames, abbr)
+	indent, err := diffIndentHeuristic(repo)
+	if err != nil {
+		return "", err
+	}
+	return treePatch(wt.Filesystem.Root(), base, idxTree, paths, noRenames, indent, abbr)
+}
+
+// diffIndentHeuristic reads the configuration that shapes hunks:
+// diff.indentHeuristic (default on) is honored, and any diff.algorithm
+// other than git's default Myers declines (ErrUnsupported) — the
+// patience, histogram and minimal searches are not reproduced.
+func diffIndentHeuristic(repo *gogit.Repository) (bool, error) {
+	if v, ok := configValue(repo, "diff", "algorithm"); ok {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "myers", "default":
+		default:
+			return false, ErrUnsupported
+		}
+	}
+	v, ok := configValue(repo, "diff", "indentHeuristic")
+	if !ok {
+		return true, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "true", "yes", "on", "1":
+		return true, nil
+	case "false", "no", "off", "0":
+		return false, nil
+	}
+	return false, ErrUnsupported
 }
 
 // treePatch renders `git diff base target` the way host git prints it
@@ -199,7 +228,7 @@ func stagedPatch(repo *gogit.Repository, rev string, paths []string, noRenames b
 // names), declining (ErrUnsupported) on what it cannot match: binary
 // hunks, C-quoted names, and — unless noRenames — any pair host git's
 // rename detection would join.
-func treePatch(root string, base, target *object.Tree, paths []string, noRenames bool, abbr *abbreviator) (string, error) {
+func treePatch(root string, base, target *object.Tree, paths []string, noRenames, indent bool, abbr *abbreviator) (string, error) {
 	changes, err := object.DiffTree(base, target)
 	if err != nil {
 		return "", ErrUnsupported
@@ -315,7 +344,11 @@ func treePatch(root string, base, target *object.Tree, paths []string, noRenames
 		}
 		la, lb := diffSplitLines(from), diffSplitLines(to)
 		b.WriteString(block[:at+1])
-		b.WriteString(newLineDiff(la, lb, true).unified(3, funcNamer(la)))
+		ld := newLineDiff(la, lb, indent)
+		if ld.declined {
+			return "", ErrUnsupported // an expensive diff too large for the verified search model
+		}
+		b.WriteString(ld.unified(3, funcNamer(la)))
 	}
 	return b.String(), nil
 }

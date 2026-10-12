@@ -17,13 +17,17 @@ import (
 // (LINEDIFF_REAL_REPOS, comma-separated paths) and compares, file by
 // file, host git's patch hunks with the engine's and with the production
 // stagedPatch path. It reports the identical share per repository and
-// fails below LINEDIFF_REAL_MIN percent (default 98).
+// fails below LINEDIFF_REAL_MIN percent (default 100). LINEDIFF_REAL_N sets
+// how many commits per repository are replayed (default 150).
 func TestLineDiffRealHistory(t *testing.T) {
 	repos := os.Getenv("LINEDIFF_REAL_REPOS")
 	if repos == "" {
 		t.Skip("set LINEDIFF_REAL_REPOS to replay real history")
 	}
-	minPct := 98.0
+	minPct, commits := 100.0, "150"
+	if v := os.Getenv("LINEDIFF_REAL_N"); v != "" {
+		commits = v
+	}
 	if v := os.Getenv("LINEDIFF_REAL_MIN"); v != "" {
 		if _, err := fmt.Sscan(v, &minPct); err != nil {
 			t.Fatal(err)
@@ -35,9 +39,11 @@ func TestLineDiffRealHistory(t *testing.T) {
 	}
 	for _, dir := range strings.Split(repos, ",") {
 		total, engine, prod := 0, 0, 0
-		for _, c := range strings.Fields(hg(dir, "rev-list", "--no-merges", "-n", "150", "HEAD")) {
+		for _, c := range strings.Fields(hg(dir, "rev-list", "--no-merges", "-n", commits, "HEAD")) {
 			for _, f := range strings.Split(strings.TrimSpace(hg(dir, "diff-tree", "--no-commit-id", "-r", "--diff-filter=M", "--name-only", c)), "\n") {
-				if f == "" {
+				// gitlinks render as "Subproject commit" lines and native
+				// patches decline them (stagedPatch); skip them here.
+				if f == "" || hg(dir, "cat-file", "-t", c+":"+f) != "blob\n" {
 					continue
 				}
 				a, b := hg(dir, "show", c+"^:"+f), hg(dir, "show", c+":"+f)

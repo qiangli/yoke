@@ -146,15 +146,20 @@ host git black-box (`linediff_oracle_test.go`; git's xdiff is LGPL and
 was not used). Established rules: Myers bisection with git's
 tie-breaks; lines unique to one side dropped before the search;
 "frequent" lines (>= 2^(floor(log4 n)+1) equals) dropped inside long
-runs of changed lines; group compaction; and the indent-heuristic slider
-choice (a size+1 window, top-down scan, sign-of-indent comparator,
-fitted penalties). Measured: random edits 100% (no heuristic) / 99.9%
-(default); real history of six dhnt repositories 99.5% byte-identical
-(`LINEDIFF_REAL_REPOS=... go test -run TestLineDiffRealHistory`), up from
-85% with go-git's diff. **Known residual (~0.5% of real files):** some
-interactions of frequent lines with changed-line runs and a few slider
-choices on larger groups still differ; such patches stay valid and
-apply identically.
+runs of changed lines (scans capped at 100 lines each way); the bounded
+search of git's default (non `--minimal`) mode, which gives up after 256
+rounds and splits at the furthest point reached (verified on search
+boxes up to 64,000 lines; a give-up on a larger box declines to host
+git); group compaction; and
+the indent-heuristic slider choice (a size+1 window, top-down scan,
+sign-of-indent comparator, penalties fitted on ~46k host decisions).
+Measured: 12,000 random edits 100% with and without the heuristic;
+large heavily edited files 100%; real history of 19 repositories
+(LINEDIFF_REAL_REPOS=... LINEDIFF_REAL_N=400 go test -run
+TestLineDiffRealHistory) byte-identical, up from 85% with go-git's
+diff. `diff.indentHeuristic` is honored; a `diff.algorithm` other than
+Myers declines. Any mismatch found later is a bug: minimize it against
+host git and fix the model.
 
 Declined by design (host git via `--external`): long-form `status`,
 `status -b`/`--ignored`/pathspecs, any `status`/`diff`/`ls-files` over an

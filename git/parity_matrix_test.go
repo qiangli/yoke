@@ -567,3 +567,52 @@ func TestNativeDiffCached_UnchangedGitlink(t *testing.T) {
 		}
 	}
 }
+
+// TestNativeDiffCached_DiffConfig: diff.indentHeuristic is honored and a
+// diff.algorithm other than Myers declines to host git.
+func TestNativeDiffCached_DiffConfig(t *testing.T) {
+	if _, err := osexec.LookPath("git"); err != nil {
+		t.Skip("no host git on PATH")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_AUTHOR_NAME", "t")
+	t.Setenv("GIT_AUTHOR_EMAIL", "t@example.com")
+	t.Setenv("GIT_COMMITTER_NAME", "t")
+	t.Setenv("GIT_COMMITTER_EMAIL", "t@example.com")
+	dir := t.TempDir()
+	pgit(t, dir, "init", "-q")
+	pwrite(t, filepath.Join(dir, "f.go"), "func f() {\n\ty()\n\t}\n\n\t}\n\ty()\n}\n")
+	pgit(t, dir, "add", "f.go")
+	pgit(t, dir, "commit", "-q", "-m", "one")
+	pwrite(t, filepath.Join(dir, "f.go"), "func f() {\n\ty()\n\t}\n\n\t}\n\n\t}\n\ty()\n}\n")
+	pgit(t, dir, "add", "f.go")
+	argv := []string{"diff", "--cached"}
+	var outs []string
+	for _, on := range []string{"true", "false"} {
+		pgit(t, dir, "config", "diff.indentHeuristic", on)
+		got, err := Exec(context.Background(), dir, argv)
+		if err != nil {
+			t.Fatalf("indentHeuristic=%s: %v", on, err)
+		}
+		host, _ := runHost(context.Background(), dir, argv)
+		if got.Stdout != host.Stdout {
+			t.Errorf("indentHeuristic=%s:\nnative:\n%s\nhost:\n%s", on, got.Stdout, host.Stdout)
+		}
+		outs = append(outs, host.Stdout)
+	}
+	if outs[0] == outs[1] {
+		t.Fatal("fixture does not exercise the indent heuristic")
+	}
+	for _, alg := range []string{"histogram", "patience", "minimal"} {
+		pgit(t, dir, "config", "diff.algorithm", alg)
+		if _, err := Exec(context.Background(), dir, argv); !errors.Is(err, ErrUnsupported) {
+			t.Errorf("diff.algorithm=%s: want ErrUnsupported, got %v", alg, err)
+		}
+	}
+	pgit(t, dir, "config", "diff.algorithm", "myers")
+	if _, err := Exec(context.Background(), dir, argv); err != nil {
+		t.Errorf("diff.algorithm=myers: %v", err)
+	}
+}

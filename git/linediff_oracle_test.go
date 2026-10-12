@@ -112,20 +112,82 @@ func TestLineDiffOracle(t *testing.T) {
 			got := nativeHunks(a, b, indent)
 			if got != want {
 				bad++
-				report := t.Logf
-				if !indent {
-					report = t.Errorf // the edit script itself must be exact
-				}
 				if bad <= 3 {
-					report("indent=%v case %d differs\n--- a ---\n%q\n--- b ---\n%q\n--- native ---\n%s--- host ---\n%s", indent, c, a, b, got, want)
+					t.Errorf("indent=%v case %d differs\n--- a ---\n%q\n--- b ---\n%q\n--- native ---\n%s--- host ---\n%s", indent, c, a, b, got, want)
 				}
 			}
 		}
 		t.Logf("indent=%v: %d/%d identical", indent, n-bad, n)
-		// Slider placement is a fitted model (see linediff.go); it must
-		// stay at 99% or better on this corpus.
-		if indent && float64(n-bad) < 0.99*float64(n) {
-			t.Errorf("indent heuristic: %d/%d identical, below 99%%", n-bad, n)
+	}
+}
+
+// TestLineDiffOracleExpensive covers host git's bounded search: large,
+// heavily edited files over a small alphabet make the middle-snake
+// search hit searchCostLimit, where host git (without --minimal) gives
+// up and splits early. Native patches must match it exactly.
+func TestLineDiffOracleExpensive(t *testing.T) {
+	if _, err := osexec.LookPath("git"); err != nil {
+		t.Skip("no host git on PATH")
+	}
+	if testing.Short() {
+		t.Skip("slow")
+	}
+	dir := t.TempDir()
+	r := rand.New(rand.NewSource(11))
+	for c := 0; c < 12; c++ {
+		alpha := 2 + r.Intn(8)
+		rate := r.Float64()
+		var la, lb []string
+		for i, n := 0, 300+r.Intn(1500); i < n; i++ {
+			la = append(la, strconv.Itoa(r.Intn(alpha)))
+		}
+		for _, l := range la {
+			if r.Float64() < rate {
+				if r.Intn(2) == 0 {
+					continue
+				}
+				lb = append(lb, strconv.Itoa(r.Intn(alpha)))
+			}
+			lb = append(lb, l)
+		}
+		for _, indent := range []bool{false, true} {
+			a, b := joinLines(la, true), joinLines(lb, true)
+			if got, want := nativeHunks(a, b, indent), hostHunks(t, dir, a, b, indent); got != want {
+				t.Errorf("case %d (indent=%v, %d/%d lines) differs from host git", c, indent, len(la), len(lb))
+			}
+		}
+	}
+}
+
+// TestLineDiffDeclinesLargeGiveUp: a search that gives up on a box
+// larger than giveUpVerifiedSize is declined (callers defer to host
+// git); a smaller expensive diff and a large cheap one are served.
+func TestLineDiffDeclinesLargeGiveUp(t *testing.T) {
+	r := rand.New(rand.NewSource(5))
+	gen := func(n int, rate float64) ([]string, []string) {
+		var a, b []string
+		for i := 0; i < n; i++ {
+			a = append(a, strconv.Itoa(r.Intn(4))+"\n")
+		}
+		for _, l := range a {
+			if r.Float64() < rate {
+				if r.Intn(2) == 0 {
+					continue
+				}
+				b = append(b, strconv.Itoa(r.Intn(4))+"\n")
+			}
+			b = append(b, l)
+		}
+		return a, b
+	}
+	for _, c := range []struct {
+		n    int
+		rate float64
+		want bool
+	}{{2000, 0.3, false}, {40000, 0.3, true}, {40000, 0.001, false}} {
+		a, b := gen(c.n, c.rate)
+		if got := newLineDiff(a, b, false).declined; got != c.want {
+			t.Errorf("n=%d rate=%v: declined=%v, want %v", c.n, c.rate, got, c.want)
 		}
 	}
 }

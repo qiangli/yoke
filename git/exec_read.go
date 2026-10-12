@@ -1995,7 +1995,11 @@ func nativeShow(_ context.Context, dir string, args []string) (*ExecResult, erro
 	if err != nil {
 		return nil, ErrUnsupported
 	}
-	patch, err := treePatch(wt.Filesystem.Root(), parentTree, commitTree, nil, false, abbr)
+	indent, err := diffIndentHeuristic(repo)
+	if err != nil {
+		return nil, err
+	}
+	patch, err := treePatch(wt.Filesystem.Root(), parentTree, commitTree, nil, false, indent, abbr)
 	if err != nil {
 		return nil, ErrUnsupported
 	}
