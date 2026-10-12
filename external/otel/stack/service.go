@@ -88,12 +88,20 @@ func NewService(cfg *Config, dataDir string) (*Service, error) {
 		mgr.AddOTLPRoute(path, u)
 	}
 
+	// OTLP/gRPC loopback receiver for Kopia (kopia v0.23.1 uses
+	// otlptracegrpc.NewUnstarted which speaks gRPC only). It listens on
+	// 127.0.0.1:31416 (port next to 31415) and forwards to the same Victoria
+	// HTTP stores via the local proxy. Never binds non-loopback, never
+	// forwards to a vendor endpoint.
+	grpcAddr := fmt.Sprintf("%s:%d", cfg.proxyBindAddr(), cfg.grpcPort())
+	grpcComponent := NewOTLPGRPCBridge(grpcAddr, otlpRoutes)
+	mgr.AddComponent(grpcComponent)
+
 	addr := fmt.Sprintf("%s:%d", cfg.proxyBindAddr(), cfg.proxyPort())
 	return &Service{
 		Manager: mgr,
-		// The OTLP endpoint is now the proxy itself, over HTTP. There is no gRPC
-		// receiver any more: nothing in this stack speaks OTLP/gRPC, because nothing
-		// needs to — Victoria takes OTLP/HTTP directly.
+		// The OTLP/HTTP proxy is the primary collector address. Kopia targets
+		// the loopback gRPC bridge (grpcAddr) instead — see serviceenv.
 		CollectorAddr: "http://" + addr,
 		HTTPAddr:      addr,
 	}, nil
