@@ -63,7 +63,7 @@ func TestLauncherScriptDefinesItsEntryPoint(t *testing.T) {
 		t.Fatalf("app.js = %d", w.Code)
 	}
 	js := w.Body.String()
-	for _, fn := range []string{"function render(", "function renderHome(", "function tile(", "async function refresh("} {
+	for _, fn := range []string{"function render(", "function renderHome(", "function tile(", "function refresh("} {
 		if !strings.Contains(js, fn) {
 			t.Errorf("app.js calls but does not define %q", strings.TrimSuffix(fn, "("))
 		}

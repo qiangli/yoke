@@ -294,7 +294,7 @@ func TestLauncherTilesFollowOpenAppsMode(t *testing.T) {
 	// launcher tiles and injected chrome cannot disagree.
 	for _, need := range []string{
 		`let openApps = "same-tab";`,
-		`fetch(url("api/look"))`,
+		`load("look", "api/look",`,
 		`l.open_apps === "new-tab"`,
 	} {
 		if !strings.Contains(js, need) {

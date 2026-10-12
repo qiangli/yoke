@@ -187,14 +187,19 @@ func TestDOMLauncherOpenFailureIsRecoverable(t *testing.T) {
 		t.Errorf("error page = %q", body)
 	}
 	failing.Store(false)
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if err := chromedp.Run(ctx, chromedp.NavigateBack()); err != nil {
+		t.Fatalf("back navigation: %v", err)
+	}
 	if err := chromedp.Run(ctx,
-		chromedp.Evaluate(`history.back()`, nil),
 		chromedp.WaitVisible(`a.tile[data-app="slowapp"]`, chromedp.ByQuery),
 		chromedp.Poll(`!document.querySelector(".tile-wrap.opening")`, nil),
-		chromedp.Click(`a.tile[data-app="slowapp"]`, chromedp.ByQuery),
-		chromedp.WaitVisible(`#up`, chromedp.ByQuery),
 	); err != nil {
-		t.Fatalf("back and retry: %v", err)
+		t.Fatalf("launcher after back: %v", err)
+	}
+	if err := chromedp.Run(ctx, chromedp.Click(`a.tile[data-app="slowapp"]`, chromedp.ByQuery), chromedp.WaitVisible(`#up`, chromedp.ByQuery)); err != nil {
+		t.Fatalf("retry: %v", err)
 	}
 	if requests.Load() != 2 {
 		t.Errorf("app requested %d times, want one per click", requests.Load())
