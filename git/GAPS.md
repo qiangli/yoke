@@ -130,11 +130,17 @@ HEAD, renames, merge conflicts — and also asserts that the core forms are
 served natively, so declining everything cannot pass. A new routed verb
 or flag on a decision read belongs in that matrix.
 
+The matrix also covers the read verbs agents inspect history with:
+`rev-parse`, `merge-base`, `rev-list`, `log`, `show`, `cat-file`,
+`symbolic-ref`, `branch`, `remote`, `grep`, `blame`, `config --get`.
+
 Declined by design (host git via `--external`): long-form `status`,
 `status -b`/`--ignored`/pathspecs, any `status`/`diff`/`ls-files` over an
 index with merge conflicts, staged renames (unless `diff --no-renames`),
 bare `ls-files --others` (lists ignored files), submodule patch hunks,
-`branch` on a detached HEAD.
+`branch` on a detached HEAD, `branch -v` on a tracking branch (no
+ahead/behind), `show` with flags, `rev:path`, merges or renames, `grep`
+with a BRE metacharacter or with tracked changes on disk, and `blame`.
 - [ ] `fetch --tags` / `--prune` — accepted, no effect.
 
 ## Suggested order to close

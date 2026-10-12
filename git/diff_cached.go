@@ -125,10 +125,16 @@ func stagedRenames(repo *gogit.Repository, base *object.Tree) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	return treeRenames(base, idxTree)
+}
+
+// treeRenames reports whether host git's rename detection (50%
+// similarity) pairs any deletion in base→target with an addition.
+func treeRenames(base, target *object.Tree) (bool, error) {
 	if base == nil {
 		base = &object.Tree{}
 	}
-	changes, err := object.DiffTreeWithOptions(context.Background(), base, idxTree,
+	changes, err := object.DiffTreeWithOptions(context.Background(), base, target,
 		&object.DiffTreeOptions{DetectRenames: true, RenameScore: 50})
 	if err != nil {
 		return false, err
@@ -178,12 +184,21 @@ func stagedPatch(repo *gogit.Repository, rev string, paths []string, noRenames b
 	if err != nil {
 		return "", ErrUnsupported
 	}
-	changes, err := object.DiffTree(base, idxTree)
+	return treePatch(base, idxTree, paths, noRenames)
+}
+
+// treePatch renders `git diff base target` the way host git prints it
+// (abbreviated index ids, header-only empty files, TAB after spaced
+// names), declining (ErrUnsupported) on what it cannot match: binary
+// hunks, C-quoted names, and — unless noRenames — any pair host git's
+// rename detection would join.
+func treePatch(base, target *object.Tree, paths []string, noRenames bool) (string, error) {
+	changes, err := object.DiffTree(base, target)
 	if err != nil {
 		return "", ErrUnsupported
 	}
 	if !noRenames {
-		if renamed, err := stagedRenames(repo, base); err != nil || renamed {
+		if renamed, err := treeRenames(base, target); err != nil || renamed {
 			return "", ErrUnsupported
 		}
 	}

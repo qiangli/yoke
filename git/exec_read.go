@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -308,6 +309,7 @@ func nativeRevParse(_ context.Context, dir string, args []string) (*ExecResult, 
 			head, herr := repo.Head()
 			if herr != nil {
 				return &ExecResult{
+					Stdout:   refName + "\n", // host git echoes an unresolved argument
 					Stderr:   fmt.Sprintf("fatal: ambiguous argument '%s': unknown revision or path not in the working tree.\n", refName),
 					ExitCode: 128,
 				}, nil
@@ -317,6 +319,7 @@ func nativeRevParse(_ context.Context, dir string, args []string) (*ExecResult, 
 			h, rerr := repo.ResolveRevision(plumbing.Revision(refName))
 			if rerr != nil {
 				return &ExecResult{
+					Stdout:   refName + "\n",
 					Stderr:   fmt.Sprintf("fatal: ambiguous argument '%s': unknown revision or path not in the working tree.\n", refName),
 					ExitCode: 128,
 				}, nil
@@ -1116,60 +1119,108 @@ func nativeBranch(_ context.Context, dir string, args []string) (*ExecResult, er
 			containsHash = h
 		}
 
-		var b strings.Builder
+		// Host git lists refs in refname order: locals, then remotes —
+		// "remotes/"-prefixed under -a — with a symbolic remote ref as
+		// "origin/HEAD -> origin/main".
+		type row struct {
+			mark, name, sym string
+			ref             *plumbing.Reference
+		}
+		var rows []row
+		contains := func(ref *plumbing.Reference) bool {
+			return containsHash == nil || branchContainsCommit(repo, ref.Hash(), *containsHash)
+		}
 
-		// List local branches
 		if !listRemote {
 			refs, err := repo.Branches()
 			if err != nil {
 				return nil, ErrUnsupported
 			}
-			err = refs.ForEach(func(ref *plumbing.Reference) error {
-				if containsHash != nil {
-					if !branchContainsCommit(repo, ref.Hash(), *containsHash) {
-						return nil
-					}
+			var locals []*plumbing.Reference
+			if err := refs.ForEach(func(ref *plumbing.Reference) error {
+				locals = append(locals, ref)
+				return nil
+			}); err != nil {
+				return nil, ErrUnsupported
+			}
+			sort.Slice(locals, func(i, j int) bool { return locals[i].Name() < locals[j].Name() })
+			cfg, cerr := repo.Config()
+			for _, ref := range locals {
+				if !contains(ref) {
+					continue
 				}
 				name := ref.Name().Short()
-				if head != nil && ref.Name() == head.Name() {
-					b.WriteString("* ")
-				} else {
-					b.WriteString("  ")
+				if verbose {
+					// -v adds "[ahead N, behind M]" for a tracked branch.
+					if cerr != nil {
+						return nil, ErrUnsupported
+					}
+					if bc, ok := cfg.Branches[name]; ok && bc.Merge != "" {
+						return nil, ErrUnsupported
+					}
 				}
-				b.WriteString(name)
-				b.WriteString(branchVerbose(ref))
-				b.WriteByte('\n')
-				return nil
-			})
-			if err != nil {
-				return nil, ErrUnsupported
+				mark := "  "
+				if head != nil && ref.Name() == head.Name() {
+					mark = "* "
+				}
+				rows = append(rows, row{mark: mark, name: name, ref: ref})
 			}
 		}
 
-		// List remote branches
 		if listRemote || listAll {
 			allRefs, err := repo.References()
 			if err != nil {
 				return nil, ErrUnsupported
 			}
-			err = allRefs.ForEach(func(ref *plumbing.Reference) error {
-				if !ref.Name().IsRemote() {
-					return nil
+			var remotes []*plumbing.Reference
+			if err := allRefs.ForEach(func(ref *plumbing.Reference) error {
+				if ref.Name().IsRemote() {
+					remotes = append(remotes, ref)
 				}
-				if containsHash != nil {
-					if !branchContainsCommit(repo, ref.Hash(), *containsHash) {
-						return nil
-					}
-				}
-				b.WriteString("  ")
-				b.WriteString(ref.Name().Short())
-				b.WriteString(branchVerbose(ref))
-				b.WriteByte('\n')
 				return nil
-			})
-			if err != nil {
+			}); err != nil {
 				return nil, ErrUnsupported
 			}
+			sort.Slice(remotes, func(i, j int) bool { return remotes[i].Name() < remotes[j].Name() })
+			prefix := ""
+			if listAll {
+				prefix = "remotes/"
+			}
+			for _, ref := range remotes {
+				name := prefix + ref.Name().Short()
+				if ref.Type() == plumbing.SymbolicReference {
+					if containsHash != nil {
+						return nil, ErrUnsupported
+					}
+					rows = append(rows, row{mark: "  ", name: name, sym: ref.Target().Short()})
+					continue
+				}
+				if !contains(ref) {
+					continue
+				}
+				rows = append(rows, row{mark: "  ", name: name, ref: ref})
+			}
+		}
+
+		// -v pads names to the widest listed one (symbolic refs excluded).
+		width := 0
+		for _, r := range rows {
+			if r.sym == "" && len(r.name) > width {
+				width = len(r.name)
+			}
+		}
+		var b strings.Builder
+		for _, r := range rows {
+			b.WriteString(r.mark)
+			switch {
+			case r.sym != "":
+				fmt.Fprintf(&b, "%s -> %s", r.name, r.sym)
+			case verbose:
+				fmt.Fprintf(&b, "%-*s%s", width, r.name, branchVerbose(r.ref))
+			default:
+				b.WriteString(r.name)
+			}
+			b.WriteByte('\n')
 		}
 
 		return &ExecResult{Stdout: b.String()}, nil
@@ -1779,76 +1830,58 @@ func nativeReset(_ context.Context, dir string, args []string) (*ExecResult, err
 	return &ExecResult{Stdout: ""}, nil
 }
 
+// nativeShow serves `show <commit>` for a commit with at most one parent:
+// git's medium header and the patch from treePatch (renames, binary and
+// C-quoted names decline there). Flags, rev:path, tags and merges decline.
 func nativeShow(_ context.Context, dir string, args []string) (*ExecResult, error) {
-	if len(args) == 0 {
+	if len(args) != 1 || strings.HasPrefix(args[0], "-") || strings.Contains(args[0], ":") {
 		return nil, ErrUnsupported
 	}
-
 	repo, err := openRepo(dir)
 	if err != nil {
 		return nil, ErrUnsupported
 	}
-
-	// Resolve revision
-	revision := args[0]
-	hash, err := repo.ResolveRevision(plumbing.Revision(revision))
+	hash, err := repo.ResolveRevision(plumbing.Revision(args[0]))
 	if err != nil {
 		return nil, ErrUnsupported
 	}
-
 	commit, err := repo.CommitObject(*hash)
-	if err != nil {
+	if err != nil || commit.NumParents() > 1 {
 		return nil, ErrUnsupported
 	}
-
 	var b strings.Builder
-	b.WriteString("commit ")
-	b.WriteString(commit.Hash.String())
-	b.WriteByte('\n')
-	b.WriteString("Author: ")
-	b.WriteString(commit.Author.Name)
-	b.WriteString(" <")
-	b.WriteString(commit.Author.Email)
-	b.WriteString(">\n")
-	b.WriteString("Date:   ")
-	b.WriteString(commit.Author.When.Format("Mon Jan 2 15:04:05 2006 -0700"))
-	b.WriteString("\n\n    ")
-	b.WriteString(strings.TrimRight(commit.Message, "\n"))
-	b.WriteString("\n\n")
-
-	// Generate patch
-	var parentTree *object.Tree
-	if commit.NumParents() > 0 {
+	fmt.Fprintf(&b, "commit %s\nAuthor: %s <%s>\nDate:   %s\n\n",
+		commit.Hash, commit.Author.Name, commit.Author.Email,
+		commit.Author.When.Format("Mon Jan 2 15:04:05 2006 -0700"))
+	for _, line := range strings.Split(strings.TrimRight(commit.Message, "\n"), "\n") {
+		if line != "" {
+			b.WriteString("    ")
+			b.WriteString(line)
+		}
+		b.WriteByte('\n')
+	}
+	parentTree := &object.Tree{}
+	if commit.NumParents() == 1 {
 		parent, err := commit.Parent(0)
-		if err == nil {
-			parentTree, _ = parent.Tree()
+		if err != nil {
+			return nil, ErrUnsupported
+		}
+		if parentTree, err = parent.Tree(); err != nil {
+			return nil, ErrUnsupported
 		}
 	}
-
 	commitTree, err := commit.Tree()
 	if err != nil {
-		// Return header without patch
-		return &ExecResult{Stdout: b.String()}, nil
+		return nil, ErrUnsupported
 	}
-
-	if parentTree == nil {
-		// Root commit: diff against empty tree
-		parentTree = &object.Tree{}
-	}
-
-	changes, err := parentTree.Diff(commitTree)
+	patch, err := treePatch(parentTree, commitTree, nil, false)
 	if err != nil {
-		// Return header without patch
-		return &ExecResult{Stdout: b.String()}, nil
+		return nil, ErrUnsupported
 	}
-
-	patch, err := changes.Patch()
-	if err != nil {
-		return &ExecResult{Stdout: b.String()}, nil
+	if patch != "" {
+		b.WriteByte('\n')
+		b.WriteString(patch)
 	}
-
-	b.WriteString(patch.String())
-
 	return &ExecResult{Stdout: b.String()}, nil
 }
 
@@ -2110,7 +2143,7 @@ func nativeGrep(_ context.Context, dir string, args []string) (*ExecResult, erro
 	// Parse flags
 	caseInsensitive := false
 	filesOnly := false
-	lineNumbers := true
+	lineNumbers := false
 	var pathSpecs []string
 	var pattern string
 	afterDash := false
@@ -2144,12 +2177,20 @@ func nativeGrep(_ context.Context, dir string, args []string) (*ExecResult, erro
 		}
 	}
 
-	if pattern == "" {
+	// The search is a literal substring match over HEAD's tree. That is
+	// host git's answer only when the pattern has no BRE metacharacter
+	// and tracked files on disk equal HEAD (git greps the working tree).
+	if pattern == "" || strings.ContainsAny(pattern, `\.^$*[]`) {
 		return nil, ErrUnsupported
 	}
 
 	repo, err := openRepo(dir)
 	if err != nil {
+		return nil, ErrUnsupported
+	}
+	if wt, werr := repo.Worktree(); werr != nil {
+		return nil, ErrUnsupported
+	} else if ps, perr := loadPorcelainState(repo, wt); perr != nil || ps.unsupported != "" || len(ps.tracked) > 0 {
 		return nil, ErrUnsupported
 	}
 
@@ -2197,8 +2238,16 @@ func nativeGrep(_ context.Context, dir string, args []string) (*ExecResult, erro
 		}
 
 		// Skip binary files
-		isBinary, _ := f.IsBinary()
-		if isBinary {
+		// git reports "Binary file X matches"; not rendered here.
+		if isBinary, _ := f.IsBinary(); isBinary {
+			if c, cerr := f.Contents(); cerr == nil {
+				if caseInsensitive {
+					c = strings.ToLower(c)
+				}
+				if strings.Contains(c, searchPattern) {
+					return ErrUnsupported
+				}
+			}
 			return nil
 		}
 
@@ -2214,6 +2263,9 @@ func nativeGrep(_ context.Context, dir string, args []string) (*ExecResult, erro
 				searchLine = strings.ToLower(line)
 			}
 			if strings.Contains(searchLine, searchPattern) {
+				if quotePath(f.Name, false) != f.Name {
+					return ErrUnsupported // host git C-quotes this name
+				}
 				if filesOnly {
 					if !matchedFiles[f.Name] {
 						matchedFiles[f.Name] = true
@@ -2325,95 +2377,12 @@ func nativeLsFiles(_ context.Context, dir string, args []string) (*ExecResult, e
 	return &ExecResult{Stdout: b.String()}, nil
 }
 
-func nativeBlame(_ context.Context, dir string, args []string) (*ExecResult, error) {
-	if len(args) == 0 {
-		return nil, ErrUnsupported
-	}
-
-	// Parse flags
-	var filePath string
-	startLine, endLine := 0, 0
-	afterDash := false
-
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--" {
-			afterDash = true
-			continue
-		}
-		if afterDash {
-			filePath = args[i]
-			continue
-		}
-		if args[i] == "-L" {
-			if i+1 >= len(args) {
-				return nil, ErrUnsupported
-			}
-			i++
-			parts := strings.SplitN(args[i], ",", 2)
-			if len(parts) != 2 {
-				return nil, ErrUnsupported
-			}
-			fmt.Sscanf(parts[0], "%d", &startLine)
-			fmt.Sscanf(parts[1], "%d", &endLine)
-		} else if strings.HasPrefix(args[i], "-L") {
-			rangeStr := args[i][2:]
-			parts := strings.SplitN(rangeStr, ",", 2)
-			if len(parts) != 2 {
-				return nil, ErrUnsupported
-			}
-			fmt.Sscanf(parts[0], "%d", &startLine)
-			fmt.Sscanf(parts[1], "%d", &endLine)
-		} else if strings.HasPrefix(args[i], "-") {
-			return nil, ErrUnsupported
-		} else {
-			filePath = args[i]
-		}
-	}
-
-	if filePath == "" {
-		return nil, ErrUnsupported
-	}
-
-	repo, err := openRepo(dir)
-	if err != nil {
-		return nil, ErrUnsupported
-	}
-
-	head, err := repo.Head()
-	if err != nil {
-		return nil, ErrUnsupported
-	}
-
-	commit, err := repo.CommitObject(head.Hash())
-	if err != nil {
-		return nil, ErrUnsupported
-	}
-
-	blame, err := gogit.Blame(commit, filePath)
-	if err != nil {
-		return &ExecResult{
-			Stderr:   fmt.Sprintf("fatal: no such path '%s'\n", filePath),
-			ExitCode: 128,
-		}, nil
-	}
-
-	var b strings.Builder
-	for i, line := range blame.Lines {
-		lineNum := i + 1
-		if startLine > 0 && lineNum < startLine {
-			continue
-		}
-		if endLine > 0 && lineNum > endLine {
-			break
-		}
-
-		shortHash := line.Hash.String()[:8]
-		author := line.Author
-		date := line.Date.Format("2006-01-02")
-		b.WriteString(fmt.Sprintf("%s (%s %s %4d) %s\n", shortHash, author, date, lineNum, line.Text))
-	}
-
-	return &ExecResult{Stdout: b.String()}, nil
+// nativeBlame declines: host git's default blame format (boundary "^",
+// author name, full timestamp, column padding) is not reproduced, and a
+// lookalike is worse than a loud decline. The typed Blame API serves
+// structured lines.
+func nativeBlame(_ context.Context, _ string, _ []string) (*ExecResult, error) {
+	return nil, ErrUnsupported
 }
 
 // parseGitDate attempts to parse a date string in common git formats.

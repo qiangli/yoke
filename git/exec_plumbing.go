@@ -26,10 +26,25 @@ func nativeCatFile(_ context.Context, dir string, args []string) (*ExecResult, e
 		return nil, ErrUnsupported
 	}
 
+	if len(args) != 2 {
+		return nil, ErrUnsupported
+	}
 	flag := args[0]
 	hashStr := args[1]
 
-	hash := plumbing.NewHash(hashStr)
+	// A full object id is looked up directly; anything else (HEAD,
+	// branch~2, abbreviated ids) resolves as a revision. rev:path and
+	// unresolvable names are host git's to answer.
+	var hash plumbing.Hash
+	if len(hashStr) == 40 && plumbing.IsHash(hashStr) {
+		hash = plumbing.NewHash(hashStr)
+	} else if strings.Contains(hashStr, ":") {
+		return nil, ErrUnsupported
+	} else if h, rerr := repo.ResolveRevision(plumbing.Revision(hashStr)); rerr == nil {
+		hash = *h
+	} else {
+		return nil, ErrUnsupported
+	}
 
 	obj, err := repo.Object(plumbing.AnyObject, hash)
 	if err != nil {
@@ -53,29 +68,32 @@ func nativeCatFile(_ context.Context, dir string, args []string) (*ExecResult, e
 
 	case "-p":
 		switch o := obj.(type) {
-		case *object.Commit:
-			var b strings.Builder
-			b.WriteString(fmt.Sprintf("tree %s\n", o.TreeHash.String()))
-			for _, p := range o.ParentHashes {
-				b.WriteString(fmt.Sprintf("parent %s\n", p.String()))
+		case *object.Commit, *object.Tag:
+			eo, err := repo.Storer.EncodedObject(plumbing.AnyObject, hash)
+			if err != nil {
+				return nil, ErrUnsupported
 			}
-			b.WriteString(fmt.Sprintf("author %s <%s> %d %s\n",
-				o.Author.Name, o.Author.Email,
-				o.Author.When.Unix(), o.Author.When.Format("-0700")))
-			b.WriteString(fmt.Sprintf("committer %s <%s> %d %s\n",
-				o.Committer.Name, o.Committer.Email,
-				o.Committer.When.Unix(), o.Committer.When.Format("-0700")))
-			b.WriteString("\n")
-			b.WriteString(o.Message)
-			return &ExecResult{Stdout: b.String()}, nil
+			r, err := eo.Reader()
+			if err != nil {
+				return nil, ErrUnsupported
+			}
+			defer r.Close()
+			raw, err := io.ReadAll(r)
+			if err != nil {
+				return nil, ErrUnsupported
+			}
+			return &ExecResult{Stdout: string(raw)}, nil
 
 		case *object.Tree:
 			var b strings.Builder
 			for _, entry := range o.Entries {
 				mode := fmt.Sprintf("%06o", entry.Mode)
 				entryType := "blob"
-				if entry.Mode == 0o040000 {
+				switch entry.Mode {
+				case 0o040000:
 					entryType = "tree"
+				case 0o160000:
+					entryType = "commit"
 				}
 				b.WriteString(fmt.Sprintf("%s %s %s\t%s\n", mode, entryType, entry.Hash.String(), entry.Name))
 			}
@@ -92,18 +110,6 @@ func nativeCatFile(_ context.Context, dir string, args []string) (*ExecResult, e
 				return nil, ErrUnsupported
 			}
 			return &ExecResult{Stdout: string(content)}, nil
-
-		case *object.Tag:
-			var b strings.Builder
-			b.WriteString(fmt.Sprintf("object %s\n", o.Target.String()))
-			b.WriteString(fmt.Sprintf("type %s\n", o.TargetType.String()))
-			b.WriteString(fmt.Sprintf("tag %s\n", o.Name))
-			b.WriteString(fmt.Sprintf("tagger %s <%s> %d %s\n",
-				o.Tagger.Name, o.Tagger.Email,
-				o.Tagger.When.Unix(), o.Tagger.When.Format("-0700")))
-			b.WriteString("\n")
-			b.WriteString(o.Message)
-			return &ExecResult{Stdout: b.String()}, nil
 
 		default:
 			return nil, ErrUnsupported
@@ -364,8 +370,10 @@ func nativeSymbolicRef(_ context.Context, dir string, args []string) (*ExecResul
 
 	// Filter out -q/--quiet
 	var positional []string
+	quiet := false
 	for _, arg := range args {
 		if arg == "-q" || arg == "--quiet" {
+			quiet = true
 			continue
 		}
 		if strings.HasPrefix(arg, "-") {
@@ -384,16 +392,10 @@ func nativeSymbolicRef(_ context.Context, dir string, args []string) (*ExecResul
 		// Read mode: print what the symbolic ref points to
 		ref, err := repo.Storer.Reference(plumbing.ReferenceName(refName))
 		if err != nil {
-			return &ExecResult{
-				Stderr:   fmt.Sprintf("fatal: ref %s is not a symbolic ref\n", refName),
-				ExitCode: 1,
-			}, nil
+			return notSymbolicRef(refName, quiet), nil
 		}
 		if ref.Type() != plumbing.SymbolicReference {
-			return &ExecResult{
-				Stderr:   fmt.Sprintf("fatal: ref %s is not a symbolic ref\n", refName),
-				ExitCode: 1,
-			}, nil
+			return notSymbolicRef(refName, quiet), nil
 		}
 		return &ExecResult{Stdout: string(ref.Target()) + "\n"}, nil
 	}
@@ -682,4 +684,13 @@ func resolveTree(repo *gogit.Repository, hash plumbing.Hash) (*object.Tree, erro
 	default:
 		return nil, fmt.Errorf("object %s is not a tree or commit", hash)
 	}
+}
+
+// notSymbolicRef is host git's answer for a ref that is not symbolic:
+// fatal (128), or a silent 1 under -q.
+func notSymbolicRef(refName string, quiet bool) *ExecResult {
+	if quiet {
+		return &ExecResult{ExitCode: 1}
+	}
+	return &ExecResult{Stderr: fmt.Sprintf("fatal: ref %s is not a symbolic ref\n", refName), ExitCode: 128}
 }

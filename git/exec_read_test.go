@@ -881,8 +881,15 @@ func TestNativeGrep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("grep error: %v", err)
 	}
-	if !strings.Contains(result.Stdout, "hello.txt:1:hello world") {
+	if result.Stdout != "hello.txt:hello world\n" { // line numbers only with -n, like host git
 		t.Errorf("expected match in output, got %q", result.Stdout)
+	}
+	result, err = nativeGrep(context.Background(), dir, []string{"-n", "hello"})
+	if err != nil {
+		t.Fatalf("grep -n error: %v", err)
+	}
+	if result.Stdout != "hello.txt:1:hello world\n" {
+		t.Errorf("grep -n: got %q", result.Stdout)
 	}
 
 	// Case insensitive search
@@ -960,26 +967,11 @@ func TestNativeLsFiles(t *testing.T) {
 	}
 }
 
+// Host git's blame format is not reproduced natively, so blame declines
+// (callers fall back to host git); the typed Blame API is tested apart.
 func TestNativeBlame(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping in short mode")
-	}
 	dir := setupTestRepo(t)
-
-	result, err := nativeBlame(context.Background(), dir, []string{"hello.txt"})
-	if err != nil {
-		t.Fatalf("blame error: %v", err)
-	}
-	// Should contain author email (from Line.Author field)
-	if !strings.Contains(result.Stdout, "test@example.com") {
-		t.Errorf("expected author in blame output, got %q", result.Stdout)
-	}
-	// Should contain line content
-	if !strings.Contains(result.Stdout, "hello world") {
-		t.Errorf("expected file content in blame output, got %q", result.Stdout)
-	}
-	// Should contain line number
-	if !strings.Contains(result.Stdout, "1)") {
-		t.Errorf("expected line number in blame output, got %q", result.Stdout)
+	if _, err := nativeBlame(context.Background(), dir, []string{"hello.txt"}); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("blame: want ErrUnsupported, got %v", err)
 	}
 }
