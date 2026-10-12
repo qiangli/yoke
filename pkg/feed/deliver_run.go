@@ -131,8 +131,11 @@ type channelPlan struct {
 }
 
 // planChannel decides, without side effects, whether ch sends now.
+// viewers maps post ids to their absolute /u/ viewer URLs; a candidate
+// whose id has a viewer URL links to the viewer (opening it marks the post
+// read) instead of the raw sink file.
 func planChannel(ch Channel, st channelState, entries []SpoolEntry, cursor int64,
-	serverRead map[string]bool, now time.Time, inboxURL string) (channelPlan, bool, error) {
+	serverRead map[string]bool, now time.Time, inboxURL string, viewers map[string]string) (channelPlan, bool, error) {
 	var plan channelPlan
 	prefs, err := ch.Prefs()
 	if err != nil {
@@ -144,6 +147,9 @@ func planChannel(ch Channel, st channelState, entries []SpoolEntry, cursor int64
 	seqs := map[string][]int64{}
 	for i, p := range pend {
 		cands[i] = p.Candidate
+		if u := viewers[p.ID]; u != "" {
+			cands[i].Link = u
+		}
 		newest[p.ID] = p.newest
 		seqs[p.ID] = p.seqs
 		if p.newest > plan.maxSeq {
@@ -310,19 +316,29 @@ func runDeliver(c *cobra.Command, env Env, only string, dryRun bool) error {
 		return err
 	}
 	serverReadFn, inboxFn := env.serverRead, env.inboxURL
+	var viewerFn func(context.Context) map[string]string
 	if serverReadFn == nil || inboxFn == nil {
-		dfltRead, dfltInbox := NewServerReadAndInbox(env)
+		dfltRead, dfltInbox, dfltViewers := NewServerReadInboxViewers(env)
 		if serverReadFn == nil {
 			serverReadFn = dfltRead
 		}
 		if inboxFn == nil {
 			inboxFn = dfltInbox
 		}
+		viewerFn = dfltViewers
 	}
 	var serverRead map[string]bool
-	if serverRead, err = serverReadFn(ctx); err != nil {
-		fmt.Fprintf(warn, "warning: server read set unavailable (%s); using the local read cursor only\n", oneLine(err.Error()))
+	var serverErr error
+	if serverRead, serverErr = serverReadFn(ctx); serverErr != nil {
+		fmt.Fprintf(warn, "warning: server read set unavailable (%s); using the local read cursor only\n", oneLine(serverErr.Error()))
 		serverRead = nil
+	}
+	// The viewers come from the same chunked server call as the read set
+	// above, so this adds no round trip. On a server error or when unpaired
+	// there are no viewer links and the sink links stand.
+	var viewers map[string]string
+	if viewerFn != nil && serverErr == nil {
+		viewers = viewerFn(ctx)
 	}
 	inbox := inboxFn(ctx)
 	st, err := loadChannelState(dir)
@@ -333,7 +349,7 @@ func runDeliver(c *cobra.Command, env Env, only string, dryRun bool) error {
 	now := env.now().In(time.Local)
 	var errs []error
 	for _, ch := range active {
-		plan, send, err := planChannel(ch, st[ch.Name], entries, cursor, serverRead, now, inbox)
+		plan, send, err := planChannel(ch, st[ch.Name], entries, cursor, serverRead, now, inbox, viewers)
 		if err != nil {
 			errs = append(errs, err)
 			continue

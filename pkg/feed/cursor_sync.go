@@ -34,6 +34,9 @@ const serverReadChunkSize = 500
 type ServerReadResponse struct {
 	Read  []string `json:"read"`
 	Inbox string   `json:"inbox"`
+	// Viewers maps post ids the server has indexed to their absolute /u/
+	// viewer URLs. Ids the server has not indexed are absent.
+	Viewers map[string]string `json:"viewers"`
 }
 
 // SyncRead sends post IDs to the paired cloudbox server's POST /api/v1/feed/read endpoint.
@@ -176,16 +179,28 @@ func queryServerRead(ctx context.Context, env Env, base, token string, ids []str
 // reader's web inbox URL. When the host is not paired it makes no request
 // and returns a nil map with no error.
 func FetchServerRead(ctx context.Context, env Env, ids []string) (map[string]bool, string, error) {
+	read, inbox, _, err := FetchServerReadFull(ctx, env, ids)
+	return read, inbox, err
+}
+
+// FetchServerReadFull is FetchServerRead plus the server's "viewers" map:
+// post ids the server has indexed mapped to their absolute /u/ viewer URLs.
+// Ids the server has not indexed are absent from the map. The viewers come
+// from the same chunked GET /api/v1/feed/read calls, with no extra round
+// trip. When the host is not paired it makes no request and returns nil
+// maps with no error.
+func FetchServerReadFull(ctx context.Context, env Env, ids []string) (map[string]bool, string, map[string]string, error) {
 	base, token := cloudOf(env)
 	if token == "" {
 		// Unpaired host: silent no-op.
-		return nil, "", nil
+		return nil, "", nil, nil
 	}
 	uniq := uniqIDs(ids)
 	read := make(map[string]bool, len(uniq))
 	if len(uniq) == 0 {
-		return read, "", nil
+		return read, "", nil, nil
 	}
+	viewers := make(map[string]string, len(uniq))
 	var inbox string
 	for start := 0; start < len(uniq); start += serverReadChunkSize {
 		end := start + serverReadChunkSize
@@ -194,18 +209,23 @@ func FetchServerRead(ctx context.Context, env Env, ids []string) (map[string]boo
 		}
 		res, err := queryServerRead(ctx, env, base, token, uniq[start:end])
 		if err != nil {
-			return nil, "", err
+			return nil, "", nil, err
 		}
 		for _, id := range res.Read {
 			if id != "" {
 				read[id] = true
 			}
 		}
+		for id, u := range res.Viewers {
+			if id != "" && u != "" {
+				viewers[id] = u
+			}
+		}
 		if inbox == "" && res.Inbox != "" {
 			inbox = res.Inbox
 		}
 	}
-	return read, inbox, nil
+	return read, inbox, viewers, nil
 }
 
 // ServerReadSet returns exactly the post IDs the paired server reports as
@@ -227,9 +247,19 @@ func ServerReadSetEnv(ctx context.Context, env Env) (map[string]bool, error) {
 // reader's web inbox URL. When the host is not paired it returns a nil map,
 // an empty inbox, and no error.
 func ServerReadAndInboxEnv(ctx context.Context, env Env) (map[string]bool, string, error) {
+	read, inbox, _, err := ServerReadAndInboxViewersEnv(ctx, env)
+	return read, inbox, err
+}
+
+// ServerReadAndInboxViewersEnv is ServerReadAndInboxEnv plus the server's
+// "viewers" map: post ids the server has indexed mapped to their absolute
+// /u/ viewer URLs. The viewers come from the same chunked calls, with no
+// extra round trip. When the host is not paired it returns nil maps, an
+// empty inbox, and no error.
+func ServerReadAndInboxViewersEnv(ctx context.Context, env Env) (map[string]bool, string, map[string]string, error) {
 	entries, err := ReadSpool(env.dir())
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 	ids := make([]string, 0, len(entries))
 	for _, e := range entries {
@@ -237,7 +267,7 @@ func ServerReadAndInboxEnv(ctx context.Context, env Env) (map[string]bool, strin
 			ids = append(ids, e.ID)
 		}
 	}
-	return FetchServerRead(ctx, env, ids)
+	return FetchServerReadFull(ctx, env, ids)
 }
 
 // ServerReadFunc returns a predicate reporting the server's read set:
@@ -266,26 +296,43 @@ func NewServerReadFunc(env Env) func(context.Context) (map[string]bool, error) {
 // failed query is not cached, so the next call retries. The returned funcs
 // are not safe for concurrent use; deliver calls them sequentially.
 func NewServerReadAndInbox(env Env) (func(context.Context) (map[string]bool, error), func(context.Context) string) {
+	serverRead, inboxURL, _ := NewServerReadInboxViewers(env)
+	return serverRead, inboxURL
+}
+
+// NewServerReadInboxViewers is NewServerReadAndInbox plus the server's
+// "viewers" map: post ids the server has indexed mapped to their absolute
+// /u/ viewer URLs. All three values come from one shared GET
+// /api/v1/feed/read query per chunk, so deliver makes one round trip per
+// chunk, not three. A failed query is not cached, so the next call retries.
+// The returned funcs are not safe for concurrent use; deliver calls them
+// sequentially.
+func NewServerReadInboxViewers(env Env) (func(context.Context) (map[string]bool, error), func(context.Context) string, func(context.Context) map[string]string) {
 	var done bool
 	var read map[string]bool
 	var inbox string
+	var viewers map[string]string
 	var err error
-	fetch := func(ctx context.Context) (map[string]bool, string, error) {
+	fetch := func(ctx context.Context) (map[string]bool, string, map[string]string, error) {
 		if !done {
-			read, inbox, err = ServerReadAndInboxEnv(ctx, env)
+			read, inbox, viewers, err = ServerReadAndInboxViewersEnv(ctx, env)
 			if err == nil {
 				done = true
 			}
 		}
-		return read, inbox, err
+		return read, inbox, viewers, err
 	}
 	serverRead := func(ctx context.Context) (map[string]bool, error) {
-		r, _, e := fetch(ctx)
+		r, _, _, e := fetch(ctx)
 		return r, e
 	}
 	inboxURL := func(ctx context.Context) string {
-		_, in, _ := fetch(ctx)
+		_, in, _, _ := fetch(ctx)
 		return in
 	}
-	return serverRead, inboxURL
+	viewerLinks := func(ctx context.Context) map[string]string {
+		_, _, v, _ := fetch(ctx)
+		return v
+	}
+	return serverRead, inboxURL, viewerLinks
 }
