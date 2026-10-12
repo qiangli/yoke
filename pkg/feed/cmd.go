@@ -366,6 +366,11 @@ func indexPublishedPost(ctx context.Context, env Env, dir string, warn io.Writer
 		fmt.Fprintln(warn, "index: skipped (host not paired)")
 		return
 	}
+	urls = publicSinkURLs(urls)
+	if len(urls) == 0 {
+		fmt.Fprintln(warn, "index: skipped (no public sink URL)")
+		return
+	}
 	req := buildIndexRequest(p, rel, data, urls, forceKey)
 	resp, err := HTTPIndexer{Base: base, Token: token}.Index(ctx, req)
 	if err == nil && resp.Indexed != "deferred" {

@@ -1,6 +1,7 @@
 package feed
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -84,12 +85,43 @@ func hasKey(m map[string]any, key string) bool {
 	return false
 }
 
-func postToProbe(t *testing.T, p *indexProbe, srv *httptest.Server, extraArgs ...string) (stdout, stderr string) {
+// httpsDirSink writes files under root like dirSink but returns a public
+// https URL, modelling a sink whose published files are publicly readable.
+type httpsDirSink struct {
+	name string
+	root string
+	base string
+}
+
+func (h *httpsDirSink) Name() string { return h.name }
+func (h *httpsDirSink) Kind() string { return "rclone" }
+func (h *httpsDirSink) Put(_ context.Context, rel string, data []byte) (string, error) {
+	full := filepath.Join(h.root, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(full, data, 0o644); err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(h.base, "/") + "/" + rel, nil
+}
+func (h *httpsDirSink) Get(_ context.Context, rel string) ([]byte, error) {
+	b, err := os.ReadFile(filepath.Join(h.root, filepath.FromSlash(rel)))
+	if err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+func postToProbe(t *testing.T, p *indexProbe, srv *httptest.Server, extraArgs ...string) (stdout, stderr, sinkDir string) {
 	t.Helper()
 	ex := &fakeExcerpter{answers: []Excerpt{goodExcerpt}}
 	te := newTestEnv(t, ex)
 	te.env.Cloud = func() (string, string) { return srv.URL, "probe-credential" }
-	sinkDir := t.TempDir()
+	te.env.OpenSink = func(c SinkConfig) (Sink, error) {
+		return &httpsDirSink{name: c.Name, root: c.Target, base: "https://example.com/s/" + c.Name}, nil
+	}
+	sinkDir = t.TempDir()
 	te.mustRun("sink", "add", "rclone", "local", sinkDir)
 	args := append([]string{"post", writeBody(t, "body text that must never leave the host seven"),
 		"--headline", "Seven", "--dek", "A dek.", "--label", "l1"}, extraArgs...)
@@ -103,12 +135,12 @@ func postToProbe(t *testing.T, p *indexProbe, srv *httptest.Server, extraArgs ..
 	if auth, _ := p.last(); auth != "Bearer "+"probe-credential" {
 		t.Fatalf("auth header = %q", auth)
 	}
-	return o, e
+	return o, e, sinkDir
 }
 
 func TestIndexPostOk(t *testing.T) {
 	p, srv := newIndexProbe(t, 200, `{"indexed":"ok","uid":"uid123","viewer":"/u/uid123/posts/2026/x.md","expires_at":"2026-04-11T00:00:00Z"}`)
-	_, stderr := postToProbe(t, p, srv)
+	_, stderr, sinkDir := postToProbe(t, p, srv)
 	if !strings.Contains(stderr, "index: ok /u/uid123/posts/2026/x.md") {
 		t.Fatalf("stderr = %q", stderr)
 	}
@@ -131,7 +163,7 @@ func TestIndexPostOk(t *testing.T) {
 	}
 
 	// file_sha256 is over the exact bytes on the sink.
-	file := post.URLs[0] // dirSink returns the file path as the URL
+	file := firstPostFile(t, sinkDir)
 	data, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatal(err)
@@ -170,7 +202,7 @@ func TestIndexPostOk(t *testing.T) {
 
 func TestIndexPostDeferred(t *testing.T) {
 	p, srv := newIndexProbe(t, 200, `{"indexed":"deferred","reason":"over quota until tomorrow"}`)
-	_, stderr := postToProbe(t, p, srv)
+	_, stderr, _ := postToProbe(t, p, srv)
 	if !strings.Contains(stderr, "index: deferred (over quota until tomorrow)") {
 		t.Fatalf("stderr = %q", stderr)
 	}
@@ -182,13 +214,13 @@ func TestIndexPostDeferred(t *testing.T) {
 
 func TestIndexPostConflictPointsAtForceKey(t *testing.T) {
 	p, srv := newIndexProbe(t, 409, `{"reason":"another key is registered"}`)
-	_, stderr := postToProbe(t, p, srv)
+	_, stderr, _ := postToProbe(t, p, srv)
 	if !strings.Contains(stderr, "--force-key") {
 		t.Fatalf("conflict message lacks --force-key: %q", stderr)
 	}
 
 	// ... and --force-key sets force_key:true on the next push.
-	_, _ = postToProbe(t, p, srv, "--force-key")
+	_, _, _ = postToProbe(t, p, srv, "--force-key")
 	req, _ := p.decodeLast(t)
 	if !req.ForceKey {
 		t.Fatalf("force_key not set: %+v", req)
@@ -205,7 +237,7 @@ func TestIndexPostRefusedPrintsServerReason(t *testing.T) {
 		{422, `{"reason":"sink bytes do not hash to file_sha256"}`, "sink bytes do not hash to file_sha256"},
 	} {
 		p, srv := newIndexProbe(t, tc.status, tc.body)
-		_, stderr := postToProbe(t, p, srv)
+		_, stderr, _ := postToProbe(t, p, srv)
 		if !strings.Contains(stderr, "index: refused: "+tc.reason) {
 			t.Fatalf("HTTP %d: stderr = %q", tc.status, stderr)
 		}
@@ -214,7 +246,7 @@ func TestIndexPostRefusedPrintsServerReason(t *testing.T) {
 
 func TestIndexPostServerErrorWarnsButExits0(t *testing.T) {
 	p, srv := newIndexProbe(t, 500, `oops`)
-	_, stderr := postToProbe(t, p, srv)
+	_, stderr, _ := postToProbe(t, p, srv)
 	if !strings.Contains(stderr, "index: failed:") {
 		t.Fatalf("stderr = %q", stderr)
 	}
@@ -239,6 +271,9 @@ func TestIndexPostServerDownWarnsButExits0(t *testing.T) {
 	srv.Close() // nothing listens now
 	te := newTestEnv(t, &fakeExcerpter{answers: []Excerpt{goodExcerpt}})
 	te.env.Cloud = func() (string, string) { return url, "probe-credential" }
+	te.env.OpenSink = func(c SinkConfig) (Sink, error) {
+		return &httpsDirSink{name: c.Name, root: c.Target, base: "https://example.com/s/" + c.Name}, nil
+	}
 	te.mustRun("sink", "add", "rclone", "local", t.TempDir())
 	_, stderr, err := te.run("post", writeBody(t, "offline body"), "--headline", "H", "--dek", "D")
 	if err != nil {
@@ -277,5 +312,93 @@ func TestSinkBase(t *testing.T) {
 		if got := SinkBase(tc.url, tc.rel); got != tc.want {
 			t.Errorf("SinkBase(%q, %q) = %q, want %q", tc.url, tc.rel, got, tc.want)
 		}
+	}
+}
+
+func TestBuildIndexRequestDropsNonPublicURLs(t *testing.T) {
+	p := &Post{ID: "id1", Headline: "H", Dek: "D", Labels: []string{"l"}, Body: "b", Pubkey: "k", Sig: "s", Created: "2026-01-01T00:00:00Z"}
+	rel := "posts/2026/id1.md"
+	okURLs := []string{
+		"https://example.com/s/web/" + rel,
+		"/tmp/sink/" + rel,
+		"git@example.com:o/r.git#main:" + rel,
+		"ftp://example.com/" + rel,
+		"https:///no-host/" + rel,
+		"http://example.com/s/plain/" + rel,
+	}
+	req := buildIndexRequest(p, rel, []byte("data"), okURLs, false)
+	want := []string{
+		"https://example.com/s/web/" + rel,
+		"http://example.com/s/plain/" + rel,
+	}
+	if strings.Join(req.Post.URLs, ",") != strings.Join(want, ",") {
+		t.Fatalf("urls = %q, want %q", req.Post.URLs, want)
+	}
+	wantBases := []string{
+		"https://example.com/s/web/",
+		"http://example.com/s/plain/",
+	}
+	if strings.Join(req.SinkBases, ",") != strings.Join(wantBases, ",") {
+		t.Fatalf("sink_bases = %q, want %q", req.SinkBases, wantBases)
+	}
+	raw, _ := json.Marshal(req)
+	for _, leak := range []string{"/tmp/sink/", "#main:", "ftp://"} {
+		if strings.Contains(string(raw), leak) {
+			t.Fatalf("push leaks non-public URL %q: %s", leak, raw)
+		}
+	}
+}
+
+func TestIndexMixedSinksSendOnlyPublicURL(t *testing.T) {
+	p, srv := newIndexProbe(t, 200, `{"indexed":"ok","viewer":"/u/x"}`)
+	ex := &fakeExcerpter{answers: []Excerpt{goodExcerpt}}
+	te := newTestEnv(t, ex)
+	te.env.Cloud = func() (string, string) { return srv.URL, "probe-credential" }
+	webRoot := t.TempDir()
+	localRoot := t.TempDir()
+	te.env.OpenSink = func(c SinkConfig) (Sink, error) {
+		if c.Name == "web" {
+			return &httpsDirSink{name: c.Name, root: webRoot, base: "https://example.com/s/web"}, nil
+		}
+		return &dirSink{name: c.Name, root: localRoot}, nil
+	}
+	te.mustRun("sink", "add", "rclone", "web", webRoot)
+	te.mustRun("sink", "add", "rclone", "local", localRoot)
+	_, stderr, err := te.run("post", writeBody(t, "mixed sinks body"), "--headline", "H", "--dek", "D")
+	if err != nil {
+		t.Fatalf("post: %v\nstderr: %s", err, stderr)
+	}
+	if p.count() != 1 {
+		t.Fatalf("registry pushes = %d, want 1", p.count())
+	}
+	req, _ := p.decodeLast(t)
+	if len(req.Post.URLs) != 1 || req.Post.URLs[0] != "https://example.com/s/web/"+req.Post.Path {
+		t.Fatalf("urls = %q", req.Post.URLs)
+	}
+	if len(req.SinkBases) != 1 || req.SinkBases[0] != "https://example.com/s/web/" {
+		t.Fatalf("sink_bases = %q", req.SinkBases)
+	}
+	_, raw := p.last()
+	if strings.Contains(raw, localRoot) {
+		t.Fatalf("push leaks local path: %s", raw)
+	}
+}
+
+func TestIndexOnlyLocalSinksSkipWithoutRequest(t *testing.T) {
+	p, srv := newIndexProbe(t, 200, `{"indexed":"ok","viewer":"/u/x"}`)
+	ex := &fakeExcerpter{answers: []Excerpt{goodExcerpt}}
+	te := newTestEnv(t, ex)
+	te.env.Cloud = func() (string, string) { return srv.URL, "probe-credential" }
+	// Default dirSink returns a local filesystem path: no public URL.
+	te.mustRun("sink", "add", "rclone", "local", t.TempDir())
+	_, stderr, err := te.run("post", writeBody(t, "local only body"), "--headline", "H", "--dek", "D")
+	if err != nil {
+		t.Fatalf("local-only post must exit 0: %v\nstderr: %s", err, stderr)
+	}
+	if p.count() != 0 {
+		t.Fatalf("registry pushes = %d, want 0", p.count())
+	}
+	if !strings.Contains(stderr, "index: skipped (no public sink URL)") {
+		t.Fatalf("stderr = %q", stderr)
 	}
 }

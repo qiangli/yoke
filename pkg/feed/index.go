@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -228,12 +229,39 @@ func noteRegistryKey(dir, base, pubkey string) {
 	}
 }
 
+// isPublicSinkURL reports whether s is an http(s) URL with a host. Local
+// rclone paths and "<remote>#<branch>:<path>" git refs must never leak to
+// the registry, which rejects non-http(s) entries with 400.
+func isPublicSinkURL(s string) bool {
+	u, err := url.Parse(s)
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	return u.Host != ""
+}
+
+// publicSinkURLs keeps only http(s) URLs with a host, preserving order.
+func publicSinkURLs(urls []string) []string {
+	out := make([]string, 0, len(urls))
+	for _, u := range urls {
+		if isPublicSinkURL(u) {
+			out = append(out, u)
+		}
+	}
+	return out
+}
+
 // buildIndexRequest assembles the registry push for a post that is already
-// live on okURLs. fileSHA is over data, the exact bytes written to the
-// sinks; the body itself is never included.
+// live on okURLs. Only http(s) URLs reach the wire: local rclone paths and
+// git "<remote>#<branch>:<path>" refs are dropped from both urls and
+// sink_bases. fileSHA is over data, the exact bytes written to the sinks;
+// the body itself is never included.
 func buildIndexRequest(p *Post, rel string, data []byte, okURLs []string, forceKey bool) IndexRequest {
 	fileSum := sha256.Sum256(data)
-	urls := append([]string{}, okURLs...)
+	urls := publicSinkURLs(okURLs)
 	bases := make([]string, 0, len(urls))
 	for _, u := range urls {
 		bases = append(bases, SinkBase(u, rel))
