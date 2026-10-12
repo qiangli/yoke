@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/qiangli/yoke/pkg/binmgr"
 )
 
 // KnownToolHelpers maps a tool's canonical name to helper executables that ship
@@ -164,6 +166,22 @@ func (c *Catalog) InstallToolPin(toolName, sourceBinary, version, toolsDir strin
 	t, ok := c.Tool(toolName)
 	if !ok {
 		return "", nil, fmt.Errorf("fleet: no tool %q", toolName)
+	}
+
+	// A managed system tool (a daemon binary such as tuwunel — hidden, not an
+	// agent CLI) has no PATH copy to pin: binmgr fetches the recipe's pinned
+	// asset, verifies its digest, unpacks it and the cached result is copied.
+	if sourceBinary == "" && t.Kind == ToolKindSystem && t.IsManaged() {
+		bt, err := t.BinmgrTool()
+		if err != nil {
+			return "", nil, err
+		}
+		if sourceBinary, err = binmgr.Ensure(context.Background(), bt); err != nil {
+			return "", nil, fmt.Errorf("fleet: tool %q managed install %s: %w", toolName, bt.Version, err)
+		}
+		if version == "" {
+			version = bt.Version
+		}
 	}
 
 	if sourceBinary == "" {

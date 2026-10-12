@@ -75,15 +75,20 @@ func serviceRecord() *recordSpec {
 		Save:      (*Catalog).SaveService,
 		Check:     (*Catalog).checkService,
 		FileFlag:  true,
+		Optional:  OptionalService,
 		ShowShort: "Print a service unit",
 		AddDoc: verbDoc{
-			Use:   "add (-f FILE|- | <name> --exec … | <file>|-)",
+			Use:   "add (-f FILE|- | --optional NAME | <name> --exec … | <file>|-)",
 			Short: "Add or replace a service unit in the local store",
 			Long: "Add or replace a service unit in the local store, from a YAML document\n" +
 				"(-f FILE, - = stdin) or from flags and --set paths. A unit named like a\n" +
 				"built-in replaces it whole; use `set` for a sparse override instead.\n\n" +
+				"--optional NAME imports a unit shipped with the binary but not seeded\n" +
+				"(e.g. matrix-chat) exactly as -f would; re-adding an identical unit is a\n" +
+				"no-op and replacing a different one needs --force.\n\n" +
 				"An enabled unit whose port another enabled unit holds is refused.",
 			Example: "  bashy service add -f ./openclaw.yaml\n" +
+				"  bashy service add --optional matrix-chat --set settings.binary=/path/to/tuwunel\n" +
 				"  bashy service add web --exec python3 --exec -m --exec http.server --exec '{port}' --port 8000",
 		},
 		SetDoc: verbDoc{
