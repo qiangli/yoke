@@ -255,9 +255,12 @@ or the host is not paired.
 Budgets are weighted (CJK counts 2): headline <= 90, dek <= 240, up to 8
 labels of <= 32. It exits non-zero only when EVERY sink failed.
 
-Repeat --attach to publish files beside the post. Each attachment is listed
-in frontmatter with its sha256 and covered by the signature; fetchers verify
-every listed attachment and mark the post drifted on mismatch.`,
+Repeat --attach to publish files under a per-post directory named after
+the post file (post posts/2026/<id>.md stores pic.png at
+posts/2026/<id>/pic.png). Each attachment is listed in frontmatter as
+"<id>/pic.png" with its sha256 and covered by the signature; link that
+path from the body, and fetchers verify every listed attachment and mark
+the post drifted on mismatch.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, a []string) error {
 			return runPost(c, env, a[0], Excerpt{Headline: headline, Dek: dek, Labels: labels}, replyTo, relPath, attaches, forceKey, noIndex)
@@ -267,7 +270,7 @@ every listed attachment and mark the post drifted on mismatch.`,
 	f.StringVar(&headline, "headline", "", "headline (default: written by your LLM)")
 	f.StringVar(&dek, "dek", "", "dek / standfirst (default: written by your LLM)")
 	f.StringArrayVar(&labels, "label", nil, "label (repeatable)")
-	f.StringArrayVar(&attaches, "attach", nil, "attachment file published beside the post (repeatable)")
+	f.StringArrayVar(&attaches, "attach", nil, "attachment file published under the post's own directory (repeatable)")
 	f.StringVar(&replyTo, "reply-to", "", "id of the post this replies to")
 	f.StringVar(&relPath, "path", "", "sink-relative path (default posts/<yyyy>/<id>.md)")
 	f.BoolVar(&forceKey, "force-key", false, "replace the registry's stored public key for this host")

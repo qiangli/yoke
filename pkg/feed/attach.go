@@ -14,9 +14,12 @@ import (
 const DefaultMaxAttachBytes = 25 << 20 // 25 MiB
 
 // Attachment is one file published beside a post. Path is relative to the
-// post's own directory (in practice the file's basename); SHA256 is the
-// lowercase hex sha256 of the attachment bytes. The signature covers every
-// entry's path and sha256 (see SigningPayloadForPost).
+// post's own directory: "<stem>/<basename>", where <stem> is the post file
+// name without its extension (so post posts/2026/<id>.md lists
+// "<id>/pic.png"); SHA256 is the lowercase hex sha256 of the attachment
+// bytes. The signature covers every entry's path and sha256 (see
+// SigningPayloadForPost). Fetchers keep accepting any safe relative path,
+// so older bare-basename entries still verify.
 type Attachment struct {
 	Path   string `yaml:"path"`
 	SHA256 string `yaml:"sha256"`
@@ -38,7 +41,7 @@ func (e Env) maxAttachBytes() int64 {
 }
 
 // attachmentBaseName reduces a --attach FILE argument to the name stored
-// beside the post. Directory components are dropped (attaching
+// under the post's own directory. Directory components are dropped (attaching
 // /tmp/photo.png stores "photo.png"); anything that cannot become a safe
 // single path segment is rejected.
 func attachmentBaseName(file string) (string, error) {
@@ -68,16 +71,38 @@ func validateAttachmentName(base string) error {
 	return nil
 }
 
+// postStem returns the directory name for a post's attachments: the post
+// file name without its extension (posts/2026/<id>.md -> <id>,
+// posts/x/hello.md -> hello).
+func postStem(postRel string) (string, error) {
+	stem := strings.TrimSuffix(path.Base(postRel), path.Ext(path.Base(postRel)))
+	if err := validateAttachmentName(stem); err != nil {
+		return "", fmt.Errorf("feed: post path %q has no safe attachment directory: %w", postRel, err)
+	}
+	return stem, nil
+}
+
 // attachmentRel returns the sink-relative destination for an attachment of
-// the post at postRel: the post's own directory joined with the basename.
-// It rejects anything that would collide with the post itself or the index,
-// or escape the sink root.
+// the post at postRel: the post's own directory joined with the post stem
+// and the basename (posts/2026/<id>.md + pic.png ->
+// posts/2026/<id>/pic.png). It rejects anything that would collide with
+// the post itself or the index, or escape the sink root.
 func attachmentRel(postRel, base string) (string, error) {
 	if err := validateAttachmentName(base); err != nil {
 		return "", err
 	}
-	rel := path.Join(path.Dir(postRel), base)
-	rel, err := validateRelPath(rel)
+	if base == path.Base(postRel) {
+		return "", fmt.Errorf("feed: attachment %q would overwrite the post itself", base)
+	}
+	if base == IndexName {
+		return "", fmt.Errorf("feed: attachment name %q is reserved for the post index", base)
+	}
+	stem, err := postStem(postRel)
+	if err != nil {
+		return "", err
+	}
+	rel := path.Join(path.Dir(postRel), stem, base)
+	rel, err = validateRelPath(rel)
 	if err != nil {
 		return "", fmt.Errorf("feed: attachment %q escapes the sink root", base)
 	}
@@ -120,8 +145,12 @@ func collectAttachments(files []string, postRel string, maxBytes int64) ([]Attac
 		if err != nil {
 			return nil, nil, err
 		}
+		stem, err := postStem(postRel)
+		if err != nil {
+			return nil, nil, err
+		}
 		sum := sha256.Sum256(data)
-		entry := Attachment{Path: base, SHA256: hex.EncodeToString(sum[:])}
+		entry := Attachment{Path: stem + "/" + base, SHA256: hex.EncodeToString(sum[:])}
 		entries = append(entries, entry)
 		uploads = append(uploads, attachmentUpload{entry: entry, rel: rel, data: data})
 	}

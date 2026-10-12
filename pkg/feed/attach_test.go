@@ -143,12 +143,12 @@ func TestCollectAttachmentsBasics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 2 || entries[0].Path != "photo.png" || entries[0].SHA256 != shaHex("png-bytes") ||
-		entries[1].Path != "talk.mp3" || entries[1].SHA256 != shaHex("mp3-bytes") {
+	if len(entries) != 2 || entries[0].Path != "id/photo.png" || entries[0].SHA256 != shaHex("png-bytes") ||
+		entries[1].Path != "id/talk.mp3" || entries[1].SHA256 != shaHex("mp3-bytes") {
 		t.Fatalf("entries = %+v", entries)
 	}
-	if len(uploads) != 2 || uploads[0].rel != "posts/2026/photo.png" || string(uploads[0].data) != "png-bytes" ||
-		uploads[1].rel != "posts/2026/talk.mp3" {
+	if len(uploads) != 2 || uploads[0].rel != "posts/2026/id/photo.png" || string(uploads[0].data) != "png-bytes" ||
+		uploads[1].rel != "posts/2026/id/talk.mp3" {
 		t.Fatalf("uploads = %+v", uploads)
 	}
 	if entries, uploads, err := collectAttachments(nil, "posts/2026/id.md", 0); err != nil || len(entries) != 0 || len(uploads) != 0 {
@@ -180,6 +180,47 @@ func TestCollectAttachmentsRejects(t *testing.T) {
 	}
 }
 
+// Two posts sharing a year directory must not clobber each other's
+// same-named attachment: each goes under its own stem directory and both
+// fetch verified.
+func TestCollectAttachmentsSameNameDifferentPosts(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	f1 := writeAttachFile(t, filepath.Join(dir, "one"), "pic.bin", "first-bytes")
+	f2 := writeAttachFile(t, filepath.Join(dir, "two"), "pic.bin", "second-bytes")
+
+	e1, u1, err := collectAttachments([]string{f1}, "posts/2026/aaa.md", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e2, u2, err := collectAttachments([]string{f2}, "posts/2026/bbb.md", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e1[0].Path != "aaa/pic.bin" || u1[0].rel != "posts/2026/aaa/pic.bin" {
+		t.Fatalf("post aaa = %+v %+v", e1, u1)
+	}
+	if e2[0].Path != "bbb/pic.bin" || u2[0].rel != "posts/2026/bbb/pic.bin" {
+		t.Fatalf("post bbb = %+v %+v", e2, u2)
+	}
+	if u1[0].rel == u2[0].rel {
+		t.Fatalf("both posts share one attachment path: %q", u1[0].rel)
+	}
+
+	src := &spySource{data: map[string][]byte{
+		u1[0].rel: u1[0].data,
+		u2[0].rel: u2[0].data,
+	}}
+	p1 := &Post{ID: "aaa", Attachments: e1}
+	p2 := &Post{ID: "bbb", Attachments: e2}
+	if d := VerifyPostAttachments(ctx, src, "posts/2026/aaa.md", p1); d != "" {
+		t.Fatalf("post aaa: %q", d)
+	}
+	if d := VerifyPostAttachments(ctx, src, "posts/2026/bbb.md", p2); d != "" {
+		t.Fatalf("post bbb: %q", d)
+	}
+}
+
 func TestValidateAttachmentName(t *testing.T) {
 	for _, good := range []string{"a.png", "x.tar.gz", "a b.mp3", ".hidden", "UPPER.JPG"} {
 		if err := validateAttachmentName(good); err != nil {
@@ -198,8 +239,13 @@ func TestValidateAttachmentName(t *testing.T) {
 
 func TestAttachmentRel(t *testing.T) {
 	rel, err := attachmentRel("posts/2026/id.md", "a.png")
-	if err != nil || rel != "posts/2026/a.png" {
+	if err != nil || rel != "posts/2026/id/a.png" {
 		t.Fatalf("rel = %q, %v", rel, err)
+	}
+	// a custom --path uses its own stem too
+	rel, err = attachmentRel("posts/x/hello.md", "pic.png")
+	if err != nil || rel != "posts/x/hello/pic.png" {
+		t.Fatalf("custom path rel = %q, %v", rel, err)
 	}
 	if _, err := attachmentRel("posts/2026/id.md", "../evil"); err == nil {
 		t.Fatal("traversal basename accepted")
@@ -213,9 +259,14 @@ func TestAttachmentRel(t *testing.T) {
 }
 
 func TestResolveAttachmentRef(t *testing.T) {
-	ref, err := ResolveAttachmentRef("posts/2026/id.md", "photo.png")
-	if err != nil || ref != "posts/2026/photo.png" {
+	ref, err := ResolveAttachmentRef("posts/2026/id.md", "id/photo.png")
+	if err != nil || ref != "posts/2026/id/photo.png" {
 		t.Fatalf("ref = %q, %v", ref, err)
+	}
+	// older bare-basename entries keep resolving (forward-compatible)
+	ref, err = ResolveAttachmentRef("posts/2026/id.md", "photo.png")
+	if err != nil || ref != "posts/2026/photo.png" {
+		t.Fatalf("legacy ref = %q, %v", ref, err)
 	}
 	for _, hostile := range []string{"", "../evil", "../../etc/passwd", "/abs", "a/../../evil"} {
 		if _, err := ResolveAttachmentRef("posts/2026/id.md", hostile); err == nil {
@@ -397,8 +448,9 @@ func TestPostAttachEndToEnd(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(p.Attachments) != 2 || p.Attachments[0].Path != "photo.png" ||
-			p.Attachments[0].SHA256 != shaHex("png-bytes") || p.Attachments[1].Path != "talk.mp3" ||
+		stem := strings.TrimSuffix(filepath.Base(file), filepath.Ext(file))
+		if len(p.Attachments) != 2 || p.Attachments[0].Path != stem+"/photo.png" ||
+			p.Attachments[0].SHA256 != shaHex("png-bytes") || p.Attachments[1].Path != stem+"/talk.mp3" ||
 			p.Attachments[1].SHA256 != shaHex("mp3-bytes") {
 			t.Fatalf("frontmatter attachments = %+v", p.Attachments)
 		}
@@ -407,9 +459,9 @@ func TestPostAttachEndToEnd(t *testing.T) {
 		}
 		for _, name := range []string{"photo.png", "talk.mp3"} {
 			dir := filepath.Dir(file)
-			got, err := os.ReadFile(filepath.Join(dir, name))
+			got, err := os.ReadFile(filepath.Join(dir, stem, name))
 			if err != nil {
-				t.Fatalf("attachment %s beside the post: %v", name, err)
+				t.Fatalf("attachment %s under the post dir: %v", name, err)
 			}
 			want := map[string]string{"photo.png": "png-bytes", "talk.mp3": "mp3-bytes"}[name]
 			if string(got) != want {
