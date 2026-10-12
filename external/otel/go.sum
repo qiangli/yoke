@@ -21,6 +21,8 @@ github.com/qiangli/sh/v3 v3.0.0-20261009065157-d3d7766e8a47 h1:OS7OZN2LmTHUY9sB7
 github.com/qiangli/sh/v3 v3.0.0-20261009065157-d3d7766e8a47/go.mod h1:ZFYKF5yRZk5SSMzb1/Shustc5RWl/YmgE9cVykg+hzg=
 github.com/qiangli/yoke v0.0.0-20261008102552-a61399bab543 h1:oFFkK+u10/4ztia7BJGqAok+2d2OhfgKMDZm9niEepQ=
 github.com/qiangli/yoke v0.0.0-20261008102552-a61399bab543/go.mod h1:wLPKsKji17neNkYttQ3LrEZhLZzdKf2cQqT0pWgt0PQ=
+github.com/qiangli/yoke v0.0.0-20261012201704-ceaeba133437 h1:Afkzl8OKGGWU0xSO4/Xx+vzUdFaef2qO74NgZ8bfO4M=
+github.com/qiangli/yoke v0.0.0-20261012201704-ceaeba133437/go.mod h1:+F/sAepZnUVd1Q3mtJaEqDEyqzzPsktOHVb/Kw7CgdM=
 github.com/russross/blackfriday/v2 v2.1.0/go.mod h1:+Rmxgy9KzJVeS9/2gXHxylqXiyQDYRxCVz55jmeOWTM=
 github.com/spf13/cobra v1.10.2 h1:DMTTonx5m65Ic0GOoRY2c16WCbHxOOw6xxezuLaBpcU=
 github.com/spf13/cobra v1.10.2/go.mod h1:7C1pvHqHw5A4vrJfjNwvOdzYu0Gml16OCs2GRiTUUS4=

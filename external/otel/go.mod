@@ -5,7 +5,7 @@ go 1.27
 toolchain go1.27.1
 
 require (
-	github.com/qiangli/yoke v0.0.0-20261008102552-a61399bab543
+	github.com/qiangli/yoke v0.0.0-20261012201704-ceaeba133437
 	github.com/spf13/cobra v1.10.2
 	go.opentelemetry.io/proto/otlp v1.10.0
 	google.golang.org/grpc v1.81.1

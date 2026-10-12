@@ -17,24 +17,70 @@ import (
 )
 
 const (
-	// These are pinned community releases whose tagged sources provide the wire
-	// paths used by service.go: native OTLP ingestion plus LogsQL/PromQL queries.
-	victoriaLogsVersion    = "v1.51.0"
-	victoriaMetricsVersion = "v1.147.0"
-	victoriaTracesVersion  = "v0.9.4"
+	// Upstream releases whose tagged sources provide the wire paths used by
+	// service.go: native OTLP ingestion plus LogsQL/PromQL queries. These lead
+	// the bashy fork builds (builds/victoria-*) at bashy main 0607f515.
+	victoriaLogsVersion    = "v1.53.0"
+	victoriaMetricsVersion = "v1.154.0"
+	victoriaTracesVersion  = "v0.12.0"
+
+	// Bashy-signed fork release tags (builds/victoria-*/tool.env at 0607f515):
+	// each is the upstream tag above built by the bashy-build workflow on the
+	// qiangli/* mirror and published as raw executables with per-asset
+	// SHA256SUMS and <asset>.sigstore.json bundles.
+	victoriaLogsBashyTag    = "bashy-v1.53.0-1"
+	victoriaMetricsBashyTag = "bashy-v1.154.0-1"
+	victoriaTracesBashyTag  = "bashy-v0.12.0-1"
 )
 
 var (
-	victoriaLogsSpec = victoriaSpec(
-		"victoria-logs", "VictoriaMetrics/VictoriaLogs", victoriaLogsVersion,
-	)
-	victoriaMetricsSpec = victoriaSpec(
-		"victoria-metrics", "VictoriaMetrics/VictoriaMetrics", victoriaMetricsVersion,
-	)
-	victoriaTracesSpec = victoriaSpec(
-		"victoria-traces", "VictoriaMetrics/VictoriaTraces", victoriaTracesVersion,
-	)
+	victoriaLogsTool    = victoriaTool("victoria-logs", victoriaLogsBashyTag, victoriaLogsSHAs)
+	victoriaMetricsTool = victoriaTool("victoria-metrics", victoriaMetricsBashyTag, victoriaMetricsSHAs)
+	victoriaTracesTool  = victoriaTool("victoria-traces", victoriaTracesBashyTag, victoriaTracesSHAs)
 )
+
+// SHA256 per asset read from the published SHA256SUMS of each bashy release
+// (downloaded via curl -sL, not from the GitHub API asset digest).
+var (
+	victoriaMetricsSHAs = map[string]string{
+		"linux/amd64":  "5cdf3534db2075efdc8a499a4fa630417d9061c0c34728b61944d342721365aa",
+		"linux/arm64":  "c6619c2a0c29874209518d8202a143706156dda18e198a50f2169acf1de6af84",
+		"darwin/amd64": "f5e389bd007623821d20b7dac3d63fcb7d5bdaa5a73610dd5e0a8b907ce764ea",
+		"darwin/arm64": "11fa51950cbee34513506b8b16b3bbf22dd46165e8b607516e0ad58f244a85f0",
+	}
+	victoriaLogsSHAs = map[string]string{
+		"linux/amd64":  "a66427b11d3c2811e06e5c4564bdae76b2644bb5a24123561bf379d4a9190b01",
+		"linux/arm64":  "61e8baf9a096c5b6b241adb966893cf6bafc9bcb6aa226be8c5b594fafdaada9",
+		"darwin/amd64": "bb270654af2751a10079d0f23f9200dfbfec2ba275e6b13785ad38bf53b8b085",
+		"darwin/arm64": "7320cdad87fd61c9daa76fc3f28d431814d88defde32d7985ab76d64fac9fbd7",
+	}
+	victoriaTracesSHAs = map[string]string{
+		"linux/amd64":  "ee7650f5fedb345dc8015fe921dd9f65687501988c51e614dd929d333bc3a7f7",
+		"linux/arm64":  "4d29cd67c8fbab4091ad0c0cb2dd753ce85aad1890fdb03769c936229a9344d4",
+		"darwin/amd64": "f4850391b00bd080f8f33a8fb0078f20066f36faded2e8dccb4d03bbae35c40d",
+		"darwin/arm64": "aefacedbce9225d469820ed05419e3a6121deeb61b43fc347c19db2ae3d6016d",
+	}
+)
+
+func victoriaTool(tool, bashyTag string, shas map[string]string) binmgr.Tool {
+	assets := map[string]binmgr.Asset{}
+	for plat, sha := range shas {
+		goos, goarch, _ := strings.Cut(plat, "/")
+		assetName := tool + "-" + goos + "-" + goarch
+		url := fmt.Sprintf("https://github.com/qiangli/%s/releases/download/%s/%s", tool, bashyTag, assetName)
+		assets[plat] = binmgr.Asset{URL: url, SHA256: sha}
+	}
+	identity := fmt.Sprintf("https://github.com/qiangli/%s/.github/workflows/bashy-build.yml@refs/tags/%s", tool, bashyTag)
+	return binmgr.Tool{
+		Name:    tool,
+		Version: bashyTag,
+		Assets:  assets,
+		Sigstore: &binmgr.Sigstore{
+			Identity: identity,
+			Issuer:   binmgr.GitHubActionsIssuer,
+		},
+	}
+}
 
 // argvBuilder maps a store's stack configuration to its native command line.
 type argvBuilder func(port int, dataDir, pathPrefix string) []string
@@ -44,7 +90,7 @@ type argvBuilder func(port int, dataDir, pathPrefix string) []string
 // while registering their process-global flags during init.
 type execStore struct {
 	name       string
-	spec       binmgr.GitHubSpec
+	tool       binmgr.Tool
 	buildArgv  argvBuilder
 	port       int
 	dataDir    string
@@ -62,20 +108,20 @@ var (
 )
 
 func NewVictoriaLogsComponent(port int, dataDir string) *execStore {
-	return newExecStore("victoria-logs", victoriaLogsSpec, victoriaLogsArgs, port, dataDir)
+	return newExecStore("victoria-logs", victoriaLogsTool, victoriaLogsArgs, port, dataDir)
 }
 
 func NewVictoriaMetricsComponent(port int, dataDir string) *execStore {
-	return newExecStore("victoria-metrics", victoriaMetricsSpec, victoriaMetricsArgs, port, dataDir)
+	return newExecStore("victoria-metrics", victoriaMetricsTool, victoriaMetricsArgs, port, dataDir)
 }
 
 func NewVictoriaTracesComponent(port int, dataDir string) *execStore {
-	return newExecStore("victoria-traces", victoriaTracesSpec, victoriaTracesArgs, port, dataDir)
+	return newExecStore("victoria-traces", victoriaTracesTool, victoriaTracesArgs, port, dataDir)
 }
 
-func newExecStore(name string, spec binmgr.GitHubSpec, buildArgv argvBuilder, port int, dataDir string) *execStore {
+func newExecStore(name string, tool binmgr.Tool, buildArgv argvBuilder, port int, dataDir string) *execStore {
 	return &execStore{
-		name: name, spec: spec, buildArgv: buildArgv, port: port, dataDir: dataDir,
+		name: name, tool: tool, buildArgv: buildArgv, port: port, dataDir: dataDir,
 	}
 }
 
@@ -88,6 +134,9 @@ func (s *execStore) SetPathPrefix(prefix string) {
 }
 
 func (s *execStore) Start(ctx context.Context) error {
+	if runtime.GOOS == "windows" {
+		return fmt.Errorf("%s: supply-chain policy: no bashy-signed asset for windows (no upstream fallback) — only linux and darwin assets are signed", s.name)
+	}
 	s.mu.Lock()
 	if s.proc != nil || s.starting {
 		s.mu.Unlock()
@@ -113,11 +162,7 @@ func (s *execStore) Start(ctx context.Context) error {
 		return fmt.Errorf("%s: create data directory: %w", s.name, err)
 	}
 
-	tool, err := binmgr.ResolveGitHub(ctx, s.spec)
-	if err != nil {
-		return fmt.Errorf("%s: resolve binary: %w", s.name, err)
-	}
-	bin, err := binmgr.Ensure(ctx, tool)
+	bin, err := binmgr.Ensure(ctx, s.tool)
 	if err != nil {
 		return fmt.Errorf("%s: fetch binary: %w", s.name, err)
 	}
@@ -141,7 +186,7 @@ func (s *execStore) Start(ctx context.Context) error {
 	s.mu.Unlock()
 	started = true
 
-	slog.Info(s.name+": started", "port", s.port, "dataDir", s.dataDir, "version", tool.Version)
+	slog.Info(s.name+": started", "port", s.port, "dataDir", s.dataDir, "version", s.tool.Version)
 	go s.watch(watchCtx)
 	return nil
 }
@@ -244,6 +289,9 @@ func victoriaMetricsArgs(port int, dataDir, pathPrefix string) []string {
 	// pushes metrics when -pushmetrics.url is supplied. Keep both outbound paths
 	// explicitly inactive. Upstream reference:
 	// https://docs.victoriametrics.com/victoriametrics/#push-metrics
+	// Flag source at v1.154.0: app/victoria-metrics/self_scraper.go:22
+	//   selfScrapeInterval = flag.Duration("selfScrapeInterval", 0, ...)
+	// Verified unchanged from v1.147.0.
 	return append(args, "-selfScrapeInterval=0")
 }
 
@@ -251,6 +299,18 @@ func victoriaTracesArgs(port int, dataDir, pathPrefix string) []string {
 	return victoriaArgs(port, dataDir, pathPrefix)
 }
 
+// victoriaArgs builds the common flag set for all three Victoria stores.
+//
+// Flag sources at the pinned tags (all Apache-2.0):
+//   -storageDataPath: app/vmstorage/main.go:29 (VictoriaMetrics v1.154.0),
+//     app/vlstorage/main.go:47 (VictoriaLogs v1.53.0),
+//     app/vtstorage/main.go:49 (VictoriaTraces v0.12.0)
+//   -retentionPeriod: app/vmstorage/main.go:30 (1M default), app/vlstorage/main.go:29
+//     (7d), app/vtstorage/main.go:31 (7d) — defaults are appropriate; not set
+//     explicitly here.
+//   -httpListenAddr: app/victoria-metrics/main.go:30, app/victoria-logs/main.go:25,
+//     app/victoria-traces/main.go:26 — flagutil.NewArrayString("httpListenAddr", ...)
+//   -http.pathPrefix: lib/httpserver/httpserver.go:50 — flag.String("http.pathPrefix", ...)
 func victoriaArgs(port int, dataDir, pathPrefix string) []string {
 	args := []string{
 		"--storageDataPath=" + filepath.Join(dataDir, "data"),
@@ -260,33 +320,4 @@ func victoriaArgs(port int, dataDir, pathPrefix string) []string {
 		args = append(args, "--http.pathPrefix="+pathPrefix)
 	}
 	return args
-}
-
-func victoriaSpec(name, repo, version string) binmgr.GitHubSpec {
-	return binmgr.GitHubSpec{
-		Name:       name,
-		Repo:       repo,
-		Version:    version,
-		Member:     victoriaArchiveMember(name),
-		AssetMatch: victoriaAssetMatch(name),
-	}
-}
-
-// Community archives are named <product>-<os>-<arch>-<version>. Enterprise
-// and cluster archives carry the same platform tokens and must be rejected.
-func victoriaAssetMatch(product string) func(string, string, string) bool {
-	return func(assetName, goos, goarch string) bool {
-		n := strings.ToLower(assetName)
-		if strings.Contains(n, "enterprise") || strings.Contains(n, "cluster") {
-			return false
-		}
-		return strings.HasPrefix(n, product+"-"+goos+"-"+goarch+"-")
-	}
-}
-
-func victoriaArchiveMember(product string) string {
-	if runtime.GOOS == "windows" {
-		return product + "-windows-" + runtime.GOARCH + "-prod"
-	}
-	return product + "-prod"
 }
