@@ -64,10 +64,10 @@ func runRclone(ctx context.Context, args ...string) ([]byte, error) {
 	return stdout.Bytes(), nil
 }
 
-// Put uploads data to <target>/<relPath> via `rclone copyto`, then tries
-// `rclone link` for a public URL. Remotes without link support (e.g. local
-// paths) fall back to the "<target>/<relPath>" path as the URL — that is a
-// usable ref for Get, not an error.
+// Put uploads data to <target>/<relPath> via `rclone copyto`. A configured
+// public URL takes precedence; otherwise it tries `rclone link`. Remotes
+// without link support (e.g. local paths) return the destination path as a
+// Get reference. That path is not a public URL and cannot enter the registry.
 func (s *rcloneSink) Put(ctx context.Context, relPath string, data []byte) (string, error) {
 	rp, err := validateRelPath(relPath)
 	if err != nil {

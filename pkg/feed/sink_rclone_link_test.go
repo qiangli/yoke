@@ -37,6 +37,30 @@ func TestRcloneSinkAddChecksRemote(t *testing.T) {
 	}
 }
 
+func TestCheckRcloneRemoteWindowsLocalPaths(t *testing.T) {
+	for _, target := range []string{`C:\feed`, `C:/feed`, `c:\feed`, `z:/feed`} {
+		t.Run(target, func(t *testing.T) {
+			run := func(_ context.Context, args ...string) ([]byte, error) {
+				t.Fatalf("local target %q called rclone with %v", target, args)
+				return nil, nil
+			}
+			if err := checkRcloneRemote(context.Background(), target, run); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestCheckRcloneRemoteOnTheFlyBackend(t *testing.T) {
+	run := func(_ context.Context, args ...string) ([]byte, error) {
+		t.Fatalf("on-the-fly backend called rclone with %v", args)
+		return nil, nil
+	}
+	if err := checkRcloneRemote(context.Background(), ":local:/tmp/feed", run); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRclonePublicURL(t *testing.T) {
 	const dest = "ready:feed/posts/a.md"
 	const rel = "posts/a.md"
@@ -46,12 +70,16 @@ func TestRclonePublicURL(t *testing.T) {
 		base, want   string
 	}{
 		{name: "link supported", output: "https://files.example/a.md\n", want: "https://files.example/a.md"},
-		{name: "link unsupported with base", err: errors.New("doesn't support public links"), base: "https://feed.example", want: "https://feed.example/posts/a.md"},
+		{name: "configured base overrides presigned link", output: "https://files.example/a.md?expires=123\n", base: "https://feed.example", want: "https://feed.example/posts/a.md"},
 		{name: "link unsupported without base", err: errors.New("doesn't support public links")},
 		{name: "non-public link", output: "ready:feed/posts/a.md\n"},
+		{name: "non-http link", output: "ftp://files.example/a.md\n"},
+		{name: "http link without host", output: "https:///a.md\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
 			run := func(_ context.Context, args ...string) ([]byte, error) {
+				calls++
 				if len(args) != 2 || args[0] != "link" || args[1] != dest {
 					t.Fatalf("rclone args = %v", args)
 				}
@@ -61,6 +89,13 @@ func TestRclonePublicURL(t *testing.T) {
 			if got != tc.want {
 				t.Fatalf("public URL = %q, want %q", got, tc.want)
 			}
+			wantCalls := 1
+			if tc.base != "" {
+				wantCalls = 0
+			}
+			if calls != wantCalls {
+				t.Fatalf("rclone link calls = %d, want %d", calls, wantCalls)
+			}
 			if tc.want == "" && len(publicSinkURLs([]string{got})) != 0 {
 				t.Fatal("non-public result would reach registry")
 			}
@@ -68,7 +103,7 @@ func TestRclonePublicURL(t *testing.T) {
 	}
 }
 
-func TestRcloneSinkPutUsesPublicLink(t *testing.T) {
+func TestRcloneSinkPutPrefersConfiguredPublicURL(t *testing.T) {
 	const dest = "ready:feed/posts/a.md"
 	var calls []string
 	run := func(_ context.Context, args ...string) ([]byte, error) {
@@ -94,10 +129,10 @@ func TestRcloneSinkPutUsesPublicLink(t *testing.T) {
 		t.Fatal(err)
 	}
 	url, err := s.Put(context.Background(), "posts/a.md", []byte("post"))
-	if err != nil || url != "https://files.example/a.md" {
+	if err != nil || url != "https://fallback.example/feed/posts/a.md" {
 		t.Fatalf("Put URL = %q, %v", url, err)
 	}
-	if strings.Join(calls, ",") != "copyto,link" {
+	if strings.Join(calls, ",") != "copyto" {
 		t.Fatalf("rclone calls = %v", calls)
 	}
 }
