@@ -178,3 +178,13 @@ func TestLocalLLMUnreachableIsNoLLM(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// A door that answers but refuses (401, 5xx) is not "no LLM", yet the author
+// still needs the way out: the error must name --headline/--dek.
+func TestResolveExcerptDoorErrorNamesManualFlags(t *testing.T) {
+	f := &fakeExcerpter{err: errors.New("model door replied 401 Unauthorized")}
+	_, err := ResolveExcerpt(context.Background(), f, "body", Excerpt{})
+	if err == nil || !strings.Contains(err.Error(), "--headline") || !strings.Contains(err.Error(), "401") {
+		t.Fatalf("want an error naming --headline and keeping the cause, got %v", err)
+	}
+}

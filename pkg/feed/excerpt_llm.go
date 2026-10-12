@@ -96,7 +96,7 @@ func ResolveExcerpt(ctx context.Context, ex Excerpter, body string, have Excerpt
 				req = ExcerptRequest{Body: body, Violation: err.Error()}
 				continue
 			}
-			return Excerpt{}, fmt.Errorf("feed: excerpt generation failed: %w", err)
+			return Excerpt{}, fmt.Errorf("feed: excerpt generation failed (pass --headline and --dek yourself, or fix the model door: bashy llm env): %w", err)
 		}
 		out := merge(g)
 		if last = ValidateExcerpt(out.Headline, out.Dek, out.Labels); last == nil {
