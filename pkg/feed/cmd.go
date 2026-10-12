@@ -51,6 +51,8 @@ type Env struct {
 	serverRead func(ctx context.Context) (map[string]bool, error)
 	// inboxURL is the reader's web inbox, "" when not paired.
 	inboxURL func(ctx context.Context) string
+	// doctor holds the `feed doctor` probes. Zero = production wiring.
+	doctor doctorProbes
 }
 
 func (e Env) dir() string {
@@ -127,7 +129,7 @@ inside a fence.`,
 		newFollowCmd(env), newUnfollowCmd(env), newFollowingCmd(env),
 		newFetchCmd(env), newReadCmd(env),
 		newChannelCmd(env), newDeliverCmd(env), newGroupCmd(env),
-		newKeyCmd(env),
+		newKeyCmd(env), newDoctorCmd(env),
 	)
 	return root
 }
