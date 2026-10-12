@@ -20,6 +20,11 @@
 .bd-sec > .bd-panel-head[aria-expanded="false"] .chev { transform: rotate(-90deg); }
 .bd-sec > .bd-panel-body { padding: 0; }
 @media (prefers-reduced-motion: reduce) { .bd-sec > .bd-panel-head .chev { transition: none; } }
+/* Visible before JavaScript or the first board response arrives. */
+.bd-loading { display: flex; align-items: center; justify-content: center; gap: .75rem; min-height: 8rem; color: var(--muted-foreground); }
+.bd-loading[hidden] { display: none; }
+.bd-loading-spinner { width: 1.5rem; height: 1.5rem; border: 3px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin .8s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .bd-loading-spinner { animation: none; } }
 </style>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'><rect width='40' height='40' rx='10' fill='%232563eb'/><rect x='9' y='10' width='6' height='20' rx='2' fill='%23ffffff'/><rect x='17' y='10' width='6' height='13' rx='2' fill='%235eead4'/><rect x='25' y='10' width='6' height='17' rx='2' fill='%23ffffff'/></svg>">
 </head>
@@ -39,7 +44,11 @@
   <span id="bd-age" title="the board is collected on a timer, not per request"></span>
 </header>
 
-<main id="bd-page">
+<main id="bd-page" aria-busy="true">
+  <section id="bd-loading" class="bd-loading" role="status" aria-live="polite">
+    <span class="bd-loading-spinner" aria-hidden="true"></span>
+    <span>Loading sprint content…</span>
+  </section>
   <section id="bd-warnings" hidden></section>
 
   <section id="bd-summary"></section>

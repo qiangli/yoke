@@ -1283,18 +1283,32 @@ let inflight = null;
 async function load() {
   if (inflight) return;
   const q = state.all ? "?all=1" : "";
-  inflight = fetch(url("api/sprint" + q)).then((r) => r.json());
+  if (!state.data) {
+    $("bd-loading").hidden = false;
+    $("bd-page").setAttribute("aria-busy", "true");
+    $("bd-summary").replaceChildren();
+  }
+  inflight = fetch(url("api/sprint" + q)).then((r) => {
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  });
   let d;
   try {
     d = await inflight;
-  } catch (_) {
+    if (d.error) throw new Error(d.error);
+  } catch (e) {
+    if (!state.data) {
+      const message = el("p", "empty", "Unable to load sprint content: " + String(e.message || e) + ". Use Refresh to try again.");
+      message.setAttribute("role", "alert");
+      $("bd-summary").replaceChildren(message);
+    } else {
+      $("bd-age").textContent = "Refresh failed — try Refresh again";
+    }
     return;
   } finally {
     inflight = null;
-  }
-  if (d.error) {
-    $("bd-summary").replaceChildren(el("p", "empty", d.error));
-    return;
+    $("bd-loading").hidden = true;
+    $("bd-page").setAttribute("aria-busy", "false");
   }
   renderWarnings(d);
   renderSummary(d);
