@@ -4,11 +4,12 @@
 
 ## Project Structure & Module Organization
 
-Quick unrelated fixes belong to the reserved default **Sprint #9999 —
-Maintenance**. Repository `bashy todo add` selects it unless `--sprint N` or
-`--no-sprint` is given. Commands addressing one sprint default to #9999 when
-the sprint operand is omitted; explicit operands win. It follows the ordinary
-sprint lifecycle and manager acceptance rules. See `bashy sprint --help`.
+Sprint defaulting is uniform: no sprint number is special and no card is created
+implicitly. Commands addressing one sprint use the most recently created
+existing sprint when the operand is omitted, and repository `bashy todo add`
+joins it unless `--sprint N` or `--no-sprint` is given; personal todos stay
+standalone. Explicit operands always win. An empty board is an error — create
+or select a sprint explicitly. See `bashy sprint --help`.
 
 This Go module (`github.com/qiangli/yoke`) is bashy's agentic userland: everything on top of the certified POSIX package `github.com/qiangli/coreutils` (a flat sibling this module imports, never the reverse). Non-POSIX command packages live in `cmds/`, one utility per directory (`cmds/tar`, `cmds/jq`, `cmds/browser`); `cmds/all` blank-imports coreutils' certified `cmds/all` and adds these, so it registers the WHOLE userland. `cmd/yoke` is the busybox-style binary (+ `yoke mcp`). Shared runtime and flags come from coreutils' `tool/`; in-process git support is in `git/`; the AgentOS hub packages are in `pkg/`. Docs live in `docs/`; managed externals and the mirrored ollama/podman forks live under `external/`.
 

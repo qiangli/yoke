@@ -306,11 +306,29 @@ func noteArg(cmd *cobra.Command, note string) (string, error) {
 	return string(data), nil
 }
 
+// parseSprintSelector resolves explicit selection without creating a sprint.
+func parseSprintSelector(selector string, allowUnlink bool) (int64, error) {
+	if selector == "last" {
+		if DefaultSprint == nil {
+			return 0, fmt.Errorf("--sprint last requires a sprint-aware host such as bashy")
+		}
+		return DefaultSprint()
+	}
+	n, err := strconv.ParseInt(selector, 10, 64)
+	if err != nil || n < 0 || (n == 0 && !allowUnlink) {
+		if allowUnlink {
+			return 0, fmt.Errorf("--sprint must be zero (unlink), a positive sprint number, or last")
+		}
+		return 0, fmt.Errorf("--sprint must be a positive sprint number or last")
+	}
+	return n, nil
+}
+
 func newAddCmd(sf storeFunc) *cobra.Command {
 	var priority, note, kind string
 	var labels []string
 	var dueStr, recurring, assignee string
-	var sprint int64
+	var sprintSelector string
 	var jsonOut bool
 	var noSprint bool
 	cmd := &cobra.Command{
@@ -321,9 +339,6 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 			st, storeScope, err := sf()
 			if err != nil {
 				return err
-			}
-			if cmd.Flags().Changed("sprint") && sprint < 1 {
-				return fmt.Errorf("--sprint must be a positive sprint number")
 			}
 			if noSprint && cmd.Flags().Changed("sprint") {
 				return fmt.Errorf("--no-sprint and --sprint cannot be combined")
@@ -345,32 +360,32 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("--label: %w", err)
 			}
-			selected := sprint
+			selected := int64(0)
+			if cmd.Flags().Changed("sprint") {
+				selected, err = parseSprintSelector(sprintSelector, false)
+				if err != nil {
+					return err
+				}
+			}
 			if err := ValidateCadence(recurring); err != nil {
 				return err
 			}
 			if _, err := canonicalAssignee(assignee); err != nil {
 				return err
 			}
-			if !cmd.Flags().Changed("sprint") && !noSprint && strings.HasPrefix(storeScope, "repo ") && PrepareMaintenance != nil {
-				selected = MaintenanceSprint
-			}
-			var maintenanceUUID, maintenanceTitle string
-			if selected == MaintenanceSprint {
-				if PrepareMaintenance == nil {
-					return fmt.Errorf("maintenance sprint requires a sprint-aware host such as bashy")
+			if !cmd.Flags().Changed("sprint") && !noSprint && strings.HasPrefix(storeScope, "repo ") && DefaultSprint != nil {
+				if selected, err = DefaultSprint(); err != nil {
+					return err
 				}
-				maintenanceUUID, maintenanceTitle, err = PrepareMaintenance(st)
-				if err != nil {
+			}
+			if selected != 0 && PrepareSprint != nil {
+				if err := PrepareSprint(st, selected); err != nil {
 					return err
 				}
 			}
 			it, err := addPrepared(st, strings.Join(args, " "), note, priority, due, recurring, assignee, func(it *issue.Issue) {
 				if selected != 0 {
 					LinkSprint(it, selected)
-					if selected == MaintenanceSprint {
-						it.SprintID, it.SprintTitle = maintenanceUUID, maintenanceTitle
-					}
 				}
 				it.Kind = kind
 				it.Labels = labels
@@ -415,8 +430,8 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 	// ONE FLAG, DOMAIN TITLES: an item's --owner is its ASSIGNEE.
 	role.AttachOwner(cmd.Flags(), &assignee, role.Assignee,
 		"who is working the item (notified over bashy notify; see bashy inbox)")
-	cmd.Flags().Int64Var(&sprint, "sprint", 0, "sprint number (repository default: #9999 Maintenance)")
-	cmd.Flags().BoolVar(&noSprint, "no-sprint", false, "create a standalone todo instead of a maintenance story")
+	cmd.Flags().StringVar(&sprintSelector, "sprint", "", "sprint number or last (repository default: most recently created sprint)")
+	cmd.Flags().BoolVar(&noSprint, "no-sprint", false, "create a standalone todo instead of a sprint story")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "machine-readable output")
 	return cmd
 }
@@ -733,7 +748,7 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 	var title, priority, note, kind string
 	var labels, unlabels []string
 	var dueStr, recurring, assignee string
-	var sprint int64
+	var sprintSelector string
 	cmd := &cobra.Command{
 		Use:   "edit <id|prefix>",
 		Short: "modify a task's title/priority/kind/labels/note",
@@ -809,19 +824,16 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 				}
 			}
 			if cmd.Flags().Changed("sprint") {
-				if sprint < 0 {
-					return fmt.Errorf("--sprint must be zero (unlink) or a positive sprint number")
+				selected, err := parseSprintSelector(sprintSelector, true)
+				if err != nil {
+					return err
 				}
-				LinkSprint(it, sprint)
-				if sprint == MaintenanceSprint {
-					if PrepareMaintenance == nil {
-						return fmt.Errorf("maintenance sprint requires a sprint-aware host such as bashy")
-					}
-					it.SprintID, it.SprintTitle, err = PrepareMaintenance(st)
-					if err != nil {
+				if selected != 0 && PrepareSprint != nil {
+					if err := PrepareSprint(st, selected); err != nil {
 						return err
 					}
 				}
+				LinkSprint(it, selected)
 			}
 			if cmd.Flags().Changed("sprint") && (SprintChanged != nil || SprintPreflight != nil) {
 				// The board reconcile below runs AFTER the story save, so a
@@ -869,7 +881,7 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 	// ONE FLAG, DOMAIN TITLES: an item's --owner is its ASSIGNEE.
 	role.AttachOwner(cmd.Flags(), &assignee, role.Assignee,
 		"who is working the item (notified over bashy notify; see bashy inbox)")
-	cmd.Flags().Int64Var(&sprint, "sprint", 0, "sprint number this story belongs to (0 unlinks)")
+	cmd.Flags().StringVar(&sprintSelector, "sprint", "", "sprint number or last (0 unlinks)")
 	return cmd
 }
 

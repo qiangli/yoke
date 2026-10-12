@@ -2,6 +2,7 @@ package weave
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,7 +25,8 @@ import (
 // board, through the seam below, for the uuid and title of card N.
 
 func init() {
-	todopkg.PrepareMaintenance = prepareMaintenance
+	todopkg.DefaultSprint = defaultSprintNumber
+	todopkg.PrepareSprint = prepareTodoSprint
 	todopkg.SprintHandles = sprintHandlesForTodo
 	todopkg.SprintPreflight = sprintBoardPreflight
 	todopkg.SprintChanged = func(previous *issue.Issue) error {
@@ -44,6 +46,48 @@ func init() {
 			return nil
 		})
 	}
+}
+
+// prepareTodoSprint gives all existing cards the same repository registration
+// behavior. A missing explicit numeric card retains the normal number-only link.
+func prepareTodoSprint(st *issue.Store, seq int64) error {
+	if st.Sub != todopkg.RepoSub {
+		return nil
+	}
+	root, err := normalizeStoryRoot(st.Root)
+	if err != nil {
+		return err
+	}
+	dir, err := sprintStoreDir()
+	if err != nil {
+		return err
+	}
+	q, err := loadWeaveQueue(dir)
+	if err != nil {
+		return err
+	}
+	s := findWeaveStory(q, seq)
+	if s == nil {
+		return nil
+	}
+	for _, have := range s.StoryRoots {
+		if have == root {
+			return nil
+		}
+	}
+	return withWeaveQueueLock(dir, func(q *weaveQueue) error {
+		s := findWeaveStory(q, seq)
+		if s == nil {
+			return fmt.Errorf("selected sprint #%d no longer exists; story left unchanged", seq)
+		}
+		for _, have := range s.StoryRoots {
+			if have == root {
+				return nil
+			}
+		}
+		s.StoryRoots = append(s.StoryRoots, root)
+		return nil
+	})
 }
 
 // sprintBoardPreflight is the pkg/todo preflight seam: it proves THIS host's
