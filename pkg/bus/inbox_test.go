@@ -319,3 +319,50 @@ func TestInboxRejectsNegativeLimitAndWait(t *testing.T) {
 		}
 	}
 }
+
+// A zero acknowledgement on a reader with no cursor must still establish the
+// cursor: that file is the reader's addressability proof, so notify to an
+// unknown name fails closed until it exists and then delivers unread mail.
+func TestMarkNotificationsReadZeroEstablishesReachableReader(t *testing.T) {
+	isolate(t)
+	if err := NotifyEvent("scheduler", "zeroreader", "before"); err == nil {
+		t.Fatal("notify to a reader with no cursor must fail closed")
+	}
+	if err := MarkNotificationsRead("zeroreader", 0); err != nil {
+		t.Fatal(err)
+	}
+	if cur, ok := inboxCursorSeq("zeroreader"); !ok || cur != 0 {
+		t.Fatalf("cursor after zero ack = %d, exists=%v; want 0, true", cur, ok)
+	}
+	if err := NotifyEvent("scheduler", "zeroreader", "after"); err != nil {
+		t.Fatalf("notify after establishing the cursor: %v", err)
+	}
+	events, _, err := UnreadNotifications("zeroreader")
+	if err != nil || len(events) != 1 || events[0].Body != "after" {
+		t.Fatalf("established reader unread = %+v, %v; want exactly the one delivered mail", events, err)
+	}
+	if err := NotifyEvent("scheduler", "ghostreader", "x"); err == nil {
+		t.Fatal("an unrelated unknown reader must stay unreachable")
+	}
+}
+
+func TestMarkNotificationsReadStaysMonotonic(t *testing.T) {
+	isolate(t)
+	if err := MarkNotificationsRead("mono", 5); err != nil {
+		t.Fatal(err)
+	}
+	for _, through := range []int64{0, 3, -1} {
+		if err := MarkNotificationsRead("mono", through); err != nil {
+			t.Fatal(err)
+		}
+		if cur, _ := inboxCursorSeq("mono"); cur != 5 {
+			t.Fatalf("ack through %d moved the cursor to %d; want it held at 5", through, cur)
+		}
+	}
+	if err := MarkNotificationsRead("mono", 9); err != nil {
+		t.Fatal(err)
+	}
+	if cur, _ := inboxCursorSeq("mono"); cur != 9 {
+		t.Fatalf("forward ack left cursor at %d, want 9", cur)
+	}
+}

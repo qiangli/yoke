@@ -253,14 +253,22 @@ func unreadNotificationsFrom(reader string, events []room.Event) ([]room.Event, 
 	return matched, high, nil
 }
 
-// MarkNotificationsRead acknowledges a previously rendered bus snapshot.
+// MarkNotificationsRead acknowledges a previously rendered bus snapshot. An
+// existing cursor only moves forward, but an absent or unparseable one is always
+// established (even at 0): the cursor file is the reader's addressability proof
+// (resolveNotifyTarget), and a missing cursor merely reads as 0.
 func MarkNotificationsRead(reader string, through int64) error {
-	current, err := readCursor(reader)
-	if err != nil {
-		return err
+	if through < 0 {
+		through = 0
 	}
-	if through <= current {
-		return nil
+	if _, exists := inboxCursorSeq(reader); exists {
+		current, err := readCursor(reader)
+		if err != nil {
+			return err
+		}
+		if through <= current {
+			return nil
+		}
 	}
 	return writeCursor(reader, through)
 }
