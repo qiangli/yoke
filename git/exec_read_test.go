@@ -326,12 +326,19 @@ func TestNativeStatus_Clean(t *testing.T) {
 	}
 	dir := setupTestRepo(t)
 
-	result, err := nativeStatus(context.Background(), dir, nil)
+	result, err := nativeStatus(context.Background(), dir, []string{"--porcelain"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result.Stdout != "" {
 		t.Errorf("expected empty status for clean repo, got %q", result.Stdout)
+	}
+	// The long form (and -b, --ignored, pathspecs) is host git's to
+	// render; the native engine declines rather than approximate it.
+	for _, args := range [][]string{nil, {"-sb"}, {"--short", "--ignored"}, {"--short", "--", "."}} {
+		if _, err := nativeStatus(context.Background(), dir, args); !errors.Is(err, ErrUnsupported) {
+			t.Errorf("status %v: want ErrUnsupported, got %v", args, err)
+		}
 	}
 }
 
@@ -927,7 +934,12 @@ func TestNativeLsFiles(t *testing.T) {
 	}
 
 	// --others should show untracked
-	result, err = nativeLsFiles(context.Background(), dir, []string{"--others"})
+	// A bare --others lists ignored files too; only the
+	// --exclude-standard form is native.
+	if _, err := nativeLsFiles(context.Background(), dir, []string{"--others"}); !errors.Is(err, ErrUnsupported) {
+		t.Errorf("ls-files --others: want ErrUnsupported, got %v", err)
+	}
+	result, err = nativeLsFiles(context.Background(), dir, []string{"--others", "--exclude-standard"})
 	if err != nil {
 		t.Fatalf("ls-files --others error: %v", err)
 	}

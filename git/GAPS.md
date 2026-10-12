@@ -113,7 +113,28 @@ These accept-and-ignore instead of rejecting; per the package rule they should
       subject on all three listing paths (degrades to plain on resolve
       failure, never breaks listing).
 - [ ] `log --date=<fmt>` — parsed, value ignored (always RFC3339).
-- [ ] `status --short` vs `--porcelain` — treated identically; no version distinction.
+- [x] `status --short` vs `--porcelain` — treated identically; no version distinction.
+      CLOSED 2026-10-11: they differ only in submodule-content letters
+      (` m`/` ?` short, ` M` porcelain v1), now rendered apart.
+
+## Decision-read parity (2026-10-11)
+
+Callers diff `status` / `diff` / `ls-files` output to decide what to
+commit, clean or sync, so for those verbs the contract is strict: the
+native output (stdout + exit code) is byte-identical to host git, or the
+verb returns `ErrUnsupported`. `TestParityMatrix` (`parity_matrix_test.go`)
+enforces it over real repository shapes — submodules registered or not,
+dirty submodule content, `.git/info/exclude` and nested `.gitignore`,
+staged deletes still on disk, C-quoted names, upstream tracking, detached
+HEAD, renames, merge conflicts — and also asserts that the core forms are
+served natively, so declining everything cannot pass. A new routed verb
+or flag on a decision read belongs in that matrix.
+
+Declined by design (host git via `--external`): long-form `status`,
+`status -b`/`--ignored`/pathspecs, any `status`/`diff`/`ls-files` over an
+index with merge conflicts, staged renames (unless `diff --no-renames`),
+bare `ls-files --others` (lists ignored files), submodule patch hunks,
+`branch` on a detached HEAD.
 - [ ] `fetch --tags` / `--prune` — accepted, no effect.
 
 ## Suggested order to close

@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"sort"
@@ -10,13 +11,17 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/storer"
+	"github.com/go-git/go-git/v5/storage/memory"
 )
 
 // indexTree materialises the staged index as a tree object (what
 // `git write-tree` does) so it can be diffed against another tree with
-// the same machinery as two commits. Subtrees are written to the object
-// store; unreachable until something references them, exactly like git.
+// the same machinery as two commits. The trees live in an in-memory
+// overlay over the repository's objects, so a read verb (status,
+// diff --cached) never writes into the repository.
 func indexTree(repo *gogit.Repository) (*object.Tree, error) {
+	ov := &overlayStorer{EncodedObjectStorer: repo.Storer, mem: memory.NewStorage()}
 	idx, err := repo.Storer.Index()
 	if err != nil {
 		return nil, err
@@ -72,17 +77,68 @@ func indexTree(repo *gogit.Repository) (*object.Tree, error) {
 		}
 		sort.Slice(entries, func(i, j int) bool { return key(entries[i]) < key(entries[j]) })
 		t := &object.Tree{Entries: entries}
-		eo := repo.Storer.NewEncodedObject()
+		eo := ov.NewEncodedObject()
 		if err := t.Encode(eo); err != nil {
 			return plumbing.ZeroHash, err
 		}
-		return repo.Storer.SetEncodedObject(eo)
+		return ov.SetEncodedObject(eo)
 	}
 	h, err := write(root)
 	if err != nil {
 		return nil, err
 	}
-	return repo.TreeObject(h)
+	return object.GetTree(ov, h)
+}
+
+// overlayStorer reads through to the repository's objects and keeps
+// writes in memory.
+type overlayStorer struct {
+	storer.EncodedObjectStorer
+	mem *memory.Storage
+}
+
+func (o *overlayStorer) NewEncodedObject() plumbing.EncodedObject { return o.mem.NewEncodedObject() }
+
+func (o *overlayStorer) SetEncodedObject(obj plumbing.EncodedObject) (plumbing.Hash, error) {
+	return o.mem.SetEncodedObject(obj)
+}
+
+func (o *overlayStorer) EncodedObject(t plumbing.ObjectType, h plumbing.Hash) (plumbing.EncodedObject, error) {
+	if obj, err := o.mem.EncodedObject(t, h); err == nil {
+		return obj, nil
+	}
+	return o.EncodedObjectStorer.EncodedObject(t, h)
+}
+
+func (o *overlayStorer) HasEncodedObject(h plumbing.Hash) error {
+	if o.mem.HasEncodedObject(h) == nil {
+		return nil
+	}
+	return o.EncodedObjectStorer.HasEncodedObject(h)
+}
+
+// stagedRenames reports whether host git would pair any staged deletion
+// with a staged addition (diff.renames on, 50% similarity): a shape the
+// native renderers do not draw, so they decline.
+func stagedRenames(repo *gogit.Repository, base *object.Tree) (bool, error) {
+	idxTree, err := indexTree(repo)
+	if err != nil {
+		return false, err
+	}
+	if base == nil {
+		base = &object.Tree{}
+	}
+	changes, err := object.DiffTreeWithOptions(context.Background(), base, idxTree,
+		&object.DiffTreeOptions{DetectRenames: true, RenameScore: 50})
+	if err != nil {
+		return false, err
+	}
+	for _, c := range changes {
+		if c.From.Name != "" && c.To.Name != "" && c.From.Name != c.To.Name {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // emptyBlobHash is the id of the zero-byte blob (`git hash-object /dev/null`).
@@ -97,7 +153,7 @@ var indexLineRE = regexp.MustCompile(`(?m)^index ([0-9a-f]{40})\.\.([0-9a-f]{40}
 // "Binary files differ" stub is not appliable, so the caller must fall
 // back to a host git rather than hand back a patch that silently drops
 // the change.
-func stagedPatch(repo *gogit.Repository, rev string, paths []string) (string, error) {
+func stagedPatch(repo *gogit.Repository, rev string, paths []string, noRenames bool) (string, error) {
 	base := &object.Tree{}
 	if rev == "" {
 		rev = "HEAD"
@@ -126,6 +182,11 @@ func stagedPatch(repo *gogit.Repository, rev string, paths []string) (string, er
 	if err != nil {
 		return "", ErrUnsupported
 	}
+	if !noRenames {
+		if renamed, err := stagedRenames(repo, base); err != nil || renamed {
+			return "", ErrUnsupported
+		}
+	}
 	if len(paths) > 0 {
 		kept := changes[:0:0]
 		for _, c := range changes {
@@ -144,6 +205,12 @@ func stagedPatch(repo *gogit.Repository, rev string, paths []string) (string, er
 	}
 	if len(changes) == 0 {
 		return "", nil
+	}
+	for _, c := range changes {
+		// git C-quotes such names in every header line; go-git does not.
+		if quotePath(c.From.Name, false) != c.From.Name || quotePath(c.To.Name, false) != c.To.Name {
+			return "", ErrUnsupported
+		}
 	}
 	patch, err := changes.Patch()
 	if err != nil {
@@ -171,6 +238,22 @@ func stagedPatch(repo *gogit.Repository, rev string, paths []string) (string, er
 	for _, stub := range stubs {
 		out = strings.Replace(out, stub, "", 1)
 	}
+	// git ends a ---/+++ name that holds a space with a TAB, so the
+	// name's end stays unambiguous.
+	// Only header lines (between "diff --git" and the first "@@") count.
+	lines := strings.SplitAfter(out, "\n")
+	inHeader := false
+	for i, l := range lines {
+		switch {
+		case strings.HasPrefix(l, "diff --git "):
+			inHeader = true
+		case strings.HasPrefix(l, "@@"):
+			inHeader = false
+		case inHeader && (strings.HasPrefix(l, "--- a/") || strings.HasPrefix(l, "+++ b/")) && strings.Contains(l[6:], " "):
+			lines[i] = strings.TrimSuffix(l, "\n") + "\t\n"
+		}
+	}
+	out = strings.Join(lines, "")
 	// go-git prints full 40-char blob ids; git abbreviates to 7.
 	out = indexLineRE.ReplaceAllStringFunc(out, func(m string) string {
 		sm := indexLineRE.FindStringSubmatch(m)

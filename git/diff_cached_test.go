@@ -230,22 +230,27 @@ func TestDiffCachedEmptyNewFileMatchesHostGit(t *testing.T) {
 	if !strings.Contains(want, "deleted file mode 100644\nindex e69de29..0000000\n") || strings.Contains(want, "--- a/was-empty") {
 		t.Fatalf("fixture lost the header-only empty-file deletion:\n%s", want)
 	}
+	// Host git pairs the emptied deletion with an empty addition as a
+	// rename (R100); without --no-renames the native engine declines.
+	if _, err := Exec(ctx, dir, []string{"diff", "--cached", "--binary", "HEAD"}); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("rename-bearing diff --cached: want ErrUnsupported, got %v", err)
+	}
 	for _, args := range [][]string{
-		{"diff", "--cached", "--binary", "HEAD"},
-		{"diff", "--cached", "--", "empty.txt"},
-		{"diff", "--cached", "--", "sub"},
-		{"diff", "--cached", "--", "was-empty", "to-empty.txt"},
+		{"diff", "--cached", "--no-renames", "--binary", "HEAD"},
+		{"diff", "--cached", "--no-renames", "--", "empty.txt"},
+		{"diff", "--cached", "--no-renames", "--", "sub"},
+		{"diff", "--cached", "--no-renames", "--", "was-empty", "to-empty.txt"},
 	} {
 		g, err := Exec(ctx, dir, args)
 		if err != nil {
 			t.Fatalf("%v: %v", args, err)
 		}
-		w := hostGit(t, dir, append(append([]string{}, args[:1]...), append([]string{"--no-renames"}, args[1:]...)...)...)
+		w := hostGit(t, dir, args...)
 		if g.Stdout != w {
 			t.Fatalf("%v differs from host git\n--- native ---\n%s\n--- host ---\n%s", args, g.Stdout, w)
 		}
 	}
-	got, _ := Exec(ctx, dir, []string{"diff", "--cached", "--binary", "HEAD"})
+	got, _ := Exec(ctx, dir, []string{"diff", "--cached", "--no-renames", "--binary", "HEAD"})
 	clean := t.TempDir()
 	hostGit(t, clean, "clone", "-q", dir, ".")
 	patch := filepath.Join(t.TempDir(), "p.diff")

@@ -273,7 +273,7 @@ func TestNativeRm(t *testing.T) {
 	}
 
 	// Status should show deletion
-	result, err = nativeStatus(context.Background(), dir, nil)
+	result, err = nativeStatus(context.Background(), dir, []string{"--short"})
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}

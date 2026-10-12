@@ -1471,11 +1471,11 @@ func TestRunExternal_OneDoor(t *testing.T) {
 	ctx := context.Background()
 	dir := makeTwoCommitRepo(t)
 
-	want, err := Exec(ctx, dir, []string{"status"})
+	want, err := Exec(ctx, dir, []string{"status", "--short"})
 	if err != nil {
 		t.Fatalf("Exec: %v", err)
 	}
-	got, err := RunExternal(ctx, dir, []string{"status"})
+	got, err := RunExternal(ctx, dir, []string{"status", "--short"})
 	if err != nil {
 		t.Fatalf("RunExternal: %v", err)
 	}

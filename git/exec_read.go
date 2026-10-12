@@ -8,13 +8,13 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/format/index"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/storer"
@@ -294,25 +294,69 @@ func nativeRevParse(_ context.Context, dir string, args []string) (*ExecResult, 
 	}
 }
 
+// nativeStatus serves only the machine-readable forms (--short / -s /
+// --porcelain[=v1], with -u{all,normal,no}); their output is
+// byte-identical to host git. The long form, --branch, --ignored,
+// pathspecs and any shape porcelainState cannot render exactly decline.
 func nativeStatus(_ context.Context, dir string, args []string) (*ExecResult, error) {
+	short, porcelain := false, false
+	untracked := "normal"
+	for _, a := range args {
+		switch a {
+		case "--short", "-s":
+			short = true
+		case "--porcelain", "--porcelain=v1":
+			short, porcelain = true, true
+		case "-uall", "--untracked-files=all", "-u", "--untracked-files":
+			untracked = "all"
+		case "-unormal", "--untracked-files=normal":
+			untracked = "normal"
+		case "-uno", "--untracked-files=no":
+			untracked = "no"
+		default:
+			return nil, ErrUnsupported
+		}
+	}
+	if !short {
+		return nil, ErrUnsupported
+	}
 	repo, err := openRepo(dir)
 	if err != nil {
 		return nil, ErrUnsupported
 	}
-
 	wt, err := repo.Worktree()
 	if err != nil {
 		return nil, ErrUnsupported
 	}
-
-	status, err := worktreeStatus(wt)
-	if err != nil {
+	ps, err := loadPorcelainState(repo, wt)
+	if err != nil || ps.unsupported != "" {
 		return nil, ErrUnsupported
 	}
-
-	// go-git's Status.String() already produces porcelain-style output.
-	// Handle --short and --porcelain which produce the same format.
-	return &ExecResult{Stdout: status.String()}, nil
+	var b strings.Builder
+	for _, p := range ps.sortedTracked() {
+		xy := ps.tracked[p]
+		if porcelain && (xy[1] == 'm' || xy[1] == '?') {
+			xy[1] = 'M' // v1 has no submodule-content letters
+		}
+		b.WriteByte(xy[0])
+		b.WriteByte(xy[1])
+		b.WriteByte(' ')
+		b.WriteString(quotePath(p, true))
+		b.WriteByte('\n')
+	}
+	var others []string
+	switch untracked {
+	case "all":
+		others = ps.untracked
+	case "normal":
+		others = ps.collapsedUntracked()
+	}
+	for _, p := range others {
+		b.WriteString("?? ")
+		b.WriteString(quotePath(p, true))
+		b.WriteByte('\n')
+	}
+	return &ExecResult{Stdout: b.String()}, nil
 }
 
 func nativeLog(_ context.Context, dir string, args []string) (*ExecResult, error) {
@@ -506,6 +550,7 @@ func nativeDiff(_ context.Context, dir string, args []string) (*ExecResult, erro
 	// Parse flags. Commit revisions are not supported (only worktree
 	// forms); exact on-disk paths after -- (or bare) filter the listing.
 	cached := false
+	noRenames := false
 	stat := false
 	quiet := false
 	nameOnly := false
@@ -520,6 +565,8 @@ func nativeDiff(_ context.Context, dir string, args []string) (*ExecResult, erro
 			dashDash = true
 		case arg == "--cached" || arg == "--staged":
 			cached = true
+		case arg == "--no-renames":
+			noRenames = true
 		case arg == "--binary" || arg == "-p" || arg == "--patch" || arg == "--no-color" || arg == "--no-ext-diff":
 			// --binary only matters for binary files, which stagedPatch
 			// refuses (ErrUnsupported) rather than emitting a stub.
@@ -564,65 +611,70 @@ func nativeDiff(_ context.Context, dir string, args []string) (*ExecResult, erro
 	if rev != "" && (quiet || nameOnly || stat) {
 		return nil, ErrUnsupported
 	}
-
-	// --quiet reports only via exit status: 0 = no differences, 1 =
-	// differences. Combined with --cached this is the "are there staged
-	// changes?" predicate loom uses to skip empty commits. --diff-filter
-	// narrows the predicate like host git.
-	if quiet {
-		status, err := worktreeStatus(wt)
-		if err != nil {
-			return nil, ErrUnsupported
-		}
-		for path, fs := range status {
-			if len(paths) > 0 && !slices.Contains(paths, path) {
-				continue
-			}
-			code := fs.Worktree
-			if cached {
-				code = fs.Staging
-			}
-			if diffFilterKeep(diffFilter, diffStatusLetter(code)) {
-				return &ExecResult{ExitCode: 1}, nil
-			}
-		}
-		return &ExecResult{ExitCode: 0}, nil
-	}
-
-	_ = stat // stat formatting is complex; fall through for now
 	if stat {
 		return nil, ErrUnsupported
 	}
 
-	if nameOnly {
-		status, err := worktreeStatus(wt)
-		if err != nil {
-			return nil, ErrUnsupported
-		}
+	ps, err := loadPorcelainState(repo, wt)
+	if err != nil || (ps.unsupported != "" && !(noRenames && ps.unsupported == unsupportedRenames)) {
+		return nil, ErrUnsupported
+	}
+	// changed lists the paths this diff covers, with their letter in the
+	// compared column: X (index vs HEAD) for --cached, Y (worktree vs
+	// index) otherwise. A submodule with dirty content counts as a
+	// worktree change, as in host git.
+	changed := func() []string {
 		var out []string
-		for path, fs := range status {
+		for _, path := range ps.sortedTracked() {
 			if len(paths) > 0 && !slices.Contains(paths, path) {
 				continue
 			}
-			code := fs.Worktree
+			c := ps.tracked[path][1]
 			if cached {
-				// Staged column: index vs HEAD.
-				code = fs.Staging
+				c = ps.tracked[path][0]
 			}
-			if diffFilterKeep(diffFilter, diffStatusLetter(code)) {
+			switch c {
+			case ' ':
+				continue
+			case 'm', '?':
+				c = 'M'
+			}
+			if diffFilterKeep(diffFilter, c) {
 				out = append(out, path)
 			}
 		}
-		sort.Strings(out)
+		return out
+	}
+
+	// --quiet reports only via exit status: 0 = no differences, 1 =
+	// differences. Combined with --cached this is the "are there staged
+	// changes?" predicate loom uses to skip empty commits.
+	if quiet {
+		if len(changed()) > 0 {
+			return &ExecResult{ExitCode: 1}, nil
+		}
+		return &ExecResult{ExitCode: 0}, nil
+	}
+
+	if nameOnly {
 		var b strings.Builder
-		for _, p := range out {
-			b.WriteString(p + "\n")
+		for _, p := range changed() {
+			b.WriteString(quotePath(p, false) + "\n")
 		}
 		return &ExecResult{Stdout: b.String()}, nil
 	}
 
+	// Patches: gitlink hunks ("Subproject commit …") are host-git only.
+	for _, path := range changed() {
+		for _, e := range ps.idx.Entries {
+			if e.Name == path && e.Mode == filemode.Submodule {
+				return nil, ErrUnsupported
+			}
+		}
+	}
+
 	if cached {
-		patch, err := stagedPatch(repo, rev, paths)
+		patch, err := stagedPatch(repo, rev, paths, noRenames)
 		if err != nil {
 			return nil, err
 		}
@@ -1009,6 +1061,11 @@ func nativeBranch(_ context.Context, dir string, args []string) (*ExecResult, er
 
 	if isListMode && (len(nonFlagArgs) == 0) {
 		head, _ := repo.Head()
+		if head != nil && !head.Name().IsBranch() && !listRemote {
+			// Detached HEAD: host git leads with "* (HEAD detached at
+			// <rev>)", where <rev> is how HEAD was reached; decline.
+			return nil, ErrUnsupported
+		}
 
 		// Resolve --contains commit hash if specified
 		var containsHash *plumbing.Hash
@@ -2149,101 +2206,86 @@ func nativeGrep(_ context.Context, dir string, args []string) (*ExecResult, erro
 	return &ExecResult{Stdout: b.String()}, nil
 }
 
+// nativeLsFiles reads the index (not HEAD), in index order, like host
+// git: the default/--cached listing, -s/--stage, -m/--modified,
+// -d/--deleted and -o/--others with --exclude-standard, each with -z.
+// Pathspecs, --ignored, a bare --others (which must list ignored files)
+// and an index with merge conflicts decline.
 func nativeLsFiles(_ context.Context, dir string, args []string) (*ExecResult, error) {
+	z, stage, modified, deleted, others, excludeStd, cached := false, false, false, false, false, false, false
+	for _, arg := range args {
+		switch arg {
+		case "--cached", "-c":
+			cached = true
+		case "-z":
+			z = true
+		case "--stage", "-s":
+			stage = true
+		case "--modified", "-m":
+			modified = true
+		case "--deleted", "-d":
+			deleted = true
+		case "--others", "-o":
+			others = true
+		case "--exclude-standard":
+			excludeStd = true
+		default:
+			return nil, ErrUnsupported
+		}
+	}
+	modes := 0
+	for _, on := range []bool{cached || stage, modified, deleted, others} {
+		if on {
+			modes++
+		}
+	}
+	if modes > 1 || (others && !excludeStd) {
+		return nil, ErrUnsupported
+	}
+
 	repo, err := openRepo(dir)
 	if err != nil {
 		return nil, ErrUnsupported
 	}
-
 	wt, err := repo.Worktree()
 	if err != nil {
 		return nil, ErrUnsupported
 	}
-
-	// Parse flags
-	nullTerminated := false
-	showModified := false
-	showOthers := false
-	showIgnored := false
-
-	for _, arg := range args {
-		switch arg {
-		case "--cached", "-c":
-			// default behavior
-		case "-z":
-			nullTerminated = true
-		case "--modified", "-m":
-			showModified = true
-		case "--others", "-o":
-			showOthers = true
-		case "--ignored":
-			showIgnored = true
-		case "--exclude-standard":
-			// accept but ignore (go-git doesn't have full .gitignore support)
-		default:
-			if strings.HasPrefix(arg, "-") {
-				return nil, ErrUnsupported
-			}
-		}
-	}
-
-	_ = showIgnored // go-git doesn't easily support this, return empty for now
-
-	status, err := worktreeStatus(wt)
-	if err != nil {
+	ps, err := loadPorcelainState(repo, wt)
+	if err != nil || ps.unsupported == "unmerged index entries" {
 		return nil, ErrUnsupported
 	}
-
-	separator := "\n"
-	if nullTerminated {
-		separator = "\x00"
+	if z && stage {
+		return nil, ErrUnsupported
+	}
+	name := func(p string) string {
+		if z {
+			return p + "\x00"
+		}
+		return quotePath(p, false) + "\n"
 	}
 
 	var b strings.Builder
-
-	if showModified {
-		for path, s := range status {
-			if s.Worktree == gogit.Modified || s.Staging == gogit.Modified {
-				b.WriteString(path)
-				b.WriteString(separator)
+	switch {
+	case others:
+		for _, p := range ps.untracked {
+			b.WriteString(name(p))
+		}
+	case modified, deleted:
+		for _, e := range ps.idx.Entries {
+			y := ps.tracked[e.Name][1]
+			if (deleted && y == 'D') || (modified && (y == 'D' || y == 'M')) {
+				b.WriteString(name(e.Name))
 			}
 		}
-		return &ExecResult{Stdout: b.String()}, nil
-	}
-
-	if showOthers {
-		for path, s := range status {
-			if s.Worktree == gogit.Untracked {
-				b.WriteString(path)
-				b.WriteString(separator)
+	default:
+		for _, e := range ps.idx.Entries {
+			if stage {
+				fmt.Fprintf(&b, "%06o %s %d\t", uint32(e.Mode), e.Hash, e.Stage)
 			}
+			b.WriteString(name(e.Name))
 		}
-		return &ExecResult{Stdout: b.String()}, nil
 	}
-
-	// Default: list all tracked files from the index
-	head, err := repo.Head()
-	if err != nil {
-		return nil, ErrUnsupported
-	}
-	commit, err := repo.CommitObject(head.Hash())
-	if err != nil {
-		return nil, ErrUnsupported
-	}
-	tree, err := commit.Tree()
-	if err != nil {
-		return nil, ErrUnsupported
-	}
-
-	err = tree.Files().ForEach(func(f *object.File) error {
-		b.WriteString(f.Name)
-		b.WriteString(separator)
-		return nil
-	})
-	if err != nil {
-		return nil, ErrUnsupported
-	}
-
 	return &ExecResult{Stdout: b.String()}, nil
 }
 
