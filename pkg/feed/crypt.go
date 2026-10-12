@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -258,7 +259,18 @@ func EncryptPost(p *Post, key []byte, group string, epoch int, random io.Reader)
 	}
 	out := *p
 	var err error
-	out.Body, err = EncryptField(strings.TrimSpace(p.Body), key, group, epoch, "body", random)
+	body := strings.TrimSpace(p.Body)
+	if len(p.Labels) > 0 {
+		payload, err := json.Marshal(struct {
+			Body   string   `json:"body"`
+			Labels []string `json:"labels"`
+		}{body, p.Labels})
+		if err != nil {
+			return nil, err
+		}
+		body = "feed:labels:v1:" + string(payload)
+	}
+	out.Body, err = EncryptField(body, key, group, epoch, "body", random)
 	if err != nil {
 		return nil, err
 	}
@@ -270,6 +282,7 @@ func EncryptPost(p *Post, key []byte, group string, epoch int, random io.Reader)
 	if err != nil {
 		return nil, err
 	}
+	out.Labels = nil
 	out.Group, out.Epoch, out.Enc = group, epoch, "v1"
 	return &out, nil
 }
@@ -286,6 +299,16 @@ func DecryptPost(p *Post, key []byte) (*Post, error) {
 	out.Body, err = DecryptField(p.Body, key, p.Group, p.Epoch, "body")
 	if err != nil {
 		return nil, err
+	}
+	if strings.HasPrefix(out.Body, "feed:labels:v1:") {
+		var payload struct {
+			Body   string   `json:"body"`
+			Labels []string `json:"labels"`
+		}
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(out.Body, "feed:labels:v1:")), &payload); err != nil {
+			return nil, fmt.Errorf("feed: decrypt labels: %w", err)
+		}
+		out.Body, out.Labels = payload.Body, payload.Labels
 	}
 	out.Headline, err = DecryptField(p.Headline, key, p.Group, p.Epoch, "headline")
 	if err != nil {
