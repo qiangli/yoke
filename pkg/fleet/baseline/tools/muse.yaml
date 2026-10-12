@@ -20,6 +20,25 @@ cli:
     version: 1.4.4-R5419.1
     license: Meta Muse Code Terms of Service (proprietary)
     license_url: https://dev.meta.ai/
+    # NO THIRD-PARTY TRACKING (Sprint #434 rule 2, docs/bashy-supply-chain-audit.md):
+    # muse has NO env switch, so there is no `env:` block here. Audited against
+    # the pinned 1.4.4-R5419.1 binary: no DO_NOT_TRACK read, and the whole
+    # MUSE_* surface carries no telemetry variable. Its lever is a SETTING, and
+    # the key is MEASURED rather than inferred — muse refuses a run on an
+    # unknown -c key, which makes it a reliable oracle:
+    #
+    #   $ muse exec --provider echo --yolo -c bogus_key_zz=false "say ok"
+    #   muse: -c bogus_key_zz: refusing run: unknown key: no such setting   (exit 2)
+    #   $ muse exec --provider echo --yolo -c telemetry.enabled=false "say ok"
+    #   echo: say ok                                                        (exit 0)
+    #
+    # The settings tree also carries telemetry.{endpoint,destination,proxy,auth,
+    # artillery,ca_bundle} and an enterprise policy document can force it off
+    # (policy.privacy.telemetry.force_off) — that document is the operator's.
+    # `telemetry.enabled=false` needs Go to inject: adding `-c` to the baseline
+    # `exec:` template is not safe from here because the gateway derives muse's
+    # argv from it and pins the result byte-for-byte
+    # (pkg/cligw/muse_binding_test.go). Recorded in the story note instead.
     assets:
       darwin/arm64:
         url: https://lookaside.facebook.com/lookaside/muse/download/?channel=muse&version={version}&file=muse-aarch64-macos

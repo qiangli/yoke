@@ -18,6 +18,23 @@ cli:
     version: 1.3.2
     license: Google Terms of Service (proprietary)
     license_url: https://policies.google.com/terms
+    # NO THIRD-PARTY TRACKING (Sprint #434 rule 2, docs/bashy-supply-chain-audit.md):
+    # the auto-update switch is the ONLY lever agy exposes, and that is a
+    # measured negative, not an omission. Audited against the pinned 1.3.2
+    # binary:
+    #   - no DO_NOT_TRACK read (zero occurrences);
+    #   - the complete AGY_*/ANTIGRAVITY_*/JETSKI_* env surface carries no
+    #     telemetry, analytics or crash-report switch (the AGY_CLI_DISABLE_*
+    #     family is rendering: LATEX, MERMAID, ESCAPE_SEQUENCE_OPTIMIZATIONS);
+    #   - `--disable_telemetry` is NOT a flag of this build: the string belongs
+    #     to an embedded component, and `agy --disable_telemetry …` answers
+    #     "flags provided but not defined: -disable_telemetry";
+    #   - the binary DOES link Clearcut and Sentry, but the telemetry knobs
+    #     (disable_telemetry, ANTIGRAVITY_SENTRY_SAMPLE_RATE, …) are
+    #     SERVER-SIDE proto/experiment fields, so they are the account's
+    #     setting to flip, not ours — guessing one here would read like a
+    #     protection that is not there.
+    # Nothing is invented: if a switch appears in a later pin, it goes here.
     env:
       - AGY_CLI_DISABLE_AUTO_UPDATE=1
     assets:

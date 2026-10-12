@@ -18,8 +18,47 @@ cli:
     version: 2.1.295
     license: Anthropic Commercial Terms of Service (proprietary; SEE LICENSE IN README.md)
     license_url: https://www.anthropic.com/legal/commercial-terms
+    # NO THIRD-PARTY TRACKING (Sprint #434 rule 2, docs/bashy-supply-chain-audit.md).
+    # Every switch below was read out of the PINNED 2.1.295 binary itself
+    # (`strings claude | grep`), not from a doc that may describe another
+    # release: each name appears as a live `process.env.<NAME>` read, and
+    # DISABLE_NON_ESSENTIAL_MODEL_CALLS — which the docs still list — is GONE
+    # from this build, so it is deliberately not set (a dead key reads like a
+    # protection that is not there).
+    #
+    #   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC  essential-traffic-only mode
+    #     (`Rt()` = privacy level "essential-traffic"): no startup connection
+    #     warm-up, no plugin-archive download, no built-in gh api, no live
+    #     preview, no guest vitals emitter. Anthropic's OWN sandbox-guest env
+    #     sets it alongside DISABLE_AUTOUPDATER=1, so it is a vendor-supported
+    #     configuration rather than an undocumented corner.
+    #   DISABLE_TELEMETRY / DO_NOT_TRACK  the two spellings this build accepts
+    #     for "no product telemetry"; both also switch OFF third-party
+    #     feature-flag evaluation (`telemetryDisabledBy`). Remote Control and
+    #     taking a remotely-started session need flags and therefore stop
+    #     working — neither is reachable from a governed headless worker.
+    #   DISABLE_ERROR_REPORTING  no crash/exception upload.
+    #   DISABLE_GROWTHBOOK  names the third-party flag vendor explicitly
+    #     (`ug()` = !DISABLE_GROWTHBOOK && …), so rule (2) does not rest on
+    #     DISABLE_TELEMETRY happening to imply it.
+    #   DISABLE_BUG_COMMAND / DISABLE_FEEDBACK_COMMAND  /bug and /feedback
+    #     refuse with "disabled via the … environment variable" instead of
+    #     uploading a transcript.
+    #   CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY  no in-session product survey.
+    #
+    # OTel export stays UNSET: CLAUDE_CODE_ENABLE_TELEMETRY is the opt-in, and
+    # if it is ever turned on OTEL_EXPORTER_OTLP_ENDPOINT may only name bashy's
+    # local collector, never a vendor endpoint.
     env:
       - DISABLE_AUTOUPDATER=1
+      - CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+      - DISABLE_TELEMETRY=1
+      - DO_NOT_TRACK=1
+      - DISABLE_ERROR_REPORTING=1
+      - DISABLE_GROWTHBOOK=1
+      - DISABLE_BUG_COMMAND=1
+      - DISABLE_FEEDBACK_COMMAND=1
+      - CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1
     assets:
       darwin/arm64:
         url: https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/{version}/darwin-arm64/claude

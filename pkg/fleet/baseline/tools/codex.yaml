@@ -19,6 +19,36 @@ cli:
     version: 0.162.0
     license: Apache-2.0
     license_url: https://github.com/openai/codex/blob/main/LICENSE
+    # NO THIRD-PARTY TRACKING (Sprint #434 rule 2, docs/bashy-supply-chain-audit.md):
+    # codex has NO env switch to put here. It was audited against the pinned
+    # 0.162.0 binary and reads no DO_NOT_TRACK and no CODEX_*TELEMETRY /
+    # *ANALYTICS variable at all (zero occurrences). Its two levers are
+    # config.toml keys, and both were MEASURED valid at this pin by loading a
+    # real config (`codex -c <key> debug models`, which rejects a bad value):
+    #
+    #   check_for_update_on_startup = false   # suppresses the startup
+    #       version.json fetch; a top-level ConfigToml key, and
+    #       `-c check_for_update_on_startup=notabool` exits 1.
+    #   otel.exporter = "none"                # `-c otel.exporter=bogusxx` exits 1
+    #       with: unknown variant `bogusxx`, expected one of `none`, `statsig`,
+    #       `otlp-http`, `otlp-grpc`. `statsig` is a VENDOR endpoint, so pinning
+    #       `none` on the launch is what keeps an operator's config.toml from
+    #       turning a governed run into a tracked one. If OTel is ever wanted it
+    #       may only be otlp-* at bashy's local collector.
+    #
+    # Neither can be set from this file: `cli.managed.env` is environment only,
+    # and the config the launch writes (agentctl's preseedCodexTrust) appends
+    # ONLY a [projects."…"] trust table to the operator's ~/.codex/config.toml
+    # by design. Injecting these needs Go — the natural home is the same
+    # `insertAfter(args, "exec", {"-c", …})` the gateway already uses for
+    # `web_search="disabled"` (pkg/cligw/worker.go) — so it is recorded here and
+    # in the story note instead of being half-done. The baseline `exec:`
+    # template is not the place: it is pinned byte-for-byte by the argv golden
+    # tests (pkg/fleet/fleet_test.go, pkg/weave/seed_contract_test.go).
+    # codex's own `analytics` section is opt-in and OFF by default for
+    # app-server ("Users have to explicitly opt in via the `analytics` section"),
+    # and the field name is not recoverable from the binary, so no key is
+    # guessed at here.
     assets:
       darwin/arm64:
         url: https://github.com/openai/codex/releases/download/rust-v{version}/codex-package-aarch64-apple-darwin.tar.gz

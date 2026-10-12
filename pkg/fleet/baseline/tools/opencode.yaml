@@ -27,8 +27,34 @@ cli:
     version: 1.18.35
     license: MIT
     license_url: https://github.com/anomalyco/opencode/blob/v1.18.35/LICENSE
+    # NO THIRD-PARTY TRACKING (Sprint #434 rule 2, docs/bashy-supply-chain-audit.md).
+    # Both switches were read out of the PINNED 1.18.35 binary:
+    #
+    #   OPENCODE_DISABLE_SHARE — the share service is the one place opencode
+    #     uploads a transcript. The read is literal:
+    #       process.env.OPENCODE_DISABLE_SHARE==="true"||...==="1"
+    #     so "1" is an accepted value, and the Share service never mints the
+    #     session/secret/url row. OPENCODE_AUTO_SHARE stays unset (it is the
+    #     opt-IN), as does the `share` config key, which the operator owns.
+    #   DO_NOT_TRACK — honoured by the BUN runtime opencode is compiled into
+    #     (the string sits beside Bun's own BUN_FEATURE_FLAG_* reads, not in
+    #     opencode's bundle), which is what disables the runtime's crash
+    #     reporting. The convention is consoledonottrack.com.
+    #
+    # Audited and deliberately NOT set:
+    #   - no Sentry DSN is compiled in (the SDK is vendored but never
+    #     configured — zero ingest.sentry.io strings), so there is no
+    #     crash-report endpoint to switch off.
+    #   - `experimental.openTelemetry` is the AI-SDK span opt-in; left unset,
+    #     and if ever enabled it may only point at bashy's local collector.
+    #   - OPENCODE_DISABLE_MODELS_FETCH / OPENCODE_DISABLE_LSP_DOWNLOAD fetch
+    #     a model catalogue and language servers. That is functional traffic,
+    #     not tracking: disabling it would break model resolution, so rule (2)
+    #     does not reach it.
     env:
       - OPENCODE_DISABLE_AUTOUPDATE=1
+      - OPENCODE_DISABLE_SHARE=1
+      - DO_NOT_TRACK=1
     assets:
       darwin/arm64:
         url: https://github.com/anomalyco/opencode/releases/download/v{version}/opencode-darwin-arm64.zip

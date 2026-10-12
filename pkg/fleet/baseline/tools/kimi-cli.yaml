@@ -15,8 +15,28 @@ cli:
     version: 2.1.1
     license: MIT
     license_url: https://github.com/MoonshotAI/kimi-code/blob/main/LICENSE
+    # NO THIRD-PARTY TRACKING (Sprint #434 rule 2, docs/bashy-supply-chain-audit.md).
+    # KIMI_DISABLE_TELEMETRY is the vendor's own kill switch, read from the
+    # source at the PINNED tag (@moonshot-ai/kimi-code@2.1.1,
+    # packages/telemetry/src/bootstrap.ts):
+    #
+    #   export const TELEMETRY_DISABLE_ENV = 'KIMI_DISABLE_TELEMETRY';
+    #   const TRUE_ENV_VALUES = new Set(['1','true','t','yes','y']);
+    #   shouldEnableTelemetry() => enabled !== false && !isTelemetryDisabledByEnv()
+    #
+    # Set it and initializeTelemetry() tears the client down before a cloud
+    # appender exists, so nothing reaches the intake. The HEADLESS path we
+    # launch honours it: apps/kimi-code/src/cli/v2/run-v2-print.ts imports
+    # shouldEnableTelemetry, and the TUI gates on isTelemetryDisabledByEnv too.
+    # The config.toml key `telemetry: false` is the same switch by another
+    # door (packages/node-sdk/src/sdk-rpc-client-v2.ts) — not used here,
+    # because the operator owns that file.
+    # kimi ships no Sentry/crash reporter (the only "sentry" in the tree is a
+    # word in a slug list) and honours no DO_NOT_TRACK, so there is nothing
+    # else to switch off: the binary is a Node SEA, not a Bun build.
     env:
       - KIMI_CODE_NO_AUTO_UPDATE=1
+      - KIMI_DISABLE_TELEMETRY=1
     assets:
       darwin/arm64:
         url: https://github.com/MoonshotAI/kimi-code/releases/download/%40moonshot-ai%2Fkimi-code%40{version}/kimi-code-darwin-arm64.tar.gz
