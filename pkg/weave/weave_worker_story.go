@@ -237,12 +237,18 @@ func weaveWorkerCommits(it *weaveItem) ([]*object.Commit, error) {
 }
 
 func weaveSubmitWorkerStories(cmd *cobra.Command, it *weaveItem) error {
-	if len(it.WorkerStories) == 0 || it.State != "submitted" || it.AutoCommitted || it.Dirty || it.UntrackedFiles > 0 || it.IsolationViolated || it.VerifyExit != nil && *it.VerifyExit != 0 {
+	if len(it.WorkerStories) == 0 || it.State != "submitted" || it.Dirty || it.UntrackedFiles > 0 || it.IsolationViolated || it.VerifyExit != nil && *it.VerifyExit != 0 {
 		return nil
 	}
 	commits, err := weaveWorkerCommits(it)
 	if err != nil {
 		return err
+	}
+	// The wrapper's preservation commit is HEAD and copies the brief's trailers,
+	// so it is run provenance, not worker delivery. Only commits the worker made
+	// can prove it; an auto-only branch proves nothing.
+	if it.AutoCommitted && len(commits) > 0 {
+		commits = commits[1:]
 	}
 	quiet := &cobra.Command{}
 	quiet.SetOut(io.Discard)

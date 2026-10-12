@@ -280,7 +280,16 @@ func weaveChildEnv(environ []string, workspace, branch, base, queueDir string, i
 		}
 		env = append(env, kv)
 	}
-	if agent := weaveWorkerAgent(it); agent != "" {
+	// The resolved launch names the agent actually being run; the item's
+	// owner is only a per-issue seat when no launch spec recorded the agent.
+	agent := weaveWorkerAgent(it)
+	if l != nil && l.Named() {
+		agent = l.Nick
+		if canonical, ok := canonicalFleetAgentName(agent); ok {
+			agent = canonical
+		}
+	}
+	if agent != "" {
 		env = append(env, "BASHY_AGENT="+agent)
 	}
 	env = append(env, "PWD="+workspace)

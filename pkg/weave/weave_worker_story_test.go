@@ -60,7 +60,7 @@ func TestWorkerStoryActorAndTerminalEvidence(t *testing.T) {
 		want                 bool
 	}{
 		{"matching", "match", "submitted", true}, {"nonmatching", "other", "submitted", false}, {"no-commits", "", "submitted", false}, {"failed", "match", "failed", false}, {"killed", "match", "killed", false},
-		{"wrong-sprint", "match", "submitted", false}, {"dirty", "match", "submitted", false}, {"verify-failed", "match", "submitted", false}, {"preservation", "match", "submitted", false}, {"manual-submit", "match", "submitted", true},
+		{"wrong-sprint", "match", "submitted", false}, {"dirty", "match", "submitted", false}, {"verify-failed", "match", "submitted", false}, {"preservation", "match", "submitted", false}, {"auto-after-delivery", "match", "submitted", true}, {"auto-dirty", "match", "submitted", false}, {"manual-submit", "match", "submitted", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root, qdir, it := workerStoryFixture(t)
@@ -87,9 +87,18 @@ func TestWorkerStoryActorAndTerminalEvidence(t *testing.T) {
 				if tc.name == "wrong-sprint" {
 					msg = strings.ReplaceAll(msg, "Sprint: #1", "Sprint: #2")
 				}
+				if tc.name == "preservation" {
+					msg = weaveAppendRunProvenance(it, weaveAutoCommitMessage(it))
+				}
 				mustWrite(t, filepath.Join(it.Workspace, "done.txt"), "done\n")
 				gitT(t, it.Workspace, "add", "done.txt")
 				gitT(t, it.Workspace, "commit", "-qm", msg)
+				if strings.HasPrefix(tc.name, "auto-") {
+					mustWrite(t, filepath.Join(it.Workspace, "KB.md"), "kb\n")
+					gitT(t, it.Workspace, "add", "KB.md")
+					gitT(t, it.Workspace, "commit", "-qm", weaveCrashedAutoCommitMessage(it, 0, ""))
+					it.AutoCommitted = true
+				}
 			}
 			it.State = tc.state
 			switch tc.name {
@@ -100,6 +109,8 @@ func TestWorkerStoryActorAndTerminalEvidence(t *testing.T) {
 				it.VerifyExit = &exit
 			case "preservation":
 				it.AutoCommitted = true
+			case "auto-dirty":
+				it.Dirty = true
 			case "manual-submit":
 				if err := runSprintStorySubmit(cmd, st.Sprint, st.ID, st.Actor, st.Repo, "worker checked tests and committed", &weaveOutputFlags{}); err != nil {
 					t.Fatal(err)
