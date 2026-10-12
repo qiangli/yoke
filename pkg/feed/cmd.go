@@ -113,7 +113,7 @@ inside a fence.`,
 		newSinkCmd(env), newPostCmd(env),
 		newFollowCmd(env), newUnfollowCmd(env), newFollowingCmd(env),
 		newFetchCmd(env), newReadCmd(env),
-		newChannelCmd(env), newDeliverCmd(env),
+		newChannelCmd(env), newDeliverCmd(env), newGroupCmd(env),
 	)
 	return root
 }
@@ -255,6 +255,7 @@ every listed attachment and mark the post drifted on mismatch.`,
 	f.StringVar(&relPath, "path", "", "sink-relative path (default posts/<yyyy>/<id>.md)")
 	f.BoolVar(&forceKey, "force-key", false, "replace the registry's stored public key for this host")
 	f.BoolVar(&noIndex, "no-index", false, "skip registering the post with the feed registry")
+	f.String("group", "", "group ID to publish into")
 	return cmd
 }
 
@@ -325,6 +326,9 @@ func runPost(c *cobra.Command, env Env, file string, have Excerpt, replyTo, relP
 		return err
 	}
 	p.Attachments = attachEntries
+	if err := prepareGroupPost(ctx, c, env, p); err != nil {
+		return err
+	}
 	priv, err := LoadOrCreateKey(dir)
 	if err != nil {
 		return err
@@ -416,6 +420,10 @@ func indexPublishedPost(ctx context.Context, env Env, dir string, warn io.Writer
 		return
 	}
 	req := buildIndexRequest(p, rel, data, urls, forceKey)
+	if p.Group != "" {
+		indexGroupedPublishedPost(ctx, env, dir, warn, base, token, p, req)
+		return
+	}
 	resp, err := HTTPIndexer{Base: base, Token: token}.Index(ctx, req)
 	if err == nil && resp.Indexed != "deferred" {
 		noteRegistryKey(dir, base, p.Pubkey)
@@ -543,6 +551,7 @@ field.`,
 					}
 				}
 			}
+			list = decryptGroupEntries(ctxOf(c), env, dir, list)
 			return printEntries(c.OutOrStdout(), list, asJSON, showBody)
 		},
 	}
@@ -595,6 +604,7 @@ func fetchAll(ctx context.Context, env Env, dir string, warn io.Writer) ([]Spool
 				continue
 			}
 			if e != nil {
+				cacheFetchedGroupPost(dir, e.ID, e.Hash, raw)
 				added = append(added, *e)
 			}
 		}
@@ -738,4 +748,201 @@ a unique prefix.`,
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "mark everything spooled as read")
 	return cmd
+}
+
+// ---- group ----
+
+func newGroupCmd(env Env) *cobra.Command {
+	group := &cobra.Command{Use: "group", Short: "manage feed groups"}
+	var private, public bool
+	var title string
+	create := &cobra.Command{Use: "create NAME", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, a []string) error {
+		if private && public {
+			return errors.New("feed: choose one group preset")
+		}
+		preset := "public"
+		if private {
+			preset = "private"
+		}
+		client, err := NewGroupClient(env)
+		if err != nil {
+			return err
+		}
+		var key []byte
+		var wrapped string
+		if private {
+			priv, err := LoadOrCreateEncKey(env.dir())
+			if err != nil {
+				return err
+			}
+			if err := client.PutEncKey(ctxOf(c), EncPubkeyB64(priv)); err != nil {
+				return err
+			}
+			key, err = freshGroupKey()
+			if err != nil {
+				return err
+			}
+			// The wrap binds the ID, so the client supplies it at creation.
+			id, err := uuid.NewV7()
+			if err != nil {
+				return err
+			}
+			wrapped, err = Wrap(key, EncPubkeyB64(priv), id.String(), 1, nil)
+			if err != nil {
+				return err
+			}
+			g, err := client.CreateGroupWithID(ctxOf(c), id.String(), a[0], title, preset, wrapped)
+			if err != nil {
+				return err
+			}
+			if g.ID != id.String() {
+				return errors.New("feed: server did not preserve private group ID; cannot use owner wrap")
+			}
+			if err := SaveGroupKey(env.dir(), g.ID, 1, key); err != nil {
+				return err
+			}
+			fmt.Fprintf(c.OutOrStdout(), "%s\t%s\t%s\n", g.ID, g.Name, preset)
+			return nil
+		}
+		g, err := client.CreateGroup(ctxOf(c), a[0], title, preset, "")
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(c.OutOrStdout(), "%s\t%s\t%s\n", g.ID, g.Name, preset)
+		return nil
+	}}
+	create.Flags().BoolVar(&private, "private", false, "create a private group")
+	create.Flags().BoolVar(&public, "public", false, "create a public group (default)")
+	create.Flags().StringVar(&title, "title", "", "display title")
+	add := &cobra.Command{Use: "add GROUP UID", Args: cobra.ExactArgs(2), RunE: func(c *cobra.Command, a []string) error {
+		client, err := NewGroupClient(env)
+		if err != nil {
+			return err
+		}
+		g, err := client.GetGroup(ctxOf(c), a[0])
+		if err != nil {
+			return err
+		}
+		wrapped := ""
+		if g.Read == "members" || g.Epoch > 0 {
+			key, err := CurrentGroupKey(ctxOf(c), client, env.dir(), g.ID, g.Epoch)
+			if err != nil {
+				return err
+			}
+			pub, err := client.GetEncKey(ctxOf(c), a[1])
+			if err != nil {
+				return err
+			}
+			wrapped, err = Wrap(key, pub, g.ID, g.Epoch, nil)
+			if err != nil {
+				return err
+			}
+		}
+		if err := client.AddMember(ctxOf(c), g.ID, a[1], wrapped); err != nil {
+			return err
+		}
+		fmt.Fprintf(c.OutOrStdout(), "added %s to %s\n", a[1], g.ID)
+		return nil
+	}}
+	rm := &cobra.Command{Use: "rm GROUP UID", Args: cobra.ExactArgs(2), RunE: func(c *cobra.Command, a []string) error {
+		client, err := NewGroupClient(env)
+		if err != nil {
+			return err
+		}
+		g, err := client.GetGroup(ctxOf(c), a[0])
+		if err != nil {
+			return err
+		}
+		if g.Read != "members" && g.Epoch == 0 {
+			if err := client.RemoveMember(ctxOf(c), g.ID, a[1], 0, nil); err != nil {
+				return err
+			}
+			fmt.Fprintf(c.OutOrStdout(), "removed %s from %s\n", a[1], g.ID)
+			return nil
+		}
+		next := g.Epoch + 1
+		key, err := freshGroupKey()
+		if err != nil {
+			return err
+		}
+		keys := map[string]string{}
+		found := false
+		for _, m := range g.Members {
+			uid := m.userID()
+			if uid == a[1] {
+				found = true
+				continue
+			}
+			if uid == "" {
+				return errors.New("feed: member list has empty uid")
+			}
+			pub, err := client.GetEncKey(ctxOf(c), uid)
+			if err != nil {
+				return err
+			}
+			keys[uid], err = Wrap(key, pub, g.ID, next, nil)
+			if err != nil {
+				return err
+			}
+		}
+		if !found {
+			return fmt.Errorf("feed: %s is not a group member", a[1])
+		}
+		if err := client.RemoveMember(ctxOf(c), g.ID, a[1], next, keys); err != nil {
+			return err
+		}
+		if err := SaveGroupKey(env.dir(), g.ID, next, key); err != nil {
+			return err
+		}
+		fmt.Fprintf(c.OutOrStdout(), "removed %s from %s; epoch %d\n", a[1], g.ID, next)
+		return nil
+	}}
+	ls := &cobra.Command{Use: "ls", Args: cobra.NoArgs, RunE: func(c *cobra.Command, _ []string) error {
+		client, err := NewGroupClient(env)
+		if err != nil {
+			return err
+		}
+		groups, err := client.ListGroups(ctxOf(c))
+		if err != nil {
+			return err
+		}
+		for _, g := range groups {
+			fmt.Fprintf(c.OutOrStdout(), "%s\t%s\t%s\t%d\n", g.ID, g.Name, g.Read, g.Epoch)
+		}
+		return nil
+	}}
+	group.AddCommand(create, add, rm, ls)
+	return group
+}
+
+func prepareGroupPost(ctx context.Context, c *cobra.Command, env Env, p *Post) error {
+	id, _ := c.Flags().GetString("group")
+	if id == "" {
+		return nil
+	}
+	client, err := NewGroupClient(env)
+	if err != nil {
+		return err
+	}
+	g, err := client.GetGroup(ctx, id)
+	if err != nil {
+		return err
+	}
+	if g.ID == "" {
+		return errors.New("feed: group response lacks ID")
+	}
+	if g.Read != "members" && g.Epoch == 0 {
+		p.Group = g.ID
+		return nil
+	}
+	key, err := CurrentGroupKey(ctx, client, env.dir(), g.ID, g.Epoch)
+	if err != nil {
+		return err
+	}
+	encrypted, err := EncryptPost(p, key, g.ID, g.Epoch, nil)
+	if err != nil {
+		return err
+	}
+	*p = *encrypted
+	return nil
 }

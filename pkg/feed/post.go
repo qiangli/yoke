@@ -23,6 +23,9 @@ type Post struct {
 	Labels     []string `yaml:"labels,omitempty"`
 	ReplyTo    string   `yaml:"reply_to,omitempty"`
 	Visibility string   `yaml:"visibility,omitempty"`
+	Group      string   `yaml:"group,omitempty"`
+	Epoch      int      `yaml:"epoch,omitempty"`
+	Enc        string   `yaml:"enc,omitempty"`
 	Pubkey     string   `yaml:"pubkey,omitempty"`
 	Sig        string   `yaml:"sig,omitempty"`
 	// Attachments lists files published beside the post, each with its
