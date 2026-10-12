@@ -42,6 +42,15 @@ import (
 // is intentionally allowed to be sparse — an absent pin is not an error, it just
 // means that tool still resolves its checksum from the release.
 var pinnedDigests = map[string]string{
+	// binmgr.CosignTool (CosignVersion v3.1.1) — the pinned Sigstore verifier.
+	// Each digest matched three ways: GitHub's published asset digest, the
+	// release's own cosign_checksums.txt, and an independent download + sha256.
+	"cosign@v3.1.1/darwin/amd64":  "14d2678dfbfde18798151e86fbd91ebdadbb7424b18412a42a155dd8a2df4c7a",
+	"cosign@v3.1.1/darwin/arm64":  "94b42a9e697be95675f6160ab031a9a5f1ec1e646d6f648d7b2f5cd59ececbc5",
+	"cosign@v3.1.1/linux/amd64":   "ae1ecd212663f3693ad9edf8b1a183900c9a52d3155ba6e354237f9a0f6463fc",
+	"cosign@v3.1.1/linux/arm64":   "2ec865872e331c32fd12b08dae15332d3f92c0aa029219589684a4903ca85d11",
+	"cosign@v3.1.1/windows/amd64": "9d2c026e667bfd979fa7ba1cab8c4b24d2e73f336ec2d57f7fc72c7e73e5b4b6",
+
 	// gotoolchain.DefaultVersion — official go.dev archives, digest confirmed
 	// by an independent download + sha256 of the artifact itself.
 	"go@1.27.1/darwin/amd64":  "8f8f52c6649542cf027bbc9b9c68d1ec042f9f34808a40413f0b8b3f66f3caa4",
