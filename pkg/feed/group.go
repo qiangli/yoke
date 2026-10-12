@@ -201,6 +201,64 @@ func (c *GroupClient) GroupKeys(ctx context.Context, id string) ([]FeedGroupKey,
 	return envelope.Keys, err
 }
 
+// ResolveGroup resolves a group NAME or ID via the groups list. It
+// matches on either the group's name or its ID and errors clearly if the
+// name is ambiguous or not found. When exactly one match is found the full
+// group is fetched via GetGroup so callers get members/epoch.
+func (c *GroupClient) ResolveGroup(ctx context.Context, nameOrID string) (FeedGroup, error) {
+	nameOrID = strings.TrimSpace(nameOrID)
+	if nameOrID == "" {
+		return FeedGroup{}, errors.New("feed: group is required")
+	}
+	// Fast path for direct ID: try GetGroup first so callers that pass an
+	// ID against servers that do not implement the list endpoint do not
+	// pay for (or fail on) a list call. If the fetched group's ID or
+	// Name matches the input we consider it resolved without listing.
+	if g, err := c.GetGroup(ctx, nameOrID); err == nil && g.ID != "" {
+		if g.ID == nameOrID || g.Name == nameOrID {
+			return g, nil
+		}
+	}
+	groups, err := c.ListGroups(ctx)
+	if err != nil {
+		// Fall back to direct ID lookup so older servers/tests that do
+		// not implement the list endpoint still work for ID-based calls.
+		if g, gerr := c.GetGroup(ctx, nameOrID); gerr == nil && g.ID != "" {
+			return g, nil
+		}
+		return FeedGroup{}, err
+	}
+	var matches []FeedGroup
+	for _, g := range groups {
+		if g.ID == nameOrID || g.Name == nameOrID {
+			matches = append(matches, g)
+		}
+	}
+	if len(matches) == 0 {
+		// Fall back to direct fetch for ID-style inputs when the name
+		// is not present in the list (e.g. stale list).
+		if g, gerr := c.GetGroup(ctx, nameOrID); gerr == nil && g.ID != "" {
+			return g, nil
+		}
+		return FeedGroup{}, fmt.Errorf("feed: no group named %q", nameOrID)
+	}
+	if len(matches) > 1 {
+		ids := make([]string, len(matches))
+		for i, g := range matches {
+			ids[i] = g.ID
+		}
+		return FeedGroup{}, fmt.Errorf("feed: ambiguous group %q: matches %d groups (%s)", nameOrID, len(matches), strings.Join(ids, ", "))
+	}
+	full, err := c.GetGroup(ctx, matches[0].ID)
+	if err != nil {
+		return FeedGroup{}, err
+	}
+	if full.ID == "" {
+		return matches[0], nil
+	}
+	return full, nil
+}
+
 func groupCachePath(dir, id string) (string, error) {
 	if id == "" || id == "." || id == ".." || strings.ContainsAny(id, "/\\") {
 		return "", errors.New("feed: invalid group id")

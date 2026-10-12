@@ -909,7 +909,7 @@ func newGroupCmd(env Env) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		g, err := client.GetGroup(ctxOf(c), a[0])
+		g, err := client.ResolveGroup(ctxOf(c), a[0])
 		if err != nil {
 			return err
 		}
@@ -939,7 +939,7 @@ func newGroupCmd(env Env) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		g, err := client.GetGroup(ctxOf(c), a[0])
+		g, err := client.ResolveGroup(ctxOf(c), a[0])
 		if err != nil {
 			return err
 		}
@@ -1030,7 +1030,7 @@ func prepareGroupPost(ctx context.Context, c *cobra.Command, env Env, p *Post) e
 	if err != nil {
 		return err
 	}
-	g, err := client.GetGroup(ctx, id)
+	g, err := client.ResolveGroup(ctx, id)
 	if err != nil {
 		return err
 	}
