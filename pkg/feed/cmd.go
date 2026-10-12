@@ -127,6 +127,7 @@ inside a fence.`,
 		newFollowCmd(env), newUnfollowCmd(env), newFollowingCmd(env),
 		newFetchCmd(env), newReadCmd(env),
 		newChannelCmd(env), newDeliverCmd(env), newGroupCmd(env),
+		newKeyCmd(env),
 	)
 	return root
 }
@@ -888,6 +889,17 @@ func newGroupCmd(env Env) *cobra.Command {
 			if g.ID != id.String() {
 				return errors.New("feed: server did not preserve private group ID; cannot use owner wrap")
 			}
+			if g.OwnerUID != "" {
+				_, devices, err := client.WrapDevices(ctxOf(c), g.OwnerUID, key, g.ID, 1)
+				if err != nil {
+					return err
+				}
+				for pub, wrap := range devices {
+					if err := client.PutDeviceWrap(ctxOf(c), g.ID, 1, g.OwnerUID, pub, wrap); err != nil {
+						return err
+					}
+				}
+			}
 			if err := SaveGroupKey(env.dir(), g.ID, 1, key); err != nil {
 				return err
 			}
@@ -914,21 +926,18 @@ func newGroupCmd(env Env) *cobra.Command {
 			return err
 		}
 		wrapped := ""
+		var devices map[string]string
 		if g.Read == "members" || g.Epoch > 0 {
 			key, err := CurrentGroupKey(ctxOf(c), client, env.dir(), g.ID, g.Epoch)
 			if err != nil {
 				return err
 			}
-			pub, err := client.GetEncKey(ctxOf(c), a[1])
-			if err != nil {
-				return err
-			}
-			wrapped, err = Wrap(key, pub, g.ID, g.Epoch, nil)
+			wrapped, devices, err = client.WrapDevices(ctxOf(c), a[1], key, g.ID, g.Epoch)
 			if err != nil {
 				return err
 			}
 		}
-		if err := client.AddMember(ctxOf(c), g.ID, a[1], wrapped); err != nil {
+		if err := client.AddMemberWithDevices(ctxOf(c), g.ID, a[1], wrapped, devices); err != nil {
 			return err
 		}
 		fmt.Fprintf(c.OutOrStdout(), "added %s to %s\n", a[1], g.ID)
@@ -956,6 +965,7 @@ func newGroupCmd(env Env) *cobra.Command {
 			return err
 		}
 		keys := map[string]string{}
+		deviceKeys := map[string]map[string]string{}
 		found := false
 		for _, m := range g.Members {
 			uid := m.userID()
@@ -966,19 +976,17 @@ func newGroupCmd(env Env) *cobra.Command {
 			if uid == "" {
 				return errors.New("feed: member list has empty uid")
 			}
-			pub, err := client.GetEncKey(ctxOf(c), uid)
+			var devices map[string]string
+			keys[uid], devices, err = client.WrapDevices(ctxOf(c), uid, key, g.ID, next)
 			if err != nil {
 				return err
 			}
-			keys[uid], err = Wrap(key, pub, g.ID, next, nil)
-			if err != nil {
-				return err
-			}
+			deviceKeys[uid] = devices
 		}
 		if !found {
 			return fmt.Errorf("feed: %s is not a group member", a[1])
 		}
-		if err := client.RemoveMember(ctxOf(c), g.ID, a[1], next, keys); err != nil {
+		if err := client.RemoveMemberWithDevices(ctxOf(c), g.ID, a[1], next, keys, deviceKeys); err != nil {
 			return err
 		}
 		if err := SaveGroupKey(env.dir(), g.ID, next, key); err != nil {

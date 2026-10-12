@@ -45,8 +45,13 @@ func (m FeedGroupMember) userID() string {
 }
 
 type FeedGroupKey struct {
-	Epoch   int    `json:"epoch"`
-	Wrapped string `json:"wrapped"`
+	Epoch          int               `json:"epoch"`
+	Wrapped        string            `json:"wrapped"`
+	WrappedDevices map[string]string `json:"wrapped_devices"`
+}
+
+type FeedEncDevice struct {
+	Pubkey string `json:"pubkey"`
 }
 
 type GroupClient struct {
@@ -125,6 +130,54 @@ func (c *GroupClient) GetEncKey(ctx context.Context, uid string) (string, error)
 	}
 	return result.Pubkey, err
 }
+func (c *GroupClient) EncDevices(ctx context.Context, uid string) ([]FeedEncDevice, error) {
+	var result struct {
+		Devices []FeedEncDevice `json:"devices"`
+	}
+	err := c.request(ctx, http.MethodGet, "enc-devices/"+url.PathEscape(uid), nil, &result)
+	if err != nil {
+		return nil, err
+	}
+	if len(result.Devices) == 0 {
+		return nil, errors.New("feed: member has no encryption devices")
+	}
+	return result.Devices, nil
+}
+func (c *GroupClient) PutDeviceWrap(ctx context.Context, id string, epoch int, uid, pubkey, wrapped string) error {
+	return c.request(ctx, http.MethodPut, "groups/"+url.PathEscape(id)+"/device-wrap", map[string]any{
+		"epoch": epoch, "uid": uid, "pubkey": pubkey, "wrapped": wrapped,
+	}, nil)
+}
+
+// WrapDevices includes every registered encryption device, with the legacy
+// primary wrap returned separately for older readers.
+func (c *GroupClient) WrapDevices(ctx context.Context, uid string, key []byte, group string, epoch int) (string, map[string]string, error) {
+	primary, err := c.GetEncKey(ctx, uid)
+	if err != nil {
+		return "", nil, err
+	}
+	devices, err := c.EncDevices(ctx, uid)
+	if err != nil {
+		return "", nil, err
+	}
+	wrapped, err := Wrap(key, primary, group, epoch, nil)
+	if err != nil {
+		return "", nil, err
+	}
+	additional := make(map[string]string)
+	seen := map[string]bool{primary: true}
+	for _, d := range devices {
+		if seen[d.Pubkey] {
+			continue
+		}
+		seen[d.Pubkey] = true
+		additional[d.Pubkey], err = Wrap(key, d.Pubkey, group, epoch, nil)
+		if err != nil {
+			return "", nil, err
+		}
+	}
+	return wrapped, additional, nil
+}
 func (c *GroupClient) CreateGroup(ctx context.Context, name, title, preset, wrapped string) (FeedGroup, error) {
 	body := map[string]any{"name": name, "title": title, "preset": preset}
 	if wrapped != "" {
@@ -171,17 +224,24 @@ func (c *GroupClient) GetGroup(ctx context.Context, id string) (FeedGroup, error
 	return g, nil
 }
 func (c *GroupClient) AddMember(ctx context.Context, id, uid, wrapped string) error {
-	body := map[string]string{"uid": uid}
-	if wrapped != "" {
-		body["wrapped"] = wrapped
+	return c.AddMemberWithDevices(ctx, id, uid, wrapped, nil)
+}
+func (c *GroupClient) AddMemberWithDevices(ctx context.Context, id, uid, wrapped string, devices map[string]string) error {
+	request := map[string]any{"uid": uid, "wrapped": wrapped}
+	if len(devices) > 0 {
+		request["wrapped_devices"] = devices
 	}
-	return c.request(ctx, http.MethodPost, "groups/"+url.PathEscape(id)+"/members", body, nil)
+	return c.request(ctx, http.MethodPost, "groups/"+url.PathEscape(id)+"/members", request, nil)
 }
 func (c *GroupClient) RemoveMember(ctx context.Context, id, uid string, epoch int, keys map[string]string) error {
+	return c.RemoveMemberWithDevices(ctx, id, uid, epoch, keys, nil)
+}
+func (c *GroupClient) RemoveMemberWithDevices(ctx context.Context, id, uid string, epoch int, keys map[string]string, devices map[string]map[string]string) error {
 	body := map[string]any{}
 	if epoch > 0 {
 		body["epoch"] = epoch
 		body["keys"] = keys
+		body["device_keys"] = devices
 	}
 	return c.request(ctx, http.MethodDelete, "groups/"+url.PathEscape(id)+"/members/"+url.PathEscape(uid), body, nil)
 }
@@ -355,7 +415,11 @@ func CurrentGroupKey(ctx context.Context, c *GroupClient, dir, id string, epoch 
 		if entry.Epoch != epoch {
 			continue
 		}
-		key, err := Unwrap(entry.Wrapped, priv, id, epoch)
+		wrapped := entry.Wrapped
+		if own, ok := entry.WrappedDevices[EncPubkeyB64(priv)]; ok {
+			wrapped = own
+		}
+		key, err := Unwrap(wrapped, priv, id, epoch)
 		if err != nil {
 			return nil, err
 		}
@@ -375,7 +439,13 @@ func GenerateGroupKey(random io.Reader) ([]byte, error) {
 func freshGroupKey() ([]byte, error) { return GenerateGroupKey(rand.Reader) }
 
 func (c *GroupClient) CreateGroupWithID(ctx context.Context, id, name, title, preset, wrapped string) (FeedGroup, error) {
+	return c.CreateGroupWithDevices(ctx, id, name, title, preset, wrapped, nil)
+}
+func (c *GroupClient) CreateGroupWithDevices(ctx context.Context, id, name, title, preset, wrapped string, devices map[string]string) (FeedGroup, error) {
 	body := map[string]any{"id": id, "name": name, "title": title, "preset": preset, "wrapped": wrapped}
+	if len(devices) > 0 {
+		body["wrapped_devices"] = devices
+	}
 	return c.createGroup(ctx, body)
 }
 

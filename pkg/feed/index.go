@@ -267,6 +267,9 @@ func buildIndexRequest(p *Post, rel string, data []byte, okURLs []string, forceK
 		bases = append(bases, SinkBase(u, rel))
 	}
 	labels := append([]string{}, p.Labels...)
+	if p.Enc == "v1" {
+		labels = []string{}
+	}
 	if labels == nil {
 		labels = []string{}
 	}
