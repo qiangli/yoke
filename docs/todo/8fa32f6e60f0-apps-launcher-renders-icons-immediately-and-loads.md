@@ -7,7 +7,7 @@ status: assigned
 priority: p1
 created: 2026-10-12T16:45:14.558767Z
 weave: 204
-assignee: qiangli
+assignee: s9999-maintenance-manager
 sprint: 9999
 sprint_id: 559b491b-4bab-57d3-bad4-5ceb9acbb9da
 sprint_title: Maintenance
