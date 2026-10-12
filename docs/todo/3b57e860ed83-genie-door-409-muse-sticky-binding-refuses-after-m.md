@@ -9,7 +9,6 @@ labels:
     - genie
     - door
 created: 2026-10-12T10:08:24.551097Z
-weave: 187
 assignee: s9999-genie-rework
 sprint: 9999
 sprint_id: 559b491b-4bab-57d3-bad4-5ceb9acbb9da

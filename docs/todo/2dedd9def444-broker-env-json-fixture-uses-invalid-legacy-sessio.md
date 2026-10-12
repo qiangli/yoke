@@ -6,7 +6,6 @@ seq: 1993
 status: done
 priority: p1
 created: 2026-10-12T15:15:21.755221Z
-weave: 195
 assignee: s9999-fixture-rework
 sprint: 9999
 sprint_id: 559b491b-4bab-57d3-bad4-5ceb9acbb9da
