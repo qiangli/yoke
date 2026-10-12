@@ -29,20 +29,7 @@ import (
 // store; without it every read in a linked worktree fails with
 // "object not found". Plain directories are unaffected.
 func openRepo(dir string) (*gogit.Repository, error) {
-	var (
-		r   *gogit.Repository
-		err error
-	)
-	if fi, serr := os.Stat(filepath.Join(dir, ".git")); serr == nil && !fi.IsDir() {
-		r, err = gogit.PlainOpenWithOptions(dir, &gogit.PlainOpenOptions{
-			DetectDotGit:          true,
-			EnableDotGitCommonDir: true,
-		})
-	} else {
-		r, err = gogit.PlainOpenWithOptions(dir, &gogit.PlainOpenOptions{
-			DetectDotGit: true,
-		})
-	}
+	r, err := openLinked(dir, true)
 	if err != nil {
 		return nil, err
 	}

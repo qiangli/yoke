@@ -118,7 +118,7 @@ func markMovedSubmodules(root string, st gogit.Status) {
 // (no upward search — a submodule path without a checkout must not
 // resolve to the superproject), alternates-aware like openRepo.
 func openCheckout(dir string) (*gogit.Repository, error) {
-	r, err := gogit.PlainOpenWithOptions(dir, &gogit.PlainOpenOptions{EnableDotGitCommonDir: true})
+	r, err := openLinked(dir, false)
 	if err != nil {
 		return nil, err
 	}
