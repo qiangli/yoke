@@ -21,6 +21,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/yoke/external/internal/serviceenv"
 	"github.com/qiangli/yoke/pkg/binmgr"
 )
 
@@ -158,6 +159,10 @@ func Register(ctx context.Context, o RegisterOptions) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
+	// act_runner has no update/analytics switch and no native OTLP exporter;
+	// still pin every standard OTLP endpoint so jobs cannot inherit a vendor
+	// destination from the launching shell.
+	cmd.Env = managedEnv()
 	return cmd.Run()
 }
 
@@ -242,10 +247,12 @@ func Daemon(ctx context.Context, version, dataDir string, extraEnv ...string) er
 	cmd.Dir = dataDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if len(extraEnv) > 0 {
-		cmd.Env = append(os.Environ(), extraEnv...)
-	}
+	cmd.Env = managedEnv(extraEnv...)
 	return cmd.Run()
+}
+
+func managedEnv(extra ...string) []string {
+	return serviceenv.LocalOTLP(append(os.Environ(), extra...), "act_runner")
 }
 
 func resolve(ctx context.Context, version string) (string, error) {

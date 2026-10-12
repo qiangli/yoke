@@ -21,6 +21,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/yoke/external/internal/serviceenv"
 	"github.com/qiangli/yoke/pkg/binmgr"
 )
 
@@ -149,6 +150,7 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 	url := "http://" + addr
 	proc, err := binmgr.Launch(ctx, bin, binmgr.RunSpec{
 		Args:       []string{"serve", cfg},
+		Env:        serviceenv.LocalOTLP(nil, "zot"),
 		Dir:        o.DataDir,
 		Stdout:     o.Stdout,
 		Stderr:     o.Stderr,
@@ -193,6 +195,11 @@ func ensureConfig(dataDir, addr string, port int) (string, error) {
 		"storage": map[string]any{"rootDirectory": filepath.Join(dataDir, "registry")},
 		"http":    map[string]any{"address": addr, "port": strconv.Itoa(port)},
 		"log":     map[string]any{"level": "info"},
+		// Zot has no update checker or anonymous usage reporter. Keeping the
+		// optional extensions map empty also leaves sync, CVE feeds, events and
+		// remote metrics disabled. Configuration reference:
+		// https://github.com/project-zot/zot/blob/main/examples/README.md
+		"extensions": map[string]any{},
 	}
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {

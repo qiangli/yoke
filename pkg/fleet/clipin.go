@@ -168,10 +168,22 @@ func (c *Catalog) InstallToolPin(toolName, sourceBinary, version, toolsDir strin
 		return "", nil, fmt.Errorf("fleet: no tool %q", toolName)
 	}
 
+	// A service pin (a server bashy starts) installs ONLY the bashy-signed
+	// build binmgr verifies keylessly: an unverified pin is refused, and so is
+	// --source, which would let a third-party binary stand in for the pin.
+	if m := t.CLI.Managed; m != nil && m.Service {
+		if err := t.ServiceBuildCheck(); err != nil {
+			return "", nil, fmt.Errorf("fleet: tool %q: %w", toolName, err)
+		}
+		if sourceBinary != "" {
+			return "", nil, fmt.Errorf("fleet: tool %q: %w: --source cannot replace the signed pin", toolName, ErrUnsignedServiceBuild)
+		}
+	}
+
 	// A managed system tool (a daemon binary such as tuwunel — hidden, not an
 	// agent CLI) has no PATH copy to pin: binmgr fetches the recipe's pinned
 	// asset, verifies its digest, unpacks it and the cached result is copied.
-	if sourceBinary == "" && t.Kind == ToolKindSystem && t.IsManaged() {
+	if sourceBinary == "" && t.IsManaged() && (t.Kind == ToolKindSystem || t.CLI.Managed.Service) {
 		bt, err := t.BinmgrTool()
 		if err != nil {
 			return "", nil, err

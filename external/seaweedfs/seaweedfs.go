@@ -21,6 +21,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/yoke/external/internal/serviceenv"
 	"github.com/qiangli/yoke/pkg/binmgr"
 )
 
@@ -137,13 +138,8 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 	addr := fmt.Sprintf("%s:%d", o.Addr, o.Port)
 	url := "http://" + addr
 	proc, err := binmgr.Launch(ctx, bin, binmgr.RunSpec{
-		Args: []string{
-			"server",
-			"-dir=" + o.DataDir,
-			"-ip.bind=" + o.Addr, // bind every service to loopback
-			"-s3",
-			"-s3.port=" + strconv.Itoa(o.Port),
-		},
+		Args:       serverArgs(o),
+		Env:        serviceenv.LocalOTLP(nil, "seaweedfs"),
 		Dir:        o.DataDir,
 		Stdout:     o.Stdout,
 		Stderr:     o.Stderr,
@@ -154,6 +150,20 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 		return nil, fmt.Errorf("seaweedfs: start: %w", err)
 	}
 	return &Instance{URL: url, Addr: addr, Version: tool.Version, proc: proc}, nil
+}
+
+func serverArgs(o Options) []string {
+	return []string{
+		"server",
+		"-dir=" + o.DataDir,
+		"-ip.bind=" + o.Addr, // bind every service to loopback
+		"-s3",
+		"-s3.port=" + strconv.Itoa(o.Port),
+		// SeaweedFS otherwise sends anonymous cluster statistics to
+		// telemetry.seaweedfs.com. Upstream source documents this flag:
+		// https://github.com/seaweedfs/seaweedfs/blob/master/weed/command/server.go
+		"-master.telemetry=false",
+	}
 }
 
 // Serve runs SeaweedFS in the foreground, blocking until ctx is cancelled or a

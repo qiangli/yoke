@@ -1,6 +1,16 @@
 package seaweedfs
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
+
+func TestServerArgsDisableAnonymousTelemetry(t *testing.T) {
+	args := serverArgs(Options{DataDir: "/data", Addr: "127.0.0.1", Port: 8333})
+	if !slices.Contains(args, "-master.telemetry=false") {
+		t.Fatalf("anonymous telemetry not disabled: %v", args)
+	}
+}
 
 func TestSpec(t *testing.T) {
 	s := Spec("")

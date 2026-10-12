@@ -37,6 +37,19 @@ cli:
     version: v1.9.4
     license: Apache-2.0
     license_url: https://github.com/matrix-construct/tuwunel/blob/main/LICENSE
+    # A SERVICE pin: bashy starts this binary, so the supply-chain policy
+    # applies — only a bashy-CI build signed keylessly with Sigstore runs.
+    # The assets below are the upstream project's own builds, NOT
+    # bashy-signed, and sigstore is deliberately EMPTY: the bashy-signed
+    # tuwunel build is pending. Until it lands (with its exact identity,
+    # https://github.com/OWNER/REPO/.github/workflows/FILE@refs/tags/vX, and
+    # issuer https://token.actions.githubusercontent.com) this pin is
+    # UNVERIFIED and `bashy tool install tuwunel` and enabling/starting the
+    # matrix-chat unit are refused.
+    service: true
+    # sigstore:
+    #   identity: <pending: bashy CI release workflow ref>
+    #   issuer: https://token.actions.githubusercontent.com
     assets:
       linux/amd64:
         url: https://github.com/matrix-construct/tuwunel/releases/download/{version}/{version}-release-all-x86_64-v1-linux-gnu-tuwunel.zst

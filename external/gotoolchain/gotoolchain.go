@@ -21,6 +21,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/yoke/external/notrack"
 	"github.com/qiangli/yoke/pkg/binmgr"
 )
 
@@ -156,8 +157,13 @@ func goCommandEnv(goroot string) []string {
 	if runtime.GOOS == "windows" {
 		env = normalizeWindowsTempEnv(env)
 	}
-	return append(env, "GOROOT="+goroot)
+	env = append(env, "GOROOT="+goroot)
+	return notrack.Env(env)
 }
+
+// ChildEnv returns a copy of env with Go and generic tracking disabled.
+// Exported for tests and for callers that build a child env directly.
+func ChildEnv(env []string) []string { return notrack.Env(env) }
 
 func normalizeWindowsTempEnv(env []string) []string {
 	out := make([]string, 0, len(env)+2)

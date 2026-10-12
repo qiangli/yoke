@@ -14,8 +14,29 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/yoke/external/internal/serviceenv"
 	"github.com/qiangli/yoke/pkg/broker/door"
 )
+
+func TestManagedServeEnvDisablesCloudAndPinsLocalOTLP(t *testing.T) {
+	got := strings.Join(managedServeEnv([]string{
+		"OLLAMA_NO_CLOUD=0",
+		"OTEL_EXPORTER_OTLP_ENDPOINT=https://vendor.example",
+		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=https://traces.vendor.example",
+	}, 11435), "\n")
+	if strings.Contains(got, "vendor.example") {
+		t.Fatalf("vendor endpoint survived:\n%s", got)
+	}
+	for _, want := range []string{
+		"OLLAMA_NO_CLOUD=1",
+		"OTEL_EXPORTER_OTLP_ENDPOINT=" + serviceenv.LocalCollectorEndpoint,
+		"OTEL_SERVICE_NAME=ollama",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q:\n%s", want, got)
+		}
+	}
+}
 
 func TestManagedServeDoesNotBindDoorHost(t *testing.T) {
 	t.Setenv("BASHY_HOME", t.TempDir())

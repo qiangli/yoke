@@ -27,6 +27,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/yoke/external/internal/serviceenv"
 	"github.com/qiangli/yoke/pkg/binmgr"
 )
 
@@ -149,14 +150,14 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 	addr := fmt.Sprintf("%s:%d", o.Addr, o.Port)
 	url := "http://" + addr
 	proc, err := binmgr.Launch(ctx, bin, binmgr.RunSpec{
-		Args: []string{
-			"--config-file=" + cfg,
+		Args: append(kopiaPrivacyArgs(),
+			"--config-file="+cfg,
 			"server", "start",
-			"--address=" + addr,
+			"--address="+addr,
 			"--insecure",         // HTTP, no TLS (the mesh is the boundary)
 			"--without-password", // no server-level auth (loopback + mesh-gated)
-		},
-		Env:        []string{"KOPIA_PASSWORD=" + pw},
+		),
+		Env:        serviceenv.LocalOTLP([]string{"KOPIA_PASSWORD=" + pw}, "kopia"),
 		Dir:        o.DataDir,
 		Stdout:     o.Stdout,
 		Stderr:     o.Stderr,
@@ -167,6 +168,13 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 		return nil, fmt.Errorf("kopia: start server: %w", err)
 	}
 	return &Instance{URL: url, Addr: addr, Version: tool.Version, proc: proc}, nil
+}
+
+// kopiaPrivacyArgs disables the default GitHub update check and enables Kopia's
+// supported OTLP tracing. Both switches are documented in the upstream flag
+// reference: https://kopia.io/docs/reference/command-line/flags/
+func kopiaPrivacyArgs() []string {
+	return []string{"--no-check-for-updates", "--otlp-trace"}
 }
 
 // Serve runs Kopia's repository server in the foreground (the `bashy kopia serve`
@@ -210,8 +218,8 @@ func ensureRepo(ctx context.Context, bin, dataDir string) (cfg, pw string, err e
 		return "", "", err
 	}
 	proc, err := binmgr.Launch(ctx, bin, binmgr.RunSpec{
-		Args:   []string{"--config-file=" + cfg, "repository", "create", "filesystem", "--path=" + repoPath},
-		Env:    []string{"KOPIA_PASSWORD=" + pw},
+		Args:   append(kopiaPrivacyArgs(), "--config-file="+cfg, "repository", "create", "filesystem", "--path="+repoPath),
+		Env:    serviceenv.LocalOTLP([]string{"KOPIA_PASSWORD=" + pw}, "kopia"),
 		Stdout: io.Discard,
 		Stderr: io.Discard,
 	})

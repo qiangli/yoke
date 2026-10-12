@@ -60,6 +60,10 @@ type Service struct {
 	Exec     []string         `yaml:"exec,omitempty" json:"exec,omitempty" doc:"foreground argv; {port} {port.NAME} {bind} {bind.NAME} {settings.KEY} {download} are expanded"`
 	Download *CommandDownload `yaml:"download,omitempty" json:"download,omitempty" doc:"pinned release binmgr provisions; {download} in exec names its path"`
 	Workdir  string           `yaml:"workdir,omitempty" json:"workdir,omitempty" doc:"working directory; ~ expands"`
+	// Tool names the managed tool pin whose binary this unit runs. Such a
+	// unit starts only when that pin is a verified bashy-signed build
+	// (CheckServiceBuild).
+	Tool string `yaml:"tool,omitempty" json:"tool,omitempty" doc:"managed tool pin whose binary the unit runs; must be bashy-signed (sigstore) to start"`
 
 	// internal provider
 	Capability string `yaml:"capability,omitempty" json:"capability,omitempty" doc:"internal: registered capability id, e.g. outpost.files"`
@@ -473,6 +477,9 @@ func (c *Catalog) checkService(s Service) error {
 	if !s.Enabled {
 		return nil
 	}
+	if err := c.CheckServiceBuild(s); err != nil {
+		return err
+	}
 	return c.ServicePortConflict(s)
 }
 
@@ -568,4 +575,24 @@ func containsStr(xs []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// CheckServiceBuild is the supply-chain gate every start path calls — enable
+// here, `bashy service start` and the monitor in the host: a unit that runs a
+// managed tool pin starts only when that pin is a verified bashy-signed build
+// (Sigstore identity declared; binmgr verifies it before install). A unit
+// naming no tool is not affected.
+func (c *Catalog) CheckServiceBuild(s Service) error {
+	name := strings.TrimSpace(s.Tool)
+	if name == "" {
+		return nil
+	}
+	t, ok := c.Tool(name)
+	if !ok {
+		return fmt.Errorf("fleet: service %q: %w: tool %q is not in the catalog", s.Name, ErrUnsignedServiceBuild, name)
+	}
+	if err := t.ServiceBuildCheck(); err != nil {
+		return fmt.Errorf("fleet: service %q: %w", s.Name, err)
+	}
+	return nil
 }

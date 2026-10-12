@@ -19,6 +19,25 @@ import (
 	"time"
 )
 
+func sectionValue(ini, section, key string) string {
+	inSection := false
+	for _, line := range strings.Split(ini, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			inSection = strings.EqualFold(strings.Trim(line, "[]"), section)
+			continue
+		}
+		if !inSection {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) == 2 && strings.EqualFold(strings.TrimSpace(parts[0]), key) {
+			return strings.TrimSpace(parts[1])
+		}
+	}
+	return ""
+}
+
 func TestEnsureConfig_SeedsAndIsIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := ensureConfig(dir, "127.0.0.1", 3000, "https://ai.dhnt.io/matrix/h/dragon/app/loom/", true)
@@ -44,6 +63,7 @@ func TestEnsureConfig_SeedsAndIsIdempotent(t *testing.T) {
 		"REVERSE_PROXY_AUTHENTICATION_EMAIL = X-WEBAUTH-EMAIL",
 		"[actions]",      // local CI control plane
 		"ENABLED = true", // act_runner registers against it
+		"[cron.update_checker]",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("seeded config missing %q", want)
@@ -95,6 +115,9 @@ func TestEnsureConfig_ReconcilesServerAndActions(t *testing.T) {
 	}
 	if strings.Contains(s, "SECRET_KEY = \n") {
 		t.Fatalf("secret was lost:\n%s", s)
+	}
+	if got := sectionValue(s, "cron.update_checker", "ENABLED"); got != "false" {
+		t.Fatalf("cron.update_checker ENABLED = %q, want false:\n%s", got, s)
 	}
 }
 

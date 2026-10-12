@@ -25,6 +25,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/yoke/external/notrack"
 	"github.com/qiangli/yoke/pkg/binmgr"
 )
 
@@ -91,8 +92,13 @@ func (e Entry) Ensure(ctx context.Context) (string, error) {
 	return binmgr.Ensure(ctx, tool)
 }
 
+// ChildEnv returns env with tracking disabled for this registry tool.
+func (e Entry) ChildEnv(env []string) []string { return notrack.Env(env) }
+
 // NewCmd builds the `bashy <name>` front-door: a transparent passthrough to the
-// managed binary. All args pass through unchanged.
+// managed binary. All args pass through unchanged. Child env includes generic
+// tracking opt-outs (DO_NOT_TRACK, CHECKPOINT_DISABLE, etc) plus tool-specific
+// vars via notrack.
 func (e Entry) NewCmd() *cobra.Command {
 	short := e.Synopsis
 	long := e.Long
@@ -112,7 +118,9 @@ func (e Entry) NewCmd() *cobra.Command {
 			}
 			c := binmgr.Command(cmd.Context(), bin, args...)
 			if e.ExecEnv != nil {
-				c.Env = e.ExecEnv()
+				c.Env = notrack.Env(e.ExecEnv())
+			} else {
+				c.Env = notrack.Env(os.Environ())
 			}
 			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 			return c.Run()

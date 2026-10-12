@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/qiangli/yoke/external/notrack"
 	"github.com/qiangli/yoke/pkg/binmgr"
 )
 
@@ -59,3 +60,6 @@ func Ensure(ctx context.Context, version string) (string, error) {
 	}
 	return binmgr.Ensure(ctx, tool)
 }
+
+// ChildEnv returns env with Bun tracking disabled (DO_NOT_TRACK=1, etc).
+func ChildEnv(env []string) []string { return notrack.Env(env) }

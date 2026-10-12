@@ -31,6 +31,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/yoke/external/internal/serviceenv"
 	"github.com/qiangli/yoke/pkg/binmgr"
 	"github.com/qiangli/yoke/pkg/coopauth"
 )
@@ -193,7 +194,7 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 	url := "http://" + addr
 	proc, err := binmgr.Launch(ctx, bin, binmgr.RunSpec{
 		Args:       []string{"web", "--config", cfg},
-		Env:        []string{"GITEA_WORK_DIR=" + o.DataDir},
+		Env:        serviceenv.LocalOTLP([]string{"GITEA_WORK_DIR=" + o.DataDir}, "loom"),
 		Dir:        o.DataDir,
 		Stdout:     o.Stdout,
 		Stderr:     o.Stderr,
@@ -313,7 +314,7 @@ func StartDaemon(ctx context.Context, o Options) (State, error) {
 	}
 	cmd := binmgr.Command(context.Background(), bin, "web", "--config", cfg)
 	cmd.Dir = o.DataDir
-	cmd.Env = append(os.Environ(), "GITEA_WORK_DIR="+o.DataDir)
+	cmd.Env = serviceenv.LocalOTLP(append(os.Environ(), "GITEA_WORK_DIR="+o.DataDir), "loom")
 	cmd.Stdout = log
 	cmd.Stderr = log
 	setDetached(cmd)
@@ -1469,6 +1470,7 @@ func ensureConfig(dataDir, addr string, port int, rootURL string, actions bool) 
 		merged := ensureServerSection(string(existing), addr, port, rootURL)
 		merged = ensureServiceSection(merged)
 		merged = ensureActionsSection(merged, actions)
+		merged = ensureUpdateCheckerSection(merged)
 		if merged != string(existing) {
 			if err := os.WriteFile(cfgPath, []byte(merged), 0o600); err != nil {
 				return "", err
@@ -1616,6 +1618,13 @@ func ensureActionsSection(ini string, want bool) string {
 	return ensureSectionKeys(ini, "actions", map[string]string{"ENABLED": val})
 }
 
+// ensureUpdateCheckerSection prevents Gitea's weekly request to
+// dl.gitea.com/gitea/version.json. Upstream documents this switch at:
+// https://docs.gitea.com/administration/config-cheat-sheet/#cron---check-for-new-gitea-versions-cronupdate_checker
+func ensureUpdateCheckerSection(ini string) string {
+	return ensureSectionKeys(ini, "cron.update_checker", map[string]string{"ENABLED": "false"})
+}
+
 func ensureSectionKeys(ini, section string, updates map[string]string) string {
 	lines := strings.Split(ini, "\n")
 	sectionHeader := "[" + section + "]"
@@ -1717,7 +1726,8 @@ func renderConfig(dataDir, addr string, port int, rootURL string, secret string,
 	if actions {
 		enabled = "true"
 	}
-	fmt.Fprintf(&b, "[actions]\nENABLED = %s\nDEFAULT_ACTIONS_URL = github\n", enabled)
+	fmt.Fprintf(&b, "[actions]\nENABLED = %s\nDEFAULT_ACTIONS_URL = github\n\n", enabled)
+	fmt.Fprintln(&b, "[cron.update_checker]\nENABLED = false")
 	return b.String()
 }
 

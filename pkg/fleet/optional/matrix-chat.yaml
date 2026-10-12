@@ -10,6 +10,10 @@
 #     unless settings.data_dir names another
 #   - no secrets in this file
 #
+# tool: tuwunel ties the unit to its pin: under the service supply-chain
+# policy it may be enabled or started only once that pin is a bashy-signed
+# build (sigstore declared and verified by binmgr). Today it is refused.
+#
 # settings.binary is the verified, decompressed tuwunel executable (empty = the
 # `tuwunel` on PATH). settings.server_name is baked into the database on first
 # start and cannot change afterwards without wiping it — set it before enabling.
@@ -17,6 +21,7 @@
 name: matrix-chat
 kind: service
 description: Matrix chat homeserver (tuwunel) — optional, loopback-only, registration disabled
+tool: tuwunel
 exec:
   - bashy
   - -c

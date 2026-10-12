@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/yoke/external/notrack"
 	"github.com/qiangli/yoke/pkg/binmgr"
 )
 
@@ -67,8 +68,12 @@ func Run(ctx context.Context, args []string) error {
 	}
 	c := binmgr.Command(ctx, bin, args...)
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+	c.Env = notrack.Env(os.Environ())
 	return c.Run()
 }
+
+// ChildEnv returns env with rclone tracking/update checks disabled.
+func ChildEnv(env []string) []string { return notrack.Env(env) }
 
 // NewRcloneCmd builds the `rclone` passthrough command (bashy front-door).
 func NewRcloneCmd() *cobra.Command {
