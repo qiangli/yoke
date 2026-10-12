@@ -172,7 +172,18 @@ type Options struct {
 	// caller is responsible for finalizing it (agentlaunch.FinalizeArgs) and
 	// for carrying its own event-stream flags; no event argv is inserted. The
 	// prompt built from Instruction still labels and budgets the turn.
+	//
+	// An exec override is the tool's own subcommand, not an agent turn, so
+	// Invoke runs it against the tool's resolved binary directly (ExecTool,
+	// else the resolved tool): no setup wrapper and no launch-declared
+	// env/state_dir redirect. Managed-binary resolution still applies.
 	ExecArgv []string
+
+	// ExecTool is the registry tool that owns ExecArgv (pkg/toolcmd sets it
+	// to the command's tool). It selects the binary an exec override runs:
+	// the owning tool, even when Agent names an override nick resolving to a
+	// different tool. Empty falls back to the resolved launch's tool.
+	ExecTool string
 }
 
 // Result is the stable envelope returned by Invoke and optionally printed by
@@ -1289,6 +1300,24 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 	args := append(lnch.Args, prompt)
 	if opt.ExecArgv != nil {
 		args = append([]string(nil), opt.ExecArgv...)
+		// An exec override is the tool's own subcommand, not an agent turn:
+		// run the tool's resolved binary directly — no setup wrapper, no
+		// launch-declared env/state_dir redirect — so the subcommand sees
+		// the user's own tool config. Managed-binary resolution still
+		// applies. The owning tool wins over an agent-nick override.
+		tool := lnch.ToolName
+		if opt.ExecTool != "" {
+			tool = opt.ExecTool
+		}
+		catalogFn := newCatalog
+		if opt.Catalog != nil {
+			catalogFn = func() *fleet.Catalog { return opt.Catalog }
+		}
+		bin, menv, mtool, err := agentlaunch.ExecBinary(tool, catalogFn)
+		if err != nil {
+			return Result{SchemaVersion: schemaVersion, Agent: lnch.Tool, Nick: name, Role: opt.Role, ExitCode: 2}, err
+		}
+		lnch.Tool, lnch.Env, lnch.ManagedTool = bin, menv, mtool
 	}
 	// A caller asking to observe a turn live needs the tool's declared event
 	// stream, not a pipe around a CLI that buffers prose until exit. The fleet
