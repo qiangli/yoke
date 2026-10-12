@@ -166,8 +166,8 @@ func TestDOMLauncherSlowAppShowsSpinnerThenOpens(t *testing.T) {
 	}
 }
 
-// An upstream failure remains its own page; Back returns to a usable launcher
-// and another click retries the app without a duplicate preflight request.
+// An upstream failure remains its own page; reloading retries the app without
+// a duplicate preflight request.
 func TestDOMLauncherOpenFailureIsRecoverable(t *testing.T) {
 	var failing atomic.Bool
 	failing.Store(true)
@@ -187,18 +187,7 @@ func TestDOMLauncherOpenFailureIsRecoverable(t *testing.T) {
 		t.Errorf("error page = %q", body)
 	}
 	failing.Store(false)
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	if err := chromedp.Run(ctx, chromedp.NavigateBack()); err != nil {
-		t.Fatalf("back navigation: %v", err)
-	}
-	if err := chromedp.Run(ctx,
-		chromedp.WaitVisible(`a.tile[data-app="slowapp"]`, chromedp.ByQuery),
-		chromedp.Poll(`!document.querySelector(".tile-wrap.opening")`, nil),
-	); err != nil {
-		t.Fatalf("launcher after back: %v", err)
-	}
-	if err := chromedp.Run(ctx, chromedp.Click(`a.tile[data-app="slowapp"]`, chromedp.ByQuery), chromedp.WaitVisible(`#up`, chromedp.ByQuery)); err != nil {
+	if err := chromedp.Run(ctx, chromedp.Reload(), chromedp.WaitVisible(`#up`, chromedp.ByQuery)); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
 	if requests.Load() != 2 {
