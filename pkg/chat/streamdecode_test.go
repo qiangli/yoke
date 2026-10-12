@@ -3,6 +3,7 @@ package chat
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -82,6 +83,15 @@ func TestDecodeStreamLinePreservesForeignJSON(t *testing.T) {
 		`{"payload_type":"run.output.delta","payload":{"text":"no envelope"}}`,
 		`{"schema_version":"bashy-hint-v1","kind":"hint"}`,
 		`{"event":"step_update","step_update":"not an object"}`,
+		`{"event":"init","init":{"x":1}}`,
+		`{"event":"init","init":{}}`,
+		`{"event":"step_update","step_update":{"text_delta":"an answer"}}`,
+		`{"event":"step_update","step_update":{"step_type":"agent_response","text_delta":"no index or state"}}`,
+		`{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"x"},"owner":"other"}`,
+		`{"event":"result","result":{"response":"42"}}`,
+		`{"event":"result","result":{"status":"ok"},"extra":1}`,
+		`{"event":"deploy","deploy":{"model":"m"}}`,
+		`{"schema_version":1,"stream":{"kind":"x"},"payload":{"k":1}}`,
 		`plain prose`,
 	} {
 		if d := DecodeStreamLine(ln); d.Kind != StreamPlain {
@@ -191,5 +201,131 @@ func TestSemanticJSONLineErrorIsNotKeywordMatch(t *testing.T) {
 	}
 	if _, _, isErr, _ := semanticJSONLine(`{"type":"tool_result","is_error":true}`); !isErr {
 		t.Fatal("is_error:true must read as failure")
+	}
+}
+
+// --- semantic activity: tool/error records survive inside Muse transport ----
+
+const (
+	museTool = `{"schema_version":1,"id":"%s","stream":{"kind":"session","id":"s"},"sequence":%d,"recorded_at":%d,"record_type":"event","payload_type":"%s","payload":{"kind":"tool","command_id":"c-%d","tool_call_id":"call-%d","name":"run_tests","input":{"cmd":"go test ./..."},"is_error":%t,"output":%q,"duration_ms":%d}}`
+	museFail = `{"schema_version":1,"id":"%s","stream":{"kind":"session","id":"s"},"sequence":%d,"recorded_at":%d,"record_type":"event","payload_type":"task.lifecycle.failed","payload_schema_version":1,"payload":{"kind":"task_lifecycle","command_id":"c","task_id":"t-%d","event":{"kind":"failed","task_id":"t-%d","error":"build step exited 2"}}}`
+)
+
+var reSequence = regexp.MustCompile(`"sequence":\d+,`)
+
+func museToolLine(n int, payloadType string, isErr bool, out string) string {
+	return fmt.Sprintf(museTool, fmt.Sprintf("00000000-0000-7000-8000-%012d", n), n, 1780531400000000+n, payloadType, n, n, isErr, out, 10+n)
+}
+
+func museFailLine(n int) string {
+	return fmt.Sprintf(museFail, fmt.Sprintf("00000000-0000-7000-8000-%012d", n), n, 1780531400000000+n, n, n)
+}
+
+// Every non-answer record of the real Muse fixture is lifecycle machinery: no
+// activity, so a healthy run can never be mistaken for a loop of it.
+func TestDecodeStreamLineMuseFixtureHasNoActivity(t *testing.T) {
+	body, err := os.ReadFile("../cligw/testdata/muse-exec-json-ok.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ln := range strings.Split(strings.TrimSpace(string(body)), "\n") {
+		if d := DecodeStreamLine(ln); d.Kind == StreamMeta && (d.Activity != "" || d.Failed) {
+			t.Fatalf("lifecycle record read as activity: %+v for %.100s", d, ln)
+		}
+	}
+}
+
+// Tool and failure records are activity; identity, timing and thinking/usage are not.
+func TestDecodeStreamLineMuseActivityClassification(t *testing.T) {
+	a := DecodeStreamLine(museToolLine(1, "tool.call.completed", true, "exit 1"))
+	b := DecodeStreamLine(museToolLine(2, "tool.call.completed", true, "exit 1"))
+	if a.Kind != StreamMeta || a.Activity == "" || !a.Failed {
+		t.Fatalf("failed tool call must be failed activity: %+v", a)
+	}
+	if a.Activity != b.Activity {
+		t.Fatalf("ids/timestamps/duration leaked into the signature:\n%s\n%s", a.Activity, b.Activity)
+	}
+	if c := DecodeStreamLine(museToolLine(3, "tool.call.completed", true, "exit 2")); c.Activity == a.Activity {
+		t.Fatal("a different error must be a different activity")
+	}
+	if ok := DecodeStreamLine(museToolLine(4, "tool.call.started", false, "")); ok.Activity == "" || ok.Failed {
+		t.Fatalf("a healthy tool call is activity but not failure: %+v", ok)
+	}
+	if f := DecodeStreamLine(museFailLine(5)); f.Activity == "" || !f.Failed {
+		t.Fatalf("a failed task lifecycle is failed activity: %+v", f)
+	}
+	for _, pt := range []string{"tool.thinking.delta", "run.usage.updated", "run.thought.delta"} {
+		if d := DecodeStreamLine(museToolLine(6, pt, false, "x")); d.Activity != "" || d.Failed {
+			t.Fatalf("%s is interior state, got %+v", pt, d)
+		}
+	}
+}
+
+// A productive run: the real fixture's envelope sequence replayed hundreds of
+// times with fresh ids/sequence/timestamps never trips, and costs nothing.
+func TestCoachQuietOnReplayedRealMuseFixture(t *testing.T) {
+	body, err := os.ReadFile("../cligw/testdata/muse-exec-json-ok.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := newCoach(DefaultCoachPolicy())
+	lines := strings.Split(strings.TrimSpace(string(body)), "\n")
+	for round := 0; round < 30; round++ {
+		for i, ln := range lines {
+			ln = strings.ReplaceAll(ln, "00000000-0000-7000-8000-0000000000", fmt.Sprintf("%08x-0000-7000-8000-0000000000", round))
+			ln = reSequence.ReplaceAllString(ln, fmt.Sprintf(`"sequence":%d,`, round*1000+i))
+			if d := DecodeStreamLine(ln); d.Kind == StreamDelta || d.Kind == StreamFinal {
+				continue // the answer itself is exercised elsewhere
+			}
+			if recs := c.feedLine(ln, true); len(recs) != 0 {
+				t.Fatalf("round %d line %d tripped on lifecycle transport: %+v", round, i, recs[0])
+			}
+		}
+	}
+	if c.Report().Total != 0 || c.OutputTokens() != 0 {
+		t.Fatalf("lifecycle transport counted: %+v tokens=%d", c.Report(), c.OutputTokens())
+	}
+}
+
+// The same failing tool call re-emitted with fresh ids is a real loop and must
+// still trip, with the failures visible to the error-ratio signal.
+func TestCoachDetectsRepeatedFailedMuseToolDespiteIDs(t *testing.T) {
+	pol := DefaultCoachPolicy()
+	pol.SoftTokenBudget, pol.SoftStepBudget = 0, 0
+	c := newCoach(pol)
+	tripped := false
+	for i := 0; i < 80 && !tripped; i++ {
+		tripped = len(c.feedLine(museToolLine(i, "tool.call.completed", true, "go: cannot find main module"), true)) > 0
+	}
+	if !tripped {
+		t.Fatal("80 identical failing tool calls inside Muse transport never tripped the coach")
+	}
+	if rep := c.Report(); rep.Distinct != 1 {
+		t.Fatalf("one repeated action must be 1 distinct, got %d", rep.Distinct)
+	}
+}
+
+func TestCoachDetectsRepeatedMuseTaskFailureAmidLifecycle(t *testing.T) {
+	pol := DefaultCoachPolicy()
+	pol.SoftTokenBudget, pol.SoftStepBudget = 0, 0
+	c := newCoach(pol)
+	tripped := false
+	for i := 0; i < 80 && !tripped; i++ {
+		c.feedLine(museMetaLine(i), true) // healthy lifecycle noise in between
+		tripped = len(c.feedLine(museFailLine(i), true)) > 0
+	}
+	if !tripped {
+		t.Fatal("a task that keeps failing never tripped the coach")
+	}
+}
+
+// Distinct tool work through Muse transport is progress, not a loop.
+func TestCoachQuietOnDistinctMuseToolCalls(t *testing.T) {
+	c := newCoach(DefaultCoachPolicy())
+	for i := 0; i < 60; i++ {
+		ln := strings.Replace(museToolLine(i, "tool.call.completed", false, "ok"), "go test ./...", fmt.Sprintf("go test ./pkg/p%d", i), 1)
+		if recs := c.feedLine(ln, true); len(recs) != 0 {
+			t.Fatalf("distinct tool call %d tripped: %+v", i, recs[0])
+		}
 	}
 }

@@ -38,6 +38,15 @@ type StreamLine struct {
 	Vendor string // "muse" | "agy" | ""
 	Kind   StreamKind
 	Text   string
+	// Activity is set on a StreamMeta record that is a real agent ACTION or a
+	// FAILURE (a tool call/result, an error, a failed task) rather than lifecycle
+	// bookkeeping. It is a signature with ids, sequence numbers, timestamps and
+	// numeric fields removed, so the same action repeated is the same Activity —
+	// which is what lets the coach see a genuine loop through transport it
+	// otherwise ignores. Empty for machinery, thinking and usage.
+	Activity string
+	// Failed reports that the record itself says it failed.
+	Failed bool
 }
 
 // DecodeStreamLine classifies one physical line of agent stdout.
@@ -53,10 +62,7 @@ func DecodeStreamLine(line string) StreamLine {
 		PayloadType   string          `json:"payload_type"`
 		Payload       json.RawMessage `json:"payload"`
 
-		Event      json.RawMessage `json:"event"`
-		Init       json.RawMessage `json:"init"`
-		StepUpdate json.RawMessage `json:"step_update"`
-		Result     json.RawMessage `json:"result"`
+		Event json.RawMessage `json:"event"`
 	}
 	if json.Unmarshal([]byte(s), &p) != nil {
 		return StreamLine{}
@@ -67,7 +73,11 @@ func DecodeStreamLine(line string) StreamLine {
 	}
 	var event string
 	if json.Unmarshal(p.Event, &event) == nil && event != "" {
-		return decodeAGY(event, p.Init, p.StepUpdate, p.Result)
+		var top map[string]json.RawMessage
+		if json.Unmarshal([]byte(s), &top) != nil {
+			return StreamLine{}
+		}
+		return decodeAGY(top, event)
 	}
 	return StreamLine{}
 }
@@ -86,39 +96,114 @@ func decodeMuse(payloadType string, payload json.RawMessage) StreamLine {
 		if json.Unmarshal(payload, &body) == nil && strings.TrimSpace(body.Text) != "" {
 			out.Kind, out.Text = StreamFinal, body.Text
 		}
+	default:
+		out.Activity, out.Failed = museActivity(payloadType, payload)
 	}
 	return out
 }
 
-func decodeAGY(event string, init, stepUpdate, result json.RawMessage) StreamLine {
+var (
+	reMuseInterior = regexp.MustCompile(`(?:^|[._])(?:thought|thinking|reasoning|usage|token|tokens|cost|heartbeat|ping)(?:$|[._])`)
+	reMuseAction   = regexp.MustCompile(`(?:^|[._])(?:tool|tools|tool_call|tool_result|exec|shell|action)(?:$|[._])`)
+	reMuseFailure  = regexp.MustCompile(`(?:^|[._])(?:failed|failure|error|errored|denied|rejected|timeout|timed_out)$`)
+	reMuseFailKind = regexp.MustCompile(`^(?:failed|failure|error|errored|denied|rejected|timed_out)$`)
+)
+
+// museActivity decides whether a non-answer MSP record is meaningful to a loop
+// detector. Lifecycle bookkeeping (task proposed/accepted/scheduled/started/
+// completed, stream links, side-effect intents, model config, status) repeats
+// identically in every healthy task and is NOT activity; thinking and usage are
+// interior state. A tool/command/action record, or any record that says it
+// failed, is. The signature is volatile-stripped so ids/sequence/timestamps do
+// not make a repeated action look new.
+func museActivity(payloadType string, payload json.RawMessage) (sig string, failed bool) {
+	pt := strings.ToLower(payloadType)
+	if reMuseInterior.MatchString(pt) {
+		return "", false
+	}
+	var v map[string]any
+	if json.Unmarshal(payload, &v) != nil {
+		return "", false
+	}
+	failed = reMuseFailure.MatchString(pt) || jsonReportsError(v)
+	if ev, ok := v["event"].(map[string]any); ok {
+		if k, _ := ev["kind"].(string); reMuseFailKind.MatchString(strings.ToLower(k)) || jsonReportsError(ev) {
+			failed = true
+		}
+	}
+	if st, _ := v["status"].(string); reMuseFailKind.MatchString(strings.ToLower(st)) {
+		failed = true
+	}
+	if !failed && !reMuseAction.MatchString(pt) {
+		return "", false
+	}
+	b, err := json.Marshal(stripVolatile(v))
+	if err != nil {
+		return "", false
+	}
+	sig = "muse " + pt + " " + string(b)
+	if len(sig) > 512 {
+		sig = sig[:200] + "#" + hashInput([]byte(sig))
+	}
+	return sig, failed
+}
+
+// decodeAGY binds each AGY event to the envelope fields its stream documents
+// (docs/validation/cligw-readiness-1230.md; pkg/cligw/testdata/agy-stream.jsonl):
+// step_update carries step_type plus step_index/state, init carries the model (or
+// a conversation_id), result carries status. The bare `event` name plus an object
+// is far too common to claim on its own — `{"event":"init","init":{"x":1}}` is
+// just as plausible in an agent's own JSON answer.
+func decodeAGY(top map[string]json.RawMessage, event string) StreamLine {
 	out := StreamLine{Vendor: "agy", Kind: StreamMeta}
+	// An AGY envelope is {"event":E, E:{...}} and nothing else (a conversation_id
+	// sibling is tolerated). Extra top-level keys mean it is someone else's JSON.
+	for k := range top {
+		if k != "event" && k != event && k != "conversation_id" {
+			return StreamLine{}
+		}
+	}
+	body := top[event]
+	if !isJSONObject(body) {
+		return StreamLine{}
+	}
 	switch event {
 	case "init":
-		if !isJSONObject(init) {
+		var in struct {
+			Model          string `json:"model"`
+			ConversationID string `json:"conversation_id"`
+		}
+		if json.Unmarshal(body, &in) != nil || (in.Model == "" && in.ConversationID == "") {
 			return StreamLine{}
 		}
 	case "step_update":
-		if !isJSONObject(stepUpdate) {
-			return StreamLine{}
-		}
 		var step struct {
-			StepType  string `json:"step_type"`
-			TextDelta string `json:"text_delta"`
+			StepIndex *float64 `json:"step_index"`
+			State     string   `json:"state"`
+			StepType  string   `json:"step_type"`
+			TextDelta string   `json:"text_delta"`
+		}
+		if json.Unmarshal(body, &step) != nil || step.StepType == "" || (step.StepIndex == nil && step.State == "") {
+			return StreamLine{}
 		}
 		// Only agent_response steps are the answer; user_input echoes the prompt and
 		// thinking is interior state.
-		if json.Unmarshal(stepUpdate, &step) == nil && step.StepType == "agent_response" && step.TextDelta != "" {
+		if step.StepType == "agent_response" && step.TextDelta != "" {
 			out.Kind, out.Text = StreamDelta, step.TextDelta
 		}
 	case "result":
-		if !isJSONObject(result) {
-			return StreamLine{}
-		}
 		var res struct {
+			Status   string `json:"status"`
 			Response string `json:"response"`
 		}
-		if json.Unmarshal(result, &res) == nil && strings.TrimSpace(res.Response) != "" {
+		if json.Unmarshal(body, &res) != nil || res.Status == "" {
+			return StreamLine{}
+		}
+		if strings.TrimSpace(res.Response) != "" {
 			out.Kind, out.Text = StreamFinal, res.Response
+		}
+		if strings.EqualFold(res.Status, "error") || strings.EqualFold(res.Status, "failed") {
+			out.Failed = true
 		}
 	default:
 		return StreamLine{}

@@ -1037,6 +1037,10 @@ func TestNormalizeTurnTextPreservesForeignMuseAGYLookAlikes(t *testing.T) {
 		`{"event":"step_update","note":"deploy finished"}`,
 		`{"event":"result","status":"ok","response":"42"}`,
 		`{"answer":"42","sequence":3}`,
+		`{"event":"init","init":{"x":1}}`,
+		`{"event":"step_update","step_update":{"text_delta":"answer"}}`,
+		`{"event":"step_update","step_update":{"step_type":"agent_response","text_delta":"x"},"owner":"someone"}`,
+		`{"event":"result","result":{"response":"42"}}`,
 	} {
 		if got := normalizeTurnText(raw); got != raw {
 			t.Errorf("foreign JSON was rewritten:\n got %q\nwant %q", got, raw)
@@ -1057,7 +1061,7 @@ func TestNormalizeLiveLineMuseAGYFragmentsAreNotLines(t *testing.T) {
 		museDeltaRec("frag"),
 		museRecord("run.terminal.completed", `{"text":"whole"}`),
 		agyStep("agent_response", "frag"),
-		`{"event":"result","result":{"response":"whole"}}`,
+		`{"event":"result","result":{"status":"SUCCESS","response":"whole"}}`,
 		museRecord("task.lifecycle.started", `{"kind":"task_lifecycle"}`),
 	} {
 		if text, keep := normalizeLiveLine(ln); keep || text != "" {

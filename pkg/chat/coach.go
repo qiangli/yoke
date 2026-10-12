@@ -437,8 +437,23 @@ func (c *Coach) feedLine(raw string, count bool) []*SteerRecord {
 	defer c.mu.Unlock()
 	d := DecodeStreamLine(raw)
 	switch d.Kind {
-	case StreamMeta, StreamFinal:
-		return nil // transport, or a repeat of deltas already measured
+	case StreamFinal:
+		return nil // a repeat of deltas already measured
+	case StreamMeta:
+		if d.Activity == "" {
+			return nil // lifecycle, thinking, usage: machinery, not progress
+		}
+		if c.deltaTail != "" {
+			addProse(c.deltaTail)
+			c.deltaTail = ""
+		}
+		// A tool/action or failure record inside recognized transport is the same
+		// kind of evidence as any structured event: ids are already stripped from
+		// the signature, so a repeated or repeatedly failing action still counts.
+		if count {
+			c.outBytes += len(d.Activity)
+		}
+		segs = append(segs, seg{norm: normalizeEvent(d.Activity), err: d.Failed, event: true})
 	case StreamDelta:
 		if count {
 			c.outBytes += len(d.Text)
