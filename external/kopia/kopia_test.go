@@ -2,7 +2,10 @@ package kopia
 
 import (
 	"slices"
+	"strings"
 	"testing"
+
+	"github.com/qiangli/yoke/external/internal/serviceenv"
 )
 
 func TestPrivacyArgsDisableUpdatesAndEnableOTLP(t *testing.T) {
@@ -11,6 +14,48 @@ func TestPrivacyArgsDisableUpdatesAndEnableOTLP(t *testing.T) {
 		if !slices.Contains(args, want) {
 			t.Fatalf("missing %s in %v", want, args)
 		}
+	}
+}
+
+// Kopia v0.23.1 uses otlptracegrpc (gRPC only). Its child env must target
+// the loopback gRPC receiver (127.0.0.1:31416) with grpc protocol, not the
+// OTLP/HTTP proxy, or traces are silently lost.
+func TestKopiaOTLPEnvTargetsGRPCReceiver(t *testing.T) {
+	env := serviceenv.LocalOTLP([]string{"KOPIA_PASSWORD=secret", "OTEL_EXPORTER_OTLP_ENDPOINT=https://vendor.example"}, "kopia")
+	joined := strings.Join(env, "\n")
+	if strings.Contains(joined, "vendor.example") {
+		t.Fatalf("vendor endpoint survived:\n%s", joined)
+	}
+	for _, want := range []string{
+		"OTEL_EXPORTER_OTLP_ENDPOINT=" + serviceenv.LocalCollectorGRPCEndpoint,
+		"OTEL_EXPORTER_OTLP_PROTOCOL=grpc",
+		"OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=grpc",
+		"OTEL_SERVICE_NAME=kopia",
+	} {
+		found := false
+		for _, e := range env {
+			if e == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("missing %q in kopia OTLP env:\n%s", want, joined)
+		}
+	}
+	// Must not contain http/protobuf for kopia; that would indicate the
+	// HTTP proxy, which kopia's gRPC exporter cannot speak to.
+	if strings.Contains(joined, "http/protobuf") {
+		t.Fatalf("kopia env must not contain http/protobuf (needs grpc):\n%s", joined)
+	}
+	// Ensure the gRPC address is loopback-only (never vendor, never 0.0.0.0).
+	for _, e := range env {
+		if strings.Contains(e, "OTEL_EXPORTER_OTLP_ENDPOINT=") && strings.Contains(e, "0.0.0.0") {
+			t.Fatalf("non-loopback bind in kopia env: %q", e)
+		}
+	}
+	if !slices.Contains(kopiaPrivacyArgs(), "--otlp-trace") {
+		t.Fatalf("--otlp-trace missing: gRPC receiver would never be exercised")
 	}
 }
 

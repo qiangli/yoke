@@ -1,6 +1,7 @@
 package stack
 
 const DefaultProxyPort = 31415
+const DefaultGRPCPort = 31416
 
 // Config controls the embedded OTEL stack. Only the proxy and OTLP ingress
 // ports are public; component UI/backend ports are allocated on loopback.
@@ -26,4 +27,11 @@ func (c *Config) proxyBindAddr() string {
 		return c.ProxyBindAddr
 	}
 	return "127.0.0.1"
+}
+
+func (c *Config) grpcPort() int {
+	if c != nil && c.OTLPGRPCPort != 0 {
+		return c.OTLPGRPCPort
+	}
+	return DefaultGRPCPort
 }
