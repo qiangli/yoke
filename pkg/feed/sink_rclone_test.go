@@ -92,3 +92,30 @@ func TestRcloneSinkRejectsTraversal(t *testing.T) {
 		t.Fatal("Put ../evil: nil error")
 	}
 }
+
+func TestRcloneSinkPublicURL(t *testing.T) {
+	ctx := context.Background()
+	if _, err := rclone.Path(ctx, ""); err != nil {
+		t.Skipf("rclone binary does not resolve and there is no network to fetch it: %v", err)
+	}
+	target := filepath.Join(t.TempDir(), "remote")
+	s, err := OpenSink(SinkConfig{Name: "r1", Kind: "rclone", Target: target, PublicURL: "https://example.test/feed/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := []byte(`{"headline":"hi"}`)
+	url, err := s.Put(ctx, "posts/a.json", data)
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if want := "https://example.test/feed/posts/a.json"; url != want {
+		t.Fatalf("Put URL = %q, want %q", url, want)
+	}
+	back, err := s.Get(ctx, url)
+	if err != nil || !bytes.Equal(back, data) {
+		t.Fatalf("Get(public URL) = %q,%v", back, err)
+	}
+	if _, err := s.Get(ctx, "https://example.test/feed/../x"); err == nil {
+		t.Fatal("Get accepted a traversing public URL")
+	}
+}

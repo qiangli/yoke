@@ -14,6 +14,7 @@ import (
 type rcloneSink struct {
 	name   string
 	target string
+	public string
 }
 
 func openRcloneSink(cfg SinkConfig) (Sink, error) {
@@ -26,7 +27,11 @@ func openRcloneSink(cfg SinkConfig) (Sink, error) {
 	if cfg.Target == "" {
 		return nil, fmt.Errorf("feed: rclone sink %q: target (remote:path) is required", cfg.Name)
 	}
-	return &rcloneSink{name: cfg.Name, target: cfg.Target}, nil
+	public, err := normalizePublicURL(cfg.PublicURL)
+	if err != nil {
+		return nil, fmt.Errorf("feed: rclone sink %q: %w", cfg.Name, err)
+	}
+	return &rcloneSink{name: cfg.Name, target: cfg.Target, public: public}, nil
 }
 
 func (s *rcloneSink) Name() string { return s.name }
@@ -80,6 +85,9 @@ func (s *rcloneSink) Put(ctx context.Context, relPath string, data []byte) (stri
 	if _, err := runRclone(ctx, "copyto", tmpName, dest); err != nil {
 		return "", err
 	}
+	if s.public != "" {
+		return s.public + "/" + rp, nil
+	}
 	out, err := runRclone(ctx, "link", dest)
 	if err != nil {
 		return dest, nil
@@ -97,6 +105,12 @@ func (s *rcloneSink) Get(ctx context.Context, ref string) ([]byte, error) {
 	base := strings.TrimSuffix(s.target, "/")
 	dest := ref
 	switch {
+	case strings.HasPrefix(ref, s.public+"/") && s.public != "":
+		rp, err := validateRelPath(strings.TrimPrefix(ref, s.public+"/"))
+		if err != nil {
+			return nil, err
+		}
+		dest = base + "/" + rp
 	case strings.HasPrefix(ref, base+"/") || ref == s.target:
 		dest = ref
 	case strings.Contains(ref, "://"):

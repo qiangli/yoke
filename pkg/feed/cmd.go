@@ -126,13 +126,17 @@ func ctxOf(c *cobra.Command) context.Context {
 
 func newSinkCmd(env Env) *cobra.Command {
 	sink := &cobra.Command{Use: "sink", Short: "manage publish sinks (sinks.json)"}
-	var branch string
+	var branch, publicURL string
 	add := &cobra.Command{
 		Use:   "add github|rclone NAME TARGET",
 		Short: "add a publish sink (github: git remote URL; rclone: remote:path)",
 		Args:  cobra.ExactArgs(3),
 		RunE: func(c *cobra.Command, a []string) error {
-			cfg := SinkConfig{Kind: a[0], Name: a[1], Target: a[2], Branch: branch}
+			pub, err := normalizePublicURL(publicURL)
+			if err != nil {
+				return err
+			}
+			cfg := SinkConfig{Kind: a[0], Name: a[1], Target: a[2], Branch: branch, PublicURL: pub}
 			if cfg.Kind != "github" && cfg.Kind != "rclone" {
 				return fmt.Errorf("feed: sink kind must be github or rclone, got %q", cfg.Kind)
 			}
@@ -155,6 +159,7 @@ func newSinkCmd(env Env) *cobra.Command {
 		},
 	}
 	add.Flags().StringVar(&branch, "branch", "", "git branch for github sinks (default main)")
+	add.Flags().StringVar(&publicURL, "public-url", "", "http(s) base URL the sink's files are served from; posts are published as BASE/<path>")
 	list := &cobra.Command{
 		Use:   "list",
 		Short: "list configured sinks",
@@ -168,6 +173,9 @@ func newSinkCmd(env Env) *cobra.Command {
 				line := s.Name + "\t" + s.Kind + "\t" + s.Target
 				if s.Branch != "" {
 					line += "\t" + s.Branch
+				}
+				if s.PublicURL != "" {
+					line += "\tpublic_url=" + s.PublicURL
 				}
 				fmt.Fprintln(c.OutOrStdout(), line)
 			}

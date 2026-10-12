@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -158,6 +159,47 @@ func TestValidateRelPath(t *testing.T) {
 		}
 		if !c.wantErr && (err != nil || got != c.want) {
 			t.Errorf("validateRelPath(%q) = %q,%v; want %q,nil", c.in, got, err, c.want)
+		}
+	}
+}
+
+func TestSinkPublicURLRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	in := []SinkConfig{
+		{Name: "a", Kind: "rclone", Target: "r:p", PublicURL: "https://example.test/feed"},
+		{Name: "b", Kind: "github", Target: "t"},
+	}
+	if err := SaveSinks(dir, in); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "sinks.json"))
+	if strings.Count(string(raw), "public_url") != 1 {
+		t.Fatalf("public_url must be written only when set: %s", raw)
+	}
+	out, err := LoadSinks(dir)
+	if err != nil || len(out) != 2 || out[0].PublicURL != in[0].PublicURL || out[1].PublicURL != "" {
+		t.Fatalf("round trip = %+v, %v", out, err)
+	}
+	bad := []SinkConfig{{Name: "a", Kind: "rclone", Target: "r:p", PublicURL: "ftp://x.test"}}
+	if err := SaveSinks(dir, bad); err == nil {
+		t.Fatal("SaveSinks accepted a non-http public URL")
+	}
+}
+
+func TestNormalizePublicURL(t *testing.T) {
+	for in, want := range map[string]string{
+		"":                         "",
+		"https://x.test":           "https://x.test",
+		"https://x.test/feed/":     "https://x.test/feed",
+		"http://x.test:8080/a/b//": "http://x.test:8080/a/b",
+	} {
+		if got, err := normalizePublicURL(in); err != nil || got != want {
+			t.Errorf("normalizePublicURL(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"x.test/feed", "ftp://x.test", "https://", "https:///p", "file:///tmp/x", "https://x.test/?q=1", "https://x.test/#f"} {
+		if _, err := normalizePublicURL(in); err == nil {
+			t.Errorf("normalizePublicURL(%q) succeeded", in)
 		}
 	}
 }

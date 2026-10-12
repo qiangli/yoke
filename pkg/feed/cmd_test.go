@@ -445,6 +445,26 @@ func TestSinkCommands(t *testing.T) {
 	}
 }
 
+func TestSinkAddPublicURL(t *testing.T) {
+	te := newTestEnv(t, nil)
+	te.mustRun("sink", "add", "rclone", "web", "remote:p", "--public-url", "https://example.test/feed/")
+	if out := te.mustRun("sink", "list"); !strings.Contains(out, "web\trclone\tremote:p\tpublic_url=https://example.test/feed\n") {
+		t.Fatalf("list = %q", out)
+	}
+	cfgs, _ := LoadSinks(KeyDir())
+	if len(cfgs) != 1 || cfgs[0].PublicURL != "https://example.test/feed" {
+		t.Fatalf("cfgs = %+v", cfgs)
+	}
+	for _, bad := range []string{"example.test", "ftp://example.test", "https://", "https://example.test/?q=1"} {
+		if _, _, err := te.run("sink", "add", "rclone", "bad", "remote:q", "--public-url", bad); err == nil {
+			t.Errorf("--public-url %q accepted", bad)
+		}
+	}
+	if cfgs, _ := LoadSinks(KeyDir()); len(cfgs) != 1 {
+		t.Fatalf("a refused sink was saved: %+v", cfgs)
+	}
+}
+
 func TestCmdTreeSmoke(t *testing.T) {
 	t.Setenv("BASHY_HOME", t.TempDir())
 	cmd := NewCmd()

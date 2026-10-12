@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -27,6 +28,34 @@ type SinkConfig struct {
 	Kind   string `json:"kind"`
 	Target string `json:"target"`
 	Branch string `json:"branch,omitempty"`
+	// PublicURL is the http(s) base URL the sink's files are served from
+	// (GitHub Pages, an S3 website bucket, a self-hosted dir). When set,
+	// Put returns PublicURL + "/" + relPath instead of the derived URL.
+	PublicURL string `json:"public_url,omitempty"`
+}
+
+// normalizePublicURL checks that raw is an http(s) URL with a host and
+// returns it without a trailing slash. Empty stays empty.
+func normalizePublicURL(raw string) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
+		return "", fmt.Errorf("feed: invalid public URL %q: want http(s)://HOST[/path]", raw)
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("feed: invalid public URL %q: no query or fragment allowed", raw)
+	}
+	return strings.TrimRight(raw, "/"), nil
+}
+
+// relUnderPublicURL maps ref back to a relPath when it lies under base.
+func relUnderPublicURL(base, ref string) (string, bool) {
+	if base == "" || !strings.HasPrefix(ref, base+"/") {
+		return "", false
+	}
+	return strings.TrimPrefix(ref, base+"/"), true
 }
 
 // SinkResult is the outcome of publishing to one sink.
@@ -81,6 +110,9 @@ func validateSinkConfigs(cfgs []SinkConfig) error {
 		}
 		if c.Target == "" {
 			return fmt.Errorf("feed: sink %q: target is required", c.Name)
+		}
+		if _, err := normalizePublicURL(c.PublicURL); err != nil {
+			return fmt.Errorf("feed: sink %q: %w", c.Name, err)
 		}
 		if _, dup := seen[c.Name]; dup {
 			return fmt.Errorf("feed: duplicate sink name %q", c.Name)

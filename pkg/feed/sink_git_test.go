@@ -185,3 +185,27 @@ func TestGitSinkCacheUnderBashyHome(t *testing.T) {
 		t.Fatalf("cache clone missing: %v", err)
 	}
 }
+
+func TestGitSinkPublicURL(t *testing.T) {
+	root := gitTestEnv(t)
+	ctx := context.Background()
+	remote := filepath.Join(root, "remote.git")
+	runGitTest(t, "init", "--bare", remote)
+
+	s, err := OpenSink(SinkConfig{Name: "g1", Kind: "github", Target: remote, PublicURL: "https://example.test/feed/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := []byte(`{"headline":"hi"}`)
+	url, err := s.Put(ctx, "posts/hello.json", data)
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if want := "https://example.test/feed/posts/hello.json"; url != want {
+		t.Fatalf("Put URL = %q, want %q", url, want)
+	}
+	back, err := s.Get(ctx, url)
+	if err != nil || !bytes.Equal(back, data) {
+		t.Fatalf("Get(public URL) = %q,%v", back, err)
+	}
+}

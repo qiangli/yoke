@@ -23,6 +23,7 @@ type gitSink struct {
 	remote string
 	branch string
 	dir    string
+	public string
 }
 
 func openGitSink(cfg SinkConfig) (Sink, error) {
@@ -39,11 +40,16 @@ func openGitSink(cfg SinkConfig) (Sink, error) {
 	if branch == "" {
 		branch = "main"
 	}
+	public, err := normalizePublicURL(cfg.PublicURL)
+	if err != nil {
+		return nil, fmt.Errorf("feed: github sink %q: %w", cfg.Name, err)
+	}
 	base, err := sinkBaseDir()
 	if err != nil {
 		return nil, err
 	}
 	return &gitSink{
+		public: public,
 		name:   cfg.Name,
 		remote: cfg.Target,
 		branch: branch,
@@ -144,6 +150,9 @@ func (s *gitSink) Put(ctx context.Context, relPath string, data []byte) (string,
 	if _, err := runGit(ctx, s.dir, "push", "origin", s.branch); err != nil {
 		return "", err
 	}
+	if s.public != "" {
+		return s.public + "/" + rp, nil
+	}
 	return buildGitURL(s.remote, s.branch, rp), nil
 }
 
@@ -167,6 +176,9 @@ func (s *gitSink) Get(ctx context.Context, ref string) ([]byte, error) {
 // relFromRef maps a Put URL back to its relPath; anything else is treated
 // as a relPath directly.
 func (s *gitSink) relFromRef(ref string) string {
+	if rel, ok := relUnderPublicURL(s.public, ref); ok {
+		return rel
+	}
 	if owner, repo, ok := parseGitHubRemote(s.remote); ok {
 		prefix := "https://raw.githubusercontent.com/" + owner + "/" + repo + "/" + s.branch + "/"
 		if strings.HasPrefix(ref, prefix) {
