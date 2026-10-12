@@ -285,6 +285,35 @@ var parityScenarios = []parityScenario{
 		pwrite(t, filepath.Join(r, "b.txt"), "b2\r\n") // a real edit, CRLF on disk
 		return r
 	}, false},
+	{"filemode-false-chmod", func(t *testing.T, root string) string {
+		// Git for Windows writes core.filemode=false: an executable-bit
+		// change alone is not a modification.
+		r := pRepo(t, filepath.Join(root, "r"))
+		pgit(t, r, "config", "core.filemode", "false")
+		if err := os.Chmod(filepath.Join(r, "a.txt"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		pwrite(t, filepath.Join(r, "b.txt"), "b2\n")
+		return r
+	}, false},
+	{"gitattributes-eol-unrelated", func(t *testing.T, root string) string {
+		// A rule for other paths must not stop native service.
+		r := pRepo(t, filepath.Join(root, "r"))
+		pwrite(t, filepath.Join(r, ".gitattributes"), "*.golden text eol=lf\n")
+		pgit(t, r, "add", ".gitattributes")
+		pgit(t, r, "commit", "-q", "-m", "attrs")
+		pwrite(t, filepath.Join(r, "a.txt"), "a2\r\n")
+		return r
+	}, false},
+	{"gitattributes-eol-applies", func(t *testing.T, root string) string {
+		// A rule for the changed path: native declines status/diff.
+		r := pRepo(t, filepath.Join(root, "r"))
+		pwrite(t, filepath.Join(r, "dir", ".gitattributes"), "*.txt text eol=lf\n")
+		pgit(t, r, "add", "dir/.gitattributes")
+		pgit(t, r, "commit", "-q", "-m", "attrs")
+		pwrite(t, filepath.Join(r, "dir", "c.txt"), "c2\r\n")
+		return r
+	}, true},
 	{"both-staged-and-unstaged", func(t *testing.T, root string) string {
 		r := pRepo(t, filepath.Join(root, "r"))
 		pwrite(t, filepath.Join(r, "a.txt"), "a2\n")
@@ -470,5 +499,43 @@ func TestNativeAdd_AutoCRLFMatchesHostGit(t *testing.T) {
 	}
 	if got, want := pgit(t, repos["native"], "status", "--porcelain"), pgit(t, repos["host"], "status", "--porcelain"); got != want {
 		t.Errorf("host git status after native add %q; after host add %q", got, want)
+	}
+}
+
+// TestNativeAdd_FileModeFalseKeepsIndexMode: under core.filemode=false a
+// native add keeps an existing entry's mode and stages new files 100644,
+// as host git does, whatever the disk's executable bits say.
+func TestNativeAdd_FileModeFalseKeepsIndexMode(t *testing.T) {
+	if _, err := osexec.LookPath("git"); err != nil {
+		t.Skip("no host git on PATH")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_AUTHOR_NAME", "t")
+	t.Setenv("GIT_AUTHOR_EMAIL", "t@example.com")
+	t.Setenv("GIT_COMMITTER_NAME", "t")
+	t.Setenv("GIT_COMMITTER_EMAIL", "t@example.com")
+	repos := map[string]string{}
+	for _, side := range []string{"host", "native"} {
+		r := pRepo(t, filepath.Join(t.TempDir(), side))
+		pwrite(t, filepath.Join(r, "run.sh"), "echo 1\n")
+		pgit(t, r, "add", "run.sh")
+		pgit(t, r, "update-index", "--chmod=+x", "run.sh")
+		pgit(t, r, "commit", "-q", "-m", "script")
+		pgit(t, r, "config", "core.filemode", "false")
+		pwrite(t, filepath.Join(r, "run.sh"), "echo 2\n") // content edit; disk mode 0644
+		_ = os.Chmod(filepath.Join(r, "run.sh"), 0o644)
+		pwrite(t, filepath.Join(r, "new.sh"), "echo new\n")
+		_ = os.Chmod(filepath.Join(r, "new.sh"), 0o755)
+		repos[side] = r
+	}
+	pgit(t, repos["host"], "add", "-A")
+	if _, err := Exec(context.Background(), repos["native"], []string{"add", "-A"}); err != nil {
+		t.Fatalf("native add: %v", err)
+	}
+	if got, want := pgit(t, repos["native"], "ls-files", "-s"), pgit(t, repos["host"], "ls-files", "-s"); got != want {
+		t.Errorf("index after native add:\n%s\nhost git:\n%s", got, want)
 	}
 }

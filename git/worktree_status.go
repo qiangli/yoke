@@ -33,8 +33,10 @@ func worktreeStatus(w *gogit.Worktree) (gogit.Status, error) {
 	}
 	markMovedSubmodules(root, st)
 	if repo, err := openRepo(root); err == nil {
-		if mode := coreAutoCRLF(repo); mode == "true" || mode == "input" {
-			dropAutoCRLFClean(repo, root, st)
+		mode := coreAutoCRLF(repo)
+		autocrlf, fileMode := mode == "true" || mode == "input", coreFileMode(repo)
+		if autocrlf || !fileMode {
+			dropConfigClean(repo, root, st, autocrlf, fileMode)
 		}
 	}
 	return st, nil

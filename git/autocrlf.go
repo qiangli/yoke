@@ -2,16 +2,19 @@ package git
 
 import (
 	"bytes"
+	"github.com/go-git/go-billy/v5"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 
+	"github.com/go-git/go-billy/v5/osfs"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
+	"github.com/go-git/go-git/v5/plumbing/format/gitattributes"
 )
 
 // go-git implements no core.autocrlf. Git for Windows ships
@@ -161,38 +164,86 @@ func blobHasCR(repo *gogit.Repository, h plumbing.Hash) bool {
 	return err == nil && bytes.IndexByte(data, '\r') >= 0
 }
 
-// eolAttributesSet reports whether a gitattributes file at the root or in
-// $GIT_DIR/info sets text/eol/crlf rules, which override core.autocrlf
-// and are not reproduced natively.
-func eolAttributesSet(root string) bool {
-	files := []string{filepath.Join(root, ".gitattributes")}
+// eolRules matches gitattributes text/eol/crlf rules against paths;
+// such rules override core.autocrlf and are not reproduced natively. As in
+// git, only the .gitattributes files of a path's ancestor directories
+// (plus $GIT_DIR/info/attributes) apply, and they are read on demand —
+// never by walking the tree.
+type eolRules struct {
+	root string
+	fs   billy.Filesystem
+	dirs map[string][]gitattributes.MatchAttribute
+	info []gitattributes.MatchAttribute
+}
+
+func loadEOLRules(root string) *eolRules {
+	r := &eolRules{root: root, fs: osfs.New(root), dirs: map[string][]gitattributes.MatchAttribute{}}
 	if gitDir, err := resolveGitDir(root); err == nil {
-		files = append(files, filepath.Join(gitDir, "info", "attributes"))
-	}
-	for _, f := range files {
-		data, err := os.ReadFile(f)
-		if err != nil {
-			continue
+		if f, err := os.Open(filepath.Join(gitDir, "info", "attributes")); err == nil {
+			r.info, _ = gitattributes.ReadAttributes(f, nil, true)
+			f.Close()
 		}
-		s := string(data)
-		if strings.Contains(s, "text") || strings.Contains(s, "eol") || strings.Contains(s, "crlf") {
+	}
+	return r
+}
+
+func (r *eolRules) dir(d string) []gitattributes.MatchAttribute {
+	if ps, ok := r.dirs[d]; ok {
+		return ps
+	}
+	var domain []string
+	if d != "" {
+		domain = strings.Split(d, "/")
+	}
+	ps, _ := gitattributes.ReadAttributesFile(r.fs, domain, ".gitattributes", d == "")
+	r.dirs[d] = ps
+	return ps
+}
+
+// applies reports whether a text/eol/crlf rule is specified for path.
+func (r *eolRules) applies(path string) bool {
+	if r == nil {
+		return false
+	}
+	var chain []string
+	for d := pathDir(path); ; d = pathDir(d) {
+		chain = append([]string{d}, chain...)
+		if d == "" {
+			break
+		}
+	}
+	var stack []gitattributes.MatchAttribute
+	for _, d := range chain { // root first: deeper files take precedence
+		stack = append(stack, r.dir(d)...)
+	}
+	stack = append(stack, r.info...)
+	if len(stack) == 0 {
+		return false
+	}
+	res, _ := gitattributes.NewMatcher(stack).Match(strings.Split(path, "/"), []string{"text", "eol", "crlf"})
+	for _, at := range res {
+		if !at.IsUnspecified() {
 			return true
 		}
 	}
 	return false
 }
 
-// dropAutoCRLFClean clears the worktree-modified mark of files that equal
-// their index blob once converted the way host git converts them.
-func dropAutoCRLFClean(repo *gogit.Repository, root string, st gogit.Status) {
+// dropConfigClean clears the worktree-modified mark of files host git
+// calls clean: equal to their index blob once converted per
+// core.autocrlf, with an executable-bit difference ignored under
+// core.filemode=false.
+func dropConfigClean(repo *gogit.Repository, root string, st gogit.Status, autocrlf, fileMode bool) {
 	idx, err := repo.Storer.Index()
 	if err != nil {
 		return
 	}
 	entries := map[string]plumbing.Hash{}
+	trustModes := map[string]bool{} // true: the executable bit cannot be why it differs
 	for _, e := range idx.Entries {
 		if e.Mode == filemode.Regular || e.Mode == filemode.Executable {
 			entries[e.Name] = e.Hash
+			trustModes[e.Name] = !fileMode || diskModeMatches(filepath.Join(root, filepath.FromSlash(e.Name)), e.Mode)
 		}
 	}
 	for path, fs := range st {
@@ -207,9 +258,16 @@ func dropAutoCRLFClean(repo *gogit.Repository, root string, st gogit.Status) {
 		if err != nil {
 			continue
 		}
-		conv, changed := toGit(content, blobHasCR(repo, h))
-		if !changed || plumbing.ComputeHash(plumbing.BlobObject, conv) != h {
+		if autocrlf {
+			if conv, changed := toGit(content, blobHasCR(repo, h)); changed {
+				content = conv
+			}
+		}
+		if plumbing.ComputeHash(plumbing.BlobObject, content) != h {
 			continue
+		}
+		if !trustModes[path] {
+			continue // same bytes, different executable bit, and filemode is on
 		}
 		fs.Worktree = gogit.Unmodified
 		if fs.Staging == gogit.Unmodified {
@@ -279,4 +337,86 @@ func applyAutoCRLFToAdded(repo *gogit.Repository, root string, before map[string
 		return nil
 	}
 	return repo.Storer.SetIndex(idx)
+}
+
+// coreFileMode resolves core.filemode (default true). Git for Windows'
+// init writes core.filemode=false: the executable bit is then never read
+// from disk — an existing index entry keeps its mode, a new file is 100644.
+func coreFileMode(repo *gogit.Repository) bool {
+	v := ""
+	if cfg, err := repo.Config(); err == nil {
+		v = cfg.Raw.Section("core").Option("filemode")
+	}
+	if v == "" {
+		for _, p := range gitConfigFiles() {
+			data, err := os.ReadFile(p)
+			if err != nil {
+				continue
+			}
+			c := config.NewConfig()
+			if c.Unmarshal(data) == nil {
+				if v = c.Raw.Section("core").Option("filemode"); v != "" {
+					break
+				}
+			}
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "false", "no", "off", "0":
+		return false
+	}
+	return true
+}
+
+// finishAdd brings what a go-git add just staged to what host git's add
+// stores: core.autocrlf conversion, and under core.filemode=false the
+// index's existing mode (100644 for a new file) instead of the disk's.
+func finishAdd(repo *gogit.Repository, root string, before map[string]plumbing.Hash, beforeMode map[string]filemode.FileMode) error {
+	if err := applyAutoCRLFToAdded(repo, root, before); err != nil {
+		return err
+	}
+	if coreFileMode(repo) {
+		return nil
+	}
+	idx, err := repo.Storer.Index()
+	if err != nil {
+		return err
+	}
+	changed := false
+	for _, e := range idx.Entries {
+		if e.Mode != filemode.Regular && e.Mode != filemode.Executable {
+			continue
+		}
+		want := filemode.Regular
+		if m, ok := beforeMode[e.Name]; ok && (m == filemode.Regular || m == filemode.Executable) {
+			want = m
+		}
+		if e.Mode != want {
+			e.Mode = want
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return repo.Storer.SetIndex(idx)
+}
+
+// indexModes records each index path's mode before an add.
+func indexModes(repo *gogit.Repository) map[string]filemode.FileMode {
+	out := map[string]filemode.FileMode{}
+	if idx, err := repo.Storer.Index(); err == nil {
+		for _, e := range idx.Entries {
+			out[e.Name] = e.Mode
+		}
+	}
+	return out
+}
+
+func diskModeMatches(path string, m filemode.FileMode) bool {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return (fi.Mode()&0o111 != 0) == (m == filemode.Executable)
 }

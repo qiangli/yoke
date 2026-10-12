@@ -212,13 +212,20 @@ func Add(opts AddOptions) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("worktree: %w", err)
 	}
+	before, beforeMode := indexSnapshot(r), indexModes(r)
 	if opts.All {
 		if _, err := w.Add("."); err != nil {
+			return nil, fmt.Errorf("add: %w", err)
+		}
+		if err := finishAdd(r, w.Filesystem.Root(), before, beforeMode); err != nil {
 			return nil, fmt.Errorf("add: %w", err)
 		}
 		return &Result{Success: true, Message: "Added all changes"}, nil
 	}
 	if _, err := w.Add(opts.Path); err != nil {
+		return nil, fmt.Errorf("add %s: %w", opts.Path, err)
+	}
+	if err := finishAdd(r, w.Filesystem.Root(), before, beforeMode); err != nil {
 		return nil, fmt.Errorf("add %s: %w", opts.Path, err)
 	}
 	return &Result{Success: true, Message: fmt.Sprintf("Added %s", opts.Path)}, nil
@@ -251,14 +258,14 @@ func Commit(opts CommitOptions) (*Result, error) {
 		return nil, fmt.Errorf("worktree: %w", err)
 	}
 	commitOpts := &gogit.CommitOptions{All: opts.All, Amend: opts.Amend}
-	if mode := coreAutoCRLF(r); opts.All && (mode == "true" || mode == "input") {
+	if mode := coreAutoCRLF(r); opts.All && (mode == "true" || mode == "input" || !coreFileMode(r)) {
 		// go-git's All stages raw worktree bytes; stage tracked changes
 		// here so core.autocrlf converts them as host git's -a would.
 		st, err := worktreeStatus(w)
 		if err != nil {
 			return nil, fmt.Errorf("status: %w", err)
 		}
-		before := indexSnapshot(r)
+		before, beforeMode := indexSnapshot(r), indexModes(r)
 		for path, fs := range st {
 			switch fs.Worktree {
 			case gogit.Modified:
@@ -271,8 +278,8 @@ func Commit(opts CommitOptions) (*Result, error) {
 				}
 			}
 		}
-		if err := applyAutoCRLFToAdded(r, w.Filesystem.Root(), before); err != nil {
-			return nil, fmt.Errorf("autocrlf: %w", err)
+		if err := finishAdd(r, w.Filesystem.Root(), before, beforeMode); err != nil {
+			return nil, fmt.Errorf("add: %w", err)
 		}
 		commitOpts.All = false
 	}

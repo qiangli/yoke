@@ -1005,9 +1005,9 @@ func nativeAdd(_ context.Context, dir string, args []string) (*ExecResult, error
 	if ps, perr := loadPorcelainState(repo, wt); perr != nil || ps.unsupported == "gitattributes eol rules" {
 		return nil, ErrUnsupported
 	}
-	before := indexSnapshot(repo)
+	before, beforeMode := indexSnapshot(repo), indexModes(repo)
 	staged := func() (*ExecResult, error) {
-		if err := applyAutoCRLFToAdded(repo, root, before); err != nil {
+		if err := finishAdd(repo, root, before, beforeMode); err != nil {
 			return nil, ErrUnsupported
 		}
 		return &ExecResult{Stdout: ""}, nil
