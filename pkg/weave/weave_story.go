@@ -741,6 +741,7 @@ func newWeaveStoryAddCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   `add "<title>"`,
 		Short: "Create a sprint card on the board",
+		Long:  "Create a sprint card on the board. The next available sprint number is allocated automatically and returned in plain or JSON output; no number or next selector is required. No sprint number is reserved for maintenance.",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if column == "" {
