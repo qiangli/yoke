@@ -39,6 +39,30 @@ func SigningPayload(bodySHA256, headline, dek string, labels []string, replyTo s
 	return buf
 }
 
+// SigningPayloadForPost extends SigningPayload with the post's attachment
+// list (each entry's path and sha256, in frontmatter order). When atts is
+// empty the result is byte-identical to SigningPayload with the same fields,
+// so posts without attachments sign and verify exactly as before.
+func SigningPayloadForPost(bodySHA256, headline, dek string, labels []string, replyTo string, atts []Attachment) []byte {
+	buf := SigningPayload(bodySHA256, headline, dek, labels, replyTo)
+	if len(atts) == 0 {
+		return buf
+	}
+	var n [4]byte
+	binary.BigEndian.PutUint32(n[:], uint32(len(atts)))
+	buf = append(buf, n[:]...)
+	for _, a := range atts {
+		var m [4]byte
+		binary.BigEndian.PutUint32(m[:], uint32(len(a.Path)))
+		buf = append(buf, m[:]...)
+		buf = append(buf, a.Path...)
+		binary.BigEndian.PutUint32(m[:], uint32(len(a.SHA256)))
+		buf = append(buf, m[:]...)
+		buf = append(buf, a.SHA256...)
+	}
+	return buf
+}
+
 // SignPayload signs payload with priv and returns the base64 (std encoding)
 // public key and signature.
 func SignPayload(priv ed25519.PrivateKey, payload []byte) (pubB64, sigB64 string) {

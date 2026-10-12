@@ -21,7 +21,7 @@ var (
 )
 
 func postPayload(p *Post) []byte {
-	return SigningPayload(p.BodySHA256(), p.Headline, p.Dek, p.Labels, p.ReplyTo)
+	return SigningPayloadForPost(p.BodySHA256(), p.Headline, p.Dek, p.Labels, p.ReplyTo, p.Attachments)
 }
 
 // SignPost stamps p.Pubkey and p.Sig over the post's body hash and excerpt

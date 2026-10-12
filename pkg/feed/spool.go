@@ -79,6 +79,15 @@ func rawHash(b []byte) string {
 // already spooled. A known id whose content changed is recorded as a new
 // "drifted" entry whatever its signature says: the edit is the news.
 func Ingest(dir, source, rel string, raw []byte, now time.Time) (*SpoolEntry, error) {
+	return ingest(dir, source, rel, raw, now, nil)
+}
+
+// ingest is Ingest with an optional attachment hook: attachmentCheck sees
+// the parsed post and returns a detail string when its listed attachments
+// fail verification ("" = ok or nothing listed). A failing check downgrades
+// a verified entry to drifted, or annotates an already drifted one; it never
+// fails the ingest itself.
+func ingest(dir, source, rel string, raw []byte, now time.Time, attachmentCheck func(*Post) string) (*SpoolEntry, error) {
 	p, err := ParsePost(raw)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", rel, err)
@@ -115,6 +124,16 @@ func Ingest(dir, source, rel string, raw []byte, now time.Time) (*SpoolEntry, er
 		}
 	}
 	status, detail := verifyStatus(p)
+	if attachmentCheck != nil {
+		if ad := attachmentCheck(p); ad != "" {
+			switch status {
+			case StatusVerified:
+				status, detail = StatusDrifted, "attachment: "+ad
+			case StatusDrifted:
+				detail += "; attachment: " + ad
+			}
+		}
+	}
 	if known {
 		status, detail = StatusDrifted, "content changed since first fetch"
 		if _, d := verifyStatus(p); d != "" {

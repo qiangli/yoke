@@ -25,6 +25,10 @@ type Post struct {
 	Visibility string   `yaml:"visibility,omitempty"`
 	Pubkey     string   `yaml:"pubkey,omitempty"`
 	Sig        string   `yaml:"sig,omitempty"`
+	// Attachments lists files published beside the post, each with its
+	// path relative to the post and its sha256 hex digest. The signature
+	// covers every entry's path and sha256.
+	Attachments []Attachment `yaml:"attachments,omitempty"`
 
 	Body string `yaml:"-"`
 }

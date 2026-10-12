@@ -35,6 +35,9 @@ type Env struct {
 	// Retention overrides RetentionPeriod (30 days) when positive. Tests
 	// set a short window; production leaves it unset.
 	Retention time.Duration
+	// MaxAttachBytes caps one --attach file. Non-positive means
+	// DefaultMaxAttachBytes (25 MiB).
+	MaxAttachBytes int64
 	// HTTP is the client for https follows. Default has a 30s timeout.
 	HTTP *http.Client
 	// Cloud resolves the registry base URL and auth credential. Default
@@ -221,7 +224,7 @@ func newSinkCmd(env Env) *cobra.Command {
 
 func newPostCmd(env Env) *cobra.Command {
 	var headline, dek, replyTo, relPath string
-	var labels []string
+	var labels, attaches []string
 	var forceKey, noIndex bool
 	cmd := &cobra.Command{
 		Use:   "post FILE|-",
@@ -233,16 +236,21 @@ It then registers the post with the feed registry, unless --no-index is set
 or the host is not paired.
 
 Budgets are weighted (CJK counts 2): headline <= 90, dek <= 240, up to 8
-labels of <= 32. It exits non-zero only when EVERY sink failed.`,
+labels of <= 32. It exits non-zero only when EVERY sink failed.
+
+Repeat --attach to publish files beside the post. Each attachment is listed
+in frontmatter with its sha256 and covered by the signature; fetchers verify
+every listed attachment and mark the post drifted on mismatch.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, a []string) error {
-			return runPost(c, env, a[0], Excerpt{Headline: headline, Dek: dek, Labels: labels}, replyTo, relPath, forceKey, noIndex)
+			return runPost(c, env, a[0], Excerpt{Headline: headline, Dek: dek, Labels: labels}, replyTo, relPath, attaches, forceKey, noIndex)
 		},
 	}
 	f := cmd.Flags()
 	f.StringVar(&headline, "headline", "", "headline (default: written by your LLM)")
 	f.StringVar(&dek, "dek", "", "dek / standfirst (default: written by your LLM)")
 	f.StringArrayVar(&labels, "label", nil, "label (repeatable)")
+	f.StringArrayVar(&attaches, "attach", nil, "attachment file published beside the post (repeatable)")
 	f.StringVar(&replyTo, "reply-to", "", "id of the post this replies to")
 	f.StringVar(&relPath, "path", "", "sink-relative path (default posts/<yyyy>/<id>.md)")
 	f.BoolVar(&forceKey, "force-key", false, "replace the registry's stored public key for this host")
@@ -250,7 +258,7 @@ labels of <= 32. It exits non-zero only when EVERY sink failed.`,
 	return cmd
 }
 
-func runPost(c *cobra.Command, env Env, file string, have Excerpt, replyTo, relPath string, forceKey, noIndex bool) error {
+func runPost(c *cobra.Command, env Env, file string, have Excerpt, replyTo, relPath string, attaches []string, forceKey, noIndex bool) error {
 	var raw []byte
 	var err error
 	if file == "-" {
@@ -312,6 +320,11 @@ func runPost(c *cobra.Command, env Env, file string, have Excerpt, replyTo, relP
 	if rel == IndexName {
 		return fmt.Errorf("feed: %s is reserved for the post index", IndexName)
 	}
+	attachEntries, uploads, err := collectAttachments(attaches, rel, env.maxAttachBytes())
+	if err != nil {
+		return err
+	}
+	p.Attachments = attachEntries
 	priv, err := LoadOrCreateKey(dir)
 	if err != nil {
 		return err
@@ -347,6 +360,24 @@ func runPost(c *cobra.Command, env Env, file string, have Excerpt, replyTo, relP
 	fmt.Fprintf(errw, "post %s -> %s\n", p.ID, rel)
 	if failed == len(results) {
 		return fmt.Errorf("feed: post %s was not published: all %d sinks failed", p.ID, failed)
+	}
+	for _, u := range uploads {
+		ures := PutAll(ctx, sinks, u.rel, u.data)
+		ufailed := 0
+		for _, r := range ures {
+			if r.Err != nil {
+				ufailed++
+				fmt.Fprintf(out, "FAILED\t%s\t%s\t%s\n", r.Name, u.entry.Path, oneLine(r.Err.Error()))
+				continue
+			}
+			fmt.Fprintf(out, "ok\t%s\t%s\n", r.Name, r.URL)
+		}
+		if ufailed == len(ures) {
+			return fmt.Errorf("feed: post %s published but attachment %q reached no sink", p.ID, u.entry.Path)
+		}
+		if ufailed > 0 {
+			fmt.Fprintf(errw, "warning: attachment %q missed %d of %d sinks; fetchers there will see drift\n", u.entry.Path, ufailed, len(ures))
+		}
 	}
 	if failed > 0 {
 		fmt.Fprintf(errw, "warning: %d of %d sinks failed; the post is live on the rest\n", failed, len(results))
@@ -558,7 +589,7 @@ func fetchAll(ctx context.Context, env Env, dir string, warn io.Writer) ([]Spool
 				fmt.Fprintf(warn, "warning: %s: %s: %v\n", ref, rel, oneLine(err.Error()))
 				continue
 			}
-			e, err := Ingest(dir, ref, rel, raw, env.now())
+			e, err := ingest(dir, ref, rel, raw, env.now(), attachmentCheck(ctx, src, rel))
 			if err != nil {
 				fmt.Fprintf(warn, "warning: %s: %v\n", ref, oneLine(err.Error()))
 				continue
