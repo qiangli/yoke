@@ -167,9 +167,9 @@ func TestVerifyPayloadErrors(t *testing.T) {
 	otherPub, _ := SignPayload(other, payload)
 
 	cases := []struct {
-		name          string
+		name           string
 		pubB64, sigB64 string
-		wantSub       string
+		wantSub        string
 	}{
 		{name: "pub not base64", pubB64: "not-base64!", sigB64: sig, wantSub: "base64"},
 		{name: "pub wrong length", pubB64: base64.StdEncoding.EncodeToString([]byte("short")), sigB64: sig, wantSub: "wrong length"},
