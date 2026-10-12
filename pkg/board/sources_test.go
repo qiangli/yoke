@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -329,6 +330,80 @@ func TestTodoStoresNeverAskForAnOwnerFlag(t *testing.T) {
 		if slices.Contains(st.args, "--owner") {
 			t.Fatalf("store %q asks todo for --owner, which selects no store: %v", st.scope, st.args)
 		}
+	}
+}
+
+func TestTodoSourceUsesRegisteredSprintStoresInsteadOfCheckoutSnapshots(t *testing.T) {
+	for _, unreadable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("registered-store-unreadable=%t", unreadable), func(t *testing.T) {
+			orig := todoExec
+			t.Cleanup(func() { todoExec = orig })
+			todoExec = func(args ...string) ([]byte, error) {
+				items := []todoItem{}
+				if slices.Contains(args, "/repos/checkout") {
+					items = []todoItem{
+						{ID: "fixed", State: "assigned", Sprint: 99},
+						{ID: "snapshot-only", State: "todo", Sprint: 99},
+						{ID: "standalone", State: "todo"},
+						{ID: "legacy", State: "todo", Sprint: 100},
+					}
+				}
+				if slices.Contains(args, "/repos/registered") {
+					if unreadable {
+						return nil, errors.New("registered store unreadable")
+					}
+					items = []todoItem{
+						{ID: "fixed", State: "done", Sprint: 99},
+						{ID: "remaining", State: "assigned", Sprint: 99},
+					}
+				}
+				env := todoEnvelope{SchemaVersion: "loom-v2"}
+				env.Result.Items, env.Result.Count = items, len(items)
+				return json.Marshal(env)
+			}
+			b := &Board{
+				Sprints: []Sprint{{ID: 99, StoryRoots: []string{"/repos/registered"}}, {ID: 100}},
+				Runs:    []Run{{Repo: "/repos/checkout"}},
+			}
+			err := (todoSource{}).Load(context.Background(), b, Options{All: true})
+			if unreadable {
+				if err == nil || !strings.Contains(err.Error(), "registered store unreadable") {
+					t.Fatalf("missing registered-store failure: %v", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			byID := map[string]Todo{}
+			for _, td := range b.Todos {
+				if _, duplicate := byID[td.ID]; duplicate {
+					t.Fatalf("duplicate story %s", td.ID)
+				}
+				byID[td.ID] = td
+			}
+			if _, exists := byID["snapshot-only"]; exists {
+				t.Fatal("unregistered snapshot invented sprint work")
+			}
+			if unreadable {
+				if _, exists := byID["fixed"]; exists {
+					t.Fatal("stale snapshot substituted for unreadable registered store")
+				}
+			} else if td := byID["fixed"]; td.Status != "done" || !slices.Contains(td.Store, "/repos/registered") {
+				t.Fatalf("status/detail lookup must use the registered store: %+v", td)
+			}
+			for _, id := range []string{"standalone", "legacy"} {
+				if _, exists := byID[id]; !exists {
+					t.Fatalf("independent task %s disappeared", id)
+				}
+			}
+			b.finalize(time.Now())
+			wantOpen, wantClosed := 1, 1
+			if unreadable {
+				wantOpen, wantClosed = 0, 0
+			}
+			if sp := b.Sprints[0]; sp.StoryOpen != wantOpen || sp.StoryClosed != wantClosed {
+				t.Fatalf("wrong sprint counts: %+v", sp)
+			}
+		})
 	}
 }
 

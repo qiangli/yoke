@@ -408,6 +408,7 @@ var todoExec = func(args ...string) ([]byte, error) {
 type scopedStore struct {
 	scope string
 	args  []string
+	root  string
 }
 
 // todoStores decides WHERE the board looks for stories.
@@ -424,7 +425,7 @@ func todoStores(b *Board) ([]scopedStore, []string) {
 		p = filepath.Clean(p)
 		if !seen[p] {
 			seen[p] = true
-			stores = append(stores, scopedStore{scope, args})
+			stores = append(stores, scopedStore{scope: scope, args: args, root: p})
 		}
 	}
 	// The personal host list. `todo --user` reaches exactly ONE of these — the
@@ -496,6 +497,21 @@ func readDirNames(dir string) []string {
 // one layer down.
 func (todoSource) Load(_ context.Context, b *Board, o Options) error {
 	stores, unreadable := todoStores(b)
+	// A run's checkout contains a snapshot of its repository's stories. Only
+	// the stores registered on a sprint determine that sprint's current state;
+	// counting snapshots resurrects closed stories and duplicates their totals.
+	storyStores := make(map[int64]map[string]bool)
+	for _, sp := range b.Sprints {
+		for _, root := range sp.StoryRoots {
+			if strings.TrimSpace(root) == "" {
+				continue
+			}
+			if storyStores[sp.ID] == nil {
+				storyStores[sp.ID] = make(map[string]bool)
+			}
+			storyStores[sp.ID][filepath.Clean(filepath.Join(root, "docs", "todo"))] = true
+		}
+	}
 	for _, sc := range stores {
 		args := append(append([]string(nil), sc.args...), "list", "--json")
 		if o.All {
@@ -512,6 +528,9 @@ func (todoSource) Load(_ context.Context, b *Board, o Options) error {
 			continue
 		}
 		for _, x := range items {
+			if roots := storyStores[x.Sprint]; len(roots) > 0 && !roots[sc.root] {
+				continue
+			}
 			b.Todos = append(b.Todos, Todo{ID: x.ID, Number: x.Seq, Title: x.Title, Status: x.status(), Priority: x.Priority, Scope: sc.scope, Due: x.Due, Overdue: x.Overdue, Created: x.Created, SprintID: x.Sprint, Assignee: x.assignee(), Store: sc.args})
 		}
 	}
