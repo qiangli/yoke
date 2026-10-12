@@ -40,9 +40,6 @@ func indexTree(repo *gogit.Repository) (*object.Tree, error) {
 		if e.Stage != 0 {
 			return nil, fmt.Errorf("unmerged index entry %s", e.Name)
 		}
-		if e.Mode == filemode.Submodule {
-			return nil, ErrUnsupported
-		}
 		parts := strings.Split(e.Name, "/")
 		n := root
 		for _, p := range parts[:len(parts)-1] {
@@ -232,6 +229,10 @@ func treePatch(root string, base, target *object.Tree, paths []string, noRenames
 		return "", nil
 	}
 	for _, c := range changes {
+		// A gitlink change renders as "Subproject commit" lines; host git's.
+		if c.From.TreeEntry.Mode == filemode.Submodule || c.To.TreeEntry.Mode == filemode.Submodule {
+			return "", ErrUnsupported
+		}
 		// git C-quotes such names in every header line; go-git does not.
 		if quotePath(c.From.Name, false) != c.From.Name || quotePath(c.To.Name, false) != c.To.Name {
 			return "", ErrUnsupported

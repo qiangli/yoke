@@ -539,3 +539,31 @@ func TestNativeAdd_FileModeFalseKeepsIndexMode(t *testing.T) {
 		t.Errorf("index after native add:\n%s\nhost git:\n%s", got, want)
 	}
 }
+
+// A superproject's index holds gitlinks; an unchanged one must not stop
+// diff --cached from rendering the staged file patch natively.
+func TestNativeDiffCached_UnchangedGitlink(t *testing.T) {
+	if _, err := osexec.LookPath("git"); err != nil {
+		t.Skip("no host git on PATH")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_AUTHOR_NAME", "t")
+	t.Setenv("GIT_AUTHOR_EMAIL", "t@example.com")
+	t.Setenv("GIT_COMMITTER_NAME", "t")
+	t.Setenv("GIT_COMMITTER_EMAIL", "t@example.com")
+	top := hostSuperproject(t, t.TempDir())
+	pwrite(t, filepath.Join(top, "a.txt"), "a2\n")
+	pgit(t, top, "add", "a.txt")
+	for _, argv := range [][]string{{"diff", "--cached", "--no-renames"}, {"diff", "--cached"}} {
+		got, err := Exec(context.Background(), top, argv)
+		if err != nil {
+			t.Fatalf("%v: %v", argv, err)
+		}
+		host, _ := runHost(context.Background(), top, argv)
+		if got.Stdout != host.Stdout {
+			t.Errorf("%v:\nnative:\n%s\nhost:\n%s", argv, got.Stdout, host.Stdout)
+		}
+	}
+}
