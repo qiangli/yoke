@@ -3,6 +3,7 @@ package fleet
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -29,32 +30,88 @@ func servicePin(sig *ToolSigstore) *ToolManaged {
 	}
 }
 
-func TestTuwunelIsAnUnverifiedServicePin(t *testing.T) {
+const (
+	tuwunelIdentity = "https://github.com/qiangli/tuwunel/.github/workflows/bashy-build.yml@refs/tags/bashy-v1.9.4-2"
+	tuwunelRelease  = "https://github.com/qiangli/tuwunel/releases/download/bashy-v1.9.4-2/"
+)
+
+// The first bashy-signed tuwunel build: a VERIFIED service pin — the exact
+// workflow identity and issuer, and every platform asset carries a sha256 and
+// a Sigstore bundle beside it.
+func TestTuwunelIsAVerifiedServicePin(t *testing.T) {
 	tl, ok := baseline(t).Tool("tuwunel")
 	if !ok {
 		t.Fatal("no tuwunel")
 	}
-	if m := tl.CLI.Managed; m == nil || !m.Service || m.Sigstore != nil || !m.Unverified() {
-		t.Fatalf("tuwunel managed = %+v, want a service pin with sigstore pending", tl.CLI.Managed)
+	m := tl.CLI.Managed
+	if m == nil || !m.Service || m.Sigstore == nil || m.Unverified() {
+		t.Fatalf("tuwunel managed = %+v, want a signed service pin", m)
 	}
-	if err := tl.ServiceBuildCheck(); !errors.Is(err, ErrUnsignedServiceBuild) {
+	if m.Sigstore.Identity != tuwunelIdentity || m.Sigstore.Issuer != binmgr.GitHubActionsIssuer {
+		t.Fatalf("sigstore = %+v", m.Sigstore)
+	}
+	if err := tl.ServiceBuildCheck(); err != nil {
 		t.Fatalf("ServiceBuildCheck = %v", err)
+	}
+	bt, err := tl.BinmgrTool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bt.Sigstore == nil || bt.Sigstore.Identity != tuwunelIdentity || bt.Sigstore.Issuer != binmgr.GitHubActionsIssuer {
+		t.Fatalf("binmgr sigstore = %+v", bt.Sigstore)
+	}
+	want := []string{"darwin/amd64", "darwin/arm64", "linux/amd64", "linux/arm64"}
+	if len(bt.Assets) != len(want) {
+		t.Fatalf("assets = %d, want %v", len(bt.Assets), want)
+	}
+	for _, k := range want {
+		a, ok := bt.Assets[k]
+		if !ok {
+			t.Fatalf("no %s asset", k)
+		}
+		if wantURL := tuwunelRelease + "tuwunel-" + strings.ReplaceAll(k, "/", "-"); a.URL != wantURL {
+			t.Errorf("%s: url %q, want %q", k, a.URL, wantURL)
+		}
+		if len(a.SHA256) != 64 || a.SHA512 != "" {
+			t.Errorf("%s: sha256 %q sha512 %q", k, a.SHA256, a.SHA512)
+		}
+		if a.SigstoreBundle != a.URL+binmgr.DefaultBundleSuffix {
+			t.Errorf("%s: bundle %q", k, a.SigstoreBundle)
+		}
+		if a.Binary != "" || a.Tree {
+			t.Errorf("%s: want a raw executable, got member %q tree %v", k, a.Binary, a.Tree)
+		}
+	}
+}
+
+// saveUnsignedSvc stores a synthetic service pin WITHOUT sigstore — the shape
+// the supply-chain gate must keep refusing now that tuwunel is signed.
+func saveUnsignedSvc(t *testing.T, opts []Option) {
+	t.Helper()
+	if err := New(opts...).SaveTool(Tool{Name: "unsignedsvc", Kind: ToolKindSystem, Hidden: true,
+		CLI: ToolCLI{Binary: "unsignedsvc", Managed: servicePin(nil)}}); err != nil {
+		t.Fatal(err)
+	}
+	tl, _ := New(opts...).Tool("unsignedsvc")
+	if !tl.CLI.Managed.Unverified() {
+		t.Fatal("synthetic pin is not unverified")
 	}
 }
 
 func TestToolInstallRefusesUnverifiedServicePin(t *testing.T) {
 	t.Setenv("BASHY_BIN_CACHE", t.TempDir())
 	opts := serviceOpts(t.TempDir())
+	saveUnsignedSvc(t, opts)
 	for _, args := range [][]string{
-		{"install", "tuwunel", "--tools-dir", t.TempDir()},
-		{"install", "tuwunel", "--tools-dir", t.TempDir(), "--source", os.Args[0]},
+		{"install", "unsignedsvc", "--tools-dir", t.TempDir()},
+		{"install", "unsignedsvc", "--tools-dir", t.TempDir(), "--source", os.Args[0]},
 	} {
 		_, err := runCmd(t, NewToolsCmd(opts...), args...)
 		if !errors.Is(err, ErrUnsignedServiceBuild) || !strings.Contains(err.Error(), "bashy only runs bashy-signed server builds") {
 			t.Fatalf("%v: err = %v", args, err)
 		}
 	}
-	if tl, _ := New(opts...).Tool("tuwunel"); tl.CLI.Binary != "tuwunel" {
+	if tl, _ := New(opts...).Tool("unsignedsvc"); tl.CLI.Binary != "unsignedsvc" {
 		t.Fatalf("a refused install rewrote cli.binary to %q", tl.CLI.Binary)
 	}
 }
@@ -74,20 +131,30 @@ func TestToolInstallRefusesSourceForSignedServicePin(t *testing.T) {
 
 func TestServiceEnableRefusesUnverifiedBuild(t *testing.T) {
 	opts := serviceOpts(t.TempDir())
-	mustSvc(t, opts, "", "add", "--optional", "matrix-chat")
-	s, _ := New(opts...).Service("matrix-chat")
-	if s.Tool != "tuwunel" {
-		t.Fatalf("matrix-chat tool = %q, want tuwunel", s.Tool)
+	saveUnsignedSvc(t, opts)
+	body, err := OptionalService("matrix-chat")
+	if err != nil {
+		t.Fatal(err)
 	}
-	_, err := svcRun(t, opts, "", "enable", "matrix-chat")
+	unit := strings.Replace(strings.Replace(string(body), "\ntool: tuwunel\n", "\ntool: unsignedsvc\n", 1), "\nname: matrix-chat\n", "\nname: unsigned-chat\n", 1)
+	f := filepath.Join(t.TempDir(), "u.yaml")
+	if err := os.WriteFile(f, []byte(unit), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustSvc(t, opts, "", "add", "-f", f)
+	s, _ := New(opts...).Service("unsigned-chat")
+	if s.Tool != "unsignedsvc" {
+		t.Fatalf("unit tool = %q, want unsignedsvc", s.Tool)
+	}
+	_, err = svcRun(t, opts, "", "enable", "unsigned-chat")
 	if !errors.Is(err, ErrUnsignedServiceBuild) {
 		t.Fatalf("enable err = %v", err)
 	}
-	if s, _ := New(opts...).Service("matrix-chat"); s.Enabled {
+	if s, _ := New(opts...).Service("unsigned-chat"); s.Enabled {
 		t.Fatal("refused enable persisted enabled")
 	}
 	// The other write paths answer to the same gate.
-	if _, err := svcRun(t, opts, "", "set", "matrix-chat", "--set", "enabled=true"); !errors.Is(err, ErrUnsignedServiceBuild) {
+	if _, err := svcRun(t, opts, "", "set", "unsigned-chat", "--set", "enabled=true"); !errors.Is(err, ErrUnsignedServiceBuild) {
 		t.Fatalf("set enabled err = %v", err)
 	}
 	if err := New(opts...).CheckServiceBuild(s); !errors.Is(err, ErrUnsignedServiceBuild) {
@@ -96,6 +163,20 @@ func TestServiceEnableRefusesUnverifiedBuild(t *testing.T) {
 	// A unit naming no tool is not affected.
 	if err := New(opts...).CheckServiceBuild(Service{Name: "web"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The shipped matrix-chat unit now passes the start gate: its tuwunel pin is
+// the bashy-signed build.
+func TestMatrixChatPassesServiceBuildGate(t *testing.T) {
+	opts := serviceOpts(t.TempDir())
+	mustSvc(t, opts, "", "add", "--optional", "matrix-chat")
+	s, _ := New(opts...).Service("matrix-chat")
+	if s.Tool != "tuwunel" {
+		t.Fatalf("matrix-chat tool = %q, want tuwunel", s.Tool)
+	}
+	if err := New(opts...).CheckServiceBuild(s); err != nil {
+		t.Fatalf("CheckServiceBuild = %v", err)
 	}
 }
 

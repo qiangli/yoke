@@ -43,8 +43,8 @@ func TestMatrixChatHomeserverPin(t *testing.T) {
 		if !sha.MatchString(a.SHA256) {
 			t.Errorf("%s: sha256 %q", k, a.SHA256)
 		}
-		if !strings.HasPrefix(a.URL, "https://github.com/matrix-construct/tuwunel/releases/download/") {
-			t.Errorf("%s: url %q is not the official release page", k, a.URL)
+		if !strings.HasPrefix(a.URL, "https://github.com/qiangli/tuwunel/releases/download/bashy-v1.9.4-2/") {
+			t.Errorf("%s: url %q is not the bashy-signed release page", k, a.URL)
 		}
 	}
 	if _, err := tl.BinmgrTool(); err != nil {
