@@ -33,6 +33,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -391,9 +392,13 @@ func openStatusRepository(repoPath string) (*gogit.Repository, error) {
 	if err != nil {
 		return nil, err
 	}
+	altRoot, ok := alternatesRoot(gitDir)
+	if !ok {
+		return r, nil
+	}
 	dot := osfs.New(gitDir)
 	store := filesystem.NewStorageWithOptions(dot, cache.NewObjectLRUDefault(), filesystem.Options{
-		AlternatesFS: osfs.New(string(filepath.Separator)),
+		AlternatesFS: osfs.New(altRoot),
 	})
 	return gogit.Open(store, osfs.New(absRepo))
 }
@@ -1120,4 +1125,35 @@ func Show(opts ShowOptions) (*Result, *ShowResult, error) {
 		Message: commit.Message,
 		Patch:   patch,
 	}, nil
+}
+
+// alternatesRoot is the filesystem root go-git resolves absolute
+// alternates paths against: "/" on Unix; on Windows the volume the
+// alternates live on ("C:\\"), since go-git makes each path relative to
+// that root and "C:/..." is not relative to "\\". Alternates spread over
+// several volumes cannot share one root (ok=false).
+func alternatesRoot(gitDir string) (string, bool) {
+	if runtime.GOOS != "windows" {
+		return string(filepath.Separator), true
+	}
+	data, err := os.ReadFile(filepath.Join(gitDir, "objects", "info", "alternates"))
+	if err != nil {
+		return "", false
+	}
+	vol := ""
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") || !filepath.IsAbs(line) {
+			continue
+		}
+		v := strings.ToUpper(filepath.VolumeName(line))
+		if vol != "" && v != vol {
+			return "", false
+		}
+		vol = v
+	}
+	if vol == "" {
+		vol = strings.ToUpper(filepath.VolumeName(gitDir))
+	}
+	return vol + `\`, true
 }

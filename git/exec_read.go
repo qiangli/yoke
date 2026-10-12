@@ -167,7 +167,8 @@ func nativeRevParse(_ context.Context, dir string, args []string) (*ExecResult, 
 				ExitCode: 128,
 			}, nil
 		}
-		return &ExecResult{Stdout: worktreeRoot + "\n"}, nil
+		// Host git prints forward slashes on every OS (C:/... on Windows).
+		return &ExecResult{Stdout: filepath.ToSlash(worktreeRoot) + "\n"}, nil
 
 	case args[0] == "--show-prefix":
 		if wtErr != nil || worktreeRoot == "" {
@@ -187,10 +188,10 @@ func nativeRevParse(_ context.Context, dir string, args []string) (*ExecResult, 
 		if absDir == worktreeRoot && filepath.Base(gitDir) == ".git" && filepath.Dir(gitDir) == worktreeRoot {
 			return &ExecResult{Stdout: ".git\n"}, nil
 		}
-		return &ExecResult{Stdout: gitDir + "\n"}, nil
+		return &ExecResult{Stdout: filepath.ToSlash(gitDir) + "\n"}, nil
 
 	case args[0] == "--absolute-git-dir":
-		return &ExecResult{Stdout: gitDir + "\n"}, nil
+		return &ExecResult{Stdout: filepath.ToSlash(gitDir) + "\n"}, nil
 
 	case args[0] == "--is-inside-work-tree":
 		if wtErr != nil || worktreeRoot == "" {

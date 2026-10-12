@@ -56,6 +56,7 @@ var parityCommands = [][]string{
 	{"rev-parse", "--show-toplevel"},
 	{"rev-parse", "--is-inside-work-tree"},
 	{"rev-parse", "--git-dir"},
+	{"rev-parse", "--absolute-git-dir"},
 	{"ls-files"},
 	{"ls-files", "-m"},
 	{"ls-files", "-d"},
@@ -262,6 +263,22 @@ var parityScenarios = []parityScenario{
 		pgit(t, r, "merge", "-q", "--no-edit", "side")
 		return r
 	}, true},
+	{"autocrlf-checkout", func(t *testing.T, root string) string {
+		// Git for Windows ships core.autocrlf=true: a checkout writes
+		// CRLF to the worktree while the index holds LF. Host git sees a
+		// clean tree; set per repository so every OS runs it.
+		r := pRepo(t, filepath.Join(root, "r"))
+		pgit(t, r, "config", "core.autocrlf", "true")
+		pwrite(t, filepath.Join(r, "lf.txt"), "one\ntwo\n")
+		pgit(t, r, "add", "lf.txt")
+		pgit(t, r, "commit", "-q", "-m", "lf")
+		if err := os.Remove(filepath.Join(r, "lf.txt")); err != nil {
+			t.Fatal(err)
+		}
+		pgit(t, r, "checkout", "--", "lf.txt")
+		pwrite(t, filepath.Join(r, "b.txt"), "b2\r\n") // a real edit, CRLF on disk
+		return r
+	}, false},
 	{"both-staged-and-unstaged", func(t *testing.T, root string) string {
 		r := pRepo(t, filepath.Join(root, "r"))
 		pwrite(t, filepath.Join(r, "a.txt"), "a2\n")
