@@ -59,7 +59,7 @@ func primaSupplementarySumsNames() map[string]bool {
 	}
 	for _, platform := range PrimaPlatforms {
 		name := "prima-" + strings.ReplaceAll(platform, "/", "-")
-		for _, suffix := range []string{"-linkage.txt", "-cmake.txt", "-inputs.json", "-inputs.tar.gz"} {
+		for _, suffix := range []string{"-linkage.txt", "-cmake.txt", "-inputs.json", "-inputs.tar.gz", "-egress.txt"} {
 			names[name+suffix] = true
 		}
 	}
