@@ -3,6 +3,7 @@ package actrunner
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -132,29 +133,62 @@ func TestActrunnerIsVerifiedPin(t *testing.T) {
 }
 
 func TestActrunnerRejectsWindows(t *testing.T) {
-	if _, ok := ActrunnerTool.Assets["windows/amd64"]; ok {
-		t.Fatalf("windows asset should not exist")
+	// No windows asset may ever be declared: the pin is darwin+linux only
+	// and windows fails closed with no upstream fallback.
+	for _, plat := range []string{"windows/amd64", "windows/arm64"} {
+		if _, ok := ActrunnerTool.Assets[plat]; ok {
+			t.Fatalf("%s asset present; windows must fail closed", plat)
+		}
 	}
-	if _, err := resolveTool(""); err != nil && strings.Contains(err.Error(), "windows") {
-		// Already checked platform; this branch only if running on windows
-		t.Logf("resolve on windows correctly fails: %v", err)
+	// OS-aware assertion against the actual resolver: on windows every
+	// version (including the pin) is refused with the supply-chain policy;
+	// elsewhere the pin resolves and the refusal is enforced by the asset
+	// absence above plus the windows-only guard (no test bypass exists).
+	if runtime.GOOS == "windows" {
+		_, err := resolveTool("")
+		if err == nil {
+			t.Fatal("expected windows resolve to fail closed, got nil error")
+		}
+		if !strings.Contains(err.Error(), "windows") || !strings.Contains(err.Error(), "supply-chain policy") {
+			t.Fatalf("windows error must name the supply-chain policy, got: %v", err)
+		}
+		return
 	}
-	// Verify the resolve error string contains the policy.
-	errMsg := "supply-chain policy: no bashy-signed asset for windows"
-	if !strings.Contains("act_runner: supply-chain policy: no bashy-signed asset for windows (no upstream fallback) — only linux and darwin assets are signed", errMsg) {
-		t.Fatal("windows error must name supply-chain policy")
+	if _, err := resolveTool(""); err != nil {
+		t.Fatalf("non-windows resolve of the pin should succeed: %v", err)
 	}
 }
 
 func TestActrunnerRejectsLatestAndUnknownVersion(t *testing.T) {
-	if _, err := resolveTool("latest"); err == nil {
-		t.Fatal("expected latest to be rejected")
+	// "latest" and unknown versions are refused on every OS. On windows the
+	// refusal is the windows fail-closed error; elsewhere it is the version
+	// error. Either way err must be non-nil — assert the OS-appropriate one.
+	for _, version := range []string{"latest", "0.2.13", "v5.0.1"} {
+		_, err := resolveTool(version)
+		if err == nil {
+			t.Fatalf("expected version %q to be rejected", version)
+		}
+		if runtime.GOOS == "windows" {
+			if !strings.Contains(err.Error(), "windows") {
+				t.Fatalf("version %q on windows: want fail-closed windows error, got: %v", version, err)
+			}
+			continue
+		}
+		if !strings.Contains(err.Error(), "not supported") {
+			t.Fatalf("version %q: want unsupported-version error, got: %v", version, err)
+		}
 	}
-	if _, err := resolveTool("0.2.13"); err == nil {
-		t.Fatal("expected retired dl.gitea.com pin 0.2.13 to be rejected")
-	}
-	if _, err := resolveTool("v5.0.1"); err == nil {
-		t.Fatal("expected unknown version to be rejected")
+	// The v5 aliases resolve only where a signed asset exists (darwin+linux).
+	// On windows they fail closed like every other version.
+	if runtime.GOOS == "windows" {
+		for _, version := range []string{"v5.0.0", actrunnerBashyTag, ""} {
+			if _, err := resolveTool(version); err == nil {
+				t.Fatalf("expected version %q to fail closed on windows", version)
+			} else if !strings.Contains(err.Error(), "windows") {
+				t.Fatalf("version %q on windows: want fail-closed windows error, got: %v", version, err)
+			}
+		}
+		return
 	}
 	if _, err := resolveTool("v5.0.0"); err != nil {
 		t.Fatalf("v5.0.0 alias should be accepted: %v", err)
