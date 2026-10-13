@@ -163,6 +163,78 @@ func bundleURL(a Asset) string {
 	return a.URL + DefaultBundleSuffix
 }
 
+// A signed cache entry needs a receipt from a completed bundle and cosign
+// verification. Its binary digest also detects a changed executable on reuse.
+type signedCacheReceipt struct {
+	Pin, Identity, Issuer, URL, Bundle, BinarySHA256 string
+}
+
+func signedCacheReceiptPath(dest string) string { return dest + ".sigstore-verified.json" }
+
+func signedCacheValid(t Tool, asset Asset, dest string) bool {
+	if t.Sigstore == nil {
+		return false
+	}
+	pin, ok := pinnedSHA256(t.Name, t.Version, Platform())
+	if !ok {
+		if t.RequireCommittedPin {
+			return false
+		}
+		pin = strings.ToLower(strings.TrimSpace(asset.SHA256))
+	}
+	if pin == "" {
+		return false
+	}
+	raw, err := os.ReadFile(signedCacheReceiptPath(dest))
+	if err != nil {
+		return false
+	}
+	var r signedCacheReceipt
+	if json.Unmarshal(raw, &r) != nil || r.Pin != pin || r.Identity != t.Sigstore.Identity ||
+		r.Issuer != t.Sigstore.Issuer || r.URL != asset.URL || r.Bundle != bundleURL(asset) {
+		return false
+	}
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		return false
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]) == r.BinarySHA256
+}
+
+func writeSignedCacheReceipt(t Tool, asset Asset, dest string) error {
+	pin, ok := pinnedSHA256(t.Name, t.Version, Platform())
+	if !ok {
+		pin = strings.ToLower(strings.TrimSpace(asset.SHA256))
+	}
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256(data)
+	r := signedCacheReceipt{pin, t.Sigstore.Identity, t.Sigstore.Issuer,
+		asset.URL, bundleURL(asset), hex.EncodeToString(sum[:])}
+	raw, err := json.Marshal(r)
+	if err != nil {
+		return err
+	}
+	path := signedCacheReceiptPath(dest)
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".receipt-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err = tmp.Write(raw); err == nil {
+		err = tmp.Close()
+	} else {
+		_ = tmp.Close()
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
 // verifySigstore runs the whole keyless check for one downloaded artifact.
 // sum is the downloaded bytes' sha256; asset.SHA256 is the pin.
 func verifySigstore(ctx context.Context, t Tool, asset Asset, artifact, sum string) error {
