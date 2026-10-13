@@ -340,6 +340,46 @@ func verifyBundleCosign(ctx context.Context, artifact, bundlePath string, s Sigs
 	return runCosign(ctx, bin, CosignVerifyArgs(artifact, bundlePath, rootPath, s))
 }
 
+// VerifySignedBlob verifies final executable bytes against a reviewed SHA256
+// and a keyless bundle. The bundle may be stored beside the executable: its
+// contents are evidence, never a trust root. Verification is fully offline
+// once the pinned cosign executable is cached.
+func VerifySignedBlob(ctx context.Context, artifact string, bundle []byte, pin string, s Sigstore) error {
+	if s.Identity == "" || s.Issuer == "" || len(pin) != 64 || len(bundle) == 0 || len(bundle) > maxBundleSize {
+		return fmt.Errorf("%w: missing or invalid signed blob metadata", ErrSigstore)
+	}
+	data, err := os.ReadFile(artifact)
+	if err != nil {
+		return fmt.Errorf("%w: read signed blob: %v", ErrSigstore, err)
+	}
+	sum := sha256.Sum256(data)
+	if err := checkBundle(bundle, data, strings.ToLower(pin), hex.EncodeToString(sum[:]), s); err != nil {
+		return fmt.Errorf("%w: %v", ErrSigstore, err)
+	}
+	f, err := os.CreateTemp(filepath.Dir(artifact), ".runner-bundle-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err = f.Write(bundle); err == nil {
+		err = f.Close()
+	} else {
+		_ = f.Close()
+	}
+	if err != nil {
+		return err
+	}
+	if err := verifyBundleCosign(ctx, artifact, f.Name(), s); err != nil {
+		return fmt.Errorf("%w: %v", ErrSigstore, err)
+	}
+	// Refuse a file swapped or modified during the external verifier call.
+	after, err := os.ReadFile(artifact)
+	if err != nil || !bytes.Equal(data, after) {
+		return fmt.Errorf("%w: signed blob changed during verification", ErrSigstore)
+	}
+	return nil
+}
+
 type limitWriter struct {
 	w io.Writer
 	n int64

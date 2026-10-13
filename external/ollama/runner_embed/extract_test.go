@@ -1,139 +1,171 @@
 package runner_embed
 
 import (
+	"bytes"
 	"compress/gzip"
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
+
+	"github.com/qiangli/yoke/pkg/binmgr"
 )
 
-func TestAvailable_Stub(t *testing.T) {
-	// Without embed_runner tag, runner should not be available.
+const testVersion = "bashy-ollama-runner-test"
+const testIdentity = "https://github.com/qiangli/bashy/.github/workflows/ollama-runner.yml@refs/tags/" + testVersion
+
+func fakeEmbed(t *testing.T, data []byte) {
+	t.Helper()
+	oldCompressed, oldBundle, oldRelease, oldVerifier := compressedRunner, embeddedRunnerBundle, runnerRelease, verifyRunner
+	t.Cleanup(func() {
+		compressedRunner, embeddedRunnerBundle, runnerRelease, verifyRunner = oldCompressed, oldBundle, oldRelease, oldVerifier
+	})
+	var buf bytes.Buffer
+	w := gzip.NewWriter(&buf)
+	if _, err := w.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	compressedRunner = buf.Bytes()
+	embeddedRunnerBundle = []byte(`{"signed":"fixture"}`)
+	runnerRelease = releaseMetadata{testVersion, testIdentity, sha256Hex(data)}
+	verifyRunner = func(_ context.Context, path string, bundle []byte, pin string, signer binmgr.Sigstore) error {
+		got, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if sha256Hex(got) != pin {
+			return fmt.Errorf("wrong executable SHA")
+		}
+		if signer.Identity != testIdentity || signer.Issuer != binmgr.GitHubActionsIssuer {
+			return fmt.Errorf("wrong signing identity")
+		}
+		if !bytes.Equal(bundle, embeddedRunnerBundle) {
+			return fmt.Errorf("wrong bundle")
+		}
+		return nil
+	}
+}
+
+func TestEnsureRunnerMissingReleaseFailsClosed(t *testing.T) {
+	fakeEmbed(t, []byte("runner"))
+	runnerRelease.sha256 = ""
 	if Available() {
-		t.Skip("runner is embedded (built with -tags embed_runner)")
+		t.Fatal("available without pin")
 	}
-	t.Log("runner not embedded (stub mode) — expected for dev builds")
-}
-
-func TestEnsureRunner_NoEmbed(t *testing.T) {
-	if Available() {
-		t.Skip("runner is embedded")
+	if _, err := EnsureRunner(t.TempDir()); err == nil {
+		t.Fatal("accepted missing pin")
 	}
-	_, err := EnsureRunner(t.TempDir())
-	if err == nil {
-		t.Error("expected error when no runner is embedded")
+	runnerRelease.sha256 = sha256Hex([]byte("runner"))
+	embeddedRunnerBundle = nil
+	if _, err := EnsureRunner(t.TempDir()); err == nil {
+		t.Fatal("accepted missing signature")
 	}
 }
 
-func TestEnsureRunner_WithFakeRunner(t *testing.T) {
-	// Simulate an embedded runner by setting compressedRunner directly.
-	fakeScript := []byte("#!/bin/sh\necho hello\n")
-
-	var buf []byte
-	w := gzipCompress(fakeScript)
-	buf = w
-
-	old := compressedRunner
-	compressedRunner = buf
-	defer func() { compressedRunner = old }()
-
-	dir := t.TempDir()
-
-	// First extraction.
-	path, err := EnsureRunner(dir)
-	if err != nil {
-		t.Fatalf("first extraction: %v", err)
-	}
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("runner not found at %s: %v", path, err)
-	}
-	info, _ := os.Stat(path)
-	if info.Mode()&0o111 == 0 {
-		t.Error("runner should be executable")
-	}
-
-	// Second call should be cached (no re-extraction).
-	path2, err := EnsureRunner(dir)
-	if err != nil {
-		t.Fatalf("cached extraction: %v", err)
-	}
-	if path2 != path {
-		t.Errorf("expected same path, got %s vs %s", path, path2)
-	}
-
-	// Verify hash file exists.
-	hashPath := path + ".sha256"
-	if _, err := os.Stat(hashPath); err != nil {
-		t.Error("hash file not created")
-	}
-
-	// Modify the embedded data — should re-extract.
-	newScript := []byte("#!/bin/sh\necho updated\n")
-	compressedRunner = gzipCompress(newScript)
-
-	path3, err := EnsureRunner(dir)
-	if err != nil {
-		t.Fatalf("re-extraction after update: %v", err)
-	}
-
-	content, _ := os.ReadFile(path3)
-	if string(content) != string(newScript) {
-		t.Error("runner was not re-extracted after hash change")
-	}
-}
-
-func TestEnsureRunner_AtomicWrite(t *testing.T) {
-	// Verify no .tmp file is left behind on success.
-	fakeScript := []byte("#!/bin/sh\necho atomic\n")
-	old := compressedRunner
-	compressedRunner = gzipCompress(fakeScript)
-	defer func() { compressedRunner = old }()
-
+func TestEnsureRunnerTamperedCacheAndSidecar(t *testing.T) {
+	data := []byte("signed runner bytes")
+	fakeEmbed(t, data)
 	dir := t.TempDir()
 	path, err := EnsureRunner(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	tmpPath := path + ".tmp"
-	if _, err := os.Stat(tmpPath); err == nil {
-		t.Error(".tmp file should not exist after successful extraction")
+	if err := os.Chmod(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("tampered"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+".sha256", []byte(sha256Hex(compressedRunner)), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	path, err = EnsureRunner(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("cache not repaired with signed bytes: %q, %v", got, err)
 	}
 }
 
-// gzipCompress compresses data with gzip.
-func gzipCompress(data []byte) []byte {
-	var buf []byte
-	var b = new(bytesBuffer)
-	w, _ := gzip.NewWriterLevel(b, gzip.BestCompression)
-	w.Write(data)
-	w.Close()
-	buf = b.Bytes()
-	return buf
-}
-
-// bytesBuffer is a simple bytes.Buffer replacement to avoid import.
-type bytesBuffer struct {
-	data []byte
-}
-
-func (b *bytesBuffer) Write(p []byte) (int, error) {
-	b.data = append(b.data, p...)
-	return len(p), nil
-}
-
-func (b *bytesBuffer) Bytes() []byte {
-	return b.data
-}
-
-func TestRunnerName(t *testing.T) {
-	expected := "ycode-runner"
-	if runnerName != expected {
-		t.Errorf("runnerName = %q, want %q", runnerName, expected)
+func TestEnsureRunnerRejectsTamperedEmbedAndCacheSymlink(t *testing.T) {
+	fakeEmbed(t, []byte("signed runner bytes"))
+	compressedRunner = gzipBytes(t, []byte("modified payload"))
+	if _, err := EnsureRunner(t.TempDir()); err == nil {
+		t.Fatal("accepted compressed payload whose final bytes miss the reviewed pin")
+	}
+	compressedRunner = gzipBytes(t, []byte("signed runner bytes"))
+	if runtime.GOOS == "windows" {
+		return
+	}
+	dir := t.TempDir()
+	link := filepath.Join(dir, runnerName)
+	if err := os.Symlink(filepath.Join(dir, "other"), link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnsureRunner(dir); err == nil {
+		t.Fatal("accepted cached symlink")
 	}
 }
 
-func TestCodesign(t *testing.T) {
-	// Just verify it doesn't panic on a non-existent file.
-	codesign(filepath.Join(t.TempDir(), "nonexistent"))
+func gzipBytes(t *testing.T, data []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := gzip.NewWriter(&buf)
+	if _, err := w.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestEnsureRunnerWrongIdentityAndOfflineCache(t *testing.T) {
+	fakeEmbed(t, []byte("signed runner bytes"))
+	dir := t.TempDir()
+	t.Setenv("BASHY_OFFLINE", "1")
+	path, err := EnsureRunner(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnsureRunner(dir); err != nil {
+		t.Fatalf("offline cache verification: %v", err)
+	}
+	runnerRelease.identity = "https://github.com/attacker/bashy/.github/workflows/ollama-runner.yml@refs/tags/" + testVersion
+	if Available() {
+		t.Fatal("wrong release identity available")
+	}
+	if _, err := EnsureRunner(dir); err == nil {
+		t.Fatal("accepted wrong identity")
+	}
+	runnerRelease.identity = testIdentity
+	verifyRunner = func(context.Context, string, []byte, string, binmgr.Sigstore) error {
+		return fmt.Errorf("bad signature")
+	}
+	if _, err := EnsureRunner(dir); err == nil {
+		t.Fatal("accepted cached bytes without valid signature")
+	}
+	if runtime.GOOS == "windows" && filepath.Ext(path) != ".exe" {
+		t.Fatal("missing executable suffix")
+	}
+}
+
+func TestVerifySignedBlobRejectsUnsignedSidecar(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runner")
+	data := []byte("binary")
+	if err := os.WriteFile(path, data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	err := binmgr.VerifySignedBlob(context.Background(), path, []byte(`{"signed":"fake"}`), sha256Hex(data),
+		binmgr.Sigstore{Identity: testIdentity, Issuer: binmgr.GitHubActionsIssuer})
+	if err == nil {
+		t.Fatal("accepted unauthenticated bundle")
+	}
 }

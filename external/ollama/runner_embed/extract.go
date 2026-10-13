@@ -1,109 +1,140 @@
-// Package runner_embed provides a self-extracting embedded inference runner.
-// The runner binary (llama.cpp + thin HTTP server) is compressed with gzip
-// and embedded via go:embed. On first use, it extracts to a cache directory
-// and reuses the cached binary on subsequent runs (validated by SHA256 hash).
-//
-// This eliminates the need to install or download a separate ollama binary.
-// Build the embedded runner with: bashy dag runner-build-thin
+// Package runner_embed extracts only a runner whose final executable bytes
+// match a reviewed release pin and the exact Bashy CI signing identity.
 package runner_embed
 
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
+
+	"github.com/qiangli/yoke/pkg/binmgr"
 )
 
-// runnerName is the extracted binary name.
 const runnerName = "ycode-runner"
+const maxRunnerSize int64 = 1 << 30
 
-// compressedRunner holds the gzip-compressed runner binary.
-// Set by embed_runner.go (when built with runner present) or
-// embed_stub.go (when no runner is available).
-var compressedRunner []byte
-
-// Available returns true if an embedded runner binary is present.
-// The runner may not be embedded in development builds.
-func Available() bool {
-	return len(compressedRunner) > 0
+// Release metadata is committed after the hosted build, audit and signing
+// gates pass. An embedded gzip by itself never makes a runner available.
+type releaseMetadata struct {
+	version, identity, sha256 string
 }
 
-// EnsureRunner extracts the embedded runner binary to cacheDir if not already
-// present or if the embedded version has changed (SHA256 mismatch).
-// Returns the absolute path to the executable runner binary.
+// Fill these only with reviewed metadata from an immutable, signed Bashy
+// release. Until then the managed service remains unavailable.
+const (
+	releaseVersion  = ""
+	releaseIdentity = ""
+)
+
+var releaseSHA256 = map[string]string{
+	"linux/amd64":   "",
+	"linux/arm64":   "",
+	"darwin/amd64":  "",
+	"darwin/arm64":  "",
+	"windows/amd64": "",
+}
+
+var runnerRelease = releaseMetadata{releaseVersion, releaseIdentity, releaseSHA256[runtime.GOOS+"/"+runtime.GOARCH]}
+var compressedRunner []byte
+var embeddedRunnerBundle []byte
+var verifyRunner = binmgr.VerifySignedBlob
+
+func releaseReady() bool {
+	r := runnerRelease
+	if r.version == "" || r.identity == "" || len(r.sha256) != 64 || len(embeddedRunnerBundle) == 0 {
+		return false
+	}
+	if _, err := hex.DecodeString(r.sha256); err != nil {
+		return false
+	}
+	const workflowPrefix = "https://github.com/qiangli/bashy/.github/workflows/"
+	return len(r.identity) > len(workflowPrefix)+len("@refs/tags/")+len(r.version) &&
+		strings.HasPrefix(r.identity, workflowPrefix) &&
+		strings.HasSuffix(r.identity, "@refs/tags/"+r.version)
+}
+
+// Available reports whether an embedded payload and its signed release
+// metadata exist. It does not claim the bytes have passed verification.
+func Available() bool { return len(compressedRunner) > 0 && releaseReady() }
+
+// EnsureRunner verifies the final executable on every cache hit and after
+// extraction. A writable checksum sidecar is never accepted as evidence.
 func EnsureRunner(cacheDir string) (string, error) {
 	if !Available() {
-		return "", fmt.Errorf("no embedded runner (build with: bashy dag runner-build-thin)")
+		return "", fmt.Errorf("runner: signed Bashy release, reviewed SHA256, or embedded payload is absent")
 	}
-
-	binName := runnerName
+	name := runnerName
 	if runtime.GOOS == "windows" {
-		binName += ".exe"
+		name += ".exe"
 	}
-	binPath := filepath.Join(cacheDir, binName)
-	hashPath := binPath + ".sha256"
-
-	// Compute hash of embedded runner.
-	h := sha256.Sum256(compressedRunner)
-	embeddedHash := fmt.Sprintf("%x", h)
-
-	// Check if cached version matches.
-	if cachedHash, err := os.ReadFile(hashPath); err == nil {
-		if string(cachedHash) == embeddedHash {
-			if info, err := os.Stat(binPath); err == nil && info.Mode().IsRegular() {
-				return binPath, nil // cached and up-to-date
-			}
+	if err := os.MkdirAll(cacheDir, 0o700); err != nil {
+		return "", fmt.Errorf("runner: create cache: %w", err)
+	}
+	dirInfo, err := os.Lstat(cacheDir)
+	if err != nil || !dirInfo.IsDir() || (runtime.GOOS != "windows" && dirInfo.Mode().Perm()&0o022 != 0) {
+		return "", fmt.Errorf("runner: cache directory must be a private real directory")
+	}
+	path := filepath.Join(cacheDir, name)
+	verify := func(p string) error {
+		return verifyRunner(context.Background(), p, embeddedRunnerBundle, runnerRelease.sha256,
+			binmgr.Sigstore{Identity: runnerRelease.identity, Issuer: binmgr.GitHubActionsIssuer})
+	}
+	if info, err := os.Lstat(path); err == nil {
+		if !info.Mode().IsRegular() {
+			return "", fmt.Errorf("runner: cached executable is not a regular file")
 		}
+		if (runtime.GOOS == "windows" || info.Mode().Perm()&0o022 == 0) && verify(path) == nil {
+			return path, nil
+		}
+		// Never return an unverified cache entry. The trusted embed may repair it.
 	}
-
-	// Extract: decompress → write binary → write hash.
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		return "", fmt.Errorf("create cache dir %s: %w", cacheDir, err)
-	}
-
 	gr, err := gzip.NewReader(bytes.NewReader(compressedRunner))
 	if err != nil {
-		return "", fmt.Errorf("decompress runner: %w", err)
+		return "", fmt.Errorf("runner: decompress: %w", err)
 	}
 	defer gr.Close()
-
-	// Write to temp file then rename for atomicity.
-	tmpPath := binPath + ".tmp"
-	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	f, err := os.CreateTemp(cacheDir, ".runner-*")
 	if err != nil {
-		return "", fmt.Errorf("create runner binary: %w", err)
+		return "", fmt.Errorf("runner: create temporary executable: %w", err)
 	}
-
-	if _, err := io.Copy(f, gr); err != nil {
-		f.Close()
-		os.Remove(tmpPath)
-		return "", fmt.Errorf("write runner binary: %w", err)
+	defer os.Remove(f.Name())
+	n, copyErr := io.Copy(f, io.LimitReader(gr, maxRunnerSize+1))
+	closeErr := f.Close()
+	if copyErr != nil || closeErr != nil || n > maxRunnerSize {
+		return "", fmt.Errorf("runner: extraction failed or exceeds size limit: %v %v", copyErr, closeErr)
 	}
-	f.Close()
-
-	if err := os.Rename(tmpPath, binPath); err != nil {
-		os.Remove(tmpPath)
-		return "", fmt.Errorf("install runner binary: %w", err)
+	if err := verify(f.Name()); err != nil {
+		return "", fmt.Errorf("runner: extracted executable verification failed: %w", err)
 	}
-
-	// macOS: ad-hoc codesign so Gatekeeper doesn't block it.
-	if runtime.GOOS == "darwin" {
-		codesign(binPath)
+	if err := os.Chmod(f.Name(), 0o500); err != nil {
+		return "", err
 	}
-
-	// Write hash for cache validation.
-	os.WriteFile(hashPath, []byte(embeddedHash), 0o644) //nolint:errcheck
-
-	return binPath, nil
+	if runtime.GOOS == "windows" {
+		// Windows rename cannot replace an existing tampered cache entry.
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return "", fmt.Errorf("runner: remove invalid cache entry: %w", err)
+		}
+	}
+	if err := os.Rename(f.Name(), path); err != nil {
+		return "", fmt.Errorf("runner: install verified executable: %w", err)
+	}
+	// Verify the installed path as well, before handing it to a launcher.
+	if err := verify(path); err != nil {
+		_ = os.Remove(path)
+		return "", fmt.Errorf("runner: installed executable verification failed: %w", err)
+	}
+	return path, nil
 }
 
-// codesign performs ad-hoc signing on macOS (same pattern as make install).
-func codesign(path string) {
-	cmd := exec.Command("codesign", "-f", "-s", "-", path)
-	cmd.Run() //nolint:errcheck
+func sha256Hex(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
