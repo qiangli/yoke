@@ -126,3 +126,29 @@ func TestOverBudgetUrgentSetAdmitsNewestHeadersAndSummary(t *testing.T) {
 		t.Fatalf("report = %+v, want both summarized and admitted urgent items", got.Report)
 	}
 }
+
+func TestHundredsOfUrgentMBGroupsDegradeToOneInboxPointer(t *testing.T) {
+	items := make([]Item, 369)
+	for i := range items {
+		id := strconv.Itoa(i + 1)
+		items[i] = Item{
+			Source: "mb", ID: id, Sequence: int64(i + 1), Priority: PriorityUrgent,
+			Topic: "BLOCKED", Body: strings.Repeat("all-broadcast "+id+" ", 40),
+			ArtifactRef: "bashy inbox --id mb:" + id,
+			// Distinct durable pointers reproduce the live unified-inbox shape
+			// whose detailed source manifest exceeded the turn budget.
+			OverflowRef: "bashy inbox --id mb:" + id,
+		}
+	}
+
+	got, err := Render(items, Options{BudgetBytes: 1024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Text != "Coordination overflow: 369 urgent items; open bashy inbox\n" {
+		t.Fatalf("fallback = %q", got.Text)
+	}
+	if len(got.Text) > 1024 || got.Report.UnrepresentedItems != 369 || got.Report.AdmittedItems != 0 {
+		t.Fatalf("text=%d report=%+v", len(got.Text), got.Report)
+	}
+}

@@ -237,7 +237,12 @@ func Render(items []Item, opt Options) (Prepared, error) {
 			return Prepared{}, err
 		}
 		if len(text) > budget {
-			return Prepared{}, fmt.Errorf("admission: %d-byte budget cannot represent urgent overflow summary", budget)
+			// A detailed manifest can itself grow without bound when every
+			// non-droppable item carries a distinct retrieval reference. Collapse
+			// that manifest to the one recovery fact a turn needs: how much urgent
+			// input is waiting and where to read it. This last-resort form has no
+			// per-item metadata, so its size is independent of backlog size.
+			return composeMinimalUrgentOverflow(candidates, budget)
 		}
 
 		urgent := make([]int, 0, len(candidates))
@@ -316,6 +321,33 @@ func Render(items []Item, opt Options) (Prepared, error) {
 		}
 	}
 	return prepared, nil
+}
+
+func composeMinimalUrgentOverflow(candidates []candidate, budget int) (Prepared, error) {
+	report := Report{SchemaVersion: OverflowSchemaVersion, InputItems: len(candidates)}
+	urgent := 0
+	for _, c := range candidates {
+		report.InputBytes += len(c.item.Body)
+		report.OmittedItems++
+		report.OmittedBytes += len(c.item.Body)
+		report.UnrepresentedItems++
+		report.UnrepresentedBytes += len(c.item.Body)
+		if c.item.Priority == PriorityUrgent {
+			urgent++
+		}
+	}
+	report.ContentDigest = digestCandidates(candidates)
+	text := fmt.Sprintf("Coordination overflow: %d urgent items; open bashy inbox\n", urgent)
+	if len(text) > budget {
+		// The turn path supplies 1024 bytes. Keep the generic byte-ceiling
+		// contract for deliberately tiny callers as well.
+		text = "bashy inbox\n"
+		if len(text) > budget {
+			text = text[:budget]
+		}
+	}
+	report.RenderedBytes = len(text)
+	return Prepared{Text: text, Report: report}, nil
 }
 
 func compose(candidates []candidate) (string, Report, error) {
