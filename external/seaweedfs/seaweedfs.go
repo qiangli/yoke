@@ -3,7 +3,8 @@
 // dhnt mesh (it can also back the Zot registry's blob store). The `weed` binary
 // is downloaded → sha256-verified → cached by binmgr, never compiled in; bashy
 // launches it via `bashy seaweedfs`, and outpost exposes its S3 gateway over the
-// mesh as `s3`. seaweedfs/seaweedfs is Apache-2.0.
+// mesh as `s3`. Upstream seaweedfs/seaweedfs is Apache-2.0; the bashy fork
+// qiangli/seaweedfs is the signed supply-chain pin.
 // See dhnt/docs/external-binary-builtins.md + docs/mesh-wrap-stack.md.
 package seaweedfs
 
@@ -14,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -26,37 +28,80 @@ import (
 )
 
 const (
-	// DefaultVersion pins the SeaweedFS release. "" / "latest" resolves the
-	// newest; pin for reproducibility ($SEAWEEDFS_VERSION or --version override).
-	DefaultVersion = "latest"
+	// Upstream release that the bashy fork was built from (builds/seaweedfs
+	// at the pinned commit). The fork tag is the upstream tag plus the bashy
+	// build counter.
+	seaweedfsVersion = "4.48"
+	// Bashy-signed fork release tag (builds/seaweedfs/tool.env at the pin):
+	// built by the bashy-build workflow on qiangli/seaweedfs and published as
+	// raw executables with per-asset SHA256SUMS and <asset>.sigstore.json bundles.
+	// Workflow run 38330302167 green: go1.26.9 + golang.org/x/net v0.60.0, 0 reachable.
+	seaweedfsBashyTag = "bashy-4.48-1"
+
+	// DefaultVersion is the pinned bashy tag. There is no "latest" — that was
+	// the upstream archive and it is intentionally absent (fail closed).
+	DefaultVersion = seaweedfsBashyTag
 	DefaultAddr    = "127.0.0.1"
 	DefaultPort    = 8333 // the S3 gateway port
 )
 
-// Spec is the binmgr GitHub spec. SeaweedFS ships per-platform .tar.gz archives
-// named `<os>_<arch>.tar.gz` containing a single `weed` binary; match the
-// standard build (not the _full / _large_disk variants).
+// SHA256 per asset read from the published SHA256SUMS of the bashy release
+// (downloaded via curl -sL, not from the GitHub API asset digest).
+var seaweedfsSHAs = map[string]string{
+	"linux/amd64":  "7b6364ccea4f8cc2940e7a5da93f4e6a9dcd8629a2ec69bfe8e59e6541bd2889",
+	"linux/arm64":  "44afeacee5bda0d71a4a2cad1530657cb442873a37bf6a91fe4d8828e445b431",
+	"darwin/amd64": "4a6b8d405cc82ed95edac9f9d96f125408eb6f436e30d203a92493eaf97aa2d0",
+	"darwin/arm64": "925de1501ef5a297d2a26efafc096e56ce537c67fb71f5a7899df510cf6ad2dc",
+}
+
+func seaweedfsTool() binmgr.Tool {
+	assets := map[string]binmgr.Asset{}
+	for plat, sha := range seaweedfsSHAs {
+		goos, goarch, _ := strings.Cut(plat, "/")
+		assetName := "weed-" + goos + "-" + goarch
+		url := fmt.Sprintf("https://github.com/qiangli/seaweedfs/releases/download/%s/%s", seaweedfsBashyTag, assetName)
+		assets[plat] = binmgr.Asset{URL: url, SHA256: sha}
+	}
+	identity := fmt.Sprintf("https://github.com/qiangli/seaweedfs/.github/workflows/bashy-build.yml@refs/tags/%s", seaweedfsBashyTag)
+	return binmgr.Tool{
+		Name:    "seaweedfs",
+		Version: seaweedfsBashyTag,
+		Assets:  assets,
+		Sigstore: &binmgr.Sigstore{
+			Identity: identity,
+			Issuer:   binmgr.GitHubActionsIssuer,
+		},
+	}
+}
+
+// SeaweedfsTool is the pinned, Sigstore-verified tool declaration. Exported
+// for tests and for callers that need to inspect the pin without launching.
+var SeaweedfsTool = seaweedfsTool()
+
+// Spec is retained for compatibility with callers that probe the resolver's
+// asset matcher (e.g. pkg/atlas/platform_external_test). It returns a
+// GitHubSpec for the qiangli fork, not the upstream seaweedfs/seaweedfs
+// archive, and never returns "latest".
 func Spec(version string) binmgr.GitHubSpec {
 	if version == "" {
 		version = DefaultVersion
 	}
+	// Normalize the upstream tag to the bashy tag so "4.48" still resolves
+	// to the signed fork without opening an upstream path.
+	if version == seaweedfsVersion {
+		version = seaweedfsBashyTag
+	}
 	return binmgr.GitHubSpec{
-		Name: "seaweedfs", Repo: "seaweedfs/seaweedfs", Version: version,
-		Member: "weed", AssetMatch: assetMatch,
+		Name: "seaweedfs", Repo: "qiangli/seaweedfs", Version: version,
+		Member: "", AssetMatch: assetMatch,
 	}
 }
 
-// assetMatch picks the standard `<os>_<arch>.tar.gz`, excluding the _full and
-// _large_disk variants that also carry the os/arch tokens.
+// assetMatch picks the raw `weed-<goos>-<goarch>` executable published by the
+// bashy fork. The upstream archive was `<os>_<arch>.tar.gz` with _full and
+// _large_disk variants; the fork publishes only raw executables.
 func assetMatch(name, goos, goarch string) bool {
-	// Releases also publish _full and _large_disk variants. Match the complete
-	// canonical archive name so a platform token embedded in a variant cannot
-	// shadow the standard server archive.
-	ext := ".tar.gz"
-	if goos == "windows" {
-		ext = ".zip"
-	}
-	return strings.EqualFold(name, goos+"_"+goarch+ext)
+	return strings.EqualFold(name, "weed-"+goos+"-"+goarch)
 }
 
 // DefaultDataDir is SeaweedFS's storage root.
@@ -118,15 +163,33 @@ func (i *Instance) Stop() error {
 	return i.proc.Stop(10 * time.Second)
 }
 
+func resolveTool(version string) (binmgr.Tool, error) {
+	if runtime.GOOS == "windows" {
+		return binmgr.Tool{}, fmt.Errorf("seaweedfs: supply-chain policy: no bashy-signed asset for windows (no upstream fallback) — only linux and darwin assets are signed")
+	}
+	tool := SeaweedfsTool
+	// Accept empty, the bashy tag, or the upstream version as aliases for the pinned tool.
+	// "latest" and any other version are refused — there is no upstream archive fallback.
+	switch version {
+	case "", seaweedfsBashyTag, seaweedfsVersion:
+		return tool, nil
+	default:
+		return binmgr.Tool{}, fmt.Errorf("seaweedfs: version %q not supported: only %q (bashy-signed) is available (upstream %q alias accepted)", version, seaweedfsBashyTag, seaweedfsVersion)
+	}
+}
+
 // Start resolves + launches `weed server` (master+volume+filer+S3, all bound to
 // loopback) NON-blocking, returning once the S3 gateway answers. The caller owns
 // the Instance — this is what outpost's wrap-harness builtin supervises and
 // exposes over the mesh. SeaweedFS runs from flags; no config file is seeded.
 func Start(ctx context.Context, o Options) (*Instance, error) {
 	o.defaults()
-	tool, err := binmgr.ResolveGitHub(ctx, Spec(o.Version))
+	if runtime.GOOS == "windows" {
+		return nil, fmt.Errorf("seaweedfs: supply-chain policy: no bashy-signed asset for windows (no upstream fallback) — only linux and darwin assets are signed")
+	}
+	tool, err := resolveTool(o.Version)
 	if err != nil {
-		return nil, fmt.Errorf("seaweedfs: resolve: %w", err)
+		return nil, err
 	}
 	bin, err := binmgr.Ensure(ctx, tool)
 	if err != nil {
@@ -156,12 +219,53 @@ func serverArgs(o Options) []string {
 	return []string{
 		"server",
 		"-dir=" + o.DataDir,
-		"-ip.bind=" + o.Addr, // bind every service to loopback
+		// Loopback binding for every service. Upstream flags (4.48):
+		//   server.go:59  serverIp = cmdServer.Flag.String("ip", ..., "ip or server name, also used as identifier")
+		//   server.go:60  serverBindIp = cmdServer.Flag.String("ip.bind", "", "ip address to bind to. If empty, default to same as -ip option.")
+		// Setting both -ip and -ip.bind to loopback guarantees the master/volume/filer/S3 listeners
+		// bind only to 127.0.0.1 regardless of viper or detected host address.
+		"-ip=" + o.Addr,
+		"-ip.bind=" + o.Addr,
 		"-s3",
 		"-s3.port=" + strconv.Itoa(o.Port),
 		// SeaweedFS otherwise sends anonymous cluster statistics to
-		// telemetry.seaweedfs.com. Upstream source documents this flag:
-		// https://github.com/seaweedfs/seaweedfs/blob/master/weed/command/server.go
+		// telemetry.seaweedfs.com once 1 GiB is stored. The flag defaults to ON:
+		//   server.go:113  masterOptions.telemetryEnabled = cmdServer.Flag.Bool("master.telemetry", true, "report anonymous cluster statistics to master.telemetry.url, use -master.telemetry=false to opt out")
+		// The same surface exists on other subcommands that start a master:
+		//   master.go:115  m.telemetryEnabled = cmdMaster.Flag.Bool("telemetry", true, "report anonymous cluster statistics to telemetry.url, use -telemetry=false to opt out")
+		//   mini.go:442    miniMasterOptions.telemetryEnabled = cmdMini.Flag.Bool("master.telemetry", true, "report anonymous cluster statistics to master.telemetry.url, use -master.telemetry=false to opt out")
+		"-master.telemetry=false",
+	}
+}
+
+// masterArgs builds argv for `weed master` with the same privacy invariants as
+// serverArgs. The loopback/telemetry flags are per-subcommand:
+//   master.go:90  m.ip = cmdMaster.Flag.String("ip", ..., "master <ip>|<server> address, also used as identifier")
+//   master.go:91  m.ipBind = cmdMaster.Flag.String("ip.bind", "", "ip address to bind to. If empty, default to same as -ip option.")
+//   master.go:115 m.telemetryEnabled = cmdMaster.Flag.Bool("telemetry", true, ...)
+func masterArgs(dataDir, addr string, port int) []string {
+	return []string{
+		"master",
+		"-mdir=" + dataDir,
+		"-ip=" + addr,
+		"-ip.bind=" + addr,
+		"-port=" + strconv.Itoa(port),
+		"-telemetry=false",
+	}
+}
+
+// miniArgs builds argv for `weed mini` (single-process mini cluster) with the
+// same invariants:
+//   mini.go:382  miniIp = cmdMini.Flag.String("ip", ..., "ip or server name, also used as identifier")
+//   mini.go:383  miniBindIp = cmdMini.Flag.String("ip.bind", "0.0.0.0", "ip address to bind to. If empty, default to same as -ip option.")
+//   mini.go:442  miniMasterOptions.telemetryEnabled = cmdMini.Flag.Bool("master.telemetry", true, ...)
+func miniArgs(dataDir, addr string, port int) []string {
+	return []string{
+		"mini",
+		"-dir=" + dataDir,
+		"-ip=" + addr,
+		"-ip.bind=" + addr,
+		"-port=" + strconv.Itoa(port),
 		"-master.telemetry=false",
 	}
 }
@@ -202,7 +306,7 @@ outpost mesh service add s3 <addr>. Can also back the Zot registry's blob store.
 			return Serve(cmd.Context(), o)
 		},
 	}
-	serve.Flags().StringVar(&o.Version, "version", "", "SeaweedFS release tag (default: latest)")
+	serve.Flags().StringVar(&o.Version, "version", "", "SeaweedFS release tag (default: "+DefaultVersion+")")
 	serve.Flags().StringVar(&o.DataDir, "data", "", "storage dir (default ~/.agents/bashy/seaweedfs)")
 	serve.Flags().StringVar(&o.Addr, "addr", DefaultAddr, "bind address")
 	serve.Flags().IntVar(&o.Port, "port", DefaultPort, "S3 gateway port")
@@ -211,7 +315,7 @@ outpost mesh service add s3 <addr>. Can also back the Zot registry's blob store.
 		Use:   "path",
 		Short: "Print the cached weed binary path (fetching it if needed)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			tool, err := binmgr.ResolveGitHub(cmd.Context(), Spec(o.Version))
+			tool, err := resolveTool(o.Version)
 			if err != nil {
 				return err
 			}
@@ -223,7 +327,7 @@ outpost mesh service add s3 <addr>. Can also back the Zot registry's blob store.
 			return nil
 		},
 	}
-	pathCmd.Flags().StringVar(&o.Version, "version", "", "SeaweedFS release tag (default: latest)")
+	pathCmd.Flags().StringVar(&o.Version, "version", "", "SeaweedFS release tag (default: "+DefaultVersion+")")
 
 	root.AddCommand(serve, pathCmd)
 	return root

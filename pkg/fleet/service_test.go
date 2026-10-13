@@ -307,9 +307,9 @@ func TestExternalServiceSeeds_ParseValidateExpandExec(t *testing.T) {
 			mesh:        "s3",
 			healthHTTP:  "/",
 			startPeriod: "45s",
-			defaultArgv: "bashy seaweedfs serve --port 8333 --addr 127.0.0.1 --data= --version 4.48",
+			defaultArgv: "bashy seaweedfs serve --port 8333 --addr 127.0.0.1 --data= --version bashy-4.48-1",
 			customData:  "/var/lib/seaweedfs",
-			customArgv:  "bashy seaweedfs serve --port 8334 --addr 0.0.0.0 --data=/var/lib/seaweedfs --version 4.48",
+			customArgv:  "bashy seaweedfs serve --port 8334 --addr 0.0.0.0 --data=/var/lib/seaweedfs --version bashy-4.48-1",
 		},
 		{
 			name:        "kopia",
