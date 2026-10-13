@@ -77,6 +77,9 @@ type Tool struct {
 	// Sigstore bundle signed by exactly this identity and issuer, verified
 	// before the digest check and before anything is unpacked (sigstore.go).
 	Sigstore *Sigstore `json:"sigstore,omitempty"`
+	// SignedSums requires a separately signed release checksum manifest. Its
+	// asset row must agree with both the downloaded bytes and a committed pin.
+	SignedSums *SignedSums `json:"signed_sums,omitempty"`
 	// RequireCommittedPin refuses release-supplied checksums, including on cache hits.
 	RequireCommittedPin bool `json:"require_committed_pin,omitempty"`
 }
@@ -207,6 +210,9 @@ func installLayout(t Tool) (dir, dest string, err error) {
 			return "", "", fmt.Errorf("binmgr: %s %s requires Sigstore verification", t.Name, t.Version)
 		}
 	}
+	if t.SignedSums != nil && (t.Sigstore == nil || !t.RequireCommittedPin) {
+		return "", "", fmt.Errorf("binmgr: %s %s signed sums require Sigstore and a committed pin", t.Name, t.Version)
+	}
 	root, err := CacheDir()
 	if err != nil {
 		return "", "", err
@@ -226,7 +232,7 @@ func installLayout(t Tool) (dir, dest string, err error) {
 // sha256-verifying + caching it if not already present, and returns the path to
 // the executable. Idempotent: a cache hit returns immediately with no network.
 func Ensure(ctx context.Context, t Tool) (string, error) {
-	if !t.RequireCommittedPin && t.Sigstore == nil && t.cachedName == t.Name && t.Name != "" && t.cachedPath != "" && isExecutable(t.cachedPath) {
+	if !t.RequireCommittedPin && t.Sigstore == nil && t.SignedSums == nil && t.cachedName == t.Name && t.Name != "" && t.cachedPath != "" && isExecutable(t.cachedPath) {
 		return t.cachedPath, nil
 	}
 	dir, dest, err := installLayout(t)
@@ -266,6 +272,13 @@ func Ensure(ctx context.Context, t Tool) (string, error) {
 	// against the release itself being tampered with.
 	if pin, ok := pinnedSHA256(t.Name, t.Version, Platform()); ok {
 		asset.SHA256, asset.SHA512, asset.MD5 = pin, "", ""
+	}
+	var sums, sumsBundle []byte
+	if t.SignedSums != nil {
+		sums, sumsBundle, err = verifySignedSums(ctx, t, asset, sum)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	// A signed tool is verified keylessly over the downloaded bytes FIRST —
@@ -326,6 +339,11 @@ func Ensure(ctx context.Context, t Tool) (string, error) {
 				return "", err
 			}
 		}
+		if t.SignedSums != nil {
+			if err := writeSignedSumsEvidence(dest, sums, sumsBundle); err != nil {
+				return "", err
+			}
+		}
 		return dest, nil
 	case asset.Binary != "":
 		if err := extract(tmpName, asset.URL, asset.Binary, dest); err != nil {
@@ -350,6 +368,11 @@ func Ensure(ctx context.Context, t Tool) (string, error) {
 	}
 	if t.Sigstore != nil {
 		if err := writeSignedCacheEvidence(asset, dest, tmpName, bundle); err != nil {
+			return "", err
+		}
+	}
+	if t.SignedSums != nil {
+		if err := writeSignedSumsEvidence(dest, sums, sumsBundle); err != nil {
 			return "", err
 		}
 	}
