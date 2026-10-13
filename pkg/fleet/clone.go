@@ -83,13 +83,19 @@ const cloneOfPrefix = "clone of "
 // says what it actually did. It never fails the clone: a minted agent with a
 // fresh context is a usable agent, and an operator who is TOLD it is fresh can
 // decide to re-brief it. What must not happen is silence.
-func (c *Catalog) cloneContext(parent, clone Agent) string {
+func (c *Catalog) cloneContext(parent, clone Agent, fresh bool) string {
 	if c.cfg.contextCloner == nil {
+		if fresh {
+			return "fresh context — --fresh was given"
+		}
 		return noteNoCloner
 	}
-	note, err := c.cfg.contextCloner(parent, clone)
+	note, err := c.cfg.contextCloner(parent, clone, fresh)
 	if err != nil {
 		return "fresh context — " + err.Error()
+	}
+	if fresh {
+		return "fresh context — --fresh was given"
 	}
 	if strings.TrimSpace(note) == "" {
 		return fmt.Sprintf(noteFresh, parent.Tool)
@@ -189,10 +195,7 @@ func newAgentsClone(opts []Option) *cobra.Command {
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "%s → %s (cloned from %s)\n", clone.Name, clone.MatrixKey(), parent.Name)
 
-			note := "fresh context — --fresh was given"
-			if !fresh {
-				note = cat.cloneContext(parent, clone)
-			}
+			note := cat.cloneContext(parent, clone, fresh)
 			fmt.Fprintln(out, note)
 
 			if ephemeral {

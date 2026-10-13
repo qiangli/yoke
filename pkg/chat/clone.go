@@ -13,7 +13,8 @@ import (
 	"github.com/qiangli/yoke/pkg/room"
 )
 
-// CloneAgentContext branches an agent's conversation context onto a clone.
+// CloneAgentContext initializes the clone's inbox cursor, then branches the
+// parent's conversation context unless fresh is true.
 //
 // It is the implementation behind `bashy agent clone`, injected into the
 // registry as a fleet.ContextCloner because knowing where an agent's store
@@ -35,12 +36,15 @@ import (
 //     mid-write is a torn one, and a clone silently seeded from a half-written
 //     transcript is precisely the confidently-wrong-answer failure this model
 //     exists to prevent. Stop the parent, or clone --fresh.
-func CloneAgentContext(parent, clone fleet.Agent) (string, error) {
+func CloneAgentContext(parent, clone fleet.Agent, fresh bool) (string, error) {
 	// Conversation history may branch, but the public board predates this
 	// identity. Start its cursor at clone time so a fresh seat receives only
 	// mail that can actually have been sent to it.
 	if err := bus.InitializeReaderAtHead(clone.Name); err != nil {
 		return "", fmt.Errorf("initialize %s inbox: %w", clone.Name, err)
+	}
+	if fresh {
+		return "", nil
 	}
 	if parent.Tool != agentlaunch.YcodeToolName {
 		return "", nil // caller renders the "tool keeps its own state" note

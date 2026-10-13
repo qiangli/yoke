@@ -160,7 +160,7 @@ func TestTaskCloneNameSanitizes(t *testing.T) {
 // imply a context was branched when the binary has no way to branch one.
 func TestCloneContextReportsFreshWhenNoClonerIsWired(t *testing.T) {
 	cat := cloneCatalog(t)
-	note := cat.cloneContext(Agent{Name: "elif"}, Agent{Name: "elif2"})
+	note := cat.cloneContext(Agent{Name: "elif"}, Agent{Name: "elif2"}, false)
 	if !strings.Contains(note, "fresh context") {
 		t.Errorf("note = %q, want it to say the clone starts fresh", note)
 	}
@@ -170,10 +170,10 @@ func TestCloneContextReportsFreshWhenNoClonerIsWired(t *testing.T) {
 // reach the operator as words, not be swallowed into a cheerful success line.
 func TestCloneContextSurfacesTheClonerError(t *testing.T) {
 	cat := New(WithRoot(t.TempDir()), WithContextCloner(
-		func(parent, clone Agent) (string, error) {
+		func(parent, clone Agent, fresh bool) (string, error) {
 			return "", errLive{}
 		}))
-	note := cat.cloneContext(Agent{Name: "elif"}, Agent{Name: "elif2"})
+	note := cat.cloneContext(Agent{Name: "elif"}, Agent{Name: "elif2"}, false)
 	if !strings.Contains(note, "is live") {
 		t.Errorf("note = %q, want the cloner's reason", note)
 	}

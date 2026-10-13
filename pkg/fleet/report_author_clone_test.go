@@ -64,8 +64,8 @@ func TestSyncNeverAuthorsCatalogEntries(t *testing.T) {
 // fresh context naming the tool, never silence.
 func TestCloneContextNamesToolWhenClonerHasNothingToCopy(t *testing.T) {
 	cat := New(WithRoot(t.TempDir()), WithContextCloner(
-		func(parent, clone Agent) (string, error) { return "", nil }))
-	note := cat.cloneContext(Agent{Name: "bruno", Tool: "codex"}, Agent{Name: "bruno2"})
+		func(parent, clone Agent, fresh bool) (string, error) { return "", nil }))
+	note := cat.cloneContext(Agent{Name: "bruno", Tool: "codex"}, Agent{Name: "bruno2"}, false)
 	if !strings.Contains(note, "fresh context") {
 		t.Errorf("note = %q, want it to say the clone starts fresh", note)
 	}

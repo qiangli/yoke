@@ -52,7 +52,10 @@ type CommandProbe func(rec Command) (reason string, ok bool)
 // which also imports this package. Naming its type here would close the cycle.
 type LiveProbe func(ctx context.Context, agent string, timeout time.Duration) (status, note string, ok bool)
 
-// ContextCloner copies an agent's conversation context to a clone, as of now.
+// ContextCloner initializes a clone's identity and optionally copies the
+// parent's conversation context as of now. Fresh is true for --fresh: identity
+// state such as inbox cursors must still be initialized, but history must not
+// be copied.
 //
 // INJECTED, for the same import-graph reason as LiveProbe: knowing where an
 // agent's store lives means pkg/chat + pkg/agentlaunch, and both read this
@@ -64,14 +67,14 @@ type LiveProbe func(ctx context.Context, agent string, timeout time.Duration) (s
 // say which of the two it got. A clone that reports inherited context it did
 // not inherit is the same class of lie as an agent answering from another
 // task's history — the failure this whole model exists to prevent.
-type ContextCloner func(parent, clone Agent) (note string, err error)
+type ContextCloner func(parent, clone Agent, fresh bool) (note string, err error)
 
 // Option configures a Catalog.
 type Option func(*Config)
 
-// WithContextCloner supplies the copier `agents clone` uses to branch an
-// agent's context. Without it, cloning still mints the record and says plainly
-// that the clone starts fresh.
+// WithContextCloner supplies the initializer/copier `agents clone` uses.
+// Without it, cloning still mints the record and says plainly that the clone
+// starts fresh.
 func WithContextCloner(f ContextCloner) Option { return func(c *Config) { c.contextCloner = f } }
 
 // WithReservedNames supplies the embedding shell's command surface so

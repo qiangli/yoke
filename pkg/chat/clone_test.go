@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,7 +46,7 @@ func TestCloneContextBranchesTheStoreAndThenDiverges(t *testing.T) {
 		"nested/deep/b":   "kept",
 	})
 
-	note, err := CloneAgentContext(parent, clone)
+	note, err := CloneAgentContext(parent, clone, false)
 	if err != nil {
 		t.Fatalf("clone context: %v", err)
 	}
@@ -96,7 +97,7 @@ func TestCloneContextRefusesALiveParent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := CloneAgentContext(parent, fleet.Agent{Name: "elif2", Tool: "ycode", Model: "glm-5.2"})
+	_, err := CloneAgentContext(parent, fleet.Agent{Name: "elif2", Tool: "ycode", Model: "glm-5.2"}, false)
 	if err == nil {
 		t.Fatal("cloning a LIVE agent's context must be refused, not silently torn")
 	}
@@ -123,7 +124,7 @@ func TestCloneContextRefusesDottedParentUnderCanonicalAndLegacyClaimKeys(t *test
 			}); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := CloneAgentContext(parent, fleet.Agent{Name: "elif2", Tool: "ycode", Model: "glm-5.2"}); err == nil || !strings.Contains(err.Error(), "--fresh") {
+			if _, err := CloneAgentContext(parent, fleet.Agent{Name: "elif2", Tool: "ycode", Model: "glm-5.2"}, false); err == nil || !strings.Contains(err.Error(), "--fresh") {
 				t.Fatalf("live dotted parent clone error = %v", err)
 			}
 		})
@@ -140,7 +141,7 @@ func TestCloneContextIsFreshForAForeignTool(t *testing.T) {
 
 	note, err := CloneAgentContext(
 		fleet.Agent{Name: "bruno", Tool: "codex", Model: "gpt-5.5"},
-		fleet.Agent{Name: "bruno2", Tool: "codex", Model: "gpt-5.5"},
+		fleet.Agent{Name: "bruno2", Tool: "codex", Model: "gpt-5.5"}, false,
 	)
 	if err != nil {
 		t.Fatalf("a foreign tool must not fail the clone, got: %v", err)
@@ -158,7 +159,7 @@ func TestFreshCloneStartsWithEmptyBoardBacklog(t *testing.T) {
 		t.Fatal(err)
 	}
 	clone := fleet.Agent{Name: "manager-clone", Tool: "codex", Model: "gpt-5.5"}
-	if _, err := CloneAgentContext(fleet.Agent{Name: "manager", Tool: "codex", Model: "gpt-5.5"}, clone); err != nil {
+	if _, err := CloneAgentContext(fleet.Agent{Name: "manager", Tool: "codex", Model: "gpt-5.5"}, clone, false); err != nil {
 		t.Fatal(err)
 	}
 	directed, other, older, err := bus.Unseen(clone.Name, 0)
@@ -181,6 +182,46 @@ func TestFreshCloneStartsWithEmptyBoardBacklog(t *testing.T) {
 	}
 }
 
+func TestAgentCloneFreshInitializesCursorAfterHundredsOfBroadcasts(t *testing.T) {
+	isolateHome(t)
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+	t.Setenv("BASHY_MB_DIR", t.TempDir())
+	root := t.TempDir()
+	cat := fleet.New(fleet.WithRoot(root))
+	if err := cat.SaveAgent(fleet.Agent{Name: "manager", Tool: "ycode", Model: "glm-5.2"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 369; i++ {
+		if err := bus.PostMessage(bus.Post{From: "broadcast", Body: "history before clone"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cmd := fleet.NewAgentsCmd(fleet.WithRoot(root), fleet.WithContextCloner(CloneAgentContext))
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetErr(&output)
+	cmd.SetArgs([]string{"clone", "manager", "manager2", "--fresh"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("agent clone --fresh: %v\n%s", err, output.String())
+	}
+	directed, other, older, err := bus.Unseen("manager2", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(directed) != 0 || len(other) != 0 || older != 0 {
+		t.Fatalf("fresh CLI clone inherited backlog: directed=%d other=%d older=%d", len(directed), len(other), older)
+	}
+
+	if err := bus.PostMessage(bus.Post{From: "newer", To: "manager2", Body: "after clone"}); err != nil {
+		t.Fatal(err)
+	}
+	directed, _, _, err = bus.Unseen("manager2", 0)
+	if err != nil || len(directed) != 1 || directed[0].Body != "after clone" {
+		t.Fatalf("post-clone mail = %+v, err=%v", directed, err)
+	}
+}
+
 // TestCloneContextRefusesToMergeIntoAnExistingStore — merging two conversation
 // histories would give the clone a past that never happened.
 func TestCloneContextRefusesToMergeIntoAnExistingStore(t *testing.T) {
@@ -192,7 +233,7 @@ func TestCloneContextRefusesToMergeIntoAnExistingStore(t *testing.T) {
 	seedStore(t, parent, map[string]string{"sessions/a.json": "{}"})
 	seedStore(t, clone, map[string]string{"sessions/its-own.json": "{}"})
 
-	if _, err := CloneAgentContext(parent, clone); err == nil {
+	if _, err := CloneAgentContext(parent, clone, false); err == nil {
 		t.Fatal("cloning onto an agent that already has a store must be refused")
 	}
 }
