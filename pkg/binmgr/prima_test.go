@@ -166,6 +166,11 @@ func TestPrimaSignedProvisionAndCacheRefusals(t *testing.T) {
 	if _, ok := Cached(tool); !ok {
 		t.Fatal("offline signed cache was not reusable")
 	}
+	wrongWorkflow := tool
+	wrongWorkflow.Sigstore = &Sigstore{Identity: PrimaIdentity + "-other", Issuer: GitHubActionsIssuer}
+	if _, err := Ensure(context.Background(), wrongWorkflow); !errors.Is(err, ErrSigstore) {
+		t.Fatalf("changed Prima workflow identity accepted from cache: %v", err)
+	}
 	if err := os.WriteFile(sumsCachePath(dest), []byte("forged\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -215,6 +220,22 @@ func primaTestSums(currentSHA string) []byte {
 		}
 		fmt.Fprintf(&b, "%s  %s\n", digest, name)
 	}
+	// Match the files copied into dist by Bashy's Prima release workflow:
+	// per-platform build evidence, audit outputs, and release metadata.
+	for _, name := range []string{
+		"prima-pin.txt", "prima-otel.env", "prima-dependencies.json",
+		"prima-sbom.cdx.json", "prima-vulnerabilities.json",
+		"prima-licenses.json", "prima-osv.json", "prima-inputs.json",
+		"prima-NOTICES.txt",
+	} {
+		fmt.Fprintf(&b, "%s  %s\n", strings.Repeat("a", 64), name)
+	}
+	for _, p := range PrimaPlatforms {
+		name := "prima-" + strings.ReplaceAll(p, "/", "-")
+		for _, suffix := range []string{"-linkage.txt", "-cmake.txt", "-inputs.json", "-inputs.tar.gz"} {
+			fmt.Fprintf(&b, "%s  %s\n", strings.Repeat("a", 64), name+suffix)
+		}
+	}
 	return []byte(b.String())
 }
 
@@ -222,14 +243,21 @@ func TestPrimaSignedSumsStrictRows(t *testing.T) {
 	tool := PrimaTool()
 	good := string(primaTestSums(strings.Repeat("b", 64)))
 	rows := strings.Split(strings.TrimSuffix(good, "\n"), "\n")
+	duplicateExecutable := append([]string(nil), rows...)
+	duplicateExecutable[1] = rows[0]
+	duplicateEvidence := append([]string(nil), rows...)
+	duplicateEvidence[5] = rows[4]
+	unknownEvidence := append([]string(nil), rows...)
+	unknownEvidence[5] = strings.Repeat("c", 64) + "  unknown.txt"
 	cases := map[string]string{
-		"duplicate":           strings.Join([]string{rows[0], rows[0], rows[2], rows[3]}, "\n") + "\n",
-		"traversal":           strings.Replace(good, "prima-linux-amd64", "../prima-linux-amd64", 1),
-		"extra":               good + strings.Repeat("c", 64) + "  extra\n",
-		"missing":             strings.Join(rows[:3], "\n") + "\n",
-		"malformed digest":    "z" + good[1:],
-		"malformed separator": strings.Replace(good, "  prima", " prima", 1),
-		"missing newline":     strings.TrimSuffix(good, "\n"),
+		"duplicate executable": strings.Join(duplicateExecutable, "\n") + "\n",
+		"duplicate evidence":   strings.Join(duplicateEvidence, "\n") + "\n",
+		"traversal":            strings.Replace(good, "prima-linux-amd64", "../prima-linux-amd64", 1),
+		"unknown evidence":     strings.Join(unknownEvidence, "\n") + "\n",
+		"missing executable":   strings.Join(rows[1:], "\n") + "\n",
+		"malformed digest":     "z" + good[1:],
+		"malformed separator":  strings.Replace(good, "  prima", " prima", 1),
+		"missing newline":      strings.TrimSuffix(good, "\n"),
 	}
 	for name, input := range cases {
 		t.Run(name, func(t *testing.T) {
