@@ -8,11 +8,24 @@ import (
 	"github.com/qiangli/yoke/external/internal/serviceenv"
 )
 
-func TestPrivacyArgsDisableUpdatesAndEnableOTLP(t *testing.T) {
-	args := kopiaPrivacyArgs()
-	for _, want := range []string{"--no-check-for-updates", "--otlp-trace"} {
+// `kopia server start` rejects repository-only flags such as
+// --no-check-for-updates (v0.23.1); updates are disabled via the env var.
+func TestServerArgvAndEnvPrivacy(t *testing.T) {
+	args := serverArgs("/d/kopia.config", "127.0.0.1:51515")
+	for _, a := range append(append([]string{}, args...), kopiaPrivacyArgs()...) {
+		if strings.Contains(a, "check-for-updates") {
+			t.Fatalf("repository-only flag %q in argv %v", a, args)
+		}
+	}
+	for _, want := range []string{"--otlp-trace", "server", "start", "--address=127.0.0.1:51515"} {
 		if !slices.Contains(args, want) {
 			t.Fatalf("missing %s in %v", want, args)
+		}
+	}
+	env := kopiaEnv("pw")
+	for _, want := range []string{"KOPIA_CHECK_FOR_UPDATES=false", "KOPIA_PASSWORD=pw"} {
+		if !slices.Contains(env, want) {
+			t.Fatalf("missing %s in %v", want, env)
 		}
 	}
 }

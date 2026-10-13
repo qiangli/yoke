@@ -150,14 +150,8 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 	addr := fmt.Sprintf("%s:%d", o.Addr, o.Port)
 	url := "http://" + addr
 	proc, err := binmgr.Launch(ctx, bin, binmgr.RunSpec{
-		Args: append(kopiaPrivacyArgs(),
-			"--config-file="+cfg,
-			"server", "start",
-			"--address="+addr,
-			"--insecure",         // HTTP, no TLS (the mesh is the boundary)
-			"--without-password", // no server-level auth (loopback + mesh-gated)
-		),
-		Env:        serviceenv.LocalOTLP([]string{"KOPIA_PASSWORD=" + pw}, "kopia"),
+		Args:       serverArgs(cfg, addr),
+		Env:        kopiaEnv(pw),
 		Dir:        o.DataDir,
 		Stdout:     o.Stdout,
 		Stderr:     o.Stderr,
@@ -170,11 +164,32 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 	return &Instance{URL: url, Addr: addr, Version: tool.Version, proc: proc}, nil
 }
 
-// kopiaPrivacyArgs disables the default GitHub update check and enables Kopia's
-// supported OTLP tracing. Both switches are documented in the upstream flag
-// reference: https://kopia.io/docs/reference/command-line/flags/
+// kopiaPrivacyArgs returns the global flags shared by every kopia invocation.
+// --otlp-trace is a global app flag (cli/observability_flags.go at v0.23.1), so
+// it is valid before any subcommand. --no-check-for-updates is NOT: it only
+// exists on `repository connect/create`, and `server start` rejects it. Update
+// checks are disabled through the environment instead (see kopiaEnv).
 func kopiaPrivacyArgs() []string {
-	return []string{"--no-check-for-updates", "--otlp-trace"}
+	return []string{"--otlp-trace"}
+}
+
+// serverArgs is the argv for `kopia server start`.
+func serverArgs(cfg, addr string) []string {
+	return append(kopiaPrivacyArgs(),
+		"--config-file="+cfg,
+		"server", "start",
+		"--address="+addr,
+		"--insecure",         // HTTP, no TLS (the mesh is the boundary)
+		"--without-password", // no server-level auth (loopback + mesh-gated)
+	)
+}
+
+// kopiaEnv is the managed child environment. KOPIA_CHECK_FOR_UPDATES=false is
+// the variable cli/update_check.go reads (checkForUpdatesEnvar, resolved via
+// App.EnvName, whose prefix is empty outside tests) and the Envar of the
+// connect/create --check-for-updates flag, so it covers server and repo create.
+func kopiaEnv(pw string) []string {
+	return serviceenv.LocalOTLP([]string{"KOPIA_PASSWORD=" + pw, "KOPIA_CHECK_FOR_UPDATES=false"}, "kopia")
 }
 
 // Serve runs Kopia's repository server in the foreground (the `bashy kopia serve`
@@ -219,7 +234,7 @@ func ensureRepo(ctx context.Context, bin, dataDir string) (cfg, pw string, err e
 	}
 	proc, err := binmgr.Launch(ctx, bin, binmgr.RunSpec{
 		Args:   append(kopiaPrivacyArgs(), "--config-file="+cfg, "repository", "create", "filesystem", "--path="+repoPath),
-		Env:    serviceenv.LocalOTLP([]string{"KOPIA_PASSWORD=" + pw}, "kopia"),
+		Env:    kopiaEnv(pw),
 		Stdout: io.Discard,
 		Stderr: io.Discard,
 	})
