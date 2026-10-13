@@ -232,7 +232,7 @@ func primaTestSums(currentSHA string) []byte {
 	}
 	for _, p := range PrimaPlatforms {
 		name := "prima-" + strings.ReplaceAll(p, "/", "-")
-		for _, suffix := range []string{"-linkage.txt", "-cmake.txt", "-inputs.json", "-inputs.tar.gz"} {
+		for _, suffix := range []string{"-linkage.txt", "-cmake.txt", "-inputs.json", "-inputs.tar.gz", "-egress.txt"} {
 			fmt.Fprintf(&b, "%s  %s\n", strings.Repeat("a", 64), name+suffix)
 		}
 	}
@@ -249,11 +249,18 @@ func TestPrimaSignedSumsStrictRows(t *testing.T) {
 	duplicateEvidence[5] = rows[4]
 	unknownEvidence := append([]string(nil), rows...)
 	unknownEvidence[5] = strings.Repeat("c", 64) + "  unknown.txt"
+	unknownEgress := append([]string(nil), rows...)
+	unknownEgress[len(unknownEgress)-1] = strings.Repeat("c", 64) + "  prima-freebsd-amd64-egress.txt"
+	duplicateEgress := append([]string(nil), rows...)
+	duplicateEgress[len(duplicateEgress)-2] = rows[len(rows)-1]
 	cases := map[string]string{
 		"duplicate executable": strings.Join(duplicateExecutable, "\n") + "\n",
 		"duplicate evidence":   strings.Join(duplicateEvidence, "\n") + "\n",
 		"traversal":            strings.Replace(good, "prima-linux-amd64", "../prima-linux-amd64", 1),
 		"unknown evidence":     strings.Join(unknownEvidence, "\n") + "\n",
+		"unknown egress":       strings.Join(unknownEgress, "\n") + "\n",
+		"duplicate egress":     strings.Join(duplicateEgress, "\n") + "\n",
+		"traversal egress":     strings.Replace(good, "  prima-linux-amd64-egress.txt", "  ../prima-linux-amd64-egress.txt", 1),
 		"missing executable":   strings.Join(rows[1:], "\n") + "\n",
 		"malformed digest":     "z" + good[1:],
 		"malformed separator":  strings.Replace(good, "  prima", " prima", 1),
@@ -266,7 +273,14 @@ func TestPrimaSignedSumsStrictRows(t *testing.T) {
 			}
 		})
 	}
-	if _, err := parseSignedSums(tool, []byte(good)); err != nil {
+	parsed, err := parseSignedSums(tool, []byte(good))
+	if err != nil {
 		t.Fatal(err)
+	}
+	for _, platform := range PrimaPlatforms {
+		name := "prima-" + strings.ReplaceAll(platform, "/", "-") + "-egress.txt"
+		if _, ok := parsed[name]; !ok {
+			t.Errorf("complete release manifest missing %q", name)
+		}
 	}
 }
