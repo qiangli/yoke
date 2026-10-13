@@ -8,7 +8,6 @@ import (
 
 	"github.com/qiangli/yoke/external/act"
 	"github.com/qiangli/yoke/external/gh"
-	"github.com/qiangli/yoke/external/kopia"
 	"github.com/qiangli/yoke/external/mise"
 	"github.com/qiangli/yoke/external/rclone"
 	"github.com/qiangli/yoke/external/registry"
@@ -59,7 +58,6 @@ func TestWindowsAssetCitationsMatchTheResolvers(t *testing.T) {
 	specs := map[string]binmgr.GitHubSpec{
 		"act":    act.Spec(""),
 		"gh":     gh.Spec(""),
-		"kopia":  kopia.Spec(""),
 		"mise":   mise.Spec(""),
 		"rclone": rclone.Spec(""),
 	}

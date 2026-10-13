@@ -3,12 +3,8 @@
 // for the dhnt mesh. The kopia binary is downloaded → sha256-verified → cached by
 // binmgr, never compiled in; bashy launches it via `bashy kopia`, and outpost
 // runs its repository server and exposes it over the mesh as `backup` (many nodes
-// back up into one repo over the forwarded port). kopia/kopia is Apache-2.0.
-//
-// NOTE: Kopia's repository-server flags are version-sensitive; the launch args
-// below (config-file + filesystem repo + `server start --insecure
-// --without-password`) target recent Kopia and should be validated on a real host
-// (the structure — binmgr + external launcher + builtin — is the stable part).
+// back up into one repo over the forwarded port). Upstream kopia/kopia is
+// Apache-2.0; the bashy fork qiangli/kopia is the signed supply-chain pin.
 // See dhnt/docs/external-binary-builtins.md + docs/mesh-wrap-stack.md.
 package kopia
 
@@ -21,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -32,42 +29,83 @@ import (
 )
 
 const (
-	// DefaultVersion pins the Kopia release. "" / "latest" resolves the newest;
-	// pin for reproducibility ($KOPIA_VERSION or --version override).
-	DefaultVersion = "latest"
+	// Upstream release that the bashy fork was built from (builds/kopia at the
+	// pinned commit). The fork tag is the upstream tag plus the bashy build counter.
+	kopiaVersion = "v0.23.1"
+	// Bashy-signed fork release tag (builds/kopia/tool.env at the pin):
+	// built by the bashy-build workflow on qiangli/kopia and published as
+	// raw executables with per-asset SHA256SUMS and <asset>.sigstore.json bundles.
+	kopiaBashyTag = "bashy-v0.23.1-3"
+
+	// DefaultVersion is the pinned bashy tag. There is no "latest" — that was
+	// the upstream archive and it is intentionally absent (fail closed).
+	DefaultVersion = kopiaBashyTag
 	DefaultAddr    = "127.0.0.1"
 	DefaultPort    = 51515 // Kopia's default server port
 )
 
-// Spec is the binmgr GitHub spec. Kopia ships per-platform archives whose binary
-// is nested in a versioned subdir (matched by basename), and uses non-Go os/arch
-// tokens (macOS, x64) — handled by the custom AssetMatch.
+// SHA256 per asset read from the published SHA256SUMS of the bashy release
+// (downloaded via curl -sL, not from the GitHub API asset digest).
+var kopiaSHAs = map[string]string{
+	"linux/amd64":  "6ae24fa8ca2b885e5a9c169b413d804681e4617413418ade96fc6e957605a89a",
+	"linux/arm64":  "5c06ddbd69a7bf38c940137110f15e150341c9349822e8ac0f953a6492504454",
+	"darwin/amd64": "05e0de6ebb38a76d71f9617440714791f65e1a3eb5395cb0dcc14c049cf02eeb",
+	"darwin/arm64": "0de1ec8a291438f7978eca197cb37ee5a33a090179c5d3dcbae2358adbc5fefa",
+}
+
+func kopiaTool() binmgr.Tool {
+	assets := map[string]binmgr.Asset{}
+	for plat, sha := range kopiaSHAs {
+		goos, goarch, _ := strings.Cut(plat, "/")
+		assetName := "kopia-" + goos + "-" + goarch
+		url := fmt.Sprintf("https://github.com/qiangli/kopia/releases/download/%s/%s", kopiaBashyTag, assetName)
+		assets[plat] = binmgr.Asset{URL: url, SHA256: sha}
+	}
+	identity := fmt.Sprintf("https://github.com/qiangli/kopia/.github/workflows/bashy-build.yml@refs/tags/%s", kopiaBashyTag)
+	return binmgr.Tool{
+		Name:    "kopia",
+		Version: kopiaBashyTag,
+		Assets:  assets,
+		Sigstore: &binmgr.Sigstore{
+			Identity: identity,
+			Issuer:   binmgr.GitHubActionsIssuer,
+		},
+	}
+}
+
+// KopiaTool is the pinned, Sigstore-verified tool declaration. Exported
+// for tests and for callers that need to inspect the pin without launching.
+var KopiaTool = kopiaTool()
+
+// Spec is retained for compatibility with callers that probe the resolver's
+// asset matcher (e.g. pkg/atlas/platform_external_test). It returns a
+// GitHubSpec for the qiangli fork, not the upstream kopia/kopia archive,
+// and never returns "latest".
 func Spec(version string) binmgr.GitHubSpec {
 	if version == "" {
 		version = DefaultVersion
 	}
-	return binmgr.GitHubSpec{
-		Name: "kopia", Repo: "kopia/kopia", Version: version,
-		Member: "kopia", AssetMatch: assetMatch,
+	if version == kopiaVersion {
+		version = kopiaBashyTag
 	}
+	return binmgr.GitHubSpec{Name: "kopia", Repo: "qiangli/kopia", Version: version, AssetMatch: assetMatch}
 }
 
-// assetMatch maps Go's goos/goarch onto Kopia's release tokens (darwin→macos,
-// amd64→x64) and matches the archive for the current platform.
 func assetMatch(name, goos, goarch string) bool {
-	n := strings.ToLower(name)
-	osTok := goos
-	if goos == "darwin" {
-		osTok = "macos"
+	return strings.EqualFold(name, "kopia-"+goos+"-"+goarch)
+}
+
+func resolveTool(version string) (binmgr.Tool, error) {
+	if runtime.GOOS == "windows" {
+		return binmgr.Tool{}, fmt.Errorf("kopia: supply-chain policy: no bashy-signed asset for windows (no upstream fallback) — only linux and darwin assets are signed")
 	}
-	if !strings.Contains(n, osTok) {
-		return false
+	tool := KopiaTool
+	switch version {
+	case "", kopiaBashyTag, kopiaVersion:
+		return tool, nil
+	default:
+		return binmgr.Tool{}, fmt.Errorf("kopia: version %q not supported: only %q (bashy-signed) is available (upstream %q alias accepted)", version, kopiaBashyTag, kopiaVersion)
 	}
-	archTok := goarch
-	if goarch == "amd64" {
-		archTok = "x64"
-	}
-	return strings.Contains(n, archTok)
 }
 
 // DefaultDataDir is Kopia's home (config + the filesystem repository).
@@ -135,9 +173,12 @@ func (i *Instance) Stop() error {
 // exposes it over the mesh.
 func Start(ctx context.Context, o Options) (*Instance, error) {
 	o.defaults()
-	tool, err := binmgr.ResolveGitHub(ctx, Spec(o.Version))
+	if runtime.GOOS == "windows" {
+		return nil, fmt.Errorf("kopia: supply-chain policy: no bashy-signed asset for windows (no upstream fallback) — only linux and darwin assets are signed")
+	}
+	tool, err := resolveTool(o.Version)
 	if err != nil {
-		return nil, fmt.Errorf("kopia: resolve: %w", err)
+		return nil, err
 	}
 	bin, err := binmgr.Ensure(ctx, tool)
 	if err != nil {
@@ -165,12 +206,21 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 }
 
 // kopiaPrivacyArgs returns the global flags shared by every kopia invocation.
-// --otlp-trace is a global app flag (cli/observability_flags.go at v0.23.1), so
-// it is valid before any subcommand. --no-check-for-updates is NOT: it only
-// exists on `repository connect/create`, and `server start` rejects it. Update
-// checks are disabled through the environment instead (see kopiaEnv).
+// --no-persist-credentials is a global app flag (cli/app.go at v0.23.1:
+//   app.Flag("persist-credentials" … Default("true") …), whose negated form
+//   is --no-persist-credentials; strategy passwordPersistenceStrategy at
+//   cli/app.go:234-246 selects Keychain+File vs None, with Darwin defaulting
+//   to Keychain at cli/password_darwin.go). Without it, KOPIA_PASSWORD
+//   triggers persistence to the OS keychain on macOS and blocks headless
+//   operation (the server never listens until the Keychain prompt is
+//   dismissed). See bashy builds/kopia/files/no-egress-test.sh at 98300aeb
+//   and builds/kopia/README.md for the headless gate.
+// --otlp-trace is also a global app flag (cli/observability_flags.go at v0.23.1),
+// so both are valid before any subcommand. --no-check-for-updates is NOT: it
+// only exists on `repository connect/create`, and `server start` rejects it.
+// Update checks are disabled through the environment instead (see kopiaEnv).
 func kopiaPrivacyArgs() []string {
-	return []string{"--otlp-trace"}
+	return []string{"--no-persist-credentials", "--otlp-trace"}
 }
 
 // serverArgs is the argv for `kopia server start`.
@@ -275,7 +325,7 @@ outpost mesh service add backup <addr>. Many nodes back up into one repo.`,
 			return Serve(cmd.Context(), o)
 		},
 	}
-	serve.Flags().StringVar(&o.Version, "version", "", "Kopia release tag (default: latest)")
+	serve.Flags().StringVar(&o.Version, "version", "", "Kopia release tag (default: "+DefaultVersion+")")
 	serve.Flags().StringVar(&o.DataDir, "data", "", "home/repo dir (default ~/.agents/bashy/kopia)")
 	serve.Flags().StringVar(&o.Addr, "addr", DefaultAddr, "bind address")
 	serve.Flags().IntVar(&o.Port, "port", DefaultPort, "server port")
@@ -284,7 +334,7 @@ outpost mesh service add backup <addr>. Many nodes back up into one repo.`,
 		Use:   "path",
 		Short: "Print the cached kopia binary path (fetching it if needed)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			tool, err := binmgr.ResolveGitHub(cmd.Context(), Spec(o.Version))
+			tool, err := resolveTool(o.Version)
 			if err != nil {
 				return err
 			}
@@ -296,7 +346,7 @@ outpost mesh service add backup <addr>. Many nodes back up into one repo.`,
 			return nil
 		},
 	}
-	pathCmd.Flags().StringVar(&o.Version, "version", "", "Kopia release tag (default: latest)")
+	pathCmd.Flags().StringVar(&o.Version, "version", "", "Kopia release tag (default: "+DefaultVersion+")")
 
 	root.AddCommand(serve, pathCmd)
 	return root

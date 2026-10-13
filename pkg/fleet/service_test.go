@@ -317,9 +317,9 @@ func TestExternalServiceSeeds_ParseValidateExpandExec(t *testing.T) {
 			mesh:        "backup",
 			healthHTTP:  "/",
 			startPeriod: "30s",
-			defaultArgv: "bashy kopia serve --port 51515 --addr 127.0.0.1 --data= --version v0.23.1",
+			defaultArgv: "bashy kopia serve --port 51515 --addr 127.0.0.1 --data= --version bashy-v0.23.1-3",
 			customData:  "/var/lib/kopia",
-			customArgv:  "bashy kopia serve --port 51516 --addr 0.0.0.0 --data=/var/lib/kopia --version v0.23.1",
+			customArgv:  "bashy kopia serve --port 51516 --addr 0.0.0.0 --data=/var/lib/kopia --version bashy-v0.23.1-3",
 		},
 	}
 
