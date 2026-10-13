@@ -588,12 +588,16 @@ github.com/qiangli/coreutils v0.0.0-20261013004930-226a73d9a214 h1:e8JSF2kEJzBXd
 github.com/qiangli/coreutils v0.0.0-20261013004930-226a73d9a214/go.mod h1:Prc1arA/ithx6dit7XSsqIiEWysnpWKTvNQMyEZpnOU=
 github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261011232922-f6f06c08ba64 h1:2ujhQaalGIUDjJV25x28d0SzJqY1hAbOyr5iky8rNMo=
 github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261011232922-f6f06c08ba64/go.mod h1:eWcTOZKzYiskL0m3T9AqnK+8dxq+ga6fd32pFBPolLk=
+github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261013004930-226a73d9a214/go.mod h1:p0JkVxHS3JKYxDz8kOYvMdPM8YRH94vZoWaFljD1vAg=
 github.com/qiangli/filebrowser/v2 v2.0.0-20261009064700-9c1237190cff h1:IZAYNdYS2RrgOPAfi7BdoXQOmJZD+nrNTKVLnSVZ3Yc=
 github.com/qiangli/filebrowser/v2 v2.0.0-20261009064700-9c1237190cff/go.mod h1:+k9+11w5Ug23nHloVPNQ6BjklVs/Y+pwHx1PXJ1cJjU=
+github.com/qiangli/filebrowser/v2 v2.0.0-20261013004903-9c7b5c8e3d09/go.mod h1:86f/lT85KHk1f2smUl+MdgDvX4nO2lQqA+tWrGZhj0A=
 github.com/qiangli/gfy v0.0.0-20261009070616-1a9d12418c8d h1:dH+sJZTC+ZjeyFSSWOrFukUNUoMhR7UbkEDTwWjcXJ4=
 github.com/qiangli/gfy v0.0.0-20261009070616-1a9d12418c8d/go.mod h1:7wEuPLejACxwbhFqG0F07nvrzOLGgKlFlx4TGMTRWbg=
+github.com/qiangli/gfy v0.0.0-20261013004914-30d38f086034/go.mod h1:20Lh1QjBlapQPgOsBpLT6lb7Cs7idsMhi/NqvqU6cG0=
 github.com/qiangli/gotreesitter v0.0.0-20261011020812-226bfcd2c541 h1:jI/ak3MTkoqTaAeCRLaeSGnLPz8+s3sed1hY+i0wwy4=
 github.com/qiangli/gotreesitter v0.0.0-20261011020812-226bfcd2c541/go.mod h1:7j+jXadfIMWcH4TMABnHj104jrGyzwpO3pycMsjOyec=
+github.com/qiangli/gotreesitter v0.0.0-20261013004852-f03173f827ed/go.mod h1:G2usTJhlsuOjs/pb4THZE25TrpHxyZ7xfVgmnWzgCmI=
 github.com/qiangli/sh/v3 v3.0.0-20261011220423-0321fab37d54 h1:R9bTyi1oMHTfsaMYlanCrEmj+ziXaJMx02nKBsCKRbM=
 github.com/qiangli/sh/v3 v3.0.0-20261011220423-0321fab37d54/go.mod h1:ZFYKF5yRZk5SSMzb1/Shustc5RWl/YmgE9cVykg+hzg=
 github.com/qiangli/sh/v3 v3.0.0-20261013004909-8f2dec0915fb h1:xXumqSp0ZWCscAJjHo1azppJldU6VYrkUvqJC5Bc9wI=
