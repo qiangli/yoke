@@ -209,6 +209,9 @@ func signedCacheValid(ctx context.Context, t Tool, asset Asset, dest string) boo
 		return false
 	}
 	sum := sha256.Sum256(data)
+	if t.SignedSums != nil && !signedSumsCacheValid(ctx, t, asset, dest, hex.EncodeToString(sum[:])) {
+		return false
+	}
 	if err := checkBundle(raw, data, pin, hex.EncodeToString(sum[:]), *t.Sigstore); err != nil {
 		return false
 	}

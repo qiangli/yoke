@@ -24,6 +24,7 @@ func PrimaTool() Tool {
 		Sigstore:            &Sigstore{Identity: PrimaIdentity, Issuer: GitHubActionsIssuer},
 		RequireCommittedPin: true}
 	base := "https://github.com/" + PrimaRepo + "/releases/download/" + PrimaVersion + "/"
+	t.SignedSums = &SignedSums{URL: base + "SHA256SUMS", BundleURL: base + "SHA256SUMS.sigstore.json"}
 	for _, p := range PrimaPlatforms {
 		os, arch, _ := strings.Cut(p, "/")
 		name := "prima-" + os + "-" + arch
