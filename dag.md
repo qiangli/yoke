@@ -12,6 +12,7 @@ the agent-first equivalent, runnable with the `bashy dag` task runner:
 ```bash
 bashy dag --list            # available targets
 bashy dag build             # build the multicall binary into ./bin
+bashy dag runner-build-thin # build the pinned native llama.cpp runner embed
 bashy dag test              # test coreutils' own packages (CI scope)
 bashy dag crossvet          # cross-OS compile gate (windows/linux/darwin)
 bashy dag consumer-build    # consumer-direction gate: build ../bashy vs this tree
@@ -74,6 +75,30 @@ Effects: exec,net,write
 set -e
 go vet $(go list ./... | grep -v /external/)
 go test $(go list ./... | grep -v /external/)
+```
+
+### runner-build-thin
+Build the native Ollama runner subprocess from the exact vendored gitlink at
+`external/ollama/src`, then gzip it to
+`external/ollama/runner_embed/ycode-runner.gz` for `-tags embed_runner`.
+The script refuses an unhydrated, advanced, or modified submodule. Release
+builders run this target natively because the runner requires cgo; Darwin/arm64
+uses Ollama's in-tree Metal backend, while Linux amd64/arm64 require CMake.
+Sources: scripts/build-runner-thin.sh, external/ollama/src
+Generates: external/ollama/runner_embed/ycode-runner.gz
+Effects: exec,net,write
+
+```bash
+scripts/build-runner-thin.sh
+```
+
+### runner-build-check
+Verify the runner build contract without running code generation or the heavy
+native C++/cgo compile. This checks the vendored source pin and cleanliness,
+supported target rules, required tools, and the output path used by the embed.
+
+```bash
+scripts/build-runner-thin.sh --check
 ```
 
 ### synergy-s8

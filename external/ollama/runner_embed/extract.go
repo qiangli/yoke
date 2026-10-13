@@ -4,7 +4,7 @@
 // and reuses the cached binary on subsequent runs (validated by SHA256 hash).
 //
 // This eliminates the need to install or download a separate ollama binary.
-// Build the embedded runner with: make runner-build-thin
+// Build the embedded runner with: bashy dag runner-build-thin
 package runner_embed
 
 import (
@@ -38,7 +38,7 @@ func Available() bool {
 // Returns the absolute path to the executable runner binary.
 func EnsureRunner(cacheDir string) (string, error) {
 	if !Available() {
-		return "", fmt.Errorf("no embedded runner (build with: make runner-build-thin)")
+		return "", fmt.Errorf("no embedded runner (build with: bashy dag runner-build-thin)")
 	}
 
 	binName := runnerName
