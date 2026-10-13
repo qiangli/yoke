@@ -77,6 +77,8 @@ type Tool struct {
 	// Sigstore bundle signed by exactly this identity and issuer, verified
 	// before the digest check and before anything is unpacked (sigstore.go).
 	Sigstore *Sigstore `json:"sigstore,omitempty"`
+	// RequireCommittedPin refuses release-supplied checksums, including on cache hits.
+	RequireCommittedPin bool `json:"require_committed_pin,omitempty"`
 }
 
 // Platform returns the current "goos/goarch" key.
@@ -113,6 +115,10 @@ func BinaryName(name string) string { return binaryName(name) }
 // whose entrypoint basename equals the tool name are found. Product executables
 // extracted together by EnsureMembers are also discoverable.
 func CachedBinary(name string) string {
+	// Prima is admitted only through its pinned, signed Tool declaration.
+	if name == PrimaName {
+		return ""
+	}
 	root, err := CacheDir()
 	if err != nil {
 		return ""
@@ -179,6 +185,9 @@ func Cached(t Tool) (string, bool) {
 	if err != nil || !isExecutable(dest) {
 		return "", false
 	}
+	if t.Sigstore != nil && !signedCacheValid(t, t.Assets[Platform()], dest) {
+		return "", false
+	}
 	return dest, true
 }
 
@@ -189,6 +198,14 @@ func installLayout(t Tool) (dir, dest string, err error) {
 	asset, ok := t.Assets[Platform()]
 	if !ok || asset.URL == "" {
 		return "", "", fmt.Errorf("binmgr: %s %s has no asset for %s", t.Name, t.Version, Platform())
+	}
+	if t.RequireCommittedPin {
+		if _, ok := pinnedSHA256(t.Name, t.Version, Platform()); !ok {
+			return "", "", fmt.Errorf("binmgr: %s %s has no committed sha256 for %s", t.Name, t.Version, Platform())
+		}
+		if t.Sigstore == nil {
+			return "", "", fmt.Errorf("binmgr: %s %s requires Sigstore verification", t.Name, t.Version)
+		}
 	}
 	root, err := CacheDir()
 	if err != nil {
@@ -209,7 +226,7 @@ func installLayout(t Tool) (dir, dest string, err error) {
 // sha256-verifying + caching it if not already present, and returns the path to
 // the executable. Idempotent: a cache hit returns immediately with no network.
 func Ensure(ctx context.Context, t Tool) (string, error) {
-	if t.cachedName == t.Name && t.Name != "" && t.cachedPath != "" && isExecutable(t.cachedPath) {
+	if !t.RequireCommittedPin && t.Sigstore == nil && t.cachedName == t.Name && t.Name != "" && t.cachedPath != "" && isExecutable(t.cachedPath) {
 		return t.cachedPath, nil
 	}
 	dir, dest, err := installLayout(t)
@@ -218,6 +235,9 @@ func Ensure(ctx context.Context, t Tool) (string, error) {
 	}
 	asset := t.Assets[Platform()]
 	if isExecutable(dest) {
+		if t.Sigstore != nil && !signedCacheValid(t, asset, dest) {
+			return "", fmt.Errorf("%w: %s %s has an unverified or stale cache entry", ErrSigstore, t.Name, t.Version)
+		}
 		return dest, nil // cache hit — no network
 	}
 	if Offline() {
@@ -299,6 +319,11 @@ func Ensure(ctx context.Context, t Tool) (string, error) {
 		if !isExecutable(dest) {
 			return "", fmt.Errorf("binmgr: %s %s: entrypoint missing after extract: %s", t.Name, t.Version, dest)
 		}
+		if t.Sigstore != nil {
+			if err := writeSignedCacheReceipt(t, asset, dest); err != nil {
+				return "", err
+			}
+		}
 		return dest, nil
 	case asset.Binary != "":
 		if err := extract(tmpName, asset.URL, asset.Binary, dest); err != nil {
@@ -320,6 +345,11 @@ func Ensure(ctx context.Context, t Tool) (string, error) {
 	}
 	if err := os.Chmod(dest, 0o755); err != nil {
 		return "", err
+	}
+	if t.Sigstore != nil {
+		if err := writeSignedCacheReceipt(t, asset, dest); err != nil {
+			return "", err
+		}
 	}
 	return dest, nil
 }
