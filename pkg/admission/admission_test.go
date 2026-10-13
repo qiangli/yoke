@@ -1,6 +1,7 @@
 package admission
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -90,5 +91,38 @@ func TestRenderFailureAcknowledgesNothing(t *testing.T) {
 	_, err := Render([]Item{{Source: "bus", ID: "1", Priority: PriorityUrgent, Body: strings.Repeat("x", 600), Acknowledge: func() error { acked = true; return nil }}}, Options{})
 	if err == nil || acked {
 		t.Fatalf("err=%v acked=%v", err, acked)
+	}
+}
+
+func TestOverBudgetUrgentSetAdmitsNewestHeadersAndSummary(t *testing.T) {
+	items := make([]Item, 40)
+	for i := range items {
+		id := strconv.Itoa(i + 1)
+		items[i] = Item{
+			Source: "mb", ID: id, Sequence: int64(i + 1), Priority: PriorityUrgent,
+			Topic: "BLOCKED", Body: strings.Repeat("urgent-"+id+" ", 80),
+			ArtifactRef: "bashy inbox read mb:" + id,
+			OverflowRef: "bashy inbox",
+		}
+	}
+
+	got, err := Render(items, Options{BudgetBytes: 1024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Text) > 1024 {
+		t.Fatalf("rendered %d bytes, want at most 1024", len(got.Text))
+	}
+	if !strings.Contains(got.Text, "mb:40") {
+		t.Fatalf("newest urgent header was not admitted:\n%s", got.Text)
+	}
+	if strings.Contains(got.Text, "- [P1] mb:1 ") {
+		t.Fatalf("oldest urgent header displaced the newest bounded set:\n%s", got.Text)
+	}
+	if !strings.Contains(got.Text, `"omitted_items":40`) || !strings.Contains(got.Text, `"unrepresented_items":`) || !strings.Contains(got.Text, `"open":"bashy inbox"`) {
+		t.Fatalf("bounded count/inbox summary missing:\n%s", got.Text)
+	}
+	if got.Report.UnrepresentedItems == 0 || got.Report.AdmittedItems == 0 {
+		t.Fatalf("report = %+v, want both summarized and admitted urgent items", got.Report)
 	}
 }

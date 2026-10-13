@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/qiangli/yoke/pkg/bus"
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/room"
 )
@@ -146,6 +147,37 @@ func TestCloneContextIsFreshForAForeignTool(t *testing.T) {
 	}
 	if note != "" {
 		t.Errorf("note = %q, want empty so the caller renders the fresh-context reason", note)
+	}
+}
+
+func TestFreshCloneStartsWithEmptyBoardBacklog(t *testing.T) {
+	isolateHome(t)
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+
+	if err := bus.PostMessage(bus.Post{From: "older", Body: "history before clone"}); err != nil {
+		t.Fatal(err)
+	}
+	clone := fleet.Agent{Name: "manager-clone", Tool: "codex", Model: "gpt-5.5"}
+	if _, err := CloneAgentContext(fleet.Agent{Name: "manager", Tool: "codex", Model: "gpt-5.5"}, clone); err != nil {
+		t.Fatal(err)
+	}
+	directed, other, older, err := bus.Unseen(clone.Name, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(directed) != 0 || len(other) != 0 || older != 0 {
+		t.Fatalf("fresh clone inherited backlog: directed=%v other=%v older=%d", directed, other, older)
+	}
+
+	if err := bus.PostMessage(bus.Post{From: "newer", To: clone.Name, Body: "after clone"}); err != nil {
+		t.Fatal(err)
+	}
+	directed, _, _, err = bus.Unseen(clone.Name, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(directed) != 1 || directed[0].Body != "after clone" {
+		t.Fatalf("post-clone mail = %+v, want the new directed item", directed)
 	}
 }
 

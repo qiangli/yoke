@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/qiangli/yoke/pkg/agentlaunch"
+	"github.com/qiangli/yoke/pkg/bus"
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/room"
 )
@@ -35,6 +36,12 @@ import (
 //     transcript is precisely the confidently-wrong-answer failure this model
 //     exists to prevent. Stop the parent, or clone --fresh.
 func CloneAgentContext(parent, clone fleet.Agent) (string, error) {
+	// Conversation history may branch, but the public board predates this
+	// identity. Start its cursor at clone time so a fresh seat receives only
+	// mail that can actually have been sent to it.
+	if err := bus.InitializeReaderAtHead(clone.Name); err != nil {
+		return "", fmt.Errorf("initialize %s inbox: %w", clone.Name, err)
+	}
 	if parent.Tool != agentlaunch.YcodeToolName {
 		return "", nil // caller renders the "tool keeps its own state" note
 	}

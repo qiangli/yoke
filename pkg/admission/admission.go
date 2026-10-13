@@ -213,8 +213,62 @@ func Render(items []Item, opt Options) (Prepared, error) {
 			return Prepared{}, fmt.Errorf("admission: urgent item %s:%s has no stable retrieval reference", c.item.Source, c.item.ID)
 		}
 	}
-	if text, _, err := compose(candidates); err != nil || len(text) > budget {
-		return Prepared{}, fmt.Errorf("admission: %d-byte budget cannot represent every urgent header", budget)
+	urgentOverflow := false
+	if text, _, err := compose(candidates); err != nil {
+		return Prepared{}, err
+	} else if len(text) > budget {
+		// An arbitrarily large urgent set must not prevent the turn that lets an
+		// agent deal with it. Keep a bounded newest prefix and let the overflow
+		// manifest carry the total count plus the durable inbox pointer. Omitted
+		// records remain unacknowledged, so the summary is a projection rather
+		// than a silent drop.
+		urgentOverflow = true
+		for i := range candidates {
+			if candidates[i].item.Priority != PriorityUrgent {
+				continue
+			}
+			if candidates[i].item.OverflowRef == "" {
+				return Prepared{}, fmt.Errorf("admission: urgent item %s:%s has no source retrieval reference", candidates[i].item.Source, candidates[i].item.ID)
+			}
+			candidates[i].mode = 0
+		}
+		text, _, err := compose(candidates)
+		if err != nil {
+			return Prepared{}, err
+		}
+		if len(text) > budget {
+			return Prepared{}, fmt.Errorf("admission: %d-byte budget cannot represent urgent overflow summary", budget)
+		}
+
+		urgent := make([]int, 0, len(candidates))
+		for i := range candidates {
+			if candidates[i].item.Priority == PriorityUrgent {
+				urgent = append(urgent, i)
+			}
+		}
+		sort.SliceStable(urgent, func(i, j int) bool {
+			a, b := candidates[urgent[i]].item.Sequence, candidates[urgent[j]].item.Sequence
+			if a != b {
+				return a > b
+			}
+			return urgent[i] > urgent[j]
+		})
+		for _, i := range urgent {
+			c := &candidates[i]
+			if c.head != "" {
+				c.mode = 1
+			} else {
+				c.mode = 2
+			}
+			text, _, err := compose(candidates)
+			if err != nil {
+				return Prepared{}, err
+			}
+			if len(text) > budget {
+				c.mode = 0
+				break
+			}
+		}
 	}
 
 	// Then spend remaining bytes in priority order. A short body is preferred;
@@ -222,6 +276,9 @@ func Render(items []Item, opt Options) (Prepared, error) {
 	// stays unread and is counted by the overflow manifest.
 	for i := range candidates {
 		c := &candidates[i]
+		if urgentOverflow && c.item.Priority == PriorityUrgent {
+			continue
+		}
 		want := 0
 		switch {
 		case len(c.item.Body) <= preview:
