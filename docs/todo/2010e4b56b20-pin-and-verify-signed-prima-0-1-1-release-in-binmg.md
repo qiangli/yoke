@@ -3,13 +3,16 @@ id: 2010e4b56b20
 kind: task
 title: Pin and verify signed Prima 0.1.1 release in binmgr
 seq: 2017
-status: assigned
+status: done
 priority: p2
+created: 0001-01-01T00:00:00Z
 weave: 234
 assignee: codex-gpt6-sol
 sprint: 436
 sprint_id: 20ad6f7b-d3d3-5ebf-973c-0bbb999db96f
 sprint_title: 'Sphere regression recovery: p2p sharding + local inference back on, bashy-built engines'
+closed: 2026-10-13T16:23:41.88403Z
+closed_by: s436-codex-manager
 ---
 
 Pin the final successful immutable Prima 0.1.1 release after independently

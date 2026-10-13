@@ -3,11 +3,16 @@ id: 7ebab03115a3
 kind: bug
 title: Accept complete signed Prima release manifest in binmgr
 seq: 2015
-status: assigned
+status: done
 priority: p1
+created: 0001-01-01T00:00:00Z
+weave: 232
 assignee: codex-gpt6-sol
 sprint: 436
 sprint_id: 20ad6f7b-d3d3-5ebf-973c-0bbb999db96f
+closed: 2026-10-13T14:29:21.057028Z
+resolution: fixed
+closed_by: codex-gpt6-sol-x
 ---
 
 Correction to signed sums worker 421790eb / Story 15ab8f29c237. Bashy CI
