@@ -31,7 +31,7 @@ import (
 //
 // Key format: "<name>@<version>/<goos>/<goarch>", e.g.
 //
-//	"go@1.27.1/linux/amd64". Value: the lowercase hex sha256 of the exact
+//	"go@1.27.2/linux/amd64". Value: the lowercase hex sha256 of the exact
 //
 // artifact binmgr downloads (the raw binary or the archive — the file as a
 // whole, matching what download() hashes).
@@ -53,12 +53,12 @@ var pinnedDigests = map[string]string{
 
 	// gotoolchain.DefaultVersion — official go.dev archives, digest confirmed
 	// by an independent download + sha256 of the artifact itself.
-	"go@1.27.1/darwin/amd64":  "8f8f52c6649542cf027bbc9b9c68d1ec042f9f34808a40413f0b8b3f66f3caa4",
-	"go@1.27.1/darwin/arm64":  "ee215d57e0ec269c60cc9ceca68e6bda321ba9ee5afe24f4b0988703c2d87d12",
-	"go@1.27.1/linux/amd64":   "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445",
-	"go@1.27.1/linux/arm64":   "3450b45a3f9ee8568792736a5c5e70a1f2e9b36c35a8f74958c03e51d7d92bec",
-	"go@1.27.1/windows/amd64": "a3911b5e0e1b1053f25ed0675f4c1c6aad1e2bfcf253df2b9be4caabd2edd95d",
-	"go@1.27.1/windows/arm64": "13b69b87bb0e83f96bc68560a8cace7f0343b1e03469f1110ea18d17e3234069",
+	"go@1.27.2/darwin/amd64":  "587b59182488b23aa6e5fc25110405a3e0e5b38ed2f5b2f46ed13c32aee356fe",
+	"go@1.27.2/darwin/arm64":  "76812b213b1b2302c978d28fa52fa92d541704b9e7d9d5db8002c50e4018c4c5",
+	"go@1.27.2/linux/amd64":   "ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5",
+	"go@1.27.2/linux/arm64":   "94f3e30b8e374bc285e7dadc11e0865726b9bc6e85b841ccceaabc0214c6b7c8",
+	"go@1.27.2/windows/amd64": "1314008898bd40df77af4b014f777f08873dbdfbcd3d92308728ee03304fe04f",
+	"go@1.27.2/windows/arm64": "5c4b294f23b558619ae8a4aa94d023e3bca03f52c8398bb41b9026002b0013de",
 
 	"witr@v0.3.3/darwin/amd64":  "39934f6a8d6a0413c52324ccdbd3a0867371785b6c066005ea063a78279487ef",
 	"witr@v0.3.3/darwin/arm64":  "d05b51825604d608da8757e549a1f5322549a350f8336c593429f3f2cd507927",
