@@ -10,6 +10,10 @@ import (
 // surfaces are internal units. outpost registers the capability ids (S18,
 // docs/settings.md "Contract notes for the unit seeds") and ships no unit
 // YAML, so a seed naming the wrong id binds to nothing.
+//
+// Sprint 436 (story 1b4773cfbdd7) restored the sphere inference units to
+// on-by-default: before Sprint 418 S18, OllamaOn() defaulted on and
+// ShardOn() was on for any paired host. The rest stay opt-in.
 
 // outpostCapabilitySeeds maps each seed to the capability id outpost
 // registers for it.
@@ -27,7 +31,15 @@ var outpostCapabilitySeeds = map[string]string{
 	"ycode":         "outpost.ycode",
 }
 
-func TestOutpostCapabilitySeedsAreDisabledInternalUnits(t *testing.T) {
+// sphereDefaultOnSeeds are the units Sprint 436 restored to on-by-default
+// for paired hosts. Every other outpost capability seed stays opt-in.
+var sphereDefaultOnSeeds = map[string]bool{
+	"ollama":      true,
+	"ollama-pool": true,
+	"shard":       true,
+}
+
+func TestOutpostCapabilitySeedsAreInternalUnits(t *testing.T) {
 	cat := New(serviceOpts(t.TempDir())...)
 	for name, id := range outpostCapabilitySeeds {
 		s, ok := cat.Service(name)
@@ -42,7 +54,11 @@ func TestOutpostCapabilitySeedsAreDisabledInternalUnits(t *testing.T) {
 			t.Errorf("%s = provider %q capability %q owner %q, want internal %s owned by outpost",
 				name, s.ProviderName(), s.Capability, s.Owner, id)
 		}
-		if s.Enabled {
+		if sphereDefaultOnSeeds[name] {
+			if !s.Enabled {
+				t.Errorf("%s seeded disabled; paired hosts need this sphere unit by default", name)
+			}
+		} else if s.Enabled {
 			t.Errorf("%s seeded enabled; enabling is the operator's", name)
 		}
 		if len(s.Exec) != 0 || s.Download != nil || s.Workdir != "" {

@@ -9,4 +9,4 @@ restart:
   policy: on-failure
   backoff: {min: 5s, max: 2m, healthy_after: 2m}
   start_limit: {burst: 5, interval: 10m}
-enabled: false
+enabled: true
