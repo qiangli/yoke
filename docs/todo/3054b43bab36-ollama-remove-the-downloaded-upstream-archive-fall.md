@@ -3,7 +3,7 @@ id: 3054b43bab36
 kind: task
 title: 'Ollama: remove the downloaded upstream-archive fallback; embedded source-built runner only (fail closed)'
 seq: 2005
-status: assigned
+status: done
 priority: p2
 labels:
     - supply-chain
@@ -13,6 +13,8 @@ assignee: muse-spark1.2
 sprint: 434
 sprint_id: f0fadef8-daec-5fc2-9c78-40979f01a0a7
 sprint_title: bashy verified builds for binmgr tools and services (fork, build, sign, distribute)
+closed: 2026-10-13T04:05:45.328207Z
+closed_by: s434-manager
 ---
 
 Goal (S434 migrate-servers-services, audit row docs/bashy-supply-chain-audit.md:22 in the umbrella): bashy must never exec a third-party-built ollama. Keep ONLY the embedded runner compiled from source (external/ollama: runner_embed, src, ollama_component.go). Remove/disable the downloaded official-archive fallback.
