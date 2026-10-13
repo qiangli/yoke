@@ -2,7 +2,7 @@ module github.com/qiangli/yoke/pkg/oci
 
 go 1.27
 
-toolchain go1.27.1
+toolchain go1.27.2
 
 require (
 	github.com/opencontainers/runtime-spec v1.3.0

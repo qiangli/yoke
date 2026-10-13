@@ -131,9 +131,9 @@ func TestPinnedSHA256_VPrefixTolerance(t *testing.T) {
 		t.Errorf("sha mismatch: with v %q != without v %q", shaWithV, shaWithoutV)
 	}
 
-	// A tool pinned without 'v' like go@1.27.1 should also resolve with or without 'v'.
-	goWithoutV, ok3 := PinnedSHA256("go", "1.27.1", "darwin/amd64")
-	goWithV, ok4 := PinnedSHA256("go", "v1.27.1", "darwin/amd64")
+	// A tool pinned without 'v' like go@1.27.2 should also resolve with or without 'v'.
+	goWithoutV, ok3 := PinnedSHA256("go", "1.27.2", "darwin/amd64")
+	goWithV, ok4 := PinnedSHA256("go", "v1.27.2", "darwin/amd64")
 	if !ok3 || !ok4 {
 		t.Fatalf("expected PinnedSHA256 for go to succeed both ways: ok3=%v, ok4=%v", ok3, ok4)
 	}

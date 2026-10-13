@@ -2,7 +2,7 @@ module github.com/qiangli/yoke
 
 go 1.27
 
-toolchain go1.27.1
+toolchain go1.27.2
 
 require (
 	github.com/GehirnInc/crypt v0.0.0-20230320061759-8cc1b52080c5
@@ -29,8 +29,8 @@ require (
 	github.com/odvcencio/gotreesitter v0.16.0
 	github.com/ollama/ollama v0.0.0-00010101000000-000000000000
 	github.com/pkg/sftp v1.13.10
-	github.com/qiangli/coreutils v0.0.0-20261011232922-f6f06c08ba64
-	github.com/qiangli/gfy v0.0.0-20261009070616-1a9d12418c8d
+	github.com/qiangli/coreutils v0.0.0-20261013004930-226a73d9a214
+	github.com/qiangli/gfy v0.0.0-20261013004914-30d38f086034
 	github.com/qiangli/yoke/pkg/llmgw v0.0.0-00010101000000-000000000000
 	github.com/qiangli/yoke/pkg/oci v0.0.0-00010101000000-000000000000
 	github.com/rjeczalik/notify v0.9.3
@@ -69,7 +69,7 @@ require (
 // checkout. Same convention as ycode/outpost/bashy. coreutils is the
 // certified POSIX package this module was split out of (Sprint 208); yoke
 // imports it, never the reverse.
-replace mvdan.cc/sh/v3 => github.com/qiangli/sh/v3 v3.0.0-20261011220423-0321fab37d54
+replace mvdan.cc/sh/v3 => github.com/qiangli/sh/v3 v3.0.0-20261013004909-8f2dec0915fb
 
 // gotreesitter: pinned local fork of upstream v0.16.0 (../gotreesitter,
 // hosting qiangli/gotreesitter, module path kept as upstream's) with the
@@ -80,14 +80,14 @@ replace mvdan.cc/sh/v3 => github.com/qiangli/sh/v3 v3.0.0-20261011220423-0321fab
 // five grammars embedded), which a module-path rename could not reach. See
 // the fork's FORK.md for provenance; THIRD_PARTY_GRAMMARS.md carries the
 // surviving 201 attributions.
-replace github.com/odvcencio/gotreesitter => github.com/qiangli/gotreesitter v0.0.0-20261011020812-226bfcd2c541
+replace github.com/odvcencio/gotreesitter => github.com/qiangli/gotreesitter v0.0.0-20261013004852-f03173f827ed
 
 // Local MIT fork adds POSIX awk float formats, locale-aware data and string
 // semantics, an error-bearing regex backend across all surfaces, and the
 // required side effect that a non-"in" reference creates an absent array
 // element. Keeping the narrow fork here makes the conformance fixes build from
 // this repository rather than an unpublished dependency commit.
-replace github.com/benhoyt/goawk => github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261011232922-f6f06c08ba64
+replace github.com/benhoyt/goawk => github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261013004930-226a73d9a214
 
 replace github.com/ollama/ollama => ./external/ollama/src
 
@@ -375,4 +375,4 @@ require (
 	tags.cncf.io/container-device-interface/specs-go v1.1.0 // indirect
 )
 
-replace github.com/filebrowser/filebrowser/v2 => github.com/qiangli/filebrowser/v2 v2.0.0-20261009064700-9c1237190cff
+replace github.com/filebrowser/filebrowser/v2 => github.com/qiangli/filebrowser/v2 v2.0.0-20261013004903-9c7b5c8e3d09

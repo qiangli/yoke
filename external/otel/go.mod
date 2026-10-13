@@ -2,7 +2,7 @@ module github.com/qiangli/yoke/external/otel
 
 go 1.27
 
-toolchain go1.27.1
+toolchain go1.27.2
 
 require (
 	github.com/qiangli/yoke v0.0.0-20261012201704-ceaeba133437
@@ -30,4 +30,4 @@ replace github.com/jaegertracing/jaeger => github.com/qiangli/jaeger v0.0.0-2026
 
 replace github.com/perses/perses => github.com/qiangli/perses v0.0.0-20260426190059-de437951b5e6
 
-replace mvdan.cc/sh/v3 => github.com/qiangli/sh/v3 v3.0.0-20261009065157-d3d7766e8a47
+replace mvdan.cc/sh/v3 => github.com/qiangli/sh/v3 v3.0.0-20261013004909-8f2dec0915fb
