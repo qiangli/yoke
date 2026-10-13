@@ -6,11 +6,10 @@ import (
 )
 
 // PrimaVersion is the immutable bashy CI release of the reviewed first-party
-// source tag bashy-prima-0.1.0 (f4ea9845). Asset pins are intentionally absent
-// until hosted CI publishes the exact signed bytes.
+// source tag bashy-prima-0.1.1. The four raw asset hashes are pinned in pins.go.
 const (
 	PrimaName     = "prima"
-	PrimaVersion  = "bashy-bashy-prima-0.1.0-1"
+	PrimaVersion  = "bashy-bashy-prima-0.1.1-4"
 	PrimaRepo     = "qiangli/prima.cpp"
 	PrimaIdentity = "https://github.com/qiangli/prima.cpp/.github/workflows/bashy-build.yml@refs/tags/" + PrimaVersion
 )

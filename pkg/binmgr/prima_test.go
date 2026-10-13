@@ -12,16 +12,22 @@ import (
 	"testing"
 )
 
-func TestPrimaDeclarationAndAbsentPins(t *testing.T) {
+func TestPrimaDeclarationAndPins(t *testing.T) {
 	t.Setenv("BASHY_BIN_CACHE", t.TempDir())
 	tool := PrimaTool()
-	if tool.Version != "bashy-bashy-prima-0.1.0-1" || tool.Sigstore.Identity !=
-		"https://github.com/qiangli/prima.cpp/.github/workflows/bashy-build.yml@refs/tags/bashy-bashy-prima-0.1.0-1" ||
+	if tool.Version != "bashy-bashy-prima-0.1.1-4" || tool.Sigstore.Identity !=
+		"https://github.com/qiangli/prima.cpp/.github/workflows/bashy-build.yml@refs/tags/bashy-bashy-prima-0.1.1-4" ||
 		tool.Sigstore.Issuer != GitHubActionsIssuer || !tool.RequireCommittedPin {
 		t.Fatalf("prima trust declaration changed: %+v", tool)
 	}
 	if len(tool.Assets) != 4 {
 		t.Fatalf("assets: %v", tool.Assets)
+	}
+	wantPins := map[string]string{
+		"darwin/amd64": "9203966e27293d958587e87e527b2f996d0207f30b56cccae0aeb9f362432772",
+		"darwin/arm64": "8a9bffcd0ea3ca9f7edc44a0c318d6ecb3f496a76dd005833d7046321c4aee8e",
+		"linux/amd64":  "0a43bd0232adc517c97e2524ce05be1a3ea61a247a575591b9e7fd52f8203c17",
+		"linux/arm64":  "b347133007fa19a6195814be0250a9a8bb4d42e571b0c901c95c50cf77e148ad",
 	}
 	for _, platform := range PrimaPlatforms {
 		osName, arch, _ := strings.Cut(platform, "/")
@@ -31,18 +37,13 @@ func TestPrimaDeclarationAndAbsentPins(t *testing.T) {
 		if a.URL != want || a.SigstoreBundle != want+DefaultBundleSuffix || a.Binary != "" || a.Tree {
 			t.Errorf("%s: %+v", platform, a)
 		}
-		if _, ok := pinnedSHA256(PrimaName, PrimaVersion, platform); ok {
-			t.Errorf("invented prima pin on %s", platform)
+		if got, ok := pinnedSHA256(PrimaName, PrimaVersion, platform); !ok || got != wantPins[platform] {
+			t.Errorf("%s: pin %q, found %v, want %q", platform, got, ok, wantPins[platform])
 		}
 	}
 	if tool.SignedSums == nil || !strings.HasSuffix(tool.SignedSums.URL, "/SHA256SUMS") ||
 		tool.SignedSums.BundleURL != tool.SignedSums.URL+DefaultBundleSuffix {
 		t.Fatalf("signed sums declaration: %+v", tool.SignedSums)
-	}
-	if _, supported := tool.Assets[Platform()]; supported {
-		if _, err := EnsurePrima(context.Background()); err == nil || !strings.Contains(err.Error(), "no committed sha256") {
-			t.Fatalf("missing pin: %v", err)
-		}
 	}
 	if got := CachedBinary(PrimaName); got != "" {
 		t.Fatalf("generic legacy cache returned %s", got)

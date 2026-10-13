@@ -42,6 +42,15 @@ import (
 // is intentionally allowed to be sparse — an absent pin is not an error, it just
 // means that tool still resolves its checksum from the release.
 var pinnedDigests = map[string]string{
+	// prima.cpp bashy-build.yml tag bashy-bashy-prima-0.1.1-4 (hosted run
+	// 38427264223). Each raw asset matches the signed SHA256SUMS and an
+	// independently downloaded binary; their bundles verified against the
+	// exact tag workflow identity and GitHub Actions OIDC issuer.
+	"prima@bashy-bashy-prima-0.1.1-4/darwin/amd64": "9203966e27293d958587e87e527b2f996d0207f30b56cccae0aeb9f362432772",
+	"prima@bashy-bashy-prima-0.1.1-4/darwin/arm64": "8a9bffcd0ea3ca9f7edc44a0c318d6ecb3f496a76dd005833d7046321c4aee8e",
+	"prima@bashy-bashy-prima-0.1.1-4/linux/amd64":  "0a43bd0232adc517c97e2524ce05be1a3ea61a247a575591b9e7fd52f8203c17",
+	"prima@bashy-bashy-prima-0.1.1-4/linux/arm64":  "b347133007fa19a6195814be0250a9a8bb4d42e571b0c901c95c50cf77e148ad",
+
 	// binmgr.CosignTool (CosignVersion v3.1.1) — the pinned Sigstore verifier.
 	// Each digest matched three ways: GitHub's published asset digest, the
 	// release's own cosign_checksums.txt, and an independent download + sha256.
