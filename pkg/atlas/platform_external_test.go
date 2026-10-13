@@ -9,11 +9,9 @@ import (
 	"github.com/qiangli/yoke/external/act"
 	"github.com/qiangli/yoke/external/gh"
 	"github.com/qiangli/yoke/external/kopia"
-	"github.com/qiangli/yoke/external/loom"
 	"github.com/qiangli/yoke/external/mise"
 	"github.com/qiangli/yoke/external/rclone"
 	"github.com/qiangli/yoke/external/registry"
-	"github.com/qiangli/yoke/external/zot"
 	"github.com/qiangli/yoke/pkg/atlas"
 	"github.com/qiangli/yoke/pkg/binmgr"
 )
@@ -62,10 +60,8 @@ func TestWindowsAssetCitationsMatchTheResolvers(t *testing.T) {
 		"act":    act.Spec(""),
 		"gh":     gh.Spec(""),
 		"kopia":  kopia.Spec(""),
-		"loom":   loom.Spec(""),
 		"mise":   mise.Spec(""),
 		"rclone": rclone.Spec(""),
-		"zot":    zot.Spec(""),
 	}
 	for name, spec := range specs {
 		d, ok := atlas.ExternalPlatforms(name)

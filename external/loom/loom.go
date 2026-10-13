@@ -23,6 +23,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -37,8 +38,17 @@ import (
 )
 
 const (
-	// DefaultVersion pins the Gitea release loom runs. go-gitea/gitea is MIT.
-	DefaultVersion   = "v28.1.0"
+	// Upstream release that the bashy fork was built from (builds/gitea at the
+	// pinned commit). The fork tag is the upstream tag plus the bashy build counter.
+	giteaVersion = "v28.1.0"
+	// Bashy-signed fork release tag (builds/gitea/tool.env at the pin):
+	// built by the bashy-build workflow on qiangli/gitea and published as
+	// raw executables with per-asset SHA256SUMS and <asset>.sigstore.json bundles.
+	giteaBashyTag = "bashy-v28.1.0-2"
+
+	// DefaultVersion is the pinned bashy tag. There is no "latest" — that was
+	// the upstream archive and it is intentionally absent (fail closed).
+	DefaultVersion   = giteaBashyTag
 	DefaultAddr      = "127.0.0.1"
 	DefaultPort      = 31880
 	DefaultProxyPort = 31881
@@ -48,12 +58,70 @@ const (
 	LoopbackName     = "admin"
 )
 
-// Spec is the binmgr GitHub spec loom resolves the Gitea binary from.
+// SHA256 per asset read from the published SHA256SUMS of the bashy release
+// (downloaded via curl -sL, not from the GitHub API asset digest).
+var giteaSHAs = map[string]string{
+	"linux/amd64":  "1b28b1b27a27fac9e04febe79338951e4f5c7bcf48be44b39774e48f8ccbae67",
+	"linux/arm64":  "4b9ac37fcb78c00c04dc400505fd90f566d5a55ff1c62b9a7865cfd74e31294d",
+	"darwin/amd64": "f816bd1cd102ca02550d238f4b8e13b9012bf384cd0fb61910cdedb37d28b947",
+	"darwin/arm64": "38b564c311760357a3ee96cebc6094da73899ef3abba9b6fb4e68fe31aa56e9c",
+}
+
+func giteaTool() binmgr.Tool {
+	assets := map[string]binmgr.Asset{}
+	for plat, sha := range giteaSHAs {
+		goos, goarch, _ := strings.Cut(plat, "/")
+		assetName := "gitea-" + goos + "-" + goarch
+		url := fmt.Sprintf("https://github.com/qiangli/gitea/releases/download/%s/%s", giteaBashyTag, assetName)
+		assets[plat] = binmgr.Asset{URL: url, SHA256: sha}
+	}
+	identity := fmt.Sprintf("https://github.com/qiangli/gitea/.github/workflows/bashy-build.yml@refs/tags/%s", giteaBashyTag)
+	return binmgr.Tool{
+		Name:    "loom",
+		Version: giteaBashyTag,
+		Assets:  assets,
+		Sigstore: &binmgr.Sigstore{
+			Identity: identity,
+			Issuer:   binmgr.GitHubActionsIssuer,
+		},
+	}
+}
+
+// LoomTool is the pinned, Sigstore-verified tool declaration. Exported
+// for tests and for callers that need to inspect the pin without launching.
+var LoomTool = giteaTool()
+
+// Spec is retained for compatibility with callers that probe the resolver's
+// asset matcher (e.g. pkg/atlas/platform_external_test). It returns a
+// GitHubSpec for the qiangli fork, not the upstream go-gitea/gitea
+// archive, and never returns "latest".
 func Spec(version string) binmgr.GitHubSpec {
 	if version == "" {
 		version = DefaultVersion
 	}
-	return binmgr.GitHubSpec{Name: "loom", Repo: "go-gitea/gitea", Version: version}
+	// Normalize the upstream tag to the bashy tag so "v28.1.0" still resolves
+	// to the signed fork without opening an upstream path.
+	if version == giteaVersion {
+		version = giteaBashyTag
+	}
+	return binmgr.GitHubSpec{Name: "loom", Repo: "qiangli/gitea", Version: version, AssetMatch: assetMatch}
+}
+
+func assetMatch(name, goos, goarch string) bool {
+	return strings.EqualFold(name, "gitea-"+goos+"-"+goarch)
+}
+
+func resolveTool(version string) (binmgr.Tool, error) {
+	if runtime.GOOS == "windows" {
+		return binmgr.Tool{}, fmt.Errorf("loom: supply-chain policy: no bashy-signed asset for windows (no upstream fallback) — only linux and darwin assets are signed")
+	}
+	tool := LoomTool
+	switch version {
+	case "", giteaBashyTag, giteaVersion:
+		return tool, nil
+	default:
+		return binmgr.Tool{}, fmt.Errorf("loom: version %q not supported: only %q (bashy-signed) is available (upstream %q alias accepted)", version, giteaBashyTag, giteaVersion)
+	}
 }
 
 // DefaultDataDir is loom's work-path (Gitea data + config + repos).
@@ -178,9 +246,12 @@ func (i *Instance) Stop() error {
 // is what outpost's wrap-harness builtin supervises and exposes over the mesh.
 func Start(ctx context.Context, o Options) (*Instance, error) {
 	o.defaults()
-	tool, err := binmgr.ResolveGitHub(ctx, Spec(o.Version))
+	if runtime.GOOS == "windows" {
+		return nil, fmt.Errorf("loom: supply-chain policy: no bashy-signed asset for windows (no upstream fallback) — only linux and darwin assets are signed")
+	}
+	tool, err := resolveTool(o.Version)
 	if err != nil {
-		return nil, fmt.Errorf("loom: resolve gitea: %w", err)
+		return nil, err
 	}
 	bin, err := binmgr.Ensure(ctx, tool)
 	if err != nil {
@@ -296,9 +367,12 @@ func StartDaemon(ctx context.Context, o Options) (State, error) {
 	if err != nil {
 		return State{}, err
 	}
-	tool, err := binmgr.ResolveGitHub(ctx, Spec(o.Version))
+	if runtime.GOOS == "windows" {
+		return State{}, fmt.Errorf("loom: supply-chain policy: no bashy-signed asset for windows (no upstream fallback) — only linux and darwin assets are signed")
+	}
+	tool, err := resolveTool(o.Version)
 	if err != nil {
-		return State{}, fmt.Errorf("loom: resolve gitea: %w", err)
+		return State{}, err
 	}
 	bin, err := binmgr.Ensure(ctx, tool)
 	if err != nil {
@@ -1777,7 +1851,7 @@ compiled in). Expose it over the mesh with: outpost mesh service add git <addr>.
 			return Serve(cmd.Context(), o)
 		},
 	}
-	serve.Flags().StringVar(&o.Version, "gitea-version", "", "Gitea release tag (default: latest)")
+	serve.Flags().StringVar(&o.Version, "gitea-version", "", "Gitea release tag (default: "+DefaultVersion+")")
 	serve.Flags().StringVar(&o.DataDir, "data", "", "work dir (default ~/.agents/bashy/loom)")
 	serve.Flags().StringVar(&o.Addr, "addr", DefaultAddr, "HTTP bind address")
 	serve.Flags().IntVar(&o.Port, "port", DefaultPort, "HTTP port")
@@ -1810,7 +1884,7 @@ compiled in). Expose it over the mesh with: outpost mesh service add git <addr>.
 			return nil
 		},
 	}
-	start.Flags().StringVar(&o.Version, "gitea-version", "", "Gitea release tag (default: latest)")
+	start.Flags().StringVar(&o.Version, "gitea-version", "", "Gitea release tag (default: "+DefaultVersion+")")
 	start.Flags().StringVar(&o.DataDir, "data", "", "work dir (default ~/.agents/bashy/loom)")
 	start.Flags().StringVar(&o.Addr, "addr", DefaultAddr, "HTTP bind address")
 	start.Flags().IntVar(&o.Port, "port", DefaultPort, "HTTP port")
@@ -1944,7 +2018,7 @@ compiled in). Expose it over the mesh with: outpost mesh service add git <addr>.
 		Use:   "path",
 		Short: "Print the cached gitea binary path (fetching it if needed)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			tool, err := binmgr.ResolveGitHub(cmd.Context(), Spec(o.Version))
+			tool, err := resolveTool(o.Version)
 			if err != nil {
 				return err
 			}
@@ -1956,7 +2030,7 @@ compiled in). Expose it over the mesh with: outpost mesh service add git <addr>.
 			return nil
 		},
 	}
-	pathCmd.Flags().StringVar(&o.Version, "gitea-version", "", "Gitea release tag (default: latest)")
+	pathCmd.Flags().StringVar(&o.Version, "gitea-version", "", "Gitea release tag (default: "+DefaultVersion+")")
 
 	root.AddCommand(serve, start, status, stopCmd, logs, exposeCmd, pathCmd, proxyCmd)
 	return root

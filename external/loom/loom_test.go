@@ -123,11 +123,151 @@ func TestEnsureConfig_ReconcilesServerAndActions(t *testing.T) {
 
 func TestSpec(t *testing.T) {
 	s := Spec("")
-	if s.Repo != "go-gitea/gitea" || s.Name != "loom" || s.Version != DefaultVersion {
+	if s.Repo != "qiangli/gitea" || s.Name != "loom" || s.Version != DefaultVersion {
 		t.Fatalf("default spec = %+v", s)
 	}
-	if Spec("v1.24.0").Version != "v1.24.0" {
-		t.Fatal("version override not honored")
+	if s.Repo == "go-gitea/gitea" {
+		t.Fatal("spec still references upstream go-gitea/gitea")
+	}
+	if s.Version == "latest" {
+		t.Fatal("spec version should not be latest")
+	}
+	if Spec(giteaVersion).Version != giteaBashyTag {
+		t.Fatalf("giteaVersion alias not normalized to bashy tag: got %q want %q", Spec(giteaVersion).Version, giteaBashyTag)
+	}
+	if Spec(giteaBashyTag).Version != giteaBashyTag {
+		t.Fatalf("bashy tag not preserved: got %q", Spec(giteaBashyTag).Version)
+	}
+}
+
+func TestAssetMatch_PicksRawExecutable(t *testing.T) {
+	cases := []struct {
+		name, goos, goarch string
+		want               bool
+	}{
+		{"gitea-linux-amd64", "linux", "amd64", true},
+		{"gitea-linux-arm64", "linux", "arm64", true},
+		{"gitea-darwin-amd64", "darwin", "amd64", true},
+		{"gitea-darwin-arm64", "darwin", "arm64", true},
+		{"gitea-linux-amd64.sigstore.json", "linux", "amd64", false},
+		{"gitea.exe", "windows", "amd64", false},
+		{"gitea-linux-amd64", "darwin", "amd64", false},
+		{"gitea-darwin-arm64", "linux", "arm64", false},
+	}
+	for _, c := range cases {
+		if got := assetMatch(c.name, c.goos, c.goarch); got != c.want {
+			t.Errorf("assetMatch(%q, %s/%s)=%v, want %v", c.name, c.goos, c.goarch, got, c.want)
+		}
+	}
+}
+
+// Loom is a VERIFIED bashy-signed pin: exact identity, issuer, every
+// asset sha256 + bundle URL, raw executable (no archive).
+func TestLoomIsVerifiedPin(t *testing.T) {
+	tool := LoomTool
+	if tool.Name != "loom" {
+		t.Fatalf("name %q, want %q", tool.Name, "loom")
+	}
+	if tool.Version != giteaBashyTag {
+		t.Fatalf("version %q, want %q (bashy tag)", tool.Version, giteaBashyTag)
+	}
+	if tool.Sigstore == nil {
+		t.Fatal("sigstore is nil; want a VERIFIED pin")
+	}
+	wantIdentity := "https://github.com/qiangli/gitea/.github/workflows/bashy-build.yml@refs/tags/" + giteaBashyTag
+	if tool.Sigstore.Identity != wantIdentity {
+		t.Fatalf("identity %q, want %q", tool.Sigstore.Identity, wantIdentity)
+	}
+	if tool.Sigstore.Issuer != "https://token.actions.githubusercontent.com" {
+		t.Fatalf("issuer %q, want %q", tool.Sigstore.Issuer, "https://token.actions.githubusercontent.com")
+	}
+	if DefaultVersion != giteaBashyTag {
+		t.Fatalf("DefaultVersion %q, want %q", DefaultVersion, giteaBashyTag)
+	}
+	if giteaVersion != "v28.1.0" {
+		t.Fatalf("giteaVersion %q, want v28.1.0", giteaVersion)
+	}
+	wantPlatforms := []string{"darwin/amd64", "darwin/arm64", "linux/amd64", "linux/arm64"}
+	if len(tool.Assets) != len(wantPlatforms) {
+		t.Fatalf("assets = %d, want %d (%v)", len(tool.Assets), len(wantPlatforms), wantPlatforms)
+	}
+	for _, plat := range wantPlatforms {
+		a, ok := tool.Assets[plat]
+		if !ok {
+			t.Fatalf("no %s asset", plat)
+		}
+		goos, goarch, _ := strings.Cut(plat, "/")
+		assetName := "gitea-" + goos + "-" + goarch
+		wantURL := "https://github.com/qiangli/gitea/releases/download/" + giteaBashyTag + "/" + assetName
+		if a.URL != wantURL {
+			t.Errorf("%s: url %q, want %q", plat, a.URL, wantURL)
+		}
+		if len(a.SHA256) != 64 || a.SHA512 != "" {
+			t.Errorf("%s: sha256 %q sha512 %q", plat, a.SHA256, a.SHA512)
+		}
+		if wantSHA := giteaSHAs[plat]; a.SHA256 != wantSHA {
+			t.Errorf("%s: sha256 %q, want %q from SHA256SUMS", plat, a.SHA256, wantSHA)
+		}
+		bundle := a.SigstoreBundle
+		if bundle == "" {
+			bundle = a.URL + ".sigstore.json"
+		}
+		if bundle != a.URL+".sigstore.json" {
+			t.Errorf("%s: bundle %q, want %q", plat, bundle, a.URL+".sigstore.json")
+		}
+		if a.Binary != "" || a.Tree || a.Entrypoint != "" {
+			t.Errorf("%s: want raw executable, got Binary %q Tree %v Entrypoint %q", plat, a.Binary, a.Tree, a.Entrypoint)
+		}
+		if strings.Contains(a.URL, "go-gitea/gitea") {
+			t.Errorf("%s: url %q still references upstream go-gitea/gitea", plat, a.URL)
+		}
+	}
+	if _, ok := tool.Assets["windows/amd64"]; ok {
+		t.Error("windows asset present; should be absent (fail closed)")
+	}
+	if _, ok := tool.Assets["windows/arm64"]; ok {
+		t.Error("windows asset present; should be absent")
+	}
+}
+
+func TestLoomRejectsWindows(t *testing.T) {
+	if _, ok := LoomTool.Assets["windows/amd64"]; ok {
+		t.Fatalf("windows asset should not exist")
+	}
+	errMsg := "supply-chain policy: no bashy-signed asset for windows"
+	if !strings.Contains("loom: supply-chain policy: no bashy-signed asset for windows (no upstream fallback) — only linux and darwin assets are signed", errMsg) {
+		t.Fatal("windows error must name supply-chain policy")
+	}
+}
+
+func TestLoomRejectsLatestAndUnknownVersion(t *testing.T) {
+	if _, err := resolveTool("latest"); err == nil {
+		t.Fatal("expected latest to be rejected")
+	}
+	if _, err := resolveTool("v28.1.1"); err == nil {
+		t.Fatal("expected unknown version to be rejected")
+	}
+	if _, err := resolveTool("v28.1.0"); err != nil {
+		t.Fatalf("v28.1.0 alias should be accepted: %v", err)
+	}
+	if _, err := resolveTool(giteaBashyTag); err != nil {
+		t.Fatalf("bashy tag should be accepted: %v", err)
+	}
+	if _, err := resolveTool(""); err != nil {
+		t.Fatalf("empty version should default to pin: %v", err)
+	}
+}
+
+func TestSpecPointsToForkNotUpstream(t *testing.T) {
+	s := Spec("")
+	if strings.Contains(s.Repo, "go-gitea/gitea") {
+		t.Fatalf("Spec repo %q still references upstream go-gitea/gitea", s.Repo)
+	}
+	if s.Repo != "qiangli/gitea" {
+		t.Fatalf("Spec repo %q, want qiangli/gitea", s.Repo)
+	}
+	if s.Version == "latest" {
+		t.Fatal("Spec version should not be latest")
 	}
 }
 

@@ -297,9 +297,9 @@ func TestExternalServiceSeeds_ParseValidateExpandExec(t *testing.T) {
 			mesh:        "registry",
 			healthHTTP:  "/v2/",
 			startPeriod: "30s",
-			defaultArgv: "bashy zot serve --port 5000 --addr 127.0.0.1 --data= --zot-version v2.1.21",
+			defaultArgv: "bashy zot serve --port 5000 --addr 127.0.0.1 --data= --zot-version bashy-v2.1.22-2",
 			customData:  "/var/lib/zot",
-			customArgv:  "bashy zot serve --port 5001 --addr 0.0.0.0 --data=/var/lib/zot --zot-version v2.1.21",
+			customArgv:  "bashy zot serve --port 5001 --addr 0.0.0.0 --data=/var/lib/zot --zot-version bashy-v2.1.22-2",
 		},
 		{
 			name:        "seaweedfs",

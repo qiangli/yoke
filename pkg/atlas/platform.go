@@ -143,11 +143,11 @@ var externalPlatforms = map[string]ExternalPlatform{
 	"helm":       {OS: allOS, WindowsAsset: "https://get.helm.sh/helm-{version}-windows-amd64.tar.gz"},
 	"kopia":      {OS: allOS, WindowsAsset: "kopia-0.0.0-windows-x64.zip"},
 	"kubectl":    {OS: allOS, WindowsAsset: "https://dl.k8s.io/release/{version}/bin/windows/amd64/kubectl.exe"},
-	"loom":       {OS: allOS, WindowsAsset: "gitea-1.0.0-windows-4.0-amd64.exe"},
+	"loom":       {OS: []string{OSDarwin, OSLinux}},
 	"mirror":     {OS: allOS, WindowsAsset: "pure-Go orchestration over rclone (pkg/mirror); no download"},
 	"rclone":     {OS: allOS, WindowsAsset: "rclone-v1.0.0-windows-amd64.zip"},
 	"seaweedfs":  {OS: []string{OSDarwin, OSLinux}},
-	"zot":        {OS: allOS, WindowsAsset: "zot-windows-amd64"},
+	"zot":        {OS: []string{OSDarwin, OSLinux}},
 	// toolchain provisioners (external/<lang>): each resolves a windows build;
 	// git-scm IS the windows path (git-for-windows MinGit; unix uses system git)
 	"cargo": {OS: allOS, WindowsAsset: "rustup-init.exe (external/rust)"}, "rustc": {OS: allOS, WindowsAsset: "rustup-init.exe (external/rust)"},
