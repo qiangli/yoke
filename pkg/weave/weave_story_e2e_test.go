@@ -379,7 +379,7 @@ func TestSprintShowSurfacesCoverageAndReachability(t *testing.T) {
 		t.Fatalf("read story source: %v", err)
 	}
 	body := string(src)
-	for _, want := range []string{"renderSprintCoverage(out, s)", "renderSprintReachability(out, s)"} {
+	for _, want := range []string{"renderSprintCoverage(out, s)", "renderSprintReachability(out, s)", "renderSprintInboxPressure(out, s)"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("sprint show does not call %s — the finding is computed and never surfaced", want)
 		}

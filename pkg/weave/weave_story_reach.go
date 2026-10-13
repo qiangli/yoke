@@ -67,6 +67,11 @@ import (
 // blocked on an answer that will never arrive.
 const sprintUnansweredAge = 30 * time.Minute
 
+// Managed conductor turns admit at most 1024 bytes of opening inbox text.
+// Warn before raw unread mail reaches that ceiling; rendering and compression
+// vary by source, so this is a conservative estimate, not an admission verdict.
+const sprintInboxPressureBytes = 3 * 1024 / 4
+
 // sprintColumnOpen reports whether a column means "this sprint is live work".
 //
 // backlog is not yet started and done is finished; both are unattended by
@@ -403,6 +408,40 @@ func renderSprintReachability(w interface{ Write([]byte) (int, error) }, s *weav
 	r := sprintCheckReachability(s)
 	for _, p := range r.Problems {
 		fmt.Fprintf(w, "  UNREACHABLE: %s\n", p)
+	}
+}
+
+func renderSprintInboxPressure(w interface{ Write([]byte) (int, error) }, s *weaveStory) {
+	if s == nil || !sprintColumnOpen(s.Column) || strings.TrimSpace(s.Owner) == "" {
+		return
+	}
+	owner := strings.TrimSpace(s.Owner)
+	directed, other, _, err := bus.Unseen(owner, 0)
+	if err != nil {
+		fmt.Fprintf(w, "  INBOX: cannot inspect %q's message board: %v\n", owner, err)
+		return
+	}
+	count, size := 0, 0
+	for _, post := range append(directed, other...) {
+		count++
+		size += len(post.Body) + len(post.From) + len(post.To) + len(post.Topic) + 64
+	}
+	for _, address := range []string{owner, fmt.Sprintf("conductor:%d", s.ID)} {
+		pending, err := bus.ReadPending(address)
+		if err != nil {
+			fmt.Fprintf(w, "  INBOX: cannot inspect %q's pending mail: %v\n", address, err)
+			return
+		}
+		for _, item := range pending {
+			if !item.Unread() {
+				continue
+			}
+			count++
+			size += len(item.Body) + len(item.Principal) + len(item.To) + len(item.Topic) + 64
+		}
+	}
+	if size >= sprintInboxPressureBytes {
+		fmt.Fprintf(w, "  INBOX: %d unread message(s), ~%d bytes of raw mail near the 1024-byte opening limit; read with `bashy inbox --as %s`\n", count, size, owner)
 	}
 }
 

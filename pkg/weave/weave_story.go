@@ -897,6 +897,7 @@ func runWeaveStoryShow(cmd *cobra.Command, id int64, flags *weaveOutputFlags, li
 	// can reach, are exactly the facts that must not wait for a close attempt.
 	renderSprintCoverage(out, s)
 	renderSprintReachability(out, s)
+	renderSprintInboxPressure(out, s)
 	if links {
 		renderSprintLinks(out, resolveSprintLinks(s))
 	}

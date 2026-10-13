@@ -1,6 +1,7 @@
 package weave
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,8 +9,30 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/qiangli/yoke/pkg/bus"
 	"github.com/qiangli/yoke/pkg/fleet"
 )
+
+func TestSprintShowWarnsBeforeUnreadMailExhaustsOpeningBudget(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := bus.PostMessage(bus.Post{From: "reviewer", To: "sprint-manager", Body: strings.Repeat("x", 710)}); err != nil {
+		t.Fatal(err)
+	}
+	s := &weaveStory{ID: 436, Column: "doing", Owner: "sprint-manager"}
+	var out bytes.Buffer
+	renderSprintInboxPressure(&out, s)
+	for _, want := range []string{"INBOX:", "1 unread", "1024-byte", "bashy inbox --as sprint-manager"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q from sprint warning: %q", want, out.String())
+		}
+	}
+	// The card is read-only: the same unread message still triggers the warning.
+	out.Reset()
+	renderSprintInboxPressure(&out, s)
+	if !strings.Contains(out.String(), "1 unread") {
+		t.Fatalf("show consumed conductor mail: %q", out.String())
+	}
+}
 
 func ambiguousSprintFleet(t *testing.T) *fleet.Catalog {
 	t.Helper()

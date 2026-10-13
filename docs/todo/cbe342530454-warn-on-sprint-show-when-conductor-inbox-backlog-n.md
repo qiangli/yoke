@@ -3,9 +3,10 @@ id: cbe342530454
 kind: bug
 title: Warn on sprint show when conductor inbox backlog nears admission limit
 seq: 2023
-status: todo
+status: assigned
 priority: p2
 created: 2026-10-13T17:57:43.836616Z
+assignee: s436-codex-manager
 sprint: 436
 sprint_id: 20ad6f7b-d3d3-5ebf-973c-0bbb999db96f
 sprint_title: 'Sphere regression recovery: p2p sharding + local inference back on, bashy-built engines'
