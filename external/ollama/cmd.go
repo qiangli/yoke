@@ -63,17 +63,13 @@ All HTTP calls go to whatever OLLAMA_HOST resolves to.`,
 }
 
 // useEmbeddedServe reports whether `ollama serve` should run bashy's
-// in-process embedded ollama server. That path needs an embedded-serve
-// callback, no explicit --use-system-binaries request, AND the inference
-// runner actually compiled into this binary (`-tags embed_runner`, see
-// runner_embed.Available). A from-source build without the runner has no
-// engine to run, so serve must fall back to a resolved system ollama rather
-// than hard-failing with ErrRunnerNotInstalled — otherwise the host model
-// door (which spawns `bashy ollama serve` as its engine) cannot serve any
-// local model on such a build.
+// in-process embedded ollama server. An embedded-serve callback identifies
+// the managed service path. That path may run only the runner compiled into
+// this binary (`-tags embed_runner`, see runner_embed.Available); it must not
+// resolve an unverified host binary when the runner is absent.
 // runnerAvailable reports whether the embedded inference runner is compiled
 // into this binary. It is a package var so tests can exercise both the
-// embedded-serve and the system-fallback path on one build.
+// embedded-serve and managed fail-closed paths on one build.
 var runnerAvailable = runner_embed.Available
 
 func useEmbeddedServe(opts CmdOptions) bool {
@@ -89,8 +85,13 @@ func newOllamaServeCmd(opts CmdOptions) *cobra.Command {
 			if useEmbeddedServe(opts) {
 				return opts.RunEmbeddedServe(cmd.Context())
 			}
-			if !opts.UseSystemBinaries && opts.RunEmbeddedServe != nil && !runnerAvailable() {
-				fmt.Fprintln(os.Stderr, "ollama: no embedded inference runner in this build; falling back to a resolved system ollama (build with -tags embed_runner for the isolated in-process engine)")
+			if opts.RunEmbeddedServe != nil {
+				if opts.UseSystemBinaries {
+					return fmt.Errorf("ollama: managed serve requires a bashy-signed embedded runner; refusing --use-system-binaries and any unverified OLLAMA_BIN, PATH, or cached binary")
+				}
+				if !runnerAvailable() {
+					return fmt.Errorf("ollama: managed serve requires a bashy-signed embedded runner: %w; refusing any unverified OLLAMA_BIN, PATH, or cached binary", ErrRunnerNotInstalled)
+				}
 			}
 			bin, err := Resolve()
 			if err != nil {

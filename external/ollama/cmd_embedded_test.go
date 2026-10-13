@@ -5,22 +5,54 @@ package ollama
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
-// TestUseEmbeddedServe_FallsBackWithoutRunner pins the regression where
-// `ollama serve` (the argv the host model door spawns as its engine) ran the
-// in-process embedded engine even on a from-source build with no inference
-// runner compiled in, hard-failing with ErrRunnerNotInstalled and leaving the
-// door unable to serve ANY local model. serve must instead fall back to a
-// resolved system ollama when the runner is absent.
-func TestUseEmbeddedServe_FallsBackWithoutRunner(t *testing.T) {
+// TestManagedServeRefusesSystemFallbackWithoutRunner pins the service supply-
+// chain boundary: neither OLLAMA_BIN nor PATH may turn into an executable
+// fallback when the bashy-signed embedded runner is absent.
+func TestManagedServeRefusesSystemFallbackWithoutRunner(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake executable is a Unix shell script")
+	}
 	defer func(prev func() bool) { runnerAvailable = prev }(runnerAvailable)
-	runnerAvailable = func() bool { return false } // build without -tags embed_runner
+	runnerAvailable = func() bool { return false }
 
-	opts := CmdOptions{RunEmbeddedServe: func(context.Context) error { return nil }}
-	if useEmbeddedServe(opts) {
-		t.Fatal("serve chose the embedded engine with no inference runner compiled in; it must fall back to a resolved system ollama so the model door can still serve local models")
+	for _, source := range []string{"OLLAMA_BIN", "PATH"} {
+		t.Run(source, func(t *testing.T) {
+			dir := t.TempDir()
+			marker := filepath.Join(dir, "invoked")
+			fake := filepath.Join(dir, "ollama")
+			if err := os.WriteFile(fake, []byte("#!/bin/sh\nprintf invoked > \""+marker+"\"\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if source == "OLLAMA_BIN" {
+				t.Setenv("OLLAMA_BIN", fake)
+				t.Setenv("PATH", "")
+			} else {
+				t.Setenv("OLLAMA_BIN", "")
+				t.Setenv("PATH", dir)
+			}
+
+			cmd := NewManagedOllamaCmd()
+			cmd.SetArgs([]string{"serve"})
+			err := cmd.Execute()
+			if err == nil {
+				t.Fatal("managed serve succeeded without a bashy-signed embedded runner")
+			}
+			for _, want := range []string{"bashy-signed embedded runner", "refusing", "OLLAMA_BIN", "PATH"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("managed serve error %q does not contain %q", err, want)
+				}
+			}
+			if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
+				t.Fatalf("unverified %s executable was invoked (marker error: %v)", source, statErr)
+			}
+		})
 	}
 }
 
@@ -37,12 +69,20 @@ func TestUseEmbeddedServe_EmbeddedWhenRunnerPresent(t *testing.T) {
 	}
 }
 
-// TestUseEmbeddedServe_SystemBinariesBypassesEmbedded keeps the explicit
-// --use-system-binaries contract: it never runs the embedded engine.
-func TestUseEmbeddedServe_SystemBinariesBypassesEmbedded(t *testing.T) {
-	opts := CmdOptions{UseSystemBinaries: true, RunEmbeddedServe: func(context.Context) error { return nil }}
-	if useEmbeddedServe(opts) {
-		t.Fatal("--use-system-binaries must bypass the embedded engine")
+// TestManagedServeRefusesUseSystemBinaries ensures the explicit system mode
+// cannot bypass the managed-service supply-chain boundary.
+func TestManagedServeRefusesUseSystemBinaries(t *testing.T) {
+	defer func(prev func() bool) { runnerAvailable = prev }(runnerAvailable)
+	runnerAvailable = func() bool { return true }
+
+	cmd := NewOllamaCmd(CmdOptions{
+		UseSystemBinaries: true,
+		RunEmbeddedServe:  func(context.Context) error { t.Fatal("embedded serve called"); return nil },
+	})
+	cmd.SetArgs([]string{"serve"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "refusing --use-system-binaries") {
+		t.Fatalf("managed --use-system-binaries error = %v, want clear refusal", err)
 	}
 }
 
