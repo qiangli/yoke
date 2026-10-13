@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -215,6 +216,90 @@ func TestEnsureSigstore(t *testing.T) {
 	})
 }
 
+func TestSignedCacheReverifiesOffline(t *testing.T) {
+	good := []byte("#!/bin/sh\necho signed\n")
+	bundle := signedBundle(t, good, good, testIdentity, testIssuer)
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Path == "/svc"+DefaultBundleSuffix {
+			_, _ = w.Write(bundle)
+		} else if r.URL.Path == "/svc" {
+			_, _ = w.Write(good)
+		} else {
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	t.Setenv("BASHY_BIN_CACHE", t.TempDir())
+	withPin(t, "signedsvc@v1.0.0/"+Platform(), sha256hex(good))
+	calls := fakeCosign(t, nil)
+	tool := Tool{Name: "signedsvc", Version: "v1.0.0",
+		Assets:   map[string]Asset{Platform(): {URL: srv.URL + "/svc", SHA256: sha256hex(good)}},
+		Sigstore: &Sigstore{Identity: testIdentity, Issuer: testIssuer}}
+	dest, err := InstallPath(tool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// This was sufficient to bypass verification: the receipt is plain JSON
+	// controlled by whoever can write the cached binary.
+	if err := os.WriteFile(dest, good, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	receipt := map[string]string{"Pin": sha256hex(good), "Identity": testIdentity,
+		"Issuer": testIssuer, "URL": srv.URL + "/svc", "Bundle": srv.URL + "/svc" + DefaultBundleSuffix,
+		"BinarySHA256": sha256hex(good)}
+	raw, _ := json.Marshal(receipt)
+	if err := os.WriteFile(dest+".sigstore-verified.json", raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Ensure(context.Background(), tool); !errors.Is(err, ErrSigstore) {
+		t.Fatalf("forged receipt admitted: %v", err)
+	}
+	if _, ok := Cached(tool); ok || requests != 0 || len(*calls) != 0 {
+		t.Fatalf("forged receipt: cached=%v requests=%d cosign=%d", ok, requests, len(*calls))
+	}
+	if err := os.Remove(dest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Ensure(context.Background(), tool); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 || len(*calls) != 1 {
+		t.Fatalf("install requests=%d cosign=%d", requests, len(*calls))
+	}
+	t.Setenv("BASHY_OFFLINE", "1")
+	if _, err := Ensure(context.Background(), tool); err != nil {
+		t.Fatalf("offline verified cache: %v", err)
+	}
+	if _, ok := Cached(tool); !ok || requests != 2 || len(*calls) != 3 {
+		t.Fatalf("offline cache: cached=%v requests=%d cosign=%d", ok, requests, len(*calls))
+	}
+	if err := os.WriteFile(signedCacheBundlePath(dest), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Ensure(context.Background(), tool); !errors.Is(err, ErrSigstore) {
+		t.Fatalf("tampered bundle admitted: %v", err)
+	}
+	if err := os.Remove(signedCacheBundlePath(dest)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Ensure(context.Background(), tool); !errors.Is(err, ErrSigstore) {
+		t.Fatalf("missing bundle admitted: %v", err)
+	}
+	if err := os.WriteFile(signedCacheBundlePath(dest), bundle, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The Go-side check succeeds, then chain/transparency verification rejects.
+	runCosign = func(context.Context, string, []string) error { return errors.New("transparency proof rejected") }
+	if _, err := Ensure(context.Background(), tool); !errors.Is(err, ErrSigstore) {
+		t.Fatalf("cosign rejection admitted: %v", err)
+	}
+}
+
 // Without Sigstore the sha256-only path is unchanged: no bundle fetched, no
 // cosign run.
 func TestEnsureUnsignedToolUnchanged(t *testing.T) {
@@ -249,6 +334,26 @@ func TestCosignRequiresCommittedPin(t *testing.T) {
 	}
 	if _, err := resolveCosign(context.Background()); !errors.Is(err, ErrSigstore) {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestCachedCosignMustMatchPin(t *testing.T) {
+	if _, ok := pinnedSHA256("cosign", CosignVersion, Platform()); !ok {
+		t.Skip("cosign not pinned on this platform")
+	}
+	t.Setenv("BASHY_BIN_CACHE", t.TempDir())
+	dest, err := InstallPath(CosignTool())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dest, []byte("forged cosign"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveCosign(context.Background()); !errors.Is(err, ErrSigstore) {
+		t.Fatalf("forged cached cosign admitted: %v", err)
 	}
 }
 

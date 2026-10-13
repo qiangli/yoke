@@ -123,10 +123,23 @@ func init() { cosignBinary = resolveCosign }
 
 func resolveCosign(ctx context.Context) (string, error) {
 	t := CosignTool()
-	if _, ok := pinnedSHA256(t.Name, t.Version, Platform()); !ok {
+	pin, ok := pinnedSHA256(t.Name, t.Version, Platform())
+	if !ok {
 		return "", fmt.Errorf("%w: no committed sha256 pin for cosign %s on %s (pkg/binmgr/pins.go); signed installs are refused until one lands", ErrSigstore, t.Version, Platform())
 	}
-	return Ensure(ctx, t)
+	path, err := Ensure(ctx, t)
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	if hex.EncodeToString(sum[:]) != pin {
+		return "", fmt.Errorf("%w: cached cosign does not match its committed sha256", ErrSigstore)
+	}
+	return path, nil
 }
 
 // runCosign execs cosign; a seam for tests.
@@ -163,15 +176,13 @@ func bundleURL(a Asset) string {
 	return a.URL + DefaultBundleSuffix
 }
 
-// A signed cache entry needs a receipt from a completed bundle and cosign
-// verification. Its binary digest also detects a changed executable on reuse.
-type signedCacheReceipt struct {
-	Pin, Identity, Issuer, URL, Bundle, BinarySHA256 string
-}
+// A bundle is evidence, not a receipt asserting that verification happened.
+// Every cache hit checks the evidence again, including cosign's offline chain
+// and transparency checks.
+func signedCacheBundlePath(dest string) string   { return dest + ".sigstore-bundle.json" }
+func signedCacheArtifactPath(dest string) string { return dest + ".sigstore-artifact" }
 
-func signedCacheReceiptPath(dest string) string { return dest + ".sigstore-verified.json" }
-
-func signedCacheValid(t Tool, asset Asset, dest string) bool {
+func signedCacheValid(ctx context.Context, t Tool, asset Asset, dest string) bool {
 	if t.Sigstore == nil {
 		return false
 	}
@@ -185,46 +196,68 @@ func signedCacheValid(t Tool, asset Asset, dest string) bool {
 	if pin == "" {
 		return false
 	}
-	raw, err := os.ReadFile(signedCacheReceiptPath(dest))
-	if err != nil {
+	raw, err := os.ReadFile(signedCacheBundlePath(dest))
+	if err != nil || len(raw) > maxBundleSize {
 		return false
 	}
-	var r signedCacheReceipt
-	if json.Unmarshal(raw, &r) != nil || r.Pin != pin || r.Identity != t.Sigstore.Identity ||
-		r.Issuer != t.Sigstore.Issuer || r.URL != asset.URL || r.Bundle != bundleURL(asset) {
-		return false
+	artifact := dest
+	if asset.Tree || asset.Binary != "" || isSingleZst(asset.URL) {
+		artifact = signedCacheArtifactPath(dest)
 	}
-	data, err := os.ReadFile(dest)
+	data, err := os.ReadFile(artifact)
 	if err != nil {
 		return false
 	}
 	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:]) == r.BinarySHA256
+	if err := checkBundle(raw, data, pin, hex.EncodeToString(sum[:]), *t.Sigstore); err != nil {
+		return false
+	}
+	// Whole trees include executable siblings; until they can all be compared
+	// with a fresh extraction, do not admit a signed tree cache hit.
+	if asset.Tree {
+		return false
+	}
+	if artifact != dest {
+		tmp, err := os.CreateTemp(filepath.Dir(dest), ".cache-extract-*")
+		if err != nil {
+			return false
+		}
+		path := tmp.Name()
+		_ = tmp.Close()
+		defer os.Remove(path)
+		if asset.Binary != "" {
+			err = extract(artifact, asset.URL, asset.Binary, path)
+		} else {
+			err = decompressZst(artifact, path, maxDecompressedSize)
+		}
+		if err != nil {
+			return false
+		}
+		want, err := os.ReadFile(path)
+		if err != nil {
+			return false
+		}
+		got, err := os.ReadFile(dest)
+		if err != nil || !bytes.Equal(got, want) {
+			return false
+		}
+	}
+	return verifyBundleCosign(ctx, artifact, signedCacheBundlePath(dest), *t.Sigstore) == nil
 }
 
-func writeSignedCacheReceipt(t Tool, asset Asset, dest string) error {
-	pin, ok := pinnedSHA256(t.Name, t.Version, Platform())
-	if !ok {
-		pin = strings.ToLower(strings.TrimSpace(asset.SHA256))
+func writeSignedCacheEvidence(asset Asset, dest, downloaded string, bundle []byte) error {
+	if asset.Tree || asset.Binary != "" || isSingleZst(asset.URL) {
+		if err := copyFile(downloaded, signedCacheArtifactPath(dest)); err != nil {
+			return err
+		}
 	}
-	data, err := os.ReadFile(dest)
-	if err != nil {
-		return err
-	}
-	sum := sha256.Sum256(data)
-	r := signedCacheReceipt{pin, t.Sigstore.Identity, t.Sigstore.Issuer,
-		asset.URL, bundleURL(asset), hex.EncodeToString(sum[:])}
-	raw, err := json.Marshal(r)
-	if err != nil {
-		return err
-	}
-	path := signedCacheReceiptPath(dest)
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".receipt-*")
+	path := signedCacheBundlePath(dest)
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".bundle-*")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(tmp.Name())
-	if _, err = tmp.Write(raw); err == nil {
+	if _, err = tmp.Write(bundle); err == nil {
 		err = tmp.Close()
 	} else {
 		_ = tmp.Close()
@@ -237,58 +270,71 @@ func writeSignedCacheReceipt(t Tool, asset Asset, dest string) error {
 
 // verifySigstore runs the whole keyless check for one downloaded artifact.
 // sum is the downloaded bytes' sha256; asset.SHA256 is the pin.
-func verifySigstore(ctx context.Context, t Tool, asset Asset, artifact, sum string) error {
+func verifySigstore(ctx context.Context, t Tool, asset Asset, artifact, sum string) ([]byte, error) {
 	s := *t.Sigstore
 	fail := func(format string, a ...any) error {
 		return fmt.Errorf("%w: %s %s: "+format, append([]any{ErrSigstore, t.Name, t.Version}, a...)...)
 	}
 	if strings.TrimSpace(s.Identity) == "" || strings.TrimSpace(s.Issuer) == "" {
-		return fail("identity and issuer are required")
+		return nil, fail("identity and issuer are required")
 	}
 	pin := strings.ToLower(strings.TrimSpace(asset.SHA256))
 	if pin == "" {
-		return fail("a signed asset needs a pinned sha256")
+		return nil, fail("a signed asset needs a pinned sha256")
 	}
 	dir := filepath.Dir(artifact)
 	bf, err := os.CreateTemp(dir, ".bundle-*")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	bundlePath := bf.Name()
 	defer os.Remove(bundlePath)
 	_, _, _, derr := download(ctx, bundleURL(asset), &limitWriter{w: bf, n: maxBundleSize})
 	_ = bf.Close()
 	if derr != nil {
-		return fail("fetch bundle: %v", derr)
+		return nil, fail("fetch bundle: %v", derr)
 	}
 	raw, err := os.ReadFile(bundlePath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	data, err := os.ReadFile(artifact)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := checkBundle(raw, data, pin, sum, s); err != nil {
-		return fail("%v", err)
+		return nil, fail("%v", err)
 	}
+	if err := verifyBundleCosign(ctx, artifact, bundlePath, s); err != nil {
+		return nil, fail("cosign verify-blob: %v", err)
+	}
+	return raw, nil
+}
+
+func verifyBundleCosign(ctx context.Context, artifact, bundlePath string, s Sigstore) error {
+	dir := filepath.Dir(artifact)
 	root, err := TrustedRoot()
 	if err != nil {
 		return err
 	}
-	rootPath := filepath.Join(dir, ".trusted_root.json")
-	if err := os.WriteFile(rootPath, root, 0o600); err != nil {
+	rf, err := os.CreateTemp(dir, ".trusted-root-*")
+	if err != nil {
 		return err
 	}
+	rootPath := rf.Name()
 	defer os.Remove(rootPath)
+	if _, err := rf.Write(root); err != nil {
+		_ = rf.Close()
+		return err
+	}
+	if err := rf.Close(); err != nil {
+		return err
+	}
 	bin, err := cosignBinary(ctx)
 	if err != nil {
 		return err
 	}
-	if err := runCosign(ctx, bin, CosignVerifyArgs(artifact, bundlePath, rootPath, s)); err != nil {
-		return fail("cosign verify-blob: %v", err)
-	}
-	return nil
+	return runCosign(ctx, bin, CosignVerifyArgs(artifact, bundlePath, rootPath, s))
 }
 
 type limitWriter struct {

@@ -185,7 +185,7 @@ func Cached(t Tool) (string, bool) {
 	if err != nil || !isExecutable(dest) {
 		return "", false
 	}
-	if t.Sigstore != nil && !signedCacheValid(t, t.Assets[Platform()], dest) {
+	if t.Sigstore != nil && !signedCacheValid(context.Background(), t, t.Assets[Platform()], dest) {
 		return "", false
 	}
 	return dest, true
@@ -235,7 +235,7 @@ func Ensure(ctx context.Context, t Tool) (string, error) {
 	}
 	asset := t.Assets[Platform()]
 	if isExecutable(dest) {
-		if t.Sigstore != nil && !signedCacheValid(t, asset, dest) {
+		if t.Sigstore != nil && !signedCacheValid(ctx, t, asset, dest) {
 			return "", fmt.Errorf("%w: %s %s has an unverified or stale cache entry", ErrSigstore, t.Name, t.Version)
 		}
 		return dest, nil // cache hit — no network
@@ -271,8 +271,10 @@ func Ensure(ctx context.Context, t Tool) (string, error) {
 	// A signed tool is verified keylessly over the downloaded bytes FIRST —
 	// exact identity, exact issuer, signature, bundle digest == pin — and a
 	// failure refuses before any decompress/install (sigstore.go).
+	var bundle []byte
 	if t.Sigstore != nil {
-		if err := verifySigstore(ctx, t, asset, tmpName, sum); err != nil {
+		bundle, err = verifySigstore(ctx, t, asset, tmpName, sum)
+		if err != nil {
 			return "", err
 		}
 	}
@@ -320,7 +322,7 @@ func Ensure(ctx context.Context, t Tool) (string, error) {
 			return "", fmt.Errorf("binmgr: %s %s: entrypoint missing after extract: %s", t.Name, t.Version, dest)
 		}
 		if t.Sigstore != nil {
-			if err := writeSignedCacheReceipt(t, asset, dest); err != nil {
+			if err := writeSignedCacheEvidence(asset, dest, tmpName, bundle); err != nil {
 				return "", err
 			}
 		}
@@ -347,7 +349,7 @@ func Ensure(ctx context.Context, t Tool) (string, error) {
 		return "", err
 	}
 	if t.Sigstore != nil {
-		if err := writeSignedCacheReceipt(t, asset, dest); err != nil {
+		if err := writeSignedCacheEvidence(asset, dest, tmpName, bundle); err != nil {
 			return "", err
 		}
 	}
