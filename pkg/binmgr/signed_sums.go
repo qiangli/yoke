@@ -44,8 +44,31 @@ func signedSumsNames(t Tool) (map[string]bool, error) {
 	return want, nil
 }
 
-// parseSignedSums accepts exactly one conventional sha256sum row per declared
-// asset. No paths, alternate spellings, comments, empty rows, or extra assets.
+// The Bashy Prima release signs all files in dist, including build and audit
+// evidence. Keep this list aligned with builds/prima.cpp's PIN, build.sh and
+// audit.sh: unknown names must never gain trust merely by sharing a signature.
+func primaSupplementarySumsNames() map[string]bool {
+	names := map[string]bool{}
+	for _, name := range []string{
+		"prima-pin.txt", "prima-otel.env", "prima-dependencies.json",
+		"prima-sbom.cdx.json", "prima-vulnerabilities.json",
+		"prima-licenses.json", "prima-osv.json", "prima-inputs.json",
+		"prima-NOTICES.txt",
+	} {
+		names[name] = true
+	}
+	for _, platform := range PrimaPlatforms {
+		name := "prima-" + strings.ReplaceAll(platform, "/", "-")
+		for _, suffix := range []string{"-linkage.txt", "-cmake.txt", "-inputs.json", "-inputs.tar.gz"} {
+			names[name+suffix] = true
+		}
+	}
+	return names
+}
+
+// parseSignedSums requires every declared executable exactly once and permits
+// only known Bashy Prima release evidence. Every row is covered by the same
+// signed sums bundle; paths, alternate spellings and malformed rows are refused.
 func parseSignedSums(t Tool, raw []byte) (map[string]string, error) {
 	want, err := signedSumsNames(t)
 	if err != nil {
@@ -55,8 +78,20 @@ func parseSignedSums(t Tool, raw []byte) (map[string]string, error) {
 		return nil, fmt.Errorf("SHA256SUMS is empty, oversized, or lacks a final newline")
 	}
 	rows := strings.Split(string(raw[:len(raw)-1]), "\n")
-	if len(rows) != len(want) {
-		return nil, fmt.Errorf("SHA256SUMS has %d rows, want %d", len(rows), len(want))
+	allowed := make(map[string]bool, len(want))
+	for name := range want {
+		allowed[name] = true
+	}
+	if t.Name == PrimaName {
+		for name := range primaSupplementarySumsNames() {
+			if allowed[name] {
+				return nil, fmt.Errorf("supplementary SHA256SUMS name conflicts with executable %q", name)
+			}
+			allowed[name] = true
+		}
+	}
+	if len(rows) < len(want) || len(rows) > len(allowed) {
+		return nil, fmt.Errorf("SHA256SUMS has %d rows, want %d to %d", len(rows), len(want), len(allowed))
 	}
 	got := make(map[string]string, len(rows))
 	for _, row := range rows {
@@ -64,7 +99,7 @@ func parseSignedSums(t Tool, raw []byte) (map[string]string, error) {
 			return nil, fmt.Errorf("malformed SHA256SUMS row")
 		}
 		digest, name := row[:64], row[66:]
-		if len(name) == 0 || !want[name] || strings.ContainsAny(name, "/\\\r\n\x00") {
+		if len(name) == 0 || !allowed[name] || strings.ContainsAny(name, "/\\\r\n\x00") {
 			return nil, fmt.Errorf("unlisted or unsafe SHA256SUMS asset %q", name)
 		}
 		if _, exists := got[name]; exists {
@@ -76,12 +111,20 @@ func parseSignedSums(t Tool, raw []byte) (map[string]string, error) {
 		}
 		got[name] = digest
 	}
+	for name := range want {
+		if _, exists := got[name]; !exists {
+			return nil, fmt.Errorf("missing SHA256SUMS executable %q", name)
+		}
+	}
 	return got, nil
 }
 
 func checkSignedSums(t Tool, asset Asset, raw, bundle []byte, binarySHA string) error {
 	if t.SignedSums == nil || t.Sigstore == nil || !t.RequireCommittedPin {
 		return fmt.Errorf("signed sums require Sigstore and a committed pin")
+	}
+	if t.Name == PrimaName && (t.Version != PrimaVersion || t.Sigstore.Identity != PrimaIdentity || t.Sigstore.Issuer != GitHubActionsIssuer) {
+		return fmt.Errorf("Prima SHA256SUMS requires the exact release workflow identity and issuer")
 	}
 	pin, ok := pinnedSHA256(t.Name, t.Version, Platform())
 	if !ok {
