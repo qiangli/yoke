@@ -568,12 +568,35 @@ func CursorSeq(reader string) (seq int64, ok bool) {
 	return n, true
 }
 
+// InitializeReaderAtHead establishes a new identity's cursor at the board head
+// that exists now. It never moves an existing reader: this is a birth-time
+// operation for clones/seats, not a way to discard an established backlog.
+// Messages appended after the snapshot remain unseen and are delivered normally.
+func InitializeReaderAtHead(reader string) error {
+	if _, ok := CursorSeq(reader); ok {
+		return nil
+	}
+	posts, err := Posts()
+	if err != nil {
+		return err
+	}
+	head := archivedThrough()
+	if len(posts) > 0 && posts[len(posts)-1].Seq > head {
+		head = posts[len(posts)-1].Seq
+	}
+	return writeSeenCursor(reader, head)
+}
+
 // MarkSeen advances a reader's cursor. Never moves it backwards: re-reading an
 // older view must not un-see what was already shown.
 func MarkSeen(reader string, seq int64) error {
 	if seq <= SeenSeq(reader) {
 		return nil
 	}
+	return writeSeenCursor(reader, seq)
+}
+
+func writeSeenCursor(reader string, seq int64) error {
 	p := seenPath(reader)
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
