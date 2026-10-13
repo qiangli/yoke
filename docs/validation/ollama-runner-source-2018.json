@@ -1,0 +1,164 @@
+{
+  "commit": "590109c8352e8d5a6206e8909b518a54a2b0a7b8",
+  "commits_tag_to_base": 4,
+  "compiled_input_license_audit": "NOT_RUN",
+  "draft": false,
+  "fork_commit": "43768325f25c059e73db0947756cd4481486f15d",
+  "identical_protocol_sections": [
+    "func StartRunner(",
+    "type LoadOperation int",
+    "type ServerStatus int"
+  ],
+  "identical_trees": [
+    "cmd/runner",
+    "runner",
+    "ml"
+  ],
+  "modules": {
+    "github.com/bahlo/generic-list-go": {
+      "license_files_sha256": {
+        "LICENSE": "2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067"
+      },
+      "version": "v0.2.0"
+    },
+    "github.com/buger/jsonparser": {
+      "license_files_sha256": {
+        "LICENSE": "632b59709152e1b5bfd3e2794848bcd2f4c70e3e175646726dbf53439ea1dbe1"
+      },
+      "version": "v1.1.1"
+    },
+    "github.com/dlclark/regexp2": {
+      "license_files_sha256": {
+        "LICENSE": "9be5d04bb4d706914d5bf943710da4afeb42048f7c529902fb57c82762a991a9"
+      },
+      "version": "v1.11.4"
+    },
+    "github.com/emirpasic/gods/v2": {
+      "license_files_sha256": {
+        "LICENSE": "871b440e9b348d6b2485c72e15f1d18f4cf8ee7bb424cbcd854b6a4a772b61d8"
+      },
+      "version": "v2.0.0-alpha"
+    },
+    "github.com/google/uuid": {
+      "license_files_sha256": {
+        "LICENSE": "0a8d61ed3cbfd5312326e8126c31ce9c627a283adc99131b56896d29ada04b2d"
+      },
+      "version": "v1.6.0"
+    },
+    "github.com/inconshreveable/mousetrap": {
+      "license_files_sha256": {
+        "LICENSE": "4819582701f150b28a563a6cd8ed0bf5a754e3c67b90ad38d78ba4131bf77795"
+      },
+      "version": "v1.1.0"
+    },
+    "github.com/mailru/easyjson": {
+      "license_files_sha256": {
+        "LICENSE": "87baa92c3100cf37441761262d622db99492ee386a063460d4676143db49af57"
+      },
+      "version": "v0.7.7"
+    },
+    "github.com/mattn/go-runewidth": {
+      "license_files_sha256": {
+        "LICENSE": "88a2379b3ca34bf5c57127aff9dcb802bbb60ece0805cdbda65b3bd115f971d9"
+      },
+      "version": "v0.0.16"
+    },
+    "github.com/rivo/uniseg": {
+      "license_files_sha256": {
+        "LICENSE.txt": "a59885f5f0f3b3c07cf9444db5fe399b6f0791eac82055f7b85cc65500551039"
+      },
+      "version": "v0.4.7"
+    },
+    "github.com/spf13/cobra": {
+      "license_files_sha256": {
+        "LICENSE.txt": "5e3400b93bbb099e83e52bab885e7441750673c21f97988ca3f1240639b63283"
+      },
+      "version": "v1.7.0"
+    },
+    "github.com/spf13/pflag": {
+      "license_files_sha256": {
+        "LICENSE": "b8514c577c1c4b46cee454d5a882b15fa411e72c5bd7f801f241591789fce61a"
+      },
+      "version": "v1.0.5"
+    },
+    "github.com/wk8/go-ordered-map/v2": {
+      "license_files_sha256": {
+        "LICENSE": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1"
+      },
+      "version": "v2.1.8"
+    },
+    "golang.org/x/crypto": {
+      "license_files_sha256": {
+        "LICENSE": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+      },
+      "version": "v0.43.0"
+    },
+    "golang.org/x/image": {
+      "license_files_sha256": {
+        "LICENSE": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+      },
+      "version": "v0.22.0"
+    },
+    "golang.org/x/sync": {
+      "license_files_sha256": {
+        "LICENSE": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+      },
+      "version": "v0.17.0"
+    },
+    "golang.org/x/sys": {
+      "license_files_sha256": {
+        "LICENSE": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+      },
+      "version": "v0.37.0"
+    },
+    "golang.org/x/term": {
+      "license_files_sha256": {
+        "LICENSE": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+      },
+      "version": "v0.36.0"
+    },
+    "gopkg.in/yaml.v3": {
+      "license_files_sha256": {
+        "LICENSE": "d18f6323b71b0b768bb5e9616e36da390fbd39369a81807cca352de4e4e6aa0b",
+        "NOTICE": "f6c2dd3a67b576eafb89b80200b8b1627230bf3821a0c14cb99a22ac19107d00"
+      },
+      "version": "v3.0.1"
+    }
+  },
+  "native_build": "NOT_RUN",
+  "platforms": {
+    "darwin/amd64": {
+      "cgo_packages": 14,
+      "dependency_resolution": "PASS",
+      "packages": 344
+    },
+    "darwin/arm64": {
+      "cgo_packages": 16,
+      "dependency_resolution": "PASS",
+      "packages": 345
+    },
+    "linux/amd64": {
+      "cgo_packages": 15,
+      "dependency_resolution": "PASS",
+      "packages": 344
+    },
+    "linux/arm64": {
+      "cgo_packages": 15,
+      "dependency_resolution": "PASS",
+      "packages": 343
+    },
+    "windows/amd64": {
+      "cgo_packages": 14,
+      "dependency_resolution": "PASS",
+      "packages": 347
+    }
+  },
+  "prerelease": false,
+  "published_at": "2026-04-23T02:29:24Z",
+  "release_url": "https://github.com/ollama/ollama/releases/tag/v0.21.2",
+  "runtime_compatibility": "NOT_RUN",
+  "tag": "v0.21.2",
+  "upstream_base": "4656a07e5639a1edb1aaae5ea2c7dcb4021846f3",
+  "verdict": "PASS_SOURCE_ONLY_NOT_RELEASE_ADMISSION",
+  "vulnerability_audit": "NOT_RUN"
+}
