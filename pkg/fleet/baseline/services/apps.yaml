@@ -19,4 +19,4 @@ restart:
   start_limit: {burst: 5, interval: 5m}
 expose:
   app: {name: apps, require_login: true, elevation: true, trust_cloud_identity: true}
-enabled: false
+enabled: true
