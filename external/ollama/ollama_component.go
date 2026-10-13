@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/ollama/ollama/envconfig"
+	_ "github.com/ollama/ollama/model/models/llama" // bounded pure-Go tokenizer path
 	ollamaserver "github.com/ollama/ollama/server"
 	"golang.org/x/crypto/ssh"
 

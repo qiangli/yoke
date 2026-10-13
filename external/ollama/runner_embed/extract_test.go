@@ -6,8 +6,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/qiangli/yoke/pkg/binmgr"
@@ -15,6 +17,14 @@ import (
 
 const testVersion = "bashy-ollama-runner-test"
 const testIdentity = "https://github.com/qiangli/bashy/.github/workflows/ollama-runner.yml@refs/tags/" + testVersion
+
+func TestMain(m *testing.M) {
+	if os.Getenv("YOKE_EMBED_TEST_CHILD") == "1" && len(os.Args) > 1 && os.Args[1] == "runner" {
+		_, _ = fmt.Fprint(os.Stdout, strings.Join(os.Args[1:], " "))
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
 
 func fakeEmbed(t *testing.T, data []byte) {
 	t.Helper()
@@ -154,6 +164,31 @@ func TestEnsureRunnerWrongIdentityAndOfflineCache(t *testing.T) {
 	}
 	if runtime.GOOS == "windows" && filepath.Ext(path) != ".exe" {
 		t.Fatal("missing executable suffix")
+	}
+}
+
+func TestVerifiedRunnerIsExecutableWithServerArguments(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fakeEmbed(t, data)
+	path, err := EnsureRunner(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(path, "runner", "--ollama-engine", "--model", "tiny.gguf", "--port", "12345")
+	cmd.Env = append(os.Environ(), "YOKE_EMBED_TEST_CHILD=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("verified runner failed: %v: %s", err, out)
+	}
+	if string(out) != "runner --ollama-engine --model tiny.gguf --port 12345" {
+		t.Fatalf("runner argv = %q", out)
 	}
 }
 
