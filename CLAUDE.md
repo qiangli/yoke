@@ -197,8 +197,9 @@ registry, three consumption surfaces, imported by bashy/ycode/outpost.
   `pkg/binmgr` (the shared managed-external-binary mechanism: `Ensure(Tool)`
   downloads → sha256-verifies → caches a per-platform release binary, and
   `Start`/`Launch`/`Process.Stop` supervise it with an optional health probe.
-  Stdlib-only. `GitHubSpec` resolves GitHub releases; `URLSpec` resolves
-  non-GitHub vendors (e.g. act_runner on dl.gitea.com). Both bashy — the "OS of
+  Stdlib-only. `GitHubSpec` resolves GitHub releases (act_runner included,
+  via the qiangli/act_runner fork); `URLSpec` resolves the remaining
+  non-GitHub vendors. Both bashy — the "OS of
   binaries" host — and outpost — the lean mesh supervisor — call it in-process to
   run wrapped tools (loom/Gitea, Zot, SeaweedFS, Kopia, **act_runner** — the
   Gitea CI executor, `external/actrunner`) without compiling those heavy binaries

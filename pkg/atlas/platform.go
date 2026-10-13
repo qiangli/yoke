@@ -137,7 +137,7 @@ var externalPlatforms = map[string]ExternalPlatform{
 	"why": {OS: allOS, WindowsAsset: "witr-windows-amd64.zip"},
 	// managed externals (external/<pkg>, GitHub releases or URL templates)
 	"act":        {OS: allOS, WindowsAsset: "act_Windows_x86_64.zip"},
-	"act-runner": {OS: allOS, WindowsAsset: "https://dl.gitea.com/act_runner/{version}/act_runner-{version}-windows-amd64.exe"},
+	"act-runner": {OS: []string{OSDarwin, OSLinux}},
 	"gh":         {OS: allOS, WindowsAsset: "gh_2.0.0_windows_amd64.zip"},
 	"git":        {OS: allOS, WindowsAsset: "pure-Go bashy git (coreutils/git); no download"},
 	"helm":       {OS: allOS, WindowsAsset: "https://get.helm.sh/helm-{version}-windows-amd64.tar.gz"},

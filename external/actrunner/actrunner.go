@@ -1,12 +1,12 @@
 // Package actrunner runs Gitea's act_runner (the GitHub-Actions-compatible CI
 // runner) as a managed external binary (pkg/binmgr) — the CI executor for the
-// dhnt mesh. The binary is downloaded → sha256-verified → cached by binmgr,
-// never compiled in. act_runner is the documented CI pick (docs/mesh-wrap-
-// stack.md): it registers against loom/Gitea and dials OUT (so it's NAT-friendly
-// over the mesh), executing .gitea/workflows/*.yml.
+// dhnt mesh. The binary is downloaded → Sigstore-verified → sha256-verified →
+// cached by binmgr, never compiled in. act_runner is the documented CI pick
+// (docs/mesh-wrap-stack.md): it registers against loom/Gitea and dials OUT (so
+// it's NAT-friendly over the mesh), executing .gitea/workflows/*.yml.
 //
-// act_runner releases live on dl.gitea.com (NOT GitHub), so this resolves the
-// binary via binmgr.URLSpec rather than GitHubSpec. gitea/act_runner is MIT.
+// Upstream gitea/runner is MIT; the bashy fork qiangli/act_runner is the
+// signed supply-chain pin (builds/act_runner at the pin below).
 // See dhnt/docs/local-p2p-cicd.md.
 package actrunner
 
@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 
@@ -26,9 +27,21 @@ import (
 )
 
 const (
-	// DefaultVersion pins the act_runner release (no "v" prefix — dl.gitea.com
-	// paths use the bare number). Override via $ACT_RUNNER_VERSION / --version.
-	DefaultVersion = "0.2.13"
+	// Upstream release that the bashy fork was built from (builds/act_runner
+	// at the pinned commit). The fork tag is the upstream tag plus the bashy
+	// build counter.
+	actrunnerVersion = "v5.0.0"
+	// Bashy-signed fork release tag (builds/act_runner/tool.env at the pin):
+	// built by the bashy-build workflow on qiangli/act_runner and published as
+	// raw executables with per-asset SHA256SUMS and <asset>.sigstore.json bundles.
+	// Workflow run 38364503714 green: go1.27.2, 0 reachable findings.
+	actrunnerBashyTag = "bashy-v5.0.0-1"
+
+	// DefaultVersion is the pinned bashy tag. There is no "latest" — that was
+	// the upstream archive and it is intentionally absent (fail closed).
+	// Override via $ACT_RUNNER_VERSION / --version, within the aliases
+	// resolveTool accepts.
+	DefaultVersion = actrunnerBashyTag
 	// DefaultLabels maps the `host` runs-on label to the HOST executor, so jobs
 	// run directly on the host shell — the runner needs no container runtime of
 	// its own. This is the tier-1 (userland) / build lane: an outpost/bashy Go
@@ -57,16 +70,74 @@ func SandboxLabel(image string) string {
 	return SandboxLabelName + ":docker://" + image
 }
 
-// Spec is the binmgr URL spec act_runner resolves its binary from.
-func Spec(version string) binmgr.URLSpec {
+// SHA256 per asset read from the published SHA256SUMS of the bashy release
+// (downloaded via curl -sL, not from the GitHub API asset digest).
+var actrunnerSHAs = map[string]string{
+	"linux/amd64":  "1e2801abb2f6fd234eddd9feba78d80c299b276d12677b5bbfc3dcd96974bd93",
+	"linux/arm64":  "93f33200df0e671aa25d172a8789c5ec7c4113f70e48276fa1caf7b749503ca4",
+	"darwin/amd64": "44799c27616cdec00b1034e8af974d251707221c7233422555cbc897cedfbd65",
+	"darwin/arm64": "70373f454aa449218daf04c03ff32f0c459cb90733ac572eb86f2b1fdbfb9bfb",
+}
+
+func actrunnerTool() binmgr.Tool {
+	assets := map[string]binmgr.Asset{}
+	for plat, sha := range actrunnerSHAs {
+		goos, goarch, _ := strings.Cut(plat, "/")
+		assetName := "act_runner-" + goos + "-" + goarch
+		url := fmt.Sprintf("https://github.com/qiangli/act_runner/releases/download/%s/%s", actrunnerBashyTag, assetName)
+		assets[plat] = binmgr.Asset{URL: url, SHA256: sha}
+	}
+	identity := fmt.Sprintf("https://github.com/qiangli/act_runner/.github/workflows/bashy-build.yml@refs/tags/%s", actrunnerBashyTag)
+	return binmgr.Tool{
+		Name:    "act_runner",
+		Version: actrunnerBashyTag,
+		Assets:  assets,
+		Sigstore: &binmgr.Sigstore{
+			Identity: identity,
+			Issuer:   binmgr.GitHubActionsIssuer,
+		},
+	}
+}
+
+// ActrunnerTool is the pinned, Sigstore-verified tool declaration. Exported
+// for tests and for callers that need to inspect the pin without launching.
+var ActrunnerTool = actrunnerTool()
+
+// Spec is retained for compatibility with callers that probe the resolver's
+// asset matcher. It returns a GitHubSpec for the qiangli fork, not the
+// upstream dl.gitea.com archive, and never returns "latest".
+func Spec(version string) binmgr.GitHubSpec {
 	if version == "" {
 		version = DefaultVersion
 	}
-	return binmgr.URLSpec{
-		Name:        "act_runner",
-		Version:     version,
-		URLTemplate: "https://dl.gitea.com/act_runner/{version}/act_runner-{version}-{goos}-{goarch}{ext}",
-		// dl.gitea.com publishes a per-file .sha256 sidecar (binmgr's default).
+	// Normalize the upstream tag to the bashy tag so "v5.0.0" still resolves
+	// to the signed fork without opening an upstream path.
+	if version == actrunnerVersion {
+		version = actrunnerBashyTag
+	}
+	return binmgr.GitHubSpec{Name: "act_runner", Repo: "qiangli/act_runner", Version: version, AssetMatch: assetMatch}
+}
+
+// assetMatch picks the raw `act_runner-<goos>-<goarch>` executable published by
+// the bashy fork. The dl.gitea.com archive was
+// `act_runner-<version>-<goos>-<arch>` with a .sha256 sidecar; the fork
+// publishes only raw executables plus <asset>.sigstore.json bundles.
+func assetMatch(name, goos, goarch string) bool {
+	return strings.EqualFold(name, "act_runner-"+goos+"-"+goarch)
+}
+
+func resolveTool(version string) (binmgr.Tool, error) {
+	if runtime.GOOS == "windows" {
+		return binmgr.Tool{}, fmt.Errorf("act_runner: supply-chain policy: no bashy-signed asset for windows (no upstream fallback) — only linux and darwin assets are signed")
+	}
+	tool := ActrunnerTool
+	// Accept empty, the bashy tag, or the upstream version as aliases for the pinned tool.
+	// "latest" and any other version are refused — there is no upstream archive fallback.
+	switch version {
+	case "", actrunnerBashyTag, actrunnerVersion:
+		return tool, nil
+	default:
+		return binmgr.Tool{}, fmt.Errorf("act_runner: version %q not supported: only %q (bashy-signed) is available (upstream %q alias accepted)", version, actrunnerBashyTag, actrunnerVersion)
 	}
 }
 
@@ -256,7 +327,7 @@ func managedEnv(extra ...string) []string {
 }
 
 func resolve(ctx context.Context, version string) (string, error) {
-	tool, err := binmgr.ResolveURL(ctx, Spec(version))
+	tool, err := resolveTool(version)
 	if err != nil {
 		return "", err
 	}
