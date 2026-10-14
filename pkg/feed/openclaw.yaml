@@ -1,0 +1,48 @@
+# Declarative adapter for the OpenClaw CLI (openclaw message send).
+# This is the primary outbound adapter for feed messaging; Go adapters in
+# pkg/feed/adapters remain as fallback when the CLI is unavailable.
+#
+# The CLI is resolved via binmgr when available (pinned, integrity-verified
+# bundle), otherwise via PATH. For tests a fake binary path is injected
+# through DeclTool.bin or binResolver.
+name: openclaw
+display: OpenClaw CLI
+channel: openclaw
+
+tool:
+  name: openclaw
+  version: "2026.10.2"
+  # Assets are filled when binmgr pins the release. Tests override bin.
+  # assets:
+
+outbound:
+  # Exactly mirrors `openclaw message send` — argv templating covers
+  # address mapping (channel:kind:id) to flags, and Text to --message.
+  argv:
+    - "{{.Bin}}"
+    - "message"
+    - "send"
+    - "--target"
+    - "{{.ConversationID}}"
+    - "--message"
+    - "{{.Text}}"
+  stdin:
+    mode: "json"
+  receipt:
+    jsonpath: "$.delivered_ids[]"
+
+inbound:
+  mode: "jsonlines"
+  mapping:
+    channel: "$.channel"
+    message_id: "$.id"
+    conversation_id: "$.conversation"
+    sender_id: "$.sender"
+    sender_display: "$.sender_display"
+    text: "$.text"
+    reply_to: "$.reply_to"
+    received_at: "$.received_at"
+
+address:
+  id_flag: "--target"
+  channel_flag: "--channel"

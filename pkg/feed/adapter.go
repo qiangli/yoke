@@ -33,7 +33,23 @@ type EnvelopeSender func(ctx context.Context, ch Channel, envelopes []Envelope) 
 // need true stdin can read the message from the --message flag value which
 // carries the JSON. Secrets are never on argv — tools read them from env
 // (bashy secret env).
-var defaultSender EnvelopeSender = toolcmdSender
+//
+// For channels with a declarative adapter (openclaw.yaml), the decl is tried
+// first via binmgr (pinned, integrity-verified); Go senders remain as fallback.
+var defaultSender EnvelopeSender = declOrToolcmdSender
+
+func declOrToolcmdSender(ctx context.Context, ch Channel, envelopes []Envelope) ([]string, error) {
+	if spec := DeclForChannel(ch.Name); spec != nil {
+		adapter, err := NewDeclAdapter(spec)
+		if err == nil {
+			if ids, err := adapter.Send(ctx, envelopes); err == nil {
+				return ids, nil
+			}
+			// Decl failed: fall through to Go/toolcmd sender.
+		}
+	}
+	return toolcmdSender(ctx, ch, envelopes)
+}
 
 func toolcmdSender(ctx context.Context, ch Channel, envelopes []Envelope) ([]string, error) {
 	tool, tc, err := toolcmd.LookupCommand(ch.Cmd)
