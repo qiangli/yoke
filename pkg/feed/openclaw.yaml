@@ -5,6 +5,16 @@
 # The CLI is resolved via binmgr when available (pinned, integrity-verified
 # bundle), otherwise via PATH. For tests a fake binary path is injected
 # through DeclTool.bin or binResolver.
+#
+# CLI contract reviewed against openclaw@2026.10.2 (docs/cli/message.md in
+# the pinned npm tarball; see pkg/binmgr/openclaw.go). `message send`
+# requires --target plus --message/--media/--presentation, accepts
+# --channel (required only when several channels are configured; a
+# channel-prefixed target such as discord:channel:123 resolves the owning
+# plugin without it), and --json emits {action, channel, messageId,
+# payload} with a top-level messageId on success. Failures exit nonzero
+# with {ok:false, ...}. argv below mirrors exactly that: one invocation
+# per envelope (the CLI sends a single target), no stdin.
 name: openclaw
 display: OpenClaw CLI
 channel: openclaw
@@ -12,24 +22,67 @@ channel: openclaw
 tool:
   name: openclaw
   version: "2026.10.2"
-  # Assets are filled when binmgr pins the release. Tests override bin.
-  # assets:
+  # The entry script is NOT runnable bare: the tarball bundles only 3 of the
+  # 65 production dependencies, and Windows cannot exec .mjs at all. With
+  # runtime node the adapter provisions the full graph (external/node:
+  # integrity-verified archive + npm --omit=dev) and launches every
+  # invocation as node <script> args... cross-platform.
+  runtime: node
+  runtime_version: "24.21.0"
+  # Pinned npm release (registry tarball + integrity). The tarball is
+  # platform-independent, so every platform carries the same bytes; the
+  # committed pins.go sha256 is authoritative at install time and overrides
+  # these asset digests (see pkg/binmgr/openclaw.go for provenance).
+  assets:
+    linux/amd64:
+      url: "https://registry.npmjs.org/openclaw/-/openclaw-2026.10.2.tgz"
+      sha512: "16e2cb17e588d76ca9c10d2bfa970a0dc981fa45eeb3937840295a2849da027e86378235022b643a1c2fd06165dab54aa6fb9404341621f8251cdcba4ebbff11"
+      tree: true
+      entrypoint: "package/openclaw.mjs"
+    linux/arm64:
+      url: "https://registry.npmjs.org/openclaw/-/openclaw-2026.10.2.tgz"
+      sha512: "16e2cb17e588d76ca9c10d2bfa970a0dc981fa45eeb3937840295a2849da027e86378235022b643a1c2fd06165dab54aa6fb9404341621f8251cdcba4ebbff11"
+      tree: true
+      entrypoint: "package/openclaw.mjs"
+    darwin/amd64:
+      url: "https://registry.npmjs.org/openclaw/-/openclaw-2026.10.2.tgz"
+      sha512: "16e2cb17e588d76ca9c10d2bfa970a0dc981fa45eeb3937840295a2849da027e86378235022b643a1c2fd06165dab54aa6fb9404341621f8251cdcba4ebbff11"
+      tree: true
+      entrypoint: "package/openclaw.mjs"
+    darwin/arm64:
+      url: "https://registry.npmjs.org/openclaw/-/openclaw-2026.10.2.tgz"
+      sha512: "16e2cb17e588d76ca9c10d2bfa970a0dc981fa45eeb3937840295a2849da027e86378235022b643a1c2fd06165dab54aa6fb9404341621f8251cdcba4ebbff11"
+      tree: true
+      entrypoint: "package/openclaw.mjs"
+    windows/amd64:
+      url: "https://registry.npmjs.org/openclaw/-/openclaw-2026.10.2.tgz"
+      sha512: "16e2cb17e588d76ca9c10d2bfa970a0dc981fa45eeb3937840295a2849da027e86378235022b643a1c2fd06165dab54aa6fb9404341621f8251cdcba4ebbff11"
+      tree: true
+      entrypoint: "package/openclaw.mjs"
+    windows/arm64:
+      url: "https://registry.npmjs.org/openclaw/-/openclaw-2026.10.2.tgz"
+      sha512: "16e2cb17e588d76ca9c10d2bfa970a0dc981fa45eeb3937840295a2849da027e86378235022b643a1c2fd06165dab54aa6fb9404341621f8251cdcba4ebbff11"
+      tree: true
+      entrypoint: "package/openclaw.mjs"
 
 outbound:
-  # Exactly mirrors `openclaw message send` — argv templating covers
-  # address mapping (channel:kind:id) to flags, and Text to --message.
+  # Exactly mirrors `openclaw message send --channel C --target T
+  # --message M --json`. {{.TargetChannel}} is empty for unprefixed
+  # conversations, and the engine drops a flag whose value renders empty,
+  # so --channel is passed only for channel-prefixed targets.
   argv:
     - "{{.Bin}}"
     - "message"
     - "send"
+    - "--channel"
+    - "{{.TargetChannel}}"
     - "--target"
-    - "{{.ConversationID}}"
+    - "{{.Target}}"
     - "--message"
     - "{{.Text}}"
-  stdin:
-    mode: "json"
+    - "--json"
   receipt:
-    jsonpath: "$.delivered_ids[]"
+    jsonpath: "$.messageId"
 
 inbound:
   mode: "jsonlines"
@@ -42,7 +95,3 @@ inbound:
     text: "$.text"
     reply_to: "$.reply_to"
     received_at: "$.received_at"
-
-address:
-  id_flag: "--target"
-  channel_flag: "--channel"

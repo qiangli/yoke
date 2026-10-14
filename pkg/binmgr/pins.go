@@ -140,6 +140,25 @@ var pinnedDigests = map[string]string{
 	"goreleaser@v2.18.2-bashy.1/windows/amd64": "6e9ff7dd2d9d88810b26c25d0fafcacca2f0df341209bdf7c6c4c4ab1fbf52cd",
 	"goreleaser@v2.18.2-bashy.1/windows/arm64": "c6d83c623d3b5b4ecb4b5bbe2dd18b9a00aded82be536bc9e26d69a733be6eb1",
 
+	// openclaw@2026.10.2 — exact reviewed npm release for feed messaging.
+	// The npm tarball is platform-independent (Node runs it), so all six
+	// platforms pin the same digest. Provenance, corroborated three ways on
+	// 2026-10-14: `npm view` and the registry API independently returned the
+	// same tarball URL, shasum 27956be5...85185c9 and integrity
+	// sha512-FuLLF+...Trv/EQ==; the downloaded bytes' sha1 and sha512 both
+	// match, and the registry publishes SLSA provenance attestations for this
+	// version. The sha256 below is of those reviewed bytes. CLI contract
+	// (message send --channel/--target/--message, --json receipt with
+	// top-level messageId) read from the shipped docs/cli/message.md inside
+	// that exact tarball; no upstream service was started. See
+	// pkg/binmgr/openclaw.go.
+	"openclaw@2026.10.2/linux/amd64":   "d1c979c9ff6c5fb600a4582a7d777e0ef5264f5a570d2e822323a8c508d744fe",
+	"openclaw@2026.10.2/linux/arm64":   "d1c979c9ff6c5fb600a4582a7d777e0ef5264f5a570d2e822323a8c508d744fe",
+	"openclaw@2026.10.2/darwin/amd64":  "d1c979c9ff6c5fb600a4582a7d777e0ef5264f5a570d2e822323a8c508d744fe",
+	"openclaw@2026.10.2/darwin/arm64":  "d1c979c9ff6c5fb600a4582a7d777e0ef5264f5a570d2e822323a8c508d744fe",
+	"openclaw@2026.10.2/windows/amd64": "d1c979c9ff6c5fb600a4582a7d777e0ef5264f5a570d2e822323a8c508d744fe",
+	"openclaw@2026.10.2/windows/arm64": "d1c979c9ff6c5fb600a4582a7d777e0ef5264f5a570d2e822323a8c508d744fe",
+
 	// No ollama pins, by design: per docs/bashy-service-supply-chain-policy.md
 	// (Sprint 436, story 8d1e72e5dff6) bashy never downloads or execs a
 	// third-party ollama release archive — the bashy-signed embedded runner
