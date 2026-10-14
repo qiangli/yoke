@@ -3,12 +3,12 @@ package feed
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -18,8 +18,24 @@ import (
 	"github.com/itchyny/gojq"
 	"gopkg.in/yaml.v3"
 
+	"github.com/qiangli/yoke/external/node"
 	"github.com/qiangli/yoke/pkg/binmgr"
 )
+
+// ensureNpmTool and npmToolCommand are the external/node provisioning seams.
+// Tests override them so no network, git, node or openclaw is touched.
+var (
+	ensureNpmTool  = node.EnsureNpmTool
+	npmToolCommand = node.NpmToolCommand
+)
+
+// openclawDeclYAML is the shipped OpenClaw declaration, embedded so the
+// adapter resolves from the installed binary independent of the process
+// working directory. Explicit files still load via ParseDeclFile /
+// LoadAndRegisterDecl (e.g. `feed channel add` flows).
+//
+//go:embed openclaw.yaml
+var openclawDeclYAML []byte
 
 // declRegistry holds declarative specs keyed by channel name.
 // The shipped openclaw.yaml is pre-registered on init; tests may add more.
@@ -29,13 +45,8 @@ var (
 )
 
 func init() {
-	// Best-effort load of the shipped openclaw declaration. Not fatal if absent
-	// (e.g. in a test temp dir). Try cwd-relative and then package-adjacent.
-	for _, p := range []string{"openclaw.yaml", filepath.Join("pkg", "feed", "openclaw.yaml")} {
-		if spec, err := ParseDeclFile(p); err == nil {
-			RegisterDecl(spec)
-			break
-		}
+	if spec, err := ParseDecl(openclawDeclYAML); err == nil {
+		RegisterDecl(spec)
 	}
 }
 
@@ -103,6 +114,17 @@ type DeclTool struct {
 	// Assets, when non-empty, are binmgr assets keyed by "goos/goarch".
 	// If nil/empty, binmgr is only consulted via CachedBinary.
 	Assets map[string]binmgr.Asset `yaml:"assets,omitempty" json:"assets,omitempty"`
+	// Runtime, when "node", runs the resolved tree script through the
+	// provisioned Node.js (node <script> args...) instead of exec'ing it
+	// directly: npm-packaged CLIs (.mjs) are not executable on Windows,
+	// and a bare exec would miss both the provisioned runtime and the
+	// installed production dependencies. RuntimeVersion pins that Node
+	// (empty defaults to node.OpenClawNodeVersion); anything else is
+	// rejected by Validate. Test doubles (Bin/binResolver) bypass the
+	// runtime: they are directly executable by construction.
+	Runtime string `yaml:"runtime,omitempty" json:"runtime,omitempty"`
+	// RuntimeVersion pins the runtime named by Runtime.
+	RuntimeVersion string `yaml:"runtime_version,omitempty" json:"runtime_version,omitempty"`
 }
 
 // DeclOutbound describes how envelopes become a CLI invocation.
@@ -187,8 +209,48 @@ type envelopeTemplateData struct {
 	Address     string // raw ConversationID
 	AddressKind string
 	AddressID   string
+	// TargetChannel/Target split a channel-prefixed ConversationID
+	// ("telegram:channel:123" -> "telegram" + "channel:123") for CLIs
+	// whose target namespace is prefixed. Unprefixed conversations leave
+	// TargetChannel empty and Target as the full ConversationID.
+	TargetChannel string
+	Target        string
 	// Full envelope JSON for {{.EnvelopeJSON}}
 	EnvelopeJSON string
+}
+
+// openclawProviders is the provider set the pinned OpenClaw release's
+// `message send` accepts for --channel (docs/cli/message.md of
+// openclaw@2026.10.2). A ConversationID whose first ":"-segment is one of
+// these is a channel-prefixed target; anything else (a bare chat id, a
+// Matrix !room:server or @user:server id, ...) is passed through whole with
+// no --channel so the CLI's sole-channel default applies.
+var openclawProviders = map[string]bool{
+	"discord":    true,
+	"googlechat": true,
+	"imessage":   true,
+	"matrix":     true,
+	"mattermost": true,
+	"msteams":    true,
+	"signal":     true,
+	"slack":      true,
+	"telegram":   true,
+	"whatsapp":   true,
+}
+
+// splitProviderTarget splits a channel-prefixed target into its provider
+// channel and the remaining target. It reports false when the conversation
+// is not prefixed with a known provider, in which case the whole string is
+// the target.
+func splitProviderTarget(conv string) (provider, target string, ok bool) {
+	head, rest, found := strings.Cut(conv, ":")
+	if !found || rest == "" {
+		return "", conv, false
+	}
+	if !openclawProviders[strings.ToLower(head)] {
+		return "", conv, false
+	}
+	return strings.ToLower(head), rest, true
 }
 
 // ParseDecl parses a DeclSpec from YAML or JSON.
@@ -227,6 +289,9 @@ func (s *DeclSpec) Validate() error {
 	}
 	if s.Tool != nil && strings.TrimSpace(s.Tool.Name) == "" && strings.TrimSpace(s.Tool.Bin) == "" {
 		return errors.New("feed: decl: tool.name or tool.bin is required when tool is set")
+	}
+	if s.Tool != nil && s.Tool.Runtime != "" && s.Tool.Runtime != "node" {
+		return fmt.Errorf("feed: decl: unknown tool runtime %q (only \"node\" is supported)", s.Tool.Runtime)
 	}
 	if s.Outbound != nil {
 		if s.Outbound.Stdin != nil {
@@ -329,6 +394,13 @@ func (a *DeclAdapter) ResolveBin(ctx context.Context) (string, error) {
 		// Try binmgr Ensure when spec carries assets/version.
 		if a.spec.Tool != nil && a.spec.Tool.Version != "" && len(a.spec.Tool.Assets) > 0 {
 			t := binmgr.Tool{Name: a.spec.Tool.Name, Version: a.spec.Tool.Version, Assets: a.spec.Tool.Assets}
+			if a.useNodeRuntime() {
+				// Full npm provisioning: integrity-verified archive plus
+				// the installed production graph. Fail closed — a
+				// half-provisioned CLI must not silently become an
+				// unrelated PATH binary.
+				return ensureNpmTool(ctx, t, a.nodeRuntimeVersion())
+			}
 			if p, err := binmgr.Ensure(ctx, t); err == nil {
 				return p, nil
 			}
@@ -339,6 +411,52 @@ func (a *DeclAdapter) ResolveBin(ctx context.Context) (string, error) {
 		return toolName, nil // let exec fail with clear error
 	}
 	return "", errors.New("feed: decl: no binary resolver")
+}
+
+// useNodeRuntime reports whether invocations run through the provisioned
+// Node launcher. Test doubles (Tool.Bin or binResolver) bypass it: they are
+// directly executable by construction, so provisioning must not trigger.
+func (a *DeclAdapter) useNodeRuntime() bool {
+	return a.spec.Tool != nil && a.spec.Tool.Runtime == "node" &&
+		a.spec.Tool.Bin == "" && a.binResolver == nil
+}
+
+// nodeRuntimeVersion pins the Node.js for a node-runtime tool, defaulting to
+// the CLI's engines floor.
+func (a *DeclAdapter) nodeRuntimeVersion() string {
+	if a.spec.Tool != nil && strings.TrimSpace(a.spec.Tool.RuntimeVersion) != "" {
+		return strings.TrimSpace(a.spec.Tool.RuntimeVersion)
+	}
+	return node.OpenClawNodeVersion
+}
+
+// runTool runs the rendered argv: through the provisioned Node launcher for
+// node-runtime tools, directly otherwise. Same stdout/stderr/code contract
+// as runCmd.
+func (a *DeclAdapter) runTool(ctx context.Context, binPath string, args []string, stdinData []byte) (string, string, int, error) {
+	if !a.useNodeRuntime() {
+		return runCmd(ctx, binPath, args, stdinData)
+	}
+	cmd, err := npmToolCommand(ctx, a.nodeRuntimeVersion(), binPath, args...)
+	if err != nil {
+		return "", "", -1, err
+	}
+	if stdinData != nil {
+		cmd.Stdin = bytes.NewReader(stdinData)
+	}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	code := 0
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			code = ee.ExitCode()
+		} else {
+			return stdout.String(), stderr.String(), -1, err
+		}
+	}
+	return stdout.String(), stderr.String(), code, nil
 }
 
 // OutboundArgvBin returns the first argv element (the binary token) or "".
@@ -404,7 +522,7 @@ func (a *DeclAdapter) sendBatchJSON(ctx context.Context, binPath string, envelop
 	if len(argv) == 0 {
 		argv = []string{binPath}
 	}
-	stdout, stderr, code, runErr := runCmd(ctx, argv[0], argv[1:], body)
+	stdout, stderr, code, runErr := a.runTool(ctx, argv[0], argv[1:], body)
 	if runErr != nil && code != 0 && !a.expectNonZeroExit() {
 		return nil, fmt.Errorf("feed: decl %q: %w: %s", a.spec.Name, runErr, strings.TrimSpace(stderr))
 	}
@@ -457,7 +575,7 @@ func (a *DeclAdapter) sendOne(ctx context.Context, binPath string, env Envelope)
 	if len(argv) == 0 {
 		argv = []string{binPath}
 	}
-	stdout, stderr, code, runErr := runCmd(ctx, argv[0], argv[1:], stdinData)
+	stdout, stderr, code, runErr := a.runTool(ctx, argv[0], argv[1:], stdinData)
 	if runErr != nil && code != 0 && !a.expectNonZeroExit() {
 		return "", fmt.Errorf("feed: decl %q: %w: %s", a.spec.Name, runErr, strings.TrimSpace(stderr))
 	}
@@ -539,22 +657,40 @@ func (a *DeclAdapter) parseReceipt(output string, envelopes []Envelope) ([]strin
 }
 
 // renderArgv renders each template token in the outbound argv.
+//
+// A token that renders empty is dropped, along with a "--flag" token
+// immediately before it: that is how a declaration conditionally omits an
+// option (e.g. "--channel" when the conversation carries no provider
+// prefix). The upstream CLIs reject explicitly-empty option values, so
+// passing them through would fail closed at the wrong layer.
 func (a *DeclAdapter) renderArgv(env Envelope, binPath string, isBatch bool) ([]string, error) {
 	if a.spec.Outbound == nil || len(a.spec.Outbound.Argv) == 0 {
 		return nil, nil
 	}
 	data := templateData(env, binPath)
-	var out []string
+	rendered := make([]string, 0, len(a.spec.Outbound.Argv))
 	for _, tok := range a.spec.Outbound.Argv {
 		// Resolve {{.Bin}} even when binPath differs.
 		tok = strings.ReplaceAll(tok, "{{.Bin}}", binPath)
-		rendered, err := renderTemplate(tok, data)
+		s, err := renderTemplate(tok, data)
 		if err != nil {
 			return nil, err
 		}
 		// Expand only if template produced space-delimited words implicitly?
 		// No: keep one token per argv entry (template stays single arg).
-		out = append(out, rendered)
+		rendered = append(rendered, s)
+	}
+	var out []string
+	for i, tok := range rendered {
+		if tok == "" {
+			continue
+		}
+		if strings.HasPrefix(tok, "-") && i+1 < len(rendered) && rendered[i+1] == "" {
+			// A flag whose value rendered empty: drop the pair. The
+			// value token itself is dropped by the empty rule above.
+			continue
+		}
+		out = append(out, tok)
 	}
 	// First token is the binary; if it was templated to the resolved bin, keep it.
 	if len(out) > 0 && out[0] == "" {
@@ -566,6 +702,7 @@ func (a *DeclAdapter) renderArgv(env Envelope, binPath string, isBatch bool) ([]
 
 func templateData(env Envelope, binPath string) envelopeTemplateData {
 	kind, id := splitConversationID(env.ConversationID)
+	provider, target, _ := splitProviderTarget(env.ConversationID)
 	js, _ := json.Marshal(env)
 	return envelopeTemplateData{
 		Bin:            binPath,
@@ -581,6 +718,8 @@ func templateData(env Envelope, binPath string) envelopeTemplateData {
 		Address:        env.ConversationID,
 		AddressKind:    kind,
 		AddressID:      id,
+		TargetChannel:  provider,
+		Target:         target,
 		EnvelopeJSON:   string(js),
 	}
 }
