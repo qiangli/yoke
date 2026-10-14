@@ -2,8 +2,9 @@ package feed
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -69,58 +70,78 @@ func TestOpenClawDeclaration(t *testing.T) {
 	}
 }
 
-// realCLIFake returns a fake openclaw that asserts the real contract:
-// argv carries --channel/--target/--message/--json and stdout is the real
-// --json success shape {action,channel,messageId,payload}. It records the
-// argv it was called with.
-func realCLIFake(t *testing.T, dir string) string {
+// openClawCLIFake uses the test executable as a portable CLI fixture. The
+// declaration still renders the real OpenClaw arguments after the helper flags.
+func openClawCLIFake(t *testing.T, spec *DeclSpec, mode string) string {
 	t.Helper()
-	path := filepath.Join(dir, "openclaw")
-	script := `#!/bin/sh
-# Assert the real CLI contract, then emit the real --json receipt shape.
-HAS_SEND=0; HAS_JSON=0
-for a in "$@"; do
-  if [ "$a" = "send" ]; then HAS_SEND=1; fi
-  if [ "$a" = "--json" ]; then HAS_JSON=1; fi
-done
-if [ "$HAS_SEND" != "1" ] || [ "$HAS_JSON" != "1" ]; then
-  echo '{"ok":false,"error":{"type":"cli_error","message":"bad argv"}}' >&2
-  exit 2
-fi
-TARGET=""; MSG=""; CHAN=""
-NEXT=""
-for a in "$@"; do
-  case "$NEXT" in
-    target) TARGET="$a"; NEXT=""; continue;;
-    message) MSG="$a"; NEXT=""; continue;;
-    channel) CHAN="$a"; NEXT=""; continue;;
-  esac
-  case "$a" in
-    --target) NEXT="target";;
-    --message) NEXT="message";;
-    --channel) NEXT="channel";;
-  esac
-done
-if [ -z "$TARGET" ] || [ -z "$MSG" ]; then
-  echo '{"ok":false,"error":{"type":"cli_error","message":"missing target/message"}}' >&2
-  exit 2
-fi
-echo "{\"action\":\"send\",\"channel\":\"$CHAN\",\"messageId\":\"mid-for-$TARGET\",\"payload\":{\"messageId\":\"mid-for-$TARGET\"}}"
-`
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+	t.Setenv("BASHY_TEST_OPENCLAW_MODE", mode)
+	path, err := os.Executable()
+	if err != nil {
 		t.Fatal(err)
 	}
+	spec.Outbound.Argv = append([]string{spec.Outbound.Argv[0], "-test.run=^TestOpenClawCLIHelper$", "--"}, spec.Outbound.Argv[1:]...)
 	return path
 }
 
-func TestOpenClawContractArgs(t *testing.T) {
-	tmpdir := t.TempDir()
-	fakeBin := realCLIFake(t, tmpdir)
+func TestOpenClawCLIHelper(t *testing.T) {
+	mode := os.Getenv("BASHY_TEST_OPENCLAW_MODE")
+	if mode == "" {
+		return
+	}
+	args := os.Args
+	for len(args) > 0 && args[0] != "--" {
+		args = args[1:]
+	}
+	if len(args) == 0 {
+		return // Parent test process, not a CLI invocation.
+	}
+	args = args[1:]
+	switch mode {
+	case "garbage":
+		fmt.Println("not json at all")
+	case "via-node":
+		fmt.Println(`{"messageId":"via-node"}`)
+	case "resolved":
+		fmt.Println(`{"messageId":"resolved"}`)
+	case "contract":
+		hasSend, hasJSON := false, false
+		values := map[string]string{}
+		for i := 0; i < len(args); i++ {
+			switch args[i] {
+			case "send":
+				hasSend = true
+			case "--json":
+				hasJSON = true
+			case "--target", "--message", "--channel":
+				if i+1 < len(args) {
+					values[args[i]] = args[i+1]
+					i++
+				}
+			}
+		}
+		if !hasSend || !hasJSON || values["--target"] == "" || values["--message"] == "" {
+			fmt.Fprintln(os.Stderr, "bad argv: missing send/json/target/message")
+			os.Exit(2)
+		}
+		id := "mid-for-" + values["--target"]
+		if err := json.NewEncoder(os.Stdout).Encode(map[string]any{
+			"action": "send", "channel": values["--channel"], "messageId": id,
+			"payload": map[string]string{"messageId": id},
+		}); err != nil {
+			os.Exit(2)
+		}
+	default:
+		os.Exit(2)
+	}
+	os.Exit(0)
+}
 
+func TestOpenClawContractArgs(t *testing.T) {
 	spec, err := ParseDeclFile("openclaw.yaml")
 	if err != nil {
 		t.Fatalf("parse openclaw.yaml: %v", err)
 	}
+	fakeBin := openClawCLIFake(t, spec, "contract")
 	spec.Tool = &DeclTool{Bin: fakeBin} // fake injection, not the pinned bundle
 	adapter, err := NewDeclAdapter(spec)
 	if err != nil {
@@ -197,15 +218,11 @@ func TestOpenClawContractArgs(t *testing.T) {
 
 func TestOpenClawWrongBytesRejected(t *testing.T) {
 	// Garbage stdout is not JSON: receipt parsing must fail, not invent ids.
-	tmpdir := t.TempDir()
-	garbage := filepath.Join(tmpdir, "openclaw-garbage")
-	if err := os.WriteFile(garbage, []byte("#!/bin/sh\necho 'not json at all'\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	spec, err := ParseDeclFile("openclaw.yaml")
 	if err != nil {
 		t.Fatalf("parse openclaw.yaml: %v", err)
 	}
+	garbage := openClawCLIFake(t, spec, "garbage")
 	spec.Tool = &DeclTool{Bin: garbage}
 	adapter, err := NewDeclAdapter(spec)
 	if err != nil {
@@ -221,9 +238,6 @@ func TestOpenClawWrongBytesRejected(t *testing.T) {
 
 func TestDeclWithOpenClawBinViaResolver(t *testing.T) {
 	// When Tool.Bin is empty, binResolver should be used (binmgr fallback test).
-	tmpdir := t.TempDir()
-	fakeBin := filepath.Join(tmpdir, "fake-openclaw-resolve")
-	os.WriteFile(fakeBin, []byte("#!/bin/sh\necho '{\"messageId\":\"resolved\"}'\n"), 0o755)
 	spec := &DeclSpec{
 		Name: "openclaw-resolve",
 		Tool: &DeclTool{Name: "openclaw"},
@@ -232,6 +246,7 @@ func TestDeclWithOpenClawBinViaResolver(t *testing.T) {
 			Receipt: &DeclReceipt{JSONPath: "$.messageId"},
 		},
 	}
+	fakeBin := openClawCLIFake(t, spec, "resolved")
 	adapter, _ := NewDeclAdapter(spec)
 	called := false
 	adapter.SetBinResolver(func(name string) string {

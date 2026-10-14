@@ -2,7 +2,6 @@ package feed
 
 import (
 	"context"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -14,8 +13,8 @@ import (
 
 // withStubNodeLauncher fakes the external/node seams for one test: Ensure
 // returns scriptPath, and the launcher records the full argv it was asked to
-// run, then execs a fake "node" that runs its $1 (proving launch order:
-// node <script> args...).
+// run, then executes the portable stand-in at the script path (proving
+// launch order: node <script> args...).
 func withStubNodeLauncher(t *testing.T, scriptPath string, provisioned *bool, launched *[]string) {
 	t.Helper()
 	oldEnsure, oldCmd := ensureNpmTool, npmToolCommand
@@ -64,21 +63,16 @@ func TestOpenClawDeclRuntime(t *testing.T) {
 }
 
 func TestNodeRuntimeSendLaunchesNodeScript(t *testing.T) {
-	dir := t.TempDir()
-	// The "script" is a directly-executable shell stand-in for openclaw.mjs;
-	// argv[0] is the resolved script path by the time the launcher runs.
-	script := filepath.Join(dir, "openclaw.mjs")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\necho '{\"messageId\":\"via-node\"}'\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	var provisioned bool
-	var launched []string
-	withStubNodeLauncher(t, script, &provisioned, &launched)
-
 	spec, err := ParseDeclFile("openclaw.yaml")
 	if err != nil {
 		t.Fatalf("parse openclaw.yaml: %v", err)
 	}
+	// The portable helper stands in for openclaw.mjs; the launcher must
+	// execute the resolved path with the rendered arguments.
+	script := openClawCLIFake(t, spec, "via-node")
+	var provisioned bool
+	var launched []string
+	withStubNodeLauncher(t, script, &provisioned, &launched)
 	adapter, err := NewDeclAdapter(spec)
 	if err != nil {
 		t.Fatal(err)
@@ -113,7 +107,6 @@ func TestNodeRuntimeBypassedByTestDoubles(t *testing.T) {
 	// not trigger provisioning — otherwise every existing fake-based test
 	// would need the network.
 	dir := t.TempDir()
-	fakeBin := realCLIFake(t, dir)
 
 	var provisioned bool
 	var launched []string
@@ -123,6 +116,7 @@ func TestNodeRuntimeBypassedByTestDoubles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse openclaw.yaml: %v", err)
 	}
+	fakeBin := openClawCLIFake(t, spec, "contract")
 	spec.Tool.Bin = fakeBin
 	adapter, err := NewDeclAdapter(spec)
 	if err != nil {

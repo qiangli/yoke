@@ -7,6 +7,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -51,7 +52,7 @@ func TestOpenClawPinResolution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenClawPath: %v", err)
 	}
-	if !strings.Contains(dest, OpenClawVersion) || !strings.HasSuffix(dest, OpenClawEntrypoint) {
+	if !strings.Contains(dest, OpenClawVersion) || !strings.HasSuffix(dest, filepath.FromSlash(OpenClawEntrypoint)) {
 		t.Fatalf("install path %q", dest)
 	}
 }
