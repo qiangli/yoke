@@ -8,7 +8,6 @@ priority: p2
 labels:
     - supply-chain
 created: 2026-10-12T21:33:52.870293Z
-weave: 219
 assignee: muse-spark1.2
 sprint: 434
 sprint_id: f0fadef8-daec-5fc2-9c78-40979f01a0a7

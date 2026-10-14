@@ -3,11 +3,14 @@ id: 5bde08ecfcce
 kind: chore
 title: Clean redundant local branches in bashy and yoke
 seq: 2022
-status: todo
+status: done
 created: 2026-10-13T17:42:41.471861Z
+assignee: s442-manager
 sprint: 442
 sprint_id: 47120153-446b-558a-8499-edbe32cb6b0a
 sprint_title: Clean redundant bashy and yoke local branches
+closed: 2026-10-14T07:48:00.077442Z
+closed_by: s442-manager
 ---
 
 User-requested local branch cleanup across bashy and yoke.
