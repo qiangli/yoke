@@ -899,7 +899,9 @@ function storiesEl(stories, detailHost, sprintID) {
 // story it executes, so a story's worker is read from the STORY's own assignee
 // and never inferred from a nearby run.
 //
-//   closed     done / closed / cancelled
+//   closed     done / wontfix / closed / cancelled — whatever todo.IsClosed
+//                calls closed (wontfix is closed-but-not-delivered, grouped
+//                here and labelled on the row, never counted as open)
 //   needs      submitted / review / failed / blocked — waiting on a person
 //   working    doing — someone is on it
 //   assigned   named owner, not started yet
@@ -923,8 +925,11 @@ const STAGE_CLASS = {
   unstarted: "unstarted",
 };
 
+// Closed mirrors the server counts (board finalize) and `bashy sprint show`:
+// done OR wontfix, via the shared todo.IsClosed predicate. JS cannot import
+// that Go predicate, so this list must stay identical to it.
 function storyIsClosed(story) {
-  return ["done", "closed", "cancelled", "canceled"].includes(String(story.status || "").toLowerCase());
+  return ["done", "wontfix", "closed", "cancelled", "canceled"].includes(String(story.status || "").toLowerCase());
 }
 
 function storyStats(sp, stories) {
@@ -954,7 +959,10 @@ function storyListEl(sp, stories, detailHost, sprintID) {
       row.type = "button";
       row.append(el("div", "sec-k " + STAGE_CLASS[stage],
         "#" + (t.number || t.id) + (t.priority ? " " + t.priority : "")));
-      row.append(el("div", "sec-v", t.title || ""));
+      // A wontfix story is closed but delivered nothing: say so on the row,
+      // so "closed" is never misread as "shipped".
+      const undelivered = String(t.status || "").toLowerCase() === "wontfix" ? " — wontfix (not delivered)" : "";
+      row.append(el("div", "sec-v", (t.title || "") + undelivered));
       // The worker is named on the ROW, not only in the detail: an operator
       // scanning for "who has what" should not have to open seven stories.
       if (t.assignee) row.append(el("div", "sec-who", "@" + t.assignee));

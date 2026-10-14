@@ -6,11 +6,11 @@ package board
 import (
 	"context"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/qiangli/yoke/pkg/policy/coord"
 	"github.com/qiangli/yoke/pkg/resources"
+	todopkg "github.com/qiangli/yoke/pkg/todo"
 	"github.com/qiangli/yoke/pkg/weave"
 )
 
@@ -381,7 +381,9 @@ func (b *Board) finalize(now time.Time) {
 			continue
 		}
 		counts := storyCounts[t.SprintID]
-		if closedStoryStatus(t.Status) {
+		// Closed is whatever `bashy sprint show` calls closed: the shared
+		// todo.IsClosed predicate (done OR wontfix), never a restated rule.
+		if todopkg.IsClosed(t.Status) {
 			counts[1]++
 		} else {
 			counts[0]++
@@ -482,15 +484,6 @@ func (b *Board) finalize(now time.Time) {
 		if len(lanes[id]) > 0 || id != "done" {
 			b.Lanes = append(b.Lanes, Lane{ID: id, Title: laneTitle(id), Cards: lanes[id]})
 		}
-	}
-}
-
-func closedStoryStatus(status string) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "done", "closed", "cancelled", "canceled":
-		return true
-	default:
-		return false
 	}
 }
 
