@@ -541,6 +541,48 @@ func LeavePID(id string, pid int) {
 	_ = Emit(Event{Type: EventLeave, Target: id})
 }
 
+// RemoveMember removes a membership card for id regardless of whether the
+// holder pid is alive. It takes the same member-claims lock LeavePID uses
+// and returns the removed card, whether a card was found and removed, and any
+// error encountered.
+func RemoveMember(id string) (Card, bool, error) {
+	dir, err := membersDir()
+	if err != nil {
+		return Card{}, false, err
+	}
+	claimLock, err := lockMemberClaims(lockfile.Holder{
+		Name: id, PID: os.Getpid(), Intent: "remove room member identity",
+	}, false)
+	if err != nil {
+		return Card{}, false, fmt.Errorf("room: serialize member removal: %w", err)
+	}
+	defer claimLock.Release()
+
+	path := memberPath(dir, id)
+	prior, ok := readCard(path)
+	legacyPath := ""
+	if !ok {
+		if legacy, safe := legacyMemberPath(dir, id); safe {
+			legacyPath = legacy
+			prior, ok = readCard(legacy)
+			if ok {
+				path = legacy
+			}
+		}
+	}
+	if !ok {
+		return Card{}, false, nil
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return Card{}, false, err
+	}
+	if legacyPath != "" && legacyPath != path {
+		_ = os.Remove(legacyPath)
+	}
+	_ = Emit(Event{Type: EventLeave, Target: id})
+	return prior, true, nil
+}
+
 // Members returns the live membership, newest first, pruning any card whose
 // HOLDER is gone (a crash left the file behind). Reading IS the reconciliation
 // — no sweeper, so the board never asserts a dead member is live.

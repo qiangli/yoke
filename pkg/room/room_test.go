@@ -63,6 +63,34 @@ func TestJoinLeaveRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRemoveMember(t *testing.T) {
+	isolate(t)
+	c := Card{
+		ID: "seat-live-1", Binding: "tool:model", Nick: "SeatLive", Tool: "tool",
+		PID: os.Getpid(),
+	}
+	if err := Join(c); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	card, ok, err := RemoveMember("seat-live-1")
+	if err != nil {
+		t.Fatalf("RemoveMember: %v", err)
+	}
+	if !ok || card.ID != "seat-live-1" {
+		t.Fatalf("RemoveMember = %+v, %v; want seat-live-1, true", card, ok)
+	}
+	members, err := Members()
+	if err != nil {
+		t.Fatalf("members: %v", err)
+	}
+	if len(members) != 0 {
+		t.Fatalf("after RemoveMember, want 0 members, got %d", len(members))
+	}
+	if _, ok, _ := Find("seat-live-1"); ok {
+		t.Fatal("member card still found after RemoveMember")
+	}
+}
+
 func TestMemberIDIsPortableOpaqueData(t *testing.T) {
 	isolate(t)
 	id := `shell:codex:8800/../../outside`
