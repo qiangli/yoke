@@ -30,16 +30,16 @@ type releaseMetadata struct {
 // Fill these only with reviewed metadata from an immutable, signed Bashy
 // release. Until then the managed service remains unavailable.
 const (
-	releaseVersion  = ""
-	releaseIdentity = ""
+	releaseVersion  = "bashy-v0.21.2-15"
+	releaseIdentity = "https://github.com/qiangli/ollama/.github/workflows/bashy-build.yml@refs/tags/bashy-v0.21.2-15"
 )
 
 var releaseSHA256 = map[string]string{
-	"linux/amd64":   "",
-	"linux/arm64":   "",
-	"darwin/amd64":  "",
-	"darwin/arm64":  "",
-	"windows/amd64": "",
+	"linux/amd64":   "b146dcee3ded0f31c2dfa9e128631e4f7072103b4eada47340cf7a0662a54b59",
+	"linux/arm64":   "edfd81603271d2fbf8097e8ceaa455b2c8102061e49b7397b1de57bef2bf14a3",
+	"darwin/amd64":  "91caa072772ac2598fad5066c324ff05ca257be4b2dfb4223bf26f27ae9fdc66",
+	"darwin/arm64":  "a149f1f2fd27b0df88107b70f6525f08efde09ce25c666372e6a60a71625309b",
+	"windows/amd64": "d2a320ae28426e45ec5d77eb3bff84a2b58e2083ec0636e85d9be84362d3858a",
 }
 
 var runnerRelease = releaseMetadata{releaseVersion, releaseIdentity, releaseSHA256[runtime.GOOS+"/"+runtime.GOARCH]}
@@ -55,7 +55,7 @@ func releaseReady() bool {
 	if _, err := hex.DecodeString(r.sha256); err != nil {
 		return false
 	}
-	const workflowPrefix = "https://github.com/qiangli/bashy/.github/workflows/"
+	const workflowPrefix = "https://github.com/qiangli/ollama/.github/workflows/"
 	return len(r.identity) > len(workflowPrefix)+len("@refs/tags/")+len(r.version) &&
 		strings.HasPrefix(r.identity, workflowPrefix) &&
 		strings.HasSuffix(r.identity, "@refs/tags/"+r.version)

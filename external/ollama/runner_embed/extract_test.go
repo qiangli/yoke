@@ -4,17 +4,19 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/qiangli/yoke/pkg/binmgr"
 )
 
 const testVersion = "bashy-ollama-runner-test"
-const testIdentity = "https://github.com/qiangli/bashy/.github/workflows/ollama-runner.yml@refs/tags/" + testVersion
+const testIdentity = "https://github.com/qiangli/ollama/.github/workflows/ollama-runner.yml@refs/tags/" + testVersion
 
 func fakeEmbed(t *testing.T, data []byte) {
 	t.Helper()
@@ -154,6 +156,35 @@ func TestEnsureRunnerWrongIdentityAndOfflineCache(t *testing.T) {
 	}
 	if runtime.GOOS == "windows" && filepath.Ext(path) != ".exe" {
 		t.Fatal("missing executable suffix")
+	}
+}
+
+func TestCommittedReleaseMetadata(t *testing.T) {
+	if releaseVersion == "" || releaseIdentity == "" {
+		t.Fatal("committed release version and identity must be filled")
+	}
+	const workflowPrefix = "https://github.com/qiangli/ollama/.github/workflows/"
+	if !strings.HasPrefix(releaseIdentity, workflowPrefix) {
+		t.Fatalf("release identity %q missing prefix %q", releaseIdentity, workflowPrefix)
+	}
+	if !strings.HasSuffix(releaseIdentity, "@refs/tags/"+releaseVersion) {
+		t.Fatalf("release identity %q missing @refs/tags/%s suffix", releaseIdentity, releaseVersion)
+	}
+	wantTargets := []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64", "windows/amd64"}
+	if len(releaseSHA256) != len(wantTargets) {
+		t.Fatalf("releaseSHA256 has %d entries, want %d", len(releaseSHA256), len(wantTargets))
+	}
+	for _, target := range wantTargets {
+		v, ok := releaseSHA256[target]
+		if !ok {
+			t.Fatalf("releaseSHA256 missing %s", target)
+		}
+		if len(v) != 64 {
+			t.Fatalf("releaseSHA256[%s] length %d, want 64", target, len(v))
+		}
+		if _, err := hex.DecodeString(v); err != nil {
+			t.Fatalf("releaseSHA256[%s] not hex: %v", target, err)
+		}
 	}
 }
 
