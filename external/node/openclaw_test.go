@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -16,7 +17,21 @@ import (
 func stubNpm(t *testing.T, dir string, fail bool) (npm, log string) {
 	t.Helper()
 	log = filepath.Join(dir, "npm-argv.log")
-	body := "#!/bin/sh\necho \"$@\" >> " + log + "\n"
+	if runtime.GOOS == "windows" {
+		npm = filepath.Join(dir, "npm.cmd")
+		body := "@echo off\r\n"
+		body += "echo %* >> \"" + log + "\"\r\n"
+		if fail {
+			body += "echo boom >&2\r\nexit /b 1\r\n"
+		} else {
+			body += "if not exist \"%~3\\node_modules\" mkdir \"%~3\\node_modules\"\r\n"
+		}
+		if err := os.WriteFile(npm, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return npm, log
+	}
+	body := "#!/bin/sh\necho \"$@\" >> '" + strings.ReplaceAll(log, "'", "'\"'\"'") + "'\n"
 	if fail {
 		body += "echo boom >&2\nexit 1\n"
 	} else {
@@ -179,9 +194,17 @@ func TestInstallNpmProdRestoresGuttedBundled(t *testing.T) {
 	// Stub behaves like the observed npm: it retires the bundled dir for
 	// replacement but never refills it.
 	npm := filepath.Join(dir, "npm")
-	stub := "#!/bin/sh\nrm -rf \"$3/node_modules/undici\"\nmkdir -p \"$3/node_modules/undici\"\n"
-	if err := os.WriteFile(npm, []byte(stub), 0o755); err != nil {
-		t.Fatal(err)
+	if runtime.GOOS == "windows" {
+		npm = filepath.Join(dir, "npm.cmd")
+		stub := "@echo off\r\nif exist \"%~3\\node_modules\\undici\" rmdir /s /q \"%~3\\node_modules\\undici\"\r\nif not exist \"%~3\\node_modules\\undici\" mkdir \"%~3\\node_modules\\undici\"\r\n"
+		if err := os.WriteFile(npm, []byte(stub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		stub := "#!/bin/sh\nrm -rf \"$3/node_modules/undici\"\nmkdir -p \"$3/node_modules/undici\"\n"
+		if err := os.WriteFile(npm, []byte(stub), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	pkgDir := filepath.Join(dir, "package")
 	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
