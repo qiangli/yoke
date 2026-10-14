@@ -159,6 +159,28 @@ var pinnedDigests = map[string]string{
 	"openclaw@2026.10.2/windows/amd64": "d1c979c9ff6c5fb600a4582a7d777e0ef5264f5a570d2e822323a8c508d744fe",
 	"openclaw@2026.10.2/windows/arm64": "d1c979c9ff6c5fb600a4582a7d777e0ef5264f5a570d2e822323a8c508d744fe",
 
+	// osv-scanner@v2.7.0 — official google/osv-scanner release osv-scanner_SHA256SUMS
+	// and independent download sha256.
+	"osv-scanner@v2.7.0/darwin/amd64":  "e82c5df7ab0a42dff29a1cd0660711447b56b4c0483ff66ad8634df10fd81a45",
+	"osv-scanner@v2.7.0/darwin/arm64":  "d4926ef8da134332543be276dff157e4c170f99ad91fc48e89448a8816bdf70b",
+	"osv-scanner@v2.7.0/linux/amd64":   "160c6253e2922e9e0a6a9771c5c4c40a4b3c6090b34a3cdd5e80c96cc2e4218b",
+	"osv-scanner@v2.7.0/linux/arm64":   "4061ef4c021ed3c47f203b818f337e351336cc5cd67c0274fc36bd1dfc728dd7",
+	"osv-scanner@v2.7.0/windows/amd64": "9964ed64ec9a387391eb4cc006ad5c531154821aef29b793e02c448de4686438",
+
+	"osvscanner@v2.7.0/darwin/amd64":  "e82c5df7ab0a42dff29a1cd0660711447b56b4c0483ff66ad8634df10fd81a45",
+	"osvscanner@v2.7.0/darwin/arm64":  "d4926ef8da134332543be276dff157e4c170f99ad91fc48e89448a8816bdf70b",
+	"osvscanner@v2.7.0/linux/amd64":   "160c6253e2922e9e0a6a9771c5c4c40a4b3c6090b34a3cdd5e80c96cc2e4218b",
+	"osvscanner@v2.7.0/linux/arm64":   "4061ef4c021ed3c47f203b818f337e351336cc5cd67c0274fc36bd1dfc728dd7",
+	"osvscanner@v2.7.0/windows/amd64": "9964ed64ec9a387391eb4cc006ad5c531154821aef29b793e02c448de4686438",
+
+	// grype@v0.120.1 — official anchore/grype release grype_0.120.1_checksums.txt
+	// and independent download sha256.
+	"grype@v0.120.1/darwin/amd64":  "5313004ccbc524c8757521dc3913f1edf4309f56bef06a2fb2d0c0eeade7cc62",
+	"grype@v0.120.1/darwin/arm64":  "cf97957fa467d25575ec2cc3228289f391ea51cf88b9cffc5f83dc03d4cbc732",
+	"grype@v0.120.1/linux/amd64":   "0a9ee97ef5ae2ee953b0a80098105052e846cdbe319a57d808b519c33cd1343d",
+	"grype@v0.120.1/linux/arm64":   "29f47391dc283aa79fcc38e65224cd61f64dec0ecfd0db7074128ebf8ff23514",
+	"grype@v0.120.1/windows/amd64": "32e3c811f31822d17592908bafdc6288aaaca3d52583c479167a8dc8399ed65d",
+
 	// No ollama pins, by design: per docs/bashy-service-supply-chain-policy.md
 	// (Sprint 436, story 8d1e72e5dff6) bashy never downloads or execs a
 	// third-party ollama release archive — the bashy-signed embedded runner

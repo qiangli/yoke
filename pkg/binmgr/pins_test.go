@@ -158,3 +158,35 @@ func TestPinnedDigests_ValidFormat(t *testing.T) {
 		}
 	}
 }
+
+func TestVulnerabilityScannerPins(t *testing.T) {
+	targets := []string{
+		"darwin/amd64",
+		"darwin/arm64",
+		"linux/amd64",
+		"linux/arm64",
+		"windows/amd64",
+	}
+
+	for _, tool := range []struct {
+		name    string
+		version string
+	}{
+		{"osv-scanner", "v2.7.0"},
+		{"osvscanner", "v2.7.0"},
+		{"grype", "v0.120.1"},
+	} {
+		for _, target := range targets {
+			sha, ok := PinnedSHA256(tool.name, tool.version, target)
+			if !ok || len(sha) != 64 {
+				t.Errorf("missing or invalid pin for %s@%s/%s: ok=%v sha=%q", tool.name, tool.version, target, ok, sha)
+			}
+			// Verify v-prefix tolerance
+			trimmedVer := strings.TrimPrefix(tool.version, "v")
+			shaTrimmed, okTrimmed := PinnedSHA256(tool.name, trimmedVer, target)
+			if !okTrimmed || shaTrimmed != sha {
+				t.Errorf("v-prefix tolerance failed for %s@%s vs %s: shaTrimmed=%q want %q", tool.name, trimmedVer, tool.version, shaTrimmed, sha)
+			}
+		}
+	}
+}

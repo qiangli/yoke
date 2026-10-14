@@ -697,6 +697,9 @@ func copyFile(src, dest string) error {
 	return writeFrom(in, dest)
 }
 
+// IsExecutable reports whether path exists and is an executable file.
+func IsExecutable(path string) bool { return isExecutable(path) }
+
 func isExecutable(path string) bool {
 	info, err := os.Stat(path)
 	if err != nil || info.IsDir() {
