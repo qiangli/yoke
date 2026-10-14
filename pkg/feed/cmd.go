@@ -129,7 +129,7 @@ inside a fence.`,
 		newFollowCmd(env), newUnfollowCmd(env), newFollowingCmd(env),
 		newFetchCmd(env), newReadCmd(env),
 		newChannelCmd(env), newDeliverCmd(env), newGroupCmd(env),
-		newKeyCmd(env), newDoctorCmd(env),
+		newBridgeCmd(env), newKeyCmd(env), newDoctorCmd(env),
 	)
 	return root
 }

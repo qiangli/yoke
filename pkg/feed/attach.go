@@ -21,8 +21,11 @@ const DefaultMaxAttachBytes = 25 << 20 // 25 MiB
 // SigningPayloadForPost). Fetchers keep accepting any safe relative path,
 // so older bare-basename entries still verify.
 type Attachment struct {
-	Path   string `yaml:"path"`
-	SHA256 string `yaml:"sha256"`
+	Path   string `yaml:"path" json:"path"`
+	SHA256 string `yaml:"sha256" json:"sha256"`
+	MIME   string `yaml:"mime,omitempty" json:"mime,omitempty"`
+	Name   string `yaml:"name,omitempty" json:"name,omitempty"`
+	Size   int64  `yaml:"size,omitempty" json:"size,omitempty"`
 }
 
 // attachmentUpload is a collected attachment ready to publish: its
