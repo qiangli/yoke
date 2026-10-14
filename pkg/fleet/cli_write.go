@@ -1,15 +1,19 @@
 package fleet
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+
+	"github.com/qiangli/yoke/pkg/room"
 )
 
 // --- agents add / set --------------------------------------------------
@@ -114,7 +118,8 @@ func reportPathError(cmd *cobra.Command, noun string, err error) error {
 // --- rm / edit / verify --------------------------------------------------
 
 func newRm(noun string, opts []Option, remove func(*Catalog, string) error) *cobra.Command {
-	return &cobra.Command{
+	var seat bool
+	cmd := &cobra.Command{
 		Use:   "rm <name>",
 		Short: "Remove an entry from the local store",
 		Long: "Remove an entry from the local store.\n\n" +
@@ -124,6 +129,35 @@ func newRm(noun string, opts []Option, remove func(*Catalog, string) error) *cob
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if seat {
+				name := args[0]
+				card, ok, err := room.RemoveMember(name)
+				if err != nil {
+					return err
+				}
+				if !ok {
+					// Fall back to matching by nick.
+					if id, ferr := findSeatIDByNick(name); ferr == nil && id != "" {
+						card, ok, err = room.RemoveMember(id)
+						if err != nil {
+							return err
+						}
+					}
+				}
+				if !ok {
+					if claimID := room.AgentClaimID(name); claimID != name {
+						card, ok, err = room.RemoveMember(claimID)
+						if err != nil {
+							return err
+						}
+					}
+				}
+				if !ok {
+					return fmt.Errorf("seat %q not found", name)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "removed seat %s (pid %d)\n", name, card.PID)
+				return nil
+			}
 			cat := New(opts...)
 			cat.WarnUnretired(cmd.ErrOrStderr(), noun, args[0])
 			// Removing an existing entry deletes someone's asset: a live
@@ -138,6 +172,48 @@ func newRm(noun string, opts []Option, remove func(*Catalog, string) error) *cob
 			return nil
 		},
 	}
+	if noun == KindAgent {
+		cmd.Flags().BoolVar(&seat, "seat", false, "remove a room member card (seat) instead of a catalog agent")
+	}
+	return cmd
+}
+
+func findSeatIDByNick(nick string) (string, error) {
+	dir := filepath.Join(room.Dir(), "members")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	var exact []string
+	var fold []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		var c room.Card
+		if json.Unmarshal(b, &c) == nil && c.ID != "" {
+			trimmed := strings.TrimSpace(c.Nick)
+			if trimmed == nick || c.Nick == nick {
+				exact = append(exact, c.ID)
+			} else if strings.EqualFold(trimmed, nick) || strings.EqualFold(c.Nick, nick) {
+				fold = append(fold, c.ID)
+			}
+		}
+	}
+	if len(exact) > 0 {
+		return exact[0], nil
+	}
+	if len(fold) > 0 {
+		return fold[0], nil
+	}
+	return "", nil
 }
 
 // newEdit opens an entry in $EDITOR. An entry from a lower ring is
