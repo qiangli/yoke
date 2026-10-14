@@ -44,6 +44,28 @@ func signedSumsNames(t Tool) (map[string]bool, error) {
 	return want, nil
 }
 
+// primaFamily reports whether a tool name belongs to the signed Prima
+// release family: the CLI, the server, and the Windows OpenMP runtime. Every
+// family member verifies against the same release checksum manifest, so each
+// accepts the sibling executables' rows alongside its own.
+func primaFamily(name string) bool {
+	return name == PrimaName || name == PrimaServerName || name == PrimaLibOMPName
+}
+
+// primaReleaseFileNames lists every non-evidence file the signed Prima
+// release ships: both executables per platform plus the Windows OpenMP
+// runtime. Keep this aligned with the release manifest: a shipped file
+// missing here is refused as unlisted, and anything listed here gains no
+// trust beyond sharing the signed manifest.
+func primaReleaseFileNames() map[string]bool {
+	names := map[string]bool{PrimaLibOMPFile: true}
+	for _, platform := range PrimaPlatforms {
+		names[primaCLIFile(platform)] = true
+		names[primaServerFile(platform)] = true
+	}
+	return names
+}
+
 // The Bashy Prima release signs all files in dist, including build and audit
 // evidence. Keep this list aligned with builds/prima.cpp's PIN, build.sh and
 // audit.sh: unknown names must never gain trust merely by sharing a signature.
@@ -58,8 +80,17 @@ func primaSupplementarySumsNames() map[string]bool {
 		names[name] = true
 	}
 	for _, platform := range PrimaPlatforms {
-		name := "prima-" + strings.ReplaceAll(platform, "/", "-")
-		for _, suffix := range []string{"-linkage.txt", "-cmake.txt", "-inputs.json", "-inputs.tar.gz", "-egress.txt"} {
+		osName, arch, _ := strings.Cut(platform, "/")
+		name := "prima-" + osName + "-" + arch
+		suffixes := []string{"-linkage.txt", "-cmake.txt", "-inputs.json", "-inputs.tar.gz", "-egress.txt"}
+		if osName == "windows" {
+			// The Windows build records its DLL inventory instead of a
+			// linkage report, and carries compiler/toolchain provenance.
+			suffixes = []string{"-cmake.txt", "-dlls.txt", "-inputs.json", "-inputs.tar.gz", "-egress.txt"}
+			names["windows-compiler-identity.json"] = true
+			names["windows-toolchain.json"] = true
+		}
+		for _, suffix := range suffixes {
 			names[name+suffix] = true
 		}
 	}
@@ -82,9 +113,15 @@ func parseSignedSums(t Tool, raw []byte) (map[string]string, error) {
 	for name := range want {
 		allowed[name] = true
 	}
-	if t.Name == PrimaName {
+	if primaFamily(t.Name) {
+		// Sibling executables share the manifest: the CLI declaration
+		// accepts the server rows (and vice versa) without requiring them.
+		// Only each declaration's own assets are required below.
+		for name := range primaReleaseFileNames() {
+			allowed[name] = true
+		}
 		for name := range primaSupplementarySumsNames() {
-			if allowed[name] {
+			if want[name] {
 				return nil, fmt.Errorf("supplementary SHA256SUMS name conflicts with executable %q", name)
 			}
 			allowed[name] = true
@@ -123,7 +160,7 @@ func checkSignedSums(t Tool, asset Asset, raw, bundle []byte, binarySHA string) 
 	if t.SignedSums == nil || t.Sigstore == nil || !t.RequireCommittedPin {
 		return fmt.Errorf("signed sums require Sigstore and a committed pin")
 	}
-	if t.Name == PrimaName && (t.Version != PrimaVersion || t.Sigstore.Identity != PrimaIdentity || t.Sigstore.Issuer != GitHubActionsIssuer) {
+	if primaFamily(t.Name) && (t.Version != PrimaVersion || t.Sigstore.Identity != PrimaIdentity || t.Sigstore.Issuer != GitHubActionsIssuer) {
 		return fmt.Errorf("Prima SHA256SUMS requires the exact release workflow identity and issuer")
 	}
 	pin, ok := pinnedSHA256(t.Name, t.Version, Platform())

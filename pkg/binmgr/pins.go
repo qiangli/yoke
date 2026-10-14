@@ -42,14 +42,25 @@ import (
 // is intentionally allowed to be sparse — an absent pin is not an error, it just
 // means that tool still resolves its checksum from the release.
 var pinnedDigests = map[string]string{
-	// prima.cpp bashy-build.yml tag bashy-bashy-prima-0.1.1-4 (hosted run
-	// 38427264223). Each raw asset matches the signed SHA256SUMS and an
-	// independently downloaded binary; their bundles verified against the
-	// exact tag workflow identity and GitHub Actions OIDC issuer.
-	"prima@bashy-bashy-prima-0.1.1-4/darwin/amd64": "9203966e27293d958587e87e527b2f996d0207f30b56cccae0aeb9f362432772",
-	"prima@bashy-bashy-prima-0.1.1-4/darwin/arm64": "8a9bffcd0ea3ca9f7edc44a0c318d6ecb3f496a76dd005833d7046321c4aee8e",
-	"prima@bashy-bashy-prima-0.1.1-4/linux/amd64":  "0a43bd0232adc517c97e2524ce05be1a3ea61a247a575591b9e7fd52f8203c17",
-	"prima@bashy-bashy-prima-0.1.1-4/linux/arm64":  "b347133007fa19a6195814be0250a9a8bb4d42e571b0c901c95c50cf77e148ad",
+	// prima.cpp bashy-build.yml tag bashy-bashy-prima-0.1.2-13 (hosted run
+	// 38486571631, green on all five platforms). Each raw asset matches the
+	// release's signed SHA256SUMS; per-asset bundles verified against the
+	// exact tag workflow identity and GitHub Actions OIDC issuer. The CLI
+	// and server are pinned per platform; libomp.dll is the Windows OpenMP
+	// runtime the executables load, installed beside them.
+	"prima@bashy-bashy-prima-0.1.2-13/darwin/amd64":  "d6fe35e0a331ea2b17aaf941ed9bb367e55d27e08bb8ea189945a253f0c1567b",
+	"prima@bashy-bashy-prima-0.1.2-13/darwin/arm64":  "43df85cb7d1622a62ff7f6d12d6d844dec8b98650ed323f315c689c9f2b88d9c",
+	"prima@bashy-bashy-prima-0.1.2-13/linux/amd64":   "d8870b8c06c956b450400c1d15e26cb10582a0fb4cc0874decf8ef1d03eb3f71",
+	"prima@bashy-bashy-prima-0.1.2-13/linux/arm64":   "7e4e70b6e2121691b6e51ecd23ed4c3792f39472c0a2a4119e58e165d12432b3",
+	"prima@bashy-bashy-prima-0.1.2-13/windows/amd64": "61d4b38df22ea014f65cb919cce0acb17f1c2f440ba7ebc528133113a6f040b8",
+
+	"prima-server@bashy-bashy-prima-0.1.2-13/darwin/amd64":  "e08abb2b162edbf46ecd3d7cd783bd2bed827bd8ae9a59c6225620c552fc4442",
+	"prima-server@bashy-bashy-prima-0.1.2-13/darwin/arm64":  "c62b848bf5309b4e16931942c0ad3715932425c6f2bc3a103ea7ba1c778a9707",
+	"prima-server@bashy-bashy-prima-0.1.2-13/linux/amd64":   "ac8afd44b8e09105390fe5cbab2babf4aed053f59cef26e7913f7ef3d5122a22",
+	"prima-server@bashy-bashy-prima-0.1.2-13/linux/arm64":   "745504f75f1fd98f9c22e719232d8b62daf13bc102f95706f39dfca35055251c",
+	"prima-server@bashy-bashy-prima-0.1.2-13/windows/amd64": "99163f5b9900fa4b1dae87492b5e059278e8d56f4b26d2a687ebf19304b09525",
+
+	"prima-libomp@bashy-bashy-prima-0.1.2-13/windows/amd64": "bc3880baa3d7770c3b598dd709a01fb54540a99139a526cb503764e6d6520a06",
 
 	// binmgr.CosignTool (CosignVersion v3.1.1) — the pinned Sigstore verifier.
 	// Each digest matched three ways: GitHub's published asset digest, the

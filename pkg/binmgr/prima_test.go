@@ -15,35 +15,84 @@ import (
 func TestPrimaDeclarationAndPins(t *testing.T) {
 	t.Setenv("BASHY_BIN_CACHE", t.TempDir())
 	tool := PrimaTool()
-	if tool.Version != "bashy-bashy-prima-0.1.1-4" || tool.Sigstore.Identity !=
-		"https://github.com/qiangli/prima.cpp/.github/workflows/bashy-build.yml@refs/tags/bashy-bashy-prima-0.1.1-4" ||
+	if tool.Version != "bashy-bashy-prima-0.1.2-13" || tool.Sigstore.Identity !=
+		"https://github.com/qiangli/prima.cpp/.github/workflows/bashy-build.yml@refs/tags/bashy-bashy-prima-0.1.2-13" ||
 		tool.Sigstore.Issuer != GitHubActionsIssuer || !tool.RequireCommittedPin {
 		t.Fatalf("prima trust declaration changed: %+v", tool)
 	}
-	if len(tool.Assets) != 4 {
+	if len(tool.Assets) != 5 {
 		t.Fatalf("assets: %v", tool.Assets)
 	}
 	wantPins := map[string]string{
-		"darwin/amd64": "9203966e27293d958587e87e527b2f996d0207f30b56cccae0aeb9f362432772",
-		"darwin/arm64": "8a9bffcd0ea3ca9f7edc44a0c318d6ecb3f496a76dd005833d7046321c4aee8e",
-		"linux/amd64":  "0a43bd0232adc517c97e2524ce05be1a3ea61a247a575591b9e7fd52f8203c17",
-		"linux/arm64":  "b347133007fa19a6195814be0250a9a8bb4d42e571b0c901c95c50cf77e148ad",
+		"darwin/amd64":  "d6fe35e0a331ea2b17aaf941ed9bb367e55d27e08bb8ea189945a253f0c1567b",
+		"darwin/arm64":  "43df85cb7d1622a62ff7f6d12d6d844dec8b98650ed323f315c689c9f2b88d9c",
+		"linux/amd64":   "d8870b8c06c956b450400c1d15e26cb10582a0fb4cc0874decf8ef1d03eb3f71",
+		"linux/arm64":   "7e4e70b6e2121691b6e51ecd23ed4c3792f39472c0a2a4119e58e165d12432b3",
+		"windows/amd64": "61d4b38df22ea014f65cb919cce0acb17f1c2f440ba7ebc528133113a6f040b8",
+	}
+	wantServerPins := map[string]string{
+		"darwin/amd64":  "e08abb2b162edbf46ecd3d7cd783bd2bed827bd8ae9a59c6225620c552fc4442",
+		"darwin/arm64":  "c62b848bf5309b4e16931942c0ad3715932425c6f2bc3a103ea7ba1c778a9707",
+		"linux/amd64":   "ac8afd44b8e09105390fe5cbab2babf4aed053f59cef26e7913f7ef3d5122a22",
+		"linux/arm64":   "745504f75f1fd98f9c22e719232d8b62daf13bc102f95706f39dfca35055251c",
+		"windows/amd64": "99163f5b9900fa4b1dae87492b5e059278e8d56f4b26d2a687ebf19304b09525",
 	}
 	for _, platform := range PrimaPlatforms {
-		osName, arch, _ := strings.Cut(platform, "/")
-		name := "prima-" + osName + "-" + arch
+		name := primaCLIFile(platform)
 		want := "https://github.com/qiangli/prima.cpp/releases/download/" + PrimaVersion + "/" + name
 		a := tool.Assets[platform]
 		if a.URL != want || a.SigstoreBundle != want+DefaultBundleSuffix || a.Binary != "" || a.Tree {
 			t.Errorf("%s: %+v", platform, a)
 		}
+		if platform == "windows/amd64" && !strings.HasSuffix(name, ".exe") {
+			t.Errorf("windows CLI asset must be an .exe: %q", name)
+		}
 		if got, ok := pinnedSHA256(PrimaName, PrimaVersion, platform); !ok || got != wantPins[platform] {
 			t.Errorf("%s: pin %q, found %v, want %q", platform, got, ok, wantPins[platform])
+		}
+		serverName := primaServerFile(platform)
+		if platform == "windows/amd64" && !strings.HasSuffix(serverName, ".exe") {
+			t.Errorf("windows server asset must be an .exe: %q", serverName)
+		}
+		if got, ok := pinnedSHA256(PrimaServerName, PrimaVersion, platform); !ok || got != wantServerPins[platform] {
+			t.Errorf("%s: server pin %q, found %v, want %q", platform, got, ok, wantServerPins[platform])
 		}
 	}
 	if tool.SignedSums == nil || !strings.HasSuffix(tool.SignedSums.URL, "/SHA256SUMS") ||
 		tool.SignedSums.BundleURL != tool.SignedSums.URL+DefaultBundleSuffix {
 		t.Fatalf("signed sums declaration: %+v", tool.SignedSums)
+	}
+	// The Windows OpenMP runtime is pinned exactly once, for its only
+	// platform, and the companion paths land beside the CLI.
+	if got, ok := pinnedSHA256(PrimaLibOMPName, PrimaVersion, "windows/amd64"); !ok ||
+		got != "bc3880baa3d7770c3b598dd709a01fb54540a99139a526cb503764e6d6520a06" {
+		t.Errorf("libomp pin %q, found %v", got, ok)
+	}
+	if _, ok := pinnedSHA256(PrimaLibOMPName, PrimaVersion, "linux/amd64"); ok {
+		t.Error("libomp must not be pinned outside windows/amd64")
+	}
+	cli, err := InstallPath(PrimaTool())
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := PrimaServerPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(server) != filepath.Dir(cli) ||
+		filepath.Base(server) != primaServerFile(Platform()) {
+		t.Errorf("server %q is not beside the CLI %q", server, cli)
+	}
+	if Platform() == "windows/amd64" {
+		dll, err := PrimaLibOMPPath()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if filepath.Dir(dll) != filepath.Dir(cli) || filepath.Base(dll) != PrimaLibOMPFile {
+			t.Errorf("libomp %q is not beside the CLI %q", dll, cli)
+		}
+	} else if _, err := PrimaLibOMPPath(); err == nil {
+		t.Error("libomp path must refuse outside windows/amd64")
 	}
 	if got := CachedBinary(PrimaName); got != "" {
 		t.Fatalf("generic legacy cache returned %s", got)
@@ -64,11 +113,11 @@ func TestPrimaSignedProvisionAndCacheRefusals(t *testing.T) {
 	t.Setenv("BASHY_BIN_CACHE", t.TempDir())
 	calls := fakeCosign(t, nil)
 	bundle := signedBundle(t, good, good, PrimaIdentity, GitHubActionsIssuer)
-	sums := primaTestSums(sha256hex(good))
+	sums := primaTestManifest(map[string]string{primaCLIFile(Platform()): sha256hex(good)})
 	sumsBundle := signedBundle(t, sums, sums, PrimaIdentity, GitHubActionsIssuer)
 	serveBundle := true
 	serveSumsBundle := true
-	name := "prima-" + strings.ReplaceAll(Platform(), "/", "-")
+	name := primaCLIFile(Platform())
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/SHA256SUMS" {
 			_, _ = w.Write(sums)
@@ -123,7 +172,7 @@ func TestPrimaSignedProvisionAndCacheRefusals(t *testing.T) {
 	serveSumsBundle = true
 	goodSums := sums
 	goodSumsBundle := sumsBundle
-	sums = primaTestSums(strings.Repeat("c", 64))
+	sums = primaTestManifest(map[string]string{primaCLIFile(Platform()): strings.Repeat("c", 64)})
 	sumsBundle = signedBundle(t, sums, sums, PrimaIdentity, GitHubActionsIssuer)
 	if _, err := Ensure(context.Background(), tool); !errors.Is(err, ErrSigstore) {
 		t.Fatalf("signed sums disagreeing with committed pin accepted: %v", err)
@@ -211,58 +260,221 @@ func TestPrimaSignedProvisionAndCacheRefusals(t *testing.T) {
 	}
 }
 
-func primaTestSums(currentSHA string) []byte {
+// TestPrimaCompanionProvision exercises the server companion path end to
+// end: no pin means no network, and a signed server installs beside the CLI
+// dir with its own evidence, re-verified on cache hits.
+func TestPrimaCompanionProvision(t *testing.T) {
+	serverBytes := []byte("#!/bin/sh\necho prima-server\n")
+	serverFile := primaServerFile(Platform())
+	serverKey := PrimaServerName + "@" + PrimaVersion + "/" + Platform()
+	withPin(t, serverKey, sha256hex(serverBytes))
+	t.Setenv("BASHY_BIN_CACHE", t.TempDir())
+	calls := fakeCosign(t, nil)
+	bundle := signedBundle(t, serverBytes, serverBytes, PrimaIdentity, GitHubActionsIssuer)
+	sums := primaTestManifest(map[string]string{serverFile: sha256hex(serverBytes)})
+	sumsBundle := signedBundle(t, sums, sums, PrimaIdentity, GitHubActionsIssuer)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/SHA256SUMS":
+			_, _ = w.Write(sums)
+		case "/SHA256SUMS.sigstore.json":
+			_, _ = w.Write(sumsBundle)
+		case "/" + serverFile + DefaultBundleSuffix:
+			_, _ = w.Write(bundle)
+		case "/" + serverFile:
+			_, _ = w.Write(serverBytes)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	decl := Tool{Name: PrimaServerName, Version: PrimaVersion,
+		Assets:              map[string]Asset{Platform(): {URL: srv.URL + "/" + serverFile, SigstoreBundle: srv.URL + "/" + serverFile + DefaultBundleSuffix}},
+		Sigstore:            &Sigstore{Identity: PrimaIdentity, Issuer: GitHubActionsIssuer},
+		SignedSums:          &SignedSums{URL: srv.URL + "/SHA256SUMS", BundleURL: srv.URL + "/SHA256SUMS.sigstore.json"},
+		RequireCommittedPin: true}
+	dest := filepath.Join(t.TempDir(), serverFile)
+	pin, _ := pinnedSHA256(PrimaServerName, PrimaVersion, Platform())
+	got, err := installVerifiedCompanion(context.Background(), decl, decl.Assets[Platform()], dest, pin, true)
+	if err != nil || got != dest {
+		t.Fatalf("signed server install: path=%q err=%v", got, err)
+	}
+	if len(*calls) != 2 {
+		t.Fatalf("sums and server must each run cosign, calls=%d", len(*calls))
+	}
+	data, err := os.ReadFile(dest)
+	if err != nil || string(data) != string(serverBytes) {
+		t.Fatalf("server holds %q: %v", data, err)
+	}
+	if _, err := installVerifiedCompanion(context.Background(), decl, decl.Assets[Platform()], dest, pin, true); err != nil {
+		t.Fatalf("verified server cache refused: %v", err)
+	}
+	// A removed pin refuses before any network, even with a warm cache.
+	delete(pinnedDigests, serverKey)
+	before := len(*calls)
+	if _, err := EnsurePrimaServer(context.Background()); err == nil || !strings.Contains(err.Error(), "no committed sha256") {
+		t.Fatalf("server bypassed removed pin: %v", err)
+	}
+	if len(*calls) != before {
+		t.Fatal("removed pin still touched the network")
+	}
+	pinnedDigests[serverKey] = sha256hex(serverBytes)
+	if err := os.WriteFile(dest, []byte("#!/bin/sh\necho changed\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installVerifiedCompanion(context.Background(), decl, decl.Assets[Platform()], dest, pin, true); !errors.Is(err, ErrSigstore) {
+		t.Fatalf("tampered server cache accepted: %v", err)
+	}
+}
+
+// TestPrimaLibOMPWindowsOnly keeps the DLL a Windows companion: every other
+// platform refuses before network or filesystem access.
+func TestPrimaLibOMPWindowsOnly(t *testing.T) {
+	if Platform() == "windows/amd64" {
+		t.Skip("this refusal applies off Windows")
+	}
+	t.Setenv("BASHY_BIN_CACHE", t.TempDir())
+	if _, err := EnsurePrimaLibOMP(context.Background()); err == nil ||
+		!strings.Contains(err.Error(), "ships only for windows/amd64") {
+		t.Fatalf("libomp off Windows: %v", err)
+	}
+}
+
+// primaTestManifest builds a complete release manifest in the shape of the
+// signed SHA256SUMS: both executables per platform, the Windows DLL, the
+// release evidence (Windows carries -dlls.txt plus compiler/toolchain
+// provenance instead of -linkage.txt), and the fixed top-level files.
+// Digests default to filler; override names a file's real digest.
+func primaTestManifest(override map[string]string) []byte {
 	var b strings.Builder
-	for _, p := range PrimaPlatforms {
-		name := "prima-" + strings.ReplaceAll(p, "/", "-")
-		digest := strings.Repeat("a", 64)
-		if p == Platform() {
-			digest = currentSHA
+	emit := func(digest, name string) {
+		if d, ok := override[name]; ok {
+			digest = d
 		}
 		fmt.Fprintf(&b, "%s  %s\n", digest, name)
 	}
-	// Match the files copied into dist by Bashy's Prima release workflow:
-	// per-platform build evidence, audit outputs, and release metadata.
+	filler := strings.Repeat("a", 64)
+	emit(filler, PrimaLibOMPFile)
 	for _, name := range []string{
 		"prima-pin.txt", "prima-otel.env", "prima-dependencies.json",
 		"prima-sbom.cdx.json", "prima-vulnerabilities.json",
 		"prima-licenses.json", "prima-osv.json", "prima-inputs.json",
 		"prima-NOTICES.txt",
 	} {
-		fmt.Fprintf(&b, "%s  %s\n", strings.Repeat("a", 64), name)
+		emit(filler, name)
 	}
 	for _, p := range PrimaPlatforms {
-		name := "prima-" + strings.ReplaceAll(p, "/", "-")
-		for _, suffix := range []string{"-linkage.txt", "-cmake.txt", "-inputs.json", "-inputs.tar.gz", "-egress.txt"} {
-			fmt.Fprintf(&b, "%s  %s\n", strings.Repeat("a", 64), name+suffix)
+		osName, arch, _ := strings.Cut(p, "/")
+		name := "prima-" + osName + "-" + arch
+		emit(filler, primaCLIFile(p))
+		emit(filler, primaServerFile(p))
+		suffixes := []string{"-linkage.txt", "-cmake.txt", "-inputs.json", "-inputs.tar.gz", "-egress.txt"}
+		if osName == "windows" {
+			suffixes = []string{"-cmake.txt", "-dlls.txt", "-inputs.json", "-inputs.tar.gz", "-egress.txt"}
+		}
+		for _, suffix := range suffixes {
+			emit(filler, name+suffix)
 		}
 	}
+	emit(filler, "windows-compiler-identity.json")
+	emit(filler, "windows-toolchain.json")
 	return []byte(b.String())
+}
+
+// TestPrimaPinnedManifestMatchesRelease guards the pin table against the
+// exact published SHA256SUMS of the pinned release: the manifest must parse
+// under every family declaration, and every committed pin for the release
+// must equal its manifest row. A typo in pins.go or a drifted allowlist
+// fails here instead of on a Windows node at provision time.
+func TestPrimaPinnedManifestMatchesRelease(t *testing.T) {
+	raw, err := os.ReadFile("testdata/prima-SHA256SUMS-0.1.2-13.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decls := []Tool{
+		PrimaTool(),
+		primaCompanionTool(PrimaServerName, primaServerFile(Platform())),
+		primaCompanionTool(PrimaLibOMPName, PrimaLibOMPFile),
+	}
+	var rows map[string]string
+	for _, decl := range decls {
+		rows, err = parseSignedSums(decl, raw)
+		if err != nil {
+			t.Fatalf("%s: published manifest refused: %v", decl.Name, err)
+		}
+	}
+	checked := 0
+	for key, pin := range pinnedDigests {
+		var name, rest string
+		for _, n := range []string{PrimaName + "@", PrimaServerName + "@", PrimaLibOMPName + "@"} {
+			if strings.HasPrefix(key, n) {
+				name, rest = strings.TrimSuffix(n, "@"), strings.TrimPrefix(key, n)
+				break
+			}
+		}
+		if name == "" {
+			continue
+		}
+		version, platform, _ := strings.Cut(rest, "/")
+		if version != PrimaVersion {
+			continue
+		}
+		var file string
+		switch name {
+		case PrimaName:
+			file = primaCLIFile(platform)
+		case PrimaServerName:
+			file = primaServerFile(platform)
+		case PrimaLibOMPName:
+			file = PrimaLibOMPFile
+		}
+		row, ok := rows[file]
+		if !ok {
+			t.Errorf("pin %s names %q, absent from the published manifest", key, file)
+			continue
+		}
+		if row != pin {
+			t.Errorf("pin %s = %s, manifest row = %s", key, pin, row)
+			continue
+		}
+		checked++
+	}
+	if checked != 11 {
+		t.Errorf("checked %d pins against the published manifest, want 11", checked)
+	}
 }
 
 func TestPrimaSignedSumsStrictRows(t *testing.T) {
 	tool := PrimaTool()
-	good := string(primaTestSums(strings.Repeat("b", 64)))
+	good := string(primaTestManifest(nil))
 	rows := strings.Split(strings.TrimSuffix(good, "\n"), "\n")
-	duplicateExecutable := append([]string(nil), rows...)
-	duplicateExecutable[1] = rows[0]
-	duplicateEvidence := append([]string(nil), rows...)
-	duplicateEvidence[5] = rows[4]
-	unknownEvidence := append([]string(nil), rows...)
-	unknownEvidence[5] = strings.Repeat("c", 64) + "  unknown.txt"
-	unknownEgress := append([]string(nil), rows...)
-	unknownEgress[len(unknownEgress)-1] = strings.Repeat("c", 64) + "  prima-freebsd-amd64-egress.txt"
-	duplicateEgress := append([]string(nil), rows...)
-	duplicateEgress[len(duplicateEgress)-2] = rows[len(rows)-1]
+	replace := func(old, new string) string {
+		out := append([]string(nil), rows...)
+		for i, row := range out {
+			if strings.HasSuffix(row, "  "+old) {
+				out[i] = strings.Repeat("b", 64) + "  " + new
+			}
+		}
+		return strings.Join(out, "\n") + "\n"
+	}
+	drop := func(name string) string {
+		var out []string
+		for _, row := range rows {
+			if !strings.HasSuffix(row, "  "+name) {
+				out = append(out, row)
+			}
+		}
+		return strings.Join(out, "\n") + "\n"
+	}
 	cases := map[string]string{
-		"duplicate executable": strings.Join(duplicateExecutable, "\n") + "\n",
-		"duplicate evidence":   strings.Join(duplicateEvidence, "\n") + "\n",
-		"traversal":            strings.Replace(good, "prima-linux-amd64", "../prima-linux-amd64", 1),
-		"unknown evidence":     strings.Join(unknownEvidence, "\n") + "\n",
-		"unknown egress":       strings.Join(unknownEgress, "\n") + "\n",
-		"duplicate egress":     strings.Join(duplicateEgress, "\n") + "\n",
-		"traversal egress":     strings.Replace(good, "  prima-linux-amd64-egress.txt", "  ../prima-linux-amd64-egress.txt", 1),
-		"missing executable":   strings.Join(rows[1:], "\n") + "\n",
+		"duplicate executable": good + rows[0] + "\n",
+		"duplicate evidence":   good + rows[1] + "\n",
+		"traversal":            replace("prima-linux-amd64", "../prima-linux-amd64"),
+		"unknown evidence":     replace("prima-pin.txt", "unknown.txt"),
+		"unknown egress":       replace("prima-windows-amd64-egress.txt", "prima-freebsd-amd64-egress.txt"),
+		"duplicate egress":     good + rows[len(rows)-1] + "\n",
+		"traversal egress":     replace("prima-linux-amd64-egress.txt", "../prima-linux-amd64-egress.txt"),
+		"missing executable":   drop(primaCLIFile("linux/amd64")),
 		"malformed digest":     "z" + good[1:],
 		"malformed separator":  strings.Replace(good, "  prima", " prima", 1),
 		"missing newline":      strings.TrimSuffix(good, "\n"),
@@ -274,6 +486,19 @@ func TestPrimaSignedSumsStrictRows(t *testing.T) {
 			}
 		})
 	}
+	// Sibling rows are accepted but not required: the CLI manifest may omit
+	// the server and DLL rows, while each companion requires its own.
+	if _, err := parseSignedSums(tool, []byte(drop(primaServerFile("linux/amd64")))); err != nil {
+		t.Fatalf("CLI manifest without a server row refused: %v", err)
+	}
+	serverDecl := primaCompanionTool(PrimaServerName, primaServerFile(Platform()))
+	if _, err := parseSignedSums(serverDecl, []byte(drop(primaServerFile(Platform())))); err == nil {
+		t.Fatal("server manifest without its own row accepted")
+	}
+	dllDecl := primaCompanionTool(PrimaLibOMPName, PrimaLibOMPFile)
+	if _, err := parseSignedSums(dllDecl, []byte(drop(PrimaLibOMPFile))); err == nil {
+		t.Fatal("DLL manifest without its own row accepted")
+	}
 	parsed, err := parseSignedSums(tool, []byte(good))
 	if err != nil {
 		t.Fatal(err)
@@ -283,5 +508,11 @@ func TestPrimaSignedSumsStrictRows(t *testing.T) {
 		if _, ok := parsed[name]; !ok {
 			t.Errorf("complete release manifest missing %q", name)
 		}
+		if _, ok := parsed[primaServerFile(platform)]; !ok {
+			t.Errorf("complete release manifest missing server %q", primaServerFile(platform))
+		}
+	}
+	if _, ok := parsed[PrimaLibOMPFile]; !ok {
+		t.Errorf("complete release manifest missing %q", PrimaLibOMPFile)
 	}
 }
