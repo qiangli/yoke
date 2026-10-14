@@ -24,6 +24,7 @@ that patch nor GNU m4 source is linked into the Go multicall binary.
 | [pranshuparmar/witr](https://github.com/pranshuparmar/witr) | Apache-2.0 | cmds/why (managed external v0.3.3) |
 | [odvcencio/gotreesitter](https://github.com/odvcencio/gotreesitter) | MIT (runtime) + per-grammar licenses, see `THIRD_PARTY_GRAMMARS.md` | pkg/treesitter, cmds/ast (linked dependency; embeds 201 permissive grammar parse tables, attributed in `THIRD_PARTY_GRAMMARS.md`) |
 | [ebitengine/purego](https://github.com/ebitengine/purego) | Apache-2.0 | pkg/collate, pkg/ctype (linked dependency v0.10.1; dlopen/dlsym FFI to glibc strcoll_l / \*_l ctype functions, no cgo — not copied source) |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | MIT | pkg/feed/adapters (reference adapter logic adapted to Go per `docs/feed-adapter-contract.md`; pinned v2026.10.2) |
 | [coder/websocket](https://github.com/coder/websocket) | ISC | pkg/sshclient (linked dependency v1.8.14; WebSocket SSH transport) |
 
 Go tools without a row above are fresh implementations written from the
