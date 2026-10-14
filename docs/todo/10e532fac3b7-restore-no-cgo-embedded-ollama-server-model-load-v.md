@@ -8,7 +8,6 @@ priority: p1
 labels:
     - sphere
 created: 2026-10-13T16:47:51.425699Z
-weave: 237
 assignee: codex-gpt6-sol
 sprint: 436
 sprint_id: 20ad6f7b-d3d3-5ebf-973c-0bbb999db96f
