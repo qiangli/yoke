@@ -1,6 +1,6 @@
 // Adapted from OpenClaw (https://github.com/openclaw/openclaw), MIT,
 // tag v2026.10.2. Original TypeScript: extensions/slack/src/*.ts.
-// Outbound only in this stage; inbound is next stage. Converted to Go.
+// Converted to Go for the feed envelope contract.
 
 package adapters
 
@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/qiangli/yoke/pkg/feed"
@@ -19,9 +20,13 @@ import (
 
 // SlackAdapter implements outbound feed envelope delivery for Slack.
 type SlackAdapter struct {
-	Token   string // Bot token — via bashy secret env (SLACK_BOT_TOKEN), never argv
-	BaseURL string // override for tests (default https://slack.com)
-	Client  *http.Client
+	Token     string // Bot token — via bashy secret env (SLACK_BOT_TOKEN), never argv
+	BaseURL   string // override for tests (default https://slack.com)
+	Client    *http.Client
+	AppToken  string // Socket Mode app token, kept in Authorization header
+	SocketURL string // test override; production obtains a fresh URL per connection
+	mu        sync.Mutex
+	seen      map[string]bool
 }
 
 func (a *SlackAdapter) baseURL() string {
