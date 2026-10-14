@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/qiangli/yoke/pkg/binmgr"
@@ -105,6 +106,17 @@ func TestOllamaEntry(t *testing.T) {
 	if cmd := e.NewCmd(); cmd.Name() != "ollama" || !cmd.DisableFlagParsing {
 		t.Errorf("ollama NewCmd wrong: name=%q disableFlags=%v", cmd.Name(), cmd.DisableFlagParsing)
 	}
+	// Supply-chain policy (Sprint 436, docs/bashy-service-supply-chain-policy.md):
+	// the registry entry must never resolve to a tool that downloads an
+	// upstream archive. Resolve must fail closed with a policy error pointing
+	// at the signed embedded runner, never produce a GitHubSpec.
+	if _, err := e.Resolve(context.Background(), ""); err == nil {
+		t.Error("ollama Resolve must fail closed per docs/bashy-service-supply-chain-policy.md; got nil error")
+	} else if !strings.Contains(err.Error(), ollamaSupplyChainPolicy) && !strings.Contains(err.Error(), "supply-chain policy") {
+		t.Errorf("ollama Resolve error = %q, want it to mention the supply-chain policy %q", err.Error(), ollamaSupplyChainPolicy)
+	} else if !strings.Contains(err.Error(), "732cbb22") {
+		t.Errorf("ollama Resolve error = %q, want it to point at the signed embedded runner (story 732cbb22)", err.Error())
+	}
 }
 
 func TestTofuAssetMatch(t *testing.T) {
@@ -131,24 +143,44 @@ func TestTofuAssetMatch(t *testing.T) {
 }
 
 func TestOllamaAssetMatch(t *testing.T) {
+	// Supply-chain policy: asset matching is disabled; the registry entry
+	// never downloads, so every name must be rejected.
 	tests := []struct {
 		name   string
 		goos   string
 		goarch string
 		want   bool
 	}{
-		{"ollama-darwin.tgz", "darwin", "amd64", true},
-		{"ollama-darwin.tgz", "darwin", "arm64", true},
-		{"ollama-windows-amd64.zip", "windows", "amd64", true},
-		{"ollama-windows-arm64.zip", "windows", "arm64", true},
-		{"ollama-linux-amd64.tar.zst", "linux", "amd64", true},
-		{"ollama-linux-arm64.tar.zst", "linux", "arm64", true},
+		{"ollama-darwin.tgz", "darwin", "amd64", false},
+		{"ollama-darwin.tgz", "darwin", "arm64", false},
+		{"ollama-windows-amd64.zip", "windows", "amd64", false},
+		{"ollama-windows-arm64.zip", "windows", "arm64", false},
+		{"ollama-linux-amd64.tar.zst", "linux", "amd64", false},
+		{"ollama-linux-arm64.tar.zst", "linux", "arm64", false},
 		{"ollama-windows-amd64-rocm.zip", "windows", "amd64", false},
 	}
 	for _, tt := range tests {
 		if got := ollamaAssetMatch(tt.name, tt.goos, tt.goarch); got != tt.want {
 			t.Errorf("ollamaAssetMatch(%q, %q, %q) = %v, want %v", tt.name, tt.goos, tt.goarch, got, tt.want)
 		}
+	}
+}
+
+// TestOllamaRegistryRefusesDownload proves the gate: the registry entry for
+// ollama must never produce a downloadable tool, even when Ensure is called.
+// No network is performed.
+func TestOllamaRegistryRefusesDownload(t *testing.T) {
+	e, ok := Lookup("ollama")
+	if !ok {
+		t.Fatal("ollama not registered")
+	}
+	t.Setenv("BASHY_BIN_CACHE", t.TempDir())
+	_, err := e.Ensure(context.Background())
+	if err == nil {
+		t.Fatal("expected Ensure to fail closed per supply-chain policy, but succeeded")
+	}
+	if !strings.Contains(err.Error(), ollamaSupplyChainPolicy) && !strings.Contains(err.Error(), "supply-chain policy") {
+		t.Errorf("Ensure error = %q, want it to mention the supply-chain policy %q", err.Error(), ollamaSupplyChainPolicy)
 	}
 }
 
@@ -187,7 +219,9 @@ func TestNoDefaultRegistryEntryLacksPin(t *testing.T) {
 		"rg",
 		"tofu",
 		"gitea",
-		"ollama",
+		// ollama is intentionally excluded: per
+		// docs/bashy-service-supply-chain-policy.md it is embedded-only
+		// and has no pins (Sprint 436).
 	}
 
 	for _, name := range requiredTools {
@@ -215,7 +249,11 @@ func TestNoDefaultRegistryEntryLacksPin(t *testing.T) {
 	}
 
 	// Also verify that ALL downloadable entries in the default registry have pins.
+	// Ollama is exempt: embedded-only per supply-chain policy, no download, no pin.
 	for _, e := range All() {
+		if e.Name == "ollama" {
+			continue
+		}
 		if e.PreferHost {
 			continue
 		}

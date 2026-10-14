@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"os/signal"
 	"runtime"
 	"syscall"
 	"time"
@@ -36,7 +35,10 @@ func NewOllamaCmd(opts CmdOptions) *cobra.Command {
 		Use:   "ollama",
 		Short: "Ollama-compatible CLI (shim onto ollama server)",
 		Long: `Drop-in shim for the upstream ollama CLI. Each verb maps to either
-the server's /api/* HTTP surface or to the system/embedded runner:
+the server's /api/* HTTP surface or to the embedded runner (supply-chain
+policy docs/bashy-service-supply-chain-policy.md: no third-party binary
+is ever execed; without the bashy-signed embedded runner the command
+fails closed):
 
   ollama serve            → bind ollama on $OLLAMA_HOST
   ollama pull MODEL       → POST /api/pull
@@ -65,8 +67,9 @@ All HTTP calls go to whatever OLLAMA_HOST resolves to.`,
 // useEmbeddedServe reports whether `ollama serve` should run bashy's
 // in-process embedded ollama server. An embedded-serve callback identifies
 // the managed service path. That path may run only the runner compiled into
-// this binary (`-tags embed_runner`, see runner_embed.Available); it must not
-// resolve an unverified host binary when the runner is absent.
+// this binary (`-tags embed_runner`, see runner_embed.Available); per
+// docs/bashy-service-supply-chain-policy.md it must never resolve an
+// unverified host binary or a downloaded archive when the runner is absent.
 // runnerAvailable reports whether the embedded inference runner is compiled
 // into this binary. It is a package var so tests can exercise both the
 // embedded-serve and managed fail-closed paths on one build.
@@ -85,22 +88,15 @@ func newOllamaServeCmd(opts CmdOptions) *cobra.Command {
 			if useEmbeddedServe(opts) {
 				return opts.RunEmbeddedServe(cmd.Context())
 			}
-			if opts.RunEmbeddedServe != nil {
-				if opts.UseSystemBinaries {
-					return fmt.Errorf("ollama: managed serve requires a bashy-signed embedded runner; refusing --use-system-binaries and any unverified OLLAMA_BIN, PATH, or cached binary")
-				}
-				if !runnerAvailable() {
-					return fmt.Errorf("ollama: managed serve requires a bashy-signed embedded runner: %w; refusing any unverified OLLAMA_BIN, PATH, or cached binary", ErrRunnerNotInstalled)
-				}
+			if opts.UseSystemBinaries {
+				return fmt.Errorf("ollama: managed serve requires a bashy-signed embedded runner; refusing --use-system-binaries and any unverified OLLAMA_BIN, PATH, or cached binary per %s (supply-chain policy) — %s", ollamaSupplyChainPolicy, signedRunnerPointer)
 			}
-			bin, err := Resolve()
-			if err != nil {
-				return err
+			if opts.RunEmbeddedServe != nil && !runnerAvailable() {
+				return fmt.Errorf("ollama: managed serve requires a bashy-signed embedded runner: %w; refusing any unverified OLLAMA_BIN, PATH, or cached binary per %s (supply-chain policy) — %s", ErrRunnerNotInstalled, ollamaSupplyChainPolicy, signedRunnerPointer)
 			}
-			fmt.Printf("Ollama server starting via system binary %s...\n", bin)
-			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-			defer stop()
-			return runSystemServe(ctx, bin, managedServeEnv(os.Environ(), managedPort()))
+			// Fail closed per supply-chain policy: there is no PATH, OLLAMA_BIN,
+			// or download fallback — serve runs the embedded server or refuses.
+			return fmt.Errorf("ollama: embedded server unavailable — %w: per %s (supply-chain policy) refusing to exec an upstream binary or download an archive — %s", ErrRunnerNotInstalled, ollamaSupplyChainPolicy, signedRunnerPointer)
 		},
 	}
 }
@@ -108,6 +104,10 @@ func newOllamaServeCmd(opts CmdOptions) *cobra.Command {
 // runSystemServe runs `bin serve` in the foreground until it exits or ctx ends.
 // Cancelling ctx sends the child SIGTERM (Kill on Windows) and waits for it, so
 // ollama can stop its own runner children instead of leaving them orphaned.
+//
+// Retained only for the unix graceful-shutdown unit test
+// (cmd_serve_unix_test.go). No user path calls it: per the supply-chain
+// policy `ollama serve` never execs a third-party binary.
 func runSystemServe(ctx context.Context, bin string, env []string) error {
 	c := exec.CommandContext(ctx, bin, "serve")
 	c.Stdout = os.Stdout
@@ -223,16 +223,8 @@ func newOllamaRunCmd(opts CmdOptions) *cobra.Command {
 			if opts.RunDelegate != nil {
 				return opts.RunDelegate(cmd.Context(), model, rest)
 			}
-			bin, err := Resolve()
-			if err != nil {
-				return err
-			}
-			cargs := append([]string{"run", model}, rest...)
-			c := exec.CommandContext(cmd.Context(), bin, cargs...)
-			c.Stdout = os.Stdout
-			c.Stderr = os.Stderr
-			c.Stdin = os.Stdin
-			return c.Run()
+			// Fail closed per supply-chain policy: never exec a third-party binary.
+			return fmt.Errorf("ollama: third-party run disabled per %s (supply-chain policy) — %s (refusing to exec upstream ollama): %w", ollamaSupplyChainPolicy, signedRunnerPointer, ErrRunnerNotInstalled)
 		},
 	}
 	cmd.DisableFlagParsing = true
@@ -247,15 +239,8 @@ func newOllamaVersionCmd(opts CmdOptions) *cobra.Command {
 			if opts.VersionDelegate != nil {
 				return opts.VersionDelegate(cmd.Context())
 			}
-			bin, err := Resolve()
-			if err != nil {
-				return err
-			}
-			c := exec.CommandContext(cmd.Context(), bin, "version")
-			c.Stdout = os.Stdout
-			c.Stderr = os.Stderr
-			c.Stdin = os.Stdin
-			return c.Run()
+			// Fail closed per supply-chain policy: never exec a third-party binary.
+			return fmt.Errorf("ollama: third-party version check disabled per %s (supply-chain policy) — %s (refusing to exec upstream ollama): %w", ollamaSupplyChainPolicy, signedRunnerPointer, ErrRunnerNotInstalled)
 		},
 	}
 }

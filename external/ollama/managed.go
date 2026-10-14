@@ -124,8 +124,11 @@ func isDoorHost(host string) bool {
 	return u.Port() == strconv.Itoa(door.Port()) || strings.HasPrefix(u.Path, "/k/")
 }
 
-// managedServeEnv produces an explicit child environment for a system ollama
-// serve. It mirrors applyManagedEnv without mutating the parent environment.
+// managedServeEnv produces an explicit child environment for an ollama serve
+// child. It mirrors applyManagedEnv without mutating the parent environment.
+// No production path spawns such a child (supply-chain policy
+// docs/bashy-service-supply-chain-policy.md); it is retained for the
+// graceful-shutdown unit test helper and its env expectations.
 func managedServeEnv(env []string, port int) []string {
 	host := ""
 	for _, entry := range env {

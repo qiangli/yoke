@@ -92,3 +92,68 @@ func TestUseEmbeddedServe_NoCallbackNeverEmbedded(t *testing.T) {
 		t.Fatal("no RunEmbeddedServe callback: serve cannot take the embedded path")
 	}
 }
+
+// TestServeFailsClosedWithoutRunner proves the gate: `ollama serve` without an
+// embedded runner must fail with a supply-chain policy error that points at
+// the signed embedded runner, never invoke Resolve or exec a third-party
+// binary, and never attempt a download (no network).
+func TestServeFailsClosedWithoutRunner(t *testing.T) {
+	defer func(prev func() bool) { runnerAvailable = prev }(runnerAvailable)
+	runnerAvailable = func() bool { return false }
+
+	cmd := NewOllamaCmd(CmdOptions{RunEmbeddedServe: func(context.Context) error { return nil }})
+	cmd.SetArgs([]string{"serve"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected serve to fail closed per supply-chain policy, but succeeded")
+	}
+	assertRefusal(t, "serve", err)
+}
+
+// TestServeFailsClosedWithoutCallback proves a bare `ollama serve` (no
+// embedded-serve callback, the old Resolve fallback) also fails closed.
+func TestServeFailsClosedWithoutCallback(t *testing.T) {
+	cmd := NewOllamaCmd(CmdOptions{})
+	cmd.SetArgs([]string{"serve"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected bare serve to fail closed per supply-chain policy, but succeeded")
+	}
+	assertRefusal(t, "serve", err)
+}
+
+// TestRunFailsClosedWithoutDelegate proves `ollama run` without a delegate
+// (the old PATH fallback) now fails closed per policy.
+func TestRunFailsClosedWithoutDelegate(t *testing.T) {
+	cmd := NewOllamaCmd(CmdOptions{})
+	cmd.SetArgs([]string{"run", "llama3"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected run to fail closed per supply-chain policy, but succeeded")
+	}
+	assertRefusal(t, "run", err)
+}
+
+// TestVersionFailsClosedWithoutDelegate proves `ollama version` without a
+// delegate now fails closed per policy.
+func TestVersionFailsClosedWithoutDelegate(t *testing.T) {
+	cmd := NewOllamaCmd(CmdOptions{})
+	cmd.SetArgs([]string{"version"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected version to fail closed per supply-chain policy, but succeeded")
+	}
+	assertRefusal(t, "version", err)
+}
+
+// assertRefusal checks a refusal error names the supply-chain policy and
+// points at the signed embedded runner (Sprint 436 story 732cbb22).
+func assertRefusal(t *testing.T, verb string, err error) {
+	t.Helper()
+	if !strings.Contains(err.Error(), ollamaSupplyChainPolicy) && !strings.Contains(err.Error(), "supply-chain") {
+		t.Fatalf("%s error = %q, want it to mention the supply-chain policy %q", verb, err.Error(), ollamaSupplyChainPolicy)
+	}
+	if !strings.Contains(err.Error(), "732cbb22") {
+		t.Fatalf("%s error = %q, want it to point at the signed embedded runner (story 732cbb22)", verb, err.Error())
+	}
+}

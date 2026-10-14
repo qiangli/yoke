@@ -1,9 +1,17 @@
 // Copyright (c) 2025 qiangli
 // See LICENSE for licensing information
 
-// Package ollama is a thin shell-out front-door to an externally installed
-// ollama binary, and provides Cobra commands to manage and run models.
-// It is Layer 2 ("Sandbox tier") of the AgentOS substrate plan (see docs/agentos-substrate-extraction-plan.md).
+// Package ollama fronts the bashy-managed ollama server and provides Cobra
+// commands to manage and run models. It is Layer 2 ("Sandbox tier") of the
+// AgentOS substrate plan (see docs/agentos-substrate-extraction-plan.md).
+//
+// Supply-chain note (Sprint 436, docs/bashy-service-supply-chain-policy.md):
+// bashy must never exec a third-party-built ollama. The ONLY supported runtime
+// is the bashy-signed embedded runner (Sprint 436 story 732cbb22) compiled
+// from source (external/ollama: runner_embed, src, ollama_component.go). The
+// downloaded official-archive fallback and the PATH / OLLAMA_BIN fallback are
+// removed. If the embedded build is unavailable on a platform, fail closed
+// with a clear error naming the supply-chain policy.
 package ollama
 
 import (
@@ -15,108 +23,38 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 )
 
-// ErrNotFound is returned by Resolve when no ollama binary can be located.
+const ollamaSupplyChainPolicy = "docs/bashy-service-supply-chain-policy.md"
+
+// signedRunnerPointer names the only supported runtime in refusal errors.
+const signedRunnerPointer = "the only supported runtime is the bashy-signed embedded runner (Sprint 436 story 732cbb22; build with -tags embed_runner)"
+
+// ErrNotFound is returned by Resolve, which now always fails per supply-chain
+// policy. Retained for compatibility.
 var ErrNotFound = errors.New("ollama binary not found")
 
-// Resolve locates an ollama binary to exec, in priority order:
-//  1. $OLLAMA_BIN (explicit override).
-//  2. "ollama" on $PATH.
-//  3. Well-known install locations, including a binary a sibling tool (e.g.
-//     ycode) may have already fetched into the per-user cache.
+// Resolve locates an ollama binary to exec.
 //
-// It returns ErrNotFound (wrapped) when nothing usable is present.
+// Disabled per docs/bashy-service-supply-chain-policy.md: bashy never execs a
+// third-party-built ollama. This function always returns a fail-closed error
+// naming the policy, and never probes PATH, OLLAMA_BIN, or well-known
+// locations.
 func Resolve() (string, error) {
-	if p := os.Getenv("OLLAMA_BIN"); p != "" {
-		if isExecutable(p) {
-			return p, nil
-		}
-		return "", fmt.Errorf("OLLAMA_BIN=%q is not an executable file: %w", p, ErrNotFound)
-	}
-	if p, err := exec.LookPath("ollama"); err == nil {
-		return p, nil
-	}
-	for _, p := range candidatePaths() {
-		if isExecutable(p) {
-			return p, nil
-		}
-	}
-	return "", fmt.Errorf("%w on PATH or in known locations; install ollama or set OLLAMA_BIN", ErrNotFound)
+	return "", fmt.Errorf("ollama: third-party binary execution disabled per %s (supply-chain policy) — %s — refusing to exec upstream ollama: %w", ollamaSupplyChainPolicy, signedRunnerPointer, ErrNotFound)
 }
 
-// candidatePaths lists fallback locations to probe when ollama is not on PATH.
-func candidatePaths() []string {
-	var paths []string
-	bin := ollamaName()
-	// An ollama a sibling agent tool already fetched (per-user cache).
-	if dir, err := os.UserCacheDir(); err == nil {
-		paths = append(paths, filepath.Join(dir, "ycode", "bin", bin))
-		paths = append(paths, filepath.Join(dir, "bashy", "bin", bin))
-	}
-	if runtime.GOOS == "darwin" {
-		paths = append(paths, "/Applications/Ollama.app/Contents/Resources/ollama")
-	}
-	if runtime.GOOS != "windows" {
-		paths = append(paths,
-			"/opt/homebrew/bin/ollama",
-			"/usr/local/bin/ollama",
-			"/usr/bin/ollama",
-		)
-	}
-	return paths
-}
-
-func ollamaName() string {
-	if runtime.GOOS == "windows" {
-		return "ollama.exe"
-	}
-	return "ollama"
-}
-
-func isExecutable(p string) bool {
-	fi, err := os.Stat(p)
-	if err != nil || fi.IsDir() {
-		return false
-	}
-	if runtime.GOOS == "windows" {
-		return true
-	}
-	return fi.Mode().Perm()&0o111 != 0
-}
-
-// Run resolves ollama and execs it with args as a transparent pass-through,
-// wiring the given stdio and inheriting the process environment. It returns
-// the child's exit code (127 if ollama cannot be located, matching the shell
-// "command not found" convention).
-func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	bin, err := Resolve()
-	if err != nil {
-		fmt.Fprintln(stderr, "bashy ollama:", err)
-		return 127
-	}
-	cmd := exec.CommandContext(ctx, bin, args...)
-	cmd.Stdin = stdin
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-	cmd.Env = os.Environ()
-	if err := cmd.Run(); err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			if code := ee.ExitCode(); code >= 0 {
-				return code
-			}
-			return 1
-		}
-		fmt.Fprintln(stderr, "bashy ollama:", err)
-		return 1
-	}
-	return 0
+// Run would resolve ollama and exec it with args as a transparent
+// pass-through. It returns the child's exit code (127 if ollama cannot be
+// located, matching the shell "command not found" convention).
+//
+// Disabled per docs/bashy-service-supply-chain-policy.md: always fails closed
+// with 127 and a policy error, never execs a third-party binary.
+func Run(_ context.Context, _ []string, _ io.Reader, _, stderr io.Writer) int {
+	fmt.Fprintln(stderr, "bashy ollama: third-party binary execution disabled per", ollamaSupplyChainPolicy, "(supply-chain policy) —", signedRunnerPointer+"; refusing to exec upstream ollama")
+	return 127
 }
 
 // DefaultURL returns the default Ollama server URL, honoring $OLLAMA_HOST.

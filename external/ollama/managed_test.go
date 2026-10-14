@@ -81,6 +81,10 @@ func TestSystemServeDoesNotBindDoorHost(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell test binary is Unix-specific")
 	}
+	// Per docs/bashy-service-supply-chain-policy.md (Sprint 436) system
+	// serve is removed: `ollama serve` never execs a third-party binary.
+	// This test now verifies it fails closed with a policy error that points
+	// at the signed embedded runner, rather than executing the binary.
 	t.Setenv("BASHY_HOME", t.TempDir())
 	t.Setenv("BASHY_OLLAMA_PORT", "11501")
 	doorHost, err := door.OllamaHost()
@@ -97,15 +101,27 @@ func TestSystemServeDoesNotBindDoorHost(t *testing.T) {
 	t.Setenv("OLLAMA_BIN", bin)
 	cmd := NewOllamaCmd(CmdOptions{UseSystemBinaries: true})
 	cmd.SetArgs([]string{"serve"})
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("system serve: %v", err)
+	err = cmd.Execute()
+	if err == nil {
+		t.Fatal("expected system serve to fail closed per supply-chain policy, but succeeded")
 	}
-	got, err := os.ReadFile(output)
-	if err != nil {
-		t.Fatal(err)
+	assertRefusal(t, "serve", err)
+	// Ensure the fake binary was NOT executed.
+	if _, statErr := os.Stat(output); !os.IsNotExist(statErr) {
+		data, _ := os.ReadFile(output)
+		t.Fatalf("system binary was executed despite policy refusal; output %q", string(data))
 	}
-	if host := string(got); host != "127.0.0.1:11501" {
-		t.Fatalf("system OLLAMA_HOST = %q, want managed bind", host)
+	// managedServeEnv still produces the correct bind env independently.
+	env := managedServeEnv([]string{"OLLAMA_HOST=" + doorHost}, 11501)
+	found := false
+	for _, e := range env {
+		if e == "OLLAMA_HOST=127.0.0.1:11501" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("managedServeEnv did not pin 127.0.0.1:11501: %v", env)
 	}
 }
 
