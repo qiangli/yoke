@@ -70,6 +70,7 @@ const (
 type Plan struct {
 	RecordLifecycle `yaml:",inline" schema:"-"`
 	Name            string   `yaml:"name" json:"name" doc:"plan id models reference with plan:"`
+	Label           string   `yaml:"label,omitempty" json:"label,omitempty" doc:"operator-facing quota account label; overrides tool and model family"`
 	Display         string   `yaml:"display,omitempty" json:"display,omitempty" doc:"human-facing label"`
 	Vendor          string   `yaml:"vendor,omitempty" json:"vendor,omitempty" doc:"company selling the seat"`
 	VendorPlan      string   `yaml:"vendor_plan,omitempty" json:"vendor_plan,omitempty" doc:"the vendor's own name for the plan"`

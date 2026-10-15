@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -15,6 +16,10 @@ import (
 )
 
 type QuotaRow struct {
+	Account          string     `json:"account"`
+	Label            string     `json:"label"`
+	Limit            string     `json:"limit,omitempty"`
+	Configured       bool       `json:"configured"`
 	Provider         string     `json:"provider"`
 	Plan             string     `json:"plan,omitempty"`
 	Lane             Lane       `json:"lane,omitempty"`
@@ -47,58 +52,144 @@ func (g *Gate) Quota(ctx context.Context, opt QuotaOptions) ([]QuotaRow, error) 
 	if now.IsZero() {
 		now = g.now()
 	}
-	report, err := g.CollectReport(ctx, ReportOptions{Provider: opt.Provider, Refresh: opt.Refresh, Now: now})
+	report, err := g.CollectReport(ctx, ReportOptions{Refresh: opt.Refresh, Now: now})
 	if err != nil {
 		return nil, err
 	}
 	cat := fleet.New()
 	models, _ := cat.Models()
 	plans, _ := cat.Plans()
-	byPlan := map[string]fleet.Plan{}
-	for _, p := range plans {
-		byPlan[p.Name] = p
-	}
 	p, err := g.policy()
 	if err != nil {
 		return nil, err
 	}
-	active := map[string]bool{}
-	configured := map[string]bool{}
-	modelByProvider := map[string]fleet.Model{}
+	agents, _ := cat.Agents()
+	activeAgents := []fleet.Agent{}
+	for _, agent := range agents {
+		if cat.AgentActive(agent) {
+			seen := map[string]bool{}
+			for agent.Base != "" && !seen[agent.Name] {
+				seen[agent.Name] = true
+				agent, _ = cat.Agent(agent.Base)
+			}
+			if m, ok := cat.Model(agent.Model); ok {
+				agent.Model = m.Name
+			}
+			activeAgents = append(activeAgents, agent)
+		}
+	}
+	return quotaRows(report, models, plans, activeAgents, p, opt, now), nil
+}
+
+// quotaRows consumes active bindings, never model availability, as configuration.
+func quotaRows(report *Report, models []fleet.Model, plans []fleet.Plan, agents []fleet.Agent, p *Policy, opt QuotaOptions, now time.Time) []QuotaRow {
+	byPlan := map[string]fleet.Plan{}
+	accounts := map[string]*QuotaRow{}
+	accountModels := map[string][]fleet.Model{}
+	tools := map[string]map[string]bool{}
+	for _, plan := range plans {
+		byPlan[plan.Name] = plan
+		accounts[plan.Name] = &QuotaRow{Account: plan.Name, Plan: plan.Name, Provider: plan.Vendor, Lane: LaneSubscription}
+	}
+	modelAccounts := map[string]string{}
 	for _, m := range models {
-		provider := strings.ToLower(m.Provider)
-		if provider == "" {
+		id := quotaAccount(m)
+		if id == "" {
 			continue
 		}
-		configured[provider] = true
-		if m.Active() {
-			active[provider] = true
-			if _, ok := modelByProvider[provider]; !ok {
-				modelByProvider[provider] = m
+		modelAccounts[m.Name] = id
+		accountModels[id] = append(accountModels[id], m)
+		if row := accounts[id]; row != nil && len(accountModels[id]) == 1 {
+			row.Provider = m.Provider
+		}
+		if accounts[id] == nil {
+			accounts[id] = &QuotaRow{Account: id, Plan: m.Plan, Provider: m.Provider, Lane: laneFor(FromFleetModelPlan(m, fleet.Plan{}))}
+		}
+	}
+	for _, agent := range agents {
+		id := modelAccounts[agent.Model]
+		if id == "" {
+			continue
+		}
+		accounts[id].Configured = true
+		if tools[id] == nil {
+			tools[id] = map[string]bool{}
+		}
+		tools[id][agent.Tool] = true
+	}
+	for id, row := range accounts {
+		row.Label = byPlan[row.Plan].Label
+		if row.Label == "" && len(tools[id]) == 1 {
+			for tool := range tools[id] {
+				row.Label = tool
 			}
 		}
+		if row.Label == "" {
+			family := ""
+			for i, m := range accountModels[id] {
+				if i == 0 {
+					family = m.Family
+				} else if family != m.Family {
+					family = ""
+					break
+				}
+			}
+			row.Label = family
+		}
+		if row.Label == "" {
+			row.Label = id
+		}
+		if id == "local" {
+			row.Label = "local"
+		}
+	}
+	eligible := func(row *QuotaRow) bool {
+		return row != nil && (row.Configured || opt.All) && (opt.Provider == "" || strings.EqualFold(row.Provider, opt.Provider) || strings.EqualFold(row.Account, opt.Provider) || strings.EqualFold(row.Label, opt.Provider))
 	}
 	rows := map[string]*QuotaRow{}
 	tokenParts := map[string]float64{}
-	tokenTotals := map[string]float64{}
 	hasParts := map[string]bool{}
 	for _, account := range report.Accounts {
-		provider := strings.ToLower(account.Provider)
-		if opt.Provider != "" && !strings.EqualFold(provider, opt.Provider) {
+		id := account.Account
+		if id == "" || id == "unresolved" || strings.EqualFold(account.Provider, "none") || strings.EqualFold(account.Provider, "unknown") {
+			continue
+		}
+		// A model-level probe may name the key even when the model bills to a plan.
+		if accounts[id] == nil && len(account.Models) > 0 {
+			resolved := modelAccounts[account.Models[0]]
+			for _, model := range account.Models[1:] {
+				if modelAccounts[model] != resolved {
+					resolved = ""
+					break
+				}
+			}
+			id = resolved
+		}
+		if account.Lane == LaneLocal {
+			id = "local"
+		}
+		base := accounts[id]
+		if !eligible(base) || !base.Configured {
 			continue
 		}
 		for _, metric := range account.Metrics {
-			if metric.Value == nil || metric.Source == "unavailable" {
+			if metric.Value == nil || metric.Source == "unavailable" || metric.Source == "local-meter" {
 				continue
 			}
-			if metric.Name != "quota.used_percent" && metric.Name != "usage.tokens" && metric.Name != "usage.tokens_in" && metric.Name != "usage.tokens_out" && metric.Name != "usage.balance" && metric.Name != "usage.used" && metric.Name != "usage.limit" && metric.Name != "usage.remaining" {
+			if metric.Name != "quota.used_percent" && metric.Name != "usage.tokens_in" && metric.Name != "usage.tokens_out" && metric.Name != "usage.balance" && metric.Name != "usage.used" && metric.Name != "usage.limit" && metric.Name != "usage.remaining" {
 				continue
 			}
 			window := metric.Window
-			key := provider + "\x00" + window
+			key := id + "\x00" + window
 			row := rows[key]
 			if row == nil {
-				row = &QuotaRow{Provider: provider, Window: window, Lane: account.Lane, Status: "ok"}
+				copy := *base
+				row = &copy
+				row.Window = window
+				row.Status = "ok"
+				if metric.Classification == "inferred" {
+					row.Status = "inferred"
+				}
 				rows[key] = row
 			}
 			if row.Source == "" || metric.Name == "quota.used_percent" {
@@ -129,8 +220,6 @@ func (g *Gate) Quota(ctx context.Context, opt QuotaOptions) ([]QuotaRow, error) 
 						row.Headroom = &h
 					}
 				}
-			case "usage.tokens":
-				tokenTotals[key] += *metric.Value
 			case "usage.tokens_in", "usage.tokens_out":
 				tokenParts[key] += *metric.Value
 				hasParts[key] = true
@@ -144,18 +233,14 @@ func (g *Gate) Quota(ctx context.Context, opt QuotaOptions) ([]QuotaRow, error) 
 		if hasParts[key] {
 			v := tokenParts[key]
 			row.Tokens = &v
-		} else if v, ok := tokenTotals[key]; ok {
-			row.Tokens = &v
+
 		}
 	}
 	for _, r := range rows {
-		if m, ok := modelByProvider[r.Provider]; ok {
-			r.Plan = m.Plan
-		}
 		if r.Headroom != nil {
 			limit := 0
 			limitKnown := false
-			if m, ok := modelByProvider[r.Provider]; ok {
+			for _, m := range accountModels[r.Account] {
 				if n, found := byPlan[m.Plan].Limit("concurrent", "requests", m.Name); found {
 					limit = int(n)
 					limitKnown = true
@@ -163,7 +248,7 @@ func (g *Gate) Quota(ctx context.Context, opt QuotaOptions) ([]QuotaRow, error) 
 			}
 			if !limitKnown {
 				for _, c := range p.Constraints {
-					if (c.Provider == r.Provider || c.Provider == "") && c.Host == "" && c.Concurrency != nil {
+					if (c.Provider == r.Provider || c.Provider == "") && (c.Account == "" || c.Account == r.Account) && c.Host == "" && c.Concurrency != nil {
 						if !limitKnown || *c.Concurrency < limit {
 							limit = *c.Concurrency
 							limitKnown = true
@@ -177,46 +262,68 @@ func (g *Gate) Quota(ctx context.Context, opt QuotaOptions) ([]QuotaRow, error) 
 			}
 		}
 	}
-	for provider := range configured {
-		if opt.Provider != "" && !strings.EqualFold(provider, opt.Provider) {
-			continue
+	// Local models and the door share one account; only active bindings configure it.
+	if tokens, ok := doorTokens(now); ok {
+		base := accounts["local"]
+		if eligible(base) && base.Configured {
+			copy := *base
+			copy.Window, copy.Status, copy.Source, copy.Classification = "5h", "ok", "bashy-door", "measured"
+			v := float64(tokens)
+			copy.Tokens, copy.ObservedAt = &v, &now
+			rows["local\x005h"] = &copy
 		}
-		if !active[provider] && opt.All {
-			for key, row := range rows {
-				if row.Provider == provider {
-					delete(rows, key)
-				}
-			}
-			rows[provider+"\x00"] = &QuotaRow{Provider: provider, Status: "not-configured"}
+	}
+	for id, base := range accounts {
+		if !eligible(base) {
 			continue
 		}
 		found := false
-		for _, r := range rows {
-			if r.Provider == provider {
+		for _, row := range rows {
+			if row.Account == id {
 				found = true
 				break
 			}
 		}
-		if !found && (active[provider] || opt.All) {
-			status := "unmeasured"
-			if !active[provider] {
-				status = "not-configured"
-			}
-			rows[provider+"\x00"] = &QuotaRow{Provider: provider, Status: status}
+		if found {
+			continue
 		}
-	}
-	if opt.Provider == "" || strings.EqualFold(opt.Provider, "local") {
-		if tokens, ok := doorTokens(now); ok {
-			v := float64(tokens)
-			row := rows["local\x005h"]
-			if row == nil {
-				row = &QuotaRow{Provider: "local", Lane: LaneLocal, Window: "5h", Status: "ok"}
-				rows["local\x005h"] = row
+		copy := *base
+		copy.Status = "unmeasured"
+		if !base.Configured {
+			copy.Status = "not-configured"
+		}
+		for _, limit := range byPlan[base.Plan].Limits {
+			if limit.Value <= 0 {
+				continue
 			}
-			row.Tokens = &v
-			row.Source = "bashy-door"
-			row.Classification = "measured"
-			row.ObservedAt = &now
+			if limit.Model != "" {
+				matched := false
+				for _, m := range accountModels[id] {
+					if m.Name == limit.Model {
+						matched = true
+					}
+				}
+				if !matched {
+					continue
+				}
+			}
+			key := id + "\x00" + limit.Window
+			row := rows[key]
+			if row == nil {
+				r := copy
+				row = &r
+				row.Window = limit.Window
+				row.Source = "plan"
+				rows[key] = row
+			}
+			if row.Limit != "" {
+				row.Limit += "; "
+			}
+			row.Limit += fmt.Sprintf("%d %s/%s", limit.Value, limit.Unit, limit.Window)
+			found = true
+		}
+		if !found {
+			rows[id+"\x00"] = &copy
 		}
 	}
 	out := make([]QuotaRow, 0, len(rows))
@@ -224,12 +331,27 @@ func (g *Gate) Quota(ctx context.Context, opt QuotaOptions) ([]QuotaRow, error) 
 		out = append(out, *r)
 	}
 	sort.Slice(out, func(i, j int) bool {
-		if out[i].Provider == out[j].Provider {
+		if out[i].Label == out[j].Label {
+			if out[i].Account != out[j].Account {
+				return out[i].Account < out[j].Account
+			}
 			return out[i].Window < out[j].Window
 		}
-		return out[i].Provider < out[j].Provider
+		return out[i].Label < out[j].Label
 	})
-	return out, nil
+	return out
+}
+func quotaAccount(m fleet.Model) string {
+	if m.Provider == "" || strings.EqualFold(m.Provider, "none") || strings.EqualFold(m.Provider, "unknown") {
+		return ""
+	}
+	if m.Kind == fleet.ModelKindLocal {
+		return "local"
+	}
+	if m.Plan != "" {
+		return m.Plan
+	}
+	return m.APIKeyRef
 }
 func doorTokens(now time.Time) (int64, bool) {
 	home := os.Getenv("BASHY_HOME")
@@ -258,5 +380,5 @@ func doorTokens(now time.Time) (int64, bool) {
 			total += v.Prompt + v.Completion
 		}
 	}
-	return total, true
+	return total, scanner.Err() == nil
 }
