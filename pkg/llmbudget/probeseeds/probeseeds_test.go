@@ -302,6 +302,69 @@ func TestRodChatGPTProProbeManySessionsFast(t *testing.T) {
 	}
 }
 
+// Rod: a real-sized rollout must not make the in-process grep scan all 20 MiB.
+// The earlier token count is outside the 256 KiB tail; the final one proves
+// the fast path still returns the newest record through the real Bash# engine.
+func TestRodChatGPTProProbeLargeRolloutFast(t *testing.T) {
+	home := isolate(t)
+	sessions := filepath.Join(home, ".codex", "sessions", "2026", "10", "15")
+	if err := os.MkdirAll(sessions, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Create(filepath.Join(sessions, "rollout-large.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	early := `{"timestamp":"2026-10-15T09:00:00.000Z","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":90,"window_minutes":300,"resets_at":1792680000},"secondary":null}}}` + "\n"
+	if _, err := f.WriteString(early); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	padding := strings.Repeat("x", 1<<20-1) + "\n"
+	for range 20 {
+		if _, err := f.WriteString(padding); err != nil {
+			f.Close()
+			t.Fatal(err)
+		}
+	}
+	target := `{"timestamp":"2026-10-15T16:43:53.000Z","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":37,"window_minutes":10080,"resets_at":1792685131},"secondary":null}}}` + "\n"
+	if _, err := f.WriteString(target); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	cat := fleet.New()
+	plan, ok := cat.Plan("chatgpt-pro")
+	if !ok || len(plan.Usage) != 1 {
+		t.Fatalf("chatgpt-pro usage: %+v", plan.Usage)
+	}
+	started := time.Now()
+	result, err := snippet.Run(context.Background(), plan.Usage[0].Run, snippet.IO{})
+	elapsed := time.Since(started)
+	if err != nil || result.Exit != 0 {
+		t.Fatalf("probe: exit=%d err=%v stderr=%s", result.Exit, err, result.Stderr)
+	}
+	var doc struct {
+		Metrics []struct {
+			Value  float64 `json:"value"`
+			Window string  `json:"window"`
+		} `json:"metrics"`
+	}
+	if err := json.Unmarshal(result.Stdout, &doc); err != nil {
+		t.Fatalf("probe JSON: %v\n%s", err, result.Stdout)
+	}
+	if len(doc.Metrics) != 1 || doc.Metrics[0].Value != 37 || doc.Metrics[0].Window != "week" {
+		t.Fatalf("last token_count metrics: %+v", doc.Metrics)
+	}
+	if elapsed >= 2*time.Second {
+		t.Fatalf("probe took %v for a 20 MiB rollout; want <2s", elapsed)
+	}
+	t.Logf("20 MiB rollout probe completed in %v", elapsed)
+}
+
 func TestRodMissingSnapshotNotConfigured(t *testing.T) {
 	home := isolate(t)
 	rows := rodQuota(t)

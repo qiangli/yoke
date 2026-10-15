@@ -44,6 +44,10 @@ usage:
           fi
         fi
         [ -n "$f" ] || exit 1
-        grep token_count "$f" | tail -n 1 | jq -c '{schema_version:"bashy-usage-v1",metrics:[.payload.rate_limits|(.primary//empty),(.secondary//empty)|select(.window_minutes==300 or .window_minutes==10080)|{name:"used_percent",value:.used_percent,unit:"percent",window:(if .window_minutes==300 then "5h" else "week" end),reset_at:.resets_at}]}'
+        line=$(tail -c 262144 "$f" | grep token_count | tail -n 1)
+        if [ -z "$line" ]; then
+          line=$(grep token_count "$f" | tail -n 1)
+        fi
+        printf '%s\n' "$line" | jq -c '{schema_version:"bashy-usage-v1",metrics:[.payload.rate_limits|(.primary//empty),(.secondary//empty)|select(.window_minutes==300 or .window_minutes==10080)|{name:"used_percent",value:.used_percent,unit:"percent",window:(if .window_minutes==300 then "5h" else "week" end),reset_at:.resets_at}]}'
       effects: [read]
       timeout: 10s
