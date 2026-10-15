@@ -995,11 +995,12 @@ type Model struct {
 	// served by agy draws on the Google plan, not the Anthropic one. Empty or
 	// dangling means unknown, and unknown is fail-open everywhere it is read
 	// (see Plan and PlanTierRank).
-	Plan          string   `yaml:"plan,omitempty" json:"plan,omitempty" doc:"subscription plan id the model is billed through (plans/)"`
-	Capabilities  []string `yaml:"capabilities,omitempty" json:"capabilities,omitempty" doc:"declared model capabilities"`
-	Domain        []string `yaml:"domain,omitempty" json:"domain,omitempty" doc:"preferred task domains"`
-	ContextLength int64    `yaml:"context_length,omitempty" json:"context_length,omitempty" doc:"maximum context length"`
-	Price         float64  `yaml:"price,omitempty" json:"price,omitempty" doc:"relative provider price"`
+	Plan          string       `yaml:"plan,omitempty" json:"plan,omitempty" doc:"subscription plan id the model is billed through (plans/)"`
+	Usage         []UsageProbe `yaml:"usage,omitempty" json:"usage,omitempty" doc:"usage probes for this model"`
+	Capabilities  []string     `yaml:"capabilities,omitempty" json:"capabilities,omitempty" doc:"declared model capabilities"`
+	Domain        []string     `yaml:"domain,omitempty" json:"domain,omitempty" doc:"preferred task domains"`
+	ContextLength int64        `yaml:"context_length,omitempty" json:"context_length,omitempty" doc:"maximum context length"`
+	Price         float64      `yaml:"price,omitempty" json:"price,omitempty" doc:"relative provider price"`
 
 	// Quality is the model's overall capability prior in [0,1]; Spec holds
 	// per-capability adjustments where a model is notably stronger or

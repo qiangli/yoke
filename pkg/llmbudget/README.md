@@ -96,10 +96,11 @@ https://docs.z.ai/devpack/overview) publishes 12,000 credits per 5 hours and
 
 ## Documented sources
 
-Both source kinds require `enabled:true`, explicit provider/account/pool/lane and
+Explicit policy source kinds require `enabled:true`, provider/account/pool/lane and
 unique `id`. Refreshes share a disk cache and a per-source kernel lock; retries
-honor cadence, deadlines and backoff even under explicit refresh. No source makes
-an inference call, searches harness credential stores or enumerates accounts.
+honor cadence, deadlines and backoff even under explicit refresh. The two policy
+source kinds make no inference calls. No source searches harness credential
+stores or enumerates accounts.
 
 * `claude-statusline`: reads `path`, an explicitly installed local bridge file:
   `{"schema_version":"bashy-claude-statusline-v1","observed_at":"2026-09-08T12:00:00Z","account":"configured-account","payload":{...}}`.
@@ -117,6 +118,14 @@ an inference call, searches harness credential stores or enumerates accounts.
   include covered external usage; costs are billing observations, not a quota or
   balance. Pagination is bounded and incomplete totals are withheld. Credentials
   only go to the fixed official origin, with redirects disabled.
+* `probe`: synthesized from active fleet model and plan `usage:` records. The
+  record holds a Bash# snippet and optional jq metric mappings; otherwise its
+  output must use the `bashy-usage-v1` JSON envelope. A probe declaring effects
+  beyond `pure` and `read` stays disabled until its source ID appears in the
+  policy `probe_consent` allow-list. Results use the shared source cache and
+  backoff. Only measured quota percentages count toward seat headroom;
+  inferred results remain display-only. Credential references resolve through
+  bashy configuration and the model's `api_key_ref`, never harness stores.
 
 Other source kinds and unavailable vendors remain explicit unsupported/unknown
 rows. A bridge/API parser being implemented does not mean the operator has

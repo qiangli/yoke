@@ -69,6 +69,9 @@ func ParseModel(name string, body []byte, src assetring.Source) (Model, error) {
 	if m.Name == "" {
 		m.Name = name
 	}
+	if err := validateUsage(m.Usage); err != nil {
+		return Model{}, fmt.Errorf("fleet: model %q: %w", name, err)
+	}
 	var fields map[string]any
 	_ = yaml.Unmarshal(body, &fields)
 	_, sourceSpecified := fields["source"]

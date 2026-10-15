@@ -4,13 +4,17 @@ import (
 	"context"
 	"math"
 	"strings"
+
+	"github.com/qiangli/yoke/pkg/fleet"
 )
+
+type headroomProbeContextKey struct{}
 
 // SubscriptionHeadroom reports the measured remaining fraction of the vendor
 // subscription window that owns binding. It is deliberately separate from
 // Preview: observations rank seats, while Preview remains the admission gate.
 //
-// A value is known only when an enabled account source produced an actual
+// A value is known only when an enabled account source produced a measured
 // quota.used_percent measurement. Configured limits, local counters, stale
 // observations, and unresolved accounts do not become vendor quota facts.
 func SubscriptionHeadroom(ctx context.Context, binding Binding) (remaining float64, known bool, err error) {
@@ -41,26 +45,41 @@ func (g *Gate) MeasuredHeadroom(ctx context.Context, model, agent string) (remai
 
 // SubscriptionHeadroom is the Gate-scoped form used by tests and embedders.
 func (g *Gate) SubscriptionHeadroom(ctx context.Context, binding Binding) (remaining float64, known bool, err error) {
-	report, err := g.CollectReport(ctx, ReportOptions{Roster: []Binding{binding}})
+	report, err := g.CollectReport(context.WithValue(ctx, headroomProbeContextKey{}, true), ReportOptions{Roster: []Binding{binding}})
 	if err != nil {
 		return 0, false, err
 	}
+	planName := ""
+	if binding.Model != "" {
+		if m, ok := fleet.New().Model(binding.Model); ok {
+			planName = m.Plan
+		}
+	}
 	remaining = 1
 	for _, account := range report.Accounts {
+		planProbe := false
+		if planName != "" && planName == account.Account {
+			for _, metric := range account.Metrics {
+				if strings.HasPrefix(metric.Source, "probe:plan:") {
+					planProbe = true
+					break
+				}
+			}
+		}
 		if account.Lane != LaneSubscription || !account.AccountKnown ||
 			(binding.Provider != "" && !strings.EqualFold(account.Provider, binding.Provider)) ||
-			(binding.Account != "" && account.Account != binding.Account) ||
-			(binding.Pool != "" && account.Pool != binding.Pool) {
+			(!planProbe && binding.Account != "" && account.Account != binding.Account) ||
+			(!planProbe && binding.Pool != "" && account.Pool != binding.Pool) {
 			continue
 		}
-		if binding.Agent != "" && !contains(account.Agents, binding.Agent) {
+		if !planProbe && binding.Agent != "" && !contains(account.Agents, binding.Agent) {
 			continue
 		}
-		if binding.Agent == "" && binding.Model != "" && !contains(account.Models, binding.Model) {
+		if !planProbe && binding.Agent == "" && binding.Model != "" && !contains(account.Models, binding.Model) {
 			continue
 		}
 		for _, metric := range account.Metrics {
-			if metric.Name != "quota.used_percent" || metric.Value == nil || metric.Classification != "actual" || metric.Source == "unavailable" {
+			if metric.Name != "quota.used_percent" || metric.Value == nil || (metric.Classification != "actual" && metric.Classification != "measured") || metric.Source == "unavailable" {
 				continue
 			}
 			used := *metric.Value

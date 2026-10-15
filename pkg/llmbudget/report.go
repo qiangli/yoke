@@ -20,6 +20,7 @@ func (g *Gate) CollectReport(ctx context.Context, opt ReportOptions) (*Report, e
 	if err != nil {
 		return nil, err
 	}
+	sources := append(append([]SourceConfig(nil), p.Sources...), synthesizedProbes(p)...)
 	s, err := g.stateSnapshot()
 	if err != nil {
 		return nil, err
@@ -65,8 +66,8 @@ func (g *Gate) CollectReport(ctx context.Context, opt ReportOptions) (*Report, e
 	for _, a := range opt.Active {
 		roster = append(roster, Binding{Model: a.Model, Agent: a.Agent})
 	}
-	for _, src := range p.Sources {
-		roster = append(roster, Binding{Provider: src.Provider, Account: src.Account, Pool: src.Pool, Lane: src.Lane, AccountKnown: true})
+	for _, src := range sources {
+		roster = append(roster, Binding{Model: src.probeModel, Provider: src.Provider, Account: src.Account, Pool: src.Pool, Lane: src.Lane, AccountKnown: true})
 	}
 	groups := map[string]*AccountReport{}
 	modelBindings := map[string][]Binding{}
@@ -247,8 +248,11 @@ func (g *Gate) CollectReport(ctx context.Context, opt ReportOptions) (*Report, e
 				row.Metrics = append(row.Metrics, legacyMetrics(m, now)...)
 			}
 		}
-		for _, src := range p.Sources {
+		for _, src := range sources {
 			if src.Provider != row.Provider || src.Account != row.Account || src.Pool != row.Pool || src.Lane != row.Lane {
+				continue
+			}
+			if ctx.Value(headroomProbeContextKey{}) == true && src.probe != nil && strings.Contains(src.probe.Run.Body, "agentic") {
 				continue
 			}
 			result, e := g.source(ctx, src, now, opt.Refresh)

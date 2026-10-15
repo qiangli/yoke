@@ -145,6 +145,126 @@
     "description": "provider-native tier name"
   },
   {
+    "path": "usage",
+    "type": "[]object",
+    "description": "usage probes for this model"
+  },
+  {
+    "path": "usage.\u003cindex\u003e",
+    "type": "object",
+    "description": "list element"
+  },
+  {
+    "path": "usage.\u003cindex\u003e.id",
+    "type": "string",
+    "description": "unique probe id on this record"
+  },
+  {
+    "path": "usage.\u003cindex\u003e.metrics",
+    "type": "[]object",
+    "description": "JSON output mapping"
+  },
+  {
+    "path": "usage.\u003cindex\u003e.metrics.\u003cindex\u003e",
+    "type": "object",
+    "description": "list element"
+  },
+  {
+    "path": "usage.\u003cindex\u003e.metrics.\u003cindex\u003e.name",
+    "type": "string",
+    "description": "metric name from the usage vocabulary"
+  },
+  {
+    "path": "usage.\u003cindex\u003e.metrics.\u003cindex\u003e.reset",
+    "type": "string",
+    "description": "jq expression for reset time"
+  },
+  {
+    "path": "usage.\u003cindex\u003e.metrics.\u003cindex\u003e.unit",
+    "type": "string",
+    "description": "literal unit or jq expression"
+  },
+  {
+    "path": "usage.\u003cindex\u003e.metrics.\u003cindex\u003e.value",
+    "type": "string",
+    "description": "jq expression for the numeric value"
+  },
+  {
+    "path": "usage.\u003cindex\u003e.metrics.\u003cindex\u003e.window",
+    "type": "string",
+    "description": "usage window"
+  },
+  {
+    "path": "usage.\u003cindex\u003e.metrics.name=\u003cvalue\u003e",
+    "type": "object",
+    "description": "named list element"
+  },
+  {
+    "path": "usage.\u003cindex\u003e.metrics.name=\u003cvalue\u003e.name",
+    "type": "string",
+    "description": "metric name from the usage vocabulary"
+  },
+  {
+    "path": "usage.\u003cindex\u003e.metrics.name=\u003cvalue\u003e.reset",
+    "type": "string",
+    "description": "jq expression for reset time"
+  },
+  {
+    "path": "usage.\u003cindex\u003e.metrics.name=\u003cvalue\u003e.unit",
+    "type": "string",
+    "description": "literal unit or jq expression"
+  },
+  {
+    "path": "usage.\u003cindex\u003e.metrics.name=\u003cvalue\u003e.value",
+    "type": "string",
+    "description": "jq expression for the numeric value"
+  },
+  {
+    "path": "usage.\u003cindex\u003e.metrics.name=\u003cvalue\u003e.window",
+    "type": "string",
+    "description": "usage window"
+  },
+  {
+    "path": "usage.\u003cindex\u003e.refresh",
+    "type": "string",
+    "description": "refresh interval, default 5m"
+  },
+  {
+    "path": "usage.\u003cindex\u003e.run",
+    "type": "object",
+    "description": "Bash# usage probe"
+  },
+  {
+    "path": "usage.\u003cindex\u003e.run.body",
+    "type": "string",
+    "description": "Bash# source code"
+  },
+  {
+    "path": "usage.\u003cindex\u003e.run.effects",
+    "type": "[]string",
+    "description": "declared effects"
+  },
+  {
+    "path": "usage.\u003cindex\u003e.run.effects.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "usage.\u003cindex\u003e.run.env",
+    "type": "map[string]string",
+    "description": "configuration credential references"
+  },
+  {
+    "path": "usage.\u003cindex\u003e.run.env.\u003ckey\u003e",
+    "type": "string",
+    "description": "map value"
+  },
+  {
+    "path": "usage.\u003cindex\u003e.run.lang",
+    "type": "string",
+    "description": "snippet language"
+  },
+  {
     "path": "version",
     "type": "string",
     "description": "version within the product family"

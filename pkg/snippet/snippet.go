@@ -29,10 +29,10 @@ const (
 )
 
 type Snippet struct {
-	Lang    string            `json:"lang,omitempty" yaml:"lang,omitempty"`
-	Body    string            `json:"body" yaml:"body"`
-	Effects []string          `json:"effects,omitempty" yaml:"effects,omitempty"`
-	Env     map[string]string `json:"env,omitempty" yaml:"env,omitempty"`
+	Lang    string            `json:"lang,omitempty" yaml:"lang,omitempty" doc:"snippet language"`
+	Body    string            `json:"body" yaml:"body" doc:"Bash# source code"`
+	Effects []string          `json:"effects,omitempty" yaml:"effects,omitempty" doc:"declared effects"`
+	Env     map[string]string `json:"env,omitempty" yaml:"env,omitempty" doc:"configuration credential references"`
 	Timeout time.Duration     `json:"-" yaml:"-"`
 }
 

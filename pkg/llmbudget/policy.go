@@ -47,7 +47,7 @@ func (g *Gate) policy() (*Policy, error) {
 	if p.Version != 1 {
 		return nil, errors.New("llmbudget: unsupported policy version")
 	}
-	if len(p.Bindings) > 10000 || len(p.Constraints) > 10000 || len(p.Sources) > 256 || len(p.Routes) > 10000 {
+	if len(p.Bindings) > 10000 || len(p.Constraints) > 10000 || len(p.Sources) > 256 || len(p.Routes) > 10000 || len(p.ProbeConsent) > 256 {
 		return nil, errors.New("llmbudget: policy collection limit exceeded")
 	}
 	seen := map[string]bool{}
@@ -76,6 +76,13 @@ func (g *Gate) policy() (*Policy, error) {
 		if c.Concurrency != nil && *c.Concurrency < 0 || c.HostSlots != nil && *c.HostSlots < 0 {
 			return nil, errors.New("llmbudget: negative concurrency")
 		}
+	}
+	seen = map[string]bool{}
+	for _, id := range p.ProbeConsent {
+		if !strings.HasPrefix(id, "probe:") || !safePolicyStrings(id) || seen[id] {
+			return nil, errors.New("llmbudget: invalid probe consent")
+		}
+		seen[id] = true
 	}
 	seen = map[string]bool{}
 	for _, r := range p.Routes {

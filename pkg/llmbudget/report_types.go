@@ -3,6 +3,8 @@ package llmbudget
 import (
 	"context"
 	"time"
+
+	"github.com/qiangli/yoke/pkg/fleet"
 )
 
 const ReportSchemaVersion = "bashy-model-usage-v1"
@@ -30,6 +32,7 @@ type Metric struct {
 	Name           string     `json:"name"`
 	Value          *float64   `json:"value"`
 	Unit           string     `json:"unit"`
+	Window         string     `json:"window,omitempty"`
 	Classification string     `json:"classification"`
 	Source         string     `json:"source"`
 	ObservedAt     time.Time  `json:"observed_at"`
@@ -132,12 +135,13 @@ type TerminationProof struct {
 // Policy is explicit, versioned local policy. Nil ceilings are unconfigured;
 // zero ceilings are enforced. Account and host axes share one transaction.
 type Policy struct {
-	missing     bool
-	Version     int            `json:"version"`
-	Bindings    []Binding      `json:"bindings"`
-	Constraints []Constraint   `json:"constraints"`
-	Routes      []Route        `json:"routes"`
-	Sources     []SourceConfig `json:"sources"`
+	missing      bool
+	Version      int            `json:"version"`
+	Bindings     []Binding      `json:"bindings"`
+	Constraints  []Constraint   `json:"constraints"`
+	Routes       []Route        `json:"routes"`
+	Sources      []SourceConfig `json:"sources"`
+	ProbeConsent []string       `json:"probe_consent,omitempty"`
 }
 type Constraint struct {
 	Provider            string  `json:"provider,omitempty"`
@@ -164,7 +168,7 @@ type Route struct {
 // explicitly enabled and never discover credentials from a harness store.
 type SourceConfig struct {
 	ID             string `json:"id"`
-	Kind           string `json:"kind"` // claude-statusline | openai-organization
+	Kind           string `json:"kind"` // claude-statusline | openai-organization | probe
 	Provider       string `json:"provider"`
 	Account        string `json:"account"`
 	Pool           string `json:"pool"`
@@ -175,6 +179,9 @@ type SourceConfig struct {
 	Organization   string `json:"organization,omitempty"`
 	RefreshSeconds int    `json:"refresh_seconds,omitempty"`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
+	probe          *fleet.UsageProbe
+	probeModel     string
+	probePlan      string
 }
 type SourceResult struct {
 	Status      string     `json:"status"`
@@ -184,7 +191,7 @@ type SourceResult struct {
 }
 
 // Adapter supports host-provided documented sources and hermetic fixtures.
-// Implementers must never make inference calls to measure usage.
+// Inference-backed probes must classify their output as inferred.
 type Adapter interface {
 	Kind() string
 	Collect(context.Context, SourceConfig, time.Time) (SourceResult, error)

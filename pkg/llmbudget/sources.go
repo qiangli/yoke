@@ -23,6 +23,9 @@ type cachedSource struct {
 
 func (g *Gate) source(ctx context.Context, c SourceConfig, now time.Time, refresh bool) (SourceResult, error) {
 	if !c.Enabled {
+		if c.Kind == "probe" {
+			return SourceResult{Status: "disabled", Limitations: []string{"Probe consent required."}}, nil
+		}
 		return SourceResult{Status: "unavailable", Limitations: []string{"Source is not explicitly enabled."}}, nil
 	}
 	var adapter Adapter
@@ -38,6 +41,8 @@ func (g *Gate) source(ctx context.Context, c SourceConfig, now time.Time, refres
 			adapter = ClaudeStatuslineAdapter{}
 		case "openai-organization":
 			adapter = OpenAIOrganizationAdapter{Resolve: g.cfg.ResolveCredential}
+		case "probe":
+			adapter = ProbeAdapter{}
 		}
 	}
 	if adapter == nil {
@@ -54,7 +59,10 @@ func (g *Gate) source(ctx context.Context, c SourceConfig, now time.Time, refres
 	var cached cachedSource
 	path := ""
 	if g.cfg.StatePath != "" {
-		raw, _ := json.Marshal(c)
+		raw, _ := json.Marshal(struct {
+			Source SourceConfig
+			Probe  any
+		}{c, c.probe})
 		hash := sha256.Sum256(raw)
 		path = filepath.Join(filepath.Dir(g.cfg.StatePath), "llm-budget-sources", hex.EncodeToString(hash[:])+".json")
 		read := func() {
