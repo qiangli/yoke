@@ -37,6 +37,8 @@ type QuotaRow struct {
 	Classification   string     `json:"classification,omitempty"`
 	Headroom         *float64   `json:"headroom,omitempty"`
 	SuggestedWorkers *int       `json:"suggested_workers,omitempty"`
+	Predict          string     `json:"predict,omitempty"`
+	ExhaustsAt       *time.Time `json:"exhausts_at,omitempty"`
 }
 
 // QuotaOptions.Refresh allows each probe its run.timeout (default 10s, cap 30s)
@@ -82,7 +84,9 @@ func (g *Gate) Quota(ctx context.Context, opt QuotaOptions) ([]QuotaRow, error) 
 			activeAgents = append(activeAgents, agent)
 		}
 	}
-	return quotaRows(report, models, plans, activeAgents, p, opt, now), nil
+	rows := quotaRows(report, models, plans, activeAgents, p, opt, now)
+	applyForecast(rows, forecastHistory(now), now)
+	return rows, nil
 }
 
 // quotaRows consumes active bindings, never model availability, as configuration.

@@ -6,6 +6,13 @@ import (
 	"testing"
 )
 
+func TestWeaveResultKeepsUsageInDistilledLog(t *testing.T) {
+	got, ok := weaveDistillStreamJSONLine(`{"type":"result","usage":{"input_tokens":120,"output_tokens":30,"cached_input_tokens":20}}`)
+	if !ok || !strings.Contains(got, "input=120") || !strings.Contains(got, "cached=20") || !strings.Contains(got, "output=30") {
+		t.Fatalf("result usage lost: %q", got)
+	}
+}
+
 func TestWeaveDistillStreamJSONLine(t *testing.T) {
 	tests := []struct {
 		name string

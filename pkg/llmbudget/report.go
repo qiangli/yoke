@@ -293,6 +293,9 @@ func (g *Gate) CollectReport(ctx context.Context, opt ReportOptions) (*Report, e
 		a, b := report.Accounts[i], report.Accounts[j]
 		return a.Provider+"/"+a.Account+"/"+a.Pool+string(a.Lane) < b.Provider+"/"+b.Account+"/"+b.Pool+string(b.Lane)
 	})
+	if opt.Refresh && g == defaultGate {
+		_ = ingestReport(ctx, now, report)
+	}
 	return report, nil
 }
 

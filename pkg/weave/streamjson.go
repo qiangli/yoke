@@ -335,6 +335,15 @@ func weaveDistillResultStreamJSON(event weaveStreamJSONEvent) string {
 		label += " " + event.Subtype
 	}
 	parts = append(parts, label)
+	if event.Usage.InputTokens > 0 {
+		parts = append(parts, fmt.Sprintf("input=%d", event.Usage.InputTokens))
+	}
+	if event.Usage.CachedInputTokens > 0 {
+		parts = append(parts, fmt.Sprintf("cached=%d", event.Usage.CachedInputTokens))
+	}
+	if event.Usage.OutputTokens > 0 {
+		parts = append(parts, fmt.Sprintf("output=%d", event.Usage.OutputTokens))
+	}
 	if event.NumTurns > 0 {
 		parts = append(parts, fmt.Sprintf("turns=%d", event.NumTurns))
 	}
