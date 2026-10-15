@@ -88,6 +88,7 @@ func (c *Catalog) Apps() ([]App, []error) {
 	cat := &assetring.Catalog[App]{
 		Sources: c.sources(dirApps),
 		Parse: func(n string, b []byte, s assetring.Source) App {
+			errs = append(errs, sourceWarnings(s)...)
 			a, err := ParseApp(n, b, s)
 			if err != nil {
 				errs = append(errs, parseErr{n, err})

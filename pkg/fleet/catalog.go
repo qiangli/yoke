@@ -190,7 +190,7 @@ func (c *Catalog) sources(noun string) []assetring.Source {
 		out = append(out, assetring.FileFS(sub, assetring.RingEmbedded, ext))
 	}
 	for _, dir := range sharedDirs(noun) {
-		out = append(out, assetring.FileDir(dir, assetring.RingShared, ext))
+		out = append(out, withBshRecords(assetring.FileDir(dir, assetring.RingShared, ext), dir))
 	}
 	out = append(out, c.cfg.shared[noun]...)
 	// The org overlay sits ABOVE the compiled-in baseline and the shared dirs,
@@ -200,7 +200,8 @@ func (c *Catalog) sources(noun string) []assetring.Source {
 		out = append(out, cloudSources(c.cfg.root, noun)...)
 	}
 	if !c.cfg.noLocal {
-		local := assetring.FileDir(c.nounDir(noun), assetring.RingLocal, ext)
+		dir := c.nounDir(noun)
+		local := withBshRecords(assetring.FileDir(dir, assetring.RingLocal, ext), dir)
 		if spec.Overlay {
 			local = overlaySource{Source: local, lower: append([]assetring.Source(nil), out...), noun: noun}
 		}
@@ -228,6 +229,7 @@ func (c *Catalog) Tools(all bool) ([]Tool, []error) {
 	cat := &assetring.Catalog[Tool]{
 		Sources: c.sources(dirTools),
 		Parse: func(n string, b []byte, s assetring.Source) Tool {
+			errs = append(errs, sourceWarnings(s)...)
 			t, err := ParseTool(n, b, s)
 			if err != nil {
 				errs = append(errs, parseErr{n, err})
@@ -281,6 +283,7 @@ func (c *Catalog) Models() ([]Model, []error) {
 	cat := &assetring.Catalog[Model]{
 		Sources: c.sources(dirModels),
 		Parse: func(n string, b []byte, s assetring.Source) Model {
+			errs = append(errs, sourceWarnings(s)...)
 			m, err := ParseModel(n, b, s)
 			if err != nil {
 				errs = append(errs, parseErr{n, err})
@@ -324,6 +327,7 @@ func (c *Catalog) agentEntries() ([]Agent, []error) {
 	cat := &assetring.Catalog[AgentFile]{
 		Sources: c.sources(dirAgents),
 		Parse: func(n string, b []byte, s assetring.Source) AgentFile {
+			errs = append(errs, sourceWarnings(s)...)
 			f, err := ParseAgentFile(n, b, s)
 			if err != nil {
 				errs = append(errs, parseErr{n, err})
@@ -465,6 +469,7 @@ func (c *Catalog) People() ([]Person, []error) {
 	cat := &assetring.Catalog[Person]{
 		Sources: c.sources(dirPeople),
 		Parse: func(n string, b []byte, s assetring.Source) Person {
+			errs = append(errs, sourceWarnings(s)...)
 			p, err := ParsePerson(n, b, s)
 			if err != nil {
 				errs = append(errs, parseErr{n, err})

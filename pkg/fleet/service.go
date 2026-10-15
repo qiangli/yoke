@@ -437,6 +437,7 @@ func (c *Catalog) Services() ([]Service, []error) {
 	cat := &assetring.Catalog[Service]{
 		Sources: c.sources(dirServices),
 		Parse: func(n string, b []byte, src assetring.Source) Service {
+			errs = append(errs, sourceWarnings(src)...)
 			s, err := ParseService(n, b, src)
 			if err != nil {
 				errs = append(errs, parseErr{n, err})

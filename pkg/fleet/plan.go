@@ -171,6 +171,7 @@ func (c *Catalog) Plans() ([]Plan, []error) {
 	cat := &assetring.Catalog[Plan]{
 		Sources: c.sources(dirPlans),
 		Parse: func(n string, b []byte, s assetring.Source) Plan {
+			errs = append(errs, sourceWarnings(s)...)
 			p, err := ParsePlan(n, b, s)
 			if err != nil {
 				errs = append(errs, parseErr{n, err})

@@ -434,6 +434,7 @@ func (c *Catalog) Commands() ([]Command, []error) {
 	cat := &assetring.Catalog[Command]{
 		Sources: c.sources(dirCommands),
 		Parse: func(n string, b []byte, s assetring.Source) Command {
+			errs = append(errs, sourceWarnings(s)...)
 			r, err := ParseCommand(n, b, s)
 			if err != nil {
 				errs = append(errs, parseErr{n, err})

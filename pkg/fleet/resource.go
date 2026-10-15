@@ -172,6 +172,7 @@ func (c *Catalog) Resources() ([]Resource, []error) {
 	cat := &assetring.Catalog[Resource]{
 		Sources: c.sources(dirResources),
 		Parse: func(n string, b []byte, s assetring.Source) Resource {
+			errs = append(errs, sourceWarnings(s)...)
 			r, err := ParseResource(n, b, s)
 			if err != nil {
 				errs = append(errs, parseErr{n, err})
@@ -228,6 +229,7 @@ func (c *Catalog) ResourceKinds() ([]ResourceKind, []error) {
 	cat := &assetring.Catalog[ResourceKind]{
 		Sources: c.sources(dirResourceKinds),
 		Parse: func(n string, b []byte, s assetring.Source) ResourceKind {
+			errs = append(errs, sourceWarnings(s)...)
 			r, err := ParseResourceKind(n, b, s)
 			if err != nil {
 				errs = append(errs, parseErr{n, err})

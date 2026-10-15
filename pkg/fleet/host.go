@@ -70,6 +70,7 @@ func (c *Catalog) Hosts() ([]Host, []error) {
 	cat := &assetring.Catalog[Host]{
 		Sources: c.sources(dirHosts),
 		Parse: func(n string, b []byte, s assetring.Source) Host {
+			errs = append(errs, sourceWarnings(s)...)
 			h, err := ParseHost(n, b, s)
 			if err != nil {
 				errs = append(errs, parseErr{n, err})

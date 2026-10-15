@@ -35,6 +35,16 @@ func (s overlaySource) Body(name string) ([]byte, bool) {
 	return []byte("[fleet overlay has no lower entry]"), true
 }
 
+// Warnings forwards deferred warnings from a wrapped source (the .bsh
+// renderer) so the catalog parse path still sees them through the
+// overlay.
+func (s overlaySource) Warnings() []error {
+	if w, ok := s.Source.(interface{ Warnings() []error }); ok {
+		return w.Warnings()
+	}
+	return nil
+}
+
 func isOverlay(body []byte) bool {
 	var head struct {
 		Overlay bool `yaml:"overlay"`
