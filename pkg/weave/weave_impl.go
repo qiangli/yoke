@@ -126,10 +126,11 @@ func weaveOtherActiveQueuesHintSuffix(currentDir string) string {
 }
 
 type weaveItem struct {
-	ID       int64  `json:"id"`
-	Title    string `json:"title"`
-	Body     string `json:"body,omitempty"`
-	Priority string `json:"priority,omitempty"`
+	NeedsTakeover bool   `json:"needs_takeover,omitempty"`
+	ID            int64  `json:"id"`
+	Title         string `json:"title"`
+	Body          string `json:"body,omitempty"`
+	Priority      string `json:"priority,omitempty"`
 	// Points is the story-point estimate (Fibonacci 1,2,3,5,8) from
 	// the optional sprint-planning phase; 8 maps to the ~30-minute
 	// runtime cap — bigger work must be split before assignment.
@@ -3717,6 +3718,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		if finishErr != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "weave: reservation retained: %v\n", finishErr)
 		}
+		if finishErr == nil && childLaunched && childTerminated {
+			weaveAutoTakeover(cmd, dir, it.ID)
+		}
 	}()
 	var handoffWorkerStories []weaveWorkerStory
 	// Claim before the live-tree baseline: updating a tracked story is an
@@ -3839,6 +3843,11 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			freshIt := findWeaveItem(freshQ, it.ID)
 			if freshIt == nil {
 				return fmt.Errorf("queue lock: run #%d disappeared", it.ID)
+			}
+			for _, other := range freshQ.Items {
+				if other.ID != freshIt.ID && other.Workspace == freshIt.Workspace && weaveRunConsumesCapacity(other.State) {
+					return fmt.Errorf("workspace occupied by run #%d", other.ID)
+				}
 			}
 			if freshIt.WrapperPid > 0 && freshIt.WrapperPid != os.Getpid() && pidAlive(freshIt.WrapperPid) {
 				return fmt.Errorf("run #%d already has a live wrapper (pid %d); run `bashy weave kill --issue %d` first: %w",

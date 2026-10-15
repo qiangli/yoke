@@ -115,6 +115,7 @@ func runWeaveHeartbeat(cmd *cobra.Command, opts weaveHeartbeatOptions, flags *we
 			if _, err := weaveReapQueue(queueDir, root, weaveBaseBranch(root)); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "heartbeat: reaper: %v\n", err)
 			}
+			weaveTakeoverHeartbeat(cmd, queueDir, opts.idleTimeout, time.Now())
 			q, err := loadWeaveQueue(queueDir)
 			if err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "heartbeat: failed to load queue: %v\n", err)

@@ -44,6 +44,9 @@ func (g *Gate) policy() (*Policy, error) {
 			return nil, errors.New("llmbudget: trailing policy data")
 		}
 	}
+	if _, err := p.Takeover.Effective(); err != nil {
+		return nil, err
+	}
 	if p.Version != 1 {
 		return nil, errors.New("llmbudget: unsupported policy version")
 	}

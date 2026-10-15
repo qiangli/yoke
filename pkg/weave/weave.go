@@ -118,6 +118,7 @@ Common-case usage:
 	cmd.AddCommand(newWeaveDoctorCmd())
 	cmd.AddCommand(newWeaveGuideCmd())
 	cmd.AddCommand(newWeaveHeartbeatCmd())
+	cmd.AddCommand(newWeaveTakeoverCmd())
 	// baton = the per-repo campaign single-driver lock (execution
 	// coordination for THIS repo's queue) — stays in weave. The
 	// cross-repo conductor-coordination verbs (cloudbox shared sessions

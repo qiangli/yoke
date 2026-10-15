@@ -135,6 +135,7 @@ type TerminationProof struct {
 // Policy is explicit, versioned local policy. Nil ceilings are unconfigured;
 // zero ceilings are enforced. Account and host axes share one transaction.
 type Policy struct {
+	Takeover     TakeoverPolicy `json:"takeover,omitempty"`
 	missing      bool
 	Version      int            `json:"version"`
 	Bindings     []Binding      `json:"bindings"`
