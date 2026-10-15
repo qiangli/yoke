@@ -39,6 +39,8 @@ type QuotaRow struct {
 	SuggestedWorkers *int       `json:"suggested_workers,omitempty"`
 	Predict          string     `json:"predict,omitempty"`
 	ExhaustsAt       *time.Time `json:"exhausts_at,omitempty"`
+	Confidence       float64    `json:"confidence,omitempty"`
+	Immune           string     `json:"immune,omitempty"`
 }
 
 // QuotaOptions.Refresh allows each probe its run.timeout (default 10s, cap 30s)
@@ -90,8 +92,85 @@ func (g *Gate) Quota(ctx context.Context, opt QuotaOptions) ([]QuotaRow, error) 
 		}
 	}
 	rows := quotaRows(report, models, plans, activeAgents, p, opt, now)
+	rows = applyObserved(rows, Observed(ctx, now), now)
 	applyForecast(rows, forecastHistory(now), now)
 	return rows, nil
+}
+
+// applyObserved uses vendor reports only where the account has no fresh
+// measured quota. A stale probe must not hide a newer vendor error.
+func applyObserved(rows []QuotaRow, states []ObservedState, now time.Time) []QuotaRow {
+	measured := map[string]bool{}
+	for _, row := range rows {
+		if !row.Stale && (row.Classification == "measured" || row.Classification == "actual") {
+			measured[row.Account] = true
+		}
+	}
+	selected := map[string]ObservedState{}
+	for _, state := range states {
+		account := state.Account
+		if account == "" {
+			account = state.Plan
+		}
+		if account == "" || measured[account] || (state.Kind != "exhausted" && state.Kind != "rate-limited" && state.Kind != "warning") {
+			continue
+		}
+		if old, ok := selected[account]; !ok || state.At.After(old.At) {
+			selected[account] = state
+		}
+	}
+	matched := map[string]bool{}
+	for i := range rows {
+		r := &rows[i]
+		state, ok := selected[r.Account]
+		if !ok || (state.Window != "" && r.Window != "" && state.Window != r.Window) {
+			continue
+		}
+		if state.Window != "" && r.Window == "" {
+			r.Window = state.Window
+		}
+		matched[r.Account] = true
+		r.Status = state.Kind
+		r.ResetAt = state.ResetAt
+		r.Classification = state.Classification
+		r.ObservedAt = &state.At
+		r.Stale = false
+		r.UsedPercent = state.UsedPercent
+		age := now.Sub(state.At).Round(time.Minute)
+		if age < 0 {
+			age = 0
+		}
+		origin := "model"
+		if state.Signal != "" {
+			origin = state.Signal
+		}
+		r.Source = fmt.Sprintf("vendor-error (%s) %s", origin, age)
+	}
+	for account, state := range selected {
+		if matched[account] {
+			continue
+		}
+		for _, row := range rows {
+			if row.Account != account {
+				continue
+			}
+			copy := row
+			copy.Window = state.Window
+			rows = append(rows, copy)
+			rows = applyObserved(rows, []ObservedState{state}, now)
+			break
+		}
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Label == rows[j].Label {
+			if rows[i].Account == rows[j].Account {
+				return rows[i].Window < rows[j].Window
+			}
+			return rows[i].Account < rows[j].Account
+		}
+		return rows[i].Label < rows[j].Label
+	})
+	return rows
 }
 
 // quotaRows consumes active bindings, never model availability, as configuration.

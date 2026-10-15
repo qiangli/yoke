@@ -17,6 +17,7 @@ import (
 )
 
 var seatMeasuredHeadroom = llmbudget.CachedMeasuredHeadroom
+var seatObservedExhaustion = llmbudget.CachedObservedExhaustion
 
 func seatQuotaFloor() float64 {
 	floor, err := strconv.ParseFloat(os.Getenv("BASHY_QUOTA_FLOOR"), 64)
@@ -37,6 +38,12 @@ func SeatQuotaStatus(queueDirs []string, tool, model, agent string, now time.Tim
 	remaining, _, known, err := seatMeasuredHeadroom(context.Background(), model, agent)
 	if err == nil && known && remaining < seatQuotaFloor() {
 		return true, fmt.Sprintf("quota-exhausted headroom=%.1f%%", remaining*100)
+	}
+	if signal, reset, ok := seatObservedExhaustion(context.Background(), model, now); ok {
+		if signal == "" {
+			signal = "model"
+		}
+		return true, fmt.Sprintf("vendor-exhausted (%s) until %s", signal, reset.Local().Format(time.RFC3339))
 	}
 	return false, ""
 }

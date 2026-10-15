@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -653,6 +654,16 @@ func applyForecast(rows []QuotaRow, forecasts []AccountForecast, now time.Time) 
 		}
 		r.Predict = f.Verdict
 		r.ExhaustsAt = f.P50
+		r.Confidence = f.Confidence
+		if strings.HasPrefix(f.Verdict, "exhausts-before-reset") && f.P50 != nil {
+			r.Predict = "exhausts ~" + f.P50.Local().Format("Mon 15:04")
+			if f.P90 != nil {
+				r.Predict += " (P90 " + f.P90.Local().Format("15:04") + ")"
+			}
+		}
+		if r.Classification == "" && (r.Status == "unmeasured" || r.Status == "not-configured") {
+			r.Classification = "predicted"
+		}
 		if f.P50 != nil && f.P50.Before(f.ResetAt) && f.Verdict != "learning" && f.Verdict != "relearning" && r.SuggestedWorkers != nil {
 			toExhaust := f.P50.Sub(now).Hours()
 			toReset := f.ResetAt.Sub(now).Hours()

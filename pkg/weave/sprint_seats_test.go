@@ -65,6 +65,26 @@ func TestSeatQuotaStatusHeadroom(t *testing.T) {
 	}
 }
 
+func TestSeatQuotaStatusObserved(t *testing.T) {
+	oldMeasured, oldObserved := seatMeasuredHeadroom, seatObservedExhaustion
+	t.Cleanup(func() { seatMeasuredHeadroom, seatObservedExhaustion = oldMeasured, oldObserved })
+	seatMeasuredHeadroom = func(context.Context, string, string) (float64, llmbudget.Binding, bool, error) {
+		return 0, llmbudget.Binding{}, false, nil
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	reset := now.Add(time.Hour)
+	seatObservedExhaustion = func(_ context.Context, model string, at time.Time) (string, time.Time, bool) {
+		if model != "model-a" || !at.Equal(now) {
+			t.Fatalf("lookup %s %s", model, at)
+		}
+		return "vendor-429", reset, true
+	}
+	blocked, reason := SeatQuotaStatus(nil, "tool-a", "model-a", "agent-a", now)
+	if !blocked || reason != "vendor-exhausted (vendor-429) until "+reset.Local().Format(time.RFC3339) {
+		t.Fatalf("status %t %q", blocked, reason)
+	}
+}
+
 func TestSeatPoolQuotaCooldown(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("BASHY_HOME", home)
