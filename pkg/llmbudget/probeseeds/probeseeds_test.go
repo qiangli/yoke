@@ -17,6 +17,7 @@ import (
 
 	_ "github.com/qiangli/yoke/cmds/all" // in-process cat, ls, grep, tail, jq
 	_ "github.com/qiangli/yoke/pkg/dag"  // registers the real Bash# snippet runner
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/llmbudget"
 )
 
@@ -55,6 +56,22 @@ func rodFleet(t *testing.T, name, yaml string) {
 
 func rodQuota(t *testing.T, consent ...string) []llmbudget.QuotaRow {
 	t.Helper()
+	cat := fleet.New()
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.SaveTool(fleet.Tool{Name: "rod-tool", Kind: fleet.ToolKindCLI, CLI: fleet.ToolCLI{Binary: binary}}); err != nil {
+		t.Fatal(err)
+	}
+	models, _ := cat.Models()
+	for _, m := range models {
+		if m.Active() {
+			if err := cat.SaveAgent(fleet.Agent{Name: "rod-" + m.Name, Tool: "rod-tool", Model: m.Name}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	g := llmbudget.New(llmbudget.Config{Policy: &llmbudget.Policy{Version: 1, ProbeConsent: consent}, Now: func() time.Time { return rodNow }})
 	rows, err := g.Quota(context.Background(), llmbudget.QuotaOptions{Now: rodNow})
 	if err != nil {
@@ -63,14 +80,19 @@ func rodQuota(t *testing.T, consent ...string) []llmbudget.QuotaRow {
 	return rows
 }
 
-func findRow(t *testing.T, rows []llmbudget.QuotaRow, provider, window string) llmbudget.QuotaRow {
+func findRow(t *testing.T, rows []llmbudget.QuotaRow, account, window string) llmbudget.QuotaRow {
 	t.Helper()
 	for _, r := range rows {
-		if r.Provider == provider && r.Window == window {
+		if r.Account == account && r.Window == window {
+			// Baseline plan labels fall back to the account when multiple tool
+			// families are installed; the isolated rod has exactly one tool.
+			if !r.Configured || r.Label == "" || (strings.HasPrefix(account, "rod-") && r.Label != "rod-tool") {
+				t.Fatalf("account metadata: %+v", r)
+			}
 			return r
 		}
 	}
-	t.Fatalf("no %s/%s row in %+v", provider, window, rows)
+	t.Fatalf("no %s/%s row in %+v", account, window, rows)
 	return llmbudget.QuotaRow{}
 }
 
@@ -78,12 +100,10 @@ func findRow(t *testing.T, rows []llmbudget.QuotaRow, provider, window string) l
 // a bashy-usage-v1 JSON surfaces as a measured quota row.
 func TestRodEchoProbeReachesQuota(t *testing.T) {
 	isolate(t)
-	t.Setenv("RODVENDOR_API_KEY", "fixture-key")
 	rodFleet(t, "rod-echo", `name: rod-echo
 display: Rod Echo
-kind: api
+kind: subscription
 provider: rodvendor
-api_key_ref: rodvendor
 usage:
   - id: pulse
     run:
@@ -91,7 +111,7 @@ usage:
       effects: [pure]
 `)
 	rows := rodQuota(t)
-	r := findRow(t, rows, "rodvendor", "5h")
+	r := findRow(t, rows, "rod-echo", "5h")
 	if r.UsedPercent == nil || *r.UsedPercent != 25 || r.Status != "ok" || r.Classification != "measured" {
 		t.Fatalf("row: %+v", r)
 	}
@@ -113,12 +133,10 @@ func TestRodPyFenceProbeReachesQuota(t *testing.T) {
 		t.Skip("python3 unavailable")
 	}
 	isolate(t)
-	t.Setenv("RODVENDOR_API_KEY", "fixture-key")
 	rodFleet(t, "rod-py", `name: rod-py
 display: Rod Py
-kind: api
+kind: subscription
 provider: rodvendor
-api_key_ref: rodvendor
 usage:
   - id: pulse
     run:
@@ -132,7 +150,7 @@ usage:
       effects: [pure, exec]
 `)
 	rows := rodQuota(t, "probe:model:rod-py/pulse")
-	r := findRow(t, rows, "rodvendor", "week")
+	r := findRow(t, rows, "rod-py", "week")
 	if r.UsedPercent == nil || *r.UsedPercent != 40 || r.Status != "ok" || r.Classification != "measured" {
 		t.Fatalf("row: %+v", r)
 	}
@@ -153,14 +171,14 @@ func TestRodClaudeMaxProbeTempHome(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := rodQuota(t)
-	five := findRow(t, rows, "anthropic", "5h")
+	five := findRow(t, rows, "claude-max", "5h")
 	if five.UsedPercent == nil || *five.UsedPercent != 42.5 || five.ResetAt == nil || five.ResetAt.Unix() != 1760539200 {
 		t.Fatalf("5h row: %+v", five)
 	}
 	if five.Source != "probe:plan:claude-max/statusline" {
 		t.Fatalf("source: %q", five.Source)
 	}
-	week := findRow(t, rows, "anthropic", "week")
+	week := findRow(t, rows, "claude-max", "week")
 	if week.UsedPercent == nil || *week.UsedPercent != 11 || week.ResetAt == nil || week.ResetAt.Unix() != 1761057600 {
 		t.Fatalf("week row: %+v", week)
 	}
@@ -194,7 +212,7 @@ func TestRodChatGPTProProbeRedactedFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := rodQuota(t)
-	week := findRow(t, rows, "openai", "week")
+	week := findRow(t, rows, "chatgpt-pro", "week")
 	if week.UsedPercent == nil || *week.UsedPercent != 1 || week.ResetAt == nil || week.ResetAt.Unix() != 1792685131 {
 		t.Fatalf("week row: %+v", week)
 	}
@@ -202,8 +220,29 @@ func TestRodChatGPTProProbeRedactedFixture(t *testing.T) {
 		t.Fatalf("source: %q", week.Source)
 	}
 	for _, r := range rows {
-		if r.Provider == "openai" && r.Window == "5h" {
+		if r.Account == "chatgpt-pro" && r.Window == "5h" {
 			t.Fatalf("older rollout leaked a 5h row: %+v", r)
 		}
 	}
+}
+
+func TestRodMissingSnapshotNotConfigured(t *testing.T) {
+	home := isolate(t)
+	rows := rodQuota(t)
+	for _, row := range rows {
+		if row.Account != "claude-max" {
+			continue
+		}
+		if row.Status != "not-configured" {
+			t.Fatalf("missing snapshot: %+v", row)
+		}
+		want := "no snapshot at " + filepath.Join(home, ".bashy", "quota", "claude.json")
+		for _, limitation := range row.Limitations {
+			if limitation == want {
+				return
+			}
+		}
+		t.Fatalf("missing reason %q: %+v", want, row)
+	}
+	t.Fatal("no claude-max account")
 }

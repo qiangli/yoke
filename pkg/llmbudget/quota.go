@@ -32,11 +32,15 @@ type QuotaRow struct {
 	Source           string     `json:"source,omitempty"`
 	ObservedAt       *time.Time `json:"observed_at,omitempty"`
 	Stale            bool       `json:"stale,omitempty"`
+	Limitations      []string   `json:"limitations,omitempty"`
 	Status           string     `json:"status"`
 	Classification   string     `json:"classification,omitempty"`
 	Headroom         *float64   `json:"headroom,omitempty"`
 	SuggestedWorkers *int       `json:"suggested_workers,omitempty"`
 }
+
+// QuotaOptions.Refresh allows each probe its run.timeout (default 10s, cap 30s)
+// despite a shorter caller deadline; explicit cancellation is still honored.
 type QuotaOptions struct {
 	All      bool
 	Provider string
@@ -172,6 +176,10 @@ func quotaRows(report *Report, models []fleet.Model, plans []fleet.Plan, agents 
 		if !eligible(base) || !base.Configured {
 			continue
 		}
+		if account.Status == "not-configured" {
+			base.Status = account.Status
+			base.Limitations = append(base.Limitations, account.Limitations...)
+		}
 		for _, metric := range account.Metrics {
 			if metric.Value == nil || metric.Source == "unavailable" || metric.Source == "local-meter" {
 				continue
@@ -288,7 +296,9 @@ func quotaRows(report *Report, models []fleet.Model, plans []fleet.Plan, agents 
 			continue
 		}
 		copy := *base
-		copy.Status = "unmeasured"
+		if copy.Status == "" {
+			copy.Status = "unmeasured"
+		}
 		if !base.Configured {
 			copy.Status = "not-configured"
 		}
@@ -350,6 +360,9 @@ func quotaAccount(m fleet.Model) string {
 	}
 	if m.Plan != "" {
 		return m.Plan
+	}
+	if m.APIKeyRef == "" && len(m.Usage) > 0 {
+		return m.Name
 	}
 	return m.APIKeyRef
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/lockfile"
+	"github.com/qiangli/yoke/pkg/fleet"
 )
 
 type cachedSource struct {
@@ -55,6 +56,9 @@ func (g *Gate) source(ctx context.Context, c SourceConfig, now time.Time, refres
 	timeout := time.Duration(c.TimeoutSeconds) * time.Second
 	if timeout <= 0 || timeout > 30*time.Second {
 		timeout = 5 * time.Second
+	}
+	if c.Kind == "probe" {
+		timeout = probeTimeout(c.probe)
 	}
 	var cached cachedSource
 	path := ""
@@ -105,6 +109,24 @@ func (g *Gate) source(ctx context.Context, c SourceConfig, now time.Time, refres
 	}
 	if ctx.Value(headroomProbeContextKey{}) == true {
 		return SourceResult{Status: "unavailable", Limitations: []string{"No cached observation for seat headroom."}}, nil
+	}
+	// Foreground refresh grants each probe its declared runtime, even when the
+	// caller uses a shorter display deadline. Preserve values and explicit
+	// cancellation; only deadline expiry is detached for probe sources.
+	if refresh && c.Kind == "probe" {
+		parent := ctx
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(context.WithoutCancel(parent))
+		stop := context.AfterFunc(parent, func() {
+			if errors.Is(parent.Err(), context.Canceled) {
+				cancel()
+			}
+		})
+		defer stop()
+		defer cancel()
+		if errors.Is(parent.Err(), context.Canceled) {
+			cancel()
+		}
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -164,4 +186,13 @@ func explicitCredential(ctx context.Context, ref string, resolve CredentialResol
 		return resolve(ctx, ref)
 	}
 	return "", errors.New("explicit credential reference required")
+}
+
+// probeTimeout matches usage-policy validation and preserves subsecond values.
+func probeTimeout(probe *fleet.UsageProbe) time.Duration {
+	timeout := 10 * time.Second
+	if probe != nil && probe.Run.Timeout > 0 {
+		timeout = probe.Run.Timeout
+	}
+	return min(timeout, 30*time.Second)
 }

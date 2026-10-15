@@ -15,6 +15,10 @@ import (
 func CollectReport(ctx context.Context, opt ReportOptions) (*Report, error) {
 	return defaultGate.CollectReport(ctx, opt)
 }
+
+// CollectReport grants refreshed probes their own runtime budget (default 10s,
+// capped at 30s), independent of caller deadlines. Explicit cancellation and
+// non-probe sources retain the caller context; cached sources retain cadence.
 func (g *Gate) CollectReport(ctx context.Context, opt ReportOptions) (*Report, error) {
 	resolveModel, listModels := reportModelResolver(g)
 	p, err := g.policy()

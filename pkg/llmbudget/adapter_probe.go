@@ -104,16 +104,13 @@ func synthesizedProbes(p *Policy) []SourceConfig {
 				lane = LaneLocal
 			}
 			d := probe.RefreshDuration()
-			timeout := 5
-			if snippet.IsAgentic(probe.Run) {
-				timeout = 30
-			}
+			timeout := probeTimeout(&probe)
 			c := SourceConfig{ID: id, Kind: "probe", Provider: provider, Account: account, Pool: account, Lane: lane, Enabled: !snippet.NeedsConsent(probe.Run) || allowed[id], RefreshSeconds: int(d.Seconds()), probe: &probe, probeModel: m.Name, probePlan: m.Plan}
-			c.TimeoutSeconds = timeout
+			c.TimeoutSeconds = int(math.Ceil(timeout.Seconds()))
 			out = append(out, c)
 		}
 		for _, probe := range m.Usage {
-			add("model", m.Name, probe, m.Provider, m.APIKeyRef, LaneAPIKey)
+			add("model", m.Name, probe, m.Provider, quotaAccount(m), LaneAPIKey)
 		}
 		if plan, ok := byPlan[m.Plan]; ok {
 			for _, probe := range plan.Usage {
@@ -155,6 +152,10 @@ func (ProbeAdapter) Collect(ctx context.Context, c SourceConfig, now time.Time) 
 	}
 	if result.Exit == 6 {
 		return SourceResult{Status: "needs-input", Limitations: []string{"Probe needs input."}}, nil
+	}
+	if result.Exit == 1 && strings.TrimSpace(string(result.Stdout)) == "" {
+		reason, _, _ := strings.Cut(string(result.Stderr), "\n")
+		return SourceResult{Status: "not-configured", Limitations: []string{strings.TrimSpace(reason)}}, nil
 	}
 	if result.Exit != 0 {
 		return SourceResult{Status: "unavailable", Limitations: []string{fmt.Sprintf("probe exited %d", result.Exit)}}, nil

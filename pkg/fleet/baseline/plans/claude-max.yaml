@@ -18,11 +18,16 @@ notes: >-
 # Field names are the ones llmbudget's claude-statusline adapter already reads:
 # payload.rate_limits.five_hour/.seven_day, each used_percentage (number) and
 # resets_at (epoch seconds). Reading the snapshot is read-only; a missing file
-# (bridge not installed) degrades to unavailable, not an error.
+# (bridge not installed) reports not-configured with a one-line reason.
 usage:
   - id: statusline
     run:
-      body: cat "$HOME/.bashy/quota/claude.json"
+      body: |
+        if [ ! -f "$HOME/.bashy/quota/claude.json" ]; then
+          echo "no snapshot at $HOME/.bashy/quota/claude.json" >&2
+          exit 1
+        fi
+        cat "$HOME/.bashy/quota/claude.json"
       effects: [read]
     metrics:
       - name: used_percent

@@ -2,6 +2,8 @@ package llmbudget
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -220,5 +222,101 @@ func TestProbeStatusesAndInferredHeadroom(t *testing.T) {
 	r, e = (ProbeAdapter{}).Collect(context.Background(), c, now)
 	if e != nil || r.Status != "needs-input" {
 		t.Fatalf("needs input %+v %v", r, e)
+	}
+}
+
+func TestProbeMissingInputStatus(t *testing.T) {
+	defer snippet.SetRunner(nil)
+	for _, tc := range []struct {
+		name   string
+		exit   int
+		stdout string
+		status string
+		err    error
+	}{
+		{"absent", 1, "", "not-configured", nil},
+		{"failed", 2, "", "unavailable", nil},
+		{"output", 1, "{}", "unavailable", nil},
+		{"runtime-error", 1, "", "unavailable", errors.New("runner failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			snippet.SetRunner(func(context.Context, snippet.Snippet, snippet.IO) (snippet.Result, error) {
+				return snippet.Result{Exit: tc.exit, Stdout: []byte(tc.stdout), Stderr: []byte("no snapshot at /fixture/missing\nextra detail\n")}, tc.err
+			})
+			c := SourceConfig{probe: &fleet.UsageProbe{Run: snippet.Snippet{Body: "fixture"}}}
+			r, _ := (ProbeAdapter{}).Collect(context.Background(), c, time.Now())
+			if r.Status != tc.status {
+				t.Fatalf("%+v", r)
+			}
+			if tc.status == "not-configured" && (len(r.Limitations) != 1 || r.Limitations[0] != "no snapshot at /fixture/missing") {
+				t.Fatalf("%+v", r)
+			}
+		})
+	}
+}
+
+func TestProbeRefreshRuntimeBudget(t *testing.T) {
+	isolateReportCatalog(t)
+	t.Setenv("BASHY_FLEET_SEEDS", "off")
+	defer snippet.SetRunner(nil)
+	for _, tc := range []struct {
+		name           string
+		declared, want time.Duration
+	}{
+		{"default", 0, 10 * time.Second},
+		{"declared", 20 * time.Second, 20 * time.Second},
+		{"fractional", 1500 * time.Millisecond, 1500 * time.Millisecond},
+		{"capped", time.Minute, 30 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			parent, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			called := false
+			snippet.SetRunner(func(ctx context.Context, _ snippet.Snippet, _ snippet.IO) (snippet.Result, error) {
+				called = true
+				deadline, ok := ctx.Deadline()
+				remaining := time.Until(deadline)
+				if !ok || remaining < tc.want-50*time.Millisecond || remaining > tc.want {
+					t.Fatalf("runtime %v, want %v", remaining, tc.want)
+				}
+				<-parent.Done()
+				if ctx.Err() != nil {
+					t.Fatalf("outer deadline cut probe short: %v", ctx.Err())
+				}
+				return snippet.Result{Stdout: []byte(`{"schema_version":"bashy-usage-v1","metrics":[]}`)}, nil
+			})
+			probe := fleet.UsageProbe{Run: snippet.Snippet{Body: "fixture", Timeout: tc.declared}}
+			c := SourceConfig{ID: "runtime", Kind: "probe", Provider: "fixture", Account: "fixture", Pool: "fixture", Lane: LaneSubscription, Enabled: true, probe: &probe}
+			g := New(Config{Policy: &Policy{Version: 1, Sources: []SourceConfig{c}}, Models: map[string]Model{}})
+			r, err := g.CollectReport(parent, ReportOptions{Refresh: true})
+			if err != nil || !called || len(r.Accounts) != 1 || r.Accounts[0].Status != "ok" {
+				t.Fatalf("report %+v, called %v: %v", r, called, err)
+			}
+		})
+	}
+}
+
+func TestProbeSourcePreservesCancellation(t *testing.T) {
+	defer snippet.SetRunner(nil)
+	for _, refresh := range []bool{false, true} {
+		t.Run(fmt.Sprint(refresh), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			snippet.SetRunner(func(callCtx context.Context, _ snippet.Snippet, _ snippet.IO) (snippet.Result, error) {
+				cancel()
+				select {
+				case <-callCtx.Done():
+					return snippet.Result{}, callCtx.Err()
+				case <-time.After(time.Second):
+					t.Fatal("explicit cancellation lost")
+					return snippet.Result{}, nil
+				}
+			})
+			c := SourceConfig{Kind: "probe", Enabled: true, probe: &fleet.UsageProbe{Run: snippet.Snippet{Body: "fixture"}}}
+			_, err := New(Config{}).source(ctx, c, time.Now(), refresh)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancellation: %v", err)
+			}
+		})
 	}
 }
