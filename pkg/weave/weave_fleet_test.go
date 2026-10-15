@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/qiangli/yoke/pkg/fleet"
+	"github.com/qiangli/yoke/pkg/quotaobs"
 )
 
 // TestFleetRowDetectsMissingTool is the regression for the launch-failure
@@ -116,6 +117,7 @@ func TestFleetReportsQuotaExhaustedNotAvailable(t *testing.T) {
 // reviewer's TOOL on cooldown with the parsed reset, so the next `weave fleet`
 // holds instead of burning another workspace pull (runs #140/#146).
 func TestPairQuotaThrottleRecordsReviewerCooldown(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
 	dir := t.TempDir()
 	now := time.Date(2026, 7, 21, 10, 0, 0, 0, time.Local)
 	pr := weavePairReviewResult{
@@ -125,6 +127,10 @@ func TestPairQuotaThrottleRecordsReviewerCooldown(t *testing.T) {
 		Reason:      "bashy pair exited 1: ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Jul 24th, 2026 9:45 PM.",
 	}
 	weaveRecordPairThrottle(dir, pr, now)
+	observations, err := quotaobs.Read(time.Time{}, nil)
+	if err != nil || len(observations) != 1 || observations[0].Agent != pr.ReviewAgent {
+		t.Fatalf("reviewer observation: %+v, %v", observations, err)
+	}
 
 	until, cause, ok := toolCooldownStatus(dir, "codex")
 	if !ok {

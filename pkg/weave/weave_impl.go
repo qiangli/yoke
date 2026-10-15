@@ -4724,6 +4724,16 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		// it after the reset. Best-effort — a cooldown error never fails the
 		// run, matching the memory/reporter calls above.
 		if it.Throttled && throttleLogTail != "" {
+			model, agent := "", it.Owner
+			if it.LaunchSpec != nil {
+				model = it.LaunchSpec.Model
+				if it.LaunchSpec.Agent != "" {
+					agent = it.LaunchSpec.Agent
+				}
+			}
+			if err := weaveRecordThrottleObservation(it.Tool, model, agent, throttleLogTail, finishedAt); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "weave start: quota observation failed (continuing): %v\n", err)
+			}
 			msg := throttleLogTail
 			if it.ThrottleSignal != "" {
 				msg = it.ThrottleSignal + "\n" + msg

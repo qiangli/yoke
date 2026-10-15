@@ -1,6 +1,7 @@
 package weave
 
 import (
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -8,6 +9,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/qiangli/yoke/pkg/fleet"
+	"github.com/qiangli/yoke/pkg/quotaobs"
 )
 
 const weaveThrottleTailBytes = 16 * 1024
@@ -31,6 +35,49 @@ var weaveThrottleGenericSignals = []string{
 	"overloaded",
 	"insufficient_quota",
 	"resource_exhausted",
+}
+
+// ObservationsFromLog extracts the matched line and two neighboring lines on
+// either side. Record performs the final redaction before persistence.
+func ObservationsFromLog(tool, model, logTail string, now time.Time) []quotaobs.Observation {
+	tail := weaveThrottleTail(logTail, weaveThrottleTailBytes)
+	ok, signal := weaveClassifyThrottle(tool, 0, tail)
+	if !ok {
+		return nil
+	}
+	lines := strings.Split(tail, "\n")
+	matched := -1
+	for i, line := range lines {
+		if strings.Contains(strings.ToLower(line), strings.ToLower(signal)) {
+			matched = i
+			break
+		}
+	}
+	if matched < 0 {
+		return nil
+	}
+	lo, hi := matched-2, matched+3
+	if lo < 0 {
+		lo = 0
+	}
+	if hi > len(lines) {
+		hi = len(lines)
+	}
+	o := quotaobs.Observation{At: now, Source: "weave", Tool: tool, Model: model, Excerpt: strings.Join(lines[lo:hi], "\n")}
+	if m, found := fleet.New().Model(model); found {
+		o.Plan = m.Plan
+	}
+	return []quotaobs.Observation{o}
+}
+
+func weaveRecordThrottleObservation(tool, model, agent, tail string, now time.Time) error {
+	for _, o := range ObservationsFromLog(tool, model, tail, now) {
+		o.Agent = agent
+		if err := quotaobs.Record(context.Background(), o); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 var weaveThrottleToolSignals = map[string][]string{}

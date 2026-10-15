@@ -107,6 +107,11 @@ func weaveRecordPairThrottle(queueDir string, pr weavePairReviewResult, now time
 	if !throttled {
 		return
 	}
+	model := ""
+	if _, selected, ok := strings.Cut(pr.ReviewAgent, ":"); ok {
+		model = selected
+	}
+	_ = weaveRecordThrottleObservation(tool, model, pr.ReviewAgent, evidence, now)
 	reset, ok := parseThrottleReset(evidence, now)
 	if !ok {
 		// No parseable reset time: a short conservative cooldown still stops
