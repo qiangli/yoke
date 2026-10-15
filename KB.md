@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [host/page] dhnt umbrella orientation: what it is, tier vocabulary, working rules, current direction — Distilled agent-memory map of the dhnt umbrella (dhnt/Tessaro naming, 6 execution tiers, submodule pin workflow, hard working rules, 2026-07 direction) — WHEN starting any task in the dhnt umbrella or its submodules (keywords: dhnt, tessaro, umbrella, submod  (kb:dhnt-umbrella-orientation)
+- [repo/page] Real-engine probe tests need a test-only sibling package — WHEN testing yoke usage-probe seeds end to end (YAML -> fleet -> llmbudget.Quota through the REAL Bash# runner): llmbudget's internal tests snippet.SetRunner(nil) in cleanup and pkg/dag imports llmbudget, so neither pkg/llmbudget nor pkg/fleet tests can import  (kb:real-engine-probe-tests-need-a-test-only-sibling-package)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 
