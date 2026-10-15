@@ -55,6 +55,24 @@ valid explicit version-1 policy with an empty constraints array.
 Model names must be canonical catalog names. Account/pool values are explicitly
 configured opaque identities, never credentials. Subscription and API lanes are
 separate. Omitted limits are unknown/unconfigured; zero is a real enforced cap.
+
+## Observation analyzer
+
+The observation journal is append-only. Deterministic `usage_signals` matches and
+model results are written to `~/.bashy/quota/analysis.jsonl` (or
+`$BASHY_HOME/quota/analysis.jsonl`), keyed by `excerpt_sha`; model results also
+carry the analyzer model in their key. `Observed` reads this sidecar and reports
+agreement, unconfirmed matches, model inference, or conflicts. Rows expire at
+their reset time, or after six hours when no reset is known.
+
+The model pass runs only through `Analyze` and `Quota` with `Refresh: true`.
+Policy must contain `"analyzer":{"enabled":true}`; `EnableAnalyzer` and
+`DisableAnalyzer` persist that consent in a writable policy. Optional `model`
+or `agent` selects a backend, and `max_batch` is capped at 20. Without a
+selection, a local model listed by the door is preferred; otherwise the
+highest measured independent fleet seat is used. Analyzer calls may consume
+quota. The CLI can expose these APIs as `quota enable analyzer`, `quota
+analyze`, and `quota --refresh`.
 Daily/Monday-week policy windows use the gate clock’s location. Host constraints
 are allocations on the state authority’s host. Machines with separate meters
 must receive conservative explicit allocations; this package does not claim a

@@ -143,6 +143,15 @@ type Policy struct {
 	Routes       []Route        `json:"routes"`
 	Sources      []SourceConfig `json:"sources"`
 	ProbeConsent []string       `json:"probe_consent,omitempty"`
+	Analyzer     AnalyzerPolicy `json:"analyzer,omitempty"`
+}
+
+// AnalyzerPolicy declares the costly, on-demand model pass.
+type AnalyzerPolicy struct {
+	Model    string `json:"model,omitempty"`
+	Agent    string `json:"agent,omitempty"`
+	MaxBatch int    `json:"max_batch,omitempty"`
+	Enabled  bool   `json:"enabled,omitempty"`
 }
 type Constraint struct {
 	Provider            string  `json:"provider,omitempty"`

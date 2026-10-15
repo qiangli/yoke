@@ -24,9 +24,26 @@ import (
 const Schema = "bashy-quota-observation-v1"
 const maxFile = 5 << 20
 
-// ParsedSignal and Analysis are reserved for the matcher and model stages.
-type ParsedSignal struct{}
-type Analysis struct{}
+// ParsedSignal is the deterministic interpretation of a vendor message.
+type ParsedSignal struct {
+	Signal      string     `json:"signal"`
+	Kind        string     `json:"kind"`
+	Window      string     `json:"window,omitempty"`
+	UsedPercent *float64   `json:"used_percent,omitempty"`
+	ResetAt     *time.Time `json:"reset_at,omitempty"`
+}
+
+// Analysis is the model's interpretation, cached by excerpt hash and model.
+type Analysis struct {
+	ExcerptSHA  string     `json:"excerpt_sha"`
+	Kind        string     `json:"kind"`
+	Window      string     `json:"window"`
+	UsedPercent *float64   `json:"used_percent"`
+	ResetAt     *time.Time `json:"reset_at"`
+	AccountHint string     `json:"account_hint"`
+	Confidence  float64    `json:"confidence"`
+	Summary     string     `json:"summary"`
+}
 
 type Observation struct {
 	Schema     string            `json:"schema"`

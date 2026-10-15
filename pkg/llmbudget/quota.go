@@ -62,6 +62,11 @@ func (g *Gate) Quota(ctx context.Context, opt QuotaOptions) ([]QuotaRow, error) 
 	if err != nil {
 		return nil, err
 	}
+	if opt.Refresh {
+		if _, err := g.Analyze(ctx, AnalyzeOptions{Now: now}); err != nil {
+			return nil, err
+		}
+	}
 	cat := fleet.New()
 	models, _ := cat.Models()
 	plans, _ := cat.Plans()

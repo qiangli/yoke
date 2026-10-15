@@ -17,6 +17,8 @@ func RecordObservation(ctx context.Context, o Observation) error {
 	if err := quotaobs.Record(ctx, o); err != nil {
 		return err
 	}
+	// The deterministic pass is cheap and runs even without analyzer consent.
+	_, _ = MatchObservations(ctx)
 	// Journal writes may arrive between explicit quota refreshes. Bound this
 	// opportunistic ingestion so the observation path never waits for telemetry.
 	quick, cancel := context.WithTimeout(ctx, 250*time.Millisecond)

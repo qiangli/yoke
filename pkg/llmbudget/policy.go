@@ -50,6 +50,9 @@ func (g *Gate) policy() (*Policy, error) {
 	if p.Version != 1 {
 		return nil, errors.New("llmbudget: unsupported policy version")
 	}
+	if !safePolicyStrings(p.Analyzer.Model, p.Analyzer.Agent) || p.Analyzer.Model != "" && p.Analyzer.Agent != "" || p.Analyzer.MaxBatch < 0 || p.Analyzer.MaxBatch > 20 {
+		return nil, errors.New("llmbudget: invalid analyzer policy")
+	}
 	if len(p.Bindings) > 10000 || len(p.Constraints) > 10000 || len(p.Sources) > 256 || len(p.Routes) > 10000 || len(p.ProbeConsent) > 256 {
 		return nil, errors.New("llmbudget: policy collection limit exceeded")
 	}
