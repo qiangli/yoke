@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -125,7 +126,8 @@ func TestForecastCompactionKeepsHourlyHistory(t *testing.T) {
 		t.Fatalf("hourly history: %+v", got)
 	}
 	st, e := os.Stat(path)
-	if e != nil || st.Mode().Perm() != 0600 {
+	// Windows has no POSIX permission bits to assert.
+	if runtime.GOOS != "windows" && (e != nil || st.Mode().Perm() != 0600) {
 		t.Fatalf("history mode: %v %v", st, e)
 	}
 }

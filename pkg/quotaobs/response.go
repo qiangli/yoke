@@ -2,6 +2,7 @@ package quotaobs
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -15,6 +16,10 @@ func RecordBestEffort(ctx context.Context, o Observation) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 25*time.Millisecond)
 	defer cancel()
 	if err := Record(ctx, o); err != nil {
+		if errors.Is(err, ErrRealHomeWrite) {
+			slog.Warn("quota observation refused", "source", o.Source, "error", err)
+			return
+		}
 		slog.Debug("quota observation skipped", "source", o.Source, "error", err)
 	}
 }

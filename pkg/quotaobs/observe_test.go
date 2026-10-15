@@ -3,7 +3,10 @@ package quotaobs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -55,18 +58,29 @@ func TestRecordReadAndDedupe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Mode().Perm() != 0600 {
+	// Windows has no POSIX permission bits to assert.
+	if runtime.GOOS != "windows" && st.Mode().Perm() != 0600 {
 		t.Fatalf("mode: %v", st.Mode())
 	}
-	if dir, err := os.Stat(strings.TrimSuffix(p, "/observations.jsonl")); err != nil || dir.Mode().Perm() != 0700 {
+	if dir, err := os.Stat(filepath.Dir(p)); err != nil || (runtime.GOOS != "windows" && dir.Mode().Perm() != 0700) {
 		t.Fatalf("directory mode: %v, %v", dir, err)
+	}
+}
+
+func TestRecordRefusesRealHomeDuringTests(t *testing.T) {
+	if realHomeErr != nil || realHome == "" {
+		t.Skip("no user home")
+	}
+	t.Setenv("BASHY_HOME", filepath.Join(realHome, ".bashy"))
+	if err := Record(context.Background(), Observation{Source: "test", Excerpt: "quota exceeded"}); !errors.Is(err, ErrRealHomeWrite) {
+		t.Fatalf("real-home write accepted: %v", err)
 	}
 }
 
 func TestRotationAndTornLine(t *testing.T) {
 	t.Setenv("BASHY_HOME", t.TempDir())
 	p, _ := path()
-	if err := os.MkdirAll(strings.TrimSuffix(p, "/observations.jsonl"), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
 		t.Fatal(err)
 	}
 	old := Observation{Schema: Schema, At: time.Now(), Source: "manual", Excerpt: strings.Repeat("x", maxFile), ExcerptSHA: "old"}

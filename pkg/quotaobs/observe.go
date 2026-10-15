@@ -9,12 +9,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"testing"
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/lockfile"
@@ -23,6 +25,31 @@ import (
 
 const Schema = "bashy-quota-observation-v1"
 const maxFile = 5 << 20
+
+// ErrRealHomeWrite reports a test that tried to journal an observation under
+// the operator's real home instead of an isolated BASHY_HOME.
+var ErrRealHomeWrite = errors.New("quotaobs: refusing test write under the real user home")
+
+// realHome is captured at process start, before any test scaffolding redirects
+// HOME or BASHY_HOME, so the guard can still recognize the operator's home.
+var realHome, realHomeErr = os.UserHomeDir()
+
+// guardTestWrite refuses journal writes that would land under the operator's
+// real home while running under go test: an unfenced test fails loudly here
+// instead of silently polluting ~/.bashy/quota.
+func guardTestWrite(p string) error {
+	if !testing.Testing() || realHomeErr != nil || realHome == "" {
+		return nil
+	}
+	rel, err := filepath.Rel(realHome, p)
+	if err != nil {
+		return nil
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil
+	}
+	return fmt.Errorf("%w: %s", ErrRealHomeWrite, p)
+}
 
 // ParsedSignal is the deterministic interpretation of a vendor message.
 type ParsedSignal struct {
@@ -110,6 +137,9 @@ func path() (string, error) {
 func Record(ctx context.Context, o Observation) error {
 	p, err := path()
 	if err != nil {
+		return err
+	}
+	if err := guardTestWrite(p); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
