@@ -1,4 +1,8 @@
 // Package snippet runs code embedded in configuration under a declared effect cap.
+//
+// Configuration seeds should route agentic probes through the bashy door and
+// default them to a local or free model. Inferred-result cache lifetimes belong
+// to callers; the probe engine uses a one-hour TTL.
 package snippet
 
 import (
@@ -16,6 +20,12 @@ import (
 
 	"github.com/qiangli/yoke/pkg/atlas"
 	"gopkg.in/yaml.v3"
+	"mvdan.cc/sh/v3/syntax"
+)
+
+const (
+	ClassMeasured = "measured"
+	ClassInferred = "inferred"
 )
 
 type Snippet struct {
@@ -107,21 +117,29 @@ type IO struct {
 	MaxStdout int64
 }
 type Result struct {
-	Stdout  []byte
-	Stderr  []byte
-	Exit    int
-	Refused []string
+	Stdout         []byte
+	Stderr         []byte
+	Exit           int
+	Refused        []string
+	Classification string
 }
 type Runner func(context.Context, Snippet, IO) (Result, error)
 type CredentialResolver func(context.Context, string) (string, error)
 type ModelRef struct{ Provider, Model, Plan string }
 
-var ErrNotConfigured = errors.New("snippet: credential not configured")
+var (
+	ErrNotConfigured     = errors.New("snippet: credential not configured")
+	ErrUndeclaredAgentic = errors.New("snippet: agentic execution requires spend effect")
+	ErrNeedsInput        = errors.New("snippet: input required")
+	ErrSelfMeasure       = errors.New("snippet: agent cannot measure its own plan")
+)
+
 var hooks struct {
 	sync.RWMutex
-	runner Runner
-	secret CredentialResolver
-	model  func(context.Context, ModelRef) (string, error)
+	runner    Runner
+	secret    CredentialResolver
+	model     func(context.Context, ModelRef) (string, error)
+	agentPlan func(agent string) (plan string, ok bool)
 }
 
 func SetRunner(r Runner)                     { hooks.Lock(); defer hooks.Unlock(); hooks.runner = r }
@@ -131,11 +149,49 @@ func SetModelCredentialResolver(r func(context.Context, ModelRef) (string, error
 	defer hooks.Unlock()
 	hooks.model = r
 }
+func SetAgentPlanResolver(r func(agent string) (plan string, ok bool)) {
+	hooks.Lock()
+	defer hooks.Unlock()
+	hooks.agentPlan = r
+}
 
 type modelKey struct{}
+type measuringKey struct{}
 
 func WithModel(ctx context.Context, provider, model, plan string) context.Context {
 	return context.WithValue(ctx, modelKey{}, ModelRef{provider, model, plan})
+}
+
+// WithMeasuring records the plan whose usage the snippet is measuring.
+func WithMeasuring(ctx context.Context, plan string) context.Context {
+	return context.WithValue(ctx, measuringKey{}, plan)
+}
+
+// IsAgentic reports whether the Bash# parser recognizes an agentic block or
+// agentic function declaration. Invalid programs and ordinary commands or
+// quoted words named "agentic" are not agentic snippets.
+func IsAgentic(s Snippet) bool {
+	f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(s.Body), "snippet.bsh")
+	if err != nil {
+		return false
+	}
+	seen := false
+	syntax.Walk(f, func(n syntax.Node) bool {
+		switch n := n.(type) {
+		case *syntax.BashPPAgenticBlock:
+			seen = true
+		case *syntax.FuncDecl:
+			if n.Agentic != nil {
+				seen = true
+			}
+		case *syntax.BashPPFuncDecl:
+			if n.Agentic != nil {
+				seen = true
+			}
+		}
+		return !seen
+	})
+	return seen
 }
 
 func CredentialPathRefused(body string) (string, bool) {
@@ -156,7 +212,12 @@ func NeedsConsent(s Snippet) bool {
 }
 
 func Run(ctx context.Context, s Snippet, tio IO) (Result, error) {
-	var zero Result
+	agentic := IsAgentic(s)
+	classification := ClassMeasured
+	if agentic {
+		classification = ClassInferred
+	}
+	zero := Result{Classification: classification}
 	lang := s.Lang
 	if lang == "" {
 		lang = "bsh"
@@ -175,6 +236,9 @@ func Run(ctx context.Context, s Snippet, tio IO) (Result, error) {
 		if !valid[e] {
 			return zero, fmt.Errorf("snippet: unknown effect %q", e)
 		}
+	}
+	if agentic && !hasEffect(s.Effects, "spend") {
+		return zero, ErrUndeclaredAgentic
 	}
 	if len(s.Effects) == 0 {
 		s.Effects = []string{"pure"}
@@ -200,8 +264,15 @@ func Run(ctx context.Context, s Snippet, tio IO) (Result, error) {
 		tio.Env = os.Environ()
 	}
 	hooks.RLock()
-	runner, secret, model := hooks.runner, hooks.secret, hooks.model
+	runner, secret, model, agentPlan := hooks.runner, hooks.secret, hooks.model, hooks.agentPlan
 	hooks.RUnlock()
+	if measuredPlan, measuring := ctx.Value(measuringKey{}).(string); measuring && agentPlan != nil {
+		for _, agent := range targetedAgents(s) {
+			if plan, ok := agentPlan(agent); ok && plan == measuredPlan {
+				return zero, fmt.Errorf("%w: agent %q uses plan %q", ErrSelfMeasure, agent, plan)
+			}
+		}
+	}
 	if runner == nil {
 		return zero, errors.New("snippet: no runner registered")
 	}
@@ -253,6 +324,7 @@ func Run(ctx context.Context, s Snippet, tio IO) (Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.Timeout)
 	defer cancel()
 	r, err := runner(ctx, s, tio)
+	r.Classification = classification
 	if int64(len(r.Stdout)) > tio.MaxStdout {
 		r.Stdout = r.Stdout[:tio.MaxStdout]
 		err = errors.Join(err, fmt.Errorf("snippet: stdout exceeds %d bytes", tio.MaxStdout))
@@ -263,5 +335,72 @@ func Run(ctx context.Context, s Snippet, tio IO) (Result, error) {
 			err = errors.New(strings.ReplaceAll(err.Error(), v, "***"))
 		}
 	}
+	if r.Exit == 6 {
+		if text := yieldText(r.Stdout, r.Stderr); text != "" {
+			return r, fmt.Errorf("%w: %s", ErrNeedsInput, text)
+		}
+		return r, ErrNeedsInput
+	}
 	return r, err
+}
+
+func hasEffect(effects []string, want string) bool {
+	for _, effect := range effects {
+		if effect == want {
+			return true
+		}
+	}
+	return false
+}
+
+// targetedAgents recognizes the deliberately small self-measurement surface:
+// whitespace-delimited "@agent NAME", "bashy agent run NAME", and
+// "--agent NAME" tokens in the body or environment keys and references.
+func targetedAgents(s Snippet) []string {
+	sources := []string{s.Body}
+	keys := make([]string, 0, len(s.Env))
+	for key := range s.Env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		sources = append(sources, key, s.Env[key])
+	}
+	var agents []string
+	for _, source := range sources {
+		fields := strings.Fields(source)
+		for i := range fields {
+			switch {
+			case fields[i] == "@agent" && i+1 < len(fields):
+				agents = append(agents, cleanAgentToken(fields[i+1]))
+			case fields[i] == "bashy" && i+3 < len(fields) && fields[i+1] == "agent" && fields[i+2] == "run":
+				agents = append(agents, cleanAgentToken(fields[i+3]))
+			case fields[i] == "--agent" && i+1 < len(fields):
+				agents = append(agents, cleanAgentToken(fields[i+1]))
+			}
+		}
+	}
+	return agents
+}
+
+func cleanAgentToken(s string) string {
+	return strings.Trim(s, "'\"`;,(){}[]")
+}
+
+func yieldText(stdout, stderr []byte) string {
+	const limit = 2 << 10
+	combined := make([]byte, 0, min(limit, len(stdout)+len(stderr)+1))
+	appendPart := func(part []byte) {
+		if len(part) == 0 || len(combined) == limit {
+			return
+		}
+		if len(combined) > 0 {
+			combined = append(combined, '\n')
+		}
+		remaining := limit - len(combined)
+		combined = append(combined, part[:min(remaining, len(part))]...)
+	}
+	appendPart(stdout)
+	appendPart(stderr)
+	return string(bytes.TrimSpace(combined))
 }
