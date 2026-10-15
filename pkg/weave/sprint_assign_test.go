@@ -197,9 +197,9 @@ func TestAssignCommandSeedsLinksAndInjectsIdentity(t *testing.T) {
 		return nil
 	}
 	for _, tc := range []struct {
-		name, env, reason string
-		flags             []string
-		shadow, probe     bool
+		name, env, reason       string
+		flags                   []string
+		shadow, probe, cooldown bool
 	}{
 		{name: "tool flags", flags: []string{"--exclude-tool", "tool-a", "--exclude-tool", "other"}, reason: "tool:tool-a"},
 		{name: "agent flags", flags: []string{"--exclude-agent", "agent-a", "--exclude-agent", "other"}, reason: "agent:agent-a"},
@@ -209,9 +209,24 @@ func TestAssignCommandSeedsLinksAndInjectsIdentity(t *testing.T) {
 		{name: "additive", env: "tool:tool-a", flags: []string{"--exclude-agent", "other"}, reason: "tool:tool-a"},
 		{name: "shadow", shadow: true, reason: "shadow"},
 		{name: "probe", probe: true, reason: "cached probe: unusable"},
+		{name: "quota cooldown", cooldown: true, reason: "quota-exhausted until "},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("BASHY_SPRINT_DISPATCH_EXCLUDE", tc.env)
+			if tc.cooldown {
+				dir, err := weaveQueueDir(root)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := recordToolCooldownCause(dir, "tool-a", time.Now().Add(time.Hour), weaveCooldownQuota); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					if err := saveToolCooldowns(dir, toolCooldowns{Tools: map[string]string{}}); err != nil {
+						t.Error(err)
+					}
+				})
+			}
 			if tc.shadow {
 				if err := cat.SaveAgent(fleet.Agent{Name: "agent-a", Tool: "tool-a", Model: "model-a", Band: 3, Role: &fleet.AgentRole{Scope: "shadow"}}); err != nil {
 					t.Fatal(err)

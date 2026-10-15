@@ -1,16 +1,50 @@
 package weave
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/qiangli/yoke/pkg/capability"
 	"github.com/qiangli/yoke/pkg/ladder"
 	"github.com/qiangli/yoke/pkg/ladder/blame"
+	"github.com/qiangli/yoke/pkg/llmbudget"
 )
+
+// TODO(47892ea6): use llmbudget.MeasuredHeadroom once it offers a cache-only
+// mode. Today it calls CollectReport -> source -> adapter.Collect on a cache
+// miss/expiry, even with Refresh=false. Seat selection must never run probes.
+var seatMeasuredHeadroom = func(context.Context, string, string) (float64, llmbudget.Binding, bool, error) {
+	return 0, llmbudget.Binding{}, false, nil
+}
+
+func seatQuotaFloor() float64 {
+	floor, err := strconv.ParseFloat(os.Getenv("BASHY_QUOTA_FLOOR"), 64)
+	if err == nil && floor >= 0 && floor <= 1 {
+		return floor
+	}
+	return 0.05
+}
+
+// SeatQuotaStatus reports whether recorded cooldowns or fresh measured quota
+// exclude a seat. Unknown quota and read errors fail open; no probes are run.
+func SeatQuotaStatus(queueDirs []string, tool, model, agent string, now time.Time) (blocked bool, reason string) {
+	for _, dir := range queueDirs {
+		if until, cause, ok := toolCooldownStatus(dir, tool); ok && until.After(now) {
+			return true, cause + " until " + until.Local().Format(time.RFC3339)
+		}
+	}
+	remaining, _, known, err := seatMeasuredHeadroom(context.Background(), model, agent)
+	if err == nil && known && remaining < seatQuotaFloor() {
+		return true, fmt.Sprintf("quota-exhausted headroom=%.1f%%", remaining*100)
+	}
+	return false, ""
+}
 
 type seatFallbackEvent struct {
 	Seat        string `json:"seat"`
@@ -128,6 +162,9 @@ func seatPool(root string, events []ladder.Event, now time.Time, exclusions ...s
 		}
 		if reason == "" && unusable[tool.Name] {
 			reason = "cached probe: unusable tool:" + tool.Name
+		}
+		if reason == "" {
+			_, reason = SeatQuotaStatus(dirs, tool.Name, a.Model, a.Name, now)
 		}
 		if reason != "" {
 			for _, x := range exclusions {

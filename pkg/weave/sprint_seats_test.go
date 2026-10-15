@@ -2,7 +2,10 @@ package weave
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,8 +13,123 @@ import (
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/ladder"
 	"github.com/qiangli/yoke/pkg/ladder/blame"
+	"github.com/qiangli/yoke/pkg/llmbudget"
 	"github.com/spf13/cobra"
 )
+
+func TestSeatQuotaFloor(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  float64
+	}{{"", .05}, {"0", 0}, {"1", 1}, {"0.2", .2}, {"-0.1", .05}, {"1.1", .05}, {"bad", .05}, {"NaN", .05}, {"Inf", .05}, {"-Inf", .05}} {
+		t.Run(tc.value, func(t *testing.T) {
+			t.Setenv("BASHY_QUOTA_FLOOR", tc.value)
+			if got := seatQuotaFloor(); got != tc.want {
+				t.Fatalf("floor = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSeatQuotaStatusHeadroom(t *testing.T) {
+	original := seatMeasuredHeadroom
+	t.Cleanup(func() { seatMeasuredHeadroom = original })
+	for _, tc := range []struct {
+		name      string
+		remaining float64
+		known     bool
+		err       error
+		floor     string
+		blocked   bool
+	}{
+		{name: "unknown"},
+		{name: "exhausted", remaining: .02, known: true, blocked: true},
+		{name: "at floor", remaining: .05, known: true},
+		{name: "above floor", remaining: .5, known: true},
+		{name: "override", remaining: .1, known: true, floor: ".2", blocked: true},
+		{name: "error", known: true, err: errors.New("unavailable")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("BASHY_QUOTA_FLOOR", tc.floor)
+			seatMeasuredHeadroom = func(_ context.Context, model, agent string) (float64, llmbudget.Binding, bool, error) {
+				if model != "model-a" || agent != "agent-a" {
+					t.Fatalf("unexpected binding %s/%s", model, agent)
+				}
+				return tc.remaining, llmbudget.Binding{}, tc.known, tc.err
+			}
+			blocked, reason := SeatQuotaStatus(nil, "tool-a", "model-a", "agent-a", time.Now())
+			if blocked != tc.blocked || (blocked && !strings.HasPrefix(reason, "quota-exhausted headroom=")) || (!blocked && reason != "") {
+				t.Fatalf("status = %t, %q", blocked, reason)
+			}
+		})
+	}
+}
+
+func TestSeatPoolQuotaCooldown(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BASHY_HOME", home)
+	t.Setenv("BASHY_SPRINT_DIR", filepath.Join(home, "sprint"))
+	cat := pinFleetWith(t)
+	t.Setenv("BASHY_AGENTS_PATH", "")
+	t.Setenv("BASHY_MODELS_PATH", "")
+	for _, err := range []error{
+		cat.SaveTool(fleet.Tool{Name: "tool-a"}),
+		cat.SaveModel(fleet.Model{Name: "model-a", Band: 3}),
+		cat.SaveAgent(fleet.Agent{Name: "agent-a", Tool: "tool-a", Model: "model-a"}),
+	} {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	root := t.TempDir()
+	dir, err := weaveQueueDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Truncate(time.Second)
+	for _, tc := range []struct {
+		name, cause string
+		offset      time.Duration
+		blocked     bool
+	}{
+		{"quota", weaveCooldownQuota, time.Hour, true},
+		{"rate", weaveCooldownRate, time.Hour, true},
+		{"legacy", "", time.Hour, true},
+		{"expired", weaveCooldownQuota, -time.Hour, false},
+		{"at reset", weaveCooldownQuota, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			until := now.Add(tc.offset)
+			if err := recordToolCooldownCause(dir, "tool-a", until, tc.cause); err != nil {
+				t.Fatal(err)
+			}
+			var reportedAgent, reportedReason string
+			pool, _, err := seatPool(root, nil, now, sprintAssignExclusions{report: func(agent, reason string) {
+				reportedAgent, reportedReason = agent, reason
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.blocked {
+				cause := tc.cause
+				if cause == "" {
+					cause = weaveCooldownRate
+				}
+				want := cause + " until " + until.Local().Format(time.RFC3339)
+				if len(pool) != 0 || reportedAgent != "agent-a" || reportedReason != want {
+					t.Fatalf("pool=%+v report=%s %q; want %q", pool, reportedAgent, reportedReason, want)
+				}
+			} else if len(pool) != 1 || !pool[0].Free || reportedReason != "" {
+				t.Fatalf("pool=%+v reason=%q", pool, reportedReason)
+			}
+			// A cooldown in a later queue directory must also be considered.
+			blocked, _ := SeatQuotaStatus([]string{t.TempDir(), dir}, "tool-a", "model-a", "agent-a", now)
+			if blocked != tc.blocked {
+				t.Fatalf("multi-directory blocked=%t", blocked)
+			}
+		})
+	}
+}
 
 func TestSeatPoolAndDutyBoardUseFamilyEvidenceKey(t *testing.T) {
 	home := t.TempDir()
