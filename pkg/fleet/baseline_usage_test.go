@@ -48,7 +48,7 @@ func TestBaselineUsageSeeds(t *testing.T) {
 			t.Fatalf("%s usage: %d probes", name, len(m.Usage))
 		}
 		p := m.Usage[0]
-		if p.ID != "balance" || len(p.Run.Effects) != 1 || p.Run.Effects[0] != "net" {
+		if p.ID != "balance" || len(p.Run.Effects) != 2 || p.Run.Effects[0] != "read" || p.Run.Effects[1] != "net" {
 			t.Fatalf("%s probe: %+v", name, p)
 		}
 		if p.Run.Env["KEY"] != "model:credential" {

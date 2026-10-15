@@ -51,7 +51,7 @@ usage:
   - id: balance
     run:
       body: fetch -f --json=false -t "$KEY" https://api.moonshot.ai/v1/users/me/balance
-      effects: [net]
+      effects: [read, net]
       env:
         KEY: model:credential
     metrics:

@@ -70,7 +70,9 @@ usage:
   - id: balance
     run:
       body: fetch -f --json=false -t "$KEY" https://api.moonshot.ai/v1/users/me/balance
-      effects: [net]
+      # read+net: the atlas classifies fetch as BOTH (it reads the response);
+      # a [net]-only cap denies the read and the probe dies 126.
+      effects: [read, net]
       env:
         KEY: model:credential
     metrics:

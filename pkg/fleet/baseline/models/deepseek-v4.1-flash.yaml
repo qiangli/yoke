@@ -40,7 +40,7 @@ usage:
   - id: balance
     run:
       body: fetch -f --json=false -t "$KEY" https://api.deepseek.com/user/balance
-      effects: [net]
+      effects: [read, net]
       env:
         KEY: model:credential
     metrics:
