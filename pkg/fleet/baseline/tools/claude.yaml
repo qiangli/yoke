@@ -203,3 +203,60 @@ integration:
     key: mcpServers
     cli: [claude, mcp, add, --scope, user, bashy, --, bashy, mcp, serve]
   shell_env: CLAUDE_CODE_SHELL
+
+# Claude stream-json rate-limit events. Allowed without high utilization is not a warning.
+usage_signals:
+  - id: stream-five_hour-rejected
+    match: '^\s*\{"type":"rate_limit_event","rate_limit_info":\{"status":"rejected".*?"resetsAt":(?P<reset>\d{9,12}).*?"rateLimitType":"five_hour"'
+    kind: exhausted
+    window: 5h
+    reset: reset
+    reset_layout: epoch
+  - id: stream-five_hour-allowed_warning
+    match: '^\s*\{"type":"rate_limit_event","rate_limit_info":\{"status":"allowed_warning".*?"resetsAt":(?P<reset>\d{9,12}).*?"rateLimitType":"five_hour"'
+    kind: warning
+    window: 5h
+    reset: reset
+    reset_layout: epoch
+  - id: stream-five_hour-allowed
+    match: '^\s*\{"type":"rate_limit_event","rate_limit_info":\{"status":"allowed".*?"resetsAt":(?P<reset>\d{9,12}).*?"rateLimitType":"five_hour".*?"utilization":(?:0\.[89]\d*|1(?:\.0*)?)(?:[,}])'
+    kind: warning
+    window: 5h
+    reset: reset
+    reset_layout: epoch
+  - id: stream-seven_day-rejected
+    match: '^\s*\{"type":"rate_limit_event","rate_limit_info":\{"status":"rejected".*?"resetsAt":(?P<reset>\d{9,12}).*?"rateLimitType":"seven_day"'
+    kind: exhausted
+    window: week
+    reset: reset
+    reset_layout: epoch
+  - id: stream-seven_day-allowed_warning
+    match: '^\s*\{"type":"rate_limit_event","rate_limit_info":\{"status":"allowed_warning".*?"resetsAt":(?P<reset>\d{9,12}).*?"rateLimitType":"seven_day"'
+    kind: warning
+    window: week
+    reset: reset
+    reset_layout: epoch
+  - id: stream-seven_day-allowed
+    match: '^\s*\{"type":"rate_limit_event","rate_limit_info":\{"status":"allowed".*?"resetsAt":(?P<reset>\d{9,12}).*?"rateLimitType":"seven_day".*?"utilization":(?:0\.[89]\d*|1(?:\.0*)?)(?:[,}])'
+    kind: warning
+    window: week
+    reset: reset
+    reset_layout: epoch
+  - id: stream-seven_day_opus-rejected
+    match: '^\s*\{"type":"rate_limit_event","rate_limit_info":\{"status":"rejected".*?"resetsAt":(?P<reset>\d{9,12}).*?"rateLimitType":"seven_day_opus"'
+    kind: exhausted
+    window: week
+    reset: reset
+    reset_layout: epoch
+  - id: stream-seven_day_opus-allowed_warning
+    match: '^\s*\{"type":"rate_limit_event","rate_limit_info":\{"status":"allowed_warning".*?"resetsAt":(?P<reset>\d{9,12}).*?"rateLimitType":"seven_day_opus"'
+    kind: warning
+    window: week
+    reset: reset
+    reset_layout: epoch
+  - id: stream-seven_day_opus-allowed
+    match: '^\s*\{"type":"rate_limit_event","rate_limit_info":\{"status":"allowed".*?"resetsAt":(?P<reset>\d{9,12}).*?"rateLimitType":"seven_day_opus".*?"utilization":(?:0\.[89]\d*|1(?:\.0*)?)(?:[,}])'
+    kind: warning
+    window: week
+    reset: reset
+    reset_layout: epoch

@@ -2,6 +2,7 @@ package weave
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -37,17 +38,51 @@ var weaveThrottleGenericSignals = []string{
 	"resource_exhausted",
 }
 
-// ObservationsFromLog extracts the matched line and two neighboring lines on
-// either side. Record performs the final redaction before persistence.
-func ObservationsFromLog(tool, model, logTail string, now time.Time) []quotaobs.Observation {
+// ObservationsFromLog records vendor evidence, or a failed run classified as a
+// throttle. Ordinary prose mentioning limits is not evidence on a successful
+// run. Record performs the final redaction before persistence.
+func ObservationsFromLog(tool, model, logTail string, now time.Time, exited bool, exitCode int) []quotaobs.Observation {
 	tail := weaveThrottleTail(logTail, weaveThrottleTailBytes)
-	ok, signal := weaveClassifyThrottle(tool, 0, tail)
+	lines := strings.Split(tail, "\n")
+	catalog := fleet.New()
+	plan := ""
+	if m, found := catalog.Model(model); found {
+		plan = m.Plan
+	}
+	var signals []fleet.UsageSignal
+	if t, found := catalog.Tool(tool); found {
+		signals = append(signals, t.UsageSignals...)
+	}
+	if p, found := catalog.Plan(plan); found {
+		signals = append(signals, p.UsageSignals...)
+	}
+	observation := func(excerpt string) quotaobs.Observation {
+		return quotaobs.Observation{At: now, Source: "weave", Tool: tool, Model: model, Plan: plan, Excerpt: excerpt}
+	}
+	var out []quotaobs.Observation
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		vendorEvent := weaveVendorUsageEvent(tool, line)
+		if vendorEvent || len(fleet.MatchSignals(signals, line, nil, now)) > 0 {
+			out = append(out, observation(line))
+		}
+	}
+	if len(out) > 0 || !exited || exitCode == 0 {
+		return out
+	}
+	ok, signal := weaveClassifyThrottle(tool, exitCode, tail)
 	if !ok {
 		return nil
 	}
-	lines := strings.Split(tail, "\n")
 	matched := -1
 	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if weaveAllowedRateLimitEvent(trimmed) {
+			continue
+		}
 		if strings.Contains(strings.ToLower(line), strings.ToLower(signal)) {
 			matched = i
 			break
@@ -63,15 +98,57 @@ func ObservationsFromLog(tool, model, logTail string, now time.Time) []quotaobs.
 	if hi > len(lines) {
 		hi = len(lines)
 	}
-	o := quotaobs.Observation{At: now, Source: "weave", Tool: tool, Model: model, Excerpt: strings.Join(lines[lo:hi], "\n")}
-	if m, found := fleet.New().Model(model); found {
-		o.Plan = m.Plan
-	}
-	return []quotaobs.Observation{o}
+	return []quotaobs.Observation{observation(strings.Join(lines[lo:hi], "\n"))}
 }
 
-func weaveRecordThrottleObservation(tool, model, agent, tail string, now time.Time) error {
-	for _, o := range ObservationsFromLog(tool, model, tail, now) {
+// A stream event must be a complete JSON line from the vendor, not a quoted
+// mention in a brief or a tool result. An allowed event is only a warning when
+// its reported utilization is at least 80%.
+func weaveVendorUsageEvent(tool, line string) bool {
+	if tool != "claude" && tool != "codex" {
+		return false
+	}
+	var event struct {
+		Type          string          `json:"type"`
+		UsageLimit    json.RawMessage `json:"usage_limit"`
+		RateLimitInfo struct {
+			Status         string `json:"status"`
+			UnifiedWindows map[string]struct {
+				Utilization float64 `json:"utilization"`
+			} `json:"unifiedWindows"`
+		} `json:"rate_limit_info"`
+	}
+	if !strings.HasPrefix(line, "{") || json.Unmarshal([]byte(line), &event) != nil || event.Type == "" {
+		return false
+	}
+	if event.Type == "rate_limit_event" && tool == "claude" {
+		switch event.RateLimitInfo.Status {
+		case "rejected", "allowed_warning":
+			return true
+		case "allowed":
+			for _, window := range event.RateLimitInfo.UnifiedWindows {
+				if window.Utilization >= 0.8 {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return len(event.UsageLimit) > 0 && string(event.UsageLimit) != "null" && string(event.UsageLimit) != `""`
+}
+
+func weaveAllowedRateLimitEvent(line string) bool {
+	var event struct {
+		Type          string `json:"type"`
+		RateLimitInfo struct {
+			Status string `json:"status"`
+		} `json:"rate_limit_info"`
+	}
+	return json.Unmarshal([]byte(line), &event) == nil && event.Type == "rate_limit_event" && event.RateLimitInfo.Status == "allowed"
+}
+
+func weaveRecordThrottleObservation(tool, model, agent, tail string, now time.Time, exited bool, exitCode int) error {
+	for _, o := range ObservationsFromLog(tool, model, tail, now, exited, exitCode) {
 		o.Agent = agent
 		if err := quotaobs.Record(context.Background(), o); err != nil {
 			return err
@@ -113,7 +190,15 @@ func weaveClassifyThrottle(tool string, exitCode int, logTail string) (throttled
 	if logTail == "" {
 		return false, ""
 	}
-	haystack := strings.ToLower(weaveThrottleTail(logTail, weaveThrottleTailBytes))
+	var eligible []string
+	for _, line := range strings.Split(weaveThrottleTail(logTail, weaveThrottleTailBytes), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if weaveAllowedRateLimitEvent(trimmed) {
+			continue
+		}
+		eligible = append(eligible, line)
+	}
+	haystack := strings.ToLower(strings.Join(eligible, "\n"))
 	for _, phrase := range weaveThrottleGenericSignals {
 		if strings.Contains(haystack, phrase) {
 			return true, phrase
