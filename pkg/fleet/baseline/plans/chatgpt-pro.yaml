@@ -31,7 +31,19 @@ usage:
   - id: sessions
     run:
       body: |
-        f=$(ls -t "$HOME"/.codex/sessions/*/*/*/rollout-*.jsonl 2>/dev/null | head -n 1)
+        days=$(ls -d "$HOME"/.codex/sessions/*/*/* 2>/dev/null | tail -n 2)
+        d=$(printf '%s\n' "$days" | tail -n 1)
+        f=
+        if [ -n "$d" ]; then
+          f=$(ls -t "$d"/rollout-*.jsonl 2>/dev/null | head -n 1)
+        fi
+        if [ -z "$f" ]; then
+          d=$(printf '%s\n' "$days" | head -n 1)
+          if [ -n "$d" ]; then
+            f=$(ls -t "$d"/rollout-*.jsonl 2>/dev/null | head -n 1)
+          fi
+        fi
         [ -n "$f" ] || exit 1
         grep token_count "$f" | tail -n 1 | jq -c '{schema_version:"bashy-usage-v1",metrics:[.payload.rate_limits|(.primary//empty),(.secondary//empty)|select(.window_minutes==300 or .window_minutes==10080)|{name:"used_percent",value:.used_percent,unit:"percent",window:(if .window_minutes==300 then "5h" else "week" end),reset_at:.resets_at}]}'
       effects: [read]
+      timeout: 10s

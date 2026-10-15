@@ -8,6 +8,8 @@ package probeseeds
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +21,7 @@ import (
 	_ "github.com/qiangli/yoke/pkg/dag"  // registers the real Bash# snippet runner
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/llmbudget"
+	"github.com/qiangli/yoke/pkg/snippet"
 )
 
 var rodNow = time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
@@ -223,6 +226,79 @@ func TestRodChatGPTProProbeRedactedFixture(t *testing.T) {
 		if r.Account == "chatgpt-pro" && r.Window == "5h" {
 			t.Fatalf("older rollout leaked a 5h row: %+v", r)
 		}
+	}
+}
+
+// Rod: even with hundreds of session files, the probe sorts rollouts only in
+// the lexically newest day that has one. The newest day below contains no
+// rollouts, so it must fall back exactly one day; a newer-mtime rollout in the
+// oldest day proves the probe does not return to the global sessions scan.
+func TestRodChatGPTProProbeManySessionsFast(t *testing.T) {
+	home := isolate(t)
+	sessions := filepath.Join(home, ".codex", "sessions", "2026", "10")
+	for _, day := range []string{"13", "14", "15"} {
+		if err := os.MkdirAll(filepath.Join(sessions, day), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stale := `{"timestamp":"2026-10-14T09:00:00.000Z","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":90,"window_minutes":300,"resets_at":1792680000},"secondary":null}}}` + "\n"
+	target := `{"timestamp":"2026-10-14T16:43:53.000Z","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":37,"window_minutes":10080,"resets_at":1792685131},"secondary":null}}}` + "\n"
+	base := rodNow.Add(-24 * time.Hour)
+	for i := 0; i < 200; i++ {
+		old := filepath.Join(sessions, "13", fmt.Sprintf("rollout-%03d.jsonl", i))
+		if err := os.WriteFile(old, []byte(stale), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		future := rodNow.Add(24*time.Hour + time.Duration(i)*time.Second)
+		if err := os.Chtimes(old, future, future); err != nil {
+			t.Fatal(err)
+		}
+
+		current := filepath.Join(sessions, "14", fmt.Sprintf("rollout-%03d.jsonl", i))
+		body := stale
+		if i == 199 {
+			body = target
+		}
+		if err := os.WriteFile(current, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		mtime := base.Add(time.Duration(i) * time.Second)
+		if err := os.Chtimes(current, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+
+		unrelated := filepath.Join(sessions, "15", fmt.Sprintf("session-%03d.jsonl", i))
+		if err := os.WriteFile(unrelated, []byte(stale), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cat := fleet.New()
+	plan, ok := cat.Plan("chatgpt-pro")
+	if !ok || len(plan.Usage) != 1 {
+		t.Fatalf("chatgpt-pro usage: %+v", plan.Usage)
+	}
+	started := time.Now()
+	result, err := snippet.Run(context.Background(), plan.Usage[0].Run, snippet.IO{})
+	elapsed := time.Since(started)
+	if err != nil || result.Exit != 0 {
+		t.Fatalf("probe: exit=%d err=%v stderr=%s", result.Exit, err, result.Stderr)
+	}
+	var doc struct {
+		Metrics []struct {
+			Value  float64 `json:"value"`
+			Window string  `json:"window"`
+		} `json:"metrics"`
+	}
+	if err := json.Unmarshal(result.Stdout, &doc); err != nil {
+		t.Fatalf("probe JSON: %v\n%s", err, result.Stdout)
+	}
+	if len(doc.Metrics) != 1 || doc.Metrics[0].Value != 37 || doc.Metrics[0].Window != "week" {
+		t.Fatalf("newest rollout metrics: %+v", doc.Metrics)
+	}
+	if elapsed >= 2*time.Second {
+		t.Fatalf("probe took %v with 3 day dirs x 200 files; want <2s", elapsed)
 	}
 }
 

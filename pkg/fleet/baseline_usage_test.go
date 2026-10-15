@@ -3,6 +3,7 @@ package fleet
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestBaselineUsageSeeds pins the compiled-in usage probes (story ad63edf1):
@@ -32,7 +33,7 @@ func TestBaselineUsageSeeds(t *testing.T) {
 	if !ok || len(chatgpt.Usage) != 1 {
 		t.Fatalf("chatgpt-pro usage: %d probes (found=%v)", len(chatgpt.Usage), ok)
 	}
-	if p := chatgpt.Usage[0]; p.ID != "sessions" || len(p.Run.Effects) != 1 || p.Run.Effects[0] != "read" || len(p.Metrics) != 0 {
+	if p := chatgpt.Usage[0]; p.ID != "sessions" || len(p.Run.Effects) != 1 || p.Run.Effects[0] != "read" || p.Run.Timeout != 10*time.Second || len(p.Metrics) != 0 {
 		t.Fatalf("chatgpt-pro probe: %+v", p)
 	}
 
