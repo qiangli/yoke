@@ -113,6 +113,69 @@ func TestProbeConsentAndPlanDedupe(t *testing.T) {
 	}
 }
 
+func TestProbeConsentFollowsSharedCredential(t *testing.T) {
+	isolateReportCatalog(t)
+	t.Setenv("BASHY_FLEET_SEEDS", "off")
+	t.Setenv("SHARED_API_KEY", "fixture-only")
+	cat := fleet.New()
+	probe := fleet.UsageProbe{ID: "balance", Run: snippet.Snippet{Body: "fixture", Effects: []string{"net"}}}
+	for _, name := range []string{"old-model", "new-model"} {
+		m := fleet.Model{Name: name, Provider: "fixture", Kind: fleet.ModelKindAPI, APIKeyRef: "shared", Usage: []fleet.UsageProbe{probe}}
+		if e := cat.SaveModel(m); e != nil {
+			t.Fatal(e)
+		}
+	}
+	p := &Policy{Version: 1, ProbeConsent: []string{"probe:model:old-model/balance"}}
+	found := false
+	for _, s := range synthesizedProbes(p) {
+		if s.ID == "probe:model:new-model/balance" && !s.Enabled {
+			t.Fatal("existing account consent was lost")
+		}
+		found = found || s.ID == "probe:model:new-model/balance"
+	}
+	if !found {
+		t.Fatal("new model probe missing")
+	}
+}
+
+type slowOverlay struct{}
+
+func (slowOverlay) Kind() string { return "slow-overlay" }
+func (slowOverlay) Collect(ctx context.Context, _ SourceConfig, _ time.Time) (SourceResult, error) {
+	<-ctx.Done()
+	return SourceResult{Status: "unavailable"}, ctx.Err()
+}
+
+func TestRefreshProbeSurvivesSlowOverlay(t *testing.T) {
+	isolateReportCatalog(t)
+	t.Setenv("BASHY_FLEET_SEEDS", "off")
+	defer snippet.SetRunner(nil)
+	measured := false
+	snippet.SetRunner(func(ctx context.Context, _ snippet.Snippet, _ snippet.IO) (snippet.Result, error) {
+		measured = ctx.Err() == nil
+		return snippet.Result{Stdout: []byte(`{"schema_version":"bashy-usage-v1","metrics":[{"name":"used_percent","value":25,"window":"5h"}]}`)}, nil
+	})
+	probe := fleet.UsageProbe{ID: "quota", Run: snippet.Snippet{Body: "fixture", Timeout: time.Second}}
+	p := &Policy{Version: 1, Sources: []SourceConfig{
+		{ID: "overlay", Kind: "slow-overlay", Provider: "fixture", Account: "seat", Pool: "seat", Lane: LaneSubscription, Enabled: true, TimeoutSeconds: 1},
+		{ID: "probe", Kind: "probe", Provider: "fixture", Account: "seat", Pool: "seat", Lane: LaneSubscription, Enabled: true, probe: &probe},
+	}}
+	g := New(Config{Policy: p, Models: map[string]Model{}, Adapters: []Adapter{slowOverlay{}}})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	r, err := g.CollectReport(ctx, ReportOptions{Refresh: true})
+	if err != nil || !measured || len(r.Accounts) != 1 {
+		t.Fatalf("probe starved: %+v, measured=%v, err=%v", r, measured, err)
+	}
+	found := false
+	for _, m := range r.Accounts[0].Metrics {
+		found = found || m.Name == "quota.used_percent" && m.Value != nil && *m.Value == 25
+	}
+	if !found {
+		t.Fatalf("measurement missing: %+v", r.Accounts[0])
+	}
+}
+
 func TestModelCredentialProbeGetsValueOnly(t *testing.T) {
 	isolateReportCatalog(t)
 	t.Setenv("FIXTURE_PROBE_API_KEY", "fixture-token")

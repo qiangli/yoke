@@ -43,6 +43,24 @@ func TestForecastLearningBurnAndWorkers(t *testing.T) {
 		t.Fatalf("workers: %+v", q[0])
 	}
 }
+func TestForecastLearningForObservedAndMeasuredAccounts(t *testing.T) {
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	used, balance := 25.0, 10.0
+	rows := []QuotaRow{
+		{Account: "plan", Window: "week", UsedPercent: &used, ObservedAt: &now, Classification: "observed"},
+		{Account: "key", Balance: &balance, ObservedAt: &now, Classification: "measured"},
+		{Account: "empty", Status: "unmeasured"},
+	}
+	applyForecast(rows, nil, now)
+	if rows[0].Predict != "learning" || rows[1].Predict != "learning" || rows[2].Predict != "" {
+		t.Fatalf("learning/default: %+v", rows)
+	}
+	forecasts := []AccountForecast{{Account: "plan", Window: "week", Verdict: "ok-until-reset"}, {Account: "key", Window: "", Verdict: "learning"}}
+	applyForecast(rows, forecasts, now)
+	if rows[0].Predict != "ok-until-reset" || rows[1].Predict != "learning" {
+		t.Fatalf("plan/key attachment: %+v", rows)
+	}
+}
 func TestForecastConvergenceProfileAndRegime(t *testing.T) {
 	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 	noisy := calculateForecast(forecastFixture(now, []float64{50, 150}), now)[0]

@@ -272,7 +272,7 @@ func samplesFromFiles(since, until time.Time) []UsageSample {
 }
 func samplesFromOTel(ctx context.Context, since, until time.Time) []UsageSample {
 	c := otelquery.NewClient("")
-	ctx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	duration := time.Since(since)
 	if duration < 0 {

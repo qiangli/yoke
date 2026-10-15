@@ -292,6 +292,9 @@ func quotaRows(report *Report, models []fleet.Model, plans []fleet.Plan, agents 
 				row.Source = metric.Source
 			}
 			t := metric.ObservedAt
+			if t.After(now) {
+				t = now
+			}
 			if row.ObservedAt == nil || t.After(*row.ObservedAt) {
 				row.ObservedAt = &t
 			}

@@ -650,6 +650,9 @@ func applyForecast(rows []QuotaRow, forecasts []AccountForecast, now time.Time) 
 		r := &rows[i]
 		f, ok := byKey[r.Account+"\x00"+r.Window]
 		if !ok {
+			if r.ObservedAt != nil && !r.ObservedAt.IsZero() && (r.UsedPercent != nil || r.Balance != nil || r.Tokens != nil || r.Classification == "measured" || r.Classification == "observed" || r.Classification == "actual") {
+				r.Predict = "learning"
+			}
 			continue
 		}
 		r.Predict = f.Verdict

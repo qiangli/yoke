@@ -59,6 +59,8 @@ func (g *Gate) source(ctx context.Context, c SourceConfig, now time.Time, refres
 	}
 	if c.Kind == "probe" {
 		timeout = probeTimeout(c.probe)
+	} else if refresh && timeout > time.Second {
+		timeout = time.Second
 	}
 	var cached cachedSource
 	path := ""
@@ -72,6 +74,15 @@ func (g *Gate) source(ctx context.Context, c SourceConfig, now time.Time, refres
 		read := func() {
 			if b, err := readBounded(path, 1<<20); err == nil {
 				_ = json.Unmarshal(b, &cached)
+				if cached.At.After(g.now().Add(time.Second)) {
+					// A cache written under a future clock cannot establish freshness.
+					cached.Version = 0
+				}
+				for i := range cached.Result.Metrics {
+					if cached.Result.Metrics[i].ObservedAt.After(now) {
+						cached.Result.Metrics[i].ObservedAt = now
+					}
+				}
 			}
 		}
 		read()
@@ -113,7 +124,7 @@ func (g *Gate) source(ctx context.Context, c SourceConfig, now time.Time, refres
 	// Foreground refresh grants each probe its declared runtime, even when the
 	// caller uses a shorter display deadline. Preserve values and explicit
 	// cancellation; only deadline expiry is detached for probe sources.
-	if refresh && c.Kind == "probe" {
+	if refresh && c.Kind == "probe" && ctx.Value(refreshBudgetContextKey{}) != true {
 		parent := ctx
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithCancel(context.WithoutCancel(parent))

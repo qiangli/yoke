@@ -80,6 +80,24 @@ func synthesizedProbes(p *Policy) []SourceConfig {
 	for _, id := range p.ProbeConsent {
 		allowed[id] = true
 	}
+	// Older consent entries name the model that originally carried a
+	// credential probe. Keep that consent when the same probe is surfaced by
+	// another model using the same account credential.
+	for _, m := range models {
+		if m.APIKeyRef == "" {
+			continue
+		}
+		for _, probe := range m.Usage {
+			if !allowed["probe:model:"+m.Name+"/"+probe.ID] {
+				continue
+			}
+			for _, peer := range models {
+				if peer.APIKeyRef == m.APIKeyRef && peer.Provider == m.Provider {
+					allowed["probe:model:"+peer.Name+"/"+probe.ID] = true
+				}
+			}
+		}
+	}
 	for _, s := range p.Sources {
 		seen[s.ID] = true
 	}

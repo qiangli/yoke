@@ -2,6 +2,8 @@ package llmbudget
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -179,6 +181,43 @@ func TestSharedSourceCacheAndFailureBackoff(t *testing.T) {
 	_, _ = g.source(context.Background(), c, now, true)
 	if count.Load() != 2 {
 		t.Fatal("failure backoff bypass")
+	}
+}
+func TestCachedSourceClampsFutureObservation(t *testing.T) {
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	g := fixtureGate(t, &Policy{Version: 1})
+	g.cfg.Now = func() time.Time { return now }
+	var count atomic.Int32
+	var fail atomic.Bool
+	g.cfg.Adapters = []Adapter{fixtureAdapter{count: &count, fail: &fail}}
+	c := SourceConfig{ID: "future", Kind: "fixture", Enabled: true, RefreshSeconds: 300}
+	_, err := g.source(context.Background(), c, now, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Reproduce a cached value whose timestamp came from a clock ahead of now.
+	future := now.Add(89 * time.Hour)
+	raw, _ := json.Marshal(struct {
+		Source SourceConfig
+		Probe  any
+	}{c, c.probe})
+	hash := sha256.Sum256(raw)
+	path := filepath.Join(filepath.Dir(g.cfg.StatePath), "llm-budget-sources", hex.EncodeToString(hash[:])+".json")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cached cachedSource
+	if err := json.Unmarshal(b, &cached); err != nil {
+		t.Fatal(err)
+	}
+	cached.Result.Metrics[0].ObservedAt = future
+	if err := atomicJSON(path, cached); err != nil {
+		t.Fatal(err)
+	}
+	r, err := g.source(context.Background(), c, now, false)
+	if err != nil || r.Metrics[0].ObservedAt.After(now) {
+		t.Fatalf("future cache timestamp: %+v, %v", r, err)
 	}
 }
 func TestSharedSourceRefreshDoesNotStampede(t *testing.T) {

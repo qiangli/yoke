@@ -16,10 +16,27 @@ func CollectReport(ctx context.Context, opt ReportOptions) (*Report, error) {
 	return defaultGate.CollectReport(ctx, opt)
 }
 
+type refreshBudgetContextKey struct{}
+
 // CollectReport grants refreshed probes their own runtime budget (default 10s,
 // capped at 30s), independent of caller deadlines. Explicit cancellation and
 // non-probe sources retain the caller context; cached sources retain cadence.
 func (g *Gate) CollectReport(ctx context.Context, opt ReportOptions) (*Report, error) {
+	// A display deadline must not consume a probe's declared runtime. The
+	// refresh still has a single upper bound and honors explicit cancellation.
+	sourceCtx := ctx
+	if opt.Refresh {
+		parent := ctx
+		var cancel context.CancelFunc
+		sourceCtx, cancel = context.WithTimeout(context.WithValue(context.WithoutCancel(parent), refreshBudgetContextKey{}, true), 60*time.Second)
+		stop := context.AfterFunc(parent, func() {
+			if errors.Is(parent.Err(), context.Canceled) {
+				cancel()
+			}
+		})
+		defer stop()
+		defer cancel()
+	}
 	resolveModel, listModels := reportModelResolver(g)
 	p, err := g.policy()
 	if err != nil {
@@ -74,10 +91,17 @@ func (g *Gate) CollectReport(ctx context.Context, opt ReportOptions) (*Report, e
 	for _, src := range sources {
 		roster = append(roster, Binding{Model: src.probeModel, Provider: src.Provider, Account: src.Account, Pool: src.Pool, Lane: src.Lane, AccountKnown: true})
 	}
+	// Probes have declared run budgets. Give them the first chance at the
+	// foreground refresh before optional or slower overlay sources.
+	if opt.Refresh {
+		sort.SliceStable(sources, func(i, j int) bool {
+			return sources[i].Kind == "probe" && sources[j].Kind != "probe"
+		})
+	}
 	groups := map[string]*AccountReport{}
 	modelBindings := map[string][]Binding{}
 	for _, b := range roster {
-		if err := ctx.Err(); err != nil {
+		if err := ctx.Err(); err != nil && (!opt.Refresh || !errors.Is(err, context.DeadlineExceeded)) {
 			return nil, err
 		}
 		if m, ok := resolveModel(b.Model); ok {
@@ -260,7 +284,7 @@ func (g *Gate) CollectReport(ctx context.Context, opt ReportOptions) (*Report, e
 			if ctx.Value(headroomProbeContextKey{}) == true && src.probe != nil && snippet.IsAgentic(src.probe.Run) {
 				continue
 			}
-			result, e := g.source(ctx, src, now, opt.Refresh)
+			result, e := g.source(sourceCtx, src, now, opt.Refresh)
 			if e != nil {
 				report.Warnings = append(report.Warnings, fmt.Sprintf("source %s: observation unavailable", src.ID))
 			}
@@ -294,7 +318,9 @@ func (g *Gate) CollectReport(ctx context.Context, opt ReportOptions) (*Report, e
 		return a.Provider+"/"+a.Account+"/"+a.Pool+string(a.Lane) < b.Provider+"/"+b.Account+"/"+b.Pool+string(b.Lane)
 	})
 	if opt.Refresh && g == defaultGate {
-		_ = ingestReport(ctx, now, report)
+		overlayCtx, cancel := context.WithTimeout(ctx, time.Second)
+		_ = ingestReport(overlayCtx, now, report)
+		cancel()
 	}
 	return report, nil
 }
