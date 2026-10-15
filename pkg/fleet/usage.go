@@ -30,7 +30,7 @@ func (p UsageProbe) RefreshDuration() time.Duration {
 			return d
 		}
 	}
-	if strings.Contains(p.Run.Body, "agentic") {
+	if snippet.IsAgentic(p.Run) {
 		return time.Hour
 	}
 	return 5 * time.Minute

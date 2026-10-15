@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +18,18 @@ import (
 )
 
 func init() {
+	snippet.SetAgentPlanResolver(func(name string) (string, bool) {
+		cat := fleet.New()
+		agent, ok := cat.Agent(name)
+		if !ok {
+			return "", false
+		}
+		model, ok := cat.Model(agent.Model)
+		if !ok || model.Plan == "" {
+			return "", false
+		}
+		return model.Plan, true
+	})
 	snippet.SetModelCredentialResolver(func(_ context.Context, ref snippet.ModelRef) (string, error) {
 		cat := fleet.New()
 		resolve := func(m fleet.Model) (string, bool) {
@@ -94,7 +105,7 @@ func synthesizedProbes(p *Policy) []SourceConfig {
 			}
 			d := probe.RefreshDuration()
 			timeout := 5
-			if strings.Contains(probe.Run.Body, "agentic") {
+			if snippet.IsAgentic(probe.Run) {
 				timeout = 30
 			}
 			c := SourceConfig{ID: id, Kind: "probe", Provider: provider, Account: account, Pool: account, Lane: lane, Enabled: !snippet.NeedsConsent(probe.Run) || allowed[id], RefreshSeconds: int(d.Seconds()), probe: &probe, probeModel: m.Name, probePlan: m.Plan}
@@ -129,6 +140,7 @@ func (ProbeAdapter) Collect(ctx context.Context, c SourceConfig, now time.Time) 
 	if strings.HasPrefix(c.ID, "probe:plan:") {
 		provider = ""
 		model = ""
+		ctx = snippet.WithMeasuring(ctx, c.probePlan)
 	}
 	ctx = snippet.WithModel(ctx, provider, model, c.probePlan)
 	result, err := snippet.Run(ctx, c.probe.Run, snippet.IO{})
@@ -136,7 +148,7 @@ func (ProbeAdapter) Collect(ctx context.Context, c SourceConfig, now time.Time) 
 		if errors.Is(err, snippet.ErrNotConfigured) {
 			return SourceResult{Status: "not-configured"}, nil
 		}
-		if result.Exit == 6 {
+		if errors.Is(err, snippet.ErrNeedsInput) || result.Exit == 6 {
 			return SourceResult{Status: "needs-input", Limitations: []string{err.Error()}}, nil
 		}
 		return SourceResult{Status: "unavailable", Limitations: []string{err.Error()}}, err
@@ -152,11 +164,11 @@ func (ProbeAdapter) Collect(ctx context.Context, c SourceConfig, now time.Time) 
 		return SourceResult{Status: "unavailable"}, fmt.Errorf("probe JSON: %w", err)
 	}
 	classification := "measured"
-	if strings.Contains(c.probe.Run.Body, "agentic") {
+	if snippet.IsAgentic(c.probe.Run) {
 		classification = "inferred"
 	}
-	if field := reflect.ValueOf(result).FieldByName("Classification"); field.IsValid() && field.Kind() == reflect.String && field.String() != "" {
-		classification = field.String()
+	if result.Classification != "" {
+		classification = result.Classification
 	}
 	out := SourceResult{Status: "ok"}
 	appendMetric := func(name string, value any, unit, window string, reset any) error {

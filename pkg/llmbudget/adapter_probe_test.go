@@ -171,8 +171,8 @@ func TestPlanProbeHeadroomCoversEveryModelOnSeat(t *testing.T) {
 
 func TestProbeStatusesAndInferredHeadroom(t *testing.T) {
 	now := time.Now()
-	probe := fleet.UsageProbe{ID: "x", Run: snippet.Snippet{Body: "agentic fixture"}}
-	c := SourceConfig{ID: "probe:plan:p/x", Kind: "probe", Provider: "vendor", Account: "p", Pool: "p", Lane: LaneSubscription, Enabled: true, probe: &probe}
+	probe := fleet.UsageProbe{ID: "x", Run: snippet.Snippet{Body: "agentic { echo fixture; }", Effects: []string{"spend"}}}
+	c := SourceConfig{ID: "probe:plan:p/x", Kind: "probe", Provider: "vendor", Account: "p", Pool: "p", Lane: LaneSubscription, Enabled: true, probe: &probe, probePlan: "p"}
 	snippet.SetRunner(func(_ context.Context, _ snippet.Snippet, _ snippet.IO) (snippet.Result, error) {
 		return snippet.Result{Stdout: []byte(`{"schema_version":"bashy-usage-v1","metrics":[{"name":"used_percent","value":97,"unit":"percent"}]}`)}, nil
 	})
@@ -207,6 +207,13 @@ func TestProbeStatusesAndInferredHeadroom(t *testing.T) {
 	}
 	probe.Run.Env = nil
 	c.probeModel = ""
+	snippet.SetRunner(func(_ context.Context, _ snippet.Snippet, _ snippet.IO) (snippet.Result, error) {
+		return snippet.Result{}, snippet.ErrNeedsInput
+	})
+	r, e = (ProbeAdapter{}).Collect(context.Background(), c, now)
+	if e != nil || r.Status != "needs-input" {
+		t.Fatalf("needs input error %+v %v", r, e)
+	}
 	snippet.SetRunner(func(_ context.Context, _ snippet.Snippet, _ snippet.IO) (snippet.Result, error) {
 		return snippet.Result{Exit: 6}, nil
 	})

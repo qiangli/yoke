@@ -19,24 +19,27 @@ func (a countedHeadroomAdapter) Collect(_ context.Context, _ SourceConfig, now t
 	return SourceResult{Status: "ok", Metrics: []Metric{{Name: "quota.used_percent", Value: &a.value, Classification: "measured", Source: "fixture", ObservedAt: now}}}, nil
 }
 
-func TestMeasuredHeadroomReadsCacheWithoutRefreshing(t *testing.T) {
+func TestCachedMeasuredHeadroomReadsCacheWithoutRefreshing(t *testing.T) {
 	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 	calls := 0
 	c := SourceConfig{ID: "cached-seat", Kind: "counted-headroom", Provider: "vendor", Account: "seat", Pool: "seat", Lane: LaneSubscription, Enabled: true, RefreshSeconds: 300}
 	g := New(Config{StatePath: filepath.Join(t.TempDir(), "meter.json"), Now: func() time.Time { return now }, Policy: &Policy{Version: 1, Bindings: []Binding{{Model: "cached-model", Provider: "vendor", Account: "seat", Pool: "seat", Lane: LaneSubscription}}, Sources: []SourceConfig{c}}, Adapters: []Adapter{countedHeadroomAdapter{calls: &calls, value: 97}}})
-	if _, _, known, e := g.MeasuredHeadroom(context.Background(), "cached-model", ""); e != nil || known || calls != 0 {
+	if _, _, known, e := g.CachedMeasuredHeadroom(context.Background(), "cached-model", ""); e != nil || known || calls != 0 {
 		t.Fatalf("cold cache called adapter: known=%v calls=%d err=%v", known, calls, e)
 	}
 	if _, e := g.CollectReport(context.Background(), ReportOptions{Roster: []Binding{{Model: "cached-model", Provider: "vendor", Account: "seat", Pool: "seat", Lane: LaneSubscription, AccountKnown: true}}, Now: now}); e != nil || calls != 1 {
 		t.Fatalf("foreground prime: calls=%d err=%v", calls, e)
 	}
-	h, _, known, e := g.MeasuredHeadroom(context.Background(), "cached-model", "")
+	h, _, known, e := g.CachedMeasuredHeadroom(context.Background(), "cached-model", "")
 	if e != nil || !known || math.Abs(h-.03) > 1e-9 || calls != 1 {
 		t.Fatalf("cache headroom %.9f %v calls=%d err=%v", h, known, calls, e)
 	}
 	now = now.Add(6 * time.Minute)
-	if _, _, known, e := g.MeasuredHeadroom(context.Background(), "cached-model", ""); e != nil || known || calls != 1 {
+	if _, _, known, e := g.CachedMeasuredHeadroom(context.Background(), "cached-model", ""); e != nil || known || calls != 1 {
 		t.Fatalf("expired cache refreshed: known=%v calls=%d err=%v", known, calls, e)
+	}
+	if h, _, known, e := g.MeasuredHeadroom(context.Background(), "cached-model", ""); e != nil || !known || math.Abs(h-.03) > 1e-9 || calls != 2 {
+		t.Fatalf("measured refresh %.9f %v calls=%d err=%v", h, known, calls, e)
 	}
 }
 

@@ -16,12 +16,7 @@ import (
 	"github.com/qiangli/yoke/pkg/llmbudget"
 )
 
-// TODO(47892ea6): use llmbudget.MeasuredHeadroom once it offers a cache-only
-// mode. Today it calls CollectReport -> source -> adapter.Collect on a cache
-// miss/expiry, even with Refresh=false. Seat selection must never run probes.
-var seatMeasuredHeadroom = func(context.Context, string, string) (float64, llmbudget.Binding, bool, error) {
-	return 0, llmbudget.Binding{}, false, nil
-}
+var seatMeasuredHeadroom = llmbudget.CachedMeasuredHeadroom
 
 func seatQuotaFloor() float64 {
 	floor, err := strconv.ParseFloat(os.Getenv("BASHY_QUOTA_FLOOR"), 64)

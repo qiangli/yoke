@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/qiangli/yoke/pkg/fleet"
+	"github.com/qiangli/yoke/pkg/snippet"
 )
 
 func CollectReport(ctx context.Context, opt ReportOptions) (*Report, error) {
@@ -252,7 +253,7 @@ func (g *Gate) CollectReport(ctx context.Context, opt ReportOptions) (*Report, e
 			if src.Provider != row.Provider || src.Account != row.Account || src.Pool != row.Pool || src.Lane != row.Lane {
 				continue
 			}
-			if ctx.Value(headroomProbeContextKey{}) == true && src.probe != nil && strings.Contains(src.probe.Run.Body, "agentic") {
+			if ctx.Value(headroomProbeContextKey{}) == true && src.probe != nil && snippet.IsAgentic(src.probe.Run) {
 				continue
 			}
 			result, e := g.source(ctx, src, now, opt.Refresh)
