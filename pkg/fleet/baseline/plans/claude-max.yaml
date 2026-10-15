@@ -1,4 +1,5 @@
 name: claude-max
+label: claude
 display: Claude Max 20x
 vendor: Anthropic
 vendor_plan: Max 20x

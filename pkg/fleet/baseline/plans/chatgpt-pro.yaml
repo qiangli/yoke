@@ -1,4 +1,5 @@
 name: chatgpt-pro
+label: codex
 display: ChatGPT Pro (highest option)
 vendor: OpenAI
 vendor_plan: Pro

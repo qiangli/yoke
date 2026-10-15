@@ -1,4 +1,5 @@
 name: meta-muse-pro
+label: muse
 display: Meta Muse (Pro seat)
 vendor: Meta
 # The operator's seat is recorded as Pro — a paid plan below Meta's top one. On

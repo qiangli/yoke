@@ -100,6 +100,38 @@ func TestQuotaGroupingWorkersAndDoor(t *testing.T) {
 }
 func ptrInt(v int) *int { return &v }
 
+func TestQuotaBaselineAccountLabels(t *testing.T) {
+	isolateReportCatalog(t)
+	t.Setenv("BASHY_FLEET_SEEDS", "")
+	cat := fleet.New(fleet.WithoutLocalStore(), fleet.WithoutCloudOverlay())
+	models, errs := cat.Models()
+	if len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	plans, errs := cat.Plans()
+	if len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	want := map[string]string{
+		"claude-max": "claude", "chatgpt-pro": "codex", "google-ai-pro": "agy",
+		"meta-muse-pro": "muse", "zai-glm-coding-pro": "glm",
+		"moonshot": "kimi", "deepseek": "deepseek",
+	}
+	// Derive from the actual seed data, without probes or active CLI tools.
+	rows := quotaRows(&Report{}, models, plans, nil, &Policy{}, QuotaOptions{All: true}, time.Now())
+	for _, row := range rows {
+		if label, ok := want[row.Account]; ok {
+			if row.Label != label {
+				t.Errorf("account %s label = %q, want %q", row.Account, row.Label, label)
+			}
+			delete(want, row.Account)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing accounts: %v", want)
+	}
+}
+
 func TestQuotaBillingAccounts(t *testing.T) {
 	t.Setenv("BASHY_HOME", t.TempDir())
 	models := []fleet.Model{

@@ -238,7 +238,7 @@ func TestRodMissingSnapshotNotConfigured(t *testing.T) {
 		}
 		want := "no snapshot at " + filepath.Join(home, ".bashy", "quota", "claude.json")
 		for _, limitation := range row.Limitations {
-			if limitation == want {
+			if filepath.ToSlash(limitation) == filepath.ToSlash(want) {
 				return
 			}
 		}

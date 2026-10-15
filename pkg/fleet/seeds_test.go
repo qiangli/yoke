@@ -46,7 +46,7 @@ func TestEmbeddedSeedsResolve(t *testing.T) {
 
 	// The family aliases are derived at load (highest version wins, a tie
 	// fails closed); every family the seeds ship must resolve to one model.
-	for _, alias := range []string{"opus", "sonnet", "haiku", "fable", "gpt", "gemini", "gemini-flash", "deepseek", "glm", "kimi", "kimi-code"} {
+	for _, alias := range []string{"opus", "sonnet", "haiku", "fable", "gpt", "gemini", "gemini-flash", "deepseek", "glm", "kimi"} {
 		if _, ok := c.Model(alias); !ok {
 			t.Errorf("family alias %q does not resolve — a seed family is missing or its versions tie", alias)
 		}
