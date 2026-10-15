@@ -276,6 +276,17 @@ func (w *Worker) DoCompletion(ctx context.Context, input CompletionPrompt, onEve
 		}
 	}
 
+	defer func() {
+		if w.stderr != nil {
+			tail := w.stderr.String()
+			if len(tail) > 16*1024 {
+				tail = tail[len(tail)-16*1024:]
+			}
+			for _, line := range strings.Split(tail, "\n") {
+				w.observeLimit(ctx, []byte(line))
+			}
+		}
+	}()
 	result := Result{Outcome: OutcomeOK}
 	var text strings.Builder
 	var waitErr error
@@ -316,6 +327,7 @@ func (w *Worker) DoCompletion(ctx context.Context, input CompletionPrompt, onEve
 				scanErr = line.err
 				continue
 			}
+			w.observeLimit(ctx, line.data)
 			ev, parsed := parseEvent(line.data, w.tool.CLI.Launch.EventsDone)
 			if !parsed {
 				if s := strings.TrimSpace(string(line.data)); s != "" {

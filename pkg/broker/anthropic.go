@@ -11,6 +11,7 @@ import (
 
 	"github.com/qiangli/yoke/pkg/llmgw/anthropic"
 	"github.com/qiangli/yoke/pkg/llmgw/openai"
+	"github.com/qiangli/yoke/pkg/quotaobs"
 )
 
 // The local engine speaks the OpenAI and Ollama dialects only, so an
@@ -147,6 +148,7 @@ func (b *Broker) serveAnthropicLocal(ctx context.Context, w http.ResponseWriter,
 		writeAnthropicErr(w, http.StatusBadGateway, "local engine: "+err.Error())
 		return 0, 0
 	}
+	quotaobs.ObserveResponse(ctx, resp, quotaobs.Observation{Source: "door", Model: clientModel})
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {

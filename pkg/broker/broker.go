@@ -32,6 +32,7 @@ import (
 
 	"github.com/qiangli/yoke/pkg/broker/door"
 	"github.com/qiangli/yoke/pkg/cligw"
+	"github.com/qiangli/yoke/pkg/quotaobs"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -666,6 +667,10 @@ func (b *Broker) proxyEngine(w http.ResponseWriter, r *http.Request, body []byte
 	target, _ := url.Parse(b.engine.base)
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	proxy.FlushInterval = -1
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		quotaobs.ObserveResponse(r.Context(), resp, quotaobs.Observation{Source: "door"})
+		return nil
+	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		writeErr(w, r.URL.Path, http.StatusBadGateway, "local engine: "+err.Error())
 	}

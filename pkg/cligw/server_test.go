@@ -20,6 +20,7 @@ import (
 	"github.com/qiangli/yoke/pkg/agentlaunch"
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/llmgw/sched"
+	"github.com/qiangli/yoke/pkg/quotaobs"
 )
 
 // The server tests run against FAKE CLIs — this test binary re-executed
@@ -386,6 +387,13 @@ func TestServerPinnedAgentAndUnknownModel(t *testing.T) {
 }
 
 func TestServerReserveFloorAnswers429(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	defer func() {
+		got, err := quotaobs.Read(time.Time{}, nil)
+		if err != nil || len(got) != 0 {
+			t.Errorf("admission recorded as vendor: %+v, %v", got, err)
+		}
+	}()
 	ts := newTestServer(t, map[string]float64{"sonnet-x": .05, "gpt-x": .05})
 
 	resp := ts.do(t, http.MethodPost, "/v1/chat/completions", ts.Token(), fmt.Sprintf(chatBody, "L4"))

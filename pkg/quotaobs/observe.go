@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -112,7 +113,7 @@ func Record(ctx context.Context, o Observation) error {
 	}
 	cutoff := o.At.Add(-10 * time.Minute)
 	for _, old := range prior {
-		if old.ExcerptSHA == o.ExcerptSHA && old.Account == o.Account && !old.At.Before(cutoff) && !old.At.After(o.At) {
+		if old.ExcerptSHA == o.ExcerptSHA && old.Account == o.Account && old.Source == o.Source && old.Tool == o.Tool && old.Model == o.Model && old.Agent == o.Agent && old.Plan == o.Plan && old.Status == o.Status && maps.Equal(old.Headers, o.Headers) && !old.At.Before(cutoff) && !old.At.After(o.At) {
 			return nil
 		}
 	}

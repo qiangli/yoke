@@ -34,6 +34,15 @@ func TestCLIHelper(t *testing.T) {
 	}
 	args = args[1:]
 	switch args[0] {
+	case "quota-event":
+		fmt.Println(`{"type":"system","usage_limit":"weekly","message":"Bearer abcdefghijklmnopqrstuvwxyz"}`)
+	case "quota-stderr":
+		fmt.Fprintln(os.Stderr, "rate limit exceeded Bearer abcdefghijklmnopqrstuvwxyz")
+		os.Exit(1)
+	case "quota-stdout":
+		fmt.Println("quota exhausted Bearer abcdefghijklmnopqrstuvwxyz")
+	case "quota-http":
+		fmt.Println(`{"type":"error","status_code":429,"headers":{"Retry-After":"120","Authorization":"secret"},"body":"Bearer abcdefghijklmnopqrstuvwxyz"}`)
 	case "backend-text":
 		fmt.Println(`{"type":"item.completed","item":{"type":"agent_message","text":"hello from cli"}}`)
 		fmt.Println(`{"type":"turn.completed","usage":{"input_tokens":11,"output_tokens":3}}`)
@@ -394,15 +403,28 @@ func installFakeCatalogEffort(t *testing.T, toolName string, warm WarmMode, mode
 		launch.EventsDone = fleet.EventsDone{Field: "event", Values: []string{"result"}}
 		launch.EventsOutcome = fleet.EventsOutcome{Path: "result.status", OK: []string{"SUCCESS"}}
 	}
+	modelName := ""
+	if strings.HasPrefix(mode, "quota-") {
+		modelName = "quota-fixture-model"
+		launch.Exec = strings.Replace(launch.Exec, "{prompt}", "--model {model} {prompt}", 1)
+		if err := cat.SaveModel(fleet.Model{Name: modelName, Kind: fleet.ModelKindSubscription, Plan: "fixture-plan"}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := cat.SaveTool(fleet.Tool{Name: toolName, Kind: fleet.ToolKindCLI, CLI: fleet.ToolCLI{Binary: os.Args[0], Launch: launch}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := cat.SaveAgent(fleet.Agent{Name: "test-agent", Tool: toolName, Effort: effort}); err != nil {
+	if err := cat.SaveAgent(fleet.Agent{Name: "test-agent", Tool: toolName, Model: modelName, Effort: effort}); err != nil {
 		t.Fatal(err)
 	}
 	old := agentlaunch.NewCatalog
 	agentlaunch.NewCatalog = func() *fleet.Catalog { return cat }
 	t.Cleanup(func() { agentlaunch.NewCatalog = old })
+	if strings.HasPrefix(mode, "quota-") {
+		if _, err := agentlaunch.Resolve("test-agent", agentlaunch.Options{}); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func waitFor(t *testing.T, timeout time.Duration, check func() bool) {
