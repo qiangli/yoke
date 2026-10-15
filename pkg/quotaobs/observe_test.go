@@ -77,6 +77,22 @@ func TestRecordRefusesRealHomeDuringTests(t *testing.T) {
 	}
 }
 
+func TestGuardAllowsJournalsUnderHomeOutsideBashy(t *testing.T) {
+	if realHomeErr != nil || realHome == "" {
+		t.Skip("no user home")
+	}
+	// A builder container with HOME=/tmp puts t.TempDir() under the real
+	// home; such a journal is isolated, not the operator's default one.
+	sibling := filepath.Join(realHome, "yoke-quotaobs-test", "quota", "observations.jsonl")
+	if err := guardTestWrite(sibling); err != nil {
+		t.Fatalf("sibling journal refused: %v", err)
+	}
+	def := filepath.Join(defaultBashyDir(), "quota", "observations.jsonl")
+	if err := guardTestWrite(def); !errors.Is(err, ErrRealHomeWrite) {
+		t.Fatalf("default journal accepted: %v", err)
+	}
+}
+
 func TestRotationAndTornLine(t *testing.T) {
 	t.Setenv("BASHY_HOME", t.TempDir())
 	p, _ := path()

@@ -26,22 +26,37 @@ import (
 const Schema = "bashy-quota-observation-v1"
 const maxFile = 5 << 20
 
-// ErrRealHomeWrite reports a test that tried to journal an observation under
-// the operator's real home instead of an isolated BASHY_HOME.
-var ErrRealHomeWrite = errors.New("quotaobs: refusing test write under the real user home")
+// ErrRealHomeWrite reports a test that tried to journal an observation inside
+// the default real-home .bashy directory instead of an isolated BASHY_HOME.
+var ErrRealHomeWrite = errors.New("quotaobs: refusing test write inside the real home's .bashy")
 
 // realHome is captured at process start, before any test scaffolding redirects
 // HOME or BASHY_HOME, so the guard can still recognize the operator's home.
 var realHome, realHomeErr = os.UserHomeDir()
 
-// guardTestWrite refuses journal writes that would land under the operator's
-// real home while running under go test: an unfenced test fails loudly here
-// instead of silently polluting ~/.bashy/quota.
+// defaultBashyDir is the .bashy directory the journal resolves to with no
+// isolation: the real home captured at process init joined with .bashy.
+func defaultBashyDir() string {
+	if realHomeErr != nil || realHome == "" {
+		return ""
+	}
+	return filepath.Join(realHome, ".bashy")
+}
+
+// guardTestWrite refuses journal writes that would land inside the default
+// real-home .bashy directory while running under go test: an unfenced test
+// fails loudly here instead of silently polluting ~/.bashy/quota. Paths
+// merely under HOME are legitimate isolated journals — a builder container
+// that sets HOME=/tmp puts t.TempDir() there — and are never refused.
 func guardTestWrite(p string) error {
-	if !testing.Testing() || realHomeErr != nil || realHome == "" {
+	if !testing.Testing() {
 		return nil
 	}
-	rel, err := filepath.Rel(realHome, p)
+	def := defaultBashyDir()
+	if def == "" {
+		return nil
+	}
+	rel, err := filepath.Rel(def, p)
 	if err != nil {
 		return nil
 	}
