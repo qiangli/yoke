@@ -96,6 +96,7 @@ func runWeaveHeartbeat(cmd *cobra.Command, opts weaveHeartbeatOptions, flags *we
 		time.Now().UTC().Format(time.RFC3339), opts.interval, opts.idleTimeout, queueDir)
 
 	idleSince := time.Time{}
+	lastImmuneCheck := time.Time{}
 	self, err := os.Executable()
 	if err != nil {
 		return err
@@ -120,6 +121,13 @@ func runWeaveHeartbeat(cmd *cobra.Command, opts weaveHeartbeatOptions, flags *we
 			if err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "heartbeat: failed to load queue: %v\n", err)
 				return false
+			}
+			now := time.Now().UTC()
+			if lastImmuneCheck.IsZero() || now.Sub(lastImmuneCheck) >= quotaImmuneInterval {
+				if _, err := runQuotaImmuneTick(cmd, root, queueDir, false); err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "heartbeat: quota immune: %v\n", err)
+				}
+				lastImmuneCheck = now
 			}
 
 			hasWork := false

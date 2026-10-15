@@ -332,8 +332,15 @@ func quotaRows(report *Report, models []fleet.Model, plans []fleet.Plan, agents 
 
 		}
 	}
+	immune, _ := resolveImmunePolicy(p.Immune)
 	for _, r := range rows {
 		if r.Headroom != nil {
+			switch {
+			case *r.Headroom <= immune.CriticalHeadroom:
+				r.Immune = "critical"
+			case *r.Headroom <= immune.WarnHeadroom:
+				r.Immune = "warn"
+			}
 			limit := 0
 			limitKnown := false
 			for _, m := range accountModels[r.Account] {

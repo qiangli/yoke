@@ -144,6 +144,7 @@ type Policy struct {
 	Sources      []SourceConfig `json:"sources"`
 	ProbeConsent []string       `json:"probe_consent,omitempty"`
 	Analyzer     AnalyzerPolicy `json:"analyzer,omitempty"`
+	Immune       ImmunePolicy   `json:"immune,omitempty"`
 }
 
 // AnalyzerPolicy declares the costly, on-demand model pass.
@@ -152,6 +153,24 @@ type AnalyzerPolicy struct {
 	Agent    string `json:"agent,omitempty"`
 	MaxBatch int    `json:"max_batch,omitempty"`
 	Enabled  bool   `json:"enabled,omitempty"`
+}
+
+// ImmunePolicy is the data-owned policy for protecting live agent work from
+// quota exhaustion. Durations use Go duration strings so an operator can write
+// "15m" rather than encoding implementation-specific nanoseconds.
+type ImmunePolicy struct {
+	WarnHeadroom     float64 `json:"warn_headroom,omitempty"`
+	CriticalHeadroom float64 `json:"critical_headroom,omitempty"`
+	ForecastMargin   string  `json:"forecast_margin,omitempty"`
+	GracePeriod      string  `json:"grace_period,omitempty"`
+}
+
+// ImmuneSettings is the validated, defaulted form consumed by supervisors.
+type ImmuneSettings struct {
+	WarnHeadroom     float64
+	CriticalHeadroom float64
+	ForecastMargin   time.Duration
+	GracePeriod      time.Duration
 }
 type Constraint struct {
 	Provider            string  `json:"provider,omitempty"`

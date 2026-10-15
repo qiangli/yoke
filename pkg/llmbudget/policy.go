@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -55,6 +56,9 @@ func (g *Gate) policy() (*Policy, error) {
 	}
 	if len(p.Bindings) > 10000 || len(p.Constraints) > 10000 || len(p.Sources) > 256 || len(p.Routes) > 10000 || len(p.ProbeConsent) > 256 {
 		return nil, errors.New("llmbudget: policy collection limit exceeded")
+	}
+	if _, err := resolveImmunePolicy(p.Immune); err != nil {
+		return nil, err
 	}
 	seen := map[string]bool{}
 	for _, b := range p.Bindings {
@@ -127,6 +131,53 @@ func (g *Gate) policy() (*Policy, error) {
 		seen[s.ID] = true
 	}
 	return p, nil
+}
+
+// ImmuneSettingsFromPolicy returns cache-watchdog settings without performing
+// any quota probe or model analysis.
+func ImmuneSettingsFromPolicy() (ImmuneSettings, error) {
+	return defaultGate.ImmuneSettingsFromPolicy()
+}
+
+// ImmuneSettingsFromPolicy is the Gate-scoped form used by supervisors and
+// tests. Missing values receive the documented safe defaults.
+func (g *Gate) ImmuneSettingsFromPolicy() (ImmuneSettings, error) {
+	p, err := g.policy()
+	if err != nil {
+		return ImmuneSettings{}, err
+	}
+	return resolveImmunePolicy(p.Immune)
+}
+
+func resolveImmunePolicy(p ImmunePolicy) (ImmuneSettings, error) {
+	out := ImmuneSettings{
+		WarnHeadroom: 0.15, CriticalHeadroom: 0.05,
+		ForecastMargin: 15 * time.Minute, GracePeriod: 3 * time.Minute,
+	}
+	if p.WarnHeadroom != 0 {
+		out.WarnHeadroom = p.WarnHeadroom
+	}
+	if p.CriticalHeadroom != 0 {
+		out.CriticalHeadroom = p.CriticalHeadroom
+	}
+	if p.ForecastMargin != "" {
+		d, err := time.ParseDuration(p.ForecastMargin)
+		if err != nil || d <= 0 {
+			return ImmuneSettings{}, errors.New("llmbudget: immune.forecast_margin must be a positive duration")
+		}
+		out.ForecastMargin = d
+	}
+	if p.GracePeriod != "" {
+		d, err := time.ParseDuration(p.GracePeriod)
+		if err != nil || d <= 0 {
+			return ImmuneSettings{}, errors.New("llmbudget: immune.grace_period must be a positive duration")
+		}
+		out.GracePeriod = d
+	}
+	if out.WarnHeadroom <= 0 || out.WarnHeadroom > 1 || out.CriticalHeadroom <= 0 || out.CriticalHeadroom > 1 || out.CriticalHeadroom > out.WarnHeadroom {
+		return ImmuneSettings{}, errors.New("llmbudget: immune headroom thresholds must satisfy 0 < critical_headroom <= warn_headroom <= 1")
+	}
+	return out, nil
 }
 func validLane(l Lane) bool { return l == LaneAPIKey || l == LaneSubscription || l == LaneLocal }
 func bindingFor(p *Policy, model, agent string) (Binding, bool) {

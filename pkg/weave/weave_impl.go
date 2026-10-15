@@ -401,12 +401,13 @@ type weaveItem struct {
 	NeedsSteward  bool   `json:"needs_steward,omitempty"`
 	StewardReason string `json:"steward_reason,omitempty"`
 
-	CoachTotalCalls    int     `json:"coach_total_calls,omitempty"`
-	CoachDistinctCalls int     `json:"coach_distinct_calls,omitempty"`
-	CoachRepeatRatio   float64 `json:"coach_repeat_ratio,omitempty"`
-	CoachSteers        int     `json:"coach_steers,omitempty"`
-	CoachRecovered     bool    `json:"coach_recovered,omitempty"`
-	CoachMode          string  `json:"coach_mode,omitempty"`
+	CoachTotalCalls    int                `json:"coach_total_calls,omitempty"`
+	CoachDistinctCalls int                `json:"coach_distinct_calls,omitempty"`
+	CoachRepeatRatio   float64            `json:"coach_repeat_ratio,omitempty"`
+	CoachSteers        int                `json:"coach_steers,omitempty"`
+	CoachRecovered     bool               `json:"coach_recovered,omitempty"`
+	CoachMode          string             `json:"coach_mode,omitempty"`
+	QuotaImmune        *quotaImmuneRecord `json:"quota_immune,omitempty"`
 }
 
 // weaveComment is one entry in an issue's history thread. Append-only;

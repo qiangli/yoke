@@ -60,9 +60,10 @@ type weaveStory struct {
 	// Contact is how to reach the conductor while this sprint runs — a meet
 	// room to talk in, and a bus topic to make someone notice. See
 	// weave_story_contact.go.
-	Contact   *sprintContact `json:"contact,omitempty"`
-	Created   time.Time      `json:"created"`
-	UpdatedAt time.Time      `json:"updated_at,omitempty"`
+	Contact     *sprintContact     `json:"contact,omitempty"`
+	QuotaImmune *quotaImmuneRecord `json:"quota_immune,omitempty"`
+	Created     time.Time          `json:"created"`
+	UpdatedAt   time.Time          `json:"updated_at,omitempty"`
 }
 
 // sprintRun links a sprint to a weave run (issue) in a SPECIFIC repo.
