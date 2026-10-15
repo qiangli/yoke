@@ -81,8 +81,9 @@ type Plan struct {
 
 	// Limits holds only KNOWN limits. An absent limit is unknown, and unknown
 	// is fail-open: no consumer may invent a number for it.
-	Limits []PlanLimit  `yaml:"limits,omitempty" json:"limits,omitempty" doc:"known, sourced plan limits; absent means unknown"`
-	Usage  []UsageProbe `yaml:"usage,omitempty" json:"usage,omitempty" doc:"usage probes for this plan"`
+	Limits       []PlanLimit   `yaml:"limits,omitempty" json:"limits,omitempty" doc:"known, sourced plan limits; absent means unknown"`
+	Usage        []UsageProbe  `yaml:"usage,omitempty" json:"usage,omitempty" doc:"usage probes for this plan"`
+	UsageSignals []UsageSignal `yaml:"usage_signals,omitempty" json:"usage_signals,omitempty" doc:"deterministic vendor-message matchers (quota errors, rate-limit headers) for this seat"`
 
 	Ring assetring.Ring `yaml:"-" json:"ring"`
 }
@@ -125,6 +126,9 @@ func (p Plan) Limit(window, unit, model string) (int64, bool) {
 func (p Plan) Validate() error {
 	if err := validateUsage(p.Usage); err != nil {
 		return fmt.Errorf("fleet: plan %q: %w", p.Name, err)
+	}
+	if err := validateUsageSignals(fmt.Sprintf("fleet: plan %q", p.Name), p.UsageSignals); err != nil {
+		return err
 	}
 	if p.Tier != "" && PlanTierRank(p.Tier) == 0 {
 		return fmt.Errorf("fleet: plan %q: tier %q is not one of %v", p.Name, p.Tier, PlanTiers())

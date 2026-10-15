@@ -14,3 +14,17 @@ sources:
 notes: >-
   Antigravity on Pro is described only as "Entry rate limits" (Ultra: higher /
   highest). No numeric threshold is published, so none is recorded.
+# Usage signals (Sprint #447): Google-style 429 bodies. RESOURCE_EXHAUSTED
+# carries a retryDelay ("37s", a Go duration) in its quota details block;
+# "Quota exceeded for quota metric ..." is the message wording. Both wordings
+# are the standard Google API error shape (cloud.google.com/docs/usage,
+# checked 2026-10-15).
+usage_signals:
+  - id: resource-exhausted
+    match: '(?is)resource_exhausted.{0,800}?"retryDelay"\s*:\s*"(?P<reset>[^"]+)"'
+    kind: exhausted
+    reset: reset
+    reset_layout: relative
+  - id: quota-metric
+    match: '(?i)quota exceeded for quota metric'
+    kind: exhausted

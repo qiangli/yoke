@@ -41,3 +41,30 @@ usage:
         unit: percent
         window: week
         reset: .payload.rate_limits.seven_day.resets_at
+# Usage signals (Sprint #447): the vendor's own quota words and the unified
+# reset header. Wording per the story brief; the statusline JSON already
+# measured on this host (rate_limits.five_hour/.seven_day with resets_at
+# epoch seconds) is the same fact through the probe above — these matchers
+# cover the error-path spellings the probe never sees.
+usage_signals:
+  - id: usage-limit-reset
+    match: '(?i)claude usage limit reached\..*?your limit will reset at (?P<reset>[^.\n]+)'
+    kind: exhausted
+    window: 5h
+    reset: reset
+    reset_layout: clock
+  - id: five-hour-limit
+    match: '(?i)5-hour limit reached'
+    kind: exhausted
+    window: 5h
+  - id: weekly-percent
+    match: '(?i)you''ve used (?P<used>\d+(?:\.\d+)?)% of your weekly limit'
+    kind: warning
+    window: week
+    used_percent: used
+  - id: unified-reset
+    header: anthropic-ratelimit-unified-reset
+    match: '^\s*(?P<reset>\d{9,12})\s*$'
+    kind: exhausted
+    reset: reset
+    reset_layout: epoch

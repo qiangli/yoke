@@ -212,3 +212,23 @@ integration:
     format: toml
     key: mcp_servers
     cli: [codex, mcp, add, bashy, --, bashy, mcp, serve]
+# Usage signals (Sprint #447): deterministic matchers for the vendor's own
+# quota words, as data. Both spellings are MEASURED live on this host
+# (pkg/weave/weave_cooldown_test.go records the exact phrasing; the dated
+# form was observed 2026-07-21). The SAME sentence carries either reset
+# shape — a bare clock is the 5-hour window, a dated month-day clock days
+# out is the weekly one — so the two signals are split on that, not on a
+# word the vendor never says.
+usage_signals:
+  - id: usage-limit-5h
+    match: '(?i)you''ve hit your usage limit.*try again at (?P<reset>\d{1,2}(?::\d{2})?\s*[ap]\.?m\.?)(?:[.,]|$)'
+    kind: exhausted
+    window: 5h
+    reset: reset
+    reset_layout: clock
+  - id: usage-limit-week
+    match: '(?i)you''ve hit your usage limit.*try again at (?P<reset>(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s*(?:\d{4}\s*)?\d{1,2}(?::\d{2})?\s*[ap]\.?m\.?)'
+    kind: exhausted
+    window: week
+    reset: reset
+    reset_layout: clock

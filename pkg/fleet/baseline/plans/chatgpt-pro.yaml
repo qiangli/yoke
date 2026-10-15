@@ -51,3 +51,20 @@ usage:
         printf '%s\n' "$line" | jq -c '{schema_version:"bashy-usage-v1",metrics:[.payload.rate_limits|(.primary//empty),(.secondary//empty)|select(.window_minutes==300 or .window_minutes==10080)|{name:"used_percent",value:.used_percent,unit:"percent",window:(if .window_minutes==300 then "5h" else "week" end),reset_at:.resets_at}]}'
       effects: [read]
       timeout: 10s
+# Usage signals (Sprint #447): OpenAI rate-limit response headers, whose
+# values are Go durations ("6m0s", "12s", "1h0m0s"). The API surfaces these
+# on 429s ahead of any body wording; windows are per-endpoint quotas the
+# headers do not name, so window stays empty.
+usage_signals:
+  - id: reset-requests
+    header: x-ratelimit-reset-requests
+    match: '^\s*(?P<reset>[\dhms.]+)\s*$'
+    kind: rate-limited
+    reset: reset
+    reset_layout: relative
+  - id: reset-tokens
+    header: x-ratelimit-reset-tokens
+    match: '^\s*(?P<reset>[\dhms.]+)\s*$'
+    kind: rate-limited
+    reset: reset
+    reset_layout: relative

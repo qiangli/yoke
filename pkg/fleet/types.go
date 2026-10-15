@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"fmt"
 	"os"
 	"sort"
 	"strings"
@@ -176,9 +177,20 @@ type Tool struct {
 	// Integration declares how the tool takes skills, instructions and MCP
 	// servers, so bashy can enable its skills in any tool from data
 	// (integration.go).
-	Integration ToolIntegration `yaml:"integration,omitempty" json:"integration" doc:"how the tool takes skills, instruction files and MCP servers"`
+	Integration ToolIntegration `yaml:"integration,omitempty" json:"integration,omitempty" doc:"how the tool takes skills, instruction files and MCP servers"`
+
+	// UsageSignals are the deterministic vendor-message matchers this tool's
+	// terminal output and response headers are run through (usage_signals.go).
+	UsageSignals []UsageSignal `yaml:"usage_signals,omitempty" json:"usage_signals,omitempty" doc:"deterministic vendor-message matchers (quota errors, rate-limit headers) observed through this tool"`
 
 	Ring assetring.Ring `yaml:"-" json:"ring"`
+}
+
+// ValidateUsageSignals checks the tool's usage-signal declarations (regex
+// compiles, groups named, vocabulary honored). Called at load like
+// ValidateCommands: a bad signal is reported, never hidden.
+func (t Tool) ValidateUsageSignals() error {
+	return validateUsageSignals(fmt.Sprintf("fleet: tool %q", t.Name), t.UsageSignals)
 }
 
 // Tool command modes.

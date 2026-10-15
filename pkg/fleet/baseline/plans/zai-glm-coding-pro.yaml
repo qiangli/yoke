@@ -39,3 +39,22 @@ limits:
     evidence: measured
     as_of: "2026-07-14"
     source: pkg/fleet/baseline/models/glm-5.2.yaml
+# Usage signals (Sprint #447). Message shapes are the vendor's error table
+# (https://docs.z.ai/api-reference/api-code, checked 2026-10-15); the 1308
+# body is MEASURED on this host (2026-10-12, HTTP 429):
+#   {"error":{"code":"1308","message":"Usage limit reached for 5 hour.
+#    Your limit will reset at 2026-10-12 17:34:44"}}
+# The matcher runs on the message text, so it fires on the raw body and on
+# JSON-wrapped excerpts alike. 1302 is a rate/concurrency cap that clears in
+# seconds: no reset to parse. Weekly/monthly (1310+) is a different wording
+# and is deliberately not guessed here.
+usage_signals:
+  - id: "1302"
+    match: '(?i)(?:"code"\s*:\s*"1302")|\brate limit reached for requests\b'
+    kind: rate-limited
+  - id: "1308"
+    match: '(?i)usage limit reached for \d+ hours?\.?\s+your limit will reset at (?P<reset>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})'
+    kind: exhausted
+    window: 5h
+    reset: reset
+    reset_layout: "2006-01-02 15:04:05"

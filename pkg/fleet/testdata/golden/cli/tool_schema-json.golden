@@ -1103,5 +1103,55 @@
     "path": "quirks",
     "type": "string",
     "description": "known tool-specific behavior"
+  },
+  {
+    "path": "usage_signals",
+    "type": "[]object",
+    "description": "deterministic vendor-message matchers (quota errors, rate-limit headers) observed through this tool"
+  },
+  {
+    "path": "usage_signals.\u003cindex\u003e",
+    "type": "object",
+    "description": "list element"
+  },
+  {
+    "path": "usage_signals.\u003cindex\u003e.header",
+    "type": "string",
+    "description": "header name read instead of the excerpt, e.g. anthropic-ratelimit-unified-reset (case-insensitive)"
+  },
+  {
+    "path": "usage_signals.\u003cindex\u003e.id",
+    "type": "string",
+    "description": "unique signal id on this record"
+  },
+  {
+    "path": "usage_signals.\u003cindex\u003e.kind",
+    "type": "string",
+    "description": "exhausted, rate-limited, or warning"
+  },
+  {
+    "path": "usage_signals.\u003cindex\u003e.match",
+    "type": "string",
+    "description": "Go regexp matched against the excerpt (or the header value when header is set); named capture groups feed reset/used_percent"
+  },
+  {
+    "path": "usage_signals.\u003cindex\u003e.reset",
+    "type": "string",
+    "description": "capture group name holding the reset instant or delay"
+  },
+  {
+    "path": "usage_signals.\u003cindex\u003e.reset_layout",
+    "type": "string",
+    "description": "epoch, rfc3339, relative, clock, or a Go time layout"
+  },
+  {
+    "path": "usage_signals.\u003cindex\u003e.used_percent",
+    "type": "string",
+    "description": "capture group name or literal used percentage"
+  },
+  {
+    "path": "usage_signals.\u003cindex\u003e.window",
+    "type": "string",
+    "description": "quota window the signal reports: 5h, day, week, month, or empty"
   }
 ]
