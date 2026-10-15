@@ -84,6 +84,9 @@ func (g *Gate) source(ctx context.Context, c SourceConfig, now time.Time, refres
 		if usable() {
 			return cached.Result, nil
 		}
+		if ctx.Value(headroomProbeContextKey{}) == true {
+			return SourceResult{Status: "unavailable", Limitations: []string{"No fresh cached observation for seat headroom."}}, nil
+		}
 		l, err := lockfile.TryAcquire(path+".lock", lockfile.Holder{Name: "llmbudget-source", Intent: "refresh observation"})
 		if errors.Is(err, lockfile.ErrHeld) {
 			if cached.Version == 1 {
@@ -99,6 +102,9 @@ func (g *Gate) source(ctx context.Context, c SourceConfig, now time.Time, refres
 		if usable() {
 			return cached.Result, nil
 		}
+	}
+	if ctx.Value(headroomProbeContextKey{}) == true {
+		return SourceResult{Status: "unavailable", Limitations: []string{"No cached observation for seat headroom."}}, nil
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

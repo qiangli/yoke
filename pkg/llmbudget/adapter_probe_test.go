@@ -28,7 +28,10 @@ func TestProbeAdapterMappingAndSelfEmission(t *testing.T) {
 	if m.Name != "quota.used_percent" || *m.Value != 97 || m.Unit != "percent" || m.Window != "5h" || m.ResetAt == nil || m.ResetAt.Unix() != 1792065600 {
 		t.Fatalf("mapping: %+v", m)
 	}
-	g := New(Config{Policy: &Policy{Version: 1, Sources: []SourceConfig{c}}, Now: func() time.Time { return now }})
+	g := New(Config{StatePath: filepath.Join(t.TempDir(), "meter.json"), Policy: &Policy{Version: 1, Sources: []SourceConfig{c}}, Now: func() time.Time { return now }})
+	if _, e := g.CollectReport(context.Background(), ReportOptions{Now: now}); e != nil {
+		t.Fatal(e)
+	}
 	h, known, e := g.SubscriptionHeadroom(context.Background(), Binding{Provider: "vendor", Account: "p", Pool: "p", Lane: LaneSubscription, AccountKnown: true})
 	if e != nil || !known || math.Abs(h-.03) > 1e-9 {
 		t.Fatalf("headroom %.9f %v %v", h, known, e)
@@ -156,7 +159,10 @@ func TestPlanProbeHeadroomCoversEveryModelOnSeat(t *testing.T) {
 		return snippet.Result{Stdout: []byte(`{"schema_version":"bashy-usage-v1","metrics":[{"name":"used_percent","value":97,"unit":"percent","window":"5h"}]}`)}, nil
 	})
 	defer snippet.SetRunner(nil)
-	g := New(Config{Policy: &Policy{Version: 1, Bindings: []Binding{{Model: "shared-two", Agent: "shared-agent", Provider: "vendor", Account: "operator-seat", Pool: "operator-seat", Lane: LaneSubscription}}}})
+	g := New(Config{StatePath: filepath.Join(t.TempDir(), "meter.json"), Policy: &Policy{Version: 1, Bindings: []Binding{{Model: "shared-two", Agent: "shared-agent", Provider: "vendor", Account: "operator-seat", Pool: "operator-seat", Lane: LaneSubscription}}}})
+	if _, e := g.CollectReport(context.Background(), ReportOptions{}); e != nil {
+		t.Fatal(e)
+	}
 	h, b, known, e := g.MeasuredHeadroom(context.Background(), "shared-two", "shared-agent")
 	if e != nil || !known || math.Abs(h-.03) > 1e-9 || b.Account != "operator-seat" {
 		t.Fatalf("shared seat headroom %.9f %+v %v %v", h, b, known, e)
@@ -171,6 +177,10 @@ func TestProbeStatusesAndInferredHeadroom(t *testing.T) {
 		return snippet.Result{Stdout: []byte(`{"schema_version":"bashy-usage-v1","metrics":[{"name":"used_percent","value":97,"unit":"percent"}]}`)}, nil
 	})
 	defer snippet.SetRunner(nil)
+	probeResult, probeErr := (ProbeAdapter{}).Collect(context.Background(), c, now)
+	if probeErr != nil || len(probeResult.Metrics) != 1 || probeResult.Metrics[0].Classification != "inferred" {
+		t.Fatalf("inferred classification %+v %v", probeResult, probeErr)
+	}
 	g := New(Config{Policy: &Policy{Version: 1, Sources: []SourceConfig{c}}, Now: func() time.Time { return now }})
 	h, known, e := g.SubscriptionHeadroom(context.Background(), Binding{Provider: "vendor", Account: "p", Pool: "p", Lane: LaneSubscription, AccountKnown: true})
 	if e != nil || known || h != 0 {

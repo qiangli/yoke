@@ -39,13 +39,13 @@ func (g *Gate) MeasuredHeadroom(ctx context.Context, model, agent string) (remai
 	if !ok || binding.Lane != LaneSubscription {
 		return 0, binding, false, nil
 	}
-	remaining, known, err = g.SubscriptionHeadroom(ctx, binding)
+	remaining, known, err = g.SubscriptionHeadroom(context.WithValue(ctx, headroomProbeContextKey{}, true), binding)
 	return remaining, binding, known, err
 }
 
 // SubscriptionHeadroom is the Gate-scoped form used by tests and embedders.
 func (g *Gate) SubscriptionHeadroom(ctx context.Context, binding Binding) (remaining float64, known bool, err error) {
-	report, err := g.CollectReport(context.WithValue(ctx, headroomProbeContextKey{}, true), ReportOptions{Roster: []Binding{binding}})
+	report, err := g.CollectReport(ctx, ReportOptions{Roster: []Binding{binding}})
 	if err != nil {
 		return 0, false, err
 	}
