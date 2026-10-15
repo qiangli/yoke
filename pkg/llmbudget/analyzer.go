@@ -42,6 +42,7 @@ type AnalyzeResult struct {
 
 type ObservedState struct {
 	Account        string                 `json:"account"`
+	ExcerptSHA     string                 `json:"excerpt_sha,omitempty"`
 	Plan           string                 `json:"plan,omitempty"`
 	Tool           string                 `json:"tool,omitempty"`
 	Kind           string                 `json:"kind"`
@@ -413,7 +414,7 @@ func Observed(ctx context.Context, now time.Time) []ObservedState {
 		if parsed == nil && model == nil {
 			continue
 		}
-		s := ObservedState{Account: o.Account, Plan: o.Plan, Tool: o.Tool, At: o.At, Matcher: parsed, Model: model, Summary: summary}
+		s := ObservedState{Account: o.Account, ExcerptSHA: o.ExcerptSHA, Plan: o.Plan, Tool: o.Tool, At: o.At, Matcher: parsed, Model: model, Summary: summary}
 		if parsed != nil {
 			s.Kind, s.Window, s.UsedPercent, s.ResetAt, s.Signal = parsed.Kind, parsed.Window, parsed.UsedPercent, parsed.ResetAt, parsed.Signal
 			s.Classification = "observed-unconfirmed"

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/qiangli/yoke/pkg/llmbudget"
+	"github.com/qiangli/yoke/pkg/quotaobs"
 	"github.com/spf13/cobra"
 )
 
@@ -30,6 +31,7 @@ func withQuotaImmuneFakes(t *testing.T) {
 func immuneTestCommand() (*cobra.Command, *bytes.Buffer) {
 	buf := new(bytes.Buffer)
 	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
 	cmd.SetOut(buf)
 	cmd.SetErr(buf)
 	return cmd, buf
@@ -202,6 +204,72 @@ func TestQuotaImmuneObservedWarningAndExhaustion(t *testing.T) {
 	a, err = assessQuotaImmune(context.Background(), quotaImmuneSeat{Account: "vendor-plan"}, time.Time{}, now, policy)
 	if err != nil || a.Level != "critical" {
 		t.Fatalf("observed exhausted=%+v err=%v", a, err)
+	}
+}
+
+func TestQuotaImmuneClassifiedObservations(t *testing.T) {
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	reset := now.Add(time.Hour)
+	used := 91.0
+	policy := llmbudget.ImmuneSettings{WarnHeadroom: .15, CriticalHeadroom: .05}
+	tests := []struct {
+		name string
+		obs  quotaobs.Observation
+		want string
+	}{
+		{"empty kind narration", quotaobs.Observation{Excerpt: "quota exceeded, reset in one hour"}, ""},
+		{"observed exhausted", quotaobs.Observation{Excerpt: "quota exhausted", Parsed: &quotaobs.ParsedSignal{Kind: "exhausted", ResetAt: &reset}, Analysis: &quotaobs.Analysis{Kind: "exhausted", ResetAt: &reset}}, "critical"},
+		{"inferred exhausted", quotaobs.Observation{Excerpt: "quota exhausted", Analysis: &quotaobs.Analysis{Kind: "exhausted", ResetAt: &reset}}, ""},
+		{"unconfirmed prose", quotaobs.Observation{Excerpt: "quota exhausted", Parsed: &quotaobs.ParsedSignal{Kind: "exhausted", ResetAt: &reset}}, ""},
+		{"conflict", quotaobs.Observation{Excerpt: "quota exhausted", Parsed: &quotaobs.ParsedSignal{Kind: "exhausted", ResetAt: &reset}, Analysis: &quotaobs.Analysis{Kind: "warning", ResetAt: &reset}}, ""},
+		{"observed percent", quotaobs.Observation{Excerpt: "weekly utilization 91%", Parsed: &quotaobs.ParsedSignal{Kind: "rate-limited", UsedPercent: &used}, Analysis: &quotaobs.Analysis{Kind: "rate-limited", UsedPercent: &used}}, "warn"},
+		{"claude weekly utilization", quotaobs.Observation{Tool: "claude", Excerpt: `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","rateLimitType":"seven_day","resetsAt":1792069200,"unifiedWindows":{"seven_day":{"utilization":0.91,"resetsAt":1792069200}}}}`, Parsed: &quotaobs.ParsedSignal{Kind: "warning", UsedPercent: &used, ResetAt: &reset}}, "warn"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			withQuotaImmuneFakes(t)
+			t.Setenv("BASHY_HOME", t.TempDir())
+			quotaImmunePolicy = func() (llmbudget.ImmuneSettings, error) { return policy, nil }
+			quotaImmuneHeadroom = func(context.Context, string, string) (float64, llmbudget.Binding, bool, error) {
+				return 0, llmbudget.Binding{}, false, nil
+			}
+			quotaImmuneForecast = func(context.Context, time.Time) []llmbudget.AccountForecast { return nil }
+			obs := tc.obs
+			obs.At, obs.Source, obs.Account = now, "weave", "plan-a"
+			if err := quotaobs.Record(context.Background(), obs); err != nil {
+				t.Fatal(err)
+			}
+			quotaImmuneObserve = readQuotaImmuneObservation
+			a, err := assessQuotaImmune(context.Background(), quotaImmuneSeat{Account: "plan-a", Tool: "claude"}, time.Time{}, now, policy)
+			if err != nil || a.Level != tc.want {
+				t.Fatalf("assessment=%+v, want level %q, err=%v", a, tc.want, err)
+			}
+			if tc.name == "empty kind narration" {
+				root := filepath.Join(t.TempDir(), "repo")
+				if err := os.MkdirAll(root, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				dir, err := weaveQueueDir(root)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := withWeaveQueueLock(dir, func(q *weaveQueue) error {
+					q.Items = []*weaveItem{{ID: 1, State: "working", LaunchSpec: &weaveLaunchSpec{Agent: "agent"}}}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				quotaImmuneNow = func() time.Time { return now }
+				quotaImmuneResolveSeat = func(string, string, string) (quotaImmuneSeat, bool) {
+					return quotaImmuneSeat{Account: "plan-a"}, true
+				}
+				cmd, _ := immuneTestCommand()
+				actions, err := runQuotaImmuneTick(cmd, root, dir, true)
+				if err != nil || len(actions) != 0 {
+					t.Fatalf("empty-kind observation caused actions=%+v err=%v", actions, err)
+				}
+			}
+		})
 	}
 }
 

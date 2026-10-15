@@ -194,39 +194,58 @@ func assessQuotaImmune(ctx context.Context, seat quotaImmuneSeat, deadline, now 
 	return out, nil
 }
 
-func readQuotaImmuneObservation(_ context.Context, seat quotaImmuneSeat, now time.Time) (quotaImmuneObservation, bool, error) {
-	observations, err := quotaobs.Read(now.Add(-24*time.Hour), func(o quotaobs.Observation) bool {
-		accountMatch := strings.EqualFold(o.Account, seat.Account) || strings.EqualFold(o.Plan, seat.Account)
-		bindingMatch := o.Agent != "" && strings.EqualFold(o.Agent, seat.Agent) || o.Model != "" && strings.EqualFold(o.Model, seat.Model) || o.Tool != "" && strings.EqualFold(o.Tool, seat.Tool)
-		return accountMatch || o.Account == "" && o.Plan == "" && bindingMatch
-	})
+func readQuotaImmuneObservation(ctx context.Context, seat quotaImmuneSeat, now time.Time) (quotaImmuneObservation, bool, error) {
+	observations, err := quotaobs.Read(now.Add(-24*time.Hour), nil)
 	if err != nil {
 		return quotaImmuneObservation{}, false, err
 	}
-	for i := len(observations) - 1; i >= 0; i-- {
-		o := observations[i]
-		lower := strings.ToLower(o.Excerpt)
-		level := ""
-		switch {
-		case strings.Contains(lower, "exhausted"), strings.Contains(lower, "usage limit"), strings.Contains(lower, "quota exceeded"):
-			level = "critical"
-		case strings.Contains(lower, "90%"), strings.Contains(lower, "quota warning"), strings.Contains(lower, "quota is low"):
-			level = "warn"
-		}
-		if level == "" {
-			continue
-		}
-		reset, _ := parseThrottleReset(o.Excerpt, now)
-		if !reset.IsZero() && !reset.After(now) {
-			continue
-		}
-		detail := strings.Join(strings.Fields(o.Excerpt), " ")
-		if len(detail) > 120 {
-			detail = detail[:117] + "..."
-		}
-		return quotaImmuneObservation{Level: level, Detail: detail, ResetAt: reset}, true, nil
+	bySHA := make(map[string][]quotaobs.Observation, len(observations))
+	for _, o := range observations {
+		bySHA[o.ExcerptSHA] = append(bySHA[o.ExcerptSHA], o)
 	}
-	return quotaImmuneObservation{}, false, nil
+	var best quotaImmuneObservation
+	policy, err := quotaImmunePolicy()
+	if err != nil {
+		return best, false, err
+	}
+	for _, state := range llmbudget.Observed(ctx, now) {
+		for _, o := range bySHA[state.ExcerptSHA] {
+			if !o.At.Equal(state.At) || o.Account != state.Account || o.Plan != state.Plan || o.Tool != state.Tool {
+				continue
+			}
+			accountMatch := strings.EqualFold(o.Account, seat.Account) || strings.EqualFold(o.Plan, seat.Account)
+			bindingMatch := o.Agent != "" && strings.EqualFold(o.Agent, seat.Agent) || o.Model != "" && strings.EqualFold(o.Model, seat.Model) || o.Tool != "" && strings.EqualFold(o.Tool, seat.Tool)
+			if !accountMatch && (o.Account != "" || o.Plan != "" || !bindingMatch) {
+				continue
+			}
+			structured := state.Matcher != nil && weaveVendorUsageEvent(o.Tool, strings.TrimSpace(o.Excerpt))
+			if state.Classification != "observed" && !(state.Classification == "observed-unconfirmed" && structured) {
+				continue
+			}
+			if state.Kind == "" {
+				continue
+			}
+			level := ""
+			if state.Kind == "exhausted" && state.ResetAt != nil && state.ResetAt.After(now) {
+				level = "critical"
+			} else if state.Kind == "warning" || state.UsedPercent != nil && *state.UsedPercent >= 100-policy.WarnHeadroom*100 {
+				level = "warn"
+			}
+			if level == "" || best.Level == "critical" {
+				continue
+			}
+			reset := time.Time{}
+			if state.ResetAt != nil {
+				reset = *state.ResetAt
+			}
+			detail := strings.Join(strings.Fields(o.Excerpt), " ")
+			if len(detail) > 120 {
+				detail = detail[:117] + "..."
+			}
+			best = quotaImmuneObservation{Level: level, Detail: detail, ResetAt: reset}
+		}
+	}
+	return best, best.Level != "", nil
 }
 
 func quotaImmuneMessage(a quotaImmuneAssessment) string {
