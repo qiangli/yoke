@@ -34,3 +34,19 @@ cost_micro: 600
 # property of the TOOL, not of the model.
 ids:
   ycode: deepseek-flash
+# Usage probe (added 2026-10-15): documented Get User Balance
+# (https://api-docs.deepseek.com/api/get-user-balance) — see
+# deepseek-v4-pro.yaml for the field notes (total_balance is a string;
+# tonumber; currency from the response). Same credential (api_key_ref
+# deepseek) as the other deepseek seats, so the probes read one account.
+usage:
+  - id: balance
+    run:
+      body: fetch -f --json=false -t "$KEY" https://api.deepseek.com/user/balance
+      effects: [net]
+      env:
+        KEY: model:credential
+    metrics:
+      - name: balance
+        value: .balance_infos[0].total_balance | tonumber
+        unit: .balance_infos[0].currency

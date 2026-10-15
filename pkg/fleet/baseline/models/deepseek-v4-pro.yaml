@@ -43,3 +43,22 @@ cost_micro: 1500
 ids:
   ycode: deepseek-v4-pro
   genie: deepseek-v4-pro
+# Usage probe (added 2026-10-15): the documented Get User Balance endpoint
+# (https://api-docs.deepseek.com/api/get-user-balance) — GET /user/balance
+# with Bearer auth returns balance_infos[0]{currency CNY|USD,
+# total_balance "110.00"}; total_balance is a STRING, hence the tonumber.
+# The deepseek seats share one credential (api_key_ref deepseek), so the
+# identical probes on deepseek-v4-pro/flash/v4.1-flash read the same account
+# and the quota view shows one row. Balance is a stock, not a rate: no
+# window, no reset.
+usage:
+  - id: balance
+    run:
+      body: fetch -f --json=false -t "$KEY" https://api.deepseek.com/user/balance
+      effects: [net]
+      env:
+        KEY: model:credential
+    metrics:
+      - name: balance
+        value: .balance_infos[0].total_balance | tonumber
+        unit: .balance_infos[0].currency

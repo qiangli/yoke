@@ -14,3 +14,23 @@ notes: >-
   "weekly limits may also apply" without a number. Per-model local-message ranges are
   published for Plus/Business only. No numeric Pro limit is published, so none is
   recorded (an absent five-hour limit is not a zero, and not a guess).
+# Usage probe (added 2026-10-15): Codex writes rollout-*.jsonl session logs
+# under ~/.codex/sessions/YYYY/MM/DD/; the last line whose payload.type is
+# token_count carries payload.rate_limits with primary/secondary slots, each
+# {used_percent, window_minutes, resets_at(epoch seconds)}. VERIFIED against a
+# real rollout on this host 2026-10-15: on the Pro seat primary is the WEEKLY
+# window (window_minutes 10080) and secondary is null — which slot carries
+# which window is plan-dependent, so the mapping selects BY window_minutes
+# (300 -> 5h, 10080 -> week) instead of by slot name, and a slot that is null
+# or an unknown window simply emits no row (self-describing bashy-usage-v1
+# output; static metric maps cannot skip an absent window). resets_at is what
+# real lines carry; no observed line has resets_in_seconds. Session logs are
+# usage data, not credentials; ~/.codex/auth.json is never read.
+usage:
+  - id: sessions
+    run:
+      body: |
+        f=$(ls -t "$HOME"/.codex/sessions/*/*/*/rollout-*.jsonl 2>/dev/null | head -n 1)
+        [ -n "$f" ] || exit 1
+        grep token_count "$f" | tail -n 1 | jq -c '{schema_version:"bashy-usage-v1",metrics:[.payload.rate_limits|(.primary//empty),(.secondary//empty)|select(.window_minutes==300 or .window_minutes==10080)|{name:"used_percent",value:.used_percent,unit:"percent",window:(if .window_minutes==300 then "5h" else "week" end),reset_at:.resets_at}]}'
+      effects: [read]

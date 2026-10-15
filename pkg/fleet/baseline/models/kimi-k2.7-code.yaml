@@ -34,3 +34,21 @@ ids:
   # With `moonshot/` it dies on an opaque "UnknownError" that names nothing —
   # which is how opencode came to be blamed for a registry typo.
   opencode: moonshotai/kimi-k2.7-code
+# Usage probe (added 2026-10-15): the documented Moonshot Check Balance
+# endpoint (https://platform.kimi.ai/docs/api/balance) — GET
+# /v1/users/me/balance with Bearer auth returns data.available_balance,
+# already numeric. Every kimi seat here rides the international origin
+# api.moonshot.ai (see base_url above), whose balance is billed USD; a
+# .cn-origin model would need its own probe (CNY). Balance is a stock, not a
+# rate: no window, no reset.
+usage:
+  - id: balance
+    run:
+      body: fetch -f --json=false -t "$KEY" https://api.moonshot.ai/v1/users/me/balance
+      effects: [net]
+      env:
+        KEY: model:credential
+    metrics:
+      - name: balance
+        value: .data.available_balance
+        unit: USD

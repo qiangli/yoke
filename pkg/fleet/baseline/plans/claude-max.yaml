@@ -13,3 +13,25 @@ notes: >-
   limits on top for paid plans, and that "there's no fixed message count" — Max 20x
   is described only as 20x Pro's usage per session. No numeric limit is published,
   so none is recorded: the budget gate stays fail-open for this seat.
+# Usage probe (added 2026-10-15): the statusline bridge snapshot the harness
+# installs at $HOME/.bashy/quota/claude.json (schema bashy-claude-statusline-v1).
+# Field names are the ones llmbudget's claude-statusline adapter already reads:
+# payload.rate_limits.five_hour/.seven_day, each used_percentage (number) and
+# resets_at (epoch seconds). Reading the snapshot is read-only; a missing file
+# (bridge not installed) degrades to unavailable, not an error.
+usage:
+  - id: statusline
+    run:
+      body: cat "$HOME/.bashy/quota/claude.json"
+      effects: [read]
+    metrics:
+      - name: used_percent
+        value: .payload.rate_limits.five_hour.used_percentage
+        unit: percent
+        window: 5h
+        reset: .payload.rate_limits.five_hour.resets_at
+      - name: used_percent
+        value: .payload.rate_limits.seven_day.used_percentage
+        unit: percent
+        window: week
+        reset: .payload.rate_limits.seven_day.resets_at

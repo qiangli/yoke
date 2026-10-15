@@ -26,6 +26,11 @@ func TestExpensiveJobAdmissionRefusesBeforeExecution(t *testing.T) {
 	}
 }
 func TestOrdinaryJobDoesNotConsumeWorkBudget(t *testing.T) {
+	// The compiled-in baseline now seeds usage probes on the claude-max and
+	// chatgpt-pro plans; an isolated, seedless fleet keeps this test about the
+	// work budget (no accounts at all), not about probe availability.
+	isolateReportCatalog(t)
+	t.Setenv("BASHY_FLEET_SEEDS", "off")
 	g := New(Config{StatePath: filepath.Join(t.TempDir(), "meter.json"), Policy: &Policy{Version: 1}})
 	finish, e := ScheduleAdmission(g)(context.Background(), &schedule.Job{ID: "posix", Kind: "at", POSIXCron: true})
 	if e != nil {
