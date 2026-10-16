@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 )
 
 func sha256hex(b []byte) string {
@@ -288,6 +289,49 @@ func TestCachedBinaryFindsBothLayouts(t *testing.T) {
 	// Absent tool stays absent — no false positive from the flat probe.
 	if got := CachedBinary("definitely-not-installed"); got != "" {
 		t.Errorf("absent tool: CachedBinary()=%q, want empty", got)
+	}
+}
+
+// The engine tarball layout bashy oci / bashy podman self-provisions:
+// <root>/<name>/<version>/<name>-<goos>-<goarch>/usr/local/bin/<binary>.
+// CachedBinary must find it, with newest mtime winning across layouts.
+func TestCachedBinaryFindsEngineTarballLayout(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BASHY_BIN_CACHE", root)
+
+	write := func(p string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tarball := filepath.Join(root, "podman", "v6.1.2",
+		"podman-"+runtime.GOOS+"-"+runtime.GOARCH,
+		"usr", "local", "bin", binaryName("podman"))
+	write(tarball)
+	if got := CachedBinary("podman"); got != tarball {
+		t.Fatalf("tarball layout: CachedBinary(podman)=%q, want %q", got, tarball)
+	}
+
+	// A sibling tool's tarball must not leak into another tool's lookup.
+	if got := CachedBinary("crun"); got != "" {
+		t.Fatalf("cross-tool leak: CachedBinary(crun)=%q, want empty", got)
+	}
+
+	// Existing layouts still resolve alongside the tarball: newest wins
+	// (a versioned Ensure drop; flat cannot coexist with the version dir
+	// in one root, and is covered by TestCachedBinaryFindsBothLayouts).
+	versioned := filepath.Join(root, "podman", "v9.9.9", binaryName("podman"))
+	write(versioned)
+	if fi, err := os.Stat(tarball); err == nil {
+		_ = os.Chtimes(versioned, fi.ModTime(), fi.ModTime().Add(time.Second))
+	}
+	if got := CachedBinary("podman"); got != versioned {
+		t.Fatalf("newest-wins: CachedBinary(podman)=%q, want %q", got, versioned)
 	}
 }
 

@@ -133,6 +133,7 @@ func CachedBinary(name string) string {
 	//   Ensure           -> <root>/<name>/<version>/<binary>   (version-pinned)
 	//   ProvisionManaged -> <root>/<binary>                    (latest-wins)
 	//   EnsureMembers    -> <root>/bashy-archive/<version>/members-<hash>/<binary>
+	//   engine tarball   -> <root>/<name>/<version>/<name>-<goos>-<goarch>/usr/local/bin/<binary>
 	//
 	// podman, ollama and the other engine tools come from ProvisionManaged, so
 	// globbing only the versioned form missed every one of them — callers then
@@ -145,6 +146,17 @@ func CachedBinary(name string) string {
 	// version supersedes an older flat drop and vice versa. Callers must not
 	// reconstruct either path themselves.
 	candidates, _ := filepath.Glob(filepath.Join(root, name, "*", binaryName(name)))
+	// The engine tarball layout bashy oci / bashy podman self-provisions (a
+	// Tree extraction of the upstream engine tarball, e.g.
+	// <root>/podman/v6.1.2/podman-linux-amd64/usr/local/bin/podman). No
+	// shared resolver for that layout exists in this module — and
+	// external/podman/engine imports this package, so reaching outward for
+	// one would risk an import cycle — so the layout is matched by glob
+	// instead, newest mtime winning below like the other layouts.
+	engine, _ := filepath.Glob(filepath.Join(root, name, "*",
+		fmt.Sprintf("%s-%s-%s", name, runtime.GOOS, runtime.GOARCH),
+		"usr", "local", "bin", binaryName(name)))
+	candidates = append(candidates, engine...)
 	switch name {
 	case "bashy", "outpost", "bash", "sh":
 		paired, _ := filepath.Glob(filepath.Join(root, "bashy-archive", "*", "members-*", binaryName(name)))
