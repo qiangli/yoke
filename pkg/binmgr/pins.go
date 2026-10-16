@@ -47,8 +47,8 @@ var pinnedDigests = map[string]string{
 	// passed VerifySignedBlob with the exact tag workflow identity.
 	"containerd-shim-runc-v2@" + K3sVersion + "/linux/amd64":  "7cd49d3ca9d2184bddd09b02107a8f39868d725a4934f731b9a6c1bfe0e0dc2f",
 	"containerd-shim-runc-v2@" + K3sVersion + "/linux/arm64":  "a652401b0b93ffb7dfe1d052de1349b9423fe68f3495dea6b97812af940f8b72",
-	"k3s@" + K3sVersion + "/linux/amd64":                      "a42c11ddd01935865c12af415a946a3116bd46ca0194c189934ce8173d041ade",
-	"k3s@" + K3sVersion + "/linux/arm64":                      "6ee0249a1fc6ccd7271c3516a6029ced67985a852e1a039d59276d642156cf51",
+	"k3s@" + K3sVersion + "/linux/amd64":                      "487d4c356e7ac1dd47b4434ab67a6f702242e4dd999ec1ea500488486b8e906c",
+	"k3s@" + K3sVersion + "/linux/arm64":                      "1d1fe029aef1524d9080d195940b255c4e563a3c053c5a1df584ca5a1f871b11",
 	"runc@" + RuncVersion + "/linux/amd64":                    "0dae679203ff4bac3d0839f191564e3dcce660cba89ce2d7d096eed31c00361f",
 	"runc@" + RuncVersion + "/linux/arm64":                    "64eef0dd4f2b1d7bf06c403e577c288faa5cc00ff5e1b664d1337e67837dd5a0",
 	"cni-bandwidth@" + CNIPluginsVersion + "/linux/amd64":     "1df99b14b72d22de9cfc7a4812ab3c3ce0153aab5d2489399d2c442bfac71616",

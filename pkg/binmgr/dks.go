@@ -9,7 +9,7 @@ import (
 // Keep each tag here so companions and their pin keys move together. Updating
 // a tag also requires reviewing and replacing all of that release's digests.
 const (
-	K3sVersion           = "bashy-v1.37.1+k3s1-7"
+	K3sVersion           = "bashy-v1.37.1+k3s1-8"
 	RuncVersion          = "bashy-v1.5.2-2"
 	CNIPluginsVersion    = "bashy-v1.5.1-2"
 	MetricsServerVersion = "bashy-v0.9.0-2"
