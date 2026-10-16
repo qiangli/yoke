@@ -130,6 +130,19 @@ var pinnedDigests = map[string]string{
 	"loom@v28.1.0/windows/amd64": "68495c963bab1bfcbbe5b48916c7f362a49aca931583575e09763a02ddf63e2d",
 	"loom@v28.1.0/windows/arm64": "04e2bc31d61e8e3335be8816ea7fc6dea22fa723822d9a6159161f95a49bae5a",
 
+	// qiangli/gitea bashy-build.yml tag bashy-v28.1.0-4. Raw executable
+	// digests are from the release SHA256SUMS; loom uses the same Gitea assets.
+	"gitea@bashy-v28.1.0-4/darwin/amd64":  "f816bd1cd102ca02550d238f4b8e13b9012bf384cd0fb61910cdedb37d28b947",
+	"gitea@bashy-v28.1.0-4/darwin/arm64":  "38b564c311760357a3ee96cebc6094da73899ef3abba9b6fb4e68fe31aa56e9c",
+	"gitea@bashy-v28.1.0-4/linux/amd64":   "1b28b1b27a27fac9e04febe79338951e4f5c7bcf48be44b39774e48f8ccbae67",
+	"gitea@bashy-v28.1.0-4/linux/arm64":   "4b9ac37fcb78c00c04dc400505fd90f566d5a55ff1c62b9a7865cfd74e31294d",
+	"gitea@bashy-v28.1.0-4/windows/amd64": "89281330ad106e1146e86ef5de64424ba51c043c0eec36a6ff0a602d0f5c745c",
+	"loom@bashy-v28.1.0-4/darwin/amd64":   "f816bd1cd102ca02550d238f4b8e13b9012bf384cd0fb61910cdedb37d28b947",
+	"loom@bashy-v28.1.0-4/darwin/arm64":   "38b564c311760357a3ee96cebc6094da73899ef3abba9b6fb4e68fe31aa56e9c",
+	"loom@bashy-v28.1.0-4/linux/amd64":    "1b28b1b27a27fac9e04febe79338951e4f5c7bcf48be44b39774e48f8ccbae67",
+	"loom@bashy-v28.1.0-4/linux/arm64":    "4b9ac37fcb78c00c04dc400505fd90f566d5a55ff1c62b9a7865cfd74e31294d",
+	"loom@bashy-v28.1.0-4/windows/amd64":  "89281330ad106e1146e86ef5de64424ba51c043c0eec36a6ff0a602d0f5c745c",
+
 	// goreleaser@v2.18.2-bashy.1 — qiangli/goreleaser fork release, built from
 	// v2.18.2 + a README fork notice (commit 7af3788) with Go 1.27.2.
 	// Provisioned silently by `bashy release`; never a user-facing verb.

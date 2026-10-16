@@ -18,6 +18,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/qiangli/yoke/pkg/binmgr"
 )
 
 func sectionValue(ini, section, key string) string {
@@ -150,6 +152,7 @@ func TestAssetMatch_PicksRawExecutable(t *testing.T) {
 		{"gitea-linux-arm64", "linux", "arm64", true},
 		{"gitea-darwin-amd64", "darwin", "amd64", true},
 		{"gitea-darwin-arm64", "darwin", "arm64", true},
+		{"gitea-windows-amd64.exe", "windows", "amd64", true},
 		{"gitea-linux-amd64.sigstore.json", "linux", "amd64", false},
 		{"gitea.exe", "windows", "amd64", false},
 		{"gitea-linux-amd64", "darwin", "amd64", false},
@@ -188,7 +191,7 @@ func TestLoomIsVerifiedPin(t *testing.T) {
 	if giteaVersion != "v28.1.0" {
 		t.Fatalf("giteaVersion %q, want v28.1.0", giteaVersion)
 	}
-	wantPlatforms := []string{"darwin/amd64", "darwin/arm64", "linux/amd64", "linux/arm64"}
+	wantPlatforms := []string{"darwin/amd64", "darwin/arm64", "linux/amd64", "linux/arm64", "windows/amd64"}
 	if len(tool.Assets) != len(wantPlatforms) {
 		t.Fatalf("assets = %d, want %d (%v)", len(tool.Assets), len(wantPlatforms), wantPlatforms)
 	}
@@ -199,6 +202,9 @@ func TestLoomIsVerifiedPin(t *testing.T) {
 		}
 		goos, goarch, _ := strings.Cut(plat, "/")
 		assetName := "gitea-" + goos + "-" + goarch
+		if goos == "windows" {
+			assetName += ".exe"
+		}
 		wantURL := "https://github.com/qiangli/gitea/releases/download/" + giteaBashyTag + "/" + assetName
 		if a.URL != wantURL {
 			t.Errorf("%s: url %q, want %q", plat, a.URL, wantURL)
@@ -223,21 +229,24 @@ func TestLoomIsVerifiedPin(t *testing.T) {
 			t.Errorf("%s: url %q still references upstream go-gitea/gitea", plat, a.URL)
 		}
 	}
-	if _, ok := tool.Assets["windows/amd64"]; ok {
-		t.Error("windows asset present; should be absent (fail closed)")
-	}
 	if _, ok := tool.Assets["windows/arm64"]; ok {
 		t.Error("windows asset present; should be absent")
 	}
 }
 
-func TestLoomRejectsWindows(t *testing.T) {
-	if _, ok := LoomTool.Assets["windows/amd64"]; ok {
-		t.Fatalf("windows asset should not exist")
+func TestLoomWindowsPin(t *testing.T) {
+	asset, ok := LoomTool.Assets["windows/amd64"]
+	if !ok {
+		t.Fatal("windows/amd64 asset missing")
 	}
-	errMsg := "supply-chain policy: no bashy-signed asset for windows"
-	if !strings.Contains("loom: supply-chain policy: no bashy-signed asset for windows (no upstream fallback) — only linux and darwin assets are signed", errMsg) {
-		t.Fatal("windows error must name supply-chain policy")
+	if !strings.HasSuffix(asset.URL, "/gitea-windows-amd64.exe") {
+		t.Fatalf("windows URL = %q", asset.URL)
+	}
+	for _, name := range []string{"gitea", "loom"} {
+		got, ok := binmgr.PinnedSHA256(name, giteaBashyTag, "windows/amd64")
+		if !ok || got != asset.SHA256 {
+			t.Errorf("%s Windows pin = %q, ok=%v; want %q", name, got, ok, asset.SHA256)
+		}
 	}
 }
 

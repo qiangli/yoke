@@ -23,7 +23,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -44,7 +43,7 @@ const (
 	// Bashy-signed fork release tag (builds/gitea/tool.env at the pin):
 	// built by the bashy-build workflow on qiangli/gitea and published as
 	// raw executables with per-asset SHA256SUMS and <asset>.sigstore.json bundles.
-	giteaBashyTag = "bashy-v28.1.0-2"
+	giteaBashyTag = "bashy-v28.1.0-4"
 
 	// DefaultVersion is the pinned bashy tag. There is no "latest" — that was
 	// the upstream archive and it is intentionally absent (fail closed).
@@ -61,10 +60,11 @@ const (
 // SHA256 per asset read from the published SHA256SUMS of the bashy release
 // (downloaded via curl -sL, not from the GitHub API asset digest).
 var giteaSHAs = map[string]string{
-	"linux/amd64":  "1b28b1b27a27fac9e04febe79338951e4f5c7bcf48be44b39774e48f8ccbae67",
-	"linux/arm64":  "4b9ac37fcb78c00c04dc400505fd90f566d5a55ff1c62b9a7865cfd74e31294d",
-	"darwin/amd64": "f816bd1cd102ca02550d238f4b8e13b9012bf384cd0fb61910cdedb37d28b947",
-	"darwin/arm64": "38b564c311760357a3ee96cebc6094da73899ef3abba9b6fb4e68fe31aa56e9c",
+	"linux/amd64":   "1b28b1b27a27fac9e04febe79338951e4f5c7bcf48be44b39774e48f8ccbae67",
+	"linux/arm64":   "4b9ac37fcb78c00c04dc400505fd90f566d5a55ff1c62b9a7865cfd74e31294d",
+	"darwin/amd64":  "f816bd1cd102ca02550d238f4b8e13b9012bf384cd0fb61910cdedb37d28b947",
+	"darwin/arm64":  "38b564c311760357a3ee96cebc6094da73899ef3abba9b6fb4e68fe31aa56e9c",
+	"windows/amd64": "89281330ad106e1146e86ef5de64424ba51c043c0eec36a6ff0a602d0f5c745c",
 }
 
 func giteaTool() binmgr.Tool {
@@ -72,6 +72,9 @@ func giteaTool() binmgr.Tool {
 	for plat, sha := range giteaSHAs {
 		goos, goarch, _ := strings.Cut(plat, "/")
 		assetName := "gitea-" + goos + "-" + goarch
+		if goos == "windows" {
+			assetName += ".exe"
+		}
 		url := fmt.Sprintf("https://github.com/qiangli/gitea/releases/download/%s/%s", giteaBashyTag, assetName)
 		assets[plat] = binmgr.Asset{URL: url, SHA256: sha}
 	}
@@ -108,13 +111,14 @@ func Spec(version string) binmgr.GitHubSpec {
 }
 
 func assetMatch(name, goos, goarch string) bool {
-	return strings.EqualFold(name, "gitea-"+goos+"-"+goarch)
+	assetName := "gitea-" + goos + "-" + goarch
+	if goos == "windows" {
+		assetName += ".exe"
+	}
+	return strings.EqualFold(name, assetName)
 }
 
 func resolveTool(version string) (binmgr.Tool, error) {
-	if runtime.GOOS == "windows" {
-		return binmgr.Tool{}, fmt.Errorf("loom: supply-chain policy: no bashy-signed asset for windows (no upstream fallback) — only linux and darwin assets are signed")
-	}
 	tool := LoomTool
 	switch version {
 	case "", giteaBashyTag, giteaVersion:
@@ -275,9 +279,6 @@ func (i *Instance) Stop() error {
 // is what outpost's wrap-harness builtin supervises and exposes over the mesh.
 func Start(ctx context.Context, o Options) (*Instance, error) {
 	o.defaults()
-	if runtime.GOOS == "windows" {
-		return nil, fmt.Errorf("loom: supply-chain policy: no bashy-signed asset for windows (no upstream fallback) — only linux and darwin assets are signed")
-	}
 	if err := checkNotRoot(o.UIDGetter); err != nil {
 		return nil, err
 	}
@@ -384,9 +385,6 @@ func StartDaemon(ctx context.Context, o Options) (State, error) {
 	}
 	if rootRewrite != nil {
 		fmt.Fprintf(o.Stderr, "loom: rewriting ROOT_URL from %s to %s\n", rootRewrite.from, rootRewrite.to)
-	}
-	if runtime.GOOS == "windows" {
-		return State{}, fmt.Errorf("loom: supply-chain policy: no bashy-signed asset for windows (no upstream fallback) — only linux and darwin assets are signed")
 	}
 	if err := checkNotRoot(o.UIDGetter); err != nil {
 		return State{}, err
