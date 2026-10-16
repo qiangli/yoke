@@ -160,6 +160,10 @@ type Options struct {
 	// RootURLExplicit is set by the CLI when --root-url was supplied. API
 	// callers that set RootURL directly are also treated as explicit.
 	RootURLExplicit bool
+
+	// UIDGetter returns the current user ID for root detection on Unix.
+	// Defaults to currentUID (which defaults to defaultUID). Injectable for testing.
+	UIDGetter func() int
 }
 
 // actionsOn resolves the effective Actions toggle: an explicit Options.Actions
@@ -207,6 +211,31 @@ func (o *Options) defaults() {
 	if o.Stderr == nil {
 		o.Stderr = os.Stderr
 	}
+	if o.UIDGetter == nil {
+		o.UIDGetter = currentUID
+	}
+}
+
+// ErrRefuseRoot is returned on Unix when loom is run as root (uid 0), because
+// Gitea forbids running as root (mustNotRunAsRoot).
+var ErrRefuseRoot = errors.New("loom: refusing to run as root (Gitea forbids it); run bashy as a regular user")
+
+var currentUID = defaultUID
+
+func checkNotRoot(getter func() int) error {
+	if !isUnix() {
+		return nil
+	}
+	if getter == nil {
+		getter = currentUID
+	}
+	if getter == nil {
+		getter = defaultUID
+	}
+	if getter != nil && getter() == 0 {
+		return ErrRefuseRoot
+	}
+	return nil
 }
 
 // Instance is a running loom (Gitea) server.
@@ -249,6 +278,9 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 	if runtime.GOOS == "windows" {
 		return nil, fmt.Errorf("loom: supply-chain policy: no bashy-signed asset for windows (no upstream fallback) — only linux and darwin assets are signed")
 	}
+	if err := checkNotRoot(o.UIDGetter); err != nil {
+		return nil, err
+	}
 	tool, err := resolveTool(o.Version)
 	if err != nil {
 		return nil, err
@@ -290,6 +322,9 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 // SIGINT/SIGTERM arrives (the `bashy loom serve` path).
 func Serve(ctx context.Context, o Options) error {
 	o.defaults()
+	if err := checkNotRoot(o.UIDGetter); err != nil {
+		return err
+	}
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -350,6 +385,12 @@ func StartDaemon(ctx context.Context, o Options) (State, error) {
 	if rootRewrite != nil {
 		fmt.Fprintf(o.Stderr, "loom: rewriting ROOT_URL from %s to %s\n", rootRewrite.from, rootRewrite.to)
 	}
+	if runtime.GOOS == "windows" {
+		return State{}, fmt.Errorf("loom: supply-chain policy: no bashy-signed asset for windows (no upstream fallback) — only linux and darwin assets are signed")
+	}
+	if err := checkNotRoot(o.UIDGetter); err != nil {
+		return State{}, err
+	}
 	if st, err := readState(o.DataDir); err == nil && healthy(ctx, st.URL, 2*time.Second) {
 		proxyOK := st.ProxyURL == "" || healthy(ctx, st.ProxyURL, 2*time.Second)
 		if st.RootURL == o.RootURL && st.Addr == fmt.Sprintf("%s:%d", o.Addr, o.Port) && proxyOK {
@@ -366,9 +407,6 @@ func StartDaemon(ctx context.Context, o Options) (State, error) {
 	cfg, err := ensureConfig(o.DataDir, o.Addr, o.Port, o.RootURL, o.actionsOn())
 	if err != nil {
 		return State{}, err
-	}
-	if runtime.GOOS == "windows" {
-		return State{}, fmt.Errorf("loom: supply-chain policy: no bashy-signed asset for windows (no upstream fallback) — only linux and darwin assets are signed")
 	}
 	tool, err := resolveTool(o.Version)
 	if err != nil {

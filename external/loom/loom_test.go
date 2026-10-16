@@ -3,6 +3,7 @@ package loom
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
@@ -1288,4 +1289,106 @@ func TestOwnerIdentities(t *testing.T) {
 	if len(got) < 1 || got[0] != "boss@corp.com" {
 		t.Fatalf("ownerIdentities(LOOM_OWNER) = %v, want boss@corp.com first", got)
 	}
+}
+
+func TestRefuseRootWithInjectableUID(t *testing.T) {
+	const wantErr = "loom: refusing to run as root (Gitea forbids it); run bashy as a regular user"
+
+	if !isUnix() {
+		// Windows is unaffected: root check returns nil
+		if err := checkNotRoot(func() int { return 0 }); err != nil {
+			t.Fatalf("expected nil on non-unix, got %v", err)
+		}
+		return
+	}
+
+	t.Run("checkNotRoot directly", func(t *testing.T) {
+		// Root (uid 0) -> refusal error
+		if err := checkNotRoot(func() int { return 0 }); err == nil || err.Error() != wantErr || !errors.Is(err, ErrRefuseRoot) {
+			t.Fatalf("checkNotRoot(root) = %v, want %q", err, wantErr)
+		}
+
+		// Non-root (uid 1000) -> proceeds (nil error)
+		if err := checkNotRoot(func() int { return 1000 }); err != nil {
+			t.Fatalf("checkNotRoot(non-root) = %v, want nil", err)
+		}
+	})
+
+	t.Run("package-level currentUID getter override", func(t *testing.T) {
+		orig := currentUID
+		defer func() { currentUID = orig }()
+
+		currentUID = func() int { return 0 }
+		if err := checkNotRoot(nil); err == nil || err.Error() != wantErr || !errors.Is(err, ErrRefuseRoot) {
+			t.Fatalf("checkNotRoot with package currentUID=0: got %v, want %q", err, wantErr)
+		}
+
+		currentUID = func() int { return 1000 }
+		if err := checkNotRoot(nil); err != nil {
+			t.Fatalf("checkNotRoot with package currentUID=1000: got %v, want nil", err)
+		}
+	})
+
+	t.Run("Start with UIDGetter", func(t *testing.T) {
+		// Root -> refusal error before exec
+		optsRoot := Options{
+			UIDGetter: func() int { return 0 },
+		}
+		_, err := Start(context.Background(), optsRoot)
+		if err == nil || err.Error() != wantErr || !errors.Is(err, ErrRefuseRoot) {
+			t.Fatalf("Start(root) = %v, want %q", err, wantErr)
+		}
+
+		// Non-root -> proceeds past root check
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		optsNonRoot := Options{
+			UIDGetter: func() int { return 1000 },
+		}
+		_, err = Start(ctx, optsNonRoot)
+		if errors.Is(err, ErrRefuseRoot) {
+			t.Fatalf("Start(non-root) returned ErrRefuseRoot: %v", err)
+		}
+		if err == nil {
+			t.Fatal("Start(non-root) unexpectedly succeeded with canceled context")
+		}
+		if strings.Contains(err.Error(), "refusing to run as root") {
+			t.Fatalf("Start(non-root) contained root refusal: %v", err)
+		}
+	})
+
+	t.Run("Serve with UIDGetter", func(t *testing.T) {
+		optsRoot := Options{
+			UIDGetter: func() int { return 0 },
+		}
+		err := Serve(context.Background(), optsRoot)
+		if err == nil || err.Error() != wantErr || !errors.Is(err, ErrRefuseRoot) {
+			t.Fatalf("Serve(root) = %v, want %q", err, wantErr)
+		}
+	})
+
+	t.Run("StartDaemon with UIDGetter", func(t *testing.T) {
+		optsRoot := Options{
+			DataDir:   t.TempDir(),
+			UIDGetter: func() int { return 0 },
+		}
+		_, err := StartDaemon(context.Background(), optsRoot)
+		if err == nil || err.Error() != wantErr || !errors.Is(err, ErrRefuseRoot) {
+			t.Fatalf("StartDaemon(root) = %v, want %q", err, wantErr)
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		optsNonRoot := Options{
+			DataDir:   t.TempDir(),
+			UIDGetter: func() int { return 1000 },
+		}
+		_, err = StartDaemon(ctx, optsNonRoot)
+		if errors.Is(err, ErrRefuseRoot) {
+			t.Fatalf("StartDaemon(non-root) returned ErrRefuseRoot: %v", err)
+		}
+		if err != nil && strings.Contains(err.Error(), "refusing to run as root") {
+			t.Fatalf("StartDaemon(non-root) contained root refusal: %v", err)
+		}
+	})
 }
