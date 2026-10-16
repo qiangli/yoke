@@ -123,6 +123,17 @@ func libPkg(front, note string) Package {
 
 func supPkg(note string) Package { return Package{Role: RoleSupport, Note: note} }
 
+// dksRuntimePkg is the census record of a package whose command is registered
+// only in the DKS runtime image (-tags bashy_dks_runtime); every other build
+// links no surface for it.
+func dksRuntimePkg(front string) Package {
+	if DKSRuntime {
+		return cmdPkg(front)
+	}
+	return Package{Role: RoleUnwired, Note: "the `" + front + "` k3s agent host tool, registered only " +
+		"in the DKS runtime image's bashy (-tags bashy_dks_runtime)"}
+}
+
 // packages is the census. The ratchet asserts it is exactly the set of
 // directories under pkg/ — no missing entry, no stale one.
 var packages = map[string]Package{
@@ -174,7 +185,7 @@ var packages = map[string]Package{
 	"sshserver": libPkg("peer", "SSH server (sessions, port forwards, authorized_keys) that outpost embeds and "+
 		"bashy's peer reverse proxy dials; moved here from outpost so bashy does not import outpost"),
 	"mirror":        cmdPkg("mirror"),
-	"nft":           cmdPkg("nft"),
+	"nft":           dksRuntimePkg("nft"),
 	"pair":          cmdPkg("pair"),
 	"patch":         cmdPkg("patch"),
 	"posixprovider": cmdPkg("posix-providers"),

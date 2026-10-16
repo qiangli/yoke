@@ -11,6 +11,10 @@
 // stack. Both are host front-door verbs rather than bare userland tools; hosts
 // register them directly.
 //
+// Build-tag gated (dks_runtime.go, -tags bashy_dks_runtime): cmds/nft and
+// cmds/mount, the k3s agent host tools of the DKS runtime image. Ordinary
+// bashy builds must keep resolving the host's own nft/mount/umount.
+//
 // Keep the list alphabetical.
 package all
 
@@ -27,10 +31,7 @@ import (
 	_ "github.com/qiangli/yoke/cmds/fetch"
 	_ "github.com/qiangli/yoke/cmds/gzip"
 	_ "github.com/qiangli/yoke/cmds/hexdump"
-	_ "github.com/qiangli/yoke/cmds/iptables"
 	_ "github.com/qiangli/yoke/cmds/jq"
-	_ "github.com/qiangli/yoke/cmds/mount"
-	_ "github.com/qiangli/yoke/cmds/nft"
 	_ "github.com/qiangli/yoke/cmds/ntp"
 	_ "github.com/qiangli/yoke/cmds/tar"
 	_ "github.com/qiangli/yoke/cmds/tokens"

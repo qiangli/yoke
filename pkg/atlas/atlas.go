@@ -956,11 +956,14 @@ func init() {
 	aliasTool("[", "test")
 	addTools(GroupCodeIntel, "ast", "graph")
 	addTools(GroupNet, "browser", "fetch")
-	// The k3s agent's host-tool surface (kube-proxy nftables mode via
-	// knftables, flannel's iptables manager, kubelet volume mounts) as
-	// pure-Go applets: nftables over netlink, mount(2)/umount2(2).
-	addTools(GroupNet, "nft", "iptables", "ip6tables", "iptables-restore", "ip6tables-restore")
-	addTools(GroupFileutils, "mount", "umount")
+	// The k3s agent's host-tool surface (kube-proxy/flannel nftables mode via
+	// knftables, kubelet volume mounts) as pure-Go applets: nftables over
+	// netlink, mount(2)/umount2(2). Registered only in the DKS runtime image
+	// (-tags bashy_dks_runtime, see cmds/all/dks_runtime.go).
+	if DKSRuntime {
+		addTools(GroupNet, "nft")
+		addTools(GroupFileutils, "mount", "umount")
+	}
 	// foreman was here (GroupOrch) but is now a suppressed internal (Bashy #40);
 	// sprint + weave are the public orchestration surface. See packages.go.
 	addTools(GroupDiagnostics, "resources", "why")
@@ -1615,9 +1618,11 @@ func init() {
 	eff(EffPriv, "chcon", "chgrp", "chmod", "chown", "install", "mknod", "newgrp")
 	// Host packet filtering/NAT and the mount table: root-only kernel state
 	// (CAP_NET_ADMIN / CAP_SYS_ADMIN) that changes what the host exposes.
-	eff(EffRead, "nft", "iptables", "ip6tables", "mount")
-	eff(EffWrite, "nft", "iptables", "ip6tables", "iptables-restore", "ip6tables-restore", "mount", "umount")
-	eff(EffPriv, "nft", "iptables", "ip6tables", "iptables-restore", "ip6tables-restore", "mount", "umount")
+	if DKSRuntime {
+		eff(EffRead, "nft", "mount")
+		eff(EffWrite, "nft", "mount", "umount")
+		eff(EffPriv, "nft", "mount", "umount")
+	}
 
 	// remote — executes on ANOTHER host (crosses the machine boundary). `dag`
 	// pipes a Host:-tagged target body to a remote `bash -s`; sphere runs pooled
@@ -1767,9 +1772,6 @@ func init() {
 		// case is irreversible, not compensable.
 		"chcon", "chgrp", "chmod", "chown", "touch", "clip", "mesg", "renice",
 		"stty",
-		// kernel firewall/NAT rules and the mount table: undoing a flush,
-		// delete or unmount needs prior state no row captures.
-		"nft", "iptables", "ip6tables", "iptables-restore", "ip6tables-restore", "mount", "umount",
 		// removal of a resource whose content/metadata the row does not retain
 		// (an emptied directory's mode/owner, a dropped at-job's command/time).
 		"rmdir", "atrm",
@@ -1803,6 +1805,11 @@ func init() {
 		"go", "mod", "cmake", "clang", "zig", "node", "npm", "npx", "pnpm", "yarn",
 		"python", "pip", "uv", "mise", "cargo", "rustc", "rustup", "rust", "pwsh",
 	)
+	// kernel firewall/NAT rules and the mount table: undoing a flush, delete
+	// or unmount needs prior state no row captures.
+	if DKSRuntime {
+		rev(RevIrreversible, "nft", "mount", "umount")
+	}
 
 	// --- release stability tier -----------------------------------------------
 	//

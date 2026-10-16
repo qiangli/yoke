@@ -152,8 +152,8 @@ func TestOriginCountsPinned(t *testing.T) {
 		got[e.Origin]++
 	}
 	want := map[string]int{
-		atlas.OriginGNU:      106, // 105 upstream names + `[`, the alias of test
-		atlas.OriginUnix:     58,  // Includes gencat, cygpath/wslpath, and the k3s agent host tools nft, ip[6]tables[-restore], mount, umount.
+		atlas.OriginGNU:      106,                    // 105 upstream names + `[`, the alias of test
+		atlas.OriginUnix:     51 + dksRuntimeTools(), // Includes gencat and the classic interop tools cygpath/wslpath.
 		atlas.OriginExternal: 12,
 		atlas.OriginBashy:    12,
 	}
