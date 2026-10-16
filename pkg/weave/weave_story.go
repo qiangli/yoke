@@ -62,8 +62,11 @@ type weaveStory struct {
 	// weave_story_contact.go.
 	Contact     *sprintContact     `json:"contact,omitempty"`
 	QuotaImmune *quotaImmuneRecord `json:"quota_immune,omitempty"`
-	Created     time.Time          `json:"created"`
-	UpdatedAt   time.Time          `json:"updated_at,omitempty"`
+	// Capabilities are the impacted capability IDs `sprint end` gates on —
+	// see sprint_capability_gate.go. Empty means no capability gate.
+	Capabilities []sprintCapability `json:"capabilities,omitempty"`
+	Created      time.Time          `json:"created"`
+	UpdatedAt    time.Time          `json:"updated_at,omitempty"`
 }
 
 // sprintRun links a sprint to a weave run (issue) in a SPECIFIC repo.
@@ -642,6 +645,7 @@ branches, worktrees, and weave workspaces owned by this sprint.`,
 		newSprintInstructCmd(),
 		newSprintStopCmd(),
 		newSprintEndCmd(),
+		newSprintCapabilityCmd(),
 		newSprintExtendCmd(),
 		newWeaveStoryTakeCmd(),
 		newWeaveStoryHandoffCmd(),

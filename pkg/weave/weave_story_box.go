@@ -678,6 +678,9 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 						if err := sprintCoverageGate(s, false, ""); err != nil {
 							return "", err
 						}
+						if err := sprintCapabilityGate(s, gateDir, now); err != nil {
+							return "", err
+						}
 						var hygiene sprintHygiene
 						if hy := sprintCheckHygiene(s); !hy.Clean() {
 							return "", fmt.Errorf(
@@ -736,7 +739,10 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 
 It parks every linked working agent in a resumable weave state, refuses missing
 or half-allocated linked runs, verifies linked repositories are committed,
-pushed, and pinned, and requires every story to be closed. When --gate is
+pushed, and pinned, and requires every story to be closed. A card listing
+impacted capability IDs (sprint capability add) also needs a PASS verdict for
+the final SHA — HEAD of --gate-dir, else cwd — or an unexpired recorded
+waiver for each. When --gate is
 supplied it must pass; without one, end succeeds and records the lifecycle as
 unverified. It then closes the time box, moves the card to done, closes the
 conductor room, and releases the lease.

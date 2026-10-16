@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"sort"
 	"testing"
 
 	"github.com/qiangli/yoke/pkg/assetring"
@@ -17,42 +18,55 @@ import (
 // The test fails when (a) a baseline unit has no golden entry, (b) a golden
 // entry names no baseline unit, or (c) a default differs from the golden
 // value, so adding a unit without recording its default breaks the build.
+//
+// Sprint 443 (story 0ad0d4f2eac6) extends the table with each unit's KEY
+// settings — the values that decide what an enabled unit actually does
+// (scope, write access, pool push, budget, role, resource limits). Release
+// version pins are deliberately not pinned here; they move every bump.
 type serviceDefaultGolden struct {
-	enabled bool
-	reason  string
+	enabled  bool
+	reason   string
+	settings map[string]string
 }
+
+type kv = map[string]string
 
 var serviceDefaultsGolden = map[string]serviceDefaultGolden{
-	"actrunner":     {false, "opt-in: the runner joins only when the operator points it at work"},
-	"apps":          {true, "default-on: paired hosts need the human front door after an upgrade"},
-	"events":        {false, "opt-in: the event bus has no subscriber until the operator wires one"},
-	"files":         {true, "default-on: pre-418 FilesOn defaulted on; embedded file manager is base host"},
-	"headlamp":      {false, "opt-in: the cluster dashboard needs an operator-attached cluster"},
-	"kopia":         {false, "opt-in: backups need an operator-configured destination"},
-	"lan-inference": {false, "opt-in: explicit by history; publishing inference to the LAN is the operator's call"},
-	"llm":           {false, "opt-in: false since first commit; model routing is operator-configured"},
-	"loom":          {false, "opt-in: false since first commit; background loom is opt-in"},
-	"meet":          {true, "default-on: paired hosts need meeting access after an upgrade"},
-	"ollama":        {true, "default-on (S436): pre-418 OllamaOn defaulted on; paired hosts run local inference"},
-	"ollama-pool":   {true, "default-on (S436): the pool push runs alongside the local proxy by default"},
-	"otel":          {true, "default-on: pre-418 OtelOn defaulted on; otel is required for DKS"},
-	"otel-stack":    {true, "default-on: local signed OTel stores and gateway are required for DKS telemetry"},
-	"podman":        {true, "default-on: pre-418 PodmanOn defaulted on; socket passthrough is base host"},
-	"sandbox":       {false, "opt-in: explicit by history; container execution limits are the operator's call"},
-	"schedule":      {false, "opt-in: the scheduler runs only with operator-defined jobs"},
-	"sdlc":          {false, "opt-in: the pipeline runner is enabled per repo by the operator"},
-	"seaweedfs":     {false, "opt-in: false since first commit; distributed storage is opt-in"},
-	"shard":         {true, "default-on (S436): pre-418 ShardOn was on for paired hosts; mesh formation needs it"},
-	"warm":          {true, "default-on: pre-418 warm followed OllamaOn; keeps preferred models resident"},
-	"ycode":         {false, "opt-in: ycode sharing is enabled per host by the operator"},
-	"zot":           {false, "opt-in: false since first commit; the local registry is opt-in"},
+	"actrunner":     {false, "opt-in: the runner joins only when the operator points it at work", kv{"forge_unit": "loom", "labels": "host:host", "sandbox": "false", "docker_host": ""}},
+	"apps":          {true, "default-on: paired hosts need the human front door after an upgrade", kv{"pair": "false", "launcher": ""}},
+	"events":        {false, "opt-in: the event bus has no subscriber until the operator wires one", nil},
+	"files":         {true, "default-on: pre-418 FilesOn defaulted on; embedded file manager is base host", kv{"scope": "", "allow_write": "false"}},
+	"headlamp":      {false, "opt-in: the cluster dashboard needs an operator-attached cluster", kv{"kubeconfig": "", "namespace": "headlamp", "target": "svc/headlamp"}},
+	"kopia":         {false, "opt-in: backups need an operator-configured destination", kv{"data_dir": ""}},
+	"lan-inference": {false, "opt-in: explicit by history; publishing inference to the LAN is the operator's call", kv{"target": ""}},
+	"llm":           {false, "opt-in: false since first commit; model routing is operator-configured", nil},
+	"loom":          {false, "opt-in: false since first commit; background loom is opt-in", kv{"root_url": ""}},
+	"meet":          {true, "default-on: paired hosts need meeting access after an upgrade", nil},
+	"ollama":        {true, "default-on (S436): pre-418 OllamaOn defaulted on; paired hosts run local inference", kv{"url": ""}},
+	"ollama-pool":   {true, "default-on (S436): the pool push runs alongside the local proxy by default", nil},
+	"otel":          {true, "default-on: pre-418 OtelOn defaulted on; otel is required for DKS", kv{"pool": "true"}},
+	"otel-stack":    {true, "default-on: local signed OTel stores and gateway are required for DKS telemetry", nil},
+	"podman":        {true, "default-on: pre-418 PodmanOn defaulted on; socket passthrough is base host", kv{"socket": ""}},
+	"sandbox":       {false, "opt-in: explicit by history; container execution limits are the operator's call", kv{"socket": "", "max_memory_mb": "0", "cpus": "0", "pids_limit": "0", "max_containers": "0", "allowed_images": ""}},
+	"schedule":      {false, "opt-in: the scheduler runs only with operator-defined jobs", nil},
+	"sdlc":          {false, "opt-in: the pipeline runner is enabled per repo by the operator", kv{"interval": "60s"}},
+	"seaweedfs":     {false, "opt-in: false since first commit; distributed storage is opt-in", kv{"data_dir": ""}},
+	"shard":         {true, "default-on (S436): pre-418 ShardOn was on for paired hosts; mesh formation needs it", kv{"role": "auto", "peers": "", "node_bytes": "0"}},
+	"warm":          {true, "default-on: pre-418 warm followed OllamaOn; keeps preferred models resident", kv{"budget_frac": "0.33"}},
+	"ycode":         {false, "opt-in: ycode sharing is enabled per host by the operator", kv{"share": "", "require_login": "false"}},
+	"zot":           {false, "opt-in: false since first commit; the local registry is opt-in", kv{"data_dir": ""}},
 }
 
-// flippedToDefaultOn are the four units this story flips back to
-// on-by-default; the override tests below exercise exactly these.
+// flippedToDefaultOn are the four units Sprint 437 flipped back to
+// on-by-default; the golden test refuses a table edit that turns them off.
 var flippedToDefaultOn = []string{"otel", "warm", "files", "podman"}
 
 func TestServiceDefaultsGolden(t *testing.T) {
+	for _, name := range flippedToDefaultOn {
+		if !serviceDefaultsGolden[name].enabled {
+			t.Errorf("%s must stay default-on (Sprint 437 a4300f7a)", name)
+		}
+	}
 	cat := New(serviceOpts(t.TempDir())...)
 	units, errs := cat.Services()
 	if len(errs) != 0 {
@@ -73,6 +87,14 @@ func TestServiceDefaultsGolden(t *testing.T) {
 		if s.Enabled != g.enabled {
 			t.Errorf("%s enabled = %v, want %v (%s)", s.Name, s.Enabled, g.enabled, g.reason)
 		}
+		for k, want := range g.settings {
+			got, ok := s.Settings[k]
+			if !ok {
+				t.Errorf("%s settings.%s missing, want %q", s.Name, k, want)
+			} else if got != want {
+				t.Errorf("%s settings.%s = %q, want %q", s.Name, k, got, want)
+			}
+		}
 	}
 	for name, g := range serviceDefaultsGolden {
 		if !seen[name] {
@@ -81,12 +103,29 @@ func TestServiceDefaultsGolden(t *testing.T) {
 	}
 }
 
-// An explicit operator opt-out beats the default-on seed: the disable lands
-// as a local-ring overlay, and removing it returns to the enabled seed.
+// defaultOnUnits is every golden unit whose seed is enabled.
+func defaultOnUnits() []string {
+	var out []string
+	for name, g := range serviceDefaultsGolden {
+		if g.enabled {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// An explicit operator opt-out beats the default-on seed for EVERY default-on
+// unit, and survives a fresh catalog load (a restart / upgrade): the disable
+// lands as a local-ring overlay, never silently re-enabled, and removing it
+// returns to the enabled seed. See docs/capability-change-policy.md.
 func TestServiceDefaultsGoldenOptOut(t *testing.T) {
 	opts := serviceOpts(t.TempDir())
-	for _, name := range flippedToDefaultOn {
+	units := defaultOnUnits()
+	for _, name := range units {
 		mustSvc(t, opts, "", "disable", name)
+	}
+	for _, name := range units {
 		s, ok := New(opts...).Service(name)
 		if !ok {
 			t.Fatalf("%s seed missing after disable", name)
@@ -98,7 +137,18 @@ func TestServiceDefaultsGoldenOptOut(t *testing.T) {
 			t.Errorf("%s ring = %v after disable, want local (explicit operator overlay)", name, s.Ring)
 		}
 	}
-	for _, name := range flippedToDefaultOn {
+	// The opt-outs are independent: listing the whole catalog after a reload
+	// still shows every one disabled.
+	all, errs := New(opts...).Services()
+	if len(errs) != 0 {
+		t.Fatalf("parse errors after opt-outs: %v", errs)
+	}
+	for _, s := range all {
+		if serviceDefaultsGolden[s.Name].enabled && s.Enabled {
+			t.Errorf("%s re-enabled on reload despite explicit opt-out", s.Name)
+		}
+	}
+	for _, name := range units {
 		mustSvc(t, opts, "", "rm", name)
 		s, _ := New(opts...).Service(name)
 		if s.Ring.String() != "embedded" || !s.Enabled {
