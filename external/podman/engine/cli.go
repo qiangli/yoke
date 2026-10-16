@@ -140,12 +140,21 @@ func buildManagedExec(ctx context.Context, bin, socket string, args []string) *e
 // conmon, the helper dir and the OCI runtimes at the files shipped in the same
 // engine tarball; CONTAINERS_HELPER_BINARY_DIR alone does not fix conmon lookup.
 func writeHelperConf(binDir, helperDir string) (string, error) {
+	return writeConfFile(helperConfContent(binDir, helperDir))
+}
+
+// helperConfContent renders the override; helper_binaries_dir is
+// [R/lib/podman, R/libexec/podman, binDir] with R = binDir/.. (pasta/passt
+// for rootless networking live in binDir).
+func helperConfContent(binDir, helperDir string) string {
+	root := filepath.Join(binDir, "..")
 	var b strings.Builder
 	b.WriteString("[engine]\n")
 	if conmon := filepath.Join(helperDir, "conmon"); isFile(conmon) {
 		fmt.Fprintf(&b, "conmon_path = [%q]\n", conmon)
 	}
-	fmt.Fprintf(&b, "helper_binaries_dir = [%q]\n", helperDir)
+	fmt.Fprintf(&b, "helper_binaries_dir = [%q, %q, %q]\n",
+		filepath.Join(root, "lib", "podman"), filepath.Join(root, "libexec", "podman"), binDir)
 	var rt []string
 	for _, name := range []string{"crun", "runc"} {
 		var found string
@@ -165,20 +174,24 @@ func writeHelperConf(binDir, helperDir string) (string, error) {
 			b.WriteString(l)
 		}
 	}
+	return b.String()
+}
+
+func writeConfFile(content string) (string, error) {
 	dir := filepath.Join(filepath.Dir(defaultBinCacheDir()), "podman-conf")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256([]byte(b.String()))
+	sum := sha256.Sum256([]byte(content))
 	path := filepath.Join(dir, "containers-"+hex.EncodeToString(sum[:6])+".conf")
-	if old, err := os.ReadFile(path); err == nil && string(old) == b.String() {
+	if old, err := os.ReadFile(path); err == nil && string(old) == content {
 		return path, nil
 	}
 	tmp, err := os.CreateTemp(dir, ".conf-*")
 	if err != nil {
 		return "", err
 	}
-	_, werr := tmp.WriteString(b.String())
+	_, werr := tmp.WriteString(content)
 	if cerr := tmp.Close(); werr == nil {
 		werr = cerr
 	}

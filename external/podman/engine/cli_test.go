@@ -105,7 +105,7 @@ func TestManagedExecLinuxHelpers(t *testing.T) {
 	}
 	for _, want := range []string{
 		"conmon_path = [\"" + filepath.Join(helpers, "conmon") + "\"]",
-		"helper_binaries_dir = [\"" + helpers + "\"]",
+		"helper_binaries_dir = [\"" + helpers + "\", \"" + filepath.Join(dir, "usr", "local", "libexec", "podman") + "\", \"" + binDir + "\"]",
 		"[engine.runtimes]",
 		"crun = [\"" + filepath.Join(binDir, "crun") + "\"]",
 		"runc = [\"" + filepath.Join(binDir, "runc") + "\"]",
@@ -122,6 +122,17 @@ func TestManagedExecLinuxHelpers(t *testing.T) {
 		if strings.HasPrefix(e, "CONTAINERS_CONF_OVERRIDE=") && e != "CONTAINERS_CONF_OVERRIDE=/operator/conf" {
 			t.Fatalf("operator value overridden: %s", e)
 		}
+	}
+}
+
+func TestHelperConfContent(t *testing.T) {
+	binDir := filepath.Join(t.TempDir(), "usr", "local", "bin")
+	root := filepath.Join(binDir, "..")
+	got := helperConfContent(binDir, filepath.Join(root, "lib", "podman"))
+	want := "helper_binaries_dir = [\"" + filepath.Join(root, "lib", "podman") + "\", \"" +
+		filepath.Join(root, "libexec", "podman") + "\", \"" + binDir + "\"]"
+	if !strings.Contains(got, want) {
+		t.Fatalf("conf missing %q:\n%s", want, got)
 	}
 }
 
