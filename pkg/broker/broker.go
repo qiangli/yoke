@@ -123,10 +123,14 @@ type Broker struct {
 	opts   Options
 	engine engineClient
 	local  bool
-	device *Device
-	sticky *stickyStore
-	audit  *auditLog
-	tracer trace.Tracer
+	// noEngineByBuild is set when the local engine is unavailable BY BUILD
+	// (a lean binary without the engines tag): the door serves fleet
+	// agents only, and local routes say so explicitly.
+	noEngineByBuild bool
+	device          *Device
+	sticky          *stickyStore
+	audit           *auditLog
+	tracer          trace.Tracer
 
 	// stickyW holds one warm CLI per bind=worker/reset=none binding, keyed
 	// like the sticky store (principal + "\x00" + key). Sessions retire when
@@ -172,11 +176,19 @@ func New(ctx context.Context, opts Options) (*Broker, error) {
 	if opts.Engine != nil {
 		base, err := opts.Engine.Start(ctx)
 		if err != nil {
-			return nil, err
+			// A lean binary has no local engine to start; that is a
+			// supported configuration, not a crash. The door comes
+			// up in fleet-agents-only mode; a real engine failure
+			// still fails the start as before.
+			if !EngineNotInBuild(err) {
+				return nil, err
+			}
+			b.noEngineByBuild = true
+		} else {
+			b.engine = engineClient{base: base}
+			b.local = true
+			b.device.OnSwitch = b.onPrincipalSwitch
 		}
-		b.engine = engineClient{base: base}
-		b.local = true
-		b.device.OnSwitch = b.onPrincipalSwitch
 	}
 	return b, nil
 }
@@ -379,6 +391,10 @@ var nativeDevicePaths = map[string]bool{
 
 func (b *Broker) serveNative(w http.ResponseWriter, r *http.Request, ri *reqInfo) {
 	if !b.local {
+		if b.noEngineByBuild {
+			writeErr(w, r.URL.Path, http.StatusServiceUnavailable, ErrEngineNotInBuild.Error())
+			return
+		}
 		writeErr(w, r.URL.Path, http.StatusServiceUnavailable, "this broker has no local model engine")
 		return
 	}

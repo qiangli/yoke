@@ -288,8 +288,10 @@ func RunDoor(ctx context.Context, o DoorOptions) error {
 		defer cligw.RemoveEndpoint()
 	}
 	fmt.Fprintf(out, "model door serving on %s (pid %d)\n", base, os.Getpid())
-	if opts.Engine != nil {
+	if b.local {
 		fmt.Fprintf(out, "local engine: bashy's Ollama, exclusive device, context %d\n", opts.EngineContext)
+	} else if b.noEngineByBuild {
+		fmt.Fprintln(out, "local engine: unavailable in this build (lean binary without the engines tag); serving fleet agents only")
 	}
 	if cli != nil {
 		fmt.Fprintln(out, "fleet agents: cligw (band/model/agent selectors)")

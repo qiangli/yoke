@@ -40,6 +40,49 @@ func (StaticEngine) Stop(context.Context) error { return nil }
 // with it set runs Ollama itself instead of the broker.
 const EngineModeEnv = "BASHY_OLLAMA_ENGINE"
 
+// ErrEngineNotInBuild reports that the local engine is unavailable BY BUILD:
+// the binary was built without the engines tag (a lean, cgo-off release),
+// so there is no local inference to start. It is not a crash: the door
+// must come up anyway and serve fleet agents only. Wrap it (with %w) from
+// any Engine.Start that detects this state.
+var ErrEngineNotInBuild = errors.New("broker: no local engine in this build (lean binary without the engines tag; the door serves fleet agents only)")
+
+// EngineNotInBuild reports whether err means the local engine is absent by
+// build rather than crashed.
+func EngineNotInBuild(err error) bool { return errors.Is(err, ErrEngineNotInBuild) }
+
+// enginesStubMarker is the stable signal the bashy engines stub prints when
+// the binary lacks the engines build (bashy/internal/agentos/engines_stub.go:
+// "local inference requires the engines build"). ExecEngine matches this
+// substring in the child's early output to tell a lean binary from a real
+// engine crash. A distinct exit code or typed error from the stub would be
+// preferable (a bashy-side change); until then this is the discriminator.
+const enginesStubMarker = "requires the engines build"
+
+// engineOutputCapture keeps the first bytes of a starting engine's output so
+// an early exit can be classified (lean stub vs crash) without parsing the
+// log file after the fact.
+type engineOutputCapture struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (c *engineOutputCapture) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	// The stub's signal is one line; keep the head only.
+	if c.buf.Len() < 16<<10 {
+		c.buf.Write(p)
+	}
+	return len(p), nil
+}
+
+func (c *engineOutputCapture) String() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.String()
+}
+
 // ExecEngine runs the engine as a child process: Argv (typically
 // [bashy ollama serve]) with EngineModeEnv=1 and OLLAMA_HOST set to a free
 // loopback port. NUM_PARALLEL=1 makes the engine itself exclusive, matching
@@ -76,8 +119,16 @@ func (e *ExecEngine) Start(ctx context.Context) (string, error) {
 		"OLLAMA_NUM_PARALLEL=1",
 	)
 	cmd.Env = append(env, e.Env...)
+	// Always tee the child's early output into a bounded capture (in
+	// addition to the log file when one is configured) so an exit during
+	// start-up can be classified: the lean-build stub announces itself,
+	// a real crash does not.
+	capture := &engineOutputCapture{}
 	if e.Log != nil {
-		cmd.Stdout, cmd.Stderr = e.Log, e.Log
+		cmd.Stdout = io.MultiWriter(e.Log, capture)
+		cmd.Stderr = io.MultiWriter(e.Log, capture)
+	} else {
+		cmd.Stdout, cmd.Stderr = capture, capture
 	}
 	cmd.SysProcAttr = engineSysProcAttr()
 	if err := cmd.Start(); err != nil {
@@ -103,6 +154,14 @@ func (e *ExecEngine) Start(ctx context.Context) (string, error) {
 	for time.Now().Before(deadline) {
 		select {
 		case <-done:
+			// cmd.Wait has returned, so the copy goroutines feeding
+			// capture are done: the stub's line is in hand when it
+			// printed one. A lean binary is not a crash: report it
+			// as unavailable-by-build so the door starts in
+			// fleet-agents-only mode.
+			if strings.Contains(capture.String(), enginesStubMarker) {
+				return "", fmt.Errorf("broker: engine unavailable: %w", ErrEngineNotInBuild)
+			}
 			return "", errors.New("broker: engine exited during start-up (see the engine log)")
 		case <-ctx.Done():
 			_ = e.Stop(context.Background())
