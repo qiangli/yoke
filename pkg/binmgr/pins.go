@@ -42,6 +42,38 @@ import (
 // is intentionally allowed to be sparse — an absent pin is not an error, it just
 // means that tool still resolves its checksum from the release.
 var pinnedDigests = map[string]string{
+	// Bashy-built DKS runtime releases: raw Linux executables checked against
+	// GitHub asset digests and signed SHA256SUMS. Every asset and manifest
+	// passed VerifySignedBlob with the exact tag workflow identity.
+	"containerd-shim-runc-v2@" + K3sVersion + "/linux/amd64":  "7cd49d3ca9d2184bddd09b02107a8f39868d725a4934f731b9a6c1bfe0e0dc2f",
+	"containerd-shim-runc-v2@" + K3sVersion + "/linux/arm64":  "a652401b0b93ffb7dfe1d052de1349b9423fe68f3495dea6b97812af940f8b72",
+	"k3s@" + K3sVersion + "/linux/amd64":                      "a42c11ddd01935865c12af415a946a3116bd46ca0194c189934ce8173d041ade",
+	"k3s@" + K3sVersion + "/linux/arm64":                      "6ee0249a1fc6ccd7271c3516a6029ced67985a852e1a039d59276d642156cf51",
+	"runc@" + RuncVersion + "/linux/amd64":                    "0dae679203ff4bac3d0839f191564e3dcce660cba89ce2d7d096eed31c00361f",
+	"runc@" + RuncVersion + "/linux/arm64":                    "64eef0dd4f2b1d7bf06c403e577c288faa5cc00ff5e1b664d1337e67837dd5a0",
+	"cni-bandwidth@" + CNIPluginsVersion + "/linux/amd64":     "1df99b14b72d22de9cfc7a4812ab3c3ce0153aab5d2489399d2c442bfac71616",
+	"cni-bandwidth@" + CNIPluginsVersion + "/linux/arm64":     "d276d049a4a95c23308f81ef22509fb24cc2c8d5fa67632ffddc7ca05d2691a1",
+	"cni-bridge@" + CNIPluginsVersion + "/linux/amd64":        "5c75f37248c06b9154a6f90a808f4808dfdc7c906cad48cb0f6fdffc3b4c1b2a",
+	"cni-bridge@" + CNIPluginsVersion + "/linux/arm64":        "9bb3b793af25a1010062676dcb4e7da470a891ed7536e5d87e2d29cf1f9b8bab",
+	"cni-firewall@" + CNIPluginsVersion + "/linux/amd64":      "84104764c7e1aad3d82d2ca42d5ca067a0b4465d94f98cc29feed4f697f9cc0e",
+	"cni-firewall@" + CNIPluginsVersion + "/linux/arm64":      "0ccf36f45eaa523c19fbc699d5821d0c14b19ca4b4fa8b4c38f9900b906c5e0e",
+	"cni-host-local@" + CNIPluginsVersion + "/linux/amd64":    "f5356c1b7d52c878e23d6dc8e09baa82b48acf6f203e5b1be76934a7237de5fa",
+	"cni-host-local@" + CNIPluginsVersion + "/linux/arm64":    "284a1d79a90803e55f3488efaca4213694a7feea42d55b75a9c723eb927fa747",
+	"cni-loopback@" + CNIPluginsVersion + "/linux/amd64":      "08e83ffa8e9f1353bf2b75633ab2eb495e3502e4bf81430cf230760725fd71d6",
+	"cni-loopback@" + CNIPluginsVersion + "/linux/arm64":      "4a397b50ebb16102cbbd738795c2783d059bf96fee5eb9c8ad64f31cc5f500ae",
+	"cni-portmap@" + CNIPluginsVersion + "/linux/amd64":       "0dc7520436a6ce3c9350dd2d676af1d193a27ca402ca951895c7530a47d7b476",
+	"cni-portmap@" + CNIPluginsVersion + "/linux/arm64":       "b01e3b62e45411c1ff8a36f9459b993fca5d48ec77e2bc1993f699c4e5bf96f8",
+	"metrics-server@" + MetricsServerVersion + "/linux/amd64": "160daff84a3698f0f893cbd069def3f262f6e23af1c944ea0f824155230477b4",
+	"metrics-server@" + MetricsServerVersion + "/linux/arm64": "354c3602eb28b18cbacf945e0139b835be0eff5add499e96eb7e4abf1e10ffd7",
+	"tailscale@" + TailscaleVersion + "/linux/amd64":          "3f1686abb2ee5959d8f585d732aa8105b2c2743e5d3f8d01ebc0463701e9c7ac",
+	"tailscale@" + TailscaleVersion + "/linux/arm64":          "cd0c15d6b928f501d63bb4d0bf54d860f7c70cc471000ec5f938779705856632",
+	"tailscaled@" + TailscaleVersion + "/linux/amd64":         "00c8b14c207a25b1da1800b2e9d7d5c28c4e04316015093afceba6539e0e572b",
+	"tailscaled@" + TailscaleVersion + "/linux/arm64":         "77ab68d93d5631b97857cceecbd3edbd98c34c93044d69d10e312cf0eba53875",
+	"coredns@" + CoreDNSVersion + "/linux/amd64":              "71013af0b33bfe8c42cd2b9d3306b33591f8ad16aad753682bd826a8f4a8b8f2",
+	"coredns@" + CoreDNSVersion + "/linux/arm64":              "b31eb70c554a51b73b0823455380d0166fb38263c617473cdbed76ee1cbd6094",
+	"pause@" + PauseVersion + "/linux/amd64":                  "e0db620d991ed72fbe10754490afd937fe6fc266ecf23902253b45c03b8f976a",
+	"pause@" + PauseVersion + "/linux/arm64":                  "02adfa63a51ad82bcd839af49c066e53277507163e1b396a96746f3a59bd1a0b",
+
 	// prima.cpp bashy-build.yml tag bashy-bashy-prima-0.1.2-13 (hosted run
 	// 38486571631, green on all five platforms). Each raw asset matches the
 	// release's signed SHA256SUMS; per-asset bundles verified against the
