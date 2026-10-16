@@ -21,6 +21,51 @@ func TestSafePathPodmanRejectsBashyShim(t *testing.T) {
 	}
 }
 
+func TestResolvePodmanBinaryCachedEngine(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BASHY_BIN_CACHE", root)
+	t.Setenv("BASHY_OFFLINE", "1")
+	t.Setenv("BASHY_PODMAN_SYSTEM", "")
+	t.Setenv("PATH", t.TempDir())
+	bin := filepath.Join(root, "podman", "v6.1.2", "podman-"+runtime.GOOS+"-"+runtime.GOARCH,
+		"usr", "local", "bin", "podman")
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
+	if err := os.MkdirAll(filepath.Dir(bin), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bin, []byte("cached engine"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := resolvePodmanBinary()
+	if err != nil || got != bin {
+		t.Fatalf("resolvePodmanBinary() = %q, %v; want %q", got, err, bin)
+	}
+}
+
+func TestResolvePodmanBinaryIgnoresPathUnlessOptedIn(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("executable fixture uses Unix mode")
+	}
+	t.Setenv("BASHY_BIN_CACHE", t.TempDir())
+	t.Setenv("BASHY_OFFLINE", "1")
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "podman")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("BASHY_PODMAN_SYSTEM", "")
+	if got, err := resolvePodmanBinary(); err == nil || got != "" || !strings.Contains(err.Error(), "no cached engine") {
+		t.Fatalf("without opt-in: %q, %v", got, err)
+	}
+	t.Setenv("BASHY_PODMAN_SYSTEM", "1")
+	if got, err := resolvePodmanBinary(); err != nil || got != bin {
+		t.Fatalf("with opt-in: %q, %v; want %q", got, err, bin)
+	}
+}
+
 func TestManagedExecLinuxHelpers(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux helper layout")

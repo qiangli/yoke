@@ -12,6 +12,9 @@ import (
 const managedPodmanVersion = "latest"
 
 func ensureManagedPodman(ctx context.Context) (string, error) {
+	if bin := binmgr.CachedBinary("podman"); bin != "" {
+		return bin, nil
+	}
 	tool, err := binmgr.ResolveGitHub(ctx, binmgr.GitHubSpec{
 		Name:       "podman-remote",
 		Repo:       "containers/podman",

@@ -19,8 +19,8 @@ import (
 )
 
 // NewPodmanCmd is the `bashy podman` front-door: a thin pass-through to Podman,
-// preferring the embedded binary, then a managed binmgr-downloaded remote
-// client, then a host podman. CONTAINER_HOST auto-points at the ISOLATED `bashy`
+// preferring the embedded binary, then a cached or managed Podman.
+// CONTAINER_HOST auto-points at the ISOLATED `bashy`
 // machine's socket when present so images + containers land in bashy's own
 // store. bashy does NOT reimplement podman's verbs; every upstream flag works.
 // $BASHY_PODMAN_SYSTEM=1 forces a podman on $PATH.
@@ -34,8 +34,7 @@ does not reimplement them.
 
 Resolution order:
   1. embedded Podman, when this bashy build includes it
-  2. managed Podman remote client, downloaded and sha-verified by binmgr
-  3. podman on PATH
+  2. cached Podman engine, or a managed Podman remote client
 
 CONTAINER_HOST is auto-set to bashy's own isolated machine socket when present,
 so containers and images land in bashy's store, distinct from any host or ycode
@@ -179,8 +178,7 @@ func prependPath(env []string, dir string) []string {
 }
 
 // resolvePodmanBinary picks the podman binary: $BASHY_PODMAN_SYSTEM → $PATH;
-// else embedded; else managed binmgr download/cache; else $PATH fallback; else a
-// clear error.
+// else embedded; else cached engine or managed download; else a clear error.
 func resolvePodmanBinary() (string, error) {
 	if systemPodman() {
 		bin, err := safePathPodman()
@@ -202,10 +200,7 @@ func resolvePodmanBinary() (string, error) {
 	} else {
 		managedErr = err
 	}
-	if bin, err := safePathPodman(); err == nil {
-		return bin, nil
-	}
-	return "", fmt.Errorf("no embedded podman in this build, managed podman unavailable for %s (%v), and no podman on PATH — rebuild with the embed_podman tag (the embed blob), or install upstream podman", managedPodmanPlatform(), managedErr)
+	return "", fmt.Errorf("podman unavailable: no embedded binary, no cached engine, and managed provisioning for %s failed: %w", managedPodmanPlatform(), managedErr)
 }
 
 // newPodmanMachineCmd wires the isolated `bashy` machine lifecycle.
