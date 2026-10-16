@@ -4,6 +4,7 @@ description: ycode observability surfaces — apps otel-prometheus, otel-logs, o
 provider: internal
 capability: outpost.otel
 owner: outpost
+requires: [otel-stack]
 settings:
   pool: "true"
 restart:

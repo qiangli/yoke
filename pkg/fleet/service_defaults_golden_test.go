@@ -36,6 +36,7 @@ var serviceDefaultsGolden = map[string]serviceDefaultGolden{
 	"ollama":        {true, "default-on (S436): pre-418 OllamaOn defaulted on; paired hosts run local inference"},
 	"ollama-pool":   {true, "default-on (S436): the pool push runs alongside the local proxy by default"},
 	"otel":          {true, "default-on: pre-418 OtelOn defaulted on; otel is required for DKS"},
+	"otel-stack":    {true, "default-on: local signed OTel stores and gateway are required for DKS telemetry"},
 	"podman":        {true, "default-on: pre-418 PodmanOn defaulted on; socket passthrough is base host"},
 	"sandbox":       {false, "opt-in: explicit by history; container execution limits are the operator's call"},
 	"schedule":      {false, "opt-in: the scheduler runs only with operator-defined jobs"},

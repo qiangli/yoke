@@ -122,13 +122,43 @@ func TestOllamaPoolRequiresTheProxyUnit(t *testing.T) {
 	if !reflect.DeepEqual(p.Dependencies(), []string{"ollama"}) {
 		t.Fatalf("ollama-pool dependencies = %v, want [ollama]", p.Dependencies())
 	}
+	otel, _ := cat.Service("otel")
+	if !reflect.DeepEqual(otel.Dependencies(), []string{"otel-stack"}) {
+		t.Fatalf("otel dependencies = %v, want [otel-stack]", otel.Dependencies())
+	}
 	for name := range outpostCapabilitySeeds {
-		if name == "ollama-pool" {
+		if name == "ollama-pool" || name == "otel" {
 			continue
 		}
 		if s, _ := cat.Service(name); len(s.Dependencies()) != 0 {
 			t.Errorf("%s dependencies = %v, want none (outpost hosts it)", name, s.Dependencies())
 		}
+	}
+}
+
+func TestOTelStackSeedRunsLocalSignedStack(t *testing.T) {
+	cat := New(serviceOpts(t.TempDir())...)
+	s, ok := cat.Service("otel-stack")
+	if !ok {
+		t.Fatal("otel-stack seed missing")
+	}
+	if err := s.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	wantExec := []string{"bashy", "otel", "serve", "--bind", "127.0.0.1", "--port", "31415", "--otlp-grpc-port", "31416"}
+	if !reflect.DeepEqual(s.Exec, wantExec) {
+		t.Errorf("exec = %v, want %v", s.Exec, wantExec)
+	}
+	wantPorts := []ServicePort{{Name: "http", Port: 31415, Bind: "loopback"}, {Name: "grpc", Port: 31416, Bind: "loopback"}}
+	if !reflect.DeepEqual(s.Ports, wantPorts) {
+		t.Errorf("ports = %+v, want %+v", s.Ports, wantPorts)
+	}
+	if s.Health.HTTP != "/healthz" || s.Restart.Policy != RestartOnFailure ||
+		s.Restart.StartLimit.Burst != 5 || s.Restart.StartLimit.Interval != "10m" {
+		t.Errorf("health or restart = %+v %+v", s.Health, s.Restart)
+	}
+	if !s.Enabled {
+		t.Error("otel-stack must be default-on")
 	}
 }
 

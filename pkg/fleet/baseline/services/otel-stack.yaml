@@ -1,0 +1,19 @@
+name: otel-stack
+kind: service
+description: Local bashy OTel gateway and signed Victoria stores
+# otel serve keeps running in the foreground and uses ~/.agents/otel by default.
+exec: [bashy, otel, serve, --bind, 127.0.0.1, --port, 31415, --otlp-grpc-port, 31416]
+ports:
+  - {name: http, port: 31415, bind: loopback}
+  - {name: grpc, port: 31416, bind: loopback}
+health:
+  http: /healthz
+  interval: 10s
+  timeout: 3s
+  failures: 3
+  start_period: 30s
+restart:
+  policy: on-failure
+  backoff: {min: 1s, max: 30s, healthy_after: 30s}
+  start_limit: {burst: 5, interval: 10m}
+enabled: true
