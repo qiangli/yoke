@@ -68,11 +68,13 @@ type Asset struct {
 // Tool is a managed external binary: a logical name, a version (the cache key),
 // and per-platform assets keyed by "goos/goarch" (e.g. "linux/amd64").
 type Tool struct {
-	cachedPath string
-	cachedName string
-	Name       string           `json:"name"`
-	Version    string           `json:"version"`
-	Assets     map[string]Asset `json:"assets"`
+	// targetPlatform is set only on the private copy used by EnsureFor.
+	targetPlatform string
+	cachedPath     string
+	cachedName     string
+	Name           string           `json:"name"`
+	Version        string           `json:"version"`
+	Assets         map[string]Asset `json:"assets"`
 	// Sigstore, when set, requires every download to carry a keyless
 	// Sigstore bundle signed by exactly this identity and issuer, verified
 	// before the digest check and before anything is unpacked (sigstore.go).
@@ -86,6 +88,13 @@ type Tool struct {
 
 // Platform returns the current "goos/goarch" key.
 func Platform() string { return runtime.GOOS + "/" + runtime.GOARCH }
+
+func (t Tool) platform() string {
+	if t.targetPlatform != "" {
+		return t.targetPlatform
+	}
+	return Platform()
+}
 
 // CacheDir is the root for downloaded binaries. Override via $BASHY_BIN_CACHE;
 // otherwise <UserCacheDir>/bashy/bin.
@@ -210,13 +219,13 @@ func installLayout(t Tool) (dir, dest string, err error) {
 	if t.Name == "" || t.Version == "" {
 		return "", "", fmt.Errorf("binmgr: tool name and version are required")
 	}
-	asset, ok := t.Assets[Platform()]
+	asset, ok := t.Assets[t.platform()]
 	if !ok || asset.URL == "" {
-		return "", "", fmt.Errorf("binmgr: %s %s has no asset for %s", t.Name, t.Version, Platform())
+		return "", "", fmt.Errorf("binmgr: %s %s has no asset for %s", t.Name, t.Version, t.platform())
 	}
 	if t.RequireCommittedPin {
-		if _, ok := pinnedSHA256(t.Name, t.Version, Platform()); !ok {
-			return "", "", fmt.Errorf("binmgr: %s %s has no committed sha256 for %s", t.Name, t.Version, Platform())
+		if _, ok := pinnedSHA256(t.Name, t.Version, t.platform()); !ok {
+			return "", "", fmt.Errorf("binmgr: %s %s has no committed sha256 for %s", t.Name, t.Version, t.platform())
 		}
 		if t.Sigstore == nil {
 			return "", "", fmt.Errorf("binmgr: %s %s requires Sigstore verification", t.Name, t.Version)
@@ -229,8 +238,15 @@ func installLayout(t Tool) (dir, dest string, err error) {
 	if err != nil {
 		return "", "", err
 	}
+	if t.platform() != Platform() {
+		root = filepath.Join(root, ".targets", filepath.FromSlash(t.platform()))
+	}
 	dir = filepath.Join(root, t.Name, t.Version)
-	dest = filepath.Join(dir, binaryName(t.Name))
+	name := t.Name
+	if strings.HasPrefix(t.platform(), "windows/") {
+		name += ".exe"
+	}
+	dest = filepath.Join(dir, name)
 	if asset.Tree {
 		if asset.Entrypoint == "" {
 			return "", "", fmt.Errorf("binmgr: %s %s: Tree asset needs an Entrypoint", t.Name, t.Version)
@@ -244,14 +260,36 @@ func installLayout(t Tool) (dir, dest string, err error) {
 // sha256-verifying + caching it if not already present, and returns the path to
 // the executable. Idempotent: a cache hit returns immediately with no network.
 func Ensure(ctx context.Context, t Tool) (string, error) {
-	if !t.RequireCommittedPin && t.Sigstore == nil && t.SignedSums == nil && t.cachedName == t.Name && t.Name != "" && t.cachedPath != "" && isExecutable(t.cachedPath) {
+	t.targetPlatform = ""
+	return ensure(ctx, t)
+}
+
+// EnsureFor resolves an explicit target platform using the same pins and
+// verification as Ensure. Foreign artifacts live under
+// <CacheDir>/.targets/<goos>/<goarch>/<name>/<version>, outside host lookups.
+// It never executes the target binary; signature verification uses host cosign.
+// A target equal to the host preserves Ensure's existing cache layout.
+func EnsureFor(ctx context.Context, t Tool, goos, goarch string) (string, error) {
+	for _, token := range []string{goos, goarch} {
+		if token == "" || strings.IndexFunc(token, func(r rune) bool {
+			return (r < 'a' || r > 'z') && (r < '0' || r > '9')
+		}) >= 0 {
+			return "", fmt.Errorf("binmgr: invalid target platform %q/%q", goos, goarch)
+		}
+	}
+	t.targetPlatform = goos + "/" + goarch
+	return ensure(ctx, t)
+}
+
+func ensure(ctx context.Context, t Tool) (string, error) {
+	if t.platform() == Platform() && !t.RequireCommittedPin && t.Sigstore == nil && t.SignedSums == nil && t.cachedName == t.Name && t.Name != "" && t.cachedPath != "" && isExecutable(t.cachedPath) {
 		return t.cachedPath, nil
 	}
 	dir, dest, err := installLayout(t)
 	if err != nil {
 		return "", err
 	}
-	asset := t.Assets[Platform()]
+	asset := t.Assets[t.platform()]
 	if isExecutable(dest) {
 		if t.Sigstore != nil && !signedCacheValid(ctx, t, asset, dest) {
 			return "", fmt.Errorf("%w: %s %s has an unverified or stale cache entry", ErrSigstore, t.Name, t.Version)
@@ -282,7 +320,7 @@ func Ensure(ctx context.Context, t Tool) (string, error) {
 	// resolved to, including a weaker md5. See pins.go for why this matters — the
 	// release-resolved checksum protects only against transit corruption, not
 	// against the release itself being tampered with.
-	if pin, ok := pinnedSHA256(t.Name, t.Version, Platform()); ok {
+	if pin, ok := pinnedSHA256(t.Name, t.Version, t.platform()); ok {
 		asset.SHA256, asset.SHA512, asset.MD5 = pin, "", ""
 	}
 	var sums, sumsBundle []byte

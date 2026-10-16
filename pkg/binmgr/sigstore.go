@@ -186,7 +186,7 @@ func signedCacheValid(ctx context.Context, t Tool, asset Asset, dest string) boo
 	if t.Sigstore == nil {
 		return false
 	}
-	pin, ok := pinnedSHA256(t.Name, t.Version, Platform())
+	pin, ok := pinnedSHA256(t.Name, t.Version, t.platform())
 	if !ok {
 		if t.RequireCommittedPin {
 			return false

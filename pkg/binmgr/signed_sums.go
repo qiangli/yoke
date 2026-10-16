@@ -163,9 +163,9 @@ func checkSignedSums(t Tool, asset Asset, raw, bundle []byte, binarySHA string) 
 	if primaFamily(t.Name) && (t.Version != PrimaVersion || t.Sigstore.Identity != PrimaIdentity || t.Sigstore.Issuer != GitHubActionsIssuer) {
 		return fmt.Errorf("Prima SHA256SUMS requires the exact release workflow identity and issuer")
 	}
-	pin, ok := pinnedSHA256(t.Name, t.Version, Platform())
+	pin, ok := pinnedSHA256(t.Name, t.Version, t.platform())
 	if !ok {
-		return fmt.Errorf("no committed sha256 for %s", Platform())
+		return fmt.Errorf("no committed sha256 for %s", t.platform())
 	}
 	rows, err := parseSignedSums(t, raw)
 	if err != nil {
