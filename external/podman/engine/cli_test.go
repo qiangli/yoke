@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -70,23 +71,69 @@ func TestManagedExecLinuxHelpers(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux helper layout")
 	}
+	t.Setenv("CONTAINERS_CONF_OVERRIDE", "")
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	dir := t.TempDir()
 	binDir := filepath.Join(dir, "usr", "local", "bin")
 	helpers := filepath.Join(dir, "usr", "local", "lib", "podman")
-	if err := os.MkdirAll(binDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(helpers, 0755); err != nil {
-		t.Fatal(err)
-	}
-	cmd := buildManagedExec(context.Background(), filepath.Join(binDir, "podman"), "", nil)
-	want := "CONTAINERS_HELPER_BINARY_DIR=" + helpers
-	for _, e := range cmd.Env {
-		if e == want {
-			return
+	for _, d := range []string{binDir, helpers} {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			t.Fatal(err)
 		}
 	}
-	t.Fatalf("missing %s", want)
+	for _, f := range []string{filepath.Join(helpers, "conmon"), filepath.Join(binDir, "crun"), filepath.Join(binDir, "runc")} {
+		if err := os.WriteFile(f, []byte("x"), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	find := func(cmd *exec.Cmd) string {
+		for _, e := range cmd.Env {
+			if v, ok := strings.CutPrefix(e, "CONTAINERS_CONF_OVERRIDE="); ok {
+				return v
+			}
+		}
+		return ""
+	}
+	cmd := buildManagedExec(context.Background(), filepath.Join(binDir, "podman"), "", nil)
+	conf := find(cmd)
+	if conf == "" {
+		t.Fatal("missing CONTAINERS_CONF_OVERRIDE")
+	}
+	data, err := os.ReadFile(conf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"conmon_path = [\"" + filepath.Join(helpers, "conmon") + "\"]",
+		"helper_binaries_dir = [\"" + helpers + "\", \"" + filepath.Join(dir, "usr", "local", "libexec", "podman") + "\", \"" + binDir + "\"]",
+		"[engine.runtimes]",
+		"crun = [\"" + filepath.Join(binDir, "crun") + "\"]",
+		"runc = [\"" + filepath.Join(binDir, "runc") + "\"]",
+	} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("conf missing %q:\n%s", want, data)
+		}
+	}
+	if again := find(buildManagedExec(context.Background(), filepath.Join(binDir, "podman"), "", nil)); again != conf {
+		t.Fatalf("not idempotent: %q vs %q", again, conf)
+	}
+	t.Setenv("CONTAINERS_CONF_OVERRIDE", "/operator/conf")
+	for _, e := range buildManagedExec(context.Background(), filepath.Join(binDir, "podman"), "", nil).Env {
+		if strings.HasPrefix(e, "CONTAINERS_CONF_OVERRIDE=") && e != "CONTAINERS_CONF_OVERRIDE=/operator/conf" {
+			t.Fatalf("operator value overridden: %s", e)
+		}
+	}
+}
+
+func TestHelperConfContent(t *testing.T) {
+	binDir := filepath.Join(t.TempDir(), "usr", "local", "bin")
+	root := filepath.Join(binDir, "..")
+	got := helperConfContent(binDir, filepath.Join(root, "lib", "podman"))
+	want := "helper_binaries_dir = [\"" + filepath.Join(root, "lib", "podman") + "\", \"" +
+		filepath.Join(root, "libexec", "podman") + "\", \"" + binDir + "\"]"
+	if !strings.Contains(got, want) {
+		t.Fatalf("conf missing %q:\n%s", want, got)
+	}
 }
 
 func TestShouldEnsureMachine(t *testing.T) {

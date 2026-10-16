@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -123,11 +125,90 @@ func buildManagedExec(ctx context.Context, bin, socket string, args []string) *e
 	}
 	if runtime.GOOS == "linux" {
 		if helperDir := filepath.Clean(filepath.Join(filepath.Dir(bin), "..", "lib", "podman")); isDir(helperDir) {
-			env = append(env, "CONTAINERS_HELPER_BINARY_DIR="+helperDir)
+			if os.Getenv("CONTAINERS_CONF_OVERRIDE") == "" {
+				if conf, err := writeHelperConf(filepath.Dir(bin), helperDir); err == nil {
+					env = append(env, "CONTAINERS_CONF_OVERRIDE="+conf)
+				}
+			}
 		}
 	}
 	cmd.Env = env
 	return cmd
+}
+
+// writeHelperConf writes (idempotently) a containers.conf override that points
+// conmon, the helper dir and the OCI runtimes at the files shipped in the same
+// engine tarball; CONTAINERS_HELPER_BINARY_DIR alone does not fix conmon lookup.
+func writeHelperConf(binDir, helperDir string) (string, error) {
+	return writeConfFile(helperConfContent(binDir, helperDir))
+}
+
+// helperConfContent renders the override; helper_binaries_dir is
+// [R/lib/podman, R/libexec/podman, binDir] with R = binDir/.. (pasta/passt
+// for rootless networking live in binDir).
+func helperConfContent(binDir, helperDir string) string {
+	root := filepath.Join(binDir, "..")
+	var b strings.Builder
+	b.WriteString("[engine]\n")
+	if conmon := filepath.Join(helperDir, "conmon"); isFile(conmon) {
+		fmt.Fprintf(&b, "conmon_path = [%q]\n", conmon)
+	}
+	fmt.Fprintf(&b, "helper_binaries_dir = [%q, %q, %q]\n",
+		filepath.Join(root, "lib", "podman"), filepath.Join(root, "libexec", "podman"), binDir)
+	var rt []string
+	for _, name := range []string{"crun", "runc"} {
+		var found string
+		for _, d := range []string{binDir, helperDir} {
+			if p := filepath.Join(d, name); isFile(p) {
+				found = p
+				break
+			}
+		}
+		if found != "" {
+			rt = append(rt, fmt.Sprintf("%s = [%q]\n", name, found))
+		}
+	}
+	if len(rt) > 0 {
+		b.WriteString("\n[engine.runtimes]\n")
+		for _, l := range rt {
+			b.WriteString(l)
+		}
+	}
+	return b.String()
+}
+
+func writeConfFile(content string) (string, error) {
+	dir := filepath.Join(filepath.Dir(defaultBinCacheDir()), "podman-conf")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256([]byte(content))
+	path := filepath.Join(dir, "containers-"+hex.EncodeToString(sum[:6])+".conf")
+	if old, err := os.ReadFile(path); err == nil && string(old) == content {
+		return path, nil
+	}
+	tmp, err := os.CreateTemp(dir, ".conf-*")
+	if err != nil {
+		return "", err
+	}
+	_, werr := tmp.WriteString(content)
+	if cerr := tmp.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		os.Remove(tmp.Name())
+		return "", werr
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		os.Remove(tmp.Name())
+		return "", err
+	}
+	return path, nil
+}
+
+func isFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
 }
 
 func isDir(path string) bool {
