@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"text/tabwriter"
 
@@ -121,8 +122,46 @@ func buildManagedExec(ctx context.Context, bin, socket string, args []string) *e
 	if dir := filepath.Dir(bin); dir != "." && dir != "" {
 		env = prependPath(env, dir)
 	}
+	if runtime.GOOS == "linux" {
+		if helperDir := filepath.Clean(filepath.Join(filepath.Dir(bin), "..", "lib", "podman")); isDir(helperDir) {
+			env = append(env, "CONTAINERS_HELPER_BINARY_DIR="+helperDir)
+		}
+	}
 	cmd.Env = env
 	return cmd
+}
+
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
+// safePathPodman refuses a PATH entry that returns to this bashy process.
+// Shell wrappers are common in local installations, so inspect their small
+// text bodies as well as symlinks to the current executable.
+func safePathPodman() (string, error) {
+	bin, err := exec.LookPath("podman")
+	if err != nil {
+		return "", err
+	}
+	self, err := os.Executable()
+	if err == nil {
+		selfInfo, selfErr := os.Stat(self)
+		binInfo, binErr := os.Stat(bin)
+		if selfErr == nil && binErr == nil && os.SameFile(selfInfo, binInfo) {
+			return "", fmt.Errorf("podman on PATH resolves to bashy")
+		}
+	}
+	f, err := os.Open(bin)
+	if err == nil {
+		defer f.Close()
+		buf := make([]byte, 65536)
+		n, _ := f.Read(buf)
+		if n > 0 && buf[0] == '#' && strings.Contains(string(buf[:n]), "bashy") && strings.Contains(string(buf[:n]), "oci") {
+			return "", fmt.Errorf("podman on PATH invokes bashy oci")
+		}
+	}
+	return bin, nil
 }
 
 func prependPath(env []string, dir string) []string {
@@ -144,7 +183,7 @@ func prependPath(env []string, dir string) []string {
 // clear error.
 func resolvePodmanBinary() (string, error) {
 	if systemPodman() {
-		bin, err := exec.LookPath("podman")
+		bin, err := safePathPodman()
 		if err != nil {
 			return "", fmt.Errorf("podman not found on PATH ($BASHY_PODMAN_SYSTEM is set; unset it to use the embedded binary): %w", err)
 		}
@@ -163,7 +202,7 @@ func resolvePodmanBinary() (string, error) {
 	} else {
 		managedErr = err
 	}
-	if bin, err := exec.LookPath("podman"); err == nil {
+	if bin, err := safePathPodman(); err == nil {
 		return bin, nil
 	}
 	return "", fmt.Errorf("no embedded podman in this build, managed podman unavailable for %s (%v), and no podman on PATH — rebuild with the embed_podman tag (the embed blob), or install upstream podman", managedPodmanPlatform(), managedErr)
