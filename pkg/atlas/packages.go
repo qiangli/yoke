@@ -174,6 +174,7 @@ var packages = map[string]Package{
 	"sshserver": libPkg("peer", "SSH server (sessions, port forwards, authorized_keys) that outpost embeds and "+
 		"bashy's peer reverse proxy dials; moved here from outpost so bashy does not import outpost"),
 	"mirror":        cmdPkg("mirror"),
+	"nft":           cmdPkg("nft"),
 	"pair":          cmdPkg("pair"),
 	"patch":         cmdPkg("patch"),
 	"posixprovider": cmdPkg("posix-providers"),

@@ -70,6 +70,9 @@ func classifyPlatforms() {
 	// cmds/ps/process_other.go: "live process inspection is supported only on
 	// Linux"; cmds/chcon/chcon_other.go: SELinux contexts.
 	osOnly([]string{OSLinux}, "ps", "chcon")
+	// pkg/nft/netlink_other.go: "nftables is not available on <os>";
+	// cmds/mount/sys_other.go: "mount/umount are supported only on Linux".
+	osOnly([]string{OSLinux}, "nft", "iptables", "ip6tables", "iptables-restore", "ip6tables-restore", "mount", "umount")
 	// !unix stubs that refuse the command outright: no POSIX uid/gid (chgrp
 	// chown), no mode bits (chmod), no FIFO/special files (mkfifo mknod), no
 	// scheduling priorities (nice renice), no crontab install (crontab), no

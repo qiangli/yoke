@@ -91,7 +91,7 @@ func TestPlatformPinsFromStubEvidence(t *testing.T) {
 			partial++
 		}
 	}
-	if unsupported != 24 || partial != 17 {
-		t.Errorf("tool table: %d not-everywhere + %d partial, want 24 + 17 (update the pin with the evidence)", unsupported, partial)
+	if unsupported != 31 || partial != 17 {
+		t.Errorf("tool table: %d not-everywhere + %d partial, want 31 + 17 (update the pin with the evidence)", unsupported, partial)
 	}
 }
