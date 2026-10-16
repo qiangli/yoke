@@ -18,6 +18,8 @@ import (
 type SignedSums struct {
 	URL       string `json:"url"`
 	BundleURL string `json:"bundle_url"`
+	// RequiredNames adds the exact release inventory to the required asset rows.
+	RequiredNames []string `json:"required_names,omitempty"`
 }
 
 const maxSignedSumsSize = 1 << 20
@@ -98,12 +100,18 @@ func primaSupplementarySumsNames() map[string]bool {
 }
 
 // parseSignedSums requires every declared executable exactly once and permits
-// only known Bashy Prima release evidence. Every row is covered by the same
-// signed sums bundle; paths, alternate spellings and malformed rows are refused.
+// only explicitly declared release files and known Bashy Prima release evidence.
+// Every row is covered by the same signed sums bundle; paths, alternate spellings
+// and malformed rows are refused.
 func parseSignedSums(t Tool, raw []byte) (map[string]string, error) {
 	want, err := signedSumsNames(t)
 	if err != nil {
 		return nil, err
+	}
+	if t.SignedSums != nil {
+		for _, name := range t.SignedSums.RequiredNames {
+			want[name] = true
+		}
 	}
 	if len(raw) == 0 || len(raw) > maxSignedSumsSize || raw[len(raw)-1] != '\n' {
 		return nil, fmt.Errorf("SHA256SUMS is empty, oversized, or lacks a final newline")

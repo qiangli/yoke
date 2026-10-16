@@ -88,3 +88,41 @@ func TestDKSToolRejectsUnknownName(t *testing.T) {
 		}
 	}
 }
+
+func TestDKSSignedSumsExactInventory(t *testing.T) {
+	counts := map[string]int{"k3s": 10, "runc": 8, "cni-plugins": 18, "metrics-server": 8, "tailscale": 10, "coredns": 8, "pause": 8}
+	for name, release := range dksReleases {
+		t.Run(name, func(t *testing.T) {
+			tool, err := DKSTool(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var rows []string
+			for _, filename := range tool.SignedSums.RequiredNames {
+				rows = append(rows, strings.Repeat("a", 64)+"  "+filename+"\n")
+			}
+			if len(rows) != counts[release.repo] {
+				t.Fatalf("manifest rows: got %d, want %d", len(rows), counts[release.repo])
+			}
+			manifest := strings.Join(rows, "")
+			if _, err := parseSignedSums(tool, []byte(manifest)); err != nil {
+				t.Fatal(err)
+			}
+			for i := range rows {
+				missing := strings.Join(rows[:i], "") + strings.Join(rows[i+1:], "")
+				if _, err := parseSignedSums(tool, []byte(missing)); err == nil {
+					t.Fatalf("accepted missing row %d", i)
+				}
+			}
+			for _, bad := range []string{
+				manifest + rows[0],
+				strings.Join(rows[1:], "") + rows[1],
+				strings.Join(rows[1:], "") + strings.Repeat("a", 64) + "  unlisted\n",
+			} {
+				if _, err := parseSignedSums(tool, []byte(bad)); err == nil {
+					t.Fatal("accepted extra, duplicate, or unlisted row")
+				}
+			}
+		})
+	}
+}

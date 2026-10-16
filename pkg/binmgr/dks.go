@@ -35,6 +35,28 @@ var dksReleases = map[string]struct{ repo, version string }{
 	"pause":                   {"pause", PauseVersion},
 }
 
+// dksManifestNames is the exact file inventory reviewed in each pinned release's
+// SHA256SUMS. Companions and build evidence are required, not optional rows.
+func dksManifestNames(repo string) []string {
+	versions := map[string]string{
+		"k3s": "v1.37.1+k3s1", "runc": "v1.5.2", "cni-plugins": "v1.5.1",
+		"metrics-server": "v0.9.0", "tailscale": "v1.104.1", "coredns": "v1.14.7", "pause": "v1.37.1",
+	}
+	names := []string{
+		repo + "-no-tracking.env", repo + "-otel.env", repo + "-pin.txt",
+		repo + "-" + versions[repo] + ".cdx.json",
+		repo + "-" + versions[repo] + ".govulncheck.json", "vuln-ignore",
+	}
+	for name, release := range dksReleases {
+		if release.repo == repo {
+			for _, arch := range []string{"amd64", "arm64"} {
+				names = append(names, name+"-linux-"+arch)
+			}
+		}
+	}
+	return names
+}
+
 // DKSTool declares a Linux runtime executable from the seven bashy-built DKS
 // releases. CNI plugins use their release names (cni-bridge, cni-host-local,
 // cni-loopback, cni-portmap, cni-bandwidth, cni-firewall). Each executable has
@@ -54,7 +76,7 @@ func DKSTool(name string) (Tool, error) {
 			Identity: "https://github.com/qiangli/" + release.repo + "/.github/workflows/bashy-build.yml@refs/tags/" + release.version,
 			Issuer:   GitHubActionsIssuer,
 		},
-		SignedSums: &SignedSums{URL: base + "SHA256SUMS", BundleURL: base + "SHA256SUMS" + DefaultBundleSuffix},
+		SignedSums: &SignedSums{URL: base + "SHA256SUMS", BundleURL: base + "SHA256SUMS" + DefaultBundleSuffix, RequiredNames: dksManifestNames(release.repo)},
 	}
 	for _, platform := range []string{"linux/amd64", "linux/arm64"} {
 		url := base + name + "-" + strings.ReplaceAll(platform, "/", "-")

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -154,30 +155,41 @@ func TestEnsureForMissingPlatform(t *testing.T) {
 	}
 }
 
-func TestEnsureForK3sLive(t *testing.T) {
+func TestEnsureForDKSLive(t *testing.T) {
 	if os.Getenv("YOKE_BINMGR_LIVE") != "1" {
-		t.Skip("set YOKE_BINMGR_LIVE=1 to verify the real k3s release")
+		t.Skip("set YOKE_BINMGR_LIVE=1 to verify every real DKS release")
 	}
 	t.Setenv("BASHY_BIN_CACHE", t.TempDir())
 	t.Setenv("BASHY_OFFLINE", "")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	tool, err := DKSTool("k3s")
-	if err != nil {
-		t.Fatal(err)
+	names := make([]string, 0, len(dksReleases))
+	for name := range dksReleases {
+		names = append(names, name)
 	}
-	dest, err := EnsureFor(ctx, tool, "linux", "amd64")
-	if err != nil {
-		t.Fatal(err)
+	sort.Strings(names)
+	for _, name := range names {
+		for _, arch := range []string{"amd64", "arm64"} {
+			t.Run(name+"/linux/"+arch, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				defer cancel()
+				tool, err := DKSTool(name)
+				if err != nil {
+					t.Fatal(err)
+				}
+				dest, err := EnsureFor(ctx, tool, "linux", arch)
+				if err != nil {
+					t.Fatal(err)
+				}
+				data, err := os.ReadFile(dest)
+				pin, ok := pinnedSHA256(tool.Name, tool.Version, "linux/"+arch)
+				if err != nil || !ok || sha256hex(data) != pin {
+					t.Fatalf("installed %s does not match committed pin: %v", name, err)
+				}
+				t.Setenv("BASHY_OFFLINE", "1")
+				if got, err := EnsureFor(ctx, tool, "linux", arch); err != nil || got != dest {
+					t.Fatalf("offline signed cache: %q %v", got, err)
+				}
+				t.Logf("%s linux/%s: committed digest, Sigstore and signed sums verified; offline cache reverified", name, arch)
+			})
+		}
 	}
-	data, err := os.ReadFile(dest)
-	pin, ok := pinnedSHA256(tool.Name, tool.Version, "linux/amd64")
-	if err != nil || !ok || sha256hex(data) != pin {
-		t.Fatalf("installed k3s does not match committed pin: %v", err)
-	}
-	t.Setenv("BASHY_OFFLINE", "1")
-	if got, err := EnsureFor(ctx, tool, "linux", "amd64"); err != nil || got != dest {
-		t.Fatalf("offline signed cache: %q %v", got, err)
-	}
-	t.Log("k3s linux/amd64: committed digest, Sigstore and signed sums verified; offline cache reverified")
 }
