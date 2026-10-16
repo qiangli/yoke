@@ -13,7 +13,13 @@ import (
 //
 // Sprint 436 (story 1b4773cfbdd7) restored the sphere inference units to
 // on-by-default: before Sprint 418 S18, OllamaOn() defaulted on and
-// ShardOn() was on for any paired host. The rest stay opt-in.
+// ShardOn() was on for any paired host.
+//
+// Sprint 437 (story a4300f7a000a) restores the remaining pre-418 defaults:
+// before Sprint 418, outpost defaulted podman, files and otel (+ otel pool)
+// on (PodmanOn/FilesOn/OtelOn nil=>true) and warm followed OllamaOn. The
+// rest stay opt-in: sandbox and lan-inference were explicit opt-in, and
+// actrunner and ycode ship disabled by history.
 
 // outpostCapabilitySeeds maps each seed to the capability id outpost
 // registers for it.
@@ -31,12 +37,18 @@ var outpostCapabilitySeeds = map[string]string{
 	"ycode":         "outpost.ycode",
 }
 
-// sphereDefaultOnSeeds are the units Sprint 436 restored to on-by-default
-// for paired hosts. Every other outpost capability seed stays opt-in.
-var sphereDefaultOnSeeds = map[string]bool{
+// outpostDefaultOnSeeds are the units that ship on-by-default: the sphere
+// inference units Sprint 436 restored (ollama, ollama-pool, shard) plus the
+// pre-418 outpost defaults Sprint 437 restored (otel, warm, files, podman).
+// Every other outpost capability seed stays opt-in.
+var outpostDefaultOnSeeds = map[string]bool{
 	"ollama":      true,
 	"ollama-pool": true,
 	"shard":       true,
+	"otel":        true,
+	"warm":        true,
+	"files":       true,
+	"podman":      true,
 }
 
 func TestOutpostCapabilitySeedsAreInternalUnits(t *testing.T) {
@@ -54,7 +66,7 @@ func TestOutpostCapabilitySeedsAreInternalUnits(t *testing.T) {
 			t.Errorf("%s = provider %q capability %q owner %q, want internal %s owned by outpost",
 				name, s.ProviderName(), s.Capability, s.Owner, id)
 		}
-		if sphereDefaultOnSeeds[name] {
+		if outpostDefaultOnSeeds[name] {
 			if !s.Enabled {
 				t.Errorf("%s seeded disabled; paired hosts need this sphere unit by default", name)
 			}
@@ -159,7 +171,7 @@ func TestOutpostCapabilitySeedsTakeGenericOverrides(t *testing.T) {
 		t.Fatal("exec accepted on an internal unit")
 	}
 	mustSvc(t, opts, "", "rm", "files")
-	if f, _ := New(opts...).Service("files"); f.Ring.String() != "embedded" || f.Enabled {
-		t.Fatalf("files after rm = %+v, want the disabled embedded seed", f)
+	if f, _ := New(opts...).Service("files"); f.Ring.String() != "embedded" || !f.Enabled {
+		t.Fatalf("files after rm = %+v, want the enabled embedded seed", f)
 	}
 }
