@@ -116,7 +116,7 @@ func TestZotIsVerifiedPin(t *testing.T) {
 	if zotVersion != "v2.1.22" {
 		t.Fatalf("zotVersion %q, want v2.1.22", zotVersion)
 	}
-	wantPlatforms := []string{"darwin/amd64", "darwin/arm64", "linux/amd64", "linux/arm64"}
+	wantPlatforms := []string{"darwin/amd64", "darwin/arm64", "linux/amd64", "linux/arm64", "windows/amd64"}
 	if len(tool.Assets) != len(wantPlatforms) {
 		t.Fatalf("assets = %d, want %d (%v)", len(tool.Assets), len(wantPlatforms), wantPlatforms)
 	}
@@ -127,6 +127,9 @@ func TestZotIsVerifiedPin(t *testing.T) {
 		}
 		goos, goarch, _ := strings.Cut(plat, "/")
 		assetName := "zot-" + goos + "-" + goarch
+		if goos == "windows" {
+			assetName += ".exe"
+		}
 		wantURL := "https://github.com/qiangli/zot/releases/download/" + zotBashyTag + "/" + assetName
 		if a.URL != wantURL {
 			t.Errorf("%s: url %q, want %q", plat, a.URL, wantURL)
@@ -151,21 +154,11 @@ func TestZotIsVerifiedPin(t *testing.T) {
 			t.Errorf("%s: url %q still references upstream project-zot/zot", plat, a.URL)
 		}
 	}
-	if _, ok := tool.Assets["windows/amd64"]; ok {
-		t.Error("windows asset present; should be absent (fail closed)")
+	if got := tool.Assets["windows/amd64"].SHA256; got != "c373f8f85f5324624d6bb11620fe149fec5c2131bcf443234f5a2f10780e294c" {
+		t.Errorf("windows SHA256 = %q, want published checksum", got)
 	}
 	if _, ok := tool.Assets["windows/arm64"]; ok {
 		t.Error("windows asset present; should be absent")
-	}
-}
-
-func TestZotRejectsWindows(t *testing.T) {
-	if _, ok := ZotTool.Assets["windows/amd64"]; ok {
-		t.Fatalf("windows asset should not exist")
-	}
-	errMsg := "supply-chain policy: no bashy-signed asset for windows"
-	if !strings.Contains("zot: supply-chain policy: no bashy-signed asset for windows (no upstream fallback) — only linux and darwin assets are signed", errMsg) {
-		t.Fatal("windows error must name supply-chain policy")
 	}
 }
 
@@ -212,6 +205,8 @@ func TestAssetMatch_PicksFullBuild(t *testing.T) {
 	}{
 		// the full build — the only acceptable match
 		{"linux", "amd64", "zot-linux-amd64", true},
+		{"windows", "amd64", "zot-windows-amd64.exe", true},
+		{"windows", "amd64", "zot-windows-amd64", false},
 		{"darwin", "arm64", "zot-darwin-arm64", true},
 
 		// siblings that ALL carry the os/arch tokens and must NOT match

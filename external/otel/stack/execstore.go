@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,9 +27,9 @@ const (
 	// each is the upstream tag above built by the bashy-build workflow on the
 	// qiangli/* mirror and published as raw executables with per-asset
 	// SHA256SUMS and <asset>.sigstore.json bundles.
-	victoriaLogsBashyTag    = "bashy-v1.53.0-1"
-	victoriaMetricsBashyTag = "bashy-v1.154.0-1"
-	victoriaTracesBashyTag  = "bashy-v0.12.0-1"
+	victoriaLogsBashyTag    = "bashy-v1.53.0-2"
+	victoriaMetricsBashyTag = "bashy-v1.154.0-2"
+	victoriaTracesBashyTag  = "bashy-v0.12.0-2"
 )
 
 var (
@@ -43,22 +42,25 @@ var (
 // (downloaded via curl -sL, not from the GitHub API asset digest).
 var (
 	victoriaMetricsSHAs = map[string]string{
-		"linux/amd64":  "5cdf3534db2075efdc8a499a4fa630417d9061c0c34728b61944d342721365aa",
-		"linux/arm64":  "c6619c2a0c29874209518d8202a143706156dda18e198a50f2169acf1de6af84",
-		"darwin/amd64": "f5e389bd007623821d20b7dac3d63fcb7d5bdaa5a73610dd5e0a8b907ce764ea",
-		"darwin/arm64": "11fa51950cbee34513506b8b16b3bbf22dd46165e8b607516e0ad58f244a85f0",
+		"linux/amd64":   "5cdf3534db2075efdc8a499a4fa630417d9061c0c34728b61944d342721365aa",
+		"linux/arm64":   "c6619c2a0c29874209518d8202a143706156dda18e198a50f2169acf1de6af84",
+		"darwin/amd64":  "f5e389bd007623821d20b7dac3d63fcb7d5bdaa5a73610dd5e0a8b907ce764ea",
+		"darwin/arm64":  "11fa51950cbee34513506b8b16b3bbf22dd46165e8b607516e0ad58f244a85f0",
+		"windows/amd64": "4fa0cca9de0eb898d5158d73dbfada99540d2ec20c9bace91020a259020930f3",
 	}
 	victoriaLogsSHAs = map[string]string{
-		"linux/amd64":  "a66427b11d3c2811e06e5c4564bdae76b2644bb5a24123561bf379d4a9190b01",
-		"linux/arm64":  "61e8baf9a096c5b6b241adb966893cf6bafc9bcb6aa226be8c5b594fafdaada9",
-		"darwin/amd64": "bb270654af2751a10079d0f23f9200dfbfec2ba275e6b13785ad38bf53b8b085",
-		"darwin/arm64": "7320cdad87fd61c9daa76fc3f28d431814d88defde32d7985ab76d64fac9fbd7",
+		"linux/amd64":   "a66427b11d3c2811e06e5c4564bdae76b2644bb5a24123561bf379d4a9190b01",
+		"linux/arm64":   "61e8baf9a096c5b6b241adb966893cf6bafc9bcb6aa226be8c5b594fafdaada9",
+		"darwin/amd64":  "bb270654af2751a10079d0f23f9200dfbfec2ba275e6b13785ad38bf53b8b085",
+		"darwin/arm64":  "7320cdad87fd61c9daa76fc3f28d431814d88defde32d7985ab76d64fac9fbd7",
+		"windows/amd64": "7880d57a5e9daa7172905dbb30bced97afd59266ec5b663d89386b8fbe8d4a87",
 	}
 	victoriaTracesSHAs = map[string]string{
-		"linux/amd64":  "ee7650f5fedb345dc8015fe921dd9f65687501988c51e614dd929d333bc3a7f7",
-		"linux/arm64":  "4d29cd67c8fbab4091ad0c0cb2dd753ce85aad1890fdb03769c936229a9344d4",
-		"darwin/amd64": "f4850391b00bd080f8f33a8fb0078f20066f36faded2e8dccb4d03bbae35c40d",
-		"darwin/arm64": "aefacedbce9225d469820ed05419e3a6121deeb61b43fc347c19db2ae3d6016d",
+		"linux/amd64":   "ee7650f5fedb345dc8015fe921dd9f65687501988c51e614dd929d333bc3a7f7",
+		"linux/arm64":   "4d29cd67c8fbab4091ad0c0cb2dd753ce85aad1890fdb03769c936229a9344d4",
+		"darwin/amd64":  "f4850391b00bd080f8f33a8fb0078f20066f36faded2e8dccb4d03bbae35c40d",
+		"darwin/arm64":  "aefacedbce9225d469820ed05419e3a6121deeb61b43fc347c19db2ae3d6016d",
+		"windows/amd64": "ed3373a067adae2d1a0f4d1c5f3a30798b43d8db1b2a3d134a9200a74ebbf27c",
 	}
 )
 
@@ -67,6 +69,9 @@ func victoriaTool(tool, bashyTag string, shas map[string]string) binmgr.Tool {
 	for plat, sha := range shas {
 		goos, goarch, _ := strings.Cut(plat, "/")
 		assetName := tool + "-" + goos + "-" + goarch
+		if goos == "windows" {
+			assetName += ".exe"
+		}
 		url := fmt.Sprintf("https://github.com/qiangli/%s/releases/download/%s/%s", tool, bashyTag, assetName)
 		assets[plat] = binmgr.Asset{URL: url, SHA256: sha}
 	}
@@ -134,9 +139,6 @@ func (s *execStore) SetPathPrefix(prefix string) {
 }
 
 func (s *execStore) Start(ctx context.Context) error {
-	if runtime.GOOS == "windows" {
-		return fmt.Errorf("%s: supply-chain policy: no bashy-signed asset for windows (no upstream fallback) — only linux and darwin assets are signed", s.name)
-	}
 	s.mu.Lock()
 	if s.proc != nil || s.starting {
 		s.mu.Unlock()
@@ -302,15 +304,16 @@ func victoriaTracesArgs(port int, dataDir, pathPrefix string) []string {
 // victoriaArgs builds the common flag set for all three Victoria stores.
 //
 // Flag sources at the pinned tags (all Apache-2.0):
-//   -storageDataPath: app/vmstorage/main.go:29 (VictoriaMetrics v1.154.0),
-//     app/vlstorage/main.go:47 (VictoriaLogs v1.53.0),
-//     app/vtstorage/main.go:49 (VictoriaTraces v0.12.0)
-//   -retentionPeriod: app/vmstorage/main.go:30 (1M default), app/vlstorage/main.go:29
-//     (7d), app/vtstorage/main.go:31 (7d) — defaults are appropriate; not set
-//     explicitly here.
-//   -httpListenAddr: app/victoria-metrics/main.go:30, app/victoria-logs/main.go:25,
-//     app/victoria-traces/main.go:26 — flagutil.NewArrayString("httpListenAddr", ...)
-//   -http.pathPrefix: lib/httpserver/httpserver.go:50 — flag.String("http.pathPrefix", ...)
+//
+//	-storageDataPath: app/vmstorage/main.go:29 (VictoriaMetrics v1.154.0),
+//	  app/vlstorage/main.go:47 (VictoriaLogs v1.53.0),
+//	  app/vtstorage/main.go:49 (VictoriaTraces v0.12.0)
+//	-retentionPeriod: app/vmstorage/main.go:30 (1M default), app/vlstorage/main.go:29
+//	  (7d), app/vtstorage/main.go:31 (7d) — defaults are appropriate; not set
+//	  explicitly here.
+//	-httpListenAddr: app/victoria-metrics/main.go:30, app/victoria-logs/main.go:25,
+//	  app/victoria-traces/main.go:26 — flagutil.NewArrayString("httpListenAddr", ...)
+//	-http.pathPrefix: lib/httpserver/httpserver.go:50 — flag.String("http.pathPrefix", ...)
 func victoriaArgs(port int, dataDir, pathPrefix string) []string {
 	args := []string{
 		"--storageDataPath=" + filepath.Join(dataDir, "data"),

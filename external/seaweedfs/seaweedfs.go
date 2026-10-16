@@ -15,7 +15,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -36,7 +35,7 @@ const (
 	// built by the bashy-build workflow on qiangli/seaweedfs and published as
 	// raw executables with per-asset SHA256SUMS and <asset>.sigstore.json bundles.
 	// Workflow run 38330302167 green: go1.26.9 + golang.org/x/net v0.60.0, 0 reachable.
-	seaweedfsBashyTag = "bashy-4.48-1"
+	seaweedfsBashyTag = "bashy-4.48-2"
 
 	// DefaultVersion is the pinned bashy tag. There is no "latest" — that was
 	// the upstream archive and it is intentionally absent (fail closed).
@@ -48,10 +47,11 @@ const (
 // SHA256 per asset read from the published SHA256SUMS of the bashy release
 // (downloaded via curl -sL, not from the GitHub API asset digest).
 var seaweedfsSHAs = map[string]string{
-	"linux/amd64":  "7b6364ccea4f8cc2940e7a5da93f4e6a9dcd8629a2ec69bfe8e59e6541bd2889",
-	"linux/arm64":  "44afeacee5bda0d71a4a2cad1530657cb442873a37bf6a91fe4d8828e445b431",
-	"darwin/amd64": "4a6b8d405cc82ed95edac9f9d96f125408eb6f436e30d203a92493eaf97aa2d0",
-	"darwin/arm64": "925de1501ef5a297d2a26efafc096e56ce537c67fb71f5a7899df510cf6ad2dc",
+	"linux/amd64":   "7b6364ccea4f8cc2940e7a5da93f4e6a9dcd8629a2ec69bfe8e59e6541bd2889",
+	"linux/arm64":   "44afeacee5bda0d71a4a2cad1530657cb442873a37bf6a91fe4d8828e445b431",
+	"darwin/amd64":  "4a6b8d405cc82ed95edac9f9d96f125408eb6f436e30d203a92493eaf97aa2d0",
+	"darwin/arm64":  "925de1501ef5a297d2a26efafc096e56ce537c67fb71f5a7899df510cf6ad2dc",
+	"windows/amd64": "126a9bb43df6368a3c3189b5b7353accbaf212d15b23b267e54edc9af5cbf117",
 }
 
 func seaweedfsTool() binmgr.Tool {
@@ -59,6 +59,9 @@ func seaweedfsTool() binmgr.Tool {
 	for plat, sha := range seaweedfsSHAs {
 		goos, goarch, _ := strings.Cut(plat, "/")
 		assetName := "weed-" + goos + "-" + goarch
+		if goos == "windows" {
+			assetName += ".exe"
+		}
 		url := fmt.Sprintf("https://github.com/qiangli/seaweedfs/releases/download/%s/%s", seaweedfsBashyTag, assetName)
 		assets[plat] = binmgr.Asset{URL: url, SHA256: sha}
 	}
@@ -101,7 +104,11 @@ func Spec(version string) binmgr.GitHubSpec {
 // bashy fork. The upstream archive was `<os>_<arch>.tar.gz` with _full and
 // _large_disk variants; the fork publishes only raw executables.
 func assetMatch(name, goos, goarch string) bool {
-	return strings.EqualFold(name, "weed-"+goos+"-"+goarch)
+	expected := "weed-" + goos + "-" + goarch
+	if goos == "windows" {
+		expected += ".exe"
+	}
+	return strings.EqualFold(name, expected)
 }
 
 // DefaultDataDir is SeaweedFS's storage root.
@@ -164,9 +171,6 @@ func (i *Instance) Stop() error {
 }
 
 func resolveTool(version string) (binmgr.Tool, error) {
-	if runtime.GOOS == "windows" {
-		return binmgr.Tool{}, fmt.Errorf("seaweedfs: supply-chain policy: no bashy-signed asset for windows (no upstream fallback) — only linux and darwin assets are signed")
-	}
 	tool := SeaweedfsTool
 	// Accept empty, the bashy tag, or the upstream version as aliases for the pinned tool.
 	// "latest" and any other version are refused — there is no upstream archive fallback.
@@ -184,9 +188,6 @@ func resolveTool(version string) (binmgr.Tool, error) {
 // exposes over the mesh. SeaweedFS runs from flags; no config file is seeded.
 func Start(ctx context.Context, o Options) (*Instance, error) {
 	o.defaults()
-	if runtime.GOOS == "windows" {
-		return nil, fmt.Errorf("seaweedfs: supply-chain policy: no bashy-signed asset for windows (no upstream fallback) — only linux and darwin assets are signed")
-	}
 	tool, err := resolveTool(o.Version)
 	if err != nil {
 		return nil, err
@@ -240,9 +241,10 @@ func serverArgs(o Options) []string {
 
 // masterArgs builds argv for `weed master` with the same privacy invariants as
 // serverArgs. The loopback/telemetry flags are per-subcommand:
-//   master.go:90  m.ip = cmdMaster.Flag.String("ip", ..., "master <ip>|<server> address, also used as identifier")
-//   master.go:91  m.ipBind = cmdMaster.Flag.String("ip.bind", "", "ip address to bind to. If empty, default to same as -ip option.")
-//   master.go:115 m.telemetryEnabled = cmdMaster.Flag.Bool("telemetry", true, ...)
+//
+//	master.go:90  m.ip = cmdMaster.Flag.String("ip", ..., "master <ip>|<server> address, also used as identifier")
+//	master.go:91  m.ipBind = cmdMaster.Flag.String("ip.bind", "", "ip address to bind to. If empty, default to same as -ip option.")
+//	master.go:115 m.telemetryEnabled = cmdMaster.Flag.Bool("telemetry", true, ...)
 func masterArgs(dataDir, addr string, port int) []string {
 	return []string{
 		"master",
@@ -256,9 +258,10 @@ func masterArgs(dataDir, addr string, port int) []string {
 
 // miniArgs builds argv for `weed mini` (single-process mini cluster) with the
 // same invariants:
-//   mini.go:382  miniIp = cmdMini.Flag.String("ip", ..., "ip or server name, also used as identifier")
-//   mini.go:383  miniBindIp = cmdMini.Flag.String("ip.bind", "0.0.0.0", "ip address to bind to. If empty, default to same as -ip option.")
-//   mini.go:442  miniMasterOptions.telemetryEnabled = cmdMini.Flag.Bool("master.telemetry", true, ...)
+//
+//	mini.go:382  miniIp = cmdMini.Flag.String("ip", ..., "ip or server name, also used as identifier")
+//	mini.go:383  miniBindIp = cmdMini.Flag.String("ip.bind", "0.0.0.0", "ip address to bind to. If empty, default to same as -ip option.")
+//	mini.go:442  miniMasterOptions.telemetryEnabled = cmdMini.Flag.Bool("master.telemetry", true, ...)
 func miniArgs(dataDir, addr string, port int) []string {
 	return []string{
 		"mini",

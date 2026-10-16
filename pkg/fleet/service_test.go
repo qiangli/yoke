@@ -297,9 +297,9 @@ func TestExternalServiceSeeds_ParseValidateExpandExec(t *testing.T) {
 			mesh:        "registry",
 			healthHTTP:  "/v2/",
 			startPeriod: "30s",
-			defaultArgv: "bashy zot serve --port 5000 --addr 127.0.0.1 --data= --zot-version bashy-v2.1.22-2",
+			defaultArgv: "bashy zot serve --port 5000 --addr 127.0.0.1 --data= --zot-version bashy-v2.1.22-3",
 			customData:  "/var/lib/zot",
-			customArgv:  "bashy zot serve --port 5001 --addr 0.0.0.0 --data=/var/lib/zot --zot-version bashy-v2.1.22-2",
+			customArgv:  "bashy zot serve --port 5001 --addr 0.0.0.0 --data=/var/lib/zot --zot-version bashy-v2.1.22-3",
 		},
 		{
 			name:        "seaweedfs",
@@ -307,9 +307,9 @@ func TestExternalServiceSeeds_ParseValidateExpandExec(t *testing.T) {
 			mesh:        "s3",
 			healthHTTP:  "/",
 			startPeriod: "45s",
-			defaultArgv: "bashy seaweedfs serve --port 8333 --addr 127.0.0.1 --data= --version bashy-4.48-1",
+			defaultArgv: "bashy seaweedfs serve --port 8333 --addr 127.0.0.1 --data= --version bashy-4.48-2",
 			customData:  "/var/lib/seaweedfs",
-			customArgv:  "bashy seaweedfs serve --port 8334 --addr 0.0.0.0 --data=/var/lib/seaweedfs --version bashy-4.48-1",
+			customArgv:  "bashy seaweedfs serve --port 8334 --addr 0.0.0.0 --data=/var/lib/seaweedfs --version bashy-4.48-2",
 		},
 		{
 			name:        "kopia",

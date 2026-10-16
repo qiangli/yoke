@@ -41,14 +41,15 @@ func TestVictoriaStoreEnvPinsLocalCollector(t *testing.T) {
 // asset sha256 + bundle URL, raw executable (no archive).
 func TestVictoriaStoresAreVerifiedPins(t *testing.T) {
 	cases := []struct {
-		name     string
-		tool     binmgr.Tool
-		bashyTag string
-		version  string
+		name       string
+		tool       binmgr.Tool
+		bashyTag   string
+		version    string
+		windowsSHA string
 	}{
-		{"victoria-metrics", victoriaMetricsTool, victoriaMetricsBashyTag, victoriaMetricsVersion},
-		{"victoria-logs", victoriaLogsTool, victoriaLogsBashyTag, victoriaLogsVersion},
-		{"victoria-traces", victoriaTracesTool, victoriaTracesBashyTag, victoriaTracesVersion},
+		{"victoria-metrics", victoriaMetricsTool, victoriaMetricsBashyTag, victoriaMetricsVersion, "4fa0cca9de0eb898d5158d73dbfada99540d2ec20c9bace91020a259020930f3"},
+		{"victoria-logs", victoriaLogsTool, victoriaLogsBashyTag, victoriaLogsVersion, "7880d57a5e9daa7172905dbb30bced97afd59266ec5b663d89386b8fbe8d4a87"},
+		{"victoria-traces", victoriaTracesTool, victoriaTracesBashyTag, victoriaTracesVersion, "ed3373a067adae2d1a0f4d1c5f3a30798b43d8db1b2a3d134a9200a74ebbf27c"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -69,7 +70,7 @@ func TestVictoriaStoresAreVerifiedPins(t *testing.T) {
 			if tool.Sigstore.Issuer != binmgr.GitHubActionsIssuer {
 				t.Fatalf("issuer %q, want %q", tool.Sigstore.Issuer, binmgr.GitHubActionsIssuer)
 			}
-			wantPlatforms := []string{"darwin/amd64", "darwin/arm64", "linux/amd64", "linux/arm64"}
+			wantPlatforms := []string{"darwin/amd64", "darwin/arm64", "linux/amd64", "linux/arm64", "windows/amd64"}
 			if len(tool.Assets) != len(wantPlatforms) {
 				t.Fatalf("assets = %d, want %d (%v)", len(tool.Assets), len(wantPlatforms), wantPlatforms)
 			}
@@ -80,6 +81,9 @@ func TestVictoriaStoresAreVerifiedPins(t *testing.T) {
 				}
 				goos, goarch, _ := strings.Cut(plat, "/")
 				assetName := tc.name + "-" + goos + "-" + goarch
+				if goos == "windows" {
+					assetName += ".exe"
+				}
 				wantURL := "https://github.com/qiangli/" + tc.name + "/releases/download/" + tc.bashyTag + "/" + assetName
 				if a.URL != wantURL {
 					t.Errorf("%s: url %q, want %q", plat, a.URL, wantURL)
@@ -103,31 +107,16 @@ func TestVictoriaStoresAreVerifiedPins(t *testing.T) {
 					t.Errorf("%s: url %q still references upstream VictoriaMetrics/*", plat, a.URL)
 				}
 			}
-			// Windows has no signed asset.
-			if _, ok := tool.Assets["windows/amd64"]; ok {
-				t.Error("windows asset present; should be absent (fail closed)")
+			if got := tool.Assets["windows/amd64"].SHA256; got != tc.windowsSHA {
+				t.Errorf("windows SHA256 = %q, want published checksum %q", got, tc.windowsSHA)
+			}
+			if _, ok := tool.Assets["windows/arm64"]; ok {
+				t.Error("unsigned windows/arm64 asset present")
 			}
 			// Version constant is the upstream tag the bashy release was built from.
 			if tc.version == "" {
 				t.Error("version constant is empty")
 			}
 		})
-	}
-}
-
-func TestVictoriaStoresRejectWindows(t *testing.T) {
-	// The Start method fails closed on windows with a supply-chain policy
-	// error and no upstream fallback. We cannot run on windows here, but we
-	// verify the Tool has no windows asset and the error string is defined.
-	for _, tool := range []binmgr.Tool{victoriaMetricsTool, victoriaLogsTool, victoriaTracesTool} {
-		if _, ok := tool.Assets["windows/amd64"]; ok {
-			t.Fatalf("%s: windows asset should not exist", tool.Name)
-		}
-	}
-	// Simulate the Start check by verifying the error message contains the
-	// policy string.
-	errMsg := "supply-chain policy: no bashy-signed asset for windows"
-	if !strings.Contains("victoria-metrics: supply-chain policy: no bashy-signed asset for windows (no upstream fallback) — only linux and darwin assets are signed", errMsg) {
-		t.Fatal("windows error must name supply-chain policy")
 	}
 }

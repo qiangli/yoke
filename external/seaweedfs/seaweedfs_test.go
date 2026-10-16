@@ -51,6 +51,8 @@ func TestAssetMatch_PicksRawExecutable(t *testing.T) {
 		want               bool
 	}{
 		{"weed-linux-amd64", "linux", "amd64", true},
+		{"weed-windows-amd64.exe", "windows", "amd64", true},
+		{"weed-windows-amd64", "windows", "amd64", false},
 		{"weed-linux-arm64", "linux", "arm64", true},
 		{"weed-darwin-amd64", "darwin", "amd64", true},
 		{"weed-darwin-arm64", "darwin", "arm64", true},
@@ -93,7 +95,7 @@ func TestSeaweedfsIsVerifiedPin(t *testing.T) {
 	if seaweedfsVersion != "4.48" {
 		t.Fatalf("seaweedfsVersion %q, want 4.48", seaweedfsVersion)
 	}
-	wantPlatforms := []string{"darwin/amd64", "darwin/arm64", "linux/amd64", "linux/arm64"}
+	wantPlatforms := []string{"darwin/amd64", "darwin/arm64", "linux/amd64", "linux/arm64", "windows/amd64"}
 	if len(tool.Assets) != len(wantPlatforms) {
 		t.Fatalf("assets = %d, want %d (%v)", len(tool.Assets), len(wantPlatforms), wantPlatforms)
 	}
@@ -104,6 +106,9 @@ func TestSeaweedfsIsVerifiedPin(t *testing.T) {
 		}
 		goos, goarch, _ := strings.Cut(plat, "/")
 		assetName := "weed-" + goos + "-" + goarch
+		if goos == "windows" {
+			assetName += ".exe"
+		}
 		wantURL := "https://github.com/qiangli/seaweedfs/releases/download/" + seaweedfsBashyTag + "/" + assetName
 		if a.URL != wantURL {
 			t.Errorf("%s: url %q, want %q", plat, a.URL, wantURL)
@@ -129,26 +134,11 @@ func TestSeaweedfsIsVerifiedPin(t *testing.T) {
 			t.Errorf("%s: url %q still references upstream seaweedfs/seaweedfs", plat, a.URL)
 		}
 	}
-	if _, ok := tool.Assets["windows/amd64"]; ok {
-		t.Error("windows asset present; should be absent (fail closed)")
+	if got := tool.Assets["windows/amd64"].SHA256; got != "126a9bb43df6368a3c3189b5b7353accbaf212d15b23b267e54edc9af5cbf117" {
+		t.Errorf("windows SHA256 = %q, want published checksum", got)
 	}
 	if _, ok := tool.Assets["windows/arm64"]; ok {
 		t.Error("windows asset present; should be absent")
-	}
-}
-
-func TestSeaweedfsRejectsWindows(t *testing.T) {
-	if _, ok := SeaweedfsTool.Assets["windows/amd64"]; ok {
-		t.Fatalf("windows asset should not exist")
-	}
-	if _, err := resolveTool(""); err != nil && strings.Contains(err.Error(), "windows") {
-		// Already checked platform; this branch only if running on windows
-		t.Logf("resolve on windows correctly fails: %v", err)
-	}
-	// Verify the Start error string contains the policy.
-	errMsg := "supply-chain policy: no bashy-signed asset for windows"
-	if !strings.Contains("seaweedfs: supply-chain policy: no bashy-signed asset for windows (no upstream fallback) — only linux and darwin assets are signed", errMsg) {
-		t.Fatal("windows error must name supply-chain policy")
 	}
 }
 

@@ -16,7 +16,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -37,7 +36,7 @@ const (
 	// raw executables with per-asset SHA256SUMS and <asset>.sigstore.json bundles.
 	// This is a MINIMAL build (no search/sync/imagetrust/ui extensions;
 	// BinaryType bashy-minimal).
-	zotBashyTag = "bashy-v2.1.22-2"
+	zotBashyTag = "bashy-v2.1.22-3"
 
 	// DefaultVersion is the pinned bashy tag. There is no "latest" — that was
 	// the upstream archive and it is intentionally absent (fail closed).
@@ -49,10 +48,11 @@ const (
 // SHA256 per asset read from the published SHA256SUMS of the bashy release
 // (downloaded via curl -sL, not from the GitHub API asset digest).
 var zotSHAs = map[string]string{
-	"linux/amd64":  "3586360d1ff6518ccd699d7d7bae81bbad298017183a32b80a63366a016a8800",
-	"linux/arm64":  "9cc8e193e4e91ecc1ca9f322443bab7240203ac45734a47e3e8324b3bf218499",
-	"darwin/amd64": "2bfc95f6989ba65017e887ad74158d679d5dc1449c95aa654dd42b560efab2b2",
-	"darwin/arm64": "3b9b24f2f848de8d8da0783d46b5a16ec76045ecbcc036b25645f232b764d216",
+	"linux/amd64":   "3586360d1ff6518ccd699d7d7bae81bbad298017183a32b80a63366a016a8800",
+	"linux/arm64":   "9cc8e193e4e91ecc1ca9f322443bab7240203ac45734a47e3e8324b3bf218499",
+	"darwin/amd64":  "2bfc95f6989ba65017e887ad74158d679d5dc1449c95aa654dd42b560efab2b2",
+	"darwin/arm64":  "3b9b24f2f848de8d8da0783d46b5a16ec76045ecbcc036b25645f232b764d216",
+	"windows/amd64": "c373f8f85f5324624d6bb11620fe149fec5c2131bcf443234f5a2f10780e294c",
 }
 
 func zotTool() binmgr.Tool {
@@ -60,6 +60,9 @@ func zotTool() binmgr.Tool {
 	for plat, sha := range zotSHAs {
 		goos, goarch, _ := strings.Cut(plat, "/")
 		assetName := "zot-" + goos + "-" + goarch
+		if goos == "windows" {
+			assetName += ".exe"
+		}
 		url := fmt.Sprintf("https://github.com/qiangli/zot/releases/download/%s/%s", zotBashyTag, assetName)
 		assets[plat] = binmgr.Asset{URL: url, SHA256: sha}
 	}
@@ -97,9 +100,6 @@ func Spec(version string) binmgr.GitHubSpec {
 }
 
 func resolveTool(version string) (binmgr.Tool, error) {
-	if runtime.GOOS == "windows" {
-		return binmgr.Tool{}, fmt.Errorf("zot: supply-chain policy: no bashy-signed asset for windows (no upstream fallback) — only linux and darwin assets are signed")
-	}
 	tool := ZotTool
 	switch version {
 	case "", zotBashyTag, zotVersion:
@@ -130,7 +130,11 @@ func resolveTool(version string) (binmgr.Tool, error) {
 // An exact match is both correct and immune to new sibling binaries appearing
 // in a future release.
 func assetMatch(name, goos, goarch string) bool {
-	return strings.EqualFold(name, "zot-"+goos+"-"+goarch)
+	expected := "zot-" + goos + "-" + goarch
+	if goos == "windows" {
+		expected += ".exe"
+	}
+	return strings.EqualFold(name, expected)
 }
 
 // DefaultDataDir is zot's storage root (the registry blob store + config).
@@ -198,9 +202,6 @@ func (i *Instance) Stop() error {
 // is what outpost's wrap-harness builtin supervises and exposes over the mesh.
 func Start(ctx context.Context, o Options) (*Instance, error) {
 	o.defaults()
-	if runtime.GOOS == "windows" {
-		return nil, fmt.Errorf("zot: supply-chain policy: no bashy-signed asset for windows (no upstream fallback) — only linux and darwin assets are signed")
-	}
 	tool, err := resolveTool(o.Version)
 	if err != nil {
 		return nil, err

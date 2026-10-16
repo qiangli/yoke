@@ -4,7 +4,7 @@ description: SeaweedFS — distributed object store and S3 gateway
 exec: [bashy, seaweedfs, serve, --port, "{port}", --addr, "{bind}", "--data={settings.data_dir}", --version, "{settings.version}"]
 settings:
   data_dir: ""
-  version: "bashy-4.48-1"
+  version: "bashy-4.48-2"
 ports:
   - name: http
     port: 8333

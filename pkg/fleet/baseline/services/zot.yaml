@@ -4,7 +4,7 @@ description: Zot OCI registry — image and artifact storage for the dhnt mesh
 exec: [bashy, zot, serve, --port, "{port}", --addr, "{bind}", "--data={settings.data_dir}", --zot-version, "{settings.version}"]
 settings:
   data_dir: ""
-  version: "bashy-v2.1.22-2"
+  version: "bashy-v2.1.22-3"
 ports:
   - name: http
     port: 5000
