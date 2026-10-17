@@ -531,6 +531,15 @@ func (b *Broker) dispatch(w http.ResponseWriter, r *http.Request, ri *reqInfo, b
 			writeErr(w, r.URL.Path, http.StatusNotFound, fmt.Sprintf("model %q is not a local model and this broker serves no fleet agents", model))
 			return
 		}
+		// A local model honors temperature/top_k/top_p/seed; a CLI seat
+		// honors none of them and drops them where the request becomes a
+		// prompt. Say so before the first byte — a streaming answer has no
+		// second chance — and keep the list on the record, so an audited run
+		// shows which parameters its numbers were NOT produced under.
+		if ignored := cligw.IgnoredSampling(identityTool(binding), body); len(ignored) > 0 {
+			ri.rec.Ignored = cligw.IgnoredValue(ignored)
+			w.Header().Set(cligw.IgnoredHeader, ri.rec.Ignored)
+		}
 		// One warm CLI per binding: reset=none implies bind=worker, and the
 		// turn runs on the binding's held session with only the new messages.
 		// bind=worker with reset=each needs no conversation, so every turn is
@@ -694,6 +703,16 @@ func (b *Broker) finish(ri *reqInfo, status int, wait time.Duration, errMsg stri
 
 func gb(n uint64) float64 { return float64(n) / (1 << 30) }
 
+// identityTool names the vendor CLI a sticky binding froze; "" when the
+// request carries no binding, in which case cligw picks the seat and no tool
+// honors sampling anyway.
+func identityTool(binding *Binding) string {
+	if binding == nil {
+		return ""
+	}
+	return binding.Identity.Tool
+}
+
 // proxyEngine forwards r (with body, when given) to the engine. A silent
 // engine cannot hang the caller past the shared first-byte bound, and a
 // transport failure is classified (unreachable 502 vs timeout 504) instead
@@ -738,6 +757,11 @@ func (b *Broker) delegateCLI(w http.ResponseWriter, r *http.Request, ri *reqInfo
 	cw := newCaptureWriter(w)
 	b.opts.CLI.ServeHTTP(cw, r)
 	ri.rec.Routed = cw.Header().Get("X-Bashy-Routed")
+	if ri.rec.Ignored == "" {
+		// Routes that reach cligw without going through dispatch (the
+		// Responses surface, /cligw/...) get the list from cligw itself.
+		ri.rec.Ignored = cw.Header().Get(cligw.IgnoredHeader)
+	}
 	ri.rec.PromptTok, ri.rec.OutputTok = parseTokens(cw.tail)
 	b.finish(ri, cw.status, 0, refusalReason(cw.status, cw.tail))
 }

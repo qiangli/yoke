@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/qiangli/yoke/pkg/cligw"
 	"github.com/qiangli/yoke/pkg/execlog"
 	"github.com/qiangli/yoke/pkg/redact"
 )
@@ -62,6 +63,7 @@ type captureTurn struct {
 	Status        int           `json:"status"`
 	Usage         *captureUsage `json:"usage,omitempty"`
 	Routed        string        `json:"routed"`
+	Ignored       string        `json:"ignored,omitempty"`
 	Request       string        `json:"request"`
 	Response      string        `json:"response"`
 	Truncated     bool          `json:"truncated"`
@@ -208,7 +210,7 @@ func (b *Broker) appendCapture(ri *reqInfo, path string, req *boundedBody, cw *c
 	if ri.rec.PromptTok != 0 || ri.rec.OutputTok != 0 {
 		usage = &captureUsage{ri.rec.PromptTok, ri.rec.OutputTok}
 	}
-	row := captureTurn{"bashy-capture-v1", ri.started.UTC(), ri.session, captureEpisode(ri.session), captureDialect(path), path, captureRedact(model), cw.status, usage, captureRedact(cw.Header().Get("X-Bashy-Routed")), captureRedact(string(req.data)), captureRedact(string(cw.full)), req.truncated || cw.truncated, captureLevel(cw.full)}
+	row := captureTurn{"bashy-capture-v1", ri.started.UTC(), ri.session, captureEpisode(ri.session), captureDialect(path), path, captureRedact(model), cw.status, usage, captureRedact(cw.Header().Get("X-Bashy-Routed")), cw.Header().Get(cligw.IgnoredHeader), captureRedact(string(req.data)), captureRedact(string(cw.full)), req.truncated || cw.truncated, captureLevel(cw.full)}
 	data, err := json.Marshal(row)
 	if err != nil {
 		return

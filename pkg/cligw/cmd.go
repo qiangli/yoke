@@ -56,7 +56,12 @@ Ask for a capability band rather than a vendor model:
 
 The router ranks the band's agents by remaining subscription quota, then warm
 availability, then operator weight, and answers with X-Bashy-Routed so the
-choice is auditable.`,
+choice is auditable.
+
+A CLI seat has no decoding controls, so temperature, top_k, top_p and seed are
+dropped where the request becomes a prompt. The answer lists what was dropped
+in X-Bashy-Ignored rather than refusing the request; the same request on a
+local engine model honors all four.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}

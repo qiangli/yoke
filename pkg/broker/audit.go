@@ -16,7 +16,9 @@ import (
 // benchmark row cites. The same records, filtered by session lineage, are
 // the session's turns (Q5).
 
-// Record is one served request.
+// Record is one served request. Ignored carries the request parameters the
+// serving backend could not honor (X-Bashy-Ignored): a recorded run's numbers
+// were not produced under them, however the request was written.
 type Record struct {
 	Time        time.Time      `json:"time"`
 	Principal   string         `json:"principal"`
@@ -32,6 +34,7 @@ type Record struct {
 	Identity    string         `json:"identity,omitempty"`
 	Use         int            `json:"use,omitempty"`
 	Routed      string         `json:"routed,omitempty"`
+	Ignored     string         `json:"ignored,omitempty"`
 	Status      int            `json:"status"`
 	WaitMS      int64          `json:"wait_ms"`
 	WallMS      int64          `json:"wall_ms"`
