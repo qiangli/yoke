@@ -269,16 +269,13 @@ func RunDoor(ctx context.Context, o DoorOptions) error {
 	}
 	listeners := []net.Listener{tcp}
 	if sock, err := door.SocketPath(); err == nil && peerCredentialsSupported {
-		_ = os.Remove(sock)
-		if ln, err := net.Listen("unix", sock); err == nil {
-			if err := os.Chmod(sock, 0o600); err != nil {
-				ln.Close()
-				tcp.Close()
-				return err
-			}
-			listeners = append(listeners, ln)
-			defer os.Remove(sock)
+		ln, err := listenOwnerSocket(sock)
+		if err != nil {
+			tcp.Close()
+			return err
 		}
+		listeners = append(listeners, ln)
+		defer os.Remove(sock)
 	}
 	base := fmt.Sprintf("http://127.0.0.1:%d", port)
 	if cli != nil {

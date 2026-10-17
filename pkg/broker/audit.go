@@ -189,3 +189,28 @@ func parseTokens(tail []byte) (prompt, output int) {
 	}
 	return 0, 0
 }
+
+// refusalReason is the error message a refused response carried, so the
+// audit record of a refusal says why — whichever surface wrote it (the
+// door's own writeErr in any dialect, or a cligw/engine error body).
+func refusalReason(status int, tail []byte) string {
+	if status < 400 {
+		return ""
+	}
+	var v struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(bytes.TrimSpace(tail), &v) == nil && len(v.Error) > 0 {
+		var msg string
+		if json.Unmarshal(v.Error, &msg) == nil && msg != "" {
+			return msg
+		}
+		var obj struct {
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(v.Error, &obj) == nil && obj.Message != "" {
+			return obj.Message
+		}
+	}
+	return http.StatusText(status)
+}
