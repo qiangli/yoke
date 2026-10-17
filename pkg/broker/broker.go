@@ -24,6 +24,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -1249,6 +1250,7 @@ func queryOf(r *http.Request) string {
 type Health struct {
 	SchemaVersion string          `json:"schema_version"`
 	PID           int             `json:"pid"`
+	Version       string          `json:"version,omitempty"`
 	Local         bool            `json:"local_engine"`
 	EngineUp      bool            `json:"engine_up"`
 	Device        DeviceStats     `json:"device"`
@@ -1258,7 +1260,7 @@ type Health struct {
 }
 
 func (b *Broker) serveHealth(w http.ResponseWriter, r *http.Request) {
-	h := Health{SchemaVersion: "bashy-broker-health-v1", PID: os.Getpid(), Local: b.local, Device: b.device.Stats()}
+	h := Health{SchemaVersion: "bashy-broker-health-v1", PID: os.Getpid(), Version: buildVersion(), Local: b.local, Device: b.device.Stats()}
 	if b.local {
 		h.EngineUp = engineUp(b.engine.base)
 		if ps, err := b.engine.ps(r.Context()); err == nil {
@@ -1385,3 +1387,12 @@ type bufferWriter struct {
 func (b *bufferWriter) Header() http.Header         { return b.header }
 func (b *bufferWriter) WriteHeader(code int)        { b.status = code }
 func (b *bufferWriter) Write(p []byte) (int, error) { return b.buf.Write(p) }
+
+// buildVersion is the main module version of the running binary ("" when
+// the build carries none).
+func buildVersion() string {
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return bi.Main.Version
+	}
+	return ""
+}

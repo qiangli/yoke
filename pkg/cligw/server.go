@@ -1300,6 +1300,7 @@ type PolicyHealth struct {
 	ReserveFloor float64 `json:"reserve_floor"`
 	Escalate     string  `json:"escalate"`
 	Filter       Filter  `json:"filter,omitempty"`
+	MaxInFlight  int     `json:"max_in_flight,omitempty"`
 }
 
 // HealthReport is the bashy-cligw-health-v1 envelope: breaker state per pool
@@ -1334,7 +1335,7 @@ func (s *Server) Health() HealthReport {
 		Autoscale:     s.scaler.Snapshot(),
 		Policy: PolicyHealth{
 			Default: s.policy.Default, ReserveFloor: s.policy.ReserveFloor,
-			Escalate: s.policy.Escalate, Filter: s.policy.Filter,
+			Escalate: s.policy.Escalate, Filter: s.policy.Filter, MaxInFlight: s.policy.MaxInFlight,
 		},
 	}
 	available := 0

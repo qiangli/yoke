@@ -328,7 +328,7 @@ its share policy is allow.`
 			cmd.RemoveCommand(c)
 		}
 	}
-	cmd.AddCommand(newServeCmd(), newUpCmd(), newDownCmd(), newEnvCmd(), newStickyCmd(), newPeerCmd(), newCaptureCmd())
+	cmd.AddCommand(newServeCmd(), newUpCmd(), newDownCmd(), newEnvCmd(), newStatusCmd(), newStickyCmd(), newPeerCmd(), newCaptureCmd())
 	return cmd
 }
 
@@ -1107,3 +1107,53 @@ func str(v any) string {
 	s, _ := v.(string)
 	return s
 }
+
+func newStatusCmd() *cobra.Command {
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:           "status",
+		Short:         "report whether the model door is up, and what it serves (exit 1 when down)",
+		Args:          cobra.NoArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(c *cobra.Command, _ []string) error {
+			st, err := door.Probe(c.Context())
+			if err != nil {
+				return err
+			}
+			w := c.OutOrStdout()
+			if asJSON {
+				enc := json.NewEncoder(w)
+				enc.SetIndent("", "  ")
+				if err := enc.Encode(st); err != nil {
+					return err
+				}
+			} else if st.Up {
+				fmt.Fprintf(w, "model door up on %s (pid %d)\n", st.Listen, st.PID)
+				if st.Version != "" {
+					fmt.Fprintf(w, "version: %s\n", st.Version)
+				}
+				fmt.Fprintf(w, "socket: %s\n", st.Socket)
+				for _, b := range st.Backends {
+					fmt.Fprintf(w, "backend %s: present=%t healthy=%t\n", b.Name, b.Present, b.Healthy)
+				}
+				fmt.Fprintf(w, "local models: %d, agent entries: %d, max in flight: %d, queue depth: %d\n", st.LocalModels, st.AgentEntries, st.MaxInFlight, st.QueueDepth)
+				if st.Error != "" {
+					fmt.Fprintf(w, "warning: %s\n", st.Error)
+				}
+			} else {
+				fmt.Fprintf(w, "model door down: %s\n", st.Error)
+			}
+			if !st.Up {
+				return ErrDoorDown
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the bashy-llm-status-v1 envelope")
+	return cmd
+}
+
+// ErrDoorDown is `llm status`' failure when no door answers (exit 1); the
+// report itself has already been printed.
+var ErrDoorDown = errors.New("the model door is down")
