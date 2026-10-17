@@ -944,7 +944,7 @@ func (b *Broker) checkIdentity(ctx context.Context, bnd *Binding) error {
 	case BackendLocal:
 		m, ok := b.localModel(ctx, id.Model)
 		if !ok {
-			return stickyErr(503, "sticky: identity %s: model %s is no longer on the engine", ShortDigest(bnd.Digest), id.Model)
+			return stickyErr(409, "sticky: identity %s: model %s is no longer on the engine", ShortDigest(bnd.Digest), id.Model)
 		}
 		if id.ModelDigest != "" && m.Digest != id.ModelDigest {
 			return stickyErr(409, "sticky: identity %s: model %s changed (digest %s, was %s); the binding cannot be served exactly", ShortDigest(bnd.Digest), id.Model, ShortDigest(m.Digest), ShortDigest(id.ModelDigest))
@@ -956,7 +956,14 @@ func (b *Broker) checkIdentity(ctx context.Context, bnd *Binding) error {
 			}
 		}
 		if lk, ok := b.opts.CLI.(AgentLookup); ok && id.Agent != "" {
-			if cur, found := lk.LookupAgent(id.Agent); found && cur.Effort != id.Effort {
+			cur, found := lk.LookupAgent(id.Agent)
+			if !found {
+				return stickyErr(409, "sticky: identity %s: agent %s disappeared from the catalog; the binding cannot be served exactly", ShortDigest(bnd.Digest), id.Agent)
+			}
+			if cur.Model != id.Model || cur.Tool != id.Tool || cur.Provider != id.Provider || cur.VendorModel != id.VendorModel || (id.Launch != "" && id.Launch != "cligw-pure-completion/"+firstNonEmpty(cur.Warm, "cold")) {
+				return stickyErr(409, "sticky: identity %s: agent %s changed its binding; the binding cannot be served exactly", ShortDigest(bnd.Digest), id.Agent)
+			}
+			if cur.Effort != id.Effort {
 				return stickyErr(409, "sticky: identity %s: agent %s now declares effort %q (was %q); the binding cannot be served exactly", ShortDigest(bnd.Digest), id.Agent, cur.Effort, id.Effort)
 			}
 		}
@@ -1309,6 +1316,24 @@ func (b *Broker) serveHealth(w http.ResponseWriter, r *http.Request) {
 // Serve runs the door on the given listeners until ctx ends. A unix
 // listener authenticates kernel peer credentials in addition to its 0600 mode.
 func (b *Broker) Serve(ctx context.Context, listeners ...net.Listener) error {
+	pollCtx, stopPoll := context.WithCancel(ctx)
+	defer stopPoll()
+	if b.local {
+		go func() {
+			ticker := time.NewTicker(5 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-pollCtx.Done():
+					return
+				case <-ticker.C:
+					probeCtx, cancel := context.WithTimeout(pollCtx, 3*time.Second)
+					b.refreshTags(probeCtx, true)
+					cancel()
+				}
+			}
+		}()
+	}
 	srv := &http.Server{
 		Handler:           b,
 		ReadHeaderTimeout: 30 * time.Second,

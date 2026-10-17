@@ -2,6 +2,8 @@ package cligw
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"reflect"
 	"slices"
 	"sort"
@@ -29,6 +31,7 @@ type FleetCatalog struct {
 	cached   []Agent
 	index    map[string]Agent
 	cachedAt time.Time
+	revision [32]byte
 }
 
 // inventoryTTL is how long a derived inventory is reused. A registry edit is a
@@ -90,8 +93,10 @@ func (c *FleetCatalog) Alias(_ context.Context, name string) (int, []string, boo
 
 // Agent is the gateway's flattened view of one launchable fleet agent.
 type Agent struct {
-	Name  string `json:"name"`
-	Model string `json:"model"`
+	// identity includes launch settings absent from the public model row.
+	identity [32]byte
+	Name     string `json:"name"`
+	Model    string `json:"model"`
 	// ModelID is the provider-side id the tool is handed for this binding,
 	// when it differs from Model (the registry name). The door's admission
 	// preview guards a coord claim on either.
@@ -203,7 +208,23 @@ func (c *FleetCatalog) inventory() []Agent {
 }
 
 func (c *FleetCatalog) refreshLocked() []Agent {
-	c.cached = c.deriveInventory()
+	revision, err := c.fleet.Revision()
+	if err != nil && c.cached != nil {
+		return c.cached
+	}
+	if c.cached != nil && revision == c.revision {
+		c.cachedAt = time.Now()
+		return c.cached
+	}
+	next := c.deriveInventory()
+	// A writer may replace several ring files while we derive. Publish only
+	// a projection of a stable revision; retry on the next request/tick.
+	after, err := c.fleet.Revision()
+	if (err != nil || after != revision) && c.cached != nil {
+		return c.cached
+	}
+	c.cached = next
+	c.revision = revision
 	c.index = make(map[string]Agent, len(c.cached))
 	for _, agent := range c.cached {
 		c.index[agent.Name] = agent
@@ -260,8 +281,12 @@ func (c *FleetCatalog) deriveInventory() []Agent {
 		if modelID == model.Name {
 			modelID = ""
 		}
+		a.AutoNick, a.Derived = "", nil
+		model.Derived = nil
+		binding, _ := json.Marshal([]any{a, tool, model})
 		out = append(out, Agent{
-			Name: a.Name, Model: model.Name, ModelID: modelID, Tool: tool.Name,
+			identity: sha256.Sum256(binding),
+			Name:     a.Name, Model: model.Name, ModelID: modelID, Tool: tool.Name,
 			Band: band, BandSource: source, Kind: model.Kind,
 			Provider: model.Provider, Warm: warmMode(tool), Effort: a.Effort,
 			Capabilities: cloneStrings(model.Capabilities),

@@ -732,7 +732,7 @@ func TestParseStickyHeader(t *testing.T) {
 	}
 }
 
-// A binding whose model left the engine is refused with 503, never served by
+// A binding whose model left the engine is refused with 409, never served by
 // another model.
 func TestStickyUnavailableIdentityIsRefusedNotRerouted(t *testing.T) {
 	h := newHarness(t, nil)
@@ -743,7 +743,7 @@ func TestStickyUnavailableIdentityIsRefusedNotRerouted(t *testing.T) {
 	h.b.refreshTags(context.Background(), true)
 	before := h.eng.body()
 	resp, out := h.do("POST", "/sticky/gone/v1/chat/completions", chat("llama3.2:3b"), nil)
-	if resp.StatusCode != 503 || resp.Header.Get("Retry-After") == "" {
+	if resp.StatusCode != 409 {
 		t.Fatalf("got %d %v", resp.StatusCode, out)
 	}
 	if after := h.eng.body(); after != nil && before == nil {

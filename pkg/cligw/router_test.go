@@ -115,7 +115,7 @@ func TestRouterQuotaFirstAndBreakerFallback(t *testing.T) {
 	if !strings.HasPrefix(got.Header(), "X-Bashy-Routed: agent=gamma, band=L4, reason=") {
 		t.Fatalf("Header() = %q", got.Header())
 	}
-	breaker.Trip("gamma", 1)
+	breaker.Trip("gamma", time.Minute)
 	got, err = router.Route(context.Background(), selector(t, cat, "L4"), Filter{}, "", "")
 	if err != nil {
 		t.Fatal(err)
@@ -166,8 +166,8 @@ func TestRouterReserveFloorReturns429(t *testing.T) {
 func TestRouterL4PlusUsesNextBandWhenL4Unavailable(t *testing.T) {
 	quota := &fakeQuota{headroom: map[string]float64{"strong": .8, "small": .7, "frontier": .6}}
 	breaker := sched.NewBreaker()
-	breaker.Trip("gamma", 1)
-	breaker.Trip("x-cascade", 1)
+	breaker.Trip("gamma", time.Minute)
+	breaker.Trip("x-cascade", time.Minute)
 	router, cat, _ := newTestRouter(t, DefaultPolicy(), quota, WithBreaker(breaker))
 	got, err := router.Route(context.Background(), selector(t, cat, "L4+"), Filter{}, "", "")
 	if err != nil {
