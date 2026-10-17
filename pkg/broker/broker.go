@@ -32,6 +32,7 @@ import (
 
 	"github.com/qiangli/yoke/pkg/broker/door"
 	"github.com/qiangli/yoke/pkg/cligw"
+	"github.com/qiangli/yoke/pkg/llmgw/gateway"
 	"github.com/qiangli/yoke/pkg/quotaobs"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -678,17 +679,22 @@ func (b *Broker) finish(ri *reqInfo, status int, wait time.Duration, errMsg stri
 
 func gb(n uint64) float64 { return float64(n) / (1 << 30) }
 
-// proxyEngine forwards r (with body, when given) to the engine.
+// proxyEngine forwards r (with body, when given) to the engine. A silent
+// engine cannot hang the caller past the shared first-byte bound, and a
+// transport failure is classified (unreachable 502 vs timeout 504) instead
+// of a bare 502.
 func (b *Broker) proxyEngine(w http.ResponseWriter, r *http.Request, body []byte) {
 	target, _ := url.Parse(b.engine.base)
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	proxy.FlushInterval = -1
+	proxy.Transport = gateway.FirstByteTransport(0)
 	proxy.ModifyResponse = func(resp *http.Response) error {
 		quotaobs.ObserveResponse(r.Context(), resp, quotaobs.Observation{Source: "door"})
 		return nil
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		writeErr(w, r.URL.Path, http.StatusBadGateway, "local engine: "+err.Error())
+		failure := gateway.ClassifyTransportError(err).WithEndpoint("engine", "")
+		writeErr(w, r.URL.Path, failure.Status, "local engine: "+firstLine(err.Error())+"; "+failure.Hint)
 	}
 	if body != nil {
 		r.Body = io.NopCloser(bytes.NewReader(body))
@@ -1346,6 +1352,15 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 // writeErr answers in the dialect of the surface: Ollama's {"error": "..."}
 // under /api/, OpenAI's envelope elsewhere.
+// firstLine keeps a transport error to one log-safe line: curl-style errors
+// can carry embedded newlines and URLs.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	return strings.TrimSpace(s)
+}
+
 func writeErr(w http.ResponseWriter, path string, status int, msg string) {
 	if strings.HasPrefix(path, "/api/") {
 		writeJSON(w, status, map[string]string{"error": msg})

@@ -111,6 +111,17 @@ type FilterCandidatesStatusFunc func(ctx context.Context, principal, model strin
 // hook goes straight to 404.
 type FallbackFunc func(w http.ResponseWriter, r *http.Request, principal, model string, body []byte) bool
 
+// MeteredFallbackFunc serves a request whose metered upstream failed with a
+// non-retryable class (auth or billing). It runs at most once per request
+// and only when the operator configured it — without it the gateway fails
+// fast. It MUST NOT select another metered key: the destination is the
+// operator's configured fallback (a subscription band or a local model).
+// The implementation sets the FallbackHeader response header itself
+// ("<from> -> <to>"); the gateway backstops it when missing and records the
+// fallback in the dispatch metrics. Returning ("", false) declines, and the
+// gateway answers with the classified error.
+type MeteredFallbackFunc func(w http.ResponseWriter, r *http.Request, principal, model string, body []byte, failure UpstreamFailure) (to string, served bool)
+
 // OnUsageFunc receives the token usage parsed from the tail of a served
 // response, once the client has finished reading it. backend is the backend
 // that actually delivered (which after a failover is not the one first
@@ -190,10 +201,13 @@ type Config struct {
 	FilterCandidates       FilterCandidatesFunc
 	FilterCandidatesStatus FilterCandidatesStatusFunc
 	Fallback               FallbackFunc
-	OnUsage                OnUsageFunc
-	OnRefusal              OnRefusalFunc
-	ListExtra              ListExtraFunc
-	DecorateModel          DecorateModelFunc
+	// MeteredFallback serves auth/billing failures once, when the
+	// operator named a fallback destination. Nil (the default) fails fast.
+	MeteredFallback MeteredFallbackFunc
+	OnUsage         OnUsageFunc
+	OnRefusal       OnRefusalFunc
+	ListExtra       ListExtraFunc
+	DecorateModel   DecorateModelFunc
 
 	// ModifyResponse runs on every upstream response after the gateway
 	// has stamped its own headers and installed the tool-call extractor,
@@ -526,9 +540,9 @@ func (g *gateway) inference(codec inferenceCodec, useAffinity bool) http.Handler
 		})
 
 		served := &byteWriteCounter{ResponseWriter: w}
-		chosen, _, status := ServeWithFailover(served, r, slate, body, modify)
-		if served.bytesWritten == 0 && status >= http.StatusBadRequest {
-			codec.writeError(w, status, errBody("upstream request failed"))
+		chosen, _, outcome := ServeWithFailoverEx(served, r, slate, body, modify)
+		if served.bytesWritten == 0 && outcome.Status >= http.StatusBadRequest {
+			g.serveUpstreamFailure(w, r, codec, principal, model, body, chosen, outcome)
 		}
 		if chosen != nil && chosen.Name() != primary.Name() {
 			// Rebind the affinity to the backend that actually
@@ -538,6 +552,35 @@ func (g *gateway) inference(codec inferenceCodec, useAffinity bool) http.Handler
 			g.cfg.Metrics.ObserveDispatch(chosen.Name(), model, "failover")
 		}
 	}
+}
+
+// serveUpstreamFailure answers a request whose upstream candidates all
+// failed before writing a byte. A classified failure reaches the caller
+// immediately with its stable status and JSON error body — a non-retryable
+// class (auth, billing) is never retried, on any candidate. The configured
+// MeteredFallback gets exactly one turn on auth and billing; without it the
+// request fails fast.
+func (g *gateway) serveUpstreamFailure(w http.ResponseWriter, r *http.Request, codec inferenceCodec, principal, model string, body []byte, chosen Backend, outcome Attempt) {
+	if outcome.Failure == nil {
+		codec.writeError(w, outcome.Status, errBody("upstream request failed"))
+		return
+	}
+	failure := *outcome.Failure
+	if failure.Provider == "" && chosen != nil {
+		failure.Provider = chosen.Name()
+	}
+	failure.Model = model
+	g.cfg.Metrics.ObserveDispatch(failure.Provider, model, "upstream_"+string(failure.Class))
+	if (failure.Class == UpstreamAuth || failure.Class == UpstreamBilling) && g.cfg.MeteredFallback != nil {
+		if to, served := g.cfg.MeteredFallback(w, r, principal, model, body, failure); served {
+			g.cfg.Metrics.ObserveDispatch(to, model, "metered_fallback")
+			if w.Header().Get(FallbackHeader) == "" {
+				w.Header().Set(FallbackHeader, failure.Provider+" -> "+to)
+			}
+			return
+		}
+	}
+	writeClassifiedError(w, codec, failure)
 }
 
 // recordingBackend notes that an attempt started before delegating. It is

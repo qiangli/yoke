@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -461,18 +462,22 @@ func (s *Server) Close() error {
 }
 
 func (s *Server) buildHandler() http.Handler {
+	// routed is captured by pointer: the metered fallback re-serves
+	// through the same routing middleware that fronts the gateway.
+	var routed http.Handler
 	gw := gateway.New(gateway.Config{
-		Catalog:        routingCatalog{s},
-		Backend:        s.lookupBackend,
-		Backends:       s.gatewayBackends,
-		Authorize:      s.Authorize,
-		AdmissionLimit: s.admissionLimit,
-		Breaker:        s.breaker,
-		Admitter:       s.admitter,
-		OnUsage:        s.onUsage,
-		OnRefusal:      s.onRefusal,
+		Catalog:         routingCatalog{s},
+		Backend:         s.lookupBackend,
+		Backends:        s.gatewayBackends,
+		Authorize:       s.Authorize,
+		AdmissionLimit:  s.admissionLimit,
+		Breaker:         s.breaker,
+		Admitter:        s.admitter,
+		OnUsage:         s.onUsage,
+		OnRefusal:       s.onRefusal,
+		MeteredFallback: s.meteredFallback(&routed),
 	})
-	routed := s.route(gw)
+	routed = s.route(gw)
 
 	mux := http.NewServeMux()
 	for _, prefix := range []string{"", gateway.AliasPrefix} {
@@ -741,6 +746,51 @@ func (s *Server) route(next http.Handler) http.Handler {
 				decision.Agent, sel.Band, nil, true)
 		}
 	})
+}
+
+// fallbackAttemptHeader guards the metered fallback against a second turn:
+// the re-served request carries it, and a repeated auth/billing failure on
+// it declines the fallback so the classified error goes straight out.
+const fallbackAttemptHeader = "X-Bashy-Fallback-Attempt"
+
+// meteredFallback returns the gateway's MeteredFallback hook when operator
+// policy names a subscription band, nil otherwise (fail fast). The fallback
+// re-serves the request once through the routing middleware with the model
+// pinned to the configured band. It never selects another metered key: the
+// destination is the operator's band, not a failover candidate.
+func (s *Server) meteredFallback(routed *http.Handler) gateway.MeteredFallbackFunc {
+	band := strings.TrimSpace(s.policy.MeteredFallback)
+	if band == "" {
+		return nil
+	}
+	return func(w http.ResponseWriter, r *http.Request, principal, model string, body []byte, failure gateway.UpstreamFailure) (string, bool) {
+		if r.Header.Get(fallbackAttemptHeader) != "" {
+			return "", false
+		}
+		patched, err := resolve.PatchModelField(body, band)
+		if err != nil {
+			return "", false
+		}
+		r2 := r.Clone(r.Context())
+		r2.Body = io.NopCloser(bytes.NewReader(patched))
+		r2.ContentLength = int64(len(patched))
+		r2.Header.Set("Content-Length", strconv.Itoa(len(patched)))
+		r2.Header.Set(fallbackAttemptHeader, "1")
+		to := "band:" + band
+		w.Header().Set(gateway.FallbackHeader, failure.Provider+" -> "+to)
+		(*routed).ServeHTTP(w, r2)
+		// The re-served request records its own routing Decision through
+		// the middleware; this line keeps the fallback itself in the
+		// audit log even when routing refuses it.
+		if s.recorder != nil {
+			_ = s.recorder.Record(r.Context(), Decision{
+				Agent: to, Band: band,
+				Reason: fmt.Sprintf("metered-fallback %s -> %s on %s (%s)", failure.Provider, to, model, failure.Class),
+			})
+		}
+		s.log.Warn("cligw: metered fallback", "from", failure.Provider, "to", to, "model", model, "class", string(failure.Class))
+		return to, true
+	}
 }
 
 // statusRecorder remembers the status the gateway wrote. It forwards Flush so

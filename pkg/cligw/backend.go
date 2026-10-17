@@ -106,9 +106,20 @@ func (b *AgentBackend) Serve(w http.ResponseWriter, r *http.Request, body []byte
 		message := "CLI worker failed"
 		if err != nil {
 			message = err.Error()
+		} else if tail := strings.TrimSpace(result.Text); tail != "" {
+			message = tail
+		}
+		// A dead or dry metered key surfaces in CLI stderr (invalid key,
+		// exhausted balance). Classify it like an upstream failure: auth
+		// and billing fail fast with their stable status and are never
+		// retried on another seat; anything else keeps the historical
+		// retry-the-next-seat behavior.
+		failure := gateway.ClassifyUpstream(0, []byte(boundSignal(message)), nil).WithEndpoint(b.Name(), "")
+		if failure.Class == gateway.UpstreamAuth || failure.Class == gateway.UpstreamBilling {
+			return gateway.Attempt{Status: failure.Status, CanRetry: false, Failure: &failure}
 		}
 		w.Header().Set("X-Bashy-Backend-Error", message)
-		return gateway.Attempt{Status: http.StatusBadGateway, CanRetry: true}
+		return gateway.Attempt{Status: http.StatusBadGateway, CanRetry: true, Failure: &failure}
 	}
 
 	text, finish := FinishChat(req, result.Text)
@@ -192,6 +203,16 @@ func (b *AgentBackend) writeResponse(w http.ResponseWriter, r *http.Request, sta
 func errorBody(message string) []byte {
 	body, _ := json.Marshal(map[string]any{"error": map[string]string{"message": message, "type": "invalid_request_error"}})
 	return body
+}
+
+// boundSignal keeps the classification input bounded: CLI stderr can echo
+// long transcripts, and only the edges carry the failure signal.
+func boundSignal(message string) string {
+	const bound = 32 << 10
+	if len(message) <= bound {
+		return message
+	}
+	return message[:bound/2] + "\n…[truncated]…\n" + message[len(message)-bound/2:]
 }
 
 // rawJSON re-encodes a decoded "any" request field (stop, tool_choice) so the

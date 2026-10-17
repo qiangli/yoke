@@ -44,6 +44,12 @@ type Policy struct {
 	ConcurrencyCaps        map[string]int     `json:"concurrency_caps,omitempty" yaml:"concurrency_caps,omitempty"`
 	MaxInFlight            int                `json:"max_in_flight,omitempty" yaml:"max_in_flight,omitempty"`
 	MaxInFlightByPrincipal map[string]int     `json:"max_in_flight_by_principal,omitempty" yaml:"max_in_flight_by_principal,omitempty"`
+	// MeteredFallback names the single fallback destination for a billing
+	// or auth failure on a metered key: a subscription band label such as
+	// "L2". Empty (the default) fails fast with the classified error.
+	// A fallback never names another metered key, and it runs at most
+	// once per request.
+	MeteredFallback string `json:"metered_fallback,omitempty" yaml:"metered_fallback,omitempty"`
 }
 
 // DefaultPolicy returns the routing defaults used when policy.yaml is absent.
@@ -179,6 +185,12 @@ func (p *Policy) Validate() error {
 	}
 	if p.MaxInFlightByPrincipal == nil {
 		p.MaxInFlightByPrincipal = map[string]int{}
+	}
+	if band := strings.TrimSpace(p.MeteredFallback); band != "" {
+		p.MeteredFallback = band
+		if _, plus, ok := parseBand(band); !ok || plus {
+			return fmt.Errorf("cligw: metered_fallback must be a subscription band label such as \"L2\" (got %q)", band)
+		}
 	}
 	return nil
 }
