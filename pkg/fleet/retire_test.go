@@ -179,6 +179,41 @@ func TestRetiredDependencyAvailability(t *testing.T) {
 	}
 }
 
+func TestBaselineKimiBindingsAvailable(t *testing.T) {
+	for _, key := range []string{"BASHY_FLEET_SEEDS", "BASHY_TOOLS_PATH", "BASHY_MODELS_PATH", "BASHY_AGENTS_PATH"} {
+		t.Setenv(key, "")
+	}
+	opts := []Option{WithBaselineFS(baselineFS), WithoutLocalStore(), WithoutCloudOverlay()}
+	c := New(opts...)
+	for _, model := range []string{"kimi-k2.6", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k3"} {
+		for _, tool := range []string{"ycode", "opencode"} {
+			name := tool + "-" + model
+			t.Run(name, func(t *testing.T) {
+				a, tl, m, err := c.Binding(name)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if a.IsRetired() || tl.IsRetired() || m.IsRetired() {
+					t.Fatalf("binding %s is retired", name)
+				}
+				if tl.Name != tool || m.Name != model {
+					t.Fatalf("binding resolved to %s:%s", tl.Name, m.Name)
+				}
+				if m.Kind != ModelKindAPI || m.APIKeyRef != "moonshot" || m.Band != 2 || m.BillingMode() != BillingMetered {
+					t.Fatalf("model auth, band or billing changed: %+v", m)
+				}
+				if err := c.AgentAvailability(a); err != nil {
+					t.Fatal(err)
+				}
+				out, err := runCmd(t, NewAgentsCmd(opts...), "show", name)
+				if err != nil || strings.Contains(out, "retired") || strings.Contains(out, "unavailable") || !strings.Contains(out, name) {
+					t.Fatalf("agent show: %s error=%v", out, err)
+				}
+			})
+		}
+	}
+}
+
 func TestRetirementReplacesInheritedMetadata(t *testing.T) {
 	base := fstest.MapFS{"baseline/models/seat.yaml": &fstest.MapFile{Data: []byte("name: seat\nretired:\n  at: before\n  reason: old\n  replaced_by: obsolete\n")}}
 	c := New(WithRoot(t.TempDir()), WithBaselineFS(base), WithoutCloudOverlay())

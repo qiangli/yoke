@@ -6,7 +6,8 @@ import (
 )
 
 // TestSeedLint is the curation rule for the compiled-in fleet (plan §E): a
-// non-retired agent seed is L3 or better and binds a curated tool and model,
+// non-retired agent seed is L3 or better (or an explicitly curated Kimi L2
+// binding) and binds a curated tool and model,
 // meaning one that is built in, not retired and not hidden. Anything outside
 // that list is a retired built-in for one release, then a custom definition
 // in bashy's examples/fleet. bashy's scripts/check-seed-bands.sh runs this
@@ -48,7 +49,16 @@ func TestSeedLint(t *testing.T) {
 				band = m.Band
 			}
 		}
-		if band < 3 {
+		// Sprint 443 restores these operator-curated Moonshot seats at their
+		// declared L2 band; other low-band seeds remain outside the 1.0 list.
+		kimiL2 := false
+		if a.Tool == "ycode" || a.Tool == "opencode" {
+			switch a.Model {
+			case "kimi-k2.6", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k3":
+				kimiL2 = band == 2
+			}
+		}
+		if band < 3 && !kimiL2 {
 			why = append(why, "band below L3")
 		}
 		if len(why) > 0 {
