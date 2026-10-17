@@ -277,7 +277,7 @@ func (e *Engine) runSerial(ctx context.Context, order []*Node, fp map[string]str
 		if ctx.Err() != nil {
 			// Cancelled (SIGTERM/SIGINT): never start the next target, even
 			// under --keep-going. Everything unstarted is reported skipped.
-			report.add(e.markCancelled(node))
+			report.add(e.markCancelled(ctx, node))
 			continue
 		}
 		if blocker, blocked := firstUnmetDep(node); blocked {
@@ -373,6 +373,9 @@ func (e *Engine) runParallel(ctx context.Context, order []*Node, fp map[string]s
 	pushSkipped := func(n *Node, status Status) {
 		queued[n.Task.Name] = true
 		r := TaskResult{Name: n.Task.Name, Host: n.Task.Host, Status: status}
+		if status == StatusSkipped && ctx.Err() != nil {
+			r.Err = context.Cause(ctx)
+		}
 		n.Status, n.Result, results[n.Task.Name] = status, &r, &r
 		e.noteResult(n.Task.Name, r)
 		go func() { done <- n }()
@@ -443,6 +446,13 @@ func (e *Engine) runParallel(ctx context.Context, order []*Node, fp map[string]s
 
 	mu.Lock()
 	schedule()
+	// An already-cancelled context dispatches nothing, so no completion would
+	// ever arrive to trigger the flush below and the loop would block forever.
+	if ctx.Err() != nil {
+		stopped = true
+		failed = true
+		flushRemaining()
+	}
 	mu.Unlock()
 
 	for completed := 0; completed < len(order); completed++ {
@@ -1083,9 +1093,9 @@ func (e *Engine) upToDate(node *Node, fp map[string]string) bool {
 
 // markCancelled records a target that never started because the run was
 // cancelled; it reads as skipped, so the run reports failed.
-func (e *Engine) markCancelled(node *Node) TaskResult {
+func (e *Engine) markCancelled(ctx context.Context, node *Node) TaskResult {
 	node.Status = StatusSkipped
-	res := TaskResult{Name: node.Task.Name, Host: node.Task.Host, Status: StatusSkipped}
+	res := TaskResult{Name: node.Task.Name, Host: node.Task.Host, Status: StatusSkipped, Err: context.Cause(ctx)}
 	node.Result = &res
 	e.noteResult(node.Task.Name, res)
 	return res
