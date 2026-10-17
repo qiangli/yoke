@@ -1025,7 +1025,21 @@ func (w *Worker) runError(waitErr, scanErr error) error {
 	if err == nil {
 		err = errors.New("CLI reported an error outcome")
 	}
-	return fmt.Errorf("cligw: %s: %w", w.agent, err)
+	err = fmt.Errorf("cligw: %s: %w", w.agent, err)
+	// The provider's verdict (invalid key, dry balance) hides in stderr
+	// behind the bare exit status. Carry its classification so Serve can
+	// fail fast instead of retrying a dead key.
+	return wrapToolError(err, w.stderrTail())
+}
+
+// stderrTail returns the tool's captured stderr for classification. It is
+// only read after the process exited, and it never leaves this package in
+// raw form: only its upstream classification travels on the error.
+func (w *Worker) stderrTail() string {
+	if w.stderr == nil {
+		return ""
+	}
+	return w.stderr.String()
 }
 
 func (w *Worker) removeDir() {

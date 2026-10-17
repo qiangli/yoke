@@ -110,11 +110,17 @@ func (b *AgentBackend) Serve(w http.ResponseWriter, r *http.Request, body []byte
 			message = tail
 		}
 		// A dead or dry metered key surfaces in CLI stderr (invalid key,
-		// exhausted balance). Classify it like an upstream failure: auth
-		// and billing fail fast with their stable status and are never
-		// retried on another seat; anything else keeps the historical
-		// retry-the-next-seat behavior.
-		failure := gateway.ClassifyUpstream(0, []byte(boundSignal(message)), nil).WithEndpoint(b.Name(), "")
+		// exhausted balance), where the bare exit status hides it. The
+		// worker error carries that stderr classification; anything
+		// without one is classified from the message like an upstream
+		// failure: auth and billing fail fast with their stable status
+		// and are never retried on another seat, while anything else
+		// keeps the historical retry-the-next-seat behavior.
+		failure, ok := toolFailure(err)
+		if !ok {
+			failure = gateway.ClassifyUpstream(0, []byte(boundSignal(message)), nil)
+		}
+		failure = failure.WithEndpoint(b.Name(), "")
 		if failure.Class == gateway.UpstreamAuth || failure.Class == gateway.UpstreamBilling {
 			return gateway.Attempt{Status: failure.Status, CanRetry: false, Failure: &failure}
 		}

@@ -137,6 +137,27 @@ func TestAgentBackendCrashCanRetry(t *testing.T) {
 	}
 }
 
+// A tool that dies with a provider 401 body on stderr is an auth failure:
+// stable 401, never retried (Sprint 455 R4, evidence F10: an api-kind agent
+// with an invalid key answered 502 transient retryable after 5 s).
+func TestAgentBackendInvalidKeyFailsFastAuth(t *testing.T) {
+	backend, cleanup := testBackend(t, "backend-401")
+	defer cleanup()
+	rec, attempt := serveBackend(t, backend, `{"model":"test-model","messages":[{"role":"user","content":"hi"}]}`, nil)
+	if attempt.Failure == nil || attempt.Failure.Class != gateway.UpstreamAuth {
+		t.Fatalf("failure=%+v attempt=%+v", attempt.Failure, attempt)
+	}
+	if attempt.Status != http.StatusUnauthorized || attempt.CanRetry || attempt.Failure.Retryable {
+		t.Fatalf("attempt=%+v", attempt)
+	}
+	if body := rec.Body.String(); body != "" {
+		t.Fatalf("auth failure wrote a body: %q", body)
+	}
+	if h := rec.Header().Get("X-Bashy-Backend-Error"); h != "" {
+		t.Fatalf("auth failure leaked into header: %q", h)
+	}
+}
+
 func TestAgentBackendClientCancelKillsWorker(t *testing.T) {
 	started := t.TempDir() + "/started"
 	t.Setenv("CLIGW_CANCEL_STARTED", started)
