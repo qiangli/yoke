@@ -203,14 +203,18 @@ type Server struct {
 	history *sched.HistoryBuffer
 	handler http.Handler
 
-	ctx    context.Context
-	cancel context.CancelFunc
+	ctx      context.Context
+	cancel   context.CancelFunc
+	pollDone chan struct{}
 
-	rankMu sync.Mutex
-	ranked map[int]rankEntry
+	reloadMu sync.Mutex
+	rankMu   sync.Mutex
+	ranked   map[int]rankEntry
 
 	mu       sync.Mutex
 	pools    map[string]*Pool
+	poolRows map[string]Agent
+	retired  []*Pool
 	backends map[string]*AgentBackend
 	order    []string
 	closed   bool
@@ -310,8 +314,10 @@ func NewServer(opts ServerOptions) (*Server, error) {
 		poolCfg: poolCfg, timeout: timeout, log: log,
 		history: sched.NewHistoryBuffer(),
 		ctx:     ctx, cancel: cancel,
+		pollDone:    make(chan struct{}),
 		ranked:      map[int]rankEntry{},
 		pools:       map[string]*Pool{},
+		poolRows:    map[string]Agent{},
 		backends:    map[string]*AgentBackend{},
 		stickyCount: map[string]int{},
 		stickySet:   map[*StickySession]struct{}{},
@@ -330,6 +336,7 @@ func NewServer(opts ServerOptions) (*Server, error) {
 	}
 	s.scaler = NewAutoscaler(scale)
 	s.handler = s.buildHandler()
+	go s.pollCatalog()
 	if opts.Prewarm {
 		s.Prewarm()
 	}
@@ -441,8 +448,12 @@ func (s *Server) Close() error {
 	for _, pool := range s.pools {
 		pools = append(pools, pool)
 	}
+	pools = append(pools, s.retired...)
 	s.mu.Unlock()
 	s.cancel()
+	if s.pollDone != nil {
+		<-s.pollDone
+	}
 	for _, pool := range pools {
 		_ = pool.Close()
 	}
@@ -810,44 +821,89 @@ func (h historyLookup) Lookup(key string) (resolve.PromptResolution, bool) {
 	return resolve.PromptResolution{Tier: rec.Tier, Domains: rec.Domains, Success: rec.Success}, true
 }
 
-// Backend returns the agent's pool-backed gateway backend, creating the pool
-// on first use. An agent that is not in the fleet inventory has no pool.
+// refreshPools reconciles membership under reloadMu. Detached backends remain
+// usable by already admitted requests; they stop retaining spare workers.
+// Never call the autoscaler with catalog/server locks held: its tick calls
+// back into both while holding its own lock.
+func (s *Server) refreshPools() map[string]Agent {
+	s.catalog.inventory()
+	s.catalog.mu.Lock()
+	rows := s.catalog.index // immutable once published
+	s.catalog.mu.Unlock()
+	s.mu.Lock()
+	var removed []string
+	for name, row := range s.poolRows {
+		next, ok := rows[name]
+		if ok && next.identity == row.identity {
+			continue
+		}
+		pool := s.pools[name]
+		s.retired = append(s.retired, pool)
+		removed = append(removed, name)
+		delete(s.pools, name)
+		delete(s.backends, name)
+		delete(s.poolRows, name)
+		for i, n := range s.order {
+			if n == name {
+				s.order = append(s.order[:i], s.order[i+1:]...)
+				break
+			}
+		}
+	}
+	retired := append([]*Pool(nil), s.retired...)
+	s.mu.Unlock()
+	for _, name := range removed {
+		s.scaler.Unregister(name)
+	}
+	for _, pool := range retired {
+		pool.SetMaxSpare(0)
+	}
+	return rows
+}
+
+func (s *Server) pollCatalog() {
+	defer close(s.pollDone)
+	ticker := time.NewTicker(inventoryTTL)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			s.reloadMu.Lock()
+			s.refreshPools()
+			s.reloadMu.Unlock()
+		}
+	}
+}
+
+// Backend returns the current agent pool, creating it on first use.
 func (s *Server) Backend(agent string) (*AgentBackend, error) {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+	rows := s.refreshPools()
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
 		return nil, errors.New("cligw: server is closed")
 	}
-	if backend, ok := s.backends[agent]; ok {
-		s.mu.Unlock()
-		return backend, nil
-	}
-	s.mu.Unlock()
-
-	row, ok := s.agent(agent)
+	row, ok := rows[agent]
 	if !ok {
+		s.mu.Unlock()
 		return nil, fmt.Errorf("cligw: agent %q is not a launchable fleet agent", agent)
 	}
-
-	s.mu.Lock()
 	if backend, ok := s.backends[agent]; ok {
 		s.mu.Unlock()
 		return backend, nil
-	}
-	if s.closed {
-		s.mu.Unlock()
-		return nil, errors.New("cligw: server is closed")
 	}
 	pool := NewPool(s.ctx, agent, s.poolConfigFor(row))
 	backend := NewAgentBackend(agent, row.Model, pool)
 	s.pools[agent] = pool
+	s.poolRows[agent] = row
 	s.backends[agent] = backend
 	s.order = append(s.order, agent)
 	s.mu.Unlock()
-
-	if err := s.scaler.Register(PoolRegistration{
-		Agent: agent, Provider: row.Provider, Band: row.Band, Pool: pool,
-	}); err != nil {
+	if err := s.scaler.Register(PoolRegistration{Agent: agent, Provider: row.Provider, Band: row.Band, Pool: pool}); err != nil {
 		return nil, err
 	}
 	return backend, nil
