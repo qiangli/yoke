@@ -26,6 +26,7 @@ cost_micro: 2000
 # property of the TOOL, not of the model.
 ids:
   ycode: kimi-k2.7-code
+  genie: kimi-k2.7-code
   # opencode's provider id is `moonshotai`, not `moonshot` (its source says so).
   # With `moonshot/` it dies on an opaque "UnknownError" that names nothing —
   # which is how opencode came to be blamed for a registry typo.

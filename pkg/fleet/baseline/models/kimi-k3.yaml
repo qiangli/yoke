@@ -53,6 +53,7 @@ cost_micro: 15000
 # property of the TOOL, not of the model.
 ids:
   ycode: kimi-k3
+  genie: kimi-k3
   # opencode's provider id is `moonshotai`, not `moonshot` (its source says so).
   opencode: moonshotai/kimi-k3
 # Usage probe (added 2026-10-15): the documented Moonshot Check Balance

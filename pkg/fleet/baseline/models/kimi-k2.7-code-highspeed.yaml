@@ -33,6 +33,7 @@ cost_micro: 3000
 # opencode's provider id is `moonshotai` — see kimi-k2.7-code.yaml.
 ids:
   ycode: kimi-k2.7-code-highspeed
+  genie: kimi-k2.7-code-highspeed
   opencode: moonshotai/kimi-k2.7-code-highspeed
 # Usage probe (added 2026-10-15): the documented Moonshot Check Balance
 # endpoint (https://platform.kimi.ai/docs/api/balance) — GET
