@@ -177,6 +177,16 @@ func (e *ExecEngine) Start(ctx context.Context) (string, error) {
 	return "", errors.New("broker: engine did not answer within 90s")
 }
 
+// Exited reports the engine process's death: the channel closes when the
+// child exits, and is nil before Start or after Stop. The door watches it
+// so a request in flight fails fast with a classified error instead of
+// waiting out the local first-byte bound.
+func (e *ExecEngine) Exited() <-chan struct{} {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.done
+}
+
 func (e *ExecEngine) Stop(ctx context.Context) error {
 	e.mu.Lock()
 	cmd, exited := e.cmd, e.done
