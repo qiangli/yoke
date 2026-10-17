@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"fmt"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -98,6 +99,24 @@ type ServicePort struct {
 	Port     int    `yaml:"port" json:"port" doc:"TCP/UDP port"`
 	Bind     string `yaml:"bind,omitempty" json:"bind,omitempty" doc:"address or loopback | lan; default loopback"`
 	Protocol string `yaml:"protocol,omitempty" json:"protocol,omitempty" doc:"tcp (default) | udp"`
+	Env      string `yaml:"env,omitempty" json:"env,omitempty" doc:"environment variable that overrides this port when set to a valid port number; unset or invalid falls back to port"`
+}
+
+// EffectivePort is the listener's actual port: Env's value when it is set to
+// a valid port, otherwise the declared Port. This keeps a unit whose port an
+// environment variable can override (the llm unit and BASHY_LLM_PORT,
+// resolved the same way by pkg/broker/door.Port) to one source of truth,
+// instead of a port baked into the seed and a second one the environment
+// resolves for everything else that talks to the unit.
+func (p ServicePort) EffectivePort() int {
+	if p.Env != "" {
+		if v := strings.TrimSpace(os.Getenv(p.Env)); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 && n < 65536 {
+				return n
+			}
+		}
+	}
+	return p.Port
 }
 
 // ServiceHealth is the unit's health probe. At most one of HTTP / TCP / Exec.
@@ -283,6 +302,9 @@ func (s Service) Validate() error {
 		if p.Protocol != "" && p.Protocol != "tcp" && p.Protocol != "udp" {
 			return bad("port %d protocol %q, want tcp | udp", p.Port, p.Protocol)
 		}
+		if p.Env != "" && !envName.MatchString(p.Env) {
+			return bad("port %d env %q is not a valid variable name", p.Port, p.Env)
+		}
 		if p.Name != "" {
 			if names[p.Name] {
 				return bad("listener name %q declared twice", p.Name)
@@ -413,7 +435,7 @@ func (s Service) resolve(key, sub string, download func(string) (string, bool)) 
 			return "", false
 		}
 		if key == "port" {
-			return strconv.Itoa(p.Port), true
+			return strconv.Itoa(p.EffectivePort()), true
 		}
 		if p.Bind == "" {
 			return "127.0.0.1", true
@@ -520,9 +542,9 @@ func (c *Catalog) ServicePortConflict(s Service) error {
 		}
 		for _, p := range s.Ports {
 			for _, q := range other.Ports {
-				if p.Port == q.Port && protoOf(p) == protoOf(q) && bindsOverlap(p.Bind, q.Bind) {
+				if p.EffectivePort() == q.EffectivePort() && protoOf(p) == protoOf(q) && bindsOverlap(p.Bind, q.Bind) {
 					return fmt.Errorf("fleet: service %q: port %d/%s is held by service %q (bind %s); disable %q or change the port",
-						s.Name, p.Port, protoOf(p), other.Name, bindLabel(q.Bind), other.Name)
+						s.Name, p.EffectivePort(), protoOf(p), other.Name, bindLabel(q.Bind), other.Name)
 				}
 			}
 		}

@@ -6,6 +6,7 @@ ports:
   - name: http
     port: 24556
     bind: loopback
+    env: BASHY_LLM_PORT
 health:
   tcp: true
   interval: 10s

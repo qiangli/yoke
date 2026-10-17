@@ -7,9 +7,13 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"github.com/qiangli/yoke/pkg/broker/door"
+	"github.com/qiangli/yoke/pkg/fleet"
 )
 
 // Sprint 455 P7 (Story #2281, Story-ID 7ad909c17d91): `llm up/down --service`
@@ -343,5 +347,68 @@ func TestLLMDownServiceRefusedWithoutAServiceLayer(t *testing.T) {
 
 	if _, err := runLLMCmd(t, newDownCmd(), "--service"); err == nil {
 		t.Fatal("down --service with no service layer: want an error")
+	}
+}
+
+// TestLLMUpServiceFindsDoorOnPortOverride is Sprint 455 P7's regression: a
+// $BASHY_LLM_PORT override must move both where up/down/status look (door.
+// Port(), already correct) AND where the llm unit itself listens, or the two
+// never meet — up --service enabled the unit, supervisord started it on the
+// seed's fixed port, and waitDoorHealthy timed out polling the override
+// port. The fake supervisor here starts the unit the way a real one would:
+// it reads the actual embedded llm unit record and expands its argv
+// (pkg/fleet.Service.ExpandExec), then binds a fake health server on the
+// port that argv names — proving the unit's own argv, not just the client,
+// now resolves the override.
+func TestLLMUpServiceFindsDoorOnPortOverride(t *testing.T) {
+	port := freeLoopbackPort(t) // reserves and points BASHY_LLM_PORT at a free port
+
+	cat := fleet.New(fleet.WithRoot(t.TempDir()), fleet.WithoutCloudOverlay())
+	unit, ok := cat.Service(ServiceUnit)
+	if !ok {
+		t.Fatalf("no %q service unit", ServiceUnit)
+	}
+	argv, err := unit.ExpandExec("")
+	if err != nil {
+		t.Fatalf("ExpandExec: %v", err)
+	}
+	var argvPort string
+	for i, a := range argv {
+		if a == "--port" && i+1 < len(argv) {
+			argvPort = argv[i+1]
+		}
+	}
+	if argvPort != port {
+		t.Fatalf("llm unit argv port = %q, want override %q: %v", argvPort, port, argv)
+	}
+
+	calls := fakeServiceManager(t)
+	ensures := fakeSupervisordManager(t, func() {
+		ln, err := net.Listen("tcp", "127.0.0.1:"+argvPort)
+		if err != nil {
+			t.Fatalf("fake supervisor: bind unit argv port %s: %v", argvPort, err)
+		}
+		mux := http.NewServeMux()
+		mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"schema_version":"bashy-broker-health-v1","pid":%d}`, 5151)
+		})
+		srv := &http.Server{Handler: mux}
+		go srv.Serve(ln)
+		t.Cleanup(func() { srv.Close() })
+	})
+
+	out, err := runLLMCmd(t, newUpCmd(), "--service")
+	if err != nil {
+		t.Fatalf("up --service: %v\n%s", err, out)
+	}
+	if len(*calls) != 1 || (*calls)[0] != (fakeServiceCall{ServiceUnit, true}) {
+		t.Fatalf("service calls = %+v, want one enable(%q)", *calls, ServiceUnit)
+	}
+	if *ensures != 1 {
+		t.Fatalf("EnsureSupervisordRunning calls = %d, want 1", *ensures)
+	}
+	if want := strconv.Itoa(door.Port()); argvPort != want {
+		t.Fatalf("argv port = %q, want door.Port() %q", argvPort, want)
 	}
 }

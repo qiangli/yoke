@@ -2,9 +2,13 @@ package fleet
 
 import (
 	"context"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
+
+	"github.com/qiangli/yoke/pkg/broker/door"
 )
 
 // Sprint 455 P7 (Story #2281, Story-ID 7ad909c17d91): the llm unit is a
@@ -100,4 +104,69 @@ func TestCatalogSetServiceEnabledHonorsBashyHome(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("expected the write under %s: %v", path, err)
 	}
+}
+
+// Sprint 455 P7 regression: `bashy llm up --service` enables the fleet unit
+// bashy supervisord starts, but the seed baked the door's port (24556)
+// straight into the unit's exec argv while up/down/status resolve the port
+// through door.Port() ($BASHY_LLM_PORT, else the default) — so an override
+// moved where the client looked without moving where the unit listened.
+// port.env is the fix: ExpandExec must resolve the same override door.Port()
+// does, keeping one port source of truth.
+func TestLLMServiceUnitPortHonorsEnvOverride(t *testing.T) {
+	t.Setenv(SeedsEnv, "off")
+	s, ok := New(serviceOpts(t.TempDir())...).Service("llm")
+	if !ok {
+		t.Fatal("no llm service unit")
+	}
+	p, ok := s.PrimaryPort()
+	if !ok {
+		t.Fatal("llm unit declares no port")
+	}
+	if p.Env != door.PortEnv {
+		t.Fatalf("llm unit port.env = %q, want %q (pkg/broker/door.PortEnv)", p.Env, door.PortEnv)
+	}
+
+	// Default: nothing overrides $BASHY_LLM_PORT, so the unit's argv and
+	// door.Port() agree on the seed's port.
+	if got := argvPort(t, s); got != strconv.Itoa(door.DefaultPort) || got != strconv.Itoa(door.Port()) {
+		t.Fatalf("default argv port = %q, want %d", got, door.DefaultPort)
+	}
+
+	// Override: a free loopback port stands in for BASHY_LLM_PORT, the same
+	// way a fake supervisor starting the real unit argv would bind to it.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	_, portStr, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("split %s: %v", ln.Addr(), err)
+	}
+	ln.Close()
+	t.Setenv(door.PortEnv, portStr)
+
+	if got := argvPort(t, s); got != portStr || got != strconv.Itoa(door.Port()) {
+		t.Fatalf("overridden argv port = %q, want %q (door.Port())", got, portStr)
+	}
+	if err := s.Validate(); err != nil {
+		t.Fatalf("llm unit with port.env still must validate: %v", err)
+	}
+}
+
+// argvPort expands s's exec and returns the value following "--port" — the
+// llm unit's shape (bashy llm serve --port {port} --bind {bind}).
+func argvPort(t *testing.T, s Service) string {
+	t.Helper()
+	argv, err := s.ExpandExec("")
+	if err != nil {
+		t.Fatalf("ExpandExec: %v", err)
+	}
+	for i, a := range argv {
+		if a == "--port" && i+1 < len(argv) {
+			return argv[i+1]
+		}
+	}
+	t.Fatalf("no --port in argv %v", argv)
+	return ""
 }
