@@ -37,6 +37,25 @@ var EngineArgv func() []string
 // `llm up` (bashy sets it). Nil = `llm up` is unavailable.
 var SelfArgv func() []string
 
+// ServiceUnit names the fleet service unit backing the model door
+// (pkg/fleet/baseline/services/llm.yaml).
+const ServiceUnit = "llm"
+
+// SetServiceEnabled persists ServiceUnit's desired state — bashy wires it to
+// pkg/fleet's Catalog.SetServiceEnabled on its own catalog, the same write
+// `bashy service enable/disable llm` makes — so `llm up/down --service` can
+// compose it with its own immediate start/stop: enabling also starts the
+// door now, and disabling also stops it, instead of waiting for bashy
+// supervisord's next reconcile. Nil means this binary has no service layer,
+// so --service is refused outright. A package variable, not a direct
+// pkg/fleet import, so a test fakes the service layer without writing to a
+// real catalog.
+var SetServiceEnabled func(ctx context.Context, unit string, enabled bool) error
+
+// errNoServiceLayer is returned by `llm up/down --service` when
+// SetServiceEnabled is nil.
+var errNoServiceLayer = errors.New("broker: this binary has no service layer (--service unavailable)")
+
 // DefaultEngineContext is the context length the engine loads models with
 // unless OLLAMA_CONTEXT_LENGTH says otherwise: explicit, so a local identity
 // always records it.
@@ -412,45 +431,93 @@ func EnsureUp(ctx context.Context) error {
 }
 
 func newUpCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:           "up",
-		Short:         "make sure the model door is running (start it in the background if not)",
+	var asService bool
+	cmd := &cobra.Command{
+		Use:   "up",
+		Short: "make sure the model door is running (start it in the background if not)",
+		Long: `up starts the door if none answers. With --service it first persists the llm
+unit's desired state as enabled (the same write "bashy service enable llm"
+makes), so bashy supervisord brings it back up at login/boot where the
+platform supports it and restarts it on crash per the unit's bounded
+backoff policy (pkg/fleet/baseline/services/llm.yaml) — then starts it now
+instead of waiting for the next reconcile.`,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(c *cobra.Command, _ []string) error {
+			if asService {
+				if SetServiceEnabled == nil {
+					return errNoServiceLayer
+				}
+				if err := SetServiceEnabled(c.Context(), ServiceUnit, true); err != nil {
+					return err
+				}
+			}
 			if err := EnsureUp(c.Context()); err != nil {
 				return err
+			}
+			if asService {
+				fmt.Fprintf(c.OutOrStdout(), "llm unit enabled; model door up on %s\n", door.BaseURL())
+				return nil
 			}
 			fmt.Fprintf(c.OutOrStdout(), "model door up on %s\n", door.BaseURL())
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&asService, "service", false, "enable the llm unit (bashy supervisord autostarts and restarts it) in addition to starting it now")
+	return cmd
 }
 
 func newDownCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:           "down",
-		Short:         "stop the running model door",
+	var asService bool
+	cmd := &cobra.Command{
+		Use:   "down",
+		Short: "stop the running model door",
+		Long: `down stops the door process answering on its port. With --service it also
+persists the llm unit's desired state as disabled (the same write "bashy
+service disable llm" makes), so bashy supervisord stops bringing it back up
+at login/boot and stops restarting it on crash. A door that is not
+currently running is not an error under --service: the unit is still
+disabled for next time.`,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(c *cobra.Command, _ []string) error {
 			var h Health
-			if err := doorJSON(c.Context(), http.MethodGet, "/health", nil, &h); err != nil {
+			running := doorJSON(c.Context(), http.MethodGet, "/health", nil, &h) == nil
+			if running {
+				p, err := os.FindProcess(h.PID)
+				if err != nil {
+					return err
+				}
+				if err := stopDoorProcess(p); err != nil {
+					return err
+				}
+			} else if !asService {
 				return fmt.Errorf("no door answers on %s", door.BaseURL())
 			}
-			p, err := os.FindProcess(h.PID)
-			if err != nil {
-				return err
+			if asService {
+				if SetServiceEnabled == nil {
+					return errNoServiceLayer
+				}
+				if err := SetServiceEnabled(c.Context(), ServiceUnit, false); err != nil {
+					return err
+				}
 			}
-			if err := stopDoorProcess(p); err != nil {
-				return err
+			out := c.OutOrStdout()
+			switch {
+			case running && asService:
+				fmt.Fprintf(out, "stopping the model door (pid %d) and disabling the llm unit\n", h.PID)
+			case running:
+				fmt.Fprintf(out, "stopping the model door (pid %d)\n", h.PID)
+			default:
+				fmt.Fprintln(out, "llm unit disabled (no door was running)")
 			}
-			fmt.Fprintf(c.OutOrStdout(), "stopping the model door (pid %d)\n", h.PID)
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&asService, "service", false, "disable the llm unit (bashy supervisord no longer starts or restarts it) in addition to stopping it now")
+	return cmd
 }
 
 // EnvSchemaVersion is the envelope `llm env --json` emits. The five client

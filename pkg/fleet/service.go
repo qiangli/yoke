@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"sort"
@@ -456,6 +457,30 @@ func (c *Catalog) Services() ([]Service, []error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, errs
+}
+
+// SetServiceEnabled persists a unit's desired state — the write `bashy
+// service enable/disable NAME` makes — for callers outside the service
+// command tree. `bashy llm up/down --service` composes this with its own
+// immediate start/stop so enabling also starts the unit now instead of
+// waiting for the next reconcile.
+func (c *Catalog) SetServiceEnabled(ctx context.Context, name string, enabled bool) error {
+	before, ok := c.Service(name)
+	if !ok {
+		return fmt.Errorf("fleet: no service %q", name)
+	}
+	if before.Enabled == enabled {
+		return nil
+	}
+	if err := guardExisting(ctx, c, KindService, before.Name, true); err != nil {
+		return err
+	}
+	after := before
+	after.Enabled = enabled
+	if err := c.checkService(after); err != nil {
+		return err
+	}
+	return c.saveChanged(dirServices, before.Name, before, after, []string{"enabled"})
 }
 
 // Service resolves a unit by name.
