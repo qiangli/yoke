@@ -149,20 +149,15 @@ func newServiceToggle(on bool, opts []Option) *cobra.Command {
 			if !ok {
 				return fmt.Errorf("fleet: no service %q", args[0])
 			}
-			if before.Enabled == on {
+			already := before.Enabled == on
+			if !already {
+				if err := cat.SetServiceEnabled(cmd.Context(), before.Name, on); err != nil {
+					return err
+				}
+			}
+			if already {
 				fmt.Fprintf(cmd.OutOrStdout(), "%s already %s\n", before.Name, enabledWord(on))
 				return nil
-			}
-			if err := guardExisting(cmd.Context(), cat, KindService, before.Name, true); err != nil {
-				return err
-			}
-			after := before
-			after.Enabled = on
-			if err := cat.checkService(after); err != nil {
-				return err
-			}
-			if err := cat.saveChanged(dirServices, before.Name, before, after, []string{"enabled"}); err != nil {
-				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", before.Name, enabledWord(on))
 			return nil
