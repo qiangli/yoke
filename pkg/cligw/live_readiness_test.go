@@ -19,6 +19,7 @@ func TestLiveDoorReadiness(t *testing.T) {
 		t.Skip("set CLIGW_LIVE_READINESS=1 for real subscription calls")
 	}
 	t.Setenv("BASHY_HOME", t.TempDir())
+	useOperatorHome(t)
 	server, err := NewServer(ServerOptions{})
 	if err != nil {
 		t.Fatal("gateway startup failed")

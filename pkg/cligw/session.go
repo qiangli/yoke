@@ -22,10 +22,67 @@ import (
 // stays open. Every other warm mode is one-shot by construction (cold exits,
 // stdin closes the session) and stays that way: DialSticky refuses those
 // tools loudly instead of faking continuity.
+//
+//	tool      multi-turn
+//	claude    yes (warm: stdin-stream-json)
+//	agy       yes (warm: stdin-stream-json)
+//	codex     no  — 501: one-shot CLI (warm: stdin)
+//	muse      no  — 501: one-shot CLI (warm: cold)
+//	opencode  no  — 501: one-shot CLI (warm: cold)
+//	genie     no  — 501: one-shot CLI (warm: cold)
+//
+// The 501 body is a StickyUnsupportedError: the tool, the reason (one-shot
+// CLI; multi-turn needs a streaming stdin protocol) and the catalog tools
+// that support it, so the caller can rebind rather than guess.
 
 // ErrStickyUnsupported marks a tool that cannot hold a multi-turn session.
-// The broker answers it with 501 and the reason.
+// The broker answers it with 501 and the reason; the concrete value is a
+// *StickyUnsupportedError carrying the tool, the reason and the alternatives.
 var ErrStickyUnsupported = errors.New("cligw: tool does not keep a warm CLI across turns")
+
+// StickyUnsupportedError is the whole 501 story for a sticky
+// bind=worker/reset=none turn on a tool that cannot hold a session: which
+// agent and tool were asked, why the tool is one-shot (its warm mode exits
+// after one turn), what multi-turn needs (a streaming stdin protocol, warm
+// mode stdin-stream-json) and which tools in the catalog have it. It
+// unwraps to ErrStickyUnsupported so callers keep matching with errors.Is.
+type StickyUnsupportedError struct {
+	// Agent is the fleet agent the turn asked for; empty when the refusal
+	// is raised below agent resolution.
+	Agent string
+	// Tool is the agent's CLI tool.
+	Tool string
+	// Warm is the tool's declared warm mode ("cold" when undeclared).
+	Warm string
+	// Supported lists the catalog tools that hold a session, name-sorted
+	// and deduplicated; nil when no catalog was available.
+	Supported []string
+}
+
+func (e *StickyUnsupportedError) Error() string {
+	var b strings.Builder
+	b.WriteString("cligw: ")
+	if e.Agent != "" {
+		fmt.Fprintf(&b, "agent %q runs tool %q", e.Agent, e.Tool)
+	} else {
+		fmt.Fprintf(&b, "tool %q is", e.Tool)
+	}
+	warm := e.Warm
+	if warm == "" {
+		warm = string(WarmCold)
+	}
+	fmt.Fprintf(&b, ", a one-shot CLI (warm mode %q exits after one turn); ", warm)
+	fmt.Fprintf(&b, "multi-turn sticky bind=worker/reset=none needs a streaming stdin protocol (warm: %s); ", WarmStdinStreamJSON)
+	if len(e.Supported) == 0 {
+		b.WriteString("supported: none in this catalog")
+	} else {
+		b.WriteString("supported: " + strings.Join(e.Supported, ", "))
+	}
+	return b.String()
+}
+
+// Unwrap keeps errors.Is(err, ErrStickyUnsupported) true.
+func (e *StickyUnsupportedError) Unwrap() error { return ErrStickyUnsupported }
 
 // ErrStickyCapped marks a room with no headroom for another sticky worker.
 // The broker answers it with 429.
@@ -70,8 +127,8 @@ func NewStickySession(ctx context.Context, agent string) (*StickySession, error)
 	}
 	if mode != WarmStdinStreamJSON {
 		_ = os.RemoveAll(cwd)
-		return nil, fmt.Errorf("%w: tool %q runs warm mode %q (want stdin-stream-json); sticky bind=worker/reset=none is not supported on it",
-			ErrStickyUnsupported, tool.Name, mode)
+		return nil, &StickyUnsupportedError{Agent: agent, Tool: tool.Name, Warm: string(mode),
+			Supported: NewFleetCatalog(agentlaunch.NewCatalog()).StickyTools()}
 	}
 	s := &StickySession{agent: agent, launch: launch, tool: tool, cwd: cwd}
 	if err := s.startLocked(s.argv("", "")); err != nil {
@@ -83,6 +140,18 @@ func NewStickySession(ctx context.Context, agent string) (*StickySession, error)
 
 // Agent reports the fleet agent this session was resolved for.
 func (s *StickySession) Agent() string { return s.agent }
+
+// Pid reports the held CLI's process id, or 0 when no process is up. A
+// multi-turn proof compares it across turns: the same pid is the same
+// conversation.
+func (s *StickySession) Pid() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cmd == nil || s.cmd.Process == nil {
+		return 0
+	}
+	return s.cmd.Process.Pid
+}
 
 // StartedAt reports when the CLI process was (re)started.
 func (s *StickySession) StartedAt() time.Time {

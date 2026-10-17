@@ -871,8 +871,7 @@ func (s *Server) DialSticky(ctx context.Context, agent string) (*StickySession, 
 		if warm == "" {
 			warm = string(WarmCold)
 		}
-		return nil, fmt.Errorf("%w: agent %q runs tool %q with warm mode %q",
-			ErrStickyUnsupported, agent, row.Tool, warm)
+		return nil, &StickyUnsupportedError{Agent: agent, Tool: row.Tool, Warm: warm, Supported: s.catalog.StickyTools()}
 	}
 	backend, err := s.Backend(agent)
 	if err != nil {

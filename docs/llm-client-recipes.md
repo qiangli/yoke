@@ -21,6 +21,32 @@ under its `bashy service` unit and is inherited by the ACP agents Codync starts.
 Every block contains the owner bearer token, so transfer it like a secret and
 do not commit it.
 
+## Multi-turn on one worker (sticky bind=worker reset=none)
+
+A sticky binding with `--bind worker --reset none` holds one warm CLI for the
+binding and forwards only the new turn of the conversation; the client keeps
+sending the whole OpenAI-style message list and the door verifies the prefix.
+Only tools that read further turns from a streaming stdin protocol (fleet
+launch `warm: stdin-stream-json`) can hold a session. Every other tool is a
+one-shot CLI and the turn is refused with 501; the body names the tool, the
+reason and the supported tools.
+
+| tool     | multi-turn | note                                                                 |
+|----------|------------|----------------------------------------------------------------------|
+| claude   | yes        | `warm: stdin-stream-json`                                            |
+| agy      | yes        | `warm: stdin-stream-json`                                            |
+| codex    | no         | 501: one-shot CLI (`warm: stdin`); needs a streaming stdin protocol  |
+| muse     | no         | 501: one-shot CLI (`warm: cold`); needs a streaming stdin protocol   |
+| opencode | no         | 501: one-shot CLI (`warm: cold`); needs a streaming stdin protocol   |
+| genie    | no         | 501: one-shot CLI (`warm: cold`); needs a streaming stdin protocol   |
+
+```sh
+bashy llm sticky create conv --model claude-sonnet5 --bind worker --reset none
+eval "$(bashy llm env --sticky conv)"
+```
+
+`--bind worker --reset each` stays one-shot on every tool.
+
 ## Reach a door through the outpost mesh
 
 Expose the door on the host that owns the seats:
