@@ -397,7 +397,15 @@ func (s *StickySession) runError(waitErr, scanErr error) error {
 	if err == nil {
 		err = errors.New("CLI reported an error outcome")
 	}
-	return fmt.Errorf("cligw: %s: %w", s.agent, err)
+	err = fmt.Errorf("cligw: %s: %w", s.agent, err)
+	return wrapToolError(err, s.stderrTail())
+}
+
+func (s *StickySession) stderrTail() string {
+	if s.stderr == nil {
+		return ""
+	}
+	return s.stderr.String()
 }
 
 func (s *StickySession) removeDir() {

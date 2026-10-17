@@ -108,6 +108,12 @@ func TestCLIHelper(t *testing.T) {
 	case "backend-crash":
 		fmt.Fprintln(os.Stderr, "fake backend crash")
 		os.Exit(7)
+	case "backend-401":
+		// A tool whose provider rejects the key: the provider 401 body
+		// goes to stderr and the tool exits 1, as the ycode CLI does for
+		// an api-kind agent with an invalid key (Sprint 455 F10).
+		fmt.Fprintln(os.Stderr, `ERROR provider request failed: {"error":{"message":"Incorrect API key provided: sk-fake. You can find your API key at https://platform.openai.com/account/api-keys.","type":"invalid_request_error","param":null,"code":"invalid_api_key"}} (status 401)`)
+		os.Exit(1)
 	case "backend-cancel":
 		if path := os.Getenv("CLIGW_CANCEL_STARTED"); path != "" {
 			_ = os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0o600)
