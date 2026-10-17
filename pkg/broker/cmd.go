@@ -43,17 +43,29 @@ const ServiceUnit = "llm"
 
 // SetServiceEnabled persists ServiceUnit's desired state — bashy wires it to
 // pkg/fleet's Catalog.SetServiceEnabled on its own catalog, the same write
-// `bashy service enable/disable llm` makes — so `llm up/down --service` can
-// compose it with its own immediate start/stop: enabling also starts the
-// door now, and disabling also stops it, instead of waiting for bashy
-// supervisord's next reconcile. Nil means this binary has no service layer,
-// so --service is refused outright. A package variable, not a direct
-// pkg/fleet import, so a test fakes the service layer without writing to a
-// real catalog.
+// `bashy service enable/disable llm` makes. `llm down --service` composes it
+// with its own stop; `llm up --service` leaves starting the door to
+// supervisord (see EnsureSupervisordRunning) rather than starting it itself.
+// Nil means this binary has no service layer, so --service is refused
+// outright. A package variable, not a direct pkg/fleet import, so a test
+// fakes the service layer without writing to a real catalog.
 var SetServiceEnabled func(ctx context.Context, unit string, enabled bool) error
 
+// EnsureSupervisordRunning starts bashy supervisord under the current
+// BASHY_HOME when nothing answers its control socket, and waits until
+// something does. `llm up --service` calls it instead of starting the door
+// itself: supervisord is the only process that restarts a crashed unit or
+// brings it back up at boot, and a door started directly here would be a
+// second, unsupervised process holding the port — exactly what a
+// supervisord started afterwards cannot tell apart from a foreign listener.
+// Nil means this binary has no service layer, same as SetServiceEnabled. A
+// package variable for the same reason: bashy wires it to pkg/fleet's
+// EnsureSupervisordRunning, and a test fakes it without starting a real
+// monitor.
+var EnsureSupervisordRunning func(ctx context.Context) error
+
 // errNoServiceLayer is returned by `llm up/down --service` when
-// SetServiceEnabled is nil.
+// SetServiceEnabled or EnsureSupervisordRunning is nil.
 var errNoServiceLayer = errors.New("broker: this binary has no service layer (--service unavailable)")
 
 // DefaultEngineContext is the context length the engine loads models with
@@ -440,43 +452,79 @@ func EnsureUp(ctx context.Context) error {
 	return fmt.Errorf("broker: the door did not come up within 120s (see %s)", filepath.Join(stateDir, "door.log"))
 }
 
+// waitDoorHealthy polls the door's health endpoint until it answers, ctx
+// ends, or 120s pass. `llm up --service` calls it after supervisord starts
+// the door: the process belongs to supervisord, not a c.Wait() this
+// package started, so health polling is all it has to go on (unlike
+// EnsureUp, which starts the door itself and also watches for an early
+// exit).
+func waitDoorHealthy(ctx context.Context) error {
+	deadline := time.Now().Add(120 * time.Second)
+	for time.Now().Before(deadline) {
+		if Healthy() {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+	msg := "broker: the door did not come up within 120s"
+	if stateDir, err := door.StateDir(); err == nil {
+		msg += " (see " + filepath.Join(stateDir, "door.log") + ")"
+	}
+	return errors.New(msg)
+}
+
 func newUpCmd() *cobra.Command {
 	var asService bool
 	cmd := &cobra.Command{
 		Use:   "up",
 		Short: "make sure the model door is running (start it in the background if not)",
-		Long: `up starts the door if none answers. With --service it first persists the llm
+		Long: `up starts the door if none answers. With --service it persists the llm
 unit's desired state as enabled (the same write "bashy service enable llm"
-makes), so bashy supervisord brings it back up at login/boot where the
-platform supports it and restarts it on crash per the unit's bounded
-backoff policy (pkg/fleet/baseline/services/llm.yaml) — then starts it now
-instead of waiting for the next reconcile.`,
+makes), makes sure bashy supervisord itself is running (starting it under
+this BASHY_HOME if nothing answers its control socket), and waits for the
+door supervisord starts — rather than starting the door itself, which
+nothing would then restart or bring back up at login/boot, and which a
+supervisord started afterwards would see as a foreign listener on the
+unit's port.`,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(c *cobra.Command, _ []string) error {
-			if asService {
-				if SetServiceEnabled == nil {
-					return errNoServiceLayer
-				}
-				if err := SetServiceEnabled(c.Context(), ServiceUnit, true); err != nil {
+			if !asService {
+				if err := EnsureUp(c.Context()); err != nil {
 					return err
 				}
-			}
-			if err := EnsureUp(c.Context()); err != nil {
-				return err
-			}
-			if asService {
-				fmt.Fprintf(c.OutOrStdout(), "llm unit enabled; model door up on %s\n", door.BaseURL())
+				fmt.Fprintf(c.OutOrStdout(), "model door up on %s\n", door.BaseURL())
 				return nil
 			}
-			fmt.Fprintf(c.OutOrStdout(), "model door up on %s\n", door.BaseURL())
+			if SetServiceEnabled == nil || EnsureSupervisordRunning == nil {
+				return errNoServiceLayer
+			}
+			if err := SetServiceEnabled(c.Context(), ServiceUnit, true); err != nil {
+				return err
+			}
+			if err := EnsureSupervisordRunning(c.Context()); err != nil {
+				return err
+			}
+			if err := waitDoorHealthy(c.Context()); err != nil {
+				return err
+			}
+			fmt.Fprintf(c.OutOrStdout(), "llm unit enabled; model door up on %s\n", door.BaseURL())
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&asService, "service", false, "enable the llm unit (bashy supervisord autostarts and restarts it) in addition to starting it now")
 	return cmd
 }
+
+// doorStopper stops the door process; stopDoorProcess by default. A package
+// variable so a test can observe its call order against SetServiceEnabled
+// without depending on the exact signal/process semantics of a real stop.
+var doorStopper = stopDoorProcess
 
 func newDownCmd() *cobra.Command {
 	var asService bool
@@ -493,6 +541,19 @@ disabled for next time.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(c *cobra.Command, _ []string) error {
+			if asService {
+				if SetServiceEnabled == nil {
+					return errNoServiceLayer
+				}
+				// Disable before stopping: once the unit is disabled,
+				// supervisord does not restart it when the process exits. In
+				// the other order, the process's exit can race supervisord's
+				// on-failure policy, which restarts it once before it reads
+				// the disable.
+				if err := SetServiceEnabled(c.Context(), ServiceUnit, false); err != nil {
+					return err
+				}
+			}
 			var h Health
 			running := doorJSON(c.Context(), http.MethodGet, "/health", nil, &h) == nil
 			if running {
@@ -500,19 +561,11 @@ disabled for next time.`,
 				if err != nil {
 					return err
 				}
-				if err := stopDoorProcess(p); err != nil {
+				if err := doorStopper(p); err != nil {
 					return err
 				}
 			} else if !asService {
 				return fmt.Errorf("no door answers on %s", door.BaseURL())
-			}
-			if asService {
-				if SetServiceEnabled == nil {
-					return errNoServiceLayer
-				}
-				if err := SetServiceEnabled(c.Context(), ServiceUnit, false); err != nil {
-					return err
-				}
 			}
 			out := c.OutOrStdout()
 			switch {

@@ -57,8 +57,8 @@ An enabled unit's ports may not overlap another enabled unit's: add, set and
 enable refuse the write and name the holder.
 
 RING: embedded = the built-in units; shared = read-only dirs on
-$BASHY_SERVICES_PATH; local = $BASHY_SERVICES_DIR (default
-~/.config/bashy/services).`
+$BASHY_SERVICES_PATH; local = $BASHY_SERVICES_DIR, else $BASHY_HOME/services
+when $BASHY_FLEET_DIR is unset (default ~/.config/bashy/services).`
 
 func serviceRecord() *recordSpec {
 	return newRecordSpec(typedRecord[Service]{

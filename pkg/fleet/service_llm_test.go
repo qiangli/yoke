@@ -2,6 +2,8 @@ package fleet
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -74,5 +76,28 @@ func TestCatalogSetServiceEnabledPersistsDesiredState(t *testing.T) {
 
 	if err := cat.SetServiceEnabled(ctx, "no-such-unit", true); err == nil {
 		t.Fatal("enabling an unknown unit: want an error")
+	}
+}
+
+// Sprint 455 R1 (Story #2303, Story-ID bf090bf24ea9): a sandbox given only
+// $BASHY_HOME (no $BASHY_FLEET_DIR, no $BASHY_SERVICES_DIR — the shape a
+// test or an isolated `bashy` run sets) must write a unit's desired state
+// under $BASHY_HOME/services, the same ring bashy supervisord resolves
+// under the same $BASHY_HOME. Before this fix it fell through to the
+// operator's real ~/.config/bashy/services, so the write and the real
+// supervisord's reconcile pass landed in the same file.
+func TestCatalogSetServiceEnabledHonorsBashyHome(t *testing.T) {
+	t.Setenv("BASHY_FLEET_DIR", "")
+	t.Setenv("BASHY_SERVICES_DIR", "")
+	home := t.TempDir()
+	t.Setenv("BASHY_HOME", home)
+
+	cat := New(WithoutCloudOverlay())
+	if err := cat.SetServiceEnabled(context.Background(), "llm", true); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	path := filepath.Join(home, dirServices, "llm.yaml")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected the write under %s: %v", path, err)
 	}
 }

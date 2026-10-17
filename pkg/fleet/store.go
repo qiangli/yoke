@@ -43,10 +43,24 @@ func DefaultRoot() string {
 }
 
 // NounDir resolves a noun's local store directory.
+//
+// The service ring additionally falls back to $BASHY_HOME/services (ahead
+// of the generic root) when $BASHY_FLEET_DIR is unset: a unit's enabled
+// flag is written here and read back by bashy supervisord, and the two must
+// resolve the same file. Without this, a process given only $BASHY_HOME
+// (the sandbox a test or an isolated run sets) wrote through to the
+// operator's real ~/.config/bashy/services while supervisord — isolated the
+// same way — read $BASHY_HOME/service/supervisord.sock, so neither saw the
+// other's state.
 func NounDir(root, noun string) string {
 	if k, ok := kindByDir(noun); ok && k.DirEnv != "" {
 		if d := os.Getenv(k.DirEnv); d != "" {
 			return d
+		}
+	}
+	if noun == dirServices && os.Getenv("BASHY_FLEET_DIR") == "" {
+		if h := strings.TrimSpace(os.Getenv("BASHY_HOME")); h != "" {
+			return filepath.Join(h, dirServices)
 		}
 	}
 	return filepath.Join(root, noun)

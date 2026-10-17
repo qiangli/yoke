@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -16,6 +17,11 @@ import (
 // wires SetServiceEnabled to pkg/fleet's Catalog.SetServiceEnabled on the
 // "llm" unit, pkg/fleet/baseline/services/llm.yaml). These tests fake that
 // seam so they never touch a real fleet catalog.
+//
+// Sprint 455 R1 (Story #2303, Story-ID bf090bf24ea9): `up --service` no
+// longer starts the door itself (EnsureSupervisordRunning stands in for
+// bashy supervisord instead), and `down --service` disables the unit before
+// stopping the process (doorStopper records order against SetServiceEnabled).
 
 type fakeServiceCall struct {
 	unit    string
@@ -31,6 +37,25 @@ func fakeServiceManager(t *testing.T) *[]fakeServiceCall {
 		return nil
 	}
 	t.Cleanup(func() { SetServiceEnabled = prev })
+	return &calls
+}
+
+// fakeSupervisordManager fakes EnsureSupervisordRunning. By default it does
+// nothing but succeed (as if a monitor already answered); tests that need
+// the door to actually start pass a non-nil onEnsure to bring it up, the way
+// a real supervisord would once it is running.
+func fakeSupervisordManager(t *testing.T, onEnsure func()) *int {
+	t.Helper()
+	calls := 0
+	prev := EnsureSupervisordRunning
+	EnsureSupervisordRunning = func(context.Context) error {
+		calls++
+		if onEnsure != nil {
+			onEnsure()
+		}
+		return nil
+	}
+	t.Cleanup(func() { EnsureSupervisordRunning = prev })
 	return &calls
 }
 
@@ -91,6 +116,7 @@ func runLLMCmd(t *testing.T, cmd *cobra.Command, args ...string) (string, error)
 
 func TestLLMUpServiceEnablesUnitBeforeStarting(t *testing.T) {
 	calls := fakeServiceManager(t)
+	ensures := fakeSupervisordManager(t, nil)
 	startHealthyDoor(t, 4242) // already answering: up is a no-op start
 
 	out, err := runLLMCmd(t, newUpCmd(), "--service")
@@ -99,6 +125,36 @@ func TestLLMUpServiceEnablesUnitBeforeStarting(t *testing.T) {
 	}
 	if len(*calls) != 1 || (*calls)[0] != (fakeServiceCall{ServiceUnit, true}) {
 		t.Fatalf("service calls = %+v, want one enable(%q)", *calls, ServiceUnit)
+	}
+	if *ensures != 1 {
+		t.Fatalf("EnsureSupervisordRunning calls = %d, want 1", *ensures)
+	}
+}
+
+// TestLLMUpServiceLeavesStartingTheDoorToSupervisord is the regression this
+// story fixes: `up --service` must not start the door as a second,
+// unsupervised process. SelfArgv is nil, so EnsureUp's own start path would
+// fail outright; the only way the door comes up here is through
+// EnsureSupervisordRunning, standing in for bashy supervisord starting the
+// now-enabled unit.
+func TestLLMUpServiceLeavesStartingTheDoorToSupervisord(t *testing.T) {
+	prevSelf := SelfArgv
+	SelfArgv = nil
+	t.Cleanup(func() { SelfArgv = prevSelf })
+
+	calls := fakeServiceManager(t)
+	freeLoopbackPort(t) // nothing answers until the fake "supervisord" starts it
+	ensures := fakeSupervisordManager(t, func() { startHealthyDoor(t, 4343) })
+
+	out, err := runLLMCmd(t, newUpCmd(), "--service")
+	if err != nil {
+		t.Fatalf("up --service: %v\n%s", err, out)
+	}
+	if len(*calls) != 1 || (*calls)[0] != (fakeServiceCall{ServiceUnit, true}) {
+		t.Fatalf("service calls = %+v, want one enable(%q)", *calls, ServiceUnit)
+	}
+	if *ensures != 1 {
+		t.Fatalf("EnsureSupervisordRunning calls = %d, want 1", *ensures)
 	}
 }
 
@@ -125,6 +181,17 @@ func TestLLMUpServiceRefusedWithoutAServiceLayer(t *testing.T) {
 	}
 }
 
+func TestLLMUpServiceRefusedWithoutASupervisordHelper(t *testing.T) {
+	fakeServiceManager(t)
+	prev := EnsureSupervisordRunning
+	EnsureSupervisordRunning = nil
+	t.Cleanup(func() { EnsureSupervisordRunning = prev })
+
+	if _, err := runLLMCmd(t, newUpCmd(), "--service"); err == nil {
+		t.Fatal("up --service with no supervisord helper: want an error")
+	}
+}
+
 func TestLLMDownServiceDisablesUnitEvenWhenNotRunning(t *testing.T) {
 	calls := fakeServiceManager(t)
 	freeLoopbackPort(t) // reserves BASHY_LLM_PORT but nothing is served there
@@ -148,6 +215,42 @@ func TestLLMDownWithoutServiceStillErrorsWhenNotRunning(t *testing.T) {
 	if len(*calls) != 0 {
 		t.Fatalf("service calls = %+v, want none", *calls)
 	}
+}
+
+// TestLLMDownServiceDisablesBeforeStopping is the regression this story
+// fixes: once the unit is disabled, a supervisord watching it does not
+// restart it when the process exits. Disabling after stopping risks the
+// monitor's on-failure policy restarting it once before it reads the
+// disable.
+func TestLLMDownServiceDisablesBeforeStopping(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns a real child process")
+	}
+	child, exited := spawnStopHelper(t)
+	startHealthyDoor(t, child.Process.Pid)
+
+	var order []string
+	prevSet := SetServiceEnabled
+	SetServiceEnabled = func(context.Context, string, bool) error {
+		order = append(order, "disable")
+		return nil
+	}
+	t.Cleanup(func() { SetServiceEnabled = prevSet })
+	prevStop := doorStopper
+	doorStopper = func(p *os.Process) error {
+		order = append(order, "stop")
+		return prevStop(p)
+	}
+	t.Cleanup(func() { doorStopper = prevStop })
+
+	out, err := runLLMCmd(t, newDownCmd(), "--service")
+	if err != nil {
+		t.Fatalf("down --service: %v\n%s", err, out)
+	}
+	if len(order) != 2 || order[0] != "disable" || order[1] != "stop" {
+		t.Fatalf("call order = %v, want [disable stop]", order)
+	}
+	waitExit(t, "door", child.Process.Pid, exited)
 }
 
 func TestLLMDownServiceRefusedWithoutAServiceLayer(t *testing.T) {
