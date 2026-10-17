@@ -3,6 +3,7 @@ package broker
 import (
 	"os"
 	"os/exec"
+	"os/signal"
 	"testing"
 	"time"
 )
@@ -11,12 +12,23 @@ import (
 // does nothing but stay alive until something stops it.
 const engineStopHelperEnv = "BASHY_BROKER_STOP_HELPER"
 
+// gracefulStopHelperEnv switches the child into door-like behavior: install
+// a signal handler, as RunDoor does, and exit 0 on receiving it instead of
+// relying on the platform's default disposition.
+const gracefulStopHelperEnv = "BASHY_BROKER_STOP_HELPER_GRACEFUL"
+
 // TestEngineStopHelperProcess is not a test. It is the child the stop tests
 // below spawn; with no signal handlers installed, the platform's default
 // disposition is exactly what is under test.
 func TestEngineStopHelperProcess(t *testing.T) {
 	if os.Getenv(engineStopHelperEnv) == "" {
 		t.Skip("child-process helper for the door/engine stop tests")
+	}
+	if os.Getenv(gracefulStopHelperEnv) != "" {
+		ch := make(chan os.Signal, 1)
+		signal.Notify(ch, os.Interrupt)
+		<-ch
+		os.Exit(0)
 	}
 	select {}
 }
