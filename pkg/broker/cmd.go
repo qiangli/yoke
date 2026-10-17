@@ -763,6 +763,22 @@ identity|worker, --reset each|none (none = multi-turn on one worker, needs
 bind=worker), --ttl (idle expiry, default 30m, 0 = never), --export (visible
 to child processes' sessions).
 
+Multi-turn (bind=worker reset=none) holds ONE warm CLI per binding and
+forwards only the new turn; it needs a tool that reads further turns from
+a streaming stdin protocol (launch warm: stdin-stream-json). Any other tool
+is one-shot and the turn is refused with 501 naming the tool, the reason and
+the supported tools:
+
+  tool      multi-turn
+  claude    yes
+  agy       yes
+  codex     no — 501: one-shot CLI (warm: stdin); needs a streaming stdin protocol
+  muse      no — 501: one-shot CLI (warm: cold); needs a streaming stdin protocol
+  opencode  no — 501: one-shot CLI (warm: cold); needs a streaming stdin protocol
+  genie     no — 501: one-shot CLI (warm: cold); needs a streaming stdin protocol
+
+bind=worker with reset=each stays one-shot on every tool.
+
 Across shells: every agent tool call is a new shell, hence a new door session,
 and a sticky lives in the session that created it. The owner token manages all
 of the principal's stickies from any session: ls lists them with their owning

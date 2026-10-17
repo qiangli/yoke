@@ -141,7 +141,7 @@ func TestStickyWorkerDivergenceIs409BeforeTheWorker(t *testing.T) {
 func TestStickyWorkerUnsupportedToolStays501(t *testing.T) {
 	h := newHarness(t, nil)
 	h.cli.mu.Lock()
-	h.cli.stickyErr = cligw.ErrStickyUnsupported
+	h.cli.stickyErr = &cligw.StickyUnsupportedError{Agent: "codex-gpt6-astra", Tool: "codex", Warm: "stdin", Supported: []string{"agy", "claude"}}
 	h.cli.mu.Unlock()
 	h.do("POST", "/v1/sticky", StickySpec{Key: "conv", Model: "L5", Bind: BindWorker, Reset: ResetNone}, nil)
 	status, out := stickyTurn(t, h, "conv", "L5", [2]string{"user", "A"})
@@ -149,8 +149,12 @@ func TestStickyWorkerUnsupportedToolStays501(t *testing.T) {
 		t.Fatalf("unsupported: %d %v, want 501", status, out)
 	}
 	raw, _ := json.Marshal(out)
-	if !strings.Contains(string(raw), "sticky") {
-		t.Fatalf("501 body %s does not name the sticky reason", raw)
+	// The body is the whole story: the binding mode, the tool, why it is
+	// one-shot, what multi-turn needs, and which tools have it.
+	for _, want := range []string{"sticky bind=worker / reset=none", `tool \"codex\"`, "one-shot CLI", "streaming stdin protocol", "supported: agy, claude"} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("501 body %s lacks %q", raw, want)
+		}
 	}
 }
 

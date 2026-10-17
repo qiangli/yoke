@@ -116,8 +116,26 @@ func TestDialStickyHonorsSupportAndCap(t *testing.T) {
 	defer server.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if _, err := server.DialSticky(ctx, "cold-four"); !errors.Is(err, ErrStickyUnsupported) {
+	_, err = server.DialSticky(ctx, "cold-four")
+	if !errors.Is(err, ErrStickyUnsupported) {
 		t.Fatalf("cold DialSticky = %v, want ErrStickyUnsupported", err)
+	}
+	// The refusal is the whole 501 story: the tool, why it cannot hold a
+	// session, and which catalog tools can.
+	var unsupported *StickyUnsupportedError
+	if !errors.As(err, &unsupported) {
+		t.Fatalf("cold DialSticky = %T %v, want *StickyUnsupportedError", err, err)
+	}
+	if unsupported.Agent != "cold-four" || unsupported.Tool != "fakecold" || unsupported.Warm != "cold" {
+		t.Fatalf("unsupported detail = %+v", unsupported)
+	}
+	if got := strings.Join(unsupported.Supported, ","); got != "claude" {
+		t.Fatalf("supported tools = %q, want the stdin-stream-json tools of the catalog (claude)", got)
+	}
+	for _, want := range []string{`tool "fakecold"`, "one-shot CLI", "streaming stdin protocol", "stdin-stream-json", "supported: claude"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("cold DialSticky error %q lacks %q", err, want)
+		}
 	}
 	if _, err := server.DialSticky(ctx, "no-such-agent"); err == nil {
 		t.Fatal("unknown agent dialed a session")
@@ -156,5 +174,30 @@ func TestStickySessionCloseIsIdempotent(t *testing.T) {
 	defer cancel()
 	if _, err := sess.Turn(ctx, CompletionPrompt{Prompt: "late"}, nil); err == nil {
 		t.Fatal("turn after close succeeded")
+	}
+}
+
+func TestStickyUnsupportedErrorNamesToolReasonAndSupport(t *testing.T) {
+	err := error(&StickyUnsupportedError{Agent: "codex-x", Tool: "codex", Warm: "stdin", Supported: []string{"agy", "claude"}})
+	if !errors.Is(err, ErrStickyUnsupported) {
+		t.Fatalf("StickyUnsupportedError does not unwrap to ErrStickyUnsupported: %v", err)
+	}
+	want := `cligw: agent "codex-x" runs tool "codex", a one-shot CLI (warm mode "stdin" exits after one turn); ` +
+		`multi-turn sticky bind=worker/reset=none needs a streaming stdin protocol (warm: stdin-stream-json); ` +
+		`supported: agy, claude`
+	if got := err.Error(); got != want {
+		t.Fatalf("Error() =\n%s\nwant\n%s", got, want)
+	}
+	none := &StickyUnsupportedError{Tool: "muse", Warm: "cold"}
+	if got := none.Error(); !strings.Contains(got, `tool "muse"`) || !strings.Contains(got, "supported: none in this catalog") {
+		t.Fatalf("Error() without agent or support = %q", got)
+	}
+}
+
+func TestFleetCatalogStickyToolsListsStreamJSONToolsOnce(t *testing.T) {
+	catalog := installServerFleet(t)
+	// Two agents share tool claude; the one cold tool is absent.
+	if got := strings.Join(catalog.StickyTools(), ","); got != "claude" {
+		t.Fatalf("StickyTools() = %q, want claude", got)
 	}
 }

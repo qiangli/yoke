@@ -260,6 +260,23 @@ func (c *FleetCatalog) Agent(name string) (Agent, bool) {
 	return agent, ok
 }
 
+// StickyTools lists the tools of the launchable inventory that hold a
+// multi-turn session (warm mode stdin-stream-json), name-sorted and
+// deduplicated. It is the "supported" half of a sticky 501.
+func (c *FleetCatalog) StickyTools() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, a := range c.inventory() {
+		if WarmMode(strings.TrimSpace(a.Warm)) != WarmStdinStreamJSON || seen[a.Tool] {
+			continue
+		}
+		seen[a.Tool] = true
+		out = append(out, a.Tool)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func (c *FleetCatalog) deriveInventory() []Agent {
 	rows, _ := c.fleet.Agents()
 	out := make([]Agent, 0, len(rows))
