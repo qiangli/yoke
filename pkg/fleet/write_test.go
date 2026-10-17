@@ -373,6 +373,35 @@ func TestDefaultRootHonorsEnv(t *testing.T) {
 	}
 }
 
+// The service ring additionally resolves under $BASHY_HOME when
+// $BASHY_FLEET_DIR and $BASHY_SERVICES_DIR are both unset — a sandbox
+// isolated only by $BASHY_HOME (as a test, or an isolated `bashy` run, sets
+// it) must not spill a unit's enabled flag into the operator's real
+// ~/.config/bashy/services, where the operator's own supervisord would then
+// start a unit the sandbox never meant it to see.
+func TestServiceNounDirHonorsBashyHome(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BASHY_FLEET_DIR", "")
+	t.Setenv("BASHY_SERVICES_DIR", "")
+	home := t.TempDir()
+	t.Setenv("BASHY_HOME", home)
+	if got, want := NounDir(root, dirServices), filepath.Join(home, dirServices); got != want {
+		t.Fatalf("NounDir(services) = %q, want %q", got, want)
+	}
+	// A noun other than services is unaffected: it still falls through to
+	// the generic root.
+	if got, want := NounDir(root, dirModels), filepath.Join(root, dirModels); got != want {
+		t.Fatalf("NounDir(models) = %q, want %q (BASHY_HOME must not leak into other nouns)", got, want)
+	}
+	// $BASHY_FLEET_DIR, once set, still wins over $BASHY_HOME for services:
+	// an operator who named an explicit fleet root meant that root.
+	fleetDir := t.TempDir()
+	t.Setenv("BASHY_FLEET_DIR", fleetDir)
+	if got, want := NounDir(fleetDir, dirServices), filepath.Join(fleetDir, dirServices); got != want {
+		t.Fatalf("NounDir(services) with BASHY_FLEET_DIR set = %q, want %q", got, want)
+	}
+}
+
 // Names are unique within a kind, not across kinds — so an agent may be called
 // `claude`. But every launcher resolves an agent before a tool, so the nickname
 // silently shadows the harness. Warn rather than let it pass unremarked.
