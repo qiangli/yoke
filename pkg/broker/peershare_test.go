@@ -121,7 +121,7 @@ func TestPeerCredentialShareAllowDenyRevoke(t *testing.T) {
 		}
 	}
 	// The Responses route (Codex's only wire since 0.162) is inference: the
-	// gate must not 403 it. It is delegated to cligw, not served by the broker.
+	// gate must not 403 it; the broker routes it by model.
 	for _, p := range []string{"/v1/responses", "/openai/v1/responses"} {
 		if code, body := peerPost(t, h, p, cred, nil); code == http.StatusForbidden || code == http.StatusUnauthorized {
 			t.Fatalf("shared peer refused on %s: %d %s", p, code, body)

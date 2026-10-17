@@ -304,7 +304,7 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ri := &reqInfo{params: params, started: b.opts.Now()}
 	ri.rec = Record{Time: ri.started, Method: r.Method, Path: rest, Class: ClassInteractive.String()}
 	cw := newCaptureWriter(w)
-	capture := b.opts.Capture && r.Method == http.MethodPost && (isInferencePath(rest) || strings.TrimPrefix(rest, "/openai") == "/v1/responses" || rest == "/api/chat" || rest == "/api/generate")
+	capture := b.opts.Capture && r.Method == http.MethodPost && (isInferencePath(rest) || rest == "/api/chat" || rest == "/api/generate")
 	cw.capture = capture
 	var requestBody boundedBody
 	if capture && r.Body != nil {
@@ -384,7 +384,7 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func isInferencePath(p string) bool {
 	p = strings.TrimPrefix(p, "/openai")
 	switch p {
-	case "/v1/chat/completions", "/v1/completions", "/v1/embeddings", "/v1/messages", "/anthropic/v1/messages":
+	case "/v1/responses", "/v1/chat/completions", "/v1/completions", "/v1/embeddings", "/v1/messages", "/anthropic/v1/messages":
 		return true
 	}
 	return false
@@ -562,6 +562,16 @@ func (b *Broker) dispatch(w http.ResponseWriter, r *http.Request, ri *reqInfo, b
 // serveLocal runs one request on the exclusive device.
 func (b *Broker) serveLocal(w http.ResponseWriter, r *http.Request, ri *reqInfo, payload map[string]json.RawMessage, model string, binding *Binding, native bool) {
 	ctx := r.Context()
+	var responseWire *localResponses
+	if !native && strings.TrimPrefix(r.URL.Path, "/openai") == "/v1/responses" {
+		var err error
+		payload, responseWire, err = responsesPayload(payload)
+		if err != nil {
+			b.finish(ri, http.StatusBadRequest, 0, err.Error())
+			writeErr(w, r.URL.Path, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 	anth := !native && isAnthropicPath(r.URL.Path)
 	clientModel := model
 	anthStream := false
@@ -676,7 +686,9 @@ func (b *Broker) serveLocal(w http.ResponseWriter, r *http.Request, ri *reqInfo,
 	}
 	defer release()
 	cw := newCaptureWriter(w)
-	if anth {
+	if responseWire != nil {
+		ri.rec.PromptTok, ri.rec.OutputTok = b.serveResponsesLocal(cw, r, body, responseWire, clientModel)
+	} else if anth {
 		ri.rec.PromptTok, ri.rec.OutputTok = b.serveAnthropicLocal(ctx, cw, body, anthStream, clientModel)
 	} else {
 		b.proxyEngine(cw, r, body)
