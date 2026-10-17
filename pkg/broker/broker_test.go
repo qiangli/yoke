@@ -343,8 +343,11 @@ func TestPriorityClassesAndQueueFull(t *testing.T) {
 	go send("interactive", "interactive")
 	waitQueued(t, h.b.device, 2)
 	resp, out := h.do("POST", "/api/chat", chat("llama3.2:3b"), nil)
-	if resp.StatusCode != 503 || resp.Header.Get("X-Bashy-Refusal") != "queue-full" {
+	if resp.StatusCode != 429 || resp.Header.Get("X-Bashy-Refusal") != "queue-full" {
 		t.Fatalf("queue full: %d %v", resp.StatusCode, out)
+	}
+	if out["type"] != "queue_full" || resp.Header.Get("Retry-After") == "" {
+		t.Fatalf("queue full carries no reason: %v", out)
 	}
 	close(h.eng.hold)
 	got := []string{<-order, <-order, <-order}

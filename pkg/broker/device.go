@@ -50,11 +50,20 @@ func ParseClass(s string, def Class) (Class, error) {
 	return def, fmt.Errorf("unknown class %q (want interrupt, steering, interactive or batch)", s)
 }
 
-// ErrQueueFull is the explicit refusal when the run queue is at its limit.
+// ErrQueueFull is the explicit refusal when the run queue is at its limit
+// (or the door is draining): the caller answers 429 (503 while draining)
+// with a queue_full reason instead of parking the request.
 var ErrQueueFull = errors.New("model queue is full")
 
 // DefaultQueueLimit bounds the waiting requests across all classes.
 const DefaultQueueLimit = 64
+
+// DeviceQueueName names the local run queue in queue_full refusals.
+const DeviceQueueName = "local"
+
+// QueueRetryAfterSecs is the back-off a queue_full refusal asks for, in the
+// Retry-After header and the retry_after_s body field alike.
+const QueueRetryAfterSecs = 5
 
 type waiter struct {
 	class     Class
@@ -66,9 +75,14 @@ type waiter struct {
 // Device is the exclusive run queue for one local model engine.
 type Device struct {
 	mu      sync.Mutex
+	name    string
 	busy    bool
 	waiting [numClasses][]*waiter
 	limit   int
+	// draining refuses new acquisitions immediately (the queue_full
+	// refusal answers 503 instead of 429) while already-queued work
+	// still runs to completion.
+	draining bool
 
 	// last is the principal whose work the device served most recently;
 	// OnSwitch runs (while the device is held) before a different
@@ -87,7 +101,29 @@ func NewDevice(limit int) *Device {
 	if limit <= 0 {
 		limit = DefaultQueueLimit
 	}
-	return &Device{limit: limit}
+	return &Device{name: DeviceQueueName, limit: limit}
+}
+
+// Name reports the queue name carried in queue_full refusals.
+func (d *Device) Name() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.name
+}
+
+// SetDraining refuses new acquisitions immediately while already-queued
+// work still runs to completion.
+func (d *Device) SetDraining(drain bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.draining = drain
+}
+
+// Draining reports whether new acquisitions are refused for a drain.
+func (d *Device) Draining() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.draining
 }
 
 // Acquire waits for the device. It returns the release func and how long
@@ -99,6 +135,10 @@ func (d *Device) Acquire(ctx context.Context, class Class, principal string) (fu
 	}
 	start := time.Now()
 	d.mu.Lock()
+	if d.draining {
+		d.mu.Unlock()
+		return nil, 0, ErrQueueFull
+	}
 	if !d.busy && d.queuedLocked() == 0 {
 		d.busy = true
 		d.mu.Unlock()
