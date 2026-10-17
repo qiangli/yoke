@@ -12,13 +12,22 @@ import (
 
 // The common service registry owns the apps lifecycle. Its seeded exec must
 // expand to flags the foreground server accepts, with safe defaults.
+//
+// The seed is ENABLED: f14961cb ("fleet: enable developer web surfaces by
+// default", Sprint 436, Story #2035) turned apps and meet on so a paired
+// developer host still has both human-facing front doors after an upgrade —
+// seeding either disabled strands sprint and meeting access until someone is
+// already on the host to repair it. pkg/fleet's TestDeveloperSurfaceSeedsAreEnabled
+// pins that intent; this test asserts the same thing from the console side so
+// the pair cannot drift apart again. Safe defaults live in the exec flags
+// below (loopback bind, pairing off), not in refusing to start.
 func TestAppsUnitExecMatchesServeFlags(t *testing.T) {
 	u, ok := fleet.New().Service("apps")
 	if !ok {
 		t.Fatal("apps service seed is missing")
 	}
-	if u.Enabled || u.ProviderName() != fleet.ServiceProviderProcess {
-		t.Fatalf("seed = enabled %v provider %s, want disabled process", u.Enabled, u.ProviderName())
+	if !u.Enabled || u.ProviderName() != fleet.ServiceProviderProcess {
+		t.Fatalf("seed = enabled %v provider %s, want enabled process", u.Enabled, u.ProviderName())
 	}
 	argv, err := u.ExpandExec("")
 	if err != nil {
