@@ -253,6 +253,88 @@ func TestLLMDownServiceDisablesBeforeStopping(t *testing.T) {
 	waitExit(t, "door", child.Process.Pid, exited)
 }
 
+// TestLLMDownServiceStopsThroughSupervisordWhenWired is Sprint 455 F9's
+// regression: once a supervisord is the one that spawned the door, `down
+// --service` must ask it to stop the unit (the path `bashy service stop`
+// uses) instead of signalling the door pid directly. Racing a direct signal
+// against the monitor's own bookkeeping is exactly what let it restart the
+// unit once before reading the disable (and, on Windows, a direct
+// CTRL_BREAK does not even reach a process group supervisord set up). The
+// door pid must never be touched when StopServiceNow is wired.
+func TestLLMDownServiceStopsThroughSupervisordWhenWired(t *testing.T) {
+	startHealthyDoor(t, 4242)
+
+	var order []string
+	prevSet := SetServiceEnabled
+	SetServiceEnabled = func(context.Context, string, bool) error {
+		order = append(order, "disable")
+		return nil
+	}
+	t.Cleanup(func() { SetServiceEnabled = prevSet })
+
+	prevStopNow := StopServiceNow
+	StopServiceNow = func(_ context.Context, unit string) error {
+		order = append(order, "stop-service:"+unit)
+		return nil
+	}
+	t.Cleanup(func() { StopServiceNow = prevStopNow })
+
+	prevStop := doorStopper
+	doorStopCalled := false
+	doorStopper = func(p *os.Process) error {
+		doorStopCalled = true
+		return nil
+	}
+	t.Cleanup(func() { doorStopper = prevStop })
+
+	out, err := runLLMCmd(t, newDownCmd(), "--service")
+	if err != nil {
+		t.Fatalf("down --service: %v\n%s", err, out)
+	}
+	if len(order) != 2 || order[0] != "disable" || order[1] != "stop-service:"+ServiceUnit {
+		t.Fatalf("call order = %v, want [disable stop-service:%s]", order, ServiceUnit)
+	}
+	if doorStopCalled {
+		t.Fatal("doorStopper was called; the door pid must not be signalled directly when StopServiceNow is wired")
+	}
+}
+
+// TestLLMDownServiceFallsBackToDoorStopperWhenStopServiceNowIsNil preserves
+// the pre-existing behavior for a binary that has not wired StopServiceNow
+// yet (an older bashy, or no monitor at all): down --service still disables
+// then signals the door pid itself.
+func TestLLMDownServiceFallsBackToDoorStopperWhenStopServiceNowIsNil(t *testing.T) {
+	prevStopNow := StopServiceNow
+	StopServiceNow = nil
+	t.Cleanup(func() { StopServiceNow = prevStopNow })
+
+	child, exited := spawnStopHelper(t)
+	startHealthyDoor(t, child.Process.Pid)
+
+	var order []string
+	prevSet := SetServiceEnabled
+	SetServiceEnabled = func(context.Context, string, bool) error {
+		order = append(order, "disable")
+		return nil
+	}
+	t.Cleanup(func() { SetServiceEnabled = prevSet })
+	prevStop := doorStopper
+	doorStopper = func(p *os.Process) error {
+		order = append(order, "stop")
+		return prevStop(p)
+	}
+	t.Cleanup(func() { doorStopper = prevStop })
+
+	out, err := runLLMCmd(t, newDownCmd(), "--service")
+	if err != nil {
+		t.Fatalf("down --service: %v\n%s", err, out)
+	}
+	if len(order) != 2 || order[0] != "disable" || order[1] != "stop" {
+		t.Fatalf("call order = %v, want [disable stop]", order)
+	}
+	waitExit(t, "door", child.Process.Pid, exited)
+}
+
 func TestLLMDownServiceRefusedWithoutAServiceLayer(t *testing.T) {
 	prev := SetServiceEnabled
 	SetServiceEnabled = nil

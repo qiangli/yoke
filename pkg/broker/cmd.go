@@ -64,6 +64,20 @@ var SetServiceEnabled func(ctx context.Context, unit string, enabled bool) error
 // monitor.
 var EnsureSupervisordRunning func(ctx context.Context) error
 
+// StopServiceNow asks bashy supervisord to stop unit through its own
+// control path — the same one `bashy service stop llm` uses — rather than
+// the caller signalling the unit's process directly. `llm down --service`
+// prefers this over doorStopper whenever it is wired: once supervisord is
+// the one that spawned the door, a direct signal from here races the
+// monitor's own bookkeeping of the stop (it can read the unit as still
+// enabled and restart it once before the disable catches up, Sprint 455
+// F9), and on Windows a direct CTRL_BREAK does not even reach a process
+// group supervisord — not this command — set up when it started the door.
+// Nil means this binary has not wired a path for this yet (an older bashy,
+// or no service layer at all); `llm down --service` then falls back to
+// signalling the door pid itself, as it always has.
+var StopServiceNow func(ctx context.Context, unit string) error
+
 // errNoServiceLayer is returned by `llm up/down --service` when
 // SetServiceEnabled or EnsureSupervisordRunning is nil.
 var errNoServiceLayer = errors.New("broker: this binary has no service layer (--service unavailable)")
@@ -536,7 +550,13 @@ persists the llm unit's desired state as disabled (the same write "bashy
 service disable llm" makes), so bashy supervisord stops bringing it back up
 at login/boot and stops restarting it on crash. A door that is not
 currently running is not an error under --service: the unit is still
-disabled for next time.`,
+disabled for next time.
+
+With --service, stopping the door itself goes through supervisord (the same
+path "bashy service stop llm" uses) rather than signalling the door process
+directly, whenever that path is wired: once supervisord is the one that
+spawned the door, a direct signal from here races its own bookkeeping of
+the stop instead of going through it.`,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -557,12 +577,18 @@ disabled for next time.`,
 			var h Health
 			running := doorJSON(c.Context(), http.MethodGet, "/health", nil, &h) == nil
 			if running {
-				p, err := os.FindProcess(h.PID)
-				if err != nil {
-					return err
-				}
-				if err := doorStopper(p); err != nil {
-					return err
+				if asService && StopServiceNow != nil {
+					if err := StopServiceNow(c.Context(), ServiceUnit); err != nil {
+						return err
+					}
+				} else {
+					p, err := os.FindProcess(h.PID)
+					if err != nil {
+						return err
+					}
+					if err := doorStopper(p); err != nil {
+						return err
+					}
 				}
 			} else if !asService {
 				return fmt.Errorf("no door answers on %s", door.BaseURL())
