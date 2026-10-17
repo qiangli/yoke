@@ -337,3 +337,41 @@ func TestEngineFailurePropagates(t *testing.T) {
 		t.Errorf("after should be skipped, got %s", byName["after"].Status)
 	}
 }
+
+func TestEnginePreCancelledContextReturnsPromptly(t *testing.T) {
+	md := "## Tasks\n\n" +
+		"### a\n" + block("bash", "echo a") +
+		"### b\nRequires: a\n" + block("bash", "echo b")
+	for _, conc := range []int{1, 4} {
+		eng := engineFor(t, t.TempDir(), md)
+		eng.Concurrency = conc
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		type out struct {
+			rep RunReport
+			err error
+		}
+		ch := make(chan out, 1)
+		go func() {
+			r, err := eng.Run(ctx, "b")
+			ch <- out{r, err}
+		}()
+		select {
+		case o := <-ch:
+			if o.err != nil {
+				t.Fatalf("j=%d: Run: %v", conc, o.err)
+			}
+			if !o.rep.Failed || len(o.rep.Results) != 2 {
+				t.Fatalf("j=%d: want failed report with 2 results, got %+v", conc, o.rep)
+			}
+			for _, r := range o.rep.Results {
+				if r.Status != StatusSkipped || r.Err == nil {
+					t.Errorf("j=%d: %s not recorded as cancelled: %+v", conc, r.Name, r)
+				}
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("j=%d: Run hung on an already-cancelled context", conc)
+		}
+	}
+}
