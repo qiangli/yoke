@@ -37,6 +37,15 @@ type Attempt struct {
 	Status    int
 	Committed bool
 	CanRetry  bool
+	// Failure is the classified upstream failure, set when the backend
+	// answered with an error (or could not be reached) and nothing was
+	// written to the caller. The handler turns it into the caller-facing
+	// JSON error; a nil Failure with a 4xx/5xx status keeps the historical
+	// generic or passthrough behavior.
+	Failure *UpstreamFailure
+	// UpstreamStatus is the raw upstream HTTP status (0 when no HTTP
+	// response arrived). Status is the stable caller-facing status.
+	UpstreamStatus int
 }
 
 // DefaultBreaker is used by reverse-proxy backends. Applications that need an
@@ -44,19 +53,29 @@ type Attempt struct {
 var DefaultBreaker = sched.NewBreaker()
 
 type reverseProxyBackend struct {
-	name     string
-	target   *url.URL
-	director func(*http.Request)
+	name      string
+	target    *url.URL
+	director  func(*http.Request)
+	firstByte time.Duration
 }
 
 // ReverseProxyBackend returns a backend that proxies to target. The optional
 // director runs after the standard single-target rewrite on served requests.
+// The first-byte bound is DefaultFirstByteTimeout.
 func ReverseProxyBackend(name string, target *url.URL, director func(*http.Request)) Backend {
+	return ReverseProxyBackendWithTimeout(name, target, director, 0)
+}
+
+// ReverseProxyBackendWithTimeout returns a backend that proxies to target
+// and fails an upstream staying silent past firstByte before its first
+// response byte. A non-positive firstByte selects DefaultFirstByteTimeout,
+// so a silent upstream can never hang a caller forever.
+func ReverseProxyBackendWithTimeout(name string, target *url.URL, director func(*http.Request), firstByte time.Duration) Backend {
 	var targetCopy url.URL
 	if target != nil {
 		targetCopy = *target
 	}
-	return &reverseProxyBackend{name: name, target: &targetCopy, director: director}
+	return &reverseProxyBackend{name: name, target: &targetCopy, director: director, firstByte: firstByte}
 }
 
 func (b *reverseProxyBackend) Name() string { return b.name }
@@ -153,6 +172,7 @@ func (b *reverseProxyBackend) Serve(w http.ResponseWriter, r *http.Request, body
 
 	proxy := httputil.NewSingleHostReverseProxy(b.target)
 	proxy.FlushInterval = -1
+	proxy.Transport = FirstByteTransport(b.firstByte)
 	originalDirector := proxy.Director
 	proxy.Director = func(out *http.Request) {
 		originalDirector(out)
