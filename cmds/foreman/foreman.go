@@ -520,7 +520,7 @@ func spawnServe(id string) error {
 	// Nil stdio maps to the null device. Inheriting the launcher's terminal
 	// made the detached daemon die from SIGHUP as soon as a noninteractive
 	// `bashy foreman start --detach` returned.
-	if err := serve.Start(); err != nil {
+	if err := startForemanDetached(serve); err != nil {
 		return err
 	}
 	go func() {

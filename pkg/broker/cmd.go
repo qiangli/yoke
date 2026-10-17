@@ -416,7 +416,7 @@ func EnsureUp(ctx context.Context) error {
 	c := exec.Command(argv[0], argv[1:]...)
 	c.Stdout, c.Stderr, c.Stdin = logf, logf, nil
 	c.SysProcAttr = detachSysProcAttr()
-	if err := c.Start(); err != nil {
+	if err := startDetached(c); err != nil {
 		return fmt.Errorf("broker: start the door: %w", err)
 	}
 	exited := make(chan error, 1)
