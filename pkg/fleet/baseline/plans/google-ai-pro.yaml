@@ -14,6 +14,15 @@ sources:
 notes: >-
   Antigravity on Pro is described only as "Entry rate limits" (Ultra: higher /
   highest). No numeric threshold is published, so none is recorded.
+# No usage probe — checked 2026-10-17: agy (Antigravity/Gemini CLI) exposes no
+# documented local usage file and no CLI status/usage command. `agy --help`
+# lists only agent/agents/models/mcp/plugin/remote-control/update; the home
+# dir ~/.gemini/antigravity-cli holds sqlite conversations and settings.json
+# with no quota fields, and agy's OAuth credential (oauth_creds.json) is not a
+# usage source. The vendor publishes no quota endpoint for the subscription
+# seat; the only documented quota signals are the 429 bodies already covered
+# below. The seat therefore stays unmeasured; bashy quota reports unmeasured
+# (never 0% or a fabricated percentage).
 # Usage signals (Sprint #447): Google-style 429 bodies. RESOURCE_EXHAUSTED
 # carries a retryDelay ("37s", a Go duration) in its quota details block;
 # "Quota exceeded for quota metric ..." is the message wording. Both wordings
