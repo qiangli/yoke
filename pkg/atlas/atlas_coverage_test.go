@@ -50,7 +50,7 @@ func TestToolTableMatchesRegistry(t *testing.T) {
 
 func TestClosedVocabularies(t *testing.T) {
 	groups := sliceSet(atlas.Groups())
-	tiers := sliceSet(atlas.Tiers())
+	tiers := sliceSet(append(atlas.Tiers(), atlas.TierAccount))
 	stages := sliceSet(atlas.Stages())
 	shapes := sliceSet(atlas.Shapes())
 	caps := sliceSet(atlas.Capabilities())
@@ -476,7 +476,7 @@ func TestIdiomsReferenceKnownCommands(t *testing.T) {
 	// Shell builtins are the embedding shell's to contribute; idioms may
 	// name these few without an atlas entry.
 	builtinOK := map[string]bool{"cd": true, "trap": true}
-	tiers := sliceSet(atlas.Tiers())
+	tiers := sliceSet(append(atlas.Tiers(), atlas.TierAccount))
 	seen := map[string]bool{}
 	for _, id := range atlas.Idioms() {
 		if id.ID == "" || id.Pattern == "" || id.Note == "" {
@@ -506,7 +506,7 @@ func TestRegistryEntryDerivation(t *testing.T) {
 		e.Subclass != atlas.SubclassManagedExternal {
 		t.Errorf("RegistryEntry(6) = %+v, want cloud/cluster-cloud/managed-external", e)
 	}
-	// A cloud/cluster CLI acts on another host — remote; a tier-2 local tool
+	// A cloud/cluster CLI acts on another host — remote; a tier-1 local tool
 	// (ripgrep) is downloaded and run but stays on this box — not remote.
 	if !sliceSet(e.Effects)[atlas.EffRemote] {
 		t.Errorf("RegistryEntry(6) effects %v missing %q", e.Effects, atlas.EffRemote)
@@ -568,8 +568,9 @@ func TestKnowledgeAndSkills10Reconciliation(t *testing.T) {
 		if !ok {
 			t.Errorf("Lookup(%q) missing from atlas", n)
 		}
-		if e.Tier != atlas.TierUserland {
-			t.Errorf("Lookup(%q).Tier = %q, want %q", n, e.Tier, atlas.TierUserland)
+		// Knowledge shared between agents is workplace by purpose (Sprint 449).
+		if e.Tier != atlas.TierWorkplace {
+			t.Errorf("Lookup(%q).Tier = %q, want %q", n, e.Tier, atlas.TierWorkplace)
 		}
 		if e.Group != atlas.GroupKnowledge {
 			t.Errorf("Lookup(%q).Group = %q, want %q", n, e.Group, atlas.GroupKnowledge)

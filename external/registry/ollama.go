@@ -16,7 +16,9 @@ const OllamaVersion = "v0.40.1"
 
 const ollamaSupplyChainPolicy = "docs/bashy-service-supply-chain-policy.md"
 
-// ollama — the managed local LLM runtime (ollama/ollama, MIT), tier 3 (sandbox).
+// ollama — the managed local LLM runtime (ollama/ollama, MIT), tier 4 (sphere):
+// the same purpose tier as the hand-listed `ollama` verb (pooled inference),
+// not an OCI operation.
 // Third-party release archives are DISABLED per docs/bashy-service-supply-chain-policy.md.
 // bashy must never download or exec an upstream ollama release archive; the
 // bashy-signed embedded runner compiled from source (external/ollama:
@@ -25,7 +27,7 @@ const ollamaSupplyChainPolicy = "docs/bashy-service-supply-chain-policy.md"
 func init() {
 	register(Entry{
 		Name:           "ollama",
-		Tier:           3,
+		Tier:           4,
 		License:        "MIT",
 		Synopsis:       "Ollama local LLM runner (embedded only; no third-party download)",
 		EnvVersion:     "OLLAMA_VERSION",

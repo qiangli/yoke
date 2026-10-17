@@ -7,8 +7,8 @@ func TestRgRegistered(t *testing.T) {
 	if !ok {
 		t.Fatal("rg not registered")
 	}
-	if e.Tier != 2 {
-		t.Errorf("rg tier = %d, want 2 (userland)", e.Tier)
+	if e.Tier != 1 {
+		t.Errorf("rg tier = %d, want 1 (userland)", e.Tier)
 	}
 	if e.License != "MIT OR Unlicense" {
 		t.Errorf("rg license = %q, want MIT OR Unlicense", e.License)

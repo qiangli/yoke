@@ -4,8 +4,9 @@
 // Package atlas is the Command Atlas: the curated multi-axis catalog of the
 // bashy/coreutils command surface. Beyond the classical class split
 // (builtin / coreutils / verb) it records, per command, a functional group,
-// the dhnt execution tier it operates in (userland/workspace/sandbox/sphere/
-// cluster/cloud/account), and agentic capability flags (json, dry-run,
+// the dhnt tier that names its primary purpose (userland/workplace/sandbox/
+// sphere/cluster/cloud, plus the account front door beside the stack), and
+// agentic capability flags (json, dry-run,
 // destructive, …), plus a curated list of composite idioms (commands
 // naturally used together).
 //
@@ -32,11 +33,18 @@ import (
 	"strings"
 )
 
-// Execution tiers (locked vocabulary — dhnt docs/execution-tiers.md), plus
-// "account" for the Tessaro front door beside the stack.
+// Tiers (locked vocabulary — dhnt docs/execution-tiers.md). A tier names a
+// command's PRIMARY PURPOSE, never where it may run: `weave` is workplace
+// (agent work and collaboration) and `ls` is userland, and both run in a
+// container, on a peer or in a pod. Package ownership does not decide the
+// tier either — a verb implemented in yoke is classified by what it is for.
+// Tier 2 was `workspace` until Sprint 449 (2026-10-17); the word `workspace`
+// keeps its filesystem meaning (a weave clone, its paths and persisted fields)
+// and is deliberately NOT a tier alias. "account" is the Tessaro front door
+// beside the six-tier stack, not a seventh tier (see Tiers).
 const (
 	TierUserland  = "userland"
-	TierWorkspace = "workspace"
+	TierWorkplace = "workplace"
 	TierSandbox   = "sandbox"
 	TierSphere    = "sphere"
 	TierCluster   = "cluster"
@@ -324,12 +332,13 @@ func Groups() []string {
 	}
 }
 
-// Tiers returns the tier vocabulary in stack order (foundation → payoff),
-// with account last (beside the stack, not in it).
+// Tiers returns the six canonical tiers in stack order (foundation → payoff).
+// TierAccount is not among them: the front door is represented separately
+// (an entry may carry it, but it is never a seventh tier).
 func Tiers() []string {
 	return []string{
-		TierUserland, TierWorkspace, TierSandbox, TierSphere,
-		TierCluster, TierCloud, TierAccount,
+		TierUserland, TierWorkplace, TierSandbox, TierSphere,
+		TierCluster, TierCloud,
 	}
 }
 
@@ -527,7 +536,7 @@ func VerbNames() []string { return sortedKeys(verbs) }
 func RegistryEntry(tier int) Entry {
 	// Every managed external is downloaded (net) and then run as its own process
 	// (exec). Only a tier-4+ CLI (sphere/cluster/cloud — doctl, …) drives a
-	// control plane on ANOTHER host and so is also `remote`; a tier-2/3 local
+	// control plane on ANOTHER host and so is also `remote`; a tier-1..3 local
 	// tool like ripgrep is not.
 	effects := []string{EffExec, EffNet}
 	if tier >= 4 {
@@ -535,7 +544,7 @@ func RegistryEntry(tier int) Entry {
 	}
 	sort.Strings(effects)
 	// SDLC stage follows the same tier split: a tier-4+ CLI drives a control
-	// plane on another host — that is shipping (deploy). A local tier-2/3 tool
+	// plane on another host — that is shipping (deploy). A local tier-1..3 tool
 	// like ripgrep serves every stage (cross).
 	stage := StageCross
 	if tier >= 4 {
@@ -568,7 +577,7 @@ func RegistryEntry(tier int) Entry {
 func TierName(t int) string {
 	switch t {
 	case 2:
-		return TierWorkspace
+		return TierWorkplace
 	case 3:
 		return TierSandbox
 	case 4:
@@ -624,7 +633,7 @@ var idioms = []Idiom{
 	{ID: "fleet-suite", Commands: []string{"weave", "sprint", "dag"},
 		Pattern: "sprint (plan) → weave (isolate/run) → dag (targets)",
 		Note: "the orchestration suite (sprint + weave are the public surface; " +
-			"foreman/supervise/pair are suppressed internals, Bashy #40)", Tier: TierWorkspace},
+			"foreman/supervise/pair are suppressed internals, Bashy #40)", Tier: TierWorkplace},
 	{ID: "cluster-deploy", Commands: []string{"kubectl", "helm"},
 		Pattern: "kubectl get ...; helm install ...",
 		Note:    "inspect the cluster, install/upgrade via charts", Tier: TierCluster},
@@ -633,16 +642,16 @@ var idioms = []Idiom{
 		Note:    "tiers 4-5 need a Tessaro-paired machine", Tier: TierAccount},
 	{ID: "whois-notify", Commands: []string{"whois", "notify"},
 		Pattern: "whois AGENT; notify AGENT \"subject\"",
-		Note:    "resolve the recipient before sending a durable, attributed nudge", Tier: TierWorkspace},
+		Note:    "resolve the recipient before sending a durable, attributed nudge", Tier: TierWorkplace},
 	{ID: "who-write", Commands: []string{"who", "write"},
 		Pattern: "who; write USER",
 		Note:    "inspect the live audience before opening a terminal conversation", Tier: TierUserland},
 	{ID: "mb-meet", Commands: []string{"mb", "meet"},
 		Pattern: "mb; meet --room ROOM",
-		Note:    "turn a board handoff into a shared conversation", Tier: TierWorkspace},
+		Note:    "turn a board handoff into a shared conversation", Tier: TierWorkplace},
 	{ID: "notify-inbox", Commands: []string{"notify", "inbox"},
 		Pattern: "notify AGENT \"subject\"; inbox",
-		Note:    "send a subject-only doorbell and receive it through the same bus", Tier: TierWorkspace},
+		Note:    "send a subject-only doorbell and receive it through the same bus", Tier: TierWorkplace},
 }
 
 // --- table construction -----------------------------------------------------
@@ -1078,52 +1087,59 @@ func init() {
 			Caps: append([]string{CapCached, CapSelfProvisioning, CapSpawnsProcesses}, caps...)}
 	}
 
-	// orchestration
-	addVerb("weave", Entry{Stage: StageCode, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
+	// orchestration — the workplace tier (agent work and collaboration). Every
+	// orchestration and knowledge verb is workplace by purpose unless it is a
+	// dedicated operation of another tier (act/act-runner run CI in OCI
+	// containers → sandbox) or a general utility that merely lives in the group
+	// (search, sota, mcp → userland). The full review, with a rationale per
+	// ambiguous entry, is docs/command-tier-classification.md.
+	addVerb("weave", Entry{Stage: StageCode, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON}})
 	addVerb("agentic", Entry{Stage: StageCross, Group: GroupPlatform, Tier: TierUserland,
 		Caps: []string{CapJSON, CapSpawnsProcesses}, Effects: []string{EffExec}})
-	addVerb("sprint", Entry{Stage: StagePlan, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON},
+	addVerb("sprint", Entry{Stage: StagePlan, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON},
 		Web: &WebSurface{Label: "Sprint", Mount: "sprint", Mode: WebInProcess, DefaultOn: true}})
 	// `dag --serve` HAS a browser view, but proxying it through the launcher does
 	// not work properly yet, so it declares no WebSurface and gets no tile. The
 	// declaration is what the launcher discovers, so removing it is the whole
 	// change — re-add it when the surface is actually usable. A tile that opens
 	// something broken is worse than no tile: it costs a click to learn nothing.
-	addVerb("dag", Entry{Stage: StageCross, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
+	addVerb("dag", Entry{Stage: StageCross, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON}})
 	// mod: the Bash# module contract — sibling pins are go.mod versions in a
-	// go.work workspace; drift/sync/dir/tools/init compose the go command.
-	addVerb("mod", Entry{Stage: StageCross, Group: GroupToolchains, Tier: TierWorkspace, Caps: []string{CapJSON}})
-	addVerb("sdlc", Entry{Stage: StageDeploy, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
+	// go.work workspace; drift/sync/dir/tools/init compose the go command. A
+	// toolchain helper, so userland: the go.work "workspace" it manages is the
+	// filesystem word, not the tier (it was filed as tier 2 on that homonym).
+	addVerb("mod", Entry{Stage: StageCross, Group: GroupToolchains, Tier: TierUserland, Caps: []string{CapJSON}})
+	addVerb("sdlc", Entry{Stage: StageDeploy, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON}})
 	// Chat began as a one-shot launcher and was temporarily renamed `invoke`.
 	// It now owns real governed interactive sessions and their control surface,
 	// so chat is canonical again; invoke remains a compatibility spelling.
-	addVerb("chat", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
-	addVerb("invoke", Entry{Stage: StageCode, Group: GroupOrch, AliasOf: "chat", Caps: []string{CapJSON, CapSpawnsProcesses}})
-	addVerb("delegate", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
+	addVerb("chat", Entry{Stage: StageCode, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON, CapSpawnsProcesses}})
+	addVerb("invoke", Entry{Stage: StageCode, Group: GroupOrch, Tier: TierWorkplace, AliasOf: "chat", Caps: []string{CapJSON, CapSpawnsProcesses}})
+	addVerb("delegate", Entry{Stage: StageCode, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON, CapSpawnsProcesses}})
 	// genie is the local-model SWE agent's front door: it runs the genie
 	// bundle's solve recipe, which starts its own model server, pulls the
 	// model once and lets the agent edit the current repository. No spend:
 	// the model is local, which is the point of the verb.
-	addVerb("genie", Entry{Stage: StageCode, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON, CapSpawnsProcesses}})
+	addVerb("genie", Entry{Stage: StageCode, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON, CapSpawnsProcesses}})
 	// ycode is the engine for agents declared in YAML (Sprint #301): bashy
 	// runs its CLI in-process. Like chat/delegate it drives a model (spend) and
 	// the agent's commands (exec, write), over the network when the model is
 	// remote.
-	addVerb("ycode", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
-	addVerb("coach", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
-	addVerb("meet", Entry{Stage: StagePlan, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses},
+	addVerb("ycode", Entry{Stage: StageCode, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON, CapSpawnsProcesses}})
+	addVerb("coach", Entry{Stage: StageCode, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON, CapSpawnsProcesses}})
+	addVerb("meet", Entry{Stage: StagePlan, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON, CapSpawnsProcesses},
 		Web: &WebSurface{Label: "Meet", Mount: "meet", Mode: WebInProcess, Port: 8637,
 			Start: []string{"meet", "serve"}, DefaultOn: true}})
-	addVerb("supervise", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapSpawnsProcesses}})
-	addVerb("capability", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	addVerb("supervise", Entry{Stage: StageCode, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapSpawnsProcesses}})
+	addVerb("capability", Entry{Stage: StageCross, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON}})
 	// leaderboard: the account of what the fleet actually did, where capability
 	// is the routing input. Read-only over the run ledger; CROSS because you
 	// ask "who has earned this" at any stage.
-	addVerb("leaderboard", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	addVerb("leaderboard", Entry{Stage: StageCross, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON}})
 	// stats is a pure filter over results JSONL (resolve rates with clustered
 	// CIs, paired differences, pass^k, cost per solve): it decides nothing and
 	// only reads its input.
-	addVerb("stats", Entry{Stage: StageTest, Group: GroupOrch, Caps: []string{CapJSON}})
+	addVerb("stats", Entry{Stage: StageTest, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON}})
 	// mb: the host message board — read what was posted to you, post to others.
 	// CROSS, because you check the board at any stage. NOT named inbox/im: this
 	// is a shared append-only spool with per-reader cursors, so it is neither a
@@ -1133,13 +1149,13 @@ func init() {
 	// CURSOR (capped at -n for anything not addressed to you); the panel is the
 	// scan across every lane, which is the one thing the CLI is not trying to
 	// be. No Port and no Start: nothing to supervise, the console serves it.
-	addVerb("mb", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON},
+	addVerb("mb", Entry{Stage: StageCross, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON},
 		Web: &WebSurface{Label: "Messages", Mount: "mb", Mode: WebInProcess, DefaultOn: true}})
-	addVerb("messages", Entry{Stage: StageCross, Group: GroupOrch, AliasOf: "mb", Caps: []string{CapJSON}})
+	addVerb("messages", Entry{Stage: StageCross, Group: GroupOrch, Tier: TierWorkplace, AliasOf: "mb", Caps: []string{CapJSON}})
 	// ping is an arity-selected front door: board reads/sends share mb's durable
 	// local store, while a bare host or system-ping option execs the platform
 	// ping. It is not an alias because both branches are intentional API.
-	addVerb("ping", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapSpawnsProcesses}})
+	addVerb("ping", Entry{Stage: StageCross, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapSpawnsProcesses}})
 	// inbox and notify are the private receive/send faces of the same bus. They
 	// remain separate top-level primitives so the atlas can show composition
 	// without inventing another transport or address-book concept.
@@ -1152,25 +1168,25 @@ func init() {
 	// CapReadOnly here: the ordinary `bashy inbox` read writes a cursor, and a
 	// capability flag that describes only one of a verb's surfaces is a claim
 	// the other surface falsifies.
-	addVerb("inbox", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON},
+	addVerb("inbox", Entry{Stage: StageCross, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON},
 		Web: &WebSurface{Label: "Inbox", Mount: "inbox", Mode: WebInProcess, DefaultOn: true,
 			Tip: "every agent's waiting mail, read-only"}})
-	addVerb("notify", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	addVerb("notify", Entry{Stage: StageCross, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON}})
 	// handoff/resume: pause a live session and pass the work on -- to another
 	// agentic tool, a scheduler, or tomorrow. CROSS, because you hand off work
 	// at any stage: a half-finished plan, a half-finished refactor, a half-run
 	// test campaign, a half-done deploy.
-	addVerb("handoff", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
-	addVerb("resume", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	addVerb("handoff", Entry{Stage: StageCross, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON}})
+	addVerb("resume", Entry{Stage: StageCross, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON}})
 	// bus — the agent notification bus (publish/watch). Replaces the never-
 	// reachable `notify`: the subscriber could not be `bashy watch`, because that
 	// name belongs to the classic watch(1), so both halves live under one parent.
-	addVerb("bus", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapJSON}})
+	addVerb("bus", Entry{Stage: StageCode, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON}})
 	// feed — the federated signed feed: post to sinks you own (git/GitHub,
 	// rclone), follow other people's sinks, fetch + verify, read. The PUBLISH
 	// half of how agents and people share knowledge beyond this host, where
 	// kb is the host-local store and bus the host-local push.
-	addVerb("feed", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON, CapNeedsNetwork}})
+	addVerb("feed", Entry{Stage: StageCross, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON, CapNeedsNetwork}})
 	// herald — reach an agent that is NOT on this host, over A2A.
 	//
 	// The stage question this verb has to answer ("which stage do you serve
@@ -1179,11 +1195,11 @@ func init() {
 	// PARTICIPANT: every other coordination verb resolves a participant through
 	// capability.ResolveTool to a binary HERE. herald is the only path to a
 	// capability that does not exist on this host and cannot be installed on it.
-	// Tier is userland because it operates a client on this node — an external
-	// third party is neither `sphere` (your own machines) nor `cloud` (a
-	// hyperscaler control plane).
+	// Tier is workplace: its purpose is agent collaboration. It is not `sphere`
+	// (your own machines) or `cloud` (a hyperscaler control plane) just because
+	// the other agent is remote — a tier is a purpose, not an execution location.
 	addVerb("herald", Entry{
-		Stage: StageCross, Group: GroupOrch, Tier: TierUserland,
+		Stage: StageCross, Group: GroupOrch, Tier: TierWorkplace,
 		Caps: []string{CapJSON, CapNeedsNetwork, CapSpawnsProcesses},
 	})
 
@@ -1199,12 +1215,12 @@ func init() {
 	// destructive, on every one of them, and declared the same way on every one
 	// of them (operator decision D4). Rows that disagreed here would tell a policy
 	// engine that `skill rm` is safer than `tool rm`, which is not true.
-	addVerb("tool", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON, CapDestructive}})
-	addVerb("model", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON, CapDestructive}})
-	addVerb("agent", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON, CapDestructive}})
-	addVerb("person", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
-	addVerb("whois", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
-	addVerb("schedule", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
+	addVerb("tool", Entry{Stage: StageCross, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON, CapDestructive}})
+	addVerb("model", Entry{Stage: StageCross, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON, CapDestructive}})
+	addVerb("agent", Entry{Stage: StageCross, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON, CapDestructive}})
+	addVerb("person", Entry{Stage: StageCross, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON}})
+	addVerb("whois", Entry{Stage: StageCross, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON}})
+	addVerb("schedule", Entry{Stage: StageCross, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON, CapSpawnsProcesses}})
 	addVerb("act", staged(StageTest, managed(GroupOrch, TierSandbox)))
 	addVerb("act-runner", staged(StageTest, managed(GroupOrch, TierSandbox, CapDaemon)))
 	addVerb("mirror", staged(StageCross, managed(GroupStorage, TierUserland, CapDaemon, CapNeedsNetwork)))
@@ -1213,19 +1229,19 @@ func init() {
 	// skill, and craft are the v1.0.0 knowledge surface (Part 4j, Sprint 379 / Story #1529).
 	// The standalone memory front door is deferred to post-1.0 (Sprint 284); memory
 	// in 1.0 is fronted by kb recall.
-	addVerb("kb", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON}})
-	addVerb("search", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON, CapNeedsNetwork}})
-	addVerb("sota", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON, CapNeedsNetwork, CapSpawnsProcesses}})
+	addVerb("kb", Entry{Stage: StageCross, Group: GroupKnowledge, Tier: TierWorkplace, Caps: []string{CapJSON}})
+	addVerb("search", Entry{Stage: StageCross, Group: GroupKnowledge, Tier: TierUserland, Caps: []string{CapJSON, CapNeedsNetwork}})
+	addVerb("sota", Entry{Stage: StageCross, Group: GroupKnowledge, Tier: TierUserland, Caps: []string{CapJSON, CapNeedsNetwork, CapSpawnsProcesses}})
 	// lexicon: what do this project's words mean HERE? It PROJECTS the atlas and the
 	// fleet registry into the channels agents read -- it introduces NO new source of
 	// truth, which is the test it has to keep passing. The moment it starts STORING
 	// vocabulary rather than projecting it, it has become the hand-written glossary
 	// that the whole data-catalog industry exists because it failed.
-	addVerb("lexicon", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON, CapReadOnly}})
+	addVerb("lexicon", Entry{Stage: StageCross, Group: GroupKnowledge, Tier: TierWorkplace, Caps: []string{CapJSON, CapReadOnly}})
 	// claim: who is working in this project. CROSS -- you collide at any stage:
 	// planning, coding, testing, deploying. Two agents writing one project is how
 	// an untested change reaches main.
-	addVerb("claim", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	addVerb("claim", Entry{Stage: StageCross, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON}})
 	// steward: WHO ANSWERS FOR THIS HOST, and what actually happened on it. Exactly one
 	// seat per host/user, held under a monotonic fencing epoch, over an append-only
 	// hash-chained journal that outlives whoever holds it — board, status, log, history
@@ -1240,13 +1256,13 @@ func init() {
 	// a flag on either: claim says who is working in a PROJECT, handoff moves a working
 	// TREE, and steward holds a MANDATE. Claiming the seat restores no diff and touches
 	// no repository — work is a diff, a seat is not.
-	addVerb("steward", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	addVerb("steward", Entry{Stage: StageCross, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON}})
 	// The MCP front door exposes command discovery and execution to agents (v1.0.0).
-	addVerb("mcp", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}, Effects: []string{EffExec}})
+	addVerb("mcp", Entry{Stage: StageCross, Group: GroupOrch, Tier: TierUserland, Caps: []string{CapJSON}, Effects: []string{EffExec}})
 	// skill: destructive for the same reason as tool/model/agent above — `rm`
 	// on the local ring, no undo.
-	addVerb("skill", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON, CapDestructive}})
-	addVerb("craft", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON, CapReadOnly}})
+	addVerb("skill", Entry{Stage: StageCross, Group: GroupKnowledge, Tier: TierWorkplace, Caps: []string{CapJSON, CapDestructive}})
+	addVerb("craft", Entry{Stage: StageCross, Group: GroupKnowledge, Tier: TierWorkplace, Caps: []string{CapJSON, CapReadOnly}})
 	// recall was a top-level verb until 2026-08-05 and is now `kb recall` — the
 	// cross-ring read surface mounted under the noun that owns memory. It has no
 	// entry of its own because the atlas catalogues VERBS and a subcommand is
@@ -1256,7 +1272,7 @@ func init() {
 	// exists to catch. Its local-first property is unchanged and now rides kb's
 	// entry — neither declares `net`, which pkg/atlas/localfirst_test.go pins.
 	// The standalone memory front door is deferred to post-1.0 (Sprint 284).
-	addVerb("define", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON, CapReadOnly}})
+	addVerb("define", Entry{Stage: StageCross, Group: GroupKnowledge, Tier: TierWorkplace, Caps: []string{CapJSON, CapReadOnly}})
 
 	// engines
 	// The tier-3 container engine has FOUR spellings and ONE canonical name
@@ -1309,7 +1325,7 @@ func init() {
 	addVerb("git-scm", staged(StageCross, provisioner(GroupForge, CapNeedsNetwork)))
 	addVerb("gh", staged(StageCross, managed(GroupForge, TierUserland, CapNeedsNetwork)))
 	// Same as dag: loom serves a UI, but the proxied tile is not right yet.
-	addVerb("loom", staged(StageCross, managed(GroupForge, TierWorkspace, CapDaemon)))
+	addVerb("loom", staged(StageCross, managed(GroupForge, TierWorkplace, CapDaemon)))
 
 	// net
 	addVerb("web", Entry{Stage: StageCross, Group: GroupNet, Caps: []string{CapJSON}})
@@ -1395,12 +1411,12 @@ func init() {
 	// replacement for an ad-hoc TODO.md); otherwise the per-host/user personal list
 	// (~/.bashy/todo/<owner>/). `weave add --from-todo` seeds a run from a repo todo.
 	// No forge, no cloud — a committed directory of one file per item.
-	addVerb("todo", Entry{Stage: StagePlan, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
+	addVerb("todo", Entry{Stage: StagePlan, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON}})
 	// judge is gate's SEMANTIC twin: gate asks "does it PASS" (mechanical,
 	// reproducible); judge asks "is it GOOD" (an LLM opinion, advisory unless
 	// --gate). Together they finally encode "sandbox-green is not mergeable".
-	addVerb("pair", Entry{Stage: StageTest, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON, CapSpawnsProcesses}})
-	addVerb("judge", Entry{Stage: StageTest, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON, CapSpawnsProcesses}})
+	addVerb("pair", Entry{Stage: StageTest, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON, CapSpawnsProcesses}})
+	addVerb("judge", Entry{Stage: StageTest, Group: GroupOrch, Tier: TierWorkplace, Caps: []string{CapJSON, CapSpawnsProcesses}})
 	addVerb("gate", Entry{Stage: StageTest, Group: GroupDiagnostics, Caps: []string{CapJSON, CapSpawnsProcesses}})
 	// conform: BASHY'S OWN fidelity batteries (bash-5.3 compat / POSIX conformance /
 	// VSC-PCTS compliance / benchmark). Renamed from `verify` 2026-07-12: it had

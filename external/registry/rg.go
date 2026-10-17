@@ -10,14 +10,15 @@ import (
 // RgVersion is the default pinned release of ripgrep.
 const RgVersion = "15.1.0"
 
-// rg - ripgrep (BurntSushi/ripgrep, MIT OR Unlicense), tier 2 userland.
+// rg - ripgrep (BurntSushi/ripgrep, MIT OR Unlicense), tier 1 (userland):
+// a general text-search utility, whatever package provisions it.
 // Ships per-platform release archives with the rg binary nested under the
 // archive root directory. Checksums are resolved by binmgr from the release's
 // checksum list.
 func init() {
 	register(Entry{
 		Name:           "rg",
-		Tier:           2,
+		Tier:           1,
 		License:        "MIT OR Unlicense",
 		Synopsis:       "ripgrep fast recursive text search (managed external, MIT OR Unlicense)",
 		EnvVersion:     "RG_VERSION",

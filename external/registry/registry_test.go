@@ -63,8 +63,8 @@ func TestGiteaEntry(t *testing.T) {
 	if !ok {
 		t.Fatal("gitea not registered")
 	}
-	if e.Tier != 5 {
-		t.Errorf("gitea tier = %d, want 5 (cluster)", e.Tier)
+	if e.Tier != 2 {
+		t.Errorf("gitea tier = %d, want 2 (workplace: the forge loom fronts)", e.Tier)
 	}
 	if e.License != "MIT" {
 		t.Errorf("gitea license = %q, want MIT", e.License)
@@ -88,8 +88,8 @@ func TestOllamaEntry(t *testing.T) {
 	if !ok {
 		t.Fatal("ollama not registered")
 	}
-	if e.Tier != 3 {
-		t.Errorf("ollama tier = %d, want 3 (sandbox)", e.Tier)
+	if e.Tier != 4 {
+		t.Errorf("ollama tier = %d, want 4 (sphere, like the ollama verb)", e.Tier)
 	}
 	if e.License != "MIT" {
 		t.Errorf("ollama license = %q, want MIT", e.License)

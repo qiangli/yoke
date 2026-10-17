@@ -9,12 +9,14 @@ import (
 // GiteaVersion is the default pinned release of Gitea.
 const GiteaVersion = "v28.1.0"
 
-// gitea — the lightweight Git forge (go-gitea/gitea, MIT), tier 5 (cluster).
+// gitea — the lightweight Git forge (go-gitea/gitea, MIT), tier 2 (workplace):
+// the forge `loom` fronts for agent collaboration, so the raw binary carries
+// the same purpose tier (it is not a DKS operation).
 // Ships per-platform GitHub-release raw binaries and checksums.
 func init() {
 	register(Entry{
 		Name:           "gitea",
-		Tier:           5,
+		Tier:           2,
 		License:        "MIT",
 		Synopsis:       "Gitea lightweight Git forge (managed external, MIT)",
 		EnvVersion:     "GITEA_VERSION",
