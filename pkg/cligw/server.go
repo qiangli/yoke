@@ -701,6 +701,12 @@ func (s *Server) route(next http.Handler) http.Handler {
 			writeJSON(w, http.StatusInternalServerError, errorEnvelope(err.Error()))
 			return
 		}
+		// The seat is chosen, so what it cannot honor is known: stamp the
+		// dropped sampling parameters BEFORE anything is written, which is
+		// the only point a streaming answer still has headers to carry.
+		if ignored := IgnoredSampling(s.toolOf(decision.Agent), body); len(ignored) > 0 {
+			w.Header().Set(IgnoredHeader, IgnoredValue(ignored))
+		}
 		if filter.Slash != "" {
 			// A slash request runs the agent's vendor command; it takes no
 			// completion worker, so no pool is created or consulted.
@@ -1149,6 +1155,15 @@ func (s *Server) pool(agent string) *Pool {
 }
 
 func (s *Server) agent(name string) (Agent, bool) { return s.catalog.Agent(name) }
+
+// toolOf names the vendor CLI an agent runs; "" when the agent is unknown.
+func (s *Server) toolOf(agent string) string {
+	a, ok := s.agent(agent)
+	if !ok {
+		return ""
+	}
+	return a.Tool
+}
 
 // admissionLimit hands the gateway the door's per-principal in-flight cap:
 // the seat's override first, then the door default, then the gateway's own
