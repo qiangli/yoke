@@ -291,6 +291,21 @@ var packages = map[string]Package{
 	"llmbudget": libPkg("chat", "the local-first meter and gate under every metered-inference "+
 		"verb (chat/judge/meet/coach/pair). Deliberately not a verb: a budget an agent can call "+
 		"is a budget an agent can raise. It is read through the verbs that declare EffSpend."),
+	"quotaobs": libPkg("llm", "the redacted vendor-quota journal under the model door: the "+
+		"allowlisted rate-limit headers and capped error excerpts that `llm serve` and the cligw "+
+		"workers record, deduped by excerpt SHA. It sits BELOW every reader on purpose — it imports "+
+		"neither llmbudget, broker nor weave, so all three (quota rows, takeover, throttling) can "+
+		"read the same evidence without a cycle. Not a verb of its own: it is what a vendor SAID, "+
+		"not something an operator does, and the reading of it an operator wants is the quota view "+
+		"llmbudget projects behind the verbs that declare EffSpend."),
+	"snippet": libPkg("dag", "code as configuration — evaluates a `!bsh` snippet embedded in a "+
+		"record or task file under a declared effect cap (pkg/atlas's effect vocabulary), with "+
+		"consent gating and inferred-result caching. It landed with pkg/dag's task-file runner and "+
+		"now also backs fleet's `.bsh` records (reached through `tool`) and llmbudget's usage "+
+		"probes. Not a verb of its own: it only ever runs code that some configuration already "+
+		"declared and capped, so its surface is whichever front door loaded that configuration — a "+
+		"`snippet` verb would be a second way to run arbitrary code with none of the config that "+
+		"bounds it."),
 	"otelquery": libPkg("otel", "the query half of `bashy otel`, split from pkg/telemetry so "+
 		"reading traces does not link the exporter."),
 	"telemetry": libPkg("otel", "bashy's OpenTelemetry voice — emission, not a command. `bashy otel` "+
