@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [repo/page] Run llmgw gates from its nested module — WHEN a yoke gate names ./pkg/llmgw/..., the root Go module rejects that pattern because pkg/llmgw has its own go.mod. Run go test ./... (and go vet ./...) with cwd pkg/llmgw; keep the root cligw, broker, and fleet gates separate so the nested-module setup error cannot mask their results.  (kb:run-llmgw-gates-from-its-nested-module)
+- [host/page] Playbook: run a multi-agent planning meeting with bashy meet — How to run a design review / decision / cross-agent planning session with 'bashy meet' instead of separate one-off agent sessions: the start -> round -> /decision + /action -> close loop, a dedicated notes-only secretary, and minutes filed to docs/meetin  (kb:playbook-run-a-multi-agent-planning-meeting-with-bashy-meet)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 
