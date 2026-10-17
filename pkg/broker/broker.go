@@ -205,6 +205,11 @@ func (b *Broker) Close(ctx context.Context) error {
 // Device exposes the run queue (live view, tests).
 func (b *Broker) Device() *Device { return b.device }
 
+// SetDraining makes the door refuse new local work immediately with a
+// queue_full reason (503 while draining) while already-queued work still
+// runs to completion. Serve sets it on shutdown.
+func (b *Broker) SetDraining(drain bool) { b.device.SetDraining(drain) }
+
 // onPrincipalSwitch evicts resident models before another principal's work
 // runs on the device, so no prefix/KV cache hit ever crosses principals (Q8).
 // This is content isolation, not timing isolation: shared queue contention,
@@ -636,10 +641,19 @@ func (b *Broker) serveLocal(w http.ResponseWriter, r *http.Request, ri *reqInfo,
 		attribute.String("bashy.model", m.Name), attribute.String("bashy.model_digest", m.Digest))
 	if err != nil {
 		if errors.Is(err, ErrQueueFull) {
-			b.finish(ri, http.StatusServiceUnavailable, wait, err.Error())
-			w.Header().Set("Retry-After", "5")
+			st := b.device.Stats()
+			depth := 0
+			for _, n := range st.Queued {
+				depth += n
+			}
+			status := http.StatusTooManyRequests
+			if b.device.Draining() {
+				status = http.StatusServiceUnavailable
+			}
+			b.finish(ri, status, wait, fmt.Sprintf("model queue is full (queue=%s depth=%d limit=%d)", b.device.Name(), depth, st.Limit))
+			w.Header().Set("Retry-After", strconv.Itoa(QueueRetryAfterSecs))
 			w.Header().Set("X-Bashy-Refusal", "queue-full")
-			writeErr(w, r.URL.Path, http.StatusServiceUnavailable, "the local model queue is full; retry later")
+			writeQueueFull(w, status, b.device.Name(), depth, st.Limit)
 			return
 		}
 		status := http.StatusServiceUnavailable
@@ -1311,6 +1325,9 @@ func (b *Broker) Serve(ctx context.Context, listeners ...net.Listener) error {
 		}
 		return err
 	case <-ctx.Done():
+		// Draining first: in-flight and queued work runs out the grace
+		// period while new arrivals get an immediate 503 with a reason.
+		b.SetDraining(true)
 		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutdown)
@@ -1358,6 +1375,19 @@ func writeErr(w http.ResponseWriter, path string, status int, msg string) {
 		return
 	}
 	writeJSON(w, status, map[string]any{"error": map[string]any{"message": msg, "type": "bashy_broker", "code": status}})
+}
+
+// writeQueueFull answers a queue-full refusal with its machine-readable
+// reason on every surface: the waiting room is bounded, so past the limit
+// the door refuses immediately instead of parking (or dropping) the request.
+func writeQueueFull(w http.ResponseWriter, status int, queue string, depth, limit int) {
+	writeJSON(w, status, map[string]any{
+		"type":          "queue_full",
+		"queue":         queue,
+		"depth":         depth,
+		"limit":         limit,
+		"retry_after_s": QueueRetryAfterSecs,
+	})
 }
 
 func writeStickyErr(w http.ResponseWriter, path string, err error) {
