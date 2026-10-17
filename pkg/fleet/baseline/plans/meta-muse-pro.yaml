@@ -15,3 +15,12 @@ sources:
 notes: >-
   Tier is operator-reported (story 5fec08b11a5f). Set vendor_plan and add the
   matching weekly token limit once the seat's vendor plan is confirmed.
+# No usage probe — checked 2026-10-17: the muse CLI (`muse --help`) exposes
+# no usage/limits/status subcommand (only resume/exec/export/trace/model-
+# profile/skills/voice/plugins/sandbox/schema/serve/session-message/mcp/auth/
+# login/logout/init), and no documented local usage file exists under
+# ~/.local/share/muse (sessions store transcripts, not quota). The vendor
+# publishes no documented usage endpoint reachable with the fleet's credential
+# (the CLI authenticates via keychain, not a documented API key quota
+# endpoint). The seat therefore stays unmeasured; bashy quota reports
+# unmeasured (never 0% or a fabricated percentage).

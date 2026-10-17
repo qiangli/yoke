@@ -39,6 +39,15 @@ limits:
     evidence: measured
     as_of: "2026-07-14"
     source: pkg/fleet/baseline/models/glm-5.2.yaml
+# No usage probe — checked 2026-10-17: docs.z.ai (llms.txt + full API
+# reference) lists only chat/image/video/generation endpoints; no documented
+# usage or credits endpoint exists, and the coding-plan key (api_key_ref zai)
+# is not a subscription OAuth login. The home dir holds no local usage file;
+# without a documented read-only endpoint a probe would need to invent a URL.
+# The seat therefore stays unmeasured; bashy quota reports unmeasured (never
+# 0% or a fabricated percentage) and surfaces live quota only via the 429
+# signals below. The only vendor-documented quota facts are the credit limits
+# above (published) and the concurrent ceiling (measured).
 # Usage signals (Sprint #447). Message shapes are the vendor's error table
 # (https://docs.z.ai/api-reference/api-code, checked 2026-10-15); the 1308
 # body is MEASURED on this host (2026-10-12, HTTP 429):
