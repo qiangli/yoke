@@ -116,6 +116,11 @@ type Options struct {
 	Capture bool
 	// ToolVersion reports a CLI tool's version for identities (nil = none).
 	ToolVersion func(tool string) string
+	// LocalFirstByte bounds how long the local engine may stay silent
+	// before its first response byte (0 = $BASHY_LLM_LOCAL_FIRST_BYTE or
+	// DefaultLocalFirstByteTimeout; negative = no bound, the request
+	// context still applies). Remote upstreams keep the 30 s fail-fast.
+	LocalFirstByte time.Duration
 	// Now is the clock (tests).
 	Now func() time.Time
 }
@@ -725,20 +730,49 @@ func identityTool(binding *Binding) string {
 	return binding.Identity.Tool
 }
 
-// proxyEngine forwards r (with body, when given) to the engine. A silent
-// engine cannot hang the caller past the shared first-byte bound, and a
-// transport failure is classified (unreachable 502 vs timeout 504) instead
-// of a bare 502.
+// proxyEngine forwards r (with body, when given) to the engine. The local
+// engine gets its own generous first-byte bound (not the remote 30 s
+// fail-fast: CPU prefill legitimately takes longer), and an exited engine
+// process fails fast through the exit watch instead of waiting out any
+// bound. A transport failure is classified (unreachable 502 vs timeout
+// 504) instead of a bare 502.
 func (b *Broker) proxyEngine(w http.ResponseWriter, r *http.Request, body []byte) {
+	done := b.engineExited()
+	if done != nil {
+		select {
+		case <-done:
+			writeErr(w, r.URL.Path, http.StatusBadGateway, "local engine: process exited; restart it with `bashy llm up`")
+			return
+		default:
+		}
+		ctx, cancel := context.WithCancel(r.Context())
+		defer cancel()
+		go func() {
+			select {
+			case <-done:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+		r = r.WithContext(ctx)
+	}
 	target, _ := url.Parse(b.engine.base)
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	proxy.FlushInterval = -1
-	proxy.Transport = gateway.FirstByteTransport(0)
+	proxy.Transport = gateway.FirstByteTransport(b.localFirstByte())
 	proxy.ModifyResponse = func(resp *http.Response) error {
 		quotaobs.ObserveResponse(r.Context(), resp, quotaobs.Observation{Source: "door"})
 		return nil
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		if done != nil {
+			select {
+			case <-done:
+				writeErr(w, r.URL.Path, http.StatusBadGateway, "local engine: process exited; restart it with `bashy llm up`")
+				return
+			default:
+			}
+		}
 		failure := gateway.ClassifyTransportError(err).WithEndpoint("engine", "")
 		writeErr(w, r.URL.Path, failure.Status, "local engine: "+firstLine(err.Error())+"; "+failure.Hint)
 	}

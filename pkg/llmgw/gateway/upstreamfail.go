@@ -228,12 +228,15 @@ func isDeadline(err error) bool {
 var firstByteTransports sync.Map // time.Duration -> http.RoundTripper
 
 // FirstByteTransport returns a RoundTripper that fails an upstream staying
-// silent past d before its first response byte. Non-positive d selects
-// DefaultFirstByteTimeout. Streaming after the first byte is unaffected.
-// The door and any other HTTP front use it so a silent upstream cannot hang
-// a caller past this bound.
+// silent past d before its first response byte. Zero d selects
+// DefaultFirstByteTimeout; a negative d disables the bound entirely and the
+// upstream may take as long as the request context allows. Streaming after
+// the first byte is unaffected either way. Remote fronts use the default so
+// a silent upstream cannot hang a caller past this bound; the local engine
+// uses a negative (or its own generous) bound because prompt prefill on a
+// CPU-only host legitimately takes longer.
 func FirstByteTransport(d time.Duration) http.RoundTripper {
-	if d <= 0 {
+	if d == 0 {
 		d = DefaultFirstByteTimeout
 	}
 	if v, ok := firstByteTransports.Load(d); ok {
@@ -245,7 +248,9 @@ func FirstByteTransport(d time.Duration) http.RoundTripper {
 	} else {
 		base = &http.Transport{}
 	}
-	base.ResponseHeaderTimeout = d
+	if d > 0 {
+		base.ResponseHeaderTimeout = d
+	}
 	actual, _ := firstByteTransports.LoadOrStore(d, base)
 	return actual.(http.RoundTripper)
 }
