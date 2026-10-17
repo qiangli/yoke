@@ -21,20 +21,23 @@ require (
 	github.com/go-git/go-billy/v5 v5.9.0
 	github.com/go-git/go-git/v5 v5.19.1
 	github.com/google/jsonschema-go v0.4.3
+	github.com/google/nftables v0.3.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/itchyny/gojq v0.12.19
 	github.com/klauspost/compress v1.18.6
+	github.com/mdlayher/netlink v1.7.3-0.20250113171957-fbb4dce95f42
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/odvcencio/gotreesitter v0.16.0
 	github.com/ollama/ollama v0.0.0-00010101000000-000000000000
 	github.com/pkg/sftp v1.13.10
-	github.com/qiangli/coreutils v0.0.0-20261013041512-6c4cf31f268c
+	github.com/qiangli/coreutils v0.0.0-20261017070323-6b80c78e8fa4
 	github.com/qiangli/gfy v0.0.0-20261013004914-30d38f086034
 	github.com/qiangli/yoke/pkg/llmgw v0.0.0-00010101000000-000000000000
 	github.com/qiangli/yoke/pkg/oci v0.0.0-00010101000000-000000000000
 	github.com/rjeczalik/notify v0.9.3
 	github.com/robfig/cron/v3 v3.0.1
+	github.com/sergi/go-diff v1.4.0
 	github.com/sirupsen/logrus v1.9.4
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/spf13/cobra v1.10.2
@@ -63,44 +66,6 @@ require (
 	mvdan.cc/sh/v3 v3.13.1
 	resty.dev/v3 v3.0.0-rc.2
 )
-
-// Sibling-path replaces: ../sh and ../coreutils resolve to the submodules
-// inside the dhnt umbrella, and to flat sibling clones in a standalone
-// checkout. Same convention as ycode/outpost/bashy. coreutils is the
-// certified POSIX package this module was split out of (Sprint 208); yoke
-// imports it, never the reverse.
-replace mvdan.cc/sh/v3 => github.com/qiangli/sh/v3 v3.0.0-20261014083225-477b218e535d
-
-// gotreesitter: pinned local fork of upstream v0.16.0 (../gotreesitter,
-// hosting qiangli/gotreesitter, module path kept as upstream's) with the
-// five non-permissive grammars deleted at the byte level — caddy,
-// disassembly, ebnf, jq (GPL-3.0) and nim (MPL-2.0). Upstream has no
-// exclusion mechanism that removes embedded blobs. The path replace also
-// redirects the transitive qiangli/gfy -> odvcencio v0.15.3 imports (same
-// five grammars embedded), which a module-path rename could not reach. See
-// the fork's FORK.md for provenance; THIRD_PARTY_GRAMMARS.md carries the
-// surviving 201 attributions.
-replace github.com/odvcencio/gotreesitter => github.com/qiangli/gotreesitter v0.0.0-20261013004852-f03173f827ed
-
-// Local MIT fork adds POSIX awk float formats, locale-aware data and string
-// semantics, an error-bearing regex backend across all surfaces, and the
-// required side effect that a non-"in" reference creates an absent array
-// element. Keeping the narrow fork here makes the conformance fixes build from
-// this repository rather than an unpublished dependency commit.
-replace github.com/benhoyt/goawk => github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261013041512-6c4cf31f268c
-
-replace github.com/ollama/ollama => ./external/ollama/src
-
-// Fork-embed: qiangli/podman lives at external/podman/src (submodule). We own its
-// version + cross-platform behavior; coreutils consumes its pure-Go embed/ API.
-replace go.podman.io/podman/v6 => ./external/podman/src
-
-// pkg/oci is the podman/buildah wrapper module (machine lifecycle + bindings)
-// relocated from ycode; external/podman/engine consumes it in-process.
-replace github.com/qiangli/yoke/pkg/oci => ./pkg/oci
-
-// pkg/llmgw is the OpenAI-compatible gateway core (nested module, stdlib + prometheus)
-replace github.com/qiangli/yoke/pkg/llmgw => ./pkg/llmgw
 
 require (
 	cyphar.com/go-pathrs v0.2.4 // indirect
@@ -215,7 +180,6 @@ require (
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/go-containerregistry v0.21.1 // indirect
 	github.com/google/go-intervals v0.0.2 // indirect
-	github.com/google/nftables v0.3.0
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
 	github.com/gorilla/handlers v1.5.2 // indirect
 	github.com/gorilla/mux v1.8.1 // indirect
@@ -245,7 +209,6 @@ require (
 	github.com/mattn/go-runewidth v0.0.23 // indirect
 	github.com/mattn/go-shellwords v1.0.13 // indirect
 	github.com/mattn/go-sqlite3 v1.14.42 // indirect
-	github.com/mdlayher/netlink v1.7.3-0.20250113171957-fbb4dce95f42
 	github.com/mdlayher/socket v0.5.1 // indirect
 	github.com/mholt/archives v0.1.5 // indirect
 	github.com/miekg/pkcs11 v1.1.1 // indirect
@@ -304,7 +267,6 @@ require (
 	github.com/secure-systems-lab/go-securesystemslib v0.11.0 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
-	github.com/sergi/go-diff v1.4.0 // indirect
 	github.com/shirou/gopsutil/v4 v4.26.5 // indirect
 	github.com/sigstore/fulcio v1.8.5 // indirect
 	github.com/sigstore/protobuf-specs v0.5.0 // indirect
@@ -378,5 +340,43 @@ require (
 	tags.cncf.io/container-device-interface v1.1.0 // indirect
 	tags.cncf.io/container-device-interface/specs-go v1.1.0 // indirect
 )
+
+// Sibling-path replaces: ../sh and ../coreutils resolve to the submodules
+// inside the dhnt umbrella, and to flat sibling clones in a standalone
+// checkout. Same convention as ycode/outpost/bashy. coreutils is the
+// certified POSIX package this module was split out of (Sprint 208); yoke
+// imports it, never the reverse.
+replace mvdan.cc/sh/v3 => github.com/qiangli/sh/v3 v3.0.0-20261014083225-477b218e535d
+
+// gotreesitter: pinned local fork of upstream v0.16.0 (../gotreesitter,
+// hosting qiangli/gotreesitter, module path kept as upstream's) with the
+// five non-permissive grammars deleted at the byte level — caddy,
+// disassembly, ebnf, jq (GPL-3.0) and nim (MPL-2.0). Upstream has no
+// exclusion mechanism that removes embedded blobs. The path replace also
+// redirects the transitive qiangli/gfy -> odvcencio v0.15.3 imports (same
+// five grammars embedded), which a module-path rename could not reach. See
+// the fork's FORK.md for provenance; THIRD_PARTY_GRAMMARS.md carries the
+// surviving 201 attributions.
+replace github.com/odvcencio/gotreesitter => github.com/qiangli/gotreesitter v0.0.0-20261013004852-f03173f827ed
+
+// Local MIT fork adds POSIX awk float formats, locale-aware data and string
+// semantics, an error-bearing regex backend across all surfaces, and the
+// required side effect that a non-"in" reference creates an absent array
+// element. Keeping the narrow fork here makes the conformance fixes build from
+// this repository rather than an unpublished dependency commit.
+replace github.com/benhoyt/goawk => github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261017070323-6b80c78e8fa4
+
+replace github.com/ollama/ollama => ./external/ollama/src
+
+// Fork-embed: qiangli/podman lives at external/podman/src (submodule). We own its
+// version + cross-platform behavior; coreutils consumes its pure-Go embed/ API.
+replace go.podman.io/podman/v6 => ./external/podman/src
+
+// pkg/oci is the podman/buildah wrapper module (machine lifecycle + bindings)
+// relocated from ycode; external/podman/engine consumes it in-process.
+replace github.com/qiangli/yoke/pkg/oci => ./pkg/oci
+
+// pkg/llmgw is the OpenAI-compatible gateway core (nested module, stdlib + prometheus)
+replace github.com/qiangli/yoke/pkg/llmgw => ./pkg/llmgw
 
 replace github.com/filebrowser/filebrowser/v2 => github.com/qiangli/filebrowser/v2 v2.0.0-20261013004903-9c7b5c8e3d09

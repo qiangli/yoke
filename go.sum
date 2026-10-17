@@ -588,10 +588,10 @@ github.com/prometheus/common v0.67.5 h1:pIgK94WWlQt1WLwAC5j2ynLaBRDiinoAb86HZHTU
 github.com/prometheus/common v0.67.5/go.mod h1:SjE/0MzDEEAyrdr5Gqc6G+sXI67maCxzaT3A2+HqjUw=
 github.com/prometheus/procfs v0.20.1 h1:XwbrGOIplXW/AU3YhIhLODXMJYyC1isLFfYCsTEycfc=
 github.com/prometheus/procfs v0.20.1/go.mod h1:o9EMBZGRyvDrSPH1RqdxhojkuXstoe4UlK79eF5TGGo=
-github.com/qiangli/coreutils v0.0.0-20261013041512-6c4cf31f268c h1:MiSA7Zc3BVHteSYH+vp5PMgb+MXvfOTuTcE4e5yJEaE=
-github.com/qiangli/coreutils v0.0.0-20261013041512-6c4cf31f268c/go.mod h1:NW0DYs9wbvOxLbetWSwZWPbrAgLIPMVdBwBDjQQ0xKs=
-github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261013041512-6c4cf31f268c h1:QE8MzZDXrU3C+l+vl2tQxwz5e39GKmDU5lvSzx1Km/8=
-github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261013041512-6c4cf31f268c/go.mod h1:p0JkVxHS3JKYxDz8kOYvMdPM8YRH94vZoWaFljD1vAg=
+github.com/qiangli/coreutils v0.0.0-20261017070323-6b80c78e8fa4 h1:8YTXI/HGRAUrVaO+IjlGhMsIQBRJuGZ0q2jPf327Am4=
+github.com/qiangli/coreutils v0.0.0-20261017070323-6b80c78e8fa4/go.mod h1:NW0DYs9wbvOxLbetWSwZWPbrAgLIPMVdBwBDjQQ0xKs=
+github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261017070323-6b80c78e8fa4 h1:Mr2luiUTRpq6eHWsE+EceUasCvP9w+qOq3eEGJZXhB0=
+github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261017070323-6b80c78e8fa4/go.mod h1:p0JkVxHS3JKYxDz8kOYvMdPM8YRH94vZoWaFljD1vAg=
 github.com/qiangli/filebrowser/v2 v2.0.0-20261013004903-9c7b5c8e3d09 h1:8BBH4NPnF6UYP5GbGGu2iM6TS1h3EY+v8ml/555jcsg=
 github.com/qiangli/filebrowser/v2 v2.0.0-20261013004903-9c7b5c8e3d09/go.mod h1:86f/lT85KHk1f2smUl+MdgDvX4nO2lQqA+tWrGZhj0A=
 github.com/qiangli/gfy v0.0.0-20261013004914-30d38f086034 h1:XHTsT5keRw4zmpOmnwUM1uiAtRlh2eJa/38OLDEtHmA=
