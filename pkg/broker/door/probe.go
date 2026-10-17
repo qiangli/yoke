@@ -19,6 +19,11 @@ const StatusSchemaVersion = "bashy-llm-status-v1"
 // ProbeTimeout bounds a whole probe, so a down door never hangs a caller.
 const ProbeTimeout = 2 * time.Second
 
+// CountsTimeout bounds the model/agent listing call on its own. The listing
+// walks every fleet agent and can take seconds on a slow host (Windows
+// measured ~4.2 s), far past ProbeTimeout, while /health answers at once.
+var CountsTimeout = 15 * time.Second
+
 // Backend is one of the door's backends and its health.
 type Backend struct {
 	Name    string `json:"name"`
@@ -38,6 +43,9 @@ type Status struct {
 	Backends      []Backend `json:"backends"`
 	LocalModels   int       `json:"local_models"`
 	AgentEntries  int       `json:"agent_entries"`
+	// CountsKnown is false when the listing did not answer in time: the two
+	// counts above are then unknown, not zero.
+	CountsKnown bool `json:"counts_known"`
 	MaxInFlight   int       `json:"max_in_flight,omitempty"`
 	QueueDepth    int       `json:"queue_depth"`
 	Error         string    `json:"error,omitempty"`
@@ -51,6 +59,7 @@ func Probe(ctx context.Context) (Status, error) {
 	if sock, err := SocketPath(); err == nil {
 		st.Socket = sock
 	}
+	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, ProbeTimeout)
 	defer cancel()
 	token, err := Token()
@@ -67,7 +76,7 @@ func Probe(ctx context.Context) (Status, error) {
 		} `json:"device"`
 		CLI json.RawMessage `json:"cligw"`
 	}
-	if err := get(ctx, "/health", token, &health); err != nil {
+	if err := get(ctx, "/health", token, ProbeTimeout, &health); err != nil {
 		st.Error = downMessage(err)
 		var he *httpErr
 		if errors.As(err, &he) {
@@ -105,10 +114,13 @@ func Probe(ctx context.Context) (Status, error) {
 			Loc  string `json:"x_locality"`
 		} `json:"data"`
 	}
-	if err := get(ctx, "/v1/models", token, &models); err != nil {
-		st.Error = "door is up but /v1/models failed: " + err.Error()
+	mctx, mcancel := context.WithTimeout(parent, CountsTimeout)
+	defer mcancel()
+	if err := get(mctx, "/v1/models", token, CountsTimeout, &models); err != nil {
+		st.Error = "door is up but model/agent counts are unknown: /v1/models failed: " + err.Error()
 		return st, nil
 	}
+	st.CountsKnown = true
 	for _, m := range models.Data {
 		if m.Kind == "local" || m.Loc == "local" {
 			st.LocalModels++
@@ -126,13 +138,13 @@ type httpErr struct {
 
 func (e *httpErr) Error() string { return e.msg }
 
-func get(ctx context.Context, path, token string, out any) error {
+func get(ctx context.Context, path, token string, timeout time.Duration, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, BaseURL()+path, nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := (&http.Client{Timeout: ProbeTimeout}).Do(req)
+	resp, err := (&http.Client{Timeout: timeout}).Do(req)
 	if err != nil {
 		return err
 	}

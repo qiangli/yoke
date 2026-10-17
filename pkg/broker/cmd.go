@@ -408,6 +408,10 @@ func EnsureUp(ctx context.Context) error {
 		return err
 	}
 	defer logf.Close()
+	var logStart int64
+	if fi, err := logf.Stat(); err == nil {
+		logStart = fi.Size()
+	}
 	argv := SelfArgv()
 	c := exec.Command(argv[0], argv[1:]...)
 	c.Stdout, c.Stderr, c.Stdin = logf, logf, nil
@@ -415,7 +419,8 @@ func EnsureUp(ctx context.Context) error {
 	if err := c.Start(); err != nil {
 		return fmt.Errorf("broker: start the door: %w", err)
 	}
-	_ = c.Process.Release()
+	exited := make(chan error, 1)
+	go func() { exited <- c.Wait() }()
 	deadline := time.Now().Add(120 * time.Second)
 	for time.Now().Before(deadline) {
 		if Healthy() {
@@ -424,6 +429,11 @@ func EnsureUp(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case werr := <-exited:
+			if Healthy() {
+				return nil
+			}
+			return fmt.Errorf("broker: the door exited before it came up (%v): %s", exitReason(werr), lastLogLines(filepath.Join(stateDir, "door.log"), logStart))
 		case <-time.After(250 * time.Millisecond):
 		}
 	}
@@ -1237,3 +1247,24 @@ func newStatusCmd() *cobra.Command {
 // ErrDoorDown is `llm status`' failure when no door answers (exit 1); the
 // report itself has already been printed.
 var ErrDoorDown = errors.New("the model door is down")
+
+func exitReason(err error) string {
+	if err == nil {
+		return "exit status 0"
+	}
+	return err.Error()
+}
+
+// lastLogLines returns what the child wrote to the log after offset, trimmed
+// to its last few lines, so a clear startup error is shown instead of a timeout.
+func lastLogLines(path string, offset int64) string {
+	data, err := os.ReadFile(path)
+	if err != nil || int64(len(data)) <= offset {
+		return "no output (see " + path + ")"
+	}
+	lines := strings.Split(strings.TrimSpace(string(data[offset:])), "\n")
+	if len(lines) > 8 {
+		lines = lines[len(lines)-8:]
+	}
+	return strings.Join(lines, "; ")
+}
