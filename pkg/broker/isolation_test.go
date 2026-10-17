@@ -215,3 +215,134 @@ func TestPeerBearerIsNotAShare(t *testing.T) {
 		t.Fatalf("peer refusal reached the engine: body %v", h.eng.lastBody)
 	}
 }
+
+// Every request leaves one audit record carrying who, which session, which
+// class, which model, the tokens and the wait — on success AND on refusal,
+// and for cligw-served requests as much as for the local device.
+func TestAuditRecordsCligwSuccessAndRefusal(t *testing.T) {
+	h := newHarness(t, nil)
+	hdr := map[string]string{SessionHeader: "s-audit", ClassHeader: "batch"}
+
+	resp, out := h.do("POST", "/v1/chat/completions", chat("L4"), hdr)
+	if resp.StatusCode != 200 {
+		t.Fatalf("cligw success: %d %v", resp.StatusCode, out)
+	}
+	ok := h.lastRecord(1)
+	if ok.Principal != "owner" || ok.Session != "s-audit" || ok.Class != "batch" || ok.Backend != BackendCLI ||
+		ok.Model != "L4" || ok.Status != 200 || ok.PromptTok != 2 || ok.OutputTok != 1 {
+		t.Fatalf("cligw success record: %+v", ok)
+	}
+
+	resp, _ = h.do("POST", "/v1/chat/completions", chat("busy"), hdr)
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("cligw refusal: %d", resp.StatusCode)
+	}
+	busy := h.lastRecord(2)
+	if busy.Principal != "owner" || busy.Session != "s-audit" || busy.Class != "batch" || busy.Backend != BackendCLI ||
+		busy.Model != "busy" || busy.Status != http.StatusTooManyRequests || busy.Error == "" {
+		t.Fatalf("cligw refusal record: %+v", busy)
+	}
+
+	// cligw's own surface through the door is audited too.
+	resp, _ = h.do("GET", "/cligw/health", nil, hdr)
+	if resp.StatusCode != 200 {
+		t.Fatalf("cligw health: %d", resp.StatusCode)
+	}
+	if r := h.lastRecord(3); r.Principal != "owner" || r.Session != "s-audit" || r.Path != "/cligw/health" || r.Status != 200 {
+		t.Fatalf("cligw surface record: %+v", r)
+	}
+
+	// An unauthenticated caller is refused and still audited, without a
+	// principal it never proved.
+	resp, _ = h.do("POST", "/v1/chat/completions", chat("L4"), map[string]string{"Authorization": "Bearer nope"})
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated: %d", resp.StatusCode)
+	}
+	if r := h.lastRecord(4); r.Status != http.StatusUnauthorized || r.Principal != "" || r.Error == "" {
+		t.Fatalf("unauthenticated record: %+v", r)
+	}
+	if n := len(h.b.audit.snapshot()); n != 4 {
+		t.Fatalf("records = %d, want one per request (4)", n)
+	}
+}
+
+// A shared peer is a different principal on the one physical engine: the
+// owner's resident models (and with them every prefix/KV cache) are evicted
+// before the peer's work runs, and again before the owner's next turn.
+func TestPeerPrincipalEvictsOwnerResidentModels(t *testing.T) {
+	h, _, peers := peerHarness(t)
+	cred, err := MintPeerCredential(peers, "codexhost", ShareAllow, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := func(token string) int {
+		req, _ := http.NewRequest("POST", h.server.URL+"/v1/chat/completions",
+			strings.NewReader(`{"model":"llama3.2:3b","messages":[{"role":"user","content":"private prefix"}]}`))
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set(SessionHeader, "s-shared")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != 200 || resp.Header.Get(BackendHeader) != BackendLocal {
+			t.Fatalf("local request: %d backend=%q", resp.StatusCode, resp.Header.Get(BackendHeader))
+		}
+		return len(h.eng.unloadedList())
+	}
+	owner := local(testToken)
+	again := local(testToken)
+	if again != owner {
+		t.Fatalf("same principal+session evicted its own cache: %d -> %d", owner, again)
+	}
+	peer := local(cred)
+	if peer <= again {
+		t.Fatal("peer:codexhost ran on the owner's resident model without an eviction")
+	}
+	if back := local(testToken); back <= peer {
+		t.Fatal("owner ran on the peer's resident model without an eviction")
+	}
+	recs := h.b.audit.snapshot()
+	if got := recs[len(recs)-2].Principal; got != "peer:codexhost" {
+		t.Fatalf("peer turn audited as %q", got)
+	}
+}
+
+// A peer naming the owner's sticky key in the owner's session reaches a
+// binding of its own (or none) — never the owner's context, transcript or
+// use counter.
+func TestPeerCannotReachOwnerStickyContext(t *testing.T) {
+	h, _, peers := peerHarness(t)
+	cred, err := MintPeerCredential(peers, "codexhost", ShareAllow, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	hdr := map[string]string{SessionHeader: "s-shared", StickyHeader: "context; uses=0"}
+	resp, out := h.do("POST", "/v1/chat/completions", chat("llama3.2:3b"), hdr)
+	if resp.StatusCode != 200 {
+		t.Fatalf("owner sticky: %d %v", resp.StatusCode, out)
+	}
+	ownerBinding := h.b.sticky.get("owner", "s-shared", "context")
+	if ownerBinding == nil || ownerBinding.Used != 1 {
+		t.Fatalf("owner binding: %+v", ownerBinding)
+	}
+
+	// The key alone (URL form, no spec) must not resolve to the owner's binding.
+	code, body := peerPost(t, h, "/s/s-shared/sticky/context/v1/chat/completions", cred, nil)
+	if code != http.StatusNotFound || strings.Contains(body, ownerBinding.Digest) {
+		t.Fatalf("peer resolved the owner's key: %d %s", code, body)
+	}
+	// With a spec the peer gets a binding of its own, in its own scope.
+	if code, body = peerPost(t, h, "/v1/chat/completions", cred, map[string]string{SessionHeader: "s-shared", StickyHeader: "context; uses=0"}); code != 200 {
+		t.Fatalf("peer's own sticky: %d %s", code, body)
+	}
+	if mine := h.b.sticky.get("peer:codexhost", "s-shared", "context"); mine == nil || mine.Principal != "peer:codexhost" || mine.Used != 1 {
+		t.Fatalf("peer binding: %+v", mine)
+	}
+	if after := h.b.sticky.get("owner", "s-shared", "context"); after == nil || after.Used != 1 || len(after.Transcript) != len(ownerBinding.Transcript) {
+		t.Fatalf("peer touched the owner's binding: %+v", after)
+	}
+	if h.b.sticky.findDigest("peer:codexhost", "s-shared", ownerBinding.Digest) != nil {
+		t.Fatal("owner's context digest visible to the peer")
+	}
+}

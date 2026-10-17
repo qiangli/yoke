@@ -316,7 +316,7 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				cw.status = http.StatusOK
 			}
 			ri.rec.PromptTok, ri.rec.OutputTok = parseTokens(cw.tail)
-			b.finish(ri, cw.status, 0, "")
+			b.finish(ri, cw.status, 0, refusalReason(cw.status, cw.tail))
 		}
 		if capture && ri.principal != "" {
 			b.appendCapture(ri, rest, &requestBody, cw)
@@ -733,7 +733,7 @@ func (b *Broker) delegateCLI(w http.ResponseWriter, r *http.Request, ri *reqInfo
 	b.opts.CLI.ServeHTTP(cw, r)
 	ri.rec.Routed = cw.Header().Get("X-Bashy-Routed")
 	ri.rec.PromptTok, ri.rec.OutputTok = parseTokens(cw.tail)
-	b.finish(ri, cw.status, 0, "")
+	b.finish(ri, cw.status, 0, refusalReason(cw.status, cw.tail))
 }
 
 // ---- local inventory -------------------------------------------------------

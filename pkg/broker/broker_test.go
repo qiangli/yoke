@@ -178,7 +178,13 @@ func (c *fakeCLI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		json.NewDecoder(r.Body).Decode(&body)
 		c.lastBody = body
 	}
+	busy := r.Method == http.MethodPost && c.lastBody != nil && c.lastBody["model"] == "busy"
 	c.mu.Unlock()
+	if busy {
+		w.WriteHeader(http.StatusTooManyRequests)
+		io.WriteString(w, `{"error":{"message":"all agents busy"}}`)
+		return
+	}
 	switch r.URL.Path {
 	case "/v1/models":
 		io.WriteString(w, `{"object":"list","data":[{"id":"L4","object":"model"}]}`)
