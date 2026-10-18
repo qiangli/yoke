@@ -5,18 +5,36 @@ The manager runs the remote gates listed below.
 
 ## Scope delivered
 
-`pkg/kbmemory` — `kb memory init|select|add|inspect|update TARGET [ID]`. It sits
+`pkg/kbmemory` — `kb memory init|select|add|inspect|update|supersede|forget TARGET [ID]`. It sits
 beside `pkg/recall` and composes `pkg/dblifecycle` + `pkg/dbdoc` (db never
 imports it; `pkg/kb` stays a leaf and supplies only vocabulary/provenance).
 Persistent mode, memory mode (via its owner session), and persistent mode through
 an explicit shared `--session` owner all take the same `Run` path. CLI and MCP
 (`MCPCommand`) share one cobra parser, one `Run`, and one envelope.
 
-**Not delivered:** supersede/forget. They depend on the 284 M6 lifecycle API,
-which does not exist yet. The manager proposed it as a stdlib `pkg/kblife`
-(Validity/Supersede/Tombstone/Resolve/Visible), and kbmemory will store its
-fields on dbdoc and call it once the SHA is pushed. `kb memory supersede` returns `invalid_input`; nothing here competes
-with M6 semantics.
+**Supersede/forget (this commit, atop integration 0b1123f6, M6 8dbc63c4).**
+They consume `pkg/kblife` directly, with no copy of its rules:
+
+- Records gain additive omitempty fields `valid_from`, `valid_to`, `supersedes`,
+  `superseded_by`, `tombstone` (`kblife.Tombstone`). `Record.Validity()` and
+  `Record.State(asOf)` wrap `kblife.Resolve` so retrieval (s453-lexical-muse)
+  can filter by `kblife.Visible`. `inspect` reports `state` at now.
+- `supersede TARGET OLD --if-revision N --replacement NEW --replacement-revision M`
+  is the registered op `memory.supersede`. It reads both records on the admitted
+  handle and refuses self-supersede, any record that is not `valid`, and a
+  replacement that already supersedes another record. It then applies
+  `kblife.Supersede` at an instant taken inside the op and writes ONE
+  `dbdoc` batch of two patches, each with its own `if_revision`. A stale side
+  rolls back the whole batch, so a supersede never half-applies. The old record
+  gets `status: superseded`, matching `kb supersede`.
+- `forget TARGET ID --if-revision N --reason R` is the registered op
+  `memory.forget`. It builds the tombstone with `kblife.NewTombstone("memory:"+ID,
+  reason, kb.ToolID(), kb.EpisodeID(), at)` and patches it under `if_revision`.
+  The record body, provenance and links are kept for audit. A second forget is
+  refused `invalid_input`.
+- Replay works as it does for add/update: the owner digests the logical
+  input, and the time is generated inside the op. There is no extra dedup
+  state. The direct path refuses `--request-id` (`unsupported`).
 
 ## Review corrections (mb:6587/6609/6615/6618, conductor steering)
 
@@ -43,7 +61,15 @@ run should confirm it.
 
 ```
 go vet ./pkg/kbmemory                                   # clean
-go test -short -count=1 -v ./pkg/kbmemory
+go test -short -count=1 -v ./pkg/kbmemory               # supersede/forget commit
+--- PASS: TestSupersedeAndForget       (3 modes: invalid inputs, stale old/replacement = conflict + nothing applied, audit kept, re-supersede/re-forget refused)
+--- PASS: TestLifecycleReplay          (memory + persistent-shared: same request ID after clock moves = original outcome, no mutation; direct = unsupported)
+--- SKIP: TestIndependentProcessLifecycle (process-level: remote gate)
+--- PASS: TestLifecycleCLIAndMCP       (flags, exit 2/1/0)
+--- PASS: (all earlier tests below, unchanged)
+ok  github.com/qiangli/yoke/pkg/kbmemory 19.097s
+
+Earlier (capture commit):
 --- PASS: TestPersistentLifecycle
 --- PASS: TestMemoryModeLifecycleThroughOwner
 --- PASS: TestPersistentThroughExplicitSharedOwner
@@ -76,7 +102,7 @@ scripts/crossvet.sh
 Process-level test, written but not run on Dragon (manager remote gate):
 
 ```
-go test -count=1 -run 'TestIndependentProcesses' -v ./pkg/kbmemory
+go test -count=1 -run 'TestIndependentProcesses|TestIndependentProcessLifecycle' -v ./pkg/kbmemory
 ```
 
 It re-execs the test binary as independent client processes with distinct
@@ -86,6 +112,10 @@ one wins, the other gets `conflict`/`busy`), a same-request-ID add from two
 processes of one principal (one record, identical ID/created), a same-principal u1 retry after
 another process's u3 (original rev-2 outcome, record stays rev 3), and the
 direct path refusing `--request-id` (`unsupported`).
+`TestIndependentProcessLifecycle` races two processes to supersede one record
+with different replacements, in all three modes. Exactly one wins, the old
+record links to the winner, and the loser stays at rev 1. It then races two
+forgets on one revision, and exactly one wins.
 
 Still owed:
 - the bashy real-path smoke after the mount patch below.

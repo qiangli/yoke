@@ -43,7 +43,7 @@ var inheritedStoreFlags = []string{"dir", "ring", "repo", "user", "base-dir"}
 func MCPCommand() mcp.RegisteredCommand {
 	schema := Schema()
 	return mcp.RegisteredCommand{
-		Name: "kb_memory", Synopsis: "explicit kb memory collections: init, select, add, inspect, update",
+		Name: "kb_memory", Synopsis: "explicit kb memory collections: init, select, add, inspect, update, supersede, forget",
 		Usage: usage, Schema: &schema, Effects: []string{"fs.read", "fs.write", "db.read", "db.write"},
 		Run: func(ctx context.Context, argv []string, stdin, dir string) (string, string, int) {
 			cmd := newCmd(nil, dir)
@@ -82,18 +82,18 @@ func Schema() tool.ArgSchema {
 	return s
 }
 
-const usage = `memory init|select|add|inspect|update TARGET [ID] [flags]`
+const usage = `memory init|select|add|inspect|update|supersede|forget TARGET [ID] [flags]`
 
 func newCmd(ctxFn func() context.Context, dir string) *cobra.Command {
 	var (
-		typ, title, body, file, osName, episode, source, requestID, sessionID string
-		tags, repos                                                           []string
-		ifRevision                                                            int64
-		wait, timeout                                                         time.Duration
-		asJSON                                                                bool
+		typ, title, body, file, osName, episode, source, requestID, sessionID, replacement, reason string
+		tags, repos                                                                                []string
+		ifRevision, replacementRevision                                                            int64
+		wait, timeout                                                                              time.Duration
+		asJSON                                                                                     bool
 	)
 	cmd := &cobra.Command{
-		Use:   "memory init|select|add|inspect|update TARGET [ID]",
+		Use:   "memory init|select|add|inspect|update|supersede|forget TARGET [ID]",
 		Short: "Opt-in memory collections in an explicit db target (both storage modes)",
 		Long: `An opt-in memory collection is a document collection in an explicitly
 named db target. Nothing is implicit: there is no default collection and no
@@ -113,10 +113,16 @@ remembered selection — every call names TARGET, and only init creates.
   update TARGET ID --if-revision N
                        change fields; a stale N is a 'conflict', never a
                        lost update
+  supersede TARGET ID --if-revision N --replacement NEW --replacement-revision M
+                       close ID's validity and open NEW's at one instant, in
+                       one atomic batch under both revisions (kb lifecycle)
+  forget TARGET ID --if-revision N --reason R
+                       hide ID behind a tombstone; the record is kept
 
 Records keep kb's vocabulary (type, candidate status, tags, scope, source
-provenance, created/updated). Supersede and forget belong to kb's lifecycle
-(Sprint 284 M6) and are not offered here. Nothing captures conversations.`,
+provenance, created/updated) and kb's lifecycle (pkg/kblife: valid_from/
+valid_to, supersedes/superseded_by, tombstone). Nothing is deleted and
+nothing captures conversations.`,
 		Args:          cobra.RangeArgs(2, 3),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -139,7 +145,8 @@ provenance, created/updated). Supersede and forget belong to kb's lifecycle
 					return finishCmd(c, fail(op, invalid("--"+name+" selects a kb store; a memory TARGET is named explicitly")), asJSON)
 				}
 			}
-			req := Request{Verb: args[0], Target: args[1], Session: sessionID, Dir: dir, Episode: episode, SourceRef: source, IfRevision: ifRevision, RequestID: requestID, Wait: wait}
+			req := Request{Verb: args[0], Target: args[1], Session: sessionID, Dir: dir, Episode: episode, SourceRef: source, IfRevision: ifRevision, RequestID: requestID, Wait: wait,
+				Replacement: replacement, ReplacementRevision: replacementRevision, Reason: reason}
 			if len(args) == 3 {
 				req.ID = args[2]
 			}
@@ -185,7 +192,10 @@ provenance, created/updated). Supersede and forget belong to kb's lifecycle
 	f.StringVar(&osName, "os", "", "scope: GOOS value")
 	f.StringVar(&episode, "episode", "", "add: episode to stamp (default: this process's episode)")
 	f.StringVar(&source, "source", "", "source ref the record came from (default for -f FILE: file:PATH)")
-	f.Int64Var(&ifRevision, "if-revision", 0, "update: the revision the change is based on (required)")
+	f.Int64Var(&ifRevision, "if-revision", 0, "update/supersede/forget: the revision the change is based on (required)")
+	f.StringVar(&replacement, "replacement", "", "supersede: the existing record that replaces ID")
+	f.Int64Var(&replacementRevision, "replacement-revision", 0, "supersede: the replacement's revision (required)")
+	f.StringVar(&reason, "reason", "", "forget: why the record is forgotten (required)")
 	f.StringVar(&requestID, "request-id", "", "owner-session mutation dedup key")
 	f.StringVar(&sessionID, "session", "", "explicit owner session for a persistent target")
 	f.DurationVar(&wait, "wait", 5*time.Second, "bound on waiting for a lock, admission or hold")

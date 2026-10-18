@@ -17,8 +17,9 @@
 // "current" selection (contract invariant 2): every verb names its target.
 // `init` is the only verb that creates anything, and it reports where.
 // Records are written `candidate` (I-kb-4) and nothing is ever captured
-// automatically. Supersede and forget are 284 M6 semantics (61ae3cc9) and
-// are deliberately not implemented here.
+// automatically. Supersede and forget consume the one lifecycle semantics,
+// pkg/kblife (284 M6): an interval is closed, a tombstone added, and nothing
+// is deleted.
 package kbmemory
 
 import (
@@ -38,6 +39,7 @@ import (
 	"github.com/qiangli/yoke/pkg/dblifecycle"
 	"github.com/qiangli/yoke/pkg/dbstore"
 	"github.com/qiangli/yoke/pkg/kb"
+	"github.com/qiangli/yoke/pkg/kblife"
 	"github.com/qiangli/yoke/pkg/policy/coord"
 )
 
@@ -54,7 +56,7 @@ const (
 )
 
 // Verbs, in the order `kb memory` documents them.
-var Verbs = []string{"init", "select", "add", "inspect", "update"}
+var Verbs = []string{"init", "select", "add", "inspect", "update", "supersede", "forget"}
 
 // Scope mirrors kb's page scope.
 type Scope struct {
@@ -84,6 +86,27 @@ type Record struct {
 	Source  Source   `json:"source"`
 	Created string   `json:"created"`
 	Updated string   `json:"updated"`
+	// Lifecycle (pkg/kblife), additive: RFC 3339 interval bounds, the
+	// supersede links, and the forget tombstone. Empty means open/none.
+	ValidFrom    string            `json:"valid_from,omitempty"`
+	ValidTo      string            `json:"valid_to,omitempty"`
+	Supersedes   string            `json:"supersedes,omitempty"`
+	SupersededBy string            `json:"superseded_by,omitempty"`
+	Tombstone    *kblife.Tombstone `json:"tombstone,omitempty"`
+}
+
+// Validity is the record's interval as kblife reads it.
+func (r Record) Validity() kblife.Validity {
+	parse := func(s string) time.Time {
+		t, _ := time.Parse(time.RFC3339, s)
+		return t
+	}
+	return kblife.Validity{ValidFrom: parse(r.ValidFrom), ValidTo: parse(r.ValidTo)}
+}
+
+// State resolves the record at asOf; retrieval shows only kblife.Visible.
+func (r Record) State(asOf time.Time) kblife.State {
+	return kblife.Resolve(r.Validity(), r.SupersededBy, r.Tombstone, asOf)
 }
 
 // Request is one typed memory operation. CLI and MCP both build it from the
@@ -103,8 +126,13 @@ type Request struct {
 	Episode    string
 	SourceRef  string
 	IfRevision int64
-	RequestID  string
-	Wait       time.Duration
+	// supersede: the replacement record and its revision precondition.
+	Replacement         string
+	ReplacementRevision int64
+	// forget: why (required).
+	Reason    string
+	RequestID string
+	Wait      time.Duration
 }
 
 // clock stamps created/updated inside operation execution (tests pin it).
@@ -154,7 +182,7 @@ func (e Envelope) ExitCode() int {
 
 func mutationClass(verb string) string {
 	switch verb {
-	case "add", "update", "init":
+	case "add", "update", "init", "supersede", "forget":
 		return "write"
 	}
 	return "read"
@@ -249,13 +277,17 @@ func session(req Request, t dbstore.Target) string {
 
 // Category operations kbmemory registers on the shared admission path.
 const (
-	OpAdd    = "memory.add"
-	OpUpdate = "memory.update"
+	OpAdd       = "memory.add"
+	OpUpdate    = "memory.update"
+	OpSupersede = "memory.supersede"
+	OpForget    = "memory.forget"
 )
 
 func init() {
 	register(OpAdd, runAdd)
 	register(OpUpdate, runUpdate)
+	register(OpSupersede, runSupersede)
+	register(OpForget, runForget)
 }
 
 // opInput is the logical memory request: what the owner's request-id digest
@@ -278,6 +310,10 @@ type opInput struct {
 	Repos      *[]string `json:"repos,omitempty"`
 	OS         *string   `json:"os,omitempty"`
 	Source     Source    `json:"source"`
+	// Replacement/ReplacementRevision: supersede. Reason: forget.
+	Replacement         string `json:"replacement,omitempty"`
+	ReplacementRevision int64  `json:"replacement_revision,omitempty"`
+	Reason              string `json:"reason,omitempty"`
 }
 
 func decodeOp(raw json.RawMessage) (opInput, error) {
@@ -370,11 +406,18 @@ func run(ctx context.Context, req Request, t dbstore.Target, id dbstore.Identity
 	if req.Verb != "add" && req.Verb != "update" && hasFields(req) {
 		return fmt.Errorf("%w: record fields apply only to add and update", dbstore.ErrInvalidInput)
 	}
-	if (req.Verb == "inspect" || req.Verb == "update") != (req.ID != "") {
-		return fmt.Errorf("%w: inspect and update take exactly one record ID; other verbs take none", dbstore.ErrInvalidInput)
+	takesID := req.Verb == "inspect" || req.Verb == "update" || req.Verb == "supersede" || req.Verb == "forget"
+	if takesID != (req.ID != "") {
+		return fmt.Errorf("%w: inspect, update, supersede and forget take exactly one record ID; other verbs take none", dbstore.ErrInvalidInput)
 	}
-	if req.Verb != "update" && req.IfRevision != 0 {
-		return fmt.Errorf("%w: --if-revision applies only to update", dbstore.ErrInvalidInput)
+	if (req.Verb == "inspect" || !takesID) && req.IfRevision != 0 {
+		return fmt.Errorf("%w: --if-revision applies only to update, supersede and forget", dbstore.ErrInvalidInput)
+	}
+	if req.Verb != "supersede" && (req.Replacement != "" || req.ReplacementRevision != 0) {
+		return fmt.Errorf("%w: --replacement applies only to supersede", dbstore.ErrInvalidInput)
+	}
+	if req.Verb != "forget" && req.Reason != "" {
+		return fmt.Errorf("%w: --reason applies only to forget", dbstore.ErrInvalidInput)
 	}
 	switch req.Verb {
 	case "init":
@@ -385,6 +428,10 @@ func run(ctx context.Context, req Request, t dbstore.Target, id dbstore.Identity
 		return add(ctx, req, t, env)
 	case "inspect":
 		return inspect(ctx, req, t, env)
+	case "supersede":
+		return supersede(ctx, req, t, env)
+	case "forget":
+		return forget(ctx, req, t, env)
 	default:
 		return update(ctx, req, t, env)
 	}
@@ -629,7 +676,7 @@ func inspect(ctx context.Context, req Request, t dbstore.Target, env *Envelope) 
 		return err
 	}
 	env.Revision = &rev
-	env.Result = map[string]any{"record": r}
+	env.Result = map[string]any{"record": r, "state": r.State(clock())}
 	return nil
 }
 
@@ -724,6 +771,140 @@ func runUpdate(ctx context.Context, h dbstore.Handle, in opInput) (dblifecycle.O
 		return outcome(w.Revision, map[string]any{"id": in.ID, "record_revision": readRev}), nil
 	}
 	return outcome(w.Revision, map[string]any{"record": r}), nil
+}
+
+// supersede replaces OLD by an existing replacement record: both revisions
+// are preconditions, and both records change in one atomic dbdoc batch, so
+// a stale side or a failed check leaves neither half-applied.
+func supersede(ctx context.Context, req Request, t dbstore.Target, env *Envelope) error {
+	if req.IfRevision < 1 || req.Replacement == "" || req.ReplacementRevision < 1 {
+		return fmt.Errorf("%w: supersede requires --if-revision N, --replacement ID and --replacement-revision M", dbstore.ErrInvalidInput)
+	}
+	in := opInput{RequestID: req.RequestID, ID: req.ID, IfRevision: req.IfRevision, Replacement: strings.TrimSpace(req.Replacement), ReplacementRevision: req.ReplacementRevision}
+	res, err := docOp(ctx, req, t, OpSupersede, in, false)
+	if err != nil {
+		return err
+	}
+	return finish(env, res)
+}
+
+// runSupersede is memory.supersede. The instant is taken inside execution,
+// and kblife.Supersede is the one interval rule.
+func runSupersede(ctx context.Context, h dbstore.Handle, in opInput) (dblifecycle.Outcome, error) {
+	if in.ID == "" || in.IfRevision < 1 || in.Replacement == "" || in.ReplacementRevision < 1 {
+		return dblifecycle.Outcome{}, fmt.Errorf("%w: supersede needs both record IDs and revisions", dbstore.ErrInvalidInput)
+	}
+	if in.ID == in.Replacement {
+		return dblifecycle.Outcome{}, fmt.Errorf("%w: a record cannot supersede itself", dbstore.ErrInvalidInput)
+	}
+	old, oldRev, err := getOn(ctx, h, in.ID)
+	if err != nil {
+		return dblifecycle.Outcome{}, err
+	}
+	rep, repRev, err := getOn(ctx, h, in.Replacement)
+	if err != nil {
+		return dblifecycle.Outcome{}, err
+	}
+	if oldRev != in.IfRevision || repRev != in.ReplacementRevision {
+		return dblifecycle.Outcome{}, fmt.Errorf("%w: revision mismatch: %s expected %d actual %d, %s expected %d actual %d",
+			dbstore.ErrConflict, in.ID, in.IfRevision, oldRev, in.Replacement, in.ReplacementRevision, repRev)
+	}
+	at := clock().UTC().Truncate(time.Second)
+	for _, r := range []Record{old, rep} {
+		if s := r.State(at); !kblife.Visible(s) {
+			return dblifecycle.Outcome{}, fmt.Errorf("%w: record %s is %s, not valid", dbstore.ErrInvalidInput, r.ID, s)
+		}
+	}
+	if rep.Supersedes != "" {
+		return dblifecycle.Outcome{}, fmt.Errorf("%w: record %s already supersedes %s", dbstore.ErrInvalidInput, rep.ID, rep.Supersedes)
+	}
+	ov, rv := old.Validity(), rep.Validity()
+	if err := kblife.Supersede(&ov, &rv, at); err != nil {
+		return dblifecycle.Outcome{}, fmt.Errorf("%w: %v", dbstore.ErrInvalidInput, err)
+	}
+	now := at.Format(time.RFC3339)
+	old.ValidTo, old.SupersededBy, old.Status, old.Updated = now, rep.ID, kb.StatusSuperseded, now
+	rep.ValidFrom, rep.Supersedes, rep.Updated = now, old.ID, now
+	oldPatch, err := json.Marshal(map[string]any{"valid_to": old.ValidTo, "superseded_by": old.SupersededBy, "status": old.Status, "updated": now})
+	if err != nil {
+		return dblifecycle.Outcome{}, err
+	}
+	repPatch, err := json.Marshal(map[string]any{"valid_from": rep.ValidFrom, "supersedes": rep.Supersedes, "updated": now})
+	if err != nil {
+		return dblifecycle.Outcome{}, err
+	}
+	or, rr := in.IfRevision, in.ReplacementRevision
+	res, err := onHandle(ctx, h, dbdoc.OpBatch, dbdoc.Input{Collection: Collection, Ops: []dbdoc.BatchOp{
+		{Op: "patch", ID: old.ID, Patch: oldPatch, IfRevision: &or},
+		{Op: "patch", ID: rep.ID, Patch: repPatch, IfRevision: &rr},
+	}})
+	if err != nil {
+		return dblifecycle.Outcome{}, err
+	}
+	var w struct {
+		Results []struct {
+			Revision int64 `json:"revision"`
+		} `json:"results"`
+	}
+	if err := decode(res, &w); err != nil || len(w.Results) != 2 {
+		return dblifecycle.Outcome{}, fmt.Errorf("%w: supersede batch result: %v", dbstore.ErrIntegrity, err)
+	}
+	return outcome(w.Results[0].Revision, map[string]any{"record": old, "replacement": rep, "replacement_revision": w.Results[1].Revision}), nil
+}
+
+// forget hides a record behind a kblife tombstone under a revision
+// precondition. The record and its provenance are kept for audit.
+func forget(ctx context.Context, req Request, t dbstore.Target, env *Envelope) error {
+	if req.IfRevision < 1 || strings.TrimSpace(req.Reason) == "" {
+		return fmt.Errorf("%w: forget requires --if-revision N and --reason R", dbstore.ErrInvalidInput)
+	}
+	// The forgetting principal is part of the request, as add's provenance is.
+	in := opInput{RequestID: req.RequestID, ID: req.ID, IfRevision: req.IfRevision, Reason: strings.TrimSpace(req.Reason),
+		Source: Source{Tool: kb.ToolID(), Episode: kb.EpisodeID()}}
+	res, err := docOp(ctx, req, t, OpForget, in, false)
+	if err != nil {
+		return err
+	}
+	return finish(env, res)
+}
+
+// runForget is memory.forget: the tombstone's instant is taken inside
+// execution; kblife.NewTombstone validates reason and principal.
+func runForget(ctx context.Context, h dbstore.Handle, in opInput) (dblifecycle.Outcome, error) {
+	if in.ID == "" || in.IfRevision < 1 {
+		return dblifecycle.Outcome{}, fmt.Errorf("%w: forget needs a record ID and --if-revision", dbstore.ErrInvalidInput)
+	}
+	r, rev, err := getOn(ctx, h, in.ID)
+	if err != nil {
+		return dblifecycle.Outcome{}, err
+	}
+	if rev != in.IfRevision {
+		return dblifecycle.Outcome{}, fmt.Errorf("%w: revision mismatch on record %q: expected_revision %d, actual_revision %d", dbstore.ErrConflict, in.ID, in.IfRevision, rev)
+	}
+	if r.Tombstone != nil {
+		return dblifecycle.Outcome{}, fmt.Errorf("%w: record %s already forgotten at %s", dbstore.ErrInvalidInput, r.ID, r.Tombstone.At.Format(time.RFC3339))
+	}
+	at := clock().UTC().Truncate(time.Second)
+	tomb, err := kblife.NewTombstone("memory:"+r.ID, in.Reason, in.Source.Tool, in.Source.Episode, at)
+	if err != nil {
+		return dblifecycle.Outcome{}, fmt.Errorf("%w: %v", dbstore.ErrInvalidInput, err)
+	}
+	r.Tombstone, r.Updated = &tomb, at.Format(time.RFC3339)
+	patch, err := json.Marshal(map[string]any{"tombstone": tomb, "updated": r.Updated})
+	if err != nil {
+		return dblifecycle.Outcome{}, err
+	}
+	res, err := onHandle(ctx, h, dbdoc.OpPatch, dbdoc.Input{Collection: Collection, ID: r.ID, Patch: patch, IfRevision: &rev})
+	if err != nil {
+		return dblifecycle.Outcome{}, err
+	}
+	var w struct {
+		Revision int64 `json:"revision"`
+	}
+	if err := decode(res, &w); err != nil {
+		return dblifecycle.Outcome{}, err
+	}
+	return outcome(w.Revision, map[string]any{"record": r, "state": kblife.StateForgotten}), nil
 }
 
 // newID mints a stable record ID. It is never reused or derived from content.
