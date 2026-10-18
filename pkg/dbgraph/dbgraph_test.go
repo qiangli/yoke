@@ -99,9 +99,14 @@ func testGraphOwnerTwoClientCAS(t *testing.T, mode dbstore.Mode) {
 		go func(name string) {
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestGraphCASClientHelper$")
 			cmd.Env = append(os.Environ(), "BASHY_GRAPH_CAS_HELPER=1", "BASHY_GRAPH_SESSION="+session, "BASHY_GRAPH_MODE="+string(mode), "BASHY_GRAPH_PATH="+target.Path, "BASHY_GRAPH_NAME="+target.Name, "BASHY_GRAPH_CLIENT="+name, "BASHY_EPISODE=graph-"+name)
-			b, err := cmd.CombinedOutput()
+			b, err := cmd.Output()
 			if err != nil {
-				results <- dblifecycle.Response{Error: &dblifecycle.OwnerError{Code: "client_failed", Message: err.Error() + ": " + string(b)}}
+				var exit *exec.ExitError
+				if errors.As(err, &exit) {
+					results <- dblifecycle.Response{Error: &dblifecycle.OwnerError{Code: "client_failed", Message: err.Error() + ": " + string(exit.Stderr)}}
+				} else {
+					results <- dblifecycle.Response{Error: &dblifecycle.OwnerError{Code: "client_failed", Message: err.Error()}}
+				}
 				return
 			}
 			var r dblifecycle.Response
