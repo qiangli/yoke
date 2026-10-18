@@ -132,3 +132,23 @@ func TestMessageLocatorBoardRead(t *testing.T) {
 		t.Fatalf("only the post with locators gets a refs line:\n%s", human)
 	}
 }
+
+func TestLocatorReadCommand(t *testing.T) {
+	cases := []struct {
+		name string
+		refs []MessageRef
+		want string
+	}{
+		{"none", nil, ""},
+		{"local", []MessageRef{{Ref: "mb:12"}}, "refs: mb:12 — read: `lens mb:12`"},
+		{"remote", []MessageRef{{Ref: "dir:/var/log/x.log@there", Note: "n"}}, "refs: dir:/var/log/x.log@there (n) — read: `lens dir:/var/log/x.log@there`"},
+		{"quoted", []MessageRef{{Ref: "zip:a!/b;c"}}, "refs: zip:a!/b;c — read: `lens 'zip:a!/b;c'`"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := refsLine(c.refs); got != c.want {
+				t.Fatalf("got %q want %q", got, c.want)
+			}
+		})
+	}
+}

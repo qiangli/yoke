@@ -154,5 +154,17 @@ func refsLine(refs []MessageRef) string {
 			parts[i] += " (" + r.Note + ")"
 		}
 	}
-	return "refs: " + strings.Join(parts, ", ")
+	reads := make([]string, len(refs))
+	for i, r := range refs {
+		reads[i] = "`lens " + shellQuoteRef(r.Ref) + "`"
+	}
+	return "refs: " + strings.Join(parts, ", ") + " — read: " + strings.Join(reads, ", ")
+}
+
+// shellQuoteRef single-quotes a locator only when it holds shell-special bytes.
+func shellQuoteRef(s string) string {
+	if !strings.ContainsAny(s, " \t!$&;|<>()*?[]{}'\"`\\#~") {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
