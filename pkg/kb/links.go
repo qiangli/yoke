@@ -6,6 +6,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/qiangli/yoke/pkg/ref"
@@ -243,6 +244,84 @@ func Backlinks(target LinkNode, nodes []LinkNode) []LinkNode {
 		}
 	}
 	return out
+}
+
+// BodyLinkRelation is the relation type a body link ([[slug]], a pages/x.md
+// link) carries in `kb backlinks`: prose links are untyped citations.
+const BodyLinkRelation = "link"
+
+// TypedBacklink is one inbound edge to a kb page: a body link (Relation
+// "link") or a live graph.jsonl link relation whose dst is the page.
+type TypedBacklink struct {
+	Ref      string
+	Kind     string
+	Title    string
+	Relation string
+}
+
+// TypedBacklinks returns the body backlinks of target (in node order) followed
+// by every live link relation whose dst resolves to it, sorted by (relation,
+// source ref, id). titles for relation sources come from nodes when the source
+// is itself a known record.
+func TypedBacklinks(target LinkNode, nodes []LinkNode, relations []Relation) []TypedBacklink {
+	var out []TypedBacklink
+	for _, n := range Backlinks(target, nodes) {
+		out = append(out, TypedBacklink{Ref: n.Ref(), Kind: string(n.Kind), Title: n.Title, Relation: BodyLinkRelation})
+	}
+	byRef := map[string]LinkNode{}
+	for _, n := range nodes {
+		byRef[n.Ref()] = n
+	}
+	type relRow struct {
+		TypedBacklink
+		id string
+	}
+	var rows []relRow
+	for _, rel := range relations {
+		if rel.Op != "link" || strings.TrimSpace(rel.Relation) == "" || relationRef(rel.Dst) != target.Ref() {
+			continue
+		}
+		src := relationRef(rel.Target)
+		if src == "" {
+			src = strings.TrimSpace(rel.Target)
+		}
+		row := relRow{TypedBacklink: TypedBacklink{Ref: src, Kind: entityKind(src), Relation: strings.TrimSpace(rel.Relation)}, id: rel.ID}
+		if r, err := ref.Parse(src); err == nil {
+			row.Kind = string(r.Kind)
+		}
+		if n, ok := byRef[src]; ok {
+			row.Title = n.Title
+		}
+		rows = append(rows, row)
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].Relation != rows[j].Relation {
+			return rows[i].Relation < rows[j].Relation
+		}
+		if rows[i].Ref != rows[j].Ref {
+			return rows[i].Ref < rows[j].Ref
+		}
+		return rows[i].id < rows[j].id
+	})
+	for _, r := range rows {
+		out = append(out, r.TypedBacklink)
+	}
+	return out
+}
+
+// relationRef canonicalises a relation endpoint that names a vocabulary ref
+// (kb:x, todo:x, urn:dhnt:kb:x) to "<kind>:<id>"; anything else (a code path,
+// a free entity name) yields "".
+func relationRef(s string) string {
+	s = strings.TrimSpace(s)
+	if !strings.Contains(s, ":") {
+		return ""
+	}
+	r, err := ref.Parse(s)
+	if err != nil {
+		return ""
+	}
+	return string(r.Kind) + ":" + r.ID
 }
 
 // ResolveOutbound splits a node's outbound links into the nodes they resolve to

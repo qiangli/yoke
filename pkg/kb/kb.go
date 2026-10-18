@@ -903,19 +903,24 @@ func graphNodes(store *Store) (nodes []LinkNode, todoKnown bool, err error) {
 }
 
 type backlinkJSON struct {
-	Ref   string `json:"ref"`
-	Kind  string `json:"kind"`
-	Title string `json:"title"`
+	Ref      string `json:"ref"`
+	Kind     string `json:"kind"`
+	Title    string `json:"title"`
+	Relation string `json:"relation,omitempty"`
 }
 
 func newBacklinksCmd(dir, ring *string) *cobra.Command {
 	var jsonOut bool
 	cmd := &cobra.Command{
 		Use:   "backlinks <slug>",
-		Short: "Show every record (kb page or todo) whose body links to this page",
+		Short: "Show every record that links or relates to this page, with the relation type",
 		Long: `Resolve the link graph at READ TIME: list every kb page and todo/issue whose
-body cites <slug> (via [[slug]], [[kb:slug]], or a pages/<slug>.md link). Reads
-only — nothing is recorded, no body is rewritten.`,
+body cites <slug> (via [[slug]], [[kb:slug]], or a pages/<slug>.md link) —
+relation "link" — then every live graph.jsonl link relation whose dst is
+kb:<slug>, with its relation type (about, supports, contradicts, …). An entity
+page is an ordinary page that is the "about" target of the records describing
+it, so backlinks of an entity page list its attachments. Reads only — nothing
+is recorded, no body is rewritten.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
 			store := openRing(*dir, *ring)
@@ -923,13 +928,17 @@ only — nothing is recorded, no body is rewritten.`,
 			if err != nil {
 				return err
 			}
+			relations, err := store.LiveRelations()
+			if err != nil {
+				return err
+			}
 			target := LinkNode{Kind: LinkKB, ID: args[0]}
-			back := Backlinks(target, nodes)
+			back := TypedBacklinks(target, nodes, relations)
 			out := c.OutOrStdout()
 			if jsonOut {
 				rows := make([]backlinkJSON, 0, len(back))
-				for _, n := range back {
-					rows = append(rows, backlinkJSON{Ref: n.Ref(), Kind: string(n.Kind), Title: n.Title})
+				for _, b := range back {
+					rows = append(rows, backlinkJSON{Ref: b.Ref, Kind: b.Kind, Title: b.Title, Relation: b.Relation})
 				}
 				payload := struct {
 					Slug      string         `json:"slug"`
@@ -944,8 +953,8 @@ only — nothing is recorded, no body is rewritten.`,
 				return nil
 			}
 			fmt.Fprintf(out, "%d record(s) link to kb:%s\n", len(back), args[0])
-			for _, n := range back {
-				fmt.Fprintf(out, "  %s\t%s\n", n.Ref(), n.Title)
+			for _, b := range back {
+				fmt.Fprintf(out, "  %s\t%s\t%s\n", b.Ref, b.Relation, b.Title)
 			}
 			return nil
 		},
@@ -963,7 +972,9 @@ func newDoctorCmd(dir, ring *string) *cobra.Command {
 		Short: "Flag link-graph and hygiene problems (never fixes — repair with update/supersede)",
 		Long: `Report, and only report: dangling links, links whose <kind>: is not in
 the ref vocabulary, orphan pages (no inbound, no outbound, not validated),
-near-duplicate pairs, and records missing a form or description. doctor FLAGS, it is never 'kb fix' — nothing here rewrites a body,
+near-duplicate pairs, records missing a form or description, open-vocabulary
+relations, and open contradictions (a live "contradicts" relation whose
+endpoints are both live — neither superseded). doctor FLAGS, it is never 'kb fix' — nothing here rewrites a body,
 so a reported page is left byte-identical on disk. Scope it with --ring.`,
 		Args: cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
@@ -986,6 +997,7 @@ so a reported page is left byte-identical on disk. Scope it with --ring.`,
 				return err
 			}
 			rep.OpenRelations = DoctorRelations(relations)
+			rep.OpenContradictions = DoctorContradictions(relations, pages)
 			rep.Ring = *ring
 			out := c.OutOrStdout()
 			if jsonOut {
@@ -1043,6 +1055,12 @@ so a reported page is left byte-identical on disk. Scope it with --ring.`,
 				fmt.Fprintf(out, "duplicate seq (%d) — kb:<seq> is ambiguous for these; slug and uuid still resolve:\n", len(rep.DuplicateSeq))
 				for _, d := range rep.DuplicateSeq {
 					fmt.Fprintf(out, "  #%d  %s\n", d.Seq, strings.Join(d.Slugs, "  "))
+				}
+			}
+			if len(rep.OpenContradictions) > 0 {
+				fmt.Fprintf(out, "open contradictions (%d) — resolve with `kb supersede` or `graph forget`:\n", len(rep.OpenContradictions))
+				for _, r := range rep.OpenContradictions {
+					fmt.Fprintf(out, "  %s -%s-> %s  [%s]\n", r.Target, r.Relation, r.Dst, r.ID)
 				}
 			}
 			if len(rep.OpenRelations) > 0 {

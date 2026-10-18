@@ -14,14 +14,27 @@ import (
 
 const RelationFile = "graph.jsonl"
 
+// coreRelations is the closed core vocabulary of the `relation` form; a link
+// outside it is kept (open vocabulary) but flagged by `kb doctor`.
+//
+// Entity nodes need no store of their own: an entity is addressed by its
+// deterministic RelationEntityID(kind, name), and an entity PAGE is an
+// ordinary kb page that is the `about` target of the records describing it
+// (`{"op":"link","target":"<src>","relation":"about","dst":"kb:<entity>"}`).
+// `kb backlinks <entity>` lists those attachments with their relation type.
 var coreRelations = map[string]bool{
-	"about":      true,
-	"supersedes": true,
-	"depends-on": true,
-	"calls":      true,
-	"tested-by":  true,
-	"decided-in": true,
-	"observed":   true,
+	"about":        true,
+	"supersedes":   true,
+	"depends-on":   true,
+	"calls":        true,
+	"tested-by":    true,
+	"decided-in":   true,
+	"observed":     true,
+	"supports":     true,
+	"contradicts":  true,
+	"derived-from": true,
+	"caused-by":    true,
+	"part-of":      true,
 }
 
 type Relation struct {

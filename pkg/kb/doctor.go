@@ -49,6 +49,10 @@ type DoctorReport struct {
 	MissingForm        []string       `json:"missing_form"`
 	MissingDescription []string       `json:"missing_description"`
 	OpenRelations      []OpenRelation `json:"open_relations"`
+	// OpenContradictions lists live `contradicts` relations whose endpoints
+	// are both live (neither superseded): a conflict nobody has resolved yet.
+	// Flagged only (I-kb-5) — resolve with `kb supersede` or `graph forget`.
+	OpenContradictions []OpenRelation `json:"open_contradictions,omitempty"`
 	// MissingID lists pages that predate the id/seq handles (no `id:` or no
 	// `seq:` in frontmatter) — they resolve by slug only until next written;
 	// the repair is an explicit `kb update <slug>`, never a doctor rewrite.
@@ -69,7 +73,7 @@ type DupSeq struct {
 func (r DoctorReport) Clean() bool {
 	return len(r.Dangling) == 0 && len(r.UnknownKind) == 0 && len(r.Orphans) == 0 && len(r.NearDuplicates) == 0 &&
 		len(r.MissingForm) == 0 && len(r.MissingDescription) == 0 &&
-		len(r.OpenRelations) == 0 && len(r.MissingID) == 0 && len(r.DuplicateSeq) == 0
+		len(r.OpenRelations) == 0 && len(r.OpenContradictions) == 0 && len(r.MissingID) == 0 && len(r.DuplicateSeq) == 0
 }
 
 // Doctor runs every hygiene check over the kb pages, using todoNodes (when the
@@ -168,6 +172,42 @@ func DoctorRelations(relations []Relation) []OpenRelation {
 		}
 		return out[i].ID < out[j].ID
 	})
+	return out
+}
+
+// DoctorContradictions returns every live `contradicts` link relation whose
+// endpoints are both live. An endpoint is superseded when it resolves to a kb
+// page with status superseded, or when a live `supersedes` relation names it
+// as dst; an endpoint kb cannot resolve (code path, free entity) is live.
+func DoctorContradictions(relations []Relation, pages []*Page) []OpenRelation {
+	superseded := map[string]bool{}
+	for _, p := range pages {
+		if p.Status == StatusSuperseded {
+			superseded["kb:"+p.Slug] = true
+		}
+	}
+	key := func(s string) string {
+		if r := relationRef(s); r != "" {
+			return r
+		}
+		return strings.TrimSpace(s)
+	}
+	for _, rel := range relations {
+		if rel.Op == "link" && strings.TrimSpace(rel.Relation) == "supersedes" {
+			superseded[key(rel.Dst)] = true
+		}
+	}
+	var out []OpenRelation
+	for _, rel := range relations {
+		if rel.Op != "link" || strings.TrimSpace(rel.Relation) != "contradicts" {
+			continue
+		}
+		if superseded[key(rel.Target)] || superseded[key(rel.Dst)] {
+			continue
+		}
+		out = append(out, OpenRelation{ID: rel.ID, Target: rel.Target, Relation: rel.Relation, Dst: rel.Dst})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }
 
