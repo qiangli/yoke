@@ -255,6 +255,17 @@ var pinnedDigests = map[string]string{
 	// official archive but no live verification yet, so it stays fail-closed.
 	"blender@4.2.3/windows/amd64": "7f8be9b1dc904e7689b3112659791c29cc9ed9d46ce57c4ea5b31a0621489b3a",
 
+	// gimp@3.2.6 — GIMP 3.2.6 AppImage (GNOME/gimp, GPL-3.0-or-later;
+	// external/gimp, Sprint 382 story 95d4747436c8). Digest is the project's
+	// own linux/SHA256SUMS row for GIMP-3.2.6-x86_64.AppImage, fetched
+	// 2026-10-18 through the download.gimp.org mirror redirector and matched
+	// against the 243,476,984 bytes that actually arrived (shasum -a 256 on
+	// the authoring host). Windows (installer .exe) and darwin (.dmg)
+	// publish no binmgr-consumable artifact and stay fail-closed;
+	// linux/arm64 has an official AppImage but no live run yet, so it stays
+	// unpinned (digest recorded in external/gimp/EVIDENCE.md).
+	"gimp@3.2.6/linux/amd64": "79ea41bc9b06f78fda181849a9ca8e42d83f1124dedb756f4d52352e2465010f",
+
 	// No ollama pins, by design: per docs/bashy-service-supply-chain-policy.md
 	// (Sprint 436, story 8d1e72e5dff6) bashy never downloads or execs a
 	// third-party ollama release archive — the bashy-signed embedded runner
