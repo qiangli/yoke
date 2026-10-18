@@ -26,9 +26,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,6 +40,7 @@ import (
 	"github.com/qiangli/coreutils/pkg/weavecli"
 	"github.com/qiangli/coreutils/tool"
 	"github.com/qiangli/yoke/pkg/codegraph"
+	"github.com/qiangli/yoke/pkg/lens/stream"
 )
 
 // schemaVersion is the stable envelope tag agents key on; graph_sha lets a
@@ -459,12 +462,6 @@ type neighbor struct {
 	Confidence string `json:"confidence"`
 }
 
-type neighborsPayload struct {
-	header
-	Node      string     `json:"node"`
-	Neighbors []neighbor `json:"neighbors"`
-}
-
 func runNeighbors(rc *tool.RunContext, args []string) int {
 	asJSON := weavecli.IsAgent()
 	var symbol, target, relation string
@@ -507,6 +504,8 @@ func runNeighbors(rc *tool.RunContext, args []string) int {
 		return 1
 	}
 	var nbrs []neighbor
+	sb := newStreamBuilder(gc.Graph, root)
+	sb.node(id)
 	for _, nb := range gc.Graph.Neighbors(id) {
 		eAttrs := gc.Graph.EdgeAttrs(id, nb)
 		rel := edgeStr(eAttrs, "relation")
@@ -514,6 +513,8 @@ func runNeighbors(rc *tool.RunContext, args []string) int {
 			continue
 		}
 		nAttrs := gc.Graph.NodeAttrs(nb)
+		sb.node(nb)
+		sb.edge(id, nb, eAttrs)
 		nbrs = append(nbrs, neighbor{
 			Label:      edgeStr(nAttrs, "label"),
 			FileType:   edgeStr(nAttrs, "file_type"),
@@ -522,12 +523,7 @@ func runNeighbors(rc *tool.RunContext, args []string) int {
 		})
 	}
 	if asJSON {
-		writeJSON(rc, neighborsPayload{
-			header:    newHeader(root, sourceSHA(root)),
-			Node:      nodeLabel(gc.Graph, id),
-			Neighbors: nbrs,
-		})
-		return 0
+		return sb.write(rc, "graph neighbors", url.Values{"op": {"neighbors"}, "symbol": {symbol}, "relation": {relation}})
 	}
 	if len(nbrs) == 0 {
 		fmt.Fprintln(rc.Err, "(no neighbors)")
@@ -550,16 +546,6 @@ type sgEdge struct {
 	Source   string `json:"source"`
 	Target   string `json:"target"`
 	Relation string `json:"relation"`
-}
-
-type impactPayload struct {
-	header
-	Node      string   `json:"node"`
-	Depth     int      `json:"depth"`
-	Total     int      `json:"total"`               // full blast-radius size before capping
-	Truncated int      `json:"truncated,omitempty"` // nodes omitted by --limit
-	Nodes     []sgNode `json:"nodes"`
-	Edges     []sgEdge `json:"edges"`
 }
 
 // defaultImpactLimit caps the returned node set so a benchmark showed the default
@@ -622,14 +608,26 @@ func runImpact(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Err, "graph impact: %v\n", err)
 		return 1
 	}
-	id := search.FindNode(gc.Graph, symbol)
-	if id == "" {
-		fmt.Fprintf(rc.Err, "graph impact: not found: %s\n", symbol)
+	// "-" takes addresses in: a bashy-graph-v1 stream (its node refs) or
+	// plain addresses, one per line, so `graph … --json | graph impact -`.
+	addrs := []string{symbol}
+	if symbol == "-" {
+		if addrs, err = stream.ReadAddresses(rc.In); err != nil {
+			fmt.Fprintf(rc.Err, "graph impact: -: %v\n", err)
+			return 1
+		}
+		if len(addrs) == 0 {
+			return usageErr(rc, "graph impact", "no addresses on stdin")
+		}
+	}
+	starts, missing := resolveAddresses(gc.Graph, root, addrs)
+	if len(missing) > 0 {
+		fmt.Fprintf(rc.Err, "graph impact: not found: %s\n", strings.Join(missing, ", "))
 		return 1
 	}
-	visited, edges := reverseBFS(gc.Graph, []string{id}, depth)
+	visited, edges := reverseBFS(gc.Graph, starts, depth)
 	if undirected {
-		visited, edges = gc.Graph.ToUndirected().BFS([]string{id}, depth)
+		visited, edges = gc.Graph.ToUndirected().BFS(starts, depth)
 	}
 	total := len(visited)
 	truncated := 0
@@ -639,19 +637,32 @@ func runImpact(rc *tool.RunContext, args []string) int {
 	}
 	nodes, sgEdges := subgraphView(gc.Graph, visited, edges)
 	if asJSON {
-		writeJSON(rc, impactPayload{
-			header:    newHeader(root, sourceSHA(root)),
-			Node:      nodeLabel(gc.Graph, id),
-			Depth:     depth,
-			Total:     total,
-			Truncated: truncated,
-			Nodes:     nodes,
-			Edges:     sgEdges,
-		})
-		return 0
+		sb := newStreamBuilder(gc.Graph, root)
+		kept := make(map[string]bool, len(visited))
+		for _, v := range visited {
+			kept[v] = true
+			sb.node(v)
+		}
+		for _, e := range edges {
+			if kept[e.Source] && kept[e.Target] {
+				sb.edge(e.Source, e.Target, e.Attrs)
+			}
+		}
+		if truncated > 0 {
+			fmt.Fprintf(rc.Err, "graph impact: %d of %d nodes omitted by --limit %d\n", truncated, total, limit)
+		}
+		q := url.Values{"op": {"impact"}, "symbol": addrs, "depth": {strconv.Itoa(depth)}, "limit": {strconv.Itoa(limit)}}
+		if undirected {
+			q.Set("undirected", "true")
+		}
+		return sb.write(rc, "graph impact", q)
+	}
+	labels := make([]string, len(starts))
+	for i, s := range starts {
+		labels[i] = nodeLabel(gc.Graph, s)
 	}
 	fmt.Fprintf(rc.Out, "blast radius of %q within %d hop(s): %d symbols, %d edges\n",
-		nodeLabel(gc.Graph, id), depth, total, len(sgEdges))
+		strings.Join(labels, ", "), depth, total, len(sgEdges))
 	for _, n := range nodes {
 		fmt.Fprintf(rc.Out, "- %s (%s)\n", n.Label, n.FileType)
 	}

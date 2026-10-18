@@ -10,7 +10,10 @@
 //     pdf/docx/xlsx→md|txt as text-only Go fallbacks, with markitdown/docling
 //     recipe rows preferred when those commands are registered;
 //   - contents projection: tar/pax/zip→listing (uniform JSONL Entry rows) and
-//     →md.
+//     →md;
+//   - graph views (Sprint 446 S19): a bashy-graph-v1 stream (recognized by
+//     its declared header, never guessed) → listing, edges, paths, tree,
+//     outline, json, dot, mermaid.
 //
 // Lossless rows promise A→B→A byte identity for canonical input; anything a
 // particular input loses is reported as a runtime loss so `--strict` can
@@ -27,6 +30,7 @@ import (
 	"strings"
 
 	"github.com/qiangli/coreutils/tool"
+	"github.com/qiangli/yoke/pkg/lens/stream"
 )
 
 // Exit codes, shared by the library errors and the CLI.
@@ -81,6 +85,7 @@ type Row struct {
 	// argv is set on the command-line rows instead of conv: they take the
 	// agent-chosen knobs and report the executable verdict (argv.go).
 	argv func(data []byte, opt ArgvOptions, l *losses) ([]byte, string, error)
+	view func(data []byte, o ViewOptions, declared bool) ([]byte, error) // graph rows
 }
 
 // IsArgv reports whether the row is a command-line (argv) row.
@@ -247,6 +252,11 @@ func buildRows() []Row {
 			t = append(t, Row{From: from, To: to, Fidelity: Lossless, argv: argvRow(from, to)})
 		}
 	}
+
+	// graph views: every one drops records or structure, so all are lossy
+	for _, v := range GraphViews {
+		t = append(t, Row{From: "graph", To: v, Fidelity: Lossy, view: graphRow(v)})
+	}
 	return t
 }
 
@@ -380,6 +390,8 @@ type Request struct {
 	// Argv carries the command-line knobs; setting either on a row that is
 	// not an argv row is a usage error.
 	Argv ArgvOptions
+	// View carries --depth/--null to graph rows.
+	View ViewOptions
 }
 
 // Result is a finished conversion.
@@ -400,6 +412,9 @@ func Convert(ctx context.Context, req Request) (Result, error) {
 	from := req.From
 	if from == "" {
 		from = Detect(req.Name, req.Data)
+		if from != "graph" && stream.IsRecords(bytes.TrimLeft(req.Data, " \t\r\n")) {
+			return Result{From: from}, &Error{Code: ExitUsage, Err: stream.ErrNoHeader}
+		}
 		if from == "" {
 			return Result{}, errorf(ExitUsage, "cannot detect the input format; pass -f FROM")
 		}
@@ -416,6 +431,8 @@ func Convert(ctx context.Context, req Request) (Result, error) {
 		out, executable, err = row.argv(req.Data, req.Argv, &l)
 	case !req.Argv.empty():
 		return Result{From: from, Row: row}, errorf(ExitUsage, "--switch and --drive apply to command-line rows, not %s -> %s", from, req.To)
+	case row.view != nil:
+		out, err = row.view(req.Data, req.View, req.From != "")
 	case row.Recipe != nil:
 		out, err = runRecipe(ctx, row, req)
 	default:

@@ -110,33 +110,26 @@ func TestGraphNeighborsCallsAreOutgoingOnly(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("graph neighbors exit %d, stderr=%s", code, errOut)
 	}
-	var p neighborsPayload
-	if err := json.Unmarshal([]byte(out), &p); err != nil {
-		t.Fatalf("invalid JSON: %v\n%s", err, out)
-	}
-	labels := map[string]bool{}
-	for _, n := range p.Neighbors {
-		labels[strings.TrimSuffix(n.Label, "()")] = true
-	}
+	p := decodeStream(t, out)
+	labels := streamLabels(p)
 	if !labels["Beta"] {
-		t.Fatalf("expected Alpha calls to include callee Beta, got %#v", p.Neighbors)
+		t.Fatalf("expected Alpha calls to include callee Beta, got %#v", p.Nodes)
 	}
 	if labels["Gamma"] {
-		t.Fatalf("caller Gamma must not appear in outgoing calls neighbors: %#v", p.Neighbors)
+		t.Fatalf("caller Gamma must not appear in outgoing calls neighbors: %#v", p.Nodes)
+	}
+	for _, e := range p.Edges {
+		if e.Rel != "calls" {
+			t.Fatalf("--relation calls leaked %q edge", e.Rel)
+		}
 	}
 
 	out, errOut, code = run(t, dir, runNeighbors, "Beta", "--relation", "calls", "--json")
 	if code != 0 {
 		t.Fatalf("graph neighbors exit %d, stderr=%s", code, errOut)
 	}
-	p = neighborsPayload{}
-	if err := json.Unmarshal([]byte(out), &p); err != nil {
-		t.Fatalf("invalid JSON: %v\n%s", err, out)
-	}
-	for _, n := range p.Neighbors {
-		if strings.TrimSuffix(n.Label, "()") == "Alpha" {
-			t.Fatalf("caller Alpha must not appear as Beta's outgoing call neighbor: %#v", p.Neighbors)
-		}
+	if p = decodeStream(t, out); streamLabels(p)["Alpha"] {
+		t.Fatalf("caller Alpha must not appear as Beta's outgoing call neighbor: %#v", p.Nodes)
 	}
 }
 
@@ -157,14 +150,8 @@ func TestGraphImpactBlastRadius(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("graph impact exit %d, stderr=%s", code, errOut)
 	}
-	var p impactPayload
-	if err := json.Unmarshal([]byte(out), &p); err != nil {
-		t.Fatalf("invalid JSON: %v\n%s", err, out)
-	}
-	labels := map[string]bool{}
-	for _, n := range p.Nodes {
-		labels[strings.TrimSuffix(strings.TrimPrefix(n.Label, "."), "()")] = true
-	}
+	p := decodeStream(t, out)
+	labels := streamLabels(p)
 	if !labels["Gamma"] {
 		t.Errorf("expected caller Gamma in Alpha's reverse-dependency impact, got %#v", p.Nodes)
 	}
@@ -179,14 +166,8 @@ func TestGraphImpactUndirectedCouplingIsExplicit(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("graph impact exit %d, stderr=%s", code, errOut)
 	}
-	var p impactPayload
-	if err := json.Unmarshal([]byte(out), &p); err != nil {
-		t.Fatalf("invalid JSON: %v\n%s", err, out)
-	}
-	labels := map[string]bool{}
-	for _, n := range p.Nodes {
-		labels[strings.TrimSuffix(strings.TrimPrefix(n.Label, "."), "()")] = true
-	}
+	p := decodeStream(t, out)
+	labels := streamLabels(p)
 	if !labels["Beta"] || !labels["Gamma"] {
 		t.Fatalf("--undirected should preserve coupling view, got %#v", p.Nodes)
 	}
@@ -197,31 +178,28 @@ func TestGraphImpactDefaultsToDirectAndCaps(t *testing.T) {
 	// Default depth is 1 (direct coupling) — a benchmark showed depth-2 on the
 	// undirected graph explodes (124 nodes / 28 KB for one symbol). --limit caps
 	// the returned set and reports the remainder rather than silently dropping.
-	out, _, code := run(t, dir, runImpact, "Alpha", "--depth", "2", "--limit", "1", "--json")
+	out, errOut, code := run(t, dir, runImpact, "Alpha", "--depth", "2", "--limit", "1", "--json")
 	if code != 0 {
 		t.Fatalf("graph impact exit %d", code)
 	}
-	var p impactPayload
-	if err := json.Unmarshal([]byte(out), &p); err != nil {
-		t.Fatalf("bad json: %v\n%s", err, out)
-	}
-	if p.Depth != 2 {
-		t.Errorf("depth should honor the flag, got %d", p.Depth)
+	p := decodeStream(t, out)
+	if q := p.Cursor.Binding.Query; !strings.Contains(q, "depth=2") || !strings.Contains(q, "limit=1") {
+		t.Errorf("cursor must bind the depth/limit options, got query %q", q)
 	}
 	if len(p.Nodes) > 1 {
 		t.Errorf("--limit 1 should cap nodes to 1, got %d", len(p.Nodes))
 	}
-	if p.Total <= len(p.Nodes) || p.Truncated != p.Total-len(p.Nodes) {
-		t.Errorf("truncation not reported: total=%d shown=%d truncated=%d", p.Total, len(p.Nodes), p.Truncated)
+	if !strings.Contains(errOut, "omitted by --limit 1") {
+		t.Errorf("truncation not reported on stderr: %q", errOut)
 	}
 	// Every returned edge must have both endpoints among the shown nodes.
 	shown := map[string]bool{}
 	for _, n := range p.Nodes {
-		shown[n.Label] = true
+		shown[n.Ref] = true
 	}
 	for _, e := range p.Edges {
-		if !shown[e.Source] || !shown[e.Target] {
-			t.Errorf("capped result has a dangling edge: %s -> %s", e.Source, e.Target)
+		if !shown[e.Src] || !shown[e.Dst] {
+			t.Errorf("capped result has a dangling edge: %s -> %s", e.Src, e.Dst)
 		}
 	}
 }

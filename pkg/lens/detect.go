@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+
+	"github.com/qiangli/yoke/pkg/lens/stream"
 )
 
 // aliases maps every accepted -f/-t spelling to its canonical format name.
@@ -27,6 +29,9 @@ var aliases = map[string]string{
 	"bash": "bash", "posix": "posix", "sh": "posix", "bsh": "bsh", "bashpp": "bsh",
 	"cmd": "cmd", "pwsh": "pwsh", "powershell": "pwsh",
 	"mcp-tool": "mcp-tool", "mcp-call": "mcp-call", "skill": "skill",
+	"graph": "graph", "bashy-graph-v1": "graph",
+	"edges": "edges", "paths": "paths", "tree": "tree", "outline": "outline",
+	"dot": "dot", "mermaid": "mermaid",
 }
 
 // Canonical returns the canonical format name for a -f/-t spelling, or "".
@@ -51,6 +56,10 @@ func byExtension(name string) string {
 	f := aliases[ext]
 	if f == "listing" || strings.HasPrefix(f, "cmd:") || argvOnly[f] {
 		return "" // command lines and command output are never guessed: they need -f
+	}
+	switch f {
+	case "graph", "edges", "paths", "tree", "outline", "dot", "mermaid":
+		return "" // graph streams are declared by their header; views are outputs
 	}
 	return f
 }
@@ -116,9 +125,14 @@ func zipKind(data []byte) string {
 	return "zip"
 }
 
-// Detect resolves FROM for an input: the file name's extension first, then
-// content magic. It returns "" when neither is conclusive.
+// Detect resolves FROM for an input. A declared bashy-graph-v1 header wins
+// (it is the stream's own statement of schema, like a fence info string);
+// then the file name's extension, then content magic. It returns "" when
+// none is conclusive.
 func Detect(name string, data []byte) string {
+	if text := bytes.TrimLeft(data, " \t\r\n"); len(text) > 0 && text[0] == '{' && stream.IsFramed(text) {
+		return "graph"
+	}
 	if f := byExtension(name); f != "" {
 		return f
 	}
