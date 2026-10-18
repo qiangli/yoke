@@ -146,6 +146,7 @@ bashy-claim-conflict-v1 document instead).`,
   bashy claim model:gpt-x --wait 10m # a registry-derived kind, waiting for the holder
   bashy claim --kind path /w/app     # ad hoc, nothing registered
   bashy claim list                # who is working right now, and where?
+  bashy claim show yoke --json    # inspect one held claim without acquiring it
   bashy claim request openai-models -m "need it for a 5 minute eval"
   bashy claim refresh do1         # heartbeat a long-held lease
   bashy claim release do1         # let someone else have the resource
@@ -443,7 +444,37 @@ pruning while others work is safe.`,
 	prune.Flags().Bool("dry-run", false, "show what would be removed without removing it")
 	prune.Flags().Bool("json", false, "emit the pruned claims")
 
-	cmd.AddCommand(list, request, release, refresh, prune)
+	show := &cobra.Command{
+		Use:   "show [kind:]NAME",
+		Short: "inspect one held claim without acquiring it",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			claims, err := List(DefaultDir())
+			if err != nil {
+				return err
+			}
+			for _, c := range claims {
+				c.normalize()
+				key := c.Resource
+				if key == "" {
+					key = c.Project
+				}
+				if shown(c) != args[0] && c.Kind+":"+key != args[0] {
+					continue
+				}
+				asJSON, _ := cmd.Flags().GetBool("json")
+				if asJSON {
+					return json.NewEncoder(cmd.OutOrStdout()).Encode(c)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%s held by %s on %s (%s, epoch %d): %s\n",
+					shown(c), c.Holder.Name, c.Holder.Host, c.Mode, c.Epoch, c.Intent)
+				return nil
+			}
+			return fmt.Errorf("claim %q is not held", args[0])
+		},
+	}
+	show.Flags().Bool("json", false, "emit the selected claim as JSON")
+	cmd.AddCommand(list, show, request, release, refresh, prune)
 	return cmd
 }
 

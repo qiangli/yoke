@@ -770,3 +770,33 @@ func TestRegisteredResourceLabelIdenticalInClaimListRelease(t *testing.T) {
 		t.Fatalf("--kind release output = %q, want 'claim: released path:/w/app\\n'", outRelKind)
 	}
 }
+
+func TestClaimShowReadsHeldClaimWithoutAcquiring(t *testing.T) {
+	dir := cliEnv(t)
+	ctx := context.Background()
+	if _, _, err := runClaim(ctx, "appdir"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := List(dir)
+	if err != nil || len(before) != 1 {
+		t.Fatalf("claim before show: %+v %v", before, err)
+	}
+	out, _, err := runClaim(ctx, "show", "clires:appdir", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got Claim
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Resource != "appdir" || got.Epoch != before[0].Epoch {
+		t.Fatalf("show returned another claim: %+v", got)
+	}
+	after, err := List(dir)
+	if err != nil || len(after) != 1 || after[0].Rev != before[0].Rev {
+		t.Fatalf("show mutated claims: %+v %v", after, err)
+	}
+	if _, _, err := runClaim(ctx, "show", "missing", "--json"); err == nil {
+		t.Fatal("missing claim was shown")
+	}
+}
