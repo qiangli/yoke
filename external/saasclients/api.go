@@ -147,9 +147,12 @@ func (a API) classify(resp *http.Response, data []byte) *gws.Error {
 	return e
 }
 
-// providerError extracts the provider's own error code/message from the two
-// documented shapes: Slack {"ok":false,"error":"…"} and Salesforce
-// [{"errorCode":"…","message":"…"}].
+// providerError extracts the provider's own error code/message from the
+// documented shapes: Slack {"ok":false,"error":"…"}, Salesforce
+// [{"errorCode":"…","message":"…"}], Notion
+// {"object":"error","code":"…","message":"…"} and Airtable
+// {"error":{"type":"…","message":"…"}}. Shapes for other Client values are
+// unrecognized: classification falls back to the HTTP status.
 func (a API) providerError(data []byte) (code, msg string) {
 	switch a.Client {
 	case "slack":
@@ -168,6 +171,25 @@ func (a API) providerError(data []byte) (code, msg string) {
 		if json.Unmarshal(data, &s) == nil && len(s) > 0 && s[0].ErrorCode != "" {
 			return s[0].ErrorCode, s[0].Message
 		}
+	case "notion":
+		var s struct {
+			Object  string `json:"object"`
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(data, &s) == nil && s.Object == "error" && s.Code != "" {
+			return s.Code, s.Message
+		}
+	case "airtable":
+		var s struct {
+			Error struct {
+				Type    string `json:"type"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(data, &s) == nil && s.Error.Type != "" {
+			return s.Error.Type, s.Error.Message
+		}
 	}
 	return "", ""
 }
@@ -183,6 +205,21 @@ func providerCode(p string) gws.Code {
 	case "ratelimited", "REQUEST_LIMIT_EXCEEDED":
 		return gws.CodeRateLimit
 	case "invalid_arguments", "invalid_arg_name", "msg_too_long", "no_text", "MALFORMED_QUERY", "INVALID_FIELD", "REQUIRED_FIELD_MISSING":
+		return gws.CodeInvalidInput
+	case "unauthorized":
+		return gws.CodeExpiredCredentials
+	case "restricted_resource":
+		return gws.CodePermissionDenied
+	case "object_not_found":
+		return gws.CodeNotFound
+	case "rate_limited":
+		return gws.CodeRateLimit
+	case "invalid_request", "invalid_request_url", "invalid_json", "validation_error", "missing_version":
+		return gws.CodeInvalidInput
+	case "AUTHENTICATION_REQUIRED":
+		return gws.CodeExpiredCredentials
+	// "NOT_FOUND" already maps to target-not-found via the shared Salesforce row.
+	case "INVALID_REQUEST", "INVALID_VALUE_FOR_COLUMN", "INVALID_FILTER_BY_FORMULA":
 		return gws.CodeInvalidInput
 	}
 	return ""

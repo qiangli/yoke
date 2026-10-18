@@ -30,6 +30,11 @@ var scopeSpecs = map[string]scopeSpec{
 	"stripe": {"STRIPE", "ACCOUNT", "API_KEY_FILE", "account id (acct_…)"},
 	"twilio": {"TWILIO", "ACCOUNT_SID", "API_KEY_FILE", "account SID (AC…)"},
 	"slack":  {"SLACK", "WORKSPACE", "TOKEN_FILE", "workspace team id (T…)"},
+	// Notion and Airtable have no native CLI (Sprint 457 story cf3c288d595a):
+	// the typed adapters in external/apiadapters resolve the same explicit
+	// target + credential-file scope through this shared facility.
+	"notion":   {"NOTION", "WORKSPACE", "TOKEN_FILE", "workspace/domain the integration token belongs to"},
+	"airtable": {"AIRTABLE", "BASE", "TOKEN_FILE", "base id (app…)"},
 }
 
 // Scope is a fully explicit target + credential selection.

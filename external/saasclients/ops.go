@@ -84,6 +84,21 @@ var Ops = []Op{
 	{"slack", "channel-list", ViaAPI, EffectRead, IdemNone, "Web API conversations.list"},
 	{"slack", "message-post", ViaAPI, EffectRealWorld, IdemLedger, "Web API chat.postMessage: sandbox workspace only; no provider key"},
 	{"slack", "message-delete", ViaAPI, EffectDelete, IdemNaturalID, "Web API chat.delete (ts)"},
+	// Notion — no native CLI exists (the curl candidate covers it as generic
+	// HTTP only), so every operation below uses the documented REST adapter in
+	// external/apiadapters (Sprint 457 story cf3c288d595a).
+	{"notion", "page-get", ViaAPI, EffectRead, IdemNone, "GET /v1/pages/{page_id}"},
+	{"notion", "database-query", ViaAPI, EffectRead, IdemNone, "POST /v1/databases/{database_id}/query"},
+	{"notion", "page-create", ViaAPI, EffectWrite, IdemLedger, "POST /v1/pages; no provider key"},
+	{"notion", "page-update", ViaAPI, EffectWrite, IdemNaturalID, "PATCH /v1/pages/{page_id}: re-applying the same properties converges"},
+	{"notion", "page-archive", ViaAPI, EffectDelete, IdemNaturalID, "PATCH /v1/pages/{page_id} archived=true"},
+	// Airtable — same position: no native CLI, generic HTTP only until the
+	// documented REST adapter in external/apiadapters.
+	{"airtable", "record-list", ViaAPI, EffectRead, IdemNone, "GET /v0/{base}/{table}"},
+	{"airtable", "record-get", ViaAPI, EffectRead, IdemNone, "GET /v0/{base}/{table}/{record_id}"},
+	{"airtable", "record-create", ViaAPI, EffectWrite, IdemLedger, "POST /v0/{base}/{table}; no provider key"},
+	{"airtable", "record-update", ViaAPI, EffectWrite, IdemNaturalID, "PATCH /v0/{base}/{table}/{record_id}"},
+	{"airtable", "record-delete", ViaAPI, EffectDelete, IdemNaturalID, "DELETE /v0/{base}/{table}/{record_id}"},
 }
 
 // LookupOp finds a capability row.
