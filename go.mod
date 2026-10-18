@@ -431,3 +431,5 @@ replace github.com/qiangli/yoke/pkg/oci => ./pkg/oci
 replace github.com/qiangli/yoke/pkg/llmgw => ./pkg/llmgw
 
 replace github.com/filebrowser/filebrowser/v2 => github.com/qiangli/filebrowser/v2 v2.0.0-20261013004903-9c7b5c8e3d09
+
+replace modernc.org/sqlite => github.com/qiangli/sqlite v1.50.2-0.20261018085128-5fb52bf328cb

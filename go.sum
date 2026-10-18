@@ -1569,3 +1569,5 @@ github.com/qiangli/coreutils v0.0.0-20261018024844-02b24ff1db5d h1:eCLO0HWO/Fa9d
 github.com/qiangli/coreutils v0.0.0-20261018024844-02b24ff1db5d/go.mod h1:nP8R/LOBZFHjHvzgE+TX3nASmemDaiMjOnei+YPuxq8=
 github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261018024844-02b24ff1db5d h1:ZNPgc5QZ+q/3CpNVGnWq7cJcmly44c+rdvVGdMfVDYo=
 github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261018024844-02b24ff1db5d/go.mod h1:p0JkVxHS3JKYxDz8kOYvMdPM8YRH94vZoWaFljD1vAg=
+github.com/qiangli/sqlite v1.50.2-0.20261018085128-5fb52bf328cb h1:LLfdQXY/uXHpJm9eYP0sdcFg4IHQHzIOUwslX9TpqxI=
+github.com/qiangli/sqlite v1.50.2-0.20261018085128-5fb52bf328cb/go.mod h1:tcNzv5p84E0skkmJn038y+hWJbLQXQqEnQfeh5r2JLM=

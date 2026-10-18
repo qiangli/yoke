@@ -29,10 +29,26 @@ go vet -modfile=/tmp/s453-sql415.mod ./pkg/dbsql ./pkg/dbstore/sqlitedb         
 
 The added `TestPragmaAuthorizerPolicy` covers getters, case/numeric/empty
 setters, a denied late batch statement and rollback, and pooled reuse in both
-modes. Independent-process tests and the remote whole-package/crossvet/live
-CLI/MCP gates remain manager-owned. The final versioned fork replacement in
-`go.mod` awaits the manager's exact published pseudo; the local path is not
-committed.
+modes. Independent-process tests remain manager-owned. Manager published
+`github.com/qiangli/sqlite` `v1.50.2-0.20261018085128-5fb52bf328cb`
+from exact fork commit `5fb52bf328cbe0c3cbe899fe21122819a50622fc`.
+Both yoke root and `external/otel` now replace `modernc.org/sqlite` with
+that version and record its checksums in their respective `go.sum` files.
+No local replacement is committed.
+
+Published-pin focused Dragon checks (no independent processes):
+
+```
+go test -count=1 -run '^(TestPragmaAuthorizerPolicy|TestHeldReadLeavesNoConnectionState)$' ./pkg/dbsql  PASS
+go test -count=1 -skip 'TestIndependent' ./pkg/dbsql ./pkg/dbstore/sqlitedb ./cmds/db             PASS
+```
+
+Manager independently checked source commit `0f7e471b` with fork `5fb52bf`:
+touched package tests and vet, built CLI, and typed and generic stdio MCP in
+both modes passed on Mac. Fork root tests passed on Windows; upstream unsafe
+pointer vet warning count was unchanged. These checks predate the published
+pin. Final remote consumer checks and the Sprint 467 base rebase remain
+manager coordinated; this record does not claim story acceptance.
 
 Worker: `s453-sql-opus` (registered first holder; author and committer),
 weave yoke#361, branch `agent/weave-issue-361` on yoke main `1587fa4c`
