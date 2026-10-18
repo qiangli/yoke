@@ -111,12 +111,13 @@ func handleDB(h dbstore.Handle) (*sql.DB, error) {
 // rollback hook records any transaction rollback, so a write operation whose
 // script rolled back and reopened a transaction cannot commit only its tail.
 type session struct {
-	conn        *sql.Conn
-	readOnly    bool
-	allowCommit atomic.Bool
-	vetoed      atomic.Bool
-	rolledBack  atomic.Bool
-	settings    [][2]string // connection pragmas as they were at begin
+	conn         *sql.Conn
+	readOnly     bool
+	allowCommit  atomic.Bool
+	vetoed       atomic.Bool
+	rolledBack   atomic.Bool
+	policyDenied atomic.Bool
+	settings     [][2]string // connection pragmas as they were at begin
 }
 
 // connPragmas are the connection-scoped settings a statement can change that
@@ -129,14 +130,17 @@ var connPragmas = []string{"query_only", "temp_store", "locking_mode", "foreign_
 type hookConn interface {
 	RegisterCommitHook(sqlite.CommitHookFn)
 	RegisterRollbackHook(sqlite.RollbackHookFn)
+	sqlite.AuthorizerRegisterer
 }
 
-func begin(ctx context.Context, db *sql.DB, readOnly bool) (*session, error) {
+func begin(ctx context.Context, db *sql.DB, readOnly bool, h dbstore.Handle) (*session, error) {
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		return nil, sqlitedb.ClassifyCtx(ctx, err)
 	}
 	s := &session{conn: conn, readOnly: readOnly}
+	memory := h.Identity().Mode == dbstore.Memory
+	exclusive := h.(*sqlitedb.DB).Exclusive() && !memory
 	if _, err := sqlite.Limit(conn, sqlite3.SQLITE_LIMIT_ATTACHED, 0); err != nil {
 		conn.Close()
 		return nil, sqlitedb.Classify(err)
@@ -162,7 +166,18 @@ func begin(ctx context.Context, db *sql.DB, readOnly bool) (*session, error) {
 			return 1
 		})
 		hc.RegisterRollbackHook(func() { s.rolledBack.Store(true) })
-		return nil
+		// SQLite invokes this during preparation and re-preparation, before a
+		// PRAGMA setter can spill memory data or release a native hold lock.
+		// A nil second argument is a getter; a nonnil empty string is a setter.
+		return hc.SetAuthorizer(func(action int32, arg1, arg2, _, _ *string) int32 {
+			if action == sqlite3.SQLITE_PRAGMA && arg1 != nil && arg2 != nil &&
+				(memory && strings.EqualFold(*arg1, "temp_store") ||
+					exclusive && strings.EqualFold(*arg1, "locking_mode")) {
+				s.policyDenied.Store(true)
+				return sqlite3.SQLITE_DENY
+			}
+			return sqlite3.SQLITE_OK
+		})
 	})
 	if err == nil && readOnly {
 		_, err = conn.ExecContext(ctx, "pragma query_only=1")
@@ -206,11 +221,17 @@ func (s *session) end() {
 		}
 		relock = relock || kv[0] == "locking_mode" && kv[1] == "exclusive"
 	}
-	_ = s.conn.Raw(func(raw any) error {
+	if err := s.conn.Raw(func(raw any) error {
+		if err := raw.(hookConn).SetAuthorizer(nil); err != nil {
+			return err
+		}
 		raw.(hookConn).RegisterCommitHook(nil)
 		raw.(hookConn).RegisterRollbackHook(nil)
 		return nil
-	})
+	}); err != nil {
+		s.discard()
+		return
+	}
 	if relock {
 		if _, err := s.conn.ExecContext(ctx, "begin exclusive; commit"); err != nil {
 			s.discard()
@@ -230,6 +251,12 @@ func (s *session) discard() {
 func (s *session) classify(ctx context.Context, err error) error {
 	if err == nil {
 		return nil
+	}
+	if s.policyDenied.Swap(false) {
+		if s.readOnly {
+			return fmt.Errorf("%w: connection policy refused PRAGMA setter: %v", dbstore.ErrReadOnly, err)
+		}
+		return fmt.Errorf("%w: connection policy refused PRAGMA setter: %v", dbstore.ErrUnsupported, err)
 	}
 	var se *sqlite.Error
 	if errors.As(err, &se) && se.Code() == sqlite3.SQLITE_CONSTRAINT_ROWID {

@@ -189,7 +189,7 @@ func runQuery(ctx context.Context, h dbstore.Handle, in Input) (dblifecycle.Outc
 	if err != nil {
 		return dblifecycle.Outcome{}, err
 	}
-	s, err := begin(ctx, db, true)
+	s, err := begin(ctx, db, true, h)
 	if err != nil {
 		return dblifecycle.Outcome{}, err
 	}
@@ -308,7 +308,7 @@ func runExec(ctx context.Context, h dbstore.Handle, in Input, allowSchema bool) 
 			return dblifecycle.Outcome{}, fmt.Errorf("statement %d: %w", i+1, err)
 		}
 	}
-	s, err := begin(ctx, db, false)
+	s, err := begin(ctx, db, false, h)
 	if err != nil {
 		return dblifecycle.Outcome{}, err
 	}
@@ -445,7 +445,7 @@ func runSchemaShow(ctx context.Context, h dbstore.Handle, in Input) (dblifecycle
 	if err != nil {
 		return dblifecycle.Outcome{}, err
 	}
-	s, err := begin(ctx, db, true)
+	s, err := begin(ctx, db, true, h)
 	if err != nil {
 		return dblifecycle.Outcome{}, err
 	}

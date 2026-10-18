@@ -100,7 +100,7 @@ func runExport(ctx context.Context, h dbstore.Handle, in Input) (dblifecycle.Out
 	if in.Out == "" || in.Out == "-" || !filepath.IsAbs(in.Out) {
 		return dblifecycle.Outcome{}, fmt.Errorf("%w: export writes a new directory; give --out DIR", dbstore.ErrInvalidInput)
 	}
-	s, err := begin(ctx, db, true)
+	s, err := begin(ctx, db, true, h)
 	if err != nil {
 		return dblifecycle.Outcome{}, err
 	}
@@ -564,7 +564,7 @@ func runImport(ctx context.Context, h dbstore.Handle, in Input) (dblifecycle.Out
 			return dblifecycle.Outcome{}, err
 		}
 	}
-	s, err := begin(ctx, db, false)
+	s, err := begin(ctx, db, false, h)
 	if err != nil {
 		return dblifecycle.Outcome{}, err
 	}

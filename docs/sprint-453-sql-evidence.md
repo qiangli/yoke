@@ -1,5 +1,39 @@
 # Sprint 453 SQL evidence — story af7f959dadcf / #2261
 
+## Current issue-415 integration (approved modernc fork)
+
+Operator mb6143 approved the minimal full modernc fork. The earlier
+no-fork and replacement-evaluation notes below are historical. Issue-415
+imports the three original issue-406 SQL commits with their original authors,
+then uses the fork's `sqlite.AuthorizerRegisterer.SetAuthorizer` through a
+pinned `sql.Conn.Raw` callback. It denies every `temp_store` setter in memory
+mode and every `locking_mode` setter on a persistent native exclusive handle.
+The callback uses SQLite's `SQLITE_PRAGMA` action and `arg2 != nil`, so direct
+and table-valued getters remain available while case, numeric, and empty
+setter arguments are refused before execution. It stays installed through the
+operation and is removed before connection pooling; a cleanup failure
+discards the connection. The original read-only, transaction, schema, and
+logical interchange paths remain in place.
+
+Dragon focused checks with a temporary external modfile replacing
+`modernc.org/sqlite` with local fork commit
+`5fb52bf328cbe0c3cbe899fe21122819a50622fc`:
+
+```
+go test -modfile=/tmp/s453-sql415.mod -run '^TestHeldReadLeavesNoConnectionState$' -count=1 ./pkg/dbsql  PASS
+go test -modfile=/tmp/s453-sql415.mod -count=1 -skip 'TestIndependent' ./pkg/dbsql                  PASS
+go test -modfile=/tmp/s453-sql415.mod -count=1 -run '^TestTypedMCPSQLQuery$' ./cmds/db              PASS
+go test -modfile=/tmp/s453-sql415.mod -count=1 ./pkg/dbstore/sqlitedb                                PASS
+go vet -modfile=/tmp/s453-sql415.mod ./pkg/dbsql ./pkg/dbstore/sqlitedb                                 PASS
+```
+
+The added `TestPragmaAuthorizerPolicy` covers getters, case/numeric/empty
+setters, a denied late batch statement and rollback, and pooled reuse in both
+modes. Independent-process tests and the remote whole-package/crossvet/live
+CLI/MCP gates remain manager-owned. The final versioned fork replacement in
+`go.mod` awaits the manager's exact published pseudo; the local path is not
+committed.
+
 Worker: `s453-sql-opus` (registered first holder; author and committer),
 weave yoke#361, branch `agent/weave-issue-361` on yoke main `1587fa4c`
 (includes the accepted lifecycle producer `921053bf`). This candidate

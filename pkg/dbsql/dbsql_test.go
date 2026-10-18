@@ -274,6 +274,54 @@ func TestHeldReadLeavesNoConnectionState(t *testing.T) {
 	})
 }
 
+func TestPragmaAuthorizerPolicy(t *testing.T) {
+	modes(t, func(t *testing.T, f *fixture) {
+		f.must(OpSchemaApply, Input{SQL: "create table r(a); insert into r values (1)"}, true)
+		h, err := (sqlitedb.Adapter{}).Open(context.Background(), f.target, dbstore.Options{Exclusive: true, Wait: time.Second, Mem: f.svc.Mem})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer h.Close()
+
+		pragma := "locking_mode"
+		setters := []string{"NoRmAl", "0", "''", "EXCLUSIVE"}
+		if f.target.Mode == dbstore.Memory {
+			pragma = "temp_store"
+			setters = []string{"FiLe", "1", "''", "MEMORY"}
+		}
+		for _, getter := range []string{"pragma " + pragma, "select * from pragma_" + pragma} {
+			if _, err := runQuery(context.Background(), h, Input{SQL: getter}); err != nil {
+				t.Errorf("getter %q: %v", getter, err)
+			}
+		}
+		for _, value := range setters {
+			setter := "pragma " + pragma + "=" + value
+			if _, err := runQuery(context.Background(), h, Input{SQL: setter}); dbstore.Code(err) != "read_only" {
+				t.Errorf("query %q: %v", setter, err)
+			}
+			if _, err := runExec(context.Background(), h, Input{SQL: setter}, false); dbstore.Code(err) != "unsupported" {
+				t.Errorf("exec %q: %v", setter, err)
+			}
+		}
+		// The callback stays active through the entire atomic batch. A
+		// rejected late statement rolls back an earlier successful write.
+		_, err = runExec(context.Background(), h, Input{Statements: []Statement{
+			{SQL: "insert into r values (2)"}, {SQL: "pragma " + pragma + "=" + setters[0]},
+		}}, false)
+		if dbstore.Code(err) != "unsupported" {
+			t.Fatalf("late setter: %v", err)
+		}
+		out, err := runQuery(context.Background(), h, Input{SQL: "select count(*) from r"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows, _ := json.Marshal(out.Result.(map[string]any)["rows"])
+		if string(rows) != `[[{"t":"int","v":"1"}]]` {
+			t.Fatalf("late setter committed earlier write: %s", rows)
+		}
+	})
+}
+
 func TestExecIsAtomic(t *testing.T) {
 	modes(t, func(t *testing.T, f *fixture) {
 		f.must(OpSchemaApply, Input{SQL: "create table a(id integer primary key, v text not null)"}, true)

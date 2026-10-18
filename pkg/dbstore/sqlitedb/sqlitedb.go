@@ -61,15 +61,17 @@ func (Adapter) Caps() dbstore.Caps {
 
 // DB is an open SQLite database.
 type DB struct {
-	id      dbstore.Identity
-	db      *sql.DB
-	ro      bool
-	guard   dbstore.Guard
-	release func()
+	id        dbstore.Identity
+	db        *sql.DB
+	ro        bool
+	exclusive bool
+	guard     dbstore.Guard
+	release   func()
 }
 
 func (d *DB) Identity() dbstore.Identity { return d.id }
 func (d *DB) ReadOnly() bool             { return d.ro }
+func (d *DB) Exclusive() bool            { return d.exclusive }
 
 // SQL is the engine handle for the sql category operations.
 func (d *DB) SQL() *sql.DB { return d.db }
@@ -149,7 +151,7 @@ func (Adapter) Create(ctx context.Context, t dbstore.Target, o dbstore.Options) 
 		os.Remove(id.Path)
 		return nil, err
 	}
-	return &DB{id: id, db: db}, nil
+	return &DB{id: id, db: db, exclusive: o.Exclusive}, nil
 }
 
 func (Adapter) Open(ctx context.Context, t dbstore.Target, o dbstore.Options) (dbstore.Handle, error) {
@@ -169,7 +171,7 @@ func (Adapter) Open(ctx context.Context, t dbstore.Target, o dbstore.Options) (d
 	if err != nil {
 		return nil, err
 	}
-	return &DB{id: id, db: db, ro: o.ReadOnly}, nil
+	return &DB{id: id, db: db, ro: o.ReadOnly, exclusive: o.Exclusive}, nil
 }
 
 // Drop removes an idle database. A persistent file is removed while this
@@ -239,7 +241,7 @@ func openMem(ctx context.Context, id dbstore.Identity, o dbstore.Options, create
 		o.Mem.Release(id)
 		return nil, err
 	}
-	return &DB{id: id, db: db, ro: o.ReadOnly, release: func() { o.Mem.Release(id) }}, nil
+	return &DB{id: id, db: db, ro: o.ReadOnly, exclusive: o.Exclusive, release: func() { o.Mem.Release(id) }}, nil
 }
 
 // open opens a pool and proves the connection with one statement, so a
