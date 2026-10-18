@@ -77,7 +77,7 @@ func TestOwnerHoldFencesOtherProcess(t *testing.T) {
 	if err != nil || !hold.OK {
 		t.Fatalf("hold: %+v %v", hold, err)
 	}
-	epoch := uint64(hold.Result.(map[string]any)["epoch"].(float64))
+	epoch := epochOf(t, hold)
 	client := exec.Command(os.Args[0], "-test.run=^TestOwnerClientHelper$")
 	client.Env = append(os.Environ(), "BASHY_DB_CLIENT_HELPER=1", "BASHY_DB_TEST_SESSION="+id, "BASHY_EPISODE=other-agent-episode")
 	b, err := client.Output()
@@ -145,7 +145,7 @@ func TestStaleOwnerHoldClosesBackendWithoutReleasingSuccessor(t *testing.T) {
 	if err != nil || !r.OK {
 		t.Fatalf("hold: %+v %v", r, err)
 	}
-	epoch := uint64(r.Result.(map[string]any)["epoch"].(float64))
+	epoch := epochOf(t, r)
 	identity, err := dbstore.Resolve(target)
 	if err != nil {
 		t.Fatal(err)
@@ -227,7 +227,7 @@ func TestPersistentAliasCannotBypassOwnerHold(t *testing.T) {
 	if err != nil || !hold.OK {
 		t.Fatalf("hold: %+v %v", hold, err)
 	}
-	epoch := uint64(hold.Result.(map[string]any)["epoch"].(float64))
+	epoch := epochOf(t, hold)
 	alias := filepath.Join(root, "sub", "..", "data.db")
 	client := exec.Command(os.Args[0], "-test.run=^TestOwnerClientHelper$")
 	client.Env = append(os.Environ(), "BASHY_DB_CLIENT_HELPER=1", "BASHY_DB_TEST_SESSION="+id, "BASHY_DB_CLIENT_PATH="+alias, "BASHY_EPISODE=alias-other-agent")
@@ -374,4 +374,15 @@ func TestOwnerSessionOperationMetadata(t *testing.T) {
 			t.Errorf("%s = %+v", tt.op, s)
 		}
 	}
+}
+
+// epochOf reads a hold epoch from an owner response; Call keeps numbers as
+// json.Number.
+func epochOf(t *testing.T, res Response) uint64 {
+	t.Helper()
+	n, err := strconv.ParseUint(string(res.Result.(map[string]any)["epoch"].(json.Number)), 10, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
 }

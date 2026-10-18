@@ -281,8 +281,12 @@ func Call(ctx context.Context, session string, req Request) (Response, error) {
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
 		return Response{}, err
 	}
+	// Numbers stay json.Number so a category result (document numbers,
+	// big integers) reaches the client exactly as the owner produced it.
 	var res Response
-	if err := json.NewDecoder(conn).Decode(&res); err != nil {
+	dec := json.NewDecoder(conn)
+	dec.UseNumber()
+	if err := dec.Decode(&res); err != nil {
 		if ctx.Err() != nil {
 			return Response{}, dbstore.FromContext(ctx.Err())
 		}

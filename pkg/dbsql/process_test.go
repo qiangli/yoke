@@ -209,7 +209,7 @@ func TestIndependentClientsShareOwnerMemoryDatabase(t *testing.T) {
 	// Exclusive hold: agent-a holds; agent-b is refused; a stale or missing
 	// epoch is refused; the holder's read path still refuses mutation.
 	hold := c.ok(call{agent: "agent-a", op: "hold"})
-	epoch := uint64(hold.Result.(map[string]any)["epoch"].(float64))
+	epoch := epochOf(t, hold)
 	if code := c.code(call{agent: "agent-b", op: OpQuery, in: Input{SQL: "select 1"}}); code != "claim_held" {
 		t.Fatalf("other agent during hold = %s", code)
 	}
@@ -296,4 +296,15 @@ func TestIndependentProcessesSharePersistentFileDirectly(t *testing.T) {
 	if b, _ := json.Marshal(res.Result.(map[string]any)["rows"]); err != nil || string(b) != `[[{"t":"int","v":"50"}]]` {
 		t.Fatalf("no lost writes: %s %v", b, err)
 	}
+}
+
+// epochOf reads a hold epoch from an owner response; Call keeps numbers as
+// json.Number.
+func epochOf(t *testing.T, res dblifecycle.Response) uint64 {
+	t.Helper()
+	n, err := strconv.ParseUint(string(res.Result.(map[string]any)["epoch"].(json.Number)), 10, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
 }

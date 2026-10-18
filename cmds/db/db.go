@@ -30,7 +30,8 @@ var command = &tool.Tool{
 	PreviewLevel: "local-preview",
 	Name:         "db", Synopsis: "Manage an explicit database target and owner session.",
 	Usage: "db create|show|check|backup|restore|drop|export|import [--engine E --mode persistent|memory --path P|--session S --name N] [--json]\n" +
-		"db sql query|exec|schema show|schema apply TARGET [--sql SQL] [--param [NAME=]TYPE:VALUE]... [--params JSON] [--input FILE|-]",
+		"db sql query|exec|schema show|schema apply TARGET [--sql SQL] [--param [NAME=]TYPE:VALUE]... [--params JSON] [--input FILE|-]\n" +
+		"db doc get|find|put|patch|rm|batch|export|import|collection create|drop|list|index add|rm|list TARGET [--collection C] [--id ID] [--doc JSON] [--filter JSON] [--input FILE|-]",
 }
 
 func init() { command.Run = run; tool.Register(command) }
@@ -39,6 +40,9 @@ type dbFlags struct {
 	fs                                                                              *pflag.FlagSet
 	engine, mode, path, session, name, backup, source, ready, requestID, attachment *string
 	sqlText, params, input, since, onConflict                                       *string
+	collection, docID, doc, patch, filter, ifRevision, index                        *string
+	fields                                                                          *[]string
+	ifAbsent, unique                                                                *bool
 	aliases, param                                                                  *[]string
 	limit, maxBytes                                                                 *int
 	idleTTL, wait, timeout                                                          *time.Duration
@@ -66,6 +70,16 @@ func declareFlags(op string) dbFlags {
 	f.maxBytes = fs.Int("max-bytes", 0, "maximum result bytes (default 262144)")
 	f.since = fs.String("since", "", "resume from a bashy-cursor-v1 envelope")
 	f.onConflict = fs.String("on-conflict", "", "import record conflicts: error|skip|replace")
+	f.collection = fs.String("collection", "", "document collection for db doc")
+	f.docID = fs.String("id", "", "stable document ID for db doc (put generates one when omitted)")
+	f.doc = fs.String("doc", "", "JSON object document for db doc put")
+	f.patch = fs.String("patch", "", "JSON merge patch (RFC 7386) for db doc patch")
+	f.filter = fs.String("filter", "", "structured JSON filter for db doc find (values are bound, never interpolated)")
+	f.ifRevision = fs.String("if-revision", "", "apply only if the document is at this revision")
+	f.ifAbsent = fs.Bool("if-absent", false, "insert only if the document ID does not exist")
+	f.index = fs.String("index", "", "document index name for db doc index add|rm")
+	f.fields = fs.StringArray("field", nil, "indexed field path (a.b[0].c) for db doc index add")
+	f.unique = fs.Bool("unique", false, "make a db doc index unique")
 	f.ready = fs.String("ready", "", "private owner rendezvous")
 	_ = fs.MarkHidden("ready")
 	f.idleTTL = fs.Duration("idle-ttl", 0, "end an idle owner session after this duration")
@@ -206,7 +220,16 @@ func run(rc *tool.RunContext, args []string) int {
 		return 0
 	}
 	catOp, raw := "", json.RawMessage(nil)
-	if op == "sql" || op == "export" || op == "import" {
+	if op == "doc" {
+		var err error
+		if catOp, operands, err = docVerb(operands); err == nil {
+			raw, err = docInput(rc, f, catOp)
+		}
+		if err != nil {
+			o := output{SchemaVersion: "bashy-db-result-v1", Op: op, MutationClass: "read"}
+			return failure(o, err).emit(rc, *jsonFlag)
+		}
+	} else if op == "sql" || op == "export" || op == "import" {
 		var err error
 		if catOp, operands, err = sqlVerb(op, operands); err == nil {
 			raw, err = categoryInput(rc, f, op)
@@ -519,11 +542,11 @@ func holdChild(ctx context.Context, rc *tool.RunContext, o output, target dbstor
 	if !ok {
 		return failure(o, fmt.Errorf("%w: owner hold response", dbstore.ErrBackend)).emit(rc, asJSON)
 	}
-	epoch, ok := result["epoch"].(float64)
-	if !ok {
+	epoch, ok := result["epoch"].(json.Number)
+	value, err := strconv.ParseUint(epoch.String(), 10, 64)
+	if !ok || err != nil {
 		return failure(o, fmt.Errorf("%w: owner hold epoch", dbstore.ErrBackend)).emit(rc, asJSON)
 	}
-	value := uint64(epoch)
 	defer func() {
 		releaseCtx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
