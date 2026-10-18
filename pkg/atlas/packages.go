@@ -330,6 +330,7 @@ var packages = map[string]Package{
 	"ctype": supPkg("glibc C/POSIX and ISO-8859-1 character classification and case mapping via " +
 		"dlopen'd *_l functions (purego, no cgo); collate's sibling provider, wired to no verb — " +
 		"POSIX classes and case mapping a tool asks for, not a command"),
+	"adapt":  supPkg("declared common-option translation and execution for foreign commands, mounted by the host's adapt front door"),
 	"ignore": supPkg("the opt-in agentic path filter shared by grep and find"),
 	"jobs":   supPkg("job control for the embedding shell's builtins, which the shell owns"),
 	"locale": supPkg("invocation-local POSIX locale-category precedence shared by locale-aware tools"),
