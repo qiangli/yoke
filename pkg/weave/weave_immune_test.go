@@ -209,6 +209,76 @@ func TestQuotaImmuneDeltaRestartAndRotation(t *testing.T) {
 	}
 }
 
+func TestQuotaImmuneBusDeltaChangesAssessmentAndResumes(t *testing.T) {
+	withQuotaImmuneFakes(t)
+	quotaImmuneDelta = quotaobs.ReadDelta
+	root := t.TempDir()
+	dir, err := weaveQueueDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := withWeaveQueueLock(dir, func(q *weaveQueue) error {
+		q.Items = []*weaveItem{{ID: 1, State: "working", LaunchSpec: &weaveLaunchSpec{Agent: "agent"}}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	quotaImmuneNow = func() time.Time { return now }
+	quotaImmunePolicy = func() (llmbudget.ImmuneSettings, error) { return llmbudget.ImmuneSettings{GracePeriod: time.Hour}, nil }
+	quotaImmuneResolveSeat = func(string, string, string) (quotaImmuneSeat, bool) { return quotaImmuneSeat{Account: "plan"}, true }
+	quotaImmuneHeadroom = func(context.Context, string, string) (float64, llmbudget.Binding, bool, error) {
+		return 0, llmbudget.Binding{}, false, nil
+	}
+	quotaImmuneForecast = func(context.Context, time.Time) []llmbudget.AccountForecast { return nil }
+	quotaImmuneObserve = readQuotaImmuneObservation
+	quotaImmuneSay = func(*cobra.Command, int64, string) error { return nil }
+	quotaImmuneKill = func(*cobra.Command, int64) error { t.Fatal("unexpected kill"); return nil }
+	weaveSupervisionSend = func(string, string) error { return nil }
+	classify := quotaImmuneClassify
+	classified := 0
+	quotaImmuneClassify = func(rows []quotaobs.Observation, at time.Time) []llmbudget.ObservedState {
+		classified += len(rows)
+		return classify(rows, at)
+	}
+	journal := filepath.Join(os.Getenv("BASHY_HOME"), "quota", "observations.jsonl")
+	addBusOnly := func(kind, excerpt string) {
+		t.Helper()
+		reset := now.Add(time.Hour)
+		obs := quotaobs.Observation{At: now, Source: "test", Account: "plan", Excerpt: excerpt, Parsed: &quotaobs.ParsedSignal{Kind: kind, ResetAt: &reset}, Analysis: &quotaobs.Analysis{Kind: kind, ResetAt: &reset}}
+		if err := quotaobs.Record(context.Background(), obs); err != nil {
+			t.Fatal(err)
+		}
+		// The producer has emitted a typed bus record. Remove the isolated
+		// journal to prove that the bus delta alone drives the assessment.
+		if err := os.Remove(journal); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd, _ := immuneTestCommand()
+	addBusOnly("warning", "warning")
+	if a, err := runQuotaImmuneTick(cmd, root, dir, false); err != nil || len(a) != 1 || a[0].Level != "warn" {
+		t.Fatalf("bus warning: %+v %v", a, err)
+	}
+	if classified != 1 {
+		t.Fatalf("classified %d rows, want 1", classified)
+	}
+	if a, err := runQuotaImmuneTick(cmd, root, dir, false); err != nil || len(a) != 0 || classified != 1 {
+		t.Fatalf("restart replay: %+v %v, classified=%d", a, err, classified)
+	}
+	addBusOnly("exhausted", "exhausted")
+	if a, err := runQuotaImmuneTick(cmd, root, dir, false); err != nil || len(a) != 1 || a[0].Level != "critical" || classified != 2 {
+		t.Fatalf("bus critical: %+v %v, classified=%d", a, err, classified)
+	}
+	if n, err := room.RotateTimeline(time.Now().Add(30 * 24 * time.Hour)); err != nil || n != 2 {
+		t.Fatalf("room rotation: %d %v", n, err)
+	}
+	addBusOnly("warning", "warning after rotation")
+	if a, err := runQuotaImmuneTick(cmd, root, dir, false); err != nil || len(a) != 0 || classified != 3 {
+		t.Fatalf("rotation resume: %+v %v, classified=%d", a, err, classified)
+	}
+}
+
 func TestQuotaImmuneWarnCriticalGraceAndDedupe(t *testing.T) {
 	withQuotaImmuneFakes(t)
 	home := t.TempDir()

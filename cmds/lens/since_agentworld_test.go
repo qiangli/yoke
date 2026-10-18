@@ -2,17 +2,42 @@ package lenscmd
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/qiangli/yoke/pkg/ref"
+	"github.com/qiangli/yoke/pkg/room"
 )
 
 type fakeDelta struct {
 	records, next, expiry string
 	err                   error
 	gotToken              string
+}
+
+func TestAgentWorldBusSinceIncludesQuotaObservation(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	t.Setenv("BASHY_MB_DIR", t.TempDir())
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+	if err := room.Emit(room.Event{Type: room.EventUsage, Actor: "quotaobs", Topic: room.TopicQuotaObservation, Body: `{"schema":"bashy-quota-observation-v1"}`}); err != nil {
+		t.Fatal(err)
+	}
+	src := busTimelineDelta{}
+	loc := ref.Locator{Scheme: "bus", Target: "timeline"}
+	records, cursor, _, err := src.Delta(context.Background(), loc, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var event room.Event
+	if err := json.Unmarshal([]byte(strings.TrimSpace(string(records))), &event); err != nil || event.Topic != room.TopicQuotaObservation {
+		t.Fatalf("delta=%q event=%+v err=%v", records, event, err)
+	}
+	records, _, _, err = src.Delta(context.Background(), loc, cursor)
+	if err != nil || len(records) != 0 {
+		t.Fatalf("replay=%q err=%v", records, err)
+	}
 }
 
 func (f *fakeDelta) Delta(_ context.Context, _ ref.Locator, token string) ([]byte, string, string, error) {

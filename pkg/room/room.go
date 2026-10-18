@@ -205,6 +205,8 @@ const (
 	EventApproval = "approval" // a human/operator approval decision
 	EventUsage    = "usage"    // a model/tool usage record
 	EventInbound  = "inbound"  // a message that arrived from outside the host
+	// TopicQuotaObservation carries a sanitized quotaobs.Observation in a usage event.
+	TopicQuotaObservation = "quota-observation-v1"
 )
 
 // Brief clips a free-text body to at most max bytes without splitting a UTF-8

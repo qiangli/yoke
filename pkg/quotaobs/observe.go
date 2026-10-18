@@ -21,6 +21,7 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/lockfile"
 	"github.com/qiangli/yoke/pkg/redact"
+	"github.com/qiangli/yoke/pkg/room"
 )
 
 const Schema = "bashy-quota-observation-v1"
@@ -206,7 +207,15 @@ func Record(ctx context.Context, o Observation) error {
 	if err != nil {
 		return err
 	}
-	return closeErr
+	if closeErr != nil {
+		return closeErr
+	}
+	// The journal remains the durable source if the room is unavailable. The
+	// event carries the same sanitized record for --since consumers.
+	if !testing.Testing() || os.Getenv("BASHY_ROOM_DIR") != "" {
+		_ = room.Emit(room.Event{Type: room.EventUsage, Actor: "quotaobs", Topic: room.TopicQuotaObservation, Body: string(b)})
+	}
+	return nil
 }
 
 func acquire(ctx context.Context, p string) (*lockfile.Lock, error) {

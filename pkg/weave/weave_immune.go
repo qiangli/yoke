@@ -78,9 +78,82 @@ type quotaImmuneTickInputs struct {
 }
 
 type quotaImmuneDeltaState struct {
-	Cursor    quotaobs.Cursor        `json:"cursor"`
-	Rows      []quotaobs.Observation `json:"rows"`
-	BusCursor string                 `json:"bus_cursor,omitempty"`
+	Cursor          quotaobs.Cursor           `json:"cursor"`
+	Rows            []quotaobs.Observation    `json:"rows"`
+	Pending         []quotaobs.Observation    `json:"pending,omitempty"`
+	States          []llmbudget.ObservedState `json:"states,omitempty"`
+	Classified      bool                      `json:"classified,omitempty"`
+	AnnotationStamp string                    `json:"annotation_stamp,omitempty"`
+	BusCursor       string                    `json:"bus_cursor,omitempty"`
+}
+
+func quotaImmuneAnnotationStamp() string {
+	home := os.Getenv("BASHY_HOME")
+	if home == "" {
+		if userHome, err := os.UserHomeDir(); err == nil {
+			home = filepath.Join(userHome, ".bashy")
+		}
+	}
+	if home == "" {
+		return ""
+	}
+	info, err := os.Stat(filepath.Join(home, "quota", "analysis.jsonl"))
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%d:%d", info.Size(), info.ModTime().UnixNano())
+}
+
+func quotaImmuneSameRow(a, b quotaobs.Observation) bool {
+	return a.At.Equal(b.At) && a.ExcerptSHA == b.ExcerptSHA && a.Source == b.Source &&
+		a.Account == b.Account && a.Plan == b.Plan && a.Agent == b.Agent && a.Model == b.Model && a.Tool == b.Tool
+}
+
+func quotaImmuneAppendRows(state *quotaImmuneDeltaState, rows []quotaobs.Observation, now time.Time) {
+	var fresh []quotaobs.Observation
+	for _, row := range rows {
+		if row.Schema != quotaobs.Schema || row.At.Before(now.Add(-24*time.Hour)) {
+			continue
+		}
+		duplicate := false
+		for _, old := range state.Rows {
+			if quotaImmuneSameRow(old, row) {
+				duplicate = true
+				break
+			}
+		}
+		for _, old := range state.Pending {
+			if quotaImmuneSameRow(old, row) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			if row.At.After(now) {
+				state.Pending = append(state.Pending, row)
+				continue
+			}
+			state.Rows = append(state.Rows, row)
+			fresh = append(fresh, row)
+		}
+	}
+	if len(fresh) != 0 {
+		state.States = append(state.States, quotaImmuneClassify(fresh, now)...)
+	}
+}
+
+func quotaImmuneBusRows(events []room.Event) []quotaobs.Observation {
+	var rows []quotaobs.Observation
+	for _, event := range events {
+		if event.Type != room.EventUsage || event.Topic != room.TopicQuotaObservation || event.Actor != "quotaobs" {
+			continue
+		}
+		var row quotaobs.Observation
+		if json.Unmarshal([]byte(event.Body), &row) == nil && row.Schema == quotaobs.Schema {
+			rows = append(rows, row)
+		}
+	}
+	return rows
 }
 
 func loadQuotaImmuneDelta(ctx context.Context, dir string, now time.Time) (*quotaImmuneTickInputs, quotaImmuneDeltaState, error) {
@@ -97,14 +170,22 @@ func loadQuotaImmuneDelta(ctx context.Context, dir string, now time.Time) (*quot
 	if errors.Is(err, quotaobs.ErrCursorExpired) {
 		// Replay from the surviving journal after rotation. Run and sprint
 		// records still own action dedupe, including a critical grace timer.
-		state = quotaImmuneDeltaState{}
+		state.Cursor = quotaobs.Cursor{}
 		rows, next, err = quotaImmuneDelta(state.Cursor)
 	}
 	if err != nil {
 		return nil, state, err
 	}
 	state.Cursor = next
-	state.Rows = append(state.Rows, rows...)
+	annotationStamp := quotaImmuneAnnotationStamp()
+	if (!state.Classified || state.AnnotationStamp != annotationStamp) && len(state.Rows) != 0 {
+		state.States = quotaImmuneClassify(state.Rows, now)
+	}
+	state.Classified = true
+	state.AnnotationStamp = annotationStamp
+	pending := state.Pending
+	state.Pending = nil
+	quotaImmuneAppendRows(&state, append(pending, rows...), now)
 	kept := state.Rows[:0]
 	for _, row := range state.Rows {
 		if !row.At.Before(now.Add(-24 * time.Hour)) {
@@ -112,19 +193,25 @@ func loadQuotaImmuneDelta(ctx context.Context, dir string, now time.Time) (*quot
 		}
 	}
 	state.Rows = kept
-	// Keep a durable agent-world bus position alongside the quota journal.
-	// Bus events are coordination evidence; only classified quota observations
-	// are allowed to change a quota assessment.
-	_, busCursor, busErr := room.ReadDelta(ctx, state.BusCursor)
+	keptStates := state.States[:0]
+	for _, classified := range state.States {
+		if !classified.At.Before(now.Add(-24 * time.Hour)) {
+			keptStates = append(keptStates, classified)
+		}
+	}
+	state.States = keptStates
+	// The room cursor is the same source token used by bus://timeline --since.
+	events, busCursor, busErr := room.ReadDelta(ctx, state.BusCursor)
 	if errors.Is(busErr, room.ErrDeltaExpired) {
-		_, busCursor, busErr = room.ReadDelta(ctx, "")
+		events, busCursor, busErr = room.ReadDelta(ctx, "")
 	}
 	if busErr == nil {
+		quotaImmuneAppendRows(&state, quotaImmuneBusRows(events), now)
 		state.BusCursor = busCursor
 	}
 	inputs := &quotaImmuneTickInputs{loaded: true}
 	inputs.busErr = busErr
-	inputs.joined = joinQuotaImmuneObservations(state.Rows, quotaImmuneClassify(state.Rows, now))
+	inputs.joined = joinQuotaImmuneObservations(state.Rows, state.States)
 	return inputs, state, nil
 }
 

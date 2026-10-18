@@ -27,7 +27,7 @@ func (busTimelineDelta) Delta(ctx context.Context, loc ref.Locator, token string
 	}
 	var b bytes.Buffer
 	for _, e := range events {
-		if e.Type != room.EventNotify {
+		if e.Type != room.EventNotify && !(e.Type == room.EventUsage && e.Topic == room.TopicQuotaObservation) {
 			continue
 		}
 		line, err := json.Marshal(e)
