@@ -3,6 +3,7 @@ package treecmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,30 @@ import (
 
 	"github.com/qiangli/coreutils/tool"
 )
+
+func TestTreeLocatorJSONDepth(t *testing.T) {
+	root := buildTree(t)
+	out, errOut, code := runTree(t, root, "--json", "--depth=1", "dir:.")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("rows: %q", out)
+	}
+	for _, line := range lines {
+		var row map[string]any
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			t.Fatalf("row %q in %q: %v", line, out, err)
+		}
+		if row["schema_version"] != "bashy-node-v1" {
+			t.Fatalf("row: %s", line)
+		}
+		if row["name"] == "b.go" {
+			t.Fatalf("depth exceeded: %s", line)
+		}
+	}
+}
 
 // buildTree lays out a fixture directory and returns its path.
 func buildTree(t *testing.T) string {

@@ -16,12 +16,15 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/ignore"
 	"github.com/qiangli/coreutils/tool"
+	"github.com/qiangli/yoke/pkg/lens"
+	"github.com/qiangli/yoke/pkg/lens/provider"
+	"github.com/qiangli/yoke/pkg/ref"
 )
 
 var cmd = &tool.Tool{
 	Name:     "tree",
 	Synopsis: "List the contents of directories in a tree-like format.",
-	Usage:    "tree [-ad] [-L level] [--agentic] [DIR...]",
+	Usage:    "tree [-ad] [-L level] [--depth=N] [--json] [--agentic] [LOCATOR...]",
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
@@ -40,6 +43,8 @@ func run(rc *tool.RunContext, args []string) int {
 	all := fs.BoolP("all", "a", false, "list hidden (dot) files too")
 	dirsOnly := fs.BoolP("dirs-only", "d", false, "list directories only")
 	level := fs.IntP("level", "L", -1, "descend only LEVEL directories deep")
+	depth := fs.Int("depth", -1, "maximum descent depth")
+	jsonView := fs.Bool("json", false, "emit bashy-node-v1 JSONL")
 	agentic := fs.Bool("agentic", false, "opt-in: also skip .gitignore'd and noise paths (node_modules, .git, …)")
 
 	operands, code := tool.Parse(rc, cmd, fs, args)
@@ -53,7 +58,40 @@ func run(rc *tool.RunContext, args []string) int {
 
 	status := 0
 	var total counter
+	classic := false
 	for _, root := range roots {
+		if *jsonView || *depth >= 0 || looksLikeLocator(root) {
+			loc, err := ref.ParseLocator(root)
+			if err != nil {
+				fmt.Fprintf(rc.Err, "tree: %s: %v\n", root, err)
+				status = 1
+				continue
+			}
+			if loc.Scheme != "dir" {
+				fmt.Fprintf(rc.Err, "tree: %s: provider %q is not registered\n", root, loc.Scheme)
+				status = 1
+				continue
+			}
+			base := rc.Path(".")
+			if filepath.IsAbs(loc.Target) {
+				base = string(filepath.Separator)
+			}
+			p := provider.NewDir(base, *agentic)
+			view := "tree"
+			if *jsonView {
+				view = "listing"
+			}
+			limit := *depth
+			if limit < 0 {
+				limit = *level
+			}
+			if err := lens.Render(rc.Ctx, rc.Out, p, loc, view, limit, false); err != nil {
+				fmt.Fprintf(rc.Err, "tree: %s: %v\n", root, err)
+				status = 1
+			}
+			continue
+		}
+		classic = true
 		o := walkOpts{all: *all, dirsOnly: *dirsOnly, level: *level}
 		if *agentic {
 			o.matcher = ignore.New(rc.Path(root))
@@ -68,6 +106,9 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 
+	if !classic {
+		return status
+	}
 	dirWord, fileWord := "directories", "files"
 	if total.dirs == 1 {
 		dirWord = "directory"
@@ -77,6 +118,30 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	fmt.Fprintf(rc.Out, "\n%d %s, %d %s\n", total.dirs, dirWord, total.files, fileWord)
 	return status
+}
+
+func looksLikeLocator(s string) bool {
+	if len(s) >= 3 && s[1] == ':' && (s[2] == '\\' || s[2] == '/') {
+		return false
+	}
+	return s != "" && (s[0] != '/' && len(s) > 1 && containsColon(s) || containsScope(s))
+}
+
+func containsColon(s string) bool {
+	for _, c := range s {
+		if c == ':' {
+			return true
+		}
+	}
+	return false
+}
+func containsScope(s string) bool {
+	for _, c := range s {
+		if c == '@' {
+			return true
+		}
+	}
+	return false
 }
 
 func walk(rc *tool.RunContext, dir, prefix string, depth int, o walkOpts, c *counter) error {
