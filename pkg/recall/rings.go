@@ -115,6 +115,15 @@ func recallPages(ring string, store *kb.Store, path string, q Query) ([]Hit, err
 			return !slices.Contains(q.Types, p.Type)
 		})
 	}
+	var relation map[string]string
+	if ring == RingAgent {
+		// Gate before ranking, like forms: an invisible note must not shape
+		// the IDF of the ones that can be returned.
+		relation = lineageOf(pages, q.Lineage)
+		pages = slices.DeleteFunc(pages, func(p *kb.Page) bool {
+			return !lineageVisible(p, relation, q.Lineage)
+		})
+	}
 	hits := kb.Search(pages, kb.Query{
 		Terms:       kb.Terms(q.Text),
 		Repo:        q.Repo,
@@ -133,9 +142,12 @@ func recallPages(ring string, store *kb.Store, path string, q Query) ([]Hit, err
 			episode = p.Source.Episode
 		}
 		checkpoint := hasCheckpointTag(p.Tags)
-		if ring == RingAgent && checkpoint && (q.Episode == "" || q.Episode != episode) {
+		rel := relation[episode]
+		if ring == RingAgent && checkpoint && rel == "" && (q.Episode == "" || q.Episode != episode) {
 			continue
 		}
+		working := ring == RingAgent && episode != "" &&
+			(rel == relSelf || rel == relAncestor || episode == q.Episode)
 		out = append(out, Hit{
 			Ring: ring, Kind: p.Type, ID: "kb:" + p.Slug, Form: p.EffForm(),
 			Cue: p.Title, Gist: p.Description, Full: p.Body,
@@ -145,6 +157,7 @@ func recallPages(ring string, store *kb.Store, path string, q Query) ([]Hit, err
 			Score:   h.Score,
 			Why:     []string{"kb", "matched " + itoa(h.Matched) + " terms"},
 			Episode: episode, Checkpoint: checkpoint,
+			Relation: rel, Working: working,
 		})
 	}
 	return out, nil
@@ -169,4 +182,69 @@ func hasCheckpointTag(tags []string) bool {
 		}
 	}
 	return false
+}
+
+const (
+	relSelf       = "self"
+	relAncestor   = "ancestor"
+	relDescendant = "descendant"
+)
+
+// lineageOf classifies every episode on the agent ring's notes against the
+// reader's lineage (see Lineage). Nil when the reader names no episode.
+func lineageOf(pages []*kb.Page, l Lineage) map[string]string {
+	self := strings.TrimSpace(l.Self)
+	if self == "" {
+		return nil
+	}
+	parent := map[string]string{}
+	if p := strings.TrimSpace(l.Parent); p != "" && p != self {
+		parent[self] = p
+	}
+	// The first recorded edge wins; pages arrive in a stable order, so the
+	// chain is deterministic even if two notes disagree.
+	for _, p := range pages {
+		if p.Source == nil || p.Source.Episode == "" || p.Source.ParentEpisode == "" {
+			continue
+		}
+		if _, ok := parent[p.Source.Episode]; !ok && p.Source.Episode != p.Source.ParentEpisode {
+			parent[p.Source.Episode] = p.Source.ParentEpisode
+		}
+	}
+	rel := map[string]string{self: relSelf}
+	for ep := parent[self]; ep != ""; ep = parent[ep] {
+		if _, seen := rel[ep]; seen {
+			break // a cycle in recorded edges: stop, never loop
+		}
+		rel[ep] = relAncestor
+	}
+	// Descendants: every episode whose chain reaches self through children.
+	for changed := true; changed; {
+		changed = false
+		for child, par := range parent {
+			if _, seen := rel[child]; seen {
+				continue
+			}
+			if r := rel[par]; r == relSelf || r == relDescendant {
+				rel[child] = relDescendant
+				changed = true
+			}
+		}
+	}
+	return rel
+}
+
+// lineageVisible applies the env-style rule: a child reads its ancestors'
+// exported notes only, and a parent reads descendants only by --lineage.
+func lineageVisible(p *kb.Page, rel map[string]string, l Lineage) bool {
+	if rel == nil || p.Source == nil {
+		return true
+	}
+	switch rel[p.Source.Episode] {
+	case relAncestor:
+		return p.Export
+	case relDescendant:
+		return l.Descendants
+	}
+	return true
 }

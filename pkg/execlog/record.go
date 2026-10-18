@@ -41,9 +41,12 @@ type Record struct {
 	// reader can tell "88 records were lost when that process died" from "88
 	// records never existed". A gap is countable; silence is not.
 	Episode string `json:"episode,omitempty"`
-	PID     int    `json:"pid,omitempty"`
-	PPID    int    `json:"ppid,omitempty"`
-	Seq     uint64 `json:"seq"`
+	// ParentEpisode is the episode that spawned this one (BASHY_PARENT_EPISODE,
+	// design §4 lineage). Empty for a root episode.
+	ParentEpisode string `json:"parent_episode,omitempty"`
+	PID           int    `json:"pid,omitempty"`
+	PPID          int    `json:"ppid,omitempty"`
+	Seq           uint64 `json:"seq"`
 
 	// What ran. Template is the learning key; Argv is the scrubbed evidence.
 	Cmd      string   `json:"cmd"`

@@ -33,6 +33,7 @@ func newNoteAddCmd(dir, ring *string) *cobra.Command {
 		slug           string
 		jsonOut        bool
 		transcript     string
+		export         bool
 	)
 	cmd := &cobra.Command{
 		Use:   "add",
@@ -80,6 +81,11 @@ func newNoteAddCmd(dir, ring *string) *cobra.Command {
 				return fmt.Errorf("kb: note add requires --body or -f")
 			}
 			effRing := strings.TrimSpace(*ring)
+			// --dir names a store directly (no ring); only a resolved
+			// shareable ring refuses --export.
+			if export && effRing != "agent" && effRing != "dir" {
+				return fmt.Errorf("kb: --export applies to agent-ring notes only (use --ring agent)")
+			}
 			if effRing != "agent" {
 				if err := shareableWriteCheck(title + "\n" + desc + "\n" + text); err != nil {
 					return err
@@ -100,9 +106,14 @@ func newNoteAddCmd(dir, ring *string) *cobra.Command {
 				Status:      StatusCandidate,
 				Source:      &Source{Tool: ToolID(), Host: HostID(), Episode: strings.TrimSpace(episode)},
 				Body:        strings.TrimSpace(text),
+				Export:      export,
 			}
 			if p.Source.Episode == "" {
 				p.Source.Episode = EpisodeID()
+			}
+			// The parent edge is known only for this process's own episode.
+			if p.Source.Episode == EpisodeID() {
+				p.Source.ParentEpisode = ParentEpisodeID()
 			}
 			pages, err := store.List()
 			if err != nil {
@@ -135,6 +146,7 @@ func newNoteAddCmd(dir, ring *string) *cobra.Command {
 	cmd.Flags().StringVarP(&bodyFile, "file", "f", "", "read the body from FILE ('-' = stdin)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit the kb JSON envelope for the created note")
 	cmd.Flags().StringVar(&transcript, "transcript", "", "distill the note from a turn-transcript JSON object in FILE ('-' = stdin)")
+	cmd.Flags().BoolVar(&export, "export", false, "agent ring: make the note visible to descendant episodes")
 	cmd.Flags().BoolVar(&force, "force", false, "skip the duplicate check")
 	return cmd
 }

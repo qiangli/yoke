@@ -12,19 +12,22 @@ import (
 )
 
 type observeEvent struct {
-	ID       string `json:"id"`
-	Event    string `json:"event"`
-	Kind     string `json:"kind"`
-	Episode  string `json:"episode,omitempty"`
-	Ref      string `json:"ref"`
-	Summary  string `json:"summary,omitempty"`
-	At       string `json:"at,omitempty"`
-	Ran      bool   `json:"ran,omitempty"`
-	Passed   bool   `json:"passed,omitempty"`
-	Command  string `json:"command,omitempty"`
-	ExitCode int    `json:"exit_code,omitempty"`
-	Where    string `json:"where,omitempty"`
-	Tool     string `json:"tool,omitempty"`
+	ID      string `json:"id"`
+	Event   string `json:"event"`
+	Kind    string `json:"kind"`
+	Episode string `json:"episode,omitempty"`
+	// ParentEpisode is set when Episode is this process's own episode and it
+	// was spawned by another (BASHY_PARENT_EPISODE).
+	ParentEpisode string `json:"parent_episode,omitempty"`
+	Ref           string `json:"ref"`
+	Summary       string `json:"summary,omitempty"`
+	At            string `json:"at,omitempty"`
+	Ran           bool   `json:"ran,omitempty"`
+	Passed        bool   `json:"passed,omitempty"`
+	Command       string `json:"command,omitempty"`
+	ExitCode      int    `json:"exit_code,omitempty"`
+	Where         string `json:"where,omitempty"`
+	Tool          string `json:"tool,omitempty"`
 }
 
 func newObserveCmd(dir, ring *string) *cobra.Command {
@@ -53,20 +56,25 @@ func newObserveCmd(dir, ring *string) *cobra.Command {
 			if ref == "" {
 				return fmt.Errorf("kb: observe requires --ref")
 			}
+			parent := ""
+			if episode == EpisodeID() {
+				parent = ParentEpisodeID()
+			}
 			ev := observeEvent{
-				ID:       observeEventID(kind, episode, ref, at),
-				Event:    "observe",
-				Kind:     kind,
-				Episode:  episode,
-				Ref:      ref,
-				Summary:  strings.TrimSpace(summary),
-				At:       at,
-				Tool:     ToolID(),
-				Ran:      ran,
-				Passed:   passed,
-				Command:  strings.TrimSpace(command),
-				ExitCode: exitCode,
-				Where:    strings.TrimSpace(where),
+				ID:            observeEventID(kind, episode, ref, at),
+				Event:         "observe",
+				Kind:          kind,
+				Episode:       episode,
+				ParentEpisode: parent,
+				Ref:           ref,
+				Summary:       strings.TrimSpace(summary),
+				At:            at,
+				Tool:          ToolID(),
+				Ran:           ran,
+				Passed:        passed,
+				Command:       strings.TrimSpace(command),
+				ExitCode:      exitCode,
+				Where:         strings.TrimSpace(where),
 			}
 			if err := appendObserveEvent(openRing(*dir, *ring), ev); err != nil {
 				return err

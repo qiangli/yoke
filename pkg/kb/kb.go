@@ -552,7 +552,7 @@ func (f *pageFlags) buildPage(c *cobra.Command) (*Page, error) {
 		Tags:        f.tags,
 		Evidence:    f.evidence,
 		Status:      StatusCandidate,
-		Source:      &Source{Tool: ToolID(), Host: HostID(), Episode: EpisodeID()},
+		Source:      &Source{Tool: ToolID(), Host: HostID(), Episode: EpisodeID(), ParentEpisode: ParentEpisodeID()},
 		Body:        strings.TrimSpace(body),
 	}
 	if len(f.repos) > 0 || f.goos != "" {

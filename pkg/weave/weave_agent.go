@@ -11,6 +11,7 @@ import (
 
 	"github.com/qiangli/yoke/pkg/agentlaunch"
 	"github.com/qiangli/yoke/pkg/fleet"
+	"github.com/qiangli/yoke/pkg/policy/coord"
 	"github.com/qiangli/yoke/pkg/secrets"
 )
 
@@ -312,6 +313,9 @@ func weaveChildEnv(environ []string, workspace, branch, base, queueDir string, i
 	// later ratings read all see one identity.
 	env = weaveAgentEnv(env, l)
 	env = weaveInstanceEnv(env, it)
+	// The worker is a delegate, not a subshell: it gets its own episode whose
+	// parent is the launcher's, so it sees only the launcher's exported notes.
+	env = coord.ChildEnv(env, fmt.Sprintf("weave-issue-%d", it.ID))
 	// Per-run agent store isolation. ycode locks its data dir, so two workers
 	// sharing one store is a hidden concurrency limit of 1 — the second dies on
 	// launch. Derive a per-issue store under the queue dir (NOT the workspace),

@@ -42,6 +42,7 @@ func NewRecallCmd() *cobra.Command {
 		minCover   float64
 		explain    bool
 		storeDir   string
+		lineage    bool
 	)
 
 	cmd := &cobra.Command{
@@ -82,6 +83,7 @@ Three things about its behaviour are contract, not implementation:
 				Since: since, MinCoverage: minCover,
 				Resolution: parseResolution(resolution),
 				Memory:     strings.TrimSpace(memory),
+				Lineage:    readerLineage("", lineage),
 				OS:         hostOS(),
 				Repo:       repoName(),
 			})
@@ -123,6 +125,7 @@ Three things about its behaviour are contract, not implementation:
 	f.Float64Var(&minCover, "min-coverage", 0, "abstain unless a hit covers this fraction of the query")
 	f.BoolVar(&explain, "explain", false, "print the ranking inputs, not just why")
 	f.StringVar(&storeDir, "store", "", "override the store root (default ~/.bashy)")
+	f.BoolVar(&lineage, "lineage", false, "agent ring: also read descendant episodes' notes")
 	return cmd
 }
 
@@ -141,6 +144,7 @@ func NewContextCmd(extra ...Reader) *cobra.Command {
 		minCover float64
 		k        int
 		asJSON   bool
+		lineage  bool
 	)
 	cmd := &cobra.Command{
 		Use:           "context",
@@ -171,8 +175,9 @@ func NewContextCmd(extra ...Reader) *cobra.Command {
 			q, err := ApplyMemory(Query{
 				Text: strings.TrimSpace(forText), Files: cleanList(files), Episode: strings.TrimSpace(episode),
 				Rings: selectedRings, Forms: selectedForms, Budget: budget, MinCoverage: minCover, K: k,
-				Memory: strings.TrimSpace(memory),
-				OS:     hostOS(), Repo: repoName(),
+				Memory:  strings.TrimSpace(memory),
+				Lineage: readerLineage(episode, lineage),
+				OS:      hostOS(), Repo: repoName(),
 			})
 			if err != nil {
 				return err
@@ -219,7 +224,24 @@ func NewContextCmd(extra ...Reader) *cobra.Command {
 	f.Float64Var(&minCover, "min-coverage", 0, "abstain unless a hit covers this fraction of the query")
 	f.IntVar(&k, "k", 3, "max hits per ring")
 	f.BoolVar(&asJSON, "json", false, "emit the frozen kb-context-v1 envelope")
+	f.BoolVar(&lineage, "lineage", false, "agent ring: also read descendant episodes' notes")
 	return cmd
+}
+
+// readerLineage places the reader in the episode chain: --episode when given,
+// else this process's own episode. The parent edge (BASHY_PARENT_EPISODE) is
+// known only for the process's own episode.
+func readerLineage(episode string, descendants bool) Lineage {
+	self := strings.TrimSpace(episode)
+	ambient := kb.EpisodeID()
+	if self == "" {
+		self = ambient
+	}
+	l := Lineage{Self: self, Descendants: descendants}
+	if self == ambient {
+		l.Parent = kb.ParentEpisodeID()
+	}
+	return l
 }
 
 func openContextRings() []Reader {

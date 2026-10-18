@@ -17,6 +17,47 @@ import (
 // EpisodeEnv is the session id every bashy process inherits.
 const EpisodeEnv = "BASHY_EPISODE"
 
+// ParentEpisodeEnv names the episode that SPAWNED this one (design §4 lineage).
+// It is set only by ChildEnv when a delegate is minted; a subshell or parallel
+// attempt inherits both variables unchanged and so shares its caller's episode.
+const ParentEpisodeEnv = "BASHY_PARENT_EPISODE"
+
+// ChildEnv mints a NEW episode for a spawned child (a delegate) and records the
+// caller's episode as its parent. key distinguishes siblings spawned by one
+// caller (weave uses the issue id); the child id is a pure function of
+// (parent, key), so a resumed spawn re-derives the same episode.
+//
+// The caller's episode is read from environ (BASHY_EPISODE, else the harness
+// session marker Self would derive). With neither there is no lineage to
+// record, and environ is returned unchanged.
+func ChildEnv(environ []string, key string) []string {
+	get := func(k string) string {
+		for i := len(environ) - 1; i >= 0; i-- {
+			if v, ok := strings.CutPrefix(environ[i], k+"="); ok {
+				return v
+			}
+		}
+		return ""
+	}
+	parent := strings.TrimSpace(get(EpisodeEnv))
+	if parent == "" {
+		parent = harnessEpisodeFrom(get)
+	}
+	if parent == "" {
+		return environ
+	}
+	sum := sha256.Sum256([]byte(parent + "\x00" + key))
+	child := "ep-" + hex.EncodeToString(sum[:8])
+	out := make([]string, 0, len(environ)+2)
+	for _, kv := range environ {
+		if strings.HasPrefix(kv, EpisodeEnv+"=") || strings.HasPrefix(kv, ParentEpisodeEnv+"=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out, EpisodeEnv+"="+child, ParentEpisodeEnv+"="+parent)
+}
+
 // Self resolves who this process is, and MINTS an identity when there is none.
 //
 // This is the gap that made the whole failure possible, and it is worth stating
@@ -77,9 +118,11 @@ var harnessSessionEnv = []struct{ tool, env string }{
 // harnessEpisode derives a stable episode from the harness session id, or ""
 // when no known harness session is present. Deterministic: every process of
 // one session derives the same value, and distinct sessions never share one.
-func harnessEpisode() string {
+func harnessEpisode() string { return harnessEpisodeFrom(os.Getenv) }
+
+func harnessEpisodeFrom(getenv func(string) string) string {
 	for _, h := range harnessSessionEnv {
-		if id := strings.TrimSpace(os.Getenv(h.env)); id != "" {
+		if id := strings.TrimSpace(getenv(h.env)); id != "" {
 			sum := sha256.Sum256([]byte(h.tool + ":" + id))
 			return "ep-" + hex.EncodeToString(sum[:8])
 		}

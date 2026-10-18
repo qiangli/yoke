@@ -264,20 +264,22 @@ func atomicWrite(path string, data []byte) error {
 // journalRecord is one appended mutation line — provenance for the audit
 // trail and the future cloudbox sync feed.
 type journalRecord struct {
-	Op      string    `json:"op"`
-	Slug    string    `json:"slug"`
-	ID      string    `json:"id,omitempty"` // the page's uuid, so a renamed or superseded slug still joins
-	Tool    string    `json:"tool,omitempty"`
-	Host    string    `json:"host,omitempty"`
-	Episode string    `json:"episode,omitempty"`
-	At      time.Time `json:"at"`
+	Op      string `json:"op"`
+	Slug    string `json:"slug"`
+	ID      string `json:"id,omitempty"` // the page's uuid, so a renamed or superseded slug still joins
+	Tool    string `json:"tool,omitempty"`
+	Host    string `json:"host,omitempty"`
+	Episode string `json:"episode,omitempty"`
+	// ParentEpisode is BASHY_PARENT_EPISODE: the episode that spawned Episode.
+	ParentEpisode string    `json:"parent_episode,omitempty"`
+	At            time.Time `json:"at"`
 }
 
 // journal appends one record. O_APPEND keeps concurrent multi-agent writes
 // safe without a lock; failures are swallowed — the page write is the
 // operation, the journal is the trail.
 func (s *Store) journal(op, slug, id string) {
-	rec := journalRecord{Op: op, Slug: slug, ID: id, Tool: ToolID(), Host: HostID(), Episode: EpisodeID(), At: time.Now().UTC()}
+	rec := journalRecord{Op: op, Slug: slug, ID: id, Tool: ToolID(), Host: HostID(), Episode: EpisodeID(), ParentEpisode: ParentEpisodeID(), At: time.Now().UTC()}
 	b, err := json.Marshal(rec)
 	if err != nil {
 		return
@@ -503,6 +505,15 @@ func HostID() string {
 		return h
 	}
 	return "host"
+}
+
+// ParentEpisodeID is the episode that spawned this one (BASHY_PARENT_EPISODE),
+// or "" for a root episode or a process with no episode of its own.
+func ParentEpisodeID() string {
+	if strings.TrimSpace(os.Getenv("BASHY_EPISODE")) == "" {
+		return ""
+	}
+	return strings.TrimSpace(os.Getenv("BASHY_PARENT_EPISODE"))
 }
 
 // EpisodeID ties a mutation to a run/session when the launcher provides one.

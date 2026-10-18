@@ -87,6 +87,9 @@ type Query struct {
 	// Episode admits checkpoint-tagged agent notes from exactly this episode.
 	// Without it, checkpoint reconstructions are never presented as records.
 	Episode string
+	// Lineage gates the agent ring by episode ancestry (design §4). Zero
+	// value = no gate, the historical behaviour.
+	Lineage Lineage `json:"-"`
 
 	// Memory is the --memory convenience filter (design §3). Input only: it
 	// expands to a facet combination via ApplyMemory and is never stored.
@@ -117,6 +120,27 @@ func (q Query) k() int {
 		return 3
 	}
 	return q.K
+}
+
+// Lineage is the reader's place in the episode chain.
+//
+// Ancestry is read from ONE deterministic source: Parent (the reader's own
+// BASHY_PARENT_EPISODE) seeds the first edge, and every further edge is the
+// source.episode → source.parent_episode pair recorded on the agent ring's
+// own notes. No execlog or journal scan is consulted, so the same store
+// answers the same way twice.
+//
+// Against that chain, an agent-ring note whose episode is:
+//   - Self — the reader's working memory, always visible;
+//   - an ancestor's — visible only when exported (`kb note add --export`);
+//   - a descendant's — visible only with Descendants (`--lineage`);
+//   - unrelated — unchanged (ordinary notes visible, checkpoints gated).
+//
+// The agent ring is owner-scoped before any of this runs, so another
+// principal still sees nothing of it (I-kb-6).
+type Lineage struct {
+	Self, Parent string
+	Descendants  bool
 }
 
 // SourceRef is an L0 pointer: where the record can be re-opened. A hit with no
@@ -162,6 +186,12 @@ type Hit struct {
 	// Episode and Checkpoint enforce the agent-ring reconstruction boundary.
 	Episode    string `json:"-"`
 	Checkpoint bool   `json:"-"`
+	// Relation is the record's place in the reader's lineage: self |
+	// ancestor | descendant, or "" when unrelated. Working marks the
+	// reader's working memory (own episode + exported ancestors), which
+	// kb context recites last.
+	Relation string `json:"-"`
+	Working  bool   `json:"-"`
 }
 
 // Budget reports what the render cost against the ceiling.

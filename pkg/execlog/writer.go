@@ -68,6 +68,11 @@ func (w *Writer) Append(meta Record, body Scrubbed, episode string) error {
 	// records landing in ep-a.jsonl while claiming to belong to ep-b, which
 	// then reads as one session having no records and another having double.
 	meta.Episode = episode
+	// The parent is recorded only for this process's own episode: a caller
+	// appending on behalf of another episode cannot know that one's lineage.
+	if meta.ParentEpisode == "" && episode != "" && episode == os.Getenv("BASHY_EPISODE") {
+		meta.ParentEpisode = os.Getenv("BASHY_PARENT_EPISODE")
+	}
 	meta.Argv = body.argv
 	meta.Cwd = body.cwd
 	meta.Template = body.template

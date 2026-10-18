@@ -60,6 +60,9 @@ type ContextBlock struct {
 	Text   string      `json:"text"`
 	Why    []string    `json:"why,omitempty"`
 	Source []SourceRef `json:"source,omitempty"`
+
+	// working is internal ordering state (never emitted): see workingLast.
+	working bool
 }
 
 // Context ranks within each reader, preserves ring boundaries, then spends one
@@ -120,7 +123,7 @@ func Context(q Query, readers ...Reader) ContextResult {
 				h.Ring = rd.Ring()
 			}
 			h.Memory = q.Memory
-			if h.Ring == RingAgent && h.Checkpoint && (q.Episode == "" || q.Episode != h.Episode) {
+			if h.Ring == RingAgent && h.Checkpoint && h.Relation == "" && (q.Episode == "" || q.Episode != h.Episode) {
 				continue
 			}
 			byRing[rd.Ring()] = append(byRing[rd.Ring()], h)
@@ -146,7 +149,28 @@ func Context(q Query, readers ...Reader) ContextResult {
 		return res
 	}
 	res.Blocks, res.Budget.Used = budgetBlocks(hits, q.Budget)
+	res.Blocks = workingLast(res.Blocks)
 	return res
+}
+
+// workingLast recites the episode's working notes after every other block
+// (recency, design §4). It runs AFTER selection and budgeting, so ring
+// precedence, per-ring K and the budget decide WHAT is shown exactly as
+// before; only the presentation order of the working blocks moves. Stable,
+// so each group keeps its ring-precedence order.
+func workingLast(blocks []ContextBlock) []ContextBlock {
+	out := make([]ContextBlock, 0, len(blocks))
+	for _, b := range blocks {
+		if !b.working {
+			out = append(out, b)
+		}
+	}
+	for _, b := range blocks {
+		if b.working {
+			out = append(out, b)
+		}
+	}
+	return out
 }
 
 func orderedReaders(q Query, readers []Reader) []Reader {
@@ -238,8 +262,8 @@ func blockAt(h Hit, resolution string) ContextBlock {
 	b := ContextBlock{
 		Ring: h.Ring, Form: h.Form, Ref: h.ID, Memory: h.Memory,
 		Resolution: resolution, Status: h.Status, Text: text,
-		ObservedAt: h.ObservedAt,
-		Why:        append([]string(nil), h.Why...), Source: append([]SourceRef(nil), h.Source...),
+		ObservedAt: h.ObservedAt, working: h.Working,
+		Why: append([]string(nil), h.Why...), Source: append([]SourceRef(nil), h.Source...),
 	}
 	// ValidTo, Freshness, Snapshot and Path stay empty in M1: no source
 	// record carries them yet (M6 owns valid_to; the sense schema owns

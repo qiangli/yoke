@@ -36,6 +36,10 @@ type Page struct {
 	Updated      string   `yaml:"updated,omitempty"`
 	Supersedes   string   `yaml:"supersedes,omitempty"`
 	SupersededBy string   `yaml:"superseded_by,omitempty"`
+	// Export marks an agent-ring note visible to DESCENDANT episodes (design
+	// §4): a delegate sees its ancestors' exported notes and nothing else of
+	// theirs. Set by `kb note add --export`.
+	Export bool `yaml:"export,omitempty"`
 
 	Body string `yaml:"-"`
 }
@@ -53,6 +57,9 @@ type Source struct {
 	Tool    string `yaml:"tool,omitempty"`
 	Host    string `yaml:"host,omitempty"`
 	Episode string `yaml:"episode,omitempty"`
+	// ParentEpisode is the episode that spawned Episode (design §4 lineage).
+	// It is the ancestry edge the agent ring's working-memory gate walks.
+	ParentEpisode string `yaml:"parent_episode,omitempty"`
 }
 
 // Page types (OKF `type`) and the validation ladder statuses.
