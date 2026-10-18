@@ -23,8 +23,12 @@ func init() {
 // the same set the skill argv rows parse.
 var skillScriptLangs = map[string]bool{"bsh": true, "bash": true, "sh": true, "posix": true}
 
-// skillToScript extracts the single shell fence body of a skill document.
-func skillToScript(data []byte, _ *losses) ([]byte, error) {
+// ExtractSkillScript extracts the single shell fence body of a skill document
+// (Sprint 446 S22). It normalizes line endings to LF, never executes anything,
+// never splits into argv, and never calls a model.
+// A document with no shell fence, an unterminated fence, an empty body, or
+// more than one shell fence is ExitInvalid — ambiguity is refused fail-closed.
+func ExtractSkillScript(data []byte) ([]byte, error) {
 	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
 	var script []string
 	shells := 0
@@ -61,4 +65,14 @@ func skillToScript(data []byte, _ *losses) ([]byte, error) {
 		return nil, errorf(ExitInvalid, "invalid skill input: empty script body")
 	}
 	return []byte(strings.Join(script, "\n") + "\n"), nil
+}
+
+// CompileSkillText is an alias for ExtractSkillScript.
+func CompileSkillText(data []byte) ([]byte, error) {
+	return ExtractSkillScript(data)
+}
+
+// skillToScript extracts the single shell fence body of a skill document.
+func skillToScript(data []byte, _ *losses) ([]byte, error) {
+	return ExtractSkillScript(data)
 }
