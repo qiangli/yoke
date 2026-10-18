@@ -223,7 +223,13 @@ func pull(rc *tool.RunContext, loc ref.Locator, depth int) ([]byte, int) {
 	if !ok {
 		return nil, tool.UsageError(rc, cmd, "%s: provider %q is not registered", loc, loc.Scheme)
 	}
-	p, err := f(rc, loc)
+	var p provider.Provider
+	var err error
+	if loc.ScopeKind != "" {
+		p, err = scopedProvider(rc, loc)
+	} else {
+		p, err = f(rc, loc)
+	}
 	if err == nil {
 		var g *stream.Graph
 		if g, err = lens.PullGraph(rc.Ctx, p, loc, depth); err == nil {
