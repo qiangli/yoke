@@ -80,7 +80,6 @@ func TestWorkspaceScopeFailsClosed(t *testing.T) {
 		{"dir:out%2Fsecret@ws:repo-0000abcd%2Fissue-7", "escapes workspace"},
 		{"dir:%2Fetc@ws:issue-9", "workspace-relative"},
 		{"git:HEAD:README.md@ws:issue-9", "does not support @ws scope"},
-		{"dir:src@peer-a", "not served locally"},
 		{"dir:src@cloud:x", "not served locally"},
 	} {
 		out, errOut, code := runTool(t, cwd, "", "-t", "graph", tc.op)
@@ -247,7 +246,7 @@ func TestSandboxScope(t *testing.T) {
 		}
 
 		// Remote scopes are refused.
-		for _, scope := range []string{"peer-a", "cloud:box-1", "k8s:box-1"} {
+		for _, scope := range []string{"cloud:box-1", "k8s:box-1"} {
 			out, errOut, code := runTool(t, cwd, "", "-t", "graph", "dir:src@"+scope)
 			if code == 0 || !strings.Contains(errOut, "not served locally") {
 				t.Fatalf("remote scope %s: code %d out %q stderr %q", scope, code, out, errOut)

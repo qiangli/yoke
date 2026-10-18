@@ -226,13 +226,15 @@ func (w *wsScoped) Edges(ctx context.Context, loc ref.Locator) ([]provider.Edge,
 }
 
 // scopedProvider picks the provider for a locator that carries a scope. Only
-// ws and sandbox are served; every other scope is refused rather than read locally.
+// ws, sandbox and host (a sphere peer) are served; every other scope is refused rather than read locally.
 func scopedProvider(_ *tool.RunContext, loc ref.Locator) (provider.Provider, error) {
 	switch loc.ScopeKind {
 	case "ws":
 		return wsProvider(loc)
 	case "sandbox":
 		return sandboxProvider(loc)
+	case "host":
+		return hostProvider(loc)
 	default:
 		return nil, fmt.Errorf("location scope %q is not served locally", loc.ScopeKind)
 	}
