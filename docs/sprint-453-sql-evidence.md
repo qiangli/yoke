@@ -226,6 +226,65 @@ References: https://www.sqlite.org/c3ref/set_authorizer.html,
 https://www.sqlite.org/compile.html#temp_store,
 https://www.sqlite.org/pragma.html#pragma_locking_mode.
 
+## Ruling 6058: released-engine replacement evaluation (issue 406)
+
+Verdict: **not a viable drop-in for this story under its unchanged platform,
+both-mode, vector-adapter and native-hold requirements.** Stop for the
+operator's fork-versus-scope decision. Candidate 7526ffb2 plus checkpoint
+38d1071f are preserved, but the two transient-effect regressions above remain
+red. This is not an acceptance claim. Issue 361's uncommitted refusal-only
+edits were not imported; no dependency pin or local replacement is delivered.
+
+The concrete released candidate is `github.com/ncruces/go-sqlite3 v0.35.6`
+(tag `v0.35.6`, Go 1.26; this repository uses Go 1.27). Its `SetAuthorizer`
+is a public connection API usable through `database/sql.Conn.Raw`, with
+`SetAuthorizer(nil)` cleanup. The driver documents CGO-free wasm2go code and
+uses `github.com/ncruces/go-sqlite3-wasm/v6 v6.3.35304`, not wazero at this
+version. The module is MIT; the Wasm module is MIT-0; its direct Go helpers
+`julianday v1.0.0`, `sort v1.0.2`, and `wbt v1.0.0` are MIT/MIT-0. The trial
+`go get` also raised x/crypto, x/mod, x/net, x/sync, x/sys, x/term, x/text,
+and x/tools through the module graph. All were released versions; no trial
+dependency is retained. The upstream README notes greater per-connection
+memory use. Since Dragon may run only focused tests, no full binary was built
+and no byte-size delta is claimed; a remote before/after binary comparison
+would be required if this candidate were reconsidered.
+
+A temporary focused test using this exact released version passed with
+`go test -run '^TestReplacement(AuthorizerProbe|MemdbDoesNotShareModernc)$'
+-count=1 ./pkg/dbsql` on Dragon (exit 0, package `ok` in 0.707 s). It opened
+both `file:` and `vfs=memdb` targets, installed the callback before preparing
+caller SQL, denied `PRAGMA temp_store=FILE`, `PRAGMA locking_mode=NORMAL`, and
+an `INSERT` on the read connection, and verified the row count stayed one.
+The same probe created a table in ncruces `vfs=memdb` and verified that a
+modernc connection to the identical URI saw no table. The probe was removed
+with its trial pin; it demonstrates API behavior and engine isolation, not
+production lifecycle, reprepare, cancellation, or independent-process proof.
+After removing the trial pin/probe, the actual acceptance regression was
+rerun in issue 406 with
+`go test -run '^TestHeldReadLeavesNoConnectionState$' -count=1 ./pkg/dbsql`:
+exit 1, persistent admitted `locking_mode=NORMAL` at `dbsql_test.go:253`,
+memory admitted `temp_store=FILE` at `dbsql_test.go:238` (package 1.360 s).
+The original failure is reproduced; no successful enforcement is implied.
+
+The existing `sqlitedb.Adapter` also backs `vecdb` through
+`modernc.org/sqlite/vec` and its `vec0` virtual table in both modes.
+Replacing that adapter globally drops the extension. Opening a separate
+ncruces SQL connection cannot access a modernc in-memory database, even with
+the same URI. A parallel SQL-only adapter would need a deliberate
+lifecycle/owner/backup and target-sharing design; merely changing the driver
+name is incorrect. The current vector adapter was left intact.
+
+The [upstream support matrix](https://github.com/ncruces/go-sqlite3/wiki/Support-matrix)
+lists native file locking and shared-memory WAL on Linux, macOS and Windows,
+but `other/other` (including AIX) has no file locking or WAL support. Its
+`sqlite3_dotlk` alternative is explicitly incompatible with the standard
+SQLite VFS used by existing clients, so it cannot prove this story's native
+exclusive hold and independent-process access on AIX. The
+[VFS documentation](https://github.com/ncruces/go-sqlite3/blob/v0.35.6/vfs/README.md)
+also warns that concurrent access through incompatible VFSes can corrupt
+data. Manager-owned remote whole-package, cross-platform, process, and binary
+size gates remain unrun for a replacement; the earlier 7526 blockers remain.
+
 ## Extension path for JSON / full-text / KV workers
 
 Follow `pkg/dbsql`, not a new framework: one package per category that
