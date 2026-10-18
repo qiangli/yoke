@@ -19,6 +19,10 @@ import (
 // `db session start` re-execs it as the owner and `db hold -- CMD` children
 // run it as independent client processes.
 func TestMain(m *testing.M) {
+	if len(os.Args) == 2 && os.Args[1] == "doc-hold-test-child" {
+		time.Sleep(5 * time.Second)
+		os.Exit(0)
+	}
 	if len(os.Args) > 2 && os.Args[1] == "db" {
 		dir, _ := os.Getwd()
 		rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: os.Environ(), In: os.Stdin, Out: os.Stdout, Err: os.Stderr}

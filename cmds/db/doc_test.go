@@ -295,7 +295,7 @@ func TestIndependentDocClientsBothModes(t *testing.T) {
 			if code != 0 {
 				t.Fatalf("find before hold: %v", before)
 			}
-			hold := exec.Command(os.Args[0], append(append([]string{"db", "hold"}, target...), "--", "sleep", "5")...)
+			hold := exec.Command(os.Args[0], append(append([]string{"db", "hold"}, target...), "--", os.Args[0], "doc-hold-test-child")...)
 			hold.Dir = root
 			hold.Env = append(os.Environ(), "BASHY_EPISODE=doc-test-holder")
 			if err := hold.Start(); err != nil {
