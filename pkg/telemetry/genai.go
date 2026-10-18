@@ -20,14 +20,17 @@ const genAISchemaURL = "https://opentelemetry.io/schemas/gen-ai/" + GenAISemConv
 
 // UnknownVenue is emitted when the host did not attach an execution venue.
 // Unknown is a value in its own right: it must never be silently collapsed into
-// userland, workspace, or any other real venue.
+// userland, a weave workspace, a container, or any other real venue. A venue
+// is where the call ran (an execution environment), not the caller's dhnt
+// purpose tier.
 const UnknownVenue = "UNKNOWN"
 
 type genAIVenueKey struct{}
 
-// WithGenAIVenue lets a host attach its execution-tier policy to model calls.
-// The telemetry package deliberately treats venue as an opaque value; it does
-// not know the host's tier names or infer them from process-global state.
+// WithGenAIVenue lets a host attach the execution venue (where the model call
+// runs) to model calls. The telemetry package deliberately treats venue as an
+// opaque value; it does not know the host's venue or tier names or infer them
+// from process-global state.
 func WithGenAIVenue(ctx context.Context, venue string) context.Context {
 	return context.WithValue(ctx, genAIVenueKey{}, normalizedVenue(venue))
 }

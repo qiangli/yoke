@@ -95,8 +95,8 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 
 	root := &cobra.Command{
 		Use:           "skill",
-		Short:         "workspace skills, gated by this host's space-time coordinate",
-		Long:          "skills lists, inspects, and probes the tier-2 workspace skills available\non this host. `list` shows only skills applicable here (env-gated via each\nskill's metadata.requires); `probe` prints the host coordinate the gate\nevaluates against.",
+		Short:         "workplace skills, gated by this host's space-time coordinate",
+		Long:          "skills lists, inspects, and probes the workplace (tier 2: agent work and\ncollaboration) skills available on this host; a skill may run in any execution\nenvironment. `list` shows only skills applicable here (env-gated via each\nskill's metadata.requires); `probe` prints the host coordinate the gate\nevaluates against. A skill's own metadata.tier is the skills mechanism's\nattestation coordinate, not this tier.",
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {

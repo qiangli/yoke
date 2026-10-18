@@ -165,7 +165,10 @@
 // `--fleet` runs targets through a [Pool] of [Worker]s instead of a bare -j
 // semaphore. A worker offers one or more execution venues; a [Transport] is how
 // a target reaches one. `Venue:` / `Lane:` accepts userland, workspace,
-// sandbox, native, cluster, and cloud as placement intent. Only the userland
+// sandbox, native, cluster, and cloud as placement intent. A venue names an
+// execution environment (where the target runs), not a dhnt purpose tier:
+// `workspace` here is the weave-clone venue, while dag itself is a workplace
+// (tier 2) command usable from any venue. Only the userland
 // transport ships today — same host, in process — so `--fleet` on one box is
 // `-j N` by construction: `Pool == nil` degrades to LocalPool(Concurrency),
 // and there is no second code path to drift.

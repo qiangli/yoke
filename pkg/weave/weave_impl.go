@@ -200,9 +200,10 @@ type weaveItem struct {
 	SessionClaim string `json:"session_claim,omitempty"`
 	Workspace    string `json:"workspace,omitempty"`
 	// legacyWorkspace reads the pre-rename queue.json key. The on-disk
-	// isolation dir + this field were called "sandbox" before the
-	// userland/workspace/sandbox/cluster taxonomy reserved "sandbox" for
-	// podman/OCI containers. loadWeaveQueue migrates it into Workspace on
+	// isolation dir + this field were called "sandbox" before the dhnt
+	// execution-tier taxonomy reserved "sandbox" for podman/OCI containers
+	// (a weave clone is a workspace — the filesystem view; the tier of the
+	// weave work done in it is workplace). loadWeaveQueue migrates it into Workspace on
 	// load (then it stops being written — omitempty), so existing queues
 	// keep their stored clone paths without a migration step.
 	LegacyWorkspace string `json:"sandbox,omitempty"`

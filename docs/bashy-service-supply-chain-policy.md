@@ -17,7 +17,7 @@ in this repository. The supply-chain trust root is the repository's git
 history, not a downloaded release artifact or a checksum sidecar served from
 the same origin.
 
-## Ollama (tier 3, sandbox)
+## Ollama (tier 4, sphere)
 
 *   **Allowed:** the embedded runner compiled from source:
     `external/ollama/runner_embed` (runner embedded via
