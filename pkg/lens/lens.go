@@ -235,6 +235,7 @@ func buildRows() []Row {
 	for _, cmd := range []string{
 		"cmd:ps", "cmd:df", "cmd:ls-l", "cmd:du", "cmd:wc",
 		"cmd:stat", "cmd:id", "cmd:uname", "cmd:tar-tv",
+		"cmd:ip-route", "cmd:netstat-rn",
 	} {
 		cmd := cmd
 		add(cmd, "json", Lossy, func(data []byte, l *losses) ([]byte, error) {

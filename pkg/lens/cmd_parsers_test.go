@@ -22,6 +22,8 @@ func TestCmdGoldens(t *testing.T) {
 		{"cmd:id", "id.out", "id.json"},
 		{"cmd:uname", "uname.out", "uname.json"},
 		{"cmd:tar-tv", "tar-tv.out", "tar-tv.json"},
+		{"cmd:ip-route", "ip-route.out", "ip-route.json"},
+		{"cmd:netstat-rn", "netstat-rn.out", "netstat-rn.json"},
 	}
 
 	for _, tc := range cases {
@@ -37,6 +39,7 @@ func TestCmdRowRegistration(t *testing.T) {
 	cmds := []string{
 		"cmd:ps", "cmd:df", "cmd:ls-l", "cmd:du", "cmd:wc",
 		"cmd:stat", "cmd:id", "cmd:uname", "cmd:tar-tv",
+		"cmd:ip-route", "cmd:netstat-rn",
 	}
 
 	for _, c := range cmds {
@@ -58,6 +61,7 @@ func TestCmdEmptyInputs(t *testing.T) {
 	// Table/line commands return empty JSON array on empty input
 	tableCmds := []string{
 		"cmd:ps", "cmd:df", "cmd:ls-l", "cmd:du", "cmd:wc", "cmd:tar-tv",
+		"cmd:ip-route", "cmd:netstat-rn",
 	}
 	for _, cmd := range tableCmds {
 		t.Run(cmd+"_empty", func(t *testing.T) {
@@ -125,6 +129,15 @@ func TestCmdMalformedInputs(t *testing.T) {
 		{"cmd:tar-tv", "short row"},                                           // insufficient columns
 		{"cmd:tar-tv", "notamode user/group 1024 2026-10-18 12:00 file"},      // invalid mode
 		{"cmd:tar-tv", "-rw-r--r-- user/group badsize 2026-10-18 12:00 file"}, // invalid size
+		// ip-route
+		{"cmd:ip-route", "default via"},                  // via without gateway
+		{"cmd:ip-route", "10.0.0.0/24 dev"},               // dev without interface
+		{"cmd:ip-route", "default metric"},               // metric without value
+		{"cmd:ip-route", "broadcast"},                    // type without destination
+		// netstat-rn
+		{"cmd:netstat-rn", "no header here\ndefault 1.1.1.1 UG en0"},              // missing header
+		{"cmd:netstat-rn", "Destination Gateway Flags Netif\ndefault 192.168.1.1"}, // insufficient columns
+		{"cmd:netstat-rn", "Destination Gateway Flags Netif\ndefault"},            // truncated row
 	}
 
 	for i, tc := range cases {

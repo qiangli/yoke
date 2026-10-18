@@ -1,0 +1,58 @@
+[
+  {
+    "destination": "default",
+    "flags": "UGScg",
+    "gateway": "192.168.1.1",
+    "interface": "en0",
+    "raw": "default            192.168.1.1        UGScg            en0"
+  },
+  {
+    "destination": "127",
+    "flags": "UCS",
+    "gateway": "127.0.0.1",
+    "interface": "lo0",
+    "raw": "127                127.0.0.1          UCS              lo0"
+  },
+  {
+    "destination": "127.0.0.1",
+    "flags": "UH",
+    "gateway": "127.0.0.1",
+    "interface": "lo0",
+    "raw": "127.0.0.1          127.0.0.1          UH               lo0"
+  },
+  {
+    "destination": "10.0.0/24",
+    "flags": "UGS",
+    "gateway": "10.0.0.1",
+    "interface": "en1",
+    "raw": "10.0.0/24          10.0.0.1           UGS              en1"
+  },
+  {
+    "destination": "192.168.1.255",
+    "flags": "UHSb",
+    "gateway": "192.168.1.100",
+    "interface": "en0",
+    "raw": "192.168.1.255      192.168.1.100      UHSb             en0"
+  },
+  {
+    "destination": "default",
+    "flags": "UGcg",
+    "gateway": "fe80::1%en0",
+    "interface": "en0",
+    "raw": "default                           fe80::1%en0                   UGcg             en0"
+  },
+  {
+    "destination": "fe80::%en0/64",
+    "flags": "UCS",
+    "gateway": "link#4",
+    "interface": "en0",
+    "raw": "fe80::%en0/64                      link#4                        UCS              en0"
+  },
+  {
+    "destination": "ff02::/16",
+    "flags": "UmCS",
+    "gateway": "ff02::fb",
+    "interface": "en0",
+    "raw": "ff02::/16                         ff02::fb                      UmCS             en0"
+  }
+]

@@ -29,6 +29,10 @@ func parseCmdToJSON(cmd string, data []byte, l *losses) ([]byte, error) {
 		return parseUname(data, l)
 	case "cmd:tar-tv":
 		return parseTarTV(data, l)
+	case "cmd:ip-route":
+		return parseIPRoute(data, l)
+	case "cmd:netstat-rn":
+		return parseNetstatRN(data, l)
 	default:
 		return nil, errorf(ExitUsage, "unknown cmd parser: %s", cmd)
 	}
@@ -840,6 +844,323 @@ func parseTarTV(data []byte, l *losses) ([]byte, error) {
 		if linkTo != "" {
 			record["link_to"] = linkTo
 		}
+		results = append(results, record)
+	}
+
+	if results == nil {
+		results = []map[string]any{}
+	}
+	return marshalIndent(results)
+}
+
+// ------------------------------------------------------------- cmd:ip-route
+
+func parseIPRoute(data []byte, l *losses) ([]byte, error) {
+	text := strings.TrimSpace(string(data))
+	if text == "" {
+		return []byte("[]\n"), nil
+	}
+	lines := strings.Split(text, "\n")
+	routeTypes := map[string]bool{
+		"unicast": true, "local": true, "broadcast": true, "multicast": true,
+		"blackhole": true, "unreachable": true, "prohibit": true, "throw": true, "nat": true,
+	}
+	knownKV := map[string]bool{
+		"via": true, "dev": true, "metric": true, "proto": true, "scope": true,
+		"src": true, "table": true, "mtu": true, "advmss": true, "hoplimit": true,
+		"pref": true, "expires": true, "prefsrc": true, "onlink": false,
+	}
+
+	var results []map[string]any
+	for lineIdx, rawLine := range lines {
+		line := strings.TrimSpace(rawLine)
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+
+		record := make(map[string]any)
+		pos := 0
+		// Detect leading type prefix.
+		if routeTypes[fields[0]] {
+			if len(fields) < 2 {
+				return nil, errorf(ExitInvalid, "malformed ip route output on line %d: missing destination after type %q", lineIdx+1, fields[0])
+			}
+			record["type"] = fields[0]
+			record["destination"] = fields[1]
+			pos = 2
+		} else {
+			record["destination"] = fields[0]
+			pos = 1
+		}
+
+		dst, _ := record["destination"].(string)
+		if dst == "" {
+			return nil, errorf(ExitInvalid, "malformed ip route output on line %d: missing destination", lineIdx+1)
+		}
+
+		var extras []string
+		var flags []string
+		i := pos
+		for i < len(fields) {
+			tok := fields[i]
+			switch tok {
+			case "via":
+				if i+1 >= len(fields) {
+					return nil, errorf(ExitInvalid, "malformed ip route output on line %d: via without gateway", lineIdx+1)
+				}
+				if _, exists := record["gateway"]; exists {
+					return nil, errorf(ExitInvalid, "malformed ip route output on line %d: duplicate gateway", lineIdx+1)
+				}
+				gw := fields[i+1]
+				if gw == "" {
+					return nil, errorf(ExitInvalid, "malformed ip route output on line %d: empty gateway", lineIdx+1)
+				}
+				record["gateway"] = gw
+				i += 2
+			case "dev":
+				if i+1 >= len(fields) {
+					return nil, errorf(ExitInvalid, "malformed ip route output on line %d: dev without interface", lineIdx+1)
+				}
+				record["interface"] = fields[i+1]
+				i += 2
+			case "metric":
+				if i+1 >= len(fields) {
+					return nil, errorf(ExitInvalid, "malformed ip route output on line %d: metric without value", lineIdx+1)
+				}
+				val := fields[i+1]
+				if n, err := strconv.ParseInt(val, 10, 64); err == nil {
+					record["metric"] = n
+				} else {
+					record["metric"] = val
+				}
+				i += 2
+			case "proto", "scope", "src", "table":
+				if i+1 >= len(fields) {
+					return nil, errorf(ExitInvalid, "malformed ip route output on line %d: %s without value", lineIdx+1, tok)
+				}
+				record[tok] = fields[i+1]
+				i += 2
+			case "mtu", "advmss", "hoplimit":
+				if i+1 >= len(fields) {
+					return nil, errorf(ExitInvalid, "malformed ip route output on line %d: %s without value", lineIdx+1, tok)
+				}
+				val := fields[i+1]
+				if n, err := strconv.ParseInt(val, 10, 64); err == nil {
+					record[tok] = n
+				} else {
+					record[tok] = val
+				}
+				i += 2
+			case "onlink", "linkdown":
+				flags = append(flags, tok)
+				i++
+			default:
+				// Check if token is a known keyword requiring value but we missed.
+				if knownKV[tok] {
+					return nil, errorf(ExitInvalid, "malformed ip route output on line %d: %s without value", lineIdx+1, tok)
+				}
+				// Unknown key-value: if next token exists and is not a known keyword/flag, treat as kv.
+				if i+1 < len(fields) && !knownKV[fields[i+1]] && fields[i+1] != "via" && fields[i+1] != "dev" && fields[i+1] != "metric" && fields[i+1] != "onlink" && fields[i+1] != "linkdown" && !routeTypes[fields[i+1]] {
+					// Heuristic: if tok looks like a key and next looks like value, preserve as extra kv.
+					// But to preserve unknown fields deterministically, store as extra string.
+					// For known pattern key value, keep as field.
+					// We preserve unknown fields by storing under their literal key if not already present.
+					key := strings.ToLower(tok)
+					// Avoid colliding with known keys.
+					if _, exists := record[key]; !exists {
+						record[key] = fields[i+1]
+					} else {
+						extras = append(extras, tok, fields[i+1])
+					}
+					i += 2
+				} else {
+					extras = append(extras, tok)
+					i++
+				}
+			}
+		}
+		if len(flags) > 0 {
+			if len(flags) == 1 {
+				record["flags"] = flags[0]
+			} else {
+				record["flags"] = strings.Join(flags, " ")
+			}
+		}
+		if len(extras) > 0 {
+			record["extra"] = strings.Join(extras, " ")
+		}
+		// Preserve raw line for full fidelity.
+		record["raw"] = line
+		results = append(results, record)
+	}
+	if results == nil {
+		results = []map[string]any{}
+	}
+	return marshalIndent(results)
+}
+
+// ------------------------------------------------------------- cmd:netstat-rn
+
+func parseNetstatRN(data []byte, l *losses) ([]byte, error) {
+	text := strings.TrimSpace(string(data))
+	if text == "" {
+		return []byte("[]\n"), nil
+	}
+	lines := strings.Split(text, "\n")
+
+	// Find header line containing Destination and Gateway and Flags.
+	headerIdx := -1
+	var headerFields []string
+	for idx, rawLine := range lines {
+		trimmed := strings.TrimSpace(rawLine)
+		if trimmed == "" {
+			continue
+		}
+		lower := strings.ToLower(trimmed)
+		if strings.Contains(lower, "destination") && strings.Contains(lower, "gateway") && strings.Contains(lower, "flags") {
+			headerIdx = idx
+			headerFields = strings.Fields(trimmed)
+			break
+		}
+	}
+	if headerIdx == -1 {
+		return nil, errorf(ExitInvalid, "malformed netstat -rn output: missing header (Destination Gateway Flags)")
+	}
+
+	// Normalize header column names to lowercase.
+	normHeaders := make([]string, len(headerFields))
+	for i, h := range headerFields {
+		normHeaders[i] = strings.ToLower(h)
+	}
+
+	// Determine column indices for known logical fields.
+	destIdx, gwIdx, flagsIdx, ifaceIdx := -1, -1, -1, -1
+	expireIdx := -1
+	for i, h := range normHeaders {
+		switch h {
+		case "destination":
+			destIdx = i
+		case "gateway":
+			gwIdx = i
+		case "flags":
+			flagsIdx = i
+		case "netif", "iface", "interface", "if":
+			ifaceIdx = i
+		case "expire":
+			expireIdx = i
+		}
+	}
+	if destIdx == -1 || gwIdx == -1 || flagsIdx == -1 || ifaceIdx == -1 {
+		return nil, errorf(ExitInvalid, "malformed netstat -rn output: missing required columns")
+	}
+
+	var results []map[string]any
+	for lineIdx := headerIdx + 1; lineIdx < len(lines); lineIdx++ {
+		rawLine := lines[lineIdx]
+		line := strings.TrimSpace(rawLine)
+		if line == "" {
+			continue
+		}
+		// Skip section headers like "Routing tables", "Internet:", "Internet6:"
+		if strings.HasSuffix(line, ":") && !strings.Contains(line, " ") {
+			continue
+		}
+		lowerLine := strings.ToLower(line)
+		if lowerLine == "routing tables" || lowerLine == "internet:" || lowerLine == "internet6:" {
+			continue
+		}
+		// Skip lines that look like a repeated header.
+		if strings.Contains(lowerLine, "destination") && strings.Contains(lowerLine, "gateway") {
+			continue
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		if len(fields) < len(normHeaders) {
+			// For BSD/macOS, Expire may be optional; allow one missing trailing column.
+			// But fail closed if we lack required 4.
+			if len(fields) < 4 {
+				return nil, errorf(ExitInvalid, "malformed netstat -rn output on line %d: insufficient columns (%d < 4)", lineIdx+1, len(fields))
+			}
+			// If header has 5 cols and row has 4, map first 4; leave expire empty.
+		}
+		if len(fields) < 4 {
+			return nil, errorf(ExitInvalid, "malformed netstat -rn output on line %d: insufficient columns (%d < 4)", lineIdx+1, len(fields))
+		}
+
+		// Map by position; header order is expected to be Destination Gateway Flags Netif [Expire ...]
+		// Use indices to support alternative orderings.
+		get := func(idx int) string {
+			if idx >= 0 && idx < len(fields) {
+				return fields[idx]
+			}
+			return ""
+		}
+		// If headers and fields align, use direct indices; otherwise fallback to positional 0..3.
+		var dest, gateway, flags, iface, expire string
+		if destIdx < len(fields) && gwIdx < len(fields) && flagsIdx < len(fields) && ifaceIdx < len(fields) {
+			dest = get(destIdx)
+			gateway = get(gwIdx)
+			flags = get(flagsIdx)
+			iface = get(ifaceIdx)
+			if expireIdx >= 0 {
+				expire = get(expireIdx)
+			}
+		} else {
+			dest = fields[0]
+			gateway = fields[1]
+			flags = fields[2]
+			iface = fields[3]
+			if len(fields) > 4 {
+				expire = fields[4]
+			}
+		}
+		if dest == "" || gateway == "" || flags == "" || iface == "" {
+			return nil, errorf(ExitInvalid, "malformed netstat -rn output on line %d: missing required field", lineIdx+1)
+		}
+
+		record := map[string]any{
+			"destination": dest,
+			"gateway":     gateway,
+			"flags":       flags,
+			"interface":   iface,
+		}
+		if expire != "" && expire != "-" {
+			record["expire"] = expire
+		}
+		// Preserve metric-like info if flags contain numeric? Flags already captured.
+		// Preserve unknown extra columns beyond header.
+		if len(fields) > len(normHeaders) {
+			extra := strings.Join(fields[len(normHeaders):], " ")
+			if extra != "" {
+				record["extra"] = extra
+			}
+		} else if len(fields) > 5 && len(normHeaders) <= 5 {
+			// Already handled via Expire minimal check; nothing
+		}
+		// Also preserve any additional raw tokens if header had refs/use/mtu etc. Store generically.
+		for i, h := range normHeaders {
+			if h == "destination" || h == "gateway" || h == "flags" || h == "netif" || h == "iface" || h == "interface" || h == "if" || h == "expire" {
+				continue
+			}
+			if i < len(fields) {
+				val := fields[i]
+				if val != "" && val != "-" {
+					if n, err := strconv.ParseInt(val, 10, 64); err == nil {
+						record[h] = n
+					} else {
+						record[h] = val
+					}
+				}
+			}
+		}
+		record["raw"] = line
 		results = append(results, record)
 	}
 

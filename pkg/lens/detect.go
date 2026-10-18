@@ -25,6 +25,7 @@ var aliases = map[string]string{
 	"cmd:ps":  "cmd:ps", "cmd:df": "cmd:df", "cmd:ls-l": "cmd:ls-l",
 	"cmd:du": "cmd:du", "cmd:wc": "cmd:wc", "cmd:stat": "cmd:stat",
 	"cmd:id": "cmd:id", "cmd:uname": "cmd:uname", "cmd:tar-tv": "cmd:tar-tv",
+	"cmd:ip-route": "cmd:ip-route", "cmd:netstat-rn": "cmd:netstat-rn",
 	// command lines (argv.go); json and yaml above double as the record rows
 	"bash": "bash", "posix": "posix", "sh": "posix", "bsh": "bsh", "bashpp": "bsh",
 	"cmd": "cmd", "pwsh": "pwsh", "powershell": "pwsh",

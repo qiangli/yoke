@@ -1,0 +1,45 @@
+[
+  {
+    "destination": "default",
+    "gateway": "192.168.1.1",
+    "interface": "eth0",
+    "metric": 100,
+    "proto": "dhcp",
+    "raw": "default via 192.168.1.1 dev eth0 proto dhcp metric 100"
+  },
+  {
+    "destination": "10.0.0.0/24",
+    "interface": "eth0",
+    "proto": "kernel",
+    "raw": "10.0.0.0/24 dev eth0 proto kernel scope link src 10.0.0.5",
+    "scope": "link",
+    "src": "10.0.0.5"
+  },
+  {
+    "destination": "192.168.122.0/24",
+    "flags": "linkdown",
+    "interface": "virbr0",
+    "proto": "kernel",
+    "raw": "192.168.122.0/24 dev virbr0 proto kernel scope link src 192.168.122.1 linkdown",
+    "scope": "link",
+    "src": "192.168.122.1"
+  },
+  {
+    "destination": "172.16.0.0/16",
+    "gateway": "10.0.0.1",
+    "interface": "eth0",
+    "metric": 200,
+    "mtu": 1500,
+    "raw": "172.16.0.0/16 via 10.0.0.1 dev eth0 metric 200 mtu 1500"
+  },
+  {
+    "destination": "192.168.1.255",
+    "interface": "eth0",
+    "proto": "kernel",
+    "raw": "broadcast 192.168.1.255 dev eth0 table local proto kernel scope link src 192.168.1.100",
+    "scope": "link",
+    "src": "192.168.1.100",
+    "table": "local",
+    "type": "broadcast"
+  }
+]
