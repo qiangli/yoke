@@ -392,6 +392,7 @@ var packages = map[string]Package{
 		"not here; reclassify to command/library when it does."},
 	"dbstore":     libPkg("db", "shared storage adapters behind the explicit database lifecycle command; category data verbs are added by their owning Sprint 453 stories."),
 	"dblifecycle": libPkg("db", "typed database lifecycle, owner IPC and claim coupling shared by the registered CLI and MCP command."),
+	"dbkv":        libPkg("db", "KV category behind `db kv bucket|get|put|delete|scan|cas|batch` and the KV logical interchange behind `db export|import`, registered with dblifecycle."),
 	"dbsql":       libPkg("db", "SQL category behind `db sql query|exec|schema` and the SQL logical interchange behind `db export|import`, registered with dblifecycle."),
 	"dbdoc":       libPkg("db", "JSON document category behind `db doc get|find|put|patch|rm|batch|collection|index|export|import`, registered with dblifecycle."),
 	"reduce": {Role: RoleUnwired, Note: "command-output reduction primitive and content-addressed spill store. " +

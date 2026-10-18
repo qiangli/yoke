@@ -52,6 +52,7 @@ func (Adapter) Caps() dbstore.Caps {
 			"writers on one handle are admitted one at a time with a wait bounded by Options.Wait that observes ctx; Bolt() bypasses that admission",
 			"a commit that must grow the file waits for read transactions in flight to end; keep reads short",
 			"memory mode is the supplemental memkv adapter: copy-on-write snapshots, readers never block, writers serialize",
+			"no TTL or expiry: values live until deleted, a ttl request is refused as unsupported; no Redis compatibility",
 			"a closed handle rejects every later View and Update with lifetime_ended",
 		},
 	})

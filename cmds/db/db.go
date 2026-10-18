@@ -31,7 +31,8 @@ var command = &tool.Tool{
 	Name:         "db", Synopsis: "Manage an explicit database target and owner session.",
 	Usage: "db create|show|check|backup|restore|drop|export|import [--engine E --mode persistent|memory --path P|--session S --name N] [--json]\n" +
 		"db sql query|exec|schema show|schema apply TARGET [--sql SQL] [--param [NAME=]TYPE:VALUE]... [--params JSON] [--input FILE|-]\n" +
-		"db doc get|find|put|patch|rm|batch|export|import|collection create|drop|list|index add|rm|list TARGET [--collection C] [--id ID] [--doc JSON] [--filter JSON] [--input FILE|-]",
+		"db doc get|find|put|patch|rm|batch|export|import|collection create|drop|list|index add|rm|list TARGET [--collection C] [--id ID] [--doc JSON] [--filter JSON] [--input FILE|-]" + "\n" +
+		"db kv bucket create|drop|list|get|put|delete|scan|cas|batch TARGET [--bucket B] [--key text:K|b64:K] [--value text:V|b64:V] [--expect text:V|b64:V|--expect-absent] [--prefix ...] [--input FILE|-]",
 }
 
 func init() { command.Run = run; tool.Register(command) }
@@ -43,6 +44,8 @@ type dbFlags struct {
 	collection, docID, doc, patch, filter, ifRevision, index                        *string
 	fields                                                                          *[]string
 	ifAbsent, unique                                                                *bool
+	bucket, key, value, expect, start, prefix, ttl                                  *string
+	expectAbsent                                                                    *bool
 	aliases, param                                                                  *[]string
 	limit, maxBytes                                                                 *int
 	idleTTL, wait, timeout                                                          *time.Duration
@@ -80,6 +83,14 @@ func declareFlags(op string) dbFlags {
 	f.index = fs.String("index", "", "document index name for db doc index add|rm")
 	f.fields = fs.StringArray("field", nil, "indexed field path (a.b[0].c) for db doc index add")
 	f.unique = fs.Bool("unique", false, "make a db doc index unique")
+	f.bucket = fs.String("bucket", "", "kv bucket name (UTF-8)")
+	f.key = fs.String("key", "", "kv key as text:UTF8 or b64:BASE64")
+	f.value = fs.String("value", "", "kv value as text:UTF8 or b64:BASE64")
+	f.expect = fs.String("expect", "", "kv cas expected current value as text:... or b64:...")
+	f.expectAbsent = fs.Bool("expect-absent", false, "kv cas: succeed only if the key is absent")
+	f.start = fs.String("start", "", "kv scan: first key at or after text:... or b64:...")
+	f.prefix = fs.String("prefix", "", "kv scan: only keys with this text:... or b64:... prefix")
+	f.ttl = fs.String("ttl", "", "unsupported: kv has no TTL or expiry")
 	f.ready = fs.String("ready", "", "private owner rendezvous")
 	_ = fs.MarkHidden("ready")
 	f.idleTTL = fs.Duration("idle-ttl", 0, "end an idle owner session after this duration")
@@ -229,9 +240,13 @@ func run(rc *tool.RunContext, args []string) int {
 			o := output{SchemaVersion: "bashy-db-result-v1", Op: op, MutationClass: "read"}
 			return failure(o, err).emit(rc, *jsonFlag)
 		}
-	} else if op == "sql" || op == "export" || op == "import" {
+	} else if op == "sql" || op == "kv" || op == "export" || op == "import" {
 		var err error
-		if catOp, operands, err = sqlVerb(op, operands); err == nil {
+		if op == "kv" {
+			if catOp, operands, err = kvVerb(operands); err == nil {
+				raw, err = kvInput(rc, f)
+			}
+		} else if catOp, operands, err = sqlVerb(op, operands); err == nil {
 			raw, err = categoryInput(rc, f, op)
 		}
 		if err != nil {
