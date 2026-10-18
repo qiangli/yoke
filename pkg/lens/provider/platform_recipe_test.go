@@ -245,3 +245,63 @@ func TestK8sScopedRecipeRefusesInvalidContext(t *testing.T) {
 		}
 	}
 }
+
+// TestTierSandboxRecipeArgvReadOnly pins the sandbox tier transport: the
+// outpost SSH target travels as literal argv, only the read-only podman ps
+// verb is ever issued, refs keep the peer scope, Open has no write-capable
+// stream, and an invalid scope or target is refused before execution.
+func TestTierSandboxRecipeArgvReadOnly(t *testing.T) {
+	var got []string
+	p, err := NewOCISandboxRecipe("novidesign", "dogtest", func(_ context.Context, c string, a ...string) ([]byte, error) {
+		got = append([]string{c}, a...)
+		return []byte(`[{"Id":"c1","Names":["web"],"Image":"img:web","State":"running"}]`), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loc := ref.Locator{Scheme: "oci", Target: "containers", ScopeKind: "sandbox", ScopeValue: "novidesign"}
+	rows, err := p.List(context.Background(), loc)
+	if err != nil || len(rows) != 1 || rows[0].Name != "web" {
+		t.Fatalf("rows=%+v err=%v", rows, err)
+	}
+	if want := []string{"outpost", "ssh", "exec", "dogtest", "--", "podman", "ps", "--all", "--format", "json"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("argv=%v want %v", got, want)
+	}
+	sep := -1
+	for i, tok := range got {
+		if tok == "--" {
+			sep = i
+		}
+	}
+	tail := got[sep+1:]
+	if len(tail) < 2 || tail[0] != "podman" || tail[1] != "ps" {
+		t.Fatalf("podman argv tail=%v, want podman ps ...", tail)
+	}
+	for _, tok := range tail {
+		for _, w := range []string{"create", "run", "start", "stop", "rm", "rmi", "pull", "push", "build", "kill", "restart", "pause", "unpause", "commit", "rename", "put"} {
+			if tok == w {
+				t.Fatalf("argv %v contains write verb %q", got, w)
+			}
+		}
+	}
+	if l, err := ref.ParseLocator(rows[0].Ref); err != nil || l.ScopeKind != "sandbox" || l.ScopeValue != "novidesign" {
+		t.Fatalf("ref=%q err=%v", rows[0].Ref, err)
+	}
+	if _, err := p.Open(context.Background(), loc); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("Open error=%v, want ErrUnsupported", err)
+	}
+	if _, err := p.List(context.Background(), ref.Locator{Scheme: "oci", Target: "containers"}); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("unscoped err=%v", err)
+	}
+	if _, err := p.List(context.Background(), ref.Locator{Scheme: "oci", Target: "containers", ScopeKind: "sandbox", ScopeValue: "other"}); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("other-scope err=%v", err)
+	}
+	for _, bad := range [][2]string{{"", "dogtest"}, {"novidesign", ""}, {"-x", "dogtest"}, {"novidesign", "a b"}, {"a=b", "dogtest"}} {
+		if _, err := NewOCISandboxRecipe(bad[0], bad[1], func(context.Context, string, ...string) ([]byte, error) {
+			t.Fatal("runner called")
+			return nil, nil
+		}); err == nil {
+			t.Fatalf("accepted scope=%q target=%q", bad[0], bad[1])
+		}
+	}
+}

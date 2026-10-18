@@ -14,13 +14,14 @@ import (
 	"github.com/qiangli/yoke/pkg/ref"
 )
 
-// S18 first slice: `@ws:<id>` and `@sandbox:<id>` read a local weave workspace
-// or sandbox, read-only. The scope is only ever the one spelled on the locator —
-// nothing infers it from the environment or the current checkout — and anything
-// that cannot be resolved to exactly one existing target fails closed.
+// S18 scopes: `@ws:<id>` reads a local weave workspace, read-only, while
+// `@sandbox:<peer>` lists containers on a remote Podman-backed outpost
+// peer (cmds/lens sandboxscope.go), never the local host. The scope is only
+// ever the one spelled on the locator — nothing infers it from the
+// environment or the current checkout — and anything that cannot be
+// resolved to exactly one existing target fails closed.
 //
 // For workspaces: <stateRoot>/<tag>/workspaces/<name>
-// For sandboxes:  <stateRoot>/<tag>/sandboxes/<name>
 //
 // <id> is `<queue-tag>/<name>` (exact) or `<name>` (must be unique across
 // the queues on this host). The layout is weave's own, with ~/.bashy/weave
@@ -29,7 +30,7 @@ import (
 // cmds/all for a path rule.
 
 // wsProviders are the schemes whose provider is a pure view of a directory
-// tree and can therefore be rooted at a workspace or sandbox.
+// tree and can therefore be rooted at a workspace.
 var wsProviders = map[string]func(root string) provider.Provider{
 	"dir": func(root string) provider.Provider { return provider.NewDir(root, false) },
 }
@@ -107,11 +108,6 @@ func resolveWorkspace(id string) (string, error) {
 	return resolveScope("ws", "workspaces", id)
 }
 
-// resolveSandbox maps a sandbox scope value to the sandbox directory.
-func resolveSandbox(id string) (string, error) {
-	return resolveScope("sandbox", "sandboxes", id)
-}
-
 // scopedDirProvider serves loc's scheme rooted at the resolved directory.
 func scopedDirProvider(loc ref.Locator, resolver func(string) (string, error)) (provider.Provider, error) {
 	mk, ok := wsProviders[loc.Scheme]
@@ -138,14 +134,9 @@ func wsProvider(loc ref.Locator) (provider.Provider, error) {
 	return scopedDirProvider(loc, resolveWorkspace)
 }
 
-// sandboxProvider serves loc's scheme rooted at the scoped sandbox.
-func sandboxProvider(loc ref.Locator) (provider.Provider, error) {
-	return scopedDirProvider(loc, resolveSandbox)
-}
-
 // wsScoped strips the scope before the inner provider sees a locator and
 // puts it back on every ref it emits, so a pulled stream names resources in
-// the workspace or sandbox rather than on the host.
+// the workspace rather than on the host.
 type wsScoped struct {
 	inner       provider.Provider
 	root        string
@@ -161,7 +152,7 @@ func (w *wsScoped) local(loc ref.Locator) (ref.Locator, error) {
 	if filepath.IsAbs(loc.Target) || strings.HasPrefix(filepath.ToSlash(loc.Target), "/") || filepath.VolumeName(loc.Target) != "" {
 		return ref.Locator{}, fmt.Errorf("@%s scope takes a %s-relative path", w.kind, noun)
 	}
-	// Lexical escapes and symlinks that leave the workspace or sandbox are refused.
+	// Lexical escapes and symlinks that leave the workspace are refused.
 	p := filepath.Join(w.root, filepath.FromSlash(loc.Target))
 	real, err := filepath.EvalSymlinks(p)
 	if err != nil {
@@ -226,10 +217,12 @@ func (w *wsScoped) Edges(ctx context.Context, loc ref.Locator) ([]provider.Edge,
 }
 
 // scopedProvider picks the provider for a locator that carries a scope. Only
-// ws, sandbox, host (a sphere peer), k8s pods and cloud droplets are served;
-// every other scope is refused rather than read locally. The k8s and cloud
-// cases delegate to the registered factories so there is exactly one
-// explicit-context recipe each, never a duplicate registry.
+// ws (a local weave workspace), sandbox (containers on a remote
+// Podman-backed outpost peer), host (a sphere peer), k8s pods and cloud
+// droplets are served; every other scope is refused rather than read
+// locally. The sandbox, k8s and cloud cases delegate to the registered
+// explicit-context recipes so there is exactly one each, never a
+// duplicate registry.
 func scopedProvider(rc *tool.RunContext, loc ref.Locator) (provider.Provider, error) {
 	switch loc.ScopeKind {
 	case "ws":

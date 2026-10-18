@@ -404,6 +404,47 @@ func NewCloudDropletsRecipe(cloudContext string, run recipeRunner) (Recipe, erro
 	}), nil
 }
 
+// ValidSandboxTarget reports whether name is acceptable as an explicit
+// outpost SSH target for a sandbox scope: non-empty, bounded, no leading
+// dash, no control, space or '=' that could smuggle extra flags.
+func ValidSandboxTarget(name string) bool {
+	if name == "" || len(name) > 253 || name[0] == '-' {
+		return false
+	}
+	for _, r := range name {
+		if r <= ' ' || r == 0x7f || r == '=' {
+			return false
+		}
+	}
+	return true
+}
+
+// NewOCISandboxRecipe lists containers on a Podman-backed outpost peer. The
+// scope value is the peer id spelled on the locator (it names every emitted
+// ref, so pulled rows round-trip); the SSH target is the single saved
+// outpost target that peer resolved to (it travels as literal argv in
+// outpost ssh exec <target> -- podman ps ...). There is no ambient host
+// fallback, only the read-only ps verb is ever issued, and an invalid
+// scope or target is refused before any command runs.
+func NewOCISandboxRecipe(scopeValue, sandboxTarget string, run recipeRunner) (Recipe, error) {
+	if !ValidSandboxTarget(scopeValue) {
+		return Recipe{}, fmt.Errorf("sandbox recipe: invalid or missing @sandbox scope %q", scopeValue)
+	}
+	if !ValidSandboxTarget(sandboxTarget) {
+		return Recipe{}, fmt.Errorf("sandbox recipe: invalid @sandbox target %q", sandboxTarget)
+	}
+	if run == nil {
+		run = runRecipe
+	}
+	return scopedPlatformRecipe("oci", "sandbox", scopeValue, "containers", func(ctx context.Context) ([]platformRecord, error) {
+		data, err := run(ctx, "outpost", "ssh", "exec", sandboxTarget, "--", "podman", "ps", "--all", "--format", "json")
+		if err != nil {
+			return nil, err
+		}
+		return parseOCI(data)
+	}), nil
+}
+
 // NewK8sScopedRecipe lists pods from exactly the named kubectl context. The
 // context is passed as a literal --context argument; there is no ambient
 // fallback, and an invalid name is refused before any command runs.

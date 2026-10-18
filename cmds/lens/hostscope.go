@@ -117,9 +117,17 @@ func (t outpostSFTP) Read(ctx context.Context, name, file string) ([]byte, error
 // resolveHostPeer maps an explicit scope value to exactly one online peer and
 // returns the name outpost addresses it by.
 func resolveHostPeer(ctx context.Context, id string) (string, error) {
+	name, _, err := resolveHostPeerEx(ctx, id)
+	return name, err
+}
+
+// resolveHostPeerEx is resolveHostPeer plus the matched peer's host, so
+// callers with host-based policy (the sandbox tier is never the local
+// Dragon host) can enforce it even when the scope spelled an alias.
+func resolveHostPeerEx(ctx context.Context, id string) (string, string, error) {
 	peers, err := fetchPeers(ctx)
 	if err != nil {
-		return "", fmt.Errorf("@%s: %w", id, err)
+		return "", "", fmt.Errorf("@%s: %w", id, err)
 	}
 	var hits []peerStatus
 	for _, p := range peers {
@@ -129,21 +137,21 @@ func resolveHostPeer(ctx context.Context, id string) (string, error) {
 	}
 	switch len(hits) {
 	case 0:
-		return "", fmt.Errorf("@%s: unknown peer", id)
+		return "", "", fmt.Errorf("@%s: unknown peer", id)
 	case 1:
 		if !hits[0].Online {
-			return "", fmt.Errorf("@%s: peer is offline", id)
+			return "", "", fmt.Errorf("@%s: peer is offline", id)
 		}
 		if strings.HasPrefix(hits[0].Host, "-") {
-			return "", fmt.Errorf("@%s: invalid peer host", id)
+			return "", "", fmt.Errorf("@%s: invalid peer host", id)
 		}
 		raw, err := hostTargetsRunner(ctx)
 		if err != nil {
-			return "", fmt.Errorf("@%s: list SSH targets: %w", id, err)
+			return "", "", fmt.Errorf("@%s: list SSH targets: %w", id, err)
 		}
 		var targets []hostSSHTarget
 		if err := json.Unmarshal(raw, &targets); err != nil {
-			return "", fmt.Errorf("@%s: decode SSH targets: %w", id, err)
+			return "", "", fmt.Errorf("@%s: decode SSH targets: %w", id, err)
 		}
 		var names []string
 		for _, target := range targets {
@@ -152,15 +160,15 @@ func resolveHostPeer(ctx context.Context, id string) (string, error) {
 			}
 		}
 		if len(names) != 1 {
-			return "", fmt.Errorf("@%s: need exactly one saved SSH target for peer %s (found %d)", id, hits[0].Host, len(names))
+			return "", "", fmt.Errorf("@%s: need exactly one saved SSH target for peer %s (found %d)", id, hits[0].Host, len(names))
 		}
-		return names[0], nil
+		return names[0], hits[0].Host, nil
 	}
 	hosts := make([]string, len(hits))
 	for i, p := range hits {
 		hosts[i] = p.Host
 	}
-	return "", fmt.Errorf("@%s: ambiguous peer, matches %s", id, strings.Join(hosts, ", "))
+	return "", "", fmt.Errorf("@%s: ambiguous peer, matches %s", id, strings.Join(hosts, ", "))
 }
 
 func hostPathOK(p string) error {

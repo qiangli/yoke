@@ -22,6 +22,17 @@ func TestTierVerbosePrintsTierAndTransport(t *testing.T) {
 		return []byte(`[{"id":7,"name":"web","status":"active"}]`), nil
 	}
 	defer func() { k8sRunner, cloudRunner = nil, nil }()
+	oldP, oldT, oldS := peerRunner, hostTargetsRunner, sandboxRunner
+	peerRunner = func(context.Context) ([]byte, error) {
+		return []byte(`[{"host":"novidesign","online":true}]`), nil
+	}
+	hostTargetsRunner = func(context.Context) ([]byte, error) {
+		return []byte(`[{"name":"dogtest","host":"novidesign"}]`), nil
+	}
+	sandboxRunner = func(_ context.Context, c string, a ...string) ([]byte, error) {
+		return []byte(`[{"Id":"c1","Names":["web"],"Image":"img:web","State":"running"}]`), nil
+	}
+	defer func() { peerRunner, hostTargetsRunner, sandboxRunner = oldP, oldT, oldS }()
 	t.Setenv("DIGITALOCEAN_ACCESS_TOKEN", "do-secret-token")
 	t.Setenv("DIGITALOCEAN_CONTEXT", "ambient-should-be-ignored")
 	t.Setenv("KUBECONFIG", "/tmp/secret-kubeconfig")
@@ -32,6 +43,7 @@ func TestTierVerbosePrintsTierAndTransport(t *testing.T) {
 	}{
 		{"k8s:pods@k8s:kind-dev", "lens: tier k8s transport kubectl scope k8s:kind-dev\n"},
 		{"cloud:droplets@cloud:team-ctx", "lens: tier cloud transport doctl scope cloud:team-ctx\n"},
+		{"oci:containers@sandbox:novidesign", "lens: tier sandbox transport podman scope sandbox:novidesign\n"},
 	} {
 		out, errb, code := runTool(t, t.TempDir(), "", "-t", "graph", "--verbose", c.operand)
 		if code != 0 {
@@ -59,6 +71,7 @@ func TestTierExplicitScopeFailClosed(t *testing.T) {
 		{Scheme: "cloud", Target: "droplets", ScopeKind: "k8s", ScopeValue: "x"},
 		{Scheme: "oci", Target: "containers", ScopeKind: "k8s", ScopeValue: "x"},
 		{Scheme: "dir", Target: ".", ScopeKind: "cloud", ScopeValue: "x"},
+		{Scheme: "dir", Target: "src", ScopeKind: "sandbox", ScopeValue: "x"},
 	} {
 		if _, err := scopedProvider(nil, loc); err == nil {
 			t.Errorf("%v: scoped pull accepted", loc)

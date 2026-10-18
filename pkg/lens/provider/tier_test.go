@@ -23,6 +23,7 @@ func TestTierOfSixTiers(t *testing.T) {
 		{ref.Locator{Scheme: "sphere", Target: ""}, "sphere", "spacegraph"},
 		{ref.Locator{Scheme: "dir", Target: ".", ScopeKind: "ws", ScopeValue: "q"}, "workspace", "local"},
 		{ref.Locator{Scheme: "dir", Target: ".", ScopeKind: "sandbox", ScopeValue: "q"}, "sandbox", "local"},
+		{ref.Locator{Scheme: "oci", Target: "containers", ScopeKind: "sandbox", ScopeValue: "novidesign"}, "sandbox", "podman"},
 		{ref.Locator{Scheme: "dir", Target: ".", ScopeKind: "host", ScopeValue: "peer"}, "sphere", "outpost-sftp"},
 		{ref.Locator{Scheme: "k8s", Target: "pods", ScopeKind: "k8s", ScopeValue: "ctx"}, "k8s", "kubectl"},
 		{ref.Locator{Scheme: "cloud", Target: "droplets", ScopeKind: "cloud", ScopeValue: "ctx"}, "cloud", "doctl"},
