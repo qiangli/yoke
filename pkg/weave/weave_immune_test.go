@@ -16,16 +16,71 @@ import (
 
 func withQuotaImmuneFakes(t *testing.T) {
 	t.Helper()
+	t.Setenv("BASHY_HOME", t.TempDir())
+	t.Setenv("BASHY_MB_DIR", t.TempDir())
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
 	now, policy := quotaImmuneNow, quotaImmunePolicy
 	headroom, observe := quotaImmuneHeadroom, quotaImmuneObserve
 	forecast, resolve := quotaImmuneForecast, quotaImmuneResolveSeat
+	read, observed := quotaImmuneRead, quotaImmuneObserved
 	say, kill, send := quotaImmuneSay, quotaImmuneKill, weaveSupervisionSend
 	t.Cleanup(func() {
 		quotaImmuneNow, quotaImmunePolicy = now, policy
 		quotaImmuneHeadroom, quotaImmuneObserve = headroom, observe
 		quotaImmuneForecast, quotaImmuneResolveSeat = forecast, resolve
+		quotaImmuneRead, quotaImmuneObserved = read, observed
 		quotaImmuneSay, quotaImmuneKill, weaveSupervisionSend = say, kill, send
 	})
+}
+
+func TestQuotaImmuneSharesInputsWithinTick(t *testing.T) {
+	withQuotaImmuneFakes(t)
+	root := t.TempDir()
+	dir, err := weaveQueueDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	if err := withWeaveQueueLock(dir, func(q *weaveQueue) error {
+		q.Items = []*weaveItem{
+			{ID: 1, State: "working", LaunchSpec: &weaveLaunchSpec{Agent: "one"}},
+			{ID: 2, State: "working", LaunchSpec: &weaveLaunchSpec{Agent: "two"}},
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	quotaImmuneNow = func() time.Time { return now }
+	quotaImmunePolicy = func() (llmbudget.ImmuneSettings, error) { return llmbudget.ImmuneSettings{}, nil }
+	quotaImmuneResolveSeat = func(agent, _, _ string) (quotaImmuneSeat, bool) {
+		return quotaImmuneSeat{Agent: agent, Account: "plan"}, true
+	}
+	quotaImmuneHeadroom = func(context.Context, string, string) (float64, llmbudget.Binding, bool, error) {
+		return 0, llmbudget.Binding{}, false, nil
+	}
+	quotaImmuneObserve = readQuotaImmuneObservation
+	var reads, classifications, forecasts int
+	quotaImmuneRead = func(time.Time, quotaobs.Filter) ([]quotaobs.Observation, error) {
+		reads++
+		return nil, nil
+	}
+	quotaImmuneObserved = func(context.Context, time.Time) []llmbudget.ObservedState {
+		classifications++
+		return nil
+	}
+	quotaImmuneForecast = func(context.Context, time.Time) []llmbudget.AccountForecast {
+		forecasts++
+		return nil
+	}
+	cmd, _ := immuneTestCommand()
+	for tick := 1; tick <= 2; tick++ {
+		if actions, err := runQuotaImmuneTick(cmd, root, dir, true); err != nil || len(actions) != 0 {
+			t.Fatalf("tick %d: actions=%+v err=%v", tick, actions, err)
+		}
+		if reads != tick || classifications != tick || forecasts != tick {
+			t.Fatalf("tick %d scans: observations=%d classifications=%d forecasts=%d", tick, reads, classifications, forecasts)
+		}
+	}
 }
 
 func immuneTestCommand() (*cobra.Command, *bytes.Buffer) {

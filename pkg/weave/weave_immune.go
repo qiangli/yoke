@@ -63,6 +63,55 @@ type quotaImmuneAction struct {
 	DryRun    bool      `json:"dry_run,omitempty"`
 }
 
+// quotaImmuneTickInputs is scoped to one tick. The analyzer and observation
+// journal both read their full stores; share those reads across live seats.
+// A new tick always gets fresh inputs, including after a dry run.
+type quotaImmuneTickInputs struct {
+	joined    []quotaImmuneObservedPair
+	forecasts []llmbudget.AccountForecast
+	loaded    bool
+	err       error
+}
+
+type quotaImmuneObservedPair struct {
+	observation quotaobs.Observation
+	state       llmbudget.ObservedState
+}
+
+type quotaImmuneInputsKey struct{}
+
+func joinQuotaImmuneObservations(observations []quotaobs.Observation, states []llmbudget.ObservedState) []quotaImmuneObservedPair {
+	bySHA := make(map[string][]quotaobs.Observation, len(observations))
+	for _, o := range observations {
+		bySHA[o.ExcerptSHA] = append(bySHA[o.ExcerptSHA], o)
+	}
+	var joined []quotaImmuneObservedPair
+	for _, state := range states {
+		for _, o := range bySHA[state.ExcerptSHA] {
+			if o.At.Equal(state.At) && o.Account == state.Account && o.Plan == state.Plan && o.Tool == state.Tool {
+				joined = append(joined, quotaImmuneObservedPair{o, state})
+			}
+		}
+	}
+	return joined
+}
+
+func quotaImmuneInputs(ctx context.Context, now time.Time) (*quotaImmuneTickInputs, bool) {
+	inputs, ok := ctx.Value(quotaImmuneInputsKey{}).(*quotaImmuneTickInputs)
+	if !ok {
+		return nil, false
+	}
+	if !inputs.loaded {
+		inputs.loaded = true
+		observations, err := quotaImmuneRead(now.Add(-24*time.Hour), nil)
+		inputs.err = err
+		if inputs.err == nil {
+			inputs.joined = joinQuotaImmuneObservations(observations, quotaImmuneObserved(ctx, now))
+		}
+	}
+	return inputs, true
+}
+
 var (
 	quotaImmuneNow         = func() time.Time { return time.Now().UTC() }
 	quotaImmunePolicy      = llmbudget.ImmuneSettingsFromPolicy
@@ -70,6 +119,8 @@ var (
 	quotaImmuneObserve     = readQuotaImmuneObservation
 	quotaImmuneResolveSeat = resolveQuotaImmuneSeat
 	quotaImmuneForecast    = llmbudget.Forecast
+	quotaImmuneRead        = quotaobs.Read
+	quotaImmuneObserved    = llmbudget.Observed
 	quotaImmuneSay         = func(cmd *cobra.Command, id int64, message string) error {
 		return runWeaveSay(cmd, id, message, false, false, "", &weaveOutputFlags{})
 	}
@@ -181,7 +232,13 @@ func assessQuotaImmune(ctx context.Context, seat quotaImmuneSeat, deadline, now 
 	if ok {
 		set(obs.Level, obs.Detail, obs.ResetAt)
 	}
-	for _, forecast := range quotaImmuneForecast(ctx, now) {
+	var forecasts []llmbudget.AccountForecast
+	if inputs, ok := ctx.Value(quotaImmuneInputsKey{}).(*quotaImmuneTickInputs); ok {
+		forecasts = inputs.forecasts
+	} else {
+		forecasts = quotaImmuneForecast(ctx, now)
+	}
+	for _, forecast := range forecasts {
 		if !strings.EqualFold(forecast.Account, seat.Account) {
 			continue
 		}
@@ -195,55 +252,56 @@ func assessQuotaImmune(ctx context.Context, seat quotaImmuneSeat, deadline, now 
 }
 
 func readQuotaImmuneObservation(ctx context.Context, seat quotaImmuneSeat, now time.Time) (quotaImmuneObservation, bool, error) {
-	observations, err := quotaobs.Read(now.Add(-24*time.Hour), nil)
-	if err != nil {
-		return quotaImmuneObservation{}, false, err
-	}
-	bySHA := make(map[string][]quotaobs.Observation, len(observations))
-	for _, o := range observations {
-		bySHA[o.ExcerptSHA] = append(bySHA[o.ExcerptSHA], o)
+	var joined []quotaImmuneObservedPair
+	if inputs, ok := quotaImmuneInputs(ctx, now); ok {
+		if inputs.err != nil {
+			return quotaImmuneObservation{}, false, inputs.err
+		}
+		joined = inputs.joined
+	} else {
+		observations, err := quotaImmuneRead(now.Add(-24*time.Hour), nil)
+		if err != nil {
+			return quotaImmuneObservation{}, false, err
+		}
+		joined = joinQuotaImmuneObservations(observations, quotaImmuneObserved(ctx, now))
 	}
 	var best quotaImmuneObservation
 	policy, err := quotaImmunePolicy()
 	if err != nil {
 		return best, false, err
 	}
-	for _, state := range llmbudget.Observed(ctx, now) {
-		for _, o := range bySHA[state.ExcerptSHA] {
-			if !o.At.Equal(state.At) || o.Account != state.Account || o.Plan != state.Plan || o.Tool != state.Tool {
-				continue
-			}
-			accountMatch := strings.EqualFold(o.Account, seat.Account) || strings.EqualFold(o.Plan, seat.Account)
-			bindingMatch := o.Agent != "" && strings.EqualFold(o.Agent, seat.Agent) || o.Model != "" && strings.EqualFold(o.Model, seat.Model) || o.Tool != "" && strings.EqualFold(o.Tool, seat.Tool)
-			if !accountMatch && (o.Account != "" || o.Plan != "" || !bindingMatch) {
-				continue
-			}
-			structured := state.Matcher != nil && weaveVendorUsageEvent(o.Tool, strings.TrimSpace(o.Excerpt))
-			if state.Classification != "observed" && !(state.Classification == "observed-unconfirmed" && structured) {
-				continue
-			}
-			if state.Kind == "" {
-				continue
-			}
-			level := ""
-			if state.Kind == "exhausted" && state.ResetAt != nil && state.ResetAt.After(now) {
-				level = "critical"
-			} else if state.Kind == "warning" || state.UsedPercent != nil && *state.UsedPercent >= 100-policy.WarnHeadroom*100 {
-				level = "warn"
-			}
-			if level == "" || best.Level == "critical" {
-				continue
-			}
-			reset := time.Time{}
-			if state.ResetAt != nil {
-				reset = *state.ResetAt
-			}
-			detail := strings.Join(strings.Fields(o.Excerpt), " ")
-			if len(detail) > 120 {
-				detail = detail[:117] + "..."
-			}
-			best = quotaImmuneObservation{Level: level, Detail: detail, ResetAt: reset}
+	for _, pair := range joined {
+		o, state := pair.observation, pair.state
+		accountMatch := strings.EqualFold(o.Account, seat.Account) || strings.EqualFold(o.Plan, seat.Account)
+		bindingMatch := o.Agent != "" && strings.EqualFold(o.Agent, seat.Agent) || o.Model != "" && strings.EqualFold(o.Model, seat.Model) || o.Tool != "" && strings.EqualFold(o.Tool, seat.Tool)
+		if !accountMatch && (o.Account != "" || o.Plan != "" || !bindingMatch) {
+			continue
 		}
+		structured := state.Matcher != nil && weaveVendorUsageEvent(o.Tool, strings.TrimSpace(o.Excerpt))
+		if state.Classification != "observed" && !(state.Classification == "observed-unconfirmed" && structured) {
+			continue
+		}
+		if state.Kind == "" {
+			continue
+		}
+		level := ""
+		if state.Kind == "exhausted" && state.ResetAt != nil && state.ResetAt.After(now) {
+			level = "critical"
+		} else if state.Kind == "warning" || state.UsedPercent != nil && *state.UsedPercent >= 100-policy.WarnHeadroom*100 {
+			level = "warn"
+		}
+		if level == "" || best.Level == "critical" {
+			continue
+		}
+		reset := time.Time{}
+		if state.ResetAt != nil {
+			reset = *state.ResetAt
+		}
+		detail := strings.Join(strings.Fields(o.Excerpt), " ")
+		if len(detail) > 120 {
+			detail = detail[:117] + "..."
+		}
+		best = quotaImmuneObservation{Level: level, Detail: detail, ResetAt: reset}
 	}
 	return best, best.Level != "", nil
 }
@@ -269,6 +327,8 @@ func runQuotaImmuneTick(cmd *cobra.Command, _ string, dir string, dryRun bool) (
 	if err != nil {
 		return nil, err
 	}
+	inputs := &quotaImmuneTickInputs{forecasts: quotaImmuneForecast(cmd.Context(), now)}
+	ctx := context.WithValue(cmd.Context(), quotaImmuneInputsKey{}, inputs)
 	var actions []quotaImmuneAction
 	for _, it := range q.Items {
 		if it.State != "working" || it.LaunchSpec == nil {
@@ -282,7 +342,7 @@ func runQuotaImmuneTick(cmd *cobra.Command, _ string, dir string, dryRun bool) (
 		if it.LaunchSpec.MaxRuntime > 0 {
 			deadline = it.StartedAt.Add(it.LaunchSpec.MaxRuntime)
 		}
-		assessment, err := assessQuotaImmune(cmd.Context(), seat, deadline, now, policy)
+		assessment, err := assessQuotaImmune(ctx, seat, deadline, now, policy)
 		if err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "weave immune: run #%d: %v\n", it.ID, err)
 			continue
@@ -349,7 +409,7 @@ func runQuotaImmuneTick(cmd *cobra.Command, _ string, dir string, dryRun bool) (
 			}
 		}
 	}
-	managerActions, err := checkQuotaImmuneManagers(cmd, policy, now, dryRun)
+	managerActions, err := checkQuotaImmuneManagers(cmd, ctx, policy, now, dryRun)
 	if err != nil {
 		return actions, err
 	}
@@ -431,7 +491,7 @@ func clearRunQuotaImmuneKillClaim(dir string, id int64) {
 	})
 }
 
-func checkQuotaImmuneManagers(cmd *cobra.Command, policy llmbudget.ImmuneSettings, now time.Time, dryRun bool) ([]quotaImmuneAction, error) {
+func checkQuotaImmuneManagers(cmd *cobra.Command, ctx context.Context, policy llmbudget.ImmuneSettings, now time.Time, dryRun bool) ([]quotaImmuneAction, error) {
 	store, err := sprintStoreDir()
 	if err != nil {
 		return nil, err
@@ -449,7 +509,7 @@ func checkQuotaImmuneManagers(cmd *cobra.Command, policy llmbudget.ImmuneSetting
 		if !ok {
 			continue
 		}
-		a, err := assessQuotaImmune(cmd.Context(), seat, snapshot.currentBox().Cutoff, now, policy)
+		a, err := assessQuotaImmune(ctx, seat, snapshot.currentBox().Cutoff, now, policy)
 		if err != nil || a.Level == "" {
 			continue
 		}
