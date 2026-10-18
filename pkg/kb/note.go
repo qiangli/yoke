@@ -31,6 +31,8 @@ func newNoteAddCmd(dir, ring *string) *cobra.Command {
 		typ            string
 		tags           []string
 		slug           string
+		jsonOut        bool
+		transcript     string
 	)
 	cmd := &cobra.Command{
 		Use:   "add",
@@ -40,15 +42,39 @@ func newNoteAddCmd(dir, ring *string) *cobra.Command {
 			if !candidate {
 				return fmt.Errorf("kb: note add requires --candidate")
 			}
-			if strings.TrimSpace(title) == "" {
-				return fmt.Errorf("kb: note add requires --title")
-			}
 			if !ValidType(typ) {
 				return fmt.Errorf("kb: invalid type %q (lesson|gotcha|runbook|decision|fact)", typ)
 			}
-			text, err := noteBody(c, body, bodyFile)
-			if err != nil {
-				return err
+			var text string
+			if strings.TrimSpace(transcript) != "" {
+				tr, err := readTranscript(c.InOrStdin(), transcript)
+				if err != nil {
+					return err
+				}
+				dTitle, dBody := tr.Distill()
+				if strings.TrimSpace(title) == "" {
+					title = dTitle
+				}
+				text = dBody
+				if body != "" || bodyFile != "" {
+					if text, err = noteBody(c, body, bodyFile); err != nil {
+						return err
+					}
+				}
+				if strings.TrimSpace(episode) == "" {
+					episode = tr.Episode
+				}
+			} else {
+				var err error
+				if text, err = noteBody(c, body, bodyFile); err != nil {
+					return err
+				}
+			}
+			if strings.TrimSpace(title) == "" {
+				return fmt.Errorf("kb: note add requires --title")
+			}
+			if ep := strings.TrimSpace(episode); ep != "" && strings.TrimSpace(transcript) != "" {
+				tags = append(append([]string(nil), tags...), "episode:"+ep)
 			}
 			if strings.TrimSpace(text) == "" {
 				return fmt.Errorf("kb: note add requires --body or -f")
@@ -91,6 +117,9 @@ func newNoteAddCmd(dir, ring *string) *cobra.Command {
 			if err := store.Write(p, "note-add"); err != nil {
 				return err
 			}
+			if jsonOut {
+				return writeSearchJSON(c.OutOrStdout(), toHits([]*Page{p}), nil, nil, nil, ResFull, nil)
+			}
 			fmt.Fprintf(c.OutOrStdout(), "added note %s (candidate)\n", p.Slug)
 			return nil
 		},
@@ -104,6 +133,8 @@ func newNoteAddCmd(dir, ring *string) *cobra.Command {
 	cmd.Flags().StringVar(&slug, "slug", "", "override the auto slug")
 	cmd.Flags().StringVar(&body, "body", "", "note body text")
 	cmd.Flags().StringVarP(&bodyFile, "file", "f", "", "read the body from FILE ('-' = stdin)")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit the kb JSON envelope for the created note")
+	cmd.Flags().StringVar(&transcript, "transcript", "", "distill the note from a turn-transcript JSON object in FILE ('-' = stdin)")
 	cmd.Flags().BoolVar(&force, "force", false, "skip the duplicate check")
 	return cmd
 }
