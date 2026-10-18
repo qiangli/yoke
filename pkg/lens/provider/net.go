@@ -1,11 +1,14 @@
 package provider
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"os/exec"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,6 +26,7 @@ type Net struct {
 	Interfaces     func() ([]net.Interface, error)
 	InterfaceAddrs func(ifi *net.Interface) ([]net.Addr, error)
 	Routes         func(ctx context.Context, loc ref.Locator) ([]Node, error)
+	RouteRunner    func(ctx context.Context) (string, error)
 }
 
 // NewNet returns a new read-only Net provider backed by the standard library net package.
@@ -32,7 +36,8 @@ func NewNet() *Net {
 		InterfaceAddrs: func(ifi *net.Interface) ([]net.Addr, error) {
 			return ifi.Addrs()
 		},
-		Routes: nil,
+		Routes:      nil,
+		RouteRunner: defaultRouteRunner,
 	}
 }
 
@@ -53,8 +58,7 @@ func (n *Net) fetchAddrs(ifi *net.Interface) ([]net.Addr, error) {
 func isRouteTarget(t string) bool {
 	t = strings.TrimPrefix(t, "interfaces/")
 	return t == "routes" || t == "route" ||
-		strings.HasPrefix(t, "routes/") || strings.HasPrefix(t, "route/") ||
-		strings.HasSuffix(t, "/routes") || strings.HasSuffix(t, "/route")
+		strings.HasPrefix(t, "routes/") || strings.HasPrefix(t, "route/")
 }
 
 func (n *Net) rootNode(loc ref.Locator, count uint64) Node {
@@ -247,7 +251,7 @@ func (n *Net) resolveTarget(loc ref.Locator, interfaces []net.Interface) (
 		return targetInterface, matchedIfi, nil, nil
 	}
 
-	if addrPart == "routes" || addrPart == "route" {
+	if addrPart == "routes" || addrPart == "route" || strings.HasPrefix(addrPart, "routes/") || strings.HasPrefix(addrPart, "route/") {
 		return targetRoute, matchedIfi, nil, nil
 	}
 
@@ -300,17 +304,14 @@ func (n *Net) Stat(ctx context.Context, loc ref.Locator) (Node, error) {
 	case targetAddress:
 		return n.addressNode(*ifi, addr), nil
 	case targetRoute:
-		if n.Routes != nil {
-			nodes, rErr := n.Routes(ctx, loc)
-			if rErr != nil {
-				return Node{}, rErr
-			}
-			if len(nodes) == 0 {
-				return Node{}, os.ErrNotExist
-			}
-			return nodes[0], nil
+		nodes, rErr := n.fetchRouteNodes(ctx, loc, ifi)
+		if rErr != nil {
+			return Node{}, rErr
 		}
-		return Node{}, ErrRouteDetailsUnsupported
+		if len(nodes) == 0 {
+			return Node{}, os.ErrNotExist
+		}
+		return nodes[0], nil
 	default:
 		return Node{}, ErrUnsupported
 	}
@@ -375,10 +376,17 @@ func (n *Net) List(ctx context.Context, loc ref.Locator) ([]Node, error) {
 		return []Node{}, nil
 
 	case targetRoute:
-		if n.Routes != nil {
-			return n.Routes(ctx, loc)
+		if isRouteLeaf(loc.Target, ifi) {
+			nodes, rErr := n.fetchRouteNodes(ctx, loc, ifi)
+			if rErr != nil {
+				return nil, rErr
+			}
+			if len(nodes) == 0 {
+				return nil, os.ErrNotExist
+			}
+			return []Node{}, nil
 		}
-		return nil, ErrRouteDetailsUnsupported
+		return n.fetchRouteNodes(ctx, loc, ifi)
 
 	default:
 		return nil, ErrUnsupported
@@ -411,8 +419,431 @@ func (n *Net) Open(ctx context.Context, loc ref.Locator) (io.ReadCloser, error) 
 
 // RouteDetails returns route rows, or ErrRouteDetailsUnsupported if platform APIs are unavailable.
 func (n *Net) RouteDetails(ctx context.Context, loc ref.Locator) ([]Node, error) {
+	return n.fetchRouteNodes(ctx, loc, nil)
+}
+
+func (n *Net) fetchRouteNodes(ctx context.Context, loc ref.Locator, ifi *net.Interface) ([]Node, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if n.Routes != nil {
 		return n.Routes(ctx, loc)
 	}
-	return nil, ErrRouteDetailsUnsupported
+	if n.RouteRunner == nil {
+		return nil, ErrRouteDetailsUnsupported
+	}
+	raw, err := n.RouteRunner(ctx)
+	if err != nil {
+		return nil, err
+	}
+	nodes, err := ParseRoutes(raw)
+	if err != nil {
+		return nil, err
+	}
+	return filterRouteNodes(nodes, loc, ifi), nil
+}
+
+func isRouteLeaf(target string, ifi *net.Interface) bool {
+	t := strings.TrimPrefix(target, "/")
+	t = strings.TrimPrefix(t, "interfaces/")
+	if ifi != nil {
+		t = strings.TrimPrefix(t, ifi.Name+"/")
+	}
+	t = strings.TrimPrefix(t, "routes/")
+	t = strings.TrimPrefix(t, "route/")
+	return t != "routes" && t != "route" && t != ""
+}
+
+func filterRouteNodes(nodes []Node, loc ref.Locator, ifi *net.Interface) []Node {
+	t := strings.TrimPrefix(loc.Target, "/")
+	t = strings.TrimPrefix(t, "interfaces/")
+	if ifi != nil {
+		t = strings.TrimPrefix(t, ifi.Name+"/")
+	}
+	t = strings.TrimPrefix(t, "routes/")
+	t = strings.TrimPrefix(t, "route/")
+
+	var filtered []Node
+	for _, node := range nodes {
+		if ifi != nil {
+			if node.Attrs["interface"] != ifi.Name {
+				continue
+			}
+		}
+		if t != "" && t != "routes" && t != "route" {
+			dest := fmt.Sprint(node.Attrs["destination"])
+			if node.Name != t && dest != t {
+				if t == "default" && (dest == "0.0.0.0/0" || dest == "default") {
+					// match default
+				} else if strings.HasPrefix(node.Name, t+"-") {
+					// match disambiguated name
+				} else {
+					continue
+				}
+			}
+		}
+		filtered = append(filtered, node)
+	}
+	return filtered
+}
+
+type rawRoute struct {
+	Destination string
+	Gateway     string
+	Interface   string
+	Family      string
+	Flags       string
+	Metric      *int
+	Scope       string
+	Source      string
+	Genmask     string
+	Proto       string
+}
+
+func buildRouteNodes(routes []rawRoute) []Node {
+	destCount := make(map[string]int, len(routes))
+	for _, r := range routes {
+		destCount[r.Destination]++
+	}
+
+	nodes := make([]Node, 0, len(routes))
+	usedNames := make(map[string]int, len(routes))
+
+	for _, r := range routes {
+		base := r.Destination
+		if destCount[r.Destination] > 1 && r.Interface != "" {
+			base = r.Destination + "-" + r.Interface
+		}
+		name := base
+		if count := usedNames[base]; count > 0 {
+			name = fmt.Sprintf("%s-%d", base, count+1)
+		}
+		usedNames[base]++
+
+		attrs := map[string]any{
+			"destination": r.Destination,
+			"gateway":     r.Gateway,
+			"interface":   r.Interface,
+		}
+		if r.Family != "" {
+			attrs["family"] = r.Family
+		}
+		if r.Flags != "" {
+			attrs["flags"] = r.Flags
+		}
+		if r.Metric != nil {
+			attrs["metric"] = *r.Metric
+		}
+		if r.Scope != "" {
+			attrs["scope"] = r.Scope
+		}
+		if r.Source != "" {
+			attrs["source"] = r.Source
+		}
+		if r.Genmask != "" {
+			attrs["genmask"] = r.Genmask
+		}
+		if r.Proto != "" {
+			attrs["proto"] = r.Proto
+		}
+
+		nodes = append(nodes, Node{
+			SchemaVersion: NodeSchema,
+			Ref:           "net:routes/" + name,
+			Path:          "routes/" + name,
+			Name:          name,
+			Kind:          "route",
+			Type:          "route",
+			Attrs:         attrs,
+		})
+	}
+
+	sort.Slice(nodes, func(i, j int) bool {
+		di := fmt.Sprint(nodes[i].Attrs["destination"])
+		dj := fmt.Sprint(nodes[j].Attrs["destination"])
+		if di != dj {
+			return di < dj
+		}
+		ii := fmt.Sprint(nodes[i].Attrs["interface"])
+		ij := fmt.Sprint(nodes[j].Attrs["interface"])
+		if ii != ij {
+			return ii < ij
+		}
+		gi := fmt.Sprint(nodes[i].Attrs["gateway"])
+		gj := fmt.Sprint(nodes[j].Attrs["gateway"])
+		if gi != gj {
+			return gi < gj
+		}
+		return nodes[i].Name < nodes[j].Name
+	})
+
+	return nodes
+}
+
+// ParseIPRoute parses Linux 'ip route show' or 'ip -6 route show' text output.
+func ParseIPRoute(output string) ([]Node, error) {
+	var routes []rawRoute
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		tokens := strings.Fields(line)
+		if len(tokens) == 0 {
+			continue
+		}
+
+		switch tokens[0] {
+		case "unicast", "local", "broadcast", "multicast", "throw", "unreachable", "prohibit", "blackhole", "nat":
+			tokens = tokens[1:]
+			if len(tokens) == 0 {
+				continue
+			}
+		}
+
+		dest := tokens[0]
+		tokens = tokens[1:]
+
+		var gw, iface, proto, scope, src string
+		var metric *int
+
+		for i := 0; i < len(tokens); i++ {
+			switch tokens[i] {
+			case "via":
+				if i+1 < len(tokens) {
+					gw = tokens[i+1]
+					i++
+				}
+			case "dev":
+				if i+1 < len(tokens) {
+					iface = tokens[i+1]
+					i++
+				}
+			case "proto":
+				if i+1 < len(tokens) {
+					proto = tokens[i+1]
+					i++
+				}
+			case "scope":
+				if i+1 < len(tokens) {
+					scope = tokens[i+1]
+					i++
+				}
+			case "src":
+				if i+1 < len(tokens) {
+					src = tokens[i+1]
+					i++
+				}
+			case "metric":
+				if i+1 < len(tokens) {
+					if m, err := strconv.Atoi(tokens[i+1]); err == nil {
+						metric = &m
+					}
+					i++
+				}
+			}
+		}
+
+		family := "ipv4"
+		if strings.Contains(dest, ":") || strings.Contains(gw, ":") {
+			family = "ipv6"
+		}
+
+		routes = append(routes, rawRoute{
+			Destination: dest,
+			Gateway:     gw,
+			Interface:   iface,
+			Family:      family,
+			Metric:      metric,
+			Scope:       scope,
+			Source:      src,
+			Proto:       proto,
+		})
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return buildRouteNodes(routes), nil
+}
+
+// ParseNetstatDarwin parses macOS/BSD 'netstat -rn' text output.
+func ParseNetstatDarwin(output string) ([]Node, error) {
+	var routes []rawRoute
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	currentFamily := "ipv4"
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "Routing tables") {
+			continue
+		}
+		if strings.HasPrefix(line, "Internet:") {
+			currentFamily = "ipv4"
+			continue
+		}
+		if strings.HasPrefix(line, "Internet6:") {
+			currentFamily = "ipv6"
+			continue
+		}
+		if strings.HasPrefix(line, "Destination") {
+			continue
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+
+		dest := fields[0]
+		gw := fields[1]
+		flags := fields[2]
+		iface := fields[3]
+
+		family := currentFamily
+		if strings.Contains(dest, ":") || strings.Contains(gw, ":") {
+			family = "ipv6"
+		}
+
+		routes = append(routes, rawRoute{
+			Destination: dest,
+			Gateway:     gw,
+			Interface:   iface,
+			Family:      family,
+			Flags:       flags,
+		})
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return buildRouteNodes(routes), nil
+}
+
+// ParseNetstatLinux parses Linux 'netstat -rn' text output.
+func ParseNetstatLinux(output string) ([]Node, error) {
+	var routes []rawRoute
+	scanner := bufio.NewScanner(strings.NewReader(output))
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "Kernel IP routing table") {
+			continue
+		}
+		if strings.HasPrefix(line, "Destination") {
+			continue
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) < 8 {
+			continue
+		}
+
+		dest := fields[0]
+		gw := fields[1]
+		genmask := fields[2]
+		flags := fields[3]
+		iface := fields[7]
+
+		if dest == "0.0.0.0" && genmask == "0.0.0.0" {
+			dest = "default"
+		}
+
+		routes = append(routes, rawRoute{
+			Destination: dest,
+			Gateway:     gw,
+			Interface:   iface,
+			Family:      "ipv4",
+			Flags:       flags,
+			Genmask:     genmask,
+		})
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return buildRouteNodes(routes), nil
+}
+
+// ParseRoutes autodetects the route table format and parses it into Nodes.
+func ParseRoutes(output string) ([]Node, error) {
+	if strings.Contains(output, "Kernel IP routing table") || (strings.Contains(output, "Genmask") && strings.Contains(output, "Iface")) {
+		return ParseNetstatLinux(output)
+	}
+	if strings.Contains(output, "Routing tables") || strings.Contains(output, "Internet:") || strings.Contains(output, "Internet6:") || strings.Contains(output, "Netif") {
+		return ParseNetstatDarwin(output)
+	}
+	nodes, err := ParseIPRoute(output)
+	if err == nil && len(nodes) > 0 {
+		return nodes, nil
+	}
+	darwinNodes, dErr := ParseNetstatDarwin(output)
+	if dErr == nil && len(darwinNodes) > 0 {
+		return darwinNodes, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return nodes, nil
+}
+
+func defaultRouteRunner(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	var runnerErr error
+	run := func(bin string, args ...string) (string, error) {
+		path, err := exec.LookPath(bin)
+		if err != nil {
+			return "", err
+		}
+		cmd := exec.CommandContext(ctx, path, args...)
+		out, err := cmd.Output()
+		if err != nil {
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			return "", err
+		}
+		return string(out), nil
+	}
+
+	if runtime.GOOS == "linux" {
+		if out, err := run("ip", "route", "show"); err == nil {
+			return out, nil
+		} else if ctx.Err() != nil {
+			return "", ctx.Err()
+		} else {
+			runnerErr = err
+		}
+		if out, err := run("netstat", "-rn"); err == nil {
+			return out, nil
+		} else if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+	} else if runtime.GOOS == "darwin" || strings.HasSuffix(runtime.GOOS, "bsd") {
+		if out, err := run("netstat", "-rn"); err == nil {
+			return out, nil
+		} else if ctx.Err() != nil {
+			return "", ctx.Err()
+		} else {
+			runnerErr = err
+		}
+	} else {
+		if out, err := run("netstat", "-rn"); err == nil {
+			return out, nil
+		} else if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		if out, err := run("ip", "route"); err == nil {
+			return out, nil
+		} else if ctx.Err() != nil {
+			return "", ctx.Err()
+		} else {
+			runnerErr = err
+		}
+	}
+
+	if runnerErr != nil {
+		return "", fmt.Errorf("%w: %v", ErrRouteDetailsUnsupported, runnerErr)
+	}
+	return "", ErrRouteDetailsUnsupported
 }

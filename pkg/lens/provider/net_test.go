@@ -387,8 +387,329 @@ func TestNetLiveHost(t *testing.T) {
 		t.Errorf("Open on live host err = %v, want ErrUnsupported", err)
 	}
 
-	// Routes returns ErrUnsupported on standard pure-Go
-	if _, err := p.Stat(ctx, ref.Locator{Scheme: "net", Target: "routes"}); !errors.Is(err, ErrUnsupported) {
-		t.Errorf("Stat routes on live host err = %v, want ErrUnsupported", err)
+	// Routes: live host routes or graceful ErrUnsupported
+	routeNode, err := p.Stat(ctx, ref.Locator{Scheme: "net", Target: "routes"})
+	if err == nil {
+		if routeNode.Kind != "route" {
+			t.Errorf("Stat routes kind = %s, want route", routeNode.Kind)
+		}
+		routes, err := p.List(ctx, ref.Locator{Scheme: "net", Target: "routes"})
+		if err != nil {
+			t.Fatalf("List routes: %v", err)
+		}
+		if len(routes) == 0 {
+			t.Logf("List routes returned 0 routes")
+		}
+		edges, err := p.Edges(ctx, ref.Locator{Scheme: "net", Target: "routes"})
+		if err != nil {
+			t.Fatalf("Edges routes: %v", err)
+		}
+		if len(edges) != len(routes) {
+			t.Errorf("Edges routes len = %d, want %d", len(edges), len(routes))
+		}
+	} else if !errors.Is(err, ErrUnsupported) {
+		t.Errorf("Stat routes on live host err = %v, want nil or ErrUnsupported", err)
+	}
+}
+
+const fixtureLinuxIPRoute = `default via 192.168.1.1 dev eth0 proto dhcp metric 100
+10.0.0.0/8 via 10.0.0.1 dev eth1 proto static
+192.168.1.0/24 dev eth0 proto kernel scope link src 192.168.1.10 metric 100
+169.254.0.0/16 dev eth0 scope link metric 1000
+fe80::/64 dev eth0 proto kernel metric 256 pref medium
+default via fe80::1 dev eth0 proto ra metric 1024 pref medium`
+
+const fixtureLinuxNetstat = `Kernel IP routing table
+Destination     Gateway         Genmask         Flags   MSS Window  irtt Iface
+0.0.0.0         192.168.1.1     0.0.0.0         UG        0 0          0 eth0
+10.0.0.0        10.0.0.1        255.0.0.0       UG        0 0          0 eth1
+192.168.1.0     0.0.0.0         255.255.255.0   U         0 0          0 eth0`
+
+const fixtureDarwinNetstat = `Routing tables
+
+Internet:
+Destination        Gateway            Flags               Netif Expire
+default            192.168.1.1        UGScg                 en0
+10.0.0/24          link#15            UCS                   en0      !
+127.0.0.1          127.0.0.1          UH                    lo0
+
+Internet6:
+Destination        Gateway            Flags               Netif Expire
+default            fe80::%utun0       UGcIg               utun0
+::1                ::1                UHL                   lo0
+fe80::%lo0/64      fe80::1%lo0        UcI                   lo0       `
+
+func TestNetPlatformRoutesLinuxIPRoute(t *testing.T) {
+	nodes, err := ParseIPRoute(fixtureLinuxIPRoute)
+	if err != nil {
+		t.Fatalf("ParseIPRoute: %v", err)
+	}
+	if len(nodes) != 6 {
+		t.Fatalf("len(nodes) = %d, want 6", len(nodes))
+	}
+
+	// Verify deterministic sorting and fields
+	var defaultIPv4, defaultIPv6 *Node
+	for i := range nodes {
+		if nodes[i].Kind != "route" || nodes[i].Type != "route" {
+			t.Errorf("node[%d] Kind/Type = %s/%s, want route/route", i, nodes[i].Kind, nodes[i].Type)
+		}
+		if nodes[i].Attrs["destination"] == "default" {
+			if nodes[i].Attrs["family"] == "ipv4" {
+				defaultIPv4 = &nodes[i]
+			} else if nodes[i].Attrs["family"] == "ipv6" {
+				defaultIPv6 = &nodes[i]
+			}
+		}
+	}
+
+	if defaultIPv4 == nil {
+		t.Fatal("missing default IPv4 route")
+	}
+	if defaultIPv4.Attrs["gateway"] != "192.168.1.1" || defaultIPv4.Attrs["interface"] != "eth0" {
+		t.Errorf("defaultIPv4 attrs = %+v", defaultIPv4.Attrs)
+	}
+	if defaultIPv4.Attrs["metric"] != 100 {
+		t.Errorf("defaultIPv4 metric = %v, want 100", defaultIPv4.Attrs["metric"])
+	}
+
+	if defaultIPv6 == nil {
+		t.Fatal("missing default IPv6 route")
+	}
+	if defaultIPv6.Attrs["gateway"] != "fe80::1" || defaultIPv6.Attrs["interface"] != "eth0" {
+		t.Errorf("defaultIPv6 attrs = %+v", defaultIPv6.Attrs)
+	}
+	if defaultIPv6.Attrs["metric"] != 1024 {
+		t.Errorf("defaultIPv6 metric = %v, want 1024", defaultIPv6.Attrs["metric"])
+	}
+
+	// Also verify ParseRoutes auto-detects it
+	autoNodes, err := ParseRoutes(fixtureLinuxIPRoute)
+	if err != nil {
+		t.Fatalf("ParseRoutes: %v", err)
+	}
+	if len(autoNodes) != len(nodes) {
+		t.Errorf("autoNodes len = %d, want %d", len(autoNodes), len(nodes))
+	}
+}
+
+func TestNetPlatformRoutesLinuxNetstat(t *testing.T) {
+	nodes, err := ParseNetstatLinux(fixtureLinuxNetstat)
+	if err != nil {
+		t.Fatalf("ParseNetstatLinux: %v", err)
+	}
+	if len(nodes) != 3 {
+		t.Fatalf("len(nodes) = %d, want 3", len(nodes))
+	}
+
+	var defaultRoute *Node
+	for i := range nodes {
+		if nodes[i].Attrs["destination"] == "default" {
+			defaultRoute = &nodes[i]
+			break
+		}
+	}
+	if defaultRoute == nil {
+		t.Fatal("missing default route in Linux netstat output")
+	}
+	if defaultRoute.Attrs["gateway"] != "192.168.1.1" || defaultRoute.Attrs["flags"] != "UG" || defaultRoute.Attrs["interface"] != "eth0" {
+		t.Errorf("defaultRoute attrs = %+v", defaultRoute.Attrs)
+	}
+
+	// Auto-detection
+	autoNodes, err := ParseRoutes(fixtureLinuxNetstat)
+	if err != nil {
+		t.Fatalf("ParseRoutes auto: %v", err)
+	}
+	if len(autoNodes) != 3 {
+		t.Errorf("len(autoNodes) = %d, want 3", len(autoNodes))
+	}
+}
+
+func TestNetPlatformRoutesDarwinNetstat(t *testing.T) {
+	nodes, err := ParseNetstatDarwin(fixtureDarwinNetstat)
+	if err != nil {
+		t.Fatalf("ParseNetstatDarwin: %v", err)
+	}
+	if len(nodes) != 6 {
+		t.Fatalf("len(nodes) = %d, want 6", len(nodes))
+	}
+
+	var foundDefaultV4, foundDefaultV6 bool
+	for _, n := range nodes {
+		if n.Attrs["destination"] == "default" {
+			if n.Attrs["interface"] == "en0" && n.Attrs["family"] == "ipv4" {
+				foundDefaultV4 = true
+				if n.Attrs["gateway"] != "192.168.1.1" || n.Attrs["flags"] != "UGScg" {
+					t.Errorf("en0 default attrs = %+v", n.Attrs)
+				}
+			}
+			if n.Attrs["interface"] == "utun0" && n.Attrs["family"] == "ipv6" {
+				foundDefaultV6 = true
+				if n.Attrs["gateway"] != "fe80::%utun0" || n.Attrs["flags"] != "UGcIg" {
+					t.Errorf("utun0 default attrs = %+v", n.Attrs)
+				}
+			}
+		}
+	}
+	if !foundDefaultV4 {
+		t.Error("missing Darwin IPv4 default route")
+	}
+	if !foundDefaultV6 {
+		t.Error("missing Darwin IPv6 default route")
+	}
+
+	// Auto-detection
+	autoNodes, err := ParseRoutes(fixtureDarwinNetstat)
+	if err != nil {
+		t.Fatalf("ParseRoutes Darwin auto: %v", err)
+	}
+	if len(autoNodes) != 6 {
+		t.Errorf("len(autoNodes) = %d, want 6", len(autoNodes))
+	}
+}
+
+func TestNetRouteEdgesAndInterfaceScoping(t *testing.T) {
+	ctx := context.Background()
+	p := newTestNetProvider()
+	p.RouteRunner = func(ctx context.Context) (string, error) {
+		return fixtureLinuxIPRoute, nil
+	}
+
+	// 1. List all routes
+	routesLoc := ref.Locator{Scheme: "net", Target: "routes"}
+	allRoutes, err := p.List(ctx, routesLoc)
+	if err != nil {
+		t.Fatalf("List routes: %v", err)
+	}
+	if len(allRoutes) != 6 {
+		t.Fatalf("len(allRoutes) = %d, want 6", len(allRoutes))
+	}
+
+	// 2. Edges from net:routes
+	routeEdges, err := p.Edges(ctx, routesLoc)
+	if err != nil {
+		t.Fatalf("Edges routes: %v", err)
+	}
+	if len(routeEdges) != 6 {
+		t.Fatalf("len(routeEdges) = %d, want 6", len(routeEdges))
+	}
+	for i, e := range routeEdges {
+		if e.SchemaVersion != EdgeSchema || e.Src != "net:routes" || e.Rel != "contains" || e.Dst != allRoutes[i].Ref {
+			t.Errorf("routeEdges[%d] = %+v, want Src=net:routes Dst=%s", i, e, allRoutes[i].Ref)
+		}
+	}
+
+	// 3. Interface scoping: eth1/routes
+	eth1RoutesLoc := ref.Locator{Scheme: "net", Target: "eth1/routes"}
+	eth1Routes, err := p.List(ctx, eth1RoutesLoc)
+	if err != nil {
+		t.Fatalf("List eth1/routes: %v", err)
+	}
+	if len(eth1Routes) != 1 {
+		t.Fatalf("len(eth1Routes) = %d, want 1", len(eth1Routes))
+	}
+	if eth1Routes[0].Attrs["destination"] != "10.0.0.0/8" || eth1Routes[0].Attrs["interface"] != "eth1" {
+		t.Errorf("unexpected eth1 route: %+v", eth1Routes[0])
+	}
+
+	// Edges from eth1/routes
+	eth1Edges, err := p.Edges(ctx, eth1RoutesLoc)
+	if err != nil {
+		t.Fatalf("Edges eth1/routes: %v", err)
+	}
+	if len(eth1Edges) != 1 || eth1Edges[0].Src != "net:eth1/routes" || eth1Edges[0].Dst != eth1Routes[0].Ref {
+		t.Errorf("unexpected eth1Edges: %+v", eth1Edges)
+	}
+
+	// 4. Interface scoping: eth0/routes
+	eth0RoutesLoc := ref.Locator{Scheme: "net", Target: "eth0/routes"}
+	eth0Routes, err := p.List(ctx, eth0RoutesLoc)
+	if err != nil {
+		t.Fatalf("List eth0/routes: %v", err)
+	}
+	if len(eth0Routes) != 5 {
+		t.Fatalf("len(eth0Routes) = %d, want 5", len(eth0Routes))
+	}
+
+	// 5. Stat specific route
+	statSpecific, err := p.Stat(ctx, ref.Locator{Scheme: "net", Target: "eth0/routes/192.168.1.0/24"})
+	if err != nil {
+		t.Fatalf("Stat specific route: %v", err)
+	}
+	if statSpecific.Attrs["destination"] != "192.168.1.0/24" {
+		t.Errorf("statSpecific destination = %v", statSpecific.Attrs["destination"])
+	}
+
+	// Specific route leaf List returns empty
+	leafList, err := p.List(ctx, ref.Locator{Scheme: "net", Target: "eth0/routes/192.168.1.0/24"})
+	if err != nil {
+		t.Fatalf("List specific route leaf: %v", err)
+	}
+	if len(leafList) != 0 {
+		t.Errorf("leafList len = %d, want 0", len(leafList))
+	}
+
+	// Specific route on wrong interface returns os.ErrNotExist
+	if _, err := p.Stat(ctx, ref.Locator{Scheme: "net", Target: "eth1/routes/192.168.1.0/24"}); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("Stat route on wrong interface err = %v, want os.ErrNotExist", err)
+	}
+
+	// RouteDetails
+	detailNodes, err := p.RouteDetails(ctx, routesLoc)
+	if err != nil {
+		t.Fatalf("RouteDetails: %v", err)
+	}
+	if len(detailNodes) != 6 {
+		t.Errorf("len(detailNodes) = %d, want 6", len(detailNodes))
+	}
+}
+
+func TestNetRouteErrorsAndGracefulFallback(t *testing.T) {
+	ctx := context.Background()
+
+	// 1. RouteRunner error
+	pErr := newTestNetProvider()
+	pErr.RouteRunner = func(ctx context.Context) (string, error) {
+		return "", errors.New("exec: command not found")
+	}
+	if _, err := pErr.Stat(ctx, ref.Locator{Scheme: "net", Target: "routes"}); err == nil {
+		t.Fatal("Stat with failing RouteRunner expected error")
+	}
+
+	// 2. Context canceled
+	pCanceled := newTestNetProvider()
+	pCanceled.RouteRunner = func(ctx context.Context) (string, error) {
+		return fixtureLinuxIPRoute, nil
+	}
+	cancCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := pCanceled.Stat(cancCtx, ref.Locator{Scheme: "net", Target: "routes"}); !errors.Is(err, context.Canceled) {
+		t.Errorf("Stat canceled context err = %v, want context.Canceled", err)
+	}
+
+	// 3. Empty route output
+	pEmpty := newTestNetProvider()
+	pEmpty.RouteRunner = func(ctx context.Context) (string, error) {
+		return "   \n\n  ", nil
+	}
+	if _, err := pEmpty.Stat(ctx, ref.Locator{Scheme: "net", Target: "routes"}); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("Stat empty routes err = %v, want os.ErrNotExist", err)
+	}
+	emptyList, err := pEmpty.List(ctx, ref.Locator{Scheme: "net", Target: "routes"})
+	if err != nil {
+		t.Fatalf("List empty routes: %v", err)
+	}
+	if len(emptyList) != 0 {
+		t.Errorf("len(emptyList) = %d, want 0", len(emptyList))
+	}
+
+	// 4. Non-existent route
+	pOk := newTestNetProvider()
+	pOk.RouteRunner = func(ctx context.Context) (string, error) {
+		return fixtureLinuxIPRoute, nil
+	}
+	if _, err := pOk.Stat(ctx, ref.Locator{Scheme: "net", Target: "routes/99.99.99.99"}); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("Stat non-existent route err = %v, want os.ErrNotExist", err)
 	}
 }
