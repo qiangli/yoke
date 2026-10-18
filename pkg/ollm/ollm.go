@@ -21,26 +21,6 @@ type Client struct {
 	baseURL string
 }
 
-// Completer is the small opt-in completion seam used by kb ask.
-type Completer interface {
-	Complete(context.Context, string) (string, error)
-}
-
-// Complete asks a local Ollama model for one non-streamed completion.
-func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
-	model := strings.TrimSpace(os.Getenv("BASHY_ASK_MODEL"))
-	if model == "" {
-		model = "llama3.2"
-	}
-	stream := false
-	var answer strings.Builder
-	err := c.inner.Generate(ctx, &api.GenerateRequest{Model: model, Prompt: prompt, Stream: &stream}, func(r api.GenerateResponse) error {
-		answer.WriteString(r.Response)
-		return nil
-	})
-	return strings.TrimSpace(answer.String()), err
-}
-
 // Model describes a locally available model.
 type Model struct {
 	Name       string

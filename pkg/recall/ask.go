@@ -2,6 +2,7 @@ package recall
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -13,7 +14,6 @@ import (
 	"strings"
 
 	"github.com/qiangli/yoke/pkg/kb"
-	"github.com/qiangli/yoke/pkg/ollm"
 	"github.com/spf13/cobra"
 )
 
@@ -68,10 +68,15 @@ type askState struct {
 	Closed      bool              `json:"closed"`
 }
 
+// Completer supplies optional local reasoning without coupling recall to a model runtime.
+type Completer interface {
+	Complete(context.Context, string) (string, error)
+}
+
 type askDeps struct {
 	readers  []Reader
 	show     func(string, string) kb.ShowEnvelope
-	complete ollm.Completer
+	complete Completer
 	stateDir string
 }
 
@@ -81,7 +86,7 @@ func NewAskCmd(extra ...Reader) *cobra.Command {
 }
 
 // NewAskCmdWithCompleter injects the optional local completion seam.
-func NewAskCmdWithCompleter(c ollm.Completer, extra ...Reader) *cobra.Command {
+func NewAskCmdWithCompleter(c Completer, extra ...Reader) *cobra.Command {
 	return newAskCmd(askDeps{readers: append(askDefaultReaders(), extra...), complete: c})
 }
 
@@ -121,6 +126,9 @@ func newAskCmd(d askDeps) *cobra.Command {
 			}
 			if reasoner != "" && reasoner != "local" {
 				return fmt.Errorf("kb ask: unknown reasoner %q", reasoner)
+			}
+			if reasoner == "local" && d.complete == nil {
+				return fmt.Errorf("kb ask: no local reasoner wired")
 			}
 			if d.show == nil {
 				d.show = showAskRef
@@ -464,13 +472,6 @@ func printAsk(c *cobra.Command, value any, _ bool) error {
 
 func driveAsk(c *cobra.Command, st *askState, id string, step AskStep, d askDeps, asJSON bool) error {
 	completion := d.complete
-	if completion == nil {
-		client, err := ollm.NewClient(ollm.DefaultURL())
-		if err != nil {
-			return err
-		}
-		completion = client
-	}
 	for st.Round < st.MaxRounds && step.Coverage < st.MinCoverage && len(step.Contradictions) == 0 {
 		promptBytes, _ := json.Marshal(step)
 		followup, err := completion.Complete(c.Context(), "Suggest one short follow-up search query for the unanswered parts of this question. Return only the query. Evidence step: "+string(promptBytes))

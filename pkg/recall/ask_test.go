@@ -166,11 +166,16 @@ func (m *askStubModel) Complete(_ context.Context, _ string) (string, error) {
 	return "beta", nil
 }
 func TestAskLocalReasonerDrivesSameRounds(t *testing.T) {
-	root := isolateRecallStores(t)
+	isolateRecallStores(t)
 	model := &askStubModel{}
 	reader := askQueryReader{}
-	d := askDeps{readers: []Reader{reader}, stateDir: filepath.Join(root, "ask"), complete: model, show: func(ref, ring string) kb.ShowEnvelope { return kb.ShowEnvelope{Ref: ref, Outcome: "found"} }}
-	cmd := newAskCmd(d)
+	cmd := NewAskCmdWithCompleter(model, reader)
+	store := kb.Open(kb.DefaultDir())
+	for _, slug := range []string{"alpha", "beta"} {
+		if err := store.Write(&kb.Page{Slug: slug, Type: kb.TypeLesson, Title: slug, Description: slug, Status: kb.StatusValidated}, "add"); err != nil {
+			t.Fatal(err)
+		}
+	}
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetArgs([]string{"alpha beta", "--reasoner", "local", "--json"})
@@ -184,9 +189,26 @@ func TestAskLocalReasonerDrivesSameRounds(t *testing.T) {
 	if model.calls != 1 || final.Abstained || final.Coverage != 1 || len(final.Citations) != 2 {
 		t.Fatalf("calls=%d final=%+v", model.calls, final)
 	}
-	st, err := loadAsk(d.stateDir, final.Session)
+	st, err := loadAsk(filepath.Join(filepath.Dir(kb.DefaultDir()), "ask"), final.Session)
 	if err != nil || !st.Closed || st.Round != 2 {
 		t.Fatalf("state=%+v err=%v", st, err)
+	}
+}
+
+func TestAskLocalReasonerRequiresCompleter(t *testing.T) {
+	root := isolateRecallStores(t)
+	cmd := NewAskCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"alpha beta", "--reasoner", "local", "--json"})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "no local reasoner wired") {
+		t.Fatalf("error = %v", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("unexpected output: %s", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "ask")); !os.IsNotExist(err) {
+		t.Fatalf("ask state created without a completer: %v", err)
 	}
 }
 
