@@ -38,16 +38,19 @@ package bus
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/google/uuid"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/qiangli/yoke/pkg/agentpty"
 	"github.com/qiangli/yoke/pkg/fleet"
@@ -431,7 +434,10 @@ func Posts() ([]Post, error) {
 		return nil, err
 	}
 	defer f.Close()
+	return readPosts(f)
+}
 
+func readPosts(f *os.File) ([]Post, error) {
 	var out []Post
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
@@ -473,12 +479,98 @@ func Unseen(reader string, limit int) (directed, other []Post, older int, err er
 	return unseen(reader, limit, newAudienceSnapshot())
 }
 
+// HintUnseen samples only the complete tail of the board for the per-command
+// advisory hint. incomplete means older unread records may exist; callers must
+// not use this result as an inbox or advance a cursor from it. Unseen remains
+// the authoritative, uncapped read.
+func HintUnseen(reader string) (directed, other []Post, incomplete bool, err error) {
+	const tailLimit = 64 * 1024
+	seen := SeenSeq(reader)
+	f, err := os.Open(postsPath())
+	if os.IsNotExist(err) {
+		return nil, nil, false, nil
+	}
+	if err != nil {
+		return nil, nil, false, err
+	}
+	defer f.Close()
+	before, err := f.Stat()
+	if err != nil {
+		return nil, nil, false, err
+	}
+	base := before.Size() - tailLimit
+	if base < 0 {
+		base = 0
+	}
+	tail := make([]byte, int(before.Size()-base))
+	if len(tail) > 0 {
+		if _, err := f.ReadAt(tail, base); err != nil {
+			return nil, nil, false, err
+		}
+	}
+	incomplete = base > 0
+	if base > 0 {
+		if first := bytes.IndexByte(tail, '\n'); first >= 0 {
+			tail = tail[first+1:]
+		} else {
+			tail = nil
+		}
+	}
+	concerns := DeclaredConcerns(reader)
+	audiences := newAudienceSnapshot()
+	firstValid := true
+	for _, line := range bytes.Split(tail, []byte{'\n'}) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		var p Post
+		if json.Unmarshal(line, &p) != nil {
+			incomplete = true
+			continue
+		}
+		if firstValid {
+			firstValid = false
+			if p.Seq <= seen {
+				incomplete = false
+			}
+		}
+		if p.Seq <= seen {
+			continue
+		}
+		onConcern := p.OnConcern(concerns)
+		if !onConcern && !p.forReader(reader, audiences) {
+			continue
+		}
+		inAudience := p.Audience != nil && !p.Audience.Empty() && audiences.inAudience(*p.Audience, reader)
+		if p.Directed(reader) {
+			directed = append(directed, p)
+		} else if onConcern || inAudience || p.Broadcast() {
+			other = append(other, p)
+		}
+	}
+	after, err := os.Stat(postsPath())
+	if err != nil || !os.SameFile(before, after) || before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
+		return nil, nil, true, nil
+	}
+	return directed, other, incomplete, nil
+}
+
 func unseen(reader string, limit int, audiences audienceSnapshot) (directed, other []Post, older int, err error) {
-	all, e := Posts()
+	at := SeenSeq(reader)
+	if at > 0 {
+		atHead, err := boardHeadAtOrBefore(at)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		if atHead {
+			return nil, nil, 0, nil
+		}
+	}
+	all, e := postsAfter(at)
 	if e != nil {
 		return nil, nil, 0, e
 	}
-	at := SeenSeq(reader)
 	concerns := DeclaredConcerns(reader)
 	var concerned, rest []Post
 	for _, p := range all {
@@ -509,6 +601,108 @@ func unseen(reader string, limit int, audiences audienceSnapshot) (directed, oth
 	}
 	other = mergeBySeq(concerned, rest)
 	return directed, other, older, nil
+}
+
+// postsAfter skips the historical prefix only when a bounded tail probe finds
+// the reader's cursor. The fallback keeps the full board authoritative for old
+// cursors, unusually large posts, and damaged tails.
+func postsAfter(seen int64) ([]Post, error) {
+	if seen <= 0 {
+		return Posts()
+	}
+	f, err := os.Open(postsPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	const tailLimit = 64 * 1024
+	base := info.Size() - tailLimit
+	if base < 0 {
+		base = 0
+	}
+	tail := make([]byte, int(info.Size()-base))
+	if _, err := f.ReadAt(tail, base); err != nil && err != io.EOF {
+		return nil, err
+	}
+	// Search complete lines backward. A malformed line cannot establish a
+	// cursor boundary, but remains harmless in the forward reader below.
+	for end := len(tail); end > 0; {
+		lineEnd := end
+		if tail[lineEnd-1] == '\n' {
+			lineEnd--
+		}
+		start := bytes.LastIndexByte(tail[:lineEnd], '\n') + 1
+		if start > 0 || base == 0 {
+			var p Post
+			if json.Unmarshal(bytes.TrimSpace(tail[start:lineEnd]), &p) == nil && p.Seq > 0 && p.Seq <= seen {
+				after, statErr := os.Stat(postsPath())
+				if statErr == nil && os.SameFile(info, after) && info.Size() == after.Size() && info.ModTime().Equal(after.ModTime()) {
+					if _, err := f.Seek(base+int64(end), io.SeekStart); err != nil {
+						return nil, err
+					}
+					return readPosts(f)
+				}
+				break
+			}
+		}
+		end = start
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	return readPosts(f)
+}
+
+// boardHeadAtOrBefore is a cheap empty-inbox check for the per-command hint.
+// The board assigns increasing sequences under its append lock, so a reader
+// already at the last complete post cannot have an unseen earlier post. If the
+// tail is partial, oversized, or changes during the probe, use the full reader.
+func boardHeadAtOrBefore(seen int64) (bool, error) {
+	f, err := os.Open(postsPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	defer f.Close()
+	before, err := f.Stat()
+	if err != nil {
+		return false, err
+	}
+	if before.Size() == 0 {
+		return true, nil
+	}
+	const tailLimit = 64 * 1024
+	n := before.Size()
+	if n > tailLimit {
+		n = tailLimit
+	}
+	tail := make([]byte, int(n))
+	if _, err := f.ReadAt(tail, before.Size()-n); err != nil {
+		return false, err
+	}
+	end := len(bytes.TrimRight(tail, "\r\n"))
+	start := bytes.LastIndexByte(tail[:end], '\n') + 1
+	if before.Size() > n && start == 0 {
+		return false, nil
+	}
+	var last Post
+	if err := json.Unmarshal(tail[start:end], &last); err != nil || last.Seq <= 0 {
+		return false, nil
+	}
+	after, err := os.Stat(postsPath())
+	if err != nil || !os.SameFile(before, after) || before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
+		return false, nil
+	}
+	return last.Seq <= seen, nil
 }
 
 // mergeBySeq interleaves two seq-ordered slices back into board order, so the

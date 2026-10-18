@@ -1,14 +1,75 @@
 package bus
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
+
+// A hint must stay bounded even when the authoritative inbox has a long unread
+// backlog. Its recent result must still include a new directed arrival.
+func TestHintUnseenOldCursorNewArrivalIsBounded(t *testing.T) {
+	boardInTempHome(t)
+	f, err := os.Create(postsPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := bufio.NewWriter(f)
+	enc := json.NewEncoder(w)
+	for i := int64(1); i <= 12000; i++ {
+		if err := enc.Encode(Post{Seq: i, From: "other", To: "someone-else", Body: strings.Repeat("x", 2048)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := enc.Encode(Post{Seq: 12001, From: "manager", To: "reader", Body: "new mail"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := MarkSeen("reader", 1000); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	directed, other, incomplete, err := HintUnseen("reader")
+	elapsed := time.Since(start)
+	t.Logf("old cursor + one new arrival after 12000 posts: %s", elapsed)
+	if err != nil || len(directed) != 1 || directed[0].Seq != 12001 || len(other) != 0 || !incomplete {
+		t.Fatalf("HintUnseen = directed %v, other %v, incomplete %v, err %v", directed, other, incomplete, err)
+	}
+	if elapsed > 40*time.Millisecond {
+		t.Fatalf("old cursor hint took %s; want at most 40ms", elapsed)
+	}
+	if SeenSeq("reader") != 1000 {
+		t.Fatal("hint consumed mail")
+	}
+	if err := MarkSeen("reader2", 1000); err != nil {
+		t.Fatal(err)
+	}
+	if d, o, partial, err := HintUnseen("reader2"); err != nil || !partial || len(d)+len(o) != 0 {
+		t.Fatalf("older unread outside tail = %v, %v, incomplete %v, err %v", d, o, partial, err)
+	}
+	fullDirected, fullOther, _, err := Unseen("reader", 0)
+	if err != nil || len(fullDirected) != 1 || fullDirected[0].Seq != 12001 || len(fullOther) != 0 {
+		t.Fatalf("authoritative Unseen = %v, %v, %v", fullDirected, fullOther, err)
+	}
+	if err := MarkSeen("reader", 12001); err != nil {
+		t.Fatal(err)
+	}
+	if d, o, partial, err := HintUnseen("reader"); err != nil || partial || len(d)+len(o) != 0 {
+		t.Fatalf("caught-up hint = %v, %v, incomplete %v, err %v", d, o, partial, err)
+	}
+}
 
 func boardInTempHome(t *testing.T) {
 	t.Helper()
