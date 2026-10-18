@@ -16,7 +16,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/qiangli/coreutils/tool"
 	"github.com/qiangli/yoke/pkg/lens"
@@ -135,7 +137,17 @@ func listRows(asJSON bool) []byte {
 
 // write follows cat: a downstream reader that exits early (`| head -1`) is a
 // normal end, silent and exit 0, unless the shell ignores SIGPIPE.
+//
+// The Go runtime turns EPIPE on fd 1/2 into a raised SIGPIPE — a standalone
+// binary would die with 141 before seeing the error — unless SIGPIPE is under
+// signal.Notify. So the write holds a Notify for its duration, letting EPIPE
+// come back as an error; an inherited or host-set SIG_IGN is left alone.
 func write(rc *tool.RunContext, data []byte) int {
+	if _, isFile := rc.Out.(*os.File); isFile && !rc.SIGPIPEIgnored && !signal.Ignored(syscall.SIGPIPE) {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGPIPE)
+		defer signal.Stop(sig)
+	}
 	if _, err := rc.Out.Write(data); err != nil {
 		if tool.IsClosedPipeError(err) && !rc.SIGPIPEIgnored {
 			return 0

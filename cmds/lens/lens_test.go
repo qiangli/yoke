@@ -6,7 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -144,5 +146,46 @@ func TestPipeHygiene(t *testing.T) {
 	}
 	if code != 0 || errb.Len() != 0 {
 		t.Fatalf("code=%d err=%q", code, errb.String())
+	}
+}
+
+// TestPipeHygieneProcess is the standalone-binary half of `lens … | head -1`:
+// the in-process test above writes to a pipe that is not fd 1, where the Go
+// runtime never raises SIGPIPE. Here the test binary re-execs itself as lens
+// with stdout on fd 1, 200,000 CSV rows to JSON, and the reader closes after
+// the first line; lens must exit 0 (not 141) with nothing on stderr.
+func TestPipeHygieneProcess(t *testing.T) {
+	if os.Getenv("LENS_PIPE_CHILD") == "1" {
+		rc := &tool.RunContext{Ctx: context.Background(), Dir: ".", Stdio: tool.Stdio{Out: os.Stdout, Err: os.Stderr, In: os.Stdin}}
+		os.Exit(cmd.Run(rc, []string{"-f", "csv", "-t", "json"}))
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("SIGPIPE is a POSIX signal")
+	}
+	var rows strings.Builder
+	rows.WriteString("id,name\n")
+	for i := 0; i < 200000; i++ {
+		rows.WriteString("1,row\n")
+	}
+	c := exec.Command(os.Args[0], "-test.run=^TestPipeHygieneProcess$")
+	c.Env = append(os.Environ(), "LENS_PIPE_CHILD=1")
+	c.Stdin = strings.NewReader(rows.String())
+	var errb bytes.Buffer
+	c.Stderr = &errb
+	out, err := c.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	line, _ := bufio.NewReader(out).ReadString('\n')
+	out.Close()
+	err = c.Wait()
+	if line != "[\n" {
+		t.Fatalf("first line %q", line)
+	}
+	if err != nil || errb.Len() != 0 {
+		t.Fatalf("lens | head -1: %v (exit %d) stderr=%q", err, c.ProcessState.ExitCode(), errb.String())
 	}
 }
