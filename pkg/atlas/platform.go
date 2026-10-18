@@ -168,13 +168,17 @@ var externalPlatforms = map[string]ExternalPlatform{
 	"uv":   {OS: allOS, WindowsAsset: "uv-x86_64-pc-windows-msvc.zip (external/python)"},
 	"pwsh": {OS: allOS, WindowsAsset: "PowerShell-7.6.6-win-x64.zip / PowerShell-7.6.6-win-arm64.zip (external/pwsh)"},
 	// declarative registry CLIs (external/registry)
-	"doctl":  {OS: allOS, WindowsAsset: "doctl-*-windows-amd64.zip"},
-	"gcloud": {OS: allOS, WindowsAsset: "vendor installer (PreferHost); google-cloud-cli-windows-x86_64.zip"},
-	"gitea":  {OS: allOS, WindowsAsset: "gitea-*-windows-4.0-amd64.exe"},
-	"gws":    {OS: allOS, WindowsAsset: "google-workspace-cli-x86_64-pc-windows-msvc.zip"},
-	"ollama": {OS: allOS, WindowsAsset: "bashy-signed embedded runner only (no download per docs/bashy-service-supply-chain-policy.md)"},
-	"rg":     {OS: allOS, WindowsAsset: "ripgrep-*-x86_64-pc-windows-msvc.zip"},
-	"tofu":   {OS: allOS, WindowsAsset: "tofu_*_windows_amd64.zip"},
+	"doctl":      {OS: allOS, WindowsAsset: "doctl-*-windows-amd64.zip"},
+	"gcloud":     {OS: allOS, WindowsAsset: "vendor installer (PreferHost); google-cloud-cli-windows-x86_64.zip"},
+	"gitea":      {OS: allOS, WindowsAsset: "gitea-*-windows-4.0-amd64.exe"},
+	"gws":        {OS: allOS, WindowsAsset: "google-workspace-cli-x86_64-pc-windows-msvc.zip"},
+	"psql":       {OS: allOS, WindowsAsset: "host-only client (PreferHost); EDB/PostgreSQL windows client install"},
+	"mongosh":    {OS: allOS, WindowsAsset: "host-only client (PreferHost); mongosh-*-win32-x64.zip"},
+	"valkey-cli": {OS: allOS, WindowsAsset: "host-only client (PreferHost); no official windows build — unverified, reachable via WSL"},
+	"snow":       {OS: allOS, WindowsAsset: "host-only client (PreferHost); snowflake-cli via pipx"},
+	"ollama":     {OS: allOS, WindowsAsset: "bashy-signed embedded runner only (no download per docs/bashy-service-supply-chain-policy.md)"},
+	"rg":         {OS: allOS, WindowsAsset: "ripgrep-*-x86_64-pc-windows-msvc.zip"},
+	"tofu":       {OS: allOS, WindowsAsset: "tofu_*_windows_amd64.zip"},
 }
 
 // ExternalPlatforms returns the declared platform support of a bin-managed

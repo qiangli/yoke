@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [host/page] Playbook: run a multi-agent planning meeting with bashy meet — How to run a design review / decision / cross-agent planning session with 'bashy meet' instead of separate one-off agent sessions: the start -> round -> /decision + /action -> close loop, a dedicated notes-only secretary, and minutes filed to docs/meetin  (kb:playbook-run-a-multi-agent-planning-meeting-with-bashy-meet)
+- [host/page] never pkill on an outpost host — WHEN tempted to kill a stuck process on any outpost-paired machine - never pkill/killall by pattern The outpost daemon is the ONLY remote path to the machine; a pattern kill takes it down with the target and you lose the host. Find the exact pid, confirm its command line, kill that one pid - or better, use the o  (kb:never-pkill-on-an-outpost-host)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 
