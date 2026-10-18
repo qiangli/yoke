@@ -13,6 +13,14 @@ const docTestJSON = `{"name":"yoke","count":3,"tags":["a","b"],"nested":{"flag":
 
 const docTestYAML = "name: yoke\ncount: 3\ntags:\n  - a\n  - b\nnested:\n  flag: true\n  nothing: null\n"
 
+func TestDocumentRejectsTrailingJSON(t *testing.T) {
+	file := docWriteTemp(t, "bad.json", `{"one":1} {"two":2}`)
+	_, err := NewJSONProvider().Stat(context.Background(), ref.Locator{Scheme: "json", Target: file})
+	if err == nil {
+		t.Fatal("multiple JSON documents were accepted as one")
+	}
+}
+
 func docWriteTemp(t *testing.T, name, content string) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), name)

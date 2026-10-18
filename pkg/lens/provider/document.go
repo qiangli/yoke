@@ -20,6 +20,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -31,6 +32,7 @@ import (
 // documents. Scheme is "json" or "yaml" and selects the decoder.
 type DocumentProvider struct {
 	Scheme string
+	Root   string // base for relative file targets; absolute targets are unchanged
 }
 
 // NewJSONProvider returns a DocumentProvider decoding "json" locators.
@@ -60,6 +62,9 @@ func (p *DocumentProvider) docDecode(target string) (any, error) {
 	if target == "" {
 		return nil, fmt.Errorf("provider: %s: empty target", p.docScheme())
 	}
+	if p != nil && p.Root != "" && !filepath.IsAbs(target) {
+		target = filepath.Join(p.Root, target)
+	}
 	raw, err := os.ReadFile(target)
 	if err != nil {
 		return nil, err
@@ -76,6 +81,13 @@ func (p *DocumentProvider) docDecode(target string) (any, error) {
 		dec.UseNumber()
 		var v any
 		if err := dec.Decode(&v); err != nil {
+			return nil, err
+		}
+		var trailing any
+		if err := dec.Decode(&trailing); err != io.EOF {
+			if err == nil {
+				return nil, fmt.Errorf("provider: json: trailing document")
+			}
 			return nil, err
 		}
 		return docNormalize(v), nil
