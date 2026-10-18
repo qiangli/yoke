@@ -350,6 +350,7 @@ var packages = map[string]Package{
 	"recommend": supPkg("the shell's did-you-mean; reached on command-not-found, never typed"),
 	"scope":     supPkg("the git-repo-aware store resolver shared by every store"),
 	"unit":      supPkg("the one contract and receipt vocabulary shared by skills and dag"),
+	"vocablint": supPkg("test-only blocking vocabulary lint for command flags and subverbs; it has no runtime command surface"),
 	"weavecli":  supPkg("the agent-friendly CLI conventions every front-door verb tree adopts"),
 
 	// --- unwired: capability that reaches nothing ---------------------------
