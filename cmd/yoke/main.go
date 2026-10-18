@@ -18,7 +18,9 @@ import (
 	"github.com/qiangli/coreutils/multicall"
 	"github.com/qiangli/coreutils/tool"
 	dbcmd "github.com/qiangli/yoke/cmds/db"
+	lenscmd "github.com/qiangli/yoke/cmds/lens"
 	"github.com/qiangli/yoke/mcp"
+	"github.com/qiangli/yoke/pkg/weave"
 	"mvdan.cc/sh/v3/interp/ownedexec"
 
 	_ "github.com/qiangli/yoke/cmds/all"
@@ -29,6 +31,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(126)
 	}
+	// Standalone lens supervision reads the same durable run store as Bashy.
+	weave.RegisterRefs(lenscmd.AgentWorldRefs)
 	// Only the `yoke mcp` front-end form starts the server; when the binary
 	// is symlinked to a tool name, `mcp` is just that tool's operand.
 	base := strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe")
