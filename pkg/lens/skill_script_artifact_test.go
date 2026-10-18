@@ -134,6 +134,16 @@ func TestScriptArtifact(t *testing.T) {
 	}
 	wantExit(t, errDangling, ExitInvalid)
 
+	// A symlink used as the store directory must not redirect artifacts.
+	linkedStore := filepath.Join(t.TempDir(), "linked-store")
+	if err := os.Symlink(symlinkDir, linkedStore); err == nil {
+		_, _, errLinked := StoreScriptArtifact(linkedStore, script)
+		if errLinked == nil {
+			t.Fatal("StoreScriptArtifact accepted a symlink store directory")
+		}
+		wantExit(t, errLinked, ExitInvalid)
+	}
+
 	// 7. Rejection: preexisting directory at artifact path fails closed.
 	subDirColl := t.TempDir()
 	if err := os.Mkdir(filepath.Join(subDirColl, wantName), 0o755); err != nil {

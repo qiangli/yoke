@@ -48,6 +48,14 @@ func StoreScriptArtifact(dir string, script []byte) (name string, digest string,
 	name = ScriptArtifactName(script)
 	digest = ScriptArtifactDigest(script)
 	target := filepath.Join(dir, name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", "", err
+	}
+	if info, err := os.Lstat(dir); err != nil {
+		return "", "", err
+	} else if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return "", "", errorf(ExitInvalid, "script artifact directory is not a real directory")
+	}
 
 	// Check whether an object already exists at the target path.
 	// os.Lstat is required so symlinks are never followed.
@@ -71,12 +79,8 @@ func StoreScriptArtifact(dir string, script []byte) (name string, digest string,
 		return "", "", statErr
 	}
 
-	// Target does not exist; ensure target directory exists.
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", "", err
-	}
-
-	// Atomic write: write to a temporary file in dir, then rename into place.
+	// Write a temporary file in the same directory, then publish it without
+	// replacing any existing object.
 	tmp, err := os.CreateTemp(dir, ".tmp-script-*")
 	if err != nil {
 		return "", "", err
@@ -100,25 +104,9 @@ func StoreScriptArtifact(dir string, script []byte) (name string, digest string,
 		return "", "", err
 	}
 
-	// Re-check target before rename to handle racing writers or concurrent changes.
-	if fi, statErr := os.Lstat(target); statErr == nil {
-		if fi.Mode()&os.ModeSymlink != 0 {
-			return "", "", errorf(ExitInvalid, "script artifact %s is a symlink", name)
-		}
-		if !fi.Mode().IsRegular() {
-			return "", "", errorf(ExitInvalid, "script artifact %s is not a regular file", name)
-		}
-		existing, readErr := os.ReadFile(target)
-		if readErr != nil {
-			return "", "", readErr
-		}
-		if !bytes.Equal(existing, script) {
-			return "", "", errorf(ExitInvalid, "script artifact %s exists with differing content", name)
-		}
-		return name, digest, nil
-	}
-
-	if err := os.Rename(tmpName, target); err != nil {
+	// Link creates the final name atomically without replacing an object that
+	// appeared after the first Lstat. Rename would overwrite that object.
+	if err := os.Link(tmpName, target); err != nil {
 		// A concurrent writer of the same content may have won the race.
 		if fi, statErr := os.Lstat(target); statErr == nil {
 			if fi.Mode()&os.ModeSymlink != 0 {
@@ -135,7 +123,6 @@ func StoreScriptArtifact(dir string, script []byte) (name string, digest string,
 		}
 		return "", "", err
 	}
-	tmpName = ""
 
 	return name, digest, nil
 }
