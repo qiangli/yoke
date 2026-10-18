@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -299,6 +300,98 @@ func ValidK8sContext(name string) bool {
 		}
 	}
 	return true
+}
+
+func parseCloudDroplets(data []byte) ([]platformRecord, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var items []map[string]any
+	if err := dec.Decode(&items); err != nil {
+		return nil, fmt.Errorf("cloud recipe: %w", err)
+	}
+	rows := make([]platformRecord, 0, len(items))
+	for _, item := range items {
+		id, err := parseCloudDropletID(firstNonNil(item, "id", "ID", "Id"))
+		if err != nil {
+			return nil, err
+		}
+		name := firstString(item, "name", "Name")
+		if name == "" {
+			name = id
+		}
+		rows = append(rows, platformRecord{id: id, name: name, kind: "droplet", typ: "cloud/droplet", attrs: map[string]any{
+			"status": firstString(item, "status", "Status"),
+		}})
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].id < rows[j].id })
+	return rows, nil
+}
+
+// parseCloudDropletID resolves a droplet id to its canonical uint64 form.
+// Numbers arrive as json.Number (the decoder uses UseNumber, so large ids
+// keep full precision); quoted digits are accepted too. Null, missing,
+// non-numeric, negative, fractional, and overflowing ids are rejected before
+// any row is emitted.
+func parseCloudDropletID(v any) (string, error) {
+	var s string
+	switch t := v.(type) {
+	case nil:
+		return "", fmt.Errorf("cloud recipe: missing droplet id")
+	case json.Number:
+		s = t.String()
+	case string:
+		s = t
+	default:
+		return "", fmt.Errorf("cloud recipe: invalid droplet id of type %T", v)
+	}
+	n, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return "", fmt.Errorf("cloud recipe: invalid droplet id %q", s)
+	}
+	return strconv.FormatUint(n, 10), nil
+}
+
+func firstNonNil(m map[string]any, keys ...string) any {
+	for _, key := range keys {
+		if v, ok := m[key]; ok && v != nil {
+			return v
+		}
+	}
+	return nil
+}
+
+// ValidCloudContext reports whether name is acceptable as a literal doctl
+// --context value: non-empty, bounded, no leading dash, no control or space.
+func ValidCloudContext(name string) bool {
+	if name == "" || len(name) > 253 || name[0] == '-' {
+		return false
+	}
+	for _, r := range name {
+		if r <= ' ' || r == 0x7f || r == '=' {
+			return false
+		}
+	}
+	return true
+}
+
+// NewCloudDropletsRecipe lists droplets from exactly the named doctl context.
+// The context is passed as a literal --context argument; there is no ambient
+// DIGITALOCEAN_CONTEXT fallback, nothing is ever written to the cloud, and an
+// invalid name is refused before any command runs.
+func NewCloudDropletsRecipe(cloudContext string, run recipeRunner) (Recipe, error) {
+	if !ValidCloudContext(cloudContext) {
+		return Recipe{}, fmt.Errorf("cloud recipe: invalid or missing @cloud context %q", cloudContext)
+	}
+	if run == nil {
+		run = runRecipe
+	}
+	return scopedPlatformRecipe("cloud", "cloud", cloudContext, "droplets", func(ctx context.Context) ([]platformRecord, error) {
+		data, err := run(ctx, "doctl", "--context", cloudContext, "compute", "droplet", "list", "--output", "json")
+		if err != nil {
+			return nil, err
+		}
+		return parseCloudDroplets(data)
+	}), nil
 }
 
 // NewK8sScopedRecipe lists pods from exactly the named kubectl context. The
