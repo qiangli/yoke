@@ -1565,3 +1565,7 @@ tags.cncf.io/container-device-interface v1.1.0 h1:RnxNhxF1JOu6CJUVpetTYvrXHdxw9j
 tags.cncf.io/container-device-interface v1.1.0/go.mod h1:76Oj0Yqp9FwTx/pySDc8Bxjpg+VqXfDb50cKAXVJ34Q=
 tags.cncf.io/container-device-interface/specs-go v1.1.0 h1:QRZVeAceQM+zTZe12eyfuJuuzp524EKYwhmvLd+h+yQ=
 tags.cncf.io/container-device-interface/specs-go v1.1.0/go.mod h1:u86hoFWqnh3hWz3esofRFKbI261bUlvUfLKGrDhJkgQ=
+github.com/qiangli/coreutils v0.0.0-20261018024844-02b24ff1db5d h1:eCLO0HWO/Fa9d27smal1wxUjVB+UQ1X8xJ+x4wyyPKs=
+github.com/qiangli/coreutils v0.0.0-20261018024844-02b24ff1db5d/go.mod h1:nP8R/LOBZFHjHvzgE+TX3nASmemDaiMjOnei+YPuxq8=
+github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261018024844-02b24ff1db5d h1:ZNPgc5QZ+q/3CpNVGnWq7cJcmly44c+rdvVGdMfVDYo=
+github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261018024844-02b24ff1db5d/go.mod h1:p0JkVxHS3JKYxDz8kOYvMdPM8YRH94vZoWaFljD1vAg=
