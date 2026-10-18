@@ -130,14 +130,14 @@ func TestCmdMalformedInputs(t *testing.T) {
 		{"cmd:tar-tv", "notamode user/group 1024 2026-10-18 12:00 file"},      // invalid mode
 		{"cmd:tar-tv", "-rw-r--r-- user/group badsize 2026-10-18 12:00 file"}, // invalid size
 		// ip-route
-		{"cmd:ip-route", "default via"},                  // via without gateway
-		{"cmd:ip-route", "10.0.0.0/24 dev"},               // dev without interface
-		{"cmd:ip-route", "default metric"},               // metric without value
-		{"cmd:ip-route", "broadcast"},                    // type without destination
+		{"cmd:ip-route", "default via"},     // via without gateway
+		{"cmd:ip-route", "10.0.0.0/24 dev"}, // dev without interface
+		{"cmd:ip-route", "default metric"},  // metric without value
+		{"cmd:ip-route", "broadcast"},       // type without destination
 		// netstat-rn
-		{"cmd:netstat-rn", "no header here\ndefault 1.1.1.1 UG en0"},              // missing header
+		{"cmd:netstat-rn", "no header here\ndefault 1.1.1.1 UG en0"},               // missing header
 		{"cmd:netstat-rn", "Destination Gateway Flags Netif\ndefault 192.168.1.1"}, // insufficient columns
-		{"cmd:netstat-rn", "Destination Gateway Flags Netif\ndefault"},            // truncated row
+		{"cmd:netstat-rn", "Destination Gateway Flags Netif\ndefault"},             // truncated row
 	}
 
 	for i, tc := range cases {

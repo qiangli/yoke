@@ -16,7 +16,7 @@ func TestDocumentAndASTProvidersThroughLens(t *testing.T) {
 		"data.json": `{"items":[{"name":"first"}]}`,
 		"data.yaml": "items:\n  - name: first\n",
 		"sample.go": "package sample\nfunc Example() {}\n",
-		"notes.md": "# Plan\n## Next step\n",
+		"notes.md":  "# Plan\n## Next step\n",
 	} {
 		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
