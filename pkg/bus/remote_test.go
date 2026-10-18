@@ -172,6 +172,9 @@ func TestRemotePathHint(t *testing.T) {
 }
 
 func TestSendRemoteAbsolutePathHint(t *testing.T) {
+	isolate(t)
+	mb := t.TempDir()
+	t.Setenv("BASHY_MB_DIR", mb)
 	wireRemote(t, nil)
 	t.Setenv("BASHY_HOME", t.TempDir())
 	res, err := Send(SendRequest{From: "tester", To: "plinth@noviwin1", Body: "read /Users/me/x.go"})
