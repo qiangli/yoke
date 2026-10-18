@@ -257,7 +257,7 @@ func readBoard(cmd *cobra.Command, o boardRead) error {
 		if jsonOut {
 			enc := json.NewEncoder(w)
 			for _, p := range posts {
-				if eerr := enc.Encode(p); eerr != nil {
+				if eerr := enc.Encode(withRefs(p)); eerr != nil {
 					return eerr
 				}
 			}
@@ -283,7 +283,11 @@ func readBoard(cmd *cobra.Command, o boardRead) error {
 						to += " [" + strings.Join(v, ", ") + "]"
 					}
 				}
-				fmt.Fprintf(w, "- [mb:%d] **%s** from `%s` → %s\n  %s\n\n", p.Seq, p.Topic, p.From, to, p.Body)
+				fmt.Fprintf(w, "- [mb:%d] **%s** from `%s` → %s\n  %s\n", p.Seq, p.Topic, p.From, to, p.Body)
+				if line := refsLine(MessageLocators(p.Body, p.From)); line != "" {
+					fmt.Fprintf(w, "  %s\n", line)
+				}
+				fmt.Fprintln(w)
 			}
 			fmt.Fprint(w, nextSteps(posts, labels, who))
 			if older > 0 {
@@ -346,8 +350,8 @@ func newMBShowCmd() *cobra.Command {
 			if jsonOut {
 				out := struct {
 					Ref string `json:"ref"`
-					Post
-				}{Ref: ref.Format(ref.MB, fmt.Sprint(p.Seq)), Post: p}
+					postWithRefs
+				}{Ref: ref.Format(ref.MB, fmt.Sprint(p.Seq)), postWithRefs: withRefs(p)}
 				enc := json.NewEncoder(w)
 				enc.SetIndent("", "  ")
 				return enc.Encode(out)
@@ -358,6 +362,9 @@ func newMBShowCmd() *cobra.Command {
 			}
 			if body := strings.TrimSpace(p.Body); body != "" {
 				fmt.Fprintf(w, "\n%s\n", body)
+			}
+			if line := refsLine(MessageLocators(p.Body, p.From)); line != "" {
+				fmt.Fprintf(w, "\n%s\n", line)
 			}
 			return nil
 		},
