@@ -45,6 +45,12 @@ func (s *Session) ServeControl(ctx context.Context, ready chan<- string) error {
 	if err := s.store.Ensure(); err != nil {
 		return err
 	}
+	// Record who serves the socket before it exists, while no turn can hold
+	// s.mu: it is what lets Terminate stop this process if it stops answering.
+	s.mu.Lock()
+	s.state = withServeProcess(s.state)
+	s.persistLocked()
+	s.mu.Unlock()
 	_ = os.Remove(path)
 	ln, err := net.Listen("unix", path)
 	if err != nil {

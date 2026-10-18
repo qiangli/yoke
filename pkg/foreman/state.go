@@ -50,6 +50,12 @@ type State struct {
 	MaxRuntime  string    `json:"max_runtime,omitempty"`
 	Deadline    time.Time `json:"deadline,omitempty"`
 	StopReason  string    `json:"stop_reason,omitempty"`
+	// ServePID and ServeStart name the process serving the control socket:
+	// its pid and that pid's kernel start identity. A stop sent over the socket
+	// cannot reach a serve process that stopped answering it, and a pid alone
+	// can be recycled, so Terminate signals only when both still match.
+	ServePID   int    `json:"serve_pid,omitempty"`
+	ServeStart string `json:"serve_start,omitempty"`
 	// OpeningSendOnce is persisted because a detached start is reopened by the
 	// serve subprocess before it launches the agent.
 	OpeningSendOnce bool `json:"opening_send_once,omitempty"`

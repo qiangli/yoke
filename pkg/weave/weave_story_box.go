@@ -426,6 +426,9 @@ func newSprintInstructCmd() *cobra.Command {
 				}
 				cwd, _ := os.Getwd()
 				note, _, err := ensureSprintOwnerSession(cmd.Context(), id, owner, instruction, cwd, time.Until(box.Cutoff))
+				if err != nil && sprintOwnerStalled(err) {
+					note, err = recoverStalledSprintOwner(cmd.Context(), s, owner, instruction, cwd, time.Until(box.Cutoff), err)
+				}
 				if err != nil {
 					return fmt.Errorf("sprint #%d instruction was not delivered: %w", id, err)
 				}

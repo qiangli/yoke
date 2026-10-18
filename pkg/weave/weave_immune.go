@@ -353,7 +353,12 @@ func runQuotaImmuneTick(cmd *cobra.Command, _ string, dir string, dryRun bool) (
 	if err != nil {
 		return actions, err
 	}
-	return append(actions, managerActions...), nil
+	actions = append(actions, managerActions...)
+	silent, err := checkSilentSprintManagers(now, dryRun)
+	if err != nil {
+		return actions, err
+	}
+	return append(actions, silent...), nil
 }
 
 func recordRunQuotaImmune(dir string, id int64, a quotaImmuneAssessment, now time.Time, policy llmbudget.ImmuneSettings) (bool, error) {
