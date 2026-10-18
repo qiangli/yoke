@@ -1,43 +1,69 @@
 # Sprint 453 lifecycle evidence — story d40c135c3627 / #2260
 
-Candidate: worker `codex-gpt6-sol`, weave yoke#351. This is a **safe checkpoint**, not a delivery or acceptance claim. The same story and binding resume after the Sprint 446 S11 locator dependency publishes. No umbrella, bashy or manager changes are included here.
+Worker: `codex-gpt6-sol`, weave yoke#351. The delivery branch is rebased onto
+yoke main `2111a999` (Sprint 446 S6/S11). This is the one shared evidence
+record for the candidate. Manager remote gates and the sequential Bashy
+typed-MCP bridge/pin are still outstanding; no story acceptance is claimed
+from development-host tests.
 
-## Acceptance map and current evidence
+## Acceptance map
 
-| Contract row | Implemented checkpoint | Focused evidence | Remaining before acceptance |
-|---|---|---|---|
-| T1 lifecycle | Typed `dblifecycle.Service` over the existing adapters; registered `db` tool with explicit flag-form target, create/show/check/backup/restore/drop, register/unregister/list; SQLite quick check; no create on missing show/drop/restore. Restore requires existing target, `--replace` and `--yes`. | `TestRegisteredLifecycleCommand` passed before the coreutils schema call was added; `TestSQLiteLifecycleBackupRestore`, `TestSQLiteMemoryNativeBackupRestore`, `TestBboltNativeBackupReopens`, `TestBackupPublicationPreservesCompetingDestination` pass after current changes. | Re-run command dispatch after 446 S6 coreutils pin; S11 locator/alias wiring; real binary CLI/MCP smoke. Backend category stories own data verbs and logical interchange. Bleve/Bonsai native backup and bbolt native restore remain explicitly unsupported. |
-| T2 lifetime and restart | Explicit owner holds `dbstore.MemSpace` in RAM; persistent bbolt reopens after owner crash; old memory session returns `lifetime_ended`. | `TestPersistentOwnerRestartAndMemoryOwnerLoss` passes with a real owner subprocess. | Remote Windows/native host run and full touched-package gate. |
-| T9 owner sessions | Explicit session start/attach/list/show/stop CLI; Unix socket in 0700 directory with 0600 socket and bearer metadata; Windows named pipe with current-account/SYSTEM DACL and no metadata bearer token; bounded request reads/deadlines; 1024-result request-id replay window in owner RAM; two-minute attached-client handles, expiry, explicit detach, busy stop; no claim of exactly-once across owner failure or eviction. | `TestOwnerMemoryLifetimeAndReplay`, `TestOwnerAttachmentsAndBusyStop`, `TestExpiredAttachmentRejected`, `TestOwnerMutationAdmissionCancellation` pass. Tests use real independent owner/client test processes where stated. | Run actual multicall binary and MCP sessions on manager remote host; verify Windows named-pipe ACL and restart; inspect cancellation/timeout paths under native execution. |
-| T10 exclusive use | Canonical `dbstore.Resolve` identity; existing `coord` kind `db`, claim epoch and backend exclusive adapter open; nested claim reuse; failure-safe release of newly acquired claim; owner checks presented epoch; stale release closes native handle without releasing successor claim; whole-database scope; no force. Per-target owner admission allows concurrent reads, serializes destructive work, and observes context/wait. | `TestOwnerHoldFencesOtherProcess`, `TestPersistentAliasCannotBypassOwnerHold`, `TestStaleOwnerHoldClosesBackendWithoutReleasingSuccessor` pass with independent processes/episodes and a path alias. | Direct CLI/MCP hold/release smoke and remote native gate; registration alias access after S11; more backend-specific busy/exclusion evidence belongs to each backend story. Bonsai read-only opens remain cooperative per adapter evidence, never claimed as native non-Bashy exclusion. |
+| Row | Delivered path | Evidence and limit |
+|---|---|---|
+| T1 lifecycle | `pkg/dblifecycle.Service` and registered `db` command implement explicit create, register/unregister, list, show, check, backup, restore and drop. The target can be flags, an S11-encoded `db:` locator or a registered resource name/alias; `dbstore.Resolve` canonicalizes the claim identity. Missing show/drop/restore do not create data; restore requires an existing target plus `--replace --yes`. SQLite check is `quick_check`; other engines report `open_only`. | Focused command dispatcher, SQLite native round trip, memory SQLite and bbolt snapshot tests below. Backend category stories own data verbs and logical export/import. Native backup works for SQLite in both modes and persistent bbolt. Native restore works for SQLite in both modes. bbolt memory native backup, bbolt native restore and Bleve/Bonsai native backup/restore return `unsupported` with a reason. |
+| T2 lifetime | Memory contents stay in owner `MemSpace`, never a temp-disk substitute; persistent bbolt reopens after owner process crash, while old memory session calls report `lifetime_ended`. | Existing `TestPersistentOwnerRestartAndMemoryOwnerLoss` uses independent processes; rerun on the claimed remote host. No one-shot CLI claims persistent memory. |
+| T9 sessions | Local authenticated IPC: Unix socket in 0700 directory, 0600 socket and token metadata; Windows named pipe DACL for current account and SYSTEM, no metadata token. Explicit start/attach/list/show/stop, attached-client presence/TTL and busy stop; request deadlines/cancellation, bounded mutation gate and 1024 successful-mutation replay entries in owner RAM. Start retains child ownership until ready; forced stop drains active request handlers before closing holds/memory. | `TestOwnerSessionOperationMetadata` and cancellation unit pass locally. Existing independent owner/client tests require remote rerun. Manager's Windows smoke on old checkpoint `114b6238` proved start → memory create/check → stop → old show `lifetime_ended`, and found stop metadata wrong; this candidate fixes the metadata and adds an actual stop-envelope assertion. Replay is only within one live owner and its bounded window; failures, eviction and owner loss do not provide exactly-once execution. |
+| T10 holds | Existing `coord` db resource kind and epoch claim; canonical path/alias identity; nested caller claim reuse; backend exclusive open and failure-safe claim release; owner checks epoch on access. Stale holder cleanup frees its native handle and map entry without releasing a successor claim. Owner admission is per target, with readers sharing; global hold map lock is not held over backend acquisition. `db hold TARGET -- CMD` starts or uses an explicit owner, passes session/epoch to the child and releases at child exit; plain hold returns session/epoch for explicit release. | Local claim/admission unit evidence and independent process tests below. Actual Bashy one-command hold and typed MCP require remote smoke. Adapter limitations remain: Bonsai persistent read-only opens are cooperative, so no non-Bashy native exclusion is claimed. No force takeover or distributed-lock claim. |
 
-## Development-host commands and raw outcomes
+The command emits `bashy-db-result-v1` and `bashy-db-error-v1` domain envelopes
+with `schema_version`, `mutation_class` and `effects[]`, preserving the 446
+domain-exit exception. `tool.PreviewLevel` is `local-preview`; `--explain`
+reports `explain-only`. Both previews leave a missing path absent. The
+single `declareFlags` source drives CLI parsing/help, `Schema()`/explain and
+the typed `MCPCommand()` projection. Generic MCP `run_tool` also invokes the
+same registered command. The typed direct tool is `db_lifecycle`; Bashy must
+append `dbcmd.MCPCommand()` to its existing registered MCP adapters while
+preserving generic `db` selection and policy.
 
-Dragon (darwin/arm64, Go from `go.mod`), focused tests only:
+## Focused development-host results
+
+Dragon, darwin/arm64, Go from `go.mod`; tests were short and native. Exact
+post-rebase commands run on this candidate's working tree:
 
 ```text
-go test -run TestSQLiteLifecycleBackupRestore -count=1 ./pkg/dblifecycle
-  PASS (before owner changes)
-go test -run TestRegisteredLifecycleCommand -count=1 ./cmds/db
-  PASS (before tool.SchemaFromFlags call)
-go test -run 'TestOwnerMemoryLifetimeAndReplay|TestOwnerHoldFencesOtherProcess|TestSQLiteLifecycleBackupRestore' -count=1 -timeout 30s ./pkg/dblifecycle
-  PASS
-go test -run 'TestPersistentOwnerRestartAndMemoryOwnerLoss|TestPersistentAliasCannotBypassOwnerHold' -count=1 -timeout 30s ./pkg/dblifecycle
-  PASS
-go test -run 'TestOwnerAttachmentsAndBusyStop|TestExpiredAttachmentRejected|TestPersistentOwnerRestartAndMemoryOwnerLoss|TestPersistentAliasCannotBypassOwnerHold' -count=1 -timeout 40s ./pkg/dblifecycle
-  PASS
-go test -run 'TestSQLiteMemoryNativeBackupRestore|TestBboltNativeBackupReopens' -count=1 -timeout 30s ./pkg/dblifecycle
-  FAIL first: SQLite memdb VACUUM INTO wrote no filesystem image; corrected to modernc native backup API for memory
-go test -run 'TestSQLiteMemoryNativeBackupRestore|TestBboltNativeBackupReopens|TestSQLiteLifecycleBackupRestore' -count=1 -timeout 25s ./pkg/dblifecycle
-  PASS after correction
+go test -count=1 -v -run TestRegisteredLifecycleCommand ./cmds/db
+  PASS; raw JSON/exits are logged by the test. Key sequence:
+  missing show 1/not_found, create 0, check 0/quick_check,
+  S11 encoded-locator show 0, backup 0,
+  restore missing 1/not_found (destination absent),
+  explicit create + restore --replace --yes 0,
+  unconfirmed drop 2/invalid_input, confirmed drop 0.
+go test -count=1 -run 'TestRegisteredLifecycleCommand|TestMCPRunToolLifecycleParity|TestTypedMCPDbLifecycle' ./cmds/db
+  PASS; in-memory MCP generic run_tool and typed db_lifecycle discovery/calls.
+go test -count=1 -run 'TestParseTargetUsesSharedLocator|TestSQLiteLifecycleBackupRestore|TestSQLiteMemoryNativeBackupRestore|TestBboltNativeBackupReopens|TestBackupPublicationPreservesCompetingDestination|TestOwnerMutationAdmissionCancellation|TestExpiredAttachmentRejected' ./pkg/dblifecycle
+  PASS.
+go test -count=1 -run 'TestOwnerSessionOperationMetadata|TestParseTargetUsesSharedLocator|TestSQLiteLifecycleBackupRestore|TestOwnerMutationAdmissionCancellation' ./pkg/dblifecycle
+  PASS after stop metadata correction.
 ```
 
-The current `cmds/db` build is **blocked** against yoke's pinned coreutils `cd33e2a` because it lacks `tool.SchemaFromFlags`; Sprint 446 S6 owns the pin update to coreutils `02b24ff1` and S11 owns `ref.ParseLocator`/`Locator.String`. No private parser/schema implementation or go.mod pin edit was made. The manager runs full touched packages, consumer checks and crossvet on a claimed remote host. This checkpoint has no such gate result.
+An earlier `go test -count=1 ./pkg/dblifecycle` passed in 2.437s on Dragon
+before these latest edits. It included independent process tests and is not
+used as the required remote acceptance gate. The manager owns the final
+touched-package, consumer and crossvet runs on a claimed remote host.
 
-## Known limitations and next action
+## Remote acceptance still owed
 
-- The current flag-form target works for typed lifecycle core, but S11 locator parsing and registered name/alias dereference are not wired. No default database, remote provider or implicit service is used.
-- Domain `bashy-db-result-v1`/`bashy-db-error-v1` envelopes carry `schema_version`, `mutation_class` and `effects`; shared loom-v2 applies only where the common native wrapper owns output. Backend category stories own their data verbs and logical export/import.
-- Owner attachment IDs expire after two minutes without use; one-shot operations without an attachment are transient. An owner loss invalidates its session and all RAM content. Dedup replay lasts 1024 successful mutations in one owner lifetime only.
-- Persistent SQLite uses native WAL sharing; bbolt/Bleve/Bonsai require owner sharing where their adapter caps say so. The existing adapter limitations in `docs/storage-adapters-evidence.md` remain constraints. This checkpoint has no claim of remote/distributed exclusion.
-- Next: commit checkpoint, yield worker351 so the same binding can run S11, then resume, rebase onto integrated yoke main, wire S11 locator/name resolution and updated coreutils schema, run command/MCP and remote evidence, finish this one story.
+- Build the candidate yoke/Bashy with the final yoke pin, then exercise actual
+  `bashy db` dispatch and stdio MCP `run_tool` plus typed `db_lifecycle`.
+- Rerun independent-process owner tests on a remote native host:
+  `TestOwnerMemoryLifetimeAndReplay`, `TestOwnerAttachmentsAndBusyStop`,
+  `TestOwnerHoldFencesOtherProcess`, `TestStaleOwnerHoldClosesBackendWithoutReleasingSuccessor`,
+  `TestPersistentOwnerRestartAndMemoryOwnerLoss`,
+  `TestPersistentAliasCannotBypassOwnerHold`. Test active-stop drain, wait
+  cancellation and `hold TARGET -- CMD` through actual built binaries.
+- Rerun Windows named-pipe owner smoke on this final candidate and assert the
+  corrected `session.stop` destructive envelope. Confirm current-account ACL.
+- Run manager's full touched packages, consumer checks and crossvet. The
+  adapter constraints in `docs/storage-adapters-evidence.md` apply; category
+  stories own data verbs and logical interchange. This story does not claim
+  their acceptance.

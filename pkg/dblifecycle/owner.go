@@ -178,14 +178,21 @@ func randomToken() (string, error) {
 // ReadSession distinguishes an ended owner from a never-held ID. It does not
 // reveal the authentication token.
 func ReadSession(id string) (SessionInfo, error) {
+	return ReadSessionContext(context.Background(), id)
+}
+
+func ReadSessionContext(ctx context.Context, id string) (SessionInfo, error) {
 	i, err := readInfo(id)
 	if err != nil {
 		return i, err
 	}
 	if i.State == "running" {
-		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-		conn, err := dialOwner(ctx, i.Address)
+		bounded, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+		conn, err := dialOwner(bounded, i.Address)
 		cancel()
+		if ctx.Err() != nil {
+			return SessionInfo{}, dbstore.FromContext(ctx.Err())
+		}
 		if err != nil {
 			i.State = "ended"
 			i.Address = ""
@@ -198,6 +205,12 @@ func ReadSession(id string) (SessionInfo, error) {
 }
 
 func ListSessions() ([]SessionInfo, error) {
+	return ListSessionsContext(context.Background())
+}
+
+func ListSessionsContext(ctx context.Context) ([]SessionInfo, error) {
+	bounded, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
 	d, err := sessionDir()
 	if err != nil {
 		return nil, err
@@ -211,11 +224,17 @@ func ListSessions() ([]SessionInfo, error) {
 	}
 	var out []SessionInfo
 	for _, e := range entries {
+		if err := bounded.Err(); err != nil {
+			return nil, dbstore.FromContext(err)
+		}
+		if len(out) >= 128 {
+			return nil, fmt.Errorf("%w: session list exceeds 128 entries", dbstore.ErrInvalidInput)
+		}
 		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
 			continue
 		}
 		id := e.Name()[:len(e.Name())-5]
-		i, err := ReadSession(id)
+		i, err := ReadSessionContext(bounded, id)
 		if err == nil {
 			out = append(out, i)
 		}
@@ -237,6 +256,15 @@ func Call(ctx context.Context, session string, req Request) (Response, error) {
 		return Response{}, fmt.Errorf("%w: session %s owner unavailable: %v", dbstore.ErrLifetimeEnded, session, err)
 	}
 	defer conn.Close()
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-done:
+		}
+	}()
 	deadline, ok := ctx.Deadline()
 	if !ok {
 		deadline = time.Now().Add(30 * time.Second)
@@ -251,6 +279,9 @@ func Call(ctx context.Context, session string, req Request) (Response, error) {
 	}
 	var res Response
 	if err := json.NewDecoder(conn).Decode(&res); err != nil {
+		if ctx.Err() != nil {
+			return Response{}, dbstore.FromContext(ctx.Err())
+		}
 		return Response{}, err
 	}
 	return res, nil
@@ -281,6 +312,7 @@ type owner struct {
 	admissionMu  sync.Mutex
 	admissions   map[string]*semaphore.Weighted
 	attachments  map[string]attachment
+	requests     sync.WaitGroup
 }
 
 // Serve starts the explicit owner in this process. ready is an owner-only
@@ -324,8 +356,12 @@ func Serve(ctx context.Context, ready string, idleTTL time.Duration) error {
 			}
 			continue
 		}
-		go o.handle(conn)
+		o.requests.Add(1)
+		go func() { defer o.requests.Done(); o.handle(conn) }()
 	}
+	// A forced stop rejects future connections, but in-flight requests retain
+	// their handles until they return or hit the per-connection deadline.
+	o.requests.Wait()
 	o.cleanupHolds()
 	o.mu.Lock()
 	o.info.State = "ended"
@@ -422,6 +458,7 @@ func (o *owner) handle(conn net.Conn) {
 }
 
 func (o *owner) executeReplay(ctx context.Context, req Request) Response {
+	spec := ownerSpec(req.Op, req.Target.Mode)
 	if req.Attachment != "" {
 		o.mu.Lock()
 		o.purgeAttachmentsLocked()
@@ -434,7 +471,7 @@ func (o *owner) executeReplay(ctx context.Context, req Request) Response {
 		}
 		o.mu.Unlock()
 		if !ok {
-			return failResponse(Response{Op: req.Op, MutationClass: Spec(req.Op, req.Target.Mode).MutationClass, Effects: Spec(req.Op, req.Target.Mode).Effects}, fmt.Errorf("%w: attachment expired or belongs to another client", dbstore.ErrInvalidInput))
+			return failResponse(Response{Op: spec.Name, MutationClass: spec.MutationClass, Effects: spec.Effects}, fmt.Errorf("%w: attachment expired or belongs to another client", dbstore.ErrInvalidInput))
 		}
 	}
 	mutating := req.Op == "create" || req.Op == "drop" || req.Op == "restore" || req.Op == "hold" || req.Op == "release"
@@ -443,7 +480,7 @@ func (o *owner) executeReplay(ctx context.Context, req Request) Response {
 	}
 	leave, err := o.mutationGate.Enter(ctx, req.Wait)
 	if err != nil {
-		return failResponse(Response{Op: req.Op, MutationClass: Spec(req.Op, req.Target.Mode).MutationClass, Effects: Spec(req.Op, req.Target.Mode).Effects}, err)
+		return failResponse(Response{Op: spec.Name, MutationClass: spec.MutationClass, Effects: spec.Effects}, err)
 	}
 	defer leave()
 	if req.RequestID == "" {
@@ -457,7 +494,7 @@ func (o *owner) executeReplay(ctx context.Context, req Request) Response {
 	digest := sha256.Sum256(b)
 	if old, ok := o.replay[key]; ok {
 		if old.digest != digest {
-			return failResponse(Response{Op: req.Op, MutationClass: "write", Effects: []string{"local.write"}}, fmt.Errorf("%w: request-id %q reused with different arguments", dbstore.ErrConflict, req.RequestID))
+			return failResponse(Response{Op: spec.Name, MutationClass: spec.MutationClass, Effects: spec.Effects}, fmt.Errorf("%w: request-id %q reused with different arguments", dbstore.ErrConflict, req.RequestID))
 		}
 		return old.response
 	}
@@ -473,9 +510,19 @@ func (o *owner) executeReplay(ctx context.Context, req Request) Response {
 	return res
 }
 
+func ownerSpec(op string, mode dbstore.Mode) Operation {
+	switch op {
+	case "attach", "detach", "stop":
+		return Spec("session."+op, mode)
+	case "status":
+		return Spec("session.show", mode)
+	}
+	return Spec(op, mode)
+}
+
 func (o *owner) execute(ctx context.Context, req Request) Response {
-	spec := Spec(req.Op, req.Target.Mode)
-	res := Response{SchemaVersion: "bashy-db-result-v1", OK: true, Op: req.Op, MutationClass: spec.MutationClass, Effects: spec.Effects, RequestID: req.RequestID}
+	spec := ownerSpec(req.Op, req.Target.Mode)
+	res := Response{SchemaVersion: "bashy-db-result-v1", OK: true, Op: spec.Name, MutationClass: spec.MutationClass, Effects: spec.Effects, RequestID: req.RequestID}
 	if req.Attachment != "" {
 		o.mu.Lock()
 		o.purgeAttachmentsLocked()
@@ -535,7 +582,7 @@ func (o *owner) execute(ctx context.Context, req Request) Response {
 			return failResponse(res, fmt.Errorf("%w: session has active requests or %d attached clients", dbstore.ErrBusy, attached))
 		}
 		res.Result = map[string]any{"session": o.info.ID, "databases_ended": o.memoryNames()}
-		go func() { time.Sleep(20 * time.Millisecond); _ = o.listener.Close() }()
+		_ = o.listener.Close()
 		return res
 	}
 	if req.Op == "hold" || req.Op == "release" {
@@ -561,20 +608,29 @@ func (o *owner) execute(ctx context.Context, req Request) Response {
 	o.holdMu.Lock()
 	held := o.holds[id.ID]
 	if held != nil {
-		if held.claim.holder.Episode != req.Holder.Episode || held.claim.holder.Name != req.Holder.Name {
-			o.holdMu.Unlock()
-			return failResponse(res, &coord.Conflict{Claim: held.claim.claim})
-		}
-		if req.Epoch == 0 || req.Epoch != held.Epoch {
-			o.holdMu.Unlock()
-			return failResponse(res, coord.ErrFenced)
-		}
-		if err := held.Check(ctx, req.Epoch); err != nil {
+		if err := held.Check(ctx, held.Epoch); err != nil {
+			if !errors.Is(err, coord.ErrFenced) && !errors.Is(err, coord.ErrNotHeld) {
+				o.holdMu.Unlock()
+				return failResponse(res, err)
+			}
+			wasHolder := held.claim.holder.Episode == req.Holder.Episode && held.claim.holder.Name == req.Holder.Name
 			_ = held.CloseBackend()
 			_ = held.claim.release()
 			delete(o.holds, id.ID)
-			o.holdMu.Unlock()
-			return failResponse(res, err)
+			held = nil
+			if wasHolder {
+				o.holdMu.Unlock()
+				return failResponse(res, coord.ErrFenced)
+			}
+		} else {
+			if held.claim.holder.Episode != req.Holder.Episode || held.claim.holder.Name != req.Holder.Name {
+				o.holdMu.Unlock()
+				return failResponse(res, &coord.Conflict{Claim: held.claim.claim})
+			}
+			if req.Epoch == 0 || req.Epoch != held.Epoch {
+				o.holdMu.Unlock()
+				return failResponse(res, coord.ErrFenced)
+			}
 		}
 	}
 	o.holdMu.Unlock()
@@ -691,8 +747,26 @@ func (o *owner) holdRequest(ctx context.Context, req Request, res Response) Resp
 	}
 	defer leave()
 	o.holdMu.Lock()
-	defer o.holdMu.Unlock()
-	if h := o.holds[id.ID]; h != nil {
+	h := o.holds[id.ID]
+	o.holdMu.Unlock()
+	if h != nil {
+		if err := h.Check(ctx, h.Epoch); err != nil {
+			if !errors.Is(err, coord.ErrFenced) && !errors.Is(err, coord.ErrNotHeld) {
+				return failResponse(res, err)
+			}
+			wasHolder := h.claim.holder.Episode == req.Holder.Episode && h.claim.holder.Name == req.Holder.Name
+			_ = h.CloseBackend()
+			_ = h.claim.release()
+			o.holdMu.Lock()
+			delete(o.holds, id.ID)
+			o.holdMu.Unlock()
+			if wasHolder {
+				return failResponse(res, coord.ErrFenced)
+			}
+			h = nil
+		}
+	}
+	if h != nil {
 		if h.claim.holder.Episode != req.Holder.Episode || h.claim.holder.Name != req.Holder.Name {
 			return failResponse(res, &coord.Conflict{Claim: h.claim.claim})
 		}
@@ -703,20 +777,17 @@ func (o *owner) holdRequest(ctx context.Context, req Request, res Response) Resp
 		if presented != h.Epoch {
 			return failResponse(res, coord.ErrFenced)
 		}
-		if err := h.Check(ctx, presented); err != nil {
-			_ = h.CloseBackend()
-			_ = h.claim.release()
-			delete(o.holds, id.ID)
-			return failResponse(res, err)
-		}
 		if req.Op == "hold" {
 			res.Result = map[string]any{"id": id.ID, "epoch": h.Epoch, "nested": true}
 			return res
 		}
-		if err := h.Release(ctx, req.Epoch); err != nil {
-			return failResponse(res, err)
-		}
+		releaseErr := h.Release(ctx, req.Epoch)
+		o.holdMu.Lock()
 		delete(o.holds, id.ID)
+		o.holdMu.Unlock()
+		if releaseErr != nil {
+			return failResponse(res, releaseErr)
+		}
 		res.Result = map[string]any{"id": id.ID, "released": true}
 		return res
 	}
@@ -724,11 +795,13 @@ func (o *owner) holdRequest(ctx context.Context, req Request, res Response) Resp
 		return failResponse(res, fmt.Errorf("%w: no owner hold on %s", dbstore.ErrNotFound, id.ID))
 	}
 	s := Service{Mem: o.mem, Holder: req.Holder}
-	h, err := s.AcquireHold(ctx, id.Target, req.Wait)
+	h, err = s.AcquireHold(ctx, id.Target, req.Wait)
 	if err != nil {
 		return failResponse(res, err)
 	}
+	o.holdMu.Lock()
 	o.holds[id.ID] = h
+	o.holdMu.Unlock()
 	res.Result = map[string]any{"id": id.ID, "epoch": h.Epoch, "nested": false, "scope": "database"}
 	return res
 }

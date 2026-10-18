@@ -57,7 +57,10 @@ func Spec(op string, mode dbstore.Mode) Operation {
 	case "session.stop":
 		s.MutationClass = "destructive"
 		s.Effects = []string{"proc.stop", "db.delete", "fs.write"}
-	case "session.attach", "session.show", "session.list":
+	case "session.attach", "session.detach":
+		s.MutationClass = "write"
+		s.Effects = []string{"db.write"}
+	case "session.show", "session.list":
 		s.Effects = []string{"fs.read"}
 	}
 	return s

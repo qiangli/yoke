@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -355,6 +356,22 @@ func TestOwnerAttachmentsAndBusyStop(t *testing.T) {
 	}
 	if r, e := Call(ctx, id, Request{Op: "stop"}); e != nil || !r.OK {
 		t.Fatalf("stop after detach: %+v %v", r, e)
+	} else if r.Op != "session.stop" || r.MutationClass != "destructive" || !slices.Contains(r.Effects, "proc.stop") {
+		t.Fatalf("stop envelope: %+v", r)
 	}
 	_ = cmd.Wait()
+}
+
+func TestOwnerSessionOperationMetadata(t *testing.T) {
+	for _, tt := range []struct{ op, name, class string }{
+		{"attach", "session.attach", "write"},
+		{"detach", "session.detach", "write"},
+		{"status", "session.show", "read"},
+		{"stop", "session.stop", "destructive"},
+	} {
+		s := ownerSpec(tt.op, "")
+		if s.Name != tt.name || s.MutationClass != tt.class {
+			t.Errorf("%s = %+v", tt.op, s)
+		}
+	}
 }

@@ -3,10 +3,12 @@ package dblifecycle
 import (
 	"context"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/qiangli/yoke/pkg/dbstore"
 	"github.com/qiangli/yoke/pkg/policy/coord"
+	"github.com/qiangli/yoke/pkg/ref"
 )
 
 type TargetInfo struct {
@@ -19,6 +21,9 @@ type TargetInfo struct {
 }
 
 func ViewTarget(id dbstore.Identity, locator string) TargetInfo {
+	if locator == "" && strings.HasPrefix(id.ID, "db:") {
+		locator = (ref.Locator{Scheme: "db", Target: strings.TrimPrefix(id.ID, "db:")}).String()
+	}
 	lifetime := "persistent"
 	if id.Mode == dbstore.Memory {
 		lifetime = "owner"

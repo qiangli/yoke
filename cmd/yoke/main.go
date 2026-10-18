@@ -17,6 +17,7 @@ import (
 
 	"github.com/qiangli/coreutils/multicall"
 	"github.com/qiangli/coreutils/tool"
+	dbcmd "github.com/qiangli/yoke/cmds/db"
 	"github.com/qiangli/yoke/mcp"
 	"mvdan.cc/sh/v3/interp/ownedexec"
 
@@ -32,7 +33,7 @@ func main() {
 	// is symlinked to a tool name, `mcp` is just that tool's operand.
 	base := strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe")
 	if base == "yoke" && len(os.Args) > 1 && os.Args[1] == "mcp" {
-		if err := mcp.ServeStdio(context.Background(), "yoke", tool.Version); err != nil {
+		if err := mcp.ServeStdioWithOptions(context.Background(), "yoke", tool.Version, mcp.Options{Registered: func() []mcp.RegisteredCommand { return []mcp.RegisteredCommand{dbcmd.MCPCommand()} }}); err != nil {
 			fmt.Fprintln(os.Stderr, "yoke mcp:", err)
 			os.Exit(1)
 		}
