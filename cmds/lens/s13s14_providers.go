@@ -16,6 +16,12 @@ func init() {
 	RegisterProvider("ast", func(rc *tool.RunContext, _ ref.Locator) (provider.Provider, error) {
 		return provider.NewAST(rc.Path(".")), nil
 	})
+	RegisterProvider("md", func(rc *tool.RunContext, _ ref.Locator) (provider.Provider, error) {
+		return provider.NewMarkdown(rc.Path(".")), nil
+	})
+	RegisterProvider("pdf", func(rc *tool.RunContext, _ ref.Locator) (provider.Provider, error) {
+		return &provider.PDF{Root: rc.Path(".")}, nil
+	})
 	RegisterProvider("proc", func(_ *tool.RunContext, _ ref.Locator) (provider.Provider, error) {
 		return provider.NewProc(), nil
 	})

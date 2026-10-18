@@ -28,7 +28,7 @@ import (
 var _ Provider = (*PDF)(nil)
 
 // PDF is a read-only Provider over PDF files. Scheme is "pdf".
-type PDF struct{}
+type PDF struct{ Root string }
 
 // NewPDF returns a pdf: provider.
 func NewPDF() *PDF { return &PDF{} }
@@ -49,7 +49,11 @@ func (p *PDF) pdfLoad(loc ref.Locator) (doc *pdfDoc, err error) {
 	if loc.Scheme != "pdf" || loc.ScopeKind != "" || loc.Target == "" {
 		return nil, ErrUnsupported
 	}
-	raw, rerr := os.ReadFile(loc.Target)
+	filePath := loc.Target
+	if p.Root != "" && !filepath.IsAbs(filePath) {
+		filePath = filepath.Join(p.Root, filePath)
+	}
+	raw, rerr := os.ReadFile(filePath)
 	if rerr != nil {
 		return nil, rerr
 	}
