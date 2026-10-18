@@ -387,6 +387,10 @@ var packages = map[string]Package{
 		"build matrix, deterministic archives, sha256 ledger (`bashy-release-v1`). No importer and " +
 		"no front-door verb yet — the `bashy release` cobra tree is the wiring that lands in bashy, " +
 		"not here; reclassify to command/library when it does."},
+	"dbstore": {Role: RoleUnwired, Note: "Sprint 453 storage-adapter foundation: canonical db identity, both storage " +
+		"modes, never-create open, engine read-only, bounded waits and Caps over SQLite (+sqlite-vec), bbolt (+memkv), " +
+		"Bleve and Bonsai (+memgraph). No importer and no `db` verb yet — the 453 lifecycle and category stories own " +
+		"that wiring; reclassify to library when the first front door lands."},
 	"reduce": {Role: RoleUnwired, Note: "command-output reduction primitive and content-addressed spill store. " +
 		"NewOutCmd is not mounted and no execution seam imports the package yet; the Sprint 123 chat and shell " +
 		"seam stories own that wiring. Reclassify when the first front door lands."},
