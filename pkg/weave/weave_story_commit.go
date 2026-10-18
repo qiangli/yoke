@@ -6,6 +6,7 @@ package weave
 
 import (
 	"fmt"
+	issuepkg "github.com/qiangli/yoke/pkg/issue"
 	todopkg "github.com/qiangli/yoke/pkg/todo"
 	"os"
 	"os/exec"
@@ -218,6 +219,56 @@ func parseCommitTrace(message string) (commitTrace, error) {
 	return trace, nil
 }
 
+// acceptStandaloneTodoFiling reports whether the pending commit is a valid
+// standalone todo-only filing: every staged file is a sprint-unlinked
+// docs/todo/*.md item (filed with `todo add --no-sprint`). Such a commit
+// carries no delivery provenance, so it validates without Sprint/Story/Story-ID
+// trailers. Anything else — code changes, mixed changes, sprint-linked stories
+// (frontmatter or a body `sprint #N` marker), non-markdown files, an empty
+// index, or unreadable state — is not exempt and keeps the strict contract.
+func acceptStandaloneTodoFiling() error {
+	root, err := gitOutput(".", "rev-parse", "--show-toplevel")
+	if err != nil {
+		return err
+	}
+	// -C root keeps the names root-relative however the hook was invoked.
+	raw, err := gitOutput(root, "diff", "--cached", "--name-only", "--no-renames")
+	if err != nil {
+		return err
+	}
+	var names []string
+	for _, name := range strings.Split(raw, "\n") {
+		if name = strings.TrimSpace(name); name != "" {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return fmt.Errorf("no staged files")
+	}
+	for _, name := range names {
+		if !strings.HasPrefix(name, todopkg.RepoSub+"/") || !strings.HasSuffix(name, ".md") {
+			return fmt.Errorf("%s is outside %s/*.md", name, todopkg.RepoSub)
+		}
+		blob, err := gitOutput(root, "show", ":0:"+name)
+		if err != nil {
+			// A staged deletion has no index blob: judge the version the
+			// commit removes.
+			blob, err = gitOutput(root, "show", "HEAD:"+name)
+			if err != nil {
+				return err
+			}
+		}
+		it, err := issuepkg.Parse([]byte(blob))
+		if err != nil {
+			return fmt.Errorf("%s: %w", name, err)
+		}
+		if it.Sprint != 0 {
+			return fmt.Errorf("%s is linked to sprint #%d", name, it.Sprint)
+		}
+	}
+	return nil
+}
+
 func validateCommitTraceStories(trace commitTrace, stories []sprintStoryState) error {
 	// Resolve by the stable id: a story number is per repo (and a repo store
 	// can hold a duplicate), so in a multi-repo sprint numbers collide.
@@ -299,6 +350,18 @@ func newSprintCommitMsgCmd() *cobra.Command {
 		}
 		trace, err := parseCommitTrace(string(raw))
 		if err != nil {
+			// A standalone todo (`todo add --no-sprint`) carries no sprint,
+			// so its filing commit has no story provenance to cite. Accept
+			// it only when the pending commit touches nothing but
+			// sprint-unlinked docs/todo/*.md items; every other
+			// trailer-less commit keeps the strict contract below.
+			if serr := acceptStandaloneTodoFiling(); serr == nil {
+				if flags.mode() == weavecli.OutputJSON {
+					return ec(emitOK(cmd.OutOrStdout(), flags.mode(), "sprint commit-msg", map[string]any{"standalone_todo_filing": true}))
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "commit provenance: standalone todo-only filing, no story trailers needed\n")
+				return nil
+			}
 			return fail(fmt.Errorf("commit provenance: %w\n\nrequired form:\n\n  Sprint: #87\n  Story: #110\n  Story-ID: d1e86f29d7a7", err))
 		}
 		dir, err := weaveStoryDir(cmd, flags.mode(), "sprint commit-msg")

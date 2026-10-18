@@ -569,6 +569,104 @@ func TestWeaveSourceEnforcesCommitHookDetectsAnInstalledHook(t *testing.T) {
 	}
 }
 
+// Sprint 467 story #2375: a standalone todo filed with `todo add --no-sprint`
+// must commit docs-only without Sprint/Story/Story-ID trailers. The exemption
+// is narrow: every staged file must be a sprint-unlinked docs/todo/*.md file.
+// Code changes, mixed changes, and sprint-linked stories still fail.
+func TestSprintCommitMsgStandaloneTodoOnlyFiling(t *testing.T) {
+	standalone := `---
+id: abcdef123456
+seq: 1
+title: Standalone task
+status: todo
+---
+
+filed without a sprint
+`
+	sprintLinked := `---
+id: 9c92c36b506c
+seq: 2375
+title: Sprint story
+status: todo
+sprint: 467
+---
+
+sprint work
+`
+	bodyLinked := `---
+id: 0123456789ab
+seq: 2
+title: Body linked task
+status: todo
+---
+
+see sprint #467 for context
+`
+	tests := []struct {
+		name    string
+		staged  map[string]string
+		wantErr string
+	}{
+		{"todo-only filing accepted", map[string]string{"docs/todo/abcdef123456-standalone-task.md": standalone}, ""},
+		{"code change still refused", map[string]string{"pkg/foo.go": "package foo\n"}, "commit provenance"},
+		{"mixed change still refused", map[string]string{
+			"docs/todo/abcdef123456-standalone-task.md": standalone,
+			"pkg/foo.go": "package foo\n",
+		}, "commit provenance"},
+		{"sprint story still refused", map[string]string{"docs/todo/9c92c36b506c-sprint-story.md": sprintLinked}, "commit provenance"},
+		{"body-linked todo still refused", map[string]string{"docs/todo/0123456789ab-body-linked.md": bodyLinked}, "commit provenance"},
+		{"non-todo doc still refused", map[string]string{"docs/notes.md": "# notes\n"}, "commit provenance"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := t.TempDir()
+			git := func(args ...string) {
+				t.Helper()
+				c := exec.Command("git", append([]string{"-C", repo}, args...)...)
+				if raw, err := c.CombinedOutput(); err != nil {
+					t.Fatalf("git %v: %v\n%s", args, err, raw)
+				}
+			}
+			git("init", "-q")
+			for name, body := range tt.staged {
+				full := filepath.Join(repo, filepath.FromSlash(name))
+				if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			git("add", "-A")
+			wd, _ := os.Getwd()
+			if err := os.Chdir(repo); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chdir(wd) })
+
+			msg := filepath.Join(t.TempDir(), "COMMIT_EDITMSG")
+			if err := os.WriteFile(msg, []byte("todo: file a standalone task\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cmd := NewSprintCmd()
+			var out bytes.Buffer
+			cmd.SetOut(&out)
+			cmd.SetErr(&out)
+			cmd.SetArgs([]string{"commit-msg", msg})
+			err := cmd.Execute()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("standalone todo-only filing must validate: %v\n%s", err, out.String())
+				}
+				return
+			}
+			if err == nil || !strings.Contains(out.String(), tt.wantErr) {
+				t.Fatalf("err = %v, want output containing %q:\n%s", err, tt.wantErr, out.String())
+			}
+		})
+	}
+}
+
 func TestParseCommitAgentTrailer(t *testing.T) {
 	base := "deliver\n\nSprint: #87\nStory: #110\nStory-ID: d1e86f29d7a7\n"
 	for _, agent := range []string{"agent-a", "tool-a:model-a", ""} {
