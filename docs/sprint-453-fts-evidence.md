@@ -34,3 +34,5 @@ That test launches a separately attached owner and independent CLI clients for m
 ## Limits
 
 Bleve's mapping is immutable once an index is created. Rebuild uses the current mapping; migration to another mapping requires explicit creation and reingestion. The portable format is Bleve category v1, not a promise of arbitrary search-engine interchange. Search pagination is invalidated by any Bashy FTS write. External code that mutates Bleve internals without the Bashy source-data batch contract can leave source documents missing; `fts.check` reports that as integrity failure. The adapter's native persistent lock is host-local; distributed exclusion is not claimed. In-memory contents end with the named owner session. Engine work already inside a Bleve batch has no cancellable API; cancellation is checked before committing.
+
+Integrated manager gates: see [shared wave 2 record](sprint-453-json-evidence.md#integrated-wave-2-manager-gate-2026-10-18).

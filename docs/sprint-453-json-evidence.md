@@ -216,3 +216,33 @@ live check: the `db_lifecycle` tool with `verb=doc`,
 - Merge import needs every exported collection to exist with identical index
   definitions; otherwise the result is `conflict` (use `--replace --yes`).
   Nothing is created implicitly.
+
+## Integrated wave 2 manager gate (2026-10-18)
+
+Shared gate record for KV, JSON documents and full-text candidates integrated on
+`96986e52`, production candidate `adc453a2`; `2e5e300b` changes only the document
+hold test to use a portable test-binary child instead of an external sleep program.
+Original worker authors are preserved. No local module replacement is delivered.
+
+- Remote macOS whole-package tests and vet passed for `pkg/dbkv`, `pkg/dbdoc`,
+  `pkg/dbfts`, `pkg/dbsql`, `pkg/dblifecycle`, `cmds/db`, and `pkg/atlas`.
+  This includes independent-process tests and the shared owner crash/restart,
+  stale-epoch, alias exclusion and cancellation regressions.
+- Repository crossvet passed Windows, Linux, Darwin and AIX lock canaries;
+  registered applet test coverage passed.
+- Native Bashy consumer built against this producer. Live FTS checks passed in
+  both modes: three independent same-revision writers yield exactly one winner,
+  cross-mode export/import retains the large integer, source check succeeds,
+  and typed/generic MCP search results match.
+- Native document CLI and typed/generic MCP passed in both modes, preserving
+  integer 12345678901234567890 and cross-mode logical interchange.
+- KV native Bashy checks passed on the earlier production-equivalent KV slice:
+  independent CAS, binary keys/values, both transfer directions and CLI/MCP parity.
+  Final integrated package tests cover the combined dispatch.
+- Earlier Windows document hold failure and earlier SQL helper number-decoding
+  failure are retained in raw gate logs. The portable hold child and UseNumber
+  process helper fixes address these test defects; no exclusion assertion was removed.
+
+Raw gate outputs and live JSONL receipts are retained by the manager. Windows
+final candidate `2e5e300b` passed all seven packages and vet, including the portable
+exclusive-hold test. Versioned consumer publication remains a separate gate.
