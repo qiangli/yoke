@@ -1,0 +1,3 @@
+Task: Produce exactly the UTF-8 text assignment-proof followed by one LF. No other output.
+Use no tools. Return a JSON object with exactly two string fields: plan (one short sentence) and result.
+Mode: premium-plan plus local-execute. result must contain one bsh fenced block implementing the task using only literal echo or printf; no expansions, external commands, file access or redirection.

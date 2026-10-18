@@ -1,0 +1,3 @@
+```bsh
+echo assignment-proof
+```

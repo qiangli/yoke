@@ -1,0 +1,159 @@
+=== RUN   TestScriptTaskAdmission
+=== RUN   TestScriptTaskAdmission/literal
+=== RUN   TestScriptTaskAdmission/ci-build
+    script_task_test.go:35: blocked: line 1: unknown command "go": only echo, printf, true, false and pwd are allowed in a pure-output script
+=== RUN   TestScriptTaskAdmission/ci-test
+    script_task_test.go:35: blocked: line 1: unknown command "go": only echo, printf, true, false and pwd are allowed in a pure-output script
+=== RUN   TestScriptTaskAdmission/artifact
+    script_task_test.go:35: blocked: line 1: redirections are not allowed in a pure-output script
+=== RUN   TestScriptTaskAdmission/shell
+    script_task_test.go:35: blocked: line 1: unknown command "sh": only echo, printf, true, false and pwd are allowed in a pure-output script
+=== RUN   TestScriptTaskAdmission/parent-escape
+    script_task_test.go:35: blocked: line 1: redirections are not allowed in a pure-output script
+=== RUN   TestScriptTaskAdmission/absolute-escape
+    script_task_test.go:35: blocked: line 1: redirections are not allowed in a pure-output script
+=== RUN   TestScriptTaskAdmission/network
+    script_task_test.go:35: blocked: line 1: unknown command "curl": only echo, printf, true, false and pwd are allowed in a pure-output script
+=== RUN   TestScriptTaskAdmission/model-tool
+    script_task_test.go:35: blocked: line 1: unknown command "bashy": only echo, printf, true, false and pwd are allowed in a pure-output script
+=== RUN   TestScriptTaskAdmission/go-tool
+    script_task_test.go:35: blocked: line 1: unknown command "go": only echo, printf, true, false and pwd are allowed in a pure-output script
+=== RUN   TestScriptTaskAdmission/substitution
+    script_task_test.go:35: blocked: line 1: $(pwd): a command substitution is not literal (lens does not expand)
+--- PASS: TestScriptTaskAdmission (0.00s)
+    --- PASS: TestScriptTaskAdmission/literal (0.00s)
+    --- PASS: TestScriptTaskAdmission/ci-build (0.00s)
+    --- PASS: TestScriptTaskAdmission/ci-test (0.00s)
+    --- PASS: TestScriptTaskAdmission/artifact (0.00s)
+    --- PASS: TestScriptTaskAdmission/shell (0.00s)
+    --- PASS: TestScriptTaskAdmission/parent-escape (0.00s)
+    --- PASS: TestScriptTaskAdmission/absolute-escape (0.00s)
+    --- PASS: TestScriptTaskAdmission/network (0.00s)
+    --- PASS: TestScriptTaskAdmission/model-tool (0.00s)
+    --- PASS: TestScriptTaskAdmission/go-tool (0.00s)
+    --- PASS: TestScriptTaskAdmission/substitution (0.00s)
+=== RUN   TestScriptArtifact
+--- PASS: TestScriptArtifact (0.01s)
+=== RUN   TestLocalScriptBoundary
+--- PASS: TestLocalScriptBoundary (0.00s)
+=== RUN   TestLocalWorkerDurableOutcome
+=== RUN   TestLocalWorkerDurableOutcome/echo_complete_
+=== RUN   TestLocalWorkerDurableOutcome/echo_before-failure_false_
+--- PASS: TestLocalWorkerDurableOutcome (0.01s)
+    --- PASS: TestLocalWorkerDurableOutcome/echo_complete_ (0.01s)
+    --- PASS: TestLocalWorkerDurableOutcome/echo_before-failure_false_ (0.01s)
+=== RUN   TestScriptPipeline_DeterministicOutput
+--- PASS: TestScriptPipeline_DeterministicOutput (0.00s)
+=== RUN   TestScriptPipeline_RejectedAmbiguous
+=== RUN   TestScriptPipeline_RejectedAmbiguous/no_fences
+=== RUN   TestScriptPipeline_RejectedAmbiguous/only_non-shell_fence
+=== RUN   TestScriptPipeline_RejectedAmbiguous/unterminated_fence
+=== RUN   TestScriptPipeline_RejectedAmbiguous/multiple_shell_fences_(bsh_+_bash)
+=== RUN   TestScriptPipeline_RejectedAmbiguous/multiple_shell_fences_(sh_+_posix)
+=== RUN   TestScriptPipeline_RejectedAmbiguous/empty_script_body
+=== RUN   TestScriptPipeline_RejectedAmbiguous/whitespace-only_script_body
+--- PASS: TestScriptPipeline_RejectedAmbiguous (0.00s)
+    --- PASS: TestScriptPipeline_RejectedAmbiguous/no_fences (0.00s)
+    --- PASS: TestScriptPipeline_RejectedAmbiguous/only_non-shell_fence (0.00s)
+    --- PASS: TestScriptPipeline_RejectedAmbiguous/unterminated_fence (0.00s)
+    --- PASS: TestScriptPipeline_RejectedAmbiguous/multiple_shell_fences_(bsh_+_bash) (0.00s)
+    --- PASS: TestScriptPipeline_RejectedAmbiguous/multiple_shell_fences_(sh_+_posix) (0.00s)
+    --- PASS: TestScriptPipeline_RejectedAmbiguous/empty_script_body (0.00s)
+    --- PASS: TestScriptPipeline_RejectedAmbiguous/whitespace-only_script_body (0.00s)
+=== RUN   TestScriptPipeline_RejectedUnsafe
+=== RUN   TestScriptPipeline_RejectedUnsafe/pipeline
+=== RUN   TestScriptPipeline_RejectedUnsafe/redirection
+=== RUN   TestScriptPipeline_RejectedUnsafe/command_substitution
+=== RUN   TestScriptPipeline_RejectedUnsafe/backtick_substitution
+=== RUN   TestScriptPipeline_RejectedUnsafe/unauthorized_command_(rm)
+=== RUN   TestScriptPipeline_RejectedUnsafe/unauthorized_command_(curl)
+=== RUN   TestScriptPipeline_RejectedUnsafe/for_loop
+=== RUN   TestScriptPipeline_RejectedUnsafe/while_loop
+=== RUN   TestScriptPipeline_RejectedUnsafe/if_clause
+=== RUN   TestScriptPipeline_RejectedUnsafe/variable_assignment
+=== RUN   TestScriptPipeline_RejectedUnsafe/background_job
+=== RUN   TestScriptPipeline_RejectedUnsafe/syntax_error
+--- PASS: TestScriptPipeline_RejectedUnsafe (0.00s)
+    --- PASS: TestScriptPipeline_RejectedUnsafe/pipeline (0.00s)
+    --- PASS: TestScriptPipeline_RejectedUnsafe/redirection (0.00s)
+    --- PASS: TestScriptPipeline_RejectedUnsafe/command_substitution (0.00s)
+    --- PASS: TestScriptPipeline_RejectedUnsafe/backtick_substitution (0.00s)
+    --- PASS: TestScriptPipeline_RejectedUnsafe/unauthorized_command_(rm) (0.00s)
+    --- PASS: TestScriptPipeline_RejectedUnsafe/unauthorized_command_(curl) (0.00s)
+    --- PASS: TestScriptPipeline_RejectedUnsafe/for_loop (0.00s)
+    --- PASS: TestScriptPipeline_RejectedUnsafe/while_loop (0.00s)
+    --- PASS: TestScriptPipeline_RejectedUnsafe/if_clause (0.00s)
+    --- PASS: TestScriptPipeline_RejectedUnsafe/variable_assignment (0.00s)
+    --- PASS: TestScriptPipeline_RejectedUnsafe/background_job (0.00s)
+    --- PASS: TestScriptPipeline_RejectedUnsafe/syntax_error (0.00s)
+=== RUN   TestScriptPipeline_NoSideEffects
+--- PASS: TestScriptPipeline_NoSideEffects (0.00s)
+=== RUN   TestScriptPipeline_DigestReuse
+--- PASS: TestScriptPipeline_DigestReuse (0.00s)
+=== RUN   TestScriptPipeline_CustomValidator
+--- PASS: TestScriptPipeline_CustomValidator (0.00s)
+=== RUN   TestScriptPipeline_DeniedCaps
+=== RUN   TestScriptPipeline_DeniedCaps/denied_capability_(missing_from_allowed)
+=== RUN   TestScriptPipeline_DeniedCaps/empty_allowed_caps_denies_all
+=== RUN   TestScriptPipeline_DeniedCaps/explicitly_denied_capability
+=== RUN   TestScriptPipeline_DeniedCaps/denied_effect_under_AllowedEffects
+=== RUN   TestScriptPipeline_DeniedCaps/denied_effect_under_advice.Cap_guard
+=== RUN   TestScriptPipeline_DeniedCaps/require_caps_fails_closed_if_unset
+=== RUN   TestScriptPipeline_DeniedCaps/allowed_caps_satisfied_succeeds
+--- PASS: TestScriptPipeline_DeniedCaps (0.00s)
+    --- PASS: TestScriptPipeline_DeniedCaps/denied_capability_(missing_from_allowed) (0.00s)
+    --- PASS: TestScriptPipeline_DeniedCaps/empty_allowed_caps_denies_all (0.00s)
+    --- PASS: TestScriptPipeline_DeniedCaps/explicitly_denied_capability (0.00s)
+    --- PASS: TestScriptPipeline_DeniedCaps/denied_effect_under_AllowedEffects (0.00s)
+    --- PASS: TestScriptPipeline_DeniedCaps/denied_effect_under_advice.Cap_guard (0.00s)
+    --- PASS: TestScriptPipeline_DeniedCaps/require_caps_fails_closed_if_unset (0.00s)
+    --- PASS: TestScriptPipeline_DeniedCaps/allowed_caps_satisfied_succeeds (0.00s)
+=== RUN   TestScriptPipeline_DryRunNoSideEffects
+--- PASS: TestScriptPipeline_DryRunNoSideEffects (0.00s)
+=== RUN   TestScriptPipeline_DigestVerification
+--- PASS: TestScriptPipeline_DigestVerification (0.00s)
+=== RUN   TestScriptPipeline_Explain
+--- PASS: TestScriptPipeline_Explain (0.00s)
+=== RUN   TestScriptPipeline_Delegation_SeatContract
+--- PASS: TestScriptPipeline_Delegation_SeatContract (0.00s)
+=== RUN   TestScriptPipeline_Delegation_DeniedCapsAndEffects
+--- PASS: TestScriptPipeline_Delegation_DeniedCapsAndEffects (0.00s)
+=== RUN   TestScriptPipeline_Delegation_NoImplicitModelCalls
+--- PASS: TestScriptPipeline_Delegation_NoImplicitModelCalls (0.00s)
+=== RUN   TestScriptPipeline_Delegation_TargetFailureCannotPromoteOrRun
+--- PASS: TestScriptPipeline_Delegation_TargetFailureCannotPromoteOrRun (0.00s)
+=== RUN   TestScriptStepsRecoveryAndPromotion
+--- PASS: TestScriptStepsRecoveryAndPromotion (0.02s)
+=== RUN   TestScriptStepsFailClosed
+--- PASS: TestScriptStepsFailClosed (0.00s)
+=== RUN   TestValidatePureOutputScript
+--- PASS: TestValidatePureOutputScript (0.00s)
+PASS
+ok  	github.com/qiangli/yoke/pkg/lens	0.832s
+=== RUN   TestScriptCLI
+--- PASS: TestScriptCLI (0.00s)
+=== RUN   TestScriptCLI_ExplainAndDryRun
+--- PASS: TestScriptCLI_ExplainAndDryRun (0.00s)
+=== RUN   TestScriptWorkerContract
+=== RUN   TestScriptWorkerContract/success
+=== RUN   TestScriptWorkerContract/nonzero
+=== RUN   TestScriptWorkerContract/tamper
+=== RUN   TestScriptWorkerContract/policy
+=== RUN   TestScriptWorkerContract/missing
+=== RUN   TestScriptWorkerContract/metadata
+=== RUN   TestScriptWorkerContract/unsafe
+=== RUN   TestScriptWorkerContract/trailing
+--- PASS: TestScriptWorkerContract (0.00s)
+    --- PASS: TestScriptWorkerContract/success (0.00s)
+    --- PASS: TestScriptWorkerContract/nonzero (0.00s)
+    --- PASS: TestScriptWorkerContract/tamper (0.00s)
+    --- PASS: TestScriptWorkerContract/policy (0.00s)
+    --- PASS: TestScriptWorkerContract/missing (0.00s)
+    --- PASS: TestScriptWorkerContract/metadata (0.00s)
+    --- PASS: TestScriptWorkerContract/unsafe (0.00s)
+    --- PASS: TestScriptWorkerContract/trailing (0.00s)
+=== RUN   TestScriptWorkerWeaveIntegration
+    script_worker_test.go:77: set LENS_TEST_BASHY to an absolute installed Bashy executable
+--- SKIP: TestScriptWorkerWeaveIntegration (0.00s)
+PASS
+ok  	github.com/qiangli/yoke/cmds/lens	0.708s

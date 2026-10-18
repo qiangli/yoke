@@ -1,0 +1,27 @@
+=== RUN   TestAssignScript
+--- PASS: TestAssignScript (0.13s)
+=== RUN   TestAssignScriptIntegration
+    sprint_assign_script_test.go:223: === RUN   TestAssignScript
+            sprint_assign_script_test.go:195: durable body verified; delta: {"schema_version":"bashy-node-v1","ref":"run:002-1","path":"KB.md","name":"KB.md","kind":"record","type":"file","attrs":{"change":"observed","evidence":"workspace-metadata","modified":"2026-10-18T14:28:40.909772761-07:00","size":421}}
+                {"schema_version":"bashy-node-v1","ref":"run:002-1","path":"seed.txt","name":"seed.txt","kind":"record","type":"file","attrs":{"change":"observed","evidence":"workspace-metadata","modified":"2026-10-18T14:28:40.836641126-07:00","size":5}}
+                {"schema_version":"bashy-node-v1","ref":"run:002-1","path":"/tmp/TestAssignScript4028335670/001/.bashy/weave/002-f4412427/logs/issue-1.log","name":"issue-1.log","kind":"record","type":"log-line","attrs":{"evidence":"persisted-log","line":"[weave] launch started at=2026-10-18T21:28:40Z agent=\"\" tool=\"yoke\"","offset":0}}
+                {"schema_version":"bashy-node-v1","ref":"run:002-1","path":"/tmp/TestAssignScript4028335670/001/.bashy/weave/002-f4412427/logs/issue-1.log","name":"issue-1.log","kind":"record","type":"log-line","attrs":{"evidence":"persisted-log","line":"assignment-proof\r","offset":68}}
+                {"schema_version":"bashy-node-v1","ref":"run:002-1","path":"lifecycle","name":"lifecycle","kind":"record","type":"lifecycle","attrs":{"evidence":"persisted-run","exit_code":0,"finished_at":"2026-10-18T21:28:43.404076Z","state":"no-op"}}
+        --- PASS: TestAssignScript (3.19s)
+        PASS
+
+    sprint_assign_script_test.go:223: === RUN   TestAssignScript
+            sprint_assign_script_test.go:195: durable body verified; delta: {"schema_version":"bashy-node-v1","ref":"run:002-1","path":"KB.md","name":"KB.md","kind":"record","type":"file","attrs":{"change":"observed","evidence":"workspace-metadata","modified":"2026-10-18T14:28:44.172834804-07:00","size":421}}
+                {"schema_version":"bashy-node-v1","ref":"run:002-1","path":"seed.txt","name":"seed.txt","kind":"record","type":"file","attrs":{"change":"observed","evidence":"workspace-metadata","modified":"2026-10-18T14:28:44.092074233-07:00","size":5}}
+                {"schema_version":"bashy-node-v1","ref":"run:002-1","path":"/tmp/TestAssignScript3860615133/001/.bashy/weave/002-a7d32997/logs/issue-1.log","name":"issue-1.log","kind":"record","type":"log-line","attrs":{"evidence":"persisted-log","line":"[weave] launch started at=2026-10-18T21:28:44Z agent=\"\" tool=\"yoke\"","offset":0}}
+                {"schema_version":"bashy-node-v1","ref":"run:002-1","path":"/tmp/TestAssignScript3860615133/001/.bashy/weave/002-a7d32997/logs/issue-1.log","name":"issue-1.log","kind":"record","type":"log-line","attrs":{"evidence":"persisted-log","line":"assignment-proof\r","offset":68}}
+                {"schema_version":"bashy-node-v1","ref":"run:002-1","path":"/tmp/TestAssignScript3860615133/001/.bashy/weave/002-a7d32997/logs/issue-1.log","name":"issue-1.log","kind":"record","type":"log-line","attrs":{"evidence":"persisted-log","line":"lens-script: exit status 1\r","offset":86}}
+                {"schema_version":"bashy-node-v1","ref":"run:002-1","path":"lifecycle","name":"lifecycle","kind":"record","type":"lifecycle","attrs":{"evidence":"persisted-run","exit_code":1,"finished_at":"2026-10-18T21:28:44.289998Z","state":"failed"}}
+        --- PASS: TestAssignScript (0.88s)
+        PASS
+
+--- PASS: TestAssignScriptIntegration (4.19s)
+=== RUN   TestScriptAssignmentContract
+--- PASS: TestScriptAssignmentContract (0.00s)
+PASS
+ok  	github.com/qiangli/yoke/pkg/weave	5.462s
