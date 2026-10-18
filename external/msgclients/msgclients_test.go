@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -447,7 +448,7 @@ func TestAuxFilesStagedAndRemoved(t *testing.T) {
 		t.Fatal("sentinel was not substituted")
 	}
 	fi, serr := os.Stat(path)
-	if serr != nil || fi.Mode().Perm() != 0o600 {
+	if serr != nil || (runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600) {
 		t.Fatalf("staged file must be 0600: %v %v", path, serr)
 	}
 	b, _ := os.ReadFile(path)
