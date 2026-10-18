@@ -25,7 +25,7 @@ deliver them to channels outside bashy.
 `meet_dm` is the inbound adapter used by gateway hooks (OpenClaw, Codync,
 ycode, or a bot script). The gateway supplies its channel and stable sender
 id; store gateway tokens with `bashy secret set NAME` and let the gateway
-resolve them with `bashy secret get NAME`, not from this skill or a checked-in
+resolve them with `bashy secret show NAME`, not from this skill or a checked-in
 config. EVERY message — including `/approve`, `/deny` and `/meet` — enters the
 `bashy meet dm` front door, which records the S3 event and checks the
 sender's app-pair device before anything happens. The router only picks the

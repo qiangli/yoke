@@ -37,7 +37,7 @@ func TestTargetRunsWhenSubcommandsAreMounted(t *testing.T) {
 func TestDryRunPlanPrintsWhenSubcommandsAreMounted(t *testing.T) {
 	path := writeDAG(t, "## Tasks\n\n### hello\nSay hi.\n"+block("bash", "echo hi"))
 
-	out, errOut, err := mountedDagCmd(t, path, "-n", "hello")
+	out, errOut, err := mountedDagCmd(t, path, "--dry-run", "hello")
 	if err != nil {
 		t.Fatalf("dry run with capacity mounted: %v (stderr=%s)", err, errOut.String())
 	}

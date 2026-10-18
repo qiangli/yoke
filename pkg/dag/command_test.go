@@ -322,7 +322,7 @@ func TestCommandDryRun(t *testing.T) {
 	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
 	cmd.SetOut(out)
 	cmd.SetErr(errOut)
-	cmd.SetArgs([]string{"-n", "--json", "--file", p, "build"})
+	cmd.SetArgs([]string{"--dry-run", "--json", "--file", p, "build"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute: %v (stderr=%s)", err, errOut.String())
 	}

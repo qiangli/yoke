@@ -745,7 +745,7 @@ func newGroupCmd(env Env) *cobra.Command {
 	group := &cobra.Command{Use: "group", Short: "manage feed groups"}
 	var private, public bool
 	var title string
-	create := &cobra.Command{Use: "create NAME", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, a []string) error {
+	create := &cobra.Command{Use: "add NAME", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, a []string) error {
 		if private && public {
 			return errors.New("feed: choose one group preset")
 		}
@@ -814,7 +814,7 @@ func newGroupCmd(env Env) *cobra.Command {
 	create.Flags().BoolVar(&private, "private", false, "create a private group")
 	create.Flags().BoolVar(&public, "public", false, "create a public group (default)")
 	create.Flags().StringVar(&title, "title", "", "display title")
-	add := &cobra.Command{Use: "add GROUP UID", Args: cobra.ExactArgs(2), RunE: func(c *cobra.Command, a []string) error {
+	addMember := &cobra.Command{Use: "add GROUP UID", Args: cobra.ExactArgs(2), RunE: func(c *cobra.Command, a []string) error {
 		client, err := NewGroupClient(env)
 		if err != nil {
 			return err
@@ -841,7 +841,7 @@ func newGroupCmd(env Env) *cobra.Command {
 		fmt.Fprintf(c.OutOrStdout(), "added %s to %s\n", a[1], g.ID)
 		return nil
 	}}
-	rm := &cobra.Command{Use: "rm GROUP UID", Args: cobra.ExactArgs(2), RunE: func(c *cobra.Command, a []string) error {
+	rmMember := &cobra.Command{Use: "rm GROUP UID", Args: cobra.ExactArgs(2), RunE: func(c *cobra.Command, a []string) error {
 		client, err := NewGroupClient(env)
 		if err != nil {
 			return err
@@ -893,7 +893,7 @@ func newGroupCmd(env Env) *cobra.Command {
 		fmt.Fprintf(c.OutOrStdout(), "removed %s from %s; epoch %d\n", a[1], g.ID, next)
 		return nil
 	}}
-	ls := &cobra.Command{Use: "ls", Args: cobra.NoArgs, RunE: func(c *cobra.Command, _ []string) error {
+	list := &cobra.Command{Use: "list", Args: cobra.NoArgs, RunE: func(c *cobra.Command, _ []string) error {
 		client, err := NewGroupClient(env)
 		if err != nil {
 			return err
@@ -923,7 +923,9 @@ func newGroupCmd(env Env) *cobra.Command {
 		fmt.Fprintln(c.OutOrStdout(), pub)
 		return nil
 	}}
-	group.AddCommand(create, add, rm, ls, key)
+	member := &cobra.Command{Use: "member", Short: "manage feed group members"}
+	member.AddCommand(addMember, rmMember)
+	group.AddCommand(create, member, list, key)
 	return group
 }
 

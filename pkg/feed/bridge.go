@@ -303,7 +303,7 @@ rate limits throttle forwarding.
 
   bashy feed bridge add SRC_CHANNEL:CONVERSATION DST_CHANNEL:CONVERSATION [--two-way] [--allow-dm] [--rate-limit N]
   bashy feed bridge list
-  bashy feed bridge remove ID`,
+  bashy feed bridge rm ID`,
 	}
 	var (
 		twoWay    bool
@@ -382,7 +382,7 @@ rate limits throttle forwarding.
 		},
 	}
 	rm := &cobra.Command{
-		Use:   "remove ID",
+		Use:   "rm ID",
 		Short: "remove a bridge route",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, a []string) error {

@@ -30,7 +30,7 @@ func TestCaptureCommands(t *testing.T) {
 		args     []string
 		contains string
 	}{
-		{[]string{"capture", "ls", "--json"}, `"turns":1`},
+		{[]string{"capture", "list", "--json"}, `"turns":1`},
 		{[]string{"capture", "show", "s-abcdef123456", "--json"}, `"bashy-capture-v1"`},
 		{[]string{"capture", "export", "s-abcdef123456", "--format", "atif"}, `"ATIF-v1.7"`},
 	} {

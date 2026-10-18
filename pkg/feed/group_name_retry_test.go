@@ -123,7 +123,7 @@ func TestGroupNameResolution(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
 		t.Fatalf("expected ambiguous via post, got %v", err)
 	}
-	_, _, err = te.run("group", "add", "same", "other")
+	_, _, err = te.run("group", "member", "add", "same", "other")
 	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
 		t.Fatalf("expected ambiguous via group add, got %v", err)
 	}

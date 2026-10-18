@@ -36,7 +36,7 @@ func TestSigningDeviceCommands(t *testing.T) {
 	}))
 	defer server.Close()
 	te.env.Cloud = func() (string, string) { return server.URL, "test-token" }
-	if got := te.mustRun("key", "ls"); !strings.Contains(got, pub+"\tactive\tCLI") {
+	if got := te.mustRun("key", "list"); !strings.Contains(got, pub+"\tactive\tCLI") {
 		t.Fatalf("key ls: %s", got)
 	}
 	te.mustRun("key", "revoke", pub)

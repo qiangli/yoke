@@ -88,7 +88,7 @@ func TestChannelAddListRm(t *testing.T) {
 	fx := newDeliverFixture(t, te)
 
 	te.mustRun("channel", "add", "phone", "--cmd", "fakeclaw:send", "--args", "--to me",
-		"--interval", "2h", "--max", "5", "--quiet", "off", "--immediate", "alice", "--immediate", "bob")
+		"--interval", "2h", "--max", "5", "--quiet-hours", "off", "--immediate", "alice", "--immediate", "bob")
 	out := te.mustRun("channel", "list")
 	for _, want := range []string{"phone", "fakeclaw:send", "interval=2h0m0s", "max=5", "quiet=off", "immediate=alice,bob", "args=--to me"} {
 		if !strings.Contains(out, want) {
@@ -104,7 +104,7 @@ func TestChannelAddListRm(t *testing.T) {
 	if _, _, err := te.run("channel", "add", "x", "--cmd", "nosuchtool:send"); err == nil {
 		t.Error("unregistered tool accepted")
 	}
-	if _, _, err := te.run("channel", "add", "x", "--cmd", "fakeclaw:send", "--quiet", "late"); err == nil {
+	if _, _, err := te.run("channel", "add", "x", "--cmd", "fakeclaw:send", "--quiet-hours", "late"); err == nil {
 		t.Error("bad quiet window accepted")
 	}
 	if _, _, err := te.run("channel", "add", "x"); err == nil {

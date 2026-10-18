@@ -991,7 +991,7 @@ func (e *Engine) envFor(node *Node) []string {
 
 // secretEnv resolves each declared secret to a NAME=value entry. Resolution is
 // process-env first (the base env, which already carries CLI overrides). A
-// cloudbox-vault hook (`bashy secret get <name>`) is the documented future
+// cloudbox-vault hook (`bashy secret show <name>`) is the documented future
 // source; this runner never shells out, so an unresolved secret is simply
 // absent (the body sees an empty $NAME).
 func (e *Engine) secretEnv(t *Task) []string {

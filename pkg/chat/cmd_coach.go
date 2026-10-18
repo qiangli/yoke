@@ -26,7 +26,7 @@ func NewCoachCmd() *cobra.Command {
 		maxSteers   int
 		steer       string
 		noInt       bool
-		quiet       time.Duration
+		idle        time.Duration
 		timeout     time.Duration
 		logPath     string
 		readOnly    bool
@@ -126,7 +126,7 @@ func NewCoachCmd() *cobra.Command {
 
 			// Drive the single task to completion: wait for the turn to end (the
 			// tool reports it), then read the answer.
-			werr := sess.WaitIdle(ctx, quiet)
+			werr := sess.WaitIdle(ctx, idle)
 			answer := sess.Turn()
 			// The turn is over — tear down NOW. The coach's watch goroutine loops
 			// until ctx.Done(), and a steerable TUI agent never exits on its own
@@ -180,7 +180,7 @@ func NewCoachCmd() *cobra.Command {
 	f.IntVar(&maxSteers, "max-steers", 0, "hard cap on interventions (default 3)")
 	f.StringVar(&steer, "steer", "", "override the steer line")
 	f.BoolVar(&noInt, "no-interrupt", false, "do not ESC before speaking (probe: a plain Say does not land mid-loop)")
-	f.DurationVar(&quiet, "quiet", 25*time.Second, "idle window that ends the turn when the tool has no event channel")
+	f.DurationVar(&idle, "idle", 25*time.Second, "idle window that ends the turn when the tool has no event channel")
 	f.DurationVar(&timeout, "timeout", 0, "overall session timeout, e.g. 15m")
 	f.StringVar(&logPath, "log", "", "append one JSON line per steer here (the training record)")
 	f.BoolVar(&readOnly, "read-only", false, "strip write authority (a talk-only session)")

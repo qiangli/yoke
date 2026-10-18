@@ -85,7 +85,7 @@ func newPeerRevokeCmd() *cobra.Command {
 
 func newPeerListCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "ls",
+		Use:   "list",
 		Short: "list peers and their share policy (never the credentials)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

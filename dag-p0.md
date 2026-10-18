@@ -67,7 +67,7 @@ Read ./dag-p0.md — it defines four P0 targets, each with a SPEC + acceptance.
 Implement ALL FOUR in pkg/dag (edit the .go files AND add tests):
   1) docs-explain   — document the fingerprint cache in doc.go AND add a --explain flag to command.go
   2) timeout-retries — add Timeout (time.Duration) + Retries (int) to Task in parser.go, enforce in engine.go
-  3) dry-run        — add --dryrun / -n plan mode to command.go (print the plan, run no bodies)
+  3) dry-run        — add --dry-run plan mode to command.go (print the plan, run no bodies)
   4) log-grouping   — add --output-group to command.go/engine.go emitting GitHub ::group::/::endgroup:: markers
 Keep everything green after EACH item:
   gofmt -l pkg/dag  (must print nothing); go vet ./pkg/dag/...; go test ./pkg/dag/... -count=1; go build ./...
@@ -139,9 +139,9 @@ go test ./pkg/dag/... -count=1
 ```
 
 ### dry-run
-P0 #3 — `--dryrun`/`-n` plan mode.
+P0 #3 — `--dry-run` plan mode.
 SPEC:
-- `pkg/dag/command.go`: add `--dryrun`/`-n`. When set, build the subgraph and
+- `pkg/dag/command.go`: add `--dry-run`. When set, build the subgraph and
   topo order, compute each target's cache decision (would-run vs up-to-date) and
   effects, and PRINT the plan (ordered targets + decision + the command/first
   body line) WITHOUT running any body. Emit a `plan` result in `--json`.

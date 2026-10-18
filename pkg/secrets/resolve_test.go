@@ -13,7 +13,7 @@ import (
 // The catalog names a credential by a STANDARD ref (`api_key_ref: zai`); a host
 // binds that ref under its own vault name (`ZAI_API_KEY=@host-zai` in
 // secrets.map). A caller that looked the ref up in the vault by its bare name
-// (`bashy secret get zai`) found nothing on every host whose vault names are
+// (`bashy secret show zai`) found nothing on every host whose vault names are
 // host-prefixed — which is every host set up by the template. The resolution
 // has to go ref -> conventional env names -> the host's binding -> the vault.
 func TestResolveAgentKeyThroughHostBinding(t *testing.T) {

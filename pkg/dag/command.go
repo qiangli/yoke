@@ -283,7 +283,7 @@ routes any agentic tool to these targets through bashy dag.`,
 			}
 
 			// Open the journal only once we know a run is actually happening —
-			// --list/--check/--explain/--dryrun all return above, and opening it
+			// --list/--check/--explain/--dry-run all return above, and opening it
 			// earlier would litter the store with empty run directories.
 			if !noJournalF {
 				if j, jerr := OpenJournal(absPath, cacheDir, keepRuns); jerr == nil && j != nil {
@@ -333,7 +333,7 @@ routes any agentic tool to these targets through bashy dag.`,
 	cmd.Flags().IntVarP(&jobs, "jobs", "j", 1, "Run up to N targets in parallel (dependency-respecting)")
 	cmd.Flags().BoolVarP(&forceF, "force", "B", false, "Ignore the fingerprint cache; run every target")
 	cmd.Flags().BoolVar(&explainF, "explain", false, "Explain per target whether it would run or is up-to-date (runs nothing)")
-	cmd.Flags().BoolVarP(&dryRunF, "dryrun", "n", false, "Print the ordered plan without running any target body")
+	cmd.Flags().BoolVar(&dryRunF, "dry-run", false, "Print the ordered plan without running any target body")
 	cmd.Flags().BoolVar(&outGroupF, "output-group", false, "Fold each target's output in GitHub ::group::/::endgroup:: markers (auto-on under GITHUB_ACTIONS)")
 	cmd.Flags().StringVar(&skillF, "skill", "", "Write a thin Agent Skill for this file to DIR/<name>/SKILL.md (routes other agents to bashy dag); runs nothing")
 	cmd.Flags().BoolVar(&checkF, "check", false, "Validate the file (parse, deps, cycles, effects) and exit; runs nothing")

@@ -974,7 +974,7 @@ func newStickyCreateCmd() *cobra.Command {
 	var asJSON bool
 	var scope string
 	cmd := &cobra.Command{
-		Use:           "create KEY",
+		Use:           "add KEY",
 		Short:         "resolve a model once and freeze it under KEY",
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
@@ -1047,7 +1047,7 @@ func newStickyShowCmd() *cobra.Command {
 func newStickyListCmd() *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
-		Use: "ls", Short: "list this principal's bindings across all sessions (marks the owning session)", Args: cobra.NoArgs,
+		Use: "list", Short: "list this principal's bindings across all sessions (marks the owning session)", Args: cobra.NoArgs,
 		SilenceUsage: true, SilenceErrors: true,
 		RunE: func(c *cobra.Command, _ []string) error {
 			var list struct {

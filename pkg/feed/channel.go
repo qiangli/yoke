@@ -224,7 +224,7 @@ interval, item cap, quiet hours and authors that break through them.`,
 		Use:   "add NAME --cmd TOOL:NAME [--args '<extra args>']",
 		Short: "add a delivery channel over a registered tool command",
 		Example: `  bashy feed channel add phone --cmd openclaw:send --args '--channel telegram --target me' \
-      --interval 4h --max 10 --quiet 22:00-07:00 --immediate alice`,
+      --interval 4h --max 10 --quiet-hours 22:00-07:00 --immediate alice`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, a []string) error {
 			cfg := Channel{
@@ -259,7 +259,7 @@ interval, item cap, quiet hours and authors that break through them.`,
 	f.StringVar(&args, "args", "", "extra arguments placed before --message")
 	f.StringVar(&interval, "interval", "", "minimum time between batches (default 4h)")
 	f.IntVar(&max, "max", 0, "items per batch before the rest collapse into a link (default 10)")
-	f.StringVar(&quiet, "quiet", "", `quiet hours "HH:MM-HH:MM" local time, or "off" (default 22:00-07:00)`)
+	f.StringVar(&quiet, "quiet-hours", "", `quiet hours "HH:MM-HH:MM" local time, or "off" (default 22:00-07:00)`)
 	f.StringArrayVar(&immediate, "immediate", nil, "author whose posts break quiet hours and the interval (repeatable)")
 	f.BoolVar(&off, "off", false, "keep the channel but deliver nothing")
 	_ = add.MarkFlagRequired("cmd")

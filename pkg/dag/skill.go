@@ -165,7 +165,7 @@ func renderSkill(doc *Document, name, ref string) ([]byte, error) {
 	b.WriteString("## Commands\n\n```bash\n")
 	fmt.Fprintf(&b, "%s --list              # targets and what they do\n", cmd)
 	fmt.Fprintf(&b, "%s TARGET              # run TARGET (its requirements first)\n", cmd)
-	fmt.Fprintf(&b, "%s --dryrun TARGET     # the plan, running nothing\n", cmd)
+	fmt.Fprintf(&b, "%s --dry-run TARGET    # the plan, running nothing\n", cmd)
 	fmt.Fprintf(&b, "%s --json TARGET       # machine-readable result envelope\n", cmd)
 	b.WriteString("```\n\n")
 	if d := defaultTarget(doc); d != "" {

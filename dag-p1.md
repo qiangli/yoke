@@ -130,7 +130,7 @@ P1 #7 — `Secrets:` injection + redaction.
 SPEC:
 - `parser.go`: `Secrets:` metadata (list of names); add to metaKeys.
 - `engine.go`: before running a target, resolve each named secret (process env
-  first; document a `bashy secrets get <name>` hook for the cloudbox vault) and
+  first; document a `bashy secret show <name>` hook for the cloudbox vault) and
   inject it into that target's env. REDACT every resolved secret VALUE from the
   target's captured stdout/stderr and the JSON envelope (replace with `***`).
 ACCEPTANCE: a target `Secrets: TOKEN` with `TOKEN=s3cr3t` in env gets `$TOKEN`;

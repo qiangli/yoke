@@ -166,7 +166,7 @@ func doctorKey(dir string) DoctorCheck {
 	}
 	if info.Size() != ed25519.SeedSize {
 		return DoctorCheck{Area: "signing-key", Status: DoctorMissing,
-			Detail: "malformed key file", Next: "bashy feed key ls"}
+			Detail: "malformed key file", Next: "bashy feed key list"}
 	}
 	return DoctorCheck{Area: "signing-key", Status: DoctorConfigured}
 }

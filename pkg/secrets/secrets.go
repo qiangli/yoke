@@ -291,7 +291,7 @@ func shellSingleQuote(s string) string {
 
 func newLsCmd(cfg *Config) *cobra.Command {
 	return &cobra.Command{
-		Use:   "ls",
+		Use:   "list",
 		Short: "List secret names (values are never printed)",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
@@ -315,8 +315,8 @@ func newLsCmd(cfg *Config) *cobra.Command {
 
 func newGetCmd(cfg *Config) *cobra.Command {
 	return &cobra.Command{
-		Use:   "get NAME",
-		Short: "Print one secret value (for KEY=$(bashy secret get NAME))",
+		Use:   "show NAME",
+		Short: "Print one secret value (for KEY=$(bashy secret show NAME))",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
 			client, err := cfg.Resolve()

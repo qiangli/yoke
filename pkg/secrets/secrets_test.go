@@ -381,7 +381,7 @@ func TestGetSetRm(t *testing.T) {
 	if _, _, err := run(t, fv.cfg(), "set", "TELEGRAM_BOT_TOKEN", "123:abc"); err != nil {
 		t.Fatalf("set: %v", err)
 	}
-	out, _, err := run(t, fv.cfg(), "get", "TELEGRAM_BOT_TOKEN")
+	out, _, err := run(t, fv.cfg(), "show", "TELEGRAM_BOT_TOKEN")
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -389,7 +389,7 @@ func TestGetSetRm(t *testing.T) {
 		t.Fatalf("get = %q", out)
 	}
 
-	out, _, err = run(t, fv.cfg(), "ls")
+	out, _, err = run(t, fv.cfg(), "list")
 	if err != nil || !strings.Contains(out, "TELEGRAM_BOT_TOKEN") {
 		t.Fatalf("ls = %q err=%v", out, err)
 	}

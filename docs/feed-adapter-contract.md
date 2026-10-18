@@ -88,7 +88,7 @@ Policies applied on every inbound envelope:
 ```
 bashy feed bridge add SRC_CHANNEL:CONVERSATION DST_CHANNEL:CONVERSATION [--two-way] [--allow-dm] [--rate-limit N]
 bashy feed bridge list
-bashy feed bridge remove ID
+bashy feed bridge rm ID
 ```
 
 A route maps `SRC_CHANNEL:CONVERSATION` → `DST_CHANNEL:CONVERSATION`.

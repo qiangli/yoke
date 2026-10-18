@@ -16,7 +16,7 @@ import (
 func newCaptureCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "capture", Short: "inspect and export captured model turns"}
 	var asJSON bool
-	ls := &cobra.Command{Use: "ls", Args: cobra.NoArgs, RunE: func(c *cobra.Command, _ []string) error {
+	ls := &cobra.Command{Use: "list", Args: cobra.NoArgs, RunE: func(c *cobra.Command, _ []string) error {
 		root, err := captureRoot()
 		if err != nil {
 			return err

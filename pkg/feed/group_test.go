@@ -111,12 +111,12 @@ func TestGroupCLIAndEncryptedFetch(t *testing.T) {
 	}))
 	defer server.Close()
 	te.env.Cloud = func() (string, string) { return server.URL, "test-token" }
-	out := te.mustRun("group", "create", "test-group", "--private", "--title", "Test Group")
+	out := te.mustRun("group", "add", "test-group", "--private", "--title", "Test Group")
 	id := strings.Split(out, "\t")[0]
 	if id == "" || id != group.ID {
 		t.Fatalf("create output %q", out)
 	}
-	if got := te.mustRun("group", "ls"); !strings.Contains(got, id) {
+	if got := te.mustRun("group", "list"); !strings.Contains(got, id) {
 		t.Fatalf("ls %q", got)
 	}
 	key1, err := LoadGroupKey(te.env.dir(), id, 1)
@@ -126,14 +126,14 @@ func TestGroupCLIAndEncryptedFetch(t *testing.T) {
 	if _, err := Unwrap(ownerWrapped, removed, id, 1); err == nil {
 		t.Fatal("other member opened owner's wrap")
 	}
-	te.mustRun("group", "add", id, "other")
+	te.mustRun("group", "member", "add", id, "other")
 	if opened, err := Unwrap(addWrapped, other, id, 1); err != nil || string(opened) != string(key1) {
 		t.Fatalf("add wrap: %v", err)
 	}
 	if opened, err := Unwrap(addDeviceWrapped, otherDevice, id, 1); err != nil || string(opened) != string(key1) {
 		t.Fatalf("second device add wrap: %v", err)
 	}
-	te.mustRun("group", "rm", id, "removed")
+	te.mustRun("group", "member", "rm", id, "removed")
 	if _, err := Unwrap(rotated["owner"], removed, id, 2); err == nil {
 		t.Fatal("removed member opened new epoch")
 	}
@@ -231,7 +231,7 @@ func TestPublicGroupPostStaysPlaintext(t *testing.T) {
 	}))
 	defer server.Close()
 	te.env.Cloud = func() (string, string) { return server.URL, "test-token" }
-	if got := te.mustRun("group", "create", "public", "--public"); !strings.Contains(got, "g-public") {
+	if got := te.mustRun("group", "add", "public", "--public"); !strings.Contains(got, "g-public") {
 		t.Fatalf("create %q", got)
 	}
 	sinkDir := t.TempDir()

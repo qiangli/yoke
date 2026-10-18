@@ -38,7 +38,7 @@ func (c *GroupClient) RevokeSigningDevice(ctx context.Context, pubkey string) er
 
 func newKeyCmd(env Env) *cobra.Command {
 	key := &cobra.Command{Use: "key", Short: "manage account signing device keys"}
-	key.AddCommand(&cobra.Command{Use: "ls", Args: cobra.NoArgs, RunE: func(c *cobra.Command, _ []string) error {
+	key.AddCommand(&cobra.Command{Use: "list", Args: cobra.NoArgs, RunE: func(c *cobra.Command, _ []string) error {
 		client, err := NewGroupClient(env)
 		if err != nil {
 			return err
