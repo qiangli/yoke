@@ -9,7 +9,7 @@ import (
 	"github.com/qiangli/yoke/pkg/reduce"
 )
 
-func recoverFromNote(t *testing.T, out string) []byte {
+func recoverFromNote(t *testing.T, dir, out string) []byte {
 	t.Helper()
 	i := strings.LastIndex(out, "canonical: bashy out ")
 	if i < 0 {
@@ -17,27 +17,21 @@ func recoverFromNote(t *testing.T, out string) []byte {
 	}
 	handle := strings.TrimRight(strings.Fields(out[i+len("canonical: bashy out "):])[0], "]\n")
 	var buf bytes.Buffer
-	if err := reduce.Recover(reduce.NewStore(chatOutputDirForTest(t)), handle, &buf); err != nil {
+	if err := reduce.Recover(reduce.NewStore(dir), handle, &buf); err != nil {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
 }
 
-func chatOutputDirForTest(t *testing.T) string {
+func sinkHome(t *testing.T) string {
 	t.Helper()
-	return strings.TrimSpace(testOutputDir)
-}
-
-var testOutputDir string
-
-func sinkHome(t *testing.T) {
 	h := t.TempDir()
 	setTestHome(t, h)
-	testOutputDir = h + "/.bashy/chat/output"
+	return h + "/.bashy/chat/output"
 }
 
 func TestSinkAppliesDeclaredViewWithRecovery(t *testing.T) {
-	sinkHome(t)
+	dir := sinkHome(t)
 	canonical := `{"name":"x","items":[1,2,3]}`
 	plan := fleet.SinkPlan{View: fleet.ViewYAML, ViewSource: fleet.SourceEnv}
 	out, err := reduceChatBytes([]byte(canonical), plan)
@@ -50,13 +44,13 @@ func TestSinkAppliesDeclaredViewWithRecovery(t *testing.T) {
 	if !strings.Contains(out, "view=yaml(env) from json · lossless") {
 		t.Fatalf("view note missing: %q", out)
 	}
-	if got := recoverFromNote(t, out); string(got) != canonical {
+	if got := recoverFromNote(t, dir, out); string(got) != canonical {
 		t.Fatalf("canonical not recoverable: %q", got)
 	}
 }
 
 func TestSinkLossyViewIsLabelled(t *testing.T) {
-	sinkHome(t)
+	dir := sinkHome(t)
 	canonical := `<html><body><h1>Title</h1><p>hello <b>world</b></p></body></html>`
 	out, err := reduceChatBytes([]byte(canonical), fleet.SinkPlan{View: fleet.ViewMD, ViewSource: fleet.SourceEnv})
 	if err != nil {
@@ -65,7 +59,7 @@ func TestSinkLossyViewIsLabelled(t *testing.T) {
 	if !strings.Contains(out, "Title") || !strings.Contains(out, "from html · lossy") || strings.Contains(out, "<h1>") {
 		t.Fatalf("lossy md view wrong: %q", out)
 	}
-	if got := recoverFromNote(t, out); string(got) != canonical {
+	if got := recoverFromNote(t, dir, out); string(got) != canonical {
 		t.Fatalf("canonical html not recoverable: %q", got)
 	}
 }
@@ -109,7 +103,22 @@ func TestSinkViewThenBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(out) > 1100 || !strings.Contains(out, "full: bashy out ") {
+	if len(out) > 1300 || !strings.Contains(out, "full: bashy out ") || !strings.Contains(out, "canonical: bashy out ") {
 		t.Fatalf("budget not applied after view (%d bytes): %q", len(out), out)
+	}
+}
+
+func TestSinkLossyViewTightBudgetKeepsCanonicalPointer(t *testing.T) {
+	dir := sinkHome(t)
+	canonical := "<html><body>" + strings.Repeat("<p>hello <b>world</b> and more text here</p>", 300) + "</body></html>"
+	out, err := reduceChatBytes([]byte(canonical), fleet.SinkPlan{View: fleet.ViewMD, ViewSource: fleet.SourceEnv, BudgetBytes: 512})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) >= len(canonical)/4 || !strings.Contains(out, "full: bashy out ") {
+		t.Fatalf("not reduced (%d bytes): %q", len(out), out)
+	}
+	if got := recoverFromNote(t, dir, out); string(got) != canonical {
+		t.Fatalf("canonical html not recoverable after budget: %d bytes", len(got))
 	}
 }

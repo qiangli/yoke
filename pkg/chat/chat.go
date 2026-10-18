@@ -893,15 +893,21 @@ func reduceChatBytes(out []byte, plan fleet.SinkPlan) (string, error) {
 		return string(redactor.Redact(out)), nil
 	}
 	store := reduce.NewStore(filepath.Join(root, "output"))
+	var viewNote string
 	if plan.View != "" {
 		canonical := redactor.Redact(reduce.CanonicalizeHome(out, home))
-		out, _ = applySinkView(store, canonical, plan)
+		out, viewNote = applySinkView(store, canonical, plan)
 	}
 	result, err := reduce.Reduce(store, out, reduce.Config{BudgetBytes: plan.BudgetBytes, HomeDir: home, Redactor: redactor, KeepHint: plan.KeepHint()})
 	if err != nil {
 		return "", fmt.Errorf("chat: reduce invocation output: %w", err)
 	}
-	return result.Text, nil
+	text := result.Text
+	if viewNote != "" && !strings.Contains(text, viewNote) {
+		// Budget elision can cut the view note; the canonical pointer must survive.
+		text = strings.TrimRight(text, "\n") + "\n" + viewNote + "\n"
+	}
+	return text, nil
 }
 
 // readerSinkPlan resolves the reader's output preferences for this turn's agent
