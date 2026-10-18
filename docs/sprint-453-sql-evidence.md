@@ -1,5 +1,43 @@
 # Sprint 453 SQL evidence — story af7f959dadcf / #2261
 
+## Issue-421 Windows held-child repair candidate
+
+Manager's actual Windows Bashy `3e71404e` / pinned Yoke `8708159f` live
+smoke reached `db hold PERSISTENT_LOCATOR -- bashy-sql.exe db sql query
+SAME_LOCATOR --sql "pragma locking_mode=''"` and returned exit 9
+`claim_held` (holder `session-041807`), where the authorizer denial should
+return exit 1. The same smoke passed on Mac. No remote host was accessed for
+this repair.
+
+Source diagnosis: `dblifecycle.Call` on the hold mints/uses the actual
+`coord.Self()` episode. The CLI's `RunContext.Env` can have been captured
+before that mint. `holdChild` previously copied only the hold session, target,
+and epoch into the child environment, so a standalone child without an
+inherited `BASHY_EPISODE` minted a different claimant. The owner checks
+claimant name and episode before the epoch and reported `claim_held`. The
+canonical target comparison itself uses `dbstore.Resolve` on both sides;
+`ref.Locator.String` escapes Windows drive colons and backslashes for the
+round trip. No consumer environment filter was found in the manager's
+Python recipe: it passes `env=dict(os.environ, ...)` to the parent CLI.
+
+The repair captures `coord.Self()` before the hold request, passes that exact
+holder to the owner, and adds its episode to the child environment alongside
+the existing session, canonical target and epoch. Target/session matching and
+the owner's claimant/epoch checks remain in force. `TestHoldChildEnvUsesAcquiredHolderEpisode`
+checks a stale environment snapshot and exact Windows-style target string.
+`TestPersistentHoldChildUsesHolderEpisode` is a process regression for a
+successful held child read and the empty `locking_mode` setter denial; it is
+reserved for the manager's remote gate under Dragon's no-process policy.
+Dragon ran only `go test -count=1 -run '^TestHoldChildEnvUsesAcquiredHolderEpisode$'
+./cmds/db`: PASS (0.616s), and `go test -count=1 -run
+'^(TestPragmaAuthorizerPolicy|TestHeldReadLeavesNoConnectionState)$'
+./pkg/dbsql`: PASS (0.903s). `git diff --check`: PASS.
+
+Remaining manager checks: run that named process regression and the actual
+Windows live smoke with this Yoke pin, confirm exit 1 `read_only` for the
+empty setter, a successful held read, and unrelated/stale claimant rejection.
+Only the manager can claim Windows product truth and story acceptance.
+
 ## Current issue-415 integration (approved modernc fork)
 
 Operator mb6143 approved the minimal full modernc fork. The earlier

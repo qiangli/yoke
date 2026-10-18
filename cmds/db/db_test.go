@@ -92,6 +92,38 @@ func TestRegisteredLifecycleCommand(t *testing.T) {
 	}
 }
 
+func TestHoldChildEnvUsesAcquiredHolderEpisode(t *testing.T) {
+	env := holdChildEnv([]string{
+		"BASHY_EPISODE=stale-snapshot",
+		"BASHY_DB_HOLD_SESSION=old-session",
+		"BASHY_DB_HOLD_TARGET=old-target",
+		"BASHY_DB_HOLD_EPOCH=1",
+		"BASHY_COORD_DIR=claims",
+	}, "ep-current", "owner", `db:sqlite:file:C:\\Data\\one.db`, 42)
+	for key, want := range map[string]string{
+		"BASHY_EPISODE":         "ep-current",
+		"BASHY_DB_HOLD_SESSION": "owner",
+		"BASHY_DB_HOLD_TARGET":  `db:sqlite:file:C:\\Data\\one.db`,
+		"BASHY_DB_HOLD_EPOCH":   "42",
+		"BASHY_COORD_DIR":       "claims",
+	} {
+		if got := envValue(env, key); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+	for _, key := range []string{"BASHY_EPISODE", "BASHY_DB_HOLD_SESSION", "BASHY_DB_HOLD_TARGET", "BASHY_DB_HOLD_EPOCH"} {
+		count := 0
+		for _, pair := range env {
+			if strings.HasPrefix(pair, key+"=") {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Errorf("%s appears %d times", key, count)
+		}
+	}
+}
+
 func TestMCPRunToolLifecycleParity(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

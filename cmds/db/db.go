@@ -480,6 +480,16 @@ func withEnv(env []string, key, value string) []string {
 	return append(out, key+"="+value)
 }
 
+func holdChildEnv(env []string, holderEpisode, session, target string, epoch uint64) []string {
+	// Call may have minted BASHY_EPISODE after RunContext.Env was captured.
+	// Carry the exact holder episode into the child so owner admission sees
+	// the same claimant as the hold, including in a bare CLI process.
+	env = withEnv(env, coord.EpisodeEnv, holderEpisode)
+	env = withEnv(env, "BASHY_DB_HOLD_SESSION", session)
+	env = withEnv(env, "BASHY_DB_HOLD_TARGET", target)
+	return withEnv(env, "BASHY_DB_HOLD_EPOCH", strconv.FormatUint(epoch, 10))
+}
+
 func holdChild(ctx context.Context, rc *tool.RunContext, o output, target dbstore.Target, session string, child []string, wait, timeout time.Duration, asJSON bool) int {
 	if len(child) == 0 || child[0] == "" {
 		return failure(o, fmt.Errorf("%w: hold requires a command after --", dbstore.ErrInvalidInput)).emit(rc, asJSON)
@@ -497,7 +507,8 @@ func holdChild(ctx context.Context, rc *tool.RunContext, o output, target dbstor
 			_, _ = dblifecycle.Call(context.Background(), session, dblifecycle.Request{Op: "stop", Yes: true})
 		}()
 	}
-	hold, err := dblifecycle.Call(ctx, session, dblifecycle.Request{Op: "hold", Target: target, Wait: wait})
+	holder := coord.Self()
+	hold, err := dblifecycle.Call(ctx, session, dblifecycle.Request{Op: "hold", Target: target, Wait: wait, Holder: holder})
 	if err != nil {
 		return failure(o, err).emit(rc, asJSON)
 	}
@@ -524,7 +535,7 @@ func holdChild(ctx context.Context, rc *tool.RunContext, o output, target dbstor
 	}
 	cmd := exec.CommandContext(ctx, child[0], child[1:]...)
 	cmd.Dir, cmd.Stdin, cmd.Stdout, cmd.Stderr = rc.Dir, rc.In, rc.Out, rc.Err
-	cmd.Env = withEnv(withEnv(withEnv(rc.Env, "BASHY_DB_HOLD_SESSION", session), "BASHY_DB_HOLD_TARGET", id.ID), "BASHY_DB_HOLD_EPOCH", strconv.FormatUint(value, 10))
+	cmd.Env = holdChildEnv(rc.Env, holder.Episode, session, id.ID, value)
 	if err := cmd.Run(); err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
