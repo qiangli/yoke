@@ -3,13 +3,14 @@ package treecmd
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/qiangli/coreutils/tool"
+	_ "github.com/qiangli/yoke/cmds/lens"
+	"github.com/qiangli/yoke/pkg/lens/stream"
 )
 
 func TestTreeLocatorJSONDepth(t *testing.T) {
@@ -18,21 +19,92 @@ func TestTreeLocatorJSONDepth(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errOut)
 	}
-	lines := strings.Split(strings.TrimSpace(out), "\n")
-	if len(lines) < 2 {
+	g, err := stream.Decode(strings.NewReader(out), stream.DecodeOptions{})
+	if err != nil {
+		t.Fatalf("not a framed bashy-graph-v1 stream: %v\n%s", err, out)
+	}
+	if err := g.Verify(); err != nil {
+		t.Fatal(err)
+	}
+	if g.Source != "." || g.Cursor.Binding.Provider != "dir" || g.Cursor.Binding.Query != "depth=1" || g.Cursor.Binding.Revision != g.Rev {
+		t.Fatalf("header/cursor not bound to dir:. depth=1: source=%q cursor=%+v", g.Source, g.Cursor)
+	}
+	if len(g.Nodes) < 2 || len(g.Edges) == 0 {
 		t.Fatalf("rows: %q", out)
 	}
-	for _, line := range lines {
-		var row map[string]any
-		if err := json.Unmarshal([]byte(line), &row); err != nil {
-			t.Fatalf("row %q in %q: %v", line, out, err)
+	for _, n := range g.Nodes {
+		if n.Name == "b.go" {
+			t.Fatalf("depth exceeded: %+v", n)
 		}
-		if row["schema_version"] != "bashy-node-v1" {
-			t.Fatalf("row: %s", line)
+	}
+}
+
+// Pull and push are the same bytes: `tree --json LOC` is what
+// `lens -t graph LOC` pulls, so every lens view of the piped stream equals
+// the view lens pulls itself. --agentic changes the walk, so it changes the
+// cursor binding (and the content), never silently the same token.
+func TestTreeStreamPullPushIdentity(t *testing.T) {
+	root := buildTree(t)
+	lens := tool.Lookup("lens")
+	if lens == nil {
+		t.Fatal("lens is not registered")
+	}
+	runLens := func(stdin string, args ...string) string {
+		t.Helper()
+		var o, e bytes.Buffer
+		rc := &tool.RunContext{Ctx: context.Background(), Dir: root,
+			Stdio: tool.Stdio{In: strings.NewReader(stdin), Out: &o, Err: &e}}
+		if code := lens.Run(rc, args); code != 0 || e.Len() > 0 {
+			t.Fatalf("lens %v: %d %s", args, code, e.String())
 		}
-		if row["name"] == "b.go" {
-			t.Fatalf("depth exceeded: %s", line)
+		return o.String()
+	}
+	for _, depth := range []string{"-1", "0", "1"} {
+		pushed, errOut, code := runTree(t, root, "--json", "--depth="+depth, "dir:sub")
+		if code != 0 || errOut != "" {
+			t.Fatalf("depth %s: %d %s", depth, code, errOut)
 		}
+		if again, _, _ := runTree(t, root, "--json", "--depth="+depth, "dir:sub"); again != pushed {
+			t.Fatalf("depth %s: producer is not deterministic", depth)
+		}
+		if pulled := runLens("", "-t", "graph", "--depth="+depth, "dir:sub"); pulled != pushed {
+			t.Fatalf("depth %s: tree --json differs from lens pull:\n%s\n---\n%s", depth, pushed, pulled)
+		}
+		for _, view := range []string{"paths", "tree", "edges"} {
+			if a, b := runLens(pushed, "-t", view), runLens("", "-t", view, "--depth="+depth, "dir:sub"); a != b {
+				t.Errorf("depth %s view %s: push %q != pull %q", depth, view, a, b)
+			}
+		}
+	}
+	plain, _, _ := runTree(t, root, "--json", ".")
+	agentic, _, _ := runTree(t, root, "--json", "--agentic", "-a", ".")
+	pg, err1 := stream.Decode(strings.NewReader(plain), stream.DecodeOptions{})
+	ag, err2 := stream.Decode(strings.NewReader(agentic), stream.DecodeOptions{})
+	if err1 != nil || err2 != nil {
+		t.Fatal(err1, err2)
+	}
+	if ag.Cursor.Binding.Query != "depth=-1&agentic=true" || ag.Cursor.Token == pg.Cursor.Token {
+		t.Fatalf("--agentic cursor not bound to its own query: %+v vs %+v", ag.Cursor, pg.Cursor)
+	}
+	if strings.Contains(agentic, "node_modules") || !strings.Contains(plain, "node_modules") {
+		t.Fatalf("--agentic did not filter the streamed walk")
+	}
+}
+
+func TestTreeJSONRefusesSeveralLocators(t *testing.T) {
+	root := buildTree(t)
+	out, errOut, code := runTree(t, root, "--json", "dir:sub", "dir:.")
+	if code != 2 || out != "" || !strings.Contains(errOut, "one locator") {
+		t.Fatalf("want usage error, got %d %q %q", code, out, errOut)
+	}
+}
+
+// Without --json the classic listing is untouched.
+func TestTreeClassicUnchangedByStream(t *testing.T) {
+	root := buildTree(t)
+	out, _, code := runTree(t, root, "sub")
+	if want := "sub\n├── b.go\n└── c.go\n\n0 directories, 2 files\n"; code != 0 || out != want {
+		t.Fatalf("classic tree:\n%q\nwant\n%q", out, want)
 	}
 }
 

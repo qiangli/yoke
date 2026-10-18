@@ -14,13 +14,16 @@ package astcmd
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	gotreesitter "github.com/odvcencio/gotreesitter"
 	"github.com/qiangli/coreutils/pkg/weavecli"
 	"github.com/qiangli/coreutils/tool"
+	"github.com/qiangli/yoke/pkg/lens/stream"
 	"github.com/qiangli/yoke/pkg/repomap"
 	"github.com/qiangli/yoke/pkg/treesitter"
 )
@@ -40,7 +43,7 @@ var subcommands = []subcmd{
 	{"search", "search AST symbols by name substring",
 		"ast search <pattern> [path] [--json]", runSearchSymbols},
 	{"refs", "find references/callers of a symbol (AST)",
-		"ast refs <symbol> [path] [--json]", runRefs},
+		"ast refs <symbol|-> [path] [--json]", runRefs},
 	{"map", "token-budgeted file→symbol repo map",
 		"ast map [path] [--budget=N] [--query=...] [--json]", runRepomap},
 	{"query", "structural tree-sitter query (S-expression) over source",
@@ -181,10 +184,11 @@ func runSymbols(rc *tool.RunContext, args []string) int {
 		return 1
 	}
 	if asJSON {
-		enc := json.NewEncoder(rc.Out)
-		enc.SetIndent("", "  ")
-		_ = enc.Encode(all)
-		return 0
+		s := newAstStream(target, abs)
+		for _, sym := range all {
+			s.treeSymbol(sym)
+		}
+		return s.write(rc, "ast symbols", url.Values{"op": {"symbols"}})
 	}
 	for _, s := range all {
 		fmt.Fprintf(rc.Out, "%s:%d: %s\n", s.File, s.Line, formatSymbolLine(s))
@@ -246,10 +250,11 @@ func runSearchSymbols(rc *tool.RunContext, args []string) int {
 		return 1
 	}
 	if asJSON {
-		enc := json.NewEncoder(rc.Out)
-		enc.SetIndent("", "  ")
-		_ = enc.Encode(matches)
-		return 0
+		s := newAstStream(target, abs)
+		for _, sym := range matches {
+			s.treeSymbol(sym)
+		}
+		return s.write(rc, "ast search", url.Values{"op": {"search"}, "pattern": {pattern}})
 	}
 	for _, s := range matches {
 		fmt.Fprintf(rc.Out, "%s:%d: %s\n", s.File, s.Line, formatSymbolLine(s))
@@ -263,6 +268,9 @@ func runSearchSymbols(rc *tool.RunContext, args []string) int {
 
 // --- ast refs ---
 
+// runRefs finds references to one symbol, or — with `-` — to every address
+// on stdin: a bashy-graph-v1 stream (ast:, graph: node refs; root and file
+// nodes are skipped) or plain symbol names one per line.
 func runRefs(rc *tool.RunContext, args []string) int {
 	asJSON := weavecli.IsAgent() // JSON by default under $BASHY_AGENTIC; --json=false/--plain override
 	var symbol, workspace string
@@ -284,30 +292,68 @@ func runRefs(rc *tool.RunContext, args []string) int {
 		fmt.Fprintln(rc.Err, "ast refs: missing symbol")
 		return 2
 	}
+	symbols := []string{symbol}
+	if symbol == "-" {
+		addrs, err := stream.ReadAddresses(rc.In)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "ast refs: stdin: %v\n", err)
+			return 2
+		}
+		symbols = symbols[:0]
+		seen := map[string]bool{}
+		for _, a := range addrs {
+			if name := symbolFromAddress(a); name != "" && !seen[name] {
+				seen[name] = true
+				symbols = append(symbols, name)
+			}
+		}
+		if len(symbols) == 0 {
+			fmt.Fprintln(rc.Err, "ast refs: no symbol addresses on stdin")
+			return 2
+		}
+	}
 	if workspace == "" {
 		workspace = "."
 	}
 	abs := rc.Path(workspace)
 	parser := treesitter.NewParser()
 
-	impacts, err := treesitter.Analyze(rc.Ctx, parser, symbol, "", abs)
-	if err != nil {
-		fmt.Fprintf(rc.Err, "ast refs: %v\n", err)
-		return 1
-	}
+	var s *astStream
 	if asJSON {
-		enc := json.NewEncoder(rc.Out)
-		enc.SetIndent("", "  ")
-		_ = enc.Encode(impacts)
-		return 0
+		s = newAstStream(workspace, abs)
 	}
-	for _, im := range impacts {
-		fmt.Fprintf(rc.Out, "%s:%d: %-12s %s\n", im.File, im.Line, im.Kind, im.Symbol)
-		if im.Context != "" {
-			fmt.Fprintf(rc.Out, "    %s\n", strings.TrimSpace(im.Context))
+	found := 0
+	for _, sym := range symbols {
+		impacts, err := treesitter.Analyze(rc.Ctx, parser, sym, "", abs)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "ast refs: %v\n", err)
+			return 1
+		}
+		found += len(impacts)
+		if s != nil {
+			t := s.target(sym)
+			for _, im := range impacts {
+				attrs := map[string]any{"line": im.Line, "distance": im.Distance}
+				if c := strings.TrimSpace(im.Context); c != "" {
+					attrs["context"] = c
+				}
+				site := s.site(im.File, im.Symbol, im.Line, "reference", im.Kind, attrs)
+				s.b.Edge(site, im.Kind, t, nil)
+			}
+			continue
+		}
+		for _, im := range impacts {
+			fmt.Fprintf(rc.Out, "%s:%d: %-12s %s\n", im.File, im.Line, im.Kind, im.Symbol)
+			if im.Context != "" {
+				fmt.Fprintf(rc.Out, "    %s\n", strings.TrimSpace(im.Context))
+			}
 		}
 	}
-	if len(impacts) == 0 {
+	if s != nil {
+		// An empty stream is still a complete answer, as the JSON array was.
+		return s.write(rc, "ast refs", url.Values{"op": {"refs"}, "symbol": symbols})
+	}
+	if found == 0 {
 		fmt.Fprintln(rc.Err, "(no references found)")
 		return 1
 	}
@@ -318,7 +364,7 @@ func runRefs(rc *tool.RunContext, args []string) int {
 
 func runRepomap(rc *tool.RunContext, args []string) int {
 	asJSON := weavecli.IsAgent() // JSON by default under $BASHY_AGENTIC; --json=false/--plain override
-	target := ""
+	target, operand := "", "."
 	opts := repomap.DefaultOptions()
 	for _, a := range args {
 		switch {
@@ -347,6 +393,7 @@ func runRepomap(rc *tool.RunContext, args []string) int {
 			target = "."
 		}
 	} else {
+		operand = target
 		target = rc.Path(target)
 	}
 
@@ -356,10 +403,22 @@ func runRepomap(rc *tool.RunContext, args []string) int {
 		return 1
 	}
 	if asJSON {
-		enc := json.NewEncoder(rc.Out)
-		enc.SetIndent("", "  ")
-		_ = enc.Encode(rm.Entries)
-		return 0
+		s := newAstStream(operand, target)
+		for _, e := range rm.Entries {
+			s.file(s.rel(e.Path))
+			for _, sym := range e.Symbols {
+				file := sym.File
+				if file == "" {
+					file = e.Path
+				}
+				s.symbol(file, sym.Name, sym.Kind, sym.Signature, sym.Line, sym.Exported)
+			}
+		}
+		q := url.Values{"op": {"map"}, "budget": {strconv.Itoa(opts.MaxTokens)}}
+		if opts.RelevanceQuery != "" {
+			q.Set("query", opts.RelevanceQuery)
+		}
+		return s.write(rc, "ast map", q)
 	}
 	fmt.Fprint(rc.Out, rm.Format())
 	return 0

@@ -320,3 +320,42 @@ func TestEncodeByteDeterminism(t *testing.T) {
 		}
 	}
 }
+
+// A Builder dedupes by ref and (src, rel, dst), and the encoded bytes do not
+// depend on the order a producer met its records in.
+func TestBuilderDedupesAndIsOrderFree(t *testing.T) {
+	build := func(order []int) string {
+		b := NewBuilder("ast:x")
+		adds := []func(){
+			func() { b.Node(provider.Node{Ref: "ast:x!/a", Name: "a", Kind: "file", Type: "go"}) },
+			func() { b.Node(provider.Node{Ref: "ast:x!/b", Name: "b", Kind: "file", Type: "go"}) },
+			func() { b.Edge("ast:x!/a", "calls", "ast:x!/b", map[string]any{"n": 1}) },
+			func() { b.Edge("ast:x!/a", "contains", "ast:x!/b", nil) },
+		}
+		for _, i := range order {
+			adds[i]()
+		}
+		// Repeats are dropped; the first record wins.
+		b.Node(provider.Node{Ref: "ast:x!/a", Name: "other", Kind: "file", Type: "go"})
+		b.Edge("ast:x!/a", "calls", "ast:x!/b", map[string]any{"n": 2})
+		if !b.Has("ast:x!/a") || b.Has("ast:x!/c") {
+			t.Fatal("Has")
+		}
+		var out bytes.Buffer
+		if err := b.Encode(&out, "ast", "op=t"); err != nil {
+			t.Fatal(err)
+		}
+		return out.String()
+	}
+	a, z := build([]int{0, 1, 2, 3}), build([]int{3, 2, 1, 0})
+	if a != z {
+		t.Fatalf("insertion order leaked:\n%s\n---\n%s", a, z)
+	}
+	g, err := Decode(strings.NewReader(a), DecodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(g.Nodes) != 2 || len(g.Edges) != 2 || g.Nodes[0].Name != "a" || g.Edges[0].Attrs["n"] != float64(1) {
+		t.Fatalf("dedupe: %+v %+v", g.Nodes, g.Edges)
+	}
+}

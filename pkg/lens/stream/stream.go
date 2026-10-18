@@ -514,3 +514,55 @@ func ReadAddresses(r io.Reader) ([]string, error) {
 	}
 	return refs, nil
 }
+
+// Builder accumulates one producer's records: the first node per ref wins and
+// repeated (src, rel, dst) edges are dropped, so a producer can add what it
+// meets in walk order and Encode still sees a duplicate-free graph.
+type Builder struct {
+	Graph Graph
+	nodes map[string]bool
+	edges map[[3]string]bool
+}
+
+// NewBuilder starts a stream whose header names source.
+func NewBuilder(source string) *Builder {
+	return &Builder{Graph: Graph{Source: source}, nodes: map[string]bool{}, edges: map[[3]string]bool{}}
+}
+
+// Node adds n unless a node with its ref is already present. Empty schema
+// version and attrs are filled.
+func (b *Builder) Node(n provider.Node) {
+	if b.nodes[n.Ref] {
+		return
+	}
+	b.nodes[n.Ref] = true
+	if n.SchemaVersion == "" {
+		n.SchemaVersion = provider.NodeSchema
+	}
+	if n.Attrs == nil {
+		n.Attrs = map[string]any{}
+	}
+	b.Graph.Nodes = append(b.Graph.Nodes, n)
+}
+
+// Has reports whether a node with ref was added.
+func (b *Builder) Has(ref string) bool { return b.nodes[ref] }
+
+// Edge adds src -rel-> dst once; attrs of a repeated edge are ignored.
+func (b *Builder) Edge(src, rel, dst string, attrs map[string]any) {
+	k := [3]string{src, rel, dst}
+	if b.edges[k] {
+		return
+	}
+	b.edges[k] = true
+	if attrs == nil {
+		attrs = map[string]any{}
+	}
+	b.Graph.Edges = append(b.Graph.Edges, provider.Edge{SchemaVersion: provider.EdgeSchema, Src: src, Rel: rel, Dst: dst, Attrs: attrs})
+}
+
+// Encode writes the framed stream with a snapshot cursor bound to
+// providerID, the builder's source and query.
+func (b *Builder) Encode(w io.Writer, providerID, query string) error {
+	return Encode(w, &b.Graph, providerID, query)
+}

@@ -18,6 +18,7 @@ import (
 	"github.com/qiangli/coreutils/tool"
 	"github.com/qiangli/yoke/pkg/lens"
 	"github.com/qiangli/yoke/pkg/lens/provider"
+	"github.com/qiangli/yoke/pkg/lens/stream"
 	"github.com/qiangli/yoke/pkg/ref"
 )
 
@@ -44,7 +45,7 @@ func run(rc *tool.RunContext, args []string) int {
 	dirsOnly := fs.BoolP("dirs-only", "d", false, "list directories only")
 	level := fs.IntP("level", "L", -1, "descend only LEVEL directories deep")
 	depth := fs.Int("depth", -1, "maximum descent depth")
-	jsonView := fs.Bool("json", false, "emit bashy-node-v1 JSONL")
+	jsonView := fs.Bool("json", false, "emit the bashy-graph-v1 stream (one LOCATOR)")
 	agentic := fs.Bool("agentic", false, "opt-in: also skip .gitignore'd and noise paths (node_modules, .git, …)")
 
 	operands, code := tool.Parse(rc, cmd, fs, args)
@@ -54,6 +55,11 @@ func run(rc *tool.RunContext, args []string) int {
 	roots := operands
 	if len(roots) == 0 {
 		roots = []string{"."}
+	}
+	// A stream is one snapshot of one source: two concatenated frames are not
+	// a stream any consumer reads.
+	if *jsonView && len(roots) > 1 {
+		return tool.UsageError(rc, cmd, "--json frames one locator per stream (got %d)", len(roots))
 	}
 
 	status := 0
@@ -77,15 +83,18 @@ func run(rc *tool.RunContext, args []string) int {
 				base = string(filepath.Separator)
 			}
 			p := provider.NewDir(base, *agentic)
-			view := "tree"
-			if *jsonView {
-				view = "listing"
-			}
 			limit := *depth
 			if limit < 0 {
 				limit = *level
 			}
-			if err := lens.Render(rc.Ctx, rc.Out, p, loc, view, limit, false); err != nil {
+			if *jsonView {
+				if err := writeStream(rc, p, loc, limit, *agentic); err != nil {
+					fmt.Fprintf(rc.Err, "tree: %s: %v\n", root, err)
+					status = 1
+				}
+				continue
+			}
+			if err := lens.Render(rc.Ctx, rc.Out, p, loc, "tree", limit, false); err != nil {
 				fmt.Fprintf(rc.Err, "tree: %s: %v\n", root, err)
 				status = 1
 			}
@@ -118,6 +127,22 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	fmt.Fprintf(rc.Out, "\n%d %s, %d %s\n", total.dirs, dirWord, total.files, fileWord)
 	return status
+}
+
+// writeStream emits the bashy-graph-v1 stream of loc. It is the same library
+// call `lens -t graph dir:LOC` pulls through (Sprint 446 S19: pull and push
+// are the same bytes); --agentic filters the walk, so it is part of the
+// query the cursor is bound to.
+func writeStream(rc *tool.RunContext, p provider.Provider, loc ref.Locator, limit int, agentic bool) error {
+	g, err := lens.PullGraph(rc.Ctx, p, loc, limit)
+	if err != nil {
+		return err
+	}
+	query := lens.PullQuery(limit)
+	if agentic {
+		query += "&agentic=true"
+	}
+	return stream.Encode(rc.Out, g, loc.Scheme, query)
 }
 
 func looksLikeLocator(s string) bool {
