@@ -230,7 +230,11 @@ func openMem(ctx context.Context, id dbstore.Identity, o dbstore.Options, create
 			return nil, err
 		}
 	}
-	db, err := open(ctx, memDSN(id), o, false)
+	dsn := memDSN(id)
+	if o.ReadOnly {
+		dsn += "&mode=ro" // the engine refuses writes, not just query_only
+	}
+	db, err := open(ctx, dsn, o, false)
 	if err != nil {
 		o.Mem.Release(id)
 		return nil, err
@@ -283,8 +287,10 @@ func fileDSN(p string, readOnly bool) string {
 	return "file:" + (&url.URL{Path: slash}).EscapedPath() + "?mode=" + mode
 }
 
+// memDSN pins temp_store=MEMORY: sorts and temp tables of a memory database
+// never spill to temporary files.
 func memDSN(id dbstore.Identity) string {
-	return "file:/" + url.PathEscape(id.Session) + "/" + url.PathEscape(id.Name) + "?vfs=memdb"
+	return "file:/" + url.PathEscape(id.Session) + "/" + url.PathEscape(id.Name) + "?vfs=memdb&_pragma=temp_store(2)"
 }
 
 // Classify maps a SQLite error to its contract code, keeping the engine

@@ -57,6 +57,8 @@ type Request struct {
 	Yes           bool           `json:"yes,omitempty"`
 	RequestID     string         `json:"request_id,omitempty"`
 	Attachment    string         `json:"attachment,omitempty"`
+	// Input is a registered category operation's typed input (CategoryOp).
+	Input json.RawMessage `json:"input,omitempty"`
 }
 
 type Response struct {
@@ -69,6 +71,8 @@ type Response struct {
 	Result        any         `json:"result,omitempty"`
 	Error         *OwnerError `json:"error,omitempty"`
 	RequestID     string      `json:"request_id,omitempty"`
+	Page          any         `json:"page,omitempty"`
+	Warnings      []string    `json:"warnings,omitempty"`
 }
 
 type OwnerError struct {
@@ -458,7 +462,7 @@ func (o *owner) handle(conn net.Conn) {
 }
 
 func (o *owner) executeReplay(ctx context.Context, req Request) Response {
-	spec := ownerSpec(req.Op, req.Target.Mode)
+	spec := ownerSpec(req)
 	if req.Attachment != "" {
 		o.mu.Lock()
 		o.purgeAttachmentsLocked()
@@ -475,6 +479,12 @@ func (o *owner) executeReplay(ctx context.Context, req Request) Response {
 		}
 	}
 	mutating := req.Op == "create" || req.Op == "drop" || req.Op == "restore" || req.Op == "hold" || req.Op == "release"
+	if _, access, ok, err := LookupCategoryOp(req.Op, req.Input); ok {
+		if err != nil {
+			return failResponse(Response{Op: spec.Name, MutationClass: spec.MutationClass, Effects: spec.Effects}, err)
+		}
+		mutating = access != AccessRead
+	}
 	if !mutating {
 		return o.execute(ctx, req)
 	}
@@ -510,7 +520,11 @@ func (o *owner) executeReplay(ctx context.Context, req Request) Response {
 	return res
 }
 
-func ownerSpec(op string, mode dbstore.Mode) Operation {
+func ownerSpec(req Request) Operation {
+	op, mode := req.Op, req.Target.Mode
+	if cat, access, ok, err := LookupCategoryOp(op, req.Input); ok && err == nil {
+		return cat.Spec(mode, access)
+	}
 	switch op {
 	case "attach", "detach", "stop":
 		return Spec("session."+op, mode)
@@ -521,7 +535,7 @@ func ownerSpec(op string, mode dbstore.Mode) Operation {
 }
 
 func (o *owner) execute(ctx context.Context, req Request) Response {
-	spec := ownerSpec(req.Op, req.Target.Mode)
+	spec := ownerSpec(req)
 	res := Response{SchemaVersion: "bashy-db-result-v1", OK: true, Op: spec.Name, MutationClass: spec.MutationClass, Effects: spec.Effects, RequestID: req.RequestID}
 	if req.Attachment != "" {
 		o.mu.Lock()
@@ -600,7 +614,11 @@ func (o *owner) execute(ctx context.Context, req Request) Response {
 	}
 	view := ViewTarget(id, "")
 	res.Target = &view
-	leave, err := o.admit(ctx, id.ID, req.Op == "create" || req.Op == "drop" || req.Op == "restore", req.Wait)
+	cat, access, isCategory, err := LookupCategoryOp(req.Op, req.Input)
+	if err != nil {
+		return failResponse(res, err)
+	}
+	leave, err := o.admit(ctx, id.ID, req.Op == "create" || req.Op == "drop" || req.Op == "restore" || (isCategory && access == AccessExclusive), req.Wait)
 	if err != nil {
 		return failResponse(res, err)
 	}
@@ -634,6 +652,26 @@ func (o *owner) execute(ctx context.Context, req Request) Response {
 		}
 	}
 	o.holdMu.Unlock()
+	if isCategory {
+		var out Outcome
+		switch {
+		case access == AccessExclusive && !req.Yes:
+			err = fmt.Errorf("%w: %s is destructive; pass --yes", dbstore.ErrConfirmationRequired, req.Op)
+		case held != nil:
+			// The holder's current epoch was checked above; its exclusive
+			// handle is the only path to the target while the hold lasts.
+			out, err = cat.Run(ctx, held.handle, req.Input, access)
+		default:
+			id, out, err = s.RunCategory(ctx, req.Target, req.Op, req.Input, req.Yes, req.Wait)
+		}
+		if err != nil {
+			return failResponse(res, err)
+		}
+		res.Result, res.Page, res.Warnings = out.Result, out.Page, out.Warnings
+		view = ViewTarget(id, "")
+		res.Target = &view
+		return res
+	}
 	switch req.Op {
 	case "create":
 		if held != nil {

@@ -391,6 +391,7 @@ var packages = map[string]Package{
 		"not here; reclassify to command/library when it does."},
 	"dbstore":     libPkg("db", "shared storage adapters behind the explicit database lifecycle command; category data verbs are added by their owning Sprint 453 stories."),
 	"dblifecycle": libPkg("db", "typed database lifecycle, owner IPC and claim coupling shared by the registered CLI and MCP command."),
+	"dbsql":       libPkg("db", "SQL category behind `db sql query|exec|schema` and the SQL logical interchange behind `db export|import`, registered with dblifecycle."),
 	"reduce": {Role: RoleUnwired, Note: "command-output reduction primitive and content-addressed spill store. " +
 		"NewOutCmd is not mounted and no execution seam imports the package yet; the Sprint 123 chat and shell " +
 		"seam stories own that wiring. Reclassify when the first front door lands."},

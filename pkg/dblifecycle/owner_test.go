@@ -369,7 +369,7 @@ func TestOwnerSessionOperationMetadata(t *testing.T) {
 		{"status", "session.show", "read"},
 		{"stop", "session.stop", "destructive"},
 	} {
-		s := ownerSpec(tt.op, "")
+		s := ownerSpec(Request{Op: tt.op})
 		if s.Name != tt.name || s.MutationClass != tt.class {
 			t.Errorf("%s = %+v", tt.op, s)
 		}

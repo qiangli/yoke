@@ -3,10 +3,12 @@
 package dbcmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +18,7 @@ import (
 
 	"github.com/qiangli/coreutils/tool"
 	"github.com/qiangli/yoke/pkg/dblifecycle"
+	"github.com/qiangli/yoke/pkg/dbsql"
 	"github.com/qiangli/yoke/pkg/dbstore"
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/policy/coord"
@@ -26,7 +29,8 @@ import (
 var command = &tool.Tool{
 	PreviewLevel: "local-preview",
 	Name:         "db", Synopsis: "Manage an explicit database target and owner session.",
-	Usage: "db create|show|check|backup|restore|drop [--engine E --mode persistent|memory --path P|--session S --name N] [--json]",
+	Usage: "db create|show|check|backup|restore|drop|export|import [--engine E --mode persistent|memory --path P|--session S --name N] [--json]\n" +
+		"db sql query|exec|schema show|schema apply TARGET [--sql SQL] [--param [NAME=]TYPE:VALUE]... [--params JSON] [--input FILE|-]",
 }
 
 func init() { command.Run = run; tool.Register(command) }
@@ -34,7 +38,9 @@ func init() { command.Run = run; tool.Register(command) }
 type dbFlags struct {
 	fs                                                                              *pflag.FlagSet
 	engine, mode, path, session, name, backup, source, ready, requestID, attachment *string
-	aliases                                                                         *[]string
+	sqlText, params, input, since, onConflict                                       *string
+	aliases, param                                                                  *[]string
+	limit, maxBytes                                                                 *int
 	idleTTL, wait, timeout                                                          *time.Duration
 	epoch                                                                           *uint64
 	detach, jsonFlag, yes, replace, dryRun, explain                                 *bool
@@ -50,8 +56,16 @@ func declareFlags(op string) dbFlags {
 	f.session = fs.String("session", "", "explicit owner session ID")
 	f.name = fs.String("name", "", "database name inside owner session")
 	f.aliases = fs.StringSlice("alias", nil, "additional registered name")
-	f.backup = fs.String("out", "", "new backup output path")
-	f.source = fs.String("in", "", "native backup input path")
+	f.backup = fs.String("out", "", "new backup file or export directory")
+	f.source = fs.String("in", "", "native backup file or export directory")
+	f.sqlText = fs.String("sql", "", "SQL text for db sql query/exec/schema apply (values are bound, never interpolated)")
+	f.param = fs.StringArray("param", nil, "bound parameter [NAME=]TYPE:VALUE, TYPE int|f64|text|bytes|null")
+	f.params = fs.String("params", "", "bound parameters as a JSON array or object of tagged values")
+	f.input = fs.String("input", "", "typed JSON input document (FILE or - for stdin)")
+	f.limit = fs.Int("limit", 0, "maximum rows or objects returned (default 100)")
+	f.maxBytes = fs.Int("max-bytes", 0, "maximum result bytes (default 262144)")
+	f.since = fs.String("since", "", "resume from a bashy-cursor-v1 envelope")
+	f.onConflict = fs.String("on-conflict", "", "import record conflicts: error|skip|replace")
 	f.ready = fs.String("ready", "", "private owner rendezvous")
 	_ = fs.MarkHidden("ready")
 	f.idleTTL = fs.Duration("idle-ttl", 0, "end an idle owner session after this duration")
@@ -75,11 +89,11 @@ func Schema() tool.ArgSchema {
 	s.Positionals = []tool.ArgParameter{{Name: "verb", Required: true}, {Name: "subject"}, {Name: "target"}}
 	for i := range s.Flags {
 		switch s.Flags[i].Type {
-		case "duration", "uint64", "stringSlice":
-			s.Flags[i].Type = "string" // exact textual wire value; pflag validates it
-			if s.Flags[i].Name == "alias" {
+		case "duration", "uint64", "stringSlice", "stringArray":
+			if s.Flags[i].Type == "stringSlice" || s.Flags[i].Type == "stringArray" {
 				s.Flags[i].Default = ""
 			}
+			s.Flags[i].Type = "string" // exact textual wire value; pflag validates it
 		}
 	}
 	return s
@@ -94,6 +108,8 @@ type output struct {
 	Effects       []string   `json:"effects"`
 	PreviewLevel  string     `json:"preview_level,omitempty"`
 	Result        any        `json:"result,omitempty"`
+	Page          any        `json:"page,omitempty"`
+	Warnings      []string   `json:"warnings,omitempty"`
 	Error         *errorBody `json:"error,omitempty"`
 }
 type errorBody struct {
@@ -189,11 +205,35 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		return 0
 	}
+	catOp, raw := "", json.RawMessage(nil)
+	if op == "sql" || op == "export" || op == "import" {
+		var err error
+		if catOp, operands, err = sqlVerb(op, operands); err == nil {
+			raw, err = categoryInput(rc, f, op)
+		}
+		if err != nil {
+			o := output{SchemaVersion: "bashy-db-result-v1", Op: op, MutationClass: "read"}
+			return failure(o, err).emit(rc, *jsonFlag)
+		}
+	}
 	spec := dblifecycle.Spec(op, dbstore.Mode(*mode))
+	if catOp != "" {
+		cat, access, ok, err := dblifecycle.LookupCategoryOp(catOp, raw)
+		if ok && err != nil {
+			o := output{SchemaVersion: "bashy-db-result-v1", Op: catOp, MutationClass: "read"}
+			return failure(o, err).emit(rc, *jsonFlag)
+		}
+		if ok {
+			spec = cat.Spec(dbstore.Mode(*mode), access)
+		}
+	}
 	if op == "session" && len(operands) == 1 {
 		spec = dblifecycle.Spec("session."+operands[0], "")
 	}
 	o := output{SchemaVersion: "bashy-db-result-v1", OK: true, Op: op, MutationClass: spec.MutationClass, Effects: spec.Effects}
+	if catOp != "" {
+		o.Op = catOp
+	}
 	if *explain || *dryRun {
 		o.PreviewLevel = "local-preview"
 		if *explain {
@@ -291,12 +331,31 @@ func run(rc *tool.RunContext, args []string) int {
 		return failure(o, err).emit(rc, *jsonFlag)
 	}
 	o.Target = dblifecycle.ViewTarget(id, "")
+	if op == "export" || op == "import" {
+		// The logical interchange belongs to the target's category.
+		catOp = dblifecycle.ViewTarget(id, "").Category + "." + op
+		o.Op = catOp
+	}
+	if catOp != "" {
+		cat, access, ok, err := dblifecycle.LookupCategoryOp(catOp, raw)
+		if !ok {
+			err = fmt.Errorf("%w: %s on engine %s", dbstore.ErrUnsupported, catOp, id.Engine)
+		}
+		if err != nil {
+			return failure(o, err).emit(rc, *jsonFlag)
+		}
+		spec = cat.Spec(id.Mode, access)
+		o.MutationClass, o.Effects = spec.MutationClass, spec.Effects
+	}
 	callSession := *session
 	if t.Mode == dbstore.Memory {
 		callSession = t.Session
 	}
-	if callSession == "" && envValue(rc.Env, "BASHY_DB_HOLD_TARGET") == id.ID {
-		callSession = envValue(rc.Env, "BASHY_DB_HOLD_SESSION")
+	// A `db hold -- CMD` child presents the hold's epoch. A memory target
+	// already names its session, so match the session rather than require
+	// it to be unset.
+	if holdSession := envValue(rc.Env, "BASHY_DB_HOLD_SESSION"); holdSession != "" && envValue(rc.Env, "BASHY_DB_HOLD_TARGET") == id.ID && (callSession == "" || callSession == holdSession) {
+		callSession = holdSession
 		if *epoch == 0 {
 			*epoch, _ = strconv.ParseUint(envValue(rc.Env, "BASHY_DB_HOLD_EPOCH"), 10, 64)
 		}
@@ -334,7 +393,11 @@ func run(rc *tool.RunContext, args []string) int {
 		return failure(o, fmt.Errorf("%w: hold/release requires an explicit --session or -- CMD", dbstore.ErrInvalidInput)).emit(rc, *jsonFlag)
 	}
 	if callSession != "" {
-		res, callErr := dblifecycle.Call(ctx, callSession, dblifecycle.Request{Op: op, Target: id.Target, Wait: *wait, Out: *backup, In: *source, Replace: *replace, Yes: *yes, RequestID: *requestID, Epoch: *epoch, Attachment: *attachment})
+		req := dblifecycle.Request{Op: op, Target: id.Target, Wait: *wait, Out: *backup, In: *source, Replace: *replace, Yes: *yes, RequestID: *requestID, Epoch: *epoch, Attachment: *attachment}
+		if catOp != "" {
+			req = dblifecycle.Request{Op: catOp, Target: id.Target, Wait: *wait, Yes: *yes, RequestID: *requestID, Epoch: *epoch, Attachment: *attachment, Input: raw}
+		}
+		res, callErr := dblifecycle.Call(ctx, callSession, req)
 		if startedOwner && (callErr != nil || !res.OK) {
 			_, _ = dblifecycle.Call(context.Background(), callSession, dblifecycle.Request{Op: "stop", Yes: true})
 		}
@@ -349,6 +412,18 @@ func run(rc *tool.RunContext, args []string) int {
 		return ownerOutput(o, res).emit(rc, *jsonFlag)
 	}
 	s := dblifecycle.Service{}
+	if catOp != "" {
+		if *requestID != "" {
+			return failure(o, fmt.Errorf("%w: --request-id deduplication is an owner-session guarantee; pass --session", dbstore.ErrUnsupported)).emit(rc, *jsonFlag)
+		}
+		var out dblifecycle.Outcome
+		_, out, err = s.RunCategory(ctx, id.Target, catOp, raw, *yes, *wait)
+		if err != nil {
+			return failure(o, err).emit(rc, *jsonFlag)
+		}
+		o.Result, o.Page, o.Warnings = out.Result, out.Page, out.Warnings
+		return o.emit(rc, *jsonFlag)
+	}
 	switch op {
 	case "create":
 		_, err = s.Create(ctx, id.Target, *wait)
@@ -477,6 +552,7 @@ func targetOperand(raw string) (dbstore.Target, error) {
 
 func ownerOutput(o output, res dblifecycle.Response) output {
 	o.SchemaVersion, o.OK, o.Op, o.Target, o.MutationClass, o.Effects, o.Result = res.SchemaVersion, res.OK, res.Op, res.Target, res.MutationClass, res.Effects, res.Result
+	o.Page, o.Warnings = res.Page, res.Warnings
 	if res.Error != nil {
 		o.Error = &errorBody{Code: res.Error.Code, Message: res.Error.Message, Retryable: res.Error.Retryable, SafeToRetry: res.Error.SafeToRetry, Details: res.Error.Details}
 	}
@@ -698,4 +774,157 @@ func registration(rc *tool.RunContext, o output, op string, args []string, canon
 	}
 	o.Result = map[string]any{"name": args[0], "target": canonical, "aliases": aliases}
 	return o.emit(rc, asJSON)
+}
+
+// sqlVerb splits `db sql query|exec|schema show|schema apply` (schema-show
+// and schema-apply are the one-word spellings typed MCP uses) from the
+// remaining operands. export and import pick their category from the target.
+func sqlVerb(op string, operands []string) (string, []string, error) {
+	if op != "sql" {
+		return "", operands, nil
+	}
+	if len(operands) == 0 {
+		return "", nil, fmt.Errorf("%w: db sql query|exec|schema show|schema apply TARGET", dbstore.ErrInvalidInput)
+	}
+	sub, rest := operands[0], operands[1:]
+	if sub == "schema" && len(rest) > 0 {
+		sub, rest = "schema."+rest[0], rest[1:]
+	} else if v, ok := strings.CutPrefix(sub, "schema-"); ok {
+		sub = "schema." + v
+	}
+	switch sub {
+	case "query", "exec", "schema.show", "schema.apply":
+		return "sql." + sub, rest, nil
+	}
+	return "", nil, fmt.Errorf("%w: db sql %s (want query, exec, schema show or schema apply)", dbstore.ErrInvalidInput, operands[0])
+}
+
+// categoryInput builds the one typed input document from --input and the
+// flags. A value given twice is an error, never a silent override.
+func categoryInput(rc *tool.RunContext, f dbFlags, op string) (json.RawMessage, error) {
+	var in dbsql.Input
+	if *f.input != "" {
+		var r io.Reader = rc.In
+		if *f.input != "-" {
+			file, err := os.Open(resolvePath(rc, *f.input))
+			if err != nil {
+				return nil, fmt.Errorf("%w: --input: %v", dbstore.ErrInvalidInput, err)
+			}
+			defer file.Close()
+			r = file
+		}
+		if r == nil {
+			return nil, fmt.Errorf("%w: --input - needs stdin", dbstore.ErrInvalidInput)
+		}
+		b, err := io.ReadAll(io.LimitReader(r, maxInput+1))
+		if err != nil {
+			return nil, err
+		}
+		if len(b) > maxInput {
+			return nil, fmt.Errorf("%w: --input is over %d bytes", dbstore.ErrLimitExceeded, maxInput)
+		}
+		dec := json.NewDecoder(bytes.NewReader(b))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&in); err != nil {
+			return nil, fmt.Errorf("%w: --input: %v", dbstore.ErrInvalidInput, err)
+		}
+	}
+	twice := func(name string, set bool) error {
+		if set {
+			return fmt.Errorf("%w: %s given in --input and as a flag", dbstore.ErrInvalidInput, name)
+		}
+		return nil
+	}
+	if *f.sqlText != "" {
+		if err := twice("sql", in.SQL != ""); err != nil {
+			return nil, err
+		}
+		in.SQL = *f.sqlText
+	}
+	if len(*f.param) > 0 || *f.params != "" {
+		if err := twice("params", len(in.Params) != 0); err != nil {
+			return nil, err
+		}
+		if len(*f.param) > 0 && *f.params != "" {
+			return nil, fmt.Errorf("%w: use --param or --params, not both", dbstore.ErrInvalidInput)
+		}
+		if *f.params != "" {
+			in.Params = json.RawMessage(*f.params)
+		} else {
+			named, positional := map[string]json.RawMessage{}, []json.RawMessage{}
+			for _, p := range *f.param {
+				name, value, err := dbsql.ParseParam(p)
+				if err != nil {
+					return nil, err
+				}
+				if name == "" {
+					positional = append(positional, value)
+				} else if _, dup := named[name]; dup {
+					return nil, fmt.Errorf("%w: --param %s given twice", dbstore.ErrInvalidInput, name)
+				} else {
+					named[name] = value
+				}
+			}
+			if len(named) > 0 && len(positional) > 0 {
+				return nil, fmt.Errorf("%w: mix of named and positional --param", dbstore.ErrInvalidInput)
+			}
+			var b []byte
+			if len(named) > 0 {
+				b, _ = json.Marshal(named)
+			} else {
+				b, _ = json.Marshal(positional)
+			}
+			in.Params = b
+		}
+	}
+	for _, v := range []struct {
+		name string
+		flag int
+		dst  *int
+	}{{"limit", *f.limit, &in.Limit}, {"max_bytes", *f.maxBytes, &in.MaxBytes}} {
+		if v.flag != 0 {
+			if err := twice(v.name, *v.dst != 0); err != nil {
+				return nil, err
+			}
+			*v.dst = v.flag
+		}
+	}
+	for _, v := range []struct {
+		name, flag string
+		dst        *string
+	}{{"since", *f.since, &in.Since}, {"on_conflict", *f.onConflict, &in.OnConflict}} {
+		if v.flag != "" {
+			if err := twice(v.name, *v.dst != ""); err != nil {
+				return nil, err
+			}
+			*v.dst = v.flag
+		}
+	}
+	// --out/--in/--replace mean the export directory and import mode here.
+	if op == "export" && *f.backup != "" {
+		in.Out = *f.backup
+	}
+	if op == "import" {
+		if *f.source != "" {
+			in.In = *f.source
+		}
+		in.Replace = in.Replace || *f.replace
+	}
+	if in.Out != "" && in.Out != "-" {
+		in.Out = resolvePath(rc, in.Out)
+	}
+	if in.In != "" && in.In != "-" {
+		in.In = resolvePath(rc, in.In)
+	}
+	return json.Marshal(in)
+}
+
+// maxInput keeps a typed input inside one owner request.
+const maxInput = 48 << 10
+
+func resolvePath(rc *tool.RunContext, p string) string {
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(rc.Dir, p)
+	}
+	return filepath.Clean(p)
 }
