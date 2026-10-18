@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -276,7 +278,58 @@ func Spec(name string, mode dbstore.Mode, a dblifecycle.Access) dblifecycle.Oper
 	case OpImport:
 		s.Effects = append([]string{"fs.read"}, s.Effects...)
 	case OpTransfer:
+		if !slices.Contains(s.Effects, "fs.write") {
+			s.Effects = append([]string{"fs.write"}, s.Effects...)
+		}
 		s.Effects = append(s.Effects, "net.egress")
 	}
 	return s
+}
+
+// IsWindowsVolume reports whether p starts with a Windows drive letter (e.g. "C:", "c:\...", "D:/...")
+// or UNC path prefix ("\\server\...").
+func IsWindowsVolume(p string) bool {
+	if len(p) >= 2 && ((p[0] >= 'a' && p[0] <= 'z') || (p[0] >= 'A' && p[0] <= 'Z')) && p[1] == ':' {
+		return true
+	}
+	if strings.HasPrefix(p, `\\`) || strings.HasPrefix(p, `//`) {
+		return true
+	}
+	return false
+}
+
+// IsRemoteDestination reports whether dest represents an rclone remote target (e.g. "remote:path",
+// ":s3:bucket") rather than a local filesystem path (such as Windows volume/drive "C:\...", "c:/...",
+// UNC "\\server\...", Unix absolute "/...", or relative paths).
+func IsRemoteDestination(dest string) bool {
+	if dest == "" {
+		return false
+	}
+	if filepath.VolumeName(dest) != "" || filepath.IsAbs(dest) {
+		return false
+	}
+	if IsWindowsVolume(dest) {
+		return false
+	}
+	if strings.HasPrefix(dest, "/") || strings.HasPrefix(dest, `\`) {
+		return false
+	}
+	colon := strings.Index(dest, ":")
+	if colon < 0 {
+		return false
+	}
+	slash := strings.IndexAny(dest, `/\`)
+	if slash >= 0 && slash < colon {
+		return false
+	}
+	return true
+}
+
+// IsRemoteTarget reports whether a transfer request targets a remote endpoint via the
+// remote flag or a remote destination string.
+func IsRemoteTarget(remote, dest string) bool {
+	if remote != "" {
+		return true
+	}
+	return IsRemoteDestination(dest)
 }

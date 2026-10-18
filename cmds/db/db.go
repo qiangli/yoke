@@ -119,7 +119,7 @@ func declareFlags(op string) dbFlags {
 	f.remote = fs.String("remote", "", "db obj transfer: remote rclone target name or path")
 	f.destination = fs.String("destination", "", "db obj transfer: destination directory or remote target")
 	f.checksum = fs.String("checksum", "", "db obj transfer: expected SHA256 checksum")
-	f.deleteFlag = fs.Bool("delete", false, "db obj transfer: delete transferred source objects")
+	f.deleteFlag = fs.Bool("delete", false, "db obj transfer: delete destination extras not present in source (sync)")
 	f.graphQuery = fs.String("query", "", "db graph query: parameterized DQL query")
 	f.graphVariables = fs.String("variables", "", "db graph query: JSON object of bound DQL variables")
 	f.graphSet = fs.String("set-nquads", "", "db graph mutate: RDF nquads to set")

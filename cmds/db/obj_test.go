@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/qiangli/yoke/mcp"
@@ -148,7 +150,15 @@ func TestObjCLI_Memory(t *testing.T) {
 		t.Fatalf("session start: %v", doc)
 	}
 	session := doc["result"].(map[string]any)["id"].(string)
-	defer dbRun(t, root, "", "session", "stop", "--session", session, "--yes")
+	stopped := false
+	stop := func() {
+		if !stopped {
+			stopped = true
+			dbRun(t, root, "", "session", "stop", "--session", session, "--yes")
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	defer stop()
 
 	target := []string{"--engine", "sqlite", "--mode", "memory", "--session", session, "--name", "memobj"}
 
@@ -170,6 +180,7 @@ func TestObjCLI_Memory(t *testing.T) {
 	if val["text"] != "memory object" {
 		t.Fatalf("memory get value: %v", val)
 	}
+	stop()
 }
 
 func TestObjMCP(t *testing.T) {
@@ -247,5 +258,89 @@ func TestObjMCP(t *testing.T) {
 	val := docGet["result"].(map[string]any)["value"].(map[string]any)
 	if val["text"] != "mcp payload" {
 		t.Fatalf("unexpected MCP get value: %v", val)
+	}
+}
+
+func TestObjTransfer_PreviewNoNet(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "preview_obj.db")
+	target := []string{"--engine", "sqlite", "--mode", "persistent", "--path", path}
+
+	code, doc := dbRun(t, root, "", append([]string{"create"}, target...)...)
+	if code != 0 {
+		t.Fatalf("create: %v", doc)
+	}
+	code, doc = dbRun(t, root, "", append([]string{"obj", "bucket", "create", "--bucket", "b1"}, target...)...)
+	if code != 0 {
+		t.Fatalf("bucket create: %v", doc)
+	}
+
+	hasEffect := func(d map[string]any, eff string) bool {
+		b, _ := json.Marshal(d["effects"])
+		return strings.Contains(string(b), eff)
+	}
+
+	hasNet := func(d map[string]any) bool {
+		return hasEffect(d, "net.egress")
+	}
+
+	// 1. Local destinations (Unix absolute, relative, Windows drive absolute) declare fs.write and NO net.egress
+	localDestinations := []string{
+		filepath.Join(root, "local-backup"),
+		`C:\backup\dir`,
+		`C:/backup/dir`,
+		`D:\data`,
+		`relative/backup`,
+	}
+	for _, dest := range localDestinations {
+		for _, preview := range []string{"--dry-run", "--explain"} {
+			code, d := dbRun(t, root, "", append([]string{"obj", "transfer", "--bucket", "b1", "--destination", dest, preview}, target...)...)
+			if code != 0 {
+				t.Fatalf("local transfer %s (%s): exit %d %v", dest, preview, code, d)
+			}
+			if !hasEffect(d, "fs.write") {
+				t.Fatalf("local destination %q (%s) missing fs.write effect: %v", dest, preview, d["effects"])
+			}
+			if hasNet(d) {
+				t.Fatalf("local destination %q (%s) declared net.egress: %v", dest, preview, d["effects"])
+			}
+		}
+	}
+
+	// 2. Memory target local destinations also declare fs.write and NO net.egress
+	memTarget := []string{"--engine", "sqlite", "--mode", "memory", "--session", "s-preview-test", "--name", "mempreview"}
+	for _, dest := range []string{filepath.Join(root, "mem-backup"), `C:\backup\memdir`} {
+		for _, preview := range []string{"--dry-run", "--explain"} {
+			code, d := dbRun(t, root, "", append([]string{"obj", "transfer", "--bucket", "b1", "--destination", dest, preview}, memTarget...)...)
+			if code != 0 {
+				t.Fatalf("memory local transfer %s (%s): exit %d %v", dest, preview, code, d)
+			}
+			if !hasEffect(d, "fs.write") {
+				t.Fatalf("memory local destination %q (%s) missing fs.write effect: %v", dest, preview, d["effects"])
+			}
+			if hasNet(d) {
+				t.Fatalf("memory local destination %q (%s) declared net.egress: %v", dest, preview, d["effects"])
+			}
+		}
+	}
+
+	// 3. Remote destinations (rclone remote:path, on-the-fly backend, or --remote flag) DO declare net.egress
+	remoteCases := [][]string{
+		{"obj", "transfer", "--bucket", "b1", "--destination", "myremote:backup/dir"},
+		{"obj", "transfer", "--bucket", "b1", "--destination", "s3:mybucket"},
+		{"obj", "transfer", "--bucket", "b1", "--destination", ":s3,provider=AWS:bucket"},
+		{"obj", "transfer", "--bucket", "b1", "--remote", "myremote", "--destination", "bucket"},
+	}
+	for _, args := range remoteCases {
+		for _, preview := range []string{"--dry-run", "--explain"} {
+			cmd := append(append([]string{}, args...), preview)
+			code, d := dbRun(t, root, "", append(cmd, target...)...)
+			if code != 0 {
+				t.Fatalf("remote transfer %v (%s): exit %d %v", args, preview, code, d)
+			}
+			if !hasNet(d) {
+				t.Fatalf("remote transfer %v (%s) failed to declare net.egress: %v", args, preview, d["effects"])
+			}
+		}
 	}
 }

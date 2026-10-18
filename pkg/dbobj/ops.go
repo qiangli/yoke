@@ -70,7 +70,7 @@ func init() {
 				if name == OpTransfer {
 					in, err := decodeInput(raw)
 					if err == nil {
-						isRemote := in.Remote != "" || strings.Contains(in.Destination, ":")
+						isRemote := IsRemoteTarget(in.Remote, in.Destination)
 						var eff []string
 						for _, e := range s.Effects {
 							if e != "net.egress" {
@@ -1363,8 +1363,8 @@ func runTransfer(ctx context.Context, store objectStore, h dbstore.Handle, in In
 		keyToNorm[o.Key] = norm
 	}
 
-	// Remote transfer via rclone: if remote target contains ":" or remote flag given
-	if in.Remote != "" || strings.Contains(dest, ":") {
+	// Remote transfer via rclone: if remote target or remote flag given
+	if IsRemoteTarget(in.Remote, dest) {
 		// Destructive control check
 		if (in.Delete || in.Replace) && !in.Replace {
 			return dblifecycle.Outcome{}, fmt.Errorf("%w: destructive transfer requires --replace", dbstore.ErrConfirmationRequired)

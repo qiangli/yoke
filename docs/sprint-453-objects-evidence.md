@@ -37,9 +37,9 @@ Category package `pkg/dbobj` implementing the Sprint 453 object storage category
 | Truncation detection in transfer and export | When `listObjects` returns `truncated == true`, partial transfer and partial export are refused with `ErrLimitExceeded`. | `TestTransfer_TruncatedRefused` |
 | No implicit schema creation on read | Read-only operations (`bucket list`, `stat`, `get`, `list`) on clean/missing targets create no schema tables and return clean results or `not_found`. Schema created only on explicit mutations. | `TestNoImplicitSchemaOnRead` |
 | Concurrent writes and cancellation | Exclusive holds and shared-writer serialization; cancellation checks before transaction commit. No process-global writer gates (admission + native transactions only). | `TestCancelledOperation_AndHoldSemantics`, `TestConcurrentWrites_NoLostUpdates` |
-| Independent-process client testing | Multi-process test uses actual `os.Executable` subprocesses against the shared target. Skips `testing.Short()` per dragon guidelines. | `TestIndependentProcess_SkippedInShort` |
+| Independent-process client testing | Multi-process tests use actual `os.Executable` subprocesses against persistent SQLite and shared-owner in-memory SQLite (CAS contention on same revision, exactly one success and one conflict, final readback). Skips `testing.Short()` per local development guidelines. | `TestIndependentProcess_SkippedInShort`, `TestIndependentProcess_Memory_OwnerCAS_SkippedInShort` |
 
-## Commands and Results on Dragon
+## Commands and Results on Local Development Host
 
 - Focused test gate:
   ```sh
@@ -49,7 +49,7 @@ Category package `pkg/dbobj` implementing the Sprint 453 object storage category
 
 - Multi-process integration gate (without `-short`):
   ```sh
-  CGO_ENABLED=0 GOMAXPROCS=2 GOFLAGS=-p=2 go test -v -run '^TestIndependentProcess_SkippedInShort$' -count=1 ./pkg/dbobj
+  CGO_ENABLED=0 GOMAXPROCS=2 GOFLAGS=-p=2 go test -v -run '^TestIndependentProcess' -count=1 ./pkg/dbobj
   ```
   Result: `PASS`
 
@@ -72,11 +72,15 @@ go test -count=1 ./pkg/dbobj -run '^TestIndependentProcess'
 - Typed MCP tool: exposed via `db_lifecycle` tool with `verb: obj` positionals and typed flags
 - Atlas census: `pkg/atlas/packages.go` census entry for `dbobj` library package
 - Capabilities: `objects` category and notes added to `pkg/dbstore/sqlitedb/sqlitedb.go` and `pkg/dbstore/bboltdb/bboltdb.go`
-- Test suite: `cmds/db/obj_test.go` covering CLI persistent mode, in-memory owner session, typed MCP execution, CAS revision preconditions, bounded listing, logical export/import, foreign flag refusal, and duplicate flag error checking
+- Shared destination classifier: `IsRemoteDestination`, `IsRemoteTarget`, and `IsWindowsVolume` in `pkg/dbobj` recognizing native Windows drive (`C:\...`, `c:/...`, `C:`) and UNC (`\\server\...`) volume/absolute paths before rclone remote syntax; shared across `objInput` path resolution, `SpecInput` effects declaration, and `runTransfer` execution
+- Input-aware SpecInput declaration: `Spec` declares `fs.write` for `OpTransfer` even in memory mode because destination/staging files are written locally; `SpecInput` adds `net.egress` only when remote target is configured
+- Aligned `--delete` sync semantics: flag help updated to `"delete destination extras not present in source (sync)"` matching explicit rclone sync destination deletion semantics
+- Test suite: `cmds/db/obj_test.go` covering CLI persistent mode, in-memory owner session, typed MCP execution, CAS revision preconditions, bounded listing, logical export/import, foreign flag refusal, duplicate flag error checking, persistent and memory local transfer preview with `fs.write` and no `net.egress`; `pkg/dbobj/dbobj_test.go` table-driven destination classifier test suite and `TestTransfer_SpecAndSpecInput_MemoryAndPersistent`
 - Test commands:
   ```sh
   CGO_ENABLED=0 GOMAXPROCS=4 GOFLAGS=-p=2 go test -short -count=1 ./cmds/db -run TestObj
   CGO_ENABLED=0 GOMAXPROCS=4 GOFLAGS=-p=2 go test -short -count=1 ./pkg/dbobj
   ```
   Result: `ok  github.com/qiangli/yoke/cmds/db (PASS)`, `ok  github.com/qiangli/yoke/pkg/dbobj (PASS)`
+
 

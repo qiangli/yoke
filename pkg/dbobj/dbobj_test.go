@@ -11,6 +11,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -569,15 +572,18 @@ func TestIndependentProcess_SkippedInShort(t *testing.T) {
 
 	mustRun(t, svc, target, OpBucketCreate, Input{Bucket: "concbkt"}, false)
 
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
 	// Launch two independent child processes concurrently against the same target
 	var out1Buf, err1Buf bytes.Buffer
-	cmd1 := exec.Command(exe, "-test.run=^TestHelperProcess$", "--", "put", dbPath, "concbkt", "k1", "val1")
+	cmd1 := exec.CommandContext(ctx, exe, "-test.run=^TestHelperProcess$", "--", "put", dbPath, "concbkt", "k1", "val1")
 	cmd1.Env = append(os.Environ(), childEnv+"=1")
 	cmd1.Stdout = &out1Buf
 	cmd1.Stderr = &err1Buf
 
 	var out2Buf, err2Buf bytes.Buffer
-	cmd2 := exec.Command(exe, "-test.run=^TestHelperProcess$", "--", "put", dbPath, "concbkt", "k2", "val2")
+	cmd2 := exec.CommandContext(ctx, exe, "-test.run=^TestHelperProcess$", "--", "put", dbPath, "concbkt", "k2", "val2")
 	cmd2.Env = append(os.Environ(), childEnv+"=1")
 	cmd2.Stdout = &out2Buf
 	cmd2.Stderr = &err2Buf
@@ -607,6 +613,242 @@ func TestIndependentProcess_SkippedInShort(t *testing.T) {
 	res2 := out2.Result.(map[string]any)["value"].(Value)
 	if *res2.Text != "val2" {
 		t.Fatalf("expected val2, got %v", *res2.Text)
+	}
+}
+
+func TestObjOwnerProcessHelper(t *testing.T) {
+	if os.Getenv("DBOBJ_OWNER_HELPER") != "1" {
+		return
+	}
+	if err := dblifecycle.Serve(context.Background(), os.Getenv("DBOBJ_READY"), 0); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestObjClientHelper(t *testing.T) {
+	if os.Getenv("DBOBJ_CLIENT_HELPER") != "1" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	op := os.Getenv("DBOBJ_CLIENT_OP")
+	var target dbstore.Target
+	_ = json.Unmarshal([]byte(os.Getenv("DBOBJ_CLIENT_TARGET")), &target)
+	input := json.RawMessage(os.Getenv("DBOBJ_CLIENT_INPUT"))
+	session := os.Getenv("DBOBJ_CLIENT_SESSION")
+	directPath := os.Getenv("DBOBJ_CLIENT_DIRECT_PATH")
+
+	var res dblifecycle.Response
+	if directPath != "" {
+		target = dbstore.Target{Engine: "sqlite", Mode: dbstore.Persistent, Path: directPath}
+		_, out, err := (dblifecycle.Service{}).RunCategory(ctx, target, op, input, os.Getenv("DBOBJ_CLIENT_YES") == "1", 10*time.Second)
+		res = dblifecycle.Response{OK: err == nil, Result: out.Result}
+		if err != nil {
+			res.Error = &dblifecycle.OwnerError{Code: dbstore.Code(err), Message: err.Error()}
+		}
+	} else {
+		var err error
+		res, err = dblifecycle.Call(ctx, session, dblifecycle.Request{
+			Op: op, Target: target, Input: input, Yes: os.Getenv("DBOBJ_CLIENT_YES") == "1", Wait: 10 * time.Second,
+		})
+		if err != nil {
+			res = dblifecycle.Response{Error: &dblifecycle.OwnerError{Code: dbstore.Code(err), Message: err.Error()}}
+		}
+	}
+	_ = json.NewEncoder(os.Stdout).Encode(res)
+}
+
+func startObjOwnerProcess(t *testing.T) (string, *exec.Cmd) {
+	t.Helper()
+	dir := t.TempDir()
+	sessionDir := filepath.Join(dir, "sessions")
+	coordDir := filepath.Join(dir, "coord")
+	t.Setenv("BASHY_DB_SESSION_DIR", sessionDir)
+	t.Setenv("BASHY_COORD_DIR", coordDir)
+	ready := filepath.Join(dir, "ready")
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	cmd := exec.CommandContext(ctx, exe, "-test.run=^TestObjOwnerProcessHelper$")
+	cmd.Env = append(os.Environ(),
+		"DBOBJ_OWNER_HELPER=1",
+		"DBOBJ_READY="+ready,
+		"BASHY_DB_SESSION_DIR="+sessionDir,
+		"BASHY_COORD_DIR="+coordDir,
+	)
+	if err := cmd.Start(); err != nil {
+		cancel()
+		t.Fatalf("start owner process: %v", err)
+	}
+	t.Cleanup(func() {
+		cancel()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if b, err := os.ReadFile(ready); err == nil && strings.HasPrefix(string(b), "s-") {
+			return strings.TrimSpace(string(b)), cmd
+		}
+	}
+	t.Fatal("owner did not become ready")
+	return "", nil
+}
+
+func runObjClient(ctx context.Context, session string, target dbstore.Target, op string, in Input) (dblifecycle.Response, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return dblifecycle.Response{}, fmt.Errorf("os.Executable: %w", err)
+	}
+	inBytes, err := json.Marshal(in)
+	if err != nil {
+		return dblifecycle.Response{}, fmt.Errorf("marshal input: %w", err)
+	}
+	targetBytes, err := json.Marshal(target)
+	if err != nil {
+		return dblifecycle.Response{}, fmt.Errorf("marshal target: %w", err)
+	}
+	childCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(childCtx, exe, "-test.run=^TestObjClientHelper$")
+	cmd.Env = append(os.Environ(),
+		"DBOBJ_CLIENT_HELPER=1",
+		"DBOBJ_CLIENT_SESSION="+session,
+		"DBOBJ_CLIENT_TARGET="+string(targetBytes),
+		"DBOBJ_CLIENT_OP="+op,
+		"DBOBJ_CLIENT_INPUT="+string(inBytes),
+	)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return dblifecycle.Response{}, fmt.Errorf("client process failed: %w, stderr: %s", err, stderr.String())
+	}
+	var res dblifecycle.Response
+	dec := json.NewDecoder(&stdout)
+	dec.UseNumber()
+	if err := dec.Decode(&res); err != nil {
+		return dblifecycle.Response{}, fmt.Errorf("decode client response: %w, stdout: %s, stderr: %s", err, stdout.String(), stderr.String())
+	}
+	return res, nil
+}
+
+func TestIndependentProcess_Memory_OwnerCAS_SkippedInShort(t *testing.T) {
+	if testing.Short() {
+		t.Skip("independent-process tests MUST skip testing.Short()")
+	}
+
+	session, _ := startObjOwnerProcess(t)
+	target := dbstore.Target{Engine: "sqlite", Mode: dbstore.Memory, Session: session, Name: "cas-shared"}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// 1. Create target on owner
+	createRes, err := dblifecycle.Call(ctx, session, dblifecycle.Request{
+		Op: "create", Target: target, Wait: 5 * time.Second,
+	})
+	if err != nil || !createRes.OK {
+		t.Fatalf("create target: %v %+v", err, createRes)
+	}
+
+	// 2. Create bucket
+	rawBucket, _ := json.Marshal(Input{Bucket: "casbkt"})
+	bktRes, err := dblifecycle.Call(ctx, session, dblifecycle.Request{
+		Op: OpBucketCreate, Target: target, Input: rawBucket, Wait: 5 * time.Second,
+	})
+	if err != nil || !bktRes.OK {
+		t.Fatalf("create bucket: %v %+v", err, bktRes)
+	}
+
+	// 3. Put initial object with revision 1
+	rawPut, _ := json.Marshal(Input{
+		Bucket: "casbkt",
+		Key:    "cas-key",
+		Value:  &Value{Text: strPtr("v0")},
+	})
+	initRes, err := dblifecycle.Call(ctx, session, dblifecycle.Request{
+		Op: OpPut, Target: target, Input: rawPut, Wait: 5 * time.Second,
+	})
+	if err != nil || !initRes.OK {
+		t.Fatalf("initial put: %v %+v", err, initRes)
+	}
+
+	// 4. Two independent child client processes race to update the same object with IfRevision = "1"
+	var wg sync.WaitGroup
+	results := make([]dblifecycle.Response, 2)
+	errs := make([]error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		results[0], errs[0] = runObjClient(ctx, session, target, OpPut, Input{
+			Bucket:     "casbkt",
+			Key:        "cas-key",
+			Value:      &Value{Text: strPtr("client-1-value")},
+			IfRevision: "1",
+		})
+	}()
+	go func() {
+		defer wg.Done()
+		results[1], errs[1] = runObjClient(ctx, session, target, OpPut, Input{
+			Bucket:     "casbkt",
+			Key:        "cas-key",
+			Value:      &Value{Text: strPtr("client-2-value")},
+			IfRevision: "1",
+		})
+	}()
+	wg.Wait()
+
+	if errs[0] != nil {
+		t.Fatalf("client 1 failed: %v", errs[0])
+	}
+	if errs[1] != nil {
+		t.Fatalf("client 2 failed: %v", errs[1])
+	}
+
+	// 5. Exactly one success and exactly one conflict
+	res1, res2 := results[0], results[1]
+	c1Success := res1.OK && (res1.Error == nil)
+	c2Success := res2.OK && (res2.Error == nil)
+	c1Conflict := !res1.OK && res1.Error != nil && res1.Error.Code == "conflict"
+	c2Conflict := !res2.OK && res2.Error != nil && res2.Error.Code == "conflict"
+
+	if !((c1Success && c2Conflict) || (c2Success && c1Conflict)) {
+		t.Fatalf("expected exactly one success and one conflict, got res1=%+v res2=%+v", res1, res2)
+	}
+
+	// 6. Final readback from owner: must have revision 2 and match winning client's value
+	rawGet, _ := json.Marshal(Input{Bucket: "casbkt", Key: "cas-key"})
+	getRes, err := dblifecycle.Call(ctx, session, dblifecycle.Request{
+		Op: OpGet, Target: target, Input: rawGet, Wait: 5 * time.Second,
+	})
+	if err != nil || !getRes.OK {
+		t.Fatalf("readback failed: %v %+v", err, getRes)
+	}
+	resMap := getRes.Result.(map[string]any)
+	objMap := resMap["object"].(map[string]any)
+	valMap := resMap["value"].(map[string]any)
+
+	var rev int64
+	switch v := objMap["revision"].(type) {
+	case json.Number:
+		rev, _ = v.Int64()
+	case float64:
+		rev = int64(v)
+	}
+	if rev != 2 {
+		t.Fatalf("expected revision 2 on readback, got %v", objMap["revision"])
+	}
+
+	expectedVal := "client-1-value"
+	if c2Success {
+		expectedVal = "client-2-value"
+	}
+	if valMap["text"] != expectedVal {
+		t.Fatalf("expected value %q, got %v", expectedVal, valMap["text"])
 	}
 }
 
@@ -1000,5 +1242,98 @@ func TestKV_ImportAtomic_MetadataPreserved(t *testing.T) {
 				t.Fatalf("expected existing_bkt CreatedAt %q to be preserved, but got %q", originalCreated, afterCreated)
 			}
 		})
+	}
+}
+
+func TestDestinationClassifier(t *testing.T) {
+	tests := []struct {
+		name        string
+		destination string
+		remote      string
+		wantRemote  bool
+	}{
+		// Windows local paths (drive letters with backslash/slash)
+		{name: "windows backslash abs", destination: `C:\backup\dir`, wantRemote: false},
+		{name: "windows lowercase drive", destination: `c:\Users\test`, wantRemote: false},
+		{name: "windows forward slash abs", destination: `C:/backup/dir`, wantRemote: false},
+		{name: "windows drive root backslash", destination: `D:\`, wantRemote: false},
+		{name: "windows drive root forward", destination: `d:/`, wantRemote: false},
+		{name: "windows drive only", destination: `C:`, wantRemote: false},
+		{name: "windows drive relative", destination: `C:rel\path`, wantRemote: false},
+		// Windows UNC paths
+		{name: "windows UNC backslash", destination: `\\server\share\backup`, wantRemote: false},
+		{name: "windows UNC forward slash", destination: `//server/share/backup`, wantRemote: false},
+		// Unix absolute paths
+		{name: "unix root", destination: `/var/backup/obj`, wantRemote: false},
+		{name: "unix tmp", destination: `/tmp/local`, wantRemote: false},
+		// Relative paths
+		{name: "relative dir", destination: `backup/dir`, wantRemote: false},
+		{name: "relative dot slash", destination: `./backup`, wantRemote: false},
+		{name: "relative parent slash", destination: `../backup`, wantRemote: false},
+		{name: "relative colon after slash", destination: `./dir:with:colon`, wantRemote: false},
+		{name: "relative sub colon", destination: `sub/dir:name`, wantRemote: false},
+		{name: "windows relative colon after slash", destination: `.\dir:colon`, wantRemote: false},
+		// Empty destination
+		{name: "empty destination", destination: ``, wantRemote: false},
+		// Remote destinations
+		{name: "rclone remote bucket", destination: `myremote:bucket`, wantRemote: true},
+		{name: "s3 remote path", destination: `s3:mybucket/dir`, wantRemote: true},
+		{name: "drive remote root", destination: `gdrive:`, wantRemote: true},
+		{name: "rclone backend on-the-fly", destination: `:s3,provider=AWS:bucket`, wantRemote: true},
+		// Remote flag specified
+		{name: "remote flag with local path", destination: `/tmp/local`, remote: `myremote`, wantRemote: true},
+		{name: "remote flag with windows path", destination: `C:\backup`, remote: `myremote`, wantRemote: true},
+		{name: "remote flag with empty dest", destination: ``, remote: `myremote`, wantRemote: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotTarget := IsRemoteTarget(tc.remote, tc.destination)
+			if gotTarget != tc.wantRemote {
+				t.Errorf("IsRemoteTarget(%q, %q) = %v, want %v", tc.remote, tc.destination, gotTarget, tc.wantRemote)
+			}
+			if tc.remote == "" {
+				gotDest := IsRemoteDestination(tc.destination)
+				if gotDest != tc.wantRemote {
+					t.Errorf("IsRemoteDestination(%q) = %v, want %v", tc.destination, gotDest, tc.wantRemote)
+				}
+			}
+		})
+	}
+}
+
+func TestTransfer_SpecAndSpecInput_MemoryAndPersistent(t *testing.T) {
+	// 1. Spec for persistent and memory
+	specPers := Spec(OpTransfer, dbstore.Persistent, dblifecycle.AccessWrite)
+	if !slices.Contains(specPers.Effects, "fs.write") {
+		t.Fatalf("expected fs.write in persistent OpTransfer Spec: %v", specPers.Effects)
+	}
+	specMem := Spec(OpTransfer, dbstore.Memory, dblifecycle.AccessWrite)
+	if !slices.Contains(specMem.Effects, "fs.write") {
+		t.Fatalf("expected fs.write in memory OpTransfer Spec: %v", specMem.Effects)
+	}
+
+	// 2. SpecInput for local destination in memory mode declares fs.write and NO net.egress
+	catOp, _, ok, err := dblifecycle.LookupCategoryOp(OpTransfer, nil)
+	if !ok || err != nil {
+		t.Fatalf("LookupCategoryOp: %v", err)
+	}
+	rawLocal, _ := json.Marshal(Input{Bucket: "bkt", Destination: "/tmp/local"})
+	declaredMemLocal := catOp.Declare(rawLocal, dbstore.Memory, dblifecycle.AccessWrite)
+	if !slices.Contains(declaredMemLocal.Effects, "fs.write") {
+		t.Fatalf("expected fs.write in declared memory local transfer: %v", declaredMemLocal.Effects)
+	}
+	if slices.Contains(declaredMemLocal.Effects, "net.egress") {
+		t.Fatalf("unexpected net.egress in declared memory local transfer: %v", declaredMemLocal.Effects)
+	}
+
+	// 3. SpecInput for remote destination in memory mode declares fs.write AND net.egress
+	rawRemote, _ := json.Marshal(Input{Bucket: "bkt", Destination: "s3:bucket"})
+	declaredMemRemote := catOp.Declare(rawRemote, dbstore.Memory, dblifecycle.AccessWrite)
+	if !slices.Contains(declaredMemRemote.Effects, "fs.write") {
+		t.Fatalf("expected fs.write in declared memory remote transfer: %v", declaredMemRemote.Effects)
+	}
+	if !slices.Contains(declaredMemRemote.Effects, "net.egress") {
+		t.Fatalf("expected net.egress in declared memory remote transfer: %v", declaredMemRemote.Effects)
 	}
 }

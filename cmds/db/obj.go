@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -180,8 +181,12 @@ func objInput(rc *tool.RunContext, f dbFlags) (json.RawMessage, error) {
 	if in.In != "" && in.In != "-" {
 		in.In = resolvePath(rc, in.In)
 	}
-	if in.Destination != "" && !strings.Contains(in.Destination, ":") {
-		in.Destination = resolvePath(rc, in.Destination)
+	if in.Destination != "" && !dbobj.IsRemoteTarget(in.Remote, in.Destination) {
+		if filepath.IsAbs(in.Destination) {
+			in.Destination = filepath.Clean(in.Destination)
+		} else if !dbobj.IsWindowsVolume(in.Destination) {
+			in.Destination = resolvePath(rc, in.Destination)
+		}
 	}
 	return json.Marshal(in)
 }
