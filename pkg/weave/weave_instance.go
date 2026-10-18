@@ -78,13 +78,10 @@ func weaveRunSessionClaim(id int64, branch string) string {
 //     conversation under a family configuration it never agreed to makes every
 //     earlier turn unattributable to the model that produced it.
 //
-// Cap exhaustion is deliberately NOT fatal here. A run's instance is retired
-// only when its record is deleted, so active instances accumulate across a
-// fleet's lifetime; letting the default cap refuse the ninth `weave start` of
-// an agent would turn an identity ceiling into a fleet outage. The cap still
-// governs interactive opens, where it is the operator's own choice. Retiring a
-// context when its run reaches a terminal state is the follow-up that makes
-// the cap meaningful for weave too.
+// Cap exhaustion is deliberately NOT fatal here: an identity ceiling must not
+// become a fleet outage. It is meaningful for weave because a run's instance
+// is retired once the run is terminal and can no longer be resumed (see
+// weaveReconcileRunInstances), so finished runs stop counting against it.
 func weaveOpenRunInstance(it *weaveItem, l *weaveAgentLaunch, branch string) (agentlaunch.InstanceContext, error) {
 	if it == nil || l == nil {
 		return agentlaunch.InstanceContext{}, nil
@@ -110,6 +107,13 @@ func weaveOpenRunInstance(it *weaveItem, l *weaveAgentLaunch, branch string) (ag
 		req.Fresh = true
 	}
 	ctx, err := agentlaunch.OpenContext(agentlaunch.Launch(*l), req)
+	// A parked context whose resume the family cap refuses stays the run's:
+	// the refusal is reported and the UUID kept for a later resume, rather
+	// than silently continuing as some other (or no) identity.
+	var capErr *fleet.CapError
+	if req.Resume != "" && errors.As(err, &capErr) {
+		return agentlaunch.InstanceContext{}, err
+	}
 	// A RECORDED CONTEXT THAT NO LONGER RESUMES must not leave its UUID on the
 	// run. The store is host-global and outlives no checkout in particular, so
 	// a record can genuinely be gone — wiped, or retired by `weave reset` on
@@ -132,6 +136,7 @@ func weaveOpenRunInstance(it *weaveItem, l *weaveAgentLaunch, branch string) (ag
 		return agentlaunch.InstanceContext{}, nil
 	}
 	it.Instance = ctx.Instance.UUID
+	it.InstanceRetired = false
 	it.InstanceFamily = ctx.Instance.FamilyID
 	it.InstanceLabel = ctx.Instance.Label
 	it.SessionClaim = session
@@ -181,4 +186,75 @@ func weaveRetireRunInstance(it *weaveItem) (string, error) {
 		return "", nil
 	}
 	return agentlaunch.RetireContext(nil, it.Instance, bus.InstanceMail, it.SessionClaim)
+}
+
+// weaveInstanceMail is the mail source a reconcile archives with; a var so a
+// test can act during the collection, which runs outside the store lock.
+var weaveInstanceMail fleet.MailSource = bus.InstanceMail
+
+// weaveReconcileRunInstances settles the instance of every run that has reached
+// a terminal state and that nothing still drives. A run that can no longer be
+// resumed — done/abandoned, or stopped with its workspace gone (`--resume`
+// needs it on disk) — has its instance retired (mail archived). A resumable
+// terminal run (failed/submitted/no-op with its workspace) is PARKED instead:
+// it keeps its UUID, mail and label for the same holder's resume, but a
+// completed worker no longer counts against the family cap; the resume
+// re-admits it against the cap (agentlaunch). It runs on every queue write and
+// before a start allocates, so instances left by runs that ended earlier are
+// reconciled before the next one needs a slot.
+//
+// Nothing is parked or retired while the run's wrapper, child or finalizer is
+// alive or a live session still owns its instance. Idempotent and
+// best-effort: a failure is retried on the next write.
+func weaveReconcileRunInstances(q *weaveQueue) {
+	if q == nil {
+		return
+	}
+	var store *fleet.InstanceStore
+	for _, it := range q.Items {
+		if it == nil || strings.TrimSpace(it.Instance) == "" || it.InstanceRetired || !isTerminalState(it.State) {
+			continue
+		}
+		if pidAlive(it.WrapperPid) || pidAlive(it.ChildPID) || pidAlive(it.FinalizerPID) {
+			continue
+		}
+		if store == nil {
+			store = fleet.NewInstanceStore("")
+		}
+		inst, err := store.Get(it.Instance)
+		if errors.Is(err, fleet.ErrInstanceUnknown) {
+			it.InstanceRetired = true // nothing left to retire
+			continue
+		}
+		if err != nil {
+			continue
+		}
+		if !inst.Active() {
+			it.InstanceRetired = true
+			continue
+		}
+		// The owner check runs inside the park/retire, under the store lock,
+		// so a session claiming concurrently is never parked or retired.
+		if !weaveRunUnresumable(it) {
+			_ = agentlaunch.ParkIdleContext(store, it.Instance)
+			continue
+		}
+		if _, err := agentlaunch.RetireIdleContext(store, it.Instance, weaveInstanceMail, it.SessionClaim); err != nil {
+			continue
+		}
+		it.InstanceRetired = true
+	}
+}
+
+// weaveRunUnresumable reports a terminal run that `weave start --resume` can no
+// longer continue.
+func weaveRunUnresumable(it *weaveItem) bool {
+	if !isTerminalState(it.State) {
+		return false
+	}
+	if weaveIsClosedState(it.State) || strings.TrimSpace(it.Workspace) == "" {
+		return true
+	}
+	_, err := os.Stat(it.Workspace)
+	return errors.Is(err, os.ErrNotExist)
 }

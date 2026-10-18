@@ -138,22 +138,61 @@ func SelfInstance(store *fleet.InstanceStore) (fleet.Instance, error) {
 	return store.Resume(id)
 }
 
-// ClaimInstance takes or keeps the single live ownership of an instance.
+// ClaimInstance takes or keeps the single live ownership of an instance in
+// the default (host) store. See ClaimInstanceIn; a parked context is
+// re-admitted against its family cap.
+func ClaimInstance(inst fleet.Instance, claim InstanceClaim) error {
+	_, err := ClaimInstanceIn(nil, inst, claim, true)
+	return err
+}
+
+// ClaimInstanceIn takes or keeps the single live ownership of an instance.
 //
 // Granted when the instance is unowned, when its previous owner's process is
 // gone, or when the CALLER IS THE SAME SESSION — which is how a per-turn child
 // command keeps working without re-taking anything. Refused with
 // *room.ErrLive when another live session owns it.
-func ClaimInstance(inst fleet.Instance, claim InstanceClaim) error {
+//
+// inst is only the caller's snapshot: the claim is decided and taken under
+// the store lock on the PERSISTED record (fleet.InstanceStore.Admit), so a
+// retirement or park that landed after the snapshot refuses it, and a guarded
+// retire/park that runs after it sees the owner. A parked record is refused
+// with fleet.ErrInstanceParked unless unpark, which re-admits it against the
+// family cap. The returned instance is the persisted record.
+func ClaimInstanceIn(store *fleet.InstanceStore, inst fleet.Instance, claim InstanceClaim, unpark bool) (fleet.Instance, error) {
 	if strings.TrimSpace(inst.UUID) == "" {
-		return fmt.Errorf("principal: an instance claim requires a UUID")
+		return fleet.Instance{}, fmt.Errorf("principal: an instance claim requires a UUID")
 	}
 	if strings.TrimSpace(claim.Session) == "" {
-		return room.ErrNoSessionClaim
+		return fleet.Instance{}, room.ErrNoSessionClaim
 	}
 	if !inst.Active() {
-		return fmt.Errorf("principal: instance %s is retired and cannot be claimed", inst.UUID)
+		return fleet.Instance{}, fmt.Errorf("principal: instance %s is retired and cannot be claimed", inst.UUID)
 	}
+	if store == nil {
+		store = fleet.NewInstanceStore("")
+	}
+	// acquired is set only when this attempt TOOK the claim (the session did
+	// not already hold it), so a failure after the claim — persisting the
+	// un-park — releases exactly that and never a claim held before the call.
+	var acquired *fleet.Instance
+	rec, err := store.Admit(inst.UUID, unpark, func(rec fleet.Instance) error {
+		owner, owned := InstanceOwner(rec)
+		if err := claimSession(rec, claim); err != nil {
+			return err
+		}
+		if !owned || owner.SessionClaim != claim.Session {
+			acquired = &rec
+		}
+		return nil
+	})
+	if err != nil && acquired != nil {
+		ReleaseInstance(*acquired, claim.Session)
+	}
+	return rec, err
+}
+
+func claimSession(inst fleet.Instance, claim InstanceClaim) error {
 	binding := ""
 	if len(inst.Bindings) > 0 {
 		binding = inst.Bindings[0]

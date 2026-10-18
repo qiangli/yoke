@@ -578,3 +578,38 @@ func TestOpenRejectsBindingsThatForgeTheConfigSeparators(t *testing.T) {
 		t.Fatalf("frozen binding = %q; want it normalized", inst.Bindings[0])
 	}
 }
+
+// A parked instance keeps its identity but stops counting against the cap;
+// Unpark re-admits it against the cap under the store lock (story
+// 17246595f4c3, ruling MB6628).
+func TestParkedInstanceIsNotCountedAndUnparkReadmits(t *testing.T) {
+	s := instanceStore(t).WithCap(1)
+	f := testFamily()
+	parked, err := s.Open(f, OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ { // idempotent
+		if err := s.Park(parked.UUID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	busy, err := s.Open(f, OpenOptions{})
+	if err != nil {
+		t.Fatalf("a parked instance still counted toward the cap: %v", err)
+	}
+	var capErr *CapError
+	if _, err := s.Unpark(parked.UUID); !errors.As(err, &capErr) {
+		t.Fatalf("unpark past the cap was admitted: %v", err)
+	}
+	if rec, _ := s.Get(parked.UUID); !rec.Active() || rec.Parked == "" || rec.Label != parked.Label {
+		t.Errorf("a refused unpark changed the parked record: %+v", rec)
+	}
+	if err := s.Park(busy.UUID); err != nil {
+		t.Fatal(err)
+	}
+	un, err := s.Unpark(parked.UUID)
+	if err != nil || un.UUID != parked.UUID || un.Parked != "" || un.MailFrom != parked.MailFrom {
+		t.Fatalf("unpark did not re-admit the same context: %+v %v", un, err)
+	}
+}

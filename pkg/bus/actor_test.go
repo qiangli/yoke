@@ -327,9 +327,9 @@ func TestResolveAuthoredActorAcceptsAHeldInstanceClaim(t *testing.T) {
 	isolateAuthoredActor(t)
 	inst := openInstanceForTest(t)
 	const raw = "instance-session"
-	if err := principal.ClaimInstance(inst, principal.InstanceClaim{
+	if _, err := principal.ClaimInstanceIn(InstanceStoreFn(), inst, principal.InstanceClaim{
 		Session: HashSessionClaim(raw), OwnerPID: foreignLivePID(t), Cwd: "/tmp/x",
-	}); err != nil {
+	}, true); err != nil {
 		t.Fatal(err)
 	}
 	CurrentSessionClaim = func(string) string { return raw }
@@ -353,9 +353,9 @@ func TestResolveAuthoredActorAcceptsAHeldInstanceClaim(t *testing.T) {
 func TestResolveAuthoredActorRefusesACompetingInstanceSession(t *testing.T) {
 	isolateAuthoredActor(t)
 	inst := openInstanceForTest(t)
-	if err := principal.ClaimInstance(inst, principal.InstanceClaim{
+	if _, err := principal.ClaimInstanceIn(InstanceStoreFn(), inst, principal.InstanceClaim{
 		Session: HashSessionClaim("the-owner"), OwnerPID: foreignLivePID(t), Cwd: "/tmp/x",
-	}); err != nil {
+	}, true); err != nil {
 		t.Fatal(err)
 	}
 	CurrentSessionClaim = func(string) string { return "an-impostor" }

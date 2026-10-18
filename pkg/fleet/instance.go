@@ -105,6 +105,12 @@ type Instance struct {
 	// and the instance no longer counts against the family's active cap. The
 	// record itself stays.
 	Retired string `yaml:"retired,omitempty" json:"retired,omitempty"`
+	// Parked is set while an ACTIVE instance is preserved for its holder to
+	// resume but is not executing (a weave run that ended resumable). A parked
+	// instance keeps its UUID, label and mail, but does not count against the
+	// family cap and is not handed to another launch as an idle context. Unpark
+	// re-admits it against the cap.
+	Parked string `yaml:"parked,omitempty" json:"parked,omitempty"`
 
 	// MailFrom is the mailbox watermark: the bus sequence this instance's
 	// personal mailbox BEGINS at. A fresh instance starts at the current
@@ -119,6 +125,10 @@ type Instance struct {
 
 // Active reports an instance that has not been retired.
 func (i Instance) Active() bool { return strings.TrimSpace(i.Retired) == "" }
+
+// Counted reports an instance that counts against its family's active cap:
+// active and not parked.
+func (i Instance) Counted() bool { return i.Active() && strings.TrimSpace(i.Parked) == "" }
 
 // MailAddress is the instance's PERSONAL mail address.
 //
@@ -311,7 +321,7 @@ func (s *InstanceStore) Open(f Family, opts OpenOptions) (Instance, error) {
 
 		var live []Instance
 		for _, i := range all {
-			if i.Active() && i.FamilyID == famID {
+			if i.Counted() && i.FamilyID == famID {
 				live = append(live, i)
 			}
 		}
@@ -375,6 +385,135 @@ func (s *InstanceStore) Resume(id string) (Instance, error) {
 	return inst, nil
 }
 
+// Park marks an active instance as preserved-but-not-executing so it stops
+// counting against the family cap. Idempotent; a retired instance is left
+// alone. The caller is responsible for knowing nothing still drives it.
+func (s *InstanceStore) Park(id string) error { return s.ParkIf(id, nil) }
+
+// ParkIf is Park with guard evaluated UNDER the store lock on the re-read
+// record; a guard error refuses the park. The lock is what makes a guard such
+// as "no live owner" atomic with the write: a claimer re-admits through
+// Unpark, which takes this same lock, so a claim either lands before the
+// guard (refused) or its Unpark runs after the park (undone).
+func (s *InstanceStore) ParkIf(id string, guard func(Instance) error) error {
+	return s.withLock("park instance", func() error {
+		inst, err := s.Get(id)
+		if err != nil {
+			return err
+		}
+		if !inst.Active() || inst.Parked != "" {
+			return nil
+		}
+		if guard != nil {
+			if err := guard(inst); err != nil {
+				return err
+			}
+		}
+		inst.Parked = nowStamp()
+		return s.write(inst)
+	})
+}
+
+// Unpark re-admits a parked instance against the family cap, under the same
+// lock Open counts with, so a resume can never take a family past its cap.
+// The UUID, label and mail are unchanged. Not parked is a no-op read; a
+// retired instance is refused, since a resume may have read it before a
+// retirement landed.
+func (s *InstanceStore) Unpark(id string) (Instance, error) {
+	var inst Instance
+	err := s.withLock("unpark instance", func() error {
+		var err error
+		inst, err = s.Get(id)
+		if err != nil {
+			return err
+		}
+		if !inst.Active() {
+			return fmt.Errorf("fleet: instance %s was retired at %s; open a new instance instead", inst.UUID, inst.Retired)
+		}
+		if inst.Parked == "" {
+			return nil
+		}
+		if err := s.readmitCap(inst); err != nil {
+			return err
+		}
+		inst.Parked = ""
+		return s.write(inst)
+	})
+	if err != nil {
+		return Instance{}, err
+	}
+	return inst, nil
+}
+
+// ErrInstanceParked refuses a claim on a parked context that the caller did
+// not ask to re-admit (a parked context is reserved for its holder's resume).
+var ErrInstanceParked = errors.New("fleet: instance is parked")
+
+// ErrInstanceRetired refuses a claim on a retired context.
+var ErrInstanceRetired = errors.New("fleet: instance is retired")
+
+// Admit runs claim UNDER the store lock on the re-read record, so ownership is
+// taken atomically against ParkIf/RetireIf (whose owner guard runs under the
+// same lock): a claim either lands before the guard (which then refuses) or
+// sees the park/retirement. A retired record is refused whatever snapshot the
+// caller holds. A parked one is refused unless unpark, in which case it is
+// re-admitted against the family cap and cleared only after claim succeeds.
+// claim must not take this store's lock; the order is store lock → room lock,
+// the same as the guards'.
+func (s *InstanceStore) Admit(id string, unpark bool, claim func(Instance) error) (Instance, error) {
+	var inst Instance
+	err := s.withLock("admit instance", func() error {
+		var err error
+		inst, err = s.Get(id)
+		if err != nil {
+			return err
+		}
+		if !inst.Active() {
+			return fmt.Errorf("%w: %s was retired at %s; open a new instance instead", ErrInstanceRetired, inst.UUID, inst.Retired)
+		}
+		parked := inst.Parked != ""
+		if parked {
+			if !unpark {
+				return fmt.Errorf("%w: %s", ErrInstanceParked, inst.UUID)
+			}
+			if err := s.readmitCap(inst); err != nil {
+				return err
+			}
+		}
+		if err := claim(inst); err != nil {
+			return err
+		}
+		if !parked {
+			return nil
+		}
+		inst.Parked = ""
+		return s.write(inst)
+	})
+	if err != nil {
+		return Instance{}, err
+	}
+	return inst, nil
+}
+
+// readmitCap refuses re-admitting a parked inst when its family is at cap.
+// Callers hold the store lock.
+func (s *InstanceStore) readmitCap(inst Instance) error {
+	all, err := s.List()
+	if err != nil {
+		return err
+	}
+	var live []Instance
+	for _, i := range all {
+		if i.Counted() && i.FamilyID == inst.FamilyID {
+			live = append(live, i)
+		}
+	}
+	if limit := s.Cap(); limit >= 0 && len(live) >= limit {
+		return &CapError{FamilyID: inst.FamilyID, Family: inst.Family, Cap: limit, Live: live}
+	}
+	return nil
+}
+
 // Get reads one record by UUID, retired or not.
 //
 // The id is canonicalized before it is used as a path, and the record's own
@@ -436,6 +575,13 @@ func (s *InstanceStore) Get(id string) (Instance, error) {
 // because "archived, not deleted" is a claim somebody will have to check (see
 // ArchivedMail, which reads it back).
 func (s *InstanceStore) Retire(id string, mail MailSource) (archive string, err error) {
+	return s.RetireIf(id, mail, nil)
+}
+
+// RetireIf is Retire with guard evaluated on the first read and again UNDER
+// the store lock on the re-read record, after the mail was collected; a guard
+// error refuses the retirement. See ParkIf for why the lock makes it atomic.
+func (s *InstanceStore) RetireIf(id string, mail MailSource, guard func(Instance) error) (archive string, err error) {
 	if mail == nil {
 		return "", ErrMailSourceRequired
 	}
@@ -450,6 +596,11 @@ func (s *InstanceStore) Retire(id string, mail MailSource) (archive string, err 
 		// Already retired: idempotent, and it must NOT archive again.
 		return inst.MailArchive, nil
 	}
+	if guard != nil {
+		if err := guard(inst); err != nil {
+			return "", err
+		}
+	}
 	records, err := mail(inst)
 	if err != nil {
 		return "", fmt.Errorf("fleet: collect mail for instance %s: %w", inst.UUID, err)
@@ -462,6 +613,11 @@ func (s *InstanceStore) Retire(id string, mail MailSource) (archive string, err 
 		if !inst.Active() {
 			archive = inst.MailArchive
 			return nil
+		}
+		if guard != nil {
+			if err := guard(inst); err != nil {
+				return err
+			}
 		}
 		// The mail is archived BEFORE the record is marked retired. If the
 		// append fails the instance stays live and its label stays held, which
@@ -576,7 +732,8 @@ func (s *InstanceStore) List() ([]Instance, error) {
 }
 
 // ActiveInstances returns the live instances of one family, or of every family
-// when familyID is empty. This is what the cap counts.
+// when familyID is empty, parked ones included. The cap counts only the
+// unparked ones (Counted).
 func (s *InstanceStore) ActiveInstances(familyID string) ([]Instance, error) {
 	all, err := s.List()
 	if err != nil {

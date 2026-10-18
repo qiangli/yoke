@@ -253,7 +253,7 @@ func openContextWithCatalog(l Launch, req ContextRequest, newCatalog CatalogFunc
 		if err := sameConfiguration(inst, family); err != nil {
 			return InstanceContext{}, err
 		}
-		if err := principal.ClaimInstance(inst, claim); err != nil {
+		if inst, err = principal.ClaimInstanceIn(store, inst, claim, true); err != nil {
 			return InstanceContext{}, err
 		}
 		return InstanceContext{Instance: inst, Family: family, Binding: binding, Resumed: true}, nil
@@ -277,7 +277,7 @@ func openContextWithCatalog(l Launch, req ContextRequest, newCatalog CatalogFunc
 				if err := sameConfiguration(inst, family); err != nil {
 					return InstanceContext{}, err
 				}
-				if err := principal.ClaimInstance(inst, claim); err != nil {
+				if inst, err = principal.ClaimInstanceIn(store, inst, claim, true); err != nil {
 					return InstanceContext{}, err
 				}
 				return InstanceContext{Instance: inst, Family: family, Binding: binding, Resumed: true}, nil
@@ -290,18 +290,27 @@ func openContextWithCatalog(l Launch, req ContextRequest, newCatalog CatalogFunc
 			return InstanceContext{}, err
 		}
 		for _, inst := range live {
+			// A parked context is reserved for its own holder's resume.
+			if inst.Parked != "" {
+				continue
+			}
 			if _, owned := principal.InstanceOwner(inst); owned {
 				continue
 			}
-			if err := principal.ClaimInstance(inst, claim); err != nil {
+			// Not unparking: a reconcile may have parked or retired it since
+			// the read, and the store-locked claim refuses either. So does a
+			// session that claimed it between the read and the write. Reading
+			// is the reconciliation: try the next candidate. Any other failure
+			// is reported, not skipped past.
+			claimed, err := principal.ClaimInstanceIn(store, inst, claim, false)
+			if err != nil {
 				var busy *room.ErrLive
-				if errors.As(err, &busy) {
-					// Somebody claimed it between the read and the write.
-					// Reading is the reconciliation: try the next candidate.
+				if errors.As(err, &busy) || errors.Is(err, fleet.ErrInstanceParked) || errors.Is(err, fleet.ErrInstanceRetired) {
 					continue
 				}
 				return InstanceContext{}, err
 			}
+			inst = claimed
 			return InstanceContext{Instance: inst, Family: family, Binding: binding, Resumed: true, Reused: true}, nil
 		}
 	}
@@ -315,7 +324,7 @@ func openContextWithCatalog(l Launch, req ContextRequest, newCatalog CatalogFunc
 	if err != nil {
 		return InstanceContext{}, err
 	}
-	if err := principal.ClaimInstance(inst, claim); err != nil {
+	if inst, err = principal.ClaimInstanceIn(store, inst, claim, false); err != nil {
 		return InstanceContext{}, err
 	}
 	return InstanceContext{Instance: inst, Family: family, Binding: binding}, nil
@@ -427,6 +436,48 @@ func RetireContext(store *fleet.InstanceStore, id string, mail fleet.MailSource,
 		return "", err
 	}
 	archive, err := store.Retire(id, mail)
+	if err != nil {
+		return "", err
+	}
+	principal.ReleaseInstance(inst, session)
+	return archive, nil
+}
+
+// ErrContextOwned refuses to park or retire a context a live session owns.
+var ErrContextOwned = errors.New("agentlaunch: context is owned by a live session")
+
+// idleGuard refuses a context with ANY live owner, checked by fleet under its
+// store lock (room.SessionOwner reads the claim card without taking a lock).
+// Every claim is taken under that same lock (principal.ClaimInstanceIn →
+// fleet.InstanceStore.Admit), so check and mutation are atomic against it.
+func idleGuard(inst fleet.Instance) error {
+	if owner, live := principal.InstanceOwner(inst); live {
+		return fmt.Errorf("%w: %s", ErrContextOwned, owner.SessionClaim)
+	}
+	return nil
+}
+
+// ParkIdleContext parks a context nothing drives so it stops counting against
+// the family cap; refused with ErrContextOwned while any live session owns it.
+func ParkIdleContext(store *fleet.InstanceStore, id string) error {
+	if store == nil {
+		store = fleet.NewInstanceStore("")
+	}
+	return store.ParkIf(id, idleGuard)
+}
+
+// RetireIdleContext is RetireContext for a context nothing drives: refused
+// with ErrContextOwned while ANY live session (session included) owns it,
+// including one that claimed it while the mail was being collected.
+func RetireIdleContext(store *fleet.InstanceStore, id string, mail fleet.MailSource, session string) (string, error) {
+	if store == nil {
+		store = fleet.NewInstanceStore("")
+	}
+	inst, err := store.Get(id)
+	if err != nil {
+		return "", err
+	}
+	archive, err := store.RetireIf(id, mail, idleGuard)
 	if err != nil {
 		return "", err
 	}

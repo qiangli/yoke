@@ -159,10 +159,12 @@ func resolveInstanceActor(id string) (string, error) {
 		anchor = os.Getpid()
 	}
 	cwd, _ := os.Getwd()
-	if err := principal.ClaimInstance(inst, principal.InstanceClaim{
+	// Claimed against the PERSISTED record under the store lock: a retirement
+	// or park that landed after the Get above refuses (or re-admits) it.
+	if _, err := principal.ClaimInstanceIn(InstanceStoreFn(), inst, principal.InstanceClaim{
 		Session: session, OwnerPID: anchor, Cwd: cwd, Mode: "authored",
 		Task: "seat taken on first authored message",
-	}); err != nil {
+	}, true); err != nil {
 		return "", fmt.Errorf("authored communication: take instance %s: %w", inst.UUID, err)
 	}
 	return addr, nil

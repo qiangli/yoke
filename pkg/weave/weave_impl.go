@@ -190,8 +190,13 @@ type weaveItem struct {
 	// InstanceLabel is the display label the context holds ("Esme-2"). For
 	// RENDERING only — labels are released on retirement and reissued, so this
 	// must never be used to address anything.
-	InstanceLabel string               `json:"instance_label,omitempty"`
-	Handoffs      []weaveHandoffRecord `json:"handoffs,omitempty"`
+	InstanceLabel string `json:"instance_label,omitempty"`
+	// InstanceRetired records that Instance was retired once the run became
+	// terminal and unresumable (see weaveReconcileRunInstances), so later
+	// queue writes do not re-read its record. Instance itself is kept: it is
+	// what the run executed as.
+	InstanceRetired bool                 `json:"instance_retired,omitempty"`
+	Handoffs        []weaveHandoffRecord `json:"handoffs,omitempty"`
 	// HandoffBaseSHA bounds replacement story evidence without changing BaseSHA.
 	HandoffBaseSHA string `json:"handoff_base_sha,omitempty"`
 	// SessionClaim is the run's stable one-way session digest. The worker and
@@ -803,6 +808,7 @@ func saveWeaveQueue(dir string, q *weaveQueue) error {
 			}
 		}
 	}
+	weaveReconcileRunInstances(q)
 	path := filepath.Join(dir, "queue.json")
 	tmp := path + ".tmp"
 	b, err := json.MarshalIndent(q, "", "  ")
@@ -3948,6 +3954,8 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 				// recorded UUID; a reassignment to a different agent is a
 				// different family and therefore a different context.
 				if opts.handoffTo == "" {
+					// Settle instances of runs that already ended before allocating.
+					weaveReconcileRunInstances(freshQ)
 					if _, err := weaveOpenRunInstance(freshIt, agentLaunch, branch); err != nil {
 						return err
 					}
@@ -4228,6 +4236,8 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 				freshIt.LaunchSpec = launchSpec
 				// Bind the run to its conversation: a fresh UUID with an empty
 				// mailbox, or the recorded one on a resume.
+				// Settle instances of runs that already ended before allocating.
+				weaveReconcileRunInstances(freshQ)
 				if _, err := weaveOpenRunInstance(freshIt, agentLaunch, branch); err != nil {
 					return err
 				}
