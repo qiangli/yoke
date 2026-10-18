@@ -75,6 +75,9 @@ func kvInput(rc *tool.RunContext, f dbFlags) (json.RawMessage, error) {
 		if err := dec.Decode(&in); err != nil {
 			return nil, fmt.Errorf("%w: --input: %v", dbstore.ErrInvalidInput, err)
 		}
+		if _, err := dec.Token(); err != io.EOF {
+			return nil, fmt.Errorf("%w: trailing data after --input", dbstore.ErrInvalidInput)
+		}
 	}
 	twice := func(name string, set bool) error {
 		if set {

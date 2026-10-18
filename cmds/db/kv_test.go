@@ -94,3 +94,15 @@ func TestIndependentKVSharedOwner(t *testing.T) {
 		t.Fatalf("get via owner: %v", doc)
 	}
 }
+
+func TestKVInputRejectsTrailingJSONBeforeMutation(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BASHY_COORD_DIR", filepath.Join(root, "coord"))
+	code, doc := dbRun(t, root, `{"bucket":"b","key":{"text":"k"},"value":{"text":"v"}} {}`, "kv", "put", "--input", "-", "--engine", "bbolt", "--mode", "persistent", "--path", "missing.db")
+	if code != 2 || doc["error"].(map[string]any)["code"] != "invalid_input" {
+		t.Fatalf("trailing input: %d %v", code, doc)
+	}
+	if _, err := os.Stat(filepath.Join(root, "missing.db")); !os.IsNotExist(err) {
+		t.Fatalf("unexpected creation: %v", err)
+	}
+}

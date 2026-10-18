@@ -17,6 +17,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -124,6 +125,9 @@ func decodeInput(raw json.RawMessage) (Input, error) {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&in); err != nil {
 		return in, fmt.Errorf("%w: kv input: %v", dbstore.ErrInvalidInput, err)
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return in, fmt.Errorf("%w: trailing data after kv input", dbstore.ErrInvalidInput)
 	}
 	if in.TTL != "" {
 		return in, fmt.Errorf("%w: the bbolt kv category has no TTL or expiry", dbstore.ErrUnsupported)
