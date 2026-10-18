@@ -791,10 +791,45 @@ func ApplySandbox(agent string, args []string, opt Options) []string {
 	return args
 }
 
+// prefsEnv projects the agent's declared reader preferences (model, tool and
+// agent layers) into BASHY_PREFS for the launched child, so the child's output
+// sink resolves the same budget/view the registry declares. A BASHY_PREFS the
+// launcher already set (an explicit operator choice) is never overwritten, and
+// nothing is added when the agent declares no preferences. Band and bashy
+// defaults are not projected: the child derives those itself.
+func prefsEnv(base []string, nick string) []string {
+	for _, kv := range base {
+		if strings.HasPrefix(kv, fleet.EnvBashyPrefs+"=") {
+			return base
+		}
+	}
+	cat := NewCatalog()
+	if cat == nil {
+		return base
+	}
+	a, t, m, err := cat.Binding(nick)
+	if err != nil {
+		return base
+	}
+	var declared fleet.ReaderPrefs
+	for _, p := range []fleet.ReaderPrefs{m.Prefs, t.Prefs, a.Prefs} {
+		declared = p.Merge(declared)
+	}
+	if declared.IsEmpty() {
+		return base
+	}
+	data, err := json.Marshal(declared)
+	if err != nil {
+		return base
+	}
+	return append(base[:len(base):len(base)], fleet.EnvBashyPrefs+"="+string(data))
+}
+
 func PrincipalEnv(base []string, l Launch) []string {
 	if !l.Named() {
 		return base
 	}
+	base = prefsEnv(base, l.Nick)
 	out := make([]string, 0, len(base)+4)
 	for _, kv := range base {
 		switch {
