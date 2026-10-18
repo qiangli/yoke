@@ -3,18 +3,23 @@ package lenscmd
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"time"
 
 	"github.com/qiangli/coreutils/tool"
+	"github.com/qiangli/yoke/pkg/lens/provider"
 	"github.com/qiangli/yoke/pkg/lens/stream"
+	"github.com/qiangli/yoke/pkg/ref"
 )
 
 // File deltas are change streams, not graph streams. --since=start reads from
@@ -175,6 +180,10 @@ func sinceFile(rc *tool.RunContext, operand, format, since, cursorOut string) in
 	}
 	token, _ := json.Marshal(pos)
 	c := stream.Cursor{SchemaVersion: stream.CursorSchema, Kind: stream.KindChangeStream, Token: base64.RawURLEncoding.EncodeToString(token), Binding: stream.Binding{Provider: "lens-file", Target: path, Query: query}}
+	return emitDelta(rc, &delta, c, cursorOut, fail)
+}
+
+func emitDelta(rc *tool.RunContext, delta *bytes.Buffer, c stream.Cursor, cursorOut string, fail func(error) int) int {
 	envelope, _ := json.Marshal(c)
 	if cursorOut == "" {
 		trailer, _ := json.Marshal(struct {
@@ -184,7 +193,7 @@ func sinceFile(rc *tool.RunContext, operand, format, since, cursorOut string) in
 		delta.Write(trailer)
 		delta.WriteByte('\n')
 	}
-	if _, err = io.Copy(rc.Out, &delta); err != nil {
+	if _, err := io.Copy(rc.Out, delta); err != nil {
 		return fail(err)
 	}
 	if cursorOut != "" {
@@ -207,4 +216,102 @@ func sinceFile(rc *tool.RunContext, operand, format, since, cursorOut string) in
 		}
 	}
 	return 0
+}
+
+// ErrDeltaExpired is returned by a DeltaSource whose position can no longer be
+// resumed; the caller reports restart guidance.
+var ErrDeltaExpired = errors.New("delta position expired")
+
+// DeltaSource is an explicitly registered, read-only change feed for one
+// agent-world scheme. Delta returns complete newline-terminated JSONL records
+// after token ("" = from start) and the opaque token to resume from. Token and
+// expiry are the source's; lens binds them to scheme/target and never invents
+// records for a scheme with no source.
+type DeltaSource interface {
+	Delta(ctx context.Context, loc ref.Locator, token string) (records []byte, next string, expiry string, err error)
+}
+
+var deltaSources = map[string]DeltaSource{}
+
+// RegisterDeltaSource wires a read-only delta source for an agent-world scheme.
+func RegisterDeltaSource(scheme string, src DeltaSource) error {
+	if !slices.Contains(provider.AgentWorldSchemes, scheme) {
+		return fmt.Errorf("lens: %q is not an agent-world scheme", scheme)
+	}
+	if src == nil {
+		return fmt.Errorf("lens: nil delta source for %q", scheme)
+	}
+	deltaSources[scheme] = src
+	return nil
+}
+
+func isAgentWorldScheme(scheme string) bool {
+	return slices.Contains(provider.AgentWorldSchemes, scheme)
+}
+
+func sinceAgentWorld(rc *tool.RunContext, loc ref.Locator, format, since, cursorOut string) int {
+	fail := func(err error) int { fmt.Fprintf(rc.Err, "lens: --since: %v\n", err); return 1 }
+	src, ok := deltaSources[loc.Scheme]
+	if !ok {
+		return fail(fmt.Errorf("no delta source registered for provider %q (no live deltas are fabricated)", loc.Scheme))
+	}
+	target := loc.String()
+	query := "delta:" + format
+	restart := fmt.Errorf("restart with --since=start")
+	token := ""
+	if since != "start" {
+		data := []byte(since)
+		if len(since) > 0 && since[0] == '@' {
+			var err error
+			if data, err = os.ReadFile(rc.Path(since[1:])); err != nil {
+				return fail(err)
+			}
+		}
+		c, err := stream.ParseCursor(data)
+		if err != nil {
+			return fail(err)
+		}
+		if err = c.Check(loc.Scheme, target, query); err != nil {
+			return fail(fmt.Errorf("%w; %v", err, restart))
+		}
+		if c.Kind != stream.KindChangeStream {
+			return fail(fmt.Errorf("requires a change-stream cursor"))
+		}
+		if c.Expiry != "" {
+			if expiry, _ := time.Parse(time.RFC3339, c.Expiry); !time.Now().Before(expiry) {
+				return fail(fmt.Errorf("cursor expired; %v", restart))
+			}
+		}
+		token = c.Token
+	}
+	records, next, expiry, err := src.Delta(rc.Ctx, loc, token)
+	if errors.Is(err, ErrDeltaExpired) {
+		return fail(fmt.Errorf("%v; %v", err, restart))
+	}
+	if err != nil {
+		return fail(err)
+	}
+	if next == "" {
+		return fail(fmt.Errorf("delta source returned no resume token"))
+	}
+	if len(records) > 0 && records[len(records)-1] != '\n' {
+		return fail(fmt.Errorf("delta source returned an incomplete record"))
+	}
+	if format == "jsonl" {
+		for _, line := range bytes.Split(bytes.TrimSuffix(records, []byte("\n")), []byte("\n")) {
+			if len(records) > 0 && !json.Valid(bytes.TrimSpace(line)) {
+				return fail(fmt.Errorf("delta source returned invalid JSONL"))
+			}
+		}
+	}
+	c := stream.Cursor{SchemaVersion: stream.CursorSchema, Kind: stream.KindChangeStream, Token: next, Expiry: expiry, Binding: stream.Binding{Provider: loc.Scheme, Target: target, Query: query}}
+	if err := c.Validate(); err != nil {
+		return fail(err)
+	}
+	if cursorOut != "" {
+		if _, err := os.Stat(filepath.Dir(rc.Path(cursorOut))); err != nil {
+			return fail(err)
+		}
+	}
+	return emitDelta(rc, bytes.NewBuffer(append([]byte(nil), records...)), c, cursorOut, fail)
 }

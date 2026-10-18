@@ -108,7 +108,8 @@ func run(rc *tool.RunContext, args []string) int {
 		if *since == "" || *list || *asJSON || len(operands) != 1 || operands[0] == "-" {
 			return tool.UsageError(rc, cmd, "--since requires start or a cursor and one regular FILE")
 		}
-		if _, ok := locatorOperand(operands[0]); ok {
+		loc, isLoc := locatorOperand(operands[0])
+		if isLoc && !isAgentWorldScheme(loc.Scheme) {
 			return tool.UsageError(rc, cmd, "--since file deltas do not support this provider")
 		}
 		format := lens.Canonical(*to)
@@ -122,6 +123,9 @@ func run(rc *tool.RunContext, args []string) int {
 			if fs.Changed(flag) {
 				return tool.UsageError(rc, cmd, "--%s does not apply to file deltas", flag)
 			}
+		}
+		if isLoc {
+			return sinceAgentWorld(rc, loc, format, *since, *cursorOut)
 		}
 		return sinceFile(rc, operands[0], format, *since, *cursorOut)
 	}
