@@ -246,8 +246,8 @@ func TestVecCollectionsAndItemsBothModes(t *testing.T) {
 		if got := f.search(Input{Collection: "e", Vector: json.RawMessage(`[2,0,0,0]`)}); strings.Contains(got, "a@") {
 			t.Fatalf("deleted vector still searchable: %s", got)
 		}
-		// Unknown fields for an op are refused, never ignored; an embedding
-		// request is not a field at all, so it can never reach a provider.
+		// Unknown fields for an op are refused, never ignored; there is no
+		// provider field, so a provider can never be chosen implicitly.
 		if c := f.code(OpGet, Input{Collection: "e", ID: "b", Filter: json.RawMessage(`{"field":"k","op":"eq","value":1}`)}, false); c != "invalid_input" {
 			t.Fatalf("get with filter: %s", c)
 		}

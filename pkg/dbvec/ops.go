@@ -1,6 +1,7 @@
 package dbvec
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -9,9 +10,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
+	"net/http"
+	"net/url"
+	"os"
+	"regexp"
 	"strconv"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/qiangli/yoke/pkg/dbdoc"
 	"github.com/qiangli/yoke/pkg/dblifecycle"
@@ -407,7 +415,10 @@ func writeOps(ctx context.Context, h dbstore.Handle, collection string, ops []Ba
 }
 
 func runPut(ctx context.Context, h dbstore.Handle, in Input) (dblifecycle.Outcome, error) {
-	if err := in.only(OpPut, "collection", "id", "vector", "metadata", "model", "if_revision", "if_absent"); err != nil {
+	if err := in.only(OpPut, "collection", "id", "vector", "text", "endpoint", "api_key_env", "metadata", "model", "if_revision", "if_absent"); err != nil {
+		return dblifecycle.Outcome{}, err
+	}
+	if err := embedInput(ctx, h, &in); err != nil {
 		return dblifecycle.Outcome{}, err
 	}
 	res, err := writeOps(ctx, h, in.Collection, []BatchOp{{Op: "put", ID: in.ID, Vector: in.Vector, Metadata: in.Metadata, Model: in.Model, IfRevision: in.IfRevision, IfAbsent: in.IfAbsent}})
@@ -446,7 +457,10 @@ func runBatch(ctx context.Context, h dbstore.Handle, in Input) (dblifecycle.Outc
 // the query vector, nearest first and then by id, so equal distances order
 // deterministically and a cursor resumes exactly after the last hit.
 func runSearch(ctx context.Context, h dbstore.Handle, in Input) (dblifecycle.Outcome, error) {
-	if err := in.only(OpSearch, "collection", "vector", "model", "filter", "params", "include_vectors", "limit", "max_bytes", "since"); err != nil {
+	if err := in.only(OpSearch, "collection", "vector", "text", "endpoint", "api_key_env", "model", "filter", "params", "include_vectors", "limit", "max_bytes", "since"); err != nil {
+		return dblifecycle.Outcome{}, err
+	}
+	if err := embedInput(ctx, h, &in); err != nil {
 		return dblifecycle.Outcome{}, err
 	}
 	limit, maxBytes, err := in.bounds()
@@ -638,4 +652,146 @@ func runCollectionList(ctx context.Context, h dbstore.Handle, in Input) (dblifec
 		last.id = out[len(out)-1].Name
 	}
 	return dblifecycle.Outcome{Result: map[string]any{"collections": out}, Page: newPage(target, query, last, len(out), limit, 0, truncated)}, nil
+}
+
+// Bounds of the explicit embedding request.
+const (
+	MaxTextBytes     = 64 << 10
+	maxEmbedResponse = 4 << 20
+	embedTimeout     = 60 * time.Second
+)
+
+var envNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
+
+// embedInput turns text into the operation's vector. It runs inside the
+// owner's Run, before any write transaction is open: the collection's model
+// and dimension are read in a short read transaction, the endpoint is called
+// with no database lock held, and the write re-checks the model, so a
+// collection replaced meanwhile refuses the vector. Supplied vectors return
+// at once — no network.
+func embedInput(ctx context.Context, h dbstore.Handle, in *Input) error {
+	if in.Text == "" {
+		if in.Endpoint != "" || in.APIKeyEnv != "" {
+			return fmt.Errorf("%w: --endpoint and --api-key-env embed --text; a supplied vector takes neither", dbstore.ErrInvalidInput)
+		}
+		return nil
+	}
+	if len(in.Vector) != 0 {
+		return fmt.Errorf("%w: give a vector or text, not both", dbstore.ErrInvalidInput)
+	}
+	if in.Endpoint == "" {
+		return fmt.Errorf("%w: text needs an explicit --endpoint (OpenAI-compatible base URL); there is no default provider", dbstore.ErrInvalidInput)
+	}
+	if len(in.Text) > MaxTextBytes || !utf8.ValidString(in.Text) {
+		return fmt.Errorf("%w: text must be 1..%d bytes of UTF-8", dbstore.ErrLimitExceeded, MaxTextBytes)
+	}
+	u, err := embedURL(in.Endpoint)
+	if err != nil {
+		return err
+	}
+	key := ""
+	if in.APIKeyEnv != "" {
+		if !envNameRE.MatchString(in.APIKeyEnv) {
+			return fmt.Errorf("%w: --api-key-env names an environment variable", dbstore.ErrInvalidInput)
+		}
+		if key = os.Getenv(in.APIKeyEnv); key == "" {
+			return fmt.Errorf("%w: --api-key-env %s is unset or empty in the process running the operation", dbstore.ErrInvalidInput, in.APIKeyEnv)
+		}
+	}
+	t, err := begin(ctx, h, false)
+	if err != nil {
+		return err
+	}
+	c, err := t.collection(in.Collection)
+	t.end()
+	if err != nil {
+		return err
+	}
+	if err := checkModelMatch(in.Model, c); err != nil {
+		return err
+	}
+	v, err := embed(ctx, u, key, c, in.Text)
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(encodeVector(v))
+	if err != nil {
+		return err
+	}
+	in.Vector, in.Model, in.Text, in.Endpoint, in.APIKeyEnv = raw, c.Model, "", "", ""
+	return nil
+}
+
+// embedURL validates an explicit OpenAI-compatible base URL (…/v1) and
+// returns its embeddings URL. Credentials never travel in the URL.
+func embedURL(endpoint string) (string, error) {
+	u, err := url.Parse(endpoint)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Opaque != "" {
+		return "", fmt.Errorf("%w: --endpoint wants an http(s) base URL such as http://127.0.0.1:11434/v1", dbstore.ErrInvalidInput)
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("%w: --endpoint takes no userinfo, query or fragment (pass a key with --api-key-env)", dbstore.ErrInvalidInput)
+	}
+	return strings.TrimSuffix(u.String(), "/") + "/embeddings", nil
+}
+
+// embedClient refuses every redirect, so a bearer key is only ever sent to
+// the endpoint the caller named.
+var embedClient = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+
+// embed posts one OpenAI /v1/embeddings request for the collection's model
+// and returns the embedding, validated against the collection's dimension
+// and metric exactly as a supplied vector is.
+func embed(ctx context.Context, endpoint, key string, c Collection, text string) ([]float32, error) {
+	ctx, cancel := context.WithTimeout(ctx, embedTimeout)
+	defer cancel()
+	body, err := json.Marshal(map[string]any{"model": c.Model, "input": text, "encoding_format": "float"})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("%w: --endpoint: %v", dbstore.ErrInvalidInput, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	resp, err := embedClient.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, dbstore.FromContext(ctx.Err())
+		}
+		return nil, fmt.Errorf("%w: embedding endpoint %s: %v", dbstore.ErrBackend, endpoint, errors.Unwrap(err))
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%w: embedding endpoint %s answered %s (redirects are not followed)", dbstore.ErrBackend, endpoint, resp.Status)
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, maxEmbedResponse+1))
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, dbstore.FromContext(ctx.Err())
+		}
+		return nil, fmt.Errorf("%w: embedding endpoint %s: %v", dbstore.ErrBackend, endpoint, err)
+	}
+	if len(b) > maxEmbedResponse {
+		return nil, fmt.Errorf("%w: embedding response is over %d bytes", dbstore.ErrLimitExceeded, maxEmbedResponse)
+	}
+	var out struct {
+		Data []struct {
+			Embedding json.RawMessage `json:"embedding"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(b, &out); err != nil || len(out.Data) != 1 || len(out.Data[0].Embedding) == 0 {
+		return nil, fmt.Errorf("%w: embedding endpoint %s did not return one data[].embedding", dbstore.ErrBackend, endpoint)
+	}
+	if out.Data[0].Embedding[0] != '[' {
+		return nil, fmt.Errorf("%w: embedding endpoint %s returned a non-float embedding", dbstore.ErrBackend, endpoint)
+	}
+	v, err := parseVector(out.Data[0].Embedding, c)
+	if err != nil {
+		return nil, fmt.Errorf("embedding from %s for model %q: %w", endpoint, c.Model, err)
+	}
+	return v, nil
 }

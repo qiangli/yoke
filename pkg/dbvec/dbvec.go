@@ -10,8 +10,10 @@
 // JSON metadata object in a companion table. Search ranks exactly — no ANN
 // index — with sqlite-vec's distance function for the collection's metric,
 // over the items a metadata filter (the db doc grammar, bound parameters
-// only) admits. Vectors are always supplied by the caller: this package makes
-// no network call and generates no embedding. Every operation registers with
+// only) admits. A supplied vector makes no network call. Text is embedded
+// only when the operation names an explicit OpenAI-compatible endpoint, with
+// the collection's persisted model: there is no default endpoint, no
+// provider registry and no fallback. Every operation registers with
 // dblifecycle, so CLI, MCP and owner sessions reach it through one claim
 // guard, owner admission, request-id replay and hold-epoch check; every
 // schema change (collection add/rm, import --replace) is exclusive.
@@ -80,6 +82,9 @@ type Input struct {
 	Model          string          `json:"model,omitempty"`
 	ID             string          `json:"id,omitempty"`
 	Vector         json.RawMessage `json:"vector,omitempty"`
+	Text           string          `json:"text,omitempty"`
+	Endpoint       string          `json:"endpoint,omitempty"`
+	APIKeyEnv      string          `json:"api_key_env,omitempty"`
 	Metadata       json.RawMessage `json:"metadata,omitempty"`
 	IfRevision     *int64          `json:"if_revision,omitempty"`
 	IfAbsent       bool            `json:"if_absent,omitempty"`
@@ -144,7 +149,8 @@ func (in Input) bounds() (limit, maxBytes int, err error) {
 func (in Input) only(op string, allowed ...string) error {
 	set := map[string]bool{
 		"collection": in.Collection != "", "dimension": in.Dimension != 0, "metric": in.Metric != "", "model": in.Model != "",
-		"id": in.ID != "", "vector": len(in.Vector) != 0, "metadata": len(in.Metadata) != 0, "if_revision": in.IfRevision != nil,
+		"id": in.ID != "", "vector": len(in.Vector) != 0, "text": in.Text != "", "endpoint": in.Endpoint != "", "api_key_env": in.APIKeyEnv != "",
+		"metadata": len(in.Metadata) != 0, "if_revision": in.IfRevision != nil,
 		"if_absent": in.IfAbsent, "ops": len(in.Ops) != 0, "filter": len(in.Filter) != 0, "params": len(in.Params) != 0,
 		"include_vectors": in.IncludeVectors, "limit": in.Limit != 0, "max_bytes": in.MaxBytes != 0, "since": in.Since != "",
 		"out": in.Out != "", "in": in.In != "", "on_conflict": in.OnConflict != "", "replace": in.Replace,
@@ -258,7 +264,7 @@ func encodeVector(v []float32) Vector {
 // store it and rank it NULL).
 func parseVector(raw json.RawMessage, c Collection) ([]float32, error) {
 	if len(raw) == 0 {
-		return nil, fmt.Errorf("%w: vector is required (supply the embedding; no provider is called)", dbstore.ErrInvalidInput)
+		return nil, fmt.Errorf("%w: vector is required (supply the embedding, or text with an explicit --endpoint)", dbstore.ErrInvalidInput)
 	}
 	var v []float32
 	switch bytes.TrimLeft(raw, " \t\r\n")[0] {

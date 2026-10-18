@@ -98,22 +98,41 @@ claim story acceptance.
   - memory-mode specs drop `fs.*` tokens, except where export or import reads
     or writes a directory.
 
-## Embedding provider (Q2, open)
+## Embedding provider (Q2, approved and implemented)
 
-No text input exists. `text` or `provider` is not a field, and the strict
-decoder refuses it with `invalid_input`, so this package never reaches a
-network or a model. I reported the concrete gap to the manager: yoke has no
-embedding client or provider-configuration seam.
-- `pkg/llmgw/gateway` serves the OpenAI-compatible `POST /v1/embeddings`;
-  it is a router, not a client.
-- `pkg/cligw` refuses embeddings.
-- `pkg/ollm` wraps the heavy ollama module with List, Pull, Delete and Import
-  only, and its `DefaultURL()` is an implicit default.
-
-The proposal is awaiting the manager's decision, not implemented: an explicit
-per-operation endpoint plus the collection's persisted model, a stdlib-only
-call inside `Run` before the write transaction, a dimension check, and no
-fallback.
+The manager approved the Q2 proposal in mb 6969, so it is implemented in
+`pkg/dbvec/ops.go` (`embedInput`, `embedURL`, `embed`). It reuses no provider
+registry and adds none. `put` and `search` accept `text` only together with
+an explicit `endpoint`: the OpenAI-compatible base URL, for example
+`http://127.0.0.1:11434/v1`. The client POSTs `{model, input,
+encoding_format:"float"}` to `<endpoint>/embeddings`.
+- There is no default URL and no fallback. Text without an endpoint is
+  `invalid_input`. A supplied vector given with `endpoint` or `api_key_env`
+  is refused, so a supplied vector never reaches the network.
+- The model is always the collection's persisted model. A different
+  `model` is refused before the call.
+- The credential follows the existing env-var convention, as
+  `OPENAI_API_KEY` does in `pkg/broker`. `api_key_env` names a variable in
+  the process running the operation (the owner, for owner sessions). Its
+  value is sent only as `Authorization: Bearer` and never appears in an
+  input, an error or the request hash. An unset or empty variable is
+  `invalid_input`, never an anonymous retry.
+- The endpoint is refused when it has userinfo, a query or a fragment, so a
+  credential cannot ride in the URL. Redirects are never followed
+  (`http.ErrUseLastResponse`). A 3xx answer is `backend_error`, so a bearer
+  key cannot leave the named host.
+- The text is limited to 64 KiB and checked before any HTTP. The response is
+  read through a 4 MiB `LimitReader` (`limit_exceeded` above that). The call
+  uses the caller's context under a 60 s cap, so cancellation is `cancelled`
+  and the deadline is `timeout`.
+- The reply must contain exactly one `data[].embedding` float array. It goes
+  through the same `parseVector` as a supplied vector: the dimension, finite
+  float32 values and the cosine zero vector are checked.
+- Inside the owner's `Run`, the collection is read in a short read
+  transaction that is closed before the HTTP call. No database lock is held
+  across the network, and the write path checks the model again. The
+  logical request (text, endpoint, env name) is what dblifecycle hashes for
+  request-id replay; nondeterminism stays inside `Run`.
 
 ## sqlite-vec probe (vec0 v0.1.9 through modernc, Dragon)
 
@@ -132,8 +151,8 @@ The command is exactly the focused local gate, run on Dragon with short
 in-process tests only and its exit status taken directly:
 
 ```
-CGO_ENABLED=0 GOMAXPROCS=2 GOFLAGS=-p=2 go test -short -count=1 ./pkg/dbvec   # exit 0, 69.3s
-CGO_ENABLED=0 GOMAXPROCS=2 GOFLAGS=-p=2 go test -short -count=1 -run TestExportedFilterAndObjectMatchDocGrammar ./pkg/dbdoc   # exit 0
+CGO_ENABLED=0 GOMAXPROCS=2 GOFLAGS=-p=2 go test -short -count=1 ./pkg/dbvec   # exit 0, 45.5s (with Q2 tests)
+CGO_ENABLED=0 GOMAXPROCS=2 GOFLAGS=-p=2 go test -short -count=1 ./pkg/dbdoc    # exit 0, 37.2s (whole package)
 CGO_ENABLED=0 go vet ./pkg/dbvec ./pkg/dbdoc   # exit 0
 ```
 
@@ -143,7 +162,7 @@ the cause is the environment and not dbvec.
 
 | Test | Covers |
 |---|---|
-| `TestVecCollectionsAndItemsBothModes` | both modes; nothing pre-created; `--yes` for add/rm; name, dimension, metric and model validation; tagged and array vectors; bit-exact f32 (subnormal, 24-bit mantissa, −0); every incompatible-vector refusal; model mismatch; metadata strictness; if-absent and if-revision conflicts; update bumps the revision; deletion removes the item from get and search; text/provider input refused; list reports dimension, metric, model and count; collection rm, then re-add with a new definition |
+| `TestVecCollectionsAndItemsBothModes` | both modes; nothing pre-created; `--yes` for add/rm; name, dimension, metric and model validation; tagged and array vectors; bit-exact f32 (subnormal, 24-bit mantissa, −0); every incompatible-vector refusal; model mismatch; metadata strictness; if-absent and if-revision conflicts; update bumps the revision; deletion removes the item from get and search; an unknown `provider` field refused; list reports dimension, metric, model and count; collection rm, then re-add with a new definition |
 | `TestSearchMetricsFiltersAndPages` | both modes; l2, l1 and cosine distances and order; metadata filter; bound `in` param with an SQL-looking value; bad field refused; wrong query dimension, zero cosine query and model mismatch refused; cursor pages through equal distances; cursor bound to its query; include_vectors; max_bytes truncation and an oversized hit; limit maximum |
 | `TestBatchIsAtomic` | both modes; a failing batch applies nothing; results per op; bad op; batch size maximum |
 | `TestPersistentSurvivesRestartMemoryEndsWithOwner` | fresh service and handle on the same file: vector bits, metadata, deletion and the persisted dimension, metric and model survive; memory ends with its MemSpace |
@@ -154,6 +173,12 @@ the cause is the environment and not dbvec.
 | `TestExportImportRoundTripsAcrossModes` | memory→persistent, persistent→memory, persistent→persistent, memory→memory: collections, IDs, revisions, metadata (big and decimal numbers, nested) and vector bits identical; search and dimension enforcement work after import; `--replace` needs `--yes` |
 | `TestImportMergeConflictPolicies` | both modes; error (nothing applied), skip, replace (revision past both), merge keeps items absent from the export, `--replace` empties first, replace plus on-conflict refused, merge into a different model or a missing collection is `conflict` |
 | `TestImportValidatesBeforeChanging` | schema v2, format 2.0, foreign schema, documents category, vec_format, bad metric, escaping path, no manifest, tampered checksum, untagged vector, wrong dimension and missing final newline are each refused with its code, and the target is unchanged; export over an existing or relative directory refused; cancelled import and export are `cancelled` |
+| `TestEmbedExplicitEndpoint` | both modes; text put and text search against a fake OpenAI-compatible endpoint; the request carries the collection's persisted model and the text; the bearer key comes from `api_key_env` and is sent only when named; the stored vector is bit-exact from the reply |
+| `TestEmbedRefusals` | no endpoint, text plus vector, endpoint with a supplied vector, userinfo, query, non-http scheme, empty or invalid key env, another model, oversize text and a missing collection are each refused, with zero requests reaching the endpoint |
+| `TestEmbedBadReplies` | wrong dimension and non-finite values are `invalid_input`; malformed JSON, two items, a base64 embedding and a non-200 status are `backend_error`; an oversize response is `limit_exceeded`; nothing is written |
+| `TestEmbedRefusesRedirect` | a 307 to another host is not followed (that host gets zero calls); `backend_error`, and the key is not in the error |
+| `TestEmbedCancel` | a hung endpoint plus caller cancellation gives `cancelled` promptly |
+| `TestSuppliedVectorZeroNetwork` | supplied-vector put and search make zero calls; with the HTTP client replaced by a failing transport, a put still succeeds |
 | `TestOwnerSessionSharesMemoryCollection` | in-process `dblifecycle.Serve` plus `Call` (the owner IPC path): two agents share one memory collection; contested revision is `conflict`; request-id replay applies once and reuse with other input is `conflict`; hold makes the other agent `claim_held` for search and put, a wrong epoch is `stale_epoch`, and the holder runs an exclusive add with its epoch, then releases; owner export, then a persistent import is bit-exact with revisions preserved; stop gives `lifetime_ended` |
 
 These independent-process tests are written. They skip under `-short` and
@@ -174,5 +199,4 @@ were not run on Dragon. They are for the manager's gate:
 
 - `cmds/db` dispatch, flags, MCP schema and atlas rows. These are shared
   files left for the manager-coordinated phase 2 mount.
-- Text embedding through an explicit provider (Q2 above).
 - Independent-process, whole-package, crossvet and remote gates (manager).
