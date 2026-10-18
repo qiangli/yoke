@@ -28,9 +28,9 @@ type weaveHandoffRecord struct {
 
 func weaveValidateHandoff(it *weaveItem) (string, error) {
 	switch it.State {
-	case "killed", "failed", "allocated", "no-op":
+	case "killed", "failed", "allocated", "no-op", "submitted":
 	default:
-		return "", fmt.Errorf("handoff requires a stopped run; run #%d is %s (kill/reconcile it first)", it.ID, it.State)
+		return "", fmt.Errorf("handoff requires a stopped or submitted run; run #%d is %s (kill/reconcile it first)", it.ID, it.State)
 	}
 	if it.WrapperPid > 0 && pidAlive(it.WrapperPid) {
 		return "", fmt.Errorf("handoff refused: run #%d has a live wrapper", it.ID)

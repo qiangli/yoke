@@ -176,6 +176,28 @@ func TestResumeHandoffRefusalsLeaveIdentityAndIndexUntouched(t *testing.T) {
 	}
 }
 
+func TestResumeHandoffSubmittedRunPreservesUniqueCommit(t *testing.T) {
+	_, _, it, next := handoffFixture(t)
+	it.State = "submitted"
+	head := strings.TrimSpace(gitT(t, it.Workspace, "rev-parse", "HEAD"))
+	if err := weaveOpenHandoff(it, next, it); err != nil {
+		t.Fatalf("submitted run handoff refused: %v", err)
+	}
+	if it.HandoffBaseSHA != head {
+		t.Fatal("submitted handoff lost unique commit")
+	}
+	if got, err := os.ReadFile(filepath.Join(it.Workspace, "unique.txt")); err != nil || string(got) != "unique\n" {
+		t.Fatalf("lost unique.txt: %q %v", got, err)
+	}
+	for _, state := range []string{"working", "paused", "done", "abandoned"} {
+		_, _, bad, next := handoffFixture(t)
+		bad.State = state
+		if err := weaveOpenHandoff(bad, next, bad); err == nil {
+			t.Fatalf("accepted handoff of %s run", state)
+		}
+	}
+}
+
 func TestResumeHandoffIncompatibleFlags(t *testing.T) {
 	for _, args := range [][]string{
 		{"--tool", "007"}, {"--clone"}, {"--no-spawn"}, {"--arena", "413"}, {"--sealed"}, {"--blind"}, {"--allow-host", "example.invalid"}, {"--", "007"},
