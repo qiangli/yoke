@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [host/page] never pkill on an outpost host — WHEN tempted to kill a stuck process on any outpost-paired machine - never pkill/killall by pattern The outpost daemon is the ONLY remote path to the machine; a pattern kill takes it down with the target and you lose the host. Find the exact pid, confirm its command line, kill that one pid - or better, use the o  (kb:never-pkill-on-an-outpost-host)
+- [repo/page] Agy model-door text lives in step updates — For cligw stdin-stream-json workers, extract only agent_response step_update.text_delta and use result.response only when no deltas arrived. Select a fresh Agy project explicitly; cwd alone can reuse remembered context. Keep raw provider stderr out of HTTP headers. See docs/validation/cligw  (kb:agy-model-door-text-lives-in-step-updates)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 

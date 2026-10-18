@@ -18,6 +18,10 @@ type TreeEntry struct {
 	Children []TreeEntry   `json:"children,omitempty"`
 }
 
+func isContainer(kind string) bool {
+	return kind == "directory" || kind == "object" || kind == "array"
+}
+
 // Walk includes root at depth zero; depth < 0 means no limit.
 func Walk(ctx context.Context, p provider.Provider, loc ref.Locator, depth int) (TreeEntry, error) {
 	n, err := p.Stat(ctx, loc)
@@ -29,7 +33,7 @@ func Walk(ctx context.Context, p provider.Provider, loc ref.Locator, depth int) 
 
 func walk(ctx context.Context, p provider.Provider, loc ref.Locator, n provider.Node, limit, level int) (TreeEntry, error) {
 	e := TreeEntry{Node: n}
-	if n.Kind != "directory" || limit >= 0 && level >= limit {
+	if !isContainer(n.Kind) || limit >= 0 && level >= limit {
 		return e, nil
 	}
 	children, err := p.List(ctx, loc)
@@ -120,7 +124,7 @@ func collectEdges(ctx context.Context, p provider.Provider, loc ref.Locator, dep
 	var edges []provider.Edge
 	var visit func(TreeEntry, int) error
 	visit = func(e TreeEntry, level int) error {
-		if e.Node.Kind == "directory" && depth >= 0 && level >= depth {
+		if isContainer(e.Node.Kind) && depth >= 0 && level >= depth {
 			return nil
 		}
 		l, err := ref.ParseLocator(e.Node.Ref)
