@@ -149,6 +149,35 @@ func rangeBounds(in *Input) (start, end *int64, err error) {
 
 var aggFuncs = []string{"count", "min", "max", "sum", "avg"}
 
+// floatExactIntMax is the largest magnitude an int64 keeps exactly as a
+// float64: 2^53-1. The points table holds every sample as a REAL shadow
+// beside the exact typed columns, and aggregates read that shadow, so
+// min/max/sum/avg are approximate when int samples outside ±this bound
+// are in scope. runAgg declares that with a warning; count is exact.
+const floatExactIntMax = 1<<53 - 1
+
+const aggApproxWarning = "min, max, sum and avg aggregate the float64 value column and are approximate when int samples outside ±9007199254740991 are in scope; count is exact"
+
+// hasApproxInts reports whether the series holds int samples outside the
+// float-exact range inside the query bounds.
+func hasApproxInts(t *tx, id int64, start, end *int64) (bool, error) {
+	q := "select count(*) from " + tablePoints + " p where p.series_id = ? and p.value_kind = ? and (p.value_int > ? or p.value_int < ?)"
+	args := []any{id, valueKindInt, int64(floatExactIntMax), -int64(floatExactIntMax)}
+	if start != nil {
+		q += " and p.ts >= ?"
+		args = append(args, *start)
+	}
+	if end != nil {
+		q += " and p.ts < ?"
+		args = append(args, *end)
+	}
+	var n int64
+	if err := t.queryRow(q, args...).Scan(&n); err != nil {
+		return false, t.classify(err)
+	}
+	return n > 0, nil
+}
+
 func checkFuncs(funcs []string) ([]string, error) {
 	if len(funcs) == 0 {
 		return aggFuncs, nil
@@ -520,6 +549,19 @@ func runAgg(ctx context.Context, h dbstore.Handle, in Input) (dblifecycle.Outcom
 	if err := ctx.Err(); err != nil {
 		return dblifecycle.Outcome{}, dbstore.FromContext(err)
 	}
+	// The REAL shadow behind min/max/sum/avg rounds ints outside the
+	// float-exact range: declare the approximation when such samples are
+	// in scope and those funcs were requested. Count over rows is exact.
+	var warnings []string
+	if want["min"] || want["max"] || want["sum"] || want["avg"] {
+		approx, err := hasApproxInts(t, id, sel.Start, sel.End)
+		if err != nil {
+			return dblifecycle.Outcome{}, err
+		}
+		if approx {
+			warnings = append(warnings, aggApproxWarning)
+		}
+	}
 	keys := make([]string, 0, len(want))
 	for k := range want {
 		keys = append(keys, k)
@@ -527,8 +569,9 @@ func runAgg(ctx context.Context, h dbstore.Handle, in Input) (dblifecycle.Outcom
 	sort.Strings(keys)
 	res := dblifecycle.Outcome{Result: map[string]any{"series": in.Series, "bucket_ns": bucket, "funcs": keys, "buckets": out},
 		Page: newPage(target, binding, offset, len(out), limit, used, truncated)}
+	res.Warnings = warnings
 	if truncated {
-		res.Warnings = []string{cursorWarning}
+		res.Warnings = append(res.Warnings, cursorWarning)
 	}
 	return res, nil
 }

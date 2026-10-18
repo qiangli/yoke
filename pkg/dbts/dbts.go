@@ -16,7 +16,12 @@
 // writes all SQL itself: every series name, label, timestamp and value is a
 // bound parameter, never interpolated text. Reads issue only fixed SELECTs,
 // so a read cannot mutate even on a held read-write handle. Schema changes
-// (import --replace) and retention deletes are exclusive.
+// (import --replace) and retention deletes are exclusive. Import stages
+// each record file once into bounded private bytes and applies those same
+// bytes in one transaction, so a late failure leaves the target unchanged.
+// Aggregates read the REAL shadow: min/max/sum/avg are declared
+// approximate when out-of-float-exact-range ints are in scope, while
+// count stays exact.
 //
 // Remote endpoints are explicit per request: the input names the endpoint,
 // there is no default, no environment fallback and nothing is provisioned or

@@ -76,6 +76,23 @@ type recordFile struct {
 	SHA256  string `json:"sha256"`
 }
 
+// maxImportFileBytes bounds one staged record file. Exports chunk at
+// pointsPerFile records, so ordinary files are a few megabytes; anything
+// larger is refused explicitly rather than staged without bound. Only one
+// file is staged at a time, so import memory stays bounded by this cap,
+// never by the dataset size, and nothing spills an in-memory database to
+// disk: staging is private import bytes, not database storage.
+const maxImportFileBytes = 64 << 20
+
+// stagedPoint is one record decoded from staged file bytes, ready to
+// apply with no further parsing.
+type stagedPoint struct {
+	series string
+	labels string // canonical labels JSON
+	ts     int64
+	val    sampleValue
+}
+
 type pointRecord struct {
 	Series string            `json:"series"`
 	Labels map[string]string `json:"labels,omitempty"`
@@ -305,11 +322,18 @@ func runImport(ctx context.Context, h dbstore.Handle, in Input) (dblifecycle.Out
 	if err != nil {
 		return dblifecycle.Outcome{}, err
 	}
-	// Validation first: every record decodes before any destructive step.
-	// Two streaming passes keep memory bounded by the record, not the data.
-	if err := validateImport(in.In, m); err != nil {
-		return dblifecycle.Outcome{}, err
+	known := map[string]bool{}
+	for _, sd := range m.SchemaDef.Series {
+		// readManifest already validated every name and label set.
+		labels, _ := canonicalLabels(sd.Labels)
+		known[sd.Name+"\x00"+labels] = true
 	}
+	// The write transaction opens before staging: every destructive step
+	// below (replace deletes, series registration, point writes) and every
+	// staged apply share one transaction, so a late failure rolls back
+	// and the target is unchanged. Staging reads each file once into
+	// bounded private bytes and applies those same bytes, so caller files
+	// cannot change between validation and apply.
 	t, err := begin(ctx, h, true)
 	if err != nil {
 		return dblifecycle.Outcome{}, err
@@ -346,7 +370,11 @@ func runImport(ctx context.Context, h dbstore.Handle, in Input) (dblifecycle.Out
 		}
 	}
 	for _, f := range m.Files {
-		n, err := applyFile(ctx, t, in.In, f, ids, onConflict)
+		staged, err := stageFile(in.In, f, known)
+		if err != nil {
+			return dblifecycle.Outcome{}, err
+		}
+		n, err := applyStaged(ctx, t, staged, ids, onConflict)
 		if err != nil {
 			return dblifecycle.Outcome{}, err
 		}
@@ -428,108 +456,98 @@ type counts struct {
 	ingested, skipped, replaced int
 }
 
-// validateImport streams every record file, verifying checksums, counts and
-// strict decoding. Nothing is written.
-func validateImport(dir string, m *manifest) error {
-	known := map[string]bool{}
-	for _, sd := range m.SchemaDef.Series {
-		labels, _ := canonicalLabels(sd.Labels)
-		known[sd.Name+"\x00"+labels] = true
+// stageFile reads one record file ONCE into bounded private bytes and
+// validates those exact bytes: size, sha256, counts and strict decoding
+// of every record. The caller applies the returned points; the file is
+// never re-read, so caller files cannot change between validation and
+// apply. Only one file is staged at a time, within maxImportFileBytes.
+func stageFile(dir string, f recordFile, known map[string]bool) ([]stagedPoint, error) {
+	if f.Bytes < 0 || f.Bytes > maxImportFileBytes {
+		return nil, fmt.Errorf("%w: %s declares %d bytes, over the %d-byte staged file limit", dbstore.ErrLimitExceeded, f.Path, f.Bytes, maxImportFileBytes)
 	}
-	for _, f := range m.Files {
-		if _, err := scanFile(dir, f, known); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func scanFile(dir string, f recordFile, known map[string]bool) (counts, error) {
-	var c counts
 	fh, err := os.Open(filepath.Join(dir, f.Path))
 	if err != nil {
-		return c, fmt.Errorf("%w: records file %s: %v", dbstore.ErrNotFound, f.Path, err)
+		return nil, fmt.Errorf("%w: records file %s: %v", dbstore.ErrNotFound, f.Path, err)
 	}
 	defer fh.Close()
-	h := sha256.New()
+	raw, err := io.ReadAll(io.LimitReader(fh, maxImportFileBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s: %v", dbstore.ErrMalformedInput, f.Path, err)
+	}
+	if int64(len(raw)) > maxImportFileBytes {
+		return nil, fmt.Errorf("%w: %s holds over the %d-byte staged file limit", dbstore.ErrLimitExceeded, f.Path, maxImportFileBytes)
+	}
+	sum := sha256.Sum256(raw)
+	if hex.EncodeToString(sum[:]) != strings.ToLower(f.SHA256) {
+		return nil, fmt.Errorf("%w: %s checksum", dbstore.ErrIntegrity, f.Path)
+	}
+	var out []stagedPoint
 	var records, nbytes int64
-	sc := bufio.NewScanner(io.TeeReader(fh, h))
-	sc.Buffer(make([]byte, 64<<10), MaxRecordBytes)
-	for sc.Scan() {
-		line := sc.Bytes()
+	for _, line := range bytes.Split(raw, []byte{'\n'}) {
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
 		}
+		if len(line) > MaxRecordBytes {
+			return nil, fmt.Errorf("%w: %s record %d over %d bytes", dbstore.ErrLimitExceeded, f.Path, records+1, MaxRecordBytes)
+		}
+		// Every record line carries its newline in the byte count, as the
+		// exporter writes them; a final line without one fails the count
+		// check below instead of importing silently.
 		nbytes += int64(len(line)) + 1
 		var rec pointRecord
 		dec := json.NewDecoder(bytes.NewReader(line))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&rec); err != nil {
-			return c, fmt.Errorf("%w: %s record %d: %v", dbstore.ErrMalformedInput, f.Path, records+1, err)
+			return nil, fmt.Errorf("%w: %s record %d: %v", dbstore.ErrMalformedInput, f.Path, records+1, err)
 		}
 		if err := checkSeriesName(rec.Series); err != nil {
-			return c, fmt.Errorf("%s record %d: %w", f.Path, records+1, err)
+			return nil, fmt.Errorf("%s record %d: %w", f.Path, records+1, err)
 		}
 		labels, err := canonicalLabels(rec.Labels)
 		if err != nil {
-			return c, fmt.Errorf("%s record %d: %w", f.Path, records+1, err)
+			return nil, fmt.Errorf("%s record %d: %w", f.Path, records+1, err)
 		}
 		if !known[rec.Series+"\x00"+labels] {
-			return c, fmt.Errorf("%w: %s record %d names series %q outside schema_def", dbstore.ErrMalformedInput, f.Path, records+1, rec.Series)
+			return nil, fmt.Errorf("%w: %s record %d names series %q outside schema_def", dbstore.ErrMalformedInput, f.Path, records+1, rec.Series)
 		}
-		if _, err := parseTS("ts", rec.Ts); err != nil {
-			return c, fmt.Errorf("%s record %d: %w", f.Path, records+1, err)
+		ts, err := parseTS("ts", rec.Ts)
+		if err != nil {
+			return nil, fmt.Errorf("%s record %d: %w", f.Path, records+1, err)
 		}
-		if _, err := parseSampleValue("value", rec.Value); err != nil {
-			return c, fmt.Errorf("%s record %d: %w", f.Path, records+1, err)
+		v, err := parseSampleValue("value", rec.Value)
+		if err != nil {
+			return nil, fmt.Errorf("%s record %d: %w", f.Path, records+1, err)
 		}
+		out = append(out, stagedPoint{series: rec.Series, labels: labels, ts: ts, val: v})
 		records++
 	}
-	if err := sc.Err(); err != nil {
-		return c, fmt.Errorf("%w: %s: %v", dbstore.ErrMalformedInput, f.Path, err)
-	}
-	if hex.EncodeToString(h.Sum(nil)) != strings.ToLower(f.SHA256) {
-		return c, fmt.Errorf("%w: %s checksum", dbstore.ErrIntegrity, f.Path)
-	}
 	if records != f.Records || nbytes != f.Bytes {
-		return c, fmt.Errorf("%w: %s declares %d records/%d bytes, holds %d/%d", dbstore.ErrMalformedInput, f.Path, f.Records, f.Bytes, records, nbytes)
+		return nil, fmt.Errorf("%w: %s declares %d records/%d bytes, holds %d/%d", dbstore.ErrMalformedInput, f.Path, f.Records, f.Bytes, records, nbytes)
 	}
-	c.ingested = int(records)
-	return c, nil
+	return out, nil
 }
 
-func applyFile(ctx context.Context, t *tx, dir string, f recordFile, ids map[string]int64, onConflict string) (counts, error) {
+// applyStaged writes staged points inside the import transaction. The
+// points were decoded from the staged bytes by stageFile, so no parsing
+// remains to fail or ignore here; every error aborts before commit and
+// leaves the target unchanged.
+func applyStaged(ctx context.Context, t *tx, staged []stagedPoint, ids map[string]int64, onConflict string) (counts, error) {
 	var c counts
-	fh, err := os.Open(filepath.Join(dir, f.Path))
-	if err != nil {
-		return c, fmt.Errorf("%w: records file %s: %v", dbstore.ErrNotFound, f.Path, err)
-	}
-	defer fh.Close()
-	sc := bufio.NewScanner(fh)
-	sc.Buffer(make([]byte, 64<<10), MaxRecordBytes)
-	for sc.Scan() {
-		line := sc.Bytes()
-		if len(bytes.TrimSpace(line)) == 0 {
-			continue
+	for _, s := range staged {
+		id, ok := ids[s.series+"\x00"+s.labels]
+		if !ok {
+			return c, fmt.Errorf("%w: staged point names series %q outside schema_def", dbstore.ErrMalformedInput, s.series)
 		}
-		var rec pointRecord
-		if err := json.Unmarshal(line, &rec); err != nil {
-			return c, fmt.Errorf("%w: %s: %v", dbstore.ErrMalformedInput, f.Path, err)
-		}
-		labels, _ := canonicalLabels(rec.Labels)
-		id := ids[rec.Series+"\x00"+labels]
-		ts, _ := parseTS("ts", rec.Ts)
-		v, _ := parseSampleValue("value", rec.Value)
 		if err := ctx.Err(); err != nil {
 			return c, dbstore.FromContext(err)
 		}
 		switch onConflict {
 		case "replace":
 			var n int
-			if err := t.queryRow("select count(*) from "+tablePoints+" where series_id = ? and ts = ?", id, ts).Scan(&n); err != nil {
+			if err := t.queryRow("select count(*) from "+tablePoints+" where series_id = ? and ts = ?", id, s.ts).Scan(&n); err != nil {
 				return c, t.classify(err)
 			}
-			if _, err := t.exec("insert or replace into "+tablePoints+"(series_id, ts, value, value_kind, value_int) values (?, ?, ?, ?, ?)", id, ts, v.fval, kindOf(v), intOf(v)); err != nil {
+			if _, err := t.exec("insert or replace into "+tablePoints+"(series_id, ts, value, value_kind, value_int) values (?, ?, ?, ?, ?)", id, s.ts, s.val.fval, kindOf(s.val), intOf(s.val)); err != nil {
 				return c, err
 			}
 			if n == 0 {
@@ -538,7 +556,7 @@ func applyFile(ctx context.Context, t *tx, dir string, f recordFile, ids map[str
 				c.replaced++
 			}
 		case "skip":
-			r, err := t.exec("insert or ignore into "+tablePoints+"(series_id, ts, value, value_kind, value_int) values (?, ?, ?, ?, ?)", id, ts, v.fval, kindOf(v), intOf(v))
+			r, err := t.exec("insert or ignore into "+tablePoints+"(series_id, ts, value, value_kind, value_int) values (?, ?, ?, ?, ?)", id, s.ts, s.val.fval, kindOf(s.val), intOf(s.val))
 			if err != nil {
 				return c, err
 			}
@@ -548,17 +566,14 @@ func applyFile(ctx context.Context, t *tx, dir string, f recordFile, ids map[str
 				c.ingested++
 			}
 		default:
-			if _, err := t.exec("insert into "+tablePoints+"(series_id, ts, value, value_kind, value_int) values (?, ?, ?, ?, ?)", id, ts, v.fval, kindOf(v), intOf(v)); err != nil {
+			if _, err := t.exec("insert into "+tablePoints+"(series_id, ts, value, value_kind, value_int) values (?, ?, ?, ?, ?)", id, s.ts, s.val.fval, kindOf(s.val), intOf(s.val)); err != nil {
 				if dbstore.Code(err) == "conflict" {
-					return c, fmt.Errorf("%w: import point %q at ts %d already exists (on_conflict=error)", err, rec.Series, ts)
+					return c, fmt.Errorf("%w: import point %q at ts %d already exists (on_conflict=error)", err, s.series, s.ts)
 				}
 				return c, err
 			}
 			c.ingested++
 		}
-	}
-	if err := sc.Err(); err != nil {
-		return c, fmt.Errorf("%w: %s: %v", dbstore.ErrMalformedInput, f.Path, err)
 	}
 	return c, nil
 }

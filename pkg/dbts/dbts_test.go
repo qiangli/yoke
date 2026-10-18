@@ -430,6 +430,122 @@ func TestTSInterchangeRoundTripsAcrossModes(t *testing.T) {
 	}
 }
 
+// TestTSAggApproximationDeclared pins the REAL-shadow contract: with int
+// samples outside float-exact range in scope, min/max/sum/avg carry an
+// approximation warning while count stays exact; in-range data and
+// count-only requests stay quiet.
+func TestTSAggApproximationDeclared(t *testing.T) {
+	hasApprox := func(out dblifecycle.Outcome) bool {
+		for _, w := range out.Warnings {
+			if strings.Contains(w, "approximate") {
+				return true
+			}
+		}
+		return false
+	}
+	bucketCount := func(t *testing.T, out dblifecycle.Outcome) string {
+		t.Helper()
+		buckets := out.Result.(map[string]any)["buckets"].([]any)
+		if len(buckets) != 1 {
+			t.Fatalf("buckets = %d", len(buckets))
+		}
+		return buckets[0].(map[string]any)["count"].(map[string]any)["v"].(string)
+	}
+	for _, mode := range []dbstore.Mode{dbstore.Persistent, dbstore.Memory} {
+		t.Run(string(mode), func(t *testing.T) {
+			f := newFixture(t, mode)
+			f.must(OpIngest, Input{Series: "big", Points: []Point{
+				tsPoint(intTS(1000), intV(math.MaxInt64)),
+				tsPoint(intTS(2000), intV(math.MinInt64)),
+				tsPoint(intTS(3000), intV(7)),
+			}}, false)
+			out := f.must(OpAgg, Input{Series: "big", Bucket: "1h"}, false)
+			if !hasApprox(out) {
+				t.Fatalf("no approximation warning: %v", out.Warnings)
+			}
+			if got := bucketCount(t, out); got != "3" {
+				t.Fatalf("bucket count = %s", got)
+			}
+			// Count-only stays quiet: counts over rows are exact.
+			out = f.must(OpAgg, Input{Series: "big", Bucket: "1h", Funcs: []string{"count"}}, false)
+			if hasApprox(out) {
+				t.Fatalf("count-only warned: %v", out.Warnings)
+			}
+			if got := bucketCount(t, out); got != "3" {
+				t.Fatalf("bucket count = %s", got)
+			}
+			// In-range ints and floats never warn.
+			f.must(OpIngest, Input{Series: "small", Points: []Point{
+				tsPoint(intTS(1000), intV(1<<53-1)),
+				tsPoint(intTS(2000), intV(-(1<<53 - 1))),
+				tsPoint(intTS(3000), f64v(0.5)),
+			}}, false)
+			out = f.must(OpAgg, Input{Series: "small", Bucket: "1h"}, false)
+			if hasApprox(out) {
+				t.Fatalf("in-range data warned: %v", out.Warnings)
+			}
+			// A range excluding the extremes stays quiet too.
+			out = f.must(OpAgg, Input{Series: "big", Bucket: "1h",
+				Start: json.RawMessage(intTS(3000))}, false)
+			if hasApprox(out) {
+				t.Fatalf("scoped-out extremes warned: %v", out.Warnings)
+			}
+		})
+	}
+}
+
+// TestTSImportStagedBytesBound pins the staged-import contract: a record
+// file declared over the staged cap is refused before mutation, and the
+// target is unchanged afterwards.
+func TestTSImportStagedBytesBound(t *testing.T) {
+	src := newFixture(t, dbstore.Persistent)
+	src.must(OpIngest, Input{Series: "s", Points: []Point{tsPoint(intTS(1), f64v(1))}}, false)
+	good := filepath.Join(t.TempDir(), "good")
+	src.must(OpExport, Input{Out: good}, false)
+
+	dir := filepath.Join(t.TempDir(), "over")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ents, err := os.ReadDir(good)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range ents {
+		b, err := os.ReadFile(filepath.Join(good, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, e.Name()), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, ManifestName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m manifest
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	m.Files[0].Bytes = maxImportFileBytes + 1
+	mb, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ManifestName), mb, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dst := newFixture(t, dbstore.Persistent)
+	if code := dst.code(OpImport, Input{In: dir, Replace: true}, true); code != "limit_exceeded" {
+		t.Fatalf("over-cap import = %s", code)
+	}
+	got := pointsOf(t, dst.must(OpRange, Input{Series: "s"}, false))
+	if len(got) != 0 {
+		t.Fatalf("refused import mutated the target: %d points", len(got))
+	}
+}
+
 // checkTaggedInts asserts every ranged point carries its exact tagged int:
 // the "int" tag plus the full decimal, including int64 extremes.
 func checkTaggedInts(t *testing.T, got []any, want []int64) {
