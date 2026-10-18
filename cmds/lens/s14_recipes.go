@@ -1,9 +1,6 @@
 package lenscmd
 
 import (
-	"context"
-	"fmt"
-
 	"github.com/qiangli/coreutils/tool"
 	"github.com/qiangli/yoke/pkg/lens/provider"
 	"github.com/qiangli/yoke/pkg/ref"
@@ -16,18 +13,4 @@ func init() {
 	RegisterProvider("k8s", func(_ *tool.RunContext, _ ref.Locator) (provider.Provider, error) {
 		return provider.NewK8sRecipe(nil), nil
 	})
-	RegisterProvider("cloud", cloudProvider)
-}
-
-// cloudRunner is nil in production (the real read-only runner); tests inject one.
-var cloudRunner func(context.Context, string, ...string) ([]byte, error)
-
-// cloudProvider serves cloud:droplets@cloud:<context> through the read-only
-// droplets recipe. An unscoped locator or any other scope fails closed: there
-// is no ambient DIGITALOCEAN_CONTEXT fallback.
-func cloudProvider(_ *tool.RunContext, loc ref.Locator) (provider.Provider, error) {
-	if loc.Scheme != "cloud" || loc.ScopeKind != "cloud" {
-		return nil, fmt.Errorf("cloud droplets need a @cloud scope, got %q", loc.String())
-	}
-	return provider.NewCloudDropletsRecipe(loc.ScopeValue, cloudRunner)
 }
