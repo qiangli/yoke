@@ -31,7 +31,7 @@ func TestGraphCASClientHelper(t *testing.T) {
 		return
 	}
 	id := os.Getenv("BASHY_GRAPH_SESSION")
-	target := dbstore.Target{Engine: "bonsai", Mode: dbstore.Persistent, Path: os.Getenv("BASHY_GRAPH_PATH")}
+	target := dbstore.Target{Engine: "bonsai", Mode: dbstore.Mode(os.Getenv("BASHY_GRAPH_MODE")), Path: os.Getenv("BASHY_GRAPH_PATH"), Session: id, Name: os.Getenv("BASHY_GRAPH_NAME")}
 	in, _ := json.Marshal(Input{Node: &dbstore.Node{ID: "shared", Type: os.Getenv("BASHY_GRAPH_CLIENT")}, IfRevision: 1})
 	res, err := dblifecycle.Call(context.Background(), id, dblifecycle.Request{Op: OpNodePut, Target: target, Input: in, Wait: 5 * time.Second})
 	if err != nil {
@@ -46,18 +46,25 @@ func TestGraphOwnerTwoClientCAS(t *testing.T) {
 	if testing.Short() {
 		t.Skip("independent process gate runs remotely")
 	}
+	for _, mode := range []dbstore.Mode{dbstore.Persistent, dbstore.Memory} {
+		t.Run(string(mode), func(t *testing.T) { testGraphOwnerTwoClientCAS(t, mode) })
+	}
+}
+
+func testGraphOwnerTwoClientCAS(t *testing.T, mode dbstore.Mode) {
 	root := t.TempDir()
 	t.Setenv("BASHY_DB_SESSION_DIR", filepath.Join(root, "sessions"))
 	t.Setenv("BASHY_COORD_DIR", filepath.Join(root, "coord"))
 	ready := filepath.Join(root, "ready")
-	owner := exec.Command(os.Args[0], "-test.run=^TestGraphOwnerHelper$")
+	ownerCtx, stopOwner := context.WithCancel(context.Background())
+	owner := exec.CommandContext(ownerCtx, os.Args[0], "-test.run=^TestGraphOwnerHelper$")
 	owner.Env = append(os.Environ(), "BASHY_GRAPH_OWNER_HELPER=1", "BASHY_GRAPH_READY="+ready)
 	if err := owner.Start(); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
+		stopOwner()
 		if owner.ProcessState == nil {
-			_ = owner.Process.Kill()
 			_ = owner.Wait()
 		}
 	})
@@ -72,7 +79,12 @@ func TestGraphOwnerTwoClientCAS(t *testing.T) {
 		t.Fatal("graph owner did not start")
 	}
 	path := filepath.Join(root, "graph")
-	target := dbstore.Target{Engine: "bonsai", Mode: dbstore.Persistent, Path: path}
+	target := dbstore.Target{Engine: "bonsai", Mode: mode, Path: path}
+	if mode == dbstore.Memory {
+		target.Path = ""
+		target.Session = session
+		target.Name = "shared"
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	if r, err := dblifecycle.Call(ctx, session, dblifecycle.Request{Op: "create", Target: target}); err != nil || !r.OK {
@@ -85,8 +97,8 @@ func TestGraphOwnerTwoClientCAS(t *testing.T) {
 	results := make(chan dblifecycle.Response, 2)
 	for _, name := range []string{"one", "two"} {
 		go func(name string) {
-			cmd := exec.Command(os.Args[0], "-test.run=^TestGraphCASClientHelper$")
-			cmd.Env = append(os.Environ(), "BASHY_GRAPH_CAS_HELPER=1", "BASHY_GRAPH_SESSION="+session, "BASHY_GRAPH_PATH="+path, "BASHY_GRAPH_CLIENT="+name, "BASHY_EPISODE=graph-"+name)
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestGraphCASClientHelper$")
+			cmd.Env = append(os.Environ(), "BASHY_GRAPH_CAS_HELPER=1", "BASHY_GRAPH_SESSION="+session, "BASHY_GRAPH_MODE="+string(mode), "BASHY_GRAPH_PATH="+target.Path, "BASHY_GRAPH_NAME="+target.Name, "BASHY_GRAPH_CLIENT="+name, "BASHY_EPISODE=graph-"+name)
 			b, err := cmd.Output()
 			if err != nil {
 				results <- dblifecycle.Response{Error: &dblifecycle.OwnerError{Code: "client_failed", Message: err.Error()}}
@@ -113,6 +125,22 @@ func TestGraphOwnerTwoClientCAS(t *testing.T) {
 	}
 	if success != 1 || conflicts != 1 {
 		t.Fatalf("CAS outcomes: success=%d conflict=%d", success, conflicts)
+	}
+	get, _ := json.Marshal(Input{ID: "shared"})
+	r, err := dblifecycle.Call(ctx, session, dblifecycle.Request{Op: OpNodeGet, Target: target, Input: get})
+	if err != nil || !r.OK {
+		t.Fatalf("final read: %+v %v", r, err)
+	}
+	b, err := json.Marshal(r.Result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var node dbstore.Node
+	if err := json.Unmarshal(b, &node); err != nil {
+		t.Fatal(err)
+	}
+	if node.Rev != 2 || (node.Type != "one" && node.Type != "two") {
+		t.Fatalf("final node: %+v", node)
 	}
 }
 
