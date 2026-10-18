@@ -301,7 +301,12 @@ func TestIndependentDocClientsBothModes(t *testing.T) {
 			if code == 0 || (errCode(got) != "claim_held" && errCode(got) != "busy") {
 				t.Fatalf("drop under hold: %d %v", code, got)
 			}
-			_ = hold.Wait()
+			if err := hold.Wait(); err != nil {
+				t.Fatalf("hold child: %v", err)
+			}
+			if code, got := run("doc", "get", "--collection", "c", "--id", "ctr"); code != 0 || got["result"].(map[string]any)["doc"].(map[string]any)["n"].(json.Number).String() != fmt.Sprint(clients*each) {
+				t.Fatalf("denied drop changed data: %d %v", code, got)
+			}
 			if code, got := run("doc", "collection", "drop", "--collection", "c", "--yes"); code != 0 {
 				t.Fatalf("drop after release: %v", got)
 			}

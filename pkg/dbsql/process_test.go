@@ -97,7 +97,9 @@ func (c client) do(r call) dblifecycle.Response {
 		c.t.Fatalf("client %s %s: %v %s", r.agent, r.op, err, b)
 	}
 	var res dblifecycle.Response
-	if err := json.Unmarshal([]byte(strings.SplitN(string(b), "\n", 2)[0]), &res); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(strings.SplitN(string(b), "\n", 2)[0]))
+	decoder.UseNumber()
+	if err := decoder.Decode(&res); err != nil {
 		c.t.Fatalf("client output %q: %v", b, err)
 	}
 	return res
