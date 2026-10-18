@@ -57,19 +57,55 @@ support.
   ambiguity refusal, redacted scope, opaque-token pagination incl.
   cross-binding/foreign-token rejection, JSON/NDJSON envelopes with the
   single `schema_version` discriminator, upload/dry-run validation,
-  typed-error exits, and canary-secret redaction.
+  typed-error exits, canary-secret redaction, and Discovery inspection
+  incl. drift/identity-change rejection (`discovery_test.go`).
+- Runtime Discovery inspection and cache drift: covered OFFLINE —
+  `InspectDiscovery` parses a Discovery document already in hand
+  (name/version/revision + sha256 fingerprint of the exact bytes) and
+  `CheckDrift` fails closed on revision drift or identity change instead
+  of silently mixing revisions (`discovery.go`, `discovery_test.go`).
+  Record the observed identity alongside `Binding.Revision` (page.go).
+  Fetching a live document still needs an authorized test account and is
+  owned by Sprint 465 story 534ede495eb8 (below).
 - Registry gate: `TestNoDefaultRegistryEntryLacksPin` unaffected (gws is
   host-first `PreferHost`, same posture as gcloud); atlas platform
   declaration added (`pkg/atlas/platform.go`, one row) so
   `TestEveryExternalDeclaresPlatforms` stays green.
-- LIVE GOOGLE CHECKS — NAMED UNVERIFIED GAP: no authorized test account
-  or platform credential exists in this environment, so the one read +
-  one reversible write with cleanup, Discovery-schema inspection, cache
-  drift observation, and denied/expired-auth against the real API were
-  NOT performed. No live support is claimed or inferred.
+- LIVE GOOGLE CHECKS — MOVED TO SPRINT 465 (story 534ede495eb8, NOT
+  attempted here): no authorized test account or platform credential
+  exists in this environment, so the one read + one reversible write
+  with cleanup, live Discovery-schema fetch, live cache-drift
+  observation, and denied/expired-auth against the real API were NOT
+  performed. No live support is claimed or inferred.
 - Supply-chain gaps (named, not inferred): sha256 pins for v0.22.5 are
   not yet in `pkg/binmgr/pins.go` (needs network-verified hashes — out
   of this story's scope); until then an explicit `$GWS_VERSION` managed
-  download verifies against the release sidecar only (TOFU). Runtime
-  Discovery schemas and cache drift are unobserved (a binary pin does
-  not freeze the remote API).
+  download verifies against the release sidecar only (TOFU). Live
+  Discovery-schema fetch and live cache-drift observation are owned by
+  Sprint 465 story 534ede495eb8 (a binary pin does not freeze the remote
+  API; the offline inspection half is covered above).
+- Go-side dependencies: this story adds NO new module dependencies
+  (`go.mod`/`go.sum` untouched — the package reuses `binmgr`,
+  `coreutils/pkg/weavecli`, `policy/audit`, `notrack` only).
+
+## Acceptance evidence (story f25d7aa4437c)
+
+| Acceptance item | Evidence (test / file) |
+|---|---|
+| gws via existing external registry | `external/registry/gws.go`, `TestGwsEntry` / `TestGwsResolvePinned` (`external/registry/gws_test.go`) |
+| Reviewed release pin (Apache-2.0, v0.22.5 @ a3768d0e) + dependencies | `TestPin`, `TestSpecDefaultsToPin`, `TestAssetMatch` (`gws_test.go`); no new Go deps (go.mod untouched) |
+| Runtime Discovery schema inspection and cache drift | `discovery.go` (`InspectDiscovery`, `CheckDrift`), `TestInspectDiscoveryIdentity` / `TestInspectDiscoveryRejects` / `TestCheckDrift` (`discovery_test.go`) — offline half; live fetch in Sprint 465 |
+| Explicit OAuth or service-account credentials, no ambient fallback | `auth.go`, `TestResolve*` + `TestRedactedScope` (`auth_test.go`) |
+| JSON/NDJSON pagination, single `schema_version` discriminator | `page.go` (`EmitPage`, `EmitNDJSON`), `TestPaginateFirstAndResume` / `TestTokenCrossBindingRejected` / `TestForeignAndRangedTokens` (`page_test.go`); opaque tokens stay binding-scoped, bashy-cursor-v1 stays 446-owned (no private cursor ABI) |
+| Uploads (Drive) and dry runs (all nine services) | `effect.go` (`Upload.Validate`, `ReadBounded`, `DryRun.Check/Emit`), `TestUploadValidation` / `TestReadBounded` / `TestDryRun` (`errors_effect_redact_test.go`); per-service Ops in `services.go`, `TestAdmittedServices` (`services_test.go`) |
+| 446 adapter/schema contracts (loom-v2 envelope, four-level preview) | `errors.go` (typed codes on the shared exit mapping), `Preview*` levels (`services.go`), `TestErrorExits` / `TestErrorRetryable` / `TestUnsupportedNamesHome` / `TestEmitErrorEnvelope` |
+| 449 discovery (cloud tier taxonomy) | registry `Tier: 6`, atlas row `pkg/atlas/platform.go`, `TestEveryExternalDeclaresPlatforms` stays green |
+| Error handling and redaction (offline half) | `redact.go`, `TestRedactArgsCanary` / `TestRedactTextCanary` |
+| Pre-v1 breaking-change + no-official-Google-support notices | `gws.go` package doc + `NewGwsCmd` long help, registry `Long`, Admission section above |
+| Admin Directory CRUD unclaimed until tested | `Deferred` map + `LookupService`, `TestDeferred` / `TestLookupService` |
+| Gmail watch, Events subscribe/renew subject to event story | `Deferred` map + `Unsupported()`, `TestDeferred` (names story 5548854717bc) |
+
+Moved to Sprint 465 story 534ede495eb8 (NOT attempted here): read and
+reversible write with an authorized test account, cleanup, live
+Discovery-schema fetch, live cache-drift observation, and
+denied/expired-auth error handling against the real API.
