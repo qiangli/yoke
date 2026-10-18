@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qiangli/yoke/pkg/bus"
 	"github.com/qiangli/yoke/pkg/lens/stream"
@@ -348,5 +349,115 @@ func TestBusDeltaCursorPastHead(t *testing.T) {
 	out, stderr, code := runTool(t, workDir, "", "--since", string(cursorJSON), "-t", "jsonl", "bus:events")
 	if code == 0 || out != "" || !strings.Contains(stderr, "delta position expired") || !strings.Contains(stderr, "restart with --since=start") {
 		t.Fatalf("expected past-head expiration guidance: code=%d out=%q stderr=%q", code, out, stderr)
+	}
+}
+
+func TestBusDeltaTimeAndDuration(t *testing.T) {
+	isolateRoom(t)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	tOld := now.Add(-30 * time.Minute)
+	tRecent := now.Add(-5 * time.Minute)
+
+	if err := room.Emit(room.Event{Type: room.EventSprint, Actor: "mgr", Target: "sprint:446", TS: tOld.Format(time.RFC3339)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := room.Emit(room.Event{Type: room.EventTodo, Actor: "agent1", Target: "todo:13778c0d7a83", TS: tRecent.Format(time.RFC3339)}); err != nil {
+		t.Fatal(err)
+	}
+
+	workDir := t.TempDir()
+
+	// 1. Duration: --since=10m should deliver only the recent event (5 min ago)
+	out, stderr, code := runTool(t, workDir, "", "--since=10m", "-t", "jsonl", "bus:events")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q out=%q", code, stderr, out)
+	}
+	data, cursor := deltaCursor(t, out)
+	lines := strings.Split(data, "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line for --since=10m, got %d:\n%s", len(lines), data)
+	}
+	var row map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &row); err != nil {
+		t.Fatalf("invalid json: %v", err)
+	}
+	if int64(row["seq"].(float64)) != 2 {
+		t.Errorf("seq = %v, want 2", row["seq"])
+	}
+
+	// 2. Trailing cursor resume: should deliver 0 records since we are at head
+	outRes, stderrRes, codeRes := runTool(t, workDir, "", "--since", cursor, "-t", "jsonl", "bus:events")
+	if codeRes != 0 || stderrRes != "" {
+		t.Fatalf("resume code=%d stderr=%q", codeRes, stderrRes)
+	}
+	dataRes, _ := deltaCursor(t, outRes)
+	if dataRes != "" {
+		t.Fatalf("expected empty data after resume, got %q", dataRes)
+	}
+
+	// 3. Absolute timestamp between event 1 and event 2: delivers only event 2
+	tBetween := now.Add(-15 * time.Minute).Format(time.RFC3339)
+	outBetween, stderrBetween, codeBetween := runTool(t, workDir, "", "--since", tBetween, "-t", "jsonl", "bus:events")
+	if codeBetween != 0 || stderrBetween != "" {
+		t.Fatalf("code=%d stderr=%q", codeBetween, stderrBetween)
+	}
+	dataBetween, _ := deltaCursor(t, outBetween)
+	linesBetween := strings.Split(dataBetween, "\n")
+	if len(linesBetween) != 1 {
+		t.Fatalf("expected 1 line for timestamp between, got %d:\n%s", len(linesBetween), dataBetween)
+	}
+
+	// 4. Absolute timestamp before event 1: delivers both events
+	tBefore := now.Add(-45 * time.Minute).Format(time.RFC3339)
+	outBefore, stderrBefore, codeBefore := runTool(t, workDir, "", "--since", tBefore, "-t", "jsonl", "bus:events")
+	if codeBefore != 0 || stderrBefore != "" {
+		t.Fatalf("code=%d stderr=%q", codeBefore, stderrBefore)
+	}
+	dataBefore, _ := deltaCursor(t, outBefore)
+	linesBefore := strings.Split(dataBefore, "\n")
+	if len(linesBefore) != 2 {
+		t.Fatalf("expected 2 lines for timestamp before, got %d:\n%s", len(linesBefore), dataBefore)
+	}
+
+	// 5. Absolute timestamp after event 2: delivers 0 events
+	tAfter := now.Add(5 * time.Minute).Format(time.RFC3339)
+	outAfter, stderrAfter, codeAfter := runTool(t, workDir, "", "--since", tAfter, "-t", "jsonl", "bus:events")
+	if codeAfter != 0 || stderrAfter != "" {
+		t.Fatalf("code=%d stderr=%q", codeAfter, stderrAfter)
+	}
+	dataAfter, _ := deltaCursor(t, outAfter)
+	if dataAfter != "" {
+		t.Fatalf("expected empty data for future timestamp, got %q", dataAfter)
+	}
+}
+
+func TestBusDeltaTimeRetentionExpiry(t *testing.T) {
+	isolateRoom(t)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	tOld := now.Add(-2 * time.Hour)
+	tNew := now.Add(-5 * time.Minute)
+
+	if err := room.Emit(room.Event{Type: room.EventSprint, Actor: "mgr", Target: "sprint:446", TS: tOld.Format(time.RFC3339)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := room.Emit(room.Event{Type: room.EventTodo, Actor: "agent1", Target: "todo:13778c0d7a83", TS: tNew.Format(time.RFC3339)}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Force archive of event 1 by rotating timeline
+	t.Setenv("BASHY_ROOM_RETENTION", "1h")
+	if _, err := room.RotateTimeline(now); err != nil {
+		t.Fatal(err)
+	}
+
+	workDir := t.TempDir()
+
+	// If floor > 0 and requested time is before oldest live event, ErrDeltaExpired is returned
+	tBeforeOld := now.Add(-3 * time.Hour).Format(time.RFC3339)
+	out, stderr, code := runTool(t, workDir, "", "--since", tBeforeOld, "-t", "jsonl", "bus:events")
+	if code == 0 || out != "" || !strings.Contains(stderr, "delta position expired") || !strings.Contains(stderr, "restart with --since=start") {
+		t.Fatalf("expected retention expiration guidance: code=%d out=%q stderr=%q", code, out, stderr)
 	}
 }

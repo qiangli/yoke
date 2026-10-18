@@ -231,6 +231,18 @@ type DeltaSource interface {
 	Delta(ctx context.Context, loc ref.Locator, token string) (records []byte, next string, expiry string, err error)
 }
 
+// TimeDeltaSource is an optional interface for a DeltaSource that can translate
+// an absolute cutoff timestamp or duration into its native resume token.
+type TimeDeltaSource interface {
+	TranslateTime(ctx context.Context, loc ref.Locator, t time.Time) (token string, err error)
+}
+
+// SeqDeltaSource is an optional interface for a DeltaSource that can translate or
+// validate a sequence shorthand into its native resume token.
+type SeqDeltaSource interface {
+	TranslateSeq(ctx context.Context, loc ref.Locator, seq int64) (token string, err error)
+}
+
 var deltaSources = map[string]DeltaSource{}
 
 // RegisterDeltaSource wires a read-only delta source for an agent-world scheme.
@@ -264,7 +276,43 @@ func sinceAgentWorld(rc *tool.RunContext, loc ref.Locator, format, since, cursor
 	if err != nil {
 		return fail(err)
 	}
-	token := spec.Token
+
+	var token string
+	switch spec.Mode {
+	case SinceModeStart:
+		token = ""
+	case SinceModeCursor:
+		token = spec.Token
+	case SinceModeSeq:
+		ssrc, ok := src.(SeqDeltaSource)
+		if !ok {
+			return fail(fmt.Errorf("provider %q does not support sequence in --since", loc.Scheme))
+		}
+		var err error
+		token, err = ssrc.TranslateSeq(rc.Ctx, loc, spec.Seq)
+		if errors.Is(err, ErrDeltaExpired) {
+			return fail(fmt.Errorf("%w; %v", err, restart))
+		}
+		if err != nil {
+			return fail(err)
+		}
+	case SinceModeTime, SinceModeDuration:
+		tsrc, ok := src.(TimeDeltaSource)
+		if !ok {
+			return fail(fmt.Errorf("provider %q does not support time/duration in --since", loc.Scheme))
+		}
+		var err error
+		token, err = tsrc.TranslateTime(rc.Ctx, loc, spec.Time)
+		if errors.Is(err, ErrDeltaExpired) {
+			return fail(fmt.Errorf("%w; %v", err, restart))
+		}
+		if err != nil {
+			return fail(err)
+		}
+	default:
+		return fail(fmt.Errorf("unsupported --since mode %q", spec.Mode))
+	}
+
 	records, next, expiry, err := src.Delta(rc.Ctx, loc, token)
 	if errors.Is(err, ErrDeltaExpired) {
 		return fail(fmt.Errorf("%v; %v", err, restart))

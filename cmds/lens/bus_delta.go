@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/qiangli/yoke/pkg/bus"
 	"github.com/qiangli/yoke/pkg/lens/provider"
@@ -20,6 +21,93 @@ func init() {
 }
 
 type busDeltaSource struct{}
+
+func (b *busDeltaSource) TranslateSeq(ctx context.Context, loc ref.Locator, seq int64) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if seq < 1 {
+		return "", fmt.Errorf("lens: bus: sequence must be positive")
+	}
+	floor := room.ArchivedThrough()
+	reader := room.NewTimelineReader(nil)
+	pos, err := reader.Latest(ctx)
+	if err != nil {
+		return "", err
+	}
+	head := pos.Seq
+	if head < floor {
+		head = floor
+	}
+	if seq < floor || seq > head {
+		return "", ErrDeltaExpired
+	}
+	return strconv.FormatInt(seq, 10), nil
+}
+
+func (b *busDeltaSource) TranslateTime(ctx context.Context, loc ref.Locator, t time.Time) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	floor := room.ArchivedThrough()
+	reader := room.NewTimelineReader(nil)
+	pos, err := reader.Latest(ctx)
+	if err != nil {
+		return "", err
+	}
+	head := pos.Seq
+	if head < floor {
+		head = floor
+	}
+
+	events, err := room.Timeline(0)
+	if err != nil {
+		return "", err
+	}
+	if len(events) == 0 {
+		return strconv.FormatInt(head, 10), nil
+	}
+
+	firstLive := events[0]
+	firstLiveTime, err := parseEventTS(firstLive.TS)
+	if err == nil && firstLiveTime.After(t) && floor > 0 {
+		return "", ErrDeltaExpired
+	}
+
+	var after int64 = -1
+	for _, e := range events {
+		evTime, err := parseEventTS(e.TS)
+		if err != nil {
+			continue
+		}
+		if evTime.After(t) || evTime.Equal(t) {
+			after = e.Seq - 1
+			break
+		}
+	}
+
+	if after < 0 {
+		return strconv.FormatInt(head, 10), nil
+	}
+
+	if after < floor {
+		if floor > 0 {
+			return "", ErrDeltaExpired
+		}
+		after = 0
+	}
+
+	return strconv.FormatInt(after, 10), nil
+}
+
+func parseEventTS(ts string) (time.Time, error) {
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
+		if t, err := time.Parse(layout, ts); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("cannot parse event timestamp %q", ts)
+}
 
 func (b *busDeltaSource) Delta(ctx context.Context, loc ref.Locator, token string) ([]byte, string, string, error) {
 	if err := ctx.Err(); err != nil {

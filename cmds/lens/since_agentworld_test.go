@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qiangli/yoke/pkg/ref"
 )
@@ -97,5 +98,73 @@ func TestAgentWorldSinceNonAgentWorldLocatorStillRejected(t *testing.T) {
 	_, stderr, code := runTool(t, t.TempDir(), "", "--since=start", "-t", "jsonl", "dir:.")
 	if code == 0 || !strings.Contains(stderr, "do not support this provider") {
 		t.Fatalf("%d %s", code, stderr)
+	}
+}
+
+func TestAgentWorldSinceUnsupportedModesSafeRejection(t *testing.T) {
+	src := &fakeDelta{records: "{\"n\":1}\n", next: "p1"}
+	withDelta(t, "kb", src)
+	dir := t.TempDir()
+
+	// fakeDelta does not implement TimeDeltaSource: --since=10m must be safely rejected
+	out, stderr, code := runTool(t, dir, "", "--since=10m", "-t", "jsonl", "kb:page")
+	if code == 0 || out != "" || !strings.Contains(stderr, `provider "kb" does not support time/duration in --since`) {
+		t.Fatalf("expected unsupported time rejection, got code=%d out=%q stderr=%q", code, out, stderr)
+	}
+
+	// fakeDelta does not implement SeqDeltaSource: --since=42 must be safely rejected
+	out, stderr, code = runTool(t, dir, "", "--since=42", "-t", "jsonl", "kb:page")
+	if code == 0 || out != "" || !strings.Contains(stderr, `provider "kb" does not support sequence in --since`) {
+		t.Fatalf("expected unsupported sequence rejection, got code=%d out=%q stderr=%q", code, out, stderr)
+	}
+
+	// start and valid cursor still work
+	out, stderr, code = runTool(t, dir, "", "--since=start", "-t", "jsonl", "kb:page")
+	if code != 0 || stderr != "" {
+		t.Fatalf("expected start to succeed, got code=%d stderr=%q", code, stderr)
+	}
+}
+
+type translatingDelta struct {
+	fakeDelta
+	translatedSeq  string
+	translatedTime string
+}
+
+func (t *translatingDelta) TranslateSeq(_ context.Context, _ ref.Locator, seq int64) (string, error) {
+	return t.translatedSeq, nil
+}
+
+func (t *translatingDelta) TranslateTime(_ context.Context, _ ref.Locator, _ time.Time) (string, error) {
+	return t.translatedTime, nil
+}
+
+func TestAgentWorldSinceTranslatingProvider(t *testing.T) {
+	src := &translatingDelta{
+		fakeDelta:      fakeDelta{records: "{\"n\":2}\n", next: "p2"},
+		translatedSeq:  "p1-seq",
+		translatedTime: "p1-time",
+	}
+	withDelta(t, "kb", src)
+	dir := t.TempDir()
+
+	// --since=42 calls TranslateSeq and passes translated token
+	out, stderr, code := runTool(t, dir, "", "--since=42", "-t", "jsonl", "kb:page")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	data, _ := deltaCursor(t, out)
+	if data != "{\"n\":2}" || src.gotToken != "p1-seq" {
+		t.Fatalf("data=%q gotToken=%q, want p1-seq", data, src.gotToken)
+	}
+
+	// --since=10m calls TranslateTime and passes translated token
+	out, stderr, code = runTool(t, dir, "", "--since=10m", "-t", "jsonl", "kb:page")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	data, _ = deltaCursor(t, out)
+	if data != "{\"n\":2}" || src.gotToken != "p1-time" {
+		t.Fatalf("data=%q gotToken=%q, want p1-time", data, src.gotToken)
 	}
 }
