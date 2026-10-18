@@ -88,3 +88,43 @@ func TestPlatformRecipesRejectInvalidSnapshots(t *testing.T) {
 		t.Fatalf("empty list=%v err=%v", rows, err)
 	}
 }
+
+func TestK8sScopedRecipeContextArgvAndRefs(t *testing.T) {
+	var got []string
+	p, err := NewK8sScopedRecipe("kind-dev", func(_ context.Context, c string, a ...string) ([]byte, error) {
+		got = append([]string{c}, a...)
+		return []byte(`{"items":[{"metadata":{"name":"a","namespace":"default","uid":"u"},"status":{"phase":"Running"}}]}`), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loc := ref.Locator{Scheme: "k8s", Target: "pods", ScopeKind: "k8s", ScopeValue: "kind-dev"}
+	rows, err := p.List(context.Background(), loc)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows=%+v err=%v", rows, err)
+	}
+	want := []string{"kubectl", "--context", "kind-dev", "get", "pods", "--all-namespaces", "-o", "json"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("argv=%v", got)
+	}
+	if l, err := ref.ParseLocator(rows[0].Ref); err != nil || l.ScopeKind != "k8s" || l.ScopeValue != "kind-dev" {
+		t.Fatalf("ref=%q err=%v", rows[0].Ref, err)
+	}
+	if _, err := p.List(context.Background(), ref.Locator{Scheme: "k8s", Target: "pods"}); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("unscoped err=%v", err)
+	}
+	if _, err := p.List(context.Background(), ref.Locator{Scheme: "k8s", Target: "pods", ScopeKind: "k8s", ScopeValue: "other"}); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("other-context err=%v", err)
+	}
+}
+
+func TestK8sScopedRecipeRefusesInvalidContext(t *testing.T) {
+	for _, bad := range []string{"", "--token=x", "-x", "a b", "a=b", "a\nb"} {
+		if _, err := NewK8sScopedRecipe(bad, func(context.Context, string, ...string) ([]byte, error) {
+			t.Fatal("runner called")
+			return nil, nil
+		}); err == nil {
+			t.Fatalf("accepted %q", bad)
+		}
+	}
+}

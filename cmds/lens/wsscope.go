@@ -226,7 +226,8 @@ func (w *wsScoped) Edges(ctx context.Context, loc ref.Locator) ([]provider.Edge,
 }
 
 // scopedProvider picks the provider for a locator that carries a scope. Only
-// ws, sandbox and host (a sphere peer) are served; every other scope is refused rather than read locally.
+// ws, sandbox, host (a sphere peer), and k8s pods are served; every other
+// scope is refused rather than read locally.
 func scopedProvider(_ *tool.RunContext, loc ref.Locator) (provider.Provider, error) {
 	switch loc.ScopeKind {
 	case "ws":
@@ -235,7 +236,19 @@ func scopedProvider(_ *tool.RunContext, loc ref.Locator) (provider.Provider, err
 		return sandboxProvider(loc)
 	case "host":
 		return hostProvider(loc)
+	case "k8s":
+		if loc.Scheme != "k8s" {
+			return nil, fmt.Errorf("location scope %q is not served locally for provider %q", loc.ScopeKind, loc.Scheme)
+		}
+		r, err := provider.NewK8sScopedRecipe(loc.ScopeValue, k8sRunner)
+		if err != nil {
+			return nil, err
+		}
+		return r, nil
 	default:
 		return nil, fmt.Errorf("location scope %q is not served locally", loc.ScopeKind)
 	}
 }
+
+// k8sRunner is nil in production (the real read-only runner); tests inject one.
+var k8sRunner func(context.Context, string, ...string) ([]byte, error)

@@ -50,10 +50,14 @@ type platformRecord struct {
 }
 
 func recipeNode(scheme, collection string, r platformRecord) Node {
+	return recipeScopedNode(scheme, "", "", collection, r)
+}
+
+func recipeScopedNode(scheme, scopeKind, scopeValue, collection string, r platformRecord) Node {
 	target := collection + "/" + r.id
 	return Node{
 		SchemaVersion: NodeSchema,
-		Ref:           (ref.Locator{Scheme: scheme, Target: target}).String(),
+		Ref:           (ref.Locator{Scheme: scheme, Target: target, ScopeKind: scopeKind, ScopeValue: scopeValue}).String(),
 		Path:          target,
 		Name:          r.name,
 		Kind:          r.kind,
@@ -99,8 +103,12 @@ func recipeRows(rows any) (io.ReadCloser, error) {
 }
 
 func platformRecipe(scheme, collection string, snapshot func(context.Context) ([]platformRecord, error)) Recipe {
+	return scopedPlatformRecipe(scheme, "", "", collection, snapshot)
+}
+
+func scopedPlatformRecipe(scheme, scopeKind, scopeValue, collection string, snapshot func(context.Context) ([]platformRecord, error)) Recipe {
 	valid := func(loc ref.Locator) (string, error) {
-		if loc.Scheme != scheme || loc.ScopeKind != "" || len(loc.Inner) != 0 {
+		if loc.Scheme != scheme || loc.ScopeKind != scopeKind || loc.ScopeValue != scopeValue || len(loc.Inner) != 0 {
 			return "", ErrUnsupported
 		}
 		switch {
@@ -128,7 +136,7 @@ func platformRecipe(scheme, collection string, snapshot func(context.Context) ([
 		}
 		rows := make([]Node, 0, len(records))
 		for _, record := range records {
-			rows = append(rows, recipeNode(scheme, collection, record))
+			rows = append(rows, recipeScopedNode(scheme, scopeKind, scopeValue, collection, record))
 		}
 		return rows, nil
 	}
@@ -147,7 +155,7 @@ func platformRecipe(scheme, collection string, snapshot func(context.Context) ([
 			}
 			for _, record := range records {
 				if record.id == id {
-					return recipeNode(scheme, collection, record), nil
+					return recipeScopedNode(scheme, scopeKind, scopeValue, collection, record), nil
 				}
 			}
 			return Node{}, os.ErrNotExist
@@ -277,4 +285,37 @@ func NewK8sRecipe(run recipeRunner) Recipe {
 		}
 		return parseK8sPods(data)
 	})
+}
+
+// ValidK8sContext reports whether name is acceptable as a literal kubectl
+// --context value: non-empty, bounded, no leading dash, no control or space.
+func ValidK8sContext(name string) bool {
+	if name == "" || len(name) > 253 || name[0] == '-' {
+		return false
+	}
+	for _, r := range name {
+		if r <= ' ' || r == 0x7f || r == '=' {
+			return false
+		}
+	}
+	return true
+}
+
+// NewK8sScopedRecipe lists pods from exactly the named kubectl context. The
+// context is passed as a literal --context argument; there is no ambient
+// fallback, and an invalid name is refused before any command runs.
+func NewK8sScopedRecipe(kubeContext string, run recipeRunner) (Recipe, error) {
+	if !ValidK8sContext(kubeContext) {
+		return Recipe{}, fmt.Errorf("k8s recipe: invalid or missing @k8s context %q", kubeContext)
+	}
+	if run == nil {
+		run = runRecipe
+	}
+	return scopedPlatformRecipe("k8s", "k8s", kubeContext, "pods", func(ctx context.Context) ([]platformRecord, error) {
+		data, err := run(ctx, "kubectl", "--context", kubeContext, "get", "pods", "--all-namespaces", "-o", "json")
+		if err != nil {
+			return nil, err
+		}
+		return parseK8sPods(data)
+	}), nil
 }
