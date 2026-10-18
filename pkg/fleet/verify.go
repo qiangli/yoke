@@ -122,8 +122,10 @@ const SmokeToken = "SMOKE-OK"
 const smokePrompt = "Reply with exactly: " + SmokeToken
 
 // SmokeArgv renders a real, minimal headless turn for tool. A bare tool has
-// no model in its name, so select its first declared binding; catalog agents
-// are name-sorted, making that choice deterministic.
+// no model in its name, so select its first declared binding that is not
+// retired; catalog agents are name-sorted, making that choice deterministic.
+// A retired binding names a model the vendor no longer serves, so smoking it
+// would report a working tool unusable.
 func (c *Catalog) SmokeArgv(tool string) ([]string, bool) {
 	t, ok := c.Tool(tool)
 	if !ok || !t.IsCLI() || t.CLI.Launch.Exec == "" {
@@ -132,7 +134,7 @@ func (c *Catalog) SmokeArgv(tool string) ([]string, bool) {
 	modelID := ""
 	agents, _ := c.Agents()
 	for _, a := range agents {
-		if a.Tool != t.Name {
+		if a.Tool != t.Name || a.Unavailable != "" || a.CheckRetired(KindAgent, a.Name) != nil {
 			continue
 		}
 		if m, ok := c.Model(a.Model); ok {
