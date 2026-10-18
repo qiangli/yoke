@@ -22,6 +22,9 @@ func init() {
 	RegisterProvider("pdf", func(rc *tool.RunContext, _ ref.Locator) (provider.Provider, error) {
 		return &provider.PDF{Root: rc.Path(".")}, nil
 	})
+	RegisterProvider("graph", func(rc *tool.RunContext, _ ref.Locator) (provider.Provider, error) {
+		return provider.NewGraph(rc.Path(".")), nil
+	})
 	RegisterProvider("proc", func(_ *tool.RunContext, _ ref.Locator) (provider.Provider, error) {
 		return provider.NewProc(), nil
 	})
