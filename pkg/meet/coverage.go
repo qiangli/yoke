@@ -234,6 +234,9 @@ func writeContributions(w io.Writer, st *State, events []Event, who string) {
 				fmt.Fprintf(w, " (%s)", l.Note)
 			}
 			fmt.Fprintln(w)
+			if line := peerReadLine(l); line != "" {
+				fmt.Fprintf(w, "   read: %s\n", redactHome(line))
+			}
 		}
 		if h := crossHostPathHint(e); h != "" {
 			fmt.Fprintf(w, "   %s\n", h)
