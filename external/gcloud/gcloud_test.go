@@ -27,3 +27,20 @@ func TestResolveDoesNotAutoDownload(t *testing.T) {
 		t.Errorf("Resolve error should explain + carry the install hint, got %v", err)
 	}
 }
+
+// Resolution must not turn an explicit version into SDK provisioning, nor echo
+// potentially secret caller input in the actionable missing-SDK diagnostic.
+func TestQualificationResolveRefusesEveryVersion(t *testing.T) {
+	for _, version := range []string{"", "latest", "575.0.0", "s457-canary-secret"} {
+		tool, err := Resolve(context.Background(), version)
+		if err == nil || tool.Name != "" || len(tool.Assets) != 0 {
+			t.Fatalf("version %q admitted a download", version)
+		}
+		if !strings.Contains(err.Error(), "PATH") || !strings.Contains(err.Error(), "cloud.google.com/sdk/docs/install") {
+			t.Fatalf("not actionable: %v", err)
+		}
+		if strings.Contains(err.Error(), "s457-canary-secret") {
+			t.Fatal("diagnostic disclosed canary")
+		}
+	}
+}

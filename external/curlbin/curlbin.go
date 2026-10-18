@@ -9,7 +9,6 @@ package curlbin
 import (
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"runtime"
 
@@ -60,7 +59,7 @@ func NewCurlCmd() *cobra.Command {
 				return err
 			}
 			p := binmgr.Command(cmd.Context(), c, args...)
-			p.Stdin, p.Stdout, p.Stderr = os.Stdin, os.Stdout, os.Stderr
+			p.Stdin, p.Stdout, p.Stderr = cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr()
 			return p.Run()
 		},
 	}

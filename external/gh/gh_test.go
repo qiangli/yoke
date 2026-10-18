@@ -21,6 +21,10 @@ func TestAssetMatch(t *testing.T) {
 		want               bool
 	}{
 		{"gh_2.62.0_linux_amd64.tar.gz", "linux", "amd64", true},
+		{"gh_2.62.0_linux_arm64.tar.gz", "linux", "arm", false},
+		{"gh_2.62.0_linux_amd64.tar.gz.sha256", "linux", "amd64", false},
+		{"gh_2.62.0_linux_amd64.deb", "linux", "amd64", false},
+		{"other_linux_amd64.zip", "linux", "amd64", false},
 		{"gh_2.62.0_linux_arm64.tar.gz", "linux", "arm64", true},
 		{"gh_2.62.0_macOS_arm64.zip", "darwin", "arm64", true},
 		{"gh_2.62.0_windows_amd64.zip", "windows", "amd64", true},

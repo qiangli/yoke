@@ -41,7 +41,7 @@ func assetMatch(name, goos, goarch string) bool {
 	if goos == "darwin" {
 		osTok = "osx"
 	}
-	return strings.Contains(n, osTok) && strings.Contains(n, goarch)
+	return strings.HasPrefix(n, "rclone-v") && strings.HasSuffix(n, "-"+osTok+"-"+goarch+".zip")
 }
 
 // Path resolves + caches the rclone binary, returning its path (used by

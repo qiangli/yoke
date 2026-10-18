@@ -48,10 +48,9 @@ func assetMatch(name, goos, goarch string) bool {
 	if goos == "darwin" {
 		osTok = "macos"
 	}
-	if !strings.Contains(n, osTok) {
-		return false
-	}
-	return strings.Contains(n, goarch)
+	suffix := "_" + osTok + "_" + goarch
+	return strings.HasPrefix(n, "gh_") &&
+		(strings.HasSuffix(n, suffix+".tar.gz") || strings.HasSuffix(n, suffix+".zip"))
 }
 
 // Ensure fetches (if needed) the gh binary and returns its cached path.
