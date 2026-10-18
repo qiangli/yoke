@@ -2,6 +2,7 @@ package stream
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -180,5 +181,142 @@ func TestReadAddresses(t *testing.T) {
 	}
 	if _, err := ReadAddresses(strings.NewReader(`{"t":"blob"}`)); err == nil {
 		t.Fatal("malformed stream accepted as addresses")
+	}
+}
+
+// A Graph reused across Encode calls must not carry the first call's trailer
+// into the second: the cursor is derived per call, never stored back.
+func TestEncodeReusedGraphGetsFreshCursor(t *testing.T) {
+	g := sample()
+	first := encode(t, g)
+	if g.Cursor != nil {
+		t.Fatal("Encode stored its derived cursor on the caller's Graph")
+	}
+	g.Nodes = g.Nodes[:1]
+	g.Edges = nil
+	second := encode(t, g)
+	d, err := Decode(strings.NewReader(second), DecodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Cursor.Binding.Revision != d.Rev || second == first {
+		t.Fatalf("reused graph emitted a stale binding:\n%s", second)
+	}
+	// Same body, other query: the trailer must follow the query.
+	var b bytes.Buffer
+	if err := Encode(&b, g, "graph", "op=impact"); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := Decode(&b, DecodeOptions{}); d == nil || d.Cursor.Binding.Query != "op=impact" {
+		t.Fatalf("trailer not bound to the new query: %#v", d)
+	}
+}
+
+func TestEncodeRefusesForeignOrStaleCursor(t *testing.T) {
+	g := sample()
+	encode(t, g)
+	rev := g.Rev
+	cases := map[string]Cursor{
+		"other provider": SnapshotCursor("dir", g.Source, "op=neighbors", rev),
+		"other target":   SnapshotCursor("graph", "graph:other", "op=neighbors", rev),
+		"other query":    SnapshotCursor("graph", g.Source, "op=impact", rev),
+		"stale revision": SnapshotCursor("graph", g.Source, "op=neighbors", "sha256:"+strings.Repeat("0", 64)),
+	}
+	for name, c := range cases {
+		c := c
+		g := sample()
+		g.Cursor = &c
+		if err := Encode(&bytes.Buffer{}, g, "graph", "op=neighbors"); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	// A change-stream cursor's revision is the provider's position.
+	g = sample()
+	g.Cursor = &Cursor{SchemaVersion: CursorSchema, Kind: KindChangeStream, Token: "opaque",
+		Binding: Binding{Provider: "graph", Target: g.Source, Query: "op=neighbors", Revision: "42"}}
+	if err := Encode(&bytes.Buffer{}, g, "graph", "op=neighbors"); err != nil {
+		t.Fatalf("change-stream trailer: %v", err)
+	}
+}
+
+// Undeclared input must be a complete frame; a declared reader accepts the
+// filtered shapes but never a malformed header.
+func TestDecodeRequiresCompleteFrame(t *testing.T) {
+	out := encode(t, sample())
+	lines := strings.SplitAfter(out, "\n")
+	noTrailer := strings.Join(lines[:5], "")
+	if _, err := Decode(strings.NewReader(noTrailer), DecodeOptions{}); !errors.Is(err, ErrNoTrailer) {
+		t.Fatalf("truncated stream: %v", err)
+	}
+	if g, err := Decode(strings.NewReader(noTrailer), DecodeOptions{Declared: true}); err != nil || !g.Framed || g.Cursor != nil {
+		t.Fatalf("declared cursor-less filter: %v", err)
+	}
+	headerOnly := lines[0]
+	if _, err := Decode(strings.NewReader(headerOnly), DecodeOptions{}); !errors.Is(err, ErrNoTrailer) {
+		t.Fatalf("header-only stream: %v", err)
+	}
+	body := strings.Join(lines[1:], "")
+	bad := map[string]string{
+		"empty source": strings.Replace(lines[0], `"source":"graph:repo"`, `"source":""`, 1),
+		"no source":    strings.Replace(lines[0], `"source":"graph:repo",`, ``, 1),
+		"empty rev":    `{"t":"header","schema_version":"bashy-graph-v1","source":"graph:repo","rev":""}` + "\n",
+		"short rev":    `{"t":"header","schema_version":"bashy-graph-v1","source":"graph:repo","rev":"sha256:abc"}` + "\n",
+	}
+	for name, h := range bad {
+		for _, declared := range []bool{false, true} {
+			if _, err := Decode(strings.NewReader(h+body), DecodeOptions{Declared: declared}); err == nil {
+				t.Errorf("%s (declared=%v): accepted", name, declared)
+			}
+		}
+	}
+	// A trailer bound to another target or snapshot is a splice, not a frame.
+	other := encode(t, &Graph{Source: "graph:other", Nodes: sample().Nodes})
+	foreign := strings.SplitAfter(other, "\n")
+	spliced := strings.Join(lines[:5], "") + foreign[len(foreign)-2]
+	if _, err := Decode(strings.NewReader(spliced), DecodeOptions{Declared: true}); err == nil {
+		t.Error("foreign cursor trailer accepted")
+	}
+}
+
+func TestParseCursorRejectsTrailingData(t *testing.T) {
+	c := SnapshotCursor("graph", "graph:repo", "op=impact", "sha256:1")
+	b, _ := json.Marshal(c)
+	if _, err := ParseCursor(append(append([]byte{}, b...), " \n"...)); err != nil {
+		t.Fatalf("trailing whitespace: %v", err)
+	}
+	for _, tail := range []string{string(b), `{}`, `x`, `]`} {
+		if _, err := ParseCursor(append(append([]byte{}, b...), tail...)); err == nil {
+			t.Errorf("trailing %q accepted", tail)
+		}
+	}
+}
+
+func TestReadAddressesIsBounded(t *testing.T) {
+	defer func(n int64) { maxAddressInput = n }(maxAddressInput)
+	maxAddressInput = 16
+	if got, err := ReadAddresses(strings.NewReader("sprint:446\n")); err != nil || len(got) != 1 {
+		t.Fatalf("under the bound: %v %v", got, err)
+	}
+	if _, err := ReadAddresses(strings.NewReader(strings.Repeat("a\n", 9))); err == nil {
+		t.Fatal("oversized input accepted")
+	}
+}
+
+// The determinism contract is byte-level: repeated encodes of equal
+// snapshots built in any order are identical, attrs maps included.
+func TestEncodeByteDeterminism(t *testing.T) {
+	mk := func(rev bool) *Graph {
+		g := sample()
+		g.Nodes[0].Attrs = map[string]any{"z": 1, "a": "x", "m": []any{"b", "a"}}
+		if rev {
+			g.Nodes[0], g.Nodes[1] = g.Nodes[1], g.Nodes[0]
+		}
+		return g
+	}
+	want := encode(t, mk(false))
+	for i := 0; i < 20; i++ {
+		if got := encode(t, mk(i%2 == 1)); got != want {
+			t.Fatalf("run %d differs:\n%s\n---\n%s", i, want, got)
+		}
 	}
 }

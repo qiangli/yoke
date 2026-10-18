@@ -49,6 +49,10 @@ const (
 // filter removed it — and the caller did not declare the schema explicitly.
 var ErrNoHeader = errors.New("stream: no " + GraphSchema + " header (a filter may have removed it; declare the input schema, e.g. lens -f graph)")
 
+// ErrNoTrailer means a framed stream ended without its cursor trailer — it
+// was truncated or filtered — and the caller did not declare the schema.
+var ErrNoTrailer = errors.New("stream: framed stream has no " + CursorSchema + " trailer (truncated or filtered; declare the input schema, e.g. lens -f graph)")
+
 // ErrCursorBinding means a cursor was presented to a provider, target or
 // query it was not issued for. Cursors are never converted across providers.
 var ErrCursorBinding = errors.New("stream: cursor is bound to a different provider, target or query")
@@ -111,13 +115,33 @@ func (c Cursor) Check(provider, target, query string) error {
 	return nil
 }
 
-// ParseCursor decodes and validates one envelope (the --since input form).
+// checkTrailer enforces the trailer's revision policy: a pagination cursor
+// resumes one snapshot, so it must name the revision it was cut from; a
+// change-stream cursor's revision is the provider's position, not ours.
+func (c Cursor) checkTrailer(target, rev string) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	if c.Binding.Target != target {
+		return ErrCursorBinding
+	}
+	if c.Kind == KindPagination && c.Binding.Revision != rev {
+		return fmt.Errorf("stream: pagination cursor revision %q does not match stream rev %q", c.Binding.Revision, rev)
+	}
+	return nil
+}
+
+// ParseCursor decodes and validates exactly one envelope (the --since input
+// form); anything after it but whitespace is an error.
 func ParseCursor(data []byte) (Cursor, error) {
 	var c Cursor
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&c); err != nil {
 		return Cursor{}, fmt.Errorf("stream: cursor: %w", err)
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return Cursor{}, errors.New("stream: cursor: trailing data after the envelope")
 	}
 	return c, c.Validate()
 }
@@ -229,7 +253,11 @@ func revOf(body []byte) string {
 }
 
 // Encode canonicalizes g, sets g.Rev, and writes the framed stream. With no
-// Cursor, the trailer is SnapshotCursor(providerID, g.Source, query, rev).
+// Cursor, the trailer is SnapshotCursor(providerID, g.Source, query, rev),
+// computed fresh on every call and never stored back, so a Graph reused after
+// its body changed cannot emit a stale binding. A caller-supplied Cursor must
+// be bound to this provider, source and query, and — for pagination — to
+// the revision being emitted.
 func Encode(w io.Writer, g *Graph, providerID, query string) error {
 	if g.Source == "" {
 		return errors.New("stream: source locator is required")
@@ -242,12 +270,15 @@ func Encode(w io.Writer, g *Graph, providerID, query string) error {
 		return err
 	}
 	g.Rev = revOf(body)
-	if g.Cursor == nil {
-		c := SnapshotCursor(providerID, g.Source, query, g.Rev)
-		g.Cursor = &c
-	}
-	if err := g.Cursor.Validate(); err != nil {
-		return err
+	trailer := SnapshotCursor(providerID, g.Source, query, g.Rev)
+	if g.Cursor != nil {
+		if err := g.Cursor.Check(providerID, g.Source, query); err != nil {
+			return err
+		}
+		if err := g.Cursor.checkTrailer(g.Source, g.Rev); err != nil {
+			return err
+		}
+		trailer = *g.Cursor
 	}
 	var b bytes.Buffer
 	enc := json.NewEncoder(&b)
@@ -256,7 +287,7 @@ func Encode(w io.Writer, g *Graph, providerID, query string) error {
 		return err
 	}
 	b.Write(body)
-	if err := enc.Encode(cursorRec{T: "cursor", Cursor: *g.Cursor}); err != nil {
+	if err := enc.Encode(cursorRec{T: "cursor", Cursor: trailer}); err != nil {
 		return err
 	}
 	_, err = w.Write(b.Bytes())
@@ -282,7 +313,9 @@ func (g *Graph) Verify() error {
 // DecodeOptions controls how much self-description Decode demands.
 type DecodeOptions struct {
 	// Declared is set when the caller declared the input schema explicitly;
-	// a headerless (filtered) record sequence is then accepted.
+	// a filtered record sequence — headerless, or framed but missing its
+	// cursor trailer — is then accepted. A header that is present must be
+	// well formed either way.
 	Declared bool
 }
 
@@ -321,7 +354,9 @@ func IsRecords(data []byte) bool {
 // Decode reads one stream. Records are JSON values in sequence — one per
 // line as producers write them, or pretty-printed as `jq` without -c writes
 // them. Records are validated individually; a header anywhere but first, a
-// record after the cursor, or an unknown record type is an error.
+// record after the cursor, or an unknown record type is an error. Undeclared
+// input must be a complete frame: a header naming source and rev, and a
+// cursor trailer bound to that source (and rev, for pagination).
 func Decode(r io.Reader, o DecodeOptions) (*Graph, error) {
 	g := &Graph{}
 	dec := json.NewDecoder(r)
@@ -359,6 +394,12 @@ func Decode(r io.Reader, o DecodeOptions) (*Graph, error) {
 			if err := json.Unmarshal(raw, &h); err != nil {
 				return nil, fmt.Errorf("stream: record %d: %w", line, err)
 			}
+			if h.Source == "" {
+				return nil, fmt.Errorf("stream: record %d: header has no source", line)
+			}
+			if !validRev(h.Rev) {
+				return nil, fmt.Errorf("stream: record %d: header rev %q is not sha256:<64 hex>", line, h.Rev)
+			}
 			g.Framed, g.Source, g.Rev = true, h.Source, h.Rev
 			continue
 		}
@@ -392,6 +433,11 @@ func Decode(r io.Reader, o DecodeOptions) (*Graph, error) {
 			if err := rec.Cursor.Validate(); err != nil {
 				return nil, fmt.Errorf("stream: record %d: %w", line, err)
 			}
+			if g.Framed {
+				if err := rec.Cursor.checkTrailer(g.Source, g.Rev); err != nil {
+					return nil, fmt.Errorf("stream: record %d: %w", line, err)
+				}
+			}
 			g.Cursor, done = &rec.Cursor, true
 		default:
 			return nil, fmt.Errorf("stream: record %d: unknown record type %q", line, probe.T)
@@ -400,7 +446,19 @@ func Decode(r io.Reader, o DecodeOptions) (*Graph, error) {
 	if first && !o.Declared {
 		return nil, ErrNoHeader
 	}
+	if g.Framed && !done && !o.Declared {
+		return nil, ErrNoTrailer
+	}
 	return g, nil
+}
+
+func validRev(rev string) bool {
+	h, ok := strings.CutPrefix(rev, "sha256:")
+	if !ok || len(h) != 2*sha256.Size {
+		return false
+	}
+	_, err := hex.DecodeString(h)
+	return err == nil
 }
 
 func validNode(n provider.Node) error {
@@ -417,13 +475,21 @@ func validEdge(e provider.Edge) error {
 	return nil
 }
 
+// maxAddressInput bounds what ReadAddresses buffers from stdin (a var so
+// tests can lower it).
+var maxAddressInput int64 = 64 << 20
+
 // ReadAddresses is the consumer side of "commands take addresses in": stdin
 // is either a stream (framed or a filtered record sequence — its node refs,
-// in order) or plain addresses one per line. Blank lines are skipped.
+// in order) or plain addresses one per line. Blank lines are skipped. Input
+// over maxAddressInput bytes is refused rather than truncated.
 func ReadAddresses(r io.Reader) ([]string, error) {
-	data, err := io.ReadAll(r)
+	data, err := io.ReadAll(io.LimitReader(r, maxAddressInput+1))
 	if err != nil {
 		return nil, err
+	}
+	if int64(len(data)) > maxAddressInput {
+		return nil, fmt.Errorf("stream: address input exceeds %d bytes", maxAddressInput)
 	}
 	trimmed := bytes.TrimSpace(data)
 	if len(trimmed) == 0 {
