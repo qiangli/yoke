@@ -31,6 +31,7 @@ const (
 	CodeNotFound           Code = "target-not-found"
 	CodeRateLimit          Code = "rate-limit"
 	CodeCursorMismatch     Code = "cursor-mismatch"
+	CodeCursorExpired      Code = "cursor-expired" // change cursor/lease aged out: explicit resync, never silent reset
 	CodeTimeout            Code = "timeout"
 	CodeCancelled          Code = "cancelled"
 	CodeOutputLimit        Code = "output-limit"

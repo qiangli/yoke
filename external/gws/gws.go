@@ -7,9 +7,9 @@
 // reviewed release PinnedVersion (immutable commit PinnedCommit). It is a
 // short-lived client under the service supply-chain policy (Rule 2): one
 // bounded invocation, exits on completion, no listener or resident child.
-// Gmail watch and Events subscribe/renew are NOT implemented here — they
-// belong to the durable-event story 5548854717bc and are recorded as
-// deferred, not absent. Admin Directory CRUD is unclaimed until tested.
+// Gmail watch and Events subscribe/renew are NOT implemented here — the
+// durable-event story 5548854717bc provides them as opt-in adapters in
+// external/gws/events. Admin Directory CRUD is unclaimed until tested.
 //
 // Two notices every consumer must keep:
 //
@@ -154,7 +154,8 @@ verified, and cached by binmgr (not compiled in). All args pass through to gws
 gws is pre-v1 and may break between releases, and it is NOT an officially
 supported Google product. Authenticate explicitly per invocation (see the
 credentials story); there is no ambient-account fallback. Gmail watch and
-Events subscribe/renew are deferred to the durable-event story, and Admin
+Events subscribe/renew go through the opt-in durable adapters in
+external/gws/events (offline-verified; live renewal unverified), and Admin
 Directory CRUD is unclaimed until tested.`,
 		DisableFlagParsing: true,
 		SilenceUsage:       true,

@@ -16,8 +16,9 @@ import (
 // PreferHost also exempts the entry from the default-registry pin gate,
 // which exists for silently-downloaded tools, not host-first ones.
 //
-// Gmail watch and Events subscribe/renew are deferred to the durable-event
-// story, and Admin Directory CRUD is unclaimed until tested — see
+// Gmail watch and Events subscribe/renew go through the opt-in durable
+// adapters in external/gws/events (story 5548854717bc), and Admin Directory
+// CRUD is unclaimed until tested — see
 // external/gws for the full admission record.
 func init() {
 	register(Entry{
@@ -33,8 +34,9 @@ credentials. $GWS_VERSION pins the release (reviewed: ` + gws.PinnedVersion + `)
 unset uses the host's own gws. All args pass through to gws.
 
 gws is pre-v1 and may break between releases, and it is NOT an officially
-supported Google product. Gmail watch and Events subscribe/renew are deferred
-to the durable-event story; Admin Directory CRUD is unclaimed until tested.`,
+supported Google product. Gmail watch and Events subscribe/renew go through the
+opt-in durable event adapters (live renewal unverified); Admin Directory CRUD is
+unclaimed until tested.`,
 		Resolve: func(ctx context.Context, version string) (binmgr.Tool, error) {
 			if version == "" {
 				version = gws.PinnedVersion

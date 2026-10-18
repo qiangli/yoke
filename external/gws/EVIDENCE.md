@@ -42,9 +42,10 @@ support.
 
 ## Deferred / unclaimed (not absent)
 
-- `gmail:watch`, `events:subscribe`, `events:renew` — deferred to the
-  durable-event story 5548854717bc (lease renewal, checkpoint, dedup,
-  restart recovery). Enforced by `Unsupported()` + `services_test.go`.
+- `gmail:watch`, `events:subscribe`, `events:renew` — owned by the
+  durable-event story 5548854717bc, delivered as opt-in adapters in
+  `external/gws/events` (section below); the gws service map still refuses
+  them as plain gws operations (`Unsupported()` + `services_test.go`).
 - `admin:*` (directory, users, groups, orgunits, mobile, chromeos) —
   UNCLAIMED until tested; owned by story 66494446f180.
 
@@ -109,3 +110,99 @@ Moved to Sprint 465 story 534ede495eb8 (NOT attempted here): read and
 reversible write with an authorized test account, cleanup, live
 Discovery-schema fetch, live cache-drift observation, and
 denied/expired-auth error handling against the real API.
+
+## Durable event adapters — story 5548854717bc (sprint 457, seq 2297)
+
+Package `external/gws/events`. Builds on this record (same candidate, same
+pin); adds NO Go module dependency, NO registry entry, and NO command — the
+documented external count is unchanged.
+
+### Execution modes
+
+| Mode | Classification | Status |
+|---|---|---|
+| `Poller.RunOnce` (Gmail `users.history.list` via the registered gws command) | short-lived client: one bounded walk (`MaxBatches`, `MaxHistoryPages`), returns when caught up / bounded / failed / cancelled | enabled as a library step; run it from the existing scheduler, not a resident loop |
+| `Renewer.RenewDue` + `RenewalJob` (Gmail `users.watch`, Events `subscriptions.patch` ttl) | short-lived client per renewal, cadence from the existing scheduler (`pkg/schedule` kind `every`) | enabled; cadence refused if `every + margin` exceeds the lease lifetime |
+| `Receiver` (Pub/Sub push handler for Gmail watch + Workspace Events) | **long-lived service** when hosted (service Rule 1) | `http.Handler` only — the package never listens (`TestNoListenerInPackage`); hosting is DISABLED by `ServeAdmission()` until a Bashy-signed build with no-egress, local/LAN-bind and outpost-TLS evidence exists |
+
+No upstream-built service is started; nothing listens, persists or renews
+unless the caller opts in (explicit checkpoint dir, explicit mount,
+explicit schedule).
+
+### Processing boundary and delivery guarantee
+
+AT-LEAST-ONCE, never exactly-once. An event is acknowledged (recorded in the
+checkpoint's bounded dedup window, fsync + atomic rename) only after its
+`Handler` returned nil; the change cursor advances only after every event of
+its batch is acknowledged, in provider order. A crash between the downstream
+action and the acknowledgment redelivers the event on restart, so handlers
+must be idempotent on `Event.ID`. Handler failures are reported as
+`partial-unknown-mutation` and are never retried by the adapter (no blind
+retry of ambiguous writes). Fetching a page is not acknowledgment: provider
+`pageToken` pagination is walked inside one `Poll` and is never stored as the
+cursor. Receiver answers 2xx only after handler + acknowledgment, so Pub/Sub
+redelivers anything else.
+
+### Reused machinery (no competing schema / ABI / store)
+
+- Typed errors: `gws.Error` on the shared loom-v2 exit mapping; one code
+  added to the existing list, `cursor-expired` (the contract's "cursor
+  mismatch/expiry" distinction). No new error ABI.
+- Cursors: opaque provider tokens; checkpoint bound to `gws.Binding`
+  (target, query, revision) and rejected with `cursor-mismatch` elsewhere.
+  bashy-cursor-v1 serialization stays 446 S19-owned.
+- Claims: coreutils `pkg/lockfile` (one consumer per checkpoint).
+- Scheduler: coreutils `pkg/schedule.Job` (kind `every`) over the registered
+  `gws` command argv. Execution: `GwsRunner(bin)` runs only the gws binary
+  resolved from the existing registry entry (`binmgr.Command`, `notrack` env,
+  bounded stdout) — never an arbitrary PATH command.
+- Redaction: `gws.RedactText` literal masking of declared secrets on every
+  returned error (provider error bodies, subprocess failures, handler errors).
+- State: `gws-events-checkpoint-v1` JSON file (0600) holding cursor, dedup
+  window, leases and explicit resync records only — event-adapter state, NOT
+  a general database and not a replacement for Sprint 453 storage APIs.
+
+### Acceptance evidence (fixture tests, no network, no credentials)
+
+| Acceptance item | Evidence (test / file) |
+|---|---|
+| Explicit opt-in durable checkpoint storage | `checkpoint.go` `Open` (explicit dir, 0600, atomic write, binding check, single-consumer lock); `TestOpenIsOptInAndClaimed`, `TestCheckpointHoldsNoCredentials` |
+| Deduplication / idempotency | bounded `Seen` window, `Event.ID` key; `TestDuplicateDelivery`, `TestDedupWindowIsBounded`, `TestReceiverDuplicateDeliveryAndAckOrdering` (CloudEvents `ce-id` across new Pub/Sub messageIds) |
+| Retry / backoff / rate limits | `retry.go` (`Backoff`, retry-after honoured and capped, only `Retryable` reads, `Limiter`); `TestRetryBackoffRateLimitAndRetryAfter`, `TestGmailErrorClassificationAndRedaction` (429 / 403 rateLimitExceeded → rate-limit) |
+| Ordered acknowledgment | `poller.go` `RunOnce`; `TestOrderedAckAndRestartRecovery` |
+| Cancellation | ctx checked per event and in every backoff/limiter wait; `TestCancellationKeepsCheckpoint` (cancel + deadline → `cancelled`/`timeout`, checkpoint not advanced past completed processing) |
+| Restart recovery (incl. crash between action and ack) | `TestOrderedAckAndRestartRecovery` (handler fails mid-batch, store reopened, acked event skipped as duplicate, rest delivered in order) |
+| Expired cursors | Gmail 404 / 410 → `cursor-expired`, not retried, checkpoint untouched, explicit `Resync(cursor, reason)` recorded; `TestExpiredCursorNeedsExplicitResync`, `TestGmailErrorClassificationAndRedaction`; lapsed lease → `cursor-expired` (`TestEventsSubscriptionLeaseRenewal`) |
+| Pagination distinct from acknowledgment | `TestGmailHistoryPaginationIsNotTheCursor`, `TestGmailHistoryBoundIsResumable` |
+| Receiver authentication | `SharedToken` (constant-time, `?token=` / `X-Goog-Channel-Token`), `BearerVerifier` (caller-supplied OIDC verifier); `TestReceiverAuthentication`, `TestReceiverBearerVerifier`, `TestReceiverBoundsAndMalformedInput` |
+| Gmail watch lease renewal (fake) | `CommandRenewer` + `ParseGmailWatch`; `TestGmailWatchLeaseRenewal` (retryable 503 then renewed, expiry persisted, out-of-margin lease untouched) |
+| Events subscription lease renewal (fake) | `EventsRenewArgv` + `ParseEventsRenew`; `TestEventsSubscriptionLeaseRenewal` (unconfirmed LRO → unknown outcome, expiry unchanged; confirmed → persisted; non-extending → failure) |
+| Existing scheduler reuse | `RenewalJob` + `schedule.ComputeNext`; `TestRenewalJobUsesExistingScheduler` |
+| Hosted receiver / long-lived worker under Rule 1 | `ServeAdmission()` disabled with reason; `TestNoListenerInPackage` |
+| Redaction with canary secrets | `TestGmailErrorClassificationAndRedaction` (provider error body, subprocess failure, handler error), `TestReceiverAuthentication` / `TestReceiverBearerVerifier` (responses never echo tokens), `TestCheckpointHoldsNoCredentials` |
+| No exactly-once promise | package doc (`events.go`) + this section |
+
+Gate run: `go test -short -count=1 ./external/gws/... ./external/registry/`,
+`go vet` of the same, `go build ./external/... ./pkg/atlas/... ./cmd/yoke`
+(results in the commit message).
+
+### Named gaps (NOT attempted; live checks move to Sprint 465)
+
+- Live Gmail `users.watch` / `users.history.list`, live Workspace Events
+  subscription create/patch, a real Pub/Sub push delivery, and a real
+  expired historyId / lapsed subscription — need an authorized test account,
+  GCP project and Pub/Sub topic; none exists here. Fakes only.
+- gws argv mapping (`gws gmail users watch|history list`, `gws events
+  subscriptions patch`, `--params` / `--json`) and the provider error-body
+  shape are from source/documentation inspection, not observed against the
+  pinned v0.22.5 binary; unverified until Sprint 465.
+- Pub/Sub OIDC JWT verification is caller-supplied (`BearerVerifier`); this
+  package ships no JWKS fetch/caching — a live verifier is unbuilt.
+- Hosting the receiver: no Bashy-signed build, no-egress proof, local/LAN
+  bind or outpost-TLS evidence — disabled (`ServeAdmission`).
+- No front-door verb invokes `RunOnce` / `RenewDue`; a scheduler job today
+  can run the renewal gws argv (`RenewalJob`), and a poll-once verb would be
+  a new registered command (manager decision; would change the documented
+  count).
+- Dedup is bounded (`DefaultSeenWindow` = 1024 ids); older duplicates are
+  not detected, which is why handlers must stay idempotent.

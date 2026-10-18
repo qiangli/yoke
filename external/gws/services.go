@@ -67,9 +67,9 @@ var Services = []Service{
 // Gmail watch and Events subscribe/renew are subject to the durable-event
 // story 5548854717bc, and Admin Directory CRUD stays unclaimed until tested.
 var Deferred = map[string]string{
-	"gmail:watch":      "deferred to event story 5548854717bc (long-lived subscription needs service Rule 1 + lease renewal evidence)",
-	"events:subscribe": "deferred to event story 5548854717bc (subscribe/renew checkpoint, dedup, restart recovery)",
-	"events:renew":     "deferred to event story 5548854717bc (lease renewal is event-story acceptance)",
+	"gmail:watch":      "event story 5548854717bc: use external/gws/events (opt-in checkpoint, lease renewal; hosted receiver needs service Rule 1; live renewal unverified until Sprint 465)",
+	"events:subscribe": "event story 5548854717bc: use external/gws/events (checkpoint, dedup, restart recovery; live subscription unverified until Sprint 465)",
+	"events:renew":     "event story 5548854717bc: use external/gws/events lease renewal (fakes only; live renewal unverified until Sprint 465)",
 	"admin:directory":  "UNCLAIMED until tested (separate story 66494446f180 owns admin coverage; GAM overlap retained)",
 	"admin:users":      "UNCLAIMED until tested (see admin:directory)",
 	"admin:groups":     "UNCLAIMED until tested (see admin:directory)",
