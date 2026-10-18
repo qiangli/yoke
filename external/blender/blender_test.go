@@ -546,11 +546,11 @@ func TestSpecAndPathFailClosedWithoutCommittedPin(t *testing.T) {
 
 func TestArtifactTable(t *testing.T) {
 	a, ok := ArtifactFor("4.2.3", "linux", "amd64")
-	if !ok || a.URL != "https://download.blender.org/release/Blender4.2/blender-4.2.3-linux-x64.tar.xz" || a.Entrypoint != "blender-4.2.3-linux-x64/blender" {
+	if !ok || a.URL != "https://ftp.blender.org/release/Blender4.2/blender-4.2.3-linux-x64.tar.xz" || a.Entrypoint != "blender-4.2.3-linux-x64/blender" {
 		t.Fatalf("linux/amd64 = %+v %v", a, ok)
 	}
 	a, ok = ArtifactFor("4.2.3", "windows", "amd64")
-	if !ok || a.URL != "https://download.blender.org/release/Blender4.2/blender-4.2.3-windows-x64.zip" || a.Entrypoint != "blender-4.2.3-windows-x64/blender.exe" {
+	if !ok || a.URL != "https://ftp.blender.org/release/Blender4.2/blender-4.2.3-windows-x64.zip" || a.Entrypoint != "blender-4.2.3-windows-x64/blender.exe" {
 		t.Fatalf("windows/amd64 = %+v %v", a, ok)
 	}
 	for _, plat := range []string{"darwin/arm64", "darwin/amd64", "linux/arm64", "windows/arm64"} {
@@ -561,6 +561,61 @@ func TestArtifactTable(t *testing.T) {
 	}
 	if _, ok := ArtifactFor("latest", "linux", "amd64"); ok {
 		t.Fatal("latest resolved")
+	}
+}
+
+// TestOfficialSourceAndPin pins the supply-chain facts a reviewer must be able
+// to check without running anything: the release root is a Blender Foundation
+// origin that serves plain HTTPS GETs (ftp.blender.org — download.blender.org
+// answers binmgr with a Cloudflare challenge page), and the windows/amd64
+// digest is EXACTLY the value in the Foundation's published manifest
+// https://ftp.blender.org/release/Blender4.2/blender-4.2.3.sha256 — never a
+// digest computed from a mirror or from whatever bytes happened to arrive.
+func TestOfficialSourceAndPin(t *testing.T) {
+	if releaseBase != "https://ftp.blender.org/release" {
+		t.Fatalf("releaseBase = %q", releaseBase)
+	}
+	if strings.Contains(releaseBase, "download.blender.org") {
+		t.Fatal("download.blender.org is behind a managed browser challenge; binmgr cannot fetch from it")
+	}
+	const officialWindowsAMD64 = "7f8be9b1dc904e7689b3112659791c29cc9ed9d46ce57c4ea5b31a0621489b3a" // blender-4.2.3-windows-x64.zip
+	sha, ok := binmgr.PinnedSHA256(toolName, DefaultVersion, "windows/amd64")
+	if !ok || sha != officialWindowsAMD64 {
+		t.Fatalf("windows/amd64 pin = %q, %v; want the official manifest digest", sha, ok)
+	}
+	tool, err := Spec("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, ok := tool.Assets["windows/amd64"]
+	if !ok || a.SHA256 != officialWindowsAMD64 || a.URL != "https://ftp.blender.org/release/Blender4.2/blender-4.2.3-windows-x64.zip" || !a.Tree || a.Entrypoint != "blender-4.2.3-windows-x64/blender.exe" {
+		t.Fatalf("windows/amd64 asset = %+v %v", a, ok)
+	}
+	if a.SHA512 != "" || a.MD5 != "" {
+		t.Fatalf("weaker digests must not be declared: %+v", a)
+	}
+}
+
+func TestRenderScriptPicksADeterministicCameraOnlyWhenNoneIsActive(t *testing.T) {
+	// A .blend produced by asset-import (fresh, empty scene + imported asset)
+	// has camera OBJECTS but no ACTIVE camera; Blender's render.render then
+	// fails. The fixed script makes the choice deterministic (first camera
+	// by name) and still refuses a scene with no camera at all. It never
+	// creates a camera.
+	for _, want := range []string{
+		`if s.camera is None:`,
+		`cams = sorted((o for o in s.objects if o.type == "CAMERA"), key=lambda o: o.name)`,
+		`raise SystemExit("yoke-blender: scene has no camera object")`,
+		`s.camera = cams[0]`,
+	} {
+		if !strings.Contains(renderScript, want) {
+			t.Fatalf("render script lacks %q", want)
+		}
+	}
+	for _, bad := range []string{"camera_add", "bpy.data.cameras.new", "objects.new"} {
+		if strings.Contains(renderScript, bad) {
+			t.Fatalf("render script must not create objects: %q", bad)
+		}
 	}
 }
 

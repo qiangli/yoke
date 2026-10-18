@@ -44,8 +44,15 @@ const (
 	// ("blender@<version>/<goos>/<goarch>").
 	toolName = "blender"
 
-	// releaseBase is the official Blender Foundation download root.
-	releaseBase = "https://download.blender.org/release"
+	// releaseBase is the official Blender Foundation release root. It is the
+	// ftp.blender.org host, not download.blender.org: both are Foundation
+	// origins for the same release tree (same paths, same bytes, same
+	// published .sha256 manifest), but download.blender.org sits behind a
+	// Cloudflare managed challenge that refuses non-browser clients — a
+	// plain HTTP GET (binmgr, curl, PowerShell) gets an interstitial, not
+	// the archive — while ftp.blender.org serves the files directly over
+	// HTTPS. The digest is still the committed pin, never the manifest.
+	releaseBase = "https://ftp.blender.org/release"
 
 	// resultMarker prefixes the single JSON result line each fixed script
 	// prints; everything else Blender writes to stdout is noise.
@@ -399,15 +406,18 @@ argv = sys.argv[sys.argv.index("--") + 1:]
 output, frame = argv[0], int(argv[1])
 s = bpy.context.scene
 if s.camera is None:
-    raise SystemExit("yoke-blender: scene has no active camera")
+    cams = sorted((o for o in s.objects if o.type == "CAMERA"), key=lambda o: o.name)
+    if not cams:
+        raise SystemExit("yoke-blender: scene has no camera object")
+    s.camera = cams[0]
 s.frame_set(frame)
 s.render.image_settings.file_format = "PNG"
 s.render.filepath = output
 s.render.use_file_extension = False
 bpy.ops.render.render(write_still=True)
 print("` + resultMarker + `" + json.dumps({"schema_version": "yoke-blender-render-v1", "output": output, "frame": frame,
-      "engine": s.render.engine, "resolution_x": s.render.resolution_x, "resolution_y": s.render.resolution_y,
-      "resolution_percentage": s.render.resolution_percentage}, sort_keys=True))
+      "camera": s.camera.name, "engine": s.render.engine, "resolution_x": s.render.resolution_x,
+      "resolution_y": s.render.resolution_y, "resolution_percentage": s.render.resolution_percentage}, sort_keys=True))
 `
 
 	outputInspectScript = `import bpy, json, sys

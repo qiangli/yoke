@@ -246,6 +246,15 @@ var pinnedDigests = map[string]string{
 	"rclone@v1.75.2/windows/amd64": "8a9db2bad1dc79a65b3348fd857069598e2aab7cf4d118b77b1df23055aff818",
 	"rclone@v1.75.2/windows/arm64": "7eb9844c9e5b723b9ef28821891caa17f6d9d1a375c49365cbe04114cec8dcd9",
 
+	// blender@4.2.3 — Blender Foundation 4.2 LTS release (external/blender,
+	// Sprint 382 story f5817629a95b). Digest taken from the Foundation's own
+	// manifest https://ftp.blender.org/release/Blender4.2/blender-4.2.3.sha256
+	// (the same value download.blender.org publishes) and matched against the
+	// bytes binmgr downloaded and extracted on noviwin1 (windows/amd64 live
+	// smoke, 2026-10-18). No other platform is pinned: linux/amd64 has an
+	// official archive but no live verification yet, so it stays fail-closed.
+	"blender@4.2.3/windows/amd64": "7f8be9b1dc904e7689b3112659791c29cc9ed9d46ce57c4ea5b31a0621489b3a",
+
 	// No ollama pins, by design: per docs/bashy-service-supply-chain-policy.md
 	// (Sprint 436, story 8d1e72e5dff6) bashy never downloads or execs a
 	// third-party ollama release archive — the bashy-signed embedded runner
