@@ -2,6 +2,8 @@ package dbkv
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -434,5 +436,44 @@ func TestKVOpsDeclareSpecs(t *testing.T) {
 	}
 	if s := Spec(OpBucketDrop, dbstore.Memory, dblifecycle.AccessExclusive); s.Hold != "exclusive" || s.MutationClass != "destructive" {
 		t.Errorf("%+v", s)
+	}
+}
+
+func TestImportRejectsMalformedRecordShapes(t *testing.T) {
+	src, dst := newFixture(t, dbstore.Persistent), newFixture(t, dbstore.Memory)
+	seed(src)
+	dst.must(OpBucketCreate, Input{Bucket: "keep"}, false)
+	before := dump(dst)
+	for name, line := range map[string]string{
+		"short":     `["YQ=="]`,
+		"long":      `["YQ==","Yg==","Yw=="]`,
+		"trailing":  `["YQ==","Yg=="] {}`,
+		"trailing2": `["YQ==","Yg=="]["YQ==","Yg=="]`,
+		"null":      `["YQ==",null]`,
+		"number":    `["YQ==",1]`,
+		"object":    `{"k":"YQ=="}`,
+	} {
+		d := filepath.Join(t.TempDir(), name)
+		src.must(OpExport, Input{Out: d}, false)
+		m, err := readManifest(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := []byte(line + "\n")
+		sum := sha256.Sum256(body)
+		m.Files[0].Records, m.Files[0].Bytes, m.Files[0].SHA256 = 1, int64(len(body)), hex.EncodeToString(sum[:])
+		if err := os.WriteFile(filepath.Join(d, m.Files[0].Path), body, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		b, _ := json.Marshal(m)
+		if err := os.WriteFile(filepath.Join(d, ManifestName), b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got := dst.code(OpImport, Input{In: d, Replace: true}, true); got != "malformed_input" {
+			t.Errorf("%s: code %q, want malformed_input", name, got)
+		}
+		if dump(dst) != before {
+			t.Fatalf("%s: refused import changed the target", name)
+		}
 	}
 }

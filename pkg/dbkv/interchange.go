@@ -113,6 +113,9 @@ func runExport(ctx context.Context, kv dbstore.KV, h dbstore.Handle, in Input) (
 				}
 				line, _ := json.Marshal([2]string{base64.StdEncoding.EncodeToString(k), base64.StdEncoding.EncodeToString(v)})
 				line = append(line, '\n')
+				if len(line) > MaxRecordBytes {
+					return false, fmt.Errorf("%w: record in bucket %q exceeds the %d-byte import limit; export refused", dbstore.ErrLimitExceeded, b, MaxRecordBytes)
+				}
 				if _, err := w.Write(line); err != nil {
 					return false, err
 				}
@@ -208,10 +211,8 @@ func eachRecord(ctx context.Context, dir string, rf recordFile, fn func(k, v []b
 		}
 		line, err := readLine(r)
 		if len(line) > 0 {
-			var rec [2]string
-			dec := json.NewDecoder(bytes.NewReader(line))
-			dec.DisallowUnknownFields()
-			if e := dec.Decode(&rec); e != nil {
+			rec, e := decodeRecord(line)
+			if e != nil {
 				return fmt.Errorf("%w: %s record %d: %v", dbstore.ErrMalformedInput, rf.Path, n+1, e)
 			}
 			k, e1 := base64.StdEncoding.DecodeString(rec[0])
@@ -237,6 +238,31 @@ func eachRecord(ctx context.Context, dir string, rf recordFile, fn func(k, v []b
 		return fmt.Errorf("%w: %s does not match the manifest (records, bytes or sha256)", dbstore.ErrIntegrity, rf.Path)
 	}
 	return nil
+}
+
+// decodeRecord accepts exactly one JSON array of two strings and nothing after it.
+func decodeRecord(line []byte) ([2]string, error) {
+	var rec [2]string
+	dec := json.NewDecoder(bytes.NewReader(line))
+	var raw []json.RawMessage
+	if err := dec.Decode(&raw); err != nil {
+		return rec, err
+	}
+	if len(raw) != 2 {
+		return rec, fmt.Errorf("record must be an array of exactly 2 strings, got %d elements", len(raw))
+	}
+	for i, r := range raw {
+		if len(r) == 0 || r[0] != '"' {
+			return rec, fmt.Errorf("record element %d is not a string", i)
+		}
+		if err := json.Unmarshal(r, &rec[i]); err != nil {
+			return rec, err
+		}
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return rec, fmt.Errorf("trailing data after record")
+	}
+	return rec, nil
 }
 
 type countWriter struct{ n *int64 }
