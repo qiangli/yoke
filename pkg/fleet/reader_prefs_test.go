@@ -570,3 +570,408 @@ func TestReaderPrefs_ResolveFromOSEnv(t *testing.T) {
 		t.Errorf("BudgetBytes = %d, want 12345", resolved.BudgetBytes)
 	}
 }
+
+func TestReaderPrefsSources(t *testing.T) {
+	t.Run("bashy default baseline sources", func(t *testing.T) {
+		resolved, sources, err := ResolveReaderPrefsWithSources(ReaderPrefsOptions{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resolved.View != ViewText || sources.View != SourceDefault {
+			t.Errorf("View = %q (%s), want %q (%s)", resolved.View, sources.View, ViewText, SourceDefault)
+		}
+		if resolved.Help != HelpClassic || sources.Help != SourceDefault {
+			t.Errorf("Help = %q (%s), want %q (%s)", resolved.Help, sources.Help, HelpClassic, SourceDefault)
+		}
+		if resolved.Dialect != "bash" || sources.Dialect != SourceDefault {
+			t.Errorf("Dialect = %q (%s), want %q (%s)", resolved.Dialect, sources.Dialect, "bash", SourceDefault)
+		}
+		if resolved.BudgetBytes != DefaultBudgetBytes || sources.BudgetBytes != SourceDefault {
+			t.Errorf("BudgetBytes = %d (%s), want %d (%s)", resolved.BudgetBytes, sources.BudgetBytes, DefaultBudgetBytes, SourceDefault)
+		}
+		if len(sources.Defaults) != 0 {
+			t.Errorf("Defaults count = %d, want 0", len(sources.Defaults))
+		}
+		if sources.SourceFor("view") != SourceDefault {
+			t.Errorf("SourceFor(view) = %q, want %q", sources.SourceFor("view"), SourceDefault)
+		}
+	})
+
+	t.Run("band layer overrides help source", func(t *testing.T) {
+		resolved, sources, err := ResolveReaderPrefsWithSources(ReaderPrefsOptions{Band: 1})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resolved.Help != HelpScript || sources.Help != SourceBand {
+			t.Errorf("Help = %q (%s), want %q (%s)", resolved.Help, sources.Help, HelpScript, SourceBand)
+		}
+		// Unpegged fields remain bashy defaults
+		if sources.View != SourceDefault {
+			t.Errorf("View source = %q, want %q", sources.View, SourceDefault)
+		}
+		if sources.Dialect != SourceDefault {
+			t.Errorf("Dialect source = %q, want %q", sources.Dialect, SourceDefault)
+		}
+		if sources.BudgetBytes != SourceDefault {
+			t.Errorf("BudgetBytes source = %q, want %q", sources.BudgetBytes, SourceDefault)
+		}
+	})
+
+	t.Run("model layer overrides band", func(t *testing.T) {
+		model := &Model{
+			Name: "opus",
+			Band: 2,
+			Prefs: ReaderPrefs{
+				Help: HelpMCP,
+				Defaults: map[string]map[string]any{
+					"llm": {"temp": 0.2},
+				},
+			},
+		}
+		resolved, sources, err := ResolveReaderPrefsWithSources(ReaderPrefsOptions{
+			Model: model,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resolved.Help != HelpMCP || sources.Help != SourceModel {
+			t.Errorf("Help = %q (%s), want %q (%s)", resolved.Help, sources.Help, HelpMCP, SourceModel)
+		}
+		if src := sources.SourceForDefault("llm", "temp"); src != SourceModel {
+			t.Errorf("SourceForDefault(llm, temp) = %q, want %q", src, SourceModel)
+		}
+	})
+
+	t.Run("tool layer precedence and defaults tracking", func(t *testing.T) {
+		tool := &Tool{
+			Name: "claude",
+			Prefs: ReaderPrefs{
+				View:        ViewJSON,
+				Help:        HelpMCP,
+				Dialect:     DialectPWSH,
+				BudgetBytes: 30000,
+				Defaults: map[string]map[string]any{
+					"*": {"no_input": true},
+				},
+			},
+		}
+		resolved, sources, err := ResolveReaderPrefsWithSources(ReaderPrefsOptions{
+			Tool: tool,
+			Band: 1, // band 1 would set help=script, but tool should override
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resolved.View != ViewJSON || sources.View != SourceTool {
+			t.Errorf("View = %q (%s), want %q (%s)", resolved.View, sources.View, ViewJSON, SourceTool)
+		}
+		if resolved.Help != HelpMCP || sources.Help != SourceTool {
+			t.Errorf("Help = %q (%s), want %q (%s)", resolved.Help, sources.Help, HelpMCP, SourceTool)
+		}
+		if resolved.Dialect != DialectPWSH || sources.Dialect != SourceTool {
+			t.Errorf("Dialect = %q (%s), want %q (%s)", resolved.Dialect, sources.Dialect, DialectPWSH, SourceTool)
+		}
+		if resolved.BudgetBytes != 30000 || sources.BudgetBytes != SourceTool {
+			t.Errorf("BudgetBytes = %d (%s), want 30000 (%s)", resolved.BudgetBytes, sources.BudgetBytes, SourceTool)
+		}
+		if src := sources.SourceForDefault("*", "no_input"); src != SourceTool {
+			t.Errorf("Defaults[*][no_input] source = %q, want %q", src, SourceTool)
+		}
+	})
+
+	t.Run("agent layer precedence and default key merging", func(t *testing.T) {
+		tool := &Tool{
+			Name: "claude",
+			Prefs: ReaderPrefs{
+				View:        ViewJSON,
+				Help:        HelpMCP,
+				Dialect:     DialectPWSH,
+				BudgetBytes: 30000,
+				Defaults: map[string]map[string]any{
+					"*": {"no_input": true, "timeout": "30s"},
+				},
+			},
+		}
+		agent := &Agent{
+			Name: "coder",
+			Prefs: ReaderPrefs{
+				View:        ViewYAML,
+				Help:        HelpSkill,
+				BudgetBytes: 25000,
+				Defaults: map[string]map[string]any{
+					"*":  {"timeout": "10s"},
+					"rm": {"dry_run": true},
+				},
+			},
+		}
+		resolved, sources, err := ResolveReaderPrefsWithSources(ReaderPrefsOptions{
+			Agent: agent,
+			Tool:  tool,
+			Band:  1,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// Agent overrides View, Help, BudgetBytes
+		if resolved.View != ViewYAML || sources.View != SourceAgent {
+			t.Errorf("View = %q (%s), want %q (%s)", resolved.View, sources.View, ViewYAML, SourceAgent)
+		}
+		if resolved.Help != HelpSkill || sources.Help != SourceAgent {
+			t.Errorf("Help = %q (%s), want %q (%s)", resolved.Help, sources.Help, HelpSkill, SourceAgent)
+		}
+		if resolved.BudgetBytes != 25000 || sources.BudgetBytes != SourceAgent {
+			t.Errorf("BudgetBytes = %d (%s), want 25000 (%s)", resolved.BudgetBytes, sources.BudgetBytes, SourceAgent)
+		}
+		// Dialect inherited from Tool
+		if resolved.Dialect != DialectPWSH || sources.Dialect != SourceTool {
+			t.Errorf("Dialect = %q (%s), want %q (%s)", resolved.Dialect, sources.Dialect, DialectPWSH, SourceTool)
+		}
+		// Defaults per-key tracking
+		if sources.SourceForDefault("*", "no_input") != SourceTool {
+			t.Errorf("Defaults[*][no_input] source = %q, want %q", sources.SourceForDefault("*", "no_input"), SourceTool)
+		}
+		if sources.SourceForDefault("*", "timeout") != SourceAgent {
+			t.Errorf("Defaults[*][timeout] source = %q, want %q", sources.SourceForDefault("*", "timeout"), SourceAgent)
+		}
+		if sources.SourceForDefault("rm", "dry_run") != SourceAgent {
+			t.Errorf("Defaults[rm][dry_run] source = %q, want %q", sources.SourceForDefault("rm", "dry_run"), SourceAgent)
+		}
+	})
+
+	t.Run("env BASHY_PREFS layer precedence", func(t *testing.T) {
+		agent := &Agent{
+			Name: "coder",
+			Prefs: ReaderPrefs{
+				View:        ViewYAML,
+				Help:        HelpSkill,
+				BudgetBytes: 25000,
+			},
+		}
+		envJSON := `{"view":"md","budget_bytes":15000,"defaults":{"graph *":{"depth":1}},"_custom":true}`
+		resolved, sources, err := ResolveReaderPrefsWithSources(ReaderPrefsOptions{
+			EnvJSON: envJSON,
+			Agent:   agent,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resolved.View != ViewMD || sources.View != SourceEnv {
+			t.Errorf("View = %q (%s), want %q (%s)", resolved.View, sources.View, ViewMD, SourceEnv)
+		}
+		if resolved.BudgetBytes != 15000 || sources.BudgetBytes != SourceEnv {
+			t.Errorf("BudgetBytes = %d (%s), want 15000 (%s)", resolved.BudgetBytes, sources.BudgetBytes, SourceEnv)
+		}
+		if resolved.Help != HelpSkill || sources.Help != SourceAgent {
+			t.Errorf("Help = %q (%s), want %q (%s)", resolved.Help, sources.Help, HelpSkill, SourceAgent)
+		}
+		if sources.SourceForDefault("graph *", "depth") != SourceEnv {
+			t.Errorf("Defaults[graph *][depth] source = %q, want %q", sources.SourceForDefault("graph *", "depth"), SourceEnv)
+		}
+		if sources.SourceFor("_custom") != SourceEnv {
+			t.Errorf("SourceFor(_custom) = %q, want %q", sources.SourceFor("_custom"), SourceEnv)
+		}
+	})
+
+	t.Run("explicit flag layer precedence", func(t *testing.T) {
+		envJSON := `{"view":"md","budget_bytes":15000,"defaults":{"rm":{"dry_run":true}}}`
+		explicit := ReaderPrefs{
+			View:        ViewCanonical,
+			BudgetBytes: 8000,
+			Defaults: map[string]map[string]any{
+				"rm": {"confirm": true},
+			},
+		}
+		resolved, sources, err := ResolveReaderPrefsWithSources(ReaderPrefsOptions{
+			Explicit: explicit,
+			EnvJSON:  envJSON,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resolved.View != ViewCanonical || sources.View != SourceExplicit {
+			t.Errorf("View = %q (%s), want %q (%s)", resolved.View, sources.View, ViewCanonical, SourceExplicit)
+		}
+		if resolved.BudgetBytes != 8000 || sources.BudgetBytes != SourceExplicit {
+			t.Errorf("BudgetBytes = %d (%s), want 8000 (%s)", resolved.BudgetBytes, sources.BudgetBytes, SourceExplicit)
+		}
+		if sources.SourceForDefault("rm", "dry_run") != SourceEnv {
+			t.Errorf("Defaults[rm][dry_run] source = %q, want %q", sources.SourceForDefault("rm", "dry_run"), SourceEnv)
+		}
+		if sources.SourceForDefault("rm", "confirm") != SourceExplicit {
+			t.Errorf("Defaults[rm][confirm] source = %q, want %q", sources.SourceForDefault("rm", "confirm"), SourceExplicit)
+		}
+	})
+
+	t.Run("all 6 precedence tiers together: explicit > env > agent > tool > model band > bashy default", func(t *testing.T) {
+		band := 2 // sets Help="script"
+
+		tool := &Tool{
+			Name: "tool-1",
+			Prefs: ReaderPrefs{
+				Dialect:     DialectPWSH,
+				BudgetBytes: 32000,
+				Defaults: map[string]map[string]any{
+					"*": {"no_input": true, "timeout": "30s"},
+				},
+			},
+		}
+
+		agent := &Agent{
+			Name: "agent-1",
+			Prefs: ReaderPrefs{
+				Help: HelpSkill,
+				Defaults: map[string]map[string]any{
+					"*":     {"timeout": "10s"},
+					"git *": {"depth": 2},
+				},
+			},
+		}
+
+		envJSON := `{
+			"view": "yaml",
+			"defaults": {
+				"git *": {"depth": 1},
+				"rm": {"dry_run": true}
+			}
+		}`
+
+		explicit := ReaderPrefs{
+			BudgetBytes: 16000,
+			Defaults: map[string]map[string]any{
+				"rm": {"confirm": true},
+			},
+		}
+
+		resolved, sources, err := ResolveReaderPrefsWithSources(ReaderPrefsOptions{
+			Explicit: explicit,
+			EnvJSON:  envJSON,
+			Agent:    agent,
+			Tool:     tool,
+			Band:     band,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// 1. View from Env ("yaml", source: env)
+		if resolved.View != ViewYAML || sources.View != SourceEnv {
+			t.Errorf("View = %q (%s), want %q (%s)", resolved.View, sources.View, ViewYAML, SourceEnv)
+		}
+
+		// 2. Help from Agent ("skill", source: agent) overrides tool and band
+		if resolved.Help != HelpSkill || sources.Help != SourceAgent {
+			t.Errorf("Help = %q (%s), want %q (%s)", resolved.Help, sources.Help, HelpSkill, SourceAgent)
+		}
+
+		// 3. Dialect from Tool ("pwsh", source: tool) overrides bashy default "bash"
+		if resolved.Dialect != DialectPWSH || sources.Dialect != SourceTool {
+			t.Errorf("Dialect = %q (%s), want %q (%s)", resolved.Dialect, sources.Dialect, DialectPWSH, SourceTool)
+		}
+
+		// 4. BudgetBytes from Explicit (16000, source: explicit) overrides env, agent, tool, default
+		if resolved.BudgetBytes != 16000 || sources.BudgetBytes != SourceExplicit {
+			t.Errorf("BudgetBytes = %d (%s), want 16000 (%s)", resolved.BudgetBytes, sources.BudgetBytes, SourceExplicit)
+		}
+
+		// 5. Defaults pattern+key fine-grained source tracking:
+		//   "*" no_input from tool
+		if sources.SourceForDefault("*", "no_input") != SourceTool {
+			t.Errorf("Defaults[*][no_input] source = %q, want %q", sources.SourceForDefault("*", "no_input"), SourceTool)
+		}
+		//   "*" timeout overridden by agent
+		if sources.SourceForDefault("*", "timeout") != SourceAgent {
+			t.Errorf("Defaults[*][timeout] source = %q, want %q", sources.SourceForDefault("*", "timeout"), SourceAgent)
+		}
+		//   "git *" depth from agent overridden by env
+		if sources.SourceForDefault("git *", "depth") != SourceEnv {
+			t.Errorf("Defaults[git *][depth] source = %q, want %q", sources.SourceForDefault("git *", "depth"), SourceEnv)
+		}
+		//   "rm" dry_run from env
+		if sources.SourceForDefault("rm", "dry_run") != SourceEnv {
+			t.Errorf("Defaults[rm][dry_run] source = %q, want %q", sources.SourceForDefault("rm", "dry_run"), SourceEnv)
+		}
+		//   "rm" confirm from explicit
+		if sources.SourceForDefault("rm", "confirm") != SourceExplicit {
+			t.Errorf("Defaults[rm][confirm] source = %q, want %q", sources.SourceForDefault("rm", "confirm"), SourceExplicit)
+		}
+	})
+
+	t.Run("invalid env JSON returns error and empty sources", func(t *testing.T) {
+		_, sources, err := ResolveReaderPrefsWithSources(ReaderPrefsOptions{
+			EnvJSON: "{invalid",
+		})
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if sources.View != "" {
+			t.Errorf("expected empty sources on error, got View = %q", sources.View)
+		}
+	})
+
+	t.Run("convenience positional and env wrappers", func(t *testing.T) {
+		t.Setenv(EnvBashyPrefs, `{"view":"md"}`)
+		res, src, err := ResolveReaderPrefsWithSourcesFromEnv(ReaderPrefs{}, nil, nil, 0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.View != ViewMD || src.View != SourceEnv {
+			t.Errorf("View = %q (%s), want md (env)", res.View, src.View)
+		}
+
+		res2, src2, err := ResolveReaderPrefsWithSourcesFromArgs(ReaderPrefs{View: ViewJSON}, "", nil, nil, 0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res2.View != ViewJSON || src2.View != SourceExplicit {
+			t.Errorf("View = %q (%s), want json (explicit)", res2.View, src2.View)
+		}
+	})
+
+	t.Run("clone and serialization", func(t *testing.T) {
+		orig := ReaderPrefsSources{
+			View:        SourceEnv,
+			Help:        SourceAgent,
+			Dialect:     SourceTool,
+			BudgetBytes: SourceExplicit,
+			Defaults: map[string]map[string]string{
+				"*": {"timeout": SourceAgent},
+			},
+			Extra: map[string]string{
+				"_custom": SourceEnv,
+			},
+		}
+
+		cloned := orig.Clone()
+		if cloned.View != orig.View || cloned.Defaults["*"]["timeout"] != SourceAgent || cloned.Extra["_custom"] != SourceEnv {
+			t.Errorf("cloned struct does not match original: %+v", cloned)
+		}
+		cloned.Defaults["*"]["timeout"] = SourceExplicit
+		if orig.Defaults["*"]["timeout"] != SourceAgent {
+			t.Error("Clone was not a deep copy of Defaults")
+		}
+
+		data, err := json.Marshal(orig)
+		if err != nil {
+			t.Fatalf("json.Marshal failed: %v", err)
+		}
+		var decoded ReaderPrefsSources
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			t.Fatalf("json.Unmarshal failed: %v", err)
+		}
+		if decoded.View != orig.View || decoded.Defaults["*"]["timeout"] != SourceAgent || decoded.Extra["_custom"] != SourceEnv {
+			t.Errorf("decoded does not match original: %+v", decoded)
+		}
+	})
+
+	t.Run("constants alias consistency", func(t *testing.T) {
+		if SourceBashyDefault != SourceDefault {
+			t.Errorf("SourceBashyDefault = %q, want %q", SourceBashyDefault, SourceDefault)
+		}
+		if SourceBashyPrefs != SourceEnv {
+			t.Errorf("SourceBashyPrefs = %q, want %q", SourceBashyPrefs, SourceEnv)
+		}
+		if SourceModelBand != SourceBand {
+			t.Errorf("SourceModelBand = %q, want %q", SourceModelBand, SourceBand)
+		}
+	})
+}

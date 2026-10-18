@@ -280,6 +280,161 @@ func ParseReaderPrefsJSON(s string) (ReaderPrefs, error) {
 	return p, nil
 }
 
+// Source names indicating where an effective preference value originated.
+const (
+	SourceExplicit = "explicit"
+	SourceEnv      = "env"
+	SourceAgent    = "agent"
+	SourceTool     = "tool"
+	SourceModel    = "model"
+	SourceBand     = "band"
+	SourceDefault  = "default"
+
+	// Descriptive aliases matching session and capability nomenclature.
+	SourceBashyPrefs   = SourceEnv
+	SourceModelBand    = SourceBand
+	SourceBashyDefault = SourceDefault
+)
+
+// ReaderPrefsSources records the source layer of each effective preference field.
+type ReaderPrefsSources struct {
+	View        string                       `yaml:"view,omitempty" json:"view,omitempty" doc:"source of effective view"`
+	Help        string                       `yaml:"help,omitempty" json:"help,omitempty" doc:"source of effective help"`
+	Dialect     string                       `yaml:"dialect,omitempty" json:"dialect,omitempty" doc:"source of effective dialect"`
+	BudgetBytes string                       `yaml:"budget_bytes,omitempty" json:"budget_bytes,omitempty" doc:"source of effective budget_bytes"`
+	Defaults    map[string]map[string]string `yaml:"defaults,omitempty" json:"defaults,omitempty" doc:"source of each effective default option per pattern"`
+	Extra       map[string]string            `yaml:",inline" json:"-" doc:"source of additional underscore keys"`
+}
+
+// Clone returns a deep copy of ReaderPrefsSources.
+func (s ReaderPrefsSources) Clone() ReaderPrefsSources {
+	res := s
+	if s.Defaults != nil {
+		res.Defaults = make(map[string]map[string]string, len(s.Defaults))
+		for pat, opts := range s.Defaults {
+			if opts != nil {
+				clonedOpts := make(map[string]string, len(opts))
+				for k, v := range opts {
+					clonedOpts[k] = v
+				}
+				res.Defaults[pat] = clonedOpts
+			} else {
+				res.Defaults[pat] = nil
+			}
+		}
+	}
+	if s.Extra != nil {
+		res.Extra = make(map[string]string, len(s.Extra))
+		for k, v := range s.Extra {
+			res.Extra[k] = v
+		}
+	}
+	return res
+}
+
+// SourceForDefault returns the source of the given command glob pattern and option key,
+// or empty string if not declared.
+func (s ReaderPrefsSources) SourceForDefault(pattern, key string) string {
+	if s.Defaults == nil {
+		return ""
+	}
+	opts, ok := s.Defaults[pattern]
+	if !ok || opts == nil {
+		return ""
+	}
+	return opts[key]
+}
+
+// SourceFor returns the source of a field by name ("view", "help", "dialect", "budget_bytes",
+// or an underscore extra key).
+func (s ReaderPrefsSources) SourceFor(field string) string {
+	switch field {
+	case "view":
+		return s.View
+	case "help":
+		return s.Help
+	case "dialect":
+		return s.Dialect
+	case "budget_bytes":
+		return s.BudgetBytes
+	default:
+		if s.Extra != nil {
+			return s.Extra[field]
+		}
+		return ""
+	}
+}
+
+// Source is an alias for SourceFor.
+func (s ReaderPrefsSources) Source(field string) string {
+	return s.SourceFor(field)
+}
+
+// MarshalJSON marshals ReaderPrefsSources to JSON, including Extra keys.
+func (s ReaderPrefsSources) MarshalJSON() ([]byte, error) {
+	m := make(map[string]any)
+	for k, v := range s.Extra {
+		m[k] = v
+	}
+	if s.View != "" {
+		m["view"] = s.View
+	}
+	if s.Help != "" {
+		m["help"] = s.Help
+	}
+	if len(s.Defaults) > 0 {
+		m["defaults"] = s.Defaults
+	}
+	if s.Dialect != "" {
+		m["dialect"] = s.Dialect
+	}
+	if s.BudgetBytes != "" {
+		m["budget_bytes"] = s.BudgetBytes
+	}
+	return json.Marshal(m)
+}
+
+// UnmarshalJSON unmarshals JSON into ReaderPrefsSources, preserving underscore extra keys.
+func (s *ReaderPrefsSources) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if s.Extra == nil {
+		s.Extra = make(map[string]string)
+	}
+	for k, v := range raw {
+		switch k {
+		case "view":
+			if err := json.Unmarshal(v, &s.View); err != nil {
+				return err
+			}
+		case "help":
+			if err := json.Unmarshal(v, &s.Help); err != nil {
+				return err
+			}
+		case "dialect":
+			if err := json.Unmarshal(v, &s.Dialect); err != nil {
+				return err
+			}
+		case "budget_bytes":
+			if err := json.Unmarshal(v, &s.BudgetBytes); err != nil {
+				return err
+			}
+		case "defaults":
+			if err := json.Unmarshal(v, &s.Defaults); err != nil {
+				return err
+			}
+		default:
+			var val string
+			if err := json.Unmarshal(v, &val); err == nil {
+				s.Extra[k] = val
+			}
+		}
+	}
+	return nil
+}
+
 // ReaderPrefsOptions holds the configuration for resolving reader preferences.
 type ReaderPrefsOptions struct {
 	Explicit ReaderPrefs
@@ -290,11 +445,61 @@ type ReaderPrefsOptions struct {
 	Band     int
 }
 
-// ResolveReaderPrefsWithOptions resolves the effective ReaderPrefs using the precedence order:
-// explicit flag > BASHY_PREFS JSON env > agent > tool > band > bashy default.
-func ResolveReaderPrefsWithOptions(opts ReaderPrefsOptions) (ReaderPrefs, error) {
+// ResolveReaderPrefsWithSources resolves effective ReaderPrefs and traces the source
+// of each effective declared preference field using precedence:
+// explicit flag > BASHY_PREFS JSON env > agent > tool > model band > bashy default.
+func ResolveReaderPrefsWithSources(opts ReaderPrefsOptions) (ReaderPrefs, ReaderPrefsSources, error) {
 	// Base layer: bashy default
 	res := BashyDefaultPrefs()
+	src := ReaderPrefsSources{
+		View:        SourceDefault,
+		Help:        SourceDefault,
+		Dialect:     SourceDefault,
+		BudgetBytes: SourceDefault,
+		Defaults:    make(map[string]map[string]string),
+		Extra:       make(map[string]string),
+	}
+
+	applyLayer := func(p ReaderPrefs, sourceName string) {
+		res = p.Merge(res)
+
+		if p.View != "" {
+			src.View = sourceName
+		}
+		if p.Help != "" {
+			src.Help = sourceName
+		}
+		if p.Dialect != "" {
+			src.Dialect = sourceName
+		}
+		if p.BudgetBytes > 0 {
+			src.BudgetBytes = sourceName
+		}
+		if len(p.Defaults) > 0 {
+			if src.Defaults == nil {
+				src.Defaults = make(map[string]map[string]string)
+			}
+			for pattern, pOpts := range p.Defaults {
+				if len(pOpts) == 0 {
+					continue
+				}
+				if src.Defaults[pattern] == nil {
+					src.Defaults[pattern] = make(map[string]string)
+				}
+				for k := range pOpts {
+					src.Defaults[pattern][k] = sourceName
+				}
+			}
+		}
+		if len(p.Extra) > 0 {
+			if src.Extra == nil {
+				src.Extra = make(map[string]string)
+			}
+			for k := range p.Extra {
+				src.Extra[k] = sourceName
+			}
+		}
+	}
 
 	// Band layer:
 	band := opts.Band
@@ -305,37 +510,44 @@ func ResolveReaderPrefsWithOptions(opts ReaderPrefsOptions) (ReaderPrefs, error)
 		band = opts.Model.Band
 	}
 	if band > 0 {
-		res = BandDefaultPrefs(band).Merge(res)
+		applyLayer(BandDefaultPrefs(band), SourceBand)
 	}
 	if opts.Model != nil && !opts.Model.Prefs.IsEmpty() {
-		res = opts.Model.Prefs.Merge(res)
+		applyLayer(opts.Model.Prefs, SourceModel)
 	}
 
 	// Tool layer:
 	if opts.Tool != nil && !opts.Tool.Prefs.IsEmpty() {
-		res = opts.Tool.Prefs.Merge(res)
+		applyLayer(opts.Tool.Prefs, SourceTool)
 	}
 
 	// Agent layer:
 	if opts.Agent != nil && !opts.Agent.Prefs.IsEmpty() {
-		res = opts.Agent.Prefs.Merge(res)
+		applyLayer(opts.Agent.Prefs, SourceAgent)
 	}
 
 	// Env layer (BASHY_PREFS JSON):
 	if strings.TrimSpace(opts.EnvJSON) != "" {
 		envPrefs, err := ParseReaderPrefsJSON(opts.EnvJSON)
 		if err != nil {
-			return ReaderPrefs{}, err
+			return ReaderPrefs{}, ReaderPrefsSources{}, err
 		}
-		res = envPrefs.Merge(res)
+		applyLayer(envPrefs, SourceEnv)
 	}
 
 	// Explicit flag layer:
 	if !opts.Explicit.IsEmpty() {
-		res = opts.Explicit.Merge(res)
+		applyLayer(opts.Explicit, SourceExplicit)
 	}
 
-	return res, nil
+	return res, src, nil
+}
+
+// ResolveReaderPrefsWithOptions resolves the effective ReaderPrefs using the precedence order:
+// explicit flag > BASHY_PREFS JSON env > agent > tool > band > bashy default.
+func ResolveReaderPrefsWithOptions(opts ReaderPrefsOptions) (ReaderPrefs, error) {
+	prefs, _, err := ResolveReaderPrefsWithSources(opts)
+	return prefs, err
 }
 
 // ResolveReaderPrefs is the pure resolver function with precedence:
@@ -353,4 +565,26 @@ func ResolveReaderPrefs(explicit ReaderPrefs, envJSON string, agent *Agent, tool
 // ResolveReaderPrefsFromEnv resolves reader preferences, reading BASHY_PREFS from os.Getenv.
 func ResolveReaderPrefsFromEnv(explicit ReaderPrefs, agent *Agent, tool *Tool, band int) (ReaderPrefs, error) {
 	return ResolveReaderPrefs(explicit, os.Getenv(EnvBashyPrefs), agent, tool, band)
+}
+
+// ResolveReaderPrefsWithSourcesFromArgs resolves reader preferences with sources from positional arguments.
+func ResolveReaderPrefsWithSourcesFromArgs(explicit ReaderPrefs, envJSON string, agent *Agent, tool *Tool, band int) (ReaderPrefs, ReaderPrefsSources, error) {
+	return ResolveReaderPrefsWithSources(ReaderPrefsOptions{
+		Explicit: explicit,
+		EnvJSON:  envJSON,
+		Agent:    agent,
+		Tool:     tool,
+		Band:     band,
+	})
+}
+
+// ResolveReaderPrefsWithSourcesFromEnv resolves reader preferences with sources, reading BASHY_PREFS from os.Getenv.
+func ResolveReaderPrefsWithSourcesFromEnv(explicit ReaderPrefs, agent *Agent, tool *Tool, band int) (ReaderPrefs, ReaderPrefsSources, error) {
+	return ResolveReaderPrefsWithSources(ReaderPrefsOptions{
+		Explicit: explicit,
+		EnvJSON:  os.Getenv(EnvBashyPrefs),
+		Agent:    agent,
+		Tool:     tool,
+		Band:     band,
+	})
 }
