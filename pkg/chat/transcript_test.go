@@ -15,27 +15,25 @@ import (
 const testSecretName = "TEST_TOKEN"
 const testSecretValue = "s3cr3t-value-long-enough"
 
-// transcriptStore points the root ladder at a tempdir and returns a registry
-// resolving over it. Hermetic: both the override and the relocated home land
-// inside the tempdir.
+// transcriptStore points the sessions root at a tempdir and returns a
+// registry resolving over it. Hermetic: nothing touches ~/.bashy.
 func transcriptStore(t *testing.T) (string, *ref.Registry) {
 	t.Helper()
-	home := t.TempDir()
-	root := filepath.Join(home, "sessions", "transcripts")
-	t.Setenv("BASHY_HOME", home)
-	t.Setenv("BASHY_CHAT_TRANSCRIPTS", "")
+	root := t.TempDir()
 	t.Setenv("BASHY_CHAT_RETENTION", "")
 	g := ref.NewRegistry()
-	RegisterRefs(g, "")
+	RegisterRefs(g, root)
 	return root, g
 }
 
+// writeTranscript lands body where sessionLog writes the live capture:
+// <root>/logs/<shortHash(id)>.log.
 func writeTranscript(t *testing.T, root, id, body string) string {
 	t.Helper()
-	if err := os.MkdirAll(root, 0o700); err != nil {
+	path := filepath.Join(root, "logs", shortHash(id)+".log")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(root, id+".md")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -61,8 +59,8 @@ func TestRefChatFound(t *testing.T) {
 	if n.Kind != ref.Chat || n.Ref != "chat:elif" || n.ID != "elif" {
 		t.Errorf("identity = %+v", n)
 	}
-	if n.Status != "transcript" || !strings.HasSuffix(n.Where, filepath.Join("transcripts", "elif.md")) {
-		t.Errorf("node = %+v, want status transcript and the transcript path", n)
+	if n.Status != "transcript" || !strings.HasSuffix(n.Where, filepath.Join("logs", shortHash("elif")+".log")) {
+		t.Errorf("node = %+v, want status transcript and the session capture path", n)
 	}
 	if n.Open != "bashy kb show chat:elif" {
 		t.Errorf("Open = %q", n.Open)
@@ -78,7 +76,7 @@ func TestRefChatFound(t *testing.T) {
 
 func TestRefChatNotFound(t *testing.T) {
 	root, g := transcriptStore(t)
-	if err := os.MkdirAll(root, 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, "logs"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := g.Resolve("chat:ghost"); !errors.Is(err, ref.ErrNotFound) {
@@ -86,6 +84,20 @@ func TestRefChatNotFound(t *testing.T) {
 	}
 	if _, err := ReadTranscript(root, "ghost", nil); !errors.Is(err, ref.ErrNotFound) {
 		t.Errorf("absent read err = %v, want ErrNotFound", err)
+	}
+	// A read over a store that was never created still reads not-found and
+	// creates nothing.
+	missing := filepath.Join(t.TempDir(), "no-such-sessions")
+	gMissing := ref.NewRegistry()
+	RegisterRefs(gMissing, missing)
+	if _, err := gMissing.Resolve("chat:ghost"); !errors.Is(err, ref.ErrNotFound) {
+		t.Errorf("missing-store resolve err = %v, want ErrNotFound", err)
+	}
+	if _, err := ReadTranscript(missing, "ghost", nil); !errors.Is(err, ref.ErrNotFound) {
+		t.Errorf("missing-store read err = %v, want ErrNotFound", err)
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Errorf("read created %s, want no directories on read", missing)
 	}
 	// An id that cannot name a file in the store is absent, never an escape.
 	for _, id := range []string{"../escape", "a/b", ""} {
@@ -95,6 +107,20 @@ func TestRefChatNotFound(t *testing.T) {
 		if _, err := ReadTranscript(root, id, nil); !errors.Is(err, ref.ErrNotFound) {
 			t.Errorf("ReadTranscript(%q) err = %v, want ErrNotFound", id, err)
 		}
+	}
+}
+
+func TestRefChatDefaultRootCreatesNothing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BASHY_CHAT_RETENTION", "")
+	// The "" root resolves through SessionsRoot (a fake ~/.bashy here) and
+	// still reads not-found without creating anything.
+	if _, err := ReadTranscript("", "ghost", nil); !errors.Is(err, ref.ErrNotFound) {
+		t.Errorf("default-root read err = %v, want ErrNotFound", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".bashy")); !os.IsNotExist(err) {
+		t.Errorf("default-root read created ~/.bashy, want no directories on read")
 	}
 }
 

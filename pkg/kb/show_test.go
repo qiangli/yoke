@@ -5,6 +5,8 @@ package kb_test
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -73,7 +75,7 @@ func newShowWorld(t *testing.T) *showWorld {
 	w.outDigest = digest
 
 	w.chatRoot = t.TempDir()
-	writeShowFile(t, filepath.Join(w.chatRoot, "elif.md"), "# elif\n\na working session\n")
+	writeShowFile(t, showChatLog(w.chatRoot, "elif"), "# elif\n\na working session\n")
 
 	w.redactor = secrets.NewRedactor()
 	if err := w.redactor.Register("SHOW_TOKEN", showSecretValue); err != nil {
@@ -160,6 +162,14 @@ func showJournalFor(dir, episode string) []string {
 		}
 	}
 	return out
+}
+
+// showChatLog names the capture file the session layer writes for id:
+// <root>/logs/<shortHash(id)>.log (pkg/chat sessionLog). Mirrored here so
+// the fixture lands where the real writer puts it.
+func showChatLog(root, id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return filepath.Join(root, "logs", hex.EncodeToString(sum[:])[:12]+".log")
 }
 
 func writeShowPage(t *testing.T, dir string, p *kb.Page) {
@@ -454,7 +464,7 @@ func TestShowChatNotFound(t *testing.T) {
 
 func TestShowChatRedacted(t *testing.T) {
 	w := newShowWorld(t)
-	writeShowFile(t, filepath.Join(w.chatRoot, "quiet.md"), showSecretValue)
+	writeShowFile(t, showChatLog(w.chatRoot, "quiet"), showSecretValue)
 	stdout, stderr, err := runShow(t, w.kbDir, "chat:quiet")
 	if err != nil {
 		t.Fatalf("a fully-withheld transcript exits 0: %v (%s)", err, stderr)
@@ -479,7 +489,7 @@ func TestShowChatRedacted(t *testing.T) {
 	}
 
 	// Partial masking stays found, with the spans listed.
-	writeShowFile(t, filepath.Join(w.chatRoot, "half.md"), "hello\ntoken "+showSecretValue+"\nbye\n")
+	writeShowFile(t, showChatLog(w.chatRoot, "half"), "hello\ntoken "+showSecretValue+"\nbye\n")
 	stdout, _, err = runShow(t, w.kbDir, "chat:half", "--json")
 	if err != nil {
 		t.Fatalf("partially-masked exits 0: %v", err)
@@ -495,7 +505,7 @@ func TestShowChatRedacted(t *testing.T) {
 
 func TestShowChatExpired(t *testing.T) {
 	w := newShowWorld(t)
-	path := filepath.Join(w.chatRoot, "old.md")
+	path := showChatLog(w.chatRoot, "old")
 	writeShowFile(t, path, "an old session\n")
 	old := time.Now().Add(-8 * 24 * time.Hour)
 	if err := os.Chtimes(path, old, old); err != nil {

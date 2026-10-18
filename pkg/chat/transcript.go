@@ -14,15 +14,15 @@ import (
 	"github.com/qiangli/yoke/pkg/secrets"
 )
 
-// This file owns the chat: ref kind (Sprint 284 M1): the session transcript
-// store behind `kb show chat:<id>`.
+// This file owns the chat: ref kind (Sprint 284 M1): the session capture
+// behind `kb show chat:<id>`.
 //
-// A transcript is the recorded session text at
-// `<TranscriptRoot>/<session-id>.md`, written by the session layer and read
-// here through the existing secret gate before anyone else sees it. Showing
-// renders through this reader; nothing is copied into any kb ring. The
-// embedding shell (bashy) wires RegisterRefs into its registry; kb show
-// renders through ReadTranscript.
+// A transcript IS the live session capture at
+// `<SessionsRoot()>/logs/<shortHash(session-id)>.log`, written by sessionLog
+// in sessions.go and read here through the existing secret gate before anyone
+// else sees it. Showing renders through this reader; nothing is copied into
+// any kb ring. The embedding shell (bashy) wires RegisterRefs into its
+// registry; kb show renders through ReadTranscript.
 
 // DefaultTranscriptRetention mirrors the room timeline default: a transcript
 // older than this reads `expired`, never a current fact. A session id the
@@ -38,25 +38,6 @@ func TranscriptRetention() time.Duration {
 		}
 	}
 	return DefaultTranscriptRetention
-}
-
-// TranscriptRoot resolves the transcript store:
-//
-//	$BASHY_CHAT_TRANSCRIPTS  the specific override, most precise
-//	$BASHY_HOME/sessions/transcripts  the whole bashy home relocated
-//	~/.bashy/sessions/transcripts     the default
-func TranscriptRoot() string {
-	if d := strings.TrimSpace(os.Getenv("BASHY_CHAT_TRANSCRIPTS")); d != "" {
-		return d
-	}
-	if h := strings.TrimSpace(os.Getenv("BASHY_HOME")); h != "" {
-		return filepath.Join(h, "sessions", "transcripts")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil || strings.TrimSpace(home) == "" {
-		return filepath.Join(os.TempDir(), "bashy-sessions-transcripts")
-	}
-	return filepath.Join(home, ".bashy", "sessions", "transcripts")
 }
 
 // ErrTranscriptExpired marks a transcript the store holds but retention has
@@ -76,18 +57,23 @@ type Transcript struct {
 	Withheld bool
 }
 
-// transcriptPath maps a session id onto its transcript file. An id that
-// cannot name a file inside the store (empty, traversal) is definitionally
-// absent from it.
-func transcriptPath(root, id string, allowDefault bool) (string, error) {
-	if allowDefault && strings.TrimSpace(root) == "" {
-		root = TranscriptRoot()
+// transcriptPath maps a session id onto its capture file: the writer's own
+// `<root>/logs/<shortHash(id)>.log`, where root "" resolves through
+// SessionsRoot. Resolution creates nothing. An id that cannot name a file
+// inside the store (empty, traversal) is definitionally absent from it.
+func transcriptPath(root, id string) (string, error) {
+	if strings.TrimSpace(root) == "" {
+		var err error
+		root, err = SessionsRoot()
+		if err != nil {
+			return "", err
+		}
 	}
 	safe := transcriptSafeName(strings.TrimSpace(id))
 	if safe == "" {
 		return "", fmt.Errorf("chat: transcript %q: %w", id, ref.ErrNotFound)
 	}
-	return filepath.Join(root, safe+".md"), nil
+	return filepath.Join(root, "logs", shortHash(safe)+".log"), nil
 }
 
 // transcriptSafeName flattens a session id into a single path component so a
@@ -103,11 +89,12 @@ func transcriptSafeName(id string) string {
 }
 
 // ReadTranscript renders one session transcript through the secret gate. root
-// "" resolves through TranscriptRoot; r nil behaves as an empty redactor (no
-// values to mask). A never-held id is ref.ErrNotFound; a past-retention id is
-// ErrTranscriptExpired; an unreadable store is its own error.
+// "" resolves through SessionsRoot and creates nothing; r nil behaves as an
+// empty redactor (no values to mask). A never-held id is ref.ErrNotFound; a
+// past-retention id is ErrTranscriptExpired; an unreadable store is its own
+// error.
 func ReadTranscript(root, id string, r *secrets.Redactor) (Transcript, error) {
-	path, err := transcriptPath(root, id, true)
+	path, err := transcriptPath(root, id)
 	if err != nil {
 		return Transcript{}, err
 	}
@@ -177,10 +164,10 @@ func redactedSpans(redacted []byte) []string {
 }
 
 // RegisterRefs installs the chat-session resolver into the uniform-ref
-// registry, over the transcript store at root ("" resolves through
-// TranscriptRoot — the same ladder every reader uses). The id is the chat
-// session id. A past-retention id still resolves here: the node names the
-// record, and the read reports it expired.
+// registry, over the sessions root at root ("" resolves through SessionsRoot
+// — the same root the session layer writes under — and creates nothing). The
+// id is the chat session id. A past-retention id still resolves here: the
+// node names the record, and the read reports it expired.
 func RegisterRefs(g *ref.Registry, root string) {
 	g.Register(ref.Chat, ref.ResolverFunc(func(id string) (ref.Node, error) {
 		return resolveChat(root, id)
@@ -188,7 +175,7 @@ func RegisterRefs(g *ref.Registry, root string) {
 }
 
 func resolveChat(root, id string) (ref.Node, error) {
-	path, err := transcriptPath(root, id, true)
+	path, err := transcriptPath(root, id)
 	if err != nil {
 		return ref.Node{}, err
 	}
