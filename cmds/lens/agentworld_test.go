@@ -67,9 +67,12 @@ func TestAgentWorldPullNotFound(t *testing.T) {
 	}
 }
 
-func TestAgentWorldStoryReportsSeam(t *testing.T) {
+func TestAgentWorldStoryMissingResolver(t *testing.T) {
+	old, oldStory := AgentWorldRefs, StoryResolver
+	AgentWorldRefs, StoryResolver = ref.NewRegistry(), nil
+	t.Cleanup(func() { AgentWorldRefs, StoryResolver = old, oldStory })
 	out, errb, code := runTool(t, t.TempDir(), "", "-t", "listing", "story:abc")
-	if code == 0 || out != "" || !strings.Contains(errb, "not a ref kind") {
+	if code == 0 || out != "" || !strings.Contains(errb, "no resolver") {
 		t.Fatalf("code=%d out=%q err=%q", code, out, errb)
 	}
 }

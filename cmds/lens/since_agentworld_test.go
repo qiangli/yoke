@@ -61,6 +61,8 @@ func withDelta(t *testing.T, scheme string, src DeltaSource) {
 }
 
 func TestAgentWorldSinceUnregistered(t *testing.T) {
+	old := deltaSources["kb"]
+	t.Cleanup(func() { deltaSources["kb"] = old })
 	delete(deltaSources, "kb")
 	out, stderr, code := runTool(t, t.TempDir(), "", "--since=start", "-t", "jsonl", "kb:page")
 	if code == 0 || out != "" || !strings.Contains(stderr, `no delta source registered for provider "kb"`) {

@@ -14,15 +14,7 @@ import (
 // package adds no kinds, no parsing and no store reads of its own.
 var EntitySchemes = []string{"sprint", "run", "agent", "mb", "meet", "bus", "kb", "host"}
 
-// UnwiredSchemes are locator schemes with no ref kind behind them. Story and
-// claim parse as locators (ref.ParseLocator accepts them) but the closed ref
-// vocabulary (ref.Kinds) has no such kind, so no resolver can be registered
-// for them without changing that table. Providers for these schemes stay
-// registered so the address keeps one spelling, and every operation reports
-// the missing owning-store wiring instead of silently reinterpreting the
-// address. This is the S15 seam: wiring story/claim to their owning stores
-// (or admitting them as ref kinds) is an operator decision for the joint
-// review, not a provider-local change.
+// UnwiredSchemes require an explicit Resolver instead of a ref.Registry kind.
 var UnwiredSchemes = []string{"story", "claim"}
 
 // AgentWorldSchemes is the full locator-scheme set cmds/lens registers: the
@@ -39,6 +31,8 @@ var AgentWorldSchemes = []string{
 type Entity struct {
 	Reg    *ref.Registry
 	Scheme string
+	// Resolver overrides registry dispatch, including locator-only story/claim.
+	Resolver ref.Resolver
 }
 
 // NewEntity returns the provider for scheme reading through reg.
@@ -61,7 +55,7 @@ func (e *Entity) check(loc ref.Locator) error {
 	if loc.ScopeKind != "" {
 		return fmt.Errorf("provider: %s: location scopes are not supported for records yet: %w", loc.Scheme, ErrUnsupported)
 	}
-	if !ref.Known(ref.Kind(e.Scheme)) {
+	if e.Resolver == nil && !ref.Known(ref.Kind(e.Scheme)) {
 		return fmt.Errorf("provider: scheme %q is a locator scheme, not a ref kind: no owning-store resolver is wired (the closed ref vocabulary is unchanged): %w", e.Scheme, ErrUnsupported)
 	}
 	if loc.Target == "" {
@@ -79,8 +73,11 @@ func (e *Entity) resolve(loc ref.Locator) (ref.Node, error) {
 	if err := e.check(loc); err != nil {
 		return ref.Node{}, err
 	}
-	res, ok := e.Reg.Lookup(ref.Kind(e.Scheme))
-	if !ok {
+	res := e.Resolver
+	if res == nil {
+		res, _ = e.Reg.Lookup(ref.Kind(e.Scheme))
+	}
+	if res == nil {
 		return ref.Node{}, fmt.Errorf("%w: %s", ref.ErrNoResolver, e.Scheme)
 	}
 	n, err := res.Resolve(loc.Target)

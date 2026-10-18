@@ -55,55 +55,10 @@ func (b *busDeltaSource) TranslateTime(ctx context.Context, loc ref.Locator, t t
 	if strings.TrimSpace(loc.Target) == "timeline" {
 		return "", fmt.Errorf("lens: bus: timeline target does not support time/duration in --since")
 	}
-	floor := room.ArchivedThrough()
-	reader := room.NewTimelineReader(nil)
-	pos, err := reader.Latest(ctx)
-	if err != nil {
-		return "", err
-	}
-	head := pos.Seq
-	if head < floor {
-		head = floor
-	}
-
-	events, err := room.Timeline(0)
-	if err != nil {
-		return "", err
-	}
-	if len(events) == 0 {
-		return strconv.FormatInt(head, 10), nil
-	}
-
-	firstLive := events[0]
-	firstLiveTime, err := parseEventTS(firstLive.TS)
-	if err == nil && firstLiveTime.After(t) && floor > 0 {
-		return "", ErrDeltaExpired
-	}
-
-	var after int64 = -1
-	for _, e := range events {
-		evTime, err := parseEventTS(e.TS)
-		if err != nil {
-			continue
-		}
-		if evTime.After(t) || evTime.Equal(t) {
-			after = e.Seq - 1
-			break
-		}
-	}
-
-	if after < 0 {
-		return strconv.FormatInt(head, 10), nil
-	}
-
-	if after < floor {
-		if floor > 0 {
-			return "", ErrDeltaExpired
-		}
-		after = 0
-	}
-
-	return strconv.FormatInt(after, 10), nil
+	// A sequence boundary cannot represent a time predicate: producers can
+	// supply timestamps out of order. Carry the cutoff into Delta and filter
+	// authoritative event timestamps there.
+	return "time:" + t.UTC().Format(time.RFC3339Nano), nil
 }
 
 func parseEventTS(ts string) (time.Time, error) {
@@ -171,6 +126,20 @@ func (b *busDeltaSource) Delta(ctx context.Context, loc ref.Locator, token strin
 
 	var after int64
 	var explicit bool
+	var cutoff time.Time
+	timeQuery := strings.HasPrefix(token, "time:")
+	if timeQuery {
+		cutoff, err = parseEventTS(strings.TrimPrefix(token, "time:"))
+		if err != nil {
+			return nil, "", "", err
+		}
+		// Archived timestamps are unavailable; we cannot prove a complete answer.
+		if floor > 0 {
+			return nil, "", "", ErrDeltaExpired
+		}
+		token = ""
+		explicit = true
+	}
 	if token != "" {
 		after, err = parseResumeToken(token)
 		if err != nil {
@@ -202,12 +171,23 @@ func (b *busDeltaSource) Delta(ctx context.Context, loc ref.Locator, token strin
 		After:    after,
 		Explicit: explicit,
 		Follow:   false,
-		Match:    matchFn,
 	}
 
 	err = room.Stream(ctx, opt, func(it room.StreamItem) error {
 		if it.Resync != nil {
 			return ErrDeltaExpired
+		}
+		if timeQuery {
+			ts, err := parseEventTS(it.Event.TS)
+			if err != nil {
+				return err
+			}
+			if ts.Before(cutoff) {
+				return nil
+			}
+		}
+		if !matchFn(it.Event) {
+			return nil
 		}
 		wire, err := bus.EncodeStreamItem(it)
 		if err != nil {

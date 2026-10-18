@@ -461,3 +461,36 @@ func TestBusDeltaTimeRetentionExpiry(t *testing.T) {
 		t.Fatalf("expected retention expiration guidance: code=%d out=%q stderr=%q", code, out, stderr)
 	}
 }
+
+// Event time and append sequence are independent (e.g. a delayed producer).
+func TestBusDeltaOutOfOrderTime(t *testing.T) {
+	isolateRoom(t)
+	now := time.Now().UTC()
+	for _, age := range []time.Duration{5 * time.Minute, 30 * time.Minute, time.Minute} {
+		if err := room.Emit(room.Event{Type: room.EventSprint, TS: now.Add(-age).Format(time.RFC3339Nano)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, stderr, code := runTool(t, t.TempDir(), "", "--since=10m", "-t", "jsonl", "bus:events")
+	if code != 0 {
+		t.Fatal(stderr)
+	}
+	data, cursor := deltaCursor(t, out)
+	lines := strings.Split(data, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("want two recent events: %s", data)
+	}
+	for i, seq := range []float64{1, 3} {
+		var row map[string]any
+		if err := json.Unmarshal([]byte(lines[i]), &row); err != nil || row["seq"] != seq {
+			t.Fatalf("row=%v err=%v", row, err)
+		}
+	}
+	out, stderr, code = runTool(t, t.TempDir(), "", "--since", cursor, "-t", "jsonl", "bus:events")
+	if code != 0 {
+		t.Fatal(stderr)
+	}
+	if data, _ := deltaCursor(t, out); data != "" {
+		t.Fatalf("replayed: %s", data)
+	}
+}

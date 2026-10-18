@@ -14,7 +14,7 @@ import (
 )
 
 func TestEntityDeltaRevisions(t *testing.T) {
-	for _, scheme := range []string{"story", "claim", "agent", "mb", "meet", "kb", "host"} {
+	for _, scheme := range []string{"sprint", "run", "story", "claim", "agent", "mb", "meet", "kb", "host"} {
 		t.Run(scheme, func(t *testing.T) {
 			oldRegistry, oldStory, oldClaim := AgentWorldRefs, StoryResolver, ClaimResolver
 			AgentWorldRefs = ref.NewRegistry()
@@ -35,6 +35,10 @@ func TestEntityDeltaRevisions(t *testing.T) {
 				return deltaCursor(t, out)
 			}
 			data, cursor := poll("start")
+			snapshot, stderr, code := runTool(t, dir, "", "-t", "listing", locator)
+			if code != 0 || strings.TrimSpace(snapshot) != data {
+				t.Fatalf("snapshot/delta mismatch: %s %s %s", snapshot, data, stderr)
+			}
 			if !strings.Contains(data, "Original title") {
 				t.Fatalf("initial data: %s", data)
 			}

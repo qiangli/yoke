@@ -15,7 +15,7 @@ import (
 )
 
 func init() {
-	for _, scheme := range []string{"agent", "mb", "meet", "kb", "host", "story", "claim"} {
+	for _, scheme := range []string{"sprint", "run", "agent", "mb", "meet", "kb", "host", "story", "claim"} {
 		if err := RegisterDeltaSource(scheme, &entityDeltaSource{scheme: scheme}); err != nil {
 			panic(err)
 		}
@@ -131,55 +131,15 @@ func (e *entityDeltaSource) Delta(ctx context.Context, loc ref.Locator, token st
 		return nil, "", "", fmt.Errorf("lens: %s: %w", loc.Scheme, ref.ErrEmptyID)
 	}
 
-	var rn ref.Node
-	var err error
-	if res, ok := lookupEntityResolver(loc.Scheme); ok {
-		rn, err = res.Resolve(target)
-	} else {
-		return nil, "", "", fmt.Errorf("%w: %s", ref.ErrNoResolver, loc.Scheme)
+	p := provider.NewEntity(AgentWorldRefs, e.scheme)
+	res, ok := lookupEntityResolver(e.scheme)
+	if !ok {
+		return nil, "", "", fmt.Errorf("%w: %s", ref.ErrNoResolver, e.scheme)
 	}
+	p.Resolver = res
+	node, err := p.Stat(ctx, loc)
 	if err != nil {
 		return nil, "", "", err
-	}
-
-	name := rn.Title
-	if name == "" {
-		name = rn.ID
-	}
-	kindStr := string(rn.Kind)
-	if kindStr == "" {
-		kindStr = loc.Scheme
-	}
-	attrs := map[string]any{"kind": kindStr, "id": rn.ID}
-	if rn.Title != "" {
-		attrs["title"] = rn.Title
-	}
-	if rn.Status != "" {
-		attrs["status"] = rn.Status
-	}
-	if rn.Where != "" {
-		attrs["where"] = rn.Where
-	}
-	if rn.Open != "" {
-		attrs["open"] = rn.Open
-	}
-	if rn.Successor != "" {
-		attrs["successor"] = rn.Successor
-	}
-	if rn.UID != "" {
-		attrs["uid"] = rn.UID
-	}
-	if rn.Seq != 0 {
-		attrs["seq"] = rn.Seq
-	}
-	node := provider.Node{
-		SchemaVersion: provider.NodeSchema,
-		Ref:           loc.String(),
-		Path:          loc.Target,
-		Name:          name,
-		Kind:          "record",
-		Type:          loc.Scheme,
-		Attrs:         attrs,
 	}
 
 	// A UID/Seq identifies an entity, not its revision. Hash the exact visible
