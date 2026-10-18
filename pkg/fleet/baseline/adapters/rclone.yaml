@@ -1,0 +1,5 @@
+kind: "adapter"
+name: "rclone"
+match: ["rclone"]
+preview_level: "unsupported"
+effects: ["fs.write", "fs.delete", "net.egress", "remote.write", "remote.delete", "proc.spawn"]

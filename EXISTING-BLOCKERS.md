@@ -1,21 +1,20 @@
 # Existing blockers — Sprint 457 / 83739c5261a3
 
-Partial candidate only; do not accept as full client admission.
-
-1. Registry owner: `external/registry.Entry.Ensure` returns a cached gcloud when
-   PATH lacks the SDK. Reproduce with `S457_AUDIT_HOST_ONLY=1 go test -short
-   -count=1 -v ./external/gcloud -run TestQualificationProbeCacheMustNotReplaceHostSDK`.
-   Registry is read-only for this worker; no fake executable is run by the probe.
-2. 446 owner/manager: supply the delivered adapt rows/engine and accepted shared
-   bounds, errors and bashy-cursor-v1 implementation. No private ABI added.
-3. Admission owner/manager: reviewed release/artifact pins, per-platform SHA-256,
-   dependency/SBOM/license/NOTICE and no-egress evidence remain absent. gh/rclone
-   latest defaults are not an admitted pin; passthrough is not per-mode enforcement.
-4. Explicit rclone artifact, test accounts/endpoints and native remote gates are
-   missing. No actual transfer, authenticated pagination, general redaction, CLI/MCP
-   parity or signed Ollama runtime support is claimed.
-
-Three serious investigation paths and all raw gates are recorded in
+Local/loopback scope is delivered; see
 [the candidate-linked evidence note](docs/sprint-457-83739c5261a3-evidence.md).
-Scoped fixes and passing fixtures are committed; manager must arrange the remote
-whole-package gate before push. No push, service startup or provisioning occurred.
+Remaining items are recorded, not faked:
+
+1. **Sprint 465 (operator decision 2026-10-17):** every check needing a real
+   account or backend — gh authenticated reads/scopes/pagination against
+   github.com or GHES, gcloud project/account calls, rclone remote backends
+   (listing, transfer, integrity, cleanup). Not attempted here.
+2. **Artifact SBOM/notices:** dependency lock, SBOM, vulnerability audit and
+   NOTICE inventory for gh, rclone, curl, gcloud and Ollama artifacts bashy does
+   not ship remain unverified. rclone's SHA256SUMS PGP signature is unverified.
+3. **Platform coverage:** only darwin/arm64 was executed. gh/rclone pins for the
+   other five platforms are committed but not exercised natively.
+4. **446 shared seams:** `--since`/bashy-cursor-v1 binding (S19) and typed
+   provider error mapping remain owned by 446; no private cursor or error ABI was
+   added, so no CLI/MCP typed-result parity is claimed.
+
+No push, service startup or upstream Ollama provisioning occurred.

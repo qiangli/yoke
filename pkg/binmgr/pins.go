@@ -226,6 +226,26 @@ var pinnedDigests = map[string]string{
 	"grype@v0.120.1/linux/arm64":   "29f47391dc283aa79fcc38e65224cd61f64dec0ecfd0db7074128ebf8ff23514",
 	"grype@v0.120.1/windows/amd64": "32e3c811f31822d17592908bafdc6288aaaca3d52583c479167a8dc8399ed65d",
 
+	// gh@v2.102.0 — reviewed cli/cli stable release (2026-09-30). Each archive
+	// digest matched two ways: the release's gh_2.102.0_checksums.txt and
+	// GitHub's published asset digest (Sprint 457 story 83739c5261a3).
+	"gh@v2.102.0/darwin/amd64":  "b245f24eb2bf5f75b426b4c26da3651a107f8d5b6f4fddfbfccc5679041378b3",
+	"gh@v2.102.0/darwin/arm64":  "da922c20d1792e5b2cbf375593d7a658acf034c12c84e007e71c76ef959c337e",
+	"gh@v2.102.0/linux/amd64":   "bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386",
+	"gh@v2.102.0/linux/arm64":   "7862c86c72f43df3a2d93ddde6f473285b4e2af61b494849846827e513ef6484",
+	"gh@v2.102.0/windows/amd64": "ae64e556ecc240b200f7eba60d550e4bb60d78e860e69dd88c449405b86067f4",
+	"gh@v2.102.0/windows/arm64": "5dcf12aa8525eabd0c46ec414f323ab6cf65229fc2cd46543cc705001bbaf223",
+
+	// rclone@v1.75.2 — reviewed rclone/rclone stable release (2026-10-09). Each
+	// archive digest matched two ways: the release's SHA256SUMS and GitHub's
+	// published asset digest (Sprint 457 story 83739c5261a3).
+	"rclone@v1.75.2/darwin/amd64":  "574e1f31cf1c464e5fb0325cb66fcbdeaf1efa1802bd9b17f13c256fd74b6561",
+	"rclone@v1.75.2/darwin/arm64":  "610ab7d48615135dfc60b763858b11a426a0d3d1160c1bb76fb0ae6011b02edd",
+	"rclone@v1.75.2/linux/amd64":   "349ac8fba6ff65d6247043f1750cdcb518ec5d500ef91463a10d37c0ccdf3702",
+	"rclone@v1.75.2/linux/arm64":   "7e1e8d69654941b7b7df84ee74c5f7fb09cce7d5496947fb7bf16b55ff427d10",
+	"rclone@v1.75.2/windows/amd64": "8a9db2bad1dc79a65b3348fd857069598e2aab7cf4d118b77b1df23055aff818",
+	"rclone@v1.75.2/windows/arm64": "7eb9844c9e5b723b9ef28821891caa17f6d9d1a375c49365cbe04114cec8dcd9",
+
 	// No ollama pins, by design: per docs/bashy-service-supply-chain-policy.md
 	// (Sprint 436, story 8d1e72e5dff6) bashy never downloads or execs a
 	// third-party ollama release archive — the bashy-signed embedded runner

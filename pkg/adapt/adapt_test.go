@@ -48,6 +48,20 @@ func TestCuratedMappings(t *testing.T) {
 		{[]string{"apt", "install", "jq"}, "no-input", nil, true},
 		{[]string{"git", "clean", "--", "file"}, "dry-run", nil, true},
 		{[]string{"git", "-C", "repo", "clean"}, "dry-run", nil, true},
+		// Sprint 457 qualified clients: provider-validated preview only where
+		// the client implements it; everything else refuses before execution.
+		{[]string{"rclone", "copy", "src", "dst"}, "dry-run", []string{"rclone", "copy", "src", "dst", "--dry-run"}, false},
+		{[]string{"rclone", "sync", "src", "dst"}, "dry-run", []string{"rclone", "sync", "src", "dst", "--dry-run"}, false},
+		{[]string{"rclone", "lsjson", "src"}, "json", []string{"rclone", "lsjson", "src"}, false},
+		{[]string{"rclone", "serve", "webdav", "src"}, "dry-run", nil, true},
+		{[]string{"rclone", "purge", "dst"}, "dry-run", nil, true},
+		{[]string{"gh", "api", "/repos/o/r"}, "json", []string{"gh", "api", "/repos/o/r"}, false},
+		{[]string{"gh", "api", "-X", "DELETE", "/repos/o/r"}, "dry-run", nil, true},
+		{[]string{"gh", "pr", "merge"}, "dry-run", nil, true},
+		{[]string{"curl", "-X", "POST", "http://127.0.0.1/"}, "dry-run", nil, true},
+		{[]string{"curl", "http://127.0.0.1/"}, "json", nil, true},
+		{[]string{"gcloud", "projects", "list"}, "json", []string{"gcloud", "projects", "list", "--format=json"}, false},
+		{[]string{"gcloud", "projects", "delete", "p"}, "dry-run", nil, true},
 	}
 	for _, tc := range cases {
 		t.Run(strings.Join(tc.argv, " ")+tc.option, func(t *testing.T) {

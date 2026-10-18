@@ -1,0 +1,6 @@
+kind: "adapter"
+name: "gh-api"
+match: ["gh", "api"]
+preview_level: "unsupported"
+effects: ["net.egress", "remote.write", "remote.delete", "proc.spawn"]
+json: []

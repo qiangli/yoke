@@ -17,8 +17,10 @@ import (
 	"github.com/qiangli/yoke/pkg/binmgr"
 )
 
-// DefaultVersion pins the rclone release. "" / "latest" resolves the newest.
-const DefaultVersion = "latest"
+// DefaultVersion is the reviewed rclone release; its per-platform archive
+// digests are committed in pkg/binmgr/pins.go. "" selects it; "latest" or any
+// unpinned version is refused rather than resolved.
+const DefaultVersion = "v1.75.2"
 
 // Spec is the binmgr GitHub spec. rclone ships per-platform .zip archives whose
 // binary is nested (rclone-<ver>-<plat>/rclone, matched by basename) and uses
@@ -46,8 +48,13 @@ func assetMatch(name, goos, goarch string) bool {
 
 // Path resolves + caches the rclone binary, returning its path (used by
 // pkg/mirror to drive `rclone sync`, and by Run).
+// It fails closed, before any network, when the version has no committed pin.
 func Path(ctx context.Context, version string) (string, error) {
-	tool, err := binmgr.ResolveGitHub(ctx, Spec(version))
+	spec := Spec(version)
+	if _, ok := binmgr.PinnedSHA256(spec.Name, spec.Version, binmgr.Platform()); !ok {
+		return "", fmt.Errorf("rclone: %s has no committed sha256 pin for %s — refusing unverified download (reviewed: %s)", spec.Version, binmgr.Platform(), DefaultVersion)
+	}
+	tool, err := binmgr.ResolveGitHub(ctx, spec)
 	if err != nil {
 		return "", fmt.Errorf("rclone: resolve: %w", err)
 	}

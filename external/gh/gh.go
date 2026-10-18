@@ -22,8 +22,10 @@ import (
 	"github.com/qiangli/yoke/pkg/binmgr"
 )
 
-// DefaultVersion resolves the newest release; pin via $GH_VERSION / --version.
-const DefaultVersion = "latest"
+// DefaultVersion is the reviewed cli/cli release; its per-platform archive
+// digests are committed in pkg/binmgr/pins.go. $GH_VERSION selects another
+// release only if it is pinned there too — "latest" is never resolved.
+const DefaultVersion = "v2.102.0"
 
 // Spec is the binmgr GitHub spec. cli/cli ships per-platform archives
 // (gh_<ver>_linux_amd64.tar.gz, gh_<ver>_macOS_arm64.zip, gh_<ver>_windows_amd64.zip)
@@ -53,9 +55,14 @@ func assetMatch(name, goos, goarch string) bool {
 		(strings.HasSuffix(n, suffix+".tar.gz") || strings.HasSuffix(n, suffix+".zip"))
 }
 
-// Ensure fetches (if needed) the gh binary and returns its cached path.
+// Ensure fetches (if needed) the gh binary and returns its cached path. It
+// fails closed, before any network, when the version has no committed pin.
 func Ensure(ctx context.Context, version string) (string, error) {
-	tool, err := binmgr.ResolveGitHub(ctx, Spec(version))
+	spec := Spec(version)
+	if _, ok := binmgr.PinnedSHA256(spec.Name, spec.Version, binmgr.Platform()); !ok {
+		return "", fmt.Errorf("gh: %s has no committed sha256 pin for %s — refusing unverified download (reviewed: %s)", spec.Version, binmgr.Platform(), DefaultVersion)
+	}
+	tool, err := binmgr.ResolveGitHub(ctx, spec)
 	if err != nil {
 		return "", fmt.Errorf("gh: resolve: %w", err)
 	}
@@ -66,13 +73,13 @@ func Ensure(ctx context.Context, version string) (string, error) {
 func ChildEnv(env []string) []string { return notrack.Env(env) }
 
 // NewGhCmd is the `bashy gh` front-door: a transparent passthrough to the managed
-// GitHub CLI. $GH_VERSION pins the release; all args pass through to gh.
+// GitHub CLI. $GH_VERSION selects a pinned release; all args pass through to gh.
 func NewGhCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "gh",
 		Short: "Run the GitHub CLI (cli/cli) as a managed external binary",
 		Long: `gh runs the GitHub CLI — downloaded, sha256-verified, and cached by binmgr
-(not compiled in). All args pass through to gh ($GH_VERSION pins the release).
+(not compiled in). All args pass through to gh ($GH_VERSION selects a pinned release).
 With bashy act + go + git it closes the CI/CD loop without any system tooling.`,
 		DisableFlagParsing: true,
 		SilenceUsage:       true,

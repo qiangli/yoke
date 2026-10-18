@@ -1,0 +1,6 @@
+kind: "adapter"
+name: "gcloud"
+match: ["gcloud"]
+preview_level: "unsupported"
+effects: ["net.egress", "remote.write", "remote.delete", "proc.spawn"]
+json: ["--format=json"]

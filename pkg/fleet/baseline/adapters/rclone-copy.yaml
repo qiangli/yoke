@@ -1,0 +1,6 @@
+kind: "adapter"
+name: "rclone-copy"
+match: ["rclone", "copy"]
+preview_level: "provider-validated-preview"
+effects: ["fs.write", "net.egress", "remote.write", "proc.spawn"]
+dry_run: ["--dry-run"]

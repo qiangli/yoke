@@ -1,0 +1,6 @@
+kind: "adapter"
+name: "rclone-lsjson"
+match: ["rclone", "lsjson"]
+preview_level: "unsupported"
+effects: ["net.egress", "proc.spawn"]
+json: []

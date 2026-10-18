@@ -69,12 +69,14 @@ func (e Entry) Ensure(ctx context.Context) (string, error) {
 		// PreferHost: the vendor install + its own self-update is the trusted path
 		// (bashy must not TOFU-download a large unsigned SDK), so a host copy wins
 		// over any managed one when no version is pinned.
+		// A host-first tool never falls back to an unpinned cached copy: its
+		// cache carries no committed digest, so a missing host install goes to
+		// Resolve (and its actionable diagnostic), not an unverified binary.
 		if e.PreferHost {
 			if p, err := exec.LookPath(e.Name); err == nil {
 				return p, nil
 			}
-		}
-		if p := binmgr.CachedBinary(e.Name); p != "" {
+		} else if p := binmgr.CachedBinary(e.Name); p != "" {
 			return p, nil
 		}
 	}

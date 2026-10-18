@@ -1,6 +1,12 @@
 package gh
 
-import "testing"
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/qiangli/yoke/pkg/binmgr"
+)
 
 func TestSpec(t *testing.T) {
 	s := Spec("")
@@ -35,6 +41,25 @@ func TestAssetMatch(t *testing.T) {
 	for _, c := range cases {
 		if got := assetMatch(c.name, c.goos, c.goarch); got != c.want {
 			t.Errorf("assetMatch(%q,%s,%s)=%v want %v", c.name, c.goos, c.goarch, got, c.want)
+		}
+	}
+}
+
+// The default is a reviewed release with a committed digest on every shipped
+// platform; "latest" and unpinned versions are refused before any network.
+func TestDefaultVersionPinnedAndUnpinnedRefused(t *testing.T) {
+	if DefaultVersion == "latest" || DefaultVersion == "" {
+		t.Fatalf("DefaultVersion %q is not a reviewed pin", DefaultVersion)
+	}
+	for _, p := range []string{"darwin/amd64", "darwin/arm64", "linux/amd64", "linux/arm64", "windows/amd64", "windows/arm64"} {
+		if sha, ok := binmgr.PinnedSHA256("gh", DefaultVersion, p); !ok || len(sha) != 64 {
+			t.Errorf("gh %s has no committed pin for %s", DefaultVersion, p)
+		}
+	}
+	t.Setenv("BASHY_BIN_CACHE", t.TempDir())
+	for _, v := range []string{"latest", "v0.0.1-unreviewed"} {
+		if _, err := Ensure(context.Background(), v); err == nil || !strings.Contains(err.Error(), "no committed sha256 pin") {
+			t.Errorf("Ensure(%q) = %v, want fail-closed pin refusal", v, err)
 		}
 	}
 }

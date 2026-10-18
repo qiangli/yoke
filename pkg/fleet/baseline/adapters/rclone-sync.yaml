@@ -1,0 +1,6 @@
+kind: "adapter"
+name: "rclone-sync"
+match: ["rclone", "sync"]
+preview_level: "provider-validated-preview"
+effects: ["fs.write", "fs.delete", "net.egress", "remote.write", "remote.delete", "proc.spawn"]
+dry_run: ["--dry-run"]

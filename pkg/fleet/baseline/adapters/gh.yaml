@@ -1,0 +1,5 @@
+kind: "adapter"
+name: "gh"
+match: ["gh"]
+preview_level: "unsupported"
+effects: ["net.egress", "remote.write", "remote.delete", "proc.spawn"]

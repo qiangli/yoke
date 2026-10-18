@@ -1,0 +1,5 @@
+kind: "adapter"
+name: "curl"
+match: ["curl"]
+preview_level: "unsupported"
+effects: ["net.egress", "fs.write", "remote.write", "proc.spawn"]
