@@ -1,0 +1,21 @@
+{
+  "argv": [
+    "/tmp/s446-run513-bin/native-gate",
+    "-test.run=^TestS446Economics$",
+    "-test.v"
+  ],
+  "env": {
+    "HOME": "/tmp/s446-run513-native/home",
+    "USERPROFILE": "/tmp/s446-run513-native/home",
+    "PATH": "/usr/bin:/bin:/opt/homebrew/bin",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "TERM": "dumb",
+    "S446_SCRIPT_CHILD": "1",
+    "S446_SCRIPT_FAIL": "0",
+    "LENS_TEST_YOKE": "/tmp/s446-run513-native/runner",
+    "S446_RESPONSE": "/Users/qiangli/.bashy/weave/yoke-d9ca9236/workspaces/issue-513/docs/validation/s446-s22-run513/B/response.json",
+    "S446_EVIDENCE": "/Users/qiangli/.bashy/weave/yoke-d9ca9236/workspaces/issue-513/docs/validation/s446-s22-run513/B/native"
+  },
+  "exit_code": 0,
+  "elapsed_seconds": 3.699476792
+}

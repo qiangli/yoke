@@ -1,0 +1,1 @@
+printf 'assignment-proof\n'

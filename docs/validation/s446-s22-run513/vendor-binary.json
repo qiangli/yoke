@@ -1,0 +1,28 @@
+{
+  "path": "/Users/qiangli/.local/share/claude/versions/2.1.284",
+  "sha256": "50a14c2f50f56668380fdda490167f1d3630d5cc18fb8aed3073c2c7ea7314fe",
+  "argv": [
+    "/Users/qiangli/.local/share/claude/versions/2.1.284",
+    "-p",
+    "--max-turns",
+    "1",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--tools",
+    "",
+    "--model",
+    "claude-opus-5",
+    "--effort",
+    "low",
+    "--setting-sources",
+    "",
+    "--strict-mcp-config",
+    "--mcp-config",
+    "{\"mcpServers\":{}}",
+    "--disable-slash-commands",
+    "--no-session-persistence",
+    "--system-prompt",
+    ""
+  ]
+}

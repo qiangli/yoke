@@ -1,0 +1,17 @@
+{
+  "schema": "lens-script-task-v1",
+  "artifact": {
+    "name": "9048ca5f4de9dd5f26b4cc78796706d7716f78dc70a868df71a896ab2080f05b.sh",
+    "digest": "sha256:9048ca5f4de9dd5f26b4cc78796706d7716f78dc70a868df71a896ab2080f05b",
+    "path": "",
+    "script": "cHJpbnRmICdhc3NpZ25tZW50LXByb29mXG4nCg=="
+  },
+  "caps": [
+    "read-only"
+  ],
+  "effects": [
+    "pure"
+  ],
+  "help": "script",
+  "no_input": true
+}

@@ -1,0 +1,3 @@
+  ── continuity (resume brief) ──
+  15:00 PDT: 21/27 accepted. S10 agent-bench#9 worker commit 79db2a4 published/pinned umbrella 6b92e5175: guarded exact DAG off arm scored 1 with sandboxed Claude/no real-home changes; usage unattributed due inherited child-session transcript suppression, so score provisional. On arm failed before vendor launch because Claude tool integration skills roots empty; UNSCORED. Follow-up agent-bench#10 linked/queued; no concurrent live Claude. S22 yoke#513 Codex Astra active, explicitly released exclusive Claude window after #9 terminal; pure-output economics only, no CI/CD effects. S5 blocked vendor stdout, S16/S18 operator host/cluster access, S21 paired scores pending. No droplet touched.
+  ── thread ──

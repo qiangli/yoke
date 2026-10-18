@@ -1,0 +1,3 @@
+PASS: frozen hashes and independent exact-byte oracle; no economic acceptance
+PASS: frozen hashes and independent exact-byte oracle; no economic acceptance
+PASS: paired model/usage/quota, raw byte oracles, artifact/body/run correlation and durable deltas

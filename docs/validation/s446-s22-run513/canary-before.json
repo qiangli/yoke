@@ -1,0 +1,15 @@
+{
+  "argv": [
+    "/usr/bin/sandbox-exec",
+    "-f",
+    "/tmp/s446-run513-vendor/guard.sb",
+    "/bin/sh",
+    "-c",
+    "/usr/bin/touch \"$1\"",
+    "canary",
+    "/Users/qiangli/.s446-run513-deny-c17f827865f14aef8693a946204eb23c"
+  ],
+  "exit_code": -9,
+  "absent": true,
+  "stderr": ""
+}

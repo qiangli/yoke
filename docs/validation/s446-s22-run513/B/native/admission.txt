@@ -1,0 +1,1 @@
+PASS: correctly hashed redirection rejected before allocation/dispatch; sentinel absent

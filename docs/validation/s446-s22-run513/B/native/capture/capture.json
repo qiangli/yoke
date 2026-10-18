@@ -1,0 +1,27 @@
+{
+  "argv": [
+    "/tmp/s446-run513-bin/yoke",
+    "lens-script",
+    "--digest",
+    "sha256:9048ca5f4de9dd5f26b4cc78796706d7716f78dc70a868df71a896ab2080f05b",
+    "--caps",
+    "read-only",
+    "--effects",
+    "pure"
+  ],
+  "binary_sha256": "e22049925d6f02582561c9c7c0cbbef1c0de2d89ee6c0106b95b605ee8907b48",
+  "body_sha256": "1fa6d1942df712bb45f7ca95094f4e9a4f4eead0df75481a9fed2cdd7638d4ac",
+  "artifact_digest": "sha256:9048ca5f4de9dd5f26b4cc78796706d7716f78dc70a868df71a896ab2080f05b",
+  "run": {
+    "WEAVE_ID": "weave-issue-1",
+    "WEAVE_ISSUE": "1",
+    "WEAVE_BASE": "main",
+    "WEAVE_BRANCH": "agent/weave-issue-1"
+  },
+  "cwd": "/private/tmp/TestS446Economics1639621989/001/.bashy/weave/002-81b628e2/workspaces/issue-1",
+  "exit_code": 0,
+  "timed_out": false,
+  "runtime_seconds": 0.112788209,
+  "stdout_sha256": "c84189cc7370b96659173bfa7037ae5bf99ecac4331b9f75cd6e2fe6d278c6a0",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

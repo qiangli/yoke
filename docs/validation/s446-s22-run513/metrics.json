@@ -1,0 +1,47 @@
+{
+  "A": {
+    "attempts": 1,
+    "successes": 1,
+    "failures": 0,
+    "success_rate": 1,
+    "input_tokens": 317,
+    "output_tokens": 43,
+    "cache_read_input_tokens": 0,
+    "cache_creation_input_tokens": 0,
+    "premium_tokens_per_success": 360,
+    "vendor_latency_seconds": 3.490974541,
+    "vendor_api_ms": 3218,
+    "vendor_list_cost_usd": 0.00266,
+    "local_runner_seconds": 0,
+    "wall_start_utc": "2026-10-18T22:02:23.440609+00:00",
+    "wall_finish_utc": "2026-10-18T22:03:08.689946+00:00",
+    "wall_seconds": 45.249337673187256,
+    "wall_provenance": "Filesystem timestamps of prompt archive before quota-before, through usage archive (A) or native gate completion (B); includes orchestration gaps, not monotonic instrumentation."
+  },
+  "B": {
+    "attempts": 1,
+    "successes": 1,
+    "failures": 0,
+    "success_rate": 1,
+    "input_tokens": 349,
+    "output_tokens": 61,
+    "cache_read_input_tokens": 0,
+    "cache_creation_input_tokens": 0,
+    "premium_tokens_per_success": 410,
+    "vendor_latency_seconds": 2.572264000000004,
+    "vendor_api_ms": 2335,
+    "vendor_list_cost_usd": 0.00327,
+    "local_runner_seconds": 0.112788209,
+    "wall_start_utc": "2026-10-18T22:03:08.710935+00:00",
+    "wall_finish_utc": "2026-10-18T22:04:06.054596+00:00",
+    "wall_seconds": 57.34366035461426,
+    "wall_provenance": "Filesystem timestamps of prompt archive before quota-before, through usage archive (A) or native gate completion (B); includes orchestration gaps, not monotonic instrumentation."
+  },
+  "scope": {
+    "provider_requests": "not independently counted; one CLI invocation per arm",
+    "retries": 0,
+    "conclusion": "B used 50 more premium tokens (+13.8889%); no staffing change; exploratory one-pair fixture only",
+    "overall_wall_seconds": 102.79625964164734,
+    "overall_wall_provenance": "Filesystem timestamps guard creation through native gate completion; preparation started earlier (first context 21:58:37 UTC)."
+  }
+}

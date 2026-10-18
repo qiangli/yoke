@@ -1,0 +1,4 @@
+(version 1)
+(allow default)
+(deny file-write* (subpath "/Users/qiangli") (with send-signal SIGKILL))
+(deny process-exec (literal "/usr/bin/security"))

@@ -1,0 +1,215 @@
+package weave
+
+import (
+	"bytes"
+
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+"fmt"
+	"time"
+
+	"github.com/qiangli/yoke/pkg/lens"
+	todopkg "github.com/qiangli/yoke/pkg/todo"
+	"github.com/spf13/cobra"
+)
+
+func TestS446Economics(t *testing.T) {
+	root := setupIsolationFixture(t)
+	t.Chdir(root)
+	home := t.TempDir()
+	for k, v := range map[string]string{"BASHY_HOME": home, "BASHY_SPRINT_DIR": filepath.Join(home, "sprint"), "BASHY_ROOM_DIR": filepath.Join(home, "room")} {
+		t.Setenv(k, v)
+	}
+	if out, code := runSprint(t, "add", "script fixture", "--announce=false"); code != 0 {
+		t.Fatal(out)
+	}
+	story, err := todopkg.Add(todopkg.RepoStore(root), "script", "prose must not reach worker", "p1", nil, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	story.Sprint = 1
+	story.Assignee = "existing-holder"
+	if _, err = todopkg.RepoStore(root).Save(story); err != nil {
+		t.Fatal(err)
+	}
+	response, err := os.ReadFile(os.Getenv("S446_RESPONSE"))
+ if err != nil { t.Fatal(err) }
+ var payload struct { Plan string `json:"plan"`; Result string `json:"result"` }
+ if err := json.Unmarshal(response, &payload); err != nil { t.Fatal(err) }
+ plan, err := lens.PlanPipeline([]byte(payload.Result), lens.PipelineOptions{StoreDir: filepath.Join(home,"artifacts"), AllowedCaps: []string{"read-only"}, AllowedEffects: []string{"pure"}, RequireCaps: true})
+ if err != nil { t.Fatal(err) }
+ script := plan.Artifact.Script
+	expectedState, expectedExit := "no-op", 0
+	if os.Getenv("S446_SCRIPT_FAIL") == "1" {
+		script = append(script, []byte("false\n")...)
+		expectedState, expectedExit = "failed", 1
+	}
+	task := lens.ScriptTask{Schema: "lens-script-task-v1", Artifact: lens.CompiledScriptArtifact{Name: lens.ScriptArtifactName(script), Digest: lens.ScriptArtifactDigest(script), Script: script}, Caps: []string{"read-only"}, Effects: []string{"pure"}, Help: "script", NoInput: true}
+	body, _ := json.MarshalIndent(task, "", "  ")
+	body = append(body, '\n')
+	file := filepath.Join(home, "task.json")
+	runner, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := os.Getenv("S446_SCRIPT_CHILD") == "1"
+	if live {
+		runner = os.Getenv("LENS_TEST_YOKE")
+	}
+	launches := 0
+	original := sprintAssignLaunchWorker
+	t.Cleanup(func() { sprintAssignLaunchWorker = original })
+	sprintAssignLaunchWorker = func(cmd *cobra.Command, r sprintAssignLaunch) error {
+		launches++
+		dir, _ := weaveQueueDir(root)
+		q, err := loadWeaveQueue(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		item := findWeaveItem(q, r.Run)
+		if item == nil || item.Body != string(body) || item.Register != story.ID {
+			t.Fatalf("body/link mismatch: %+v", item)
+		}
+		if r.Agent != "" || len(r.Env) != 0 || r.PTY != "always" || r.MaxRuntime != time.Minute || strings.Join(r.Argv, " ") != strings.Join(append([]string{runner}, task.WorkerArgs()...), " ") {
+			t.Fatalf("launch: %+v", r)
+		}
+		if live {
+			return original(cmd, r)
+		}
+		return nil
+	}
+	invoke := func(dry bool) error {
+		cmd := newSprintAssignCmd()
+		args := []string{"1", story.ID, "--repo", root, "--script-task", file, "--script-runner", runner}
+		if dry {
+			args = append(args, "--dry-run")
+		}
+		cmd.SetArgs(args)
+		cmd.SetOut(&bytes.Buffer{})
+		cmd.SetErr(&bytes.Buffer{})
+		return cmd.ExecuteContext(t.Context())
+	}
+	// Invalid bodies must fail before allocation, even in dry-run.
+	sentinel := filepath.Join(home, "negative-sentinel")
+ invalid := []string{`{}`, string(body) + `{}`, strings.Replace(string(body), `"no_input": true`, `"no_input": false`, 1), strings.Replace(string(body), task.Artifact.Digest, "sha256:bad", 1)}
+	for _, source := range []string{"printf forbidden > " + sentinel, "go build ./...", "go test ./...", "printf release > artifact-v1.txt", "sh -c true", "printf escape > ../outside", "printf escape > /tmp/outside", "curl https://example.invalid", "bashy model list"} {
+		bad := task
+		b := []byte(source + "\n")
+		bad.Artifact = lens.CompiledScriptArtifact{Name: lens.ScriptArtifactName(b), Digest: lens.ScriptArtifactDigest(b), Script: b}
+		encoded, err := json.Marshal(bad)
+		if err != nil {
+			t.Fatal(err)
+		}
+		invalid = append(invalid, string(encoded))
+	}
+	for _, missingCaps := range []bool{false, true} {
+		bad := task
+		if missingCaps {
+			bad.Caps = nil
+		} else {
+			bad.Effects = nil
+		}
+		encoded, err := json.Marshal(bad)
+		if err != nil {
+			t.Fatal(err)
+		}
+		invalid = append(invalid, string(encoded))
+	}
+	for _, bad := range invalid {
+		if err := os.WriteFile(file, []byte(bad), 0600); err != nil {
+			t.Fatal(err)
+		}
+		for _, dry := range []bool{true, false} {
+			if err := invoke(dry); err == nil {
+				t.Fatal("accepted invalid task")
+			}
+		}
+	}
+	dir, err := weaveQueueDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q, err := loadWeaveQueue(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(sentinel); !os.IsNotExist(err) { t.Fatal("negative control sentinel exists") }
+ if len(q.Items) != 0 || launches != 0 {
+		t.Fatal("invalid task allocated or dispatched a run")
+	}
+	if err := os.WriteFile(file, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := invoke(true); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := todopkg.RepoStore(root).Resolve(story.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if launches != 0 || loaded.Weave != 0 {
+		t.Fatal("validation/dry-run mutated assignment")
+	}
+	if err := invoke(false); err != nil && expectedExit == 0 {
+		t.Fatal(err)
+	}
+	if launches != 1 {
+		t.Fatal(launches)
+	}
+	loaded, err = todopkg.RepoStore(root).Resolve(story.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Weave == 0 || loaded.Assignee != story.Assignee {
+		t.Fatal("link or holder changed")
+	}
+	if err := invoke(false); err == nil {
+		t.Fatal("duplicate assignment accepted")
+	}
+	if live {
+		dir, _ := weaveQueueDir(root)
+		q, err := loadWeaveQueue(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		item := findWeaveItem(q, loaded.Weave)
+		if item.State != expectedState || item.ExitCode == nil || *item.ExitCode != expectedExit || item.FinishedAt.IsZero() {
+			t.Fatalf("durable outcome: %+v", item)
+		}
+		data, err := os.ReadFile(item.LogPath)
+		if err != nil || !bytes.Contains(data, []byte("assignment-proof")) {
+			t.Fatalf("log: %q %v", data, err)
+		}
+		cursor := filepath.Join(home, "cursor")
+		command := exec.CommandContext(t.Context(), runner, "lens", "--since", "start", "--cursor-out", cursor, "-t", "jsonl", "run:"+filepath.Base(root)+"-1")
+		data, err = command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("delta: %s %v", data, err)
+		}
+		if !bytes.Contains(data, []byte(`"type":"lifecycle"`)) || !bytes.Contains(data, []byte(`"state":"`+expectedState+`"`)) || !bytes.Contains(data, []byte("assignment-proof")) {
+			t.Fatalf("missing supervision: %s", data)
+		}
+		command = exec.CommandContext(t.Context(), runner, "lens", "--since", "@"+cursor, "--cursor-out", cursor, "-t", "jsonl", "run:"+filepath.Base(root)+"-1")
+		again, e := command.CombinedOutput()
+		if e != nil || len(again) != 0 {
+			t.Fatalf("cursor replay: %q %v", again, e)
+		}
+		if len(item.WorkerStories) != 0 {
+			t.Fatal("script claimed story")
+		}
+		evidence := os.Getenv("S446_EVIDENCE")
+ if evidence == "" { t.Fatal("missing evidence destination") }
+ for name, value := range map[string][]byte{"admission.txt":[]byte("PASS: correctly hashed redirection rejected before allocation/dispatch; sentinel absent\n"), "task.json":body, "delta.jsonl":data, "delta-replay.jsonl":again} {
+  if err := os.WriteFile(filepath.Join(evidence,name),value,0600); err != nil {t.Fatal(err)}
+ }
+ record, err := json.MarshalIndent(item,"","  "); if err != nil {t.Fatal(err)}
+ if err := os.WriteFile(filepath.Join(evidence,"native-run.json"),record,0600); err != nil {t.Fatal(err)}
+ pjson, _ := json.MarshalIndent(plan,"","  "); os.WriteFile(filepath.Join(evidence,"plan.json"),pjson,0600)
+ logdata, _ := os.ReadFile(item.LogPath); os.WriteFile(filepath.Join(evidence,"native.log"),logdata,0600)
+ fmt.Println("durable body verified; native result and deltas archived")
+	}
+}

@@ -1,0 +1,70 @@
+{
+  "id": 1,
+  "title": "script",
+  "body": "{\n  \"schema\": \"lens-script-task-v1\",\n  \"artifact\": {\n    \"name\": \"9048ca5f4de9dd5f26b4cc78796706d7716f78dc70a868df71a896ab2080f05b.sh\",\n    \"digest\": \"sha256:9048ca5f4de9dd5f26b4cc78796706d7716f78dc70a868df71a896ab2080f05b\",\n    \"path\": \"\",\n    \"script\": \"cHJpbnRmICdhc3NpZ25tZW50LXByb29mXG4nCg==\"\n  },\n  \"caps\": [\n    \"read-only\"\n  ],\n  \"effects\": [\n    \"pure\"\n  ],\n  \"help\": \"script\",\n  \"no_input\": true\n}\n",
+  "priority": "p1",
+  "points": 3,
+  "state": "no-op",
+  "register": "8055496b9b7f",
+  "script_assignment": {
+    "body": "{\n  \"schema\": \"lens-script-task-v1\",\n  \"artifact\": {\n    \"name\": \"9048ca5f4de9dd5f26b4cc78796706d7716f78dc70a868df71a896ab2080f05b.sh\",\n    \"digest\": \"sha256:9048ca5f4de9dd5f26b4cc78796706d7716f78dc70a868df71a896ab2080f05b\",\n    \"path\": \"\",\n    \"script\": \"cHJpbnRmICdhc3NpZ25tZW50LXByb29mXG4nCg==\"\n  },\n  \"caps\": [\n    \"read-only\"\n  ],\n  \"effects\": [\n    \"pure\"\n  ],\n  \"help\": \"script\",\n  \"no_input\": true\n}\n",
+    "runner": "/tmp/s446-run513-native/runner",
+    "digest": "sha256:9048ca5f4de9dd5f26b4cc78796706d7716f78dc70a868df71a896ab2080f05b"
+  },
+  "tool": "runner",
+  "owner": "runner-a",
+  "workspace": "/tmp/TestS446Economics1639621989/001/.bashy/weave/002-81b628e2/workspaces/issue-1",
+  "branch": "agent/weave-issue-1",
+  "base_sha": "e922417d563561e3af0b1f07ceba34b65bb7c3f5",
+  "launch_phase": "launching agent",
+  "created": "2026-10-18T22:04:04.68971Z",
+  "started_at": "2026-10-18T22:04:04.871526Z",
+  "finished_at": "2026-10-18T22:04:05.430208Z",
+  "head": "e922417d563561e3af0b1f07ceba34b65bb7c3f5",
+  "review_at": "0001-01-01T00:00:00Z",
+  "judge": "none",
+  "band": 3,
+  "dirty": false,
+  "disposition": "empty",
+  "exit_code": 0,
+  "finalizing_at": "0001-01-01T00:00:00Z",
+  "log_path": "/tmp/TestS446Economics1639621989/001/.bashy/weave/002-81b628e2/logs/issue-1.log",
+  "result_path": "/tmp/TestS446Economics1639621989/001/.bashy/weave/002-81b628e2/logs/issue-1.result.md",
+  "provision_group": 57597,
+  "tool_launch_recorded": true,
+  "resource_terminated": true,
+  "resource_verified_at": "0001-01-01T00:00:00Z",
+  "resource_reservation_id": "weave-eb3d2d9deb95421315ce01c59e8b60d4",
+  "resource_reservation_owner": "eb3d2d9deb95421315ce01c59e8b60d4",
+  "launch_spec": {
+    "tool": "/tmp/s446-run513-native/runner",
+    "argv": [
+      "lens-script",
+      "--digest",
+      "sha256:9048ca5f4de9dd5f26b4cc78796706d7716f78dc70a868df71a896ab2080f05b",
+      "--caps",
+      "read-only",
+      "--effects",
+      "pure"
+    ],
+    "max_runtime": 60000000000,
+    "pty": "always"
+  },
+  "comments": [
+    {
+      "at": "2026-10-18T22:04:04.88058Z",
+      "author": "conductor",
+      "kind": "system",
+      "body": "assigned to runner-a"
+    }
+  ],
+  "live_root": "/private/tmp/TestS446Economics1639621989/002",
+  "live_tree_sha": "434c91564dd64b5252907fd937eda0d58b6eccda2488617a24fe2d3fa45ea189",
+  "live_tree_lines": [
+    "?? docs/todo/8055496b9b7f-script.md"
+  ],
+  "coach_total_calls": 1,
+  "coach_distinct_calls": 1,
+  "coach_repeat_ratio": 1,
+  "coach_mode": "pty"
+}

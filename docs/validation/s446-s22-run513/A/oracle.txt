@@ -1,0 +1,1 @@
+PASS: frozen hashes and independent exact-byte oracle; no economic acceptance

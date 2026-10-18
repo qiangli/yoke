@@ -1,0 +1,4 @@
+=== RUN   TestS446Economics
+durable body verified; native result and deltas archived
+--- PASS: TestS446Economics (1.47s)
+PASS

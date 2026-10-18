@@ -1,0 +1,6 @@
+{
+  "path": "/Users/qiangli/projects/poc/dhnt/agent-bench/scripts/arm_home.py",
+  "sha256": "3ac942ca1c3eaf4122e28900bc503ed6eaf6423e4ee3e5efec1604611a95ece4",
+  "used_function": "seed_claude_keychain",
+  "copies_removed": true
+}

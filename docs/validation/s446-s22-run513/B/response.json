@@ -1,0 +1,4 @@
+{
+  "plan": "Emit the literal text with a single printf in a bsh fenced block.",
+  "result": "```bsh\nprintf 'assignment-proof\\n'\n```"
+}
