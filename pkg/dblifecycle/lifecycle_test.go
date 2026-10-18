@@ -3,12 +3,15 @@ package dblifecycle
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/dgraph-io/dgo/v250/protos/api"
+	"github.com/qiangli/bonsai/pkg/bonsai"
 	"github.com/qiangli/yoke/pkg/dbstore"
 	"github.com/qiangli/yoke/pkg/dbstore/bboltdb"
 	"github.com/qiangli/yoke/pkg/dbstore/bonsaidb"
@@ -96,6 +99,36 @@ func TestBonsaiNativeBackupRestore(t *testing.T) {
 	if _, err := s.Backup(ctx, target, backup, 0); err != nil {
 		t.Fatal(err)
 	}
+	// A caller can change the source after staging. Native restore must use
+	// the same private bytes that passed validation.
+	staged, err := stageBonsaiBackup(ctx, backup, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestBytes, err := os.ReadFile(filepath.Join(staged, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest bonsai.MasterManifest
+	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	backupFile := filepath.Join(backup, manifest.Manifests[0].Path, fmt.Sprintf("r%d-g1.backup", manifest.Manifests[0].ReadTs))
+	stagedFile := filepath.Join(staged, manifest.Manifests[0].Path, fmt.Sprintf("r%d-g1.backup", manifest.Manifests[0].ReadTs))
+	beforeStage, err := os.ReadFile(stagedFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(backupFile, []byte("changed source"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	afterStage, err := os.ReadFile(stagedFile)
+	if err != nil || !bytes.Equal(beforeStage, afterStage) {
+		t.Fatalf("staged backup changed with source: %v", err)
+	}
+	if err := os.WriteFile(backupFile, beforeStage, 0600); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.Backup(ctx, target, backup, 0); !errors.Is(err, dbstore.ErrExists) {
 		t.Fatalf("backup overwrite: %v", err)
 	}
@@ -126,6 +159,21 @@ func TestBonsaiNativeBackupRestore(t *testing.T) {
 	if _, err := s.Restore(ctx, target, broken, true, 0); !errors.Is(err, dbstore.ErrIntegrity) {
 		t.Fatalf("invalid backup: %v", err)
 	}
+	lateBroken := filepath.Join(root, "late-broken")
+	if err := os.Mkdir(lateBroken, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stageBonsaiBackup(ctx, backup, lateBroken); err != nil {
+		t.Fatal(err)
+	}
+	lateBroken = filepath.Join(lateBroken, "backup")
+	lateFile := filepath.Join(lateBroken, manifest.Manifests[0].Path, fmt.Sprintf("r%d-g1.backup", manifest.Manifests[0].ReadTs))
+	if err := os.WriteFile(lateFile, []byte("bad payload"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Restore(ctx, target, lateBroken, true, 0); !errors.Is(err, dbstore.ErrIntegrity) {
+		t.Fatalf("malformed late payload: %v", err)
+	}
 	h, err = s.Open(ctx, target, true, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -146,6 +194,25 @@ func TestBonsaiNativeBackupRestore(t *testing.T) {
 	_ = h.Close()
 	if err != nil || !bytes.Contains(result.Json, []byte("Alice")) || bytes.Contains(result.Json, []byte("Bob")) {
 		t.Fatalf("restored graph: %s %v", result.Json, err)
+	}
+}
+
+func TestStageBonsaiBackupRejectsEscapingReferences(t *testing.T) {
+	for _, path := range []string{"../outside", "/outside", `..\outside`} {
+		t.Run(path, func(t *testing.T) {
+			input := t.TempDir()
+			manifest := bonsai.MasterManifest{Manifests: []*bonsai.Manifest{{Path: path, ReadTs: 1}}}
+			data, err := json.Marshal(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(input, "manifest.json"), data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := stageBonsaiBackup(context.Background(), input, t.TempDir()); !errors.Is(err, dbstore.ErrInvalidInput) {
+				t.Fatalf("path %q: %v", path, err)
+			}
+		})
 	}
 }
 

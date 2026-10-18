@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/blevesearch/bleve/v2"
@@ -466,6 +467,128 @@ func (s Service) Restore(ctx context.Context, t dbstore.Target, in string, repla
 // restoreBonsai first replays the complete backup into a private disposable
 // database. Bonsai's native restore mutates as it reads, so manifest parsing
 // alone cannot guarantee that malformed backup bytes leave the target intact.
+const bonsaiRestoreLimit int64 = 2 << 30
+
+// stageBonsaiBackup copies exactly the manifest chain consumed by native restore.
+// Both validation and the destructive restore use this private copy.
+func stageBonsaiBackup(ctx context.Context, input, stage string) (string, error) {
+	inputInfo, err := os.Lstat(input)
+	if err != nil {
+		return "", err
+	}
+	if !inputInfo.IsDir() || inputInfo.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("%w: bonsai backup root must be a directory", dbstore.ErrInvalidInput)
+	}
+	backup := filepath.Join(stage, "backup")
+	if err := os.Mkdir(backup, 0700); err != nil {
+		return "", err
+	}
+	manifestPath := filepath.Join(input, "manifest.json")
+	info, err := os.Lstat(manifestPath)
+	if err != nil {
+		return "", fmt.Errorf("%w: bonsai manifest: %v", dbstore.ErrIntegrity, err)
+	}
+	if !info.Mode().IsRegular() || info.Size() > 1<<20 {
+		return "", fmt.Errorf("%w: invalid bonsai manifest", dbstore.ErrInvalidInput)
+	}
+	manifestFile, err := os.Open(manifestPath)
+	if err != nil {
+		return "", err
+	}
+	openedManifest, err := manifestFile.Stat()
+	if err != nil || !os.SameFile(info, openedManifest) {
+		_ = manifestFile.Close()
+		return "", fmt.Errorf("%w: bonsai manifest changed while staging", dbstore.ErrInvalidInput)
+	}
+	data, err := io.ReadAll(io.LimitReader(manifestFile, 1<<20+1))
+	_ = manifestFile.Close()
+	if len(data) > 1<<20 {
+		return "", dbstore.ErrLimitExceeded
+	}
+	if err != nil {
+		return "", err
+	}
+	var master bonsai.MasterManifest
+	if err := json.Unmarshal(data, &master); err != nil {
+		return "", fmt.Errorf("%w: bonsai manifest: %v", dbstore.ErrMalformedInput, err)
+	}
+	if len(master.Manifests) == 0 || len(master.Manifests) > 1024 {
+		return "", fmt.Errorf("%w: bonsai manifest chain", dbstore.ErrInvalidInput)
+	}
+	if err := os.WriteFile(filepath.Join(backup, "manifest.json"), data, 0600); err != nil {
+		return "", err
+	}
+	remaining := bonsaiRestoreLimit
+	for _, m := range master.Manifests {
+		if err := ctx.Err(); err != nil {
+			return "", dbstore.FromContext(err)
+		}
+		if m == nil || m.Path == "" || m.Path == "." || m.Path == ".." || strings.ContainsAny(m.Path, `/\`) || filepath.Base(m.Path) != m.Path {
+			return "", fmt.Errorf("%w: escaping bonsai manifest path", dbstore.ErrInvalidInput)
+		}
+		sourceDir := filepath.Join(input, m.Path)
+		info, err := os.Lstat(sourceDir)
+		if err != nil {
+			return "", fmt.Errorf("%w: bonsai backup directory: %v", dbstore.ErrIntegrity, err)
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("%w: bonsai backup directory", dbstore.ErrInvalidInput)
+		}
+		destDir := filepath.Join(backup, m.Path)
+		if err := os.Mkdir(destDir, 0700); err != nil && !os.IsExist(err) {
+			return "", err
+		}
+		name := fmt.Sprintf("r%d-g1.backup", m.ReadTs)
+		source := filepath.Join(sourceDir, name)
+		info, err = os.Lstat(source)
+		if err != nil {
+			return "", fmt.Errorf("%w: bonsai backup file: %v", dbstore.ErrIntegrity, err)
+		}
+		if !info.Mode().IsRegular() || info.Size() > remaining {
+			return "", fmt.Errorf("%w: bonsai backup file size or type", dbstore.ErrLimitExceeded)
+		}
+		inFile, err := os.Open(source)
+		if err != nil {
+			return "", err
+		}
+		openedSource, err := inFile.Stat()
+		if err != nil || !os.SameFile(info, openedSource) {
+			_ = inFile.Close()
+			return "", fmt.Errorf("%w: bonsai backup file changed while staging", dbstore.ErrInvalidInput)
+		}
+		outFile, err := os.OpenFile(filepath.Join(destDir, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if err != nil {
+			inFile.Close()
+			return "", err
+		}
+		for err == nil {
+			if e := ctx.Err(); e != nil {
+				err = dbstore.FromContext(e)
+				break
+			}
+			var n int64
+			n, err = io.CopyN(outFile, inFile, min(int64(64<<10), remaining+1))
+			remaining -= n
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				err = nil
+				break
+			}
+			if remaining < 0 {
+				err = dbstore.ErrLimitExceeded
+			}
+		}
+		closeErr := outFile.Close()
+		_ = inFile.Close()
+		if err != nil {
+			return "", err
+		}
+		if closeErr != nil {
+			return "", closeErr
+		}
+	}
+	return backup, nil
+}
+
 func (s Service) restoreBonsai(ctx context.Context, id dbstore.Identity, a dbstore.Adapter, in string, replace bool, wait time.Duration) (dbstore.Identity, error) {
 	probe := s.options(id, wait, false)
 	probe.ReadOnly = true
@@ -504,12 +627,16 @@ func (s Service) restoreBonsai(ctx context.Context, id dbstore.Identity, a dbsto
 		return id, err
 	}
 	defer os.RemoveAll(stage)
+	stagedInput, err := stageBonsaiBackup(ctx, input, stage)
+	if err != nil {
+		return id, err
+	}
 	checkTarget := dbstore.Target{Engine: "bonsai", Mode: dbstore.Persistent, Path: filepath.Join(stage, "db")}
 	check, err := a.Create(ctx, checkTarget, dbstore.Options{Wait: wait})
 	if err != nil {
 		return id, err
 	}
-	err = check.(*bonsaidb.DB).Bonsai().RestoreFromManifest(ctx, input)
+	err = check.(*bonsaidb.DB).Bonsai().RestoreFromManifest(ctx, stagedInput)
 	closeErr := check.Close()
 	if err != nil {
 		return id, fmt.Errorf("%w: invalid bonsai backup: %v", dbstore.ErrIntegrity, err)
@@ -535,10 +662,10 @@ func (s Service) restoreBonsai(ctx context.Context, id dbstore.Identity, a dbsto
 	defer dest.Close()
 	b := dest.(*bonsaidb.DB).Bonsai()
 	if err := b.DropAll(ctx); err != nil {
-		return id, dbstore.Backend("bonsai", err)
+		return id, fmt.Errorf("%w: native bonsai target reset failed; target may be partial; recover from a known-good backup: %v", dbstore.ErrIntegrity, err)
 	}
-	if err := b.RestoreFromManifest(ctx, input); err != nil {
-		return id, fmt.Errorf("%w: native bonsai restore failed after target reset: %v", dbstore.ErrIntegrity, err)
+	if err := b.RestoreFromManifest(ctx, stagedInput); err != nil {
+		return id, fmt.Errorf("%w: native bonsai restore failed after target reset; target may be partial; recover from a known-good backup: %v", dbstore.ErrIntegrity, err)
 	}
 	return id, nil
 }
