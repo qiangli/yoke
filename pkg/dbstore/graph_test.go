@@ -3,9 +3,39 @@ package dbstore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 )
+
+func TestMemGraphNodesSnapshotOrderAndStop(t *testing.T) {
+	g := NewMemGraph()
+	defer g.Close()
+	ctx := context.Background()
+	if err := g.Update(ctx, func(tx GraphTx) error {
+		for _, id := range []string{"z", "a", "m"} {
+			if _, err := tx.PutNode(Node{ID: id}, Cond{}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	if err := g.View(ctx, func(tx GraphTx) error {
+		return tx.Nodes(func(n Node) (bool, error) { got = append(got, n.ID); return len(got) < 2, nil })
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(got) != "[a m]" {
+		t.Fatalf("order/stop: %v", got)
+	}
+	want := errors.New("stop")
+	if err := g.View(ctx, func(tx GraphTx) error { return tx.Nodes(func(Node) (bool, error) { return false, want }) }); !errors.Is(err, want) {
+		t.Fatalf("callback error: %v", err)
+	}
+}
 
 func TestMemGraphLifecycleAndPreconditions(t *testing.T) {
 	ctx := context.Background()

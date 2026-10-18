@@ -74,6 +74,9 @@ const (
 // GraphTx is one graph transaction.
 type GraphTx interface {
 	GetNode(id string) (Node, bool, error)
+	// Nodes visits all nodes in ID order in this transaction's snapshot.
+	// Returning false stops the scan; callback errors propagate.
+	Nodes(fn func(Node) (bool, error)) error
 	PutNode(n Node, c Cond) (uint64, error)
 	// DeleteNode removes the node and every edge touching it.
 	DeleteNode(id string) error
@@ -148,6 +151,16 @@ func (g graphTx) GetNode(id string) (Node, bool, error) {
 		return n, false, err
 	}
 	return n, true, json.Unmarshal(v, &n)
+}
+
+func (g graphTx) Nodes(fn func(Node) (bool, error)) error {
+	return g.tx.Scan(bNodes, nil, func(_, v []byte) (bool, error) {
+		var n Node
+		if err := json.Unmarshal(v, &n); err != nil {
+			return false, err
+		}
+		return fn(n)
+	})
 }
 
 func (g graphTx) PutNode(n Node, c Cond) (uint64, error) {

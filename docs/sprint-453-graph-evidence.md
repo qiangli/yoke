@@ -35,3 +35,21 @@ exclusion. The adapter's separate process exclusion test lives in
 - CLI/MCP mount, cross-mode round trips, independent-process owner tests and
   full story acceptance remain outstanding. Remote fixtures are not live
   host evidence.
+
+## Enumeration seam
+
+`GraphTx.Nodes` now visits every memory graph node, including isolated nodes,
+in ID order within the existing snapshot transaction. Callback false stops
+the scan; callback errors propagate. This is a prerequisite for lossless
+interchange, not completion of interchange. `pkg/dbgraph` still refuses
+export/import and declares no mode support for those operations.
+
+Direct local gate on Dragon with `CGO_ENABLED=0 GOMAXPROCS=2 GOFLAGS=-p=2`:
+
+```sh
+go test -short -count=1 ./pkg/dbgraph ./pkg/dbstore
+```
+
+Exit 0: `pkg/dbgraph` 7.522s and `pkg/dbstore` 1.693s. The new test checks
+node order, bounded callback stop and error propagation. Persistent typed
+mapping and lossless JSON/JSONL import/export in both directions remain open.
