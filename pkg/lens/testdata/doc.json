@@ -1,0 +1,34 @@
+{
+  "name": "lens",
+  "version": 3,
+  "ratio": 1.5,
+  "big": 12345678901234567890,
+  "exp": 1e-7,
+  "ok": true,
+  "none": null,
+  "zip": "007",
+  "yes": "yes",
+  "quote": "say \"hi\" <b>&</b>",
+  "unicode": "héllo — 世界",
+  "multi": "line1\nline2",
+  "tags": [
+    "a",
+    "b"
+  ],
+  "meta": {
+    "z": 1,
+    "a": {
+      "deep": "x"
+    }
+  },
+  "items": [
+    {
+      "id": 1
+    },
+    {
+      "id": 2
+    }
+  ],
+  "emptyObj": {},
+  "emptyArr": []
+}

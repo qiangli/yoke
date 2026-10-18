@@ -1,0 +1,27 @@
+{
+  "title": "lens config",
+  "port": 8080,
+  "ratio": 0.25,
+  "enabled": true,
+  "hosts": [
+    "alpha",
+    "omega"
+  ],
+  "key with space": "quoted",
+  "server": {
+    "name": "main",
+    "tls": {
+      "cert": "c\\path\n"
+    }
+  },
+  "rows": [
+    {
+      "from": "json",
+      "to": "yaml"
+    },
+    {
+      "from": "csv",
+      "to": "md"
+    }
+  ]
+}

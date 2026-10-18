@@ -5,6 +5,7 @@ go 1.27
 toolchain go1.27.2
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/GehirnInc/crypt v0.0.0-20230320061759-8cc1b52080c5
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2
 	github.com/a2aproject/a2a-go/v2 v2.3.1
@@ -29,6 +30,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/itchyny/gojq v0.12.19
 	github.com/klauspost/compress v1.18.6
+	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/mdlayher/netlink v1.7.3-0.20250113171957-fbb4dce95f42
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/odvcencio/gotreesitter v0.16.0
@@ -77,7 +79,6 @@ require (
 	cyphar.com/go-pathrs v0.2.4 // indirect
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
-	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/HdrHistogram/hdrhistogram-go v1.2.0 // indirect
 	github.com/JohannesKaufmann/dom v0.3.1 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
@@ -234,7 +235,6 @@ require (
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/klauspost/pgzip v1.2.6 // indirect
 	github.com/kr/fs v0.1.0 // indirect
-	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20240909124753-873cd0166683 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect

@@ -935,7 +935,7 @@ func init() {
 	addTools(GroupTextutils,
 		"awk", "b2sum", "base32", "base64", "basenc", "cat", "cksum", "cmp",
 		"comm", "csplit", "cut", "diff", "expand", "fmt", "fold", "grep", "iconv",
-		"gunzip", "gzip", "head", "hexdump", "join", "jq", "md5sum", "more",
+		"gunzip", "gzip", "head", "hexdump", "join", "jq", "lens", "md5sum", "more",
 		"nl", "numfmt", "od", "paste", "pr", "ptx", "sed", "sha1sum",
 		"sha224sum", "sha256sum", "sha384sum", "sha512sum", "shuf", "sort",
 		"split", "strings", "sum", "tac", "tail", "tee", "tokens", "tr",
@@ -1485,7 +1485,7 @@ func init() {
 		"test", "[",
 		// textutils (transform/read input)
 		"awk", "cat", "cmp", "comm", "csplit", "cut", "diff", "expand", "fmt",
-		"fold", "grep", "gzip", "gunzip", "head", "hexdump", "iconv", "join", "jq",
+		"fold", "grep", "gzip", "gunzip", "head", "hexdump", "iconv", "join", "jq", "lens",
 		"more", "nl", "od", "paste", "pr", "ptx", "sed", "shuf", "sort",
 		"split", "strings", "tac", "tail", "tee", "tokens", "tr", "tsort",
 		"unexpand", "uniq", "uudecode", "uuencode", "wc", "xargs", "zcat",
@@ -1741,7 +1741,7 @@ func init() {
 		// textutils transforms and digests that only read their input
 		"b2sum", "base32", "base64", "basenc", "cat", "cksum", "cmp", "comm",
 		"cut", "diff", "expand", "fmt", "fold", "grep", "iconv", "head",
-		"hexdump", "join", "jq", "md5sum", "more", "nl", "od", "paste", "pr",
+		"hexdump", "join", "jq", "lens", "md5sum", "more", "nl", "od", "paste", "pr",
 		"ptx", "shuf", "sort", "strings", "sum", "tac", "tail", "tokens", "tr",
 		"tsort", "unexpand", "uniq", "uuencode", "wc", "sha1sum", "sha224sum",
 		"sha256sum", "sha384sum", "sha512sum", "zcat",

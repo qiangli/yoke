@@ -160,6 +160,7 @@ var packages = map[string]Package{
 	"herald":     cmdPkg("herald"),
 	"judge":      cmdPkg("judge"),
 	"kb":         cmdPkg("kb"),
+	"lens":       cmdPkg("lens"),
 	"ref": libPkg("define", "the ONE grammar for naming anything bashy can address — `<kind>:<id>`, "+
 		"`urn:dhnt:<kind>:<id>`, the closed 15-kind vocabulary, the node every store's resolver returns. "+
 		"Stdlib-only leaf by test, because pkg/kb already reaches fleet/bus/principal and the shared type "+

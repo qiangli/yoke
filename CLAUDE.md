@@ -32,7 +32,7 @@ What lives here:
 - the **AgentOS hub** — `pkg/{fleet,kb,bus,room,meet,weave,dag,foreman,chat,
   skills,craft,secrets,binmgr,atlas,…}` (see §AgentOS hub);
 - the **non-POSIX applets and front-door verbs** — `cmds/{ast,browser,fetch,
-  jq,tar,gzip,tree,which,watch,tokens,tz,ntp,cal,hexdump,clip,duration,why,
+  jq,lens,tar,gzip,tree,which,watch,tokens,tz,ntp,cal,hexdump,clip,duration,why,
   atq,atrm,graph,foreman,resources}`; `cmds/all` blank-imports coreutils'
   certified `cmds/all` and adds these, so a consumer that wants the whole
   userland imports `github.com/qiangli/yoke/cmds/all`;

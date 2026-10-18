@@ -8,7 +8,8 @@
 //	-H/-d/-X/-u/-t  full REST control (headers, body, method, basic/bearer auth)
 //
 // HTTP is handled by resty (resty.dev/v3, MIT, pure-Go); HTML→markdown by
-// JohannesKaufmann/html-to-markdown (MIT). curl/wget stay untouched on PATH.
+// JohannesKaufmann/html-to-markdown (MIT) via lens.HTMLToMarkdown, the same
+// converter as `lens -f html -t md`. curl/wget stay untouched on PATH.
 package fetchcmd
 
 import (
@@ -19,11 +20,11 @@ import (
 	"strings"
 	"time"
 
-	htmltomarkdown "github.com/JohannesKaufmann/html-to-markdown/v2"
 	resty "resty.dev/v3"
 
 	"github.com/qiangli/coreutils/pkg/weavecli"
 	"github.com/qiangli/coreutils/tool"
+	"github.com/qiangli/yoke/pkg/lens"
 )
 
 const fetchSchemaVersion = "bashy-fetch-v1"
@@ -108,7 +109,7 @@ func run(rc *tool.RunContext, args []string) int {
 
 	body := resp.String()
 	if *md {
-		if out, cerr := htmltomarkdown.ConvertString(body); cerr == nil {
+		if out, cerr := lens.HTMLToMarkdown(body); cerr == nil {
 			body = out
 		} else {
 			fmt.Fprintf(rc.Err, "fetch: --md: %v (printing raw body)\n", cerr)

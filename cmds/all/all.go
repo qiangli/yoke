@@ -32,6 +32,7 @@ import (
 	_ "github.com/qiangli/yoke/cmds/gzip"
 	_ "github.com/qiangli/yoke/cmds/hexdump"
 	_ "github.com/qiangli/yoke/cmds/jq"
+	_ "github.com/qiangli/yoke/cmds/lens"
 	_ "github.com/qiangli/yoke/cmds/ntp"
 	_ "github.com/qiangli/yoke/cmds/tar"
 	_ "github.com/qiangli/yoke/cmds/tokens"

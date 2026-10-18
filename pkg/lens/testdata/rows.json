@@ -1,0 +1,17 @@
+[
+  {
+    "name": "widget",
+    "qty": "3",
+    "note": "has, comma"
+  },
+  {
+    "name": "gadget",
+    "qty": "10",
+    "note": "multi\nline"
+  },
+  {
+    "name": "empty",
+    "qty": "",
+    "note": ""
+  }
+]

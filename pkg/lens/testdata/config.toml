@@ -1,0 +1,20 @@
+title = "lens config"
+port = 8080
+ratio = 0.25
+enabled = true
+hosts = ["alpha", "omega"]
+"key with space" = "quoted"
+
+[server]
+name = "main"
+
+[server.tls]
+cert = "c\\path\n"
+
+[[rows]]
+from = "json"
+to = "yaml"
+
+[[rows]]
+from = "csv"
+to = "md"

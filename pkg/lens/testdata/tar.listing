@@ -1,0 +1,4 @@
+{"path":"pkg/","type":"dir","size":0,"mode":"0755","mtime":"2026-10-17T12:00:00Z"}
+{"path":"pkg/a.txt","type":"file","size":5,"mode":"0644","mtime":"2026-10-17T12:00:00Z"}
+{"path":"pkg/link","type":"symlink","size":0,"mode":"0777","mtime":"2026-10-17T12:00:00Z"}
+{"path":"pkg/hard","type":"hardlink","size":0,"mode":"0644","mtime":"2026-10-17T12:00:00Z"}

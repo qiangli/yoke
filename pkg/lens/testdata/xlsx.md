@@ -1,0 +1,9 @@
+```tsv
+region	revenue
+north	100
+south		200
+
+second
+
+tenth
+```

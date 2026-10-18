@@ -52,7 +52,7 @@ var posixRequired = []string{
 var bashyTools = []string{
 	"ast", "graph", "resources", "posix-gate",
 	"browser", "fetch",
-	"tokens", "duration", "tz", "ntp", "sntp", "clip",
+	"tokens", "duration", "tz", "ntp", "sntp", "clip", "lens",
 }
 
 var (
