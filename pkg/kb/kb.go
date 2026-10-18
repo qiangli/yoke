@@ -163,6 +163,8 @@ phrase it as "what + WHEN this applies" with trigger keywords.`,
 	cmd.AddCommand(newLogCmd(&dir, resolved))
 	cmd.AddCommand(newBacklinksCmd(&dir, resolved))
 	cmd.AddCommand(newDoctorCmd(&dir, resolved))
+	cmd.AddCommand(newExportCmd(&dir, resolved))
+	cmd.AddCommand(newImportCmd(&dir, resolved))
 	return cmd
 }
 

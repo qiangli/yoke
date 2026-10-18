@@ -124,18 +124,21 @@ func resetShowWiring() {
 
 func newShowCmd(dir, ring *string) *cobra.Command {
 	var form string
-	var jsonOut bool
+	var jsonOut, okf bool
 	cmd := &cobra.Command{
 		Use:   "show <slug|#seq|uuid|kind:id>",
 		Short: "Print one page (frontmatter + body) — by slug, running number, uuid, or kind:id ref",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
 			arg := strings.TrimSpace(args[0])
+			if okf {
+				return runShowOKF(c, arg, *dir, jsonOut)
+			}
 			if strings.HasPrefix(arg, "sense:") {
 				return runShowSense(c, arg, jsonOut)
 			}
 			if r, err := ref.Parse(arg); err == nil {
-				return runShowRef(c, r, *dir, *ring, form, jsonOut)
+				return runShowRef(c, r, *dir, *ring, form, jsonOut, false)
 			} else if errors.Is(err, ref.ErrNotRef) {
 				if strings.Contains(arg, ":") {
 					return showFailure(c, jsonOut, showResult{
@@ -154,6 +157,7 @@ func newShowCmd(dir, ring *string) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&form, "form", "", "require the page to be this form: note|page (kb pages only)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "print the §5.1 envelope instead of raw content")
+	cmd.Flags().BoolVar(&okf, "okf", false, "render a foreign ref (episode|skill|out) as an OKF document, without ingesting it")
 	return cmd
 }
 
@@ -334,7 +338,7 @@ func runShowSlug(c *cobra.Command, slug, dir, ring, form string, jsonOut bool) e
 // through the owning store's reader. kb: reads through today's store path
 // (slug auto-detect, ring order repo→host); every other kind needs a wired
 // reader.
-func runShowRef(c *cobra.Command, r ref.Ref, dir, ring, form string, jsonOut bool) error {
+func runShowRef(c *cobra.Command, r ref.Ref, dir, ring, form string, jsonOut, okf bool) error {
 	fail := func(outcome Outcome, errText string) error {
 		return showFailure(c, jsonOut, showResult{
 			Outcome: outcome, Ref: r.String(), Kind: string(r.Kind), ID: r.ID, ErrText: errText,
@@ -392,7 +396,28 @@ func runShowRef(c *cobra.Command, r ref.Ref, dir, ring, form string, jsonOut boo
 		}
 		return showFailure(c, jsonOut, got)
 	}
+	if okf && got.Content != "" {
+		doc, err := RenderOKFForeign(n, content)
+		if err != nil {
+			return fail(OutcomeError, err.Error())
+		}
+		got.Content = doc
+	}
 	return showSuccess(c, jsonOut, got)
+}
+
+// runShowOKF is `kb show REF --okf` (§5.1, §6.4): only a foreign ref of an
+// OKF-rendered kind (episode|skill|out) qualifies; it resolves and reads
+// exactly like the plain show and renders the content as an OKF document.
+func runShowOKF(c *cobra.Command, arg, dir string, jsonOut bool) error {
+	r, err := ref.Parse(arg)
+	if err != nil || okfForeignTypes[r.Kind] == "" {
+		return showFailure(c, jsonOut, showResult{
+			Outcome: OutcomeError, Ref: arg,
+			ErrText: fmt.Sprintf("kb: %s: --okf renders episode, skill and out refs", arg),
+		})
+	}
+	return runShowRef(c, r, dir, "", "", jsonOut, true)
 }
 
 // runShowKBNode reads a resolved kb: node through today's store path, so the

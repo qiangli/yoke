@@ -729,3 +729,29 @@ func TestShowSenseMissingAndResolverErrors(t *testing.T) {
 		t.Error("sense: with no id: want an error")
 	}
 }
+
+// TestShowSkillOKF: --okf renders a foreign ref as an OKF document (type
+// skill, resource = the ref) and ingests nothing into the kb ring.
+func TestShowSkillOKF(t *testing.T) {
+	w := newShowWorld(t)
+	before, _ := os.ReadDir(filepath.Join(w.kbDir, "pages"))
+	stdout, _, err := runShow(t, w.kbDir, "skill:deploy", "--okf")
+	if err != nil {
+		t.Fatalf("show skill:deploy --okf: %v", err)
+	}
+	for _, s := range []string{"---\ntype: skill\n", "resource: skill:deploy\n", "description: Deploy the app\n", "---\n\n# Deploy\n"} {
+		if !strings.Contains(stdout, s) {
+			t.Errorf("OKF render missing %q:\n%s", s, stdout)
+		}
+	}
+	if strings.Contains(stdout, "name: deploy") {
+		t.Errorf("SKILL.md frontmatter leaked into the OKF body:\n%s", stdout)
+	}
+	after, _ := os.ReadDir(filepath.Join(w.kbDir, "pages"))
+	if len(after) != len(before) {
+		t.Errorf("show --okf ingested: pages %d -> %d", len(before), len(after))
+	}
+	if _, _, err := runShow(t, w.kbDir, "deploy-runbook", "--okf"); err == nil {
+		t.Error("--okf on a kb page must fail: it renders foreign refs only")
+	}
+}

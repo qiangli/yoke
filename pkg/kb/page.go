@@ -23,19 +23,25 @@ type Page struct {
 	ID  string `yaml:"id,omitempty"`
 	Seq int    `yaml:"seq,omitempty"`
 
-	Form         string   `yaml:"form,omitempty"` // note|page (the SHAPE; a legacy record with none reads as page)
-	Type         string   `yaml:"type"`           // lesson|gotcha|runbook|decision|fact (OKF: the one required field)
-	Title        string   `yaml:"title"`
-	Description  string   `yaml:"description"` // "what + WHEN this applies" — the routing surface
-	Tags         []string `yaml:"tags,omitempty"`
-	Scope        *Scope   `yaml:"scope,omitempty"`
-	Status       string   `yaml:"status,omitempty"` // candidate|validated|stale|superseded
-	Evidence     string   `yaml:"evidence,omitempty"`
-	Source       *Source  `yaml:"source,omitempty"`
-	Created      string   `yaml:"created,omitempty"` // RFC 3339
-	Updated      string   `yaml:"updated,omitempty"`
-	Supersedes   string   `yaml:"supersedes,omitempty"`
-	SupersededBy string   `yaml:"superseded_by,omitempty"`
+	Form        string   `yaml:"form,omitempty"` // note|page (the SHAPE; a legacy record with none reads as page)
+	Type        string   `yaml:"type"`           // lesson|gotcha|runbook|decision|fact (OKF: the one required field)
+	Title       string   `yaml:"title"`
+	Description string   `yaml:"description"` // "what + WHEN this applies" — the routing surface
+	Tags        []string `yaml:"tags,omitempty"`
+	Scope       *Scope   `yaml:"scope,omitempty"`
+	Status      string   `yaml:"status,omitempty"` // candidate|validated|stale|superseded
+	Evidence    string   `yaml:"evidence,omitempty"`
+	Source      *Source  `yaml:"source,omitempty"`
+	Created     string   `yaml:"created,omitempty"` // RFC 3339
+	Updated     string   `yaml:"updated,omitempty"`
+	// Timestamp and Resource are the OKF v0.1 conventional fields (design
+	// §6.4): timestamp = updated (else created), resource = the ref or URL of
+	// the thing the page describes. The OKF render (okf.go) fills them; a
+	// store write never does, so on-disk pages are unchanged.
+	Timestamp    string `yaml:"timestamp,omitempty"`
+	Resource     string `yaml:"resource,omitempty"`
+	Supersedes   string `yaml:"supersedes,omitempty"`
+	SupersededBy string `yaml:"superseded_by,omitempty"`
 	// Export marks an agent-ring note visible to DESCENDANT episodes (design
 	// §4): a delegate sees its ancestors' exported notes and nothing else of
 	// theirs. Set by `kb note add --export`.
