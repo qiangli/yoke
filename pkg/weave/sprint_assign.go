@@ -3,6 +3,7 @@ package weave
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/qiangli/yoke/pkg/issue"
 	"github.com/qiangli/yoke/pkg/ladder"
+	"github.com/qiangli/yoke/pkg/lens"
 	todopkg "github.com/qiangli/yoke/pkg/todo"
 	"github.com/spf13/cobra"
 )
@@ -32,6 +34,9 @@ type sprintAssignLaunch struct {
 	Repo, Agent string
 	Run         int64
 	Env         map[string]string
+	Argv        []string
+	PTY         string
+	MaxRuntime  time.Duration
 }
 type sprintAssignDeps struct {
 	seed   func() (int64, error)
@@ -214,7 +219,7 @@ func sprintAssignRecord(cmd *cobra.Command, id int64, kind string, event sprintA
 	})
 }
 
-func sprintAssignSeed(cmd *cobra.Command, sprint int64, root string, story *issue.Issue, points, band int) (int64, error) {
+func sprintAssignSeed(cmd *cobra.Command, sprint int64, root string, story *issue.Issue, points, band int, scriptBody ...*weaveScriptAssignment) (int64, error) {
 	if todopkg.IsClosed(story.Status) || story.Weave != 0 {
 		return 0, fmt.Errorf("story %s is closed or already linked to run #%d", story.ID, story.Weave)
 	}
@@ -227,6 +232,9 @@ func sprintAssignSeed(cmd *cobra.Command, sprint int64, root string, story *issu
 		body += fmt.Sprintf("\n\nThis issue also touches: %v\n", story.Refs)
 	}
 	body += fmt.Sprintf("\n\nDelivery commit trailers:\nSprint: #%d\nStory: #%d\nStory-ID: %s\n", sprint, story.Seq, story.ID)
+	if len(scriptBody) > 0 {
+		body = scriptBody[0].Body
+	}
 	var run *weaveItem
 	err = withWeaveQueueLock(dir, func(q *weaveQueue) error {
 		for _, it := range q.Items {
@@ -235,6 +243,9 @@ func sprintAssignSeed(cmd *cobra.Command, sprint int64, root string, story *issu
 			}
 		}
 		run = &weaveItem{ID: q.NextID, Title: story.Title, Body: body, Priority: story.Priority, Stage: story.Stage, Register: story.ID, State: "todo", Created: time.Now().UTC(), Points: points, Band: band, Judge: weaveJudgeNone}
+		if len(scriptBody) > 0 {
+			run.ScriptAssignment = scriptBody[0]
+		}
 		q.NextID++
 		q.Root = root
 		q.Items = append(q.Items, run)
@@ -291,7 +302,14 @@ var sprintAssignLaunchWorker = func(cmd *cobra.Command, r sprintAssignLaunch) er
 			}
 		}(key, old, had)
 	}
-	return runWeaveStart(cmd, r.Run, "", []string{r.Agent}, weaveStartOptions{pty: "never"}, &weaveOutputFlags{})
+	argv, pty := r.Argv, r.PTY
+	if len(argv) == 0 {
+		argv = []string{r.Agent}
+	}
+	if pty == "" {
+		pty = "never"
+	}
+	return runWeaveStart(cmd, r.Run, "", argv, weaveStartOptions{pty: pty, maxRuntime: r.MaxRuntime}, &weaveOutputFlags{})
 }
 
 func newSprintAssignCmd() *cobra.Command { return sprintAssignCommand(false) }
@@ -299,6 +317,7 @@ func newSprintReviewCmd() *cobra.Command { return sprintAssignCommand(true) }
 
 func sprintAssignCommand(review bool) *cobra.Command {
 	var repo, manual, author string
+	var scriptFile, scriptRunner string
 	var excludeTools, excludeAgents []string
 	var points, band, authorBand int
 	var dry bool
@@ -315,6 +334,8 @@ func sprintAssignCommand(review bool) *cobra.Command {
 		cmd.Flags().StringVar(&author, "author", "", "author tool:model")
 		cmd.Flags().IntVar(&authorBand, "author-band", 0, "author band (3, 4 or 5)")
 	} else {
+		cmd.Flags().StringVar(&scriptFile, "script-task", "", "validated JSON task file; exact body, local execution, no fleet/model selection")
+		cmd.Flags().StringVar(&scriptRunner, "script-runner", "", "absolute trusted Yoke binary for --script-task")
 		cmd.Flags().IntVar(&points, "points", 3, "story points (1, 2, 3, 5 or 8; defaults to 3)")
 		cmd.Flags().IntVar(&band, "band", 3, "owning band (3, 4 or 5)")
 		cmd.Flags().StringVar(&manual, "agent", "", "manual assignment override, recorded in the thread")
@@ -353,6 +374,12 @@ func sprintAssignCommand(review bool) *cobra.Command {
 		root, story, err := resolveSprintStoryFor(s, repo, args[1])
 		if err != nil {
 			return err
+		}
+		if scriptFile != "" || scriptRunner != "" {
+			if manual != "" || len(excludeTools) > 0 || len(excludeAgents) > 0 {
+				return fmt.Errorf("script assignment cannot combine fleet selection flags")
+			}
+			return sprintAssignScript(cmd, id, root, story, points, band, scriptFile, scriptRunner, dry)
 		}
 		events, err := sprintAssignReadEvents()
 		if err != nil {
@@ -436,4 +463,72 @@ func sprintAssignCommand(review bool) *cobra.Command {
 		}})
 	}
 	return cmd
+}
+
+// sprintAssignScript uses the normal seed/link and owned process lifecycle. It
+// does not impersonate a model agent or rewrite a queue after dispatch.
+func sprintAssignScript(cmd *cobra.Command, id int64, root string, story *issue.Issue, points, band int, file, runner string, dry bool) error {
+	if file == "" || !filepath.IsAbs(runner) {
+		return fmt.Errorf("--script-task FILE and --script-runner ABSOLUTE_YOKE required")
+	}
+	info, err := os.Stat(runner)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 {
+		return fmt.Errorf("script runner must be executable")
+	}
+	f, err := os.Open(file)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	body, err := io.ReadAll(io.LimitReader(f, 65537))
+	if err != nil {
+		return err
+	}
+	task, err := lens.DecodeScriptTask(body)
+	if err != nil {
+		return err
+	}
+	if _, err = ladder.StoryInitialRating(ladder.Points(points)); err != nil {
+		return err
+	}
+	if todopkg.IsClosed(story.Status) || story.Weave != 0 {
+		return fmt.Errorf("story is closed or already linked")
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "script=%s help=script no_input=true runner=%s\n", task.Artifact.Digest, runner)
+	if dry {
+		return nil
+	}
+	// Authorize before seeding; recording below rechecks the lease.
+	dir, err := sprintStoreDir()
+	if err != nil {
+		return err
+	}
+	if err = withWeaveQueueLock(dir, func(q *weaveQueue) error {
+		s := findWeaveStory(q, id)
+		if s == nil {
+			return fmt.Errorf("sprint not found")
+		}
+		return authorizeSprintLeaseToken(cmd, s, "assign")
+	}); err != nil {
+		return err
+	}
+	run, err := sprintAssignSeed(cmd, id, root, story, points, band, &weaveScriptAssignment{Body: string(body), Runner: runner, Digest: task.Artifact.Digest})
+	if err != nil {
+		return err
+	}
+	if err = sprintAssignRecord(cmd, id, "assign-script", sprintAssignEvent{Story: story.ID, Seat: "script", Run: run, Reason: task.Artifact.Digest}); err != nil {
+		return err
+	}
+	return sprintAssignLaunchWorker(cmd, sprintAssignLaunch{Repo: root, Run: run, Argv: append([]string{runner}, task.WorkerArgs()...), PTY: "always", MaxRuntime: time.Minute})
+}
+
+// weaveScriptAssignment freezes the trusted local process contract separately
+// from story ownership. Such a process supplies evidence, never claims/submits.
+type weaveScriptAssignment struct {
+	Body   string `json:"body"`
+	Runner string `json:"runner"`
+	Digest string `json:"digest"`
 }

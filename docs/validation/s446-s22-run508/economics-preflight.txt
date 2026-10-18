@@ -1,0 +1,15 @@
+=== RUN   TestScriptTaskAdmission
+=== RUN   TestScriptTaskAdmission/literal
+=== RUN   TestScriptTaskAdmission/ci-build
+    script_task_test.go:28: blocked: line 1: unknown command "go": only echo, printf, true, false and pwd are allowed in a pure-output script
+=== RUN   TestScriptTaskAdmission/ci-test
+    script_task_test.go:28: blocked: line 1: unknown command "go": only echo, printf, true, false and pwd are allowed in a pure-output script
+=== RUN   TestScriptTaskAdmission/artifact
+    script_task_test.go:28: blocked: line 1: redirections are not allowed in a pure-output script
+--- PASS: TestScriptTaskAdmission (0.00s)
+    --- PASS: TestScriptTaskAdmission/literal (0.00s)
+    --- PASS: TestScriptTaskAdmission/ci-build (0.00s)
+    --- PASS: TestScriptTaskAdmission/ci-test (0.00s)
+    --- PASS: TestScriptTaskAdmission/artifact (0.00s)
+PASS
+ok  	github.com/qiangli/yoke/pkg/lens	0.762s

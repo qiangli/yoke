@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/qiangli/yoke/pkg/lens"
 	todopkg "github.com/qiangli/yoke/pkg/todo"
 	"github.com/spf13/cobra"
 )
@@ -141,6 +143,21 @@ func weaveWorkerAgent(it *weaveItem) string {
 }
 
 func weaveClaimWorkerStories(cmd *cobra.Command, queueDir string, it *weaveItem) error {
+	if contract := it.ScriptAssignment; contract != nil {
+		task, err := lens.DecodeScriptTask([]byte(it.Body))
+		if err != nil {
+			return err
+		}
+		if contract.Body != it.Body || contract.Digest != task.Artifact.Digest || it.LaunchSpec == nil ||
+			it.LaunchSpec.Tool != contract.Runner || !slices.Equal(it.LaunchSpec.Argv, task.WorkerArgs()) || it.LaunchSpec.Agent != "" {
+			return fmt.Errorf("script assignment launch differs from validated contract")
+		}
+		// The holder remains accountable. A deterministic evidence run neither
+		// impersonates a fleet claimant nor auto-submits the linked story.
+		it.WorkerStories = nil
+		return nil
+	}
+
 	stories, err := weaveResolveWorkerStories(queueDir, it)
 	if err != nil {
 		return err

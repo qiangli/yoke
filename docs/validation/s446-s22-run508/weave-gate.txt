@@ -1,0 +1,165 @@
+=== RUN   TestResolveRunFound
+--- PASS: TestResolveRunFound (0.03s)
+=== RUN   TestResolveRunNotFound
+--- PASS: TestResolveRunNotFound (0.05s)
+=== RUN   TestResolveRunAmbiguousAcrossQueues
+--- PASS: TestResolveRunAmbiguousAcrossQueues (0.03s)
+=== RUN   TestResolveRunCurrentCheckoutWins
+--- PASS: TestResolveRunCurrentCheckoutWins (0.06s)
+=== RUN   TestResolveRunEvidenceHandles
+--- PASS: TestResolveRunEvidenceHandles (0.03s)
+=== RUN   TestAssignPoolCarriesPlanRank
+--- PASS: TestAssignPoolCarriesPlanRank (0.05s)
+=== RUN   TestAssignScript
+--- PASS: TestAssignScript (0.12s)
+=== RUN   TestAssignScriptIntegration
+    sprint_assign_script_test.go:188: === RUN   TestAssignScript
+            sprint_assign_script_test.go:160: durable body verified; delta: {"schema_version":"bashy-node-v1","ref":"run:002-1","path":"KB.md","name":"KB.md","kind":"record","type":"file","attrs":{"change":"observed","evidence":"workspace-metadata","modified":"2026-10-18T14:12:15.269330262-07:00","size":421}}
+                {"schema_version":"bashy-node-v1","ref":"run:002-1","path":"seed.txt","name":"seed.txt","kind":"record","type":"file","attrs":{"change":"observed","evidence":"workspace-metadata","modified":"2026-10-18T14:12:15.203883856-07:00","size":5}}
+                {"schema_version":"bashy-node-v1","ref":"run:002-1","path":"/tmp/TestAssignScript2443856164/001/.bashy/weave/002-525fe4b0/logs/issue-1.log","name":"issue-1.log","kind":"record","type":"log-line","attrs":{"evidence":"persisted-log","line":"[weave] launch started at=2026-10-18T21:12:15Z agent=\"\" tool=\"yoke\"","offset":0}}
+                {"schema_version":"bashy-node-v1","ref":"run:002-1","path":"/tmp/TestAssignScript2443856164/001/.bashy/weave/002-525fe4b0/logs/issue-1.log","name":"issue-1.log","kind":"record","type":"log-line","attrs":{"evidence":"persisted-log","line":"assignment-proof\r","offset":68}}
+                {"schema_version":"bashy-node-v1","ref":"run:002-1","path":"lifecycle","name":"lifecycle","kind":"record","type":"lifecycle","attrs":{"evidence":"persisted-run","exit_code":0,"finished_at":"2026-10-18T21:12:17.668518Z","state":"no-op"}}
+        --- PASS: TestAssignScript (3.05s)
+        PASS
+
+    sprint_assign_script_test.go:188: === RUN   TestAssignScript
+            sprint_assign_script_test.go:160: durable body verified; delta: {"schema_version":"bashy-node-v1","ref":"run:002-1","path":"KB.md","name":"KB.md","kind":"record","type":"file","attrs":{"change":"observed","evidence":"workspace-metadata","modified":"2026-10-18T14:12:18.394634282-07:00","size":421}}
+                {"schema_version":"bashy-node-v1","ref":"run:002-1","path":"seed.txt","name":"seed.txt","kind":"record","type":"file","attrs":{"change":"observed","evidence":"workspace-metadata","modified":"2026-10-18T14:12:18.323191304-07:00","size":5}}
+                {"schema_version":"bashy-node-v1","ref":"run:002-1","path":"/tmp/TestAssignScript77845318/001/.bashy/weave/002-e76b4fb4/logs/issue-1.log","name":"issue-1.log","kind":"record","type":"log-line","attrs":{"evidence":"persisted-log","line":"[weave] launch started at=2026-10-18T21:12:18Z agent=\"\" tool=\"yoke\"","offset":0}}
+                {"schema_version":"bashy-node-v1","ref":"run:002-1","path":"/tmp/TestAssignScript77845318/001/.bashy/weave/002-e76b4fb4/logs/issue-1.log","name":"issue-1.log","kind":"record","type":"log-line","attrs":{"evidence":"persisted-log","line":"assignment-proof\r","offset":68}}
+                {"schema_version":"bashy-node-v1","ref":"run:002-1","path":"/tmp/TestAssignScript77845318/001/.bashy/weave/002-e76b4fb4/logs/issue-1.log","name":"issue-1.log","kind":"record","type":"log-line","attrs":{"evidence":"persisted-log","line":"lens-script: exit status 1\r","offset":86}}
+                {"schema_version":"bashy-node-v1","ref":"run:002-1","path":"lifecycle","name":"lifecycle","kind":"record","type":"lifecycle","attrs":{"evidence":"persisted-run","exit_code":1,"finished_at":"2026-10-18T21:12:18.509734Z","state":"failed"}}
+        --- PASS: TestAssignScript (0.75s)
+        PASS
+
+--- PASS: TestAssignScriptIntegration (3.93s)
+=== RUN   TestScriptAssignmentContract
+--- PASS: TestScriptAssignmentContract (0.00s)
+=== RUN   TestAssignDispatch
+=== RUN   TestAssignDispatch/fit
+=== RUN   TestAssignDispatch/busy
+=== RUN   TestAssignDispatch/cascade
+=== RUN   TestAssignDispatch/L5_cascade
+=== RUN   TestAssignDispatch/dry-run
+=== RUN   TestAssignDispatch/manual
+--- PASS: TestAssignDispatch (0.00s)
+    --- PASS: TestAssignDispatch/fit (0.00s)
+    --- PASS: TestAssignDispatch/busy (0.00s)
+    --- PASS: TestAssignDispatch/cascade (0.00s)
+    --- PASS: TestAssignDispatch/L5_cascade (0.00s)
+    --- PASS: TestAssignDispatch/dry-run (0.00s)
+    --- PASS: TestAssignDispatch/manual (0.00s)
+=== RUN   TestAssignBusyUsesLiveQueueCheck
+--- PASS: TestAssignBusyUsesLiveQueueCheck (0.00s)
+=== RUN   TestAssignCommandSeedsLinksAndInjectsIdentity
+=== RUN   TestAssignCommandSeedsLinksAndInjectsIdentity/tool_flags
+=== RUN   TestAssignCommandSeedsLinksAndInjectsIdentity/agent_flags
+=== RUN   TestAssignCommandSeedsLinksAndInjectsIdentity/tool_env
+=== RUN   TestAssignCommandSeedsLinksAndInjectsIdentity/agent_env
+=== RUN   TestAssignCommandSeedsLinksAndInjectsIdentity/binding_env
+=== RUN   TestAssignCommandSeedsLinksAndInjectsIdentity/additive
+=== RUN   TestAssignCommandSeedsLinksAndInjectsIdentity/shadow
+=== RUN   TestAssignCommandSeedsLinksAndInjectsIdentity/probe
+=== RUN   TestAssignCommandSeedsLinksAndInjectsIdentity/quota_cooldown
+--- PASS: TestAssignCommandSeedsLinksAndInjectsIdentity (0.84s)
+    --- PASS: TestAssignCommandSeedsLinksAndInjectsIdentity/tool_flags (0.07s)
+    --- PASS: TestAssignCommandSeedsLinksAndInjectsIdentity/agent_flags (0.07s)
+    --- PASS: TestAssignCommandSeedsLinksAndInjectsIdentity/tool_env (0.07s)
+    --- PASS: TestAssignCommandSeedsLinksAndInjectsIdentity/agent_env (0.07s)
+    --- PASS: TestAssignCommandSeedsLinksAndInjectsIdentity/binding_env (0.07s)
+    --- PASS: TestAssignCommandSeedsLinksAndInjectsIdentity/additive (0.07s)
+    --- PASS: TestAssignCommandSeedsLinksAndInjectsIdentity/shadow (0.07s)
+    --- PASS: TestAssignCommandSeedsLinksAndInjectsIdentity/probe (0.07s)
+    --- PASS: TestAssignCommandSeedsLinksAndInjectsIdentity/quota_cooldown (0.07s)
+=== RUN   TestAssignPoolReplayProbeAndBusyClone
+--- PASS: TestAssignPoolReplayProbeAndBusyClone (0.16s)
+=== RUN   TestTakeoverCause
+=== RUN   TestTakeoverCause/usage_limit_reached
+=== RUN   TestTakeoverCause/insufficient_quota
+=== RUN   TestTakeoverCause/HTTP_502_bad_gateway
+=== RUN   TestTakeoverCause/API_error:_500
+=== RUN   TestTakeoverCause/overloaded_error
+=== RUN   TestTakeoverCause/service_unavailable
+=== RUN   TestTakeoverCause/connection_refused_api.vendor.example
+=== RUN   TestTakeoverCause/connection_refused_localhost:8000
+=== RUN   TestTakeoverCause/rate_limit_exceeded
+=== RUN   TestTakeoverCause/authentication_failed
+=== RUN   TestTakeoverCause/compiler_error
+--- PASS: TestTakeoverCause (0.00s)
+    --- PASS: TestTakeoverCause/usage_limit_reached (0.00s)
+    --- PASS: TestTakeoverCause/insufficient_quota (0.00s)
+    --- PASS: TestTakeoverCause/HTTP_502_bad_gateway (0.00s)
+    --- PASS: TestTakeoverCause/API_error:_500 (0.00s)
+    --- PASS: TestTakeoverCause/overloaded_error (0.00s)
+    --- PASS: TestTakeoverCause/service_unavailable (0.00s)
+    --- PASS: TestTakeoverCause/connection_refused_api.vendor.example (0.00s)
+    --- PASS: TestTakeoverCause/connection_refused_localhost:8000 (0.00s)
+    --- PASS: TestTakeoverCause/rate_limit_exceeded (0.00s)
+    --- PASS: TestTakeoverCause/authentication_failed (0.00s)
+    --- PASS: TestTakeoverCause/compiler_error (0.00s)
+=== RUN   TestTakeoverSelection
+--- PASS: TestTakeoverSelection (0.06s)
+=== RUN   TestTakeoverWorkspaceSingleton
+--- PASS: TestTakeoverWorkspaceSingleton (0.06s)
+=== RUN   TestTakeoverDispatch
+=== RUN   TestTakeoverDispatch/quota
+=== RUN   TestTakeoverDispatch/heartbeat
+=== RUN   TestTakeoverDispatch/dry
+=== RUN   TestTakeoverDispatch/unavailable
+=== RUN   TestTakeoverDispatch/other
+--- PASS: TestTakeoverDispatch (0.63s)
+    --- PASS: TestTakeoverDispatch/quota (0.14s)
+    --- PASS: TestTakeoverDispatch/heartbeat (0.16s)
+    --- PASS: TestTakeoverDispatch/dry (0.10s)
+    --- PASS: TestTakeoverDispatch/unavailable (0.12s)
+    --- PASS: TestTakeoverDispatch/other (0.10s)
+=== RUN   TestTakeoverFlagStory
+--- PASS: TestTakeoverFlagStory (0.02s)
+=== RUN   TestTakeoverBriefAndNativeGit
+--- PASS: TestTakeoverBriefAndNativeGit (0.05s)
+=== RUN   TestTakeoverRedactsSecrets
+--- PASS: TestTakeoverRedactsSecrets (0.00s)
+=== RUN   TestWorkerStoryActorAndTerminalEvidence
+=== RUN   TestWorkerStoryActorAndTerminalEvidence/matching
+=== RUN   TestWorkerStoryActorAndTerminalEvidence/nonmatching
+=== RUN   TestWorkerStoryActorAndTerminalEvidence/no-commits
+=== RUN   TestWorkerStoryActorAndTerminalEvidence/failed
+=== RUN   TestWorkerStoryActorAndTerminalEvidence/killed
+=== RUN   TestWorkerStoryActorAndTerminalEvidence/wrong-sprint
+=== RUN   TestWorkerStoryActorAndTerminalEvidence/dirty
+=== RUN   TestWorkerStoryActorAndTerminalEvidence/verify-failed
+=== RUN   TestWorkerStoryActorAndTerminalEvidence/preservation
+=== RUN   TestWorkerStoryActorAndTerminalEvidence/auto-after-delivery
+=== RUN   TestWorkerStoryActorAndTerminalEvidence/auto-dirty
+=== RUN   TestWorkerStoryActorAndTerminalEvidence/manual-submit
+--- PASS: TestWorkerStoryActorAndTerminalEvidence (3.40s)
+    --- PASS: TestWorkerStoryActorAndTerminalEvidence/matching (0.28s)
+    --- PASS: TestWorkerStoryActorAndTerminalEvidence/nonmatching (0.32s)
+    --- PASS: TestWorkerStoryActorAndTerminalEvidence/no-commits (0.24s)
+    --- PASS: TestWorkerStoryActorAndTerminalEvidence/failed (0.26s)
+    --- PASS: TestWorkerStoryActorAndTerminalEvidence/killed (0.32s)
+    --- PASS: TestWorkerStoryActorAndTerminalEvidence/wrong-sprint (0.27s)
+    --- PASS: TestWorkerStoryActorAndTerminalEvidence/dirty (0.27s)
+    --- PASS: TestWorkerStoryActorAndTerminalEvidence/verify-failed (0.26s)
+    --- PASS: TestWorkerStoryActorAndTerminalEvidence/preservation (0.29s)
+    --- PASS: TestWorkerStoryActorAndTerminalEvidence/auto-after-delivery (0.32s)
+    --- PASS: TestWorkerStoryActorAndTerminalEvidence/auto-dirty (0.30s)
+    --- PASS: TestWorkerStoryActorAndTerminalEvidence/manual-submit (0.28s)
+=== RUN   TestWorkerStoryExplicitIdentityAndConflict
+--- PASS: TestWorkerStoryExplicitIdentityAndConflict (0.19s)
+=== RUN   TestWorkerStoryFinalizeIntegration
+--- PASS: TestWorkerStoryFinalizeIntegration (0.39s)
+=== RUN   TestWorkerStoryLaunchClaimsBeforeExecution
+=== RUN   TestWorkerStoryLaunchClaimsBeforeExecution/false
+=== RUN   TestWorkerStoryLaunchClaimsBeforeExecution/true
+--- PASS: TestWorkerStoryLaunchClaimsBeforeExecution (0.85s)
+    --- PASS: TestWorkerStoryLaunchClaimsBeforeExecution/false (0.57s)
+    --- PASS: TestWorkerStoryLaunchClaimsBeforeExecution/true (0.28s)
+=== RUN   TestWorkerStoryLinkGenerationAndUUID
+--- PASS: TestWorkerStoryLinkGenerationAndUUID (0.19s)
+=== RUN   TestWorkerStorySubmissionRefusalIsDurable
+--- PASS: TestWorkerStorySubmissionRefusalIsDurable (0.27s)
+=== RUN   TestWorkerStoryCommitRangeIsNativeAndMeasured
+--- PASS: TestWorkerStoryCommitRangeIsNativeAndMeasured (0.22s)
+PASS
+ok  	github.com/qiangli/yoke/pkg/weave	12.665s

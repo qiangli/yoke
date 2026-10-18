@@ -253,6 +253,12 @@ func runWeaveTakeover(cmd *cobra.Command, dir string, id int64, mode string, dry
 	if it == nil {
 		return fmt.Errorf("run #%d not found", id)
 	}
+	if it.ScriptAssignment != nil {
+		if automatic {
+			return nil
+		}
+		return fmt.Errorf("script assignments require explicit recompile/reassignment; model takeover is disabled")
+	}
 	board, s, err := weaveTakeoverSprint(dir, it)
 	if err != nil {
 		if automatic {
@@ -503,6 +509,9 @@ func weaveTakeoverHeartbeat(cmd *cobra.Command, dir string, idle time.Duration, 
 		return
 	}
 	for _, it := range q.Items {
+		if it.ScriptAssignment != nil {
+			continue
+		}
 		if it.NeedsTakeover {
 			continue
 		}

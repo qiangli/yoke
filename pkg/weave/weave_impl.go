@@ -155,9 +155,10 @@ type weaveItem struct {
 	// travels with the repo; this queue is per-machine execution state. The back-ref
 	// is what keeps them one system instead of two: when this item merges, the
 	// register entry can be closed, and `issue show` can say what is in flight.
-	Register             string             `json:"register,omitempty"`
-	WorkerStories        []weaveWorkerStory `json:"worker_stories,omitempty"`
-	StorySubmissionError string             `json:"story_submission_error,omitempty"`
+	Register             string                 `json:"register,omitempty"`
+	ScriptAssignment     *weaveScriptAssignment `json:"script_assignment,omitempty"`
+	WorkerStories        []weaveWorkerStory     `json:"worker_stories,omitempty"`
+	StorySubmissionError string                 `json:"story_submission_error,omitempty"`
 	// DependsOn lists issues that must be DONE (merged) before this one may start.
 	// This is the conductor's "schedule by parallel safety" rule, moved out of the
 	// conductor's head and into the data — where a resumed conductor, or a second

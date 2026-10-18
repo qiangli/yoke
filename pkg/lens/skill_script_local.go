@@ -25,62 +25,8 @@ type LocalScriptRunner struct {
 
 // RunScript statically verifies declared capabilities and effects, then executes the script locally.
 func (r *LocalScriptRunner) RunScript(ctx context.Context, artifact *CompiledScriptArtifact) (*ExecutionResult, error) {
-	if r == nil || artifact == nil || len(artifact.Script) == 0 {
-		return nil, errorf(ExitInvalid, "cannot run empty or uncompiled script artifact")
-	}
-
-	// Revalidate at the execution boundary: exported artifacts are mutable and
-	// the plan's custom validator or effect analysis is not an execution guard.
-	if artifact.Digest != ScriptArtifactDigest(artifact.Script) || artifact.Name != ScriptArtifactName(artifact.Script) {
-		return nil, errorf(ExitInvalid, "script artifact identity mismatch")
-	}
-	if err := ValidatePureOutputScript(artifact.Script); err != nil {
+	if err := r.ValidateScript(artifact); err != nil {
 		return nil, err
-	}
-	// Statically analyze only the bounded, literal pure-output language.
-	_, effects, caps, _, err := AnalyzeScript(artifact.Script)
-	if err != nil {
-		return nil, err
-	}
-
-	// Execution requires the caller to explicitly authorize capabilities and
-	// effects, even within the bounded pure-output language.
-	if len(r.AllowedCaps) == 0 {
-		return nil, errorf(ExitInvalid, "local script execution denied: missing explicit nonempty allowed capability policy (fail-closed; arbitrary capabilities forbidden)")
-	}
-	if len(r.AllowedEffects) == 0 {
-		return nil, errorf(ExitInvalid, "local script execution denied: missing explicit nonempty allowed effect policy (fail-closed; arbitrary effects forbidden)")
-	}
-
-	// Verify denied capabilities (fail closed).
-	for _, denied := range r.DeniedCaps {
-		for _, cp := range caps {
-			if cp == denied {
-				return nil, errorf(ExitInvalid, "script execution denied: capability %q is explicitly forbidden", denied)
-			}
-		}
-	}
-
-	// Verify required capabilities against allowed policy (fail closed).
-	allowedCapMap := make(map[string]bool, len(r.AllowedCaps))
-	for _, ac := range r.AllowedCaps {
-		allowedCapMap[ac] = true
-	}
-	for _, cp := range caps {
-		if !allowedCapMap[cp] {
-			return nil, errorf(ExitInvalid, "script execution denied: capability %q is not in allowed capabilities %v", cp, r.AllowedCaps)
-		}
-	}
-
-	// Verify required effects against allowed policy (fail closed).
-	allowedEffMap := make(map[string]bool, len(r.AllowedEffects))
-	for _, ae := range r.AllowedEffects {
-		allowedEffMap[ae] = true
-	}
-	for _, ef := range effects {
-		if !allowedEffMap[ef] {
-			return nil, errorf(ExitInvalid, "script execution denied: effect %q is not in allowed effects %v", ef, r.AllowedEffects)
-		}
 	}
 
 	// Interpret only builtins in process, with no inherited environment, shell
@@ -120,6 +66,69 @@ func (r *LocalScriptRunner) RunScript(ctx context.Context, artifact *CompiledScr
 		Stderr:   stderr.Bytes(),
 		Error:    runErr,
 	}, nil
+}
+
+// ValidateScript checks identity, syntax and policy without executing any script.
+func (r *LocalScriptRunner) ValidateScript(artifact *CompiledScriptArtifact) error {
+	if r == nil || artifact == nil || len(artifact.Script) == 0 {
+		return errorf(ExitInvalid, "cannot run empty or uncompiled script artifact")
+	}
+
+	// Revalidate at the execution boundary: exported artifacts are mutable and
+	// the plan's custom validator or effect analysis is not an execution guard.
+	if artifact.Digest != ScriptArtifactDigest(artifact.Script) || artifact.Name != ScriptArtifactName(artifact.Script) {
+		return errorf(ExitInvalid, "script artifact identity mismatch")
+	}
+	if err := ValidatePureOutputScript(artifact.Script); err != nil {
+		return err
+	}
+	// Statically analyze only the bounded, literal pure-output language.
+	_, effects, caps, _, err := AnalyzeScript(artifact.Script)
+	if err != nil {
+		return err
+	}
+
+	// Execution requires the caller to explicitly authorize capabilities and
+	// effects, even within the bounded pure-output language.
+	if len(r.AllowedCaps) == 0 {
+		return errorf(ExitInvalid, "local script execution denied: missing explicit nonempty allowed capability policy (fail-closed; arbitrary capabilities forbidden)")
+	}
+	if len(r.AllowedEffects) == 0 {
+		return errorf(ExitInvalid, "local script execution denied: missing explicit nonempty allowed effect policy (fail-closed; arbitrary effects forbidden)")
+	}
+
+	// Verify denied capabilities (fail closed).
+	for _, denied := range r.DeniedCaps {
+		for _, cp := range caps {
+			if cp == denied {
+				return errorf(ExitInvalid, "script execution denied: capability %q is explicitly forbidden", denied)
+			}
+		}
+	}
+
+	// Verify required capabilities against allowed policy (fail closed).
+	allowedCapMap := make(map[string]bool, len(r.AllowedCaps))
+	for _, ac := range r.AllowedCaps {
+		allowedCapMap[ac] = true
+	}
+	for _, cp := range caps {
+		if !allowedCapMap[cp] {
+			return errorf(ExitInvalid, "script execution denied: capability %q is not in allowed capabilities %v", cp, r.AllowedCaps)
+		}
+	}
+
+	// Verify required effects against allowed policy (fail closed).
+	allowedEffMap := make(map[string]bool, len(r.AllowedEffects))
+	for _, ae := range r.AllowedEffects {
+		allowedEffMap[ae] = true
+	}
+	for _, ef := range effects {
+		if !allowedEffMap[ef] {
+			return errorf(ExitInvalid, "script execution denied: effect %q is not in allowed effects %v", ef, r.AllowedEffects)
+		}
+	}
+
+	return nil
 }
 
 // ExecuteTask executes a WeaveReceivingSeatTask locally under declared effects.

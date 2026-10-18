@@ -1,9 +1,7 @@
 package lenscmd
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
 	"slices"
 	"strings"
 
@@ -11,16 +9,7 @@ import (
 	"github.com/qiangli/yoke/pkg/lens"
 )
 
-// scriptTask is the exact JSON body passed by weave through WEAVE_ISSUE_BODY.
-// Policy is repeated in the launch argv so a changed body cannot widen authority.
-type scriptTask struct {
-	Schema   string                      `json:"schema"`
-	Artifact lens.CompiledScriptArtifact `json:"artifact"`
-	Caps     []string                    `json:"caps"`
-	Effects  []string                    `json:"effects"`
-	Help     string                      `json:"help"`
-	NoInput  bool                        `json:"no_input"`
-}
+type scriptTask = lens.ScriptTask
 
 var scriptCmd = &tool.Tool{
 	Name:     "lens-script",
@@ -44,17 +33,9 @@ func runScriptWorker(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, scriptCmd, "requires digest, nonempty caps/effects and no operands")
 	}
 	body := rc.Getenv("WEAVE_ISSUE_BODY")
-	if len(body) == 0 || len(body) > 64*1024 {
-		return fail(fmt.Errorf("task body must be 1..65536 bytes"))
-	}
-	var task scriptTask
-	dec := json.NewDecoder(strings.NewReader(body))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&task); err != nil {
+	task, err := lens.DecodeScriptTask([]byte(body))
+	if err != nil {
 		return fail(err)
-	}
-	if err := dec.Decode(new(any)); err != io.EOF {
-		return fail(fmt.Errorf("trailing task data"))
 	}
 	allowedCaps, allowedEffects := strings.Split(*caps, ","), strings.Split(*effects, ",")
 	for _, values := range [][]string{allowedCaps, allowedEffects} {
