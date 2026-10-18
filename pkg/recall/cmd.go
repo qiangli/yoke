@@ -14,6 +14,7 @@ import (
 
 	"github.com/qiangli/yoke/pkg/craft"
 	"github.com/qiangli/yoke/pkg/kb"
+	"github.com/qiangli/yoke/pkg/kbmemory"
 	"github.com/qiangli/yoke/pkg/redact"
 	"github.com/qiangli/yoke/pkg/scope"
 	"github.com/qiangli/yoke/pkg/skills"
@@ -167,6 +168,13 @@ func NewContextCmd(extra ...Reader) *cobra.Command {
 		lineage  bool
 		asOf     string
 		hops     int
+		// mem* selects one explicit memory collection for the bounded
+		// provenance-rich path (story c537aeb13da6). Empty memTarget keeps
+		// the historical legacy-only assembly byte-identical.
+		memTarget, memIndex, memSession, memDir, memMode string
+		memOS, memSince, memUntil                        string
+		memTags, memRepos                                []string
+		memWait, memTimeout                              time.Duration
 	)
 	cmd := &cobra.Command{
 		Use:           "context",
@@ -222,10 +230,43 @@ func NewContextCmd(extra ...Reader) *cobra.Command {
 					}
 				}
 			}
+			// One explicit memory collection joins the assembly when
+			// --memory-target names it. The index is required beside it:
+			// indexes are never provisioned, so a missing one is a caller
+			// error, not a default. The collection's ring joins selection
+			// and validation like any reader's; without it the read would
+			// spuriously refuse itself as "not selected".
+			var memSrc *MemorySource
+			baseReaders := readers
+			if strings.TrimSpace(memTarget) != "" {
+				if strings.TrimSpace(memIndex) == "" {
+					return fmt.Errorf("kb context: --memory-index is required with --memory-target (indexes are never provisioned)")
+				}
+				memSrc = &MemorySource{
+					Target: strings.TrimSpace(memTarget), Index: strings.TrimSpace(memIndex),
+					Session: strings.TrimSpace(memSession), Dir: strings.TrimSpace(memDir),
+					Mode: strings.TrimSpace(memMode),
+					Tags: cleanList(memTags), Repos: cleanList(memRepos), OS: strings.TrimSpace(memOS),
+					Since: strings.TrimSpace(memSince), Until: strings.TrimSpace(memUntil),
+					Wait: memWait, Timeout: memTimeout,
+				}
+				if !slices.Contains(q.Rings, memSrc.ring()) {
+					q.Rings = append(q.Rings, memSrc.ring())
+				}
+				readers = append(readers, memSrc.Reader())
+			}
 			if err := validateContextSelection(validationRings, q.Forms, readers); err != nil {
 				return err
 			}
-			res := Context(q, readers...)
+			var res ContextResult
+			if memSrc != nil {
+				// The validation twin carries no hits; the hit-carrying
+				// twin is built inside MemoryContext from the served
+				// records, so serve from the pre-twin readers.
+				res = MemoryContext(cmd.Context(), q, *memSrc, baseReaders...)
+			} else {
+				res = Context(q, readers...)
+			}
 			if asJSON {
 				enc := json.NewEncoder(cmd.OutOrStdout())
 				enc.SetIndent("", "  ")
@@ -234,6 +275,17 @@ func NewContextCmd(extra ...Reader) *cobra.Command {
 				}
 			} else {
 				renderContext(cmd.OutOrStdout(), res)
+			}
+			// An explicit collection failure is a caller error with a
+			// structured code: the internal MemoryError state carries it
+			// (§10.3 admits no top-level error field, so the envelope
+			// stays frozen) and the returned ExitError carries the §5.2
+			// exit mapping — never a silent success, never process exit
+			// inside the library (an os.Exit here would kill an MCP server).
+			if res.MemoryError != nil {
+				return &kbmemory.ExitError{Code: MemoryExitCode(res.MemoryError.Code),
+					Msg: fmt.Sprintf("kb context: memory %s: %s",
+						res.MemoryError.Code, res.MemoryError.Message)}
 			}
 			for _, ring := range res.Rings {
 				if !ring.OK {
@@ -257,6 +309,18 @@ func NewContextCmd(extra ...Reader) *cobra.Command {
 	f.BoolVar(&lineage, "lineage", false, "agent ring: also read descendant episodes' notes")
 	f.StringVar(&asOf, "as-of", "", "resolve page validity at this instant (RFC3339 or YYYY-MM-DD; default now)")
 	f.IntVar(&hops, "hops", 0, "multi-hop graph expansion depth from ranked hits (0 = direct hits only)")
+	f.StringVar(&memTarget, "memory-target", "", "explicit memory collection target (sqlite locator); enables the memory collection path")
+	f.StringVar(&memIndex, "memory-index", "", "explicit full-text rank index locator (required with --memory-target, never provisioned)")
+	f.StringVar(&memSession, "memory-session", "", "explicit owner session for a persistent memory target")
+	f.StringVar(&memDir, "memory-dir", "", "resolve a relative persistent memory path")
+	f.StringVar(&memMode, "memory-mode", "", "retrieval mode (default lexical; semantic|hybrid report unsupported)")
+	f.StringSliceVar(&memTags, "memory-tags", nil, "memory scope: all tags must match")
+	f.StringSliceVar(&memRepos, "memory-repos", nil, "memory scope: any repo overlap")
+	f.StringVar(&memOS, "memory-os", "", "memory scope: exact OS")
+	f.StringVar(&memSince, "memory-since", "", "memory scope: record created at or after (inclusive)")
+	f.StringVar(&memUntil, "memory-until", "", "memory scope: record created before (exclusive)")
+	f.DurationVar(&memWait, "memory-wait", 0, "bound waiting for lock/admission on the memory read")
+	f.DurationVar(&memTimeout, "memory-timeout", 0, "bound the whole memory read (0 = none)")
 	return cmd
 }
 

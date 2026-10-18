@@ -216,6 +216,11 @@ type Hit struct {
 	// Empty when the query carried no --memory filter.
 	Memory string `json:"memory,omitempty"`
 
+	// Retrieval is the per-block lexical provenance, set only for hits
+	// served from a memory collection (MemoryContext). Nil for legacy
+	// kb-ring hits; omitempty keeps the established envelope unchanged.
+	Retrieval *BlockRetrieval `json:"retrieval,omitempty"`
+
 	// Compose is the command that renders a capability, when the hit is one.
 	Compose string `json:"compose,omitempty"`
 

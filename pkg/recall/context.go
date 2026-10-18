@@ -23,6 +23,28 @@ type ContextResult struct {
 	Abstained      bool           `json:"abstained"`
 	Rings          []ContextRing  `json:"rings"`
 	Blocks         []ContextBlock `json:"blocks"`
+	// Freshness names the index population a memory collection read was
+	// ranked from; Truncation reports a cut memory read. Both are set only
+	// by MemoryContext and stay nil (hence absent) for legacy kb-ring
+	// assembly, so the golden stays byte-unchanged.
+	Freshness  *MemoryFreshness  `json:"freshness,omitempty"`
+	Truncation *MemoryTruncation `json:"truncation,omitempty"`
+	// MemoryError carries the structured retrieval failure when an
+	// explicit memory collection read fails. Set only by MemoryContext;
+	// nil for every legacy assembly and every successful memory read.
+	// Internal state only (never marshalled: §10.3 admits no top-level
+	// addition beyond retrieval/freshness/truncation, so the envelope
+	// stays frozen). The CLI/MCP boundary maps Code to the process exit
+	// via MemoryExitCode by returning a typed ExitError.
+	MemoryError *MemoryRetrieveError `json:"-"`
+}
+
+// MemoryRetrieveError is the structured code of a failed explicit memory
+// collection read (db contract §5.2 codes: not_found, busy, timeout,
+// cancelled, ...), with the human message beside it.
+type MemoryRetrieveError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 type ContextBudget struct {
@@ -60,6 +82,10 @@ type ContextBlock struct {
 	Text   string      `json:"text"`
 	Why    []string    `json:"why,omitempty"`
 	Source []SourceRef `json:"source,omitempty"`
+	// Retrieval is the per-block lexical provenance for a block assembled
+	// from a memory collection. Nil for legacy kb-ring blocks; omitempty
+	// keeps the frozen envelope byte-unchanged.
+	Retrieval *BlockRetrieval `json:"retrieval,omitempty"`
 
 	// working is internal ordering state (never emitted): see workingLast.
 	working bool
@@ -297,6 +323,7 @@ func blockAt(h Hit, resolution string) ContextBlock {
 		ObservedAt: h.ObservedAt, working: h.Working,
 		Path: append([]string(nil), h.Path...),
 		Why:  append([]string(nil), h.Why...), Source: append([]SourceRef(nil), h.Source...),
+		Retrieval: h.Retrieval,
 	}
 	// Freshness, Snapshot and Path stay empty: no source record carries them
 	// yet (the sense schema owns freshness/snapshot; M4 owns path). ValidTo
@@ -321,6 +348,13 @@ func renderContext(w io.Writer, res ContextResult) {
 		return
 	}
 	for _, b := range res.Blocks {
-		fmt.Fprintf(w, "- [%s/%s] %s  (%s)\n", b.Ring, b.Form, strings.ReplaceAll(b.Text, "\n", " "), b.Ref)
+		text := strings.ReplaceAll(b.Text, "\n", " ")
+		if b.Retrieval != nil {
+			// New-path blocks label their token count as an estimate
+			// right in the prompt-ready text; legacy lines are untouched.
+			fmt.Fprintf(w, "- [%s/%s] %s  (%s, ~%d tokens estimate)\n", b.Ring, b.Form, text, b.Ref, b.Tokens)
+			continue
+		}
+		fmt.Fprintf(w, "- [%s/%s] %s  (%s)\n", b.Ring, b.Form, text, b.Ref)
 	}
 }
