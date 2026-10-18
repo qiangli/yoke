@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -33,13 +34,21 @@ func nativeCatFile(_ context.Context, dir string, args []string) (*ExecResult, e
 	hashStr := args[1]
 
 	// A full object id is looked up directly; anything else (HEAD,
-	// branch~2, abbreviated ids) resolves as a revision. rev:path and
-	// unresolvable names are host git's to answer.
+	// branch~2, abbreviated ids) resolves as a revision, and rev:path
+	// natively. Index forms, cwd-relative paths and unresolvable names
+	// are host git's to answer.
 	var hash plumbing.Hash
 	if len(hashStr) == 40 && plumbing.IsHash(hashStr) {
 		hash = plumbing.NewHash(hashStr)
-	} else if strings.Contains(hashStr, ":") {
-		return nil, ErrUnsupported
+	} else if rev, p, ok := SplitRevPath(hashStr); ok {
+		rp, rerr := ResolveRevPath(repo, rev, p)
+		if errors.Is(rerr, ErrPathNotInRev) {
+			return &ExecResult{Stderr: "fatal: " + strings.TrimPrefix(rerr.Error(), ErrPathNotInRev.Error()+": ") + "\n", ExitCode: 128}, nil
+		}
+		if rerr != nil {
+			return nil, ErrUnsupported
+		}
+		hash = rp.Hash
 	} else if h, rerr := repo.ResolveRevision(plumbing.Revision(hashStr)); rerr == nil {
 		hash = *h
 	} else {
