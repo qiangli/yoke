@@ -226,9 +226,11 @@ func (w *wsScoped) Edges(ctx context.Context, loc ref.Locator) ([]provider.Edge,
 }
 
 // scopedProvider picks the provider for a locator that carries a scope. Only
-// ws, sandbox, host (a sphere peer), and k8s pods are served; every other
-// scope is refused rather than read locally.
-func scopedProvider(_ *tool.RunContext, loc ref.Locator) (provider.Provider, error) {
+// ws, sandbox, host (a sphere peer), k8s pods and cloud droplets are served;
+// every other scope is refused rather than read locally. The k8s and cloud
+// cases delegate to the registered factories so there is exactly one
+// explicit-context recipe each, never a duplicate registry.
+func scopedProvider(rc *tool.RunContext, loc ref.Locator) (provider.Provider, error) {
 	switch loc.ScopeKind {
 	case "ws":
 		return wsProvider(loc)
@@ -240,11 +242,12 @@ func scopedProvider(_ *tool.RunContext, loc ref.Locator) (provider.Provider, err
 		if loc.Scheme != "k8s" {
 			return nil, fmt.Errorf("location scope %q is not served locally for provider %q", loc.ScopeKind, loc.Scheme)
 		}
-		r, err := provider.NewK8sScopedRecipe(loc.ScopeValue, k8sRunner)
-		if err != nil {
-			return nil, err
+		return k8sProvider(rc, loc)
+	case "cloud":
+		if loc.Scheme != "cloud" {
+			return nil, fmt.Errorf("location scope %q is not served locally for provider %q", loc.ScopeKind, loc.Scheme)
 		}
-		return r, nil
+		return cloudProvider(rc, loc)
 	default:
 		return nil, fmt.Errorf("location scope %q is not served locally", loc.ScopeKind)
 	}

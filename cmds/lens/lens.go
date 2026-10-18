@@ -12,7 +12,8 @@
 // mcp-call/skill); they are never detected, so they need -f. Two knobs are
 // the agent's: --switch=keep|slash|pascal respells options for a Windows
 // peer and --drive=C spells /c/… paths natively. --verbose adds
-// "executable: schema-verified|unverified"; nothing is ever run.
+// "executable: schema-verified|unverified"; for a locator pull it also prints
+// the resolved tier and transport (never credentials); nothing is ever run.
 //
 // Pull and push are the same bytes: a LOCATOR is walked into the
 // bashy-graph-v1 stream (`-t graph` prints it) and that stream is then
@@ -167,6 +168,9 @@ func run(rc *tool.RunContext, args []string) int {
 		if loc, ok := locatorOperand(operands[0]); ok {
 			if fromFmt != "" {
 				return tool.UsageError(rc, cmd, "-f does not apply to a locator")
+			}
+			if *verbose {
+				reportTier(rc, loc)
 			}
 			if data, code = pull(rc, loc, *depth); code != 0 {
 				return code

@@ -22,7 +22,7 @@ var locatorSchemes = map[string]bool{
 	"dir": true, "tar": true, "zip": true, "gzip": true, "git": true,
 	"ast": true, "graph": true, "json": true, "yaml": true, "md": true,
 	"pdf": true, "proc": true, "net": true, "peer": true, "sphere": true,
-	"story": true, "claim": true, "oci": true, "k8s": true, "dag": true,
+	"story": true, "claim": true, "oci": true, "k8s": true, "cloud": true, "dag": true,
 }
 
 // ParseLocator parses the declared v1 schemes and existing entity refs.
