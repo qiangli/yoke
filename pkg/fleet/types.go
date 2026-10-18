@@ -183,6 +183,8 @@ type Tool struct {
 	// terminal output and response headers are run through (usage_signals.go).
 	UsageSignals []UsageSignal `yaml:"usage_signals,omitempty" json:"usage_signals,omitempty" doc:"deterministic vendor-message matchers (quota errors, rate-limit headers) observed through this tool"`
 
+	Prefs ReaderPrefs `yaml:"prefs,omitempty" json:"prefs,omitempty" doc:"declared reader preferences"`
+
 	Ring assetring.Ring `yaml:"-" json:"ring"`
 }
 
@@ -1025,6 +1027,8 @@ type Model struct {
 
 	XHosts []ModelHost `yaml:"x_hosts,omitempty" json:"x_hosts,omitempty" doc:"paired hosts serving the model"`
 
+	Prefs ReaderPrefs `yaml:"prefs,omitempty" json:"prefs,omitempty" doc:"declared reader preferences"`
+
 	// Derived holds names the catalog computed at load — today, the family
 	// alias. It is a function of the whole catalog, not of this entry, so
 	// it is never persisted (`yaml:"-"`): writing it back would freeze a
@@ -1176,6 +1180,8 @@ type Agent struct {
 	Lifecycle *AgentLifecycle `yaml:"lifecycle,omitempty" json:"lifecycle,omitempty" doc:"work owning this ephemeral definition"`
 	Ephemeral bool            `yaml:"ephemeral,omitempty" json:"ephemeral,omitempty" doc:"whether the agent exists for one task"`
 	Task      string          `yaml:"task,omitempty" json:"task,omitempty" doc:"task assigned to an ephemeral agent"`
+
+	Prefs ReaderPrefs `yaml:"prefs,omitempty" json:"prefs,omitempty" doc:"declared reader preferences"`
 
 	// AutoNick and Derived are computed by the catalog at load: the
 	// assigned human name (when Nick is empty) and the floating family
