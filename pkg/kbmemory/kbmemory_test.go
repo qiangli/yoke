@@ -166,6 +166,31 @@ func TestPersistentThroughExplicitSharedOwner(t *testing.T) {
 	lifecycle(t, loc("sqlite:file:"+filepath.Join(dir, "shared.db")), owner(t, dir))
 }
 
+// TestLargeCaptureThroughSharedOwner: a body over the owner's former 64 KiB
+// request read bound is captured and read back through both owner modes.
+func TestLargeCaptureThroughSharedOwner(t *testing.T) {
+	dir := isolate(t)
+	s := owner(t, dir)
+	body := strings.Repeat("x\"", 300<<10) // escaping doubles the quote bytes
+	for name, target := range map[string]string{
+		"memory":            loc("sqlite:mem:" + s + "/big"),
+		"persistent-shared": loc("sqlite:file:" + filepath.Join(dir, "big.db")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			session := s
+			if name == "memory" {
+				session = ""
+			}
+			must(t, Request{Verb: "init", Target: target, Session: session})
+			r := record(t, must(t, Request{Verb: "add", Target: target, Session: session, Body: str(body)}))
+			got := record(t, must(t, Request{Verb: "inspect", Target: target, Session: session, ID: r.ID}))
+			if got.Body != body {
+				t.Fatalf("large body round-trip: got %d bytes, want %d", len(got.Body), len(body))
+			}
+		})
+	}
+}
+
 func TestNothingImplicit(t *testing.T) {
 	dir := isolate(t)
 	missing := filepath.Join(dir, "missing.db")

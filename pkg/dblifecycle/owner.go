@@ -28,6 +28,11 @@ const wireVersion = "bashy-db-owner-v1"
 const replayLimit = 1024
 const attachmentTTL = 2 * time.Minute
 
+// MaxWireBytes bounds one encoded owner request. It is the single declared
+// IPC cap for client and server: it carries an 8 MiB category snapshot plus
+// worst-case JSON escaping, so any input a category accepts fits on the wire.
+const MaxWireBytes = 64 << 20
+
 // SessionInfo is on-disk control metadata only. Database contents and replay
 // results stay in the owner process memory. The bearer token is protected by
 // owner-only directory and file modes; it is never returned in CLI output.
@@ -255,6 +260,14 @@ func Call(ctx context.Context, session string, req Request) (Response, error) {
 	if info.State != "running" {
 		return Response{}, fmt.Errorf("%w: session %s", dbstore.ErrLifetimeEnded, session)
 	}
+	req.SchemaVersion, req.Token = wireVersion, info.Token
+	if req.Holder.Episode == "" {
+		req.Holder = coord.Self()
+	}
+	wire, err := encodeRequest(req)
+	if err != nil {
+		return Response{}, err
+	}
 	conn, err := dialOwner(ctx, info.Address)
 	if err != nil {
 		return Response{}, fmt.Errorf("%w: session %s owner unavailable: %v", dbstore.ErrLifetimeEnded, session, err)
@@ -274,11 +287,7 @@ func Call(ctx context.Context, session string, req Request) (Response, error) {
 		deadline = time.Now().Add(30 * time.Second)
 	}
 	_ = conn.SetDeadline(deadline)
-	req.SchemaVersion, req.Token = wireVersion, info.Token
-	if req.Holder.Episode == "" {
-		req.Holder = coord.Self()
-	}
-	if err := json.NewEncoder(conn).Encode(req); err != nil {
+	if _, err := conn.Write(wire); err != nil {
 		return Response{}, err
 	}
 	// Numbers stay json.Number so a category result (document numbers,
@@ -293,6 +302,20 @@ func Call(ctx context.Context, session string, req Request) (Response, error) {
 		return Response{}, err
 	}
 	return res, nil
+}
+
+// encodeRequest refuses a request over MaxWireBytes before anything is sent,
+// so an oversized request is a structured limit error, never a truncated read
+// the owner drops.
+func encodeRequest(req Request) ([]byte, error) {
+	b, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	if len(b)+1 > MaxWireBytes {
+		return nil, fmt.Errorf("%w: owner request is %d bytes, over %d", dbstore.ErrLimitExceeded, len(b)+1, MaxWireBytes)
+	}
+	return append(b, '\n'), nil
 }
 
 type replay struct {
@@ -447,7 +470,7 @@ func (o *owner) handle(conn net.Conn) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
 	var req Request
-	if err := json.NewDecoder(io.LimitReader(conn, 64<<10)).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(conn, MaxWireBytes)).Decode(&req); err != nil {
 		return
 	}
 	if req.SchemaVersion != wireVersion || subtle.ConstantTimeCompare([]byte(req.Token), []byte(o.info.Token)) != 1 {

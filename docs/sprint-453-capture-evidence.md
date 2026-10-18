@@ -28,9 +28,11 @@ They consume `pkg/kblife` directly, with no copy of its rules:
   rolls back the whole batch, so a supersede never half-applies. The old record
   gets `status: superseded`, matching `kb supersede`.
 - `forget TARGET ID --if-revision N --reason R` is the registered op
-  `memory.forget`. It builds the tombstone with `kblife.NewTombstone("memory:"+ID,
+  `memory.forget`. It builds the tombstone with `kblife.NewTombstone(ID,
   reason, kb.ToolID(), kb.EpisodeID(), at)` and patches it under `if_revision`.
-  The record body, provenance and links are kept for audit. A second forget is
+  `Tombstone.Ref` is the stable record ID verbatim; the canonical target is
+  carried by the envelope, so no `memory:` scheme or db descent is invented
+  (mb:6762). The record body, provenance and links are kept for audit. A second forget is
   refused `invalid_input`.
 - Replay works as it does for add/update: the owner digests the logical
   input, and the time is generated inside the op. There is no extra dedup
@@ -130,3 +132,21 @@ Still owed:
    so CLI exit codes match MCP `MCPCommand().Run`.
 4. MCP registration: `kbmemory.MCPCommand()` beside the existing direct tools
    (`yoke/mcp/direct.go` pattern).
+
+## Owner wire cap correction (mb:6774, steering 2026-10-18T13:45Z)
+
+| Finding | Fix | Test |
+|---|---|---|
+| `dblifecycle` owner `serve` read requests through `io.LimitReader(conn, 64<<10)`, so a valid `memory.add` over ~64 KiB through memory mode or a shared persistent owner failed with EOF although `MaxBody` is 1 MiB | one declared `dblifecycle.MaxWireBytes = 64 MiB` (8 MiB category snapshots + worst-case JSON escaping). `Call` encodes the request first and refuses over the cap with `dbstore.ErrLimitExceeded` before dialing; the server reads through the same cap. No new protocol or registry | `TestOwnerWireCap` (200 KiB request OK; over-cap request `limit_exceeded`, op never runs) |
+| `inspect`/internal `get` read with dbdoc's default 256 KiB `--max-bytes`, so a large captured record could be written but not read back (`limit_exceeded`) | the record reads pass `MaxBytes: dbdoc.MaxDocBytes`, the document bound the body limit already sits under | `TestLargeCaptureThroughSharedOwner` (600 KiB escaped body add + inspect, memory and persistent-shared) |
+| `Tombstone.Ref` used an unsupported `memory:` prefix | `kblife.NewTombstone(r.ID, …)` | `TestSupersedeAndForget` asserts `tb.Ref == ID` |
+
+Dragon (focused only, raw exits kept with pipefail; log `/tmp/s453-wire-gate.log`):
+
+    go test -short -count=1 -run 'TestOwnerWireCap|TestOwnerCallPreservesNumberLexemes' ./pkg/dblifecycle   ok 0.690s rc=0
+    go test -short -count=1 ./pkg/kbmemory                                                                ok 13.976s rc=0
+    go vet ./pkg/kbmemory ./pkg/dblifecycle                                                               rc=0
+
+Remote gates owed (manager): whole `./pkg/dblifecycle` (process tests),
+whole `./pkg/kbmemory` without `-short` (independent processes, all modes),
+atlas/recall/kb/dbdoc, `scripts/crossvet.sh`.

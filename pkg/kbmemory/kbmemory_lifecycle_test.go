@@ -100,7 +100,7 @@ func TestSupersedeAndForget(t *testing.T) {
 			}
 			gone, rev, st := inspectRev(t, tg, ss, b.ID)
 			tb := gone.Tombstone
-			if rev != 3 || st != kblife.StateForgotten || tb == nil || tb.Ref != "memory:"+b.ID || tb.Reason != "wrong" || tb.By == "" ||
+			if rev != 3 || st != kblife.StateForgotten || tb == nil || tb.Ref != b.ID || tb.Reason != "wrong" || tb.By == "" ||
 				tb.Episode != "ep-test" || !tb.At.Equal(at) || gone.Body != "new" || gone.Supersedes != a.ID {
 				t.Fatalf("forgotten record %+v rev %d %s", gone, rev, st)
 			}

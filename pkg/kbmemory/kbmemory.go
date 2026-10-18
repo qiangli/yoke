@@ -648,7 +648,7 @@ func outcome(rev int64, result map[string]any) dblifecycle.Outcome {
 }
 
 func getOn(ctx context.Context, h dbstore.Handle, id string) (Record, int64, error) {
-	res, err := onHandle(ctx, h, dbdoc.OpGet, dbdoc.Input{Collection: Collection, ID: id})
+	res, err := onHandle(ctx, h, dbdoc.OpGet, dbdoc.Input{Collection: Collection, ID: id, MaxBytes: dbdoc.MaxDocBytes})
 	if err != nil {
 		return Record{}, 0, err
 	}
@@ -667,7 +667,7 @@ func decodeDoc(res any, id string) (Record, int64, error) {
 }
 
 func inspect(ctx context.Context, req Request, t dbstore.Target, env *Envelope) error {
-	res, err := docOp(ctx, req, t, dbdoc.OpGet, dbdoc.Input{Collection: Collection, ID: req.ID}, false)
+	res, err := docOp(ctx, req, t, dbdoc.OpGet, dbdoc.Input{Collection: Collection, ID: req.ID, MaxBytes: dbdoc.MaxDocBytes}, false)
 	if err != nil {
 		return err
 	}
@@ -885,7 +885,7 @@ func runForget(ctx context.Context, h dbstore.Handle, in opInput) (dblifecycle.O
 		return dblifecycle.Outcome{}, fmt.Errorf("%w: record %s already forgotten at %s", dbstore.ErrInvalidInput, r.ID, r.Tombstone.At.Format(time.RFC3339))
 	}
 	at := clock().UTC().Truncate(time.Second)
-	tomb, err := kblife.NewTombstone("memory:"+r.ID, in.Reason, in.Source.Tool, in.Source.Episode, at)
+	tomb, err := kblife.NewTombstone(r.ID, in.Reason, in.Source.Tool, in.Source.Episode, at)
 	if err != nil {
 		return dblifecycle.Outcome{}, fmt.Errorf("%w: %v", dbstore.ErrInvalidInput, err)
 	}
