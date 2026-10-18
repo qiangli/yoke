@@ -1098,6 +1098,9 @@ func offerToolCommand(w io.Writer, agent string, c capability.Capability) {
 }
 
 // NewChatCmd returns the `bashy chat` command.
+// chatRunnerOverride lets tests substitute the agent runner behind the CLI; nil uses the default.
+var chatRunnerOverride Runner
+
 func NewChatCmd() *cobra.Command {
 	var opt Options
 	var capStr string
@@ -1105,6 +1108,8 @@ func NewChatCmd() *cobra.Command {
 	var bandSel int
 	var interactive bool
 	var attachLive bool
+	var view string
+	var explain bool
 	cmd := &cobra.Command{
 		Use:   "chat [--agent AGENT | --band N | --tool T] [--instruction TEXT]",
 		Short: "talk to an agent — a live governed session (no instruction) or a one-shot (with --instruction)",
@@ -1115,6 +1120,12 @@ func NewChatCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
 				opt.Instruction = strings.TrimSpace(strings.Join(append([]string{opt.Instruction}, args...), " "))
+			}
+			if view != "" {
+				if view != fleet.ViewCanonical {
+					return fmt.Errorf("chat: unsupported --view %q (only %q)", view, fleet.ViewCanonical)
+				}
+				opt.Full = true
 			}
 			// --capability routes to the best-fit ROUTABLE agent from the living
 			// matrix (see pkg/capability). The matrix is keyed by tool:model, and
@@ -1204,7 +1215,10 @@ func NewChatCmd() *cobra.Command {
 			if !opt.JSON && !opt.DryRun {
 				opt.Stream = cmd.OutOrStdout()
 			}
-			res, err := Invoke(cmd.Context(), opt, nil)
+			res, err := Invoke(cmd.Context(), opt, chatRunnerOverride)
+			if explain && res.BudgetSource != "" {
+				fmt.Fprintf(cmd.ErrOrStderr(), "chat: output budget source=%s canonical=%t\n", res.BudgetSource, opt.Full)
+			}
 			if opt.JSON {
 				b, _ := json.Marshal(res)
 				fmt.Fprintln(cmd.OutOrStdout(), string(b))
@@ -1239,6 +1253,9 @@ func NewChatCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opt.Sandbox, "sandbox", "", "agent sandbox override, for example workspace-write or danger-full-access")
 	cmd.Flags().StringArrayVar(&opt.WritableRoots, "writable-root", nil, "explicitly grant an extra writable path to a --sandbox workspace-write launch (repeatable)")
 	cmd.Flags().BoolVar(&opt.JSON, "json", false, "print a bashy-chat-v1 JSON result envelope")
+	cmd.Flags().BoolVar(&opt.Full, "full", false, "return the complete canonical output, skipping reduction (redaction still applies)")
+	cmd.Flags().StringVar(&view, "view", "", `output view; "canonical" is the same as --full`)
+	cmd.Flags().BoolVar(&explain, "explain", false, "report which preference layer set the output budget (no output contents)")
 	cmd.Flags().Bool("plain", false, "force plain output even under BASHY_AGENTIC")
 	cmd.Flags().BoolVar(&opt.DryRun, "dry-run", false, "print the resolved invocation without running the agent")
 	cmd.Flags().BoolVar(&opt.ReadOnly, "read-only", false,

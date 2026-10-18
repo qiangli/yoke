@@ -526,3 +526,43 @@ func TestInvokeFullEscapeBypassesReduction(t *testing.T) {
 		t.Fatalf("view=canonical did not bypass: %v", err)
 	}
 }
+
+func TestChatCLIFullAndViewCanonicalEscapes(t *testing.T) {
+	permitUnsafeLaunch(t)
+	pinCatalog(t)
+	isolatedRoom(t)
+	setTestHome(t, t.TempDir())
+	t.Setenv("BASHY_PREFS", `{"budget_bytes":2048}`)
+	full := strings.Repeat("canonical producer line\n", 1000)
+	chatRunnerOverride = &fakeRunner{output: full}
+	t.Cleanup(func() { chatRunnerOverride = nil })
+
+	run := func(extra ...string) (string, string, error) {
+		cmd := NewChatCmd()
+		var out, errb bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&errb)
+		cmd.SetArgs(append([]string{"--agent", "codex", "-m", "x", "--cwd", t.TempDir(), "--plain", "--explain"}, extra...))
+		err := cmd.Execute()
+		return out.String(), errb.String(), err
+	}
+	out, errs, err := run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) >= len(full) || !strings.Contains(out, "full: bashy out ") {
+		t.Fatalf("default not reduced with recovery pointer (%d bytes)", len(out))
+	}
+	if !strings.Contains(errs, "source=") || strings.Contains(errs, "canonical producer") {
+		t.Fatalf("explain output wrong: %q", errs)
+	}
+	for _, args := range [][]string{{"--full"}, {"--view=canonical"}, {"--view", "canonical"}} {
+		out, _, err := run(args...)
+		if err != nil || strings.TrimRight(out, "\n") != strings.TrimRight(full, "\n") {
+			t.Fatalf("%v not complete: err=%v %d vs %d", args, err, len(out), len(full))
+		}
+	}
+	if _, _, err := run("--view=bogus"); err == nil {
+		t.Fatal("malformed --view accepted")
+	}
+}
