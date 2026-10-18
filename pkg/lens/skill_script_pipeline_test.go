@@ -3,10 +3,15 @@ package lens
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/qiangli/yoke/pkg/atlas"
+	"github.com/qiangli/yoke/pkg/policy/advice"
 )
 
 // TestScriptPipeline_DeterministicOutput pins that valid pure-output skills
@@ -373,5 +378,284 @@ func TestScriptPipeline_CustomValidator(t *testing.T) {
 	entries, _ := os.ReadDir(storeDir)
 	if len(entries) != 0 {
 		t.Fatalf("store dir has %d files, expected 0", len(entries))
+	}
+}
+
+// TestScriptPipeline_DeniedCaps verifies that missing or denied capabilities or effects
+// fail closed with ExitInvalid BEFORE any worker execution or storage.
+func TestScriptPipeline_DeniedCaps(t *testing.T) {
+	docWithPwd := "```bsh\npwd\n```\n"
+	docWithEcho := "```bsh\necho hello\n```\n"
+
+	// 1. Script requires "read-only" capability; allowed caps does not contain it.
+	t.Run("denied capability (missing from allowed)", func(t *testing.T) {
+		storeDir := t.TempDir()
+		opts := PipelineOptions{
+			StoreDir:    storeDir,
+			AllowedCaps: []string{"json"}, // missing "read-only"
+		}
+		_, err := PlanPipeline([]byte(docWithEcho), opts)
+		if err == nil {
+			t.Fatal("expected denied capability error, got nil")
+		}
+		wantExit(t, err, ExitInvalid)
+		if !strings.Contains(err.Error(), `capability "read-only" which is denied`) {
+			t.Fatalf("unexpected error message: %v", err)
+		}
+		// Verify no files written.
+		entries, _ := os.ReadDir(storeDir)
+		if len(entries) != 0 {
+			t.Fatalf("expected 0 files, got %d", len(entries))
+		}
+	})
+
+	// 2. Allowed caps is empty slice: all caps are denied.
+	t.Run("empty allowed caps denies all", func(t *testing.T) {
+		storeDir := t.TempDir()
+		opts := PipelineOptions{
+			StoreDir:    storeDir,
+			AllowedCaps: []string{},
+		}
+		_, err := PlanPipeline([]byte(docWithEcho), opts)
+		if err == nil {
+			t.Fatal("expected denied capability error, got nil")
+		}
+		wantExit(t, err, ExitInvalid)
+		if !strings.Contains(err.Error(), `capability "read-only" which is denied`) {
+			t.Fatalf("unexpected error message: %v", err)
+		}
+	})
+
+	// 3. Explicitly denied capability in DeniedCaps.
+	t.Run("explicitly denied capability", func(t *testing.T) {
+		storeDir := t.TempDir()
+		opts := PipelineOptions{
+			StoreDir:   storeDir,
+			DeniedCaps: []string{"read-only"},
+		}
+		_, err := PlanPipeline([]byte(docWithEcho), opts)
+		if err == nil {
+			t.Fatal("expected denied capability error, got nil")
+		}
+		wantExit(t, err, ExitInvalid)
+		if !strings.Contains(err.Error(), `script requires denied capability "read-only"`) {
+			t.Fatalf("unexpected error message: %v", err)
+		}
+	})
+
+	// 4. Allowed effects: script with pwd needs "read", allowed is only "pure".
+	t.Run("denied effect under AllowedEffects", func(t *testing.T) {
+		storeDir := t.TempDir()
+		opts := PipelineOptions{
+			StoreDir:       storeDir,
+			AllowedEffects: []string{atlas.EffPure},
+		}
+		_, err := PlanPipeline([]byte(docWithPwd), opts)
+		if err == nil {
+			t.Fatal("expected denied effect error, got nil")
+		}
+		wantExit(t, err, ExitInvalid)
+		if !strings.Contains(err.Error(), `script requires effect "read" which is denied`) {
+			t.Fatalf("unexpected error message: %v", err)
+		}
+	})
+
+	// 5. Guard check using advice.Cap: guard only allows "pure", script uses pwd (effect "read").
+	t.Run("denied effect under advice.Cap guard", func(t *testing.T) {
+		storeDir := t.TempDir()
+		guard, err := advice.ParseCap(atlas.EffPure)
+		if err != nil {
+			t.Fatal(err)
+		}
+		opts := PipelineOptions{
+			StoreDir: storeDir,
+			Guard:    &guard,
+		}
+		_, err = PlanPipeline([]byte(docWithPwd), opts)
+		if err == nil {
+			t.Fatal("expected guard denial error, got nil")
+		}
+		wantExit(t, err, ExitInvalid)
+		if !strings.Contains(err.Error(), "guard denied effects [read]") {
+			t.Fatalf("unexpected error message: %v", err)
+		}
+	})
+
+	// 6. RequireCaps is true but AllowedCaps is nil.
+	t.Run("require caps fails closed if unset", func(t *testing.T) {
+		storeDir := t.TempDir()
+		opts := PipelineOptions{
+			StoreDir:    storeDir,
+			RequireCaps: true,
+		}
+		_, err := PlanPipeline([]byte(docWithEcho), opts)
+		if err == nil {
+			t.Fatal("expected missing caps error, got nil")
+		}
+		wantExit(t, err, ExitInvalid)
+		if !strings.Contains(err.Error(), "missing required capability declaration") {
+			t.Fatalf("unexpected error message: %v", err)
+		}
+	})
+
+	// 7. Allowed caps matches: succeeds.
+	t.Run("allowed caps satisfied succeeds", func(t *testing.T) {
+		storeDir := t.TempDir()
+		opts := PipelineOptions{
+			StoreDir:       storeDir,
+			AllowedCaps:    []string{atlas.CapReadOnly},
+			AllowedEffects: []string{atlas.EffPure},
+		}
+		plan, err := PlanPipeline([]byte(docWithEcho), opts)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !slices.Contains(plan.Capabilities, atlas.CapReadOnly) {
+			t.Errorf("plan missing read-only capability: %v", plan.Capabilities)
+		}
+	})
+}
+
+// TestScriptPipeline_DryRunNoSideEffects verifies that dry-run planning performs
+// full extraction, validation, analysis, and digest calculation without creating
+// any files or executing any script commands.
+func TestScriptPipeline_DryRunNoSideEffects(t *testing.T) {
+	sentinelDir := t.TempDir()
+	sentinelFile := filepath.Join(sentinelDir, "ran.txt")
+	storeDir := filepath.Join(t.TempDir(), "artifacts")
+
+	doc := "```bsh\necho 'dry run test'\npwd\n```\n"
+
+	plan, err := DryRunPipeline([]byte(doc), PipelineOptions{
+		StoreDir: storeDir,
+	})
+	if err != nil {
+		t.Fatalf("DryRunPipeline failed: %v", err)
+	}
+
+	if !plan.DryRun {
+		t.Error("plan.DryRun should be true")
+	}
+	if plan.Artifact == nil || plan.Artifact.Name == "" || plan.Artifact.Digest == "" {
+		t.Fatalf("plan artifact details missing: %+v", plan.Artifact)
+	}
+	if !slices.Contains(plan.Capabilities, atlas.CapReadOnly) {
+		t.Errorf("plan capabilities %v missing read-only", plan.Capabilities)
+	}
+	if !slices.Contains(plan.Effects, atlas.EffRead) {
+		t.Errorf("plan effects %v missing read", plan.Effects)
+	}
+
+	// Verify NO files exist in storeDir (storeDir should not even have been created or should be empty).
+	if entries, err := os.ReadDir(storeDir); err == nil && len(entries) > 0 {
+		t.Fatalf("storeDir has %d files after dry-run, expected 0", len(entries))
+	}
+
+	// Hostile script in dry-run mode: must be rejected with zero execution.
+	hostileDoc := "```bsh\necho 'pwned' > " + sentinelFile + "\n```\n"
+	_, hostileErr := DryRunPipeline([]byte(hostileDoc), PipelineOptions{StoreDir: storeDir})
+	if hostileErr == nil {
+		t.Fatal("expected hostile script to be rejected in dry-run, got nil")
+	}
+	wantExit(t, hostileErr, ExitInvalid)
+
+	// Sentinel file must NOT exist.
+	if _, err := os.Stat(sentinelFile); !os.IsNotExist(err) {
+		t.Fatalf("sentinel file was created! Script was executed: %s", sentinelFile)
+	}
+}
+
+// TestScriptPipeline_DigestVerification verifies that dry-run and planning
+// verify digests against preexisting artifacts in the store directory.
+func TestScriptPipeline_DigestVerification(t *testing.T) {
+	doc := "```bsh\necho 'verify digest'\npwd\n```\n"
+	storeDir := t.TempDir()
+
+	// First: write valid artifact using non-dry-run compile.
+	art, err := CompileSkillScriptPipeline(storeDir, []byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. DryRun against matching existing file: succeeds and verifies digest.
+	plan, err := DryRunPipeline([]byte(doc), PipelineOptions{StoreDir: storeDir})
+	if err != nil {
+		t.Fatalf("dry-run against valid existing artifact failed: %v", err)
+	}
+	if plan.Artifact.Digest != art.Digest || plan.Artifact.Name != art.Name {
+		t.Fatalf("digest mismatch in dry-run: %s vs %s", plan.Artifact.Digest, art.Digest)
+	}
+
+	// 2. DryRun against corrupted/differing file at the artifact path: fails closed.
+	badStoreDir := t.TempDir()
+	badPath := filepath.Join(badStoreDir, art.Name)
+	if err := os.WriteFile(badPath, []byte("tampered content\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, badErr := DryRunPipeline([]byte(doc), PipelineOptions{StoreDir: badStoreDir})
+	if badErr == nil {
+		t.Fatal("expected dry-run error on tampered existing artifact, got nil")
+	}
+	wantExit(t, badErr, ExitInvalid)
+	if !strings.Contains(badErr.Error(), "differing content") {
+		t.Fatalf("expected 'differing content' error, got %v", badErr)
+	}
+
+	// 3. DryRun against symlink at the artifact path: fails closed.
+	symlinkStoreDir := t.TempDir()
+	realTarget := filepath.Join(symlinkStoreDir, "real.sh")
+	if err := os.WriteFile(realTarget, art.Script, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	symlinkPath := filepath.Join(symlinkStoreDir, art.Name)
+	if err := os.Symlink(realTarget, symlinkPath); err != nil {
+		t.Fatal(err)
+	}
+	_, symErr := DryRunPipeline([]byte(doc), PipelineOptions{StoreDir: symlinkStoreDir})
+	if symErr == nil {
+		t.Fatal("expected dry-run error on symlink artifact, got nil")
+	}
+	wantExit(t, symErr, ExitInvalid)
+	if !strings.Contains(symErr.Error(), "symlink") {
+		t.Fatalf("expected 'symlink' error, got %v", symErr)
+	}
+}
+
+// TestScriptPipeline_Explain verifies the human-readable and JSON explain output
+// format of the ScriptPlan.
+func TestScriptPipeline_Explain(t *testing.T) {
+	doc := "```bsh\necho 'system ready'\npwd\n```\n"
+	storeDir := t.TempDir()
+
+	plan, err := DryRunPipeline([]byte(doc), PipelineOptions{StoreDir: storeDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	exp := plan.Explain()
+	for _, expected := range []string{
+		"artifact: ",
+		"digest: sha256:",
+		"required_caps: read-only",
+		"effects: read",
+		"commands: echo, pwd",
+		"reversibility: readonly",
+		"execution: zero-execution dry-run (no worker executed)",
+	} {
+		if !strings.Contains(exp, expected) {
+			t.Errorf("Explain() output %q does not contain %q", exp, expected)
+		}
+	}
+
+	jsonBytes, err := plan.ExplainJSON()
+	if err != nil {
+		t.Fatalf("ExplainJSON failed: %v", err)
+	}
+	var unmarshaled map[string]any
+	if err := json.Unmarshal(jsonBytes, &unmarshaled); err != nil {
+		t.Fatalf("invalid JSON from ExplainJSON: %v", err)
+	}
+	if unmarshaled["artifact"] == nil || unmarshaled["capabilities"] == nil || unmarshaled["effects"] == nil {
+		t.Fatalf("missing required JSON keys in %s", string(jsonBytes))
 	}
 }

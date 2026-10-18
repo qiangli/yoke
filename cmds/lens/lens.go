@@ -31,10 +31,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 
 	"github.com/qiangli/coreutils/tool"
+	"github.com/qiangli/yoke/pkg/atlas"
 	"github.com/qiangli/yoke/pkg/lens"
 	"github.com/qiangli/yoke/pkg/lens/provider"
 	"github.com/qiangli/yoke/pkg/lens/stream"
@@ -100,6 +102,9 @@ func run(rc *tool.RunContext, args []string) int {
 	since := fs.String("since", "", "file deltas: start, cursor envelope, or @cursor-file (rotation requires explicit restart)")
 	cursorOut := fs.String("cursor-out", "", "save file delta cursor after output succeeds; otherwise append JSONL cursor trailer")
 	nul := fs.Bool("null", false, "paths view: NUL-terminated")
+	explain := fs.Bool("explain", false, "skill script plan: print zero-execution explanation of artifact and required capabilities")
+	dryRun := fs.Bool("dry-run", false, "skill script plan: dry-run plan with zero execution")
+	capFlag := fs.String("cap", "", "skill script plan: comma-separated allowed capabilities or effects")
 
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
@@ -136,8 +141,8 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		return write(rc, listRows(*asJSON))
 	}
-	if *asJSON {
-		return tool.UsageError(rc, cmd, "--json applies to -l")
+	if *asJSON && !*explain && !*dryRun {
+		return tool.UsageError(rc, cmd, "--json applies to -l or --explain/--dry-run")
 	}
 	if *to == "" {
 		return tool.UsageError(rc, cmd, "-t TO is required")
@@ -193,6 +198,61 @@ func run(rc *tool.RunContext, args []string) int {
 	if err != nil {
 		fmt.Fprintf(rc.Err, "lens: %v\n", err)
 		return lens.ExitInvalid
+	}
+
+	if *explain || *dryRun {
+		if fromFmt != "skill" || toFmt != "script" {
+			return tool.UsageError(rc, cmd, "--explain and --dry-run apply to -f skill -t script")
+		}
+		for _, flag := range []string{"strict", "verbose", "switch", "drive", "depth", "since", "cursor-out", "null"} {
+			if fs.Changed(flag) {
+				return tool.UsageError(rc, cmd, "--%s does not apply to script planning", flag)
+			}
+		}
+		var allowedCaps []string
+		var allowedEffects []string
+		if *capFlag != "" {
+			for tok := range strings.SplitSeq(*capFlag, ",") {
+				tok = strings.TrimSpace(tok)
+				if tok == "" {
+					continue
+				}
+				isCap := slices.Contains(atlas.Capabilities(), tok)
+				isEff := slices.Contains(atlas.Effects(), tok)
+				if !isCap && !isEff {
+					return tool.UsageError(rc, cmd, "unknown capability or effect %q", tok)
+				}
+				if isCap {
+					allowedCaps = append(allowedCaps, tok)
+				}
+				if isEff {
+					allowedEffects = append(allowedEffects, tok)
+				}
+			}
+		}
+		opts := lens.PipelineOptions{
+			StoreDir: rc.Path("."),
+			DryRun:   true,
+		}
+		if fs.Changed("cap") {
+			opts.AllowedCaps = allowedCaps
+			opts.AllowedEffects = allowedEffects
+		}
+		plan, err := lens.DryRunPipeline(data, opts)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "lens: %v\n", err)
+			return lens.ExitInvalid
+		}
+		if *asJSON {
+			b, err := plan.ExplainJSON()
+			if err != nil {
+				fmt.Fprintf(rc.Err, "lens: %v\n", err)
+				return lens.ExitInvalid
+			}
+			b = append(b, '\n')
+			return write(rc, b)
+		}
+		return write(rc, []byte(plan.Explain()+"\n"))
 	}
 
 	req := lens.Request{From: fromFmt, To: toFmt, Name: name, Data: data, Base: rc, Argv: lens.ArgvOptions{Switch: *sw, Drive: *drive}, View: view}

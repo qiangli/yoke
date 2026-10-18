@@ -63,3 +63,64 @@ func TestScriptCLI(t *testing.T) {
 		t.Fatalf("switch flag on script row: code=%d err=%q", code, errb)
 	}
 }
+
+// TestScriptCLI_ExplainAndDryRun tests lens -f skill -t script with --explain,
+// --dry-run, --json, and --cap.
+func TestScriptCLI_ExplainAndDryRun(t *testing.T) {
+	dir := t.TempDir()
+	doc := "# Skill Document\n\nRuns a pure echo command.\n\n```bsh\necho 'hello from lens'\n```\n\nFooter prose.\n"
+
+	// 1. --explain prints zero-execution diagnostic view and writes no files.
+	out, errb, code := runTool(t, dir, doc, "-f", "skill", "-t", "script", "--explain")
+	if code != 0 || errb != "" {
+		t.Fatalf("--explain: code=%d err=%q", code, errb)
+	}
+	for _, expected := range []string{"artifact: ", "digest: sha256:", "required_caps: read-only", "effects: pure", "execution: zero-execution dry-run"} {
+		if !strings.Contains(out, expected) {
+			t.Errorf("--explain output missing %q: %q", expected, out)
+		}
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 0 {
+		t.Fatalf("--explain wrote %d files, expected 0", len(entries))
+	}
+
+	// 2. --dry-run behaves identically with zero execution and no side effects.
+	outDry, errbDry, codeDry := runTool(t, dir, doc, "-f", "skill", "-t", "script", "--dry-run")
+	if codeDry != 0 || errbDry != "" || outDry != out {
+		t.Fatalf("--dry-run: code=%d err=%q out=%q", codeDry, errbDry, outDry)
+	}
+
+	// 3. --explain --json outputs structured JSON.
+	outJSON, errbJSON, codeJSON := runTool(t, dir, doc, "-f", "skill", "-t", "script", "--explain", "--json")
+	if codeJSON != 0 || errbJSON != "" {
+		t.Fatalf("--explain --json: code=%d err=%q", codeJSON, errbJSON)
+	}
+	if !strings.Contains(outJSON, `"artifact"`) || !strings.Contains(outJSON, `"capabilities"`) {
+		t.Fatalf("--explain --json output missing keys: %s", outJSON)
+	}
+
+	// 4. Denied caps via --cap fails closed before execution.
+	docPwd := "```bsh\npwd\n```\n"
+	_, errbCap, codeCap := runTool(t, dir, docPwd, "-f", "skill", "-t", "script", "--explain", "--cap=pure")
+	if codeCap != lens.ExitInvalid || !strings.Contains(errbCap, `denied`) {
+		t.Fatalf("--cap denied effect: code=%d err=%q", codeCap, errbCap)
+	}
+
+	// 5. Allowed caps via --cap succeeds.
+	outAllowed, errbAllowed, codeAllowed := runTool(t, dir, docPwd, "-f", "skill", "-t", "script", "--explain", "--cap=read-only,read")
+	if codeAllowed != 0 || errbAllowed != "" {
+		t.Fatalf("--cap allowed: code=%d err=%q out=%q", codeAllowed, errbAllowed, outAllowed)
+	}
+
+	// 6. Rejected unsafe script under --explain fails closed without running or writing files.
+	sentinel := filepath.Join(dir, "sentinel.txt")
+	hostileDoc := "```bsh\necho evil > " + sentinel + "\n```\n"
+	_, errbHostile, codeHostile := runTool(t, dir, hostileDoc, "-f", "skill", "-t", "script", "--explain")
+	if codeHostile != lens.ExitInvalid || !strings.Contains(errbHostile, "redirection") {
+		t.Fatalf("hostile --explain: code=%d err=%q", codeHostile, errbHostile)
+	}
+	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+		t.Fatal("hostile script executed under --explain!")
+	}
+}
