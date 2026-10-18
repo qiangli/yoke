@@ -9,7 +9,7 @@
                 {"schema_version":"bashy-node-v1","ref":"run:002-1","path":"lifecycle","name":"lifecycle","kind":"record","type":"lifecycle","attrs":{"evidence":"persisted-run","exit_code":0,"finished_at":"2026-10-18T21:18:37.110552Z","state":"no-op"}}
         --- PASS: TestAssignScript (3.50s)
         PASS
-        
+
     sprint_assign_script_test.go:223: === RUN   TestAssignScript
             sprint_assign_script_test.go:195: durable body verified; delta: {"schema_version":"bashy-node-v1","ref":"run:002-1","path":"KB.md","name":"KB.md","kind":"record","type":"file","attrs":{"change":"observed","evidence":"workspace-metadata","modified":"2026-10-18T14:18:38.140740391-07:00","size":421}}
                 {"schema_version":"bashy-node-v1","ref":"run:002-1","path":"seed.txt","name":"seed.txt","kind":"record","type":"file","attrs":{"change":"observed","evidence":"workspace-metadata","modified":"2026-10-18T14:18:38.039271261-07:00","size":5}}
@@ -19,7 +19,7 @@
                 {"schema_version":"bashy-node-v1","ref":"run:002-1","path":"lifecycle","name":"lifecycle","kind":"record","type":"lifecycle","attrs":{"evidence":"persisted-run","exit_code":1,"finished_at":"2026-10-18T21:18:38.311443Z","state":"failed"}}
         --- PASS: TestAssignScript (0.93s)
         PASS
-        
+
 --- PASS: TestAssignScriptIntegration (4.58s)
 === RUN   TestScriptAssignmentContract
 --- PASS: TestScriptAssignmentContract (0.00s)
