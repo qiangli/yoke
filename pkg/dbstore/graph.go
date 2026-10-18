@@ -78,11 +78,14 @@ type GraphTx interface {
 	// Returning false stops the scan; callback errors propagate.
 	Nodes(fn func(Node) (bool, error)) error
 	PutNode(n Node, c Cond) (uint64, error)
+	// ImportNode preserves a validated portable revision within an import transaction.
+	ImportNode(n Node) error
 	// DeleteNode removes the node and every edge touching it.
 	DeleteNode(id string) error
 	GetEdge(from, typ, to string) (Edge, bool, error)
 	// PutEdge needs both endpoints to exist.
 	PutEdge(e Edge, c Cond) (uint64, error)
+	ImportEdge(e Edge) error
 	DeleteEdge(from, typ, to string) error
 	// Edges visits the edges of id in one direction, optionally of one type,
 	// in (type, other-end) order until fn returns false.
@@ -184,6 +187,38 @@ func (g graphTx) PutNode(n Node, c Cond) (uint64, error) {
 	return n.Rev, g.tx.Put(bNodes, []byte(n.ID), v)
 }
 
+func (g graphTx) importRevision(rev uint64) error {
+	if rev == 0 {
+		return fmt.Errorf("%w: graph revision must be positive", ErrInvalidInput)
+	}
+	v, _, err := g.tx.Get(bMeta, kSeq)
+	if err != nil {
+		return err
+	}
+	var cur uint64
+	if len(v) == 8 {
+		cur = binary.BigEndian.Uint64(v)
+	}
+	if rev > cur {
+		return g.tx.Put(bMeta, kSeq, binary.BigEndian.AppendUint64(nil, rev))
+	}
+	return nil
+}
+
+func (g graphTx) ImportNode(n Node) error {
+	if err := checkName("node id", n.ID); err != nil {
+		return err
+	}
+	if err := g.importRevision(n.Rev); err != nil {
+		return err
+	}
+	b, err := json.Marshal(n)
+	if err != nil {
+		return err
+	}
+	return g.tx.Put(bNodes, []byte(n.ID), b)
+}
+
 func (g graphTx) DeleteNode(id string) error {
 	if _, ok, err := g.GetNode(id); err != nil || !ok {
 		if err == nil {
@@ -246,6 +281,32 @@ func (g graphTx) PutEdge(e Edge, c Cond) (uint64, error) {
 		return 0, err
 	}
 	return e.Rev, g.tx.Put(bIn, edgeKey(e.To, e.Type, e.From), []byte{})
+}
+
+func (g graphTx) ImportEdge(e Edge) error {
+	for _, s := range []string{e.From, e.Type, e.To} {
+		if err := checkName("edge identity", s); err != nil {
+			return err
+		}
+	}
+	for _, id := range []string{e.From, e.To} {
+		if _, ok, err := g.GetNode(id); err != nil {
+			return err
+		} else if !ok {
+			return fmt.Errorf("%w: endpoint %s", ErrNotFound, id)
+		}
+	}
+	if err := g.importRevision(e.Rev); err != nil {
+		return err
+	}
+	b, err := json.Marshal(e)
+	if err != nil {
+		return err
+	}
+	if err := g.tx.Put(bOut, edgeKey(e.From, e.Type, e.To), b); err != nil {
+		return err
+	}
+	return g.tx.Put(bIn, edgeKey(e.To, e.Type, e.From), nil)
 }
 
 func (g graphTx) DeleteEdge(from, typ, to string) error {

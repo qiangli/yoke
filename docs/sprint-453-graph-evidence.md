@@ -1,55 +1,22 @@
-# Sprint 453 graph category evidence — story #2266
+# Sprint 453 graph package evidence
 
-Candidate: `pkg/dbgraph` on the issue-451 holder. The graph category registers
-with `dblifecycle.CategoryOp`; all calls use the existing lifecycle open/hold,
-owner admission, epoch fencing and request replay. The shared `cmds/db` mount
-has not been edited pending the manager's phase-2 coordination.
+Story #2266 (`55284ec86624`). This is package-level evidence for the graph holder; CLI/MCP registration, lifecycle native backup/restore, independent-process and remote gates remain with the sprint manager's coordinated phase.
+
+## Representation and boundary
+
+`pkg/dbgraph` implements typed node and directed edge operations on the supplemental in-memory `MemGraph` and on persistent Bonsai. Persistent typed records use only `bashy_graph_key` (indexed string) and `bashy_graph_data` (base64 of the JSON encoding of `dbstore.Node` or `dbstore.Edge`). Node and edge identities, types, direction, opaque binary properties, and revisions round trip. Isolated nodes export through `GraphTx.Nodes`; incoming and outgoing edges use the same identity. `MemGraph` has no DQL interpreter. Persistent Bonsai retains native parameterized DQL query and mutation for databases with nonportable schemas.
+
+Logical export is a new directory with `manifest.json` and checked `records.jsonl`, format `bashy-db-export-v1` / `1.0`, graph representation `bashy-typed-graph-v1`. The manifest declares the two reserved predicates and SHA-256, byte count and record count. Memory export uses one graph snapshot transaction; persistent export uses one Bonsai query snapshot. A persistent database with another schema, an unexpected portable key, malformed record or unsupported format fails before logical mutation. Arbitrary DQL data uses native backup for fidelity; logical export makes no arbitrary DQL parity claim. Import validates the full manifest, checksum, identities, duplicate keys, revisions and edge endpoints before writing. Memory import is one atomic graph transaction. Persistent import performs one Bonsai mutation after conflict checks; it is limited to the reserved typed subset. `on_conflict=error|skip|replace` and whole-target `replace` are explicit. Typed persistent writes read/check and mutate within one category operation; raw category mutations and schema changes are refused once a typed schema exists. Non-Bashy direct native clients remain cooperative under the adapter's declared exclusion model.
+
+**Owner admission gap for CAS:** `dblifecycle/owner.go` currently admits normal category writes with weight 1 of 1024. Two persistent typed writes can therefore both read the same revision before either mutation. Bonsai's `Upsert` is also implemented as a separate query followed by `Mutate`, without an atomic conditional. The manager has been asked to serialize graph typed writes at the existing per-target owner admission boundary while retaining `AccessWrite`; persistent revision preconditions are not yet accepted as concurrent CAS evidence. This package adds no lock registry.
+
+A portable export is bounded to 100,000 records, 64 MiB of Bonsai query JSON and 8 MiB per JSONL record. Context cancellation is checked during scans, export and import validation. Larger graphs return `limit_exceeded` instead of an incomplete interchange. This bounded representation is the package's current scale limit.
 
 ## Local gate
 
-Host: dragon, 2026-10-18. Command (direct exit status, no pipe):
+On Dragon with `CGO_ENABLED=0 GOMAXPROCS=4 GOFLAGS=-p=2`:
 
-```sh
-CGO_ENABLED=0 GOMAXPROCS=2 GOFLAGS=-p=2 go test -short -count=1 ./pkg/dbgraph
-```
+- `go test -short -count=1 ./pkg/dbgraph` — PASS. Covers typed operations, revisions, process exclusion, memory→persistent→memory round trip with isolated nodes and binary properties, idempotent import, replacement, raw mutation bypass refusal, deletion cascade, and external DQL schema refusal.
+- `go test -short -count=1 ./pkg/dbstore ./pkg/dbstore/bonsaidb` — PASS. Covers the existing graph adapter and Bonsai adapter tests after the graph transaction import seam.
 
-Exit 0; `ok github.com/qiangli/yoke/pkg/dbgraph 7.907s` on the first named-test
-run. Tests cover memory typed node/edge writes and reads, binary properties,
-revision conflict, incoming edge traversal and explicit DQL refusal; persistent
-Bonsai schema, parameterized DQL, mutation, and one-native-handle-per-process
-exclusion. The adapter's separate process exclusion test lives in
-`pkg/dbstore/bonsaidb` and is intentionally skipped in short mode.
-
-## Current contract boundary
-
-- Persistent: native Bonsai parameterized DQL, N-Quad mutation, schema show/apply.
-- Memory: supplemental `dbstore.MemGraph` typed nodes/edges with revisions.
-  Memory mode has no DQL parser or claimed DQL parity.
-- Native persistent backup/restore and database drop are inherited from the
-  accepted `dblifecycle` and Bonsai adapter, not reimplemented here.
-- Lossless logical export/import is **not delivered**. `GraphTx` can look up a
-  node and traverse edges, but cannot enumerate all nodes; exporting through
-  it would omit isolated nodes. The package refuses export/import and declares
-  no mode support for those operations. The manager was asked to coordinate
-  the smallest shared adapter enumeration seam before phase 2.
-- CLI/MCP mount, cross-mode round trips, independent-process owner tests and
-  full story acceptance remain outstanding. Remote fixtures are not live
-  host evidence.
-
-## Enumeration seam
-
-`GraphTx.Nodes` now visits every memory graph node, including isolated nodes,
-in ID order within the existing snapshot transaction. Callback false stops
-the scan; callback errors propagate. This is a prerequisite for lossless
-interchange, not completion of interchange. `pkg/dbgraph` still refuses
-export/import and declares no mode support for those operations.
-
-Direct local gate on Dragon with `CGO_ENABLED=0 GOMAXPROCS=2 GOFLAGS=-p=2`:
-
-```sh
-go test -short -count=1 ./pkg/dbgraph ./pkg/dbstore
-```
-
-Exit 0: `pkg/dbgraph` 7.522s and `pkg/dbstore` 1.693s. The new test checks
-node order, bounded callback stop and error propagation. Persistent typed
-mapping and lossless JSON/JSONL import/export in both directions remain open.
+The package is not yet mounted in shared CLI/atlas rows. The manager owns that phase and whole-product, independent-process and platform gates. Native Bonsai backup/restore in the shared lifecycle is likewise pending manager coordination; the existing lifecycle only supports SQLite and bbolt there.

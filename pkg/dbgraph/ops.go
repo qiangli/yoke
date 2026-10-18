@@ -63,10 +63,8 @@ func Spec(name string, mode dbstore.Mode, a dblifecycle.Access) dblifecycle.Oper
 	switch name {
 	case OpQuery, OpMutate, OpSchemaShow, OpSchemaApply:
 		s.Modes = []string{"persistent"}
-	case OpNodeGet, OpNodePut, OpNodeRm, OpEdgeGet, OpEdgePut, OpEdgeRm, OpEdges:
-		s.Modes = []string{"memory"}
-	case OpExport, OpImport:
-		s.Modes = nil // withheld until the lossless interchange seam is available
+	case OpNodeGet, OpNodePut, OpNodeRm, OpEdgeGet, OpEdgePut, OpEdgeRm, OpEdges, OpExport, OpImport:
+		s.Modes = []string{"memory", "persistent"}
 	}
 	if mode == dbstore.Memory {
 		s.Effects = []string{"db.read"}
@@ -136,6 +134,13 @@ func runMutate(ctx context.Context, d *bonsaidb.DB, in Input) (dblifecycle.Outco
 	if err := persistent(d); err != nil {
 		return dblifecycle.Outcome{}, err
 	}
+	schema, err := d.Bonsai().SchemaText(ctx)
+	if err != nil {
+		return dblifecycle.Outcome{}, dbstore.Backend("bonsai", err)
+	}
+	if isPortableSchema(schema) {
+		return dblifecycle.Outcome{}, fmt.Errorf("%w: raw DQL mutations cannot modify the portable typed graph", dbstore.ErrUnsupported)
+	}
 	if in.SetNQuads == "" && in.DelNQuads == "" {
 		return dblifecycle.Outcome{}, fmt.Errorf("%w: set_nquads or del_nquads required", dbstore.ErrInvalidInput)
 	}
@@ -162,6 +167,13 @@ func runSchemaApply(ctx context.Context, d *bonsaidb.DB, in Input) (dblifecycle.
 	if err := persistent(d); err != nil {
 		return dblifecycle.Outcome{}, err
 	}
+	schema, err := d.Bonsai().SchemaText(ctx)
+	if err != nil {
+		return dblifecycle.Outcome{}, dbstore.Backend("bonsai", err)
+	}
+	if isPortableSchema(schema) {
+		return dblifecycle.Outcome{}, fmt.Errorf("%w: raw schema changes cannot modify the portable typed graph", dbstore.ErrUnsupported)
+	}
 	if strings.TrimSpace(in.Schema) == "" {
 		return dblifecycle.Outcome{}, fmt.Errorf("%w: schema required", dbstore.ErrInvalidInput)
 	}
@@ -175,8 +187,8 @@ func runNodeGet(ctx context.Context, d *bonsaidb.DB, in Input) (dblifecycle.Outc
 	if err := in.only(OpNodeGet, "id"); err != nil {
 		return dblifecycle.Outcome{}, err
 	}
-	if err := memory(d); err != nil {
-		return dblifecycle.Outcome{}, err
+	if d.Bonsai() != nil {
+		return persistentNodeGet(ctx, d, in)
 	}
 	if err := checkID(in.ID); err != nil {
 		return dblifecycle.Outcome{}, err
@@ -196,8 +208,8 @@ func runNodePut(ctx context.Context, d *bonsaidb.DB, in Input) (dblifecycle.Outc
 	if err := in.only(OpNodePut, "node", "if_absent", "if_revision"); err != nil {
 		return dblifecycle.Outcome{}, err
 	}
-	if err := memory(d); err != nil {
-		return dblifecycle.Outcome{}, err
+	if d.Bonsai() != nil {
+		return persistentNodePut(ctx, d, in)
 	}
 	if in.Node == nil {
 		return dblifecycle.Outcome{}, fmt.Errorf("%w: node required", dbstore.ErrInvalidInput)
@@ -216,8 +228,8 @@ func runNodeRm(ctx context.Context, d *bonsaidb.DB, in Input) (dblifecycle.Outco
 	if err := in.only(OpNodeRm, "id", "if_revision"); err != nil {
 		return dblifecycle.Outcome{}, err
 	}
-	if err := memory(d); err != nil {
-		return dblifecycle.Outcome{}, err
+	if d.Bonsai() != nil {
+		return persistentNodeRm(ctx, d, in)
 	}
 	if err := checkID(in.ID); err != nil {
 		return dblifecycle.Outcome{}, err
@@ -241,8 +253,8 @@ func runEdgeGet(ctx context.Context, d *bonsaidb.DB, in Input) (dblifecycle.Outc
 	if err := in.only(OpEdgeGet, "from", "type", "to"); err != nil {
 		return dblifecycle.Outcome{}, err
 	}
-	if err := memory(d); err != nil {
-		return dblifecycle.Outcome{}, err
+	if d.Bonsai() != nil {
+		return persistentEdgeGet(ctx, d, in)
 	}
 	var e dbstore.Edge
 	var ok bool
@@ -259,8 +271,8 @@ func runEdgePut(ctx context.Context, d *bonsaidb.DB, in Input) (dblifecycle.Outc
 	if err := in.only(OpEdgePut, "edge", "if_absent", "if_revision"); err != nil {
 		return dblifecycle.Outcome{}, err
 	}
-	if err := memory(d); err != nil {
-		return dblifecycle.Outcome{}, err
+	if d.Bonsai() != nil {
+		return persistentEdgePut(ctx, d, in)
 	}
 	if in.Edge == nil {
 		return dblifecycle.Outcome{}, fmt.Errorf("%w: edge required", dbstore.ErrInvalidInput)
@@ -276,8 +288,8 @@ func runEdgeRm(ctx context.Context, d *bonsaidb.DB, in Input) (dblifecycle.Outco
 	if err := in.only(OpEdgeRm, "from", "type", "to", "if_revision"); err != nil {
 		return dblifecycle.Outcome{}, err
 	}
-	if err := memory(d); err != nil {
-		return dblifecycle.Outcome{}, err
+	if d.Bonsai() != nil {
+		return persistentEdgeRm(ctx, d, in)
 	}
 	err := d.Update(ctx, func(tx dbstore.GraphTx) error {
 		e, ok, x := tx.GetEdge(in.From, in.Type, in.To)
@@ -298,8 +310,8 @@ func runEdges(ctx context.Context, d *bonsaidb.DB, in Input) (dblifecycle.Outcom
 	if err := in.only(OpEdges, "id", "type", "direction", "limit", "max_bytes"); err != nil {
 		return dblifecycle.Outcome{}, err
 	}
-	if err := memory(d); err != nil {
-		return dblifecycle.Outcome{}, err
+	if d.Bonsai() != nil {
+		return persistentEdges(ctx, d, in)
 	}
 	if err := checkID(in.ID); err != nil {
 		return dblifecycle.Outcome{}, err
