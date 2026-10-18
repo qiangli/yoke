@@ -105,8 +105,8 @@ func TestStreamRecognitionAndFilteredInput(t *testing.T) {
 
 func TestLocatorOperands(t *testing.T) {
 	dir := streamFixture(t)
-	if _, errb, code := runTool(t, dir, "", "-t", "tree", "sphere:x"); code != 2 || !strings.Contains(errb, `provider "sphere" is not registered`) {
-		t.Fatalf("unregistered provider: %d %q", code, errb)
+	if _, errb, code := runTool(t, dir, "", "-t", "tree", "sphere:x"); code != 1 || !strings.Contains(errb, "file does not exist") {
+		t.Fatalf("missing sphere node: %d %q", code, errb)
 	}
 	if _, errb, code := runTool(t, dir, "", "-f", "json", "-t", "tree", "dir:top"); code != 2 || !strings.Contains(errb, "-f does not apply") {
 		t.Fatalf("-f with locator: %d %q", code, errb)
