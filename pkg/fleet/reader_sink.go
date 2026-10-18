@@ -78,3 +78,18 @@ func PlanSink(prefs ReaderPrefs, sources ReaderPrefsSources, escape bool) SinkPl
 		DialectSource: or(sources.Dialect),
 	}
 }
+
+// KeepHint is the marker's "how to avoid this elision" command, rendered once
+// here for the reader's dialect and help form. The bash/classic default returns
+// "" so the reducer keeps its own default and no-prefs output is unchanged.
+func (p SinkPlan) KeepHint() string {
+	switch {
+	case p.Help == HelpMCP || p.Help == HelpSkill:
+		return "--view=canonical"
+	case p.Dialect == DialectPWSH:
+		return "$env:BASHY_OUTPUT_REDUCE='off'"
+	case p.Dialect == DialectCMD:
+		return "set BASHY_OUTPUT_REDUCE=off"
+	}
+	return ""
+}

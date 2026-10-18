@@ -892,7 +892,7 @@ func reduceChatBytes(out []byte, plan fleet.SinkPlan) (string, error) {
 		out = reduce.CanonicalizeHome(out, home)
 		return string(redactor.Redact(out)), nil
 	}
-	result, err := reduce.Reduce(reduce.NewStore(filepath.Join(root, "output")), out, reduce.Config{BudgetBytes: plan.BudgetBytes, HomeDir: home, Redactor: redactor})
+	result, err := reduce.Reduce(reduce.NewStore(filepath.Join(root, "output")), out, reduce.Config{BudgetBytes: plan.BudgetBytes, HomeDir: home, Redactor: redactor, KeepHint: plan.KeepHint()})
 	if err != nil {
 		return "", fmt.Errorf("chat: reduce invocation output: %w", err)
 	}
@@ -1315,6 +1315,7 @@ func NewChatCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opt.Full, "full", false, "return the complete canonical output, skipping reduction (redaction still applies)")
 	cmd.Flags().StringVar(&view, "view", "", `output view; "canonical" is the same as --full`)
 	cmd.Flags().BoolVar(&explain, "explain", false, "report which preference layer set the output budget (no output contents)")
+	cmd.Flags().BoolVar(&explain, "verbose", false, "same as --explain")
 	cmd.Flags().Bool("plain", false, "force plain output even under BASHY_AGENTIC")
 	cmd.Flags().BoolVar(&opt.DryRun, "dry-run", false, "print the resolved invocation without running the agent")
 	cmd.Flags().BoolVar(&opt.ReadOnly, "read-only", false,

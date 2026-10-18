@@ -604,3 +604,49 @@ func TestChatCLIGlobDefaultsAndProfileExplain(t *testing.T) {
 		t.Fatalf("explicit flag did not beat default (%d bytes): %q", len(out), errs)
 	}
 }
+
+func TestSinkRendersDialectAndHelpOnce(t *testing.T) {
+	permitUnsafeLaunch(t)
+	pinCatalog(t)
+	isolatedRoom(t)
+	full := strings.Repeat("canonical producer line\n", 3000)
+	invoke := func(prefs string, extra ...string) (string, string) {
+		setTestHome(t, t.TempDir())
+		t.Setenv("BASHY_PREFS", prefs)
+		chatRunnerOverride = &fakeRunner{output: full}
+		t.Cleanup(func() { chatRunnerOverride = nil })
+		cmd := NewChatCmd()
+		var out, errb bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&errb)
+		cmd.SetArgs(append([]string{"--agent", "codex", "-m", "x", "--cwd", t.TempDir(), "--plain"}, extra...))
+		if err := cmd.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		return out.String(), errb.String()
+	}
+	def, _ := invoke("")
+	if !strings.Contains(def, "BASHY_OUTPUT_REDUCE=off") || !strings.Contains(def, "full: bashy out ") {
+		t.Fatalf("no-prefs marker changed: %q", def[max(0, len(def)-300):])
+	}
+	for prefs, want := range map[string]string{
+		`{"dialect":"pwsh"}`: "$env:BASHY_OUTPUT_REDUCE='off'",
+		`{"dialect":"cmd"}`:  "set BASHY_OUTPUT_REDUCE=off",
+		`{"help":"mcp"}`:     "--view=canonical",
+		`{"help":"skill"}`:   "--view=canonical",
+	} {
+		out, _ := invoke(prefs)
+		if !strings.Contains(out, want) || strings.Contains(out, "BASHY_OUTPUT_REDUCE=off") && want != "set BASHY_OUTPUT_REDUCE=off" {
+			t.Fatalf("%s: marker lacks %q: %q", prefs, want, out[max(0, len(out)-300):])
+		}
+	}
+	out, errs := invoke(`{"dialect":"pwsh"}`, "--full")
+	if strings.TrimRight(out, "\n") != strings.TrimRight(full, "\n") {
+		t.Fatal("--full not canonical under dialect")
+	}
+	_ = errs
+	_, errs = invoke(`{"dialect":"pwsh","budget_bytes":2048}`, "--verbose")
+	if !strings.Contains(errs, "dialect=pwsh(env)") || !strings.Contains(errs, "budget_bytes=2048(env)") || strings.Contains(errs, "canonical producer") {
+		t.Fatalf("--verbose profile wrong: %q", errs)
+	}
+}
