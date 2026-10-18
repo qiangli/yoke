@@ -892,7 +892,12 @@ func reduceChatBytes(out []byte, plan fleet.SinkPlan) (string, error) {
 		out = reduce.CanonicalizeHome(out, home)
 		return string(redactor.Redact(out)), nil
 	}
-	result, err := reduce.Reduce(reduce.NewStore(filepath.Join(root, "output")), out, reduce.Config{BudgetBytes: plan.BudgetBytes, HomeDir: home, Redactor: redactor, KeepHint: plan.KeepHint()})
+	store := reduce.NewStore(filepath.Join(root, "output"))
+	if plan.View != "" {
+		canonical := redactor.Redact(reduce.CanonicalizeHome(out, home))
+		out, _ = applySinkView(store, canonical, plan)
+	}
+	result, err := reduce.Reduce(store, out, reduce.Config{BudgetBytes: plan.BudgetBytes, HomeDir: home, Redactor: redactor, KeepHint: plan.KeepHint()})
 	if err != nil {
 		return "", fmt.Errorf("chat: reduce invocation output: %w", err)
 	}
