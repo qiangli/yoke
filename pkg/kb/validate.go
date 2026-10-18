@@ -37,6 +37,14 @@ func newValidateCmd(dir, ring *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// A consolidate proposal is accepted only while the source state
+			// it observed still holds; a stale one is rejected with its
+			// reasons (rerun kb consolidate to recompute it).
+			if reasons, err := store.ProposalStale(p); err != nil {
+				return err
+			} else if len(reasons) > 0 {
+				return fmt.Errorf("kb: %s: proposal is stale, not validated: %s", p.Slug, strings.Join(reasons, "; "))
+			}
 			p.Status = StatusValidated
 			p.Evidence = strings.TrimSpace(evidence)
 			if err := store.Write(p, "validate"); err != nil {

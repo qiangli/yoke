@@ -52,6 +52,10 @@ type Page struct {
 	// §4): a delegate sees its ancestors' exported notes and nothing else of
 	// theirs. Set by `kb note add --export`.
 	Export bool `yaml:"export,omitempty"`
+	// Proposal is the audit block of a `kb consolidate` candidate: rule,
+	// sources and the source state observed (consolidate.go). Absent on every
+	// other page.
+	Proposal *Proposal `yaml:"proposal,omitempty"`
 
 	Body string `yaml:"-"`
 }

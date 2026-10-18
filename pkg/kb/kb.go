@@ -158,6 +158,7 @@ phrase it as "what + WHEN this applies" with trigger keywords.`,
 	cmd.AddCommand(newForgetCmd(&dir, resolved))
 	cmd.AddCommand(newValidateCmd(&dir, resolved))
 	cmd.AddCommand(newRetroCmd(&dir, resolved))
+	cmd.AddCommand(newConsolidateCmd(&dir, resolved))
 	cmd.AddCommand(newSourcesCmd(&dir))
 	cmd.AddCommand(newTransferCmd(&dir))
 	cmd.AddCommand(newListCmd(&dir, resolved))

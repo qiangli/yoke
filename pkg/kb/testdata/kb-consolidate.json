@@ -1,0 +1,244 @@
+{
+  "schema_version": "bashy-kb-consolidate-v1",
+  "rules": "embedded",
+  "applied": false,
+  "proposals": [
+    {
+      "id": "67838f4467412223",
+      "rule": "lesson-from-failure",
+      "rule_version": 1,
+      "kind": "lesson",
+      "subject": "go test ./pkg/dag",
+      "sources": [
+        {
+          "ref": "observe:g1",
+          "state": "valid",
+          "digest": "6cafce47e800392b",
+          "observed_at": "2026-10-01T10:00:00Z",
+          "episode": "ep-1"
+        },
+        {
+          "ref": "observe:g2",
+          "state": "valid",
+          "digest": "847cdbb0dfbce1aa",
+          "observed_at": "2026-10-04T10:00:00Z",
+          "episode": "ep-3"
+        }
+      ],
+      "state_digest": "fe6c3d881a8da271",
+      "slug": "consolidate-67838f4467412223",
+      "type": "lesson",
+      "title": "Failure: go test ./pkg/dag",
+      "body": "2 failure event(s) for go test ./pkg/dag — distill the guardrail before validating.\n\n- observe:g1: TestCapacity timed out\n- observe:g2: TestCapacity timed out again",
+      "status": "new"
+    },
+    {
+      "id": "05e57d0699912b3c",
+      "rule": "lesson-from-failure",
+      "rule_version": 1,
+      "kind": "lesson",
+      "subject": "sense:disk-0",
+      "sources": [
+        {
+          "ref": "observe:s3",
+          "state": "valid",
+          "digest": "fae65c952b2b90b3",
+          "observed_at": "2026-10-11T00:00:00Z",
+          "episode": "ep-6"
+        }
+      ],
+      "state_digest": "18118f4e648df5e6",
+      "slug": "consolidate-05e57d0699912b3c",
+      "type": "lesson",
+      "title": "Failure: sense:disk-0",
+      "body": "1 failure event(s) for sense:disk-0 — distill the guardrail before validating.\n\n- observe:s3: probe failed: disk.free = unknown",
+      "status": "new"
+    },
+    {
+      "id": "e6d01e5a8219620f",
+      "rule": "fact-from-repeated-claim",
+      "rule_version": 1,
+      "kind": "fact",
+      "subject": "deploy.region",
+      "sources": [
+        {
+          "ref": "kb:note-region",
+          "state": "valid",
+          "digest": "dd36974a81e04e57",
+          "observed_at": "2026-10-02T00:00:00Z",
+          "episode": "ep-2"
+        },
+        {
+          "ref": "observe:c1",
+          "state": "valid",
+          "digest": "c55ebd3ff1e2b4ea",
+          "observed_at": "2026-10-02T01:00:00Z",
+          "episode": "ep-2"
+        },
+        {
+          "ref": "observe:c2",
+          "state": "valid",
+          "digest": "93ad5acadabecc9e",
+          "observed_at": "2026-10-05T01:00:00Z",
+          "episode": "ep-4"
+        }
+      ],
+      "state_digest": "6fd31d1191d69f3f",
+      "slug": "consolidate-e6d01e5a8219620f",
+      "type": "fact",
+      "title": "deploy.region = us-east-1",
+      "body": "Claimed by 3 independent sources.\n\n- kb:note-region: deploy.region = us-east-1\n- observe:c1: deploy.region = us-east-1\n- observe:c2: deploy.region = us-east-1",
+      "status": "new"
+    },
+    {
+      "id": "ec6eb35579b29916",
+      "rule": "relation-supports",
+      "rule_version": 1,
+      "kind": "relation",
+      "subject": "buildbox.cpus",
+      "relation": "supports",
+      "from": "observe:f1",
+      "to": "kb:fact-buildbox-cpus",
+      "sources": [
+        {
+          "ref": "kb:fact-buildbox-cpus",
+          "state": "valid",
+          "digest": "0ced1bb01cb82304",
+          "observed_at": "2026-09-01T00:00:00Z"
+        },
+        {
+          "ref": "observe:f1",
+          "state": "valid",
+          "digest": "c917dac9af1ce828",
+          "observed_at": "2026-10-12T00:00:00Z",
+          "episode": "ep-7"
+        }
+      ],
+      "state_digest": "b55e1fc51eea2517",
+      "slug": "consolidate-ec6eb35579b29916",
+      "type": "fact",
+      "title": "observe:f1 supports kb:fact-buildbox-cpus",
+      "body": "Proposed relation: observe:f1 supports kb:fact-buildbox-cpus (buildbox.cpus = 4).\n\n- kb:fact-buildbox-cpus: buildbox.cpus = 4\n- observe:f1: buildbox.cpus = 4",
+      "status": "new"
+    },
+    {
+      "id": "bb578037f2af462c",
+      "rule": "relation-caused-by",
+      "rule_version": 1,
+      "kind": "relation",
+      "relation": "caused-by",
+      "from": "kb:note-dag-timeout",
+      "to": "observe:g1",
+      "sources": [
+        {
+          "ref": "kb:note-dag-timeout",
+          "state": "valid",
+          "digest": "feae55fee82ae54b",
+          "observed_at": "2026-10-01T11:00:00Z",
+          "episode": "ep-1"
+        },
+        {
+          "ref": "observe:g1",
+          "state": "valid",
+          "digest": "6cafce47e800392b",
+          "observed_at": "2026-10-01T10:00:00Z",
+          "episode": "ep-1"
+        }
+      ],
+      "state_digest": "0c01cb793adbee90",
+      "slug": "consolidate-bb578037f2af462c",
+      "type": "fact",
+      "title": "kb:note-dag-timeout caused-by observe:g1",
+      "body": "Proposed relation: kb:note-dag-timeout caused-by observe:g1 (written in the episode that failed).\n\n- kb:note-dag-timeout: dag capacity tests need the package alone\n- observe:g1: TestCapacity timed out",
+      "status": "new"
+    },
+    {
+      "id": "f89b50d1aaf176a2",
+      "rule": "contradicts-differing-claim",
+      "rule_version": 1,
+      "kind": "contradicts",
+      "subject": "buildbox.cpus",
+      "relation": "contradicts",
+      "sources": [
+        {
+          "ref": "kb:fact-buildbox-cpus",
+          "state": "valid",
+          "digest": "0ced1bb01cb82304",
+          "observed_at": "2026-09-01T00:00:00Z"
+        },
+        {
+          "ref": "kb:note-cpus",
+          "state": "valid",
+          "digest": "27fab904c7368f21",
+          "observed_at": "2026-10-03T00:00:00Z",
+          "episode": "ep-5"
+        },
+        {
+          "ref": "observe:f1",
+          "state": "valid",
+          "digest": "c917dac9af1ce828",
+          "observed_at": "2026-10-12T00:00:00Z",
+          "episode": "ep-7"
+        },
+        {
+          "ref": "observe:s1",
+          "state": "valid",
+          "digest": "b016177f2af74826",
+          "observed_at": "2026-10-10T00:00:00Z",
+          "episode": "ep-5"
+        }
+      ],
+      "state_digest": "f94646714ebbe818",
+      "slug": "consolidate-f89b50d1aaf176a2",
+      "type": "gotcha",
+      "title": "Contradicts: buildbox.cpus has differing values",
+      "body": "buildbox.cpus is claimed as: 4, 8.\nFlag only — no fact is changed; resolve by validating or superseding.\n\n- kb:fact-buildbox-cpus: buildbox.cpus = 4\n- kb:note-cpus: buildbox.cpus = 8\n- observe:f1: buildbox.cpus = 4\n- observe:s1: buildbox.cpus = 8",
+      "status": "new"
+    },
+    {
+      "id": "214c1a17550a2146",
+      "rule": "contradicts-differing-claim",
+      "rule_version": 1,
+      "kind": "contradicts",
+      "subject": "deploy.region",
+      "relation": "contradicts",
+      "sources": [
+        {
+          "ref": "graph:r1",
+          "state": "valid",
+          "digest": "cc765bc8715236aa",
+          "observed_at": "2026-10-06T00:00:00Z",
+          "episode": "ep-8"
+        },
+        {
+          "ref": "kb:note-region",
+          "state": "valid",
+          "digest": "dd36974a81e04e57",
+          "observed_at": "2026-10-02T00:00:00Z",
+          "episode": "ep-2"
+        },
+        {
+          "ref": "observe:c1",
+          "state": "valid",
+          "digest": "c55ebd3ff1e2b4ea",
+          "observed_at": "2026-10-02T01:00:00Z",
+          "episode": "ep-2"
+        },
+        {
+          "ref": "observe:c2",
+          "state": "valid",
+          "digest": "93ad5acadabecc9e",
+          "observed_at": "2026-10-05T01:00:00Z",
+          "episode": "ep-4"
+        }
+      ],
+      "state_digest": "450286bd00dcdf5d",
+      "slug": "consolidate-214c1a17550a2146",
+      "type": "gotcha",
+      "title": "Contradicts: deploy.region has differing values",
+      "body": "deploy.region is claimed as: eu-west-1, us-east-1.\nFlag only — no fact is changed; resolve by validating or superseding.\n\n- graph:r1: deploy.region = eu-west-1\n- kb:note-region: deploy.region = us-east-1\n- observe:c1: deploy.region = us-east-1\n- observe:c2: deploy.region = us-east-1",
+      "status": "new"
+    }
+  ],
+  "stale": []
+}

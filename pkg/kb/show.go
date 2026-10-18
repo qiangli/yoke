@@ -82,6 +82,19 @@ type ShowEnvelope struct {
 	// (superseded, expired, forgotten, not-yet-valid): the outcome stays
 	// "found" — the page is still on disk — and this says why recall hides it.
 	Lifecycle *ShowLifecycle `json:"lifecycle,omitempty"`
+	// Proposal is set only on a `kb consolidate` candidate: its rule and
+	// whether the source state it observed still holds (state "stale" with
+	// the reasons when not).
+	Proposal *ShowProposal `json:"proposal,omitempty"`
+}
+
+// ShowProposal is a consolidate candidate's audit status at show time.
+type ShowProposal struct {
+	ID          string   `json:"id"`
+	Rule        string   `json:"rule"`
+	RuleVersion int      `json:"rule_version"`
+	State       string   `json:"state"` // pending|stale
+	Reasons     []string `json:"reasons,omitempty"`
 }
 
 // ShowLifecycle is a page's resolved lifecycle state at show time, plus its
@@ -220,6 +233,7 @@ type showResult struct {
 	Snapshot   string
 	ErrText    string
 	Lifecycle  *ShowLifecycle
+	Proposal   *ShowProposal
 }
 
 func (r showResult) envelope() ShowEnvelope {
@@ -240,6 +254,7 @@ func (r showResult) envelope() ShowEnvelope {
 		Snapshot:      r.Snapshot,
 		Error:         r.ErrText,
 		Lifecycle:     r.Lifecycle,
+		Proposal:      r.Proposal,
 	}
 }
 
@@ -340,10 +355,11 @@ func runShowSlug(c *cobra.Command, slug, dir, ring, form string, jsonOut bool) e
 	// ranker's own output. See pkg/kb/activation.go.
 	store.RecordOpen(p.Slug)
 	life := pageLifecycle(c, store, p)
+	prop := pageProposal(c, store, p)
 	if jsonOut {
 		return showSuccess(c, true, showResult{
 			Outcome: OutcomeFound, Ref: "kb:" + p.Slug, Kind: "kb", ID: p.Slug,
-			Title: p.Title, Status: p.Status, Content: string(b), Lifecycle: life,
+			Title: p.Title, Status: p.Status, Content: string(b), Lifecycle: life, Proposal: prop,
 		})
 	}
 	_, err = c.OutOrStdout().Write(b)
@@ -469,8 +485,31 @@ func runShowKBNode(c *cobra.Command, n ref.Node, dir, ring, form string, jsonOut
 	return showSuccess(c, jsonOut, showResult{
 		Outcome: OutcomeFound, Ref: n.Ref, Kind: string(n.Kind), ID: n.ID,
 		Title: n.Title, Status: n.Status, Where: n.Where, Open: n.Open,
-		Content: string(b), Lifecycle: pageLifecycle(c, store, p),
+		Content: string(b), Lifecycle: pageLifecycle(c, store, p), Proposal: pageProposal(c, store, p),
 	})
+}
+
+// pageProposal reports a consolidate candidate's audit status; nil on any
+// other page. A stale proposal is also noted on stderr.
+func pageProposal(c *cobra.Command, store *Store, p *Page) *ShowProposal {
+	if p.Proposal == nil {
+		return nil
+	}
+	sp := &ShowProposal{ID: p.Proposal.ID, Rule: p.Proposal.Rule, RuleVersion: p.Proposal.RuleVersion, State: "pending"}
+	if p.Status != StatusCandidate {
+		sp.State = p.Status
+		return sp
+	}
+	reasons, err := store.ProposalStale(p)
+	if err != nil {
+		sp.State, sp.Reasons = "unknown", []string{err.Error()}
+		return sp
+	}
+	if len(reasons) > 0 {
+		sp.State, sp.Reasons = "stale", reasons
+		fmt.Fprintf(c.ErrOrStderr(), "kb: %s: proposal stale: %s\n", p.Slug, strings.Join(reasons, "; "))
+	}
+	return sp
 }
 
 // pageLifecycle resolves p now; nil when it is simply valid, so a valid page's

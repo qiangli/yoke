@@ -1,0 +1,94 @@
+# kb consolidate — the default rule set (design §7, the sleep-time pass).
+#
+# This file is DATA: `kb consolidate --rules FILE` replaces it wholesale, so a
+# rule is added, retuned, reworded or dropped without a code change. Each rule
+# names one deterministic matcher (`match`) the engine implements; everything
+# else — thresholds, page type, title and body wording — lives here. Bump a
+# rule's `version` whenever you change what it proposes: the version is part
+# of every proposal's identity, so a retuned rule never collides with the
+# proposals its older self made.
+#
+# Matchers:
+#   failure                 failure events (gate ran+failed, non-zero exit,
+#                           failure kinds/outcomes below), grouped by command
+#                           or ref; >= min of them propose a lesson.
+#   repeated-claim          the same "subject = value" claim from >= min
+#                           distinct sources proposes a fact.
+#   claim-supports          a claim agreeing with a validated fact page
+#                           proposes a `supports` relation.
+#   note-in-failed-episode  a note written in an episode that had a failure
+#                           proposes a `caused-by` relation.
+#   differing-claim         one subject carrying differing values (claims and
+#                           validated facts alike) raises a `contradicts` flag.
+#
+# Templates are Go text/template over: .Subject .Value .Values .Relation
+# .From .To .Count .Lines (one "ref: text" line per source).
+schema: bashy-kb-consolidate-rules-v1
+
+# A claim is a source text of the shape "subject = value". Group 1 is the
+# subject, group 2 the value.
+claim_pattern: '^\s*([^\s=]+)\s*=\s*(\S(?:.*\S)?)\s*$'
+
+# Values that say "we don't know" — an observation, never a differing claim.
+unknown_values: [unknown, "?", n/a, none, "null"]
+
+failure:
+  kinds: [failure, error]
+  outcomes: [fail, failed, error]
+
+rules:
+  - id: lesson-from-failure
+    version: 1
+    match: failure
+    min: 1
+    type: lesson
+    title: "Failure: {{.Subject}}"
+    body: |
+      {{.Count}} failure event(s) for {{.Subject}} — distill the guardrail before validating.
+      {{range .Lines}}
+      - {{.}}{{end}}
+
+  - id: fact-from-repeated-claim
+    version: 1
+    match: repeated-claim
+    min: 3
+    type: fact
+    title: "{{.Subject}} = {{.Value}}"
+    body: |
+      Claimed by {{.Count}} independent sources.
+      {{range .Lines}}
+      - {{.}}{{end}}
+
+  - id: relation-supports
+    version: 1
+    match: claim-supports
+    type: fact
+    relation: supports
+    title: "{{.From}} supports {{.To}}"
+    body: |
+      Proposed relation: {{.From}} {{.Relation}} {{.To}} ({{.Subject}} = {{.Value}}).
+      {{range .Lines}}
+      - {{.}}{{end}}
+
+  - id: relation-caused-by
+    version: 1
+    match: note-in-failed-episode
+    type: fact
+    relation: caused-by
+    title: "{{.From}} caused-by {{.To}}"
+    body: |
+      Proposed relation: {{.From}} {{.Relation}} {{.To}} (written in the episode that failed).
+      {{range .Lines}}
+      - {{.}}{{end}}
+
+  - id: contradicts-differing-claim
+    version: 1
+    match: differing-claim
+    type: gotcha
+    relation: contradicts
+    title: "Contradicts: {{.Subject}} has differing values"
+    body: |
+      {{.Subject}} is claimed as: {{range $i, $v := .Values}}{{if $i}}, {{end}}{{$v}}{{end}}.
+      Flag only — no fact is changed; resolve by validating or superseding.
+      {{range .Lines}}
+      - {{.}}{{end}}
