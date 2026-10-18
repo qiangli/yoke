@@ -1,0 +1,7 @@
+kind: "adapter"
+name: "az-deployment"
+match: ["az", "deployment"]
+preview_level: "provider-validated-preview"
+effects: ["net.egress", "remote.write", "remote.delete", "proc.spawn"]
+json: ["--output=json"]
+dry_run: ["--what-if"]

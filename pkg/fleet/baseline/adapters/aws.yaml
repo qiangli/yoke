@@ -1,0 +1,6 @@
+kind: "adapter"
+name: "aws"
+match: ["aws"]
+preview_level: "unsupported"
+effects: ["net.egress", "remote.write", "remote.delete", "proc.spawn"]
+json: ["--output=json"]

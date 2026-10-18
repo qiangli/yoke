@@ -1,0 +1,6 @@
+kind: "adapter"
+name: "aws-s3"
+match: ["aws", "s3"]
+preview_level: "provider-validated-preview"
+effects: ["net.egress", "remote.write", "remote.delete", "proc.spawn"]
+dry_run: ["--dryrun"]

@@ -1,0 +1,5 @@
+kind: "adapter"
+name: "glab"
+match: ["glab"]
+preview_level: "unsupported"
+effects: ["net.egress", "remote.write", "remote.delete", "proc.spawn"]

@@ -169,6 +169,9 @@ var externalPlatforms = map[string]ExternalPlatform{
 	"pwsh": {OS: allOS, WindowsAsset: "PowerShell-7.6.6-win-x64.zip / PowerShell-7.6.6-win-arm64.zip (external/pwsh)"},
 	// declarative registry CLIs (external/registry)
 	"doctl":      {OS: allOS, WindowsAsset: "doctl-*-windows-amd64.zip"},
+	"glab":       {OS: allOS, WindowsAsset: "glab_*-Windows-x86_64.zip (vendor GitLab release)"},
+	"aws":        {OS: allOS, WindowsAsset: "AWSCLIV2.msi (vendor installer, PreferHost)"},
+	"az":         {OS: allOS, WindowsAsset: "azure-cli MSI (vendor installer, PreferHost)"},
 	"gcloud":     {OS: allOS, WindowsAsset: "vendor installer (PreferHost); google-cloud-cli-windows-x86_64.zip"},
 	"gitea":      {OS: allOS, WindowsAsset: "gitea-*-windows-4.0-amd64.exe"},
 	"gws":        {OS: allOS, WindowsAsset: "google-workspace-cli-x86_64-pc-windows-msvc.zip"},
