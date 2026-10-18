@@ -1,0 +1,6 @@
+kind: "adapter"
+name: "unzip"
+match: ["unzip"]
+preview_level: "unsupported"
+effects: ["fs.read", "fs.write", "proc.spawn"]
+listing: ["-l", "{args}"]

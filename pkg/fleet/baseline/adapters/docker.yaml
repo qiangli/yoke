@@ -1,0 +1,5 @@
+kind: "adapter"
+name: "docker"
+match: ["docker"]
+preview_level: "unsupported"
+effects: ["net.egress", "remote.write", "remote.delete", "proc.spawn"]

@@ -1,0 +1,6 @@
+kind: "adapter"
+name: "git-ls-files"
+match: ["git", "ls-files"]
+preview_level: "unsupported"
+effects: ["fs.read", "proc.spawn"]
+null: ["-z"]

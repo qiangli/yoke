@@ -1,0 +1,5 @@
+kind: "adapter"
+name: "git"
+match: ["git"]
+preview_level: "unsupported"
+effects: ["fs.read", "fs.write", "fs.delete", "net.egress", "proc.spawn"]

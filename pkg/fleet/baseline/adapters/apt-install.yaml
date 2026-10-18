@@ -1,0 +1,6 @@
+kind: "adapter"
+name: "apt-install"
+match: ["apt", "install"]
+preview_level: "local-preview"
+effects: ["fs.write", "proc.spawn"]
+dry_run: ["--simulate"]

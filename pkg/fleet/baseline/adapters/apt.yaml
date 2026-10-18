@@ -1,0 +1,5 @@
+kind: "adapter"
+name: "apt"
+match: ["apt"]
+preview_level: "unsupported"
+effects: ["fs.write", "net.egress", "proc.spawn"]

@@ -40,5 +40,5 @@ const baselineRoot = "baseline"
 // capability priors, and env markers that used to be duplicated across
 // pkg/chat, pkg/weave, pkg/capability, and pkg/skills.
 //
-//go:embed baseline/tools/*.yaml baseline/models/*.yaml baseline/agents/*.yaml baseline/plans/*.yaml baseline/services/*.yaml
+//go:embed baseline/tools/*.yaml baseline/models/*.yaml baseline/agents/*.yaml baseline/plans/*.yaml baseline/services/*.yaml baseline/adapters/*.yaml
 var baselineFS embed.FS

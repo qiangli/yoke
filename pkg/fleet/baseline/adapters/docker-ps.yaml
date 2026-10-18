@@ -1,0 +1,6 @@
+kind: "adapter"
+name: "docker-ps"
+match: ["docker", "ps"]
+preview_level: "unsupported"
+effects: ["net.egress", "proc.inspect", "proc.spawn"]
+json: ["--format=json"]

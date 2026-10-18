@@ -1,0 +1,6 @@
+kind: "adapter"
+name: "apt-remove"
+match: ["apt", "remove"]
+preview_level: "local-preview"
+effects: ["fs.delete", "proc.spawn"]
+dry_run: ["--simulate"]

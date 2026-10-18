@@ -1,0 +1,6 @@
+kind: "adapter"
+name: "rsync"
+match: ["rsync"]
+preview_level: "provider-validated-preview"
+effects: ["fs.write", "fs.delete", "net.egress", "proc.spawn"]
+dry_run: ["--dry-run"]

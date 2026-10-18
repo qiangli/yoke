@@ -1,0 +1,6 @@
+kind: "adapter"
+name: "kubectl-get"
+match: ["kubectl", "get"]
+preview_level: "unsupported"
+effects: ["net.egress", "proc.spawn"]
+json: ["--output=json"]

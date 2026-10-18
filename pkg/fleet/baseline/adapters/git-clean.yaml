@@ -1,0 +1,6 @@
+kind: "adapter"
+name: "git-clean"
+match: ["git", "clean"]
+preview_level: "local-preview"
+effects: ["fs.delete", "proc.spawn"]
+dry_run: ["--dry-run"]
