@@ -235,6 +235,9 @@ func writeContributions(w io.Writer, st *State, events []Event, who string) {
 			}
 			fmt.Fprintln(w)
 		}
+		if h := crossHostPathHint(e); h != "" {
+			fmt.Fprintf(w, "   %s\n", h)
+		}
 		if e.File != "" {
 			fmt.Fprintf(w, "\n   full: %s\n", redactHome(e.File))
 		}
