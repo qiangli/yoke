@@ -266,6 +266,16 @@ var pinnedDigests = map[string]string{
 	// unpinned (digest recorded in external/gimp/EVIDENCE.md).
 	"gimp@3.2.6/linux/amd64": "79ea41bc9b06f78fda181849a9ca8e42d83f1124dedb756f4d52352e2465010f",
 
+	// audacity@3.7.3 — Audacity 3.7.3 release (external/audacity,
+	// Sprint 382 story 0e5f3dfcbb46). Digests taken from the official
+	// CHECKSUMS.txt at https://github.com/audacity/audacity/releases/download/Audacity-3.7.3/CHECKSUMS.txt
+	// (fetched 2026-10-18 from the authoring host). Windows zip was also
+	// downloaded locally (26,398,933 bytes) and sha256-hashed to the same
+	// value; linux AppImage digest is from the same manifest. Darwin
+	// publishes only .dmg/.pkg (ErrNoArtifact) so no darwin pin.
+	"audacity@3.7.3/windows/amd64": "1d4c91d0bc1b5376f4c8768d48a6e79ab9dcb4600c1162053f61556becb45ce5",
+	"audacity@3.7.3/linux/amd64":   "4e7600c3d9f09dca52c7171cc0bfe76abb168436143cd02ecfa3052ab9f7aaa1",
+
 	// No ollama pins, by design: per docs/bashy-service-supply-chain-policy.md
 	// (Sprint 436, story 8d1e72e5dff6) bashy never downloads or execs a
 	// third-party ollama release archive — the bashy-signed embedded runner
