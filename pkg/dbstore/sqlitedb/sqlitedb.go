@@ -39,7 +39,7 @@ func (Adapter) Engine() string { return Engine }
 func (Adapter) Caps() dbstore.Caps {
 	return dbstore.Summarize(dbstore.Caps{
 		Engine:     Engine,
-		Categories: []string{"sql", "documents", "vectors"},
+		Categories: []string{"sql", "documents", "vectors", "objects"},
 		Modes: map[dbstore.Mode]dbstore.ModeCaps{
 			dbstore.Persistent: {
 				Supported: true, Via: "native",
@@ -57,6 +57,7 @@ func (Adapter) Caps() dbstore.Caps {
 			"a closed handle's pool rejects later statements, reported as lifetime_ended",
 			"documents: db doc collections are tables created only by db doc collection create; db export|import of a sqlite target is the sql interchange, db doc export|import the document interchange",
 			"vectors: db vec collections are sqlite-vec vec0 tables created only by db vec collection add (dimension, metric, model persisted); search is exact, never ANN; db vec export|import is the vector interchange",
+			"objects: db obj buckets and revisioned objects with sha256 checksums; db obj export|import is the object interchange",
 		},
 	})
 }

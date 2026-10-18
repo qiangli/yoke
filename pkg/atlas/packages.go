@@ -402,6 +402,7 @@ var packages = map[string]Package{
 	"kbmemory":    libPkg("kb", "opt-in memory collections behind `kb memory init|select|add|inspect|update`: kb-shaped candidate records in an explicit db document target, either storage mode, through dblifecycle admission; supersede/forget stay 284 M6."),
 	"dbvec":       libPkg("db", "sqlite-vec vector category behind `db vec put|get|rm|batch|search|collection|export|import`: explicit collections with persisted dimension/metric/model, exact filtered search, supplied vectors with zero network, text only via an explicit endpoint; registered with dblifecycle."),
 	"dbfts":       libPkg("db", "Bleve full-text category with explicit mappings, source documents, lexical search and logical interchange behind db fts and db export|import."),
+	"dbobj":       libPkg("db", "object storage category behind `db obj bucket|list|stat|get|put|delete|rm|transfer|export|import`: buckets, metadata, bounded listing, backup transfer, and logical interchange, registered with dblifecycle."),
 	"reduce": {Role: RoleUnwired, Note: "command-output reduction primitive and content-addressed spill store. " +
 		"NewOutCmd is not mounted and no execution seam imports the package yet; the Sprint 123 chat and shell " +
 		"seam stories own that wiring. Reclassify when the first front door lands."},

@@ -35,7 +35,8 @@ var command = &tool.Tool{
 		"db doc get|find|put|patch|rm|batch|export|import|collection create|drop|list|index add|rm|list TARGET [--collection C] [--id ID] [--doc JSON] [--filter JSON] [--input FILE|-]" + "\n" +
 		"db kv bucket create|drop|list|get|put|delete|scan|cas|batch TARGET [--bucket B] [--key text:K|b64:K] [--value text:V|b64:V] [--expect text:V|b64:V|--expect-absent] [--prefix ...] [--input FILE|-]" + "\n" +
 		"db fts search|get|put|delete|batch|check|mapping show|rebuild TARGET [--input FILE|-]" + "\n" +
-		"db vec put|get|rm|batch|search|export|import|collection add|rm|list TARGET [--collection C] [--id ID] [--vector JSON|--text T --endpoint URL [--api-key-env VAR]] [--metadata JSON] [--filter JSON] [--input FILE|-]",
+		"db vec put|get|rm|batch|search|export|import|collection add|rm|list TARGET [--collection C] [--id ID] [--vector JSON|--text T --endpoint URL [--api-key-env VAR]] [--metadata JSON] [--filter JSON] [--input FILE|-]" + "\n" +
+		"db obj bucket create|drop|list|get|put|delete|rm|stat|list|transfer|export|import TARGET [--bucket B] [--key K] [--value text:...|b64:...] [--content-type T] [--metadata JSON] [--input FILE|-]",
 }
 
 func init() { command.Run = run; tool.Register(command) }
@@ -49,8 +50,10 @@ type dbFlags struct {
 	ifAbsent, unique                                                                *bool
 	bucket, key, value, expect, start, prefix, ttl                                  *string
 	metric, model, vector, text, endpoint, apiKeyEnv, metadata                      *string
+	contentType, remote, destination, checksum                                      *string
 	dimension                                                                       *int
 	includeVectors                                                                  *bool
+	deleteFlag                                                                      *bool
 	expectAbsent                                                                    *bool
 	aliases, param                                                                  *[]string
 	limit, maxBytes                                                                 *int
@@ -106,6 +109,11 @@ func declareFlags(op string) dbFlags {
 	f.apiKeyEnv = fs.String("api-key-env", "", "db vec: environment variable holding the --endpoint bearer key")
 	f.metadata = fs.String("metadata", "", "db vec put: JSON object metadata")
 	f.includeVectors = fs.Bool("include-vectors", false, "db vec get|search: return stored vectors")
+	f.contentType = fs.String("content-type", "", "db obj put: MIME content type")
+	f.remote = fs.String("remote", "", "db obj transfer: remote rclone target name or path")
+	f.destination = fs.String("destination", "", "db obj transfer: destination directory or remote target")
+	f.checksum = fs.String("checksum", "", "db obj transfer: expected SHA256 checksum")
+	f.deleteFlag = fs.Bool("delete", false, "db obj transfer: delete transferred source objects")
 	f.ready = fs.String("ready", "", "private owner rendezvous")
 	_ = fs.MarkHidden("ready")
 	f.idleTTL = fs.Duration("idle-ttl", 0, "end an idle owner session after this duration")
@@ -246,11 +254,15 @@ func run(rc *tool.RunContext, args []string) int {
 		return 0
 	}
 	catOp, raw := "", json.RawMessage(nil)
-	if op == "doc" || op == "vec" {
+	if op == "doc" || op == "vec" || op == "obj" {
 		var err error
 		if op == "vec" {
 			if catOp, operands, err = vecVerb(operands); err == nil {
 				raw, err = vecInput(rc, f)
+			}
+		} else if op == "obj" {
+			if catOp, operands, err = objVerb(operands); err == nil {
+				raw, err = objInput(rc, f)
 			}
 		} else if catOp, operands, err = docVerb(operands); err == nil {
 			raw, err = docInput(rc, f, catOp)

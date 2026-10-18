@@ -65,6 +65,26 @@ func init() {
 			Spec: func(mode dbstore.Mode, a dblifecycle.Access) dblifecycle.Operation {
 				return Spec(name, mode, a)
 			},
+			SpecInput: func(raw json.RawMessage, mode dbstore.Mode, a dblifecycle.Access) dblifecycle.Operation {
+				s := Spec(name, mode, a)
+				if name == OpTransfer {
+					in, err := decodeInput(raw)
+					if err == nil {
+						isRemote := in.Remote != "" || strings.Contains(in.Destination, ":")
+						var eff []string
+						for _, e := range s.Effects {
+							if e != "net.egress" {
+								eff = append(eff, e)
+							}
+						}
+						if isRemote {
+							eff = append(eff, "net.egress")
+						}
+						s.Effects = eff
+					}
+				}
+				return s
+			},
 			Run: func(ctx context.Context, h dbstore.Handle, raw json.RawMessage, a dblifecycle.Access) (dblifecycle.Outcome, error) {
 				in, err := decodeInput(raw)
 				if err != nil {

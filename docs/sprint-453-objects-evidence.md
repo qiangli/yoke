@@ -65,3 +65,18 @@ To be executed on the manager's claimed remote test host:
 ```sh
 go test -count=1 ./pkg/dbobj -run '^TestIndependentProcess'
 ```
+
+## Phase 2 Mount Evidence
+
+- CLI dispatch: `cmds/db/obj.go`, `cmds/db/db.go` (`objVerb`, `objInput`, `dbFlags`, usage, and dispatch)
+- Typed MCP tool: exposed via `db_lifecycle` tool with `verb: obj` positionals and typed flags
+- Atlas census: `pkg/atlas/packages.go` census entry for `dbobj` library package
+- Capabilities: `objects` category and notes added to `pkg/dbstore/sqlitedb/sqlitedb.go` and `pkg/dbstore/bboltdb/bboltdb.go`
+- Test suite: `cmds/db/obj_test.go` covering CLI persistent mode, in-memory owner session, typed MCP execution, CAS revision preconditions, bounded listing, logical export/import, foreign flag refusal, and duplicate flag error checking
+- Test commands:
+  ```sh
+  CGO_ENABLED=0 GOMAXPROCS=4 GOFLAGS=-p=2 go test -short -count=1 ./cmds/db -run TestObj
+  CGO_ENABLED=0 GOMAXPROCS=4 GOFLAGS=-p=2 go test -short -count=1 ./pkg/dbobj
+  ```
+  Result: `ok  github.com/qiangli/yoke/cmds/db (PASS)`, `ok  github.com/qiangli/yoke/pkg/dbobj (PASS)`
+

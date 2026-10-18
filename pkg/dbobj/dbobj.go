@@ -138,6 +138,11 @@ func decodeInput(raw json.RawMessage) (Input, error) {
 	return in, nil
 }
 
+// DecodeInput decodes raw JSON into Input rejecting unknown fields.
+func DecodeInput(raw json.RawMessage) (Input, error) {
+	return decodeInput(raw)
+}
+
 func (in Input) bounds() (limit, maxBytes int, err error) {
 	limit, maxBytes = in.Limit, in.MaxBytes
 	if limit == 0 {

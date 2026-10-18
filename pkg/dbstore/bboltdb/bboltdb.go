@@ -37,7 +37,7 @@ func (Adapter) Engine() string { return Engine }
 func (Adapter) Caps() dbstore.Caps {
 	return dbstore.Summarize(dbstore.Caps{
 		Engine:     Engine,
-		Categories: []string{"kv"},
+		Categories: []string{"kv", "objects"},
 		Modes: map[dbstore.Mode]dbstore.ModeCaps{
 			dbstore.Persistent: {
 				Supported: true, Via: "native",
@@ -54,6 +54,7 @@ func (Adapter) Caps() dbstore.Caps {
 			"memory mode is the supplemental memkv adapter: copy-on-write snapshots, readers never block, writers serialize",
 			"no TTL or expiry: values live until deleted, a ttl request is refused as unsupported; no Redis compatibility",
 			"a closed handle rejects every later View and Update with lifetime_ended",
+			"objects: db obj buckets and revisioned objects with sha256 checksums; db obj export|import is the object interchange",
 		},
 	})
 }
