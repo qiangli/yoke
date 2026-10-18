@@ -26,6 +26,9 @@ func (b *busDeltaSource) TranslateSeq(ctx context.Context, loc ref.Locator, seq 
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	if strings.TrimSpace(loc.Target) == "timeline" {
+		return "", fmt.Errorf("lens: bus: timeline target does not support sequence in --since")
+	}
 	if seq < 1 {
 		return "", fmt.Errorf("lens: bus: sequence must be positive")
 	}
@@ -48,6 +51,9 @@ func (b *busDeltaSource) TranslateSeq(ctx context.Context, loc ref.Locator, seq 
 func (b *busDeltaSource) TranslateTime(ctx context.Context, loc ref.Locator, t time.Time) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
+	}
+	if strings.TrimSpace(loc.Target) == "timeline" {
+		return "", fmt.Errorf("lens: bus: timeline target does not support time/duration in --since")
 	}
 	floor := room.ArchivedThrough()
 	reader := room.NewTimelineReader(nil)
@@ -124,12 +130,15 @@ func (b *busDeltaSource) Delta(ctx context.Context, loc ref.Locator, token strin
 	}
 
 	target := strings.TrimSpace(loc.Target)
+	if target == "timeline" {
+		return busTimelineDelta{}.Delta(ctx, loc, token)
+	}
 	var (
 		matchKind string
 		matchSeq  int64 = -1
 	)
 	switch target {
-	case "", "events", "timeline", "all", "*":
+	case "", "events", "all", "*":
 		// match all events
 	default:
 		clean := strings.TrimPrefix(target, "#")

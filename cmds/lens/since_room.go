@@ -37,5 +37,3 @@ func (busTimelineDelta) Delta(ctx context.Context, loc ref.Locator, token string
 	}
 	return b.Bytes(), next, "", nil
 }
-
-func init() { _ = RegisterDeltaSource("bus", busTimelineDelta{}) }
