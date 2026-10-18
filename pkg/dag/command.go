@@ -25,7 +25,7 @@ import (
 func newDagCmd() *cobra.Command {
 	var (
 		listF, jsonF, plainF, quietF, keepGoing, forceF, explainF, dryRunF, outGroupF, checkF, watchF bool
-		sandboxF, fleetF, meshF, timingsF, runsF, noJournalF, statusF, htmlF                          bool
+		sandboxF, fleetF, meshF, timingsF, runsF, noJournalF, statusF, htmlF, graphF                  bool
 		fileArg, showRunF, serveF, skillF                                                             string
 		cacheDir, cacheExport, cacheImport, chunksPath, remoteCmd, remoteShell                        string
 		jobs, keepRuns                                                                                int
@@ -173,6 +173,12 @@ routes any agentic tool to these targets through bashy dag.`,
 
 			if checkF {
 				return runCheck(out, errOut, mode, doc, g)
+			}
+			if graphF {
+				if err := writeGraphStream(out, doc, path, workDir); err != nil {
+					return emitErr(errOut, mode, err)
+				}
+				return nil
 			}
 			if listF {
 				return runList(out, mode, doc)
@@ -327,6 +333,7 @@ routes any agentic tool to these targets through bashy dag.`,
 	cmd.CompletionOptions.DisableDefaultCmd = true
 	cmd.Flags().BoolVarP(&listF, "list", "l", false, "List targets and exit")
 	cmd.Flags().BoolVar(&jsonF, "json", false, "Emit machine-readable envelope")
+	cmd.Flags().BoolVar(&graphF, "graph", false, "Emit the task graph as a bashy-graph-v1 stream (targets, requires edges); runs nothing")
 	cmd.Flags().BoolVar(&plainF, "plain", false, "Plain-text output, no banners")
 	cmd.Flags().BoolVar(&quietF, "quiet", false, "Suppress banners; final result only")
 	cmd.Flags().BoolVarP(&keepGoing, "keep-going", "k", false, "Continue past a failed target")

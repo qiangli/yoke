@@ -138,7 +138,7 @@ func newUnsubscribeCmd() *cobra.Command {
 }
 
 func newSubscriptionsCmd() *cobra.Command {
-	var jsonOut, reconcile bool
+	var jsonOut, graphOut, reconcile bool
 	cmd := &cobra.Command{
 		Use:     "subscriptions",
 		Aliases: []string{"subs"},
@@ -157,7 +157,14 @@ func newSubscriptionsCmd() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			w := cmd.OutOrStdout()
+			if graphOut && jsonOut {
+				return fmt.Errorf("bus subscriptions: --graph and --json are different outputs; pick one")
+			}
 			if reconcile {
+				// Under --graph stdout is the stream; the summary goes aside.
+				if graphOut {
+					w = cmd.ErrOrStderr()
+				}
 				if FleetNames == nil {
 					return fmt.Errorf("bus: no agent catalog is wired here, so the fleet cannot be reconciled")
 				}
@@ -174,6 +181,9 @@ func newSubscriptionsCmd() *cobra.Command {
 			all, err := Subscriptions()
 			if err != nil {
 				return err
+			}
+			if graphOut {
+				return writeSubscriptionsStream(cmd.OutOrStdout(), all)
 			}
 			if jsonOut {
 				enc := json.NewEncoder(w)
@@ -200,6 +210,7 @@ func newSubscriptionsCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit JSON")
+	cmd.Flags().BoolVar(&graphOut, "graph", false, "emit a bashy-graph-v1 stream (subscribers, interests, interrupt rights)")
 	cmd.Flags().BoolVar(&reconcile, "reconcile", false, "open a default inbox for every fleet agent that lacks one")
 	return cmd
 }

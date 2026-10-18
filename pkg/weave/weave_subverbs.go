@@ -806,6 +806,7 @@ the prompt — it does not bypass the unmerged-work guard; use --force for that.
 
 func newWeaveStatusCmd() *cobra.Command {
 	var flags weaveOutputFlags
+	var graph bool
 	cmd := &cobra.Command{
 		Use:   "status <issue>",
 		Short: "Show an issue's reconciled state, merge status, and verify result",
@@ -820,10 +821,14 @@ many commits it is ahead, and the last substrate-verified result.`,
 			if err != nil {
 				return fmt.Errorf("issue must be an integer: %q", args[0])
 			}
+			if graph {
+				return runWeaveStatusGraph(cmd, id, &flags)
+			}
 			return runWeaveStatus(cmd, id, &flags)
 		},
 	}
 	flags.attach(cmd)
+	cmd.Flags().BoolVar(&graph, "graph", false, "Emit the run's relations (depends-on, parent/children, stories) as a bashy-graph-v1 stream")
 	return cmd
 }
 
