@@ -14,6 +14,7 @@ import (
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/llmbudget"
 	"github.com/qiangli/yoke/pkg/quotaobs"
+	"github.com/qiangli/yoke/pkg/room"
 	"github.com/spf13/cobra"
 )
 
@@ -73,14 +74,16 @@ type quotaImmuneTickInputs struct {
 	forecasts []llmbudget.AccountForecast
 	loaded    bool
 	err       error
+	busErr    error
 }
 
 type quotaImmuneDeltaState struct {
-	Cursor quotaobs.Cursor        `json:"cursor"`
-	Rows   []quotaobs.Observation `json:"rows"`
+	Cursor    quotaobs.Cursor        `json:"cursor"`
+	Rows      []quotaobs.Observation `json:"rows"`
+	BusCursor string                 `json:"bus_cursor,omitempty"`
 }
 
-func loadQuotaImmuneDelta(dir string, now time.Time) (*quotaImmuneTickInputs, quotaImmuneDeltaState, error) {
+func loadQuotaImmuneDelta(ctx context.Context, dir string, now time.Time) (*quotaImmuneTickInputs, quotaImmuneDeltaState, error) {
 	name := filepath.Join(dir, "quota-immune-cursor.json")
 	var state quotaImmuneDeltaState
 	if b, err := os.ReadFile(name); err == nil {
@@ -109,7 +112,18 @@ func loadQuotaImmuneDelta(dir string, now time.Time) (*quotaImmuneTickInputs, qu
 		}
 	}
 	state.Rows = kept
+	// Keep a durable agent-world bus position alongside the quota journal.
+	// Bus events are coordination evidence; only classified quota observations
+	// are allowed to change a quota assessment.
+	_, busCursor, busErr := room.ReadDelta(ctx, state.BusCursor)
+	if errors.Is(busErr, room.ErrDeltaExpired) {
+		_, busCursor, busErr = room.ReadDelta(ctx, "")
+	}
+	if busErr == nil {
+		state.BusCursor = busCursor
+	}
 	inputs := &quotaImmuneTickInputs{loaded: true}
+	inputs.busErr = busErr
 	inputs.joined = joinQuotaImmuneObservations(state.Rows, quotaImmuneClassify(state.Rows, now))
 	return inputs, state, nil
 }
@@ -402,9 +416,12 @@ func runQuotaImmuneTick(cmd *cobra.Command, _ string, dir string, dryRun bool) (
 	inputs := &quotaImmuneTickInputs{}
 	var deltaState quotaImmuneDeltaState
 	if quotaImmuneDelta != nil {
-		inputs, deltaState, err = loadQuotaImmuneDelta(dir, now)
+		inputs, deltaState, err = loadQuotaImmuneDelta(cmd.Context(), dir, now)
 		if err != nil {
 			return nil, err
+		}
+		if inputs.busErr != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "weave immune: bus delta: %v\n", inputs.busErr)
 		}
 	}
 	inputs.forecasts = quotaImmuneForecast(cmd.Context(), now)

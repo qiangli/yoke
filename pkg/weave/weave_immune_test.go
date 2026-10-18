@@ -3,6 +3,7 @@ package weave
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/qiangli/yoke/pkg/llmbudget"
 	"github.com/qiangli/yoke/pkg/quotaobs"
+	"github.com/qiangli/yoke/pkg/room"
 	"github.com/spf13/cobra"
 )
 
@@ -143,6 +145,9 @@ func TestQuotaImmuneDeltaRestartAndRotation(t *testing.T) {
 		}
 	}
 	add("warning")
+	if err := room.Emit(room.Event{Type: room.EventNotify, Topic: "quota", Body: "coordination marker"}); err != nil {
+		t.Fatal(err)
+	}
 	if a, err := runQuotaImmuneTick(cmd, root, dir, true); err != nil || len(a) != 1 || !a[0].DryRun {
 		t.Fatalf("dry run: %+v %v", a, err)
 	}
@@ -152,8 +157,33 @@ func TestQuotaImmuneDeltaRestartAndRotation(t *testing.T) {
 	if a, err := runQuotaImmuneTick(cmd, root, dir, false); err != nil || len(a) != 1 || a[0].Level != "warn" {
 		t.Fatalf("first: %+v %v", a, err)
 	}
+	var state quotaImmuneDeltaState
+	b, err := os.ReadFile(filepath.Join(dir, "quota-immune-cursor.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &state); err != nil || state.BusCursor == "" {
+		t.Fatalf("bus cursor: %v %+v", err, state)
+	}
+	if events, _, err := room.ReadDelta(context.Background(), state.BusCursor); err != nil || len(events) != 0 {
+		t.Fatalf("bus replay after checkpoint: %+v %v", events, err)
+	}
+	firstBusCursor := state.BusCursor
+	if err := room.Emit(room.Event{Type: room.EventNotify, Topic: "quota", Body: "second marker"}); err != nil {
+		t.Fatal(err)
+	}
 	if a, err := runQuotaImmuneTick(cmd, root, dir, false); err != nil || len(a) != 0 {
 		t.Fatalf("restart: %+v %v", a, err)
+	}
+	b, err = os.ReadFile(filepath.Join(dir, "quota-immune-cursor.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &state); err != nil || state.BusCursor == firstBusCursor {
+		t.Fatalf("second bus cursor: %v %+v", err, state)
+	}
+	if events, _, err := room.ReadDelta(context.Background(), state.BusCursor); err != nil || len(events) != 0 {
+		t.Fatalf("second bus replay: %+v %v", events, err)
 	}
 	if len(counts) != 3 || counts[0] != 1 || counts[1] != 1 || counts[2] != 0 {
 		t.Fatalf("delta counts: %v", counts)
