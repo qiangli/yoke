@@ -36,19 +36,37 @@ Both yoke root and `external/otel` now replace `modernc.org/sqlite` with
 that version and record its checksums in their respective `go.sum` files.
 No local replacement is committed.
 
-Published-pin focused Dragon checks (no independent processes):
+Published-pin Dragon checks (historical host-policy deviation):
 
 ```
 go test -count=1 -run '^(TestPragmaAuthorizerPolicy|TestHeldReadLeavesNoConnectionState)$' ./pkg/dbsql  PASS
 go test -count=1 -skip 'TestIndependent' ./pkg/dbsql ./pkg/dbstore/sqlitedb ./cmds/db             PASS
 ```
 
+The second command ran the broad `./cmds/db` package suite. Its
+`TestSQLVerbsBothModes` test starts native owner subprocesses, which
+`-skip TestIndependent` does not exclude. This was a Dragon host-policy
+deviation, not an in-process-only check; it was not rerun. The first command
+was focused and in-process.
+
+After the rebase, Dragon ran only named in-process tests:
+
+```
+go test -count=1 -run '^(TestPragmaAuthorizerPolicy|TestHeldReadLeavesNoConnectionState|TestTypedMCPSQLQuery)$' ./pkg/dbsql ./cmds/db  PASS
+```
+
+Both the root and `external/otel` `go list -m` resolve the published fork
+version above.
+
 Manager independently checked source commit `0f7e471b` with fork `5fb52bf`:
 touched package tests and vet, built CLI, and typed and generic stdio MCP in
 both modes passed on Mac. Fork root tests passed on Windows; upstream unsafe
 pointer vet warning count was unchanged. These checks predate the published
-pin. Final remote consumer checks and the Sprint 467 base rebase remain
-manager coordinated; this record does not claim story acceptance.
+pin. The five SQL commits were rebased without conflict onto the exact
+Sprint 467 published base `4d1eda4151a93a62cc2cd05fff31c0321e36cc6f`;
+the SQL source and dependency trees match the pre-rebase candidate
+`0dacb7c2`. Final remote consumer checks remain manager coordinated;
+this record does not claim story acceptance.
 
 Worker: `s453-sql-opus` (registered first holder; author and committer),
 weave yoke#361, branch `agent/weave-issue-361` on yoke main `1587fa4c`
