@@ -268,3 +268,50 @@ func TestNativeStatusSurvivesForwardingFailure(t *testing.T) {
 		t.Fatalf("forwarding error replaced native success with %d", code)
 	}
 }
+
+func TestCLIExplainArgumentShape(t *testing.T) {
+	argv, cat := helper(t)
+	a, ok := cat.Adapter("fixture")
+	if !ok {
+		t.Fatal("missing fixture adapter")
+	}
+	a.Effects = []string{"fs.write", "net.egress"}
+	if err := cat.SaveAdapter(a); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(t.TempDir(), "ran")
+	tail := []string{"marker", marker, "--token=inline-secret", "--password", "separate-secret", "-uattached-secret", "--unknown=unknown-secret", "", "--", "--operand-secret"}
+	var out, errOut bytes.Buffer
+	c := NewCmd(nil, fleet.WithoutCloudOverlay())
+	c.SetArgs(append([]string{"--explain", "--"}, append(argv, tail...)...))
+	c.SetOut(&out)
+	c.SetErr(&errOut)
+	if code := ExitCode(c.Execute()); code != 0 || errOut.Len() != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errOut.String())
+	}
+	want := "adapter: fixture\npreview_level: unsupported\neffects: fs.write, net.egress\narguments: values redacted; positions are target argv indexes; no execution\n"
+	for i := range argv {
+		want += fmt.Sprintf("  argv[%d]: matched command prefix [redacted]\n", i)
+	}
+	shapes := []string{
+		"operand or flag value [redacted]", "operand or flag value [redacted]",
+		"long flag with inline value [redacted]=[redacted]", "long flag [redacted]",
+		"operand or flag value [redacted]", "short flag/cluster or attached value [redacted]",
+		"long flag with inline value [redacted]=[redacted]", "operand or flag value [redacted]",
+		"option terminator --", "operand after -- [redacted]",
+	}
+	for i, shape := range shapes {
+		want += fmt.Sprintf("  argv[%d]: %s\n", len(argv)+i, shape)
+	}
+	if out.String() != want {
+		t.Fatalf("explanation = %q, want %q", out.String(), want)
+	}
+	for _, secret := range []string{marker, "inline-secret", "separate-secret", "attached-secret", "unknown-secret", "operand-secret"} {
+		if strings.Contains(out.String()+errOut.String(), secret) {
+			t.Fatal("explanation leaked argument value")
+		}
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("explain executed target")
+	}
+}

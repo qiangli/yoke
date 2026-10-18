@@ -271,9 +271,32 @@ func NewCmd(lens PrepareLens, opts ...fleet.Option) *cobra.Command {
 			return fail(e.Error())
 		}
 		if req.Explain {
-			// No user argv or option values enter diagnostics. Names/effects come from
-			// declarations; raw foreign output is never captured or represented as safe.
-			fmt.Fprintf(c.OutOrStdout(), "adapter: %s\npreview_level: %s\neffects: %s\narguments: omitted (may contain credentials); no execution\n", p.Adapter.Name, p.Adapter.PreviewLevel, strings.Join(p.Adapter.Effects, ", "))
+			fmt.Fprintf(c.OutOrStdout(), "adapter: %s\npreview_level: %s\neffects: %s\n", p.Adapter.Name, p.Adapter.PreviewLevel, strings.Join(p.Adapter.Effects, ", "))
+			fmt.Fprintln(c.OutOrStdout(), "arguments: values redacted; positions are target argv indexes; no execution")
+			// Describe lexical shape only: adapters do not declare foreign flag
+			// arity. Even a flag-looking token may be a credential value, and a
+			// short flag may carry an attached secret. Never print raw tokens.
+			operands := false
+			for i, arg := range p.Argv {
+				shape := "operand or flag value [redacted]"
+				switch {
+				case i < len(p.Adapter.Match):
+					shape = "matched command prefix [redacted]"
+				case operands:
+					shape = "operand after -- [redacted]"
+				case arg == "--":
+					shape = "option terminator --"
+					operands = true
+				case strings.HasPrefix(arg, "--"):
+					shape = "long flag [redacted]"
+					if strings.Contains(arg, "=") {
+						shape = "long flag with inline value [redacted]=[redacted]"
+					}
+				case strings.HasPrefix(arg, "-") && arg != "-":
+					shape = "short flag/cluster or attached value [redacted]"
+				}
+				fmt.Fprintf(c.OutOrStdout(), "  argv[%d]: %s\n", i, shape)
+			}
 			return nil
 		}
 		code := Run(c.Context(), p, c.InOrStdin(), c.OutOrStdout(), c.ErrOrStderr(), lens)
