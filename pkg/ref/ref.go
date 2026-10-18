@@ -66,6 +66,8 @@ const (
 	Skill   Kind = "skill"   // a skill, by name
 	Episode Kind = "episode" // one continuing conversation, by its BASHY_EPISODE id
 	Role    Kind = "role"    // an addressable seat (steward, conductor:22), not its holder
+	Out     Kind = "out"     // spilled command output, by digest-prefix handle (verbatim id)
+	Chat    Kind = "chat"    // a chat session transcript, by chat session id
 
 	// Unknown is what a parser files a `<scheme>:<rest>` under when the scheme
 	// is not in the vocabulary. It is NEVER a member of Kinds() and never
@@ -75,7 +77,11 @@ const (
 )
 
 // kinds is the closed table. Kinds() copies it; Known() indexes it.
-var kinds = []Kind{KB, Todo, Sprint, Run, Meet, MB, Bus, Agent, Person, Host, Tool, Model, Skill, Episode, Role}
+// out and chat close the M1 front-door set (Sprint 284): every memory type
+// reachable through `kb show` is a vocabulary kind with an owning resolver.
+// cleanID leaves both ids verbatim — an out handle is a digest prefix (never
+// `#`-stripped) and a chat id is a session id.
+var kinds = []Kind{KB, Todo, Sprint, Run, Meet, MB, Bus, Agent, Person, Host, Tool, Model, Skill, Episode, Role, Out, Chat}
 
 var known = func() map[Kind]bool {
 	m := make(map[Kind]bool, len(kinds))

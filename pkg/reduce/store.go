@@ -155,6 +155,12 @@ func (s *Store) Get(handle string) ([]byte, string, error) {
 	return content, digestPrefix + name, nil
 }
 
+// ErrNoSpill marks a handle that matches no blob in a READABLE store. It must
+// stay distinct from a store that could not be read at all (a missing root, a
+// permission failure): "not found" is a fact about the record, "cannot read"
+// is a fact about this host, and kb show reports them as different outcomes.
+var ErrNoSpill = errors.New("reduce: no spilled output")
+
 // resolve maps a handle to the single blob filename it identifies.
 func (s *Store) resolve(handle string) (string, error) {
 	if s == nil || s.root == "" {
@@ -167,15 +173,20 @@ func (s *Store) resolve(handle string) (string, error) {
 	if !isHex(want) {
 		return "", fmt.Errorf("reduce: recovery handle %q is not a hex digest prefix", handle)
 	}
+	if _, err := os.Stat(s.root); err != nil {
+		// The store itself is unreadable — a missing root, a permission
+		// failure — never "not found".
+		return "", fmt.Errorf("reduce: spill store at %s unreadable: %w", s.root, err)
+	}
 	if len(want) == digestHexLen {
 		if _, err := os.Stat(filepath.Join(s.root, want)); err != nil {
-			return "", fmt.Errorf("reduce: no spilled output for %s", handle)
+			return "", fmt.Errorf("%w for %s", ErrNoSpill, handle)
 		}
 		return want, nil
 	}
 	entries, err := os.ReadDir(s.root)
 	if err != nil {
-		return "", fmt.Errorf("reduce: no spilled output for %s", handle)
+		return "", fmt.Errorf("reduce: spill store at %s unreadable: %w", s.root, err)
 	}
 	var matches []string
 	for _, e := range entries {
@@ -187,7 +198,7 @@ func (s *Store) resolve(handle string) (string, error) {
 	sort.Strings(matches)
 	switch len(matches) {
 	case 0:
-		return "", fmt.Errorf("reduce: no spilled output for %s", handle)
+		return "", fmt.Errorf("%w for %s", ErrNoSpill, handle)
 	case 1:
 		return matches[0], nil
 	default:

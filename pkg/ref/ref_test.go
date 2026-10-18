@@ -17,11 +17,11 @@ import (
 // reviewed decision and the atlas/docs row lands with it.
 func TestKindsIsTheVocabulary(t *testing.T) {
 	want := []Kind{"kb", "todo", "sprint", "run", "meet", "mb", "bus",
-		"agent", "person", "host", "tool", "model", "skill", "episode", "role"}
+		"agent", "person", "host", "tool", "model", "skill", "episode", "role", "out", "chat"}
 	if got := Kinds(); !slices.Equal(got, want) {
 		t.Fatalf("vocabulary drifted:\n got %v\nwant %v\n(a new kind needs a table row here, a resolver in its store, and an atlas row)", got, want)
 	}
-	if len(Kinds()) != 15 {
+	if len(Kinds()) != 17 {
 		t.Fatalf("15 kinds, got %d", len(Kinds()))
 	}
 	for _, k := range Kinds() {
@@ -74,6 +74,13 @@ func TestParseSpellings(t *testing.T) {
 		{"skill:conductor", Skill, "conductor", ""},
 		{"episode:e-2026-09-13-1", Episode, "e-2026-09-13-1", ""},
 		{"role:steward", Role, "steward", ""},
+		{"out:9c2d4f1a", Out, "9c2d4f1a", ""},
+		{"out:sha256:9c2d4f1a", Out, "sha256:9c2d4f1a", ""}, // verbatim: the store strips the scheme
+		{"chat:elif", Chat, "elif", ""},
+		{"urn:dhnt:out:9c2d4f1a", Out, "9c2d4f1a", ""},
+		{"urn:dhnt:chat:elif", Chat, "elif", ""},
+		{"dhnt:out/9c2d4f1a", Out, "9c2d4f1a", ""},
+		{"dhnt:chat/elif", Chat, "elif", ""},
 		{"role:conductor:22", Role, "conductor:22", ""}, // the id may itself carry a colon
 		// fully qualified
 		{"urn:dhnt:kb:deploy-runbook", KB, "deploy-runbook", ""},

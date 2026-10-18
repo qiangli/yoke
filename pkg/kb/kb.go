@@ -468,42 +468,9 @@ func writeSearchJSON(w io.Writer, hits []Hit, rel []Relation, fed []FedHit, rep 
 }
 
 // --- show ----------------------------------------------------------------
-
-func newShowCmd(dir, ring *string) *cobra.Command {
-	var form string
-	cmd := &cobra.Command{
-		Use:   "show <slug|#seq|uuid>",
-		Short: "Print one page (frontmatter + body) — by slug, running number or uuid (prefix)",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(c *cobra.Command, args []string) error {
-			if form != "" && !ValidForm(form) {
-				return fmt.Errorf("kb: invalid form %q (note|page|relation|code)", form)
-			}
-			store := openRing(*dir, *ring)
-			// The three handles of one entity (ref.Shape) all open the same
-			// page. LoadByHandle applies the agent ring's owner scope the way
-			// Load does: another principal's page reports as absent.
-			p, err := store.LoadByHandle(strings.TrimPrefix(args[0], "kb:"))
-			if err != nil {
-				return err
-			}
-			if form != "" && p.EffForm() != form {
-				return fmt.Errorf("kb: %s is form %s, not %s", p.Slug, p.EffForm(), form)
-			}
-			b, err := os.ReadFile(store.PagePath(p.Slug))
-			if err != nil {
-				return err
-			}
-			// An OPEN is the use signal — the reader's judgement, not the
-			// ranker's own output. See pkg/kb/activation.go.
-			store.RecordOpen(p.Slug)
-			_, err = c.OutOrStdout().Write(b)
-			return err
-		},
-	}
-	cmd.Flags().StringVar(&form, "form", "", "require the page to be this form: note|page")
-	return cmd
-}
+// `kb show` lives in show.go: one front door over every memory type
+// (Sprint 284 M1) — a bare slug opens the page by handle exactly as below,
+// and `kind:id` refs resolve through the wired registry.
 
 // --- add -----------------------------------------------------------------
 
