@@ -155,8 +155,12 @@ func checkSilentSprintManagers(now time.Time, dryRun bool) ([]quotaImmuneAction,
 		if !dryRun {
 			message := fmt.Sprintf("manager %s %s its managed session is running but the sprint lease is %s (%s); restart it through the owner lifecycle: sprint instruct recovers a stalled session",
 				owner, silentSprintOwnerMarker, live, sprintOwnerHeartbeat(snapshot))
+			// The snapshot is stale by the time the lock is held: report only if
+			// the lease is still the one judged — same heartbeat, still not live.
+			beat := snapshot.Lease.At
 			if !reportSprintOwnerStallIf(snapshot.ID, owner, message, func(s *weaveStory) bool {
-				return s.Lease != nil && s.Lease.Holder == owner && !silentSprintOwnerReported(s)
+				return s.Lease != nil && s.Lease.Holder == owner && s.Lease.At.Equal(beat) &&
+					s.seat().Live(now) != role.LivenessLive && !silentSprintOwnerReported(s)
 			}) {
 				continue
 			}

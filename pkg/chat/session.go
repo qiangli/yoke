@@ -175,6 +175,12 @@ type SessionOptions struct {
 	// accepted explicitly or not at all.
 	AllowUnsafe bool
 
+	// KillOnParentExit arms the same parent-death guard as Options.KillOnParentExit
+	// for the session's process group. Foreman sets it: its agent is steerable
+	// only through the serve process, so outliving that process leaves an
+	// unsteerable duplicate behind.
+	KillOnParentExit bool
+
 	// Mode labels this instance on its host-room card (foreman | meet | coach | …).
 	// Empty defaults to "session". It is how `bashy chat sessions` shows WHAT a
 	// member is doing, not just that it exists.
@@ -441,9 +447,10 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 			}
 		}()
 		exit, killed, err := agentpty.Run(cmd, sink, agentpty.Options{
-			CtlSock:    sock,
-			Capture:    true, // the caller records this; the human watches via observe
-			MaxRuntime: opt.Timeout,
+			CtlSock:          sock,
+			Capture:          true, // the caller records this; the human watches via observe
+			MaxRuntime:       opt.Timeout,
+			KillOnParentExit: opt.KillOnParentExit,
 			OnStart: func(realTTY string) error {
 				line, link, err := publishSessionTTY(id, realTTY)
 				if err != nil {

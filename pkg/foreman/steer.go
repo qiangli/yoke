@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -202,6 +203,28 @@ func (s *Session) liveSessionOptions(prompt string, sink io.Writer, timeout time
 		WritableRoots:   append([]string(nil), s.state.WritableRoots...),
 		Mode:            "foreman",
 		Task:            s.state.ID,
+		// Terminate signals only the serve process; the agent must go with it.
+		KillOnParentExit: agentDiesWithServe,
+	}
+}
+
+// agentDiesWithServe arms the parent-death guard wherever Terminate can stop a
+// serve process. procguard refuses to launch on Windows, where Terminate never
+// signals anything either.
+var agentDiesWithServe = runtime.GOOS != "windows"
+
+// turnOptions is a one-shot turn's launch. Like the live session, the agent
+// dies with the serve process rather than outliving a Terminate.
+func (s *Session) turnOptions(instruction, cwd string) chat.Options {
+	return chat.Options{
+		Agent:            s.state.Agent,
+		Role:             s.state.Role,
+		Instruction:      instruction,
+		Cwd:              cwd,
+		AllowUnsafe:      s.state.AllowUnsafe,
+		Sandbox:          s.state.Sandbox,
+		WritableRoots:    append([]string(nil), s.state.WritableRoots...),
+		KillOnParentExit: agentDiesWithServe,
 	}
 }
 

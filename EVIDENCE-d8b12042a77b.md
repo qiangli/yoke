@@ -173,3 +173,39 @@ stubbed in the test (fixture-only, never a real session).
 - bashy: a1bcb1a3 on 0d2af687 in /tmp/s467-stall-bashy-394 (local, not pushed); needs the yoke pin bumped
   to the yoke candidate before it builds without the out-of-tree GOWORK.
 - Cross-OS: `GOOS=linux|windows go vet ./pkg/foreman ./pkg/weave` clean. Whole-package gates: manager (remote).
+
+## Step 6 — review 01:54 PDT (ACK: no new recover flag; existing lifecycle; actual supervisor)
+### (1) owned agent cannot outlive a terminated serve process
+`Terminate` signals only the serve pid. Foreman launched its agent WITHOUT the existing parent-death guard
+on all three paths: live steerable session (`chat.Start` → `agentpty.Run`, no option existed on
+`chat.SessionOptions`) and both one-shot turns (`session.go` instruct fallback, `dag.go` target) which
+built `chat.Options` without `KillOnParentExit`. Fix reuses the existing mechanism only: new
+`chat.SessionOptions.KillOnParentExit` passed through to `agentpty.Options.KillOnParentExit`; foreman sets it
+via `liveSessionOptions` and a shared `turnOptions` (both call sites). Gated `runtime.GOOS != "windows"`
+because procguard refuses to launch there, and Terminate never signals on Windows anyway.
+RED `go vet ./pkg/foreman` (test written first)
+```
+vet: pkg/foreman/steer_test.go:130:58: s.liveSessionOptions("go", io.Discard, time.Minute).KillOnParentExit undefined (type chat.SessionOptions has no field or method KillOnParentExit)
+```
+GREEN `go test ./pkg/foreman -run 'TestEveryAgentLaunchDiesWithTheServeProcess|TestLiveSessionOptions|TestTerminate' -count=1`
+→ `ok github.com/qiangli/yoke/pkg/foreman 4.076s`
+The guard itself (fixture parent SIGKILLed → pty leader AND grandchild gone) is the existing
+`go test ./pkg/agentpty -run 'TestParentExitKillsPTYTree|TestKillOnParentExit'` (all PASS) and
+`go test ./pkg/procguard` (all PASS, incl. TestGuardExistsBeforeCommandStart). No real session killed.
+Boundary (unchanged, procguard states it): a descendant that calls setsid/setpgid itself escapes the
+portable guard; the ACP rung (BASHY_ACP=1 only) does not take the option.
+
+### (2) sweep snapshot race
+`checkSilentSprintManagers` judged a snapshot, then reported under the queue lock checking only holder +
+dedupe. The claim now also requires the CURRENT lease heartbeat to equal the one judged and the seat still
+not live.
+RED `go test ./pkg/weave -run TestImmuneTickDoesNotReportAManagerThatRefreshedAfterTheSnapshot -count=1`
+```
+--- FAIL: TestImmuneTickDoesNotReportAManagerThatRefreshedAfterTheSnapshot (0.06s)
+    sprint_owner_stall_test.go:386: refreshed manager alarmed: actions=[{Kind:manager-silent ... Sprint:457 Level:lapsed ...}] sent=[deputy:457: sprint #457 manager manager silent: ...]
+```
+(deterministic: the card-proof stub, which runs between snapshot and report, refreshes the lease.)
+GREEN `go test ./pkg/weave -run 'TestImmuneTick(DoesNotReportAManagerThatRefreshedAfterTheSnapshot|ReportsASilentManagedManagerOnce)|TestSprintInstruct(StalledManager|OrdinaryFailure|HasNoRecoverFlag)' -count=1 -v`
+→ 7/7 PASS, `ok github.com/qiangli/yoke/pkg/weave 16.907s`.
+Cross-OS: `GOOS=linux|windows|darwin go vet ./pkg/foreman ./pkg/weave ./pkg/chat` clean.
+Candidate: 04b861ec + the follow-up commit carrying this section (`git log -2`). Whole-package gates: manager (remote).

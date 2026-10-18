@@ -348,3 +348,45 @@ func TestImmuneTickReportsASilentManagedManagerOnce(t *testing.T) {
 		t.Fatalf("thread=%+v", th)
 	}
 }
+
+// The sweep judges a snapshot and reports under the queue lock later. A
+// manager that checkpoints in between is healthy again: the report must
+// recheck the CURRENT lease (same heartbeat, still not live), not just the
+// holder, or a recovered manager is alarmed as hung.
+func TestImmuneTickDoesNotReportAManagerThatRefreshedAfterTheSnapshot(t *testing.T) {
+	withQuotaImmuneFakes(t)
+	t.Setenv("BASHY_HOME", t.TempDir())
+	t.Setenv("BASHY_SPRINT_DIR", t.TempDir())
+	withSprintSupervisor(t, "deputy:457", true)
+	now := time.Date(2026, 10, 17, 22, 52, 0, 0, time.UTC)
+	store, _ := sprintStoreDir()
+	s := &weaveStory{ID: 457, Column: "doing", Lease: &weaveStoryLease{Holder: "manager", At: now.Add(-125 * time.Minute)}}
+	if err := withWeaveQueueLock(store, func(q *weaveQueue) error { q.Stories = []*weaveStory{s}; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	oldCard := sprintOwnerManagedCardLive
+	t.Cleanup(func() { sprintOwnerManagedCardLive = oldCard })
+	// Runs after the sweep took its snapshot and before it reports: the
+	// manager checkpoints right here.
+	sprintOwnerManagedCardLive = func(string, int64) bool {
+		_ = withWeaveQueueLock(store, func(q *weaveQueue) error {
+			findWeaveStory(q, 457).Lease.At = now
+			return nil
+		})
+		return true
+	}
+	var sent []string
+	weaveSupervisionSend = func(to, body string) error { sent = append(sent, to+": "+body); return nil }
+	oldAnnounce := announceStageFn
+	announceStageFn = func(string, string) error { return nil }
+	t.Cleanup(func() { announceStageFn = oldAnnounce })
+
+	actions, err := checkSilentSprintManagers(now, false)
+	if err != nil || len(actions) != 0 || len(sent) != 0 {
+		t.Fatalf("refreshed manager alarmed: actions=%+v sent=%v err=%v", actions, sent, err)
+	}
+	board, _ := loadWeaveQueue(store)
+	if th := board.Stories[0].Thread; len(th) != 0 {
+		t.Fatalf("thread=%+v", th)
+	}
+}

@@ -119,3 +119,21 @@ func TestExplicitSandboxSurvivesDetachedForemanStart(t *testing.T) {
 		t.Fatalf("detached profile lost: %+v", got)
 	}
 }
+
+// Terminate signals only the serve process. The agent it launched must not
+// outlive it as an unsteerable second manager, so every launch path — the live
+// session and both one-shot turns — arms the existing parent-death guard
+// (pkg/procguard via agentpty/execRunner; TestParentExitKillsPTYTree and
+// TestKillOnParentExit* prove the guard itself).
+func TestEveryAgentLaunchDiesWithTheServeProcess(t *testing.T) {
+	if !agentDiesWithServe {
+		t.Skip("procguard is unsupported here, and Terminate signals nothing")
+	}
+	s := &Session{state: State{ID: "sprint-1-manager", Agent: "claude", Cwd: "/work"}}
+	if !s.liveSessionOptions("go", io.Discard, time.Minute).KillOnParentExit {
+		t.Error("live session launches without KillOnParentExit")
+	}
+	if o := s.turnOptions("go", "/work"); !o.KillOnParentExit || o.Instruction != "go" || o.Cwd != "/work" || o.Agent != "claude" {
+		t.Errorf("one-shot turn options: %+v", o)
+	}
+}

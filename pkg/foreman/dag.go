@@ -88,15 +88,7 @@ func (s *Session) runDAGTarget(ctx context.Context, dir string, task *dag.Task) 
 		return err
 	}
 	prompt := s.composeDAGPrompt(task)
-	res, err := chat.Invoke(ctx, chat.Options{
-		Agent:         s.state.Agent,
-		Role:          s.state.Role,
-		Instruction:   prompt,
-		Cwd:           firstNonEmpty(s.state.Cwd, dir),
-		AllowUnsafe:   s.state.AllowUnsafe,
-		Sandbox:       s.state.Sandbox,
-		WritableRoots: append([]string(nil), s.state.WritableRoots...),
-	}, s.runner)
+	res, err := chat.Invoke(ctx, s.turnOptions(prompt, firstNonEmpty(s.state.Cwd, dir)), s.runner)
 	if out := strings.TrimSpace(res.Output); out != "" {
 		if rerr := s.record(RoleAgent, task.Name, out); rerr != nil {
 			return s.blockAndCommit("history artifact: "+rerr.Error(), rerr)

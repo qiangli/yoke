@@ -331,15 +331,7 @@ func (s *Session) Apply(ctx context.Context, cmd Command) error {
 			s.state.SteerWhyNot = why
 		}
 
-		res, err := chat.Invoke(ctx, chat.Options{
-			Agent:         s.state.Agent,
-			Role:          s.state.Role,
-			Instruction:   s.composePrompt(cmd.Message, prior),
-			Cwd:           s.state.Cwd,
-			AllowUnsafe:   s.state.AllowUnsafe,
-			Sandbox:       s.state.Sandbox,
-			WritableRoots: append([]string(nil), s.state.WritableRoots...),
-		}, s.runner)
+		res, err := chat.Invoke(ctx, s.turnOptions(s.composePrompt(cmd.Message, prior), s.state.Cwd), s.runner)
 		if out := strings.TrimSpace(res.Output); out != "" {
 			if rerr := s.record(RoleAgent, "", out); rerr != nil {
 				return s.blockAndCommit("history artifact: "+rerr.Error(), rerr)
