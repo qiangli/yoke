@@ -34,7 +34,8 @@ var command = &tool.Tool{
 		"db sql query|exec|schema show|schema apply TARGET [--sql SQL] [--param [NAME=]TYPE:VALUE]... [--params JSON] [--input FILE|-]\n" +
 		"db doc get|find|put|patch|rm|batch|export|import|collection create|drop|list|index add|rm|list TARGET [--collection C] [--id ID] [--doc JSON] [--filter JSON] [--input FILE|-]" + "\n" +
 		"db kv bucket create|drop|list|get|put|delete|scan|cas|batch TARGET [--bucket B] [--key text:K|b64:K] [--value text:V|b64:V] [--expect text:V|b64:V|--expect-absent] [--prefix ...] [--input FILE|-]" + "\n" +
-		"db fts search|get|put|delete|batch|check|mapping show|rebuild TARGET [--input FILE|-]",
+		"db fts search|get|put|delete|batch|check|mapping show|rebuild TARGET [--input FILE|-]" + "\n" +
+		"db vec put|get|rm|batch|search|export|import|collection add|rm|list TARGET [--collection C] [--id ID] [--vector JSON|--text T --endpoint URL [--api-key-env VAR]] [--metadata JSON] [--filter JSON] [--input FILE|-]",
 }
 
 func init() { command.Run = run; tool.Register(command) }
@@ -47,6 +48,9 @@ type dbFlags struct {
 	fields                                                                          *[]string
 	ifAbsent, unique                                                                *bool
 	bucket, key, value, expect, start, prefix, ttl                                  *string
+	metric, model, vector, text, endpoint, apiKeyEnv, metadata                      *string
+	dimension                                                                       *int
+	includeVectors                                                                  *bool
 	expectAbsent                                                                    *bool
 	aliases, param                                                                  *[]string
 	limit, maxBytes                                                                 *int
@@ -93,6 +97,15 @@ func declareFlags(op string) dbFlags {
 	f.start = fs.String("start", "", "kv scan: first key at or after text:... or b64:...")
 	f.prefix = fs.String("prefix", "", "kv scan: only keys with this text:... or b64:... prefix")
 	f.ttl = fs.String("ttl", "", "unsupported: kv has no TTL or expiry")
+	f.dimension = fs.Int("dimension", 0, "db vec collection add: vector dimension (1..8192)")
+	f.metric = fs.String("metric", "", "db vec collection add: distance metric cosine|l2|l1")
+	f.model = fs.String("model", "", "db vec: embedding model identity a collection persists")
+	f.vector = fs.String("vector", "", "db vec: supplied vector as {\"t\":\"vec\",\"dtype\":\"f32\",\"b64\":...} or a JSON number array")
+	f.text = fs.String("text", "", "db vec put|search: text to embed (requires an explicit --endpoint)")
+	f.endpoint = fs.String("endpoint", "", "db vec: explicit OpenAI-compatible embeddings endpoint for --text (no default)")
+	f.apiKeyEnv = fs.String("api-key-env", "", "db vec: environment variable holding the --endpoint bearer key")
+	f.metadata = fs.String("metadata", "", "db vec put: JSON object metadata")
+	f.includeVectors = fs.Bool("include-vectors", false, "db vec get|search: return stored vectors")
 	f.ready = fs.String("ready", "", "private owner rendezvous")
 	_ = fs.MarkHidden("ready")
 	f.idleTTL = fs.Duration("idle-ttl", 0, "end an idle owner session after this duration")
@@ -233,9 +246,13 @@ func run(rc *tool.RunContext, args []string) int {
 		return 0
 	}
 	catOp, raw := "", json.RawMessage(nil)
-	if op == "doc" {
+	if op == "doc" || op == "vec" {
 		var err error
-		if catOp, operands, err = docVerb(operands); err == nil {
+		if op == "vec" {
+			if catOp, operands, err = vecVerb(operands); err == nil {
+				raw, err = vecInput(rc, f)
+			}
+		} else if catOp, operands, err = docVerb(operands); err == nil {
 			raw, err = docInput(rc, f, catOp)
 		}
 		if err != nil {

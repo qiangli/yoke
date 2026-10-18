@@ -195,8 +195,45 @@ were not run on Dragon. They are for the manager's gate:
   process is `busy` while the native exclusive lock is held, and the
   collection is unchanged.
 
+## Phase 2 — CLI and MCP mount (operator-approved 2026-10-18)
+
+Shared files, edited under the manager's phase-2 approval:
+
+- `cmds/db/db.go`: a `db vec` usage line, and dispatch beside `db doc`.
+  It adds the flags `--dimension --metric --model --vector --text
+  --endpoint --api-key-env --metadata --include-vectors`. These are declared
+  once in `declareFlags`, so the CLI, `--explain` and the typed MCP schema
+  stay identical.
+- `cmds/db/vec.go`: `vecVerb` handles `put|get|rm|batch|search|export|import`,
+  `collection add|rm|list` and the one-word `collection-add` form that typed
+  MCP uses. `vecInput` builds one `dbvec.Input` from `--input` plus flags.
+  It refuses three things with `invalid_input`: a value given twice, a data
+  flag from another category set to a non-default value, and a misplaced
+  `--out/--in/--replace`.
+- `cmds/db/mcp.go` is unchanged. `db_lifecycle` derives its schema from
+  `declareFlags`, so the new flags reach MCP with no other change.
+- `pkg/dbstore/sqlitedb`: `Categories` adds `vectors`, plus a vectors note.
+- `pkg/atlas/packages.go`: a `dbvec` library row.
+
+Command, run locally on Dragon with `CGO_ENABLED=0 GOMAXPROCS=2 GOFLAGS=-p=2`
+and checked by direct exit status:
+
+```
+go test -short -count=1 ./cmds/db -run TestVec -v   # EXIT=0
+--- PASS: TestVecVerbsPersistentCLI
+--- SKIP: TestVecVerbsMemorySessionCLI (spawns an independent owner process)
+--- PASS: TestVecRegisteredCLIAndTypedMCP
+go test -short -count=1 ./pkg/dbvec                 # EXIT=0  ok 37.162s
+```
+
+| Test | Shows |
+|---|---|
+| `TestVecVerbsPersistentCLI` | registered CLI: no implicit collection (`not_found`); `collection add` needs `--yes` and is destructive; supplied vector as a number array and tagged f32 via `--input -`; stale `--if-revision` is `conflict`; metadata-filtered exact search; foreign, duplicated and misplaced flags and text without an endpoint are `invalid_input`; `export --out` then `import --in --replace --yes` into a second target gives identical search; revision-guarded rm, collection rm |
+| `TestVecVerbsMemorySessionCLI` | the same flow on memory targets in an owner session (re-exec'd owner, so it skips under `-short` and runs in the manager's gate) |
+| `TestVecRegisteredCLIAndTypedMCP` | supplied vectors make zero endpoint calls; a text put through typed MCP embeds once with the persisted model; CLI and MCP search envelopes are byte-identical for a supplied vector and for text with an explicit endpoint |
+
 ## Not done in this phase
 
-- `cmds/db` dispatch, flags, MCP schema and atlas rows. These are shared
-  files left for the manager-coordinated phase 2 mount.
-- Independent-process, whole-package, crossvet and remote gates (manager).
+- Gates left to the manager: independent-process tests, whole `cmds/db`,
+  `pkg/atlas`, `pkg/dbstore/sqlitedb` and `pkg/dbdoc` packages, crossvet,
+  and the remote gates.
