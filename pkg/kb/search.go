@@ -412,6 +412,12 @@ func statusWeight(status string) float64 {
 	}
 }
 
+// ScopeMatches reports whether page p is visible under the caller's repo and
+// OS scope. It is the exported twin of the ranking-time filter, so consumers
+// that enumerate visible pages without ranking (recall's multi-hop graph)
+// apply exactly the same gate.
+func ScopeMatches(p *Page, repo, goos string) bool { return scopeMatches(p, repo, goos) }
+
 func scopeMatches(p *Page, repo, goos string) bool {
 	if p.Scope == nil {
 		return true

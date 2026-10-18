@@ -6,6 +6,16 @@ import (
 	"unicode"
 )
 
+// PageRank runs personalized PageRank over a directed graph. It is the thin
+// exported wrapper pkg/recall's multi-hop walk reuses instead of copying:
+// graph maps node -> outgoing neighbours (a neighbour listed twice carries
+// twice the transition weight), personalization biases the teleport vector
+// toward query seeds (nil = uniform), iterations <= 0 means 20, damping <= 0
+// means 0.85. Scores are NOT normalized; quantize before rendering.
+func PageRank(graph map[string][]string, personalization map[string]float64, iterations int, damping float64) map[string]float64 {
+	return pageRank(graph, personalization, iterations, damping)
+}
+
 // pageRank computes PageRank scores for nodes in a directed graph.
 // graph maps node -> list of outgoing edges (neighbors).
 // personalization provides bias toward certain nodes (nil = uniform).

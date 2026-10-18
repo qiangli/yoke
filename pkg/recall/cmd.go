@@ -44,6 +44,7 @@ func NewRecallCmd() *cobra.Command {
 		storeDir   string
 		lineage    bool
 		asOf       string
+		hops       int
 	)
 
 	cmd := &cobra.Command{
@@ -82,10 +83,13 @@ Three things about its behaviour are contract, not implementation:
 			if err != nil {
 				return err
 			}
+			if hops < 0 {
+				return fmt.Errorf("kb recall: --hops %d: want >= 0", hops)
+			}
 			q, err := ApplyMemory(Query{
 				AsOf: at,
 				Text: strings.Join(args, " "),
-				K:    k, Budget: budget, Rings: selected,
+				K:    k, Budget: budget, Rings: selected, Hops: hops,
 				Since: since, MinCoverage: minCover,
 				Resolution: parseResolution(resolution),
 				Memory:     strings.TrimSpace(memory),
@@ -133,6 +137,7 @@ Three things about its behaviour are contract, not implementation:
 	f.StringVar(&storeDir, "store", "", "override the store root (default ~/.bashy)")
 	f.BoolVar(&lineage, "lineage", false, "agent ring: also read descendant episodes' notes")
 	f.StringVar(&asOf, "as-of", "", "resolve page validity at this instant (RFC3339 or YYYY-MM-DD; default now)")
+	f.IntVar(&hops, "hops", 0, "multi-hop graph expansion depth from ranked hits (0 = direct hits only)")
 	return cmd
 }
 
@@ -161,6 +166,7 @@ func NewContextCmd(extra ...Reader) *cobra.Command {
 		asJSON   bool
 		lineage  bool
 		asOf     string
+		hops     int
 	)
 	cmd := &cobra.Command{
 		Use:           "context",
@@ -192,10 +198,13 @@ func NewContextCmd(extra ...Reader) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("kb context: %w", err)
 			}
+			if hops < 0 {
+				return fmt.Errorf("kb context: --hops %d: want >= 0", hops)
+			}
 			q, err := ApplyMemory(Query{
 				AsOf: at,
 				Text: strings.TrimSpace(forText), Files: cleanList(files), Episode: strings.TrimSpace(episode),
-				Rings: selectedRings, Forms: selectedForms, Budget: budget, MinCoverage: minCover, K: k,
+				Rings: selectedRings, Forms: selectedForms, Budget: budget, MinCoverage: minCover, K: k, Hops: hops,
 				Memory:  strings.TrimSpace(memory),
 				Lineage: readerLineage(episode, lineage),
 				OS:      hostOS(), Repo: repoName(),
@@ -247,6 +256,7 @@ func NewContextCmd(extra ...Reader) *cobra.Command {
 	f.BoolVar(&asJSON, "json", false, "emit the frozen kb-context-v1 envelope")
 	f.BoolVar(&lineage, "lineage", false, "agent ring: also read descendant episodes' notes")
 	f.StringVar(&asOf, "as-of", "", "resolve page validity at this instant (RFC3339 or YYYY-MM-DD; default now)")
+	f.IntVar(&hops, "hops", 0, "multi-hop graph expansion depth from ranked hits (0 = direct hits only)")
 	return cmd
 }
 

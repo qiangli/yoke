@@ -105,6 +105,15 @@ type Query struct {
 	// keeps its historical empty-means-all meaning.
 	memoryRingsStrict, memoryFormsStrict bool
 
+	// Hops bounds multi-hop expansion: how many graph edges a discovered hit
+	// may sit from its nearest seed. 0 (default) disables the walk entirely
+	// and the output is byte-identical to the pre-walk behaviour.
+	Hops int
+	// Seeds is the injectable multi-hop seed source. Nil (default) seeds the
+	// walk with today's per-ring recall hits. A set source (for example the
+	// kbmemory adapter) contributes additional seeds beside them. Input only,
+	// never stored.
+	Seeds SeedSource `json:"-"`
 	// Now is injectable so tests are not clock-dependent. Zero = time.Now().
 	Now time.Time
 	// AsOf is the instant every kb page's lifecycle is resolved at (design
@@ -197,6 +206,11 @@ type Hit struct {
 
 	Score float64  `json:"score"`
 	Why   []string `json:"why,omitempty"`
+
+	// Path is the multi-hop provenance: seed ref, then alternating relation
+	// labels and node refs ending at this hit's ref. Empty for direct (seed)
+	// hits and whenever Hops is 0, so the established envelope is unchanged.
+	Path []string `json:"path,omitempty"`
 
 	// Memory names the --memory type that produced the hit (design §5.2).
 	// Empty when the query carried no --memory filter.
@@ -398,11 +412,37 @@ func Recall(q Query, readers ...Reader) Result {
 		res.Hits = append(res.Hits, hits...)
 	}
 
+	if q.Hops > 0 {
+		merged, herrs := expandSeeds(q, readers, res.Hits)
+		for _, ring := range sortedKeys(herrs) {
+			dup := false
+			for _, e := range res.Errors {
+				if e.Ring == ring {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				res.Errors = append(res.Errors, RingError{Ring: ring, Err: herrs[ring].Error()})
+			}
+		}
+		res.Hits = merged
+	}
+
 	if q.MinCoverage > 0 && len(res.Hits) == 0 {
 		res.Abstained = true
 	}
 	res.Hits, res.Budget.Spent, res.Budget.Truncated = applyBudget(res.Hits, q.Budget)
 	return res
+}
+
+func sortedKeys(m map[string]error) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // applyBudget truncates at a whole-hit boundary. A half-rendered record is worse

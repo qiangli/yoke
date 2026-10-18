@@ -40,18 +40,7 @@ func (RelationRing) Forms() []string {
 	return []string{kb.FormRelation}
 }
 func (r RelationRing) Recall(q Query) ([]Hit, error) {
-	if r.Path != "" {
-		if err := requireRingDir(r.Path); err != nil {
-			return nil, err
-		}
-	}
-	var live []kb.Relation
-	var err error
-	if r.RingName == RingAgent {
-		live, err = (kb.OwnerRelationRing{Dir: r.Path, Owner: r.Owner}).Live()
-	} else {
-		live, err = (kb.RelationRing{Dir: r.Path}).Live()
-	}
+	live, err := r.live()
 	if err != nil {
 		return nil, err
 	}
@@ -88,18 +77,67 @@ func (r AgentRing) Recall(q Query) ([]Hit, error) {
 	return recallPages(RingAgent, r.Store, r.Path, q)
 }
 
-func recallPages(ring string, store *kb.Store, path string, q Query) ([]Hit, error) {
-	if path != "" {
-		if err := requireRingDir(path); err != nil {
+// live returns the relation records visible to the requesting principal: the
+// owner-scoped live set on the agent ring (another principal's relations stay
+// invisible, a missing principal sees nothing), the shared live set
+// elsewhere, always after forget-replay. Both Recall and the multi-hop graph
+// read through here so the walk never sees a hidden edge.
+func (r RelationRing) live() ([]kb.Relation, error) {
+	if r.Path != "" {
+		if err := requireRingDir(r.Path); err != nil {
 			return nil, err
 		}
 	}
+	if r.RingName == RingAgent {
+		return (kb.OwnerRelationRing{Dir: r.Path, Owner: r.Owner}).Live()
+	}
+	return (kb.RelationRing{Dir: r.Path}).Live()
+}
+
+func recallPages(ring string, store *kb.Store, path string, q Query) ([]Hit, error) {
+	pages, relation, err := visiblePages(ring, store, path, q)
+	if err != nil {
+		return nil, err
+	}
+	hits := kb.Search(pages, kb.Query{
+		Terms:       kb.Terms(q.Text),
+		Repo:        q.Repo,
+		OS:          q.OS,
+		K:           q.k(),
+		MinCoverage: q.MinCoverage,
+		// Status-superseded pages were already resolved against AsOf
+		// above; one superseded only AFTER as-of is a valid hit here.
+		All: true,
+	})
+	var out []Hit
+	for _, h := range hits {
+		if hit, ok := pageHit(ring, store, q, relation, h.Page, h.Score, h.Matched); ok {
+			out = append(out, hit)
+		}
+	}
+	return out, nil
+}
+
+// visiblePages returns the pages the requesting principal may see, filtered
+// exactly as ranking sees them: forms and --memory types first (independent
+// corpora, invisible to IDF), then lifecycle at the as-of instant (a
+// forgotten or superseded page cannot shape what is returned), then the agent
+// ring's lineage gate. The multi-hop graph builds from this pool, so a hidden
+// page can never bridge, score, or appear — it is absent before ranking, not
+// demoted after it. The relation map classifies agent-ring episodes for the
+// checkpoint/working rules pageHit applies.
+func visiblePages(ring string, store *kb.Store, path string, q Query) ([]*kb.Page, map[string]string, error) {
+	if path != "" {
+		if err := requireRingDir(path); err != nil {
+			return nil, nil, err
+		}
+	}
 	if store == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	pages, err := store.List()
 	if err != nil {
-		return nil, fmt.Errorf("kb: open %s: %w", path, err)
+		return nil, nil, fmt.Errorf("kb: open %s: %w", path, err)
 	}
 	// Filter before ranking: forms (and --memory types) are independent
 	// corpora, just as scoped-out pages are. Letting excluded records affect
@@ -120,7 +158,7 @@ func recallPages(ring string, store *kb.Store, path string, q Query) ([]Hit, err
 	// superseded page cannot shape the IDF of what is returned.
 	tombs, err := store.Tombstones()
 	if err != nil {
-		return nil, fmt.Errorf("kb: open %s: %w", path, err)
+		return nil, nil, fmt.Errorf("kb: open %s: %w", path, err)
 	}
 	pages = kb.VisibleAt(pages, tombs, q.asOf())
 	var relation map[string]string
@@ -132,46 +170,39 @@ func recallPages(ring string, store *kb.Store, path string, q Query) ([]Hit, err
 			return !lineageVisible(p, relation, q.Lineage)
 		})
 	}
-	hits := kb.Search(pages, kb.Query{
-		Terms:       kb.Terms(q.Text),
-		Repo:        q.Repo,
-		OS:          q.OS,
-		K:           q.k(),
-		MinCoverage: q.MinCoverage,
-		// Status-superseded pages were already resolved against AsOf
-		// above; one superseded only AFTER as-of is a valid hit here.
-		All: true,
-	})
-	var out []Hit
-	for _, h := range hits {
-		p := h.Page
-		if q.Since > 0 && !withinSince(p.Updated, p.Created, q.now(), q.Since) {
-			continue
-		}
-		episode := ""
-		if p.Source != nil {
-			episode = p.Source.Episode
-		}
-		checkpoint := hasCheckpointTag(p.Tags)
-		rel := relation[episode]
-		if ring == RingAgent && checkpoint && rel == "" && (q.Episode == "" || q.Episode != episode) {
-			continue
-		}
-		working := ring == RingAgent && episode != "" &&
-			(rel == relSelf || rel == relAncestor || episode == q.Episode)
-		out = append(out, Hit{
-			Ring: ring, Kind: p.Type, ID: "kb:" + p.Slug, Form: p.EffForm(),
-			Cue: p.Title, Gist: p.Description, Full: p.Body,
-			Source: []SourceRef{{URI: "file://" + store.PagePath(p.Slug)}},
-			Status: p.Status, Confidence: "ASSERTED",
-			ObservedAt: p.Updated, ValidFrom: validFrom(p), ValidTo: p.ValidTo,
-			Score:   h.Score,
-			Why:     []string{"kb", "matched " + itoa(h.Matched) + " terms"},
-			Episode: episode, Checkpoint: checkpoint,
-			Relation: rel, Working: working,
-		})
+	return pages, relation, nil
+}
+
+// pageHit renders one visible page as a hit, applying the read-time gates
+// ranking does not own: the --since age filter and the agent ring's
+// checkpoint/working rules. False means the page stays invisible to this
+// reader.
+func pageHit(ring string, store *kb.Store, q Query, relation map[string]string, p *kb.Page, score float64, matched int) (Hit, bool) {
+	if q.Since > 0 && !withinSince(p.Updated, p.Created, q.now(), q.Since) {
+		return Hit{}, false
 	}
-	return out, nil
+	episode := ""
+	if p.Source != nil {
+		episode = p.Source.Episode
+	}
+	checkpoint := hasCheckpointTag(p.Tags)
+	rel := relation[episode]
+	if ring == RingAgent && checkpoint && rel == "" && (q.Episode == "" || q.Episode != episode) {
+		return Hit{}, false
+	}
+	working := ring == RingAgent && episode != "" &&
+		(rel == relSelf || rel == relAncestor || episode == q.Episode)
+	return Hit{
+		Ring: ring, Kind: p.Type, ID: "kb:" + p.Slug, Form: p.EffForm(),
+		Cue: p.Title, Gist: p.Description, Full: p.Body,
+		Source: []SourceRef{{URI: "file://" + store.PagePath(p.Slug)}},
+		Status: p.Status, Confidence: "ASSERTED",
+		ObservedAt: p.Updated, ValidFrom: validFrom(p), ValidTo: p.ValidTo,
+		Score:   score,
+		Why:     []string{"kb", "matched " + itoa(matched) + " terms"},
+		Episode: episode, Checkpoint: checkpoint,
+		Relation: rel, Working: working,
+	}, true
 }
 
 func requireRingDir(path string) error {

@@ -144,6 +144,37 @@ func Context(q Query, readers ...Reader) ContextResult {
 		hits = append(hits, ringHits...)
 	}
 
+	if q.Hops > 0 {
+		merged, herrs := expandSeeds(q, readers, hits)
+		for _, ring := range sortedKeys(herrs) {
+			fixed := false
+			for i := range res.Rings {
+				if res.Rings[i].Name == ring {
+					if res.Rings[i].OK {
+						res.Rings[i].OK = false
+						res.Rings[i].Error = herrs[ring].Error()
+					}
+					fixed = true
+				}
+			}
+			if !fixed {
+				res.Rings = append(res.Rings, ContextRing{Name: ring, Error: herrs[ring].Error()})
+			}
+		}
+		// The reader loop's agent checkpoint gate, applied to discoveries
+		// (seeds passed it already, so re-checking them is idempotent):
+		// a discovery is still the same principal's read.
+		kept := merged[:0]
+		for _, h := range merged {
+			if len(h.Path) > 0 && h.Ring == RingAgent && h.Checkpoint && h.Relation == "" &&
+				(q.Episode == "" || q.Episode != h.Episode) {
+				continue
+			}
+			kept = append(kept, h)
+		}
+		hits = kept
+	}
+
 	if q.MinCoverage > 0 && len(hits) == 0 {
 		res.Abstained = true
 		return res
@@ -264,7 +295,8 @@ func blockAt(h Hit, resolution string) ContextBlock {
 		Resolution: resolution, Status: h.Status, Text: text,
 		ValidTo:    h.ValidTo,
 		ObservedAt: h.ObservedAt, working: h.Working,
-		Why: append([]string(nil), h.Why...), Source: append([]SourceRef(nil), h.Source...),
+		Path: append([]string(nil), h.Path...),
+		Why:  append([]string(nil), h.Why...), Source: append([]SourceRef(nil), h.Source...),
 	}
 	// Freshness, Snapshot and Path stay empty: no source record carries them
 	// yet (the sense schema owns freshness/snapshot; M4 owns path). ValidTo
