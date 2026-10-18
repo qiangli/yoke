@@ -1,6 +1,6 @@
 # Sprint 453 graph package evidence
 
-Story #2266 (`55284ec86624`). This is package-level evidence for the graph holder; CLI/MCP registration and independent-process and remote gates remain with the sprint manager's coordinated phase.
+Story #2266 (`55284ec86624`). Graph CLI/MCP registration is included. Independent-process and remote gates remain with the sprint manager's coordinated phase.
 
 ## Representation and boundary
 
@@ -19,5 +19,6 @@ A portable export is bounded to 100,000 records, 64 MiB of Bonsai query JSON and
 On Dragon with `CGO_ENABLED=0 GOMAXPROCS=4 GOFLAGS=-p=2`:
 
 - `go test -short -count=1 ./pkg/dblifecycle ./pkg/dbgraph ./pkg/dbstore ./pkg/dbstore/bonsaidb` — PASS. Covers typed operations, revisions, process exclusion, memory→persistent→memory round trip with isolated nodes and binary properties, idempotent import, replacement, raw mutation bypass refusal, deletion cascade, external DQL schema refusal, and native Bonsai backup/restore. Restore regressions check malformed late payload leaves the target intact, staged bytes remain unchanged when the caller's source changes, and manifest traversal paths are refused.
+- `CGO_ENABLED=0 GOMAXPROCS=4 GOFLAGS=-p=2 go test -short -count=1 ./cmds/db -run TestGraph` — PASS after the graph front door was mounted on the published storage batch. `db graph` accepts typed JSON input or declared flags, the registered MCP command uses the same runner, and general `db export|import` routes Bonsai to graph interchange. The focused test covers a persistent typed node, isolated-node export/import, rejected foreign and duplicate flags, and MCP node retrieval.
 
 The package is not yet mounted in shared CLI/atlas rows. The manager owns that phase and whole-product, independent-process and platform gates.

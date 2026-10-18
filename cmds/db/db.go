@@ -18,6 +18,7 @@ import (
 
 	"github.com/qiangli/coreutils/tool"
 	_ "github.com/qiangli/yoke/pkg/dbfts"
+	_ "github.com/qiangli/yoke/pkg/dbgraph"
 	"github.com/qiangli/yoke/pkg/dblifecycle"
 	"github.com/qiangli/yoke/pkg/dbsql"
 	"github.com/qiangli/yoke/pkg/dbstore"
@@ -36,7 +37,8 @@ var command = &tool.Tool{
 		"db kv bucket create|drop|list|get|put|delete|scan|cas|batch TARGET [--bucket B] [--key text:K|b64:K] [--value text:V|b64:V] [--expect text:V|b64:V|--expect-absent] [--prefix ...] [--input FILE|-]" + "\n" +
 		"db fts search|get|put|delete|batch|check|mapping show|rebuild TARGET [--input FILE|-]" + "\n" +
 		"db vec put|get|rm|batch|search|export|import|collection add|rm|list TARGET [--collection C] [--id ID] [--vector JSON|--text T --endpoint URL [--api-key-env VAR]] [--metadata JSON] [--filter JSON] [--input FILE|-]" + "\n" +
-		"db obj bucket create|drop|list|get|put|delete|rm|stat|list|transfer|export|import TARGET [--bucket B] [--key K] [--value text:...|b64:...] [--content-type T] [--metadata JSON] [--input FILE|-]",
+		"db obj bucket create|drop|list|get|put|delete|rm|stat|list|transfer|export|import TARGET [--bucket B] [--key K] [--value text:...|b64:...] [--content-type T] [--metadata JSON] [--input FILE|-]" + "\n" +
+		"db graph query|mutate|schema show|schema apply|node get|put|rm|edge get|put|rm|edges|export|import TARGET [--input FILE|-]",
 }
 
 func init() { command.Run = run; tool.Register(command) }
@@ -51,6 +53,8 @@ type dbFlags struct {
 	bucket, key, value, expect, start, prefix, ttl                                  *string
 	metric, model, vector, text, endpoint, apiKeyEnv, metadata                      *string
 	contentType, remote, destination, checksum                                      *string
+	graphQuery, graphVariables, graphSet, graphDel, graphSchema                     *string
+	graphNode, graphEdge, graphFrom, graphType, graphTo, graphDirection             *string
 	dimension                                                                       *int
 	includeVectors                                                                  *bool
 	deleteFlag                                                                      *bool
@@ -114,6 +118,17 @@ func declareFlags(op string) dbFlags {
 	f.destination = fs.String("destination", "", "db obj transfer: destination directory or remote target")
 	f.checksum = fs.String("checksum", "", "db obj transfer: expected SHA256 checksum")
 	f.deleteFlag = fs.Bool("delete", false, "db obj transfer: delete transferred source objects")
+	f.graphQuery = fs.String("query", "", "db graph query: parameterized DQL query")
+	f.graphVariables = fs.String("variables", "", "db graph query: JSON object of bound DQL variables")
+	f.graphSet = fs.String("set-nquads", "", "db graph mutate: RDF nquads to set")
+	f.graphDel = fs.String("del-nquads", "", "db graph mutate: RDF nquads to delete")
+	f.graphSchema = fs.String("schema", "", "db graph schema apply: DQL schema text")
+	f.graphNode = fs.String("node", "", "db graph node put: typed node JSON")
+	f.graphEdge = fs.String("edge", "", "db graph edge put: typed edge JSON")
+	f.graphFrom = fs.String("from", "", "db graph edge identity: source node")
+	f.graphType = fs.String("type", "", "db graph edge identity: edge type")
+	f.graphTo = fs.String("to", "", "db graph edge identity: destination node")
+	f.graphDirection = fs.String("direction", "", "db graph edges: in or out")
 	f.ready = fs.String("ready", "", "private owner rendezvous")
 	_ = fs.MarkHidden("ready")
 	f.idleTTL = fs.Duration("idle-ttl", 0, "end an idle owner session after this duration")
@@ -254,7 +269,7 @@ func run(rc *tool.RunContext, args []string) int {
 		return 0
 	}
 	catOp, raw := "", json.RawMessage(nil)
-	if op == "doc" || op == "vec" || op == "obj" {
+	if op == "doc" || op == "vec" || op == "obj" || op == "graph" {
 		var err error
 		if op == "vec" {
 			if catOp, operands, err = vecVerb(operands); err == nil {
@@ -263,6 +278,10 @@ func run(rc *tool.RunContext, args []string) int {
 		} else if op == "obj" {
 			if catOp, operands, err = objVerb(operands); err == nil {
 				raw, err = objInput(rc, f)
+			}
+		} else if op == "graph" {
+			if catOp, operands, err = graphVerb(operands); err == nil {
+				raw, err = graphInput(rc, f)
 			}
 		} else if catOp, operands, err = docVerb(operands); err == nil {
 			raw, err = docInput(rc, f, catOp)
@@ -414,7 +433,9 @@ func run(rc *tool.RunContext, args []string) int {
 		// The logical interchange belongs to the target's category.
 		catOp = dblifecycle.ViewTarget(id, "").Category + "." + op
 		o.Op = catOp
-		if strings.HasPrefix(catOp, "fts.") {
+		if strings.HasPrefix(catOp, "graph.") {
+			raw, err = graphInput(rc, f)
+		} else if strings.HasPrefix(catOp, "fts.") {
 			raw, err = ftsInput(rc, f, op)
 		} else {
 			raw, err = categoryInput(rc, f, op)
