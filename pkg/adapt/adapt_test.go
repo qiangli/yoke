@@ -82,6 +82,11 @@ func TestHelperProcess(t *testing.T) {
 			break
 		}
 	}
+	if len(args) > 0 && args[0] == "json" {
+		input, _ := io.ReadAll(os.Stdin)
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"payload": string(input), "argv": args[1:], "discard": "private"})
+		os.Exit(37)
+	}
 	if len(args) > 0 && args[0] == "success" {
 		fmt.Fprint(os.Stdout, "native output")
 		os.Exit(0)

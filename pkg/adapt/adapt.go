@@ -26,10 +26,11 @@ type Plan struct {
 	Argv    []string
 	Adapter fleet.Adapter
 	Lens    string
+	Fields  []string // generic JSON projection; native mappings take precedence
 }
 
-// PrepareLens is S3's preflight seam. It must validate row availability and
-// bounds before returning a streaming writer. Close flushes the conversion.
+// PrepareLens preflights row availability before returning an output sink.
+// Close completes conversion; PrepareJSONLens supplies the bounded S3 bridge.
 // A nil seam refuses lens mappings before the foreign command starts.
 type PrepareLens func(context.Context, string, io.Writer) (io.WriteCloser, error)
 
@@ -85,13 +86,21 @@ func Build(rows []fleet.Adapter, argv []string, req Request) (Plan, error) {
 		if key == "since" {
 			return Plan{}, fmt.Errorf("--since requires the shared S19 cursor binding seam")
 		}
-		if m == nil {
-			return Plan{}, fmt.Errorf("adapter %s does not support --%s", a.Name, key)
-		}
 		if key == "fields" {
 			if _, ok := req.Options["json"]; !ok {
 				return Plan{}, fmt.Errorf("--fields requires --json")
 			}
+			fields, err := parseFields(value)
+			if err != nil {
+				return Plan{}, err
+			}
+			if m == nil {
+				p.Fields = fields
+				continue
+			}
+		}
+		if m == nil {
+			return Plan{}, fmt.Errorf("adapter %s does not support --%s", a.Name, key)
 		}
 		if key == "json" && len(m) == 1 && strings.HasPrefix(m[0], "lens: cmd:") {
 			p.Lens = strings.TrimPrefix(m[0], "lens: ")
@@ -148,6 +157,13 @@ func Run(ctx context.Context, p Plan, in io.Reader, out, errOut io.Writer, lens 
 		fmt.Fprintln(errOut, "adapt: missing command")
 		return 125
 	}
+	var projected io.WriteCloser
+	if len(p.Fields) > 0 {
+		projected = newBoundedOutput(ctx, out, func(data []byte) ([]byte, error) {
+			return projectJSON(data, p.Fields)
+		})
+		out = projected
+	}
 	var converted io.WriteCloser
 	if p.Lens != "" {
 		if lens == nil {
@@ -168,6 +184,11 @@ func Run(ctx context.Context, p Plan, in io.Reader, out, errOut io.Writer, lens 
 	if converted != nil {
 		if e := converted.Close(); e != nil {
 			fmt.Fprintln(errOut, "adapt: lens conversion failed after execution")
+		}
+	}
+	if projected != nil {
+		if e := projected.Close(); e != nil {
+			fmt.Fprintln(errOut, "adapt: JSON projection failed after execution")
 		}
 	}
 	if err == nil {
@@ -269,7 +290,7 @@ func bindFlags(fs *pflag.FlagSet) {
 	for _, n := range []string{"json", "null", "dry-run", "no-input", "explain"} {
 		fs.Bool(n, false, "request the declared common option")
 	}
-	fs.String("fields", "", "native JSON field projection")
+	fs.String("fields", "", "JSON field projection (native when declared)")
 	fs.Int("depth", 0, "native tree walk depth")
 	fs.String("since", "", "shared cursor envelope (requires S19 binding)")
 }
