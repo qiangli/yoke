@@ -14,7 +14,8 @@ func TestLocatorPeerReadLine(t *testing.T) {
 	cases := []struct {
 		name, os, text, speaker, want, wantContains string
 	}{
-		{name: "remote posix", speaker: "a@peerbox-zz", text: "see dir:/srv/x", want: "lens dir:/srv/x@peerbox-zz"},
+		{name: "unknown os both labeled", speaker: "a@peerbox-zz", text: "see dir:/srv/x", wantContains: "[bash] lens dir:/srv/x@peerbox-zz | [pwsh] &"},
+		{name: "remote posix", os: "linux", speaker: "a@peerbox-zz", text: "see dir:/srv/x", want: "lens dir:/srv/x@peerbox-zz"},
 		{name: "remote windows", os: "windows", speaker: "a@peerbox-zz", text: "see dir:/srv/x", wantContains: "lens"},
 		{name: "explicit host scope", speaker: "a", text: "see dir:/srv/x@peerbox-zz", wantContains: "@peerbox-zz"},
 		{name: "unscoped sender is local", speaker: "a", text: "see dir:/srv/x", want: ""},
@@ -54,7 +55,7 @@ func TestLocatorPeerReadInContributions(t *testing.T) {
 	var b strings.Builder
 	writeContributions(&b, &State{ID: "m1"}, events, "")
 	out := b.String()
-	if !strings.Contains(out, "read: lens ") || !strings.Contains(out, text) || events[0].Text != text {
+	if !strings.Contains(out, "read: [bash] lens ") || !strings.Contains(out, text) || events[0].Text != text {
 		t.Fatalf("bad output: %s", out)
 	}
 }
