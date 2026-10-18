@@ -140,13 +140,26 @@ export succeeded; without `UseNumber`, `1E+2` decoded as `100`). Search of
 in `cmds/db/db.go`, which already parses `json.Number`; the `float64`
 assertions elsewhere in the repo are not `Call` results.
 
-`TestIndependentDocClientsBothModes` ran once on Dragon by accident (a
-`-run Doc` filter matched it). Persistent passed. Memory failed at "drop
-under hold" with `stale_epoch`: the hold process and the drop client shared
-one `BASHY_EPISODE`, so the owner fenced the drop as the holder's own
-request without its epoch, which is the designed behavior. The test now
-gives the hold process its own episode, so the drop comes from another agent
-and must get `claim_held`/`busy`. Not re-run here; the remote gate confirms it.
+Remote gate cce37efe (manager, Mac) reported two subprocess failures, both
+in tests; production code is unchanged for them:
+
+- `pkg/dbsql/process_test.go`: `epochOf` expects `json.Number`, but the
+  client driver decoded the relayed owner response with plain
+  `json.Unmarshal` (float64). The driver now decodes with `UseNumber`, as
+  `Call` does. The other assertions marshal rows and are unaffected.
+- `TestIndependentDocClientsBothModes/memory`: drop under hold gave
+  `stale_epoch`. Diagnosis: the hold process and the drop client inherited
+  one `BASHY_EPISODE`, so the owner saw the holder itself calling without its
+  epoch and fenced it, which is designed behavior; fencing is not weakened.
+  The hold process now has its own episode, so the drop must get
+  `claim_held`/`busy`. Readiness polls a no-op exclusive probe (`index rm`
+  of a missing index: `not_found` until held, then `claim_held`/`busy`)
+  instead of a fixed sleep. A `find` before the hold and after the refused
+  drop must match (data unchanged), the `db hold` exit is checked through
+  `Wait`, and the drop after release must succeed.
+
+This test also ran once on Dragon by accident (a `-run Doc` filter matched
+it), with the same memory failure. It has not been run here since.
 
 Not run on Dragon: `TestIndependentDocClientsBothModes` (after the fix), and the existing
 subprocess tests whose epoch assertion changed

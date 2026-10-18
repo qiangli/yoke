@@ -287,25 +287,47 @@ func TestIndependentDocClientsBothModes(t *testing.T) {
 				t.Fatalf("lost updates: %v", d)
 			}
 			// A destructive drop from another agent's process is refused while
-			// a hold is active, then succeeds after release. The holder has
-			// its own episode: a same-episode caller without the epoch is
-			// fenced (stale_epoch), not refused as another holder.
-			hold := exec.Command(os.Args[0], append(append([]string{"db", "hold"}, target...), "--", "sleep", "3")...)
+			// a hold is active and leaves the data unchanged, then succeeds
+			// after release. The holder has its own episode: a same-episode
+			// caller without the epoch is fenced (stale_epoch), not refused as
+			// another holder.
+			code, before := run("doc", "find", "--collection", "c")
+			if code != 0 {
+				t.Fatalf("find before hold: %v", before)
+			}
+			hold := exec.Command(os.Args[0], append(append([]string{"db", "hold"}, target...), "--", "sleep", "5")...)
 			hold.Dir = root
 			hold.Env = append(os.Environ(), "BASHY_EPISODE=doc-test-holder")
 			if err := hold.Start(); err != nil {
 				t.Fatal(err)
 			}
-			time.Sleep(time.Second)
-			code, got := run("doc", "collection", "drop", "--collection", "c", "--yes", "--wait", "200ms")
+			// Readiness without a fixed sleep: an exclusive op that changes
+			// nothing (rm of a missing index) answers not_found until the
+			// hold is active, then claim_held or busy.
+			held := false
+			for deadline := time.Now().Add(4 * time.Second); !held && time.Now().Before(deadline); {
+				_, got := run("doc", "index", "rm", "--collection", "c", "--index", "absent", "--yes", "--wait", "100ms")
+				switch errCode(got) {
+				case "claim_held", "busy":
+					held = true
+				case "not_found":
+					time.Sleep(50 * time.Millisecond)
+				default:
+					t.Fatalf("hold readiness probe: %v", got)
+				}
+			}
+			if !held {
+				t.Fatal("hold did not become active")
+			}
+			code, got = run("doc", "collection", "drop", "--collection", "c", "--yes", "--wait", "200ms")
 			if code == 0 || (errCode(got) != "claim_held" && errCode(got) != "busy") {
 				t.Fatalf("drop under hold: %d %v", code, got)
 			}
 			if err := hold.Wait(); err != nil {
-				t.Fatalf("hold child: %v", err)
+				t.Fatalf("db hold: %v", err)
 			}
-			if code, got := run("doc", "get", "--collection", "c", "--id", "ctr"); code != 0 || got["result"].(map[string]any)["doc"].(map[string]any)["n"].(json.Number).String() != fmt.Sprint(clients*each) {
-				t.Fatalf("denied drop changed data: %d %v", code, got)
+			if code, after := run("doc", "find", "--collection", "c"); code != 0 || fmt.Sprint(after["result"]) != fmt.Sprint(before["result"]) {
+				t.Fatalf("refused drop changed the data: %v -> %v", before["result"], after["result"])
 			}
 			if code, got := run("doc", "collection", "drop", "--collection", "c", "--yes"); code != 0 {
 				t.Fatalf("drop after release: %v", got)

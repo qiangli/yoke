@@ -96,10 +96,12 @@ func (c client) do(r call) dblifecycle.Response {
 	if err != nil {
 		c.t.Fatalf("client %s %s: %v %s", r.agent, r.op, err, b)
 	}
+	// Decode as Call does: the relayed owner response keeps its numbers
+	// as json.Number (the hold epoch included).
 	var res dblifecycle.Response
-	decoder := json.NewDecoder(strings.NewReader(strings.SplitN(string(b), "\n", 2)[0]))
-	decoder.UseNumber()
-	if err := decoder.Decode(&res); err != nil {
+	dec := json.NewDecoder(strings.NewReader(strings.SplitN(string(b), "\n", 2)[0]))
+	dec.UseNumber()
+	if err := dec.Decode(&res); err != nil {
 		c.t.Fatalf("client output %q: %v", b, err)
 	}
 	return res
