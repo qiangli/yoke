@@ -82,5 +82,3 @@ go test -count=1 ./pkg/dbobj -run '^TestIndependentProcess'
   CGO_ENABLED=0 GOMAXPROCS=4 GOFLAGS=-p=2 go test -short -count=1 ./pkg/dbobj
   ```
   Result: `ok  github.com/qiangli/yoke/cmds/db (PASS)`, `ok  github.com/qiangli/yoke/pkg/dbobj (PASS)`
-
-

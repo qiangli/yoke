@@ -58,7 +58,7 @@ func (Adapter) Caps() dbstore.Caps {
 			"documents: db doc collections are tables created only by db doc collection create; db export|import of a sqlite target is the sql interchange, db doc export|import the document interchange",
 			"vectors: db vec collections are sqlite-vec vec0 tables created only by db vec collection add (dimension, metric, model persisted); search is exact, never ANN; db vec export|import is the vector interchange",
 			"objects: db obj buckets and revisioned objects with sha256 checksums; db obj export|import is the object interchange",
-		"timeseries: db ts series are bashy_ts_series/bashy_ts_points tables created on first ingest; ts values keep their tagged type with exact int64 bits, described as SQL analytics, never full OLAP; db ts export|import is the time-series interchange",
+			"timeseries: db ts series are bashy_ts_series/bashy_ts_points tables created on first ingest; ts values keep their tagged type with exact int64 bits, described as SQL analytics, never full OLAP; db ts export|import is the time-series interchange",
 		},
 	})
 }
