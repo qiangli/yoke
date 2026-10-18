@@ -18,6 +18,9 @@ import (
 	"github.com/qiangli/yoke/pkg/bus"
 	"github.com/qiangli/yoke/pkg/capability"
 	"github.com/qiangli/yoke/pkg/kb"
+	"github.com/qiangli/yoke/pkg/lens/provider"
+	"github.com/qiangli/yoke/pkg/lens/stream"
+	"github.com/qiangli/yoke/pkg/ref"
 	"github.com/qiangli/yoke/pkg/role"
 	"github.com/qiangli/yoke/pkg/room"
 	"github.com/qiangli/yoke/pkg/scope"
@@ -1752,6 +1755,7 @@ func newContributionsCmd() *cobra.Command {
 
 func newListCmd() *cobra.Command {
 	var as string
+	var jsonOut bool
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "list saved meetings",
@@ -1767,6 +1771,9 @@ func newListCmd() *cobra.Command {
 				return err
 			}
 			reader := canonAgent(strings.TrimSpace(strings.TrimPrefix(as, "@")))
+			if jsonOut {
+				return writeMeetListGraph(cmd.OutOrStdout(), sessions, reader)
+			}
 			if reader != "" {
 				return writeGroupedRoomList(cmd, sessions, reader)
 			}
@@ -1790,7 +1797,32 @@ func newListCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&as, "as", "", "show grouped rooms and unread counts for NAME (does not mark messages read)")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit a bashy-graph-v1 stream of saved meetings")
 	return cmd
+}
+
+func writeMeetListGraph(w io.Writer, sessions []*State, reader string) error {
+	const source = "meet:*"
+	b := stream.NewBuilder(source)
+	b.Node(provider.Node{Ref: source, Name: "meetings", Kind: "roster", Type: "meet/list"})
+	for _, s := range sessions {
+		if s == nil || s.ID == "" {
+			return fmt.Errorf("meet list: meeting has no durable id")
+		}
+		r := ref.Format(ref.Meet, s.ID)
+		attrs := map[string]any{
+			"id": s.ID, "room": s.Room, "name": s.Name, "status": s.Status,
+			"topic": s.Topic, "participants": s.Participants,
+			"permanent": s.Permanent, "shared": s.Shared,
+		}
+		b.Node(provider.Node{Ref: r, Name: s.Topic, Kind: "meeting", Type: "meet/room", Attrs: attrs})
+		b.Edge(source, "contains", r, nil)
+	}
+	query := "op=list"
+	if reader != "" {
+		query += "&as=" + reader
+	}
+	return b.Encode(w, "meet", query)
 }
 
 type roomListGroup struct {
