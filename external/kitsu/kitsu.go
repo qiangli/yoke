@@ -3,6 +3,7 @@
 package kitsu
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 var (
@@ -24,11 +26,15 @@ var (
 	ErrUnsupported             = errors.New("kitsu: operation has no verified endpoint")
 	ErrBodyTooLarge            = errors.New("kitsu: response body too large")
 	ErrInvalidID               = errors.New("kitsu: invalid UUID")
+	ErrInvalidComment          = errors.New("kitsu: invalid comment text")
+	ErrCommentTooLarge         = errors.New("kitsu: comment text too large")
 )
 
 const (
-	DefaultTimeout       = 15 * time.Second
-	MaxBodyBytes   int64 = 4 << 20
+	DefaultTimeout            = 15 * time.Second
+	MaxBodyBytes        int64 = 4 << 20
+	MaxCommentBytes           = 16 << 10
+	MaxRequestBodyBytes       = 20 << 10
 )
 
 // Config contains only caller-supplied, process-local configuration.
@@ -51,10 +57,7 @@ func sameOrigin(a, b *url.URL) bool {
 }
 
 func NewClient(cfg Config) (*Client, error) {
-	if strings.TrimSpace(cfg.Token) == "" {
-		return nil, ErrMissingCredential
-	}
-	if strings.ContainsAny(cfg.Token, "\r\n") {
+	if cfg.Token != "" && (strings.TrimSpace(cfg.Token) == "" || strings.ContainsAny(cfg.Token, "\r\n")) {
 		return nil, ErrMissingCredential
 	}
 	u, err := url.Parse(cfg.BaseURL)
@@ -186,10 +189,14 @@ func (c *Client) Read(ctx context.Context, op ReadOperation, id string, q Query)
 	if err != nil {
 		return nil, err
 	}
-	return c.request(ctx, http.MethodGet, path)
+	body, _, err := c.request(ctx, http.MethodGet, path, nil)
+	return body, err
 }
 
-func (c *Client) request(ctx context.Context, method, path string) (json.RawMessage, error) {
+func (c *Client) request(ctx context.Context, method, path string, payload []byte) (json.RawMessage, int, error) {
+	if c.token == "" {
+		return nil, 0, ErrMissingCredential
+	}
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	u := *c.base
@@ -198,38 +205,41 @@ func (c *Client) request(ctx context.Context, method, path string) (json.RawMess
 	if len(parts) == 2 {
 		u.RawQuery = parts[1]
 	}
-	req, err := http.NewRequestWithContext(ctx, method, u.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), bytes.NewReader(payload))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Accept", "application/json")
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		if errors.Is(err, ErrCrossOriginRedirect) {
-			return nil, ErrCrossOriginRedirect
+			return nil, 0, ErrCrossOriginRedirect
 		}
 		// net/http errors can include URLs; never return one that could contain a secret.
-		return nil, errors.New("kitsu: request failed")
+		return nil, 0, errors.New("kitsu: request failed")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("kitsu: HTTP %d", resp.StatusCode)
+		return nil, resp.StatusCode, fmt.Errorf("kitsu: HTTP %d", resp.StatusCode)
 	}
 	if resp.StatusCode == http.StatusNoContent {
-		return nil, nil
+		return nil, resp.StatusCode, nil
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxBodyBytes+1))
 	if err != nil {
-		return nil, errors.New("kitsu: response read failed")
+		return nil, resp.StatusCode, errors.New("kitsu: response read failed")
 	}
 	if int64(len(body)) > MaxBodyBytes {
-		return nil, ErrBodyTooLarge
+		return nil, resp.StatusCode, ErrBodyTooLarge
 	}
 	if !json.Valid(body) {
-		return nil, errors.New("kitsu: invalid JSON response")
+		return nil, resp.StatusCode, errors.New("kitsu: invalid JSON response")
 	}
-	return json.RawMessage(body), nil
+	return json.RawMessage(body), resp.StatusCode, nil
 }
 
 // WriteOption requires the caller to choose an execution mode explicitly.
@@ -244,8 +254,13 @@ func WithDryRun() WriteOption  { return DryRun }
 func WithExecute() WriteOption { return Execute }
 
 type Effect struct {
-	Method string `json:"method"`
-	Path   string `json:"path"`
+	Method      string              `json:"method"`
+	Path        string              `json:"path"`
+	BodySummary *CommentBodySummary `json:"body_summary,omitempty"`
+}
+type CommentBodySummary struct {
+	TaskStatusID string `json:"task_status_id"`
+	CommentBytes int    `json:"comment_bytes"`
 }
 type WriteResult struct {
 	Effect   Effect `json:"effect"`
@@ -266,9 +281,51 @@ func (c *Client) DeleteComment(ctx context.Context, taskID, commentID string, op
 	if options[0] == DryRun {
 		return result, nil
 	}
-	_, err := c.request(ctx, http.MethodDelete, strings.TrimPrefix(effect.Path, "/api"))
+	_, _, err := c.request(ctx, http.MethodDelete, strings.TrimPrefix(effect.Path, "/api"), nil)
 	if err != nil {
 		return result, err
+	}
+	result.Executed = true
+	return result, nil
+}
+
+// CreateComment posts a task comment and its required task status. The status
+// change is a server-side effect of creating the comment in Zou.
+func (c *Client) CreateComment(ctx context.Context, taskID, taskStatusID, comment string, options ...WriteOption) (WriteResult, error) {
+	if !validID(taskID) || !validID(taskStatusID) {
+		return WriteResult{}, ErrInvalidID
+	}
+	if !utf8.ValidString(comment) {
+		return WriteResult{}, ErrInvalidComment
+	}
+	if len(comment) > MaxCommentBytes {
+		return WriteResult{}, ErrCommentTooLarge
+	}
+	effect := Effect{
+		Method:      http.MethodPost,
+		Path:        "/api/actions/tasks/" + taskID + "/comment",
+		BodySummary: &CommentBodySummary{TaskStatusID: taskStatusID, CommentBytes: len(comment)},
+	}
+	result := WriteResult{Effect: effect}
+	if len(options) != 1 || (options[0] != DryRun && options[0] != Execute) {
+		return result, ErrExecutionNotExplicit
+	}
+	payload, err := json.Marshal(struct {
+		TaskStatusID string `json:"task_status_id"`
+		Comment      string `json:"comment"`
+	}{TaskStatusID: taskStatusID, Comment: comment})
+	if err != nil || len(payload) > MaxRequestBodyBytes {
+		return result, ErrCommentTooLarge
+	}
+	if options[0] == DryRun {
+		return result, nil
+	}
+	_, status, err := c.request(ctx, http.MethodPost, strings.TrimPrefix(effect.Path, "/api"), payload)
+	if err != nil {
+		return result, err
+	}
+	if status != http.StatusCreated {
+		return result, fmt.Errorf("kitsu: unexpected HTTP %d", status)
 	}
 	result.Executed = true
 	return result, nil

@@ -2,7 +2,9 @@ package kitsu
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,12 +17,13 @@ const (
 	projectID = "11111111-1111-4111-8111-111111111111"
 	taskID    = "22222222-2222-4222-8222-222222222222"
 	commentID = "33333333-3333-4333-8333-333333333333"
+	statusID  = "44444444-4444-4444-8444-444444444444"
 )
 
 func TestConfig(t *testing.T) {
 	for _, cfg := range []Config{
 		{BaseURL: "http://example.com", Token: "secret"},
-		{BaseURL: "https://example.com", Token: ""},
+		{BaseURL: "https://example.com", Token: " \n"},
 		{BaseURL: "https://u:p@example.com", Token: "secret"},
 		{BaseURL: "https://example.com/elsewhere", Token: "secret"},
 	} {
@@ -32,6 +35,79 @@ func TestConfig(t *testing.T) {
 		if _, err := NewClient(Config{BaseURL: base, Token: "secret"}); err != nil {
 			t.Fatalf("%s: %v", base, err)
 		}
+	}
+}
+
+func TestCreateComment(t *testing.T) {
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if r.Method != http.MethodPost || r.URL.RequestURI() != "/api/actions/tasks/"+taskID+"/comment" {
+			t.Errorf("wrong route: %s %s", r.Method, r.URL.RequestURI())
+		}
+		if r.Header.Get("Content-Type") != "application/json" || r.Header.Get("Authorization") != "Bearer secret" {
+			t.Errorf("wrong headers: %v", r.Header)
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+		}
+		var fields map[string]any
+		if err := json.Unmarshal(body, &fields); err != nil || len(fields) != 2 || fields["task_status_id"] != statusID || fields["comment"] != "Ready for review" {
+			t.Errorf("wrong body: %s (%v)", body, err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":"` + commentID + `"}`))
+	}))
+	defer server.Close()
+	c, err := NewClient(Config{BaseURL: server.URL, Token: "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, options := range [][]WriteOption{nil, {WithDryRun(), WithExecute()}, {WithExecute(), WithExecute()}, {WriteOption(255)}} {
+		if _, err := c.CreateComment(context.Background(), taskID, statusID, "Ready for review", options...); !errors.Is(err, ErrExecutionNotExplicit) {
+			t.Fatalf("invalid options %v: %v", options, err)
+		}
+	}
+	dry, err := c.CreateComment(context.Background(), taskID, statusID, "Ready for review", WithDryRun())
+	if err != nil || dry.Executed || dry.Effect.Method != "POST" || dry.Effect.Path != "/api/actions/tasks/"+taskID+"/comment" || dry.Effect.BodySummary == nil || dry.Effect.BodySummary.TaskStatusID != statusID || dry.Effect.BodySummary.CommentBytes != len("Ready for review") || hits.Load() != 0 {
+		t.Fatalf("dry run: %+v %v hits=%d", dry, err, hits.Load())
+	}
+	result, err := c.CreateComment(context.Background(), taskID, statusID, "Ready for review", WithExecute())
+	if err != nil || !result.Executed || hits.Load() != 1 {
+		t.Fatalf("executed: %+v %v hits=%d", result, err, hits.Load())
+	}
+	if _, err := c.CreateComment(context.Background(), "bad", statusID, "hi", WithExecute()); !errors.Is(err, ErrInvalidID) {
+		t.Fatalf("task ID: %v", err)
+	}
+	if _, err := c.CreateComment(context.Background(), taskID, "bad", "hi", WithExecute()); !errors.Is(err, ErrInvalidID) {
+		t.Fatalf("status ID: %v", err)
+	}
+	if _, err := c.CreateComment(context.Background(), taskID, statusID, strings.Repeat("a", MaxCommentBytes+1), WithExecute()); !errors.Is(err, ErrCommentTooLarge) {
+		t.Fatalf("oversize: %v", err)
+	}
+	if _, err := c.CreateComment(context.Background(), taskID, statusID, strings.Repeat("\n", MaxCommentBytes), WithDryRun()); !errors.Is(err, ErrCommentTooLarge) {
+		t.Fatalf("encoded body oversize: %v", err)
+	}
+	if _, err := c.CreateComment(context.Background(), taskID, statusID, "\xff", WithExecute()); !errors.Is(err, ErrInvalidComment) {
+		t.Fatalf("invalid UTF-8: %v", err)
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("invalid calls hit server: %d", hits.Load())
+	}
+	untokened, err := NewClient(Config{BaseURL: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := untokened.CreateComment(context.Background(), taskID, statusID, "Ready for review", WithDryRun()); err != nil || hits.Load() != 1 {
+		t.Fatalf("tokenless dry run: %v hits=%d", err, hits.Load())
+	}
+	if _, err := untokened.CreateComment(context.Background(), taskID, statusID, "Ready for review", WithExecute()); !errors.Is(err, ErrMissingCredential) || hits.Load() != 1 {
+		t.Fatalf("tokenless execute: %v hits=%d", err, hits.Load())
+	}
+	if _, err := untokened.Read(context.Background(), ListProjects, "", Query{}); !errors.Is(err, ErrMissingCredential) || hits.Load() != 1 {
+		t.Fatalf("tokenless read: %v hits=%d", err, hits.Load())
 	}
 }
 
