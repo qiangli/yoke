@@ -23,6 +23,8 @@ const RecordsName = "documents.jsonl"
 const ExportSchema = "bashy-fts-export-v1"
 const MaxImportRecords = 100000
 const MaxImportBytes = 128 << 20
+const MaxManifestBytes = 1 << 20
+const MaxRecordBytes = 8 << 20
 
 type manifest struct {
 	SchemaVersion string          `json:"schema_version"`
@@ -36,7 +38,15 @@ type manifest struct {
 
 func allSources(ctx context.Context, d *blevedb.DB) ([]DocumentEntry, error) {
 	var out []DocumentEntry
-	err := eachSource(ctx, d, func(e DocumentEntry) error { out = append(out, e); return nil })
+	var total int
+	err := eachSource(ctx, d, func(e DocumentEntry) error {
+		total += len(e.ID) + len(e.Doc) + 128
+		if len(out) >= MaxImportRecords || total > MaxImportBytes {
+			return dbstore.ErrLimitExceeded
+		}
+		out = append(out, e)
+		return nil
+	})
 	return out, err
 }
 
@@ -97,12 +107,20 @@ func runExport(ctx context.Context, d *blevedb.DB, in Input) (dblifecycle.Outcom
 	hash := sha256.New()
 	writer := bufio.NewWriter(io.MultiWriter(f, hash))
 	count := 0
+	var total int
 	err = eachSource(ctx, d, func(e DocumentEntry) error {
-		b, _ := json.Marshal(e)
+		b, err := json.Marshal(e)
+		if err != nil {
+			return err
+		}
+		if len(b)+1 > MaxRecordBytes || count >= MaxImportRecords || total > MaxImportBytes-len(b)-1 {
+			return dbstore.ErrLimitExceeded
+		}
 		if _, err := writer.Write(append(b, '\n')); err != nil {
 			return err
 		}
 		count++
+		total += len(b) + 1
 		return nil
 	})
 	if err != nil {
@@ -133,9 +151,17 @@ func runExport(ctx context.Context, d *blevedb.DB, in Input) (dblifecycle.Outcom
 
 func readExport(ctx context.Context, path string) (manifest, []DocumentEntry, error) {
 	var m manifest
-	b, err := os.ReadFile(filepath.Join(path, ManifestName))
+	mf, err := os.Open(filepath.Join(path, ManifestName))
 	if err != nil {
 		return m, nil, err
+	}
+	defer mf.Close()
+	b, err := io.ReadAll(io.LimitReader(mf, MaxManifestBytes+1))
+	if err != nil {
+		return m, nil, err
+	}
+	if len(b) > MaxManifestBytes {
+		return m, nil, dbstore.ErrLimitExceeded
 	}
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
@@ -166,19 +192,19 @@ func readExport(ctx context.Context, path string) (manifest, []DocumentEntry, er
 		return m, nil, dbstore.ErrLimitExceeded
 	}
 	hash := sha256.New()
-	r := bufio.NewReader(io.TeeReader(f, hash))
+	r := bufio.NewScanner(io.TeeReader(f, hash))
+	r.Buffer(make([]byte, 64<<10), MaxRecordBytes+1)
 	entries := make([]DocumentEntry, 0, m.Count)
 	seen := map[string]bool{}
-	for {
+	var total int
+	for r.Scan() {
 		if err := ctx.Err(); err != nil {
 			return m, nil, dbstore.FromContext(err)
 		}
-		line, err := r.ReadBytes('\n')
-		if err == io.EOF && len(line) == 0 {
-			break
-		}
-		if err != nil && err != io.EOF {
-			return m, nil, err
+		line := r.Bytes()
+		total += len(line) + 1
+		if total > MaxImportBytes {
+			return m, nil, dbstore.ErrLimitExceeded
 		}
 		var e DocumentEntry
 		if json.Unmarshal(bytes.TrimSpace(line), &e) != nil || e.ID == "" || seen[e.ID] {
@@ -192,9 +218,9 @@ func readExport(ctx context.Context, path string) (manifest, []DocumentEntry, er
 		if len(entries) > m.Count {
 			return m, nil, dbstore.ErrMalformedInput
 		}
-		if err == io.EOF {
-			break
-		}
+	}
+	if err := r.Err(); err != nil {
+		return m, nil, fmt.Errorf("%w: record exceeds %d bytes or cannot be scanned: %v", dbstore.ErrLimitExceeded, MaxRecordBytes, err)
 	}
 	if len(entries) != m.Count || hex.EncodeToString(hash.Sum(nil)) != m.SHA256 {
 		return m, nil, dbstore.ErrIntegrity

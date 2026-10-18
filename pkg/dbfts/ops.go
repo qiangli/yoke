@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"sync"
@@ -107,6 +108,10 @@ func document(raw json.RawMessage) (map[string]any, error) {
 	dec.UseNumber()
 	if err := dec.Decode(&doc); err != nil || doc == nil {
 		return nil, fmt.Errorf("%w: document must be a JSON object", dbstore.ErrInvalidInput)
+	}
+	var extra any
+	if dec.Decode(&extra) != io.EOF {
+		return nil, fmt.Errorf("%w: trailing document data", dbstore.ErrInvalidInput)
 	}
 	if _, reserved := doc["_bashy_source"]; reserved {
 		return nil, fmt.Errorf("%w: reserved field _bashy_source", dbstore.ErrInvalidInput)
@@ -254,14 +259,20 @@ func run(ctx context.Context, h dbstore.Handle, op string, in Input) (dblifecycl
 			if raw == nil {
 				return dblifecycle.Outcome{}, fmt.Errorf("%w: source missing for %s", dbstore.ErrIntegrity, hit.ID)
 			}
-			if bytesUsed+len(raw) > maxBytes {
+			entry := map[string]any{"id": hit.ID, "revision": revision(raw), "score": hit.Score, "doc": json.RawMessage(raw)}
+			encoded, err := json.Marshal(entry)
+			if err != nil {
+				return dblifecycle.Outcome{}, err
+			}
+			hitBytes := len(encoded)
+			if hitBytes > maxBytes-bytesUsed {
 				if len(hits) == 0 {
 					return dblifecycle.Outcome{}, fmt.Errorf("%w: first document exceeds max_bytes", dbstore.ErrLimitExceeded)
 				}
 				break
 			}
-			hits = append(hits, map[string]any{"id": hit.ID, "revision": revision(raw), "score": hit.Score, "doc": json.RawMessage(raw)})
-			bytesUsed += len(raw)
+			hits = append(hits, entry)
+			bytesUsed += hitBytes
 		}
 		endGen, err := generation(idx)
 		if err != nil {
@@ -282,11 +293,22 @@ func run(ctx context.Context, h dbstore.Handle, op string, in Input) (dblifecycl
 		if err != nil {
 			return dblifecycle.Outcome{}, err
 		}
-		sources, err := allSources(ctx, d)
+		var checked uint64
+		err = eachSource(ctx, d, func(e DocumentEntry) error {
+			doc, err := document(e.Doc)
+			if err != nil {
+				return fmt.Errorf("%w: invalid source for %s: %v", dbstore.ErrIntegrity, e.ID, err)
+			}
+			if err := idx.NewBatch().Index(e.ID, doc); err != nil {
+				return fmt.Errorf("%w: source cannot be indexed for %s: %v", dbstore.ErrIntegrity, e.ID, err)
+			}
+			checked++
+			return nil
+		})
 		if err != nil {
 			return dblifecycle.Outcome{}, err
 		}
-		if uint64(len(sources)) != count {
+		if checked != count {
 			return dblifecycle.Outcome{}, dbstore.ErrIntegrity
 		}
 		return dblifecycle.Outcome{Result: map[string]any{"documents": count, "valid": true}}, nil

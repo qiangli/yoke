@@ -12,6 +12,7 @@ import (
 
 	"github.com/qiangli/yoke/pkg/dblifecycle"
 	"github.com/qiangli/yoke/pkg/dbstore"
+	"github.com/qiangli/yoke/pkg/dbstore/blevedb"
 )
 
 type fixture struct {
@@ -211,6 +212,58 @@ func TestMemoryOwnerLifetime(t *testing.T) {
 	}
 	if _, err := f.run(OpGet, Input{ID: "one"}, false); dbstore.Code(err) != "lifetime_ended" {
 		t.Fatalf("closed owner: %v", err)
+	}
+}
+
+func TestFTSInputBoundsAndIntegrity(t *testing.T) {
+	f := newFixture(t, dbstore.Memory)
+	if _, err := f.run(OpPut, Input{ID: "trailing", Doc: json.RawMessage(`{"text":"ok"} {"text":"extra"}`)}, false); dbstore.Code(err) != "invalid_input" {
+		t.Fatalf("trailing document: %v", err)
+	}
+	f.must(OpPut, Input{ID: "keep", Doc: json.RawMessage(`{"text":"ok"}`)}, false)
+	dir := filepath.Join(t.TempDir(), "export")
+	f.must(OpExport, Input{Out: dir}, false)
+	manifestPath := filepath.Join(dir, ManifestName)
+	recordsPath := filepath.Join(dir, RecordsName)
+	validManifest, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validRecords, err := os.ReadFile(recordsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, bytes.Repeat([]byte("x"), MaxManifestBytes+1), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.run(OpImport, Input{In: dir, Replace: true}, true); dbstore.Code(err) != "limit_exceeded" {
+		t.Fatalf("manifest bound: %v", err)
+	}
+	if err := os.WriteFile(manifestPath, validManifest, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(recordsPath, bytes.Repeat([]byte("x"), MaxRecordBytes+1), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.run(OpImport, Input{In: dir, Replace: true}, true); dbstore.Code(err) != "limit_exceeded" {
+		t.Fatalf("record bound: %v", err)
+	}
+	if err := os.WriteFile(recordsPath, validRecords, 0600); err != nil {
+		t.Fatal(err)
+	}
+	f.must(OpGet, Input{ID: "keep"}, false)
+	h, err := (blevedb.Adapter{}).Open(context.Background(), f.target, dbstore.Options{Mem: f.svc.Mem})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.(*blevedb.DB).Index().DeleteInternal(sourceKey("keep")); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.run(OpCheck, Input{}, false); dbstore.Code(err) != "integrity" {
+		t.Fatalf("missing source check: %v", err)
 	}
 }
 
