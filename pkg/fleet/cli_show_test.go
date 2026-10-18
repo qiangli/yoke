@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -120,6 +121,86 @@ func TestAgentsShowReportsEffectiveBinaryFallback(t *testing.T) {
 	if !strings.Contains(got, "tool:    fallback-tool (fallback-tool)") {
 		t.Fatalf("agent summary omitted the effective binary fallback:\n%s", got)
 	}
+}
+
+// The human agent summary prints the EFFECTIVE reader prefs for the
+// selected Agent+Tool+band: budget_bytes plus the other declared keys, with
+// default values shown explicitly. The raw BASHY_PREFS JSON never prints.
+func TestAgentShowReaderPrefs(t *testing.T) {
+	mkRing := func(t *testing.T, agentPrefs ReaderPrefs, modelBand int) string {
+		t.Helper()
+		root := t.TempDir()
+		cat := New(WithRoot(root))
+		if err := cat.SaveTool(Tool{
+			Name: "show-tool", Kind: ToolKindCLI,
+			CLI: ToolCLI{Launch: ToolLaunch{Exec: "show-tool {prompt}"}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := cat.SaveModel(Model{Name: "show-model", UpstreamID: "provider-show-model", Band: modelBand}); err != nil {
+			t.Fatal(err)
+		}
+		if err := cat.SaveAgent(Agent{Name: "show-agent", Tool: "show-tool", Model: "show-model", Prefs: agentPrefs}); err != nil {
+			t.Fatal(err)
+		}
+		return root
+	}
+	show := func(t *testing.T, root string) string {
+		t.Helper()
+		got, err := runCmd(t, NewAgentsCmd(WithRoot(root)), "show", "show-agent")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	t.Run("defaults are explicit", func(t *testing.T) {
+		got := show(t, mkRing(t, ReaderPrefs{}, 0))
+		for _, want := range []string{
+			fmt.Sprintf("budget_bytes=%d", DefaultBudgetBytes),
+			"view=" + ViewText,
+			"help=" + HelpClassic,
+			"dialect=bash",
+		} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("agent summary omitted default %q:\n%s", want, got)
+			}
+		}
+		if strings.Contains(got, EnvBashyPrefs) {
+			t.Fatalf("agent summary leaked the prefs env name:\n%s", got)
+		}
+	})
+
+	t.Run("agent prefs win", func(t *testing.T) {
+		got := show(t, mkRing(t, ReaderPrefs{BudgetBytes: 12345, View: ViewJSON}, 0))
+		for _, want := range []string{"budget_bytes=12345", "view=" + ViewJSON} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("agent summary omitted effective pref %q:\n%s", want, got)
+			}
+		}
+	})
+
+	t.Run("env resolves without leaking raw JSON", func(t *testing.T) {
+		root := mkRing(t, ReaderPrefs{}, 0)
+		raw := `{"budget_bytes":77777,"view":"json"}`
+		t.Setenv(EnvBashyPrefs, raw)
+		got := show(t, root)
+		for _, want := range []string{"budget_bytes=77777", "view=json"} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("agent summary omitted env pref %q:\n%s", want, got)
+			}
+		}
+		if strings.Contains(got, raw) {
+			t.Fatalf("agent summary leaked raw %s:\n%s", EnvBashyPrefs, got)
+		}
+	})
+
+	t.Run("band help default", func(t *testing.T) {
+		got := show(t, mkRing(t, ReaderPrefs{}, 4))
+		if !strings.Contains(got, "help="+HelpSkill) {
+			t.Fatalf("agent summary omitted band help default %q:\n%s", HelpSkill, got)
+		}
+	})
 }
 
 // Asking for two formats is a caller mistake; letting one silently win would

@@ -638,7 +638,59 @@ func showAgentSummary(cmd *cobra.Command, cat *Catalog, a Agent) error {
 	if !tool.TakesModel() {
 		fmt.Fprintf(out, "warning: %s cannot select a model; the binding is a label, not a selection\n", tool.Name)
 	}
+	// Effective reader prefs for the selected Agent+Tool+band. Defaults are
+	// always shown explicitly (the baseline is a value, not an absence), and
+	// the raw BASHY_PREFS JSON is never echoed — only resolved values print.
+	band := standings[a.Name].Band
+	if band == 0 {
+		band = model.Band
+	}
+	prefs, err := ResolveReaderPrefsFromEnv(ReaderPrefs{}, &a, &tool, band)
+	if err != nil {
+		fmt.Fprintf(out, "reader:   unavailable (%v)\n", err)
+		return nil
+	}
+	writeReaderPrefs(out, prefs)
 	return nil
+}
+
+// writeReaderPrefs renders the effective reader preferences for humans.
+// The first line always names every scalar key so default values read as
+// values (budget_bytes=40960, not a blank); per-command glob defaults and
+// additional underscore keys follow one per line in sorted order.
+func writeReaderPrefs(out io.Writer, p ReaderPrefs) {
+	fmt.Fprintf(out, "reader:   budget_bytes=%d view=%s help=%s dialect=%s\n",
+		p.BudgetBytes, p.View, p.Help, p.Dialect)
+	if len(p.Defaults) > 0 {
+		patterns := make([]string, 0, len(p.Defaults))
+		for pat := range p.Defaults {
+			patterns = append(patterns, pat)
+		}
+		sort.Strings(patterns)
+		for _, pat := range patterns {
+			opts := p.Defaults[pat]
+			keys := make([]string, 0, len(opts))
+			for k := range opts {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			parts := make([]string, 0, len(keys))
+			for _, k := range keys {
+				parts = append(parts, fmt.Sprintf("%s=%v", k, opts[k]))
+			}
+			fmt.Fprintf(out, "reader-default: %s %s\n", pat, strings.Join(parts, " "))
+		}
+	}
+	if len(p.Extra) > 0 {
+		keys := make([]string, 0, len(p.Extra))
+		for k := range p.Extra {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Fprintf(out, "reader-extra: %s=%v\n", k, p.Extra[k])
+		}
+	}
 }
 
 // writeStanding renders an agent's place on the band ladder for humans.
