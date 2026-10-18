@@ -1,0 +1,20 @@
+{
+  "schema_version": "bashy-kb-ask-step-v1",
+  "session": "session",
+  "round": 1,
+  "evidence": [
+    {
+      "ref": "kb:one",
+      "ring": "host",
+      "text": "alpha beta",
+      "path": [
+        "kb:one",
+        "file:///one"
+      ]
+    }
+  ],
+  "open_questions": [],
+  "contradictions": [],
+  "suggested_follow_ups": [],
+  "coverage": 1
+}

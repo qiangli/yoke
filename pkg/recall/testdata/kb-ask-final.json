@@ -1,0 +1,16 @@
+{
+  "schema_version": "bashy-kb-ask-final-v1",
+  "session": "session",
+  "abstained": false,
+  "answer": "alpha beta [kb:one]",
+  "citations": [
+    {
+      "ref": "kb:one",
+      "path": [
+        "kb:one",
+        "file:///one"
+      ]
+    }
+  ],
+  "coverage": 1
+}
