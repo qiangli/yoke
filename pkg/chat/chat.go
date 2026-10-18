@@ -41,6 +41,9 @@ const schemaVersion = "bashy-chat-v1"
 // commands such as sdlc can use the same primitive as human operators.
 type Options struct {
 	Agent string
+	// Full is the --full / --view=canonical escape: the turn's output skips
+	// reduction (redaction still applies).
+	Full bool
 	// Catalog pins fleet resolution for an embedded caller. Nil uses the host catalog.
 	Catalog       *fleet.Catalog
 	Role          string
@@ -203,6 +206,8 @@ type Result struct {
 	DryRun        bool     `json:"dry_run,omitempty"`
 	ExitCode      int      `json:"exit_code"`
 	Output        string   `json:"output,omitempty"`
+	// BudgetSource names the reader-preference layer that set the output budget.
+	BudgetSource string `json:"budget_source,omitempty"`
 }
 
 // LaunchProfile is the minimal headless launch contract needed by chat.
@@ -857,11 +862,11 @@ func chatStateDir() string {
 // The chat state root already owns per-agent conversation data.  Keeping the
 // content-addressed output blobs beside it avoids a new, private artifact store
 // for one-shot turns.
-func reduceInvokeOutput(out string) (string, error) {
-	return reduceChatBytes([]byte(out))
+func reduceInvokeOutput(out string, plan fleet.SinkPlan) (string, error) {
+	return reduceChatBytes([]byte(out), plan)
 }
 
-func reduceChatBytes(out []byte) (string, error) {
+func reduceChatBytes(out []byte, plan fleet.SinkPlan) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return "", errors.New("chat: no state directory for reduced output")
@@ -879,15 +884,35 @@ func reduceChatBytes(out []byte) (string, error) {
 			_ = redactor.Register(name, value)
 		}
 	}
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("BASHY_OUTPUT_REDUCE")), "off") {
+	if plan.Canonical || strings.EqualFold(strings.TrimSpace(os.Getenv("BASHY_OUTPUT_REDUCE")), "off") {
 		out = reduce.CanonicalizeHome(out, home)
 		return string(redactor.Redact(out)), nil
 	}
-	result, err := reduce.Reduce(reduce.NewStore(filepath.Join(root, "output")), out, reduce.Config{HomeDir: home, Redactor: redactor})
+	result, err := reduce.Reduce(reduce.NewStore(filepath.Join(root, "output")), out, reduce.Config{BudgetBytes: plan.BudgetBytes, HomeDir: home, Redactor: redactor})
 	if err != nil {
 		return "", fmt.Errorf("chat: reduce invocation output: %w", err)
 	}
 	return result.Text, nil
+}
+
+// readerSinkPlan resolves the reader's output preferences for this turn's agent
+// (explicit > BASHY_PREFS > agent > tool > model band > default).
+func readerSinkPlan(name string, opt Options) (fleet.SinkPlan, error) {
+	catalog := opt.Catalog
+	if catalog == nil {
+		catalog = newCatalog()
+	}
+	var ap *fleet.Agent
+	var tp *fleet.Tool
+	band := 0
+	if a, t, m, err := catalog.Binding(name); err == nil {
+		ap, tp, band = &a, &t, m.Band
+	}
+	prefs, src, err := fleet.ResolveReaderPrefsWithSourcesFromEnv(fleet.ReaderPrefs{}, ap, tp, band)
+	if err != nil {
+		return fleet.SinkPlan{}, fmt.Errorf("chat: resolve reader preferences: %w", err)
+	}
+	return fleet.PlanSink(prefs, src, opt.Full), nil
 }
 
 func emitReduced(dst io.Writer, text string) error {
@@ -1460,7 +1485,12 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 	// spilled by reduceInvokeOutput, and the bounded view tells the next agent
 	// exactly how to recover them.
 	res.ExitCode = code
-	reduced, reduceErr := reduceInvokeOutput(out)
+	plan, planErr := readerSinkPlan(name, opt)
+	if planErr != nil {
+		return res, planErr
+	}
+	res.BudgetSource = plan.Source
+	reduced, reduceErr := reduceInvokeOutput(out, plan)
 	if reduceErr != nil {
 		return res, reduceErr
 	}
@@ -1476,7 +1506,7 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 			return res, fmt.Errorf("chat: read event channel: %w", readErr)
 		}
 		if len(events) > 0 {
-			reducedEvents, eventErr := reduceChatBytes(events)
+			reducedEvents, eventErr := reduceChatBytes(events, plan)
 			if eventErr != nil {
 				return res, eventErr
 			}

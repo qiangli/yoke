@@ -15,6 +15,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/reduce"
 )
 
@@ -467,5 +468,61 @@ func TestFleetTokenEnvOnlyFillsAnEmptyHand(t *testing.T) {
 	got = fleetTokenEnv([]string{"HOME=/x"})
 	if len(got) != 2 || got[1] != "BASHY_FLEET_TOKEN=paired-token" {
 		t.Fatalf("the child did not receive the host token: %v", got)
+	}
+}
+
+func TestInvokeReaderBudgetShrinksAndRecovers(t *testing.T) {
+	permitUnsafeLaunch(t)
+	pinCatalog(t)
+	home := t.TempDir()
+	setTestHome(t, home)
+	t.Setenv("BASHY_PREFS", `{"budget_bytes":2048}`)
+	full := strings.Repeat("canonical producer line\n", 1000)
+	res, err := Invoke(context.Background(), Options{Agent: "codex", Instruction: "summarize", Cwd: t.TempDir()}, &fakeRunner{output: full})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Output) > 2048 || len(res.Output) == 0 {
+		t.Fatalf("output %d bytes not within reader budget", len(res.Output))
+	}
+	if res.BudgetSource != fleet.SourceEnv {
+		t.Fatalf("budget source = %q", res.BudgetSource)
+	}
+	if !strings.Contains(res.Output, "bashy out ") {
+		t.Fatalf("no recovery pointer: %q", res.Output)
+	}
+	entries, err := os.ReadDir(filepath.Join(home, ".bashy", "chat", "output"))
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("no spill: %v", err)
+	}
+	found := false
+	for _, e := range entries {
+		blob, _ := os.ReadFile(filepath.Join(home, ".bashy", "chat", "output", e.Name()))
+		if string(blob) == full {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("omitted bytes not recoverable from spill")
+	}
+}
+
+func TestInvokeFullEscapeBypassesReduction(t *testing.T) {
+	permitUnsafeLaunch(t)
+	pinCatalog(t)
+	setTestHome(t, t.TempDir())
+	t.Setenv("BASHY_PREFS", `{"budget_bytes":2048}`)
+	full := strings.Repeat("canonical producer line\n", 1000)
+	res, err := Invoke(context.Background(), Options{Agent: "codex", Instruction: "x", Cwd: t.TempDir(), Full: true}, &fakeRunner{output: full})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Output != full {
+		t.Fatalf("--full did not return canonical bytes (%d vs %d)", len(res.Output), len(full))
+	}
+	t.Setenv("BASHY_PREFS", `{"view":"canonical"}`)
+	res, err = Invoke(context.Background(), Options{Agent: "codex", Instruction: "x", Cwd: t.TempDir()}, &fakeRunner{output: full})
+	if err != nil || res.Output != full {
+		t.Fatalf("view=canonical did not bypass: %v", err)
 	}
 }
