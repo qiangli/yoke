@@ -12,6 +12,7 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/weavecli"
 	"github.com/qiangli/yoke/pkg/fleet"
+	"github.com/qiangli/yoke/pkg/lens/agentworld"
 	"github.com/qiangli/yoke/pkg/llmbudget"
 	"github.com/qiangli/yoke/pkg/quotaobs"
 	"github.com/qiangli/yoke/pkg/room"
@@ -200,10 +201,10 @@ func loadQuotaImmuneDelta(ctx context.Context, dir string, now time.Time) (*quot
 		}
 	}
 	state.States = keptStates
-	// The room cursor is the same source token used by bus://timeline --since.
-	events, busCursor, busErr := room.ReadDelta(ctx, state.BusCursor)
-	if errors.Is(busErr, room.ErrDeltaExpired) {
-		events, busCursor, busErr = room.ReadDelta(ctx, "")
+	// Resume the same bound bus://timeline --since source used by lens.
+	events, busCursor, busErr := agentworld.ReadTimeline(ctx, state.BusCursor)
+	if agentworld.IsExpired(busErr) {
+		events, busCursor, busErr = agentworld.ReadTimeline(ctx, "")
 	}
 	if busErr == nil {
 		quotaImmuneAppendRows(&state, quotaImmuneBusRows(events), now)

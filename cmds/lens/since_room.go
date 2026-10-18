@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/qiangli/yoke/pkg/lens/agentworld"
 	"github.com/qiangli/yoke/pkg/ref"
 	"github.com/qiangli/yoke/pkg/room"
 )
@@ -18,7 +19,7 @@ func (busTimelineDelta) Delta(ctx context.Context, loc ref.Locator, token string
 	if loc.Target != "timeline" {
 		return nil, "", "", ErrDeltaExpired
 	}
-	events, next, err := room.ReadDelta(ctx, token)
+	events, next, err := agentworld.TimelineDelta(ctx, token)
 	if errors.Is(err, room.ErrDeltaExpired) {
 		return nil, "", "", ErrDeltaExpired
 	}
@@ -27,9 +28,6 @@ func (busTimelineDelta) Delta(ctx context.Context, loc ref.Locator, token string
 	}
 	var b bytes.Buffer
 	for _, e := range events {
-		if e.Type != room.EventNotify && !(e.Type == room.EventUsage && e.Topic == room.TopicQuotaObservation) {
-			continue
-		}
 		line, err := json.Marshal(e)
 		if err != nil {
 			return nil, "", "", err

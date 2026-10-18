@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qiangli/yoke/pkg/lens/stream"
 	"github.com/qiangli/yoke/pkg/llmbudget"
 	"github.com/qiangli/yoke/pkg/quotaobs"
 	"github.com/qiangli/yoke/pkg/room"
@@ -165,8 +166,21 @@ func TestQuotaImmuneDeltaRestartAndRotation(t *testing.T) {
 	if err := json.Unmarshal(b, &state); err != nil || state.BusCursor == "" {
 		t.Fatalf("bus cursor: %v %+v", err, state)
 	}
-	if events, _, err := room.ReadDelta(context.Background(), state.BusCursor); err != nil || len(events) != 0 {
+	busCursor, err := stream.ParseCursor([]byte(state.BusCursor))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := busCursor.Check("bus", "bus://timeline", "delta:jsonl"); err != nil {
+		t.Fatal(err)
+	}
+	if events, _, err := room.ReadDelta(context.Background(), busCursor.Token); err != nil || len(events) != 0 {
 		t.Fatalf("bus replay after checkpoint: %+v %v", events, err)
+	}
+	// A watchdog upgraded from the raw room token must resume without
+	// replaying its already classified events and write a bound cursor.
+	state.BusCursor = busCursor.Token
+	if err := saveQuotaImmuneDelta(dir, state); err != nil {
+		t.Fatal(err)
 	}
 	firstBusCursor := state.BusCursor
 	if err := room.Emit(room.Event{Type: room.EventNotify, Topic: "quota", Body: "second marker"}); err != nil {
@@ -182,7 +196,11 @@ func TestQuotaImmuneDeltaRestartAndRotation(t *testing.T) {
 	if err := json.Unmarshal(b, &state); err != nil || state.BusCursor == firstBusCursor {
 		t.Fatalf("second bus cursor: %v %+v", err, state)
 	}
-	if events, _, err := room.ReadDelta(context.Background(), state.BusCursor); err != nil || len(events) != 0 {
+	busCursor, err = stream.ParseCursor([]byte(state.BusCursor))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if events, _, err := room.ReadDelta(context.Background(), busCursor.Token); err != nil || len(events) != 0 {
 		t.Fatalf("second bus replay: %+v %v", events, err)
 	}
 	if len(counts) != 3 || counts[0] != 1 || counts[1] != 1 || counts[2] != 0 {
