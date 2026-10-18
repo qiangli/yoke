@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "/Users/qiangli/.local/bin/claude",
+    "--help"
+  ],
+  "exit_code": 0,
+  "elapsed_seconds": 0.057757708000000005,
+  "recorded_at": "2026-10-18T21:33:26.155577+00:00"
+}

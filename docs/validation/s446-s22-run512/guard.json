@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "/usr/bin/sandbox-exec",
+    "-p",
+    "(version 1) (allow default) (deny file-write* (subpath \"/Users/qiangli\"))",
+    "/bin/sh",
+    "-c",
+    "/usr/bin/touch /Users/qiangli/.s446-run512-deny-canary"
+  ],
+  "exit_code": 1,
+  "elapsed_seconds": 0.013882332999999969,
+  "recorded_at": "2026-10-18T21:33:26.460185+00:00"
+}

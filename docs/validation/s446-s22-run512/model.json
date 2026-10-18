@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "/Users/qiangli/.local/bin/bashy",
+    "model",
+    "show",
+    "opus5",
+    "--json"
+  ],
+  "exit_code": 0,
+  "elapsed_seconds": 0.12181825,
+  "recorded_at": "2026-10-18T21:33:26.286145+00:00"
+}

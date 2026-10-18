@@ -1,0 +1,30 @@
+{
+  "provenance": "Transcribed Claude rows from functions exec / write_stdin session 17775; stdout not redirected during original command. Other account rows omitted.",
+  "argv": [
+    "bashy",
+    "model",
+    "quota",
+    "--json"
+  ],
+  "exit_code": 0,
+  "observed_at": "2026-10-18T14:29:20.602129-07:00",
+  "read_at_approx": "2026-10-18T14:32:00-07:00",
+  "account": "claude-max",
+  "provider": "anthropic",
+  "lane": "subscription",
+  "source": "probe:plan:claude-max/statusline",
+  "status": "ok",
+  "stale": false,
+  "windows": [
+    {
+      "window": "5h",
+      "used_percent": 3,
+      "reset_at": "2026-10-19T01:00:00Z"
+    },
+    {
+      "window": "week",
+      "used_percent": 39,
+      "reset_at": "2026-10-23T09:00:00Z"
+    }
+  ]
+}
