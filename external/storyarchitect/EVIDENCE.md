@@ -1,0 +1,17 @@
+# Story Architect admission — story 9505bb10b74a (Sprint 382)
+
+Decision on 2026-10-18: **UNSUPPORTED for v1.0**. This is an admission record, not an executable adapter or a support claim. No Story Architect code was downloaded or run on Dragon.
+
+## Official evidence checked
+
+- Project and source: https://github.com/story-apps/starc . The project's README describes a C++/Qt desktop application and points users to packaged builds. Its build instructions name `starcapp` as the main executable.
+- License at the reviewed release: https://raw.githubusercontent.com/story-apps/starc/v0.8.3/LICENSE — GNU GPL version 3. The Sprint 457 Creative execution modes contract permits this copyleft desktop client only as a bounded, short-lived invocation; it does not admit a resident service.
+- Publisher release: https://github.com/story-apps/starc/releases/tag/v0.8.3 . Official runnable Linux AppImages are listed at https://github.com/story-apps/starc/releases/download/v0.8.3/starc-setup.AppImage and https://github.com/story-apps/starc/releases/download/v0.8.3/starc-setup-qt5.AppImage . The release asset metadata at https://api.github.com/repos/story-apps/starc/releases/tags/v0.8.3 reports respectively `sha256:0068d355d222d1003aecf45f7e0dfb30f30409393a8575d1e1f19dbd3b4b6e99` and `sha256:5f192d353481bb5595cb56634ddd52666c4ae23242b99e0eee24a5939c312fd3`. These are GitHub's digest fields for assets on the publisher's release, not a separately publisher-signed checksum manifest. The bytes were not independently downloaded and hashed here, so no binmgr pin is admitted.
+- Official help: https://starc.app/help/ and https://starc.app/help/start-writing/ describe interactive app workflows, including project creation through the GUI. The release notes describe import and export features, but provide no bounded headless CLI or documented file mutation interface: https://github.com/story-apps/starc/releases/tag/v0.8.3 .
+- `starc-mcp` reference: https://github.com/Christianrhf/starc-mcp . The story treats this no-visible-license repository as reference only; its implementation is not copied or depended on.
+
+## Missing admission element and fail-closed reason
+
+The required **documented or validated bounded headless seam** for project, script, scene, character and series operations is absent from the reviewed official material. No native-platform fixture or live validation of such a seam was performed. A desktop executable plus an asset digest does not establish safe, bounded agent operations. Direct SQLite/XML writes would guess private storage schemas and bypass the application's own migrations and consistency rules; a successful mock would not validate compatibility or safe project writes. Therefore this story adds no Go wrapper, tests, binmgr pin, registered command, MCP tool, project writer, or storage reverse engineering. Every v1.0 platform and operation remains UNSUPPORTED until an official or independently validated bounded interface and verified artifact bytes provide admission evidence.
+
+The governing contract is `docs/sprint-457-client-admission-contract.md`, Creative execution modes, in the parent `dhnt` repository; this Yoke workspace does not contain that file. Its Story Architect row permits a short-lived GPL-3.0 client with bounded file-level operations through a Go bridge, while requiring separate evidence before support is claimed. This record applies that gate and does not claim the bridge exists.
