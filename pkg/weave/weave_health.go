@@ -249,7 +249,7 @@ func weaveHealthConsistencyIssue(s weaveHealthSnapshot, it *weaveItem) (string, 
 		if it == nil || it.LaunchSpec == nil {
 			return "active run has no launch specification", "inspect the queue record before resuming", true
 		}
-		if s.Tool != "" && it.LaunchSpec.Tool != "" && !weaveSameLaunchTool(s.Tool, it.LaunchSpec.Tool) {
+		if s.Tool != "" && it.LaunchSpec.Tool != "" && !weaveLaunchSpecRunsTool(s.Tool, it.LaunchSpec) {
 			return fmt.Sprintf("owner launch tool %q contradicts recorded tool %q", it.LaunchSpec.Tool, s.Tool), "repair the launch record before resuming", true
 		}
 		if s.WrapperPID <= 0 {
@@ -339,12 +339,15 @@ func weaveClassifyHealth(s weaveHealthSnapshot, it *weaveItem, now time.Time) we
 // resolved binary PATH (a managed, versioned install such as
 // ~/.bashy/tools/codex/0.157.1/codex, or codex.exe on Windows). Comparing them
 // as strings flagged every such run as inconsistent, so compare the path's
-// executable name instead. Both separators are accepted because a record can
-// be read on a different OS than the one that wrote it.
+// executable name instead.
 func weaveSameLaunchTool(recorded, launched string) bool {
-	if recorded == launched {
-		return true
-	}
+	return recorded == launched || weaveLaunchBinaryName(launched) == recorded
+}
+
+// weaveLaunchBinaryName reduces a launch binary to its executable name. Both
+// separators are accepted because a record can be read on a different OS than
+// the one that wrote it; a Windows .exe suffix is dropped for the same reason.
+func weaveLaunchBinaryName(launched string) string {
 	base := launched
 	if i := strings.LastIndexAny(base, `/\`); i >= 0 {
 		base = base[i+1:]
@@ -352,5 +355,59 @@ func weaveSameLaunchTool(recorded, launched string) bool {
 	if len(base) > 4 && strings.EqualFold(base[len(base)-4:], ".exe") {
 		base = base[:len(base)-4]
 	}
-	return base == recorded
+	return base
+}
+
+// weaveFrontDoorBinary is the host shell binary that dispatches first-party
+// tools as verbs (`bashy genie …`, `bashy ycode …`). A launch spec whose
+// binary is the front door names its tool in argv[0], not in the binary.
+const weaveFrontDoorBinary = "bashy"
+
+// weaveLaunchSpecRunsTool reports whether a launch spec runs the recorded tool.
+// The direct comparison covers tools launched by their own binary. A registry
+// tool whose launch contract goes through the bashy front door (ycode:
+// `bashy genie -m MODEL PROMPT`, alias genie) records the registry name while
+// the spec's binary is "bashy" — comparing those two flagged every live
+// ycode/genie run as inconsistent (Sprint #467, story #2371). For a front-door
+// launch the tool is the verb in argv[0], compared by name and then through the
+// fleet registry so an alias ("genie") and its canonical tool ("ycode") agree.
+// A front door with no verb, a flag in place of a verb, or a verb that resolves
+// to a different registry tool is still a contradiction.
+func weaveLaunchSpecRunsTool(recorded string, spec *weaveLaunchSpec) bool {
+	if spec == nil {
+		return false
+	}
+	if weaveSameLaunchTool(recorded, spec.Tool) {
+		return true
+	}
+	if weaveLaunchBinaryName(spec.Tool) != weaveFrontDoorBinary || len(spec.Argv) == 0 {
+		return false
+	}
+	verb := spec.Argv[0]
+	if verb == "" || strings.HasPrefix(verb, "-") {
+		return false
+	}
+	if verb == recorded {
+		return true
+	}
+	return weaveSameRegistryTool(recorded, verb)
+}
+
+// weaveSameRegistryTool reports whether two names resolve to one fleet
+// registry tool (canonical name or alias). Unknown names never match: the
+// registry is consulted only to RECONCILE two names, never to excuse one.
+func weaveSameRegistryTool(a, b string) bool {
+	cat := fleetCatalog()
+	if cat == nil {
+		return false
+	}
+	ta, ok := cat.Tool(a)
+	if !ok {
+		return false
+	}
+	tb, ok := cat.Tool(b)
+	if !ok {
+		return false
+	}
+	return ta.Name == tb.Name
 }
