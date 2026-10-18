@@ -256,8 +256,26 @@ func TestCLIAndMCPParity(t *testing.T) {
 	target := loc("sqlite:file:mem.db")
 	run := MCPCommand().Run
 	out, errOut, exit := run(context.Background(), []string{"--json", "init", target}, "", dir)
-	if exit != 0 || !strings.Contains(out, `"schema_version":"bashy-kb-memory-result-v1"`) || !strings.Contains(out, filepath.Join(dir, "mem.db")) {
+	var initEnv struct {
+		SchemaVersion string                 `json:"schema_version"`
+		Target        dblifecycle.TargetInfo `json:"target"`
+		Result        struct {
+			Stores []struct {
+				ID   string `json:"id"`
+				Path string `json:"path"`
+			} `json:"stores"`
+		} `json:"result"`
+	}
+	if exit != 0 || json.Unmarshal([]byte(out), &initEnv) != nil || initEnv.SchemaVersion != "bashy-kb-memory-result-v1" || len(initEnv.Result.Stores) != 1 {
 		t.Fatalf("mcp init: %d %s %s", exit, out, errOut)
+	}
+	// Compare paths structurally: the JSON escapes Windows backslashes and
+	// the store resolves tempdir symlinks (/var -> /private/var on macOS).
+	store := initEnv.Result.Stores[0]
+	got, gerr := os.Stat(store.Path)
+	want, werr := os.Stat(filepath.Join(dir, "mem.db"))
+	if gerr != nil || werr != nil || !os.SameFile(got, want) || initEnv.Target.Engine != "sqlite" || initEnv.Target.ID != store.ID {
+		t.Fatalf("mcp init target: %+v %+v (%v %v)", initEnv.Target, store, gerr, werr)
 	}
 	out, _, exit = run(context.Background(), []string{"--json", "-f", "-", "--tags", "x,y", "add", target}, "from stdin\n", dir)
 	var env Envelope
