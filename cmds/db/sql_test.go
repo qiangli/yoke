@@ -226,3 +226,42 @@ func TestMemoryHoldChildPresentsEpoch(t *testing.T) {
 		t.Fatalf("held write: %v", doc)
 	}
 }
+
+// The parent can mint its episode while acquiring the hold, after the CLI
+// RunContext took its environment snapshot. The child must use that episode.
+func TestPersistentHoldChildUsesHolderEpisode(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BASHY_DB_SESSION_DIR", filepath.Join(root, "sessions"))
+	t.Setenv("BASHY_COORD_DIR", filepath.Join(root, "coord"))
+	path := filepath.Join(root, "held.db")
+	target := []string{"--engine", "sqlite", "--mode", "persistent", "--path", path}
+	dbRun(t, root, "", append([]string{"create"}, target...)...)
+	dbRun(t, root, "", append([]string{"sql", "schema", "apply", "--yes", "--sql", "create table t(v)"}, target...)...)
+	// No inherited episode: acquiring the hold has to mint one. RunContext.Env
+	// is captured before that happens, as in an ordinary standalone CLI.
+	t.Setenv("BASHY_EPISODE", "")
+	runChild := func(sql string, wantCode int, wantError string) {
+		t.Helper()
+		child := append(append([]string{"hold"}, target...), "--", os.Args[0], "db", "sql", "query")
+		child = append(child, target...)
+		child = append(child, "--sql", sql)
+		var out, stderr bytes.Buffer
+		rc := &tool.RunContext{Ctx: context.Background(), Dir: root, Env: os.Environ(), Out: &out, Err: &stderr}
+		if code := tool.Lookup("db").Run(rc, child); code != wantCode {
+			t.Fatalf("held child exit %d, want %d: stdout %s stderr %s", code, wantCode, out.String(), stderr.String())
+		}
+		var doc map[string]any
+		if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+			t.Fatalf("held child output: %v: %s", err, out.String())
+		}
+		if wantError == "" {
+			if doc["ok"] != true {
+				t.Fatalf("held child read: %v", doc)
+			}
+		} else if doc["error"].(map[string]any)["code"] != wantError {
+			t.Fatalf("held child error: %v", doc)
+		}
+	}
+	runChild("select count(*) from t", 0, "")
+	runChild("pragma locking_mode=''", 1, "read_only")
+}
