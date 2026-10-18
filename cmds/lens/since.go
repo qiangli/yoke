@@ -258,32 +258,13 @@ func sinceAgentWorld(rc *tool.RunContext, loc ref.Locator, format, since, cursor
 	target := loc.String()
 	query := "delta:" + format
 	restart := fmt.Errorf("restart with --since=start")
-	token := ""
-	if since != "start" {
-		data := []byte(since)
-		if len(since) > 0 && since[0] == '@' {
-			var err error
-			if data, err = os.ReadFile(rc.Path(since[1:])); err != nil {
-				return fail(err)
-			}
-		}
-		c, err := stream.ParseCursor(data)
-		if err != nil {
-			return fail(err)
-		}
-		if err = c.Check(loc.Scheme, target, query); err != nil {
-			return fail(fmt.Errorf("%w; %v", err, restart))
-		}
-		if c.Kind != stream.KindChangeStream {
-			return fail(fmt.Errorf("requires a change-stream cursor"))
-		}
-		if c.Expiry != "" {
-			if expiry, _ := time.Parse(time.RFC3339, c.Expiry); !time.Now().Before(expiry) {
-				return fail(fmt.Errorf("cursor expired; %v", restart))
-			}
-		}
-		token = c.Token
+	spec, err := ParseSinceCursor(since, loc, query, time.Now(), func(p string) ([]byte, error) {
+		return os.ReadFile(rc.Path(p))
+	})
+	if err != nil {
+		return fail(err)
 	}
+	token := spec.Token
 	records, next, expiry, err := src.Delta(rc.Ctx, loc, token)
 	if errors.Is(err, ErrDeltaExpired) {
 		return fail(fmt.Errorf("%v; %v", err, restart))
