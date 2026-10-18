@@ -228,6 +228,13 @@ func writeContributions(w io.Writer, st *State, events []Event, who string) {
 			fmt.Fprintf(w, "   q: %s\n", oneLine(e.Question))
 		}
 		fmt.Fprintf(w, "\n%s\n", redactHome(strings.TrimSpace(e.Text)))
+		for _, l := range EventLocators(e) {
+			fmt.Fprintf(w, "   locator: %s", redactHome(l.Ref))
+			if l.Note != "" {
+				fmt.Fprintf(w, " (%s)", l.Note)
+			}
+			fmt.Fprintln(w)
+		}
 		if e.File != "" {
 			fmt.Fprintf(w, "\n   full: %s\n", redactHome(e.File))
 		}

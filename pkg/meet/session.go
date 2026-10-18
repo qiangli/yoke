@@ -946,3 +946,12 @@ func listSessions() ([]*State, error) {
 	sort.Slice(out, func(i, j int) bool { return out[i].Created.After(out[j].Created) })
 	return out, nil
 }
+
+// EventLocators returns the locators named in a message or turn's text, read
+// side only: Event.Text is untouched and nothing is fetched or executed.
+func EventLocators(e Event) []bus.MessageRef {
+	if e.Kind != "message" && e.Kind != "turn" {
+		return nil
+	}
+	return bus.MessageLocators(e.Text, e.Speaker)
+}
