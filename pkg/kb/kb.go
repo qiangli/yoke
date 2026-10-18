@@ -30,6 +30,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/yoke/pkg/kblife"
 	"github.com/qiangli/yoke/pkg/ref"
 	"github.com/qiangli/yoke/pkg/scope"
 )
@@ -154,6 +155,7 @@ phrase it as "what + WHEN this applies" with trigger keywords.`,
 	cmd.AddCommand(newObserveCmd(&dir, resolved))
 	cmd.AddCommand(newUpdateCmd(&dir, resolved))
 	cmd.AddCommand(newSupersedeCmd(&dir, resolved))
+	cmd.AddCommand(newForgetCmd(&dir, resolved))
 	cmd.AddCommand(newValidateCmd(&dir, resolved))
 	cmd.AddCommand(newRetroCmd(&dir, resolved))
 	cmd.AddCommand(newSourcesCmd(&dir))
@@ -211,6 +213,12 @@ campaign memory (~/.bashy/weave/...). No terms lists everything (use
 				return err
 			}
 			pages = filterType(filterForm(pages, form), typ)
+			// A forgotten page is hidden from search, --all included.
+			tombs, err := store.Tombstones()
+			if err != nil {
+				return err
+			}
+			pages = HideForgotten(pages, tombs, time.Now())
 			if repo == "" {
 				if cwd, err := os.Getwd(); err == nil {
 					if root := repoRootOf(cwd); root != "" {
@@ -715,6 +723,16 @@ invalidated lesson plus its correction is itself knowledge.`,
 				return fmt.Errorf("kb: new page needs its own identity — pass a different --title or --slug")
 			}
 			p.Supersedes = old.Slug
+			// The intervals meet at one instant: old.valid_to =
+			// new.valid_from = now. kblife validates before mutating, so a
+			// refused supersede writes neither page.
+			oldV, newV := old.Validity(), p.Validity()
+			at := time.Now().UTC().Truncate(time.Second)
+			if err := kblife.Supersede(&oldV, &newV, at); err != nil {
+				return fmt.Errorf("kb: supersede %s: %w", old.Slug, err)
+			}
+			old.ValidTo = oldV.ValidTo.Format(time.RFC3339)
+			p.ValidFrom = newV.ValidFrom.Format(time.RFC3339)
 			if err := store.Write(p, "supersede"); err != nil {
 				return err
 			}

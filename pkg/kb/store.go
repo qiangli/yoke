@@ -322,6 +322,8 @@ func (s *Store) RebuildIndex() error {
 		return err
 	}
 	rank := map[string]int{StatusValidated: 0, StatusCandidate: 1, StatusStale: 2}
+	tombs, _ := s.Tombstones()
+	pages = HideForgotten(pages, tombs, time.Now())
 	var live []*Page
 	for _, p := range pages {
 		if p.Status == StatusSuperseded {

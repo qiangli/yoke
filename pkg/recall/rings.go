@@ -115,6 +115,14 @@ func recallPages(ring string, store *kb.Store, path string, q Query) ([]Hit, err
 			return !slices.Contains(q.Types, p.Type)
 		})
 	}
+	// Lifecycle before ranking, like forms: resolve every page at the as-of
+	// instant (kblife) and keep only the valid ones, so a forgotten or
+	// superseded page cannot shape the IDF of what is returned.
+	tombs, err := store.Tombstones()
+	if err != nil {
+		return nil, fmt.Errorf("kb: open %s: %w", path, err)
+	}
+	pages = kb.VisibleAt(pages, tombs, q.asOf())
 	var relation map[string]string
 	if ring == RingAgent {
 		// Gate before ranking, like forms: an invisible note must not shape
@@ -130,6 +138,9 @@ func recallPages(ring string, store *kb.Store, path string, q Query) ([]Hit, err
 		OS:          q.OS,
 		K:           q.k(),
 		MinCoverage: q.MinCoverage,
+		// Status-superseded pages were already resolved against AsOf
+		// above; one superseded only AFTER as-of is a valid hit here.
+		All: true,
 	})
 	var out []Hit
 	for _, h := range hits {
@@ -153,7 +164,7 @@ func recallPages(ring string, store *kb.Store, path string, q Query) ([]Hit, err
 			Cue: p.Title, Gist: p.Description, Full: p.Body,
 			Source: []SourceRef{{URI: "file://" + store.PagePath(p.Slug)}},
 			Status: p.Status, Confidence: "ASSERTED",
-			ObservedAt: p.Updated, ValidFrom: p.Created,
+			ObservedAt: p.Updated, ValidFrom: validFrom(p), ValidTo: p.ValidTo,
 			Score:   h.Score,
 			Why:     []string{"kb", "matched " + itoa(h.Matched) + " terms"},
 			Episode: episode, Checkpoint: checkpoint,
@@ -247,4 +258,13 @@ func lineageVisible(p *kb.Page, rel map[string]string, l Lineage) bool {
 		return l.Descendants
 	}
 	return true
+}
+
+// validFrom is the page's recorded interval start, else its creation time
+// (the historical value, for pages written before intervals existed).
+func validFrom(p *kb.Page) string {
+	if p.ValidFrom != "" {
+		return p.ValidFrom
+	}
+	return p.Created
 }

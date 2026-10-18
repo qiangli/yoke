@@ -262,12 +262,13 @@ func blockAt(h Hit, resolution string) ContextBlock {
 	b := ContextBlock{
 		Ring: h.Ring, Form: h.Form, Ref: h.ID, Memory: h.Memory,
 		Resolution: resolution, Status: h.Status, Text: text,
+		ValidTo:    h.ValidTo,
 		ObservedAt: h.ObservedAt, working: h.Working,
 		Why: append([]string(nil), h.Why...), Source: append([]SourceRef(nil), h.Source...),
 	}
-	// ValidTo, Freshness, Snapshot and Path stay empty in M1: no source
-	// record carries them yet (M6 owns valid_to; the sense schema owns
-	// freshness/snapshot; M4 owns path). Declared here, never emitted.
+	// Freshness, Snapshot and Path stay empty: no source record carries them
+	// yet (the sense schema owns freshness/snapshot; M4 owns path). ValidTo
+	// is copied when the page's interval is closed (M6 supersede).
 	b.Tokens = estimateContextTokens(b)
 	return b
 }

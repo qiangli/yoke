@@ -43,6 +43,7 @@ func NewRecallCmd() *cobra.Command {
 		explain    bool
 		storeDir   string
 		lineage    bool
+		asOf       string
 	)
 
 	cmd := &cobra.Command{
@@ -77,7 +78,12 @@ Three things about its behaviour are contract, not implementation:
 			if cmd.Flags().Changed("ring") {
 				selected = cleanList(rings)
 			}
+			at, err := asOfFlag(asOf)
+			if err != nil {
+				return err
+			}
 			q, err := ApplyMemory(Query{
+				AsOf: at,
 				Text: strings.Join(args, " "),
 				K:    k, Budget: budget, Rings: selected,
 				Since: since, MinCoverage: minCover,
@@ -126,7 +132,16 @@ Three things about its behaviour are contract, not implementation:
 	f.BoolVar(&explain, "explain", false, "print the ranking inputs, not just why")
 	f.StringVar(&storeDir, "store", "", "override the store root (default ~/.bashy)")
 	f.BoolVar(&lineage, "lineage", false, "agent ring: also read descendant episodes' notes")
+	f.StringVar(&asOf, "as-of", "", "resolve page validity at this instant (RFC3339 or YYYY-MM-DD; default now)")
 	return cmd
+}
+
+// asOfFlag parses an optional --as-of; empty means now (zero AsOf).
+func asOfFlag(s string) (time.Time, error) {
+	if strings.TrimSpace(s) == "" {
+		return time.Time{}, nil
+	}
+	return ParseAsOf(s)
 }
 
 // NewContextCmd builds the budgeted `kb context` stage verb. Extra readers are
@@ -145,6 +160,7 @@ func NewContextCmd(extra ...Reader) *cobra.Command {
 		k        int
 		asJSON   bool
 		lineage  bool
+		asOf     string
 	)
 	cmd := &cobra.Command{
 		Use:           "context",
@@ -172,7 +188,12 @@ func NewContextCmd(extra ...Reader) *cobra.Command {
 			} else {
 				selectedRings, selectedForms = cleanList(rings), cleanList(forms)
 			}
+			at, err := asOfFlag(asOf)
+			if err != nil {
+				return fmt.Errorf("kb context: %w", err)
+			}
 			q, err := ApplyMemory(Query{
+				AsOf: at,
 				Text: strings.TrimSpace(forText), Files: cleanList(files), Episode: strings.TrimSpace(episode),
 				Rings: selectedRings, Forms: selectedForms, Budget: budget, MinCoverage: minCover, K: k,
 				Memory:  strings.TrimSpace(memory),
@@ -225,6 +246,7 @@ func NewContextCmd(extra ...Reader) *cobra.Command {
 	f.IntVar(&k, "k", 3, "max hits per ring")
 	f.BoolVar(&asJSON, "json", false, "emit the frozen kb-context-v1 envelope")
 	f.BoolVar(&lineage, "lineage", false, "agent ring: also read descendant episodes' notes")
+	f.StringVar(&asOf, "as-of", "", "resolve page validity at this instant (RFC3339 or YYYY-MM-DD; default now)")
 	return cmd
 }
 

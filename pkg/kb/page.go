@@ -42,6 +42,12 @@ type Page struct {
 	Resource     string `yaml:"resource,omitempty"`
 	Supersedes   string `yaml:"supersedes,omitempty"`
 	SupersededBy string `yaml:"superseded_by,omitempty"`
+	// ValidFrom and ValidTo are the page's validity interval [from, to),
+	// RFC 3339, written by `kb supersede` through pkg/kblife (old.valid_to =
+	// new.valid_from = the supersede instant). Empty = open bound, so every
+	// page written before intervals existed is unchanged on disk.
+	ValidFrom string `yaml:"valid_from,omitempty"`
+	ValidTo   string `yaml:"valid_to,omitempty"`
 	// Export marks an agent-ring note visible to DESCENDANT episodes (design
 	// §4): a delegate sees its ancestors' exported notes and nothing else of
 	// theirs. Set by `kb note add --export`.

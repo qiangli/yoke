@@ -7,9 +7,11 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/yoke/pkg/kblife"
 	"github.com/qiangli/yoke/pkg/ref"
 )
 
@@ -76,6 +78,17 @@ type ShowEnvelope struct {
 	Freshness     string   `json:"freshness,omitempty"`
 	Snapshot      string   `json:"snapshot,omitempty"`
 	Error         string   `json:"error,omitempty"`
+	// Lifecycle is set only when the page's resolved state is not valid
+	// (superseded, expired, forgotten, not-yet-valid): the outcome stays
+	// "found" — the page is still on disk — and this says why recall hides it.
+	Lifecycle *ShowLifecycle `json:"lifecycle,omitempty"`
+}
+
+// ShowLifecycle is a page's resolved lifecycle state at show time, plus its
+// tombstone when forgotten.
+type ShowLifecycle struct {
+	State     kblife.State      `json:"state"`
+	Tombstone *kblife.Tombstone `json:"tombstone,omitempty"`
 }
 
 // ShowContent is what an owning store's reader returns for a resolved node.
@@ -206,6 +219,7 @@ type showResult struct {
 	Freshness  string
 	Snapshot   string
 	ErrText    string
+	Lifecycle  *ShowLifecycle
 }
 
 func (r showResult) envelope() ShowEnvelope {
@@ -225,6 +239,7 @@ func (r showResult) envelope() ShowEnvelope {
 		Freshness:     r.Freshness,
 		Snapshot:      r.Snapshot,
 		Error:         r.ErrText,
+		Lifecycle:     r.Lifecycle,
 	}
 }
 
@@ -324,10 +339,11 @@ func runShowSlug(c *cobra.Command, slug, dir, ring, form string, jsonOut bool) e
 	// An OPEN is the use signal — the reader's judgement, not the
 	// ranker's own output. See pkg/kb/activation.go.
 	store.RecordOpen(p.Slug)
+	life := pageLifecycle(c, store, p)
 	if jsonOut {
 		return showSuccess(c, true, showResult{
 			Outcome: OutcomeFound, Ref: "kb:" + p.Slug, Kind: "kb", ID: p.Slug,
-			Title: p.Title, Status: p.Status, Content: string(b),
+			Title: p.Title, Status: p.Status, Content: string(b), Lifecycle: life,
 		})
 	}
 	_, err = c.OutOrStdout().Write(b)
@@ -453,8 +469,24 @@ func runShowKBNode(c *cobra.Command, n ref.Node, dir, ring, form string, jsonOut
 	return showSuccess(c, jsonOut, showResult{
 		Outcome: OutcomeFound, Ref: n.Ref, Kind: string(n.Kind), ID: n.ID,
 		Title: n.Title, Status: n.Status, Where: n.Where, Open: n.Open,
-		Content: string(b),
+		Content: string(b), Lifecycle: pageLifecycle(c, store, p),
 	})
+}
+
+// pageLifecycle resolves p now; nil when it is simply valid, so a valid page's
+// envelope is unchanged. A non-valid state is also noted on stderr in text mode.
+func pageLifecycle(c *cobra.Command, store *Store, p *Page) *ShowLifecycle {
+	tomb, _ := store.Tombstone(p.Slug)
+	state := PageState(p, tomb, time.Now())
+	if state == kblife.StateValid {
+		return nil
+	}
+	note := fmt.Sprintf("kb: %s: lifecycle %s", p.Slug, state)
+	if tomb != nil {
+		note += fmt.Sprintf(" at %s by %s: %s", tomb.At.Format(time.RFC3339), tomb.By, tomb.Reason)
+	}
+	fmt.Fprintln(c.ErrOrStderr(), note)
+	return &ShowLifecycle{State: state, Tombstone: tomb}
 }
 
 // showOutcomeError names a non-found reader outcome for the error line and

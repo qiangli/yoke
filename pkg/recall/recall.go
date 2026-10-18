@@ -32,6 +32,7 @@
 package recall
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -106,6 +107,9 @@ type Query struct {
 
 	// Now is injectable so tests are not clock-dependent. Zero = time.Now().
 	Now time.Time
+	// AsOf is the instant every kb page's lifecycle is resolved at (design
+	// §7, `--as-of`): only pages valid then are returned. Zero = Now.
+	AsOf time.Time `json:"-"`
 }
 
 func (q Query) now() time.Time {
@@ -113,6 +117,26 @@ func (q Query) now() time.Time {
 		return time.Now()
 	}
 	return q.Now
+}
+
+func (q Query) asOf() time.Time {
+	if q.AsOf.IsZero() {
+		return q.now()
+	}
+	return q.AsOf
+}
+
+// ParseAsOf reads an --as-of value: RFC 3339, or a YYYY-MM-DD date meaning
+// that day's start in UTC.
+func ParseAsOf(s string) (time.Time, error) {
+	s = strings.TrimSpace(s)
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, nil
+	}
+	if t, err := time.Parse("2006-01-02", s); err == nil {
+		return t, nil
+	}
+	return time.Time{}, fmt.Errorf("--as-of %q: want RFC3339 or YYYY-MM-DD", s)
 }
 
 func (q Query) k() int {
@@ -169,6 +193,7 @@ type Hit struct {
 
 	ObservedAt string `json:"observed_at,omitempty"`
 	ValidFrom  string `json:"valid_from,omitempty"`
+	ValidTo    string `json:"valid_to,omitempty"`
 
 	Score float64  `json:"score"`
 	Why   []string `json:"why,omitempty"`

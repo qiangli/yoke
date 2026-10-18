@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -114,18 +113,5 @@ func observeEventID(kind, episode, ref, at string) string {
 }
 
 func appendObserveEvent(store *Store, ev observeEvent) error {
-	if err := os.MkdirAll(store.Dir(), 0o755); err != nil {
-		return err
-	}
-	b, err := json.Marshal(ev)
-	if err != nil {
-		return err
-	}
-	f, err := os.OpenFile(store.journalPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = f.Write(append(b, '\n'))
-	return err
+	return store.appendJournal(ev)
 }

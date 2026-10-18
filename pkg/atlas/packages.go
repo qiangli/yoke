@@ -160,7 +160,11 @@ var packages = map[string]Package{
 	"herald":     cmdPkg("herald"),
 	"judge":      cmdPkg("judge"),
 	"kb":         cmdPkg("kb"),
-	"lens":       cmdPkg("lens"),
+	"kblife": libPkg("kb", "the ONE lifecycle semantics (validity intervals, supersede, forget tombstones, "+
+		"as-of resolution) for kb pages AND revisioned document records — resolve at consumption, flag never "+
+		"edit. Stdlib-only by test so dbdoc-backed stores import it without a cycle; reached through "+
+		"`kb supersede` / `kb forget` / `--as-of`. Sprint 284 M6."),
+	"lens": cmdPkg("lens"),
 	"ref": libPkg("define", "the ONE grammar for naming anything bashy can address — `<kind>:<id>`, "+
 		"`urn:dhnt:<kind>:<id>`, the closed 15-kind vocabulary, the node every store's resolver returns. "+
 		"Stdlib-only leaf by test, because pkg/kb already reaches fleet/bus/principal and the shared type "+
