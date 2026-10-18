@@ -3,6 +3,7 @@ package dbfts
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/qiangli/yoke/pkg/dblifecycle"
@@ -48,12 +49,14 @@ type Input struct {
 	In         string          `json:"in,omitempty"`
 	OnConflict string          `json:"on_conflict,omitempty"`
 	Replace    bool            `json:"replace,omitempty"`
+	IfRevision string          `json:"if_revision,omitempty"`
 }
 
 // DocumentEntry is one document in a batch put.
 type DocumentEntry struct {
-	ID  string          `json:"id"`
-	Doc json.RawMessage `json:"doc"`
+	ID         string          `json:"id"`
+	Doc        json.RawMessage `json:"doc"`
+	IfRevision string          `json:"if_revision,omitempty"`
 }
 
 func decodeInput(raw json.RawMessage) (Input, error) {
@@ -65,6 +68,10 @@ func decodeInput(raw json.RawMessage) (Input, error) {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&in); err != nil {
 		return in, fmt.Errorf("%w: fts input: %v", dbstore.ErrInvalidInput, err)
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		return in, fmt.Errorf("%w: trailing fts input", dbstore.ErrInvalidInput)
 	}
 	return in, nil
 }
@@ -118,6 +125,7 @@ func Spec(name string, mode dbstore.Mode, a dblifecycle.Access) dblifecycle.Oper
 	switch name {
 	case OpExport:
 		s.Effects = append(fs("fs.read", "db.read"), "fs.write")
+		s.MutationClass, s.Hold = "read", "exclusive"
 	case OpImport:
 		s.Effects = append([]string{"fs.read"}, s.Effects...)
 	}

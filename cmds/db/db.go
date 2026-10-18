@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/qiangli/coreutils/tool"
+	_ "github.com/qiangli/yoke/pkg/dbfts"
 	"github.com/qiangli/yoke/pkg/dblifecycle"
 	"github.com/qiangli/yoke/pkg/dbsql"
 	"github.com/qiangli/yoke/pkg/dbstore"
@@ -32,7 +33,8 @@ var command = &tool.Tool{
 	Usage: "db create|show|check|backup|restore|drop|export|import [--engine E --mode persistent|memory --path P|--session S --name N] [--json]\n" +
 		"db sql query|exec|schema show|schema apply TARGET [--sql SQL] [--param [NAME=]TYPE:VALUE]... [--params JSON] [--input FILE|-]\n" +
 		"db doc get|find|put|patch|rm|batch|export|import|collection create|drop|list|index add|rm|list TARGET [--collection C] [--id ID] [--doc JSON] [--filter JSON] [--input FILE|-]" + "\n" +
-		"db kv bucket create|drop|list|get|put|delete|scan|cas|batch TARGET [--bucket B] [--key text:K|b64:K] [--value text:V|b64:V] [--expect text:V|b64:V|--expect-absent] [--prefix ...] [--input FILE|-]",
+		"db kv bucket create|drop|list|get|put|delete|scan|cas|batch TARGET [--bucket B] [--key text:K|b64:K] [--value text:V|b64:V] [--expect text:V|b64:V|--expect-absent] [--prefix ...] [--input FILE|-]" + "\n" +
+		"db fts search|get|put|delete|batch|check|mapping show|rebuild TARGET [--input FILE|-]",
 }
 
 func init() { command.Run = run; tool.Register(command) }
@@ -240,13 +242,17 @@ func run(rc *tool.RunContext, args []string) int {
 			o := output{SchemaVersion: "bashy-db-result-v1", Op: op, MutationClass: "read"}
 			return failure(o, err).emit(rc, *jsonFlag)
 		}
-	} else if op == "sql" || op == "kv" || op == "export" || op == "import" {
+	} else if op == "sql" || op == "kv" || op == "fts" || op == "export" || op == "import" {
 		var err error
 		if op == "kv" {
 			if catOp, operands, err = kvVerb(operands); err == nil {
 				raw, err = kvInput(rc, f)
 			}
-		} else if catOp, operands, err = sqlVerb(op, operands); err == nil {
+		} else if op == "fts" {
+			if catOp, operands, err = ftsVerb(operands); err == nil {
+				raw, err = ftsInput(rc, f, op)
+			}
+		} else if catOp, operands, err = sqlVerb(op, operands); err == nil && op != "export" && op != "import" {
 			raw, err = categoryInput(rc, f, op)
 		}
 		if err != nil {
@@ -369,10 +375,24 @@ func run(rc *tool.RunContext, args []string) int {
 		return failure(o, err).emit(rc, *jsonFlag)
 	}
 	o.Target = dblifecycle.ViewTarget(id, "")
+	if op == "create" && id.Engine == "bleve" {
+		raw, err = ftsInput(rc, f, op)
+		if err != nil {
+			return failure(o, err).emit(rc, *jsonFlag)
+		}
+	}
 	if op == "export" || op == "import" {
 		// The logical interchange belongs to the target's category.
 		catOp = dblifecycle.ViewTarget(id, "").Category + "." + op
 		o.Op = catOp
+		if strings.HasPrefix(catOp, "fts.") {
+			raw, err = ftsInput(rc, f, op)
+		} else {
+			raw, err = categoryInput(rc, f, op)
+		}
+		if err != nil {
+			return failure(o, err).emit(rc, *jsonFlag)
+		}
 	}
 	if catOp != "" {
 		cat, access, ok, err := dblifecycle.LookupCategoryOp(catOp, raw)
@@ -431,7 +451,7 @@ func run(rc *tool.RunContext, args []string) int {
 		return failure(o, fmt.Errorf("%w: hold/release requires an explicit --session or -- CMD", dbstore.ErrInvalidInput)).emit(rc, *jsonFlag)
 	}
 	if callSession != "" {
-		req := dblifecycle.Request{Op: op, Target: id.Target, Wait: *wait, Out: *backup, In: *source, Replace: *replace, Yes: *yes, RequestID: *requestID, Epoch: *epoch, Attachment: *attachment}
+		req := dblifecycle.Request{Op: op, Target: id.Target, Wait: *wait, Out: *backup, In: *source, Replace: *replace, Yes: *yes, RequestID: *requestID, Epoch: *epoch, Attachment: *attachment, Input: raw}
 		if catOp != "" {
 			req = dblifecycle.Request{Op: catOp, Target: id.Target, Wait: *wait, Yes: *yes, RequestID: *requestID, Epoch: *epoch, Attachment: *attachment, Input: raw}
 		}
@@ -464,7 +484,7 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	switch op {
 	case "create":
-		_, err = s.Create(ctx, id.Target, *wait)
+		_, err = s.CreateConfigured(ctx, id.Target, raw, *wait)
 	case "show":
 		_, o.Result, err = s.Show(ctx, id.Target, *wait)
 	case "check":

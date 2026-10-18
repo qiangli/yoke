@@ -4,11 +4,16 @@
 package dblifecycle
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/blevesearch/bleve/v2"
 
 	bolt "go.etcd.io/bbolt"
 	sqlite "modernc.org/sqlite"
@@ -79,12 +84,45 @@ func (s Service) guard(ctx context.Context, id dbstore.Identity) error {
 // Create requires an explicit target. It never selects a default target or
 // creates a parent directory.
 func (s Service) Create(ctx context.Context, t dbstore.Target, wait time.Duration) (dbstore.Identity, error) {
+	return s.CreateConfigured(ctx, t, nil, wait)
+}
+
+// CreateConfigured accepts an explicit Bleve mapping with the same claim
+// admission as Create. The mapping is fixed for the lifetime of that index.
+func (s Service) CreateConfigured(ctx context.Context, t dbstore.Target, input json.RawMessage, wait time.Duration) (dbstore.Identity, error) {
 	id, a, err := resolve(t)
 	if err != nil {
 		return id, err
 	}
 	if err := s.guard(ctx, id); err != nil {
 		return id, err
+	}
+	if len(input) != 0 {
+		var cfg struct {
+			Mapping json.RawMessage `json:"mapping"`
+		}
+		dec := json.NewDecoder(bytes.NewReader(input))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&cfg); err != nil {
+			return id, fmt.Errorf("%w: create input: %v", dbstore.ErrInvalidInput, err)
+		}
+		var extra any
+		if err := dec.Decode(&extra); err != io.EOF {
+			return id, fmt.Errorf("%w: trailing create input", dbstore.ErrInvalidInput)
+		}
+		if len(cfg.Mapping) != 0 {
+			if id.Engine != blevedb.Engine {
+				return id, fmt.Errorf("%w: mapping applies only to bleve", dbstore.ErrInvalidInput)
+			}
+			m := bleve.NewIndexMapping()
+			if err := json.Unmarshal(cfg.Mapping, m); err != nil {
+				return id, fmt.Errorf("%w: mapping: %v", dbstore.ErrInvalidInput, err)
+			}
+			if err := m.Validate(); err != nil {
+				return id, fmt.Errorf("%w: mapping: %v", dbstore.ErrInvalidInput, err)
+			}
+			a = blevedb.Adapter{Mapping: m}
+		}
 	}
 	h, err := a.Create(ctx, id.Target, s.options(id, wait, false))
 	if err != nil {

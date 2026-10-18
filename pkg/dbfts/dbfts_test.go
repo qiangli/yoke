@@ -66,6 +66,7 @@ func TestBleveInternalStorage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FieldDict: %v", err)
 	}
+	defer dict.Close()
 	entry, err := dict.Next()
 	if err != nil {
 		t.Fatalf("dict.Next: %v", err)
@@ -79,6 +80,7 @@ func TestBleveInternalStorage(t *testing.T) {
 	if err != nil {
 		t.Logf("FieldDict(_id) err: %v", err)
 	} else {
+		defer dictID.Close()
 		for {
 			e, err := dictID.Next()
 			if err != nil || e == nil {
@@ -136,6 +138,7 @@ func TestBlevePersistentInternalStorage(t *testing.T) {
 	if err != nil {
 		t.Logf("FieldDict(_id) err: %v", err)
 	} else {
+		defer dictID.Close()
 		for {
 			e, err := dictID.Next()
 			if err != nil || e == nil {

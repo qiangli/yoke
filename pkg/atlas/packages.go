@@ -395,6 +395,7 @@ var packages = map[string]Package{
 	"dbkv":        libPkg("db", "KV category behind `db kv bucket|get|put|delete|scan|cas|batch` and the KV logical interchange behind `db export|import`, registered with dblifecycle."),
 	"dbsql":       libPkg("db", "SQL category behind `db sql query|exec|schema` and the SQL logical interchange behind `db export|import`, registered with dblifecycle."),
 	"dbdoc":       libPkg("db", "JSON document category behind `db doc get|find|put|patch|rm|batch|collection|index|export|import`, registered with dblifecycle."),
+	"dbfts":       libPkg("db", "Bleve full-text category with explicit mappings, source documents, lexical search and logical interchange behind db fts and db export|import."),
 	"reduce": {Role: RoleUnwired, Note: "command-output reduction primitive and content-addressed spill store. " +
 		"NewOutCmd is not mounted and no execution seam imports the package yet; the Sprint 123 chat and shell " +
 		"seam stories own that wiring. Reclassify when the first front door lands."},

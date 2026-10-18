@@ -84,7 +84,7 @@ func (s Service) RunCategory(ctx context.Context, t dbstore.Target, name string,
 		out, err := op.Run(ctx, h, input, access)
 		return id, out, err
 	}
-	if !yes {
+	if !yes && name != "fts.export" {
 		return id, Outcome{}, fmt.Errorf("%w: %s is destructive; pass --yes", dbstore.ErrConfirmationRequired, name)
 	}
 	probe := s.options(id, wait, false)

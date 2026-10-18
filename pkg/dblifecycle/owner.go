@@ -659,7 +659,7 @@ func (o *owner) execute(ctx context.Context, req Request) Response {
 	if isCategory {
 		var out Outcome
 		switch {
-		case access == AccessExclusive && !req.Yes:
+		case access == AccessExclusive && !req.Yes && req.Op != "fts.export":
 			err = fmt.Errorf("%w: %s is destructive; pass --yes", dbstore.ErrConfirmationRequired, req.Op)
 		case held != nil:
 			// The holder's current epoch was checked above; its exclusive
@@ -681,7 +681,7 @@ func (o *owner) execute(ctx context.Context, req Request) Response {
 		if held != nil {
 			return failResponse(res, fmt.Errorf("%w: target is already held", dbstore.ErrExists))
 		}
-		id, err = s.Create(ctx, req.Target, req.Wait)
+		id, err = s.CreateConfigured(ctx, req.Target, req.Input, req.Wait)
 	case "show":
 		if held != nil {
 			res.Result, err = showHandle(held.handle)
