@@ -762,6 +762,14 @@ func register(name string, access func(Input) dblifecycle.Access, run runFn) {
 			return access(in), nil
 		},
 		Spec: func(mode dbstore.Mode, a dblifecycle.Access) dblifecycle.Operation { return Spec(name, mode, a) },
+		// SpecInput is the shared input-aware declaration seam: CLI
+		// preview, CLI execution and the owner report all declare through
+		// CategoryOp.Declare. Remote ops name their explicit endpoint in
+		// the input and always carry net.egress (see Spec); local ops
+		// never do. A dry run declares only, so it performs zero HTTP.
+		SpecInput: func(raw json.RawMessage, mode dbstore.Mode, a dblifecycle.Access) dblifecycle.Operation {
+			return Spec(name, mode, a)
+		},
 		Run: func(ctx context.Context, h dbstore.Handle, raw json.RawMessage, a dblifecycle.Access) (dblifecycle.Outcome, error) {
 			in, err := DecodeInput(raw)
 			if err != nil {

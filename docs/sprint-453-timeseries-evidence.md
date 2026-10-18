@@ -1,11 +1,13 @@
 # Sprint 453 time-series evidence — story 01b029625a5e / #2267
 
 Worker: `muse-spark1.3` (registered first holder; author and committer).
-Base: `d9714fd5` (fetched `/tmp/s453-memory-publish` `origin/main`, FF-only).
-Phase 1 (constructor/schema seams): `pkg/dbts` only. No `cmds/db`, atlas,
-caps, or shared-file writes; those wait for the manager-coordinated phase-2
-mount. This is the one evidence record for the candidate. No story
-acceptance is claimed from development-host tests.
+Base: `0ccd94f8` (phase-2 integrated base, fetched `/tmp/s453-memory-publish`
+`s453-storage-batch`; own core `d87f7c00`/`f48702d3`/`b6de45a1`/`1e7cf5aa`
+rebased onto it, generated `KB.md`-only `71f1f7a6` omitted).
+Phase 2 (manager-authorized mount): `cmds/db` `db ts` verbs, the atlas
+census row, and the sqlite `timeseries` capability row, on top of the
+unchanged phase-1 core. This is the one evidence record for the candidate.
+No story acceptance is claimed from development-host tests.
 
 ## What was added
 
@@ -92,21 +94,52 @@ acceptance is claimed from development-host tests.
   was not chosen so in-range analytics keep working. Record files over
   64 MiB staged size are refused (`limit_exceeded`); larger datasets
   must arrive as more chunk files, which the exporter already writes.
-- Phase-2 mount (manager-coordinated, not in this candidate): `cmds/db`
-  `db ts` verbs, the atlas census row for `pkg/dbts` (its absence trips
-  `TestCensusCoversEveryPackage` until the row lands), the sqlite caps
-  `ts` category row, and whole-package/crossvet/remote gates. Remote
+- Phase-2 mount (now in this candidate, manager-authorized): `cmds/db/ts.go`
+  (`tsVerb`/`tsInput`/`tsFlags`, same shape as the vec/obj/graph mounts),
+  `db.go` usage + flag declarations + dispatch branch only, the atlas
+  `dbts` census row, and the sqlite `timeseries` capability row. vec/obj/
+  graph files and their `SpecInput`/`Declare` paths are untouched. Remote
   httptest fixtures here are not live evidence.
+- Timestamp bounds (`start`/`end`) and `series_list` are typed JSON values
+  and travel in `--input` only; every scalar has a flag. The shared
+  `--bucket` (kv) and `--endpoint` (vec) flags are reused with ts meaning,
+  the same way `--id` and `--input` already serve every category.
+- `pkg/dbts` gains the shared input-aware seam: every op registers
+  `SpecInput`, so CLI preview, CLI execution and the owner all declare
+  through `CategoryOp.Declare`. Remote ops always carry `net.egress`;
+  local ts ops never do. A dry run declares only (zero HTTP); a no-net
+  effect cap refuses remote ops before any request.
 
 ## Development-host execution record (Dragon, darwin/arm64)
 
 Focused short tests only. No full product build, no container, no ollama.
 
 ```
-CGO_ENABLED=0 GOMAXPROCS=4 GOFLAGS=-p=2 go test -short -count=1 ./pkg/dbts/   ok (9.6s)
+CGO_ENABLED=0 GOMAXPROCS=4 GOFLAGS=-p=2 go test -short -count=1 ./pkg/dbts/   ok (16.2s)
 CGO_ENABLED=0 go vet ./pkg/dbts/   clean
 gofmt -l pkg/dbts/   clean
 ```
+
+Phase-2 execution record (same host, same flags):
+
+```
+CGO_ENABLED=0 GOMAXPROCS=4 GOFLAGS=-p=2 go test -short -count=1 ./cmds/db -run TestTS   ok (4.0s)
+CGO_ENABLED=0 go vet ./cmds/db/ ./pkg/dbts/ ./pkg/atlas/ ./pkg/dbstore/sqlitedb/   clean
+gofmt -l cmds/db/ pkg/dbts/   clean
+```
+
+`TestTSVerbsPersistentCLI` (ingest incl. int64 extremes, conflict,
+exact tagged round trip asserted on raw stdout, bounded range, agg with
+declared approximation warning, foreign/duplicated/misplaced/unknown-verb
+refusals, export/import across targets, unconfirmed/confirmed retain),
+`TestTSRegisteredCLIAndMCP` (CLI/MCP envelope equality incl. the tagged
+extreme, schema carries `series`), and `TestTSRemoteNetEffect`
+(`net.egress` declared on dry-run/explain with zero endpoint calls, local
+ops declare no net, no-net cap refuses remote before any request, uncapped
+execution runs the bounded query and the Prometheus-text ingest) pass;
+`TestTSVerbsMemorySessionCLI` reports SKIP under `-short` (independent
+owner process; manager gate). Not run here (manager gates):
+whole-package suite, crossvet, independent-process tests, remote host.
 
 19 top-level tests pass (both modes where applicable): the earlier
 `TestTSTaggedIntExtremesRoundTrip` and four-direction interchange

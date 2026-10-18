@@ -38,7 +38,8 @@ var command = &tool.Tool{
 		"db fts search|get|put|delete|batch|check|mapping show|rebuild TARGET [--input FILE|-]" + "\n" +
 		"db vec put|get|rm|batch|search|export|import|collection add|rm|list TARGET [--collection C] [--id ID] [--vector JSON|--text T --endpoint URL [--api-key-env VAR]] [--metadata JSON] [--filter JSON] [--input FILE|-]" + "\n" +
 		"db obj bucket create|drop|list|get|put|delete|rm|stat|list|transfer|export|import TARGET [--bucket B] [--key K] [--value text:...|b64:...] [--content-type T] [--metadata JSON] [--input FILE|-]" + "\n" +
-		"db graph query|mutate|schema show|schema apply|node get|put|rm|edge get|put|rm|edges|export|import TARGET [--input FILE|-]",
+		"db graph query|mutate|schema show|schema apply|node get|put|rm|edge get|put|rm|edges|export|import TARGET [--input FILE|-]" + "\n" +
+		"db ts ingest|range|agg|retain|export|import|remote query|ingest TARGET [--series S] [--labels JSON] [--points JSON] [--bucket D] [--funcs F,...] [--retention D] [--expr E] [--step D] [--endpoint URL] [--input FILE|-]",
 }
 
 func init() { command.Run = run; tool.Register(command) }
@@ -55,6 +56,7 @@ type dbFlags struct {
 	contentType, remote, destination, checksum                                      *string
 	graphQuery, graphVariables, graphSet, graphDel, graphSchema                     *string
 	graphNode, graphEdge, graphFrom, graphType, graphTo, graphDirection             *string
+	tsSeries, tsLabels, tsPoints, tsFuncs, tsRetention, tsExpr, tsStep              *string
 	dimension                                                                       *int
 	includeVectors                                                                  *bool
 	deleteFlag                                                                      *bool
@@ -129,6 +131,13 @@ func declareFlags(op string) dbFlags {
 	f.graphType = fs.String("type", "", "db graph edge identity: edge type")
 	f.graphTo = fs.String("to", "", "db graph edge identity: destination node")
 	f.graphDirection = fs.String("direction", "", "db graph edges: in or out")
+	f.tsSeries = fs.String("series", "", "db ts: series name for ingest|range|agg|retain")
+	f.tsLabels = fs.String("labels", "", "db ts: label set as a JSON object of strings")
+	f.tsPoints = fs.String("points", "", "db ts ingest: samples as a JSON array of {ts, value} tagged values")
+	f.tsFuncs = fs.String("funcs", "", "db ts agg: comma-separated subset of count,min,max,sum,avg")
+	f.tsRetention = fs.String("retention", "", "db ts retain: keep duration like 30d, or off")
+	f.tsExpr = fs.String("expr", "", "db ts remote query: VictoriaMetrics expression")
+	f.tsStep = fs.String("step", "", "db ts remote query: query resolution like 60s, 15m")
 	f.ready = fs.String("ready", "", "private owner rendezvous")
 	_ = fs.MarkHidden("ready")
 	f.idleTTL = fs.Duration("idle-ttl", 0, "end an idle owner session after this duration")
@@ -269,7 +278,7 @@ func run(rc *tool.RunContext, args []string) int {
 		return 0
 	}
 	catOp, raw := "", json.RawMessage(nil)
-	if op == "doc" || op == "vec" || op == "obj" || op == "graph" {
+	if op == "doc" || op == "vec" || op == "obj" || op == "graph" || op == "ts" {
 		var err error
 		if op == "vec" {
 			if catOp, operands, err = vecVerb(operands); err == nil {
@@ -282,6 +291,10 @@ func run(rc *tool.RunContext, args []string) int {
 		} else if op == "graph" {
 			if catOp, operands, err = graphVerb(operands); err == nil {
 				raw, err = graphInput(rc, f)
+			}
+		} else if op == "ts" {
+			if catOp, operands, err = tsVerb(operands); err == nil {
+				raw, err = tsInput(rc, f)
 			}
 		} else if catOp, operands, err = docVerb(operands); err == nil {
 			raw, err = docInput(rc, f, catOp)
