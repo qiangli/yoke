@@ -50,7 +50,7 @@ type runPosition struct {
 // RunHistory consumes evidence handles from the existing owning-store resolver.
 // File rows are observations (mtime on initial queries, metadata differences on
 // resume), commits follow the run's first-parent lineage, and logs are complete
-// lines. No status or PID is interpreted as progress.
+// lines. Terminal lifecycle rows report persisted outcomes, never inferred progress.
 type RunHistory struct{ Resolver ref.RunSourceResolver }
 
 func (r RunHistory) TranslateTime(ctx context.Context, loc ref.Locator, cutoff time.Time) (string, error) {
@@ -122,7 +122,7 @@ func (r RunHistory) Delta(ctx context.Context, loc ref.Locator, token string) ([
 		}
 	}
 	resume := p.Head != ""
-	if resume && (p.Sources.Workspace != sources.Workspace || p.Sources.BaseCommit != sources.BaseCommit || p.Sources.LogPath != sources.LogPath || !p.Sources.StartedAt.Equal(sources.StartedAt)) {
+	if resume && (p.Sources.Workspace != sources.Workspace || p.Sources.BaseCommit != sources.BaseCommit || (p.Sources.LogPath != "" && p.Sources.LogPath != sources.LogPath) || !p.Sources.StartedAt.Equal(sources.StartedAt)) {
 		return fail(ErrRunExpired)
 	}
 	now := time.Now().UTC()
@@ -241,10 +241,10 @@ func (r RunHistory) Delta(ctx context.Context, loc ref.Locator, token string) ([
 		if err != nil {
 			return fail(err)
 		}
-		if resume && (identity != p.Identity || st.Size() < p.Offset) {
+		if resume && p.Identity != "" && (identity != p.Identity || st.Size() < p.Offset) {
 			return fail(ErrRunExpired)
 		}
-		if resume {
+		if resume && p.Identity != "" {
 			a, err := runAnchor(f, p.Offset)
 			if err != nil || a != p.Anchor {
 				return fail(ErrRunExpired)
@@ -301,6 +301,13 @@ func (r RunHistory) Delta(ctx context.Context, loc ref.Locator, token string) ([
 		if err != nil {
 			return fail(err)
 		}
+	}
+	// The owning store supplies the terminal receipt. Preserve it in the cursor
+	// even when filtered by time so continuation never replays an old outcome.
+	if outcome := sources.Lifecycle; outcome != nil && !outcome.FinishedAt.IsZero() &&
+		(!resume || !sameRunLifecycle(p.Sources.Lifecycle, outcome)) &&
+		(p.Cutoff.IsZero() || (!outcome.FinishedAt.Before(p.Cutoff) && !outcome.FinishedAt.After(now))) {
+		emit("lifecycle", "lifecycle", map[string]any{"state": outcome.State, "exit_code": outcome.ExitCode, "finished_at": outcome.FinishedAt, "evidence": "persisted-run"})
 	}
 	p.Version = 1
 	p.Sources = sources
@@ -377,4 +384,11 @@ func walkRunFiles(ctx context.Context, root string, visit fs.WalkDirFunc) error 
 		}
 	}
 	return walk(root, 0)
+}
+
+func sameRunLifecycle(a, b *ref.RunLifecycle) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.State == b.State && a.FinishedAt.Equal(b.FinishedAt) && reflect.DeepEqual(a.ExitCode, b.ExitCode)
 }

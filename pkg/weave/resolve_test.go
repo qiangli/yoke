@@ -207,7 +207,9 @@ func TestResolveRunEvidenceHandles(t *testing.T) {
 	t.Cleanup(func() { bus.RemoteSend = old })
 	root := filepath.Join(t.TempDir(), "evidence")
 	started := time.Now().UTC().Truncate(time.Second)
-	scratchQueue(t, home, "evidence-abc", root, &weaveItem{ID: 7, Workspace: root, BaseSHA: "base", LogPath: "log", StartedAt: started})
+	exit := 1
+	finished := started.Add(time.Second)
+	scratchQueue(t, home, "evidence-abc", root, &weaveItem{ID: 7, Workspace: root, BaseSHA: "base", LogPath: "log", StartedAt: started, State: "failed", ExitCode: &exit, FinishedAt: finished})
 	g := ref.NewRegistry()
 	RegisterRefs(g)
 	resolver, _ := g.Lookup(ref.Run)
@@ -218,5 +220,8 @@ func TestResolveRunEvidenceHandles(t *testing.T) {
 	sources, err := r.RunSources("evidence-7")
 	if err != nil || sources.Workspace != root || sources.BaseCommit != "base" || sources.LogPath != "log" || !sources.StartedAt.Equal(started) {
 		t.Fatalf("sources=%+v error=%v", sources, err)
+	}
+	if sources.Lifecycle == nil || sources.Lifecycle.State != "failed" || sources.Lifecycle.ExitCode == nil || *sources.Lifecycle.ExitCode != 1 || !sources.Lifecycle.FinishedAt.Equal(finished) {
+		t.Fatalf("missing persisted outcome: %+v", sources.Lifecycle)
 	}
 }

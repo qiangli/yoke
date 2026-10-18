@@ -612,6 +612,8 @@ type ExecutionResult struct {
 
 // DelegationResult contains the outcome of delegating a validated script to a worker seat.
 type DelegationResult struct {
+	verifiedScript []byte
+
 	Recording *ScriptRecording        `json:"recording,omitempty"`
 	Plan      *ScriptPlan             `json:"plan"`
 	Seat      string                  `json:"seat"`
@@ -726,7 +728,7 @@ func (p *ScriptPlan) Delegate(ctx context.Context, seat WorkerSeat) (*Delegation
 		}
 	}
 
-	body := p.Artifact.Script
+	body := append([]byte(nil), p.Artifact.Script...)
 	p.Seat = seat.Name
 	p.SeatHelp = seat.Help
 	p.SeatNoInput = seat.NoInput
@@ -790,6 +792,7 @@ func (p *ScriptPlan) Delegate(ctx context.Context, seat WorkerSeat) (*Delegation
 	if !success {
 		return res, errorf(ExitInvalid, "delegated script worker failed with exit code %d", execRes.ExitCode)
 	}
+	res.verifiedScript = append([]byte(nil), body...)
 	return res, nil
 }
 

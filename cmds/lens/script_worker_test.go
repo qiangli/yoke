@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -111,11 +112,20 @@ func TestScriptWorkerWeaveIntegration(t *testing.T) {
 	}
 	invoke(git, "init", "-b", "main")
 	invoke(git, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "fixture")
-	for i, script := range []string{"echo weave-local-success\n", "echo weave-local-failure\nfalse\n"} {
+	i := -1
+	var digests []string
+	runner := lens.WorkerRunnerFunc(func(ctx context.Context, artifact *lens.CompiledScriptArtifact) (*lens.ExecutionResult, error) {
+		i++
+		script := string(artifact.Script)
+		digests = append(digests, artifact.Digest)
 		task := workerTask(script)
 		body, _ := json.Marshal(task)
 		invoke(bashy, "weave", "add", "bounded script", "--body", string(body))
-		id := []string{"1", "2"}[i]
+		id := strconv.Itoa(i + 1)
+		expectedState, expectedExit := "no-op", 0
+		if i == 1 || i == 2 {
+			expectedState, expectedExit = "failed", 1
+		}
 		cursor := filepath.Join(root, "cursor-"+id)
 		// weave start may itself report a nonzero code for the failed child;
 		// the durable readback below, not its shell status, is the verdict.
@@ -134,6 +144,32 @@ func TestScriptWorkerWeaveIntegration(t *testing.T) {
 		marker := strings.TrimPrefix(strings.Split(script, "\n")[0], "echo ")
 		if !bytes.Contains(delta, []byte(`"evidence":"persisted-log"`)) || !bytes.Contains(delta, []byte(marker)) {
 			t.Fatalf("captured output missing from run delta: %s", delta)
+		}
+		var lifecycleCount int
+		for _, line := range bytes.Split(delta, []byte("\n")) {
+			var row struct {
+				Type  string `json:"type"`
+				Attrs struct {
+					State      string    `json:"state"`
+					ExitCode   *int      `json:"exit_code"`
+					FinishedAt time.Time `json:"finished_at"`
+				} `json:"attrs"`
+			}
+			if len(line) == 0 {
+				continue
+			}
+			if err := json.Unmarshal(line, &row); err != nil {
+				t.Fatal(err)
+			}
+			if row.Type == "lifecycle" {
+				lifecycleCount++
+				if row.Attrs.State != expectedState || row.Attrs.ExitCode == nil || *row.Attrs.ExitCode != expectedExit || row.Attrs.FinishedAt.IsZero() {
+					t.Fatalf("bad lifecycle: %s", line)
+				}
+			}
+		}
+		if lifecycleCount != 1 {
+			t.Fatalf("want one lifecycle row: %s", delta)
 		}
 		if again := invoke(yoke, "lens", "--since", "@"+cursor, "--cursor-out", cursor, "-t", "jsonl", "run:repo-"+id); len(again) != 0 {
 			t.Fatalf("unchanged run replayed evidence: %s", again)
@@ -165,8 +201,7 @@ func TestScriptWorkerWeaveIntegration(t *testing.T) {
 			for _, item := range q.Items {
 				if item.ID == i+1 {
 					found = true
-					expected := []string{"no-op", "failed"}[i]
-					if item.State != expected || item.ExitCode == nil || *item.ExitCode != i || item.FinishedAt == "" || item.Body != string(body) {
+					if item.State != expectedState || item.ExitCode == nil || *item.ExitCode != expectedExit || item.FinishedAt == "" || item.Body != string(body) {
 						t.Fatalf("incorrect durable outcome: %+v", item)
 					}
 					log, err := os.ReadFile(item.LogPath)
@@ -183,5 +218,29 @@ func TestScriptWorkerWeaveIntegration(t *testing.T) {
 		if !found {
 			t.Fatal("no durable run found")
 		}
+		return &lens.ExecutionResult{ExitCode: expectedExit}, nil
+	})
+	skill := func(s string) []byte { return []byte("```sh\n" + s + "\n```\n") }
+	attempts, err := lens.ExecuteScriptSteps(t.Context(), []lens.ScriptStep{
+		{Name: "success", Skill: skill("echo weave-local-success")},
+		{Name: "repair", Skill: skill("echo weave-local-failure\nfalse"), Retries: 1, ReplacementSkill: skill("echo weave-local-recompiled")},
+	}, lens.PipelineOptions{StoreDir: filepath.Join(root, "artifacts")}, lens.WorkerSeat{
+		Name: "native-weave", Help: "script", NoInput: true, AllowedCaps: []string{"read-only"}, AllowedEffects: []string{"pure"}, Runner: runner,
+	})
+	if err != nil || len(attempts) != 4 {
+		t.Fatalf("native recovery: %d attempts, %v", len(attempts), err)
+	}
+	if digests[1] != digests[2] || digests[2] == digests[3] || !attempts[3].Recompiled {
+		t.Fatal("native retry/recompile identity")
+	}
+	promoted := filepath.Join(root, "verified-dag.md")
+	if _, err := attempts[1].Result.PublishDAG(promoted, "verified"); err == nil {
+		t.Fatal("native failure promoted")
+	}
+	if _, err := attempts[3].Result.PublishDAG(promoted, "verified"); err != nil {
+		t.Fatal(err)
+	}
+	if out := invoke(bashy, "dag", promoted, "verified"); !bytes.Contains(out, []byte("weave-local-recompiled")) {
+		t.Fatalf("promoted DAG did not execute: %s", out)
 	}
 }

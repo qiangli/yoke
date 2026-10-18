@@ -505,6 +505,14 @@ type RunSources struct {
 	BaseCommit string
 	LogPath    string
 	StartedAt  time.Time
+	Lifecycle  *RunLifecycle `json:",omitempty"`
+}
+
+// RunLifecycle is a persisted outcome, never inferred from process liveness.
+type RunLifecycle struct {
+	State      string    `json:"state"`
+	ExitCode   *int      `json:"exit_code"`
+	FinishedAt time.Time `json:"finished_at"`
 }
 
 // RunSourceResolver optionally extends Resolver with the run's evidence handles.

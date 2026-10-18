@@ -121,7 +121,7 @@ func resolveRunSources(id string) (ref.Node, ref.RunSources, error) {
 		node.Where = hits[0].repo
 		node.Open = fmt.Sprintf("bashy weave status %d", hits[0].item.ID)
 		it := hits[0].item
-		return node, ref.RunSources{Workspace: it.Workspace, BaseCommit: it.BaseSHA, LogPath: it.LogPath, StartedAt: it.StartedAt}, nil
+		return node, ref.RunSources{Workspace: it.Workspace, BaseCommit: it.BaseSHA, LogPath: it.LogPath, StartedAt: it.StartedAt, Lifecycle: &ref.RunLifecycle{State: string(it.State), ExitCode: it.ExitCode, FinishedAt: it.FinishedAt}}, nil
 	default:
 		paths := make([]string, 0, len(hits))
 		for _, h := range hits {

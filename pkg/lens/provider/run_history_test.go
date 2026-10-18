@@ -215,3 +215,35 @@ func TestRunHistoryScanLimits(t *testing.T) {
 		}
 	})
 }
+
+func TestRunHistoryTerminalContinuation(t *testing.T) {
+	for _, state := range []string{"no-op", "failed", "killed"} {
+		t.Run(state, func(t *testing.T) {
+			r, _, _ := historyFixture(t)
+			resolver := r.Resolver.(*historyResolver)
+			// A launched run may acquire its log after the first cursor.
+			log := resolver.sources.LogPath
+			resolver.sources.LogPath = ""
+			loc := ref.Locator{Scheme: "run", Target: "repo-1"}
+			_, cursor, _, err := r.Delta(t.Context(), loc, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			exit := 1
+			resolver.sources.LogPath = log
+			resolver.sources.Lifecycle = &ref.RunLifecycle{State: state, ExitCode: &exit, FinishedAt: time.Now().Add(-time.Second)}
+			data, next, _, err := r.Delta(t.Context(), loc, cursor)
+			if err != nil || !strings.Contains(string(data), `"type":"lifecycle"`) || !strings.Contains(string(data), `"state":"`+state+`"`) || !strings.Contains(string(data), `"exit_code":1`) {
+				t.Fatalf("terminal delta: %s %v", data, err)
+			}
+			data, _, _, err = r.Delta(t.Context(), loc, next)
+			if err != nil || len(data) != 0 {
+				t.Fatalf("terminal replay: %s %v", data, err)
+			}
+			resolver.sources.StartedAt = time.Now()
+			if _, _, _, err := r.Delta(t.Context(), loc, next); err == nil {
+				t.Fatal("new attempt reused old cursor")
+			}
+		})
+	}
+}
