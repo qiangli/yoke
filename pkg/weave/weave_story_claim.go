@@ -206,7 +206,7 @@ func runSprintStoryClaim(cmd *cobra.Command, id int64, ref, as, repo string, for
 		if todopkg.IsClosed(it.Status) {
 			return "", fmt.Errorf("story %s is already closed", it.ID)
 		}
-		if held := strings.TrimSpace(it.Assignee); held != "" && !strings.EqualFold(held, who) && !force {
+		if held := strings.TrimSpace(it.Assignee); held != "" && !strings.EqualFold(held, who) && !storyHolderCloneOf(held, who) && !force {
 			return "", fmt.Errorf("story %s is held by %s — coordinate with them (`bashy mb send %s ...`), or --force to take it",
 				it.ID, held, held)
 		}
@@ -545,4 +545,11 @@ func unclaimedSubmitHint(id int64, storyID, who string) string {
 			"(NAME from `bashy agent list`) before submission", storyID, id, storyID)
 	}
 	return fmt.Sprintf("story %s is unclaimed — run `bashy sprint claim %d %s --owner %s` before submission", storyID, id, storyID, who)
+}
+
+// storyHolderCloneOf reports whether claimant is a catalog-verified ephemeral
+// clone of holder. The catalog record is the evidence; the name is never parsed.
+func storyHolderCloneOf(holder, claimant string) bool {
+	a, ok := fleetCatalog().Agent(claimant)
+	return ok && a.Ephemeral && a.ClonedFrom != "" && strings.EqualFold(a.ClonedFrom, holder)
 }
