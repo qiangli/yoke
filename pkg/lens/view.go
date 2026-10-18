@@ -33,7 +33,7 @@ func Walk(ctx context.Context, p provider.Provider, loc ref.Locator, depth int) 
 
 func walk(ctx context.Context, p provider.Provider, loc ref.Locator, n provider.Node, limit, level int) (TreeEntry, error) {
 	e := TreeEntry{Node: n}
-	if !isContainer(n.Kind) || limit >= 0 && level >= limit {
+	if !isContainer(n.Kind) && n.Children == nil || limit >= 0 && level >= limit {
 		return e, nil
 	}
 	children, err := p.List(ctx, loc)
@@ -124,7 +124,7 @@ func collectEdges(ctx context.Context, p provider.Provider, loc ref.Locator, dep
 	var edges []provider.Edge
 	var visit func(TreeEntry, int) error
 	visit = func(e TreeEntry, level int) error {
-		if isContainer(e.Node.Kind) && depth >= 0 && level >= depth {
+		if (isContainer(e.Node.Kind) || e.Node.Children != nil) && depth >= 0 && level >= depth {
 			return nil
 		}
 		l, err := ref.ParseLocator(e.Node.Ref)
