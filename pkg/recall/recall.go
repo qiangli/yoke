@@ -32,7 +32,6 @@
 package recall
 
 import (
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -89,6 +88,19 @@ type Query struct {
 	// Without it, checkpoint reconstructions are never presented as records.
 	Episode string
 
+	// Memory is the --memory convenience filter (design §3). Input only: it
+	// expands to a facet combination via ApplyMemory and is never stored.
+	Memory string `json:"-"`
+	// Types restricts kb page records by OKF type. Set from the Memory
+	// expansion; empty means no constraint. Input only, never stored.
+	Types []string `json:"-"`
+
+	// memoryRingsStrict and memoryFormsStrict mark facets ApplyMemory already
+	// resolved, so an empty selection means "the intersection was empty"
+	// rather than "unrestricted". A facet the memory row does not constrain
+	// keeps its historical empty-means-all meaning.
+	memoryRingsStrict, memoryFormsStrict bool
+
 	// Now is injectable so tests are not clock-dependent. Zero = time.Now().
 	Now time.Time
 }
@@ -105,18 +117,6 @@ func (q Query) k() int {
 		return 3
 	}
 	return q.K
-}
-
-func (q Query) wants(ring string) bool {
-	if len(q.Rings) == 0 {
-		return true
-	}
-	for _, r := range q.Rings {
-		if r == ring {
-			return true
-		}
-	}
-	return false
 }
 
 // SourceRef is an L0 pointer: where the record can be re-opened. A hit with no
@@ -148,6 +148,10 @@ type Hit struct {
 
 	Score float64  `json:"score"`
 	Why   []string `json:"why,omitempty"`
+
+	// Memory names the --memory type that produced the hit (design §5.2).
+	// Empty when the query carried no --memory filter.
+	Memory string `json:"memory,omitempty"`
 
 	// Compose is the command that renders a capability, when the hit is one.
 	Compose string `json:"compose,omitempty"`
@@ -235,7 +239,7 @@ func (r CapabilityRing) Recall(q Query) ([]Hit, error) {
 			return nil, err
 		}
 	}
-	if len(q.Forms) > 0 && !slices.Contains(q.Forms, kb.FormPage) {
+	if !q.allowsForm(kb.FormPage) {
 		return nil, nil
 	}
 	if r.Folds == nil {
@@ -303,14 +307,26 @@ func Recall(q Query, readers ...Reader) Result {
 	res := Result{RecallVersion: Version, Query: q.Text}
 	res.Budget.Tokens = q.Budget
 
+	rq, err := ApplyMemory(q)
+	if err != nil {
+		res.Errors = append(res.Errors, RingError{Ring: "memory", Err: err.Error()})
+		return res
+	}
+	q = rq
+
 	for _, rd := range readers {
-		if !q.wants(rd.Ring()) {
+		if !q.allowsRing(rd.Ring()) {
 			continue
 		}
 		hits, err := rd.Recall(q)
 		if err != nil {
 			res.Errors = append(res.Errors, RingError{Ring: rd.Ring(), Err: err.Error()})
 			continue
+		}
+		if q.Memory != "" {
+			for i := range hits {
+				hits[i].Memory = q.Memory
+			}
 		}
 		// Within a ring: rank by score, cap at K. Ties break on ID so the
 		// same store returns the same order twice — a caller building on an

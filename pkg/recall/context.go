@@ -18,6 +18,7 @@ const ContextVersion = 1
 type ContextResult struct {
 	ContextVersion int            `json:"context_version"`
 	For            string         `json:"for"`
+	Memory         string         `json:"memory,omitempty"`
 	Budget         ContextBudget  `json:"budget"`
 	Abstained      bool           `json:"abstained"`
 	Rings          []ContextRing  `json:"rings"`
@@ -36,15 +37,29 @@ type ContextRing struct {
 }
 
 type ContextBlock struct {
-	Ring       string      `json:"ring"`
-	Form       string      `json:"form"`
-	Ref        string      `json:"ref"`
-	Tokens     int         `json:"tokens"`
-	Resolution string      `json:"resolution,omitempty"`
-	Status     string      `json:"status,omitempty"`
-	Text       string      `json:"text"`
-	Why        []string    `json:"why,omitempty"`
-	Source     []SourceRef `json:"source,omitempty"`
+	Ring       string `json:"ring"`
+	Form       string `json:"form"`
+	Ref        string `json:"ref"`
+	Memory     string `json:"memory,omitempty"`
+	Tokens     int    `json:"tokens"`
+	Resolution string `json:"resolution,omitempty"`
+	Status     string `json:"status,omitempty"`
+	// ValidTo is the RFC3339 end of validity, written by M6 supersede and
+	// read through here: M1 emits it only when the source record carries one.
+	ValidTo string `json:"valid_to,omitempty"`
+	// ObservedAt, Freshness and Snapshot are the sense-observation surface
+	// (design §5.1): source ref, observed_at, freshness/status and snapshot
+	// digest. ObservedAt is copied from the hit whenever the source carries
+	// one; freshness and snapshot stay empty until the sense schema lands.
+	ObservedAt string `json:"observed_at,omitempty"`
+	Freshness  string `json:"freshness,omitempty"`
+	Snapshot   string `json:"snapshot,omitempty"`
+	// Path is reserved for M4 --hops provenance (seed → relation → node).
+	// M1 reserves the name and never emits it.
+	Path   []string    `json:"path,omitempty"`
+	Text   string      `json:"text"`
+	Why    []string    `json:"why,omitempty"`
+	Source []SourceRef `json:"source,omitempty"`
 }
 
 // Context ranks within each reader, preserves ring boundaries, then spends one
@@ -52,9 +67,22 @@ type ContextBlock struct {
 // hit that fits; only then does it upgrade each block to the largest resolution
 // that fits. A high-ranked full page therefore cannot starve every later ring.
 func Context(q Query, readers ...Reader) ContextResult {
+	rq, merr := ApplyMemory(q)
+	if merr != nil {
+		return ContextResult{
+			ContextVersion: ContextVersion,
+			For:            q.Text,
+			Memory:         normalizeMemory(q.Memory),
+			Budget:         ContextBudget{Limit: q.Budget},
+			Blocks:         []ContextBlock{},
+			Rings:          []ContextRing{{Name: "memory", OK: false, Error: merr.Error()}},
+		}
+	}
+	q = rq
 	res := ContextResult{
 		ContextVersion: ContextVersion,
 		For:            q.Text,
+		Memory:         q.Memory,
 		Budget:         ContextBudget{Limit: q.Budget},
 		Blocks:         []ContextBlock{},
 	}
@@ -69,7 +97,7 @@ func Context(q Query, readers ...Reader) ContextResult {
 
 	byRing := map[string][]Hit{}
 	for _, rd := range ordered {
-		if !readerIntersectsForms(rd, q.Forms) {
+		if !readerIntersectsForms(rd, q) {
 			continue
 		}
 		ringHits, err := rd.Recall(q)
@@ -85,12 +113,13 @@ func Context(q Query, readers ...Reader) ContextResult {
 			if h.Form == "" && len(rd.Forms()) == 1 {
 				h.Form = rd.Forms()[0]
 			}
-			if len(q.Forms) > 0 && !slices.Contains(q.Forms, h.Form) {
+			if !q.allowsForm(h.Form) {
 				continue
 			}
 			if h.Ring == "" {
 				h.Ring = rd.Ring()
 			}
+			h.Memory = q.Memory
 			if h.Ring == RingAgent && h.Checkpoint && (q.Episode == "" || q.Episode != h.Episode) {
 				continue
 			}
@@ -122,7 +151,10 @@ func Context(q Query, readers ...Reader) ContextResult {
 
 func orderedReaders(q Query, readers []Reader) []Reader {
 	wanted := q.Rings
-	if len(wanted) == 0 {
+	// After --memory resolution an empty Rings is an empty intersection
+	// (match nothing), not the historical every-ring default — unless the
+	// memory row left rings unconstrained (code).
+	if len(wanted) == 0 && !q.memoryRingsStrict {
 		wanted = Rings()
 	}
 	order := map[string]int{}
@@ -146,11 +178,11 @@ func orderedReaders(q Query, readers []Reader) []Reader {
 	return out
 }
 
-func readerIntersectsForms(rd Reader, forms []string) bool {
-	if len(forms) == 0 {
-		return true
+func readerIntersectsForms(rd Reader, q Query) bool {
+	if len(q.Forms) == 0 {
+		return !q.memoryFormsStrict
 	}
-	for _, form := range forms {
+	for _, form := range q.Forms {
 		if slices.Contains(rd.Forms(), form) {
 			return true
 		}
@@ -204,10 +236,14 @@ func blockAt(h Hit, resolution string) ContextBlock {
 		text += "\n" + string(body)
 	}
 	b := ContextBlock{
-		Ring: h.Ring, Form: h.Form, Ref: h.ID,
+		Ring: h.Ring, Form: h.Form, Ref: h.ID, Memory: h.Memory,
 		Resolution: resolution, Status: h.Status, Text: text,
-		Why: append([]string(nil), h.Why...), Source: append([]SourceRef(nil), h.Source...),
+		ObservedAt: h.ObservedAt,
+		Why:        append([]string(nil), h.Why...), Source: append([]SourceRef(nil), h.Source...),
 	}
+	// ValidTo, Freshness, Snapshot and Path stay empty in M1: no source
+	// record carries them yet (M6 owns valid_to; the sense schema owns
+	// freshness/snapshot; M4 owns path). Declared here, never emitted.
 	b.Tokens = estimateContextTokens(b)
 	return b
 }

@@ -101,12 +101,18 @@ func recallPages(ring string, store *kb.Store, path string, q Query) ([]Hit, err
 	if err != nil {
 		return nil, fmt.Errorf("kb: open %s: %w", path, err)
 	}
-	// Filter before ranking: forms are independent corpora, just as scoped-out
-	// pages are. Letting excluded forms affect IDF would change a requested
-	// form's order based on records that cannot be returned.
-	if len(q.Forms) > 0 {
+	// Filter before ranking: forms (and --memory types) are independent
+	// corpora, just as scoped-out pages are. Letting excluded records affect
+	// IDF would change a requested form's order based on records that cannot
+	// be returned. The type filter applies to kb pages only: relation records
+	// and capability folds carry no OKF page type and are gated by the
+	// ring/form selection instead.
+	pages = slices.DeleteFunc(pages, func(p *kb.Page) bool {
+		return !q.allowsForm(p.EffForm())
+	})
+	if len(q.Types) > 0 {
 		pages = slices.DeleteFunc(pages, func(p *kb.Page) bool {
-			return !slices.Contains(q.Forms, p.EffForm())
+			return !slices.Contains(q.Types, p.Type)
 		})
 	}
 	hits := kb.Search(pages, kb.Query{

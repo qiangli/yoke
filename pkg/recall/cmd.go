@@ -37,6 +37,7 @@ func NewRecallCmd() *cobra.Command {
 		budget     int
 		resolution string
 		rings      []string
+		memory     string
 		since      time.Duration
 		minCover   float64
 		explain    bool
@@ -69,13 +70,23 @@ Three things about its behaviour are contract, not implementation:
   flag, not with --all. A fold derived from facts is the supported path.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			q := Query{
+			// With --memory the flag only narrows the expansion when it was
+			// explicitly passed; otherwise the memory row supplies the rings.
+			var selected []string
+			if cmd.Flags().Changed("ring") {
+				selected = cleanList(rings)
+			}
+			q, err := ApplyMemory(Query{
 				Text: strings.Join(args, " "),
-				K:    k, Budget: budget, Rings: rings,
+				K:    k, Budget: budget, Rings: selected,
 				Since: since, MinCoverage: minCover,
 				Resolution: parseResolution(resolution),
+				Memory:     strings.TrimSpace(memory),
 				OS:         hostOS(),
 				Repo:       repoName(),
+			})
+			if err != nil {
+				return err
 			}
 			res := Recall(q, openRings(storeDir)...)
 
@@ -107,6 +118,7 @@ Three things about its behaviour are contract, not implementation:
 	f.IntVar(&budget, "budget", 2000, "hard ceiling on rendered output, in tokens (0 = none)")
 	f.StringVar(&resolution, "resolution", "line", "how much of each record to render: cue|line|full")
 	f.StringSliceVar(&rings, "ring", nil, "restrict to these rings (repeatable); default all")
+	f.StringVar(&memory, "memory", "", "memory type: working|episodic|semantic|procedural|reflective|profile|code")
 	f.DurationVar(&since, "since", 0, "ignore records older than this")
 	f.Float64Var(&minCover, "min-coverage", 0, "abstain unless a hit covers this fraction of the query")
 	f.BoolVar(&explain, "explain", false, "print the ranking inputs, not just why")
@@ -124,6 +136,7 @@ func NewContextCmd(extra ...Reader) *cobra.Command {
 		episode  string
 		rings    []string
 		forms    []string
+		memory   string
 		budget   int
 		minCover float64
 		k        int
@@ -140,13 +153,42 @@ func NewContextCmd(extra ...Reader) *cobra.Command {
 				return fmt.Errorf("kb context: --for is required")
 			}
 			readers := append(openContextRings(), extra...)
-			if err := validateContextSelection(rings, forms, readers); err != nil {
+			// With --memory the flags only narrow the expansion when
+			// explicitly passed; otherwise the memory row supplies them.
+			// An empty intersection is the normal empty answer, never an
+			// error, so the resolved selection validates as-is.
+			var selectedRings, selectedForms []string
+			if strings.TrimSpace(memory) != "" {
+				if cmd.Flags().Changed("rings") {
+					selectedRings = cleanList(rings)
+				}
+				if cmd.Flags().Changed("forms") {
+					selectedForms = cleanList(forms)
+				}
+			} else {
+				selectedRings, selectedForms = cleanList(rings), cleanList(forms)
+			}
+			q, err := ApplyMemory(Query{
+				Text: strings.TrimSpace(forText), Files: cleanList(files), Episode: strings.TrimSpace(episode),
+				Rings: selectedRings, Forms: selectedForms, Budget: budget, MinCoverage: minCover, K: k,
+				Memory: strings.TrimSpace(memory),
+				OS:     hostOS(), Repo: repoName(),
+			})
+			if err != nil {
 				return err
 			}
-			q := Query{
-				Text: strings.TrimSpace(forText), Files: cleanList(files), Episode: strings.TrimSpace(episode),
-				Rings: cleanList(rings), Forms: cleanList(forms), Budget: budget, MinCoverage: minCover, K: k,
-				OS: hostOS(), Repo: repoName(),
+			// A row that constrains no rings (code) leaves Rings empty to
+			// mean every reader; validate its forms against all of them.
+			validationRings := q.Rings
+			if len(validationRings) == 0 && strings.TrimSpace(memory) != "" && !cmd.Flags().Changed("rings") {
+				for _, rd := range readers {
+					if !slices.Contains(validationRings, rd.Ring()) {
+						validationRings = append(validationRings, rd.Ring())
+					}
+				}
+			}
+			if err := validateContextSelection(validationRings, q.Forms, readers); err != nil {
+				return err
 			}
 			res := Context(q, readers...)
 			if asJSON {
@@ -172,6 +214,7 @@ func NewContextCmd(extra ...Reader) *cobra.Command {
 	f.StringVar(&episode, "episode", "", "include checkpoint-tagged agent notes from this episode")
 	f.StringSliceVar(&rings, "rings", []string{RingRepo, RingHost}, "rings to read: agent,repo,host,capability")
 	f.StringSliceVar(&forms, "forms", []string{kb.FormNote, kb.FormPage}, "forms to read: note,page,relation,code")
+	f.StringVar(&memory, "memory", "", "memory type: working|episodic|semantic|procedural|reflective|profile|code (sets default rings/forms)")
 	f.IntVar(&budget, "budget", PreambleBudget, "hard ceiling on assembled output, in estimated tokens")
 	f.Float64Var(&minCover, "min-coverage", 0, "abstain unless a hit covers this fraction of the query")
 	f.IntVar(&k, "k", 3, "max hits per ring")
