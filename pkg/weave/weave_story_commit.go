@@ -219,13 +219,29 @@ func parseCommitTrace(message string) (commitTrace, error) {
 	return trace, nil
 }
 
+// todoBlobSprintLinked reports whether a docs/todo blob carries any sprint
+// linkage: the numeric frontmatter/body link, or the sprint_id/sprint_title
+// metadata that travels with a claimed story. Unparseable blobs report no
+// linkage; callers judge validity separately.
+func todoBlobSprintLinked(blob []byte) bool {
+	it, err := issuepkg.Parse(blob)
+	if err != nil {
+		return false
+	}
+	return it.Sprint != 0 || it.SprintID != "" || it.SprintTitle != ""
+}
+
 // acceptStandaloneTodoFiling reports whether the pending commit is a valid
 // standalone todo-only filing: every staged file is a sprint-unlinked
 // docs/todo/*.md item (filed with `todo add --no-sprint`). Such a commit
 // carries no delivery provenance, so it validates without Sprint/Story/Story-ID
 // trailers. Anything else — code changes, mixed changes, sprint-linked stories
-// (frontmatter or a body `sprint #N` marker), non-markdown files, an empty
-// index, or unreadable state — is not exempt and keeps the strict contract.
+// (frontmatter, a body `sprint #N` marker, or sprint_id/sprint_title
+// metadata), malformed filings without a valid id/title, non-markdown files,
+// an empty index, or unreadable state — is not exempt and keeps the strict
+// contract. The committed (HEAD) blob is checked alongside the staged one so
+// stripping sprint metadata off an existing sprint-linked story cannot
+// silently convert the commit into an exempt filing.
 func acceptStandaloneTodoFiling() error {
 	root, err := gitOutput(".", "rev-parse", "--show-toplevel")
 	if err != nil {
@@ -262,8 +278,28 @@ func acceptStandaloneTodoFiling() error {
 		if err != nil {
 			return fmt.Errorf("%s: %w", name, err)
 		}
+		// issue.Parse accepts empty frontmatter, so demand a real filing:
+		// a 12-hex id and a title. Anything less is not a todo the hook
+		// can exempt.
+		if !commitStoryID.MatchString(it.ID) {
+			return fmt.Errorf("%s has no valid todo id", name)
+		}
+		if strings.TrimSpace(it.Title) == "" {
+			return fmt.Errorf("%s has no todo title", name)
+		}
 		if it.Sprint != 0 {
 			return fmt.Errorf("%s is linked to sprint #%d", name, it.Sprint)
+		}
+		if it.SprintID != "" || it.SprintTitle != "" {
+			return fmt.Errorf("%s carries sprint metadata", name)
+		}
+		// Judge the version the commit removes alongside the staged one:
+		// deleting sprint metadata off a committed sprint-linked story
+		// must not convert the commit into an exempt filing.
+		if prior, err := gitOutput(root, "show", "HEAD:"+name); err == nil {
+			if todoBlobSprintLinked([]byte(prior)) {
+				return fmt.Errorf("%s was linked to a sprint before this commit", name)
+			}
 		}
 	}
 	return nil

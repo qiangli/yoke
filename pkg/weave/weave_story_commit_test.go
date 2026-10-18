@@ -667,6 +667,161 @@ see sprint #467 for context
 	}
 }
 
+// Sprint 467 story #2375 (manager review): issue.Parse accepts empty
+// frontmatter, so the standalone exemption must demand a valid filing — a
+// 12-hex id and a title — and must treat sprint_id/sprint_title metadata as
+// a sprint link even when the numeric sprint is absent. Editing a committed
+// sprint-linked story to strip its sprint metadata must not convert the
+// commit into an exempt filing, so the prior (HEAD) blob is checked too.
+func TestSprintCommitMsgStandaloneTodoFilingBoundaries(t *testing.T) {
+	standalone := `---
+id: abcdef123456
+seq: 1
+title: Standalone task
+status: todo
+---
+
+filed without a sprint
+`
+	malformed := `---
+
+---
+
+just prose, no fields at all
+`
+	noTitle := `---
+id: abcdef123456
+seq: 1
+status: todo
+---
+
+no title field
+`
+	badID := `---
+id: not-an-id
+seq: 1
+title: Bad id task
+status: todo
+---
+
+id is not 12-hex
+`
+	sprintIDOnly := `---
+id: abcdef123456
+seq: 1
+title: Sprint uuid task
+status: todo
+sprint_id: f3a4f03d-9571-5bb8-967a-a36aad5520fb
+---
+
+numeric sprint stripped, uuid kept
+`
+	sprintTitleOnly := `---
+id: abcdef123456
+seq: 1
+title: Sprint title task
+status: todo
+sprint_title: Bashy agent harness and fleet tooling fixes
+---
+
+numeric sprint stripped, title kept
+`
+	sprintLinked := `---
+id: 9c92c36b506c
+seq: 2375
+title: Sprint story
+status: todo
+sprint: 467
+---
+
+sprint work
+`
+	stripped := `---
+id: 9c92c36b506c
+seq: 2375
+title: Sprint story
+status: todo
+---
+
+sprint metadata deleted from a linked story
+`
+	tests := []struct {
+		name      string
+		committed map[string]string
+		staged    map[string]string
+		wantErr   string
+	}{
+		{"malformed todo still refused", nil, map[string]string{"docs/todo/abcdef123456-malformed.md": malformed}, "commit provenance"},
+		{"missing title still refused", nil, map[string]string{"docs/todo/abcdef123456-no-title.md": noTitle}, "commit provenance"},
+		{"bad id still refused", nil, map[string]string{"docs/todo/bad-id.md": badID}, "commit provenance"},
+		{"sprint_id without sprint still refused", nil, map[string]string{"docs/todo/abcdef123456-uuid.md": sprintIDOnly}, "commit provenance"},
+		{"sprint_title without sprint still refused", nil, map[string]string{"docs/todo/abcdef123456-title.md": sprintTitleOnly}, "commit provenance"},
+		{"stripped sprint metadata still refused", map[string]string{"docs/todo/9c92c36b506c-sprint-story.md": sprintLinked}, map[string]string{"docs/todo/9c92c36b506c-sprint-story.md": stripped}, "commit provenance"},
+		{"standalone edit still accepted", map[string]string{"docs/todo/abcdef123456-standalone-task.md": standalone}, map[string]string{"docs/todo/abcdef123456-standalone-task.md": standalone + "\nmore notes\n"}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := t.TempDir()
+			git := func(args ...string) {
+				t.Helper()
+				c := exec.Command("git", append([]string{"-C", repo}, args...)...)
+				if raw, err := c.CombinedOutput(); err != nil {
+					t.Fatalf("git %v: %v\n%s", args, err, raw)
+				}
+			}
+			git("init", "-q")
+			for name, body := range tt.committed {
+				full := filepath.Join(repo, filepath.FromSlash(name))
+				if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if len(tt.committed) > 0 {
+				git("add", "-A")
+				git("-c", "user.email=test@example.test", "-c", "user.name=test", "commit", "-qm", "base")
+			}
+			for name, body := range tt.staged {
+				full := filepath.Join(repo, filepath.FromSlash(name))
+				if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			git("add", "-A")
+			wd, _ := os.Getwd()
+			if err := os.Chdir(repo); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chdir(wd) })
+
+			msg := filepath.Join(t.TempDir(), "COMMIT_EDITMSG")
+			if err := os.WriteFile(msg, []byte("todo: file a standalone task\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cmd := NewSprintCmd()
+			var out bytes.Buffer
+			cmd.SetOut(&out)
+			cmd.SetErr(&out)
+			cmd.SetArgs([]string{"commit-msg", msg})
+			err := cmd.Execute()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("standalone todo-only filing must validate: %v\n%s", err, out.String())
+				}
+				return
+			}
+			if err == nil || !strings.Contains(out.String(), tt.wantErr) {
+				t.Fatalf("err = %v, want output containing %q:\n%s", err, tt.wantErr, out.String())
+			}
+		})
+	}
+}
+
 func TestParseCommitAgentTrailer(t *testing.T) {
 	base := "deliver\n\nSprint: #87\nStory: #110\nStory-ID: d1e86f29d7a7\n"
 	for _, agent := range []string{"agent-a", "tool-a:model-a", ""} {
