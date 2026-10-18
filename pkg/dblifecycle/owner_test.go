@@ -386,3 +386,72 @@ func epochOf(t *testing.T, res Response) uint64 {
 	}
 	return n
 }
+
+// Call decodes owner responses with UseNumber: a category result keeps big
+// integers and decimal text exactly, and the hold epoch consumer reads the
+// same json.Number through acquire, nested refresh and release. The owner
+// runs in this process, so no subprocess is involved.
+func TestOwnerCallPreservesNumberLexemes(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BASHY_DB_SESSION_DIR", filepath.Join(dir, "sessions"))
+	t.Setenv("BASHY_COORD_DIR", filepath.Join(dir, "coord"))
+	RegisterCategoryOp("test.echo", CategoryOp{
+		Access: func(json.RawMessage) (Access, error) { return AccessRead, nil },
+		Spec: func(dbstore.Mode, Access) Operation {
+			return Operation{Name: "test.echo", MutationClass: "read", Effects: []string{}}
+		},
+		Run: func(_ context.Context, _ dbstore.Handle, input json.RawMessage, _ Access) (Outcome, error) {
+			return Outcome{Result: input}, nil
+		},
+	})
+	t.Cleanup(func() { categoryOps.Delete("test.echo") })
+	ready := filepath.Join(dir, "ready")
+	serveCtx, stopServe := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() { served <- Serve(serveCtx, ready, 0) }()
+	t.Cleanup(func() { stopServe(); <-served })
+	var id string
+	for deadline := time.Now().Add(5 * time.Second); id == "" && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if b, err := os.ReadFile(ready); err == nil && strings.HasPrefix(string(b), "s-") {
+			id = string(b)
+		}
+	}
+	if id == "" {
+		t.Fatal("owner did not become ready")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	target := dbstore.Target{Engine: "sqlite", Mode: dbstore.Memory, Session: id, Name: "numbers"}
+	if r, err := Call(ctx, id, Request{Op: "create", Target: target}); err != nil || !r.OK {
+		t.Fatalf("create: %+v %v", r, err)
+	}
+	echo, err := Call(ctx, id, Request{Op: "test.echo", Target: target, Input: json.RawMessage(`{"big":12345678901234567890,"dec":1.50,"exp":1E+2,"nested":[-0.0]}`)})
+	if err != nil || !echo.OK {
+		t.Fatalf("echo: %+v %v", echo, err)
+	}
+	got := echo.Result.(map[string]any)
+	for key, want := range map[string]string{"big": "12345678901234567890", "dec": "1.50", "exp": "1E+2"} {
+		if n, ok := got[key].(json.Number); !ok || n.String() != want {
+			t.Fatalf("%s = %#v, want json.Number %s", key, got[key], want)
+		}
+	}
+	if n, ok := got["nested"].([]any)[0].(json.Number); !ok || n.String() != "-0.0" {
+		t.Fatalf("nested = %#v", got["nested"])
+	}
+	hold, err := Call(ctx, id, Request{Op: "hold", Target: target})
+	if err != nil || !hold.OK {
+		t.Fatalf("hold: %+v %v", hold, err)
+	}
+	epoch := epochOf(t, hold)
+	refresh, err := Call(ctx, id, Request{Op: "hold", Target: target, Epoch: epoch})
+	if err != nil || !refresh.OK || refresh.Result.(map[string]any)["nested"] != true || epochOf(t, refresh) != epoch {
+		t.Fatalf("refresh: %+v %v", refresh, err)
+	}
+	if stale, err := Call(ctx, id, Request{Op: "release", Target: target, Epoch: epoch + 1}); err != nil || stale.OK || stale.Error.Code != "stale_epoch" {
+		t.Fatalf("stale release: %+v %v", stale, err)
+	}
+	release, err := Call(ctx, id, Request{Op: "release", Target: target, Epoch: epoch})
+	if err != nil || !release.OK || release.Result.(map[string]any)["released"] != true {
+		t.Fatalf("release: %+v %v", release, err)
+	}
+}
