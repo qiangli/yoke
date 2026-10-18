@@ -90,7 +90,10 @@ exclusive lease.
 | Atomic updates | revision preconditions; merge patch; atomic batch | `TestBatchIsAtomic` (a third-op failure leaves ops 1-2 unapplied), `TestConcurrentRevisionUpdatesLoseNothing` (4 writers × 10 contested increments; final value 40, revision 41) |
 | Bounded pagination | `--limit` (default 100, max 10000) and `--max-bytes` (default 256 KiB); keyset `bashy-cursor-v1` cursor bound to target+query; one oversized doc gives `limit_exceeded` | `TestFindPaginationIsBounded` |
 | JSONL import/export, both directions | manifest + JSONL; merge with `--on-conflict error\|skip\|replace`, or `--replace` | `TestInterchangeRoundTripsAcrossModes` (persistent→persistent, memory→memory, memory→persistent, persistent→memory), `TestImportMergeConflictPolicies` |
-| Malformed/unsupported versions, validation before mutation | major version, schema, category, doc_format, path, tamper, malformed JSON, non-object, duplicate key, revision, unknown field, missing newline, missing manifest | `TestImportValidatesBeforeMutation` (target unchanged after every refusal) |
+| Malformed/unsupported versions, validation before mutation | major version, schema, category, doc_format, path, tamper, malformed JSON, non-object, duplicate key, revision, unknown field, missing newline, missing manifest, trailing JSON after a record (with the manifest count/bytes/sha256 recomputed, so only the parser can refuse it) | `TestImportValidatesBeforeMutation` (target unchanged after every refusal) |
+| Revision exhaustion | a replaced document moves to max(current, imported)+1, strictly past both; at MaxInt64 import and put/patch give `limit_exceeded` instead of overflowing | `TestImportReplaceRevisionExhaustion` (replace over 5 gives 6; MaxInt64 rolls back, target unchanged) |
+| Export fits its own import | a record line over `MaxRecordBytes` fails the export with `limit_exceeded` and removes the partial directory | `TestExportRejectsOversizedRecord` |
+| Owner number fidelity | `Call` decodes with `UseNumber`; category results keep big-integer and decimal lexemes; hold epoch read as `json.Number` through acquire, nested refresh, stale release and release | `TestOwnerCallPreservesNumberLexemes` (in-process `Serve`, no subprocess; asserts `12345678901234567890`, `1.50`, `1E+2`, `-0.0`) |
 | Cancellation | context checked while streaming; import is one transaction | `TestImportCancellationRollsBack` |
 | Both modes, persistent reopen, memory lifetime | every package test runs in both modes; memory lives in the owner | `TestPersistentSurvivesReopenMemoryEndsWithOwner`; CLI smoke below (`session stop` gives `lifetime_ended`) |
 | Exclusive destructive ops | exclusive ops refused under another native lock; held handle runs ops | `TestExclusiveOpsRespectNativeLock`, `TestReadHandleRefusesWrites` |
@@ -103,7 +106,8 @@ exclusive lease.
 go vet ./pkg/dbdoc ./cmds/db ./pkg/dblifecycle ./pkg/dbsql ./pkg/dbstore/sqlitedb   PASS
 GOOS=windows go vet ./pkg/dbdoc ./cmds/db ./pkg/dblifecycle                            PASS
 GOOS=linux go vet ./pkg/dbdoc ./cmds/db                                                PASS
-go test -count=1 ./pkg/dbdoc                                                           PASS (13 tests; package has no subprocess tests)
+go test -count=1 ./pkg/dbdoc                                                           PASS (15 tests; package has no subprocess tests)
+go test -count=1 -run '^TestOwnerCallPreservesNumberLexemes$' ./pkg/dblifecycle        PASS
 go test -count=1 -run '^(TestDocVerbParsing|TestDocCLIAndTypedMCPParity|TestHoldChildEnvUsesAcquiredHolderEpisode|TestTypedMCPSQLQuery|TestRegisteredLifecycleCommand|TestTypedMCPDbLifecycle)$' ./cmds/db   PASS
 go test -count=1 -run '^(TestSQLiteLifecycleBackupRestore|TestBackupPublicationPreservesCompetingDestination|TestSQLiteMemoryNativeBackupRestore|TestBboltNativeBackupReopens|TestParseTargetUsesSharedLocator)$' ./pkg/dblifecycle   PASS
 go test -count=1 -run '^(TestLifecycleBothModes|TestPersistentSurvivesReopenMemoryEndsWithLifetime|TestMemoryModeWritesNothingToDisk|TestCancellationAndInvalidOptions|TestClosedHandleRejectsUse)$' ./pkg/dbstore/sqlitedb   PASS
@@ -128,7 +132,23 @@ followed, in order:
 After the `UseNumber` fix, the owner-session get returns
 `12345678901234567890` and `1.50` exactly.
 
-Not run on Dragon: `TestIndependentDocClientsBothModes`, and the existing
+Review follow-up (trailing JSON, revision exhaustion, export record size,
+owner number regression): each new test was checked to fail with its fix
+removed (trailing record accepted; MaxInt64 gave `backend_error`; oversized
+export succeeded; without `UseNumber`, `1E+2` decoded as `100`). Search of
+`dblifecycle.Call` consumers: the only numeric read is the `db hold` epoch
+in `cmds/db/db.go`, which already parses `json.Number`; the `float64`
+assertions elsewhere in the repo are not `Call` results.
+
+`TestIndependentDocClientsBothModes` ran once on Dragon by accident (a
+`-run Doc` filter matched it). Persistent passed. Memory failed at "drop
+under hold" with `stale_epoch`: the hold process and the drop client shared
+one `BASHY_EPISODE`, so the owner fenced the drop as the holder's own
+request without its epoch, which is the designed behavior. The test now
+gives the hold process its own episode, so the drop comes from another agent
+and must get `claim_held`/`busy`. Not re-run here; the remote gate confirms it.
+
+Not run on Dragon: `TestIndependentDocClientsBothModes` (after the fix), and the existing
 subprocess tests whose epoch assertion changed
 (`pkg/dblifecycle/owner_test.go`, `pkg/dbsql/process_test.go`). They compile
 and vet.

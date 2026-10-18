@@ -286,10 +286,13 @@ func TestIndependentDocClientsBothModes(t *testing.T) {
 			if d := got["result"].(map[string]any); d["doc"].(map[string]any)["n"].(json.Number).String() != fmt.Sprint(clients*each) {
 				t.Fatalf("lost updates: %v", d)
 			}
-			// A destructive drop from another process is refused while a hold
-			// is active, then succeeds after release.
+			// A destructive drop from another agent's process is refused while
+			// a hold is active, then succeeds after release. The holder has
+			// its own episode: a same-episode caller without the epoch is
+			// fenced (stale_epoch), not refused as another holder.
 			hold := exec.Command(os.Args[0], append(append([]string{"db", "hold"}, target...), "--", "sleep", "3")...)
 			hold.Dir = root
+			hold.Env = append(os.Environ(), "BASHY_EPISODE=doc-test-holder")
 			if err := hold.Start(); err != nil {
 				t.Fatal(err)
 			}

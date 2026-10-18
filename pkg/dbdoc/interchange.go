@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -184,6 +185,11 @@ func exportCollection(ctx context.Context, t *tx, dir, name, collection string) 
 		if err != nil {
 			return rf, fmt.Errorf("%w: collection %q document %q: %v", dbstore.ErrIntegrity, collection, r.ID, err)
 		}
+		// The export must stay importable: a line the reader would refuse
+		// fails here instead of producing an export that cannot load.
+		if len(line)+1 > MaxRecordBytes {
+			return rf, fmt.Errorf("%w: collection %q document %q encodes to over %d bytes", dbstore.ErrLimitExceeded, collection, r.ID, MaxRecordBytes)
+		}
 		if _, err := w.Write(append(line, '\n')); err != nil {
 			return rf, err
 		}
@@ -347,6 +353,9 @@ func eachRecord(ctx context.Context, dir string, f recordFile, fn func(n int64, 
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&r); err != nil {
 			return fmt.Errorf("%w: %s record %d: %v", dbstore.ErrMalformedInput, f.Path, n, err)
+		}
+		if _, err := dec.Token(); err != io.EOF {
+			return fmt.Errorf("%w: %s record %d has data after the record", dbstore.ErrMalformedInput, f.Path, n)
 		}
 		if checkID(r.ID) != nil || r.Revision < 1 {
 			return fmt.Errorf("%w: %s record %d needs an id and a revision >= 1", dbstore.ErrMalformedInput, f.Path, n)
@@ -528,8 +537,9 @@ func runImport(ctx context.Context, h dbstore.Handle, in Input) (dblifecycle.Out
 // loadFile re-streams a validated record file into its collection. The
 // checksum is verified again at the end, inside the transaction, so a file
 // changed after validation rolls the whole import back. A record keeps its
-// exported revision when inserted; a replaced document moves past both
-// revisions so a holder of the old one sees a conflict.
+// exported revision when inserted; a replaced document moves strictly past
+// both revisions so a holder of either sees a conflict, and fails when no
+// later revision exists.
 func loadFile(ctx context.Context, t *tx, dir string, f recordFile, policy string) (int64, error) {
 	var applied int64
 	err := eachRecord(ctx, dir, f, func(n int64, r record) error {
@@ -543,7 +553,11 @@ func loadFile(ctx context.Context, t *tx, dir string, f recordFile, policy strin
 		case policy == "skip":
 			return nil
 		case policy == "replace":
-			rev := max(cur.Revision+1, r.Revision)
+			rev := max(cur.Revision, r.Revision)
+			if rev == math.MaxInt64 {
+				return fmt.Errorf("%w: collection %q record %d: document %q has no revision after %d", dbstore.ErrLimitExceeded, f.Collection, n, r.ID, rev)
+			}
+			rev++
 			_, err = t.exec("update "+table(f.Collection)+" set revision = ?, doc = ? where id = ?", rev, string(r.Doc), r.ID)
 		default:
 			return fmt.Errorf("%w: collection %q record %d: document %q already exists (--on-conflict error)", dbstore.ErrConflict, f.Collection, n, r.ID)

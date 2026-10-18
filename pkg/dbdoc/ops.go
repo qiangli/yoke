@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -396,6 +397,9 @@ func (t *tx) write(collection string, op BatchOp) (map[string]any, error) {
 			return nil, uniqueConflict(err)
 		}
 		return map[string]any{"id": op.ID, "revision": int64(1), "created": true}, nil
+	}
+	if cur.Revision == math.MaxInt64 {
+		return nil, fmt.Errorf("%w: document %q has no revision after %d", dbstore.ErrLimitExceeded, op.ID, cur.Revision)
 	}
 	if _, err := t.exec("update "+table(collection)+" set revision = ?, doc = ? where id = ?", cur.Revision+1, string(text), op.ID); err != nil {
 		return nil, uniqueConflict(err)

@@ -2,10 +2,14 @@ package dbdoc
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -188,6 +192,13 @@ func TestImportValidatesBeforeMutation(t *testing.T) {
 		{"norev", "malformed_input", appendRecord(`{"id":"zz","revision":0,"doc":{}}` + "\n")},
 		{"extra", "malformed_input", appendRecord(`{"id":"zz","revision":1,"doc":{},"x":1}` + "\n")},
 		{"nonewline", "malformed_input", appendRecord(`{"id":"zz","revision":1,"doc":{}}`)},
+		// Trailing JSON after a valid record, with the manifest's count,
+		// length and sha256 recomputed so only the parser can refuse it.
+		{"trailing", "malformed_input", func(dir string) {
+			rehash(t, dir, "records-000001.jsonl", func(s string) string {
+				return strings.Replace(s, "\n", `{"id":"zz","revision":1,"doc":{}}`+"\n", 1)
+			})
+		}},
 		{"missing", "not_found", func(dir string) { os.Remove(filepath.Join(dir, ManifestName)) }},
 	} {
 		dir := variant(tc.name, tc.edit)
@@ -197,6 +208,103 @@ func TestImportValidatesBeforeMutation(t *testing.T) {
 		if dump(dst) != before {
 			t.Fatalf("%s: rejected import changed the target", tc.name)
 		}
+	}
+}
+
+// rehash rewrites one record file of an export and fixes the manifest's
+// records/bytes/sha256 for it, so the edit passes the integrity checks.
+func rehash(t *testing.T, dir, path string, edit func(string) string) {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(dir, path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := edit(string(b))
+	if err := os.WriteFile(filepath.Join(dir, path), []byte(out), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mp := filepath.Join(dir, ManifestName)
+	mb, _ := os.ReadFile(mp)
+	var m map[string]any
+	if err := json.Unmarshal(mb, &m); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte(out))
+	for _, f := range m["files"].([]any) {
+		if f := f.(map[string]any); f["path"] == path {
+			f["records"], f["bytes"], f["sha256"] = strings.Count(out, "\n"), len(out), hex.EncodeToString(sum[:])
+		}
+	}
+	mb, _ = json.Marshal(m)
+	if err := os.WriteFile(mp, mb, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A replaced document moves strictly past both its current and its
+// imported revision; when no later revision exists the import fails and
+// rolls back instead of overflowing.
+func TestImportReplaceRevisionExhaustion(t *testing.T) {
+	src := newFixture(t, dbstore.Persistent)
+	src.must(OpCollectionCreate, Input{Collection: "c"}, true)
+	src.must(OpPut, Input{Collection: "c", ID: "a", Doc: json.RawMessage(`{"v":"new"}`)}, false)
+	good := filepath.Join(t.TempDir(), "exp")
+	src.must(OpExport, Input{Out: good}, false)
+	withRev := func(rev string) string {
+		dir := filepath.Join(t.TempDir(), rev)
+		if err := os.CopyFS(dir, os.DirFS(good)); err != nil {
+			t.Fatal(err)
+		}
+		rehash(t, dir, "records-000000.jsonl", func(s string) string {
+			return strings.Replace(s, `"revision":1`, `"revision":`+rev, 1)
+		})
+		return dir
+	}
+	dst := newFixture(t, dbstore.Persistent)
+	dst.must(OpCollectionCreate, Input{Collection: "c"}, true)
+	dst.must(OpPut, Input{Collection: "c", ID: "a", Doc: json.RawMessage(`{"v":"old"}`)}, false)
+	dst.must(OpPut, Input{Collection: "c", ID: "a", Doc: json.RawMessage(`{"v":"old"}`)}, false)
+	dst.must(OpImport, Input{In: withRev("5"), OnConflict: "replace"}, false)
+	if d := dst.get("c", "a"); d.Revision != 6 || string(d.Doc) != `{"v":"new"}` {
+		t.Fatalf("replace over revision 5: %d %s", d.Revision, d.Doc)
+	}
+	before := dump(dst)
+	if c := dst.code(OpImport, Input{In: withRev(strconv.FormatInt(math.MaxInt64, 10)), OnConflict: "replace"}, false); c != "limit_exceeded" {
+		t.Fatalf("exhausted revision: got %s", c)
+	}
+	if dump(dst) != before {
+		t.Fatal("exhausted-revision import changed the target")
+	}
+}
+
+// Export refuses a record its own import would refuse, and removes the
+// partial directory.
+func TestExportRejectsOversizedRecord(t *testing.T) {
+	f := newFixture(t, dbstore.Persistent)
+	f.must(OpCollectionCreate, Input{Collection: "c"}, true)
+	h, err := f.svc.Open(context.Background(), f.target, false, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := begin(context.Background(), h, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	big := `{"s":"` + strings.Repeat("x", MaxRecordBytes) + `"}`
+	if _, err := tx.exec("insert into "+table("c")+" (id, revision, doc) values (?, 1, ?)", "a", big); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.commit(); err != nil {
+		t.Fatal(err)
+	}
+	tx.end()
+	h.Close()
+	out := filepath.Join(t.TempDir(), "exp")
+	if c := f.code(OpExport, Input{Out: out}, false); c != "limit_exceeded" {
+		t.Fatalf("oversized export: got %s", c)
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		t.Fatalf("failed export left %s: %v", out, err)
 	}
 }
 
