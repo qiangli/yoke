@@ -31,7 +31,10 @@ func TestGraphCASClientHelper(t *testing.T) {
 		return
 	}
 	id := os.Getenv("BASHY_GRAPH_SESSION")
-	target := dbstore.Target{Engine: "bonsai", Mode: dbstore.Mode(os.Getenv("BASHY_GRAPH_MODE")), Path: os.Getenv("BASHY_GRAPH_PATH"), Session: id, Name: os.Getenv("BASHY_GRAPH_NAME")}
+	target := dbstore.Target{Engine: "bonsai", Mode: dbstore.Mode(os.Getenv("BASHY_GRAPH_MODE")), Path: os.Getenv("BASHY_GRAPH_PATH"), Name: os.Getenv("BASHY_GRAPH_NAME")}
+	if target.Mode == dbstore.Memory {
+		target.Session = id
+	}
 	in, _ := json.Marshal(Input{Node: &dbstore.Node{ID: "shared", Type: os.Getenv("BASHY_GRAPH_CLIENT")}, IfRevision: 1})
 	res, err := dblifecycle.Call(context.Background(), id, dblifecycle.Request{Op: OpNodePut, Target: target, Input: in, Wait: 5 * time.Second})
 	if err != nil {

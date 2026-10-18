@@ -16,10 +16,11 @@ A portable export is bounded to 100,000 records, 64 MiB of Bonsai query JSON and
 
 ## Local gate
 
-On Dragon with `CGO_ENABLED=0 GOMAXPROCS=4 GOFLAGS=-p=2`:
+On the local development host with `CGO_ENABLED=0 GOMAXPROCS=4 GOFLAGS=-p=2`:
 
 - `go test -short -count=1 ./pkg/dblifecycle ./pkg/dbgraph ./pkg/dbstore ./pkg/dbstore/bonsaidb` — PASS. Covers typed operations, revisions, process exclusion, memory→persistent→memory round trip with isolated nodes and binary properties, idempotent import, replacement, raw mutation bypass refusal, deletion cascade, external DQL schema refusal, and native Bonsai backup/restore. Restore regressions check malformed late payload leaves the target intact, staged bytes remain unchanged when the caller's source changes, and manifest traversal paths are refused.
 - `CGO_ENABLED=0 GOMAXPROCS=4 GOFLAGS=-p=2 go test -short -count=1 ./cmds/db -run TestGraph` — PASS after the graph front door was mounted on the local storage batch candidate. `db graph` accepts typed JSON input or declared flags, the registered MCP command uses the same runner, and general `db export|import` routes Bonsai to graph interchange. The focused test covers a persistent typed node, isolated-node export/import, rejected foreign and duplicate flags, and MCP node retrieval.
 - `CGO_ENABLED=0 GOMAXPROCS=4 GOFLAGS=-p=2 go test -short -count=1 ./pkg/dbgraph` and `CGO_ENABLED=0 GOMAXPROCS=4 GOFLAGS=-p=2 go test -short -count=1 ./pkg/dbgraph ./cmds/db -run TestGraph` — PASS after extending the independent-client regression; the non-short process test remains for the manager's remote gate.
+- `CGO_ENABLED=0 GOMAXPROCS=4 GOFLAGS=-p=2 go test -short -count=1 ./pkg/dbgraph -run TestGraph` — PASS after correcting the persistent CAS child target to omit its session field. The owner call still routes by session ID. The earlier Windows process gate returned `invalid_input` because the persistent child target included a session; the manager's remote rerun is pending.
 
 The graph package is mounted in shared CLI/MCP and atlas rows. The manager owns whole-product, independent-process and platform gates.
