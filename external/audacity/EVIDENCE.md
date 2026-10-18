@@ -75,7 +75,7 @@ is NOT live support. windows/amd64 is pinned; darwin/* fails closed
 
 Every operation takes explicit ABSOLUTE paths (relative paths, control
 characters, option-looking values, wrong extensions, missing inputs,
-missing output parents are refused BEFORE provisioning or pipe — 
+missing output parents are refused BEFORE provisioning or pipe —
 `TestValidationRunsBeforeExecution`, `TestResolverFailureMeansNoPipe`)
 and sends ONE fixed command set over the local pipe. Paths reach the
 pipe only as quoted `Filename="..."` values. Each transaction returns
@@ -198,6 +198,9 @@ live verification is `TestLive` (opt-in, below).
   -count=1 -race ./external/audacity ./pkg/binmgr` — PASS on darwin/arm64
   (authoring host, 2026-10-18, `go1.27.2 darwin/arm64`; issue #439 re-landing over
   accepted GIMP, pins.go keeps both `gimp@3.2.6` and `audacity@3.7.3`).
+  These are SCOPED gates (`./external/audacity ./pkg/binmgr`): scoped
+  tests, scoped vet, and GOOS=windows/linux/darwin vet passed; the whole
+  `scripts/crossvet.sh` run is NOT claimed by this story's evidence.
   Fixture tests cover the bounded same-user local pipe (Unix FIFO
   admitted, Windows provision-only): `TestVerifyPipeRejectsNonFIFOAndWrongOwner`
   (FIFO type + `syscall.Stat_t.Uid` same-user), `TestPipeTransactionBoundedCancellation`
@@ -229,9 +232,30 @@ live verification is `TestLive` (opt-in, below).
   stdlib. It never starts Audacity (no launch path exists): the operator
   starts the provisioned 3.7.3 with mod-script-pipe enabled first. On
   windows it asserts provisioning + the honest fail-closed pipe error.
-  **NOT RUN in this change** — the manager runs it only on a claimed
-  novidesign (linux/amd64) or noviwin (windows/amd64, provision-only)
-  host, never on Dragon; record the result here when it lands.
+  **RUN by the manager on novidesign (linux/amd64, epoch59), 2026-10-18 —
+  PASS twice.** Not run on the authoring host (Dragon) and not run on
+  noviwin (windows/amd64 stays provision-only, below). Record:
+  - Artifact: the official Audacity 3.7.3 linux amd64 AppImage
+    (`audacity-linux-3.7.3-x64-22.04.AppImage`, 108,603,896 bytes),
+    sha256-verified against the official `CHECKSUMS.txt` digest that is the
+    committed pin.
+  - The AppImage's static launcher could not execute under the host's
+    amd64 binfmt, so the squashfs payload was extracted and Audacity was
+    started from the extracted tree. The extraction was for that reason
+    only; the bytes verified are the official AppImage, unmodified.
+  - First run honest result: Audacity's first-run modal (the one-time
+    welcome/update dialog) blocked the pipe server, so the first `TestLive`
+    attempt hit the bounded timeout. The modal was dismissed once in the UI
+    and Audacity was restarted (the one-time operator setup this document
+    already requires; the wrapper itself enabled and dismissed nothing).
+  - Then the real `TestLive` drove production `NewCmd` → `Path` →
+    `binmgr` → `defaultPipeClient` over the same-user FIFO pair: **PASS**
+    twice. Each run's `Import2` and `GetInfo` replies each ended in
+    `BatchCommand finished: OK` and `GetInfo` returned the real Tracks JSON
+    for the generated WAV. First PASS 0.40 s (operation 383 ms); repeat
+    PASS 0.30 s (operation 289 ms).
+  - Cleanup: the exact container used and its 539 MiB temp were removed;
+    no host jobs were left behind; novidesign epoch59 released.
 - Live pin-verify (darwin/arm64 host, 2026-10-18, no GUI) — SEPARATE from
   full pipe transaction:
   - `ArtifactFor("3.7.3","darwin","arm64")` → false (`ErrNoArtifact`);
@@ -260,21 +284,20 @@ live verification is `TestLive` (opt-in, below).
     the same behavior until run on a windows host); the supply-chain pin
     itself is verified. Live execution of `Audacity.exe` on windows/amd64
     still requires a windows host (not done here).
-  - Live pipe session (`audacity info/trim/normalize/export` → real
-    Audacity 3.x via FIFO/named pipe) **NOT YET RUN**: no GUI-capable
-    linux/windows host with Audacity + mod-script-pipe enabled was available
-    on Dragon; `TestLive` above is the queued vehicle. `audacity.Run` on darwin correctly fails closed with
-    `ErrNoArtifact` before dialing any pipe; the pipe path itself
-    (`/tmp/audacity_script_pipe.*` / `\\.\pipe\ToSrvPipe`) was never
-    dialed and no network was used. A follow-up on a linux/windows host
-    with a display must: start Audacity 3.7.3 (enable Modules→mod-script-pipe),
-    run each of the four ops over explicit absolute files with a 30 s bounded
-    transaction, observe `yoke-audacity-v1` JSON and exported files, and clean
-    the cache. Until then, every pipe transaction beyond fixture remains
-    "unverified — fails closed without a running same-user Audacity".
+  - Live pipe session on linux/amd64: **RUN** — the `info` operation
+    (`Import2` + `GetInfo`) over the real same-user FIFO against the real
+    Audacity 3.7.3 is the manager's `TestLive` PASS ×2 on novidesign
+    epoch59 recorded above. `trim`/`normalize`/`export` share the same
+    transport and framing (fixture-pinned command sets) but were NOT driven
+    live in this story; their live run is listed under "What remains".
+    On the authoring host (darwin/arm64) `audacity.Run` correctly fails
+    closed with `ErrNoArtifact` before dialing any pipe; no pipe
+    (`/tmp/audacity_script_pipe.*` / `\\.\pipe\ToSrvPipe`) was dialed
+    and no network was used from Dragon. windows/amd64 remains
+    provision-only: no live `Audacity.exe` session has been run.
 - Registry / atlas / `cmds/all`: NOT touched by this story. `audacity` is
   reachable through `audacity.NewCmd()` (the cobra front door the live
-  smoke will drive); mounting it on the bashy command/MCP surface is a
+  smoke drove on novidesign); mounting it on the bashy command/MCP surface is a
   separate, reviewed change (atlas census + registry pin gate).
 - Go-side dependencies: none added (`go.mod`/`go.sum` untouched; the
   package uses `pkg/binmgr`, cobra, and stdlib only).
@@ -285,11 +308,12 @@ live verification is `TestLive` (opt-in, below).
 
 ## What remains (out of this story's acceptance)
 
-- Live download-verify-run on linux/amd64 and windows/amd64 against a
-  real Audacity 3.x AppImage/zip (empty cache → Ensure → provisioned
-  binary size/hash → pipe session → JSON → cleanup): `YOKE_AUDACITY_LIVE=1
-  go test -count=1 -run TestLive -v ./external/audacity` on novidesign /
-  noviwin (manager-owned).
+- Live `trim`/`normalize`/`export` sessions on linux/amd64 (only `info`
+  was driven live via `TestLive` on novidesign epoch59), and the
+  windows/amd64 live run (`YOKE_AUDACITY_LIVE=1 go test -count=1 -run
+  TestLive -v ./external/audacity` on noviwin asserts provisioning + the
+  fail-closed pipe error; a Windows named-pipe transport is a separate
+  story).
 - Mounting `audacity` on `cmds/all` / the bashy command + MCP surface
   (requires atlas/registry review).
 - Create-to-post integration and any Wave 4 breadth beyond these four ops.
