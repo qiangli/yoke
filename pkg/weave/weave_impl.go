@@ -1908,6 +1908,13 @@ func weaveAppendRunProvenance(it *weaveItem, message string) string {
 		}
 		block := strings.Join(trailers, "\n")
 		if _, err := parseCommitTrace("auto\n\n" + block); err == nil {
+			// Environment identity counts only for the pending commit; every
+			// later audit (--check-range, pre-push) reads the Agent trailer
+			// alone, so the worker's attribution has to be written down here
+			// or the preserved commit is "unknown" forever after.
+			if agent := weaveWorkerAgent(it); agent != "" {
+				block += "\nAgent: " + agent
+			}
 			return message + "\n\n" + block
 		}
 	}
@@ -2038,7 +2045,25 @@ func weaveExcludeFile(workspace string) string {
 	return p
 }
 
+// maybeAutoCommit preserves the workspace tree with no worker identity: the
+// launcher's BASHY_AGENT is still dropped, so the commit is unattributed
+// rather than misattributed. Run paths that know the worker use
+// maybeAutoCommitAs.
 func maybeAutoCommit(workspace, msg string) (bool, error) {
+	return maybeAutoCommitAs(workspace, msg, "")
+}
+
+// maybeAutoCommitAs commits the worker's uncommitted tree AS the worker.
+//
+// The wrapper runs in the conductor's process, so a bare `git commit` here
+// inherits the CONDUCTOR's environment and the commit-msg hook attributes the
+// commit from it: BASHY_AGENT empty gave "found identity unknown", a manager's
+// gave a mismatch against the story's assignee — and either recorded a bypass
+// that auto-failed the sprint's manage score, for work the worker had just
+// delivered (Sprints 449/453/457/467). The tree being preserved is the
+// worker's, in the worker's workspace, so the commit carries the same
+// identity weaveChildEnv exported to the worker and never the launcher's.
+func maybeAutoCommitAs(workspace, msg, agent string) (bool, error) {
 	weaveEnsureBashyExclude(workspace)
 	dirty, _, untrackedFiles := weaveMeasureDirtiness(workspace)
 	if !dirty && untrackedFiles == 0 {
@@ -2049,10 +2074,28 @@ func maybeAutoCommit(workspace, msg string) (bool, error) {
 		return false, fmt.Errorf("git add -A: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	commit := exec.Command(gitBin(), "-C", workspace, "commit", "-m", msg)
+	commit.Env = weaveCommitIdentityEnv(os.Environ(), agent)
 	if out, err := commit.CombinedOutput(); err != nil {
 		return false, fmt.Errorf("git commit: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return true, nil
+}
+
+// weaveCommitIdentityEnv is the environment a wrapper-made commit runs under:
+// the launcher's BASHY_AGENT removed, the worker's set when known. It is the
+// commit-time half of weaveChildEnv's identity rule.
+func weaveCommitIdentityEnv(environ []string, agent string) []string {
+	env := make([]string, 0, len(environ)+1)
+	for _, kv := range environ {
+		if strings.HasPrefix(kv, "BASHY_AGENT=") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	if agent = strings.TrimSpace(agent); agent != "" {
+		env = append(env, "BASHY_AGENT="+agent)
+	}
+	return env
 }
 
 // weaveSuiteGateCommand resolves the gate a merge must clear.
@@ -4588,7 +4631,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		if exitCode != 0 || runErr != nil || killReason != "" {
 			msg = weaveCrashedAutoCommitMessage(it, exitCode, killReason)
 		}
-		committed, err := maybeAutoCommit(workspace, msg)
+		committed, err := maybeAutoCommitAs(workspace, msg, weaveWorkerAgent(it))
 		autoCommitted = committed
 		if err != nil {
 			autoCommitErr = err.Error()
@@ -6066,7 +6109,7 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason, disposition string, y
 							if nerr != nil {
 								return fmt.Errorf("run #%d: --force could not preserve nested submodule work, refusing to destroy it: %w", id, nerr)
 							}
-							committed, cerr := maybeAutoCommit(it.Workspace, weaveForcedSalvageCommitMessage(it))
+							committed, cerr := maybeAutoCommitAs(it.Workspace, weaveForcedSalvageCommitMessage(it), weaveWorkerAgent(it))
 							if cerr != nil {
 								return fmt.Errorf("run #%d: --force could not commit %d uncommitted file(s) for preservation, refusing to destroy them: %w", id, dirtyFiles+untracked, cerr)
 							}
@@ -7988,7 +8031,7 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 				if _, statErr := os.Stat(it.Workspace); statErr == nil {
 					ahead, head := weaveUnmergedAhead(root, base, it)
 					if dirty, dirtyFiles, untracked := weaveMeasureDirtiness(it.Workspace); dirty || untracked > 0 {
-						committed, cerr := maybeAutoCommit(it.Workspace, weaveForcedSalvageCommitMessage(it))
+						committed, cerr := maybeAutoCommitAs(it.Workspace, weaveForcedSalvageCommitMessage(it), weaveWorkerAgent(it))
 						if cerr != nil {
 							results = append(results, pruneResult{
 								Issue: it.ID, State: it.State, Workspace: it.Workspace, Merged: false,
