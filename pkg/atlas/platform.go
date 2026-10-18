@@ -179,6 +179,8 @@ var externalPlatforms = map[string]ExternalPlatform{
 	"stripe":        {OS: allOS, WindowsAsset: "stripe_*_windows_x86_64.zip"},
 	"twilio":        {OS: allOS, WindowsAsset: "host-only client (PreferHost); twilio-*.exe vendor installer"},
 	"slack":         {OS: allOS, WindowsAsset: "slack_cli_*_windows_64-bit.zip"},
+	"m365":          {OS: allOS, WindowsAsset: "host-only client (PreferHost); npm @pnp/cli-microsoft365 (Node runtime), no binary archive"},
+	"gam":           {OS: allOS, WindowsAsset: "host-only client (PreferHost); gam-*-windows-x86_64.zip vendor release"},
 	"kcat":          {OS: allOS, WindowsAsset: "host-only client (PreferHost); kcat windows build via vendor/packaging (unverified here)"},
 	"psql":          {OS: allOS, WindowsAsset: "host-only client (PreferHost); EDB/PostgreSQL windows client install"},
 	"mongosh":       {OS: allOS, WindowsAsset: "host-only client (PreferHost); mongosh-*-win32-x64.zip"},
