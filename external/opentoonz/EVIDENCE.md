@@ -1,0 +1,26 @@
+# OpenToonz admission — story da22dfaae775 (Sprint 382, Story #355)
+
+Decision on 2026-10-18: **UNSUPPORTED for v1.0**. This is an admission record, not an executable adapter or a support claim. No OpenToonz code was downloaded, installed, or run on Dragon; only small official metadata pages (release API records, license text, documentation pages) were read.
+
+## Official evidence checked
+
+- Project and source: https://github.com/opentoonz/opentoonz . The project README describes a C++ desktop 2D animation application.
+- License at the reviewed release: https://raw.githubusercontent.com/opentoonz/opentoonz/v1.8.0/LICENSE.txt (2190 bytes, fetched 2026-10-18). It grants the BSD 3-Clause "New" or "Revised" License (redistribution in source and binary forms permitted with copyright-notice retention). Permissive license is NOT the blocker. Note: the GitHub repository metadata API reports license `NOASSERTION` for this repo, so the LICENSE.txt text above — not the API label — is the license evidence.
+- Publisher release: https://github.com/opentoonz/opentoonz/releases/tag/v1.8.0 (current latest; not draft, not prerelease). The release API record at https://api.github.com/repos/opentoonz/opentoonz/releases/tags/v1.8.0 lists exactly 2 assets and no checksum manifest:
+  - `OpenToonz.pkg` (110,493,957 bytes, macOS installer package): https://github.com/opentoonz/opentoonz/releases/download/v1.8.0/OpenToonz.pkg
+  - `OpenToonzSetup.exe` (59,788,942 bytes, Windows installer): https://github.com/opentoonz/opentoonz/releases/download/v1.8.0/OpenToonzSetup.exe
+- Prior release https://github.com/opentoonz/opentoonz/releases/tag/v1.7.1 (API: https://api.github.com/repos/opentoonz/opentoonz/releases/tags/v1.7.1) carries the same 2-asset installer-only shape (`OpenToonz.pkg`, `OpenToonzSetup.exe`). No release in the reviewed set publishes a Linux artifact, a portable archive, a raw binary, or any `SHA256SUMS`/checksum asset.
+- Digest posture: the GitHub release API exposes platform-computed `digest` fields for the two v1.8.0 assets (`sha256:6360efbd…abb84e609d13` for the pkg, `sha256:bd678a03…d3ac061d0` for the exe). These are GitHub-computed asset digests, NOT a publisher-published checksum manifest, and no bytes were downloaded and hashed here — so per the GIMP/Blender precedent (manifest AND bytes, never a platform-computed digest alone) no binmgr pin is admitted. The Sigstore attestations endpoint for the macOS asset digest answers 404 (`https://api.github.com/repos/opentoonz/opentoonz/attestations/sha256:6360efbde7739910d4eefe9d494b6b57e852a3f75bdbeb1e6d75abb84e609d13` → 404 on 2026-10-18): no publisher-signed build attestation exists.
+- Headless seam: the official manual documents batch rendering only as an interactive GUI/farm workflow — "Rendering Scenes in Batch Mode" (Tasks pane, TNZBAT task lists) at https://opentoonz.readthedocs.io/en/latest/rendering_the_animation.html#rendering-scenes-in-batch-mode and the farm controller/server service install at https://opentoonz.readthedocs.io/en/latest/using_the_toonz_farm.html (sources: https://github.com/opentoonz/opentoonz_docs/blob/master/source/rendering_the_animation.rst and `source/using_the_toonz_farm.rst`). A `tcomposer` render binary is referenced only inside farm/issue discussion (e.g. https://github.com/opentoonz/opentoonz/issues/2305, https://github.com/opentoonz/opentoonz/issues/3999); upstream publishes no CLI reference, no flag contract, and no scripting facility (no ToonzScript interface exists upstream). The farm path additionally requires installing Windows Services / shared-root farm nodes, which is a resident-service shape outside the admitted short-lived-client boundary.
+
+## Missing admission elements and fail-closed reason
+
+Two of the three required prerequisites are absent from the reviewed official material, so admission fails closed:
+
+1. **Publisher-authenticated digest for the exact artifact — ABSENT.** No checksum file, no attestation, no signed manifest is published with any reviewed release. Inventing a pin from the GitHub API digest field is explicitly refused.
+2. **Binmgr-consumable runnable artifact — ABSENT.** Both platforms ship installer-only payloads (`.pkg`, `Setup.exe`) which `pkg/binmgr` does not unpack or execute (same bar as the GIMP evidence: installer-only platforms are NOT DECLARED), and no official Linux artifact exists at all.
+3. **Documented bounded headless seam — ABSENT as a contract.** Official batch rendering is GUI task-list / farm-service based; no documented standalone CLI contract and no script API exist to bound scene/timeline/render/output operations against.
+
+Therefore this story adds no Go wrapper, no tests, no binmgr pin, no registered command, and no MCP tool. The `external/opentoonz/` tree contains this evidence file only. Every v1.0 platform and operation remains UNSUPPORTED until the publisher ships (a) a non-installer artifact binmgr can verify and execute, (b) a publisher-published digest for that exact artifact, and (c) a documented bounded headless rendering contract.
+
+The governing contract is `docs/sprint-457-client-admission-contract.md`, Creative execution modes, in the parent `dhnt` repository; this Yoke workspace does not contain that file. This record applies that gate and does not claim any bridge exists.
