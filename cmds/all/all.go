@@ -27,6 +27,7 @@ import (
 	_ "github.com/qiangli/yoke/cmds/browser"
 	_ "github.com/qiangli/yoke/cmds/cal"
 	_ "github.com/qiangli/yoke/cmds/clip"
+	_ "github.com/qiangli/yoke/cmds/db"
 	_ "github.com/qiangli/yoke/cmds/duration"
 	_ "github.com/qiangli/yoke/cmds/fetch"
 	_ "github.com/qiangli/yoke/cmds/gzip"

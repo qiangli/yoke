@@ -1224,6 +1224,8 @@ func init() {
 	addVerb("act", staged(StageTest, managed(GroupOrch, TierSandbox)))
 	addVerb("act-runner", staged(StageTest, managed(GroupOrch, TierSandbox, CapDaemon)))
 	addVerb("mirror", staged(StageCross, managed(GroupStorage, TierUserland, CapDaemon, CapNeedsNetwork)))
+	addVerb("db", Entry{Stage: StageCross, Group: GroupStorage, Tier: TierUserland,
+		Caps: []string{CapJSON, CapDestructive, CapSpawnsProcesses}})
 
 	// knowledge and skills: kb, graph (registered above under GroupCodeIntel tools),
 	// skill, and craft are the v1.0.0 knowledge surface (Part 4j, Sprint 379 / Story #1529).

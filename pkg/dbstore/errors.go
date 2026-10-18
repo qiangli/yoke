@@ -23,11 +23,12 @@ var (
 	ErrTimeout       error = codeError("timeout")
 	ErrCancelled     error = codeError("cancelled")
 	ErrLifetimeEnded error = codeError("lifetime_ended")
+	ErrIntegrity     error = codeError("integrity")
 	ErrBackend       error = codeError("backend_error")
 )
 
 var codes = []error{ErrNotFound, ErrExists, ErrInvalidInput, ErrUnsupported, ErrReadOnly,
-	ErrBusy, ErrConflict, ErrTimeout, ErrCancelled, ErrLifetimeEnded, ErrBackend}
+	ErrBusy, ErrConflict, ErrTimeout, ErrCancelled, ErrLifetimeEnded, ErrIntegrity, ErrBackend}
 
 // Code returns the contract error code for err ("" for nil). Context errors
 // map to timeout/cancelled; anything unclassified is backend_error.
