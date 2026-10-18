@@ -15,6 +15,13 @@ func TestScriptTaskAdmission(t *testing.T) {
 		{"ci-build", "go build ./...\n", false},
 		{"ci-test", "go test ./...\n", false},
 		{"artifact", "printf release > artifact.txt\n", false},
+		{"shell", "sh -c true\n", false},
+		{"parent-escape", "printf release > ../artifact.txt\n", false},
+		{"absolute-escape", "printf release > /tmp/artifact.txt\n", false},
+		{"network", "curl https://example.invalid\n", false},
+		{"model-tool", "bashy model list\n", false},
+		{"go-tool", "go tool compile source.go\n", false},
+		{"substitution", "echo $(pwd)\n", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := []byte(tc.script)

@@ -87,7 +87,31 @@ func TestAssignScript(t *testing.T) {
 		return cmd.ExecuteContext(t.Context())
 	}
 	// Invalid bodies must fail before allocation, even in dry-run.
-	for _, bad := range []string{`{}`, string(body) + `{}`, strings.Replace(string(body), `"no_input": true`, `"no_input": false`, 1), strings.Replace(string(body), task.Artifact.Digest, "sha256:bad", 1)} {
+	invalid := []string{`{}`, string(body) + `{}`, strings.Replace(string(body), `"no_input": true`, `"no_input": false`, 1), strings.Replace(string(body), task.Artifact.Digest, "sha256:bad", 1)}
+	for _, source := range []string{"go build ./...", "go test ./...", "printf release > artifact-v1.txt", "sh -c true", "printf escape > ../outside", "printf escape > /tmp/outside", "curl https://example.invalid", "bashy model list"} {
+		bad := task
+		b := []byte(source + "\n")
+		bad.Artifact = lens.CompiledScriptArtifact{Name: lens.ScriptArtifactName(b), Digest: lens.ScriptArtifactDigest(b), Script: b}
+		encoded, err := json.Marshal(bad)
+		if err != nil {
+			t.Fatal(err)
+		}
+		invalid = append(invalid, string(encoded))
+	}
+	for _, missingCaps := range []bool{false, true} {
+		bad := task
+		if missingCaps {
+			bad.Caps = nil
+		} else {
+			bad.Effects = nil
+		}
+		encoded, err := json.Marshal(bad)
+		if err != nil {
+			t.Fatal(err)
+		}
+		invalid = append(invalid, string(encoded))
+	}
+	for _, bad := range invalid {
 		if err := os.WriteFile(file, []byte(bad), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -96,6 +120,17 @@ func TestAssignScript(t *testing.T) {
 				t.Fatal("accepted invalid task")
 			}
 		}
+	}
+	dir, err := weaveQueueDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q, err := loadWeaveQueue(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(q.Items) != 0 || launches != 0 {
+		t.Fatal("invalid task allocated or dispatched a run")
 	}
 	if err := os.WriteFile(file, body, 0600); err != nil {
 		t.Fatal(err)

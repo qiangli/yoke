@@ -1,0 +1,5 @@
+=== RUN   TestS446NativeConfinementProbe
+    s446_confinement_probe_test.go:68: BLOCKER CONFIRMED: literal offline go test in native PTY can write outside cwd, open a loopback socket, and execute a host tool; environment/cwd/watchdog are not confinement
+--- PASS: TestS446NativeConfinementProbe (4.17s)
+PASS
+ok  	github.com/qiangli/yoke/pkg/weave	5.143s
