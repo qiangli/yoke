@@ -748,7 +748,7 @@ func TestScriptPipeline_Delegation_SeatContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Delegate with ReaderPrefs failed: %v", err)
 	}
-	if !resFromPrefs.Success || !bytes.Equal(resFromPrefs.Body, plan.Artifact.Script) {
+	if resFromPrefs.Success || resFromPrefs.Executed || !bytes.Equal(resFromPrefs.Body, plan.Artifact.Script) {
 		t.Fatalf("resFromPrefs mismatch: %+v", resFromPrefs)
 	}
 }
@@ -883,8 +883,8 @@ func TestScriptPipeline_Delegation_NoImplicitModelCalls(t *testing.T) {
 		t.Fatalf("DelegateSkillScript failed: %v", err)
 	}
 
-	if !res.Success {
-		t.Error("expected success")
+	if res.Success || res.Executed {
+		t.Error("planning without a worker must not report successful execution")
 	}
 	if !strings.HasPrefix(res.Artifact.Digest, "sha256:") {
 		t.Errorf("invalid digest: %s", res.Artifact.Digest)
@@ -916,10 +916,12 @@ func TestScriptPipeline_Delegation_TargetFailureCannotPromoteOrRun(t *testing.T)
 	})
 
 	failRes, failErr := plan.Delegate(ctx, WorkerSeat{
-		Name:    "ci-builder",
-		Help:    fleet.HelpScript,
-		NoInput: true,
-		Runner:  failingRunner,
+		Name:           "ci-builder",
+		Help:           fleet.HelpScript,
+		NoInput:        true,
+		Runner:         failingRunner,
+		AllowedCaps:    []string{atlas.CapReadOnly},
+		AllowedEffects: []string{atlas.EffPure, atlas.EffRead},
 	})
 	if failErr == nil {
 		t.Fatal("expected error on worker failure, got nil")
@@ -960,10 +962,12 @@ func TestScriptPipeline_Delegation_TargetFailureCannotPromoteOrRun(t *testing.T)
 	})
 
 	succRes, succErr := plan.Delegate(ctx, WorkerSeat{
-		Name:    "ci-builder",
-		Help:    fleet.HelpScript,
-		NoInput: true,
-		Runner:  successRunner,
+		Name:           "ci-builder",
+		Help:           fleet.HelpScript,
+		NoInput:        true,
+		Runner:         successRunner,
+		AllowedCaps:    []string{atlas.CapReadOnly},
+		AllowedEffects: []string{atlas.EffPure, atlas.EffRead},
 	})
 	if succErr != nil {
 		t.Fatalf("unexpected error on success runner: %v", succErr)

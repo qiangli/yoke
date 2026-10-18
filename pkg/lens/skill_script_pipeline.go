@@ -603,14 +603,16 @@ func (f WorkerRunnerFunc) RunScript(ctx context.Context, artifact *CompiledScrip
 
 // ExecutionResult holds the output from a worker executing a script artifact.
 type ExecutionResult struct {
-	ExitCode int    `json:"exit_code"`
-	Stdout   []byte `json:"stdout,omitempty"`
-	Stderr   []byte `json:"stderr,omitempty"`
-	Error    error  `json:"error,omitempty"`
+	Recording *ScriptRecording `json:"recording,omitempty"` // Nil unless durable recording was acknowledged.
+	ExitCode  int              `json:"exit_code"`
+	Stdout    []byte           `json:"stdout,omitempty"`
+	Stderr    []byte           `json:"stderr,omitempty"`
+	Error     error            `json:"error,omitempty"`
 }
 
 // DelegationResult contains the outcome of delegating a validated script to a worker seat.
 type DelegationResult struct {
+	Recording *ScriptRecording        `json:"recording,omitempty"`
 	Plan      *ScriptPlan             `json:"plan"`
 	Seat      string                  `json:"seat"`
 	Artifact  *CompiledScriptArtifact `json:"artifact"`
@@ -636,7 +638,7 @@ type PromotedArtifact struct {
 // CanRunNext reports whether a subsequent dependent task can run.
 // S22 invariant: target failure cannot promote or run subsequent steps.
 func (r *DelegationResult) CanRunNext() bool {
-	return r != nil && r.Success && r.ExitCode == 0 && r.Error == nil
+	return r != nil && r.Executed && r.Success && r.ExitCode == 0 && r.Error == nil
 }
 
 // Promote promotes a successfully delegated script artifact into a dag target or kb runbook.
@@ -646,7 +648,7 @@ func (r *DelegationResult) Promote(targetType, name string) (*PromotedArtifact, 
 	if r == nil {
 		return nil, errorf(ExitInvalid, "cannot promote nil delegation result")
 	}
-	if !r.Success || r.ExitCode != 0 || r.Error != nil {
+	if !r.Executed || !r.Success || r.ExitCode != 0 || r.Error != nil {
 		return nil, errorf(ExitInvalid, "target failure cannot promote: script execution failed (exit %d: %v)", r.ExitCode, r.Error)
 	}
 	if r.Artifact == nil || r.Artifact.Digest == "" {
@@ -698,6 +700,10 @@ func (p *ScriptPlan) Delegate(ctx context.Context, seat WorkerSeat) (*Delegation
 		return nil, errorf(ExitInvalid, "seat %q has no_input=false; no_input:true required for script delegation", seat.Name)
 	}
 
+	if !p.DryRun && seat.Runner != nil && (len(seat.AllowedCaps) == 0 || len(seat.AllowedEffects) == 0) {
+		return nil, errorf(ExitInvalid, "script execution requires nonempty declared capabilities and effects")
+	}
+
 	// Verify seat security caps/effects BEFORE any worker execution (fail closed).
 	if len(seat.DeniedCaps) > 0 {
 		if err := p.VerifyDeniedCaps(seat.DeniedCaps); err != nil {
@@ -733,14 +739,25 @@ func (p *ScriptPlan) Delegate(ctx context.Context, seat WorkerSeat) (*Delegation
 			Artifact: p.Artifact,
 			Body:     body,
 			Executed: false,
-			Success:  true,
+			Success:  false,
 			ExitCode: 0,
 		}, nil
 	}
 
-	// Execute via worker runner.
+	// Execute via worker runner. Preserve the process outcome even when a
+	// subsequent operation (such as durable recording) fails.
 	execRes, err := seat.Runner.RunScript(ctx, p.Artifact)
 	if err != nil {
+		res := &DelegationResult{Plan: p, Seat: seat.Name, Artifact: p.Artifact, Body: body, Executed: true, ExitCode: ExitInvalid, Error: err}
+		if execRes != nil {
+			res.ExitCode, res.Stdout, res.Stderr = execRes.ExitCode, execRes.Stdout, execRes.Stderr
+			res.Recording = execRes.Recording
+		}
+		return res, err
+	}
+
+	if execRes == nil {
+		err := errorf(ExitInvalid, "worker returned no execution outcome")
 		return &DelegationResult{
 			Plan:     p,
 			Seat:     seat.Name,
@@ -752,30 +769,20 @@ func (p *ScriptPlan) Delegate(ctx context.Context, seat WorkerSeat) (*Delegation
 			Error:    err,
 		}, err
 	}
-	if execRes == nil {
-		return &DelegationResult{
-			Plan:     p,
-			Seat:     seat.Name,
-			Artifact: p.Artifact,
-			Body:     body,
-			Executed: true,
-			Success:  true,
-			ExitCode: 0,
-		}, nil
-	}
 
 	success := execRes.ExitCode == 0 && execRes.Error == nil
 	res := &DelegationResult{
-		Plan:     p,
-		Seat:     seat.Name,
-		Artifact: p.Artifact,
-		Body:     body,
-		Executed: true,
-		Success:  success,
-		ExitCode: execRes.ExitCode,
-		Stdout:   execRes.Stdout,
-		Stderr:   execRes.Stderr,
-		Error:    execRes.Error,
+		Plan:      p,
+		Seat:      seat.Name,
+		Artifact:  p.Artifact,
+		Body:      body,
+		Executed:  true,
+		Success:   success,
+		ExitCode:  execRes.ExitCode,
+		Recording: execRes.Recording,
+		Stdout:    execRes.Stdout,
+		Stderr:    execRes.Stderr,
+		Error:     execRes.Error,
 	}
 	if !success && execRes.Error != nil {
 		return res, execRes.Error
