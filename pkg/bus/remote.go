@@ -6,8 +6,22 @@ package bus
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 )
+
+var localAbsPathRe = regexp.MustCompile(`(?:^|[\s"'\x60(\[=:,])((?:/|~/)[A-Za-z0-9._~-][^\s"'\x60)\]]*|[A-Za-z]:[\\/][^\s"'\x60)\]]+)`)
+
+// remotePathHint returns advice when a cross-host body names an absolute local
+// path, which the recipient host cannot open. It is advice only.
+func remotePathHint(body string) string {
+	m := localAbsPathRe.FindStringSubmatch(body)
+	if m == nil {
+		return ""
+	}
+	return "message body contains local path " + m[1] + "; the recipient host cannot read this host's filesystem — " +
+		"use an explicit locator instead (repo-relative path with commit, issue/room/artifact id, or URL)"
+}
 
 // Cross-host mail — the email model.
 //
@@ -147,7 +161,8 @@ func sendRemote(req SendRequest, route RemoteRoute) (SendResult, error) {
 		return SendResult{}, fmt.Errorf("relay accepted %s (id %s) but the local outbox copy failed: %w", route.Participant, id, err)
 	}
 	d := Delivery{To: route.Participant, State: StateQueued, Reason: "relayed; delivered when the recipient host next reads its inbox",
-		Warning: "the relay accepted the envelope for " + route.Participant + "; that is not proof the recipient host has read it"}
+		Warning: "the relay accepted the envelope for " + route.Participant + "; that is not proof the recipient host has read it",
+		Hint:    remotePathHint(req.Body)}
 	return SendResult{Seq: seq, ID: id, Kind: SendRemote, Label: route.Participant, Deliveries: []Delivery{d}}, nil
 }
 

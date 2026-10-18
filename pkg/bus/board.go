@@ -968,6 +968,8 @@ type Delivery struct {
 	State string `json:"state,omitempty"`
 	// Warning is an honest caveat: accepted onto the board is not read.
 	Warning string `json:"warning,omitempty"`
+	// Hint is non-blocking advice for the sender; it never changes delivery.
+	Hint string `json:"hint,omitempty"`
 }
 
 // SteerLive injects text into a recipient's live session when it has one.

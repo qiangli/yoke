@@ -155,3 +155,34 @@ func TestPostsCarryAUUID(t *testing.T) {
 	}
 	t.Fatal("post not found")
 }
+
+func TestRemotePathHint(t *testing.T) {
+	for body, want := range map[string]bool{
+		"see /Users/me/repo/file.go": true,
+		"look at (~/notes/x.md)":     true,
+		`C:\work\x.txt please`:       true,
+		"use and/or yes/no":          false,
+		"https://example.com/a/b":    false,
+		"repo-relative pkg/bus/a.go": false,
+	} {
+		if got := remotePathHint(body) != ""; got != want {
+			t.Errorf("remotePathHint(%q) = %v, want %v", body, got, want)
+		}
+	}
+}
+
+func TestSendRemoteAbsolutePathHint(t *testing.T) {
+	wireRemote(t, nil)
+	t.Setenv("BASHY_HOME", t.TempDir())
+	res, err := Send(SendRequest{From: "tester", To: "plinth@noviwin1", Body: "read /Users/me/x.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Kind != SendRemote || !strings.Contains(res.Deliveries[0].Hint, "/Users/me/x.go") {
+		t.Fatalf("missing hint: %+v", res)
+	}
+	res, err = Send(SendRequest{From: "tester", To: "plinth@noviwin1", Body: "read pkg/x.go"})
+	if err != nil || res.Deliveries[0].Hint != "" {
+		t.Fatalf("unexpected hint: %+v %v", res, err)
+	}
+}

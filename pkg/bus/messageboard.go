@@ -543,8 +543,11 @@ func steerNotice(from, body string) string {
 // prove — see the state block in board.go.
 func reportDelivery(cmd *cobra.Command, ds []Delivery) {
 	groups := map[string][]string{}
-	var warnings []string
+	var warnings, hints []string
 	for _, d := range ds {
+		if d.Hint != "" {
+			hints = append(hints, d.Hint)
+		}
 		st := d.State
 		if st == "" {
 			// A delivery with no state set is at least accepted: it was posted.
@@ -570,6 +573,9 @@ func reportDelivery(cmd *cobra.Command, ds []Delivery) {
 	}
 	for _, msg := range warnings {
 		fmt.Fprintf(w, "  warning: %s\n", msg)
+	}
+	for _, msg := range hints {
+		fmt.Fprintf(w, "  hint: %s\n", msg)
 	}
 }
 
