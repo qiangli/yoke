@@ -90,3 +90,47 @@ func TestEventsFollowPicksUpLaterEvents(t *testing.T) {
 type chanWriter struct{ ch chan string }
 
 func (c *chanWriter) Write(p []byte) (int, error) { c.ch <- string(p); return len(p), nil }
+
+func TestBusDeltaStreamItemEncoding(t *testing.T) {
+	// Test encoding regular timeline event
+	evItem := room.StreamItem{
+		Event: room.Event{
+			Seq:  10,
+			TS:   "2026-10-18T10:00:00Z",
+			Type: room.EventSprint,
+			Body: "decision",
+		},
+	}
+	b, err := EncodeStreamItem(evItem)
+	if err != nil {
+		t.Fatalf("encode event: %v", err)
+	}
+	var evLine EventsLine
+	if err := json.Unmarshal(b, &evLine); err != nil {
+		t.Fatalf("unmarshal event line: %v", err)
+	}
+	if evLine.SchemaVersion != EventsSchemaVersion || evLine.Event.Seq != 10 || evLine.Event.Type != room.EventSprint {
+		t.Fatalf("unexpected event wire line: %v", evLine)
+	}
+
+	// Test encoding resync notice
+	resyncItem := room.StreamItem{
+		Resync: &room.Resync{
+			Reason:          room.ResyncRetention,
+			Since:           5,
+			ArchivedThrough: 10,
+			Seq:             10,
+		},
+	}
+	rb, err := EncodeStreamItem(resyncItem)
+	if err != nil {
+		t.Fatalf("encode resync: %v", err)
+	}
+	var rLine ResyncLine
+	if err := json.Unmarshal(rb, &rLine); err != nil {
+		t.Fatalf("unmarshal resync line: %v", err)
+	}
+	if rLine.SchemaVersion != EventsSchemaVersion || rLine.Type != room.EventResync || rLine.Resync.Reason != room.ResyncRetention {
+		t.Fatalf("unexpected resync wire line: %v", rLine)
+	}
+}
