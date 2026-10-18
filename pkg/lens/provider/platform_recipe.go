@@ -309,6 +309,16 @@ func parseCloudDroplets(data []byte) ([]platformRecord, error) {
 	if err := dec.Decode(&items); err != nil {
 		return nil, fmt.Errorf("cloud recipe: %w", err)
 	}
+	if items == nil {
+		return nil, fmt.Errorf("cloud recipe: null droplet list")
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		if err == nil {
+			err = fmt.Errorf("unexpected trailing data")
+		}
+		return nil, fmt.Errorf("cloud recipe: %w", err)
+	}
 	rows := make([]platformRecord, 0, len(items))
 	for _, item := range items {
 		id, err := parseCloudDropletID(firstNonNil(item, "id", "ID", "Id"))

@@ -185,6 +185,21 @@ func TestCloudDropletsRejectInvalidSnapshots(t *testing.T) {
 			t.Fatalf("accepted droplets %q", bad)
 		}
 	}
+	// A top-level null is not an empty list.
+	if _, err := parseCloudDroplets([]byte(`null`)); err == nil {
+		t.Fatal("accepted top-level null droplet list")
+	}
+	// Trailing JSON after a valid array is rejected, not ignored.
+	for _, bad := range []string{
+		`[] {}`,
+		`[{"id":1,"name":"a"}] [{"id":2,"name":"b"}]`,
+		`[{"id":1,"name":"a"}] null`,
+		`[] trailing`,
+	} {
+		if _, err := parseCloudDroplets([]byte(bad)); err == nil {
+			t.Fatalf("accepted droplets with trailing data %q", bad)
+		}
+	}
 	// Large ids keep full precision: 2^53+1 must not collapse to 2^53.
 	rows, err := parseCloudDroplets([]byte(`[{"id":9007199254740993,"name":"big"}]`))
 	if err != nil || len(rows) != 1 || rows[0].id != "9007199254740993" {
