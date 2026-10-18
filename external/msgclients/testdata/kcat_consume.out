@@ -1,0 +1,2 @@
+{"key":null,"offset":7,"partition":0,"payload":"{\"id\":9007199254740993,\"total\":\"12.50\"}","topic":"orders"}
+{"key":null,"offset":8,"partition":0,"payload":"plain text with ünicode","topic":"orders"}
