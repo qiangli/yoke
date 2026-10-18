@@ -16,6 +16,7 @@ import (
 	"time"
 
 	yokegit "github.com/qiangli/yoke/git"
+	"github.com/qiangli/yoke/pkg/agentlaunch"
 	"github.com/qiangli/yoke/pkg/chat"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -1983,6 +1984,14 @@ func Delegate(ctx context.Context, opt DelegateOptions) (DelegateResult, error) 
 	return res, nil
 }
 
+// backgroundSupervisorEnv stamps the conductor's principal and declared reader
+// preferences (BASHY_PREFS) into the detached supervisor, which hands its
+// environment to the agent it execs; the foreground path gets the same
+// projection through chat.Invoke.
+func backgroundSupervisorEnv(base []string, r chat.Result) []string {
+	return agentlaunch.PrincipalEnv(base, agentlaunch.Launch{Nick: r.Nick, ToolName: r.Agent, Tool: r.Agent, Model: r.Model})
+}
+
 func chatOptionsForDelegate(res DelegateResult, opt DelegateOptions) chat.Options {
 	return chat.Options{
 		Agent:       res.Conductor,
@@ -2023,6 +2032,7 @@ func StartBackgroundRun(ctx context.Context, res DelegateResult, opt DelegateOpt
 	supervisorArgs := []string{"sdlc", "supervise", "--runs-dir", opt.RunsDir, run.ID, "--", dryRes.Agent}
 	supervisorArgs = append(supervisorArgs, dryRes.Args...)
 	cmd := exec.Command(exe, supervisorArgs...)
+	cmd.Env = backgroundSupervisorEnv(os.Environ(), dryRes)
 	applyBackgroundProcAttrs(cmd)
 	if err := cmd.Start(); err != nil {
 		run.Status = "failed"
