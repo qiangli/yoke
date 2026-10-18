@@ -4,3 +4,4 @@ match: ["tar"]
 preview_level: "unsupported"
 effects: ["fs.read", "fs.write", "proc.spawn"]
 listing: ["-t", "-f", "{args}"]
+json: ["lens: cmd:tar-tv"]

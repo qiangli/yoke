@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -853,5 +854,47 @@ func TestExtractToStdoutMissingMemberAndModeErrors(t *testing.T) {
 	}
 	if b, err := os.ReadFile(filepath.Join(dir, "z.txt")); err != nil || string(b) != "zed\n" {
 		t.Errorf("plain extract content: %q %v", b, err)
+	}
+}
+
+func TestJSONListing(t *testing.T) {
+	dir := t.TempDir()
+	makeTree(t, dir)
+
+	_, errb, code := runTool(t, dir, nil, "-cf", "a.tar", "src")
+	if code != 0 {
+		t.Fatalf("create: code=%d err=%q", code, errb)
+	}
+
+	// -tf a.tar --json
+	out, errb, code := runTool(t, dir, nil, "-tf", "a.tar", "--json")
+	if code != 0 {
+		t.Fatalf("list --json: code=%d err=%q", code, errb)
+	}
+	var entries []map[string]any
+	if err := json.Unmarshal([]byte(out), &entries); err != nil {
+		t.Fatalf("unmarshal json: %v\noutput: %s", err, out)
+	}
+	if len(entries) < 3 {
+		t.Fatalf("expected at least 3 entries, got %d", len(entries))
+	}
+	for _, e := range entries {
+		if e["filename"] == nil || e["flags"] == nil || e["date"] == nil {
+			t.Errorf("missing required keys in entry: %+v", e)
+		}
+	}
+
+	// -tvf a.tar --json produces same valid JSON
+	outV, errbV, codeV := runTool(t, dir, nil, "-tvf", "a.tar", "--json")
+	if codeV != 0 || outV != out {
+		t.Fatalf("tvf --json mismatch: code=%d err=%q", codeV, errbV)
+	}
+
+	// --json on create or extract must be rejected
+	if _, errb, code := runTool(t, dir, nil, "-cf", "b.tar", "src", "--json"); code != 2 || !strings.Contains(errb, "--json is only supported with -t") {
+		t.Errorf("expected usage error on -c --json, got code=%d err=%q", code, errb)
+	}
+	if _, errb, code := runTool(t, dir, nil, "-xf", "a.tar", "--json"); code != 2 || !strings.Contains(errb, "--json is only supported with -t") {
+		t.Errorf("expected usage error on -x --json, got code=%d err=%q", code, errb)
 	}
 }

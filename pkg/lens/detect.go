@@ -20,6 +20,9 @@ var aliases = map[string]string{
 	"pdf": "pdf", "docx": "docx", "xlsx": "xlsx", "pptx": "pptx",
 	"tar": "tar", "pax": "tar", "tgz": "tar", "zip": "zip",
 	"listing": "listing",
+	"cmd:ps":  "cmd:ps", "cmd:df": "cmd:df", "cmd:ls-l": "cmd:ls-l",
+	"cmd:du": "cmd:du", "cmd:wc": "cmd:wc", "cmd:stat": "cmd:stat",
+	"cmd:id": "cmd:id", "cmd:uname": "cmd:uname", "cmd:tar-tv": "cmd:tar-tv",
 }
 
 // Canonical returns the canonical format name for a -f/-t spelling, or "".
@@ -42,7 +45,7 @@ func byExtension(name string) string {
 		return "html"
 	}
 	f := aliases[ext]
-	if f == "listing" {
+	if f == "listing" || strings.HasPrefix(f, "cmd:") {
 		return ""
 	}
 	return f

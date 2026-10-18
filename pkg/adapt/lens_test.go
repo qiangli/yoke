@@ -136,3 +136,21 @@ func TestCLIJSONProjection(t *testing.T) {
 		t.Fatal(out.String(), diag.String())
 	}
 }
+
+func TestPrepareJSONLensTarTV(t *testing.T) {
+	var out bytes.Buffer
+	w, err := PrepareJSONLens(context.Background(), "cmd:tar-tv", &out)
+	if err != nil {
+		t.Fatalf("PrepareJSONLens failed: %v", err)
+	}
+	sample := "-rw-r--r-- alice/staff   1024 2026-10-18 12:00 app.py\n"
+	if _, err := w.Write([]byte(sample)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"filename": "app.py"`) {
+		t.Fatalf("expected json with app.py, got: %s", out.String())
+	}
+}

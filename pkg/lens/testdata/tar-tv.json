@@ -1,0 +1,27 @@
+[
+  {
+    "date": "2026-10-18 12:00",
+    "filename": "app.py",
+    "flags": "-rw-r--r--",
+    "group": "staff",
+    "owner": "alice",
+    "size": 1024
+  },
+  {
+    "date": "2026-10-18 12:05",
+    "filename": "src/",
+    "flags": "drwxr-xr-x",
+    "group": "staff",
+    "owner": "alice",
+    "size": 0
+  },
+  {
+    "date": "2026-10-18 12:10",
+    "filename": "link.txt",
+    "flags": "lrwxrwxrwx",
+    "group": "staff",
+    "link_to": "app.py",
+    "owner": "alice",
+    "size": 0
+  }
+]

@@ -1,0 +1,41 @@
+[
+  {
+    "command": "/sbin/init",
+    "cpu_percent": 0,
+    "mem_percent": 0.1,
+    "pid": 1,
+    "rss": 13116,
+    "start": "Oct10",
+    "stat": "Ss",
+    "time": "0:04",
+    "tty": null,
+    "user": "root",
+    "vsz": 168392
+  },
+  {
+    "command": "/usr/sbin/atd -f",
+    "cpu_percent": 0,
+    "mem_percent": 0,
+    "pid": 412,
+    "rss": 2108,
+    "start": "Oct10",
+    "stat": "S",
+    "time": "0:00",
+    "tty": null,
+    "user": "daemon",
+    "vsz": 24540
+  },
+  {
+    "command": "python3 app.py --port 8080",
+    "cpu_percent": 1.5,
+    "mem_percent": 0.5,
+    "pid": 1337,
+    "rss": 45120,
+    "start": "12:00",
+    "stat": "S+",
+    "time": "0:01",
+    "tty": "pts/1",
+    "user": "alice",
+    "vsz": 892340
+  }
+]

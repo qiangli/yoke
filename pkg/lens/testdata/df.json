@@ -1,0 +1,26 @@
+[
+  {
+    "1k_blocks": 41251136,
+    "available": 26279144,
+    "filesystem": "/dev/sda1",
+    "mounted_on": "/",
+    "use_percent": 33,
+    "used": 12845600
+  },
+  {
+    "1k_blocks": 1918816,
+    "available": 1918816,
+    "filesystem": "tmpfs",
+    "mounted_on": "/dev/shm",
+    "use_percent": 0,
+    "used": 0
+  },
+  {
+    "1k_blocks": 104857600,
+    "available": 54261760,
+    "filesystem": "/dev/sdb1",
+    "mounted_on": "/mnt/data storage",
+    "use_percent": 46,
+    "used": 45219840
+  }
+]

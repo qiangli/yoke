@@ -1,0 +1,14 @@
+[
+  {
+    "blocks": 4,
+    "path": "./src/sub"
+  },
+  {
+    "blocks": 16,
+    "path": "./src"
+  },
+  {
+    "blocks": 24,
+    "path": "."
+  }
+]

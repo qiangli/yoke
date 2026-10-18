@@ -1,0 +1,10 @@
+{
+  "hardware_platform": "x86_64",
+  "kernel_name": "Linux",
+  "kernel_release": "5.15.0-generic",
+  "kernel_version": "#42-Ubuntu SMP Fri Jan 1 00:00:00 UTC 2026",
+  "machine": "x86_64",
+  "node_name": "myhost",
+  "operating_system": "GNU/Linux",
+  "processor": "x86_64"
+}

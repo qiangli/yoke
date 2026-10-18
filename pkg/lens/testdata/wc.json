@@ -1,0 +1,20 @@
+[
+  {
+    "bytes": 150,
+    "file": "file1.txt",
+    "lines": 10,
+    "words": 20
+  },
+  {
+    "bytes": 300,
+    "file": "file2.txt",
+    "lines": 30,
+    "words": 40
+  },
+  {
+    "bytes": 450,
+    "file": "total",
+    "lines": 40,
+    "words": 60
+  }
+]

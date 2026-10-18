@@ -15,7 +15,9 @@ package tarcmd
 import (
 	"archive/tar"
 	"bufio"
+	"bytes"
 	"compress/gzip"
+	"context"
 	"fmt"
 	"io"
 	"io/fs"
@@ -28,13 +30,14 @@ import (
 	"time"
 
 	"github.com/qiangli/coreutils/tool"
+	"github.com/qiangli/yoke/pkg/lens"
 )
 
 var cmd = &tool.Tool{
 	Name:     "tar",
 	Synopsis: "Create, list, or extract tar archives (optionally gzip-compressed).",
 	Usage: "tar -c [-zv] -f ARCHIVE [-C DIR] [--exclude=PATTERN] FILE...\n" +
-		"   or: tar -t [-zv] -f ARCHIVE [MEMBER...]\n" +
+		"   or: tar -t [-zv] [--json] -f ARCHIVE [MEMBER...]\n" +
 		"   or: tar -x [-zv] -f ARCHIVE [-C DIR] [--strip-components=N] [MEMBER...]",
 }
 
@@ -60,6 +63,7 @@ func run(rc *tool.RunContext, args []string) int {
 	fs.StringArray("exclude", nil, "exclude files matching PATTERN when creating an archive")
 	strip := fs.Uint("strip-components", 0, "strip N leading components from file names on extraction")
 	toStdout := fs.BoolP("to-stdout", "O", false, "extract regular-file contents to standard output instead of the filesystem")
+	asJSON := fs.Bool("json", false, "format output as JSON")
 
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
@@ -80,6 +84,9 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	if *file == "" {
 		return tool.UsageError(rc, cmd, "no archive file specified; use -f FILE ('-' means stdin/stdout)")
+	}
+	if *asJSON && !*list {
+		return tool.UsageError(rc, cmd, "--json is only supported with -t")
 	}
 	if fs.Changed("strip-components") && !*extract {
 		return tool.UsageError(rc, cmd, "--strip-components is only supported with -x")
@@ -111,7 +118,7 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		return doCreate(rc, *file, base, orderedOperands, *gz, *verbose)
 	}
-	return doRead(rc, *file, base, operands, *gz, *verbose, *extract, *toStdout, int(*strip))
+	return doRead(rc, *file, base, operands, *gz, *verbose, *extract, *toStdout, int(*strip), *asJSON)
 }
 
 // expandOldStyle handles GNU tar's "old option style": a first operand
@@ -157,7 +164,7 @@ type createOperand struct {
 var tarLongOptions = map[string]bool{
 	"create": true, "extract": true, "list": true, "file": true,
 	"gzip": true, "verbose": true, "directory": true, "exclude": true,
-	"strip-components": true, "to-stdout": true, "help": true, "version": true,
+	"strip-components": true, "to-stdout": true, "json": true, "help": true, "version": true,
 }
 
 var tarLongOptionsWithValue = map[string]bool{
@@ -552,7 +559,7 @@ func tarNamedClassContains(class string, c byte) bool {
 
 // ----------------------------------------------------------- list/extract
 
-func doRead(rc *tool.RunContext, archive, base string, operands []string, gz, verbose, extract, toStdout bool, strip int) int {
+func doRead(rc *tool.RunContext, archive, base string, operands []string, gz, verbose, extract, toStdout bool, strip int, asJSON bool) int {
 	var r io.Reader
 	if archive == "-" {
 		if rc.In == nil {
@@ -589,7 +596,12 @@ func doRead(rc *tool.RunContext, archive, base string, operands []string, gz, ve
 	tr := tar.NewReader(r)
 	matched := make([]bool, len(operands))
 	failed := false
-	lister := &verboseLister{out: rc.Out}
+	var jsonBuf bytes.Buffer
+	outWriter := rc.Out
+	if asJSON {
+		outWriter = &jsonBuf
+	}
+	lister := &verboseLister{out: outWriter}
 	var dirs []dirFix
 
 	for {
@@ -609,7 +621,7 @@ func doRead(rc *tool.RunContext, archive, base string, operands []string, gz, ve
 		}
 
 		if !extract {
-			if verbose {
+			if asJSON || verbose {
 				lister.print(hdr)
 			} else {
 				fmt.Fprintln(rc.Out, hdr.Name)
@@ -662,6 +674,19 @@ func doRead(rc *tool.RunContext, archive, base string, operands []string, gz, ve
 	if failed {
 		fmt.Fprintln(rc.Err, "tar: Exiting with failure status due to previous errors")
 		return 1
+	}
+	if !extract && asJSON {
+		res, err := lens.Convert(context.Background(), lens.Request{
+			From: "cmd:tar-tv",
+			To:   "json",
+			Data: jsonBuf.Bytes(),
+		})
+		if err != nil {
+			fmt.Fprintf(rc.Err, "tar: %v\n", err)
+			return 1
+		}
+		rc.Out.Write(res.Data)
+		return 0
 	}
 	return 0
 }

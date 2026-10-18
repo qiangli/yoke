@@ -1,0 +1,4 @@
+total 24
+-rw-r--r--  1 alice staff  1024 Oct 10 12:00 app.py
+drwxr-xr-x  3 alice staff   512 Oct 10 12:05 src
+lrwxr-xr-x  1 alice staff     6 Oct 10 12:10 link.txt -> app.py

@@ -219,6 +219,17 @@ func buildRows() []Row {
 			return b.Bytes(), err
 		})
 	}
+
+	// command output -> data (jc-style)
+	for _, cmd := range []string{
+		"cmd:ps", "cmd:df", "cmd:ls-l", "cmd:du", "cmd:wc",
+		"cmd:stat", "cmd:id", "cmd:uname", "cmd:tar-tv",
+	} {
+		cmd := cmd
+		add(cmd, "json", Lossy, func(data []byte, l *losses) ([]byte, error) {
+			return parseCmdToJSON(cmd, data, l)
+		})
+	}
 	return t
 }
 

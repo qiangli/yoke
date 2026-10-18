@@ -1,0 +1,4 @@
+USER       PID  %CPU %MEM      VSZ    RSS TTY      STAT START   TIME COMMAND
+root         1   0.0  0.1   168392  13116 ?        Ss   Oct10   0:04 /sbin/init
+daemon     412   0.0  0.0    24540   2108 ?        S    Oct10   0:00 /usr/sbin/atd -f
+alice     1337   1.5  0.5   892340  45120 pts/1    S+   12:00   0:01 python3 app.py --port 8080

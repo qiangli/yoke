@@ -1,0 +1,22 @@
+[
+  {
+    "access": "0644",
+    "access_time": "2026-10-18 12:00:00.000000000 +0000",
+    "birth_time": "2026-10-18 12:00:00.000000000 +0000",
+    "blocks": 8,
+    "change_time": "2026-10-18 12:00:00.000000000 +0000",
+    "device": "801h/2049d",
+    "file": "test.txt",
+    "flags": "-rw-r--r--",
+    "gid": 1000,
+    "group": "alice",
+    "inode": 123456,
+    "io_blocks": 4096,
+    "links": 1,
+    "modify_time": "2026-10-18 12:00:00.000000000 +0000",
+    "size": 1024,
+    "type": "regular file",
+    "uid": 1000,
+    "user": "alice"
+  }
+]

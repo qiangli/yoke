@@ -1,0 +1,8 @@
+  File: test.txt
+  Size: 1024       	Blocks: 8          IO Block: 4096   regular file
+Device: 801h/2049d	Inode: 123456      Links: 1
+Access: (0644/-rw-r--r--)  Uid: ( 1000/   alice)   Gid: ( 1000/   alice)
+Access: 2026-10-18 12:00:00.000000000 +0000
+Modify: 2026-10-18 12:00:00.000000000 +0000
+Change: 2026-10-18 12:00:00.000000000 +0000
+ Birth: 2026-10-18 12:00:00.000000000 +0000
