@@ -566,3 +566,41 @@ func TestChatCLIFullAndViewCanonicalEscapes(t *testing.T) {
 		t.Fatal("malformed --view accepted")
 	}
 }
+
+func TestChatCLIGlobDefaultsAndProfileExplain(t *testing.T) {
+	permitUnsafeLaunch(t)
+	pinCatalog(t)
+	isolatedRoom(t)
+	setTestHome(t, t.TempDir())
+	t.Setenv("BASHY_PREFS", `{"budget_bytes":2048,"help":"script","dialect":"pwsh","defaults":{"*":{"full":false},"chat":{"full":true,"bogus":1}}}`)
+	full := strings.Repeat("canonical producer line\n", 1000)
+	chatRunnerOverride = &fakeRunner{output: full}
+	t.Cleanup(func() { chatRunnerOverride = nil })
+	run := func(extra ...string) (string, string) {
+		cmd := NewChatCmd()
+		var out, errb bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&errb)
+		cmd.SetArgs(append([]string{"--agent", "codex", "-m", "x", "--cwd", t.TempDir(), "--plain", "--explain"}, extra...))
+		if err := cmd.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		return out.String(), errb.String()
+	}
+	out, errs := run()
+	if strings.TrimRight(out, "\n") != strings.TrimRight(full, "\n") {
+		t.Fatalf("glob default full=true not applied: %d vs %d", len(out), len(full))
+	}
+	for _, want := range []string{"default full=true source=env", `pattern="chat"`, "bogus ignored", "help=script(env)", "dialect=pwsh(env)", "budget_bytes=2048(env)", "canonical=true"} {
+		if !strings.Contains(errs, want) {
+			t.Fatalf("explain missing %q in %q", want, errs)
+		}
+	}
+	if strings.Contains(errs, "canonical producer") {
+		t.Fatal("explain leaked output contents")
+	}
+	out, errs = run("--full=false")
+	if len(out) >= len(full) || !strings.Contains(errs, "explicit flag wins") {
+		t.Fatalf("explicit flag did not beat default (%d bytes): %q", len(out), errs)
+	}
+}

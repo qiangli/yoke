@@ -11,3 +11,4 @@ missing:
 tool:    gt-tool (gt-tool)
 model:   gt-model → gt-upstream-1
 launch:  gt-tool --yolo -m gt-upstream-1 {prompt}
+reader:   budget_bytes=40960 view=text help=skill dialect=bash

@@ -230,6 +230,51 @@
     "description": "permission mode: auto, ask, review, or deny"
   },
   {
+    "path": "prefs",
+    "type": "object",
+    "description": "declared reader preferences"
+  },
+  {
+    "path": "prefs.budget_bytes",
+    "type": "int",
+    "description": "output-reduction budget in bytes"
+  },
+  {
+    "path": "prefs.defaults",
+    "type": "map[string]map[string]interface {}",
+    "description": "glob defaults per command like PSDefaultParameterValues"
+  },
+  {
+    "path": "prefs.defaults.\u003ckey\u003e",
+    "type": "map[string]interface {}",
+    "description": "map value"
+  },
+  {
+    "path": "prefs.dialect",
+    "type": "string",
+    "description": "command dialect (bash, pwsh, cmd)"
+  },
+  {
+    "path": "prefs.extra",
+    "type": "map[string]interface {}",
+    "description": "additional underscore keys"
+  },
+  {
+    "path": "prefs.extra.\u003ckey\u003e",
+    "type": "interface {}",
+    "description": "map value"
+  },
+  {
+    "path": "prefs.help",
+    "type": "string",
+    "description": "help/instruction form (skill, script, mcp, classic)"
+  },
+  {
+    "path": "prefs.view",
+    "type": "string",
+    "description": "output shape (json, yaml, md, text)"
+  },
+  {
     "path": "ratings",
     "type": "object",
     "description": "duty ratings (code, manage, judge)"

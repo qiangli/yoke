@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -208,6 +209,9 @@ type Result struct {
 	Output        string   `json:"output,omitempty"`
 	// BudgetSource names the reader-preference layer that set the output budget.
 	BudgetSource string `json:"budget_source,omitempty"`
+	// ReaderProfile is the content-free effective reader profile (view, help,
+	// dialect, budget, each with its source layer).
+	ReaderProfile string `json:"reader_profile,omitempty"`
 }
 
 // LaunchProfile is the minimal headless launch contract needed by chat.
@@ -898,6 +902,14 @@ func reduceChatBytes(out []byte, plan fleet.SinkPlan) (string, error) {
 // readerSinkPlan resolves the reader's output preferences for this turn's agent
 // (explicit > BASHY_PREFS > agent > tool > model band > default).
 func readerSinkPlan(name string, opt Options) (fleet.SinkPlan, error) {
+	prefs, src, err := resolveReaderPrefs(name, opt)
+	if err != nil {
+		return fleet.SinkPlan{}, err
+	}
+	return fleet.PlanSink(prefs, src, opt.Full), nil
+}
+
+func resolveReaderPrefs(name string, opt Options) (fleet.ReaderPrefs, fleet.ReaderPrefsSources, error) {
 	catalog := opt.Catalog
 	if catalog == nil {
 		catalog = newCatalog()
@@ -905,14 +917,51 @@ func readerSinkPlan(name string, opt Options) (fleet.SinkPlan, error) {
 	var ap *fleet.Agent
 	var tp *fleet.Tool
 	band := 0
-	if a, t, m, err := catalog.Binding(name); err == nil {
-		ap, tp, band = &a, &t, m.Band
+	if name != "" {
+		if a, t, m, err := catalog.Binding(name); err == nil {
+			ap, tp, band = &a, &t, m.Band
+		}
 	}
 	prefs, src, err := fleet.ResolveReaderPrefsWithSourcesFromEnv(fleet.ReaderPrefs{}, ap, tp, band)
 	if err != nil {
-		return fleet.SinkPlan{}, fmt.Errorf("chat: resolve reader preferences: %w", err)
+		return prefs, src, fmt.Errorf("chat: resolve reader preferences: %w", err)
 	}
-	return fleet.PlanSink(prefs, src, opt.Full), nil
+	return prefs, src, nil
+}
+
+// applyChatDefaults applies the resolved glob defaults for the "chat" command
+// to flags the caller did not set (explicit flag wins). Unknown option names
+// are reported, never silently dropped. Returns the explain lines.
+func applyChatDefaults(cmd *cobra.Command, opt Options) ([]string, error) {
+	name, _ := ResolveAgent(opt.Agent, opt.Role)
+	prefs, src, err := resolveReaderPrefs(name, opt)
+	if err != nil {
+		return nil, err
+	}
+	applied := fleet.MatchCommandDefaults(prefs, src, "chat")
+	var lines []string
+	keys := make([]string, 0, len(applied.Options))
+	for k := range applied.Options {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		flagName := strings.ReplaceAll(k, "_", "-")
+		f := cmd.Flags().Lookup(flagName)
+		switch {
+		case f == nil:
+			lines = append(lines, fmt.Sprintf("default %s ignored: no such option source=%s pattern=%q", k, applied.Sources[k], applied.Pattern[k]))
+		case f.Changed:
+			lines = append(lines, fmt.Sprintf("default %s skipped: explicit flag wins source=%s", k, applied.Sources[k]))
+		default:
+			if err := cmd.Flags().Set(flagName, fmt.Sprint(applied.Options[k])); err != nil {
+				return nil, fmt.Errorf("chat: default %s=%v (%s): %w", k, applied.Options[k], applied.Sources[k], err)
+			}
+			f.Changed = false
+			lines = append(lines, fmt.Sprintf("default %s=%v source=%s pattern=%q", k, applied.Options[k], applied.Sources[k], applied.Pattern[k]))
+		}
+	}
+	return lines, nil
 }
 
 func emitReduced(dst io.Writer, text string) error {
@@ -1121,6 +1170,10 @@ func NewChatCmd() *cobra.Command {
 			if len(args) > 0 {
 				opt.Instruction = strings.TrimSpace(strings.Join(append([]string{opt.Instruction}, args...), " "))
 			}
+			defaultLines, derr := applyChatDefaults(cmd, opt)
+			if derr != nil {
+				return derr
+			}
 			if view != "" {
 				if view != fleet.ViewCanonical {
 					return fmt.Errorf("chat: unsupported --view %q (only %q)", view, fleet.ViewCanonical)
@@ -1218,6 +1271,12 @@ func NewChatCmd() *cobra.Command {
 			res, err := Invoke(cmd.Context(), opt, chatRunnerOverride)
 			if explain && res.BudgetSource != "" {
 				fmt.Fprintf(cmd.ErrOrStderr(), "chat: output budget source=%s canonical=%t\n", res.BudgetSource, opt.Full)
+				if res.ReaderProfile != "" {
+					fmt.Fprintf(cmd.ErrOrStderr(), "chat: profile %s\n", res.ReaderProfile)
+				}
+				for _, l := range defaultLines {
+					fmt.Fprintf(cmd.ErrOrStderr(), "chat: %s\n", l)
+				}
 			}
 			if opt.JSON {
 				b, _ := json.Marshal(res)
@@ -1507,6 +1566,7 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 		return res, planErr
 	}
 	res.BudgetSource = plan.Source
+	res.ReaderProfile = plan.Profile()
 	reduced, reduceErr := reduceInvokeOutput(out, plan)
 	if reduceErr != nil {
 		return res, reduceErr
