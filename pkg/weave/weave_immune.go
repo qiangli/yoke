@@ -2,7 +2,10 @@ package weave
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -63,14 +66,81 @@ type quotaImmuneAction struct {
 	DryRun    bool      `json:"dry_run,omitempty"`
 }
 
-// quotaImmuneTickInputs is scoped to one tick. The analyzer and observation
-// journal both read their full stores; share those reads across live seats.
-// A new tick always gets fresh inputs, including after a dry run.
+// quotaImmuneTickInputs shares one delta-backed observation view across seats.
+// Forecasts are fresh for each tick, including dry runs.
 type quotaImmuneTickInputs struct {
 	joined    []quotaImmuneObservedPair
 	forecasts []llmbudget.AccountForecast
 	loaded    bool
 	err       error
+}
+
+type quotaImmuneDeltaState struct {
+	Cursor quotaobs.Cursor        `json:"cursor"`
+	Rows   []quotaobs.Observation `json:"rows"`
+}
+
+func loadQuotaImmuneDelta(dir string, now time.Time) (*quotaImmuneTickInputs, quotaImmuneDeltaState, error) {
+	name := filepath.Join(dir, "quota-immune-cursor.json")
+	var state quotaImmuneDeltaState
+	if b, err := os.ReadFile(name); err == nil {
+		if err := json.Unmarshal(b, &state); err != nil {
+			return nil, state, err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, state, err
+	}
+	rows, next, err := quotaImmuneDelta(state.Cursor)
+	if errors.Is(err, quotaobs.ErrCursorExpired) {
+		// Replay from the surviving journal after rotation. Run and sprint
+		// records still own action dedupe, including a critical grace timer.
+		state = quotaImmuneDeltaState{}
+		rows, next, err = quotaImmuneDelta(state.Cursor)
+	}
+	if err != nil {
+		return nil, state, err
+	}
+	state.Cursor = next
+	state.Rows = append(state.Rows, rows...)
+	kept := state.Rows[:0]
+	for _, row := range state.Rows {
+		if !row.At.Before(now.Add(-24 * time.Hour)) {
+			kept = append(kept, row)
+		}
+	}
+	state.Rows = kept
+	inputs := &quotaImmuneTickInputs{loaded: true}
+	inputs.joined = joinQuotaImmuneObservations(state.Rows, quotaImmuneClassify(state.Rows, now))
+	return inputs, state, nil
+}
+
+func saveQuotaImmuneDelta(dir string, state quotaImmuneDeltaState) error {
+	name := filepath.Join(dir, "quota-immune-cursor.json")
+	b, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dir, ".quota-immune-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if err := f.Chmod(0600); err != nil {
+		f.Close()
+		return err
+	}
+	if _, err := f.Write(b); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), name)
 }
 
 type quotaImmuneObservedPair struct {
@@ -121,6 +191,8 @@ var (
 	quotaImmuneForecast    = llmbudget.Forecast
 	quotaImmuneRead        = quotaobs.Read
 	quotaImmuneObserved    = llmbudget.Observed
+	quotaImmuneDelta       = quotaobs.ReadDelta
+	quotaImmuneClassify    = llmbudget.ObservedRows
 	quotaImmuneSay         = func(cmd *cobra.Command, id int64, message string) error {
 		return runWeaveSay(cmd, id, message, false, false, "", &weaveOutputFlags{})
 	}
@@ -327,9 +399,18 @@ func runQuotaImmuneTick(cmd *cobra.Command, _ string, dir string, dryRun bool) (
 	if err != nil {
 		return nil, err
 	}
-	inputs := &quotaImmuneTickInputs{forecasts: quotaImmuneForecast(cmd.Context(), now)}
+	inputs := &quotaImmuneTickInputs{}
+	var deltaState quotaImmuneDeltaState
+	if quotaImmuneDelta != nil {
+		inputs, deltaState, err = loadQuotaImmuneDelta(dir, now)
+		if err != nil {
+			return nil, err
+		}
+	}
+	inputs.forecasts = quotaImmuneForecast(cmd.Context(), now)
 	ctx := context.WithValue(cmd.Context(), quotaImmuneInputsKey{}, inputs)
 	var actions []quotaImmuneAction
+	assessmentFailed := false
 	for _, it := range q.Items {
 		if it.State != "working" || it.LaunchSpec == nil {
 			continue
@@ -344,6 +425,7 @@ func runQuotaImmuneTick(cmd *cobra.Command, _ string, dir string, dryRun bool) (
 		}
 		assessment, err := assessQuotaImmune(ctx, seat, deadline, now, policy)
 		if err != nil {
+			assessmentFailed = true
 			fmt.Fprintf(cmd.ErrOrStderr(), "weave immune: run #%d: %v\n", it.ID, err)
 			continue
 		}
@@ -417,6 +499,11 @@ func runQuotaImmuneTick(cmd *cobra.Command, _ string, dir string, dryRun bool) (
 	silent, err := checkSilentSprintManagers(now, dryRun)
 	if err != nil {
 		return actions, err
+	}
+	if !dryRun && !assessmentFailed && quotaImmuneDelta != nil {
+		if err := saveQuotaImmuneDelta(dir, deltaState); err != nil {
+			return actions, err
+		}
 	}
 	return append(actions, silent...), nil
 }

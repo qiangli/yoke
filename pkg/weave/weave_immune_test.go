@@ -23,12 +23,15 @@ func withQuotaImmuneFakes(t *testing.T) {
 	headroom, observe := quotaImmuneHeadroom, quotaImmuneObserve
 	forecast, resolve := quotaImmuneForecast, quotaImmuneResolveSeat
 	read, observed := quotaImmuneRead, quotaImmuneObserved
+	delta, classify := quotaImmuneDelta, quotaImmuneClassify
+	quotaImmuneDelta = nil // Legacy fake observations in existing decision tests.
 	say, kill, send := quotaImmuneSay, quotaImmuneKill, weaveSupervisionSend
 	t.Cleanup(func() {
 		quotaImmuneNow, quotaImmunePolicy = now, policy
 		quotaImmuneHeadroom, quotaImmuneObserve = headroom, observe
 		quotaImmuneForecast, quotaImmuneResolveSeat = forecast, resolve
 		quotaImmuneRead, quotaImmuneObserved = read, observed
+		quotaImmuneDelta, quotaImmuneClassify = delta, classify
 		quotaImmuneSay, quotaImmuneKill, weaveSupervisionSend = say, kill, send
 	})
 }
@@ -90,6 +93,90 @@ func immuneTestCommand() (*cobra.Command, *bytes.Buffer) {
 	cmd.SetOut(buf)
 	cmd.SetErr(buf)
 	return cmd, buf
+}
+
+func TestQuotaImmuneDeltaRestartAndRotation(t *testing.T) {
+	withQuotaImmuneFakes(t)
+	quotaImmuneDelta = quotaobs.ReadDelta
+	root := t.TempDir()
+	dir, err := weaveQueueDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	if err := withWeaveQueueLock(dir, func(q *weaveQueue) error {
+		q.Items = []*weaveItem{{ID: 1, State: "working", LaunchSpec: &weaveLaunchSpec{Agent: "agent"}}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	quotaImmuneNow = func() time.Time { return now }
+	quotaImmunePolicy = func() (llmbudget.ImmuneSettings, error) { return llmbudget.ImmuneSettings{GracePeriod: time.Hour}, nil }
+	quotaImmuneResolveSeat = func(string, string, string) (quotaImmuneSeat, bool) { return quotaImmuneSeat{Account: "plan"}, true }
+	quotaImmuneHeadroom = func(context.Context, string, string) (float64, llmbudget.Binding, bool, error) {
+		return 0, llmbudget.Binding{}, false, nil
+	}
+	quotaImmuneForecast = func(context.Context, time.Time) []llmbudget.AccountForecast { return nil }
+	quotaImmuneObserve = readQuotaImmuneObservation
+	quotaImmuneClassify = func(rows []quotaobs.Observation, _ time.Time) []llmbudget.ObservedState {
+		out := make([]llmbudget.ObservedState, 0, len(rows))
+		for _, o := range rows {
+			out = append(out, llmbudget.ObservedState{Account: o.Account, Plan: o.Plan, Tool: o.Tool, At: o.At, ExcerptSHA: o.ExcerptSHA, Kind: o.Parsed.Kind, ResetAt: o.Parsed.ResetAt, Matcher: o.Parsed, Classification: "observed"})
+		}
+		return out
+	}
+	quotaImmuneSay = func(*cobra.Command, int64, string) error { return nil }
+	weaveSupervisionSend = func(string, string) error { return nil }
+	read := quotaImmuneDelta
+	var counts []int
+	quotaImmuneDelta = func(c quotaobs.Cursor) ([]quotaobs.Observation, quotaobs.Cursor, error) {
+		rows, next, err := read(c)
+		counts = append(counts, len(rows))
+		return rows, next, err
+	}
+	cmd, _ := immuneTestCommand()
+	reset := now.Add(time.Hour)
+	add := func(kind string) {
+		t.Helper()
+		if err := quotaobs.Record(context.Background(), quotaobs.Observation{At: now, Account: "plan", Excerpt: kind, Parsed: &quotaobs.ParsedSignal{Kind: kind, ResetAt: &reset}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("warning")
+	if a, err := runQuotaImmuneTick(cmd, root, dir, true); err != nil || len(a) != 1 || !a[0].DryRun {
+		t.Fatalf("dry run: %+v %v", a, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "quota-immune-cursor.json")); !os.IsNotExist(err) {
+		t.Fatalf("dry run wrote cursor: %v", err)
+	}
+	if a, err := runQuotaImmuneTick(cmd, root, dir, false); err != nil || len(a) != 1 || a[0].Level != "warn" {
+		t.Fatalf("first: %+v %v", a, err)
+	}
+	if a, err := runQuotaImmuneTick(cmd, root, dir, false); err != nil || len(a) != 0 {
+		t.Fatalf("restart: %+v %v", a, err)
+	}
+	if len(counts) != 3 || counts[0] != 1 || counts[1] != 1 || counts[2] != 0 {
+		t.Fatalf("delta counts: %v", counts)
+	}
+	add("exhausted")
+	if a, err := runQuotaImmuneTick(cmd, root, dir, false); err != nil || len(a) != 1 || a[0].Level != "critical" {
+		t.Fatalf("critical: %+v %v", a, err)
+	}
+	if counts[3] != 1 {
+		t.Fatalf("third delta: %v", counts)
+	}
+	// Simulate the journal's rename rotation while a cursor is persisted.
+	p := filepath.Join(os.Getenv("BASHY_HOME"), "quota", "observations.jsonl")
+	if err := os.Rename(p, p+".1"); err != nil {
+		t.Fatal(err)
+	}
+	add("warning again")
+	if a, err := runQuotaImmuneTick(cmd, root, dir, false); err != nil || len(a) != 0 {
+		t.Fatalf("rotation replay: %+v %v", a, err)
+	}
+	if counts[4] != 1 {
+		t.Fatalf("rotation delta: %v", counts)
+	}
 }
 
 func TestQuotaImmuneWarnCriticalGraceAndDedupe(t *testing.T) {

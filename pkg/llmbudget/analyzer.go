@@ -379,6 +379,11 @@ func Observed(ctx context.Context, now time.Time) []ObservedState {
 	if err != nil {
 		return nil
 	}
+	return ObservedRows(obs, now)
+}
+
+// ObservedRows classifies a supplied journal delta without rereading the journal.
+func ObservedRows(obs []quotaobs.Observation, now time.Time) []ObservedState {
 	cache, err := readAnnotations()
 	if err != nil {
 		return nil
