@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/qiangli/yoke/pkg/redact"
+	"github.com/qiangli/yoke/pkg/secrets"
 	"io"
 	"os"
 	"strings"
@@ -72,7 +74,7 @@ func (t *Transcript) Distill() (title, body string) {
 	if first == "" {
 		first = pick("")
 	}
-	title = truncateRunes(strings.Join(strings.Fields(first), " "), transcriptTitleCap)
+	title = truncateRunes(maskDistilled(strings.Join(strings.Fields(first), " ")), transcriptTitleCap)
 
 	var sb strings.Builder
 	for _, m := range t.Messages {
@@ -85,6 +87,16 @@ func (t *Transcript) Distill() (title, body string) {
 		}
 		sb.WriteString(m.Role + ": " + content)
 	}
-	body = truncateRunes(sb.String(), transcriptBodyCap)
+	body = truncateRunes(maskDistilled(sb.String()), transcriptBodyCap)
 	return title, body
+}
+
+// maskDistilled scrubs host identity, then masks credential shapes.
+// pkg/execlog.MaskSecrets would cycle (execlog imports kb), so the shared
+// pkg/secrets shape masker is used instead.
+func maskDistilled(s string) string {
+	s = redact.FromHost().String(s)
+	r := secrets.NewRedactor()
+	_ = r.SetShapeMode(secrets.ShapeMask)
+	return string(r.Redact([]byte(s)))
 }

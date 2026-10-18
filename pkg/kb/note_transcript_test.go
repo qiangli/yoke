@@ -2,7 +2,9 @@ package kb
 
 import (
 	"encoding/json"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -94,5 +96,31 @@ func TestNoteTranscriptInvalid(t *testing.T) {
 		if ents, _ := os.ReadDir(dir); len(ents) != 0 {
 			t.Fatalf("wrote something for %q: %v", in, ents)
 		}
+	}
+}
+
+func TestNoteTranscriptMasksSecrets(t *testing.T) {
+	gh := "ghp_" + strings.Repeat("aB3dE5gH7k", 3) + "aB3dE5"
+	aws := "AKIAIOSFODNN7EXAMPLE"
+	in := `{"episode":"ep-1","messages":[{"role":"user","content":"token ` + gh + `"},{"role":"tool","content":"key ` + aws + ` and ` + gh + `"}]}`
+	dir := t.TempDir()
+	env, out, err := addTx(t, dir, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, gh) || strings.Contains(out, aws) {
+		t.Fatalf("secret leaked in output: %s", out)
+	}
+	filepath.WalkDir(dir, func(p string, d fs.DirEntry, e error) error {
+		if e == nil && !d.IsDir() {
+			b, _ := os.ReadFile(p)
+			if strings.Contains(string(b), gh) || strings.Contains(string(b), aws) {
+				t.Errorf("secret leaked in %s", p)
+			}
+		}
+		return nil
+	})
+	if len(env.Pages) != 1 || strings.Contains(env.Pages[0].Title, gh) {
+		t.Fatalf("title: %+v", env.Pages)
 	}
 }
