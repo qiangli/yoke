@@ -66,8 +66,9 @@ func TestSend_UnresolvedBareNameStillMayRelay(t *testing.T) {
 	isolate(t)
 	instStore(t)
 	asked := relaySpy(t)
+	prevSend := RemoteSend
 	RemoteSend = func(RemoteMessage) (RemoteReceipt, error) { return RemoteReceipt{}, nil }
-	t.Cleanup(func() { RemoteSend = nil })
+	t.Cleanup(func() { RemoteSend = prevSend })
 	res, err := Send(SendRequest{From: "tester", To: "colleague", Topic: "mb", Body: "hi"})
 	if err != nil || res.Kind != SendRemote || len(*asked) != 1 {
 		t.Fatalf("legitimate remote name must keep relaying: %+v %v (asked %v)", res, err, *asked)

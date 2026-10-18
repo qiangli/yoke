@@ -189,3 +189,23 @@ func TestSendRemoteAbsolutePathHint(t *testing.T) {
 		t.Fatalf("unexpected hint: %+v %v", res, err)
 	}
 }
+
+// An unstubbed remote Send must reach the TestMain guard, not a real relay,
+// and must leave the (private) board untouched.
+func TestLocatorRelayGuardRefusesUnstubbedDial(t *testing.T) {
+	isolate(t)
+	prevR := RemoteResolve
+	RemoteResolve = func(string) (RemoteRoute, error) {
+		return RemoteRoute{Participant: "plinth@noviwin1", Host: "noviwin1", Session: "s"}, nil
+	}
+	defer func() { RemoteResolve = prevR }()
+	before := boardLen(t)
+	_, err := Send(SendRequest{From: "tester", To: "plinth@noviwin1", Body: "x"})
+	if err == nil || !strings.Contains(err.Error(), "real relay") {
+		t.Fatalf("err = %v, want guard refusal", err)
+	}
+	if boardLen(t) != before {
+		t.Fatal("refused dial still posted")
+	}
+	relayDials = nil // expected dial; don't fail the run
+}
