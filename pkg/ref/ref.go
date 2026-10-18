@@ -42,6 +42,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Kind is the namespace half of a ref: which store owns the id.
@@ -496,3 +497,18 @@ func (g *Registry) Resolve(s string) (Node, error) {
 // ErrNoResolver: the kind is in the vocabulary but this build registered no
 // resolver for it.
 var ErrNoResolver = errors.New("ref: no resolver wired for kind")
+
+// RunSources identifies persisted evidence owned by a run. It carries no process
+// liveness: readers must derive progress from the named artifacts.
+type RunSources struct {
+	Workspace  string
+	BaseCommit string
+	LogPath    string
+	StartedAt  time.Time
+}
+
+// RunSourceResolver optionally extends Resolver with the run's evidence handles.
+type RunSourceResolver interface {
+	Resolver
+	RunSources(id string) (RunSources, error)
+}

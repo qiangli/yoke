@@ -2,11 +2,14 @@ package weave
 
 import (
 	"errors"
+	"fmt"
+	"github.com/qiangli/yoke/pkg/bus"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qiangli/yoke/pkg/ref"
 )
@@ -191,5 +194,29 @@ func TestResolveRunCurrentCheckoutWins(t *testing.T) {
 	}
 	if n.Title != "mine" || n.Where != canonA {
 		t.Fatalf("resolved the wrong checkout: %+v", n)
+	}
+}
+
+func TestResolveRunEvidenceHandles(t *testing.T) {
+	home, _ := hermeticHome(t)
+	old := bus.RemoteSend
+	bus.RemoteSend = func(bus.RemoteMessage) (bus.RemoteReceipt, error) {
+		t.Error("unexpected relay")
+		return bus.RemoteReceipt{}, fmt.Errorf("blocked test relay")
+	}
+	t.Cleanup(func() { bus.RemoteSend = old })
+	root := filepath.Join(t.TempDir(), "evidence")
+	started := time.Now().UTC().Truncate(time.Second)
+	scratchQueue(t, home, "evidence-abc", root, &weaveItem{ID: 7, Workspace: root, BaseSHA: "base", LogPath: "log", StartedAt: started})
+	g := ref.NewRegistry()
+	RegisterRefs(g)
+	resolver, _ := g.Lookup(ref.Run)
+	r, ok := resolver.(ref.RunSourceResolver)
+	if !ok {
+		t.Fatal("run evidence not wired")
+	}
+	sources, err := r.RunSources("evidence-7")
+	if err != nil || sources.Workspace != root || sources.BaseCommit != "base" || sources.LogPath != "log" || !sources.StartedAt.Equal(started) {
+		t.Fatalf("sources=%+v error=%v", sources, err)
 	}
 }

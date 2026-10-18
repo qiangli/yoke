@@ -27,7 +27,7 @@ import (
 // there are no store options to pass.
 func RegisterRefs(g *ref.Registry) {
 	g.Register(ref.Sprint, ref.ResolverFunc(resolveSprint))
-	g.Register(ref.Run, ref.ResolverFunc(resolveRun))
+	g.Register(ref.Run, runResolver{})
 }
 
 // resolveSprint answers sprint:<seq>, sprint:<uuid>, sprint:<slug> and the
@@ -73,16 +73,29 @@ type runHit struct {
 // "current checkout first" decorative: the gate's two same-named checkouts
 // reported ambiguity from INSIDE one of them.
 func resolveRun(id string) (ref.Node, error) {
+	n, _, err := resolveRunSources(id)
+	return n, err
+}
+
+type runResolver struct{}
+
+func (runResolver) Resolve(id string) (ref.Node, error) { return resolveRun(id) }
+func (runResolver) RunSources(id string) (ref.RunSources, error) {
+	_, sources, err := resolveRunSources(id)
+	return sources, err
+}
+
+func resolveRunSources(id string) (ref.Node, ref.RunSources, error) {
 	base, n, err := parseRunID(id)
 	if err != nil {
-		return ref.Node{}, err
+		return ref.Node{}, ref.RunSources{}, err
 	}
 	var hits []runHit
 	dirs, current := runQueueDirs()
 	for _, dir := range dirs {
 		q, err := loadWeaveQueue(dir)
 		if err != nil {
-			return ref.Node{}, fmt.Errorf("weave: read queue %s: %w", dir, err)
+			return ref.Node{}, ref.RunSources{}, fmt.Errorf("weave: read queue %s: %w", dir, err)
 		}
 		root := strings.TrimSpace(q.Root)
 		if root == "" {
@@ -100,20 +113,21 @@ func resolveRun(id string) (ref.Node, error) {
 	}
 	switch len(hits) {
 	case 0:
-		return ref.Node{}, fmt.Errorf("run:%s: %w", id, ref.ErrNotFound)
+		return ref.Node{}, ref.RunSources{}, fmt.Errorf("run:%s: %w", id, ref.ErrNotFound)
 	case 1:
 		node := ref.NewNode(ref.Run, fmt.Sprintf("%s-%d", base, n))
 		node.Title = hits[0].item.Title
 		node.Status = hits[0].item.State
 		node.Where = hits[0].repo
 		node.Open = fmt.Sprintf("bashy weave status %d", hits[0].item.ID)
-		return node, nil
+		it := hits[0].item
+		return node, ref.RunSources{Workspace: it.Workspace, BaseCommit: it.BaseSHA, LogPath: it.LogPath, StartedAt: it.StartedAt}, nil
 	default:
 		paths := make([]string, 0, len(hits))
 		for _, h := range hits {
 			paths = append(paths, h.repo)
 		}
-		return ref.Node{}, fmt.Errorf("run:%s is ambiguous — %d queues share basename %q: %s; cd into the repo you mean",
+		return ref.Node{}, ref.RunSources{}, fmt.Errorf("run:%s is ambiguous — %d queues share basename %q: %s; cd into the repo you mean",
 			id, len(hits), base, strings.Join(paths, ", "))
 	}
 }

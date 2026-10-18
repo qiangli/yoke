@@ -47,7 +47,7 @@ import (
 var cmd = &tool.Tool{
 	Name:     "lens",
 	Synopsis: "Convert a file between representations (json/yaml/toml/csv/md, pdf/docx/xlsx/html → md|txt, archive → listing, command line → bash/cmd/pwsh/mcp/skill, bashy-graph-v1 stream → views).",
-	Usage:    "lens [-f FROM] -t TO [--strict] [--verbose] [--switch=keep|slash|pascal] [--drive=C] [--depth=N] [--null] [--since=start|CURSOR|@FILE] [--cursor-out=FILE] [FILE|LOCATOR] | lens -l [--json]",
+	Usage:    "lens [-f FROM] -t TO [--strict] [--verbose] [--switch=keep|slash|pascal] [--drive=C] [--depth=N] [--null] [--since=start|CURSOR|@FILE|TIME|DURATION] [--cursor-out=FILE] [FILE|LOCATOR] | lens -l [--json]",
 }
 
 // ProviderFactory builds the provider that serves one pulled locator.
@@ -100,7 +100,7 @@ func run(rc *tool.RunContext, args []string) int {
 	sw := fs.String("switch", "", "command lines: option spelling keep|slash|pascal (--dry-run, /dry-run, -DryRun)")
 	drive := fs.String("drive", "", "command lines: drive letters present on the target (C, CD); /c/… paths become C:\\…")
 	depth := fs.Int("depth", -1, "graph views and locator pulls: maximum descent depth (-1 = unbounded)")
-	since := fs.String("since", "", "file deltas: start, cursor envelope, or @cursor-file (rotation requires explicit restart)")
+	since := fs.String("since", "", "deltas: start, bound cursor or @cursor-file; run/bus also accept time or duration")
 	cursorOut := fs.String("cursor-out", "", "save file delta cursor after output succeeds; otherwise append JSONL cursor trailer")
 	nul := fs.Bool("null", false, "paths view: NUL-terminated")
 	explain := fs.Bool("explain", false, "skill script plan: print zero-execution explanation of artifact and required capabilities")
@@ -114,15 +114,15 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	if fs.Changed("since") || fs.Changed("cursor-out") {
 		if *since == "" || *list || *asJSON || len(operands) != 1 || operands[0] == "-" {
-			return tool.UsageError(rc, cmd, "--since requires start or a cursor and one regular FILE")
+			return tool.UsageError(rc, cmd, "--since requires a selector and one FILE or agent-world LOCATOR")
 		}
 		loc, isLoc := locatorOperand(operands[0])
 		if isLoc && !isAgentWorldScheme(loc.Scheme) {
 			return tool.UsageError(rc, cmd, "--since file deltas do not support this provider")
 		}
 		format := lens.Canonical(*to)
-		if format != "jsonl" && format != "txt" || *from != "" && lens.Canonical(*from) != format {
-			return tool.UsageError(rc, cmd, "--since requires -t jsonl or -t txt, without format conversion")
+		if format != "jsonl" && format != "txt" && !(isLoc && loc.Scheme == "run" && format == "listing") || *from != "" && lens.Canonical(*from) != format {
+			return tool.UsageError(rc, cmd, "--since requires -t jsonl or -t txt (run also supports listing), without format conversion")
 		}
 		if format == "txt" && *cursorOut == "" {
 			return tool.UsageError(rc, cmd, "--since -t txt requires --cursor-out")

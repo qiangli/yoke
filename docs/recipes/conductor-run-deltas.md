@@ -2,88 +2,81 @@
 
 Sprint #446, Story #2134 (13778c0d7a83).
 
-Use one checkpoint per locator and output format. The shell must register its
-owning-store sprint/run resolvers in lens.AgentWorldRefs (the same ref.Resolver
-used by define). Story snapshots and deltas use StoryResolver, falling back to
-the todo resolver; claims use ClaimResolver or the local coord ledger.
+The embedding shell registers weave's existing resolver with
+`weave.RegisterRefs(lens.AgentWorldRefs)`. That resolver also exposes persisted
+workspace, base commit, launch time, and log handles through
+`ref.RunSourceResolver`. No separate history store or process probe is used.
 
 ## Poll a run
 
-For an existing run ID, capture the initial state and checkpoint:
-
 ```sh
-bashy lens -t jsonl run:ID --since=start > run.delta.jsonl
+bashy lens -t listing run:ID --since=10m > run.delta.jsonl
 bashy jq -c 'select(.t == "cursor") | .cursor' run.delta.jsonl > run.cursor.json
 bashy jq -c 'select(.t != "cursor")' run.delta.jsonl
-```
 
-On subsequent polls:
-
-```sh
-bashy lens -t jsonl run:ID --since=@run.cursor.json > run.next.jsonl
-bashy jq -c 'select(.t != "cursor")' run.next.jsonl
-# After downstream processing succeeds:
+bashy lens -t listing run:ID --since=@run.cursor.json > run.next.jsonl
+# Only after lens and downstream processing succeed:
 bashy jq -c 'select(.t == "cursor") | .cursor' run.next.jsonl > run.cursor.json
 ```
 
-Only process a batch if lens succeeded. Persist checkpoints atomically in a
-production loop. Do not advance them before downstream processing succeeds.
-An unchanged run emits only a cursor. A changed resolver status, for example
-running → done, emits the new record followed by a cursor:
+Listing emits JSONL `bashy-node-v1` rows with types `file`, `commit`, and
+`log-line`, followed by a `t:cursor` record. Example attributes:
 
 ```json
-{"schema_version":"bashy-node-v1","ref":"run:ID","path":"ID","name":"Worker","kind":"record","type":"run","attrs":{"kind":"run","id":"ID","title":"Worker","status":"done"}}
+{"change":"observed","size":81,"modified":"2026-10-18T20:00:00Z","evidence":"workspace-metadata"}
+{"commit":"<full SHA>","message":"lens: add run history","time":"2026-10-18T20:00:00Z","evidence":"git-first-parent"}
+{"offset":120,"line":"ok github.com/qiangli/yoke/cmds/lens","evidence":"persisted-log"}
 ```
 
-The actual final record has `t:"cursor"` and a `bashy-cursor-v1` envelope,
-bound to provider `run`, target `run:ID`, and query `delta:jsonl`.
-Its entity-v1 hash token is opaque; retain the emitted envelope unchanged.
-A different run, scheme, or format cannot reuse it. Missing records/store
-errors fail; they are not empty successful polls or deletion events.
+The envelope binds provider, exact locator, and output format, expires after
+24 hours, and holds the source handles, Git head, file metadata, log identity,
+complete-line offset and a short preceding-byte anchor. Treat its token as
+opaque. It can contain workspace paths; retain it with the run's evidence.
+`--cursor-out=FILE` writes the envelope separately, atomically after stdout
+succeeds. `jsonl` is also supported, but its cursor cannot resume `listing`.
+An unchanged poll emits only the cursor. Run status or process liveness never
+counts as file, commit, or log progress.
 
-## Collect concrete evidence alongside the run state
+## Evidence and bounds
 
-In the run's workspace, record its initial commit as BASE, then compare against
-that fixed baseline (these are Git snapshots, not lens change-stream records):
+* Commits follow first-parent history from the persisted base (or previous
+  head). Initial time queries filter by Git committer timestamp, checking every
+  commit up to the base so out-of-order timestamps do not hide later matches.
+  This is recorded Git time, not proof of when a process performed work.
+* Initial file rows are current workspace observations whose mtimes fall in
+  the interval. Resume compares path, size, mode, and mtime, including removals.
+  They are not an audit of intermediate edits, same-metadata rewrites, or files
+  already deleted before the first poll. Ignored/untracked files are included;
+  `.git` is excluded and symlink targets are not followed.
+* Logs include complete lines only. A run launched within the interval can
+  supply raw lines. For an older run, changed logs require per-line RFC3339
+  timestamps (JSON `timestamp`, `time`, or `ts`, or a leading timestamp).
+  An entirely old log is skipped using its filesystem mtime. Untimestamped
+  lines spanning the cutoff fail explicitly: their time cannot be recovered
+  from liveness or current log mtime. Start once with `--since=start`, then
+  resume by cursor to collect subsequent raw lines without guessing times.
 
-```sh
-git diff --name-status BASE
-git log --oneline BASE..HEAD
-```
+Each poll is capped at 256 commits, 16,384 workspace entries, and 1 MiB of new
+log data. An old log can be skipped with a bounded tail read. Resume seeks to
+its saved offset; it does not reread the consumed log prefix or prior commits.
+File inventory scans are capped every time. Limit errors fail the whole batch
+without a new cursor; they do not imply a complete empty interval. Workspaces
+and logs must remain stable during a poll; logs must be append-only.
 
-Example evidence: `M cmds/lens/entity_delta.go` and
-`abc1234 lens: wire run deltas`. Include uncommitted changes when reviewing
-progress; a terminal run status alone does not prove a delivery commit exists.
+Missing evidence, changed source handles, log rotation/truncation/anchor
+mismatch, or a Git head that no longer descends from the checkpoint fail
+explicitly. Preserve the failed checkpoint for diagnosis, then deliberately
+restart with `--since=start` against the current retained sources. Restart
+replays current evidence, cannot restore deleted history, and still obeys the
+bounds. Missing workspace/base/start metadata cannot establish history.
 
-For a known append-only worker log path:
+Resolvers lacking the optional run-source interface retain the earlier entity
+snapshot behavior for start/resume; they reject time selectors. Other entity
+schemes likewise expose record changes, not historical transitions. Bus event
+time/sequence semantics and regular-file byte cursors remain unchanged.
 
-```sh
-bashy lens -t txt /absolute/path/worker.log --since=start --cursor-out=log.cursor.json
-bashy lens -t txt /absolute/path/worker.log --since=@log.cursor.json --cursor-out=log.cursor.json
-```
+## Separate integration gap
 
-Example delta: `ok github.com/qiangli/yoke/cmds/lens 0.4s`.
-The file cursor advances over complete lines only. Rotation/truncation requires
-an explicit restart. With --cursor-out the bound envelope is saved separately
-after stdout succeeds; without it JSONL streams end with a cursor record.
-
-## Selector contract and remaining integration
-
-All ten agent-world schemes support start and bound resume envelopes when their
-resolvers are wired. Entity deltas detect changes to the visible record, not
-every intermediate transition. Entity sequence IDs are identities, not update
-revisions, so sprint/run/story/agent/claim/mb/meet/kb/host reject numeric, timestamp,
-and duration selectors. Their resolvers expose no authoritative update time.
-
-bus:events (and event-kind/sequence targets) supports sequence positions and
-time/duration predicates against event timestamps, even out of append order.
-Time queries after retention has removed history fail rather than claim a
-complete answer. bus:timeline supports bound cursors only. File streams support
-start and file envelopes only.
-
-The proposed `lens -t listing run:ID --since=10m` remains unsupported:
---since uses jsonl/txt, and ref.Node has no run artifact or log history.
-This recipe uses separate evidence sources explicitly. Completing that original
-acceptance requires an owning run-store history API plus conductor skill
-integration in the embedding shell repository; this repository has no conductor
-skill source. No file/commit/log events are invented from a run status.
+The cross-repository conductor skill still needs this supervision recipe wired
+into its workflow. Its source belongs to the embedding shell repository and is
+outside this story slice; no conductor skill files were changed here.

@@ -101,6 +101,13 @@ func (e *entityDeltaSource) TranslateTime(ctx context.Context, loc ref.Locator, 
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	if e.scheme == "run" {
+		if res, ok := lookupEntityResolver("run"); ok {
+			if r, ok := res.(ref.RunSourceResolver); ok {
+				return (provider.RunHistory{Resolver: r}).TranslateTime(ctx, loc, t)
+			}
+		}
+	}
 	// ref.Node exposes identity and display fields, but no authoritative update time.
 	return "", fmt.Errorf("provider %q does not support time/duration in --since: resolver has no authoritative update time", e.scheme)
 }
@@ -131,6 +138,13 @@ func (e *entityDeltaSource) Delta(ctx context.Context, loc ref.Locator, token st
 		return nil, "", "", fmt.Errorf("lens: %s: %w", loc.Scheme, ref.ErrEmptyID)
 	}
 
+	if e.scheme == "run" {
+		if res, ok := lookupEntityResolver("run"); ok {
+			if r, ok := res.(ref.RunSourceResolver); ok {
+				return (provider.RunHistory{Resolver: r}).Delta(ctx, loc, token)
+			}
+		}
+	}
 	p := provider.NewEntity(AgentWorldRefs, e.scheme)
 	res, ok := lookupEntityResolver(e.scheme)
 	if !ok {

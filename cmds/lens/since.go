@@ -326,7 +326,7 @@ func sinceAgentWorld(rc *tool.RunContext, loc ref.Locator, format, since, cursor
 	if len(records) > 0 && records[len(records)-1] != '\n' {
 		return fail(fmt.Errorf("delta source returned an incomplete record"))
 	}
-	if format == "jsonl" {
+	if format == "jsonl" || format == "listing" {
 		for _, line := range bytes.Split(bytes.TrimSuffix(records, []byte("\n")), []byte("\n")) {
 			if len(records) > 0 && !json.Valid(bytes.TrimSpace(line)) {
 				return fail(fmt.Errorf("delta source returned invalid JSONL"))
