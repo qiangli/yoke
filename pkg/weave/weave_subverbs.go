@@ -526,7 +526,7 @@ func newWeaveSayCmd() *cobra.Command {
 	var raw string
 	cmd := &cobra.Command{
 		Use:   `say <issue> ["<text>"]`,
-		Short: "Inject a line into a running subagent's terminal",
+		Short: "Save steering for a run and deliver it to its live terminal",
 		Long: `say connects to the running wrapper's per-issue control socket and
 types the text into the subagent's PTY, followed by Enter. To the
 subagent it is indistinguishable from a human typing into its TUI —
@@ -545,8 +545,10 @@ Flags provide additional control over the injected bytes:
 Plain usage is unchanged (text + Enter). Anyone on the host can
 inject; watch the reaction with 'weave log <issue> -f'.
 
-Caveats: the issue must be state=working with a live wrapper that
-allocated a PTY. Tools that don't read terminal input in their
+Plain text is saved in the run thread and included on resume, even if the
+worker has stopped. A live transport write is not proof the worker read it.
+Keystroke flags require state=working with a live wrapper and a control socket.
+Tools that don't read terminal input in their
 non-interactive modes (e.g. 'claude -p') receive the keystrokes but
 ignore them — use a TUI/streaming mode when you plan to steer.
 Wrappers started by an older ycode have no control socket.`,

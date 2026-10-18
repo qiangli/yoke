@@ -75,12 +75,14 @@ func runWeaveComment(cmd *cobra.Command, id int64, author, kind, body string, fl
 			weavecli.ExitPrecondFail, err))
 	}
 	dir, _ := weaveQueueDir(root)
+	var target *weaveItem
 	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
 		it := findWeaveItem(q, id)
 		if it == nil {
 			return fmt.Errorf("run #%d not found%s", id, weaveOtherActiveQueuesHintSuffix(dir))
 		}
 		weaveAppendComment(it, author, kind, body)
+		target = it
 		return nil
 	})
 	if lockErr != nil {
@@ -90,9 +92,13 @@ func runWeaveComment(cmd *cobra.Command, id int64, author, kind, body string, fl
 		}
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave comment", code, lockErr))
 	}
+	delivered := false
+	if kind != "progress" && author != target.Owner {
+		delivered = weavePushComment(target, body)
+	}
 	if mode == weavecli.OutputJSON {
 		return ec(emitOK(cmd.OutOrStdout(), mode, "weave comment", map[string]any{
-			"issue": id, "kind": kind, "body": body,
+			"issue": id, "kind": kind, "body": body, "delivered": delivered,
 		}))
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "weave comment: run #%d +%s\n", id, kind)

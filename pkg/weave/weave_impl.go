@@ -3502,6 +3502,12 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	// the registry with the issue body as the prompt. This is resolved here,
 	// after the issue is known, because the body IS the prompt.
 	promptBody := it.Body
+	if opts.resume && !opts.blind && !it.Blind && it.ArenaSprint == 0 {
+		promptBody, err = weaveResumePrompt(it)
+		if err != nil {
+			return err
+		}
+	}
 	promptTitle := it.Title
 	if opts.blind || it.Blind {
 		promptBody = boothProjection(promptBody)
@@ -4413,7 +4419,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	wtool, wmodel, _ := strings.Cut(guards.coachee, ":")
 	weaveCard := room.Card{
 		ID:        fmt.Sprintf("weave-%d-%d", it.ID, os.Getpid()),
-		Principal: "conductor",
+		Principal: weaveSteeringPrincipal(it),
 		Tool:      wtool,
 		Model:     wmodel,
 		Binding:   guards.coachee,
@@ -4949,6 +4955,34 @@ func runWeaveSay(cmd *cobra.Command, id int64, text string, tab, enter bool, raw
 	if it == nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave say",
 			weavecli.ExitInvalidArg, fmt.Errorf("run #%d not found%s", id, weaveOtherActiveQueuesHintSuffix(dir))))
+	}
+	// Prose is durable steering, including when the worker has already stopped.
+	// Keystrokes retain their existing live-only semantics.
+	if raw == "" && !enter && !tab {
+		if it.State == "done" || it.State == "abandoned" {
+			return fmt.Errorf("run #%d is %s and cannot resume", id, it.State)
+		}
+		if err := withWeaveQueueLock(dir, func(q *weaveQueue) error {
+			fresh := findWeaveItem(q, id)
+			if fresh == nil {
+				return fmt.Errorf("run #%d not found", id)
+			}
+			weaveAppendComment(fresh, os.Getenv("WEAVE_AGENT"), "steering", text)
+			it = fresh
+			return nil
+		}); err != nil {
+			return err
+		}
+		delivered := weavePushComment(it, text)
+		if mode == weavecli.OutputJSON {
+			return ec(emitOK(cmd.OutOrStdout(), mode, "weave say", map[string]any{"issue": id, "queued": true, "delivered": delivered, "sent": text}))
+		}
+		if delivered {
+			fmt.Fprintf(cmd.OutOrStdout(), "weave say: steering written to run #%d control channel and saved for resume — verify receipt in the worker log\n", id)
+		} else {
+			fmt.Fprintf(cmd.OutOrStdout(), "weave say: steering queued for run #%d resume; no live delivery\n", id)
+		}
+		return nil
 	}
 	if it.State != "working" || it.WrapperPid == 0 || !pidAlive(it.WrapperPid) {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave say",

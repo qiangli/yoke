@@ -797,7 +797,12 @@ func SteerLive(agent, text string) Delivery {
 		return d
 	}
 	for _, c := range members {
-		if !strings.EqualFold(c.ID, agent) && !strings.EqualFold(c.Binding, agent) {
+		// Weave publishes its transport separately from the socket-less claim.
+		// Match that transport by immutable instance, never by model family.
+		instanceID, instanceTarget := ExplicitInstanceID(agent)
+		cardInstance, instanceCard := ExplicitInstanceID(c.Principal)
+		instanceMatch := instanceTarget && instanceCard && strings.EqualFold(instanceID, cardInstance)
+		if !strings.EqualFold(c.ID, agent) && !strings.EqualFold(c.Binding, agent) && !instanceMatch {
 			continue
 		}
 		if strings.TrimSpace(c.CtlSock) == "" {
@@ -805,17 +810,20 @@ func SteerLive(agent, text string) Delivery {
 			// by it, so there is no socket. This is the common case for a TUI
 			// the operator started, and it is why the board exists.
 			d.Reason = "session has no control socket (not bashy-launched)"
-			return d
+			continue
 		}
 		if serr := SteerFrame(c.CtlSock, text); serr != nil {
 			d.Reason = serr.Error()
 			return d
 		}
 		d.Steered = true
+		d.Reason = ""
 		_ = room.Emit(room.Event{Type: room.EventSteer, Target: c.ID, Body: text})
 		return d
 	}
-	d.Reason = "not running"
+	if d.Reason == "" {
+		d.Reason = "not running"
+	}
 	return d
 }
 
