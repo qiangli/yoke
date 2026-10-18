@@ -481,7 +481,7 @@ func sprintUnansweredGate(s *weaveStory, verb string) error {
 	}
 	return fmt.Errorf("sprint #%d cannot %s: %d unanswered message(s) for %q, oldest %s.\n"+
 		"  somebody is blocked on an answer that would never come.\n"+
-		"  read them first: bashy inbox --as %s\n"+
+		"  read them first: bashy bus pending --as %s\n"+
 		"  (reading is enough — the gate asks that somebody looked, not that you replied)",
 		s.ID, verb, n, s.Owner, oldest.Round(time.Minute), s.Owner)
 }
