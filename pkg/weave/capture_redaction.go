@@ -89,9 +89,12 @@ func weaveWarnCaptureRedactionIncomplete(w io.Writer, registered int, failed []s
 		level, registered, strings.Join(failed, ", "))
 }
 
-// weaveOpenCaptureLog creates the capture log truncated. When secrets were
-// rendered for the run the file is 0600 in a 0700 directory, chmod-ed
-// explicitly because OpenFile/MkdirAll honour the mode only on creation.
+// weaveOpenCaptureLog opens the capture log for append so a relaunch of the
+// same run keeps the previous attempt's output: each launch writes its own
+// "[weave] launch started" marker, and the single file holds every attempt.
+// When secrets were rendered for the run the file is 0600 in a 0700
+// directory, chmod-ed explicitly because OpenFile/MkdirAll honour the mode
+// only on creation.
 func weaveOpenCaptureLog(logsDir, logPath string, secretsRendered bool) (*os.File, error) {
 	dirMode, fileMode := os.FileMode(0o755), os.FileMode(0o600)
 	if secretsRendered {
@@ -105,7 +108,7 @@ func weaveOpenCaptureLog(logsDir, logPath string, secretsRendered bool) (*os.Fil
 			return nil, fmt.Errorf("restrict log dir: %w", err)
 		}
 	}
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, fileMode)
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, fileMode)
 	if err != nil {
 		return nil, fmt.Errorf("open log: %w", err)
 	}

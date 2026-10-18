@@ -6302,6 +6302,15 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 			resultPath = conventional
 		}
 	}
+	// The capture log accumulates every launch attempt of the run, so
+	// status points at it as the complete launch evidence.
+	logPath := it.LogPath
+	if logPath == "" {
+		conventional := filepath.Join(dir, "logs", fmt.Sprintf("issue-%d.log", it.ID))
+		if _, err := os.Stat(conventional); err == nil {
+			logPath = conventional
+		}
+	}
 
 	if mode == weavecli.OutputJSON {
 		res := map[string]any{
@@ -6375,6 +6384,9 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 		}
 		if resultPath != "" {
 			res["result_path"] = resultPath
+		}
+		if logPath != "" {
+			res["log_path"] = logPath
 		}
 		return ec(emitOK(cmd.OutOrStdout(), mode, "weave status", res))
 	}
@@ -6455,6 +6467,9 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 	}
 	if resultPath != "" {
 		fmt.Fprintf(w, "  result:     %s\n", weaveTildePath(resultPath))
+	}
+	if logPath != "" {
+		fmt.Fprintf(w, "  log:        %s\n", weaveTildePath(logPath))
 	}
 	mergedStr := "no"
 	switch {

@@ -193,6 +193,40 @@ func TestWeaveCaptureRedactionNothingToRegisterIsSilent(t *testing.T) {
 	}
 }
 
+func TestWeaveCaptureLogRelaunchRetainsBothAttempts(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "logs")
+	path := filepath.Join(dir, "issue-9.log")
+	first, err := weaveOpenCaptureLog(dir, path, false)
+	if err != nil {
+		t.Fatalf("open capture log (first launch): %v", err)
+	}
+	if _, err := first.Write([]byte("[weave] launch started agent=first\nfirst-attempt-output\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := weaveOpenCaptureLog(dir, path, false)
+	if err != nil {
+		t.Fatalf("open capture log (second launch): %v", err)
+	}
+	if _, err := second.Write([]byte("[weave] launch started agent=second\nsecond-attempt-output\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"first-attempt-output", "second-attempt-output"} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("relaunch lost %q; log holds %q", want, string(data))
+		}
+	}
+}
+
 func TestWeaveCaptureLogIsOwnerOnlyWhenSecretsRendered(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX file modes")

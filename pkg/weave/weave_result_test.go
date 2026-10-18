@@ -169,6 +169,61 @@ func TestWeaveStatus_ShowsResultPath(t *testing.T) {
 	}
 }
 
+func TestWeaveStatus_ShowsLogPath(t *testing.T) {
+	root := setupIsolationFixture(t)
+	t.Chdir(root)
+
+	out, code := runWeave(t, "add", "log path test run", "--json")
+	if code != 0 {
+		t.Fatalf("weave add failed (exit %d): %s", code, out)
+	}
+
+	dir, err := weaveQueueDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logsDir := filepath.Join(dir, "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(logsDir, "issue-1.log")
+	if err := os.WriteFile(logPath, []byte("[weave] launch started\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := withWeaveQueueLock(dir, func(q *weaveQueue) error {
+		it := findWeaveItem(q, 1)
+		it.LogPath = logPath
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	textOut, code := runWeave(t, "status", "1")
+	if code != 0 {
+		t.Fatalf("weave status failed (exit %d): %s", code, textOut)
+	}
+	if !strings.Contains(textOut, "issue-1.log") {
+		t.Fatalf("weave status output missing log path:\n%s", textOut)
+	}
+
+	jsonOut, code := runWeave(t, "status", "1", "--json")
+	if code != 0 {
+		t.Fatalf("weave status --json failed (exit %d): %s", code, jsonOut)
+	}
+	var res map[string]any
+	if err := json.Unmarshal([]byte(jsonOut), &res); err != nil {
+		t.Fatalf("unmarshal json error: %v, output: %s", err, jsonOut)
+	}
+	data, ok := res["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing result envelope in %s", jsonOut)
+	}
+	gotPath, ok := data["log_path"].(string)
+	if !ok || !strings.HasSuffix(gotPath, "issue-1.log") {
+		t.Fatalf("expected log_path ending in issue-1.log, got %q in %v", gotPath, data)
+	}
+}
+
 func TestWeaveRunEnd_PersistsResultFile(t *testing.T) {
 	root := setupIsolationFixture(t)
 	t.Chdir(root)
