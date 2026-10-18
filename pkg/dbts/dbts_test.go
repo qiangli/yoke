@@ -1,6 +1,7 @@
 package dbts
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -697,4 +698,81 @@ func TestTSImportNegatives(t *testing.T) {
 	if len(got) != 0 {
 		t.Fatalf("failed imports mutated the target: %d points", len(got))
 	}
+}
+
+// TestTSImportLateMalformedLeavesTargetUnchanged stages a file whose first
+// records decode but a later line carries trailing garbage (a second JSON
+// value). Import must refuse the whole file and leave the pre-existing
+// target, including int64 extremes, exactly unchanged.
+func TestTSImportLateMalformedLeavesTargetUnchanged(t *testing.T) {
+	dst := newFixture(t, dbstore.Persistent)
+	ints := []int64{math.MaxInt64, math.MinInt64}
+	var seed []Point
+	for i, n := range ints {
+		seed = append(seed, tsPoint(intTS(int64(100+i)), intV(n)))
+	}
+	dst.must(OpIngest, Input{Series: "k", Points: seed}, false)
+
+	src := newFixture(t, dbstore.Persistent)
+	src.must(OpIngest, Input{Series: "k", Points: []Point{
+		tsPoint(intTS(1), intV(7)),
+		tsPoint(intTS(2), intV(8)),
+	}}, false)
+	good := filepath.Join(t.TempDir(), "good")
+	src.must(OpExport, Input{Out: good}, false)
+
+	dir := filepath.Join(t.TempDir(), "late")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ents, err := os.ReadDir(good)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range ents {
+		b, err := os.ReadFile(filepath.Join(good, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, e.Name()), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, ManifestName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m manifest
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	// Corrupt the last line with a trailing second JSON value, then
+	// refresh counts and checksum so validation reaches the strict
+	// per-line decode of the staged bytes themselves.
+	pf := filepath.Join(dir, m.Files[0].Path)
+	lines, err := os.ReadFile(pf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trimmed := strings.TrimSuffix(string(lines), "\n")
+	cut := strings.LastIndex(trimmed, "\n")
+	head, last := trimmed[:cut+1], trimmed[cut+1:]
+	bad := head + last + " {}\n"
+	if err := os.WriteFile(pf, []byte(bad), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	final, _ := os.ReadFile(pf)
+	m.Files[0].Records = int64(bytes.Count(final, []byte{'\n'}))
+	m.Files[0].Bytes = int64(len(final))
+	sum := sha256.Sum256(final)
+	m.Files[0].SHA256 = hex.EncodeToString(sum[:])
+	mb, _ := json.Marshal(m)
+	if err := os.WriteFile(filepath.Join(dir, ManifestName), mb, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := dst.code(OpImport, Input{In: dir}, false); code != "malformed_input" {
+		t.Fatalf("trailing-garbage import = %q, want malformed_input", code)
+	}
+	got := pointsOf(t, dst.must(OpRange, Input{Series: "k"}, false))
+	checkTaggedInts(t, got, ints)
 }

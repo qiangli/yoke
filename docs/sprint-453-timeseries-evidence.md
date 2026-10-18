@@ -61,7 +61,7 @@ acceptance is claimed from development-host tests.
 | Both modes, import/export both directions, owner tests | Memory + persistent fixtures everywhere; four-direction round trips; owner process tests | `TestTSInterchangeRoundTripsAcrossModes`, process tests |
 | Revision conflicts, bounded cancellation, destructive hold/epoch invariants | Duplicate stamp → `conflict`; cancelled ctx → `cancelled`; unconfirmed exclusive → `confirmation_required`; hold/stale-epoch paths | `TestTSIngestConflicts`, `TestTSCancelledContext`, retain confirmation, process hold section |
 | Lossless JSON/JSONL both directions | §8.3 tagged ts/int/f64; re-export byte-identical; int64-ns stamps; tagged ints keep tag + full int64 range (dedicated `value_kind`/`value_int` columns, REAL shadow for aggregates) | Round-trip byte comparison, tagged-int assertions incl. int64 extremes |
-| Staged import: same checked bytes, bounded, target unchanged on failure | One bounded read per file, checksum + strict decode of those bytes, single-transaction apply with rollback | `TestTSImportStagedBytesBound` (over-cap refused `limit_exceeded`, target unchanged), `TestTSImportNegatives` target-unchanged tail |
+| Staged import: same checked bytes, bounded, target unchanged on failure | One bounded read per file, checksum + strict decode of those bytes, single-transaction apply with rollback; `stageFile` takes `ctx` and checks it before staging and per record; strict one-value-per-line decode (second value/trailing garbage refused); `Lstat` regular-file gate refuses FIFOs/sockets/devices before open | `TestTSImportStagedBytesBound` (over-cap refused `limit_exceeded`, target unchanged), `TestTSImportNegatives` target-unchanged tail, `TestTSImportLateMalformedLeavesTargetUnchanged` (trailing-garbage later line refused `malformed_input`, pre-existing int64 extremes unchanged) |
 | Approximate aggregates declared, never silent | min/max/sum/avg read the REAL shadow and warn when out-of-±(2^53−1) ints are in scope; count exact, in-range and count-only quiet | `TestTSAggApproximationDeclared` |
 
 ## Honest limits
@@ -103,21 +103,23 @@ acceptance is claimed from development-host tests.
 Focused short tests only. No full product build, no container, no ollama.
 
 ```
-CGO_ENABLED=0 GOMAXPROCS=4 GOFLAGS=-p=2 go test -short -count=1 ./pkg/dbts/   ok (17.9s)
+CGO_ENABLED=0 GOMAXPROCS=4 GOFLAGS=-p=2 go test -short -count=1 ./pkg/dbts/   ok (9.6s)
 CGO_ENABLED=0 go vet ./pkg/dbts/   clean
 gofmt -l pkg/dbts/   clean
 ```
 
-18 top-level tests pass (both modes where applicable): the earlier
+19 top-level tests pass (both modes where applicable): the earlier
 `TestTSTaggedIntExtremesRoundTrip` and four-direction interchange
-assertions, plus the new `TestTSAggApproximationDeclared`
-(approximation warning with int64 extremes in scope, count exact,
-count-only and in-range quiet, out-of-scope quiet) and
-`TestTSImportStagedBytesBound` (over-cap manifest refused
-`limit_exceeded`, target unchanged); the two independent-process
-tests report SKIP under `-short`. Staging reads each file once inside
-the import write transaction (one file at a time, 64 MiB cap), so the
-write lock is held during bounded staging I/O; any staged failure
-rolls back. Direct `go test` exit status, no pipe masking. Not run
-here (manager gates): whole-package suite, `scripts/crossvet.sh`,
+assertions, `TestTSAggApproximationDeclared` (approximation warning
+with int64 extremes in scope, count exact, count-only and in-range
+quiet, out-of-scope quiet), `TestTSImportStagedBytesBound` (over-cap
+manifest refused `limit_exceeded`, target unchanged), and the new
+`TestTSImportLateMalformedLeavesTargetUnchanged` (trailing-garbage
+later line refused `malformed_input`, pre-existing int64 extremes
+unchanged); the two independent-process tests report SKIP under
+`-short`. Staging reads each file once inside the import write
+transaction (one file at a time, 64 MiB cap), so the write lock is
+held during bounded staging I/O; any staged failure rolls back.
+Direct `go test` exit status, no pipe masking. Not run here
+(manager gates): whole-package suite, `scripts/crossvet.sh`,
 independent-process tests, cross-builds, remote host.

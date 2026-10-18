@@ -370,7 +370,7 @@ func runImport(ctx context.Context, h dbstore.Handle, in Input) (dblifecycle.Out
 		}
 	}
 	for _, f := range m.Files {
-		staged, err := stageFile(in.In, f, known)
+		staged, err := stageFile(ctx, in.In, f, known)
 		if err != nil {
 			return dblifecycle.Outcome{}, err
 		}
@@ -461,9 +461,19 @@ type counts struct {
 // of every record. The caller applies the returned points; the file is
 // never re-read, so caller files cannot change between validation and
 // apply. Only one file is staged at a time, within maxImportFileBytes.
-func stageFile(dir string, f recordFile, known map[string]bool) ([]stagedPoint, error) {
+func stageFile(ctx context.Context, dir string, f recordFile, known map[string]bool) ([]stagedPoint, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, dbstore.FromContext(err)
+	}
 	if f.Bytes < 0 || f.Bytes > maxImportFileBytes {
 		return nil, fmt.Errorf("%w: %s declares %d bytes, over the %d-byte staged file limit", dbstore.ErrLimitExceeded, f.Path, f.Bytes, maxImportFileBytes)
+	}
+	// Lstat before open: refuse FIFOs/sockets/devices so a crafted
+	// manifest path cannot block the importer on open or read.
+	if fi, err := os.Lstat(filepath.Join(dir, f.Path)); err != nil {
+		return nil, fmt.Errorf("%w: records file %s: %v", dbstore.ErrNotFound, f.Path, err)
+	} else if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%w: records file %s is not a regular file", dbstore.ErrMalformedInput, f.Path)
 	}
 	fh, err := os.Open(filepath.Join(dir, f.Path))
 	if err != nil {
@@ -484,6 +494,9 @@ func stageFile(dir string, f recordFile, known map[string]bool) ([]stagedPoint, 
 	var out []stagedPoint
 	var records, nbytes int64
 	for _, line := range bytes.Split(raw, []byte{'\n'}) {
+		if err := ctx.Err(); err != nil {
+			return nil, dbstore.FromContext(err)
+		}
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
 		}
@@ -498,6 +511,15 @@ func stageFile(dir string, f recordFile, known map[string]bool) ([]stagedPoint, 
 		dec := json.NewDecoder(bytes.NewReader(line))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&rec); err != nil {
+			return nil, fmt.Errorf("%w: %s record %d: %v", dbstore.ErrMalformedInput, f.Path, records+1, err)
+		}
+		// Strict one-value-per-line: a second JSON value or trailing
+		// garbage on the line is malformed, not a silent truncation.
+		var extra json.RawMessage
+		if err := dec.Decode(&extra); err != io.EOF {
+			if err == nil {
+				err = fmt.Errorf("trailing data after record")
+			}
 			return nil, fmt.Errorf("%w: %s record %d: %v", dbstore.ErrMalformedInput, f.Path, records+1, err)
 		}
 		if err := checkSeriesName(rec.Series); err != nil {
