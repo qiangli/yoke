@@ -45,3 +45,41 @@ func TestLocatorMessageRefFollowsOnSourceHost(t *testing.T) {
 		})
 	}
 }
+
+func TestLocatorMessageOperandFollowsPost(t *testing.T) {
+	cases := []struct {
+		name, from, body, want, wantErr string
+		wantCalls                       bool
+	}{
+		{"peer host sender", "alice@mac-1.example", "see dir:src for it", "a.txt", "", true},
+		{"explicit alias", "alice@other", "see dir:src@mac", "a.txt", "", true},
+		{"unknown host", "alice@nowhere", "see dir:src", "", "unknown peer", false},
+		{"ambiguous host alias", "alice@x", "see dir:src@dup", "", "ambiguous peer", false},
+		{"two locators refused", "alice@mac-1.example", "dir:src and dir:other", "", "ambiguous, message names 2", false},
+		{"no locator", "alice@mac-1.example", "just prose /etc/passwd", "", "no followable locator", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("BASHY_MB_DIR", t.TempDir())
+			t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+			fh := hostFixture(t, hostPeers)
+			if _, err := bus.PostMessageSeq(bus.Post{From: tc.from, Topic: "mb", Body: tc.body}); err != nil {
+				t.Fatal(err)
+			}
+			out, errOut, code := runTool(t, t.TempDir(), "", "-t", "graph", "mb:1")
+			if tc.wantErr != "" {
+				if code == 0 || !strings.Contains(errOut, tc.wantErr) {
+					t.Fatalf("code %d stderr %q, want %q", code, errOut, tc.wantErr)
+				}
+			} else if code != 0 || !strings.Contains(out, tc.want) {
+				t.Fatalf("code %d stderr %q out %q", code, errOut, out)
+			}
+			if tc.wantCalls != (len(fh.calls) > 0) {
+				t.Fatalf("transport calls = %v", fh.calls)
+			}
+		})
+	}
+	if _, _, code := runTool(t, t.TempDir(), "", "-t", "graph", "mb:99"); code == 0 {
+		t.Fatal("missing post must fail")
+	}
+}

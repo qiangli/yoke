@@ -170,7 +170,15 @@ func run(rc *tool.RunContext, args []string) int {
 	var data []byte
 	var err error
 	if len(operands) == 1 && operands[0] != "-" {
-		if loc, ok := locatorOperand(operands[0]); ok {
+		loc, isMsg, mcode := messageOperand(rc, operands[0])
+		if isMsg && mcode != 0 {
+			return mcode
+		}
+		ok := isMsg
+		if !ok {
+			loc, ok = locatorOperand(operands[0])
+		}
+		if ok {
 			if fromFmt != "" {
 				return tool.UsageError(rc, cmd, "-f does not apply to a locator")
 			}
