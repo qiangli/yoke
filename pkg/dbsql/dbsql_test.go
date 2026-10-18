@@ -231,17 +231,26 @@ func TestHeldReadLeavesNoConnectionState(t *testing.T) {
 				t.Fatalf("held %q left connection state %s (was %s)", q, got, before)
 			}
 		}
-		// Pragma-only reads that succeed are restored as well.
-		if _, err := runQuery(context.Background(), h, Input{SQL: "pragma temp_store=1; pragma foreign_keys=1"}); err != nil {
+		// A memory session must refuse FILE before SQLite can create a
+		// temporary file. Restoring the setting after the call is too late.
+		if f.target.Mode == dbstore.Memory {
+			if _, err := runQuery(context.Background(), h, Input{SQL: "pragma temp_store=FILE; select 1"}); err == nil {
+				t.Fatal("memory query admitted temp_store=FILE")
+			}
+			if _, err := runExec(context.Background(), h, Input{SQL: "pragma temp_store=FILE"}, false); err == nil {
+				t.Fatal("memory exec admitted temp_store=FILE")
+			}
+		} else if _, err := runQuery(context.Background(), h, Input{SQL: "pragma foreign_keys=1"}); err != nil {
 			t.Fatal(err)
 		}
 		if got := state(); got != before {
 			t.Fatalf("pragma read left connection state %s (was %s)", got, before)
 		}
 		if f.target.Mode == dbstore.Persistent {
-			// Dropping locking_mode through a read must not release the hold's native lock.
-			if _, err := runQuery(context.Background(), h, Input{SQL: "pragma locking_mode=normal; select count(*) from r"}); err != nil {
-				t.Fatal(err)
+			// NORMAL plus a file access would release the native lock before
+			// session cleanup can restore EXCLUSIVE.
+			if _, err := runQuery(context.Background(), h, Input{SQL: "pragma locking_mode=normal; select count(*) from r"}); err == nil {
+				t.Fatal("held query admitted locking_mode=NORMAL")
 			}
 			other, err := sql.Open("sqlite", "file:"+f.target.Path+"?mode=ro&_pragma=busy_timeout(0)")
 			if err != nil {

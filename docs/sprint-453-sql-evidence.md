@@ -186,6 +186,46 @@ a yoke pin bump to this candidate. go.mod/go.sum are unchanged.
 - Exclusion is the lifecycle story's: host-local claim plus native lock or
   owner admission, never presented as distributed.
 
+## Blocking review 7526: transient engine effects (continuation)
+
+Candidate 7526ffb2 remains unaccepted. Restoring `temp_store` or
+`locking_mode` after an operation cannot undo a temporary disk spill or prove
+that an exclusive native lock stayed held. The focused regression
+`go test ./pkg/dbsql -run '^TestHeldReadLeavesNoConnectionState$' -count=1`
+on Dragon exits 1 at this candidate, with:
+
+```
+--- FAIL: TestHeldReadLeavesNoConnectionState (1.20s)
+    --- FAIL: TestHeldReadLeavesNoConnectionState/persistent (1.12s)
+        dbsql_test.go:253: held query admitted locking_mode=NORMAL
+    --- FAIL: TestHeldReadLeavesNoConnectionState/memory (0.08s)
+        dbsql_test.go:238: memory query admitted temp_store=FILE
+FAIL github.com/qiangli/yoke/pkg/dbsql 2.840s
+```
+
+SQLite's supported `sqlite3_set_authorizer` callback runs at statement
+preparation (and on reprepare), before a `SQLITE_PRAGMA` setting takes effect.
+The narrow dependency option is a per-connection `RegisterAuthorizer` API in
+the modernc driver, exposing action code, pragma name, and argument through
+`database/sql.Conn.Raw`, with callback removal when the connection closes.
+`dbsql` can then deny `temp_store` setters on memory sessions and
+`locking_mode` setters while a persistent native exclusive hold is active.
+Keep the callback installed through statement stepping and preserve the
+existing commit/rollback hooks and cleanup checks. Pinned modernc v1.50.1
+contains the engine entry point but no exported authorizer. No dependency pin
+has been changed; manager coordinates the driver surface first.
+
+SQLite's `SQLITE_TEMP_STORE=3` build option also forces temporary storage to
+memory despite a PRAGMA override, but affects all consumers of that SQLite
+build and does not protect held locking mode. The authorizer is the smallest
+single supported mechanism for both named gaps. It does not itself prove that
+all other potential file effects or lock paths are safe; focused adversarial
+tests and the manager's remote gates remain required.
+
+References: https://www.sqlite.org/c3ref/set_authorizer.html,
+https://www.sqlite.org/compile.html#temp_store,
+https://www.sqlite.org/pragma.html#pragma_locking_mode.
+
 ## Extension path for JSON / full-text / KV workers
 
 Follow `pkg/dbsql`, not a new framework: one package per category that
