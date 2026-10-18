@@ -15,13 +15,18 @@ var localAbsPathRe = regexp.MustCompile(`(?:^|[\s"'\x60(\[=:,])((?:/|~/)[A-Za-z0
 // remotePathHint returns advice when a cross-host body names an absolute local
 // path, which the recipient host cannot open. It is advice only.
 func remotePathHint(body string) string {
-	m := localAbsPathRe.FindStringSubmatch(body)
-	if m == nil {
-		return ""
+	for _, m := range localAbsPathRe.FindAllStringSubmatchIndex(body, -1) {
+		start := m[2]
+		if schemePrefixRe.MatchString(body[:start]) {
+			continue // already a locator: `dir:/abs` names its scope explicitly
+		}
+		return "message body contains local path " + body[start:m[3]] + "; the recipient host cannot read this host's filesystem — " +
+			"use an explicit locator instead (repo-relative path with commit, issue/room/artifact id, or URL)"
 	}
-	return "message body contains local path " + m[1] + "; the recipient host cannot read this host's filesystem — " +
-		"use an explicit locator instead (repo-relative path with commit, issue/room/artifact id, or URL)"
+	return ""
 }
+
+var schemePrefixRe = regexp.MustCompile(`(?:^|[^A-Za-z0-9-])[a-z][a-z0-9-]+:$`)
 
 // Cross-host mail — the email model.
 //
