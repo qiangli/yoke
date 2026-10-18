@@ -173,6 +173,9 @@ func agentRecord() *recordSpec {
 			"code/manage/judge ratings (r ± RD, events), and each certificate's validity.\n" +
 			"--json and --yaml print the stored record, which never contains a band.",
 		Summary: showAgentSummary,
+		ShowFlags: func(c *cobra.Command) {
+			c.Flags().Bool("explain", false, "also print the source of each effective reader preference")
+		},
 		// An agent's asset blob is the envelope, not the bare agent — that is
 		// the shape the store holds and the control plane serves.
 		YAMLBlob: func(a Agent) any { return AgentFile{Agents: []Agent{a}} },

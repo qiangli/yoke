@@ -201,6 +201,33 @@ func TestAgentShowReaderPrefs(t *testing.T) {
 			t.Fatalf("agent summary omitted band help default %q:\n%s", HelpSkill, got)
 		}
 	})
+
+	t.Run("explain prints sources only on request", func(t *testing.T) {
+		root := mkRing(t, ReaderPrefs{View: ViewJSON}, 0)
+		raw := `{"budget_bytes":77777,"defaults":{"ls*":{"limit":5}},"_note":"x"}`
+		t.Setenv(EnvBashyPrefs, raw)
+		plain := show(t, root)
+		if strings.Contains(plain, "reader-source") {
+			t.Fatalf("default output changed:\n%s", plain)
+		}
+		got, err := runCmd(t, NewAgentsCmd(WithRoot(root)), "show", "show-agent", "--explain")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{
+			"reader-source: budget_bytes=" + SourceEnv,
+			"view=" + SourceAgent,
+			"reader-source-default: ls* limit=",
+			"reader-source-extra: _note=",
+		} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("explain omitted %q:\n%s", want, got)
+			}
+		}
+		if strings.Contains(got, raw) {
+			t.Fatalf("explain leaked raw %s:\n%s", EnvBashyPrefs, got)
+		}
+	})
 }
 
 // Asking for two formats is a caller mistake; letting one silently win would

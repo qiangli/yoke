@@ -645,13 +645,50 @@ func showAgentSummary(cmd *cobra.Command, cat *Catalog, a Agent) error {
 	if band == 0 {
 		band = model.Band
 	}
-	prefs, err := ResolveReaderPrefsFromEnv(ReaderPrefs{}, &a, &tool, band)
+	prefs, srcs, err := ResolveReaderPrefsWithSources(ReaderPrefsOptions{
+		EnvJSON: os.Getenv(EnvBashyPrefs), Agent: &a, Tool: &tool, Band: band,
+	})
 	if err != nil {
 		fmt.Fprintf(out, "reader:   unavailable (%v)\n", err)
 		return nil
 	}
 	writeReaderPrefs(out, prefs)
+	if explain, _ := cmd.Flags().GetBool("explain"); explain {
+		writeReaderSources(out, srcs)
+	}
 	return nil
+}
+
+// writeReaderSources renders where each effective reader preference came
+// from, one per line in sorted order. Only source labels print, never values.
+func writeReaderSources(out io.Writer, s ReaderPrefsSources) {
+	fmt.Fprintf(out, "reader-source: budget_bytes=%s view=%s help=%s dialect=%s\n",
+		s.BudgetBytes, s.View, s.Help, s.Dialect)
+	pats := make([]string, 0, len(s.Defaults))
+	for pat := range s.Defaults {
+		pats = append(pats, pat)
+	}
+	sort.Strings(pats)
+	for _, pat := range pats {
+		keys := make([]string, 0, len(s.Defaults[pat]))
+		for k := range s.Defaults[pat] {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		parts := make([]string, 0, len(keys))
+		for _, k := range keys {
+			parts = append(parts, k+"="+s.Defaults[pat][k])
+		}
+		fmt.Fprintf(out, "reader-source-default: %s %s\n", pat, strings.Join(parts, " "))
+	}
+	keys := make([]string, 0, len(s.Extra))
+	for k := range s.Extra {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		fmt.Fprintf(out, "reader-source-extra: %s=%s\n", k, s.Extra[k])
+	}
 }
 
 // writeReaderPrefs renders the effective reader preferences for humans.

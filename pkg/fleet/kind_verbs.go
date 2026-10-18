@@ -123,8 +123,10 @@ type typedRecord[T any] struct {
 	// Summary renders the human view `show` prints by default; nil means the
 	// record's YAML. YAMLBlob maps a record to the document `--yaml` prints
 	// (agents are stored in an envelope); nil means the record itself.
-	Summary  func(cmd *cobra.Command, c *Catalog, rec T) error
-	YAMLBlob func(T) any
+	Summary func(cmd *cobra.Command, c *Catalog, rec T) error
+	// ShowFlags registers extra `show` flags a Summary may read.
+	ShowFlags func(*cobra.Command)
+	YAMLBlob  func(T) any
 
 	AddDoc, SetDoc verbDoc
 	Flags          []kindFlag
@@ -177,6 +179,7 @@ type recordSpec struct {
 	check     func(*Catalog, any) error
 	forceDoc  string
 	summary   func(*cobra.Command, *Catalog, any) error
+	showFlags func(*cobra.Command)
 	yamlBlob  func(any) any
 	showShort string
 	showLong  string
@@ -214,7 +217,7 @@ func newRecordSpec[T any](t typedRecord[T]) *recordSpec {
 			*t.Name(v) = name
 			return v
 		},
-		showShort: t.ShowShort, showLong: t.ShowLong,
+		showShort: t.ShowShort, showLong: t.ShowLong, showFlags: t.ShowFlags,
 		addDoc: t.AddDoc, setDoc: t.SetDoc,
 		flags: t.Flags, aliasDoc: t.AliasDoc, nameFlag: t.NameFlag,
 		fileFlag: t.FileFlag, optional: t.Optional,
@@ -388,6 +391,9 @@ func newShow(kind string, opts []Option) *cobra.Command {
 	c.Flags().BoolVar(&asJSON, "json", false, jsonHelp)
 	c.Flags().BoolVar(&asYAML, "yaml", false, yamlHelp)
 	c.Flags().StringVar(&field, "field", "", "print one dotted path")
+	if r.showFlags != nil {
+		r.showFlags(c)
+	}
 	return c
 }
 
