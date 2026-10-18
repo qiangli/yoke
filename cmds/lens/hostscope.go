@@ -23,6 +23,42 @@ import (
 
 const hostMaxFile = 4 << 20
 
+// hostStderrLimit bounds outpost stderr captured on the host transport,
+// mirroring runRecipe's 4096-byte stderr bound on the sandbox tier. Only
+// outpost's own diagnostic text (exit guidance such as elevation prompts)
+// ever lands here: argv is caller-spelled identifiers, and no credential is
+// resolved or printed on this path.
+const hostStderrLimit = 4096
+
+// hostStderr retains the first hostStderrLimit bytes of a command's stderr.
+// Returning the full write length keeps a chatty producer from blocking.
+type hostStderr struct {
+	buf []byte
+}
+
+func (b *hostStderr) Write(p []byte) (int, error) {
+	if len(b.buf) < hostStderrLimit {
+		b.buf = append(b.buf, p[:min(len(p), hostStderrLimit-len(b.buf))]...)
+	}
+	return len(p), nil
+}
+
+// text returns the captured diagnostics trimmed for error display: NULs
+// stripped, surrounding whitespace cut. The capture is already bounded.
+func (b *hostStderr) text() string {
+	return strings.TrimSpace(strings.ReplaceAll(string(b.buf), "\x00", ""))
+}
+
+// hostRunError decorates a failed outpost invocation with its bounded
+// stderr, so actionable guidance (for example an elevation prompt) reaches
+// the caller instead of a bare exit status. Pure: tests pin the format.
+func hostRunError(args []string, runErr error, errBuf *hostStderr) error {
+	if msg := errBuf.text(); msg != "" {
+		return fmt.Errorf("host: outpost %s: %w: %s", strings.Join(args, " "), runErr, msg)
+	}
+	return fmt.Errorf("host: outpost %s: %w", strings.Join(args, " "), runErr)
+}
+
 type hostEntry struct {
 	Name    string
 	Dir     bool
@@ -50,11 +86,13 @@ var hostTargetsRunner = runHostTargets
 func runHostTargets(ctx context.Context) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, peerTimeout)
 	defer cancel()
+	args := []string{"ssh", "list", "--json"}
 	var out peerCapture
-	c := exec.CommandContext(ctx, "outpost", "ssh", "list", "--json")
-	c.Stdout = &out
+	errBuf := &hostStderr{}
+	c := exec.CommandContext(ctx, "outpost", args...)
+	c.Stdout, c.Stderr = &out, errBuf
 	if err := c.Run(); err != nil {
-		return nil, err
+		return nil, hostRunError(args, err, errBuf)
 	}
 	if out.overflow {
 		return nil, fmt.Errorf("host: SSH target listing exceeds %d bytes", peerMaxOutput)
@@ -65,11 +103,13 @@ func runHostTargets(ctx context.Context) ([]byte, error) {
 func (outpostSFTP) run(ctx context.Context, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, peerTimeout)
 	defer cancel()
+	full := append([]string{"ssh", "sftp"}, args...)
 	var out peerCapture
-	c := exec.CommandContext(ctx, "outpost", append([]string{"ssh", "sftp"}, args...)...)
-	c.Stdout = &out
+	errBuf := &hostStderr{}
+	c := exec.CommandContext(ctx, "outpost", full...)
+	c.Stdout, c.Stderr = &out, errBuf
 	if err := c.Run(); err != nil {
-		return nil, err
+		return nil, hostRunError(full, err, errBuf)
 	}
 	if out.overflow {
 		return nil, fmt.Errorf("host: outpost output exceeds %d bytes", peerMaxOutput)

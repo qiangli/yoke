@@ -2,6 +2,7 @@ package lenscmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -114,6 +115,80 @@ func TestParseHostListingPreservesNamesAndSkipsSymlinks(t *testing.T) {
 	}
 	if _, err := parseHostListing([]byte("-rw-r--r--\t5\t../escape\n")); err == nil {
 		t.Fatal("unsafe remote name accepted")
+	}
+}
+
+// authFailHost fails every transport call with a canned outpost-style error,
+// standing in for a live elevation refusal without contacting any peer.
+type authFailHost struct{ err error }
+
+func (a authFailHost) List(_ context.Context, name, dir string) ([]hostEntry, error) {
+	return nil, a.err
+}
+
+func (a authFailHost) Read(_ context.Context, name, file string) ([]byte, error) {
+	return nil, a.err
+}
+
+// TestHostRunErrorIncludesBoundedStderr pins the @host transport contract:
+// a failed outpost invocation carries its bounded, trimmed stderr (the
+// actionable guidance, as @sandbox does via runRecipe), stays wrapped for
+// errors.Is, never grows past hostStderrLimit, and strips NULs.
+func TestHostRunErrorIncludesBoundedStderr(t *testing.T) {
+	runErr := errors.New("exit status 1")
+	args := []string{"ssh", "sftp", "ls", "dogtest", "."}
+
+	var withMsg hostStderr
+	_, _ = withMsg.Write([]byte("Error: elevation required for novidesign \u2014 run outpost connect novidesign\n"))
+	err := hostRunError(args, runErr, &withMsg)
+	if !strings.Contains(err.Error(), "elevation required for novidesign") ||
+		!strings.Contains(err.Error(), "run outpost connect novidesign") {
+		t.Fatalf("guidance lost: %q", err)
+	}
+	if !errors.Is(err, runErr) {
+		t.Fatalf("run error unwrapped: %q", err)
+	}
+
+	if err := hostRunError(args, runErr, &hostStderr{}); strings.HasSuffix(err.Error(), ": ") ||
+		!errors.Is(err, runErr) {
+		t.Fatalf("empty stderr should fall back to the bare error: %q", err)
+	}
+
+	big := &hostStderr{}
+	if _, err := big.Write([]byte(strings.Repeat("x", 2*hostStderrLimit))); err != nil {
+		t.Fatal(err)
+	}
+	if len(big.buf) != hostStderrLimit {
+		t.Fatalf("stderr capture=%d bytes, want bound %d", len(big.buf), hostStderrLimit)
+	}
+	if got := hostRunError(args, runErr, big).Error(); !strings.HasSuffix(got, string(big.buf)) {
+		t.Fatalf("bounded stderr not carried verbatim, got %d chars", len(got))
+	}
+
+	var nul hostStderr
+	_, _ = nul.Write([]byte("re-elevate novidesign:\x00 no TTY for password prompt\n"))
+	if got := hostRunError(args, runErr, &nul).Error(); strings.Contains(got, "\x00") ||
+		!strings.Contains(got, "no TTY for password prompt") {
+		t.Fatalf("stderr not sanitized: %q", got)
+	}
+}
+
+// TestHostScopeSurfacesAuthGuidance proves a readable auth failure reaches
+// the user: when the sftp transport reports an elevation refusal, the lens
+// CLI surfaces that guidance on stderr instead of a bare exit status. No
+// live peer is contacted: peers, targets and the transport are all canned,
+// and no credential is acquired or modified.
+func TestHostScopeSurfacesAuthGuidance(t *testing.T) {
+	hostFixture(t, hostPeers)
+	oldT := hostTransportImpl
+	hostTransportImpl = authFailHost{err: errors.New("host: outpost ssh sftp ls mac-target src: exit status 1: Error: elevation required for novidesign \u2014 run outpost connect novidesign")}
+	defer func() { hostTransportImpl = oldT }()
+	out, errOut, code := runTool(t, t.TempDir(), "", "-t", "graph", "dir:src@mac")
+	if code == 0 || out != "" {
+		t.Fatalf("code=%d out=%q stderr=%q, want a surfaced failure", code, out, errOut)
+	}
+	if !strings.Contains(errOut, "elevation required") || !strings.Contains(errOut, "outpost connect") {
+		t.Fatalf("auth guidance lost from stderr: %q", errOut)
 	}
 }
 
