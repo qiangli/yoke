@@ -4,15 +4,117 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qiangli/yoke/pkg/dblifecycle"
 	"github.com/qiangli/yoke/pkg/dbstore"
 	"github.com/qiangli/yoke/pkg/dbstore/bonsaidb"
 )
+
+func TestGraphOwnerHelper(t *testing.T) {
+	if os.Getenv("BASHY_GRAPH_OWNER_HELPER") != "1" {
+		return
+	}
+	if err := dblifecycle.Serve(context.Background(), os.Getenv("BASHY_GRAPH_READY"), 0); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGraphCASClientHelper(t *testing.T) {
+	if os.Getenv("BASHY_GRAPH_CAS_HELPER") != "1" {
+		return
+	}
+	id := os.Getenv("BASHY_GRAPH_SESSION")
+	target := dbstore.Target{Engine: "bonsai", Mode: dbstore.Persistent, Path: os.Getenv("BASHY_GRAPH_PATH")}
+	in, _ := json.Marshal(Input{Node: &dbstore.Node{ID: "shared", Type: os.Getenv("BASHY_GRAPH_CLIENT")}, IfRevision: 1})
+	res, err := dblifecycle.Call(context.Background(), id, dblifecycle.Request{Op: OpNodePut, Target: target, Input: in, Wait: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(res); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGraphOwnerTwoClientCAS(t *testing.T) {
+	if testing.Short() {
+		t.Skip("independent process gate runs remotely")
+	}
+	root := t.TempDir()
+	t.Setenv("BASHY_DB_SESSION_DIR", filepath.Join(root, "sessions"))
+	t.Setenv("BASHY_COORD_DIR", filepath.Join(root, "coord"))
+	ready := filepath.Join(root, "ready")
+	owner := exec.Command(os.Args[0], "-test.run=^TestGraphOwnerHelper$")
+	owner.Env = append(os.Environ(), "BASHY_GRAPH_OWNER_HELPER=1", "BASHY_GRAPH_READY="+ready)
+	if err := owner.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if owner.ProcessState == nil {
+			_ = owner.Process.Kill()
+			_ = owner.Wait()
+		}
+	})
+	var session string
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if b, err := os.ReadFile(ready); err == nil && strings.HasPrefix(string(b), "s-") {
+			session = string(b)
+			break
+		}
+	}
+	if session == "" {
+		t.Fatal("graph owner did not start")
+	}
+	path := filepath.Join(root, "graph")
+	target := dbstore.Target{Engine: "bonsai", Mode: dbstore.Persistent, Path: path}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if r, err := dblifecycle.Call(ctx, session, dblifecycle.Request{Op: "create", Target: target}); err != nil || !r.OK {
+		t.Fatalf("create: %+v %v", r, err)
+	}
+	in, _ := json.Marshal(Input{Node: &dbstore.Node{ID: "shared", Type: "initial"}})
+	if r, err := dblifecycle.Call(ctx, session, dblifecycle.Request{Op: OpNodePut, Target: target, Input: in}); err != nil || !r.OK {
+		t.Fatalf("initial node: %+v %v", r, err)
+	}
+	results := make(chan dblifecycle.Response, 2)
+	for _, name := range []string{"one", "two"} {
+		go func(name string) {
+			cmd := exec.Command(os.Args[0], "-test.run=^TestGraphCASClientHelper$")
+			cmd.Env = append(os.Environ(), "BASHY_GRAPH_CAS_HELPER=1", "BASHY_GRAPH_SESSION="+session, "BASHY_GRAPH_PATH="+path, "BASHY_GRAPH_CLIENT="+name, "BASHY_EPISODE=graph-"+name)
+			b, err := cmd.Output()
+			if err != nil {
+				results <- dblifecycle.Response{Error: &dblifecycle.OwnerError{Code: "client_failed", Message: err.Error()}}
+				return
+			}
+			var r dblifecycle.Response
+			if err := json.Unmarshal([]byte(strings.SplitN(string(b), "\n", 2)[0]), &r); err != nil {
+				results <- dblifecycle.Response{Error: &dblifecycle.OwnerError{Code: "decode_failed", Message: err.Error()}}
+				return
+			}
+			results <- r
+		}(name)
+	}
+	var success, conflicts int
+	for range 2 {
+		r := <-results
+		if r.OK {
+			success++
+		} else if r.Error != nil && r.Error.Code == "conflict" {
+			conflicts++
+		} else {
+			t.Fatalf("unexpected CAS response: %+v", r)
+		}
+	}
+	if success != 1 || conflicts != 1 {
+		t.Fatalf("CAS outcomes: success=%d conflict=%d", success, conflicts)
+	}
+}
 
 func call(t *testing.T, h dbstore.Handle, op string, in Input) (dblifecycle.Outcome, error) {
 	t.Helper()

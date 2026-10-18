@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/blevesearch/bleve/v2"
+	"github.com/qiangli/bonsai/pkg/bonsai"
 
 	bolt "go.etcd.io/bbolt"
 	sqlite "modernc.org/sqlite"
@@ -202,8 +203,7 @@ func (s Service) Drop(ctx context.Context, t dbstore.Target, wait time.Duration)
 	return id, a.Drop(ctx, id.Target, s.options(id, wait, true))
 }
 
-// Backup supports native SQLite and bbolt snapshots. Other adapters return
-// unsupported until their backend stories provide a truthful native snapshot.
+// Backup produces a native snapshot for SQLite, bbolt, and persistent Bonsai.
 // The destination is exclusive: a previous backup is never overwritten.
 func (s Service) Backup(ctx context.Context, t dbstore.Target, out string, wait time.Duration) (dbstore.Identity, error) {
 	// VACUUM INTO reads source content but SQLite requires a read-write
@@ -221,6 +221,33 @@ func backupHandle(ctx context.Context, h dbstore.Handle, out string) error {
 	id := h.Identity()
 	if out == "" || out == "-" {
 		return fmt.Errorf("%w: backup requires a file path", dbstore.ErrInvalidInput)
+	}
+	if id.Engine == "bonsai" {
+		if id.Mode != dbstore.Persistent {
+			return fmt.Errorf("%w: bonsai memory native backup; use graph export", dbstore.ErrUnsupported)
+		}
+		if err := ctx.Err(); err != nil {
+			return dbstore.FromContext(err)
+		}
+		// Bonsai writes a directory tree. Reserve the destination exclusively
+		// so a concurrent backup can never replace an existing one.
+		if err := os.Mkdir(out, 0o700); err != nil {
+			if os.IsExist(err) {
+				return dbstore.ErrExists
+			}
+			return err
+		}
+		complete := false
+		defer func() {
+			if !complete {
+				_ = os.RemoveAll(out)
+			}
+		}()
+		if _, err := h.(*bonsaidb.DB).Bonsai().BackupTo(ctx, bonsai.BackupOptions{Dir: out, Type: bonsai.BackupFull}); err != nil {
+			return dbstore.Backend("bonsai", err)
+		}
+		complete = true
+		return nil
 	}
 	if id.Engine != "sqlite" && id.Engine != "bbolt" {
 		return fmt.Errorf("%w: %s native backup; use backend logical export when available", dbstore.ErrUnsupported, id.Engine)
@@ -344,6 +371,9 @@ func (s Service) Restore(ctx context.Context, t dbstore.Target, in string, repla
 	if err != nil {
 		return id, err
 	}
+	if id.Engine == "bonsai" {
+		return s.restoreBonsai(ctx, id, a, in, replace, wait)
+	}
 	if id.Engine != "sqlite" {
 		return id, fmt.Errorf("%w: native restore for %s/%s", dbstore.ErrUnsupported, id.Engine, id.Mode)
 	}
@@ -431,4 +461,84 @@ func (s Service) Restore(ctx context.Context, t dbstore.Target, in string, repla
 		return b.Finish()
 	})
 	return id, sqlitedb.Classify(err)
+}
+
+// restoreBonsai first replays the complete backup into a private disposable
+// database. Bonsai's native restore mutates as it reads, so manifest parsing
+// alone cannot guarantee that malformed backup bytes leave the target intact.
+func (s Service) restoreBonsai(ctx context.Context, id dbstore.Identity, a dbstore.Adapter, in string, replace bool, wait time.Duration) (dbstore.Identity, error) {
+	probe := s.options(id, wait, false)
+	probe.ReadOnly = true
+	h, err := a.Open(ctx, id.Target, probe)
+	if err != nil {
+		return id, err
+	}
+	if err = h.Close(); err != nil {
+		return id, err
+	}
+	if !replace {
+		return id, fmt.Errorf("%w: restore requires --replace", dbstore.ErrExists)
+	}
+	if id.Mode != dbstore.Persistent {
+		return id, fmt.Errorf("%w: bonsai memory native restore; use graph import", dbstore.ErrUnsupported)
+	}
+	if in == "" || in == "-" {
+		return id, fmt.Errorf("%w: restore requires a directory", dbstore.ErrInvalidInput)
+	}
+	input, err := filepath.Abs(in)
+	if err != nil {
+		return id, err
+	}
+	if input == id.Path {
+		return id, fmt.Errorf("%w: backup and target are identical", dbstore.ErrInvalidInput)
+	}
+	info, err := os.Stat(input)
+	if err != nil {
+		return id, err
+	}
+	if !info.IsDir() {
+		return id, fmt.Errorf("%w: bonsai backup must be a directory", dbstore.ErrInvalidInput)
+	}
+	stage, err := os.MkdirTemp("", "bonsai-restore-check-*")
+	if err != nil {
+		return id, err
+	}
+	defer os.RemoveAll(stage)
+	checkTarget := dbstore.Target{Engine: "bonsai", Mode: dbstore.Persistent, Path: filepath.Join(stage, "db")}
+	check, err := a.Create(ctx, checkTarget, dbstore.Options{Wait: wait})
+	if err != nil {
+		return id, err
+	}
+	err = check.(*bonsaidb.DB).Bonsai().RestoreFromManifest(ctx, input)
+	closeErr := check.Close()
+	if err != nil {
+		return id, fmt.Errorf("%w: invalid bonsai backup: %v", dbstore.ErrIntegrity, err)
+	}
+	if closeErr != nil {
+		return id, closeErr
+	}
+	if err := ctx.Err(); err != nil {
+		return id, dbstore.FromContext(err)
+	}
+	hold, err := acquireClaim(ctx, id, s.holder(), wait)
+	if err != nil {
+		return id, err
+	}
+	defer hold.release()
+	if err := s.guard(ctx, id); err != nil {
+		return id, err
+	}
+	dest, err := a.Open(ctx, id.Target, s.options(id, wait, true))
+	if err != nil {
+		return id, err
+	}
+	defer dest.Close()
+	b := dest.(*bonsaidb.DB).Bonsai()
+	if err := b.DropAll(ctx); err != nil {
+		return id, dbstore.Backend("bonsai", err)
+	}
+	if err := b.RestoreFromManifest(ctx, input); err != nil {
+		return id, fmt.Errorf("%w: native bonsai restore failed after target reset: %v", dbstore.ErrIntegrity, err)
+	}
+	return id, nil
 }
