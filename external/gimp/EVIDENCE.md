@@ -4,8 +4,9 @@ Yoke-side admission and verification record for the GIMP external.
 Build/license admission, fixture tests, and live verified support are
 distinct rows below; a compiling wrapper or a passing fake-executor test
 is NOT live support. linux/amd64 is PINNED with manifest+bytes verified
-digests (see Pins); on-target batch execution on Linux is the named gap,
-and every other platform fails closed.
+digests (see Pins) and LIVE-VERIFIED on an approved linux/amd64 target
+(see "Live evidence — novidesign.local"); every other platform fails
+closed.
 
 Precedent: `external/blender` (story f5817629a95b) is the accepted
 verified-provisioning pattern this story follows — managed external,
@@ -120,7 +121,8 @@ carrying a fixed-template program, exactly one `--batch-interpreter
 python-fu-eval`, trailing `--quit`, and the absence of GUI/batch-escape
 flags.
 
-Program-body provenance (doc-verified, execution-unverified): every
+Program-body provenance (doc-verified, then live-verified on
+novidesign.local — see below): every
 call in the fixed template was checked against the project's own
 `gimp-api-docs-3.2.6` (`v3.2/api-docs/gimp-api-docs-3.2.6.tar.xz`,
 fetched 2026-10-18) — `Gimp.file_load(run_mode, file)`,
@@ -132,9 +134,12 @@ image to any supported format by extension", options NULL),
 `GimpRotationType` members `GIMP_ROTATE_DEGREES90/180/270` (this check
 caught and fixed a wrong `ROTATE_90`-style spelling before any live
 run). What the docs do NOT pin down is the turn direction of the
-rotation members and runtime behavior under `--quit`, which the live run
-below confirms. Validation, argv, escaping, provisioning and refusals do
-not depend on those spellings.
+rotation members and runtime behavior under `--quit`; the live run on
+novidesign.local confirmed `--quit` exits after the batch for all three
+programs and that the scale path produces exact dimensions (rotation
+direction remains doc-only — `TestLive` does not exercise `--rotate`).
+Validation, argv, escaping, provisioning and refusals do not depend on
+those spellings.
 
 ## Operation schema/effects (registered-command declaration, unmounted)
 
@@ -181,9 +186,11 @@ out.
   program including a hostile-path case (skipped only where no python3
   exists — present on the authoring host, 3.9.6).
 - `live_test.go` (`TestLive`, `YOKE_GIMP_LIVE=1`) is compile-verified
-  here (vet builds it) and execution-unverified: it provisions through
-  the real path and runs export/convert/edit over a stdlib-generated
-  PNG, asserting result schemas and exact scaled dimensions.
+  here (vet builds it) and was EXECUTED by the manager on the approved
+  linux/amd64 target (PASS; see "Live evidence — novidesign.local"): it
+  provisions through the real path and runs export/convert/edit over a
+  stdlib-generated PNG, asserting result schemas and exact scaled
+  dimensions.
 - Go-side dependencies: none added (`go.mod`/`go.sum` untouched; the
   package uses `pkg/binmgr`, cobra, and stdlib only; `pkg/atlas` is a
   test-only import for vocabulary pins).
@@ -220,10 +227,10 @@ artifact exists, so nothing ran here):
 
 ## Named gaps (not done here)
 
-- On-target live run: `YOKE_GIMP_LIVE=1` provision + export/convert/edit
-  on a linux/amd64 host (first run confirms/adjusts the fixed program
-  bodies, AppImage FUSE behavior in the target environment, and
-  `--quit` semantics), then the linux/arm64 pin + run.
+- linux/arm64: pin the recorded aarch64 manifest row only after a
+  download-verify-run on a native arm64 Linux host; until then `ErrNoPin`.
+- `--rotate` is fixture-verified (argv/program goldens, API-doc spelling)
+  but not exercised by `TestLive`; turn direction is doc-only.
 - Mounting `Registered()` on `cmds/all` / registry / atlas and the bashy
   command + MCP surface: separate, reviewed change.
 - Wave 4 follow-ups per the story's sprint card.
@@ -254,3 +261,42 @@ supervisor-authorized, at 05:50 PDT:
   remains manager-gated to a separately claimed approved host
   (novidesign or noviwin).
 - No other source, test, or pin changes accompany this section.
+
+## Live evidence — 2026-10-18, novidesign.local (approved host, claim epoch55)
+
+Manager-run live acceptance, 06:00–06:09 PDT, under the host claim
+`novidesign.local` epoch55 (released afterwards). This is the on-target
+run that the earlier "named gap" text above referred to; it was NOT run
+on Dragon.
+
+- Provisioning: the official `GIMP-3.2.6-x86_64.AppImage` was downloaded
+  by the real `Path`/`pkg/binmgr` code path (not a hand-placed binary),
+  and its SHA256 matched the committed pin
+  `79ea41bc9b06f78fda181849a9ca8e42d83f1124dedb756f4d52352e2465010f`
+  exactly before anything was executed.
+- Target environment: novidesign.local is arm64, so the run used an
+  isolated, already-cached Ubuntu amd64 container. The host's ARM
+  `qemu-static` wrapper plus `APPIMAGE_EXTRACT_AND_RUN=1` were used ONLY
+  to bridge nested AppImage execution inside that container (FUSE is
+  unavailable there). The production program bodies and argv were
+  unchanged — the wrapper's `--no-interface --no-data --no-fonts
+  --new-instance --batch-interpreter python-fu-eval --batch <fixed>
+  --quit` shape ran as committed.
+- `YOKE_GIMP_LIVE=1 go test -run TestLive ./external/gimp` — PASS,
+  total 148.14s. Per operation (foreground child, exit 0, marked result
+  line, non-empty output):
+
+  | Operation | Wall time | Output bytes | Output SHA256 (prefix) |
+  |---|---|---|---|
+  | `export` in.png → flat.png | 1m28.056s (includes first-run AppImage extraction) | 4040 | `574141dd…` |
+  | `convert --mode gray` in.png → gray.png | 37.928s | 3644 | `bfda54d3…` |
+  | `edit --scale 32x24` in.png → small.png | 22.141s | 2619 | `a72f21d4…` |
+
+  `small.png` decoded by Go's `image/png` to exactly 32x24, as the test
+  asserts.
+- Cleanup, verified after the run: no GIMP process, container, or temp
+  file remained; `/tmp` staging removed on the VM and on the Mac; host
+  claim released; disk usage unchanged at 6.3 GiB.
+- Scope: this section records manager-supplied results. No source, test,
+  or pin changed between the commit the manager ran and this evidence
+  commit; nothing was executed on the authoring host for this section.
