@@ -6,6 +6,12 @@
 //	lens [-f FROM] -t TO [FILE]   convert (FROM: -f, else extension, else magic)
 //	lens -l [--json]              list the rows
 //
+// Command lines are rows too (bash/posix/bsh/cmd/pwsh/json/yaml/mcp-tool/
+// mcp-call/skill); they are never detected, so they need -f. Two knobs are
+// the agent's: --switch=keep|slash|pascal respells options for a Windows
+// peer and --drive=C spells /c/… paths natively. --verbose adds
+// "executable: schema-verified|unverified"; nothing is ever run.
+//
 // Exit: 0 converted; 1 input invalid for FROM; 2 usage; 3 no route;
 // 4 lossy under --strict; 127 recipe converter not registered.
 package lenscmd
@@ -26,8 +32,8 @@ import (
 
 var cmd = &tool.Tool{
 	Name:     "lens",
-	Synopsis: "Convert a file between representations (json/yaml/toml/csv/md, pdf/docx/xlsx/html → md|txt, archive → listing).",
-	Usage:    "lens [-f FROM] -t TO [--strict] [--verbose] [FILE] | lens -l [--json]",
+	Synopsis: "Convert a file between representations (json/yaml/toml/csv/md, pdf/docx/xlsx/html → md|txt, archive → listing, command line → bash/cmd/pwsh/mcp/skill).",
+	Usage:    "lens [-f FROM] -t TO [--strict] [--verbose] [--switch=keep|slash|pascal] [--drive=C] [FILE] | lens -l [--json]",
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
@@ -39,7 +45,9 @@ func run(rc *tool.RunContext, args []string) int {
 	list := fs.BoolP("list", "l", false, "list the conversion rows")
 	asJSON := fs.Bool("json", false, "with -l, one JSON object per row")
 	strict := fs.Bool("strict", false, "exit 4 instead of writing a lossy result")
-	verbose := fs.Bool("verbose", false, "print the route and fidelity on stderr")
+	verbose := fs.Bool("verbose", false, "print the route, fidelity and (command lines) executable verdict on stderr")
+	sw := fs.String("switch", "", "command lines: option spelling keep|slash|pascal (--dry-run, /dry-run, -DryRun)")
+	drive := fs.String("drive", "", "command lines: drive letters present on the target (C, CD); /c/… paths become C:\\…")
 
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
@@ -85,7 +93,8 @@ func run(rc *tool.RunContext, args []string) int {
 		return lens.ExitInvalid
 	}
 
-	res, err := lens.Convert(rc.Ctx, lens.Request{From: fromFmt, To: toFmt, Name: name, Data: data, Base: rc})
+	req := lens.Request{From: fromFmt, To: toFmt, Name: name, Data: data, Base: rc, Argv: lens.ArgvOptions{Switch: *sw, Drive: *drive}}
+	res, err := lens.Convert(rc.Ctx, req)
 	if err != nil {
 		if le, ok := err.(*lens.Error); ok {
 			fmt.Fprintf(rc.Err, "lens: %v\n", le)
@@ -96,6 +105,9 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	if *verbose {
 		fmt.Fprintf(rc.Err, "lens: route %s -> %s via %s (%s)\n", res.From, res.Row.To, res.Row.Via(), res.Row.Fidelity)
+		if res.Executable != "" {
+			fmt.Fprintf(rc.Err, "lens: executable: %s\n", res.Executable)
+		}
 	}
 	for _, n := range res.Losses {
 		fmt.Fprintf(rc.Err, "lens: lossy: %s\n", n)

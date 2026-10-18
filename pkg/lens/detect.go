@@ -23,6 +23,10 @@ var aliases = map[string]string{
 	"cmd:ps":  "cmd:ps", "cmd:df": "cmd:df", "cmd:ls-l": "cmd:ls-l",
 	"cmd:du": "cmd:du", "cmd:wc": "cmd:wc", "cmd:stat": "cmd:stat",
 	"cmd:id": "cmd:id", "cmd:uname": "cmd:uname", "cmd:tar-tv": "cmd:tar-tv",
+	// command lines (argv.go); json and yaml above double as the record rows
+	"bash": "bash", "posix": "posix", "sh": "posix", "bsh": "bsh", "bashpp": "bsh",
+	"cmd": "cmd", "pwsh": "pwsh", "powershell": "pwsh",
+	"mcp-tool": "mcp-tool", "mcp-call": "mcp-call", "skill": "skill",
 }
 
 // Canonical returns the canonical format name for a -f/-t spelling, or "".
@@ -45,8 +49,8 @@ func byExtension(name string) string {
 		return "html"
 	}
 	f := aliases[ext]
-	if f == "listing" || strings.HasPrefix(f, "cmd:") {
-		return ""
+	if f == "listing" || strings.HasPrefix(f, "cmd:") || argvOnly[f] {
+		return "" // command lines and command output are never guessed: they need -f
 	}
 	return f
 }

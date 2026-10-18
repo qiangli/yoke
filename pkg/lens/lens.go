@@ -78,7 +78,13 @@ type Row struct {
 	Fidelity Fidelity
 	Recipe   *Recipe // nil for built-in rows
 	conv     func(data []byte, l *losses) ([]byte, error)
+	// argv is set on the command-line rows instead of conv: they take the
+	// agent-chosen knobs and report the executable verdict (argv.go).
+	argv func(data []byte, opt ArgvOptions, l *losses) ([]byte, string, error)
 }
+
+// IsArgv reports whether the row is a command-line (argv) row.
+func (r Row) IsArgv() bool { return r.argv != nil }
 
 // Via names the converter: "go" or "recipe:<command>".
 func (r Row) Via() string {
@@ -230,6 +236,17 @@ func buildRows() []Row {
 			return parseCmdToJSON(cmd, data, l)
 		})
 	}
+
+	// command lines: every ordered pair of argv dialects; json↔yaml stays the
+	// data row above (a command record is data too, and that row is exact).
+	for _, from := range argvFormats {
+		for _, to := range argvFormats {
+			if from == to || !argvOnly[from] && !argvOnly[to] {
+				continue
+			}
+			t = append(t, Row{From: from, To: to, Fidelity: Lossless, argv: argvRow(from, to)})
+		}
+	}
 	return t
 }
 
@@ -360,6 +377,9 @@ type Request struct {
 	Data []byte
 	// Base is copied into the RunContext of a recipe command (Env, FS, …).
 	Base *tool.RunContext
+	// Argv carries the command-line knobs; setting either on a row that is
+	// not an argv row is a usage error.
+	Argv ArgvOptions
 }
 
 // Result is a finished conversion.
@@ -368,6 +388,8 @@ type Result struct {
 	Row    Row
 	From   string
 	Losses []string // what this input lost on top of the row's declaration
+	// Executable is SchemaVerified or Unverified on argv rows, "" otherwise.
+	Executable string
 }
 
 // Lossy reports whether the result is anything but exact.
@@ -388,9 +410,15 @@ func Convert(ctx context.Context, req Request) (Result, error) {
 	}
 	var l losses
 	var out []byte
-	if row.Recipe != nil {
+	var executable string
+	switch {
+	case row.argv != nil:
+		out, executable, err = row.argv(req.Data, req.Argv, &l)
+	case !req.Argv.empty():
+		return Result{From: from, Row: row}, errorf(ExitUsage, "--switch and --drive apply to command-line rows, not %s -> %s", from, req.To)
+	case row.Recipe != nil:
 		out, err = runRecipe(ctx, row, req)
-	} else {
+	default:
 		out, err = row.conv(req.Data, &l)
 	}
 	if err != nil {
@@ -400,7 +428,7 @@ func Convert(ctx context.Context, req Request) (Result, error) {
 		}
 		return Result{From: from, Row: row}, &Error{Code: ExitInvalid, Err: fmt.Errorf("invalid %s input: %w", from, err)}
 	}
-	return Result{Data: out, Row: row, From: from, Losses: l.notes}, nil
+	return Result{Data: out, Row: row, From: from, Losses: l.notes, Executable: executable}, nil
 }
 
 func runRecipe(ctx context.Context, row Row, req Request) ([]byte, error) {
