@@ -3877,9 +3877,10 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		launchSpec.Agent, launchSpec.Model = agentLaunch.Nick, agentLaunch.Model
 	}
 	// Control socket for `weave say` — only meaningful when the
-	// subagent gets a PTY and we're actually spawning it.
+	// subagent gets a PTY and we're actually spawning it. Codex exec does
+	// not consume live terminal messages; keep its steering queued for resume.
 	ctlSock := ""
-	if opts.ptyMode() != "never" && !opts.noSpawn {
+	if opts.ptyMode() != "never" && !opts.noSpawn && !weaveCodexExec(launchSpec) {
 		ctlSock = weaveCtlSockPath(dir, it.ID)
 	}
 	if opts.resume {

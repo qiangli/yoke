@@ -2,6 +2,7 @@ package weave
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -67,9 +68,48 @@ func weaveResumePrompt(it *weaveItem) (string, error) {
 	return body, nil
 }
 
+// Codex exec is a one-shot launch: a PTY does not turn it into the
+// interactive Codex session. Keep this check on the actual launch recipe;
+// a tool having a separate steer_exec does not make its exec steerable.
+// Other tools (including streaming-input launches) retain their transport.
+func weaveCodexExec(spec *weaveLaunchSpec) bool {
+	if spec == nil {
+		return false
+	}
+	name := strings.TrimSuffix(filepath.Base(spec.Tool), ".exe")
+	if name != "codex" && spec.Agent != "" {
+		cat := fleetCatalog()
+		if a, ok := cat.Agent(spec.Agent); ok {
+			name = a.Tool
+		} else {
+			name, _, _ = strings.Cut(spec.Agent, ":")
+		}
+	}
+	if name != "codex" {
+		return false
+	}
+	for i := 0; i < len(spec.Argv); i++ {
+		arg := spec.Argv[i]
+		switch arg {
+		case "--":
+			return false // subsequent text is a prompt, not a subcommand
+		case "-c", "--config", "-m", "--model", "-p", "--profile", "-C", "--cd", "-s", "--sandbox", "-a", "--ask-for-approval", "--add-dir", "--enable", "--disable", "--local-provider":
+			i++
+		default:
+			if !strings.HasPrefix(arg, "-") {
+				return arg == "exec"
+			}
+		}
+	}
+	return false
+}
+
 // A socket write is transport delivery, not proof of model incorporation.
 // Always persist the comment before attempting this best-effort live push.
 func weavePushComment(it *weaveItem, body string) bool {
+	if weaveCodexExec(it.LaunchSpec) {
+		return false
+	}
 	if it.State != "working" || it.WrapperPid == 0 || !pidAlive(it.WrapperPid) || it.CtlSock == "" {
 		return false
 	}
