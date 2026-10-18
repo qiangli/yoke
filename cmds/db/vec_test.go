@@ -1,18 +1,23 @@
 package dbcmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/qiangli/coreutils/tool"
 	"github.com/qiangli/yoke/mcp"
+	"github.com/qiangli/yoke/pkg/policy/advice"
 )
 
 func vecHits(t *testing.T, doc map[string]any) string {
@@ -202,5 +207,70 @@ func TestVecRegisteredCLIAndTypedMCP(t *testing.T) {
 		if hits := vecHits(t, cli); hits[:23] != `[{"distance":0,"id":"t"` {
 			t.Fatalf("nearest is not the embedded item: %s", hits)
 		}
+	}
+}
+
+// TestVecTextNetEffect: the CLI declares net.egress only for text with an
+// explicit endpoint, a dry run never calls the endpoint, and an effect cap
+// without net refuses text before any request while vectors still run.
+func TestVecTextNetEffect(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BASHY_COORD_DIR", filepath.Join(root, "coord"))
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"data":[{"index":0,"embedding":[0,1,0]}]}`)
+	}))
+	defer srv.Close()
+	endpoint := srv.URL + "/v1"
+	target := []string{"--engine", "sqlite", "--mode", "persistent", "--path", filepath.Join(root, "v.db")}
+	for _, args := range [][]string{
+		{"create"},
+		{"vec", "collection", "add", "--yes", "--collection", "c", "--dimension", "3", "--metric", "l2", "--model", "m"},
+	} {
+		if code, doc := dbRun(t, root, "", append(args, target...)...); code != 0 {
+			t.Fatalf("%v: %v", args, doc)
+		}
+	}
+	hasNet := func(doc map[string]any) bool {
+		b, _ := json.Marshal(doc["effects"])
+		return strings.Contains(string(b), "net.egress")
+	}
+	text := []string{"vec", "put", "--collection", "c", "--id", "t", "--text", "hi", "--endpoint", endpoint}
+	vector := []string{"vec", "put", "--collection", "c", "--id", "v", "--vector", "[1,0,0]"}
+	for _, preview := range []string{"--dry-run", "--explain"} {
+		if code, doc := dbRun(t, root, "", append(append(text, preview), target...)...); code != 0 || !hasNet(doc) {
+			t.Fatalf("%s text: exit %d %v", preview, code, doc)
+		}
+		if code, doc := dbRun(t, root, "", append(append(vector, preview), target...)...); code != 0 || hasNet(doc) {
+			t.Fatalf("%s vector: exit %d %v", preview, code, doc)
+		}
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("preview reached the endpoint %d times", calls.Load())
+	}
+	noNet, err := advice.ParseCap("read,write,destroy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	capped := func(args ...string) (int, map[string]any) {
+		var out, stderr bytes.Buffer
+		rc := &tool.RunContext{Ctx: advice.WithCap(context.Background(), noNet), Dir: root, Env: os.Environ(), In: strings.NewReader(""), Out: &out, Err: &stderr}
+		code := tool.Lookup("db").Run(rc, append(args, target...))
+		var doc map[string]any
+		if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+			t.Fatalf("db %v: %q %q", args, out.String(), stderr.String())
+		}
+		return code, doc
+	}
+	if code, doc := capped(text...); code == 0 || errCode(doc) != "unsupported" || calls.Load() != 0 {
+		t.Fatalf("text under a no-net cap: exit %d %v (calls %d)", code, doc, calls.Load())
+	}
+	if code, doc := capped(vector...); code != 0 || hasNet(doc) {
+		t.Fatalf("vector under a no-net cap: exit %d %v", code, doc)
+	}
+	if code, doc := dbRun(t, root, "", append(text, target...)...); code != 0 || !hasNet(doc) || calls.Load() != 1 {
+		t.Fatalf("uncapped text: exit %d %v (calls %d)", code, doc, calls.Load())
 	}
 }

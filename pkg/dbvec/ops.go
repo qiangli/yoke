@@ -65,6 +65,15 @@ func register(name string, access func(Input) dblifecycle.Access, run func(conte
 			return access(in), nil
 		},
 		Spec: func(mode dbstore.Mode, a dblifecycle.Access) dblifecycle.Operation { return Spec(name, mode, a) },
+		SpecInput: func(raw json.RawMessage, mode dbstore.Mode, a dblifecycle.Access) dblifecycle.Operation {
+			s := Spec(name, mode, a)
+			// Only text with an explicit endpoint reaches the network; a
+			// supplied vector declares none.
+			if in, err := DecodeInput(raw); err == nil && in.Text != "" && in.Endpoint != "" {
+				s.Effects = append(s.Effects, "net.egress")
+			}
+			return s
+		},
 		Run: func(ctx context.Context, h dbstore.Handle, raw json.RawMessage, a dblifecycle.Access) (dblifecycle.Outcome, error) {
 			in, err := DecodeInput(raw)
 			if err != nil {

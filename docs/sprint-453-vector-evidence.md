@@ -232,6 +232,38 @@ go test -short -count=1 ./pkg/dbvec                 # EXIT=0  ok 37.162s
 | `TestVecVerbsMemorySessionCLI` | the same flow on memory targets in an owner session (re-exec'd owner, so it skips under `-short` and runs in the manager's gate) |
 | `TestVecRegisteredCLIAndTypedMCP` | supplied vectors make zero endpoint calls; a text put through typed MCP embeds once with the persisted model; CLI and MCP search envelopes are byte-identical for a supplied vector and for text with an explicit endpoint |
 
+## Input-aware network effect (phase 2 review)
+
+Text `put`/`search` with an explicit `--endpoint` makes an HTTP call, so its
+declaration must say so; a supplied vector must not.
+
+- `pkg/dblifecycle/category.go`: `CategoryOp.SpecInput(raw, mode, access)` is
+  optional; `CategoryOp.Declare` uses it and otherwise falls back to `Spec`.
+  CLI preview, CLI execution (`cmds/db/db.go`) and the owner's `ownerSpec`
+  all call `Declare`, so all three report the same effects.
+- `Admit(ctx, spec)` checks the existing effect cap (`advice.CapFrom`, set by
+  `advice.WithCap`/`@guard`). A declared `net.*` effect under a cap without
+  `net` is refused as `unsupported`. `RunCategory` (direct path) and `Call`
+  (owner path, client side, before dialing) both admit before any category
+  `Run`, so the endpoint never sees a denied request. MCP reaches the same
+  runner with its context. An explicit `--endpoint` does not bypass the cap.
+  No new registry.
+- `pkg/dbvec/ops.go`: `SpecInput` adds `net.egress` only when the decoded
+  input has both `text` and `endpoint`.
+
+```
+go test -short -count=1 ./pkg/dbvec                    # EXIT=0  ok 48.695s
+go test -short -count=1 ./pkg/dblifecycle              # EXIT=0  ok 4.490s
+go test -short -count=1 ./cmds/db -run TestVec         # EXIT=0  ok 3.415s
+```
+
+| Test | Shows |
+|---|---|
+| `TestDeclareAndAdmitNetEffect` | `Declare` falls back to `Spec`; input-aware declaration; `Admit` passes with no cap, with a net cap, and for a declaration without net; it refuses `net.egress` under a no-net cap |
+| `TestSpecInputDeclaresNetOnlyForText` | `put`/`search` declare `net.egress` for text+endpoint in both modes, and nothing network-related for supplied vectors |
+| `TestNetCapDeniesTextBeforeRequest` | in both modes and through an in-process owner session, a no-net cap refuses text put/search with zero endpoint calls; supplied vectors still run; a net cap allows text; owner response effects carry `net.egress` only for text |
+| `TestVecTextNetEffect` | registered CLI: `--dry-run` and `--explain` declare `net.egress` for text and not for a vector, with zero HTTP; a no-net cap on the run context refuses text (`unsupported`, zero calls) and runs a vector; uncapped text calls the endpoint once |
+
 ## Not done in this phase
 
 - Gates left to the manager: independent-process tests, whole `cmds/db`,

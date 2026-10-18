@@ -6,12 +6,15 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/qiangli/yoke/pkg/dblifecycle"
 	"github.com/qiangli/yoke/pkg/dbstore"
+	"github.com/qiangli/yoke/pkg/policy/advice"
 )
 
 // fakeEmbedder is an OpenAI-compatible /v1/embeddings endpoint answering
@@ -208,3 +211,78 @@ func TestSuppliedVectorZeroNetwork(t *testing.T) {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// Only text with an explicit endpoint declares network egress; the same op
+// with a supplied vector declares none.
+func TestSpecInputDeclaresNetOnlyForText(t *testing.T) {
+	for _, tc := range []struct {
+		op, in string
+		net    bool
+	}{
+		{OpPut, `{"collection":"e","id":"a","vector":[1,0]}`, false},
+		{OpSearch, `{"collection":"e","vector":[1,0]}`, false},
+		{OpPut, `{"collection":"e","id":"a","text":"hi","endpoint":"http://127.0.0.1:1/v1"}`, true},
+		{OpSearch, `{"collection":"e","text":"hi","endpoint":"http://127.0.0.1:1/v1"}`, true},
+	} {
+		op, a, ok, err := dblifecycle.LookupCategoryOp(tc.op, json.RawMessage(tc.in))
+		if !ok || err != nil {
+			t.Fatalf("%s: %v", tc.op, err)
+		}
+		for _, mode := range []dbstore.Mode{dbstore.Memory, dbstore.Persistent} {
+			s := op.Declare(json.RawMessage(tc.in), mode, a)
+			if got := slices.Contains(s.Effects, "net.egress"); got != tc.net {
+				t.Fatalf("%s %s %s: effects %v", tc.op, mode, tc.in, s.Effects)
+			}
+		}
+	}
+}
+
+// An effect cap without net refuses text before the endpoint sees a request,
+// on the direct path and through an owner session; supplied vectors pass.
+func TestNetCapDeniesTextBeforeRequest(t *testing.T) {
+	noNet, err := advice.ParseCap("read,write,destroy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	withNet, _ := advice.ParseCap("read,write,destroy,net")
+	denied := advice.WithCap(context.Background(), noNet)
+	fe := newFakeEmbedder(t, replyVector(`[1,0,0,0]`))
+	modes(t, func(t *testing.T, f *fixture) {
+		f.must(OpCollectionAdd, Input{Collection: "e", Dimension: 4, Metric: "l2", Model: "m"}, true)
+		before := fe.calls.Load()
+		for _, op := range []string{OpPut, OpSearch} {
+			_, err := f.runCtx(denied, op, Input{Collection: "e", ID: "a", Text: "hi", Endpoint: fe.base()}, false)
+			if dbstore.Code(err) != "unsupported" || !strings.Contains(err.Error(), "net.egress") {
+				t.Fatalf("%s under a no-net cap: %v", op, err)
+			}
+		}
+		if n := fe.calls.Load(); n != before {
+			t.Fatalf("denied text reached the endpoint (%d calls)", n-before)
+		}
+		if _, err := f.runCtx(denied, OpPut, Input{Collection: "e", ID: "v", Vector: json.RawMessage(`[1,0,0,0]`)}, false); err != nil {
+			t.Fatalf("supplied vector under a no-net cap: %v", err)
+		}
+		if _, err := f.runCtx(advice.WithCap(context.Background(), withNet), OpPut, Input{Collection: "e", ID: "a", Text: "hi", Endpoint: fe.base()}, false); err != nil {
+			t.Fatalf("text under a net cap: %v", err)
+		}
+	})
+
+	session := startOwner(t)
+	target := dbstore.Target{Engine: "sqlite", Mode: dbstore.Memory, Session: session, Name: "n"}
+	o := ownerCall{t: t, session: session, target: target}
+	o.ok("a", "create", Input{}, 0, false, "")
+	o.ok("a", OpCollectionAdd, Input{Collection: "e", Dimension: 4, Metric: "l2", Model: "m"}, 0, true, "")
+	before := fe.calls.Load()
+	b, _ := json.Marshal(Input{Collection: "e", ID: "a", Text: "hi", Endpoint: fe.base()})
+	_, err = dblifecycle.Call(denied, session, dblifecycle.Request{Op: OpPut, Target: target, Input: b, Wait: time.Second})
+	if dbstore.Code(err) != "unsupported" || fe.calls.Load() != before {
+		t.Fatalf("owner call under a no-net cap: %v (calls %d)", err, fe.calls.Load()-before)
+	}
+	res := o.ok("a", OpPut, Input{Collection: "e", ID: "a", Text: "hi", Endpoint: fe.base()}, 0, false, "")
+	if !slices.Contains(res.Effects, "net.egress") {
+		t.Fatalf("owner response effects %v", res.Effects)
+	}
+	if res := o.ok("a", OpPut, Input{Collection: "e", ID: "v", Vector: json.RawMessage(`[1,0,0,0]`)}, 0, false, ""); slices.Contains(res.Effects, "net.egress") {
+		t.Fatalf("supplied vector declared %v", res.Effects)
+	}
+}

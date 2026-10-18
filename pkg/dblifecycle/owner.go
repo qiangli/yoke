@@ -253,6 +253,9 @@ func ListSessionsContext(ctx context.Context) ([]SessionInfo, error) {
 }
 
 func Call(ctx context.Context, session string, req Request) (Response, error) {
+	if err := admitCategory(ctx, req.Op, req.Target.Mode, req.Input); err != nil {
+		return Response{}, err
+	}
 	info, err := readInfo(session)
 	if err != nil {
 		return Response{}, err
@@ -550,7 +553,7 @@ func (o *owner) executeReplay(ctx context.Context, req Request) Response {
 func ownerSpec(req Request) Operation {
 	op, mode := req.Op, req.Target.Mode
 	if cat, access, ok, err := LookupCategoryOp(op, req.Input); ok && err == nil {
-		return cat.Spec(mode, access)
+		return cat.Declare(req.Input, mode, access)
 	}
 	switch op {
 	case "attach", "detach", "stop":

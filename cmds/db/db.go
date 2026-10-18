@@ -285,7 +285,7 @@ func run(rc *tool.RunContext, args []string) int {
 			return failure(o, err).emit(rc, *jsonFlag)
 		}
 		if ok {
-			spec = cat.Spec(dbstore.Mode(*mode), access)
+			spec = cat.Declare(raw, dbstore.Mode(*mode), access)
 		}
 	}
 	if op == "session" && len(operands) == 1 {
@@ -419,7 +419,7 @@ func run(rc *tool.RunContext, args []string) int {
 		if err != nil {
 			return failure(o, err).emit(rc, *jsonFlag)
 		}
-		spec = cat.Spec(id.Mode, access)
+		spec = cat.Declare(raw, id.Mode, access)
 		o.MutationClass, o.Effects = spec.MutationClass, spec.Effects
 	}
 	callSession := *session
