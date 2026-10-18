@@ -6066,7 +6066,7 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason, disposition string, y
 	base := weaveBaseBranch(root)
 	var it *weaveItem
 	var preservedRef string
-	var nestedRefs []string
+	var nestedRefs, sideRefs []string
 	notFoundHint := weaveOtherActiveQueuesHintSuffix(dir)
 	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
 		it = findWeaveItem(q, id)
@@ -6137,6 +6137,25 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason, disposition string, y
 						}
 					}
 				}
+				// HEAD is not all a workspace holds: a stash or a side branch
+				// (a pre-squash WIP) keeps the guarded teardown from proving
+				// settlement, so --force preserves those commits as well.
+				if force {
+					probe := *it
+					probe.SalvageRef = preservedRef
+					for _, ref := range weaveUnsettledLocalRefs(root, base, &probe) {
+						obj, rerr := gitOut(it.Workspace, "rev-parse", "--verify", "--quiet", ref)
+						if rerr != nil {
+							continue // unmeasurable: the teardown refuses and names it
+						}
+						name := fmt.Sprintf("refs/salvage/abandoned-%d-%s", id, strings.ReplaceAll(strings.TrimPrefix(ref, "refs/"), "/", "-"))
+						saved, perr := weavePreserveRefAs(root, it.Workspace, ref, name, strings.TrimSpace(obj))
+						if perr != nil {
+							return fmt.Errorf("run #%d: --force could not preserve %s as %s, refusing to destroy it: %w", id, ref, saved, perr)
+						}
+						sideRefs = append(sideRefs, saved)
+					}
+				}
 			}
 		}
 		// If a wrapper PID is recorded and the item is still working,
@@ -6201,7 +6220,7 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason, disposition string, y
 	}
 	if len(acts) == 0 && it.Workspace != "" {
 		if _, err := os.Stat(it.Workspace); err == nil {
-			leftovers = append(leftovers, "workspace "+it.Workspace+": teardown deferred (wrapper still winding down, or settlement unproven) — `weave prune` reclaims it")
+			leftovers = append(leftovers, "workspace "+it.Workspace+": teardown refused: "+weaveTeardownRefusal(dir, it.ID)+" — `weave prune` reclaims it once resolved")
 		}
 	}
 	if mode == weavecli.OutputJSON {
@@ -6218,6 +6237,9 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason, disposition string, y
 		if len(nestedRefs) > 0 {
 			res["preserved_nested_refs"] = nestedRefs
 		}
+		if len(sideRefs) > 0 {
+			res["preserved_side_refs"] = sideRefs
+		}
 		if len(leftovers) > 0 {
 			res["leftovers"] = leftovers
 		}
@@ -6230,6 +6252,9 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason, disposition string, y
 	}
 	for _, r := range nestedRefs {
 		fmt.Fprintf(cmd.OutOrStdout(), "weave abandon: nested submodule work preserved at %s\n", r)
+	}
+	for _, r := range sideRefs {
+		fmt.Fprintf(cmd.OutOrStdout(), "weave abandon: side work preserved at %s\n", r)
 	}
 	for _, l := range leftovers {
 		fmt.Fprintf(cmd.ErrOrStderr(), "weave abandon: left alone: %s\n", l)
@@ -6248,7 +6273,13 @@ func weavePreserveAbandonedTip(root, workspace string, id int64, head string) (s
 }
 
 func weavePreserveTipAs(root, workspace, base, head string) (string, error) {
-	if _, err := gitOut(root, "fetch", "--no-tags", "--recurse-submodules=no", workspace, "HEAD"); err != nil {
+	return weavePreserveRefAs(root, workspace, "HEAD", base, head)
+}
+
+// weavePreserveRefAs imports the workspace ref src (whose object is head)
+// under base, with the same never-move naming as weavePreserveTipAs.
+func weavePreserveRefAs(root, workspace, src, base, head string) (string, error) {
+	if _, err := gitOut(root, "fetch", "--no-tags", "--recurse-submodules=no", workspace, src); err != nil {
 		return base, err
 	}
 

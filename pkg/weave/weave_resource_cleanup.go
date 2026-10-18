@@ -225,7 +225,8 @@ func weaveUnsettledLocalRefs(root, base string, it *weaveItem) []string {
 			}
 			c := root != "" && base != "" &&
 				(exec.Command(gitBin(), "-C", root, "merge-base", "--is-ancestor", sha, base).Run() == nil ||
-					(it.SalvageRef != "" && exec.Command(gitBin(), "-C", root, "merge-base", "--is-ancestor", sha, it.SalvageRef).Run() == nil))
+					(it.SalvageRef != "" && exec.Command(gitBin(), "-C", root, "merge-base", "--is-ancestor", sha, it.SalvageRef).Run() == nil) ||
+					weaveSideSalvageContains(root, it.ID, sha))
 			covered[sha] = c
 			if !c {
 				unsettled = append(unsettled, ref)
@@ -234,6 +235,36 @@ func weaveUnsettledLocalRefs(root, base string, it *weaveItem) []string {
 		}
 	}
 	return unsettled
+}
+
+// weaveSideSalvageContains reports whether sha is reachable from a side-work
+// salvage ref `abandon --force` imported for run id (a stash or side branch,
+// refs/salvage/abandoned-<id>-*). Any git failure answers false.
+func weaveSideSalvageContains(root string, id int64, sha string) bool {
+	out, err := exec.Command(gitBin(), "-C", root, "for-each-ref", "--count=1", "--contains", sha,
+		"--format=%(refname)", fmt.Sprintf("refs/salvage/abandoned-%d-*", id)).Output()
+	return err == nil && strings.TrimSpace(string(out)) != ""
+}
+
+// weaveTeardownRefusal says exactly why weavePruneOwnedRun left a run's
+// workspace in place: the same checks, in the same order, named.
+func weaveTeardownRefusal(dir string, id int64) string {
+	root, ok := weaveRepoRootForQueue(dir)
+	if !ok {
+		return "queue repository root unavailable"
+	}
+	q, err := loadWeaveQueue(dir)
+	if err != nil {
+		return "queue unreadable: " + err.Error()
+	}
+	it, err := weaveCleanupEligible(q, id, "")
+	if err != nil {
+		return err.Error()
+	}
+	if refs := weaveUnsettledLocalRefs(root, weaveBaseBranch(root), it); len(refs) > 0 {
+		return "workspace ref(s) hold commits in neither base nor a salvage ref: " + strings.Join(refs, ", ")
+	}
+	return "workspace HEAD holds commits in neither base nor the salvage ref"
 }
 
 // weaveRunArtifactKinds is the ordered list of everything a run owns on disk.
