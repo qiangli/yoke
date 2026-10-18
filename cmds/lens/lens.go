@@ -43,7 +43,7 @@ import (
 var cmd = &tool.Tool{
 	Name:     "lens",
 	Synopsis: "Convert a file between representations (json/yaml/toml/csv/md, pdf/docx/xlsx/html → md|txt, archive → listing, command line → bash/cmd/pwsh/mcp/skill, bashy-graph-v1 stream → views).",
-	Usage:    "lens [-f FROM] -t TO [--strict] [--verbose] [--switch=keep|slash|pascal] [--drive=C] [--depth=N] [--null] [FILE|LOCATOR] | lens -l [--json]",
+	Usage:    "lens [-f FROM] -t TO [--strict] [--verbose] [--switch=keep|slash|pascal] [--drive=C] [--depth=N] [--null] [--since=start|CURSOR|@FILE] [--cursor-out=FILE] [FILE|LOCATOR] | lens -l [--json]",
 }
 
 // ProviderFactory builds the provider that serves one pulled locator.
@@ -96,11 +96,34 @@ func run(rc *tool.RunContext, args []string) int {
 	sw := fs.String("switch", "", "command lines: option spelling keep|slash|pascal (--dry-run, /dry-run, -DryRun)")
 	drive := fs.String("drive", "", "command lines: drive letters present on the target (C, CD); /c/… paths become C:\\…")
 	depth := fs.Int("depth", -1, "graph views and locator pulls: maximum descent depth (-1 = unbounded)")
+	since := fs.String("since", "", "file deltas: start, cursor envelope, or @cursor-file (rotation requires explicit restart)")
+	cursorOut := fs.String("cursor-out", "", "save file delta cursor after output succeeds; otherwise append JSONL cursor trailer")
 	nul := fs.Bool("null", false, "paths view: NUL-terminated")
 
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
+	}
+	if fs.Changed("since") || fs.Changed("cursor-out") {
+		if *since == "" || *list || *asJSON || len(operands) != 1 || operands[0] == "-" {
+			return tool.UsageError(rc, cmd, "--since requires start or a cursor and one regular FILE")
+		}
+		if _, ok := locatorOperand(operands[0]); ok {
+			return tool.UsageError(rc, cmd, "--since file deltas do not support this provider")
+		}
+		format := lens.Canonical(*to)
+		if format != "jsonl" && format != "txt" || *from != "" && lens.Canonical(*from) != format {
+			return tool.UsageError(rc, cmd, "--since requires -t jsonl or -t txt, without format conversion")
+		}
+		if format == "txt" && *cursorOut == "" {
+			return tool.UsageError(rc, cmd, "--since -t txt requires --cursor-out")
+		}
+		for _, flag := range []string{"strict", "verbose", "switch", "drive", "depth", "null"} {
+			if fs.Changed(flag) {
+				return tool.UsageError(rc, cmd, "--%s does not apply to file deltas", flag)
+			}
+		}
+		return sinceFile(rc, operands[0], format, *since, *cursorOut)
 	}
 	if *list {
 		if *to != "" || *from != "" || len(operands) > 0 {
