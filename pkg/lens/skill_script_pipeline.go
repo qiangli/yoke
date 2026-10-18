@@ -2,6 +2,7 @@ package lens
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 
 	"github.com/qiangli/yoke/pkg/atlas"
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/policy/advice"
 )
 
@@ -48,6 +50,9 @@ type PipelineOptions struct {
 
 	// DryRun, if true, executes zero worker execution and creates no artifact files on disk.
 	DryRun bool
+
+	// Seat specifies the receiving worker seat for delegation.
+	Seat *WorkerSeat
 }
 
 // CompiledScriptArtifact holds the result of running the bounded compile/validate pipeline.
@@ -80,6 +85,15 @@ type ScriptPlan struct {
 
 	// DryRun reports whether this plan was generated under zero-execution dry-run mode.
 	DryRun bool `json:"dry_run,omitempty"`
+
+	// Seat is the target worker seat name when planned for delegation.
+	Seat string `json:"seat,omitempty"`
+
+	// SeatHelp is the target worker seat help mode (must be HelpScript).
+	SeatHelp string `json:"seat_help,omitempty"`
+
+	// SeatNoInput is the target worker seat no_input mode (must be true).
+	SeatNoInput bool `json:"seat_no_input,omitempty"`
 }
 
 // Caps returns the declared/required capabilities.
@@ -160,6 +174,9 @@ func (p *ScriptPlan) Explain() string {
 	}
 	if p.Reversibility != "" {
 		fmt.Fprintf(&b, "reversibility: %s\n", p.Reversibility)
+	}
+	if p.Seat != "" {
+		fmt.Fprintf(&b, "delegation_seat: %s (help:%s, no_input:%t)\n", p.Seat, p.SeatHelp, p.SeatNoInput)
 	}
 	fmt.Fprintf(&b, "execution: zero-execution dry-run (no worker executed)\n")
 	return strings.TrimRight(b.String(), "\n")
@@ -377,6 +394,39 @@ func PlanPipeline(skillText []byte, opts PipelineOptions) (*ScriptPlan, error) {
 		}
 	}
 
+	if opts.Seat != nil {
+		opts.Seat.Normalize()
+		if opts.Seat.Help != fleet.HelpScript {
+			return nil, errorf(ExitInvalid, "seat %q has help mode %q, want %q (help:script required for delegation)", opts.Seat.Name, opts.Seat.Help, fleet.HelpScript)
+		}
+		if !opts.Seat.NoInput {
+			return nil, errorf(ExitInvalid, "seat %q has no_input=false; no_input:true required for script delegation", opts.Seat.Name)
+		}
+		if len(opts.Seat.DeniedCaps) > 0 {
+			if err := plan.VerifyDeniedCaps(opts.Seat.DeniedCaps); err != nil {
+				return nil, err
+			}
+		}
+		if opts.Seat.AllowedCaps != nil {
+			if err := plan.VerifyCaps(opts.Seat.AllowedCaps); err != nil {
+				return nil, err
+			}
+		}
+		if opts.Seat.AllowedEffects != nil {
+			if err := plan.VerifyEffects(opts.Seat.AllowedEffects); err != nil {
+				return nil, err
+			}
+		}
+		if opts.Seat.Guard != nil {
+			if err := plan.VerifyGuard(opts.Seat.Guard); err != nil {
+				return nil, err
+			}
+		}
+		plan.Seat = opts.Seat.Name
+		plan.SeatHelp = opts.Seat.Help
+		plan.SeatNoInput = opts.Seat.NoInput
+	}
+
 	// Zero-execution dry-run mode: do not write to store dir, but verify existing artifact digest if present.
 	if opts.DryRun {
 		if opts.StoreDir != "" {
@@ -504,4 +554,249 @@ func DryRunSkillScript(dir string, skillText []byte) (*ScriptPlan, error) {
 // ExplainSkillScript is a helper returning the explanation of a skill script plan.
 func ExplainSkillScript(dir string, skillText []byte) (string, error) {
 	return ExplainPipeline(skillText, PipelineOptions{StoreDir: dir})
+}
+
+// WorkerSeat defines a receiving worker seat for script delegation (Sprint 446 S22).
+// In accordance with the S22 contract, delegated worker seats must have
+// help: script (fleet.HelpScript) and no_input: true.
+type WorkerSeat struct {
+	Name           string            `json:"name"`                      // Seat or worker identifier (e.g. "worker-local", "ci-seat")
+	Role           string            `json:"role,omitempty"`            // Seat role (e.g. "worker", "ci")
+	Help           string            `json:"help"`                      // Instruction form; must be "script" (fleet.HelpScript)
+	NoInput        bool              `json:"no_input"`                  // Must be true for unattended script execution
+	AllowedCaps    []string          `json:"allowed_caps,omitempty"`    // Permitted capabilities
+	DeniedCaps     []string          `json:"denied_caps,omitempty"`     // Forbidden capabilities
+	AllowedEffects []string          `json:"allowed_effects,omitempty"` // Permitted effects
+	Guard          *advice.Cap       `json:"-"`                         // Optional receiving seat @guard cap
+	Prefs          fleet.ReaderPrefs `json:"prefs,omitempty"`           // Optional reader preferences
+	Runner         WorkerRunner      `json:"-"`                         // Execution interface for the seat
+}
+
+// Normalize ensures the seat profile defaults are resolved from its Prefs if unset.
+func (s *WorkerSeat) Normalize() {
+	if s.Help == "" && s.Prefs.Help != "" {
+		s.Help = s.Prefs.Help
+	}
+	if !s.NoInput {
+		if s.Prefs.Defaults != nil {
+			if star, ok := s.Prefs.Defaults["*"]; ok && star != nil {
+				if noInput, ok := star["no_input"].(bool); ok && noInput {
+					s.NoInput = true
+				}
+			}
+		}
+	}
+}
+
+// WorkerRunner executes a validated script artifact.
+type WorkerRunner interface {
+	RunScript(ctx context.Context, artifact *CompiledScriptArtifact) (*ExecutionResult, error)
+}
+
+// WorkerRunnerFunc adapts a plain function to the WorkerRunner interface.
+type WorkerRunnerFunc func(ctx context.Context, artifact *CompiledScriptArtifact) (*ExecutionResult, error)
+
+// RunScript calls f(ctx, artifact).
+func (f WorkerRunnerFunc) RunScript(ctx context.Context, artifact *CompiledScriptArtifact) (*ExecutionResult, error) {
+	return f(ctx, artifact)
+}
+
+// ExecutionResult holds the output from a worker executing a script artifact.
+type ExecutionResult struct {
+	ExitCode int    `json:"exit_code"`
+	Stdout   []byte `json:"stdout,omitempty"`
+	Stderr   []byte `json:"stderr,omitempty"`
+	Error    error  `json:"error,omitempty"`
+}
+
+// DelegationResult contains the outcome of delegating a validated script to a worker seat.
+type DelegationResult struct {
+	Plan      *ScriptPlan             `json:"plan"`
+	Seat      string                  `json:"seat"`
+	Artifact  *CompiledScriptArtifact `json:"artifact"`
+	Body      []byte                  `json:"body"`                 // The script body passed to the worker seat
+	Executed  bool                    `json:"executed"`             // True if worker runner was invoked
+	Success   bool                    `json:"success"`              // True if worker ran successfully with exit code 0
+	ExitCode  int                     `json:"exit_code"`            // Process exit status
+	Stdout    []byte                  `json:"stdout,omitempty"`     // Captured stdout
+	Stderr    []byte                  `json:"stderr,omitempty"`     // Captured stderr
+	Error     error                   `json:"error,omitempty"`      // Execution error if any
+	Promoted  bool                    `json:"promoted"`             // True if promoted to dag target or kb runbook
+	TargetRef string                  `json:"target_ref,omitempty"` // Promoted reference
+}
+
+// PromotedArtifact is a compiled script promoted into a dag target or kb runbook.
+type PromotedArtifact struct {
+	Type     string `json:"type"`     // "dag" or "runbook"
+	Ref      string `json:"ref"`      // "dag:<target>" or "kb:runbook/<slug>"
+	Artifact string `json:"artifact"` // Artifact name (<digest>.sh)
+	Digest   string `json:"digest"`   // sha256:<hex>
+}
+
+// CanRunNext reports whether a subsequent dependent task can run.
+// S22 invariant: target failure cannot promote or run subsequent steps.
+func (r *DelegationResult) CanRunNext() bool {
+	return r != nil && r.Success && r.ExitCode == 0 && r.Error == nil
+}
+
+// Promote promotes a successfully delegated script artifact into a dag target or kb runbook.
+// In accordance with S22 safety invariants, if the target failed (ExitCode != 0, Error != nil,
+// or Success == false), Promote refuses fail-closed with ExitInvalid and returns an error.
+func (r *DelegationResult) Promote(targetType, name string) (*PromotedArtifact, error) {
+	if r == nil {
+		return nil, errorf(ExitInvalid, "cannot promote nil delegation result")
+	}
+	if !r.Success || r.ExitCode != 0 || r.Error != nil {
+		return nil, errorf(ExitInvalid, "target failure cannot promote: script execution failed (exit %d: %v)", r.ExitCode, r.Error)
+	}
+	if r.Artifact == nil || r.Artifact.Digest == "" {
+		return nil, errorf(ExitInvalid, "target cannot promote: missing compiled artifact")
+	}
+	targetType = strings.ToLower(strings.TrimSpace(targetType))
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, errorf(ExitInvalid, "promotion target name cannot be empty")
+	}
+	var ref string
+	switch targetType {
+	case "dag":
+		ref = "dag:" + name
+	case "runbook", "kb":
+		ref = "kb:runbook/" + name
+	default:
+		return nil, errorf(ExitInvalid, "unsupported promotion target type %q (allowed: dag, runbook)", targetType)
+	}
+	r.Promoted = true
+	r.TargetRef = ref
+	return &PromotedArtifact{
+		Type:     targetType,
+		Ref:      ref,
+		Artifact: r.Artifact.Name,
+		Digest:   r.Artifact.Digest,
+	}, nil
+}
+
+// Delegate delegates the validated content-addressed script as body to a receiving
+// worker seat (Sprint 446 S22). It enforces the following production invariants:
+//  1. The receiving seat MUST declare help:script (fleet.HelpScript) and no_input:true.
+//     Any other help mode or interactive requirement fails closed.
+//  2. Fails closed before any worker execution if required capabilities or effects
+//     are denied by the receiving seat's AllowedCaps, DeniedCaps, AllowedEffects, or Guard.
+//  3. Script bytes are handed off directly as body (no implicit model calls).
+//  4. On worker failure, the result records failure and refuses promotion.
+func (p *ScriptPlan) Delegate(ctx context.Context, seat WorkerSeat) (*DelegationResult, error) {
+	if p == nil || p.Artifact == nil || len(p.Artifact.Script) == 0 {
+		return nil, errorf(ExitInvalid, "cannot delegate empty or uncompiled script plan")
+	}
+
+	seat.Normalize()
+
+	if seat.Help != fleet.HelpScript {
+		return nil, errorf(ExitInvalid, "seat %q has help mode %q, want %q (help:script required for delegation)", seat.Name, seat.Help, fleet.HelpScript)
+	}
+	if !seat.NoInput {
+		return nil, errorf(ExitInvalid, "seat %q has no_input=false; no_input:true required for script delegation", seat.Name)
+	}
+
+	// Verify seat security caps/effects BEFORE any worker execution (fail closed).
+	if len(seat.DeniedCaps) > 0 {
+		if err := p.VerifyDeniedCaps(seat.DeniedCaps); err != nil {
+			return nil, err
+		}
+	}
+	if seat.AllowedCaps != nil {
+		if err := p.VerifyCaps(seat.AllowedCaps); err != nil {
+			return nil, err
+		}
+	}
+	if seat.AllowedEffects != nil {
+		if err := p.VerifyEffects(seat.AllowedEffects); err != nil {
+			return nil, err
+		}
+	}
+	if seat.Guard != nil {
+		if err := p.VerifyGuard(seat.Guard); err != nil {
+			return nil, err
+		}
+	}
+
+	body := p.Artifact.Script
+	p.Seat = seat.Name
+	p.SeatHelp = seat.Help
+	p.SeatNoInput = seat.NoInput
+
+	// If DryRun or no Runner supplied (handoff across repository boundary):
+	if p.DryRun || seat.Runner == nil {
+		return &DelegationResult{
+			Plan:     p,
+			Seat:     seat.Name,
+			Artifact: p.Artifact,
+			Body:     body,
+			Executed: false,
+			Success:  true,
+			ExitCode: 0,
+		}, nil
+	}
+
+	// Execute via worker runner.
+	execRes, err := seat.Runner.RunScript(ctx, p.Artifact)
+	if err != nil {
+		return &DelegationResult{
+			Plan:     p,
+			Seat:     seat.Name,
+			Artifact: p.Artifact,
+			Body:     body,
+			Executed: true,
+			Success:  false,
+			ExitCode: ExitInvalid,
+			Error:    err,
+		}, err
+	}
+	if execRes == nil {
+		return &DelegationResult{
+			Plan:     p,
+			Seat:     seat.Name,
+			Artifact: p.Artifact,
+			Body:     body,
+			Executed: true,
+			Success:  true,
+			ExitCode: 0,
+		}, nil
+	}
+
+	success := execRes.ExitCode == 0 && execRes.Error == nil
+	res := &DelegationResult{
+		Plan:     p,
+		Seat:     seat.Name,
+		Artifact: p.Artifact,
+		Body:     body,
+		Executed: true,
+		Success:  success,
+		ExitCode: execRes.ExitCode,
+		Stdout:   execRes.Stdout,
+		Stderr:   execRes.Stderr,
+		Error:    execRes.Error,
+	}
+	if !success && execRes.Error != nil {
+		return res, execRes.Error
+	}
+	if !success {
+		return res, errorf(ExitInvalid, "delegated script worker failed with exit code %d", execRes.ExitCode)
+	}
+	return res, nil
+}
+
+// DelegatePipeline compiles, validates, plans, and delegates skill text to a worker seat.
+func DelegatePipeline(ctx context.Context, skillText []byte, opts PipelineOptions, seat WorkerSeat) (*DelegationResult, error) {
+	opts.Seat = &seat
+	plan, err := PlanPipeline(skillText, opts)
+	if err != nil {
+		return nil, err
+	}
+	return plan.Delegate(ctx, seat)
+}
+
+// DelegateSkillScript compiles skill text and delegates it to seat using storeDir.
+func DelegateSkillScript(ctx context.Context, skillText []byte, storeDir string, seat WorkerSeat) (*DelegationResult, error) {
+	return DelegatePipeline(ctx, skillText, PipelineOptions{StoreDir: storeDir}, seat)
 }

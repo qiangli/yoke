@@ -37,6 +37,7 @@ import (
 
 	"github.com/qiangli/coreutils/tool"
 	"github.com/qiangli/yoke/pkg/atlas"
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/lens"
 	"github.com/qiangli/yoke/pkg/lens/provider"
 	"github.com/qiangli/yoke/pkg/lens/stream"
@@ -105,6 +106,7 @@ func run(rc *tool.RunContext, args []string) int {
 	explain := fs.Bool("explain", false, "skill script plan: print zero-execution explanation of artifact and required capabilities")
 	dryRun := fs.Bool("dry-run", false, "skill script plan: dry-run plan with zero execution")
 	capFlag := fs.String("cap", "", "skill script plan: comma-separated allowed capabilities or effects")
+	seatFlag := fs.String("seat", "", "skill script plan: target worker seat name for delegation (must have help:script,no_input:true)")
 
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
@@ -245,6 +247,15 @@ func run(rc *tool.RunContext, args []string) int {
 		if fs.Changed("cap") {
 			opts.AllowedCaps = allowedCaps
 			opts.AllowedEffects = allowedEffects
+		}
+		if *seatFlag != "" {
+			opts.Seat = &lens.WorkerSeat{
+				Name:           *seatFlag,
+				Help:           fleet.HelpScript,
+				NoInput:        true,
+				AllowedCaps:    allowedCaps,
+				AllowedEffects: allowedEffects,
+			}
 		}
 		plan, err := lens.DryRunPipeline(data, opts)
 		if err != nil {

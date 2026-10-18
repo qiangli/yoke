@@ -123,4 +123,28 @@ func TestScriptCLI_ExplainAndDryRun(t *testing.T) {
 	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
 		t.Fatal("hostile script executed under --explain!")
 	}
+
+	// 7. --seat with --explain shows delegation seat line and writes no files.
+	outSeat, errbSeat, codeSeat := runTool(t, dir, doc, "-f", "skill", "-t", "script", "--explain", "--seat=ci-worker-1")
+	if codeSeat != 0 || errbSeat != "" {
+		t.Fatalf("--seat: code=%d err=%q", codeSeat, errbSeat)
+	}
+	if !strings.Contains(outSeat, "delegation_seat: ci-worker-1 (help:script, no_input:true)") {
+		t.Errorf("--seat output missing delegation_seat line: %q", outSeat)
+	}
+
+	// 8. --seat with --explain --json includes seat in JSON output.
+	outSeatJSON, errbSeatJSON, codeSeatJSON := runTool(t, dir, doc, "-f", "skill", "-t", "script", "--explain", "--seat=ci-worker-1", "--json")
+	if codeSeatJSON != 0 || errbSeatJSON != "" {
+		t.Fatalf("--seat --json: code=%d err=%q", codeSeatJSON, errbSeatJSON)
+	}
+	if !strings.Contains(outSeatJSON, `"seat": "ci-worker-1"`) || !strings.Contains(outSeatJSON, `"seat_help": "script"`) || !strings.Contains(outSeatJSON, `"seat_no_input": true`) {
+		t.Fatalf("--seat --json missing expected fields: %s", outSeatJSON)
+	}
+
+	// 9. --seat with denied --cap fails closed before any worker execution.
+	_, errbSeatCap, codeSeatCap := runTool(t, dir, docPwd, "-f", "skill", "-t", "script", "--explain", "--seat=ci-worker-1", "--cap=pure")
+	if codeSeatCap != lens.ExitInvalid || !strings.Contains(errbSeatCap, "denied") {
+		t.Fatalf("--seat with denied --cap: code=%d err=%q", codeSeatCap, errbSeatCap)
+	}
 }

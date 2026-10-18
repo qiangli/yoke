@@ -1,6 +1,8 @@
 package lens
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/qiangli/yoke/pkg/atlas"
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/policy/advice"
 )
 
@@ -657,5 +660,336 @@ func TestScriptPipeline_Explain(t *testing.T) {
 	}
 	if unmarshaled["artifact"] == nil || unmarshaled["capabilities"] == nil || unmarshaled["effects"] == nil {
 		t.Fatalf("missing required JSON keys in %s", string(jsonBytes))
+	}
+}
+
+// TestScriptPipeline_Delegation_SeatContract verifies that delegation requires
+// help:script (fleet.HelpScript) and no_input:true, rejecting other help forms
+// or interactive requirements fail-closed, and correctly delegating the content-addressed
+// script bytes as body.
+func TestScriptPipeline_Delegation_SeatContract(t *testing.T) {
+	doc := "```bsh\necho 'delegate test'\n```\n"
+	storeDir := t.TempDir()
+	ctx := context.Background()
+
+	plan, err := PlanPipeline([]byte(doc), PipelineOptions{StoreDir: storeDir})
+	if err != nil {
+		t.Fatalf("PlanPipeline failed: %v", err)
+	}
+
+	// 1. Seat with wrong help form (classic) is rejected.
+	_, err = plan.Delegate(ctx, WorkerSeat{
+		Name:    "worker-classic",
+		Help:    fleet.HelpClassic,
+		NoInput: true,
+	})
+	if err == nil {
+		t.Fatal("expected error on help:classic, got nil")
+	}
+	wantExit(t, err, ExitInvalid)
+	if !strings.Contains(err.Error(), "help:script required for delegation") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// 2. Seat with help:mcp is rejected.
+	_, err = plan.Delegate(ctx, WorkerSeat{
+		Name:    "worker-mcp",
+		Help:    fleet.HelpMCP,
+		NoInput: true,
+	})
+	if err == nil {
+		t.Fatal("expected error on help:mcp, got nil")
+	}
+	wantExit(t, err, ExitInvalid)
+
+	// 3. Seat with no_input:false is rejected.
+	_, err = plan.Delegate(ctx, WorkerSeat{
+		Name:    "worker-interactive",
+		Help:    fleet.HelpScript,
+		NoInput: false,
+	})
+	if err == nil {
+		t.Fatal("expected error on no_input:false, got nil")
+	}
+	wantExit(t, err, ExitInvalid)
+	if !strings.Contains(err.Error(), "no_input:true required for script delegation") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// 4. Seat with help:script, no_input:true succeeds and hands off script bytes as Body.
+	res, err := plan.Delegate(ctx, WorkerSeat{
+		Name:    "worker-valid",
+		Help:    fleet.HelpScript,
+		NoInput: true,
+	})
+	if err != nil {
+		t.Fatalf("Delegate failed: %v", err)
+	}
+	if !bytes.Equal(res.Body, plan.Artifact.Script) {
+		t.Fatalf("delegated body mismatch: got %q, want %q", res.Body, plan.Artifact.Script)
+	}
+	if res.Seat != "worker-valid" {
+		t.Errorf("seat name mismatch: %s", res.Seat)
+	}
+	if res.Artifact.Digest != plan.Artifact.Digest {
+		t.Errorf("artifact digest mismatch: %s", res.Artifact.Digest)
+	}
+
+	// 5. Seat with ReaderPrefs (help: script, defaults: {*: {no_input: true}}) resolves through Normalize().
+	resFromPrefs, err := plan.Delegate(ctx, WorkerSeat{
+		Name: "worker-prefs",
+		Prefs: fleet.ReaderPrefs{
+			Help: fleet.HelpScript,
+			Defaults: map[string]map[string]any{
+				"*": {"no_input": true},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Delegate with ReaderPrefs failed: %v", err)
+	}
+	if !resFromPrefs.Success || !bytes.Equal(resFromPrefs.Body, plan.Artifact.Script) {
+		t.Fatalf("resFromPrefs mismatch: %+v", resFromPrefs)
+	}
+}
+
+// TestScriptPipeline_Delegation_DeniedCapsAndEffects verifies that delegation fails
+// closed BEFORE any worker runner execution if required capabilities or effects are
+// missing or denied by the receiving seat.
+func TestScriptPipeline_Delegation_DeniedCapsAndEffects(t *testing.T) {
+	doc := "```bsh\npwd\necho 'status check'\n```\n"
+	storeDir := t.TempDir()
+	ctx := context.Background()
+
+	plan, err := PlanPipeline([]byte(doc), PipelineOptions{StoreDir: storeDir})
+	if err != nil {
+		t.Fatalf("PlanPipeline failed: %v", err)
+	}
+
+	runnerCalled := false
+	runner := WorkerRunnerFunc(func(ctx context.Context, artifact *CompiledScriptArtifact) (*ExecutionResult, error) {
+		runnerCalled = true
+		return &ExecutionResult{ExitCode: 0}, nil
+	})
+
+	// 1. Seat AllowedCaps does not include read-only.
+	runnerCalled = false
+	_, err = plan.Delegate(ctx, WorkerSeat{
+		Name:        "worker-write-only",
+		Help:        fleet.HelpScript,
+		NoInput:     true,
+		AllowedCaps: []string{"write"},
+		Runner:      runner,
+	})
+	if err == nil {
+		t.Fatal("expected error on denied capability, got nil")
+	}
+	wantExit(t, err, ExitInvalid)
+	if runnerCalled {
+		t.Fatal("worker runner was executed despite denied capability!")
+	}
+
+	// 2. Seat DeniedCaps explicitly excludes read-only.
+	runnerCalled = false
+	_, err = plan.Delegate(ctx, WorkerSeat{
+		Name:       "worker-denied-read",
+		Help:       fleet.HelpScript,
+		NoInput:    true,
+		DeniedCaps: []string{atlas.CapReadOnly},
+		Runner:     runner,
+	})
+	if err == nil {
+		t.Fatal("expected error on explicitly denied capability, got nil")
+	}
+	wantExit(t, err, ExitInvalid)
+	if runnerCalled {
+		t.Fatal("worker runner was executed despite denied capability!")
+	}
+
+	// 3. Seat AllowedEffects only permits pure, but script uses pwd (effect read).
+	runnerCalled = false
+	_, err = plan.Delegate(ctx, WorkerSeat{
+		Name:           "worker-pure-only",
+		Help:           fleet.HelpScript,
+		NoInput:        true,
+		AllowedEffects: []string{atlas.EffPure},
+		Runner:         runner,
+	})
+	if err == nil {
+		t.Fatal("expected error on denied effect, got nil")
+	}
+	wantExit(t, err, ExitInvalid)
+	if runnerCalled {
+		t.Fatal("worker runner was executed despite denied effect!")
+	}
+
+	// 4. Seat Guard only allows pure.
+	guard, gErr := advice.ParseCap(atlas.EffPure)
+	if gErr != nil {
+		t.Fatal(gErr)
+	}
+	runnerCalled = false
+	_, err = plan.Delegate(ctx, WorkerSeat{
+		Name:    "worker-guarded",
+		Help:    fleet.HelpScript,
+		NoInput: true,
+		Guard:   &guard,
+		Runner:  runner,
+	})
+	if err == nil {
+		t.Fatal("expected error on guard exceeded, got nil")
+	}
+	wantExit(t, err, ExitInvalid)
+	if runnerCalled {
+		t.Fatal("worker runner was executed despite guard exceeded!")
+	}
+
+	// 5. Allowed caps and effects match: worker runner IS called.
+	runnerCalled = false
+	res, err := plan.Delegate(ctx, WorkerSeat{
+		Name:           "worker-authorized",
+		Help:           fleet.HelpScript,
+		NoInput:        true,
+		AllowedCaps:    []string{atlas.CapReadOnly},
+		AllowedEffects: []string{atlas.EffRead},
+		Runner:         runner,
+	})
+	if err != nil {
+		t.Fatalf("unexpected delegation failure: %v", err)
+	}
+	if !runnerCalled {
+		t.Fatal("expected worker runner to be called on authorized delegation")
+	}
+	if !res.Success {
+		t.Error("expected res.Success to be true")
+	}
+}
+
+// TestScriptPipeline_Delegation_NoImplicitModelCalls proves that script compile,
+// validation, and delegation to worker seats is pure deterministic code with zero
+// implicit model calls.
+func TestScriptPipeline_Delegation_NoImplicitModelCalls(t *testing.T) {
+	doc := "```bsh\necho 'pure test'\n```\n"
+	storeDir := t.TempDir()
+	ctx := context.Background()
+
+	// Pipeline produces content-addressed artifact without calling any model.
+	res, err := DelegateSkillScript(ctx, []byte(doc), storeDir, WorkerSeat{
+		Name:    "ci-seat",
+		Help:    fleet.HelpScript,
+		NoInput: true,
+	})
+	if err != nil {
+		t.Fatalf("DelegateSkillScript failed: %v", err)
+	}
+
+	if !res.Success {
+		t.Error("expected success")
+	}
+	if !strings.HasPrefix(res.Artifact.Digest, "sha256:") {
+		t.Errorf("invalid digest: %s", res.Artifact.Digest)
+	}
+	if string(res.Body) != "echo 'pure test'\n" {
+		t.Errorf("unexpected script body: %q", string(res.Body))
+	}
+}
+
+// TestScriptPipeline_Delegation_TargetFailureCannotPromoteOrRun proves that when a
+// delegated target fails (non-zero exit code or runner error), the pipeline refuses
+// promotion to dag targets or kb runbooks fail-closed, and cannot run subsequent tasks.
+func TestScriptPipeline_Delegation_TargetFailureCannotPromoteOrRun(t *testing.T) {
+	doc := "```bsh\necho 'step 1'\n```\n"
+	storeDir := t.TempDir()
+	ctx := context.Background()
+
+	plan, err := PlanPipeline([]byte(doc), PipelineOptions{StoreDir: storeDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Failing runner (exit code 1).
+	failingRunner := WorkerRunnerFunc(func(ctx context.Context, artifact *CompiledScriptArtifact) (*ExecutionResult, error) {
+		return &ExecutionResult{
+			ExitCode: 1,
+			Stderr:   []byte("build error: compiler failure\n"),
+		}, nil
+	})
+
+	failRes, failErr := plan.Delegate(ctx, WorkerSeat{
+		Name:    "ci-builder",
+		Help:    fleet.HelpScript,
+		NoInput: true,
+		Runner:  failingRunner,
+	})
+	if failErr == nil {
+		t.Fatal("expected error on worker failure, got nil")
+	}
+	if failRes.Success {
+		t.Fatal("failRes.Success should be false on worker failure")
+	}
+	if failRes.CanRunNext() {
+		t.Fatal("failRes.CanRunNext() must be false on target failure")
+	}
+
+	// Refusal to promote failed target to DAG target.
+	_, dagErr := failRes.Promote("dag", "ci-build")
+	if dagErr == nil {
+		t.Fatal("expected Promote(dag) to fail on target failure, got nil")
+	}
+	wantExit(t, dagErr, ExitInvalid)
+	if !strings.Contains(dagErr.Error(), "target failure cannot promote") {
+		t.Fatalf("unexpected error message: %v", dagErr)
+	}
+
+	// Refusal to promote failed target to KB runbook.
+	_, kbErr := failRes.Promote("runbook", "deploy-runbook")
+	if kbErr == nil {
+		t.Fatal("expected Promote(runbook) to fail on target failure, got nil")
+	}
+	wantExit(t, kbErr, ExitInvalid)
+	if !strings.Contains(kbErr.Error(), "target failure cannot promote") {
+		t.Fatalf("unexpected error message: %v", kbErr)
+	}
+
+	// 2. Successful runner (exit code 0): CanRunNext is true and Promote succeeds.
+	successRunner := WorkerRunnerFunc(func(ctx context.Context, artifact *CompiledScriptArtifact) (*ExecutionResult, error) {
+		return &ExecutionResult{
+			ExitCode: 0,
+			Stdout:   []byte("build ok\n"),
+		}, nil
+	})
+
+	succRes, succErr := plan.Delegate(ctx, WorkerSeat{
+		Name:    "ci-builder",
+		Help:    fleet.HelpScript,
+		NoInput: true,
+		Runner:  successRunner,
+	})
+	if succErr != nil {
+		t.Fatalf("unexpected error on success runner: %v", succErr)
+	}
+	if !succRes.Success {
+		t.Fatal("succRes.Success should be true")
+	}
+	if !succRes.CanRunNext() {
+		t.Fatal("succRes.CanRunNext() should be true on target success")
+	}
+
+	// Promote to DAG target succeeds.
+	promotedDAG, err := succRes.Promote("dag", "ci-build")
+	if err != nil {
+		t.Fatalf("Promote(dag) failed on successful target: %v", err)
+	}
+	if promotedDAG.Ref != "dag:ci-build" || promotedDAG.Type != "dag" || promotedDAG.Digest != succRes.Artifact.Digest {
+		t.Fatalf("promoted DAG mismatch: %+v", promotedDAG)
+	}
+
+	// Promote to KB runbook succeeds.
+	promotedKB, err := succRes.Promote("runbook", "ci-runbook")
+	if err != nil {
+		t.Fatalf("Promote(runbook) failed on successful target: %v", err)
+	}
+	if promotedKB.Ref != "kb:runbook/ci-runbook" || promotedKB.Type != "runbook" || promotedKB.Digest != succRes.Artifact.Digest {
+		t.Fatalf("promoted KB mismatch: %+v", promotedKB)
 	}
 }
