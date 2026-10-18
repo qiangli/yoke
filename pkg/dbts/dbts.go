@@ -3,8 +3,10 @@
 // retain`, the time-series logical interchange `db ts export|import`, and
 // bounded VictoriaMetrics endpoint tools `db ts remote query|ingest`.
 //
-// A ts database holds named series of timestamped float samples in two
-// tables the package manages itself (bashy_ts_series, bashy_ts_points); a
+// A ts database holds named series of timestamped samples in two tables
+// the package manages itself (bashy_ts_series, bashy_ts_points): every
+// value keeps its §8.3 tag, an int in a dedicated typed column down to
+// the full int64 range and a float as a REAL; a
 // series is registered by its first ingest, never earlier, and SQLite is
 // described as SQL analytics, not full OLAP. Ingest, range and agg address
 // one exact series (name plus full label set); retain addresses every
@@ -341,11 +343,20 @@ func encodeTS(ns int64) map[string]any {
 	return map[string]any{"t": "ts", "v": time.Unix(0, ns).UTC().Format(time.RFC3339Nano), "unit": "ns"}
 }
 
-// parseValue decodes a tagged float sample. int converts exactly.
-func parseValue(field string, raw json.RawMessage) (float64, error) {
+// sampleValue is one decoded tagged sample: either an exact int64 or a
+// float64. Ints are always exact, including int64 extremes: the store
+// keeps them in a dedicated typed column, never a coerced REAL.
+type sampleValue struct {
+	isInt bool
+	ival  int64
+	fval  float64
+}
+
+// parseSampleValue decodes a tagged sample for the local store.
+func parseSampleValue(field string, raw json.RawMessage) (sampleValue, error) {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 || string(raw) == "null" {
-		return 0, fmt.Errorf("%w: %s needs a value", dbstore.ErrInvalidInput, field)
+		return sampleValue{}, fmt.Errorf("%w: %s needs a value", dbstore.ErrInvalidInput, field)
 	}
 	var t struct {
 		T string          `json:"t"`
@@ -354,53 +365,92 @@ func parseValue(field string, raw json.RawMessage) (float64, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&t); err != nil {
-		return 0, fmt.Errorf("%w: %s value: %v", dbstore.ErrInvalidInput, field, err)
+		return sampleValue{}, fmt.Errorf("%w: %s value: %v", dbstore.ErrInvalidInput, field, err)
 	}
 	switch t.T {
 	case "int":
 		var s string
 		if err := json.Unmarshal(t.V, &s); err != nil {
-			return 0, fmt.Errorf("%w: %s int value must be a decimal string", dbstore.ErrInvalidInput, field)
+			return sampleValue{}, fmt.Errorf("%w: %s int value must be a decimal string", dbstore.ErrInvalidInput, field)
 		}
 		n, err := strconv.ParseInt(s, 10, 64)
 		if err != nil {
-			return 0, fmt.Errorf("%w: %s int value %q", dbstore.ErrInvalidInput, field, s)
+			return sampleValue{}, fmt.Errorf("%w: %s int value %q", dbstore.ErrInvalidInput, field, s)
 		}
-		// Samples are REALs: an int outside float-exact range would round
-		// silently, so it is refused instead of coerced.
-		if n > 1<<53-1 || n < -(1<<53-1) {
-			return 0, fmt.Errorf("%w: %s int value %q exceeds float-exact range ±%d", dbstore.ErrInvalidInput, field, s, 1<<53-1)
-		}
-		return float64(n), nil
+		return sampleValue{isInt: true, ival: n, fval: float64(n)}, nil
 	case "f64":
 		var s string
 		if json.Unmarshal(t.V, &s) == nil {
 			switch s {
 			case "NaN":
-				return 0, fmt.Errorf("%w: %s NaN is not stored: the driver binds it as NULL", dbstore.ErrInvalidInput, field)
+				return sampleValue{}, fmt.Errorf("%w: %s NaN is not stored: the driver binds it as NULL", dbstore.ErrInvalidInput, field)
 			case "Inf":
-				return math.Inf(1), nil
+				return sampleValue{fval: math.Inf(1)}, nil
 			case "-Inf":
-				return math.Inf(-1), nil
+				return sampleValue{fval: math.Inf(-1)}, nil
 			}
-			return 0, fmt.Errorf("%w: %s f64 string must be NaN, Inf or -Inf", dbstore.ErrInvalidInput, field)
+			return sampleValue{}, fmt.Errorf("%w: %s f64 string must be NaN, Inf or -Inf", dbstore.ErrInvalidInput, field)
 		}
 		var n json.Number
 		d := json.NewDecoder(bytes.NewReader(t.V))
 		d.UseNumber()
 		if err := d.Decode(&n); err != nil {
-			return 0, fmt.Errorf("%w: %s f64 value must be a JSON number", dbstore.ErrInvalidInput, field)
+			return sampleValue{}, fmt.Errorf("%w: %s f64 value must be a JSON number", dbstore.ErrInvalidInput, field)
 		}
 		f, err := strconv.ParseFloat(n.String(), 64)
 		if err != nil {
-			return 0, fmt.Errorf("%w: %s f64 %s: %v", dbstore.ErrInvalidInput, field, n, err)
+			return sampleValue{}, fmt.Errorf("%w: %s f64 %s: %v", dbstore.ErrInvalidInput, field, n, err)
 		}
 		if math.IsNaN(f) {
-			return 0, fmt.Errorf("%w: %s NaN is not stored: the driver binds it as NULL", dbstore.ErrInvalidInput, field)
+			return sampleValue{}, fmt.Errorf("%w: %s NaN is not stored: the driver binds it as NULL", dbstore.ErrInvalidInput, field)
 		}
-		return f, nil
+		return sampleValue{fval: f}, nil
 	}
-	return 0, fmt.Errorf("%w: %s value tag %q (int or f64); untagged numbers are refused", dbstore.ErrInvalidInput, field, t.T)
+	return sampleValue{}, fmt.Errorf("%w: %s value tag %q (int or f64); untagged numbers are refused", dbstore.ErrInvalidInput, field, t.T)
+}
+
+// parseValue decodes a tagged sample for backends that hold only REALs
+// (the VictoriaMetrics text exposition). An int outside float-exact range
+// would round silently there, so it is refused before any byte is sent,
+// never coerced.
+func parseValue(field string, raw json.RawMessage) (float64, error) {
+	s, err := parseSampleValue(field, raw)
+	if err != nil {
+		return 0, err
+	}
+	if s.isInt {
+		if s.ival > 1<<53-1 || s.ival < -(1<<53-1) {
+			return 0, fmt.Errorf("%w: %s int value %d exceeds float-exact range ±%d", dbstore.ErrInvalidInput, field, s.ival, 1<<53-1)
+		}
+		return float64(s.ival), nil
+	}
+	return s.fval, nil
+}
+
+// encodeSampleValue renders a stored sample as a contract §8.3 tagged
+// value, preserving the input tag: ints stay ints with their exact
+// decimal, floats stay floats.
+func encodeSampleValue(v sampleValue) map[string]any {
+	if v.isInt {
+		return map[string]any{"t": "int", "v": strconv.FormatInt(v.ival, 10)}
+	}
+	return encodeValue(v.fval)
+}
+
+// kindOf/intOf bind one sample to the typed columns: the kind flag and,
+// for ints, the exact int64 (NULL for floats).
+func kindOf(v sampleValue) int {
+	if v.isInt {
+		return valueKindInt
+	}
+	return valueKindFloat
+}
+
+func intOf(v sampleValue) any {
+	if v.isInt {
+		return v.ival
+	}
+	return nil
 }
 
 // encodeValue renders a REAL sample as a contract §8.3 f64 value.
@@ -442,9 +492,20 @@ create table if not exists bashy_ts_points(
  series_id integer not null references bashy_ts_series(id) on delete cascade,
  ts integer not null,
  value real not null,
+ value_kind integer not null default 0,
+ value_int integer,
  primary key(series_id, ts)
 );
 create index if not exists bashy_ts_points_ts on bashy_ts_points(ts);`
+
+// Points value columns. value holds every sample as a REAL (the f64, or
+// the nearest float shadow of an int, so SQL aggregates keep working);
+// value_kind is 0 for f64 and 1 for int; value_int holds the exact int64
+// when the kind is 1 and is NULL otherwise.
+const (
+	valueKindFloat = 0
+	valueKindInt   = 1
+)
 
 // tx is one connection running one transaction for one operation.
 type tx struct {
@@ -523,6 +584,41 @@ func (t *tx) ensureSchema() error {
 			continue
 		}
 		if _, err := t.exec(stmt); err != nil {
+			return err
+		}
+	}
+	// Migrate tables made before the typed value columns: earlier rows
+	// are all f64 by construction, so the kind default (0) already
+	// describes them and only missing columns are added.
+	rows, err := t.query("pragma table_info(" + tablePoints + ")")
+	if err != nil {
+		return err
+	}
+	have := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notnull int
+		var dflt sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return t.classify(err)
+		}
+		have[name] = true
+	}
+	cerr := rows.Err()
+	rows.Close()
+	if cerr != nil {
+		return t.classify(cerr)
+	}
+	if !have["value_kind"] {
+		if _, err := t.exec("alter table " + tablePoints + " add column value_kind integer not null default 0"); err != nil {
+			return err
+		}
+	}
+	if !have["value_int"] {
+		if _, err := t.exec("alter table " + tablePoints + " add column value_int integer"); err != nil {
 			return err
 		}
 	}

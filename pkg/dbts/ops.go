@@ -38,7 +38,7 @@ func validateFor(name string, in *Input) error {
 			if _, err := parseTS(fmt.Sprintf("points[%d].ts", i), p.Ts); err != nil {
 				return err
 			}
-			if _, err := parseValue(fmt.Sprintf("points[%d].value", i), p.Value); err != nil {
+			if _, err := parseSampleValue(fmt.Sprintf("points[%d].value", i), p.Value); err != nil {
 				return err
 			}
 		}
@@ -220,7 +220,7 @@ func runIngest(ctx context.Context, h dbstore.Handle, in Input) (dblifecycle.Out
 	}
 	type sample struct {
 		ts  int64
-		val float64
+		val sampleValue
 	}
 	samples := make([]sample, len(in.Points))
 	for i, p := range in.Points {
@@ -228,7 +228,7 @@ func runIngest(ctx context.Context, h dbstore.Handle, in Input) (dblifecycle.Out
 		if err != nil {
 			return dblifecycle.Outcome{}, err
 		}
-		v, err := parseValue(fmt.Sprintf("points[%d].value", i), p.Value)
+		v, err := parseSampleValue(fmt.Sprintf("points[%d].value", i), p.Value)
 		if err != nil {
 			return dblifecycle.Outcome{}, err
 		}
@@ -259,7 +259,7 @@ func runIngest(ctx context.Context, h dbstore.Handle, in Input) (dblifecycle.Out
 			if err := t.queryRow("select count(*) from "+tablePoints+" where series_id = ? and ts = ?", id, s.ts).Scan(&n); err != nil {
 				return dblifecycle.Outcome{}, t.classify(err)
 			}
-			if _, err := t.exec("insert or replace into "+tablePoints+"(series_id, ts, value) values (?, ?, ?)", id, s.ts, s.val); err != nil {
+			if _, err := t.exec("insert or replace into "+tablePoints+"(series_id, ts, value, value_kind, value_int) values (?, ?, ?, ?, ?)", id, s.ts, s.val.fval, kindOf(s.val), intOf(s.val)); err != nil {
 				return dblifecycle.Outcome{}, fmt.Errorf("points[%d]: %w", i, err)
 			}
 			if n == 0 {
@@ -269,11 +269,11 @@ func runIngest(ctx context.Context, h dbstore.Handle, in Input) (dblifecycle.Out
 			}
 			continue
 		}
-		stmt := "insert into " + tablePoints + "(series_id, ts, value) values (?, ?, ?)"
+		stmt := "insert into " + tablePoints + "(series_id, ts, value, value_kind, value_int) values (?, ?, ?, ?, ?)"
 		if onConflict == "skip" {
-			stmt = "insert or ignore into " + tablePoints + "(series_id, ts, value) values (?, ?, ?)"
+			stmt = "insert or ignore into " + tablePoints + "(series_id, ts, value, value_kind, value_int) values (?, ?, ?, ?, ?)"
 		}
-		r, err := t.exec(stmt, id, s.ts, s.val)
+		r, err := t.exec(stmt, id, s.ts, s.val.fval, kindOf(s.val), intOf(s.val))
 		if err != nil {
 			if dbstore.Code(err) == "conflict" {
 				return dblifecycle.Outcome{}, fmt.Errorf("%w: points[%d] at ts %d already exists (on_conflict=error)", err, i, s.ts)
@@ -340,7 +340,7 @@ func runRange(ctx context.Context, h dbstore.Handle, in Input) (dblifecycle.Outc
 		return dblifecycle.Outcome{}, t.classify(err)
 	}
 	var sb strings.Builder
-	sb.WriteString("select p.ts, p.value from " + tablePoints + " p where p.series_id = ?")
+	sb.WriteString("select p.ts, p.value_kind, p.value_int, p.value from " + tablePoints + " p where p.series_id = ?")
 	args := []any{id}
 	if sel.Start != nil {
 		sb.WriteString(" and p.ts >= ?")
@@ -365,11 +365,17 @@ func runRange(ctx context.Context, h dbstore.Handle, in Input) (dblifecycle.Outc
 			break
 		}
 		var ts int64
-		var v float64
-		if err := rows.Scan(&ts, &v); err != nil {
+		var kind int
+		var ival sql.NullInt64
+		var fval float64
+		if err := rows.Scan(&ts, &kind, &ival, &fval); err != nil {
 			return dblifecycle.Outcome{}, t.classify(err)
 		}
-		rec := map[string]any{"ts": encodeTS(ts), "value": encodeValue(v)}
+		v := sampleValue{fval: fval}
+		if kind == valueKindInt && ival.Valid {
+			v = sampleValue{isInt: true, ival: ival.Int64, fval: fval}
+		}
+		rec := map[string]any{"ts": encodeTS(ts), "value": encodeSampleValue(v)}
 		b, _ := json.Marshal(rec)
 		if used+len(b) > maxBytes {
 			if len(out) == 0 {

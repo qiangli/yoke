@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -183,16 +184,22 @@ func writeExportFiles(ctx context.Context, t *tx, dir string, m *manifest) error
 			}
 		}
 		m.SchemaDef.Series = append(m.SchemaDef.Series, seriesDef{Name: s.name, Labels: lm, RetentionNs: s.retention})
-		prows, err := t.query("select p.ts, p.value from "+tablePoints+" p where p.series_id = ? order by p.ts", s.id)
+		prows, err := t.query("select p.ts, p.value_kind, p.value_int, p.value from "+tablePoints+" p where p.series_id = ? order by p.ts", s.id)
 		if err != nil {
 			return err
 		}
 		for prows.Next() {
 			var ts int64
-			var v float64
-			if err := prows.Scan(&ts, &v); err != nil {
+			var kind int
+			var ival sql.NullInt64
+			var fval float64
+			if err := prows.Scan(&ts, &kind, &ival, &fval); err != nil {
 				prows.Close()
 				return t.classify(err)
+			}
+			v := sampleValue{fval: fval}
+			if kind == valueKindInt && ival.Valid {
+				v = sampleValue{isInt: true, ival: ival.Int64, fval: fval}
 			}
 			if w == nil {
 				var err error
@@ -203,7 +210,7 @@ func writeExportFiles(ctx context.Context, t *tx, dir string, m *manifest) error
 				}
 			}
 			tsb, _ := json.Marshal(encodeTS(ts))
-			vb, _ := json.Marshal(encodeValue(v))
+			vb, _ := json.Marshal(encodeSampleValue(v))
 			lb, _ := json.Marshal(lm)
 			line := `{"series":` + strconv.Quote(s.name) + `,"labels":` + string(orEmptyObj(lb)) +
 				`,"ts":` + string(tsb) + `,"value":` + string(vb) + "}\n"
@@ -473,7 +480,7 @@ func scanFile(dir string, f recordFile, known map[string]bool) (counts, error) {
 		if _, err := parseTS("ts", rec.Ts); err != nil {
 			return c, fmt.Errorf("%s record %d: %w", f.Path, records+1, err)
 		}
-		if _, err := parseValue("value", rec.Value); err != nil {
+		if _, err := parseSampleValue("value", rec.Value); err != nil {
 			return c, fmt.Errorf("%s record %d: %w", f.Path, records+1, err)
 		}
 		records++
@@ -512,7 +519,7 @@ func applyFile(ctx context.Context, t *tx, dir string, f recordFile, ids map[str
 		labels, _ := canonicalLabels(rec.Labels)
 		id := ids[rec.Series+"\x00"+labels]
 		ts, _ := parseTS("ts", rec.Ts)
-		v, _ := parseValue("value", rec.Value)
+		v, _ := parseSampleValue("value", rec.Value)
 		if err := ctx.Err(); err != nil {
 			return c, dbstore.FromContext(err)
 		}
@@ -522,7 +529,7 @@ func applyFile(ctx context.Context, t *tx, dir string, f recordFile, ids map[str
 			if err := t.queryRow("select count(*) from "+tablePoints+" where series_id = ? and ts = ?", id, ts).Scan(&n); err != nil {
 				return c, t.classify(err)
 			}
-			if _, err := t.exec("insert or replace into "+tablePoints+"(series_id, ts, value) values (?, ?, ?)", id, ts, v); err != nil {
+			if _, err := t.exec("insert or replace into "+tablePoints+"(series_id, ts, value, value_kind, value_int) values (?, ?, ?, ?, ?)", id, ts, v.fval, kindOf(v), intOf(v)); err != nil {
 				return c, err
 			}
 			if n == 0 {
@@ -531,7 +538,7 @@ func applyFile(ctx context.Context, t *tx, dir string, f recordFile, ids map[str
 				c.replaced++
 			}
 		case "skip":
-			r, err := t.exec("insert or ignore into "+tablePoints+"(series_id, ts, value) values (?, ?, ?)", id, ts, v)
+			r, err := t.exec("insert or ignore into "+tablePoints+"(series_id, ts, value, value_kind, value_int) values (?, ?, ?, ?, ?)", id, ts, v.fval, kindOf(v), intOf(v))
 			if err != nil {
 				return c, err
 			}
@@ -541,7 +548,7 @@ func applyFile(ctx context.Context, t *tx, dir string, f recordFile, ids map[str
 				c.ingested++
 			}
 		default:
-			if _, err := t.exec("insert into "+tablePoints+"(series_id, ts, value) values (?, ?, ?)", id, ts, v); err != nil {
+			if _, err := t.exec("insert into "+tablePoints+"(series_id, ts, value, value_kind, value_int) values (?, ?, ?, ?, ?)", id, ts, v.fval, kindOf(v), intOf(v)); err != nil {
 				if dbstore.Code(err) == "conflict" {
 					return c, fmt.Errorf("%w: import point %q at ts %d already exists (on_conflict=error)", err, rec.Series, ts)
 				}

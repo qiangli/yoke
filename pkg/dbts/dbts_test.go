@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -103,7 +104,9 @@ func TestTSIngestRangeRoundTrip(t *testing.T) {
 				t.Fatalf("timezone offset not normalized: %v", second["ts"])
 			}
 			first := got[0].(map[string]any)
-			if first["value"].(map[string]any)["v"] != float64(3) {
+			// Tagged ints round-trip as tagged ints: the tag and the
+			// exact decimal survive, never a coerced f64.
+			if v := first["value"].(map[string]any); v["t"] != "int" || v["v"] != "3" {
 				t.Fatalf("int value not exact: %v", first["value"])
 			}
 			// A range addresses one exact series; another label set is a
@@ -307,6 +310,10 @@ func TestTSInputValidation(t *testing.T) {
 			Start: json.RawMessage(intTS(2)), End: json.RawMessage(intTS(1))}, "invalid_input"},
 		{"nan remote ingest", OpRemoteIngest, Input{Endpoint: "http://h:8428",
 			SeriesList: []Series{{Name: "m", Points: []Point{tsPoint(intTS(1000), `{"t":"f64","v":"NaN"}`)}}}}, ""},
+		// The float-text backend cannot hold int64 extremes: refused in
+		// validation, before any byte is sent (local ingest accepts them).
+		{"extreme int remote ingest", OpRemoteIngest, Input{Endpoint: "http://h:8428",
+			SeriesList: []Series{{Name: "m", Points: []Point{tsPoint(intTS(1000), intV(math.MaxInt64))}}}}, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -360,12 +367,12 @@ func TestTSInterchangeRoundTripsAcrossModes(t *testing.T) {
 				tsPoint(intTS(9_007_199_254_740_991), intV(9007199254740991)),
 				tsPoint(intTS(-5_000_000_000), f64v(-0.25)),
 			}}, false)
-			// Ints outside float-exact range are refused, never rounded.
-			if code := src.code(OpIngest, Input{Series: "a", Points: []Point{
-				tsPoint(intTS(1), intV(9223372036854775807)),
-			}}, false); code != "invalid_input" {
-				t.Fatalf("inexact int = %s", code)
-			}
+			// int64 extremes are stored exactly, never rounded: the
+			// dedicated typed columns keep the full 64 bits.
+			src.must(OpIngest, Input{Series: "ext", Points: []Point{
+				tsPoint(intTS(1), intV(math.MaxInt64)),
+				tsPoint(intTS(2), intV(math.MinInt64)),
+			}}, false)
 			src.must(OpIngest, Input{Series: "b", Points: []Point{
 				tsPoint(intTS(1000), `{"t":"f64","v":"-Inf"}`),
 				tsPoint(intTS(2000), `{"t":"f64","v":"Inf"}`),
@@ -379,7 +386,7 @@ func TestTSInterchangeRoundTripsAcrossModes(t *testing.T) {
 			}
 			out := filepath.Join(t.TempDir(), "exp")
 			res := src.must(OpExport, Input{Out: out}, false).Result.(map[string]any)
-			if res["series"] != 2 || res["points"] != int64(5) {
+			if res["series"] != 3 || res["points"] != int64(7) {
 				t.Fatalf("export = %v", res)
 			}
 			if _, err := os.Stat(filepath.Join(out, "manifest.json")); err != nil {
@@ -387,7 +394,7 @@ func TestTSInterchangeRoundTripsAcrossModes(t *testing.T) {
 			}
 			dst := newFixture(t, tc.to)
 			res = dst.must(OpImport, Input{In: out, Replace: true}, true).Result.(map[string]any)
-			if res["ingested"] != 5 {
+			if res["ingested"] != 7 {
 				t.Fatalf("import = %v", res)
 			}
 			// The destination re-exports to identical record bytes: the
@@ -405,16 +412,75 @@ func TestTSInterchangeRoundTripsAcrossModes(t *testing.T) {
 			}
 			// Ordered by stamp: the pre-epoch point, the float-exact int
 			// (2^53-1 ns sits near the epoch), then the RFC point.
-			if v := got[1].(map[string]any)["value"].(map[string]any)["v"]; v != float64(9007199254740991) {
+			if v := got[1].(map[string]any)["value"].(map[string]any); v["t"] != "int" || v["v"] != "9007199254740991" {
 				t.Fatalf("exact int not preserved: %v", v)
 			}
+			// The extremes survive export/import with tag and bits intact.
+			checkTaggedInts(t, pointsOf(t, dst.must(OpRange, Input{Series: "ext"}, false)),
+				[]int64{math.MaxInt64, math.MinInt64})
 			// Merge import keeps target retention and refuses duplicates.
 			if code := dst.code(OpImport, Input{In: out}, false); code != "conflict" {
 				t.Fatalf("merge duplicate = %s", code)
 			}
 			res = dst.must(OpImport, Input{In: out, OnConflict: "skip"}, false).Result.(map[string]any)
-			if res["skipped"] != 5 {
+			if res["skipped"] != 7 {
 				t.Fatalf("merge skip = %v", res)
+			}
+		})
+	}
+}
+
+// checkTaggedInts asserts every ranged point carries its exact tagged int:
+// the "int" tag plus the full decimal, including int64 extremes.
+func checkTaggedInts(t *testing.T, got []any, want []int64) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("points = %d, want %d", len(got), len(want))
+	}
+	for i, n := range want {
+		v := got[i].(map[string]any)["value"].(map[string]any)
+		if v["t"] != "int" || v["v"] != fmt.Sprintf("%d", n) {
+			t.Fatalf("point %d = %v, want tagged int %d", i, v, n)
+		}
+	}
+}
+
+// TestTSTaggedIntExtremesRoundTrip keeps tagged ints exact across
+// ingest/range and export/import: int64 extremes, the float-boundary
+// ±2^53, zero and -1 stay tagged ints, while f64s stay f64s.
+func TestTSTaggedIntExtremesRoundTrip(t *testing.T) {
+	for _, mode := range []dbstore.Mode{dbstore.Persistent, dbstore.Memory} {
+		t.Run(string(mode), func(t *testing.T) {
+			f := newFixture(t, mode)
+			ints := []int64{math.MaxInt64, math.MinInt64, 1 << 53, -(1 << 53), 0, -1}
+			var pts []Point
+			for i, n := range ints {
+				pts = append(pts, tsPoint(intTS(int64(1000+i)), intV(n)))
+			}
+			pts = append(pts, tsPoint(intTS(9000), f64v(1.5)))
+			if res := f.must(OpIngest, Input{Series: "ext", Points: pts}, false).Result.(map[string]any); res["ingested"] != len(pts) {
+				t.Fatalf("ingested = %v", res)
+			}
+			got := pointsOf(t, f.must(OpRange, Input{Series: "ext"}, false))
+			checkTaggedInts(t, got[:len(ints)], ints)
+			if v := got[len(got)-1].(map[string]any)["value"].(map[string]any); v["t"] != "f64" || v["v"] != 1.5 {
+				t.Fatalf("f64 point = %v", v)
+			}
+			out := filepath.Join(t.TempDir(), "ext1")
+			f.must(OpExport, Input{Out: out}, false)
+			dst := newFixture(t, mode)
+			dst.must(OpImport, Input{In: out, Replace: true}, true)
+			got = pointsOf(t, dst.must(OpRange, Input{Series: "ext"}, false))
+			checkTaggedInts(t, got[:len(ints)], ints)
+			if v := got[len(got)-1].(map[string]any)["value"].(map[string]any); v["t"] != "f64" || v["v"] != 1.5 {
+				t.Fatalf("imported f64 point = %v", v)
+			}
+			out2 := filepath.Join(t.TempDir(), "ext2")
+			dst.must(OpExport, Input{Out: out2}, false)
+			b1, _ := os.ReadFile(filepath.Join(out, "points-000001.jsonl"))
+			b2, _ := os.ReadFile(filepath.Join(out2, "points-000001.jsonl"))
+			if string(b1) != string(b2) {
+				t.Fatalf("re-export differs:\n%s\n%s", b1, b2)
 			}
 		})
 	}

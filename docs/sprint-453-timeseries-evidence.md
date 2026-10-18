@@ -33,7 +33,11 @@ acceptance is claimed from development-host tests.
   `db:vm:remote:<endpoint>`.
 - `pkg/dbts/dbts_test.go`, `pkg/dbts/remote_test.go` — short in-process
   tests, both modes throughout (httptest fixtures for remote, never a
-  provisioned service).
+  provisioned service). Numeric-type correction: tagged ints keep their
+  tag and exact int64 bits via `value_kind`/`value_int` (REAL shadow
+  for aggregates, old tables migrate on next write); only the remote
+  float-text backend refuses beyond ±(2^53−1), in validation before
+  any byte is sent.
 - `pkg/dbts/process_test.go` — independent-process tests (owner + client
   re-exec): shared owner memory database, persistent direct sharing,
   request-id replay, contested stamps, hold/exclusive/epoch behavior,
@@ -50,14 +54,20 @@ acceptance is claimed from development-host tests.
 | Preserve existing OTel | `pkg/otelquery` untouched | `git status` shows only `pkg/dbts` + this doc |
 | Both modes, import/export both directions, owner tests | Memory + persistent fixtures everywhere; four-direction round trips; owner process tests | `TestTSInterchangeRoundTripsAcrossModes`, process tests |
 | Revision conflicts, bounded cancellation, destructive hold/epoch invariants | Duplicate stamp → `conflict`; cancelled ctx → `cancelled`; unconfirmed exclusive → `confirmation_required`; hold/stale-epoch paths | `TestTSIngestConflicts`, `TestTSCancelledContext`, retain confirmation, process hold section |
-| Lossless JSON/JSONL both directions | §8.3 tagged ts/f64; re-export byte-identical; int64-ns stamps, exact ints to ±(2^53−1) | Round-trip byte comparison, exact-int assertions |
+| Lossless JSON/JSONL both directions | §8.3 tagged ts/int/f64; re-export byte-identical; int64-ns stamps; tagged ints keep tag + full int64 range (dedicated `value_kind`/`value_int` columns, REAL shadow for aggregates) | Round-trip byte comparison, tagged-int assertions incl. int64 extremes |
 
 ## Honest limits
 
 - NaN is refused (`invalid_input`): the driver binds it as NULL, so
   storing it would be a silent loss (probed, then the probe removed).
-  ±Inf round-trips. Ints outside float-exact range are refused, never
-  rounded.
+  ±Inf round-trips. Tagged ints are stored exactly over the full int64
+  range, including the extremes — never rounded, never coerced to f64.
+  Only the VictoriaMetrics float-text backend refuses ints outside
+  ±(2^53−1), in validation before any byte is sent (`invalid_input`).
+  Tables made before the typed columns migrate on the next write
+  (`ensureSchema` adds `value_kind`/`value_int`; earlier rows are f64
+  by construction and read back unchanged — probed with a scratch
+  old-schema database, probe kept out of the repo).
 - Ingest/range/agg address one exact series (name plus full label set);
   retain addresses every series matching a name and label subset.
   Multi-series selectors are a later story, not this one.
@@ -80,13 +90,19 @@ acceptance is claimed from development-host tests.
 Focused short tests only. No full product build, no container, no ollama.
 
 ```
-CGO_ENABLED=0 GOMAXPROCS=2 GOFLAGS=-p=2 go test -short -count=1 ./pkg/dbts/   ok (26.9s)
+CGO_ENABLED=0 GOMAXPROCS=4 GOFLAGS=-p=2 go test -short -count=1 ./pkg/dbts/   ok (9.9s)
 go vet ./pkg/dbts/   clean
 gofmt -l pkg/dbts/   clean
 ```
 
-15 top-level tests pass (both modes where applicable); the two
-independent-process tests report SKIP under `-short`. Direct `go test`
-exit status, no pipe masking. Not run here (manager gates):
-whole-package suite, `scripts/crossvet.sh`, independent-process tests,
-cross-builds, remote host.
+16 top-level tests pass (both modes where applicable), including the new
+`TestTSTaggedIntExtremesRoundTrip` (int64 extremes, ±2^53, zero/-1 tag
+exactness across ingest/range and export/import, f64s stay f64) and the
+strengthened interchange assertions (extremes accepted in all four
+mode combinations, re-export byte-identical, tag asserted); the two
+independent-process tests report SKIP under `-short`. The pre-fix run
+failed authentically (`map[t:f64 v:3]` coercion; int64-max refused),
+then passed after the typed-column fix. Direct `go test` exit status,
+no pipe masking. Not run here (manager gates): whole-package suite,
+`scripts/crossvet.sh`, independent-process tests, cross-builds,
+remote host.
