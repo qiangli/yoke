@@ -227,3 +227,30 @@ artifact exists, so nothing ran here):
 - Mounting `Registered()` on `cmds/all` / registry / atlas and the bashy
   command + MCP surface: separate, reviewed change.
 - Wave 4 follow-ups per the story's sprint card.
+
+## Dragon policy-breach cleanup — 2026-10-18 (authoring host "Dragon", darwin/arm64)
+
+An earlier worker on this story had begun preparing a Lima Linux VM
+(`gimp-live`) on Dragon to run GIMP live. That is forbidden by Dragon
+policy (no podman/container/VM/native heavy creative runs). Cleanup,
+supervisor-authorized, at 05:50 PDT:
+
+- `limactl stop -f gimp-live` then `limactl delete gimp-live` — the VM
+  instance was force-stopped and deleted; no output of a GIMP run
+  existed to preserve, because GIMP never started inside it.
+- Dependency + mtime check before uninstalling: both `lima` 2.2.1 and
+  `lima-additional-guestagents` 2.2.1 had been installed by brew tonight
+  (the same session) and `brew uses --installed` showed no other
+  dependents of either. `lima-additional-guestagents` was uninstalled
+  first, then `lima`. No shared or preexisting package was removed.
+- Post-cleanup state, re-verified at 05:58 PDT while writing this
+  section: `limactl` is absent from PATH, `~/.lima/gimp-live` does not
+  exist, `brew list --formula` shows no lima formula, and `df -h /`
+  reports 47 GiB free on the data volume (about 50 GiB immediately after
+  the deletion, per the supervisor's reading).
+- Live GIMP was NOT executed on Dragon at any point — not in the VM,
+  not in a container, not natively. The only runs here were the
+  fixture-only suite recorded under Verification status. Live evidence
+  remains manager-gated to a separately claimed approved host
+  (novidesign or noviwin).
+- No other source, test, or pin changes accompany this section.
