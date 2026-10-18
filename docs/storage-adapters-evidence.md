@@ -75,9 +75,9 @@ code license. The module's code licenses (`LICENSE`, `LICENSE-GO`,
   `vectors` build tag, which nothing here sets.
 - `modernc.org/sqlite/vec` is transpiled Go (`ccgo`); generated files exist for
   darwin, freebsd, linux (386, amd64, arm, arm64, loong64, ppc64le, riscv64,
-  s390x), openbsd and windows (amd64, 386). Cross-platform compilation was not
-  run on the development host by instruction; it belongs to the manager's
-  remote crossvet gate.
+  s390x), openbsd and windows (amd64, 386). Cross-platform compilation is the
+  manager's remote crossvet gate; see the verification section for the
+  development-host history.
 
 ## Vector backend choice
 
@@ -215,8 +215,14 @@ checks that the old handle is refused.
 
 ## Verification on the development host
 
-Short, focused runs on darwin/arm64 (go1.27.2), one package at a time, as
-instructed. There were no cross-compiles and no whole-repository suites:
+Two passes ran on the development host (darwin/arm64, go1.27.2).
+
+The first run deviated from the host policy: it ran cross-platform builds and
+cross-OS vet of the adapter packages on this host. The manager stopped that
+run for it. Its results are not claimed as gate evidence here.
+
+The resumed pass ran only short, focused tests, one package at a time, with no
+cross-compiles and no whole-repository suites:
 
 ```
 go test -count=1 ./pkg/dbstore                 ok
@@ -227,8 +233,16 @@ go test -count=1 ./pkg/dbstore/sqlitedb        ok
 go test -count=1 ./pkg/dbstore/vecdb           ok
 go test -count=1 ./pkg/dbstore/dbstoretest     ok
 CGO_ENABLED=0 go build ./pkg/dbstore/...       ok
+go test -count=1 -run TestCensus ./pkg/atlas   ok
 ```
 
+The atlas census (`TestCensusCoversEveryPackage`,
+`TestCensusRecordsAreWellFormed`) passes with `pkg/dbstore` recorded as
+`RoleUnwired`.
+
+The module and license audit behind the license table is kept as
+`docs/storage-adapters-licenses.tsv` (module, pinned version, license).
+
 Not run here, and left to the manager's remote gates: full touched-package
-gates under the CI ratchet, `scripts/crossvet.sh` (cross-OS), the
-`pkg/atlas` census, and any downstream consumer build.
+gates under the CI ratchet, `scripts/crossvet.sh` (cross-OS), and any
+downstream consumer build.
