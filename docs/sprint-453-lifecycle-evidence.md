@@ -25,6 +25,14 @@ same registered command. The typed direct tool is `db_lifecycle`; Bashy must
 append `dbcmd.MCPCommand()` to its existing registered MCP adapters while
 preserving generic `db` selection and policy.
 
+Atlas classifies registered `db` as a storage tool with maximum effects
+`read,write,destroy,exec,persist`, irreversible and experimental. `destroy`
+reflects drop/restore, `exec` reflects owner start and `hold -- CMD`, and
+`persist` reflects persistent targets. MCP policy therefore requires an
+explicit `destroy` grant even for a read-only invocation of this umbrella
+tool; the parity tests grant it. The policy is coarse at command level and no
+per-operation bypass is claimed.
+
 ## Focused development-host results
 
 Dragon, darwin/arm64, Go from `go.mod`; tests were short and native. Exact
@@ -44,6 +52,13 @@ go test -count=1 -run 'TestParseTargetUsesSharedLocator|TestSQLiteLifecycleBacku
   PASS.
 go test -count=1 -run 'TestOwnerSessionOperationMetadata|TestParseTargetUsesSharedLocator|TestSQLiteLifecycleBackupRestore|TestOwnerMutationAdmissionCancellation' ./pkg/dblifecycle
   PASS after stop metadata correction.
+go test -count=1 -run 'TestToolTableMatchesRegistry|TestClosedVocabularies|TestReversibilityCoverageAndConsistency|TestStabilityCoverageOnVerbs' ./pkg/atlas
+  PASS after adding the registered tool row and effects/classes.
+go test -count=1 -run 'TestRegisteredLifecycleCommand|TestMCPRunToolLifecycleParity|TestTypedMCPDbLifecycle' ./cmds/db
+  PASS with an explicit MCP destroy grant; the typed denial case asserts policy
+  exit 126 without it, even for a read invocation of the umbrella command.
+go test -count=1 -run 'TestOwnerSessionOperationMetadata|TestSQLiteLifecycleBackupRestore|TestBackupPublicationPreservesCompetingDestination|TestOwnerMutationAdmissionCancellation|TestExpiredAttachmentRejected' ./pkg/dblifecycle
+  PASS.
 ```
 
 An earlier `go test -count=1 ./pkg/dblifecycle` passed in 2.437s on Dragon
@@ -67,3 +82,10 @@ touched-package, consumer and crossvet runs on a claimed remote host.
   adapter constraints in `docs/storage-adapters-evidence.md` apply; category
   stories own data verbs and logical interchange. This story does not claim
   their acceptance.
+- Manager's Windows gate on `c6e17898` failed atlas classification (missing
+  registered tool/effects/reversibility/stability); this candidate fixes that
+  with the focused atlas pass above. The same gate reported `mcp.TestPolicyCalls`
+  failures around zero audit duration on Windows; manager reproduced them on
+  parent `2111a999`, with unchanged MCP source. That pre-existing failure is
+  not marked resolved here. Raw gate:
+  `C:/Users/noviadmin/sprint453/gate-20261017-213411`.

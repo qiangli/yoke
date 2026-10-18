@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -95,7 +96,7 @@ func TestMCPRunToolLifecycleParity(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	serverT, clientT := mcpsdk.NewInMemoryTransports()
-	server, err := mcp.NewServer("yoke", "test").Connect(ctx, serverT, nil)
+	server, err := mcp.NewServerWithOptions("yoke", "test", mcp.Options{Policy: &mcp.Policy{Allow: map[string]bool{"destroy": true}, Audit: func(mcp.Record) {}}}).Connect(ctx, serverT, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +146,7 @@ func TestTypedMCPDbLifecycle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	serverT, clientT := mcpsdk.NewInMemoryTransports()
-	srv, err := mcp.BuildServer("yoke", "test", mcp.Options{Registered: func() []mcp.RegisteredCommand { return []mcp.RegisteredCommand{MCPCommand()} }})
+	srv, err := mcp.BuildServer("yoke", "test", mcp.Options{Policy: &mcp.Policy{Allow: map[string]bool{"destroy": true}, Audit: func(mcp.Record) {}}, Registered: func() []mcp.RegisteredCommand { return []mcp.RegisteredCommand{MCPCommand()} }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,5 +202,41 @@ func TestTypedMCPDbLifecycle(t *testing.T) {
 		if out.ExitCode != tt.exit {
 			t.Fatalf("%s exit=%d out=%s stderr=%s", tt.verb, out.ExitCode, out.Stdout, out.Stderr)
 		}
+	}
+}
+
+func TestTypedMCPDbLifecycleRequiresDestroyGrant(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	serverT, clientT := mcpsdk.NewInMemoryTransports()
+	srv, err := mcp.BuildServer("yoke", "test", mcp.Options{Policy: &mcp.Policy{Audit: func(mcp.Record) {}}, Registered: func() []mcp.RegisteredCommand { return []mcp.RegisteredCommand{MCPCommand()} }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := srv.Connect(ctx, serverT, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "db-test", Version: "test"}, nil)
+	session, err := client.Connect(ctx, clientT, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	res, err := session.CallTool(ctx, &mcpsdk.CallToolParams{Name: "db_lifecycle", Arguments: map[string]any{"verb": "list"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out mcp.RunToolOutput
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.ExitCode != 126 || !strings.Contains(out.Stderr, "effect destroy requires --allow destroy") {
+		t.Fatalf("exit=%d stderr=%q", out.ExitCode, out.Stderr)
 	}
 }

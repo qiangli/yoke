@@ -976,6 +976,7 @@ func init() {
 	// foreman was here (GroupOrch) but is now a suppressed internal (Bashy #40);
 	// sprint + weave are the public orchestration surface. See packages.go.
 	addTools(GroupDiagnostics, "resources", "why")
+	addTools(GroupStorage, "db")
 
 	// ed is an in-process Go applet. The remaining pinned POSIX external
 	// providers live in pkg/posixprovider and cmds/posixproviders.
@@ -1003,12 +1004,14 @@ func init() {
 
 	// Tool capabilities (evidence per flag: docs/command-atlas.md §2.3).
 	capTools(CapJSON,
-		"ast", "graph",
+		"ast", "graph", "db",
 		"browser", "fetch", "duration", "tz", "ntp", "sntp", "tokens",
 		"resources", "why",
 	)
 	capTools(CapDryRun, "rm")
 	capTools(CapDestructive, "rm", "dd", "shred", "truncate", "mail", "mailx")
+	capTools(CapDestructive, "db")
+	capTools(CapSpawnsProcesses, "db")
 	capTools(CapReadOnly,
 		"cat", "cmp", "comm", "df", "diff", "du", "file", "grep", "head", "hexdump",
 		"ls", "od", "ps", "readlink", "realpath", "resources", "stat", "strings", "tac", "tail",
@@ -1224,8 +1227,6 @@ func init() {
 	addVerb("act", staged(StageTest, managed(GroupOrch, TierSandbox)))
 	addVerb("act-runner", staged(StageTest, managed(GroupOrch, TierSandbox, CapDaemon)))
 	addVerb("mirror", staged(StageCross, managed(GroupStorage, TierUserland, CapDaemon, CapNeedsNetwork)))
-	addVerb("db", Entry{Stage: StageCross, Group: GroupStorage, Tier: TierUserland,
-		Caps: []string{CapJSON, CapDestructive, CapSpawnsProcesses}})
 
 	// knowledge and skills: kb, graph (registered above under GroupCodeIntel tools),
 	// skill, and craft are the v1.0.0 knowledge surface (Part 4j, Sprint 379 / Story #1529).
@@ -1514,7 +1515,7 @@ func init() {
 		"ast", "graph", "browser", "fetch",
 		// verbs that read stores / remote state
 		"capability", "leaderboard", "stats", "meet", "mb", "messages", "ping", "inbox", "bus", "agent", "tool", "model", "person", "whois",
-		"kb", "skill", "lexicon", "claim", "git", "web", "rclone", "kopia", "commands", "context",
+		"kb", "skill", "lexicon", "claim", "db", "git", "web", "rclone", "kopia", "commands", "context",
 		// craft READS the attestation ledger skills writes; it never writes it.
 		"craft", "define",
 		"doctor", "otel", "audit", "check", "sprint",
@@ -1562,7 +1563,7 @@ func init() {
 		"ask",
 		// verbs
 		"weave", "genie", "ycode", "sprint", "dag", "sdlc", "supervise", "capability", "leaderboard", "agent", "dks",
-		"tool", "model", "person", "kb", "skill", "lexicon", "claim", "mirror", "feed", "git",
+		"tool", "model", "person", "kb", "skill", "lexicon", "claim", "db", "mirror", "feed", "git",
 		"git-scm", "gh", "curl", "helm", "self", "bootstrap", "upgrade",
 		// commands add/set write the registered-command ring (Sprint 179).
 		"commands",
@@ -1586,7 +1587,7 @@ func init() {
 		// four rows declare it alike (see the tool/model/agent entries).
 		"tool", "model", "agent", "skill",
 		// commands rm deletes a registered command's local entry the same way.
-		"commands",
+		"commands", "db",
 	)
 
 	// net — opens a network connection (the egress / exfiltration surface).
@@ -1612,7 +1613,7 @@ func init() {
 		"newgrp", "ping",
 		"find", "awk", "xargs", "at", "batch", "nice", "nohup",
 		"stdbuf", "time", "timeout", "watch", "env",
-		"weave", "dag", "sdlc", "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "schedule", "act", "sota", "genie", "ycode",
+		"weave", "dag", "sdlc", "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "schedule", "act", "sota", "genie", "ycode", "db",
 		"act-runner", "skill", "oci", "podman", "docker", "sandbox", "ollama", "dks", "peer",
 		"git-scm", "loom", "curl", "zot", "seaweedfs", "kopia", "kubectl",
 		"verify", "conform", "gate", "run", "tessaro", "login", "why",
@@ -1654,7 +1655,7 @@ func init() {
 	eff(EffPersist,
 		"at", "batch", "crontab", "nohup",
 		"schedule", "act-runner", "mirror", "oci", "podman", "docker", "sandbox", "ollama", "dks", "meet", "mb", "messages", "ping", "inbox", "bus", "notify",
-		"loom", "zot", "seaweedfs", "kopia", "self", "bootstrap", "upgrade",
+		"loom", "zot", "seaweedfs", "kopia", "self", "bootstrap", "upgrade", "db",
 		// an `app` server outlives the shell that started it.
 		"app",
 		// genie pulls models into the shared store and installs its bundle.
@@ -1775,7 +1776,7 @@ func init() {
 	rev(RevIrreversible,
 		// Whole command rows include deletion, replacement, migration, or lifecycle
 		// operations. No per-invocation prior state or recovery guarantee exists.
-		"graph", "sprint", "capability", "leaderboard", "person", "handoff", "resume",
+		"graph", "sprint", "capability", "leaderboard", "person", "handoff", "resume", "db",
 		"kb", "lexicon", "claim", "steward", "todo", "secret", "ask",
 		"feed", // a published post cannot be recalled from the sinks that mirrored it
 		"self", "bootstrap", "upgrade",
@@ -1872,7 +1873,7 @@ func init() {
 		"ping", "bus", "notify", "app", "model", "tool", "chat", "invoke",
 		"llm", "kb", "graph", "craft", "ask", "oci", "sandbox", "loom", "ycode", "feed",
 		// orchestration / knowledge / fleet verbs outside the v1.0.0 table
-		"agentic", "capability", "claim", "coach", "define", "delegate", "dks",
+		"agentic", "capability", "claim", "coach", "define", "delegate", "dks", "db",
 		"gate", "handoff", "leaderboard", "login", "mirror", "otel", "peer",
 		"person", "resume", "search", "secret", "stats", "steward", "tessaro",
 		// engines, forges and managed externals fronted by a verb
