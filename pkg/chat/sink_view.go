@@ -43,5 +43,5 @@ func applySinkView(store *reduce.Store, canonical []byte, plan fleet.SinkPlan) (
 	if !strings.HasSuffix(string(out), "\n") {
 		out = append(out, '\n')
 	}
-	return append(out, note+"\n"...), note
+	return out, note
 }

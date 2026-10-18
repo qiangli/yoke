@@ -103,7 +103,7 @@ func TestSinkViewThenBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(out) > 1300 || !strings.Contains(out, "full: bashy out ") || !strings.Contains(out, "canonical: bashy out ") {
+	if len(out) > 1024 || !strings.Contains(out, "full: bashy out ") || !strings.Contains(out, "canonical: bashy out ") {
 		t.Fatalf("budget not applied after view (%d bytes): %q", len(out), out)
 	}
 }
@@ -115,7 +115,7 @@ func TestSinkLossyViewTightBudgetKeepsCanonicalPointer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(out) >= len(canonical)/4 || !strings.Contains(out, "full: bashy out ") {
+	if len(out) > 512 || !strings.Contains(out, "full: bashy out ") {
 		t.Fatalf("not reduced (%d bytes): %q", len(out), out)
 	}
 	if got := recoverFromNote(t, dir, out); string(got) != canonical {

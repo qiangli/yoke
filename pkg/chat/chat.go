@@ -893,18 +893,29 @@ func reduceChatBytes(out []byte, plan fleet.SinkPlan) (string, error) {
 		return string(redactor.Redact(out)), nil
 	}
 	store := reduce.NewStore(filepath.Join(root, "output"))
+	budget := plan.BudgetBytes
+	if budget <= 0 {
+		budget = reduce.DefaultBudgetBytes
+	}
 	var viewNote string
 	if plan.View != "" {
 		canonical := redactor.Redact(reduce.CanonicalizeHome(out, home))
-		out, viewNote = applySinkView(store, canonical, plan)
+		var viewed []byte
+		viewed, viewNote = applySinkView(store, canonical, plan)
+		// Reserve the canonical pointer inside the cap so elision cannot drop it.
+		if viewNote != "" && len(viewNote)+2 <= budget/2 {
+			out = viewed
+			budget -= len(viewNote) + 2
+		} else {
+			viewNote = ""
+		}
 	}
-	result, err := reduce.Reduce(store, out, reduce.Config{BudgetBytes: plan.BudgetBytes, HomeDir: home, Redactor: redactor, KeepHint: plan.KeepHint()})
+	result, err := reduce.Reduce(store, out, reduce.Config{BudgetBytes: budget, HomeDir: home, Redactor: redactor, KeepHint: plan.KeepHint()})
 	if err != nil {
 		return "", fmt.Errorf("chat: reduce invocation output: %w", err)
 	}
 	text := result.Text
-	if viewNote != "" && !strings.Contains(text, viewNote) {
-		// Budget elision can cut the view note; the canonical pointer must survive.
+	if viewNote != "" {
 		text = strings.TrimRight(text, "\n") + "\n" + viewNote + "\n"
 	}
 	return text, nil
