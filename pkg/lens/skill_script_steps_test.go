@@ -1,4 +1,4 @@
-package lens
+package lens_test
 
 import (
 	"bytes"
@@ -9,18 +9,19 @@ import (
 	"testing"
 
 	"github.com/qiangli/yoke/pkg/dag"
+	"github.com/qiangli/yoke/pkg/lens"
 )
 
 func TestScriptStepsRecoveryAndPromotion(t *testing.T) {
 	skill := func(s string) []byte { return []byte("```sh\n" + s + "\n```\n") }
-	local := &LocalScriptRunner{AllowedCaps: []string{"read-only"}, AllowedEffects: []string{"pure"}, WorkDir: t.TempDir()}
+	local := &lens.LocalScriptRunner{AllowedCaps: []string{"read-only"}, AllowedEffects: []string{"pure"}, WorkDir: t.TempDir()}
 	var calls []string
-	seat := WorkerSeat{Name: "local", Help: "script", NoInput: true, AllowedCaps: local.AllowedCaps, AllowedEffects: local.AllowedEffects, Runner: WorkerRunnerFunc(func(ctx context.Context, a *CompiledScriptArtifact) (*ExecutionResult, error) {
+	seat := lens.WorkerSeat{Name: "local", Help: "script", NoInput: true, AllowedCaps: local.AllowedCaps, AllowedEffects: local.AllowedEffects, Runner: lens.WorkerRunnerFunc(func(ctx context.Context, a *lens.CompiledScriptArtifact) (*lens.ExecutionResult, error) {
 		calls = append(calls, string(a.Script))
 		return local.RunScript(ctx, a)
 	})}
-	steps := []ScriptStep{{Name: "before", Skill: skill("echo before")}, {Name: "repair", Skill: skill("false"), Retries: 1, ReplacementSkill: skill("echo repaired")}, {Name: "after", Skill: skill("echo after")}}
-	attempts, err := ExecuteScriptSteps(t.Context(), steps, PipelineOptions{StoreDir: t.TempDir()}, seat)
+	steps := []lens.ScriptStep{{Name: "before", Skill: skill("echo before")}, {Name: "repair", Skill: skill("false"), Retries: 1, ReplacementSkill: skill("echo repaired")}, {Name: "after", Skill: skill("echo after")}}
+	attempts, err := lens.ExecuteScriptSteps(t.Context(), steps, lens.PipelineOptions{StoreDir: t.TempDir()}, seat)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,36 +65,39 @@ func TestScriptStepsRecoveryAndPromotion(t *testing.T) {
 	}
 	calls = nil
 	steps[1].ReplacementSkill = nil
-	attempts, err = ExecuteScriptSteps(t.Context(), steps, PipelineOptions{}, seat)
+	attempts, err = lens.ExecuteScriptSteps(t.Context(), steps, lens.PipelineOptions{}, seat)
 	if err == nil || len(attempts) != 3 || strings.Contains(strings.Join(calls, ""), "after") {
 		t.Fatalf("failure did not stop: %v %q", err, calls)
 	}
 	steps[1].ReplacementSkill = skill("echo $(pwd)")
 	calls = nil
-	if _, err = ExecuteScriptSteps(t.Context(), steps, PipelineOptions{}, seat); err == nil || len(calls) != 3 {
+	if _, err = lens.ExecuteScriptSteps(t.Context(), steps, lens.PipelineOptions{}, seat); err == nil || len(calls) != 3 {
 		t.Fatalf("unsafe replacement reached worker: %v %q", err, calls)
 	}
 }
 
 func TestScriptStepsFailClosed(t *testing.T) {
 	calls := 0
-	seat := WorkerSeat{Name: "test", Help: "script", NoInput: true, AllowedCaps: []string{"read-only"}, AllowedEffects: []string{"pure"}, Runner: WorkerRunnerFunc(func(context.Context, *CompiledScriptArtifact) (*ExecutionResult, error) { calls++; return nil, nil })}
-	step := ScriptStep{Name: "one", Skill: []byte("```sh\ntrue\n```\n"), Retries: 3}
-	attempts, err := ExecuteScriptSteps(t.Context(), []ScriptStep{step}, PipelineOptions{}, seat)
+	seat := lens.WorkerSeat{Name: "test", Help: "script", NoInput: true, AllowedCaps: []string{"read-only"}, AllowedEffects: []string{"pure"}, Runner: lens.WorkerRunnerFunc(func(context.Context, *lens.CompiledScriptArtifact) (*lens.ExecutionResult, error) {
+		calls++
+		return nil, nil
+	})}
+	step := lens.ScriptStep{Name: "one", Skill: []byte("```sh\ntrue\n```\n"), Retries: 3}
+	attempts, err := lens.ExecuteScriptSteps(t.Context(), []lens.ScriptStep{step}, lens.PipelineOptions{}, seat)
 	if err == nil || calls != 1 || len(attempts) != 1 {
 		t.Fatalf("missing outcome retried: %d %v", calls, err)
 	}
 	calls = 0
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, err = ExecuteScriptSteps(ctx, []ScriptStep{step}, PipelineOptions{}, seat); err == nil || calls != 0 {
+	if _, err = lens.ExecuteScriptSteps(ctx, []lens.ScriptStep{step}, lens.PipelineOptions{}, seat); err == nil || calls != 0 {
 		t.Fatal("cancelled work executed")
 	}
 	step.Retries = 4
-	if _, err = ExecuteScriptSteps(t.Context(), []ScriptStep{step}, PipelineOptions{}, seat); err == nil || calls != 0 {
+	if _, err = lens.ExecuteScriptSteps(t.Context(), []lens.ScriptStep{step}, lens.PipelineOptions{}, seat); err == nil || calls != 0 {
 		t.Fatal("unbounded retry accepted")
 	}
-	forged := &DelegationResult{Executed: true, Success: true, Artifact: &CompiledScriptArtifact{Script: []byte("true\n")}}
+	forged := &lens.DelegationResult{Executed: true, Success: true, Artifact: &lens.CompiledScriptArtifact{Script: []byte("true\n")}}
 	if _, err = forged.PublishDAG(filepath.Join(t.TempDir(), "dag.md"), "verified"); err == nil {
 		t.Fatal("unverified result promoted")
 	}
