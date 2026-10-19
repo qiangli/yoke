@@ -8,6 +8,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/GehirnInc/crypt v0.0.0-20230320061759-8cc1b52080c5
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2
+	github.com/Microsoft/go-winio v0.6.2
 	github.com/a2aproject/a2a-go/v2 v2.3.1
 	github.com/atotto/clipboard v0.1.4
 	github.com/aymanbagabas/go-pty v0.2.3
@@ -22,6 +23,7 @@ require (
 	github.com/dhnt/dhnt v0.2.0-alpha.3.0.20260619230448-ddbed43582c0
 	github.com/ebitengine/purego v0.10.1
 	github.com/filebrowser/filebrowser/v2 v2.63.23
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-git/go-billy/v5 v5.9.0
 	github.com/go-git/go-git/v5 v5.19.1
 	github.com/google/jsonschema-go v0.4.3
@@ -37,7 +39,7 @@ require (
 	github.com/ollama/ollama v0.0.0-00010101000000-000000000000
 	github.com/pkg/sftp v1.13.10
 	github.com/qiangli/bonsai v0.0.0-20261013041512-fbfc95fa4dda
-	github.com/qiangli/coreutils v0.0.0-20261018113912-178acbc68450
+	github.com/qiangli/coreutils v0.0.0-20261019134046-ccd5c756c64e
 	github.com/qiangli/gfy v0.0.0-20261013004914-30d38f086034
 	github.com/qiangli/yoke/pkg/llmgw v0.0.0-00010101000000-000000000000
 	github.com/qiangli/yoke/pkg/oci v0.0.0-00010101000000-000000000000
@@ -49,6 +51,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/tiktoken-go/tokenizer v0.8.0
+	github.com/tklauser/ps v0.0.5-0.20260804061010-39c4acb07b31
 	github.com/ulikunitz/xz v0.5.15
 	go.etcd.io/bbolt v1.4.3
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0
@@ -66,6 +69,7 @@ require (
 	golang.org/x/crypto v0.53.0
 	golang.org/x/mod v0.36.0
 	golang.org/x/net v0.56.0
+	golang.org/x/sync v0.21.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/term v0.44.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -81,7 +85,6 @@ require (
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/HdrHistogram/hdrhistogram-go v1.2.0 // indirect
 	github.com/JohannesKaufmann/dom v0.3.1 // indirect
-	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/ProtonMail/go-crypto v1.4.0 // indirect
 	github.com/RoaringBitmap/roaring/v2 v2.4.5 // indirect
 	github.com/STARRY-S/zip v0.2.3 // indirect
@@ -181,7 +184,6 @@ require (
 	github.com/felixge/fgprof v0.9.5 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/flynn/go-shlex v0.0.0-20150515145356-3f9db97f8568 // indirect
-	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/fsouza/go-dockerclient v1.13.1 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.8 // indirect
 	github.com/gin-contrib/cors v1.7.2 // indirect
@@ -327,7 +329,6 @@ require (
 	github.com/tjfoc/gmsm v1.4.1 // indirect
 	github.com/tklauser/go-sysconf v0.3.16 // indirect
 	github.com/tklauser/numcpus v0.11.0 // indirect
-	github.com/tklauser/ps v0.0.5-0.20260804061010-39c4acb07b31 // indirect
 	github.com/tomasen/realip v0.0.0-20180522021738-f0c99a92ddce // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/twpayne/go-geom v1.6.1 // indirect
@@ -367,7 +368,6 @@ require (
 	golang.org/x/exp v0.0.0-20260410095643-746e56fc9e2f // indirect
 	golang.org/x/image v0.42.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/text v0.38.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/tools v0.45.0 // indirect
@@ -397,7 +397,7 @@ require (
 // checkout. Same convention as ycode/outpost/bashy. coreutils is the
 // certified POSIX package this module was split out of (Sprint 208); yoke
 // imports it, never the reverse.
-replace mvdan.cc/sh/v3 => github.com/qiangli/sh/v3 v3.0.0-20261014083225-477b218e535d
+replace mvdan.cc/sh/v3 => github.com/qiangli/sh/v3 v3.0.0-20261019130812-6bf0a3d23481
 
 // gotreesitter: pinned local fork of upstream v0.16.0 (../gotreesitter,
 // hosting qiangli/gotreesitter, module path kept as upstream's) with the
@@ -415,7 +415,7 @@ replace github.com/odvcencio/gotreesitter => github.com/qiangli/gotreesitter v0.
 // required side effect that a non-"in" reference creates an absent array
 // element. Keeping the narrow fork here makes the conformance fixes build from
 // this repository rather than an unpublished dependency commit.
-replace github.com/benhoyt/goawk => github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261018113912-178acbc68450
+replace github.com/benhoyt/goawk => github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261019134046-ccd5c756c64e
 
 replace github.com/ollama/ollama => ./external/ollama/src
 
