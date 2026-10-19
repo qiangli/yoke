@@ -7,7 +7,6 @@ status: done
 labels:
     - quota
 created: 2026-10-19T02:11:41.108803Z
-weave: 514
 assignee: agy-gemini3.8-flash
 sprint: 469
 sprint_id: ce3c3f37-86a2-5069-a2b7-043f2f9be051
