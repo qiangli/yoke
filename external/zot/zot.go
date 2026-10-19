@@ -9,6 +9,7 @@
 package zot
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -250,14 +251,27 @@ func Serve(ctx context.Context, o Options) error {
 	return inst.Stop()
 }
 
-// ensureConfig writes a minimal zot config.json on first run, returns its path.
+// ensureConfig seeds a minimal zot config.json on first run and returns its
+// path. On every start it reconciles the bashy-managed keys (http.address,
+// http.port, storage.rootDirectory) from the current arguments while keeping
+// every user-owned field; a config that already matches is left untouched (no
+// rewrite, no mtime change). Same reconcile-on-existing pattern as loom.
 func ensureConfig(dataDir, addr string, port int) (string, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return "", err
 	}
 	cfgPath := filepath.Join(dataDir, "config.json")
-	if _, err := os.Stat(cfgPath); err == nil {
-		return cfgPath, nil // reuse
+	if existing, err := os.ReadFile(cfgPath); err == nil {
+		merged, err := reconcileConfig(existing, dataDir, addr, port)
+		if err != nil {
+			return "", err
+		}
+		if merged != string(existing) {
+			if err := os.WriteFile(cfgPath, []byte(merged), 0o644); err != nil {
+				return "", err
+			}
+		}
+		return cfgPath, nil // reuse (managed keys reconciled)
 	}
 	cfg := map[string]any{
 		"storage": map[string]any{"rootDirectory": filepath.Join(dataDir, "registry")},
@@ -277,6 +291,51 @@ func ensureConfig(dataDir, addr string, port int) (string, error) {
 		return "", err
 	}
 	return cfgPath, nil
+}
+
+// reconcileConfig rewrites only the bashy-managed keys (http.address,
+// http.port, storage.rootDirectory) in an existing zot config, preserving
+// every other user-owned field. It returns the original bytes unchanged when
+// the managed keys already match, so callers skip the write (mtime untouched).
+func reconcileConfig(in []byte, dataDir, addr string, port int) (string, error) {
+	var cfg map[string]any
+	if err := json.Unmarshal(in, &cfg); err != nil {
+		return "", fmt.Errorf("zot: %s is not valid JSON: %w", "config.json", err)
+	}
+	if cfg == nil {
+		cfg = map[string]any{}
+	}
+	// canonical snapshot of the parsed state: json.Marshal sorts map keys, so
+	// comparing snapshots is a semantic diff that ignores formatting.
+	snap, err := json.Marshal(cfg)
+	if err != nil {
+		return "", err
+	}
+	httpSrv, _ := cfg["http"].(map[string]any)
+	if httpSrv == nil {
+		httpSrv = map[string]any{}
+		cfg["http"] = httpSrv
+	}
+	httpSrv["address"] = addr
+	httpSrv["port"] = strconv.Itoa(port)
+	storage, _ := cfg["storage"].(map[string]any)
+	if storage == nil {
+		storage = map[string]any{}
+		cfg["storage"] = storage
+	}
+	storage["rootDirectory"] = filepath.Join(dataDir, "registry")
+	after, err := json.Marshal(cfg)
+	if err != nil {
+		return "", err
+	}
+	if bytes.Equal(snap, after) {
+		return string(in), nil // managed keys already match — keep the file as-is
+	}
+	out, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
 }
 
 // NewZotCmd builds the `zot` command tree (bashy front-door + any cobra host).

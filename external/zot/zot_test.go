@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -34,13 +35,127 @@ func TestEnsureConfig_SeedsAndIsIdempotent(t *testing.T) {
 	if ext, ok := parsed["extensions"].(map[string]any); !ok || len(ext) != 0 {
 		t.Fatalf("extensions = %#v, want empty (optional outbound integrations off)", parsed["extensions"])
 	}
-	// idempotent: second call must not overwrite
+	// same arguments: the file stays byte-identical and the mtime is untouched
+	// (no rewrite at all — a rewrite would churn restarts and break -count>1).
 	first := string(b)
+	fiBefore, _ := os.Stat(cfg)
 	if _, err := ensureConfig(dir, "127.0.0.1", 5000); err != nil {
 		t.Fatal(err)
 	}
-	if b2, _ := os.ReadFile(cfg); string(b2) != first {
-		t.Fatal("ensureConfig overwrote an existing config")
+	b2, _ := os.ReadFile(cfg)
+	fiAfter, _ := os.Stat(cfg)
+	if string(b2) != first {
+		t.Fatal("ensureConfig rewrote an existing config with the same arguments")
+	}
+	if !fiAfter.ModTime().Equal(fiBefore.ModTime()) {
+		t.Fatal("ensureConfig touched config.json mtime with the same arguments")
+	}
+	// changed arguments: ONLY the managed keys (http.address, http.port,
+	// storage.rootDirectory) are rewritten; every other field is preserved.
+	var before map[string]any
+	if err := json.Unmarshal(b2, &before); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ensureConfig(dir, "127.0.0.1", 6000); err != nil {
+		t.Fatal(err)
+	}
+	b3, _ := os.ReadFile(cfg)
+	var after map[string]any
+	if err := json.Unmarshal(b3, &after); err != nil {
+		t.Fatal(err)
+	}
+	afterHTTP, _ := after["http"].(map[string]any)
+	if afterHTTP == nil || afterHTTP["address"] != "127.0.0.1" || afterHTTP["port"] != "6000" {
+		t.Fatalf("http config after port change = %#v", after["http"])
+	}
+	// simulate the rewrite on the pre-change document: only managed keys differ
+	beforeHTTP, _ := before["http"].(map[string]any)
+	beforeHTTP["port"] = "6000"
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("rewrite touched fields beyond the managed keys:\nbefore %#v\nafter  %#v", before, after)
+	}
+}
+
+func TestEnsureConfig_ReappliesBindOnRestart(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := ensureConfig(dir, "127.0.0.1", 5000); err != nil {
+		t.Fatalf("first ensureConfig: %v", err)
+	}
+	// restart with a new bind and port: the managed http config must follow
+	if _, err := ensureConfig(dir, "0.0.0.0", 5001); err != nil {
+		t.Fatalf("second ensureConfig: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(b, &parsed); err != nil {
+		t.Fatalf("config JSON: %v", err)
+	}
+	http, _ := parsed["http"].(map[string]any)
+	if http == nil {
+		t.Fatalf("config missing http section: %#v", parsed)
+	}
+	if http["address"] != "0.0.0.0" {
+		t.Fatalf("restart kept stale http config: address = %#v, want 0.0.0.0", http["address"])
+	}
+	if http["port"] != "5001" {
+		t.Fatalf("restart kept stale http config: port = %#v, want 5001", http["port"])
+	}
+}
+
+func TestEnsureConfig_PreservesUserFields(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	if _, err := ensureConfig(dir, "127.0.0.1", 5000); err != nil {
+		t.Fatalf("ensureConfig: %v", err)
+	}
+	// user-owned edits: a tweaked log level and an extensions entry
+	b, _ := os.ReadFile(cfgPath)
+	var user map[string]any
+	if err := json.Unmarshal(b, &user); err != nil {
+		t.Fatal(err)
+	}
+	user["log"].(map[string]any)["level"] = "debug"
+	user["extensions"].(map[string]any)["metrics"] = map[string]any{"prometheus": map[string]any{"path": "/metrics"}}
+	userDoc, err := json.MarshalIndent(user, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, userDoc, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// a bind change rewrites only the managed keys; user fields survive
+	if _, err := ensureConfig(dir, "0.0.0.0", 5000); err != nil {
+		t.Fatalf("ensureConfig after user edits: %v", err)
+	}
+	b2, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var after map[string]any
+	if err := json.Unmarshal(b2, &after); err != nil {
+		t.Fatal(err)
+	}
+	logSec, _ := after["log"].(map[string]any)
+	if logSec == nil || logSec["level"] != "debug" {
+		t.Fatalf("user log.level lost after reconcile: %#v", after["log"])
+	}
+	ext, _ := after["extensions"].(map[string]any)
+	if ext == nil {
+		t.Fatalf("extensions section lost after reconcile: %#v", after["extensions"])
+	}
+	metrics, _ := ext["metrics"].(map[string]any)
+	if metrics == nil {
+		t.Fatalf("user extensions.metrics lost after reconcile: %#v", ext)
+	}
+	prom, _ := metrics["prometheus"].(map[string]any)
+	if prom == nil || prom["path"] != "/metrics" {
+		t.Fatalf("user extensions.metrics.prometheus lost after reconcile: %#v", metrics)
+	}
+	if http, _ := after["http"].(map[string]any); http == nil || http["address"] != "0.0.0.0" {
+		t.Fatalf("managed http.address not reconciled: %#v", after["http"])
 	}
 }
 
