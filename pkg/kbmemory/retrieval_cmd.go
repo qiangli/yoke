@@ -43,7 +43,7 @@ func NewSyncIndexCmd() *cobra.Command {
 func MCPRetrieveCommand() mcp.RegisteredCommand {
 	schema := RetrieveSchema()
 	return mcp.RegisteredCommand{
-		Name: "kb_memory_retrieve", Synopsis: "scoped lexical memory recall with freshness",
+		Name: "kb_memory_retrieve", Synopsis: "scoped memory recall with freshness (lexical, semantic, hybrid)",
 		Usage: retrieveUsage, Schema: &schema, Effects: []string{"fs.read", "db.read"},
 		Run: func(ctx context.Context, argv []string, stdin, dir string) (string, string, int) {
 			cmd := newRetrieveCmd(nil, dir)
@@ -129,18 +129,23 @@ const syncUsage = `index-sync TARGET --index INDEX [flags]`
 func newRetrieveCmd(ctxFn func() context.Context, dir string) *cobra.Command {
 	var (
 		index, mode, text, osName, since, until, asOf, requestID, sessionID string
+		vector, vectorCollection, embedModel                                string
 		tags, repos                                                         []string
 		limit, maxBytes                                                     int
 		wait, timeout                                                       time.Duration
+		fallbackLexical                                                     bool
 		asJSON                                                              bool
 	)
 	cmd := &cobra.Command{
 		Use:   "retrieve TARGET --index INDEX",
-		Short: "Scoped lexical memory recall over two explicit targets",
-		Long: `Recall reads exactly two explicit targets and writes nothing: the
-sqlite memory collection (source of truth) and the bleve rank index. Only
-lexical mode is served; semantic and hybrid fail with unsupported, naming
-the missing embedding backend (Wave4).
+		Short: "Scoped memory recall over explicit targets (lexical, semantic, hybrid)",
+		Long: `Recall reads explicit targets and writes nothing: the sqlite
+memory collection (source of truth) and the bleve rank index. Lexical mode
+ranks on the bleve side. Semantic mode (--vector, --embed-model) embeds the
+rank text through the local model door and ranks the vector collection
+through the vec category; hybrid fuses both lists with reciprocal rank
+fusion. Without a vector target and model the vector modes fail with
+unsupported, unless --fallback-lexical labels a lexical fallback.
 
   TARGET  the db locator for the memory collection, as 'bashy db' prints it
           (colons escaped): db:sqlite%3Afile%3APATH (persistent) or
@@ -180,13 +185,19 @@ whether anything is stale — including newly added unindexed records.`,
 			q := RetrieveQuery{Target: args[0], Index: index, Session: sessionID, Dir: dir,
 				Mode: mode, Text: text, Tags: tags, Repos: repos, OS: osName,
 				Since: since, Until: until, AsOf: asOf, Limit: limit, MaxBytes: maxBytes,
-				RequestID: requestID, Wait: wait}
+				RequestID: requestID, Wait: wait, Vector: vector,
+				VectorCollection: vectorCollection, EmbedModel: embedModel,
+				FallbackLexical: fallbackLexical}
 			return finishRetrieveCmd(c, Retrieve(ctx, q), asJSON)
 		},
 	}
 	f := cmd.Flags()
 	f.StringVar(&index, "index", "", "db locator for the bleve rank index (required; retrieval never provisions one)")
-	f.StringVar(&mode, "mode", ModeLexical, "retrieval mode: lexical (semantic|hybrid report unsupported)")
+	f.StringVar(&mode, "mode", ModeLexical, "retrieval mode: lexical|semantic|hybrid (vector modes need --vector and --embed-model, or --fallback-lexical)")
+	f.StringVar(&vector, "vector", "", "db locator for the sqlite vector rank target (required for semantic|hybrid; retrieval never provisions one)")
+	f.StringVar(&vectorCollection, "vector-collection", "", "vec collection holding memory embeddings (default memory)")
+	f.StringVar(&embedModel, "embed-model", "", "explicit local embedding model for semantic|hybrid (must match the vector collection)")
+	f.BoolVar(&fallbackLexical, "fallback-lexical", false, "serve labeled lexical results instead of failing when a vector mode has no backend")
 	f.StringVar(&text, "text", "", "rank text (empty matches every indexed record: a pure filter browse)")
 	f.StringSliceVar(&tags, "tags", nil, "tags, all of which must match (comma-separated or repeated)")
 	f.StringSliceVar(&repos, "repos", nil, "scope: repo basenames, any overlap matches")
@@ -301,8 +312,12 @@ func finishRetrieveCmd(c *cobra.Command, env Envelope, asJSON bool) error {
 	if res.Freshness.Stale {
 		fresh = "stale"
 	}
+	mode := res.Mode
+	if res.Fallback {
+		mode += "+fallback"
+	}
 	if _, err := fmt.Fprintf(c.OutOrStdout(), "%d hits (%s, %s): %d source, %d indexed, %d examined, %d dropped src=%s idx=%s\n",
-		len(res.Hits), res.Mode, fresh, res.Freshness.SourceDocuments,
+		len(res.Hits), mode, fresh, res.Freshness.SourceDocuments,
 		res.Freshness.IndexDocuments, res.Freshness.Examined, res.Freshness.DroppedStale,
 		shortFP(res.Freshness.SourceRevision), shortFP(res.Freshness.IndexRevision)); err != nil {
 		return &ExitError{Code: 1, Msg: fmt.Sprintf("kb %s: writing result: %v", env.Op, err)}
