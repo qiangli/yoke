@@ -338,6 +338,11 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 	} else {
 		toolName = name
 	}
+	if toolName == "codex" && !opt.DryRun {
+		if err := codexSocketDiagnostic(); err != nil {
+			return lnch, err
+		}
+	}
 	// Keep the ycode catalog row as the alias's launch metadata. Its headless
 	// template invokes genie, while its ACP declaration remains authoritative.
 	lnch.Tool, lnch.ToolName = toolName, toolName
