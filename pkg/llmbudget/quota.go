@@ -64,11 +64,9 @@ func (g *Gate) Quota(ctx context.Context, opt QuotaOptions) ([]QuotaRow, error) 
 	if err != nil {
 		return nil, err
 	}
-	if opt.Refresh {
-		if _, err := g.Analyze(ctx, AnalyzeOptions{Now: now}); err != nil {
-			return nil, err
-		}
-	}
+	// Refresh updates declared quota sources. Vendor error matching runs below
+	// through Observed; model analysis is a separate, optional command and a
+	// missing local model must not turn a successful source refresh into 502.
 	cat := fleet.New()
 	models, _ := cat.Models()
 	plans, _ := cat.Plans()
@@ -272,7 +270,7 @@ func quotaRows(report *Report, models []fleet.Model, plans []fleet.Plan, agents 
 		if !eligible(base) || !base.Configured {
 			continue
 		}
-		if account.Status == "not-configured" {
+		if account.Status == "not-configured" || account.Status == "unavailable" || account.Status == "needs-input" || account.Status == "stale" {
 			base.Status = account.Status
 			base.Limitations = append(base.Limitations, account.Limitations...)
 		}

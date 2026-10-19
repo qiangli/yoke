@@ -4,8 +4,12 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -108,6 +112,38 @@ func TestQuotaOldMeasuredSampleIsStale(t *testing.T) {
 		[]fleet.Model{{Name: "codex", Provider: "openai", Plan: "chatgpt-pro"}}, []fleet.Plan{{Name: "chatgpt-pro"}}, []fleet.Agent{{Model: "codex"}}, &Policy{}, QuotaOptions{}, now)
 	if len(rows) != 1 || rows[0].Status != "stale" || !rows[0].Stale {
 		t.Fatalf("old measured quota must not be healthy: %+v", rows)
+	}
+}
+
+func TestQuotaRefreshSurvivesModelDoorFailure(t *testing.T) {
+	g, _, now := analyzerFixture(t, true)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			_, _ = w.Write([]byte(`{"data":[{"id":"test-analyzer"}]}`))
+			return
+		}
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer server.Close()
+	_, port, _ := strings.Cut(strings.TrimPrefix(server.URL, "http://127.0.0.1:"), "/")
+	if port == "" {
+		port = strings.TrimPrefix(server.URL, "http://127.0.0.1:")
+	}
+	if _, err := strconv.Atoi(port); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BASHY_LLM_PORT", port)
+	if _, err := g.Quota(context.Background(), QuotaOptions{Refresh: true, Now: now}); err != nil {
+		t.Fatalf("source refresh must survive analyzer failure: %v", err)
+	}
+}
+
+func TestQuotaReportsFailedSource(t *testing.T) {
+	now := time.Date(2026, 10, 19, 5, 0, 0, 0, time.UTC)
+	rows := quotaRows(&Report{Accounts: []AccountReport{{Account: "seat", Provider: "fixture", Status: "unavailable", Limitations: []string{"probe failed"}}}},
+		[]fleet.Model{{Name: "fixture", Provider: "fixture", Plan: "seat"}}, []fleet.Plan{{Name: "seat"}}, []fleet.Agent{{Model: "fixture"}}, &Policy{}, QuotaOptions{}, now)
+	if len(rows) != 1 || rows[0].Status != "unavailable" || len(rows[0].Limitations) != 1 {
+		t.Fatalf("failed source must be visible: %+v", rows)
 	}
 }
 
