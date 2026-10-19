@@ -19,8 +19,8 @@ import (
 
 // MuslUvVersion is the uv release used on hosts without glibc: UV_LIBC (the
 // libc override that makes uv work where it cannot detect one) arrived in uv
-// 0.7.22. glibc and macOS hosts keep DefaultVersion.
-const MuslUvVersion = "0.12.19"
+// 0.7.22; 0.13.0 is the oldest that installs CPython 3.15.0. Kept equal to DefaultVersion.
+const MuslUvVersion = "0.13.0"
 
 // needsMusl reports whether this host needs the musl path: Linux without glibc.
 func needsMusl() bool { return muslrt.Needed() }

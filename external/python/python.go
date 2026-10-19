@@ -23,15 +23,15 @@ import (
 	"github.com/qiangli/yoke/pkg/muslrt"
 )
 
-// DefaultVersion pins the uv release fetched when none is requested. uv is
-// backward-compatible; bump periodically or override with $BASHY_UV_VERSION.
-const DefaultVersion = "0.5.11"
+// DefaultVersion pins the uv release fetched when none is requested: 0.13.0 is the
+// oldest uv that ships CPython 3.15.0 final. Override with $BASHY_UV_VERSION.
+const DefaultVersion = "0.13.0"
 
 // DefaultPython is the CPython line a Bash# island gets when neither the
 // project (.python-version) nor the caller names one: uv installs the newest
 // patch of this line from python-build-standalone (PSF-2.0). Override with
 // $BASHY_PYTHON_VERSION.
-const DefaultPython = "3.13"
+const DefaultPython = "3.15"
 
 // uvTriple maps Go's GOOS/GOARCH to uv's release triple + archive ext.
 func uvTriple() (triple, ext string, err error) {
@@ -183,7 +183,7 @@ func newCmd(use, short, mode string) *cobra.Command {
 }
 
 // EnsureInterpreter provisions a uv-managed CPython and returns its absolute
-// python executable. version is a uv python request ("3.13", "3.12.4", ""
+// python executable. version is a uv python request ("3.15", "3.12.4", ""
 // for DefaultPython). Only uv-MANAGED interpreters are considered — a host
 // python on PATH is never returned, so the same request yields the same
 // interpreter on every host. Idempotent: an installed interpreter is found
