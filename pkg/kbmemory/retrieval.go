@@ -45,9 +45,13 @@
 // kblife.Visible(record.State(asOf)), defaulting to one fixed now per
 // retrieval with an optional --as-of for historical reads.
 //
-// Semantic and hybrid modes return explicit unsupported: there is no
-// embedding provider on this path, no network call, and never a silent
-// substitution of another mode.
+// Semantic and hybrid modes rank through an optional sqlite vector target
+// (retrieval_semantic.go): the query is embedded through the existing local
+// model door, the bounded vector population is ranked through the vec
+// category on the shared admission path, and hybrid fuses both lists with
+// reciprocal rank fusion. Without an explicitly configured vector target
+// and embedding model they return explicit unsupported, never a silent
+// substitution — unless the caller chose the labeled lexical fallback.
 package kbmemory
 
 import (
@@ -88,6 +92,14 @@ const (
 // filter browse). Tags all must match; Repos matches on any overlap; OS is
 // exact; Since is inclusive and Until exclusive on the record's created
 // stamp. Zero Limit/MaxBytes take the category defaults.
+//
+// Semantic and hybrid modes additionally read Vector, an optional S11 db
+// locator for the sqlite vector rank target (never provisioned here), with
+// VectorCollection naming its vec collection (default "memory") and
+// EmbedModel naming the explicit local embedding model, which must match
+// the collection's persisted model. Embed injects the embedding entry
+// point (nil selects the local model door); FallbackLexical serves labeled
+// lexical results instead of failing when a vector mode has no backend.
 type RetrieveQuery struct {
 	Mode      string
 	Target    string // S11 db locator for the sqlite memory collection
@@ -105,6 +117,22 @@ type RetrieveQuery struct {
 	AsOf      string // optional RFC 3339 instant for lifecycle visibility; empty means one fixed now per retrieval
 	RequestID string
 	Wait      time.Duration
+	// Vector is the optional S11 db locator for the sqlite vector rank
+	// target behind semantic and hybrid modes.
+	Vector string
+	// VectorCollection names the vec collection holding memory embeddings
+	// (default DefaultVectorCollection).
+	VectorCollection string
+	// EmbedModel is the explicit local embedding model for semantic and
+	// hybrid modes; it must match the vector collection's persisted model.
+	EmbedModel string
+	// FallbackLexical serves labeled lexical results (Result.Fallback)
+	// instead of failing when a vector mode has no backend or embedding
+	// fails.
+	FallbackLexical bool
+	// Embed injects the embedding entry point; nil selects EmbedLocal,
+	// the existing local model door.
+	Embed Embedder
 }
 
 // Hit is one served record: Ref is the stable record ID verbatim, beside
@@ -133,6 +161,13 @@ type Hit struct {
 // stable form, so a re-encoding is not a change), and Stale is true exactly
 // when they differ. A same-count edit outside the query and a same-count
 // delete-plus-add both show stale even though no count moves.
+//
+// Vector modes additionally report the vector rank target they read
+// (VectorTarget with its persisted VectorModel, VectorDimension and live
+// VectorDocuments count). The vector side has no cheap population snapshot,
+// so its IndexRevision is the collection identity label and Stale also
+// turns true when examined candidates show indexed bytes that differ from
+// the served documents or any candidate is dropped.
 type Freshness struct {
 	DocTarget       string `json:"doc_target"`
 	IndexTarget     string `json:"index_target"`
@@ -146,13 +181,23 @@ type Freshness struct {
 	DroppedStale    int    `json:"dropped_stale"`
 	DroppedState    int    `json:"dropped_state,omitempty"`
 	Truncated       bool   `json:"truncated"`
+	// VectorTarget is the vector rank target behind semantic and hybrid
+	// modes, with the persisted embedding identity it was validated
+	// against through the vec category.
+	VectorTarget    string `json:"vector_target,omitempty"`
+	VectorModel     string `json:"vector_model,omitempty"`
+	VectorDimension int    `json:"vector_dimension,omitempty"`
+	VectorDocuments int64  `json:"vector_documents,omitempty"`
 }
 
 // RetrieveResult is the result body of a successful retrieval envelope.
+// Fallback is true when the caller explicitly chose --fallback-lexical and
+// a vector mode was served as labeled lexical results.
 type RetrieveResult struct {
 	Hits      []Hit     `json:"hits"`
 	Freshness Freshness `json:"freshness"`
 	Mode      string    `json:"mode"`
+	Fallback  bool      `json:"fallback,omitempty"`
 }
 
 // Retrieve runs one scoped lexical retrieval and returns its envelope. It
@@ -170,7 +215,8 @@ func Retrieve(ctx context.Context, q RetrieveQuery) Envelope {
 
 func retrieve(ctx context.Context, q RetrieveQuery, env *Envelope) (RetrieveResult, error) {
 	var out RetrieveResult
-	if err := checkRetrieveMode(q.Mode); err != nil {
+	mode, fallback, err := resolveMode(q)
+	if err != nil {
 		return out, err
 	}
 	limit, maxBytes, err := retrieveBounds(q.Limit, q.MaxBytes)
@@ -200,7 +246,15 @@ func retrieve(ctx context.Context, q RetrieveQuery, env *Envelope) (RetrieveResu
 	env.Target = &info
 	f := retrieveFilter{tags: clean(q.Tags), repos: clean(q.Repos), os: strings.TrimSpace(q.OS),
 		since: since, until: until, wantSince: wantSince, wantUntil: wantUntil}
-	return runRetrieve(ctx, q, docT, idxT, docID, f, limit, maxBytes, asOf)
+	if mode != ModeLexical {
+		return runVectorRetrieve(ctx, q, mode, docT, idxT, docID, f, limit, maxBytes, asOf)
+	}
+	res, err := runRetrieve(ctx, q, docT, idxT, docID, f, limit, maxBytes, asOf)
+	if err != nil {
+		return out, err
+	}
+	res.Fallback = fallback
+	return res, nil
 }
 
 // retrieveAsOf resolves the lifecycle instant for one retrieval: one fixed
@@ -217,15 +271,15 @@ func retrieveAsOf(asOf string) (time.Time, error) {
 	return t, nil
 }
 
-// checkRetrieveMode admits lexical only. Semantic and hybrid name the
-// missing explicitly configured embedding backend instead of substituting.
+// checkRetrieveMode admits every known mode name. Backend readiness for
+// the vector modes is decided per query by resolveMode in
+// retrieval_semantic.go: without a vector target and an embedding entry
+// point they stay structured unsupported unless the caller chose the
+// labeled lexical fallback.
 func checkRetrieveMode(mode string) error {
 	switch strings.TrimSpace(mode) {
-	case "", ModeLexical:
+	case "", ModeLexical, ModeSemantic, ModeHybrid:
 		return nil
-	case ModeSemantic, ModeHybrid:
-		return fmt.Errorf("%w: mode %q needs an explicitly configured embedding backend (Wave4); this read path offers lexical only",
-			dbstore.ErrUnsupported, strings.TrimSpace(mode))
 	default:
 		return fmt.Errorf("%w: mode %q (want lexical|semantic|hybrid)", dbstore.ErrInvalidInput, mode)
 	}
@@ -791,39 +845,14 @@ func runRetrieve(ctx context.Context, q RetrieveQuery, docT, idxT dbstore.Target
 	out.Freshness.IndexRevision = rop.IndexRevision
 	out.Freshness.Stale = out.Freshness.SourceRevision != out.Freshness.IndexRevision
 	out.Freshness.IndexTotal = rop.Total
-	why := f.why(q.Text)
-	used, byteStopped := 0, false
+	out.Freshness.Truncated = rop.Truncated
+	cands := make([]rankCandidate, 0, len(rop.Hits))
 	for _, h := range rop.Hits {
-		if err := ctx.Err(); err != nil {
-			return out, dbstore.FromContext(err)
-		}
-		if len(out.Hits) >= limit {
-			break
-		}
-		out.Freshness.Examined++
-		hit, stop, err := serveSnapHit(srcSnap, h, f, why, used, maxBytes, asOf)
-		if err == errDropped {
-			out.Freshness.DroppedStale++
-			continue
-		}
-		if err == errDroppedState {
-			out.Freshness.DroppedState++
-			continue
-		}
-		if err != nil {
-			return out, err
-		}
-		if hit != nil {
-			out.Hits = append(out.Hits, hit.hit)
-			used += hit.bytes
-		}
-		if stop {
-			byteStopped = true
-			break
-		}
+		cands = append(cands, rankCandidate{id: h.ID, rev: h.Revision, score: h.Score, doc: h.Doc})
 	}
-	out.Freshness.Truncated = rop.Truncated || byteStopped ||
-		(len(out.Hits) == limit && out.Freshness.Examined < len(rop.Hits))
+	if err := serveRanked(ctx, srcSnap, cands, false, true, f, f.why(q.Text), ModeLexical, limit, maxBytes, asOf, &out); err != nil {
+		return out, err
+	}
 	return out, nil
 }
 
@@ -848,7 +877,7 @@ func liveRecord(r Record, asOf time.Time) bool {
 // record left the live lifecycle at the retrieval's as-of is dropped the
 // same way. stop reports the byte budget is spent and the call must end
 // truncated.
-func serveSnapHit(snap map[string]sourceDoc, h ftsHit, f retrieveFilter, why []string, used, maxBytes int, asOf time.Time) (*servedHit, bool, error) {
+func serveSnapHit(snap map[string]sourceDoc, h ftsHit, f retrieveFilter, why []string, used, maxBytes int, asOf time.Time, mode string) (*servedHit, bool, error) {
 	d, ok := snap[h.ID]
 	if !ok {
 		return nil, false, errDropped
@@ -878,7 +907,7 @@ func serveSnapHit(snap map[string]sourceDoc, h ftsHit, f retrieveFilter, why []s
 		}
 		return nil, true, nil
 	}
-	return &servedHit{hit: Hit{Ref: fresh.ID, Score: h.Score, Mode: ModeLexical,
+	return &servedHit{hit: Hit{Ref: fresh.ID, Score: h.Score, Mode: mode,
 		Revision: d.revision, IndexRevision: h.Revision, Stale: !reflect.DeepEqual(indexed, fresh),
 		Record: fresh, Why: why}, bytes: size}, false, nil
 }
