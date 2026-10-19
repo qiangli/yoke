@@ -37,6 +37,15 @@ func lastJournalLine(t *testing.T, dir string) string {
 }
 
 func TestRepoRingWriteRecordsNoHost(t *testing.T) {
+	// Pin the process identity the journal stamps (ToolID/EpisodeID):
+	// EpisodeID is "" when the launcher provides no episode, so an
+	// unset BASHY_EPISODE drops the journal's episode key entirely.
+	// HostID reads no environment (paired agent name, else hostname),
+	// so there is no host variable to pin — the test asserts host
+	// absence instead.
+	t.Setenv("BASHY_EPISODE", "ep-journal")
+	t.Setenv("WEAVE_AGENT", "test-tool")
+
 	// A temp git checkout with docs/kb, as resolve.go names the repo ring.
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, RepoSub), 0o755); err != nil {
@@ -76,7 +85,7 @@ func TestRepoRingWriteRecordsNoHost(t *testing.T) {
 	}
 	// The journal stamps the process identity (ToolID/EpisodeID), not the
 	// page's Source — only the host must be gone.
-	if rec["tool"] != ToolID() || rec["episode"] != EpisodeID() {
+	if rec["tool"] != "test-tool" || rec["episode"] != "ep-journal" {
 		t.Fatalf("repo-ring journal lost tool/episode: %s", line)
 	}
 
