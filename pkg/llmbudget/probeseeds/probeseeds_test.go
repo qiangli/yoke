@@ -229,6 +229,22 @@ func TestRodChatGPTProProbeRedactedFixture(t *testing.T) {
 	}
 }
 
+func TestRodChatGPTProOldSessionIsStale(t *testing.T) {
+	home := isolate(t)
+	sessions := filepath.Join(home, ".codex", "sessions", "2026", "10", "15")
+	if err := os.MkdirAll(sessions, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"timestamp":"2026-10-14T03:00:00Z","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":17,"window_minutes":10080,"resets_at":1792685131},"secondary":null}}}` + "\n"
+	if err := os.WriteFile(filepath.Join(sessions, "rollout-fixture.jsonl"), []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	row := findRow(t, rodQuota(t), "chatgpt-pro", "week")
+	if row.Status != "stale" || !row.Stale {
+		t.Fatalf("33-hour-old Codex session must not be healthy: %+v", row)
+	}
+}
+
 // Rod: even with hundreds of session files, the probe sorts rollouts only in
 // the lexically newest day that has one. The newest day below contains no
 // rollouts, so it must fall back exactly one day; a newer-mtime rollout in the

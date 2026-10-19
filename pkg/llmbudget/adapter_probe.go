@@ -250,6 +250,16 @@ func (ProbeAdapter) Collect(ctx context.Context, c SourceConfig, now time.Time) 
 			if e := appendMetric(name, m["value"], stringValue(m["unit"]), stringValue(m["window"]), m["reset_at"]); e != nil {
 				return SourceResult{Status: "unavailable"}, e
 			}
+			if at, ok := m["observed_at"].(string); ok {
+				parsed, err := time.Parse(time.RFC3339Nano, at)
+				if err != nil {
+					return SourceResult{Status: "unavailable"}, fmt.Errorf("probe: invalid observed_at: %w", err)
+				}
+				if parsed.After(now) {
+					parsed = now
+				}
+				out.Metrics[len(out.Metrics)-1].ObservedAt = parsed
+			}
 		}
 	}
 	return out, nil

@@ -100,6 +100,17 @@ func TestQuotaGroupingWorkersAndDoor(t *testing.T) {
 }
 func ptrInt(v int) *int { return &v }
 
+func TestQuotaOldMeasuredSampleIsStale(t *testing.T) {
+	now := time.Date(2026, 10, 19, 5, 0, 0, 0, time.UTC)
+	old := now.Add(-33 * time.Hour)
+	used := 17.0
+	rows := quotaRows(&Report{Accounts: []AccountReport{{Account: "chatgpt-pro", Provider: "openai", Metrics: []Metric{{Name: "quota.used_percent", Value: &used, Window: "week", Classification: "measured", Source: "probe", ObservedAt: old}}}}},
+		[]fleet.Model{{Name: "codex", Provider: "openai", Plan: "chatgpt-pro"}}, []fleet.Plan{{Name: "chatgpt-pro"}}, []fleet.Agent{{Model: "codex"}}, &Policy{}, QuotaOptions{}, now)
+	if len(rows) != 1 || rows[0].Status != "stale" || !rows[0].Stale {
+		t.Fatalf("old measured quota must not be healthy: %+v", rows)
+	}
+}
+
 func TestQuotaBaselineAccountLabels(t *testing.T) {
 	isolateReportCatalog(t)
 	t.Setenv("BASHY_FLEET_SEEDS", "")

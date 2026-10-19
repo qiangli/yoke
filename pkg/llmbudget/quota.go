@@ -100,10 +100,18 @@ func (g *Gate) Quota(ctx context.Context, opt QuotaOptions) ([]QuotaRow, error) 
 // applyObserved uses vendor reports only where the account has no fresh
 // measured quota. A stale probe must not hide a newer vendor error.
 func applyObserved(rows []QuotaRow, states []ObservedState, now time.Time) []QuotaRow {
-	measured := map[string]bool{}
+	measured := map[string]time.Time{}
 	for _, row := range rows {
 		if !row.Stale && (row.Classification == "measured" || row.Classification == "actual") {
-			measured[row.Account] = true
+			// An undated measurement retains the conservative precedence used
+			// by older callers. Dated vendor errors may supersede older probes.
+			at := now
+			if row.ObservedAt != nil {
+				at = *row.ObservedAt
+			}
+			if at.After(measured[row.Account]) {
+				measured[row.Account] = at
+			}
 		}
 	}
 	selected := map[string]ObservedState{}
@@ -112,7 +120,7 @@ func applyObserved(rows []QuotaRow, states []ObservedState, now time.Time) []Quo
 		if account == "" {
 			account = state.Plan
 		}
-		if account == "" || measured[account] || (state.Kind != "exhausted" && state.Kind != "rate-limited" && state.Kind != "warning") {
+		if account == "" || !state.At.After(measured[account]) || (state.Kind != "exhausted" && state.Kind != "rate-limited" && state.Kind != "warning") {
 			continue
 		}
 		if old, ok := selected[account]; !ok || state.At.After(old.At) {
@@ -301,7 +309,9 @@ func quotaRows(report *Report, models []fleet.Model, plans []fleet.Plan, agents 
 			if metric.ResetAt != nil {
 				row.ResetAt = metric.ResetAt
 			}
-			row.Stale = row.Stale || metric.Classification == "stale"
+			// A cached vendor sample cannot remain healthy indefinitely merely
+			// because it was measured when first collected.
+			row.Stale = row.Stale || metric.Classification == "stale" || (metric.Name == "quota.used_percent" && !metric.ObservedAt.IsZero() && now.Sub(metric.ObservedAt) > time.Hour)
 			if row.Classification == "" || metric.Name == "quota.used_percent" {
 				row.Classification = metric.Classification
 			}
@@ -329,6 +339,10 @@ func quotaRows(report *Report, models []fleet.Model, plans []fleet.Plan, agents 
 		}
 	}
 	for key, row := range rows {
+		if row.Stale {
+			row.Status = "stale"
+			row.Headroom = nil
+		}
 		if hasParts[key] {
 			v := tokenParts[key]
 			row.Tokens = &v

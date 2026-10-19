@@ -35,6 +35,17 @@ func TestQuotaObservedPrecedence(t *testing.T) {
 	}
 }
 
+func TestQuotaNewerExhaustionOverridesMeasuredSample(t *testing.T) {
+	now := time.Date(2026, 10, 19, 5, 0, 0, 0, time.UTC)
+	measuredAt := now.Add(-10 * time.Minute)
+	reset := now.Add(time.Hour)
+	rows := []QuotaRow{{Account: "seat", Window: "5h", Status: "ok", Classification: "measured", ObservedAt: &measuredAt}}
+	applyObserved(rows, []ObservedState{{Account: "seat", Window: "5h", Kind: "exhausted", Classification: "observed", At: now.Add(-time.Minute), ResetAt: &reset}}, now)
+	if rows[0].Status != "exhausted" {
+		t.Fatalf("newer vendor error must override older probe: %+v", rows[0])
+	}
+}
+
 func TestQuotaLogFilter(t *testing.T) {
 	t.Setenv("BASHY_HOME", t.TempDir())
 	ctx := context.Background()
