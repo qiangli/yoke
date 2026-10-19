@@ -31,7 +31,7 @@ import (
 const ExitBrokenRing = 1
 
 // NewRecallCmd builds the `recall` verb.
-func NewRecallCmd() *cobra.Command {
+func NewRecallCmd(extra ...Reader) *cobra.Command {
 	var (
 		asJSON     bool
 		k          int
@@ -101,7 +101,12 @@ Three things about its behaviour are contract, not implementation:
 			if err != nil {
 				return err
 			}
-			res := Recall(q, openRings(storeDir)...)
+			readers := openRings(storeDir)
+			// An explicit store overrides every substrate, including mounted readers.
+			if storeDir == "" {
+				readers = append(readers, extra...)
+			}
+			res := Recall(q, readers...)
 
 			out := cmd.OutOrStdout()
 			if asJSON {
