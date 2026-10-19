@@ -19,6 +19,8 @@ func NewSearchCmd() *cobra.Command {
 		content bool
 		files   bool
 		kb      bool
+		indexed bool
+		mode    string
 		dir     string
 		max     int
 		backend string
@@ -66,6 +68,15 @@ func NewSearchCmd() *cobra.Command {
 			}
 			query := strings.Join(args, " ")
 			ctx := c.Context()
+			if indexed {
+				if files || kb || content || local || index || status {
+					return fmt.Errorf("search: --indexed cannot be combined with scan/filename/kb selectors")
+				}
+				return runIndexed(c, query, mode, max, asJSON)
+			}
+			if c.Flags().Changed("mode") {
+				return fmt.Errorf("search: --mode requires --indexed")
+			}
 
 			// --- local (P0b): content/files scan + kb facts ---
 			if local || files || kb || content {
@@ -149,7 +160,10 @@ func NewSearchCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.AddCommand(newIndexCmd())
 	f := cmd.Flags()
+	f.BoolVar(&indexed, "indexed", false, "search the managed extracted-content index")
+	f.StringVar(&mode, "mode", "auto", "indexed retrieval: auto|lexical|semantic|hybrid (auto labels lexical fallback)")
 	f.BoolVar(&local, "local", false, "local search: file content + kb facts (default domain content+kb)")
 	f.BoolVar(&content, "content", false, "local: file-content scan only (implies --local)")
 	f.BoolVar(&files, "files", false, "local: filename search (uses an index when available)")

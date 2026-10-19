@@ -318,6 +318,18 @@ func searchVectors(ctx context.Context, q RetrieveQuery, vecT dbstore.Target, de
 	if err := decode(out.Result, &res); err != nil {
 		return nil, fmt.Errorf("%w: vector search result: %v", dbstore.ErrIntegrity, err)
 	}
+	var page struct {
+		Truncated bool            `json:"truncated"`
+		Cursor    json.RawMessage `json:"cursor"`
+	}
+	if out.Page != nil {
+		if err := decode(out.Page, &page); err != nil {
+			return nil, err
+		}
+	}
+	if page.Truncated || len(page.Cursor) > 0 && string(page.Cursor) != "null" {
+		return nil, fmt.Errorf("%w: vector population exceeds the bounded retrieval snapshot", dbstore.ErrLimitExceeded)
+	}
 	hits := res.Hits
 	slices.SortFunc(hits, func(a, b vecSearchHit) int {
 		if a.Distance != b.Distance {
@@ -328,7 +340,25 @@ func searchVectors(ctx context.Context, q RetrieveQuery, vecT dbstore.Target, de
 		}
 		return strings.Compare(a.ID, b.ID)
 	})
-	return hits, nil
+	// A producer may store bounded chunks under recordID~N, each carrying
+	// the unchanged source Record metadata. Collapse their best rank before
+	// fusion and source/lifecycle filtering; return each source at most once.
+	seen := map[string]bool{}
+	sources := make([]vecSearchHit, 0, len(hits))
+	for _, h := range hits {
+		var record Record
+		if json.Unmarshal(h.Metadata, &record) == nil && record.ID != "" && strings.HasPrefix(h.ID, record.ID+"~") {
+			suffix := strings.TrimPrefix(h.ID, record.ID+"~")
+			if _, err := strconv.ParseUint(suffix, 10, 32); err == nil {
+				h.ID = record.ID
+			}
+		}
+		if !seen[h.ID] {
+			seen[h.ID] = true
+			sources = append(sources, h)
+		}
+	}
+	return sources, nil
 }
 
 // rankCandidate is one ordered rank entry awaiting source resolution: the

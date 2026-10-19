@@ -37,6 +37,7 @@ var serviceDefaultsGolden = map[string]serviceDefaultGolden{
 	"events":        {false, "opt-in: the event bus has no subscriber until the operator wires one", nil},
 	"files":         {true, "default-on: pre-418 FilesOn defaulted on; embedded file manager is base host", kv{"scope": "", "allow_write": "false"}},
 	"headlamp":      {false, "opt-in: the cluster dashboard needs an operator-attached cluster", kv{"kubeconfig": "", "namespace": "headlamp", "target": "svc/headlamp"}},
+	"index":         {false, "opt-in: managed indexing requires explicit initialization", nil},
 	"kopia":         {false, "opt-in: backups need an operator-configured destination", kv{"data_dir": ""}},
 	"lan-inference": {false, "opt-in: explicit by history; publishing inference to the LAN is the operator's call", kv{"target": ""}},
 	"llm":           {false, "opt-in: false since first commit; model routing is operator-configured", nil},

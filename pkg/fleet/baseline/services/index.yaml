@@ -1,0 +1,19 @@
+name: index
+kind: service
+description: opt-in managed local document indexing
+exec: [bashy, search, index, serve, --port, "{port}"]
+ports:
+  - name: health
+    port: 24557
+    bind: loopback
+health:
+  tcp: true
+  interval: 10s
+  timeout: 2s
+  failures: 3
+  start_period: 30s
+restart:
+  policy: on-failure
+  backoff: {min: 1s, max: 30s, healthy_after: 30s}
+  start_limit: {burst: 5, interval: 5m}
+enabled: false
