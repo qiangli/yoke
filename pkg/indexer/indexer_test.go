@@ -694,3 +694,19 @@ func TestGitInfoAndGlobalExcludes(t *testing.T) {
 		t.Fatalf("ignored tracked source included: %#v", got)
 	}
 }
+
+func TestIgnoreWindowsLineEndings(t *testing.T) {
+	m, root := fixture(t)
+	write(t, filepath.Join(root, ".gitignore"), "ignored.md\r\n")
+	write(t, filepath.Join(root, "ignored.md"), "crlfignoredneedle")
+	write(t, filepath.Join(root, "visible.md"), "crlfvisibleneedle")
+	if e := m.Add(root); e != nil {
+		t.Fatal(e)
+	}
+	if e := m.Sync(t.Context()); e != nil {
+		t.Fatal(e)
+	}
+	if len(hits(t, m, "crlfignoredneedle")) != 0 || len(hits(t, m, "crlfvisibleneedle")) != 1 {
+		t.Fatal("CRLF policy was not applied")
+	}
+}

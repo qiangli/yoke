@@ -79,6 +79,7 @@ func ignored(root, path string, isDir bool) bool {
 			return false
 		}
 		for _, line := range strings.Split(string(b), "\n") {
+			line = strings.TrimSuffix(line, "\r")
 			if line != "" && !strings.HasPrefix(line, "#") {
 				ps = append(ps, gitignore.ParsePattern(line, base))
 			}
