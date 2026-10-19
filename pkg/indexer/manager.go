@@ -157,7 +157,7 @@ func (m *Manager) Init() error {
 	if e := os.MkdirAll(m.dir, 0700); e != nil {
 		return e
 	}
-	if e := os.Chmod(m.dir, 0700); e != nil {
+	if e := secureDirectory(m.dir); e != nil {
 		return e
 	}
 	l, e := lockfile.AcquireWithin(filepath.Join(m.dir, "state.lock"), wait, lockfile.Holder{Name: "index", PID: os.Getpid()})

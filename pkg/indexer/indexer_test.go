@@ -13,6 +13,7 @@ import (
 	"github.com/qiangli/yoke/pkg/dbvec"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -93,7 +94,7 @@ func TestIndexEditsForgetAndReopen(t *testing.T) {
 		t.Fatal("forget retained entries")
 	}
 	st, e := os.Stat(m.dir)
-	if e != nil || st.Mode().Perm() != 0700 {
+	if e != nil || (runtime.GOOS != "windows" && st.Mode().Perm() != 0700) {
 		t.Fatal("index directory must be owner-only")
 	}
 	if _, e = os.Stat(filepath.Join(filepath.Dir(m.dir), "kb")); !os.IsNotExist(e) {
