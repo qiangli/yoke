@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -158,7 +159,7 @@ func TestToolInstallManagedSystemToolViaBinmgr(t *testing.T) {
 	if err != nil || !bytes.Equal(got, exe) {
 		t.Fatalf("pinned copy is not the decompressed asset (err %v)", err)
 	}
-	if info, _ := os.Stat(want); info == nil || info.Mode().Perm()&0o111 == 0 {
+	if info, _ := os.Stat(want); info == nil || (runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0) {
 		t.Fatal("pinned copy is not executable")
 	}
 	tl, _ := New(opts...).Tool("homeserver")
