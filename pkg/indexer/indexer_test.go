@@ -652,3 +652,45 @@ func TestPauseCancelsActiveEmbeddingWithoutWaitingForStateLock(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+func TestGitInfoAndGlobalExcludes(t *testing.T) {
+	m, root := fixture(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	repo, e := gogit.PlainInit(root, false)
+	if e != nil {
+		t.Fatal(e)
+	}
+	wt, e := repo.Worktree()
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, name := range []string{"info.md", "global.md", "visible.md"} {
+		write(t, filepath.Join(root, name), "ignorepolicyneedle "+name)
+		if _, e = wt.Add(name); e != nil {
+			t.Fatal(e)
+		}
+	}
+	write(t, filepath.Join(root, ".git", "info", "exclude"), "info.md\n")
+	global := filepath.Join(home, "global-ignore")
+	write(t, global, "global.md\n")
+	cfg, e := repo.Config()
+	if e != nil {
+		t.Fatal(e)
+	}
+	cfg.Raw.Section("core").SetOption("excludesfile", filepath.ToSlash(global))
+	if e = repo.SetConfig(cfg); e != nil {
+		t.Fatal(e)
+	}
+	if e = m.Add(root); e != nil {
+		t.Fatal(e)
+	}
+	if e = m.Sync(t.Context()); e != nil {
+		t.Fatal(e)
+	}
+	got := hits(t, m, "ignorepolicyneedle")
+	if len(got) != 1 || got[0].Record.Title != "visible.md" {
+		t.Fatalf("ignored tracked source included: %#v", got)
+	}
+}

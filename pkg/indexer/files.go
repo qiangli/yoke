@@ -19,7 +19,9 @@ import (
 	"unicode/utf8"
 
 	gogit "github.com/go-git/go-git/v5"
+	gitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
+	gitfs "github.com/go-git/go-git/v5/storage/filesystem"
 	"github.com/qiangli/yoke/pkg/lens"
 )
 
@@ -53,34 +55,77 @@ func canonicalRemote(raw string) string {
 // ignored reads only ancestor ignore files. It never traverses an excluded
 // directory just to discover its ignore rules.
 func ignored(root, path string, isDir bool) bool {
+	rr := repoRoot(root)
+	if rr != "" {
+		root = rr
+	}
 	rel, e := filepath.Rel(root, path)
 	if e != nil {
 		return true
 	}
 	parts := strings.Split(filepath.ToSlash(rel), "/")
 	var ps []gitignore.Pattern
+	read := func(name string, base []string) bool {
+		f, e := os.Open(name)
+		if os.IsNotExist(e) {
+			return true
+		}
+		if e != nil {
+			return false
+		}
+		b, e := io.ReadAll(io.LimitReader(f, (64<<10)+1))
+		f.Close()
+		if e != nil || len(b) > 64<<10 {
+			return false
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			if line != "" && !strings.HasPrefix(line, "#") {
+				ps = append(ps, gitignore.ParsePattern(line, base))
+			}
+		}
+		return true
+	}
+	// Git's global/local excludes precede per-directory rules. The repository
+	// storage filesystem resolves linked worktrees to their common metadata.
+	if rr != "" {
+		repo, e := gogit.PlainOpenWithOptions(rr, &gogit.PlainOpenOptions{EnableDotGitCommonDir: true})
+		if e != nil {
+			return true
+		}
+		cfg, e := repo.ConfigScoped(gitconfig.GlobalScope)
+		if e != nil {
+			return true
+		}
+		exclude := cfg.Raw.Section("core").Option("excludesfile")
+		if strings.HasPrefix(exclude, "~/") {
+			h, _ := os.UserHomeDir()
+			exclude = filepath.Join(h, exclude[2:])
+		}
+		if exclude != "" {
+			if !filepath.IsAbs(exclude) {
+				exclude = filepath.Join(rr, exclude)
+			}
+			if !read(exclude, nil) {
+				return true
+			}
+		}
+		if st, ok := repo.Storer.(*gitfs.Storage); ok {
+			if !read(filepath.Join(st.Filesystem().Root(), "info", "exclude"), nil) {
+				return true
+			}
+		}
+	}
 	for i := 0; i < len(parts); i++ {
 		dir := filepath.Join(append([]string{root}, parts[:i]...)...)
 		for _, name := range []string{".gitignore", ".bashyignore"} {
-			f, e := os.Open(filepath.Join(dir, name))
-			if e != nil {
-				continue
-			}
-			b, e := io.ReadAll(io.LimitReader(f, 64<<10))
-			f.Close()
-			if e != nil {
-				continue
-			}
-			for _, line := range strings.Split(string(b), "\n") {
-				line = strings.TrimSpace(line)
-				if line != "" && !strings.HasPrefix(line, "#") {
-					ps = append(ps, gitignore.ParsePattern(line, parts[:i]))
-				}
+			if !read(filepath.Join(dir, name), parts[:i]) {
+				return true
 			}
 		}
 	}
 	return gitignore.NewMatcher(ps).Match(parts, isDir)
 }
+
 func (m *Manager) files(root string, remotes map[string]string) ([]sourceFile, string, error) {
 	unit := root
 	if rr := repoRoot(root); rr != "" {
