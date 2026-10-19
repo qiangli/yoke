@@ -26,10 +26,10 @@ func TestTierVerbosePrintsTierAndTransport(t *testing.T) {
 	defer func() { k8sRunner, cloudRunner = nil, nil }()
 	oldP, oldT, oldS := peerRunner, hostTargetsRunner, sandboxRunner
 	peerRunner = func(context.Context) ([]byte, error) {
-		return []byte(`[{"host":"novidesign","online":true}]`), nil
+		return []byte(`[{"host":"fixture-remote.invalid","online":true}]`), nil
 	}
 	hostTargetsRunner = func(context.Context) ([]byte, error) {
-		return []byte(`[{"name":"dogtest","host":"novidesign"}]`), nil
+		return []byte(`[{"name":"dogtest","host":"fixture-remote.invalid"}]`), nil
 	}
 	sandboxRunner = func(_ context.Context, c string, a ...string) ([]byte, error) {
 		return []byte(`[{"Id":"c1","Names":["web"],"Image":"img:web","State":"running"}]`), nil
@@ -45,7 +45,7 @@ func TestTierVerbosePrintsTierAndTransport(t *testing.T) {
 	}{
 		{"k8s:pods@k8s:kind-dev", "lens: tier k8s transport kubectl scope k8s:kind-dev\n"},
 		{"cloud:droplets@cloud:team-ctx", "lens: tier cloud transport doctl scope cloud:team-ctx\n"},
-		{"oci:containers@sandbox:novidesign", "lens: tier sandbox transport podman scope sandbox:novidesign\n"},
+		{"oci:containers@sandbox:fixture-remote.invalid", "lens: tier sandbox transport podman scope sandbox:fixture-remote.invalid\n"},
 	} {
 		out, errb, code := runTool(t, t.TempDir(), "", "-t", "graph", "--verbose", c.operand)
 		if code != 0 {
@@ -202,10 +202,10 @@ func TestTierCommonOptionsUniform(t *testing.T) {
 
 	oldP, oldT, oldS, oldK, oldC, oldH := peerRunner, hostTargetsRunner, sandboxRunner, k8sRunner, cloudRunner, hostTransportImpl
 	peerRunner = func(context.Context) ([]byte, error) {
-		return []byte(`[{"host":"novidesign","online":true},{"host":"mac-1.example","alias":"mac","online":true}]`), nil
+		return []byte(`[{"host":"fixture-remote.invalid","online":true},{"host":"mac-1.example","alias":"mac","online":true}]`), nil
 	}
 	hostTargetsRunner = func(context.Context) ([]byte, error) {
-		return []byte(`[{"name":"dogtest","host":"novidesign"},{"name":"mac-target","host":"mac-1.example"}]`), nil
+		return []byte(`[{"name":"dogtest","host":"fixture-remote.invalid"},{"name":"mac-target","host":"mac-1.example"}]`), nil
 	}
 	fh := &fakeHost{
 		tree: map[string][]hostEntry{
@@ -242,7 +242,7 @@ func TestTierCommonOptionsUniform(t *testing.T) {
 		child   string
 	}{
 		{"dir:src@ws:issue-7", "@ws:issue-7", "lens: tier workspace transport local scope ws:issue-7\n", "a.txt"},
-		{"oci:containers@sandbox:novidesign", "@sandbox:novidesign", "lens: tier sandbox transport podman scope sandbox:novidesign\n", "web"},
+		{"oci:containers@sandbox:fixture-remote.invalid", "@sandbox:fixture-remote.invalid", "lens: tier sandbox transport podman scope sandbox:fixture-remote.invalid\n", "web"},
 		{"dir:src@mac", "@mac", "lens: tier sphere transport outpost-sftp scope host:mac\n", "a.txt"},
 		{"k8s:pods@k8s:kind-dev", "@k8s:kind-dev", "lens: tier k8s transport kubectl scope k8s:kind-dev\n", `"name":"a"`},
 		{"cloud:droplets@cloud:team-ctx", "@cloud:team-ctx", "lens: tier cloud transport doctl scope cloud:team-ctx\n", "web"},
@@ -324,7 +324,7 @@ func TestTierCommonOptionsUniform(t *testing.T) {
 	for _, loc := range []ref.Locator{
 		{Scheme: "k8s", Target: "pods", ScopeKind: "k8s", ScopeValue: "kind-dev"},
 		{Scheme: "cloud", Target: "droplets", ScopeKind: "cloud", ScopeValue: "team-ctx"},
-		{Scheme: "oci", Target: "containers", ScopeKind: "sandbox", ScopeValue: "novidesign"},
+		{Scheme: "oci", Target: "containers", ScopeKind: "sandbox", ScopeValue: "fixture-remote.invalid"},
 	} {
 		p, err := scopedProvider(nil, loc)
 		if err != nil {

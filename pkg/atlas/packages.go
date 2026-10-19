@@ -399,6 +399,7 @@ var packages = map[string]Package{
 	"dbkv":        libPkg("db", "KV category behind `db kv bucket|get|put|delete|scan|cas|batch` and the KV logical interchange behind `db export|import`, registered with dblifecycle."),
 	"dbsql":       libPkg("db", "SQL category behind `db sql query|exec|schema` and the SQL logical interchange behind `db export|import`, registered with dblifecycle."),
 	"dbdoc":       libPkg("db", "JSON document category behind `db doc get|find|put|patch|rm|batch|collection|index|export|import`, registered with dblifecycle."),
+	"indexer":     libPkg("search", "opt-in managed source ingestion behind search index and indexed retrieval; directory facts, policy, supervision and shared storage, not a second memory front door"),
 	"kbmemory":    libPkg("kb", "opt-in memory collections behind `kb memory init|select|add|inspect|update`: kb-shaped candidate records in an explicit db document target, either storage mode, through dblifecycle admission; supersede/forget stay 284 M6."),
 	"dbvec":       libPkg("db", "sqlite-vec vector category behind `db vec put|get|rm|batch|search|collection|export|import`: explicit collections with persisted dimension/metric/model, exact filtered search, supplied vectors with zero network, text only via an explicit endpoint; registered with dblifecycle."),
 	"dbfts":       libPkg("db", "Bleve full-text category with explicit mappings, source documents, lexical search and logical interchange behind db fts and db export|import."),

@@ -14,15 +14,15 @@ import (
 )
 
 // sandboxPeers mirrors `outpost peers status --json`: Dragon is the local
-// dev-loop host (also reachable by alias), novidesign a remote
+// dev-loop host (also reachable by alias), fixture-remote.invalid a remote
 // Podman-backed peer with one saved SSH target, lern another remote peer
 // with no saved target.
 const sandboxPeers = `[
  {"host":"dragon","alias":"dbox","online":true},
- {"host":"novidesign","online":true},
+ {"host":"fixture-remote.invalid","online":true},
  {"host":"lern","online":true}]`
 
-const sandboxTargets = `[{"name":"dogtest","host":"novidesign"},{"name":"dragonsftp","host":"dragon"}]`
+const sandboxTargets = `[{"name":"dogtest","host":"fixture-remote.invalid"},{"name":"dragonsftp","host":"dragon"}]`
 
 const sandboxPodman = `[{"Id":"c1","Names":["web"],"Image":"img:web","State":"running"}]`
 
@@ -106,18 +106,18 @@ func TestTierSandboxRefusesDragonLocal(t *testing.T) {
 	}
 }
 
-// TestTierSandboxPodmanReadOnly pins the novidesign contract: the explicit
+// TestTierSandboxPodmanReadOnly pins the fixture-remote.invalid contract: the explicit
 // peer resolves to exactly one saved SSH target, the podman listing travels
-// as literal outpost argv, emitted refs keep the @sandbox:novidesign scope,
+// as literal outpost argv, emitted refs keep the @sandbox:fixture-remote.invalid scope,
 // and no write-capable stream exists.
 func TestTierSandboxPodmanReadOnly(t *testing.T) {
 	_, _, argv := sandboxFixture(t)
 	cwd := t.TempDir()
-	out, errOut, code := runTool(t, cwd, "", "-t", "graph", "oci:containers@sandbox:novidesign")
+	out, errOut, code := runTool(t, cwd, "", "-t", "graph", "oci:containers@sandbox:fixture-remote.invalid")
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%q", code, errOut)
 	}
-	if !strings.Contains(out, "web") || !strings.Contains(out, `"oci:containers/c1@sandbox:novidesign"`) {
+	if !strings.Contains(out, "web") || !strings.Contains(out, `"oci:containers/c1@sandbox:fixture-remote.invalid"`) {
 		t.Fatalf("rows lost the sandbox scope:\n%s", out)
 	}
 	if want := []string{"outpost", "ssh", "exec", "dogtest", "--", "podman", "ps", "--all", "--format", "json"}; !reflect.DeepEqual(*argv, want) {
@@ -143,7 +143,7 @@ func TestTierSandboxPodmanReadOnly(t *testing.T) {
 		}
 	}
 
-	loc := ref.Locator{Scheme: "oci", Target: "containers", ScopeKind: "sandbox", ScopeValue: "novidesign"}
+	loc := ref.Locator{Scheme: "oci", Target: "containers", ScopeKind: "sandbox", ScopeValue: "fixture-remote.invalid"}
 	p, err := scopedProvider(nil, loc)
 	if err != nil {
 		t.Fatal(err)
@@ -170,9 +170,9 @@ func TestTierSandboxPodmanReadOnly(t *testing.T) {
 func TestTierSandboxExplicitScope(t *testing.T) {
 	_, _, argv := sandboxFixture(t)
 	for _, loc := range []ref.Locator{
-		{Scheme: "dir", Target: "src", ScopeKind: "sandbox", ScopeValue: "novidesign"},
-		{Scheme: "k8s", Target: "pods", ScopeKind: "sandbox", ScopeValue: "novidesign"},
-		{Scheme: "cloud", Target: "droplets", ScopeKind: "sandbox", ScopeValue: "novidesign"},
+		{Scheme: "dir", Target: "src", ScopeKind: "sandbox", ScopeValue: "fixture-remote.invalid"},
+		{Scheme: "k8s", Target: "pods", ScopeKind: "sandbox", ScopeValue: "fixture-remote.invalid"},
+		{Scheme: "cloud", Target: "droplets", ScopeKind: "sandbox", ScopeValue: "fixture-remote.invalid"},
 		{Scheme: "oci", Target: "containers", ScopeKind: "sandbox", ScopeValue: "nobody"},
 		{Scheme: "oci", Target: "containers", ScopeKind: "sandbox", ScopeValue: "lern"},
 		{Scheme: "oci", Target: "containers", ScopeKind: "sandbox", ScopeValue: "-bad"},

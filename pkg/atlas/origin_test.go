@@ -155,7 +155,7 @@ func TestOriginCountsPinned(t *testing.T) {
 		atlas.OriginGNU:      106,                    // 105 upstream names + `[`, the alias of test
 		atlas.OriginUnix:     51 + dksRuntimeTools(), // Includes gencat and the classic interop tools cygpath/wslpath.
 		atlas.OriginExternal: 12,
-		atlas.OriginBashy:    14, // + lens (Sprint 446 S3) and db (Sprint 453)
+		atlas.OriginBashy:    15, // lens, its bounded script helper, and db
 	}
 	for o, n := range want {
 		if got[o] != n {

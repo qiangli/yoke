@@ -916,6 +916,9 @@ func sortedKeys(m map[string]Entry) []string {
 }
 
 func init() {
+	addTools(GroupOrch, "lens-script")
+	capTools(CapSpawnsProcesses, "lens-script")
+	eff(EffExec, "lens-script")
 	// In-process tools (tier userland by definition). The coverage test
 	// asserts this set == tool.Names() with cmds/all + cmds/graph +
 	// cmds/resources registered (the public Bashy inventory).
@@ -1812,7 +1815,7 @@ func init() {
 		"make", "strip", "lp", "posix-providers",
 		// verbs: metered spend, ungoverned processes, remote control planes,
 		// durable message buses, history-rewriting forges, registry deletions
-		"weave", "agentic", "dag", "sdlc", "chat", "invoke", "delegate",
+		"weave", "agentic", "lens-script", "dag", "sdlc", "chat", "invoke", "delegate",
 		"genie", "ycode", "coach", "meet", "supervise", "mb", "messages",
 		"ping", "inbox", "notify", "bus", "herald", "tool", "model", "agent",
 		"schedule", "act", "act-runner", "mirror", "mcp", "skill", "oci",
