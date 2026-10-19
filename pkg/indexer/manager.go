@@ -219,6 +219,9 @@ func (m *Manager) Add(path string) error {
 		if rr := repoRoot(p); rr != "" {
 			p = rr
 		}
+		if m.badRoot(p, true) {
+			return fmt.Errorf("index: excluded repository root %s", p)
+		}
 		if m.cfg.Roots[p] == nil && len(m.cfg.Roots) >= m.cfg.MaxRoots {
 			return fmt.Errorf("index: root cap %d", m.cfg.MaxRoots)
 		}
@@ -287,6 +290,9 @@ func (m *Manager) visit(path string, at time.Time) {
 	}
 	if rr := repoRoot(p); rr != "" {
 		p = rr
+	}
+	if m.badRoot(p, false) {
+		return
 	}
 	m.observe(p, at)
 }

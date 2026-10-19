@@ -803,3 +803,27 @@ func TestCustomStateAndCachesNeverIngested(t *testing.T) {
 		t.Fatal("cache discovery accepted")
 	}
 }
+
+func TestHomeRepositoryNeverAutoPromoted(t *testing.T) {
+	m, home := fixture(t)
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if _, e := gogit.PlainInit(home, false); e != nil {
+		t.Fatal(e)
+	}
+	child := filepath.Join(home, "project")
+	write(t, filepath.Join(child, "note.md"), "homerepoforbiddenneedle")
+	now := time.Now().UTC()
+	for _, day := range []int{1, 2, 3} {
+		if e := m.Visit(child, now.AddDate(0, 0, -day)); e != nil {
+			t.Fatal(e)
+		}
+	}
+	st, e := m.Status()
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(st.Roots) != 0 {
+		t.Fatal("home repository auto-promoted", st.Roots)
+	}
+}
