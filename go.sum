@@ -815,8 +815,16 @@ github.com/qiangli/bonsai v0.0.0-20261013041512-fbfc95fa4dda h1:ONMy/PmqSAQA3bzb
 github.com/qiangli/bonsai v0.0.0-20261013041512-fbfc95fa4dda/go.mod h1:XPDzA91wEz1K4qkkXyqGpkd41M+zDIY6wkz5Aird7Vs=
 github.com/qiangli/coreutils v0.0.0-20261017213852-cd33e2a2594a h1:A7jO7h4rd2mUcLIPZyFCR4ZOCfCmSZI/5a46kSNRvgM=
 github.com/qiangli/coreutils v0.0.0-20261017213852-cd33e2a2594a/go.mod h1:nP8R/LOBZFHjHvzgE+TX3nASmemDaiMjOnei+YPuxq8=
+github.com/qiangli/coreutils v0.0.0-20261018024844-02b24ff1db5d h1:eCLO0HWO/Fa9d27smal1wxUjVB+UQ1X8xJ+x4wyyPKs=
+github.com/qiangli/coreutils v0.0.0-20261018024844-02b24ff1db5d/go.mod h1:nP8R/LOBZFHjHvzgE+TX3nASmemDaiMjOnei+YPuxq8=
+github.com/qiangli/coreutils v0.0.0-20261018113912-178acbc68450 h1:Aqt2ijXsiAYY13KhfC+NcdGPKLHvZrugNm/UGhX0Twk=
+github.com/qiangli/coreutils v0.0.0-20261018113912-178acbc68450/go.mod h1:nP8R/LOBZFHjHvzgE+TX3nASmemDaiMjOnei+YPuxq8=
 github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261017213852-cd33e2a2594a h1:6zS3KRLy5B9VeXL2iTmY1/Pb0875R7GekoM5krgwj1Q=
 github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261017213852-cd33e2a2594a/go.mod h1:p0JkVxHS3JKYxDz8kOYvMdPM8YRH94vZoWaFljD1vAg=
+github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261018024844-02b24ff1db5d h1:ZNPgc5QZ+q/3CpNVGnWq7cJcmly44c+rdvVGdMfVDYo=
+github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261018024844-02b24ff1db5d/go.mod h1:p0JkVxHS3JKYxDz8kOYvMdPM8YRH94vZoWaFljD1vAg=
+github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261018113912-178acbc68450 h1:KCsJLKSON/SLbKtjgqE8CU5DLV5NF3sOyeOLgZXupzI=
+github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261018113912-178acbc68450/go.mod h1:p0JkVxHS3JKYxDz8kOYvMdPM8YRH94vZoWaFljD1vAg=
 github.com/qiangli/filebrowser/v2 v2.0.0-20261013004903-9c7b5c8e3d09 h1:8BBH4NPnF6UYP5GbGGu2iM6TS1h3EY+v8ml/555jcsg=
 github.com/qiangli/filebrowser/v2 v2.0.0-20261013004903-9c7b5c8e3d09/go.mod h1:86f/lT85KHk1f2smUl+MdgDvX4nO2lQqA+tWrGZhj0A=
 github.com/qiangli/gfy v0.0.0-20261013004914-30d38f086034 h1:XHTsT5keRw4zmpOmnwUM1uiAtRlh2eJa/38OLDEtHmA=
@@ -825,6 +833,8 @@ github.com/qiangli/gotreesitter v0.0.0-20261013004852-f03173f827ed h1:QDBn3tsuUC
 github.com/qiangli/gotreesitter v0.0.0-20261013004852-f03173f827ed/go.mod h1:G2usTJhlsuOjs/pb4THZE25TrpHxyZ7xfVgmnWzgCmI=
 github.com/qiangli/sh/v3 v3.0.0-20261014083225-477b218e535d h1:WeYsXOry8H3Bhhz0FqHjKvrTOHGmp0YiDcZsSm0+7BM=
 github.com/qiangli/sh/v3 v3.0.0-20261014083225-477b218e535d/go.mod h1:tyFtJgC2PikzHoF5joV+bRq5JdGSisHLNPZNsh9nxgI=
+github.com/qiangli/sqlite v1.50.2-0.20261018085128-5fb52bf328cb h1:LLfdQXY/uXHpJm9eYP0sdcFg4IHQHzIOUwslX9TpqxI=
+github.com/qiangli/sqlite v1.50.2-0.20261018085128-5fb52bf328cb/go.mod h1:tcNzv5p84E0skkmJn038y+hWJbLQXQqEnQfeh5r2JLM=
 github.com/quic-go/qpack v0.5.1 h1:giqksBPnT/HDtZ6VhtFKgoLOWmlyo9Ei6u9PqzIMbhI=
 github.com/quic-go/qpack v0.5.1/go.mod h1:+PC4XFrEskIVkcLzpEkbLqq1uCoxPhQuvK5rH1ZgaEg=
 github.com/quic-go/quic-go v0.54.0 h1:6s1YB9QotYI6Ospeiguknbp2Znb/jZYjZLRXn9kMQBg=
@@ -1565,9 +1575,3 @@ tags.cncf.io/container-device-interface v1.1.0 h1:RnxNhxF1JOu6CJUVpetTYvrXHdxw9j
 tags.cncf.io/container-device-interface v1.1.0/go.mod h1:76Oj0Yqp9FwTx/pySDc8Bxjpg+VqXfDb50cKAXVJ34Q=
 tags.cncf.io/container-device-interface/specs-go v1.1.0 h1:QRZVeAceQM+zTZe12eyfuJuuzp524EKYwhmvLd+h+yQ=
 tags.cncf.io/container-device-interface/specs-go v1.1.0/go.mod h1:u86hoFWqnh3hWz3esofRFKbI261bUlvUfLKGrDhJkgQ=
-github.com/qiangli/coreutils v0.0.0-20261018024844-02b24ff1db5d h1:eCLO0HWO/Fa9d27smal1wxUjVB+UQ1X8xJ+x4wyyPKs=
-github.com/qiangli/coreutils v0.0.0-20261018024844-02b24ff1db5d/go.mod h1:nP8R/LOBZFHjHvzgE+TX3nASmemDaiMjOnei+YPuxq8=
-github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261018024844-02b24ff1db5d h1:ZNPgc5QZ+q/3CpNVGnWq7cJcmly44c+rdvVGdMfVDYo=
-github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261018024844-02b24ff1db5d/go.mod h1:p0JkVxHS3JKYxDz8kOYvMdPM8YRH94vZoWaFljD1vAg=
-github.com/qiangli/sqlite v1.50.2-0.20261018085128-5fb52bf328cb h1:LLfdQXY/uXHpJm9eYP0sdcFg4IHQHzIOUwslX9TpqxI=
-github.com/qiangli/sqlite v1.50.2-0.20261018085128-5fb52bf328cb/go.mod h1:tcNzv5p84E0skkmJn038y+hWJbLQXQqEnQfeh5r2JLM=
