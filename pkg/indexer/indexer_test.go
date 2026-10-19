@@ -772,3 +772,34 @@ func TestDirectoryFactsBeforeInitialization(t *testing.T) {
 		t.Fatal("off index recorded directory facts")
 	}
 }
+
+func TestCustomStateAndCachesNeverIngested(t *testing.T) {
+	_, root := fixture(t)
+	home := filepath.Join(root, "state-home")
+	m := New(home)
+	if e := m.Init(); e != nil {
+		t.Fatal(e)
+	}
+	write(t, filepath.Join(home, "cligw", "token"), "privatecachemarker")
+	for key, name := range map[string]string{"GOMODCACHE": "modules-store", "GOCACHE": "compiler-data", "OLLAMA_MODELS": "weights-store", "BASHY_BIN_CACHE": "tools-data"} {
+		p := filepath.Join(root, name)
+		t.Setenv(key, p)
+		write(t, filepath.Join(p, "manifest.txt"), "privatecachemarker")
+	}
+	write(t, filepath.Join(root, "safe.md"), "publiccachecontrolmarker")
+	if e := m.Add(root); e != nil {
+		t.Fatal(e)
+	}
+	if e := m.Sync(t.Context()); e != nil {
+		t.Fatal(e)
+	}
+	if len(hits(t, m, "privatecachemarker")) != 0 || len(hits(t, m, "publiccachecontrolmarker")) != 1 {
+		t.Fatal("private state/model/cache was ingested")
+	}
+	if e := m.Add(home); e == nil {
+		t.Fatal("explicit private state root accepted")
+	}
+	if RecordVisit(home, os.Getenv("GOMODCACHE"), time.Now()) {
+		t.Fatal("cache discovery accepted")
+	}
+}

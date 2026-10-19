@@ -71,7 +71,15 @@ type Manager struct {
 	Embed kbmemory.Embedder
 }
 
-func New(home string) *Manager { return &Manager{dir: filepath.Join(home, "index"), Now: time.Now} }
+func New(home string) *Manager {
+	if absolute, e := filepath.Abs(home); e == nil {
+		home = absolute
+	}
+	if resolved, e := filepath.EvalSymlinks(home); e == nil {
+		home = resolved
+	}
+	return &Manager{dir: filepath.Join(home, "index"), Now: time.Now}
+}
 func (m *Manager) now() time.Time {
 	if m.Now != nil {
 		return m.Now().UTC()
@@ -454,14 +462,48 @@ func (m *Manager) badRoot(p string, explicit bool) bool {
 	if inside(temp, p) {
 		return true
 	}
-	return inside(m.dir, p)
+	return m.privateSource(p)
+}
+
+// Custom state/model/cache locations are private even when their basename is
+// ordinary text and an ancestor was explicitly selected for indexing.
+func (m *Manager) privateSource(path string) bool {
+	roots := []string{filepath.Dir(m.dir)}
+	for _, key := range []string{"OLLAMA_MODELS", "BASHY_BIN_CACHE", "GOMODCACHE", "GOCACHE"} {
+		if p := os.Getenv(key); p != "" {
+			roots = append(roots, p)
+		}
+	}
+	gp := os.Getenv("GOPATH")
+	if gp == "" {
+		if home, e := os.UserHomeDir(); e == nil {
+			gp = filepath.Join(home, "go")
+		}
+	}
+	for _, p := range filepath.SplitList(gp) {
+		if p != "" {
+			roots = append(roots, filepath.Join(p, "pkg"))
+		}
+	}
+	for _, root := range roots {
+		if absolute, e := filepath.Abs(root); e == nil {
+			root = absolute
+		}
+		if resolved, e := filepath.EvalSymlinks(root); e == nil {
+			root = resolved
+		}
+		if inside(root, path) {
+			return true
+		}
+	}
+	return false
 }
 func inside(root, p string) bool {
 	r, e := filepath.Rel(root, p)
 	return e == nil && (r == "." || r != ".." && !strings.HasPrefix(r, ".."+string(filepath.Separator)))
 }
 func (m *Manager) excluded(root, path string, st fs.FileInfo) bool {
-	if placeholder(st) || st.Mode()&os.ModeSymlink != 0 || inside(m.dir, path) {
+	if placeholder(st) || st.Mode()&os.ModeSymlink != 0 || m.privateSource(path) {
 		return true
 	}
 	rel, e := filepath.Rel(root, path)
