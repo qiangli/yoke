@@ -1,0 +1,6 @@
+kind: "adapter"
+name: "doctl-compute-droplet-list"
+match: ["doctl", "compute", "droplet", "list"]
+preview_level: "unsupported"
+effects: ["net.egress", "proc.spawn"]
+json: ["--output=json"]
