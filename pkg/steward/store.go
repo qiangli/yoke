@@ -250,6 +250,44 @@ func Open(dir string, opts ...Option) (*Store, error) {
 	return s, nil
 }
 
+// openExistingSeat reads the canonical seat without creating a store, binding,
+// registry directory, or lock. Projections such as host role enumeration must
+// not turn a read into a seat mutation.
+func openExistingSeat() (*Store, error) {
+	sc, err := (OSScope{}).Scope()
+	if err != nil {
+		return nil, err
+	}
+	root, err := defaultRegistryRoot()
+	if err != nil {
+		return nil, err
+	}
+	s := &Store{scope: sc, scopeProvider: OSScope{}, registryRoot: root, maxTranscript: MaxTranscriptBytes}
+	var entry registryEntry
+	found, err := readJSON(s.registryPath(), &entry)
+	if err != nil || !found || entry.Digest != sc.Digest() {
+		return nil, fmt.Errorf("steward: no readable canonical seat binding: %v", err)
+	}
+	dir, err := DefaultSeatDir()
+	if err != nil {
+		return nil, err
+	}
+	s.dir, err = canonicalDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	boundDir, err := canonicalDir(entry.Dir)
+	if err != nil || s.dir != boundDir {
+		return nil, fmt.Errorf("steward: seat directory does not match canonical binding: %v", err)
+	}
+	var binding scopeBinding
+	found, err = readJSON(filepath.Join(s.dir, "scope.json"), &binding)
+	if err != nil || !found || binding.Digest != sc.Digest() {
+		return nil, fmt.Errorf("steward: no readable store scope binding: %v", err)
+	}
+	return s, nil
+}
+
 // makeCanonicalDir creates the store directory and returns the ONE string everything else
 // compares it by. Creation comes first, and the canonical form is read back off the created
 // directory, because the two orders do not agree and only this one is stable.

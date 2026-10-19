@@ -44,7 +44,8 @@ func rolesForBoard() []bus.HostRole {
 		Label: "steward",
 		Topic: stewardAssignment().Topic(),
 	}
-	if st, err := Open(""); err == nil {
+	st, err := openExistingSeat()
+	if err == nil {
 		if view, err := st.Status(time.Now()); err == nil && !view.Authority.Vacant {
 			role.Holder = view.Authority.Holder.Name
 			role.HolderInstance = instanceUUIDOf(view.Authority.Holder)
@@ -54,7 +55,7 @@ func rolesForBoard() []bus.HostRole {
 	// deputy:<scope> is role mail through the same addressing. The address is
 	// the SCOPE, so it survives vacancy and handoff; Holder is the current
 	// instance UUID snapshot, empty while vacant — never a reusable label.
-	if st, err := Open(""); err == nil {
+	if err == nil {
 		if occs, err := st.DeputyOccupancies(time.Now()); err == nil {
 			for _, occ := range occs {
 				out = append(out, bus.HostRole{Label: occ.Address, Topic: occ.Topic, Holder: occ.Holder})
@@ -75,7 +76,7 @@ func rolesForBoard() []bus.HostRole {
 // it" is the single most useful thing this can say, and it is exactly what was
 // invisible when a steward ran for hours against an unclaimed seat.
 func seatsForLexicon() []lexicon.SeatInfo {
-	st, err := Open("")
+	st, err := openExistingSeat()
 	if err != nil {
 		return nil
 	}

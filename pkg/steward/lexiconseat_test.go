@@ -1,11 +1,32 @@
 package steward
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/qiangli/yoke/pkg/bus"
 )
+
+func TestRolesForBoardDoesNotCreateSeatOrRegistry(t *testing.T) {
+	seatHome := t.TempDir()
+	accountHome := t.TempDir()
+	t.Setenv("HOME", seatHome)
+	oldHome := accountHomeFn
+	accountHomeFn = func() (string, string, error) { return accountHome, "account:test", nil }
+	t.Cleanup(func() { accountHomeFn = oldHome })
+
+	roles := rolesForBoard()
+	if len(roles) != 1 || roles[0].Label != "steward" {
+		t.Fatalf("unexpected vacant role list: %+v", roles)
+	}
+	for _, path := range []string{filepath.Join(seatHome, ".bashy", "steward"), filepath.Join(accountHome, ".bashy", "steward")} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("read-only role lookup created %s: %v", path, err)
+		}
+	}
+}
 
 func TestRolesForBoard_HolderUUIDAndLegacyName(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
