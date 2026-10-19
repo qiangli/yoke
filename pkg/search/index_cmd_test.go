@@ -11,7 +11,15 @@ import (
 func TestManagedIndexCLIAndFallback(t *testing.T) {
 	t.Setenv("BASHY_HOME", filepath.Join(t.TempDir(), "home"))
 	t.Setenv("BASHY_COORD_DIR", filepath.Join(t.TempDir(), "coord"))
-	root := t.TempDir()
+	userHome, e := os.UserHomeDir()
+	if e != nil {
+		t.Fatal(e)
+	}
+	root, e := os.MkdirTemp(userHome, "bashy-index-cli-test-")
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() { os.RemoveAll(root) })
 	if e := os.WriteFile(filepath.Join(root, "note.md"), []byte("cliindexmarker"), 0600); e != nil {
 		t.Fatal(e)
 	}

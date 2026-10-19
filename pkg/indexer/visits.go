@@ -3,6 +3,7 @@ package indexer
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"github.com/qiangli/coreutils/pkg/lockfile"
 	"io"
 	"os"
@@ -16,14 +17,25 @@ type directoryVisit struct {
 }
 
 // RecordVisit writes only a directory and timestamp. It is best-effort,
-// non-blocking, and never creates or enables an index. No argv is retained.
+// non-blocking. It may create the owner-only directory journal, never stores,
+// configuration or a service. No argv is retained.
 func RecordVisit(home, path string, at time.Time) bool {
 	m := New(home)
-	if e := m.load(); e != nil || !m.cfg.Enabled {
-		return false
-	}
 	p, e := canonical(path)
 	if e != nil || m.badRoot(p, false) {
+		return false
+	}
+	if e := m.load(); e != nil {
+		if !errors.Is(e, os.ErrNotExist) || fileExists(filepath.Join(m.dir, "disabled")) {
+			return false
+		}
+		if st, e := os.Lstat(m.dir); e == nil && st.Mode()&os.ModeSymlink != 0 {
+			return false
+		}
+		if os.MkdirAll(m.dir, 0700) != nil || secureDirectory(m.dir) != nil {
+			return false
+		}
+	} else if !m.cfg.Enabled {
 		return false
 	}
 	l, e := lockfile.TryAcquire(filepath.Join(m.dir, "visits.lock"), lockfile.Holder{Name: "directory visit", PID: os.Getpid()})

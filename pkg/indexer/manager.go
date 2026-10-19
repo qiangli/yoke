@@ -434,18 +434,6 @@ func (m *Manager) consumeJournal() {
 var excludedNames = map[string]bool{"AppData": true, "Application Data": true, "Local Settings": true, "appdata": true, "library": true, "node_modules": true, "vendor": true, "venv": true, "build": true, "dist": true, "target": true, "Library": true, "tmp": true, "temp": true, "cache": true, "caches": true, "keychains": true, "passwords": true, "credentials": true, "models": true, "__pycache__": true, "System Volume Information": true}
 
 func (m *Manager) badRoot(p string, explicit bool) bool {
-	// Explicit synthetic roots below the system temp directory are used by
-	// acceptance tests. The temp directory itself and automatic discovery stay excluded.
-	tmp := filepath.Clean(os.TempDir())
-	if explicit && p != tmp && inside(tmp, p) {
-		rel, _ := filepath.Rel(tmp, p)
-		for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
-			if strings.HasPrefix(part, ".") || excludedNames[part] {
-				return true
-			}
-		}
-		return inside(m.dir, p)
-	}
 
 	if p == filepath.VolumeName(p)+string(filepath.Separator) {
 		return true
@@ -455,15 +443,16 @@ func (m *Manager) badRoot(p string, explicit bool) bool {
 		return true
 	}
 	for _, part := range strings.Split(filepath.ToSlash(p), "/") {
-		if strings.HasPrefix(part, ".") || excludedNames[part] && !(explicit && (part == "tmp" || part == "temp")) {
+		if strings.HasPrefix(part, ".") || excludedNames[part] {
 			return true
 		}
 	}
-	if !explicit {
-		tmp := filepath.Clean(os.TempDir())
-		if inside(tmp, p) {
-			return true
-		}
+	temp := filepath.Clean(os.TempDir())
+	if resolved, e := filepath.EvalSymlinks(temp); e == nil {
+		temp = resolved
+	}
+	if inside(temp, p) {
+		return true
 	}
 	return inside(m.dir, p)
 }

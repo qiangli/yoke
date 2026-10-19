@@ -21,6 +21,25 @@ import (
 	"github.com/qiangli/yoke/pkg/kbmemory"
 )
 
+// Source fixtures are temporary directories under the test user's home, not
+// under the OS scratch area that production policy must always exclude.
+func sourceTempDir(t *testing.T) string {
+	t.Helper()
+	home, e := os.UserHomeDir()
+	if e != nil {
+		t.Fatal(e)
+	}
+	p, e := os.MkdirTemp(home, "bashy-index-test-")
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() { os.RemoveAll(p) })
+	p, e = filepath.EvalSymlinks(p)
+	if e != nil {
+		t.Fatal(e)
+	}
+	return p
+}
 func fixture(t *testing.T) (*Manager, string) {
 	t.Helper()
 	home := filepath.Join(t.TempDir(), "home")
@@ -30,7 +49,7 @@ func fixture(t *testing.T) (*Manager, string) {
 	if e := m.Init(); e != nil {
 		t.Fatal(e)
 	}
-	return m, t.TempDir()
+	return m, sourceTempDir(t)
 }
 func write(t *testing.T, p, s string) {
 	t.Helper()
@@ -316,7 +335,7 @@ func TestGitTrackedDeduplicatedAndCommitRefresh(t *testing.T) {
 	if _, e = repo.CreateRemote(&config.RemoteConfig{Name: "origin", URLs: []string{"https://example.invalid/team/repo.git"}}); e != nil {
 		t.Fatal(e)
 	}
-	clone := filepath.Join(t.TempDir(), "clone")
+	clone := filepath.Join(sourceTempDir(t), "clone")
 	if e = os.CopyFS(clone, os.DirFS(root)); e != nil {
 		t.Fatal(e)
 	}
@@ -708,5 +727,48 @@ func TestIgnoreWindowsLineEndings(t *testing.T) {
 	}
 	if len(hits(t, m, "crlfignoredneedle")) != 0 || len(hits(t, m, "crlfvisibleneedle")) != 1 {
 		t.Fatal("CRLF policy was not applied")
+	}
+}
+
+func TestTemporaryRootsAlwaysExcluded(t *testing.T) {
+	m, _ := fixture(t)
+	root := t.TempDir()
+	if e := m.Add(root); e == nil {
+		t.Fatal("explicit OS temp root accepted")
+	}
+	if RecordVisit(filepath.Dir(m.dir), root, time.Now()) {
+		t.Fatal("OS temp visit recorded")
+	}
+}
+func TestDirectoryFactsBeforeInitialization(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "state")
+	root := sourceTempDir(t)
+	write(t, filepath.Join(root, "note.md"), "preinitvisitneedle")
+	now := time.Now().UTC()
+	for _, days := range []int{1, 2, 3} {
+		if !RecordVisit(home, root, now.AddDate(0, 0, -days)) {
+			t.Fatal("safe visit not recorded")
+		}
+	}
+	for _, name := range []string{"state.json", "documents.db", "fulltext"} {
+		if _, e := os.Stat(filepath.Join(home, "index", name)); !os.IsNotExist(e) {
+			t.Fatal("discovery provisioned index", name, e)
+		}
+	}
+	m := New(home)
+	if e := m.Init(); e != nil {
+		t.Fatal(e)
+	}
+	if e := m.Sync(t.Context()); e != nil {
+		t.Fatal(e)
+	}
+	if len(hits(t, m, "preinitvisitneedle")) != 1 {
+		t.Fatal("pre-init visits were not consumed")
+	}
+	if e := m.SetEnabled(false); e != nil {
+		t.Fatal(e)
+	}
+	if RecordVisit(home, root, now) {
+		t.Fatal("off index recorded directory facts")
 	}
 }
