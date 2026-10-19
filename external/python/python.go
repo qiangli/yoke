@@ -161,8 +161,55 @@ func run(ctx context.Context, mode string, args []string) error {
 	}
 	c := binmgr.Command(ctx, uv, argv...)
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
-	c.Env = uvEnv(notrack.Env(append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))))
+	env := append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if mode == "python" || mode == "pip" {
+		cwd, _ := os.Getwd()
+		env = frontDoorEnv(env, cwd)
+	}
+	c.Env = uvEnv(notrack.Env(env))
 	return c.Run()
+}
+
+// frontDoorEnv makes `bashy python|pip` use the managed interpreter like
+// EnsureInterpreter: uv ignores host pythons unless the caller set
+// UV_PYTHON_PREFERENCE, and the version is $BASHY_PYTHON_VERSION, else the
+// nearest .python-version (left to uv), else DefaultPython.
+func frontDoorEnv(env []string, cwd string) []string {
+	get := func(k string) (string, bool) {
+		for i := len(env) - 1; i >= 0; i-- {
+			if v, ok := strings.CutPrefix(env[i], k+"="); ok {
+				return v, true
+			}
+		}
+		return "", false
+	}
+	if _, ok := get("UV_PYTHON_PREFERENCE"); !ok {
+		env = append(env, "UV_PYTHON_PREFERENCE=only-managed")
+	}
+	if v := strings.TrimSpace(os.Getenv("BASHY_PYTHON_VERSION")); v != "" {
+		return append(env, "UV_PYTHON="+v)
+	}
+	if hasPythonVersionFile(cwd) {
+		return env
+	}
+	if _, ok := get("UV_PYTHON"); ok {
+		return env
+	}
+	return append(env, "UV_PYTHON="+DefaultPython)
+}
+
+func hasPythonVersionFile(dir string) bool {
+	for dir != "" {
+		if _, err := os.Stat(filepath.Join(dir, ".python-version")); err == nil {
+			return true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return false
 }
 
 // NewUvCmd / NewPythonCmd / NewPipCmd are the `bashy uv|python|pip` front-doors.
