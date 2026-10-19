@@ -217,6 +217,9 @@ func (m *Manager) Add(path string) error {
 			return fmt.Errorf("index: excluded root %s", p)
 		}
 		if rr := repoRoot(p); rr != "" {
+			if rr != p && m.badRoot(rr, false) {
+				return fmt.Errorf("index: select repository root %s explicitly", rr)
+			}
 			p = rr
 		}
 		if m.badRoot(p, true) {

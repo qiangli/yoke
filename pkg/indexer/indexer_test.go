@@ -826,4 +826,10 @@ func TestHomeRepositoryNeverAutoPromoted(t *testing.T) {
 	if len(st.Roots) != 0 {
 		t.Fatal("home repository auto-promoted", st.Roots)
 	}
+	if e := m.Add(child); e == nil {
+		t.Fatal("child selection authorized the entire home repository")
+	}
+	if e := m.Add(home); e != nil {
+		t.Fatal("explicit home selection refused", e)
+	}
 }
