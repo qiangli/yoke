@@ -24,16 +24,18 @@ func TestIndexOwnerACL(t *testing.T) {
 			t.Fatal(e)
 		}
 		acl, _, e := sd.DACL()
-		if e != nil || acl == nil || acl.AceCount != 1 {
-			t.Fatalf("%s: expected one owner ACE: %v", path, e)
+		if e != nil || acl == nil || acl.AceCount == 0 {
+			t.Fatalf("%s: expected owner ACEs: %v; %s", path, e, sd.String())
 		}
-		var ace *windows.ACCESS_ALLOWED_ACE
-		if e := windows.GetAce(acl, 0, &ace); e != nil {
-			t.Fatal(e)
-		}
-		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || !sid.Equals(user.User.Sid) {
-			t.Fatalf("%s: non-owner access", path)
+		for i := uint32(0); i < uint32(acl.AceCount); i++ {
+			var ace *windows.ACCESS_ALLOWED_ACE
+			if e := windows.GetAce(acl, i, &ace); e != nil {
+				t.Fatal(e)
+			}
+			sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+			if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || !sid.Equals(user.User.Sid) {
+				t.Fatalf("%s: non-owner access: %s", path, sd.String())
+			}
 		}
 	}
 }
