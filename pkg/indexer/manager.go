@@ -456,6 +456,9 @@ func (m *Manager) badRoot(p string, explicit bool) bool {
 		return true
 	}
 	h, _ := os.UserHomeDir()
+	if resolved, e := filepath.EvalSymlinks(h); e == nil {
+		h = resolved
+	}
 	if p == h && !explicit {
 		return true
 	}
