@@ -3,7 +3,7 @@
     "/usr/bin/sandbox-exec",
     "-f",
     "/tmp/s446-run513-vendor/guard.sb",
-    "/Users/qiangli/.local/share/claude/versions/2.1.284",
+    "$HOME/.local/share/claude/versions/2.1.284",
     "-p",
     "--max-turns",
     "1",

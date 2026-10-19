@@ -17,7 +17,7 @@ cli:
     # headless backend used by the fleet launch above.
     steer_exec: bashy ycode -m {model}
     # supports_say is MEASURED (Sprint #323, stories #1115/#1098,
-    # 2026-09-28, dragon, ycode 2efcc3a): `bashy chat --agent <genie on
+    # 2026-09-28, dev-host, ycode 2efcc3a): `bashy chat --agent <genie on
     # gpt-oss:20b> -i --yolo` under a headless pty, steered only through
     # `bashy chat steer|interrupt`.
     #   steer  a line sent while a turn ran was echoed at once and acted on

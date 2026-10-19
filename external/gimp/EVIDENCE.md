@@ -5,7 +5,7 @@ Build/license admission, fixture tests, and live verified support are
 distinct rows below; a compiling wrapper or a passing fake-executor test
 is NOT live support. linux/amd64 is PINNED with manifest+bytes verified
 digests (see Pins) and LIVE-VERIFIED on an approved linux/amd64 target
-(see "Live evidence — novidesign.local"); every other platform fails
+(see "Live evidence — macos-host"); every other platform fails
 closed.
 
 Precedent: `external/blender` (story f5817629a95b) is the accepted
@@ -122,7 +122,7 @@ python-fu-eval`, trailing `--quit`, and the absence of GUI/batch-escape
 flags.
 
 Program-body provenance (doc-verified, then live-verified on
-novidesign.local — see below): every
+macos-host — see below): every
 call in the fixed template was checked against the project's own
 `gimp-api-docs-3.2.6` (`v3.2/api-docs/gimp-api-docs-3.2.6.tar.xz`,
 fetched 2026-10-18) — `Gimp.file_load(run_mode, file)`,
@@ -135,7 +135,7 @@ image to any supported format by extension", options NULL),
 caught and fixed a wrong `ROTATE_90`-style spelling before any live
 run). What the docs do NOT pin down is the turn direction of the
 rotation members and runtime behavior under `--quit`; the live run on
-novidesign.local confirmed `--quit` exits after the batch for all three
+macos-host confirmed `--quit` exits after the batch for all three
 programs and that the scale path produces exact dimensions (rotation
 direction remains doc-only — `TestLive` does not exercise `--rotate`).
 Validation, argv, escaping, provisioning and refusals do not depend on
@@ -187,7 +187,7 @@ out.
   exists — present on the authoring host, 3.9.6).
 - `live_test.go` (`TestLive`, `YOKE_GIMP_LIVE=1`) is compile-verified
   here (vet builds it) and was EXECUTED by the manager on the approved
-  linux/amd64 target (PASS; see "Live evidence — novidesign.local"): it
+  linux/amd64 target (PASS; see "Live evidence — macos-host"): it
   provisions through the real path and runs export/convert/edit over a
   stdlib-generated PNG, asserting result schemas and exact scaled
   dimensions.
@@ -220,7 +220,7 @@ artifact exists, so nothing ran here):
   pin. The `windows/` and `macos/` listings for 3.2.6 carry only
   `gimp-3.2.6-setup.exe` and `gimp-3.2.6-{arm64,x86_64}.dmg`, so the
   fail-closed rows above still hold.
-- Conductor STOP (Dragon policy, 2026-10-18): no Linux container was
+- Conductor STOP (dev-host policy, 2026-10-18): no Linux container was
   booted and no GIMP was executed on the authoring host; only the
   fixture-only suite ran here. The on-target live run is owned by the
   manager on an approved host after code review.
@@ -235,10 +235,10 @@ artifact exists, so nothing ran here):
   command + MCP surface: separate, reviewed change.
 - Wave 4 follow-ups per the story's sprint card.
 
-## Dragon policy-breach cleanup — 2026-10-18 (authoring host "Dragon", darwin/arm64)
+## dev-host policy-breach cleanup — 2026-10-18 (authoring host "dev-host", darwin/arm64)
 
 An earlier worker on this story had begun preparing a Lima Linux VM
-(`gimp-live`) on Dragon to run GIMP live. That is forbidden by Dragon
+(`gimp-live`) on dev-host to run GIMP live. That is forbidden by dev-host
 policy (no podman/container/VM/native heavy creative runs). Cleanup,
 supervisor-authorized, at 05:50 PDT:
 
@@ -255,26 +255,26 @@ supervisor-authorized, at 05:50 PDT:
   exist, `brew list --formula` shows no lima formula, and `df -h /`
   reports 47 GiB free on the data volume (about 50 GiB immediately after
   the deletion, per the supervisor's reading).
-- Live GIMP was NOT executed on Dragon at any point — not in the VM,
+- Live GIMP was NOT executed on dev-host at any point — not in the VM,
   not in a container, not natively. The only runs here were the
   fixture-only suite recorded under Verification status. Live evidence
   remains manager-gated to a separately claimed approved host
-  (novidesign or noviwin).
+  (macos-host or windows-host).
 - No other source, test, or pin changes accompany this section.
 
-## Live evidence — 2026-10-18, novidesign.local (approved host, claim epoch55)
+## Live evidence — 2026-10-18, macos-host (approved host, claim epoch55)
 
 Manager-run live acceptance, 06:00–06:09 PDT, under the host claim
-`novidesign.local` epoch55 (released afterwards). This is the on-target
+`macos-host` epoch55 (released afterwards). This is the on-target
 run that the earlier "named gap" text above referred to; it was NOT run
-on Dragon.
+on dev-host.
 
 - Provisioning: the official `GIMP-3.2.6-x86_64.AppImage` was downloaded
   by the real `Path`/`pkg/binmgr` code path (not a hand-placed binary),
   and its SHA256 matched the committed pin
   `79ea41bc9b06f78fda181849a9ca8e42d83f1124dedb756f4d52352e2465010f`
   exactly before anything was executed.
-- Target environment: novidesign.local is arm64, so the run used an
+- Target environment: macos-host is arm64, so the run used an
   isolated, already-cached Ubuntu amd64 container. The host's ARM
   `qemu-static` wrapper plus `APPIMAGE_EXTRACT_AND_RUN=1` were used ONLY
   to bridge nested AppImage execution inside that container (FUSE is

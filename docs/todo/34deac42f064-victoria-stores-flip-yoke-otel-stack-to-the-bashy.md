@@ -29,5 +29,5 @@ Acceptance:
 1. All three stores resolve ONLY the signed fork assets; no upstream VictoriaMetrics/* download path remains. Windows has no signed asset: fail closed with an error naming the supply-chain policy (no upstream fallback).
 2. Version constants bumped; check the argv builders (victoria*Args) against the new versions' flags (e.g. -retentionPeriod, -httpListenAddr, -selfScrapeInterval, http.pathPrefix) - cite upstream flag source at the tag if anything changed.
 3. Unit test (no network) asserting each store is a VERIFIED pin: identity, issuer, every asset sha256 + bundle URL, raw executable.
-4. One live check on dragon (short, no containers): install the darwin-arm64 victoria-metrics via binmgr (signature verified) and run it with -version. Paste output.
+4. One live check on dev-host (short, no containers): install the darwin-arm64 victoria-metrics via binmgr (signature verified) and run it with -version. Paste output.
 5. Gate: go vet + go test -count=1 ./external/otel/... ./pkg/binmgr/... green (external/otel/stack may be a nested module - run from its dir). Commit with trailers; sprint submit with SHA + gate + live-check output.

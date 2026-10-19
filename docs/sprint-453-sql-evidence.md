@@ -27,8 +27,8 @@ the owner's claimant/epoch checks remain in force. `TestHoldChildEnvUsesAcquired
 checks a stale environment snapshot and exact Windows-style target string.
 `TestPersistentHoldChildUsesHolderEpisode` is a process regression for a
 successful held child read and the empty `locking_mode` setter denial; it is
-reserved for the manager's remote gate under Dragon's no-process policy.
-Dragon ran only `go test -count=1 -run '^TestHoldChildEnvUsesAcquiredHolderEpisode$'
+reserved for the manager's remote gate under dev-host's no-process policy.
+dev-host ran only `go test -count=1 -run '^TestHoldChildEnvUsesAcquiredHolderEpisode$'
 ./cmds/db`: PASS (0.616s), and `go test -count=1 -run
 '^(TestPragmaAuthorizerPolicy|TestHeldReadLeavesNoConnectionState)$'
 ./pkg/dbsql`: PASS (0.903s). `git diff --check`: PASS.
@@ -53,7 +53,7 @@ operation and is removed before connection pooling; a cleanup failure
 discards the connection. The original read-only, transaction, schema, and
 logical interchange paths remain in place.
 
-Dragon focused checks with a temporary external modfile replacing
+dev-host focused checks with a temporary external modfile replacing
 `modernc.org/sqlite` with local fork commit
 `5fb52bf328cbe0c3cbe899fe21122819a50622fc`:
 
@@ -74,7 +74,7 @@ Both yoke root and `external/otel` now replace `modernc.org/sqlite` with
 that version and record its checksums in their respective `go.sum` files.
 No local replacement is committed.
 
-Published-pin Dragon checks (historical host-policy deviation):
+Published-pin dev-host checks (historical host-policy deviation):
 
 ```
 go test -count=1 -run '^(TestPragmaAuthorizerPolicy|TestHeldReadLeavesNoConnectionState)$' ./pkg/dbsql  PASS
@@ -83,11 +83,11 @@ go test -count=1 -skip 'TestIndependent' ./pkg/dbsql ./pkg/dbstore/sqlitedb ./cm
 
 The second command ran the broad `./cmds/db` package suite. Its
 `TestSQLVerbsBothModes` test starts native owner subprocesses, which
-`-skip TestIndependent` does not exclude. This was a Dragon host-policy
+`-skip TestIndependent` does not exclude. This was a dev-host host-policy
 deviation, not an in-process-only check; it was not rerun. The first command
 was focused and in-process.
 
-After the rebase, Dragon ran only named in-process tests:
+After the rebase, dev-host ran only named in-process tests:
 
 ```
 go test -count=1 -run '^(TestPragmaAuthorizerPolicy|TestHeldReadLeavesNoConnectionState|TestTypedMCPSQLQuery)$' ./pkg/dbsql ./cmds/db  PASS
@@ -168,7 +168,7 @@ Persistent holds were unaffected. `cmds/db` now applies the hold env whenever
 the target matches `BASHY_DB_HOLD_TARGET` and the session matches.
 `TestMemoryHoldChildPresentsEpoch` covers it.
 
-## Development-host execution record (Dragon, darwin/arm64)
+## Development-host execution record (dev-host, darwin/arm64)
 
 Candidate `47ed0d28` run — HOST-POLICY DEVIATIONS, recorded as such and not
 as acceptance evidence: a full `go build -o /tmp/yoke ./cmd/yoke` with a
@@ -177,7 +177,7 @@ real-binary smoke, and the independent-process tests
 `TestIndependentProcessesSharePersistentFileDirectly`, and `cmds/db`
 `TestSQLVerbsBothModes` / `TestMemoryHoldChildPresentsEpoch`, which spawn the
 test binary as the `db` CLI and a real `db session start` owner) were
-executed on Dragon. They passed there; the manager's remote gate is the
+executed on dev-host. They passed there; the manager's remote gate is the
 authority for them.
 
 Rework run (this candidate) — focused unit tests only, no build of
@@ -298,7 +298,7 @@ Candidate 7526ffb2 remains unaccepted. Restoring `temp_store` or
 `locking_mode` after an operation cannot undo a temporary disk spill or prove
 that an exclusive native lock stayed held. The focused regression
 `go test ./pkg/dbsql -run '^TestHeldReadLeavesNoConnectionState$' -count=1`
-on Dragon exits 1 at this candidate, with:
+on dev-host exits 1 at this candidate, with:
 
 ```
 --- FAIL: TestHeldReadLeavesNoConnectionState (1.20s)
@@ -351,13 +351,13 @@ version. The module is MIT; the Wasm module is MIT-0; its direct Go helpers
 `go get` also raised x/crypto, x/mod, x/net, x/sync, x/sys, x/term, x/text,
 and x/tools through the module graph. All were released versions; no trial
 dependency is retained. The upstream README notes greater per-connection
-memory use. Since Dragon may run only focused tests, no full binary was built
+memory use. Since dev-host may run only focused tests, no full binary was built
 and no byte-size delta is claimed; a remote before/after binary comparison
 would be required if this candidate were reconsidered.
 
 A temporary focused test using this exact released version passed with
 `go test -run '^TestReplacement(AuthorizerProbe|MemdbDoesNotShareModernc)$'
--count=1 ./pkg/dbsql` on Dragon (exit 0, package `ok` in 0.707 s). It opened
+-count=1 ./pkg/dbsql` on dev-host (exit 0, package `ok` in 0.707 s). It opened
 both `file:` and `vfs=memdb` targets, installed the callback before preparing
 caller SQL, denied `PRAGMA temp_store=FILE`, `PRAGMA locking_mode=NORMAL`, and
 an `INSERT` on the read connection, and verified the row count stayed one.

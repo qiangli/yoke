@@ -52,7 +52,7 @@ Pins and Live evidence); every other platform still fails closed.
   (fetched 2026-10-18 from the authoring host; manifest sha256
   `0288570c…583155`, 576 bytes; same value as download.blender.org
   publishes). It was NEVER computed from a mirror or from the bytes
-  that happened to arrive: binmgr downloaded the archive on noviwin1
+  that happened to arrive: binmgr downloaded the archive on windows-host
   and verified it AGAINST this pin before extracting (Live evidence).
   `TestOfficialSourceAndPin` pins the constant so a drift is a test
   failure, and the asset declares no SHA512/MD5.
@@ -117,7 +117,7 @@ of `--python`, `--python-console`, `--python-use-system-env`, `--addons`,
   `gofmt -l external/blender pkg/binmgr` clean; `go vet` of both for
   GOOS=windows/linux/darwin; `go test -count=1 ./external/blender
   ./pkg/binmgr` — PASS on darwin/arm64 (authoring host) AND on
-  noviwin1 windows/amd64 (see below). The fake executor never starts a
+  windows-host windows/amd64 (see below). The fake executor never starts a
   process; the two `TestRealExecutor*` tests exercise the real
   `runCommand` with `/bin/sleep` and `/bin/echo` (skipped on Windows).
 - Registry / atlas / `cmds/all`: NOT touched by this story. `blender` is
@@ -127,14 +127,14 @@ of `--python`, `--python-console`, `--python-use-system-env`, `--addons`,
 - Go-side dependencies: none added (`go.mod`/`go.sum` untouched; the
   package uses `pkg/binmgr`, cobra, and stdlib only).
 
-## Live evidence — windows/amd64, noviwin1.local, 2026-10-18
+## Live evidence — windows/amd64, windows-host, 2026-10-18
 
 Story f5817629a95b, sprint 382, run by the original holder on the
-claimed noviwin1 (epoch11). Nothing ran on the authoring host (Dragon)
-except fetching the 576-byte manifest. Everything on noviwin1 ran in an
+claimed windows-host (epoch11). Nothing ran on the authoring host (dev-host)
+except fetching the 576-byte manifest. Everything on windows-host ran in an
 isolated temp tree, not a shared checkout:
 
-- Host: `noviwin1` — Windows NT 10.0.26200, AMD Ryzen 5 7520U with
+- Host: `windows-host` — Windows NT 10.0.26200, AMD Ryzen 5 7520U with
   Radeon Graphics (integrated), 16 GB; `go1.27.2 windows/amd64`
   (GOTOOLCHAIN=auto from the host's go1.27.0). Session: Windows OpenSSH,
   non-interactive `cmd.exe`.

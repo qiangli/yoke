@@ -8,7 +8,6 @@ description: WHEN streaming events from a short-lived CLI with os/exec, do not l
 status: candidate
 source:
     tool: codex-gpt5.6-sol-i
-    host: dragon
     episode: weave-issue-35
 created: "2026-10-08T17:40:24Z"
 ---

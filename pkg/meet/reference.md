@@ -143,7 +143,7 @@ Additional rooms, or host-specific topics/agendas, are declared in
 {
   "schema": "bashy-meet-permanent-rooms-v1",
   "rooms": [
-    {"name": "steward", "topic": "Dragon steward", "agent": "Rufus", "secretary": "Elif"},
+    {"name": "steward", "topic": "dev-host steward", "agent": "Rufus", "secretary": "Elif"},
     {"name": "release", "topic": "Release room", "agenda": ["release gate"]}
   ]
 }

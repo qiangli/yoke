@@ -132,7 +132,7 @@ only: five new files, no capture edits, no generated `KB.md`):
   independent-process tests, skipped under `-short`) and live CLI/MCP
   smoke after review. Whole `dbfts` joins the owed manager gate with the
   new `Generation` export.
-- Local gate (this session, Dragon): `go vet` clean on both packages;
+- Local gate (this session, dev-host): `go vet` clean on both packages;
   `go test -count=1 -short -run 'Retrieve|Sync|Lexical|Lifecycle'
   ./pkg/kbmemory/` green, `go test -count=1 -short ./pkg/dbfts/` green,
   `TestRetrieveBusyOnConcurrentIndexWrite` green `-count=5` and under

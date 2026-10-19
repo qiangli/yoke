@@ -1,6 +1,6 @@
 # Sprint 467 story #2383 (43f01cb71db9) — `weave abandon --force` teardown
 
-Host: dragon (macOS). Caps: `GOFLAGS=-p=2 GOMAXPROCS=4 BASHY_INSTANCE_CAP=32`.
+Host: dev-host (macOS). Caps: `GOFLAGS=-p=2 GOMAXPROCS=4 BASHY_INSTANCE_CAP=32`.
 Filtered tests only; the manager runs whole `pkg/weave` + `scripts/crossvet.sh` remotely.
 
 ## Root cause (read-only inspection of live leftover rows, nothing touched)

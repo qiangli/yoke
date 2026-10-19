@@ -98,9 +98,9 @@ exclusive lease.
 | Both modes, persistent reopen, memory lifetime | every package test runs in both modes; memory lives in the owner | `TestPersistentSurvivesReopenMemoryEndsWithOwner`; CLI smoke below (`session stop` gives `lifetime_ended`) |
 | Exclusive destructive ops | exclusive ops refused under another native lock; held handle runs ops | `TestExclusiveOpsRespectNativeLock`, `TestReadHandleRefusesWrites` |
 | CLI/MCP parity | typed `db_lifecycle` MCP subject spellings; same envelope | `TestDocCLIAndTypedMCPParity` (byte-equal envelopes for find, collection-list and index-list; exact number text through MCP) |
-| Independent clients, both modes | direct persistent file; memory through an explicit owner session | `TestIndependentDocClientsBothModes` — **written for the manager's remote gate, not run on Dragon** (see below) |
+| Independent clients, both modes | direct persistent file; memory through an explicit owner session | `TestIndependentDocClientsBothModes` — **written for the manager's remote gate, not run on dev-host** (see below) |
 
-## Dragon commands (named, in-process only)
+## dev-host commands (named, in-process only)
 
 ```
 go vet ./pkg/dbdoc ./cmds/db ./pkg/dblifecycle ./pkg/dbsql ./pkg/dbstore/sqlitedb   PASS
@@ -114,7 +114,7 @@ go test -count=1 -run '^(TestLifecycleBothModes|TestPersistentSurvivesReopenMemo
 go test -count=1 ./pkg/atlas                                                           PASS
 ```
 
-Registered-path smoke on Dragon (`go build -o /tmp/yoke425 ./cmd/yoke`, run
+Registered-path smoke on dev-host (`go build -o /tmp/yoke425 ./cmd/yoke`, run
 as `yoke db …`): `doc put` before create gave `not_found`. Create without
 `--yes` gave `confirmation_required`; with `--yes` it succeeded. The rest
 followed, in order:
@@ -158,10 +158,10 @@ in tests; production code is unchanged for them:
   drop must match (data unchanged), the `db hold` exit is checked through
   `Wait`, and the drop after release must succeed.
 
-This test also ran once on Dragon by accident (a `-run Doc` filter matched
+This test also ran once on dev-host by accident (a `-run Doc` filter matched
 it), with the same memory failure. It has not been run here since.
 
-Not run on Dragon: `TestIndependentDocClientsBothModes` (after the fix), and the existing
+Not run on dev-host: `TestIndependentDocClientsBothModes` (after the fix), and the existing
 subprocess tests whose epoch assertion changed
 (`pkg/dblifecycle/owner_test.go`, `pkg/dbsql/process_test.go`). They compile
 and vet.

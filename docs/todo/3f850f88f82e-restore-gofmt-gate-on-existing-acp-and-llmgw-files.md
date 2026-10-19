@@ -14,4 +14,4 @@ closed: 2026-10-12T15:43:14.401942Z
 closed_by: s9999-maintenance-manager
 ---
 
-Manager remote fmtcheck on candidate c159f1e stops before crossvet: pkg/chat/acp_adapter_test.go and pkg/llmgw/responses/translate.go whitespace alignment. Apply gofmt to precisely these files in isolated Yoke workspace, no semantic edits; do not baseline or bypass fmtcheck. Acceptance existing scripts/fmtcheck.sh exits0; no new tests for whitespace. NO full crossvet/build/container on Dragon; manager remote gates after integration. Commit proper Sprint9999/Story/Story-ID; preserve generated KB. Raw failure /tmp/s9999-yoke-final-gate.json.
+Manager remote fmtcheck on candidate c159f1e stops before crossvet: pkg/chat/acp_adapter_test.go and pkg/llmgw/responses/translate.go whitespace alignment. Apply gofmt to precisely these files in isolated Yoke workspace, no semantic edits; do not baseline or bypass fmtcheck. Acceptance existing scripts/fmtcheck.sh exits0; no new tests for whitespace. NO full crossvet/build/container on dev-host; manager remote gates after integration. Commit proper Sprint9999/Story/Story-ID; preserve generated KB. Raw failure /tmp/s9999-yoke-final-gate.json.

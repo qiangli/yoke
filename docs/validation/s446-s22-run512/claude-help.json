@@ -1,6 +1,6 @@
 {
   "argv": [
-    "/Users/qiangli/.local/bin/claude",
+    "$HOME/.local/bin/claude",
     "--help"
   ],
   "exit_code": 0,

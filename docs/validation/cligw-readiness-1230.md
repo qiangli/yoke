@@ -1,6 +1,6 @@
 # Authenticated model-door readiness — Story #1230
 
-Sprint #328, Story-ID `84389f905a84`. Measured 2026-09-29 on dragon.
+Sprint #328, Story-ID `84389f905a84`. Measured 2026-09-29 on dev-host.
 
 ## Baseline and diagnosis
 
@@ -81,7 +81,7 @@ unwritable inherited Go cache; setting the writable GOCACHE above resolved it.
 The remaining exact failure, reproduced by invoking genie directly, is:
 
 ```text
-genie: mkdir /Users/qiangli/.bashy/genie/chat/issue-88__Users_qiangli_.bashy_weave_yoke-d9ca9236_workspaces_issue-88-ecf051eb: operation not permitted
+genie: mkdir $HOME/.bashy/genie/chat/issue-88__<home>_.bashy_weave_yoke-d9ca9236_workspaces_issue-88-ecf051eb: operation not permitted
 ```
 
 Genie's workspace-config creation uses the real home directory even when

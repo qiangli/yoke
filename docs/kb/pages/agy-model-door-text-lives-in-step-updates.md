@@ -8,7 +8,6 @@ description: For cligw stdin-stream-json workers, extract only agent_response st
 status: candidate
 source:
     tool: codex-gpt6-astra-j
-    host: dragon
     episode: weave-issue-88
 created: "2026-09-30T00:22:59Z"
 ---

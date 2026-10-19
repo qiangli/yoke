@@ -14,7 +14,7 @@ Story #2264 (`8c8b6228daa2`). This candidate adds Bleve lexical operations behin
 | CLI/MCP parity | `TestFTSRegisteredCLIAndTypedMCP` calls the actual registered `db` runner and typed `db_lifecycle` MCP tool and compares their search envelopes. |
 | Cancellation and restart | Context is checked during search, export, import preflight and rebuild; canceled import leaves the target intact. Every persistent category call reopens the index; mapping and data survive reopen. `TestBatchAtomicityAndMalformedImport`, `TestConfiguredMappingAndReopen`. |
 
-## Commands and results on Dragon
+## Commands and results on dev-host
 
 - `go test ./pkg/dbfts -run '^TestBleve' -count=1 -timeout 60s -v` — PASS after closing both `FieldDict` iterators. The prior hang log is preserved outside this patch.
 - `go test ./pkg/dbfts ./cmds/db -run '^(TestBleveInternalStorage|TestBlevePersistentInternalStorage|TestIndexOperationsBothModes|TestLogicalRoundTripBothDirections|TestConfiguredMappingAndReopen|TestSearchFilterPaginationAndStaleCursor|TestBatchAtomicityAndMalformedImport|TestMemoryOwnerLifetime|TestFTSRegisteredCLIAndTypedMCP)$' -count=1 -timeout 60s -v` — PASS.
@@ -23,13 +23,13 @@ Story #2264 (`8c8b6228daa2`). This candidate adds Bleve lexical operations behin
 
 ## Remote process gate recipe
 
-Run on the manager's claimed remote test host, not Dragon:
+Run on the manager's claimed remote test host, not dev-host:
 
 ```sh
 go test ./cmds/db -run '^TestIndependentFTSClientsBothModes$' -count=1 -timeout 120s -v
 ```
 
-That test launches a separately attached owner and independent CLI clients for memory and persistent targets, then checks concurrent writes and a separate search client. The manager's cross-process claim, crash/restart, CLI/MCP and whole-package gates remain required before acceptance. These were not run on Dragon.
+That test launches a separately attached owner and independent CLI clients for memory and persistent targets, then checks concurrent writes and a separate search client. The manager's cross-process claim, crash/restart, CLI/MCP and whole-package gates remain required before acceptance. These were not run on dev-host.
 
 ## Limits
 

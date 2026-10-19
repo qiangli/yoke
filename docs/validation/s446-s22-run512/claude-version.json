@@ -1,6 +1,6 @@
 {
   "argv": [
-    "/Users/qiangli/.local/bin/claude",
+    "$HOME/.local/bin/claude",
     "--version"
   ],
   "exit_code": 0,

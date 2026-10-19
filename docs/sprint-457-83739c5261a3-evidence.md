@@ -187,7 +187,7 @@ client-behavior evidence on fixtures, not a general bashy redaction layer.
 
 ## Platform/artifact coverage
 
-Actual gate host: Dragon, macOS (Darwin 25.5.0), Go 1.27.2, **darwin/arm64 only**.
+Actual gate host: dev-host, macOS (Darwin 25.5.0), Go 1.27.2, **darwin/arm64 only**.
 No Linux or Windows native execution, no cross-compiles, no signed-runner runs.
 Table-driven OS/arch cases prove asset-name selection and pin presence only.
 

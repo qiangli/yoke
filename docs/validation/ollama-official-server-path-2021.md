@@ -100,6 +100,6 @@ and native server inference has not been proven. Yoke's current component still
 imports the fork server, so its full no-cgo package build remains blocked by
 the existing MLX/discovery symbols. Worker #237's tests do not remove that
 dependency or satisfy Rule 1. Managed local inference must remain fail-closed
-until the official server artifact and adapter pass the gates above. No Dragon
+until the official server artifact and adapter pass the gates above. No dev-host
 native build, container, full suite, source-fork edit, merge, or push was used
 for this review.

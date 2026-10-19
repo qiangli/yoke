@@ -1,1 +1,1 @@
-{"argv": ["/Users/qiangli/.local/bin/bashy", "model", "quota", "--json"], "exit_code": 0, "elapsed": 23.830842750000002}
+{"argv": ["$HOME/.local/bin/bashy", "model", "quota", "--json"], "exit_code": 0, "elapsed": 23.830842750000002}

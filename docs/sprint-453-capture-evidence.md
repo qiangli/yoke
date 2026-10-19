@@ -1,6 +1,6 @@
 # Sprint 453 — memory collection lifecycle/capture evidence (story 564cbba7c9fd)
 
-Status: **candidate, not accepted.** Dragon ran short filtered unit tests only.
+Status: **candidate, not accepted.** dev-host ran short filtered unit tests only.
 The manager runs the remote gates listed below.
 
 ## Scope delivered
@@ -59,7 +59,7 @@ tree. On this resume against a2865302 it passed before any edit
 (`ok … 3.971s`), so the failure did not reproduce here. The manager's remote
 run should confirm it.
 
-## Dragon results (short filtered, this commit)
+## dev-host results (short filtered, this commit)
 
 ```
 go vet ./pkg/kbmemory                                   # clean
@@ -101,7 +101,7 @@ go test -count=1 ./pkg/kbmemory ./pkg/atlas ./pkg/recall ./pkg/kb ./pkg/dbdoc ./
 scripts/crossvet.sh
 ```
 
-Process-level test, written but not run on Dragon (manager remote gate):
+Process-level test, written but not run on dev-host (manager remote gate):
 
 ```
 go test -count=1 -run 'TestIndependentProcesses|TestIndependentProcessLifecycle' -v ./pkg/kbmemory
@@ -141,7 +141,7 @@ Still owed:
 | `inspect`/internal `get` read with dbdoc's default 256 KiB `--max-bytes`, so a large captured record could be written but not read back (`limit_exceeded`) | the record reads pass `MaxBytes: dbdoc.MaxDocBytes`, the document bound the body limit already sits under | `TestLargeCaptureThroughSharedOwner` (600 KiB escaped body add + inspect, memory and persistent-shared) |
 | `Tombstone.Ref` used an unsupported `memory:` prefix | `kblife.NewTombstone(r.ID, …)` | `TestSupersedeAndForget` asserts `tb.Ref == ID` |
 
-Dragon (focused only, raw exits kept with pipefail; log `/tmp/s453-wire-gate.log`):
+dev-host (focused only, raw exits kept with pipefail; log `/tmp/s453-wire-gate.log`):
 
     go test -short -count=1 -run 'TestOwnerWireCap|TestOwnerCallPreservesNumberLexemes' ./pkg/dblifecycle   ok 0.690s rc=0
     go test -short -count=1 ./pkg/kbmemory                                                                ok 13.976s rc=0

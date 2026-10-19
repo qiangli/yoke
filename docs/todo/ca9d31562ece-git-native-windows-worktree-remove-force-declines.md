@@ -16,4 +16,4 @@ closed: 2026-10-12T05:35:58.857717Z
 closed_by: s9999-gitparity-manager
 ---
 
-Pre-existing on Windows (verified at a234655~1 and 8b2c14c on noviwin1): TestNativeWorktree_AddRemoveList fails at remove --force with ErrUnsupported, and TempDir cleanup reports .git/worktrees/wt1/commondir in use by another process - an open handle survives the native call. Find the unclosed file and why remove --force declines only on Windows.
+Pre-existing on Windows (verified at a234655~1 and 8b2c14c on windows-host): TestNativeWorktree_AddRemoveList fails at remove --force with ErrUnsupported, and TempDir cleanup reports .git/worktrees/wt1/commondir in use by another process - an open handle survives the native call. Find the unclosed file and why remove --force declines only on Windows.

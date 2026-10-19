@@ -1,6 +1,6 @@
 # Story Architect admission — story 9505bb10b74a (Sprint 382)
 
-Decision on 2026-10-18: **UNSUPPORTED for v1.0**. This is an admission record, not an executable adapter or a support claim. No Story Architect code was downloaded or run on Dragon.
+Decision on 2026-10-18: **UNSUPPORTED for v1.0**. This is an admission record, not an executable adapter or a support claim. No Story Architect code was downloaded or run on dev-host.
 
 ## Official evidence checked
 

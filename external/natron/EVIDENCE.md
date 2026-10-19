@@ -6,7 +6,7 @@ artifact — so per the story contract implementation stops here: no wrapper
 (`natron.go`), no fixture tests (`natron_test.go`), no `pkg/binmgr/pins.go`
 entry, no download, no execution. Nothing is invented.
 
-## Prerequisite checks (each verified 2026-10-18 from Dragon, metadata only)
+## Prerequisite checks (each verified 2026-10-18 from dev-host, metadata only)
 
 1. **Official runnable open-source artifact for one supported platform:
    PRESENT (but unusable without a digest).**
@@ -39,8 +39,8 @@ entry, no download, no execution. Nothing is invented.
    - The former download site `https://natron.fr/download/` returns
      **404 ("Page non trouvée")**; no hash is published there either.
    - A locally computed hash is not a substitute: it would require a
-     147+ MB download on Dragon (prohibited: no large artifact downloads
-     on Dragon) and would still not be publisher-authenticated — the
+     147+ MB download on dev-host (prohibited: no large artifact downloads
+     on dev-host) and would still not be publisher-authenticated — the
      exact failure mode the Ardour story (0556ec75) was rejected for.
      Never invent a digest.
 
@@ -60,8 +60,8 @@ entry, no download, no execution. Nothing is invented.
 - New path `external/natron/EVIDENCE.md` only (this file). No `natron.go`,
   no `natron_test.go`, no `pins.go` change — mirrors the Story Architect
   evidence-only precedent (Yoke `32a0f587`).
-- No Natron process was started and no artifact was downloaded on Dragon.
-  Live execution stays gated on separately claimed novidesign/noviwin
+- No Natron process was started and no artifact was downloaded on dev-host.
+  Live execution stays gated on separately claimed macos-host/windows-host
   with manager coordination.
 
 ## Reversal condition

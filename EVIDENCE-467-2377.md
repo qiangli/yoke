@@ -90,7 +90,7 @@ for this case.
 'TestExpandAgentSelectsTheModel|TestExpandedAGYKeepsPromptFlagAdjacentToPrompt|TestExpandAGYCarriesGenericWorkspacePlaceholder|TestExpandedBodyIsTheFinalArgument|TestWorkspacePreflightVerificationFailsClosed|TestSeededContractArgsUnchanged|TestSeededContractCarriesTheLaunchQuirks|TestEmptyBodyFallsBackToTheTitle|TestMultiTokenArgvIsVerbatim'
 -count=1` — ok (1.5s, recorded in 0faca8a5). Launch-contract behavior pinned
 by existing tests; no code changed, so no vet/crossvet delta. No heavy
-suites on Dragon, no global gc, no other run touched.
+suites on dev-host, no global gc, no other run touched.
 
 ## Scope notes
 

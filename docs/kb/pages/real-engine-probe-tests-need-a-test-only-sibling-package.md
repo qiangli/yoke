@@ -8,7 +8,6 @@ description: 'WHEN testing yoke usage-probe seeds end to end (YAML -> fleet -> l
 status: candidate
 source:
     tool: opencode-glm-5.3-c
-    host: dragon
     episode: weave-issue-263
 created: "2026-10-15T17:02:13Z"
 ---

@@ -15,4 +15,4 @@ closed_by: s9999-maintenance-manager
 
 Found by Sprint 422 merge gate. Both fail on yoke 610b7af BEFORE the S422 feed merge (verified in a detached worktree): TestCensusCoversEveryPackage (pkg/unit not classified in pkg/atlas/packages.go) and TestWindowsAssetCitationsMatchTheResolvers (seaweedfs cited windows_amd64.tar.gz is not what its resolver picks). Owners: pkg/unit author (S420 unit envelope) and the seaweedfs external registry. Verify: go test ./pkg/atlas/.
 
-S9999 lane: atlas pkg/unit census and SeaweedFS Windows citation. Keep assertions strict. Focused go test ./pkg/atlas. No full builds/containers on Dragon; isolated submodule commit, no push; send SHA/tests to s9999-maintenance-manager.
+S9999 lane: atlas pkg/unit census and SeaweedFS Windows citation. Keep assertions strict. Focused go test ./pkg/atlas. No full builds/containers on dev-host; isolated submodule commit, no push; send SHA/tests to s9999-maintenance-manager.

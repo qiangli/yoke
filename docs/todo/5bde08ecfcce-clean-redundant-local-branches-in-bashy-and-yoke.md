@@ -17,7 +17,7 @@ User-requested local branch cleanup across bashy and yoke.
 
 Completed 2026-10-13: removed 15 redundant local branches and two clean historical maintenance integration worktrees. Every deleted branch was either an ancestor of main or had all patches equivalent to main according to git cherry. Recovery bundles verified before deletion. Main commit IDs unchanged; remote refs untouched; unique commits and all Sprint 436 linked worktrees preserved. No code tests required for Git metadata cleanup.
 
-Recovery bundles, original branch SHAs, before-state and exact result: /Users/qiangli/.bashy/backups/branch-cleanup-20261013-104255
+Recovery bundles, original branch SHAs, before-state and exact result: $HOME/.bashy/backups/branch-cleanup-20261013-104255
 
 bashy deleted: s436/audit-gate-98, s436/compiler-fix-100, s436/compiler-inputs-99, s436/native-gate-97, s9999-e2e-pin, s9999-inbox-cap-candidate, s9999-inbox-host-candidate, s9999-maintenance-integration.
 Preserved: s434/headlamp-8a3ca0e3, s434/headlamp-b2976d73, s436/prima-admission, s436/prima-admission-staging, s436/runner-release-draft.

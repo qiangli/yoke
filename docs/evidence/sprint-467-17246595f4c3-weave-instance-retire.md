@@ -1,6 +1,6 @@
 # Sprint 467 / story #2380 (17246595f4c3) — weave run instances retired at terminal
 
-Base: d661ccfc53c7e5bf74e40632d05d184220be4fad (agent/weave-issue-433). Host: Dragon (darwin), filtered tests only.
+Base: d661ccfc53c7e5bf74e40632d05d184220be4fad (agent/weave-issue-433). Host: dev-host (darwin), filtered tests only.
 
 Fix: `saveWeaveQueue` calls `weaveReconcileRunInstances`, which retires (via
 `agentlaunch.RetireContext` + `bus.InstanceMail`, mail archived) the instance of
@@ -196,7 +196,7 @@ $ go test ./pkg/agentlaunch -run TestDirectClaimOfStaleSnapshotRefusedAfterRetir
 FAIL	github.com/qiangli/yoke/pkg/agentlaunch	0.541s
 ```
 
-GREEN (Dragon, filtered):
+GREEN (dev-host, filtered):
 
 ```
 $ go test ./pkg/agentlaunch -run 'DirectClaim|OwnerAcquired|ResumeRacingPark|IdleGuard' -count=1 -v

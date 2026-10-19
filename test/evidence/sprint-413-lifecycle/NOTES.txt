@@ -1,6 +1,6 @@
 Sprint 413 / weave lifecycle delivery
 Stories: #1821 26a846d9db4e; #1833 0c5fddf0fefc
-Worker: codex-gpt6-astra; Dragon; branch agent/weave-issue-44
+Worker: codex-gpt6-astra; dev-host; branch agent/weave-issue-44
 Source baseline: bffcda988649ea3c4e765de3b29b211d5747a7f8
 
 Shared API/import trace before implementation:

@@ -1,6 +1,6 @@
 # OpenToonz admission — story da22dfaae775 (Sprint 382, Story #355)
 
-Decision on 2026-10-18: **UNSUPPORTED for v1.0**. This is an admission record, not an executable adapter or a support claim. No OpenToonz code was downloaded, installed, or run on Dragon; only small official metadata pages (release API records, license text, documentation pages) were read.
+Decision on 2026-10-18: **UNSUPPORTED for v1.0**. This is an admission record, not an executable adapter or a support claim. No OpenToonz code was downloaded, installed, or run on dev-host; only small official metadata pages (release API records, license text, documentation pages) were read.
 
 ## Official evidence checked
 

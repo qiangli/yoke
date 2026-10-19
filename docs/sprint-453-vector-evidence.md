@@ -134,7 +134,7 @@ encoding_format:"float"}` to `<endpoint>/embeddings`.
   logical request (text, endpoint, env name) is what dblifecycle hashes for
   request-id replay; nondeterminism stays inside `Run`.
 
-## sqlite-vec probe (vec0 v0.1.9 through modernc, Dragon)
+## sqlite-vec probe (vec0 v0.1.9 through modernc, dev-host)
 
 | Probe | Result |
 |---|---|
@@ -147,7 +147,7 @@ encoding_format:"float"}` to `<endpoint>/embeddings`.
 
 ## Tests
 
-The command is exactly the focused local gate, run on Dragon with short
+The command is exactly the focused local gate, run on dev-host with short
 in-process tests only and its exit status taken directly:
 
 ```
@@ -182,7 +182,7 @@ the cause is the environment and not dbvec.
 | `TestOwnerSessionSharesMemoryCollection` | in-process `dblifecycle.Serve` plus `Call` (the owner IPC path): two agents share one memory collection; contested revision is `conflict`; request-id replay applies once and reuse with other input is `conflict`; hold makes the other agent `claim_held` for search and put, a wrong epoch is `stale_epoch`, and the holder runs an exclusive add with its epoch, then releases; owner export, then a persistent import is bit-exact with revisions preserved; stop gives `lifetime_ended` |
 
 These independent-process tests are written. They skip under `-short` and
-were not run on Dragon. They are for the manager's gate:
+were not run on dev-host. They are for the manager's gate:
 
 - `TestIndependentProcessesShareOwnerMemoryCollection`: a re-exec'd owner
   process and three concurrent client processes (2 writers × 15 puts plus a
@@ -215,7 +215,7 @@ Shared files, edited under the manager's phase-2 approval:
 - `pkg/dbstore/sqlitedb`: `Categories` adds `vectors`, plus a vectors note.
 - `pkg/atlas/packages.go`: a `dbvec` library row.
 
-Command, run locally on Dragon with `CGO_ENABLED=0 GOMAXPROCS=2 GOFLAGS=-p=2`
+Command, run locally on dev-host with `CGO_ENABLED=0 GOMAXPROCS=2 GOFLAGS=-p=2`
 and checked by direct exit status:
 
 ```

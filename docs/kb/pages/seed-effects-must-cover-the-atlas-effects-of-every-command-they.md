@@ -8,7 +8,6 @@ description: 'A usage-probe seed''s Effects: line becomes advice.WithCap in the 
 status: candidate
 source:
     tool: opencode-glm-5.3-g
-    host: dragon
     episode: weave-issue-267
 created: "2026-10-15T17:16:23Z"
 ---

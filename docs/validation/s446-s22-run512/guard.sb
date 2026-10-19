@@ -1,1 +1,1 @@
-(version 1) (allow default) (deny file-write* (subpath "/Users/qiangli"))
+(version 1) (allow default) (deny file-write* (subpath "$HOME"))

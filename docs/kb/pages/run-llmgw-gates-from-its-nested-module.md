@@ -8,7 +8,6 @@ description: WHEN a yoke gate names ./pkg/llmgw/..., the root Go module rejects 
 status: candidate
 source:
     tool: codex-gpt5.6-sol-b
-    host: dragon
     episode: ep-dd7732ba7e9c708e
 created: "2026-10-11T07:14:27Z"
 ---

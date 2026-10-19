@@ -37,7 +37,7 @@ utility); `TestOriginCountsPinned` accounts for this addition.
 
 ## Focused development-host results
 
-Dragon, darwin/arm64, Go from `go.mod`; tests were short and native. Exact
+dev-host, darwin/arm64, Go from `go.mod`; tests were short and native. Exact
 post-rebase commands run on this candidate's working tree:
 
 ```text
@@ -63,14 +63,14 @@ go test -count=1 -run 'TestOwnerSessionOperationMetadata|TestSQLiteLifecycleBack
   PASS.
 go test -count=1 ./pkg/atlas
   PASS after correcting db origin; all atlas package tests, including pinned
-  origin counts, pass on Dragon.
+  origin counts, pass on dev-host.
 go test -count=1 -run 'TestRegisteredLifecycleCommand|TestMCPRunToolLifecycleParity|TestTypedMCPDbLifecycle' ./cmds/db
   PASS on the origin-corrected candidate.
 go test -count=1 -run 'TestOwnerSessionOperationMetadata|TestSQLiteLifecycleBackupRestore|TestBackupPublicationPreservesCompetingDestination|TestOwnerMutationAdmissionCancellation|TestExpiredAttachmentRejected' ./pkg/dblifecycle
   PASS on the origin-corrected candidate.
 ```
 
-An earlier `go test -count=1 ./pkg/dblifecycle` passed in 2.437s on Dragon
+An earlier `go test -count=1 ./pkg/dblifecycle` passed in 2.437s on dev-host
 before these latest edits. It included independent process tests and is not
 used as the required remote acceptance gate. The manager owns the final
 touched-package, consumer and crossvet runs on a claimed remote host.
@@ -97,7 +97,7 @@ touched-package, consumer and crossvet runs on a claimed remote host.
   failures around zero audit duration on Windows; manager reproduced them on
   parent `2111a999`, with unchanged MCP source. That pre-existing failure is
   not marked resolved here. Raw gate:
-  `C:/Users/noviadmin/sprint453/gate-20261017-213411`.
+  `$HOME/sprint453/gate-20261017-213411`.
 - Manager's Windows repair gate on `6a43f159` passed lifecycle, command,
   adapter, search and codegraph packages but failed
   `atlas.TestOriginCountsPinned`: `db` was incorrectly counted as Unix.

@@ -33,7 +33,7 @@ manager early review (5 items ACKed before editing).
   byte-identical. CLI/MCP boundary consumes the returned `ExitError` code (same
   table); Bashy consumer wiring stays phase 2.
 
-## Commands run (local only, Dragon)
+## Commands run (local only, dev-host)
 
 ```
 gofmt -l pkg/recall/                                    # clean, no output
@@ -58,7 +58,7 @@ CLI flag registration + target-without-index refusal,
 legacy envelope key-absence (`retrieval/freshness/truncation/memory_error`).
 Existing TestContextEnvelopeGolden passes unchanged (golden byte-unchanged).
 
-## Owed gates (manager runs remotely — NOT run on Dragon)
+## Owed gates (manager runs remotely — NOT run on dev-host)
 
 Whole `./pkg/recall` + `./pkg/kbmemory` suites, native-process tests,
 live CLI/MCP/golden gates (incl. real `--memory-target` CLI exit-code observation

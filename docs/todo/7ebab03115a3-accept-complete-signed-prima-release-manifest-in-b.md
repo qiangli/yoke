@@ -23,5 +23,5 @@ and unique safe basenames. Require all four executable rows; compare the
 selected row with downloaded bytes and the independent committed pin. Verify
 the sums signature against the exact workflow identity and issuer, including
 offline cache reuse. Exercise realistic complete manifests and negative cases.
-Do not add release pins until hosted CI succeeds. No Dragon native build or
+Do not add release pins until hosted CI succeeds. No dev-host native build or
 container, and no push.

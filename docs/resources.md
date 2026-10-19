@@ -125,7 +125,7 @@ darwin), keeping the shortest mount path.
 {
   "schema_version": "bashy-resources-v1",
   "at": "2026-07-21T10:04:25Z",
-  "host": "dragon", "os": "darwin", "arch": "arm64",
+  "host": "dev-host", "os": "darwin", "arch": "arm64",
   "sample_seconds": 0.301,
   "cpu":     {"logical_cores": 12, "usage_percent": 57.4, "pressure": "normal", "source": "loadavg", "load_average": [7.8, 7.5, 7.1]},
   "memory":  {"total_bytes": 25769803776, "used_bytes": 7180000000, "used_percent": 27, "pressure": "normal"},

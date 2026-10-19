@@ -1,6 +1,6 @@
 {
   "argv": [
-    "/Users/qiangli/.local/bin/bashy",
+    "$HOME/.local/bin/bashy",
     "model",
     "show",
     "opus5",

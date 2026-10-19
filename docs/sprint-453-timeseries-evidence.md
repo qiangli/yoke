@@ -110,7 +110,7 @@ No story acceptance is claimed from development-host tests.
   local ts ops never do. A dry run declares only (zero HTTP); a no-net
   effect cap refuses remote ops before any request.
 
-## Development-host execution record (Dragon, darwin/arm64)
+## Development-host execution record (dev-host, darwin/arm64)
 
 Focused short tests only. No full product build, no container, no ollama.
 

@@ -1,22 +1,22 @@
 import os,json,sys,time,subprocess,hashlib,signal,uuid
 from pathlib import Path
-sys.path.insert(0,'/Users/qiangli/projects/poc/dhnt/agent-bench/scripts')
+sys.path.insert(0,'$HOME/projects/poc/dhnt/agent-bench/scripts')
 from arm_home import seed_claude_keychain
 ROOT=Path.cwd(); E=ROOT/'docs/validation/s446-s22-run513'; R=Path('/tmp/s446-run513-vendor'); R.mkdir(mode=0o700)
-BIN=Path('/Users/qiangli/.local/share/claude/versions/2.1.284'); MODEL='claude-opus-5'
+BIN=Path('$HOME/.local/share/claude/versions/2.1.284'); MODEL='claude-opus-5'
 start=time.monotonic(); deadline=start+900
-profile=R/'guard.sb'; profile.write_text('(version 1)\n(allow default)\n(deny file-write* (subpath "/Users/qiangli") (with send-signal SIGKILL))\n(deny process-exec (literal "/usr/bin/security"))\n')
+profile=R/'guard.sb'; profile.write_text('(version 1)\n(allow default)\n(deny file-write* (subpath "$HOME") (with send-signal SIGKILL))\n(deny process-exec (literal "/usr/bin/security"))\n')
 (E/'guard.sb').write_bytes(profile.read_bytes())
 baseargs=[str(BIN),'-p','--max-turns','1','--output-format','stream-json','--verbose','--tools','','--model',MODEL,'--effort','low','--setting-sources','','--strict-mcp-config','--mcp-config','{"mcpServers":{}}','--disable-slash-commands','--no-session-persistence','--system-prompt','']
 (E/'vendor-binary.json').write_text(json.dumps(dict(path=str(BIN),sha256=hashlib.sha256(BIN.read_bytes()).hexdigest(),argv=baseargs),indent=2)+'\n')
 def canary(label):
- target=Path('/Users/qiangli')/('.s446-run513-deny-'+uuid.uuid4().hex)
+ target=Path('$HOME')/('.s446-run513-deny-'+uuid.uuid4().hex)
  p=subprocess.run(['/usr/bin/sandbox-exec','-f',str(profile),'/bin/sh','-c','/usr/bin/touch "$1"','canary',str(target)],capture_output=True,timeout=15)
  record=dict(argv=p.args,exit_code=p.returncode,absent=not target.exists(),stderr=p.stderr.decode(errors='replace'))
  (E/('canary-'+label+'.json')).write_text(json.dumps(record,indent=2)+'\n')
  assert p.returncode in (-9,137) and not target.exists(), 'write deny canary failed'
 def quota(dest):
- t=time.monotonic(); p=subprocess.run(['/Users/qiangli/.local/bin/bashy','model','quota','--json'],capture_output=True,timeout=60)
+ t=time.monotonic(); p=subprocess.run(['$HOME/.local/bin/bashy','model','quota','--json'],capture_output=True,timeout=60)
  dest.with_suffix('.stdout').write_bytes(p.stdout); dest.with_suffix('.stderr').write_bytes(p.stderr)
  dest.with_suffix('.meta.json').write_text(json.dumps(dict(argv=p.args,exit_code=p.returncode,elapsed=time.monotonic()-t))+'\n')
  assert p.returncode==0
@@ -27,7 +27,7 @@ def quota(dest):
 # Independent auth copies, no shared cache/history/settings; helper strips refresh token.
 for arm in ('A','B'):
  a=R/arm; (a/'home/.claude').mkdir(parents=True,mode=0o700); (a/'workspace').mkdir(); (a/'tmp').mkdir()
- seed_claude_keychain(str(a/'home/.claude'),['/Users/qiangli'])
+ seed_claude_keychain(str(a/'home/.claude'),['$HOME'])
  (a/'home/.claude/.claude.json').write_text(json.dumps({'hasCompletedOnboarding':True}))
 canary('before')
 for arm in ('A','B'):
