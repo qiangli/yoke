@@ -1,11 +1,19 @@
 package bus
 
 import (
+	"context"
+	"encoding/json"
 	"os"
+	"runtime"
 	"strings"
 
+	"github.com/qiangli/yoke/pkg/lens"
 	"github.com/qiangli/yoke/pkg/ref"
 )
+
+// The board renders on the reader's host. On Windows its suggested command
+// must use the same S4 PowerShell row as Meet, not POSIX shell quoting.
+var localCommandOS = runtime.GOOS
 
 // MessageRef is a canonical locator found in a message body (Sprint 446 S16,
 // communication by address). It is a READ-SIDE annotation: the body is stored
@@ -156,9 +164,26 @@ func refsLine(refs []MessageRef) string {
 	}
 	reads := make([]string, len(refs))
 	for i, r := range refs {
-		reads[i] = "`lens " + shellQuoteRef(r.Ref) + "`"
+		if command := readCommand(r.Ref); command != "" {
+			reads[i] = "`" + command + "`"
+		}
 	}
 	return "refs: " + strings.Join(parts, ", ") + " — read: " + strings.Join(reads, ", ")
+}
+
+func readCommand(ref string) string {
+	if localCommandOS != "windows" {
+		return "lens " + shellQuoteRef(ref)
+	}
+	data, err := json.Marshal(map[string]any{"name": "lens", "kind": "command", "exec": []string{"lens", ref}})
+	if err != nil {
+		return ""
+	}
+	res, err := lens.Convert(context.Background(), lens.Request{From: "json", To: "pwsh", Data: data})
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(res.Data))
 }
 
 // shellQuoteRef single-quotes a locator only when it holds shell-special bytes.

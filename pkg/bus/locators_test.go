@@ -152,3 +152,16 @@ func TestLocatorReadCommand(t *testing.T) {
 		})
 	}
 }
+
+func TestMessageRefReadUsesWindowsDialect(t *testing.T) {
+	old := localCommandOS
+	localCommandOS = "windows"
+	t.Cleanup(func() { localCommandOS = old })
+	line := refsLine([]MessageRef{{Ref: "zip:a!/b;c"}})
+	if !strings.Contains(line, "read: `&") || !strings.Contains(line, "zip:a!/b;c") {
+		t.Fatalf("Windows read command was not rendered by S4 PowerShell row: %q", line)
+	}
+	if strings.Contains(line, "lens 'zip:a!/b;c'") {
+		t.Fatalf("POSIX shell command leaked to Windows reader: %q", line)
+	}
+}

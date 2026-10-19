@@ -1,11 +1,33 @@
 package meet
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/qiangli/yoke/pkg/bus"
 )
+
+func TestPeerOSUsesBoundedOutpostStatus(t *testing.T) {
+	old := peerStatusRunner
+	t.Cleanup(func() { peerStatusRunner = old })
+	rows := `[{"host":"win-1","alias":"desk","os":"windows"},{"host":"linux-1","os":"linux"},{"host":"other","alias":"ambiguous","os":"darwin"},{"host":"another","alias":"ambiguous","os":"windows"}]`
+	peerStatusRunner = func(context.Context) ([]byte, error) { return []byte(rows), nil }
+	for host, want := range map[string]string{"win-1": "windows", "desk": "windows", "linux-1": "linux", "ambiguous": "", "missing": ""} {
+		if got := lookupPeerOS(host); got != want {
+			t.Errorf("lookupPeerOS(%q) = %q, want %q", host, got, want)
+		}
+	}
+	refs := bus.MessageLocators("see dir:src@desk", "a")
+	if len(refs) != 1 || !strings.HasPrefix(peerReadLine(refs[0]), "&") {
+		t.Fatalf("Windows peer command was not rendered as PowerShell: %+v", refs)
+	}
+	peerStatusRunner = func(context.Context) ([]byte, error) { return nil, errors.New("offline") }
+	if got := lookupPeerOS("win-1"); got != "" {
+		t.Fatalf("unavailable peer board guessed OS %q", got)
+	}
+}
 
 func TestLocatorPeerReadLine(t *testing.T) {
 	t.Setenv("BASHY_HOME", t.TempDir())
