@@ -115,7 +115,7 @@ func (s *Store) Forget(p *Page, reason string, at time.Time) (kblife.Tombstone, 
 		return kblife.Tombstone{}, err
 	}
 	rec := forgetRecord{
-		journalRecord: journalRecord{Op: "forget", Slug: p.Slug, ID: p.ID, Tool: tomb.By, Host: HostID(),
+		journalRecord: journalRecord{Op: "forget", Slug: p.Slug, ID: p.ID, Tool: tomb.By, Host: s.hostID(),
 			Episode: tomb.Episode, ParentEpisode: ParentEpisodeID(), At: tomb.At},
 		Ref: tomb.Ref, Reason: tomb.Reason, By: tomb.By,
 	}

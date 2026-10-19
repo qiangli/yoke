@@ -64,7 +64,7 @@ func scopedRings(dir, scope string, scopes ref.ScopeLookup) ([]kbRing, error) {
 	if root == "" {
 		return []kbRing{{name: "host", store: Open(DefaultDir())}}, nil
 	}
-	return []kbRing{{name: "repo", store: Open(filepath.Join(root, RepoSub))}}, nil
+	return []kbRing{{name: "repo", store: OpenRepo(filepath.Join(root, RepoSub))}}, nil
 }
 
 // resolveKB looks a handle (slug, seq or uuid — ref.ShapeOf) up across the
@@ -102,7 +102,7 @@ func kbRings(dir string) []kbRing {
 	var rings []kbRing
 	if cwd, err := os.Getwd(); err == nil {
 		if root := repoRootOf(cwd); root != "" {
-			rings = append(rings, kbRing{name: "repo", store: Open(filepath.Join(root, RepoSub))})
+			rings = append(rings, kbRing{name: "repo", store: OpenRepo(filepath.Join(root, RepoSub))})
 		}
 	}
 	rings = append(rings, kbRing{name: "host", store: Open(DefaultDir())})

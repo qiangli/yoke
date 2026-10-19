@@ -71,10 +71,14 @@ func resolveKBDir(dir *string, forceRepo, forceUser, forceAgent bool, baseDir st
 // point a front end mounts (e.g. `bashy kb`).
 // openRing opens the store for the resolved ring. On the agent ring it scopes
 // reads to the calling principal (ToolID) so another principal sees nothing;
-// every other ring is unscoped.
+// on the repo ring it records no host (committed); every other ring is an
+// unscoped host-recording store.
 func openRing(dir, ring string) *Store {
 	if ring == string(scope.KindAgent) {
 		return OpenAgentRing(dir, ToolID())
+	}
+	if ring == string(scope.KindRepo) {
+		return OpenRepo(dir)
 	}
 	return Open(dir)
 }
@@ -160,7 +164,7 @@ phrase it as "what + WHEN this applies" with trigger keywords.`,
 	cmd.AddCommand(newRetroCmd(&dir, resolved))
 	cmd.AddCommand(newConsolidateCmd(&dir, resolved))
 	cmd.AddCommand(newSourcesCmd(&dir))
-	cmd.AddCommand(newTransferCmd(&dir))
+	cmd.AddCommand(newTransferCmd(&dir, resolved))
 	cmd.AddCommand(newListCmd(&dir, resolved))
 	cmd.AddCommand(newIndexCmd(&dir, resolved))
 	cmd.AddCommand(newLogCmd(&dir, resolved))

@@ -32,6 +32,13 @@ import (
 //	<dir>/.git           best-effort history/blame via the pure-Go git package
 type Store struct {
 	dir string
+	// repoRing marks the committed per-repo store (docs/kb/ inside a git
+	// repository): its pages and journal lines are checked in, so they
+	// carry no host identity. The host ring (DefaultDir under ~/.bashy) is
+	// private and keeps recording the host. Set from how the store was
+	// resolved or opened (openRing, resolve.go, or OpenRepo directly) —
+	// hostID is the one decision point that reads it.
+	repoRing bool
 	// ownerScoped restricts reads to a single principal: Load and List
 	// return only pages this principal wrote (Source.Tool match). It is set
 	// for the AGENT ring, whose store is owner-only — another principal
@@ -100,6 +107,27 @@ func OpenAgentRing(dir, owner string) *Store {
 	s.ownerScoped = true
 	s.owner = strings.TrimSpace(owner)
 	return s
+}
+
+// OpenRepo opens the committed per-repo store at dir (docs/kb/ inside a git
+// repository). Writes through it record no host: the pages and the journal
+// are checked into a public repo, while the host ring stays private.
+func OpenRepo(dir string) *Store {
+	if dir == "" {
+		dir = DefaultDir()
+	}
+	return &Store{dir: dir, repoRing: true}
+}
+
+// hostID is the host identity this store stamps on journal records, or ""
+// for a repo-ring store (committed: no host). Callers keep stamping
+// HostID() at build time; Write and the journal writers consult this one
+// decision point so the ring — not each call site — decides.
+func (s *Store) hostID() string {
+	if s.repoRing {
+		return ""
+	}
+	return HostID()
 }
 
 // ownedBy reports whether page p was written by principal owner.
@@ -212,6 +240,12 @@ func (s *Store) Write(p *Page, op string) error {
 	if err := os.MkdirAll(s.pagesDir(), 0o755); err != nil {
 		return err
 	}
+	// A repo-ring store is committed: the page carries no host (the field
+	// is omitempty, so it vanishes from the front matter). Tool and Episode
+	// stay as stamped.
+	if s.repoRing && p.Source != nil {
+		p.Source.Host = ""
+	}
 	b, err := p.Marshal()
 	if err != nil {
 		return err
@@ -279,7 +313,7 @@ type journalRecord struct {
 // safe without a lock; failures are swallowed — the page write is the
 // operation, the journal is the trail.
 func (s *Store) journal(op, slug, id string) {
-	rec := journalRecord{Op: op, Slug: slug, ID: id, Tool: ToolID(), Host: HostID(), Episode: EpisodeID(), ParentEpisode: ParentEpisodeID(), At: time.Now().UTC()}
+	rec := journalRecord{Op: op, Slug: slug, ID: id, Tool: ToolID(), Host: s.hostID(), Episode: EpisodeID(), ParentEpisode: ParentEpisodeID(), At: time.Now().UTC()}
 	b, err := json.Marshal(rec)
 	if err != nil {
 		return
@@ -456,12 +490,16 @@ func (s *Store) gitSnapshot(msg string) {
 	if _, err := git.Add(git.AddOptions{RepoPath: s.dir, All: true}); err != nil {
 		return
 	}
-	tool, host := ToolID(), HostID()
+	tool, host := ToolID(), s.hostID()
+	email := tool
+	if host != "" {
+		email = tool + "@" + host
+	}
 	_, _ = git.Commit(git.CommitOptions{
 		RepoPath:    s.dir,
 		Message:     msg,
 		AuthorName:  tool,
-		AuthorEmail: tool + "@" + host,
+		AuthorEmail: email,
 	})
 }
 

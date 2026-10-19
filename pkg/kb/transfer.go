@@ -18,7 +18,7 @@ import (
 // way. The judgment (what to transfer, how to distill) is the agent's,
 // guided by the knowledge-transfer skill. Writes nothing, ever.
 
-func newTransferCmd(dir *string) *cobra.Command {
+func newTransferCmd(dir, ring *string) *cobra.Command {
 	var k int
 	var from string
 	cmd := &cobra.Command{
@@ -44,7 +44,7 @@ sources probes are used: ~/.agents/ycode/memory and <repo>/.agents/ycode/memory.
 				if src != memexSource {
 					return fmt.Errorf("kb: transfer --from %q not supported (only: memex)", from)
 				}
-				return runMemexTransfer(c, *dir, args)
+				return runMemexTransfer(c, *dir, *ring, args)
 			}
 			store := Open(*dir)
 			pages, err := store.List()
@@ -110,14 +110,14 @@ full procedure: bashy skill show knowledge-transfer
 // a MOVE: the notes are written here and the source dir is left untouched for
 // the operator to delete. Idempotent — a memory already present (by content
 // hash, then near-duplicate title) is skipped, so a second run moves nothing.
-func runMemexTransfer(c *cobra.Command, dir string, srcDirs []string) error {
+func runMemexTransfer(c *cobra.Command, dir, ring string, srcDirs []string) error {
 	if len(srcDirs) == 0 {
 		srcDirs = defaultMemexDirs()
 	}
 	// The target store is read UNSCOPED (every page physically in the ring),
 	// so dedup sees the memex-stamped pages a prior run wrote even though their
 	// Source.Tool is "memex" rather than this principal.
-	store := Open(dir)
+	store := openRing(dir, ring)
 	existing, err := store.List()
 	if err != nil {
 		return err
