@@ -153,6 +153,7 @@ var packages = map[string]Package{
 	"chat":       cmdPkg("chat"),
 	"codegraph":  cmdPkg("graph"),
 	"dag":        cmdPkg("dag"),
+	"dagrun":     libPkg("dag", "the one bashy run manifest (a dag.md) generated from command + args + context, its pure cluster rendering, workspace context and durable session record/replay log behind the cluster-userland verbs; no verb of its own until those land"),
 	"gomod":      cmdPkg("mod"),
 	"foreman":    libPkg("weave", "internal process manager for steerable agent sessions under weave and sprint; suppressed from the public atlas (Bashy #40)"),
 	"gate":       cmdPkg("gate"),
