@@ -215,7 +215,8 @@ func TestRunEmitManifestDoesNotApply(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, stderr)
 	}
 	want, err := dagrun.Generate(dagrun.GenerateInput{
-		Command:     dagrun.CommandRef{Name: "echo", Digest: testExeSHA, Artifacts: map[string]string{"linux/amd64": testAmdSHA, "linux/arm64": testArmSHA}},
+		// A shipped command on the image executor: release + image, nothing fetched.
+		Command:     dagrun.CommandRef{Name: "echo", Digest: testExeSHA, Release: "v1.2.3", Image: testRunImage},
 		Argv:        []string{"echo", "hello world"},
 		WorkspaceID: testWorkspaceID,
 		RunID:       testRunID,
@@ -373,9 +374,102 @@ func TestRunShippedWithoutProvenArtifactFailsClosed(t *testing.T) {
 	rt.renv.shippedArtifacts = func(string, releaseIdentity) (map[string]string, error) {
 		return nil, errors.New("no artifact digest for linux/amd64")
 	}
-	code, _, stderr := rt.exec(t, "run", "--", "make")
-	if code == 0 || !strings.Contains(stderr, "no artifact digest for linux/amd64") {
-		t.Errorf("exit %d stderr %q", code, stderr)
+	_, _, err := rt.renv.resolveCommand("make", executorTarget{fetches: true})
+	if err == nil || !strings.Contains(err.Error(), "no artifact digest for linux/amd64") || !strings.Contains(err.Error(), "nothing ran") {
+		t.Errorf("fetching executor: err %v", err)
+	}
+	rt.noSideEffects(t)
+}
+
+// darwinRelease is a macOS client's release: it proves only its own bytes.
+func darwinRelease() (releaseIdentity, error) {
+	return releaseIdentity{Version: "v1.2.3", SHA256: testExeSHA, Commit: "656d72b81d76e0c0ffee0123456789abcdef0123", GOOS: "darwin", GOARCH: "arm64"}, nil
+}
+
+// bashy itself is shipped, and on the Linux image executor a shipped
+// command needs no client-provable linux artifact: the image carries it.
+func TestRunShippedBashyFromNonLinuxClient(t *testing.T) {
+	rt := newRunTest(t)
+	rt.selectWorkspace(t, "skel")
+	rt.renv.release = darwinRelease
+	rt.renv.shippedArtifacts = provenShippedArtifacts // the production prover
+	rt.renv.image = func() string { return "" }       // the release's own image
+	code, stdout, stderr := rt.exec(t, "run", "--session", "--", "bashy", "-c", "echo hi; exit 7")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	if strings.Contains(stderr, "artifact digest") {
+		t.Errorf("image executor asked for an artifact digest: %s", stderr)
+	}
+	if stdout != "session "+testRunID+"\n" {
+		t.Errorf("stdout %q, want the session id", stdout)
+	}
+	w := appliedWorkload(t, rt.runner.calls[0].stdin)
+	if w["kind"] != "Pod" {
+		t.Fatalf("workload kind %v, want Pod", w["kind"])
+	}
+	c := w["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)
+	if c["image"] != "localhost/bashy-scratch:656d72b8" {
+		t.Errorf("image %v, want the client's own build", c["image"])
+	}
+	var argv []string
+	for _, a := range c["command"].([]any) {
+		argv = append(argv, a.(string))
+	}
+	if got := strings.Join(argv, " "); !strings.HasPrefix(got, "bashy dks session-server --session "+testRunID+" ") ||
+		!strings.Contains(got, " -- bashy -c ") || !strings.Contains(got, "bashy -c 'echo hi; exit 7'") {
+		t.Errorf("container command %q is not the session server over bashy -c", got)
+	}
+	// The identity — release and image — travels in the manifest annotation.
+	ann := w["metadata"].(map[string]any)["annotations"].(map[string]any)
+	m, err := dagrun.ParseManifest([]byte(ann[dagrun.AnnotManifest].(string)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Meta.Artifact) != 0 {
+		t.Errorf("image run recorded artifacts %v", m.Meta.Artifact)
+	}
+	text := string(m.Text)
+	for _, want := range []string{"bashy release v1.2.3 656d72b81d76e0c0ffee0123456789abcdef0123", "image localhost/bashy-scratch:656d72b8"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("manifest does not record %q:\n%s", want, text)
+		}
+	}
+}
+
+// The binary's own invoked name is shipped too, whatever the registry says.
+func TestRunSelfNameIsShipped(t *testing.T) {
+	rt := newRunTest(t)
+	rt.selectWorkspace(t, "skel")
+	rt.renv.selfName = func() string { return "bashy-dev" }
+	for _, name := range []string{"bashy", "bashy-dev"} {
+		if _, _, err := rt.renv.resolveCommand(name, executorTarget{image: testRunImage}); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if _, _, err := rt.renv.resolveCommand("bashy-other", executorTarget{image: testRunImage}); err == nil || !strings.Contains(err.Error(), "unknown command") {
+		t.Errorf("unregistered name: err %v", err)
+	}
+}
+
+// An executor that fetches the artifact (vk-native) still fails closed when
+// the client cannot prove a linux digest.
+func TestShippedFromNonLinuxClientStillFailsForFetchingExecutor(t *testing.T) {
+	rt := newRunTest(t)
+	rt.renv.release = darwinRelease
+	rt.renv.shippedArtifacts = provenShippedArtifacts
+	_, _, err := rt.renv.resolveCommand("bashy", executorTarget{fetches: true, image: testRunImage})
+	if err == nil || !strings.Contains(err.Error(), "no artifact digest for linux/amd64 or linux/arm64") ||
+		!strings.Contains(err.Error(), "darwin/arm64") {
+		t.Errorf("err %v, want the fail-closed artifact error", err)
+	}
+	// A Linux client proves its own bytes for that executor.
+	rt.renv.release = func() (releaseIdentity, error) {
+		return releaseIdentity{Version: "v1.2.3", SHA256: testExeSHA, GOOS: "linux", GOARCH: "amd64"}, nil
+	}
+	ref, _, err := rt.renv.resolveCommand("bashy", executorTarget{fetches: true})
+	if err != nil || ref.Artifacts["linux/amd64"] != testExeSHA {
+		t.Errorf("linux client: ref %+v err %v", ref, err)
 	}
 	rt.noSideEffects(t)
 }

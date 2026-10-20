@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"strings"
@@ -37,12 +38,23 @@ import (
 )
 
 // releaseIdentity is the running bashy release: its version, the sha256 of
-// its own executable, and the commit it was built from. A shipped command's
-// identity is the release; its commit names the default executor image.
+// its own executable, the commit it was built from and the platform it runs
+// on. A shipped command's identity is the release; its commit names the
+// default executor image.
 type releaseIdentity struct {
 	Version string
 	SHA256  string // hex
 	Commit  string // hex; "" when the build carries no VCS identity
+	GOOS    string // the platform these bytes are built for
+	GOARCH  string
+}
+
+// String is the release as a manifest records it: version, then commit.
+func (r releaseIdentity) String() string {
+	if r.Commit == "" {
+		return r.Version
+	}
+	return r.Version + " " + r.Commit
 }
 
 // runEnv extends the userland seams with what run/ps/stop need. Production
@@ -57,6 +69,9 @@ type runEnv struct {
 	shippedArtifacts func(name string, rel releaseIdentity) (map[string]string, error)
 	// isShipped reports whether name is a builtin shipped in this binary.
 	isShipped func(name string) bool
+	// selfName is the base name this binary was invoked as ("" = unknown);
+	// it, like "bashy", names the session shell itself — a shipped command.
+	selfName func() string
 	// lookupCommand resolves a registered command record by name or alias.
 	lookupCommand func(name string) (fleet.Command, bool)
 	// getenv reads one exported variable for a bare `--env K`.
@@ -122,6 +137,7 @@ func defaultRunEnv(env *userlandEnv) *runEnv {
 		release:          selfRelease,
 		shippedArtifacts: provenShippedArtifacts,
 		isShipped:        func(name string) bool { return tool.Lookup(name) != nil },
+		selfName:         selfBaseName,
 		lookupCommand:    func(name string) (fleet.Command, bool) { return fleet.New().Command(name) },
 		getenv:           os.LookupEnv,
 		image:            func() string { return strings.TrimSpace(os.Getenv(imageEnvVar)) },
@@ -222,7 +238,8 @@ func (env *runEnv) run(cmd *cobra.Command, o runOptions, args []string) error {
 	if err != nil {
 		return fail(err)
 	}
-	ref, recordKind, err := env.resolveCommand(args[0])
+	image, from, imgErr := env.resolveImage(o.image)
+	ref, recordKind, err := env.resolveCommand(args[0], executorTarget{image: image, imageErr: imgErr})
 	if err != nil {
 		return fail(err)
 	}
@@ -248,9 +265,9 @@ func (env *runEnv) run(cmd *cobra.Command, o runOptions, args []string) error {
 	if err != nil {
 		return fail(err)
 	}
-	image, from, imgErr := env.resolveImage(o.image)
 	if o.emit == "manifest" {
-		// The manifest is image-free; the image is reported, not required.
+		// A registered command's manifest is image-free: the image is
+		// reported, not required. A shipped command's names its image.
 		if imgErr != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "dks: executor image unresolved: pass --image or set $%s\n", imageEnvVar)
 		} else {
@@ -557,22 +574,64 @@ func (env *runEnv) planeClient(ctxRec dagrun.Context) (*cluster.Client, error) {
 	return &cluster.Client{Runner: env.newRunner(), Context: kctx}, nil
 }
 
-// resolveCommand maps argv[0] to its identity: a builtin shipped in this
-// binary is the bashy release; a registered command is its record digest
-// plus its pinned artifacts. Anything else is unknown and runs nowhere.
-// The kind is the registered record's run.kind; a shipped command's is ""
-// (one-shot).
-func (env *runEnv) resolveCommand(name string) (dagrun.CommandRef, dagrun.RunKind, error) {
-	if env.isShipped(name) {
+// executorTarget is how the chosen executor class gets a shipped command:
+// a Linux executor runs the bashy-built image, which already carries every
+// shipped command, so nothing is fetched; a fetching executor (vk-native,
+// Stage B) downloads the per-platform bashy artifact.
+type executorTarget struct {
+	fetches  bool   // the executor fetches the command's artifact
+	image    string // the image a Linux executor runs; "" = unresolved
+	imageErr error  // why no image resolved
+}
+
+// isShippedCommand reports whether name is shipped with this bashy: a
+// builtin in the registry, or bashy itself — the session shell, which the
+// registry does not list.
+func (env *runEnv) isShippedCommand(name string) bool {
+	if name == "bashy" {
+		return true
+	}
+	if env.selfName != nil {
+		if self := env.selfName(); self != "" && name == self {
+			return true
+		}
+	}
+	return env.isShipped(name)
+}
+
+// resolveCommand maps argv[0] to its identity: a command shipped with
+// bashy is the bashy release (version + commit) plus, on an image
+// executor, the image that carries it; a registered command is its record
+// digest plus its pinned artifacts. Anything else is unknown and runs
+// nowhere. The kind is the registered record's run.kind; a shipped
+// command's is "" (one-shot).
+func (env *runEnv) resolveCommand(name string, exec executorTarget) (dagrun.CommandRef, dagrun.RunKind, error) {
+	if env.isShippedCommand(name) {
 		rel, err := env.release()
 		if err != nil {
 			return dagrun.CommandRef{}, "", fmt.Errorf("command %s: bashy release identity: %w — nothing ran", name, err)
 		}
-		arts, err := env.shippedArtifacts(name, rel)
-		if err != nil {
-			return dagrun.CommandRef{}, "", fmt.Errorf("command %s: %w — nothing ran", name, err)
+		ref := dagrun.CommandRef{Name: name, Digest: rel.SHA256, Release: rel.String()}
+		if exec.fetches {
+			// The executor downloads an artifact: its digest must be one
+			// this bashy can prove, or nothing runs.
+			arts, err := env.shippedArtifacts(name, rel)
+			if err != nil {
+				return dagrun.CommandRef{}, "", fmt.Errorf("command %s: %w — nothing ran", name, err)
+			}
+			ref.Artifacts = arts
+			return ref, "", nil
 		}
-		return dagrun.CommandRef{Name: name, Digest: rel.SHA256, Artifacts: arts}, "", nil
+		// The executor runs the image, which already holds the command:
+		// nothing is fetched, so the identity is the release plus the image.
+		if exec.image == "" {
+			if exec.imageErr != nil {
+				return dagrun.CommandRef{}, "", exec.imageErr
+			}
+			return dagrun.CommandRef{}, "", fmt.Errorf("command %s: no executor image — nothing ran", name)
+		}
+		ref.Image = exec.image
+		return ref, "", nil
 	}
 	rec, ok := env.lookupCommand(name)
 	if !ok {
@@ -730,7 +789,17 @@ func selfRelease() (releaseIdentity, error) {
 		}
 		commit = commitFromBuildInfo(bi)
 	}
-	return releaseIdentity{Version: version, SHA256: sum, Commit: commit}, nil
+	return releaseIdentity{Version: version, SHA256: sum, Commit: commit, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH}, nil
+}
+
+// selfBaseName is the base name of this executable, without a Windows
+// .exe suffix; "" when it cannot be read.
+func selfBaseName() string {
+	self, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSuffix(filepath.Base(self), ".exe")
 }
 
 // commitFromBuildInfo is the commit a binary was built from: the full
@@ -782,15 +851,16 @@ func fileSHA256(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// provenShippedArtifacts returns only the artifact digests this process
-// can prove: the running binary IS the linux/<arch> artifact when it runs
-// on a Linux executor arch. Anything else fails closed, naming the platform
-// a Linux executor needs.
+// provenShippedArtifacts returns only the artifact digests this release
+// can prove for an executor that fetches one: the running binary IS the
+// linux/<arch> artifact when it is built for a Linux executor arch.
+// Anything else fails closed, naming the platform a fetching executor
+// needs. An image executor never asks: the image carries the command.
 func provenShippedArtifacts(_ string, rel releaseIdentity) (map[string]string, error) {
-	if runtime.GOOS == "linux" && (runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64") {
-		return map[string]string{"linux/" + runtime.GOARCH: rel.SHA256}, nil
+	if rel.GOOS == "linux" && (rel.GOARCH == "amd64" || rel.GOARCH == "arm64") {
+		return map[string]string{"linux/" + rel.GOARCH: rel.SHA256}, nil
 	}
-	return nil, fmt.Errorf("no artifact digest for linux/amd64 or linux/arm64 (this bashy is %s/%s and proves only its own bytes)", runtime.GOOS, runtime.GOARCH)
+	return nil, fmt.Errorf("no artifact digest for linux/amd64 or linux/arm64 (this bashy is %s/%s and proves only its own bytes)", orDash(rel.GOOS), orDash(rel.GOARCH))
 }
 
 func sleepContext(ctx context.Context, d time.Duration) error {

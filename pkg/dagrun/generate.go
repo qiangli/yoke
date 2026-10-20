@@ -14,14 +14,38 @@ import (
 	"github.com/qiangli/yoke/pkg/dag"
 )
 
-// CommandRef is the identity of the registered command being run: the
-// record digest plus one pinned artifact sha256 per goos/goarch. It is a
-// plain copy of the command record's fields, so this package does not
-// depend on the registry types.
+// CommandRef is the identity of the command being run: the record digest
+// plus one pinned artifact sha256 per goos/goarch. It is a plain copy of the
+// command record's fields, so this package does not depend on the registry
+// types. A command shipped with bashy also names the bashy release and, when
+// a Linux executor runs it from the bashy-built image (nothing fetched), that
+// image; both are optional and recorded in the manifest description.
 type CommandRef struct {
 	Name      string
 	Digest    string            // record digest, sha256
 	Artifacts map[string]string // "goos/goarch" -> sha256
+	Release   string            // shipped only: bashy "<version> <commit>"; "" otherwise
+	Image     string            // shipped only: the executor image carrying it; "" otherwise
+}
+
+// description is the manifest's description line: the command, and for a
+// shipped command the release and image that are its identity.
+func (c CommandRef) description() (string, error) {
+	if hasControl(c.Release) || hasControl(c.Image) {
+		return "", invalid("command %s: release %q or image %q contains a control character", c.Name, c.Release, c.Image)
+	}
+	var shipped []string
+	if c.Release != "" {
+		shipped = append(shipped, "bashy release "+c.Release)
+	}
+	if c.Image != "" {
+		shipped = append(shipped, "image "+c.Image)
+	}
+	id := ""
+	if len(shipped) > 0 {
+		id = " (shipped: " + strings.Join(shipped, ", ") + ")"
+	}
+	return "bashy run manifest for " + c.Name + id + " (generated; do not edit)", nil
 }
 
 // Resources is `run.resources`.
@@ -98,13 +122,17 @@ func Generate(in GenerateInput) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	desc, err := in.Command.description()
+	if err != nil {
+		return nil, err
+	}
 
 	var fm bytes.Buffer
 	enc := yaml.NewEncoder(&fm)
 	enc.SetIndent(2)
 	if err := enc.Encode(manifestFront{
 		Name:        "run-" + strings.ToLower(in.RunID),
-		Description: "bashy run manifest for " + in.Command.Name + " (generated; do not edit)",
+		Description: desc,
 		Type:        "dag",
 		Metadata:    meta,
 	}); err != nil {

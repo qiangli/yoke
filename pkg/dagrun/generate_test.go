@@ -237,6 +237,8 @@ func TestGenerateFailsClosed(t *testing.T) {
 		"credential with space": func(in *GenerateInput) { in.Run.Credentials = []string{"a b"} },
 		"accelerator no kind":   func(in *GenerateInput) { in.Run.Accelerator = Accelerator{Family: "cuda", Count: 1} },
 		"nul in argv":           func(in *GenerateInput) { in.Argv = []string{"echo", "a\x00b"} },
+		"image newline":         func(in *GenerateInput) { in.Command.Image = "img:1\n---" },
+		"release newline":       func(in *GenerateInput) { in.Command.Release = "v1\nx" },
 	}
 	for name, mutate := range cases {
 		in := testInput()
@@ -266,5 +268,31 @@ func TestGenerateDefaults(t *testing.T) {
 	}
 	if !strings.Contains(string(m), "\nRetries: 0\n") {
 		t.Fatalf("manifest lacks Retries: 0:\n%s", m)
+	}
+}
+
+// A shipped command's release and executor image are recorded in the
+// manifest; a registered command's description is unchanged.
+func TestGenerateRecordsShippedReleaseAndImage(t *testing.T) {
+	in := testInput()
+	in.Command = CommandRef{Name: "bashy", Digest: testRecord, Release: "v1.2.3 656d72b8", Image: "localhost/bashy-scratch:656d72b8"}
+	in.Match = nil
+	m, err := Generate(in)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if _, err := ParseManifest(m); err != nil {
+		t.Fatalf("ParseManifest: %v", err)
+	}
+	want := "bashy run manifest for bashy (shipped: bashy release v1.2.3 656d72b8, image localhost/bashy-scratch:656d72b8) (generated; do not edit)"
+	if !strings.Contains(string(m), want) {
+		t.Errorf("manifest lacks %q:\n%s", want, m)
+	}
+	reg, err := Generate(testInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(reg), "description: bashy run manifest for render (generated; do not edit)\n") {
+		t.Errorf("registered description changed:\n%s", reg)
 	}
 }
