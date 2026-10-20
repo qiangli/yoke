@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [repo/page] resource watch: install and operate the host resource watcher — How to install, tune and read bashy resource watch — use when a host needs disk/memory/CPU/GPU/network threshold alarms or when auto-registered host resources appear in resource list `bashy resource watch` samples this host's registered resources and  (kb:resource-watch-install-and-operate-the-host-resource-watcher)
+- [repo/page] Real-engine probe tests need a test-only sibling package — WHEN testing yoke usage-probe seeds end to end (YAML -> fleet -> llmbudget.Quota through the REAL Bash# runner): llmbudget's internal tests snippet.SetRunner(nil) in cleanup and pkg/dag imports llmbudget, so neither pkg/llmbudget nor pkg/fleet tests can import  (kb:real-engine-probe-tests-need-a-test-only-sibling-package)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 
