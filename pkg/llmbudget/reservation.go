@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -59,25 +60,37 @@ func (g *Gate) ownerPath(id string) string {
 }
 func validOwner(id string) bool { b, e := hex.DecodeString(id); return e == nil && len(b) == 16 }
 func (g *Gate) ownerLive(id string) bool {
+	live, _ := g.ownerCheck(id)
+	return live
+}
+
+// ownerCheck reports whether the owner lock is definitely held. A non-nil
+// error means the answer is unknown (I/O trouble), not that the owner is dead.
+func (g *Gate) ownerCheck(id string) (bool, error) {
 	if !validOwner(id) {
-		return false
+		return false, nil
 	}
 	if g.cfg.StatePath == "" {
-		return true
+		return true, nil
 	}
 	// Do not create a never-existing owner merely to check it.
 	if _, err := os.Stat(g.ownerPath(id)); err != nil {
-		return false
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
 	}
 	l, err := lockfile.TryAcquire(g.ownerPath(id), lockfile.Holder{Name: "budget-owner-check"})
 	if errors.Is(err, lockfile.ErrHeld) {
-		return true
+		return true, nil
 	}
-	if err == nil {
-		_ = l.Release()
+	if err != nil {
+		return false, err
 	}
-	return false
+	_ = l.Release()
+	return false, nil
 }
+
 func Preview(ctx context.Context, r Request) (Admission, error) { return defaultGate.Preview(ctx, r) }
 func Reserve(ctx context.Context, r Request) (Admission, error) { return defaultGate.Reserve(ctx, r) }
 func Renew(ctx context.Context, id, owner string, ttl time.Duration) error {
@@ -427,6 +440,14 @@ func safeAdd(a, b int64) int64 {
 	}
 	return a + b
 }
+
+// ErrReservationMissing and ErrOwnerNotLive are the definite Renew failures;
+// every other Renew error (lock wait, deadline, I/O) is transient.
+var (
+	ErrReservationMissing = errors.New("llmbudget: reservation missing")
+	ErrOwnerNotLive       = errors.New("llmbudget: reservation owner not live")
+)
+
 func (g *Gate) Renew(ctx context.Context, id, owner string, ttl time.Duration) error {
 	if ttl < time.Second || ttl > 24*time.Hour {
 		return errors.New("llmbudget: invalid renewal TTL")
@@ -434,10 +455,17 @@ func (g *Gate) Renew(ctx context.Context, id, owner string, ttl time.Duration) e
 	return g.transaction(ctx, func() error {
 		r, ok := g.state.Reservations[id]
 		if !ok {
-			return errors.New("llmbudget: reservation missing")
+			return ErrReservationMissing
 		}
-		if r.Owner != owner || !g.ownerLive(owner) {
-			return errors.New("llmbudget: reservation owner not live")
+		if r.Owner != owner {
+			return ErrOwnerNotLive
+		}
+		live, err := g.ownerCheck(owner)
+		if err != nil {
+			return fmt.Errorf("llmbudget: owner liveness check: %w", err)
+		}
+		if !live {
+			return ErrOwnerNotLive
 		}
 		r.RenewedAt = g.now()
 		r.ExpiresAt = r.RenewedAt.Add(ttl)

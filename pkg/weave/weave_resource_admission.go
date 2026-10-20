@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -61,6 +62,59 @@ func weaveRunLifecycleLock(dir string, id int64) (*lockfile.Lock, error) {
 	return lockfile.TryAcquire(weaveRunLifecycleLockPath(dir, id), lockfile.Holder{Intent: "weave run lifecycle"})
 }
 
+const (
+	weaveReservationTTL = 2 * time.Minute
+	weaveRenewInterval  = 30 * time.Second
+	weaveRenewTimeout   = 5 * time.Second
+	// A run is cancelled once no renew has succeeded for ttl-margin, so it is
+	// stopped before the reservation can lapse under it.
+	weaveRenewSafetyMargin = 30 * time.Second
+)
+
+// weaveRenewLoop keeps one reservation alive. Only a definite loss, or a
+// renew drought long enough for the reservation to expire, cancels the run.
+type weaveRenewLoop struct {
+	renew func(context.Context) error
+	now   func() time.Time
+	ttl   time.Duration
+	log   io.Writer
+	run   string
+}
+
+func (l weaveRenewLoop) serve(ctx context.Context, tick <-chan time.Time, cancel func()) {
+	lastOK := l.now()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick:
+		}
+		rctx, rcancel := context.WithTimeout(ctx, weaveRenewTimeout)
+		err := l.renew(rctx)
+		rcancel()
+		if ctx.Err() != nil {
+			return
+		}
+		if err == nil {
+			lastOK = l.now()
+			continue
+		}
+		since := l.now().Sub(lastOK)
+		switch {
+		case errors.Is(err, llmbudget.ErrReservationMissing), errors.Is(err, llmbudget.ErrOwnerNotLive):
+			fmt.Fprintf(l.log, "weave: run %s: resource reservation lost, cancelling run: %v\n", l.run, err)
+			cancel()
+			return
+		case since >= l.ttl-weaveRenewSafetyMargin:
+			fmt.Fprintf(l.log, "weave: run %s: no successful reservation renew for %s (ttl %s), cancelling run: %v\n", l.run, since.Round(time.Second), l.ttl, err)
+			cancel()
+			return
+		default:
+			fmt.Fprintf(l.log, "weave: run %s: reservation renew failed (will retry, last ok %s ago): %v\n", l.run, since.Round(time.Second), err)
+		}
+	}
+}
+
 type weaveAdmission struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -109,7 +163,7 @@ func beginWeaveAdmission(ctx context.Context, hooks WeaveResourceHooks, demand W
 		owner.Close()
 		return nil, err
 	}
-	req := llmbudget.Request{ID: "weave-" + owner.ID(), Owner: owner.ID(), Run: demand.Run, Host: host, Model: demand.Model, ModelID: demand.ModelID, Agent: demand.Agent, HostSlots: 1, MemoryBytes: demand.MemoryBytes, TTL: 2 * time.Minute, UnknownMemory: demand.MemoryBytes == 0}
+	req := llmbudget.Request{ID: "weave-" + owner.ID(), Owner: owner.ID(), Run: demand.Run, Host: host, Model: demand.Model, ModelID: demand.ModelID, Agent: demand.Agent, HostSlots: 1, MemoryBytes: demand.MemoryBytes, TTL: weaveReservationTTL, UnknownMemory: demand.MemoryBytes == 0}
 	if demand.Model != "" || demand.ModelID != "" {
 		req.Concurrency = 1
 		req.UnknownTokens = true
@@ -124,24 +178,18 @@ func beginWeaveAdmission(ctx context.Context, hooks WeaveResourceHooks, demand W
 	}
 	workCtx, cancel := context.WithCancel(ctx)
 	a := &weaveAdmission{ctx: workCtx, cancel: cancel, gate: gate, owner: owner, request: admission.Reservation.Request, startID: startID, done: make(chan struct{})}
+	loop := weaveRenewLoop{
+		renew: func(c context.Context) error { return gate.Renew(c, req.ID, req.Owner, weaveReservationTTL) },
+		now:   time.Now,
+		ttl:   weaveReservationTTL,
+		log:   os.Stderr,
+		run:   demand.Run,
+	}
+	ticker := time.NewTicker(weaveRenewInterval)
 	go func() {
 		defer close(a.done)
-		timer := time.NewTicker(30 * time.Second)
-		defer timer.Stop()
-		for {
-			select {
-			case <-workCtx.Done():
-				return
-			case <-timer.C:
-				renewCtx, cancel := context.WithTimeout(workCtx, 5*time.Second)
-				err := gate.Renew(renewCtx, req.ID, req.Owner, 2*time.Minute)
-				cancel()
-				if err != nil {
-					a.cancel()
-					return
-				}
-			}
-		}
+		defer ticker.Stop()
+		loop.serve(workCtx, ticker.C, a.cancel)
 	}()
 	return a, nil
 }
