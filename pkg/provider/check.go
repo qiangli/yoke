@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 )
@@ -217,6 +218,14 @@ func (g guard) Do(ctx context.Context, req Request) (Result, error) {
 	}
 	if err == nil && r.Error != nil {
 		err = r.Error
+	}
+	if err != nil && r.Error == nil {
+		var e *Error
+		if !errors.As(err, &e) {
+			e = &Error{Code: ErrProvider, Message: err.Error()}
+		}
+		r = Result{ProtocolVersion: ProtocolVersion, Op: req.Op, Error: e}
+		err = e
 	}
 	return r, err
 }
