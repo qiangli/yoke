@@ -115,3 +115,17 @@ func TestBareCommandShowsHelp(t *testing.T) {
 		t.Errorf("help does not mention the resource subcommands:\n%s", out)
 	}
 }
+
+func TestSystemMinFreeAlarmPrintedOnce(t *testing.T) {
+	cmd := NewSystemCommand()
+	var errBuf bytes.Buffer
+	cmd.SetOut(&errBuf)
+	cmd.SetErr(&errBuf)
+	cmd.SetArgs([]string{"--interval", "0", "--min-free", "10000000G"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected failure below the floor")
+	}
+	if n := strings.Count(errBuf.String(), "disk floor alarm:"); n != 1 {
+		t.Fatalf("alarm printed %d times, want 1: %q", n, errBuf.String())
+	}
+}

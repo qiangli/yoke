@@ -3871,7 +3871,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	}
 	agentEventsPath := ""
 	if agentLaunch != nil {
-		toolArgs, err = weaveBindAgentWorkspace(agentLaunch, toolArgs, workspace, weaveManagedGOCachePath(os.Environ(), dir, it.ID))
+		toolArgs, err = weaveBindAgentWorkspace(agentLaunch, toolArgs, workspace, weaveSharedGOCachePath(os.Environ(), dir, it.ID))
 		if err != nil {
 			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 				weavecli.ExitPrecondFail, err))

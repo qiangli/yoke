@@ -42,7 +42,7 @@ func weaveGOCacheReleaseFixture(t *testing.T, state, verify string) (root, dir, 
 	if err := saveWeaveQueue(dir, q); err != nil {
 		t.Fatal(err)
 	}
-	cache = weaveManagedGOCachePath(nil, dir, 1)
+	cache = weaveLegacyGOCachePath(nil, dir, 1)
 	if err := os.MkdirAll(cache, 0o755); err != nil {
 		t.Fatal(err)
 	}
