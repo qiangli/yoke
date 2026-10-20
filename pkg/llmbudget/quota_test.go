@@ -160,7 +160,7 @@ func TestQuotaBaselineAccountLabels(t *testing.T) {
 		t.Fatal(errs)
 	}
 	want := map[string]string{
-		"claude-max": "claude", "chatgpt-pro": "codex", "google-ai-pro": "agy",
+		"claude-max": "claude", "chatgpt-pro": "codex", "google-ai-ultra": "agy",
 		"meta-muse-pro": "muse", "zai-glm-coding-pro": "glm",
 		"moonshot": "kimi", "deepseek": "deepseek",
 	}
@@ -184,7 +184,7 @@ func TestQuotaBillingAccounts(t *testing.T) {
 	models := []fleet.Model{
 		{Name: "claude-model", Provider: "anthropic", Plan: "claude-max", Family: "claude"},
 		{Name: "codex-model", Provider: "openai", Plan: "chatgpt-pro", Family: "gpt"},
-		{Name: "agy-model", Provider: "gemini", Plan: "google-ai-pro", Family: "gemini"},
+		{Name: "agy-model", Provider: "gemini", Plan: "google-ai-ultra", Family: "gemini"},
 		{Name: "muse-model", Provider: "meta", Plan: "meta-muse-pro", Family: "muse"},
 		{Name: "glm-model", Provider: "openai-compat", Plan: "zai-glm-coding-pro", Family: "glm"},
 		{Name: "deepseek-model", Provider: "openai-compat", APIKeyRef: "deepseek-ref", Family: "deepseek"},
@@ -195,7 +195,7 @@ func TestQuotaBillingAccounts(t *testing.T) {
 		{Name: "unused-model", Provider: "openai-compat", APIKeyRef: "unused-key", Family: "unused"},
 	}
 	plans := []fleet.Plan{
-		{Name: "claude-max"}, {Name: "chatgpt-pro"}, {Name: "google-ai-pro"}, {Name: "meta-muse-pro"},
+		{Name: "claude-max"}, {Name: "chatgpt-pro"}, {Name: "google-ai-ultra"}, {Name: "meta-muse-pro"},
 		{Name: "zai-glm-coding-pro", Limits: []fleet.PlanLimit{{Window: "5h", Unit: "credits", Value: 12000}}},
 		{Name: "unused-plan", Label: "explicit"},
 	}

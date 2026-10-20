@@ -69,13 +69,14 @@ func TestEmbeddedPlansAreDatedSourcedAndResolved(t *testing.T) {
 		t.Fatal("no seeded model names a plan")
 	}
 
-	// The operator's seats as recorded by the story: the Claude and Codex seats
-	// are their vendors' highest plans; the Agy, Muse and GLM seats are Pro.
+	// The operator's seats as recorded by the story: the Claude, Codex and Agy
+	// seats are their vendors' highest plans (Agy moved from Google AI Pro to
+	// AI Ultra on 2026-10-20); the Muse and GLM seats are Pro.
 	for model, tier := range map[string]string{
 		"opus5.5": PlanTierMax, "gpt6-sol": PlanTierMax,
-		"gemini3.8-flash": PlanTierPro, "muse-spark1.3": PlanTierPro, "glm-5.3": PlanTierPro,
+		"gemini3.8-flash": PlanTierMax, "muse-spark1.3": PlanTierPro, "glm-5.3": PlanTierPro,
 		// Served by agy, so billed through the Google seat, not Anthropic's.
-		"opus4.6": PlanTierPro,
+		"opus4.6": PlanTierMax,
 	} {
 		m, ok := c.Model(model)
 		if !ok {

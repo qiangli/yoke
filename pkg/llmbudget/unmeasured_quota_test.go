@@ -8,7 +8,7 @@ import (
 )
 
 // TestQuotaUnmeasuredStaysNotFabricated verifies Story #1025: the three
-// investigated seats (google-ai-pro/agy, zai-glm-coding-pro/glm, meta-muse-pro/muse)
+// investigated seats (google-ai-ultra/agy, zai-glm-coding-pro/glm, meta-muse-pro/muse)
 // have no measured probe, so quota must report unmeasured with no UsedPercent
 // — never 0% and never a fabricated percentage. The plan yamls document why
 // each stays unmeasured (checked 2026-10-17).
@@ -16,12 +16,12 @@ func TestQuotaUnmeasuredStaysNotFabricated(t *testing.T) {
 	isolateReportCatalog(t)
 	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 	models := []fleet.Model{
-		{Name: "agy-model", Provider: "gemini", Plan: "google-ai-pro", Family: "gemini"},
+		{Name: "agy-model", Provider: "gemini", Plan: "google-ai-ultra", Family: "gemini"},
 		{Name: "glm-model", Provider: "openai-compat", Plan: "zai-glm-coding-pro", Family: "glm"},
 		{Name: "muse-model", Provider: "meta", Plan: "meta-muse-pro", Family: "muse"},
 	}
 	plans := []fleet.Plan{
-		{Name: "google-ai-pro", Label: "agy"},
+		{Name: "google-ai-ultra", Label: "agy"},
 		{Name: "zai-glm-coding-pro", Label: "glm"},
 		{Name: "meta-muse-pro", Label: "muse"},
 	}
@@ -32,7 +32,7 @@ func TestQuotaUnmeasuredStaysNotFabricated(t *testing.T) {
 	}
 	report := &Report{}
 	rows := quotaRows(report, models, plans, agents, &Policy{}, QuotaOptions{}, now)
-	want := map[string]bool{"google-ai-pro": false, "zai-glm-coding-pro": false, "meta-muse-pro": false}
+	want := map[string]bool{"google-ai-ultra": false, "zai-glm-coding-pro": false, "meta-muse-pro": false}
 	for _, r := range rows {
 		if _, ok := want[r.Account]; !ok {
 			continue

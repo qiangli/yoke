@@ -122,7 +122,7 @@ func TestUsageSignalSeedMatch(t *testing.T) {
 		},
 		{
 			name:    "google resource exhausted with retryDelay",
-			signals: plans["google-ai-pro"].UsageSignals,
+			signals: plans["google-ai-ultra"].UsageSignals,
 			excerpt: `{"error":{"code":429,"message":"Quota exceeded for quota metric a generate_content quota and limit","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"37s"}]}}`,
 			want: []ParsedSignal{
 				{

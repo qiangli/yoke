@@ -1,19 +1,20 @@
-name: google-ai-pro
+name: google-ai-ultra
 label: agy
-display: Google AI Pro
+display: Google AI Ultra
 vendor: Google
-vendor_plan: Google AI Pro
-# Google's ladder is Free < AI Plus < AI Pro < AI Ultra (5x / 20x). Pro sits below
-# Ultra, so its normalized tier is pro. It is the seat agy (Antigravity) bills every
-# model it serves against — including the Claude and GPT-OSS models reached
-# through agy. Checked 2026-09-29.
-tier: pro
-as_of: "2026-09-29"
+vendor_plan: Google AI Ultra
+# Google's ladder is Free < AI Plus < AI Pro < AI Ultra. Ultra is the vendor's
+# highest individual plan, so its normalized tier is max. It is the seat agy
+# (Antigravity) bills every model it serves against — including the Claude and
+# GPT-OSS models reached through agy. Seat upgraded from AI Pro to AI Ultra on
+# 2026-10-20.
+tier: max
+as_of: "2026-10-20"
 sources:
   - https://gemini.google/subscriptions/
 notes: >-
-  Antigravity on Pro is described only as "Entry rate limits" (Ultra: higher /
-  highest). No numeric threshold is published, so none is recorded.
+  Antigravity on Ultra is described only as the highest rate limits (Pro:
+  "Entry rate limits"). No numeric threshold is published, so none is recorded.
 # No usage probe — checked 2026-10-17: agy (Antigravity/Gemini CLI) exposes no
 # documented local usage file and no CLI status/usage command. `agy --help`
 # lists only agent/agents/models/mcp/plugin/remote-control/update; the home

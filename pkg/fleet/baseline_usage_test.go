@@ -72,7 +72,7 @@ func TestBaselineUsageSeeds(t *testing.T) {
 	// z.ai publishes no quota/usage endpoint (checked docs.z.ai's full API
 	// reference 2026-10-15), and muse/google have none either: those plans
 	// carry no probe rather than a guess.
-	for _, name := range []string{"zai-glm-coding-pro", "meta-muse-pro", "google-ai-pro"} {
+	for _, name := range []string{"zai-glm-coding-pro", "meta-muse-pro", "google-ai-ultra"} {
 		if plan, ok := c.Plan(name); ok && len(plan.Usage) != 0 {
 			t.Fatalf("%s unexpectedly carries usage probes: %+v", name, plan.Usage)
 		}

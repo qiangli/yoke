@@ -9,7 +9,7 @@ import (
 
 // TestUnmeasuredProbeDocs verifies that plans without a measured probe
 // document why they stay unmeasured (Story #1025). The probe seeds for
-// google-ai-pro (agy), zai-glm-coding-pro (z.ai GLM) and meta-muse-pro
+// google-ai-ultra (agy), zai-glm-coding-pro (z.ai GLM) and meta-muse-pro
 // (muse) were investigated on 2026-10-17 and found to have no documented
 // read-only source; each plan yaml must therefore carry an explicit
 // "stays unmeasured" rationale so quota remains unmeasured instead of
@@ -20,7 +20,7 @@ func TestUnmeasuredProbeDocs(t *testing.T) {
 		must []string
 	}{
 		{
-			plan: "google-ai-pro",
+			plan: "google-ai-ultra",
 			must: []string{
 				"stays unmeasured",
 				"agy",
