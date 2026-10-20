@@ -202,7 +202,9 @@ func weaveStoryLeaseState(s *weaveStory) (holder string, stale bool, free bool) 
 // fresh, which is what a zero time compared against a TTL used to produce.
 // A dead attached process is folded in here, at the one place all three
 // liveness consumers already agree to ask, rather than at each of them.
-func (s *weaveStory) seat() role.Seat {
+func (s *weaveStory) seat() role.Seat { return s.seatAt(time.Now()) }
+
+func (s *weaveStory) seatAt(now time.Time) role.Seat {
 	if s == nil || s.Lease == nil {
 		return role.Seat{TTL: SprintLeaseTTL}
 	}
@@ -212,23 +214,28 @@ func (s *weaveStory) seat() role.Seat {
 		// take and refreshed on checkpoint, so it is the heartbeat. Reporting
 		// it as the acquisition time too would make every refresh look like a
 		// new tenure.
-		HeartbeatAt: s.Lease.At,
+		HeartbeatAt: SprintLeaseEffectiveHeartbeat(s.Lease.Holder, s.Lease.At, s.Lease.AttachedPID, now),
 		TTL:         SprintLeaseTTL,
 	}
-	// A HEARTBEAT IS A CLAIM ABOUT A MOMENT; A NAMED PROCESS IS CHECKABLE NOW.
-	//
-	// When a foreground watch is holding this seat open it stamps its pid, and
-	// it beats only every TTL/3 — so a watch killed just after a beat leaves a
-	// timestamp that is still comfortably "fresh" and a seat that nothing is
-	// occupying. Withdrawing the heartbeat (rather than inventing a fourth
-	// liveness word the shared type does not have) lands it on UNKNOWN: held
-	// per the record, with nothing saying it breathes. That is exactly what is
-	// true, and it is what lets a successor take the seat instead of waiting
-	// out a TTL behind a conductor that is already gone.
-	if s.Lease.AttachedPID > 0 && !room.PidAlive(s.Lease.AttachedPID) {
-		seat.HeartbeatAt = time.Time{}
-	}
 	return seat
+}
+
+// SprintLeaseEffectiveHeartbeat grades the stored beat against current process
+// evidence. A managed manager can spend longer than the TTL inside one tool
+// call without reading its inbox or running a sprint verb. Its live room member
+// keeps the seat live; the stored timestamp remains the last actual activity.
+// A dead attached watch still withdraws its beat, and a deliberately cleared
+// beat cannot be revived by a room member.
+func SprintLeaseEffectiveHeartbeat(holder string, at time.Time, attachedPID int, now time.Time) time.Time {
+	if attachedPID > 0 && !room.PidAlive(attachedPID) {
+		return time.Time{}
+	}
+	if !at.IsZero() && attachedPID == 0 && now.Sub(at) > SprintLeaseTTL {
+		if transport, _ := room.OwnerTransportFor(holder); transport == room.TransportManaged {
+			return now
+		}
+	}
+	return at
 }
 
 // weaveConductorIdentity resolves process-local evidence for the acting
@@ -1205,10 +1212,10 @@ you still gate, converge and report.`,
 					switch {
 					case free:
 						weaveStoryAppend(s, who, kindStage, "took conductor lease (was unclaimed)")
-					case stale:
-						weaveStoryAppend(s, who, kindStage, fmt.Sprintf("took STALE conductor lease from %s (recovery)", prev))
 					case prev == who:
 						weaveStoryAppend(s, who, kindSystem, "resumed own conductor lease and delivery stream")
+					case stale:
+						weaveStoryAppend(s, who, kindStage, fmt.Sprintf("took STALE conductor lease from %s (recovery)", prev))
 					case retiredOld:
 						weaveStoryAppend(s, who, kindStage, fmt.Sprintf("renamed own conductor lease from %s", prev))
 					default:
