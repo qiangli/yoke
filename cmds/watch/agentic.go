@@ -84,8 +84,8 @@ func registerAgenticFlags(fs *pflag.FlagSet, o *agenticOptions) {
 	fs.DurationVar(&o.heartbeat, "heartbeat", 0, "alarm when an expected report does not arrive within this long")
 	fs.StringSliceVar(&o.expect, "expect", nil, "locators that must report, armed from the start (use with --heartbeat)")
 	fs.DurationVar(&o.replyWithin, "reply-within", 0, "alarm when a directed message is not answered within this long")
-	fs.StringSliceVar(&o.sources, "source", nil, "subscribe to a journal: mb[:recipient], sprint-thread[:N]")
-	fs.DurationVar(&o.backfill, "backfill", 0, "report records already present that are younger than this")
+	fs.StringSliceVar(&o.sources, "source", nil, "subscribe to a journal: mb[:recipient], sprint-thread[:N]; with --preset/--rules it REPLACES that file's source(s) of the same kind")
+	fs.DurationVar(&o.backfill, "backfill", 0, "report records already present that are younger than this (the window is announced on stderr at start)")
 	fs.StringVar(&o.rules, "rules", "", "read rules from a "+watch.RulesSchemaVersion+" file")
 	fs.StringVar(&o.preset, "preset", "", "start from a named rule file (see --list-presets)")
 	fs.BoolVar(&o.listPresets, "list-presets", false, "list the available presets and exit")
@@ -152,6 +152,13 @@ func runAgentic(rc *tool.RunContext, opts watchOptions, o *agenticOptions) int {
 			return tool.UsageError(rc, cmd, "--inbox needs a sender: pass --from")
 		}
 		sinks = append(sinks, hostsrc.NewInboxSink(from, o.inbox, "watch"))
+	}
+
+	// A backfilling watcher opens with the RECENT PAST, and unannounced those
+	// first lines read exactly like a burst of live activity. Say the window
+	// once, before the first cycle, so nobody acts on history as if it were news.
+	if w := watch.BackfillWindow(plan.Sources); w > 0 {
+		fmt.Fprintf(rc.Err, "watch: backfill: reporting entries younger than %s\n", w)
 	}
 
 	ctx := rc.Ctx
@@ -237,36 +244,38 @@ func buildPlan(rc *tool.RunContext, opts watchOptions, o *agenticOptions) (watch
 	if o.preset != "" && o.rules != "" {
 		return plan, tool.UsageError(rc, cmd, "--preset and --rules are two ways to say the same thing; pass one")
 	}
-	if o.preset != "" {
-		preset, err := watch.LoadPreset(o.preset)
-		if err != nil {
-			fmt.Fprintf(rc.Err, "watch: %v\n", err)
-			return plan, 1
-		}
-		built, err := preset.File.Build(buildOptions(rc, opts))
-		if err != nil {
-			fmt.Fprintf(rc.Err, "watch: preset %s: %v\n", o.preset, err)
-			return plan, 1
-		}
-		plan = built
+	file, label, haveFile, code := ruleFile(rc, o)
+	if code >= 0 {
+		return plan, code
 	}
-	if o.rules != "" {
-		body, err := os.ReadFile(rc.Path(o.rules))
-		if err != nil {
-			fmt.Fprintf(rc.Err, "watch: %v\n", err)
-			return plan, 1
+
+	// The command line's --source selections NARROW the rule file rather than
+	// joining it: naming a source of a kind replaces the file's own source(s)
+	// of that kind. Otherwise `--preset sprint --source sprint-thread:472`
+	// keeps the preset's unfiltered thread source and reports every card on
+	// the host beside the one that was asked for.
+	selections := make([]watch.SourceSpec, 0, len(o.sources))
+	for _, spec := range o.sources {
+		sel := namedSourceSpec(spec, o.backfill)
+		// A typo on the command line is a usage error whether or not a rule
+		// file is also in play, and it is refused BEFORE the narrowing: a
+		// selection the host cannot build must not quietly drop the file's
+		// source of the kind it misspelled.
+		if !watch.KnownSourceType(sel.Type) {
+			fmt.Fprintf(rc.Err, "%v\n", watch.UnknownSourceTypeError(sel.Type))
+			return plan, 2
 		}
-		file, err := watch.ParseRuleFile(body)
+		selections = append(selections, sel)
+	}
+	if haveFile {
+		built, err := file.NarrowSources(selections).Build(buildOptions(rc, opts))
 		if err != nil {
-			fmt.Fprintf(rc.Err, "watch: %v\n", err)
-			return plan, 1
-		}
-		built, err := file.Build(buildOptions(rc, opts))
-		if err != nil {
-			fmt.Fprintf(rc.Err, "watch: %v\n", err)
+			fmt.Fprintf(rc.Err, "watch: %s: %v\n", label, err)
 			return plan, 1
 		}
 		plan = built
+		// Built with the file: they must not be added a second time below.
+		selections = nil
 	}
 
 	// The command after -- is a poll source, always: it is the universal
@@ -303,8 +312,8 @@ func buildPlan(rc *tool.RunContext, opts watchOptions, o *agenticOptions) (watch
 		plan.Sinks = append(plan.Sinks, sink)
 	}
 
-	for _, spec := range o.sources {
-		src, err := buildNamedSource(spec, o.backfill)
+	for _, spec := range selections {
+		src, err := watch.BuildSource(spec, watch.BuildOptions{})
 		if err != nil {
 			fmt.Fprintf(rc.Err, "watch: %v\n", err)
 			return plan, 2
@@ -321,17 +330,48 @@ func buildPlan(rc *tool.RunContext, opts watchOptions, o *agenticOptions) (watch
 	return plan, -1
 }
 
-func buildNamedSource(spec string, backfill time.Duration) (watch.Source, error) {
+// ruleFile resolves --preset / --rules to the one rule file this invocation
+// starts from. It is read, not built: the command line's own source selections
+// have to reach it before it becomes a plan (see NarrowSources).
+func ruleFile(rc *tool.RunContext, o *agenticOptions) (file watch.RuleFile, label string, ok bool, code int) {
+	switch {
+	case o.preset != "":
+		preset, err := watch.LoadPreset(o.preset)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "watch: %v\n", err)
+			return file, "", false, 1
+		}
+		return preset.File, "preset " + o.preset, true, -1
+	case o.rules != "":
+		body, err := os.ReadFile(rc.Path(o.rules))
+		if err != nil {
+			fmt.Fprintf(rc.Err, "watch: %v\n", err)
+			return file, "", false, 1
+		}
+		parsed, err := watch.ParseRuleFile(body)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "watch: %v\n", err)
+			return file, "", false, 1
+		}
+		return parsed, "rules " + o.rules, true, -1
+	}
+	return file, "", false, -1
+}
+
+// namedSourceSpec reads the flag spelling of a source: mb[:recipient],
+// sprint-thread[:N]. "sprint" is the shorthand for the thread source, so the
+// locator vocabulary and the source vocabulary agree.
+func namedSourceSpec(spec string, backfill time.Duration) watch.SourceSpec {
 	typ, target, _ := strings.Cut(spec, ":")
 	typ = strings.TrimSpace(typ)
 	if typ == "sprint" {
 		typ = "sprint-thread"
 	}
-	return watch.BuildSource(watch.SourceSpec{
+	return watch.SourceSpec{
 		Type:     typ,
 		Target:   strings.TrimSpace(target),
 		Backfill: watch.Duration(backfill),
-	}, watch.BuildOptions{})
+	}
 }
 
 func buildFlagRules(o *agenticOptions) ([]watch.Rule, error) {

@@ -11,7 +11,7 @@ import (
 	"github.com/qiangli/coreutils/tool"
 )
 
-func runTool(t *testing.T, args ...string) (stdout, stderr string, code int) {
+func newRunContext(t *testing.T) (*tool.RunContext, *bytes.Buffer, *bytes.Buffer) {
 	t.Helper()
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
@@ -20,6 +20,12 @@ func runTool(t *testing.T, args ...string) (stdout, stderr string, code int) {
 		Env:   []string{"HOSTNAME=testhost"},
 		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
 	}
+	return rc, &out, &errb
+}
+
+func runTool(t *testing.T, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
+	rc, out, errb := newRunContext(t)
 	code = cmd.Run(rc, args)
 	return out.String(), errb.String(), code
 }

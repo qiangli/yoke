@@ -171,6 +171,28 @@ func RegisterJoin(name string, levels func() []AckLevel) {
 	joinFamily[name] = levels
 }
 
+// KnownSourceType reports whether this host can build a source of that type:
+// the two built-ins plus whatever a host package registered.
+//
+// It exists so a CALLER assembling a plan from flags can refuse a typo as the
+// usage error it is, with the same message and the same exit code whether or
+// not a rule file is also in play.
+func KnownSourceType(typ string) bool {
+	if typ == "poll" || typ == "hook" {
+		return true
+	}
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	_, ok := sourceTypes[typ]
+	return ok
+}
+
+// UnknownSourceTypeError is the ONE spelling of that refusal, so a rule file
+// and a flag report an unbuildable source identically.
+func UnknownSourceTypeError(typ string) error {
+	return fmt.Errorf("watch: unknown source type %q (have: poll, hook, %s)", typ, strings.Join(SourceTypes(), ", "))
+}
+
 // SourceTypes lists the registered source types.
 func SourceTypes() []string {
 	registryMu.RLock()
@@ -240,7 +262,7 @@ func buildSource(spec SourceSpec, opts BuildOptions) (Source, error) {
 	factory := sourceTypes[spec.Type]
 	registryMu.RUnlock()
 	if factory == nil {
-		return nil, fmt.Errorf("watch: unknown source type %q (have: poll, hook, %s)", spec.Type, strings.Join(SourceTypes(), ", "))
+		return nil, UnknownSourceTypeError(spec.Type)
 	}
 	return factory(spec)
 }

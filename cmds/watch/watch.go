@@ -40,9 +40,19 @@ the message board (--inbox), or as an exit code (--until).
   watch --until --match field=stage,after=accepted -- bashy sprint show 480 --json
   watch --json --change status --key id -- kubectl get pods -o json
   watch --preset sprint --inbox conductor
+  watch --preset sprint --source sprint-thread:480   narrow the preset to one card
   watch --source mb --reply-within 15m
   watch --preset idle --locator run:repo-7 -- tail -c 2000 run.log
   watch --list-presets
+
+An explicit --source NARROWS a --preset/--rules file: naming a source of a kind
+REPLACES that file's own source(s) of that kind, and leaves its other kinds
+alone. With no --source the file watches exactly what it declares. A narrowed
+source keeps the file's backfill window, task class and quiet window — the
+command line said which object to watch, not how to watch it.
+
+A watcher that backfills announces the window on stderr before its first cycle,
+so the opening lines are not mistaken for live events.
 
 Exit codes: 0 an alert fired (or the classic -g change), 1 --timeout elapsed
 with nothing to report, 2 usage, 8 CMD failed under -e, 130 interrupted.`,

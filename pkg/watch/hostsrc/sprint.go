@@ -46,6 +46,10 @@ func NewSprintSource(read Timeline) *SprintSource {
 // Name implements watch.Source.
 func (s *SprintSource) Name() string { return "sprint-thread" }
 
+// BackfillWindow implements watch.Backfiller, so an invocation can announce
+// how much of the past its first lines describe.
+func (s *SprintSource) BackfillWindow() time.Duration { return s.Backfill }
+
 // Poll implements watch.Source.
 func (s *SprintSource) Poll(_ context.Context, now time.Time) ([]watch.Event, error) {
 	tail := s.Tail
