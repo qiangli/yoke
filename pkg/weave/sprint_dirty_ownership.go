@@ -49,6 +49,10 @@ func sprintDirtyOwnership(s *weaveStory, board []*weaveStory, root string, repoP
 			i++
 			paths = append(paths, entries[i])
 		}
+		// Only an untracked path lets the footprint's directory claims speak
+		// for it; anything git already tracks is attributed path-level, from
+		// the history it has of its own.
+		untracked := entry[:2] == "??"
 		owners := map[int64]bool{}
 		// hard records an attribution the sprint's commit footprint cannot
 		// narrow: its own story file, or a linked checkout's own state.
@@ -83,10 +87,10 @@ func sprintDirtyOwnership(s *weaveStory, board []*weaveStory, root string, repoP
 			if footprint == nil {
 				footprint = sprintCommitFootprint(root)
 			}
-			if footprint.records(s.ID) && !sprintTouchedAny(footprint, s.ID, paths) {
+			if footprint.records(s.ID) && !sprintTouchedAny(footprint, s.ID, paths, untracked) {
 				delete(owners, s.ID)
 				for _, path := range paths {
-					for id := range footprint.owners(filepath.ToSlash(path)) {
+					for id := range footprint.owners(filepath.ToSlash(path), untracked) {
 						owners[id] = true
 					}
 				}

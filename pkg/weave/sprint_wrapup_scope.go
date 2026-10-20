@@ -20,6 +20,10 @@ package weave
 // it; dirt inside it still refuses. Same for a stale pin: it belongs to
 // whoever produces in the sibling.
 //
+// Containment in a directory counts only where the path has no history of its
+// own — see sprintFootprint for why a tracked file is attributed path-level
+// only.
+//
 // Every way this can fail degrades to the old behavior. No commits of ours in
 // a checkout means no footprint to scope by — the whole checkout stays ours,
 // which is also the right answer, because a sprint with nothing committed is
@@ -41,13 +45,21 @@ const sprintFootprintWindow = "2000"
 
 // sprintFootprint is which sprints' delivery commits touched which paths in
 // one checkout: the files they changed, and the directories those files live
-// in, because a NEW file of a sprint's own work lands beside its committed
-// work and has no history of its own.
+// in.
 //
-// The repo root is deliberately not a directory claim. Nearly every sprint
-// commits a root-level file (go.mod alone would do it), so claiming the root
-// directory would hand each sprint everyone else's root-level dirt — the trap
-// this scoping exists to remove.
+// The two are not interchangeable, and which one answers depends on the dirty
+// path. A TRACKED path has a history of its own — git knows exactly which
+// commits touched it — so containment adds no evidence and costs correctness:
+// every sprint commits its plan doc straight into the umbrella's docs/, so the
+// directory rule would make docs/ "ours" and hand us another live session's
+// modified docs/sprint-479-plan.md, which is the Sprint 454 shape this scoping
+// exists to remove. An UNTRACKED path has no history at all, and then the
+// directory holding it is the only evidence there is: a new file of a sprint's
+// own work lands beside its committed work.
+//
+// The repo root is deliberately not a directory claim either. Nearly every
+// sprint commits a root-level file (go.mod alone would do it), so claiming the
+// root directory would hand each sprint everyone else's root-level dirt.
 type sprintFootprint struct {
 	paths   map[string]map[int64]bool
 	dirs    map[string]map[int64]bool
@@ -125,14 +137,16 @@ func (fp *sprintFootprint) claim(into map[string]map[int64]bool, key string, ids
 // makes its footprint usable as a scope at all.
 func (fp *sprintFootprint) records(id int64) bool { return fp.sprints[id] }
 
-// owners names the sprints whose commits touched rel or the directory holding it.
-func (fp *sprintFootprint) owners(rel string) map[int64]bool {
+// owners names the sprints whose commits touched rel. Only when rel is
+// untracked — and so has no history to read — does the directory holding it
+// stand in for one.
+func (fp *sprintFootprint) owners(rel string, untracked bool) map[int64]bool {
 	rel = strings.TrimPrefix(path.Clean(strings.ReplaceAll(rel, `\`, "/")), "./")
 	out := map[int64]bool{}
 	for id := range fp.paths[rel] {
 		out[id] = true
 	}
-	if dir := path.Dir(rel); dir != "." && dir != "/" {
+	if dir := path.Dir(rel); untracked && dir != "." && dir != "/" {
 		for id := range fp.dirs[dir] {
 			out[id] = true
 		}
@@ -141,7 +155,9 @@ func (fp *sprintFootprint) owners(rel string) map[int64]bool {
 }
 
 // touched reports whether rel is inside this sprint's own footprint.
-func (fp *sprintFootprint) touched(id int64, rel string) bool { return fp.owners(rel)[id] }
+func (fp *sprintFootprint) touched(id int64, rel string, untracked bool) bool {
+	return fp.owners(rel, untracked)[id]
+}
 
 // sprintTrailerIDs reads the sprint numbers out of a `Sprint:` trailer value.
 func sprintTrailerIDs(value string) []int64 {
@@ -176,10 +192,11 @@ func sprintStalePinMovers(sibling string) map[int64]bool {
 
 // sprintTouchedAny reports whether any of one status entry's paths is ours. A
 // rename carries both its new and its original path and either one being in
-// our footprint makes the rename ours.
-func sprintTouchedAny(fp *sprintFootprint, id int64, paths []string) bool {
+// our footprint makes the rename ours; a rename is tracked on both sides, so
+// untracked is false for it as for every other entry git has a history for.
+func sprintTouchedAny(fp *sprintFootprint, id int64, paths []string, untracked bool) bool {
 	for _, rel := range paths {
-		if fp.touched(id, rel) {
+		if fp.touched(id, rel, untracked) {
 			return true
 		}
 	}

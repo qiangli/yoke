@@ -12,6 +12,9 @@ import (
 // delivery commit of its own and one another sprint delivered) and a sibling it
 // only PINS (sh, stale, nobody linking it). The nested checkouts are ignored by
 // the umbrella, so the only state under test is what each case writes.
+//
+// docs/ is the SHARED directory: every sprint commits its plan doc straight
+// into it, so both sprints have files there and neither owns the directory.
 func wrapupScopeFixture(t *testing.T) (string, string) {
 	t.Helper()
 	t.Setenv("GOWORK", "")
@@ -28,6 +31,8 @@ func wrapupScopeFixture(t *testing.T) (string, string) {
 		"yoke/go.mod":           "module example.com/yoke\n\ngo 1.24\n\nrequire example.com/sh v0.0.0-20200101000000-0123456789ab\n",
 		"yoke/pkg/own/own.go":   "package own\n",
 		"yoke/other/foreign.go": "package other\n",
+		"yoke/docs/plan-a.md":   "# plan a\n",
+		"yoke/docs/plan-b.md":   "# plan b\n",
 		"sh/go.mod":             "module example.com/sh\n\ngo 1.24\n",
 	}
 	for rel, data := range files {
@@ -50,12 +55,16 @@ func wrapupScopeFixture(t *testing.T) (string, string) {
 	// THE EVIDENCE THE SPRINT ALREADY RECORDS: delivery commits carry the
 	// sprint number, so each sprint's footprint in the checkout is readable.
 	yoke := filepath.Join(root, "yoke")
-	for _, c := range []struct{ file, message string }{
-		{"pkg/own/own.go", "yoke: our work\n\nSprint: #1\nStory: #10\nStory-ID: 1111aaaa1111"},
-		{"other/foreign.go", "yoke: the other sprint's work\n\nSprint: #2\nStory: #20\nStory-ID: 2222bbbb2222"},
+	ours := "\n\nSprint: #1\nStory: #10\nStory-ID: 1111aaaa1111"
+	theirs := "\n\nSprint: #2\nStory: #20\nStory-ID: 2222bbbb2222"
+	for _, c := range []struct{ file, body, message string }{
+		{"pkg/own/own.go", "package own // delivered\n", "yoke: our work" + ours},
+		{"docs/plan-a.md", "# plan a — delivered\n", "yoke: our plan doc" + ours},
+		{"other/foreign.go", "package other // delivered\n", "yoke: the other sprint's work" + theirs},
+		{"docs/plan-b.md", "# plan b — delivered\n", "yoke: the other sprint's plan doc" + theirs},
 	} {
 		p := filepath.Join(yoke, filepath.FromSlash(c.file))
-		if err := os.WriteFile(p, []byte("package x // delivered\n"), 0o644); err != nil {
+		if err := os.WriteFile(p, []byte(c.body), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		git(yoke, "commit", "-aqm", c.message)
@@ -107,18 +116,50 @@ func TestSprintEndWarnsOnForeignDirtItNeverTouched(t *testing.T) {
 	}
 }
 
-// The narrowing is scoped, not a waiver: dirt in a path this sprint's own
-// commits touched — or in a directory they touched, which is where a new file
-// of the sprint's own work lands — still refuses.
+// A directory is shared the moment two sprints commit into it, and docs/ always
+// is: every sprint lands its plan doc there. A TRACKED file of another sprint's,
+// modified by its live session, has a history of its own, so it is attributed
+// path-level and warns — claiming it by containment is the Sprint 454 shape.
+func TestSprintEndWarnsOnForeignDirtInASharedDirectory(t *testing.T) {
+	root, dir := wrapupScopeFixture(t)
+	foreign := filepath.Join(root, "yoke", "docs", "plan-b.md")
+	if err := os.WriteFile(foreign, []byte("# plan b — #2 live edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, code := runSprint(t, "end", "1")
+	if code != 0 {
+		t.Fatalf("another session's dirt in a shared directory blocked end: %s", out)
+	}
+	if !strings.Contains(out, "uncommitted docs/plan-b.md (sprint #2)") {
+		t.Errorf("end did not warn naming the owner: %s", out)
+	}
+	after, err := loadWeaveQueue(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Stories[0].Column != "done" {
+		t.Fatalf("sprint #1 not ended: %+v", after.Stories[0])
+	}
+	if data, err := os.ReadFile(foreign); err != nil || !strings.Contains(string(data), "#2 live edit") {
+		t.Fatalf("end touched the other session's file: %q %v", data, err)
+	}
+}
+
+// The narrowing is scoped, not a waiver. A path this sprint's own commits
+// touched still refuses, in a shared directory as anywhere else — and so does
+// an UNTRACKED file, which has no history of its own and so is read from the
+// directory its siblings live in, even where another sprint also commits.
 func TestSprintEndStillRefusesDirtItTouched(t *testing.T) {
 	for _, tc := range []struct{ name, file string }{
 		{"own file", "pkg/own/own.go"},
 		{"new file beside its own work", "pkg/own/new.go"},
+		{"own file in a shared directory", "docs/plan-a.md"},
+		{"new file beside its own work in a shared directory", "docs/plan-a-notes.md"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root, _ := wrapupScopeFixture(t)
 			p := filepath.Join(root, "yoke", filepath.FromSlash(tc.file))
-			if err := os.WriteFile(p, []byte("package own // unfinished\n"), 0o644); err != nil {
+			if err := os.WriteFile(p, []byte("unfinished\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
 			out, code := runSprint(t, "end", "1")
