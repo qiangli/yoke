@@ -246,6 +246,98 @@ func TestK8sScopedRecipeRefusesInvalidContext(t *testing.T) {
 	}
 }
 
+func TestK8sNodesRecipeRowsAndReadOnlyCommand(t *testing.T) {
+	p := NewK8sNodesRecipe(func(_ context.Context, c string, a ...string) ([]byte, error) {
+		if c != "kubectl" || !reflect.DeepEqual(a, []string{"get", "nodes", "-o", "json"}) {
+			t.Fatalf("command=%s args=%v", c, a)
+		}
+		return []byte(`{"items":[
+			{"metadata":{"name":"node-b","uid":"ub","labels":{"node-role.kubernetes.io/worker":""}},"status":{"conditions":[{"type":"Ready","status":"False"}],"nodeInfo":{"kubeletVersion":"v1.29.2"}}},
+			{"metadata":{"name":"node-a","uid":"ua","labels":{"node-role.kubernetes.io/control-plane":"","kubernetes.io/role":"master"}},"status":{"conditions":[{"type":"Ready","status":"True"}],"nodeInfo":{"kubeletVersion":"v1.30.0"}}},
+			{"metadata":{"name":"node-c","uid":"uc"},"status":{}}
+		]}`), nil
+	})
+	loc := ref.Locator{Scheme: "k8s", Target: "nodes"}
+	rows, err := p.List(context.Background(), loc)
+	if err != nil || len(rows) != 3 {
+		t.Fatalf("rows=%+v err=%v", rows, err)
+	}
+	if rows[0].Path != "nodes/node-a" || rows[1].Path != "nodes/node-b" || rows[2].Path != "nodes/node-c" {
+		t.Fatalf("unsorted rows=%+v", rows)
+	}
+	if rows[0].Kind != "node" || rows[0].Type != "k8s/node" {
+		t.Fatalf("row=%+v", rows[0])
+	}
+	if rows[0].Attrs["ready"] != "True" || rows[0].Attrs["kubeletVersion"] != "v1.30.0" || rows[0].Attrs["roles"] != "control-plane,master" || rows[0].Attrs["uid"] != "ua" {
+		t.Fatalf("attrs=%v", rows[0].Attrs)
+	}
+	if rows[1].Attrs["ready"] != "False" || rows[1].Attrs["roles"] != "worker" {
+		t.Fatalf("attrs=%v", rows[1].Attrs)
+	}
+	// A node without conditions or labels still lists with Unknown readiness.
+	if rows[2].Attrs["ready"] != "Unknown" || rows[2].Attrs["roles"] != "" {
+		t.Fatalf("attrs=%v", rows[2].Attrs)
+	}
+	item, err := p.Stat(context.Background(), ref.Locator{Scheme: "k8s", Target: "nodes/node-a"})
+	if err != nil || item.Ref != rows[0].Ref {
+		t.Fatalf("item=%+v err=%v", item, err)
+	}
+	if _, err := p.Stat(context.Background(), ref.Locator{Scheme: "k8s", Target: "nodes/missing"}); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing error=%v", err)
+	}
+}
+
+func TestK8sNodesRejectInvalidSnapshots(t *testing.T) {
+	for _, bad := range []string{`not json`, `{"items":[{"metadata":{}}]}`, `{"items":[{"metadata":{"name":"a/b"}}]}`} {
+		if _, err := parseK8sNodes([]byte(bad)); err == nil {
+			t.Fatalf("accepted nodes %q", bad)
+		}
+	}
+	if rows, err := parseK8sNodes([]byte(`{"items":[]}`)); err != nil || len(rows) != 0 {
+		t.Fatalf("empty list=%v err=%v", rows, err)
+	}
+}
+
+func TestK8sNodesScopedRecipeContextArgvAndRefs(t *testing.T) {
+	var got []string
+	p, err := NewK8sNodesScopedRecipe("kind-dev", func(_ context.Context, c string, a ...string) ([]byte, error) {
+		got = append([]string{c}, a...)
+		return []byte(`{"items":[{"metadata":{"name":"n1","uid":"u1","labels":{"node-role.kubernetes.io/control-plane":""}},"status":{"conditions":[{"type":"Ready","status":"True"}],"nodeInfo":{"kubeletVersion":"v1.30.0"}}}]}`), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loc := ref.Locator{Scheme: "k8s", Target: "nodes", ScopeKind: "k8s", ScopeValue: "kind-dev"}
+	rows, err := p.List(context.Background(), loc)
+	if err != nil || len(rows) != 1 || rows[0].Name != "n1" {
+		t.Fatalf("rows=%+v err=%v", rows, err)
+	}
+	want := []string{"kubectl", "--context", "kind-dev", "get", "nodes", "-o", "json"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("argv=%v", got)
+	}
+	if l, err := ref.ParseLocator(rows[0].Ref); err != nil || l.ScopeKind != "k8s" || l.ScopeValue != "kind-dev" {
+		t.Fatalf("ref=%q err=%v", rows[0].Ref, err)
+	}
+	if _, err := p.Open(context.Background(), loc); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("Open error=%v", err)
+	}
+	if _, err := p.List(context.Background(), ref.Locator{Scheme: "k8s", Target: "nodes"}); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("unscoped err=%v", err)
+	}
+	if _, err := p.List(context.Background(), ref.Locator{Scheme: "k8s", Target: "nodes", ScopeKind: "k8s", ScopeValue: "other"}); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("other-context err=%v", err)
+	}
+	for _, bad := range []string{"", "--token=x", "-x", "a b", "a=b", "a\nb"} {
+		if _, err := NewK8sNodesScopedRecipe(bad, func(context.Context, string, ...string) ([]byte, error) {
+			t.Fatal("runner called")
+			return nil, nil
+		}); err == nil {
+			t.Fatalf("accepted %q", bad)
+		}
+	}
+}
+
 // TestTierSandboxRecipeArgvReadOnly pins the sandbox tier transport: the
 // outpost SSH target travels as literal argv, only the read-only podman ps
 // verb is ever issued, refs keep the peer scope, Open has no write-capable

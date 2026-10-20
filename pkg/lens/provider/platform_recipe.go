@@ -260,6 +260,66 @@ func parseK8sPods(data []byte) ([]platformRecord, error) {
 	return rows, nil
 }
 
+func parseK8sNodes(data []byte) ([]platformRecord, error) {
+	var list struct {
+		Items []struct {
+			Metadata struct {
+				Name   string            `json:"name"`
+				UID    string            `json:"uid"`
+				Labels map[string]string `json:"labels"`
+			} `json:"metadata"`
+			Status struct {
+				Conditions []struct {
+					Type   string `json:"type"`
+					Status string `json:"status"`
+				} `json:"conditions"`
+				NodeInfo struct {
+					KubeletVersion string `json:"kubeletVersion"`
+				} `json:"nodeInfo"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil, fmt.Errorf("k8s recipe: %w", err)
+	}
+	rows := make([]platformRecord, 0, len(list.Items))
+	for _, item := range list.Items {
+		name := item.Metadata.Name
+		if name == "" || strings.ContainsAny(name, "/!:") {
+			return nil, fmt.Errorf("k8s recipe: missing or invalid node name")
+		}
+		ready := "Unknown"
+		for _, c := range item.Status.Conditions {
+			if c.Type == "Ready" {
+				ready = c.Status
+				break
+			}
+		}
+		seen := map[string]bool{}
+		var roles []string
+		addRole := func(r string) {
+			if r != "" && !seen[r] {
+				seen[r] = true
+				roles = append(roles, r)
+			}
+		}
+		for k := range item.Metadata.Labels {
+			if r, ok := strings.CutPrefix(k, "node-role.kubernetes.io/"); ok {
+				addRole(r)
+			}
+		}
+		addRole(item.Metadata.Labels["kubernetes.io/role"])
+		sort.Strings(roles)
+		rows = append(rows, platformRecord{id: name, name: name, kind: "node", typ: "k8s/node", attrs: map[string]any{
+			"uid": item.Metadata.UID, "ready": ready,
+			"kubeletVersion": item.Status.NodeInfo.KubeletVersion,
+			"roles":          strings.Join(roles, ","),
+		}})
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].id < rows[j].id })
+	return rows, nil
+}
+
 // NewOCIRecipe lists local containers with a read-only CLI snapshot.
 func NewOCIRecipe(run recipeRunner) Recipe {
 	if run == nil {
@@ -461,5 +521,40 @@ func NewK8sScopedRecipe(kubeContext string, run recipeRunner) (Recipe, error) {
 			return nil, err
 		}
 		return parseK8sPods(data)
+	}), nil
+}
+
+// NewK8sNodesRecipe lists nodes from the selected kubectl context without
+// mutation. Nodes are cluster-scoped, so there is no --all-namespaces flag.
+func NewK8sNodesRecipe(run recipeRunner) Recipe {
+	if run == nil {
+		run = runRecipe
+	}
+	return platformRecipe("k8s", "nodes", func(ctx context.Context) ([]platformRecord, error) {
+		data, err := run(ctx, "kubectl", "get", "nodes", "-o", "json")
+		if err != nil {
+			return nil, err
+		}
+		return parseK8sNodes(data)
+	})
+}
+
+// NewK8sNodesScopedRecipe lists nodes from exactly the named kubectl
+// context. The context is passed as a literal --context argument; there is
+// no ambient fallback, and an invalid name is refused before any command
+// runs.
+func NewK8sNodesScopedRecipe(kubeContext string, run recipeRunner) (Recipe, error) {
+	if !ValidK8sContext(kubeContext) {
+		return Recipe{}, fmt.Errorf("k8s recipe: invalid or missing @k8s context %q", kubeContext)
+	}
+	if run == nil {
+		run = runRecipe
+	}
+	return scopedPlatformRecipe("k8s", "k8s", kubeContext, "nodes", func(ctx context.Context) ([]platformRecord, error) {
+		data, err := run(ctx, "kubectl", "--context", kubeContext, "get", "nodes", "-o", "json")
+		if err != nil {
+			return nil, err
+		}
+		return parseK8sNodes(data)
 	}), nil
 }

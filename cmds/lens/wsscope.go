@@ -218,8 +218,8 @@ func (w *wsScoped) Edges(ctx context.Context, loc ref.Locator) ([]provider.Edge,
 
 // scopedProvider picks the provider for a locator that carries a scope. Only
 // ws (a local weave workspace), sandbox (containers on a remote
-// Podman-backed outpost peer), host (a sphere peer), k8s pods and cloud
-// droplets are served; every other scope is refused rather than read
+// Podman-backed outpost peer), host (a sphere peer), k8s pods and nodes and
+// cloud droplets are served; every other scope is refused rather than read
 // locally. The sandbox, k8s and cloud cases delegate to the registered
 // explicit-context recipes so there is exactly one each, never a
 // duplicate registry.
