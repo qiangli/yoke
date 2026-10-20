@@ -383,7 +383,7 @@ func (env *runEnv) checkScheduled(cmd *cobra.Command, client *cluster.Client, ct
 			if r.Unschedulable != "" {
 				return env.refuseUnschedulable(cmd, client, ctxRec, runID, request, r.Unschedulable)
 			}
-			if r.Scheduled || r.Phase == cluster.PhaseSucceeded || r.Phase == cluster.PhaseFailed {
+			if r.Scheduled || r.Phase == cluster.PhaseSucceeded || r.Phase == cluster.PhaseFailed || r.Phase == cluster.PhaseLost {
 				return nil
 			}
 		}
@@ -428,7 +428,8 @@ func isSession(k dagrun.RunKind) bool {
 func fleetRecordRunKind(fleet.Command) dagrun.RunKind { return "" }
 
 // wait polls the workspace's runs until runID reaches a terminal phase or
-// the timeout passes. Succeeded exits 0; failed and timeout exit 1. A run the
+// the timeout passes. Succeeded exits 0; failed and timeout exit 1; lost
+// exits the dedicated lost code. A run the
 // scheduler reports Unschedulable is refused and removed at once; a plain
 // Pending (image pull, slow start) keeps waiting.
 func (env *runEnv) wait(cmd *cobra.Command, client *cluster.Client, ctxRec dagrun.Context, runID, request string, timeout time.Duration) error {
@@ -458,6 +459,9 @@ func (env *runEnv) wait(cmd *cobra.Command, client *cluster.Client, ctxRec dagru
 			case cluster.PhaseFailed:
 				fmt.Fprintf(cmd.ErrOrStderr(), "bashy dks run: run %s failed (%s/%s reports phase failed)\n", runID, r.Kind, r.Name)
 				return &exitStatusError{code: 1}
+			case cluster.PhaseLost:
+				fmt.Fprintf(cmd.ErrOrStderr(), "bashy dks run: run %s lost: its executor went away under %s/%s; not re-run — re-run it explicitly\n", runID, r.Kind, r.Name)
+				return &exitStatusError{code: sessionLostExitCode}
 			}
 		}
 		if !env.now().Before(deadline) {
@@ -481,7 +485,8 @@ func newUserlandPsCmd(env *runEnv) *cobra.Command {
   RUN  KIND  COMMAND  PHASE  AGE  EXECUTOR
 
 KIND is one-shot, interactive or long-running; a session's PHASE is its
-pod's phase.`,
+pod's phase, or lost when the executor killed it before its session server
+recorded an exit (a lost session is never re-run).`,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,

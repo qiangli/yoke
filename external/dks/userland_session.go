@@ -121,6 +121,10 @@ type sessionPod struct {
 	UID        string
 	Host       string
 	AttachPort int
+	// Phase is the pod's session phase (cluster.SessionPhase); Terminated
+	// its container's terminated state, nil while it runs.
+	Phase      cluster.Phase
+	Terminated *cluster.ContainerTerminated
 }
 
 // podList is the slice of `kubectl get pods -o json` the lookup reads.
@@ -136,6 +140,11 @@ type podList struct {
 		Spec struct {
 			NodeName string `json:"nodeName"`
 		} `json:"spec"`
+		Status struct {
+			Phase             string                    `json:"phase"`
+			Reason            string                    `json:"reason"`
+			ContainerStatuses []cluster.ContainerStatus `json:"containerStatuses"`
+		} `json:"status"`
 	} `json:"items"`
 }
 
@@ -192,12 +201,15 @@ func lookupSessionPod(ctx context.Context, r cluster.Runner, kctx, id string) (p
 		return sessionPod{}, false, fmt.Errorf("session pod %s/%s has no %s annotation (%q): it predates the session server — re-run it to attach",
 			item.Metadata.Namespace, item.Metadata.Name, dagrun.AnnotAttachPort, rawPort)
 	}
+	phase, term := cluster.SessionPhase(item.Status.Phase, item.Status.Reason, item.Status.ContainerStatuses)
 	return sessionPod{
 		Namespace:  item.Metadata.Namespace,
 		Name:       item.Metadata.Name,
 		UID:        item.Metadata.UID,
 		Host:       host,
 		AttachPort: port,
+		Phase:      phase,
+		Terminated: term,
 	}, true, nil
 }
 
@@ -629,6 +641,38 @@ func mapStreamEnd(cmd *cobra.Command, verb, id string, n int64, end streamEnd) e
 	}
 }
 
+// terminalDialFailure is the verdict on a failed dial to a session pod that
+// already terminated: its server died with its container, so the dial error
+// (a 502 from the edge, a refused connect) says nothing — the pod's status
+// does. A lost session gets the dedicated lost code and is never re-run; an
+// exited one reports the child's code. ok is false while the pod is not
+// terminal, and the caller reports the dial error itself.
+func terminalDialFailure(cmd *cobra.Command, verb, id string, pod sessionPod) (err error, ok bool) {
+	at := "an unknown time"
+	code := 0
+	if t := pod.Terminated; t != nil {
+		if strings.TrimSpace(t.FinishedAt) != "" {
+			at = t.FinishedAt
+		}
+		code = t.ExitCode
+	}
+	switch pod.Phase {
+	case cluster.PhaseLost:
+		fmt.Fprintf(cmd.ErrOrStderr(), "bashy dks %s: session %s lost: executor gone at %s; not re-run — re-run it explicitly\n", verb, id, at)
+		return &exitStatusError{code: sessionLostExitCode}, true
+	case cluster.PhaseSucceeded, cluster.PhaseFailed:
+		if pod.Phase == cluster.PhaseFailed && code == 0 {
+			code = 1
+		}
+		fmt.Fprintf(cmd.ErrOrStderr(), "bashy dks %s: session %s exited with code %d at %s; its session server is gone\n", verb, id, code, at)
+		if code != 0 {
+			return &exitStatusError{code: code}, true
+		}
+		return nil, true
+	}
+	return nil, false
+}
+
 func newSessionAttachCmd(env *sessionEnv) *cobra.Command {
 	var viewer bool
 	cmd := &cobra.Command{
@@ -678,6 +722,9 @@ func (env *sessionEnv) runAttach(cmd *cobra.Command, id string, viewer bool) err
 	defer stop()
 	stream, err := env.dialStream(ctx, endpoint, env.newClientID(), 0, viewer)
 	if err != nil {
+		if verdict, ok := terminalDialFailure(cmd, "attach", id, tgt.pod); ok {
+			return verdict
+		}
 		return fail(planeError(tgt.ctx, err))
 	}
 	defer stream.Close()
@@ -773,13 +820,15 @@ func (env *sessionEnv) snapshotLogs(cmd *cobra.Command, tgt sessionTarget, endpo
 	}
 	conn, err := env.snapshotDial(ctx, raw, headers)
 	if err != nil {
+		if verdict, ok := terminalDialFailure(cmd, "logs", id, tgt.pod); ok {
+			return verdict
+		}
 		return fail(planeError(sessionTargetCtx(tgt), err))
 	}
 	defer conn.Close()
 	if err := readSnapshotToEnd(conn, cmd.OutOrStdout()); err != nil {
 		return fail(err)
 	}
-	_ = id
 	return nil
 }
 
@@ -796,6 +845,9 @@ func (env *sessionEnv) followLogs(cmd *cobra.Command, tgt sessionTarget, endpoin
 	defer stop()
 	stream, err := env.dialStream(ctx, endpoint, env.newClientID(), 0, true)
 	if err != nil {
+		if verdict, ok := terminalDialFailure(cmd, "logs", id, tgt.pod); ok {
+			return verdict
+		}
 		return fail(planeError(tgt.ctx, err))
 	}
 	defer stream.Close()
