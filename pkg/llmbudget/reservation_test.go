@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -453,5 +454,29 @@ func TestExpiredReservationsDoNotConsumeCapacity(t *testing.T) {
 		if strings.HasPrefix(id, "stale-") {
 			t.Fatalf("expired reservation %q survived admission", id)
 		}
+	}
+}
+
+func TestRenewDefiniteVersusTransientErrors(t *testing.T) {
+	ctx := context.Background()
+	g := fixtureGate(t, fixturePolicy())
+	o := fixtureOwner(t, g)
+	if a, e := g.Reserve(ctx, demand("r", o)); e != nil || a.Reservation == nil {
+		t.Fatalf("reserve: %+v %v", a, e)
+	}
+	if e := g.Renew(ctx, "r", o.ID(), 2*time.Minute); e != nil {
+		t.Fatal(e)
+	}
+	if e := g.Renew(ctx, "nope", o.ID(), 2*time.Minute); !errors.Is(e, ErrReservationMissing) {
+		t.Fatalf("missing: %v", e)
+	}
+	if e := g.Renew(ctx, "r", "someone-else", 2*time.Minute); !errors.Is(e, ErrOwnerNotLive) {
+		t.Fatalf("other owner: %v", e)
+	}
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+	e := g.Renew(cctx, "r", o.ID(), 2*time.Minute)
+	if e == nil || errors.Is(e, ErrReservationMissing) || errors.Is(e, ErrOwnerNotLive) {
+		t.Fatalf("cancelled ctx must be a transient error, got %v", e)
 	}
 }
