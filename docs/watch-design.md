@@ -130,10 +130,10 @@ works at all: nothing arrives, so only the clock can fire.
 - **inverse (`not ... within T`)** — the operator the story asks for, and the
   one that subsumes three rules. It fires when the positive condition has NOT
   held for T:
-  - *idle*: no input and no output for T (default 14m). Applies to a session's
-    pty byte counters, a run log's stdout/stderr counters, a file's mtime, an
+  - *idle*: no input and no output for T. Applies to a session's pty byte
+    counters, a run log's stdout/stderr counters, a file's mtime, an
     interface's rx/tx, or a queue with no new records — they are all "activity
-    on a locator".
+    on a locator". The policy it carries is the next section.
   - *liveness*: an expected heartbeat did not arrive within T. Locators named
     with `Expect` are armed at start, so a heartbeat that **never** arrives
     fires; otherwise a locator is armed when first seen.
@@ -141,8 +141,56 @@ works at all: nothing arrives, so only the clock can fire.
     Process liveness is never evidence of progress, so the engine has no way to
     spell "healthy because the pid exists".
   - *un-stall*: activity resuming emits the `clear`, carrying the idle
-    duration.
+    duration — and it clears **whichever rung was raised**, because nobody
+    wants the critical cleared while the warning stays behind.
   - *absence* is this rule with the whole source as the locator.
+
+### The idle policy
+
+Four statements, in quarter-hour steps because the numbers have to be sayable:
+
+| | |
+| --- | --- |
+| 15m quiet | **warning** (`level: warning`, reason `idle`) |
+| 30m quiet | **critical** (`level: critical`, the line says *stalled*) |
+| re-notify | every 15m while the condition persists |
+
+Two rungs rather than one, because a single threshold either cries wolf at
+thirty minutes of normal quiet or notices a dead run an hour late, and which
+one it does depends on a number nobody can pick correctly for every task. The
+level is part of the alert identity, so an escalation is **delivered** — a
+dedupe that swallowed the critical would leave an operator looking at "idle"
+for something that has been dead for an hour. It is a `level`, not a new
+`reason`: a consumer filtering `reason=idle` keeps seeing the condition when it
+escalates.
+
+- **Idle applies to LONG-RUNNING work only** — weave runs, managed sessions,
+  services, background and schedule jobs. A short foreground command that
+  printed nothing for twenty minutes is not stalled, it is a command, and
+  whoever started it is watching it. The engine cannot *guess* which one it is
+  looking at and guessing from a locator string would be wrong in both
+  directions, so the class is **declared**: by the source that spawned the work
+  (`watch.Task`, delivered to the rules before the first cycle) or on the event
+  itself (the `task` label). A locator declared `command`/`foreground` is never
+  flagged; an undeclared one stays eligible, because the operator who pointed
+  `--idle` at it has said what it is. `watch --task run|session|service|job|
+  schedule|command` is the CLI spelling.
+- **A task may declare its own expected quiet window** (`--quiet-window 45m`,
+  the `quiet_window` label, or `Task.Quiet`). The declared window *replaces*
+  the warning threshold and the critical rung keeps the rule's own ratio, so
+  45m gives 45m/90m rather than collapsing both rungs onto the same instant.
+  A window that does not parse leaves the default in force and is reported in
+  the alert's `quiet_window_error` field — never silently ignored.
+- **A task younger than its window is never flagged.** This is not the same as
+  "we have not seen it for that long": a journal entry an hour old is evidence
+  the task is *at least* that old, and a `Started` a source declares is the
+  only fact that distinguishes a genuinely quiet run from a one-minute-old one
+  with an hour of backfilled history. `Started` does not seed the clock — a
+  watcher that has only just begun cannot claim the task was already stale
+  before it looked.
+
+`--idle`/`--heartbeat` without `--renotify` take the 15m cadence; a rule file
+says `renotify` itself. A rule that wants one rung sets `"no_critical": true`.
 - **correlation (request → response)** — a trigger, an expected event, a
   deadline, and a correlation key. Emits `responded` (with latency), `late` (a
   response after the deadline) or `unanswered` (at the deadline, naming the
@@ -188,9 +236,8 @@ Sinks are one method (`Deliver(Alert) error`):
   sends real mail**;
 - **until** — exit on the first alert. This is the sink that replaces
   hand-written until-loops: an agent blocks on
-  `watch --until --timeout 15m [rules] -- CMD`.
-
-Hook-a-command is Phase 2.
+  `watch --until --timeout 15m [rules] -- CMD`;
+- **hook** — a Bash# script the user wrote. See the next section.
 
 ### Exit codes
 
@@ -239,6 +286,99 @@ edit it, and `--rules ./mine.json`. `bashy resources watch` stays a thin
 documented alias for a `resources` preset (Phase 2) so there is exactly one
 watch engine.
 
+## Bash# script hooks — the same rod, for sources and sinks
+
+Presets let a user configure the engine. Hooks let a user **extend** it, in
+both directions, without rebuilding bashy:
+
+- a **probe hook** is a source. It prints NDJSON samples on stdout —
+  `{"resource":"gpu:0","field":"utilization","value":91,"unit":"percent"}` —
+  and the engine applies its rules to them exactly as to a built-in sampler.
+  A vendor GPU tool, an app metric, a model quota, a remote API, a queue
+  depth. One `sample` event per line, plus a `changed` event when a value
+  moves, so a change rule works over a user's probe with no threshold rule in
+  sight. (Threshold and rate rules are still Phase 2; what a probe's values
+  cross today is the inverse rule's warning/critical/clear ladder and the
+  change rule.)
+- an **action hook** is a sink. It runs on a transition — warning, critical,
+  clear, idle, unanswered — so reclaiming a disk, pausing a run or paging a
+  seat is a script in the asset ring rather than a verb in this binary.
+
+The alternative is a verb per resource and a verb per response, which is the
+shape this whole engine exists to collapse.
+
+**The event goes on stdin and the argv is fixed.** One `bashy-watch-v1` JSON
+object (an alert for an action; nothing for a probe) on stdin, and the script's
+configured argv verbatim. No alert value is ever interpolated into a script or
+its arguments, so there is no shell string for a locator containing a quote, a
+newline or a `$(…)` to break out of. A hook that wants a field reads its stdin.
+
+Discovery is the ring catalog again, one `.bsh` file per hook:
+
+```
+$BASHY_WATCH_DIR/hooks/<name>.bsh     most precise
+$BASHY_HOME/watch/hooks/<name>.bsh    a relocated bashy home
+~/.bashy/watch/hooks/<name>.bsh       the default local ring
+(embedded)                            the shipped examples
+```
+
+A local script shadows a shipped one of the same name — `watch --list-hooks`
+shows which won, and `watch --hook-source gpu > ~/.bashy/watch/hooks/mine.bsh`
+is how a user starts from an example. The shipped two are **examples, not
+verbs**: `reclaim-go-build` (orphaned `go-build*` temp dirs older than 15m with
+no open handles, dry-run unless configured with `--apply`) and `gpu`
+(nvidia-smi when present, and **nothing** when absent — "there is no GPU here"
+is not a probe failure).
+
+### Safety
+
+Applied in one place, `Hooks.Run`, so no caller can forget one:
+
+- **per-hook timeout** — 60s for a probe, 5m for an action;
+- **concurrency 1 per hook** — an overlapping invocation is *skipped*, never
+  queued, because a queue of reclaims is a reclaim storm with a delay;
+- **a non-zero exit or a timeout is itself an alarm event**, raised into the
+  alert stream (reason `error`, rule `hook:<name>`) through the engine's own
+  dedupe. A hook that quietly did not run leaves the operator believing it did.
+  A probe that failed produces that alarm and **no events**, for the same
+  reason a failed snapshot does not advance a baseline. One unreadable sample
+  line does not discard the readable ones and is not dropped in silence either;
+- **A4 — the master never runs user hooks.** There is no master/worker role
+  check in this module to reuse, so the refusal is driven from an explicit
+  signal: `BASHY_WATCH_ROLE=master` in the environment (or `Hooks.Master` in
+  code). The master's job is to decide; running a user's script is a worker's;
+- **A6 — a destructive hook needs explicit confirmation** in its configuration
+  (`"destructive": true, "confirm": true` on the sink), never a crossed
+  threshold. Hooks otherwise run as the invoking user under the normal bashy
+  policy;
+- a hook that cannot be resolved is an **error**, never a hook that does
+  nothing: a watch whose sink silently never ran reports a problem and then
+  ignores it.
+
+Execution is `bashy --bashsharp <script> <fixed argv>` through the **installed
+bashy, looked up on PATH at run time** — deliberately not `os.Executable()`,
+which in a test or an embedding host is something other than a shell. The exec
+itself is injectable (`Hooks.Exec`), so unit tests exercise the policy without
+a real bashy.
+
+### Rule-file spelling
+
+```json
+{
+  "schema_version": "bashy-watch-rules-v1",
+  "sources": [{"type": "hook", "script": "gpu", "locator": "gpu:0", "class": "service"}],
+  "rules":   [{"type": "change", "fields": ["utilization"]}],
+  "sinks":   [{"type": "hook", "script": "reclaim-go-build", "args": ["--apply"],
+               "destructive": true, "confirm": true,
+               "when": {"attrs": {"level": "critical"}}}]
+}
+```
+
+`sinks` is the only sink a rule file may declare: console, NDJSON and inbox are
+the invocation's business, not a rule file's. `--probe NAME` and `--hook NAME`
+are the flag spellings for the simple cases; a fixed argv, a `when` filter or a
+destructive hook needs the file.
+
 ## Classic watch is untouched
 
 No agentic flag given ⇒ the classic path runs, byte for byte: `-n`, `-d`,
@@ -251,5 +391,6 @@ an agentic flag; the existing tests are the gate on that.
 OTel spool source (`spans.jsonl`: requests, responses, errors and metrics are
 already spans, so there is no new instrumentation API), fsnotify source
 (create/write/remove/chmod — file mode changes), weave run-state source,
-threshold + rate rules shared with `pkg/resources`, the hook sink, and the
-`deploy` and `resources` presets.
+threshold + rate rules shared with `pkg/resources`, wiring `pkg/resources`
+onto this engine, and the `deploy` and `resources` presets. (The hook sink
+moved into Phase 1 — see above.)

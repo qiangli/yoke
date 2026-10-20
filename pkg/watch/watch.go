@@ -80,6 +80,15 @@ const (
 	StateClear = "clear"
 )
 
+// Alert LEVELS. Two rungs and no more: the first is "look at this", the
+// second is "this is not coming back on its own". A level is not a reason —
+// the same condition escalates, and a consumer filtering `reason=idle` must
+// keep seeing it when it does.
+const (
+	LevelWarning  = "warning"
+	LevelCritical = "critical"
+)
+
 // Alert reasons. The vocabulary is small on purpose: an operator reading an
 // alert stream should not have to learn a word per command.
 const (
@@ -101,6 +110,7 @@ type Alert struct {
 	Rule    string         `json:"rule"`
 	State   string         `json:"state"`
 	Reason  string         `json:"reason"`
+	Level   string         `json:"level,omitempty"`
 	Locator string         `json:"locator,omitempty"`
 	Message string         `json:"message,omitempty"`
 	Fields  map[string]any `json:"fields,omitempty"`
@@ -162,6 +172,73 @@ type Armer interface {
 // that NEVER arrived.
 type Starter interface {
 	Start(now time.Time)
+}
+
+// TASK CLASSES. Idleness applies to LONG-RUNNING work and nothing else: a
+// weave run, a managed session, a service, a background or schedule job. A
+// short foreground command that printed nothing for twenty minutes is not
+// stalled — it is a command, and whoever started it is watching it.
+//
+// The engine cannot guess which one it is looking at, and guessing from a
+// locator string would be wrong in both directions. So a class is DECLARED:
+// by the source that spawned the work (Task), or on the event itself (the
+// AttrTask label). An undeclared locator stays eligible — the operator who
+// pointed `watch --idle` at it has said what it is — but a locator declared
+// short is never flagged.
+const (
+	ClassRun        = "run"      // a weave run
+	ClassSession    = "session"  // a managed agent session
+	ClassService    = "service"  // a supervised service
+	ClassJob        = "job"      // a background job
+	ClassSchedule   = "schedule" // a schedule job
+	ClassCommand    = "command"  // a short foreground command — never idle
+	ClassForeground = "foreground"
+)
+
+// LongRunning reports whether idleness applies to a task class. An unknown or
+// empty class is long-running: see the note above on why the default is
+// eligible rather than exempt.
+func LongRunning(class string) bool {
+	switch class {
+	case ClassCommand, ClassForeground:
+		return false
+	default:
+		return true
+	}
+}
+
+// Event labels a task declares about itself.
+const (
+	// AttrTask is the task class (see LongRunning).
+	AttrTask = "task"
+	// AttrQuiet is the task's own expected quiet window ("45m"): how long it
+	// may legitimately say nothing. A task younger than its window is never
+	// flagged, and the window replaces the rule's default warning threshold.
+	AttrQuiet = "quiet_window"
+)
+
+// Task is what a source knows about the thing it watches, up front: what kind
+// of work it is, how long it may legitimately be quiet, and when it began.
+//
+// Started is the one fact no event can supply. A journal entry an hour old
+// does not mean the task is an hour old, and without a start time a watcher
+// that back-fills history flags a run that began a minute ago.
+type Task struct {
+	Locator string
+	Class   string
+	Quiet   time.Duration
+	Started time.Time
+}
+
+// TaskDeclarer is implemented by a source that knows the task it watches.
+type TaskDeclarer interface {
+	Tasks() []Task
+}
+
+// Declarer is implemented by a rule that can be told about a task, so a rule
+// file does not have to repeat what the source already knows.
+type Declarer interface {
+	Declare(Task)
 }
 
 // Sink delivers an alert. One method, so an agent can add one inline.

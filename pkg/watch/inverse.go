@@ -15,11 +15,24 @@ import (
 // Everything else is naming.
 type Inverse struct {
 	RuleName string
-	Within   time.Duration
+	// Within is the WARNING threshold: quiet for this long is a warning.
+	Within time.Duration
+	// Critical is the second rung: quiet for this long is not a slow task, it
+	// is a stalled one. Zero takes the default (DefaultStalled when Within is
+	// the default, otherwise twice Within — the same ratio either way, so a
+	// rule that sets only one rung still gets a ladder rather than a cliff).
+	Critical time.Duration
+	// NoCritical keeps a single rung, for a condition where "worse" means
+	// nothing (a heartbeat either arrived or it did not).
+	NoCritical bool
 	// Reason labels the alert: idle (a session, a run, a file), missing (a
 	// heartbeat or probe that did not occur), absent (a source or queue that
 	// went quiet).
 	Reason string
+	// Class is the task class assumed for a locator that declares none —
+	// which is how `--idle` on an explicit resource stays eligible while a
+	// locator declared ClassCommand never is. See LongRunning.
+	Class string
 	// Scope selects which events' locators this rule TRACKS AT ALL. nil means
 	// every event's.
 	//
@@ -54,9 +67,22 @@ type Inverse struct {
 
 // InverseRule is the inverse operator over one Inverse config.
 type InverseRule struct {
-	cfg    Inverse
-	last   map[string]time.Time
-	firing map[string]bool
+	cfg Inverse
+	// last is the clock: when the condition last held for a locator.
+	last map[string]time.Time
+	// born is when the task BEGAN, which is not when we first heard about it:
+	// a back-dated journal entry tells us the task is at least that old, a
+	// declared Started tells us exactly, and the watcher's own start is the
+	// floor for a locator we armed and never heard from.
+	born map[string]time.Time
+	// firing records the level currently reported per locator, so a resume
+	// clears the rung that was actually raised.
+	firing map[string]string
+	// quiet, class and started are the per-locator declarations.
+	quiet    map[string]time.Duration
+	quietErr map[string]string
+	class    map[string]string
+	started  map[string]time.Time
 }
 
 // NewInverse builds the inverse rule.
@@ -70,11 +96,38 @@ func NewInverse(c Inverse) *InverseRule {
 	if c.Within <= 0 {
 		c.Within = DefaultIdle
 	}
-	return &InverseRule{cfg: c, last: map[string]time.Time{}, firing: map[string]bool{}}
+	if c.Critical <= 0 {
+		if c.Within == DefaultIdle {
+			c.Critical = DefaultStalled
+		} else {
+			c.Critical = 2 * c.Within
+		}
+	}
+	return &InverseRule{
+		cfg:  c,
+		last: map[string]time.Time{}, born: map[string]time.Time{},
+		firing: map[string]string{}, quiet: map[string]time.Duration{},
+		quietErr: map[string]string{}, class: map[string]string{},
+		started: map[string]time.Time{},
+	}
 }
 
-// DefaultIdle is the operator's documented default window for idleness.
-const DefaultIdle = 14 * time.Minute
+// THE IDLE POLICY, IN QUARTER-HOUR STEPS.
+//
+// Quarter-hours because the numbers have to be sayable: an operator reads
+// "15 minutes quiet, 30 minutes stalled, remind me every 15" once and knows
+// the whole policy. The two rungs are a ladder on purpose — a single
+// threshold either cries wolf at 30 minutes of normal quiet or notices a dead
+// run an hour late, and which of the two it does depends on a number nobody
+// can pick correctly for every task.
+const (
+	// DefaultIdle is the warning threshold: quiet for this long is worth a look.
+	DefaultIdle = 15 * time.Minute
+	// DefaultStalled is the critical threshold: quiet for this long is a stall.
+	DefaultStalled = 30 * time.Minute
+	// DefaultRenotify is how often a persisting condition is restated.
+	DefaultRenotify = 15 * time.Minute
+)
 
 // Name implements Rule.
 func (r *InverseRule) Name() string { return r.cfg.RuleName }
@@ -84,6 +137,32 @@ func (r *InverseRule) Arm(locators []string) {
 	r.cfg.Expect = append(r.cfg.Expect, locators...)
 }
 
+// Declare implements Declarer: what a source knows about its task.
+//
+// A declared task is also an ARMED one — a source that says "I watch
+// run:repo-7" has named the locator, so silence from it is reportable without
+// the rule file repeating the name.
+func (r *InverseRule) Declare(t Task) {
+	if t.Locator == "" {
+		return
+	}
+	r.cfg.Expect = append(r.cfg.Expect, t.Locator)
+	if t.Class != "" {
+		r.class[t.Locator] = t.Class
+	}
+	if t.Quiet > 0 {
+		r.quiet[t.Locator] = t.Quiet
+	}
+	if !t.Started.IsZero() {
+		// A DECLARED start wins over anything we INFER, and that is the whole
+		// point of carrying it: it is the only fact that distinguishes "quiet
+		// for an hour" from "one minute old with an hour of backfilled
+		// history". It does NOT seed the clock — a watcher that has only just
+		// begun cannot claim the task was already stale before it looked.
+		r.started[t.Locator] = t.Started
+	}
+}
+
 // Start arms the locators that are expected to report. The window starts now:
 // a watcher that has only just begun cannot claim a lease was already stale.
 func (r *InverseRule) Start(now time.Time) {
@@ -91,7 +170,30 @@ func (r *InverseRule) Start(now time.Time) {
 		if _, known := r.last[loc]; !known {
 			r.last[loc] = now
 		}
+		r.noteBorn(loc, now)
 	}
+}
+
+// noteBorn keeps the EARLIEST time we have any evidence the locator existed.
+// A back-dated journal entry is evidence the task is at least that old; it is
+// never evidence that it is NOT older.
+func (r *InverseRule) noteBorn(loc string, at time.Time) {
+	if at.IsZero() {
+		return
+	}
+	if prev, known := r.born[loc]; !known || at.Before(prev) {
+		r.born[loc] = at
+	}
+}
+
+// ageFrom is when the task began, as well as we know: declared if declared,
+// earliest observed otherwise.
+func (r *InverseRule) ageFrom(loc string) (time.Time, bool) {
+	if t, ok := r.started[loc]; ok && !t.IsZero() {
+		return t, true
+	}
+	t, ok := r.born[loc]
+	return t, ok
 }
 
 // On implements Rule: activity resets the clock, and un-stalls a locator that
@@ -111,6 +213,8 @@ func (r *InverseRule) On(ev Event, now time.Time) []Alert {
 	if r.cfg.Scope != nil && !r.cfg.Scope(ev) {
 		return nil
 	}
+	r.learn(loc, ev)
+	r.noteBorn(loc, at)
 	if r.cfg.Activity != nil && !r.cfg.Activity(ev) {
 		// NOT activity — but now we know the locator EXISTS, which is worth
 		// recording: "alive but idle is stalled, never healthy" only works if a
@@ -122,10 +226,11 @@ func (r *InverseRule) On(ev Event, now time.Time) []Alert {
 	}
 	prev, known := r.last[loc]
 	r.last[loc] = at
-	if !r.firing[loc] {
+	level := r.firing[loc]
+	if level == "" {
 		return nil
 	}
-	r.firing[loc] = false
+	delete(r.firing, loc)
 	if r.cfg.NoClear {
 		return nil
 	}
@@ -135,11 +240,67 @@ func (r *InverseRule) On(ev Event, now time.Time) []Alert {
 	}
 	e := ev
 	return []Alert{{
-		At: at, Rule: r.cfg.RuleName, State: StateClear, Reason: r.cfg.Reason, Locator: loc,
+		At: at, Rule: r.cfg.RuleName, State: StateClear, Reason: r.cfg.Reason, Level: level, Locator: loc,
 		Message: fmt.Sprintf("%s: activity resumed after %s", loc, idle),
-		Fields:  r.fields(idle),
+		Fields:  r.fields(loc, idle, r.windowOf(loc), level),
 		Event:   &e,
 	}}
+}
+
+// learn records a task's own declarations off the event. A source that knows
+// nothing about tasks says nothing, and the defaults apply.
+func (r *InverseRule) learn(loc string, ev Event) {
+	if c := ev.Attr(AttrTask); c != "" {
+		r.class[loc] = c
+	}
+	q := ev.Attr(AttrQuiet)
+	if q == "" {
+		return
+	}
+	d, err := time.ParseDuration(q)
+	if err != nil || d <= 0 {
+		// Not silently ignored: the default applies, and the alert says the
+		// declaration was unreadable. A window that quietly did nothing is how
+		// a watcher ends up measuring something other than what it was told.
+		r.quietErr[loc] = q
+		return
+	}
+	delete(r.quietErr, loc)
+	r.quiet[loc] = d
+}
+
+// windowOf is the warning threshold for a locator: its declared quiet window
+// if it has one, the rule's otherwise.
+func (r *InverseRule) windowOf(loc string) time.Duration {
+	if d, ok := r.quiet[loc]; ok && d > 0 {
+		return d
+	}
+	return r.cfg.Within
+}
+
+// criticalOf is the critical threshold. A declared window scales both rungs by
+// the rule's own ratio, so declaring a 45m window gives 45m/90m rather than
+// collapsing the two rungs onto the same instant.
+func (r *InverseRule) criticalOf(loc string) time.Duration {
+	if r.cfg.NoCritical {
+		return 0
+	}
+	w := r.windowOf(loc)
+	if w == r.cfg.Within {
+		return r.cfg.Critical
+	}
+	if r.cfg.Within <= 0 {
+		return 2 * w
+	}
+	return time.Duration(float64(w) * (float64(r.cfg.Critical) / float64(r.cfg.Within)))
+}
+
+// classOf is the locator's task class: declared, or the rule's assumption.
+func (r *InverseRule) classOf(loc string) string {
+	if c, ok := r.class[loc]; ok && c != "" {
+		return c
+	}
+	return r.cfg.Class
 }
 
 // Tick implements Rule: the half no event can provide.
@@ -157,21 +318,47 @@ func (r *InverseRule) Tick(now time.Time) []Alert {
 
 	var out []Alert
 	for _, loc := range locs {
-		idle := now.Sub(r.last[loc])
-		if idle < r.cfg.Within {
+		// Idle applies to long-running work only. A short foreground command
+		// is not flagged no matter how quiet it is.
+		if !LongRunning(r.classOf(loc)) {
 			continue
 		}
-		r.firing[loc] = true
+		window := r.windowOf(loc)
+		// A task YOUNGER than its window has not had time to be quiet for it.
+		if born, known := r.ageFrom(loc); known && now.Sub(born) < window {
+			continue
+		}
+		idle := now.Sub(r.last[loc])
+		if idle < window {
+			continue
+		}
+		level := LevelWarning
+		if crit := r.criticalOf(loc); crit > 0 && idle >= crit {
+			level = LevelCritical
+		}
+		r.firing[loc] = level
 		msg := r.cfg.Message
 		if msg == "" {
-			msg = fmt.Sprintf("%s: stalled — no %s for %s (threshold %s)", loc, r.subject(), idle, r.cfg.Within)
+			msg = r.render(loc, level, idle, window)
 		}
 		out = append(out, Alert{
-			At: now, Rule: r.cfg.RuleName, State: StateFire, Reason: r.cfg.Reason, Locator: loc,
-			Message: msg, Fields: r.fields(idle),
+			At: now, Rule: r.cfg.RuleName, State: StateFire, Reason: r.cfg.Reason, Level: level,
+			Locator: loc, Message: msg, Fields: r.fields(loc, idle, window, level),
 		})
 	}
 	return out
+}
+
+// render is the human line. The critical rung says STALLED, because a task
+// that is alive and has produced nothing for twice its window is not a slow
+// task — and there is deliberately no way to spell "healthy because the pid
+// exists".
+func (r *InverseRule) render(loc, level string, idle, window time.Duration) string {
+	if level == LevelCritical {
+		return fmt.Sprintf("%s: stalled — no %s for %s (critical at %s)",
+			loc, r.subject(), idle, r.criticalOf(loc))
+	}
+	return fmt.Sprintf("%s: idle — no %s for %s (warning at %s)", loc, r.subject(), idle, window)
 }
 
 func (r *InverseRule) subject() string {
@@ -185,10 +372,21 @@ func (r *InverseRule) subject() string {
 	}
 }
 
-func (r *InverseRule) fields(idle time.Duration) map[string]any {
-	return map[string]any{
+func (r *InverseRule) fields(loc string, idle, window time.Duration, level string) map[string]any {
+	f := map[string]any{
 		"idle_for":     idle.String(),
 		"idle_seconds": idle.Seconds(),
-		"within":       r.cfg.Within.String(),
+		"within":       window.String(),
+		"level":        level,
 	}
+	if crit := r.criticalOf(loc); crit > 0 {
+		f["critical"] = crit.String()
+	}
+	if c := r.classOf(loc); c != "" {
+		f["task"] = c
+	}
+	if bad, ok := r.quietErr[loc]; ok {
+		f["quiet_window_error"] = bad
+	}
+	return f
 }

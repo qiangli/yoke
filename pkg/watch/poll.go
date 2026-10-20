@@ -27,6 +27,15 @@ type PollSource struct {
 	// Keys names the record identity. Empty means DefaultKeys (first present
 	// wins); two or more make a composite key.
 	Keys []string
+	// Class and Quiet declare the TASK this source polls: its class (see
+	// LongRunning) and its own expected quiet window. They exist because the
+	// engine cannot tell a weave run from a one-shot `ls` — the caller can.
+	Class string
+	Quiet time.Duration
+	// Started is when the polled task began, if the caller knows. A task
+	// younger than its quiet window is never flagged.
+	Started time.Time
+
 	// AllowEmpty reads an empty snapshot literally — as zero records — for a
 	// command whose empty output genuinely means empty. Off by default: an
 	// empty snapshot is far more often a command that failed to say anything,
@@ -59,6 +68,15 @@ func (p *PollSource) Expected() []string {
 		return nil
 	}
 	return []string{p.Locator}
+}
+
+// Tasks implements TaskDeclarer: one poll source polls one task, and it is the
+// only thing in the pipeline that knows what kind of task that is.
+func (p *PollSource) Tasks() []Task {
+	if p.Locator == "" {
+		return nil
+	}
+	return []Task{{Locator: p.Locator, Class: p.Class, Quiet: p.Quiet, Started: p.Started}}
 }
 
 // Poll implements Source.

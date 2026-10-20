@@ -1,0 +1,79 @@
+#!/usr/bin/env bashy
+# AN ACTION HOOK EXAMPLE, not a verb.
+#
+# Reclaims orphaned go-build temp directories: the `go-build*` trees the
+# toolchain leaves in TMPDIR when a build is killed. They are the single
+# largest source of slow disk-fill on a build host, and no build ever looks at
+# one again.
+#
+# The alert that triggered the hook arrives as one JSON object on STDIN
+# (schema bashy-watch-v1). Nothing from it is interpolated into this script:
+# read stdin if you want a field.
+#
+# DRY RUN BY DEFAULT. It deletes only when configured with --apply, because A6
+# says a persistent destroy is authorized by configuration and not by a
+# threshold being crossed:
+#
+#   {"sinks": [{"type": "hook", "script": "reclaim-go-build",
+#               "args": ["--apply"], "destructive": true, "confirm": true}]}
+#
+# Three conditions, all of which must hold before a directory is touched:
+#   - the name matches go-build*, directly under TMPDIR;
+#   - it has not been modified for at least 15 minutes;
+#   - nothing has it open (checked with lsof when available — a running build's
+#     cache must survive this hook, and mtime alone does not prove it is idle).
+
+set -u
+
+apply=0
+for arg in "$@"; do
+	case "$arg" in
+	--apply) apply=1 ;;
+	--dry-run) apply=0 ;;
+	esac
+done
+
+# The alert is on stdin. Drained so a hook that ignores it never wedges the
+# writer, and echoed in dry-run so the operator can see what fired.
+alert=$(cat)
+
+tmp=${TMPDIR:-/tmp}
+tmp=${tmp%/}
+
+# find's -mmin +15 is "last modified more than 15 minutes ago" — the quiet
+# window below which a directory may still belong to a live build.
+candidates=$(find "$tmp" -maxdepth 1 -type d -name 'go-build*' -mmin +15 2>/dev/null || true)
+
+freed=0
+kept=0
+for dir in $candidates; do
+	[ -d "$dir" ] || continue
+	if command -v lsof >/dev/null 2>&1; then
+		if lsof +D "$dir" >/dev/null 2>&1; then
+			kept=$((kept + 1))
+			printf 'keep %s: open handles\n' "$dir"
+			continue
+		fi
+	fi
+	if [ "$apply" -eq 1 ]; then
+		if rm -rf -- "$dir"; then
+			freed=$((freed + 1))
+			printf 'reclaimed %s\n' "$dir"
+		else
+			printf 'failed %s\n' "$dir" >&2
+			exit 1
+		fi
+	else
+		freed=$((freed + 1))
+		printf 'would reclaim %s\n' "$dir"
+	fi
+done
+
+if [ "$apply" -eq 1 ]; then
+	printf 'reclaimed %d, kept %d (open) under %s\n' "$freed" "$kept" "$tmp"
+else
+	printf 'dry run: %d reclaimable, %d kept (open) under %s — pass --apply to delete\n' \
+		"$freed" "$kept" "$tmp"
+	[ -n "$alert" ] && printf 'triggered by: %s\n' "$alert"
+fi
+exit 0

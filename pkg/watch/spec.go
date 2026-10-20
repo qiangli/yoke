@@ -53,6 +53,17 @@ type SourceSpec struct {
 	AllowEmpty bool     `json:"allow_empty,omitempty"`
 	// Reader is the cursor identity a receipt level is measured against.
 	Reader string `json:"reader,omitempty"`
+	// Script names a probe hook's Bash# script (type "hook").
+	Script string `json:"script,omitempty"`
+	// Args is the FIXED argv a probe hook is run with.
+	Args []string `json:"args,omitempty"`
+	// Timeout bounds one probe invocation (default DefaultProbeTimeout).
+	Timeout Duration `json:"timeout,omitempty"`
+	// Class and Quiet are the source's declaration ABOUT ITS TASK: what kind
+	// of work it watches, and how long that work may legitimately be quiet.
+	// Both reach the idle rule before the first cycle (see watch.Task).
+	Class string   `json:"class,omitempty"`
+	Quiet Duration `json:"quiet_window,omitempty"`
 }
 
 // RuleSpec declares one rule in a rule file. The fields a type does not use
@@ -63,14 +74,18 @@ type RuleSpec struct {
 	When   Criteria `json:"when,omitempty"`
 	Fields []string `json:"fields,omitempty"`
 
-	Within    Duration  `json:"within,omitempty"`
-	Reason    string    `json:"reason,omitempty"`
-	Activity  *Criteria `json:"activity,omitempty"`
-	Scope     *Criteria `json:"scope,omitempty"`
-	LocatorBy string    `json:"locator_by,omitempty"`
-	Expect    []string  `json:"expect,omitempty"`
-	NoClear   bool      `json:"no_clear,omitempty"`
-	Message   string    `json:"message,omitempty"`
+	Within Duration `json:"within,omitempty"`
+	// Critical is the inverse rule's second rung; NoCritical keeps one.
+	Critical   Duration  `json:"critical,omitempty"`
+	NoCritical bool      `json:"no_critical,omitempty"`
+	Class      string    `json:"class,omitempty"`
+	Reason     string    `json:"reason,omitempty"`
+	Activity   *Criteria `json:"activity,omitempty"`
+	Scope      *Criteria `json:"scope,omitempty"`
+	LocatorBy  string    `json:"locator_by,omitempty"`
+	Expect     []string  `json:"expect,omitempty"`
+	NoClear    bool      `json:"no_clear,omitempty"`
+	Message    string    `json:"message,omitempty"`
 
 	Trigger *Criteria `json:"trigger,omitempty"`
 	Join    string    `json:"join,omitempty"`
@@ -87,6 +102,10 @@ type RuleFile struct {
 	Timeout       Duration     `json:"timeout,omitempty"`
 	Sources       []SourceSpec `json:"sources,omitempty"`
 	Rules         []RuleSpec   `json:"rules,omitempty"`
+	// Sinks are the rule file's ACTION hooks: user code run on a transition.
+	// There is no other sink type here — console, NDJSON and inbox are the
+	// invocation's business, not a rule file's.
+	Sinks []HookSpec `json:"sinks,omitempty"`
 }
 
 // ParseRuleFile decodes a rule file. An unknown schema version is an error:
@@ -109,6 +128,7 @@ func ParseRuleFile(b []byte) (RuleFile, error) {
 type Plan struct {
 	Sources  []Source
 	Rules    []Rule
+	Sinks    []Sink
 	Interval time.Duration
 	Renotify time.Duration
 	Timeout  time.Duration
@@ -120,6 +140,10 @@ type BuildOptions struct {
 	// exec: the host owns process policy (which shell, which env, which budget),
 	// so a rule file cannot smuggle one in.
 	Command func(argv []string) (Runner, error)
+	// Hooks runs the Bash# hook scripts a rule file names. nil means this host
+	// does not run user hooks, and a rule file that names one is refused
+	// loudly rather than watched with the hook quietly missing.
+	Hooks HookRunner
 }
 
 // SourceFactory builds a source from its spec.
@@ -176,6 +200,16 @@ func (f RuleFile) Build(opts BuildOptions) (Plan, error) {
 		}
 		plan.Rules = append(plan.Rules, rule)
 	}
+	for _, spec := range f.Sinks {
+		if spec.Type != "" && spec.Type != "hook" {
+			return Plan{}, fmt.Errorf("watch: unknown sink type %q (have: hook)", spec.Type)
+		}
+		sink, err := NewHookSink(opts.Hooks, spec)
+		if err != nil {
+			return Plan{}, err
+		}
+		plan.Sinks = append(plan.Sinks, sink)
+	}
 	return plan, nil
 }
 
@@ -193,13 +227,20 @@ func buildSource(spec SourceSpec, opts BuildOptions) (Source, error) {
 		}
 		p := NewPollSource("poll", spec.Locator, run)
 		p.Keys, p.AllowEmpty = spec.Keys, spec.AllowEmpty
+		p.Class, p.Quiet = spec.Class, spec.Quiet.D()
 		return p, nil
+	}
+	if spec.Type == "hook" {
+		return NewHookSource(opts.Hooks, HookSpec{
+			Script: spec.Script, Args: spec.Args, Timeout: spec.Timeout,
+			Locator: spec.Locator, Class: spec.Class, Quiet: spec.Quiet,
+		})
 	}
 	registryMu.RLock()
 	factory := sourceTypes[spec.Type]
 	registryMu.RUnlock()
 	if factory == nil {
-		return nil, fmt.Errorf("watch: unknown source type %q (have: poll, %s)", spec.Type, strings.Join(SourceTypes(), ", "))
+		return nil, fmt.Errorf("watch: unknown source type %q (have: poll, hook, %s)", spec.Type, strings.Join(SourceTypes(), ", "))
 	}
 	return factory(spec)
 }
@@ -213,6 +254,7 @@ func buildRule(spec RuleSpec) (Rule, error) {
 	case "inverse", "idle", "absence", "liveness":
 		cfg := Inverse{
 			RuleName: spec.Name, Within: spec.Within.D(), Reason: spec.Reason,
+			Critical: spec.Critical.D(), NoCritical: spec.NoCritical, Class: spec.Class,
 			Expect: spec.Expect, NoClear: spec.NoClear, Message: spec.Message,
 		}
 		if spec.Activity != nil {

@@ -2,6 +2,7 @@ package watch
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -63,8 +64,20 @@ func New(cfg Config) *Engine {
 	return &Engine{cfg: cfg, fired: map[string]time.Time{}, firing: map[string]bool{}}
 }
 
-// alertID is the identity a transition is measured against.
-func alertID(a Alert) string { return a.Rule + "|" + a.Locator + "|" + a.Reason }
+// alertID is the identity a transition is measured against. The LEVEL is part
+// of it: an escalation from warning to critical is not a repeat of the warning,
+// and a dedupe that swallowed it would leave an operator looking at "idle" for
+// something that has been dead for an hour.
+func alertID(a Alert) string {
+	return a.Rule + "|" + a.Locator + "|" + a.Reason + "|" + a.Level
+}
+
+// alertGroup is the same identity WITHOUT the level, because a recovery is not
+// level-specific: "it came back" clears whichever rung was raised, and nobody
+// wants the critical cleared while the warning stays behind.
+func alertGroup(a Alert) string {
+	return a.Rule + "|" + a.Locator + "|" + a.Reason + "|"
+}
 
 // Observe runs the rules over one event and delivers what survives policy.
 func (e *Engine) Observe(ev Event) []Alert {
@@ -74,6 +87,15 @@ func (e *Engine) Observe(ev Event) []Alert {
 	}
 	return e.deliver(raised)
 }
+
+// Raise puts an alert the ENGINE did not produce through the same delivery
+// policy as one it did — dedupe, re-notify, clear-what-was-warned.
+//
+// It exists for the hook alarms: a probe or action script that exited non-zero
+// has to be heard about in the alert stream (never silent), and a failing hook
+// on a two-second interval must be deduped like any other persisting
+// condition rather than printed thirty times a minute.
+func (e *Engine) Raise(a Alert) []Alert { return e.deliver([]Alert{a}) }
 
 // Tick runs the time-driven rules and delivers what survives policy.
 func (e *Engine) Tick(now time.Time) []Alert {
@@ -95,11 +117,18 @@ func (e *Engine) deliver(alerts []Alert) []Alert {
 			// Never clear what nobody was warned about: "X is fine again" for an
 			// X that never alarmed is noise that teaches a reader to ignore the
 			// channel.
-			if !e.firing[id] {
+			group := alertGroup(a)
+			cleared := false
+			for id := range e.firing {
+				if strings.HasPrefix(id, group) {
+					delete(e.firing, id)
+					delete(e.fired, id)
+					cleared = true
+				}
+			}
+			if !cleared {
 				continue
 			}
-			delete(e.firing, id)
-			delete(e.fired, id)
 		} else {
 			if last, seen := e.fired[id]; seen {
 				if e.cfg.Renotify <= 0 || a.At.Sub(last) < e.cfg.Renotify {
@@ -127,14 +156,26 @@ func (e *Engine) Run(ctx context.Context) int {
 	}
 	start := e.cfg.Now()
 	var expected []string
+	var tasks []Task
 	for _, src := range e.cfg.Sources {
 		if ex, ok := src.(Expecter); ok {
 			expected = append(expected, ex.Expected()...)
+		}
+		// What a source knows about its task — class, quiet window, start
+		// time — reaches the rules BEFORE the first cycle, because all three
+		// decide whether a locator may be flagged at all.
+		if td, ok := src.(TaskDeclarer); ok {
+			tasks = append(tasks, td.Tasks()...)
 		}
 	}
 	for _, r := range e.cfg.Rules {
 		if a, ok := r.(Armer); ok && len(expected) > 0 {
 			a.Arm(expected)
+		}
+		if d, ok := r.(Declarer); ok {
+			for _, t := range tasks {
+				d.Declare(t)
+			}
 		}
 		if s, ok := r.(Starter); ok {
 			s.Start(start)

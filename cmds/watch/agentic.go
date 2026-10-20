@@ -20,6 +20,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/pflag"
@@ -38,12 +39,16 @@ var agenticFlags = []string{
 	"json", "key", "locator", "match", "change", "idle", "heartbeat", "expect",
 	"reply-within", "source", "backfill", "rules", "preset", "list-presets",
 	"inbox", "from", "until", "timeout", "renotify", "allow-empty",
+	"task", "quiet-window",
+	"probe", "hook", "list-hooks", "hook-source",
 }
 
 type agenticOptions struct {
 	jsonOut     bool
 	keys        []string
 	locator     string
+	task        string
+	quietWindow time.Duration
 	match       []string
 	change      []string
 	idle        time.Duration
@@ -55,6 +60,10 @@ type agenticOptions struct {
 	rules       string
 	preset      string
 	listPresets bool
+	probes      []string
+	hooks       []string
+	listHooks   bool
+	hookSource  string
 	inbox       []string
 	from        string
 	until       bool
@@ -67,6 +76,8 @@ func registerAgenticFlags(fs *pflag.FlagSet, o *agenticOptions) {
 	fs.BoolVar(&o.jsonOut, "json", false, "emit one "+watch.SchemaVersion+" alert per line on stdout (NDJSON)")
 	fs.StringSliceVar(&o.keys, "key", nil, "record identity for the structured diff (default id/name/key/seq/path)")
 	fs.StringVar(&o.locator, "locator", "", "name the watched resource (sprint:480, run:repo-7, @host, a path)")
+	fs.StringVar(&o.task, "task", "", "declare the watched task's class: run, session, service, job, schedule, command (idle never flags a command)")
+	fs.DurationVar(&o.quietWindow, "quiet-window", 0, "declare how long the watched task may legitimately be quiet (scales both idle rungs)")
 	fs.StringArrayVar(&o.match, "match", nil, "alarm on events matching field=status,after=done,text=RE,attr.to=operator (repeatable)")
 	fs.StringSliceVar(&o.change, "change", nil, "alarm on any change of these fields")
 	fs.DurationVar(&o.idle, "idle", 0, "alarm when a resource shows no activity for this long (the inverse operator)")
@@ -78,6 +89,10 @@ func registerAgenticFlags(fs *pflag.FlagSet, o *agenticOptions) {
 	fs.StringVar(&o.rules, "rules", "", "read rules from a "+watch.RulesSchemaVersion+" file")
 	fs.StringVar(&o.preset, "preset", "", "start from a named rule file (see --list-presets)")
 	fs.BoolVar(&o.listPresets, "list-presets", false, "list the available presets and exit")
+	fs.StringArrayVar(&o.probes, "probe", nil, "sample a resource with a Bash# probe hook, by asset name or path (repeatable)")
+	fs.StringArrayVar(&o.hooks, "hook", nil, "run a Bash# action hook on every alert, by asset name or path (repeatable); for a fixed argv, a when-filter or a destructive hook, use a rule file's sinks")
+	fs.BoolVar(&o.listHooks, "list-hooks", false, "list the available hook scripts and exit")
+	fs.StringVar(&o.hookSource, "hook-source", "", "print a hook script, so a shipped example can be copied into the local ring")
 	fs.StringSliceVar(&o.inbox, "inbox", nil, "post every alert to these recipients or seats")
 	fs.StringVar(&o.from, "from", "", "sender for --inbox (default: this agent's board identity)")
 	fs.BoolVar(&o.until, "until", false, "exit 0 on the first alert; exit 1 if --timeout elapses first")
@@ -100,6 +115,12 @@ func runAgentic(rc *tool.RunContext, opts watchOptions, o *agenticOptions) int {
 	if o.listPresets {
 		return listPresets(rc)
 	}
+	if o.listHooks {
+		return listHooks(rc)
+	}
+	if o.hookSource != "" {
+		return printHookSource(rc, o.hookSource)
+	}
 
 	plan, code := buildPlan(rc, opts, o)
 	if code >= 0 {
@@ -121,6 +142,7 @@ func runAgentic(rc *tool.RunContext, opts watchOptions, o *agenticOptions) int {
 	} else {
 		sinks = append(sinks, watch.ConsoleSink{W: rc.Err})
 	}
+	sinks = append(sinks, plan.Sinks...)
 	if len(o.inbox) > 0 {
 		from := o.from
 		if from == "" {
@@ -153,6 +175,12 @@ func runAgentic(rc *tool.RunContext, opts watchOptions, o *agenticOptions) int {
 	if o.renotify > 0 {
 		renotify = o.renotify
 	}
+	// A condition that persists is RESTATED on the documented cadence. Without
+	// this an --idle watch reports the stall once and then goes quiet, which
+	// reads exactly like a watcher that stopped.
+	if renotify <= 0 && (o.idle > 0 || o.heartbeat > 0) {
+		renotify = watch.DefaultRenotify
+	}
 	timeout := plan.Timeout
 	if o.timeout > 0 {
 		timeout = o.timeout
@@ -178,6 +206,20 @@ func runAgentic(rc *tool.RunContext, opts watchOptions, o *agenticOptions) int {
 			fmt.Fprintf(rc.Err, "watch: %s: %v\n", source, err)
 		},
 	})
+	// A failing hook is reported in the ALERT STREAM, not just as a diagnostic:
+	// a hook that quietly did not run leaves the operator believing it did.
+	// Routing it through the engine gets it the same dedupe as any condition.
+	for _, s := range sinks {
+		if hook, ok := s.(*watch.HookSink); ok {
+			hook.Alarm = func(a watch.Alert) { engine.Raise(a) }
+		}
+	}
+	for _, src := range plan.Sources {
+		if hook, ok := src.(*watch.HookSource); ok {
+			hook.Alarm = func(a watch.Alert) { engine.Raise(a) }
+		}
+	}
+
 	code = engine.Run(ctx)
 	if commandFailed {
 		return watch.ExitCommandFailed
@@ -201,7 +243,7 @@ func buildPlan(rc *tool.RunContext, opts watchOptions, o *agenticOptions) (watch
 			fmt.Fprintf(rc.Err, "watch: %v\n", err)
 			return plan, 1
 		}
-		built, err := preset.File.Build(watch.BuildOptions{Command: commandRunner(rc, opts)})
+		built, err := preset.File.Build(buildOptions(rc, opts))
 		if err != nil {
 			fmt.Fprintf(rc.Err, "watch: preset %s: %v\n", o.preset, err)
 			return plan, 1
@@ -219,7 +261,7 @@ func buildPlan(rc *tool.RunContext, opts watchOptions, o *agenticOptions) (watch
 			fmt.Fprintf(rc.Err, "watch: %v\n", err)
 			return plan, 1
 		}
-		built, err := file.Build(watch.BuildOptions{Command: commandRunner(rc, opts)})
+		built, err := file.Build(buildOptions(rc, opts))
 		if err != nil {
 			fmt.Fprintf(rc.Err, "watch: %v\n", err)
 			return plan, 1
@@ -238,7 +280,27 @@ func buildPlan(rc *tool.RunContext, opts watchOptions, o *agenticOptions) (watch
 		}
 		src := watch.NewPollSource("poll", o.locator, run)
 		src.Keys, src.AllowEmpty = o.keys, o.allowEmpty
+		src.Class, src.Quiet = o.task, o.quietWindow
 		plan.Sources = append(plan.Sources, src)
+	}
+
+	for _, spec := range o.probes {
+		src, err := watch.NewHookSource(hookRunner(), watch.HookSpec{Script: spec, Locator: o.locator,
+			Class: o.task, Quiet: watch.Duration(o.quietWindow)})
+		if err != nil {
+			fmt.Fprintf(rc.Err, "watch: %v\n", err)
+			return plan, 2
+		}
+		plan.Sources = append(plan.Sources, src)
+	}
+
+	for _, spec := range o.hooks {
+		sink, err := watch.NewHookSink(hookRunner(), watch.HookSpec{Script: spec})
+		if err != nil {
+			fmt.Fprintf(rc.Err, "watch: %v\n", err)
+			return plan, 2
+		}
+		plan.Sinks = append(plan.Sinks, sink)
 	}
 
 	for _, spec := range o.sources {
@@ -371,6 +433,55 @@ func parseCriteria(spec string) (watch.Criteria, error) {
 		}
 	}
 	return c, nil
+}
+
+// hookRunner is the one hook runner for a watch invocation, so the
+// concurrency-1 limit is shared across every hook in the plan rather than
+// counted per sink.
+var hookRunner = sync.OnceValue(watch.NewHooks)
+
+// buildOptions is what a rule file is allowed to reach: the host's command
+// runner and the host's hook runner, and nothing else.
+func buildOptions(rc *tool.RunContext, opts watchOptions) watch.BuildOptions {
+	return watch.BuildOptions{Command: commandRunner(rc, opts), Hooks: hookRunner()}
+}
+
+func listHooks(rc *tool.RunContext) int {
+	rows, err := watch.HookCatalog().Rows()
+	if err != nil {
+		fmt.Fprintf(rc.Err, "watch: %v\n", err)
+		return 1
+	}
+	if len(rows) == 0 {
+		fmt.Fprintln(rc.Err, "watch: no hook scripts")
+		return 1
+	}
+	for _, row := range rows {
+		origin := row.Entry.Origin
+		if origin == "" {
+			origin = "(embedded)"
+		}
+		shadow := ""
+		if row.Shadows {
+			shadow = " (shadows the embedded example)"
+		}
+		fmt.Fprintf(rc.Out, "%-20s %-9s %s%s\n", row.Name, row.Entry.Ring, origin, shadow)
+	}
+	fmt.Fprintf(rc.Out, "\nlocal ring: %s\n", watch.HooksDir())
+	return 0
+}
+
+// printHookSource is the copy mechanism: an embedded example has no path on
+// disk, so `--hook-source gpu > ~/.bashy/watch/hooks/mine.bsh` is how a user
+// starts from one.
+func printHookSource(rc *tool.RunContext, name string) int {
+	entry, _, ok := watch.HookCatalog().Get(name)
+	if !ok {
+		fmt.Fprintf(rc.Err, "watch: no hook %q (have: %s)\n", name, strings.Join(watch.HookNames(), ", "))
+		return 1
+	}
+	rc.Out.Write(entry.Body)
+	return 0
 }
 
 // commandRunner adapts the watched command to watch.Runner. The engine does not
