@@ -99,3 +99,35 @@ func TestInverseLocatorOfGroupsActivity(t *testing.T) {
 		t.Fatalf("alerts = %+v, want absence reported for the source", fire)
 	}
 }
+
+func TestInverseArmsLocatorsASourceExpects(t *testing.T) {
+	// A poll source pointed at one resource knows its locator before the first
+	// cycle, so "this log has not moved since I started watching" is reportable
+	// without the rule file having to name it.
+	r := NewInverse(Inverse{RuleName: "idle", Within: 14 * time.Minute})
+	r.Arm([]string{"run:repo-7"})
+	r.Start(at0)
+	fire := r.Tick(at0.Add(14 * time.Minute))
+	if len(fire) != 1 || fire[0].Locator != "run:repo-7" {
+		t.Fatalf("alerts = %+v, want the armed locator reported", fire)
+	}
+}
+
+func TestInverseScopeKeepsUnrelatedLocatorsOut(t *testing.T) {
+	// Without a scope, a rule asking "has this sprint thread gone quiet?" would
+	// start a timer on every message id another source mentions, and alarm
+	// about all of them 14 minutes later.
+	r := NewInverse(Inverse{
+		RuleName: "sprint-idle",
+		Within:   14 * time.Minute,
+		Scope:    func(ev Event) bool { return ev.Source == "sprint-thread" },
+		Activity: func(ev Event) bool { return ev.Source == "sprint-thread" },
+	})
+	r.Start(at0)
+	r.On(Event{At: at0, Source: "sprint-thread", Locator: "sprint:480"}, at0)
+	r.On(Event{At: at0, Source: "mb", Locator: "mb:m1"}, at0)
+	fire := r.Tick(at0.Add(14 * time.Minute))
+	if len(fire) != 1 || fire[0].Locator != "sprint:480" {
+		t.Fatalf("alerts = %+v, want only the in-scope locator", fire)
+	}
+}

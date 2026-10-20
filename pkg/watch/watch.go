@@ -140,6 +140,23 @@ type Rule interface {
 	Tick(now time.Time) []Alert
 }
 
+// Expecter is implemented by a source that knows UP FRONT which locators it
+// intends to report on.
+//
+// It exists for the case absence cannot otherwise reach: a locator that has
+// been silent since before the watcher started has no event to hang a timer on,
+// so an idle rule over a poll source would arm only on the first change — which
+// is to say, never, for the exact resource that is stuck.
+type Expecter interface {
+	Expected() []string
+}
+
+// Armer is implemented by a rule that can be told which locators to expect, so
+// a rule FILE does not have to name a locator the command line already did.
+type Armer interface {
+	Arm(locators []string)
+}
+
 // Starter is implemented by a rule that must be armed with a start time —
 // a liveness rule has to know when the clock started to report a heartbeat
 // that NEVER arrived.

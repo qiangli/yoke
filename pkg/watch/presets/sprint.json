@@ -1,0 +1,50 @@
+{
+  "schema_version": "bashy-watch-rules-v1",
+  "name": "sprint",
+  "description": "What a conductor supervising sprints has to notice: a card's stage changing, a judgement recorded on the thread, a message addressed to the operator, and a sprint that has gone quiet. Replaces a hand-written poll script. Copy it, edit the windows, and point --rules at your copy.",
+  "interval": "60s",
+  "renotify": "1h",
+  "sources": [
+    {"type": "sprint-thread", "backfill": "2h"},
+    {"type": "mb", "backfill": "2h"}
+  ],
+  "rules": [
+    {
+      "type": "match",
+      "name": "stage",
+      "when": {"source": "sprint-thread", "attrs": {"kind": "stage"}}
+    },
+    {
+      "type": "match",
+      "name": "judgement",
+      "when": {
+        "source": "sprint-thread",
+        "any": [
+          {"attrs": {"kind": "fail"}},
+          {"attrs": {"kind": "bypass"}},
+          {"attrs": {"kind": "blocker"}},
+          {"attrs": {"kind": "override"}},
+          {"attrs": {"kind": "escalation"}},
+          {"attrs": {"kind": "verdict"}},
+          {"attrs": {"kind": "takeover"}},
+          {"attrs": {"kind": "split-needed"}},
+          {"attrs": {"kind": "decision"}},
+          {"text": "accept(ed)?\\b"}
+        ]
+      }
+    },
+    {
+      "type": "match",
+      "name": "operator-mail",
+      "when": {"source": "mb", "attrs": {"to_role": "operator"}}
+    },
+    {
+      "type": "inverse",
+      "name": "sprint-idle",
+      "reason": "idle",
+      "within": "45m",
+      "activity": {"source": "sprint-thread"},
+      "locator_by": "locator"
+    }
+  ]
+}

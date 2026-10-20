@@ -257,3 +257,26 @@ func TestSinksRenderAlerts(t *testing.T) {
 		t.Fatalf("record = %+v", rec)
 	}
 }
+
+type expectingSource struct{ fakeSource }
+
+func (e *expectingSource) Expected() []string { return []string{"run:repo-7"} }
+
+func TestEngineArmsExpectedLocatorsFromSources(t *testing.T) {
+	now := at0
+	sink := &collectSink{}
+	rule := NewInverse(Inverse{RuleName: "idle", Within: 2 * time.Minute})
+	e := New(Config{
+		Sources: []Source{&expectingSource{fakeSource{name: "poll"}}},
+		Rules:   []Rule{rule}, Sinks: []Sink{sink},
+		Interval: time.Minute, MaxCycles: 4,
+		Now:   func() time.Time { return now },
+		Sleep: func(_ context.Context, d time.Duration) bool { now = now.Add(d); return true },
+	})
+	if code := e.Run(context.Background()); code != ExitOK {
+		t.Fatalf("code = %d", code)
+	}
+	if len(sink.got) != 1 || sink.got[0].Locator != "run:repo-7" || sink.got[0].Reason != ReasonIdle {
+		t.Fatalf("sink = %+v, want one idle alert for the expected locator", sink.got)
+	}
+}

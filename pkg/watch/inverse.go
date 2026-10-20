@@ -20,6 +20,17 @@ type Inverse struct {
 	// heartbeat or probe that did not occur), absent (a source or queue that
 	// went quiet).
 	Reason string
+	// Scope selects which events' locators this rule TRACKS AT ALL. nil means
+	// every event's.
+	//
+	// It is separate from Activity because the two questions are different, and
+	// conflating them produces either noise or silence. "A sprint thread has
+	// gone quiet" must not start a 45-minute timer on every message id the mb
+	// source happens to mention (noise); "a session is alive but idle" needs the
+	// liveness sample to ARM a clock that only real output may reset (silence
+	// otherwise). Scope says what to watch; Activity says what counts as
+	// progress on it.
+	Scope Predicate
 	// Activity selects the events that count as the condition holding. nil
 	// means every event does.
 	//
@@ -68,6 +79,11 @@ const DefaultIdle = 14 * time.Minute
 // Name implements Rule.
 func (r *InverseRule) Name() string { return r.cfg.RuleName }
 
+// Arm adds locators a source said it expects to report on.
+func (r *InverseRule) Arm(locators []string) {
+	r.cfg.Expect = append(r.cfg.Expect, locators...)
+}
+
 // Start arms the locators that are expected to report. The window starts now:
 // a watcher that has only just begun cannot claim a lease was already stale.
 func (r *InverseRule) Start(now time.Time) {
@@ -81,9 +97,6 @@ func (r *InverseRule) Start(now time.Time) {
 // On implements Rule: activity resets the clock, and un-stalls a locator that
 // was reported stalled.
 func (r *InverseRule) On(ev Event, now time.Time) []Alert {
-	if r.cfg.Activity != nil && !r.cfg.Activity(ev) {
-		return nil
-	}
 	loc := ev.Locator
 	if r.cfg.LocatorOf != nil {
 		loc = r.cfg.LocatorOf(ev)
@@ -94,6 +107,18 @@ func (r *InverseRule) On(ev Event, now time.Time) []Alert {
 	at := ev.At
 	if at.IsZero() {
 		at = now
+	}
+	if r.cfg.Scope != nil && !r.cfg.Scope(ev) {
+		return nil
+	}
+	if r.cfg.Activity != nil && !r.cfg.Activity(ev) {
+		// NOT activity — but now we know the locator EXISTS, which is worth
+		// recording: "alive but idle is stalled, never healthy" only works if a
+		// liveness sample arms the clock it must not reset.
+		if _, known := r.last[loc]; !known {
+			r.last[loc] = at
+		}
+		return nil
 	}
 	prev, known := r.last[loc]
 	r.last[loc] = at

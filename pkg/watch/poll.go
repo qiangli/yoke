@@ -51,6 +51,16 @@ func NewPollSource(name, locator string, run Runner) *PollSource {
 // Name implements Source.
 func (p *PollSource) Name() string { return p.SourceName }
 
+// Expected implements Expecter: a poll source is pointed at ONE resource, so
+// an idle rule can arm it before the first cycle and report a command whose
+// output never moved at all.
+func (p *PollSource) Expected() []string {
+	if p.Locator == "" {
+		return nil
+	}
+	return []string{p.Locator}
+}
+
 // Poll implements Source.
 //
 // THE BASELINE IS ONLY ADVANCED BY A SNAPSHOT WE BELIEVE. A command that

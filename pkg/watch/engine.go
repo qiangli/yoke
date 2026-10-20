@@ -126,7 +126,16 @@ func (e *Engine) Run(ctx context.Context) int {
 		ctx = context.Background()
 	}
 	start := e.cfg.Now()
+	var expected []string
+	for _, src := range e.cfg.Sources {
+		if ex, ok := src.(Expecter); ok {
+			expected = append(expected, ex.Expected()...)
+		}
+	}
 	for _, r := range e.cfg.Rules {
+		if a, ok := r.(Armer); ok && len(expected) > 0 {
+			a.Arm(expected)
+		}
 		if s, ok := r.(Starter); ok {
 			s.Start(start)
 		}

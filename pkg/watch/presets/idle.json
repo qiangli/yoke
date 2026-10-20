@@ -1,0 +1,16 @@
+{
+  "schema_version": "bashy-watch-rules-v1",
+  "name": "idle",
+  "description": "No input and no output for 14 minutes is a STALL, not health: a process that is alive but idle has made no progress, and process liveness is not evidence of progress. Point it at anything whose output moves while work is happening -- a run log, a pty byte counter, a queue -- with 'watch --preset idle --locator run:repo-7 -- <command>'. The clear event reports how long the stall lasted.",
+  "interval": "60s",
+  "renotify": "30m",
+  "rules": [
+    {
+      "type": "inverse",
+      "name": "idle",
+      "reason": "idle",
+      "within": "14m",
+      "locator_by": "locator"
+    }
+  ]
+}
