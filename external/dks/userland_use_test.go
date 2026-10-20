@@ -19,8 +19,10 @@ import (
 // fakeRunner records every call and answers from a script; it never execs.
 type fakeRunner struct {
 	calls []runnerCall
-	// script maps the first kubectl action (e.g. "get", "apply") to its
-	// scripted answer; "get" answers both reachability and configmap gets.
+	// script maps a script key — the kubectl action ("get", "apply",
+	// "delete") refined by the plane question it asks — to its scripted
+	// answer. A key the test does not script falls back to the bare action,
+	// exactly the way the original fake answered.
 	stdout map[string][]byte
 	stderr map[string][]byte
 	exit   map[string]int
@@ -32,18 +34,40 @@ type runnerCall struct {
 	stdin []byte
 }
 
-func (f *fakeRunner) Run(_ context.Context, argv []string, stdin []byte) ([]byte, []byte, int, error) {
-	f.calls = append(f.calls, runnerCall{argv: append([]string(nil), argv...), stdin: append([]byte(nil), stdin...)})
-	action := ""
+// actionOf returns the first kubectl action of argv ("" when none).
+func actionOf(argv []string) string {
 	for _, a := range argv {
 		switch a {
 		case "get", "apply", "delete":
-			action = a
-		}
-		if action != "" {
-			break
+			return a
 		}
 	}
+	return ""
+}
+
+// scriptKey refines a get into the plane question it asks, so a test can
+// script reachability, the by-name list and the by-id lookup separately:
+// "get-namespace" (reachability), "get-by-name" (workspace list by the
+// name label) and "get-configmap" (any other configmap get).
+func scriptKey(argv []string) string {
+	action := actionOf(argv)
+	if action != "get" {
+		return action
+	}
+	joined := strings.Join(argv, " ")
+	switch {
+	case strings.Contains(joined, LabelWorkspaceName+"="):
+		return "get-by-name"
+	case strings.Contains(joined, "configmap"):
+		return "get-configmap"
+	case strings.Contains(joined, "namespace"):
+		return "get-namespace"
+	}
+	return "get"
+}
+
+func (f *fakeRunner) Run(_ context.Context, argv []string, stdin []byte) ([]byte, []byte, int, error) {
+	f.calls = append(f.calls, runnerCall{argv: append([]string(nil), argv...), stdin: append([]byte(nil), stdin...)})
 	if f.exit == nil {
 		f.exit = map[string]int{}
 	}
@@ -53,7 +77,63 @@ func (f *fakeRunner) Run(_ context.Context, argv []string, stdin []byte) ([]byte
 	if f.stderr == nil {
 		f.stderr = map[string][]byte{}
 	}
-	return f.stdout[action], f.stderr[action], f.exit[action], f.err[action]
+	key, action := scriptKey(argv), actionOf(argv)
+	stdout, ok := f.stdout[key]
+	if !ok {
+		stdout = f.stdout[action]
+	}
+	stderr, ok := f.stderr[key]
+	if !ok {
+		stderr = f.stderr[action]
+	}
+	exit, ok := f.exit[key]
+	if !ok {
+		exit = f.exit[action]
+	}
+	err, ok := f.err[key]
+	if !ok {
+		err = f.err[action]
+	}
+	return stdout, stderr, exit, err
+}
+
+// applyCalls returns the recorded runner calls that apply to the plane.
+func applyCalls(calls []runnerCall) []runnerCall {
+	var out []runnerCall
+	for _, c := range calls {
+		if actionOf(c.argv) == "apply" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// wsListJSON builds the `kubectl get configmap -o json` answer of a plane
+// holding exactly the given workspaces of one name.
+func wsListJSON(t *testing.T, name string, ids ...string) []byte {
+	t.Helper()
+	items := make([]map[string]any, 0, len(ids))
+	for _, id := range ids {
+		items = append(items, map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      workspaceObjectName(id),
+				"namespace": userlandNamespace,
+				"labels": map[string]any{
+					dagrun.LabelManagedBy: dagrun.ManagedByBashy,
+					dagrun.LabelWorkspace: id,
+					LabelWorkspaceName:    name,
+				},
+			},
+			"data": map[string]any{"name": name},
+		})
+	}
+	b, err := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "ConfigMapList", "items": items})
+	if err != nil {
+		t.Fatalf("encode configmap list: %v", err)
+	}
+	return b
 }
 
 // unreachable scripts a plane that cannot be reached at all.
@@ -171,12 +251,16 @@ func TestUseUnreachablePlaneNeverRunsLocally(t *testing.T) {
 	}
 }
 
-// Selecting an existing workspace resolves through the probe and persists the
-// context under $BASHY_HOME/dks/context, printing workspace and plane.
+// Selecting an existing workspace by NAME asks the plane which workspace
+// holds the name (the dhnt.io/workspace-name label) and selects THAT id,
+// then persists the context under $BASHY_HOME/dks/context, printing
+// workspace and plane.
 func TestUseExistingWorkspaceSelectsAndPersists(t *testing.T) {
 	te := newTestEnv(t)
-	te.runner.exit["get"] = 0
-	te.runner.stdout["get"] = []byte("configmap/bashy-ws-01jbq5e9p2wyz5zg4hj3xrg7w8\n")
+	// The plane's skel is NOT this client's mint: the found id must win.
+	const planeID = "01M5DGE9P2WYZ5ZG4HJ3XRG7W8"
+	te.runner.exit["get-by-name"] = 0
+	te.runner.stdout["get-by-name"] = wsListJSON(t, "skel", planeID)
 
 	code, stdout, stderr := runUserland(t, te.env, "use", "skel@k8s:dev")
 	if code != 0 {
@@ -194,24 +278,30 @@ func TestUseExistingWorkspaceSelectsAndPersists(t *testing.T) {
 	if ctx.Name != "skel" || ctx.Plane != "k8s:dev" || ctx.Tier != dagrun.TierCluster {
 		t.Errorf("persisted context = %+v, want name skel plane k8s:dev tier cluster", ctx)
 	}
+	if ctx.WorkspaceID != planeID {
+		t.Errorf("persisted workspace id = %q, want the plane's %q: the record the plane holds wins over any private mint", ctx.WorkspaceID, planeID)
+	}
 	if !dagrun.ValidWorkspaceID(ctx.WorkspaceID) {
 		t.Errorf("persisted workspace id %q is not a ULID", ctx.WorkspaceID)
 	}
-	// Resolve must have probed reachability then workspace existence, nothing else.
+	// Resolve must have probed reachability then listed by name, nothing else.
 	if len(te.runner.calls) != 2 {
-		t.Fatalf("runner calls = %v, want reachability + workspace-exists only", len(te.runner.calls))
+		t.Fatalf("runner calls = %v, want reachability + list-by-name only", len(te.runner.calls))
 	}
 	// Label-only selection: the workspace is found by its labels, never by
-	// guessing its name into the selector.
-	sel := "app.kubernetes.io/managed-by=bashy,dhnt.io/workspace=" + ctx.WorkspaceID
+	// guessing its object name into the selector.
+	sel := "app.kubernetes.io/managed-by=bashy," + LabelWorkspaceName + "=skel"
 	cmArgv := strings.Join(te.runner.calls[1].argv, " ")
-	for _, want := range []string{"--context dev", "get configmap", "-n bashy-userland", "-l " + sel, "-o name"} {
+	for _, want := range []string{"--context dev", "get configmap", "-n bashy-userland", "-l " + sel, "-o json"} {
 		if !strings.Contains(cmArgv, want) {
-			t.Errorf("workspace-exists argv %q misses %q", cmArgv, want)
+			t.Errorf("list-by-name argv %q misses %q", cmArgv, want)
 		}
 	}
 	if strings.Contains(cmArgv, "bashy-ws-") {
-		t.Errorf("workspace-exists argv names the object instead of selecting by label: %q", cmArgv)
+		t.Errorf("list-by-name argv names the object instead of selecting by label: %q", cmArgv)
+	}
+	if len(applyCalls(te.runner.calls)) != 0 {
+		t.Errorf("selecting an existing workspace applied something: %v", te.runner.calls)
 	}
 	if len(te.execCalls) != 0 {
 		t.Errorf("use executed locally: %v", te.execCalls)
@@ -220,28 +310,23 @@ func TestUseExistingWorkspaceSelectsAndPersists(t *testing.T) {
 
 // First use of a NEW name creates the workspace (server-side apply, field
 // manager bashy) before persisting — the walking-skeleton `use skel` path.
+// The record carries the name BOTH as the dhnt.io/workspace-name label —
+// the key a later `use <name>` selects by — and as data.name.
 func TestUseFirstUseCreatesWorkspace(t *testing.T) {
 	te := newTestEnv(t)
-	te.runner.exit["get"] = 0
-	te.runner.stdout["get"] = []byte("") // reachable, but the workspace list is empty
+	te.runner.exit["get-by-name"] = 0
+	te.runner.stdout["get-by-name"] = wsListJSON(t, "skel") // the plane holds no skel
 	te.runner.exit["apply"] = 0
 
 	code, _, stderr := runUserland(t, te.env, "use", "skel@k8s:dev")
 	if code != 0 {
 		t.Fatalf("first use exited %d: %q", code, stderr)
 	}
-	var apply *runnerCall
-	for i := range te.runner.calls {
-		for _, a := range te.runner.calls[i].argv {
-			if a == "apply" {
-				c := te.runner.calls[i]
-				apply = &c
-			}
-		}
+	applies := applyCalls(te.runner.calls)
+	if len(applies) != 1 {
+		t.Fatalf("apply calls = %d, want exactly one create", len(applies))
 	}
-	if apply == nil {
-		t.Fatalf("no server-side apply issued: %v", te.runner.calls)
-	}
+	apply := applies[0]
 	for _, want := range []string{"apply", "--server-side", "--field-manager=bashy", "-f", "-"} {
 		found := false
 		for _, a := range apply.argv {
@@ -280,11 +365,156 @@ func TestUseFirstUseCreatesWorkspace(t *testing.T) {
 	if labels["app.kubernetes.io/managed-by"] != "bashy" || labels["dhnt.io/workspace"] != "01JBQ5E9P2WYZ5ZG4HJ3XRG7W8" {
 		t.Errorf("applied labels = %v, want managed-by=bashy and the workspace label", labels)
 	}
+	if labels["dhnt.io/workspace-name"] != "skel" {
+		t.Errorf("applied labels = %v, want dhnt.io/workspace-name=skel: the name label is how a later use selects this record", labels)
+	}
+	data, _ := cm["data"].(map[string]any)
+	if data["name"] != "skel" {
+		t.Errorf("applied data = %v, want data.name=skel kept", data)
+	}
 	if _, ok := currentContext(t); !ok {
 		t.Error("first use did not persist the new workspace context")
 	}
 	if len(te.execCalls) != 0 {
 		t.Errorf("create executed locally: %v", te.execCalls)
+	}
+}
+
+// FIRST RED TEST of the S481.2 name-selection fix. LIVE bug (Sprint 481
+// walking skeleton): a second client on another host, same account and
+// plane, ran `bashy dks use sk481@k8s:cloudbox` and minted a NEW workspace
+// (01M5DHRZRR884BPX167EMS11YK) next to the first client's sk481
+// (01M5DHMQ5J6JPRHQXDJP18X789) — two workspaces, one name, no shared home
+// or sessions. The fix: the fake plane already holds sk481 with id X, so
+// `use sk481` selects X and applies nothing.
+func TestUseSelectsExistingWorkspaceByName(t *testing.T) {
+	te := newTestEnv(t)
+	const idA = "01M5DHMQ5J6JPRHQXDJP18X789"
+	te.runner.exit["get-by-name"] = 0
+	te.runner.stdout["get-by-name"] = wsListJSON(t, "sk481", idA)
+	te.runner.exit["apply"] = 0 // must never be needed
+
+	code, stdout, stderr := runUserland(t, te.env, "use", "sk481@k8s:cloudbox")
+	if code != 0 {
+		t.Fatalf("use of an existing name exited %d: %q %q", code, stdout, stderr)
+	}
+	ctx, ok := currentContext(t)
+	if !ok {
+		t.Fatal("use did not persist a context")
+	}
+	if ctx.WorkspaceID != idA {
+		t.Errorf("selected workspace id = %q, want the plane's existing %q: a name must select the record the plane holds, never mint a sibling", ctx.WorkspaceID, idA)
+	}
+	if ctx.Name != "sk481" || ctx.Plane != "k8s:cloudbox" || ctx.Tier != dagrun.TierCluster {
+		t.Errorf("persisted context = %+v, want name sk481 plane k8s:cloudbox tier cluster", ctx)
+	}
+	if applies := applyCalls(te.runner.calls); len(applies) != 0 {
+		t.Errorf("selecting an existing workspace applied %d time(s): the live bug was a second record per client", len(applies))
+	}
+	if len(te.runner.calls) != 2 {
+		t.Fatalf("runner calls = %v, want reachability + list-by-name only", len(te.runner.calls))
+	}
+	sel := "app.kubernetes.io/managed-by=bashy," + LabelWorkspaceName + "=sk481"
+	cmArgv := strings.Join(te.runner.calls[1].argv, " ")
+	for _, want := range []string{"--context cloudbox", "get configmap", "-n bashy-userland", "-l " + sel, "-o json"} {
+		if !strings.Contains(cmArgv, want) {
+			t.Errorf("list-by-name argv %q misses %q", cmArgv, want)
+		}
+	}
+	for _, want := range []string{"sk481", idA, "cloudbox"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("stdout %q does not mention %q", stdout, want)
+		}
+	}
+	if len(te.execCalls) != 0 {
+		t.Errorf("use executed locally: %v", te.execCalls)
+	}
+}
+
+// Create happens ONLY on first use: client A creates sk481 on an empty
+// plane; client B — another host, same account and plane, no local state —
+// selects A's workspace and applies NOTHING. Pre-fix live evidence: B minted
+// 01M5DHRZRR884BPX167EMS11YK next to A's 01M5DHMQ5J6JPRHQXDJP18X789.
+func TestUseCreatesOnFirstUseOnly(t *testing.T) {
+	te := newTestEnv(t) // client A
+	te.runner.exit["get-by-name"] = 0
+	te.runner.stdout["get-by-name"] = wsListJSON(t, "sk481") // the plane holds no sk481
+	te.runner.exit["apply"] = 0
+
+	code, _, stderr := runUserland(t, te.env, "use", "sk481@k8s:cloudbox")
+	if code != 0 {
+		t.Fatalf("first use exited %d: %q", code, stderr)
+	}
+	ctxA, ok := currentContext(t)
+	if !ok || ctxA.WorkspaceID != "01JBQ5E9P2WYZ5ZG4HJ3XRG7W8" {
+		t.Fatalf("first use persisted %+v ok=%v, want the minted 01JBQ5E9P2WYZ5ZG4HJ3XRG7W8", ctxA, ok)
+	}
+	if applies := applyCalls(te.runner.calls); len(applies) != 1 {
+		t.Fatalf("apply calls = %d, want exactly the one first-use create", len(applies))
+	}
+
+	// The plane now holds A's record (the apply above wrote it); script it.
+	te.runner.stdout["get-by-name"] = wsListJSON(t, "sk481", ctxA.WorkspaceID)
+
+	// Client B: a fresh host — no local state — same plane, its own minter.
+	homeB := t.TempDir()
+	t.Setenv("BASHY_HOME", homeB)
+	envB := &userlandEnv{
+		stateDir:  func() string { return filepath.Join(homeB, "dks", "context") },
+		newRunner: func() cluster.Runner { return te.runner },
+		mintID:    func() string { return "01M5DHRZRR884BPX167EMS11YK" },
+		execLocal: func(context.Context, string, []string) int { return 0 },
+	}
+	code, stdout, stderr := runUserland(t, envB, "use", "sk481@k8s:cloudbox")
+	if code != 0 {
+		t.Fatalf("second client's use exited %d: %q %q", code, stdout, stderr)
+	}
+	ctxB, ok := currentContext(t)
+	if !ok {
+		t.Fatal("second client's use did not persist a context")
+	}
+	if ctxB.WorkspaceID != ctxA.WorkspaceID {
+		t.Errorf("second client selected %q, want A's %q: one name, one workspace, every client", ctxB.WorkspaceID, ctxA.WorkspaceID)
+	}
+	if applies := applyCalls(te.runner.calls); len(applies) != 1 {
+		t.Fatalf("apply calls = %d after the second client, want still the one create", len(applies))
+	}
+	for _, c := range te.runner.calls {
+		if bytes.Contains(c.stdin, []byte("01M5DHRZRR884BPX167EMS11YK")) || bytes.Contains(c.stdin, []byte(strings.ToLower("01M5DHRZRR884BPX167EMS11YK"))) {
+			t.Errorf("the second client's mint leaked to the plane: %s", c.stdin)
+		}
+	}
+}
+
+// Two workspace records of one name are an explicit ambiguity: use fails
+// closed listing both ids, selects nothing, creates nothing.
+func TestUseAmbiguousNameFailsClosed(t *testing.T) {
+	te := newTestEnv(t)
+	const (
+		idA = "01M5DHMQ5J6JPRHQXDJP18X789"
+		idB = "01M5DHRZRR884BPX167EMS11YK"
+	)
+	te.runner.exit["get-by-name"] = 0
+	te.runner.stdout["get-by-name"] = wsListJSON(t, "sk481", idA, idB)
+	te.runner.exit["apply"] = 0 // must never be needed
+
+	code, _, stderr := runUserland(t, te.env, "use", "sk481@k8s:cloudbox")
+	if code == 0 {
+		t.Fatal("use of an ambiguous name exited 0")
+	}
+	for _, want := range []string{"ambiguous", "sk481", idA, idB} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr %q does not contain %q", stderr, want)
+		}
+	}
+	if applies := applyCalls(te.runner.calls); len(applies) != 0 {
+		t.Errorf("an ambiguous name applied something: %v", te.runner.calls)
+	}
+	if _, ok := currentContext(t); ok {
+		t.Error("an ambiguous name was persisted as the selected context")
+	}
+	if len(te.execCalls) != 0 {
+		t.Errorf("an ambiguous name executed locally: %v", te.execCalls)
 	}
 }
 
@@ -340,8 +570,8 @@ func TestWorkspaceObjectNameIsRFC1123(t *testing.T) {
 // Namespace object in the payload creates it, items applied in order.
 func TestUseCreatesNamespaceOnFreshPlane(t *testing.T) {
 	te := newTestEnv(t)
-	te.runner.exit["get"] = 0
-	te.runner.stdout["get"] = []byte("") // reachable; workspace list empty
+	te.runner.exit["get-by-name"] = 0
+	te.runner.stdout["get-by-name"] = wsListJSON(t, "sk481") // reachable; no sk481 anywhere
 	te.runner.exit["apply"] = 0
 
 	code, stdout, stderr := runUserland(t, te.env, "use", "sk481@k8s:cloudbox")
@@ -394,8 +624,8 @@ func TestUseCreatesNamespaceOnFreshPlane(t *testing.T) {
 // to run alone against a namespace that did not exist.
 func TestUseApplyWithoutNamespaceFailsOnFreshPlane(t *testing.T) {
 	te := newTestEnv(t)
-	te.runner.exit["get"] = 0
-	te.runner.stdout["get"] = []byte("")
+	te.runner.exit["get-by-name"] = 0
+	te.runner.stdout["get-by-name"] = wsListJSON(t, "sk481")
 	te.runner.exit["apply"] = 1
 	te.runner.stderr["apply"] = []byte(`Error from server (NotFound): namespaces "bashy-userland" not found`)
 
@@ -429,7 +659,8 @@ func TestUseMissingWorkspaceFailsClosedWithoutCreate(t *testing.T) {
 	if err := store.Select(prev); err != nil {
 		t.Fatal(err)
 	}
-	te.runner.exit["get"] = 0 // plane reachable; workspace list empty
+	te.runner.exit["get-by-name"] = 0 // plane reachable; no skel record anywhere
+	te.runner.stdout["get-by-name"] = wsListJSON(t, "skel")
 
 	code, _, stderr := runUserland(t, te.env, "use", "skel@k8s:dev")
 	if code == 0 {
@@ -491,7 +722,8 @@ func TestBareUseAndUseNone(t *testing.T) {
 	}
 
 	te2 := newTestEnv(t)
-	te2.runner.exit["get"] = 0
+	te2.runner.exit["get-by-name"] = 0
+	te2.runner.stdout["get-by-name"] = wsListJSON(t, "skel") // plane holds no skel: first use creates it
 	te2.runner.exit["apply"] = 0
 	if code, _, stderr := runUserland(t, te2.env, "use", "skel"); code != 0 {
 		t.Fatalf("use skel exited %d: %q", code, stderr)
@@ -582,8 +814,8 @@ func TestUseNonKubernetesPlaneFailsClosed(t *testing.T) {
 // The default plane (no scope) probes kubectl with no --context.
 func TestUseDefaultPlaneProbesWithoutContext(t *testing.T) {
 	te := newTestEnv(t)
-	te.runner.exit["get"] = 0
-	te.runner.stdout["get"] = []byte("configmap/bashy-ws-01jbq5e9p2wyz5zg4hj3xrg7w8\n")
+	te.runner.exit["get-by-name"] = 0
+	te.runner.stdout["get-by-name"] = wsListJSON(t, "skel", "01JBQ5E9P2WYZ5ZG4HJ3XRG7W8")
 	if code, _, stderr := runUserland(t, te.env, "use", "skel"); code != 0 {
 		t.Fatalf("use skel exited %d: %q", code, stderr)
 	}
