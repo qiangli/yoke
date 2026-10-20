@@ -56,9 +56,11 @@ const (
 	sessionEvictedExitCode = 4
 )
 
-// sessionHostLabel is the executor-host label render selects on (the vknode
-// host of the pod). The pod's nodeName is the fallback when the label is
-// absent.
+// sessionHostLabel is the Outpost host label. The vknode sets it on its
+// NODE (the node name itself is "<host>-vk-<provider>", not the host), so
+// the executor host is read from the pod's node; a pod that carries the
+// label wins (forward compatible). The node name is never a fallback: the
+// tunnel routes by Outpost host, and a plain kubelet has none.
 const sessionHostLabel = "outpost.dhnt.io/host"
 
 // labelValueRE guards label selectors: an id that is not a label value is
@@ -67,6 +69,10 @@ const sessionHostLabel = "outpost.dhnt.io/host"
 var labelValueRE = regexp.MustCompile(`^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$`)
 
 func validLabelValue(id string) bool { return labelValueRE.MatchString(id) }
+
+// nodeNameRE is a DNS-1123 subdomain: the shape of a Kubernetes node name,
+// checked before it becomes a kubectl operand.
+var nodeNameRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$`)
 
 // transientAppName reimplements outpost's TransientAppName
 // (outpost/internal/agent/vknode/transient.go): "vk-" + namespace + "-" +
@@ -172,11 +178,13 @@ func lookupSessionPod(ctx context.Context, r cluster.Runner, kctx, id string) (p
 	item := list.Items[best]
 	host := item.Metadata.Labels[sessionHostLabel]
 	if host == "" {
-		host = item.Spec.NodeName
+		if host, err = nodeOutpostHost(ctx, r, kctx, item.Metadata.Namespace, item.Metadata.Name, item.Spec.NodeName); err != nil {
+			return sessionPod{}, false, err
+		}
 	}
-	if host == "" {
-		return sessionPod{}, false, fmt.Errorf("session pod %s/%s names no executor host (label %s or nodeName) — nothing ran",
-			item.Metadata.Namespace, item.Metadata.Name, sessionHostLabel)
+	if !validLabelValue(host) {
+		return sessionPod{}, false, fmt.Errorf("session pod %s/%s names executor host %q, which is not a valid Outpost host — nothing ran",
+			item.Metadata.Namespace, item.Metadata.Name, host)
 	}
 	rawPort := item.Metadata.Annotations[dagrun.AnnotAttachPort]
 	port, perr := strconv.Atoi(strings.TrimSpace(rawPort))
@@ -191,6 +199,48 @@ func lookupSessionPod(ctx context.Context, r cluster.Runner, kctx, id string) (p
 		Host:       host,
 		AttachPort: port,
 	}, true, nil
+}
+
+// nodeObject is the slice of `kubectl get node -o json` the host lookup reads.
+type nodeObject struct {
+	Metadata struct {
+		Labels map[string]string `json:"labels"`
+	} `json:"metadata"`
+}
+
+// nodeOutpostHost resolves the Outpost host of the node a session pod runs
+// on from the node's sessionHostLabel. A node without it is a plain kubelet:
+// attach rides the Outpost tunnel, so that fails closed rather than dialing
+// a route named after the node.
+func nodeOutpostHost(ctx context.Context, r cluster.Runner, kctx, ns, pod, node string) (string, error) {
+	if node == "" {
+		return "", fmt.Errorf("session pod %s/%s is not scheduled on a node yet (no spec.nodeName) — nothing ran; retry once it is running", ns, pod)
+	}
+	if !nodeNameRE.MatchString(node) {
+		return "", fmt.Errorf("session pod %s/%s names node %q, which is not a valid node name — nothing ran", ns, pod, node)
+	}
+	argv := []string{"kubectl"}
+	if kctx != "" {
+		argv = append(argv, "--context", kctx)
+	}
+	argv = append(argv, "get", "node", node, "-o", "json")
+	stdout, stderr, exit, err := r.Run(ctx, argv, nil)
+	switch {
+	case err != nil:
+		return "", fmt.Errorf("kubectl did not run: %w", err)
+	case exit != 0:
+		return "", fmt.Errorf("kubectl get node %s exited %d: %s", node, exit, strings.TrimSpace(string(stderr)))
+	}
+	var obj nodeObject
+	if derr := json.Unmarshal(stdout, &obj); derr != nil {
+		return "", fmt.Errorf("parse kubectl get node %s output: %w", node, derr)
+	}
+	host := strings.TrimSpace(obj.Metadata.Labels[sessionHostLabel])
+	if host == "" {
+		return "", fmt.Errorf("session pod %s/%s runs on node %s, which carries no %s label — attach and logs ride the Outpost tunnel and need an Outpost (vknode) executor host; nothing ran",
+			ns, pod, node, sessionHostLabel)
+	}
+	return host, nil
 }
 
 // attachStream is the live view the verbs pump: the surface of
@@ -893,16 +943,86 @@ func realDialStream(ctx context.Context, endpoint, clientID string, since int64,
 	if viewer {
 		opts = append(opts, attach.Viewer())
 	}
-	return attach.Attach(ctx, endpoint, clientID, since, opts...)
+	s, err := attach.Attach(ctx, endpoint, clientID, since, opts...)
+	if err != nil {
+		return nil, describeHandshake(ctx, err, endpoint, headers, nil)
+	}
+	return &describedStream{Stream: s, endpoint: endpoint, headers: headers}, nil
+}
+
+// describedStream is the attach stream whose redial failures carry the same
+// handshake diagnosis as the first dial.
+type describedStream struct {
+	*attach.Stream
+	endpoint string
+	headers  func() (http.Header, error)
+}
+
+func (d *describedStream) Reconnect(ctx context.Context) error {
+	if err := d.Stream.Reconnect(ctx); err != nil {
+		return describeHandshake(ctx, err, d.endpoint, d.headers, nil)
+	}
+	return nil
+}
+
+// describeHandshake turns gorilla's bare "websocket: bad handshake" into a
+// diagnosable error: the HTTP status the edge answered and the dialed path.
+// It never includes the query, userinfo or headers (no credentials). When
+// the failed dial's response is not in hand (pkg/dagrun/attach does not
+// surface it), one read-only viewer probe with the same headers recovers
+// the status; a probe that unexpectedly upgrades is closed at once.
+func describeHandshake(ctx context.Context, err error, endpoint string, headers func() (http.Header, error), resp *http.Response) error {
+	if err == nil || !errors.Is(err, websocket.ErrBadHandshake) {
+		return err
+	}
+	path := endpoint
+	if u, perr := url.Parse(endpoint); perr == nil {
+		path = u.Path
+	}
+	if resp == nil {
+		resp = probeHandshake(ctx, endpoint, headers)
+	}
+	if resp == nil {
+		return fmt.Errorf("%w (dialing %s; the edge's HTTP status is unknown)", err, path)
+	}
+	return fmt.Errorf("%w: HTTP %d %s (dialing %s)", err, resp.StatusCode, strings.TrimSpace(http.StatusText(resp.StatusCode)), path)
+}
+
+// probeHandshake redials endpoint as a viewer, only to read the response of
+// a refused handshake. nil means no HTTP response was obtained.
+func probeHandshake(ctx context.Context, endpoint string, headers func() (http.Header, error)) *http.Response {
+	raw, err := snapshotURL(endpoint, "handshake-probe")
+	if err != nil {
+		return nil
+	}
+	var h http.Header
+	if headers != nil {
+		if h, err = headers(); err != nil {
+			return nil
+		}
+	}
+	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
+	ws, resp, err := dialer.DialContext(ctx, raw, h)
+	if err == nil {
+		_ = ws.Close()
+		return nil
+	}
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	return resp
 }
 
 // realSnapshotDial opens the snapshot websocket carrying the paired
 // client's headers.
 func realSnapshotDial(ctx context.Context, endpoint string, headers http.Header) (snapshotConn, error) {
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
-	ws, _, err := dialer.DialContext(ctx, endpoint, headers)
+	ws, resp, err := dialer.DialContext(ctx, endpoint, headers)
 	if err != nil {
-		return nil, err
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		return nil, describeHandshake(ctx, err, endpoint, nil, resp)
 	}
 	return ws, nil
 }
