@@ -3,6 +3,7 @@ package dks
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime/debug"
@@ -113,8 +114,10 @@ func newRunTest(t *testing.T) *runTest {
 			}
 			return "", false
 		},
-		image: func() string { return testRunImage },
-		now:   func() time.Time { return rt.clock },
+		image:           func() string { return testRunImage },
+		recordRunKind:   func(fleet.Command) dagrun.RunKind { return "" },
+		stdinIsTerminal: func() bool { return false },
+		now:             func() time.Time { return rt.clock },
 		sleep: func(_ context.Context, d time.Duration) error {
 			rt.sleeps++
 			rt.clock = rt.clock.Add(d)
@@ -472,7 +475,7 @@ func TestPsListsOnlyCurrentWorkspace(t *testing.T) {
 	if len(lines) != 3 {
 		t.Fatalf("ps output:\n%s", stdout)
 	}
-	if f := strings.Fields(lines[0]); strings.Join(f, " ") != "RUN COMMAND PHASE AGE EXECUTOR" {
+	if f := strings.Fields(lines[0]); strings.Join(f, " ") != "RUN KIND COMMAND PHASE AGE EXECUTOR" {
 		t.Errorf("header %q", lines[0])
 	}
 	if !strings.HasPrefix(lines[1], older) || !strings.HasPrefix(lines[2], testRunID) {
@@ -481,7 +484,7 @@ func TestPsListsOnlyCurrentWorkspace(t *testing.T) {
 	if strings.Contains(stdout, "leak") || strings.Contains(stdout, otherWorkspace) {
 		t.Errorf("ps shows another workspace's run:\n%s", stdout)
 	}
-	if f := strings.Fields(lines[2]); len(f) != 5 || f[2] != "succeeded" || f[4] != "Job/run-"+strings.ToLower(testRunID) {
+	if f := strings.Fields(lines[2]); len(f) != 6 || f[1] != "one-shot" || f[3] != "succeeded" || f[5] != "Job/run-"+strings.ToLower(testRunID) {
 		t.Errorf("row %q", lines[2])
 	}
 	_, again, _ := rt.exec(t, "ps")
@@ -641,5 +644,206 @@ func TestCommitFromPseudoVersion(t *testing.T) {
 	}
 	if got := defaultImage(releaseIdentity{}); got != "" {
 		t.Errorf("defaultImage without commit = %q", got)
+	}
+}
+
+// appliedItems decodes the v1 List one apply sent.
+func appliedItems(t *testing.T, payload []byte) []map[string]any {
+	t.Helper()
+	var list struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(payload, &list); err != nil {
+		t.Fatalf("applied payload: %v", err)
+	}
+	return list.Items
+}
+
+// appliedWorkload is the one Job or Pod of an apply.
+func appliedWorkload(t *testing.T, payload []byte) map[string]any {
+	t.Helper()
+	for _, o := range appliedItems(t, payload) {
+		if k := o["kind"]; k == "Job" || k == "Pod" {
+			return o
+		}
+	}
+	t.Fatalf("no workload in %s", payload)
+	return nil
+}
+
+func TestRunSessionRendersSessionServerPod(t *testing.T) {
+	rt := newRunTest(t)
+	rt.selectWorkspace(t, "skel")
+	rt.renv.isShipped = func(name string) bool { return name == "sh" }
+	code, stdout, stderr := rt.exec(t, "run", "--session", "--", "sh", "-c", "echo hi; exit 7")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	if got := strings.Join(rt.runner.actions(), ","); got != "apply" {
+		t.Fatalf("plane calls = %s, want apply only (a session never polls)", got)
+	}
+	if rt.sleeps != 0 {
+		t.Errorf("slept %d times; a session returns at once", rt.sleeps)
+	}
+	if stdout != "session "+testRunID+"\n" {
+		t.Errorf("stdout %q, want the session id", stdout)
+	}
+	w := appliedWorkload(t, rt.runner.calls[0].stdin)
+	if w["kind"] != "Pod" {
+		t.Fatalf("workload kind %v, want Pod", w["kind"])
+	}
+	md := w["metadata"].(map[string]any)
+	port, _ := md["annotations"].(map[string]any)[dagrun.AnnotAttachPort].(string)
+	if port == "" {
+		t.Fatalf("no %s annotation: %v", dagrun.AnnotAttachPort, md["annotations"])
+	}
+	c := w["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)
+	var argv []string
+	for _, a := range c["command"].([]any) {
+		argv = append(argv, a.(string))
+	}
+	got := strings.Join(argv, " ")
+	if !strings.HasPrefix(got, "bashy dks session-server --session "+testRunID+" ") ||
+		!strings.Contains(got, "--port "+port+" ") || !strings.Contains(got, " -- bashy -c ") ||
+		!strings.Contains(got, "sh -c") {
+		t.Errorf("container command %q is not the session server over the argv", got)
+	}
+	ports := c["ports"].([]any)[0].(map[string]any)
+	if fmt.Sprint(ports["hostPort"]) != port {
+		t.Errorf("hostPort %v, want %s", ports["hostPort"], port)
+	}
+	if _, tty := c["tty"]; tty {
+		t.Error("a non-terminal session rendered a tty (want long-running)")
+	}
+}
+
+func TestRunSessionTTYIsInteractive(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		args  []string
+		stdin bool
+	}{
+		{"flag", []string{"run", "--session", "--tty", "--", "sh"}, false},
+		{"terminal", []string{"run", "--session", "--", "sh"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := newRunTest(t)
+			rt.selectWorkspace(t, "skel")
+			rt.renv.isShipped = func(name string) bool { return name == "sh" }
+			rt.renv.stdinIsTerminal = func() bool { return tc.stdin }
+			code, _, stderr := rt.exec(t, tc.args...)
+			if code != 0 {
+				t.Fatalf("exit %d: %s", code, stderr)
+			}
+			c := appliedWorkload(t, rt.runner.calls[0].stdin)["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)
+			if c["tty"] != true || c["stdin"] != true {
+				t.Errorf("container %v is not interactive", c)
+			}
+		})
+	}
+}
+
+func TestRunRegisteredRecordKindWins(t *testing.T) {
+	rt := newRunTest(t)
+	rt.selectWorkspace(t, "skel")
+	rt.registry["agentd"] = fleet.Command{Name: "agentd", Kind: fleet.KindCommand, Script: "serve"}
+	rt.renv.recordRunKind = func(rec fleet.Command) dagrun.RunKind {
+		if rec.Name == "agentd" {
+			return dagrun.RunLongRunning
+		}
+		return ""
+	}
+	code, stdout, stderr := rt.exec(t, "run", "--", "agentd")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	if got := strings.Join(rt.runner.actions(), ","); got != "apply" {
+		t.Errorf("plane calls = %s, want apply only", got)
+	}
+	if stdout != "session "+testRunID+"\n" {
+		t.Errorf("stdout %q, want the session id", stdout)
+	}
+	if k := appliedWorkload(t, rt.runner.calls[0].stdin)["kind"]; k != "Pod" {
+		t.Errorf("workload %v, want the record's long-running Pod", k)
+	}
+
+	// A shipped command defaults to one-shot: a Job, waited on.
+	rt2 := newRunTest(t)
+	rt2.selectWorkspace(t, "skel")
+	rt2.runner.gets = [][]byte{runsJSON(jobJSON(testWorkspaceID, testRunID, "make", "Complete"))}
+	if code, _, stderr := rt2.exec(t, "run", "--", "make"); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	if k := appliedWorkload(t, rt2.runner.calls[0].stdin)["kind"]; k != "Job" {
+		t.Errorf("shipped workload %v, want Job", k)
+	}
+}
+
+func TestRunSessionRefusesServiceKind(t *testing.T) {
+	rt := newRunTest(t)
+	rt.selectWorkspace(t, "skel")
+	rt.registry["web"] = fleet.Command{Name: "web", Kind: fleet.KindCommand, Script: "serve"}
+	rt.renv.recordRunKind = func(fleet.Command) dagrun.RunKind { return dagrun.RunService }
+	code, stdout, stderr := rt.exec(t, "run", "--session", "--", "web")
+	if code == 0 || !strings.Contains(stderr, "service") || !strings.Contains(stderr, "nothing ran") {
+		t.Errorf("exit %d stderr %q, want a refusal naming run.kind service", code, stderr)
+	}
+	if stdout != "" {
+		t.Errorf("stdout %q", stdout)
+	}
+	rt.noSideEffects(t)
+}
+
+// podJSON is a session Pod as the plane reports it: labels plus the
+// manifest annotation render wrote.
+func podJSON(t *testing.T, ws, run, command string, kind dagrun.RunKind, phase string) string {
+	t.Helper()
+	manifest, err := dagrun.Generate(dagrun.GenerateInput{
+		Command:     dagrun.CommandRef{Name: command, Digest: testExeSHA, Artifacts: map[string]string{"linux/amd64": testAmdSHA}},
+		Argv:        []string{command},
+		WorkspaceID: ws,
+		RunID:       run,
+		Cwd:         "~/docs",
+		Venue:       dag.VenueCluster,
+		Run:         dagrun.RunSpec{Kind: kind},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ann, _ := json.Marshal(map[string]string{dagrun.AnnotManifest: string(manifest)})
+	return fmt.Sprintf(`{"kind":"Pod","metadata":{"name":"bashy-run-%s","labels":{%q:"bashy",%q:%q,%q:%q,%q:%q},"annotations":%s},"status":{"phase":%q}}`,
+		strings.ToLower(run), dagrun.LabelManagedBy, dagrun.LabelWorkspace, ws, dagrun.LabelRun, run, dagrun.LabelCommand, command, ann, phase)
+}
+
+func TestPsShowsKind(t *testing.T) {
+	rt := newRunTest(t)
+	rt.selectWorkspace(t, "skel")
+	const (
+		shellRun = "01JC1ZK3V0000000000000000A"
+		agentRun = "01JC1ZK3V0000000000000000B"
+	)
+	answer := runsJSON(
+		jobJSON(testWorkspaceID, testRunID, "make", "Complete"),
+		podJSON(t, testWorkspaceID, shellRun, "bashy", dagrun.RunInteractive, "Running"),
+		podJSON(t, testWorkspaceID, agentRun, "agentd", dagrun.RunLongRunning, "Running"),
+	)
+	rt.runner.gets = [][]byte{answer}
+	code, stdout, stderr := rt.exec(t, "ps")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	lines := strings.Split(strings.TrimSpace(stdout), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("ps output:\n%s", stdout)
+	}
+	if f := strings.Join(strings.Fields(lines[0]), " "); f != "RUN KIND COMMAND PHASE AGE EXECUTOR" {
+		t.Errorf("header %q", lines[0])
+	}
+	want := map[string]string{shellRun: "interactive", agentRun: "long-running", testRunID: "one-shot"}
+	for _, l := range lines[1:] {
+		f := strings.Fields(l)
+		if len(f) != 6 || want[f[0]] != f[1] {
+			t.Errorf("row %q, want kind %s", l, want[f[0]])
+		}
 	}
 }
