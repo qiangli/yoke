@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -175,7 +176,7 @@ func TestUseUnreachablePlaneNeverRunsLocally(t *testing.T) {
 func TestUseExistingWorkspaceSelectsAndPersists(t *testing.T) {
 	te := newTestEnv(t)
 	te.runner.exit["get"] = 0
-	te.runner.stdout["get"] = []byte("configmap/bashy-ws-01JBQ5E9P2WYZ5ZG4HJ3XRG7W8\n")
+	te.runner.stdout["get"] = []byte("configmap/bashy-ws-01jbq5e9p2wyz5zg4hj3xrg7w8\n")
 
 	code, stdout, stderr := runUserland(t, te.env, "use", "skel@k8s:dev")
 	if code != 0 {
@@ -272,8 +273,8 @@ func TestUseFirstUseCreatesWorkspace(t *testing.T) {
 		t.Errorf("second item kind = %v, want ConfigMap", cm["kind"])
 	}
 	md, _ := cm["metadata"].(map[string]any)
-	if md["name"] != "bashy-ws-01JBQ5E9P2WYZ5ZG4HJ3XRG7W8" || md["namespace"] != "bashy-userland" {
-		t.Errorf("applied object = %v/%v, want bashy-ws-<id> in bashy-userland", md["namespace"], md["name"])
+	if md["name"] != "bashy-ws-01jbq5e9p2wyz5zg4hj3xrg7w8" || md["namespace"] != "bashy-userland" {
+		t.Errorf("applied object = %v/%v, want the lowercased bashy-ws-<id> in bashy-userland", md["namespace"], md["name"])
 	}
 	labels, _ := md["labels"].(map[string]any)
 	if labels["app.kubernetes.io/managed-by"] != "bashy" || labels["dhnt.io/workspace"] != "01JBQ5E9P2WYZ5ZG4HJ3XRG7W8" {
@@ -284,6 +285,50 @@ func TestUseFirstUseCreatesWorkspace(t *testing.T) {
 	}
 	if len(te.execCalls) != 0 {
 		t.Errorf("create executed locally: %v", te.execCalls)
+	}
+}
+
+// A ULID is uppercase Crockford base32, but a Kubernetes object name must
+// be a LOWERCASE RFC 1123 subdomain — the live API rejected the uppercase
+// name (render.go already lowercases run objects). The workspace object
+// name lowercases the id; the dhnt.io/workspace label keeps it as minted;
+// and the existence lookup matches the plane's answer by the same
+// lowercased name, never the uppercase one.
+func TestWorkspaceObjectNameIsRFC1123(t *testing.T) {
+	id := "01M5DGE9P2WYZ5ZG4HJ3XRG7W8" // a minted ULID: uppercase
+	name := workspaceObjectName(id)
+	if name != "bashy-ws-"+strings.ToLower(id) {
+		t.Errorf("workspaceObjectName(%q) = %q, want bashy-ws-<lowercased id>", id, name)
+	}
+	rfc1123Subdomain := regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`)
+	if !rfc1123Subdomain.MatchString(name) {
+		t.Errorf("workspace object name %q is not a lowercase RFC 1123 subdomain", name)
+	}
+
+	// The lookup agrees: an answer naming the lowercased object finds the
+	// workspace; an answer spelling the name in UPPERCASE — the spelling the
+	// API rejects — does not.
+	te := newTestEnv(t)
+	te.runner.exit["get"] = 0
+	te.runner.stdout["get"] = []byte("configmap/" + name + "\n")
+	if err := (&KubeProbe{Runner: te.runner}).WorkspaceExists("k8s:dev", id); err != nil {
+		t.Errorf("WorkspaceExists did not match the plane's lowercased answer: %v", err)
+	}
+
+	te2 := newTestEnv(t)
+	te2.runner.exit["get"] = 0
+	te2.runner.stdout["get"] = []byte("configmap/bashy-ws-" + id + "\n")
+	if err := (&KubeProbe{Runner: te2.runner}).WorkspaceExists("k8s:dev", id); err == nil {
+		t.Error("WorkspaceExists matched an uppercase object name the API would have rejected")
+	}
+
+	// The label selector keeps the id as minted: labels allow uppercase.
+	sel := "app.kubernetes.io/managed-by=bashy,dhnt.io/workspace=" + id
+	if len(te.runner.calls) != 1 {
+		t.Fatalf("WorkspaceExists runner calls = %v, want exactly one", te.runner.calls)
+	}
+	if got := strings.Join(te.runner.calls[0].argv, " "); !strings.Contains(got, "-l "+sel) {
+		t.Errorf("workspace-exists argv %q does not select by the minted (uppercase) label %q", got, sel)
 	}
 }
 
@@ -538,7 +583,7 @@ func TestUseNonKubernetesPlaneFailsClosed(t *testing.T) {
 func TestUseDefaultPlaneProbesWithoutContext(t *testing.T) {
 	te := newTestEnv(t)
 	te.runner.exit["get"] = 0
-	te.runner.stdout["get"] = []byte("configmap/bashy-ws-01JBQ5E9P2WYZ5ZG4HJ3XRG7W8\n")
+	te.runner.stdout["get"] = []byte("configmap/bashy-ws-01jbq5e9p2wyz5zg4hj3xrg7w8\n")
 	if code, _, stderr := runUserland(t, te.env, "use", "skel"); code != 0 {
 		t.Fatalf("use skel exited %d: %q", code, stderr)
 	}

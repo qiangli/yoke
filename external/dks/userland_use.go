@@ -277,8 +277,15 @@ type KubeProbe struct {
 // userlandNamespace hosts the per-workspace records of the client verbs.
 const userlandNamespace = "bashy-userland"
 
-// workspaceObjectName is the plane object of one workspace record.
-func workspaceObjectName(workspaceID string) string { return "bashy-ws-" + workspaceID }
+// workspaceObjectName is the plane object of one workspace record. A ULID
+// is uppercase Crockford base32, but an object name must be a lowercase
+// RFC 1123 subdomain — the API rejects uppercase — so the NAME lowercases
+// the id (as render does for run objects) while the dhnt.io/workspace
+// LABEL keeps the id as minted: labels allow uppercase. Lookups go through
+// here too, so they always address the same lowercased name.
+func workspaceObjectName(workspaceID string) string {
+	return "bashy-ws-" + strings.ToLower(workspaceID)
+}
 
 // planeContext maps an opaque plane ref to a kubectl --context value: "" is
 // the default cluster plane (no flag), k8s:<context> its context. Any other
