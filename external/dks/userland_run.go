@@ -96,6 +96,10 @@ const runPollInterval = 2 * time.Second
 // defaultRunTimeout bounds a waiting (non-detached) run.
 const defaultRunTimeout = 30 * time.Minute
 
+// defaultScheduleCheck bounds how long a --detach run waits to learn
+// whether the scheduler can place it at all before returning its id.
+const defaultScheduleCheck = 20 * time.Second
+
 // imageEnvVar names the default Linux executor image.
 const imageEnvVar = "BASHY_DKS_IMAGE"
 
@@ -168,7 +172,9 @@ type runOptions struct {
 	env     []string
 	image   string
 	timeout time.Duration
-	verbose bool
+	// scheduleCheck bounds the --detach placement check (0 = none).
+	scheduleCheck time.Duration
+	verbose       bool
 }
 
 func newUserlandRunCmd(env *runEnv) *cobra.Command {
@@ -215,6 +221,8 @@ nothing.`,
 	f.StringVar(&o.image, "image", "", "Linux executor image (default $"+imageEnvVar+", then "+defaultImagePrefix+"<bashy commit>)")
 	f.BoolVar(&o.verbose, "verbose", false, "report the resolved executor image and where it came from")
 	f.DurationVar(&o.timeout, "timeout", defaultRunTimeout, "how long to wait for a terminal phase")
+	f.DurationVar(&o.scheduleCheck, "schedule-check", defaultScheduleCheck, "with --detach: how long to check the run can be placed before returning (0 = no check)")
+	_ = f.MarkHidden("schedule-check")
 	return cmd
 }
 
@@ -310,12 +318,82 @@ func (env *runEnv) run(cmd *cobra.Command, o runOptions, args []string) error {
 		return nil
 	}
 	if o.detach {
+		if err := env.checkScheduled(cmd, client, ctxRec, runID, resourceRequest(o), o.scheduleCheck); err != nil {
+			return err
+		}
 		fmt.Fprintln(cmd.OutOrStdout(), runID)
 		return nil
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "dks: run %s applied to workspace %s; waiting (output streaming and exact exit codes arrive with 'bashy dks logs')\n",
 		runID, workspaceDisplay(ctxRec))
-	return env.wait(cmd, client, ctxRec, runID, o.timeout)
+	return env.wait(cmd, client, ctxRec, runID, resourceRequest(o), o.timeout)
+}
+
+// resourceRequest names the run's resource request as its flags spelled
+// it; "" when it requested none.
+func resourceRequest(o runOptions) string {
+	var parts []string
+	if o.cpu > 0 {
+		parts = append(parts, fmt.Sprintf("--cpu %d", o.cpu))
+	}
+	if o.memory != "" {
+		parts = append(parts, "--memory "+o.memory)
+	}
+	return strings.Join(parts, " ")
+}
+
+// refuseUnschedulable is the unsatisfied-resource result (contract §2.4):
+// the scheduler reported no node can take the run, so its objects are
+// deleted by run label — nothing ran — and the run exits non-zero naming
+// the scheduler's reason and the request.
+func (env *runEnv) refuseUnschedulable(cmd *cobra.Command, client *cluster.Client, ctxRec dagrun.Context, runID, request, reason string) error {
+	msg := "unsatisfied resources: " + reason
+	if request != "" {
+		msg += " (requested " + request + ")"
+	}
+	if err := client.Stop(cmd.Context(), runID); err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "bashy dks run: %s; removing run %s failed: %v — 'bashy dks stop %s' to remove it\n",
+			msg, runID, planeError(ctxRec, err), runID)
+		return &exitStatusError{code: 1}
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "bashy dks run: %s — run %s removed, nothing ran\n", msg, runID)
+	return &exitStatusError{code: 1}
+}
+
+// checkScheduled is the bounded placement check of a --detach run: it
+// returns nil once a pod of the run is bound to a node or the check runs
+// out (a slow start is not a refusal), and refuses the run when the
+// scheduler reports it Unschedulable. A plane error here only warns: the
+// run is applied, so its id is still the caller's to manage.
+func (env *runEnv) checkScheduled(cmd *cobra.Command, client *cluster.Client, ctxRec dagrun.Context, runID, request string, check time.Duration) error {
+	if check <= 0 {
+		return nil
+	}
+	deadline := env.now().Add(check)
+	for {
+		runs, err := client.List(cmd.Context(), ctxRec.WorkspaceID)
+		if err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "bashy dks run: placement of run %s unchecked: %v\n", runID, planeError(ctxRec, err))
+			return nil
+		}
+		for _, r := range runs {
+			if r.RunID != runID {
+				continue
+			}
+			if r.Unschedulable != "" {
+				return env.refuseUnschedulable(cmd, client, ctxRec, runID, request, r.Unschedulable)
+			}
+			if r.Scheduled || r.Phase == cluster.PhaseSucceeded || r.Phase == cluster.PhaseFailed {
+				return nil
+			}
+		}
+		if !env.now().Before(deadline) {
+			return nil
+		}
+		if err := env.sleep(cmd.Context(), runPollInterval); err != nil {
+			return nil
+		}
+	}
 }
 
 // runKind resolves the run kind: the record's run.kind (absent =
@@ -350,8 +428,10 @@ func isSession(k dagrun.RunKind) bool {
 func fleetRecordRunKind(fleet.Command) dagrun.RunKind { return "" }
 
 // wait polls the workspace's runs until runID reaches a terminal phase or
-// the timeout passes. Succeeded exits 0; failed and timeout exit 1.
-func (env *runEnv) wait(cmd *cobra.Command, client *cluster.Client, ctxRec dagrun.Context, runID string, timeout time.Duration) error {
+// the timeout passes. Succeeded exits 0; failed and timeout exit 1. A run the
+// scheduler reports Unschedulable is refused and removed at once; a plain
+// Pending (image pull, slow start) keeps waiting.
+func (env *runEnv) wait(cmd *cobra.Command, client *cluster.Client, ctxRec dagrun.Context, runID, request string, timeout time.Duration) error {
 	if timeout <= 0 {
 		timeout = defaultRunTimeout
 	}
@@ -368,6 +448,9 @@ func (env *runEnv) wait(cmd *cobra.Command, client *cluster.Client, ctxRec dagru
 				continue
 			}
 			phase = r.Phase
+			if r.Unschedulable != "" {
+				return env.refuseUnschedulable(cmd, client, ctxRec, runID, request, r.Unschedulable)
+			}
 			switch r.Phase {
 			case cluster.PhaseSucceeded:
 				fmt.Fprintf(cmd.OutOrStdout(), "dks: run %s succeeded\n", runID)

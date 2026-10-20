@@ -314,7 +314,7 @@ func TestRunWaitIsBoundedByTimeout(t *testing.T) {
 func TestRunDetachPrintsRunIDWithoutWaiting(t *testing.T) {
 	rt := newRunTest(t)
 	rt.selectWorkspace(t, "skel")
-	code, stdout, stderr := rt.exec(t, "run", "--detach", "--", "make")
+	code, stdout, stderr := rt.exec(t, "run", "--detach", "--schedule-check", "0", "--", "make")
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, stderr)
 	}
@@ -323,6 +323,114 @@ func TestRunDetachPrintsRunIDWithoutWaiting(t *testing.T) {
 	}
 	if got := strings.Join(rt.runner.actions(), ","); got != "apply" {
 		t.Errorf("plane calls = %s, want apply only", got)
+	}
+}
+
+// runPodJSON is a run's Pod with the given phase and PodScheduled condition
+// ("" = no condition).
+func runPodJSON(run, phase, scheduled, reason, message string) string {
+	conds := ""
+	if scheduled != "" {
+		conds = fmt.Sprintf(`,"conditions":[{"type":"PodScheduled","status":%q,"reason":%q,"message":%q}]`, scheduled, reason, message)
+	}
+	return fmt.Sprintf(`{"kind":"Pod","metadata":{"name":"run-%s-abcde","labels":{%q:"bashy",%q:%q,%q:%q,%q:"seq"}},"status":{"phase":%q%s}}`,
+		strings.ToLower(run), dagrun.LabelManagedBy, dagrun.LabelWorkspace, testWorkspaceID, dagrun.LabelRun, run, dagrun.LabelCommand, phase, conds)
+}
+
+const insufficientCPU = "0/5 nodes are available: 5 Insufficient cpu."
+
+func TestRunUnschedulableIsRefusedAndCleanedUp(t *testing.T) {
+	rt := newRunTest(t)
+	rt.selectWorkspace(t, "skel")
+	rt.runner.gets = [][]byte{
+		runsJSON(jobJSON(testWorkspaceID, testRunID, "seq", "")),
+		runsJSON(jobJSON(testWorkspaceID, testRunID, "seq", ""), runPodJSON(testRunID, "Pending", "False", "Unschedulable", insufficientCPU)),
+	}
+	code, _, stderr := rt.exec(t, "run", "--cpu", "64", "--", "make", "test")
+	if code == 0 {
+		t.Fatalf("exit 0 for an unschedulable run; stderr %q", stderr)
+	}
+	for _, want := range []string{"unsatisfied resources", insufficientCPU, "--cpu 64", "nothing ran"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr %q misses %q", stderr, want)
+		}
+	}
+	if got := strings.Join(rt.runner.actions(), ","); got != "apply,get,get,delete" {
+		t.Fatalf("plane calls = %s, want apply, two lists, one delete and no further polling", got)
+	}
+	del := strings.Join(rt.runner.calls[3].argv, " ")
+	if !strings.Contains(del, "-l "+dagrun.LabelManagedBy+"=bashy,"+dagrun.LabelRun+"="+testRunID) {
+		t.Errorf("delete argv %q does not select by run label", del)
+	}
+	if rt.sleeps != 1 {
+		t.Errorf("slept %d times, want 1", rt.sleeps)
+	}
+}
+
+func TestRunPlainPendingKeepsWaiting(t *testing.T) {
+	rt := newRunTest(t)
+	rt.selectWorkspace(t, "skel")
+	rt.runner.gets = [][]byte{
+		runsJSON(jobJSON(testWorkspaceID, testRunID, "seq", ""), runPodJSON(testRunID, "Pending", "", "", "")),
+		runsJSON(jobJSON(testWorkspaceID, testRunID, "seq", ""), runPodJSON(testRunID, "Pending", "True", "", "")),
+		runsJSON(jobJSON(testWorkspaceID, testRunID, "seq", "Complete")),
+	}
+	code, _, stderr := rt.exec(t, "run", "--", "make", "test")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	if got := strings.Join(rt.runner.actions(), ","); got != "apply,get,get,get" {
+		t.Errorf("plane calls = %s, want no delete", got)
+	}
+}
+
+func TestRunDetachRefusesUnschedulable(t *testing.T) {
+	rt := newRunTest(t)
+	rt.selectWorkspace(t, "skel")
+	rt.runner.gets = [][]byte{runsJSON(jobJSON(testWorkspaceID, testRunID, "seq", ""), runPodJSON(testRunID, "Pending", "False", "Unschedulable", insufficientCPU))}
+	code, stdout, stderr := rt.exec(t, "run", "--detach", "--cpu", "64", "--", "make", "test")
+	if code == 0 || stdout != "" {
+		t.Fatalf("exit %d stdout %q, want non-zero and no run id", code, stdout)
+	}
+	if !strings.Contains(stderr, "unsatisfied resources: "+insufficientCPU) {
+		t.Errorf("stderr %q does not name the scheduler reason", stderr)
+	}
+	if got := strings.Join(rt.runner.actions(), ","); got != "apply,get,delete" {
+		t.Errorf("plane calls = %s, want apply, get, delete", got)
+	}
+}
+
+func TestRunDetachReturnsOnceScheduled(t *testing.T) {
+	rt := newRunTest(t)
+	rt.selectWorkspace(t, "skel")
+	rt.runner.gets = [][]byte{
+		runsJSON(jobJSON(testWorkspaceID, testRunID, "seq", ""), runPodJSON(testRunID, "Pending", "", "", "")),
+		runsJSON(jobJSON(testWorkspaceID, testRunID, "seq", ""), runPodJSON(testRunID, "Pending", "True", "", "")),
+	}
+	code, stdout, stderr := rt.exec(t, "run", "--detach", "--", "make", "test")
+	if code != 0 || stdout != testRunID+"\n" {
+		t.Fatalf("exit %d stdout %q: %s", code, stdout, stderr)
+	}
+	if got := strings.Join(rt.runner.actions(), ","); got != "apply,get,get" {
+		t.Errorf("plane calls = %s, want apply then two lists", got)
+	}
+}
+
+func TestRunDetachCheckIsBounded(t *testing.T) {
+	rt := newRunTest(t)
+	rt.selectWorkspace(t, "skel")
+	rt.runner.gets = [][]byte{runsJSON(jobJSON(testWorkspaceID, testRunID, "seq", ""), runPodJSON(testRunID, "Pending", "", "", ""))}
+	code, stdout, stderr := rt.exec(t, "run", "--detach", "--", "make", "test")
+	if code != 0 || stdout != testRunID+"\n" {
+		t.Fatalf("exit %d stdout %q: %s", code, stdout, stderr)
+	}
+	if want := int(defaultScheduleCheck / runPollInterval); rt.sleeps != want {
+		t.Errorf("slept %d times, want %d", rt.sleeps, want)
+	}
+	for _, a := range rt.runner.actions() {
+		if a == "delete" {
+			t.Fatal("a plain Pending run was deleted")
+		}
 	}
 }
 
