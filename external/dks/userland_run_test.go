@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
@@ -512,5 +513,133 @@ func TestRunPsStopAreRegistered(t *testing.T) {
 				t.Errorf("%s is still a closed door", c.Name())
 			}
 		}
+	}
+}
+
+// fakeBuildRelease is the release identity a binary built with bi reports.
+func fakeBuildRelease(bi *debug.BuildInfo) func() (releaseIdentity, error) {
+	return func() (releaseIdentity, error) {
+		return releaseIdentity{Version: bi.Main.Version, SHA256: testExeSHA, Commit: commitFromBuildInfo(bi)}, nil
+	}
+}
+
+func vcsBuild(rev string) *debug.BuildInfo {
+	return &debug.BuildInfo{Main: debug.Module{Path: "github.com/qiangli/bashy", Version: "(devel)"},
+		Settings: []debug.BuildSetting{{Key: "vcs", Value: "git"}, {Key: "vcs.revision", Value: rev}}}
+}
+
+func TestRunDefaultImageIsOwnBashyCommit(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	rt := newRunTest(t)
+	rt.selectWorkspace(t, "skel")
+	rt.renv.release = fakeBuildRelease(vcsBuild("656d72b81d76e0c0ffee0123456789abcdef0123"))
+	rt.renv.image = func() string { return "" } // no $BASHY_DKS_IMAGE
+	code, stdout, stderr := rt.exec(t, "run", "--emit", "yaml", "--", "make")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, `"image": "localhost/bashy-scratch:656d72b8"`) {
+		t.Errorf("rendered objects do not run the own-commit image:\n%s", stdout)
+	}
+	if !strings.Contains(stderr, "localhost/bashy-scratch:656d72b8") || !strings.Contains(stderr, "release") {
+		t.Errorf("stderr %q does not name the resolved image and its source", stderr)
+	}
+	rt.noSideEffects(t)
+}
+
+func TestRunImagePrecedenceFlagEnvRelease(t *testing.T) {
+	const own = "localhost/bashy-scratch:656d72b8"
+	for _, tc := range []struct {
+		name, flag, env, want, from string
+	}{
+		{"flag wins", "example.invalid/flag:1", "example.invalid/env:1", "example.invalid/flag:1", "flag"},
+		{"env over release", "", "example.invalid/env:1", "example.invalid/env:1", "env"},
+		{"release last", "", "", own, "release"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := newRunTest(t)
+			rt.selectWorkspace(t, "skel")
+			rt.renv.release = fakeBuildRelease(vcsBuild("656d72b81d76e0c0ffee0123456789abcdef0123"))
+			rt.renv.image = func() string { return tc.env }
+			args := []string{"run", "--emit", "yaml"}
+			if tc.flag != "" {
+				args = append(args, "--image", tc.flag)
+			}
+			code, stdout, stderr := rt.exec(t, append(args, "--", "make")...)
+			if code != 0 {
+				t.Fatalf("exit %d: %s", code, stderr)
+			}
+			if !strings.Contains(stdout, `"image": "`+tc.want+`"`) {
+				t.Errorf("image is not %q:\n%s", tc.want, stdout)
+			}
+			if !strings.Contains(stderr, tc.want+" (from "+tc.from+")") {
+				t.Errorf("stderr %q does not name %q from %s", stderr, tc.want, tc.from)
+			}
+			rt.noSideEffects(t)
+		})
+	}
+}
+
+func TestRunVerboseNamesImageSource(t *testing.T) {
+	rt := newRunTest(t)
+	rt.selectWorkspace(t, "skel@k8s:dev")
+	rt.renv.release = fakeBuildRelease(vcsBuild("656d72b81d76e0c0ffee0123456789abcdef0123"))
+	rt.renv.image = func() string { return "" }
+	_, _, stderr := rt.exec(t, "run", "--verbose", "--detach", "--", "make")
+	if !strings.Contains(stderr, "localhost/bashy-scratch:656d72b8 (from release)") {
+		t.Errorf("--verbose stderr %q does not name the image source", stderr)
+	}
+	_, _, quiet := rt.exec(t, "run", "--detach", "--", "make")
+	if strings.Contains(quiet, "executor image") {
+		t.Errorf("non-verbose run is chatty: %q", quiet)
+	}
+}
+
+func TestRunNoCommitNoImageFailsClosed(t *testing.T) {
+	rt := newRunTest(t)
+	rt.selectWorkspace(t, "skel@k8s:dev")
+	rt.renv.release = fakeBuildRelease(&debug.BuildInfo{Main: debug.Module{Version: "(devel)"}})
+	rt.renv.image = func() string { return "" }
+	for _, args := range [][]string{
+		{"run", "--", "make"},
+		{"run", "--emit", "yaml", "--", "make"},
+	} {
+		code, stdout, stderr := rt.exec(t, args...)
+		if code == 0 {
+			t.Errorf("%q exited 0 with no resolvable image", args)
+		}
+		if !strings.Contains(stderr, "--image") || !strings.Contains(stderr, "$"+imageEnvVar) {
+			t.Errorf("%q stderr %q is not actionable", args, stderr)
+		}
+		if stdout != "" {
+			t.Errorf("%q printed %q", args, stdout)
+		}
+	}
+	rt.noSideEffects(t)
+}
+
+func TestCommitFromPseudoVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		bi   *debug.BuildInfo
+		want string
+	}{
+		{"vcs.revision", vcsBuild("656d72b81d76e0c0ffee0123456789abcdef0123"), "656d72b81d76e0c0ffee0123456789abcdef0123"},
+		{"pseudo", &debug.BuildInfo{Main: debug.Module{Version: "v0.0.0-20261020101500-656d72b81d76"}}, "656d72b81d76"},
+		{"pseudo pre", &debug.BuildInfo{Main: debug.Module{Version: "v1.2.4-0.20261020101500-656d72b81d76"}}, "656d72b81d76"},
+		{"pseudo dirty", &debug.BuildInfo{Main: debug.Module{Version: "v1.2.4-0.20261020101500-656d72b81d76+dirty"}}, "656d72b81d76"},
+		{"release tag", &debug.BuildInfo{Main: debug.Module{Version: "v1.2.3"}}, ""},
+		{"devel", &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}}, ""},
+		{"nil", nil, ""},
+	} {
+		if got := commitFromBuildInfo(tc.bi); got != tc.want {
+			t.Errorf("%s: commit %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	if got := defaultImage(releaseIdentity{Commit: "656d72b81d76"}); got != "localhost/bashy-scratch:656d72b8" {
+		t.Errorf("defaultImage = %q", got)
+	}
+	if got := defaultImage(releaseIdentity{}); got != "" {
+		t.Errorf("defaultImage without commit = %q", got)
 	}
 }

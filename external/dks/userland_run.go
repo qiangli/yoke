@@ -35,11 +35,13 @@ import (
 	"github.com/qiangli/yoke/pkg/fleet"
 )
 
-// releaseIdentity is the running bashy release: its version and the sha256
-// of its own executable. A shipped command's identity is the release.
+// releaseIdentity is the running bashy release: its version, the sha256 of
+// its own executable, and the commit it was built from. A shipped command's
+// identity is the release; its commit names the default executor image.
 type releaseIdentity struct {
 	Version string
 	SHA256  string // hex
+	Commit  string // hex; "" when the build carries no VCS identity
 }
 
 // runEnv extends the userland seams with what run/ps/stop need. Production
@@ -58,7 +60,8 @@ type runEnv struct {
 	lookupCommand func(name string) (fleet.Command, bool)
 	// getenv reads one exported variable for a bare `--env K`.
 	getenv func(key string) (string, bool)
-	// image is the default Linux executor image ("" = must be given).
+	// image reads $BASHY_DKS_IMAGE ("" = unset); the release's own image
+	// is the fallback after it.
 	image func() string
 	// now and sleep drive the completion wait.
 	now   func() time.Time
@@ -73,6 +76,38 @@ const defaultRunTimeout = 30 * time.Minute
 
 // imageEnvVar names the default Linux executor image.
 const imageEnvVar = "BASHY_DKS_IMAGE"
+
+// defaultImagePrefix is the repository of the release's own executor image,
+// tagged with the first 8 hex of the bashy commit. One constant so the
+// release pipeline can move it to a signed release ref.
+const defaultImagePrefix = "localhost/bashy-scratch:"
+
+// defaultImage is the executor image of rel: the client's own bashy build.
+// "" when the build carries no commit.
+func defaultImage(rel releaseIdentity) string {
+	if len(rel.Commit) < 8 {
+		return ""
+	}
+	return defaultImagePrefix + rel.Commit[:8]
+}
+
+// resolveImage picks the Linux executor image: --image, then
+// $BASHY_DKS_IMAGE, then the release's own image. It returns the image and
+// where it came from (flag, env or release), or fails closed.
+func (env *runEnv) resolveImage(flag string) (image, from string, err error) {
+	if image = strings.TrimSpace(flag); image != "" {
+		return image, "flag", nil
+	}
+	if image = env.image(); image != "" {
+		return image, "env", nil
+	}
+	if rel, rerr := env.release(); rerr == nil {
+		if image = defaultImage(rel); image != "" {
+			return image, "release", nil
+		}
+	}
+	return "", "", fmt.Errorf("no Linux executor image: this bashy build carries no commit to name its own image — pass --image or set $%s — nothing ran", imageEnvVar)
+}
 
 func defaultRunEnv(env *userlandEnv) *runEnv {
 	return &runEnv{
@@ -106,6 +141,7 @@ type runOptions struct {
 	env     []string
 	image   string
 	timeout time.Duration
+	verbose bool
 }
 
 func newUserlandRunCmd(env *runEnv) *cobra.Command {
@@ -140,7 +176,8 @@ nothing.`,
 	f.IntVar(&o.cpu, "cpu", 0, "whole CPUs to request")
 	f.StringVar(&o.memory, "memory", "", "memory to request, e.g. 4Gi")
 	f.StringArrayVar(&o.env, "env", nil, "carry one variable: K (its exported value) or K=V; repeatable")
-	f.StringVar(&o.image, "image", "", "Linux executor image (default $"+imageEnvVar+")")
+	f.StringVar(&o.image, "image", "", "Linux executor image (default $"+imageEnvVar+", then "+defaultImagePrefix+"<bashy commit>)")
+	f.BoolVar(&o.verbose, "verbose", false, "report the resolved executor image and where it came from")
 	f.DurationVar(&o.timeout, "timeout", defaultRunTimeout, "how long to wait for a terminal phase")
 	return cmd
 }
@@ -187,17 +224,22 @@ func (env *runEnv) run(cmd *cobra.Command, o runOptions, args []string) error {
 	if err != nil {
 		return fail(err)
 	}
+	image, from, imgErr := env.resolveImage(o.image)
 	if o.emit == "manifest" {
+		// The manifest is image-free; the image is reported, not required.
+		if imgErr != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "dks: executor image unresolved: pass --image or set $%s\n", imageEnvVar)
+		} else {
+			fmt.Fprintf(cmd.ErrOrStderr(), "dks: executor image %s (from %s)\n", image, from)
+		}
 		_, err := cmd.OutOrStdout().Write(manifest)
 		return err
 	}
-
-	image := strings.TrimSpace(o.image)
-	if image == "" {
-		image = env.image()
+	if imgErr != nil {
+		return fail(imgErr)
 	}
-	if image == "" {
-		return fail(fmt.Errorf("no Linux executor image: pass --image or set $%s — nothing ran", imageEnvVar))
+	if o.verbose || o.emit == "yaml" {
+		fmt.Fprintf(cmd.ErrOrStderr(), "dks: executor image %s (from %s)\n", image, from)
 	}
 	class := dagrun.ExecutorClass{OS: "linux", Image: image}
 	if o.emit == "yaml" {
@@ -540,8 +582,8 @@ func upperASCII(b byte) byte {
 	return b
 }
 
-// selfRelease is the running binary's identity: its module version and the
-// sha256 of os.Executable.
+// selfRelease is the running binary's identity: its module version, the
+// sha256 of os.Executable, and the commit it was built from.
 func selfRelease() (releaseIdentity, error) {
 	self, err := os.Executable()
 	if err != nil {
@@ -551,11 +593,50 @@ func selfRelease() (releaseIdentity, error) {
 	if err != nil {
 		return releaseIdentity{}, err
 	}
-	version := "(devel)"
-	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" {
-		version = bi.Main.Version
+	version, commit := "(devel)", ""
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		if bi.Main.Version != "" {
+			version = bi.Main.Version
+		}
+		commit = commitFromBuildInfo(bi)
 	}
-	return releaseIdentity{Version: version, SHA256: sum}, nil
+	return releaseIdentity{Version: version, SHA256: sum, Commit: commit}, nil
+}
+
+// commitFromBuildInfo is the commit a binary was built from: the full
+// vcs.revision stamped by the go command, else the 12-hex suffix of a Go
+// pseudo-version main module (vX.Y.Z-yyyymmddhhmmss-abcdefabcdef), else "".
+func commitFromBuildInfo(bi *debug.BuildInfo) string {
+	if bi == nil {
+		return ""
+	}
+	for _, s := range bi.Settings {
+		if s.Key == "vcs.revision" && isHex(s.Value) {
+			return s.Value
+		}
+	}
+	v, _, _ := strings.Cut(bi.Main.Version, "+")
+	i := strings.LastIndexByte(v, '-')
+	if i < 0 {
+		return ""
+	}
+	rev, stamp := v[i+1:], v[:i]
+	j := strings.LastIndexAny(stamp, "-.")
+	if j < 0 || len(rev) != 12 || !isHex(rev) {
+		return ""
+	}
+	if ts := stamp[j+1:]; len(ts) != 14 || strings.Trim(ts, "0123456789") != "" {
+		return ""
+	}
+	return rev
+}
+
+func isHex(s string) bool {
+	if s == "" {
+		return false
+	}
+	_, err := hex.DecodeString(strings.Repeat("0", len(s)%2) + s)
+	return err == nil
 }
 
 func fileSHA256(path string) (string, error) {
