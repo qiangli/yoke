@@ -3,7 +3,7 @@ name: digitalocean
 form: declarative
 version: "1"
 protocol_version: provider/v1
-summary: DigitalOcean reference adapter (built-in; interpreted by the linked-in engine, never spawned)
+summary: DigitalOcean reference adapter (built-in; dispatched to the linked-in Go adapter, never the declarative engine, never spawned)
 builtin: true
 capabilities: [validate, capacity, plan, create, inspect, list, start, stop, destroy]
 declarative:

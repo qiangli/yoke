@@ -14,6 +14,7 @@ import (
 
 	"github.com/qiangli/yoke/pkg/assetring"
 	"github.com/qiangli/yoke/pkg/provider"
+	"github.com/qiangli/yoke/pkg/provider/scaffold"
 )
 
 // Provider packages (S472.12) load through the existing fleet kind/assetring
@@ -35,10 +36,10 @@ import (
 //
 // builtin is the one loader-level field the contract does not carry: it
 // marks a compiled-in reference entry (e.g. digitalocean) whose behavior
-// ships linked into the binary rather than in an argv-spawned program. A
-// built-in is never declared form: executable — there is no external
-// program to spawn — so the embedded reference entry is a declarative
-// document plus builtin: true.
+// ships linked into the binary as a Go adapter rather than in an
+// argv-spawned program or a declarative document. A built-in is never
+// dispatched to the declarative engine — the engine schema does not
+// validate its document — and never spawns.
 
 const KindInfra = "infra"
 const dirInfra = "infra"
@@ -48,8 +49,8 @@ const dirInfra = "infra"
 type InfraProvider struct {
 	provider.Manifest `yaml:",inline"`
 	// Builtin marks a compiled-in reference entry. It is loader-level only:
-	// form executable is wrong for a built-in (nothing to spawn), so the
-	// reference ships as declarative data plus this marker.
+	// the behavior ships as the linked-in Go adapter, so the entry is
+	// never dispatched to the declarative engine and never spawned.
 	Builtin bool           `yaml:"builtin,omitempty" json:"builtin,omitempty" doc:"compiled-in reference entry, not a spawned program"`
 	Ring    assetring.Ring `yaml:"-" json:"ring"`
 }
@@ -268,7 +269,13 @@ func (p InfraProvider) Validate() error {
 		if len(p.Manifest.Argv) != 0 {
 			return infraInvalid(name, "declarative manifest must not carry argv")
 		}
-		if err := validateDeclarativeDoc(name, p.Manifest.Declarative); err != nil {
+		if p.Builtin {
+			// A built-in is dispatched to the linked-in Go adapter,
+			// never the declarative engine, so its document is not
+			// engine-validated here.
+			return nil
+		}
+		if err := validateDeclarativeDoc(p.Manifest); err != nil {
 			return err
 		}
 		return nil
@@ -287,32 +294,18 @@ func (p InfraProvider) Validate() error {
 	return nil
 }
 
-// validateDeclarativeDoc schema-validates the declarative document without
-// any exec. Templates are pure substitution data: this walks shapes only and
-// never substitutes or evaluates anything.
-func validateDeclarativeDoc(name string, raw json.RawMessage) error {
-	if len(raw) == 0 {
-		return infraInvalid(name, "declarative manifest requires a declarative document")
-	}
-	var doc map[string]any
-	if err := json.Unmarshal(raw, &doc); err != nil || doc == nil {
-		return infraInvalid(name, "declarative document must be a mapping")
-	}
-	lc, ok := doc["lifecycle"].(map[string]any)
-	if !ok || len(lc) == 0 {
-		return infraInvalid(name, "declarative document requires a lifecycle mapping")
-	}
-	known := false
-	for op := range lc {
-		if infraCapabilities[provider.Capability(op)] {
-			known = true
+// validateDeclarativeDoc runs the exported pkg/provider declarative
+// validator — the same function the master calls at registration — so
+// registration and the engine agree. It validates the schema without any
+// exec and without allocating anything: templates are pure substitution
+// data, never substituted or evaluated here.
+func validateDeclarativeDoc(m provider.Manifest) error {
+	if err := provider.ValidateDeclarative(m); err != nil {
+		var perr *provider.Error
+		if errors.As(err, &perr) {
+			return &InfraError{Kind: InfraErrInvalid, Name: m.Name, Msg: perr.Message}
 		}
-		if _, ok := lc[op].(map[string]any); !ok {
-			return infraInvalid(name, fmt.Sprintf("lifecycle op %q must be a mapping", op))
-		}
-	}
-	if !known {
-		return infraInvalid(name, "lifecycle mapping names no known operation")
+		return infraInvalid(m.Name, err.Error())
 	}
 	return nil
 }
@@ -533,8 +526,62 @@ func init() {
 	})
 }
 
-// NewInfraCmd builds the `infra` verb tree (add/list/show/rm) on the fleet
-// kind-core write surface, like NewAdaptersCmd. Bashy mounts it later.
+// newInfraInit writes a provider authoring scaffold (S472.14) into a
+// target directory: a manifest (+ an executable skeleton implementing
+// every standard hook for the executable form), an example config and
+// deterministic fixtures.
+func newInfraInit() *cobra.Command {
+	var form, name, dir string
+	cmd := &cobra.Command{
+		Use:   "init",
+		Short: "Write a provider authoring scaffold into a directory",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := scaffold.Init(scaffold.Options{Dir: dir, Form: provider.Form(form), Name: name}); err != nil {
+				return err
+			}
+			display := name
+			if display == "" {
+				display = dir
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "initialized %s provider %q in %s\n", form, display, dir)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&form, "form", "declarative", "provider form: declarative|executable")
+	cmd.Flags().StringVar(&name, "name", "", "provider name (default: target directory base)")
+	cmd.Flags().StringVar(&dir, "dir", ".", "target directory")
+	return cmd
+}
+
+// newInfraValidate checks a provider authoring directory without
+// allocating anything: schema, capabilities, structured errors, timeout
+// handling and operation identity.
+func newInfraValidate() *cobra.Command {
+	var dir string
+	cmd := &cobra.Command{
+		Use:   "validate [DIR]",
+		Short: "Validate a provider authoring directory without allocating",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			target := dir
+			if len(args) == 1 {
+				target = args[0]
+			}
+			if err := scaffold.Validate(target); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s: valid\n", target)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&dir, "dir", ".", "provider authoring directory")
+	return cmd
+}
+
+// NewInfraCmd builds the `infra` verb tree (add/list/show/rm plus the
+// authoring init/validate) on the fleet kind-core write surface, like
+// NewAdaptersCmd. Bashy mounts it later.
 func NewInfraCmd(opts ...Option) *cobra.Command {
 	var asJSON bool
 	list := &cobra.Command{Use: "list", Short: "List provider packages", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
@@ -558,5 +605,6 @@ func NewInfraCmd(opts ...Option) *cobra.Command {
 	}}
 	list.Flags().BoolVar(&asJSON, "json", false, "JSON records")
 	return newRoot(KindInfra, "Provider packages (declarative manifests and executable plugins)",
-		list, newShow(KindInfra, opts), newAdd(KindInfra, opts), newRm(KindInfra, opts, (*Catalog).RemoveInfraProvider))
+		list, newShow(KindInfra, opts), newAdd(KindInfra, opts), newRm(KindInfra, opts, (*Catalog).RemoveInfraProvider),
+		newInfraInit(), newInfraValidate())
 }

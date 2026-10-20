@@ -29,7 +29,7 @@ func TestProviderKindRingPrecedence(t *testing.T) {
 		t.Fatal("embedded digitalocean entry must carry the loader-level builtin marker")
 	}
 
-	local := []byte("kind: infra\nname: digitalocean\nform: declarative\nprotocol_version: provider/v1\nversion: local-override\ncapabilities: [create]\ndeclarative:\n  lifecycle:\n    create: {endpoint: /v2/droplets}\n")
+	local := []byte("kind: infra\nname: digitalocean\nform: declarative\nprotocol_version: provider/v1\nversion: local-override\ncapabilities: [create, list]\ndeclarative:\n  base_url: https://api.example.com\n  auth: {in: header, name: X-Api-Key}\n  resource: {id: id, status: status, tags: tags}\n  states: {running: running}\n  operations:\n    create: {method: POST, path: /v2/droplets, result: droplet}\n    list: {method: GET, path: /v2/droplets, result: droplets}\n")
 	cat := New(WithoutCloudOverlay())
 	dir := cat.nounDir(dirInfra)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -125,7 +125,7 @@ func TestProviderArgvNoShell(t *testing.T) {
 // if it is ever called.
 func TestDeclarativeManifestLoadsWithoutExec(t *testing.T) {
 	isolatedFleetRoot(t)
-	body := []byte("kind: infra\nname: decl\nform: declarative\nprotocol_version: provider/v1\nversion: \"2\"\ncapabilities: [create, list]\ndeclarative:\n  endpoints:\n    create: /v2/things?name=$(name)&q=a;b\n  templates:\n    body: '{\"x\": \"$(evil); drop\"}'\n  lifecycle:\n    create: {endpoint: /v2/things, template: body}\n    list: {endpoint: /v2/things}\n")
+	body := []byte("kind: infra\nname: decl\nform: declarative\nprotocol_version: provider/v1\nversion: \"2\"\ncapabilities: [create, list]\ndeclarative:\n  base_url: https://api.example.com\n  auth: {in: header, name: X-Api-Key}\n  resource: {id: id, status: status, tags: tags}\n  states: {running: running}\n  operations:\n    create: {method: POST, path: \"/v2/things?name=$(name)&q=a;b\", body: '{\"x\": \"$(evil); drop\"}', result: thing}\n    list: {method: GET, path: /v2/things, result: things}\n")
 	p, err := ParseInfraProvider("decl", body, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -194,7 +194,7 @@ func TestProviderCloudCacheOfflineLoad(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	body := []byte("kind: infra\nname: cached\nform: declarative\nprotocol_version: provider/v1\nversion: cached-1\ncapabilities: [list]\ndeclarative:\n  lifecycle:\n    list: {endpoint: /v2/things}\n")
+	body := []byte("kind: infra\nname: cached\nform: declarative\nprotocol_version: provider/v1\nversion: cached-1\ncapabilities: [list]\ndeclarative:\n  base_url: https://api.example.com\n  auth: {in: header, name: X-Api-Key}\n  resource: {id: id, status: status, tags: tags}\n  operations:\n    list: {method: GET, path: /v2/things, result: things}\n")
 	if err := os.WriteFile(filepath.Join(dir, "cached.yaml"), body, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -279,6 +279,80 @@ func TestInfraUnsupportedOpIsExplicit(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Fatalf("exec hook called %d times, want 0", calls)
+	}
+}
+
+// Registration and the engine agree: a manifest the fleet loader
+// accepts is accepted by the exported declarative validator, and the
+// embedded digitalocean baseline (builtin: true) loads as dispatched to
+// the linked-in Go adapter, never the declarative engine.
+func TestInfraRegistrationAgreesWithEngine(t *testing.T) {
+	isolatedFleetRoot(t)
+	base, ok := New(WithoutCloudOverlay()).InfraProvider("digitalocean")
+	if !ok {
+		t.Fatal("embedded digitalocean provider missing")
+	}
+	if !base.Builtin {
+		t.Fatal("embedded digitalocean entry must carry the loader-level builtin marker")
+	}
+
+	body := []byte("kind: infra\nname: agree\nform: declarative\nprotocol_version: provider/v1\ncapabilities: [validate, create, inspect, list]\ndeclarative:\n  base_url: https://api.example.com\n  auth: {in: header, name: X-Api-Key}\n  resource: {id: id, status: status, tags: tags}\n  operations:\n    validate: {method: GET, path: /api/account}\n    create: {method: POST, path: /api/machines, result: machine}\n    inspect: {method: GET, path: \"/api/machines/${resource_id}\", result: machine}\n    list: {method: GET, path: /api/machines, result: machines}\n")
+	p, err := ParseInfraProvider("agree", body, nil)
+	if err != nil {
+		t.Fatalf("loader rejected an engine-valid manifest: %v", err)
+	}
+	if err := provider.ValidateDeclarative(p.Manifest); err != nil {
+		t.Fatalf("engine rejected a loader-accepted manifest: %v", err)
+	}
+
+	broken := []byte("kind: infra\nname: broken\nform: declarative\nprotocol_version: provider/v1\ncapabilities: [create, list]\ndeclarative:\n  base_url: https://api.example.com\n  auth: {in: header, name: X-Api-Key}\n  resource: {id: id, status: status, tags: tags}\n  operations:\n    list: {method: GET, path: /v2/things, result: things}\n")
+	if _, err := ParseInfraProvider("broken", broken, nil); err == nil {
+		t.Fatal("loader accepted a manifest whose create capability has no endpoint")
+	} else if !strings.Contains(err.Error(), "no operation endpoint") {
+		t.Fatalf("wrong refusal: %v", err)
+	}
+}
+
+// The authoring surface: `infra init` writes a scaffold (once per form)
+// and `infra validate` accepts it with exit 0, all without allocating.
+func TestInfraInitValidateCmds(t *testing.T) {
+	for _, form := range []string{"declarative", "executable"} {
+		dir := filepath.Join(t.TempDir(), form)
+		init := NewInfraCmd()
+		init.SetArgs([]string{"init", "--form", form, "--name", "mine-" + form, "--dir", dir})
+		var out strings.Builder
+		init.SetOut(&out)
+		if err := init.Execute(); err != nil {
+			t.Fatalf("init %s: %v", form, err)
+		}
+		validate := NewInfraCmd()
+		validate.SetArgs([]string{"validate", dir})
+		validate.SetOut(&out)
+		if err := validate.Execute(); err != nil {
+			t.Fatalf("validate %s: %v", form, err)
+		}
+		if !strings.Contains(out.String(), dir+": valid") {
+			t.Fatalf("validate %s output = %q, want a valid verdict", form, out.String())
+		}
+		// The scaffold registers in a temp local ring unchanged.
+		raw, err := os.ReadFile(filepath.Join(dir, "manifest.yaml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ParseInfraProvider("mine-"+form, raw, nil); err != nil {
+			t.Fatalf("scaffold manifest does not register: %v", err)
+		}
+	}
+
+	bad := NewInfraCmd()
+	bad.SetArgs([]string{"init", "--form", "telepathy", "--dir", t.TempDir()})
+	if err := bad.Execute(); err == nil {
+		t.Fatal("init with an unknown form must fail")
+	}
+	empty := NewInfraCmd()
+	empty.SetArgs([]string{"validate", t.TempDir()})
+	if err := empty.Execute(); err == nil {
+		t.Fatal("validate of a directory without a manifest must fail")
 	}
 }
 

@@ -152,6 +152,14 @@ type DeclarativeConfig struct {
 	HTTPClient *http.Client
 }
 
+// ValidateDeclarative validates a declarative manifest against the engine schema
+// without evaluating anything or making any network call. It is the same function
+// the master calls at registration.
+func ValidateDeclarative(m Manifest) error {
+	_, err := ParseDeclarative(m)
+	return err
+}
+
 // ParseDeclarative decodes and validates m.Declarative.
 func ParseDeclarative(m Manifest) (*DeclarativeDoc, error) {
 	bad := func(format string, args ...any) error {
