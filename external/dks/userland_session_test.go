@@ -14,7 +14,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -189,6 +191,9 @@ func newSessionTest(t *testing.T) *sessionTest {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("BASHY_HOME", home)
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("KUBECONFIG", filepath.Join(home, "no-kubeconfig"))
 	st := &sessionTest{home: home, runner: &sessionRunner{}}
 	uenv := &userlandEnv{
 		stateDir:  func() string { return filepath.Join(home, "dks", "context") },
@@ -660,10 +665,10 @@ func TestLogsSnapshotSendsPairedAuth(t *testing.T) {
 	}))
 	t.Cleanup(wrapped.Close)
 	st.senv.tunnelBase = func(dagrun.Context) (string, error) { return wrapped.URL, nil }
-	st.senv.authHeaders = func() http.Header {
+	st.senv.authHeaders = func(string) (http.Header, error) {
 		h := http.Header{}
 		h.Set("X-DKS-Test-Auth", "test-token")
-		return h
+		return h, nil
 	}
 	st.runner.podsJSON = sessionPodJSON("default", "bashy-run-"+strings.ToLower(testRunID), "abcdef1234567890", "worker-a", "41234")
 
@@ -924,5 +929,157 @@ func TestRenderInteractivePodRunsSessionServerWithHostPort(t *testing.T) {
 	oneAnns, _ := oneMD["annotations"].(map[string]any)
 	if _, ok := oneAnns[dagrun.AnnotAttachPort]; ok {
 		t.Errorf("one-shot carries the attach annotation: %v", oneAnns[dagrun.AnnotAttachPort])
+	}
+}
+
+// TestAttachUsesPairedCredentialsAndDerivedTunnelBase is the production
+// wiring: no tunnel env var, the base derived from the plane context's
+// kubeconfig server, and the paired Outpost's bearer plus the app-scoped
+// elevation cookie the edge mints for it. The httptest tunnel refuses any
+// request without the bearer and any upgrade without the cookie.
+func TestAttachUsesPairedCredentialsAndDerivedTunnelBase(t *testing.T) {
+	st := newSessionTest(t)
+	st.senv.tunnelBase = defaultTunnelBase
+	st.senv.authHeaders = pairedAuthHeaders
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv(tunnelBaseEnv, "")
+	t.Setenv("OUTPOST_SESSION_JWT", "")
+
+	st.selectWorkspace(t, "skel@k8s:plane-a")
+	hub, id := sessionCommandHub(t, testRunID)
+	if _, err := hub.Append([]byte("paired-ok")); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := hub.RecordExit(0, time.Now()); err != nil {
+		t.Fatalf("RecordExit: %v", err)
+	}
+	podName := "bashy-run-" + strings.ToLower(testRunID)
+	appPath := "/matrix/h/worker-a/app/vk-default-" + podName + "-abcdef12"
+	const bearer, cookie = "test-paired-bearer-0123456789", "test-elev-cookie"
+	var primed, upgrades int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, appPath+"/") {
+			http.Error(w, "unknown app", http.StatusNotFound)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer "+bearer {
+			http.Error(w, "login required", http.StatusUnauthorized)
+			return
+		}
+		if !websocket.IsWebSocketUpgrade(r) {
+			primed++
+			http.SetCookie(w, &http.Cookie{Name: "matrix_elev", Value: cookie, Path: appPath, HttpOnly: true})
+			http.Error(w, "no index", http.StatusNotFound)
+			return
+		}
+		if c, err := r.Cookie("matrix_elev"); err != nil || c.Value != cookie {
+			http.Error(w, "elevation required", http.StatusForbidden)
+			return
+		}
+		upgrades++
+		attach.Handler(hub).ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	kube := filepath.Join(home, "kubeconfig")
+	writeTestFile(t, kube, 0o600, fmt.Sprintf(`apiVersion: v1
+kind: Config
+current-context: other
+clusters:
+- name: other
+  cluster:
+    server: https://other.invalid:6443
+- name: plane-a-cluster
+  cluster:
+    server: %s/k8s/clusters/plane-a
+contexts:
+- name: other
+  context:
+    cluster: other
+- name: plane-a
+  context:
+    cluster: plane-a-cluster
+`, srv.URL))
+	t.Setenv("KUBECONFIG", kube)
+	writeTestFile(t, filepath.Join(home, "xdg", "matrix", "agent.json"), 0o600,
+		fmt.Sprintf(`{"server_addr":"127.0.0.1","server_port":443,"protocol":"wss","access_token":%q}`, bearer))
+	st.runner.podsJSON = sessionPodJSON("default", podName, "abcdef1234567890", "worker-a", "41234")
+
+	code, stdout, stderr := st.exec(t, "attach", id)
+	if code != 0 {
+		t.Fatalf("attach exited %d, want 0 (stderr %q)", code, stderr)
+	}
+	if stdout != "paired-ok" {
+		t.Errorf("attach replayed %q, want %q", stdout, "paired-ok")
+	}
+	if primed == 0 || upgrades != 1 {
+		t.Errorf("primed=%d upgrades=%d, want the cookie minted then one upgrade", primed, upgrades)
+	}
+	if strings.Contains(stderr, bearer) || strings.Contains(stderr, cookie) {
+		t.Errorf("stderr leaked a credential: %q", stderr)
+	}
+	st.noLocal(t)
+}
+
+func writeTestFile(t *testing.T, path string, mode os.FileMode, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), mode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, mode); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestPairedAuthHeadersGuards pins the credential doors: the bearer never
+// goes to a host other than the paired server, a refusal at the edge is an
+// actionable error that names no credential, a config other users can read
+// is ignored, and $BASHY_DKS_TUNNEL_BASE overrides the derived base.
+func TestPairedAuthHeadersGuards(t *testing.T) {
+	newSessionTest(t)
+	home := os.Getenv("HOME")
+	const bearer = "test-paired-bearer-0123456789"
+	cfg := filepath.Join(home, "xdg", "matrix", "agent.json")
+	writeTestFile(t, cfg, 0o600, fmt.Sprintf(`{"server_addr":"127.0.0.1:443","access_token":%q}`, bearer))
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		http.Error(w, "not shared", http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+	wsEndpoint := "ws://" + strings.TrimPrefix(srv.URL, "http://") + "/matrix/h/worker-a/app/vk-x/attach?client=c"
+
+	_, err := pairedAuthHeaders(wsEndpoint)
+	if err == nil || !strings.Contains(err.Error(), "HTTP 403") || !strings.Contains(err.Error(), "worker-a") || strings.Contains(err.Error(), bearer) {
+		t.Errorf("edge refusal error = %v, want an actionable 403 naming the host and no credential", err)
+	}
+
+	foreign := strings.Replace(wsEndpoint, "127.0.0.1", "localhost", 1)
+	before := hits
+	if h, err := pairedAuthHeaders(foreign); err != nil || h != nil || hits != before {
+		t.Errorf("foreign tunnel got headers=%v err=%v hits=%d, want no credentials and no request", h, err, hits-before)
+	}
+
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(cfg, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if h, err := pairedAuthHeaders(wsEndpoint); err != nil || h != nil {
+			t.Errorf("readable config used: headers=%v err=%v", h, err)
+		}
+	}
+
+	t.Setenv(tunnelBaseEnv, "https://override.invalid/")
+	if got, err := defaultTunnelBase(dagrun.Context{Plane: "k8s:missing"}); err != nil || got != "https://override.invalid" {
+		t.Errorf("override base = %q, %v", got, err)
+	}
+	t.Setenv(tunnelBaseEnv, "")
+	if _, err := defaultTunnelBase(dagrun.Context{Plane: "k8s:missing"}); err == nil || !strings.Contains(err.Error(), tunnelBaseEnv) {
+		t.Errorf("missing kubeconfig context error = %v, want fail-closed naming $%s", err, tunnelBaseEnv)
 	}
 }

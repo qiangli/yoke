@@ -580,3 +580,57 @@ func TestAttachBadOffset(t *testing.T) {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
 	}
 }
+
+// TestAttachHeadersRideEveryDial pins the Headers option: the first dial and
+// a reconnect each re-run the header func, so a refreshed credential reaches
+// the redial, and a header error fails the dial before the network.
+func TestAttachHeadersRideEveryDial(t *testing.T) {
+	hub, _ := attachHub(t, &fakePTY{}, "")
+	var mu sync.Mutex
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Header.Get("X-Test-Auth"))
+		mu.Unlock()
+		if r.Header.Get("X-Test-Auth") == "" {
+			http.Error(w, "no auth", http.StatusUnauthorized)
+			return
+		}
+		Handler(hub).ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	ctx, cancel := attachCtx(t)
+	defer cancel()
+
+	n := 0
+	headers := func() (http.Header, error) {
+		n++
+		h := http.Header{}
+		h.Set("X-Test-Auth", "gen-"+string(rune('0'+n)))
+		return h, nil
+	}
+	s, err := Attach(ctx, attachWSURL(srv), "a", 0, Headers(headers))
+	if err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	defer s.Close()
+	if err := s.Reconnect(ctx); err != nil {
+		t.Fatalf("Reconnect: %v", err)
+	}
+	mu.Lock()
+	got := append([]string(nil), seen...)
+	mu.Unlock()
+	if len(got) != 2 || got[0] != "gen-1" || got[1] != "gen-2" {
+		t.Fatalf("handshake headers = %q, want [gen-1 gen-2]", got)
+	}
+
+	boom := errors.New("no credential")
+	if _, err := Attach(ctx, attachWSURL(srv), "b", 0, Headers(func() (http.Header, error) { return nil, boom })); !errors.Is(err, boom) {
+		t.Fatalf("Attach with failing headers = %v, want %v", err, boom)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 2 {
+		t.Fatalf("a failing header func reached the server: %q", seen)
+	}
+}
