@@ -53,6 +53,14 @@ is not applied on top of it (that would double every window). Immediate
 metrics use the 3-point hysteresis. A re-notify fires every 30 minutes
 while a resource is still alarming.
 
+A metric's FIRST evaluated sample alarms at once when it is already beyond
+a threshold (unknown → warning/critical commits without waiting out the
+hysteresis) — a disk that was already full when the watcher first saw it
+must be heard on that sample, not two scheduler ticks later. The rule
+never bypasses a sustain window (CPU, GPU utilization, throughput still
+wait out their 5 minutes), and every transition after the first level is
+set keeps the full 3-point hysteresis against flapping.
+
 Platform honesty (unchanged from `resources system`): a metric a platform
 cannot supply purely is omitted, never approximated. darwin reports no GPU
 utilization or VRAM-usage figures (IOKit needs cgo), so those metrics

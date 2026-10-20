@@ -114,12 +114,17 @@ func (w *Watcher) Observe(at time.Time, sys *System) []Event {
 	for _, rd := range readings {
 		key := rd.resource + "/" + rd.metric
 		st := w.states[key]
-		if st == nil {
+		// first: the metric's opening sample (no memory of it in this run
+		// or the persisted state). A value already beyond a threshold then
+		// is a breach that predates the watcher, not a flap: it commits at
+		// once instead of waiting out the count hysteresis.
+		first := st == nil
+		if first {
 			st = &metricState{Level: LevelNormal, Pending: LevelNormal}
 			w.states[key] = st
 		}
 		raw, threshold := w.rawLevel(rd, st, at)
-		ev := w.advance(st, rd, raw, threshold, at)
+		ev := w.advance(st, rd, raw, threshold, at, first)
 		if ev != nil {
 			emitted = append(emitted, *ev)
 			w.appendEvent(*ev)
@@ -196,8 +201,11 @@ func thresholdFor(lvl Level, warn, crit float64) float64 {
 }
 
 // advance runs the hysteresis state machine for one reading and returns the
-// transition or re-notification event, if any.
-func (w *Watcher) advance(st *metricState, rd reading, raw Level, threshold float64, at time.Time) *Event {
+// transition or re-notification event, if any. first marks the metric's
+// opening sample: its transition from unknown commits without the count
+// hysteresis (sustained metrics still wait out their window in rawLevel);
+// every transition after the first level is set keeps the full hysteresis.
+func (w *Watcher) advance(st *metricState, rd reading, raw Level, threshold float64, at time.Time, first bool) *Event {
 	cfg := w.cfgFor(rd.resource)
 	if rd.metric == metricNetLink {
 		if rd.ifaceUp {
@@ -224,7 +232,7 @@ func (w *Watcher) advance(st *metricState, rd reading, raw Level, threshold floa
 		return nil
 	}
 	need := cfg.Hysteresis
-	if rd.sustain > 0 || rd.immediate {
+	if rd.sustain > 0 || rd.immediate || first {
 		need = 1
 	}
 	if raw == st.Pending {

@@ -110,7 +110,7 @@ func TestResourcesWatchOnce(t *testing.T) {
 	if !strings.Contains(errBuf.String(), "registered host-a.example") {
 		t.Errorf("watch --once must auto-register host resources:\n%s", errBuf.String())
 	}
-	// Second run is quiet: idempotent registration, hysteresis not yet met.
+	// Second run is quiet: idempotent registration, no duplicate alarm.
 	errBuf.Reset()
 	code = run(rc, []string{"watch", "--once"})
 	if code != 0 {
