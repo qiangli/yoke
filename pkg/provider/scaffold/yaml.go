@@ -64,10 +64,7 @@ func stripComment(s string) string {
 	return s
 }
 
-func parseNode(lines []struct {
-	indent int
-	text   string
-}, idx *int, currentIndent int) (any, bool, error) {
+func parseNode(lines []lineInfo, idx *int, currentIndent int) (any, bool, error) {
 	if *idx >= len(lines) {
 		return nil, false, nil
 	}
