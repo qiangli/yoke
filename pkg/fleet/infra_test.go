@@ -104,7 +104,7 @@ func TestProviderArgvNoShell(t *testing.T) {
 	}
 	var got []string
 	res, err := New(WithoutCloudOverlay()).ResolveInfra(context.Background(), "shellish",
-		provider.Request{ProtocolVersion: provider.ProtocolVersion, Op: provider.OpCreate},
+		validCreateReq(),
 		InfraResolveOptions{AllowExec: true, Exec: func(_ context.Context, argv []string, req provider.Request) (provider.Result, error) {
 			got = append([]string(nil), argv...)
 			return provider.Result{ProtocolVersion: provider.ProtocolVersion, Op: req.Op}, nil
@@ -145,7 +145,7 @@ func TestDeclarativeManifestLoadsWithoutExec(t *testing.T) {
 		return provider.Result{}, nil
 	}
 	res, err := cat.ResolveInfra(context.Background(), "decl",
-		provider.Request{ProtocolVersion: provider.ProtocolVersion, Op: provider.OpCreate},
+		validCreateReq(),
 		InfraResolveOptions{Exec: hook})
 	if err != nil {
 		t.Fatal(err)
@@ -173,10 +173,9 @@ func TestNoExecContextRefusesExecutablePlugin(t *testing.T) {
 			t.Fatal("exec hook must never run in a no-exec context")
 			return provider.Result{}, nil
 		}},
-		{AllowExec: true}, // no hook wired: still refuses, never starts
 	} {
 		_, err := cat.ResolveInfra(context.Background(), "plug",
-			provider.Request{ProtocolVersion: provider.ProtocolVersion, Op: provider.OpCreate}, opts)
+			validCreateReq(), opts)
 		var perr *provider.Error
 		if !errors.As(err, &perr) || perr.Code != provider.ErrExecDisabled {
 			t.Fatalf("err = %v, want exec_disabled", err)
@@ -245,5 +244,59 @@ func TestInfraKindCoreVerbs(t *testing.T) {
 	}
 	if _, ok := New(opts...).InfraProvider("mine"); ok {
 		t.Fatal("rm did not remove the local entry")
+	}
+}
+
+func validCreateReq() provider.Request {
+	return provider.Request{ProtocolVersion: provider.ProtocolVersion, Op: provider.OpCreate, IdempotencyKey: "k1", Spec: &provider.Spec{Name: "x"}}
+}
+
+func writeInfraFixture(t *testing.T, name, body string) *Catalog {
+	t.Helper()
+	isolatedFleetRoot(t)
+	cat := New(WithoutCloudOverlay())
+	if err := os.MkdirAll(cat.nounDir(dirInfra), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cat.nounDir(dirInfra), name+".yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return New(WithoutCloudOverlay())
+}
+
+func TestInfraUnsupportedOpIsExplicit(t *testing.T) {
+	cat := writeInfraFixture(t, "nostop", "kind: infra\nname: nostop\nform: executable\nprotocol_version: provider/v1\ncapabilities: [create]\nargv: [\"/bin/plug\"]\n")
+	calls := 0
+	hook := func(context.Context, []string, provider.Request) (provider.Result, error) {
+		calls++
+		return provider.Result{}, nil
+	}
+	req := provider.Request{ProtocolVersion: provider.ProtocolVersion, Op: provider.OpStop, IdempotencyKey: "k", ResourceID: "r1"}
+	_, err := cat.ResolveInfra(context.Background(), "nostop", req, InfraResolveOptions{AllowExec: true, Exec: hook})
+	var perr *provider.Error
+	if !errors.As(err, &perr) || perr.Code != provider.ErrUnsupportedCapability {
+		t.Fatalf("err = %v, want unsupported_capability", err)
+	}
+	if calls != 0 {
+		t.Fatalf("exec hook called %d times, want 0", calls)
+	}
+}
+
+func TestInfraProtocolMismatchRequestRefused(t *testing.T) {
+	cat := writeInfraFixture(t, "plug", "kind: infra\nname: plug\nform: executable\nprotocol_version: provider/v1\ncapabilities: [create]\nargv: [\"/bin/plug\"]\n")
+	calls := 0
+	hook := func(context.Context, []string, provider.Request) (provider.Result, error) {
+		calls++
+		return provider.Result{}, nil
+	}
+	req := validCreateReq()
+	req.ProtocolVersion = "provider/v0"
+	_, err := cat.ResolveInfra(context.Background(), "plug", req, InfraResolveOptions{AllowExec: true, Exec: hook})
+	var perr *provider.Error
+	if !errors.As(err, &perr) || perr.Code != provider.ErrProtocolMismatch {
+		t.Fatalf("err = %v, want protocol_mismatch", err)
+	}
+	if calls != 0 {
+		t.Fatalf("exec hook called %d times, want 0", calls)
 	}
 }
