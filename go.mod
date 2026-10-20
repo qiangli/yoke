@@ -42,6 +42,7 @@ require (
 	github.com/qiangli/coreutils v0.0.0-20261019154849-42845e33d023
 	github.com/qiangli/gfy v0.0.0-20261013004914-30d38f086034
 	github.com/qiangli/yoke/pkg/llmgw v0.0.0-00010101000000-000000000000
+	github.com/qiangli/yoke/pkg/provider v0.0.0-00010101000000-000000000000
 	github.com/qiangli/yoke/pkg/oci v0.0.0-00010101000000-000000000000
 	github.com/rjeczalik/notify v0.9.3
 	github.com/robfig/cron/v3 v3.0.1
@@ -429,6 +430,9 @@ replace github.com/qiangli/yoke/pkg/oci => ./pkg/oci
 
 // pkg/llmgw is the OpenAI-compatible gateway core (nested module, stdlib + prometheus)
 replace github.com/qiangli/yoke/pkg/llmgw => ./pkg/llmgw
+
+// pkg/provider is the S472 provider contract + dispatcher + DO adapter (nested, stdlib-only, go 1.26 for cloudbox/hub)
+replace github.com/qiangli/yoke/pkg/provider => ./pkg/provider
 
 replace github.com/filebrowser/filebrowser/v2 => github.com/qiangli/filebrowser/v2 v2.0.0-20261013004903-9c7b5c8e3d09
 
