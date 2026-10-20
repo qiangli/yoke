@@ -53,6 +53,8 @@ type Config struct {
 	HTTPClient *http.Client
 	// PollInterval is the wait between action-status polls (default 2s).
 	PollInterval time.Duration
+	// Now stamps offer observation times; default time.Now.
+	Now func() time.Time
 }
 
 // Manifest is the adapter's manifest: every v1 operation, no volumes/spot.
@@ -252,7 +254,11 @@ func (a *adapter) capacity(ctx context.Context, req provider.Request) (provider.
 	if err := a.call(ctx, http.MethodGet, "/v2/sizes?per_page=200", nil, &sizes); err != nil {
 		return fail(req.Op, err)
 	}
-	data, _ := json.Marshal(map[string]json.RawMessage{"regions": regions.Regions, "sizes": sizes.Sizes})
+	out := map[string]any{"regions": regions.Regions, "sizes": sizes.Sizes}
+	if offers, err := a.offers(ctx, regions.Regions, sizes.Sizes); err == nil {
+		out["offers"] = offers
+	}
+	data, _ := json.Marshal(out)
 	return ok(req.Op, &provider.Result{Data: data})
 }
 
