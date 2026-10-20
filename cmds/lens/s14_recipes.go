@@ -3,6 +3,7 @@ package lenscmd
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/qiangli/coreutils/tool"
 	"github.com/qiangli/yoke/pkg/lens/provider"
@@ -17,14 +18,23 @@ func init() {
 	RegisterProvider("cloud", cloudProvider)
 }
 
-// k8sProvider serves k8s:pods@k8s:<context> through the read-only pods
-// recipe. An unscoped locator or any other scope fails closed: there is no
-// ambient kubectl-context fallback, matching cloudProvider.
+// k8sProvider serves k8s:pods@k8s:<context> and k8s:nodes@k8s:<context>
+// through the read-only recipes. An unscoped locator, any other scope or any
+// other collection fails closed: there is no ambient kubectl-context
+// fallback, matching cloudProvider.
 func k8sProvider(_ *tool.RunContext, loc ref.Locator) (provider.Provider, error) {
 	if loc.Scheme != "k8s" || loc.ScopeKind != "k8s" {
-		return nil, fmt.Errorf("k8s pods need a @k8s scope, got %q", loc.String())
+		return nil, fmt.Errorf("k8s pods and nodes need a @k8s scope, got %q", loc.String())
 	}
-	return provider.NewK8sScopedRecipe(loc.ScopeValue, k8sRunner)
+	collection, _, _ := strings.Cut(loc.Target, "/")
+	switch collection {
+	case "pods":
+		return provider.NewK8sScopedRecipe(loc.ScopeValue, k8sRunner)
+	case "nodes":
+		return provider.NewK8sNodesScopedRecipe(loc.ScopeValue, k8sRunner)
+	default:
+		return nil, fmt.Errorf("k8s: unknown collection %q", loc.Target)
+	}
 }
 
 // cloudRunner is nil in production (the real read-only runner); tests inject one.
