@@ -68,7 +68,7 @@ func TestWeaveReverifyWithoutVerifyCommandReleasesManagedGOCache(t *testing.T) {
 }
 
 func TestWeaveReleaseManagedGOCacheEveryTerminalState(t *testing.T) {
-	for _, state := range []string{"submitted", "no-op", "failed", "killed"} {
+	for _, state := range []string{"submitted", "no-op", "failed", "killed", "done", "abandoned"} {
 		for _, verify := range []string{"", "true"} {
 			t.Run(state+"/verify="+verify, func(t *testing.T) {
 				_, dir, cache := weaveGOCacheReleaseFixture(t, state, verify)
@@ -122,5 +122,52 @@ func TestWeaveReleaseManagedGOCacheRecordsFailureOnRowThenClears(t *testing.T) {
 	fresh, _ = loadWeaveQueue(dir)
 	if fresh.Items[0].CleanupError != "" {
 		t.Fatalf("CleanupError not cleared after successful release: %q", fresh.Items[0].CleanupError)
+	}
+}
+
+func TestSafeRemoveManagedGOCacheRefusals(t *testing.T) {
+	_, dir, cache := weaveGOCacheReleaseFixture(t, "working", "")
+
+	// 1. Outside managed root (e.g. other tool's runtime dir under TMPDIR)
+	otherDir := filepath.Join(t.TempDir(), "other-tool-daemon")
+	if err := os.MkdirAll(otherDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := safeRemoveManagedGOCache(dir, otherDir); err == nil || !strings.Contains(err.Error(), "not contained in") {
+		t.Fatalf("expected not contained error for %q, got: %v", otherDir, err)
+	}
+
+	// 2. Symlink inside managed root pointing elsewhere
+	symlinkPath := filepath.Join(weaveManagedGOCacheRoot(dir), "run-99")
+	if err := os.Symlink(otherDir, symlinkPath); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Remove(symlinkPath) }()
+	if err := safeRemoveManagedGOCache(dir, symlinkPath); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink refusal for %q, got: %v", symlinkPath, err)
+	}
+
+	// 3. Active live run refusal when State is working
+	q, _ := loadWeaveQueue(dir)
+	q.Items[0].State = "working"
+	q.Items[0].WrapperPid = 0
+	_ = saveWeaveQueue(dir, q)
+	if err := safeRemoveManagedGOCache(dir, cache); err == nil || !strings.Contains(err.Error(), "is active") {
+		t.Fatalf("expected active run refusal for working run, got: %v", err)
+	}
+}
+
+func TestWeaveAbandonReleasesManagedGOCache(t *testing.T) {
+	root, _, cache := weaveGOCacheReleaseFixture(t, "submitted", "")
+	oldWD, _ := os.Getwd()
+	defer func() { _ = os.Chdir(oldWD) }()
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := runWeave(t, "abandon", "1", "--json"); code != 0 {
+		t.Fatalf("abandon exit=%d: %s", code, out)
+	}
+	if _, err := os.Stat(cache); !os.IsNotExist(err) {
+		t.Fatalf("managed GOCACHE survived abandon: err=%v", err)
 	}
 }

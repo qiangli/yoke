@@ -6212,6 +6212,7 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason, disposition string, y
 	// Auto-status: dropping the run returns its linked todo to the backlog
 	// (assigned -> todo, link cleared), so the list stops showing a stale "assigned".
 	weaveReleaseRegister(root, it)
+	weaveReleaseManagedGOCache(cmd.ErrOrStderr(), "weave abandon", dir, it)
 	acts := weavePruneOwnedRun(dir, it.ID, filepath.Base(root))
 	var leftovers []string
 	for _, a := range acts {

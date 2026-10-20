@@ -15,11 +15,12 @@ import (
 var cmd = &tool.Tool{
 	Name:     "resources",
 	Synopsis: "Report fleet utilization across providers, bands, and meters.",
-	Usage:    "resources fleet [--json] | resources budget [MODEL...] [--json]",
+	Usage:    "resources fleet [--json] | resources budget [MODEL...] [--json] | resources system [--min-free FLOOR] [--json]",
 }
 
 const usageText = "Usage: resources fleet [--json]\n" +
-	"       resources budget [MODEL...] [--json]\n"
+	"       resources budget [MODEL...] [--json]\n" +
+	"       resources system [--min-free FLOOR] [--interval DURATION] [--json]\n"
 
 func init() {
 	cmd.Run = run
@@ -33,6 +34,8 @@ func run(rc *tool.RunContext, args []string) int {
 		subargs = args[1:]
 	case len(args) > 0 && args[0] == "budget":
 		return runBudget(rc, args[1:])
+	case len(args) > 0 && args[0] == "system":
+		return runSystem(rc, args[1:])
 	case len(args) > 0 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help"):
 		fmt.Fprint(rc.Out, usageText)
 		return 0
@@ -94,5 +97,62 @@ func runBudget(rc *tool.RunContext, args []string) int {
 	}
 
 	fmt.Fprint(rc.Out, resources.FormatBudgetTable(br))
+	return 0
+}
+
+func runSystem(rc *tool.RunContext, args []string) int {
+	fs := tool.NewFlags(cmd.Name)
+	asJSON := fs.Bool("json", weavecli.IsAgent(), "emit a bashy-resources-v1 envelope")
+	interval := fs.Duration("interval", resources.DefaultInterval, "gap between counter samples")
+	minFree := fs.String("min-free", "", "fail if free disk space is below floor (e.g. 100G, 10%, 100G,10%)")
+	mountFilter := fs.String("mount", "", "mount point to check")
+	quiet := fs.BoolP("quiet", "q", false, "suppress output on success")
+	operands, code := tool.Parse(rc, cmd, fs, args)
+	if code >= 0 {
+		return code
+	}
+	_ = operands
+
+	if *interval < 0 {
+		fmt.Fprintf(rc.Err, "resources system: --interval must not be negative\n")
+		return 1
+	}
+
+	sys, err := resources.Collect(rc.Ctx, resources.Options{Interval: *interval})
+	if err != nil {
+		fmt.Fprintf(rc.Err, "resources system: %v\n", err)
+		return 1
+	}
+
+	if *minFree != "" {
+		cfg, err := resources.ParseDiskFloor(*minFree)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "resources system: %v\n", err)
+			return 1
+		}
+		cfg.Mount = *mountFilter
+		if err := resources.CheckDiskFloor(sys.Disks, cfg); err != nil {
+			fmt.Fprintln(rc.Err, err.Error())
+			return 1
+		}
+		if *quiet {
+			return 0
+		}
+	}
+
+	if *asJSON {
+		b, err := json.MarshalIndent(sys, "", "  ")
+		if err != nil {
+			fmt.Fprintf(rc.Err, "resources system: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(rc.Out, string(b))
+		return 0
+	}
+
+	if err := resources.Render(rc.Out, sys); err != nil {
+		fmt.Fprintf(rc.Err, "resources system: %v\n", err)
+		return 1
+	}
 	return 0
 }

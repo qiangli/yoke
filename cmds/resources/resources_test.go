@@ -45,3 +45,32 @@ func TestResourcesFleetCommand(t *testing.T) {
 		t.Errorf("SchemaVersion = %q, want %q", env.SchemaVersion, resources.SchemaVersion)
 	}
 }
+
+func TestResourcesSystemCommand(t *testing.T) {
+	rc := &tool.RunContext{
+		Ctx: context.Background(),
+	}
+	var outBuf, errBuf bytes.Buffer
+	rc.Out = &outBuf
+	rc.Err = &errBuf
+
+	// Test basic resources system
+	code := run(rc, []string{"system", "--interval", "0"})
+	if code != 0 {
+		t.Fatalf("resources system exit code = %d, err = %s", code, errBuf.String())
+	}
+	if !strings.Contains(outBuf.String(), "DISK") {
+		t.Errorf("resources system output missing DISK header:\n%s", outBuf.String())
+	}
+
+	// Test resources system --min-free impossible floor fails with actionable alarm
+	outBuf.Reset()
+	errBuf.Reset()
+	code = run(rc, []string{"system", "--interval", "0", "--min-free", "10000000G"})
+	if code == 0 {
+		t.Fatal("expected non-zero exit code for impossible 10000000G floor")
+	}
+	if !strings.Contains(errBuf.String(), "disk floor alarm:") {
+		t.Fatalf("expected stderr to contain 'disk floor alarm:', got: %q", errBuf.String())
+	}
+}
