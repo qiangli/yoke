@@ -26,6 +26,9 @@ const (
 )
 
 func TestMain(m *testing.M) {
+	if os.Getenv(pluginEnv) == "fixture" {
+		fixturePluginMain() // fixture_test.go: the stateful executable fixture
+	}
 	if os.Getenv(pluginEnv) == "echo" {
 		if p := os.Getenv(markerEnv); p != "" {
 			_ = os.WriteFile(p, []byte("ran"), 0o600)
@@ -343,7 +346,11 @@ func TestDestroyWithoutConfirmationRefused(t *testing.T) {
 	}
 }
 
-func TestTemporaryResourceDestroyNoPrompt(t *testing.T) {
+// TestTemporaryResourceDestroyNoPromptAdapter is the adapter-level half:
+// the DO adapter honors a temporary authorization on a resource created as
+// temporary. The dispatcher-level TestTemporaryResourceDestroyNoPrompt
+// (dispatcher_test.go) covers the journaled TTL sweep across all forms.
+func TestTemporaryResourceDestroyNoPromptAdapter(t *testing.T) {
 	fake := fakedo.New(t)
 	a := newDO(t, fake)
 	ttl := &provider.Authorization{Kind: provider.AuthTemporary, ExpiresAt: time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC)}
