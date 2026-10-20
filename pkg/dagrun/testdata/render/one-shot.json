@@ -1,0 +1,142 @@
+[
+  {
+    "apiVersion": "batch/v1",
+    "kind": "Job",
+    "metadata": {
+      "annotations": {
+        "artifact.dhnt.io/darwin-arm64": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "artifact.dhnt.io/linux-amd64": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "artifact.dhnt.io/linux-arm64": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "dhnt.io/command-digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+        "dhnt.io/manifest": "---\nname: run-01jb7cexample0000000000000\ndescription: bashy run manifest for render (generated; do not edit)\ntype: dag\nmetadata:\n  run-kind: one-shot\n  workspace: ws-01jb6zexample0000000000\n  run-id: 01JB7CEXAMPLE0000000000000\n  command:\n    name: render\n    digest: sha256:4444444444444444444444444444444444444444444444444444444444444444\n  artifact:\n    darwin/arm64: sha256:3333333333333333333333333333333333333333333333333333333333333333\n    linux/amd64: sha256:1111111111111111111111111111111111111111111111111111111111111111\n    linux/arm64: sha256:2222222222222222222222222222222222222222222222222222222222222222\n  cwd: ~/docs\n  egress: none\n---\n## run\nVenue: cluster\nDistribution: single\nMatch: kubernetes.io/os=linux\nCPUPerTask: 2\nMemory: 4Gi\nEnv: LANG=C.UTF-8 TZ=UTC\nTimeout: 30m0s\nRetries: 0\nArtifacts: out/report.pdf\n```sh\nsh -c 'for i in 1 2 3; do echo tick $i; sleep 5; done; exit 7'\n```\n"
+      },
+      "labels": {
+        "app.kubernetes.io/managed-by": "bashy",
+        "dhnt.io/command": "render",
+        "dhnt.io/run": "01JB7CEXAMPLE0000000000000",
+        "dhnt.io/workspace": "ws-01jb6zexample0000000000"
+      },
+      "name": "bashy-run-01jb7cexample0000000000000"
+    },
+    "spec": {
+      "activeDeadlineSeconds": 1800,
+      "backoffLimit": 0,
+      "template": {
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "bashy",
+            "dhnt.io/command": "render",
+            "dhnt.io/run": "01JB7CEXAMPLE0000000000000",
+            "dhnt.io/workspace": "ws-01jb6zexample0000000000"
+          }
+        },
+        "spec": {
+          "affinity": {
+            "nodeAffinity": {
+              "requiredDuringSchedulingIgnoredDuringExecution": {
+                "nodeSelectorTerms": [
+                  {
+                    "matchExpressions": [
+                      {
+                        "key": "kubernetes.io/arch",
+                        "operator": "In",
+                        "values": [
+                          "amd64",
+                          "arm64"
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          "automountServiceAccountToken": false,
+          "containers": [
+            {
+              "command": [
+                "bashy",
+                "-c",
+                "sh -c 'for i in 1 2 3; do echo tick $i; sleep 5; done; exit 7'"
+              ],
+              "env": [
+                {
+                  "name": "HOME",
+                  "value": "/home/bashy"
+                },
+                {
+                  "name": "LANG",
+                  "value": "C.UTF-8"
+                },
+                {
+                  "name": "TZ",
+                  "value": "UTC"
+                }
+              ],
+              "image": "registry.example/bashy/bashy:v0.0.0-test",
+              "name": "run",
+              "resources": {
+                "requests": {
+                  "cpu": "2",
+                  "memory": "4Gi"
+                }
+              },
+              "volumeMounts": [
+                {
+                  "mountPath": "/home/bashy",
+                  "name": "home"
+                }
+              ],
+              "workingDir": "/home/bashy/docs"
+            }
+          ],
+          "nodeSelector": {
+            "kubernetes.io/os": "linux"
+          },
+          "restartPolicy": "Never",
+          "tolerations": [
+            {
+              "effect": "NoSchedule",
+              "key": "virtual-kubelet.io/provider",
+              "operator": "Equal",
+              "value": "outpost"
+            }
+          ],
+          "volumes": [
+            {
+              "hostPath": {
+                "path": "/var/lib/bashy/dks/home/ws-01jb6zexample0000000000",
+                "type": "DirectoryOrCreate"
+              },
+              "name": "home"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "apiVersion": "networking.k8s.io/v1",
+    "kind": "NetworkPolicy",
+    "metadata": {
+      "labels": {
+        "app.kubernetes.io/managed-by": "bashy",
+        "dhnt.io/command": "render",
+        "dhnt.io/run": "01JB7CEXAMPLE0000000000000",
+        "dhnt.io/workspace": "ws-01jb6zexample0000000000"
+      },
+      "name": "bashy-run-01jb7cexample0000000000000"
+    },
+    "spec": {
+      "egress": [],
+      "podSelector": {
+        "matchLabels": {
+          "dhnt.io/run": "01JB7CEXAMPLE0000000000000"
+        }
+      },
+      "policyTypes": [
+        "Egress"
+      ]
+    }
+  }
+]
