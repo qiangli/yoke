@@ -153,3 +153,39 @@ func TestDiscoverOffers_DigitalOceanDefaultCatalogStillServed(t *testing.T) {
 		t.Fatalf("default catalog offer = %+v", o)
 	}
 }
+
+func TestDiscoverOffers_DigitalOceanDiskInfoAndUnknownVRAMUnit(t *testing.T) {
+	fake := fakedo.New(t)
+	fake.SetCatalog(
+		[]map[string]any{{"slug": "nyc", "available": true, "sizes": []string{}}},
+		[]map[string]any{
+			{"slug": "gpu-disk", "vcpus": 8, "memory": 65536, "disk": 999, "available": true, "regions": []string{"nyc"},
+				"disk_info": []map[string]any{
+					{"type": "boot", "size": map[string]any{"amount": 720, "unit": "gib"}},
+					{"type": "scratch", "size": map[string]any{"amount": 5, "unit": "tib"}},
+					{"type": "mystery", "size": map[string]any{"amount": 1, "unit": "furlong"}},
+				},
+				"gpu_info": map[string]any{"count": 1, "model": "nvidia_x", "vram": map[string]any{"amount": 80, "unit": "parsecs"}}},
+			{"slug": "gpu-mb", "vcpus": 8, "memory": 65536, "disk": 100, "available": true, "regions": []string{"nyc"},
+				"gpu_info": map[string]any{"count": 1, "model": "nvidia_y", "vram": map[string]any{"amount": 24000, "unit": "mb"}}},
+		})
+	got := discover(t, fake)
+
+	o := got["gpu-disk@nyc/on_demand"]
+	if len(o.Storage) != 2 {
+		t.Fatalf("storage = %+v (unknown-unit disk must be dropped, legacy disk ignored)", o.Storage)
+	}
+	boot, scratch := o.Storage[0], o.Storage[1]
+	if boot.Kind != "boot" || !boot.Persistent || boot.SizeBytes != 720*provider.GiB {
+		t.Fatalf("boot = %+v", boot)
+	}
+	if scratch.Kind != "scratch" || scratch.Persistent || scratch.Attachable || scratch.SizeBytes != 5<<40 {
+		t.Fatalf("scratch = %+v", scratch)
+	}
+	if len(o.Accelerators) != 1 || o.Accelerators[0].MemoryBytes != 0 || o.FitsSingleDevice(1) {
+		t.Fatalf("unknown VRAM unit must not be guessed: %+v", o.Accelerators)
+	}
+	if mb := got["gpu-mb@nyc/on_demand"].Accelerators[0].MemoryBytes; mb != 24000*1_000_000 {
+		t.Fatalf("decimal MB = %d, want exactly 24e9", mb)
+	}
+}

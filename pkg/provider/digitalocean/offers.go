@@ -32,6 +32,14 @@ type doGPUDevice struct {
 	} `json:"vram"`
 }
 
+type doDisk struct {
+	Type string `json:"type"`
+	Size *struct {
+		Amount float64 `json:"amount"`
+		Unit   string  `json:"unit"`
+	} `json:"size"`
+}
+
 type doSize struct {
 	Slug            string   `json:"slug"`
 	VCPUs           int      `json:"vcpus"`
@@ -39,6 +47,7 @@ type doSize struct {
 	Disk            int64    `json:"disk"`     // GiB
 	Transfer        float64  `json:"transfer"` // TB
 	Arch            string   `json:"arch"`
+	DiskInfo        []doDisk `json:"disk_info"`
 	PriceMonthly    *float64 `json:"price_monthly"`
 	PriceHourly     *float64 `json:"price_hourly"`
 	SpotPriceHourly *float64 `json:"spot_price_hourly"`
@@ -51,16 +60,61 @@ type doSize struct {
 	} `json:"gpu_info"`
 }
 
+// unitBytes converts an exact known unit to bytes; ok is false for any
+// unit it does not know, so callers never guess a size.
+func unitBytes(amount float64, unit string) (int64, bool) {
+	var mult float64
+	switch strings.ToLower(strings.TrimSpace(unit)) {
+	case "kib":
+		mult = 1 << 10
+	case "mib":
+		mult = 1 << 20
+	case "gib":
+		mult = 1 << 30
+	case "tib":
+		mult = 1 << 40
+	case "kb":
+		mult = 1e3
+	case "mb":
+		mult = 1e6
+	case "gb":
+		mult = 1e9
+	case "tb":
+		mult = 1e12
+	default:
+		return 0, false
+	}
+	return int64(amount * mult), true
+}
+
 func vramBytes(d doGPUDevice) int64 {
 	if d.VRAM == nil {
 		return 0
 	}
-	switch strings.ToLower(d.VRAM.Unit) {
-	case "mib", "mb":
-		return int64(d.VRAM.Amount * float64(1<<20))
-	default: // gib
-		return int64(d.VRAM.Amount * float64(provider.GiB))
+	n, _ := unitBytes(d.VRAM.Amount, d.VRAM.Unit)
+	return n
+}
+
+// storage prefers disk_info (boot/local persist; scratch and unknown types do
+// not claim persistence) and falls back to the legacy disk size. Disks with an
+// unknown size unit are omitted rather than guessed.
+func (s doSize) storage() []provider.Storage {
+	if len(s.DiskInfo) == 0 {
+		return []provider.Storage{{Kind: "boot", SizeBytes: s.Disk * provider.GiB, Persistent: true}}
 	}
+	var out []provider.Storage
+	for _, d := range s.DiskInfo {
+		if d.Size == nil {
+			continue
+		}
+		n, ok := unitBytes(d.Size.Amount, d.Size.Unit)
+		if !ok {
+			continue
+		}
+		kind := strings.ToLower(d.Type)
+		out = append(out, provider.Storage{Kind: kind, SizeBytes: n, Persistent: kind == "boot" || kind == "local"})
+	}
+	return out
 }
 
 func (s doSize) accelerators() []provider.Accelerator {
@@ -155,7 +209,7 @@ func (a *adapter) offers(ctx context.Context, regionsRaw, sizesRaw json.RawMessa
 				CPU:           provider.CPU{Arch: z.Arch, Count: z.VCPUs},
 				MemoryBytes:   z.Memory << 20,
 				Accelerators:  accs,
-				Storage:       []provider.Storage{{Kind: "boot", SizeBytes: z.Disk * provider.GiB, Persistent: true, Attachable: false}},
+				Storage:       z.storage(),
 				Network:       provider.Network{Known: z.Transfer > 0, TransferBytes: int64(z.Transfer * 1e12)},
 				Quota:         quota,
 				Qualification: provider.Qualification{Qualified: true},
