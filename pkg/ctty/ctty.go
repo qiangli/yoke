@@ -71,15 +71,29 @@ var (
 	// ErrNoGUI means no attended GUI askpass channel is available here.
 	ErrNoGUI = errors.New("ctty: no attended GUI available")
 
-	// ErrDeclined means the human was reached and said no — cancelled the dialog
-	// or dismissed it. Distinct from ErrNoGUI: the channel worked, the answer was
-	// "no". A caller must NOT fall through to another channel on this error, or
-	// declining once would just summon a second prompt.
+	// ErrDeclined means the human was reached and said no — the dialog's Cancel
+	// button, or a helper's unambiguous "no". Distinct from ErrNoGUI: the
+	// channel worked, the answer was "no". A caller must NOT fall through to
+	// another channel on this error, or declining once would just summon a
+	// second prompt.
 	ErrDeclined = errors.New("ctty: cancelled by the operator")
 
 	// ErrTimeout means the prompt was displayed and nobody answered in time.
 	// Like ErrDeclined this is a real outcome, not a channel failure.
 	ErrTimeout = errors.New("ctty: timed out waiting for the operator")
+
+	// ErrDismissed means the dialog went away WITHOUT an operator answer and
+	// without positive evidence a human ever saw it: the system dismissed it,
+	// the window server refused to show it, or it was closed by a keyboard
+	// gesture that carries no identity. It is deliberately neither of the two
+	// outcomes above — a decline is an operator ACTION and this is the absence
+	// of one — so a caller treats the rung as failed, never as a human "no".
+	//
+	// This exists because of a measured failure: in a headless managed session
+	// osascript fails the whole dialog with error -128 ("User canceled") within
+	// seconds, without any operator involved. Reporting that as ErrDeclined
+	// turned a channel that reached nobody into a silent cancel.
+	ErrDismissed = errors.New("ctty: the dialog was dismissed without an operator answer")
 )
 
 // Request is one question for the human. The same shape drives every channel, so
@@ -220,8 +234,10 @@ func TTYUsable() bool {
 // Ask puts the request to the human over the chosen channel.
 //
 // It returns ErrNoTTY/ErrNoGUI when the channel is unavailable (the caller should
-// try the next rung) and ErrDeclined/ErrTimeout when the human was reached and did
-// not answer (the caller must NOT retry on another channel — see ErrDeclined).
+// try the next rung), ErrDeclined/ErrTimeout when the human was reached and did
+// not answer (the caller must NOT retry on another channel — see ErrDeclined),
+// and ErrDismissed when the dialog went away without an operator answer (the rung
+// failed; the caller may fall back).
 func Ask(ch Channel, req Request) ([]byte, error) {
 	switch ch {
 	case ChannelTTY:
