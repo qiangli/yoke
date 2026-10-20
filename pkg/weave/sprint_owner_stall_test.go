@@ -221,6 +221,22 @@ func TestSprintOwnerStallReportsStoredLeaseHeartbeat(t *testing.T) {
 	}
 }
 
+func TestSprintOwnerStallUnknownLeaseHeartbeat(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		story *weaveStory
+	}{
+		{name: "nil story"},
+		{name: "nil lease", story: &weaveStory{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sprintOwnerHeartbeat(tc.story); got != "lease heartbeat unknown" {
+				t.Fatalf("heartbeat = %q, want lease heartbeat unknown", got)
+			}
+		})
+	}
+}
+
 // The Sprint 457 reproducer: a hung manager is detected, reported to the
 // thread, the board and the instructing supervisor, and recovered once through
 // the existing stop/start lifecycle with the instruction delivered.

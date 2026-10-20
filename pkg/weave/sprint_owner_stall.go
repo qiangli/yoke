@@ -71,6 +71,9 @@ func recoverStalledSprintOwner(ctx context.Context, s *weaveStory, owner, brief,
 // against, so a reader can tell a fresh stall from a seat that went silent
 // hours ago.
 func sprintOwnerHeartbeat(s *weaveStory) string {
+	if s == nil || s.Lease == nil {
+		return "lease heartbeat unknown"
+	}
 	at := s.Lease.At
 	if at.IsZero() {
 		return "lease heartbeat unknown"
