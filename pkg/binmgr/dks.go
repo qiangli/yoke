@@ -10,7 +10,7 @@ import (
 // a tag also requires reviewing and replacing all of that release's digests.
 const (
 	K3sVersion           = "bashy-v1.37.1+k3s1-11"
-	RuncVersion          = "bashy-v1.5.2-2"
+	RuncVersion          = "bashy-v1.5.2-3"
 	CNIPluginsVersion    = "bashy-v1.5.1-2"
 	MetricsServerVersion = "bashy-v0.9.0-2"
 	TailscaleVersion     = "bashy-v1.104.1-1"
