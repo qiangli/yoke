@@ -133,6 +133,13 @@ jobs:
         shell: bash
         run: ./scripts/ci-test-gate.sh
 
+      # pkg/provider is a nested module (stdlib-only, Go 1.26 for cloudbox), so
+      # the root `go list ./...` above does not include it.
+      - name: Test nested module pkg/provider
+        shell: bash
+        working-directory: pkg/provider
+        run: go vet ./... && go test -count=1 ./...
+
       # End-to-end checks for the bashy apps console over a REAL port: HTTP,
       # WebSocket and the app APIs, with no browser. They cover the plumbing the
       # byte-level tests cannot see — a tile whose path is not mounted, a page
