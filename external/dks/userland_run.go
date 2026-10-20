@@ -28,6 +28,7 @@ import (
 
 	"github.com/qiangli/coreutils/tool"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/qiangli/yoke/pkg/dag"
 	"github.com/qiangli/yoke/pkg/dagrun"
@@ -60,6 +61,12 @@ type runEnv struct {
 	lookupCommand func(name string) (fleet.Command, bool)
 	// getenv reads one exported variable for a bare `--env K`.
 	getenv func(key string) (string, bool)
+	// recordRunKind is a registered record's run.kind ("" = absent =
+	// one-shot).
+	recordRunKind func(rec fleet.Command) dagrun.RunKind
+	// stdinIsTerminal reports whether this process's stdin is a terminal,
+	// which makes a --session run interactive.
+	stdinIsTerminal func() bool
 	// image reads $BASHY_DKS_IMAGE ("" = unset); the release's own image
 	// is the fallback after it.
 	image func() string
@@ -118,6 +125,8 @@ func defaultRunEnv(env *userlandEnv) *runEnv {
 		lookupCommand:    func(name string) (fleet.Command, bool) { return fleet.New().Command(name) },
 		getenv:           os.LookupEnv,
 		image:            func() string { return strings.TrimSpace(os.Getenv(imageEnvVar)) },
+		recordRunKind:    fleetRecordRunKind,
+		stdinIsTerminal:  func() bool { return term.IsTerminal(int(os.Stdin.Fd())) },
 		now:              time.Now,
 		sleep:            sleepContext,
 	}
@@ -135,6 +144,8 @@ func newRunCmds(env *runEnv) []*cobra.Command {
 // runOptions are the flags of one `dks run`.
 type runOptions struct {
 	detach  bool
+	session bool
+	tty     bool
 	emit    string
 	cpu     int
 	memory  string
@@ -147,7 +158,7 @@ type runOptions struct {
 func newUserlandRunCmd(env *runEnv) *cobra.Command {
 	var o runOptions
 	cmd := &cobra.Command{
-		Use:   "run [--detach] [--cpu N --memory Q] [--env K[=V]]... -- <cmd> [args...]",
+		Use:   "run [--detach | --session [--tty]] [--cpu N --memory Q] [--env K[=V]]... -- <cmd> [args...]",
 		Short: "Run a command as a scheduled workload in the selected workspace",
 		Long: `run schedules one shipped or registered command in the selected workspace
 and waits for it to finish:
@@ -155,6 +166,13 @@ and waits for it to finish:
   bashy dks run -- make test        wait; exit 0 on success, 1 on failure
   bashy dks run --detach -- make    print the run id and return at once
   bashy dks run --env CI -- make    carry an exported variable (repeatable)
+  bashy dks run --session -- agent  start a detachable session, print its id
+                                    and return; 'bashy dks attach <id>' joins it
+
+A registered command runs as its record's run.kind (absent = one-shot); a
+shipped command runs one-shot. --session runs the command as a session:
+interactive when stdin is a terminal or --tty is given, long-running
+otherwise. A session is always detached at start.
 
 Only variables named with --env travel; nothing else of this environment
 does. Without a selected workspace, with an unknown command, an unreachable
@@ -171,6 +189,8 @@ nothing.`,
 	f := cmd.Flags()
 	f.SetInterspersed(false) // the first word is the command: its flags are its own
 	f.BoolVar(&o.detach, "detach", false, "print the run id and return without waiting")
+	f.BoolVar(&o.session, "session", false, "run as a detachable session; print 'session <id>' and return")
+	f.BoolVar(&o.tty, "tty", false, "with --session: an interactive session even when stdin is not a terminal")
 	f.StringVar(&o.emit, "emit", "", "print the run manifest (manifest) or the rendered objects instead of applying")
 	_ = f.MarkHidden("emit") // the escape hatch stays off the zero-ceremony path
 	f.IntVar(&o.cpu, "cpu", 0, "whole CPUs to request")
@@ -202,7 +222,11 @@ func (env *runEnv) run(cmd *cobra.Command, o runOptions, args []string) error {
 	if err != nil {
 		return fail(err)
 	}
-	ref, err := env.resolveCommand(args[0])
+	ref, recordKind, err := env.resolveCommand(args[0])
+	if err != nil {
+		return fail(err)
+	}
+	kind, err := env.runKind(o, ref.Name, recordKind)
 	if err != nil {
 		return fail(err)
 	}
@@ -219,7 +243,7 @@ func (env *runEnv) run(cmd *cobra.Command, o runOptions, args []string) error {
 		Cwd:         ctxRec.Cwd,
 		Env:         envVars,
 		Venue:       dag.VenueCluster,
-		Run:         dagrun.RunSpec{Resources: dagrun.Resources{CPU: o.cpu, Memory: o.memory}},
+		Run:         dagrun.RunSpec{Kind: kind, Resources: dagrun.Resources{CPU: o.cpu, Memory: o.memory}},
 	})
 	if err != nil {
 		return fail(err)
@@ -263,6 +287,11 @@ func (env *runEnv) run(cmd *cobra.Command, o runOptions, args []string) error {
 	if _, err := client.Apply(cmd.Context(), manifest, class); err != nil {
 		return fail(planeError(ctxRec, err))
 	}
+	if isSession(kind) {
+		// The session id is the run id the attach/logs verbs take.
+		fmt.Fprintf(cmd.OutOrStdout(), "session %s\n", runID)
+		return nil
+	}
 	if o.detach {
 		fmt.Fprintln(cmd.OutOrStdout(), runID)
 		return nil
@@ -271,6 +300,37 @@ func (env *runEnv) run(cmd *cobra.Command, o runOptions, args []string) error {
 		runID, workspaceDisplay(ctxRec))
 	return env.wait(cmd, client, ctxRec, runID, o.timeout)
 }
+
+// runKind resolves the run kind: the record's run.kind (absent =
+// one-shot), which --session turns into a session — interactive under a
+// terminal or --tty, long-running otherwise. A service is never a session.
+func (env *runEnv) runKind(o runOptions, name string, recordKind dagrun.RunKind) (dagrun.RunKind, error) {
+	if o.tty && !o.session {
+		return "", errors.New("--tty needs --session — nothing ran")
+	}
+	if !o.session {
+		return recordKind, nil
+	}
+	switch recordKind {
+	case dagrun.RunService:
+		return "", fmt.Errorf("command %s has run.kind service, which is deployed, not run as a session — nothing ran", name)
+	case dagrun.RunInteractive, dagrun.RunLongRunning:
+		return recordKind, nil
+	}
+	if o.tty || env.stdinIsTerminal() {
+		return dagrun.RunInteractive, nil
+	}
+	return dagrun.RunLongRunning, nil
+}
+
+func isSession(k dagrun.RunKind) bool {
+	return k == dagrun.RunInteractive || k == dagrun.RunLongRunning
+}
+
+// fleetRecordRunKind is a registered record's run.kind. The command record
+// carries no `run:` block yet, so every registered command is one-shot
+// until the registry grows one.
+func fleetRecordRunKind(fleet.Command) dagrun.RunKind { return "" }
 
 // wait polls the workspace's runs until runID reaches a terminal phase or
 // the timeout passes. Succeeded exits 0; failed and timeout exit 1.
@@ -318,7 +378,10 @@ func newUserlandPsCmd(env *runEnv) *cobra.Command {
 		Short: "List the selected workspace's runs",
 		Long: `ps lists the runs of the selected workspace, oldest first:
 
-  RUN  COMMAND  PHASE  AGE  EXECUTOR`,
+  RUN  KIND  COMMAND  PHASE  AGE  EXECUTOR
+
+KIND is one-shot, interactive or long-running; a session's PHASE is its
+pod's phase.`,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -339,22 +402,83 @@ func newUserlandPsCmd(env *runEnv) *cobra.Command {
 			if err != nil {
 				return fail(planeError(ctxRec, err))
 			}
-			writeRuns(cmd.OutOrStdout(), runs, ctxRec.WorkspaceID, env.now())
+			kinds, err := sessionKinds(cmd.Context(), client, ctxRec.WorkspaceID, runs)
+			if err != nil {
+				return fail(planeError(ctxRec, err))
+			}
+			writeRuns(cmd.OutOrStdout(), runs, kinds, ctxRec.WorkspaceID, env.now())
 			return nil
 		},
 	}
 }
 
+// sessionKinds reads the run kind of every bare-Pod run (a session) from
+// the manifest annotation render wrote on it. A Job is one-shot and needs no
+// read, so a workspace with no session costs no extra plane call.
+func sessionKinds(ctx context.Context, client *cluster.Client, workspaceID string, runs []cluster.RunStatus) (map[string]dagrun.RunKind, error) {
+	hasPod := false
+	for _, r := range runs {
+		if r.Workspace == workspaceID && r.Kind == "Pod" {
+			hasPod = true
+			break
+		}
+	}
+	if !hasPod {
+		return nil, nil
+	}
+	if !validLabelValue(workspaceID) {
+		return nil, fmt.Errorf("workspace id %q is not a label-safe id", workspaceID)
+	}
+	argv := []string{"kubectl"}
+	if client.Context != "" {
+		argv = append(argv, "--context", client.Context)
+	}
+	sel := dagrun.LabelManagedBy + "=" + dagrun.ManagedByBashy + "," + dagrun.LabelWorkspace + "=" + workspaceID
+	argv = append(argv, "get", "pods", "-l", sel, "-o", "json")
+	stdout, stderr, exit, err := client.Runner.Run(ctx, argv, nil)
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("kubectl did not run (%v): %w", err, dag.ErrWorkerUnreachable)
+	case exit != 0:
+		return nil, fmt.Errorf("%w: kubectl get pods exited %d: %s", cluster.ErrPlaneRejected, exit, strings.TrimSpace(string(stderr)))
+	}
+	var list podList
+	if err := json.Unmarshal(stdout, &list); err != nil {
+		return nil, fmt.Errorf("parse kubectl get pods output: %w", err)
+	}
+	kinds := map[string]dagrun.RunKind{}
+	for _, it := range list.Items {
+		id := it.Metadata.Labels[dagrun.LabelRun]
+		text := it.Metadata.Annotations[dagrun.AnnotManifest]
+		if id == "" || text == "" {
+			continue
+		}
+		if m, err := dagrun.ParseManifest([]byte(text)); err == nil {
+			kinds[id] = m.Meta.RunKind
+		}
+	}
+	return kinds, nil
+}
+
+// runKindColumn is the KIND of one run: a Job is one-shot, a session Pod is
+// the kind its manifest names, "-" when that is unreadable.
+func runKindColumn(r cluster.RunStatus, kinds map[string]dagrun.RunKind) string {
+	if r.Kind == "Job" {
+		return string(dagrun.RunOneShot)
+	}
+	return orDash(string(kinds[r.RunID]))
+}
+
 // writeRuns prints the runs of one workspace in run-id order (ULIDs, so
 // oldest first). A run labelled for another workspace is never shown.
-func writeRuns(w io.Writer, runs []cluster.RunStatus, workspaceID string, now time.Time) {
+func writeRuns(w io.Writer, runs []cluster.RunStatus, kinds map[string]dagrun.RunKind, workspaceID string, now time.Time) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "RUN\tCOMMAND\tPHASE\tAGE\tEXECUTOR")
+	fmt.Fprintln(tw, "RUN\tKIND\tCOMMAND\tPHASE\tAGE\tEXECUTOR")
 	for _, r := range runs {
 		if r.Workspace != workspaceID {
 			continue
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", r.RunID, orDash(r.Command), r.Phase, runAge(r.RunID, now), r.Kind+"/"+r.Name)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", r.RunID, runKindColumn(r, kinds), orDash(r.Command), r.Phase, runAge(r.RunID, now), r.Kind+"/"+r.Name)
 	}
 	_ = tw.Flush()
 }
@@ -436,23 +560,29 @@ func (env *runEnv) planeClient(ctxRec dagrun.Context) (*cluster.Client, error) {
 // resolveCommand maps argv[0] to its identity: a builtin shipped in this
 // binary is the bashy release; a registered command is its record digest
 // plus its pinned artifacts. Anything else is unknown and runs nowhere.
-func (env *runEnv) resolveCommand(name string) (dagrun.CommandRef, error) {
+// The kind is the registered record's run.kind; a shipped command's is ""
+// (one-shot).
+func (env *runEnv) resolveCommand(name string) (dagrun.CommandRef, dagrun.RunKind, error) {
 	if env.isShipped(name) {
 		rel, err := env.release()
 		if err != nil {
-			return dagrun.CommandRef{}, fmt.Errorf("command %s: bashy release identity: %w — nothing ran", name, err)
+			return dagrun.CommandRef{}, "", fmt.Errorf("command %s: bashy release identity: %w — nothing ran", name, err)
 		}
 		arts, err := env.shippedArtifacts(name, rel)
 		if err != nil {
-			return dagrun.CommandRef{}, fmt.Errorf("command %s: %w — nothing ran", name, err)
+			return dagrun.CommandRef{}, "", fmt.Errorf("command %s: %w — nothing ran", name, err)
 		}
-		return dagrun.CommandRef{Name: name, Digest: rel.SHA256, Artifacts: arts}, nil
+		return dagrun.CommandRef{Name: name, Digest: rel.SHA256, Artifacts: arts}, "", nil
 	}
 	rec, ok := env.lookupCommand(name)
 	if !ok {
-		return dagrun.CommandRef{}, fmt.Errorf("unknown command %q: neither shipped with bashy nor registered ('bashy commands' lists them) — nothing ran", name)
+		return dagrun.CommandRef{}, "", fmt.Errorf("unknown command %q: neither shipped with bashy nor registered ('bashy commands' lists them) — nothing ran", name)
 	}
-	return registeredRef(rec)
+	ref, err := registeredRef(rec)
+	if err != nil {
+		return dagrun.CommandRef{}, "", err
+	}
+	return ref, env.recordRunKind(rec), nil
 }
 
 // registeredRef is a registered command's identity: the sha256 of its
