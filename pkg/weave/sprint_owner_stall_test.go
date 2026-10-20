@@ -205,6 +205,38 @@ func announcedStall(c *supervisionCapture) bool {
 	return false
 }
 
+func TestSprintOwnerStallReportsStoredLeaseHeartbeat(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("BASHY_HOME", t.TempDir())
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+	const holder = "manager"
+	if err := room.Join(room.Card{ID: room.AgentClaimID(holder), Nick: holder,
+		PID: os.Getpid(), Caps: []string{room.CapInboxDelivery}}); err != nil {
+		t.Fatal(err)
+	}
+	s := &weaveStory{Lease: &weaveStoryLease{Holder: holder, At: time.Now().Add(-40 * time.Minute)}}
+	if got := sprintOwnerHeartbeat(s); !strings.Contains(got, "last lease heartbeat 40m") {
+		t.Fatalf("stall report heartbeat = %q, want stored beat 40m ago", got)
+	}
+}
+
+func TestSprintOwnerStallUnknownLeaseHeartbeat(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		story *weaveStory
+	}{
+		{name: "nil story"},
+		{name: "nil lease", story: &weaveStory{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sprintOwnerHeartbeat(tc.story); got != "lease heartbeat unknown" {
+				t.Fatalf("heartbeat = %q, want lease heartbeat unknown", got)
+			}
+		})
+	}
+}
+
 // The Sprint 457 reproducer: a hung manager is detected, reported to the
 // thread, the board and the instructing supervisor, and recovered once through
 // the existing stop/start lifecycle with the instruction delivered.

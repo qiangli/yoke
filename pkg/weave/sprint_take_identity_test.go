@@ -22,6 +22,7 @@ func takeFixture(t *testing.T, owner string) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("BASHY_HOME", t.TempDir())
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	t.Setenv("BASHY_SPRINT_DIR", "")
 	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
 	t.Setenv("BASHY_MB_DIR", t.TempDir())
@@ -130,6 +131,11 @@ func TestStaleSeatIsRecoverableByTheSameInstanceOnANewSession(t *testing.T) {
 	}
 	if after.Lease.Session != "sha256:resumed-session" || after.Lease.Instance != instance {
 		t.Fatalf("recovery did not record the resuming session: %+v", after.Lease)
+	}
+	last := after.Thread[len(after.Thread)-1]
+	if strings.Contains(last.Body, "took STALE conductor lease") ||
+		!strings.Contains(last.Body, "resumed own conductor lease") {
+		t.Fatalf("self take recorded %q, want a resume without stale recovery", last.Body)
 	}
 }
 

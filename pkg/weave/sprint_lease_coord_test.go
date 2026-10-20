@@ -2,13 +2,63 @@ package weave
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/qiangli/yoke/pkg/policy/coord"
 	"github.com/qiangli/yoke/pkg/principal"
+	"github.com/qiangli/yoke/pkg/role"
+	"github.com/qiangli/yoke/pkg/room"
 )
+
+func TestManagedManagerKeepsLeaseLiveDuringLongTurn(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("BASHY_HOME", t.TempDir())
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+	const holder = "manager"
+	if err := room.Join(room.Card{ID: room.AgentClaimID(holder), Nick: holder,
+		PID: os.Getpid(), Caps: []string{room.CapInboxDelivery}}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 20, 4, 0, 0, 0, time.UTC)
+	s := &weaveStory{ID: 98, Lease: &weaveStoryLease{Holder: holder,
+		At: now.Add(-SprintLeaseTTL - time.Minute)}}
+	if got := s.seatAt(now).Live(now); got != role.LivenessLive {
+		t.Fatalf("live managed manager with an old sprint verb has lease %s, want live", got)
+	}
+	s.Lease.At = time.Now().Add(-SprintLeaseTTL - time.Minute)
+	if err := sprintLeaseAcquire(s, "successor", false); err == nil {
+		t.Fatal("successor recovered a lease held by a live managed manager")
+	}
+}
+
+func TestDeadManagedManagerLeaseCanBeRecovered(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("BASHY_HOME", t.TempDir())
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+	if err := room.Join(room.Card{ID: room.AgentClaimID("former"), Nick: "former",
+		PID: retiredPID(t), Caps: []string{room.CapInboxDelivery}}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 20, 4, 0, 0, 0, time.UTC)
+	s := &weaveStory{ID: 98, Lease: &weaveStoryLease{Holder: "former",
+		At: now.Add(-SprintLeaseTTL - time.Minute)}}
+	if got := s.seatAt(now).Live(now); got != role.LivenessLapsed {
+		t.Fatalf("dead manager lease = %s, want lapsed", got)
+	}
+	// An old beat without a live room member must remain recoverable.
+	s.Lease.At = time.Now().Add(-SprintLeaseTTL - time.Minute)
+	if err := sprintLeaseAcquire(s, "successor", false); err != nil {
+		t.Fatalf("successor could not recover dead manager lease: %v", err)
+	}
+	if s.Lease.Holder != "successor" {
+		t.Fatalf("holder = %q, want successor", s.Lease.Holder)
+	}
+}
 
 func mutateSprintCard(t *testing.T, id int64, fn func(s *weaveStory)) {
 	t.Helper()

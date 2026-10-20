@@ -286,16 +286,8 @@ func (sprintSource) Load(_ context.Context, b *Board, o Options) error {
 			// `bashy agent` and this board all grade the SAME lease, and a board
 			// ageing it on its own clock reports a conductor the verbs still
 			// consider live. That constant is exported for exactly this reason.
-			s.LeaseStale = o.Now.Sub(x.Lease.At) > weave.SprintLeaseTTL
-			// Same reason, one step further: a beat is only as good as the
-			// process that wrote it. When the lease names the foreground watch
-			// that was holding the seat and that process is gone, the beat is
-			// evidence about a moment, not about now — and the board would
-			// otherwise print a live conductor for the rest of the TTL, which
-			// is the disagreement the comment above exists to prevent.
-			if x.Lease.AttachedPID > 0 && !room.PidAlive(x.Lease.AttachedPID) {
-				s.LeaseStale = true
-			}
+			beat := weave.SprintLeaseEffectiveHeartbeat(x.Lease.Holder, x.Lease.At, x.Lease.AttachedPID, o.Now)
+			s.LeaseStale = beat.IsZero() || o.Now.Sub(beat) > weave.SprintLeaseTTL
 		}
 		b.Sprints = append(b.Sprints, s)
 	}
