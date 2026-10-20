@@ -1,0 +1,54 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {"name": "bashy-run-runjobactive", "labels": {"app.kubernetes.io/managed-by": "bashy", "dhnt.io/workspace": "ws-01jb6zexample0000000000", "dhnt.io/run": "RUNJOBACTIVE", "dhnt.io/command": "render"}},
+      "status": {"active": 1, "ready": 1}
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {"name": "bashy-run-runjobactive-x7k2p", "labels": {"app.kubernetes.io/managed-by": "bashy", "dhnt.io/workspace": "ws-01jb6zexample0000000000", "dhnt.io/run": "RUNJOBACTIVE", "dhnt.io/command": "render", "job-name": "bashy-run-runjobactive"}, "ownerReferences": [{"apiVersion": "batch/v1", "kind": "Job", "name": "bashy-run-runjobactive", "controller": true}]},
+      "status": {"phase": "Running"}
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {"name": "bashy-run-runcomplete", "labels": {"app.kubernetes.io/managed-by": "bashy", "dhnt.io/workspace": "ws-01jb6zexample0000000000", "dhnt.io/run": "RUNCOMPLETE", "dhnt.io/command": "render"}},
+      "status": {"succeeded": 1, "conditions": [{"type": "SuccessCriteriaMet", "status": "True"}, {"type": "Complete", "status": "True"}]}
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {"name": "bashy-run-runcomplete-q9z4m", "labels": {"app.kubernetes.io/managed-by": "bashy", "dhnt.io/workspace": "ws-01jb6zexample0000000000", "dhnt.io/run": "RUNCOMPLETE", "dhnt.io/command": "render"}, "ownerReferences": [{"apiVersion": "batch/v1", "kind": "Job", "name": "bashy-run-runcomplete", "controller": true}]},
+      "status": {"phase": "Succeeded"}
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {"name": "bashy-run-runfailed", "labels": {"app.kubernetes.io/managed-by": "bashy", "dhnt.io/workspace": "ws-01jb6zexample0000000000", "dhnt.io/run": "RUNFAILED", "dhnt.io/command": "render"}},
+      "status": {"failed": 1, "conditions": [{"type": "FailureTarget", "status": "True"}, {"type": "Failed", "status": "True", "reason": "BackoffLimitExceeded"}]}
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {"name": "bashy-run-runjobnew", "labels": {"app.kubernetes.io/managed-by": "bashy", "dhnt.io/workspace": "ws-01jb6zexample0000000000", "dhnt.io/run": "RUNJOBNEW", "dhnt.io/command": "render"}},
+      "status": {}
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {"name": "bashy-run-runsession", "labels": {"app.kubernetes.io/managed-by": "bashy", "dhnt.io/workspace": "ws-01jb6zexample0000000000", "dhnt.io/run": "RUNSESSION", "dhnt.io/command": "bashy"}},
+      "status": {"phase": "Running"}
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {"name": "bashy-run-runpodpending", "labels": {"app.kubernetes.io/managed-by": "bashy", "dhnt.io/workspace": "ws-01jb6zexample0000000000", "dhnt.io/run": "RUNPODPENDING", "dhnt.io/command": "agent"}},
+      "status": {"phase": "Pending"}
+    }
+  ]
+}

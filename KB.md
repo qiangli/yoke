@@ -2,9 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-
-- [repo/page] resource watch: install and operate the host resource watcher — How to install, tune and read bashy resource watch — use when a host needs disk/memory/CPU/GPU/network threshold alarms or when auto-registered host resources appear in resource list `bashy resource watch` samples this host's registered resources and  (kb:resource-watch-install-and-operate-the-host-resource-watcher)
-- [repo/page] Agy model-door text lives in step updates — For cligw stdin-stream-json workers, extract only agent_response step_update.text_delta and use result.response only when no deltas arrived. Select a fresh Agy project explicitly; cwd alone can reuse remembered context. Keep raw provider stderr out of HTTP headers. See docs/validation/cligw  (kb:agy-model-door-text-lives-in-step-updates)
+- [repo/page] Seed effects must cover the atlas effects of every command they run — A usage-probe seed's Effects: line becomes advice.WithCap in the snippet runner, and every command the body dispatches is classified by atlas.Lookup — fetch is read+net, so a [net]-only balance seed died 126 (effect cap denied). WHEN authori  (kb:seed-effects-must-cover-the-atlas-effects-of-every-command-they)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 
