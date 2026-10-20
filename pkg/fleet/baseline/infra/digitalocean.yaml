@@ -1,0 +1,21 @@
+kind: infra
+name: digitalocean
+form: declarative
+version: "1"
+protocol_version: provider/v1
+summary: DigitalOcean reference adapter (built-in; interpreted by the linked-in engine, never spawned)
+builtin: true
+capabilities: [validate, capacity, plan, create, inspect, list, start, stop, destroy]
+declarative:
+  endpoints:
+    droplets: /v2/droplets
+  lifecycle:
+    validate: {endpoint: /v2/account, method: GET}
+    capacity: {endpoint: /v2/regions, method: GET}
+    plan: {endpoint: /v2/droplets, method: GET}
+    create: {endpoint: /v2/droplets, method: POST}
+    inspect: {endpoint: /v2/droplets/{id}, method: GET}
+    list: {endpoint: /v2/droplets, method: GET}
+    start: {endpoint: /v2/droplets/{id}/actions, method: POST}
+    stop: {endpoint: /v2/droplets/{id}/actions, method: POST}
+    destroy: {endpoint: /v2/droplets/{id}, method: DELETE}
