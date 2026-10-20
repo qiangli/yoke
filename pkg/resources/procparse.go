@@ -101,9 +101,27 @@ func parseNetDev(r io.Reader) []netCounter {
 		if err1 != nil || err2 != nil {
 			continue
 		}
-		out = append(out, netCounter{name: name, rxBytes: rx, txBytes: tx})
+		nc := netCounter{name: name, rxBytes: rx, txBytes: tx}
+		// Columns 1-3 are rx packets, errors, drops; 9-11 the tx triple.
+		if len(fields) >= 12 {
+			nc.rxPackets, _ = strconv.ParseUint(fields[1], 10, 64)
+			nc.rxErrors, _ = strconv.ParseUint(fields[2], 10, 64)
+			nc.rxErrors += dropOrZero(fields[3])
+			nc.txPackets, _ = strconv.ParseUint(fields[9], 10, 64)
+			nc.txErrors, _ = strconv.ParseUint(fields[10], 10, 64)
+			nc.txErrors += dropOrZero(fields[11])
+		}
+		out = append(out, nc)
 	}
 	return out
+}
+
+func dropOrZero(s string) uint64 {
+	v, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return v
 }
 
 // parseDiskstats reads /proc/diskstats. Fields 3 and 7 (0-based, after the

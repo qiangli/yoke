@@ -31,6 +31,15 @@ func sampleCounters() (counters, error) {
 	if f, err := os.Open(filepath.Join(procRoot, "net", "dev")); err == nil {
 		c.net = parseNetDev(f)
 		f.Close()
+		// Link speed is one small sysfs read per interface; unknown or
+		// disconnected links report nothing and the watcher skips them.
+		for i := range c.net {
+			if b, err := os.ReadFile(filepath.Join(sysRoot, "class", "net", c.net[i].name, "speed")); err == nil {
+				if v, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil && v > 0 {
+					c.net[i].linkMbps = v
+				}
+			}
+		}
 	} else {
 		c.warnings = append(c.warnings, "network: "+err.Error())
 	}

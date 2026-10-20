@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"text/tabwriter"
 
@@ -86,6 +87,7 @@ func newResourceAdd() *cobra.Command {
 	var kind, title, notes, ttl, mode string
 	var file string
 	var aliases, guards []string
+	var watch, rmWatch []string
 	c := &cobra.Command{
 		Use:   "add (-f FILE|- | NAME --kind KIND [--title T] [MEMBER...])",
 		Short: "Register a resource: a name for something agents must not share",
@@ -142,6 +144,9 @@ func newResourceAdd() *cobra.Command {
 				Name: args[0], Kind: kind, Members: append([]string(nil), args[1:]...),
 				Title: title, Notes: notes, Aliases: aliases, TTL: ttl, Mode: mode, Guard: guards,
 			}
+			if err := applyWatchFlags(&rec, watch, nil); err != nil {
+				return err
+			}
 			if err := rec.Validate(); err != nil {
 				return err
 			}
@@ -165,6 +170,8 @@ func newResourceAdd() *cobra.Command {
 	c.Flags().StringVar(&mode, "mode", "", "narrow the kind's claim modes to one: lease, attached or announce")
 	c.Flags().StringArrayVar(&aliases, "alias", nil, "alternate accepted name (repeatable)")
 	c.Flags().StringArrayVar(&guards, "guard", nil, "argv prefix another lane enforces (repeatable; stored verbatim)")
+	c.Flags().StringArrayVar(&watch, "watch", nil, "resource-watch override k=v, e.g. warn floor or threshold (repeatable)")
+	c.Flags().StringArrayVar(&rmWatch, "rm-watch", nil, "drop a stored resource-watch override key (repeatable)")
 	return c
 }
 
@@ -293,6 +300,9 @@ func newResourceShow() *cobra.Command {
 			if len(rec.Guard) > 0 {
 				fmt.Fprintf(out, "guard:   %s\n", strings.Join(rec.Guard, " "))
 			}
+			if len(rec.Watch) > 0 {
+				fmt.Fprintf(out, "watch:   %s\n", formatWatchMap(rec.Watch))
+			}
 			fmt.Fprintf(out, "ring:    %s\n", rec.Ring)
 			return nil
 		},
@@ -304,7 +314,7 @@ func newResourceShow() *cobra.Command {
 
 func newResourceSet() *cobra.Command {
 	var kind, title, notes, ttl, mode string
-	var members, rmMembers, addAliases, rmAliases, guards, rmGuards []string
+	var members, rmMembers, addAliases, rmAliases, guards, rmGuards, watch, rmWatch []string
 	c := &cobra.Command{
 		Use:           "set NAME [--kind K] [--title T] [--member M]... [--rm-member M]... [--add-alias A]... [--rm-alias A]... [--guard P]... [--rm-guard P]...",
 		Short:         "Modify a resource's record",
@@ -340,9 +350,13 @@ func newResourceSet() *cobra.Command {
 			rec.Members = mergeResourceValues(rec.Members, members, rmMembers)
 			rec.Aliases = mergeResourceValues(rec.Aliases, addAliases, rmAliases)
 			rec.Guard = mergeResourceValues(rec.Guard, guards, rmGuards)
+			if err := applyWatchFlags(&rec, watch, rmWatch); err != nil {
+				return err
+			}
+			watchChanged := len(watch) > 0 || len(rmWatch) > 0
 			if cmd.Flags().Changed("kind") || cmd.Flags().Changed("title") || cmd.Flags().Changed("notes") ||
 				cmd.Flags().Changed("ttl") || cmd.Flags().Changed("mode") || len(members) > 0 || len(rmMembers) > 0 ||
-				len(addAliases) > 0 || len(rmAliases) > 0 || len(guards) > 0 || len(rmGuards) > 0 {
+				len(addAliases) > 0 || len(rmAliases) > 0 || len(guards) > 0 || len(rmGuards) > 0 || watchChanged {
 				for _, n := range append([]string{rec.Name}, rec.Aliases...) {
 					if holder, ok := cat.Resource(n); ok && holder.Name != rec.Name {
 						return fmt.Errorf("resource: %q already belongs to resource %q", n, holder.Name)
@@ -370,7 +384,52 @@ func newResourceSet() *cobra.Command {
 	c.Flags().StringArrayVar(&rmAliases, "rm-alias", nil, "drop an alternate accepted name (repeatable)")
 	c.Flags().StringArrayVar(&guards, "guard", nil, "store an argv prefix another lane enforces (repeatable)")
 	c.Flags().StringArrayVar(&rmGuards, "rm-guard", nil, "drop a stored guard prefix (repeatable)")
+	c.Flags().StringArrayVar(&watch, "watch", nil, "resource-watch override k=v (repeatable: disk-free-warn=100G, cpu-warn=90, enabled=false, ...)")
+	c.Flags().StringArrayVar(&rmWatch, "rm-watch", nil, "drop a stored resource-watch override key (repeatable)")
 	return c
+}
+
+// applyWatchFlags merges --watch/--rm-watch into a record's Watch map,
+// validating each key=value with the watcher's own vocabulary.
+func applyWatchFlags(rec *fleet.Resource, add, rm []string) error {
+	for _, kv := range add {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			return fmt.Errorf("resource: --watch %q: want key=value", kv)
+		}
+		k = strings.TrimSpace(k)
+		v = strings.TrimSpace(v)
+		if err := ValidateWatchOverride(k, v); err != nil {
+			return fmt.Errorf("resource: --watch %q: %w", kv, err)
+		}
+		if rec.Watch == nil {
+			rec.Watch = map[string]string{}
+		}
+		rec.Watch[k] = v
+	}
+	for _, k := range rm {
+		if rec.Watch != nil {
+			delete(rec.Watch, strings.TrimSpace(k))
+		}
+	}
+	if rec.Watch != nil && len(rec.Watch) == 0 {
+		rec.Watch = nil
+	}
+	return nil
+}
+
+// formatWatchMap renders a watch map deterministically (k=v, sorted).
+func formatWatchMap(m map[string]string) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+m[k])
+	}
+	return strings.Join(parts, " ")
 }
 
 // mergeResourceValues applies an append/remove pair to a record list,

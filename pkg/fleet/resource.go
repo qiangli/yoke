@@ -27,15 +27,16 @@ import (
 // record, and a live claim on it refuses the removal first.
 type Resource struct {
 	RecordLifecycle `yaml:",inline" schema:"-"`
-	Name            string   `yaml:"name" json:"name" doc:"canonical resource name"`
-	Kind            string   `yaml:"kind" json:"kind" doc:"claim kind the resource is held under: a builtin (name, path, repo) or a resourcekind name"`
-	Members         []string `yaml:"members,omitempty" json:"members,omitempty" doc:"what claims on this resource cover: paths, seats, or member strings, depending on the kind"`
-	Title           string   `yaml:"title,omitempty" json:"title,omitempty" doc:"human-facing label"`
-	Notes           string   `yaml:"notes,omitempty" json:"notes,omitempty" doc:"free-form notes"`
-	Aliases         []string `yaml:"aliases,omitempty" json:"aliases,omitempty" doc:"alternate accepted names"`
-	TTL             string   `yaml:"ttl,omitempty" json:"ttl,omitempty" doc:"Go duration overriding the kind's claim TTL; empty means the kind's own"`
-	Mode            string   `yaml:"mode,omitempty" json:"mode,omitempty" doc:"narrows the kind's permitted claim modes to this one; empty means the kind's own"`
-	Guard           []string `yaml:"guard,omitempty" json:"guard,omitempty" doc:"argv prefixes another lane enforces; stored here, never interpreted"`
+	Name            string            `yaml:"name" json:"name" doc:"canonical resource name"`
+	Kind            string            `yaml:"kind" json:"kind" doc:"claim kind the resource is held under: a builtin (name, path, repo) or a resourcekind name"`
+	Members         []string          `yaml:"members,omitempty" json:"members,omitempty" doc:"what claims on this resource cover: paths, seats, or member strings, depending on the kind"`
+	Title           string            `yaml:"title,omitempty" json:"title,omitempty" doc:"human-facing label"`
+	Notes           string            `yaml:"notes,omitempty" json:"notes,omitempty" doc:"free-form notes"`
+	Aliases         []string          `yaml:"aliases,omitempty" json:"aliases,omitempty" doc:"alternate accepted names"`
+	TTL             string            `yaml:"ttl,omitempty" json:"ttl,omitempty" doc:"Go duration overriding the kind's claim TTL; empty means the kind's own"`
+	Mode            string            `yaml:"mode,omitempty" json:"mode,omitempty" doc:"narrows the kind's permitted claim modes to this one; empty means the kind's own"`
+	Guard           []string          `yaml:"guard,omitempty" json:"guard,omitempty" doc:"argv prefixes another lane enforces; stored here, never interpreted"`
+	Watch           map[string]string `yaml:"watch,omitempty" json:"watch,omitempty" doc:"resource-watch overrides (thresholds, floors, sustain, notify-to) layered over the host record and the defaults"`
 
 	Ring assetring.Ring `yaml:"-" json:"ring"`
 }

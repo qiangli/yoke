@@ -74,3 +74,59 @@ func TestResourcesSystemCommand(t *testing.T) {
 		t.Fatalf("expected stderr to contain 'disk floor alarm:', got: %q", errBuf.String())
 	}
 }
+
+func TestResourcesWatchOnce(t *testing.T) {
+	t.Setenv("BASHY_FLEET_DIR", t.TempDir())
+	t.Setenv("BASHY_COORD_DIR", t.TempDir())
+	t.Setenv("BASHY_RESOURCES_DIR", t.TempDir())
+	t.Setenv("BASHY_MB_DIR", t.TempDir())
+
+	prev := resources.WatchSampler
+	resources.WatchSampler = func(context.Context) (*resources.System, error) {
+		return &resources.System{
+			SchemaVersion: resources.SchemaVersion,
+			Host:          "host-a.example",
+			OS:            "darwin",
+			CPU:           resources.CPU{UsagePercent: 3, Source: "ticks"},
+			Memory:        resources.Memory{TotalBytes: 64 << 30, UsedBytes: 19 << 30, UsedPercent: 30},
+			Disks: []resources.Disk{{
+				Mount: "/data", TotalBytes: 500 << 30, UsedBytes: 430 << 30,
+				FreeBytes: 70 << 30, UsedPercent: 86,
+			}},
+			Network: []resources.Interface{{Name: "en0", RxBytes: 1, TxBytes: 1, Up: true}},
+		}, nil
+	}
+	t.Cleanup(func() { resources.WatchSampler = prev })
+
+	rc := &tool.RunContext{Ctx: context.Background()}
+	var outBuf, errBuf bytes.Buffer
+	rc.Out = &outBuf
+	rc.Err = &errBuf
+
+	code := run(rc, []string{"watch", "--once"})
+	if code != 0 {
+		t.Fatalf("resources watch --once exit = %d, err = %s", code, errBuf.String())
+	}
+	if !strings.Contains(errBuf.String(), "registered host-a.example") {
+		t.Errorf("watch --once must auto-register host resources:\n%s", errBuf.String())
+	}
+	// Second run is quiet: idempotent registration, hysteresis not yet met.
+	errBuf.Reset()
+	code = run(rc, []string{"watch", "--once"})
+	if code != 0 {
+		t.Fatalf("second watch --once exit = %d, err = %s", code, errBuf.String())
+	}
+	if strings.Contains(errBuf.String(), "registered ") {
+		t.Errorf("second run re-registered:\n%s", errBuf.String())
+	}
+}
+
+func TestResourcesWatchRejectsZeroInterval(t *testing.T) {
+	rc := &tool.RunContext{Ctx: context.Background()}
+	var outBuf, errBuf bytes.Buffer
+	rc.Out = &outBuf
+	rc.Err = &errBuf
+	if code := run(rc, []string{"watch", "--interval", "0"}); code == 0 {
+		t.Fatal("watch with zero interval and no --once must fail")
+	}
+}
