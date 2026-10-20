@@ -436,7 +436,19 @@ func resourceRequest(o runOptions) string {
 // deleted by run label — nothing ran — and the run exits non-zero naming
 // the scheduler's reason and the request.
 func (env *runEnv) refuseUnschedulable(cmd *cobra.Command, client *cluster.Client, ctxRec dagrun.Context, runID, request, reason string, redact func(string) string) error {
-	msg := "unsatisfied resources: " + reason
+	return env.refuseRun(cmd, client, ctxRec, runID, request, "unsatisfied resources: "+reason, redact)
+}
+
+// refuseCreate is the result for a Job whose controller cannot create its
+// Pod (admission refused it: quota exceeded, request above a limit): no
+// Pod will ever exist, so the run is removed like an unschedulable one.
+func (env *runEnv) refuseCreate(cmd *cobra.Command, client *cluster.Client, ctxRec dagrun.Context, runID, request, reason string, redact func(string) string) error {
+	return env.refuseRun(cmd, client, ctxRec, runID, request, "cannot create pod: "+reason, redact)
+}
+
+// refuseRun deletes a run that cannot run by its run label and exits
+// non-zero naming msg and the request.
+func (env *runEnv) refuseRun(cmd *cobra.Command, client *cluster.Client, ctxRec dagrun.Context, runID, request, msg string, redact func(string) string) error {
 	if request != "" {
 		msg += " (requested " + request + ")"
 	}
@@ -479,6 +491,9 @@ func (env *runEnv) checkScheduled(cmd *cobra.Command, client *cluster.Client, ct
 			if r.Unschedulable != "" {
 				return env.refuseUnschedulable(cmd, client, ctxRec, runID, request, r.Unschedulable, redact)
 			}
+			if reason := jobCreateFailure(cmd.Context(), client, r); reason != "" {
+				return env.refuseCreate(cmd, client, ctxRec, runID, request, reason, redact)
+			}
 			if r.Scheduled || r.Phase == cluster.PhaseSucceeded || r.Phase == cluster.PhaseFailed || r.Phase == cluster.PhaseLost {
 				return nil
 			}
@@ -490,6 +505,58 @@ func (env *runEnv) checkScheduled(cmd *cobra.Command, client *cluster.Client, ct
 			return nil
 		}
 	}
+}
+
+// jobCreateFailure is the API server's message when the run's Job
+// controller failed to create its Pod (a FailedCreate event on the Job),
+// "" otherwise. Only a Pending Job with no bound Pod is asked: once a Pod
+// exists, creation succeeded. The Job's events are read straight through
+// the client's runner; an error reading them is not a finding — the next
+// poll asks again.
+func jobCreateFailure(ctx context.Context, client *cluster.Client, r cluster.RunStatus) string {
+	if r.Kind != "Job" || r.Phase != cluster.PhasePending || r.Scheduled || client == nil || client.Runner == nil {
+		return ""
+	}
+	argv := []string{"kubectl"}
+	if client.Context != "" {
+		argv = append(argv, "--context", client.Context)
+	}
+	argv = append(argv, "get", "events", "--field-selector",
+		"involvedObject.kind=Job,involvedObject.name="+r.Name+",reason=FailedCreate", "-o", "json")
+	out, _, exit, err := client.Runner.Run(ctx, argv, nil)
+	if err != nil || exit != 0 {
+		return ""
+	}
+	var list struct {
+		Items []struct {
+			InvolvedObject struct {
+				Kind string `json:"kind"`
+				Name string `json:"name"`
+			} `json:"involvedObject"`
+			Reason        string `json:"reason"`
+			Message       string `json:"message"`
+			LastTimestamp string `json:"lastTimestamp"`
+			EventTime     string `json:"eventTime"`
+		} `json:"items"`
+	}
+	if json.Unmarshal(out, &list) != nil {
+		return ""
+	}
+	// The latest event wins; RFC 3339 timestamps order as strings.
+	var msg, at string
+	for _, e := range list.Items {
+		if e.Reason != "FailedCreate" || e.InvolvedObject.Kind != "Job" || e.InvolvedObject.Name != r.Name {
+			continue
+		}
+		ts := e.LastTimestamp
+		if ts == "" {
+			ts = e.EventTime
+		}
+		if m := strings.TrimSpace(strings.TrimPrefix(e.Message, "Error creating: ")); m != "" && (msg == "" || ts >= at) {
+			msg, at = m, ts
+		}
+	}
+	return msg
 }
 
 // runKind resolves the run kind: the record's run.kind (absent =
@@ -551,6 +618,9 @@ func (env *runEnv) wait(cmd *cobra.Command, client *cluster.Client, ctxRec dagru
 			phase = r.Phase
 			if r.Unschedulable != "" {
 				return env.refuseUnschedulable(cmd, client, ctxRec, runID, request, r.Unschedulable, redact)
+			}
+			if reason := jobCreateFailure(cmd.Context(), client, r); reason != "" {
+				return env.refuseCreate(cmd, client, ctxRec, runID, request, reason, redact)
 			}
 			switch r.Phase {
 			case cluster.PhaseSucceeded:
