@@ -122,7 +122,7 @@ func DefaultCoachPolicy() CoachPolicy {
 		MaxSteers:       3,
 		EscalateAfter:   2, // 2 generic steers, then escalate to an agent-coach
 		Interrupt:       true,
-		Steer:           "You appear to be repeating work you have already completed. If you already have the answer, STOP investigating and deliver your final result now.",
+		Steer:           DefaultRepeatSteer,
 		PtyWindow:       40,
 		PtyNoveltyFloor: 0.35,
 
@@ -135,10 +135,22 @@ func DefaultCoachPolicy() CoachPolicy {
 }
 
 // Steer messages, per signal. churn/repeat use the policy's Steer.
+//
+// Exported: injected steer sentences are supervisor-provided context, never
+// vendor output. Consumers that classify run logs (quota/throttle watchdogs)
+// consult ReflexSteers as the source of truth instead of copying phrases.
 const (
-	errorRateSteer = "Most of your recent actions are FAILING. The current approach is not working — stop, reconsider whether the goal is achievable as stated, and either try a fundamentally different approach or report the blocker instead of retrying."
-	budgetSteer    = "You have burned a large part of your budget (tokens/quota/time) without converging. If you are exploring options without a plan, STOP and reason about the structure of the problem; then deliver your best result or report clearly what is blocking you."
+	DefaultRepeatSteer = "You appear to be repeating work you have already completed. If you already have the answer, STOP investigating and deliver your final result now."
+	ErrorRateSteer     = "Most of your recent actions are FAILING. The current approach is not working — stop, reconsider whether the goal is achievable as stated, and either try a fundamentally different approach or report the blocker instead of retrying."
+	BudgetSteer        = "You have burned a large part of your budget (tokens/quota/time) without converging. If you are exploring options without a plan, STOP and reason about the structure of the problem; then deliver your best result or report clearly what is blocking you."
 )
+
+// ReflexSteers returns every fixed sentence the LLM-free reflex coach can
+// inject into a run: the default repeat steer plus the per-signal steers.
+// A custom CoachPolicy.Steer is caller-provided and cannot be enumerated.
+func ReflexSteers() []string {
+	return []string{DefaultRepeatSteer, ErrorRateSteer, BudgetSteer}
+}
 
 // SteerRecord is one intervention: the signal that triggered it and what was said.
 type SteerRecord struct {
@@ -552,23 +564,23 @@ func (c *Coach) feedNormLocked(norm string, isErr, event bool) *SteerRecord {
 	// signal 2 — ERROR-RATE: distinct steps, but most are failing.
 	if c.pol.ErrorRateThreshold > 0 && len(c.errWin) >= c.errWindow() &&
 		float64(c.errCount)/float64(len(c.errWin)) >= c.pol.ErrorRateThreshold {
-		return c.tripPty("error-rate", "errors", errorRateSteer, distinct, int64(len(c.errWin)), int64(c.errCount))
+		return c.tripPty("error-rate", "errors", ErrorRateSteer, distinct, int64(len(c.errWin)), int64(c.errCount))
 	}
 	// signal 3 — BUDGET: burning cost/quota/time/steps without converging. Cost
 	// first (mid-stream, and what an api-key OR subscription-quota run actually
 	// spends); re-fires at each increment so a grinder escalates.
 	if b := c.pol.SoftTokenBudget; b > 0 && c.outBytes/4 >= (c.tokenMarks+1)*b {
 		c.tokenMarks++
-		return c.tripPty("budget-cost", "output-tokens", budgetSteer, distinct, int64(b), int64(c.outBytes/4))
+		return c.tripPty("budget-cost", "output-tokens", BudgetSteer, distinct, int64(b), int64(c.outBytes/4))
 	}
 	if b := c.pol.SoftTimeBudget; b > 0 && !c.started.IsZero() &&
 		time.Since(c.started) >= time.Duration(c.timeMarks+1)*b {
 		c.timeMarks++
-		return c.tripPty("budget-time", "elapsed", budgetSteer, distinct, int64(b.Seconds()), int64(time.Since(c.started).Seconds()))
+		return c.tripPty("budget-time", "elapsed", BudgetSteer, distinct, int64(b.Seconds()), int64(time.Since(c.started).Seconds()))
 	}
 	if b := c.pol.SoftStepBudget; b > 0 && c.total >= (c.stepMarks+1)*b {
 		c.stepMarks++
-		return c.tripPty("budget-steps", "steps", budgetSteer, distinct, int64(b), int64(c.total))
+		return c.tripPty("budget-steps", "steps", BudgetSteer, distinct, int64(b), int64(c.total))
 	}
 	return nil
 }

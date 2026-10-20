@@ -4698,7 +4698,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		freshIt.Throttled = false
 		freshIt.ThrottleSignal = ""
 		if logPath != "" {
-			logTail := weaveReadThrottleLogTail(logPath)
+			logTail := weaveScrubInjectedTail(weaveReadThrottleLogTail(logPath), freshIt.Body)
 			throttleLogTail = logTail
 			throttled, signal := weaveClassifyThrottle(it.Tool, exitCode, logTail)
 			if exitCode != 0 && throttled {
@@ -4803,7 +4803,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 					agent = it.LaunchSpec.Agent
 				}
 			}
-			if err := weaveRecordThrottleObservation(it.Tool, model, agent, throttleLogTail, finishedAt, true, exitCode); err != nil {
+			if err := weaveRecordThrottleObservation(it.Tool, model, agent, throttleLogTail, finishedAt, true, exitCode, it.Body); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "weave start: quota observation failed (continuing): %v\n", err)
 			}
 			if it.Throttled {
@@ -4813,7 +4813,10 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 				}
 				if reset, ok := parseThrottleReset(msg, time.Now()); ok {
 					coolTool := weaveThrottleToolFromSignal(it.Tool, throttleLogTail)
-					if err := recordToolCooldownCause(dir, coolTool, reset, weaveThrottleCause(msg)); err != nil {
+					// The cause comes from the matched vendor signal alone: a
+					// coach nudge elsewhere in the tail names "quota" on
+					// healthy runs and must not flip a rate cooldown into one.
+					if err := recordToolCooldownCause(dir, coolTool, reset, weaveThrottleCause(it.ThrottleSignal)); err != nil {
 						fmt.Fprintf(cmd.ErrOrStderr(), "weave start: cooldown record failed (continuing): %v\n", err)
 					}
 				}

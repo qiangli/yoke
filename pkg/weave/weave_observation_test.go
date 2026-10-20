@@ -23,7 +23,7 @@ func TestObservationsFromLog(t *testing.T) {
 		{"gemini", "fixture-model", "429 RESOURCE_EXHAUSTED: retry later", "RESOURCE_EXHAUSTED", 1},
 	}
 	for _, tc := range cases {
-		got := ObservationsFromLog(tc.tool, tc.model, tc.log, now, true, tc.exit)
+		got := ObservationsFromLog(tc.tool, tc.model, tc.log, now, true, tc.exit, "")
 		if len(got) != 1 || got[0].Tool != tc.tool || !strings.Contains(got[0].Excerpt, tc.signal) {
 			t.Fatalf("%s: %+v", tc.tool, got)
 		}
@@ -34,7 +34,7 @@ func TestWeaveExitObservationFeeder(t *testing.T) {
 	t.Setenv("BASHY_HOME", t.TempDir())
 	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 	log := "before\nERROR: You've hit your usage limit. Try again at 1:30 PM.\nafter"
-	if err := weaveRecordThrottleObservation("codex", "fixture-model", "codex-agent", log, now, true, 1); err != nil {
+	if err := weaveRecordThrottleObservation("codex", "fixture-model", "codex-agent", log, now, true, 1, ""); err != nil {
 		t.Fatal(err)
 	}
 	got, err := quotaobs.Read(time.Time{}, nil)
@@ -67,7 +67,7 @@ func TestObservationFalsePositiveExcerpts(t *testing.T) {
 		} else if count == 4 || count == 9 || count >= 16 {
 			tool, model = "opencode", "glm-5.2"
 		}
-		if got := ObservationsFromLog(tool, model, excerpt, now, true, 0); len(got) != 0 {
+		if got := ObservationsFromLog(tool, model, excerpt, now, true, 0, ""); len(got) != 0 {
 			t.Errorf("fixture %d: unexpected observation: %+v", count, got)
 		}
 		count++
@@ -93,12 +93,12 @@ func TestClaudeRateLimitEventObservations(t *testing.T) {
 		{"allowed", "", "5h", "five_hour", "0.23", false},
 	} {
 		line := `{"type":"rate_limit_event","rate_limit_info":{"status":"` + tc.status + `","resetsAt":1791609000,"rateLimitType":"` + tc.typ + `","unifiedWindows":{"` + tc.typ + `":{"utilization":` + tc.utilization + `}}}}`
-		got := ObservationsFromLog("claude", "claude-opus-5", "before\n"+line+"\nafter", now, true, 0)
+		got := ObservationsFromLog("claude", "claude-opus-5", "before\n"+line+"\nafter", now, true, 0, "")
 		if (len(got) == 1) != tc.want {
 			t.Fatalf("%s/%s: %+v", tc.status, tc.typ, got)
 		}
 		if !tc.want {
-			if failed := ObservationsFromLog("claude", "claude-opus-5", line, now, true, 1); len(failed) != 0 {
+			if failed := ObservationsFromLog("claude", "claude-opus-5", line, now, true, 1, ""); len(failed) != 0 {
 				t.Fatalf("allowed event on failed run: %+v", failed)
 			}
 			continue
@@ -121,12 +121,12 @@ func TestStructuredUsageLimitWithoutFailedExit(t *testing.T) {
 	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 	line := `{"type":"result","usage_limit":"reset at 13:00"}`
 	for _, tool := range []string{"claude", "codex"} {
-		got := ObservationsFromLog(tool, "fixture-model", line, now, false, 0)
+		got := ObservationsFromLog(tool, "fixture-model", line, now, false, 0, "")
 		if len(got) != 1 || got[0].Excerpt != line {
 			t.Fatalf("%s: %+v", tool, got)
 		}
 	}
-	if got := ObservationsFromLog("codex", "fixture-model", "note: quota at 13:00", now, false, 1); len(got) != 0 {
+	if got := ObservationsFromLog("codex", "fixture-model", "note: quota at 13:00", now, false, 1, ""); len(got) != 0 {
 		t.Fatalf("unfinished prose: %+v", got)
 	}
 }

@@ -22,7 +22,7 @@ func TestTakeoverCause(t *testing.T) {
 		{"usage limit reached", "quota-exhausted"}, {"insufficient_quota", "quota-exhausted"}, {"HTTP 502 bad gateway", "vendor-outage"}, {"API error: 500", "vendor-outage"}, {"overloaded_error", "vendor-outage"}, {"service_unavailable", "vendor-outage"}, {"connection refused api.vendor.example", "vendor-outage"}, {"connection refused localhost:8000", "other"}, {"rate limit exceeded", "other"}, {"authentication failed", "other"}, {"compiler error", "other"},
 	} {
 		t.Run(tc.log, func(t *testing.T) {
-			got, _ := weaveTakeoverCause(tc.log, nil, "a", now)
+			got, _ := weaveTakeoverCause(tc.log, nil, "a", now, "")
 			if got != tc.want {
 				t.Fatalf("%s != %s", got, tc.want)
 			}
@@ -33,12 +33,12 @@ func TestTakeoverCause(t *testing.T) {
 		account string
 		want    string
 	}{{9 * time.Minute, "a", "vendor-outage"}, {11 * time.Minute, "a", "other"}, {time.Minute, "b", "other"}, {-time.Minute, "a", "other"}} {
-		got, _ := weaveTakeoverCause("", []quotaobs.Observation{{At: now.Add(-tc.age), Account: tc.account, Status: 503, Excerpt: "vendor failed"}}, "a", now)
+		got, _ := weaveTakeoverCause("", []quotaobs.Observation{{At: now.Add(-tc.age), Account: tc.account, Status: 503, Excerpt: "vendor failed"}}, "a", now, "")
 		if got != tc.want {
 			t.Fatalf("%+v: %s", tc, got)
 		}
 	}
-	_, e := weaveTakeoverCause("quota exhausted token=secret-123456789", nil, "a", now)
+	_, e := weaveTakeoverCause("quota exhausted token=secret-123456789", nil, "a", now, "")
 	if strings.Contains(e, "secret-123") {
 		t.Fatal(e)
 	}
