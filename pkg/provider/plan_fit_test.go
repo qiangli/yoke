@@ -126,3 +126,53 @@ func TestPlanFit_QuotedCostAndLifecycle(t *testing.T) {
 		t.Fatalf("persistent has no expiry: %v", p.MaxLifetime)
 	}
 }
+
+func TestPlanFit_LifecyclePolicy(t *testing.T) {
+	w := baseWork()
+	w.Model.WeightBytes = 10 * GiB
+	w.Lifecycle = ""
+	w.MaxLifetime = 0
+	w.CleanupTrigger = ""
+	if p := PlanFit(gpuOffer(1, 24), w); !p.Fits || p.LifecycleMode != LifecyclePersistent || p.MaxLifetime != 0 {
+		t.Fatalf("unspecified lifecycle must default to persistent without expiry: %+v", p)
+	}
+	w.Lifecycle = LifecycleEphemeral
+	if p := PlanFit(gpuOffer(1, 24), w); !p.Fits || p.MaxLifetime != time.Hour || p.CleanupTrigger == "" {
+		t.Fatalf("ephemeral plan needs a finite default lifetime and cleanup trigger: %+v", p)
+	}
+	o := gpuOffer(1, 24)
+	o.Purchase = PurchaseSpot
+	w.AllowSpot = true
+	w.Lifecycle = LifecyclePersistent
+	if p := PlanFit(o, w); p.Fits || !strings.Contains(p.Reason, "ephemeral") {
+		t.Fatalf("persistent spot must be rejected: %+v", p)
+	}
+}
+
+func TestPlanFit_LocalUnifiedAndCPUFallback(t *testing.T) {
+	const observedUnifiedBytes = 38_654_705_664
+	w := baseWork()
+	w.Model.WeightBytes = 10 * GiB
+	o := gpuOffer(1, 36)
+	o.MemoryBytes = observedUnifiedBytes
+	o.Accelerators[0].MemoryBytes = observedUnifiedBytes
+	o.Accelerators[0].Unified = true
+	if p := PlanFit(o, w); !p.Fits || p.Placement != PlacementUnified {
+		t.Fatalf("observed unified-memory capacity should fit: %+v", p)
+	}
+	o.Accelerators = nil
+	w.AllowCPU = true
+	if p := PlanFit(o, w); !p.Fits || p.Placement != PlacementCPUFallback {
+		t.Fatalf("same host RAM should allow explicit CPU fallback: %+v", p)
+	}
+}
+
+func TestPlanFit_EstimateOverflowRejects(t *testing.T) {
+	w := baseWork()
+	w.Model.WeightBytes = 10 * GiB
+	w.Context = int(^uint(0) >> 1)
+	w.Concurrency = 2
+	if p := PlanFit(gpuOffer(1, 24), w); p.Fits || !strings.Contains(p.Reason, "estimate exceeds") {
+		t.Fatalf("overflow cannot turn an oversize model into a fit: %+v", p)
+	}
+}

@@ -2,6 +2,7 @@ package provider
 
 import (
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -85,17 +86,36 @@ const (
 
 // PlanFit judges whether w fits o and projects cost and lifecycle.
 func PlanFit(o Offer, w Workload) Plan {
-	p := Plan{Offer: o, Purchase: o.Purchase, LifecycleMode: w.Lifecycle, CleanupTrigger: w.CleanupTrigger}
-	if w.Lifecycle != LifecyclePersistent {
-		p.LifecycleMode = LifecycleEphemeral
-		p.MaxLifetime = w.MaxLifetime
-	}
+	p := Plan{Offer: o, Purchase: o.Purchase, LifecycleMode: LifecyclePersistent, CleanupTrigger: w.CleanupTrigger}
 	reject := func(format string, a ...any) Plan {
 		p.Reason = fmt.Sprintf(format, a...)
 		return p
 	}
+	switch w.Lifecycle {
+	case "", LifecyclePersistent:
+		if p.CleanupTrigger == "" {
+			p.CleanupTrigger = "explicit release"
+		}
+	case LifecycleEphemeral:
+		p.LifecycleMode = LifecycleEphemeral
+		p.MaxLifetime = w.MaxLifetime
+		if p.MaxLifetime == 0 {
+			p.MaxLifetime = time.Hour
+		}
+		if p.MaxLifetime < 0 {
+			return reject("ephemeral lifetime must be positive")
+		}
+		if p.CleanupTrigger == "" {
+			p.CleanupTrigger = "work terminal or expiry; manual session at expiry or explicit release"
+		}
+	default:
+		return reject("unsupported lifecycle mode %q", w.Lifecycle)
+	}
 	if ok, why := o.Placeable(); !ok {
 		return reject("%s", why)
+	}
+	if o.Purchase == PurchaseSpot && p.LifecycleMode != LifecycleEphemeral {
+		return reject("spot requires an ephemeral lifecycle")
 	}
 	if o.Purchase == PurchaseSpot && !w.AllowSpot {
 		return reject("spot requires explicit opt-in; no silent fallback from on-demand")
@@ -118,7 +138,21 @@ func PlanFit(o Offer, w Workload) Plan {
 		p.Uncertain = append(p.Uncertain, "context unknown; assumed 4096")
 	}
 	conc := max(w.Concurrency, 1)
-	raw := w.Model.WeightBytes + kv*int64(ctx)*int64(conc) + runtimeBufferBytes
+	if int64(ctx) > math.MaxInt64/int64(conc) {
+		return reject("memory estimate exceeds supported range")
+	}
+	tokens := int64(ctx) * int64(conc)
+	if kv > math.MaxInt64/tokens {
+		return reject("memory estimate exceeds supported range")
+	}
+	kvBytes := kv * tokens
+	if w.Model.WeightBytes > math.MaxInt64-kvBytes-runtimeBufferBytes {
+		return reject("memory estimate exceeds supported range")
+	}
+	raw := w.Model.WeightBytes + kvBytes + runtimeBufferBytes
+	if raw > math.MaxInt64-raw/10 {
+		return reject("memory estimate exceeds supported range")
+	}
 	p.NeedBytes = raw + raw/10 // 10% headroom
 
 	switch {
