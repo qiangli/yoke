@@ -3,6 +3,7 @@ package dagrun
 import (
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"path"
 	"sort"
 	"strconv"
@@ -30,13 +31,17 @@ var ErrUnsupportedExecutor = errors.New("dagrun: unsupported executor")
 // Labels and well-known keys on every rendered object. ps, logs, stop and
 // cleanup select by these labels only.
 const (
-	LabelManagedBy  = "app.kubernetes.io/managed-by"
-	LabelWorkspace  = "dhnt.io/workspace"
-	LabelRun        = "dhnt.io/run"
-	LabelCommand    = "dhnt.io/command"
-	ManagedByBashy  = "bashy"
-	AnnotManifest   = "dhnt.io/manifest"
-	AnnotDigest     = "dhnt.io/command-digest"
+	LabelManagedBy = "app.kubernetes.io/managed-by"
+	LabelWorkspace = "dhnt.io/workspace"
+	LabelRun       = "dhnt.io/run"
+	LabelCommand   = "dhnt.io/command"
+	ManagedByBashy = "bashy"
+	AnnotManifest  = "dhnt.io/manifest"
+	AnnotDigest    = "dhnt.io/command-digest"
+	// AnnotAttachPort carries the session server's published attach port on
+	// interactive and long-running Pods. `dks attach` and `dks logs` read it
+	// back to build the tunnel URL; one-shot Jobs never carry it.
+	AnnotAttachPort = "dhnt.io/attach-port"
 	annotArtifactNS = "artifact.dhnt.io/" // + <goos>-<goarch>
 
 	labelNodeOS      = "kubernetes.io/os"
@@ -124,16 +129,37 @@ func renderLinux(m *Manifest, class ExecutorClass) ([]Object, error) {
 		env = append(env, map[string]any{"name": k, "value": v})
 	}
 
+	// Session kinds run under the hidden session server: the executor's
+	// vknode publishes the container port that sets hostPort as a transient
+	// app, and the verbs reach the server through the matrix tunnel at it.
+	attachPort := 0
+	if m.Meta.RunKind == RunInteractive || m.Meta.RunKind == RunLongRunning {
+		attachPort = sessionAttachPort(m.Meta.RunID)
+	}
+	body := strings.TrimSuffix(t.Body, "\n")
+	command := []any{"bashy", "-c", body}
+	if attachPort != 0 {
+		command = []any{"bashy", "dks", "session-server",
+			"--session", m.Meta.RunID,
+			"--home", HomeMountPath,
+			"--port", strconv.Itoa(attachPort),
+			"--", "bashy", "-c", body}
+	}
 	container := map[string]any{
 		"name":         "run",
 		"image":        class.Image,
-		"command":      []any{"bashy", "-c", strings.TrimSuffix(t.Body, "\n")},
+		"command":      command,
 		"workingDir":   workDir,
 		"env":          env,
 		"volumeMounts": []any{map[string]any{"name": "home", "mountPath": HomeMountPath}},
 	}
 	if len(resources) > 0 {
 		container["resources"] = resources
+	}
+	if attachPort != 0 {
+		container["ports"] = []any{map[string]any{
+			"name": "attach", "containerPort": attachPort, "hostPort": attachPort,
+		}}
 	}
 	if m.Meta.RunKind == RunInteractive {
 		container["stdin"] = true
@@ -182,7 +208,9 @@ func renderLinux(m *Manifest, class ExecutorClass) ([]Object, error) {
 		if t.Timeout > 0 {
 			podSpec["activeDeadlineSeconds"] = int64(t.Timeout.Seconds())
 		}
-		workload = Object{"apiVersion": "v1", "kind": "Pod", "metadata": meta(true), "spec": podSpec}
+		md := meta(true)
+		md["annotations"].(map[string]any)[AnnotAttachPort] = strconv.Itoa(attachPort)
+		workload = Object{"apiVersion": "v1", "kind": "Pod", "metadata": md, "spec": podSpec}
 	default:
 		return nil, unsupported("run-kind %s is not rendered yet", m.Meta.RunKind)
 	}
@@ -298,6 +326,24 @@ func linuxResources(t *dag.Task) (map[string]any, error) {
 		out["limits"] = limits
 	}
 	return out, nil
+}
+
+// sessionAttachPortRange bounds the deterministic per-session attach port:
+// 40000-49999, above the ephemeral range and clear of well-known services.
+const (
+	sessionAttachPortBase  = 40000
+	sessionAttachPortCount = 10000
+)
+
+// sessionAttachPort maps a run id onto a deterministic attach port in
+// 40000-49999. Render stays pure: the same manifest always yields the same
+// port with no allocation and no I/O. The limit is documented, not solved:
+// two sessions of one host that hash to the same port collide, and moving
+// one of them is placement retry — out of scope for this slice.
+func sessionAttachPort(runID string) int {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(runID))
+	return sessionAttachPortBase + int(h.Sum32()%sessionAttachPortCount)
 }
 
 // quantity spells a byte count as a Kubernetes binary quantity.
