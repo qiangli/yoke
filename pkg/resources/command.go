@@ -49,9 +49,9 @@ func NewSystemCommand() *cobra.Command {
 			"--interval apart and reporting the delta, so the command takes at least\n" +
 			"that long to return. --interval 0 skips the second sample: CPU then\n" +
 			"reports the since-boot average and byte rates are omitted.",
-		Args:          cobra.NoArgs,
-		SilenceUsage:  true,
-		SilenceErrors: true,
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		// The returned error is the only copy of the alarm: cobra prints it once.
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if interval < 0 {
 				return fmt.Errorf("--interval must not be negative")
@@ -63,12 +63,10 @@ func NewSystemCommand() *cobra.Command {
 			if minFree != "" {
 				cfg, err := ParseDiskFloor(minFree)
 				if err != nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "resources system: %v\n", err)
-					return err
+					return fmt.Errorf("resources system: %w", err)
 				}
 				cfg.Mount = mountFilter
 				if err := CheckDiskFloor(sys.Disks, cfg); err != nil {
-					fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
 					return err
 				}
 				if quiet {

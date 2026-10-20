@@ -76,17 +76,76 @@ func TestSharedGOCacheTrimKeepsUnderCapEvictingOldest(t *testing.T) {
 	}
 }
 
-func TestSharedGOCacheTrimSkippedWhileRunLive(t *testing.T) {
-	_, q := sharedCacheFixture(t)
-	root := fillSharedCache(t, q, 10)
-	old := weaveGOCacheHostLive
-	weaveGOCacheHostLive = func(string) bool { return true }
-	t.Cleanup(func() { weaveGOCacheHostLive = old })
-	freed, _ := weaveTrimSharedGOCache(q, 0)
-	if freed != 0 {
-		t.Fatalf("trim ran while a run was live: freed=%d", freed)
+func ageSharedCache(t *testing.T, q string, ages map[string]time.Duration) string {
+	t.Helper()
+	root := filepath.Join(filepath.Dir(q), weaveSharedGOCacheDir)
+	if err := os.MkdirAll(filepath.Join(root, "ab"), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "ab", "a-d")); err != nil {
+	for name, age := range ages {
+		p := filepath.Join(root, "ab", name)
+		if err := os.WriteFile(p, make([]byte, 100), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		mt := time.Now().Add(-age)
+		_ = os.Chtimes(p, mt, mt)
+	}
+	return root
+}
+
+func setHostLive(t *testing.T, live bool) {
+	old := weaveGOCacheHostLive
+	weaveGOCacheHostLive = func(string) bool { return live }
+	t.Cleanup(func() { weaveGOCacheHostLive = old })
+}
+
+func TestSharedGOCacheTrimWhileLiveEvictsOnlyOldFiles(t *testing.T) {
+	_, q := sharedCacheFixture(t)
+	root := ageSharedCache(t, q, map[string]time.Duration{
+		"old1": 5 * time.Hour, "old2": 3 * time.Hour, "old3": 2 * time.Hour,
+		"new1": 10 * time.Minute, "new2": time.Minute,
+	})
+	setHostLive(t, true)
+	freed, err := weaveTrimSharedGOCache(q, 100)
+	if err != nil || freed != 300 {
+		t.Fatalf("freed=%d err=%v, want 300 (all old files, no new)", freed, err)
+	}
+	for _, n := range []string{"old1", "old2", "old3"} {
+		if _, err := os.Stat(filepath.Join(root, "ab", n)); !os.IsNotExist(err) {
+			t.Fatalf("%s survived: %v", n, err)
+		}
+	}
+	for _, n := range []string{"new1", "new2"} {
+		if _, err := os.Stat(filepath.Join(root, "ab", n)); err != nil {
+			t.Fatalf("recent %s evicted while live: %v", n, err)
+		}
+	}
+}
+
+func TestSharedGOCacheTrimWhileLiveStopsAtCap(t *testing.T) {
+	_, q := sharedCacheFixture(t)
+	root := ageSharedCache(t, q, map[string]time.Duration{
+		"old1": 5 * time.Hour, "old2": 3 * time.Hour, "new1": time.Minute,
+	})
+	setHostLive(t, true)
+	freed, _ := weaveTrimSharedGOCache(q, 200)
+	if freed != 100 {
+		t.Fatalf("freed=%d, want 100", freed)
+	}
+	if _, err := os.Stat(filepath.Join(root, "ab", "old2")); err != nil {
+		t.Fatalf("evicted past the cap: %v", err)
+	}
+}
+
+func TestSharedGOCacheTrimWhileLiveKeepsRecentEvenOverCap(t *testing.T) {
+	_, q := sharedCacheFixture(t)
+	root := fillSharedCache(t, q, 10) // all younger than the safety age except the oldest
+	setHostLive(t, true)
+	freed, _ := weaveTrimSharedGOCache(q, 0)
+	if freed > 100 {
+		t.Fatalf("freed=%d, recent files must survive", freed)
+	}
+	if _, err := os.Stat(filepath.Join(root, "ab", "j-d")); err != nil {
 		t.Fatal(err)
 	}
 }

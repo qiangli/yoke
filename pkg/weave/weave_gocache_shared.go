@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // weaveGOCacheHostLive reports whether any weave run on the host (any queue
@@ -38,6 +39,11 @@ var weaveGOCacheHostLive = func(stateRoot string) bool {
 	return false
 }
 
+// weaveGOCacheSafetyAge is the minimum file age evicted while runs are live.
+var weaveGOCacheSafetyAge = time.Hour
+
+var weaveGOCacheNow = time.Now
+
 func weaveGOCacheMaxBytes() int64 {
 	if v := strings.TrimSpace(os.Getenv(weaveGOCacheMaxEnv)); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
@@ -48,8 +54,8 @@ func weaveGOCacheMaxBytes() int64 {
 }
 
 // weaveTrimSharedGOCache evicts least-recently-used files from the shared cache
-// until it is at or under the cap. It does nothing while any run on the host is
-// live, and it removes only regular files, never directories: Go tolerates a
+// until it is at or under the cap. While any run on the host is live it evicts only
+// files older than the safety age. It removes only regular files, never directories: Go tolerates a
 // missing cache entry (it rebuilds) but not a directory vanishing mid-write, so
 // the cache root and its subdirectories are left in place. Returns bytes freed.
 func weaveTrimSharedGOCache(queueDir string, maxBytes int64) (int64, error) {
@@ -64,8 +70,12 @@ func weaveTrimSharedGOCache(queueDir string, maxBytes int64) (int64, error) {
 	if lst.Mode()&os.ModeSymlink != 0 || !lst.IsDir() {
 		return 0, nil
 	}
+	// While a run is live only files untouched for the safety age are evicted:
+	// go refreshes the mtime of an entry it uses once it is over an hour old,
+	// so an older file is not in use by a running build.
+	var cutoff int64 = 1<<63 - 1
 	if weaveGOCacheHostLive(filepath.Dir(queueDir)) {
-		return 0, nil
+		cutoff = weaveGOCacheNow().Add(-weaveGOCacheSafetyAge).UnixNano()
 	}
 	type ent struct {
 		path string
@@ -92,7 +102,7 @@ func weaveTrimSharedGOCache(queueDir string, maxBytes int64) (int64, error) {
 	sort.Slice(files, func(i, j int) bool { return files[i].mod < files[j].mod })
 	var freed int64
 	for _, f := range files {
-		if total-freed <= maxBytes {
+		if total-freed <= maxBytes || f.mod >= cutoff {
 			break
 		}
 		if err := os.Remove(f.path); err == nil {
