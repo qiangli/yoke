@@ -220,13 +220,14 @@ type DeviceMismatch struct {
 
 // DeviceComparison is the result of CompareAccelerators.
 type DeviceComparison struct {
+	Known      bool             `json:"known"`
 	Advertised int              `json:"advertised"`
 	Observed   int              `json:"observed"`
 	Mismatches []DeviceMismatch `json:"mismatches,omitempty"`
 }
 
 // Match reports no observed-versus-advertised difference.
-func (c DeviceComparison) Match() bool { return len(c.Mismatches) == 0 }
+func (c DeviceComparison) Match() bool { return c.Known && len(c.Mismatches) == 0 }
 
 func normModel(m string) string {
 	var b strings.Builder
@@ -258,7 +259,7 @@ func sortedDevices(in []Accelerator) []Accelerator {
 // observed memory means unobserved and is not compared. Devices are compared
 // one by one, never summed.
 func CompareAccelerators(advertised, observed []Accelerator, tolerance float64) DeviceComparison {
-	c := DeviceComparison{Advertised: len(advertised), Observed: len(observed)}
+	c := DeviceComparison{Known: true, Advertised: len(advertised), Observed: len(observed)}
 	if len(advertised) != len(observed) {
 		c.Mismatches = append(c.Mismatches, DeviceMismatch{Kind: MismatchCount, Index: -1})
 	}
@@ -277,11 +278,10 @@ func CompareAccelerators(advertised, observed []Accelerator, tolerance float64) 
 }
 
 // CompareObserved compares the offer's advertised accelerators with its
-// observed Allocation (none observed counts as zero devices), exact memory.
+// observed Allocation. A nil allocation means no observation was made.
 func (o Offer) CompareObserved() DeviceComparison {
-	var obs []Accelerator
-	if o.Allocation != nil {
-		obs = o.Allocation.Accelerators
+	if o.Allocation == nil {
+		return DeviceComparison{Advertised: len(o.Accelerators)}
 	}
-	return CompareAccelerators(o.Accelerators, obs, 0)
+	return CompareAccelerators(o.Accelerators, o.Allocation.Accelerators, 0)
 }

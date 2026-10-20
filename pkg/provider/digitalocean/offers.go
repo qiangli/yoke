@@ -176,13 +176,15 @@ func (a *adapter) offers(ctx context.Context, regionsRaw, sizesRaw json.RawMessa
 	}
 	if a.call(ctx, http.MethodGet, "/v2/account", nil, &acct) == nil {
 		account = acct.Account.UUID
-		var l struct {
+		var l, gpu struct {
 			Meta struct {
 				Total *int `json:"total"`
 			} `json:"meta"`
 		}
-		if acct.Account.DropletLimit > 0 && a.call(ctx, http.MethodGet, "/v2/droplets?per_page=1", nil, &l) == nil && l.Meta.Total != nil {
-			quota = provider.Quota{Known: true, Limit: acct.Account.DropletLimit, Used: *l.Meta.Total, ObservedAt: at}
+		if acct.Account.DropletLimit > 0 &&
+			a.call(ctx, http.MethodGet, "/v2/droplets?per_page=1", nil, &l) == nil && l.Meta.Total != nil &&
+			a.call(ctx, http.MethodGet, "/v2/droplets?type=gpus&per_page=1", nil, &gpu) == nil && gpu.Meta.Total != nil {
+			quota = provider.Quota{Known: true, Limit: acct.Account.DropletLimit, Used: *l.Meta.Total + *gpu.Meta.Total, ObservedAt: at}
 		}
 	}
 

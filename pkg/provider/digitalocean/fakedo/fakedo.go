@@ -173,6 +173,13 @@ func (s *Server) AddDroplet(name string, tags ...string) int {
 	return s.addLocked(name, "s-1vcpu-1gb", "r1", "ubuntu-24-04-x64", "active", tags, "").ID
 }
 
+// AddGPUDroplet seeds a GPU droplet, which the real unfiltered list omits.
+func (s *Server) AddGPUDroplet(name string, tags ...string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.addLocked(name, "gpu-h100x1-80gb", "r1", "ubuntu-24-04-x64", "active", tags, "").ID
+}
+
 // AttachVolume records a block-storage volume on a droplet; DO keeps (and
 // bills) volumes after the droplet is deleted.
 func (s *Server) AttachVolume(id int, volumeID string) {
@@ -401,9 +408,10 @@ func applyAction(d *Droplet, a *action) {
 func (s *Server) listDroplets(r *http.Request) (int, any) {
 	q := r.URL.Query()
 	tag := q.Get("tag_name")
+	gpuOnly := q.Get("type") == "gpus"
 	var all []*Droplet
 	for _, d := range s.droplets {
-		if tag == "" || slices.Contains(d.Tags, tag) {
+		if (tag == "" || slices.Contains(d.Tags, tag)) && (strings.HasPrefix(d.SizeSlug, "gpu-") == gpuOnly) {
 			s.tick(d)
 			all = append(all, d)
 		}

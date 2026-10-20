@@ -146,6 +146,19 @@ func TestDiscoverOffers_DigitalOceanExhaustedQuota(t *testing.T) {
 	}
 }
 
+func TestDiscoverOffers_DigitalOceanQuotaIncludesGPUDroplets(t *testing.T) {
+	fake := fakedo.New(t)
+	catalog(fake)
+	fake.SetAccount(map[string]any{"uuid": "acct-9", "droplet_limit": 2})
+	fake.AddDroplet("cpu")
+	fake.AddGPUDroplet("gpu")
+	for _, o := range discover(t, fake) {
+		if !o.Quota.Known || o.Quota.Used != 2 || !o.Quota.Exhausted() {
+			t.Fatalf("quota omitted GPU droplet: %+v", o.Quota)
+		}
+	}
+}
+
 func TestDiscoverOffers_DigitalOceanDefaultCatalogStillServed(t *testing.T) {
 	fake := fakedo.New(t)
 	got := discover(t, fake)

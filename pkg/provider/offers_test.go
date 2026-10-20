@@ -78,11 +78,11 @@ func TestDiscoverOffers_ObservedDeviceMismatch(t *testing.T) {
 	}
 
 	o := Offer{Accelerators: adv}
-	if c := o.CompareObserved(); c.Match() || c.Observed != 0 {
-		t.Fatalf("no allocation observed must mismatch on count: %+v", c)
+	if c := o.CompareObserved(); c.Known || c.Match() || c.Observed != 0 {
+		t.Fatalf("no allocation observed must remain unknown: %+v", c)
 	}
 	o.Allocation = &Allocation{Accelerators: adv}
-	if !o.CompareObserved().Match() {
+	if c := o.CompareObserved(); !c.Known || !c.Match() {
 		t.Fatal("identical allocation must match")
 	}
 }
