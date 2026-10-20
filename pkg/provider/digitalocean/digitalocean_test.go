@@ -333,6 +333,47 @@ func TestInvalidCredentials(t *testing.T) {
 	}
 }
 
+// TestDigitalOceanWorker_CreateRetryNoDuplicateAllocation exercises the
+// role=worker path specifically (S451.4): worker tags, no satellite
+// enrollment bundle, and the bootstrap handoff to S451.9. It is not the
+// generic idempotency replay covered by TestCreateIdempotencyKeyReplay and
+// TestCreateResponseLostLeavesNoOrphan above — those exercise a plain
+// create with no role and no handoff.
+func TestDigitalOceanWorker_CreateRetryNoDuplicateAllocation(t *testing.T) {
+	fake := fakedo.New(t)
+	a := newFastAdapter(t, fake, 300*time.Millisecond)
+	fake.Inject(http.MethodPost, "/v2/droplets", fakedo.LoseResponse, 1)
+
+	spec := provider.Spec{Name: "wk-1", Region: "r1", Size: "s-1vcpu-1gb", Image: "ubuntu-24-04-x64"}
+	res1, handoff1, err := digitalocean.CreateWorker(context.Background(), a, "worker-k", spec, nil)
+	if err != nil {
+		t.Fatalf("create whose response was lost should adopt the existing droplet: %v", err)
+	}
+	res2, handoff2, err := digitalocean.CreateWorker(context.Background(), a, "worker-k", spec, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res1.Resource == nil || res2.Resource == nil || res1.Resource.ID == "" || res1.Resource.ID != res2.Resource.ID {
+		t.Fatalf("retry allocated a duplicate: %+v vs %+v", res1.Resource, res2.Resource)
+	}
+	if n := fake.CreateCount(); n != 1 {
+		t.Fatalf("CreateCount = %d, want exactly one allocation", n)
+	}
+	if handoff1 != handoff2 || handoff1.ResourceID != res1.Resource.ID || handoff1.IdempotencyKey != "worker-k" {
+		t.Fatalf("bootstrap handoff must stay stable across the retry: %+v vs %+v", handoff1, handoff2)
+	}
+	for _, want := range []string{provider.TagLease, provider.OwnerTag("t1"), provider.IdempotencyTag("worker-k"), digitalocean.TagRoleWorker} {
+		if !slices.Contains(res1.Resource.Tags, want) {
+			t.Errorf("missing worker tag %q in %v", want, res1.Resource.Tags)
+		}
+	}
+	id, _ := strconv.Atoi(res1.Resource.ID)
+	d, ok := fake.Droplet(id)
+	if !ok || d.UserData != "" {
+		t.Fatalf("a role=worker create must never carry a satellite enrollment bundle as user data: %q", d.UserData)
+	}
+}
+
 func TestManifestIsValid(t *testing.T) {
 	if err := provider.ValidateManifest(digitalocean.Manifest()); err != nil {
 		t.Fatal(err)
