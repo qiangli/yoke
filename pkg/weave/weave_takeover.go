@@ -43,10 +43,21 @@ func takeoverRedact(s string) string {
 	return takeoverKey.ReplaceAllString(takeoverSecret.ReplaceAllString(redact.FromHost().String(s), "${1}[REDACTED]"), "[REDACTED]")
 }
 
-func weaveTakeoverCause(tail string, observations []quotaobs.Observation, account string, now time.Time) (string, string) {
+func weaveTakeoverCause(tail string, observations []quotaobs.Observation, account string, now time.Time, brief string) (string, string) {
+	normBrief := weaveNormBrief(brief)
+	// One physical log line at a time: injected steer sentences and brief
+	// quotes are supervisor context, never vendor evidence, and a multi-line
+	// observation window must not let one steer sentence veto — or one vendor
+	// error launder — its neighbors.
 	classify := func(s string) string {
+		if weaveInjectedLine(s, normBrief) {
+			return "other"
+		}
 		low := strings.ToLower(s)
-		if ok, _ := weaveClassifyThrottle("", 1, low); ok && weaveThrottleCause(low) == weaveCooldownQuota {
+		if ok, _ := weaveClassifyThrottle("", 1, s); ok && weaveThrottleCause(low) == weaveCooldownQuota {
+			return "quota-exhausted"
+		}
+		if weaveVendorQuotaEvent(s) {
 			return "quota-exhausted"
 		}
 		if takeoverHTTPFailure.MatchString(low) || (weaveAutopilotOverloaded(low) && (strings.Contains(low, "overloaded") || strings.Contains(low, "529"))) || strings.Contains(low, "service unavailable") || strings.Contains(low, "service_unavailable") || (strings.Contains(low, "connection refused") && (strings.Contains(low, "api.") || strings.Contains(low, "vendor api"))) {
@@ -54,7 +65,7 @@ func weaveTakeoverCause(tail string, observations []quotaobs.Observation, accoun
 		}
 		return "other"
 	}
-	for _, line := range strings.Split(tail, "\n") {
+	for _, line := range strings.Split(weaveScrubInjectedTail(tail, brief), "\n") {
 		if cause := classify(line); cause != "other" {
 			return cause, takeoverRedact(line)
 		}
@@ -66,8 +77,10 @@ func weaveTakeoverCause(tail string, observations []quotaobs.Observation, accoun
 		if o.Status >= 500 && o.Status <= 599 {
 			return "vendor-outage", takeoverRedact(o.Excerpt)
 		}
-		if cause := classify(o.Excerpt); cause != "other" {
-			return cause, takeoverRedact(o.Excerpt)
+		for _, line := range strings.Split(o.Excerpt, "\n") {
+			if cause := classify(line); cause != "other" {
+				return cause, takeoverRedact(o.Excerpt)
+			}
 		}
 	}
 	return "other", ""
@@ -274,7 +287,7 @@ func runWeaveTakeover(cmd *cobra.Command, dir string, id int64, mode string, dry
 	now := time.Now().UTC()
 	tail := weaveTakeoverTail(it.LogPath)
 	observations, _ := quotaobs.Read(now.Add(-10*time.Minute), func(o quotaobs.Observation) bool { return binding.Account != "" && o.Account == binding.Account })
-	cause, evidence := weaveTakeoverCause(tail, observations, binding.Account, now)
+	cause, evidence := weaveTakeoverCause(tail, observations, binding.Account, now, it.Body)
 	if cause == "other" {
 		if !automatic {
 			fmt.Fprintln(cmd.OutOrStdout(), "takeover: cause=other; no takeover")
@@ -538,7 +551,7 @@ func weaveTakeoverHeartbeat(cmd *cobra.Command, dir string, idle time.Duration, 
 		}
 		binding, _ := weaveTakeoverBinding(weaveWorkerAgent(it))
 		obs, _ := quotaobs.Read(now.Add(-10*time.Minute), func(o quotaobs.Observation) bool { return binding.Account != "" && o.Account == binding.Account })
-		cause, _ := weaveTakeoverCause(weaveTakeoverTail(it.LogPath), obs, binding.Account, now)
+		cause, _ := weaveTakeoverCause(weaveTakeoverTail(it.LogPath), obs, binding.Account, now, it.Body)
 		if cause == "other" {
 			continue
 		}
