@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -175,7 +176,7 @@ func TestUseUnreachablePlaneNeverRunsLocally(t *testing.T) {
 func TestUseExistingWorkspaceSelectsAndPersists(t *testing.T) {
 	te := newTestEnv(t)
 	te.runner.exit["get"] = 0
-	te.runner.stdout["get"] = []byte("configmap/bashy-ws-01JBQ5E9P2WYZ5ZG4HJ3XRG7W8\n")
+	te.runner.stdout["get"] = []byte("configmap/bashy-ws-01jbq5e9p2wyz5zg4hj3xrg7w8\n")
 
 	code, stdout, stderr := runUserland(t, te.env, "use", "skel@k8s:dev")
 	if code != 0 {
@@ -252,16 +253,28 @@ func TestUseFirstUseCreatesWorkspace(t *testing.T) {
 			t.Errorf("apply argv %q misses %q", apply.argv, want)
 		}
 	}
-	var cm map[string]any
-	if err := json.Unmarshal(apply.stdin, &cm); err != nil {
-		t.Fatalf("apply stdin is not one JSON object: %v\n%s", err, apply.stdin)
+	var list struct {
+		Kind  string           `json:"kind"`
+		Items []map[string]any `json:"items"`
 	}
+	if err := json.Unmarshal(apply.stdin, &list); err != nil {
+		t.Fatalf("apply stdin is not one JSON list: %v\n%s", err, apply.stdin)
+	}
+	if list.Kind != "List" || len(list.Items) != 2 {
+		t.Fatalf("apply payload kind=%q items=%d, want a List of Namespace+ConfigMap", list.Kind, len(list.Items))
+	}
+	ns, _ := list.Items[0]["metadata"].(map[string]any)
+	nsLabels, _ := ns["labels"].(map[string]any)
+	if list.Items[0]["kind"] != "Namespace" || ns["name"] != "bashy-userland" || nsLabels["app.kubernetes.io/managed-by"] != "bashy" {
+		t.Errorf("first item = %v, want Namespace bashy-userland labelled managed-by=bashy", list.Items[0])
+	}
+	cm := list.Items[1]
 	if cm["kind"] != "ConfigMap" {
-		t.Errorf("apply object kind = %v, want ConfigMap", cm["kind"])
+		t.Errorf("second item kind = %v, want ConfigMap", cm["kind"])
 	}
 	md, _ := cm["metadata"].(map[string]any)
-	if md["name"] != "bashy-ws-01JBQ5E9P2WYZ5ZG4HJ3XRG7W8" || md["namespace"] != "bashy-userland" {
-		t.Errorf("applied object = %v/%v, want bashy-ws-<id> in bashy-userland", md["namespace"], md["name"])
+	if md["name"] != "bashy-ws-01jbq5e9p2wyz5zg4hj3xrg7w8" || md["namespace"] != "bashy-userland" {
+		t.Errorf("applied object = %v/%v, want the lowercased bashy-ws-<id> in bashy-userland", md["namespace"], md["name"])
 	}
 	labels, _ := md["labels"].(map[string]any)
 	if labels["app.kubernetes.io/managed-by"] != "bashy" || labels["dhnt.io/workspace"] != "01JBQ5E9P2WYZ5ZG4HJ3XRG7W8" {
@@ -272,6 +285,129 @@ func TestUseFirstUseCreatesWorkspace(t *testing.T) {
 	}
 	if len(te.execCalls) != 0 {
 		t.Errorf("create executed locally: %v", te.execCalls)
+	}
+}
+
+// A ULID is uppercase Crockford base32, but a Kubernetes object name must
+// be a LOWERCASE RFC 1123 subdomain — the live API rejected the uppercase
+// name (render.go already lowercases run objects). The workspace object
+// name lowercases the id; the dhnt.io/workspace label keeps it as minted;
+// and the existence lookup matches the plane's answer by the same
+// lowercased name, never the uppercase one.
+func TestWorkspaceObjectNameIsRFC1123(t *testing.T) {
+	id := "01M5DGE9P2WYZ5ZG4HJ3XRG7W8" // a minted ULID: uppercase
+	name := workspaceObjectName(id)
+	if name != "bashy-ws-"+strings.ToLower(id) {
+		t.Errorf("workspaceObjectName(%q) = %q, want bashy-ws-<lowercased id>", id, name)
+	}
+	rfc1123Subdomain := regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`)
+	if !rfc1123Subdomain.MatchString(name) {
+		t.Errorf("workspace object name %q is not a lowercase RFC 1123 subdomain", name)
+	}
+
+	// The lookup agrees: an answer naming the lowercased object finds the
+	// workspace; an answer spelling the name in UPPERCASE — the spelling the
+	// API rejects — does not.
+	te := newTestEnv(t)
+	te.runner.exit["get"] = 0
+	te.runner.stdout["get"] = []byte("configmap/" + name + "\n")
+	if err := (&KubeProbe{Runner: te.runner}).WorkspaceExists("k8s:dev", id); err != nil {
+		t.Errorf("WorkspaceExists did not match the plane's lowercased answer: %v", err)
+	}
+
+	te2 := newTestEnv(t)
+	te2.runner.exit["get"] = 0
+	te2.runner.stdout["get"] = []byte("configmap/bashy-ws-" + id + "\n")
+	if err := (&KubeProbe{Runner: te2.runner}).WorkspaceExists("k8s:dev", id); err == nil {
+		t.Error("WorkspaceExists matched an uppercase object name the API would have rejected")
+	}
+
+	// The label selector keeps the id as minted: labels allow uppercase.
+	sel := "app.kubernetes.io/managed-by=bashy,dhnt.io/workspace=" + id
+	if len(te.runner.calls) != 1 {
+		t.Fatalf("WorkspaceExists runner calls = %v, want exactly one", te.runner.calls)
+	}
+	if got := strings.Join(te.runner.calls[0].argv, " "); !strings.Contains(got, "-l "+sel) {
+		t.Errorf("workspace-exists argv %q does not select by the minted (uppercase) label %q", got, sel)
+	}
+}
+
+// FIRST RED TEST of S481.2: on a FRESH plane — reachable, but no
+// bashy-userland namespace — first use of a new name must bootstrap the
+// namespace and the workspace record in ONE apply. The fake plays the API
+// server's namespace rule faithfully: a namespaced apply against a namespace
+// that does not exist yet is refused with the live NotFound error, and a
+// Namespace object in the payload creates it, items applied in order.
+func TestUseCreatesNamespaceOnFreshPlane(t *testing.T) {
+	te := newTestEnv(t)
+	te.runner.exit["get"] = 0
+	te.runner.stdout["get"] = []byte("") // reachable; workspace list empty
+	te.runner.exit["apply"] = 0
+
+	code, stdout, stderr := runUserland(t, te.env, "use", "sk481@k8s:cloudbox")
+	if code != 0 {
+		t.Fatalf("use on a fresh plane exited %d: %q %q", code, stdout, stderr)
+	}
+
+	var apply *runnerCall
+	for i := range te.runner.calls {
+		for _, a := range te.runner.calls[i].argv {
+			if a == "apply" {
+				c := te.runner.calls[i]
+				apply = &c
+			}
+		}
+	}
+	if apply == nil {
+		t.Fatalf("no apply issued on a fresh plane: %v", te.runner.calls)
+	}
+	var list struct {
+		Kind  string           `json:"kind"`
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(apply.stdin, &list); err != nil {
+		t.Fatalf("apply stdin is not one JSON payload: %v\n%s", err, apply.stdin)
+	}
+	if list.Kind != "List" || len(list.Items) != 2 {
+		t.Fatalf("apply payload kind=%q items=%d, want one List of exactly Namespace+ConfigMap (a single apply call)", list.Kind, len(list.Items))
+	}
+	if list.Items[0]["kind"] != "Namespace" {
+		t.Errorf("first item kind = %v, want the Namespace BEFORE the ConfigMap", list.Items[0]["kind"])
+	}
+	ns, _ := list.Items[0]["metadata"].(map[string]any)
+	if ns["name"] != "bashy-userland" {
+		t.Errorf("namespace item name = %v, want bashy-userland", ns["name"])
+	}
+	if cm, _ := list.Items[1]["metadata"].(map[string]any); cm["namespace"] != "bashy-userland" || !strings.Contains(cm["name"].(string), "bashy-ws-") {
+		t.Errorf("configmap item = %v/%v, want bashy-ws-<id> in bashy-userland", cm["namespace"], cm["name"])
+	}
+	if ctx, ok := currentContext(t); !ok || ctx.WorkspaceID != "01JBQ5E9P2WYZ5ZG4HJ3XRG7W8" {
+		t.Errorf("selection after fresh-plane create = %+v ok=%v, want the minted workspace", ctx, ok)
+	}
+	if !strings.Contains(stdout, "cloudbox") {
+		t.Errorf("stdout %q does not name the plane", stdout)
+	}
+}
+
+// A payload WITHOUT the namespace first is refused the way the live fresh
+// plane refused it — the regression the fix closes: the ConfigMap apply used
+// to run alone against a namespace that did not exist.
+func TestUseApplyWithoutNamespaceFailsOnFreshPlane(t *testing.T) {
+	te := newTestEnv(t)
+	te.runner.exit["get"] = 0
+	te.runner.stdout["get"] = []byte("")
+	te.runner.exit["apply"] = 1
+	te.runner.stderr["apply"] = []byte(`Error from server (NotFound): namespaces "bashy-userland" not found`)
+
+	code, _, stderr := runUserland(t, te.env, "use", "sk481@k8s:cloudbox")
+	if code == 0 {
+		t.Fatal("use exited 0 although the plane refused the apply")
+	}
+	if !strings.Contains(stderr, "bashy-userland") || !strings.Contains(stderr, "exited 1") {
+		t.Errorf("stderr %q does not carry the plane's refusal", stderr)
+	}
+	if _, ok := currentContext(t); ok {
+		t.Error("a refused apply was persisted as the selected context")
 	}
 }
 
@@ -447,7 +583,7 @@ func TestUseNonKubernetesPlaneFailsClosed(t *testing.T) {
 func TestUseDefaultPlaneProbesWithoutContext(t *testing.T) {
 	te := newTestEnv(t)
 	te.runner.exit["get"] = 0
-	te.runner.stdout["get"] = []byte("configmap/bashy-ws-01JBQ5E9P2WYZ5ZG4HJ3XRG7W8\n")
+	te.runner.stdout["get"] = []byte("configmap/bashy-ws-01jbq5e9p2wyz5zg4hj3xrg7w8\n")
 	if code, _, stderr := runUserland(t, te.env, "use", "skel"); code != 0 {
 		t.Fatalf("use skel exited %d: %q", code, stderr)
 	}
