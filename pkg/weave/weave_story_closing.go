@@ -21,8 +21,11 @@ package weave
 // later, in CI, on code that plainly exists. Leaving a sprint with stale pins
 // hands that to whoever comes next with no way to tell it was inherited.
 //
-// Dirty paths are attributed to stories and linked repos. Sharing a checkout
-// does not exempt this sprint's own files; other or unknown ownership is warned.
+// Dirty paths are attributed to stories, linked repos, and — inside a linked
+// checkout — the paths this sprint's own delivery commits touched. Sharing a
+// checkout does not exempt this sprint's own files; other or unknown ownership
+// is warned. See sprint_wrapup_scope.go for why the scope is narrowed to what
+// the sprint touched, and how each way of reading that evidence degrades.
 
 import (
 	"fmt"

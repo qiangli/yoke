@@ -34,6 +34,10 @@ func sprintDirtyOwnership(s *weaveStory, board []*weaveStory, root string, repoP
 	candidates, roots := sprintOwnedRoots(s, board, repoPath)
 	dirty := 0
 	var warnings []string
+	// Read the delivery history only once something is attributed to us by
+	// mere containment — a clean checkout, or one dirtied only outside our
+	// links, never pays for it.
+	var footprint *sprintFootprint
 	entries := strings.Split(string(out), "\x00")
 	for i := 0; i < len(entries); i++ {
 		entry := entries[i]
@@ -46,6 +50,9 @@ func sprintDirtyOwnership(s *weaveStory, board []*weaveStory, root string, repoP
 			paths = append(paths, entries[i])
 		}
 		owners := map[int64]bool{}
+		// hard records an attribution the sprint's commit footprint cannot
+		// narrow: its own story file, or a linked checkout's own state.
+		hard := false
 		for _, path := range paths {
 			abs := hygieneRootKey(filepath.Join(root, path))
 			// Read deleted/renamed stories from HEAD so removing the file does not
@@ -60,13 +67,29 @@ func sprintDirtyOwnership(s *weaveStory, board []*weaveStory, root string, repoP
 					for _, owner := range candidates {
 						if storyBelongsToSprint(it, owner) {
 							owners[owner.ID] = true
+							hard = hard || owner.ID == s.ID
 						}
 					}
 					continue
 				}
 			}
-			for id := range sprintRootOwners(s, roots, abs, true) {
+			rooted := sprintRootOwners(s, roots, abs, true)
+			for id := range rooted {
 				owners[id] = true
+			}
+			hard = hard || (rooted[s.ID] && sprintOwnsRootExactly(roots, abs, s.ID))
+		}
+		if owners[s.ID] && !hard {
+			if footprint == nil {
+				footprint = sprintCommitFootprint(root)
+			}
+			if footprint.records(s.ID) && !sprintTouchedAny(footprint, s.ID, paths) {
+				delete(owners, s.ID)
+				for _, path := range paths {
+					for id := range footprint.owners(filepath.ToSlash(path)) {
+						owners[id] = true
+					}
+				}
 			}
 		}
 		if owners[s.ID] {
@@ -152,20 +175,38 @@ func sprintYieldsRoot(id int64, roots []sprintOwnedRoot, root string) bool {
 
 // sprintStalePinOwnership keeps the stale pins s answers for. A pin goes stale
 // when its sibling's HEAD moves, so it belongs to whoever produces in the
-// sibling: a pin on a sibling only other active sprints link is warned, while
-// one s links, or nobody links, still blocks.
+// sibling: a pin on a sibling only other active sprints link is warned, as is
+// one in a dep this sprint never changed. A sibling s links, or delivered a
+// commit in, still blocks — the pin is the only sibling source CI reads, so
+// shipping a change there and leaving the pin behind is this sprint's chore.
+//
+// Scoping a pin to the deps s changed needs s to have delivered something in
+// the module that holds the pin; with no commits of its own there, nothing is
+// scoped and an unlinked sibling's drift stays s's to answer, as before.
 func sprintStalePinOwnership(s *weaveStory, board []*weaveStory, path string, pins []string, repoPath func(sprintRun) (string, bool)) ([]string, []string) {
 	ws, err := gomod.Load(path)
 	if err != nil || ws == nil {
 		return pins, nil
 	}
 	_, roots := sprintOwnedRoots(s, board, repoPath)
+	scoped := len(pins) > 0 && sprintCommitFootprint(path).records(s.ID)
 	var own, warnings []string
 	for _, name := range pins {
-		owners := sprintRootOwners(s, roots, hygieneRootKey(filepath.Join(ws.Root, filepath.FromSlash(name))), false)
-		if len(owners) == 0 || owners[s.ID] {
+		sibling := hygieneRootKey(filepath.Join(ws.Root, filepath.FromSlash(name)))
+		owners := sprintRootOwners(s, roots, sibling, false)
+		if owners[s.ID] {
 			own = append(own, name)
 			continue
+		}
+		// Nobody links it: ask the sibling's own history whether this sprint
+		// delivered there, and name whoever moved it past the pin when it
+		// did not.
+		if len(owners) == 0 {
+			if !scoped || sprintCommitFootprint(sibling).records(s.ID) {
+				own = append(own, name)
+				continue
+			}
+			owners = sprintStalePinMovers(sibling)
 		}
 		warnings = append(warnings, fmt.Sprintf("WARNING: %s: stale pin %s (%s)", path, name, sprintOwnerNames(owners)))
 	}

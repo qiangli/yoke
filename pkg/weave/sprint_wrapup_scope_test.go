@@ -132,7 +132,7 @@ func TestSprintEndStillRefusesDirtItTouched(t *testing.T) {
 // A sibling pin trails whoever moved the sibling's HEAD. Sprint 454 was refused
 // over pins in deps it never changed, in two repos, with no way to answer them.
 func TestSprintEndWarnsOnPinDriftItNeverCaused(t *testing.T) {
-	root, dir := wrapupScopeFixture(t)
+	_, dir := wrapupScopeFixture(t)
 	out, code := runSprint(t, "end", "1")
 	if code != 0 {
 		t.Fatalf("drift in a dep the sprint never changed blocked end: %s", out)
@@ -147,7 +147,6 @@ func TestSprintEndWarnsOnPinDriftItNeverCaused(t *testing.T) {
 	if after.Stories[0].Column != "done" {
 		t.Fatalf("sprint #1 not ended: %+v", after.Stories[0])
 	}
-	_ = root
 }
 
 // A pin trailing a commit THIS sprint made in the sibling is its own chore: the
