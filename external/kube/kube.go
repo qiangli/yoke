@@ -39,8 +39,18 @@ const ProfilePeer = "peer"
 // default ~/.kube/outpost.yaml) and keeps the broker refresh.
 const ProfileCloudbox = "cloudbox"
 
+// ProfileFederation targets the Karmada federation control plane
+// (DKS_FEDERATION_KUBECONFIG, default
+// ~/.kube/outpost-federation/karmada.yaml). The materialised kubeconfig must
+// exist and be readable or this fails closed — there is no refresh for the
+// federation plane, and it never falls back to another plane.
+const ProfileFederation = "federation"
+
 // EnvPeerKubeconfig overrides the peer-plane kubeconfig path.
 const EnvPeerKubeconfig = "DKS_PEER_KUBECONFIG"
+
+// EnvFederationKubeconfig overrides the federation-plane kubeconfig path.
+const EnvFederationKubeconfig = "DKS_FEDERATION_KUBECONFIG"
 
 // ExecName is the on-disk basename for a tool (adds .exe on Windows) — the name
 // binmgr.Ensure caches it under (<CacheDir>/<name>/<version>/<execname>).
@@ -94,15 +104,20 @@ type Resolution struct {
 //     ~/.kube/outpost.yaml, with the broker refresh enabled. If the path can't
 //     be resolved (no $HOME) this also fails closed, since the profile was
 //     explicitly requested.
-//  4. No profile (the variable is unset, "auto"): if the user's
+//  4. $DKS_PROFILE=federation selects $DKS_FEDERATION_KUBECONFIG, defaulting
+//     to ~/.kube/outpost-federation/karmada.yaml, with no refresh. The file
+//     must exist and be readable or this fails closed — the federation plane
+//     never silently falls back to another plane.
+//  5. No profile (the variable is unset, "auto"): if the user's
 //     standard ~/.kube/config exists, nothing is injected, so native kubectl/
 //     helm honor its current context (the Dragon case: local peer cluster via
 //     ~/.kube/config). Only when that standard file is absent does this fall
 //     back to the canonical cloudbox outpost.yaml, with refresh enabled —
 //     preserving the original zero-config behavior on hosts with no local
 //     kubeconfig at all.
-//  5. Any set value other than peer or cloudbox, including an explicitly
-//     empty value, fails closed rather than silently guessing a plane.
+//  6. Any set value other than peer, cloudbox, or federation, including an
+//     explicitly empty value, fails closed rather than silently guessing a
+//     plane.
 func ResolveKubeconfig() (Resolution, error) {
 	if v := os.Getenv("KUBECONFIG"); v != "" {
 		return Resolution{}, nil // honor the user's explicit choice
@@ -136,8 +151,15 @@ func ResolveKubeconfig() (Resolution, error) {
 		}
 		return Resolution{KUBECONFIG: path, Refresh: true}, nil
 
+	case ProfileFederation:
+		path := federationKubeconfigPath()
+		if path == "" || !fileReadable(path) {
+			return Resolution{}, fmt.Errorf("kube: %s=federation kubeconfig %q not found or unreadable", EnvProfile, path)
+		}
+		return Resolution{KUBECONFIG: path}, nil
+
 	default:
-		return Resolution{}, fmt.Errorf("kube: unknown %s=%q (want %q or %q)", EnvProfile, profile, ProfilePeer, ProfileCloudbox)
+		return Resolution{}, fmt.Errorf("kube: unknown %s=%q (want %q, %q, or %q)", EnvProfile, profile, ProfilePeer, ProfileCloudbox, ProfileFederation)
 	}
 }
 
@@ -154,6 +176,16 @@ func peerKubeconfigPath() string {
 	}
 	if home, err := os.UserHomeDir(); err == nil {
 		return filepath.Join(home, ".kube", "outpost-control-plane", "k3s.yaml")
+	}
+	return ""
+}
+
+func federationKubeconfigPath() string {
+	if p := os.Getenv(EnvFederationKubeconfig); p != "" {
+		return p
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, ".kube", "outpost-federation", "karmada.yaml")
 	}
 	return ""
 }

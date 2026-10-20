@@ -276,6 +276,17 @@ var pinnedDigests = map[string]string{
 	"audacity@3.7.3/windows/amd64": "1d4c91d0bc1b5376f4c8768d48a6e79ab9dcb4600c1162053f61556becb45ce5",
 	"audacity@3.7.3/linux/amd64":   "4e7600c3d9f09dca52c7171cc0bfe76abb168436143cd02ecfa3052ab9f7aaa1",
 
+	// karmadactl@v1.19.0 — official karmada-io/karmada release
+	// karmadactl-<os>-<arch>.tgz archives. Each digest matched three ways:
+	// the release's per-asset .tgz.sha256 sidecar, GitHub's published asset
+	// digest, and an independent download + sha256 of the artifact itself
+	// (darwin/arm64, 2026-10-20). Upstream ships no Windows asset, so there
+	// is no windows pin — Windows stays fail-closed by design.
+	"karmadactl@v1.19.0/darwin/amd64": "f4b4ea6b3b33bab72602d62f5122e16be64f5297b79d99efc394dca1233a3755",
+	"karmadactl@v1.19.0/darwin/arm64": "f987edc33597f6266edb70ee0626dfce4ff050123c463955c7222cef0b874624",
+	"karmadactl@v1.19.0/linux/amd64":  "cf690eacc25ed13b6a27366c1b0b33e0e6edd2833e379922d420a5355550ef3d",
+	"karmadactl@v1.19.0/linux/arm64":  "bbda64036fb2e5f2f94eb00a5b58febcb3d6f77a175df81627baed1a65cd954a",
+
 	// No ollama pins, by design: per docs/bashy-service-supply-chain-policy.md
 	// (Sprint 436, story 8d1e72e5dff6) bashy never downloads or execs a
 	// third-party ollama release archive — the bashy-signed embedded runner

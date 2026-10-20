@@ -184,6 +184,77 @@ func TestOllamaRegistryRefusesDownload(t *testing.T) {
 	}
 }
 
+func TestKarmadactlEntry(t *testing.T) {
+	e, ok := Lookup("karmadactl")
+	if !ok {
+		t.Fatal("karmadactl not registered")
+	}
+	if e.Tier != 5 {
+		t.Errorf("karmadactl tier = %d, want 5 (cluster: the Karmada federation CLI)", e.Tier)
+	}
+	if e.License != "Apache-2.0" {
+		t.Errorf("karmadactl license = %q, want Apache-2.0", e.License)
+	}
+	if e.DefaultVersion != KarmadactlVersion {
+		t.Errorf("karmadactl DefaultVersion = %q, want %q", e.DefaultVersion, KarmadactlVersion)
+	}
+	if e.EnvVersion != "KARMADACTL_VERSION" {
+		t.Errorf("karmadactl EnvVersion = %q, want KARMADACTL_VERSION", e.EnvVersion)
+	}
+	if e.Synopsis == "" {
+		t.Error("karmadactl has no synopsis")
+	}
+	if e.Resolve == nil {
+		t.Error("karmadactl has no Resolve")
+	}
+	if cmd := e.NewCmd(); cmd.Name() != "karmadactl" || !cmd.DisableFlagParsing {
+		t.Errorf("karmadactl NewCmd wrong: name=%q disableFlags=%v", cmd.Name(), cmd.DisableFlagParsing)
+	}
+	// Fail-closed supply chain: the pinned release must carry committed
+	// sha256 pins for darwin/linux x amd64/arm64, and must NOT claim a
+	// Windows platform (upstream ships no karmadactl windows asset).
+	for _, p := range []string{"darwin/amd64", "darwin/arm64", "linux/amd64", "linux/arm64"} {
+		sha, ok := binmgr.PinnedSHA256(e.Name, e.DefaultVersion, p)
+		if !ok || sha == "" {
+			t.Errorf("karmadactl %q has no pin for %s", e.DefaultVersion, p)
+		}
+		if len(sha) != 64 {
+			t.Errorf("karmadactl pin for %s is not 64 hex chars: %q", p, sha)
+		}
+	}
+	for _, p := range []string{"windows/amd64", "windows/arm64"} {
+		if sha, ok := binmgr.PinnedSHA256(e.Name, e.DefaultVersion, p); ok || sha != "" {
+			t.Errorf("karmadactl %q must have no windows pin (no upstream asset), got %q for %s", e.DefaultVersion, sha, p)
+		}
+	}
+}
+
+func TestKarmadactlAssetMatch(t *testing.T) {
+	tests := []struct {
+		name   string
+		goos   string
+		goarch string
+		want   bool
+	}{
+		{"karmadactl-darwin-amd64.tgz", "darwin", "amd64", true},
+		{"karmadactl-darwin-arm64.tgz", "darwin", "arm64", true},
+		{"karmadactl-linux-amd64.tgz", "linux", "amd64", true},
+		{"karmadactl-linux-arm64.tgz", "linux", "arm64", true},
+		// The sibling kubectl-karmada plugin ships beside karmadactl in the
+		// same release — it must never match (wrong binary).
+		{"kubectl-karmada-darwin-arm64.tgz", "darwin", "arm64", false},
+		{"kubectl-karmada-linux-amd64.tgz", "linux", "amd64", false},
+		{"karmadactl-darwin-amd64.tgz.sha256", "darwin", "amd64", false},
+		{"karmadactl-linux-amd64.tgz", "darwin", "amd64", false},
+		{"karmadactl-darwin-arm64.tgz", "linux", "arm64", false},
+	}
+	for _, tt := range tests {
+		if got := karmadactlAssetMatch(tt.name, tt.goos, tt.goarch); got != tt.want {
+			t.Errorf("karmadactlAssetMatch(%q, %q, %q) = %v, want %v", tt.name, tt.goos, tt.goarch, got, tt.want)
+		}
+	}
+}
+
 func TestNamesAndAll(t *testing.T) {
 	names := Names()
 	if len(names) == 0 {
@@ -250,6 +321,19 @@ func TestNoDefaultRegistryEntryLacksPin(t *testing.T) {
 
 	// Also verify that ALL downloadable entries in the default registry have pins.
 	// Ollama is exempt: embedded-only per supply-chain policy, no download, no pin.
+	// karmadactl is exempt on Windows: upstream ships no karmadactl windows
+	// asset (darwin/linux .tgz only), so Windows stays fail-closed by design.
+	pinnedPlatforms := func(name string) []string {
+		if name == "karmadactl" {
+			return []string{
+				"darwin/amd64",
+				"darwin/arm64",
+				"linux/amd64",
+				"linux/arm64",
+			}
+		}
+		return supportedPlatforms
+	}
 	for _, e := range All() {
 		if e.Name == "ollama" {
 			continue
@@ -261,7 +345,7 @@ func TestNoDefaultRegistryEntryLacksPin(t *testing.T) {
 			t.Errorf("entry %q has no DefaultVersion", e.Name)
 			continue
 		}
-		for _, p := range supportedPlatforms {
+		for _, p := range pinnedPlatforms(e.Name) {
 			sha, ok := binmgr.PinnedSHA256(e.Name, e.DefaultVersion, p)
 			if !ok || sha == "" {
 				t.Errorf("entry %q (%s) has no pin for %s", e.Name, e.DefaultVersion, p)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -177,6 +178,69 @@ func TestResolveKubeconfigAutoFallsBackToCloudboxWhenNoStandardConfig(t *testing
 	}
 	if !res.Refresh {
 		t.Error("Refresh = false, want true for the implicit cloudbox fallback")
+	}
+}
+
+func TestResolveKubeconfigFederationProfile(t *testing.T) {
+	home := fakeHome(t)
+	t.Setenv("KUBECONFIG", "")
+	t.Setenv("DKS_PROFILE", "federation")
+	fed := filepath.Join(home, "karmada.yaml")
+	t.Setenv("DKS_FEDERATION_KUBECONFIG", fed)
+	if err := os.WriteFile(fed, []byte("federation"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := ResolveKubeconfig()
+	if err != nil {
+		t.Fatalf("ResolveKubeconfig() error = %v", err)
+	}
+	if res.KUBECONFIG != fed {
+		t.Errorf("KUBECONFIG = %q, want %q", res.KUBECONFIG, fed)
+	}
+	if res.Refresh {
+		t.Error("Refresh = true, want false for the federation profile (no refresh)")
+	}
+}
+
+func TestResolveKubeconfigFederationProfileDefaultPath(t *testing.T) {
+	home := fakeHome(t)
+	t.Setenv("KUBECONFIG", "")
+	t.Setenv("DKS_PROFILE", "federation")
+	t.Setenv("DKS_FEDERATION_KUBECONFIG", "")
+	want := filepath.Join(home, ".kube", "outpost-federation", "karmada.yaml")
+	if err := os.MkdirAll(filepath.Dir(want), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(want, []byte("federation"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := ResolveKubeconfig()
+	if err != nil {
+		t.Fatalf("ResolveKubeconfig() error = %v", err)
+	}
+	if res.KUBECONFIG != want {
+		t.Errorf("KUBECONFIG = %q, want default %q", res.KUBECONFIG, want)
+	}
+}
+
+func TestResolveKubeconfigFederationProfileFailsClosedWhenMissing(t *testing.T) {
+	home := fakeHome(t)
+	t.Setenv("KUBECONFIG", "")
+	t.Setenv("DKS_PROFILE", "federation")
+	missing := filepath.Join(home, "missing-federation.yaml")
+	t.Setenv("DKS_FEDERATION_KUBECONFIG", missing)
+
+	res, err := ResolveKubeconfig()
+	if err == nil {
+		t.Fatalf("ResolveKubeconfig() = %+v, want an error for a missing federation kubeconfig", res)
+	}
+	if !strings.Contains(err.Error(), missing) {
+		t.Errorf("ResolveKubeconfig() error = %q, want it to name the federation path %q", err.Error(), missing)
+	}
+	if res != (Resolution{}) {
+		t.Errorf("ResolveKubeconfig() = %+v, want zero Resolution on error", res)
 	}
 }
 

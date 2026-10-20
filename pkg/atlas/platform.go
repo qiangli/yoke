@@ -191,6 +191,11 @@ var externalPlatforms = map[string]ExternalPlatform{
 	"ollama":        {OS: allOS, WindowsAsset: "bashy-signed embedded runner only (no download per docs/bashy-service-supply-chain-policy.md)"},
 	"rg":            {OS: allOS, WindowsAsset: "ripgrep-*-x86_64-pc-windows-msvc.zip"},
 	"tofu":          {OS: allOS, WindowsAsset: "tofu_*_windows_amd64.zip"},
+	// karmadactl (tier 5, cluster): upstream ships karmadactl-<os>-<arch>.tgz
+	// for darwin/linux x amd64/arm64 only — no Windows asset, so no
+	// WindowsAsset and no windows OS. Tier/stability/origin derive from
+	// RegistryEntry (cluster/experimental); this row is the platform table.
+	"karmadactl": {OS: []string{OSDarwin, OSLinux}},
 }
 
 // ExternalPlatforms returns the declared platform support of a bin-managed

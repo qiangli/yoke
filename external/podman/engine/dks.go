@@ -22,6 +22,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/yoke/external/dks"
 	ociMachine "github.com/qiangli/yoke/pkg/oci/machine"
 )
 
@@ -56,9 +57,13 @@ Kubernetes tier. k3s-agent / kubelet-in-container must create cgroups under
 pod silently never starts. A dedicated rootful VM fixes this uniformly across
 every outpost, so hosts in the wild don't each hit a different podman quirk.
 
-macOS/Windows only — on Linux, containers run natively (no VM needed).`,
+macOS/Windows only — on Linux, containers run natively (no VM needed).
+
+The federation subcommand is mounted here in the full build, but it is NOT
+engine-only: the same command is routed from the lean build's early dispatch,
+so 'bashy dks federation …' works everywhere the VM verbs refuse.`,
 	}
-	cmd.AddCommand(newDKSProvisionCmd(), newDKSStatusCmd())
+	cmd.AddCommand(newDKSProvisionCmd(), newDKSStatusCmd(), dks.NewFederationCmd())
 	return cmd
 }
 

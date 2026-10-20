@@ -97,7 +97,10 @@ always wins. Otherwise: $DKS_PROFILE=peer targets the local peer-plane cluster
 ($DKS_PEER_KUBECONFIG or ~/.kube/outpost-control-plane/k3s.yaml, failing closed
 if missing); $DKS_PROFILE=cloudbox targets the legacy cloudbox cluster
 ($OUTPOST_KUBECONFIG_PATH or ~/.kube/outpost.yaml, refreshed through outpost's
-broker); with no profile set, kubectl honors your standard ~/.kube/config and
+broker); $DKS_PROFILE=federation targets the Karmada federation control plane
+($DKS_FEDERATION_KUBECONFIG or ~/.kube/outpost-federation/karmada.yaml, failing
+closed if missing, no refresh — selected through 'bashy dks federation');
+with no profile set, kubectl honors your standard ~/.kube/config and
 its current context when that file exists, falling back to the cloudbox
 kubeconfig only when it doesn't. $KUBECTL_VERSION pins the release; all args
 pass through to kubectl.`,
