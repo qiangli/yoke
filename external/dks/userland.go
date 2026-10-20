@@ -19,21 +19,23 @@ import (
 )
 
 // userlandVerbs are the `bashy dks` client verbs of the cluster-userland
-// contract §3. The spellings are final; logs and attach are registered but
-// fail closed until S481.6 lands.
+// contract §3. The spellings are final; session-server is the hidden
+// executor-side verb the rendered Pod runs, never typed by hand.
 var userlandVerbs = map[string]string{
-	"use":    "select the workspace later commands run in (create on first use)",
-	"local":  "run one command on this machine, explicitly",
-	"run":    "run a command as a scheduled workload in the selected workspace",
-	"ps":     "list the workspace's runs and sessions",
-	"logs":   "show a run's or session's output",
-	"attach": "reattach a session from any paired client",
-	"stop":   "stop exactly one run or session",
+	"use":            "select the workspace later commands run in (create on first use)",
+	"local":          "run one command on this machine, explicitly",
+	"run":            "run a command as a scheduled workload in the selected workspace",
+	"ps":             "list the workspace's runs and sessions",
+	"logs":           "show a run's or session's output",
+	"attach":         "reattach a session from any paired client",
+	"stop":           "stop exactly one run or session",
+	"session-server": "run the executor-side session server (internal)",
 }
 
 // unimplementedVerbs fail closed: registered for discovery and help, but they
-// never run anything — locally or on a plane — until their story lands.
-var unimplementedVerbs = []string{"logs", "attach"}
+// never run anything — locally or on a plane — until their story lands. No
+// verb is unimplemented now; the machinery stays for future verbs.
+var unimplementedVerbs = []string{}
 
 // notAvailableSprint names the stories that finish the unimplemented verbs.
 const notAvailableSprint = "Sprint 481 S481.3/S481.6"
@@ -101,6 +103,7 @@ func newUserlandCmds(env *userlandEnv) []*cobra.Command {
 		newUserlandLocalCmd(env),
 	}
 	cmds = append(cmds, newUserlandRunCmds(env)...)
+	cmds = append(cmds, newUserlandSessionCmds(env)...)
 	for _, verb := range unimplementedVerbs {
 		cmds = append(cmds, newNotAvailableCmd(verb))
 	}

@@ -5,6 +5,7 @@
     "metadata": {
       "annotations": {
         "artifact.dhnt.io/linux-amd64": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "dhnt.io/attach-port": "42650",
         "dhnt.io/command-digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
         "dhnt.io/manifest": "---\nname: run-01jb7cexample0000000000000\ndescription: bashy run manifest for bashy (generated; do not edit)\ntype: dag\nmetadata:\n  run-kind: interactive\n  workspace: ws-01jb6zexample0000000000\n  run-id: 01JB7CEXAMPLE0000000000000\n  command:\n    name: bashy\n    digest: sha256:4444444444444444444444444444444444444444444444444444444444444444\n  artifact:\n    linux/amd64: sha256:1111111111111111111111111111111111111111111111111111111111111111\n  cwd: ~/sub\n  egress: internet\n---\n## run\nVenue: cluster\nDistribution: single\nMatch: kubernetes.io/arch=amd64 kubernetes.io/os=linux outpost.dhnt.io/host=worker-a\nCPUPerTask: 1\nMemory: 512Mi\nEnv: LANG=C.UTF-8 TZ=UTC\nRetries: 0\n```sh\nbashy -i\n```\n"
       },
@@ -21,6 +22,16 @@
       "containers": [
         {
           "command": [
+            "bashy",
+            "dks",
+            "session-server",
+            "--session",
+            "01JB7CEXAMPLE0000000000000",
+            "--home",
+            "/home/bashy",
+            "--port",
+            "42650",
+            "--",
             "bashy",
             "-c",
             "bashy -i"
@@ -41,6 +52,13 @@
           ],
           "image": "registry.example/bashy/bashy:v0.0.0-test",
           "name": "run",
+          "ports": [
+            {
+              "containerPort": 42650,
+              "hostPort": 42650,
+              "name": "attach"
+            }
+          ],
           "resources": {
             "requests": {
               "cpu": "1",
