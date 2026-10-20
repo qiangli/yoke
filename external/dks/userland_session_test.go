@@ -38,6 +38,7 @@ type sessionRunner struct {
 	calls    []runnerCall
 	podsJSON []byte
 	listJSON []byte
+	nodeJSON []byte
 	runErr   error
 }
 
@@ -60,6 +61,11 @@ func (r *sessionRunner) Run(_ context.Context, argv []string, stdin []byte) ([]b
 				return r.podsJSON, nil, 0, nil
 			}
 			return []byte(`{"items":[]}`), nil, 0, nil
+		}
+	}
+	for _, a := range argv {
+		if a == "node" && r.nodeJSON != nil {
+			return r.nodeJSON, nil, 0, nil
 		}
 	}
 	return []byte(`{}`), nil, 0, nil
@@ -366,6 +372,132 @@ func TestAttachVerbReplaysAndExitsWithSessionCode(t *testing.T) {
 		t.Error("attach never looked the pod up by label")
 	}
 	st.noLocal(t)
+}
+
+// vknodePodJSON is a session pod as the vknode actually schedules it: no
+// Outpost host label on the pod, only the node name ("<host>-vk-podman").
+func vknodePodJSON(namespace, name, uid, node, port string) []byte {
+	return []byte(fmt.Sprintf(`{"items":[{"metadata":{"name":%q,"namespace":%q,"uid":%q,`+
+		`"labels":{"app.kubernetes.io/managed-by":"bashy","dhnt.io/workspace":%q,"dhnt.io/run":%q},`+
+		`"annotations":{"dhnt.io/attach-port":%q}},`+
+		`"spec":{"nodeName":%q},"status":{"phase":"Running"}}]}`,
+		name, namespace, uid, testWorkspaceID, testRunID, port, node))
+}
+
+// nodeJSON is one node as `kubectl get node -o json` reports it.
+func nodeJSON(name string, labels map[string]string) []byte {
+	b, _ := json.Marshal(map[string]any{"metadata": map[string]any{"name": name, "labels": labels}})
+	return b
+}
+
+// TestAttachUsesNodeOutpostHostLabelNotNodeName pins the live S481.6 fix:
+// the vknode labels its NODE with the Outpost host, the pod carries none,
+// and the tunnel routes by host — so the dialed path names the host from
+// the node label, never the node name.
+func TestAttachUsesNodeOutpostHostLabelNotNodeName(t *testing.T) {
+	st := newSessionTest(t)
+	st.selectWorkspace(t, "skel")
+	hub, id := sessionCommandHub(t, testRunID)
+	_, dialed := attachTunnelServer(t, st, hub)
+	if err := hub.RecordExit(0, time.Now()); err != nil {
+		t.Fatalf("RecordExit: %v", err)
+	}
+	podName := "bashy-run-" + strings.ToLower(testRunID)
+	st.runner.podsJSON = vknodePodJSON("default", podName, "abcdef1234567890", "x-vk-podman", "41234")
+	st.runner.nodeJSON = nodeJSON("x-vk-podman", map[string]string{"outpost.dhnt.io/host": "x"})
+
+	code, _, stderr := st.exec(t, "attach", id)
+	if code != 0 {
+		t.Fatalf("attach exited %d, want 0 (stderr %q)", code, stderr)
+	}
+	if len(*dialed) != 1 {
+		t.Fatalf("dialed endpoints = %v, want exactly one tunnel dial", *dialed)
+	}
+	want := "/matrix/h/x/app/vk-default-" + podName + "-abcdef12/attach"
+	if got := (*dialed)[0].endpoint; !strings.HasSuffix(got, want) {
+		t.Errorf("tunnel endpoint %q, want path %q", got, want)
+	}
+	var sawNode bool
+	for _, c := range st.runner.calls {
+		if strings.Join(c.argv, " ") == "kubectl get node x-vk-podman -o json" ||
+			strings.HasSuffix(strings.Join(c.argv, " "), "get node x-vk-podman -o json") {
+			sawNode = true
+		}
+	}
+	if !sawNode {
+		t.Errorf("attach never read the pod's node: %v", st.runner.calls)
+	}
+	st.noLocal(t)
+}
+
+// TestAttachNodeWithoutOutpostHostFailsClosed: a pod on a plain kubelet has
+// no Outpost host to tunnel through, so attach and logs refuse with an
+// actionable message and never dial a route named after the node.
+func TestAttachNodeWithoutOutpostHostFailsClosed(t *testing.T) {
+	st := newSessionTest(t)
+	st.selectWorkspace(t, "skel")
+	hub, id := sessionCommandHub(t, testRunID)
+	_, dialed := attachTunnelServer(t, st, hub)
+	// A recorded exit makes a regression (dialing the node-name route) end
+	// promptly with a wrong exit 0 instead of hanging on a live session.
+	if err := hub.RecordExit(0, time.Now()); err != nil {
+		t.Fatalf("RecordExit: %v", err)
+	}
+	podName := "bashy-run-" + strings.ToLower(testRunID)
+	st.runner.podsJSON = vknodePodJSON("default", podName, "abcdef1234567890", "plain-kubelet", "41234")
+	st.runner.nodeJSON = nodeJSON("plain-kubelet", map[string]string{"kubernetes.io/os": "linux"})
+
+	for _, args := range [][]string{{"attach", id}, {"logs", id}} {
+		code, _, stderr := st.exec(t, args...)
+		if code == 0 {
+			t.Errorf("%v exited 0 on a node with no Outpost host", args)
+		}
+		for _, want := range []string{"plain-kubelet", "outpost.dhnt.io/host", "Outpost"} {
+			if !strings.Contains(stderr, want) {
+				t.Errorf("%v stderr %q misses %q", args, stderr, want)
+			}
+		}
+	}
+	if len(*dialed) != 0 {
+		t.Errorf("dialed %v, want no tunnel dial", *dialed)
+	}
+	st.noLocal(t)
+}
+
+// TestBadHandshakeNamesStatusAndPath: a refused tunnel upgrade reports the
+// edge's HTTP status and the dialed path — never the query or a credential.
+func TestBadHandshakeNamesStatusAndPath(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "no such route", http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+	const secret = "test-bearer-should-not-leak"
+	headers := func() (http.Header, error) {
+		return http.Header{"Authorization": []string{"Bearer " + secret}}, nil
+	}
+	endpoint := "ws://" + strings.TrimPrefix(srv.URL, "http://") + "/matrix/h/wrong/app/vk-a/attach"
+	ctx := context.Background()
+
+	_, err := realDialStream(ctx, endpoint, "client-1", 0, false, headers)
+	h, _ := headers()
+	_, serr := realSnapshotDial(ctx, endpoint+"?client=c&since=0&viewer=1", h)
+	for name, e := range map[string]error{"attach": err, "snapshot": serr} {
+		if e == nil {
+			t.Fatalf("%s: dial succeeded against a 404 edge", name)
+		}
+		msg := e.Error()
+		if !errors.Is(e, websocket.ErrBadHandshake) {
+			t.Errorf("%s: %q no longer wraps ErrBadHandshake", name, msg)
+		}
+		for _, want := range []string{"HTTP 404", "/matrix/h/wrong/app/vk-a/attach"} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("%s: %q misses %q", name, msg, want)
+			}
+		}
+		if strings.Contains(msg, secret) || strings.Contains(msg, "client=") {
+			t.Errorf("%s: %q leaks the query or a credential", name, msg)
+		}
+	}
 }
 
 // readBinaryBytes reads binary frames until n bytes arrive or the deadline
