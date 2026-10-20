@@ -63,7 +63,7 @@ The federation subcommand is mounted here in the full build, but it is NOT
 engine-only: the same command is routed from the lean build's early dispatch,
 so 'bashy dks federation …' works everywhere the VM verbs refuse.`,
 	}
-	cmd.AddCommand(newDKSProvisionCmd(), newDKSStatusCmd(), dks.NewFederationCmd())
+	cmd.AddCommand(append(dks.NewUserlandCmds(), newDKSProvisionCmd(), newDKSStatusCmd(), dks.NewFederationCmd())...)
 	return cmd
 }
 
