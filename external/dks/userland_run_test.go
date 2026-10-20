@@ -92,12 +92,19 @@ type runTest struct {
 	clock    time.Time
 	sleeps   int
 	registry map[string]fleet.Command
+	secrets  map[string][]byte
 }
 
 func newRunTest(t *testing.T) *runTest {
 	t.Helper()
 	te := newTestEnv(t)
-	rt := &runTest{testEnv: te, runner: &seqRunner{}, clock: time.UnixMilli(1_730_000_000_000).Add(90 * time.Second), registry: map[string]fleet.Command{}}
+	rt := &runTest{
+		testEnv:  te,
+		runner:   &seqRunner{},
+		clock:    time.UnixMilli(1_730_000_000_000).Add(90 * time.Second),
+		registry: map[string]fleet.Command{},
+		secrets:  map[string][]byte{},
+	}
 	te.env.newRunner = func() cluster.Runner { return rt.runner }
 	te.env.mintID = func() string { return testRunID }
 	rt.renv = &runEnv{
@@ -106,7 +113,7 @@ func newRunTest(t *testing.T) *runTest {
 		shippedArtifacts: func(string, releaseIdentity) (map[string]string, error) {
 			return map[string]string{"linux/amd64": testAmdSHA, "linux/arm64": testArmSHA}, nil
 		},
-		isShipped:     func(name string) bool { return name == "echo" || name == "make" },
+		isShipped:     func(name string) bool { return name == "echo" || name == "make" || name == "claude" },
 		lookupCommand: func(name string) (fleet.Command, bool) { c, ok := rt.registry[name]; return c, ok },
 		getenv: func(k string) (string, bool) {
 			if k == "CI" {
@@ -114,7 +121,13 @@ func newRunTest(t *testing.T) *runTest {
 			}
 			return "", false
 		},
-		image:           func() string { return testRunImage },
+		image: func() string { return testRunImage },
+		secretResolver: func(_ context.Context, vaultName string) ([]byte, error) {
+			if val, ok := rt.secrets[vaultName]; ok {
+				return val, nil
+			}
+			return nil, fmt.Errorf("secret %q not found in test fake", vaultName)
+		},
 		recordRunKind:   func(fleet.Command) dagrun.RunKind { return "" },
 		stdinIsTerminal: func() bool { return false },
 		now:             func() time.Time { return rt.clock },
@@ -647,12 +660,229 @@ func TestStopDeletesByRunLabelOnly(t *testing.T) {
 		t.Fatalf("calls = %v", rt.runner.actions())
 	}
 	got := strings.Join(rt.runner.calls[0].argv, " ")
-	want := "kubectl delete jobs,pods,services,deployments,networkpolicies -l " + dagrun.LabelManagedBy + "=bashy," + dagrun.LabelRun + "=" + testRunID + " --wait=false"
+	want := "kubectl delete jobs,pods,services,deployments,networkpolicies,secrets -l " + dagrun.LabelManagedBy + "=bashy," + dagrun.LabelRun + "=" + testRunID + " --wait=false"
 	if got != want {
 		t.Errorf("stop argv = %q, want %q", got, want)
 	}
 	if !strings.Contains(stdout, testRunID) {
 		t.Errorf("stdout %q", stdout)
+	}
+}
+
+func TestStopDeletesCredentialSecret(t *testing.T) {
+	rt := newRunTest(t)
+	rt.selectWorkspace(t, "skel")
+	code, stdout, stderr := rt.exec(t, "stop", testRunID)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	if len(rt.runner.calls) != 1 {
+		t.Fatalf("calls = %v", rt.runner.actions())
+	}
+	call := rt.runner.calls[0]
+	foundSecrets := false
+	for i, arg := range call.argv {
+		if arg == "delete" && i+1 < len(call.argv) {
+			kinds := strings.Split(call.argv[i+1], ",")
+			for _, k := range kinds {
+				if k == "secrets" || k == "secret" {
+					foundSecrets = true
+					break
+				}
+			}
+		}
+	}
+	if !foundSecrets {
+		t.Errorf("stop argv %q does not include secrets in delete kinds", call.argv)
+	}
+	if !strings.Contains(stdout, testRunID) {
+		t.Errorf("stdout %q", stdout)
+	}
+}
+
+func TestRunCredentialNeverInArgvManifestOrAnnotations(t *testing.T) {
+	rt := newRunTest(t)
+	rt.selectWorkspace(t, "skel@k8s:dev")
+
+	// Construct fake oat token dynamically at runtime (no literal real-looking tokens in source)
+	fakeOAT := strings.Join([]string{"sk", "ant", "oat", "fake", "token", "0123456789abcdef"}, "-")
+	rt.secrets["anthropic-subscription"] = []byte(fakeOAT)
+
+	rt.runner.gets = [][]byte{
+		runsJSON(jobJSON(testWorkspaceID, testRunID, "claude", "Complete")),
+	}
+
+	code, stdout, stderr := rt.exec(t, "run", "--credential", "anthropic-subscription=CLAUDE_CODE_OAUTH_TOKEN", "--", "claude", "-p", "generate report")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+
+	if len(rt.runner.calls) < 2 {
+		t.Fatalf("expected at least 2 plane calls (Secret apply, Job apply), got %d: %v", len(rt.runner.calls), rt.runner.actions())
+	}
+
+	secretCall := rt.runner.calls[0]
+	jobCall := rt.runner.calls[1]
+
+	// Secret call checks
+	wantSecretName := "bashy-cred-" + strings.ToLower(testRunID)
+	var secretObj map[string]any
+	if err := json.Unmarshal(secretCall.stdin, &secretObj); err != nil {
+		t.Fatalf("parse secret apply stdin: %v", err)
+	}
+	if secretObj["kind"] != "Secret" {
+		t.Errorf("secret call kind = %v, want Secret", secretObj["kind"])
+	}
+	secMeta, _ := secretObj["metadata"].(map[string]any)
+	if secMeta["name"] != wantSecretName {
+		t.Errorf("secret name = %v, want %s", secMeta["name"], wantSecretName)
+	}
+	labels, _ := secMeta["labels"].(map[string]any)
+	if labels[dagrun.LabelManagedBy] != "bashy" || labels[dagrun.LabelRun] != testRunID || labels[dagrun.LabelWorkspace] != testWorkspaceID {
+		t.Errorf("secret labels incorrect: %v", labels)
+	}
+	stringData, _ := secretObj["stringData"].(map[string]any)
+	if stringData["CLAUDE_CODE_OAUTH_TOKEN"] != fakeOAT {
+		t.Errorf("stringData[CLAUDE_CODE_OAUTH_TOKEN] = %v, want %s", stringData["CLAUDE_CODE_OAUTH_TOKEN"], fakeOAT)
+	}
+	// Verify fakeOAT appears ONLY in stringData in the Secret payload
+	secretJSONWithoutStringData := strings.Replace(string(secretCall.stdin), fakeOAT, "", 1)
+	if strings.Contains(secretJSONWithoutStringData, fakeOAT) {
+		t.Fatal("CRITICAL: fakeOAT leaked into other parts of Secret payload")
+	}
+
+	// Workload Job checks
+	var jobList map[string]any
+	if err := json.Unmarshal(jobCall.stdin, &jobList); err != nil {
+		t.Fatalf("parse job apply stdin: %v", err)
+	}
+	items, _ := jobList["items"].([]any)
+	if len(items) == 0 {
+		t.Fatal("workload items empty")
+	}
+	jobObj, _ := items[0].(map[string]any)
+	jobSpec, _ := jobObj["spec"].(map[string]any)
+	tmpl, _ := jobSpec["template"].(map[string]any)
+	podSpec, _ := tmpl["spec"].(map[string]any)
+	containers, _ := podSpec["containers"].([]any)
+	container, _ := containers[0].(map[string]any)
+	envList, _ := container["env"].([]any)
+
+	var foundEnv map[string]any
+	for _, e := range envList {
+		entry, _ := e.(map[string]any)
+		if entry["name"] == "CLAUDE_CODE_OAUTH_TOKEN" {
+			foundEnv = entry
+			break
+		}
+	}
+	if foundEnv == nil {
+		t.Fatalf("workload container env missing CLAUDE_CODE_OAUTH_TOKEN: %v", envList)
+	}
+	vf, _ := foundEnv["valueFrom"].(map[string]any)
+	skr, _ := vf["secretKeyRef"].(map[string]any)
+	if skr["name"] != wantSecretName {
+		t.Errorf("secretKeyRef name = %v, want %s", skr["name"], wantSecretName)
+	}
+	if skr["key"] != "CLAUDE_CODE_OAUTH_TOKEN" {
+		t.Errorf("secretKeyRef key = %v, want CLAUDE_CODE_OAUTH_TOKEN", skr["key"])
+	}
+
+	// Workload must NOT contain secret value bytes anywhere in its JSON payload
+	if bytes.Contains(jobCall.stdin, []byte(fakeOAT)) {
+		t.Fatal("CRITICAL: secret value leaked into workload payload")
+	}
+
+	// Workload annotations/manifest must record only the vault name and env name, never the value
+	jobMeta, _ := jobObj["metadata"].(map[string]any)
+	annots, _ := jobMeta["annotations"].(map[string]any)
+	manifestText, _ := annots[dagrun.AnnotManifest].(string)
+	if strings.Contains(manifestText, fakeOAT) {
+		t.Fatal("CRITICAL: secret value leaked into manifest annotation")
+	}
+	if !strings.Contains(manifestText, "Secrets: anthropic-subscription=CLAUDE_CODE_OAUTH_TOKEN") {
+		t.Errorf("manifest annotation missing Secrets reference line: %s", manifestText)
+	}
+
+	// Argv of all calls must contain no secret value bytes
+	for i, c := range rt.runner.calls {
+		fullArgv := strings.Join(c.argv, " ")
+		if strings.Contains(fullArgv, fakeOAT) {
+			t.Fatalf("CRITICAL: call %d argv contains secret value: %s", i, fullArgv)
+		}
+	}
+
+	// Stdout and stderr must contain no secret value bytes
+	if strings.Contains(stdout, fakeOAT) {
+		t.Fatal("CRITICAL: stdout contains secret value")
+	}
+	if strings.Contains(stderr, fakeOAT) {
+		t.Fatal("CRITICAL: stderr contains secret value")
+	}
+}
+
+func TestRunRefusesMeteredKeyForSubscription(t *testing.T) {
+	// Case 1: vault name contains "subscription"
+	{
+		rt := newRunTest(t)
+		rt.selectWorkspace(t, "skel")
+		meteredKey := strings.Join([]string{"sk", "ant", "api03", "sample", "metered", "key"}, "-")
+		rt.secrets["anthropic-subscription"] = []byte(meteredKey)
+
+		code, _, stderr := rt.exec(t, "run", "--credential", "anthropic-subscription", "--", "claude", "-p", "report")
+		if code != 1 {
+			t.Errorf("exit code = %d, want 1", code)
+		}
+		wantMsg := "metered API key refused for a subscription credential — nothing ran"
+		if !strings.Contains(stderr, wantMsg) {
+			t.Errorf("stderr %q does not contain %q", stderr, wantMsg)
+		}
+		if len(rt.runner.calls) != 0 {
+			t.Errorf("plane calls made: %v, want 0", rt.runner.actions())
+		}
+	}
+
+	// Case 2: ENV_NAME is CLAUDE_CODE_OAUTH_TOKEN
+	{
+		rt := newRunTest(t)
+		rt.selectWorkspace(t, "skel")
+		meteredKey := strings.Join([]string{"sk", "ant", "api03", "other", "metered", "key"}, "-")
+		rt.secrets["my-custom-vault"] = []byte(meteredKey)
+
+		code, _, stderr := rt.exec(t, "run", "--credential", "my-custom-vault=CLAUDE_CODE_OAUTH_TOKEN", "--", "claude", "-p", "report")
+		if code != 1 {
+			t.Errorf("exit code = %d, want 1", code)
+		}
+		wantMsg := "metered API key refused for a subscription credential — nothing ran"
+		if !strings.Contains(stderr, wantMsg) {
+			t.Errorf("stderr %q does not contain %q", stderr, wantMsg)
+		}
+		if len(rt.runner.calls) != 0 {
+			t.Errorf("plane calls made: %v, want 0", rt.runner.actions())
+		}
+	}
+}
+
+func TestRunRedactsDeliveredSecretFromError(t *testing.T) {
+	rt := newRunTest(t)
+	rt.selectWorkspace(t, "skel")
+
+	secretToken := strings.Join([]string{"my", "super", "secret", "token", "val"}, "-")
+	rt.secrets["my-vault"] = []byte(secretToken)
+
+	// Inject runner error on apply that echoes the secret
+	rt.runner.apply.exit = 1
+	rt.runner.apply.stderr = fmt.Sprintf("plane error with leaked %s token", secretToken)
+
+	code, _, stderr := rt.exec(t, "run", "--credential", "my-vault=MY_TOKEN", "--", "echo", "hello")
+	if code == 0 {
+		t.Fatal("expected non-zero exit")
+	}
+	if strings.Contains(stderr, secretToken) {
+		t.Fatalf("CRITICAL: stderr leaked secret: %s", stderr)
+	}
+	if !strings.Contains(stderr, "[redacted]") {
+		t.Errorf("stderr does not contain [redacted]: %s", stderr)
 	}
 }
 

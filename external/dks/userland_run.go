@@ -12,6 +12,7 @@
 package dks
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -20,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
@@ -35,6 +37,7 @@ import (
 	"github.com/qiangli/yoke/pkg/dagrun"
 	"github.com/qiangli/yoke/pkg/dagrun/cluster"
 	"github.com/qiangli/yoke/pkg/fleet"
+	"github.com/qiangli/yoke/pkg/secrets"
 )
 
 // releaseIdentity is the running bashy release: its version, the sha256 of
@@ -85,6 +88,8 @@ type runEnv struct {
 	// image reads $BASHY_DKS_IMAGE ("" = unset); the release's own image
 	// is the fallback after it.
 	image func() string
+	// secretResolver resolves vault credential references into secret values on the client.
+	secretResolver func(ctx context.Context, vaultName string) ([]byte, error)
 	// now and sleep drive the completion wait.
 	now   func() time.Time
 	sleep func(ctx context.Context, d time.Duration) error
@@ -145,11 +150,26 @@ func defaultRunEnv(env *userlandEnv) *runEnv {
 		lookupCommand:    func(name string) (fleet.Command, bool) { return fleet.New().Command(name) },
 		getenv:           os.LookupEnv,
 		image:            func() string { return strings.TrimSpace(os.Getenv(imageEnvVar)) },
+		secretResolver:   defaultSecretResolver,
 		recordRunKind:    fleetRecordRunKind,
 		stdinIsTerminal:  func() bool { return term.IsTerminal(int(os.Stdin.Fd())) },
 		now:              time.Now,
 		sleep:            sleepContext,
 	}
+}
+
+// defaultSecretResolver resolves a vault credential by running `bashy secret show <vault-name>`.
+func defaultSecretResolver(ctx context.Context, vaultName string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "bashy", "secret", "show", vaultName)
+	out, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
+			return nil, fmt.Errorf("bashy secret show %s: %s", vaultName, bytes.TrimSpace(exitErr.Stderr))
+		}
+		return nil, fmt.Errorf("bashy secret show %s: %w", vaultName, err)
+	}
+	return bytes.TrimRight(out, "\r\n"), nil
 }
 
 // newUserlandRunCmds builds run, ps and stop over the production seams.
@@ -163,15 +183,16 @@ func newRunCmds(env *runEnv) []*cobra.Command {
 
 // runOptions are the flags of one `dks run`.
 type runOptions struct {
-	detach  bool
-	session bool
-	tty     bool
-	emit    string
-	cpu     int
-	memory  string
-	env     []string
-	image   string
-	timeout time.Duration
+	detach      bool
+	session     bool
+	tty         bool
+	emit        string
+	cpu         int
+	memory      string
+	env         []string
+	credentials []string
+	image       string
+	timeout     time.Duration
 	// scheduleCheck bounds the --detach placement check (0 = none).
 	scheduleCheck time.Duration
 	verbose       bool
@@ -180,7 +201,7 @@ type runOptions struct {
 func newUserlandRunCmd(env *runEnv) *cobra.Command {
 	var o runOptions
 	cmd := &cobra.Command{
-		Use:   "run [--detach | --session [--tty]] [--cpu N --memory Q] [--env K[=V]]... -- <cmd> [args...]",
+		Use:   "run [--detach | --session [--tty]] [--cpu N --memory Q] [--env K[=V]]... [--credential <vault-name>[=<ENV_NAME>]]... -- <cmd> [args...]",
 		Short: "Run a command as a scheduled workload in the selected workspace",
 		Long: `run schedules one shipped or registered command in the selected workspace
 and waits for it to finish:
@@ -218,6 +239,7 @@ nothing.`,
 	f.IntVar(&o.cpu, "cpu", 0, "whole CPUs to request")
 	f.StringVar(&o.memory, "memory", "", "memory to request, e.g. 4Gi")
 	f.StringArrayVar(&o.env, "env", nil, "carry one variable: K (its exported value) or K=V; repeatable")
+	f.StringArrayVar(&o.credentials, "credential", nil, "deliver one credential out-of-band: <vault-name>[=<ENV_NAME>]; repeatable")
 	f.StringVar(&o.image, "image", "", "Linux executor image (default $"+imageEnvVar+", then "+defaultImagePrefix+"<bashy commit>)")
 	f.BoolVar(&o.verbose, "verbose", false, "report the resolved executor image and where it came from")
 	f.DurationVar(&o.timeout, "timeout", defaultRunTimeout, "how long to wait for a terminal phase")
@@ -229,8 +251,10 @@ nothing.`,
 // run is `dks run`. Order is fail-closed: selection, command identity and
 // manifest first (no plane call), then the plane, then apply, then wait.
 func (env *runEnv) run(cmd *cobra.Command, o runOptions, args []string) error {
+	var secretValues [][]byte
+	redact := func(s string) string { return s }
 	fail := func(err error) error {
-		fmt.Fprintf(cmd.ErrOrStderr(), "bashy dks run: %v\n", err)
+		fmt.Fprintf(cmd.ErrOrStderr(), "bashy dks run: %s\n", redact(err.Error()))
 		return errUserlandHandled
 	}
 	switch o.emit {
@@ -259,6 +283,62 @@ func (env *runEnv) run(cmd *cobra.Command, o runOptions, args []string) error {
 	if err != nil {
 		return fail(err)
 	}
+
+	secretStringData := make(map[string]string)
+	var credRefsForManifest []string
+	for _, spec := range o.credentials {
+		spec = strings.TrimSpace(spec)
+		if spec == "" {
+			return fail(errors.New("--credential: empty specification — nothing ran"))
+		}
+		vaultName, envName, hasEnv := strings.Cut(spec, "=")
+		vaultName = strings.TrimSpace(vaultName)
+		if vaultName == "" {
+			return fail(fmt.Errorf("--credential %q: empty vault name — nothing ran", spec))
+		}
+		if err := dagrun.ValidateRef(vaultName); err != nil {
+			return fail(err)
+		}
+		if hasEnv {
+			envName = strings.TrimSpace(envName)
+			if envName == "" {
+				return fail(fmt.Errorf("--credential %q: empty environment variable name — nothing ran", spec))
+			}
+		} else {
+			names := secrets.CredentialEnvNames(vaultName)
+			if len(names) == 0 || names[0] == "" {
+				return fail(fmt.Errorf("--credential %s: no environment variable name mapped; pass --credential %s=<ENV_NAME> explicitly — nothing ran", vaultName, vaultName))
+			}
+			envName = names[0]
+		}
+		if !validEnvName(envName) {
+			return fail(fmt.Errorf("--credential %q: invalid environment variable name %q — nothing ran", spec, envName))
+		}
+		if env.secretResolver == nil {
+			return fail(errors.New("no secret resolver configured — nothing ran"))
+		}
+		valBytes, err := env.secretResolver(cmd.Context(), vaultName)
+		if err != nil {
+			return fail(fmt.Errorf("resolve credential %q: %w — nothing ran", vaultName, err))
+		}
+		valStr := string(valBytes)
+		if strings.TrimSpace(valStr) == "" {
+			return fail(fmt.Errorf("credential %q has empty value — nothing ran", vaultName))
+		}
+		isSubscription := envName == "CLAUDE_CODE_OAUTH_TOKEN" || strings.Contains(strings.ToLower(vaultName), "subscription")
+		if isSubscription && strings.HasPrefix(strings.TrimSpace(valStr), "sk-ant-api") {
+			return fail(errors.New("metered API key refused for a subscription credential — nothing ran"))
+		}
+		secretValues = append(secretValues, valBytes)
+		secretStringData[envName] = valStr
+		credRefsForManifest = append(credRefsForManifest, vaultName+"="+envName)
+	}
+	if len(secretValues) > 0 {
+		redact = func(s string) string {
+			return string(dagrun.Redact([]byte(s), secretValues...))
+		}
+	}
+
 	runID := env.mintID()
 	manifest, err := dagrun.Generate(dagrun.GenerateInput{
 		Command:     ref,
@@ -268,7 +348,11 @@ func (env *runEnv) run(cmd *cobra.Command, o runOptions, args []string) error {
 		Cwd:         ctxRec.Cwd,
 		Env:         envVars,
 		Venue:       dag.VenueCluster,
-		Run:         dagrun.RunSpec{Kind: kind, Resources: dagrun.Resources{CPU: o.cpu, Memory: o.memory}},
+		Run: dagrun.RunSpec{
+			Kind:        kind,
+			Resources:   dagrun.Resources{CPU: o.cpu, Memory: o.memory},
+			Credentials: credRefsForManifest,
+		},
 	})
 	if err != nil {
 		return fail(err)
@@ -309,6 +393,11 @@ func (env *runEnv) run(cmd *cobra.Command, o runOptions, args []string) error {
 	if err != nil {
 		return fail(err)
 	}
+	if len(secretStringData) > 0 {
+		if err := env.applySecret(cmd.Context(), client, ctxRec.WorkspaceID, runID, secretStringData); err != nil {
+			return fail(planeError(ctxRec, err))
+		}
+	}
 	if _, err := client.Apply(cmd.Context(), manifest, class); err != nil {
 		return fail(planeError(ctxRec, err))
 	}
@@ -318,7 +407,7 @@ func (env *runEnv) run(cmd *cobra.Command, o runOptions, args []string) error {
 		return nil
 	}
 	if o.detach {
-		if err := env.checkScheduled(cmd, client, ctxRec, runID, resourceRequest(o), o.scheduleCheck); err != nil {
+		if err := env.checkScheduled(cmd, client, ctxRec, runID, resourceRequest(o), o.scheduleCheck, redact); err != nil {
 			return err
 		}
 		fmt.Fprintln(cmd.OutOrStdout(), runID)
@@ -326,7 +415,7 @@ func (env *runEnv) run(cmd *cobra.Command, o runOptions, args []string) error {
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "dks: run %s applied to workspace %s; waiting (output streaming and exact exit codes arrive with 'bashy dks logs')\n",
 		runID, workspaceDisplay(ctxRec))
-	return env.wait(cmd, client, ctxRec, runID, resourceRequest(o), o.timeout)
+	return env.wait(cmd, client, ctxRec, runID, resourceRequest(o), o.timeout, redact)
 }
 
 // resourceRequest names the run's resource request as its flags spelled
@@ -346,12 +435,15 @@ func resourceRequest(o runOptions) string {
 // the scheduler reported no node can take the run, so its objects are
 // deleted by run label — nothing ran — and the run exits non-zero naming
 // the scheduler's reason and the request.
-func (env *runEnv) refuseUnschedulable(cmd *cobra.Command, client *cluster.Client, ctxRec dagrun.Context, runID, request, reason string) error {
+func (env *runEnv) refuseUnschedulable(cmd *cobra.Command, client *cluster.Client, ctxRec dagrun.Context, runID, request, reason string, redact func(string) string) error {
 	msg := "unsatisfied resources: " + reason
 	if request != "" {
 		msg += " (requested " + request + ")"
 	}
-	if err := client.Stop(cmd.Context(), runID); err != nil {
+	if redact != nil {
+		msg = redact(msg)
+	}
+	if err := env.stopRun(cmd.Context(), client, runID); err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "bashy dks run: %s; removing run %s failed: %v — 'bashy dks stop %s' to remove it\n",
 			msg, runID, planeError(ctxRec, err), runID)
 		return &exitStatusError{code: 1}
@@ -365,7 +457,7 @@ func (env *runEnv) refuseUnschedulable(cmd *cobra.Command, client *cluster.Clien
 // out (a slow start is not a refusal), and refuses the run when the
 // scheduler reports it Unschedulable. A plane error here only warns: the
 // run is applied, so its id is still the caller's to manage.
-func (env *runEnv) checkScheduled(cmd *cobra.Command, client *cluster.Client, ctxRec dagrun.Context, runID, request string, check time.Duration) error {
+func (env *runEnv) checkScheduled(cmd *cobra.Command, client *cluster.Client, ctxRec dagrun.Context, runID, request string, check time.Duration, redact func(string) string) error {
 	if check <= 0 {
 		return nil
 	}
@@ -373,7 +465,11 @@ func (env *runEnv) checkScheduled(cmd *cobra.Command, client *cluster.Client, ct
 	for {
 		runs, err := client.List(cmd.Context(), ctxRec.WorkspaceID)
 		if err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "bashy dks run: placement of run %s unchecked: %v\n", runID, planeError(ctxRec, err))
+			errText := planeError(ctxRec, err).Error()
+			if redact != nil {
+				errText = redact(errText)
+			}
+			fmt.Fprintf(cmd.ErrOrStderr(), "bashy dks run: placement of run %s unchecked: %s\n", runID, errText)
 			return nil
 		}
 		for _, r := range runs {
@@ -381,7 +477,7 @@ func (env *runEnv) checkScheduled(cmd *cobra.Command, client *cluster.Client, ct
 				continue
 			}
 			if r.Unschedulable != "" {
-				return env.refuseUnschedulable(cmd, client, ctxRec, runID, request, r.Unschedulable)
+				return env.refuseUnschedulable(cmd, client, ctxRec, runID, request, r.Unschedulable, redact)
 			}
 			if r.Scheduled || r.Phase == cluster.PhaseSucceeded || r.Phase == cluster.PhaseFailed || r.Phase == cluster.PhaseLost {
 				return nil
@@ -432,7 +528,7 @@ func fleetRecordRunKind(fleet.Command) dagrun.RunKind { return "" }
 // exits the dedicated lost code. A run the
 // scheduler reports Unschedulable is refused and removed at once; a plain
 // Pending (image pull, slow start) keeps waiting.
-func (env *runEnv) wait(cmd *cobra.Command, client *cluster.Client, ctxRec dagrun.Context, runID, request string, timeout time.Duration) error {
+func (env *runEnv) wait(cmd *cobra.Command, client *cluster.Client, ctxRec dagrun.Context, runID, request string, timeout time.Duration, redact func(string) string) error {
 	if timeout <= 0 {
 		timeout = defaultRunTimeout
 	}
@@ -441,7 +537,11 @@ func (env *runEnv) wait(cmd *cobra.Command, client *cluster.Client, ctxRec dagru
 	for {
 		runs, err := client.List(cmd.Context(), ctxRec.WorkspaceID)
 		if err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "bashy dks run: %v\n", planeError(ctxRec, err))
+			errText := planeError(ctxRec, err).Error()
+			if redact != nil {
+				errText = redact(errText)
+			}
+			fmt.Fprintf(cmd.ErrOrStderr(), "bashy dks run: %s\n", errText)
 			return errUserlandHandled
 		}
 		for _, r := range runs {
@@ -450,7 +550,7 @@ func (env *runEnv) wait(cmd *cobra.Command, client *cluster.Client, ctxRec dagru
 			}
 			phase = r.Phase
 			if r.Unschedulable != "" {
-				return env.refuseUnschedulable(cmd, client, ctxRec, runID, request, r.Unschedulable)
+				return env.refuseUnschedulable(cmd, client, ctxRec, runID, request, r.Unschedulable, redact)
 			}
 			switch r.Phase {
 			case cluster.PhaseSucceeded:
@@ -470,7 +570,11 @@ func (env *runEnv) wait(cmd *cobra.Command, client *cluster.Client, ctxRec dagru
 			return &exitStatusError{code: 1}
 		}
 		if err := env.sleep(cmd.Context(), runPollInterval); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "bashy dks run: stopped waiting for run %s: %v\n", runID, err)
+			errText := err.Error()
+			if redact != nil {
+				errText = redact(errText)
+			}
+			fmt.Fprintf(cmd.ErrOrStderr(), "bashy dks run: stopped waiting for run %s: %s\n", runID, errText)
 			return errUserlandHandled
 		}
 	}
@@ -624,13 +728,94 @@ A 'run:' reference names a weave run, not a dks run: stop it with weave.`,
 			if err != nil {
 				return fail(err)
 			}
-			if err := client.Stop(cmd.Context(), id); err != nil {
+			if err := env.stopRun(cmd.Context(), client, id); err != nil {
 				return fail(planeError(ctxRec, err))
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "dks: stopped run %s\n", id)
 			return nil
 		},
 	}
+}
+
+// dksStopKinds is everything Render can emit plus the credential Secret.
+const dksStopKinds = "jobs,pods,services,deployments,networkpolicies,secrets"
+
+// stopRun removes exactly the objects of one run from the plane, including
+// the workload and its credential Secret, selecting by run label.
+func (env *runEnv) stopRun(ctx context.Context, client *cluster.Client, runID string) error {
+	if !dagrun.ValidWorkspaceID(runID) {
+		return fmt.Errorf("%w: %s=%q", cluster.ErrInvalidSelector, dagrun.LabelRun, runID)
+	}
+	sel := dagrun.LabelManagedBy + "=" + dagrun.ManagedByBashy + "," + dagrun.LabelRun + "=" + runID
+	argv := []string{"kubectl"}
+	if client.Context != "" {
+		argv = append(argv, "--context", client.Context)
+	}
+	argv = append(argv, "delete", dksStopKinds, "-l", sel, "--wait=false")
+	_, stderr, exit, err := client.Runner.Run(ctx, argv, nil)
+	switch {
+	case err != nil:
+		return fmt.Errorf("kubectl did not run (%v): %w", err, dag.ErrWorkerUnreachable)
+	case exit != 0:
+		return fmt.Errorf("%w: kubectl delete exited %d: %s", cluster.ErrPlaneRejected, exit, strings.TrimSpace(string(stderr)))
+	}
+	return nil
+}
+
+// applySecret server-side applies a label-owned v1 Secret before the workload.
+func (env *runEnv) applySecret(ctx context.Context, client *cluster.Client, workspaceID, runID string, stringData map[string]string) error {
+	secretName := "bashy-cred-" + strings.ToLower(runID)
+	secret := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Secret",
+		"metadata": map[string]any{
+			"name": secretName,
+			"labels": map[string]any{
+				dagrun.LabelManagedBy: dagrun.ManagedByBashy,
+				dagrun.LabelRun:       runID,
+				dagrun.LabelWorkspace: workspaceID,
+			},
+		},
+		"stringData": stringData,
+	}
+	payload, err := json.Marshal(secret)
+	if err != nil {
+		return fmt.Errorf("cluster: encode secret: %w", err)
+	}
+	payload = append(payload, '\n')
+	argv := []string{"kubectl"}
+	if client.Context != "" {
+		argv = append(argv, "--context", client.Context)
+	}
+	argv = append(argv, "apply", "--server-side", "--field-manager="+dagrun.ManagedByBashy, "-f", "-")
+	_, stderr, exit, err := client.Runner.Run(ctx, argv, payload)
+	switch {
+	case err != nil:
+		return fmt.Errorf("kubectl did not run (%v): %w", err, dag.ErrWorkerUnreachable)
+	case exit != 0:
+		return fmt.Errorf("%w: kubectl apply secret exited %d: %s", cluster.ErrPlaneRejected, exit, strings.TrimSpace(string(stderr)))
+	}
+	return nil
+}
+
+// validEnvName checks that name is a valid environment variable name: ^[a-zA-Z_][a-zA-Z0-9_]*$
+func validEnvName(name string) bool {
+	if len(name) == 0 {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if i == 0 {
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_') {
+				return false
+			}
+		} else {
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // errNoContext is the actionable failure of a cluster verb with no selected
