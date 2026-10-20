@@ -6,8 +6,9 @@
 // (a bearer token resolved by the caller through the existing bashy
 // login/bearer conventions — never invented here), and receives a bundle:
 // a single-use enrollment token, the master's Ed25519 public key, the
-// master URL, and the artifact location. The bundle is passed to the
-// dispatcher's create as opaque Spec.UserData.
+// master URL, and the artifact location. The bundle's user_data script
+// (the complete first-boot script rendered by the master) is passed to
+// the dispatcher's create as opaque Spec.UserData.
 //
 // Wire shape (public contract, kept identical to what the master half
 // implements; this package refers only to the public API, never to
@@ -21,7 +22,15 @@
 //	201 Created (200 also accepted):
 //	{"satellite_id": "...", "enrollment_token": "<single-use>",
 //	 "master_public_key": "ed25519:...", "master_url": "https://...",
-//	 "artifact_url": "https://...", "expires_at": "RFC3339" (optional)}
+//	 "artifact_url": "https://...", "expires_at": "RFC3339" (optional),
+//	 "user_data": "<complete first-boot script, plain string>"}
+//
+// user_data is the complete first-boot script as a plain string, rendered
+// by the master with the SAME script it uses for its own provisioning
+// (one install path). The executable path passes it through byte-identical
+// as Spec.UserData; a VM created with anything else (e.g. a JSON encoding
+// of the bundle) would never install or enroll, because cloud-init only
+// runs a script/cloud-config.
 //
 // Provider credentials come from the local CredentialSource the caller
 // wired into the dispatcher (yoke/pkg/secrets on local bashy) and are
@@ -60,6 +69,11 @@ const (
 	// KindEnrollFailed is any other enrollment failure (auth, unknown
 	// satellite, malformed bundle). It also precedes any provider call.
 	KindEnrollFailed = "enroll_failed"
+	// KindBundleIncomplete means the master issued a bundle without the
+	// complete first-boot script (user_data empty). UserData refuses to
+	// guess: it returns this kind instead of a JSON encoding, which a VM
+	// would never execute.
+	KindBundleIncomplete = "bundle_incomplete"
 )
 
 // Error is a structured enrollment failure.
@@ -94,20 +108,29 @@ type enrollmentRequest struct {
 	Endpoint    string `json:"endpoint,omitempty"`
 }
 
-// Bundle is one enrollment bundle as issued by the master.
+// Bundle is one enrollment bundle as issued by the master. UserDataScript
+// is the complete first-boot script (plain string) rendered by the master.
 type Bundle struct {
 	SatelliteID     string    `json:"satellite_id"`
 	EnrollmentToken string    `json:"enrollment_token"`
 	MasterPublicKey string    `json:"master_public_key"`
 	MasterURL       string    `json:"master_url"`
 	ArtifactURL     string    `json:"artifact_url"`
+	UserDataScript  string    `json:"user_data"`
 	ExpiresAt       time.Time `json:"expires_at,omitempty"`
 }
 
-// UserData renders the bundle as the opaque create user-data the
-// dispatcher passes through unread (Spec.UserData).
+// UserData returns the master's first-boot script byte-identical for use
+// as the opaque create user-data the dispatcher passes through unread
+// (Spec.UserData). It never returns a JSON encoding of the bundle: a VM
+// created with JSON user-data would never install or enroll. An empty
+// script fails with kind bundle_incomplete.
 func (b Bundle) UserData() ([]byte, error) {
-	return json.Marshal(b)
+	if b.UserDataScript == "" {
+		return nil, &Error{Kind: KindBundleIncomplete,
+			Message: "master issued a bundle without user_data (the first-boot script)"}
+	}
+	return []byte(b.UserDataScript), nil
 }
 
 // Client is an enrollment client for one master. Session is the owner's
@@ -170,9 +193,9 @@ func (c Client) RequestBundle(ctx context.Context, satelliteID, endpoint string)
 	if err := json.Unmarshal(raw, &b); err != nil {
 		return Bundle{}, &Error{Kind: KindEnrollFailed, Message: fmt.Sprintf("decode bundle: %v", err), Status: resp.StatusCode}
 	}
-	if b.EnrollmentToken == "" || b.MasterPublicKey == "" || b.MasterURL == "" || b.ArtifactURL == "" {
-		return Bundle{}, &Error{Kind: KindEnrollFailed,
-			Message: "master issued an incomplete bundle (need enrollment_token, master_public_key, master_url, artifact_url)",
+	if b.EnrollmentToken == "" || b.MasterPublicKey == "" || b.MasterURL == "" || b.ArtifactURL == "" || b.UserDataScript == "" {
+		return Bundle{}, &Error{Kind: KindBundleIncomplete,
+			Message: "master issued an incomplete bundle (need enrollment_token, master_public_key, master_url, artifact_url, user_data)",
 			Status:  resp.StatusCode}
 	}
 	if b.SatelliteID == "" {
@@ -188,7 +211,7 @@ type ProvisionRequest struct {
 	// Endpoint is the optional public endpoint hint sent to the master.
 	Endpoint string
 	// Spec is the provider create spec; its UserData is replaced with the
-	// enrollment bundle (opaque to the provider).
+	// bundle's user_data first-boot script (opaque to the provider).
 	Spec provider.Spec
 	// IdempotencyKey is the create's idempotency key (required).
 	IdempotencyKey string
@@ -203,8 +226,8 @@ type ProvisionRequest struct {
 // obtains the enrollment bundle from the master — an unreachable master or
 // a 5xx/503 answer fails with kind master_unavailable BEFORE any provider
 // call — then it creates through the dispatcher (opened ExecAllowed: this
-// runs on user-owned compute) with the bundle as opaque Spec.UserData,
-// and reports progress. Provider credentials stay in the dispatcher's
+// runs on user-owned compute) with the bundle's user_data script as opaque
+// Spec.UserData, and reports progress. Provider credentials stay in the dispatcher's
 // local CredentialSource and never reach the master.
 func ProvisionExecutable(ctx context.Context, c Client, d *provider.Dispatcher, req ProvisionRequest) (provider.Result, error) {
 	report := func(s string) {
@@ -219,8 +242,7 @@ func ProvisionExecutable(ctx context.Context, c Client, d *provider.Dispatcher, 
 	}
 	userData, err := bundle.UserData()
 	if err != nil {
-		return provider.Result{ProtocolVersion: provider.ProtocolVersion, Op: provider.OpCreate},
-			&Error{Kind: KindEnrollFailed, Message: fmt.Sprintf("encode bundle: %v", err)}
+		return provider.Result{ProtocolVersion: provider.ProtocolVersion, Op: provider.OpCreate}, err
 	}
 	spec := req.Spec
 	spec.UserData = userData

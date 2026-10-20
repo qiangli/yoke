@@ -25,6 +25,7 @@ type countingAdapter struct {
 	calls    int
 	creates  int
 	destroys int
+	userData []byte
 }
 
 func (a *countingAdapter) Manifest() provider.Manifest { return a.manifest }
@@ -36,6 +37,9 @@ func (a *countingAdapter) Do(_ context.Context, req provider.Request) (provider.
 	switch req.Op {
 	case provider.OpCreate:
 		a.creates++
+		if req.Spec != nil {
+			a.userData = append([]byte(nil), req.Spec.UserData...)
+		}
 		return provider.Result{
 			ProtocolVersion: provider.ProtocolVersion, Op: req.Op,
 			Resource: &provider.Resource{ID: "host-1", Name: "sat", State: provider.StateRunning},
@@ -141,7 +145,8 @@ func TestNoProviderCredentialSentToMaster(t *testing.T) {
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"satellite_id":"sat-1","enrollment_token":"single-use-token",` +
-			`"master_public_key":"ed25519:abc","master_url":"https://master.example","artifact_url":"https://artifacts.example/sat.tgz"}`))
+			`"master_public_key":"ed25519:abc","master_url":"https://master.example","artifact_url":"https://artifacts.example/sat.tgz",` +
+			`"user_data":"#!/bin/sh\nenroll sat-1 single-use-token\n"}`))
 	}))
 	defer master.Close()
 
@@ -169,6 +174,32 @@ func TestNoProviderCredentialSentToMaster(t *testing.T) {
 		if strings.Contains(s, planted) {
 			t.Fatalf("provider credential reached the master in:\n%s", s)
 		}
+	}
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	const wantScript = "#!/bin/sh\nenroll sat-1 single-use-token\n"
+	if string(fixture.userData) != wantScript {
+		t.Fatalf("provider user_data = %q, want the master script byte-identical", fixture.userData)
+	}
+}
+
+// Bundle.UserData must be the master's first-boot script byte-identical
+// (one install path: the master renders the SAME script it uses for its
+// own provisioning), never a JSON encoding of the bundle. Empty script is
+// an incomplete bundle.
+func TestBundleUserDataIsMasterScript(t *testing.T) {
+	const script = "#!/bin/sh\nenroll sat-1 single-use-token\n"
+	b := enroll.Bundle{SatelliteID: "sat-1", UserDataScript: script}
+	got, err := b.UserData()
+	if err != nil {
+		t.Fatalf("UserData: %v", err)
+	}
+	if string(got) != script {
+		t.Fatalf("UserData = %q, want the master script byte-identical", got)
+	}
+	empty := enroll.Bundle{SatelliteID: "sat-1"}
+	if _, err := empty.UserData(); enroll.KindOf(err) != enroll.KindBundleIncomplete {
+		t.Fatalf("empty UserData err = %v, want kind %q", err, enroll.KindBundleIncomplete)
 	}
 }
 

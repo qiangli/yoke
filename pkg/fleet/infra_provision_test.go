@@ -77,6 +77,7 @@ func TestInfraProvisionExecutablePath(t *testing.T) {
 			"satellite_id": "sat-1", "enrollment_token": "single-use-token",
 			"master_public_key": "ed25519:abc", "master_url": "https://master.example",
 			"artifact_url": "https://artifacts.example/sat.tgz",
+			"user_data":    "#!/bin/sh\nenroll sat-1 single-use-token\n",
 		})
 	}))
 	defer master.Close()
@@ -125,7 +126,7 @@ declarative:
 	}
 	foundBundle := false
 	for _, b := range providerBodies {
-		if strings.Contains(b, "enrollment_token") {
+		if strings.Contains(b, "enroll sat-1 single-use-token") {
 			foundBundle = true
 		}
 		if strings.Contains(b, planted) {
