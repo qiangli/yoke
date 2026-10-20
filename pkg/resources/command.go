@@ -49,9 +49,10 @@ func NewSystemCommand() *cobra.Command {
 			"--interval apart and reporting the delta, so the command takes at least\n" +
 			"that long to return. --interval 0 skips the second sample: CPU then\n" +
 			"reports the since-boot average and byte rates are omitted.",
-		Args:         cobra.NoArgs,
-		SilenceUsage: true,
-		// The returned error is the only copy of the alarm: cobra prints it once.
+		Args:          cobra.NoArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		// The returned error is the only copy of the alarm: the host prints it once.
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if interval < 0 {
 				return fmt.Errorf("--interval must not be negative")
