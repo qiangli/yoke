@@ -38,6 +38,9 @@ func NewCommand() *cobra.Command {
 func NewSystemCommand() *cobra.Command {
 	var jsonOut bool
 	var interval time.Duration
+	var minFree string
+	var mountFilter string
+	var quiet bool
 	cmd := &cobra.Command{
 		Use:   "system",
 		Short: "Show live CPU, memory, disk, network, and GPU utilization for this host",
@@ -57,6 +60,21 @@ func NewSystemCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if minFree != "" {
+				cfg, err := ParseDiskFloor(minFree)
+				if err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "resources system: %v\n", err)
+					return err
+				}
+				cfg.Mount = mountFilter
+				if err := CheckDiskFloor(sys.Disks, cfg); err != nil {
+					fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
+					return err
+				}
+				if quiet {
+					return nil
+				}
+			}
 			if jsonOut {
 				enc := json.NewEncoder(cmd.OutOrStdout())
 				enc.SetIndent("", "  ")
@@ -67,5 +85,8 @@ func NewSystemCommand() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit the bashy-resources-v1 JSON envelope")
 	cmd.Flags().DurationVar(&interval, "interval", DefaultInterval, "gap between the two counter samples (0 = single sample, no rates)")
+	cmd.Flags().StringVar(&minFree, "min-free", "", "fail if free disk space is below floor (e.g. 100G, 10%, 100G,10%)")
+	cmd.Flags().StringVar(&mountFilter, "mount", "", "mount point to check (default: check candidate filesystems)")
+	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "suppress output on success when floor is satisfied")
 	return cmd
 }

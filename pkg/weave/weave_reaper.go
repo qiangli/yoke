@@ -3,6 +3,7 @@ package weave
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -124,7 +125,9 @@ func weaveReapQueueWait(dir, root, base string, wait time.Duration) ([]weaveReap
 		actions = weaveReapPass(q, root, base, time.Now().UTC())
 		for _, a := range actions {
 			if a.To == "failed" || a.To == "done" {
-				weaveQueueOwnerNotice(dir, q, findWeaveItem(q, a.Issue), "run-reconciled")
+				item := findWeaveItem(q, a.Issue)
+				weaveQueueOwnerNotice(dir, q, item, "run-reconciled")
+				weaveReleaseManagedGOCache(io.Discard, "weave reaper", dir, item)
 			}
 		}
 		return nil

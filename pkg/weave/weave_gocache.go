@@ -98,6 +98,22 @@ func safeRemoveManagedGOCache(queueDir, cachePath string) error {
 	if err != nil || strings.HasPrefix(rel, "..") || rel == "." || strings.ContainsRune(rel, filepath.Separator) {
 		return fmt.Errorf("managed GOCACHE path %q is not contained in %q", absCache, root)
 	}
+	if _, ok := weaveManagedGOCacheIssue(absQueue, absCache); !ok {
+		return fmt.Errorf("managed GOCACHE path %q is not a valid run cache directory in %q", absCache, root)
+	}
+	lst, err := os.Lstat(absCache)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if lst.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to remove managed GOCACHE %q: path is a symlink", absCache)
+	}
+	if !lst.IsDir() {
+		return fmt.Errorf("managed GOCACHE path %q is not a directory", absCache)
+	}
 	if q, err := loadWeaveQueue(absQueue); err == nil {
 		for _, it := range q.Items {
 			if it == nil || it.ID <= 0 {
@@ -106,10 +122,9 @@ func safeRemoveManagedGOCache(queueDir, cachePath string) error {
 			if !(it.State == "working" || it.State == "finalizing") {
 				continue
 			}
-			if it.WrapperPid == 0 && it.FinalizerPID == 0 {
-				continue
-			}
-			live := (it.WrapperPid > 0 && pidAlive(it.WrapperPid)) || (it.FinalizerPID > 0 && pidAlive(it.FinalizerPID))
+			live := (it.WrapperPid == 0 && it.FinalizerPID == 0) ||
+				(it.WrapperPid > 0 && pidAlive(it.WrapperPid)) ||
+				(it.FinalizerPID > 0 && pidAlive(it.FinalizerPID))
 			if !live {
 				continue
 			}
@@ -127,16 +142,6 @@ func safeRemoveManagedGOCache(queueDir, cachePath string) error {
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("managed GOCACHE live-run check failed: %w", err)
-	}
-	st, err := os.Stat(absCache)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	if !st.IsDir() {
-		return fmt.Errorf("managed GOCACHE path %q is not a directory", absCache)
 	}
 	return os.RemoveAll(absCache)
 }
