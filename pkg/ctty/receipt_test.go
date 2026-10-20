@@ -73,9 +73,11 @@ func TestReceiptCountsRunesNotBytes(t *testing.T) {
 }
 
 // The receipt dialog's answer follows the same positive-evidence contract as
-// the entry dialog: USE and RETRY are the two affirmative outcomes, CANCEL is a
-// decline, TIMEOUT is a timeout, and anything else is an error — never a
-// silent acceptance.
+// the entry dialog: USE and RETRY are the two affirmative outcomes, TIMEOUT is
+// a timeout, DISMISS is a dismissal without an operator answer (the dialog has
+// no Cancel button, so -128 — which also fires when the dialog cannot be shown
+// — reports DISMISS, never a decline; story f2c250c5f038), and anything else is
+// an error — never a silent acceptance.
 func TestParseReceiptResult(t *testing.T) {
 	if retry, err := parseReceiptResult("USE\n"); err != nil || retry {
 		t.Errorf("USE => retry=%v err=%v, want accept", retry, err)
@@ -83,11 +85,18 @@ func TestParseReceiptResult(t *testing.T) {
 	if retry, err := parseReceiptResult("RETRY\n"); err != nil || !retry {
 		t.Errorf("RETRY => retry=%v err=%v, want retry", retry, err)
 	}
-	if _, err := parseReceiptResult("CANCEL\n"); !errors.Is(err, ErrDeclined) {
-		t.Errorf("CANCEL => %v, want ErrDeclined", err)
+	if _, err := parseReceiptResult("DISMISS\n"); !errors.Is(err, ErrDismissed) {
+		t.Errorf("DISMISS => %v, want ErrDismissed", err)
 	}
 	if _, err := parseReceiptResult("TIMEOUT\n"); !errors.Is(err, ErrTimeout) {
 		t.Errorf("TIMEOUT => %v, want ErrTimeout", err)
+	}
+	// CANCEL is not in this dialog's contract any more: with no Cancel button,
+	// the only thing that ever produced it was error -128, whose other face is
+	// a dialog that could not be shown at all. Accepting it as a decline is
+	// precisely the auto-cancel this story fixes.
+	if _, err := parseReceiptResult("CANCEL\n"); err == nil {
+		t.Error("CANCEL was accepted — it is not in the receipt dialog's contract")
 	}
 	if _, err := parseReceiptResult("something else"); err == nil {
 		t.Error("an unrecognised result was accepted")

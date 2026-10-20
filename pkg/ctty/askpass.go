@@ -25,7 +25,7 @@ type helperKind int
 
 const (
 	kindSSHAskpass helperKind = iota // argv[1]=prompt, value on stdout, exit 0
-	kindOsascript                    // our AppleScript, prints OK:<v> | CANCEL | TIMEOUT
+	kindOsascript                    // our AppleScript, prints OK:<v> | CANCEL | TIMEOUT | DISMISS
 	kindZenity                       // --entry --hide-text; exit 1 cancel, 5 timeout
 	kindKDialog                      // --password; exit 1 cancel
 	kindPinentry                     // Assuan protocol on stdin/stdout
@@ -88,7 +88,9 @@ func GUIAvailable() bool { return findHelper() != nil }
 // Errors are meaningfully distinct and callers depend on it: ErrNoGUI means the
 // channel is unavailable (try the next rung); ErrDeclined and ErrTimeout mean the
 // human WAS reached and the answer was no or nothing (do not try another rung —
-// re-prompting someone who just cancelled is how a nuisance becomes a phish).
+// re-prompting someone who just cancelled is how a nuisance becomes a phish);
+// ErrDismissed means the dialog went away without an operator answer at all, so
+// the rung failed and the caller may fall back.
 func AskGUI(req Request) ([]byte, error) {
 	h := findHelper()
 	if h == nil {
@@ -137,9 +139,16 @@ func answered(v []byte) ([]byte, error) {
 // let the requester write AppleScript that runs as the operator. `on run argv` is
 // the parameterised-query equivalent for osascript.
 //
-// The three returns are the positive-evidence contract. `giving up after` makes
+// The four returns are the positive-evidence contract. `giving up after` makes
 // the dialog self-dismiss, and its result carries `gave up` — which is the field
 // that must be checked, because the process still exits 0 when nobody answers.
+//
+// Error -128 is DISMISS, not CANCEL, and that split is story f2c250c5f038: -128
+// is what osascript reports when the OPERATOR cancels AND when the dialog could
+// not be shown at all — a headless session's window server refuses it, the
+// dialog dies within seconds, and no human was ever involved. The two cannot be
+// told apart at the error number, so -128 carries no operator evidence and must
+// not speak for one; only the Cancel BUTTON is an affirmative "no".
 const osascriptSrc = `on run argv
 	set theText to item 1 of argv
 	set theTitle to item 2 of argv
@@ -152,7 +161,7 @@ const osascriptSrc = `on run argv
 			set r to display dialog theText with title theTitle default answer "" buttons {"Cancel", "OK"} default button "OK" with icon caution giving up after tmo
 		end if
 	on error number -128
-		return "CANCEL"
+		return "DISMISS"
 	end try
 	if gave up of r then return "TIMEOUT"
 	if button returned of r is not "OK" then return "CANCEL"
@@ -209,16 +218,20 @@ func confirmReceipt(ctx context.Context, path string, req Request, value []byte)
 	return parseReceiptResult(string(out))
 }
 
-// parseTaggedResult reads the OK:/CANCEL/TIMEOUT contract that our own osascript
-// and PowerShell front-ends emit.
+// parseTaggedResult reads the OK:/CANCEL/TIMEOUT/DISMISS contract that our own
+// osascript and PowerShell front-ends emit.
 //
 // This is the positive-evidence rule made concrete, and it is why the scripts
 // print a tag at all instead of just the value. The exit status cannot carry this
 // information: `osascript ... giving up after N` exits 0 whether the human typed a
 // password or walked away, so a helper that trusts the exit code turns "nobody was
-// there" into a successful empty answer. The tag makes the three outcomes
-// distinguishable, and an unrecognised line is an ERROR rather than a fourth,
+// there" into a successful empty answer. The tag makes the four outcomes
+// distinguishable, and an unrecognised line is an ERROR rather than a fifth,
 // silently-empty outcome.
+//
+// DISMISS is the outcome with no operator attached — see osascriptSrc — so it is
+// ErrDismissed, never ErrDeclined: reporting it as a decline is how a headless
+// session's dead popup read as "ask: cancelled" (story f2c250c5f038).
 func parseTaggedResult(who, raw string) ([]byte, error) {
 	// One line terminator — the one the helper appended — and nothing else.
 	// The greedy TrimRight this replaces ate newlines that were part of the
@@ -231,6 +244,8 @@ func parseTaggedResult(who, raw string) ([]byte, error) {
 		return nil, ErrDeclined
 	case line == "TIMEOUT":
 		return nil, ErrTimeout
+	case line == "DISMISS":
+		return nil, ErrDismissed
 	case strings.HasPrefix(line, "OK:"):
 		return answered([]byte(strings.TrimPrefix(line, "OK:")))
 	default:

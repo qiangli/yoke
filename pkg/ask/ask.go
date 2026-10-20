@@ -170,7 +170,7 @@ func runAsk(c *cobra.Command, o *options) error {
 		}
 	}()
 
-	value, err := obtain(r, ctty.Channel(o.channel), c.ErrOrStderr())
+	value, err := obtain(r, ctty.CurrentProbe(ctty.Channel(o.channel)), c.ErrOrStderr())
 	if err != nil {
 		return err
 	}
@@ -193,13 +193,20 @@ func runAsk(c *cobra.Command, o *options) error {
 // human and got "no": re-prompting somebody who just cancelled is how a legitimate
 // mechanism turns into a nuisance, and then into a phish people click through.
 //
+// The one judgement call is ErrDismissed — a dialog that went away without an
+// operator answer (story f2c250c5f038: a headless managed session's GUI popup
+// auto-cancelled within seconds, twice, without anybody touching it). A dismissal
+// is not a "no", so the ladder does not stop there; it says so on the status
+// stream and opens the rendezvous, whose instruction line is the exact answer
+// command. That holds even for a forced --channel gui, which has no next rung to
+// fall to: the operator forced the CHANNEL, not a silent cancel.
+//
 // status is the COMMAND's error stream, not os.Stderr. The distinction is
 // load-bearing for --stdout: `bashy ask --stdout | bashy secret set NAME` stores
 // whatever crosses stdout, so every instruction and rendezvous note must follow
 // wherever the host wired the command's stderr — a hardcoded os.Stderr bypasses a
 // host that rewires the streams, and the prose ends up in the vault.
-func obtain(r Request, requested ctty.Channel, status io.Writer) ([]byte, error) {
-	probe := ctty.CurrentProbe(requested)
+func obtain(r Request, probe ctty.Probe, status io.Writer) ([]byte, error) {
 	req := ctty.Request{
 		Frame:   renderFrame(r),
 		Prompt:  promptLine(r),
@@ -221,19 +228,32 @@ func obtain(r Request, requested ctty.Channel, status io.Writer) ([]byte, error)
 			}
 			return v, nil
 		default:
-			v, err := ctty.Ask(ch, req)
+			v, err := askDialog(ch, req)
 			if err == nil {
 				return v, nil
 			}
-			if errors.Is(err, ctty.ErrDeclined) {
+			switch {
+			case errors.Is(err, ctty.ErrDeclined):
+				// The operator answered "no". Final: falling through would
+				// re-prompt somebody who just cancelled.
 				return nil, fmt.Errorf("ask: cancelled")
-			}
-			if errors.Is(err, ctty.ErrTimeout) {
+			case errors.Is(err, ctty.ErrTimeout):
 				return nil, fmt.Errorf("ask: nobody answered within %s",
 					r.Expires.Sub(r.Created).Round(time.Second))
+			case errors.Is(err, ctty.ErrDismissed):
+				// Nobody answered — possibly nobody was ever shown anything.
+				// Loud note first, then the rendezvous, which prints the exact
+				// answer command. Never a silent cancel.
+				fmt.Fprintf(status, "bashy ask: the %s dialog was dismissed without an operator answer (%v); answer in YOUR OWN terminal with the command below\n", ch, err)
+				v, err := waitForAnswer(r, status)
+				if err != nil {
+					return nil, err
+				}
+				return v, nil
+			default:
+				// Channel unavailable — try the next rung.
+				lastErr = err
 			}
-			// Channel unavailable — try the next rung.
-			lastErr = err
 		}
 	}
 	if lastErr != nil {
@@ -241,6 +261,11 @@ func obtain(r Request, requested ctty.Channel, status io.Writer) ([]byte, error)
 	}
 	return nil, fmt.Errorf("ask: no channel could reach a human")
 }
+
+// askDialog is the dispatch to the tty and GUI channels. A variable so tests can
+// inject a dialog runner — no test may pop a real dialog or open a real terminal
+// — while production always goes through ctty.Ask.
+var askDialog = ctty.Ask
 
 // rungs orders the channels to attempt.
 //

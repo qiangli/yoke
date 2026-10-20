@@ -63,7 +63,9 @@ func receiptLine(value []byte) string {
 // receiptSrc shows the receipt and asks the operator to accept or retry. Same
 // parameterised-argv rule as osascriptSrc, and the same positive-evidence
 // contract: `giving up after` still exits 0, so the tag is what carries the
-// outcome.
+// outcome. There is no Cancel button here, so -128 — which also fires when the
+// dialog cannot be shown at all — reports DISMISS: a dismissal is not an
+// operator's "no" (see osascriptSrc, story f2c250c5f038).
 const receiptSrc = `on run argv
 	set theText to item 1 of argv
 	set theTitle to item 2 of argv
@@ -71,24 +73,26 @@ const receiptSrc = `on run argv
 	try
 		set r to display dialog theText with title theTitle buttons {"Retry", "Use"} default button "Use" with icon caution giving up after tmo
 	on error number -128
-		return "CANCEL"
+		return "DISMISS"
 	end try
 	if gave up of r then return "TIMEOUT"
 	if button returned of r is "Retry" then return "RETRY"
 	return "USE"
 end run`
 
-// parseReceiptResult reads the receipt dialog's USE/RETRY/CANCEL/TIMEOUT
+// parseReceiptResult reads the receipt dialog's USE/RETRY/DISMISS/TIMEOUT
 // contract. Mirrors parseTaggedResult: an unrecognised line is an error, never
-// a silent acceptance of a value the operator did not confirm.
+// a silent acceptance of a value the operator did not confirm. DISMISS is
+// ErrDismissed, not ErrDeclined — the dialog went away without an operator
+// answer, so the value in hand is unconfirmed, not declined.
 func parseReceiptResult(raw string) (retry bool, err error) {
 	switch strings.TrimRight(raw, "\r\n") {
 	case "USE":
 		return false, nil
 	case "RETRY":
 		return true, nil
-	case "CANCEL":
-		return false, ErrDeclined
+	case "DISMISS":
+		return false, ErrDismissed
 	case "TIMEOUT":
 		return false, ErrTimeout
 	default:
