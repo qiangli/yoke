@@ -5,6 +5,8 @@ package resourcescmd
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/weavecli"
@@ -14,13 +16,14 @@ import (
 
 var cmd = &tool.Tool{
 	Name:     "resources",
-	Synopsis: "Report fleet utilization across providers, bands, and meters.",
-	Usage:    "resources fleet [--json] | resources budget [MODEL...] [--json] | resources system [--min-free FLOOR] [--json]",
+	Synopsis: "Report fleet utilization across providers, bands (L1-L4), and the host watcher.",
+	Usage:    "resources fleet [--json] | resources budget [MODEL...] [--json] | resources system [--min-free FLOOR] [--json] | resources watch [--once] [--json]",
 }
 
 const usageText = "Usage: resources fleet [--json]\n" +
 	"       resources budget [MODEL...] [--json]\n" +
-	"       resources system [--min-free FLOOR] [--interval DURATION] [--json]\n"
+	"       resources system [--min-free FLOOR] [--interval DURATION] [--json]\n" +
+	"       resources watch [--once] [--interval DURATION] [--json] [--notify]\n"
 
 func init() {
 	cmd.Run = run
@@ -36,6 +39,8 @@ func run(rc *tool.RunContext, args []string) int {
 		return runBudget(rc, args[1:])
 	case len(args) > 0 && args[0] == "system":
 		return runSystem(rc, args[1:])
+	case len(args) > 0 && args[0] == "watch":
+		return runWatch(rc, args[1:])
 	case len(args) > 0 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help"):
 		fmt.Fprint(rc.Out, usageText)
 		return 0
@@ -97,6 +102,48 @@ func runBudget(rc *tool.RunContext, args []string) int {
 	}
 
 	fmt.Fprint(rc.Out, resources.FormatBudgetTable(br))
+	return 0
+}
+
+// runWatch implements `resources watch`: the same engine as the cobra
+// `resource watch` front door (pkg/resources.RunWatch) — sample this host's
+// resources, alarm on threshold transitions — reached through the tool
+// surface so shell users get one spelling either way.
+func runWatch(rc *tool.RunContext, args []string) int {
+	fs := tool.NewFlags(cmd.Name)
+	once := fs.Bool("once", false, "take one sample, emit transitions, save state and exit")
+	interval := fs.Duration("interval", time.Minute, "loop interval in continuous mode")
+	asJSON := fs.Bool("json", false, "emit events as NDJSON on stdout")
+	notify := fs.Bool("notify", false, "also deliver alarms to the bashy inbox")
+	recipient := fs.String("recipient", "", "inbox recipient for --notify")
+	stateDir := fs.String("state-dir", "", "directory for the watcher state file")
+	noRegister := fs.Bool("no-register", false, "skip auto-registering host resources")
+	operands, code := tool.Parse(rc, cmd, fs, args)
+	if code >= 0 {
+		return code
+	}
+	_ = operands
+
+	if *interval <= 0 && !*once {
+		fmt.Fprintf(rc.Err, "resources watch: --interval must be positive (or pass --once)\n")
+		return 2
+	}
+	rcpt := *recipient
+	if rcpt == "" {
+		if v := os.Getenv("BASHY_RESOURCE_WATCH_TO"); strings.TrimSpace(v) != "" {
+			rcpt = v
+		} else {
+			rcpt = "operator"
+		}
+	}
+	err := resources.RunWatch(rc.Ctx, resources.WatchOptions{
+		Once: *once, Interval: *interval, JSON: *asJSON, Register: !*noRegister,
+		NotifyTo: rcpt, NotifyRequested: *notify, StateDir: *stateDir,
+	}, rc.Err, rc.Out)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "resources watch: %v\n", err)
+		return 1
+	}
 	return 0
 }
 

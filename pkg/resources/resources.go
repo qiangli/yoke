@@ -29,6 +29,7 @@ package resources
 
 import (
 	"context"
+	"net"
 	"os"
 	"runtime"
 	"sort"
@@ -116,13 +117,21 @@ type Disk struct {
 }
 
 // Interface is one network interface: cumulative counters plus the rate
-// observed over the sample window.
+// observed over the sample window. Packet and error counters, the link
+// state and the link speed are best effort: a platform that cannot supply
+// them purely reports zeros and the watcher skips the metric.
 type Interface struct {
 	Name          string  `json:"name"`
 	RxBytes       uint64  `json:"rx_bytes"`
 	TxBytes       uint64  `json:"tx_bytes"`
 	RxBytesPerSec float64 `json:"rx_bytes_per_sec,omitempty"`
 	TxBytesPerSec float64 `json:"tx_bytes_per_sec,omitempty"`
+	RxPackets     uint64  `json:"rx_packets,omitempty"`
+	TxPackets     uint64  `json:"tx_packets,omitempty"`
+	RxErrors      uint64  `json:"rx_errors,omitempty"`
+	TxErrors      uint64  `json:"tx_errors,omitempty"`
+	LinkMbps      int     `json:"link_mbps,omitempty"`
+	Up            bool    `json:"up,omitempty"`
 }
 
 // GPU is a detected graphics processor. Absent GPUs are normal: the slice
@@ -156,9 +165,14 @@ type counters struct {
 type cpuTicks struct{ total, idle uint64 }
 
 type netCounter struct {
-	name    string
-	rxBytes uint64
-	txBytes uint64
+	name      string
+	rxBytes   uint64
+	txBytes   uint64
+	rxPackets uint64
+	txPackets uint64
+	rxErrors  uint64
+	txErrors  uint64
+	linkMbps  int
 }
 
 type ioCounter struct {
@@ -275,13 +289,21 @@ func tickUsage(prev, cur cpuTicks) float64 {
 }
 
 func buildNetwork(first, second []netCounter, elapsed float64) []Interface {
+	up := map[string]bool{}
+	if ifaces, err := net.Interfaces(); err == nil {
+		for _, i := range ifaces {
+			up[i.Name] = i.Flags&net.FlagUp != 0
+		}
+	}
 	prev := map[string]netCounter{}
 	for _, n := range first {
 		prev[n.name] = n
 	}
 	out := make([]Interface, 0, len(second))
 	for _, n := range second {
-		iface := Interface{Name: n.name, RxBytes: n.rxBytes, TxBytes: n.txBytes}
+		iface := Interface{Name: n.name, RxBytes: n.rxBytes, TxBytes: n.txBytes,
+			RxPackets: n.rxPackets, TxPackets: n.txPackets, RxErrors: n.rxErrors, TxErrors: n.txErrors,
+			LinkMbps: n.linkMbps, Up: up[n.name]}
 		if p, ok := prev[n.name]; ok && elapsed > 0 {
 			iface.RxBytesPerSec = rate(p.rxBytes, n.rxBytes, elapsed)
 			iface.TxBytesPerSec = rate(p.txBytes, n.txBytes, elapsed)
