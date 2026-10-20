@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -317,16 +318,46 @@ func TestClusterListParsesStatusByLabel(t *testing.T) {
 		t.Fatalf("List argv\n got %q\nwant %q", r.calls[0].argv, wantArgv)
 	}
 	want := []RunStatus{
-		{RunID: "RUNCOMPLETE", Workspace: testWorkspace, Command: "render", Kind: "Job", Name: "bashy-run-runcomplete", Phase: PhaseSucceeded},
+		{RunID: "RUNCOMPLETE", Workspace: testWorkspace, Command: "render", Kind: "Job", Name: "bashy-run-runcomplete", Phase: PhaseSucceeded, Scheduled: true},
 		{RunID: "RUNFAILED", Workspace: testWorkspace, Command: "render", Kind: "Job", Name: "bashy-run-runfailed", Phase: PhaseFailed},
-		{RunID: "RUNJOBACTIVE", Workspace: testWorkspace, Command: "render", Kind: "Job", Name: "bashy-run-runjobactive", Phase: PhaseRunning},
+		{RunID: "RUNJOBACTIVE", Workspace: testWorkspace, Command: "render", Kind: "Job", Name: "bashy-run-runjobactive", Phase: PhaseRunning, Scheduled: true},
 		{RunID: "RUNJOBNEW", Workspace: testWorkspace, Command: "render", Kind: "Job", Name: "bashy-run-runjobnew", Phase: PhasePending},
 		{RunID: "RUNPODPENDING", Workspace: testWorkspace, Command: "agent", Kind: "Pod", Name: "bashy-run-runpodpending", Phase: PhasePending},
-		{RunID: "RUNSESSION", Workspace: testWorkspace, Command: "bashy", Kind: "Pod", Name: "bashy-run-runsession", Phase: PhaseRunning},
+		{RunID: "RUNSESSION", Workspace: testWorkspace, Command: "bashy", Kind: "Pod", Name: "bashy-run-runsession", Phase: PhaseRunning, Scheduled: true},
 	}
 	if !reflect.DeepEqual(got, want) {
 		gb, _ := json.MarshalIndent(got, "", " ")
 		t.Fatalf("List =\n%s", gb)
+	}
+}
+
+func TestClusterListSurfacesUnschedulablePod(t *testing.T) {
+	labels := `{"app.kubernetes.io/managed-by":"bashy","dhnt.io/workspace":"` + testWorkspace + `","dhnt.io/run":"%s","dhnt.io/command":"seq"}`
+	out := fmt.Sprintf(`{"items":[
+	 {"kind":"Job","metadata":{"name":"bashy-run-big","labels":`+labels+`},"status":{"active":1}},
+	 {"kind":"Pod","metadata":{"name":"bashy-run-big-abcde","labels":`+labels+`},"status":{"phase":"Pending","conditions":[
+	  {"type":"PodScheduled","status":"False","reason":"Unschedulable","message":"0/5 nodes are available: 5 Insufficient cpu."}]}},
+	 {"kind":"Pod","metadata":{"name":"bashy-run-pull","labels":`+labels+`},"status":{"phase":"Pending","conditions":[
+	  {"type":"PodScheduled","status":"True"}]}},
+	 {"kind":"Pod","metadata":{"name":"bashy-run-fresh","labels":`+labels+`},"status":{"phase":"Pending"}}
+	]}`, "BIG", "BIG", "PULL", "FRESH")
+	got, err := (&Client{Runner: &fakeRunner{stdout: []byte(out)}}).List(context.Background(), testWorkspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]RunStatus{
+		"BIG":   {Phase: PhaseRunning, Unschedulable: "0/5 nodes are available: 5 Insufficient cpu."},
+		"PULL":  {Phase: PhasePending, Scheduled: true},
+		"FRESH": {Phase: PhasePending},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("List = %+v", got)
+	}
+	for _, r := range got {
+		w := want[r.RunID]
+		if r.Phase != w.Phase || r.Scheduled != w.Scheduled || r.Unschedulable != w.Unschedulable {
+			t.Errorf("%s = phase %s scheduled %v unschedulable %q, want %+v", r.RunID, r.Phase, r.Scheduled, r.Unschedulable, w)
+		}
 	}
 }
 

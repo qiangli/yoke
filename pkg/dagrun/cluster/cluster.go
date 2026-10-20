@@ -88,6 +88,13 @@ type RunStatus struct {
 	Kind      string `json:"kind"` // Job or Pod: the run's workload
 	Name      string `json:"name"`
 	Phase     Phase  `json:"phase"`
+	// Scheduled: a Pod of the run is bound to a node (PodScheduled=True,
+	// or past Pending).
+	Scheduled bool `json:"scheduled,omitempty"`
+	// Unschedulable is the scheduler's message when a Pending Pod of the run
+	// has PodScheduled=False with reason Unschedulable (FailedScheduling),
+	// e.g. "0/5 nodes are available: Insufficient cpu"; "" otherwise.
+	Unschedulable string `json:"unschedulable,omitempty"`
 }
 
 // UnsatisfiedError: no executor of the requested class can run the manifest
@@ -257,8 +264,10 @@ type kubeObject struct {
 		Succeeded  int    `json:"succeeded"`
 		Failed     int    `json:"failed"`
 		Conditions []struct {
-			Type   string `json:"type"`
-			Status string `json:"status"`
+			Type    string `json:"type"`
+			Status  string `json:"status"`
+			Reason  string `json:"reason"`
+			Message string `json:"message"`
 		} `json:"conditions"`
 	} `json:"status"`
 }
@@ -304,12 +313,50 @@ func parseRuns(out []byte) ([]RunStatus, error) {
 			Kind: o.Kind, Name: o.Metadata.Name, Phase: phase,
 		}
 	}
+	// A run's Pods carry its scheduling state even when its Job wins.
+	for _, o := range list.Items {
+		r, ok := byRun[o.Metadata.Labels[dagrun.LabelRun]]
+		if !ok || o.Kind != "Pod" {
+			continue
+		}
+		scheduled, unsched := podScheduling(o)
+		r.Scheduled = r.Scheduled || scheduled
+		if r.Unschedulable == "" {
+			r.Unschedulable = unsched
+		}
+		byRun[r.RunID] = r
+	}
 	runs := make([]RunStatus, 0, len(byRun))
 	for _, r := range byRun {
 		runs = append(runs, r)
 	}
 	sort.Slice(runs, func(i, j int) bool { return runs[i].RunID < runs[j].RunID })
 	return runs, nil
+}
+
+// podScheduling reads one Pod's PodScheduled condition: whether it is bound
+// to a node, and the scheduler's message when it is Pending and
+// Unschedulable. A Pending Pod with no such condition is neither.
+func podScheduling(o kubeObject) (scheduled bool, unschedulable string) {
+	if p := o.Status.Phase; p != "" && p != "Pending" {
+		return true, ""
+	}
+	for _, c := range o.Status.Conditions {
+		if c.Type != "PodScheduled" {
+			continue
+		}
+		switch {
+		case c.Status == "True":
+			return true, ""
+		case c.Status == "False" && c.Reason == "Unschedulable":
+			msg := strings.TrimSpace(c.Message)
+			if msg == "" {
+				msg = c.Reason
+			}
+			return false, msg
+		}
+	}
+	return false, ""
 }
 
 func jobPhase(o kubeObject) Phase {
