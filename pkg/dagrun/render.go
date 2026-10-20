@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/qiangli/yoke/pkg/dag"
+	"github.com/qiangli/yoke/pkg/secrets"
 )
 
 // Object is one rendered Kubernetes object in plain unstructured form, ready
@@ -100,9 +101,6 @@ func renderLinux(m *Manifest, class ExecutorClass) ([]Object, error) {
 	default:
 		return nil, badManifest("venue %q is not a cluster venue", t.Venue)
 	}
-	if len(t.Secrets) > 0 {
-		return nil, unsupported("credentials %v are not wired into cluster dispatch yet", t.Secrets)
-	}
 	if m.Meta.Egress == EgressPlane {
 		return nil, unsupported("egress plane has no cluster policy yet")
 	}
@@ -120,13 +118,53 @@ func renderLinux(m *Manifest, class ExecutorClass) ([]Object, error) {
 		return nil, err
 	}
 
+	secretName := "bashy-cred-" + strings.ToLower(m.Meta.RunID)
+	var credEnvNames []string
+	seenCredEnv := make(map[string]struct{})
+	for _, sec := range t.Secrets {
+		var envName string
+		if strings.Contains(sec, "=") {
+			_, envName, _ = strings.Cut(sec, "=")
+		} else {
+			names := secrets.CredentialEnvNames(sec)
+			if len(names) > 0 {
+				envName = names[0]
+			} else {
+				envName = sec
+			}
+		}
+		envName = strings.TrimSpace(envName)
+		if envName == "" {
+			return nil, badManifest("invalid secret ref %q", sec)
+		}
+		if _, ok := seenCredEnv[envName]; !ok {
+			seenCredEnv[envName] = struct{}{}
+			credEnvNames = append(credEnvNames, envName)
+		}
+	}
+	sort.Strings(credEnvNames)
+
 	env := []any{map[string]any{"name": "HOME", "value": HomeMountPath}}
 	for _, kv := range sortedEnv(t.Env) {
 		k, v, _ := strings.Cut(kv, "=")
 		if k == "HOME" {
 			continue // home is the workspace home, never the client's
 		}
+		if _, ok := seenCredEnv[k]; ok {
+			continue
+		}
 		env = append(env, map[string]any{"name": k, "value": v})
+	}
+	for _, envName := range credEnvNames {
+		env = append(env, map[string]any{
+			"name": envName,
+			"valueFrom": map[string]any{
+				"secretKeyRef": map[string]any{
+					"name": secretName,
+					"key":  envName,
+				},
+			},
+		})
 	}
 
 	// Session kinds run under the hidden session server: the executor's

@@ -182,6 +182,23 @@ func (b *DeliveryBundle) Redact(text []byte) []byte {
 	return out
 }
 
+// Redact removes credential shapes and any provided literal secret values from
+// text before persistence or output.
+func Redact(text []byte, extraValues ...[]byte) []byte {
+	if len(text) == 0 {
+		return text
+	}
+	r := secrets.NewRedactor()
+	_ = r.SetShapeMode(secrets.ShapeMask)
+	out := r.Redact(text)
+	for _, val := range extraValues {
+		if len(val) > 0 && bytes.Contains(out, val) {
+			out = bytes.ReplaceAll(out, val, []byte("[redacted]"))
+		}
+	}
+	return out
+}
+
 // Delivery resolves vault credential references out-of-band for executor dispatch.
 // It maps candidate environment variable names (from secrets.CredentialEnvNames) to values,
 // keeping them OUT of argv and OUT of the manifest.

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -184,7 +185,6 @@ func TestRenderUnsupportedExecutors(t *testing.T) {
 func TestRenderFailsClosed(t *testing.T) {
 	unsupported := map[string]func(*GenerateInput){
 		"service":            func(in *GenerateInput) { in.Run.Kind = RunService },
-		"credentials":        func(in *GenerateInput) { in.Run.Credentials = []string{"vendor/subscription"} },
 		"egress plane":       func(in *GenerateInput) { in.Run.Egress.Mode = EgressPlane },
 		"native venue":       func(in *GenerateInput) { in.Venue = "native" },
 		"native backend":     func(in *GenerateInput) { in.Match["outpost.dhnt.io/backend"] = "vk-native" },
@@ -272,5 +272,49 @@ func TestRenderLinuxContainerNeverOnNativeBackend(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRenderCredentialSecretKeyRef(t *testing.T) {
+	in := renderCases()["one-shot"]
+	in.Run.Credentials = []string{"anthropic-subscription=CLAUDE_CODE_OAUTH_TOKEN", "anthropic"}
+	m := mustGenerate(t, in)
+	objs, err := Render(m, linuxClass())
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if len(objs) == 0 {
+		t.Fatal("Render returned no objects")
+	}
+	spec := dig(t, objs[0], "spec", "template", "spec").(map[string]any)
+	containers := spec["containers"].([]any)
+	container := containers[0].(map[string]any)
+	envList := container["env"].([]any)
+
+	wantSecretName := "bashy-cred-" + strings.ToLower(in.RunID)
+	checked := make(map[string]bool)
+	for _, e := range envList {
+		entry := e.(map[string]any)
+		name, _ := entry["name"].(string)
+		if name == "CLAUDE_CODE_OAUTH_TOKEN" || name == "ANTHROPIC_API_KEY" {
+			vf, ok := entry["valueFrom"].(map[string]any)
+			if !ok {
+				t.Fatalf("%s missing valueFrom: %v", name, entry)
+			}
+			skr, ok := vf["secretKeyRef"].(map[string]any)
+			if !ok {
+				t.Fatalf("%s missing secretKeyRef: %v", name, vf)
+			}
+			if skr["name"] != wantSecretName {
+				t.Errorf("%s secretKeyRef name = %v, want %s", name, skr["name"], wantSecretName)
+			}
+			if skr["key"] != name {
+				t.Errorf("%s secretKeyRef key = %v, want %s", name, skr["key"], name)
+			}
+			checked[name] = true
+		}
+	}
+	if !checked["CLAUDE_CODE_OAUTH_TOKEN"] || !checked["ANTHROPIC_API_KEY"] {
+		t.Errorf("expected both credentials in container env, got %v", checked)
 	}
 }
