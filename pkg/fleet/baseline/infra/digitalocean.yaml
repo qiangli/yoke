@@ -14,8 +14,8 @@ declarative:
     capacity: {endpoint: /v2/regions, method: GET}
     plan: {endpoint: /v2/droplets, method: GET}
     create: {endpoint: /v2/droplets, method: POST}
-    inspect: {endpoint: /v2/droplets/{id}, method: GET}
+    inspect: {endpoint: "/v2/droplets/{id}", method: GET}
     list: {endpoint: /v2/droplets, method: GET}
-    start: {endpoint: /v2/droplets/{id}/actions, method: POST}
-    stop: {endpoint: /v2/droplets/{id}/actions, method: POST}
-    destroy: {endpoint: /v2/droplets/{id}, method: DELETE}
+    start: {endpoint: "/v2/droplets/{id}/actions", method: POST}
+    stop: {endpoint: "/v2/droplets/{id}/actions", method: POST}
+    destroy: {endpoint: "/v2/droplets/{id}", method: DELETE}

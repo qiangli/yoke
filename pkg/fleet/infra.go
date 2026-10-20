@@ -50,7 +50,7 @@ type InfraProvider struct {
 	// Builtin marks a compiled-in reference entry. It is loader-level only:
 	// form executable is wrong for a built-in (nothing to spawn), so the
 	// reference ships as declarative data plus this marker.
-	Builtin bool            `yaml:"builtin,omitempty" json:"builtin,omitempty" doc:"compiled-in reference entry, not a spawned program"`
+	Builtin bool           `yaml:"builtin,omitempty" json:"builtin,omitempty" doc:"compiled-in reference entry, not a spawned program"`
 	Ring    assetring.Ring `yaml:"-" json:"ring"`
 }
 
@@ -83,8 +83,8 @@ func (e *InfraError) Error() string {
 
 // Distinct exit codes for the two failure kinds.
 const (
-	ExitInfraInvalid           = 3
-	ExitInfraProtocolMismatch  = 4
+	ExitInfraInvalid          = 3
+	ExitInfraProtocolMismatch = 4
 )
 
 // InfraExitCode maps a loader error to its exit code, falling back to the
@@ -476,14 +476,30 @@ func (c *Catalog) ResolveInfra(ctx context.Context, name string, req provider.Re
 func init() {
 	registerKind(kindSpec{
 		Name: KindInfra, Plural: dirInfra, DirEnv: "BASHY_INFRA_DIR", PathEnv: "BASHY_INFRA_PATH",
-		Type: reflect.TypeOf(InfraProvider{}),
+		Type:   reflect.TypeOf(InfraProvider{}),
 		Lookup: holder((*Catalog).InfraProvider, func(p InfraProvider) string { return p.Manifest.Name }),
-		Names: listed((*Catalog).InfraProviders, func(p InfraProvider) string { return p.Manifest.Name }),
+		Names:  listed((*Catalog).InfraProviders, func(p InfraProvider) string { return p.Manifest.Name }),
 		Seeded: true, Mechanism: true,
 		Record: newRecordSpec(typedRecord[InfraProvider]{
 			Get:  (*Catalog).InfraProvider,
 			Name: func(p *InfraProvider) *string { return &p.Manifest.Name },
 			Ring: func(p InfraProvider) assetring.Ring { return p.Ring },
+			Summary: func(cmd *cobra.Command, _ *Catalog, p InfraProvider) error {
+				caps := make([]string, 0, len(p.Manifest.Capabilities))
+				for _, cp := range p.Manifest.Capabilities {
+					caps = append(caps, string(cp))
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "name: %s\norigin: %s\nform: %s\nversion: %s\nprotocol: %s\ncapabilities: %s\n",
+					p.Manifest.Name, p.Ring, p.Manifest.Form,
+					p.Manifest.Version, p.Manifest.ProtocolVersion, strings.Join(caps, ", "))
+				if p.Builtin {
+					fmt.Fprintln(cmd.OutOrStdout(), "builtin: true")
+				}
+				if p.Manifest.Summary != "" {
+					fmt.Fprintf(cmd.OutOrStdout(), "summary: %s\n", p.Manifest.Summary)
+				}
+				return nil
+			},
 			Parse: func(fallback string, body []byte) ([]InfraProvider, error) {
 				p, err := ParseInfraProvider(fallback, body, nil)
 				if err != nil {
