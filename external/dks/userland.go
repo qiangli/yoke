@@ -19,8 +19,8 @@ import (
 )
 
 // userlandVerbs are the `bashy dks` client verbs of the cluster-userland
-// contract §3. The spellings are final; run, ps, logs, attach and stop are
-// registered but fail closed until S481.3/S481.6 land.
+// contract §3. The spellings are final; logs and attach are registered but
+// fail closed until S481.6 lands.
 var userlandVerbs = map[string]string{
 	"use":    "select the workspace later commands run in (create on first use)",
 	"local":  "run one command on this machine, explicitly",
@@ -33,7 +33,7 @@ var userlandVerbs = map[string]string{
 
 // unimplementedVerbs fail closed: registered for discovery and help, but they
 // never run anything — locally or on a plane — until their story lands.
-var unimplementedVerbs = []string{"run", "ps", "logs", "attach", "stop"}
+var unimplementedVerbs = []string{"logs", "attach"}
 
 // notAvailableSprint names the stories that finish the unimplemented verbs.
 const notAvailableSprint = "Sprint 481 S481.3/S481.6"
@@ -100,6 +100,7 @@ func newUserlandCmds(env *userlandEnv) []*cobra.Command {
 		newUserlandUseCmd(env),
 		newUserlandLocalCmd(env),
 	}
+	cmds = append(cmds, newUserlandRunCmds(env)...)
 	for _, verb := range unimplementedVerbs {
 		cmds = append(cmds, newNotAvailableCmd(verb))
 	}
