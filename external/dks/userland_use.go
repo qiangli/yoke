@@ -351,10 +351,23 @@ func (p *KubeProbe) WorkspaceExists(plane, workspaceID string) error {
 }
 
 // EnsureWorkspace creates the workspace record by server-side apply through
-// the runner, one field manager bashy: re-applying is idempotent.
+// the runner, one field manager bashy: re-applying is idempotent. The payload
+// is one v1 List whose first item is the userland Namespace itself — labelled
+// managed-by=bashy, cluster-scoped, so its re-apply is a no-op — followed by
+// the workspace ConfigMap. kubectl applies list items in order, so a FRESH
+// plane (no bashy-userland namespace yet) is bootstrapped by the very call
+// that writes the record: one runner invocation, no prior setup step.
 func (p *KubeProbe) EnsureWorkspace(ctx context.Context, plane, workspaceID, name string) error {
 	if !dagrun.ValidWorkspaceID(workspaceID) {
 		return fmt.Errorf("workspace id %q is not a ULID", workspaceID)
+	}
+	namespace := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Namespace",
+		"metadata": map[string]any{
+			"name":   userlandNamespace,
+			"labels": map[string]string{dagrun.LabelManagedBy: dagrun.ManagedByBashy},
+		},
 	}
 	obj := map[string]any{
 		"apiVersion": "v1",
@@ -371,7 +384,7 @@ func (p *KubeProbe) EnsureWorkspace(ctx context.Context, plane, workspaceID, nam
 	if name != "" {
 		obj["data"] = map[string]string{"name": name}
 	}
-	payload, err := json.Marshal(obj)
+	payload, err := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "List", "items": []any{namespace, obj}})
 	if err != nil {
 		return fmt.Errorf("encode workspace record: %w", err)
 	}

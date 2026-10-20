@@ -252,12 +252,24 @@ func TestUseFirstUseCreatesWorkspace(t *testing.T) {
 			t.Errorf("apply argv %q misses %q", apply.argv, want)
 		}
 	}
-	var cm map[string]any
-	if err := json.Unmarshal(apply.stdin, &cm); err != nil {
-		t.Fatalf("apply stdin is not one JSON object: %v\n%s", err, apply.stdin)
+	var list struct {
+		Kind  string           `json:"kind"`
+		Items []map[string]any `json:"items"`
 	}
+	if err := json.Unmarshal(apply.stdin, &list); err != nil {
+		t.Fatalf("apply stdin is not one JSON list: %v\n%s", err, apply.stdin)
+	}
+	if list.Kind != "List" || len(list.Items) != 2 {
+		t.Fatalf("apply payload kind=%q items=%d, want a List of Namespace+ConfigMap", list.Kind, len(list.Items))
+	}
+	ns, _ := list.Items[0]["metadata"].(map[string]any)
+	nsLabels, _ := ns["labels"].(map[string]any)
+	if list.Items[0]["kind"] != "Namespace" || ns["name"] != "bashy-userland" || nsLabels["app.kubernetes.io/managed-by"] != "bashy" {
+		t.Errorf("first item = %v, want Namespace bashy-userland labelled managed-by=bashy", list.Items[0])
+	}
+	cm := list.Items[1]
 	if cm["kind"] != "ConfigMap" {
-		t.Errorf("apply object kind = %v, want ConfigMap", cm["kind"])
+		t.Errorf("second item kind = %v, want ConfigMap", cm["kind"])
 	}
 	md, _ := cm["metadata"].(map[string]any)
 	if md["name"] != "bashy-ws-01JBQ5E9P2WYZ5ZG4HJ3XRG7W8" || md["namespace"] != "bashy-userland" {
@@ -272,6 +284,85 @@ func TestUseFirstUseCreatesWorkspace(t *testing.T) {
 	}
 	if len(te.execCalls) != 0 {
 		t.Errorf("create executed locally: %v", te.execCalls)
+	}
+}
+
+// FIRST RED TEST of S481.2: on a FRESH plane — reachable, but no
+// bashy-userland namespace — first use of a new name must bootstrap the
+// namespace and the workspace record in ONE apply. The fake plays the API
+// server's namespace rule faithfully: a namespaced apply against a namespace
+// that does not exist yet is refused with the live NotFound error, and a
+// Namespace object in the payload creates it, items applied in order.
+func TestUseCreatesNamespaceOnFreshPlane(t *testing.T) {
+	te := newTestEnv(t)
+	te.runner.exit["get"] = 0
+	te.runner.stdout["get"] = []byte("") // reachable; workspace list empty
+	te.runner.exit["apply"] = 0
+
+	code, stdout, stderr := runUserland(t, te.env, "use", "sk481@k8s:cloudbox")
+	if code != 0 {
+		t.Fatalf("use on a fresh plane exited %d: %q %q", code, stdout, stderr)
+	}
+
+	var apply *runnerCall
+	for i := range te.runner.calls {
+		for _, a := range te.runner.calls[i].argv {
+			if a == "apply" {
+				c := te.runner.calls[i]
+				apply = &c
+			}
+		}
+	}
+	if apply == nil {
+		t.Fatalf("no apply issued on a fresh plane: %v", te.runner.calls)
+	}
+	var list struct {
+		Kind  string           `json:"kind"`
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(apply.stdin, &list); err != nil {
+		t.Fatalf("apply stdin is not one JSON payload: %v\n%s", err, apply.stdin)
+	}
+	if list.Kind != "List" || len(list.Items) != 2 {
+		t.Fatalf("apply payload kind=%q items=%d, want one List of exactly Namespace+ConfigMap (a single apply call)", list.Kind, len(list.Items))
+	}
+	if list.Items[0]["kind"] != "Namespace" {
+		t.Errorf("first item kind = %v, want the Namespace BEFORE the ConfigMap", list.Items[0]["kind"])
+	}
+	ns, _ := list.Items[0]["metadata"].(map[string]any)
+	if ns["name"] != "bashy-userland" {
+		t.Errorf("namespace item name = %v, want bashy-userland", ns["name"])
+	}
+	if cm, _ := list.Items[1]["metadata"].(map[string]any); cm["namespace"] != "bashy-userland" || !strings.Contains(cm["name"].(string), "bashy-ws-") {
+		t.Errorf("configmap item = %v/%v, want bashy-ws-<id> in bashy-userland", cm["namespace"], cm["name"])
+	}
+	if ctx, ok := currentContext(t); !ok || ctx.WorkspaceID != "01JBQ5E9P2WYZ5ZG4HJ3XRG7W8" {
+		t.Errorf("selection after fresh-plane create = %+v ok=%v, want the minted workspace", ctx, ok)
+	}
+	if !strings.Contains(stdout, "cloudbox") {
+		t.Errorf("stdout %q does not name the plane", stdout)
+	}
+}
+
+// A payload WITHOUT the namespace first is refused the way the live fresh
+// plane refused it — the regression the fix closes: the ConfigMap apply used
+// to run alone against a namespace that did not exist.
+func TestUseApplyWithoutNamespaceFailsOnFreshPlane(t *testing.T) {
+	te := newTestEnv(t)
+	te.runner.exit["get"] = 0
+	te.runner.stdout["get"] = []byte("")
+	te.runner.exit["apply"] = 1
+	te.runner.stderr["apply"] = []byte(`Error from server (NotFound): namespaces "bashy-userland" not found`)
+
+	code, _, stderr := runUserland(t, te.env, "use", "sk481@k8s:cloudbox")
+	if code == 0 {
+		t.Fatal("use exited 0 although the plane refused the apply")
+	}
+	if !strings.Contains(stderr, "bashy-userland") || !strings.Contains(stderr, "exited 1") {
+		t.Errorf("stderr %q does not carry the plane's refusal", stderr)
+	}
+	if _, ok := currentContext(t); ok {
+		t.Error("a refused apply was persisted as the selected context")
 	}
 }
 
