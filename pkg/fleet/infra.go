@@ -430,7 +430,7 @@ type InfraResolveOptions struct {
 	// loader with AllowExec false (no-exec context): an executable entry
 	// then resolves as not runnable here and is never started.
 	AllowExec bool
-	// Exec runs the plugin argv. Required when AllowExec is true.
+	// Exec runs the plugin argv. Nil means the pkg/provider executable runner.
 	Exec InfraExecFunc
 }
 
@@ -456,21 +456,40 @@ func (c *Catalog) ResolveInfra(ctx context.Context, name string, req provider.Re
 	if err := p.Validate(); err != nil {
 		return InfraResolution{}, err
 	}
+	if perr := provider.CheckRequest(p.Manifest, req); perr != nil {
+		return InfraResolution{}, perr
+	}
 	if p.Manifest.Form == provider.FormDeclarative {
 		return InfraResolution{Provider: p}, nil
 	}
-	if !opts.AllowExec || opts.Exec == nil {
+	if !opts.AllowExec {
 		return InfraResolution{}, &provider.Error{
 			Code:    provider.ErrExecDisabled,
 			Message: fmt.Sprintf("infra provider %q is executable and this context does not run plugins", name),
 		}
 	}
 	argv := append([]string(nil), p.Manifest.Argv...)
-	res, err := opts.Exec(ctx, argv, req)
+	run := opts.Exec
+	if run == nil {
+		run = defaultInfraExec(p.Manifest)
+	}
+	res, err := run(ctx, argv, req)
 	if err != nil {
 		return InfraResolution{}, err
 	}
 	return InfraResolution{Provider: p, Argv: argv, Result: &res}, nil
+}
+
+// defaultInfraExec runs the plugin through the pkg/provider executable runner.
+func defaultInfraExec(m provider.Manifest) InfraExecFunc {
+	return func(ctx context.Context, argv []string, req provider.Request) (provider.Result, error) {
+		m.Argv = argv
+		a, err := provider.NewExecAdapter(m, provider.ExecOptions{})
+		if err != nil {
+			return provider.Result{}, err
+		}
+		return a.Do(ctx, req)
+	}
 }
 
 func init() {
