@@ -8,6 +8,7 @@ package dks
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -211,6 +213,12 @@ func newSessionTest(t *testing.T) *sessionTest {
 	st.senv.newClientID = func() string { return "test-client" }
 	st.senv.terminal = func() sessionTerminal { return stubTerminal{cols: 80, rows: 24} }
 	st.senv.now = func() time.Time { return time.UnixMilli(1_730_000_000_000) }
+	// The post-exit linger ends at once unless a test holds it open.
+	st.senv.lingerAfter = func(time.Duration) <-chan time.Time {
+		ch := make(chan time.Time)
+		close(ch)
+		return ch
+	}
 	return st
 }
 
@@ -443,6 +451,251 @@ func TestSessionServerRecordsExitOnce(t *testing.T) {
 		t.Errorf("second RecordExit err = %v, want ErrSecondExit", err)
 	}
 	st.noLocal(t)
+}
+
+// blockingPTYHandle is a fake child that runs until exit is closed, then
+// exits with code. Input is guarded: the attach handler writes it from its
+// own goroutine.
+type blockingPTYHandle struct {
+	code  int
+	exit  chan struct{}
+	mu    sync.Mutex
+	input []byte
+}
+
+func (f *blockingPTYHandle) WriteInput(p []byte) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.input = append(f.input, p...)
+	return len(p), nil
+}
+
+func (f *blockingPTYHandle) Resize(_, _ uint16) error { return nil }
+
+func (f *blockingPTYHandle) Signal(_ string) error { return nil }
+
+func (f *blockingPTYHandle) Wait() (int, error) {
+	<-f.exit
+	return f.code, nil
+}
+
+func (f *blockingPTYHandle) gotInput() []byte {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]byte(nil), f.input...)
+}
+
+// lingeringServer runs session-server in the background over a blocking
+// fake child that printed out. It returns the child, the bound address, a
+// channel that ends the linger, the linger duration the server asked for,
+// and the server's exit (code, stderr).
+type lingeringServer struct {
+	child    *blockingPTYHandle
+	addr     string
+	release  chan time.Time
+	lingered chan time.Duration
+	done     chan [2]any
+}
+
+func startLingeringServer(t *testing.T, st *sessionTest, out string, code int, extra ...string) *lingeringServer {
+	t.Helper()
+	ls := &lingeringServer{
+		child:    &blockingPTYHandle{code: code, exit: make(chan struct{})},
+		release:  make(chan time.Time),
+		lingered: make(chan time.Duration, 1),
+		done:     make(chan [2]any, 1),
+	}
+	bound := make(chan string, 1)
+	st.senv.startPTY = func(_ []string, sink io.Writer, _ string) (ptyHandle, error) {
+		if _, err := io.WriteString(sink, out); err != nil {
+			return nil, err
+		}
+		return ls.child, nil
+	}
+	st.senv.listen = func(string) (net.Listener, error) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err == nil {
+			bound <- ln.Addr().String()
+		}
+		return ln, err
+	}
+	st.senv.lingerAfter = func(d time.Duration) <-chan time.Time {
+		ls.lingered <- d
+		return ls.release
+	}
+	args := append([]string{"session-server", "--session", testRunID, "--home", t.TempDir(), "--port", "41234"}, extra...)
+	args = append(args, "--", "bashy", "-c", "work")
+	go func() {
+		c, _, stderr := st.exec(t, args...)
+		ls.done <- [2]any{c, stderr}
+	}()
+	select {
+	case ls.addr = <-bound:
+	case <-time.After(10 * time.Second):
+		t.Fatal("session-server never bound its port")
+	}
+	return ls
+}
+
+// exitAndAwaitLinger ends the child and waits until the server has recorded
+// the exit and entered its linger window.
+func (ls *lingeringServer) exitAndAwaitLinger(t *testing.T) time.Duration {
+	t.Helper()
+	close(ls.child.exit)
+	select {
+	case d := <-ls.lingered:
+		return d
+	case r := <-ls.done:
+		t.Fatalf("session-server exited %v before lingering (stderr %q)", r[0], r[1])
+	case <-time.After(10 * time.Second):
+		t.Fatal("session-server never entered its linger window")
+	}
+	return 0
+}
+
+// awaitExit ends the linger and returns the server's exit code.
+func (ls *lingeringServer) awaitExit(t *testing.T) int {
+	t.Helper()
+	close(ls.release)
+	select {
+	case r := <-ls.done:
+		return r[0].(int)
+	case <-time.After(10 * time.Second):
+		t.Fatal("session-server did not exit after its linger window")
+	}
+	return -1
+}
+
+// readTerminal reads a whole terminal attach: output bytes and the exit
+// code, failing if the stream ends without an exit frame.
+func readTerminal(t *testing.T, ws *websocket.Conn) (string, int) {
+	t.Helper()
+	var got []byte
+	for {
+		_ = ws.SetReadDeadline(time.Now().Add(10 * time.Second))
+		typ, msg, err := ws.ReadMessage()
+		if err != nil {
+			t.Fatalf("read before exit frame: %v (got %q)", err, got)
+		}
+		if typ == websocket.BinaryMessage {
+			got = append(got, msg...)
+			continue
+		}
+		var c struct {
+			Type     string `json:"type"`
+			ExitCode *int   `json:"exit_code"`
+		}
+		if err := json.Unmarshal(msg, &c); err != nil {
+			t.Fatalf("control frame %q: %v", msg, err)
+		}
+		switch c.Type {
+		case "exit":
+			if c.ExitCode == nil {
+				t.Fatalf("exit frame without a code: %q", msg)
+			}
+			return string(got), *c.ExitCode
+		case "error", "lost", "evicted":
+			t.Fatalf("unexpected %s frame: %q", c.Type, msg)
+		}
+	}
+}
+
+// TestSessionServerServesReplayAndExitAfterChildExits is the live bug: the
+// child exits 7 and the server used to exit with it, closing the port. Now,
+// within the linger window, a new attach replays every byte and gets exit 7
+// — and so do the `attach` and `logs` verbs over the tunnel — and after the
+// window the server itself exits 7 so the Pod's terminal state carries it.
+func TestSessionServerServesReplayAndExitAfterChildExits(t *testing.T) {
+	st := newSessionTest(t)
+	st.selectWorkspace(t, "skel")
+	ls := startLingeringServer(t, st, "tick1\ntick2\n", 7)
+	if d := ls.exitAndAwaitLinger(t); d != defaultSessionLinger {
+		t.Errorf("linger = %s, want the default %s", d, defaultSessionLinger)
+	}
+
+	ws, _, err := websocket.DefaultDialer.Dial("ws://"+ls.addr+"/attach?client=late&since=0", nil)
+	if err != nil {
+		t.Fatalf("late attach dial: %v", err)
+	}
+	out, code := readTerminal(t, ws)
+	_ = ws.Close()
+	if out != "tick1\ntick2\n" || code != 7 {
+		t.Errorf("late attach = %q exit %d, want all output and exit 7", out, code)
+	}
+	ws, _, err = websocket.DefaultDialer.Dial("ws://"+ls.addr+"/attach?client=late&since=6", nil)
+	if err != nil {
+		t.Fatalf("resume dial: %v", err)
+	}
+	out, code = readTerminal(t, ws)
+	_ = ws.Close()
+	if out != "tick2\n" || code != 7 {
+		t.Errorf("resume from 6 = %q exit %d, want %q exit 7", out, code, "tick2\n")
+	}
+
+	// The verbs, through the tunnel seam pointed at the lingering server.
+	st.senv.tunnelBase = func(dagrun.Context) (string, error) { return "http://" + ls.addr, nil }
+	podName := "bashy-run-" + strings.ToLower(testRunID)
+	st.runner.podsJSON = sessionPodJSON("default", podName, "abcdef1234567890", "worker-a", "41234")
+	if c, stdout, stderr := st.exec(t, "attach", testRunID); c != 7 || stdout != "tick1\ntick2\n" {
+		t.Errorf("attach after exit = %d %q, want 7 and all output (stderr %q)", c, stdout, stderr)
+	}
+	if c, stdout, stderr := st.exec(t, "logs", testRunID); c != 0 || stdout != "tick1\ntick2\n" {
+		t.Errorf("logs after exit = %d %q, want 0 and all output (stderr %q)", c, stdout, stderr)
+	}
+
+	if c := ls.awaitExit(t); c != 7 {
+		t.Errorf("session-server exited %d after the linger, want the child's 7", c)
+	}
+	if _, err := net.DialTimeout("tcp", ls.addr, time.Second); err == nil {
+		t.Error("attach port still open after the linger window")
+	}
+}
+
+// TestLateAttachAfterExitIsReadOnly: a non-viewer attach after the exit is
+// served as a viewer — it gets the replay and exit code, its input never
+// reaches the child, and it takes nothing over (no holder recorded).
+func TestLateAttachAfterExitIsReadOnly(t *testing.T) {
+	st := newSessionTest(t)
+	home := t.TempDir()
+	ls := startLingeringServer(t, st, "done\n", 7, "--home", home, "--linger", "30s")
+	if d := ls.exitAndAwaitLinger(t); d != 30*time.Second {
+		t.Errorf("linger = %s, want the flagged 30s", d)
+	}
+
+	ws, _, err := websocket.DefaultDialer.Dial("ws://"+ls.addr+"/attach?client=late&since=0", nil)
+	if err != nil {
+		t.Fatalf("late attach dial: %v", err)
+	}
+	_ = ws.WriteMessage(websocket.BinaryMessage, []byte("rm -rf\n"))
+	_ = ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"signal","signal":"INT"}`))
+	out, code := readTerminal(t, ws)
+	_ = ws.Close()
+	if out != "done\n" || code != 7 {
+		t.Errorf("late non-viewer attach = %q exit %d, want replay and exit 7", out, code)
+	}
+	if c := ls.awaitExit(t); c != 7 {
+		t.Errorf("session-server exited %d, want 7", c)
+	}
+	if in := ls.child.gotInput(); len(in) != 0 {
+		t.Errorf("late attach input reached the exited child: %q", in)
+	}
+
+	sess, err := dagrun.NewSession(testRunID, testRunID, testRunID, dagrun.KindInteractive, "exec-1", "linux", "amd64", "", time.Now())
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	hub, err := dagrun.NewHub(filepath.Join(home, ".dks", "sessions", testRunID), sess, nil)
+	if err != nil {
+		t.Fatalf("reopen Hub: %v", err)
+	}
+	defer hub.Close()
+	snap := hub.Session()
+	if snap.State != dagrun.StateExited || snap.ExitCode == nil || *snap.ExitCode != 7 {
+		t.Fatalf("record = %s exit %v, want exited 7", snap.State, snap.ExitCode)
+	}
+	if snap.Holder != "" {
+		t.Errorf("late attach took the session over: holder %q", snap.Holder)
+	}
 }
 
 // TestLogsWithoutFollowStopsAtEnd attaches a viewer to a LIVE session and
