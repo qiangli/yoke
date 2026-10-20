@@ -86,3 +86,14 @@ func InboxBody(a watch.Alert) string {
 	}
 	return sb.String()
 }
+
+// SenderIdentity resolves who a watcher posts AS: the board's own reader
+// identity, so an alert is attributable to the agent that raised it rather than
+// to a name a flag invented.
+func SenderIdentity() string {
+	id, err := bus.BoardIdentity("")
+	if err != nil || strings.TrimSpace(id) == "" {
+		return ""
+	}
+	return id
+}

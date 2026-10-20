@@ -303,3 +303,9 @@ func extractor(spec string) (func(Event) string, error) {
 		return nil, fmt.Errorf("watch: %q is not a field selector (want locator, source, key or attr:<name>)", spec)
 	}
 }
+
+// BuildSource builds one source from its spec, for a caller assembling a plan
+// from flags rather than from a file.
+func BuildSource(spec SourceSpec, opts BuildOptions) (Source, error) {
+	return buildSource(spec, opts)
+}
