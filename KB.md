@@ -2,7 +2,6 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [repo/page] CLI stdout ownership must outlive process wait — WHEN streaming events from a short-lived CLI with os/exec, do not let exec.Cmd.Wait own and close StdoutPipe while a separate scanner drains terminal events. Attach an explicitly owned os.Pipe writer to Cmd.Stdout, close the parent's writer after Start, and let the scanner close t  (kb:cli-stdout-ownership-must-outlive-process-wait)
 - [repo/page] Run llmgw gates from its nested module — WHEN a yoke gate names ./pkg/llmgw/..., the root Go module rejects that pattern because pkg/llmgw has its own go.mod. Run go test ./... (and go vet ./...) with cwd pkg/llmgw; keep the root cligw, broker, and fleet gates separate so the nested-module setup error cannot mask their results.  (kb:run-llmgw-gates-from-its-nested-module)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
