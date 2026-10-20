@@ -122,10 +122,16 @@ func TestSystemMinFreeAlarmPrintedOnce(t *testing.T) {
 	cmd.SetOut(&errBuf)
 	cmd.SetErr(&errBuf)
 	cmd.SetArgs([]string{"--interval", "0", "--min-free", "10000000G"})
-	if err := cmd.Execute(); err == nil {
+	err := cmd.Execute()
+	if err == nil {
 		t.Fatal("expected failure below the floor")
 	}
-	if n := strings.Count(errBuf.String(), "disk floor alarm:"); n != 1 {
-		t.Fatalf("alarm printed %d times, want 1: %q", n, errBuf.String())
+	// The host prints the returned error; the command itself must stay silent.
+	if strings.Contains(errBuf.String(), "Error:") {
+		t.Fatalf("cobra printed the error itself: %q", errBuf.String())
+	}
+	host := errBuf.String() + err.Error() + "\n"
+	if n := strings.Count(host, "disk floor alarm:"); n != 1 {
+		t.Fatalf("alarm appears %d times, want 1: %q", n, host)
 	}
 }

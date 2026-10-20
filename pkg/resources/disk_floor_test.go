@@ -177,8 +177,7 @@ func TestSystemCommandMinFreeFlag(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected non-zero exit for impossible 10000000G floor")
 	}
-	errOutput := errBuf.String()
-	if !strings.Contains(errOutput, "disk floor alarm:") {
-		t.Fatalf("expected stderr to contain 'disk floor alarm:', got: %q", errOutput)
+	if !strings.Contains(err.Error(), "disk floor alarm:") {
+		t.Fatalf("expected error to contain 'disk floor alarm:', got: %q", err.Error())
 	}
 }
