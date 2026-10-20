@@ -196,20 +196,29 @@ func TestWatchDryRunFixture(t *testing.T) {
 		}, &errBuf, &outBuf)
 	}
 
-	// 86% for three samples: one warning line, no inbox message yet? The
-	// fixture contract: the warning transition is delivered too (one
-	// message per transition).
+	// 86%: the first sample already beyond the threshold alarms at once
+	// (one warning line and one inbox message per transition); two more
+	// identical samples add nothing.
 	stage = 0.86
-	for range 3 {
+	if err := runOnce(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errBuf.String(), "level=warning") {
+		t.Fatalf("86%% first sample: no warning line:\n%s", errBuf.String())
+	}
+	if len(sent) != 1 || sent[0].Level != LevelWarning {
+		t.Fatalf("86%% first sample: notifier saw %d events", len(sent))
+	}
+	for range 2 {
 		if err := runOnce(); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if !strings.Contains(errBuf.String(), "level=warning") {
-		t.Fatalf("86%% sample: no warning line:\n%s", errBuf.String())
+	if strings.Contains(errBuf.String(), "level=warning") {
+		t.Fatalf("identical samples re-alarmed:\n%s", errBuf.String())
 	}
-	if len(sent) != 1 || sent[0].Level != LevelWarning {
-		t.Fatalf("86%% sample: notifier saw %d events", len(sent))
+	if len(sent) != 1 {
+		t.Fatalf("identical samples delivered more events: %d", len(sent))
 	}
 
 	// 96%: a critical line plus one inbox message for it (the tight free
@@ -276,6 +285,102 @@ func ndjsonOf(t *testing.T, errBuf, outBuf bytes.Buffer) string {
 		t.Fatalf("expected NDJSON on stdout, got none (stderr:\n%s)", errBuf.String())
 	}
 	return outBuf.String()
+}
+
+// --- first run: fresh state alarms on the first evaluated sample ---------------
+
+// S480: a resource already beyond a threshold on the FIRST evaluated sample
+// (the run that auto-registers it included) alarms on that sample — not two
+// scheduler ticks later. Fresh registry and state per case; fake samples.
+func TestWatchOnceFirstSampleAlarms(t *testing.T) {
+	cases := []struct {
+		name   string
+		fix    func(*System)
+		metric string
+		level  string
+		value  string
+	}{
+		{"disk 92 percent warns on the first once", func(s *System) {
+			s.Disks = []Disk{fakeDisk("/", 92, 500*gib)}
+		}, "disk-used", "warning", "92%"},
+		{"swap 94 percent goes critical on the first once", func(s *System) {
+			s.Memory.SwapUsedBytes = uint64(0.94 * float64(s.Memory.SwapTotalBytes))
+		}, "swap-used", "critical", "94%"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			watchRoots(t)
+			prevSampler := WatchSampler
+			WatchSampler = func(context.Context) (*System, error) {
+				sys := fakeSystem()
+				tc.fix(sys)
+				return sys, nil
+			}
+			t.Cleanup(func() { WatchSampler = prevSampler })
+
+			var errBuf, outBuf bytes.Buffer
+			if err := RunWatch(context.Background(), WatchOptions{Once: true, Register: true}, &errBuf, &outBuf); err != nil {
+				t.Fatal(err)
+			}
+			out := errBuf.String()
+			if !strings.Contains(out, "registered host-a.example") {
+				t.Fatalf("the first run must auto-register:\n%s", out)
+			}
+			want := "metric=" + tc.metric + " level=" + tc.level + " value=" + tc.value
+			if !strings.Contains(out, want) {
+				t.Fatalf("first sample beyond the threshold must alarm on that sample (want %q):\n%s", want, out)
+			}
+		})
+	}
+}
+
+// The registration run itself evaluates: register and alarm in ONE run.
+func TestWatchOnceRegistrationRunEvaluates(t *testing.T) {
+	watchRoots(t)
+	prevSampler := WatchSampler
+	WatchSampler = func(context.Context) (*System, error) {
+		sys := fakeSystem()
+		sys.Disks = []Disk{fakeDisk("/data", 92, 500*gib)}
+		return sys, nil
+	}
+	t.Cleanup(func() { WatchSampler = prevSampler })
+
+	var errBuf, outBuf bytes.Buffer
+	if err := RunWatch(context.Background(), WatchOptions{Once: true, Register: true}, &errBuf, &outBuf); err != nil {
+		t.Fatal(err)
+	}
+	out := errBuf.String()
+	if !strings.Contains(out, "registered ") || !strings.Contains(out, "host-a.example.disk-data") {
+		t.Fatalf("run must register the disk:\n%s", out)
+	}
+	if !strings.Contains(out, "metric=disk-used level=warning") {
+		t.Fatalf("the same run must evaluate the sample it registered from:\n%s", out)
+	}
+}
+
+// The second identical sample must not duplicate the alarm.
+func TestWatchOnceSecondIdenticalSampleNoDuplicate(t *testing.T) {
+	watchRoots(t)
+	prevSampler := WatchSampler
+	WatchSampler = func(context.Context) (*System, error) {
+		sys := fakeSystem()
+		sys.Disks = []Disk{fakeDisk("/data", 92, 500*gib)}
+		return sys, nil
+	}
+	t.Cleanup(func() { WatchSampler = prevSampler })
+
+	runOnce := func() string {
+		var errBuf, outBuf bytes.Buffer
+		if err := RunWatch(context.Background(), WatchOptions{Once: true, Register: true}, &errBuf, &outBuf); err != nil {
+			t.Fatal(err)
+		}
+		return errBuf.String()
+	}
+	runOnce()
+	second := runOnce()
+	if n := strings.Count(second, "metric=disk-used"); n != 0 {
+		t.Fatalf("second identical sample duplicated the alarm %d times:\n%s", n, second)
+	}
 }
 
 // --- the cobra front door ------------------------------------------------------

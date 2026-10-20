@@ -342,11 +342,73 @@ func TestEvaluateNetLinkDown(t *testing.T) {
 	}
 }
 
-// --- hysteresis, transitions, re-notify --------------------------------------
+// --- first sample, hysteresis, transitions, re-notify -------------------------
+
+// The FIRST evaluated sample of a metric (state creation, including the run
+// that auto-registers the resource) must alarm when it is already beyond a
+// threshold: the transition from unknown commits at once, without waiting
+// out the count hysteresis (S480: a full disk must not wait two scheduler
+// ticks to be heard). Sustained metrics still wait out their window.
+func TestWatchFirstSampleCommitsImmediately(t *testing.T) {
+	now := time.Now().UTC()
+
+	// Disk already at 92% on the very first sample: warning at once.
+	w := NewWatcher(DefaultWatchConfig())
+	sys := fakeSystem()
+	sys.Disks = []Disk{fakeDisk("/data", 92, 500*gib)}
+	evs := w.Observe(now, sys)
+	found := false
+	for _, e := range evs {
+		if e.Resource == "host-a.example.disk-data" && e.Metric == "disk-used" {
+			found = e.Level == LevelWarning && e.From == LevelNormal
+		}
+	}
+	if !found {
+		t.Fatalf("first sample at 92%% used must warn immediately: %v", summarize(evs))
+	}
+
+	// Swap already at 94% on the first sample: critical at once.
+	w2 := NewWatcher(DefaultWatchConfig())
+	sys2 := fakeSystem()
+	sys2.Memory.SwapUsedBytes = uint64(0.94 * float64(sys2.Memory.SwapTotalBytes))
+	evs = w2.Observe(now, sys2)
+	found = false
+	for _, e := range evs {
+		if e.Resource == "host-a.example.mem" && e.Metric == "swap-used" {
+			found = e.Level == LevelCritical
+		}
+	}
+	if !found {
+		t.Fatalf("first sample at 94%% swap must go critical immediately: %v", summarize(evs))
+	}
+}
+
+// The first-sample rule must not bypass the 5-minute sustain window.
+func TestWatchCPUSustainGovernsFirstSample(t *testing.T) {
+	w := NewWatcher(DefaultWatchConfig())
+	start := time.Now().UTC()
+	sys := fakeSystem()
+	sys.CPU.UsagePercent = 99
+	for i := range 5 {
+		w.Observe(start.Add(time.Duration(i)*time.Minute), sys)
+	}
+	if evs := allEvents(w, "host-a.example.cpu", "cpu-used"); len(evs) != 0 {
+		t.Fatalf("cpu 99%% inside the sustain window alarmed: %v", summarize(evs))
+	}
+	w.Observe(start.Add(5*time.Minute), sys)
+	evs := allEvents(w, "host-a.example.cpu", "cpu-used")
+	if len(evs) != 1 || evs[0].Level != LevelCritical {
+		t.Fatalf("cpu 99%% held 5m must go critical: %v", summarize(evs))
+	}
+}
 
 func TestWatcherHysteresisSuppressesFlap(t *testing.T) {
 	w := NewWatcher(DefaultWatchConfig())
 	start := time.Now().UTC()
+	// Establish the normal baseline first (the first sample would commit a
+	// real breach at once); then hover: single samples above the threshold
+	// must not flap the level.
+	w.Observe(start, fakeSystem())
 	for i := range 8 {
 		sys := fakeSystem()
 		if i%2 == 0 {
@@ -354,7 +416,7 @@ func TestWatcherHysteresisSuppressesFlap(t *testing.T) {
 		} else {
 			sys.Disks = []Disk{fakeDisk("/data", 70, 500*gib)}
 		}
-		w.Observe(start.Add(time.Duration(i)*time.Minute), sys)
+		w.Observe(start.Add(time.Duration(i+1)*time.Minute), sys)
 	}
 	if evs := allEvents(w, "host-a.example.disk-data", "disk-used"); len(evs) != 0 {
 		t.Fatalf("hovering at the threshold must not alarm: %v", summarize(evs))
@@ -366,30 +428,27 @@ func TestWatcherTransitionsAndClear(t *testing.T) {
 	start := time.Now().UTC()
 	at := func(i int) time.Time { return start.Add(time.Duration(i) * time.Second) }
 
-	// Three consecutive warnings commit the transition on the third.
+	// The first sample already beyond the threshold commits at once; the
+	// next two identical samples add nothing.
 	for i := range 3 {
 		sys := fakeSystem()
 		sys.Disks = []Disk{fakeDisk("/data", 86, 500*gib)}
 		evs := w.Observe(at(i), sys)
-		if i < 2 {
-			for _, e := range evs {
-				if e.Resource == "host-a.example.disk-data" && e.Metric == "disk-used" {
-					t.Fatalf("alarm before hysteresis committed (sample %d): %v", i, e)
-				}
+		var got *Event
+		for _, e := range evs {
+			if e.Resource == "host-a.example.disk-data" && e.Metric == "disk-used" {
+				got = &e
 			}
-		} else {
-			var got *Event
-			for _, e := range evs {
-				if e.Resource == "host-a.example.disk-data" && e.Metric == "disk-used" {
-					got = &e
-				}
-			}
+		}
+		if i == 0 {
 			if got == nil || got.Level != LevelWarning || got.From != LevelNormal {
-				t.Fatalf("third sample must commit normal->warning: %v", summarize(evs))
+				t.Fatalf("first sample must commit normal->warning at once: %v", summarize(evs))
 			}
 			if got.Host != "host-a.example" || got.At.IsZero() || got.Value != 86 {
 				t.Fatalf("event is missing fields: %+v", got)
 			}
+		} else if got != nil {
+			t.Fatalf("identical sample %d duplicated the alarm: %v", i, *got)
 		}
 	}
 
