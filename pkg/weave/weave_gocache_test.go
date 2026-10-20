@@ -39,11 +39,11 @@ func TestWeaveChildEnvManagedGOCacheReusedAcrossResume(t *testing.T) {
 	if cacheA != cacheB {
 		t.Fatalf("resume changed managed GOCACHE: first=%q second=%q", cacheA, cacheB)
 	}
-	if cacheA == cacheC {
-		t.Fatalf("different runs share managed GOCACHE %q", cacheA)
+	if cacheA != cacheC {
+		t.Fatalf("different runs must share ONE managed GOCACHE: %q vs %q", cacheA, cacheC)
 	}
-	if strings.Contains(cacheA, "/ws/issue-42") || !strings.HasPrefix(cacheA, queueDir) {
-		t.Fatalf("managed GOCACHE must live under the queue dir, outside the workspace: %q", cacheA)
+	if strings.Contains(cacheA, "/ws/issue-42") || strings.HasPrefix(cacheA, queueDir+string(filepath.Separator)) {
+		t.Fatalf("shared GOCACHE must be outside the workspace and any per-queue dir: %q", cacheA)
 	}
 }
 
@@ -111,16 +111,13 @@ func TestRunWeaveReverifyUsesManagedGOCacheAndCleansItUp(t *testing.T) {
 		t.Fatalf("reverify exit=%d: %s", code, out)
 	}
 
-	wantCache := weaveManagedGOCachePath(nil, dir, 1)
+	wantCache := weaveSharedGOCachePath(nil, dir, 1)
 	gotCacheBytes, err := os.ReadFile(verifyPathFile)
 	if err != nil {
 		t.Fatalf("read verify output: %v", err)
 	}
 	if got := string(gotCacheBytes); got != wantCache {
 		t.Fatalf("verify observed GOCACHE %q, want %q", got, wantCache)
-	}
-	if _, err := os.Stat(wantCache); !os.IsNotExist(err) {
-		t.Fatalf("managed GOCACHE still exists after coherent reverify: err=%v", err)
 	}
 }
 
@@ -130,7 +127,7 @@ func TestRunWeavePruneKeepsManagedGOCacheForActiveRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cache := weaveManagedGOCachePath(nil, dir, 1)
+	cache := weaveLegacyGOCachePath(nil, dir, 1)
 	if err := os.MkdirAll(cache, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +166,7 @@ func TestRunWeavePruneRemovesCrashLeftoverManagedGOCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cache := weaveManagedGOCachePath(nil, dir, 77)
+	cache := weaveLegacyGOCachePath(nil, dir, 77)
 	if err := os.MkdirAll(cache, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +207,7 @@ func TestPruneReclaimsPerRunBuildCaches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cache := weaveManagedGOCachePath(nil, dir, 1)
+	cache := weaveLegacyGOCachePath(nil, dir, 1)
 	if err := os.MkdirAll(cache, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +243,7 @@ func TestPruneLeavesTheSharedGoCacheAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv(weaveManagedGOCacheEnv, shared)
-	cache := weaveManagedGOCachePath(nil, dir, 1)
+	cache := weaveLegacyGOCachePath(nil, dir, 1)
 	if err := os.MkdirAll(cache, 0o755); err != nil {
 		t.Fatal(err)
 	}

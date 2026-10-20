@@ -15,6 +15,11 @@ import (
 const (
 	weaveManagedGOCacheEnv = "GOCACHE"
 	weaveManagedGOCacheDir = "go-build-cache"
+	weaveSharedGOCacheDir  = ".go-build-cache"
+
+	// WeaveGOCacheMaxEnv overrides the shared cache size cap, in bytes.
+	weaveGOCacheMaxEnv     = "WEAVE_GOCACHE_MAX_BYTES"
+	weaveGOCacheDefaultMax = int64(15) << 30
 )
 
 var weaveManagedGOCacheReplacer = strings.NewReplacer(
@@ -23,18 +28,31 @@ var weaveManagedGOCacheReplacer = strings.NewReplacer(
 	" ", "_",
 )
 
-func weaveManagedGOCachePath(parentEnv []string, queueDir string, issueID int64) string {
+// weaveLegacyGOCachePath is the retired per-run cache location, kept only so
+// older runs' directories can be found and removed (one-time migration).
+func weaveLegacyGOCachePath(parentEnv []string, queueDir string, issueID int64) string {
 	if issueID <= 0 || strings.TrimSpace(queueDir) == "" || envHasName(parentEnv, weaveManagedGOCacheEnv) {
 		return ""
 	}
 	return filepath.Join(queueDir, "agent-data", weaveManagedGOCacheDir, "run-"+weaveManagedGOCacheReplacer.Replace(strconv.FormatInt(issueID, 10)))
 }
 
+// weaveSharedGOCachePath is the ONE managed GOCACHE every weave run on the host
+// shares, across all queues and repos: <stateRoot>/.go-build-cache, a sibling
+// of the queue dirs. The Go build cache is safe for concurrent use by many go
+// processes. A GOCACHE already in the parent env still wins.
+func weaveSharedGOCachePath(parentEnv []string, queueDir string, issueID int64) string {
+	if issueID <= 0 || strings.TrimSpace(queueDir) == "" || envHasName(parentEnv, weaveManagedGOCacheEnv) {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(queueDir), weaveSharedGOCacheDir)
+}
+
 func weaveApplyManagedGOCache(env, parentEnv []string, queueDir string, it *weaveItem) []string {
 	if it == nil {
 		return env
 	}
-	dir := weaveManagedGOCachePath(parentEnv, queueDir, it.ID)
+	dir := weaveSharedGOCachePath(parentEnv, queueDir, it.ID)
 	if dir == "" || envHasName(env, weaveManagedGOCacheEnv) {
 		return env
 	}
@@ -128,7 +146,7 @@ func safeRemoveManagedGOCache(queueDir, cachePath string) error {
 			if !live {
 				continue
 			}
-			liveCache := weaveManagedGOCachePath(nil, absQueue, it.ID)
+			liveCache := weaveLegacyGOCachePath(nil, absQueue, it.ID)
 			if liveCache == "" {
 				continue
 			}
@@ -150,7 +168,7 @@ func weaveCleanupManagedGOCache(queueDir string, it *weaveItem) error {
 	if it == nil || queueDir == "" {
 		return nil
 	}
-	cache := weaveManagedGOCachePath(nil, queueDir, it.ID)
+	cache := weaveLegacyGOCachePath(nil, queueDir, it.ID)
 	if cache == "" {
 		return nil
 	}
@@ -188,7 +206,7 @@ func weaveManagedGOCacheSweepTargets(queueDir string, q *weaveQueue, stale bool)
 		if it == nil || !weavePrunableForSweep(it.State, stale) {
 			continue
 		}
-		cache := weaveManagedGOCachePath(nil, absQueue, it.ID)
+		cache := weaveLegacyGOCachePath(nil, absQueue, it.ID)
 		if cache == "" {
 			continue
 		}
@@ -254,6 +272,8 @@ func weaveReleaseManagedGOCache(stderr io.Writer, verb, queueDir string, it *wea
 		return
 	}
 	err := weaveCleanupManagedGOCache(queueDir, it)
+	weaveMigrateLegacyGOCaches(queueDir)
+	_, _ = weaveTrimSharedGOCache(queueDir, weaveGOCacheMaxBytes())
 	msg := ""
 	if err != nil {
 		msg = fmt.Sprintf("managed GOCACHE: %v", err)

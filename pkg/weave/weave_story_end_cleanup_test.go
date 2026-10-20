@@ -41,7 +41,7 @@ func endCleanupFixture(t *testing.T) (root, dir string) {
 		writeAndCommit(t, ws, "w.txt", "work\n", "agent work")
 		it.State, it.Workspace, it.Branch, it.CommitsAhead = "submitted", ws, "agent/weave-issue-"+string(rune('0'+it.ID)), 1
 		it.LaunchSpec = &weaveLaunchSpec{Tool: "true", MaxRuntime: 5 * time.Minute}
-		cache := weaveManagedGOCachePath(nil, dir, it.ID)
+		cache := weaveLegacyGOCachePath(nil, dir, it.ID)
 		if err := os.MkdirAll(cache, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -74,7 +74,7 @@ func TestSprintEndRefusesUndisposedRunThenClosesAtZeroResidue(t *testing.T) {
 	if code == 0 || !strings.Contains(out, "no disposition") || !strings.Contains(out, "weave pull 1") {
 		t.Fatalf("end must refuse an undecided submitted run: exit=%d\n%s", code, out)
 	}
-	cache1 := weaveManagedGOCachePath(nil, dir, 1)
+	cache1 := weaveLegacyGOCachePath(nil, dir, 1)
 	if _, err := os.Stat(cache1); err != nil {
 		t.Fatalf("refusal must not reclaim: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestSprintEndRefusesUndisposedRunThenClosesAtZeroResidue(t *testing.T) {
 	if it2 == nil || it2.State != "submitted" || it2.Workspace == "" {
 		t.Fatalf("shared-queue run #2 was disturbed: %+v", it2)
 	}
-	if _, err := os.Stat(weaveManagedGOCachePath(nil, dir, 2)); err != nil {
+	if _, err := os.Stat(weaveLegacyGOCachePath(nil, dir, 2)); err != nil {
 		t.Fatalf("shared-queue run #2 cache reclaimed by a sprint that does not own it: %v", err)
 	}
 	if _, err := os.Stat(it2.Workspace); err != nil {
@@ -128,7 +128,7 @@ func TestSprintEndRefusesOnRecordedCleanupFailure(t *testing.T) {
 	}
 	// Keep a real unsafe artifact after the recorded failure. A stale error
 	// with nothing left to clean is cleared by a successful guarded retry.
-	cache := weaveManagedGOCachePath(nil, dir, 1)
+	cache := weaveLegacyGOCachePath(nil, dir, 1)
 	if err := os.MkdirAll(filepath.Dir(cache), 0o755); err != nil {
 		t.Fatal(err)
 	}

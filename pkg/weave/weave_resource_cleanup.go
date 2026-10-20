@@ -280,7 +280,7 @@ func weaveRunArtifactPath(dir string, it *weaveItem, kind string) string {
 	case "log":
 		return it.LogPath
 	case "cache":
-		return weaveManagedGOCachePath(nil, dir, it.ID)
+		return weaveLegacyGOCachePath(nil, dir, it.ID)
 	case "agent-data":
 		return agentlaunch.YcodeDataDir(nil, agentlaunch.Launch{ToolName: agentlaunch.YcodeToolName}, dir, strconv.FormatInt(it.ID, 10))
 	case "lock":
@@ -607,7 +607,7 @@ func weaveConventionalArtifact(dir string, id int64, kind, path string) error {
 	case "socket":
 		expected = weaveCtlSockPath(dir, id)
 	case "cache":
-		expected = weaveManagedGOCachePath(nil, dir, id)
+		expected = weaveLegacyGOCachePath(nil, dir, id)
 	case "agent-data":
 		expected = agentlaunch.YcodeDataDir(nil, agentlaunch.Launch{ToolName: agentlaunch.YcodeToolName}, dir, strconv.FormatInt(id, 10))
 	}

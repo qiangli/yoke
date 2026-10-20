@@ -74,7 +74,7 @@ func gcFixture(t *testing.T) (home, live, liveRoot, active, renamed, goneUnique 
 		t.Fatal(err)
 	}
 	for _, id := range []int64{1, 9} {
-		c := weaveManagedGOCachePath(nil, live, id)
+		c := weaveLegacyGOCachePath(nil, live, id)
 		if err := os.MkdirAll(c, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -102,7 +102,7 @@ func gcFixture(t *testing.T) (home, live, liveRoot, active, renamed, goneUnique 
 	}}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(weaveManagedGOCachePath(nil, active, 1), 0o755); err != nil {
+	if err := os.MkdirAll(weaveLegacyGOCachePath(nil, active, 1), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -157,7 +157,7 @@ func TestWeaveGCReportThenApply(t *testing.T) {
 	if _, err := os.Stat(renamed); err != nil {
 		t.Fatalf("report removed the renamed root: %v", err)
 	}
-	if _, err := os.Stat(weaveManagedGOCachePath(nil, live, 9)); err != nil {
+	if _, err := os.Stat(weaveLegacyGOCachePath(nil, live, 9)); err != nil {
 		t.Fatalf("report removed the orphan cache: %v", err)
 	}
 
@@ -165,7 +165,7 @@ func TestWeaveGCReportThenApply(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("gc apply: %s", out)
 	}
-	for _, p := range []string{renamed, weaveManagedGOCachePath(nil, live, 9), weaveManagedGOCachePath(nil, live, 1), filepath.Join(live, "workspaces", "issue-1")} {
+	for _, p := range []string{renamed, weaveLegacyGOCachePath(nil, live, 9), weaveLegacyGOCachePath(nil, live, 1), filepath.Join(live, "workspaces", "issue-1")} {
 		if _, err := os.Lstat(p); !os.IsNotExist(err) {
 			t.Fatalf("not reclaimed: %s (%v)", p, err)
 		}

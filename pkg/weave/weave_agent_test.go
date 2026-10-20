@@ -538,7 +538,7 @@ func TestBindAgentWorkspaceGrantsManagedGOCacheToSandboxedWorker(t *testing.T) {
 		t.Fatalf("launch=%+v err=%v", l, err)
 	}
 	queue := t.TempDir()
-	cache := weaveManagedGOCachePath(nil, queue, 7)
+	cache := weaveLegacyGOCachePath(nil, queue, 7)
 	bound, err := weaveBindAgentWorkspace(l, argv, "/tmp/allocated-work", cache)
 	if err != nil {
 		t.Fatal(err)
