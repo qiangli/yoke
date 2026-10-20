@@ -1,0 +1,45 @@
+#!/usr/bin/env bashy
+# A PROBE HOOK EXAMPLE, not a verb.
+#
+# Prints one NDJSON sample per line:
+#
+#   {"resource":"gpu:0","field":"utilization","value":91,"unit":"percent"}
+#
+# The engine applies its rules to these exactly as to a built-in sampler. To
+# watch something else — an app metric, a model quota, a queue depth, a remote
+# API — copy this into the local ring and change the body:
+#
+#   bashy watch --hook-source gpu > ~/.bashy/watch/hooks/mine.bsh
+#   bashy watch --probe mine --change utilization --json
+#
+# A local script of the same name shadows this one, so overriding `gpu` is a
+# copy and an edit.
+#
+# PRINTS NOTHING WHEN THE VENDOR TOOL IS ABSENT, and exits 0 while doing it:
+# "there is no GPU here" is not a probe failure, and reporting it as one would
+# alarm every host that has no GPU. A probe exits non-zero only when it could
+# not take the measurement it was asked for.
+
+set -u
+
+command -v nvidia-smi >/dev/null 2>&1 || exit 0
+
+# --query-gpu with --format=csv,noheader,nounits gives one line per GPU of
+# bare numbers, which is the one nvidia-smi output shape that does not change
+# between driver versions.
+nvidia-smi \
+	--query-gpu=index,utilization.gpu,memory.used,memory.total,temperature.gpu \
+	--format=csv,noheader,nounits 2>/dev/null |
+	while IFS=, read -r idx util mem_used mem_total temp; do
+		idx=${idx// /}
+		util=${util// /}
+		mem_used=${mem_used// /}
+		mem_total=${mem_total// /}
+		temp=${temp// /}
+		[ -n "$idx" ] || continue
+		res="gpu:$idx"
+		printf '{"resource":"%s","field":"utilization","value":%s,"unit":"percent"}\n' "$res" "${util:-0}"
+		printf '{"resource":"%s","field":"memory_used","value":%s,"unit":"MiB"}\n' "$res" "${mem_used:-0}"
+		printf '{"resource":"%s","field":"memory_total","value":%s,"unit":"MiB"}\n' "$res" "${mem_total:-0}"
+		printf '{"resource":"%s","field":"temperature","value":%s,"unit":"celsius"}\n' "$res" "${temp:-0}"
+	done

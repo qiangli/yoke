@@ -1,4 +1,12 @@
-// Package watchcmd implements watch(1): run a command periodically.
+// Package watchcmd implements watch(1): run a command periodically — and, with
+// any agentic flag, the host's ONE generic watch engine.
+//
+// Classic mode is procps watch, unchanged: -n, -d, -g/--chgexit, -e, -t, -x,
+// the header and the GNU exit codes. Agentic mode (agentic.go, over
+// pkg/watch) answers the question an agent actually has — "tell me when THIS
+// changes, and let me block until it does" — for any command and for the
+// host's own journals, with no watch subcommand added to any command. See
+// docs/watch-design.md.
 package watchcmd
 
 import (
@@ -20,8 +28,24 @@ import (
 
 var cmd = &tool.Tool{
 	Name:     "watch",
-	Synopsis: "Execute a program periodically, showing output fullscreen.",
-	Usage:    "watch [OPTION]... CMD [ARGS...]",
+	Synopsis: "Execute a program periodically, showing output fullscreen; or watch any state change for a condition.",
+	Usage: `watch [OPTION]... CMD [ARGS...]
+
+Classic (procps) mode runs CMD every -n seconds and shows its output.
+
+Agentic mode is selected by any agentic flag below. It turns state changes into
+EVENTS, applies rules, and reports alerts — on stderr, as NDJSON (--json), to
+the message board (--inbox), or as an exit code (--until).
+
+  watch --until --match field=stage,after=accepted -- bashy sprint show 480 --json
+  watch --json --change status --key id -- kubectl get pods -o json
+  watch --preset sprint --inbox conductor
+  watch --source mb --reply-within 15m
+  watch --preset idle --locator run:repo-7 -- tail -c 2000 run.log
+  watch --list-presets
+
+Exit codes: 0 an alert fired (or the classic -g change), 1 --timeout elapsed
+with nothing to report, 2 usage, 8 CMD failed under -e, 130 interrupted.`,
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
@@ -34,11 +58,17 @@ func run(rc *tool.RunContext, args []string) int {
 	errexit := fs.BoolP("errexit", "e", false, "exit if CMD exits with a non-zero status")
 	chgexit := fs.BoolP("chgexit", "g", false, "exit when CMD output changes")
 	execDirect := fs.BoolP("exec", "x", false, "pass CMD directly to exec instead of a shell")
+	// The agentic options are additive and OFF unless one is given: with none,
+	// everything below this point is the classic procps behaviour, including
+	// the exit codes. See agentic.go.
+	agentic := &agenticOptions{}
+	registerAgenticFlags(fs, agentic)
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
 	}
-	if len(operands) == 0 {
+	selected := agenticSelected(fs)
+	if len(operands) == 0 && !selected {
 		return tool.UsageError(rc, cmd, "missing command")
 	}
 	if *interval <= 0 {
@@ -46,33 +76,38 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	opts := watchOptions{
-		interval:   time.Duration(*interval * float64(time.Second)),
-		noTitle:    *noTitle,
-		diff:       *diff,
-		errexit:    *errexit,
-		chgexit:    *chgexit,
-		execDirect: *execDirect,
-		argv:       operands,
-		tty:        stdoutIsTTY(rc.Out),
-		now:        time.Now,
-		runCommand: execWatchCommand,
+		interval:    time.Duration(*interval * float64(time.Second)),
+		noTitle:     *noTitle,
+		diff:        *diff,
+		errexit:     *errexit,
+		chgexit:     *chgexit,
+		execDirect:  *execDirect,
+		argv:        operands,
+		tty:         stdoutIsTTY(rc.Out),
+		now:         time.Now,
+		runCommand:  execWatchCommand,
+		intervalSet: fs.Changed("interval"),
+	}
+	if selected {
+		return runAgentic(rc, opts, agentic)
 	}
 	return watchLoop(rc, opts)
 }
 
 type watchOptions struct {
-	interval   time.Duration
-	noTitle    bool
-	diff       bool
-	errexit    bool
-	chgexit    bool
-	execDirect bool
-	argv       []string
-	tty        bool
-	maxCycles  int
-	now        func() time.Time
-	runCommand func(context.Context, *tool.RunContext, watchOptions) ([]byte, int, error)
-	sleep      func(context.Context, time.Duration) bool
+	interval    time.Duration
+	intervalSet bool
+	noTitle     bool
+	diff        bool
+	errexit     bool
+	chgexit     bool
+	execDirect  bool
+	argv        []string
+	tty         bool
+	maxCycles   int
+	now         func() time.Time
+	runCommand  func(context.Context, *tool.RunContext, watchOptions) ([]byte, int, error)
+	sleep       func(context.Context, time.Duration) bool
 }
 
 func watchLoop(rc *tool.RunContext, opts watchOptions) int {

@@ -1,0 +1,20 @@
+{
+  "schema_version": "bashy-watch-rules-v1",
+  "name": "agent-reply",
+  "description": "Did the agent you wrote to answer? Tracks every directed message on the board through delivered -> read -> replied and alarms when one is not answered within the deadline, naming how far it got. A queued message is never an acknowledgment.",
+  "interval": "60s",
+  "renotify": "1h",
+  "sources": [
+    {"type": "mb", "backfill": "1h"}
+  ],
+  "rules": [
+    {
+      "type": "correlation",
+      "name": "agent-reply",
+      "within": "15m",
+      "join": "mb-reply",
+      "key": "attr:conv",
+      "trigger": {"source": "mb", "kinds": ["added"], "attrs": {"directed": "true"}}
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "schema_version": "bashy-watch-rules-v1",
+  "name": "idle",
+  "description": "No input and no output is a STALL, not health: a task that is alive but idle has made no progress, and process liveness is never evidence of progress. Quiet for 15m is a warning, 30m is critical, and a condition that persists is restated every 15m. Idle applies to LONG-RUNNING work only -- weave runs, managed sessions, services, background and schedule jobs -- never to a short foreground command, and a task younger than its own quiet window is never flagged. Point it at anything whose output moves while work is happening with 'watch --preset idle --locator run:repo-7 --task run -- <command>'; a task with a legitimately longer silence declares it with --quiet-window, which scales both rungs. The clear event reports how long the stall lasted.",
+  "interval": "60s",
+  "renotify": "15m",
+  "rules": [
+    {
+      "type": "inverse",
+      "name": "idle",
+      "reason": "idle",
+      "within": "15m",
+      "critical": "30m",
+      "locator_by": "locator"
+    }
+  ]
+}
