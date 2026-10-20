@@ -39,7 +39,7 @@ require (
 	github.com/ollama/ollama v0.0.0-00010101000000-000000000000
 	github.com/pkg/sftp v1.13.10
 	github.com/qiangli/bonsai v0.0.0-20261013041512-fbfc95fa4dda
-	github.com/qiangli/coreutils v0.0.0-20261019134046-ccd5c756c64e
+	github.com/qiangli/coreutils v0.0.0-20261019154849-42845e33d023
 	github.com/qiangli/gfy v0.0.0-20261013004914-30d38f086034
 	github.com/qiangli/yoke/pkg/llmgw v0.0.0-00010101000000-000000000000
 	github.com/qiangli/yoke/pkg/oci v0.0.0-00010101000000-000000000000
@@ -415,7 +415,7 @@ replace github.com/odvcencio/gotreesitter => github.com/qiangli/gotreesitter v0.
 // required side effect that a non-"in" reference creates an absent array
 // element. Keeping the narrow fork here makes the conformance fixes build from
 // this repository rather than an unpublished dependency commit.
-replace github.com/benhoyt/goawk => github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261019134046-ccd5c756c64e
+replace github.com/benhoyt/goawk => github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261019154849-42845e33d023
 
 replace github.com/ollama/ollama => ./external/ollama/src
 
