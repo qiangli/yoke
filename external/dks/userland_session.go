@@ -449,7 +449,11 @@ type sessionEnv struct {
 	startPTY func(argv []string, sink io.Writer, ctlSock string) (ptyHandle, error)
 	// listen binds the session server's port; tests bind loopback.
 	listen func(addr string) (net.Listener, error)
-	now    func() time.Time
+	// lingerAfter starts the post-exit read-only window: the server keeps
+	// serving replay and the exit frame until the returned channel fires.
+	// Production is time.After; tests close a channel.
+	lingerAfter func(d time.Duration) <-chan time.Time
+	now         func() time.Time
 }
 
 func defaultSessionEnv(env *userlandEnv) *sessionEnv {
@@ -462,6 +466,7 @@ func defaultSessionEnv(env *userlandEnv) *sessionEnv {
 		terminal:     func() sessionTerminal { return osTerminal{} },
 		startPTY:     startAgentPTY,
 		listen:       func(addr string) (net.Listener, error) { return net.Listen("tcp", addr) },
+		lingerAfter:  time.After,
 		now:          time.Now,
 	}
 	s.dialStream = func(ctx context.Context, endpoint, clientID string, since int64, viewer bool) (attachStream, error) {
@@ -762,7 +767,13 @@ type sessionServerOptions struct {
 	session string
 	home    string
 	port    int
+	linger  time.Duration
 }
+
+// defaultSessionLinger is how long an exited session stays attachable: a
+// client that disconnected before the child exited can still come back for
+// the replay and the recorded exit code (contract §4.3).
+const defaultSessionLinger = 10 * time.Minute
 
 func newSessionServerCmd(env *sessionEnv) *cobra.Command {
 	var o sessionServerOptions
@@ -781,14 +792,19 @@ func newSessionServerCmd(env *sessionEnv) *cobra.Command {
 	cmd.Flags().StringVar(&o.session, "session", "", "session id (the run id of the rendered Pod)")
 	cmd.Flags().StringVar(&o.home, "home", "", "workspace home holding .dks/sessions/<id>/")
 	cmd.Flags().IntVar(&o.port, "port", 0, "attach port to serve (the Pod's published hostPort)")
+	cmd.Flags().DurationVar(&o.linger, "linger", defaultSessionLinger, "keep serving read-only replay and the exit code this long after the child exits")
 	return cmd
 }
 
 // runSessionServer serves one session to its end: bind the attach port, run
 // argv under a PTY into a fresh Hub, serve the attach protocol until the
-// child exits, record the exit exactly once, and exit with the child's code.
-// A client disconnect detaches (the child keeps running); only the child's
-// own exit ends the server.
+// child exits, record the exit exactly once, linger, and exit with the
+// child's code. A client disconnect detaches (the child keeps running). After
+// the exit the server keeps serving for --linger so a late client still gets
+// the replay and the recorded code; the attach handler serves an exited
+// session read-only (no takeover, no input). The linger ends early on
+// SIGTERM/SIGINT — `dks stop` deletes the Pod — and the process still exits
+// with the child's code, so the Pod's terminal state carries it.
 func (env *sessionEnv) runSessionServer(cmd *cobra.Command, o sessionServerOptions, argv []string) error {
 	fail := func(err error) error {
 		fmt.Fprintf(cmd.ErrOrStderr(), "bashy dks session-server: %v\n", err)
@@ -802,6 +818,9 @@ func (env *sessionEnv) runSessionServer(cmd *cobra.Command, o sessionServerOptio
 	}
 	if o.port < 1 || o.port > 65535 {
 		return fail(fmt.Errorf("--port %d is not a port (1-65535)", o.port))
+	}
+	if o.linger < 0 {
+		return fail(fmt.Errorf("--linger %s is negative", o.linger))
 	}
 	if len(argv) == 0 {
 		return fail(errors.New("no command after --"))
@@ -850,6 +869,15 @@ func (env *sessionEnv) runSessionServer(cmd *cobra.Command, o sessionServerOptio
 	}
 	if rerr := hub.RecordExit(code, env.now()); rerr != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "bashy dks session-server: record exit: %v\n", rerr)
+	}
+	if o.linger > 0 {
+		stop := make(chan os.Signal, 1)
+		signal.Notify(stop, syscall.SIGTERM, os.Interrupt)
+		select {
+		case <-env.lingerAfter(o.linger):
+		case <-stop:
+		}
+		signal.Stop(stop)
 	}
 	if code != 0 {
 		return &exitStatusError{code: code}
