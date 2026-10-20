@@ -48,3 +48,41 @@ func TestDiscoverOffers_FitAndPlaceable(t *testing.T) {
 		t.Fatal("unqualified must not be placeable")
 	}
 }
+
+func TestDiscoverOffers_ObservedDeviceMismatch(t *testing.T) {
+	adv := []Accelerator{{Vendor: "nvidia", Model: "NVIDIA L40S", MemoryBytes: 48 * GiB}, {Model: "L40S", MemoryBytes: 48 * GiB}}
+
+	ok := CompareAccelerators(adv, []Accelerator{{Model: "l40s", MemoryBytes: 48 * GiB}, {Model: "NVIDIA-L40S", MemoryBytes: 47 * GiB}}, 0.05)
+	if !ok.Match() {
+		t.Fatalf("within tolerance must match: %+v", ok)
+	}
+
+	cnt := CompareAccelerators(adv, []Accelerator{{Model: "L40S", MemoryBytes: 48 * GiB}}, 0)
+	if cnt.Match() || cnt.Advertised != 2 || cnt.Observed != 1 || cnt.Mismatches[0].Kind != MismatchCount {
+		t.Fatalf("count mismatch: %+v", cnt)
+	}
+
+	mem := CompareAccelerators(adv, []Accelerator{{Model: "L40S", MemoryBytes: 48 * GiB}, {Model: "L40S", MemoryBytes: 24 * GiB}}, 0.05)
+	if mem.Match() || len(mem.Mismatches) != 1 || mem.Mismatches[0].Kind != MismatchMemory || mem.Mismatches[0].ObservedBytes != 24*GiB {
+		t.Fatalf("memory mismatch: %+v", mem)
+	}
+
+	mod := CompareAccelerators(adv, []Accelerator{{Model: "L40S", MemoryBytes: 48 * GiB}, {Model: "T4", MemoryBytes: 48 * GiB}}, 0)
+	if mod.Match() || mod.Mismatches[0].Kind != MismatchModel {
+		t.Fatalf("model mismatch: %+v", mod)
+	}
+
+	unk := CompareAccelerators(adv, []Accelerator{{Model: "L40S"}, {Model: "L40S"}}, 0)
+	if !unk.Match() {
+		t.Fatalf("unobserved memory must not mismatch: %+v", unk)
+	}
+
+	o := Offer{Accelerators: adv}
+	if c := o.CompareObserved(); c.Match() || c.Observed != 0 {
+		t.Fatalf("no allocation observed must mismatch on count: %+v", c)
+	}
+	o.Allocation = &Allocation{Accelerators: adv}
+	if !o.CompareObserved().Match() {
+		t.Fatal("identical allocation must match")
+	}
+}

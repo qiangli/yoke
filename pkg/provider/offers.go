@@ -3,6 +3,8 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -194,4 +196,92 @@ func DiscoverOffers(ctx context.Context, a Adapter) ([]Offer, error) {
 		}
 	}
 	return d.Offers, nil
+}
+
+// MismatchKind classifies an observed-versus-advertised accelerator difference.
+type MismatchKind string
+
+const (
+	MismatchCount  MismatchKind = "count"
+	MismatchModel  MismatchKind = "model"
+	MismatchMemory MismatchKind = "memory"
+)
+
+// DeviceMismatch is one difference. Index is the position in the paired
+// (model, memory-descending) ordering; it is -1 for a count mismatch.
+type DeviceMismatch struct {
+	Kind            MismatchKind `json:"kind"`
+	Index           int          `json:"index"`
+	AdvertisedModel string       `json:"advertised_model,omitempty"`
+	ObservedModel   string       `json:"observed_model,omitempty"`
+	AdvertisedBytes int64        `json:"advertised_bytes,omitempty"`
+	ObservedBytes   int64        `json:"observed_bytes,omitempty"`
+}
+
+// DeviceComparison is the result of CompareAccelerators.
+type DeviceComparison struct {
+	Advertised int              `json:"advertised"`
+	Observed   int              `json:"observed"`
+	Mismatches []DeviceMismatch `json:"mismatches,omitempty"`
+}
+
+// Match reports no observed-versus-advertised difference.
+func (c DeviceComparison) Match() bool { return len(c.Mismatches) == 0 }
+
+func normModel(m string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(m) {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return strings.TrimPrefix(strings.TrimPrefix(b.String(), "nvidia"), "amd")
+}
+
+func sortedDevices(in []Accelerator) []Accelerator {
+	out := append([]Accelerator(nil), in...)
+	sort.SliceStable(out, func(i, j int) bool {
+		a, b := normModel(out[i].Model), normModel(out[j].Model)
+		if a != b {
+			return a < b
+		}
+		return out[i].MemoryBytes > out[j].MemoryBytes
+	})
+	return out
+}
+
+// CompareAccelerators compares an observed per-device inventory (for example
+// Outpost sysinfo GPUs mapped to Accelerator: model name plus per-device
+// memory bytes) against advertised devices. Models compare case- and
+// punctuation-insensitively; observed memory below advertised by more than
+// tolerance (fraction, e.g. 0.05 for driver reserve) is a mismatch. Zero
+// observed memory means unobserved and is not compared. Devices are compared
+// one by one, never summed.
+func CompareAccelerators(advertised, observed []Accelerator, tolerance float64) DeviceComparison {
+	c := DeviceComparison{Advertised: len(advertised), Observed: len(observed)}
+	if len(advertised) != len(observed) {
+		c.Mismatches = append(c.Mismatches, DeviceMismatch{Kind: MismatchCount, Index: -1})
+	}
+	adv, obs := sortedDevices(advertised), sortedDevices(observed)
+	for i := 0; i < len(adv) && i < len(obs); i++ {
+		a, o := adv[i], obs[i]
+		if normModel(a.Model) != normModel(o.Model) {
+			c.Mismatches = append(c.Mismatches, DeviceMismatch{Kind: MismatchModel, Index: i, AdvertisedModel: a.Model, ObservedModel: o.Model})
+			continue
+		}
+		if a.MemoryBytes > 0 && o.MemoryBytes > 0 && float64(o.MemoryBytes) < float64(a.MemoryBytes)*(1-tolerance) {
+			c.Mismatches = append(c.Mismatches, DeviceMismatch{Kind: MismatchMemory, Index: i, AdvertisedModel: a.Model, ObservedModel: o.Model, AdvertisedBytes: a.MemoryBytes, ObservedBytes: o.MemoryBytes})
+		}
+	}
+	return c
+}
+
+// CompareObserved compares the offer's advertised accelerators with its
+// observed Allocation (none observed counts as zero devices), exact memory.
+func (o Offer) CompareObserved() DeviceComparison {
+	var obs []Accelerator
+	if o.Allocation != nil {
+		obs = o.Allocation.Accelerators
+	}
+	return CompareAccelerators(o.Accelerators, obs, 0)
 }
