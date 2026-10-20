@@ -55,6 +55,24 @@ func TestTakeoverCauseVendorQuotaKept(t *testing.T) {
 	}
 }
 
+// A second-generation brief reprints the previous tail verbatim under the
+// supervisor's evidence marker. That quoted evidence must not launder the
+// live tail into supervisor context: genuine vendor quota lines still read
+// as quota-exhausted, and the takeover limit still engages.
+func TestTakeoverCauseTakeoverBriefDoesNotLaunderTail(t *testing.T) {
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	tail := "working\nERROR: You've hit your usage limit. Try again at 1:30 PM.\n"
+	brief := "SUPERVISED TAKEOVER\nOriginal brief (historical task context):\nOriginal task\n\n" +
+		weaveBriefEvidenceMarker + "\nLast log lines:\n" + tail
+	if got, _ := weaveTakeoverCause(tail, nil, "a", now, brief); got != "quota-exhausted" {
+		t.Fatalf("takeover brief: cause=%q, want %q", got, "quota-exhausted")
+	}
+	nudgeTail := "working\n" + chat.BudgetSteer + "\n"
+	if got, _ := weaveTakeoverCause(nudgeTail, nil, "a", now, brief); got != "other" {
+		t.Fatalf("takeover brief with nudge tail: cause=%q, want %q", got, "other")
+	}
+}
+
 // The same nudge must not become a quota observation on a failed run, while
 // genuine vendor evidence alongside an unrelated brief still records.
 func TestObservationsFromLogIgnoresCoachNudge(t *testing.T) {
