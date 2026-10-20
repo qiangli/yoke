@@ -1049,3 +1049,47 @@ func TestPsShowsKind(t *testing.T) {
 		}
 	}
 }
+
+// killedPodJSON is a session Pod whose container terminated with code and
+// reason, as the plane reports it after the executor killed it.
+func killedPodJSON(t *testing.T, run string, kind dagrun.RunKind, code int, reason string) string {
+	t.Helper()
+	pod := podJSON(t, testWorkspaceID, run, "bashy", kind, "Failed")
+	status := fmt.Sprintf(`"status":{"phase":"Failed","containerStatuses":[{"state":{"terminated":{"exitCode":%d,"reason":%q,"finishedAt":"2026-10-20T22:27:15Z"}}}]}`, code, reason)
+	return strings.Replace(pod, `"status":{"phase":"Failed"}`, status, 1)
+}
+
+// TestPsReportsKilledSessionAsLost: a session Pod the executor killed
+// (137, reason Error — the session server recorded no exit of the child)
+// shows phase lost; a child's own exit code stays failed.
+func TestPsReportsKilledSessionAsLost(t *testing.T) {
+	rt := newRunTest(t)
+	rt.selectWorkspace(t, "skel")
+	const (
+		killedRun = "01JC1ZK3V0000000000000000A"
+		exitedRun = "01JC1ZK3V0000000000000000B"
+	)
+	rt.runner.gets = [][]byte{runsJSON(
+		killedPodJSON(t, killedRun, dagrun.RunLongRunning, 137, "Error"),
+		killedPodJSON(t, exitedRun, dagrun.RunInteractive, 7, "Error"),
+	)}
+	code, stdout, stderr := rt.exec(t, "ps")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	want := map[string]string{killedRun: "lost", exitedRun: "failed"}
+	rows := 0
+	for _, l := range strings.Split(strings.TrimSpace(stdout), "\n")[1:] {
+		f := strings.Fields(l)
+		if len(f) != 6 {
+			t.Fatalf("row %q", l)
+		}
+		rows++
+		if f[3] != want[f[0]] {
+			t.Errorf("run %s phase %s, want %s", f[0], f[3], want[f[0]])
+		}
+	}
+	if rows != 2 {
+		t.Fatalf("ps output:\n%s", stdout)
+	}
+}

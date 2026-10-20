@@ -1468,3 +1468,66 @@ func TestPairedAuthHeadersGuards(t *testing.T) {
 		t.Errorf("missing kubeconfig context error = %v, want fail-closed naming $%s", err, tunnelBaseEnv)
 	}
 }
+
+// killedSessionPodJSON is a session pod after the executor killed its
+// container: phase Failed, terminated 137 with reason Error.
+func killedSessionPodJSON(name string, code int) []byte {
+	return []byte(fmt.Sprintf(`{"items":[{"metadata":{"name":%q,"namespace":"default","uid":"abcdef1234567890",`+
+		`"labels":{"app.kubernetes.io/managed-by":"bashy","dhnt.io/workspace":%q,"dhnt.io/run":%q,"outpost.dhnt.io/host":"worker-a"},`+
+		`"annotations":{"dhnt.io/attach-port":"41234"}},`+
+		`"spec":{"nodeName":"node-fallback"},"status":{"phase":"Failed","containerStatuses":[{"state":{"terminated":`+
+		`{"exitCode":%d,"reason":"Error","finishedAt":"2026-10-20T22:27:15Z"}}}]}}]}`,
+		name, testWorkspaceID, testRunID, code))
+}
+
+// TestAttachToLostSessionReportsLostNotHandshake: the live S481.6 gap — the
+// executor killed the session's container, the edge answers 502, and
+// attach/logs must report the session lost (with when) under the dedicated
+// lost code, never the raw handshake error, and never re-run it.
+func TestAttachToLostSessionReportsLostNotHandshake(t *testing.T) {
+	edge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "bad gateway", http.StatusBadGateway)
+	}))
+	t.Cleanup(edge.Close)
+	for _, args := range [][]string{{"attach", testRunID}, {"logs", testRunID}, {"logs", "-f", testRunID}} {
+		st := newSessionTest(t)
+		st.selectWorkspace(t, "skel")
+		st.senv.tunnelBase = func(dagrun.Context) (string, error) { return edge.URL, nil }
+		st.runner.podsJSON = killedSessionPodJSON("bashy-run-"+strings.ToLower(testRunID), 137)
+
+		code, _, stderr := st.exec(t, args...)
+		if code != sessionLostExitCode {
+			t.Errorf("%v exited %d, want lost code %d (stderr %q)", args, code, sessionLostExitCode, stderr)
+		}
+		want := "session " + testRunID + " lost: executor gone at 2026-10-20T22:27:15Z; not re-run — re-run it explicitly"
+		if !strings.Contains(stderr, want) {
+			t.Errorf("%v stderr %q, want %q", args, stderr, want)
+		}
+		if strings.Contains(stderr, "handshake") || strings.Contains(stderr, "502") {
+			t.Errorf("%v stderr leaks the raw handshake error: %q", args, stderr)
+		}
+		for _, c := range st.runner.calls {
+			if action(c.argv) == "apply" || action(c.argv) == "delete" {
+				t.Errorf("%v touched the plane: %v", args, c.argv)
+			}
+		}
+		st.noLocal(t)
+	}
+}
+
+// TestAttachToExitedSessionReportsChildCode: a pod whose child exited with
+// its own code (7) is not lost — attach reports that code, not lost.
+func TestAttachToExitedSessionReportsChildCode(t *testing.T) {
+	edge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "bad gateway", http.StatusBadGateway)
+	}))
+	t.Cleanup(edge.Close)
+	st := newSessionTest(t)
+	st.selectWorkspace(t, "skel")
+	st.senv.tunnelBase = func(dagrun.Context) (string, error) { return edge.URL, nil }
+	st.runner.podsJSON = killedSessionPodJSON("bashy-run-"+strings.ToLower(testRunID), 7)
+	code, _, stderr := st.exec(t, "attach", testRunID)
+	if code != 7 || strings.Contains(stderr, "lost") || !strings.Contains(stderr, "exited with code 7") {
+		t.Errorf("attach exited %d stderr %q, want the child's code 7", code, stderr)
+	}
+}

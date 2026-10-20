@@ -77,7 +77,72 @@ const (
 	PhaseSucceeded Phase = "succeeded"
 	PhaseFailed    Phase = "failed"
 	PhaseUnknown   Phase = "unknown" // a Pod the plane reports as Unknown
+	// PhaseLost: a session Pod that ended without its session server
+	// recording the child's exit — the executor or container died under it
+	// (contract §4.3). It is never restarted, migrated or replayed.
+	PhaseLost Phase = "lost"
 )
+
+// ContainerStatus is the slice of a Pod container status the phase mapping
+// reads.
+type ContainerStatus struct {
+	State struct {
+		Terminated *ContainerTerminated `json:"terminated"`
+	} `json:"state"`
+}
+
+// ContainerTerminated is a container's terminated state.
+type ContainerTerminated struct {
+	ExitCode   int    `json:"exitCode"`
+	Signal     int    `json:"signal"`
+	Reason     string `json:"reason"`
+	FinishedAt string `json:"finishedAt"`
+}
+
+// lostContainerReasons are terminated reasons no session server reports:
+// the container was killed or never ran, so the child's exit is unknown.
+var lostContainerReasons = map[string]bool{
+	"OOMKilled":              true,
+	"ContainerCannotRun":     true,
+	"ContainerStatusUnknown": true,
+}
+
+// lostPodReasons are Pod-level reasons for a Pod the executor dropped.
+var lostPodReasons = map[string]bool{
+	"Evicted":  true,
+	"NodeLost": true,
+	"Shutdown": true,
+}
+
+// SessionPhase maps a session (bare) Pod's status onto its phase. The
+// session server reports the child's exit only as its own process exit
+// code, so a Failed Pod is lost — not failed — when nothing but the
+// executor can have ended it: a Pod-level eviction/node loss, a killed or
+// unrunnable container, a signal-style exit (128+N, e.g. 137 SIGKILL, 143
+// SIGTERM), or no terminated state at all. Any other code is the child's
+// own and stays failed. The returned state is the container's terminated
+// state, nil when the plane reported none.
+func SessionPhase(phase, reason string, containers []ContainerStatus) (Phase, *ContainerTerminated) {
+	var term *ContainerTerminated
+	for _, c := range containers {
+		if c.State.Terminated != nil {
+			term = c.State.Terminated
+			break
+		}
+	}
+	p := podPhase(phase)
+	if p != PhaseFailed {
+		return p, term
+	}
+	switch {
+	case lostPodReasons[reason], term == nil:
+		return PhaseLost, term
+	case lostContainerReasons[term.Reason], term.Signal != 0,
+		term.ExitCode > 128 && term.ExitCode <= 128+64:
+		return PhaseLost, term
+	}
+	return PhaseFailed, term
+}
 
 // RunStatus is one run as ps lists it: identity from its labels, phase from
 // its workload's status.
@@ -259,11 +324,13 @@ type kubeObject struct {
 		Labels map[string]string `json:"labels"`
 	} `json:"metadata"`
 	Status struct {
-		Phase      string `json:"phase"` // Pod
-		Active     int    `json:"active"`
-		Succeeded  int    `json:"succeeded"`
-		Failed     int    `json:"failed"`
-		Conditions []struct {
+		Phase             string            `json:"phase"`  // Pod
+		Reason            string            `json:"reason"` // Pod
+		ContainerStatuses []ContainerStatus `json:"containerStatuses"`
+		Active            int               `json:"active"`
+		Succeeded         int               `json:"succeeded"`
+		Failed            int               `json:"failed"`
+		Conditions        []struct {
 			Type    string `json:"type"`
 			Status  string `json:"status"`
 			Reason  string `json:"reason"`
@@ -304,7 +371,8 @@ func parseRuns(out []byte) ([]RunStatus, error) {
 		case "Job":
 			phase = jobPhase(o)
 		case "Pod":
-			phase = podPhase(o.Status.Phase)
+			// A run whose Pod wins has no Job: it is a session.
+			phase, _ = SessionPhase(o.Status.Phase, o.Status.Reason, o.Status.ContainerStatuses)
 		default:
 			continue
 		}

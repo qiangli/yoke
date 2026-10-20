@@ -392,3 +392,32 @@ func TestClusterRunnerHonorsContext(t *testing.T) {
 		t.Fatal("runner called on a done context")
 	}
 }
+
+func TestSessionPhaseSeparatesLostFromChildExit(t *testing.T) {
+	term := func(code, signal int, reason string) []ContainerStatus {
+		var c ContainerStatus
+		c.State.Terminated = &ContainerTerminated{ExitCode: code, Signal: signal, Reason: reason, FinishedAt: "2026-10-20T22:27:15Z"}
+		return []ContainerStatus{c}
+	}
+	cases := []struct {
+		name, phase, reason string
+		containers          []ContainerStatus
+		want                Phase
+	}{
+		{"running", "Running", "", nil, PhaseRunning},
+		{"child exit 0", "Succeeded", "", term(0, 0, "Completed"), PhaseSucceeded},
+		{"child exit 7", "Failed", "", term(7, 0, "Error"), PhaseFailed},
+		{"SIGKILL", "Failed", "", term(137, 0, "Error"), PhaseLost},
+		{"SIGTERM", "Failed", "", term(143, 0, "Error"), PhaseLost},
+		{"signal field", "Failed", "", term(0, 9, "Error"), PhaseLost},
+		{"OOMKilled", "Failed", "", term(1, 0, "OOMKilled"), PhaseLost},
+		{"ContainerCannotRun", "Failed", "", term(127, 0, "ContainerCannotRun"), PhaseLost},
+		{"evicted", "Failed", "Evicted", nil, PhaseLost},
+		{"no terminated state", "Failed", "", nil, PhaseLost},
+	}
+	for _, c := range cases {
+		if got, _ := SessionPhase(c.phase, c.reason, c.containers); got != c.want {
+			t.Errorf("%s: SessionPhase = %s, want %s", c.name, got, c.want)
+		}
+	}
+}
