@@ -1,0 +1,125 @@
+[
+  {
+    "apiVersion": "v1",
+    "kind": "Pod",
+    "metadata": {
+      "annotations": {
+        "artifact.dhnt.io/darwin-arm64": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "artifact.dhnt.io/linux-amd64": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "artifact.dhnt.io/linux-arm64": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "dhnt.io/command-digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+        "dhnt.io/manifest": "---\nname: run-01jb7cexample0000000000000\ndescription: bashy run manifest for agent+cli/v2 (generated; do not edit)\ntype: dag\nmetadata:\n  run-kind: long-running\n  workspace: ws-01jb6zexample0000000000\n  run-id: 01JB7CEXAMPLE0000000000000\n  command:\n    name: agent+cli/v2\n    digest: sha256:4444444444444444444444444444444444444444444444444444444444444444\n  artifact:\n    darwin/arm64: sha256:3333333333333333333333333333333333333333333333333333333333333333\n    linux/amd64: sha256:1111111111111111111111111111111111111111111111111111111111111111\n    linux/arm64: sha256:2222222222222222222222222222222222222222222222222222222222222222\n  egress: none\n---\n## run\nVenue: cluster\nDistribution: single\nAccelerator: gpu\nAccelerator-Family: cuda\nAccelerator-Count: 2\nAccelerator-Memory: 16Gi\nTimeout: 1h30m0s\nRetries: 0\n```sh\nagent --task 'say \"hi\"'\n```\n"
+      },
+      "labels": {
+        "app.kubernetes.io/managed-by": "bashy",
+        "dhnt.io/command": "agent-cli-v2",
+        "dhnt.io/run": "01JB7CEXAMPLE0000000000000",
+        "dhnt.io/workspace": "ws-01jb6zexample0000000000"
+      },
+      "name": "bashy-run-01jb7cexample0000000000000"
+    },
+    "spec": {
+      "activeDeadlineSeconds": 5400,
+      "affinity": {
+        "nodeAffinity": {
+          "requiredDuringSchedulingIgnoredDuringExecution": {
+            "nodeSelectorTerms": [
+              {
+                "matchExpressions": [
+                  {
+                    "key": "kubernetes.io/arch",
+                    "operator": "In",
+                    "values": [
+                      "amd64",
+                      "arm64"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "automountServiceAccountToken": false,
+      "containers": [
+        {
+          "command": [
+            "bashy",
+            "-c",
+            "agent --task 'say \"hi\"'"
+          ],
+          "env": [
+            {
+              "name": "HOME",
+              "value": "/home/bashy"
+            }
+          ],
+          "image": "registry.example/bashy/bashy:v0.0.0-test",
+          "name": "run",
+          "resources": {
+            "limits": {
+              "dhnt.io/vram": "32Gi",
+              "nvidia.com/gpu": "2"
+            },
+            "requests": {
+              "dhnt.io/vram": "32Gi",
+              "nvidia.com/gpu": "2"
+            }
+          },
+          "volumeMounts": [
+            {
+              "mountPath": "/home/bashy",
+              "name": "home"
+            }
+          ],
+          "workingDir": "/home/bashy"
+        }
+      ],
+      "nodeSelector": {
+        "kubernetes.io/os": "linux"
+      },
+      "restartPolicy": "Never",
+      "tolerations": [
+        {
+          "effect": "NoSchedule",
+          "key": "virtual-kubelet.io/provider",
+          "operator": "Equal",
+          "value": "outpost"
+        }
+      ],
+      "volumes": [
+        {
+          "hostPath": {
+            "path": "/var/lib/bashy/dks/home/ws-01jb6zexample0000000000",
+            "type": "DirectoryOrCreate"
+          },
+          "name": "home"
+        }
+      ]
+    }
+  },
+  {
+    "apiVersion": "networking.k8s.io/v1",
+    "kind": "NetworkPolicy",
+    "metadata": {
+      "labels": {
+        "app.kubernetes.io/managed-by": "bashy",
+        "dhnt.io/command": "agent-cli-v2",
+        "dhnt.io/run": "01JB7CEXAMPLE0000000000000",
+        "dhnt.io/workspace": "ws-01jb6zexample0000000000"
+      },
+      "name": "bashy-run-01jb7cexample0000000000000"
+    },
+    "spec": {
+      "egress": [],
+      "podSelector": {
+        "matchLabels": {
+          "dhnt.io/run": "01JB7CEXAMPLE0000000000000"
+        }
+      },
+      "policyTypes": [
+        "Egress"
+      ]
+    }
+  }
+]
