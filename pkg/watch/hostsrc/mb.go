@@ -54,6 +54,9 @@ func NewMBSource(b Board) *MBSource {
 // Name implements watch.Source.
 func (s *MBSource) Name() string { return "mb" }
 
+// BackfillWindow implements watch.Backfiller.
+func (s *MBSource) BackfillWindow() time.Duration { return s.Backfill }
+
 // Poll implements watch.Source.
 func (s *MBSource) Poll(_ context.Context, now time.Time) ([]watch.Event, error) {
 	posts, err := s.BoardAPI.Posts()

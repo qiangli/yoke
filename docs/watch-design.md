@@ -286,6 +286,51 @@ edit it, and `--rules ./mine.json`. `bashy resources watch` stays a thin
 documented alias for a `resources` preset (Phase 2) so there is exactly one
 watch engine.
 
+### An explicit `--source` narrows the file, it does not join it
+
+Naming a source on the command line **replaces** the rule file's source(s) of
+that kind; the file's other kinds stay:
+
+```
+watch --preset sprint                                 every card, plus the board
+watch --preset sprint --source sprint-thread:480      that card, plus the board
+watch --preset sprint --source sprint-thread:472                       --source sprint-thread:480      those two, plus the board
+watch --preset sprint --source mb:<seat>              every card, that seat only
+```
+
+The alternative — appending the explicit source beside the preset's own
+unfiltered one — is the bug this rule exists to prevent: a watcher asked for two
+cards reported every card on the host, and the extra lines were
+indistinguishable from the ones that were requested. A filter that silently
+widens the request it was given fails the same way as one that matches nothing:
+the answer is not the question.
+
+A narrowed source keeps **everything but the target** from the file — the
+backfill window, the task class, the quiet window — because the command line
+said *which object* to watch, not *how* to watch it. An explicit `--backfill`
+still wins. A kind the file does not declare is simply added, so a selection can
+give a preset a source it never had. With no `--source` at all the file watches
+exactly what it declares.
+
+The mechanism is `RuleFile.NarrowSources` (pkg/watch/narrow.go), applied to the
+parsed file *before* it is built, so a preset and a `--rules` file behave
+identically and the engine never sees a source the invocation did not ask for.
+
+### Backfill is announced
+
+A watcher that backfills opens with the **recent past**, and unannounced those
+first lines read exactly like a burst of live activity — an operator who
+mistakes backfill for news acts on something that already happened. So the
+window is stated once on stderr, before the first cycle:
+
+```
+watch: backfill: reporting entries younger than 2h0m0s
+```
+
+Any source that reports already-present records declares the window
+(`watch.Backfiller`); the invocation prints the widest one, and prints nothing
+when no source backfills at all.
+
 ## Bash# script hooks — the same rod, for sources and sinks
 
 Presets let a user configure the engine. Hooks let a user **extend** it, in

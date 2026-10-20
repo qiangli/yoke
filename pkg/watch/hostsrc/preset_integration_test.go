@@ -228,3 +228,110 @@ func TestShippedPresetsAllParseAndBuild(t *testing.T) {
 		}
 	}
 }
+
+// THE NARROWING GATE.
+//
+// `--preset sprint --source sprint-thread:472` is a request to watch ONE card.
+// Before the narrowing, the preset's own unfiltered sprint-thread source was
+// kept beside the explicit one, so the watcher reported every card on the host
+// — the narrower request was silently widened.
+func TestExplicitSourceNarrowsThePresetToOneCard(t *testing.T) {
+	t.Setenv("BASHY_WATCH_DIR", t.TempDir())
+	board := newFakeBoard()
+	timeline := []room.Event{
+		sprintEvent(1, -30*time.Minute, "sprint:#450", "stage", "manager", "started"),
+		sprintEvent(2, -20*time.Minute, "sprint:#472", "stage", "worker", "started"),
+		sprintEvent(3, -10*time.Minute, "sprint:#472", "decision", "worker", "accepted"),
+		sprintEvent(4, -5*time.Minute, "sprint:#481", "stage", "manager", "started"),
+	}
+	useFixtures(t, board, func(int) ([]room.Event, error) { return timeline, nil })
+
+	preset, err := watch.LoadPreset("sprint")
+	if err != nil {
+		t.Fatalf("preset: %v", err)
+	}
+	narrowed := preset.File.NarrowSources([]watch.SourceSpec{{Type: "sprint-thread", Target: "472"}})
+	plan, err := narrowed.Build(watch.BuildOptions{})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	// The preset's 2h backfill survives the narrowing: the command line said
+	// WHICH card, not how far back to read.
+	if w := watch.BackfillWindow(plan.Sources); w != 2*time.Hour {
+		t.Fatalf("backfill window = %v, want the preset's 2h", w)
+	}
+
+	var got []watch.Alert
+	now := at0
+	engine := watch.New(watch.Config{
+		Sources:  plan.Sources,
+		Rules:    plan.Rules,
+		Sinks:    []watch.Sink{watch.FuncSink(func(a watch.Alert) error { got = append(got, a); return nil })},
+		Interval: plan.Interval,
+		Renotify: plan.Renotify,
+		// Past the preset's 45m idle window, so a card that went quiet reports.
+		MaxCycles: 50,
+		Now:       func() time.Time { return now },
+		Sleep:     func(_ context.Context, d time.Duration) bool { now = now.Add(d); return true },
+	})
+	if code := engine.Run(context.Background()); code != watch.ExitOK {
+		t.Fatalf("code = %d", code)
+	}
+
+	want := []alertRow{
+		{"stage", watch.ReasonMatch, "sprint:472"},
+		{"judgement", watch.ReasonMatch, "sprint:472"},
+		{"sprint-idle", watch.ReasonIdle, "sprint:472"},
+	}
+	if g := rows(got); showRows(g) != showRows(want) {
+		t.Fatalf("alerts = %s\nwant       = %s\n(450 and 481 are other cards: naming one must not report the others)",
+			showRows(g), showRows(want))
+	}
+}
+
+// An explicit source of ONE kind leaves the preset's other kinds alone.
+func TestExplicitMBSourceKeepsThePresetSprintThread(t *testing.T) {
+	t.Setenv("BASHY_WATCH_DIR", t.TempDir())
+	board := newFakeBoard()
+	board.add(bus.Post{ID: "ask", From: "manager", To: "operator", Topic: "sprint",
+		Body: "decision needed", At: ts(-2 * time.Minute)})
+	timeline := []room.Event{
+		sprintEvent(1, -5*time.Minute, "sprint:#472", "stage", "worker", "started"),
+	}
+	useFixtures(t, board, func(int) ([]room.Event, error) { return timeline, nil })
+
+	preset, err := watch.LoadPreset("sprint")
+	if err != nil {
+		t.Fatalf("preset: %v", err)
+	}
+	narrowed := preset.File.NarrowSources([]watch.SourceSpec{{Type: "mb", Target: "operator"}})
+	plan, err := narrowed.Build(watch.BuildOptions{})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	var got []watch.Alert
+	now := at0
+	engine := watch.New(watch.Config{
+		Sources:   plan.Sources,
+		Rules:     plan.Rules,
+		Sinks:     []watch.Sink{watch.FuncSink(func(a watch.Alert) error { got = append(got, a); return nil })},
+		Interval:  plan.Interval,
+		Renotify:  plan.Renotify,
+		MaxCycles: 2,
+		Now:       func() time.Time { return now },
+		Sleep:     func(_ context.Context, d time.Duration) bool { now = now.Add(d); return true },
+	})
+	if code := engine.Run(context.Background()); code != watch.ExitOK {
+		t.Fatalf("code = %d", code)
+	}
+
+	want := []alertRow{
+		{"stage", watch.ReasonMatch, "sprint:472"},
+		{"operator-mail", watch.ReasonMatch, "mb:ask"},
+	}
+	if g := rows(got); showRows(g) != showRows(want) {
+		t.Fatalf("alerts = %s\nwant       = %s\n(an mb selection must not drop the preset's sprint-thread source)",
+			showRows(g), showRows(want))
+	}
+}

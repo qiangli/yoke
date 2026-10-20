@@ -101,6 +101,9 @@ func TestAgenticUsageErrors(t *testing.T) {
 		{"nothing to watch", []string{"--until"}, "nothing to watch"},
 		{"nothing to alarm on", []string{"--json", "--", "echo x"}, "nothing to alarm on"},
 		{"unknown source", []string{"--source", "nope", "--match", "kind=added"}, "unknown source type"},
+		// Same refusal with a preset: a selection the host cannot build must
+		// not pass for a narrowing of the preset's sources.
+		{"unknown source with a preset", []string{"--preset", "sprint", "--source", "nope"}, "unknown source type"},
 		{"preset and rules", []string{"--preset", "sprint", "--rules", "x.json"}, "pass one"},
 		{"bad regexp", []string{"--match", "text=(", "--", "echo x"}, "error parsing regexp"},
 	}
@@ -164,5 +167,69 @@ func TestParseCriteria(t *testing.T) {
 	}
 	if c, err = parseCriteria("text=~stalled"); err != nil || c.Text != "stalled" {
 		t.Fatalf("(%+v, %v): the =~ spelling must be accepted", c, err)
+	}
+}
+
+// sourceNames is what a built plan can still be asked about: the KINDS it will
+// poll, in order.
+func sourceNames(plan watch.Plan) []string {
+	out := make([]string, 0, len(plan.Sources))
+	for _, s := range plan.Sources {
+		out = append(out, s.Name())
+	}
+	return out
+}
+
+func TestAgenticExplicitSourceNarrowsThePreset(t *testing.T) {
+	isolatePresets(t)
+	rc, _, _ := newRunContext(t)
+	cases := []struct {
+		name    string
+		sources []string
+		want    []string
+	}{
+		{"no selection keeps the preset", nil, []string{"sprint-thread", "mb"}},
+		// One sprint-thread source, not two: the preset's unfiltered one is
+		// replaced rather than kept beside the explicit card.
+		{"one card", []string{"sprint-thread:472"}, []string{"sprint-thread", "mb"}},
+		{"two cards", []string{"sprint:472", "sprint-thread:480"}, []string{"sprint-thread", "sprint-thread", "mb"}},
+		{"mb only narrows mb", []string{"mb:seat-x"}, []string{"sprint-thread", "mb"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			o := &agenticOptions{preset: "sprint", sources: tc.sources}
+			plan, code := buildPlan(rc, watchOptions{}, o)
+			if code >= 0 {
+				t.Fatalf("buildPlan = %d", code)
+			}
+			if got := sourceNames(plan); strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Fatalf("sources = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A fresh watcher's first lines are BACKFILL — the recent past, not live
+// activity. Unannounced, that reads exactly like a burst of new events.
+func TestAgenticAnnouncesTheBackfillWindow(t *testing.T) {
+	isolatePresets(t)
+	t.Setenv("BASHY_HOME", t.TempDir())
+	_, errOut, code := runTool(t, "-n", "0.01", "--source", "sprint-thread:472", "--backfill", "2h",
+		"--match", "kind=added", "--timeout", "40ms")
+	if code != 1 {
+		t.Fatalf("code = %d, want 1 (%q)", code, errOut)
+	}
+	if !strings.Contains(errOut, "backfill: reporting entries younger than 2h0m0s") {
+		t.Fatalf("stderr = %q, want the backfill window announced", errOut)
+	}
+}
+
+func TestAgenticWithoutBackfillSaysNothing(t *testing.T) {
+	isolatePresets(t)
+	t.Setenv("BASHY_HOME", t.TempDir())
+	_, errOut, code := runTool(t, "-n", "0.01", "--source", "sprint-thread:472",
+		"--match", "kind=added", "--timeout", "40ms")
+	if code != 1 || strings.Contains(errOut, "backfill") {
+		t.Fatalf("(%q, %d): a baseline-only watcher has no window to announce", errOut, code)
 	}
 }
