@@ -39,6 +39,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
+	"gopkg.in/yaml.v3"
 
 	"github.com/qiangli/yoke/pkg/agentpty"
 	"github.com/qiangli/yoke/pkg/dagrun"
@@ -431,10 +432,10 @@ type sessionEnv struct {
 	// tunnelBase resolves the paired plane's matrix-tunnel base URL
 	// (http/https). Tests point it at an httptest server.
 	tunnelBase func(ctxRec dagrun.Context) (string, error)
-	// authHeaders are the paired client's auth headers for tunnel dials.
-	// This file invents no scheme: production defaults to none and the
-	// pairing story installs its own.
-	authHeaders func() http.Header
+	// authHeaders are the paired client's auth headers for one tunnel
+	// endpoint, resolved before every dial so a refreshed cookie reaches a
+	// redial. Production is pairedAuthHeaders.
+	authHeaders func(endpoint string) (http.Header, error)
 	// dialStream dials one attach endpoint; production is attach.Attach.
 	dialStream func(ctx context.Context, endpoint, clientID string, since int64, viewer bool) (attachStream, error)
 	// snapshotDial opens the raw websocket a logs snapshot reads; it
@@ -452,11 +453,10 @@ type sessionEnv struct {
 }
 
 func defaultSessionEnv(env *userlandEnv) *sessionEnv {
-	return &sessionEnv{
+	s := &sessionEnv{
 		runEnv:       defaultRunEnv(env),
 		tunnelBase:   defaultTunnelBase,
-		authHeaders:  func() http.Header { return nil },
-		dialStream:   realDialStream,
+		authHeaders:  pairedAuthHeaders,
 		snapshotDial: realSnapshotDial,
 		newClientID:  defaultClientID,
 		terminal:     func() sessionTerminal { return osTerminal{} },
@@ -464,6 +464,12 @@ func defaultSessionEnv(env *userlandEnv) *sessionEnv {
 		listen:       func(addr string) (net.Listener, error) { return net.Listen("tcp", addr) },
 		now:          time.Now,
 	}
+	s.dialStream = func(ctx context.Context, endpoint, clientID string, since int64, viewer bool) (attachStream, error) {
+		return realDialStream(ctx, endpoint, clientID, since, viewer, func() (http.Header, error) {
+			return s.authHeaders(endpoint)
+		})
+	}
+	return s
 }
 
 // newUserlandSessionCmds builds logs, attach and the hidden session-server
@@ -706,7 +712,11 @@ func (env *sessionEnv) snapshotLogs(cmd *cobra.Command, tgt sessionTarget, endpo
 	}
 	ctx, cancel := context.WithTimeout(cmd.Context(), snapshotTimeout)
 	defer cancel()
-	conn, err := env.snapshotDial(ctx, raw, env.authHeaders())
+	headers, err := env.authHeaders(raw)
+	if err != nil {
+		return fail(err)
+	}
+	conn, err := env.snapshotDial(ctx, raw, headers)
 	if err != nil {
 		return fail(planeError(sessionTargetCtx(tgt), err))
 	}
@@ -850,8 +860,8 @@ func (env *sessionEnv) runSessionServer(cmd *cobra.Command, o sessionServerOptio
 // realDialStream is the production attach dial: pkg/dagrun/attach's
 // reconnecting client. The paired client's auth rides whatever dialer the
 // pairing story installs in this seam; this file sends no credentials.
-func realDialStream(ctx context.Context, endpoint, clientID string, since int64, viewer bool) (attachStream, error) {
-	var opts []attach.Option
+func realDialStream(ctx context.Context, endpoint, clientID string, since int64, viewer bool, headers func() (http.Header, error)) (attachStream, error) {
+	opts := []attach.Option{attach.Headers(headers)}
 	if viewer {
 		opts = append(opts, attach.Viewer())
 	}
@@ -869,18 +879,235 @@ func realSnapshotDial(ctx context.Context, endpoint string, headers http.Header)
 	return ws, nil
 }
 
-// tunnelBaseEnv names the paired plane's matrix-tunnel base URL.
+// tunnelBaseEnv overrides the paired plane's matrix-tunnel base URL.
 const tunnelBaseEnv = "BASHY_DKS_TUNNEL_BASE"
 
-// defaultTunnelBase reads the paired plane base from the environment. The
-// pairing story (Sprint 482 satellite) owns the value; this verb only reads
-// it, never guesses it.
-func defaultTunnelBase(_ dagrun.Context) (string, error) {
-	base := strings.TrimSuffix(strings.TrimSpace(os.Getenv(tunnelBaseEnv)), "/")
-	if base == "" {
-		return "", fmt.Errorf("no matrix tunnel base: set $%s to the paired plane base — nothing ran", tunnelBaseEnv)
+// defaultTunnelBase is $BASHY_DKS_TUNNEL_BASE when set, else the
+// scheme://host of the plane context's cluster server in the kubeconfig:
+// the paired plane fronts its Kubernetes API and its matrix tunnel on one
+// edge. A context with no usable server fails closed.
+func defaultTunnelBase(ctxRec dagrun.Context) (string, error) {
+	if base := strings.TrimSuffix(strings.TrimSpace(os.Getenv(tunnelBaseEnv)), "/"); base != "" {
+		return base, nil
 	}
-	return base, nil
+	kctx, err := planeContext(ctxRec.Plane)
+	if err != nil {
+		return "", err
+	}
+	server, err := kubeconfigServer(kctx)
+	if err != nil {
+		return "", fmt.Errorf("no matrix tunnel base: %v; set $%s to the paired plane base — nothing ran", err, tunnelBaseEnv)
+	}
+	u, err := url.Parse(server)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", fmt.Errorf("no matrix tunnel base: cluster server %q is not an http(s) URL; set $%s to the paired plane base — nothing ran", server, tunnelBaseEnv)
+	}
+	return u.Scheme + "://" + u.Host, nil
+}
+
+// kubeconfig is the slice of a kubeconfig file the base derivation reads.
+type kubeconfig struct {
+	CurrentContext string `yaml:"current-context"`
+	Clusters       []struct {
+		Name    string `yaml:"name"`
+		Cluster struct {
+			Server string `yaml:"server"`
+		} `yaml:"cluster"`
+	} `yaml:"clusters"`
+	Contexts []struct {
+		Name    string `yaml:"name"`
+		Context struct {
+			Cluster string `yaml:"cluster"`
+		} `yaml:"context"`
+	} `yaml:"contexts"`
+}
+
+// kubeconfigServer resolves kctx ("" = current-context) to its cluster
+// server across $KUBECONFIG (else ~/.kube/config), merging the way kubectl
+// does: the first file to set a field or name an entry wins.
+func kubeconfigServer(kctx string) (string, error) {
+	var files []string
+	if v := os.Getenv("KUBECONFIG"); v != "" {
+		files = filepath.SplitList(v)
+	} else if home, err := os.UserHomeDir(); err == nil {
+		files = []string{filepath.Join(home, ".kube", "config")}
+	}
+	current := ""
+	contexts := map[string]string{}
+	servers := map[string]string{}
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		var kc kubeconfig
+		if yaml.Unmarshal(b, &kc) != nil {
+			continue
+		}
+		if current == "" {
+			current = kc.CurrentContext
+		}
+		for _, c := range kc.Contexts {
+			if _, ok := contexts[c.Name]; !ok {
+				contexts[c.Name] = c.Context.Cluster
+			}
+		}
+		for _, c := range kc.Clusters {
+			if _, ok := servers[c.Name]; !ok {
+				servers[c.Name] = c.Cluster.Server
+			}
+		}
+	}
+	if kctx == "" {
+		kctx = current
+	}
+	if kctx == "" {
+		return "", errors.New("kubeconfig names no current context")
+	}
+	cluster, ok := contexts[kctx]
+	if !ok {
+		return "", fmt.Errorf("kubeconfig has no context %q", kctx)
+	}
+	server := strings.TrimSpace(servers[cluster])
+	if server == "" {
+		return "", fmt.Errorf("kubeconfig context %q has no cluster server", kctx)
+	}
+	return server, nil
+}
+
+// elevationCookie is the edge's per-(host, app) authorization cookie.
+const elevationCookie = "matrix_elev"
+
+// pairedAuthHeaders authorizes one tunnel endpoint as the paired Outpost's
+// account. A vk session pod is published as an authentication-only app, so
+// the edge mints its app-scoped cookie for any request that authenticates
+// as the host's owner or sharee — no OS password. One bearer GET to the app
+// root collects the cookie; the dial then carries bearer and cookie. The
+// credentials go only to the paired server's host: a tunnel elsewhere gets
+// no headers at all.
+func pairedAuthHeaders(endpoint string) (http.Header, error) {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	cred, ok := loadPairedCredential()
+	if !ok || !strings.EqualFold(u.Hostname(), cred.host) {
+		return nil, nil
+	}
+	h := http.Header{}
+	h.Set("Authorization", "Bearer "+cred.bearer)
+	appRoot, host, app := appRootURL(u)
+	req, err := http.NewRequest(http.MethodGet, appRoot, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = h.Clone()
+	client := &http.Client{
+		Timeout:       10 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("authorize app %s on executor host %s: %w", app, host, err)
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+	_ = resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return nil, fmt.Errorf("the paired account cannot reach app %s on executor host %s (HTTP %d): the host must be owned by or shared with the paired account — nothing ran",
+			app, host, resp.StatusCode)
+	}
+	for _, c := range resp.Cookies() {
+		if c.Name == elevationCookie && c.Value != "" {
+			h.Set("Cookie", (&http.Cookie{Name: elevationCookie, Value: c.Value}).String())
+		}
+	}
+	return h, nil
+}
+
+// appRootURL maps a ws(s) attach endpoint onto the http(s) root of its app
+// (…/app/<name>/), plus the host and app names for messages.
+func appRootURL(u *url.URL) (root, host, app string) {
+	r := *u
+	r.RawQuery, r.Fragment = "", ""
+	switch r.Scheme {
+	case "ws":
+		r.Scheme = "http"
+	case "wss":
+		r.Scheme = "https"
+	}
+	p := strings.TrimSuffix(r.Path, "/attach")
+	r.Path = strings.TrimSuffix(p, "/") + "/"
+	parts := strings.Split(strings.Trim(p, "/"), "/")
+	for i := 0; i+1 < len(parts); i++ {
+		switch parts[i] {
+		case "h":
+			host = parts[i+1]
+		case "app":
+			app = parts[i+1]
+		}
+	}
+	return r.String(), host, app
+}
+
+// pairedCredential is the paired Outpost's bearer and the server it pairs.
+type pairedCredential struct {
+	bearer string
+	host   string
+}
+
+// loadPairedCredential reads the paired Outpost's config file
+// ($XDG_CONFIG_HOME/matrix/agent.json, else ~/.config/matrix/agent.json):
+// the bearer is $OUTPOST_SESSION_JWT, else access_token, else token — the
+// order outpost's own clients use; the server is server_addr. A file other
+// users can read is refused.
+func loadPairedCredential() (pairedCredential, bool) {
+	dir := os.Getenv("XDG_CONFIG_HOME")
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return pairedCredential{}, false
+		}
+		dir = filepath.Join(home, ".config")
+	}
+	p := filepath.Join(dir, "matrix", "agent.json")
+	st, err := os.Stat(p)
+	if err != nil || !st.Mode().IsRegular() {
+		return pairedCredential{}, false
+	}
+	if runtime.GOOS != "windows" && st.Mode().Perm()&0o077 != 0 {
+		return pairedCredential{}, false
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return pairedCredential{}, false
+	}
+	var f struct {
+		ServerAddr  string `json:"server_addr"`
+		Token       string `json:"token"`
+		AccessToken string `json:"access_token"`
+	}
+	if json.Unmarshal(b, &f) != nil {
+		return pairedCredential{}, false
+	}
+	bearer := strings.TrimSpace(os.Getenv("OUTPOST_SESSION_JWT"))
+	if bearer == "" {
+		bearer = strings.TrimSpace(f.AccessToken)
+	}
+	if bearer == "" {
+		bearer = strings.TrimSpace(f.Token)
+	}
+	host := strings.TrimSpace(f.ServerAddr)
+	if strings.Contains(host, "://") {
+		if u, err := url.Parse(host); err == nil {
+			host = u.Hostname()
+		}
+	} else if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	if bearer == "" || host == "" || strings.ContainsAny(bearer, "\r\n") {
+		return pairedCredential{}, false
+	}
+	return pairedCredential{bearer: bearer, host: host}, true
 }
 
 // defaultClientID identifies this client's attachments: host plus pid, so

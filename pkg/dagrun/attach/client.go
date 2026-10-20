@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"net/url"
 	"strconv"
 	"sync"
@@ -22,7 +23,8 @@ import (
 var ErrClosed = errors.New("attach: stream closed")
 
 type clientConfig struct {
-	viewer bool
+	viewer  bool
+	headers func() (http.Header, error)
 }
 
 // Option tunes Attach.
@@ -32,6 +34,13 @@ type Option func(*clientConfig)
 // locally and the server ignores input frames from viewers.
 func Viewer() Option {
 	return func(c *clientConfig) { c.viewer = true }
+}
+
+// Headers sets the handshake headers of every dial, first and reconnect
+// alike. fn runs before each dial so a refreshed credential reaches the
+// redial; an error from fn fails that dial without touching the network.
+func Headers(fn func() (http.Header, error)) Option {
+	return func(c *clientConfig) { c.headers = fn }
 }
 
 // Attach dials endpoint (the ws:// or wss:// attach URL) as clientID,
@@ -46,6 +55,7 @@ func Attach(ctx context.Context, endpoint, clientID string, since int64, opts ..
 		endpoint: endpoint,
 		clientID: clientID,
 		viewer:   cfg.viewer,
+		headers:  cfg.headers,
 		next:     since,
 		waitCh:   make(chan struct{}),
 	}
@@ -67,6 +77,7 @@ type Stream struct {
 	endpoint string
 	clientID string
 	viewer   bool
+	headers  func() (http.Header, error)
 
 	conn   *websocket.Conn
 	gen    int
@@ -109,13 +120,26 @@ func (s *Stream) dialURL(since int64) (string, error) {
 	return u.String(), nil
 }
 
+// handshake dials target with the configured headers.
+func (s *Stream) handshake(ctx context.Context, target string) (*websocket.Conn, error) {
+	var h http.Header
+	if s.headers != nil {
+		var err error
+		if h, err = s.headers(); err != nil {
+			return nil, err
+		}
+	}
+	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
+	ws, _, err := dialer.DialContext(ctx, target, h)
+	return ws, err
+}
+
 func (s *Stream) dial(ctx context.Context, since int64) error {
 	raw, err := s.dialURL(since)
 	if err != nil {
 		return err
 	}
-	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
-	ws, _, err := dialer.DialContext(ctx, raw, nil)
+	ws, err := s.handshake(ctx, raw)
 	if err != nil {
 		return err
 	}
@@ -157,8 +181,7 @@ func (s *Stream) Reconnect(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
-	ws, _, err := dialer.DialContext(ctx, target, nil)
+	ws, err := s.handshake(ctx, target)
 	if err != nil {
 		s.mu.Lock()
 		s.connErr = err
