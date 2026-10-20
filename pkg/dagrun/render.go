@@ -170,6 +170,7 @@ func renderLinux(m *Manifest, class ExecutorClass) ([]Object, error) {
 		"restartPolicy":                "Never",
 		"automountServiceAccountToken": false,
 		"nodeSelector":                 nodeSelector,
+		"affinity":                     affinity,
 		"tolerations": []any{map[string]any{
 			"key": "virtual-kubelet.io/provider", "operator": "Equal", "value": "outpost", "effect": "NoSchedule",
 		}},
@@ -178,9 +179,6 @@ func renderLinux(m *Manifest, class ExecutorClass) ([]Object, error) {
 			"name":     "home",
 			"hostPath": map[string]any{"path": HomeHostRoot + "/" + m.Meta.Workspace, "type": "DirectoryOrCreate"},
 		}},
-	}
-	if affinity != nil {
-		podSpec["affinity"] = affinity
 	}
 
 	name := "bashy-run-" + strings.ToLower(m.Meta.RunID)
@@ -267,28 +265,30 @@ func linuxPlacement(m *Manifest) (map[string]any, map[string]any, error) {
 	if len(m.Meta.Artifact) > 0 && len(arches) == 0 {
 		return nil, nil, badManifest("command %s has no linux artifact", m.Meta.Command.Name)
 	}
+	// The native-process backend ignores the image and runs the node's own
+	// binaries, so a container workload requires a node whose backend is not
+	// vk-native; nodes without the label (plain kubelets) stay eligible.
+	exprs := []any{map[string]any{"key": labelNodeBackend, "operator": "NotIn", "values": []any{"vk-native"}}}
 	if pinned, ok := sel[labelNodeArch].(string); ok {
 		if len(m.Meta.Artifact) > 0 && m.Meta.Artifact["linux/"+pinned] == "" {
 			return nil, nil, badManifest("command %s has no linux/%s artifact", m.Meta.Command.Name, pinned)
 		}
-		return sel, nil, nil
-	}
-	switch len(arches) {
-	case 0: // a shipped command: identity is the bashy release itself
-		return sel, nil, nil
-	case 1:
-		sel[labelNodeArch] = arches[0]
-		return sel, nil, nil
-	}
-	values := make([]any, len(arches))
-	for i, a := range arches {
-		values[i] = a
+	} else {
+		switch len(arches) {
+		case 0: // a shipped command: identity is the bashy release itself
+		case 1:
+			sel[labelNodeArch] = arches[0]
+		default:
+			values := make([]any, len(arches))
+			for i, a := range arches {
+				values[i] = a
+			}
+			exprs = append(exprs, map[string]any{"key": labelNodeArch, "operator": "In", "values": values})
+		}
 	}
 	affinity := map[string]any{"nodeAffinity": map[string]any{
 		"requiredDuringSchedulingIgnoredDuringExecution": map[string]any{
-			"nodeSelectorTerms": []any{map[string]any{"matchExpressions": []any{
-				map[string]any{"key": labelNodeArch, "operator": "In", "values": values},
-			}}},
+			"nodeSelectorTerms": []any{map[string]any{"matchExpressions": exprs}},
 		},
 	}}
 	return sel, affinity, nil

@@ -227,3 +227,50 @@ func TestRenderFailsClosed(t *testing.T) {
 		t.Errorf("Render of a non-manifest err = %v, want ErrInvalidManifest", err)
 	}
 }
+
+// TestRenderLinuxContainerNeverOnNativeBackend: the native-process backend
+// ignores the image, so a Linux container workload must require a node
+// whose backend is not vk-native (unlabelled kubelets stay eligible) — on
+// every workload kind, alongside the os selector and the host pin.
+func TestRenderLinuxContainerNeverOnNativeBackend(t *testing.T) {
+	for name, kind := range map[string]string{"one-shot": "Job", "interactive": "Pod", "long-running": "Pod"} {
+		t.Run(name, func(t *testing.T) {
+			in := renderCases()[name]
+			objs, err := Render(mustGenerate(t, in), linuxClass())
+			if err != nil {
+				t.Fatal(err)
+			}
+			w := objs[0]
+			if w["kind"] != kind {
+				t.Fatalf("kind = %v, want %s", w["kind"], kind)
+			}
+			spec := dig(t, w, "spec").(map[string]any)
+			if kind == "Job" {
+				spec = dig(t, spec, "template", "spec").(map[string]any)
+			}
+			if sel := spec["nodeSelector"].(map[string]any); sel["kubernetes.io/os"] != "linux" {
+				t.Fatalf("nodeSelector lost os=linux: %v", sel)
+			} else if host := in.Match["outpost.dhnt.io/host"]; host != "" && sel["outpost.dhnt.io/host"] != host {
+				t.Fatalf("nodeSelector lost the host pin: %v", sel)
+			}
+			terms, _ := dig(t, spec, "affinity", "nodeAffinity",
+				"requiredDuringSchedulingIgnoredDuringExecution", "nodeSelectorTerms").([]any)
+			if len(terms) == 0 {
+				t.Fatal("no required node affinity")
+			}
+			for i, term := range terms {
+				found := false
+				for _, e := range dig(t, term, "matchExpressions").([]any) {
+					e := e.(map[string]any)
+					if e["key"] == "outpost.dhnt.io/backend" && e["operator"] == "NotIn" {
+						vals := e["values"].([]any)
+						found = len(vals) == 1 && vals[0] == "vk-native"
+					}
+				}
+				if !found {
+					t.Errorf("term %d lacks backend NotIn [vk-native]: %v", i, term)
+				}
+			}
+		})
+	}
+}

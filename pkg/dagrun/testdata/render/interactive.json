@@ -18,6 +18,25 @@
       "name": "bashy-run-01jb7cexample0000000000000"
     },
     "spec": {
+      "affinity": {
+        "nodeAffinity": {
+          "requiredDuringSchedulingIgnoredDuringExecution": {
+            "nodeSelectorTerms": [
+              {
+                "matchExpressions": [
+                  {
+                    "key": "outpost.dhnt.io/backend",
+                    "operator": "NotIn",
+                    "values": [
+                      "vk-native"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      },
       "automountServiceAccountToken": false,
       "containers": [
         {

@@ -38,6 +38,13 @@
                   {
                     "matchExpressions": [
                       {
+                        "key": "outpost.dhnt.io/backend",
+                        "operator": "NotIn",
+                        "values": [
+                          "vk-native"
+                        ]
+                      },
+                      {
                         "key": "kubernetes.io/arch",
                         "operator": "In",
                         "values": [
