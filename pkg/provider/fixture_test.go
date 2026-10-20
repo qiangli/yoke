@@ -500,15 +500,14 @@ func (f *fixtureAdapter) Do(ctx context.Context, req provider.Request) (provider
 			return fixtureFail(req.Op, err)
 		}
 		if stall {
-			// The side effect happened; the process now hangs until the
-			// runner kills it — a create whose result was never seen.
-			// (A sleep, not a bare select: the runtime would otherwise
-			// report a deadlock and exit on its own.)
-			select {
-			case <-ctx.Done():
-			case <-time.After(10 * time.Minute):
-			}
-			time.Sleep(10 * time.Minute)
+			// The side effect happened, the answer never arrived: the
+			// plugin's own call to its cloud timed out after the request
+			// was sent. It reports that as the normalized ambiguous
+			// failure — the same classification the runner gives a plugin
+			// it had to kill — so the scenario does not hinge on how fast
+			// this process can be spawned and killed under load.
+			e := &provider.Error{Code: provider.ErrTimeout, Message: "fixture: create sent; the provider never answered", Retryable: true}
+			return provider.Result{ProtocolVersion: provider.ProtocolVersion, Op: req.Op, Error: e}, e
 		}
 		return fixtureOK(req.Op, &provider.Result{Resource: m.resource()})
 	case provider.OpInspect:

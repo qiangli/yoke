@@ -185,9 +185,12 @@ func rows(t *testing.T, caps []provider.Capability) []formRow {
 			open: func(t *testing.T, opts provider.Options) *provider.Dispatcher {
 				opts.Exec = provider.ExecAllowed
 				opts.ExecEnv = pluginEnvFor(stateDir)
-				// Each call spawns the test binary; a cold cache or the race
-				// detector can take it past the in-process rows' budget.
-				opts.Timeout = 3 * time.Second
+				// Each call spawns the test binary; its duration is the
+				// host's to decide, so the budget is the test's own deadline,
+				// not a guess at how fast a process starts under load. The
+				// scenario's ambiguous create does not wait for this: the
+				// fixture reports it (see fixtureAdapter.Do).
+				opts.Timeout = execTimeout(t)
 				d, err := provider.Open(context.Background(), executableManifest(stateDir, caps), opts)
 				if err != nil {
 					t.Fatal(err)
@@ -203,6 +206,20 @@ func rows(t *testing.T, caps []provider.Capability) []formRow {
 			calls:           func() int { _, _, c := plugin.counts(); return c },
 		},
 	}
+}
+
+// execTimeout is the per-call budget for rows that spawn a process: a
+// generous constant, or the remaining test deadline when that is shorter.
+// Only tests that deliberately assert timeout behavior use a short one.
+func execTimeout(t *testing.T) time.Duration {
+	t.Helper()
+	const generous = 60 * time.Second
+	if dl, ok := t.Deadline(); ok {
+		if left := time.Until(dl) / 2; left > 0 && left < generous {
+			return left
+		}
+	}
+	return generous
 }
 
 func baseOpts(j provider.JournalStore) provider.Options {
