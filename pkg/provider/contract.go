@@ -16,6 +16,10 @@ import (
 // ProtocolVersion is the only protocol version this package speaks.
 const ProtocolVersion = "provider/v1"
 
+// KindInfra is the Manifest.Kind of every provider package (the fleet kind
+// and bashy verb of record are both "infra", S472.0).
+const KindInfra = "infra"
+
 // Op is one lifecycle operation.
 type Op string
 
@@ -49,13 +53,16 @@ type Form string
 const (
 	FormDeclarative Form = "declarative"
 	FormExecutable  Form = "executable"
+	// FormBuiltin is a Go adapter linked into the host (e.g. the
+	// DigitalOcean reference adapter). It has neither Argv nor Declarative.
+	FormBuiltin Form = "builtin"
 )
 
 // Manifest identifies a provider package. Credentials are never manifest
 // fields; they are references resolved by the caller.
 type Manifest struct {
 	Name            string       `json:"name" yaml:"name"`
-	Kind            string       `json:"kind" yaml:"kind"` // "provider"
+	Kind            string       `json:"kind" yaml:"kind"` // KindInfra ("infra")
 	Form            Form         `json:"form" yaml:"form"`
 	Version         string       `json:"version,omitempty" yaml:"version,omitempty"`
 	ProtocolVersion string       `json:"protocol_version" yaml:"protocol_version"`
