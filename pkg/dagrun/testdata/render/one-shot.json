@@ -83,6 +83,10 @@
               "image": "registry.example/bashy/bashy:v0.0.0-test",
               "name": "run",
               "resources": {
+                "limits": {
+                  "cpu": "2",
+                  "memory": "4Gi"
+                },
                 "requests": {
                   "cpu": "2",
                   "memory": "4Gi"

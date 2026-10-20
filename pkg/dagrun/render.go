@@ -334,14 +334,19 @@ func linuxPlacement(m *Manifest) (map[string]any, map[string]any, error) {
 
 // linuxResources maps the dag request lines onto container resources.
 // Extended resources (GPU, VRAM) go in limits too, as Kubernetes requires.
+// A cpu/memory request carries an equal limit: left unset, a namespace
+// LimitRange's default limit applies and, when below the request, makes
+// every Pod of the run invalid.
 func linuxResources(t *dag.Task) (map[string]any, error) {
 	requests := map[string]any{}
 	limits := map[string]any{}
 	if t.CPUPerTask > 0 {
-		requests["cpu"] = strconv.Itoa(t.CPUPerTask)
+		cpu := strconv.Itoa(t.CPUPerTask)
+		requests["cpu"], limits["cpu"] = cpu, cpu
 	}
 	if t.MemPerTask > 0 {
-		requests["memory"] = quantity(t.MemPerTask)
+		mem := quantity(t.MemPerTask)
+		requests["memory"], limits["memory"] = mem, mem
 	}
 	if a := t.Accelerator; a.Kind != "" {
 		if a.Kind != "gpu" || a.Family != "cuda" {

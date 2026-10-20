@@ -35,6 +35,7 @@ const (
 type seqRunner struct {
 	calls   []runnerCall
 	gets    [][]byte
+	events  [][]byte // `get events` answers, kept apart from the run lists
 	getExit int
 	getErr  string
 	apply   struct {
@@ -46,6 +47,15 @@ type seqRunner struct {
 func (r *seqRunner) Run(_ context.Context, argv []string, stdin []byte) ([]byte, []byte, int, error) {
 	r.calls = append(r.calls, runnerCall{argv: append([]string(nil), argv...), stdin: append([]byte(nil), stdin...)})
 	switch action(argv) {
+	case "events":
+		if len(r.events) == 0 {
+			return []byte(`{"items":[]}`), nil, 0, nil
+		}
+		out := r.events[0]
+		if len(r.events) > 1 {
+			r.events = r.events[1:]
+		}
+		return out, nil, 0, nil
 	case "get":
 		if r.getExit != 0 {
 			return nil, []byte(r.getErr), r.getExit, nil
@@ -65,7 +75,10 @@ func (r *seqRunner) Run(_ context.Context, argv []string, stdin []byte) ([]byte,
 }
 
 func action(argv []string) string {
-	for _, a := range argv {
+	for i, a := range argv {
+		if a == "get" && i+1 < len(argv) && argv[i+1] == "events" {
+			return "events"
+		}
 		switch a {
 		case "get", "apply", "delete":
 			return a
@@ -377,6 +390,88 @@ func TestRunUnschedulableIsRefusedAndCleanedUp(t *testing.T) {
 	}
 	if rt.sleeps != 1 {
 		t.Errorf("slept %d times, want 1", rt.sleeps)
+	}
+}
+
+// pendingJobJSON is a run's Job that has created no Pod yet.
+func pendingJobJSON(run string) string {
+	return fmt.Sprintf(`{"kind":"Job","metadata":{"name":"run-%s","labels":{%q:"bashy",%q:%q,%q:%q,%q:"seq"}},"status":{}}`,
+		strings.ToLower(run), dagrun.LabelManagedBy, dagrun.LabelWorkspace, testWorkspaceID, dagrun.LabelRun, run, dagrun.LabelCommand)
+}
+
+const exceedsLimit = `pods "run-x-abcde" is invalid: spec.containers[0].resources.requests: Invalid value: "64": must be less than or equal to cpu limit of 500m`
+
+// failedCreateJSON is a `get events` answer: the Job controller's
+// FailedCreate events for the run's Job.
+func failedCreateJSON(run string, messages ...string) []byte {
+	var items []string
+	for i, m := range messages {
+		items = append(items, fmt.Sprintf(`{"involvedObject":{"kind":"Job","name":"run-%s"},"reason":"FailedCreate","type":"Warning","message":%q,"lastTimestamp":"2026-10-20T00:00:0%dZ"}`,
+			strings.ToLower(run), "Error creating: "+m, i))
+	}
+	return []byte(`{"items":[` + strings.Join(items, ",") + `]}`)
+}
+
+func TestRunJobFailedCreateIsRefusedAndCleanedUp(t *testing.T) {
+	rt := newRunTest(t)
+	rt.selectWorkspace(t, "skel")
+	rt.runner.gets = [][]byte{runsJSON(pendingJobJSON(testRunID))}
+	rt.runner.events = [][]byte{
+		[]byte(`{"items":[]}`),
+		failedCreateJSON(testRunID, "older", exceedsLimit),
+	}
+	code, _, stderr := rt.exec(t, "run", "--cpu", "64", "--", "make", "test")
+	if code == 0 {
+		t.Fatalf("exit 0 for a run whose pod cannot be created; stderr %q", stderr)
+	}
+	for _, want := range []string{"cannot create pod: " + exceedsLimit, "--cpu 64", "nothing ran"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr %q misses %q", stderr, want)
+		}
+	}
+	if got := strings.Join(rt.runner.actions(), ","); got != "apply,get,events,get,events,delete" {
+		t.Fatalf("plane calls = %s, want two polls then one delete", got)
+	}
+	ev := strings.Join(rt.runner.calls[2].argv, " ")
+	if !strings.Contains(ev, "involvedObject.kind=Job,involvedObject.name=run-"+strings.ToLower(testRunID)+",reason=FailedCreate") {
+		t.Errorf("events argv %q does not select the Job's FailedCreate events", ev)
+	}
+	del := strings.Join(rt.runner.calls[5].argv, " ")
+	if !strings.Contains(del, "-l "+dagrun.LabelManagedBy+"=bashy,"+dagrun.LabelRun+"="+testRunID) {
+		t.Errorf("delete argv %q does not select by run label", del)
+	}
+}
+
+func TestRunDetachRefusesJobFailedCreate(t *testing.T) {
+	rt := newRunTest(t)
+	rt.selectWorkspace(t, "skel")
+	rt.runner.gets = [][]byte{runsJSON(pendingJobJSON(testRunID))}
+	rt.runner.events = [][]byte{failedCreateJSON(testRunID, `exceeded quota: compute, requested: cpu=64, used: cpu=0, limited: cpu=4`)}
+	code, stdout, stderr := rt.exec(t, "run", "--detach", "--cpu", "64", "--", "make", "test")
+	if code == 0 || stdout != "" {
+		t.Fatalf("exit %d stdout %q, want non-zero and no run id", code, stdout)
+	}
+	if !strings.Contains(stderr, "cannot create pod: exceeded quota") {
+		t.Errorf("stderr %q does not name the API message", stderr)
+	}
+	if got := strings.Join(rt.runner.actions(), ","); got != "apply,get,events,delete" {
+		t.Errorf("plane calls = %s, want apply, get, events, delete", got)
+	}
+}
+
+func TestRunPendingJobWithoutFailedCreateKeepsWaiting(t *testing.T) {
+	rt := newRunTest(t)
+	rt.selectWorkspace(t, "skel")
+	rt.runner.gets = [][]byte{
+		runsJSON(pendingJobJSON(testRunID)),
+		runsJSON(jobJSON(testWorkspaceID, testRunID, "seq", "Complete")),
+	}
+	code, _, stderr := rt.exec(t, "run", "--", "make", "test")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	if got := strings.Join(rt.runner.actions(), ","); got != "apply,get,events,get" {
+		t.Errorf("plane calls = %s, want no delete", got)
 	}
 }
 

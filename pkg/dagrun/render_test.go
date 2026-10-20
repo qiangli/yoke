@@ -318,3 +318,30 @@ func TestRenderCredentialSecretKeyRef(t *testing.T) {
 		t.Errorf("expected both credentials in container env, got %v", checked)
 	}
 }
+
+// A LimitRange default limit below the request makes every Pod invalid, so
+// a cpu/memory request always carries an equal limit.
+func TestRenderSetsLimitsEqualToRequests(t *testing.T) {
+	in := renderCases()["interactive"]
+	objs, err := Render(mustGenerate(t, in), linuxClass())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var res map[string]any
+	for _, o := range objs {
+		if o["kind"] == "Pod" {
+			c := dig(t, o, "spec", "containers").([]any)[0]
+			res = dig(t, c, "resources").(map[string]any)
+		}
+	}
+	if res == nil {
+		t.Fatalf("no Pod resources in %v", objs)
+	}
+	requests, _ := res["requests"].(map[string]any)
+	limits, _ := res["limits"].(map[string]any)
+	for _, k := range []string{"cpu", "memory"} {
+		if requests[k] == nil || limits[k] != requests[k] {
+			t.Errorf("%s: request %v, limit %v; want an equal limit", k, requests[k], limits[k])
+		}
+	}
+}
