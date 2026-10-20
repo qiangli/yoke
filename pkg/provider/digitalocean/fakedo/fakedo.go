@@ -105,6 +105,23 @@ type Server struct {
 	deletes  int
 	requests int
 	stall    chan struct{}
+	regions  []map[string]any
+	sizes    []map[string]any
+	account  map[string]any
+}
+
+// SetCatalog replaces the served /v2/regions and /v2/sizes entries.
+func (s *Server) SetCatalog(regions, sizes []map[string]any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.regions, s.sizes = regions, sizes
+}
+
+// SetAccount replaces the served /v2/account object.
+func (s *Server) SetAccount(account map[string]any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.account = account
 }
 
 // New starts a fake and closes it when the test ends.
@@ -288,9 +305,16 @@ func (s *Server) route(r *http.Request) (int, any) {
 	}
 	switch {
 	case len(parts) == 2 && parts[1] == "account" && r.Method == http.MethodGet:
+		if s.account != nil {
+			return http.StatusOK, map[string]any{"account": s.account}
+		}
 		return http.StatusOK, map[string]any{"account": map[string]any{
 			"uuid": "acct-0001", "status": "active", "droplet_limit": 25,
 		}}
+	case len(parts) == 2 && parts[1] == "regions" && r.Method == http.MethodGet && s.regions != nil:
+		return http.StatusOK, map[string]any{"regions": s.regions}
+	case len(parts) == 2 && parts[1] == "sizes" && r.Method == http.MethodGet && s.sizes != nil:
+		return http.StatusOK, map[string]any{"sizes": s.sizes}
 	case len(parts) == 2 && parts[1] == "regions" && r.Method == http.MethodGet:
 		return http.StatusOK, map[string]any{"regions": []map[string]any{
 			{"slug": "r1", "name": "Region One", "available": true, "sizes": []string{"s-1vcpu-1gb", "s-2vcpu-4gb"}},
