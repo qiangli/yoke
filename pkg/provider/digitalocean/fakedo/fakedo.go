@@ -54,6 +54,7 @@ type Droplet struct {
 	Networks  Networks  `json:"networks"`
 	CreatedAt time.Time `json:"created_at"`
 	UserData  string    `json:"-"`
+	SSHKeys   []string  `json:"-"`
 
 	polls int // GETs left before a "new" droplet becomes "active"
 }
@@ -455,6 +456,7 @@ func (s *Server) createDroplet(r *http.Request) (int, any) {
 		Size     string   `json:"size"`
 		Image    any      `json:"image"`
 		Tags     []string `json:"tags"`
+		SSHKeys  []string `json:"ssh_keys"`
 		UserData string   `json:"user_data"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -465,6 +467,7 @@ func (s *Server) createDroplet(r *http.Request) (int, any) {
 	}
 	image := fmt.Sprint(in.Image)
 	d := s.addLocked(in.Name, in.Size, in.Region, image, "new", in.Tags, in.UserData)
+	d.SSHKeys = append([]string(nil), in.SSHKeys...)
 	s.creates++
 	return http.StatusAccepted, map[string]any{"droplet": d}
 }

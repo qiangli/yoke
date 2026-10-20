@@ -375,6 +375,9 @@ func (a *adapter) create(ctx context.Context, req provider.Request) (provider.Re
 		"image":  s.Image,
 		"tags":   a.createTags(req),
 	}
+	if len(s.SSHKeys) > 0 {
+		body["ssh_keys"] = s.SSHKeys
+	}
 	if len(s.UserData) > 0 {
 		body["user_data"] = string(s.UserData) // opaque, passed through unread
 	}

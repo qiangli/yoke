@@ -111,6 +111,22 @@ func TestCreateTagsAndUserDataPassThrough(t *testing.T) {
 	}
 }
 
+func TestCreatePassesSSHKeysToDigitalOcean(t *testing.T) {
+	fake := fakedo.New(t)
+	a := newAdapter(t, fake)
+	spec := testSpec()
+	spec.SSHKeys = []string{"12345"}
+	r, err := a.Do(context.Background(), provider.Request{Op: provider.OpCreate, IdempotencyKey: "worker-ssh", Spec: spec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := strconv.Atoi(r.Resource.ID)
+	d, ok := fake.Droplet(id)
+	if !ok || !slices.Equal(d.SSHKeys, []string{"12345"}) {
+		t.Fatalf("droplet SSH keys = %v, want [12345]", d.SSHKeys)
+	}
+}
+
 func TestDestroyRefusesForeignResource(t *testing.T) {
 	fake := fakedo.New(t)
 	a := newAdapter(t, fake)

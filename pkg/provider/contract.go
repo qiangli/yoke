@@ -114,12 +114,14 @@ type Authorization struct {
 
 // Spec is the create/plan input.
 type Spec struct {
-	Name   string            `json:"name,omitempty"`
-	Region string            `json:"region,omitempty"`
-	Size   string            `json:"size,omitempty"`
-	Image  string            `json:"image,omitempty"`
-	Tags   []string          `json:"tags,omitempty"`
-	Labels map[string]string `json:"labels,omitempty"`
+	Name   string   `json:"name,omitempty"`
+	Region string   `json:"region,omitempty"`
+	Size   string   `json:"size,omitempty"`
+	Image  string   `json:"image,omitempty"`
+	Tags   []string `json:"tags,omitempty"`
+	// SSHKeys are provider key IDs or fingerprints installed at first boot.
+	SSHKeys []string          `json:"ssh_keys,omitempty"`
+	Labels  map[string]string `json:"labels,omitempty"`
 	// UserData is opaque (e.g. an enrollment bundle) and passed through unread.
 	UserData []byte `json:"user_data,omitempty"`
 }
