@@ -89,6 +89,9 @@ func newUserlandUseCmd(env *userlandEnv) *cobra.Command {
   bashy dks use --none           leave the cluster context; commands run locally
   bashy dks use                  show the current selection
 
+A name selects the workspace of that name on the plane — created only when
+the plane holds none, so every client of the account reaches the same
+workspace; two workspaces of one name are an ambiguity that selects nothing.
 An unreachable plane or a missing workspace fails with the reason and runs
 nothing. --create re-creates a missing workspace explicitly; first use of a
 new name creates it by itself.`,
@@ -154,9 +157,16 @@ The -- separator is required: without it nothing runs.`,
 }
 
 // selectWorkspace parses, resolves against the plane and persists one
-// selection. Fail-closed order: parse, resolve (probe first), persist only
-// once the plane has answered. First use of a new name mints the workspace
-// identity and creates the workspace record on the plane.
+// selection. Fail-closed order: parse, probe (reachability first), decide,
+// persist only once the plane has answered. A selection BY ID (@ws:<id>)
+// resolves strictly by that identity. A selection BY NAME asks the plane
+// which workspace record holds the name — the dhnt.io/workspace-name label
+// — and selects that record's id, so every client of the account reaches
+// the SAME workspace (contract §3 "select (create on first use)"; §7:
+// identities belong to the account, never to one client). Only when the
+// plane holds NO record of the name does first use mint a fresh ULID and
+// create one; two records of one name are an explicit ambiguity that
+// selects nothing.
 func (env *userlandEnv) selectWorkspace(cmd *cobra.Command, arg string, create bool) error {
 	fail := func(err error) error {
 		fmt.Fprintf(cmd.ErrOrStderr(), "bashy dks use: %v\n", err)
@@ -170,44 +180,90 @@ func (env *userlandEnv) selectWorkspace(cmd *cobra.Command, arg string, create b
 	if err != nil {
 		return fail(err)
 	}
+	probe := &KubeProbe{Runner: env.newRunner()}
 
-	// Workspace identity: the id the selection carries, the id this client
-	// already selected under the same name, or a fresh ULID on first use.
-	id := sel.WorkspaceID
-	fresh := false
-	if id == "" {
-		if cur, ok, err := store.Current(); err != nil {
+	if sel.WorkspaceID != "" {
+		// By identity: the id is the whole address of the workspace.
+		ctxRec, err := dagrun.NewContext(sel, "", "")
+		if err != nil {
 			return fail(err)
-		} else if ok && cur.Name == sel.Name {
+		}
+		target, err := dagrun.Resolve(ctxRec, probe)
+		var missing *dagrun.WorkspaceMissingError
+		if errors.As(err, &missing) && create {
+			// --create re-creates the missing record of this identity.
+			if err := probe.EnsureWorkspace(cmd.Context(), ctxRec.Plane, ctxRec.WorkspaceID, sel.Name); err != nil {
+				return fail(err)
+			}
+			target, err = dagrun.Target{
+				WorkspaceID: ctxRec.WorkspaceID, Name: ctxRec.Name, Plane: ctxRec.Plane, Tier: ctxRec.Tier,
+			}, nil
+		}
+		if err != nil {
+			return fail(err)
+		}
+		return commitSelection(cmd, store, ctxRec, target)
+	}
+
+	// By name: reachability first — nothing else may run on an unreachable
+	// plane — then the plane answers which workspace holds the name.
+	if err := probe.Reachable(sel.Plane); err != nil {
+		return fail(&dagrun.PlaneUnreachableError{Plane: sel.Plane, Err: err})
+	}
+	ids, err := probe.ListWorkspacesByName(sel.Plane, sel.Name)
+	if err != nil {
+		return fail(err)
+	}
+	var id string
+	switch len(ids) {
+	case 1:
+		// The plane's record wins over any private mint: this is how a
+		// second client reaches the first client's workspace.
+		id = ids[0]
+	case 0:
+		// Create-on-first-use — but a name this client already selected
+		// names a workspace the plane no longer holds: never re-mint what
+		// a record may still own; fail missing instead (and --create
+		// re-applies the known id, which also stamps the name label onto
+		// records older than this fix).
+		cur, ok, err := store.Current()
+		if err != nil {
+			return fail(err)
+		}
+		if ok && cur.Name == sel.Name {
 			id = cur.WorkspaceID
+			if !create {
+				return fail(&dagrun.WorkspaceMissingError{
+					Plane:       sel.Plane,
+					WorkspaceID: id,
+					Err:         fmt.Errorf("no ConfigMap labelled %s in namespace %s", LabelWorkspaceName+"="+sel.Name, userlandNamespace),
+				})
+			}
 		} else {
 			id = env.mintID()
-			fresh = true
 		}
+		// Create the workspace record (apply exit 0 = the plane has
+		// answered), then the selection may persist.
+		if err := probe.EnsureWorkspace(cmd.Context(), sel.Plane, id, sel.Name); err != nil {
+			return fail(err)
+		}
+	default:
+		return fail(fmt.Errorf("workspace name %q is ambiguous on plane %s: %d records hold it (%s) — nothing was selected; reattach by identity with 'bashy dks use @ws:<id>' after removing the extra records", sel.Name, planeDisplay(sel.Plane), len(ids), strings.Join(ids, ", ")))
 	}
 	ctxRec, err := dagrun.NewContext(sel, id, "")
 	if err != nil {
 		return fail(err)
 	}
+	return commitSelection(cmd, store, ctxRec, dagrun.Target{
+		WorkspaceID: ctxRec.WorkspaceID, Name: ctxRec.Name, Plane: ctxRec.Plane, Tier: ctxRec.Tier,
+	})
+}
 
-	probe := &KubeProbe{Runner: env.newRunner()}
-	target, err := dagrun.Resolve(ctxRec, probe)
-	var missing *dagrun.WorkspaceMissingError
-	if errors.As(err, &missing) && (create || fresh) {
-		// Create-on-first-use: apply the workspace record, then the plane
-		// has answered (apply exit 0) and the selection may persist.
-		if err := probe.EnsureWorkspace(cmd.Context(), ctxRec.Plane, id, sel.Name); err != nil {
-			return fail(err)
-		}
-		target, err = dagrun.Target{
-			WorkspaceID: ctxRec.WorkspaceID, Name: ctxRec.Name, Plane: ctxRec.Plane, Tier: ctxRec.Tier,
-		}, nil
-	}
-	if err != nil {
-		return fail(err)
-	}
+// commitSelection persists the resolved context and prints it: the one
+// write, only after the plane has answered.
+func commitSelection(cmd *cobra.Command, store *dagrun.Store, ctxRec dagrun.Context, target dagrun.Target) error {
 	if err := store.Select(ctxRec); err != nil {
-		return fail(err)
+		return failUserland(cmd, err)
 	}
 	name := target.Name
 	if name == "" {
@@ -276,6 +332,13 @@ type KubeProbe struct {
 
 // userlandNamespace hosts the per-workspace records of the client verbs.
 const userlandNamespace = "bashy-userland"
+
+// LabelWorkspaceName is the plane label carrying the workspace NAME on the
+// workspace ConfigMap. `use <name>` selects existing workspaces by this
+// label (besides managed-by), so a second client of the same account
+// reaches the first client's workspace instead of minting a sibling record
+// of the same name; data.name stays on the record for humans and kubectl.
+const LabelWorkspaceName = "dhnt.io/workspace-name"
 
 // workspaceObjectName is the plane object of one workspace record. A ULID
 // is uppercase Crockford base32, but an object name must be a lowercase
@@ -357,16 +420,99 @@ func (p *KubeProbe) WorkspaceExists(plane, workspaceID string) error {
 	return fmt.Errorf("no ConfigMap %s labelled %s in namespace %s", workspaceObjectName(workspaceID), sel, userlandNamespace)
 }
 
+// ListWorkspacesByName asks the plane which workspace records hold name:
+// ONE `kubectl get configmap -n bashy-userland -l managed-by=bashy,dhnt.io/workspace-name=<name> -o json`
+// on the same runner path every plane question rides. The answer is the ids
+// from the dhnt.io/workspace labels, in the plane's order. A record of the
+// name whose id label is missing or not a ULID is a BROKEN record and fails
+// closed rather than being skipped: skipping it could silently mint a
+// second workspace of the same name — the very bug this list closes.
+func (p *KubeProbe) ListWorkspacesByName(plane, name string) ([]string, error) {
+	labelValue, err := workspaceNameLabelValue(name)
+	if err != nil {
+		return nil, err
+	}
+	sel := dagrun.LabelManagedBy + "=" + dagrun.ManagedByBashy + "," + LabelWorkspaceName + "=" + labelValue
+	argv, err := probeArgv(plane, "get", "configmap", "-n", userlandNamespace, "-l", sel, "-o", "json")
+	if err != nil {
+		return nil, err
+	}
+	stdout, stderr, exit, err := p.Runner.Run(context.Background(), argv, nil)
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("kubectl did not run: %w", err)
+	case exit != 0:
+		return nil, fmt.Errorf("kubectl get configmap exited %d: %s", exit, firstLine(stderr))
+	}
+	var list planeConfigmapList
+	if err := json.Unmarshal(stdout, &list); err != nil {
+		return nil, fmt.Errorf("decode the configmap list of workspace name %q: %w", name, err)
+	}
+	ids := make([]string, 0, len(list.Items))
+	for _, item := range list.Items {
+		id := item.Metadata.Labels[dagrun.LabelWorkspace]
+		if !dagrun.ValidWorkspaceID(id) {
+			return nil, fmt.Errorf("workspace record %s holds name %q but no valid %s label: a broken record must fail closed", item.Metadata.Name, name, dagrun.LabelWorkspace)
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+// planeConfigmapList is the slice of `kubectl get configmap -o json` the
+// by-name selection parses: only each item's name and labels matter here.
+type planeConfigmapList struct {
+	Items []struct {
+		Metadata struct {
+			Name   string            `json:"name"`
+			Labels map[string]string `json:"labels"`
+		} `json:"metadata"`
+	} `json:"items"`
+}
+
+// workspaceNameLabelValue maps a workspace name to its LabelWorkspaceName
+// value. A Kubernetes label value is 1-63 characters of alphanumerics, '-',
+// '_' and '.', starting and ending alphanumeric; a name outside that set
+// can neither be selected nor created on a plane and fails closed here —
+// never mangled, because two mangled names could collide into one workspace.
+func workspaceNameLabelValue(name string) (string, error) {
+	edge := func(c byte) bool {
+		return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
+	}
+	if name == "" || len(name) > 63 || !edge(name[0]) || !edge(name[len(name)-1]) {
+		return "", fmt.Errorf("workspace name %q is not a usable %s value: 1-63 characters of letters, digits, '-', '_' and '.', starting and ending alphanumeric", name, LabelWorkspaceName)
+	}
+	for i := 0; i < len(name); i++ {
+		if c := name[i]; !(c == '-' || c == '_' || c == '.' || edge(c)) {
+			return "", fmt.Errorf("workspace name %q holds %q, which a %s value cannot carry: names are selectable when limited to letters, digits, '-', '_' and '.'", name, string(c), LabelWorkspaceName)
+		}
+	}
+	return name, nil
+}
+
 // EnsureWorkspace creates the workspace record by server-side apply through
-// the runner, one field manager bashy: re-applying is idempotent. The payload
-// is one v1 List whose first item is the userland Namespace itself — labelled
-// managed-by=bashy, cluster-scoped, so its re-apply is a no-op — followed by
-// the workspace ConfigMap. kubectl applies list items in order, so a FRESH
-// plane (no bashy-userland namespace yet) is bootstrapped by the very call
-// that writes the record: one runner invocation, no prior setup step.
+// the runner, one field manager bashy: re-applying is idempotent. The name
+// rides BOTH as the dhnt.io/workspace-name label — the key `use <name>`
+// selects by — and as data.name. The payload is one v1 List whose first
+// item is the userland Namespace itself — labelled managed-by=bashy,
+// cluster-scoped, so its re-apply is a no-op — followed by the workspace
+// ConfigMap. kubectl applies list items in order, so a FRESH plane (no
+// bashy-userland namespace yet) is bootstrapped by the very call that
+// writes the record: one runner invocation, no prior setup step.
 func (p *KubeProbe) EnsureWorkspace(ctx context.Context, plane, workspaceID, name string) error {
 	if !dagrun.ValidWorkspaceID(workspaceID) {
 		return fmt.Errorf("workspace id %q is not a ULID", workspaceID)
+	}
+	labels := map[string]string{
+		dagrun.LabelManagedBy: dagrun.ManagedByBashy,
+		dagrun.LabelWorkspace: workspaceID,
+	}
+	if name != "" {
+		labelValue, err := workspaceNameLabelValue(name)
+		if err != nil {
+			return err
+		}
+		labels[LabelWorkspaceName] = labelValue
 	}
 	namespace := map[string]any{
 		"apiVersion": "v1",
@@ -382,10 +528,7 @@ func (p *KubeProbe) EnsureWorkspace(ctx context.Context, plane, workspaceID, nam
 		"metadata": map[string]any{
 			"name":      workspaceObjectName(workspaceID),
 			"namespace": userlandNamespace,
-			"labels": map[string]string{
-				dagrun.LabelManagedBy: dagrun.ManagedByBashy,
-				dagrun.LabelWorkspace: workspaceID,
-			},
+			"labels":    labels,
 		},
 	}
 	if name != "" {
