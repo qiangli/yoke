@@ -36,6 +36,8 @@ func fixture(t *testing.T) (root, outside string) {
 	must(os.Symlink("../../../../../../../"+strings.TrimPrefix(outside, "/"), filepath.Join(root, "rel-escape")))
 	must(os.Symlink("/etc/passwd", filepath.Join(root, "abs-passwd")))
 	must(os.Symlink("etc", filepath.Join(root, "good")))
+	must(os.Symlink("/etc", filepath.Join(root, "abs-etc")))
+	must(os.Symlink("../../../..", filepath.Join(root, "rel-up")))
 	must(os.Symlink("loop-b", filepath.Join(root, "loop-a")))
 	must(os.Symlink("loop-a", filepath.Join(root, "loop-b")))
 	return root, outside
@@ -73,14 +75,15 @@ func within(root, p string) bool {
 func TestOpenInRootResolvesInside(t *testing.T) {
 	root, _ := fixture(t)
 	for path, want := range map[string]string{
-		"etc/passwd":              "INSIDE",
-		"/etc/passwd":             "INSIDE",
-		"good/passwd":             "INSIDE",
-		"../../../etc/passwd":     "INSIDE",
-		"abs-passwd":              "INSIDE",
-		"abs-escape/../secret":    "ROOTED",
-		"etc/../../../../secret":  "ROOTED",
-		"./etc//./passwd":         "INSIDE",
+		"etc/passwd":             "INSIDE",
+		"/etc/passwd":            "INSIDE",
+		"good/passwd":            "INSIDE",
+		"../../../etc/passwd":    "INSIDE",
+		"abs-passwd":             "INSIDE",
+		"abs-etc/../secret":      "ROOTED",
+		"rel-up/etc/passwd":      "INSIDE",
+		"etc/../../../../secret": "ROOTED",
+		"./etc//./passwd":        "INSIDE",
 	} {
 		f, err := OpenInRoot(root, path)
 		if err != nil {
@@ -160,9 +163,10 @@ func TestOpenatInRootFallbackWalk(t *testing.T) {
 	}
 	defer dir.Close()
 	for path, want := range map[string]string{
-		"abs-passwd":             "INSIDE",
-		"rel-escape/../etc/passwd": "INSIDE",
-		"abs-escape/../secret":   "ROOTED",
+		"abs-passwd":           "INSIDE",
+		"rel-up/etc/passwd":    "INSIDE",
+		"abs-etc/../secret":    "ROOTED",
+		"good/../../../secret": "ROOTED",
 	} {
 		f, err := walkInRoot(dir, path, walkOpts{})
 		if err != nil {
