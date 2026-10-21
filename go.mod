@@ -30,6 +30,7 @@ require (
 	github.com/google/nftables v0.3.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
+	github.com/hashicorp/go-multierror v1.1.1
 	github.com/itchyny/gojq v0.12.19
 	github.com/klauspost/compress v1.18.6
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
@@ -225,8 +226,6 @@ require (
 	github.com/gorilla/mux v1.8.1 // indirect
 	github.com/gorilla/schema v1.4.1 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
-	github.com/hashicorp/errwrap v1.1.0 // indirect
-	github.com/hashicorp/go-multierror v1.1.1 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/itchyny/timefmt-go v0.1.8 // indirect
@@ -442,3 +441,13 @@ replace modernc.org/sqlite => github.com/qiangli/sqlite v1.50.2-0.20261018085128
 // dependency (clean-room boundJoin in osfs/boundjoin.go). Removes cyphar
 // from the ./git dep graph while go-git keeps its osfs API.
 replace github.com/go-git/go-billy/v5 => ./external/go-billy
+
+// S488.3c: clean-room permissive replacements for the MPL-2.0
+// hashicorp error-aggregation chain reached from the engine build via
+// podman/containers-common callers. Only the caller-used API is
+// implemented (see external/multierror/README.yoke.md); errwrap is no
+// longer imported by the replacement at all but stays replaced so the
+// module path resolves permissively for downstream pins.
+replace github.com/hashicorp/go-multierror => ./external/multierror
+
+replace github.com/hashicorp/errwrap => ./external/errwrap
