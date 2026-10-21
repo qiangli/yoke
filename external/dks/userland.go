@@ -30,6 +30,10 @@ var userlandVerbs = map[string]string{
 	"attach":         "reattach a session from any paired client",
 	"stop":           "stop exactly one run or session",
 	"session-server": "run the executor-side session server (internal)",
+	"expose":         "make one local service reachable from the workspace's pods",
+	"unexpose":       "remove one expose",
+	"exposed":        "list the workspace's exposes",
+	"relay":          "run the in-cluster expose relay (internal)",
 }
 
 // unimplementedVerbs fail closed: registered for discovery and help, but they
@@ -104,6 +108,7 @@ func newUserlandCmds(env *userlandEnv) []*cobra.Command {
 	}
 	cmds = append(cmds, newUserlandRunCmds(env)...)
 	cmds = append(cmds, newUserlandSessionCmds(env)...)
+	cmds = append(cmds, newUserlandExposeCmds(env)...)
 	for _, verb := range unimplementedVerbs {
 		cmds = append(cmds, newNotAvailableCmd(verb))
 	}
