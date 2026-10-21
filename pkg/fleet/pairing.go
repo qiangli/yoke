@@ -313,7 +313,10 @@ func newMasterTokenMintCmd() *cobra.Command {
 				if strings.TrimSpace(a.AccessToken) == "" {
 					return fmt.Errorf("fleet: %s has no access_token", from)
 				}
-				base, caller = a.ServerAddr, strings.TrimSpace(a.AccessToken)
+				// agent.json stores a bare host (e.g. ai.dhnt.io); the client
+				// needs a URL. A value that already carries a scheme is kept.
+				base = mintBaseURL(a.ServerAddr)
+				caller = strings.TrimSpace(a.AccessToken)
 			} else {
 				base, caller = ResolveCloud("", "")
 			}
@@ -365,4 +368,15 @@ func newMasterTokenMintCmd() *cobra.Command {
 	mint.Flags().StringVar(&hostName, "host-name", "", "host the coord-<host> token is minted for (default os.Hostname)")
 	mint.Flags().StringVar(&ttl, "ttl", "365d", "time to live, e.g. 90d (max 365d)")
 	return mint
+}
+
+// mintBaseURL turns an agent.json server_addr into a client base URL: a bare
+// host (optionally with port) becomes https://host; a value with a scheme is
+// kept as-is; empty stays empty (the caller falls back to the default base).
+func mintBaseURL(serverAddr string) string {
+	sa := strings.TrimRight(strings.TrimSpace(serverAddr), "/")
+	if sa == "" || strings.Contains(sa, "://") {
+		return sa
+	}
+	return "https://" + sa
 }

@@ -813,3 +813,18 @@ func TestMasterTokenSaveStillWorks(t *testing.T) {
 		t.Fatalf("save: %v", err)
 	}
 }
+
+// TestMintBaseFromBareServerAddr: a real Outpost agent.json stores a bare host
+// ("ai.dhnt.io"); mint must turn it into an https URL, not POST to a
+// scheme-less URL (S490 live finding: unsupported protocol scheme "").
+func TestMintBaseFromBareServerAddr(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"ai.dhnt.io", "https://ai.dhnt.io"},
+		{"ai.dhnt.io:8443", "https://ai.dhnt.io:8443"},
+		{"http://127.0.0.1:9", "http://127.0.0.1:9"},
+	} {
+		if got := mintBaseURL(tc.in); got != tc.want {
+			t.Fatalf("mintBaseURL(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
