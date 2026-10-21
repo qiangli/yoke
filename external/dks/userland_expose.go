@@ -54,11 +54,12 @@ import (
 // `exposed` table and the run-env injection need, so neither has to keep a
 // second record anywhere.
 const (
-	exposeLabel        = "dks.dhnt.io/expose"
-	exposeExpiresAnnot = "dks.dhnt.io/expires"
-	exposeKindAnnot    = "dks.dhnt.io/expose-kind"
-	exposeTargetAnnot  = "dks.dhnt.io/expose-target"
-	exposeEnvAnnot     = "dks.dhnt.io/expose-env"
+	exposeLabel         = "dks.dhnt.io/expose"
+	exposeExpiresAnnot  = "dks.dhnt.io/expires"
+	exposeKindAnnot     = "dks.dhnt.io/expose-kind"
+	exposeTargetAnnot   = "dks.dhnt.io/expose-target"
+	exposeEnvAnnot      = "dks.dhnt.io/expose-env"
+	exposeUpstreamAnnot = "dks.dhnt.io/expose-upstream"
 )
 
 // exposeTokenHeader is the per-request guard Outpost checks on every HTTP
@@ -75,8 +76,8 @@ const (
 	exposeExpiresKey  = "EXPOSE_EXPIRES"
 )
 
-// The expose kinds this story implements, and the two proxy kinds it parses
-// but leaves to S487.3/S487.4.
+// The expose kinds this story implements. The two proxy kinds are proxy
+// spellings: egress serves a CONNECT relay, git rides the http relay.
 const (
 	exposeKindHTTP   = "http"
 	exposeKindTCP    = "tcp"
@@ -95,6 +96,17 @@ const (
 	exposeEgressKind   = "egress"
 	exposeEgressTarget = "egress://"
 	exposeEgressPort   = 3128
+)
+
+// The git record kind, the Outpost target prefix and the default git host.
+// The CLI accepts proxy:git; the record and the exposed table use the short
+// kind git, Outpost gets git+<upstream>, and the relay rides the plain http
+// mode — Outpost's git app does the smart-HTTP filtering and injects the
+// HOST's credential, never the pod's.
+const (
+	exposeGitKind         = "git"
+	exposeGitTargetPrefix = "git+"
+	defaultGitUpstream    = "https://github.com"
 )
 
 // egressNoProxyVar and egressNoProxy are the bypass variable and list every
@@ -228,6 +240,9 @@ type exposeRecord struct {
 	Expires time.Time
 	Port    int      // the Service port; 8080 for http
 	Env     []string // the recorded --env entries, {url} unsubstituted
+	// Upstream is a git expose's git host (default https://github.com): the
+	// value the run env's insteadOf rewrite matches against.
+	Upstream string
 }
 
 // live reports whether the expose is still inside its TTL.
@@ -339,17 +354,18 @@ func mintExposeToken() (string, error) {
 
 // exposeOptions are the flags of one `dks expose`.
 type exposeOptions struct {
-	as    string
-	ttl   time.Duration
-	env   []string
-	allow []string
-	force bool
+	as       string
+	ttl      time.Duration
+	env      []string
+	allow    []string
+	upstream string
+	force    bool
 }
 
 func newExposeCmd(env *exposeEnv) *cobra.Command {
 	var o exposeOptions
 	cmd := &cobra.Command{
-		Use:   "expose <http://127.0.0.1:PORT | tcp://host:port | proxy:egress> --as <name> [--ttl 1h] [--allow a,b] [--env K=V]... [--force]",
+		Use:   "expose <http://127.0.0.1:PORT | tcp://host:port | proxy:egress | proxy:git> --as <name> [--ttl 1h] [--allow a,b] [--env K=V]... [--force]",
 		Short: "Make one local service reachable from the selected workspace's pods",
 		Long: `expose makes exactly ONE service on this machine reachable from the pods
 of the selected workspace, for a bounded time:
@@ -357,10 +373,14 @@ of the selected workspace, for a bounded time:
   bashy dks expose http://127.0.0.1:9000 --as web
   bashy dks expose tcp://127.0.0.1:5432 --as db --ttl 4h
   bashy dks expose http://127.0.0.1:9000 --as llm --env ANTHROPIC_BASE_URL={url}
+  bashy dks expose proxy:git --as git --allow owner/repo,owner/*
 
 Pods then reach it at http://<name>:8080 (http) or <name>:<port> (tcp), and
 'bashy dks run' injects DKS_<NAME>_URL / DKS_<NAME>_ADDR for every live
-expose. Default-deny holds: nothing exposed is nothing reachable.
+expose. A proxy:git expose additionally injects GIT_CONFIG_* insteadOf
+entries, so a plain git clone in a pod goes through the relay with no
+credential in the pod. Default-deny holds: nothing exposed is nothing
+reachable.
 
 The expose is registered on this machine's Outpost host with a one-off token
 and an expiry; past the expiry it stops answering at once, with no restart.
@@ -377,7 +397,8 @@ that collides with an Outpost built-in app.`,
 	f.StringVar(&o.as, "as", "", "the name pods reach the service by (a lowercase DNS label)")
 	f.DurationVar(&o.ttl, "ttl", defaultExposeTTL, "how long the expose lives (max 24h)")
 	f.StringArrayVar(&o.env, "env", nil, "record one variable for every run in the workspace: K=V, with {url} substituted; repeatable")
-	f.StringSliceVar(&o.allow, "allow", nil, "allowlist for the proxy kinds (proxy:egress, proxy:git)")
+	f.StringSliceVar(&o.allow, "allow", nil, "allowlist for the proxy kinds (proxy:egress: host,*.domain[:port]; proxy:git: owner/repo,owner/*)")
+	f.StringVar(&o.upstream, "upstream", "", "with proxy:git: the git host to proxy (default "+defaultGitUpstream+")")
 	f.BoolVar(&o.force, "force", false, "expose an admin-grade target or a built-in app name anyway")
 	return cmd
 }
@@ -514,6 +535,78 @@ func validEgressHostname(host string) bool {
 	return true
 }
 
+// cleanGitAllow splits, trims and validates the --allow list of a proxy:git
+// expose. Entries are owner/repo or owner/*; Outpost proxies only the git
+// smart-HTTP traffic of the listed repositories, so a bad entry refusing the
+// whole expose keeps the allowlist honest.
+func cleanGitAllow(raw []string) ([]string, error) {
+	var out []string
+	for _, s := range raw {
+		for _, part := range strings.Split(s, ",") {
+			p := strings.TrimSpace(part)
+			if p == "" {
+				if strings.TrimSpace(s) == "" && len(raw) == 1 && len(out) == 0 {
+					return nil, fmt.Errorf("--allow is required for a %s expose: pass --allow owner/repo,owner/* — nothing ran", exposeKindGit)
+				}
+				return nil, fmt.Errorf("--allow %q: want owner/repo or owner/* — nothing ran", s)
+			}
+			if err := validateGitAllowEntry(p); err != nil {
+				return nil, err
+			}
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("--allow is required for a %s expose: pass --allow owner/repo,owner/* — nothing ran", exposeKindGit)
+	}
+	return out, nil
+}
+
+// gitAllowNameRE is one owner or repo name of a git allow entry: a
+// git-host name of letters, digits, dot, hyphen and underscore, starting
+// with a letter or digit.
+var gitAllowNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// validateGitAllowEntry checks one git allow entry: owner/repo or owner/*.
+func validateGitAllowEntry(s string) error {
+	bad := func() error {
+		return fmt.Errorf("--allow %q: want owner/repo or owner/* — nothing ran", s)
+	}
+	owner, repo, hasSlash := strings.Cut(s, "/")
+	if !hasSlash || !gitAllowNameRE.MatchString(owner) {
+		return bad()
+	}
+	if repo == "*" {
+		return nil
+	}
+	if !gitAllowNameRE.MatchString(repo) {
+		return bad()
+	}
+	return nil
+}
+
+// parseGitUpstream validates --upstream of a proxy:git expose: an http(s)
+// git host URL, defaulting to the public git host. The trailing slash is
+// trimmed so the run env's insteadOf value can append its own.
+func parseGitUpstream(raw string) (string, error) {
+	u := strings.TrimSpace(raw)
+	if u == "" {
+		u = defaultGitUpstream
+	}
+	bad := func() error {
+		return fmt.Errorf("--upstream %q: want an http(s) git host URL such as %s — nothing ran", raw, defaultGitUpstream)
+	}
+	if strings.ContainsAny(u, " \t") || strings.ContainsAny(u, "\r\n\x00") {
+		return "", bad()
+	}
+	parsed, err := url.Parse(u)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" ||
+		parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", bad()
+	}
+	return strings.TrimSuffix(u, "/"), nil
+}
+
 // adminGrade names why a target or name is admin-grade, "" when it is not.
 // This is the --force gate: it refuses publishing the host's own
 // administration by accident, and refuses shadowing a built-in app name.
@@ -554,7 +647,7 @@ func (env *exposeEnv) expose(cmd *cobra.Command, o exposeOptions, args []string)
 		return errUserlandHandled
 	}
 	if len(args) != 1 {
-		fmt.Fprintln(cmd.ErrOrStderr(), "usage: bashy dks expose <http://127.0.0.1:PORT | tcp://host:port> --as <name>")
+		fmt.Fprintln(cmd.ErrOrStderr(), "usage: bashy dks expose <http://127.0.0.1:PORT | tcp://host:port | proxy:egress | proxy:git> --as <name>")
 		return errUserlandHandled
 	}
 	name := strings.TrimSpace(o.as)
@@ -575,18 +668,33 @@ func (env *exposeEnv) expose(cmd *cobra.Command, o exposeOptions, args []string)
 	if err != nil {
 		return fail(err)
 	}
-	if tgt.kind == exposeKindGit {
-		return fail(fmt.Errorf("target %s parses, but proxy:git is not implemented in this story (S487.4) — nothing ran", tgt.kind))
-	}
 	var egressAllow []string
+	var gitAllow []string
+	gitUpstream := ""
 	if tgt.kind == exposeKindEgress {
 		cleaned, err := cleanEgressAllow(o.allow)
 		if err != nil {
 			return fail(err)
 		}
 		egressAllow = cleaned
-	} else if len(o.allow) > 0 {
-		return fail(fmt.Errorf("--allow applies to %s and %s only, not to an %s target — nothing ran", exposeKindEgress, exposeKindGit, tgt.kind))
+	} else if tgt.kind == exposeKindGit {
+		cleaned, err := cleanGitAllow(o.allow)
+		if err != nil {
+			return fail(err)
+		}
+		gitAllow = cleaned
+		upstream, err := parseGitUpstream(o.upstream)
+		if err != nil {
+			return fail(err)
+		}
+		gitUpstream = upstream
+	} else {
+		if len(o.allow) > 0 {
+			return fail(fmt.Errorf("--allow applies to %s and %s only, not to an %s target — nothing ran", exposeKindEgress, exposeKindGit, tgt.kind))
+		}
+		if strings.TrimSpace(o.upstream) != "" {
+			return fail(fmt.Errorf("--upstream applies to %s only, not to an %s target — nothing ran", exposeKindGit, tgt.kind))
+		}
 	}
 	if why := adminGrade(name, tgt); why != "" && !o.force {
 		// One audit line per refusal, with the reason named.
@@ -624,6 +732,14 @@ func (env *exposeEnv) expose(cmd *cobra.Command, o exposeOptions, args []string)
 		rec.Kind = exposeEgressKind
 		rec.Target = strings.Join(egressAllow, ",")
 		rec.Port = exposeEgressPort
+	}
+	if tgt.kind == exposeKindGit {
+		spec.Target = exposeGitTargetPrefix + gitUpstream
+		spec.Allow = gitAllow
+		rec.Kind = exposeGitKind
+		rec.Target = strings.Join(gitAllow, ",")
+		rec.Port = exposeHTTPPort
+		rec.Upstream = gitUpstream
 	}
 	if rec.Kind == exposeKindHTTP {
 		rec.Port = exposeHTTPPort
@@ -701,6 +817,9 @@ func exposeObjects(rec exposeRecord, workspaceID, image, upstream, token string)
 		exposeTargetAnnot:  rec.Target,
 		exposeEnvAnnot:     envJSON,
 	}
+	if rec.Upstream != "" {
+		annots[exposeUpstreamAnnot] = rec.Upstream
+	}
 	meta := func(name string) map[string]any {
 		return map[string]any{"name": name, "labels": cloneAnyMap(labels), "annotations": cloneAnyMap(annots)}
 	}
@@ -708,6 +827,13 @@ func exposeObjects(rec exposeRecord, workspaceID, image, upstream, token string)
 	selector := map[string]any{
 		dagrun.LabelManagedBy: dagrun.ManagedByBashy,
 		exposeLabel:           rec.Name,
+	}
+	// A git expose rides the plain http relay: the existing http relay is
+	// enough, because Outpost's git app does the smart-HTTP filtering and
+	// injects the HOST's credential beyond it.
+	relayMode := rec.Kind
+	if relayMode == exposeGitKind {
+		relayMode = exposeKindHTTP
 	}
 	// limits == requests, exactly as a run's container does: a relay that
 	// cannot be placed is better than one a namespace default resizes.
@@ -726,7 +852,7 @@ func exposeObjects(rec exposeRecord, workspaceID, image, upstream, token string)
 		"image": image,
 		"command": []any{
 			"bashy", "dks", "relay",
-			"--mode", rec.Kind,
+			"--mode", relayMode,
 			"--listen", fmt.Sprintf(":%d", rec.Port),
 		},
 		"env": []any{
@@ -984,9 +1110,10 @@ func planeExposes(ctx context.Context, env *runEnv, ctxRec dagrun.Context) ([]ex
 			continue
 		}
 		rec := exposeRecord{
-			Name:   name,
-			Kind:   it.Metadata.Annotations[exposeKindAnnot],
-			Target: it.Metadata.Annotations[exposeTargetAnnot],
+			Name:     name,
+			Kind:     it.Metadata.Annotations[exposeKindAnnot],
+			Target:   it.Metadata.Annotations[exposeTargetAnnot],
+			Upstream: it.Metadata.Annotations[exposeUpstreamAnnot],
 		}
 		if raw := strings.TrimSpace(it.Metadata.Annotations[exposeExpiresAnnot]); raw != "" {
 			if t, perr := time.Parse(time.RFC3339, raw); perr == nil {
@@ -1016,6 +1143,12 @@ func sortExposes(recs []exposeRecord) {
 	}
 }
 
+// gitConfigPrefix is the family of environment variables that rewrites git
+// URLs in the pod: a plain `git clone <upstream>/owner/repo` goes through
+// the relay instead, with NO credential in the pod — the HOST's credential
+// is injected beyond the relay, by Outpost.
+const gitConfigPrefix = "GIT_CONFIG_"
+
 // exposeRunEnv is the environment every run in the workspace inherits from
 // its LIVE exposes: the address variable, plus the recorded entries with
 // {url} substituted, plus the proxy variables for a live egress expose. An
@@ -1023,6 +1156,7 @@ func sortExposes(recs []exposeRecord) {
 // safe to leave lying around.
 func exposeRunEnv(recs []exposeRecord, now time.Time) map[string]string {
 	out := map[string]string{}
+	gitCount := 0
 	for _, r := range recs {
 		if !r.live(now) {
 			continue
@@ -1034,6 +1168,12 @@ func exposeRunEnv(recs []exposeRecord, now time.Time) map[string]string {
 			out["HTTP_PROXY"] = addr
 			out[egressNoProxyVar] = egressNoProxy
 		}
+		if r.Kind == exposeGitKind && r.Upstream != "" {
+			i := strconv.Itoa(gitCount)
+			out[gitConfigPrefix+"KEY_"+i] = "url." + addr + "/.insteadOf"
+			out[gitConfigPrefix+"VALUE_"+i] = strings.TrimSuffix(r.Upstream, "/") + "/"
+			gitCount++
+		}
 		for _, kv := range r.Env {
 			k, v, hasValue := strings.Cut(kv, "=")
 			if !hasValue || !validEnvName(k) {
@@ -1041,6 +1181,9 @@ func exposeRunEnv(recs []exposeRecord, now time.Time) map[string]string {
 			}
 			out[k] = strings.ReplaceAll(v, "{url}", addr)
 		}
+	}
+	if gitCount > 0 {
+		out[gitConfigPrefix+"COUNT"] = strconv.Itoa(gitCount)
 	}
 	return out
 }
@@ -1162,7 +1305,7 @@ func (env *exposeEnv) relay(cmd *cobra.Command, o relayOptions) error {
 	case "":
 		return fail(errors.New("--mode is required: http, tcp or egress"))
 	default:
-		return fail(fmt.Errorf("--mode %q: want http, tcp or egress (%s arrives with S487.4)", o.mode, exposeKindGit))
+		return fail(fmt.Errorf("--mode %q: want http, tcp or egress (a git expose rides --mode http)", o.mode))
 	}
 	select {
 	case <-expired:

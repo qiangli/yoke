@@ -83,21 +83,6 @@ func TestExposeEgressRequiresAllowAndPassesItToOutpost(t *testing.T) {
 	if !strings.Contains(specJSON, "3128") {
 		t.Errorf("Service does not publish 3128:\n%s", specJSON)
 	}
-
-	// proxy:git stays refused in this story.
-	et3 := newExposeTest(t)
-	et3.selectWorkspace(t, "skel")
-	code, _, stderr = et3.exec(t, "expose", "proxy:git", "--as", "gitproxy",
-		"--allow", "owner/repo")
-	if code == 0 {
-		t.Fatal("expose proxy:git exited 0 (S487.4 owns it)")
-	}
-	if !strings.Contains(stderr, "nothing ran") {
-		t.Errorf("stderr %q does not carry %q", stderr, "nothing ran")
-	}
-	if len(et3.apps.adds) != 0 {
-		t.Errorf("a refused git expose registered an app: %+v", et3.apps.adds)
-	}
 }
 
 // RED (S487.3): relay --mode egress bridges CONNECT over a ?dst= websocket,
