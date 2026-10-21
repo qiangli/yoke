@@ -19,6 +19,7 @@ require (
 	github.com/coder/acp-go-sdk v0.13.5
 	github.com/coder/websocket v1.8.14
 	github.com/creack/pty/v2 v2.0.1
+	github.com/cyphar/filepath-securejoin v0.6.1
 	github.com/dgraph-io/dgo/v250 v250.0.0
 	github.com/dhnt/dhnt v0.2.0-alpha.3.0.20260619230448-ddbed43582c0
 	github.com/ebitengine/purego v0.10.1
@@ -156,7 +157,6 @@ require (
 	github.com/crc-org/vfkit v0.6.3 // indirect
 	github.com/creack/pty v1.1.24 // indirect
 	github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467 // indirect
-	github.com/cyphar/filepath-securejoin v0.6.1 // indirect
 	github.com/d4l3k/go-bfloat16 v0.0.0-20211005043715-690c3bdd05f1 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/dgraph-io/badger/v4 v4.9.1 // indirect
@@ -451,3 +451,11 @@ replace github.com/go-git/go-billy/v5 => ./external/go-billy
 replace github.com/hashicorp/go-multierror => ./external/multierror
 
 replace github.com/hashicorp/errwrap => ./external/errwrap
+
+// S488.3d: clean-room permissive replacement for the MPL-2.0
+// cyphar/filepath-securejoin reached from the engine build via
+// podman/storage/containers-common/buildah/cgroups callers. Only
+// the caller-used API is implemented (SecureJoin; see
+// external/securejoin/README.yoke.md). pathrs-lite stays out of
+// scope: the host engine graph never imports it.
+replace github.com/cyphar/filepath-securejoin => ./external/securejoin
