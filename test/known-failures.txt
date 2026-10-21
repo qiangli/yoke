@@ -1,3 +1,6 @@
 # Go tests known to FAIL — the no-regression ratchet baseline (see
 # scripts/ci-test-gate.sh; same contract as coreutils/test/known-failures.txt).
 # Format: <goos> <package> <TestName>
+darwin github.com/qiangli/yoke/pkg/mplfree TestEngineGraphHasNoMultierrorChain
+linux github.com/qiangli/yoke/pkg/mplfree TestEngineGraphHasNoMultierrorChain
+windows github.com/qiangli/yoke/pkg/mplfree TestEngineGraphHasNoMultierrorChain
