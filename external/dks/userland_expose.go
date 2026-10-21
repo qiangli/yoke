@@ -19,6 +19,7 @@
 package dks
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -37,6 +38,7 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode"
 
 	"github.com/coder/websocket"
 	"github.com/spf13/cobra"
@@ -86,6 +88,54 @@ const (
 // it as http://<name>:8080, which is what `dks run` injects.
 const exposeHTTPPort = 8080
 
+// The egress record kind, Outpost target and Service port. The CLI accepts
+// proxy:egress as the target spelling; the record, the relay mode and the
+// exposed table all use the short kind egress.
+const (
+	exposeEgressKind   = "egress"
+	exposeEgressTarget = "egress://"
+	exposeEgressPort   = 3128
+)
+
+// egressNoProxyVar and egressNoProxy are the bypass variable and list every
+// egress run inherits alongside the proxy variables.
+const (
+	egressNoProxyVar = "NO_PROXY"
+	egressNoProxy    = ".svc,.cluster.local,localhost,127.0.0.1"
+)
+
+// exposeSecretRefPrefix names the pseudo-vault of expose-provided Secret
+// entries: an expose variable the dag manifest Env line cannot carry (it
+// splits values on whitespace and commas, so the comma-separated NO_PROXY
+// bypass list is unrepresentable there) rides the run Secret under a
+// dks-expose ref instead, and the pod still receives it via secretKeyRef.
+const exposeSecretRefPrefix = "dks-expose"
+
+// exposeSecretRef is the manifest Secrets: ref wiring one expose-provided
+// Secret entry to its environment variable.
+func exposeSecretRef(envName string) string {
+	return exposeSecretRefPrefix + "=" + envName
+}
+
+// manifestEnvValueOK reports whether v can ride a dag manifest Env: line:
+// empty, otherwise free of whitespace, commas, controls and ${ — the
+// manifest's own list-token rule, mirrored here so a variable the line
+// cannot carry is routed to the run Secret instead of failing generation.
+func manifestEnvValueOK(v string) bool {
+	if v == "" {
+		return true
+	}
+	if strings.Contains(v, "${") {
+		return false
+	}
+	for _, r := range v {
+		if unicode.IsControl(r) || r == ' ' || r == '\t' || r == ',' {
+			return false
+		}
+	}
+	return true
+}
+
 // TTL bounds of one expose: the default is short on purpose, and nothing
 // outlives a day without being re-exposed.
 const (
@@ -121,6 +171,8 @@ type exposeAppSpec struct {
 	Target      string
 	TokenSHA256 string
 	Expires     time.Time
+	// Allow is the egress allow list (host or *.domain[:port] entries).
+	Allow []string
 }
 
 // outpostApps is the Outpost host side behind one seam, so no test execs the
@@ -138,12 +190,16 @@ type execOutpostApps struct{}
 // addArgv is the argv of one registration. It is a method of its own so the
 // "no token in argv" rule is checkable without execing anything.
 func (execOutpostApps) addArgv(spec exposeAppSpec) []string {
-	return []string{
+	argv := []string{
 		"apps", "add", spec.App,
 		"--target", spec.Target,
 		"--expose-token-sha256", spec.TokenSHA256,
 		"--expose-expires", spec.Expires.UTC().Format(time.RFC3339),
 	}
+	if len(spec.Allow) > 0 {
+		argv = append(argv, "--allow", strings.Join(spec.Allow, ","))
+	}
+	return argv
 }
 
 func (e execOutpostApps) Add(ctx context.Context, spec exposeAppSpec) error {
@@ -179,13 +235,18 @@ func (r exposeRecord) live(now time.Time) bool {
 	return r.Expires.IsZero() || now.Before(r.Expires)
 }
 
-// address is what a pod uses to reach the expose: the http URL or the tcp
-// host:port. It is also the {url} substitution of the recorded env.
+// address is what a pod uses to reach the expose: the http URL, the egress
+// proxy URL, or the tcp host:port. It is also the {url} substitution of the
+// recorded env.
 func (r exposeRecord) address() string {
 	if r.Kind == exposeKindTCP {
 		return fmt.Sprintf("%s:%d", r.Name, r.Port)
 	}
-	return fmt.Sprintf("http://%s:%d", r.Name, exposeHTTPPort)
+	port := r.Port
+	if port == 0 {
+		port = exposeHTTPPort
+	}
+	return fmt.Sprintf("http://%s:%d", r.Name, port)
 }
 
 // envVarName is the DKS_<NAME>_ suffix variable of one expose: URL for an
@@ -288,7 +349,7 @@ type exposeOptions struct {
 func newExposeCmd(env *exposeEnv) *cobra.Command {
 	var o exposeOptions
 	cmd := &cobra.Command{
-		Use:   "expose <http://127.0.0.1:PORT | tcp://host:port> --as <name> [--ttl 1h] [--env K=V]... [--force]",
+		Use:   "expose <http://127.0.0.1:PORT | tcp://host:port | proxy:egress> --as <name> [--ttl 1h] [--allow a,b] [--env K=V]... [--force]",
 		Short: "Make one local service reachable from the selected workspace's pods",
 		Long: `expose makes exactly ONE service on this machine reachable from the pods
 of the selected workspace, for a bounded time:
@@ -362,6 +423,97 @@ func parseExposeTarget(raw string) (exposeTarget, error) {
 	return exposeTarget{}, fmt.Errorf("target %q: want http://127.0.0.1:PORT, tcp://host:port, %s or %s — nothing ran", raw, exposeKindEgress, exposeKindGit)
 }
 
+// cleanEgressAllow splits, trims and validates the --allow list of a
+// proxy:egress expose. Entries are host or *.domain, each with an optional
+// :port. An empty list, an empty entry, or a malformed entry refuses the
+// whole expose before anything exists.
+func cleanEgressAllow(raw []string) ([]string, error) {
+	var out []string
+	for _, s := range raw {
+		for _, part := range strings.Split(s, ",") {
+			p := strings.TrimSpace(part)
+			if p == "" {
+				if strings.TrimSpace(s) == "" && len(raw) == 1 && len(out) == 0 {
+					return nil, fmt.Errorf("--allow is required for a %s expose: pass --allow host,*.domain[:port] — nothing ran", exposeKindEgress)
+				}
+				return nil, fmt.Errorf("--allow %q: want host or *.domain, each with an optional :port — nothing ran", s)
+			}
+			if err := validateEgressAllowEntry(p); err != nil {
+				return nil, err
+			}
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("--allow is required for a %s expose: pass --allow host,*.domain[:port] — nothing ran", exposeKindEgress)
+	}
+	return out, nil
+}
+
+// validateEgressAllowEntry checks one allow entry: a hostname or *.domain
+// with an optional numeric :port.
+func validateEgressAllowEntry(s string) error {
+	bad := func() error {
+		return fmt.Errorf("--allow %q: want host or *.domain, each with an optional :port — nothing ran", s)
+	}
+	if s == "" || strings.ContainsAny(s, " \t/?#@") {
+		return bad()
+	}
+	host := s
+	if strings.Contains(s, ":") {
+		h, portText, err := net.SplitHostPort(s)
+		if err != nil || h == "" {
+			return bad()
+		}
+		port, perr := strconv.Atoi(portText)
+		if perr != nil || port < 1 || port > 65535 {
+			return bad()
+		}
+		host = h
+	}
+	if strings.HasPrefix(host, "*.") {
+		rest := strings.TrimPrefix(host, "*.")
+		if rest == "" || strings.Contains(rest, "*") || !strings.Contains(rest, ".") {
+			return bad()
+		}
+		if !validEgressHostname(rest) {
+			return bad()
+		}
+		return nil
+	}
+	if strings.Contains(host, "*") {
+		return bad()
+	}
+	if !validEgressHostname(host) {
+		return bad()
+	}
+	return nil
+}
+
+// validEgressHostname is a permissive dot-separated hostname check: labels of
+// letters, digits and hyphens, never starting or ending with a hyphen.
+func validEgressHostname(host string) bool {
+	host = strings.TrimSuffix(host, ".")
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || len(label) > 63 {
+			return false
+		}
+		if strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return false
+		}
+		for _, r := range label {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' {
+				continue
+			}
+			return false
+		}
+	}
+	return true
+}
+
 // adminGrade names why a target or name is admin-grade, "" when it is not.
 // This is the --force gate: it refuses publishing the host's own
 // administration by accident, and refuses shadowing a built-in app name.
@@ -423,11 +575,17 @@ func (env *exposeEnv) expose(cmd *cobra.Command, o exposeOptions, args []string)
 	if err != nil {
 		return fail(err)
 	}
-	switch tgt.kind {
-	case exposeKindEgress, exposeKindGit:
-		return fail(fmt.Errorf("target %s parses, but the proxy kinds are not implemented in this story (S487.3/S487.4) — nothing ran", tgt.kind))
+	if tgt.kind == exposeKindGit {
+		return fail(fmt.Errorf("target %s parses, but proxy:git is not implemented in this story (S487.4) — nothing ran", tgt.kind))
 	}
-	if len(o.allow) > 0 {
+	var egressAllow []string
+	if tgt.kind == exposeKindEgress {
+		cleaned, err := cleanEgressAllow(o.allow)
+		if err != nil {
+			return fail(err)
+		}
+		egressAllow = cleaned
+	} else if len(o.allow) > 0 {
 		return fail(fmt.Errorf("--allow applies to %s and %s only, not to an %s target — nothing ran", exposeKindEgress, exposeKindGit, tgt.kind))
 	}
 	if why := adminGrade(name, tgt); why != "" && !o.force {
@@ -459,6 +617,17 @@ func (env *exposeEnv) expose(cmd *cobra.Command, o exposeOptions, args []string)
 	sum := sha256.Sum256([]byte(token))
 	expires := env.now().Add(o.ttl).UTC().Truncate(time.Second)
 	spec := exposeAppSpec{App: name, Target: tgt.target, TokenSHA256: hex.EncodeToString(sum[:]), Expires: expires}
+	rec := exposeRecord{Name: name, Kind: tgt.kind, Target: tgt.target, Expires: expires, Port: tgt.port, Env: recorded}
+	if tgt.kind == exposeKindEgress {
+		spec.Target = exposeEgressTarget
+		spec.Allow = egressAllow
+		rec.Kind = exposeEgressKind
+		rec.Target = strings.Join(egressAllow, ",")
+		rec.Port = exposeEgressPort
+	}
+	if rec.Kind == exposeKindHTTP {
+		rec.Port = exposeHTTPPort
+	}
 
 	client, err := env.planeClient(ctxRec)
 	if err != nil {
@@ -466,10 +635,6 @@ func (env *exposeEnv) expose(cmd *cobra.Command, o exposeOptions, args []string)
 	}
 	if err := env.apps.Add(cmd.Context(), spec); err != nil {
 		return fail(fmt.Errorf("register app %s with Outpost: %v — nothing ran", name, err))
-	}
-	rec := exposeRecord{Name: name, Kind: tgt.kind, Target: tgt.target, Expires: expires, Port: tgt.port, Env: recorded}
-	if rec.Kind == exposeKindHTTP {
-		rec.Port = exposeHTTPPort
 	}
 	objs, err := exposeObjects(rec, ctxRec.WorkspaceID, image, upstream, token)
 	if err != nil {
@@ -853,8 +1018,9 @@ func sortExposes(recs []exposeRecord) {
 
 // exposeRunEnv is the environment every run in the workspace inherits from
 // its LIVE exposes: the address variable, plus the recorded entries with
-// {url} substituted. An expired expose contributes nothing — the TTL cut is
-// what makes an expose safe to leave lying around.
+// {url} substituted, plus the proxy variables for a live egress expose. An
+// expired expose contributes nothing — the TTL cut is what makes an expose
+// safe to leave lying around.
 func exposeRunEnv(recs []exposeRecord, now time.Time) map[string]string {
 	out := map[string]string{}
 	for _, r := range recs {
@@ -863,6 +1029,11 @@ func exposeRunEnv(recs []exposeRecord, now time.Time) map[string]string {
 		}
 		addr := r.address()
 		out[r.envVarName()] = addr
+		if r.Kind == exposeEgressKind {
+			out["HTTPS_PROXY"] = addr
+			out["HTTP_PROXY"] = addr
+			out[egressNoProxyVar] = egressNoProxy
+		}
 		for _, kv := range r.Env {
 			k, v, hasValue := strings.Cut(kv, "=")
 			if !hasValue || !validEnvName(k) {
@@ -886,13 +1057,15 @@ type relayOptions struct {
 func newRelayCmd(env *exposeEnv) *cobra.Command {
 	var o relayOptions
 	cmd := &cobra.Command{
-		Use:   "relay --mode http|tcp",
+		Use:   "relay --mode http|tcp|egress",
 		Short: "Run the in-cluster expose relay (internal)",
 		Long: `relay is the in-cluster half of an expose: it holds the expose token and
 reaches the exposed service only through the Outpost app route.
 
-  --mode http   listen and reverse-proxy to the app route
-  --mode tcp    listen and bridge each connection over one WebSocket upgrade
+  --mode http    listen and reverse-proxy to the app route
+  --mode tcp     listen and bridge each connection over one WebSocket upgrade
+  --mode egress  listen as an HTTP CONNECT proxy, bridging each CONNECT over
+                 one ?dst= WebSocket upgrade of the app route
 
 The token comes from $` + exposeTokenKey + ` and from nowhere else; it is never
 an argument and never printed. Past its expiry the relay exits non-zero.
@@ -906,7 +1079,7 @@ an argument and never printed. Past its expiry the relay exits non-zero.
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&o.mode, "mode", "", "http or tcp")
+	f.StringVar(&o.mode, "mode", "", "http, tcp or egress")
 	f.StringVar(&o.listen, "listen", ":8080", "address to listen on")
 	f.StringVar(&o.upstream, "upstream", "", "the app route to reach (default $"+exposeUpstreamKey+")")
 	f.StringVar(&o.pathPrefix, "path-prefix", "", "with --mode http: prefix every proxied path")
@@ -984,10 +1157,12 @@ func (env *exposeEnv) relay(cmd *cobra.Command, o relayOptions) error {
 		}()
 	case exposeKindTCP:
 		go func() { serveErr <- relayTCPServe(ctx, ln, upstream, token) }()
+	case exposeEgressKind:
+		go func() { serveErr <- relayEgressServe(ctx, ln, upstream, token) }()
 	case "":
-		return fail(errors.New("--mode is required: http or tcp"))
+		return fail(errors.New("--mode is required: http, tcp or egress"))
 	default:
-		return fail(fmt.Errorf("--mode %q: want http or tcp (%s and %s arrive with S487.3/S487.4)", o.mode, exposeKindEgress, exposeKindGit))
+		return fail(fmt.Errorf("--mode %q: want http, tcp or egress (%s arrives with S487.4)", o.mode, exposeKindGit))
 	}
 	select {
 	case <-expired:
@@ -1079,6 +1254,12 @@ func bridgeTCPOverWS(ctx context.Context, conn net.Conn, endpoint, token string)
 		return
 	}
 	defer ws.CloseNow()
+	bridgeWSConn(ctx, conn, ws)
+}
+
+// bridgeWSConn copies bytes both ways between a TCP connection and an open
+// websocket until either side ends.
+func bridgeWSConn(ctx context.Context, conn net.Conn, ws *websocket.Conn) {
 	remote := websocket.NetConn(ctx, ws, websocket.MessageBinary)
 	done := make(chan struct{}, 2)
 	go func() {
@@ -1093,4 +1274,99 @@ func bridgeTCPOverWS(ctx context.Context, conn net.Conn, endpoint, token string)
 	case <-done:
 	case <-ctx.Done():
 	}
+}
+
+// relayEgressServe listens as an HTTP CONNECT proxy on :3128. Each CONNECT
+// host:port is bridged over one ?dst=host:port WebSocket upgrade of the
+// upstream app route. Anything that is not a CONNECT is refused with 405;
+// a WebSocket dial failure or an immediate policy close is refused with 403
+// before any 200 is written.
+func relayEgressServe(ctx context.Context, ln net.Listener, upstream, token string) error {
+	wsBase, err := tunnelWSScheme(strings.TrimSpace(upstream))
+	if err != nil {
+		return err
+	}
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+			return err
+		}
+		go handleEgressConn(ctx, conn, wsBase, token)
+	}
+}
+
+func handleEgressConn(ctx context.Context, conn net.Conn, wsBase, token string) {
+	defer conn.Close()
+	br := bufio.NewReader(conn)
+	req, err := http.ReadRequest(br)
+	if err != nil {
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(req.Method), "CONNECT") {
+		msg := "method not allowed: egress proxy handles CONNECT only; use https via CONNECT\n"
+		fmt.Fprintf(conn, "HTTP/1.1 405 Method Not Allowed\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(msg), msg)
+		return
+	}
+	hostport := strings.TrimSpace(req.Host)
+	if hostport == "" {
+		hostport = strings.TrimSpace(req.URL.Host)
+	}
+	if hostport == "" {
+		hostport = strings.TrimSpace(req.RequestURI)
+	}
+	if _, _, err := net.SplitHostPort(hostport); err != nil {
+		msg := "bad CONNECT target: want host:port\n"
+		fmt.Fprintf(conn, "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(msg), msg)
+		return
+	}
+	sep := "?"
+	if strings.Contains(wsBase, "?") {
+		sep = "&"
+	}
+	endpoint := wsBase + sep + "dst=" + url.QueryEscape(hostport)
+	dialCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	forbidden := func() {
+		msg := "forbidden\n"
+		fmt.Fprintf(conn, "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(msg), msg)
+	}
+	// The Outpost app closes a disallowed dst with a policy status right
+	// after the upgrade, which only a data-path read surfaces: Ping waits
+	// for a pong the closed app never sends, while Read reports the close
+	// frame at once. A timed-out or cancelled read closes the connection
+	// it ran on, so the probe connection is sacrificial: a clean probe is
+	// followed by a fresh bridge dial, and 200 is written only then.
+	probe, resp, err := websocket.Dial(dialCtx, endpoint, &websocket.DialOptions{HTTPHeader: exposeHeaders(token)})
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	if err != nil {
+		forbidden()
+		return
+	}
+	probeCtx, probeCancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	_, _, perr := probe.Read(probeCtx)
+	probeCancel()
+	_ = probe.CloseNow()
+	if ctx.Err() != nil {
+		return
+	}
+	if perr != nil && websocket.CloseStatus(perr) != websocket.StatusCode(-1) {
+		forbidden()
+		return
+	}
+	ws, resp, err := websocket.Dial(dialCtx, endpoint, &websocket.DialOptions{HTTPHeader: exposeHeaders(token)})
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	if err != nil {
+		forbidden()
+		return
+	}
+	defer ws.CloseNow()
+	fmt.Fprintf(conn, "HTTP/1.1 200 Connection Established\r\n\r\n")
+	bridgeWSConn(ctx, conn, ws)
 }
