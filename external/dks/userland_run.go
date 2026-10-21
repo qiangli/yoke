@@ -90,6 +90,10 @@ type runEnv struct {
 	image func() string
 	// secretResolver resolves vault credential references into secret values on the client.
 	secretResolver func(ctx context.Context, vaultName string) ([]byte, error)
+	// listExposes lists the workspace's exposes (userland_expose.go); nil
+	// means no expose env reaches a run, which is what a test that is not
+	// about exposes wants.
+	listExposes func(ctx context.Context, ctxRec dagrun.Context) ([]exposeRecord, error)
 	// now and sleep drive the completion wait.
 	now   func() time.Time
 	sleep func(ctx context.Context, d time.Duration) error
@@ -141,7 +145,7 @@ func (env *runEnv) resolveImage(flag string) (image, from string, err error) {
 }
 
 func defaultRunEnv(env *userlandEnv) *runEnv {
-	return &runEnv{
+	renv := &runEnv{
 		userlandEnv:      env,
 		release:          selfRelease,
 		shippedArtifacts: provenShippedArtifacts,
@@ -156,6 +160,10 @@ func defaultRunEnv(env *userlandEnv) *runEnv {
 		now:              time.Now,
 		sleep:            sleepContext,
 	}
+	renv.listExposes = func(ctx context.Context, ctxRec dagrun.Context) ([]exposeRecord, error) {
+		return planeExposes(ctx, renv, ctxRec)
+	}
+	return renv
 }
 
 // defaultSecretResolver resolves a vault credential by running `bashy secret show <vault-name>`.
@@ -282,6 +290,23 @@ func (env *runEnv) run(cmd *cobra.Command, o runOptions, args []string) error {
 	envVars, err := env.exportedEnv(o.env)
 	if err != nil {
 		return fail(err)
+	}
+	// Every LIVE expose of the workspace reaches the run as environment, so
+	// a pod learns where the exposed services are without being told. An
+	// explicit --env always wins over an expose's recorded entry.
+	exposed, err := env.exposes(cmd.Context(), ctxRec)
+	if err != nil {
+		return fail(planeError(ctxRec, err))
+	}
+	if vars := exposeRunEnv(exposed, env.now()); len(vars) > 0 {
+		if envVars == nil {
+			envVars = make(map[string]string, len(vars))
+		}
+		for k, v := range vars {
+			if _, taken := envVars[k]; !taken {
+				envVars[k] = v
+			}
+		}
 	}
 
 	secretStringData := make(map[string]string)
