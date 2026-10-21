@@ -291,9 +291,14 @@ func (env *runEnv) run(cmd *cobra.Command, o runOptions, args []string) error {
 	if err != nil {
 		return fail(err)
 	}
+	secretStringData := make(map[string]string)
+	var credRefsForManifest []string
 	// Every LIVE expose of the workspace reaches the run as environment, so
 	// a pod learns where the exposed services are without being told. An
-	// explicit --env always wins over an expose's recorded entry.
+	// explicit --env always wins over an expose's recorded entry. A value
+	// the manifest Env line cannot carry (the comma-separated NO_PROXY
+	// bypass list) rides the run Secret under a dks-expose ref instead, so
+	// generation still succeeds and the pod still receives every variable.
 	exposed, err := env.exposes(cmd.Context(), ctxRec)
 	if err != nil {
 		return fail(planeError(ctxRec, err))
@@ -304,13 +309,15 @@ func (env *runEnv) run(cmd *cobra.Command, o runOptions, args []string) error {
 		}
 		for k, v := range vars {
 			if _, taken := envVars[k]; !taken {
-				envVars[k] = v
+				if manifestEnvValueOK(v) {
+					envVars[k] = v
+				} else {
+					secretStringData[k] = v
+					credRefsForManifest = append(credRefsForManifest, exposeSecretRef(k))
+				}
 			}
 		}
 	}
-
-	secretStringData := make(map[string]string)
-	var credRefsForManifest []string
 	for _, spec := range o.credentials {
 		spec = strings.TrimSpace(spec)
 		if spec == "" {

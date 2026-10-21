@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/qiangli/yoke/pkg/dagrun"
 )
 
 func mustJSON(t *testing.T, v any) []byte {
@@ -228,9 +229,9 @@ func TestRelayEgressConnectBridgesAndRefusesPolicyClose(t *testing.T) {
 }
 
 // RED (S487.3): a live egress expose reaches runs as proxy env plus DKS_<NAME>_URL.
-// The assertion is on exposeRunEnv, the map `dks run` merges into every run:
-// the dag manifest's Env line cannot carry commas, so the comma-separated
-// bypass list is checked here rather than through --emit manifest.
+// Comma-free values ride the manifest Env line; the comma-separated NO_PROXY
+// bypass list rides the run Secret under a dks-expose ref, so generation
+// still succeeds and the pod still receives every variable.
 func TestRunInjectsProxyEnvForEgress(t *testing.T) {
 	rt := newRunTest(t)
 	rt.selectWorkspace(t, "skel")
@@ -252,5 +253,110 @@ func TestRunInjectsProxyEnvForEgress(t *testing.T) {
 	}
 	if _, ok := got["DKS_OLD_URL"]; ok {
 		t.Error("an EXPIRED egress expose reached the run's environment")
+	}
+
+	// End to end through the manifest: a live egress expose must not fail
+	// generation. The comma-free proxy addresses ride Env; NO_PROXY rides
+	// a dks-expose Secrets ref to the run Secret.
+	rt.renv.listExposes = func(context.Context, dagrun.Context) ([]exposeRecord, error) {
+		return []exposeRecord{
+			{Name: "proxy", Kind: "egress", Target: "a.example.com", Port: 3128, Expires: now.Add(time.Hour)},
+		}, nil
+	}
+	code, stdout, stderr := rt.exec(t, "run", "--emit", "manifest", "--", "echo", "hi")
+	if code != 0 {
+		t.Fatalf("run with a live egress expose exited %d: %s", code, stderr)
+	}
+	m, err := dagrun.ParseManifest([]byte(stdout))
+	if err != nil {
+		t.Fatalf("parse the emitted manifest: %v", err)
+	}
+	envGot := map[string]string{}
+	for _, kv := range m.Task.Env {
+		k, v, _ := strings.Cut(kv, "=")
+		envGot[k] = v
+	}
+	for k, want := range map[string]string{
+		"DKS_PROXY_URL": "http://proxy:3128",
+		"HTTPS_PROXY":   "http://proxy:3128",
+		"HTTP_PROXY":    "http://proxy:3128",
+	} {
+		if envGot[k] != want {
+			t.Errorf("manifest env %s = %q, want %q", k, envGot[k], want)
+		}
+	}
+	foundRef := false
+	for _, sec := range m.Task.Secrets {
+		if sec == exposeSecretRef("NO_PROXY") {
+			foundRef = true
+		}
+	}
+	if !foundRef {
+		t.Errorf("manifest secrets = %q, want a %q ref carrying NO_PROXY", m.Task.Secrets, exposeSecretRef("NO_PROXY"))
+	}
+	if strings.Contains(stdout, egressNoProxy) {
+		t.Errorf("the manifest carries the bypass list inline, where the Env line cannot hold it")
+	}
+
+	// End to end through a real run: the bypass list rides the run Secret
+	// and the pod receives it via secretKeyRef, commas intact.
+	rt2 := newRunTest(t)
+	rt2.selectWorkspace(t, "skel@k8s:dev")
+	now2 := rt2.renv.now()
+	rt2.renv.listExposes = func(context.Context, dagrun.Context) ([]exposeRecord, error) {
+		return []exposeRecord{
+			{Name: "proxy", Kind: "egress", Target: "a.example.com", Port: 3128, Expires: now2.Add(time.Hour)},
+		}, nil
+	}
+	rt2.runner.gets = [][]byte{
+		runsJSON(jobJSON(testWorkspaceID, testRunID, "echo", "Complete")),
+	}
+	code, _, stderr = rt2.exec(t, "run", "--", "echo", "hi")
+	if code != 0 {
+		t.Fatalf("run with a live egress expose exited %d: %s", code, stderr)
+	}
+	if len(rt2.runner.calls) < 2 {
+		t.Fatalf("expected Secret and workload applies, got %d plane calls", len(rt2.runner.calls))
+	}
+	var secretObj map[string]any
+	if err := json.Unmarshal(rt2.runner.calls[0].stdin, &secretObj); err != nil {
+		t.Fatalf("parse Secret apply stdin: %v", err)
+	}
+	stringData, _ := secretObj["stringData"].(map[string]any)
+	if stringData[egressNoProxyVar] != egressNoProxy {
+		t.Errorf("Secret stringData[%s] = %v, want the bypass list", egressNoProxyVar, stringData[egressNoProxyVar])
+	}
+	var jobList map[string]any
+	if err := json.Unmarshal(rt2.runner.calls[1].stdin, &jobList); err != nil {
+		t.Fatalf("parse workload apply stdin: %v", err)
+	}
+	items, _ := jobList["items"].([]any)
+	if len(items) == 0 {
+		t.Fatal("workload items empty")
+	}
+	jobObj, _ := items[0].(map[string]any)
+	jobSpec, _ := jobObj["spec"].(map[string]any)
+	tmpl, _ := jobSpec["template"].(map[string]any)
+	podSpec, _ := tmpl["spec"].(map[string]any)
+	containers, _ := podSpec["containers"].([]any)
+	if len(containers) == 0 {
+		t.Fatal("workload containers empty")
+	}
+	container, _ := containers[0].(map[string]any)
+	envList, _ := container["env"].([]any)
+	wired := false
+	for _, e := range envList {
+		entry, _ := e.(map[string]any)
+		if entry["name"] != egressNoProxyVar {
+			continue
+		}
+		vf, _ := entry["valueFrom"].(map[string]any)
+		skr, _ := vf["secretKeyRef"].(map[string]any)
+		if skr["key"] == egressNoProxyVar {
+			wired = true
+		}
+	}
+	if !wired {
+		t.Errorf("workload container env does not receive %s via secretKeyRef: %v", egressNoProxyVar, envList)
 	}
 }

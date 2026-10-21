@@ -38,6 +38,7 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode"
 
 	"github.com/coder/websocket"
 	"github.com/spf13/cobra"
@@ -96,9 +97,44 @@ const (
 	exposeEgressPort   = 3128
 )
 
-// egressNoProxy is the bypass list every egress run inherits alongside the
-// proxy variables.
-const egressNoProxy = ".svc,.cluster.local,localhost,127.0.0.1"
+// egressNoProxyVar and egressNoProxy are the bypass variable and list every
+// egress run inherits alongside the proxy variables.
+const (
+	egressNoProxyVar = "NO_PROXY"
+	egressNoProxy    = ".svc,.cluster.local,localhost,127.0.0.1"
+)
+
+// exposeSecretRefPrefix names the pseudo-vault of expose-provided Secret
+// entries: an expose variable the dag manifest Env line cannot carry (it
+// splits values on whitespace and commas, so the comma-separated NO_PROXY
+// bypass list is unrepresentable there) rides the run Secret under a
+// dks-expose ref instead, and the pod still receives it via secretKeyRef.
+const exposeSecretRefPrefix = "dks-expose"
+
+// exposeSecretRef is the manifest Secrets: ref wiring one expose-provided
+// Secret entry to its environment variable.
+func exposeSecretRef(envName string) string {
+	return exposeSecretRefPrefix + "=" + envName
+}
+
+// manifestEnvValueOK reports whether v can ride a dag manifest Env: line:
+// empty, otherwise free of whitespace, commas, controls and ${ — the
+// manifest's own list-token rule, mirrored here so a variable the line
+// cannot carry is routed to the run Secret instead of failing generation.
+func manifestEnvValueOK(v string) bool {
+	if v == "" {
+		return true
+	}
+	if strings.Contains(v, "${") {
+		return false
+	}
+	for _, r := range v {
+		if unicode.IsControl(r) || r == ' ' || r == '\t' || r == ',' {
+			return false
+		}
+	}
+	return true
+}
 
 // TTL bounds of one expose: the default is short on purpose, and nothing
 // outlives a day without being re-exposed.
@@ -996,7 +1032,7 @@ func exposeRunEnv(recs []exposeRecord, now time.Time) map[string]string {
 		if r.Kind == exposeEgressKind {
 			out["HTTPS_PROXY"] = addr
 			out["HTTP_PROXY"] = addr
-			out["NO_PROXY"] = egressNoProxy
+			out[egressNoProxyVar] = egressNoProxy
 		}
 		for _, kv := range r.Env {
 			k, v, hasValue := strings.Cut(kv, "=")
