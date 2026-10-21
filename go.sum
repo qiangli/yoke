@@ -810,6 +810,8 @@ github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261019154849-42845e33d02
 github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261019154849-42845e33d023/go.mod h1:p0JkVxHS3JKYxDz8kOYvMdPM8YRH94vZoWaFljD1vAg=
 github.com/qiangli/filebrowser/v2 v2.0.0-20261013004903-9c7b5c8e3d09 h1:8BBH4NPnF6UYP5GbGGu2iM6TS1h3EY+v8ml/555jcsg=
 github.com/qiangli/filebrowser/v2 v2.0.0-20261013004903-9c7b5c8e3d09/go.mod h1:86f/lT85KHk1f2smUl+MdgDvX4nO2lQqA+tWrGZhj0A=
+github.com/qiangli/filebrowser/v2 v2.0.0-20261021004418-d1d2feab4473 h1:3L6uJHiZ+gliJlpEjAjdnxTsVNr06+twiJvVpoYLNlI=
+github.com/qiangli/filebrowser/v2 v2.0.0-20261021004418-d1d2feab4473/go.mod h1:B6SGbzVBL1P5wBIfC1J8pX+gSUBrx6J8dBb+UK7ZnTs=
 github.com/qiangli/gfy v0.0.0-20261013004914-30d38f086034 h1:XHTsT5keRw4zmpOmnwUM1uiAtRlh2eJa/38OLDEtHmA=
 github.com/qiangli/gfy v0.0.0-20261013004914-30d38f086034/go.mod h1:20Lh1QjBlapQPgOsBpLT6lb7Cs7idsMhi/NqvqU6cG0=
 github.com/qiangli/gotreesitter v0.0.0-20261013004852-f03173f827ed h1:QDBn3tsuUCc05sBLh/NdxPJWGHjizNAWierrNFYLUpc=

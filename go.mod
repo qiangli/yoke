@@ -433,7 +433,7 @@ replace github.com/qiangli/yoke/pkg/llmgw => ./pkg/llmgw
 // pkg/provider is the S472 provider contract + dispatcher + DO adapter (nested, stdlib-only, go 1.26 for cloudbox/hub)
 replace github.com/qiangli/yoke/pkg/provider => ./pkg/provider
 
-replace github.com/filebrowser/filebrowser/v2 => github.com/qiangli/filebrowser/v2 v2.0.0-20261013004903-9c7b5c8e3d09
+replace github.com/filebrowser/filebrowser/v2 => github.com/qiangli/filebrowser/v2 v2.0.0-20261021004418-d1d2feab4473
 
 replace modernc.org/sqlite => github.com/qiangli/sqlite v1.50.2-0.20261018085128-5fb52bf328cb
 
