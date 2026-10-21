@@ -250,8 +250,10 @@ func TestRunInjectsProxyEnvForEgress(t *testing.T) {
 	rt.selectWorkspace(t, "skel")
 	now := rt.renv.now()
 	recs := []exposeRecord{
-		{Name: "proxy", Kind: "egress", Target: "a.example.com,*.example.org", Port: 3128, Expires: now.Add(time.Hour)},
-		{Name: "old", Kind: "egress", Target: "a.example.com", Port: 3128, Expires: now.Add(-time.Second)},
+		{Name: "proxy", Kind: "egress", Target: "a.example.com,*.example.org", Port: 3128,
+			AppURL: testAppURL("proxy"), Expires: now.Add(time.Hour)},
+		{Name: "old", Kind: "egress", Target: "a.example.com", Port: 3128,
+			AppURL: testAppURL("old"), Expires: now.Add(-time.Second)},
 	}
 	got := exposeRunEnv(recs, now)
 	for k, want := range map[string]string{
@@ -273,7 +275,8 @@ func TestRunInjectsProxyEnvForEgress(t *testing.T) {
 	// a dks-expose Secrets ref to the run Secret.
 	rt.renv.listExposes = func(context.Context, dagrun.Context) ([]exposeRecord, error) {
 		return []exposeRecord{
-			{Name: "proxy", Kind: "egress", Target: "a.example.com", Port: 3128, Expires: now.Add(time.Hour)},
+			{Name: "proxy", Kind: "egress", Target: "a.example.com", Port: 3128,
+				AppURL: testAppURL("proxy"), Expires: now.Add(time.Hour)},
 		}, nil
 	}
 	code, stdout, stderr := rt.exec(t, "run", "--emit", "manifest", "--", "echo", "hi")
@@ -318,7 +321,8 @@ func TestRunInjectsProxyEnvForEgress(t *testing.T) {
 	now2 := rt2.renv.now()
 	rt2.renv.listExposes = func(context.Context, dagrun.Context) ([]exposeRecord, error) {
 		return []exposeRecord{
-			{Name: "proxy", Kind: "egress", Target: "a.example.com", Port: 3128, Expires: now2.Add(time.Hour)},
+			{Name: "proxy", Kind: "egress", Target: "a.example.com", Port: 3128,
+				AppURL: testAppURL("proxy"), Expires: now2.Add(time.Hour)},
 		}, nil
 	}
 	rt2.runner.gets = [][]byte{

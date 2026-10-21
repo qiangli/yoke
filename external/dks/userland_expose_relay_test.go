@@ -246,9 +246,7 @@ func TestRunAssignsDeterministicLocalPortsAndEnv(t *testing.T) {
 	rt := newRunTest(t)
 	rt.selectWorkspace(t, "skel")
 	now := rt.renv.now()
-	appURL := func(name string) string {
-		return testSatellite + "/matrix/h/" + testOutpostHost + "/app/" + name + "/"
-	}
+	appURL := testAppURL
 	// Deliberately NOT in name order: the plan sorts, the caller need not.
 	recs := []exposeRecord{
 		{Name: "web", Kind: exposeKindHTTP, Target: "http://127.0.0.1:9000", Port: exposeHTTPPort,

@@ -335,15 +335,21 @@ func (e exposeRelay) address() string {
 	return fmt.Sprintf("http://127.0.0.1:%d", e.port)
 }
 
-// planRelays assigns every LIVE expose a deterministic loopback port, in
-// expose-name order so the same set always plans the same ports. Order of
-// assignment is load-bearing: the fixed claims (egress 3128, a tcp
+// planRelays assigns every SERVEABLE expose a deterministic loopback port,
+// in expose-name order so the same set always plans the same ports. Order
+// of assignment is load-bearing: the fixed claims (egress 3128, a tcp
 // expose's own target port) are taken FIRST, then http and git fill 18080
 // upward around them, so adding an http expose never moves a tcp one.
+//
+// Serveable means live AND carrying an app route. This is the ONE filter
+// both halves of the injection run through, so the environment can never
+// name a loopback port no relay is listening on — an expose past its TTL,
+// or one recorded before the app route was part of the record, contributes
+// neither a relay nor a variable.
 func planRelays(recs []exposeRecord, now time.Time) []exposeRelay {
 	var live []exposeRecord
 	for _, r := range recs {
-		if r.live(now) {
+		if r.live(now) && r.AppURL != "" {
 			live = append(live, r)
 		}
 	}
@@ -401,12 +407,6 @@ func relaySpecs(recs []exposeRecord, now time.Time) []dagrun.Relay {
 	plan := planRelays(recs, now)
 	out := make([]dagrun.Relay, 0, len(plan))
 	for _, e := range plan {
-		if e.rec.AppURL == "" {
-			// Without an app route there is nothing to dial; a relay that
-			// listened anyway would answer a pod with a connection that
-			// goes nowhere.
-			continue
-		}
 		spec := dagrun.Relay{
 			Name:      e.rec.Name,
 			Mode:      e.rec.relayMode(),

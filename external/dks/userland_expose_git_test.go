@@ -175,13 +175,13 @@ func TestRunInjectsGitInsteadOfEnvWithoutCredential(t *testing.T) {
 	rt.selectWorkspace(t, "skel")
 	now := rt.renv.now()
 	recs := []exposeRecord{
-		{Name: "git", Kind: exposeGitKind, Target: "octo/app,octo/*",
+		{Name: "git", Kind: exposeGitKind, Target: "octo/app,octo/*", AppURL: testAppURL("git"),
 			Upstream: defaultGitUpstream, Port: exposeHTTPPort, Expires: now.Add(time.Hour)},
-		{Name: "mirror", Kind: exposeGitKind, Target: "other/*",
+		{Name: "mirror", Kind: exposeGitKind, Target: "other/*", AppURL: testAppURL("mirror"),
 			Upstream: "https://git.example.com", Port: exposeHTTPPort, Expires: now.Add(time.Hour)},
-		{Name: "old", Kind: exposeGitKind, Target: "octo/app",
+		{Name: "old", Kind: exposeGitKind, Target: "octo/app", AppURL: testAppURL("old"),
 			Upstream: defaultGitUpstream, Port: exposeHTTPPort, Expires: now.Add(-time.Second)},
-		{Name: "proxy", Kind: exposeEgressKind, Target: "a.example.com",
+		{Name: "proxy", Kind: exposeEgressKind, Target: "a.example.com", AppURL: testAppURL("proxy"),
 			Port: exposeEgressPort, Expires: now.Add(time.Hour)},
 	}
 	got := exposeRunEnv(recs, now)

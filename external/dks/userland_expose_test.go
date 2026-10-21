@@ -102,6 +102,14 @@ func appliedObjects(t *testing.T, calls []runnerCall) map[string]map[string]any 
 	return out
 }
 
+// testAppURL is the matrix-tunnel app route one expose records: what an
+// in-pod relay dials, and — with the TTL — what makes a record SERVEABLE.
+// A fixture without it is an expose from before the app route was part of
+// the record, and contributes neither a relay nor a variable.
+func testAppURL(name string) string {
+	return testSatellite + "/matrix/h/" + testOutpostHost + "/app/" + name + "/"
+}
+
 // freeLoopbackPorts hands out n ports nothing is listening on, so a relay
 // test can bind them itself.
 func freeLoopbackPorts(t *testing.T, n int) []int {
@@ -480,10 +488,12 @@ func TestRunInjectsExposeEnv(t *testing.T) {
 	now := rt.renv.now()
 	rt.renv.listExposes = func(context.Context, dagrun.Context) ([]exposeRecord, error) {
 		return []exposeRecord{
-			{Name: "web", Kind: exposeKindHTTP, Target: "http://127.0.0.1:9000", Expires: now.Add(time.Hour),
-				Env: []string{"ANTHROPIC_BASE_URL={url}v1"}},
-			{Name: "code-db", Kind: exposeKindTCP, Target: "tcp://127.0.0.1:5432", Port: 5432, Expires: now.Add(time.Hour)},
-			{Name: "old", Kind: exposeKindHTTP, Target: "http://127.0.0.1:9100", Expires: now.Add(-time.Second)},
+			{Name: "web", Kind: exposeKindHTTP, Target: "http://127.0.0.1:9000", AppURL: testAppURL("web"),
+				Expires: now.Add(time.Hour), Env: []string{"ANTHROPIC_BASE_URL={url}v1"}},
+			{Name: "code-db", Kind: exposeKindTCP, Target: "tcp://127.0.0.1:5432", Port: 5432,
+				AppURL: testAppURL("code-db"), Expires: now.Add(time.Hour)},
+			{Name: "old", Kind: exposeKindHTTP, Target: "http://127.0.0.1:9100", AppURL: testAppURL("old"),
+				Expires: now.Add(-time.Second)},
 		}, nil
 	}
 
