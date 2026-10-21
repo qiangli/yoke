@@ -23,7 +23,7 @@ what those callers use:
 - `(*Error).Unwrap() []error` — standard multi-error unwrapping so
   `errors.Is`/`errors.As` traverse the aggregate.
 - `(*Error).Len() int` and `Group` (`Go(func() error)`,
-  `Wait() *Error`) — added in S488.3d for the Linux-only buildah
+  `Wait() *Error`) — added in S488.3e for the Linux-only buildah
   `imagebuildah` caller (concurrent stage builds); `Wait` returns nil
   when every task succeeded.
 

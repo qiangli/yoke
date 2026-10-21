@@ -3,7 +3,7 @@ package multierror
 import "sync"
 
 // Group runs functions concurrently and aggregates their errors,
-// written for the buildah imagebuildah caller (S488.3d Linux engine
+// written for the buildah imagebuildah caller (S488.3e Linux engine
 // graph): a zero-value Group, Go per task, then one Wait.
 type Group struct {
 	wg  sync.WaitGroup
