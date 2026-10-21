@@ -42,8 +42,8 @@ require (
 	github.com/qiangli/coreutils v0.0.0-20261019154849-42845e33d023
 	github.com/qiangli/gfy v0.0.0-20261013004914-30d38f086034
 	github.com/qiangli/yoke/pkg/llmgw v0.0.0-00010101000000-000000000000
-	github.com/qiangli/yoke/pkg/provider v0.0.0-00010101000000-000000000000
 	github.com/qiangli/yoke/pkg/oci v0.0.0-00010101000000-000000000000
+	github.com/qiangli/yoke/pkg/provider v0.0.0-00010101000000-000000000000
 	github.com/rjeczalik/notify v0.9.3
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/sergi/go-diff v1.4.0
@@ -437,3 +437,8 @@ replace github.com/qiangli/yoke/pkg/provider => ./pkg/provider
 replace github.com/filebrowser/filebrowser/v2 => github.com/qiangli/filebrowser/v2 v2.0.0-20261013004903-9c7b5c8e3d09
 
 replace modernc.org/sqlite => github.com/qiangli/sqlite v1.50.2-0.20261018085128-5fb52bf328cb
+
+// S488.3a: managed billy without the MPL-2.0 cyphar/filepath-securejoin
+// dependency (clean-room boundJoin in osfs/boundjoin.go). Removes cyphar
+// from the ./git dep graph while go-git keeps its osfs API.
+replace github.com/go-git/go-billy/v5 => ./external/go-billy

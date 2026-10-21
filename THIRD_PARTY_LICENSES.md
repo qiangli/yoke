@@ -26,6 +26,7 @@ that patch nor GNU m4 source is linked into the Go multicall binary.
 | [ebitengine/purego](https://github.com/ebitengine/purego) | Apache-2.0 | pkg/collate, pkg/ctype (linked dependency v0.10.1; dlopen/dlsym FFI to glibc strcoll_l / \*_l ctype functions, no cgo — not copied source) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | MIT | pkg/feed/adapters (reference adapter logic adapted to Go per `docs/feed-adapter-contract.md`; pinned v2026.10.2) |
 | [coder/websocket](https://github.com/coder/websocket) | ISC | pkg/sshclient (linked dependency v1.8.14; WebSocket SSH transport) |
+| [go-git/go-billy](https://github.com/go-git/go-billy) | Apache-2.0 | external/go-billy (managed vendored copy of v5.9.0: fs.go, memfs, osfs, util, helper/* verbatim; `*_test.go` and `test/` helpers omitted; osfs/os_bound.go modified per its provenance header to call clean-room boundjoin.go instead of MPL-2.0 filepath-securejoin) |
 
 Go tools without a row above are fresh implementations written from the
 GNU / POSIX documentation (the per-file package comments say which).
