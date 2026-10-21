@@ -2,7 +2,9 @@ package fleet
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -145,17 +147,11 @@ func pairedToken(base string) string {
 	return outpostToken()
 }
 
-// SaveMasterToken copies the access_token out of a pre-migration agent.json
-// into MasterTokenPath (0600), labeled with that file's server. The token is
-// never returned or printed.
-func SaveMasterToken(fromAgentJSON string) (string, error) {
-	a, ok := readOutpostAgent(fromAgentJSON)
-	if !ok {
-		return "", fmt.Errorf("fleet: cannot read %s as an Outpost agent.json", fromAgentJSON)
-	}
-	if strings.TrimSpace(a.AccessToken) == "" {
-		return "", fmt.Errorf("fleet: %s has no access_token", fromAgentJSON)
-	}
+// writeMasterTokenFile stores a coordination-base credential at
+// MasterTokenPath (0600), labeled with the base URL it belongs to (line
+// 2), so the #599 ladder can tell it apart from other bases' labels.
+// The value is written, never returned or printed.
+func writeMasterTokenFile(tokenValue, base string) (string, error) {
 	path := MasterTokenPath()
 	if path == "" {
 		return "", fmt.Errorf("fleet: no config directory for the master token")
@@ -163,8 +159,8 @@ func SaveMasterToken(fromAgentJSON string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return "", err
 	}
-	body := strings.TrimSpace(a.AccessToken) + "\n"
-	if h := hostOf(a.ServerAddr); h != "" {
+	body := strings.TrimSpace(tokenValue) + "\n"
+	if h := hostOf(base); h != "" {
 		body += "https://" + h + "\n"
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".master-token-*")
@@ -187,6 +183,20 @@ func SaveMasterToken(fromAgentJSON string) (string, error) {
 		return "", err
 	}
 	return path, nil
+}
+
+// SaveMasterToken copies the access_token out of a pre-migration agent.json
+// into MasterTokenPath (0600), labeled with that file's server. The token is
+// never returned or printed.
+func SaveMasterToken(fromAgentJSON string) (string, error) {
+	a, ok := readOutpostAgent(fromAgentJSON)
+	if !ok {
+		return "", fmt.Errorf("fleet: cannot read %s as an Outpost agent.json", fromAgentJSON)
+	}
+	if strings.TrimSpace(a.AccessToken) == "" {
+		return "", fmt.Errorf("fleet: %s has no access_token", fromAgentJSON)
+	}
+	return writeMasterTokenFile(a.AccessToken, a.ServerAddr)
 }
 
 // NewMasterTokenCmd is `master-token save --from <agent.json>`, the writer a
@@ -216,5 +226,143 @@ func NewMasterTokenCmd() *cobra.Command {
 	}
 	save.Flags().StringVar(&from, "from", "", "pre-migration Outpost agent.json to read access_token from")
 	c.AddCommand(save)
+	c.AddCommand(newMasterTokenMintCmd())
 	return c
+}
+
+// coordTokenScopes is the standing set a migrated host needs for
+// fleet coordination: cross-host mb, inbox, the fleet registry. Nothing
+// wider — the migration hook must not mint an admin-capable credential.
+var coordTokenScopes = []string{"tasks:read", "tasks:write"}
+
+// coordTokenName derives the per-host coordination token name. One token
+// per host, revocable individually: the shared manual
+// DHNT_FLEET_COORD_TOKEN goes away.
+func coordTokenName(host string) (string, error) {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "" {
+		return "", fmt.Errorf("fleet: cannot determine the host name (pass --host-name)")
+	}
+	var b strings.Builder
+	for _, r := range host {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('-')
+		}
+	}
+	name := "coord-" + b.String()
+	if len(name) > 64 {
+		name = name[:64]
+	}
+	name = strings.Trim(name, "-.")
+	if err := validateTokenName(name); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+// newMasterTokenMintCmd is `master-token mint`, the S490.5 migration
+// hook: moving a host to a satellite mints that host's own coordination
+// token from its existing ai.dhnt.io credential and writes the
+// master-token file, so cross-host mb keeps working with no console
+// step. The minted value is never printed. Re-running replaces the
+// file (revoking the previous coord-<host> token it replaced).
+func newMasterTokenMintCmd() *cobra.Command {
+	var from, hostName, ttl string
+	mint := &cobra.Command{
+		Use:   "mint",
+		Short: "Mint this host's own coordination token and save it as the master credential (0600; never printed)",
+		Long: "Mint this host's own coordination token and save it as the master credential.\n\n" +
+			"Moving a host to a satellite mints its own tasks:read,tasks:write\n" +
+			"coordination token — name coord-<host> — from the host's existing\n" +
+			"coordination-base credential, and writes ~/.config/bashy/master-token\n" +
+			"(0600, base URL on line 2) exactly like `master-token save`. The\n" +
+			"value is never printed. Re-running replaces the file and revokes\n" +
+			"the previous coord-<host> token it replaced: one token per host,\n" +
+			"revocable individually.",
+		Args:          cobra.NoArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := validateTokenTTL(ttl); err != nil {
+				return err
+			}
+			host := strings.TrimSpace(hostName)
+			if host == "" {
+				h, err := os.Hostname()
+				if err != nil {
+					return fmt.Errorf("fleet: cannot determine the host name (pass --host-name): %w", err)
+				}
+				host = h
+			}
+			name, err := coordTokenName(host)
+			if err != nil {
+				return err
+			}
+			// The caller credential: --from's access_token, or — when the
+			// host is still paired to the base — the current pairing via
+			// ResolveCloud. The #599 ladder rule is unchanged.
+			var base, caller string
+			if from != "" {
+				a, ok := readOutpostAgent(from)
+				if !ok {
+					return fmt.Errorf("fleet: cannot read %s as an Outpost agent.json", from)
+				}
+				if strings.TrimSpace(a.AccessToken) == "" {
+					return fmt.Errorf("fleet: %s has no access_token", from)
+				}
+				base, caller = a.ServerAddr, strings.TrimSpace(a.AccessToken)
+			} else {
+				base, caller = ResolveCloud("", "")
+			}
+			if caller == "" {
+				return fmt.Errorf("fleet: no coordination-base credential (pass --from <agent.json> or pair to the base first)")
+			}
+			if strings.TrimSpace(base) == "" {
+				base = "https://ai.dhnt.io"
+			}
+			client := TokenClient{BaseURL: strings.TrimRight(base, "/"), Token: caller, HTTP: httpClient()}
+			m, err := client.Create(name, coordTokenScopes, ttl)
+			if err != nil {
+				// Idempotent re-run: the previous coord-<host> row still
+				// holds the name (409), so revoke it and mint again.
+				var terr *TokenError
+				if !errors.As(err, &terr) || terr.Status != http.StatusConflict {
+					return err
+				}
+				rows, lerr := client.List()
+				if lerr != nil {
+					return err
+				}
+				prev := ""
+				for _, r := range rows {
+					if r.Name == name {
+						prev = r.ID
+						break
+					}
+				}
+				if prev == "" {
+					return err
+				}
+				if rerr := client.Revoke(prev); rerr != nil {
+					return err
+				}
+				if m, err = client.Create(name, coordTokenScopes, ttl); err != nil {
+					return err
+				}
+			}
+			path, err := writeMasterTokenFile(m.Token, base)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "minted %s (%s) saved master token to %s\n", m.Name, m.ID, path)
+			return nil
+		},
+	}
+	mint.Flags().StringVar(&from, "from", "", "pre-migration Outpost agent.json to mint from (else the current pairing via ResolveCloud)")
+	mint.Flags().StringVar(&hostName, "host-name", "", "host the coord-<host> token is minted for (default os.Hostname)")
+	mint.Flags().StringVar(&ttl, "ttl", "365d", "time to live, e.g. 90d (max 365d)")
+	return mint
 }
