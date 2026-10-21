@@ -149,28 +149,49 @@ func splitComps(p string) []string {
 // joinStack reassembles components into a path. The stack always
 // derives from an absolute root, so a bare join would lose the
 // leading separator (splitRoot drops empty components); restore it.
+//
+// The volume seed carries its own separator (vol + Separator, e.g.
+// "C:\"): seeding filepath.Join with a bare "C:" would produce a
+// drive-relative path (stdlib Join(`C:`, `f`) = `C:f`), letting the
+// result escape the root on Windows.
 func joinStack(vol string, stack []string) string {
 	if vol != "" {
-		parts := stack
-		if len(parts) == 0 || parts[0] != vol {
-			parts = append([]string{vol}, parts...)
+		rest := stack
+		if len(rest) > 0 && rest[0] == vol {
+			rest = rest[1:]
 		}
-		return filepath.Join(parts...)
+		seed := vol + string(filepath.Separator)
+		if len(rest) == 0 {
+			return seed
+		}
+		return filepath.Join(append([]string{seed}, rest...)...)
 	}
 	return string(filepath.Separator) + filepath.Join(stack...)
 }
 
-// withinBase reports whether p is base or descends from it.
+// withinBase reports whether p is base or descends from it. A base
+// that is itself a filesystem root ("/" on Unix, "C:\" on Windows —
+// the only Clean forms ending in a separator) contains every path
+// beneath its prefix; requiring a further separator would check
+// prefix "//" and reject everything under "/".
 func withinBase(base, p string) bool {
+	if runtime.GOOS == "windows" {
+		if strings.EqualFold(p, base) {
+			return true
+		}
+		if len(p) <= len(base) || !strings.EqualFold(p[:len(base)], base) {
+			return false
+		}
+		if strings.HasSuffix(base, string(filepath.Separator)) {
+			return true
+		}
+		return p[len(base)] == filepath.Separator
+	}
 	if p == base {
 		return true
 	}
-	if runtime.GOOS == "windows" {
-		if len(p) > len(base) && strings.EqualFold(p[:len(base)], base) &&
-			p[len(base)] == filepath.Separator {
-			return true
-		}
-		return false
+	if base == string(filepath.Separator) {
+		return strings.HasPrefix(p, base)
 	}
 	return strings.HasPrefix(p, base+string(filepath.Separator))
 }
