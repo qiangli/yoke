@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -101,6 +102,34 @@ func appliedObjects(t *testing.T, calls []runnerCall) map[string]map[string]any 
 	return out
 }
 
+// testAppURL is the matrix-tunnel app route one expose records: what an
+// in-pod relay dials, and — with the TTL — what makes a record SERVEABLE.
+// A fixture without it is an expose from before the app route was part of
+// the record, and contributes neither a relay nor a variable.
+func testAppURL(name string) string {
+	return testSatellite + "/matrix/h/" + testOutpostHost + "/app/" + name + "/"
+}
+
+// freeLoopbackPorts hands out n ports nothing is listening on, so a relay
+// test can bind them itself.
+func freeLoopbackPorts(t *testing.T, n int) []int {
+	t.Helper()
+	out := make([]int, 0, n)
+	var lns []net.Listener
+	for i := 0; i < n; i++ {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("reserve a port: %v", err)
+		}
+		lns = append(lns, ln)
+		out = append(out, ln.Addr().(*net.TCPAddr).Port)
+	}
+	for _, ln := range lns {
+		_ = ln.Close()
+	}
+	return out
+}
+
 // FIRST RED TEST of S487.2: an admin-grade target or an app name colliding
 // with an Outpost built-in is REFUSED without --force, having registered
 // nothing with Outpost and applied nothing to the plane.
@@ -146,10 +175,14 @@ func TestExposeRefusesAdminAppWithoutForce(t *testing.T) {
 	}
 }
 
-// expose applies exactly a Secret, a Deployment and a Service, all labelled
-// dks.dhnt.io/expose=<name> and annotated with the expiry; the token lives
-// ONLY in the Secret, and only its sha256 ever reaches outpost's argv.
-func TestExposeAppliesLabelledSecretDeploymentServiceAndNoTokenInArgv(t *testing.T) {
+// RED (S487.2): expose applies EXACTLY ONE object — the labelled Secret
+// dks-expose-<name> — and no Deployment and no Service. A relay Deployment
+// could not be reached from a vk-podman pod at all (its DNS is podman's and
+// its network is the podman bridge), so the relay moved INTO the run pod and
+// these two objects are gone. The Secret carries the whole record in its
+// annotations, the token lives ONLY in its stringData, and only the sha256
+// ever reaches outpost's argv.
+func TestExposeAppliesOnlySecretNoDeploymentOrService(t *testing.T) {
 	et := newExposeTest(t)
 	et.selectWorkspace(t, "skel")
 
@@ -183,58 +216,73 @@ func TestExposeAppliesLabelledSecretDeploymentServiceAndNoTokenInArgv(t *testing
 		t.Fatalf("outpost argv LEAKS the token: %q", joined)
 	}
 
-	// Three objects, one per kind, every one labelled and annotated.
+	// ONE object, and it is the Secret.
 	objs := appliedObjects(t, et.runner.calls)
-	for _, kind := range []string{"Secret", "Deployment", "Service"} {
-		obj, ok := objs[kind]
-		if !ok {
-			t.Fatalf("expose applied no %s (applied %v)", kind, objs)
-		}
-		meta, _ := obj["metadata"].(map[string]any)
-		labels, _ := meta["labels"].(map[string]any)
-		if labels[exposeLabel] != "web" {
-			t.Errorf("%s labels = %v, want %s=web", kind, labels, exposeLabel)
-		}
-		if labels[dagrun.LabelManagedBy] != dagrun.ManagedByBashy {
-			t.Errorf("%s is not label-owned by bashy: %v", kind, labels)
-		}
-		annots, _ := meta["annotations"].(map[string]any)
-		expires, _ := annots[exposeExpiresAnnot].(string)
-		if _, err := time.Parse(time.RFC3339, expires); err != nil {
-			t.Errorf("%s annotation %s = %q, want an RFC3339 instant", kind, exposeExpiresAnnot, expires)
+	if len(objs) != 1 {
+		t.Fatalf("expose applied %d kinds, want exactly the Secret: %v", len(objs), objs)
+	}
+	for _, gone := range []string{"Deployment", "Service"} {
+		if _, ok := objs[gone]; ok {
+			t.Errorf("expose still applies a %s: a vk-podman pod can reach neither", gone)
 		}
 	}
-	if name, _ := objs["Service"]["metadata"].(map[string]any)["name"].(string); name != "web" {
-		t.Errorf("Service name = %q, want the expose name web (pods reach http://web:8080)", name)
+	secret, ok := objs["Secret"]
+	if !ok {
+		t.Fatalf("expose applied no Secret (applied %v)", objs)
+	}
+	meta, _ := secret["metadata"].(map[string]any)
+	if name, _ := meta["name"].(string); name != dagrun.ExposeSecretName("web") {
+		t.Errorf("Secret name = %q, want %q (the name Render's secretKeyRef points at)", name, dagrun.ExposeSecretName("web"))
+	}
+	labels, _ := meta["labels"].(map[string]any)
+	if labels[exposeLabel] != "web" {
+		t.Errorf("Secret labels = %v, want %s=web", labels, exposeLabel)
+	}
+	if labels[dagrun.LabelManagedBy] != dagrun.ManagedByBashy {
+		t.Errorf("Secret is not label-owned by bashy: %v", labels)
+	}
+	if labels[dagrun.LabelWorkspace] != testWorkspaceID {
+		t.Errorf("Secret is not scoped to the workspace: %v", labels)
 	}
 
-	// The token is in the Secret and nowhere else — not in another object,
-	// not on stdout, not on stderr.
-	secretRaw, _ := json.Marshal(objs["Secret"])
-	if !strings.Contains(string(secretRaw), testExposeToken) {
+	// The whole record is in the annotations: with no Service left, this is
+	// the only place `exposed` and `dks run` read an expose back from.
+	annots, _ := meta["annotations"].(map[string]any)
+	expires, _ := annots[exposeExpiresAnnot].(string)
+	if _, err := time.Parse(time.RFC3339, expires); err != nil {
+		t.Errorf("Secret annotation %s = %q, want an RFC3339 instant", exposeExpiresAnnot, expires)
+	}
+	wantAppURL := testSatellite + "/matrix/h/" + testOutpostHost + "/app/web/"
+	for annot, want := range map[string]string{
+		exposeKindAnnot:   exposeKindHTTP,
+		exposeTargetAnnot: "http://127.0.0.1:9000",
+		exposeAppURLAnnot: wantAppURL,
+		exposePortAnnot:   strconv.Itoa(exposeHTTPPort),
+		exposeEnvAnnot:    `["API={url}v1"]`,
+	} {
+		if got, _ := annots[annot].(string); got != want {
+			t.Errorf("Secret annotation %s = %q, want %q", annot, got, want)
+		}
+	}
+
+	// The token is in the Secret's stringData and nowhere else — not in an
+	// annotation, not on stdout, not on stderr.
+	stringData, _ := secret["stringData"].(map[string]any)
+	if stringData[exposeTokenKey] != testExposeToken {
 		t.Errorf("the Secret does not carry %s", exposeTokenKey)
 	}
-	for kind, obj := range objs {
-		if kind == "Secret" {
-			continue
-		}
-		raw, _ := json.Marshal(obj)
-		if strings.Contains(string(raw), testExposeToken) {
-			t.Errorf("%s LEAKS the token: %s", kind, raw)
-		}
+	annotRaw, _ := json.Marshal(annots)
+	if strings.Contains(string(annotRaw), testExposeToken) {
+		t.Errorf("an annotation LEAKS the token: %s", annotRaw)
 	}
 	if strings.Contains(stdout, testExposeToken) || strings.Contains(stderr, testExposeToken) {
 		t.Error("expose printed the token")
 	}
 
-	// The relay reaches the app only through the matrix-tunnel app route.
-	wantUpstream := testSatellite + "/matrix/h/" + testOutpostHost + "/app/web/"
-	depRaw, _ := json.Marshal(objs["Deployment"])
-	if !strings.Contains(string(depRaw), wantUpstream) {
-		t.Errorf("Deployment does not point the relay at %q:\n%s", wantUpstream, depRaw)
-	}
-	if !strings.Contains(string(depRaw), `"relay"`) {
-		t.Errorf("Deployment does not run 'dks relay':\n%s", depRaw)
+	// What the expose publishes is the variable its runs will carry: the
+	// pod-side address is a loopback port `dks run` plans per run.
+	if strings.TrimSpace(stdout) != "DKS_WEB_URL" {
+		t.Errorf("expose printed %q, want the run variable DKS_WEB_URL", stdout)
 	}
 }
 
@@ -268,14 +316,18 @@ func TestUnexposeDeletesOnlyLabelled(t *testing.T) {
 	if strings.Contains(argv, "--all") {
 		t.Errorf("delete argv %q is not label-scoped", argv)
 	}
-	for _, kind := range []string{"secrets", "deployments", "services"} {
-		if !strings.Contains(argv, kind) {
-			t.Errorf("delete argv %q does not remove %s", argv, kind)
+	if !strings.Contains(argv, "secrets") {
+		t.Errorf("delete argv %q does not remove the expose Secret", argv)
+	}
+	// An expose is ONE object now: naming kinds it never created would make
+	// unexpose reach past itself.
+	for _, gone := range []string{"deployments", "services", "jobs", "pods"} {
+		if strings.Contains(argv, gone) {
+			t.Errorf("delete argv %q reaches beyond the expose's own Secret (%s)", argv, gone)
 		}
 	}
-	// Nothing of another expose's, and no run objects, may be in scope.
-	if strings.Contains(argv, dagrun.LabelRun+"=") || strings.Contains(argv, "jobs") || strings.Contains(argv, "pods") {
-		t.Errorf("delete argv %q reaches beyond the expose's own objects", argv)
+	if strings.Contains(argv, dagrun.LabelRun+"=") {
+		t.Errorf("delete argv %q reaches into a run's objects", argv)
 	}
 }
 
@@ -436,10 +488,12 @@ func TestRunInjectsExposeEnv(t *testing.T) {
 	now := rt.renv.now()
 	rt.renv.listExposes = func(context.Context, dagrun.Context) ([]exposeRecord, error) {
 		return []exposeRecord{
-			{Name: "web", Kind: exposeKindHTTP, Target: "http://127.0.0.1:9000", Expires: now.Add(time.Hour),
-				Env: []string{"ANTHROPIC_BASE_URL={url}v1"}},
-			{Name: "code-db", Kind: exposeKindTCP, Target: "tcp://127.0.0.1:5432", Port: 5432, Expires: now.Add(time.Hour)},
-			{Name: "old", Kind: exposeKindHTTP, Target: "http://127.0.0.1:9100", Expires: now.Add(-time.Second)},
+			{Name: "web", Kind: exposeKindHTTP, Target: "http://127.0.0.1:9000", AppURL: testAppURL("web"),
+				Expires: now.Add(time.Hour), Env: []string{"ANTHROPIC_BASE_URL={url}v1"}},
+			{Name: "code-db", Kind: exposeKindTCP, Target: "tcp://127.0.0.1:5432", Port: 5432,
+				AppURL: testAppURL("code-db"), Expires: now.Add(time.Hour)},
+			{Name: "old", Kind: exposeKindHTTP, Target: "http://127.0.0.1:9100", AppURL: testAppURL("old"),
+				Expires: now.Add(-time.Second)},
 		}, nil
 	}
 
@@ -456,10 +510,13 @@ func TestRunInjectsExposeEnv(t *testing.T) {
 		k, v, _ := strings.Cut(kv, "=")
 		got[k] = v
 	}
+	// Every address is LOOPBACK: the relay serving it runs in this pod.
+	// web is the only http expose, so it takes the first http port; code-db
+	// keeps its own target port.
 	for k, want := range map[string]string{
-		"DKS_WEB_URL":        "http://web:8080",
-		"ANTHROPIC_BASE_URL": "http://web:8080v1",
-		"DKS_CODE_DB_ADDR":   "code-db:5432",
+		"DKS_WEB_URL":        "http://127.0.0.1:18080",
+		"ANTHROPIC_BASE_URL": "http://127.0.0.1:18080v1",
+		"DKS_CODE_DB_ADDR":   "127.0.0.1:5432",
 	} {
 		if got[k] != want {
 			t.Errorf("manifest env %s = %q, want %q", k, got[k], want)

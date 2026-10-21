@@ -36,8 +36,8 @@ Runs ON the Outpost host (local `outpost apps add`; remote hosts are out of scop
 ```
 bashy dks expose <http://127.0.0.1:P | tcp://host:port | proxy:egress | proxy:git> \
     --as <name> [--ttl 1h] [--allow a,b] [--env K=V] [--force]
-bashy dks unexpose <name>     # outpost apps rm + delete labelled cluster objects
-bashy dks exposed             # NAME KIND TARGET EXPIRES STATE, from labels
+bashy dks unexpose <name>     # outpost apps rm + delete the labelled Secret
+bashy dks exposed             # NAME KIND TARGET EXPIRES STATE, from the Secrets
 ```
 
 - `--ttl` defaults to 1h, max 24h.
@@ -49,31 +49,86 @@ bashy dks exposed             # NAME KIND TARGET EXPIRES STATE, from labels
 - Audit: one line per expose, unexpose and refusal in the dks run journal. Tokens
   never appear in argv, logs, errors or the journal.
 
-## In-cluster relay
+## The relay runs IN the run pod (S487.2)
 
-`bashy dks relay` is a hidden subcommand that runs in the normal dks run image.
-Token comes from env `EXPOSE_TOKEN` (Secret `secretKeyRef`), the upstream app-route
-URL from env or flag. Neither is ever in argv or logs.
+`bashy dks relay` is a hidden subcommand that runs in the normal dks run image. Its
+token comes from the environment and from nowhere else; neither the token nor the
+app-route URL is ever in argv or logs.
 
-| Mode | Listens | Behaviour |
-|------|---------|-----------|
-| `--mode http` | `:8080` | reverse-proxy to the app route URL, adds both headers, optional `--path-prefix` (e.g. `/k/<door-peer>/`) |
-| `--mode tcp` | `:<port>` | per connection, WebSocket-dial the app route with both headers, byte-bridge |
-| `--mode egress` | `:3128` | HTTP CONNECT proxy; per CONNECT, WebSocket-dial `/app/<app>/?dst=host:port` (S487.3) |
+| Mode | Behaviour |
+|------|-----------|
+| `--mode http` | reverse-proxy to the app route URL, adds both headers, optional `--path-prefix` (e.g. `/k/<door-peer>/`) |
+| `--mode tcp` | per connection, WebSocket-dial the app route with both headers, byte-bridge |
+| `--mode egress` | HTTP CONNECT proxy; per CONNECT, WebSocket-dial `/app/<app>/?dst=host:port` (S487.3) |
+
+The form the rendered Pod actually runs is the wrapper:
+
+```
+bashy dks relay --all -- <the run's own command>
+```
+
+It reads the run's relay list from `$DKS_RELAYS` (JSON, no secrets), binds every
+relay on `127.0.0.1:<local-port>` BEFORE anything else runs, then runs the command
+as a child with the wrapper's stdio, forwards signals to it, and exits with the
+child's exit code. Each relay's token arrives as `$DKS_EXPOSE_TOKEN_<NAME>`, via
+`valueFrom.secretKeyRef` on the expose's own Secret — never a literal, never argv.
+A relay stops accepting at its expiry; a relay already past its expiry at start is
+reported and skipped, because the run is not the expose.
+
+**Why in-pod, and not a relay Deployment behind a Service.** Live findings on the
+satellite DKS (vk-podman executor, 2026-10-21):
+
+- A relay Deployment needed run-pod placement to be schedulable at all.
+- Even running, a pod on a vk-podman node CANNOT use a cluster Service: its DNS is
+  podman's resolver (`Lookup db on 10.x.x.x:53: no such host`) and it sits on the
+  podman bridge, so a ClusterIP is unroutable (`web:8080` connection refused).
+- vk-podman supports exactly ONE container per Pod, so a sidecar is not available
+  either.
+
+In-pod is also portable to any Kubernetes and a tighter grant than default-deny
+through a Service: only the run that was given the exposes can reach them.
 
 ## Cluster objects
 
-Per expose `<name>`, in the workspace namespace: a Secret, a Deployment (1 replica
-relay) and a Service `<name>`, all labelled `dks.dhnt.io/expose=<name>` with annotation
-`dks.dhnt.io/expires=<RFC3339>`. Pods reach `http://<name>:8080` or `<name>:<port>`.
+Per expose `<name>`, in the workspace namespace: EXACTLY ONE object — the Secret
+`dks-expose-<name>`, labelled `dks.dhnt.io/expose=<name>` (plus the bashy
+ownership and workspace labels). No Deployment, no Service.
 
-`bashy dks run` / `--session` injects env for every live expose in the workspace:
+Its `stringData` holds `EXPOSE_TOKEN`; its annotations hold the whole record, so
+`exposed` and `dks run` read an expose back from the Secret and no second store
+exists anywhere:
 
-- `DKS_<NAME>_URL` (http) or `DKS_<NAME>_ADDR` (tcp)
-- egress also: `HTTPS_PROXY`/`HTTP_PROXY=http://<name>:3128`,
-  `NO_PROXY=.svc,.cluster.local,localhost`
-- plus any `--env K=V` recorded on the expose (stored on the Secret/annotation,
+| Annotation | Value |
+|------------|-------|
+| `dks.dhnt.io/expires` | RFC3339 expiry |
+| `dks.dhnt.io/expose-kind` | `http`, `tcp`, `egress`, `git` |
+| `dks.dhnt.io/expose-target` | the target as typed (proxy kinds: the allow list) |
+| `dks.dhnt.io/expose-allow` | the cleaned allow list (proxy kinds) |
+| `dks.dhnt.io/expose-app-url` | the app route an in-pod relay dials |
+| `dks.dhnt.io/expose-upstream` | a git expose's git host (the `insteadOf` match) |
+| `dks.dhnt.io/expose-port` | the expose's own port (a tcp target port; 8080 / 3128) |
+| `dks.dhnt.io/expose-env` | the recorded `--env` entries, JSON, `{url}` unsubstituted |
+
+`bashy dks run` / `--session` plans one deterministic LOOPBACK port per live
+expose, in expose-name order, and injects both halves off that one plan — the
+manifest relay list the pod's wrapper reads, and the environment naming it:
+
+- fixed claims first: `egress` takes `3128`, a `tcp` expose keeps its own target
+  port when free (else the next free from `18180`)
+- then `http` and `git` fill `18080` upward around them
+- `DKS_<NAME>_URL=http://127.0.0.1:<p>` (http, git, egress) or
+  `DKS_<NAME>_ADDR=127.0.0.1:<p>` (tcp)
+- egress also: `HTTPS_PROXY`/`HTTP_PROXY=http://127.0.0.1:3128`,
+  `NO_PROXY=localhost,127.0.0.1,.svc,.cluster.local`
+- git also: `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<i>`/`GIT_CONFIG_VALUE_<i>` wiring
+  `url.http://127.0.0.1:<p>/.insteadOf <upstream>/`, so a plain `git clone` in the
+  pod goes through the relay with NO credential in the pod
+- plus any `--env K=V` recorded on the expose (stored on the Secret annotation,
   `{url}` substituted)
+
+A value the dag manifest `Env:` line cannot carry — the comma-separated `NO_PROXY`
+bypass list — rides the run Secret under a `dks-expose` ref instead, and the pod
+still receives it via `secretKeyRef`.
 
 ## Verified against source
 

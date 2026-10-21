@@ -293,16 +293,22 @@ func (env *runEnv) run(cmd *cobra.Command, o runOptions, args []string) error {
 	}
 	secretStringData := make(map[string]string)
 	var credRefsForManifest []string
-	// Every LIVE expose of the workspace reaches the run as environment, so
-	// a pod learns where the exposed services are without being told. An
-	// explicit --env always wins over an expose's recorded entry. A value
-	// the manifest Env line cannot carry (the comma-separated NO_PROXY
-	// bypass list) rides the run Secret under a dks-expose ref instead, so
-	// generation still succeeds and the pod still receives every variable.
+	// Every LIVE expose of the workspace reaches the run twice over: as a
+	// RELAY the pod's own `dks relay --all` wrapper serves on 127.0.0.1,
+	// and as the ENVIRONMENT that names the loopback address of it — so a
+	// pod learns where the exposed services are without being told, and
+	// without needing a cluster Service it could not route to. Both come
+	// off ONE deterministic plan, so a variable always names the port its
+	// relay listens on. An explicit --env always wins over an expose's
+	// recorded entry. A value the manifest Env line cannot carry (the
+	// comma-separated NO_PROXY bypass list) rides the run Secret under a
+	// dks-expose ref instead, so generation still succeeds and the pod
+	// still receives every variable.
 	exposed, err := env.exposes(cmd.Context(), ctxRec)
 	if err != nil {
 		return fail(planeError(ctxRec, err))
 	}
+	relays := relaySpecs(exposed, env.now())
 	if vars := exposeRunEnv(exposed, env.now()); len(vars) > 0 {
 		if envVars == nil {
 			envVars = make(map[string]string, len(vars))
@@ -380,6 +386,7 @@ func (env *runEnv) run(cmd *cobra.Command, o runOptions, args []string) error {
 		Cwd:         ctxRec.Cwd,
 		Env:         envVars,
 		Venue:       dag.VenueCluster,
+		Relays:      relays,
 		Run: dagrun.RunSpec{
 			Kind:        kind,
 			Resources:   dagrun.Resources{CPU: o.cpu, Memory: o.memory},

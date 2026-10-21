@@ -1,21 +1,28 @@
 // userland_expose.go — the `bashy dks expose`, `unexpose`, `exposed` client
-// verbs and the hidden in-cluster `dks relay` (Sprint 487 expose contract).
+// verbs and the hidden `dks relay` the run pod wraps its command with
+// (Sprint 487 expose contract).
 //
 // What an expose is: ONE local service on this Outpost host, reachable from
 // the workspace's pods and from nowhere else. There is no new transport —
 // the bytes ride the existing matrix-tunnel app route
 // <satellite>/matrix/h/<host>/app/<app>/, so an expose is exactly an Outpost
-// app plus a token guard plus an in-cluster relay that holds the token.
+// app plus a token guard plus a relay that holds the token.
 //
-// Three objects per expose, all label-owned (dks.dhnt.io/expose=<name>): a
-// Secret holding EXPOSE_TOKEN, a 1-replica Deployment running `dks relay`,
-// and a Service named <name> so pods reach http://<name>:8080 (http) or
-// <name>:<port> (tcp). Default-deny: nothing exposed, nothing reachable.
+// ONE object per expose, label-owned (dks.dhnt.io/expose=<name>): the Secret
+// dks-expose-<name> holding EXPOSE_TOKEN, annotated with the whole record
+// (kind, target, allow list, app route, port, recorded env, expiry) so no
+// second store exists anywhere. There is deliberately NO relay Deployment
+// and NO Service: the relay runs INSIDE the run pod as its PID 1
+// (`bashy dks relay --all -- <command>`), listening on 127.0.0.1. See
+// pkg/dagrun/relay.go for why — a vk-podman pod cannot resolve or route to
+// a cluster Service at all, and in-pod is also the tighter grant: only the
+// run that was given the exposes can reach them.
 //
 // The token discipline is the whole security story: 32 random bytes hex,
 // minted here, written ONLY into the Secret, and handed to Outpost as a
 // sha256 — never as argv, never to a log, never to an error. Everything that
-// could print it goes through the hash instead.
+// could print it goes through the hash instead. It reaches a pod only as
+// $DKS_EXPOSE_TOKEN_<NAME>, projected by secretKeyRef from that one Secret.
 package dks
 
 import (
@@ -33,9 +40,12 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"os/exec"
+	"os/signal"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 	"unicode"
@@ -54,23 +64,34 @@ import (
 // `exposed` table and the run-env injection need, so neither has to keep a
 // second record anywhere.
 const (
-	exposeLabel         = "dks.dhnt.io/expose"
-	exposeExpiresAnnot  = "dks.dhnt.io/expires"
-	exposeKindAnnot     = "dks.dhnt.io/expose-kind"
-	exposeTargetAnnot   = "dks.dhnt.io/expose-target"
-	exposeEnvAnnot      = "dks.dhnt.io/expose-env"
+	exposeLabel        = "dks.dhnt.io/expose"
+	exposeExpiresAnnot = "dks.dhnt.io/expires"
+	exposeKindAnnot    = "dks.dhnt.io/expose-kind"
+	exposeTargetAnnot  = "dks.dhnt.io/expose-target"
+	exposeEnvAnnot     = "dks.dhnt.io/expose-env"
+	// exposeUpstreamAnnot is a git expose's GIT host (the insteadOf match),
+	// not the app route; exposeAppURLAnnot is the app route every relay
+	// dials. They are different things and both are needed.
 	exposeUpstreamAnnot = "dks.dhnt.io/expose-upstream"
+	exposeAppURLAnnot   = "dks.dhnt.io/expose-app-url"
+	exposeAllowAnnot    = "dks.dhnt.io/expose-allow"
+	// exposePortAnnot is the expose's own port: a tcp expose's target port
+	// (the run's preferred loopback port) and 8080/3128 for the others.
+	// With no Service to read it back off, the record carries it.
+	exposePortAnnot = "dks.dhnt.io/expose-port"
 )
 
 // exposeTokenHeader is the per-request guard Outpost checks on every HTTP
 // request and WebSocket upgrade to an exposed app.
 const exposeTokenHeader = "X-Dhnt-Expose-Token"
 
-// exposeTokenKey is the Secret key, and the relay's env var, holding the
-// token. The relay reads it from the environment ONLY.
-const exposeTokenKey = "EXPOSE_TOKEN"
+// exposeTokenKey is the Secret key holding the token, and the suffix of the
+// per-relay variable it is projected into. One definition, in pkg/dagrun,
+// because Render wires the secretKeyRef and the relay reads the variable.
+const exposeTokenKey = dagrun.ExposeTokenKey
 
-// The relay's remaining environment: where to proxy and when to stop.
+// The single-relay form's remaining environment: where to proxy and when to
+// stop. `--all` reads $DKS_RELAYS instead and needs neither.
 const (
 	exposeUpstreamKey = "EXPOSE_UPSTREAM"
 	exposeExpiresKey  = "EXPOSE_EXPIRES"
@@ -85,13 +106,26 @@ const (
 	exposeKindGit    = "proxy:git"
 )
 
-// exposeHTTPPort is the port an http expose's Service publishes: pods reach
-// it as http://<name>:8080, which is what `dks run` injects.
+// exposeHTTPPort is an http (and git) expose's recorded port. It is no
+// longer a Service port — pods reach the in-pod relay on a loopback port
+// `dks run` plans — but the record keeps a port so the table and the
+// planner have one shape for every kind.
 const exposeHTTPPort = 8080
 
-// The egress record kind, Outpost target and Service port. The CLI accepts
+// The loopback port bases `dks run` plans an in-pod relay on, deterministic
+// in expose-name order so the same set of exposes always yields the same
+// ports: http and git from 18080 up, a tcp expose on its own target port
+// when free and from 18180 up otherwise, egress always on 3128 (the port
+// every proxy-aware tool already expects).
+const (
+	relayHTTPPortBase = 18080
+	relayTCPPortBase  = 18180
+)
+
+// The egress record kind, Outpost target and proxy port. The CLI accepts
 // proxy:egress as the target spelling; the record, the relay mode and the
-// exposed table all use the short kind egress.
+// exposed table all use the short kind egress. 3128 is the port every
+// proxy-aware tool already expects, so an egress relay always claims it.
 const (
 	exposeEgressKind   = "egress"
 	exposeEgressTarget = "egress://"
@@ -113,7 +147,7 @@ const (
 // egress run inherits alongside the proxy variables.
 const (
 	egressNoProxyVar = "NO_PROXY"
-	egressNoProxy    = ".svc,.cluster.local,localhost,127.0.0.1"
+	egressNoProxy    = "localhost,127.0.0.1,.svc,.cluster.local"
 )
 
 // exposeSecretRefPrefix names the pseudo-vault of expose-provided Secret
@@ -232,17 +266,27 @@ func exposeOutpostError(err error) error {
 	return err
 }
 
-// exposeRecord is one expose as the plane holds it.
+// exposeRecord is one expose as the plane holds it — the Secret's label and
+// annotations, read back.
 type exposeRecord struct {
 	Name    string
 	Kind    string
 	Target  string
 	Expires time.Time
-	Port    int      // the Service port; 8080 for http
-	Env     []string // the recorded --env entries, {url} unsubstituted
+	// Port is the expose's own port: a tcp expose's target port, else 8080
+	// (http, git) or 3128 (egress). It is the run planner's PREFERRED
+	// loopback port for a tcp expose, not a Service port.
+	Port int
+	Env  []string // the recorded --env entries, {url} unsubstituted
 	// Upstream is a git expose's git host (default https://github.com): the
 	// value the run env's insteadOf rewrite matches against.
 	Upstream string
+	// AppURL is the matrix-tunnel app route an in-pod relay dials:
+	// <satellite>/matrix/h/<host>/app/<name>/. Minted at expose time,
+	// because that is where the satellite base and the host identity are.
+	AppURL string
+	// Allow is the proxy kinds' allow list, as registered with Outpost.
+	Allow []string
 }
 
 // live reports whether the expose is still inside its TTL.
@@ -250,18 +294,18 @@ func (r exposeRecord) live(now time.Time) bool {
 	return r.Expires.IsZero() || now.Before(r.Expires)
 }
 
-// address is what a pod uses to reach the expose: the http URL, the egress
-// proxy URL, or the tcp host:port. It is also the {url} substitution of the
-// recorded env.
-func (r exposeRecord) address() string {
-	if r.Kind == exposeKindTCP {
-		return fmt.Sprintf("%s:%d", r.Name, r.Port)
+// relayMode is the `dks relay` mode this expose is served by. A git expose
+// rides the plain http mode: Outpost's git app does the smart-HTTP
+// filtering and injects the HOST's credential beyond the app route.
+func (r exposeRecord) relayMode() string {
+	switch r.Kind {
+	case exposeKindTCP:
+		return dagrun.RelayModeTCP
+	case exposeEgressKind:
+		return dagrun.RelayModeEgress
+	default:
+		return dagrun.RelayModeHTTP
 	}
-	port := r.Port
-	if port == 0 {
-		port = exposeHTTPPort
-	}
-	return fmt.Sprintf("http://%s:%d", r.Name, port)
 }
 
 // envVarName is the DKS_<NAME>_ suffix variable of one expose: URL for an
@@ -272,6 +316,109 @@ func (r exposeRecord) envVarName() string {
 		suffix = "_ADDR"
 	}
 	return "DKS_" + strings.ToUpper(strings.ReplaceAll(r.Name, "-", "_")) + suffix
+}
+
+// exposeRelay pairs one LIVE expose with the loopback port its in-pod relay
+// will listen on.
+type exposeRelay struct {
+	rec  exposeRecord
+	port int
+}
+
+// address is what the pod uses to reach the expose: the loopback http URL,
+// or host:port for a tcp expose. It is also the {url} substitution of the
+// recorded env.
+func (e exposeRelay) address() string {
+	if e.rec.Kind == exposeKindTCP {
+		return fmt.Sprintf("127.0.0.1:%d", e.port)
+	}
+	return fmt.Sprintf("http://127.0.0.1:%d", e.port)
+}
+
+// planRelays assigns every SERVEABLE expose a deterministic loopback port,
+// in expose-name order so the same set always plans the same ports. Order
+// of assignment is load-bearing: the fixed claims (egress 3128, a tcp
+// expose's own target port) are taken FIRST, then http and git fill 18080
+// upward around them, so adding an http expose never moves a tcp one.
+//
+// Serveable means live AND carrying an app route. This is the ONE filter
+// both halves of the injection run through, so the environment can never
+// name a loopback port no relay is listening on — an expose past its TTL,
+// or one recorded before the app route was part of the record, contributes
+// neither a relay nor a variable.
+func planRelays(recs []exposeRecord, now time.Time) []exposeRelay {
+	var live []exposeRecord
+	for _, r := range recs {
+		if r.live(now) && r.AppURL != "" {
+			live = append(live, r)
+		}
+	}
+	sortExposes(live)
+	taken := map[int]bool{}
+	port := make(map[string]int, len(live))
+	nextFree := func(from int) int {
+		for p := from; p <= 65535; p++ {
+			if !taken[p] {
+				return p
+			}
+		}
+		return 0
+	}
+	claim := func(name string, p int) {
+		taken[p] = true
+		port[name] = p
+	}
+	for _, r := range live {
+		switch r.Kind {
+		case exposeEgressKind:
+			if !taken[exposeEgressPort] {
+				claim(r.Name, exposeEgressPort)
+			}
+		case exposeKindTCP:
+			if r.Port > 0 && !taken[r.Port] {
+				claim(r.Name, r.Port)
+			}
+		}
+	}
+	for _, r := range live {
+		if _, done := port[r.Name]; done {
+			continue
+		}
+		from := relayHTTPPortBase
+		if r.Kind == exposeKindTCP || r.Kind == exposeEgressKind {
+			from = relayTCPPortBase
+		}
+		if p := nextFree(from); p != 0 {
+			claim(r.Name, p)
+		}
+	}
+	out := make([]exposeRelay, 0, len(live))
+	for _, r := range live {
+		if p, ok := port[r.Name]; ok {
+			out = append(out, exposeRelay{rec: r, port: p})
+		}
+	}
+	return out
+}
+
+// relaySpecs is the manifest's relay list for the workspace's live exposes:
+// what `dks relay --all` reads out of $DKS_RELAYS. No secret is in it.
+func relaySpecs(recs []exposeRecord, now time.Time) []dagrun.Relay {
+	plan := planRelays(recs, now)
+	out := make([]dagrun.Relay, 0, len(plan))
+	for _, e := range plan {
+		spec := dagrun.Relay{
+			Name:      e.rec.Name,
+			Mode:      e.rec.relayMode(),
+			Upstream:  e.rec.AppURL,
+			LocalPort: e.port,
+		}
+		if !e.rec.Expires.IsZero() {
+			spec.Expires = e.rec.Expires.UTC().Format(time.RFC3339)
+		}
+		out = append(out, spec)
+	}
+	return out
 }
 
 // exposeEnv extends the run seams with the Outpost host side, the token
@@ -704,10 +851,8 @@ func (env *exposeEnv) expose(cmd *cobra.Command, o exposeOptions, args []string)
 	if err != nil {
 		return fail(err)
 	}
-	image, _, err := env.resolveImage("")
-	if err != nil {
-		return fail(err)
-	}
+	// No executor image is resolved here: an expose applies no workload of
+	// its own any more, so there is nothing for an image to run.
 	base, err := env.tunnelBase(ctxRec)
 	if err != nil {
 		return fail(err)
@@ -725,13 +870,14 @@ func (env *exposeEnv) expose(cmd *cobra.Command, o exposeOptions, args []string)
 	sum := sha256.Sum256([]byte(token))
 	expires := env.now().Add(o.ttl).UTC().Truncate(time.Second)
 	spec := exposeAppSpec{App: name, Target: tgt.target, TokenSHA256: hex.EncodeToString(sum[:]), Expires: expires}
-	rec := exposeRecord{Name: name, Kind: tgt.kind, Target: tgt.target, Expires: expires, Port: tgt.port, Env: recorded}
+	rec := exposeRecord{Name: name, Kind: tgt.kind, Target: tgt.target, Expires: expires, Port: tgt.port, Env: recorded, AppURL: upstream}
 	if tgt.kind == exposeKindEgress {
 		spec.Target = exposeEgressTarget
 		spec.Allow = egressAllow
 		rec.Kind = exposeEgressKind
 		rec.Target = strings.Join(egressAllow, ",")
 		rec.Port = exposeEgressPort
+		rec.Allow = egressAllow
 	}
 	if tgt.kind == exposeKindGit {
 		spec.Target = exposeGitTargetPrefix + gitUpstream
@@ -740,6 +886,7 @@ func (env *exposeEnv) expose(cmd *cobra.Command, o exposeOptions, args []string)
 		rec.Target = strings.Join(gitAllow, ",")
 		rec.Port = exposeHTTPPort
 		rec.Upstream = gitUpstream
+		rec.Allow = gitAllow
 	}
 	if rec.Kind == exposeKindHTTP {
 		rec.Port = exposeHTTPPort
@@ -752,21 +899,22 @@ func (env *exposeEnv) expose(cmd *cobra.Command, o exposeOptions, args []string)
 	if err := env.apps.Add(cmd.Context(), spec); err != nil {
 		return fail(fmt.Errorf("register app %s with Outpost: %v — nothing ran", name, err))
 	}
-	objs, err := exposeObjects(rec, ctxRec.WorkspaceID, image, upstream, token)
+	obj, err := exposeSecretObject(rec, ctxRec.WorkspaceID, token)
 	if err != nil {
 		return fail(err)
 	}
-	for _, obj := range objs {
-		if err := applyObject(cmd.Context(), client, obj); err != nil {
-			// A half-applied expose is removed: nothing reachable, nothing left.
-			_ = env.removeExpose(cmd.Context(), client, name)
-			_ = env.apps.Rm(cmd.Context(), name)
-			return fail(planeError(ctxRec, err))
-		}
+	if err := applyObject(cmd.Context(), client, obj); err != nil {
+		// A half-applied expose is removed: nothing reachable, nothing left.
+		_ = env.removeExpose(cmd.Context(), client, name)
+		_ = env.apps.Rm(cmd.Context(), name)
+		return fail(planeError(ctxRec, err))
 	}
 	// The audit line: one per expose, token-free by construction.
 	fmt.Fprintf(cmd.ErrOrStderr(), "dks: expose %s %s %s expires %s\n", name, rec.Kind, rec.Target, expires.Format(time.RFC3339))
-	fmt.Fprintf(cmd.OutOrStdout(), "%s\n", rec.address())
+	// The pod-side address is a loopback port `dks run` plans per run, so
+	// what an expose publishes is the VARIABLE its runs will carry, not an
+	// address this command could print truthfully.
+	fmt.Fprintf(cmd.OutOrStdout(), "%s\n", rec.envVarName())
 	return nil
 }
 
@@ -791,10 +939,12 @@ func parseExposeEnv(specs []string) ([]string, error) {
 	return out, nil
 }
 
-// exposeObjects renders the three label-owned objects of one expose, in
-// apply order: the Secret first (the Deployment references it), then the
-// Deployment, then the Service.
-func exposeObjects(rec exposeRecord, workspaceID, image, upstream, token string) ([]map[string]any, error) {
+// exposeSecretObject renders the ONE label-owned object of an expose: the
+// Secret dks-expose-<name>. Its stringData holds the token; its annotations
+// hold the whole record, so `exposed` and `dks run` read the expose back
+// from the Secret and no second store exists. There is no Deployment and no
+// Service — the relay runs in the run pod (see the file header).
+func exposeSecretObject(rec exposeRecord, workspaceID, token string) (map[string]any, error) {
 	if !validLabelValue(workspaceID) {
 		return nil, fmt.Errorf("workspace id %q is not a label-safe id — nothing ran", workspaceID)
 	}
@@ -806,103 +956,34 @@ func exposeObjects(rec exposeRecord, workspaceID, image, upstream, token string)
 		}
 		envJSON = string(b)
 	}
-	labels := map[string]any{
-		dagrun.LabelManagedBy: dagrun.ManagedByBashy,
-		dagrun.LabelWorkspace: workspaceID,
-		exposeLabel:           rec.Name,
-	}
 	annots := map[string]any{
 		exposeExpiresAnnot: rec.Expires.UTC().Format(time.RFC3339),
 		exposeKindAnnot:    rec.Kind,
 		exposeTargetAnnot:  rec.Target,
 		exposeEnvAnnot:     envJSON,
+		exposeAppURLAnnot:  rec.AppURL,
+		exposePortAnnot:    strconv.Itoa(rec.Port),
 	}
 	if rec.Upstream != "" {
 		annots[exposeUpstreamAnnot] = rec.Upstream
 	}
-	meta := func(name string) map[string]any {
-		return map[string]any{"name": name, "labels": cloneAnyMap(labels), "annotations": cloneAnyMap(annots)}
+	if len(rec.Allow) > 0 {
+		annots[exposeAllowAnnot] = strings.Join(rec.Allow, ",")
 	}
-	objName := "dks-expose-" + rec.Name
-	selector := map[string]any{
-		dagrun.LabelManagedBy: dagrun.ManagedByBashy,
-		exposeLabel:           rec.Name,
-	}
-	// A git expose rides the plain http relay: the existing http relay is
-	// enough, because Outpost's git app does the smart-HTTP filtering and
-	// injects the HOST's credential beyond it.
-	relayMode := rec.Kind
-	if relayMode == exposeGitKind {
-		relayMode = exposeKindHTTP
-	}
-	// limits == requests, exactly as a run's container does: a relay that
-	// cannot be placed is better than one a namespace default resizes.
-	resources := map[string]any{
-		"requests": map[string]any{"cpu": "100m", "memory": "64Mi"},
-		"limits":   map[string]any{"cpu": "100m", "memory": "64Mi"},
-	}
-	secret := map[string]any{
+	return map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Secret",
-		"metadata":   meta(objName),
-		"stringData": map[string]any{exposeTokenKey: token},
-	}
-	container := map[string]any{
-		"name":  "relay",
-		"image": image,
-		"command": []any{
-			"bashy", "dks", "relay",
-			"--mode", relayMode,
-			"--listen", fmt.Sprintf(":%d", rec.Port),
-		},
-		"env": []any{
-			map[string]any{"name": exposeUpstreamKey, "value": upstream},
-			map[string]any{"name": exposeExpiresKey, "value": rec.Expires.UTC().Format(time.RFC3339)},
-			map[string]any{"name": exposeTokenKey, "valueFrom": map[string]any{
-				"secretKeyRef": map[string]any{"name": objName, "key": exposeTokenKey},
-			}},
-		},
-		"ports":     []any{map[string]any{"containerPort": rec.Port}},
-		"resources": resources,
-	}
-	deployment := map[string]any{
-		"apiVersion": "apps/v1",
-		"kind":       "Deployment",
-		"metadata":   meta(objName),
-		"spec": map[string]any{
-			"replicas": 1,
-			"selector": map[string]any{"matchLabels": cloneAnyMap(selector)},
-			"template": map[string]any{
-				"metadata": map[string]any{"labels": cloneAnyMap(labels)},
-				"spec": map[string]any{
-					"containers": []any{container},
-				},
+		"metadata": map[string]any{
+			"name": dagrun.ExposeSecretName(rec.Name),
+			"labels": map[string]any{
+				dagrun.LabelManagedBy: dagrun.ManagedByBashy,
+				dagrun.LabelWorkspace: workspaceID,
+				exposeLabel:           rec.Name,
 			},
+			"annotations": annots,
 		},
-	}
-	service := map[string]any{
-		"apiVersion": "v1",
-		"kind":       "Service",
-		"metadata":   meta(rec.Name),
-		"spec": map[string]any{
-			"selector": cloneAnyMap(selector),
-			"ports": []any{map[string]any{
-				"name":       rec.Kind,
-				"port":       rec.Port,
-				"targetPort": rec.Port,
-				"protocol":   "TCP",
-			}},
-		},
-	}
-	return []map[string]any{secret, deployment, service}, nil
-}
-
-func cloneAnyMap(m map[string]any) map[string]any {
-	out := make(map[string]any, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
-	return out
+		"stringData": map[string]any{exposeTokenKey: token},
+	}, nil
 }
 
 // applyObject server-side applies one object, exactly the way applySecret
@@ -929,9 +1010,9 @@ func applyObject(ctx context.Context, client *cluster.Client, obj map[string]any
 	return nil
 }
 
-// exposeStopKinds is exactly what exposeObjects can create — never a run's
-// kinds, never everything.
-const exposeStopKinds = "secrets,deployments,services"
+// exposeStopKinds is exactly what exposeSecretObject can create — never a
+// run's kinds, never everything. One kind, because an expose is one object.
+const exposeStopKinds = "secrets"
 
 // removeExpose deletes the objects of one expose by its label, and nothing
 // else: the selector carries both the bashy ownership label and the expose
@@ -959,14 +1040,16 @@ func (env *exposeEnv) removeExpose(ctx context.Context, client *cluster.Client, 
 func newUnexposeCmd(env *exposeEnv) *cobra.Command {
 	return &cobra.Command{
 		Use:   "unexpose <name>",
-		Short: "Remove one expose: the Outpost app and its labelled objects",
+		Short: "Remove one expose: the Outpost app and its labelled Secret",
 		Long: `unexpose removes exactly one expose — the app registration on this
-machine's Outpost host, and the objects the expose label selects:
+machine's Outpost host, and the Secret the expose label selects:
 
   bashy dks unexpose web
 
 Nothing else of the workspace is touched: the delete is selected by
-dks.dhnt.io/expose=<name>, never by name or namespace.`,
+dks.dhnt.io/expose=<name>, never by name or namespace. Runs already in
+flight keep the relay they started with until they exit; the Outpost guard
+is gone, so it answers nothing.`,
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -987,8 +1070,8 @@ dks.dhnt.io/expose=<name>, never by name or namespace.`,
 			if err != nil {
 				return fail(err)
 			}
-			// Outpost first: the guard goes away before the relay does, so
-			// there is no window where the relay holds a live token.
+			// Outpost first: the guard goes away before the Secret does, so
+			// there is no window where a token is live but unguarded.
 			if err := env.apps.Rm(cmd.Context(), name); err != nil {
 				return fail(fmt.Errorf("remove app %s from Outpost: %v", name, err))
 			}
@@ -1061,9 +1144,10 @@ func (env *runEnv) exposes(ctx context.Context, ctxRec dagrun.Context) ([]expose
 	return env.listExposes(ctx, ctxRec)
 }
 
-// planeExposes reads the workspace's exposes from the labelled Services:
-// one Service per expose, carrying every annotation the table and the run
-// env need, so no second record exists anywhere.
+// planeExposes reads the workspace's exposes from the labelled SECRETS: one
+// Secret per expose, carrying every annotation the table and the run's
+// relay plan need, so no second record exists anywhere. Only metadata is
+// read — the token stays in the cluster.
 func planeExposes(ctx context.Context, env *runEnv, ctxRec dagrun.Context) ([]exposeRecord, error) {
 	if !validLabelValue(ctxRec.WorkspaceID) {
 		return nil, fmt.Errorf("workspace id %q is not a label-safe id", ctxRec.WorkspaceID)
@@ -1078,13 +1162,13 @@ func planeExposes(ctx context.Context, env *runEnv, ctxRec dagrun.Context) ([]ex
 	}
 	sel := dagrun.LabelManagedBy + "=" + dagrun.ManagedByBashy + "," +
 		dagrun.LabelWorkspace + "=" + ctxRec.WorkspaceID + "," + exposeLabel
-	argv = append(argv, "get", "services", "-l", sel, "-o", "json")
+	argv = append(argv, "get", "secrets", "-l", sel, "-o", "json")
 	stdout, stderr, exit, err := client.Runner.Run(ctx, argv, nil)
 	switch {
 	case err != nil:
 		return nil, fmt.Errorf("kubectl did not run (%v): %w", err, dag.ErrWorkerUnreachable)
 	case exit != 0:
-		return nil, fmt.Errorf("%w: kubectl get services exited %d: %s", cluster.ErrPlaneRejected, exit, strings.TrimSpace(string(stderr)))
+		return nil, fmt.Errorf("%w: kubectl get secrets exited %d: %s", cluster.ErrPlaneRejected, exit, strings.TrimSpace(string(stderr)))
 	}
 	var list struct {
 		Items []struct {
@@ -1093,15 +1177,10 @@ func planeExposes(ctx context.Context, env *runEnv, ctxRec dagrun.Context) ([]ex
 				Labels      map[string]string `json:"labels"`
 				Annotations map[string]string `json:"annotations"`
 			} `json:"metadata"`
-			Spec struct {
-				Ports []struct {
-					Port int `json:"port"`
-				} `json:"ports"`
-			} `json:"spec"`
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(stdout, &list); err != nil {
-		return nil, fmt.Errorf("parse kubectl get services output: %w", err)
+		return nil, fmt.Errorf("parse kubectl get secrets output: %w", err)
 	}
 	var out []exposeRecord
 	for _, it := range list.Items {
@@ -1114,14 +1193,20 @@ func planeExposes(ctx context.Context, env *runEnv, ctxRec dagrun.Context) ([]ex
 			Kind:     it.Metadata.Annotations[exposeKindAnnot],
 			Target:   it.Metadata.Annotations[exposeTargetAnnot],
 			Upstream: it.Metadata.Annotations[exposeUpstreamAnnot],
+			AppURL:   it.Metadata.Annotations[exposeAppURLAnnot],
 		}
 		if raw := strings.TrimSpace(it.Metadata.Annotations[exposeExpiresAnnot]); raw != "" {
 			if t, perr := time.Parse(time.RFC3339, raw); perr == nil {
 				rec.Expires = t
 			}
 		}
-		if len(it.Spec.Ports) > 0 {
-			rec.Port = it.Spec.Ports[0].Port
+		if raw := strings.TrimSpace(it.Metadata.Annotations[exposePortAnnot]); raw != "" {
+			if p, perr := strconv.Atoi(raw); perr == nil {
+				rec.Port = p
+			}
+		}
+		if raw := strings.TrimSpace(it.Metadata.Annotations[exposeAllowAnnot]); raw != "" {
+			rec.Allow = strings.Split(raw, ",")
 		}
 		if raw := strings.TrimSpace(it.Metadata.Annotations[exposeEnvAnnot]); raw != "" && raw != "[]" {
 			var recorded []string
@@ -1154,14 +1239,16 @@ const gitConfigPrefix = "GIT_CONFIG_"
 // {url} substituted, plus the proxy variables for a live egress expose. An
 // expired expose contributes nothing — the TTL cut is what makes an expose
 // safe to leave lying around.
+//
+// Every address is a LOOPBACK address now, because the relay serving it
+// runs in the pod. It is the same plan relaySpecs writes into the manifest,
+// so the port a variable names is the port the pod's relay listens on.
 func exposeRunEnv(recs []exposeRecord, now time.Time) map[string]string {
 	out := map[string]string{}
 	gitCount := 0
-	for _, r := range recs {
-		if !r.live(now) {
-			continue
-		}
-		addr := r.address()
+	for _, e := range planRelays(recs, now) {
+		r := e.rec
+		addr := e.address()
 		out[r.envVarName()] = addr
 		if r.Kind == exposeEgressKind {
 			out["HTTPS_PROXY"] = addr
@@ -1188,8 +1275,11 @@ func exposeRunEnv(recs []exposeRecord, now time.Time) map[string]string {
 	return out
 }
 
-// relayOptions are the flags of one `dks relay`.
+// relayOptions are the flags of one `dks relay`. Two forms: `--all --
+// <cmd>` is the one the rendered run pod uses, and the single `--mode`
+// form is what a test (or a hand debug) drives one relay with.
 type relayOptions struct {
+	all        bool
 	mode       string
 	listen     string
 	upstream   string
@@ -1200,28 +1290,43 @@ type relayOptions struct {
 func newRelayCmd(env *exposeEnv) *cobra.Command {
 	var o relayOptions
 	cmd := &cobra.Command{
-		Use:   "relay --mode http|tcp|egress",
-		Short: "Run the in-cluster expose relay (internal)",
-		Long: `relay is the in-cluster half of an expose: it holds the expose token and
+		Use:   "relay --all -- <cmd> [args...] | relay --mode http|tcp|egress",
+		Short: "Run the run pod's expose relays (internal)",
+		Long: `relay is the pod-side half of an expose: it holds the expose token and
 reaches the exposed service only through the Outpost app route.
 
-  --mode http    listen and reverse-proxy to the app route
-  --mode tcp     listen and bridge each connection over one WebSocket upgrade
-  --mode egress  listen as an HTTP CONNECT proxy, bridging each CONNECT over
-                 one ?dst= WebSocket upgrade of the app route
+  --all -- <cmd>  start EVERY relay named in $` + dagrun.RelaysEnv + ` on 127.0.0.1,
+                  then exec <cmd> as a child with this process's stdio,
+                  forwarding signals and exiting with the child's code
 
-The token comes from $` + exposeTokenKey + ` and from nowhere else; it is never
-an argument and never printed. Past its expiry the relay exits non-zero.
-'bashy dks expose' runs this for you; it is not meant to be typed.`,
+  --mode http     listen and reverse-proxy to the app route
+  --mode tcp      listen and bridge each connection over one WebSocket upgrade
+  --mode egress   listen as an HTTP CONNECT proxy, bridging each CONNECT over
+                  one ?dst= WebSocket upgrade of the app route
+
+$` + dagrun.RelaysEnv + ` carries no secret: each relay's token arrives on its own as
+$` + dagrun.RelayTokenEnvPrefix + `<NAME>, projected from the expose's Secret. A token is never an
+argument and never printed. A relay stops accepting at its expiry, and the
+` + "`--mode`" + ` form exits non-zero rather than serving past it.
+
+The rendered run Pod runs this for you; it is not meant to be typed.`,
 		Hidden:        true,
-		Args:          cobra.NoArgs,
+		Args:          cobra.ArbitraryArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if o.all {
+				return env.relayAll(cmd, o, args)
+			}
+			if len(args) > 0 {
+				fmt.Fprintf(cmd.ErrOrStderr(), "bashy dks relay: %q takes no arguments without --all\n", args[0])
+				return errUserlandHandled
+			}
 			return env.relay(cmd, o)
 		},
 	}
 	f := cmd.Flags()
+	f.BoolVar(&o.all, "all", false, "start every relay in $"+dagrun.RelaysEnv+", then run the command after -- as a child")
 	f.StringVar(&o.mode, "mode", "", "http, tcp or egress")
 	f.StringVar(&o.listen, "listen", ":8080", "address to listen on")
 	f.StringVar(&o.upstream, "upstream", "", "the app route to reach (default $"+exposeUpstreamKey+")")
@@ -1285,27 +1390,12 @@ func (env *exposeEnv) relay(cmd *cobra.Command, o relayOptions) error {
 		return fail(fmt.Errorf("listen on %s: %v", o.listen, err))
 	}
 	defer ln.Close()
-	serveErr := make(chan error, 1)
-	switch o.mode {
-	case exposeKindHTTP:
-		h, herr := relayHTTPHandler(upstream, token, o.pathPrefix)
-		if herr != nil {
-			return fail(herr)
-		}
-		srv := &http.Server{Handler: h, ReadHeaderTimeout: 30 * time.Second}
-		go func() { serveErr <- srv.Serve(ln) }()
-		go func() {
-			<-ctx.Done()
-			_ = srv.Close()
-		}()
-	case exposeKindTCP:
-		go func() { serveErr <- relayTCPServe(ctx, ln, upstream, token) }()
-	case exposeEgressKind:
-		go func() { serveErr <- relayEgressServe(ctx, ln, upstream, token) }()
-	case "":
+	if o.mode == "" {
 		return fail(errors.New("--mode is required: http, tcp or egress"))
-	default:
-		return fail(fmt.Errorf("--mode %q: want http, tcp or egress (a git expose rides --mode http)", o.mode))
+	}
+	serveErr, err := serveRelay(ctx, o.mode, ln, upstream, token, o.pathPrefix)
+	if err != nil {
+		return fail(err)
 	}
 	select {
 	case <-expired:
@@ -1315,6 +1405,165 @@ func (env *exposeEnv) relay(cmd *cobra.Command, o relayOptions) error {
 			return nil
 		}
 		return fail(err)
+	}
+}
+
+// serveRelay starts one relay's listener-side server on an ALREADY BOUND
+// listener and hands back the channel its terminal error arrives on. The
+// bind is the caller's so that `--all` can prove every relay is listening
+// before it execs the run's command: a child that raced its relays would
+// see connection-refused on its first request.
+func serveRelay(ctx context.Context, mode string, ln net.Listener, upstream, token, pathPrefix string) (<-chan error, error) {
+	serveErr := make(chan error, 1)
+	switch mode {
+	case dagrun.RelayModeHTTP:
+		h, err := relayHTTPHandler(upstream, token, pathPrefix)
+		if err != nil {
+			return nil, err
+		}
+		srv := &http.Server{Handler: h, ReadHeaderTimeout: 30 * time.Second}
+		go func() { serveErr <- srv.Serve(ln) }()
+		go func() {
+			<-ctx.Done()
+			_ = srv.Close()
+		}()
+	case dagrun.RelayModeTCP:
+		go func() { serveErr <- relayTCPServe(ctx, ln, upstream, token) }()
+	case dagrun.RelayModeEgress:
+		go func() { serveErr <- relayEgressServe(ctx, ln, upstream, token) }()
+	default:
+		return nil, fmt.Errorf("--mode %q: want %s, %s or %s (a git expose rides %s)",
+			mode, dagrun.RelayModeHTTP, dagrun.RelayModeTCP, dagrun.RelayModeEgress, dagrun.RelayModeHTTP)
+	}
+	return serveErr, nil
+}
+
+// relayAll is `dks relay --all -- <cmd>`: the run pod's PID 1. It reads the
+// relay list from $DKS_RELAYS, binds every relay on 127.0.0.1 BEFORE
+// anything runs, then execs the run's own command as a child with this
+// process's stdio, forwards signals to it, and exits with its code.
+//
+// Fail-closed where it matters and fail-open where it does not: an
+// unparsable list, a missing token or a port it cannot bind refuses the
+// whole run (the pod would otherwise run with a silently missing service),
+// while a relay that is ALREADY past its expiry is reported and skipped —
+// the run itself is not the expose, and killing it would be a worse answer
+// than running it without one route.
+func (env *exposeEnv) relayAll(cmd *cobra.Command, o relayOptions, argv []string) error {
+	fail := func(err error) error {
+		fmt.Fprintf(cmd.ErrOrStderr(), "bashy dks relay: %s\n", err)
+		return errUserlandHandled
+	}
+	if len(argv) == 0 {
+		return fail(fmt.Errorf("--all needs the command to run after --: bashy dks relay --all -- <cmd> [args...]"))
+	}
+	if strings.TrimSpace(o.mode) != "" {
+		return fail(fmt.Errorf("--all and --mode %s are two different forms: pass one", o.mode))
+	}
+	raw := strings.TrimSpace(os.Getenv(dagrun.RelaysEnv))
+	if raw == "" {
+		return fail(fmt.Errorf("$%s is unset or empty: --all is the rendered pod's form, and the renderer sets it", dagrun.RelaysEnv))
+	}
+	var relays []dagrun.Relay
+	if err := json.Unmarshal([]byte(raw), &relays); err != nil {
+		return fail(fmt.Errorf("$%s is not a relay list: %v", dagrun.RelaysEnv, err))
+	}
+	if err := dagrun.ValidateRelays(relays); err != nil {
+		return fail(fmt.Errorf("$%s: %v", dagrun.RelaysEnv, err))
+	}
+	base := context.Background()
+	if env.relayDialCtx != nil {
+		base = env.relayDialCtx()
+	}
+	ctx, cancel := context.WithCancel(base)
+	defer cancel()
+	now := env.now()
+	var listeners []net.Listener
+	defer func() {
+		for _, ln := range listeners {
+			_ = ln.Close()
+		}
+	}()
+	for _, r := range relays {
+		token := strings.TrimSpace(os.Getenv(r.TokenEnv()))
+		if token == "" {
+			return fail(fmt.Errorf("relay %s: $%s is unset or empty — the relay carries no credential of its own", r.Name, r.TokenEnv()))
+		}
+		expires, err := r.ExpiresAt()
+		if err != nil {
+			return fail(err)
+		}
+		if !expires.IsZero() && !now.Before(expires) {
+			fmt.Fprintf(cmd.ErrOrStderr(), "bashy dks relay: expose %s expired at %s — not serving it; re-expose it\n",
+				r.Name, expires.UTC().Format(time.RFC3339))
+			continue
+		}
+		ln, err := net.Listen("tcp", r.Addr())
+		if err != nil {
+			return fail(fmt.Errorf("relay %s: listen on %s: %v", r.Name, r.Addr(), err))
+		}
+		listeners = append(listeners, ln)
+		if _, err := serveRelay(ctx, r.Mode, ln, r.Upstream, token, r.PathPrefix); err != nil {
+			return fail(fmt.Errorf("relay %s: %v", r.Name, err))
+		}
+		// The TTL cut is per relay: at its expiry the listener closes, so
+		// it stops ACCEPTING while the rest of the run keeps going.
+		if !expires.IsZero() {
+			stop := time.AfterFunc(expires.Sub(now), func() { _ = ln.Close() })
+			defer stop.Stop()
+		}
+		fmt.Fprintf(cmd.ErrOrStderr(), "bashy dks relay: expose %s (%s) on %s\n", r.Name, r.Mode, r.Addr())
+	}
+	return runRelayChild(cmd, argv)
+}
+
+// relaySignals are the signals a relay wrapper forwards to its child rather
+// than acting on: the child is the run, and a `dks stop` that deletes the
+// Pod must reach it.
+var relaySignals = []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT}
+
+// runRelayChild runs the wrapped command with this process's stdio, forwards
+// signals to it, and returns its exit code as an exitStatusError so the Pod's
+// terminal state carries the RUN's code, not the wrapper's.
+func runRelayChild(cmd *cobra.Command, argv []string) error {
+	child := exec.Command(argv[0], argv[1:]...)
+	child.Stdin, child.Stdout, child.Stderr = cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr()
+	if err := child.Start(); err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "bashy dks relay: start %s: %v\n", argv[0], err)
+		return errUserlandHandled
+	}
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, relaySignals...)
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case sig := <-sigs:
+				// Best effort by design: Windows refuses most signals, and
+				// a child that already exited is not an error here.
+				_ = child.Process.Signal(sig)
+			case <-done:
+				return
+			}
+		}
+	}()
+	err := child.Wait()
+	close(done)
+	signal.Stop(sigs)
+	var exitErr *exec.ExitError
+	switch {
+	case err == nil:
+		return nil
+	case errors.As(err, &exitErr):
+		code := exitErr.ExitCode()
+		if code < 0 {
+			// Killed by a signal: no exit code of its own.
+			code = 1
+		}
+		return &exitStatusError{code: code}
+	default:
+		fmt.Fprintf(cmd.ErrOrStderr(), "bashy dks relay: %s: %v\n", argv[0], err)
+		return errUserlandHandled
 	}
 }
 

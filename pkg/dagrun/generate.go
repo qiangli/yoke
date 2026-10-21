@@ -84,6 +84,22 @@ type RunSpec struct {
 	Outputs      []string // dag Artifacts: checked after exit
 }
 
+// relaysFor copies the in-pod relay list into the manifest in NAME order,
+// so the same set of exposes always writes the same frontmatter. Generate
+// stays pure: the ports are the caller's deterministic plan, not an
+// allocation made here.
+func relaysFor(rs []Relay) ([]Relay, error) {
+	if len(rs) == 0 {
+		return nil, nil
+	}
+	out := append([]Relay(nil), rs...)
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	if err := ValidateRelays(out); err != nil {
+		return nil, invalid("%v", err)
+	}
+	return out, nil
+}
+
 // GenerateInput is everything Generate reads: the command record, the argv
 // typed at the session shell, and the context it ran in. The caller supplies
 // the run id; Generate reads no clock and no randomness.
@@ -97,6 +113,9 @@ type GenerateInput struct {
 	Venue       string            // dag venue (cluster, native, sandbox, …)
 	Match       map[string]string // host capability labels (os/arch/host/backend)
 	Run         RunSpec
+	// Relays are the in-pod expose relays the run wraps its command with.
+	// The caller plans the loopback ports; Generate only records them.
+	Relays []Relay
 }
 
 func invalid(format string, a ...any) error {
@@ -269,6 +288,11 @@ func generateMeta(in GenerateInput) (ManifestMeta, error) {
 		m.Ports = append([]Port(nil), in.Run.Ports...)
 		sort.Slice(m.Ports, func(i, j int) bool { return m.Ports[i].Name < m.Ports[j].Name })
 	}
+	relays, err := relaysFor(in.Relays)
+	if err != nil {
+		return m, err
+	}
+	m.Relays = relays
 	return m, nil
 }
 
@@ -397,6 +421,9 @@ func checkGenerated(text []byte, in GenerateInput) error {
 	}
 	if in.Run.Resources.Memory != "" && spec.MemPerTask == 0 {
 		return invalid("memory %q is not a dag memory quantity", in.Run.Resources.Memory)
+	}
+	if len(m.Meta.Relays) != len(in.Relays) {
+		return invalid("generated relays do not read back one-for-one")
 	}
 	if len(m.Task.Env) != len(in.Env) || len(m.Task.Match) != len(in.Match) ||
 		len(m.Task.Secrets) != len(in.Run.Credentials) || len(m.Task.Artifacts) != len(in.Run.Outputs) {
