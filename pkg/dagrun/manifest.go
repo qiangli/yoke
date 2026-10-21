@@ -84,6 +84,10 @@ type ManifestMeta struct {
 	Egress      EgressMode        `yaml:"egress"`
 	EgressHosts []string          `yaml:"egress-hosts,omitempty"`
 	Ports       []Port            `yaml:"ports,omitempty"`
+	// Relays are the in-pod expose relays `bashy dks relay --all` starts
+	// before the run's own command (see relay.go). Empty is the common case
+	// and writes no frontmatter line at all.
+	Relays []Relay `yaml:"relays,omitempty"`
 }
 
 // manifestFront is the whole frontmatter block, in the order it is written.
@@ -144,6 +148,9 @@ func ParseManifest(text []byte) (*Manifest, error) {
 	}
 	if strings.TrimSpace(meta.Command.Name) == "" {
 		return nil, fmt.Errorf("%w: no command name", ErrInvalidManifest)
+	}
+	if err := ValidateRelays(meta.Relays); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidManifest, err)
 	}
 	return &Manifest{Name: front.Name, Meta: meta, Task: doc.Tasks[0], Text: text}, nil
 }

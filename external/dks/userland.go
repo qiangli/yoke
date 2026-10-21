@@ -33,7 +33,7 @@ var userlandVerbs = map[string]string{
 	"expose":         "make one local service reachable from the workspace's pods",
 	"unexpose":       "remove one expose",
 	"exposed":        "list the workspace's exposes",
-	"relay":          "run the in-cluster expose relay (internal)",
+	"relay":          "run the run pod's expose relays (internal)",
 }
 
 // unimplementedVerbs fail closed: registered for discovery and help, but they

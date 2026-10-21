@@ -1,6 +1,7 @@
 package dagrun
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -144,6 +145,18 @@ func renderLinux(m *Manifest, class ExecutorClass) ([]Object, error) {
 	}
 	sort.Strings(credEnvNames)
 
+	// The relay-owned variables are Render's to write: the list from the
+	// manifest and one secretKeyRef per token. A run Env: line may not
+	// shadow them, or a pod could be handed a token-shaped literal.
+	relays := m.Meta.Relays
+	relayOwned := make(map[string]struct{}, 2*len(relays)+1)
+	if len(relays) > 0 {
+		relayOwned[RelaysEnv] = struct{}{}
+		for _, r := range relays {
+			relayOwned[r.TokenEnv()] = struct{}{}
+		}
+	}
+
 	env := []any{map[string]any{"name": "HOME", "value": HomeMountPath}}
 	for _, kv := range sortedEnv(t.Env) {
 		k, v, _ := strings.Cut(kv, "=")
@@ -151,6 +164,9 @@ func renderLinux(m *Manifest, class ExecutorClass) ([]Object, error) {
 			continue // home is the workspace home, never the client's
 		}
 		if _, ok := seenCredEnv[k]; ok {
+			continue
+		}
+		if _, ok := relayOwned[k]; ok {
 			continue
 		}
 		env = append(env, map[string]any{"name": k, "value": v})
@@ -165,6 +181,30 @@ func renderLinux(m *Manifest, class ExecutorClass) ([]Object, error) {
 				},
 			},
 		})
+	}
+
+	// The relay list rides the environment as plain JSON — it names ports
+	// and app routes, never a token — and each token rides its own
+	// secretKeyRef out of the expose's Secret. The pod therefore learns
+	// where to listen from argv-free data, and the only literal secret in
+	// the cluster stays the Secret `dks expose` wrote.
+	if len(relays) > 0 {
+		relayJSON, err := json.Marshal(relays)
+		if err != nil {
+			return nil, fmt.Errorf("dagrun: encode relays: %w", err)
+		}
+		env = append(env, map[string]any{"name": RelaysEnv, "value": string(relayJSON)})
+		for _, r := range relays {
+			env = append(env, map[string]any{
+				"name": r.TokenEnv(),
+				"valueFrom": map[string]any{
+					"secretKeyRef": map[string]any{
+						"name": r.SecretName(),
+						"key":  ExposeTokenKey,
+					},
+				},
+			})
+		}
 	}
 
 	// Session kinds run under the hidden session server: the executor's
@@ -182,6 +222,12 @@ func renderLinux(m *Manifest, class ExecutorClass) ([]Object, error) {
 			"--home", HomeMountPath,
 			"--port", strconv.Itoa(attachPort),
 			"--", "bashy", "-c", body}
+	}
+	// With relays, the pod's PID 1 is the relay wrapper and the command
+	// above becomes its child. Prefixing (rather than rebuilding) is what
+	// makes this work for the plain and the session-server forms alike.
+	if len(relays) > 0 {
+		command = append([]any{"bashy", "dks", "relay", "--all", "--"}, command...)
 	}
 	container := map[string]any{
 		"name":         "run",
