@@ -31,6 +31,11 @@ const relayChildExitCode = 7
 // require the body "ok", so the assertion runs WHILE the relays are up.
 const relayChildGetEnv = "DKS_RELAY_TEST_CHILD_GET"
 
+// relayChildProxyEnv asks the helper child to require that $HTTPS_PROXY
+// reached it with this value: the relays opt out of the proxy environment,
+// the wrapped command must still inherit it unchanged.
+const relayChildProxyEnv = "DKS_RELAY_TEST_CHILD_PROXY"
+
 // TestRelayAllChild is NOT a test of its own: it is the child process the
 // `relay --all` tests run through the wrapper. It dials every port its
 // parent planned — and optionally GETs through one of them — then exits
@@ -50,6 +55,12 @@ func TestRelayAllChild(t *testing.T) {
 			os.Exit(9)
 		}
 		_ = c.Close()
+	}
+	if want := strings.TrimSpace(os.Getenv(relayChildProxyEnv)); want != "" {
+		if got := os.Getenv("HTTPS_PROXY"); got != want {
+			fmt.Fprintf(os.Stderr, "child: $HTTPS_PROXY = %q, want the parent's %q\n", got, want)
+			os.Exit(9)
+		}
 	}
 	if p := strings.TrimSpace(os.Getenv(relayChildGetEnv)); p != "" {
 		resp, err := http.Get("http://127.0.0.1:" + p + "/v1/messages")

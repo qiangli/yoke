@@ -50,17 +50,26 @@ func (f *fakeOutpostApps) Rm(_ context.Context, app string) error {
 }
 
 // exposeTest is the hermetic exposeEnv: the run fake plus a fake Outpost
-// host side, a pinned token and a pinned satellite base.
+// host side, a pinned token, a pinned satellite base and a fake app-route
+// probe. The probe answers 403 — guard reached, route ready — at once, so a
+// test that does not care about the readiness wait never pays for it.
 type exposeTest struct {
 	*runTest
 	apps *fakeOutpostApps
 	eenv *exposeEnv
+	// probe is the status sequence the fake route probe hands out; the last
+	// entry repeats for every further probe. probeErr, when set, is what
+	// every probe fails with instead.
+	probe    []int
+	probeErr error
+	// probed records the app route URL of every probe, in order.
+	probed []string
 }
 
 func newExposeTest(t *testing.T) *exposeTest {
 	t.Helper()
 	rt := newRunTest(t)
-	et := &exposeTest{runTest: rt, apps: &fakeOutpostApps{}}
+	et := &exposeTest{runTest: rt, apps: &fakeOutpostApps{}, probe: []int{http.StatusForbidden}}
 	et.eenv = &exposeEnv{
 		runEnv:       rt.renv,
 		apps:         et.apps,
@@ -68,6 +77,17 @@ func newExposeTest(t *testing.T) *exposeTest {
 		tunnelBase:   func(dagrun.Context) (string, error) { return testSatellite, nil },
 		outpostHost:  func() (string, error) { return testOutpostHost, nil },
 		relayDialCtx: context.Background,
+		probeRoute: func(_ context.Context, appURL string) (int, error) {
+			et.probed = append(et.probed, appURL)
+			if et.probeErr != nil {
+				return 0, et.probeErr
+			}
+			i := len(et.probed) - 1
+			if i >= len(et.probe) {
+				i = len(et.probe) - 1
+			}
+			return et.probe[i], nil
+		},
 	}
 	return et
 }
