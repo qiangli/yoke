@@ -10,7 +10,7 @@ module. The public API is exactly what the shipped engine graph
 uses:
 
 - `SecureJoin(root, unsafePath string) (string, error)` — the only
-  symbol the engine callers reference (podman `pkg/util`
+  root-package symbol the engine callers reference (podman `pkg/util`
   dockerignore resolution, `pkg/lookup` passwd/group paths,
   containers/common `etchosts`, storage, buildah `parse`, cgroups).
   Absolute paths are treated as relative to root, `..` above root
@@ -40,17 +40,47 @@ right side of their own
 the same arrangement as `external/go-billy` and
 `external/multierror`.
 
-## pathrs-lite
+## pathrs-lite and pathrs-lite/procfs
 
-Out of scope: the `pathrs-lite` subpackage is only reached from
-Linux-only files (`libpod/container_internal_linux.go`,
-`pkg/domain/infra/abi/play_linux.go`) and the Linux engine
-dependency set (storage, selinux, runc). The host (`GOWORK=off`)
-engine graph — the gate this story pins — imports only the root
-`SecureJoin` package, so this module ships only that package. If a
-future caller needs more API surface, extend this module clean-room
-from that caller's use (permissive sources only) and extend the
-`pkg/mplfree` contract test alongside.
+The Linux engine graph (`GOOS=linux go list -deps
+./external/podman/engine`) also imports the `pathrs-lite` and
+`pathrs-lite/procfs` subpackages. They are implemented here clean-room
+from the permissive callers' use and the Linux openat2(2), openat(2),
+proc(5) and statfs(2) manual pages — again without opening the MPL
+source. The public API is exactly what those callers use:
+
+- `pathrs.OpenInRoot(root, path)` / `pathrs.OpenatInRoot(rootFile,
+  path)` — podman `libpod/container_internal_linux.go` and
+  `pkg/domain/infra/abi/play_linux.go`, storage `userns.go` and
+  `pkg/chunked`, runc `internal/pathrs`. Returns an O_PATH handle.
+- `pathrs.Reopen(file, flags)` — every caller above plus
+  opencontainers/selinux; upgrades the O_PATH handle through a verified
+  procfs and checks the reopened file is the same inode.
+- `pathrs.MkdirAllHandle(rootFile, path, mode)` — runc
+  `internal/pathrs` `MkdirAllInRoot`.
+- `procfs.OpenProcRoot()` / `OpenUnsafeProcRoot()`, `(*Handle).Close`,
+  `OpenSelf(sub)`, `OpenPid(pid, sub)`, `OpenThreadSelf(sub)` returning
+  a `ProcThreadSelfCloser` — selinux `go-selinux` and runc
+  `internal/pathrs` / `libcontainer/apparmor`.
+
+Confinement is file-descriptor based, never a lexical join followed by
+an open: in-root lookups use openat2 `RESOLVE_IN_ROOT |
+RESOLVE_NO_MAGICLINKS`; procfs lookups use `RESOLVE_BENEATH |
+RESOLVE_NO_MAGICLINKS | RESOLVE_NO_XDEV` beneath a `/proc` handle
+verified as a procfs root (`PROC_SUPER_MAGIC`, inode 1), and refuse
+`..` in subpaths. Kernels without openat2 (pre-5.6) get an
+openat(`O_NOFOLLOW`) walk that holds a handle for every directory on
+the path and resolves `..` by popping back to the held parent; the
+procfs walk re-checks each handle is procfs and refuses every symlink
+except the leading `self`/`thread-self`. Off Linux the functions return
+an "only supported on linux" error.
+
+The two packages share their kernel helpers as identical copies
+(`kernel_linux.go`, pinned by `TestKernelCopiesInSync`) instead of an
+internal package: this module compiles under two module paths (as the
+cyphar replacement and standalone), so an intra-module import cannot
+resolve in both. The Linux behavioral tests (`*_linux_test.go`) need a
+Linux host to run.
 
 ## Re-syncing
 

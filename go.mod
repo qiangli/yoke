@@ -455,7 +455,7 @@ replace github.com/hashicorp/errwrap => ./external/errwrap
 // S488.3d: clean-room permissive replacement for the MPL-2.0
 // cyphar/filepath-securejoin reached from the engine build via
 // podman/storage/containers-common/buildah/cgroups callers. Only
-// the caller-used API is implemented (SecureJoin; see
-// external/securejoin/README.yoke.md). pathrs-lite stays out of
-// scope: the host engine graph never imports it.
+// the caller-used API is implemented (SecureJoin, plus the Linux-only
+// pathrs-lite and pathrs-lite/procfs subpackages; see
+// external/securejoin/README.yoke.md).
 replace github.com/cyphar/filepath-securejoin => ./external/securejoin
