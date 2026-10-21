@@ -34,6 +34,11 @@ which removes securejoin (and its `cyphar.com/go-pathrs` dependency)
 from the module graph while keeping the billy API — and the Git path
 containment it provides — intact.
 
+The nested module declares `github.com/qiangli/yoke/external/go-billy` so
+standalone consumers can fetch it at a yoke commit and use it on the right
+side of their own `replace github.com/go-git/go-billy/v5 => ...` directive.
+The root local replace continues to work with the original import path.
+
 ## Re-syncing
 
 To re-sync with a newer upstream: copy the new version over this

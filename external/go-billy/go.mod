@@ -1,4 +1,4 @@
-module github.com/go-git/go-billy/v5
+module github.com/qiangli/yoke/external/go-billy
 
 go 1.25.0
 
