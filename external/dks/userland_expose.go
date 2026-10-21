@@ -436,6 +436,10 @@ type exposeEnv struct {
 	outpostHost func() (string, error)
 	// relayDialCtx is the relay's base context; tests pin it.
 	relayDialCtx func() context.Context
+	// probeRoute GETs the app route carrying NO expose headers and reports
+	// the status code. It is how expose learns the route is live AND
+	// guarded; tests pin the sequence it answers with.
+	probeRoute func(ctx context.Context, appURL string) (int, error)
 }
 
 func defaultExposeEnv(env *userlandEnv) *exposeEnv {
@@ -446,6 +450,7 @@ func defaultExposeEnv(env *userlandEnv) *exposeEnv {
 		tunnelBase:   defaultTunnelBase,
 		outpostHost:  defaultOutpostHost,
 		relayDialCtx: context.Background,
+		probeRoute:   defaultProbeRoute,
 	}
 }
 
@@ -909,6 +914,13 @@ func (env *exposeEnv) expose(cmd *cobra.Command, o exposeOptions, args []string)
 		_ = env.apps.Rm(cmd.Context(), name)
 		return fail(planeError(ctxRec, err))
 	}
+	// The route is not reachable the instant Outpost knows about it: wait
+	// for the guard to answer before telling anyone the expose exists.
+	if err := env.awaitGuardedRoute(cmd, name, upstream); err != nil {
+		_ = env.removeExpose(cmd.Context(), client, name)
+		_ = env.apps.Rm(cmd.Context(), name)
+		return fail(err)
+	}
 	// The audit line: one per expose, token-free by construction.
 	fmt.Fprintf(cmd.ErrOrStderr(), "dks: expose %s %s %s expires %s\n", name, rec.Kind, rec.Target, expires.Format(time.RFC3339))
 	// The pod-side address is a loopback port `dks run` plans per run, so
@@ -916,6 +928,88 @@ func (env *exposeEnv) expose(cmd *cobra.Command, o exposeOptions, args []string)
 	// address this command could print truthfully.
 	fmt.Fprintf(cmd.OutOrStdout(), "%s\n", rec.envVarName())
 	return nil
+}
+
+// The app route readiness wait: how often expose probes it, and how long it
+// waits before giving up. 120s is well past the ~35s the satellite edge took
+// live to learn a new app is not login-required.
+const (
+	exposeReadyInterval = 2 * time.Second
+	exposeReadyDeadline = 120 * time.Second
+)
+
+// exposeProbeClient is the client the readiness probe uses. Redirects are
+// NOT followed: the satellite edge redirects an unauthenticated request to
+// its login page, and a 200 from THAT page is not the app route answering.
+var exposeProbeClient = &http.Client{
+	Timeout:       15 * time.Second,
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+}
+
+// defaultProbeRoute GETs the app route with none of the relay's headers —
+// no expose token, no Bearer — and reports the status it was answered with.
+func defaultProbeRoute(ctx context.Context, appURL string) (int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, appURL, nil)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := exposeProbeClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	// Drain a bounded amount so the connection can be reused by the next
+	// probe; the body itself is never read for meaning.
+	_, _ = io.CopyN(io.Discard, resp.Body, 32<<10)
+	return resp.StatusCode, nil
+}
+
+// awaitGuardedRoute returns only once the app route is LIVE AND GUARDED.
+//
+// Why expose waits at all: right after `outpost apps add` the satellite edge
+// still believes the new app is login-required and answers a token-less
+// request 401 "You need to be signed in to view this app." for tens of
+// seconds. Only once it has learned otherwise does the request reach the
+// Outpost expose guard, which refuses a request without the token with 403.
+// So 403 is the ready signal — the route is live and the token is what opens
+// it — and expose pays the wait rather than the runs: a pod started inside
+// that window just fails.
+//
+// A 2xx is a HARD failure, not a readier signal: the route answered a
+// request that carried no expose token at all, so the guard is not in place
+// and the service would be reachable by anyone who can reach the satellite.
+// Either failure rolls the expose back, so nothing half-made is left.
+func (env *exposeEnv) awaitGuardedRoute(cmd *cobra.Command, name, appURL string) error {
+	start := env.now()
+	deadline := start.Add(exposeReadyDeadline)
+	last := "none"
+	waiting := false
+	for {
+		code, err := env.probeRoute(cmd.Context(), appURL)
+		switch {
+		case err != nil:
+			last = err.Error()
+		case code == http.StatusForbidden:
+			fmt.Fprintf(cmd.ErrOrStderr(), "dks: expose %s ready after %ds\n",
+				name, int(env.now().Sub(start).Round(time.Second).Seconds()))
+			return nil
+		case code >= 200 && code < 300:
+			return fmt.Errorf("app route answers %d without the expose token — guard missing; rolled back", code)
+		default:
+			last = strconv.Itoa(code)
+		}
+		if !env.now().Before(deadline) {
+			return fmt.Errorf("app route not ready after %ds (last status %s) — rolled back",
+				int(exposeReadyDeadline.Seconds()), last)
+		}
+		if !waiting {
+			waiting = true
+			fmt.Fprintf(cmd.ErrOrStderr(), "dks: expose %s waiting for the app route (status %s)\n", name, last)
+		}
+		if err := env.sleep(cmd.Context(), exposeReadyInterval); err != nil {
+			return fmt.Errorf("waiting for the app route of %s: %v", name, err)
+		}
+	}
 }
 
 // tunnelAppURL is the matrix-tunnel address of an Outpost app:
@@ -1579,6 +1673,38 @@ func exposeHeaders(token string) http.Header {
 	return h
 }
 
+// relayUpstreamTransport is the ONE transport every relay upstream call
+// uses, and its Proxy is nil ON PURPOSE — never http.ProxyFromEnvironment,
+// never http.DefaultTransport.
+//
+// A run that was given an egress expose carries
+// HTTPS_PROXY/HTTP_PROXY=http://127.0.0.1:3128 in its environment: the
+// in-pod egress relay itself. The relays are started by the same PID 1 and
+// inherit it, so a relay that honoured the environment would dial the
+// SATELLITE through its own sibling — which refuses any host that is not in
+// the egress allowlist, and the satellite never is. Live that showed up as
+// `http: proxy error: Forbidden` in the container log, with http and tcp
+// exposes answering empty, egress 403 for even an allowed host, and git 502.
+// Only the relays' own calls opt out; the wrapped CMD keeps the proxy env
+// unchanged, because reaching the internet through the egress relay is
+// exactly what the run is meant to do.
+var relayUpstreamTransport = func() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.Proxy = nil
+	return t
+}()
+
+// relayUpstreamClient is the client the relay websocket dials use. It has no
+// Timeout by design: coder/websocket turns a client Timeout into a deadline
+// on the WHOLE connection, and a bridged connection is long-lived.
+var relayUpstreamClient = &http.Client{Transport: relayUpstreamTransport}
+
+// relayDialOptions are the dial options EVERY relay websocket upgrade uses
+// (tcp and egress modes): both expose headers, over the no-proxy client.
+func relayDialOptions(token string) *websocket.DialOptions {
+	return &websocket.DialOptions{HTTPHeader: exposeHeaders(token), HTTPClient: relayUpstreamClient}
+}
+
 // relayHTTPHandler reverse-proxies to the app route, adding both headers and
 // an optional path prefix. The prefix is how one relay fronts a sub-route of
 // the app (the LLM door's /k/<door-peer>/).
@@ -1591,6 +1717,7 @@ func relayHTTPHandler(upstream, token, pathPrefix string) (http.Handler, error) 
 	base.Path = joinURLPath(base.Path, pathPrefix)
 	base.RawQuery, base.Fragment = "", ""
 	return &httputil.ReverseProxy{
+		Transport: relayUpstreamTransport,
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(&base)
 			pr.Out.Host = base.Host
@@ -1638,7 +1765,7 @@ func bridgeTCPOverWS(ctx context.Context, conn net.Conn, endpoint, token string)
 	defer conn.Close()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	ws, resp, err := websocket.Dial(ctx, endpoint, &websocket.DialOptions{HTTPHeader: exposeHeaders(token)})
+	ws, resp, err := websocket.Dial(ctx, endpoint, relayDialOptions(token))
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close()
 	}
@@ -1731,7 +1858,7 @@ func handleEgressConn(ctx context.Context, conn net.Conn, wsBase, token string) 
 	// frame at once. A timed-out or cancelled read closes the connection
 	// it ran on, so the probe connection is sacrificial: a clean probe is
 	// followed by a fresh bridge dial, and 200 is written only then.
-	probe, resp, err := websocket.Dial(dialCtx, endpoint, &websocket.DialOptions{HTTPHeader: exposeHeaders(token)})
+	probe, resp, err := websocket.Dial(dialCtx, endpoint, relayDialOptions(token))
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close()
 	}
@@ -1750,7 +1877,7 @@ func handleEgressConn(ctx context.Context, conn net.Conn, wsBase, token string) 
 		forbidden()
 		return
 	}
-	ws, resp, err := websocket.Dial(dialCtx, endpoint, &websocket.DialOptions{HTTPHeader: exposeHeaders(token)})
+	ws, resp, err := websocket.Dial(dialCtx, endpoint, relayDialOptions(token))
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close()
 	}
