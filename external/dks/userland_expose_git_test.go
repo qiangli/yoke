@@ -13,9 +13,11 @@ import (
 	"github.com/qiangli/yoke/pkg/dagrun"
 )
 
-// RED (S487.4): proxy:git requires a valid --allow of owner/repo or owner/*
-// entries, registers git+<upstream> with Outpost carrying the list, and
-// applies the same objects as an http expose with relay --mode http on 8080.
+// RED (S487.4, reshaped in S487.2): proxy:git requires a valid --allow of
+// owner/repo or owner/* entries, registers git+<upstream> with Outpost
+// carrying the list, and applies the same ONE object as an http expose: the
+// Secret, recording kind git, the allow list, the git upstream and the app
+// route. The relay itself runs in the run pod, in plain http mode.
 func TestExposeGitRequiresValidAllowAndPassesItToOutpost(t *testing.T) {
 	// Missing --allow, and every malformed entry, refuse the whole expose
 	// before anything is registered or applied.
@@ -58,7 +60,7 @@ func TestExposeGitRequiresValidAllowAndPassesItToOutpost(t *testing.T) {
 	}
 
 	// A valid list lands on Outpost as git+<upstream> with --allow, and the
-	// plane objects run the plain http relay on 8080.
+	// one plane object records what the run's http relay needs.
 	et := newExposeTest(t)
 	et.selectWorkspace(t, "skel")
 	code, _, stderr := et.exec(t, "expose", exposeKindGit, "--as", "gitproxy",
@@ -85,27 +87,31 @@ func TestExposeGitRequiresValidAllowAndPassesItToOutpost(t *testing.T) {
 	}
 
 	objs := appliedObjects(t, et.runner.calls)
-	dep, ok := objs["Deployment"]
-	if !ok {
-		t.Fatal("expose applied no Deployment")
+	if len(objs) != 1 {
+		t.Fatalf("expose applied %d kinds, want exactly the Secret: %v", len(objs), objs)
 	}
-	cmd, ok := deploymentRelayCommand(dep)
-	if !ok {
-		t.Fatalf("Deployment runs no relay command:\n%s", mustJSON(t, dep))
+	for _, gone := range []string{"Deployment", "Service"} {
+		if _, ok := objs[gone]; ok {
+			t.Errorf("a git expose still applies a %s", gone)
+		}
 	}
-	joined := strings.Join(cmd, " ")
-	if !strings.Contains(joined, "--mode http") {
-		t.Errorf("git Deployment does not run relay --mode http: %q", joined)
+	annots := exposeAnnotations(t, objs["Secret"])
+	for annot, want := range map[string]string{
+		exposeKindAnnot:     exposeGitKind,
+		exposeAllowAnnot:    "octo/app,octo/*",
+		exposeUpstreamAnnot: defaultGitUpstream,
+		exposePortAnnot:     "8080",
+		exposeAppURLAnnot:   testSatellite + "/matrix/h/" + testOutpostHost + "/app/gitproxy/",
+	} {
+		if got := annots[annot]; got != want {
+			t.Errorf("Secret annotation %s = %q, want %q", annot, got, want)
+		}
 	}
-	if !strings.Contains(joined, ":8080") {
-		t.Errorf("git Deployment does not listen on 8080: %q", joined)
-	}
-	svc, ok := objs["Service"]
-	if !ok {
-		t.Fatal("expose applied no Service")
-	}
-	if port := servicePort(t, svc); port != exposeHTTPPort {
-		t.Errorf("Service port = %d, want %d", port, exposeHTTPPort)
+	// A git expose rides the plain http relay mode: Outpost's git app does
+	// the smart-HTTP filtering and injects the HOST's credential.
+	gitRec := exposeRecord{Name: "gitproxy", Kind: exposeGitKind}
+	if got := gitRec.relayMode(); got != dagrun.RelayModeHTTP {
+		t.Errorf("a git expose is served by relay mode %q, want %q", got, dagrun.RelayModeHTTP)
 	}
 	if raw := string(mustJSON(t, objs["Secret"])); strings.Contains(raw, defaultGitUpstream+"/info/refs") {
 		t.Errorf("Secret leaks an upstream credential path")
@@ -159,42 +165,11 @@ func TestExposeGitRequiresValidAllowAndPassesItToOutpost(t *testing.T) {
 	}
 }
 
-// deploymentRelayCommand digs the relay container's argv out of an applied
-// Deployment object.
-func deploymentRelayCommand(dep map[string]any) ([]string, bool) {
-	spec, _ := dep["spec"].(map[string]any)
-	tmpl, _ := spec["template"].(map[string]any)
-	pspec, _ := tmpl["spec"].(map[string]any)
-	containers, _ := pspec["containers"].([]any)
-	if len(containers) == 0 {
-		return nil, false
-	}
-	c0, _ := containers[0].(map[string]any)
-	raw, _ := c0["command"].([]any)
-	var out []string
-	for _, a := range raw {
-		s, _ := a.(string)
-		out = append(out, s)
-	}
-	return out, len(out) > 0
-}
-
-// servicePort digs the first port out of an applied Service object.
-func servicePort(t *testing.T, svc map[string]any) int {
-	t.Helper()
-	spec, _ := svc["spec"].(map[string]any)
-	ports, _ := spec["ports"].([]any)
-	if len(ports) == 0 {
-		t.Fatalf("Service publishes no port:\n%s", mustJSON(t, svc))
-	}
-	p, _ := ports[0].(map[string]any)
-	port, _ := p["port"].(float64)
-	return int(port)
-}
-
-// RED (S487.4): a live git expose reaches runs as GIT_CONFIG_* insteadOf
-// entries plus DKS_<NAME>_URL — never a credential. Several git exposes
-// number their entries and do not collide with the egress proxy env.
+// RED (S487.4, reshaped in S487.2): a live git expose reaches runs as
+// GIT_CONFIG_* insteadOf entries plus DKS_<NAME>_URL, pointed at the
+// LOOPBACK port the pod's own relay serves — never a credential. Several git
+// exposes number their entries, take the http ports in name order, and do
+// not collide with the egress proxy env.
 func TestRunInjectsGitInsteadOfEnvWithoutCredential(t *testing.T) {
 	rt := newRunTest(t)
 	rt.selectWorkspace(t, "skel")
@@ -211,17 +186,17 @@ func TestRunInjectsGitInsteadOfEnvWithoutCredential(t *testing.T) {
 	}
 	got := exposeRunEnv(recs, now)
 	for k, want := range map[string]string{
-		"DKS_GIT_URL":        "http://git:8080",
-		"DKS_MIRROR_URL":     "http://mirror:8080",
+		"DKS_GIT_URL":        "http://127.0.0.1:18080",
+		"DKS_MIRROR_URL":     "http://127.0.0.1:18081",
 		"GIT_CONFIG_COUNT":   "2",
-		"GIT_CONFIG_KEY_0":   "url.http://git:8080/.insteadOf",
+		"GIT_CONFIG_KEY_0":   "url.http://127.0.0.1:18080/.insteadOf",
 		"GIT_CONFIG_VALUE_0": defaultGitUpstream + "/",
-		"GIT_CONFIG_KEY_1":   "url.http://mirror:8080/.insteadOf",
+		"GIT_CONFIG_KEY_1":   "url.http://127.0.0.1:18081/.insteadOf",
 		"GIT_CONFIG_VALUE_1": "https://git.example.com/",
 		// The egress proxy env of a live egress expose is untouched by the
-		// git entries.
-		"HTTPS_PROXY": "http://proxy:3128",
-		"HTTP_PROXY":  "http://proxy:3128",
+		// git entries, and keeps 3128 of its own.
+		"HTTPS_PROXY": "http://127.0.0.1:3128",
+		"HTTP_PROXY":  "http://127.0.0.1:3128",
 	} {
 		if got[k] != want {
 			t.Errorf("run env %s = %q, want %q", k, got[k], want)
@@ -252,7 +227,7 @@ func TestRunInjectsGitInsteadOfEnvWithoutCredential(t *testing.T) {
 	}
 	for k, want := range map[string]string{
 		"GIT_CONFIG_COUNT":   "2",
-		"GIT_CONFIG_KEY_0":   "url.http://git:8080/.insteadOf",
+		"GIT_CONFIG_KEY_0":   "url.http://127.0.0.1:18080/.insteadOf",
 		"GIT_CONFIG_VALUE_0": defaultGitUpstream + "/",
 	} {
 		if envGot[k] != want {
@@ -269,7 +244,8 @@ func TestRunInjectsGitInsteadOfEnvWithoutCredential(t *testing.T) {
 	}
 }
 
-// RED (S487.4): the http relay forwards the git smart-HTTP paths intact with
+// RED (S487.4): the http relay (now the pod's own) forwards the git
+// smart-HTTP paths intact with
 // both token headers, so the pod's git speaks to the relay and the HOST's
 // credential is injected beyond it — never the pod's.
 func TestRelayHTTPForwardsGitSmartPath(t *testing.T) {

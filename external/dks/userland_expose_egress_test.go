@@ -25,8 +25,10 @@ func mustJSON(t *testing.T, v any) []byte {
 	return b
 }
 
-// RED (S487.3): proxy:egress requires --allow, registers egress:// with the
-// allow list, and serves via relay --mode egress on 3128.
+// RED (S487.3, reshaped in S487.2): proxy:egress requires --allow, registers
+// egress:// with the allow list, and records port 3128 on its Secret — the
+// port the run pod's own `relay --all` serves the CONNECT proxy on. There is
+// no relay Deployment and no Service any more.
 func TestExposeEgressRequiresAllowAndPassesItToOutpost(t *testing.T) {
 	// Without --allow: refused, nothing ran.
 	et := newExposeTest(t)
@@ -71,18 +73,42 @@ func TestExposeEgressRequiresAllowAndPassesItToOutpost(t *testing.T) {
 	}
 
 	objs := appliedObjects(t, et2.runner.calls)
-	depRaw := string(mustJSON(t, objs["Deployment"]))
-	if !strings.Contains(depRaw, `"egress"`) {
-		t.Errorf("Deployment does not run relay --mode egress:\n%s", depRaw)
+	if len(objs) != 1 {
+		t.Fatalf("expose applied %d kinds, want exactly the Secret: %v", len(objs), objs)
 	}
-	svc, ok := objs["Service"]
-	if !ok {
-		t.Fatal("expose applied no Service")
+	for _, gone := range []string{"Deployment", "Service"} {
+		if _, ok := objs[gone]; ok {
+			t.Errorf("an egress expose still applies a %s", gone)
+		}
 	}
-	specJSON := string(mustJSON(t, svc))
-	if !strings.Contains(specJSON, "3128") {
-		t.Errorf("Service does not publish 3128:\n%s", specJSON)
+	annots := exposeAnnotations(t, objs["Secret"])
+	for annot, want := range map[string]string{
+		exposeKindAnnot:   exposeEgressKind,
+		exposeAllowAnnot:  "a.example.com,*.example.org",
+		exposePortAnnot:   "3128",
+		exposeAppURLAnnot: testSatellite + "/matrix/h/" + testOutpostHost + "/app/proxy/",
+	} {
+		if got := annots[annot]; got != want {
+			t.Errorf("Secret annotation %s = %q, want %q", annot, got, want)
+		}
 	}
+}
+
+// exposeAnnotations digs the record annotations out of an applied expose
+// Secret.
+func exposeAnnotations(t *testing.T, obj map[string]any) map[string]string {
+	t.Helper()
+	meta, _ := obj["metadata"].(map[string]any)
+	raw, _ := meta["annotations"].(map[string]any)
+	if len(raw) == 0 {
+		t.Fatalf("expose Secret carries no annotations:\n%s", mustJSON(t, obj))
+	}
+	out := make(map[string]string, len(raw))
+	for k, v := range raw {
+		s, _ := v.(string)
+		out[k] = s
+	}
+	return out
 }
 
 // RED (S487.3): relay --mode egress bridges CONNECT over a ?dst= websocket,
@@ -213,10 +239,12 @@ func TestRelayEgressConnectBridgesAndRefusesPolicyClose(t *testing.T) {
 	}
 }
 
-// RED (S487.3): a live egress expose reaches runs as proxy env plus DKS_<NAME>_URL.
-// Comma-free values ride the manifest Env line; the comma-separated NO_PROXY
-// bypass list rides the run Secret under a dks-expose ref, so generation
-// still succeeds and the pod still receives every variable.
+// RED (S487.3, reshaped in S487.2): a live egress expose reaches runs as
+// proxy env plus DKS_<NAME>_URL, all pointed at the LOOPBACK port the pod's
+// own relay serves. Comma-free values ride the manifest Env line; the
+// comma-separated NO_PROXY bypass list rides the run Secret under a
+// dks-expose ref, so generation still succeeds and the pod still receives
+// every variable.
 func TestRunInjectsProxyEnvForEgress(t *testing.T) {
 	rt := newRunTest(t)
 	rt.selectWorkspace(t, "skel")
@@ -227,10 +255,10 @@ func TestRunInjectsProxyEnvForEgress(t *testing.T) {
 	}
 	got := exposeRunEnv(recs, now)
 	for k, want := range map[string]string{
-		"DKS_PROXY_URL": "http://proxy:3128",
-		"HTTPS_PROXY":   "http://proxy:3128",
-		"HTTP_PROXY":    "http://proxy:3128",
-		"NO_PROXY":      ".svc,.cluster.local,localhost,127.0.0.1",
+		"DKS_PROXY_URL": "http://127.0.0.1:3128",
+		"HTTPS_PROXY":   "http://127.0.0.1:3128",
+		"HTTP_PROXY":    "http://127.0.0.1:3128",
+		"NO_PROXY":      "localhost,127.0.0.1,.svc,.cluster.local",
 	} {
 		if got[k] != want {
 			t.Errorf("run env %s = %q, want %q", k, got[k], want)
@@ -262,9 +290,9 @@ func TestRunInjectsProxyEnvForEgress(t *testing.T) {
 		envGot[k] = v
 	}
 	for k, want := range map[string]string{
-		"DKS_PROXY_URL": "http://proxy:3128",
-		"HTTPS_PROXY":   "http://proxy:3128",
-		"HTTP_PROXY":    "http://proxy:3128",
+		"DKS_PROXY_URL": "http://127.0.0.1:3128",
+		"HTTPS_PROXY":   "http://127.0.0.1:3128",
+		"HTTP_PROXY":    "http://127.0.0.1:3128",
 	} {
 		if envGot[k] != want {
 			t.Errorf("manifest env %s = %q, want %q", k, envGot[k], want)
