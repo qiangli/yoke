@@ -239,14 +239,16 @@ func (c TokenClient) Revoke(id string) error {
 }
 
 // writeSecretToVault stores a minted value under name through the
-// existing secrets client, against the same coordination base with the
-// caller's own credential (the fresh token itself carries no
-// secrets:write scope yet — and must never need one to be storable).
-func writeSecretToVault(base, callerToken, name, value string) error {
-	sc := secrets.Client{
-		BaseURL: base,
-		Token:   callerToken,
-		HTTP:    &http.Client{Timeout: 20 * time.Second},
+// secrets credential chain (secrets.Config{}.Resolve, exactly like
+// `bashy secret set`), NEVER the minting caller's token: the caller is
+// typically the host's Outpost pairing token (outpost scopes, NO
+// secrets:write), which the vault refuses with 403. The fresh token
+// itself carries no secrets:write scope yet — and must never need one
+// to be storable.
+func writeSecretToVault(name, value string) error {
+	sc, err := secrets.Config{}.Resolve()
+	if err != nil {
+		return err
 	}
 	return sc.Put([]secrets.Item{{Name: name, Value: value}})
 }
@@ -294,8 +296,8 @@ func NewTokenCmd() *cobra.Command {
 				return err
 			}
 			if toSecret != "" {
-				if err := writeSecretToVault(client.BaseURL, client.Token, toSecret, m.Token); err != nil {
-					return fmt.Errorf("fleet: minted %q but the vault write failed: %w", m.Name, err)
+				if err := writeSecretToVault(toSecret, m.Token); err != nil {
+					return fmt.Errorf("fleet: minted %q (%s) but the vault write failed: %w", m.Name, m.ID, err)
 				}
 			}
 			if asJSON {

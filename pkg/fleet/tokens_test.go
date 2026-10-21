@@ -49,6 +49,9 @@ type fakeCloudbox struct {
 	byID    map[string]*fakeTokenRow
 	byValue map[string]*fakeTokenRow // static caller rows + minted rows
 	secrets map[string]string
+	// lastVaultBearer is the Authorization header of the last vault PUT.
+	// It proves WHICH credential the --to-secret path wrote with.
+	lastVaultBearer string
 }
 
 var validTokenName = regexp.MustCompile(`^[a-z0-9._-]{1,64}$`)
@@ -60,9 +63,15 @@ func newFakeCloudbox(t *testing.T) *fakeCloudbox {
 		byValue: map[string]*fakeTokenRow{},
 		secrets: map[string]string{},
 	}
-	// Two static caller rows; minted rows are registered under their value too.
-	f.byValue["caller-token"] = &fakeTokenRow{owner: "u1", scopes: []string{"tasks:read", "tasks:write", "secrets:read", "secrets:write"}}
+	// Static caller rows; minted rows are registered under their value too.
+	// caller-token is an Outpost pairing-style credential: it mints the
+	// task scopes it holds but carries NO secrets:write, so the vault
+	// write surface refuses it with 403 exactly like a real host.
+	// secrets-token is the vault credential the secrets chain resolves
+	// ($BASHY_SECRETS_TOKEN in tests).
+	f.byValue["caller-token"] = &fakeTokenRow{owner: "u1", scopes: []string{"tasks:read", "tasks:write"}}
 	f.byValue["poor-token"] = &fakeTokenRow{owner: "u2", scopes: []string{"tasks:read"}}
+	f.byValue["secrets-token"] = &fakeTokenRow{owner: "u1", scopes: []string{"secrets:read", "secrets:write"}}
 	return f
 }
 
@@ -206,9 +215,25 @@ func parseFakeTTL(s string) (time.Duration, bool) {
 }
 
 func (f *fakeCloudbox) serveSecrets(w http.ResponseWriter, r *http.Request) {
-	if _, ok := f.caller(r); !ok {
+	caller, ok := f.caller(r)
+	if !ok {
 		f.writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
+	}
+	if r.Method == http.MethodPost && r.URL.Path == "/api/v1/secrets" {
+		// The vault write surface requires secrets:write: a pairing-style
+		// caller token is refused with 403, exactly like a real host.
+		held := false
+		for _, s := range caller.scopes {
+			if s == "secrets:write" {
+				held = true
+				break
+			}
+		}
+		if !held {
+			f.writeErr(w, http.StatusForbidden, "scope secrets:write is not held by the calling token")
+			return
+		}
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -224,6 +249,7 @@ func (f *fakeCloudbox) serveSecrets(w http.ResponseWriter, r *http.Request) {
 			f.writeErr(w, http.StatusBadRequest, "invalid body")
 			return
 		}
+		f.lastVaultBearer = r.Header.Get("Authorization")
 		for _, s := range body.Secrets {
 			f.secrets[s.Name] = s.Value
 		}
@@ -253,7 +279,9 @@ func (f *fakeCloudbox) handler() http.Handler {
 }
 
 // tokenHost gives a test a hermetic config home plus env pointing the
-// ResolveCloud ladder at the fake: BASHY_CLOUDBOX_URL + BASHY_FLEET_TOKEN.
+// ResolveCloud ladder at the fake (BASHY_CLOUDBOX_URL + BASHY_FLEET_TOKEN)
+// and the secrets chain at the fake's vault credential
+// ($BASHY_SECRETS_TOKEN, exactly like a host with `bashy secret` set up).
 func tokenHost(t *testing.T, srv *httptest.Server, token string) {
 	t.Helper()
 	home := t.TempDir()
@@ -263,6 +291,7 @@ func tokenHost(t *testing.T, srv *httptest.Server, token string) {
 	t.Setenv("XDG_CONFIG_HOME", cfg)
 	t.Setenv("BASHY_CLOUDBOX_URL", srv.URL)
 	t.Setenv("BASHY_FLEET_TOKEN", token)
+	t.Setenv("BASHY_SECRETS_TOKEN", "secrets-token")
 	t.Setenv("BASHY_API_KEY", "")
 }
 
@@ -508,6 +537,81 @@ func TestTokenCmdCreateToSecret(t *testing.T) {
 	}
 	if _, err := c.List(); err != nil {
 		t.Fatalf("minted token does not authenticate: %v", err)
+	}
+}
+
+// The vault write must resolve through the secrets chain, never the
+// minting caller's token: on a real host the caller is the Outpost
+// pairing token (outpost scopes, NO secrets:write), which the vault
+// refuses with 403. The fake models that split — its vault surface
+// accepts only the secrets-token credential and rejects the caller
+// token — so this fails while the write uses callerToken and passes
+// once it walks secrets.Config{}.Resolve().
+func TestTokenCmdCreateToSecretUsesSecretsChain(t *testing.T) {
+	f, srv := startFake(t)
+	tokenHost(t, srv, "caller-token") // minting caller: NO secrets:write
+	stdout, stderr, err := runTokenCmd(t, "create",
+		"--name", "fleet-coordination",
+		"--scope", "tasks:read,tasks:write",
+		"--ttl", "90d",
+		"--to-secret", "CHAIN_PROBE")
+	if err != nil {
+		t.Fatalf("create: %v (stdout=%q stderr=%q)", err, stdout, stderr)
+	}
+	f.mu.Lock()
+	got := f.secrets["CHAIN_PROBE"]
+	bearer := f.lastVaultBearer
+	f.mu.Unlock()
+	if got == "" {
+		t.Fatal("the vault never received the minted value")
+	}
+	if bearer != "Bearer secrets-token" {
+		t.Fatalf("vault write used %q, want the secrets-chain credential", bearer)
+	}
+	if strings.Contains(stdout, got) || strings.Contains(stderr, got) {
+		t.Fatalf("the token value was printed (stdout=%q stderr=%q)", stdout, stderr)
+	}
+}
+
+// A failed vault write still mints first and reports the orphaned row's
+// name AND id (so it can be revoked) without ever printing the value.
+func TestTokenCmdCreateToSecretFailureKeepsID(t *testing.T) {
+	f, srv := startFake(t)
+	tokenHost(t, srv, "caller-token")
+	os.Unsetenv("BASHY_SECRETS_TOKEN") // break the secrets chain
+	stdout, stderr, err := runTokenCmd(t, "create",
+		"--name", "doomed-secret",
+		"--scope", "tasks:read",
+		"--ttl", "24h",
+		"--to-secret", "NOWHERE")
+	if err == nil {
+		t.Fatal("expected the vault write to fail without a secrets credential")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "but the vault write failed") {
+		t.Fatalf("error should say the vault write failed, got: %v", err)
+	}
+	if !strings.Contains(msg, "doomed-secret") {
+		t.Fatalf("error should name the minted token, got: %v", err)
+	}
+	f.mu.Lock()
+	var id, val string
+	for _, row := range f.byID {
+		if row.name == "doomed-secret" {
+			id, val = row.id, row.value
+		}
+	}
+	f.mu.Unlock()
+	if id == "" {
+		t.Fatal("the token was not minted before the vault write failed")
+	}
+	if !strings.Contains(msg, id) {
+		t.Fatalf("error should keep the token id %s visible (to revoke it), got: %v", id, err)
+	}
+	for _, s := range []string{msg, stdout, stderr} {
+		if val != "" && strings.Contains(s, val) {
+			t.Fatalf("the token value leaked: %q", s)
+		}
 	}
 }
 
