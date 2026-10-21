@@ -22,6 +22,10 @@ what those callers use:
   `errorhandling` comment describes (it `TrimSpace`s the result).
 - `(*Error).Unwrap() []error` — standard multi-error unwrapping so
   `errors.Is`/`errors.As` traverse the aggregate.
+- `(*Error).Len() int` and `Group` (`Go(func() error)`,
+  `Wait() *Error`) — added in S488.3d for the Linux-only buildah
+  `imagebuildah` caller (concurrent stage builds); `Wait` returns nil
+  when every task succeeded.
 
 ## Why a local replace
 

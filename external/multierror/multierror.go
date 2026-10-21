@@ -8,7 +8,8 @@
 // pkg/machine/shim and containers/common retry/supplemented/libimage)
 // without reading the replaced module's source. Only the public API
 // those callers use is provided: the Error type with its Errors field,
-// Append, ErrorOrNil, and the Error and Unwrap methods.
+// Append, ErrorOrNil, Len, and the Error and Unwrap methods, plus
+// Group for the Linux buildah caller.
 package multierror
 
 import (
@@ -94,6 +95,14 @@ func (e *Error) Error() string {
 	}
 	return fmt.Sprintf("%d errors occurred:\n%s\n\n",
 		len(e.Errors), strings.Join(points, "\n"))
+}
+
+// Len reports how many errors the aggregate holds; 0 on a nil *Error.
+func (e *Error) Len() int {
+	if e == nil {
+		return 0
+	}
+	return len(e.Errors)
 }
 
 // ErrorOrNil returns the aggregate as an error interface value, or nil
