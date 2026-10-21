@@ -49,6 +49,7 @@ func fakePlane(t *testing.T, bodies map[string]string) (CloudClient, *int) {
 func TestResolveNeedsAToken(t *testing.T) {
 	t.Setenv("BASHY_FLEET_TOKEN", "")
 	t.Setenv("BASHY_API_KEY", "")
+	isolateConfig(t)
 	t.Setenv("PATH", t.TempDir())
 	_, err := CloudConfig{}.Resolve()
 	if err == nil || !strings.Contains(err.Error(), "works fine without one") {
@@ -74,6 +75,7 @@ func TestResolveGetsTokenFromPairedOutpost(t *testing.T) {
 	}
 	t.Setenv("BASHY_FLEET_TOKEN", "")
 	t.Setenv("BASHY_API_KEY", "")
+	isolateConfig(t)
 
 	bindir := t.TempDir()
 	outpost := filepath.Join(bindir, "outpost")
@@ -275,4 +277,14 @@ func TestSyncRejectsATraversalName(t *testing.T) {
 	if res.Fetched != 1 {
 		t.Fatalf("fetched %d — the traversal name must be dropped", res.Fetched)
 	}
+}
+
+// isolateConfig hides the real host's Outpost pairing and master credential.
+func isolateConfig(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("BASHY_CLOUDBOX_URL", "")
 }
