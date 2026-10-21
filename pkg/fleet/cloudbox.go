@@ -37,6 +37,7 @@ type CloudConfig struct {
 //
 //	URL:   --url flag > $BASHY_CLOUDBOX_URL > https://ai.dhnt.io
 //	Token: --token flag > $BASHY_FLEET_TOKEN > $BASHY_API_KEY > paired outpost
+//	       (see ResolveCloud for the satellite rule)
 //
 // The token needs the read scopes for the nouns being synced. Minting it
 // read-only is the point: a token that pulls a catalog should not be able to
@@ -53,16 +54,19 @@ func (c CloudConfig) Resolve() (CloudClient, error) {
 // paired host needs no per-feature token setup:
 //
 //	URL:   override > $BASHY_CLOUDBOX_URL > https://ai.dhnt.io
-//	Token: override > $BASHY_FLEET_TOKEN > $BASHY_API_KEY > paired outpost
+//	Token: override > $BASHY_FLEET_TOKEN > $BASHY_API_KEY >
+//	       paired outpost token, ONLY when the pairing points at base >
+//	       master credential (MasterTokenPath) when it points elsewhere
 //
 // The paired outpost's token is the derived credential — pairing is the only
-// setup a developer does. An empty token means "not paired and nothing set";
+// setup a developer does. A host migrated to a satellite holds a pairing token
+// for THAT server; it is never sent to a different host (S490.5). An empty token means "not paired and nothing set";
 // the caller words the refusal for its own feature.
 func ResolveCloud(urlOverride, tokenOverride string) (base, token string) {
 	base = strings.TrimRight(firstNonEmptyStr(urlOverride, os.Getenv("BASHY_CLOUDBOX_URL"), "https://ai.dhnt.io"), "/")
 	token = firstNonEmptyStr(tokenOverride, os.Getenv("BASHY_FLEET_TOKEN"), os.Getenv("BASHY_API_KEY"))
 	if token == "" {
-		token = outpostToken()
+		token = pairedToken(base)
 	}
 	return base, token
 }

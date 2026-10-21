@@ -82,8 +82,10 @@ func DefaultEnv() Env {
 		// hosts paired before the outpost rename still carry (the MATRIX_*
 		// wire identifiers were kept on purpose, and so was the config dir).
 		// A host read only at the new path reported UNPAIRED while paired.
-		for _, dir := range []string{"outpost", "matrix"} {
-			if name, ok := readOutpostAgentName(filepath.Join(home, ".config", dir, "agent.json")); ok {
+		// fleet.OutpostAgentFiles is the one list (XDG-aware), shared with
+		// the cloudbox token ladder that reads server_addr from the same file.
+		for _, f := range fleet.OutpostAgentFiles() {
+			if name, ok := readOutpostAgentName(f); ok {
 				e.Paired, e.PairedName = true, name
 				break
 			}
