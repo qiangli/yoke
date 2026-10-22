@@ -374,6 +374,11 @@ func TestInfraHarden(t *testing.T) {
 		t.Fatalf("expected droplet tags %+v to intersect with firewall tags %+v", d.Tags, fw.Tags)
 	}
 
+	// D: Reserved IP attached and assign action executed
+	if !fake.HasAction("assign", dID) {
+		t.Fatalf("expected assign action for droplet %d", dID)
+	}
+
 	// 3. Reconcile second time: completely idempotent!
 	stdout, _, err = runInfra(t, fake, fakedo.TestToken, "harden",
 		"--droplet", "1001",
@@ -407,5 +412,82 @@ func TestInfraHarden(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("harden with --sat: %v", err)
+	}
+}
+
+func TestInfraHardenReservedIPAssignment(t *testing.T) {
+	fake := fakedo.New(t)
+	fake.SetAsyncPolls(1)
+	dID := fake.AddDroplet("sat-node-harden-ip")
+
+	// 1. Run harden with --reserved-ip: must create, assign, and verify
+	stdout, stderr, err := runInfra(t, fake, fakedo.TestToken, "harden",
+		"--droplet", "1001",
+		"--reserved-ip",
+		"--json",
+	)
+	if err != nil {
+		t.Fatalf("harden failed: %v, stderr: %s", err, stderr)
+	}
+
+	var res fleet.HardenResult
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+		t.Fatalf("unmarshal json: %v", err)
+	}
+	if !res.Reconciled {
+		t.Fatalf("expected reconciled=true, got: %+v", res)
+	}
+
+	// Verify an assign action ran for the droplet on DO
+	if !fake.HasAction("assign", dID) {
+		t.Fatalf("expected assign action to run for droplet %d (fake has %d assign actions)", dID, fake.ActionCount("assign"))
+	}
+
+	var ipAction *fleet.HardenAction
+	for _, a := range res.Actions {
+		if a.Dimension == "reserved_ip" {
+			ipAction = &a
+			break
+		}
+	}
+	if ipAction == nil {
+		t.Fatal("expected reserved_ip action in result")
+	}
+	if ipAction.Status != "reconciled" {
+		t.Fatalf("expected reserved_ip status reconciled, got %s", ipAction.Status)
+	}
+
+	assignedIP := ipAction.Target
+	rip, ok := fake.ReservedIP(assignedIP)
+	if !ok {
+		t.Fatalf("reserved IP %s not found on fake DO", assignedIP)
+	}
+	if rip.Droplet == nil || rip.Droplet.ID != dID {
+		t.Fatalf("expected reserved IP %s to be assigned to droplet %d, got: %+v", assignedIP, dID, rip.Droplet)
+	}
+
+	// 2. Second run must be idempotent noop and not execute additional assign actions
+	stdout, _, err = runInfra(t, fake, fakedo.TestToken, "harden",
+		"--droplet", "1001",
+		"--reserved-ip",
+		"--json",
+	)
+	if err != nil {
+		t.Fatalf("second harden run failed: %v", err)
+	}
+	var res2 fleet.HardenResult
+	if err := json.Unmarshal([]byte(stdout), &res2); err != nil {
+		t.Fatalf("unmarshal second run json: %v", err)
+	}
+	if !res2.Reconciled {
+		t.Fatalf("expected second run reconciled=true, got: %+v", res2)
+	}
+	for _, a := range res2.Actions {
+		if a.Dimension == "reserved_ip" && a.Status != "noop" {
+			t.Fatalf("expected reserved_ip status noop on second run, got %s", a.Status)
+		}
+	}
+	if count := fake.ActionCount("assign"); count != 1 {
+		t.Fatalf("expected exactly 1 assign action across runs, got %d", count)
 	}
 }
