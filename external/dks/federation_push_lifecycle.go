@@ -649,6 +649,12 @@ func pushJoin(ctx context.Context, out io.Writer, o pushOptions) error {
 		return fmt.Errorf("dks federation --mode push: decode member kubeconfig: %v", err)
 	}
 	memberRefs := normalizeResourceRefs(credEnv.Created)
+	var memberReceipt json.RawMessage
+	if credEnv.Created != nil {
+		if b, err := json.Marshal(credEnv.Created); err == nil {
+			memberReceipt = b
+		}
+	}
 	if len(memberRefs) == 0 {
 		// The contract names the three objects; a server that omits the
 		// listing still created them, so record the canonical refs.
@@ -689,6 +695,7 @@ func pushJoin(ctx context.Context, out io.Writer, o pushOptions) error {
 		KarmadaInstalled: installedByUs,
 		HostCreated:      []string{secretRef, clusterRef},
 		MemberCreated:    memberRefs,
+		MemberReceipt:    memberReceipt,
 		MemberServer:     memberCreds.server,
 		KarmadaServer:    creds.server,
 		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
@@ -764,7 +771,10 @@ func pushLeave(ctx context.Context, out io.Writer, o pushOptions) error {
 	} else {
 		fmt.Fprintf(out, "federation push: member secret %q already absent\n", memberSecretName(name))
 	}
-	if _, status, err := member.do(ctx, http.MethodDelete, pushPathMemberCred, nil); err != nil {
+	if len(rec.MemberReceipt) == 0 {
+		return fmt.Errorf("dks federation --mode push: baseline for %q has no member-credential receipt; revoke on %s needs the created refs with UIDs (DELETE %s with {\"created\": [...]})", name, pushHostOf(member.baseURL), pushPathMemberCred)
+	}
+	if _, status, err := member.do(ctx, http.MethodDelete, pushPathMemberCred, map[string]any{"created": rec.MemberReceipt}); err != nil {
 		if status == http.StatusNotFound {
 			fmt.Fprintf(out, "federation push: member credential already absent\n")
 		} else {

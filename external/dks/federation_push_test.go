@@ -179,10 +179,11 @@ func (f *fakeSatellite) serveMember(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.credHits++
+		// Same shape as cloudbox: refs with UIDs; DELETE must echo them.
 		f.credCreated = []any{
-			"ServiceAccount/karmada-system/" + pushMemberSA,
-			map[string]any{"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRoleBinding", "name": pushMemberSA},
-			"Secret/karmada-system/" + pushMemberSA + "-token",
+			map[string]any{"apiVersion": "v1", "kind": "ServiceAccount", "namespace": "kube-system", "name": pushMemberSA, "uid": "uid-sa-1"},
+			map[string]any{"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRoleBinding", "name": pushMemberSA, "uid": "uid-crb-1"},
+			map[string]any{"apiVersion": "v1", "kind": "Secret", "namespace": "kube-system", "name": pushMemberSA, "uid": "uid-secret-1"},
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -194,9 +195,24 @@ func (f *fakeSatellite) serveMember(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
+		var body struct {
+			Created []any `json:"created"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Created) == 0 {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "created resource references are required"})
+			return
+		}
+		want, _ := json.Marshal(f.credCreated)
+		got, _ := json.Marshal(body.Created)
+		if !bytes.Equal(want, got) {
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "receipt does not match"})
+			return
+		}
 		f.credRevoked = true
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"revoked": true})
+		_ = json.NewEncoder(w).Encode(map[string]any{"deleted": body.Created})
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}

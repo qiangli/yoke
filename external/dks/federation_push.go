@@ -388,9 +388,13 @@ type pushBaseline struct {
 	KarmadaInstalled bool     `json:"karmadaInstalledByUs"`
 	HostCreated      []string `json:"hostCreated"`
 	MemberCreated    []string `json:"memberCreated"`
-	MemberServer     string   `json:"memberServer,omitempty"`
-	KarmadaServer    string   `json:"karmadaServer,omitempty"`
-	CreatedAt        string   `json:"createdAt"`
+	// MemberReceipt is the member-credential "created" receipt exactly as
+	// the satellite returned it (refs with UIDs, no secrets). Leave sends it
+	// back verbatim: the satellite revokes only objects whose UIDs match.
+	MemberReceipt json.RawMessage `json:"memberReceipt,omitempty"`
+	MemberServer  string          `json:"memberServer,omitempty"`
+	KarmadaServer string          `json:"karmadaServer,omitempty"`
+	CreatedAt     string          `json:"createdAt"`
 }
 
 func pushWriteBaseline(rec pushBaseline) (string, error) {
