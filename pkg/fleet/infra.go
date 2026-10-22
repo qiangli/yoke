@@ -606,5 +606,6 @@ func NewInfraCmd(opts ...Option) *cobra.Command {
 	list.Flags().BoolVar(&asJSON, "json", false, "JSON records")
 	return newRoot(KindInfra, "Provider packages (declarative manifests and executable plugins)",
 		list, newShow(KindInfra, opts), newAdd(KindInfra, opts), newRm(KindInfra, opts, (*Catalog).RemoveInfraProvider),
-		newInfraInit(), newInfraValidate(), newInfraProvision(opts), NewInfraRequestCmd())
+		newInfraInit(), newInfraValidate(), newInfraProvision(opts), NewInfraRequestCmd(),
+		newInfraIP(), newInfraFirewall(), newInfraHarden())
 }
