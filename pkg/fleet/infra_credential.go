@@ -26,10 +26,12 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 // CredentialRecord is one master credential as the v1 API returns it:
@@ -203,10 +205,8 @@ func findCredential(rows []CredentialRecord, provider, role string) (CredentialR
 // into a scrollback buffer by accident.
 func readCredentialStdin(cmd *cobra.Command) (string, error) {
 	in := cmd.InOrStdin()
-	if f, ok := in.(*os.File); ok {
-		if st, err := f.Stat(); err == nil && st.Mode()&os.ModeCharDevice != 0 {
-			return "", fmt.Errorf("fleet: refusing to read a credential from a terminal; pipe it instead (bashy ask --stdout | bashy infra credential add --provider P --role R)")
-		}
+	if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		return "", fmt.Errorf("fleet: refusing to read a credential from a terminal; pipe it instead (bashy ask --stdout | bashy infra credential add --provider P --role R)")
 	}
 	raw, err := io.ReadAll(io.LimitReader(in, 1<<20))
 	if err != nil {
@@ -305,6 +305,25 @@ func NewInfraCredentialCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			if asJSON {
+				if lsProvider != "" || lsRole != "" {
+					filtered := make([]CredentialRecord, 0, len(rows))
+					for _, r := range rows {
+						if lsProvider != "" && normalizeCredentialProvider(r.Provider) != normalizeCredentialProvider(lsProvider) {
+							continue
+						}
+						if lsRole != "" && !strings.EqualFold(r.Role, lsRole) {
+							continue
+						}
+						filtered = append(filtered, r)
+					}
+					env := map[string]any{"credentials": filtered}
+					data, err := json.Marshal(env)
+					if err != nil {
+						return err
+					}
+					_, err = out.Write(append(data, '\n'))
+					return err
+				}
 				_, err := out.Write(append(raw, '\n'))
 				return err
 			}
@@ -338,13 +357,19 @@ func NewInfraCredentialCmd() *cobra.Command {
 	ls.Flags().StringVar(&lsRole, "role", "", "only show this role")
 
 	var rmProvider, rmRole string
+	var rmID uint64
 	rm := &cobra.Command{
-		Use:   "rm --provider P --role R",
+		Use:   "rm [--id ID | --provider P --role R]",
 		Short: "Revoke a provider credential",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if strings.TrimSpace(rmProvider) == "" || strings.TrimSpace(rmRole) == "" {
-				return fmt.Errorf("fleet: infra credential rm: --provider and --role are required")
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if rmID == 0 && len(args) == 1 {
+				if id, err := strconv.ParseUint(args[0], 10, 64); err == nil {
+					rmID = id
+				}
+			}
+			if rmID == 0 && (strings.TrimSpace(rmProvider) == "" || strings.TrimSpace(rmRole) == "") {
+				return fmt.Errorf("fleet: infra credential rm: --id ID (or --provider and --role) is required")
 			}
 			client, err := NewCredentialClient(master, token)
 			if err != nil {
@@ -354,28 +379,59 @@ func NewInfraCredentialCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rec, err := findCredential(rows, rmProvider, rmRole)
-			if err != nil {
+			var targetID uint64
+			var label string
+			if rmID != 0 {
+				targetID = rmID
+				label = fmt.Sprintf("id %d", targetID)
+				for _, r := range rows {
+					if r.ID == targetID {
+						label = fmt.Sprintf("%s/%s (id %d)", r.Provider, r.Role, r.ID)
+						break
+					}
+				}
+			} else {
+				rec, err := findCredential(rows, rmProvider, rmRole)
+				if err != nil {
+					return err
+				}
+				targetID = rec.ID
+				label = fmt.Sprintf("%s/%s (id %d)", rec.Provider, rec.Role, rec.ID)
+			}
+			if err := client.Revoke(targetID); err != nil {
 				return err
 			}
-			if err := client.Revoke(rec.ID); err != nil {
+			if asJSON {
+				out := map[string]any{"status": "revoked", "id": targetID}
+				data, err := json.Marshal(out)
+				if err != nil {
+					return err
+				}
+				_, err = cmd.OutOrStdout().Write(append(data, '\n'))
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "revoked %s/%s (id %d)\n", rec.Provider, rec.Role, rec.ID)
+			fmt.Fprintf(cmd.OutOrStdout(), "revoked %s\n", label)
 			return nil
 		},
 	}
+	rm.Flags().Uint64Var(&rmID, "id", 0, "credential id to revoke")
 	rm.Flags().StringVar(&rmProvider, "provider", "", "provider (e.g. do)")
 	rm.Flags().StringVar(&rmRole, "role", "", "provision or purge")
 
 	var rotProvider, rotRole, rotExpires string
+	var rotID uint64
 	rotate := &cobra.Command{
-		Use:   "rotate --provider P --role R",
+		Use:   "rotate [--provider P --role R | --id ID]",
 		Short: "Re-validate and replace a provider credential (value read from stdin only)",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if strings.TrimSpace(rotProvider) == "" || strings.TrimSpace(rotRole) == "" {
-				return fmt.Errorf("fleet: infra credential rotate: --provider and --role are required")
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if rotID == 0 && len(args) == 1 {
+				if id, err := strconv.ParseUint(args[0], 10, 64); err == nil {
+					rotID = id
+				}
+			}
+			if rotID == 0 && (strings.TrimSpace(rotProvider) == "" || strings.TrimSpace(rotRole) == "") {
+				return fmt.Errorf("fleet: infra credential rotate: --provider and --role (or --id ID) are required")
 			}
 			value, err := readCredentialStdin(cmd)
 			if err != nil {
@@ -389,15 +445,21 @@ func NewInfraCredentialCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rows, _, err := client.List()
-			if err != nil {
-				return err
+			var targetID uint64
+			if rotID != 0 {
+				targetID = rotID
+			} else {
+				rows, _, err := client.List()
+				if err != nil {
+					return err
+				}
+				rec, err := findCredential(rows, rotProvider, rotRole)
+				if err != nil {
+					return err
+				}
+				targetID = rec.ID
 			}
-			rec, err := findCredential(rows, rotProvider, rotRole)
-			if err != nil {
-				return err
-			}
-			updated, raw, err := client.Rotate(rec.ID, value, expires)
+			updated, raw, err := client.Rotate(targetID, value, expires)
 			if err != nil {
 				return err
 			}
@@ -411,6 +473,7 @@ func NewInfraCredentialCmd() *cobra.Command {
 			return nil
 		},
 	}
+	rotate.Flags().Uint64Var(&rotID, "id", 0, "credential id to rotate")
 	rotate.Flags().StringVar(&rotProvider, "provider", "", "provider (e.g. do)")
 	rotate.Flags().StringVar(&rotRole, "role", "", "provision or purge")
 	rotate.Flags().StringVar(&rotExpires, "expires-at", "", "operator-known expiry (RFC3339 or YYYY-MM-DD); empty = unknown")
