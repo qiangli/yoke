@@ -7,7 +7,15 @@
 //
 // Served endpoints: GET /v2/account, GET /v2/regions, GET /v2/sizes,
 // GET|POST /v2/droplets (tag_name, page, per_page), GET|DELETE
-// /v2/droplets/{id}, POST /v2/droplets/{id}/actions, GET /v2/actions/{id}.
+// /v2/droplets/{id}, POST /v2/droplets/{id}/actions, GET /v2/actions/{id},
+// GET|POST /v2/reserved_ips, GET|DELETE /v2/reserved_ips/{ip},
+// POST /v2/reserved_ips/{ip}/actions,
+// GET|POST /v2/firewalls, GET|DELETE /v2/firewalls/{id},
+// POST|DELETE /v2/firewalls/{id}/droplets, POST|DELETE /v2/firewalls/{id}/tags,
+// POST|DELETE /v2/firewalls/{id}/rules,
+// GET|POST /v2/projects, GET /v2/projects/{id},
+// GET|POST /v2/projects/{id}/resources,
+// GET|POST /v2/tags, POST|DELETE /v2/tags/{name}/resources.
 package fakedo
 
 import (
@@ -75,6 +83,56 @@ type Network struct {
 	Type      string `json:"type"`
 }
 
+// ReservedIP is DO's reserved/floating IP shape in the fake.
+type ReservedIP struct {
+	IP      string   `json:"ip"`
+	Region  Slug     `json:"region"`
+	Droplet *Droplet `json:"droplet"`
+	Locked  bool     `json:"locked,omitempty"`
+}
+
+// FakeFirewall is DO's cloud firewall shape in the fake.
+type FakeFirewall struct {
+	ID            string         `json:"id"`
+	Name          string         `json:"name"`
+	Status        string         `json:"status"`
+	InboundRules  []FirewallRule `json:"inbound_rules"`
+	OutboundRules []FirewallRule `json:"outbound_rules"`
+	DropletIDs    []int          `json:"droplet_ids"`
+	Tags          []string       `json:"tags"`
+	CreatedAt     time.Time      `json:"created_at"`
+}
+
+// FirewallRule is one rule on a firewall.
+type FirewallRule struct {
+	Protocol     string       `json:"protocol"`
+	Ports        string       `json:"ports"`
+	Sources      *RuleTargets `json:"sources,omitempty"`
+	Destinations *RuleTargets `json:"destinations,omitempty"`
+}
+
+// RuleTargets defines sources or destinations for a firewall rule.
+type RuleTargets struct {
+	Addresses        []string `json:"addresses,omitempty"`
+	DropletIDs       []int    `json:"droplet_ids,omitempty"`
+	LoadBalancerUIDs []string `json:"load_balancer_uids,omitempty"`
+	KubernetesIDs    []string `json:"kubernetes_ids,omitempty"`
+	Tags             []string `json:"tags,omitempty"`
+}
+
+// FakeProject is DO's project shape in the fake.
+type FakeProject struct {
+	ID          string    `json:"id"`
+	OwnerUUID   string    `json:"owner_uuid"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Purpose     string    `json:"purpose"`
+	Environment string    `json:"environment"`
+	IsDefault   bool      `json:"is_default"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
 type action struct {
 	ID        int    `json:"id"`
 	Status    string `json:"status"` // in-progress, completed, errored
@@ -95,20 +153,25 @@ type fault struct {
 type Server struct {
 	*httptest.Server
 
-	mu       sync.Mutex
-	droplets map[int]*Droplet
-	actions  map[int]*action
-	nextID   int
-	polls    int
-	maxPer   int
-	faults   []*fault
-	creates  int
-	deletes  int
-	requests int
-	stall    chan struct{}
-	regions  []map[string]any
-	sizes    []map[string]any
-	account  map[string]any
+	mu               sync.Mutex
+	droplets         map[int]*Droplet
+	actions          map[int]*action
+	reservedIPs      map[string]*ReservedIP
+	firewalls        map[string]*FakeFirewall
+	projects         map[string]*FakeProject
+	projectResources map[string][]string
+	tags             map[string]bool
+	nextID           int
+	polls            int
+	maxPer           int
+	faults           []*fault
+	creates          int
+	deletes          int
+	requests         int
+	stall            chan struct{}
+	regions          []map[string]any
+	sizes            []map[string]any
+	account          map[string]any
 }
 
 // SetCatalog replaces the served /v2/regions and /v2/sizes entries.
@@ -128,10 +191,15 @@ func (s *Server) SetAccount(account map[string]any) {
 // New starts a fake and closes it when the test ends.
 func New(t testing.TB) *Server {
 	s := &Server{
-		droplets: map[int]*Droplet{},
-		actions:  map[int]*action{},
-		nextID:   1000,
-		stall:    make(chan struct{}),
+		droplets:         map[int]*Droplet{},
+		actions:          map[int]*action{},
+		reservedIPs:      map[string]*ReservedIP{},
+		firewalls:        map[string]*FakeFirewall{},
+		projects:         map[string]*FakeProject{},
+		projectResources: map[string][]string{},
+		tags:             map[string]bool{},
+		nextID:           1000,
+		stall:            make(chan struct{}),
 	}
 	s.Server = httptest.NewServer(http.HandlerFunc(s.serve))
 	t.Cleanup(func() {
@@ -179,6 +247,107 @@ func (s *Server) AddGPUDroplet(name string, tags ...string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.addLocked(name, "gpu-h100x1-80gb", "r1", "ubuntu-24-04-x64", "active", tags, "").ID
+}
+
+// AddReservedIP seeds a reserved IP on the fake server.
+func (s *Server) AddReservedIP(ip string, region string, dropletID int) *ReservedIP {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var d *Droplet
+	if dropletID > 0 {
+		d = s.droplets[dropletID]
+	}
+	rip := &ReservedIP{
+		IP:      ip,
+		Region:  Slug{Slug: region},
+		Droplet: d,
+	}
+	s.reservedIPs[ip] = rip
+	return rip
+}
+
+// AddFirewall seeds a cloud firewall on the fake server.
+func (s *Server) AddFirewall(name string, tags []string, dropletIDs []int, inbound ...FirewallRule) *FakeFirewall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nextID++
+	id := fmt.Sprintf("fw-%d", s.nextID)
+	fw := &FakeFirewall{
+		ID:            id,
+		Name:          name,
+		Status:        "succeeded",
+		Tags:          slices.Clone(tags),
+		DropletIDs:    slices.Clone(dropletIDs),
+		InboundRules:  slices.Clone(inbound),
+		OutboundRules: []FirewallRule{},
+		CreatedAt:     time.Now().UTC(),
+	}
+	if fw.Tags == nil {
+		fw.Tags = []string{}
+	}
+	if fw.DropletIDs == nil {
+		fw.DropletIDs = []int{}
+	}
+	if fw.InboundRules == nil {
+		fw.InboundRules = []FirewallRule{}
+	}
+	s.firewalls[id] = fw
+	return fw
+}
+
+// AddProject seeds a project on the fake server.
+func (s *Server) AddProject(name string) *FakeProject {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nextID++
+	id := fmt.Sprintf("proj-%d", s.nextID)
+	p := &FakeProject{
+		ID:        id,
+		Name:      name,
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	s.projects[id] = p
+	return p
+}
+
+// ProjectResources returns the URNs assigned to projectID or name.
+func (s *Server) ProjectResources(projectID string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.findProjectLocked(projectID)
+	if p == nil {
+		return nil
+	}
+	return slices.Clone(s.projectResources[p.ID])
+}
+
+// FirewallByName returns a copy of a firewall by its name.
+func (s *Server) FirewallByName(name string) (*FakeFirewall, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, fw := range s.firewalls {
+		if fw.Name == name {
+			c := *fw
+			c.Tags = slices.Clone(fw.Tags)
+			c.DropletIDs = slices.Clone(fw.DropletIDs)
+			c.InboundRules = slices.Clone(fw.InboundRules)
+			return &c, true
+		}
+	}
+	return nil, false
+}
+
+func (s *Server) findProjectLocked(nameOrID string) *FakeProject {
+	if p, ok := s.projects[nameOrID]; ok {
+		return p
+	}
+	for _, p := range s.projects {
+		if p.Name == nameOrID {
+			return p
+		}
+	}
+	return nil
 }
 
 // AttachVolume records a block-storage volume on a droplet; DO keeps (and
@@ -370,6 +539,394 @@ func (s *Server) route(r *http.Request) (int, any) {
 		}
 		s.tickAction(a)
 		return http.StatusOK, map[string]any{"action": a}
+	case parts[1] == "reserved_ips":
+		return s.routeReservedIPs(r, parts)
+	case parts[1] == "firewalls":
+		return s.routeFirewalls(r, parts)
+	case parts[1] == "projects":
+		return s.routeProjects(r, parts)
+	case parts[1] == "tags":
+		return s.routeTags(r, parts)
+	}
+	return notFound()
+}
+
+func (s *Server) routeReservedIPs(r *http.Request, parts []string) (int, any) {
+	switch {
+	case len(parts) == 2 && r.Method == http.MethodGet:
+		var list []*ReservedIP
+		for _, rip := range s.reservedIPs {
+			list = append(list, rip)
+		}
+		sort.Slice(list, func(i, j int) bool { return list[i].IP < list[j].IP })
+		if list == nil {
+			list = []*ReservedIP{}
+		}
+		return http.StatusOK, map[string]any{
+			"reserved_ips": list,
+			"links":        map[string]any{},
+			"meta":         map[string]int{"total": len(list)},
+		}
+	case len(parts) == 2 && r.Method == http.MethodPost:
+		var in struct {
+			Region    string `json:"region"`
+			DropletID int    `json:"droplet_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			return http.StatusUnprocessableEntity, apiError{ID: "unprocessable_entity", Message: err.Error()}
+		}
+		s.nextID++
+		ipStr := fmt.Sprintf("198.51.100.%d", s.nextID%250+1)
+		var reg string
+		var d *Droplet
+		if in.DropletID > 0 {
+			d = s.droplets[in.DropletID]
+			if d == nil {
+				return notFound()
+			}
+			reg = d.Region.Slug
+		} else {
+			reg = in.Region
+			if reg == "" {
+				reg = "r1"
+			}
+		}
+		rip := &ReservedIP{
+			IP:      ipStr,
+			Region:  Slug{Slug: reg},
+			Droplet: d,
+		}
+		s.reservedIPs[ipStr] = rip
+		return http.StatusAccepted, map[string]any{"reserved_ip": rip}
+	case len(parts) == 3 && r.Method == http.MethodGet:
+		rip := s.reservedIPs[parts[2]]
+		if rip == nil {
+			return notFound()
+		}
+		return http.StatusOK, map[string]any{"reserved_ip": rip}
+	case len(parts) == 3 && r.Method == http.MethodDelete:
+		ip := parts[2]
+		if _, ok := s.reservedIPs[ip]; !ok {
+			return notFound()
+		}
+		delete(s.reservedIPs, ip)
+		return http.StatusNoContent, nil
+	case len(parts) == 4 && parts[3] == "actions" && r.Method == http.MethodPost:
+		ip := parts[2]
+		rip := s.reservedIPs[ip]
+		if rip == nil {
+			return notFound()
+		}
+		var in struct {
+			Type      string `json:"type"`
+			DropletID int    `json:"droplet_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			return http.StatusUnprocessableEntity, apiError{ID: "unprocessable_entity", Message: err.Error()}
+		}
+		s.nextID++
+		switch in.Type {
+		case "assign":
+			d := s.droplets[in.DropletID]
+			if d == nil {
+				return notFound()
+			}
+			rip.Droplet = d
+		case "unassign":
+			rip.Droplet = nil
+		default:
+			return http.StatusUnprocessableEntity, apiError{ID: "unprocessable_entity", Message: "unknown action " + in.Type}
+		}
+		a := &action{ID: s.nextID, Status: "completed", Type: in.Type, DropletID: in.DropletID}
+		s.actions[a.ID] = a
+		return http.StatusCreated, map[string]any{"action": a}
+	}
+	return notFound()
+}
+
+func (s *Server) routeFirewalls(r *http.Request, parts []string) (int, any) {
+	switch {
+	case len(parts) == 2 && r.Method == http.MethodGet:
+		var list []*FakeFirewall
+		for _, fw := range s.firewalls {
+			list = append(list, fw)
+		}
+		sort.Slice(list, func(i, j int) bool { return list[i].ID < list[j].ID })
+		if list == nil {
+			list = []*FakeFirewall{}
+		}
+		return http.StatusOK, map[string]any{
+			"firewalls": list,
+			"links":     map[string]any{},
+			"meta":      map[string]int{"total": len(list)},
+		}
+	case len(parts) == 2 && r.Method == http.MethodPost:
+		var in struct {
+			Name          string         `json:"name"`
+			InboundRules  []FirewallRule `json:"inbound_rules"`
+			OutboundRules []FirewallRule `json:"outbound_rules"`
+			DropletIDs    []int          `json:"droplet_ids"`
+			Tags          []string       `json:"tags"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			return http.StatusUnprocessableEntity, apiError{ID: "unprocessable_entity", Message: err.Error()}
+		}
+		s.nextID++
+		id := fmt.Sprintf("fw-%d", s.nextID)
+		fw := &FakeFirewall{
+			ID:            id,
+			Name:          in.Name,
+			Status:        "succeeded",
+			InboundRules:  in.InboundRules,
+			OutboundRules: in.OutboundRules,
+			DropletIDs:    in.DropletIDs,
+			Tags:          in.Tags,
+			CreatedAt:     time.Now().UTC(),
+		}
+		if fw.InboundRules == nil {
+			fw.InboundRules = []FirewallRule{}
+		}
+		if fw.OutboundRules == nil {
+			fw.OutboundRules = []FirewallRule{}
+		}
+		if fw.DropletIDs == nil {
+			fw.DropletIDs = []int{}
+		}
+		if fw.Tags == nil {
+			fw.Tags = []string{}
+		}
+		s.firewalls[id] = fw
+		return http.StatusAccepted, map[string]any{"firewall": fw}
+	case len(parts) == 3 && r.Method == http.MethodGet:
+		fw := s.firewalls[parts[2]]
+		if fw == nil {
+			return notFound()
+		}
+		return http.StatusOK, map[string]any{"firewall": fw}
+	case len(parts) == 3 && r.Method == http.MethodDelete:
+		id := parts[2]
+		if _, ok := s.firewalls[id]; !ok {
+			return notFound()
+		}
+		delete(s.firewalls, id)
+		return http.StatusNoContent, nil
+	case len(parts) == 4 && parts[3] == "droplets":
+		fw := s.firewalls[parts[2]]
+		if fw == nil {
+			return notFound()
+		}
+		var in struct {
+			DropletIDs []int `json:"droplet_ids"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		if r.Method == http.MethodPost {
+			for _, dID := range in.DropletIDs {
+				if !slices.Contains(fw.DropletIDs, dID) {
+					fw.DropletIDs = append(fw.DropletIDs, dID)
+				}
+			}
+			return http.StatusNoContent, nil
+		} else if r.Method == http.MethodDelete {
+			for _, dID := range in.DropletIDs {
+				fw.DropletIDs = slices.DeleteFunc(fw.DropletIDs, func(x int) bool { return x == dID })
+			}
+			return http.StatusNoContent, nil
+		}
+	case len(parts) == 4 && parts[3] == "tags":
+		fw := s.firewalls[parts[2]]
+		if fw == nil {
+			return notFound()
+		}
+		var in struct {
+			Tags []string `json:"tags"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		if r.Method == http.MethodPost {
+			for _, t := range in.Tags {
+				if !slices.Contains(fw.Tags, t) {
+					fw.Tags = append(fw.Tags, t)
+				}
+			}
+			return http.StatusNoContent, nil
+		} else if r.Method == http.MethodDelete {
+			for _, t := range in.Tags {
+				fw.Tags = slices.DeleteFunc(fw.Tags, func(x string) bool { return x == t })
+			}
+			return http.StatusNoContent, nil
+		}
+	case len(parts) == 4 && parts[3] == "rules":
+		fw := s.firewalls[parts[2]]
+		if fw == nil {
+			return notFound()
+		}
+		var in struct {
+			InboundRules  []FirewallRule `json:"inbound_rules"`
+			OutboundRules []FirewallRule `json:"outbound_rules"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		if r.Method == http.MethodPost {
+			for _, r := range in.InboundRules {
+				fw.InboundRules = append(fw.InboundRules, r)
+			}
+			for _, r := range in.OutboundRules {
+				fw.OutboundRules = append(fw.OutboundRules, r)
+			}
+			return http.StatusNoContent, nil
+		} else if r.Method == http.MethodDelete {
+			for _, del := range in.InboundRules {
+				fw.InboundRules = slices.DeleteFunc(fw.InboundRules, func(existing FirewallRule) bool {
+					return existing.Protocol == del.Protocol && existing.Ports == del.Ports
+				})
+			}
+			return http.StatusNoContent, nil
+		}
+	}
+	return notFound()
+}
+
+func (s *Server) routeProjects(r *http.Request, parts []string) (int, any) {
+	switch {
+	case len(parts) == 2 && r.Method == http.MethodGet:
+		var list []*FakeProject
+		for _, p := range s.projects {
+			list = append(list, p)
+		}
+		sort.Slice(list, func(i, j int) bool { return list[i].ID < list[j].ID })
+		if list == nil {
+			list = []*FakeProject{}
+		}
+		return http.StatusOK, map[string]any{
+			"projects": list,
+			"links":    map[string]any{},
+			"meta":     map[string]int{"total": len(list)},
+		}
+	case len(parts) == 2 && r.Method == http.MethodPost:
+		var in struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+			Purpose     string `json:"purpose"`
+			Environment string `json:"environment"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			return http.StatusUnprocessableEntity, apiError{ID: "unprocessable_entity", Message: err.Error()}
+		}
+		s.nextID++
+		p := &FakeProject{
+			ID:          fmt.Sprintf("proj-%d", s.nextID),
+			Name:        in.Name,
+			Description: in.Description,
+			Purpose:     in.Purpose,
+			Environment: in.Environment,
+			CreatedAt:   time.Now().UTC(),
+			UpdatedAt:   time.Now().UTC(),
+		}
+		s.projects[p.ID] = p
+		return http.StatusCreated, map[string]any{"project": p}
+	case len(parts) == 3 && r.Method == http.MethodGet:
+		p := s.findProjectLocked(parts[2])
+		if p == nil {
+			return notFound()
+		}
+		return http.StatusOK, map[string]any{"project": p}
+	case len(parts) == 4 && parts[3] == "resources":
+		p := s.findProjectLocked(parts[2])
+		if p == nil {
+			return notFound()
+		}
+		if r.Method == http.MethodGet {
+			urns := s.projectResources[p.ID]
+			res := make([]map[string]any, 0, len(urns))
+			for _, u := range urns {
+				res = append(res, map[string]any{"urn": u})
+			}
+			return http.StatusOK, map[string]any{
+				"resources": res,
+				"links":     map[string]any{},
+				"meta":      map[string]int{"total": len(res)},
+			}
+		} else if r.Method == http.MethodPost {
+			var in struct {
+				Resources []string `json:"resources"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&in)
+			for _, u := range in.Resources {
+				if !slices.Contains(s.projectResources[p.ID], u) {
+					s.projectResources[p.ID] = append(s.projectResources[p.ID], u)
+				}
+			}
+			res := make([]map[string]any, 0, len(s.projectResources[p.ID]))
+			for _, u := range s.projectResources[p.ID] {
+				res = append(res, map[string]any{"urn": u})
+			}
+			return http.StatusOK, map[string]any{"resources": res}
+		}
+	}
+	return notFound()
+}
+
+func (s *Server) routeTags(r *http.Request, parts []string) (int, any) {
+	switch {
+	case len(parts) == 2 && r.Method == http.MethodGet:
+		var list []map[string]string
+		for t := range s.tags {
+			list = append(list, map[string]string{"name": t})
+		}
+		if list == nil {
+			list = []map[string]string{}
+		}
+		return http.StatusOK, map[string]any{"tags": list}
+	case len(parts) == 2 && r.Method == http.MethodPost:
+		var in struct {
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			return http.StatusUnprocessableEntity, apiError{ID: "unprocessable_entity", Message: err.Error()}
+		}
+		s.tags[in.Name] = true
+		return http.StatusCreated, map[string]any{"tag": map[string]string{"name": in.Name}}
+	case len(parts) == 3 && r.Method == http.MethodGet:
+		name := parts[2]
+		if !s.tags[name] {
+			return notFound()
+		}
+		return http.StatusOK, map[string]any{"tag": map[string]string{"name": name}}
+	case len(parts) == 3 && r.Method == http.MethodDelete:
+		name := parts[2]
+		delete(s.tags, name)
+		return http.StatusNoContent, nil
+	case len(parts) == 4 && parts[3] == "resources":
+		tagName := parts[2]
+		s.tags[tagName] = true
+		var in struct {
+			Resources []struct {
+				ResourceID   string `json:"resource_id"`
+				ResourceType string `json:"resource_type"`
+			} `json:"resources"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		if r.Method == http.MethodPost {
+			for _, res := range in.Resources {
+				if res.ResourceType == "droplet" {
+					id, _ := strconv.Atoi(res.ResourceID)
+					if d := s.droplets[id]; d != nil {
+						if !slices.Contains(d.Tags, tagName) {
+							d.Tags = append(d.Tags, tagName)
+						}
+					}
+				}
+			}
+			return http.StatusNoContent, nil
+		} else if r.Method == http.MethodDelete {
+			for _, res := range in.Resources {
+				if res.ResourceType == "droplet" {
+					id, _ := strconv.Atoi(res.ResourceID)
+					if d := s.droplets[id]; d != nil {
+						d.Tags = slices.DeleteFunc(d.Tags, func(t string) bool { return t == tagName })
+					}
+				}
+			}
+			return http.StatusNoContent, nil
+		}
 	}
 	return notFound()
 }
