@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -109,12 +110,12 @@ func setupFakeCredentialMaster(t *testing.T) *fakeCredentialMaster {
 	return f
 }
 
-func runCredential(t *testing.T, stdin string, args ...string) (string, error) {
+func runCredentialWithReader(t *testing.T, in io.Reader, args ...string) (string, error) {
 	t.Helper()
 	cmd := NewInfraCmd(WithoutCloudOverlay())
 	cmd.SetArgs(append([]string{"credential"}, args...))
-	if stdin != "" {
-		cmd.SetIn(strings.NewReader(stdin))
+	if in != nil {
+		cmd.SetIn(in)
 	} else {
 		cmd.SetIn(strings.NewReader(""))
 	}
@@ -122,6 +123,11 @@ func runCredential(t *testing.T, stdin string, args ...string) (string, error) {
 	cmd.SetOut(&out)
 	err := cmd.Execute()
 	return out.String(), err
+}
+
+func runCredential(t *testing.T, stdin string, args ...string) (string, error) {
+	t.Helper()
+	return runCredentialWithReader(t, strings.NewReader(stdin), args...)
 }
 
 func TestInfraCredentialAddReadsValueFromStdin(t *testing.T) {
@@ -231,9 +237,32 @@ func TestInfraCredentialLsRmRotate(t *testing.T) {
 		t.Fatalf("rotate sent value=%q id=%q", rotVal, rotID)
 	}
 
-	mout, err := runCredential(t, "", "rm", "--provider", "do", "--role", "purge")
+	// Rotate by --id.
+	routID, err := runCredential(t, "do-purge-op-token-v3\n", "rotate", "--id", "7")
 	if err != nil {
-		t.Fatalf("rm: %v", err)
+		t.Fatalf("rotate --id 7: %v", err)
+	}
+	if !strings.Contains(routID, "rotated digitalocean/purge (id 7") {
+		t.Fatalf("rotate --id 7 output: %s", routID)
+	}
+
+	// rm --id 7 --json
+	jrm, err := runCredential(t, "", "rm", "--id", "7", "--json")
+	if err != nil {
+		t.Fatalf("rm --id 7 --json: %v", err)
+	}
+	var rmResp struct {
+		Status string `json:"status"`
+		ID     uint64 `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(jrm), &rmResp); err != nil || rmResp.ID != 7 || rmResp.Status != "revoked" {
+		t.Fatalf("rm --id 7 --json unexpected output: %v (%s)", err, jrm)
+	}
+
+	// rm --id 7
+	mout, err := runCredential(t, "", "rm", "--id", "7")
+	if err != nil {
+		t.Fatalf("rm --id 7: %v", err)
 	}
 	if !strings.Contains(mout, "revoked digitalocean/purge (id 7)") {
 		t.Fatalf("rm output: %s", mout)
@@ -245,12 +274,45 @@ func TestInfraCredentialLsRmRotate(t *testing.T) {
 		t.Fatalf("rm revoked id %q", revoked)
 	}
 
+	// rm by provider/role
+	pout, err := runCredential(t, "", "rm", "--provider", "do", "--role", "purge")
+	if err != nil {
+		t.Fatalf("rm --provider do --role purge: %v", err)
+	}
+	if !strings.Contains(pout, "revoked digitalocean/purge (id 7)") {
+		t.Fatalf("rm output: %s", pout)
+	}
+
+	if _, err := runCredential(t, "", "rm", "--id", "999"); err == nil ||
+		!strings.Contains(err.Error(), "no such credential") {
+		t.Fatalf("rm nonexistent id: err = %v", err)
+	}
 	if _, err := runCredential(t, "", "rm", "--provider", "do", "--role", "provision"); err == nil ||
 		!strings.Contains(err.Error(), "no do provision credential") {
 		t.Fatalf("rm unknown pair: err = %v", err)
 	}
 	if _, err := runCredential(t, "", "rm", "--provider", "do"); err == nil {
 		t.Fatal("rm without --role succeeded")
+	}
+	if _, err := runCredential(t, "", "rm"); err == nil ||
+		!strings.Contains(err.Error(), "--id ID (or --provider and --role) is required") {
+		t.Fatalf("rm without id or provider/role: err = %v", err)
+	}
+}
+
+func TestInfraCredentialDevNull(t *testing.T) {
+	isolatedFleetRoot(t)
+	setupFakeCredentialMaster(t)
+
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Skipf("cannot open %s: %v", os.DevNull, err)
+	}
+	defer devNull.Close()
+
+	_, err = runCredentialWithReader(t, devNull, "add", "--provider", "do", "--role", "purge")
+	if err == nil || !strings.Contains(err.Error(), "no credential on stdin") {
+		t.Fatalf("devnull should be treated as empty stdin, got: %v", err)
 	}
 }
 
