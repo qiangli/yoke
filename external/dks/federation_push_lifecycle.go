@@ -66,6 +66,7 @@ type karmadaCreds struct {
 	caPool *x509.CertPool
 	cert   *tls.Certificate
 	token  string
+	caPEM  []byte // the CA bundle as PEM, when the kubeconfig carries one
 }
 
 // parseKubeconfig decodes kubeconfig YAML into dial parameters for the
@@ -130,6 +131,7 @@ func parseKubeconfig(raw []byte) (karmadaCreds, error) {
 			return creds, fmt.Errorf("dks federation --mode push: cluster CA did not parse as PEM")
 		}
 		creds.caPool = pool
+		creds.caPEM = der
 	case cl.CAFile != "":
 		pem, err := os.ReadFile(cl.CAFile)
 		if err != nil {
@@ -139,6 +141,7 @@ func parseKubeconfig(raw []byte) (karmadaCreds, error) {
 		if !pool.AppendCertsFromPEM(pem) {
 			return creds, fmt.Errorf("dks federation --mode push: cluster CA file did not parse as PEM")
 		}
+		creds.caPEM = pem
 		creds.caPool = pool
 	}
 	switch {
@@ -265,9 +268,27 @@ func (e karmadaStatusError) Error() string {
 // memberSecretName is the karmada-system Secret holding a member kubeconfig.
 func memberSecretName(clusterName string) string { return clusterName + "-kubeconfig" }
 
-// createMemberSecret stores the member kubeconfig the Push Cluster points at.
+// createMemberSecret stores the member credential the Push Cluster's
+// secretRef points at. Karmada builds its member client from the keys
+// "token" and "caBundle" (what karmadactl join writes); a Secret holding
+// only a kubeconfig left the Cluster at StatusCollectionFailed "missing a
+// non-empty value for token" (S490.8). The kubeconfig is kept alongside.
 func (c *karmadaClient) createMemberSecret(ctx context.Context, clusterName string, memberKubeconfig []byte) (string, error) {
 	name := memberSecretName(clusterName)
+	creds, err := parseKubeconfig(memberKubeconfig)
+	if err != nil {
+		return "", err
+	}
+	if creds.token == "" {
+		return "", fmt.Errorf("dks federation --mode push: member kubeconfig for %s has no bearer token", clusterName)
+	}
+	data := map[string]string{
+		pushKubeconfigKey: base64.StdEncoding.EncodeToString(memberKubeconfig),
+		"token":           base64.StdEncoding.EncodeToString([]byte(creds.token)),
+	}
+	if len(creds.caPEM) > 0 {
+		data["caBundle"] = base64.StdEncoding.EncodeToString(creds.caPEM)
+	}
 	obj := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Secret",
@@ -277,7 +298,7 @@ func (c *karmadaClient) createMemberSecret(ctx context.Context, clusterName stri
 			"labels":    map[string]string{"dhnt.io/federation-push": "true"},
 		},
 		"type": "Opaque",
-		"data": map[string]string{pushKubeconfigKey: base64.StdEncoding.EncodeToString(memberKubeconfig)},
+		"data": data,
 	}
 	if _, err := c.do(ctx, http.MethodPost, "/api/v1/namespaces/"+pushKarmadaNS+"/secrets", obj); err != nil {
 		return "", err

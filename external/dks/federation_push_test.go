@@ -8,8 +8,16 @@ package dks
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"io"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -59,9 +67,33 @@ const (
 	testMemberToken    = "test-member-sa-token-ddd"
 )
 
+// testMemberCAData is a throwaway self-signed CA (base64 PEM), as the
+// real member credential embeds the member apiserver CA.
+var testMemberCAData = func() string {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "test-member-ca"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		panic(err)
+	}
+	return base64.StdEncoding.EncodeToString(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+}()
+
+func keysOf(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
 func memberKubeconfigYAML(server string) string {
 	return "apiVersion: v1\nkind: Config\ncurrent-context: member\n" +
-		"clusters:\n- name: member\n  cluster:\n    server: " + server + "\n    insecure-skip-tls-verify: true\n" +
+		"clusters:\n- name: member\n  cluster:\n    server: " + server + "\n    certificate-authority-data: " + testMemberCAData + "\n" +
 		"users:\n- name: member-sa\n  user:\n    token: " + testMemberToken + "\n" +
 		"contexts:\n- name: member\n  context:\n    cluster: member\n    user: member-sa\n"
 }
@@ -392,8 +424,18 @@ func TestPushJoinFullLifecycle(t *testing.T) {
 	if ref["name"] != "alien-kubeconfig" || ref["namespace"] != pushKarmadaNS {
 		t.Fatalf("cluster secretRef = %v, want karmada-system/alien-kubeconfig", ref)
 	}
-	if _, ok := fx.karmada.secrets["alien-kubeconfig"]; !ok {
+	sec, ok := fx.karmada.secrets["alien-kubeconfig"]
+	if !ok {
 		t.Fatalf("member secret missing: %v", fx.karmada.secrets)
+	}
+	// Karmada's Push client reads "token" and "caBundle" from the secretRef
+	// (S490.8: a kubeconfig-only Secret left the Cluster StatusCollectionFailed).
+	data, _ := sec["data"].(map[string]any)
+	for _, key := range []string{"token", "caBundle"} {
+		v, _ := data[key].(string)
+		if raw, err := base64.StdEncoding.DecodeString(v); err != nil || len(raw) == 0 {
+			t.Fatalf("member secret lacks a non-empty %q (keys %v)", key, keysOf(data))
+		}
 	}
 	if fx.host.installHits != 1 {
 		t.Fatalf("install hits = %d, want 1", fx.host.installHits)
