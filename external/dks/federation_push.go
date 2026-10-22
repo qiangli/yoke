@@ -56,7 +56,7 @@ import (
 // satellite federation endpoints. The cloudbox run owns the gate; if it
 // settles on a different name, pass --scope (repeatable / comma-separated)
 // or set $BASHY_FEDERATION_SCOPE instead of rebuilding.
-const FederationPushScope = "cluster:federate"
+const FederationPushScope = "cluster:federation"
 
 // Satellite endpoint paths consumed by push mode. The install path is
 // pre-existing; kubeconfig and member-credential are new in the shared
