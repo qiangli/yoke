@@ -45,7 +45,7 @@ func TestInfraCredentialsRequired(t *testing.T) {
 
 	// Verify no --access-token flag exists
 	cmd := fleet.NewInfraCmd()
-	for _, sub := range []string{"ip", "firewall", "harden"} {
+	for _, sub := range []string{"ip", "firewall", "harden", "trash", "restore"} {
 		c, _, err := cmd.Find([]string{sub})
 		if err != nil {
 			t.Fatalf("subcommand %s not found: %v", sub, err)
