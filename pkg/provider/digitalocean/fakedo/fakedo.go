@@ -138,6 +138,7 @@ type action struct {
 	Status    string `json:"status"` // in-progress, completed, errored
 	Type      string `json:"type"`
 	DropletID int    `json:"resource_id"`
+	ip        string
 	size      string
 	polls     int
 }
@@ -579,7 +580,9 @@ func (s *Server) routeReservedIPs(r *http.Request, parts []string) (int, any) {
 		ipStr := fmt.Sprintf("198.51.100.%d", s.nextID%250+1)
 		var reg string
 		var d *Droplet
-		if in.DropletID > 0 {
+		if in.Region != "" && in.DropletID == 0 {
+			reg = in.Region
+		} else if in.DropletID > 0 {
 			d = s.droplets[in.DropletID]
 			if d == nil {
 				return notFound()
@@ -627,18 +630,26 @@ func (s *Server) routeReservedIPs(r *http.Request, parts []string) (int, any) {
 		s.nextID++
 		switch in.Type {
 		case "assign":
-			d := s.droplets[in.DropletID]
-			if d == nil {
+			if s.droplets[in.DropletID] == nil {
 				return notFound()
 			}
-			rip.Droplet = d
 		case "unassign":
-			rip.Droplet = nil
 		default:
 			return http.StatusUnprocessableEntity, apiError{ID: "unprocessable_entity", Message: "unknown action " + in.Type}
 		}
-		a := &action{ID: s.nextID, Status: "completed", Type: in.Type, DropletID: in.DropletID}
+		a := &action{
+			ID:        s.nextID,
+			Status:    "in-progress",
+			Type:      in.Type,
+			DropletID: in.DropletID,
+			ip:        ip,
+			polls:     s.polls,
+		}
 		s.actions[a.ID] = a
+		if a.polls == 0 {
+			a.Status = "completed"
+			s.applyReservedIPAction(rip, a)
+		}
 		return http.StatusCreated, map[string]any{"action": a}
 	}
 	return notFound()
@@ -947,9 +958,63 @@ func (s *Server) tickAction(a *action) {
 		return
 	}
 	a.Status = "completed"
+	if a.ip != "" {
+		if rip := s.reservedIPs[a.ip]; rip != nil {
+			s.applyReservedIPAction(rip, a)
+		}
+		return
+	}
 	if d := s.droplets[a.DropletID]; d != nil {
 		applyAction(d, a)
 	}
+}
+
+func (s *Server) applyReservedIPAction(rip *ReservedIP, a *action) {
+	switch a.Type {
+	case "assign":
+		if d := s.droplets[a.DropletID]; d != nil {
+			rip.Droplet = d
+		}
+	case "unassign":
+		rip.Droplet = nil
+	}
+}
+
+// HasAction reports whether an action of the given type was executed for dropletID.
+func (s *Server) HasAction(actionType string, dropletID int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, a := range s.actions {
+		if a.Type == actionType && (dropletID == 0 || a.DropletID == dropletID) {
+			return true
+		}
+	}
+	return false
+}
+
+// ActionCount returns the total number of actions of actionType (or all actions if actionType is empty).
+func (s *Server) ActionCount(actionType string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	count := 0
+	for _, a := range s.actions {
+		if actionType == "" || a.Type == actionType {
+			count++
+		}
+	}
+	return count
+}
+
+// ReservedIP returns a copy of the reserved IP, or false if not found.
+func (s *Server) ReservedIP(ip string) (ReservedIP, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rip, ok := s.reservedIPs[ip]
+	if !ok {
+		return ReservedIP{}, false
+	}
+	c := *rip
+	return c, true
 }
 
 func applyAction(d *Droplet, a *action) {

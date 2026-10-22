@@ -104,6 +104,54 @@ func TestReservedIPs(t *testing.T) {
 	}
 }
 
+func TestAttachReservedIP(t *testing.T) {
+	fake := fakedo.New(t)
+	fake.SetAsyncPolls(1)
+	c := newClient(t, fake)
+	ctx := context.Background()
+
+	dID := fake.AddDroplet("sat-node-attach", "tag1")
+
+	// 1. Attach when no IP is assigned: creates and attaches
+	rip, attached, err := c.AttachReservedIP(ctx, dID, "r1")
+	if err != nil {
+		t.Fatalf("AttachReservedIP: %v", err)
+	}
+	if !attached {
+		t.Fatal("expected attached=true on first call")
+	}
+	if rip.Droplet == nil || rip.Droplet.ID != dID {
+		t.Fatalf("expected droplet %d on attached reserved IP, got %+v", dID, rip.Droplet)
+	}
+	if !fake.HasAction("assign", dID) {
+		t.Fatalf("expected assign action to run on fake DO")
+	}
+
+	// 2. Second call: idempotent, returns existing without new action
+	rip2, attached2, err := c.AttachReservedIP(ctx, dID, "r1")
+	if err != nil {
+		t.Fatalf("second AttachReservedIP: %v", err)
+	}
+	if attached2 {
+		t.Fatal("expected attached=false on idempotent second call")
+	}
+	if rip2.IP != rip.IP {
+		t.Fatalf("expected same IP %s, got %s", rip.IP, rip2.IP)
+	}
+	if count := fake.ActionCount("assign"); count != 1 {
+		t.Fatalf("expected exactly 1 assign action across calls, got %d", count)
+	}
+
+	// 3. WaitForReservedIPAssignment verifies already-assigned IP immediately
+	verified, err := c.WaitForReservedIPAssignment(ctx, rip.IP, dID)
+	if err != nil {
+		t.Fatalf("WaitForReservedIPAssignment: %v", err)
+	}
+	if verified.IP != rip.IP || verified.Droplet == nil || verified.Droplet.ID != dID {
+		t.Fatalf("unexpected verified reserved IP: %+v", verified)
+	}
+}
+
 func TestFirewalls(t *testing.T) {
 	fake := fakedo.New(t)
 	c := newClient(t, fake)

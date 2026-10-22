@@ -265,13 +265,18 @@ func newInfraHarden() *cobra.Command {
 					createdIP := "<new>"
 					if !dryRun {
 						newRip, err := client.CreateReservedIP(ctx, digitalocean.CreateReservedIPRequest{
-							DropletID: dropletID,
-							Region:    droplet.Region.Slug,
+							Region: droplet.Region.Slug,
 						})
 						if err != nil {
 							return fmt.Errorf("infra harden: create reserved IP: %w", err)
 						}
 						createdIP = newRip.IP
+						if err := client.AssignReservedIP(ctx, createdIP, dropletID); err != nil {
+							return fmt.Errorf("infra harden: assign reserved IP %s to droplet %d: %w", createdIP, dropletID, err)
+						}
+						if _, err := client.WaitForReservedIPAssignment(ctx, createdIP, dropletID); err != nil {
+							return fmt.Errorf("infra harden: verify reserved IP %s assigned to droplet %d: %w", createdIP, dropletID, err)
+						}
 						status = "reconciled"
 					}
 					actions = append(actions, HardenAction{

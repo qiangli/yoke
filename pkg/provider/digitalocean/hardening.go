@@ -169,7 +169,8 @@ func (c *Client) CreateReservedIP(ctx context.Context, req CreateReservedIPReque
 	return &out.ReservedIP, nil
 }
 
-// AssignReservedIP attaches a reserved IP to a droplet.
+// AssignReservedIP attaches a reserved IP to a droplet, waits for the action to complete,
+// and verifies that the reserved IP resource reflects the droplet assignment.
 func (c *Client) AssignReservedIP(ctx context.Context, ip string, dropletID int) error {
 	in := map[string]any{"type": "assign", "droplet_id": dropletID}
 	var out struct {
@@ -181,7 +182,58 @@ func (c *Client) AssignReservedIP(ctx context.Context, ip string, dropletID int)
 	if err := c.call(ctx, http.MethodPost, "/v2/reserved_ips/"+url.PathEscape(ip)+"/actions", in, &out); err != nil {
 		return err
 	}
-	return c.waitAction(ctx, out.Action.ID, out.Action.Status)
+	if err := c.waitAction(ctx, out.Action.ID, out.Action.Status); err != nil {
+		return err
+	}
+	_, err := c.WaitForReservedIPAssignment(ctx, ip, dropletID)
+	return err
+}
+
+// WaitForReservedIPAssignment polls GetReservedIP until the reserved IP reflects
+// the specified dropletID, or until ctx expires.
+func (c *Client) WaitForReservedIPAssignment(ctx context.Context, ip string, dropletID int) (*ReservedIP, error) {
+	for {
+		rip, err := c.GetReservedIP(ctx, ip)
+		if err != nil {
+			return nil, err
+		}
+		if rip.Droplet != nil && rip.Droplet.ID == dropletID {
+			return rip, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("digitalocean: reserved IP %s assignment to droplet %d timed out: %w", ip, dropletID, ctx.Err())
+		case <-time.After(c.pollInterval):
+		}
+	}
+}
+
+// AttachReservedIP ensures a reserved IP is attached to dropletID. If the droplet
+// already has a reserved IP, it returns that IP with attached=false. Otherwise, it
+// creates a new reserved IP in region, assigns it to dropletID, and verifies
+// assignment by polling until the reserved IP reflects the droplet.
+func (c *Client) AttachReservedIP(ctx context.Context, dropletID int, region string) (*ReservedIP, bool, error) {
+	ips, err := c.ListReservedIPs(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	for _, r := range ips {
+		if r.Droplet != nil && r.Droplet.ID == dropletID {
+			return &r, false, nil
+		}
+	}
+	rip, err := c.CreateReservedIP(ctx, CreateReservedIPRequest{Region: region})
+	if err != nil {
+		return nil, false, err
+	}
+	if err := c.AssignReservedIP(ctx, rip.IP, dropletID); err != nil {
+		return nil, false, err
+	}
+	verified, err := c.WaitForReservedIPAssignment(ctx, rip.IP, dropletID)
+	if err != nil {
+		return nil, false, err
+	}
+	return verified, true, nil
 }
 
 // UnassignReservedIP detaches a reserved IP from its droplet.
