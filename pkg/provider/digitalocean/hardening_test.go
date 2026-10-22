@@ -339,6 +339,9 @@ func TestDropletsAndTags(t *testing.T) {
 	if err := c.TagDroplet(ctx, "reaper:exempt", dID); err != nil {
 		t.Fatalf("TagDroplet: %v", err)
 	}
+	if !fake.HasTag("reaper:exempt") {
+		t.Fatal("expected reaper:exempt to be created on fake DO")
+	}
 
 	d, _ = c.GetDroplet(ctx, dID)
 	if !slices.Contains(d.Tags, "reaper:exempt") {
@@ -352,5 +355,29 @@ func TestDropletsAndTags(t *testing.T) {
 	d, _ = c.GetDroplet(ctx, dID)
 	if slices.Contains(d.Tags, "reaper:exempt") {
 		t.Fatalf("expected reaper:exempt removed from droplet")
+	}
+}
+
+func TestCreateTag(t *testing.T) {
+	fake := fakedo.New(t)
+	c := newClient(t, fake)
+	ctx := context.Background()
+
+	// 1. Create brand new tag -> 201 Created
+	if err := c.CreateTag(ctx, "brand-new-tag"); err != nil {
+		t.Fatalf("CreateTag: %v", err)
+	}
+	if !fake.HasTag("brand-new-tag") {
+		t.Fatal("expected brand-new-tag created on fake DO")
+	}
+
+	// 2. Create existing tag -> 422 Unprocessable Entity treated as success (nil)
+	if err := c.CreateTag(ctx, "brand-new-tag"); err != nil {
+		t.Fatalf("CreateTag already exists: %v", err)
+	}
+
+	// 3. Empty tag returns error
+	if err := c.CreateTag(ctx, ""); err == nil {
+		t.Fatal("expected error on empty tag")
 	}
 }

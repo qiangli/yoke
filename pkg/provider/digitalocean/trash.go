@@ -194,6 +194,8 @@ type TrashResult struct {
 // TrashDroplet soft-deletes a cloudbox-owned droplet by adding bashy-trash,
 // bashy-purge-after-<unix>, and optional bashy-trash-reason-<slug> tags, then
 // powering it off. It is idempotent and refuses foreign or permanent droplets.
+// TagDroplet ensures each tag exists on DigitalOcean (POST /v2/tags; 422
+// already-exists = ok) before tagging resources (POST /v2/tags/{tag}/resources).
 func (c *Client) TrashDroplet(ctx context.Context, opts TrashOptions) (*TrashResult, error) {
 	if opts.DropletID <= 0 {
 		return nil, errors.New("droplet ID is required")
