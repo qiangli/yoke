@@ -98,6 +98,15 @@ Subcommands (pass straight through to 'outpost cluster federation'):
   bashy dks federation status  …    membership and member-cluster health
   bashy dks federation on|off|token …  control-plane and token passthrough
 
+Push mode (satellite-hosted planes, no outpost involved):
+  bashy dks federation join --mode push --host-satellite URL --member-satellite URL [--name N] [--dry-run]
+  bashy dks federation leave --mode push --host-satellite URL [--member-satellite URL|--name N] [--dry-run] [--uninstall]
+  bashy dks federation status --mode push --host-satellite URL
+Push mode exchanges the owner Bearer ($BASHY_FLEET_TOKEN) on each satellite,
+ensures Karmada on the host, registers the member as a Push Cluster, and
+records exactly what was created under $BASHY_HOME/dks/federation. Secrets
+are never printed or kept at rest.
+
   bashy dks federation karmadactl …  the managed Karmada CLI (pinned release,
                                      sha256-verified; $KARMADACTL_VERSION pins it)
 
@@ -115,6 +124,23 @@ refresh). Set $OUTPOST_BIN to point at a specific outpost binary.`,
 			}
 			sub := args[0]
 			rest := args[1:]
+			// Push mode federates two satellite-hosted (embedded) planes
+			// through the satellites' own HTTPS API and never touches
+			// Outpost. Everything else keeps the pull-mode passthrough.
+			if (sub == "join" || sub == "leave" || sub == "status") && hasModePush(rest) {
+				previous, hadPrevious := os.LookupEnv(kube.EnvProfile)
+				if err := os.Setenv(kube.EnvProfile, kube.ProfileFederation); err != nil {
+					return fmt.Errorf("select %s=%s: %w", kube.EnvProfile, kube.ProfileFederation, err)
+				}
+				defer func() {
+					if hadPrevious {
+						_ = os.Setenv(kube.EnvProfile, previous)
+					} else {
+						_ = os.Unsetenv(kube.EnvProfile)
+					}
+				}()
+				return runPushMode(cmd.Context(), cmd.OutOrStdout(), sub, rest)
+			}
 			_, passthrough := federationVerbs[sub]
 			if sub != "karmadactl" && !passthrough {
 				fmt.Fprintf(cmd.ErrOrStderr(), "dks federation: unknown subcommand %q — try: join, leave, status, on, off, token, karmadactl\n", sub)
