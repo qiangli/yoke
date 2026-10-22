@@ -607,6 +607,7 @@ func NewInfraCmd(opts ...Option) *cobra.Command {
 	return newRoot(KindInfra, "Provider packages (declarative manifests and executable plugins)",
 		list, newShow(KindInfra, opts), newAdd(KindInfra, opts), newRm(KindInfra, opts, (*Catalog).RemoveInfraProvider),
 		newInfraInit(), newInfraValidate(), newInfraProvision(opts), NewInfraRequestCmd(),
+		NewInfraCredentialCmd(),
 		newInfraIP(), newInfraFirewall(), newInfraHarden(),
 		newInfraTrash(), newInfraRestore())
 }
