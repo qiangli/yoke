@@ -383,6 +383,13 @@ func (s *Server) DeleteCount() int { s.mu.Lock(); defer s.mu.Unlock(); return s.
 // RequestCount is the number of authenticated API requests received.
 func (s *Server) RequestCount() int { s.mu.Lock(); defer s.mu.Unlock(); return s.requests }
 
+// HasTag reports whether a tag has been created on the fake server.
+func (s *Server) HasTag(name string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tags[name]
+}
+
 func (s *Server) addLocked(name, size, region, image, status string, tags []string, userData string) *Droplet {
 	s.nextID++
 	id := s.nextID
@@ -398,6 +405,11 @@ func (s *Server) addLocked(name, size, region, image, status string, tags []stri
 	}
 	if d.Tags == nil {
 		d.Tags = []string{}
+	}
+	for _, t := range tags {
+		if t != "" {
+			s.tags[t] = true
+		}
 	}
 	if status == "new" {
 		d.polls = s.polls
@@ -893,6 +905,12 @@ func (s *Server) routeTags(r *http.Request, parts []string) (int, any) {
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			return http.StatusUnprocessableEntity, apiError{ID: "unprocessable_entity", Message: err.Error()}
 		}
+		if in.Name == "" {
+			return http.StatusUnprocessableEntity, apiError{ID: "unprocessable_entity", Message: "name is required"}
+		}
+		if s.tags[in.Name] {
+			return http.StatusUnprocessableEntity, apiError{ID: "unprocessable_entity", Message: "tag already exists"}
+		}
 		s.tags[in.Name] = true
 		return http.StatusCreated, map[string]any{"tag": map[string]string{"name": in.Name}}
 	case len(parts) == 3 && r.Method == http.MethodGet:
@@ -907,7 +925,9 @@ func (s *Server) routeTags(r *http.Request, parts []string) (int, any) {
 		return http.StatusNoContent, nil
 	case len(parts) == 4 && parts[3] == "resources":
 		tagName := parts[2]
-		s.tags[tagName] = true
+		if !s.tags[tagName] {
+			return notFound()
+		}
 		var in struct {
 			Resources []struct {
 				ResourceID   string `json:"resource_id"`

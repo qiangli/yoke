@@ -92,6 +92,13 @@ func TestTrash_SuccessAndIdempotency(t *testing.T) {
 		}
 	}
 
+	// Verify tags were created on DO
+	for _, exp := range []string{"bashy-trash", "bashy-purge-after-1792677600", "bashy-trash-reason-stuck-at-boot"} {
+		if !fake.HasTag(exp) {
+			t.Fatalf("expected tag %q created on fake DO", exp)
+		}
+	}
+
 	// 3. Re-run trash: idempotent!
 	res2, err := c.TrashDroplet(ctx, digitalocean.TrashOptions{
 		DropletID: dID,

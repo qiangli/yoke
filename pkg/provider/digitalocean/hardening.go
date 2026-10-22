@@ -561,8 +561,30 @@ func (c *Client) GetDroplet(ctx context.Context, id int) (*DropletDetail, error)
 	return &out.Droplet, nil
 }
 
-// TagDroplet attaches a tag to a droplet.
+// CreateTag creates a tag by name on DigitalOcean. If the tag already exists,
+// DigitalOcean returns HTTP 422 Unprocessable Entity, which is treated as success (nil).
+func (c *Client) CreateTag(ctx context.Context, tag string) error {
+	if tag == "" {
+		return errors.New("digitalocean: tag name is required")
+	}
+	in := map[string]string{"name": tag}
+	err := c.call(ctx, http.MethodPost, "/v2/tags", in, nil)
+	if err != nil {
+		var ae *apiError
+		if errors.As(err, &ae) && ae.status == http.StatusUnprocessableEntity {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+// TagDroplet attaches a tag to a droplet, ensuring the tag exists on DigitalOcean
+// first (creating it if absent, treating 422 already-exists as success).
 func (c *Client) TagDroplet(ctx context.Context, tag string, dropletID int) error {
+	if err := c.CreateTag(ctx, tag); err != nil {
+		return fmt.Errorf("ensure tag %q: %w", tag, err)
+	}
 	in := map[string]any{
 		"resources": []map[string]string{
 			{
