@@ -158,19 +158,37 @@ func Clone(opts CloneOptions) (*Result, error) {
 	}
 	cloneOpts.Auth = auth
 
-	if _, err := gogit.PlainClone(opts.Path, false, cloneOpts); err != nil {
+	r, err := gogit.PlainClone(opts.Path, false, cloneOpts)
+	if err != nil {
 		// If the branch lookup failed, retry as a tag — go-git won't
 		// auto-fall-back like upstream git does.
 		if opts.Branch != "" && errors.Is(err, plumbing.ErrReferenceNotFound) {
 			cloneOpts.ReferenceName = plumbing.NewTagReferenceName(opts.Branch)
-			if _, err2 := gogit.PlainClone(opts.Path, false, cloneOpts); err2 == nil {
-				return &Result{Success: true, Message: fmt.Sprintf("Cloned into '%s'", opts.Path)}, nil
+			if retry, err2 := gogit.PlainClone(opts.Path, false, cloneOpts); err2 == nil {
+				return cloneResult(retry, opts.Path)
 			}
 		}
 		return nil, fmt.Errorf("clone failed: %w", err)
 	}
 
-	return &Result{Success: true, Message: fmt.Sprintf("Cloned into '%s'", opts.Path)}, nil
+	return cloneResult(r, opts.Path)
+}
+
+func cloneResult(r *gogit.Repository, path string) (*Result, error) {
+	// Windows filesystems do not preserve Git's executable bit. Native Git
+	// writes this setting on clone; without it a newly cloned tree looks
+	// modified to go-git before its first checkout by commit hash.
+	if runtime.GOOS == "windows" {
+		cfg, err := r.Config()
+		if err != nil {
+			return nil, err
+		}
+		cfg.Raw.Section("core").SetOption("filemode", "false")
+		if err := r.SetConfig(cfg); err != nil {
+			return nil, err
+		}
+	}
+	return &Result{Success: true, Message: fmt.Sprintf("Cloned into '%s'", path)}, nil
 }
 
 // InitOptions configures an Init call.
@@ -996,7 +1014,7 @@ func Checkout(opts CheckoutOptions) (*Result, error) {
 		if err := r.Storer.SetReference(ref); err != nil {
 			return nil, fmt.Errorf("reset branch: %w", err)
 		}
-		if err := w.Checkout(&gogit.CheckoutOptions{Branch: plumbing.NewBranchReferenceName(opts.Branch)}); err != nil {
+		if err := checkoutClean(w, &gogit.CheckoutOptions{Branch: plumbing.NewBranchReferenceName(opts.Branch)}); err != nil {
 			return nil, fmt.Errorf("checkout: %w", err)
 		}
 		return &Result{Success: true, Message: fmt.Sprintf("Reset branch '%s'", opts.Branch)}, nil
@@ -1011,7 +1029,7 @@ func Checkout(opts CheckoutOptions) (*Result, error) {
 			return nil, fmt.Errorf("create branch: %w", err)
 		}
 	}
-	if err := w.Checkout(&gogit.CheckoutOptions{
+	if err := checkoutClean(w, &gogit.CheckoutOptions{
 		Branch: plumbing.NewBranchReferenceName(opts.Branch),
 	}); err != nil {
 		// Not a branch name — try it as a revision (commit SHA, short
@@ -1020,7 +1038,7 @@ func Checkout(opts CheckoutOptions) (*Result, error) {
 		// build-script `--ref <sha>` arguments check out without system git.
 		if !opts.Create {
 			if hash, rerr := r.ResolveRevision(plumbing.Revision(opts.Branch)); rerr == nil {
-				if herr := w.Checkout(&gogit.CheckoutOptions{Hash: *hash}); herr == nil {
+				if herr := checkoutClean(w, &gogit.CheckoutOptions{Hash: *hash}); herr == nil {
 					return &Result{Success: true, Message: fmt.Sprintf("HEAD is now at %s (detached)", hash.String()[:7])}, nil
 				}
 			}
@@ -1028,6 +1046,31 @@ func Checkout(opts CheckoutOptions) (*Result, error) {
 		return nil, fmt.Errorf("checkout: %w", err)
 	}
 	return &Result{Success: true, Message: fmt.Sprintf("Switched to branch '%s'", opts.Branch)}, nil
+}
+
+// checkoutClean allows a checkout when go-git's raw status sees only changes
+// that Git configuration says to ignore (notably executable bits on Windows).
+// Force is safe only after the normalized status confirms there are no staged,
+// unstaged, or untracked changes to lose.
+func checkoutClean(w *gogit.Worktree, opts *gogit.CheckoutOptions) error {
+	if !opts.Force {
+		raw, err := w.Status()
+		if err != nil {
+			return err
+		}
+		if !raw.IsClean() {
+			clean, err := worktreeStatus(w)
+			if err != nil {
+				return err
+			}
+			if clean.IsClean() {
+				copy := *opts
+				copy.Force = true
+				opts = &copy
+			}
+		}
+	}
+	return w.Checkout(opts)
 }
 
 // RemoteRemove removes the named remote (`git remote remove <name>`).
