@@ -218,3 +218,39 @@ func TestApplicableAdvertisement(t *testing.T) {
 		t.Fatalf("description not truncated: %d runes", len([]rune(ads[0].Description)))
 	}
 }
+
+// A repository-owned skill must be visible from its root and nested directories.
+// Its requires gate is evaluated after discovery, not used to hide the name.
+func TestProjectSkillDiscoveryAndGoRequirement(t *testing.T) {
+	project := t.TempDir()
+	if err := os.Mkdir(filepath.Join(project, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSkill(t, filepath.Join(project, "skills"), "go-repo-health", "---\nname: go-repo-health\ndescription: Go health\nmetadata:\n  requires: \"has=go\"\n---")
+	inside := filepath.Join(project, "nested")
+	if err := os.Mkdir(inside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(inside); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(old) })
+
+	cat, _ := NewCatalog(WithConfigDir(t.TempDir()))
+	sk, _, ok := cat.Get("go-repo-health")
+	if !ok || sk.Name != "go-repo-health" || sk.Ring != RingShared {
+		t.Fatalf("project skill not discovered: ok=%v skill=%+v", ok, sk)
+	}
+	withGo := testProbes(t, map[string]string{"os": "darwin", "arch": "arm64"}, map[string]string{"go": "1.27.2"})
+	withoutGo := testProbes(t, map[string]string{"os": "darwin", "arch": "arm64"}, map[string]string{})
+	if got := verdictOf(sk, withGo); !got.Applicable {
+		t.Fatalf("go requirement with tool: %+v", got)
+	}
+	if got := verdictOf(sk, withoutGo); got.Applicable || got.Failing != "has=go: absent" {
+		t.Fatalf("go requirement without tool: %+v", got)
+	}
+}

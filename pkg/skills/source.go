@@ -2,6 +2,7 @@ package skills
 
 import (
 	"io/fs"
+	"os"
 	"path/filepath"
 
 	"github.com/qiangli/yoke/pkg/assetring"
@@ -49,6 +50,25 @@ func DirSource(dir string) Source {
 // no control plane required. Local installs/learning still shadow it.
 func SharedDirSource(dir string) Source {
 	return assetring.FolderDir(dir, RingShared, skillMarker)
+}
+
+// projectSkillsDir locates skills/ at the nearest Git repository root.
+// A nested checkout owns its own catalog; an absent skills/ is an empty ring.
+func projectSkillsDir() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return filepath.Join(dir, "skills")
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
 }
 
 // ExitCode maps a cobra error to the repo exit convention (2 usage, 1 otherwise).

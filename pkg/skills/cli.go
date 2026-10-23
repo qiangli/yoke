@@ -817,7 +817,13 @@ func (c *config) probes(refresh bool) (*ProbeSet, *FileCache) {
 }
 
 func (c *config) catalog() *Catalog {
-	cat := &Catalog{Sources: c.sources}
+	cat := &Catalog{Sources: append([]Source(nil), c.sources...)}
+	// Repository skills are a read-only shared source. Discover the nearest
+	// repository at call time so show, verify, list and craft agree even when
+	// a command starts in a nested directory.
+	if dir := projectSkillsDir(); dir != "" {
+		cat.Sources = append(cat.Sources, SharedDirSource(dir))
+	}
 	if c.cfgDir != "" {
 		cat.Sources = append(cat.Sources, DirSource(c.cfgDir))
 		cat.RetiredDir = filepath.Join(c.cfgDir, retiredDirName)
