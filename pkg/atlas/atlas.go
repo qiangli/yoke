@@ -1406,6 +1406,12 @@ func init() {
 	addVerb("otel", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly, CapNeedsNetwork}})
 	addVerb("audit", Entry{Stage: StageCross, Group: GroupPlatform, AliasOf: "inspect", Caps: []string{CapJSON, CapReadOnly}})
 	addVerb("check", Entry{Stage: StageTest, Group: GroupDiagnostics, Caps: []string{CapJSON, CapReadOnly}})
+	// src: the source-provenance front door (Sprint 458 M1). `src show` maps a
+	// command to its source repo, Go package and class; `src fetch` pins an OSS
+	// checkout at the running binary's release commit; `src check` flags
+	// working-tree edits under core or protected paths. Diagnostics group: it
+	// verifies the supply chain rather than shipping anything.
+	addVerb("src", Entry{Stage: StageCross, Group: GroupDiagnostics, Caps: []string{CapJSON, CapNeedsNetwork}})
 	// gate: THE Test verb. Before it, the Test stage was EMPTY -- not because
 	// nobody tested, but because the gate (the command that decides pass/fail)
 	// was spelled four incompatible ways across four packages: weave's
@@ -1536,6 +1542,8 @@ func init() {
 		// list — and WRITES it (below). A privacy surface: it is a durable account of
 		// what the steward/user is doing across every thread.
 		"todo", "why",
+		// src READS the fetched OSS checkouts it maps and verifies.
+		"src",
 	)
 
 	// write — mutates the filesystem or host state (short of irreversible loss).
@@ -1570,6 +1578,8 @@ func init() {
 		"git-scm", "gh", "curl", "helm", "self", "bootstrap", "upgrade",
 		// commands add/set write the registered-command ring (Sprint 179).
 		"commands",
+		// src fetch WRITES the pinned OSS checkout under $BASHY_HOME/src.
+		"src",
 		"rclone", "meet", "mb", "messages", "ping", "inbox", "bus", "notify",
 		// llm WRITES its bearer token, the endpoint record of a running
 		// server, and a usage.jsonl line per routing decision and per
@@ -1602,6 +1612,8 @@ func init() {
 		"git-scm", "gh", "loom", "web", "curl", "rclone", "zot", "seaweedfs",
 		"kopia", "kubectl", "helm", "self", "bootstrap", "upgrade", "secret",
 		"otel", "tessaro", "login", "app",
+		// src fetch clones the OSS remote (or the offline seed) over the net.
+		"src",
 		// llm's workers are agent CLIs, and they reach their vendor.
 		"llm",
 		// commands verify on a download: record provisions the pinned binary.
@@ -1816,7 +1828,7 @@ func init() {
 		// verbs: metered spend, ungoverned processes, remote control planes,
 		// durable message buses, history-rewriting forges, registry deletions
 		"weave", "agentic", "lens-script", "dag", "sdlc", "chat", "invoke", "delegate",
-		"genie", "ycode", "coach", "meet", "supervise", "mb", "messages",
+		"genie", "ycode", "coach", "meet", "supervise", "mb", "messages", "src",
 		"ping", "inbox", "notify", "bus", "herald", "tool", "model", "agent",
 		"schedule", "act", "act-runner", "mirror", "mcp", "skill", "oci",
 		"podman", "docker", "sandbox", "ollama", "llm", "peer", "git",
@@ -1878,7 +1890,7 @@ func init() {
 		// orchestration / knowledge / fleet verbs outside the v1.0.0 table
 		"agentic", "capability", "claim", "coach", "define", "delegate", "dks", "db",
 		"gate", "handoff", "leaderboard", "login", "mirror", "otel", "peer",
-		"person", "resume", "search", "secret", "stats", "steward", "tessaro",
+		"person", "resume", "search", "secret", "src", "stats", "steward", "tessaro",
 		// engines, forges and managed externals fronted by a verb
 		"act", "act-runner", "curl", "gh", "git", "git-scm", "helm", "kopia",
 		"kubectl", "rclone", "seaweedfs", "zot",
