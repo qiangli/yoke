@@ -32,7 +32,7 @@ func newSrcCmd() *cobra.Command {
 func newShowCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "show <cmd>",
-		Short: "Show a command's source repo, Go package, class, and release commit",
+		Short: "Show a command's source repo, Go package, class, release commit, and protected parts",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			info, err := Show(args[0])
@@ -45,6 +45,13 @@ func newShowCmd() *cobra.Command {
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "command: %s\nrepo: %s\npackage: %s\nclass: %s\ncommit: %s\n",
 				info.Command, info.Repo, pkg, info.Class, info.Commit)
+			if len(info.ProtectedParts) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "protected_parts: (none)")
+			} else {
+				for _, p := range info.ProtectedParts {
+					fmt.Fprintf(cmd.OutOrStdout(), "protected_part: %s:%s\n", p.Repo, p.Path)
+				}
+			}
 			return nil
 		},
 	}

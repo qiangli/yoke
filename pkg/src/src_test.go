@@ -13,7 +13,9 @@ import (
 
 // seedFixture builds a tiny two-commit git repo and publishes it as a bare
 // seed at home/seed/yoke.git (the Sprint 386 offline-seed shape). It returns
-// the two commit SHAs (old, new). No network is touched.
+// the two commit SHAs (old, new). The tree mixes tiers: pkg/atlas is core,
+// pkg/weave/weave_story_commit.go is a protected guard rail, pkg/weave's
+// other files are skill tier, and README is neutral. No network is touched.
 func seedFixture(t *testing.T, home string) (oldSHA, newSHA string) {
 	t.Helper()
 	work := filepath.Join(t.TempDir(), "work")
@@ -27,6 +29,7 @@ func seedFixture(t *testing.T, home string) (oldSHA, newSHA string) {
 		}
 	}
 	write("pkg/weave/engine.go", "package weave\n")
+	write("pkg/weave/weave_story_commit.go", "package weave\n")
 	write("pkg/atlas/atlas.go", "package atlas\n")
 	write("README.md", "# fixture\n")
 	if _, err := ygit.Init(ygit.InitOptions{Path: work}); err != nil {
@@ -63,18 +66,20 @@ func seedFixture(t *testing.T, home string) (oldSHA, newSHA string) {
 
 func destOf(home string) string { return filepath.Join(home, "src", "yoke") }
 
-func TestShowCoreProtectedSkill(t *testing.T) {
+func TestShowCoreSkillExternal(t *testing.T) {
 	t.Setenv("BASHY_SRC_COMMIT", "abc123def456")
 	for _, tc := range []struct {
 		cmd       string
 		repo, pkg string
 		class     src.Class
+		parts     []string
 	}{
-		{"dag", "yoke", "github.com/qiangli/yoke/pkg/dag", src.ClassCore},
-		{"sprint", "yoke", "github.com/qiangli/yoke/pkg/weave", src.ClassProtected},
-		{"kb", "yoke", "github.com/qiangli/yoke/pkg/kb", src.ClassSkill},
-		{"kubectl", "managed", "managed:kubectl", src.ClassExternal},
-		{"ls", "coreutils", "github.com/qiangli/coreutils", src.ClassCore},
+		{"dag", "yoke", "github.com/qiangli/yoke/pkg/dag", src.ClassCore, nil},
+		{"sprint", "yoke", "github.com/qiangli/yoke/pkg/weave", src.ClassSkill,
+			[]string{"pkg/weave/sprint_commit_attribution.go", "pkg/weave/weave_story_commit.go"}},
+		{"kb", "yoke", "github.com/qiangli/yoke/pkg/kb", src.ClassSkill, nil},
+		{"kubectl", "managed", "managed:kubectl", src.ClassExternal, nil},
+		{"ls", "coreutils", "github.com/qiangli/coreutils", src.ClassCore, nil},
 	} {
 		info, err := src.Show(tc.cmd)
 		if err != nil {
@@ -84,6 +89,24 @@ func TestShowCoreProtectedSkill(t *testing.T) {
 		if info.Repo != tc.repo || info.Package != tc.pkg || info.Class != tc.class || info.Commit != "abc123def456" {
 			t.Errorf("Show(%q) = %+v, want repo=%q pkg=%q class=%q commit=abc123def456",
 				tc.cmd, info, tc.repo, tc.pkg, tc.class)
+		}
+		var got []string
+		for _, p := range info.ProtectedParts {
+			got = append(got, p.Repo+":"+p.Path)
+		}
+		var want []string
+		for _, p := range tc.parts {
+			want = append(want, "yoke:"+p)
+		}
+		if len(got) != len(want) {
+			t.Errorf("Show(%q) protected parts = %q, want %q", tc.cmd, got, want)
+			continue
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("Show(%q) protected parts = %q, want %q", tc.cmd, got, want)
+				break
+			}
 		}
 	}
 	if _, err := src.Show("nope-not-a-command"); err == nil {
@@ -115,13 +138,15 @@ func TestFetchFromSeedNoOpAndCheckClean(t *testing.T) {
 	if !strings.Contains(strings.Join(branches, "\n"), "pristine") {
 		t.Errorf("no pristine branch in %q", branches)
 	}
-	prot := filepath.Join(dest, "pkg", "weave", "engine.go")
+	prot := filepath.Join(dest, "pkg", "weave", "weave_story_commit.go")
 	if st, err := os.Stat(prot); err != nil || st.Mode().Perm() != 0o444 {
 		t.Errorf("protected file mode = %v, %v; want 0444", st, err)
 	}
-	neutral := filepath.Join(dest, "README.md")
-	if st, err := os.Stat(neutral); err != nil || st.Mode().Perm()&0o200 == 0 {
-		t.Errorf("neutral file should stay writable: %v, %v", st, err)
+	for _, rel := range []string{"pkg/weave/engine.go", "README.md"} {
+		p := filepath.Join(dest, filepath.FromSlash(rel))
+		if st, err := os.Stat(p); err != nil || st.Mode().Perm()&0o200 == 0 {
+			t.Errorf("%s should stay writable: %v, %v", rel, st, err)
+		}
 	}
 
 	msg2, err := src.Fetch(home, "yoke")
@@ -159,8 +184,9 @@ func TestCheckFlagsProtectedAndCoreEdits(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	tamper("pkg/weave/engine.go")
+	tamper("pkg/weave/weave_story_commit.go")
 	tamper("pkg/atlas/atlas.go")
+	tamper("pkg/weave/engine.go")
 	tamper("README.md")
 
 	vs, err := src.Check(home)
@@ -168,11 +194,11 @@ func TestCheckFlagsProtectedAndCoreEdits(t *testing.T) {
 		t.Fatalf("Check: %v", err)
 	}
 	want := map[string]string{
-		"pkg/weave/engine.go": "protected",
-		"pkg/atlas/atlas.go":  "core",
+		"pkg/weave/weave_story_commit.go": "protected",
+		"pkg/atlas/atlas.go":              "core",
 	}
 	if len(vs) != len(want) {
-		t.Fatalf("Check = %v, want %d violations (neutral README excluded)", vs, len(want))
+		t.Fatalf("Check = %v, want %d violations (skill-tier and neutral files excluded)", vs, len(want))
 	}
 	for _, v := range vs {
 		if want[v.Path] != v.Kind || v.Repo != "yoke" {
@@ -234,9 +260,18 @@ func TestSrcCmdShowAndCheck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("show dag: %v", err)
 	}
-	for _, want := range []string{"repo: yoke", "package: github.com/qiangli/yoke/pkg/dag", "class: core", "commit: " + sha} {
+	for _, want := range []string{"repo: yoke", "package: github.com/qiangli/yoke/pkg/dag", "class: core", "commit: " + sha, "protected_parts: (none)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("show dag output %q missing %q", out, want)
+		}
+	}
+	out, err = run("show", "sprint")
+	if err != nil {
+		t.Fatalf("show sprint: %v", err)
+	}
+	for _, want := range []string{"class: skill", "protected_part: yoke:pkg/weave/sprint_commit_attribution.go", "protected_part: yoke:pkg/weave/weave_story_commit.go"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("show sprint output %q missing %q", out, want)
 		}
 	}
 	if _, err := run("show", "nope-not-a-command"); err == nil {
@@ -250,7 +285,7 @@ func TestSrcCmdShowAndCheck(t *testing.T) {
 		t.Errorf("check clean = %q, %v", out, err)
 	}
 
-	prot := filepath.Join(destOf(home), "pkg", "weave", "engine.go")
+	prot := filepath.Join(destOf(home), "pkg", "weave", "weave_story_commit.go")
 	if err := os.Chmod(prot, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +296,7 @@ func TestSrcCmdShowAndCheck(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "violation") {
 		t.Errorf("check tampered err = %v (output %q), want a violation exit", err, out)
 	}
-	if !strings.Contains(out, "VIOLATION protected yoke:pkg/weave/engine.go") {
+	if !strings.Contains(out, "VIOLATION protected yoke:pkg/weave/weave_story_commit.go") {
 		t.Errorf("check output %q missing the violation line", out)
 	}
 }

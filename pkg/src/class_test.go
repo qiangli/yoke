@@ -23,9 +23,9 @@ func TestCoreVerbSetLocked(t *testing.T) {
 }
 
 // TestEveryAtlasCommandHasClass is the coverage ratchet: no catalogued
-// command may lack a class. ClassOf is total by construction; this pins
-// that against the live atlas so a new table entry can never slip through
-// unclassified.
+// command may lack a class, and no command may carry the path-only
+// protected tier. ClassOf is total by construction; this pins that against
+// the live atlas so a new table entry can never slip through unclassified.
 func TestEveryAtlasCommandHasClass(t *testing.T) {
 	vocab := map[string]bool{}
 	for _, c := range src.Classes() {
@@ -34,13 +34,24 @@ func TestEveryAtlasCommandHasClass(t *testing.T) {
 	if len(vocab) != 4 {
 		t.Fatalf("Classes() = %q, want the 4-class vocabulary", src.Classes())
 	}
+	cmdVocab := map[string]bool{}
+	for _, c := range src.CommandClasses() {
+		cmdVocab[c] = true
+	}
+	if len(cmdVocab) != 3 {
+		t.Fatalf("CommandClasses() = %q, want core|skill|external", src.CommandClasses())
+	}
 	cmds := src.AtlasCommands()
 	if len(cmds) == 0 {
 		t.Fatal("AtlasCommands() is empty — the ratchet would pass vacuously")
 	}
 	for _, cmd := range cmds {
-		if c := src.ClassOf(cmd); !vocab[string(c)] {
+		c := src.ClassOf(cmd)
+		if !vocab[string(c)] {
 			t.Errorf("ClassOf(%q) = %q, outside %q", cmd, c, src.Classes())
+		}
+		if c == src.ClassProtected {
+			t.Errorf("ClassOf(%q) = protected: protection is per path, never per command", cmd)
 		}
 	}
 	for _, v := range src.CoreVerbs() {
@@ -50,8 +61,47 @@ func TestEveryAtlasCommandHasClass(t *testing.T) {
 	}
 }
 
+// TestBashBuiltins61 pins the shell-owned builtin set: 61 names, with ".",
+// ":", "[" and readonly present and time absent (time is a reserved word,
+// not a builtin).
+func TestBashBuiltins61(t *testing.T) {
+	want := []string{
+		".", ":", "[",
+		"alias", "bg", "bind", "break",
+		"builtin", "caller", "cd", "command",
+		"compgen", "complete", "compopt", "continue",
+		"declare", "dirs", "disown", "echo",
+		"enable", "eval", "exec", "exit",
+		"export", "false", "fc", "fg",
+		"getopts", "hash", "help", "history",
+		"jobs", "kill", "let", "local",
+		"logout", "mapfile", "popd", "printf",
+		"pushd", "pwd", "read", "readarray",
+		"readonly", "return", "set", "shift",
+		"shopt", "source", "suspend", "test",
+		"times", "trap", "true", "type",
+		"typeset", "ulimit", "umask", "unalias",
+		"unset", "wait",
+	}
+	if len(want) != 61 {
+		t.Fatalf("test lists %d names, want all 61 written out", len(want))
+	}
+	if got := src.BuiltinNames(); !slices.Equal(got, want) {
+		t.Errorf("BuiltinNames() = %q, want %q", got, want)
+	}
+	if src.IsBuiltin("time") {
+		t.Error("IsBuiltin(time) = true: time is a reserved word, not a builtin")
+	}
+	for _, b := range []string{".", ":", "[", "readonly"} {
+		if !src.IsBuiltin(b) {
+			t.Errorf("IsBuiltin(%q) = false, want true", b)
+		}
+	}
+}
+
 // TestClassDerivation pins the derivation rules behind ClassOf: origin axis
-// plus core verb list, protected manifest, skill default.
+// plus core verb list, skill default. Guard-rail paths never promote a
+// command out of skill.
 func TestClassDerivation(t *testing.T) {
 	cases := []struct {
 		cmd  string
@@ -59,6 +109,9 @@ func TestClassDerivation(t *testing.T) {
 		why  string
 	}{
 		{"cd", src.ClassCore, "bash builtin"},
+		{".", src.ClassCore, "POSIX special builtin"},
+		{"[", src.ClassCore, "test alias builtin"},
+		{"readonly", src.ClassCore, "bash builtin"},
 		{"ls", src.ClassCore, "POSIX-required + GNU name"},
 		{"cat", src.ClassCore, "POSIX-required + GNU name"},
 		{"awk", src.ClassCore, "POSIX-required classic tool"},
@@ -72,9 +125,9 @@ func TestClassDerivation(t *testing.T) {
 		{"kubectl", src.ClassExternal, "bin-managed external"},
 		{"gh", src.ClassExternal, "bin-managed external"},
 		{"go", src.ClassExternal, "toolchain provisioner"},
-		{"weave", src.ClassProtected, "implemented under protected pkg/weave"},
-		{"sprint", src.ClassProtected, "implemented under protected pkg/weave"},
-		{"steward", src.ClassProtected, "implemented under protected pkg/steward"},
+		{"weave", src.ClassSkill, "protected paths do not promote commands"},
+		{"sprint", src.ClassSkill, "protected paths do not promote commands"},
+		{"steward", src.ClassSkill, "in-process skill surface"},
 		{"kb", src.ClassSkill, "in-process skill surface"},
 		{"chat", src.ClassSkill, "in-process skill surface"},
 		{"resources", src.ClassSkill, "yoke tool outside the core set"},

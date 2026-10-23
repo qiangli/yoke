@@ -20,6 +20,10 @@ type Info struct {
 	Package string
 	Class   Class
 	Commit  string
+	// ProtectedParts lists the protected manifest rows inside the command's
+	// own package: the guard-rail files its implementation ships with. The
+	// command's class is unaffected — protection is per path.
+	ProtectedParts []ProtEntry
 }
 
 // coreVerbSource hand-maps the 14 locked core verbs to their source. The
@@ -136,25 +140,32 @@ func CensusPackageNames() []string {
 	return out
 }
 
-// isProtectedCommand reports whether cmd is implemented under a Protected
-// (non-core) manifest prefix. Core and external commands never qualify:
-// the class precedence puts them first.
-func isProtectedCommand(cmd string) bool {
-	repo, pkg, err := Source(cmd)
-	if err != nil || repo != "yoke" {
-		return false
+// packageRelDir converts a Source package path to the repo-relative directory
+// its protected_parts are drawn from. The second result is false when the
+// package is unknown (a shell-mounted command with no Go package), in which
+// case there are no parts to list.
+func packageRelDir(repo, pkg string) (string, bool) {
+	if pkg == "" {
+		return "", false
 	}
-	rel := pkg
-	if rel == yokeModule {
-		return false
+	switch repo {
+	case "yoke":
+		if pkg == yokeModule {
+			return "", true
+		}
+		const prefix = yokeModule + "/"
+		if len(pkg) > len(prefix) && pkg[:len(prefix)] == prefix {
+			return pkg[len(prefix):], true
+		}
+		return "", false
+	case "coreutils":
+		if pkg == coreutilsModule {
+			return "", true
+		}
+		return "", false
+	default:
+		return "", false
 	}
-	const prefix = yokeModule + "/"
-	if len(rel) <= len(prefix) || rel[:len(prefix)] != prefix {
-		return false
-	}
-	rel = rel[len(prefix):]
-	m := matchProt("yoke", rel)
-	return m != nil && !m.Core
 }
 
 // Show returns the full `src show` record for cmd.
@@ -167,5 +178,9 @@ func Show(cmd string) (Info, error) {
 	if commit == "" {
 		commit = "unknown"
 	}
-	return Info{Command: cmd, Repo: repo, Package: pkg, Class: ClassOf(cmd), Commit: commit}, nil
+	var parts []ProtEntry
+	if dir, ok := packageRelDir(repo, pkg); ok {
+		parts = PackageProtectedParts(repo, dir)
+	}
+	return Info{Command: cmd, Repo: repo, Package: pkg, Class: ClassOf(cmd), Commit: commit, ProtectedParts: parts}, nil
 }
