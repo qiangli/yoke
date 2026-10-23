@@ -78,20 +78,21 @@ func ffUpdate(r *gogit.Repository, w *gogit.Worktree, branch plumbing.ReferenceN
 	if err != nil {
 		return fmt.Errorf("status: %w", err)
 	}
-	if st.IsClean() {
+	raw, err := w.Status()
+	if err != nil {
+		return fmt.Errorf("status: %w", err)
+	}
+	if st.IsClean() && raw.IsClean() {
 		// MergeReset moves the branch ref and rebuilds index + worktree.
-		// Safe here: the tree is clean, so nothing can be lost.
 		if err := w.Reset(&gogit.ResetOptions{Mode: gogit.MergeReset, Commit: target}); err != nil {
 			return fmt.Errorf("fast-forward: %w", err)
 		}
 		return nil
 	}
 
-	// Dirty worktree. go-git's MergeReset refuses on any unstaged change
-	// and its HardReset deletes untracked files, so neither matches git's
-	// behavior. Apply the tree diff by hand instead: only paths changed
-	// between oldHash and target are touched, and the overlap check below
-	// guarantees none of them carry local modifications.
+	// go-git's MergeReset refuses on any raw unstaged change, including
+	// file-mode changes ignored by core.filemode=false. Apply the tree diff
+	// by hand instead; this also preserves unrelated local and ignored files.
 	changes, err := treeChanges(r, oldHash, target)
 	if err != nil {
 		return err
@@ -333,7 +334,7 @@ func Merge(opts MergeOptions) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := w.Reset(&gogit.ResetOptions{Mode: gogit.MergeReset, Commit: *targetHash}); err != nil {
+	if err := ffUpdate(r, w, headRef.Name(), headHash, *targetHash); err != nil {
 		return nil, fmt.Errorf("merge --no-ff: %w", err)
 	}
 	msg := opts.Message

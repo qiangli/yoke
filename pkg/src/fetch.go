@@ -45,7 +45,7 @@ func Fetch(home, repo string) (string, error) {
 	}
 	dest := filepath.Join(SrcDir(home), repo)
 	if st, err := os.Stat(dest); err == nil && st.IsDir() {
-		return fetchExisting(dest, commit)
+		return fetchExisting(dest, repo, commit)
 	}
 	origin := seedOrigin(home, repo)
 	if origin == "" {
@@ -72,7 +72,7 @@ func Fetch(home, repo string) (string, error) {
 		_ = os.RemoveAll(dest)
 		return "", fmt.Errorf("src: refusing %s: checkout at %s, want release commit %s", repo, shortSHA(rev.Hash), shortSHA(commit))
 	}
-	if err := ensurePristine(dest); err != nil {
+	if err := ensurePristine(dest, repo); err != nil {
 		_ = os.RemoveAll(dest)
 		return "", err
 	}
@@ -86,7 +86,7 @@ func Fetch(home, repo string) (string, error) {
 // fetchExisting handles a present checkout: exact-commit match is a no-op,
 // anything else is refused (a tampered or mismatched tree must never be
 // silently kept or clobbered).
-func fetchExisting(dest, commit string) (string, error) {
+func fetchExisting(dest, repo, commit string) (string, error) {
 	rev, err := ygit.RevParse(ygit.RevParseOptions{RepoPath: dest})
 	if err != nil {
 		return "", fmt.Errorf("src: refusing %s: %v", dest, err)
@@ -95,7 +95,7 @@ func fetchExisting(dest, commit string) (string, error) {
 		return "", fmt.Errorf("src: refusing %s: checkout at %s, want release commit %s (remove it to re-fetch)",
 			dest, shortSHA(rev.Hash), shortSHA(commit))
 	}
-	if err := ensurePristine(dest); err != nil {
+	if err := ensurePristine(dest, repo); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("%s already at %s (no-op)", dest, shortSHA(commit)), nil
@@ -103,14 +103,25 @@ func fetchExisting(dest, commit string) (string, error) {
 
 // ensurePristine creates (or confirms) the local `pristine` branch at HEAD —
 // callers guarantee HEAD is the release commit — and checks it out.
-func ensurePristine(dest string) error {
+func ensurePristine(dest, repo string) error {
 	if _, _, err := ygit.Branch(ygit.BranchOptions{RepoPath: dest, Name: pristineBranch}); err != nil {
 		return fmt.Errorf("src: branch %s: %w", pristineBranch, err)
 	}
+	cur, err := currentBranch(dest)
+	if err != nil {
+		return err
+	}
+	if cur == pristineBranch {
+		return nil
+	}
+	if err := unlockRepo(dest, repo); err != nil {
+		return err
+	}
 	if _, err := ygit.Checkout(ygit.CheckoutOptions{RepoPath: dest, Branch: pristineBranch}); err != nil {
+		_ = relockRepo(dest, repo)
 		return fmt.Errorf("src: checkout %s: %w", pristineBranch, err)
 	}
-	return nil
+	return relockRepo(dest, repo)
 }
 
 // protectFiles leaves every file under a protected-manifest prefix read-only.
