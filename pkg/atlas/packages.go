@@ -347,6 +347,9 @@ var packages = map[string]Package{
 	"lockfile": supPkg("the ONE process file-lock primitive — Acquire/TryAcquire/AcquireWithin, " +
 		"one platform pair for the whole tree. Five packages hand-rolled their own and " +
 		"three of five had been ported to Windows while two were no-ops"),
+	"mplfree": supPkg("test-only MPL-free license gate on the podman engine import graph: the " +
+		"multierror chain and securejoin resolution must land on permissive replacements, never " +
+		"MPL-2.0 upstream; it has no runtime command surface"),
 	"stateaccess": supPkg("tells a sandbox-DENIED coordination store from a BUSY one: a no-lock " +
 		"preflight before the first mutation and an actionable denial that never wraps lockfile.ErrHeld"),
 	"nudge":     supPkg("the proactive half of the agent-hint subsystem; emitted, never invoked"),
