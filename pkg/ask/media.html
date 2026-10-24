@@ -36,6 +36,9 @@ body.pm .prompter{position:absolute;inset:0;height:auto;background:none}
 body.pm .prompter .text{font-size:clamp(2rem,4.6vw,4rem);line-height:1.35;text-align:left;padding:0 6%}
 body.pm .prompter::before{top:22%}
 .main{display:contents}
+body.full .prompter{overflow:auto}
+body.full .prompter .text{position:static;transform:none!important;padding:24px 6%;font-size:clamp(1.2rem,2.4vw,2rem)}
+body.full .prompter::before{display:none}
 </style></head><body><div class="wrap">
 <header><b>bashy ask · {{.Kind}}</b><span>requested by {{.Requester}} · stays on this computer until you press “Use this”</span></header>
 {{if .Prompt}}<div class="prompt">{{.Prompt}}</div>{{end}}
@@ -49,6 +52,7 @@ body.pm .prompter::before{top:22%}
 </div>
 <div class="controls">
   <button class="primary" id="start">Start</button>
+  <button id="full" style="display:none">Full script</button>
   <button class="rec" id="stop" disabled>Stop</button>
   <button id="retake" disabled>Retake</button>
   <button class="ok" id="use" disabled>Use this</button>
@@ -62,7 +66,7 @@ const $ = id => document.getElementById(id);
 const preview=$("preview"), playback=$("playback"), still=$("still"), badge=$("badge"), count=$("count");
 let stream, rec, chunks=[], blob=null, timer=null, scrollY=0, rafId=0, t0=0;
 if (KIND==="photo") $("start").textContent="Take photo";
-if (SCRIPT) { document.body.classList.add("pm"); $("prompter").style.display="block"; $("speedl").style.display="flex"; $("ptext").textContent=SCRIPT; resetPrompter(); }
+if (SCRIPT) { $("full").style.display="inline-block"; document.body.classList.add("pm"); $("prompter").style.display="block"; $("speedl").style.display="flex"; $("ptext").textContent=SCRIPT; resetPrompter(); }
 function resetPrompter(){ scrollY=0; $("ptext").style.top=$("prompter").clientHeight*0.22+"px"; $("ptext").style.transform="translateY(0)"; }
 function scrollPrompter(ts){ const dt=(ts-(scrollPrompter.last||ts))/1000; scrollPrompter.last=ts; scrollY+=dt*Number($("speed").value); $("ptext").style.transform=`translateY(${-scrollY}px)`; rafId=requestAnimationFrame(scrollPrompter); }
 function msg(t){ $("msg").textContent=t; }
@@ -83,10 +87,11 @@ $("start").onclick = async ()=>{
     c.toBlob(b=>{ blob=b; still.src=URL.createObjectURL(b); still.style.display="block"; preview.style.display="none"; $("retake").disabled=false; $("use").disabled=false; msg("Happy with it? Press “Use this”, or retake."); },"image/png");
     return;
   }
+  document.body.classList.remove("full"); $("full").textContent="Full script"; $("full").disabled=true;
   resetPrompter(); await countdown(3);
   chunks=[]; const type=pickType(); rec=new MediaRecorder(stream, type?{mimeType:type}:{});
   rec.ondataavailable=e=>{ if(e.data.size) chunks.push(e.data); };
-  rec.onstop=()=>{ if(SCRIPT){document.body.classList.remove("pm"); $("prompter").style.display="none";} blob=new Blob(chunks,{type:rec.mimeType||type||"video/webm"}); playback.src=URL.createObjectURL(blob); playback.style.display="block"; preview.style.display="none"; badge.className="badge"; badge.textContent="review"; cancelAnimationFrame(rafId); scrollPrompter.last=0; $("retake").disabled=false; $("use").disabled=false; msg("Watch it back. “Use this” sends it; “Retake” starts over."); };
+  rec.onstop=()=>{ $("full").disabled=false; if(SCRIPT){document.body.classList.remove("pm"); $("prompter").style.display="none";} blob=new Blob(chunks,{type:rec.mimeType||type||"video/webm"}); playback.src=URL.createObjectURL(blob); playback.style.display="block"; preview.style.display="none"; badge.className="badge"; badge.textContent="review"; cancelAnimationFrame(rafId); scrollPrompter.last=0; $("retake").disabled=false; $("use").disabled=false; msg("Watch it back. “Use this” sends it; “Retake” starts over."); };
   rec.start(1000); t0=Date.now(); badge.className="badge rec"; $("stop").disabled=false;
   if (SCRIPT) rafId=requestAnimationFrame(scrollPrompter);
   timer=setInterval(()=>{ const s=Math.floor((Date.now()-t0)/1000); badge.textContent="● "+Math.floor(s/60)+":"+String(s%60).padStart(2,"0"); if(MAX>0&&s>=MAX) $("stop").click(); },250);
@@ -102,5 +107,6 @@ $("use").onclick=async ()=>{
 };
 $("speed").oninput=()=>{ $("speedv").textContent=$("speed").value; };
 document.addEventListener("keydown",e=>{ if(!SCRIPT) return; const r=$("speed"); if(e.key==="ArrowUp"){r.value=Math.min(120,+r.value+5);} else if(e.key==="ArrowDown"){r.value=Math.max(5,+r.value-5);} else return; e.preventDefault(); $("speedv").textContent=r.value; });
+$("full").onclick=()=>{ const on=document.body.classList.toggle("full"); $("full").textContent=on?"Prompter":"Full script"; if(!on) resetPrompter(); };
 camera();
 </script></body></html>
