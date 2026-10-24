@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -155,11 +156,14 @@ func (c Client) List() ([]Item, error) {
 
 // Get returns one secret value by name.
 func (c Client) Get(name string) (string, error) {
-	resp, err := c.do(http.MethodGet, "/"+name, nil)
+	resp, err := c.do(http.MethodGet, "/"+url.PathEscape(name), nil)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return "", fmt.Errorf("no such secret: %s", name)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return "", apiError(resp)
 	}
@@ -191,7 +195,7 @@ func (c Client) Put(items []Item) error {
 
 // Delete removes one secret by name.
 func (c Client) Delete(name string) error {
-	resp, err := c.do(http.MethodDelete, "/"+name, nil)
+	resp, err := c.do(http.MethodDelete, "/"+url.PathEscape(name), nil)
 	if err != nil {
 		return err
 	}

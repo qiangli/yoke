@@ -18,6 +18,7 @@ type fakeVault struct {
 	t      *testing.T
 	data   map[string]string
 	server *httptest.Server
+	paths  []string
 }
 
 func newFakeVault(t *testing.T) *fakeVault {
@@ -69,7 +70,10 @@ func newFakeVault(t *testing.T) *fakeVault {
 			http.Error(w, "method", http.StatusMethodNotAllowed)
 		}
 	})
-	fv.server = httptest.NewServer(mux)
+	fv.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fv.paths = append(fv.paths, r.Method+" "+r.URL.EscapedPath())
+		mux.ServeHTTP(w, r)
+	}))
 	t.Cleanup(fv.server.Close)
 	return fv
 }
@@ -100,6 +104,7 @@ func run(t *testing.T, cfg Config, args ...string) (string, string, error) {
 
 func configureSecretsTestEnv(t *testing.T) {
 	t.Helper()
+	t.Setenv("BASHY_HOME", t.TempDir())
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("BASHY_SECRETS_TOKEN", "")

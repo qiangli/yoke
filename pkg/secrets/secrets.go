@@ -58,7 +58,11 @@ history, compose the separate ask command with set:
 To mint a fresh random secret that never passes through the operator, an
 agent transcript or shell history, compose gen (local-only) with set:
 
-  bashy secret gen | bashy secret set DB_PASSWORD`,
+  bashy secret gen | bashy secret set DB_PASSWORD
+
+Name secrets <provider>/<account>/<purpose> (for example do/orbit/agent or
+docr/dhnt/push). Keep local secret files only under ~/.ssh/; use
+bashy secret exec for one-off commands.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -67,6 +71,7 @@ agent transcript or shell history, compose gen (local-only) with set:
 	cmd.PersistentFlags().StringVar(&cfg.Token, "token", "", "Bearer token (default $BASHY_SECRETS_TOKEN, ~/.config/bashy/secrets-token, or $BASHY_API_KEY)")
 
 	cmd.AddCommand(newEnvCmd(&cfg))
+	cmd.AddCommand(newExecCmd(&cfg))
 	cmd.AddCommand(newLsCmd(&cfg))
 	cmd.AddCommand(newGetCmd(&cfg))
 	cmd.AddCommand(newCheckCmd(&cfg))
@@ -91,8 +96,10 @@ func newEnvCmd(cfg *Config) *cobra.Command {
   eval "$(bashy secret env)"
 
 Each line is LOCAL_NAME=RHS. An RHS beginning with '@' is a cloudbox secret
-REFERENCE (@name, or @{name}) resolved from the vault; any other RHS is a
-literal value. The template contains NO secrets, so it is safe to commit:
+REFERENCE (@name, or @{name}) resolved from the vault. A bare word matching
+a vault name is refused with "did you mean @NAME?"; other values are literals.
+Quote an intentional literal that matches a vault name. The template contains
+NO secrets, so it is safe to commit:
 
   # ~/.config/bashy/secrets.map
   OPENAI_API_KEY=@host-a-aider-openai
@@ -108,8 +115,8 @@ are materialized — nothing else in the vault leaks into your shell.
 Default template: $XDG_CONFIG_HOME/bashy/secrets.map (else
 ~/.config/bashy/secrets.map); pass a path to override. The last successful
 render is cached (mode 0600) and reused only when cloudbox is unreachable,
-so env never breaks shell startup — it always exits 0 and prints a leading
-comment on degraded paths.`,
+with a leading comment on degraded paths. Ambiguous bare vault names fail
+with a non-zero exit instead of emitting exports or using the cache.`,
 		Args: cobra.RangeArgs(0, 1),
 		RunE: func(c *cobra.Command, args []string) error {
 			tmpl := ""
@@ -132,11 +139,12 @@ type binding struct {
 	ref     string // vault reference name, when isRef
 	literal string // literal value, when !isRef
 	isRef   bool
+	bare    bool // unquoted single word: reject an accidental vault name
 }
 
 func runEnv(out, errOut io.Writer, cfg Config, tmplPath string, noCache bool) error {
-	// env must never break shell startup: on any error fall back to cache,
-	// and if even that fails emit a harmless comment and exit 0.
+	// Network errors fall back to cache; ambiguous template bindings must
+	// fail instead of exporting a vault name as a literal credential.
 	usingDefault := tmplPath == ""
 	if usingDefault {
 		tmplPath = defaultTemplatePath()
@@ -165,6 +173,15 @@ func runEnv(out, errOut io.Writer, cfg Config, tmplPath string, noCache bool) er
 		var items []Item
 		items, err = client.List()
 		if err == nil {
+			names := make(map[string]bool, len(items))
+			for _, it := range items {
+				names[it.Name] = true
+			}
+			for _, bd := range bindings {
+				if bd.bare && names[bd.literal] {
+					return fmt.Errorf("%s: did you mean @%s?", bd.local, bd.literal)
+				}
+			}
 			rendered, missing := renderEnv(bindings, items)
 			for _, m := range missing {
 				fmt.Fprintf(errOut, "bashy secret: %q -> %q not found in vault; skipped\n", m.local, m.ref)
@@ -233,7 +250,9 @@ func readTemplate(path string) ([]binding, error) {
 			out = append(out, binding{local: local, ref: ref, isRef: true})
 			continue
 		}
-		out = append(out, binding{local: local, literal: unquote(stripInlineComment(raw)), isRef: false})
+		raw = stripInlineComment(raw)
+		bare := raw != "" && !strings.ContainsAny(raw, "'\"\\") && len(strings.Fields(raw)) == 1
+		out = append(out, binding{local: local, literal: unquote(raw), bare: bare})
 	}
 	if err := sc.Err(); err != nil {
 		return nil, err
@@ -291,10 +310,11 @@ func shellSingleQuote(s string) string {
 
 func newLsCmd(cfg *Config) *cobra.Command {
 	return &cobra.Command{
-		Use:   "list",
-		Short: "List secret names (values are never printed)",
-		Args:  cobra.NoArgs,
-		RunE: func(c *cobra.Command, _ []string) error {
+		Use:     "list [PREFIX]",
+		Aliases: []string{"ls"},
+		Short:   "List secret names, optionally filtered by prefix (values are never printed)",
+		Args:    cobra.MaximumNArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
 			client, err := cfg.Resolve()
 			if err != nil {
 				return err
@@ -304,7 +324,9 @@ func newLsCmd(cfg *Config) *cobra.Command {
 				return err
 			}
 			for _, it := range items {
-				fmt.Fprintln(c.OutOrStdout(), it.Name)
+				if len(args) == 0 || strings.HasPrefix(it.Name, args[0]) {
+					fmt.Fprintln(c.OutOrStdout(), it.Name)
+				}
 			}
 			return nil
 		},
