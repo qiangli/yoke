@@ -61,6 +61,9 @@ type options struct {
 	out     string
 	stdout  bool
 	json    bool
+	media   string
+	script  string
+	maxSecs int
 }
 
 // NewAskCmd returns the `ask` command tree — the host-agnostic entry point a front
@@ -136,6 +139,11 @@ func runAsk(c *cobra.Command, o *options) error {
 		return err
 	}
 
+	script, err := readScript(o.script)
+	if err != nil {
+		return err
+	}
+
 	id, err := newID()
 	if err != nil {
 		return fmt.Errorf("ask: generating a request id: %w", err)
@@ -170,7 +178,12 @@ func runAsk(c *cobra.Command, o *options) error {
 		}
 	}()
 
-	value, err := obtain(r, ctty.CurrentProbe(ctty.Channel(o.channel)), c.ErrOrStderr())
+	var value []byte
+	if o.media != "" {
+		value, err = obtainMedia(c.Context(), r, o.media, script, o.maxSecs, c.ErrOrStderr())
+	} else {
+		value, err = obtain(r, ctty.CurrentProbe(ctty.Channel(o.channel)), c.ErrOrStderr())
+	}
 	if err != nil {
 		return err
 	}
