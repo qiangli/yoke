@@ -1453,7 +1453,6 @@ func init() {
 	// atlas lie — an agent on an air-gapped host reads these caps and would skip a
 	// capability that works perfectly there.
 	addVerb("ask", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapJSON}})
-	addVerb("record", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapJSON}})
 
 	// account
 	addVerb("tessaro", Entry{Stage: StageCross, Group: GroupAccount, Tier: TierAccount,
@@ -1573,8 +1572,6 @@ func init() {
 		// a metadata record while a request is pending. It never writes the value
 		// anywhere the caller chose without validating the path first.
 		"ask",
-		// record WRITES the take (photo, video, audio) to a 0600 file, like ask.
-		"record",
 		// verbs
 		"weave", "genie", "ycode", "sprint", "dag", "sdlc", "supervise", "capability", "leaderboard", "agent", "dks",
 		"tool", "model", "person", "kb", "skill", "lexicon", "claim", "db", "mirror", "feed", "git",
@@ -1795,7 +1792,7 @@ func init() {
 		// Whole command rows include deletion, replacement, migration, or lifecycle
 		// operations. No per-invocation prior state or recovery guarantee exists.
 		"graph", "sprint", "capability", "leaderboard", "person", "handoff", "resume", "db",
-		"kb", "lexicon", "claim", "steward", "todo", "secret", "ask", "record",
+		"kb", "lexicon", "claim", "steward", "todo", "secret", "ask",
 		"feed", // a published post cannot be recalled from the sinks that mirrored it
 		"self", "bootstrap", "upgrade",
 		// destructive data loss
@@ -1889,7 +1886,7 @@ func init() {
 		"bootstrap", "upgrade", "web",
 		// v1.0.0 list, consumer or envelope still missing on the bar
 		"ping", "bus", "notify", "app", "model", "tool", "chat", "invoke",
-		"llm", "kb", "graph", "craft", "ask", "record", "oci", "sandbox", "loom", "ycode", "feed",
+		"llm", "kb", "graph", "craft", "ask", "oci", "sandbox", "loom", "ycode", "feed",
 		// orchestration / knowledge / fleet verbs outside the v1.0.0 table
 		"agentic", "capability", "claim", "coach", "define", "delegate", "dks", "db",
 		"gate", "handoff", "leaderboard", "login", "mirror", "otel", "peer",
