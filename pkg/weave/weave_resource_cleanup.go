@@ -237,6 +237,23 @@ func weaveUnsettledLocalRefs(root, base string, it *weaveItem) []string {
 	return unsettled
 }
 
+// weaveUnsettledSideRefs excludes the run's own branch: the normal ahead
+// guard handles it, and --force can preserve that tip before removal.
+func weaveUnsettledSideRefs(root, base string, it *weaveItem) []string {
+	refs := weaveUnsettledLocalRefs(root, base, it)
+	if it == nil || it.Branch == "" {
+		return refs
+	}
+	own := "refs/heads/" + it.Branch
+	var side []string
+	for _, ref := range refs {
+		if ref != own {
+			side = append(side, ref)
+		}
+	}
+	return side
+}
+
 // weaveSideSalvageContains reports whether sha is reachable from a side-work
 // salvage ref `abandon --force` imported for run id (a stash or side branch,
 // refs/salvage/abandoned-<id>-*). Any git failure answers false.
@@ -509,12 +526,15 @@ func weavePruneOwnedRun(dir string, id int64, repo string, expectedBirth ...time
 // A read-only estimate for review before --apply. No lock files, claims, or
 // lifecycle writes occur here; apply independently repeats every eligibility
 // check, and reports actual apparent bytes only after successful removal.
-func sprintPlanRunArtifacts(s *weaveStory) []sprintPruneAction {
+func sprintPlanRunArtifacts(s *weaveStory, older ...time.Duration) []sprintPruneAction {
 	var actions []sprintPruneAction
 	if s == nil {
 		return actions
 	}
 	for _, run := range s.Runs {
+		if len(older) > 0 && older[0] > 0 && (run.Born.IsZero() || time.Since(run.Born) < older[0]) {
+			continue
+		}
 		dir, e := weaveQueueDirForSprintRun(run)
 		if e != nil {
 			continue
@@ -566,6 +586,14 @@ func weavePlanOwnedRun(dir, repo string, it *weaveItem) []sprintPruneAction {
 			continue
 		}
 		a := sprintPruneAction{Kind: kind, Repo: repo, Target: path, ByteKind: "apparent_regular_file_bytes"}
+		if kind == "workspace" {
+			out, statusErr := exec.Command(gitBin(), "-C", path, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none").Output()
+			if statusErr != nil || len(out) > 0 {
+				a.Err = "workspace dirty, untracked, or unreadable; left alone"
+				actions = append(actions, a)
+				continue
+			}
+		}
 		if kind != "socket" {
 			if e := weaveContainedArtifact(dir, path); e != nil {
 				a.Err = e.Error()

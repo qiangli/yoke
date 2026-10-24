@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/qiangli/yoke/pkg/principal"
+	"github.com/qiangli/yoke/pkg/prune"
 )
 
 func agentC() principal.Ref { return principal.Ref{Name: "codex-c", Episode: "ep-ccc", Host: "h"} }
@@ -133,26 +134,34 @@ func TestClaimPruneCLI(t *testing.T) {
 		return out.String()
 	}
 
-	if out := run("prune", "--dry-run"); !strings.Contains(out, "would prune") ||
-		!strings.Contains(out, "codex-b") || !strings.Contains(out, "age ") {
+	before, err := os.ReadFile(claimPath(dir, agentB()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := run("prune"); !strings.Contains(out, "would remove") ||
+		!strings.Contains(out, "codex-b") || !strings.Contains(out, "last heartbeat") {
 		t.Fatalf("dry-run output = %q", out)
 	}
 	if _, err := os.Stat(claimPath(dir, agentB())); err != nil {
 		t.Fatalf("dry-run removed the claim: %v", err)
 	}
-	if out := run("prune"); !strings.Contains(out, "pruned") ||
-		!strings.Contains(out, "codex-b") || !strings.Contains(out, "age ") {
+	after, err := os.ReadFile(claimPath(dir, agentB()))
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("dry-run changed the claim: %v", err)
+	}
+	if out := run("prune", "--apply"); !strings.Contains(out, "removed") ||
+		!strings.Contains(out, "codex-b") || !strings.Contains(out, "last heartbeat") {
 		t.Fatalf("prune output = %q", out)
 	}
 	if _, err := os.Stat(claimPath(dir, agentB())); !os.IsNotExist(err) {
 		t.Fatal("lapsed claim still present after prune")
 	}
 	out := run("prune", "--json")
-	var got []Claim
-	if err := json.Unmarshal([]byte(out), &got); err != nil || len(got) != 0 {
-		t.Fatalf("json output = %q, claims = %d, err = %v", out, len(got), err)
+	var got prune.Result
+	if err := json.Unmarshal([]byte(out), &got); err != nil || len(got.Items) != 0 {
+		t.Fatalf("json output = %q, claims = %d, err = %v", out, len(got.Items), err)
 	}
-	if out := run("prune"); !strings.Contains(out, "nothing lapsed") {
+	if out := run("prune"); !strings.Contains(out, "0 item(s)") {
 		t.Fatalf("empty prune output = %q", out)
 	}
 }

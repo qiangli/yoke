@@ -1,6 +1,7 @@
 package weave
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/qiangli/coreutils/pkg/weavecli"
+	"github.com/qiangli/yoke/pkg/prune"
 )
 
 // Per-subverb constructors. Each registers its flags + RunE and
@@ -720,11 +722,12 @@ salvaged work to a remote is a separate, deliberate decision.`,
 
 func newWeavePruneCmd() *cobra.Command {
 	var flags weaveOutputFlags
-	var yes bool
+	var yes, apply bool
 	var stale, force bool
+	var older string
 	cmd := &cobra.Command{
 		Use:   "prune",
-		Short: "Remove workspace directories and merged branches for terminal items",
+		Short: "List stale workspaces, caches and merged branches; --apply removes them",
 		Long: `prune cleans up after terminal queue items:
 - Removes lingering workspace directories for done, abandoned, failed, and killed items
 - Deletes agent/weave-issue-N branches from the user repo if fully merged
@@ -742,13 +745,38 @@ safe because branches are deleted with -d, which refuses unmerged. True, and
 beside the point: -d protects the branch in the USER repo, which is not where
 the work is.)
 
-Use --yes to skip the confirmation prompt.`,
+Dry-run is the default. Use --apply to remove eligible items; --yes is a
+compatibility alias for --apply.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runWeavePrune(cmd, yes, stale, force, &flags)
+			var age time.Duration
+			if older != "" {
+				var err error
+				age, err = prune.ParseOlder(older)
+				if err != nil {
+					return err
+				}
+			}
+			if apply || yes {
+				return runWeavePrune(cmd, true, stale, force, &flags, age)
+			}
+			items, err := (WeavePruner{Stale: stale}).DryRun(cmd.Context(), prune.Options{Older: age})
+			if err != nil {
+				return err
+			}
+			if items == nil {
+				items = []prune.Item{}
+			}
+			if flags.mode() == weavecli.OutputJSON {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(prune.Result{Noun: "weave", Items: items})
+			}
+			prune.PrintItems(cmd.OutOrStdout(), items, false, prune.Counts{})
+			return nil
 		},
 	}
 	flags.attach(cmd)
-	cmd.Flags().BoolVar(&yes, "yes", false, "Skip the confirmation prompt")
+	cmd.Flags().BoolVar(&apply, "apply", false, "remove eligible items after rechecking them")
+	cmd.Flags().StringVar(&older, "older", "", "only items older than duration (e.g. 30d)")
+	cmd.Flags().BoolVar(&yes, "yes", false, "Compatibility alias for --apply")
 	cmd.Flags().BoolVar(&force, "force", false, "Remove guarded workspaces; queue-backed work is first preserved under refs/salvage/abandoned-<issue>")
 	cmd.Flags().BoolVar(&stale, "stale", false, "Also sweep orphaned 'allocated' items (workspace created but never launched / launched-and-died with no commits) — clears leftover clutter from prior sessions; never touches items with committed work")
 	return cmd

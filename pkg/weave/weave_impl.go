@@ -7930,7 +7930,7 @@ func weavePrunableForSweep(state string, stale bool) bool {
 	return stale && state == "allocated"
 }
 
-func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutputFlags) error {
+func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutputFlags, older time.Duration) error {
 	mode := flags.mode()
 	cwd, _ := os.Getwd()
 	root, err := weaveRepoRoot(cwd)
@@ -7951,7 +7951,7 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 	weaveReconcileMerged(root, base, q)
 	pendingCount := 0
 	for _, it := range q.Items {
-		if weavePrunableForSweep(it.State, stale) {
+		if weavePrunableForSweep(it.State, stale) && (older == 0 || (!it.Created.IsZero() && time.Since(it.Created) >= older)) {
 			pendingCount++
 		}
 	}
@@ -7960,6 +7960,15 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave prune",
 			weavecli.ExitGenericFail, err))
 	}
+	if older > 0 {
+		var aged []weaveManagedGOCacheSweep
+		for _, target := range cacheTargets {
+			if oldEnough(target.Path, older) {
+				aged = append(aged, target)
+			}
+		}
+		cacheTargets = aged
+	}
 	// Directories under workspaces/ that no item claims. The loop above cannot
 	// see them at any flag setting, so without this pass they are unreclaimable
 	// for the life of the queue.
@@ -7967,6 +7976,15 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 	if err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave prune",
 			weavecli.ExitGenericFail, err))
+	}
+	if older > 0 {
+		var aged []weaveOrphanWorkspace
+		for _, target := range orphanTargets {
+			if oldEnough(target.Path, older) {
+				aged = append(aged, target)
+			}
+		}
+		orphanTargets = aged
 	}
 	orphanSweepable := 0
 	for _, o := range orphanTargets {
@@ -8017,7 +8035,7 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 		// Re-reconcile under the lock so the flip persists to disk.
 		weaveReconcileMerged(root, base, q)
 		for _, it := range q.Items {
-			if !weavePrunableForSweep(it.State, stale) {
+			if !weavePrunableForSweep(it.State, stale) || (older > 0 && (it.Created.IsZero() || time.Since(it.Created) < older)) {
 				continue
 			}
 			swept++
@@ -8053,11 +8071,26 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 			// item's clone-point BaseSHA; a workspace whose local base ref had moved
 			// on to include the agent's commits counts 0 that way, and 0 is the
 			// number that lets a destructive sweep proceed.
-			if !force && it.Workspace != "" && !merged {
+			if it.Workspace != "" {
+				if _, statErr := os.Stat(it.Workspace); statErr == nil && len(weaveUnsettledSideRefs(root, base, it)) > 0 {
+					results = append(results, pruneResult{Issue: it.ID, State: it.State, Workspace: it.Workspace,
+						Merged: merged, Action: "skipped: workspace holds local refs not integrated into base; salvage first"})
+					continue
+				}
+			}
+			if !force && it.Workspace != "" {
 				if _, statErr := os.Stat(it.Workspace); statErr == nil {
-					ahead, _ := weaveUnmergedAhead(root, base, it)
+					if _, statusErr := exec.Command(gitBin(), "-C", it.Workspace, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none").Output(); statusErr != nil {
+						results = append(results, pruneResult{Issue: it.ID, State: it.State, Workspace: it.Workspace,
+							Merged: merged, Action: "skipped: workspace unreadable; left alone"})
+						continue
+					}
+					ahead := 0
+					if !merged {
+						ahead, _ = weaveUnmergedAhead(root, base, it)
+					}
 					dirty, dirtyFiles, untracked := weaveMeasureDirtiness(it.Workspace)
-					if ahead > 0 || dirty {
+					if ahead > 0 || dirty || untracked > 0 {
 						why := weavePruneHoldReason(ahead, dirtyFiles, untracked)
 						results = append(results, pruneResult{
 							Issue: it.ID, State: it.State, Workspace: it.Workspace,
@@ -8074,7 +8107,7 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 			// --force` does, so --force means "I accept the risk" and not
 			// "make it disappear". A tree is committed first, because only a
 			// commit is reachable by a ref.
-			if force && it.Workspace != "" && !merged {
+			if force && it.Workspace != "" {
 				if _, statErr := os.Stat(it.Workspace); statErr == nil {
 					ahead, head := weaveUnmergedAhead(root, base, it)
 					if dirty, dirtyFiles, untracked := weaveMeasureDirtiness(it.Workspace); dirty || untracked > 0 {
@@ -8134,6 +8167,9 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 			return oerr
 		}
 		for _, o := range orphans {
+			if !oldEnough(o.Path, older) {
+				continue
+			}
 			// --force lifts the private-work hold, never the live-run one: a
 			// sibling clone a working run is building against is not litter.
 			if o.Hold != "" && (!force || strings.HasPrefix(o.Hold, "sibling clone shared with live run")) {
@@ -8159,6 +8195,9 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 			return err
 		}
 		for _, target := range cacheTargets {
+			if !oldEnough(target.Path, older) {
+				continue
+			}
 			state := "orphaned-cache"
 			if it := findWeaveItem(q, target.Issue); it != nil {
 				state = it.State
@@ -8180,7 +8219,7 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 	// for every settled terminal run, and compacts the row.
 	if q, err := loadWeaveQueue(dir); err == nil {
 		for _, it := range q.Items {
-			if it == nil || !weavePrunableForSweep(it.State, stale) {
+			if it == nil || !weavePrunableForSweep(it.State, stale) || (older > 0 && (it.Created.IsZero() || time.Since(it.Created) < older)) {
 				continue
 			}
 			for _, a := range weavePruneOwnedRun(dir, it.ID, filepath.Base(root)) {

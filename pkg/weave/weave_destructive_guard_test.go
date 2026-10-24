@@ -1,12 +1,60 @@
 package weave
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/qiangli/yoke/pkg/prune"
 )
+
+func TestWeavePruneDryRunDoesNotChangeQueueOrWorkspace(t *testing.T) {
+	_, workspace, dir := setupPullRefusalFixture(t, 1, "failed", 0)
+	queuePath := filepath.Join(dir, "queue.json")
+	before, err := os.ReadFile(queuePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, code := runWeave(t, "prune", "--json")
+	if code != 0 || !strings.Contains(out, `"items"`) {
+		t.Fatalf("dry-run exit=%d: %s", code, out)
+	}
+	after, err := os.ReadFile(queuePath)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("dry-run changed queue: %v", err)
+	}
+	if _, err := os.Stat(workspace); err != nil {
+		t.Fatalf("dry-run changed workspace: %v", err)
+	}
+}
+
+func TestWeavePruneKeepsUntrackedWorkEvenWhenHeadMerged(t *testing.T) {
+	_, workspace, _ := setupPullRefusalFixture(t, 1, "failed", 0)
+	private := filepath.Join(workspace, "private.txt")
+	if err := os.WriteFile(private, []byte("unfinished"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	items, err := (WeavePruner{}).DryRun(context.Background(), prune.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		if item.ID == "workspace:"+workspace {
+			t.Fatal("dry-run offered a dirty workspace")
+		}
+	}
+	out, code := runWeave(t, "prune", "--apply")
+	if code != 0 || !strings.Contains(out, "KEPT") {
+		t.Fatalf("apply exit=%d: %s", code, out)
+	}
+	if _, err := os.Stat(private); err != nil {
+		t.Fatalf("private work lost: %v", err)
+	}
+}
 
 // `weave prune --help` claims it "REFUSES to delete a workspace that still
 // holds work". A claim in a help string is not a guard; this exercises the

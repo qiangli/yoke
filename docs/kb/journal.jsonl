@@ -4,3 +4,4 @@
 {"op":"add","slug":"real-engine-probe-tests-need-a-test-only-sibling-package","id":"01a14083-aafb-7b9c-907d-9b1261a537f4","tool":"opencode-glm-5.3-c","episode":"weave-issue-263","at":"2026-10-15T17:02:13.244125Z"}
 {"op":"add","slug":"seed-effects-must-cover-the-atlas-effects-of-every-command-they","id":"01a14090-a5db-78f8-8fa9-c5c6c2c4e4a2","tool":"opencode-glm-5.3-g","episode":"weave-issue-267","at":"2026-10-15T17:16:23.900008Z"}
 {"op":"add","slug":"resource-watch-install-and-operate-the-host-resource-watcher","id":"01a15843-6e96-7b7d-b9e6-517619446464","tool":"opencode-glm-5.3-v","episode":"ep-2569ab4348efccc9","parent_episode":"ep-6af0d55c01552e6f","at":"2026-10-20T07:42:56.66317Z"}
+{"op":"add","slug":"prune-dry-runs-must-use-read-only-room-membership","id":"01a16cee-4307-768b-9239-561d177de116","tool":"codex-gpt6-sol-t","episode":"ep-d124fa6191d4526a","parent_episode":"ep-d62d5ebffb33162f","at":"2026-10-24T08:01:56.488001Z"}

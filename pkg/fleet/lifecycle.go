@@ -38,8 +38,8 @@ func (c *Catalog) ArchiveAgent(name string, idle func(Agent) error) (string, err
 	if !ok {
 		return "", nil
 	}
-	if !a.Ephemeral || a.Lifecycle == nil || a.Ring != ringLocal() {
-		return "", fmt.Errorf("fleet: %s is not an owned local ephemeral agent", name)
+	if (a.ClonedFrom == "" && (!a.Ephemeral || a.Lifecycle == nil)) || a.Ring != ringLocal() {
+		return "", fmt.Errorf("fleet: %s is not a local clone or owned ephemeral agent", name)
 	}
 	if _, _, lower := c.lowerEntry(dirAgents, a.Name); lower {
 		return "", fmt.Errorf("fleet: %s shadows a lower-ring identity", name)

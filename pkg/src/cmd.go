@@ -3,6 +3,7 @@ package src
 import (
 	"fmt"
 
+	"github.com/qiangli/yoke/pkg/prune"
 	"github.com/spf13/cobra"
 )
 
@@ -32,7 +33,8 @@ func newSrcCmd() *cobra.Command {
   src patch apply <repo> <file> [--title T]
                    apply a patch file on a fresh branch and open a PR
   src upgrade <repo> <commit>
-                   move pristine to the release commit and rebase local onto it`,
+				   move pristine to the release commit and rebase local onto it
+  src prune        list stale derived builds; --apply removes them`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -47,6 +49,7 @@ func newSrcCmd() *cobra.Command {
 	cmd.AddCommand(newPrCmd())
 	cmd.AddCommand(newPatchCmd())
 	cmd.AddCommand(newUpgradeCmd())
+	cmd.AddCommand(prune.NewNounCommand(Pruner{}))
 	return cmd
 }
 

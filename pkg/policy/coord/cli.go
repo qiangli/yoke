@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/qiangli/yoke/pkg/bus"
+	"github.com/qiangli/yoke/pkg/prune"
 	"github.com/spf13/cobra"
 )
 
@@ -150,7 +151,8 @@ bashy-claim-conflict-v1 document instead).`,
   bashy claim request openai-models -m "need it for a 5 minute eval"
   bashy claim refresh do1         # heartbeat a long-held lease
   bashy claim release do1         # let someone else have the resource
-  bashy claim prune               # clear lapsed claims no live holder holds`,
+  bashy claim prune               # list lapsed claims
+  bashy claim prune --apply       # clear them if still lapsed`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			dash := cmd.ArgsLenAtDash()
 			if dash >= 0 {
@@ -395,54 +397,8 @@ the claim keeps refusing.`,
 	}
 	request.Flags().StringVarP(&requestMessage, "message", "m", "", "merge/sequencing request (default names requester and target)")
 
-	prune := &cobra.Command{
-		Use:   "prune",
-		Short: "remove lapsed claims no live holder holds",
-		Long: `prune clears claims whose heartbeat is past the TTL — project claims
-and named resource holds left behind by agents that stopped without
-releasing. Live and attached (kernel-locked) claims are never touched, so
-pruning while others work is safe.`,
-		Example: `  bashy claim prune              # clear lapsed claims
-  bashy claim prune --dry-run    # show what would go, remove nothing
-  bashy claim prune --json         # machine-readable removals`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			dryRun, _ := cmd.Flags().GetBool("dry-run")
-			asJSON, _ := cmd.Flags().GetBool("json")
-			now := time.Now()
-			pruned, err := Prune(DefaultDir(), now, dryRun)
-			if err != nil {
-				return err
-			}
-			if asJSON {
-				if pruned == nil {
-					pruned = []*Claim{}
-				}
-				b, _ := json.MarshalIndent(pruned, "", "  ")
-				fmt.Fprintln(cmd.OutOrStdout(), string(b))
-				return nil
-			}
-			if len(pruned) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "claim: nothing lapsed to prune")
-				return nil
-			}
-			verb := "pruned"
-			if dryRun {
-				verb = "would prune"
-			}
-			for _, c := range pruned {
-				target, mode := c.Project, "project"
-				if c.Resource != "" {
-					target, mode = c.Resource, c.Mode
-				}
-				fmt.Fprintf(cmd.OutOrStdout(), "%s %-18s %-22s %-10s age %s %s\n",
-					verb, c.Holder.Name, target, mode,
-					now.Sub(c.Heartbeat).Round(time.Second), c.Intent)
-			}
-			return nil
-		},
-	}
-	prune.Flags().Bool("dry-run", false, "show what would be removed without removing it")
-	prune.Flags().Bool("json", false, "emit the pruned claims")
+	pruneCmd := prune.NewNounCommand(ClaimPruner{})
+	pruneCmd.Short = "List lapsed claims; --apply removes only claims still lapsed"
 
 	show := &cobra.Command{
 		Use:   "show [kind:]NAME",
@@ -474,7 +430,7 @@ pruning while others work is safe.`,
 		},
 	}
 	show.Flags().Bool("json", false, "emit the selected claim as JSON")
-	cmd.AddCommand(list, show, request, release, refresh, prune)
+	cmd.AddCommand(list, show, request, release, refresh, pruneCmd)
 	return cmd
 }
 

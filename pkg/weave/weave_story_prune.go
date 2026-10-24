@@ -40,10 +40,12 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/qiangli/coreutils/pkg/weavecli"
+	"github.com/qiangli/yoke/pkg/prune"
 )
 
 // sprintPruneAction is one thing prune did, or would do.
@@ -62,6 +64,7 @@ type sprintPruneAction struct {
 func newWeaveStoryPruneCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var apply bool
+	var older string
 	cmd := &cobra.Command{
 		Use:   "prune <sprint>",
 		Short: "Report a sprint's clean state across its repos and this host — and reclaim what is redundant",
@@ -97,27 +100,36 @@ different decisions and should not share a keystroke.`,
 			"  bashy sprint prune 99 --apply    # reclaim what is redundant\n" +
 			"  bashy sprint prune --json        # for an agent with no context",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			var age time.Duration
+			if older != "" {
+				var err error
+				age, err = prune.ParseOlder(older)
+				if err != nil {
+					return err
+				}
+			}
 			// NO ID IS A VALID CALL. The agent most likely to need this is the
 			// one with the least context: a worker that just cloned a repo, a
 			// reviewer who wandered in, anything that wants to know the state
 			// before it builds. Making it name a sprint number first would put
 			// the check behind exactly the knowledge it exists to supply.
 			if len(args) == 0 {
-				return runSprintPruneAll(cmd, apply, &flags)
+				return runSprintPruneAll(cmd, apply, &flags, age)
 			}
 			id, err := strconv.ParseInt(args[0], 10, 64)
 			if err != nil {
 				return fmt.Errorf("sprint must be an integer: %q", args[0])
 			}
-			return runSprintPrune(cmd, id, apply, &flags)
+			return runSprintPrune(cmd, id, apply, &flags, age)
 		},
 	}
 	cmd.Flags().BoolVar(&apply, "apply", false, "actually reclaim (default: report only)")
+	cmd.Flags().StringVar(&older, "older", "", "only linked runs older than duration (e.g. 30d)")
 	flags.attach(cmd)
 	return cmd
 }
 
-func runSprintPrune(cmd *cobra.Command, id int64, apply bool, flags *weaveOutputFlags) error {
+func runSprintPrune(cmd *cobra.Command, id int64, apply bool, flags *weaveOutputFlags, older time.Duration) error {
 	mode := flags.mode()
 	op := "sprint prune"
 	dir, err := weaveStoryDir(cmd, mode, op)
@@ -140,21 +152,24 @@ func runSprintPrune(cmd *cobra.Command, id int64, apply bool, flags *weaveOutput
 
 	var actions []sprintPruneAction
 	if apply {
-		actions = sprintApplyPrune(s, hy)
+		actions = sprintApplyPrune(s, hy, older)
 	}
+	removed, bytes := sprintRemovedCounts(actions)
 
 	if mode == weavecli.OutputJSON {
 		return ec(emitOK(cmd.OutOrStdout(), mode, op, map[string]any{
-			"sprint":       id,
-			"applied":      apply,
-			"clean":        hy.Clean(),
-			"repos":        hy.Repos,
-			"problems":     hy.Problems,
-			"reclaimable":  hy.Reclaimable,
-			"uncovered":    coverage,
-			"reachability": reach,
-			"actions":      actions,
-			"reclaim_plan": sprintPlanRunArtifacts(s),
+			"sprint":        id,
+			"applied":       apply,
+			"clean":         hy.Clean(),
+			"repos":         hy.Repos,
+			"problems":      hy.Problems,
+			"reclaimable":   hy.Reclaimable,
+			"uncovered":     coverage,
+			"reachability":  reach,
+			"actions":       actions,
+			"removed_count": removed,
+			"removed_bytes": bytes,
+			"reclaim_plan":  sprintPlanRunArtifacts(s, older),
 		}))
 	}
 
@@ -165,7 +180,7 @@ func runSprintPrune(cmd *cobra.Command, id int64, apply bool, flags *weaveOutput
 	}
 	renderSprintHygiene(out, hy)
 	if !apply {
-		for _, a := range sprintPlanRunArtifacts(s) {
+		for _, a := range sprintPlanRunArtifacts(s, older) {
 			fmt.Fprintf(out, "  estimate %s %s: %d apparent bytes (complete=%t)\n", a.Kind, a.Target, a.ExpectedBytes, a.BytesComplete)
 		}
 	}
@@ -181,6 +196,9 @@ func runSprintPrune(cmd *cobra.Command, id int64, apply bool, flags *weaveOutput
 			fmt.Fprintf(out, "  removed %s %s\n", a.Kind, a.Target)
 		}
 	}
+	if apply {
+		fmt.Fprintf(out, "  removed %d item(s), %s\n", removed, prune.FormatSize(bytes))
+	}
 	switch {
 	case !apply && len(hy.Reclaimable) > 0:
 		fmt.Fprintf(out, "  %d item(s) reclaimable — `bashy sprint prune %d --apply`\n", len(hy.Reclaimable), id)
@@ -190,25 +208,40 @@ func runSprintPrune(cmd *cobra.Command, id int64, apply bool, flags *weaveOutput
 	return nil
 }
 
+func sprintRemovedCounts(actions []sprintPruneAction) (int, int64) {
+	var count int
+	var bytes int64
+	for _, a := range actions {
+		if a.Done && a.Err == "" {
+			count++
+			bytes += int64(a.ActualBytes)
+		}
+	}
+	return count, bytes
+}
+
 // sprintApplyPrune removes what the hygiene pass proved redundant.
 //
 // It RE-CHECKS each target at the moment of removal rather than trusting the
 // report it was handed. The report was taken without a lock and a repo is a
 // shared thing: a branch that was integrated when we looked may have gained a
 // commit since, and acting on a stale reading is how cleanup deletes work.
-func sprintApplyPrune(s *weaveStory, hy sprintHygiene) []sprintPruneAction {
+func sprintApplyPrune(s *weaveStory, hy sprintHygiene, older ...time.Duration) []sprintPruneAction {
 	// Repository-wide stale worktrees and integrated branches are observations,
 	// not proof of this sprint's ownership. Only explicit linked run artifacts
 	// are eligible for mutation; a competitor's checkout is never swept.
-	return sprintPruneRunArtifacts(s)
+	return sprintPruneRunArtifacts(s, older...)
 }
 
-func sprintPruneRunArtifacts(s *weaveStory) []sprintPruneAction {
+func sprintPruneRunArtifacts(s *weaveStory, older ...time.Duration) []sprintPruneAction {
 	var acts []sprintPruneAction
 	if s == nil {
 		return acts
 	}
 	for _, run := range s.Runs {
+		if len(older) > 0 && older[0] > 0 && (run.Born.IsZero() || time.Since(run.Born) < older[0]) {
+			continue
+		}
 		dir, err := weaveQueueDirForSprintRun(run)
 		if err != nil {
 			continue
@@ -228,7 +261,7 @@ func sprintPruneRunArtifacts(s *weaveStory) []sprintPruneAction {
 // Only open sprints are walked. A done sprint's leftovers are still reported by
 // naming it explicitly; sweeping them by default would bury today's actionable
 // findings under months of closed work.
-func runSprintPruneAll(cmd *cobra.Command, apply bool, flags *weaveOutputFlags) error {
+func runSprintPruneAll(cmd *cobra.Command, apply bool, flags *weaveOutputFlags, older time.Duration) error {
 	mode := flags.mode()
 	op := "sprint prune"
 	dir, err := weaveStoryDir(cmd, mode, op)
@@ -255,14 +288,19 @@ func runSprintPruneAll(cmd *cobra.Command, apply bool, flags *weaveOutputFlags) 
 	var reports []map[string]any
 	out := cmd.OutOrStdout()
 	allClean := true
+	var totalRemoved int
+	var totalBytes int64
 	for _, s := range open {
 		hy := sprintCheckHygiene(s)
 		reach := sprintCheckReachability(s)
 		coverage := sprintCoverageProblems(s)
 		var actions []sprintPruneAction
 		if apply {
-			actions = sprintApplyPrune(s, hy)
+			actions = sprintApplyPrune(s, hy, older)
 		}
+		removed, bytes := sprintRemovedCounts(actions)
+		totalRemoved += removed
+		totalBytes += bytes
 		clean := hy.Clean() && len(coverage) == 0 && len(reach.Problems) == 0
 		if !clean {
 			allClean = false
@@ -272,7 +310,8 @@ func runSprintPruneAll(cmd *cobra.Command, apply bool, flags *weaveOutputFlags) 
 				"sprint": s.ID, "title": s.Title, "clean": clean,
 				"repos": hy.Repos, "problems": hy.Problems,
 				"reclaimable": hy.Reclaimable, "uncovered": coverage,
-				"reachability": reach, "actions": actions, "reclaim_plan": sprintPlanRunArtifacts(s),
+				"reachability": reach, "actions": actions, "reclaim_plan": sprintPlanRunArtifacts(s, older),
+				"removed_count": removed, "removed_bytes": bytes,
 			})
 			continue
 		}
@@ -294,10 +333,12 @@ func runSprintPruneAll(cmd *cobra.Command, apply bool, flags *weaveOutputFlags) 
 		}
 	}
 	if mode == weavecli.OutputJSON {
-		return ec(emitOK(cmd.OutOrStdout(), mode, op, map[string]any{"sprints": reports, "clean": allClean}))
+		return ec(emitOK(cmd.OutOrStdout(), mode, op, map[string]any{"sprints": reports, "clean": allClean, "removed_count": totalRemoved, "removed_bytes": totalBytes}))
 	}
 	if !apply {
 		fmt.Fprintln(out, "report only — `bashy sprint prune --apply` to reclaim, or name a sprint for detail")
+	} else {
+		fmt.Fprintf(out, "removed %d item(s), %s\n", totalRemoved, prune.FormatSize(totalBytes))
 	}
 	return nil
 }

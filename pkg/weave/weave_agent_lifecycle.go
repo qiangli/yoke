@@ -84,7 +84,7 @@ func weaveAgentIdle(a fleet.Agent, dir string, q *weaveQueue) error {
 		}
 		return false
 	}
-	cards, err := room.Members()
+	cards, err := room.PeekMembers()
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -99,7 +99,7 @@ func weaveAgentIdle(a fleet.Agent, dir string, q *weaveQueue) error {
 		return err
 	}
 	dirs := append(weaveAllQueueDirs(), board)
-	if a.Lifecycle.WeaveQueue != "" {
+	if a.Lifecycle != nil && a.Lifecycle.WeaveQueue != "" {
 		dirs = append(dirs, a.Lifecycle.WeaveQueue)
 	}
 	for _, leaseDir := range append(dirs, dir) {
@@ -154,7 +154,7 @@ func weaveGuardAgentLifecycle(dir string, a fleet.Agent, fn func() error) error 
 		return err
 	}
 	dirs := append(weaveAllQueueDirs(), board)
-	if a.Lifecycle.WeaveQueue != "" {
+	if a.Lifecycle != nil && a.Lifecycle.WeaveQueue != "" {
 		dirs = append(dirs, a.Lifecycle.WeaveQueue)
 	}
 	seen := map[string]bool{dir: true}

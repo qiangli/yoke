@@ -601,12 +601,29 @@ func RemoveMember(id string) (Card, bool, error) {
 // The returned view is already correct without the deletion; a skipped prune is
 // retried by the next reader.
 func Members() ([]Card, error) {
-	dir, err := membersDir()
+	return readMembers(true)
+}
+
+// PeekMembers reports the live set without creating directories or pruning
+// stale cards. Cleanup dry runs use this so observing a room cannot change it.
+func PeekMembers() ([]Card, error) { return readMembers(false) }
+
+func readMembers(prune bool) ([]Card, error) {
+	var dir string
+	var err error
+	if prune {
+		dir, err = membersDir()
+	} else {
+		dir = filepath.Join(Dir(), "members")
+	}
 	if err != nil {
 		return nil, err
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
+		if !prune && os.IsNotExist(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	var out []Card
@@ -626,7 +643,9 @@ func Members() ([]Card, error) {
 		}
 		out = append(out, c)
 	}
-	pruneStaleCards(stale)
+	if prune {
+		pruneStaleCards(stale)
+	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Joined > out[j].Joined })
 	return out, nil
 }
