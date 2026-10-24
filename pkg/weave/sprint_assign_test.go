@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/qiangli/yoke/pkg/fleet"
+	"github.com/qiangli/yoke/pkg/lens"
 	todopkg "github.com/qiangli/yoke/pkg/todo"
 	"os"
 	"path/filepath"
@@ -46,6 +47,9 @@ func TestAssignDispatch(t *testing.T) {
 				launches++
 				if r.Env["BASHY_AGENT"] != "agent-a" {
 					t.Fatalf("missing identity: %+v", r)
+				}
+				if r.IdleTimeout != 10*time.Minute {
+					t.Fatalf("want IdleTimeout 10m, got %v", r.IdleTimeout)
 				}
 				return nil
 			}, record: func(kind string, e sprintAssignEvent) error {
@@ -170,7 +174,7 @@ func TestAssignCommandSeedsLinksAndInjectsIdentity(t *testing.T) {
 	t.Cleanup(func() { sprintAssignLaunchWorker = oldLaunch })
 	sprintAssignLaunchWorker = func(_ *cobra.Command, r sprintAssignLaunch) error {
 		launched++
-		if r.Agent != "agent-a" || r.Env["BASHY_AGENT"] != "agent-a" || r.Repo != root {
+		if r.Agent != "agent-a" || r.Env["BASHY_AGENT"] != "agent-a" || r.Repo != root || r.IdleTimeout != 10*time.Minute {
 			t.Fatalf("launch %+v", r)
 		}
 		dir, _ := weaveQueueDir(root)
@@ -419,5 +423,106 @@ func TestReviewCommandUnknownStandingEscalates(t *testing.T) {
 	data, _ := json.Marshal(findWeaveStory(q, 1))
 	if bytes.Contains(data, []byte("review-assign")) {
 		t.Fatalf("capacity wait recorded an assignment: %s", data)
+	}
+}
+
+func TestSprintAssignIdleTimeout(t *testing.T) {
+	root := setupIsolationFixture(t)
+	t.Chdir(root)
+	home := t.TempDir()
+	t.Setenv("BASHY_HOME", home)
+	t.Setenv("BASHY_SPRINT_DIR", filepath.Join(home, "sprint"))
+	t.Setenv("BASHY_ROOM_DIR", filepath.Join(home, "room"))
+	t.Setenv("BASHY_FLEET_SEEDS", "off")
+	t.Setenv("BASHY_AGENTS_PATH", "")
+	t.Setenv("BASHY_MODELS_PATH", "")
+	cat := fleet.New(fleet.WithRoot(t.TempDir()))
+	oldFleet := fleetCatalog
+	fleetCatalog = func() *fleet.Catalog { return cat }
+	t.Cleanup(func() { fleetCatalog = oldFleet })
+	for _, err := range []error{
+		cat.SaveTool(fleet.Tool{Name: "tool-a"}),
+		cat.SaveModel(fleet.Model{Name: "model-a", Band: 3, CostMicro: 100}),
+		cat.SaveAgent(fleet.Agent{Name: "agent-a", Tool: "tool-a", Model: "model-a", Band: 3}),
+	} {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	board, _ := sprintStoreDir()
+	if err := withWeaveQueueLock(board, func(q *weaveQueue) error {
+		q.Stories = append(q.Stories, &weaveStory{ID: 1, Title: "dispatch", Column: "doing"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	script := []byte("echo test\n")
+	task := lens.ScriptTask{Schema: "lens-script-task-v1", Artifact: lens.CompiledScriptArtifact{Name: lens.ScriptArtifactName(script), Digest: lens.ScriptArtifactDigest(script), Script: script}, Caps: []string{"read-only"}, Effects: []string{"pure"}, Help: "script", NoInput: true}
+	taskBody, err := json.Marshal(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskFile := filepath.Join(home, "task.json")
+	if err := os.WriteFile(taskFile, taskBody, 0600); err != nil {
+		t.Fatal(err)
+	}
+	runner, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var captured sprintAssignLaunch
+	oldLaunch := sprintAssignLaunchWorker
+	t.Cleanup(func() { sprintAssignLaunchWorker = oldLaunch })
+	sprintAssignLaunchWorker = func(_ *cobra.Command, r sprintAssignLaunch) error {
+		captured = r
+		return nil
+	}
+
+	for _, tc := range []struct {
+		name        string
+		script      bool
+		flag        string
+		wantTimeout time.Duration
+	}{
+		{name: "model default", flag: "", wantTimeout: 10 * time.Minute},
+		{name: "model custom flag", flag: "7m", wantTimeout: 7 * time.Minute},
+		{name: "model zero keeps default", flag: "0", wantTimeout: 10 * time.Minute},
+		{name: "script default", script: true, flag: "", wantTimeout: 10 * time.Minute},
+		{name: "script custom flag", script: true, flag: "15m", wantTimeout: 15 * time.Minute},
+		{name: "script zero keeps default", script: true, flag: "0", wantTimeout: 10 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			captured = sprintAssignLaunch{}
+			story, err := todopkg.Add(todopkg.RepoStore(root), "task-"+tc.name, "body", "p1", nil, "", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			story.Sprint = 1
+			if _, err = todopkg.RepoStore(root).Save(story); err != nil {
+				t.Fatal(err)
+			}
+			cmd := newSprintAssignCmd()
+			var args []string
+			if tc.script {
+				args = []string{"1", story.ID, "--repo", root, "--script-task", taskFile, "--script-runner", runner}
+			} else {
+				args = []string{"1", story.ID, "--repo", root, "--points", "3", "--agent", "agent-a"}
+			}
+			if tc.flag != "" {
+				args = append(args, "--idle-timeout", tc.flag)
+			}
+			cmd.SetArgs(args)
+			var buf bytes.Buffer
+			cmd.SetOut(&buf)
+			cmd.SetErr(&buf)
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("cmd.Execute: %v\nOutput: %s", err, buf.String())
+			}
+			if captured.IdleTimeout != tc.wantTimeout {
+				t.Fatalf("launch IdleTimeout = %v, want %v", captured.IdleTimeout, tc.wantTimeout)
+			}
+		})
 	}
 }

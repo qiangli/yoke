@@ -456,7 +456,7 @@ func sprintReassignLaunch(cmd *cobra.Command, root, agent string, id int64, cap 
 			_ = os.Unsetenv("BASHY_AGENT")
 		}
 	}()
-	return runWeaveStart(cmd, id, "", []string{agent}, weaveStartOptions{pty: "never", maxRuntime: cap}, &weaveOutputFlags{})
+	return runWeaveStart(cmd, id, "", []string{agent}, weaveStartOptions{pty: "never", maxRuntime: cap, idleTimeout: sprintAssignDefaultIdleTimeout}, &weaveOutputFlags{})
 }
 
 func sprintReassignTimeoutBlame(run int64, actor string, now time.Time) blame.Attribution {

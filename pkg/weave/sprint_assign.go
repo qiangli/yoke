@@ -17,6 +17,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const sprintAssignDefaultIdleTimeout = 10 * time.Minute
+
 type sprintAssignEvent struct {
 	Story       string  `json:"story"`
 	Agent       string  `json:"agent"`
@@ -37,6 +39,7 @@ type sprintAssignLaunch struct {
 	Argv        []string
 	PTY         string
 	MaxRuntime  time.Duration
+	IdleTimeout time.Duration
 }
 type sprintAssignDeps struct {
 	seed   func() (int64, error)
@@ -44,7 +47,7 @@ type sprintAssignDeps struct {
 	record func(string, sprintAssignEvent) error
 }
 
-func sprintAssignDispatch(cmd *cobra.Command, task ladder.StoryTask, pool []ladder.Entrant, lines ladder.Lines, manual string, dry bool, repo string, deps sprintAssignDeps) error {
+func sprintAssignDispatch(cmd *cobra.Command, task ladder.StoryTask, pool []ladder.Entrant, lines ladder.Lines, manual string, dry bool, repo string, deps sprintAssignDeps, idleTimeout ...time.Duration) error {
 	pick := ladder.ScheduleStory(task, pool, lines)
 	if manual != "" {
 		found := false
@@ -98,7 +101,11 @@ func sprintAssignDispatch(cmd *cobra.Command, task ladder.StoryTask, pool []ladd
 			break
 		}
 	}
-	return deps.launch(cmd, sprintAssignLaunch{Repo: repo, Agent: pick.Agent, Run: run, Env: map[string]string{"BASHY_AGENT": pick.Agent}})
+	launchIdle := sprintAssignDefaultIdleTimeout
+	if len(idleTimeout) > 0 && idleTimeout[0] > 0 {
+		launchIdle = idleTimeout[0]
+	}
+	return deps.launch(cmd, sprintAssignLaunch{Repo: repo, Agent: pick.Agent, Run: run, Env: map[string]string{"BASHY_AGENT": pick.Agent}, IdleTimeout: launchIdle})
 }
 
 func sprintReviewDispatch(cmd *cobra.Command, story string, author ladder.DutyStanding, band int, vendor string, pool []ladder.Entrant, dry bool, record func(string, sprintAssignEvent) error) error {
@@ -309,7 +316,11 @@ var sprintAssignLaunchWorker = func(cmd *cobra.Command, r sprintAssignLaunch) er
 	if pty == "" {
 		pty = "never"
 	}
-	return runWeaveStart(cmd, r.Run, "", argv, weaveStartOptions{pty: pty, maxRuntime: r.MaxRuntime}, &weaveOutputFlags{})
+	idle := r.IdleTimeout
+	if idle <= 0 {
+		idle = sprintAssignDefaultIdleTimeout
+	}
+	return runWeaveStart(cmd, r.Run, "", argv, weaveStartOptions{pty: pty, maxRuntime: r.MaxRuntime, idleTimeout: idle}, &weaveOutputFlags{})
 }
 
 func newSprintAssignCmd() *cobra.Command { return sprintAssignCommand(false) }
@@ -321,6 +332,7 @@ func sprintAssignCommand(review bool) *cobra.Command {
 	var excludeTools, excludeAgents []string
 	var points, band, authorBand int
 	var dry bool
+	var idleTimeout time.Duration
 	name := "assign"
 	if review {
 		name = "review"
@@ -339,6 +351,7 @@ func sprintAssignCommand(review bool) *cobra.Command {
 		cmd.Flags().IntVar(&points, "points", 3, "story points (1, 2, 3, 5 or 8; defaults to 3)")
 		cmd.Flags().IntVar(&band, "band", 3, "owning band (3, 4 or 5)")
 		cmd.Flags().StringVar(&manual, "agent", "", "manual assignment override, recorded in the thread")
+		cmd.Flags().DurationVar(&idleTimeout, "idle-timeout", 0, "output-idle watchdog threshold; 0 keeps default (10m)")
 	}
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		exclusions, err := sprintAssignExcludeOptions(excludeTools, excludeAgents)
@@ -375,11 +388,15 @@ func sprintAssignCommand(review bool) *cobra.Command {
 		if err != nil {
 			return err
 		}
+		effIdleTimeout := sprintAssignDefaultIdleTimeout
+		if idleTimeout > 0 {
+			effIdleTimeout = idleTimeout
+		}
 		if scriptFile != "" || scriptRunner != "" {
 			if manual != "" || len(excludeTools) > 0 || len(excludeAgents) > 0 {
 				return fmt.Errorf("script assignment cannot combine fleet selection flags")
 			}
-			return sprintAssignScript(cmd, id, root, story, points, band, scriptFile, scriptRunner, dry)
+			return sprintAssignScript(cmd, id, root, story, points, band, scriptFile, scriptRunner, dry, effIdleTimeout)
 		}
 		events, err := sprintAssignReadEvents()
 		if err != nil {
@@ -460,14 +477,14 @@ func sprintAssignCommand(review bool) *cobra.Command {
 				return err
 			}
 			return sprintAssignLaunchWorker(cmd, r)
-		}})
+		}}, effIdleTimeout)
 	}
 	return cmd
 }
 
 // sprintAssignScript uses the normal seed/link and owned process lifecycle. It
 // does not impersonate a model agent or rewrite a queue after dispatch.
-func sprintAssignScript(cmd *cobra.Command, id int64, root string, story *issue.Issue, points, band int, file, runner string, dry bool) error {
+func sprintAssignScript(cmd *cobra.Command, id int64, root string, story *issue.Issue, points, band int, file, runner string, dry bool, idleTimeout ...time.Duration) error {
 	if file == "" || !filepath.IsAbs(runner) {
 		return fmt.Errorf("--script-task FILE and --script-runner ABSOLUTE_YOKE required")
 	}
@@ -522,7 +539,11 @@ func sprintAssignScript(cmd *cobra.Command, id int64, root string, story *issue.
 	if err = sprintAssignRecord(cmd, id, "assign-script", sprintAssignEvent{Story: story.ID, Seat: "script", Run: run, Reason: task.Artifact.Digest}); err != nil {
 		return err
 	}
-	return sprintAssignLaunchWorker(cmd, sprintAssignLaunch{Repo: root, Run: run, Argv: append([]string{runner}, task.WorkerArgs()...), PTY: "always", MaxRuntime: time.Minute})
+	launchIdle := sprintAssignDefaultIdleTimeout
+	if len(idleTimeout) > 0 && idleTimeout[0] > 0 {
+		launchIdle = idleTimeout[0]
+	}
+	return sprintAssignLaunchWorker(cmd, sprintAssignLaunch{Repo: root, Run: run, Argv: append([]string{runner}, task.WorkerArgs()...), PTY: "always", MaxRuntime: time.Minute, IdleTimeout: launchIdle})
 }
 
 // weaveScriptAssignment freezes the trusted local process contract separately
