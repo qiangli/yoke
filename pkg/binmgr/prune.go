@@ -10,14 +10,16 @@ import (
 	"time"
 
 	"github.com/qiangli/yoke/pkg/prune"
+	"github.com/shirou/gopsutil/v4/process"
 )
 
 // SelfPruner reclaims superseded, versioned bashy and managed-tool caches.
 // It keeps the two newest versions of every component and the running binary.
 type SelfPruner struct {
-	Home     string
-	Cache    string
-	ExecPath string // injectable for tests; empty uses os.Executable
+	Home               string
+	Cache              string
+	ExecPath           string // injectable for tests; empty uses os.Executable
+	runningExecutables func(context.Context) ([]string, error)
 }
 
 func (SelfPruner) Name() string { return "self" }
@@ -48,6 +50,15 @@ func (p SelfPruner) DryRun(ctx context.Context, opts prune.Options) ([]prune.Ite
 		exe, _ = os.Executable()
 	}
 	exe, _ = filepath.EvalSymlinks(exe)
+	running := p.runningExecutables
+	if running == nil {
+		running = activeExecutables
+	}
+	active, err := running(ctx)
+	if err != nil {
+		return nil, err
+	}
+	active = append(active, exe)
 	var items []prune.Item
 	for _, root := range roots {
 		rootInfo, rootErr := os.Lstat(root)
@@ -110,7 +121,7 @@ func (p SelfPruner) DryRun(ctx context.Context, opts prune.Options) ([]prune.Ite
 					continue
 				}
 				path := filepath.Join(componentDir, v.name)
-				if exe != "" && (exe == path || strings.HasPrefix(exe, path+string(os.PathSeparator))) {
+				if containsExecutable(path, active) {
 					continue
 				}
 				if opts.Older > 0 && time.Since(v.mod) < opts.Older {
@@ -125,6 +136,37 @@ func (p SelfPruner) DryRun(ctx context.Context, opts prune.Options) ([]prune.Ite
 		}
 	}
 	return items, nil
+}
+
+func containsExecutable(dir string, paths []string) bool {
+	for _, path := range paths {
+		if path == dir || strings.HasPrefix(path, dir+string(os.PathSeparator)) {
+			return true
+		}
+	}
+	return false
+}
+
+func activeExecutables(ctx context.Context) ([]string, error) {
+	processes, err := process.ProcessesWithContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("self prune: list running processes: %w", err)
+	}
+	var paths []string
+	for _, proc := range processes {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		path, err := proc.ExeWithContext(ctx)
+		if err != nil || path == "" {
+			continue // the OS may hide unrelated processes
+		}
+		if resolved, err := filepath.EvalSymlinks(path); err == nil {
+			path = resolved
+		}
+		paths = append(paths, path)
+	}
+	return paths, nil
 }
 
 func (p SelfPruner) Apply(ctx context.Context, items []prune.Item) (prune.Counts, error) {
