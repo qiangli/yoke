@@ -452,10 +452,21 @@ func TestM2SrcRodCoversM2(t *testing.T) {
 	if _, err := run("pr", "open", "yoke", "rod-topic"); err == nil {
 		t.Error("pr open without --title succeeded, want failure")
 	}
+	if _, err := run("pr", "open", "yoke", "rod-topic", "--title", "Rod PR"); err == nil || !strings.Contains(err.Error(), "no diff") {
+		t.Errorf("pr open without diff err = %v, want no diff refusal", err)
+	}
+	writeWork(t, destOf(home), "pkg/weave/engine.go", "// rod change\n")
+	commitWork(t, destOf(home), "rod change")
 	if out, err := run("pr", "open", "yoke", "rod-topic", "--title", "Rod PR"); err != nil || !strings.Contains(out, "opened") {
 		t.Errorf("pr open = %q, %v", out, err)
 	}
 	if out, err := run("pr", "list"); err != nil || !strings.Contains(out, "Rod PR") {
 		t.Errorf("pr list after open = %q, %v", out, err)
+	}
+	if out, err := run("revert", "yoke"); err != nil {
+		t.Errorf("revert dry-run = %q, %v", out, err)
+	}
+	if out, err := run("revert", "yoke", "--apply"); err != nil || !strings.Contains(out, "reverted yoke to pristine") {
+		t.Errorf("revert apply = %q, %v", out, err)
 	}
 }

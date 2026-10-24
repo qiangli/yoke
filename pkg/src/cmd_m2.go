@@ -349,3 +349,37 @@ func newUpgradeCmd() *cobra.Command {
 		},
 	}
 }
+
+func newRevertCmd() *cobra.Command {
+	var apply bool
+	c := &cobra.Command{
+		Use:   "revert <repo>",
+		Short: "Reset the local src checkout to pristine (base tip)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repo := args[0]
+			res, err := Revert("", repo, apply)
+			if err != nil {
+				return err
+			}
+			if apply {
+				fmt.Fprintf(cmd.OutOrStdout(), "reverted %s to pristine at %s\n", repo, shortSHA(res.PristineSHA))
+				return nil
+			}
+			if len(res.Commits) == 0 && len(res.Files) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "(nothing to discard)")
+				return nil
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), "would discard:")
+			for _, c := range res.Commits {
+				fmt.Fprintf(cmd.OutOrStdout(), "  commit %s %s\n", shortSHA(c.Hash), c.Message)
+			}
+			for _, f := range res.Files {
+				fmt.Fprintf(cmd.OutOrStdout(), "  file %s\n", f)
+			}
+			return nil
+		},
+	}
+	c.Flags().BoolVar(&apply, "apply", false, "apply the revert, discarding local changes")
+	return c
+}

@@ -34,6 +34,8 @@ func newSrcCmd() *cobra.Command {
                    apply a patch file on a fresh branch and open a PR
   src upgrade <repo> <commit>
 				   move pristine to the release commit and rebase local onto it
+  src revert <repo> [--apply]
+                   reset the local src checkout to pristine (base tip)
   src prune        list stale derived builds; --apply removes them`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -49,6 +51,7 @@ func newSrcCmd() *cobra.Command {
 	cmd.AddCommand(newPrCmd())
 	cmd.AddCommand(newPatchCmd())
 	cmd.AddCommand(newUpgradeCmd())
+	cmd.AddCommand(newRevertCmd())
 	cmd.AddCommand(prune.NewNounCommand(Pruner{}))
 	return cmd
 }

@@ -17,4 +17,5 @@
 //	src pr           — local pull requests (open, show, list, merge, close).
 //	src patch        — move changes between hosts by file.
 //	src upgrade      — re-pin pristine and rebase local onto the release.
+//	src revert       — reset the local checkout to pristine (dry-run default).
 package src

@@ -108,6 +108,23 @@ func OpenPR(home, repo, branch, title, testCmd string) (PR, error) {
 	if err != nil {
 		return PR{}, err
 	}
+	baseSHA, err := mergeBase(dir, localBranch, headSHA)
+	if err != nil {
+		return PR{}, fmt.Errorf("src: merge base of %s and %s: %w", localBranch, shortSHA(headSHA), err)
+	}
+	hasDiff := false
+	if baseSHA != headSHA {
+		text, err := diffText(dir, baseSHA, headSHA)
+		if err != nil {
+			return PR{}, err
+		}
+		if strings.TrimSpace(text) != "" {
+			hasDiff = true
+		}
+	}
+	if !hasDiff {
+		return PR{}, fmt.Errorf("src: branch %q has no diff against base %s", branch, localBranch)
+	}
 	id, err := nextPRID(home)
 	if err != nil {
 		return PR{}, err
