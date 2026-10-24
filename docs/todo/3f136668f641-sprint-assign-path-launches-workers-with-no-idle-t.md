@@ -6,6 +6,9 @@ seq: 2036
 status: todo
 priority: p2
 created: 2026-10-23T17:35:03.120887Z
+sprint: 497
+sprint_id: 16af0380-7ec7-5d41-a9c6-50e1b03cdf11
+sprint_title: 'Fix the 2026-10-23 findings: satellite login/superadmin security, web console multi-satellite UX, fleet downgrade trap, Windows agent bugs, weave/sprint tooling, outpost headless/version skew'
 ---
 
 Found 2026-10-23 Sprint 458 run dhnt#130 (agy gemini3.8-flash, --print-timeout 40m): no PTY capture, no file changes and 0% CPU for 20 min; weave list said 'working'. weave start has --idle-timeout but it defaults off and sprint assign does not set it. Expected: assign-path runs get a default output-idle timeout (e.g. 10m) and report 'stalled' instead of 'working'.
