@@ -32,12 +32,19 @@ func TestOverviewListsEveryRegisteredNounInTempHome(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(old) })
 	rows := Registry().Overview(context.Background())
-	want := []string{"agent", "claim", "self", "sprint", "src", "weave"}
+	want := []string{"agent", "claim", "host", "satellite", "self", "sprint", "src", "weave"}
 	if len(rows) != len(want) {
 		t.Fatalf("overview rows = %+v", rows)
 	}
 	for i, row := range rows {
-		if row.Noun != want[i] || row.Command != "bashy "+want[i]+" prune --apply" || row.Error != "" {
+		if row.Noun != want[i] || row.Command != "bashy "+want[i]+" prune --apply" {
+			t.Fatalf("row %d = %+v", i, row)
+		}
+		if want[i] == "host" || want[i] == "satellite" {
+			if row.Error == "" {
+				t.Fatalf("row %d should report missing owner token", i)
+			}
+		} else if row.Error != "" {
 			t.Fatalf("row %d = %+v", i, row)
 		}
 	}
