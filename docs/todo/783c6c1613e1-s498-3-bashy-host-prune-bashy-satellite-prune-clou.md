@@ -1,7 +1,7 @@
 ---
 id: 783c6c1613e1
 kind: feature
-title: S498.3 bashy host prune + bashy satellite prune (dry-run default, --apply), plus the CLI for satellite transfer
+title: S498.3 bashy host prune + bashy satellite prune (cloud side, per the prune convention), plus the CLI for satellite transfer
 seq: 2042
 status: todo
 priority: p1
