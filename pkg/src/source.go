@@ -80,10 +80,22 @@ var posixProviderTools = map[string]bool{
 //
 //  1. the curated core-verb and extra tables;
 //  2. bash builtins (the shell wins dispatch, so the shell owns them);
+//     then commands registered with the embedding shell (RegisteredSource);
 //  3. atlas externals: POSIX providers vs bin-managed;
 //  4. the census: a cmdPkg front door names its yoke package;
 //  5. yoke cmds/ tools, then yoke's own (bashy-origin) tools;
 //  6. everything else in-process: the certified coreutils module.
+//
+// RegisteredSource maps a command registered with the embedding shell
+// (`bashy commands add`) to the file that implements it. yoke has no view of
+// that registry, so the shell supplies the lookup; nil means none is mounted.
+// A registered command shadows nothing bashy ships, so it is consulted only
+// after the curated tables and the bash builtins.
+var RegisteredSource func(cmd string) (repo, path string, ok bool)
+
+// RegisteredRepo is the repo label Source reports for a registered command.
+const RegisteredRepo = "registered"
+
 func Source(cmd string) (repo, pkg string, err error) {
 	if s, ok := coreVerbSource[cmd]; ok {
 		return s[0], s[1], nil
@@ -93,6 +105,11 @@ func Source(cmd string) (repo, pkg string, err error) {
 	}
 	if IsBuiltin(cmd) {
 		return "bashy", "builtin", nil
+	}
+	if RegisteredSource != nil {
+		if repo, path, ok := RegisteredSource(cmd); ok {
+			return repo, path, nil
+		}
 	}
 	e, ok := atlas.Lookup(cmd)
 	if !ok {
