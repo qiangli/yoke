@@ -28,9 +28,14 @@ import (
 //      All components are strictly permissive non-copyleft, satisfying the supply chain policy.
 //    - Runs across all six release targets under Python 3.9+ (provisioned by bashy via uv / CPython 3.15,
 //      PSF-2.0, yoke/external/python).
-//    - JavaScript challenges (n-sig / player signatures) are resolved by invoking
-//      Node.js via `--js-runtimes node`, reusing the repository's existing Node.js
-//      provisioning (v22.23.2 LTS, MIT, yoke/external/node).
+//    - JavaScript challenges (n-sig / player signatures) are resolved using
+//      an admitted JavaScript runtime. Upstream yt-dlp defaults to and recommends
+//      Deno (v2.9.8, MIT, DenoTool()), while also supporting Node.js (v22.23.2 LTS, MIT,
+//      yoke/external/node).
+//    - External JavaScript solver scripts (yt-dlp-ejs, 0.8.0, The Unlicense + ISC + MIT)
+//      are bundled directly into the pure Python zipapp, satisfying `--no-remote-components`.
+//      Standalone wheel and minified solver artifacts are pinned and cached for modular or
+//      decoupled runtime environments.
 //
 // 2. whisper.cpp (MIT License - Permissive):
 //    - Pinned stable release: v1.9.5 (official upstream stable release).
@@ -176,6 +181,134 @@ func EnsureWhisperCpp(ctx context.Context) (string, error) {
 }
 
 const (
+	DenoName    = "deno"
+	DenoVersion = "v2.9.8"
+	DenoBaseURL = "https://github.com/denoland/deno/releases/download/" + DenoVersion + "/"
+)
+
+// DenoPlatforms lists all six target platforms supported by official upstream prebuilt archives.
+var DenoPlatforms = []string{
+	"linux/amd64", "linux/arm64",
+	"darwin/amd64", "darwin/arm64",
+	"windows/amd64", "windows/arm64",
+}
+
+func denoAssetFile(platform string) string {
+	switch platform {
+	case "darwin/arm64":
+		return "deno-aarch64-apple-darwin.zip"
+	case "darwin/amd64":
+		return "deno-x86_64-apple-darwin.zip"
+	case "linux/arm64":
+		return "deno-aarch64-unknown-linux-gnu.zip"
+	case "linux/amd64":
+		return "deno-x86_64-unknown-linux-gnu.zip"
+	case "windows/arm64":
+		return "deno-aarch64-pc-windows-msvc.zip"
+	case "windows/amd64":
+		return "deno-x86_64-pc-windows-msvc.zip"
+	default:
+		return ""
+	}
+}
+
+// DenoTool declares the official upstream Deno runtime across all six release targets.
+// Deno is the recommended JavaScript engine for yt-dlp to solve dynamic YouTube player
+// signature and throttling challenges via `--no-remote-components --js-runtimes deno:<path>`.
+func DenoTool() Tool {
+	t := Tool{
+		Name:    DenoName,
+		Version: DenoVersion,
+		Assets:  make(map[string]Asset, len(DenoPlatforms)),
+	}
+	for _, p := range DenoPlatforms {
+		file := denoAssetFile(p)
+		binary := "deno"
+		if strings.HasPrefix(p, "windows/") {
+			binary = "deno.exe"
+		}
+		pin, _ := pinnedSHA256(DenoName, DenoVersion, p)
+		t.Assets[p] = Asset{
+			URL:    DenoBaseURL + file,
+			SHA256: pin,
+			Binary: binary,
+		}
+	}
+	return t
+}
+
+// EnsureDeno provisions the official prebuilt Deno binary for the host platform,
+// downloading, verifying against committed SHA-256 pin, unpacking from zip, and caching locally.
+func EnsureDeno(ctx context.Context) (string, error) {
+	return Ensure(ctx, DenoTool())
+}
+
+const (
+	YtDlpEjsName    = "yt-dlp-ejs"
+	YtDlpEjsVersion = "0.8.0"
+
+	// YtDlpEjsWheelURL is the official upstream pure-Python wheel (The Unlicense + ISC meriyah + MIT astring).
+	YtDlpEjsWheelURL    = "https://github.com/yt-dlp/ejs/releases/download/0.8.0/yt_dlp_ejs-0.8.0-py3-none-any.whl"
+	YtDlpEjsWheelSHA256 = "79300e5fca7f937a1eeede11f0456862c1b41107ce1d726871e0207424f4bdb4"
+	YtDlpEjsWheelSize   = 53443
+
+	// YtDlpEjsSolverURL is the official bundled JavaScript solver script (The Unlicense + ISC meriyah + MIT astring).
+	YtDlpEjsSolverURL    = "https://github.com/yt-dlp/ejs/releases/download/0.8.0/yt.solver.lib.min.js"
+	YtDlpEjsSolverSHA256 = "c55987fe697e5b9ee18830163f7af85327e9bb5c3e674b969d38c8d205eaa577"
+	YtDlpEjsSolverSize   = 151561
+)
+
+// YtDlpEjsPackageInfo describes the pinned upstream yt-dlp-ejs release artifacts.
+type YtDlpEjsPackageInfo struct {
+	Version      string
+	WheelURL     string
+	WheelSHA256  string
+	WheelSize    int64
+	SolverURL    string
+	SolverSHA256 string
+	SolverSize   int64
+}
+
+// YtDlpEjsPackage returns metadata for the pinned yt-dlp-ejs component artifacts.
+func YtDlpEjsPackage() YtDlpEjsPackageInfo {
+	return YtDlpEjsPackageInfo{
+		Version:      YtDlpEjsVersion,
+		WheelURL:     YtDlpEjsWheelURL,
+		WheelSHA256:  YtDlpEjsWheelSHA256,
+		WheelSize:    YtDlpEjsWheelSize,
+		SolverURL:    YtDlpEjsSolverURL,
+		SolverSHA256: YtDlpEjsSolverSHA256,
+		SolverSize:   YtDlpEjsSolverSize,
+	}
+}
+
+// YtDlpEjsPackageDir returns the directory where yt-dlp-ejs artifacts are cached.
+func YtDlpEjsPackageDir() (string, error) {
+	if d := strings.TrimSpace(os.Getenv("BASHY_BIN_CACHE")); d != "" {
+		return filepath.Join(filepath.Dir(d), "packages", "yt-dlp-ejs"), nil
+	}
+	base, err := os.UserCacheDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, "bashy", "packages", "yt-dlp-ejs"), nil
+}
+
+// EnsureYtDlpEjsWheel downloads and verifies the official pure-Python wheel.
+// Concurrency-safe, verifies exact size and SHA-256, and caches offline.
+func EnsureYtDlpEjsWheel(ctx context.Context) (string, error) {
+	info := YtDlpEjsPackage()
+	return ensureEjsArtifact(ctx, "wheel", "yt_dlp_ejs-0.8.0-py3-none-any.whl", info.WheelURL, info.WheelSHA256, info.WheelSize)
+}
+
+// EnsureYtDlpEjsSolver downloads and verifies the official bundled minified JavaScript solver.
+// Concurrency-safe, verifies exact size and SHA-256, and caches offline.
+func EnsureYtDlpEjsSolver(ctx context.Context) (string, error) {
+	info := YtDlpEjsPackage()
+	return ensureEjsArtifact(ctx, "solver", "yt.solver.lib.min.js", info.SolverURL, info.SolverSHA256, info.SolverSize)
+}
+
+const (
 	WhisperCppSourceURL    = "https://github.com/ggml-org/whisper.cpp/archive/refs/tags/v1.9.5.tar.gz"
 	WhisperCppSourceSHA256 = "ff1a9053feb509ff9d7729703355541ae9690073a6b1c40eb692c962e0dc1720"
 	WhisperCppSourceSize   = 9626464
@@ -216,6 +349,7 @@ var (
 	transcriptionMu sync.Mutex
 	modelInFlight   = make(map[string]*modelFlight)
 	sourceInFlight  = make(map[string]*sourceFlight)
+	ejsInFlight     = make(map[string]*ejsFlight)
 )
 
 type modelFlight struct {
@@ -225,6 +359,12 @@ type modelFlight struct {
 }
 
 type sourceFlight struct {
+	done chan struct{}
+	path string
+	err  error
+}
+
+type ejsFlight struct {
 	done chan struct{}
 	path string
 	err  error
@@ -611,6 +751,120 @@ func EnsureWhisperModel(ctx context.Context, name string) (string, error) {
 			}
 		}
 		flight.err = fmt.Errorf("install whisper model: %w", err)
+		return "", flight.err
+	}
+
+	flight.path = targetFile
+	return targetFile, nil
+}
+
+func ensureEjsArtifact(ctx context.Context, kind, filename, url, expectedSHA string, expectedSize int64) (string, error) {
+	dir, err := YtDlpEjsPackageDir()
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("create ejs package dir: %w", err)
+	}
+
+	targetFile := filepath.Join(dir, filename)
+	if fi, err := os.Stat(targetFile); err == nil && fi.Size() == expectedSize {
+		if valid, _ := verifyFileSHA256(targetFile, expectedSHA); valid {
+			return targetFile, nil
+		}
+	}
+
+	flightKey := kind + ":" + filename
+	transcriptionMu.Lock()
+	if flight, ok := ejsInFlight[flightKey]; ok {
+		transcriptionMu.Unlock()
+		select {
+		case <-flight.done:
+			return flight.path, flight.err
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	flight := &ejsFlight{done: make(chan struct{})}
+	ejsInFlight[flightKey] = flight
+	transcriptionMu.Unlock()
+
+	defer func() {
+		transcriptionMu.Lock()
+		delete(ejsInFlight, flightKey)
+		close(flight.done)
+		transcriptionMu.Unlock()
+	}()
+
+	if fi, err := os.Stat(targetFile); err == nil && fi.Size() == expectedSize {
+		if valid, _ := verifyFileSHA256(targetFile, expectedSHA); valid {
+			flight.path = targetFile
+			return targetFile, nil
+		}
+	}
+
+	tmp, err := os.CreateTemp(dir, fmt.Sprintf(".dl-ejs-%s-*", kind))
+	if err != nil {
+		flight.err = fmt.Errorf("create temp ejs file: %w", err)
+		return "", flight.err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		flight.err = fmt.Errorf("create ejs request: %w", err)
+		_ = tmp.Close()
+		return "", flight.err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		flight.err = fmt.Errorf("download ejs %s: %w", kind, err)
+		_ = tmp.Close()
+		return "", flight.err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		flight.err = fmt.Errorf("download ejs %s: http status %d", kind, resp.StatusCode)
+		_ = tmp.Close()
+		return "", flight.err
+	}
+
+	hasher := sha256.New()
+	mw := io.MultiWriter(tmp, hasher)
+
+	copied, err := io.Copy(mw, resp.Body)
+	closeErr := tmp.Close()
+	if err != nil {
+		flight.err = fmt.Errorf("stream ejs %s: %w", kind, err)
+		return "", flight.err
+	}
+	if closeErr != nil {
+		flight.err = fmt.Errorf("close ejs %s: %w", kind, closeErr)
+		return "", flight.err
+	}
+
+	if copied != expectedSize {
+		flight.err = fmt.Errorf("download ejs %s: expected %d bytes, got %d", kind, expectedSize, copied)
+		return "", flight.err
+	}
+
+	actualSHA := hex.EncodeToString(hasher.Sum(nil))
+	if !strings.EqualFold(actualSHA, expectedSHA) {
+		flight.err = fmt.Errorf("rejected tampered ejs %s: expected sha256 %s, got %s", kind, expectedSHA, actualSHA)
+		return "", flight.err
+	}
+
+	if err := os.Rename(tmpName, targetFile); err != nil {
+		if fi, serr := os.Stat(targetFile); serr == nil && fi.Size() == expectedSize {
+			if valid, _ := verifyFileSHA256(targetFile, expectedSHA); valid {
+				flight.path = targetFile
+				return targetFile, nil
+			}
+		}
+		flight.err = fmt.Errorf("install ejs %s: %w", kind, err)
 		return "", flight.err
 	}
 

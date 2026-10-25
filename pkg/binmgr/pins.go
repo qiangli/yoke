@@ -230,6 +230,29 @@ var pinnedDigests = map[string]string{
 	"whisper-cpp-source@v1.9.5/windows/amd64": "ff1a9053feb509ff9d7729703355541ae9690073a6b1c40eb692c962e0dc1720",
 	"whisper-cpp-source@v1.9.5/windows/arm64": "ff1a9053feb509ff9d7729703355541ae9690073a6b1c40eb692c962e0dc1720",
 
+	// deno@v2.9.8 — official upstream prebuilt releases (MIT, S503.6).
+	// Required by yt-dlp for dynamic YouTube JavaScript signature & challenge solving.
+	// Official zip releases contain standalone binary 'deno' ('deno.exe' on windows)
+	// with official SHA-256 sidecars verified across all six release targets.
+	"deno@v2.9.8/darwin/arm64":  "9f0bf660393da2eaff044cdc7444cb08c73f235849b61d224d825a194ce7c98e",
+	"deno@v2.9.8/darwin/amd64":  "4b2f5edd2639b7470f034238b321d7002d8dfb4726d8558f52c17afac370eb2c",
+	"deno@v2.9.8/linux/arm64":   "d49596c20b9788cf8f5d8ddf644103d4bde56ed239753f0bdb92ba9361d51905",
+	"deno@v2.9.8/linux/amd64":   "e890975bc2549807bbcc0b584ffafda72cc7c93349dd99c80483dd784f6c4609",
+	"deno@v2.9.8/windows/arm64": "b413b92b735b50c198e8fe3b85af1aa50e29d5f72e229aab701d132286e14cef",
+	"deno@v2.9.8/windows/amd64": "cba84b26e0df5ae7f74fc66b86a95b866872a86292ebd84fa1e959927edd93bf",
+
+	// yt-dlp-ejs@0.8.0 — official standalone external JavaScript component for yt-dlp (The Unlicense + ISC + MIT, S503.6).
+	// Bundled directly into the pure Python yt-dlp 2026.10.21 zipapp, and pinned here
+	// as an independent package and solver script for offline challenge solving and decoupled runtimes.
+	"yt-dlp-ejs@0.8.0/":             "79300e5fca7f937a1eeede11f0456862c1b41107ce1d726871e0207424f4bdb4",
+	"yt-dlp-ejs@0.8.0/linux/amd64":   "79300e5fca7f937a1eeede11f0456862c1b41107ce1d726871e0207424f4bdb4",
+	"yt-dlp-ejs@0.8.0/linux/arm64":   "79300e5fca7f937a1eeede11f0456862c1b41107ce1d726871e0207424f4bdb4",
+	"yt-dlp-ejs@0.8.0/darwin/amd64":  "79300e5fca7f937a1eeede11f0456862c1b41107ce1d726871e0207424f4bdb4",
+	"yt-dlp-ejs@0.8.0/darwin/arm64":  "79300e5fca7f937a1eeede11f0456862c1b41107ce1d726871e0207424f4bdb4",
+	"yt-dlp-ejs@0.8.0/windows/amd64": "79300e5fca7f937a1eeede11f0456862c1b41107ce1d726871e0207424f4bdb4",
+	"yt-dlp-ejs@0.8.0/windows/arm64": "79300e5fca7f937a1eeede11f0456862c1b41107ce1d726871e0207424f4bdb4",
+	"yt-dlp-ejs-solver@0.8.0/":       "c55987fe697e5b9ee18830163f7af85327e9bb5c3e674b969d38c8d205eaa577",
+
 	// osv-scanner@v2.7.0 — official google/osv-scanner release osv-scanner_SHA256SUMS
 	// and independent download sha256.
 	"osv-scanner@v2.7.0/darwin/amd64":  "e82c5df7ab0a42dff29a1cd0660711447b56b4c0483ff66ad8634df10fd81a45",

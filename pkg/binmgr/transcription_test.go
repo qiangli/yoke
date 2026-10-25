@@ -1,6 +1,8 @@
 package binmgr
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -445,5 +447,257 @@ func TestEnsureWhisperModel_Concurrent(t *testing.T) {
 	data, err := os.ReadFile(results[0])
 	if err != nil || string(data) != string(content) {
 		t.Fatalf("on-disk cached file corrupted: %v, content = %q", err, string(data))
+	}
+}
+
+func TestDenoTool_Declaration(t *testing.T) {
+	tool := DenoTool()
+	if tool.Name != "deno" {
+		t.Fatalf("unexpected name: %s", tool.Name)
+	}
+	if tool.Version != DenoVersion {
+		t.Fatalf("unexpected version: %s", tool.Version)
+	}
+	if tool.Version != "v2.9.8" {
+		t.Fatalf("expected pinned version v2.9.8, got %s", tool.Version)
+	}
+	if len(tool.Assets) != 6 {
+		t.Fatalf("expected 6 platform assets, got %d", len(tool.Assets))
+	}
+
+	for _, plat := range DenoPlatforms {
+		asset, ok := tool.Assets[plat]
+		if !ok {
+			t.Errorf("missing asset for platform %s", plat)
+		}
+		if !strings.HasPrefix(asset.URL, DenoBaseURL) || !strings.HasSuffix(asset.URL, ".zip") {
+			t.Errorf("platform %s url mismatch: %s", plat, asset.URL)
+		}
+		expectedBinary := "deno"
+		if strings.HasPrefix(plat, "windows/") {
+			expectedBinary = "deno.exe"
+		}
+		if asset.Binary != expectedBinary {
+			t.Errorf("platform %s binary mismatch: got %q, want %q", plat, asset.Binary, expectedBinary)
+		}
+		pin, ok := pinnedSHA256(tool.Name, tool.Version, plat)
+		if !ok || pin == "" {
+			t.Errorf("platform %s missing pinned sha256", plat)
+		}
+		if asset.SHA256 != pin {
+			t.Errorf("platform %s asset sha256 mismatch: got %q, want %q", plat, asset.SHA256, pin)
+		}
+	}
+}
+
+func makeMockZipArchive(t *testing.T, files map[string][]byte) ([]byte, string) {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for name, content := range files {
+		fw, err := zw.Create(name)
+		if err != nil {
+			t.Fatalf("failed creating zip entry %s: %v", name, err)
+		}
+		if _, err := fw.Write(content); err != nil {
+			t.Fatalf("failed writing zip entry %s: %v", name, err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("failed closing zip writer: %v", err)
+	}
+	zipBytes := buf.Bytes()
+	h := sha256.Sum256(zipBytes)
+	return zipBytes, hex.EncodeToString(h[:])
+}
+
+func TestEnsureDeno_RejectsTampered(t *testing.T) {
+	mockZip, _ := makeMockZipArchive(t, map[string][]byte{
+		"deno":     []byte("#!/bin/sh\necho deno\n"),
+		"deno.exe": []byte("mock exe"),
+	})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(mockZip)
+	}))
+	defer srv.Close()
+
+	tool := Tool{
+		Name:    "deno-test",
+		Version: "v2.9.8",
+		Assets: map[string]Asset{
+			Platform(): {
+				URL:    srv.URL + "/deno.zip",
+				SHA256: "0000000000000000000000000000000000000000000000000000000000000000",
+				Binary: "deno",
+			},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	t.Setenv("BASHY_BIN_CACHE", tmpDir)
+
+	ctx := context.Background()
+	_, err := Ensure(ctx, tool)
+	if err == nil {
+		t.Fatal("Ensure did not reject tampered deno asset")
+	}
+	if !strings.Contains(err.Error(), "sha256 mismatch") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+
+	dest := filepath.Join(tmpDir, "deno-test", "v2.9.8", binaryName("deno-test"))
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatal("tampered binary was not removed from cache")
+	}
+}
+
+func TestEnsureDeno_VerifiesAndCaches(t *testing.T) {
+	binaryContent := []byte("#!/bin/sh\necho mock deno v2.9.8\n")
+	mockZip, zipSHA := makeMockZipArchive(t, map[string][]byte{
+		"deno":     binaryContent,
+		"deno.exe": binaryContent,
+	})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(mockZip)
+	}))
+	defer srv.Close()
+
+	tool := Tool{
+		Name:    "deno-verify-test",
+		Version: "v2.9.8",
+		Assets: map[string]Asset{
+			Platform(): {
+				URL:    srv.URL + "/deno.zip",
+				SHA256: zipSHA,
+				Binary: "deno",
+			},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	t.Setenv("BASHY_BIN_CACHE", tmpDir)
+
+	ctx := context.Background()
+	binPath, err := Ensure(ctx, tool)
+	if err != nil {
+		t.Fatalf("Ensure failed on valid deno archive: %v", err)
+	}
+
+	data, err := os.ReadFile(binPath)
+	if err != nil {
+		t.Fatalf("failed reading extracted binary: %v", err)
+	}
+	if !bytes.Equal(data, binaryContent) {
+		t.Fatalf("extracted binary content mismatch: got %q, want %q", data, binaryContent)
+	}
+
+	// Verify offline cache hit (server closed)
+	srv.Close()
+	cachedPath, err := Ensure(ctx, tool)
+	if err != nil {
+		t.Fatalf("Ensure failed on offline cache hit: %v", err)
+	}
+	if cachedPath != binPath {
+		t.Fatalf("cached path mismatch: got %s, want %s", cachedPath, binPath)
+	}
+}
+
+func TestYtDlpEjs_Catalog(t *testing.T) {
+	pkg := YtDlpEjsPackage()
+	if pkg.Version != "0.8.0" {
+		t.Fatalf("unexpected version: %s", pkg.Version)
+	}
+	if pkg.WheelSize != 53443 {
+		t.Fatalf("unexpected wheel size: %d", pkg.WheelSize)
+	}
+	if pkg.WheelSHA256 != "79300e5fca7f937a1eeede11f0456862c1b41107ce1d726871e0207424f4bdb4" {
+		t.Fatalf("unexpected wheel sha256: %s", pkg.WheelSHA256)
+	}
+	if pkg.SolverSize != 151561 {
+		t.Fatalf("unexpected solver size: %d", pkg.SolverSize)
+	}
+	if pkg.SolverSHA256 != "c55987fe697e5b9ee18830163f7af85327e9bb5c3e674b969d38c8d205eaa577" {
+		t.Fatalf("unexpected solver sha256: %s", pkg.SolverSHA256)
+	}
+
+	pin, ok := pinnedSHA256("yt-dlp-ejs", "0.8.0", "")
+	if !ok || pin != pkg.WheelSHA256 {
+		t.Fatalf("yt-dlp-ejs wheel pin mismatch: got %q, want %q", pin, pkg.WheelSHA256)
+	}
+	solverPin, ok := pinnedSHA256("yt-dlp-ejs-solver", "0.8.0", "")
+	if !ok || solverPin != pkg.SolverSHA256 {
+		t.Fatalf("yt-dlp-ejs-solver pin mismatch: got %q, want %q", solverPin, pkg.SolverSHA256)
+	}
+}
+
+func TestEnsureYtDlpEjs_VerifiesAndCaches(t *testing.T) {
+	content := []byte("mock yt-dlp-ejs wheel content")
+	hasher := sha256.New()
+	hasher.Write(content)
+	contentSHA := hex.EncodeToString(hasher.Sum(nil))
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(content)
+	}))
+	defer srv.Close()
+
+	tmpDir := t.TempDir()
+	t.Setenv("BASHY_BIN_CACHE", filepath.Join(tmpDir, "bin"))
+
+	ctx := context.Background()
+	path, err := ensureEjsArtifact(ctx, "wheel", "mock_ejs.whl", srv.URL+"/mock.whl", contentSHA, int64(len(content)))
+	if err != nil {
+		t.Fatalf("ensureEjsArtifact failed: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(data, content) {
+		t.Fatalf("cached file content corrupted or missing: %v", err)
+	}
+
+	// Verify offline cache hit (server closed)
+	srv.Close()
+	path2, err := ensureEjsArtifact(ctx, "wheel", "mock_ejs.whl", srv.URL+"/mock.whl", contentSHA, int64(len(content)))
+	if err != nil {
+		t.Fatalf("ensureEjsArtifact failed on offline cache hit: %v", err)
+	}
+	if path2 != path {
+		t.Fatalf("path mismatch: got %s, want %s", path2, path)
+	}
+}
+
+func TestEnsureYtDlpEjs_RejectsTampered(t *testing.T) {
+	content := []byte("tampered ejs artifact bytes")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(content)
+	}))
+	defer srv.Close()
+
+	tmpDir := t.TempDir()
+	t.Setenv("BASHY_BIN_CACHE", filepath.Join(tmpDir, "bin"))
+
+	ctx := context.Background()
+	badSHA := "0000000000000000000000000000000000000000000000000000000000000000"
+	_, err := ensureEjsArtifact(ctx, "solver", "tampered_solver.js", srv.URL+"/tampered.js", badSHA, int64(len(content)))
+	if err == nil {
+		t.Fatal("ensureEjsArtifact did not reject tampered artifact")
+	}
+	if !strings.Contains(err.Error(), "rejected tampered ejs") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	dir, err := YtDlpEjsPackageDir()
+	if err != nil {
+		t.Fatalf("YtDlpEjsPackageDir failed: %v", err)
+	}
+	dest := filepath.Join(dir, "tampered_solver.js")
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatal("tampered ejs file was not removed from cache")
 	}
 }
