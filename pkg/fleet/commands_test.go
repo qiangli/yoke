@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/qiangli/yoke/pkg/assetring"
 	"github.com/qiangli/yoke/pkg/atlas"
+	"github.com/qiangli/yoke/pkg/spacetime"
 )
 
 // shPath is an executable every unix test host has; the exec-mode fixtures
@@ -104,6 +106,12 @@ func TestValidateCommandRefusals(t *testing.T) {
 		{"bad env", Command{Name: "x", Exec: []string{"a"}, Env: []string{"novalue"}}, "not KEY=VALUE"},
 		{"relative cwd", Command{Name: "x", Exec: []string{"a"}, Cwd: "rel"}, "must be absolute"},
 		{"path in name", Command{Name: "a/b", Exec: []string{"a"}}, "path separator"},
+		{"bad provider role", Command{Name: "x", Exec: []string{"a"}, Provides: []string{"Transcribe Acquire"}}, "open dotted identifier"},
+		{"duplicate provider role", Command{Name: "x", Exec: []string{"a"}, Provides: []string{"transcribe.acquire", "transcribe.acquire"}}, "duplicated"},
+		{"accepts without role", Command{Name: "x", Exec: []string{"a"}, Accepts: []CommandMatch{{Path: "/input", Pattern: ".*"}}}, "requires at least one provides"},
+		{"bad pointer", Command{Name: "x", Exec: []string{"a"}, Provides: []string{"transcribe.acquire"}, Accepts: []CommandMatch{{Path: "input", Pattern: ".*"}}}, "JSON pointer"},
+		{"bad pattern", Command{Name: "x", Exec: []string{"a"}, Provides: []string{"transcribe.acquire"}, Accepts: []CommandMatch{{Path: "/input", Pattern: "["}}}, "pattern"},
+		{"bad requires", Command{Name: "x", Exec: []string{"a"}, Requires: "os==linux"}, "requires"},
 	}
 	for _, tc := range cases {
 		rec := tc.rec
@@ -117,6 +125,55 @@ func TestValidateCommandRefusals(t *testing.T) {
 	ok.applyDefaults()
 	if err := ok.Validate(reservedFixture); err != nil {
 		t.Errorf("valid script refused: %v", err)
+	}
+}
+
+func TestCommandProviderApplicabilityAndOpenInputMatching(t *testing.T) {
+	body := `name: youtube-source
+kind: command
+exec: [/bin/true]
+effects: [read, net, exec]
+os: [darwin, linux, windows]
+provides: [transcribe.acquire]
+requires: "os=darwin arch=arm64 has=fixture-tool"
+accepts:
+  - path: /input
+    pattern: '^https://([^/]+\.)?example\.test/'
+`
+	rec, err := ParseCommand("youtube-source", []byte(body), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Validate(nil); err != nil {
+		t.Fatal(err)
+	}
+	if !rec.ProvidesRole("transcribe.acquire") || rec.ProvidesRole("transcribe.decode") {
+		t.Fatalf("roles = %v", rec.Provides)
+	}
+	var request any
+	if err := json.Unmarshal([]byte(`{"input":"https://media.example.test/watch?v=one"}`), &request); err != nil {
+		t.Fatal(err)
+	}
+	if ok, reason := rec.AcceptsJSON(request); !ok {
+		t.Fatalf("matching request rejected: %s", reason)
+	}
+	if err := json.Unmarshal([]byte(`{"input":"https://elsewhere.test/watch"}`), &request); err != nil {
+		t.Fatal(err)
+	}
+	if ok, reason := rec.AcceptsJSON(request); ok || !strings.Contains(reason, "/input=") {
+		t.Fatalf("unsupported request = %v, %q", ok, reason)
+	}
+
+	ps := spacetime.DefaultProbes(spacetime.NopCache())
+	ps.SetStatic("os", "darwin")
+	ps.SetStatic("arch", "arm64")
+	ps.SetStatic("tool.fixture-tool", "present")
+	if verdict := rec.Applicability(ps); !verdict.Applicable {
+		t.Fatalf("applicability = %+v", verdict)
+	}
+	ps.SetStatic("arch", "amd64")
+	if verdict := rec.Applicability(ps); verdict.Applicable || !strings.Contains(verdict.Failing, "arch=arm64") {
+		t.Fatalf("wrong-arch applicability = %+v", verdict)
 	}
 }
 
@@ -244,7 +301,7 @@ func TestCommandsCRUD(t *testing.T) {
 	opts := []Option{WithRoot(root), WithReservedNames(reservedFixture)}
 	tree := func() *cobra.Command { return NewCommandsCmd(opts...) }
 
-	if out, err := runCmd(t, tree(), "add", "gl", "--set", "script=git log --oneline", "--set", "effects.0=read", "--set", "synopsis=compact log"); err != nil || !strings.Contains(out, "gl (script: read)") {
+	if out, err := runCmd(t, tree(), "add", "gl", "--set", "script=git log --oneline", "--set", "effects.0=read", "--set", "synopsis=compact log", "--set", "provides.0=fixture.read", "--set", "accepts.0.path=/kind", "--set", "accepts.0.pattern=^text$", "--set", "requires=os=linux,darwin,windows"); err != nil || !strings.Contains(out, "gl (script: read)") {
 		t.Fatalf("add: %v %q", err, out)
 	}
 	if _, err := os.Stat(filepath.Join(root, "commands", "gl.yaml")); err != nil {
@@ -252,6 +309,9 @@ func TestCommandsCRUD(t *testing.T) {
 	}
 	if out, err := runCmd(t, tree(), "show", "gl", "--field", "synopsis"); err != nil || strings.TrimSpace(out) != "compact log" {
 		t.Errorf("show --field: %v %q", err, out)
+	}
+	if out, err := runCmd(t, tree(), "show", "gl", "--field", "provides"); err != nil || !strings.Contains(out, "fixture.read") {
+		t.Errorf("show provider declaration: %v %q", err, out)
 	}
 	if out, err := runCmd(t, tree(), "list"); err != nil || !strings.Contains(out, "gl") || !strings.Contains(out, "script") {
 		t.Errorf("list: %v %q", err, out)
@@ -266,7 +326,7 @@ func TestCommandsCRUD(t *testing.T) {
 	if err == nil || !strings.Contains(out, "script") || !strings.Contains(out, "download.sha256.<key>") {
 		t.Errorf("unknown path must print the schema: %v %q", err, out)
 	}
-	if out, err := runCmd(t, tree(), "schema"); err != nil || !strings.Contains(out, "exec.<index>") || !strings.Contains(out, "download.sha256.<key>") || !strings.Contains(out, "effects.<index>") {
+	if out, err := runCmd(t, tree(), "schema"); err != nil || !strings.Contains(out, "exec.<index>") || !strings.Contains(out, "download.sha256.<key>") || !strings.Contains(out, "effects.<index>") || !strings.Contains(out, "accepts.<index>.pattern") || !strings.Contains(out, "requires") {
 		t.Errorf("schema: %v %q", err, out)
 	}
 	// Collision filter: builtins/applets/verbs and the CRUD words, no --force.

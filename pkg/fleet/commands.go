@@ -54,6 +54,15 @@ type Command struct {
 	// record: untyped pass-through, exactly as before the field existed.
 	Args *CommandSchema `yaml:"args,omitempty" json:"args,omitempty" doc:"argument schema the shell binds and validates before the body runs (typed positionals, flags, enums, defaults); absent = untyped pass-through"`
 
+	// Open capability names and JSON request matchers make a registered
+	// command discoverable as a provider without teaching the caller a closed
+	// list of provider kinds. Requires uses the same space-time grammar as
+	// skills (for example "os=linux,darwin arch=amd64,arm64 has=ffmpeg").
+	// Effects and OS remain the command record's existing declarations.
+	Provides []string       `yaml:"provides,omitempty" json:"provides,omitempty" doc:"open provider roles implemented by this command (for example transcribe.acquire)"`
+	Accepts  []CommandMatch `yaml:"accepts,omitempty" json:"accepts,omitempty" doc:"JSON-pointer/RE2 rules, all of which an automatically selected request must match; empty accepts every request"`
+	Requires string         `yaml:"requires,omitempty" json:"requires,omitempty" doc:"skill-compatible applicability expression declaring host, architecture and command dependencies"`
+
 	// Atlas metadata (closed vocabularies from pkg/atlas).
 	Effects []string `yaml:"effects,omitempty" json:"effects,omitempty" doc:"security effects (atlas vocabulary); at least one — script bodies must declare theirs"`
 	Caps    []string `yaml:"caps,omitempty" json:"caps,omitempty" doc:"agentic capabilities (atlas vocabulary)"`
@@ -288,6 +297,9 @@ func (c Command) Validate(reserved ReservedName) error {
 		return fmt.Errorf("fleet: command %q: cwd %q must be absolute", c.Name, c.Cwd)
 	}
 	if err := c.Args.Validate(); err != nil {
+		return fmt.Errorf("fleet: command %q: %w", c.Name, err)
+	}
+	if err := c.validateApplicability(); err != nil {
 		return fmt.Errorf("fleet: command %q: %w", c.Name, err)
 	}
 	return nil

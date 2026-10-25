@@ -52,6 +52,19 @@ command has:
   script     an inline body run as ` + "`bashy -c BODY NAME ARGS`" + ` (--set script=…;
              its effects are yours to declare: --set effects.0=read)
 
+Any mode may also advertise itself for automatic selection without adding a
+new dispatcher or plugin loader:
+
+  provides.<i>             open provider role (for example transcribe.acquire)
+  accepts.<i>.path         RFC 6901 JSON pointer into a request
+  accepts.<i>.pattern      RE2 input-support expression for that scalar
+  requires                 the same host/dependency expression skills use
+
+All accepts rules must match. An empty accepts list supports every request for
+the declared role. OS support and effects remain the ordinary os/effects
+fields. Website, media and future domain knowledge therefore stays in records,
+not in a closed core vocabulary.
+
 Any mode may declare an ARGUMENT SCHEMA — typed positionals, named flags,
 enums and defaults — that the shell binds and validates BEFORE the body or
 program runs, so a bad call fails on the argument, not inside the body:
@@ -84,6 +97,8 @@ type commandRow struct {
 	Name     string   `json:"name"`
 	Mode     string   `json:"mode"`
 	Effects  []string `json:"effects"`
+	Provides []string `json:"provides,omitempty"`
+	Requires string   `json:"requires,omitempty"`
 	Aliases  []string `json:"aliases,omitempty"`
 	Ring     string   `json:"ring"`
 	Hidden   bool     `json:"hidden,omitempty"`
@@ -113,7 +128,8 @@ func newCommandsList(opts []Option) *cobra.Command {
 					continue
 				}
 				rows = append(rows, commandRow{
-					RecordLifecycle: r.RecordLifecycle, Name: r.Name, Mode: r.Mode(), Effects: r.Effects, Aliases: r.Aliases,
+					RecordLifecycle: r.RecordLifecycle, Name: r.Name, Mode: r.Mode(), Effects: r.Effects, Provides: r.Provides,
+					Requires: r.Requires, Aliases: r.Aliases,
 					Ring: r.Ring.String(), Hidden: r.Hidden, Shadowed: shadows[r.Name], Synopsis: r.Synopsis,
 				})
 			}

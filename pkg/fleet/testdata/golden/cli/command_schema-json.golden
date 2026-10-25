@@ -1,5 +1,25 @@
 [
   {
+    "path": "accepts",
+    "type": "[]object",
+    "description": "JSON-pointer/RE2 rules, all of which an automatically selected request must match; empty accepts every request"
+  },
+  {
+    "path": "accepts.\u003cindex\u003e",
+    "type": "object",
+    "description": "list element"
+  },
+  {
+    "path": "accepts.\u003cindex\u003e.path",
+    "type": "string",
+    "description": "RFC 6901 JSON pointer into the provider request"
+  },
+  {
+    "path": "accepts.\u003cindex\u003e.pattern",
+    "type": "string",
+    "description": "RE2 expression the pointed-to scalar must match"
+  },
+  {
     "path": "aliases",
     "type": "[]string",
     "description": "alternate names (each passes the same collision filter)"
@@ -293,6 +313,21 @@
     "path": "os.\u003cindex\u003e",
     "type": "string",
     "description": "list element"
+  },
+  {
+    "path": "provides",
+    "type": "[]string",
+    "description": "open provider roles implemented by this command (for example transcribe.acquire)"
+  },
+  {
+    "path": "provides.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "requires",
+    "type": "string",
+    "description": "skill-compatible applicability expression declaring host, architecture and command dependencies"
   },
   {
     "path": "script",
