@@ -26,7 +26,7 @@ import (
 //      whose full license closure consists of The Unlicense (core yt-dlp / public domain dedication),
 //      ISC license (bundled meriyah JS parser), and MIT license (bundled astring JS generator).
 //      All components are strictly permissive non-copyleft, satisfying the supply chain policy.
-//    - Runs across all six release targets under Python 3.9+ (provisioned by bashy via uv / CPython 3.15,
+//    - Runs across all six release targets under Python 3.10+ (provisioned by bashy via uv / CPython 3.15,
 //      PSF-2.0, yoke/external/python).
 //    - JavaScript challenges (n-sig / player signatures) are resolved using
 //      an admitted JavaScript runtime. Upstream yt-dlp defaults to and recommends
