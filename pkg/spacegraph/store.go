@@ -48,7 +48,7 @@ type Observation struct {
 	Source     string
 }
 
-// Record folds an observation into the store.
+// Record appends an observation without replaying history on the command path.
 //
 // It is an append, never an edit: the file is a log, and the live view is the
 // replay. That buys the bi-temporal question — what did this host believe last
@@ -61,32 +61,16 @@ func (s *Store) Record(obs Observation) error {
 		obs.At = time.Now().UTC()
 	}
 
-	live, err := s.Live(obs.At)
-	if err != nil {
-		return err
-	}
-
 	e := Edge{
 		Schema: Schema, Src: obs.Src, Rel: obs.Rel, Dst: obs.Dst, Via: obs.Via,
 		N: 1, First: obs.At, Last: obs.At, ValidFrom: obs.At,
 		Coordinate: obs.Coordinate, Place: obs.Place, Source: obs.Source,
+		Delta: true,
 	}
 	if obs.OK {
 		e.OK = 1
 	}
 
-	if prev, ok := live[e.ID()]; ok {
-		// Accumulate onto the SAME identity. This is the whole anti-fragmentation
-		// property: the seventh ssh to a host strengthens one edge rather than
-		// creating a seventh.
-		e.N = prev.N + 1
-		e.OK = prev.OK + e.OK
-		e.First = prev.First
-		e.ValidFrom = prev.ValidFrom
-		if prev.Via != "" && e.Via == "" {
-			e.Via = prev.Via
-		}
-	}
 	return s.append(e)
 }
 
@@ -128,8 +112,8 @@ func (s *Store) append(e Edge) error {
 
 // Live replays the log and returns the edges believed at t, keyed by edge id.
 //
-// Last writer wins per identity, which is what makes a re-recorded observation
-// idempotent rather than duplicative.
+// Legacy snapshots replace the prior state; new observation deltas add to it.
+// Replaying either format twice produces the same view.
 func (s *Store) Live(t time.Time) (map[string]Edge, error) {
 	all, _, err := s.all()
 	if err != nil {
@@ -137,7 +121,26 @@ func (s *Store) Live(t time.Time) (map[string]Edge, error) {
 	}
 	out := make(map[string]Edge, len(all))
 	for _, e := range all {
-		out[e.ID()] = e
+		id := e.ID()
+		if !e.Delta {
+			// Legacy records and Supersede are full snapshots.
+			out[id] = e
+			continue
+		}
+		if prev, ok := out[id]; ok && prev.Live(e.Last) {
+			prev.N += e.N
+			prev.OK += e.OK
+			prev.Last = e.Last
+			if e.Via != "" {
+				prev.Via = e.Via
+			}
+			prev.Coordinate, prev.Place, prev.Source = e.Coordinate, e.Place, e.Source
+			out[id] = prev
+			continue
+		}
+		// A first observation, or a new observation after Supersede.
+		e.Delta = false
+		out[id] = e
 	}
 	for id, e := range out {
 		if !e.Live(t) {

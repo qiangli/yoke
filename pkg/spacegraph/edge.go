@@ -47,6 +47,9 @@ const (
 // instead of creating a seventh one.
 type Edge struct {
 	Schema string `json:"schema"`
+	// Delta marks an append-only observation. Legacy records and explicit
+	// supersessions are full snapshots; Live folds both formats together.
+	Delta bool `json:"delta,omitempty"`
 
 	Src string   `json:"src"` // craft.Entity.ID()
 	Rel Relation `json:"rel"`

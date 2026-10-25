@@ -4,6 +4,9 @@
 package spacegraph
 
 import (
+	"os"
+	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -220,6 +223,48 @@ func TestIdempotentReplay(t *testing.T) {
 		if a[i].N != b[i].N {
 			t.Errorf("counts drift on replay: %+v vs %+v", a[i], b[i])
 		}
+	}
+}
+
+func TestRecordFoldsDeltasWithLegacyLogAcrossStores(t *testing.T) {
+	s := Open(t.TempDir())
+	base := time.Now().UTC().Add(-time.Hour)
+	target := Observation{Src: "host:a", Rel: RelReached, Dst: "host:b", OK: true, At: base}
+	if err := s.append(Edge{Schema: Schema, Src: target.Src, Rel: target.Rel, Dst: target.Dst, Via: "account:first", N: 7, OK: 4, First: base, Last: base, ValidFrom: base}); err != nil {
+		t.Fatal(err)
+	}
+	// A new writer must fold its delta with an old full snapshot, even when
+	// unrelated history and a damaged line follow that snapshot.
+	for i := 0; i < 400; i++ {
+		if err := s.append(Edge{Schema: Schema, Src: "repo:unrelated", Rel: RelContains, Dst: "path:" + strconv.Itoa(i), N: 1, First: base, Last: base, ValidFrom: base}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f, err := os.OpenFile(s.Path(), os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.WriteString("{broken}\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	target.At = base.Add(time.Minute)
+	target.Via = "account:second"
+	if err := Open(filepath.Dir(s.Path())).Record(target); err != nil {
+		t.Fatal(err)
+	}
+	live, err := s.Live(base.Add(2 * time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := live[(Edge{Src: target.Src, Rel: target.Rel, Dst: target.Dst}).ID()]
+	if e.N != 8 || e.OK != 5 {
+		t.Fatalf("cross-store count = n=%d ok=%d, want 8/5", e.N, e.OK)
+	}
+	if e.Via != target.Via {
+		t.Fatalf("latest account = %q, want %q", e.Via, target.Via)
 	}
 }
 
