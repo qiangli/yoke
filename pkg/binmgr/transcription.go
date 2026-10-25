@@ -250,7 +250,6 @@ func EnsureWhisperCppSource(ctx context.Context) (string, error) {
 		if valid, _ := verifyFileSHA256(targetFile, info.SHA256); valid {
 			return targetFile, nil
 		}
-		_ = os.Remove(targetFile)
 	}
 
 	// Concurrency synchronization: if a download for this version is already running, wait.
@@ -281,7 +280,6 @@ func EnsureWhisperCppSource(ctx context.Context) (string, error) {
 			flight.path = targetFile
 			return targetFile, nil
 		}
-		_ = os.Remove(targetFile)
 	}
 
 	tmp, err := os.CreateTemp(dir, fmt.Sprintf(".dl-whisper-source-%s-*", info.Version))
@@ -317,9 +315,13 @@ func EnsureWhisperCppSource(ctx context.Context) (string, error) {
 	mw := io.MultiWriter(tmp, hasher)
 
 	copied, err := io.Copy(mw, resp.Body)
-	_ = tmp.Close()
+	closeErr := tmp.Close()
 	if err != nil {
 		flight.err = fmt.Errorf("stream whisper source: %w", err)
+		return "", flight.err
+	}
+	if closeErr != nil {
+		flight.err = fmt.Errorf("close whisper source: %w", closeErr)
 		return "", flight.err
 	}
 
@@ -511,7 +513,6 @@ func EnsureWhisperModel(ctx context.Context, name string) (string, error) {
 		if valid, _ := verifyFileSHA256(targetFile, info.SHA256); valid {
 			return targetFile, nil
 		}
-		_ = os.Remove(targetFile)
 	}
 
 	// Concurrency synchronization: if a download for this model is already in progress,
@@ -543,7 +544,6 @@ func EnsureWhisperModel(ctx context.Context, name string) (string, error) {
 			flight.path = targetFile
 			return targetFile, nil
 		}
-		_ = os.Remove(targetFile)
 	}
 
 	// Create unique temporary file in destination directory
@@ -580,9 +580,13 @@ func EnsureWhisperModel(ctx context.Context, name string) (string, error) {
 	mw := io.MultiWriter(tmp, hasher)
 
 	copied, err := io.Copy(mw, resp.Body)
-	_ = tmp.Close()
+	closeErr := tmp.Close()
 	if err != nil {
 		flight.err = fmt.Errorf("stream whisper model: %w", err)
+		return "", flight.err
+	}
+	if closeErr != nil {
+		flight.err = fmt.Errorf("close whisper model: %w", closeErr)
 		return "", flight.err
 	}
 
