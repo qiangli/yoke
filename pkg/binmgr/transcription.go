@@ -49,8 +49,8 @@ import (
 //    - Admitted resolution paths:
 //      a) Pinned source build: upstream stable v1.9.5 source archive pinned with SHA-256 in pins.go
 //         via EnsureWhisperCppSource.
-//      b) First-party signed CI release: qiangli/whisper.cpp tagged at v1.9.5 with keyless Sigstore
-//         provenance attestations from GitHub Actions, following the pattern in prima.go.
+//      b) First-party signed CI release: qiangli/bashy tagged at the WhisperCppVersion
+//         release tag, with keyless Sigstore bundles from GitHub Actions.
 //
 // 3. Media Decoder / FFmpeg (LGPL-2.1-or-later / GPL-2.0-or-later):
 //    - Strict permissive packaging CANNOT be satisfied: FFmpeg has no permissive license option.
@@ -79,9 +79,9 @@ const (
 	YtDlpSHA256 = "b7af77f686e95f7845ce8d09d21957718febb8b48b30555adb9dd2292ad7bf14"
 
 	WhisperCppName     = "whisper-cpp"
-	WhisperCppVersion  = "v1.9.5"
-	WhisperCppRepo     = "qiangli/whisper.cpp"
-	WhisperCppIdentity = "https://github.com/qiangli/whisper.cpp/.github/workflows/bashy-build.yml@refs/tags/" + WhisperCppVersion
+	WhisperCppVersion  = "whisper-cpp-v1.9.5-bashy.1"
+	WhisperCppRepo     = "qiangli/bashy"
+	WhisperCppIdentity = "https://github.com/qiangli/bashy/.github/workflows/s503-whisper-release.yml@refs/tags/" + WhisperCppVersion
 )
 
 // YtDlpPlatforms covers all six release targets because the pure Python zipapp
@@ -132,9 +132,9 @@ func YtDlpTool() Tool {
 // across all six release targets.
 // Upstream stable release v1.9.5 publishes no prebuilt standalone CLI release archives
 // (assets_count = 0) and nightly builds (b5454) are excluded by policy.
-// This declaration models the first-party Sigstore-signed CI release pattern established
-// in prima.go (qiangli/whisper.cpp built via .github/workflows/bashy-build.yml with keyless Sigstore
-// attestations and signed SHA256SUMS).
+// This declaration models the first-party Bashy tagged release with keyless
+// Sigstore bundles and a signed SHA256SUMS containing all six executables,
+// the reviewed notice bundle, and the release manifest.
 // Because prebuilt binaries have not yet been built and signed in pins.go, RequireCommittedPin
 // enforces fail-closed rejection on missing pins across all six target platforms.
 func WhisperCppTool() Tool {
@@ -149,6 +149,7 @@ func WhisperCppTool() Tool {
 	t.SignedSums = &SignedSums{
 		URL:       base + "SHA256SUMS",
 		BundleURL: base + "SHA256SUMS.sigstore.json",
+		RequiredNames: []string{"WHISPER-NOTICES.txt", "whisper-release-manifest.json", "whisper-build-evidence.tar.gz"},
 	}
 	for _, p := range WhisperCppPlatforms {
 		name := whisperCLIFile(p)

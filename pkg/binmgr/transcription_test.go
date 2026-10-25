@@ -93,8 +93,8 @@ func TestWhisperCppTool_PlatformsAndBlockers(t *testing.T) {
 	if tool.Version != WhisperCppVersion {
 		t.Fatalf("unexpected version: %s", tool.Version)
 	}
-	if tool.Version != "v1.9.5" {
-		t.Fatalf("expected pinned stable version v1.9.5, got %s", tool.Version)
+	if tool.Version != "whisper-cpp-v1.9.5-bashy.1" {
+		t.Fatalf("unexpected first-party release tag %s", tool.Version)
 	}
 	if !tool.RequireCommittedPin {
 		t.Fatal("expected RequireCommittedPin = true to enforce fail-closed check on missing pins")
@@ -104,6 +104,14 @@ func TestWhisperCppTool_PlatformsAndBlockers(t *testing.T) {
 	}
 	if tool.SignedSums == nil {
 		t.Fatal("expected SignedSums declaration for first-party CI release")
+	}
+	if tool.SignedSums.URL != whisperReleaseBase()+"SHA256SUMS" ||
+		tool.SignedSums.BundleURL != whisperReleaseBase()+"SHA256SUMS.sigstore.json" ||
+		len(tool.SignedSums.RequiredNames) != 3 ||
+		tool.SignedSums.RequiredNames[0] != "WHISPER-NOTICES.txt" ||
+		tool.SignedSums.RequiredNames[1] != "whisper-release-manifest.json" ||
+		tool.SignedSums.RequiredNames[2] != "whisper-build-evidence.tar.gz" {
+		t.Fatalf("unexpected signed release inventory: %+v", tool.SignedSums)
 	}
 
 	if len(tool.Assets) != 6 {
