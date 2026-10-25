@@ -239,7 +239,7 @@ require (
 	github.com/maruel/natural v1.3.0 // indirect
 	github.com/marusama/semaphore/v2 v2.5.0 // indirect
 	github.com/mattn/go-isatty v0.0.22 // indirect
-	github.com/mattn/go-runewidth v0.0.23 // indirect
+	github.com/mattn/go-runewidth v0.0.27 // indirect
 	github.com/mattn/go-shellwords v1.0.13 // indirect
 	github.com/mattn/go-sqlite3 v1.14.42 // indirect
 	github.com/mdlayher/socket v0.5.1 // indirect
@@ -446,3 +446,5 @@ replace github.com/hashicorp/errwrap => ./external/errwrap
 // pathrs-lite and pathrs-lite/procfs subpackages; see
 // external/securejoin/README.yoke.md).
 replace github.com/cyphar/filepath-securejoin => ./external/securejoin
+
+replace github.com/mattn/go-runewidth => ./external/runewidth
