@@ -115,6 +115,136 @@ func WhisperCppTool() Tool {
 	}
 }
 
+// EnsureYtDlp provisions the pure-Python zipapp for the host platform.
+func EnsureYtDlp(ctx context.Context) (string, error) {
+	return Ensure(ctx, YtDlpTool())
+}
+
+// EnsureWhisperCpp attempts to provision the whisper.cpp CLI binary.
+// Upstream stable release v1.9.5 publishes no prebuilt CLI release archives across
+// any target platform (assets_count = 0). This function fails closed with an
+// explicit blocker error describing the admitted resolution paths (pinned source build
+// via EnsureWhisperCppSource or first-party signed CI release), rather than falling
+// back to nightly builds.
+func EnsureWhisperCpp(ctx context.Context) (string, error) {
+	tool := WhisperCppTool()
+	p := Platform()
+	if _, ok := tool.Assets[p]; !ok {
+		return "", fmt.Errorf("binmgr: %s %s has no prebuilt CLI asset for %s (upstream stable release publishes no precompiled CLI assets; nightly builds are excluded; build from pinned source or await first-party signed release)", tool.Name, tool.Version, p)
+	}
+	return Ensure(ctx, tool)
+}
+
+const (
+	WhisperCppSourceURL    = "https://github.com/ggml-org/whisper.cpp/archive/refs/tags/v1.9.5.tar.gz"
+	WhisperCppSourceSHA256 = "ff1a9053feb509ff9d7729703355541ae9690073a6b1c40eb692c962e0dc1720"
+	WhisperCppSourceSize   = 9626464
+)
+
+// WhisperCppSourceArchiveInfo describes the pinned upstream v1.9.5 source tarball.
+type WhisperCppSourceArchiveInfo struct {
+	Version string
+	URL     string
+	SHA256  string
+	Size    int64
+}
+
+// WhisperCppSourceArchive returns the metadata for the pinned stable v1.9.5 source archive.
+func WhisperCppSourceArchive() WhisperCppSourceArchiveInfo {
+	return WhisperCppSourceArchiveInfo{
+		Version: WhisperCppVersion,
+		URL:     WhisperCppSourceURL,
+		SHA256:  WhisperCppSourceSHA256,
+		Size:    WhisperCppSourceSize,
+	}
+}
+
+// WhisperSourceDir returns the directory where source archives are cached.
+func WhisperSourceDir() (string, error) {
+	if d := strings.TrimSpace(os.Getenv("BASHY_BIN_CACHE")); d != "" {
+		return filepath.Join(filepath.Dir(d), "sources", "whisper"), nil
+	}
+	base, err := os.UserCacheDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, "bashy", "sources", "whisper"), nil
+}
+
+// EnsureWhisperCppSource downloads and verifies the official upstream stable v1.9.5 source archive.
+// Downloads with fail-closed SHA-256 verification and rejects tampered archives.
+func EnsureWhisperCppSource(ctx context.Context) (string, error) {
+	info := WhisperCppSourceArchive()
+	dir, err := WhisperSourceDir()
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("create whisper source dir: %w", err)
+	}
+
+	targetFile := filepath.Join(dir, fmt.Sprintf("whisper.cpp-%s.tar.gz", info.Version))
+
+	// Check if already cached and valid
+	if fi, err := os.Stat(targetFile); err == nil && fi.Size() == info.Size {
+		if valid, _ := verifyFileSHA256(targetFile, info.SHA256); valid {
+			return targetFile, nil
+		}
+		_ = os.Remove(targetFile)
+	}
+
+	tmpFile := targetFile + ".tmp"
+	_ = os.Remove(tmpFile)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, info.URL, nil)
+	if err != nil {
+		return "", fmt.Errorf("create source request: %w", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("download whisper source: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("download whisper source: http status %d", resp.StatusCode)
+	}
+
+	out, err := os.OpenFile(tmpFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return "", fmt.Errorf("create temp source file: %w", err)
+	}
+
+	hasher := sha256.New()
+	mw := io.MultiWriter(out, hasher)
+
+	copied, err := io.Copy(mw, resp.Body)
+	_ = out.Close()
+	if err != nil {
+		_ = os.Remove(tmpFile)
+		return "", fmt.Errorf("stream whisper source: %w", err)
+	}
+
+	if copied != info.Size {
+		_ = os.Remove(tmpFile)
+		return "", fmt.Errorf("download whisper source: expected %d bytes, got %d", info.Size, copied)
+	}
+
+	actualSHA := hex.EncodeToString(hasher.Sum(nil))
+	if !strings.EqualFold(actualSHA, info.SHA256) {
+		_ = os.Remove(tmpFile)
+		return "", fmt.Errorf("rejected tampered whisper source %s: expected sha256 %s, got %s", info.Version, info.SHA256, actualSHA)
+	}
+
+	if err := os.Rename(tmpFile, targetFile); err != nil {
+		_ = os.Remove(tmpFile)
+		return "", fmt.Errorf("install whisper source: %w", err)
+	}
+
+	return targetFile, nil
+}
+
 // WhisperModelInfo describes a pinned OpenAI Whisper GGML model weight file.
 type WhisperModelInfo struct {
 	Name   string

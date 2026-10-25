@@ -217,6 +217,19 @@ var pinnedDigests = map[string]string{
 	"yt-dlp@2026.10.21/windows/amd64": "b7af77f686e95f7845ce8d09d21957718febb8b48b30555adb9dd2292ad7bf14",
 	"yt-dlp@2026.10.21/windows/arm64": "b7af77f686e95f7845ce8d09d21957718febb8b48b30555adb9dd2292ad7bf14",
 
+	// whisper-cpp-source@v1.9.5 — official upstream stable release source archive (MIT, S503.6).
+	// Upstream stable release v1.9.5 publishes no prebuilt standalone CLI binaries
+	// (assets_count = 0) and nightly builds (b5454) are excluded by policy.
+	// This pinned source tarball provides the admitted source build path across all
+	// six native targets when CMake and C/C++ compilation toolchains are present.
+	"whisper-cpp-source@v1.9.5/":             "ff1a9053feb509ff9d7729703355541ae9690073a6b1c40eb692c962e0dc1720",
+	"whisper-cpp-source@v1.9.5/linux/amd64":   "ff1a9053feb509ff9d7729703355541ae9690073a6b1c40eb692c962e0dc1720",
+	"whisper-cpp-source@v1.9.5/linux/arm64":   "ff1a9053feb509ff9d7729703355541ae9690073a6b1c40eb692c962e0dc1720",
+	"whisper-cpp-source@v1.9.5/darwin/amd64":  "ff1a9053feb509ff9d7729703355541ae9690073a6b1c40eb692c962e0dc1720",
+	"whisper-cpp-source@v1.9.5/darwin/arm64":  "ff1a9053feb509ff9d7729703355541ae9690073a6b1c40eb692c962e0dc1720",
+	"whisper-cpp-source@v1.9.5/windows/amd64": "ff1a9053feb509ff9d7729703355541ae9690073a6b1c40eb692c962e0dc1720",
+	"whisper-cpp-source@v1.9.5/windows/arm64": "ff1a9053feb509ff9d7729703355541ae9690073a6b1c40eb692c962e0dc1720",
+
 	// osv-scanner@v2.7.0 — official google/osv-scanner release osv-scanner_SHA256SUMS
 	// and independent download sha256.
 	"osv-scanner@v2.7.0/darwin/amd64":  "e82c5df7ab0a42dff29a1cd0660711447b56b4c0483ff66ad8634df10fd81a45",
