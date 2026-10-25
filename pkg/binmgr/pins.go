@@ -204,6 +204,19 @@ var pinnedDigests = map[string]string{
 	"openclaw@2026.10.2/windows/amd64": "d1c979c9ff6c5fb600a4582a7d777e0ef5264f5a570d2e822323a8c508d744fe",
 	"openclaw@2026.10.2/windows/arm64": "d1c979c9ff6c5fb600a4582a7d777e0ef5264f5a570d2e822323a8c508d744fe",
 
+	// yt-dlp@2026.10.21 — reviewed pure Python zipapp (The Unlicense + ISC meriyah + MIT astring, S503.6).
+	// Upstream standalone PyInstaller executables bundle mutagen (GPL-2.0-or-later)
+	// and are strictly excluded under repository supply-chain policy. The zipapp
+	// contains only permissive non-copyleft code (The Unlicense core, ISC meriyah
+	// JS parser, MIT astring JS generator) and runs across all six release targets
+	// under Python 3.9+ (managed uv CPython 3.15).
+	"yt-dlp@2026.10.21/linux/amd64":   "b7af77f686e95f7845ce8d09d21957718febb8b48b30555adb9dd2292ad7bf14",
+	"yt-dlp@2026.10.21/linux/arm64":   "b7af77f686e95f7845ce8d09d21957718febb8b48b30555adb9dd2292ad7bf14",
+	"yt-dlp@2026.10.21/darwin/amd64":  "b7af77f686e95f7845ce8d09d21957718febb8b48b30555adb9dd2292ad7bf14",
+	"yt-dlp@2026.10.21/darwin/arm64":  "b7af77f686e95f7845ce8d09d21957718febb8b48b30555adb9dd2292ad7bf14",
+	"yt-dlp@2026.10.21/windows/amd64": "b7af77f686e95f7845ce8d09d21957718febb8b48b30555adb9dd2292ad7bf14",
+	"yt-dlp@2026.10.21/windows/arm64": "b7af77f686e95f7845ce8d09d21957718febb8b48b30555adb9dd2292ad7bf14",
+
 	// osv-scanner@v2.7.0 — official google/osv-scanner release osv-scanner_SHA256SUMS
 	// and independent download sha256.
 	"osv-scanner@v2.7.0/darwin/amd64":  "e82c5df7ab0a42dff29a1cd0660711447b56b4c0483ff66ad8634df10fd81a45",
