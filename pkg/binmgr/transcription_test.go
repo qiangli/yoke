@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -92,12 +94,32 @@ func TestWhisperCppTool_PlatformsAndBlockers(t *testing.T) {
 	if tool.Version != "v1.9.5" {
 		t.Fatalf("expected pinned stable version v1.9.5, got %s", tool.Version)
 	}
+	if !tool.RequireCommittedPin {
+		t.Fatal("expected RequireCommittedPin = true to enforce fail-closed check on missing pins")
+	}
+	if tool.Sigstore == nil || tool.Sigstore.Identity != WhisperCppIdentity || tool.Sigstore.Issuer != GitHubActionsIssuer {
+		t.Fatalf("unexpected Sigstore declaration: %+v", tool.Sigstore)
+	}
+	if tool.SignedSums == nil {
+		t.Fatal("expected SignedSums declaration for first-party CI release")
+	}
 
-	// Upstream v1.9.5 stable release publishes no prebuilt standalone CLI release archives.
-	// All six targets must have missing stable assets recorded as explicit blockers.
+	if len(tool.Assets) != 6 {
+		t.Fatalf("expected 6 platform assets declared, got %d", len(tool.Assets))
+	}
+
+	// Verify all six native platforms are present in Assets and point to release base
+	base := whisperReleaseBase()
 	for _, plat := range WhisperCppPlatforms {
-		if _, ok := tool.Assets[plat]; ok {
-			t.Errorf("platform %s should have no upstream prebuilt assets in stable v1.9.5: missing stable assets must remain blockers", plat)
+		asset, ok := tool.Assets[plat]
+		if !ok {
+			t.Errorf("missing asset declaration for platform %s", plat)
+		}
+		if !strings.HasPrefix(asset.URL, base) {
+			t.Errorf("platform %s url %q does not have base prefix %q", plat, asset.URL, base)
+		}
+		if !strings.HasSuffix(asset.SigstoreBundle, DefaultBundleSuffix) {
+			t.Errorf("platform %s bundle %q does not have default suffix %q", plat, asset.SigstoreBundle, DefaultBundleSuffix)
 		}
 	}
 }
@@ -106,9 +128,9 @@ func TestEnsureWhisperCpp_FailsClosed(t *testing.T) {
 	ctx := context.Background()
 	_, err := EnsureWhisperCpp(ctx)
 	if err == nil {
-		t.Fatal("EnsureWhisperCpp must fail closed when upstream stable release has no prebuilt assets")
+		t.Fatal("EnsureWhisperCpp must fail closed when upstream stable release has no prebuilt assets and first-party build is unreleased")
 	}
-	if !strings.Contains(err.Error(), "has no prebuilt CLI asset") {
+	if !strings.Contains(err.Error(), "has no committed sha256") {
 		t.Fatalf("unexpected error message: %v", err)
 	}
 
@@ -125,9 +147,9 @@ func TestEnsureWhisperCpp_FailsClosed(t *testing.T) {
 	for _, tgt := range targets {
 		_, err := EnsureFor(ctx, tool, tgt.goos, tgt.goarch)
 		if err == nil {
-			t.Errorf("EnsureFor(%s/%s) must fail closed with missing asset blocker", tgt.goos, tgt.goarch)
+			t.Errorf("EnsureFor(%s/%s) must fail closed with missing committed pin blocker", tgt.goos, tgt.goarch)
 		}
-		if !strings.Contains(err.Error(), "has no asset for") {
+		if !strings.Contains(err.Error(), "has no committed sha256") {
 			t.Errorf("EnsureFor(%s/%s) unexpected error: %v", tgt.goos, tgt.goarch, err)
 		}
 	}
@@ -282,15 +304,15 @@ func TestEnsureWhisperModel_VerifiesAndCaches(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// Register test model in catalog
+	// Register test model in catalog safely
 	testModel := "test-model"
-	WhisperModels[testModel] = WhisperModelInfo{
+	cleanup := RegisterTestWhisperModel(testModel, WhisperModelInfo{
 		Name:   testModel,
 		URL:    srv.URL + "/model.bin",
 		SHA256: contentSHA,
 		Size:   int64(len(content)),
-	}
-	defer delete(WhisperModels, testModel)
+	})
+	defer cleanup()
 
 	tmpDir := t.TempDir()
 	t.Setenv("BASHY_BIN_CACHE", filepath.Join(tmpDir, "bin"))
@@ -332,13 +354,13 @@ func TestEnsureWhisperModel_RejectsTampered(t *testing.T) {
 	defer srv.Close()
 
 	testModel := "test-tampered"
-	WhisperModels[testModel] = WhisperModelInfo{
+	cleanup := RegisterTestWhisperModel(testModel, WhisperModelInfo{
 		Name:   testModel,
 		URL:    srv.URL + "/model.bin",
 		SHA256: "0000000000000000000000000000000000000000000000000000000000000000",
 		Size:   int64(len(content)),
-	}
-	defer delete(WhisperModels, testModel)
+	})
+	defer cleanup()
 
 	tmpDir := t.TempDir()
 	t.Setenv("BASHY_BIN_CACHE", filepath.Join(tmpDir, "bin"))
@@ -361,5 +383,67 @@ func TestEnsureWhisperModel_RejectsTampered(t *testing.T) {
 	dest := filepath.Join(dir, fmt.Sprintf("ggml-%s.bin", testModel))
 	if _, err := os.Stat(dest); !os.IsNotExist(err) {
 		t.Fatal("tampered file was not removed from cache")
+	}
+}
+
+func TestEnsureWhisperModel_Concurrent(t *testing.T) {
+	content := []byte("concurrent model content for race test")
+	hasher := sha256.New()
+	hasher.Write(content)
+	contentSHA := hex.EncodeToString(hasher.Sum(nil))
+
+	var reqCount int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&reqCount, 1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(content)
+	}))
+	defer srv.Close()
+
+	testModel := "test-concurrent"
+	cleanup := RegisterTestWhisperModel(testModel, WhisperModelInfo{
+		Name:   testModel,
+		URL:    srv.URL + "/concurrent.bin",
+		SHA256: contentSHA,
+		Size:   int64(len(content)),
+	})
+	defer cleanup()
+
+	tmpDir := t.TempDir()
+	t.Setenv("BASHY_BIN_CACHE", filepath.Join(tmpDir, "bin"))
+
+	const numWorkers = 8
+	var wg sync.WaitGroup
+	results := make([]string, numWorkers)
+	errs := make([]error, numWorkers)
+
+	ctx := context.Background()
+	wg.Add(numWorkers)
+	for i := 0; i < numWorkers; i++ {
+		go func(workerIdx int) {
+			defer wg.Done()
+			results[workerIdx], errs[workerIdx] = EnsureWhisperModel(ctx, testModel)
+		}(i)
+	}
+	wg.Wait()
+
+	for i := 0; i < numWorkers; i++ {
+		if errs[i] != nil {
+			t.Fatalf("worker %d returned error: %v", i, errs[i])
+		}
+		if results[i] != results[0] {
+			t.Fatalf("worker %d path %q differs from worker 0 %q", i, results[i], results[0])
+		}
+	}
+
+	// Verify only 1 download occurred across all concurrent workers
+	if c := atomic.LoadInt32(&reqCount); c != 1 {
+		t.Fatalf("expected exactly 1 download request across %d concurrent workers, got %d", numWorkers, c)
+	}
+
+	// Verify content on disk
+	data, err := os.ReadFile(results[0])
+	if err != nil || string(data) != string(content) {
+		t.Fatalf("on-disk cached file corrupted: %v, content = %q", err, string(data))
 	}
 }
