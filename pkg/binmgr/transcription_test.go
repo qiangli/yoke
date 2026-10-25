@@ -167,8 +167,11 @@ func TestEnsureWhisperCpp_FailsClosed(t *testing.T) {
 
 func TestWhisperCppSourceArchive_Catalog(t *testing.T) {
 	info := WhisperCppSourceArchive()
-	if info.Version != WhisperCppVersion {
+	if info.Version != WhisperCppSourceVersion {
 		t.Fatalf("unexpected version: %s", info.Version)
+	}
+	if WhisperCppSourceVersion != "v1.9.5" {
+		t.Fatalf("unexpected upstream source version: %s", WhisperCppSourceVersion)
 	}
 	if info.Size != 9626464 {
 		t.Fatalf("unexpected source archive size: %d", info.Size)

@@ -78,10 +78,11 @@ const (
 	// YtDlpSHA256 is the verified digest of the 2026.10.21 zipapp.
 	YtDlpSHA256 = "b7af77f686e95f7845ce8d09d21957718febb8b48b30555adb9dd2292ad7bf14"
 
-	WhisperCppName     = "whisper-cpp"
-	WhisperCppVersion  = "whisper-cpp-v1.9.5-bashy.1"
-	WhisperCppRepo     = "qiangli/bashy"
-	WhisperCppIdentity = "https://github.com/qiangli/bashy/.github/workflows/s503-whisper-release.yml@refs/tags/" + WhisperCppVersion
+	WhisperCppName          = "whisper-cpp"
+	WhisperCppSourceVersion = "v1.9.5"
+	WhisperCppVersion       = "whisper-cpp-v1.9.5-bashy.1"
+	WhisperCppRepo          = "qiangli/bashy"
+	WhisperCppIdentity      = "https://github.com/qiangli/bashy/.github/workflows/s503-whisper-release.yml@refs/tags/" + WhisperCppVersion
 )
 
 // YtDlpPlatforms covers all six release targets because the pure Python zipapp
@@ -147,8 +148,8 @@ func WhisperCppTool() Tool {
 	}
 	base := whisperReleaseBase()
 	t.SignedSums = &SignedSums{
-		URL:       base + "SHA256SUMS",
-		BundleURL: base + "SHA256SUMS.sigstore.json",
+		URL:           base + "SHA256SUMS",
+		BundleURL:     base + "SHA256SUMS.sigstore.json",
 		RequiredNames: []string{"WHISPER-NOTICES.txt", "whisper-release-manifest.json", "whisper-build-evidence.tar.gz"},
 	}
 	for _, p := range WhisperCppPlatforms {
@@ -326,7 +327,7 @@ type WhisperCppSourceArchiveInfo struct {
 // WhisperCppSourceArchive returns the metadata for the pinned stable v1.9.5 source archive.
 func WhisperCppSourceArchive() WhisperCppSourceArchiveInfo {
 	return WhisperCppSourceArchiveInfo{
-		Version: WhisperCppVersion,
+		Version: WhisperCppSourceVersion,
 		URL:     WhisperCppSourceURL,
 		SHA256:  WhisperCppSourceSHA256,
 		Size:    WhisperCppSourceSize,
