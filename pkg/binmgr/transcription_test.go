@@ -81,9 +81,15 @@ func TestWhisperModels_Catalog(t *testing.T) {
 		if info.Size <= 0 {
 			t.Errorf("model %s non-positive size: %d", name, info.Size)
 		}
-		if !strings.HasPrefix(info.URL, "https://huggingface.co/ggerganov/whisper.cpp/") {
+		if !strings.HasPrefix(info.URL, "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/") {
 			t.Errorf("model %s unexpected url: %s", name, info.URL)
 		}
+	}
+	// Verified against the official file metadata and an independent full-byte
+	// download. The upstream model card still displays an obsolete tiny digest.
+	tiny, err := WhisperModel("tiny")
+	if err != nil || tiny.Size != 77691713 || tiny.SHA256 != "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21" {
+		t.Fatalf("tiny model pin differs from verified upstream bytes: %+v, %v", tiny, err)
 	}
 
 	if _, err := WhisperModel("non-existent-model"); err == nil {
