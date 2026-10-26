@@ -361,6 +361,36 @@ func TestClusterListSurfacesUnschedulablePod(t *testing.T) {
 	}
 }
 
+func TestClusterListSurfacesImagePullPod(t *testing.T) {
+	labels := `{"app.kubernetes.io/managed-by":"bashy","dhnt.io/workspace":"` + testWorkspace + `","dhnt.io/run":"%s","dhnt.io/command":"seq"}`
+	out := fmt.Sprintf(`{"items":[
+	 {"kind":"Job","metadata":{"name":"bashy-run-bad","labels":`+labels+`},"status":{}},
+	 {"kind":"Pod","metadata":{"name":"bashy-run-bad-abcde","labels":`+labels+`},"status":{"phase":"Pending",
+	  "containerStatuses":[{"name":"run","state":{"waiting":{"reason":"ImagePullBackOff","message":"Failed to pull image \"localhost/bashy-scratch:deadbeef\": not found"}}}]}},
+	 {"kind":"Pod","metadata":{"name":"bashy-run-plain-abcde","labels":`+labels+`},"status":{"phase":"Pending",
+	  "containerStatuses":[{"name":"run","state":{"waiting":{"reason":"ContainerCreating"}}}]}},
+	 {"kind":"Pod","metadata":{"name":"bashy-run-ran-abcde","labels":`+labels+`},"status":{"phase":"Running",
+	  "containerStatuses":[{"name":"run","state":{"waiting":{"reason":"ErrImagePull","message":"stale"}}}]}}
+	]}`, "BAD", "BAD", "PLAIN", "RAN")
+	got, err := (&Client{Runner: &fakeRunner{stdout: []byte(out)}}).List(context.Background(), testWorkspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"BAD":   `ImagePullBackOff: Failed to pull image "localhost/bashy-scratch:deadbeef": not found`,
+		"PLAIN": "",
+		"RAN":   "",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("List = %+v", got)
+	}
+	for _, r := range got {
+		if r.ImagePull != want[r.RunID] {
+			t.Errorf("%s imagePull = %q, want %q", r.RunID, r.ImagePull, want[r.RunID])
+		}
+	}
+}
+
 func TestClusterListErrors(t *testing.T) {
 	c := &Client{Runner: &fakeRunner{}}
 	if _, err := c.List(context.Background(), "ws,x"); !errors.Is(err, ErrInvalidSelector) {

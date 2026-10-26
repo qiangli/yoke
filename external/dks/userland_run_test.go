@@ -508,6 +508,76 @@ func TestRunDetachRefusesUnschedulable(t *testing.T) {
 	}
 }
 
+// imagePullPodJSON is a run's Pod stuck waiting on its executor image.
+func imagePullPodJSON(run, reason, message string) string {
+	pod := runPodJSON(run, "Pending", "", "", "")
+	status := fmt.Sprintf(`"status":{"phase":"Pending","containerStatuses":[{"name":"run","state":{"waiting":{"reason":%q,"message":%q}}}]}`, reason, message)
+	return strings.Replace(pod, `"status":{"phase":"Pending"}`, status, 1)
+}
+
+const imagePullMessage = `Failed to pull image "ghcr.io/qiangli/bashy-scratch:656d72b8": not found`
+
+func TestRunImagePullIsRefusedAndCleanedUp(t *testing.T) {
+	rt := newRunTest(t)
+	rt.selectWorkspace(t, "skel")
+	rt.runner.gets = [][]byte{
+		runsJSON(jobJSON(testWorkspaceID, testRunID, "seq", "")),
+		runsJSON(jobJSON(testWorkspaceID, testRunID, "seq", ""), imagePullPodJSON(testRunID, "ImagePullBackOff", imagePullMessage)),
+	}
+	code, _, stderr := rt.exec(t, "run", "--", "make", "test")
+	if code == 0 {
+		t.Fatalf("exit 0 for a run whose image cannot be pulled; stderr %q", stderr)
+	}
+	for _, want := range []string{"cannot pull executor image", "ImagePullBackOff", "--image", "$" + imageEnvVar, "nothing ran"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr %q misses %q", stderr, want)
+		}
+	}
+	if got := strings.Join(rt.runner.actions(), ","); got != "apply,get,get,delete" {
+		t.Fatalf("plane calls = %s, want two polls then one delete and no further waiting", got)
+	}
+	if rt.sleeps != 1 {
+		t.Errorf("slept %d times, want 1", rt.sleeps)
+	}
+}
+
+func TestRunDetachRefusesImagePull(t *testing.T) {
+	rt := newRunTest(t)
+	rt.selectWorkspace(t, "skel")
+	rt.runner.gets = [][]byte{runsJSON(jobJSON(testWorkspaceID, testRunID, "seq", ""), imagePullPodJSON(testRunID, "ErrImagePull", imagePullMessage))}
+	code, stdout, stderr := rt.exec(t, "run", "--detach", "--", "make", "test")
+	if code == 0 || stdout != "" {
+		t.Fatalf("exit %d stdout %q, want non-zero and no run id", code, stdout)
+	}
+	if !strings.Contains(stderr, "cannot pull executor image: ErrImagePull") {
+		t.Errorf("stderr %q does not name the image-pull reason", stderr)
+	}
+	if got := strings.Join(rt.runner.actions(), ","); got != "apply,get,delete" {
+		t.Errorf("plane calls = %s, want apply, get, delete", got)
+	}
+}
+
+func TestPsWarnsImagePull(t *testing.T) {
+	rt := newRunTest(t)
+	rt.selectWorkspace(t, "skel")
+	rt.runner.gets = [][]byte{runsJSON(
+		jobJSON(testWorkspaceID, testRunID, "seq", ""),
+		imagePullPodJSON(testRunID, "ImagePullBackOff", imagePullMessage),
+	)}
+	code, stdout, stderr := rt.exec(t, "ps")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, testRunID) {
+		t.Errorf("ps does not list the stuck run:\n%s", stdout)
+	}
+	for _, want := range []string{"cannot pull executor image", testRunID, "ImagePullBackOff"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("ps stderr %q misses %q", stderr, want)
+		}
+	}
+}
+
 func TestRunDetachReturnsOnceScheduled(t *testing.T) {
 	rt := newRunTest(t)
 	rt.selectWorkspace(t, "skel")
@@ -625,7 +695,7 @@ func TestRunShippedBashyFromNonLinuxClient(t *testing.T) {
 		t.Fatalf("workload kind %v, want Pod", w["kind"])
 	}
 	c := w["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)
-	if c["image"] != "localhost/bashy-scratch:656d72b8" {
+	if c["image"] != "ghcr.io/qiangli/bashy-scratch:656d72b8" {
 		t.Errorf("image %v, want the client's own build", c["image"])
 	}
 	var argv []string
@@ -646,7 +716,7 @@ func TestRunShippedBashyFromNonLinuxClient(t *testing.T) {
 		t.Errorf("image run recorded artifacts %v", m.Meta.Artifact)
 	}
 	text := string(m.Text)
-	for _, want := range []string{"bashy release v1.2.3 656d72b81d76e0c0ffee0123456789abcdef0123", "image localhost/bashy-scratch:656d72b8"} {
+	for _, want := range []string{"bashy release v1.2.3 656d72b81d76e0c0ffee0123456789abcdef0123", "image ghcr.io/qiangli/bashy-scratch:656d72b8"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("manifest does not record %q:\n%s", want, text)
 		}
@@ -1068,17 +1138,17 @@ func TestRunDefaultImageIsOwnBashyCommit(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, stderr)
 	}
-	if !strings.Contains(stdout, `"image": "localhost/bashy-scratch:656d72b8"`) {
+	if !strings.Contains(stdout, `"image": "ghcr.io/qiangli/bashy-scratch:656d72b8"`) {
 		t.Errorf("rendered objects do not run the own-commit image:\n%s", stdout)
 	}
-	if !strings.Contains(stderr, "localhost/bashy-scratch:656d72b8") || !strings.Contains(stderr, "release") {
+	if !strings.Contains(stderr, "ghcr.io/qiangli/bashy-scratch:656d72b8") || !strings.Contains(stderr, "release") {
 		t.Errorf("stderr %q does not name the resolved image and its source", stderr)
 	}
 	rt.noSideEffects(t)
 }
 
 func TestRunImagePrecedenceFlagEnvRelease(t *testing.T) {
-	const own = "localhost/bashy-scratch:656d72b8"
+	const own = "ghcr.io/qiangli/bashy-scratch:656d72b8"
 	for _, tc := range []struct {
 		name, flag, env, want, from string
 	}{
@@ -1116,7 +1186,7 @@ func TestRunVerboseNamesImageSource(t *testing.T) {
 	rt.renv.release = fakeBuildRelease(vcsBuild("656d72b81d76e0c0ffee0123456789abcdef0123"))
 	rt.renv.image = func() string { return "" }
 	_, _, stderr := rt.exec(t, "run", "--verbose", "--detach", "--", "make")
-	if !strings.Contains(stderr, "localhost/bashy-scratch:656d72b8 (from release)") {
+	if !strings.Contains(stderr, "ghcr.io/qiangli/bashy-scratch:656d72b8 (from release)") {
 		t.Errorf("--verbose stderr %q does not name the image source", stderr)
 	}
 	_, _, quiet := rt.exec(t, "run", "--detach", "--", "make")
@@ -1166,7 +1236,7 @@ func TestCommitFromPseudoVersion(t *testing.T) {
 			t.Errorf("%s: commit %q, want %q", tc.name, got, tc.want)
 		}
 	}
-	if got := defaultImage(releaseIdentity{Commit: "656d72b81d76"}); got != "localhost/bashy-scratch:656d72b8" {
+	if got := defaultImage(releaseIdentity{Commit: "656d72b81d76"}); got != "ghcr.io/qiangli/bashy-scratch:656d72b8" {
 		t.Errorf("defaultImage = %q", got)
 	}
 	if got := defaultImage(releaseIdentity{}); got != "" {

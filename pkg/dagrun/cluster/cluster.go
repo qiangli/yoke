@@ -87,8 +87,16 @@ const (
 // reads.
 type ContainerStatus struct {
 	State struct {
+		Waiting    *ContainerWaiting    `json:"waiting"`
 		Terminated *ContainerTerminated `json:"terminated"`
 	} `json:"state"`
+}
+
+// ContainerWaiting is a container's waiting state: the kubelet reports the
+// executor image through it when the image cannot be pulled.
+type ContainerWaiting struct {
+	Reason  string `json:"reason"`
+	Message string `json:"message"`
 }
 
 // ContainerTerminated is a container's terminated state.
@@ -160,6 +168,20 @@ type RunStatus struct {
 	// has PodScheduled=False with reason Unschedulable (FailedScheduling),
 	// e.g. "0/5 nodes are available: Insufficient cpu"; "" otherwise.
 	Unschedulable string `json:"unschedulable,omitempty"`
+	// ImagePull is the kubelet's message when a Pending Pod of the run
+	// cannot pull its executor image (ErrImagePull, ImagePullBackOff or
+	// InvalidImageName), e.g. "ErrImagePull: Failed to pull image ...";
+	// "" otherwise.
+	ImagePull string `json:"imagePull,omitempty"`
+}
+
+// imagePullReasons are the container waiting reasons that mean the run's
+// executor image cannot be pulled: the run will never start until the
+// image is published or the reference is fixed.
+var imagePullReasons = map[string]bool{
+	"ErrImagePull":     true,
+	"ImagePullBackOff": true,
+	"InvalidImageName": true,
 }
 
 // UnsatisfiedError: no executor of the requested class can run the manifest
@@ -381,7 +403,8 @@ func parseRuns(out []byte) ([]RunStatus, error) {
 			Kind: o.Kind, Name: o.Metadata.Name, Phase: phase,
 		}
 	}
-	// A run's Pods carry its scheduling state even when its Job wins.
+	// A run's Pods carry its scheduling and image-pull state even when
+	// its Job wins.
 	for _, o := range list.Items {
 		r, ok := byRun[o.Metadata.Labels[dagrun.LabelRun]]
 		if !ok || o.Kind != "Pod" {
@@ -391,6 +414,9 @@ func parseRuns(out []byte) ([]RunStatus, error) {
 		r.Scheduled = r.Scheduled || scheduled
 		if r.Unschedulable == "" {
 			r.Unschedulable = unsched
+		}
+		if r.ImagePull == "" {
+			r.ImagePull = podImagePull(o)
 		}
 		byRun[r.RunID] = r
 	}
@@ -425,6 +451,27 @@ func podScheduling(o kubeObject) (scheduled bool, unschedulable string) {
 		}
 	}
 	return false, ""
+}
+
+// podImagePull reads one Pod's container waiting states: the kubelet's
+// message when a container cannot pull the run's executor image, prefixed
+// with its reason, "" when no container is waiting on an image pull. Only
+// a Pending Pod is asked: once a container ran, the image pulled fine.
+func podImagePull(o kubeObject) string {
+	if p := o.Status.Phase; p != "" && p != "Pending" {
+		return ""
+	}
+	for _, c := range o.Status.ContainerStatuses {
+		w := c.State.Waiting
+		if w == nil || !imagePullReasons[w.Reason] {
+			continue
+		}
+		if msg := strings.TrimSpace(w.Message); msg != "" {
+			return w.Reason + ": " + msg
+		}
+		return w.Reason
+	}
+	return ""
 }
 
 func jobPhase(o kubeObject) Phase {

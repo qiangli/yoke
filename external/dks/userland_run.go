@@ -113,9 +113,10 @@ const defaultScheduleCheck = 20 * time.Second
 const imageEnvVar = "BASHY_DKS_IMAGE"
 
 // defaultImagePrefix is the repository of the release's own executor image,
-// tagged with the first 8 hex of the bashy commit. One constant so the
-// release pipeline can move it to a signed release ref.
-const defaultImagePrefix = "localhost/bashy-scratch:"
+// tagged with the first 8 hex of the bashy commit. The release pipeline
+// publishes this image every release, so a default install pulls it
+// without any local image present.
+const defaultImagePrefix = "ghcr.io/qiangli/bashy-scratch:"
 
 // defaultImage is the executor image of rel: the client's own bashy build.
 // "" when the build carries no commit.
@@ -485,6 +486,15 @@ func (env *runEnv) refuseCreate(cmd *cobra.Command, client *cluster.Client, ctxR
 	return env.refuseRun(cmd, client, ctxRec, runID, request, "cannot create pod: "+reason, redact)
 }
 
+// refuseImagePull is the result for a run whose Pod cannot pull its
+// executor image (ErrImagePull, ImagePullBackOff): the image reference is
+// unpublished or misspelled, so waiting cannot help — the run is removed
+// at once and the message names the published-image escape hatches.
+func (env *runEnv) refuseImagePull(cmd *cobra.Command, client *cluster.Client, ctxRec dagrun.Context, runID, request, reason string, redact func(string) string) error {
+	return env.refuseRun(cmd, client, ctxRec, runID, request,
+		fmt.Sprintf("cannot pull executor image: %s — pass --image or set $%s to a published image", reason, imageEnvVar), redact)
+}
+
 // refuseRun deletes a run that cannot run by its run label and exits
 // non-zero naming msg and the request.
 func (env *runEnv) refuseRun(cmd *cobra.Command, client *cluster.Client, ctxRec dagrun.Context, runID, request, msg string, redact func(string) string) error {
@@ -506,7 +516,8 @@ func (env *runEnv) refuseRun(cmd *cobra.Command, client *cluster.Client, ctxRec 
 // checkScheduled is the bounded placement check of a --detach run: it
 // returns nil once a pod of the run is bound to a node or the check runs
 // out (a slow start is not a refusal), and refuses the run when the
-// scheduler reports it Unschedulable. A plane error here only warns: the
+// scheduler reports it Unschedulable or its Pod cannot pull the executor
+// image. A plane error here only warns: the
 // run is applied, so its id is still the caller's to manage.
 func (env *runEnv) checkScheduled(cmd *cobra.Command, client *cluster.Client, ctxRec dagrun.Context, runID, request string, check time.Duration, redact func(string) string) error {
 	if check <= 0 {
@@ -529,6 +540,9 @@ func (env *runEnv) checkScheduled(cmd *cobra.Command, client *cluster.Client, ct
 			}
 			if r.Unschedulable != "" {
 				return env.refuseUnschedulable(cmd, client, ctxRec, runID, request, r.Unschedulable, redact)
+			}
+			if r.ImagePull != "" {
+				return env.refuseImagePull(cmd, client, ctxRec, runID, request, r.ImagePull, redact)
 			}
 			if reason := jobCreateFailure(cmd.Context(), client, r); reason != "" {
 				return env.refuseCreate(cmd, client, ctxRec, runID, request, reason, redact)
@@ -632,8 +646,9 @@ func fleetRecordRunKind(fleet.Command) dagrun.RunKind { return "" }
 // wait polls the workspace's runs until runID reaches a terminal phase or
 // the timeout passes. Succeeded exits 0; failed and timeout exit 1; lost
 // exits the dedicated lost code. A run the
-// scheduler reports Unschedulable is refused and removed at once; a plain
-// Pending (image pull, slow start) keeps waiting.
+// scheduler reports Unschedulable, or whose Pod cannot pull its executor
+// image, is refused and removed at once; a plain Pending (slow start)
+// keeps waiting.
 func (env *runEnv) wait(cmd *cobra.Command, client *cluster.Client, ctxRec dagrun.Context, runID, request string, timeout time.Duration, redact func(string) string) error {
 	if timeout <= 0 {
 		timeout = defaultRunTimeout
@@ -657,6 +672,9 @@ func (env *runEnv) wait(cmd *cobra.Command, client *cluster.Client, ctxRec dagru
 			phase = r.Phase
 			if r.Unschedulable != "" {
 				return env.refuseUnschedulable(cmd, client, ctxRec, runID, request, r.Unschedulable, redact)
+			}
+			if r.ImagePull != "" {
+				return env.refuseImagePull(cmd, client, ctxRec, runID, request, r.ImagePull, redact)
 			}
 			if reason := jobCreateFailure(cmd.Context(), client, r); reason != "" {
 				return env.refuseCreate(cmd, client, ctxRec, runID, request, reason, redact)
@@ -725,6 +743,13 @@ recorded an exit (a lost session is never re-run).`,
 				return fail(planeError(ctxRec, err))
 			}
 			writeRuns(cmd.OutOrStdout(), runs, kinds, ctxRec.WorkspaceID, env.now())
+			for _, r := range runs {
+				if r.Workspace != ctxRec.WorkspaceID || r.ImagePull == "" {
+					continue
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(), "bashy dks ps: run %s cannot pull executor image: %s — 'bashy dks stop %s' to remove it, --image or $%s to point at a published image\n",
+					r.RunID, r.ImagePull, r.RunID, imageEnvVar)
+			}
 			return nil
 		},
 	}
