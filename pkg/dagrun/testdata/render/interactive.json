@@ -102,6 +102,7 @@
       "nodeSelector": {
         "kubernetes.io/arch": "amd64",
         "kubernetes.io/os": "linux",
+        "outpost.dhnt.io/backend": "vk-podman",
         "outpost.dhnt.io/host": "worker-a"
       },
       "restartPolicy": "Never",

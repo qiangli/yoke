@@ -1207,6 +1207,10 @@ func TestRenderInteractivePodRunsSessionServerWithHostPort(t *testing.T) {
 
 		md, _ := pod["metadata"].(map[string]any)
 		spec, _ := pod["spec"].(map[string]any)
+		selector, _ := spec["nodeSelector"].(map[string]any)
+		if selector["outpost.dhnt.io/backend"] != "vk-podman" {
+			t.Errorf("%s node selector = %v; attach needs the Outpost app publisher", kind, selector)
+		}
 		var ctr map[string]any
 		for _, c := range spec["containers"].([]any) {
 			ctr = c.(map[string]any)
@@ -1317,12 +1321,12 @@ func TestRenderInteractivePodRunsSessionServerWithHostPort(t *testing.T) {
 	}
 }
 
-// TestAttachUsesPairedCredentialsAndDerivedTunnelBase is the production
+// TestAttachUsesAccountTokenExchangeAndDerivedTunnelBase is the production
 // wiring: no tunnel env var, the base derived from the plane context's
-// kubeconfig server, and the paired Outpost's bearer plus the app-scoped
-// elevation cookie the edge mints for it. The httptest tunnel refuses any
-// request without the bearer and any upgrade without the cookie.
-func TestAttachUsesPairedCredentialsAndDerivedTunnelBase(t *testing.T) {
+// kubeconfig server, and an account token exchanged on that satellite. The
+// paired Outpost's host token must not reach the app. The httptest tunnel
+// requires the exchanged bearer and an app-scoped cookie for upgrade.
+func TestAttachUsesAccountTokenExchangeAndDerivedTunnelBase(t *testing.T) {
 	st := newSessionTest(t)
 	st.senv.tunnelBase = defaultTunnelBase
 	st.senv.authHeaders = pairedAuthHeaders
@@ -1331,20 +1335,31 @@ func TestAttachUsesPairedCredentialsAndDerivedTunnelBase(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
 	t.Setenv(tunnelBaseEnv, "")
 	t.Setenv("OUTPOST_SESSION_JWT", "")
+	t.Setenv("DHNT_OWNER_TOKEN", "test-account-owner-token")
 
 	st.selectWorkspace(t, "skel@k8s:plane-a")
 	hub, id := sessionCommandHub(t, testRunID)
 	if _, err := hub.Append([]byte("paired-ok")); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
-	if err := hub.RecordExit(0, time.Now()); err != nil {
+	if err := hub.RecordExit(7, time.Now()); err != nil {
 		t.Fatalf("RecordExit: %v", err)
 	}
 	podName := "bashy-run-" + strings.ToLower(testRunID)
 	appPath := "/matrix/h/worker-a/app/vk-default-" + podName + "-abcdef12"
-	const bearer, cookie = "test-paired-bearer-0123456789", "test-elev-cookie"
-	var primed, upgrades int
+	const bearer, cookie = "test-exchanged-bearer-0123456789", "test-elev-cookie"
+	var exchanged, primed, upgrades int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/tokens/exchange" {
+			if r.Method != http.MethodPost || r.Header.Get("Authorization") != "Bearer test-account-owner-token" {
+				http.Error(w, "bad owner", http.StatusForbidden)
+				return
+			}
+			exchanged++
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"token":"`+bearer+`"}`)
+			return
+		}
 		if !strings.HasPrefix(r.URL.Path, appPath+"/") {
 			http.Error(w, "unknown app", http.StatusNotFound)
 			return
@@ -1389,20 +1404,20 @@ contexts:
 `, srv.URL))
 	t.Setenv("KUBECONFIG", kube)
 	writeTestFile(t, filepath.Join(home, "xdg", "matrix", "agent.json"), 0o600,
-		fmt.Sprintf(`{"server_addr":"127.0.0.1","server_port":443,"protocol":"wss","access_token":%q}`, bearer))
+		`{"server_addr":"127.0.0.1","access_token":"host-token-must-not-be-used"}`)
 	st.runner.podsJSON = sessionPodJSON("default", podName, "abcdef1234567890", "worker-a", "41234")
 
 	code, stdout, stderr := st.exec(t, "attach", id)
-	if code != 0 {
-		t.Fatalf("attach exited %d, want 0 (stderr %q)", code, stderr)
+	if code != 7 {
+		t.Fatalf("attach exited %d, want 7 (stderr %q)", code, stderr)
 	}
 	if stdout != "paired-ok" {
 		t.Errorf("attach replayed %q, want %q", stdout, "paired-ok")
 	}
-	if primed == 0 || upgrades != 1 {
-		t.Errorf("primed=%d upgrades=%d, want the cookie minted then one upgrade", primed, upgrades)
+	if exchanged == 0 || primed == 0 || upgrades != 1 {
+		t.Errorf("exchanged=%d primed=%d upgrades=%d, want exchange, cookie mint, then one upgrade", exchanged, primed, upgrades)
 	}
-	if strings.Contains(stderr, bearer) || strings.Contains(stderr, cookie) {
+	if strings.Contains(stderr, bearer) || strings.Contains(stderr, cookie) || strings.Contains(stderr, "test-account-owner-token") {
 		t.Errorf("stderr leaked a credential: %q", stderr)
 	}
 	st.noLocal(t)
@@ -1429,6 +1444,7 @@ func TestPairedAuthHeadersGuards(t *testing.T) {
 	newSessionTest(t)
 	home := os.Getenv("HOME")
 	const bearer = "test-paired-bearer-0123456789"
+	t.Setenv("OUTPOST_SESSION_JWT", bearer)
 	cfg := filepath.Join(home, "xdg", "matrix", "agent.json")
 	writeTestFile(t, cfg, 0o600, fmt.Sprintf(`{"server_addr":"127.0.0.1:443","access_token":%q}`, bearer))
 	var hits int
@@ -1466,6 +1482,54 @@ func TestPairedAuthHeadersGuards(t *testing.T) {
 	t.Setenv(tunnelBaseEnv, "")
 	if _, err := defaultTunnelBase(dagrun.Context{Plane: "k8s:missing"}); err == nil || !strings.Contains(err.Error(), tunnelBaseEnv) {
 		t.Errorf("missing kubeconfig context error = %v, want fail-closed naming $%s", err, tunnelBaseEnv)
+	}
+}
+
+func TestPairedAuthHeadersNeverUsesHostToken(t *testing.T) {
+	newSessionTest(t)
+	t.Setenv("OUTPOST_SESSION_JWT", "")
+	t.Setenv("DHNT_OWNER_TOKEN", "")
+	t.Setenv("BASHY_FLEET_TOKEN", "")
+	t.Setenv("BASHY_API_KEY", "")
+	writeTestFile(t, filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "matrix", "agent.json"), 0o600,
+		`{"server_addr":"127.0.0.1","access_token":"host-token-must-not-be-used"}`)
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		http.Error(w, "unexpected request", http.StatusForbidden)
+	}))
+	defer srv.Close()
+	endpoint := "ws://" + strings.TrimPrefix(srv.URL, "http://") + "/matrix/h/worker-a/app/vk-session/attach"
+	_, err := pairedAuthHeaders(endpoint)
+	if err == nil || !strings.Contains(err.Error(), "no account credential") || strings.Contains(err.Error(), "host-token-must-not-be-used") {
+		t.Fatalf("host-only credential error = %v", err)
+	}
+	if hits != 0 {
+		t.Fatalf("host token triggered %d requests, want none", hits)
+	}
+}
+
+func TestPairedAuthHeadersExchangeRefusalDoesNotLeakToken(t *testing.T) {
+	newSessionTest(t)
+	t.Setenv("OUTPOST_SESSION_JWT", "")
+	t.Setenv("DHNT_OWNER_TOKEN", "owner-secret-must-not-leak")
+	writeTestFile(t, filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "matrix", "agent.json"), 0o600,
+		`{"server_addr":"127.0.0.1","access_token":"host-secret-must-not-leak"}`)
+	var appHits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/tokens/exchange" {
+			appHits++
+		}
+		http.Error(w, "owner-secret-must-not-leak", http.StatusForbidden)
+	}))
+	defer srv.Close()
+	endpoint := "ws://" + strings.TrimPrefix(srv.URL, "http://") + "/matrix/h/worker-a/app/vk-session/attach"
+	_, err := pairedAuthHeaders(endpoint)
+	if err == nil || !strings.Contains(err.Error(), "HTTP 403") || strings.Contains(err.Error(), "owner-secret-must-not-leak") || strings.Contains(err.Error(), "host-secret-must-not-leak") {
+		t.Fatalf("exchange refusal error = %v", err)
+	}
+	if appHits != 0 {
+		t.Fatalf("app received %d requests after exchange refusal, want none", appHits)
 	}
 }
 

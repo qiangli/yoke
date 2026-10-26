@@ -16,6 +16,7 @@
 package dks
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1178,11 +1179,12 @@ func kubeconfigServer(kctx string) (string, error) {
 // elevationCookie is the edge's per-(host, app) authorization cookie.
 const elevationCookie = "matrix_elev"
 
-// pairedAuthHeaders authorizes one tunnel endpoint as the paired Outpost's
-// account. A vk session pod is published as an authentication-only app, so
-// the edge mints its app-scoped cookie for any request that authenticates
-// as the host's owner or sharee — no OS password. One bearer GET to the app
-// root collects the cookie; the dial then carries bearer and cookie. The
+// pairedAuthHeaders authorizes one tunnel endpoint as the user's account. A
+// paired Outpost's access_token identifies the host, not its owner, and must
+// never be offered to the account-scoped host proxy. A vk session pod is
+// published as an authentication-only app, so the edge mints its app-scoped
+// cookie for a host owner or sharee without an OS password. One bearer GET
+// to the app root collects the cookie; the dial then carries both. The
 // credentials go only to the paired server's host: a tunnel elsewhere gets
 // no headers at all.
 func pairedAuthHeaders(endpoint string) (http.Header, error) {
@@ -1194,8 +1196,12 @@ func pairedAuthHeaders(endpoint string) (http.Header, error) {
 	if !ok || !strings.EqualFold(u.Hostname(), cred.host) {
 		return nil, nil
 	}
+	bearer, err := sessionAccountBearer(u)
+	if err != nil {
+		return nil, err
+	}
 	h := http.Header{}
-	h.Set("Authorization", "Bearer "+cred.bearer)
+	h.Set("Authorization", "Bearer "+bearer)
 	appRoot, host, app := appRootURL(u)
 	req, err := http.NewRequest(http.MethodGet, appRoot, nil)
 	if err != nil {
@@ -1224,6 +1230,72 @@ func pairedAuthHeaders(endpoint string) (http.Header, error) {
 	return h, nil
 }
 
+// sessionAccountBearer exchanges an already configured account token for a
+// short-lived token on the paired satellite. OUTPOST_SESSION_JWT is retained
+// for callers that already have an exchanged token. The host token in
+// agent.json is deliberately not a fallback: satellite ownership rejects it
+// even when the host and client belong to the same account.
+func sessionAccountBearer(endpoint *url.URL) (string, error) {
+	if token := strings.TrimSpace(os.Getenv("OUTPOST_SESSION_JWT")); token != "" {
+		return token, nil
+	}
+	owner := strings.TrimSpace(os.Getenv("DHNT_OWNER_TOKEN"))
+	if owner == "" {
+		owner = strings.TrimSpace(os.Getenv("BASHY_FLEET_TOKEN"))
+	}
+	if owner == "" {
+		owner = strings.TrimSpace(os.Getenv("BASHY_API_KEY"))
+	}
+	if owner == "" {
+		return "", errors.New("no account credential for session attach (set DHNT_OWNER_TOKEN or BASHY_FLEET_TOKEN); the paired Outpost host token cannot authorize another host")
+	}
+	if strings.ContainsAny(owner, "\r\n") {
+		return "", errors.New("invalid account credential for session attach")
+	}
+	base := *endpoint
+	base.Path, base.RawPath, base.RawQuery, base.Fragment = "/", "", "", ""
+	switch base.Scheme {
+	case "wss":
+		base.Scheme = "https"
+	case "ws":
+		base.Scheme = "http"
+	default:
+		return "", fmt.Errorf("session attach endpoint has unsupported scheme %q", base.Scheme)
+	}
+	if base.Scheme == "http" {
+		ip := net.ParseIP(base.Hostname())
+		if !strings.EqualFold(base.Hostname(), "localhost") && (ip == nil || !ip.IsLoopback()) {
+			return "", errors.New("session attach account credential requires HTTPS outside loopback")
+		}
+	}
+	body := []byte(`{"scopes":["host:proxy"],"ttl":"10m"}`)
+	req, err := http.NewRequest(http.MethodPost, base.String()+"api/v1/tokens/exchange", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+owner)
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("exchange account credential for session attach: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return "", fmt.Errorf("exchange account credential for session attach: HTTP %d", resp.StatusCode)
+	}
+	var result struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&result); err != nil {
+		return "", fmt.Errorf("decode session attach credential exchange: %w", err)
+	}
+	if result.Token == "" || strings.ContainsAny(result.Token, "\r\n") {
+		return "", errors.New("session attach credential exchange returned no valid token")
+	}
+	return result.Token, nil
+}
+
 // appRootURL maps a ws(s) attach endpoint onto the http(s) root of its app
 // (…/app/<name>/), plus the host and app names for messages.
 func appRootURL(u *url.URL) (root, host, app string) {
@@ -1249,17 +1321,14 @@ func appRootURL(u *url.URL) (root, host, app string) {
 	return r.String(), host, app
 }
 
-// pairedCredential is the paired Outpost's bearer and the server it pairs.
+// pairedCredential names the server paired to the local Outpost.
 type pairedCredential struct {
-	bearer string
-	host   string
+	host string
 }
 
 // loadPairedCredential reads the paired Outpost's config file
 // ($XDG_CONFIG_HOME/matrix/agent.json, else ~/.config/matrix/agent.json):
-// the bearer is $OUTPOST_SESSION_JWT, else access_token, else token — the
-// order outpost's own clients use; the server is server_addr. A file other
-// users can read is refused.
+// Only server_addr is used. A file other users can read is refused.
 func loadPairedCredential() (pairedCredential, bool) {
 	dir := os.Getenv("XDG_CONFIG_HOME")
 	if dir == "" {
@@ -1282,19 +1351,10 @@ func loadPairedCredential() (pairedCredential, bool) {
 		return pairedCredential{}, false
 	}
 	var f struct {
-		ServerAddr  string `json:"server_addr"`
-		Token       string `json:"token"`
-		AccessToken string `json:"access_token"`
+		ServerAddr string `json:"server_addr"`
 	}
 	if json.Unmarshal(b, &f) != nil {
 		return pairedCredential{}, false
-	}
-	bearer := strings.TrimSpace(os.Getenv("OUTPOST_SESSION_JWT"))
-	if bearer == "" {
-		bearer = strings.TrimSpace(f.AccessToken)
-	}
-	if bearer == "" {
-		bearer = strings.TrimSpace(f.Token)
 	}
 	host := strings.TrimSpace(f.ServerAddr)
 	if strings.Contains(host, "://") {
@@ -1304,10 +1364,10 @@ func loadPairedCredential() (pairedCredential, bool) {
 	} else if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
 	}
-	if bearer == "" || host == "" || strings.ContainsAny(bearer, "\r\n") {
+	if host == "" {
 		return pairedCredential{}, false
 	}
-	return pairedCredential{bearer: bearer, host: host}, true
+	return pairedCredential{host: host}, true
 }
 
 // defaultClientID identifies this client's attachments: host plus pid, so

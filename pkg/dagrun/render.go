@@ -318,6 +318,12 @@ func renderLinux(m *Manifest, class ExecutorClass) ([]Object, error) {
 // to the arches that have an artifact), host and backend are copied.
 func linuxPlacement(m *Manifest) (map[string]any, map[string]any, error) {
 	sel := map[string]any{labelNodeOS: "linux"}
+	// A session's attach URL is served by the Outpost vknode transient app
+	// registry. A plain kubelet can run the container, but never publishes
+	// that app, leaving an apparently healthy session with a 404 on attach.
+	if m.Meta.RunKind == RunInteractive || m.Meta.RunKind == RunLongRunning {
+		sel[labelNodeBackend] = "vk-podman"
+	}
 	for k, v := range m.Task.Match {
 		switch k {
 		case "os", labelNodeOS:
@@ -329,6 +335,9 @@ func linuxPlacement(m *Manifest) (map[string]any, map[string]any, error) {
 		case labelNodeBackend:
 			if v == "vk-native" {
 				return nil, nil, unsupported("backend vk-native is the native executor (Stage B)")
+			}
+			if selected, ok := sel[labelNodeBackend]; ok && selected != v {
+				return nil, nil, unsupported("session attach requires backend vk-podman, not %s", v)
 			}
 			sel[k] = v
 		default:
@@ -351,7 +360,8 @@ func linuxPlacement(m *Manifest) (map[string]any, map[string]any, error) {
 	}
 	// The native-process backend ignores the image and runs the node's own
 	// binaries, so a container workload requires a node whose backend is not
-	// vk-native; nodes without the label (plain kubelets) stay eligible.
+	// vk-native; nodes without the label (plain kubelets) stay eligible for
+	// one-shot jobs. Session pods also carry the vk-podman selector above.
 	exprs := []any{map[string]any{"key": labelNodeBackend, "operator": "NotIn", "values": []any{"vk-native"}}}
 	if pinned, ok := sel[labelNodeArch].(string); ok {
 		if len(m.Meta.Artifact) > 0 && m.Meta.Artifact["linux/"+pinned] == "" {

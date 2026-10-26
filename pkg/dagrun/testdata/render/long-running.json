@@ -101,7 +101,8 @@
         }
       ],
       "nodeSelector": {
-        "kubernetes.io/os": "linux"
+        "kubernetes.io/os": "linux",
+        "outpost.dhnt.io/backend": "vk-podman"
       },
       "restartPolicy": "Never",
       "tolerations": [

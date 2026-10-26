@@ -199,6 +199,11 @@ func TestRenderFailsClosed(t *testing.T) {
 			t.Errorf("%s: err = %v, want ErrUnsupportedExecutor", name, err)
 		}
 	}
+	sessionOnPlainBackend := renderCases()["interactive"]
+	sessionOnPlainBackend.Match["outpost.dhnt.io/backend"] = "vk-ollama"
+	if _, err := Render(mustGenerate(t, sessionOnPlainBackend), linuxClass()); !errors.Is(err, ErrUnsupportedExecutor) {
+		t.Errorf("session on non-publishing backend: err = %v, want ErrUnsupportedExecutor", err)
+	}
 
 	invalidCases := map[string]func(*GenerateInput){
 		"userland venue": func(in *GenerateInput) { in.Venue = "userland" },
@@ -229,9 +234,9 @@ func TestRenderFailsClosed(t *testing.T) {
 }
 
 // TestRenderLinuxContainerNeverOnNativeBackend: the native-process backend
-// ignores the image, so a Linux container workload must require a node
-// whose backend is not vk-native (unlabelled kubelets stay eligible) — on
-// every workload kind, alongside the os selector and the host pin.
+// ignores the image, so a Linux container workload must exclude vk-native.
+// Sessions also require vk-podman, whose Outpost provider publishes the
+// attach app; plain kubelets remain eligible for one-shot jobs.
 func TestRenderLinuxContainerNeverOnNativeBackend(t *testing.T) {
 	for name, kind := range map[string]string{"one-shot": "Job", "interactive": "Pod", "long-running": "Pod"} {
 		t.Run(name, func(t *testing.T) {
@@ -252,6 +257,10 @@ func TestRenderLinuxContainerNeverOnNativeBackend(t *testing.T) {
 				t.Fatalf("nodeSelector lost os=linux: %v", sel)
 			} else if host := in.Match["outpost.dhnt.io/host"]; host != "" && sel["outpost.dhnt.io/host"] != host {
 				t.Fatalf("nodeSelector lost the host pin: %v", sel)
+			} else if kind == "Pod" && sel["outpost.dhnt.io/backend"] != "vk-podman" {
+				t.Fatalf("session can land on a node with no app publisher: %v", sel)
+			} else if kind == "Job" && sel["outpost.dhnt.io/backend"] != nil {
+				t.Fatalf("one-shot job unnecessarily pinned to vk-podman: %v", sel)
 			}
 			terms, _ := dig(t, spec, "affinity", "nodeAffinity",
 				"requiredDuringSchedulingIgnoredDuringExecution", "nodeSelectorTerms").([]any)
