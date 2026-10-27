@@ -296,7 +296,7 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 	if err != nil {
 		return nil, fmt.Errorf("loom: fetch gitea: %w", err)
 	}
-	cfg, err := ensureConfig(o.DataDir, o.Addr, o.Port, o.RootURL, o.actionsOn(), o.Storage)
+	cfg, err := ensureRuntimeConfig(ctx, o.DataDir, o.Addr, o.Port, o.RootURL, o.actionsOn(), o.Storage)
 	if err != nil {
 		return nil, err
 	}
@@ -408,7 +408,7 @@ func StartDaemon(ctx context.Context, o Options) (State, error) {
 	if err := ensureProxyPortFreeForStart(o.DataDir, o.Addr, o.ProxyPort); err != nil {
 		return State{}, err
 	}
-	cfg, err := ensureConfig(o.DataDir, o.Addr, o.Port, o.RootURL, o.actionsOn(), o.Storage)
+	cfg, err := ensureRuntimeConfig(ctx, o.DataDir, o.Addr, o.Port, o.RootURL, o.actionsOn(), o.Storage)
 	if err != nil {
 		return State{}, err
 	}

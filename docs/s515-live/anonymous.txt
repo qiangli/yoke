@@ -1,0 +1,15 @@
+DIAGNOSTIC ONLY: bypassing stable name with 127.0.0.1:8333
+DIAGNOSTIC ONLY: anonymous S3 credentials
+loom ready pid=24316 port=59549
+counter_positive_control before=20828 after=21084 delta=256
+OCI push manifest=sha256:a4b8d6a7a2ac7a0322a397dbc6f5275b8d3a098f029b6aa9d0268ecce308e9df layer=sha256:ffcf9f57c453c03d9bec7e300676afeb90bba3a10e82a677a21ccd6b540453d5
+OCI layer PROXIED status=200 bytes=8390144 sha256=ffcf9f57c453c03d9bec7e300676afeb90bba3a10e82a677a21ccd6b540453d5 loom_pid=24316 tcp_data_tx_before=8415943 after=16806870 delta=8390927
+OCI layer direct_seaweedfs_sha256=ffcf9f57c453c03d9bec7e300676afeb90bba3a10e82a677a21ccd6b540453d5 MATCH key=packages/ff/cf/ffcf9f57c453c03d9bec7e300676afeb90bba3a10e82a677a21ccd6b540453d5
+OCI config PROXIED status=200 bytes=151 sha256=fa3d2d847d13422b02650eed15b5e6e8eb21e0a0893b2524bfc2d03a4bfd1690 loom_pid=24316 tcp_data_tx_before=16806870 after=16807800 delta=930
+OCI config direct_seaweedfs_sha256=fa3d2d847d13422b02650eed15b5e6e8eb21e0a0893b2524bfc2d03a4bfd1690 MATCH key=packages/fa/3d/fa3d2d847d13422b02650eed15b5e6e8eb21e0a0893b2524bfc2d03a4bfd1690
+LFS upload oid=a6d04d3d08436bf913894692c6de9eae02de320ea4cb0c585c65aee0df07407e bytes=4194304
+LFS PROXIED status=200 bytes=4194304 sha256=a6d04d3d08436bf913894692c6de9eae02de320ea4cb0c585c65aee0df07407e loom_pid=24316 tcp_data_tx_before=21007286 after=25202127 delta=4194841
+LFS direct_seaweedfs_sha256=a6d04d3d08436bf913894692c6de9eae02de320ea4cb0c585c65aee0df07407e MATCH key=lfs/a6/d0/4d3d08436bf913894692c6de9eae02de320ea4cb0c585c65aee0df07407e
+FAIL: acceptance failures: OCI layer returned 200 with payload through loom; OCI config returned 200 with payload through loom; LFS returned 200 with payload through loom
+exit status 1
+Error: exit status 1
