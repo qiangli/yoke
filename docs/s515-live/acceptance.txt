@@ -1,0 +1,8 @@
+==> live
+dag: effect cap: target "live": "bashy-s515-fixed.exe" needs unknown not in Effects: exec,net,write
+FAIL: loom exited: exit status 1; inspect loom.log
+exit status 1
+Error: exit status 1
+==> live FAILED (exit 1)
+dag: 1/1 targets failed
+gate_exit=1

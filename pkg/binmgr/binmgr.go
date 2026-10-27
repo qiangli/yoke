@@ -290,6 +290,13 @@ func ensure(ctx context.Context, t Tool) (string, error) {
 		return "", err
 	}
 	asset := t.Assets[t.platform()]
+	if asset.Tree && !(isExecutable(dest) && treeComplete(dir)) {
+		lock, err := lockTree(ctx, dir)
+		if err != nil {
+			return "", err
+		}
+		defer lock.Release()
+	}
 	if isExecutable(dest) && (!asset.Tree || treeComplete(dir)) {
 		if t.Sigstore != nil && !signedCacheValid(ctx, t, asset, dest) {
 			return "", fmt.Errorf("%w: %s %s has an unverified or stale cache entry", ErrSigstore, t.Name, t.Version)

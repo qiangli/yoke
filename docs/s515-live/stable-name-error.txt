@@ -1,0 +1,1 @@
+2026/10/27 11:46:36 routers/init.go:65:mustInit() [F] gitea.dev/modules/storage.Init failed: ObjectStorage.BucketExists: endpoint=s515self.s515.localhost:31890, location=us-east-1, bucket=loom: Head "http://s515self.s515.localhost:31890/loom/": dial tcp: lookup s515self.s515.localhost: no such host
