@@ -237,7 +237,7 @@ func ReplicaAdd(ctx context.Context, o ReplicaOptions) ([]string, error) {
 		}
 		state := "exists"
 		if !have {
-			_, err := p.do(ctx, "POST", "/repos/"+ri.FullName+"/push_mirrors", map[string]any{
+			status, err := p.do(ctx, "POST", "/repos/"+ri.FullName+"/push_mirrors", map[string]any{
 				"remote_address":  addr,
 				"remote_username": user,
 				"remote_password": o.ReplicaToken,
@@ -245,6 +245,9 @@ func ReplicaAdd(ctx context.Context, o ReplicaOptions) ([]string, error) {
 				"sync_on_commit":  true,
 			}, nil)
 			if err != nil {
+				if status == http.StatusUnauthorized {
+					return lines, fmt.Errorf("%s: create mirror: %w\n\n%s", ri.FullName, err, localNetworkHint(addr))
+				}
 				return lines, fmt.Errorf("%s: create mirror: %w", ri.FullName, err)
 			}
 			state = "mirrored"
@@ -259,6 +262,29 @@ func ReplicaAdd(ctx context.Context, o ReplicaOptions) ([]string, error) {
 		lines = append(lines, fmt.Sprintf("%s -> %s: %s", ri.FullName, addr, state))
 	}
 	return lines, nil
+}
+
+// localNetworkHint explains the 401 Gitea answers for a push mirror to a
+// private or loopback replica. The status reads like a credential problem and
+// is not one — HandleRemoteAddressError maps its
+// ErrInvalidCloneAddr{IsPermissionDenied} to 401, and a correct token fails
+// identically — so the error has to name the knob or the next hour goes into
+// re-minting tokens. Printed for any 401 from this call: a genuinely bad token
+// lands here too, and the first line says which to check.
+func localNetworkHint(addr string) string {
+	host := addr
+	if u, err := url.Parse(addr); err == nil && u.Host != "" {
+		host = u.Host
+	}
+	return fmt.Sprintf(`hint: if the primary's token is good, this 401 is not about credentials.
+Gitea refuses a push mirror to a private or loopback address unless its
+app.ini carries [migrations] ALLOW_LOCALNETWORKS = true, and reports that
+refusal as 401 "Permission denied". Every mesh-local replica is such an
+address. Set %s on the PRIMARY loom and restart it
+(bashy loom stop && bashy loom start) — loom writes the key, and the
+allow-list that bounds it, on start:
+
+    %s=%s`, MirrorAllowedDomainsEnv, MirrorAllowedDomainsEnv, host)
 }
 
 // ReplicaList lists push mirrors (optionally only those to o.Replica).
@@ -474,7 +500,12 @@ func newReplicaCmd() *cobra.Command {
 		return err
 	}
 	mk := func(use, short string, nargs cobra.PositionalArgs, fn func(context.Context, ReplicaOptions) ([]string, error)) *cobra.Command {
-		return &cobra.Command{Use: use, Short: short, Args: nargs, PreRunE: func(c *cobra.Command, a []string) error { return prep(c, a) },
+		// SilenceUsage: a failure here is a runtime one (a forge said no), not a
+		// mis-typed command, and cobra's usage block otherwise scrolls the
+		// explanation — the 401 local-network hint — off the operator's screen.
+		// Measured live in round 4 before this line existed.
+		return &cobra.Command{Use: use, Short: short, Args: nargs, SilenceUsage: true,
+			PreRunE: func(c *cobra.Command, a []string) error { return prep(c, a) },
 			RunE: func(c *cobra.Command, _ []string) error {
 				lines, err := fn(c.Context(), o)
 				return emit(c, lines, err)
