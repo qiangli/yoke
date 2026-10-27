@@ -157,9 +157,12 @@ type Options struct {
 	// site-admin. The operator who registered the host must own its forge. Empty
 	// falls back to the OS user running loom (plus $LOOM_OWNER). A caller that
 	// knows the paired cloud account (outpost) passes that email here.
-	Owner  string
-	Stdout io.Writer
-	Stderr io.Writer
+	Owner string
+	// Storage offloads LFS, packages, Actions logs/artifacts and archives to a
+	// peer's S3 (seaweedfs). nil falls back to $LOOM_S3_* (see StorageFromEnv).
+	Storage *Storage
+	Stdout  io.Writer
+	Stderr  io.Writer
 
 	// RootURLExplicit is set by the CLI when --root-url was supplied. API
 	// callers that set RootURL directly are also treated as explicit.
@@ -217,6 +220,9 @@ func (o *Options) defaults() {
 	}
 	if o.UIDGetter == nil {
 		o.UIDGetter = currentUID
+	}
+	if o.Storage == nil {
+		o.Storage = StorageFromEnv()
 	}
 }
 
@@ -290,7 +296,7 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 	if err != nil {
 		return nil, fmt.Errorf("loom: fetch gitea: %w", err)
 	}
-	cfg, err := ensureConfig(o.DataDir, o.Addr, o.Port, o.RootURL, o.actionsOn())
+	cfg, err := ensureConfig(o.DataDir, o.Addr, o.Port, o.RootURL, o.actionsOn(), o.Storage)
 	if err != nil {
 		return nil, err
 	}
@@ -402,7 +408,7 @@ func StartDaemon(ctx context.Context, o Options) (State, error) {
 	if err := ensureProxyPortFreeForStart(o.DataDir, o.Addr, o.ProxyPort); err != nil {
 		return State{}, err
 	}
-	cfg, err := ensureConfig(o.DataDir, o.Addr, o.Port, o.RootURL, o.actionsOn())
+	cfg, err := ensureConfig(o.DataDir, o.Addr, o.Port, o.RootURL, o.actionsOn(), o.Storage)
 	if err != nil {
 		return State{}, err
 	}
@@ -1568,7 +1574,7 @@ func firstNonEmpty(vals ...string) string {
 // On an existing app.ini it reuses it, but reconciles the server URL/listener and
 // actions toggle so an already-initialized data dir can be exposed over the mesh
 // without manual app.ini surgery.
-func ensureConfig(dataDir, addr string, port int, rootURL string, actions bool) (string, error) {
+func ensureConfig(dataDir, addr string, port int, rootURL string, actions bool, st *Storage) (string, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return "", err
 	}
@@ -1581,6 +1587,7 @@ func ensureConfig(dataDir, addr string, port int, rootURL string, actions bool) 
 		merged = ensureServiceSection(merged)
 		merged = ensureActionsSection(merged, actions)
 		merged = ensureUpdateCheckerSection(merged)
+		merged = ensureStorageSection(merged, st)
 		if merged != string(existing) {
 			if err := os.WriteFile(cfgPath, []byte(merged), 0o600); err != nil {
 				return "", err
@@ -1592,7 +1599,7 @@ func ensureConfig(dataDir, addr string, port int, rootURL string, actions bool) 
 	if err != nil {
 		return "", err
 	}
-	ini := renderConfig(dataDir, addr, port, rootURL, secret, actions)
+	ini := ensureStorageSection(renderConfig(dataDir, addr, port, rootURL, secret, actions), st)
 	if err := os.WriteFile(cfgPath, []byte(ini), 0o600); err != nil {
 		return "", err
 	}
