@@ -3,17 +3,19 @@ id: 5434b5be81d5
 kind: feature
 title: 'S515.2 loom object storage on peers: [storage] -> seaweedfs S3 on a peer with SERVE_DIRECT (LFS, packages, Actions logs/artifacts, archives); spike stable name <peer-id>.<sat-id>.localhost + fixed outpost port routed to the peer''s s3'
 seq: 2775
-status: doing
+status: done
 priority: p0
 labels:
     - loom
 created: 2026-10-27T13:53:05.888294Z
+weave: 635
 assignee: claude-sonnet5.5
 sprint: 515
 sprint_id: e82160ea-95db-5f2a-b69e-b2d784b2996b
 sprint_title: 'satellite loom: private forge + CI + groups (KISS/MVP, reuse loom/act_runner/scopes)'
+closed: 2026-10-27T19:19:39.185473Z
 resolution: fixed
-closed_by: claude-sonnet5.5-d
+closed_by: codex-gpt6-astra-k
 ---
 
 S515.2 loom object storage on peers. Spec: umbrella docs/sprint-515-satellite-loom.md (S515.2, "Stable peer storage name"). Code is DONE and on main: yoke 259a9d82 (loom [storage] + SERVE_DIRECT, LOOM_S3_* env; docs/peer-store-name.md), outpost 997b8a3 (store router 127.0.0.1:31890, Host-routed to the peer's s3 mesh service). This round = LIVE acceptance only; fix bugs you find inside this story.
