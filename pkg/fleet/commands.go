@@ -6,11 +6,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
+	"mvdan.cc/sh/v3/pathconv"
 
 	"github.com/qiangli/yoke/pkg/assetring"
 	"github.com/qiangli/yoke/pkg/atlas"
@@ -428,11 +430,18 @@ func (c Command) Executable() (string, bool) {
 		return "", false
 	}
 	prog := c.Exec[0]
-	if filepath.IsAbs(prog) {
-		_, err := exec.LookPath(prog)
+	look := prog
+	if runtime.GOOS == "windows" {
+		// Presence check only: an MSYS drive path (/c/...) is not absolute to
+		// Windows; LookPath on the native form applies PATHEXT. The recorded
+		// argv is untouched.
+		look = pathconv.NativePath(prog)
+	}
+	if filepath.IsAbs(look) {
+		_, err := exec.LookPath(look)
 		return prog, err == nil
 	}
-	p, err := exec.LookPath(prog)
+	p, err := exec.LookPath(look)
 	return p, err == nil
 }
 
