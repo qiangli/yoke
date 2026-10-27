@@ -226,26 +226,43 @@ func (o *Options) defaults() {
 	}
 }
 
-// ErrRefuseRoot is returned on Unix when loom is run as root (uid 0), because
-// Gitea forbids running as root (mustNotRunAsRoot).
+// ErrRefuseRoot is returned when loom is run as root on a Unix that has no
+// privilege-drop path, because Gitea forbids running as root
+// (mustNotRunAsRoot). On LINUX a root loom drops to a dedicated unprivileged
+// account instead of refusing — see privdrop.go for why (the product satellite
+// runs its outpost as root) — so this is now reachable only on a non-Linux
+// Unix, which in practice means macOS.
 var ErrRefuseRoot = errors.New("loom: refusing to run as root (Gitea forbids it); run bashy as a regular user")
 
 var currentUID = defaultUID
 
-func checkNotRoot(getter func() int) error {
-	if !isUnix() {
-		return nil
-	}
+// effectiveUID resolves the uid loom is running as, honouring an injected
+// getter (Options.UIDGetter) over the package default.
+func effectiveUID(getter func() int) int {
 	if getter == nil {
 		getter = currentUID
 	}
 	if getter == nil {
 		getter = defaultUID
 	}
-	if getter != nil && getter() == 0 {
-		return ErrRefuseRoot
+	if getter == nil {
+		return -1
 	}
-	return nil
+	return getter()
+}
+
+func checkNotRoot(getter func() int) error {
+	if !isUnix() {
+		return nil
+	}
+	uid := effectiveUID(getter)
+	if uid != 0 {
+		return nil
+	}
+	if shouldDropPrivileges(privDropGOOS, uid) {
+		return nil // handled by dropping to the loom account (privdrop.go)
+	}
+	return ErrRefuseRoot
 }
 
 // Instance is a running loom (Gitea) server.
@@ -300,29 +317,70 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 	if err != nil {
 		return nil, err
 	}
+	drop, err := ensurePrivDrop(ctx, o.DataDir, effectiveUID(o.UIDGetter))
+	if err != nil {
+		return nil, err
+	}
+	if err := prepareForRunUser(cfg, bin, o.DataDir, drop); err != nil {
+		return nil, err
+	}
 	addr := fmt.Sprintf("%s:%d", o.Addr, o.Port)
 	url := "http://" + addr
-	proc, err := binmgr.Launch(ctx, bin, binmgr.RunSpec{
-		Args:       []string{"web", "--config", cfg},
-		Env:        serviceenv.LocalOTLP([]string{"GITEA_WORK_DIR=" + o.DataDir}, "loom"),
-		Dir:        o.DataDir,
-		Stdout:     o.Stdout,
-		Stderr:     o.Stderr,
-		HealthURL:  url,
-		HealthWait: 60 * time.Second,
-	})
+	proc, err := binmgr.Launch(ctx, bin, giteaWebRunSpec(cfg, url, o, drop))
 	if err != nil {
 		return nil, fmt.Errorf("loom: start gitea: %w", err)
 	}
-	if err := ensureLoopbackAdmin(ctx, bin, cfg, o.DataDir); err != nil {
+	if err := ensureLoopbackAdmin(ctx, bin, cfg, o.DataDir, drop); err != nil {
 		_ = proc.Stop(10 * time.Second)
 		return nil, err
 	}
 	// Two admins are auto-added: the host OS user (local username) and any
 	// explicit owner (the cloudbox-signup email the caller passes) — plus the
 	// email allowlist file. All promoted (existing or new).
-	ensureAdmins(ctx, bin, cfg, o.DataDir, url, append(loadAdmins(o.DataDir), ownerIdentities(o)...))
+	ensureAdmins(ctx, bin, cfg, o.DataDir, url, append(loadAdmins(o.DataDir), ownerIdentities(o)...), drop)
 	return &Instance{URL: url, Addr: addr, Version: tool.Version, proc: proc}, nil
+}
+
+// giteaWebRunSpec is the foreground `gitea web` launch spec (the Start path).
+// drop is nil when loom runs as the invoking user, and every drop.* call is a
+// no-op then, so this one constructor covers both.
+func giteaWebRunSpec(cfg, healthURL string, o Options, drop *privDrop) binmgr.RunSpec {
+	return binmgr.RunSpec{
+		Args:       []string{"web", "--config", cfg},
+		Env:        serviceenv.LocalOTLP(append([]string{"GITEA_WORK_DIR=" + o.DataDir}, drop.env()...), "loom"),
+		Dir:        o.DataDir,
+		Stdout:     o.Stdout,
+		Stderr:     o.Stderr,
+		HealthURL:  healthURL,
+		HealthWait: 60 * time.Second,
+		Configure:  drop.apply,
+	}
+}
+
+// giteaWebCommand is the background `gitea web` command (the StartDaemon path).
+// The caller still applies setDetached + drop.apply, because it owns the stdio
+// handover too.
+func giteaWebCommand(ctx context.Context, bin, cfg, dataDir string, drop *privDrop) *exec.Cmd {
+	cmd := binmgr.Command(ctx, bin, "web", "--config", cfg)
+	cmd.Dir = dataDir
+	cmd.Env = serviceenv.LocalOTLP(append(append(os.Environ(), "GITEA_WORK_DIR="+dataDir), drop.env()...), "loom")
+	return cmd
+}
+
+// prepareForRunUser makes the on-disk state agree with the credential Gitea is
+// about to run under: RUN_USER in app.ini (or its REMOVAL when loom runs as the
+// invoking user), ownership of the data dir, and reachability of the managed
+// binary. A no-op on the non-root path apart from the RUN_USER convergence,
+// which has to run either way — a data dir left behind by a root start carries
+// RUN_USER = loom, and Gitea exits if that disagrees with the user it is.
+func prepareForRunUser(cfg, bin, dataDir string, drop *privDrop) error {
+	if err := ensureRunUserConfig(cfg, drop.runUser()); err != nil {
+		return err
+	}
+	if err := drop.own(dataDir); err != nil {
+		return err
+	}
+	return drop.allowExec(bin)
 }
 
 // Serve runs loom in the foreground, blocking until the context is cancelled or
@@ -423,17 +481,25 @@ func StartDaemon(ctx context.Context, o Options) (State, error) {
 	if err := os.MkdirAll(o.DataDir, 0o755); err != nil {
 		return State{}, err
 	}
+	drop, err := ensurePrivDrop(ctx, o.DataDir, effectiveUID(o.UIDGetter))
+	if err != nil {
+		return State{}, err
+	}
+	if err := prepareForRunUser(cfg, bin, o.DataDir, drop); err != nil {
+		return State{}, err
+	}
 	logFile := logPath(o.DataDir)
 	log, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return State{}, err
 	}
-	cmd := binmgr.Command(context.Background(), bin, "web", "--config", cfg)
-	cmd.Dir = o.DataDir
-	cmd.Env = serviceenv.LocalOTLP(append(os.Environ(), "GITEA_WORK_DIR="+o.DataDir), "loom")
+	// The log file is handed over as an inherited fd, so the dropped child
+	// writes to it without needing to open the path itself.
+	cmd := giteaWebCommand(context.Background(), bin, cfg, o.DataDir, drop)
 	cmd.Stdout = log
 	cmd.Stderr = log
 	setDetached(cmd)
+	drop.apply(cmd)
 	if err := cmd.Start(); err != nil {
 		_ = log.Close()
 		return State{}, fmt.Errorf("loom: start gitea: %w", err)
@@ -483,13 +549,13 @@ func StartDaemon(ctx context.Context, o Options) (State, error) {
 		_ = removeState(o.DataDir)
 		return State{}, err
 	}
-	if err := ensureLoopbackAdmin(ctx, bin, cfg, o.DataDir); err != nil {
+	if err := ensureLoopbackAdmin(ctx, bin, cfg, o.DataDir, drop); err != nil {
 		_ = cmd.Process.Kill()
 		_ = proxyCmd.Process.Kill()
 		_ = removeState(o.DataDir)
 		return State{}, err
 	}
-	ensureAdmins(ctx, bin, cfg, o.DataDir, st.URL, append(loadAdmins(o.DataDir), ownerIdentities(o)...))
+	ensureAdmins(ctx, bin, cfg, o.DataDir, st.URL, append(loadAdmins(o.DataDir), ownerIdentities(o)...), drop)
 	if err := waitHTTP(ctx, st.ProxyURL, 30*time.Second); err != nil {
 		_ = cmd.Process.Kill()
 		_ = proxyCmd.Process.Kill()
@@ -1251,7 +1317,7 @@ func proxyIdentity(req *http.Request) (user, email, name string) {
 	return LoopbackUser, LoopbackEmail, LoopbackName
 }
 
-func ensureLoopbackAdmin(ctx context.Context, bin, cfg, dataDir string) error {
+func ensureLoopbackAdmin(ctx context.Context, bin, cfg, dataDir string, drop *privDrop) error {
 	args := []string{
 		"--config", cfg,
 		"--work-path", dataDir,
@@ -1263,7 +1329,7 @@ func ensureLoopbackAdmin(ctx context.Context, bin, cfg, dataDir string) error {
 		"--admin",
 		"--must-change-password=false",
 	}
-	out, err := runGiteaAdmin(ctx, bin, dataDir, args...)
+	out, err := runGiteaAdmin(ctx, bin, dataDir, drop, args...)
 	if err == nil {
 		return nil
 	}
@@ -1271,7 +1337,7 @@ func ensureLoopbackAdmin(ctx context.Context, bin, cfg, dataDir string) error {
 	if !strings.Contains(strings.ToLower(msg), "already exists") {
 		return fmt.Errorf("loom: ensure local admin: %w: %s", err, strings.TrimSpace(msg))
 	}
-	list, listErr := runGiteaAdmin(ctx, bin, dataDir, "--config", cfg, "--work-path", dataDir, "admin", "user", "list", "--admin")
+	list, listErr := runGiteaAdmin(ctx, bin, dataDir, drop, "--config", cfg, "--work-path", dataDir, "admin", "user", "list", "--admin")
 	if listErr != nil {
 		return fmt.Errorf("loom: check local admin: %w: %s", listErr, strings.TrimSpace(string(list)))
 	}
@@ -1312,14 +1378,14 @@ func loadAdmins(dataDir string) []string {
 // their GitHub user, which is NOT the host OS user). Both are supported so the
 // admin allowlist covers the real operator regardless of which identity the proxy
 // stamps. baseURL is the loom API base for promoting already-existing accounts.
-func ensureAdmins(ctx context.Context, bin, cfg, dataDir, baseURL string, identities []string) {
+func ensureAdmins(ctx context.Context, bin, cfg, dataDir, baseURL string, identities []string, drop *privDrop) {
 	seen := map[string]bool{}
 	for _, id := range identities {
 		if id = strings.TrimSpace(id); id == "" || seen[id] {
 			continue
 		}
 		seen[id] = true
-		ensureUserAdmin(ctx, bin, cfg, dataDir, baseURL, id)
+		ensureUserAdmin(ctx, bin, cfg, dataDir, baseURL, id, drop)
 	}
 }
 
@@ -1329,7 +1395,7 @@ func ensureAdmins(ctx context.Context, bin, cfg, dataDir, baseURL string, identi
 // non-admin — promote it via the loopback-admin API (the gitea CLI can only
 // create-as-admin, never promote). Best effort: logs an actionable warning, never
 // blocks startup.
-func ensureUserAdmin(ctx context.Context, bin, cfg, dataDir, baseURL, id string) {
+func ensureUserAdmin(ctx context.Context, bin, cfg, dataDir, baseURL, id string, drop *privDrop) {
 	u := coopauth.Username(id)
 	if u == "" || u == LoopbackUser {
 		return
@@ -1338,7 +1404,7 @@ func ensureUserAdmin(ctx context.Context, bin, cfg, dataDir, baseURL, id string)
 	if !strings.Contains(email, "@") {
 		email = u + "@localhost" // a bare handle: synthesize a stable local email
 	}
-	out, err := runGiteaAdmin(ctx, bin, dataDir, "--config", cfg, "--work-path", dataDir,
+	out, err := runGiteaAdmin(ctx, bin, dataDir, drop, "--config", cfg, "--work-path", dataDir,
 		"admin", "user", "create", "--username", u, "--email", email,
 		"--random-password", "--admin", "--must-change-password=false")
 	if err == nil {
@@ -1392,10 +1458,15 @@ func promoteAdminViaAPI(ctx context.Context, baseURL, user string) error {
 	return nil
 }
 
-func runGiteaAdmin(ctx context.Context, bin, dataDir string, args ...string) ([]byte, error) {
+// runGiteaAdmin runs the `gitea admin` CLI against the same data dir. It drops
+// to the same account as the server: these calls write the SQLite DB, and run as
+// root they would both trip Gitea's own root guard and leave root-owned files
+// inside a tree the server can only touch as the loom account.
+func runGiteaAdmin(ctx context.Context, bin, dataDir string, drop *privDrop, args ...string) ([]byte, error) {
 	cmd := binmgr.Command(ctx, bin, args...)
 	cmd.Dir = dataDir
-	cmd.Env = append(os.Environ(), "GITEA_WORK_DIR="+dataDir)
+	cmd.Env = append(append(os.Environ(), "GITEA_WORK_DIR="+dataDir), drop.env()...)
+	drop.apply(cmd)
 	return cmd.CombinedOutput()
 }
 
@@ -1743,6 +1814,80 @@ func ensureActionsSection(ini string, want bool) string {
 // https://docs.gitea.com/administration/config-cheat-sheet/#cron---check-for-new-gitea-versions-cronupdate_checker
 func ensureUpdateCheckerSection(ini string) string {
 	return ensureSectionKeys(ini, "cron.update_checker", map[string]string{"ENABLED": "false"})
+}
+
+// ensureRunUserConfig converges app.ini's RUN_USER to runUser ("" removes it).
+// A separate pass over the written file rather than a parameter on ensureConfig,
+// for the same reason writeGitConfig is one: the value is only known after the
+// credential is resolved.
+func ensureRunUserConfig(cfg, runUser string) error {
+	data, err := os.ReadFile(cfg)
+	if err != nil {
+		return err
+	}
+	ini := ensureRunUser(string(data), runUser)
+	if ini == string(data) {
+		return nil
+	}
+	return os.WriteFile(cfg, []byte(ini), 0o600)
+}
+
+// ensureRunUser reconciles the top-level RUN_USER key — the one Gitea compares
+// against the OS user it finds itself running as, exiting when they disagree.
+// It lives in the nameless preamble section next to APP_NAME/RUN_MODE.
+//
+// runUser == "" REMOVES the key so Gitea falls back to its own default (the
+// current user). That direction is what makes a data dir a root start left
+// behind usable again by a plain user run — and it is why this converges
+// instead of only ever writing.
+func ensureRunUser(ini, runUser string) string {
+	lines := strings.Split(ini, "\n")
+	preambleEnd := len(lines)
+	for i, ln := range lines {
+		t := strings.TrimSpace(ln)
+		if strings.HasPrefix(t, "[") && strings.HasSuffix(t, "]") {
+			preambleEnd = i
+			break
+		}
+	}
+	out := make([]string, 0, len(lines)+1)
+	found := false
+	for i, ln := range lines {
+		if i < preambleEnd && strings.EqualFold(iniKey(ln), "RUN_USER") {
+			found = true
+			if runUser != "" {
+				out = append(out, "RUN_USER = "+runUser)
+			}
+			continue
+		}
+		out = append(out, ln)
+	}
+	if found || runUser == "" {
+		return strings.Join(out, "\n")
+	}
+	// Not present: append to the end of the preamble, before its blank
+	// separator line, so the first section header stays where it was.
+	at := preambleEnd
+	for at > 0 && strings.TrimSpace(out[at-1]) == "" {
+		at--
+	}
+	merged := append([]string{}, out[:at]...)
+	merged = append(merged, "RUN_USER = "+runUser)
+	merged = append(merged, out[at:]...)
+	return strings.Join(merged, "\n")
+}
+
+// iniKey is the key an app.ini line assigns, or "" for a blank/comment line.
+func iniKey(line string) string {
+	t := strings.TrimSpace(line)
+	if t == "" || strings.HasPrefix(t, "#") || strings.HasPrefix(t, ";") {
+		return ""
+	}
+	k, _, ok := strings.Cut(t, "=")
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(k)
 }
 
 func ensureSectionKeys(ini, section string, updates map[string]string) string {

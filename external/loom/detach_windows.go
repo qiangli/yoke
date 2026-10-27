@@ -13,5 +13,8 @@ import (
 // not receive the parent console's Ctrl-C / CTRL_BREAK — the Windows
 // counterpart of Setpgid in detach_unix.go.
 func setDetached(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_PROCESS_GROUP}
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.CreationFlags |= windows.CREATE_NEW_PROCESS_GROUP
 }
