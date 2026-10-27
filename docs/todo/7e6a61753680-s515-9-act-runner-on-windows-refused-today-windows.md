@@ -1,7 +1,7 @@
 ---
 id: 7e6a61753680
 kind: bug
-title: S515.8 act_runner on Windows (refused today; Windows lanes use bashy dag --mesh until then); only after S515.4 is proven
+title: S515.9 act_runner on Windows (refused today; Windows lanes use bashy dag --mesh until then); only after S515.6 is proven
 seq: 2774
 status: todo
 priority: p3
