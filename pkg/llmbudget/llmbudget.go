@@ -182,6 +182,12 @@ func (g *Gate) Load(s State) {
 }
 
 func New(cfg Config) *Gate {
+	if runtime.GOOS == "windows" {
+		// Bash fixtures and Git Bash callers spell absolute paths as /c/... or
+		// /tmp/.... Go file APIs on Windows require their native spelling.
+		cfg.StatePath = pathconv.ToOS("", cfg.StatePath)
+		cfg.PolicyPath = pathconv.ToOS("", cfg.PolicyPath)
+	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
@@ -497,13 +503,15 @@ func DefaultFromEnv() *Gate {
 	})
 }
 
-// nativeStatePath maps an MSYS drive path (/c/..., inherited through a nested
-// shell exec) to native form on Windows so Go and the shell address one file.
+// nativeStatePath maps a shell-spelled path (/c/... or /tmp/..., inherited
+// through a nested shell exec) to native form on Windows so Go and the shell
+// address one file. Mount-aware (ToOS): /tmp resolves through the shell's
+// mount table, where plain NativePath would strand it at the drive root.
 func nativeStatePath(p string) string {
 	if runtime.GOOS != "windows" || p == "" {
 		return p
 	}
-	return pathconv.NativePath(p)
+	return pathconv.ToOS("", p)
 }
 
 func defaultStatePath() string {
