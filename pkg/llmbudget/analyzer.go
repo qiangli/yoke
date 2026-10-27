@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/qiangli/yoke/pkg/broker/door"
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/quotaobs"
+	"mvdan.cc/sh/v3/pathconv"
 )
 
 // AnalyzerBackend is the paid model boundary. A fake backend can be supplied
@@ -631,7 +633,11 @@ func (liveAnalyzer) Analyze(ctx context.Context, model, agent, prompt string) ([
 	if len(argv) == 0 {
 		return nil, errors.New("analyzer launch unavailable")
 	}
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	prog := argv[0]
+	if runtime.GOOS == "windows" {
+		prog = pathconv.NativePath(prog)
+	}
+	cmd := exec.CommandContext(ctx, prog, argv[1:]...)
 	cmd.Stdin = strings.NewReader(prompt)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

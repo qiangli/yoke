@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"mvdan.cc/sh/v3/pathconv"
 )
 
 // Resolving an agent CLI must not depend on the launcher's inherited PATH.
@@ -121,6 +123,11 @@ func ResolveToolBinary(tool string) string {
 		return ""
 	}
 	if strings.ContainsRune(tool, filepath.Separator) || strings.ContainsRune(tool, '/') {
+		if runtime.GOOS == "windows" {
+			// Program path only (never argv): an MSYS drive path (/c/...) is
+			// not executable to Go's exec on Windows.
+			return pathconv.NativePath(tool)
+		}
 		return tool
 	}
 	if p, err := exec.LookPath(tool); err == nil {
