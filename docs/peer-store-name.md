@@ -16,6 +16,12 @@ The seaweedfs wrapper configures one S3 identity from
 data dir, 0600); unset keeps open mode. Open mode rejects signed writes, so
 SERVE_DIRECT needs the keys set on both sides.
 
+Round-3 Windows evidence confirms keyed uploads, unsigned-write rejection,
+and OCI 307 downloads through this bucket route with flat loom TX. Standard
+LFS batch downloads also use the signed bucket URL with flat TX, but Gitea's
+LFS object endpoint returns 200 and proxies bytes. The strict LFS HTTP-30x
+gate therefore remains failed; see [round-3 evidence](s515-2-live-round3.md).
+
 ## Why the DNS name failed (historical)
 
 Status of the DNS-name design: **not accepted on Windows**. The intended name is
@@ -39,8 +45,9 @@ local `s3` service without a mesh. A localhost-aware HTTP client returned 200
 and `Server: SeaweedFS 30GB 4.48` through the stable name. That proves the
 router, not Go/Gitea name resolution.
 
-To complete this design without system hosts/DNS changes, the Gitea S3
-transport and each consuming Go client need an explicit loopback dial rule
+Completing the abandoned DNS-name design without system hosts/DNS changes
+would have required the Gitea S3
+transport and each consuming Go client to use an explicit loopback dial rule
 for the reserved store-name namespace, preserving the original URL and Host.
 Gitea's MinIO transport does not currently use its general proxy settings.
 Do not treat browser/curl resolution as proof for Gitea or container clients.

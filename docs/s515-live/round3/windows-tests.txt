@@ -1,0 +1,18 @@
+--- FAIL: TestArenaPushBaseAndBundleLocalRepo (0.07s)
+    arena_test.go:48: PushBase: exec: "git": executable file not found in %PATH%
+--- FAIL: TestBoothCopyBaseToBareFork (0.04s)
+    booth_test.go:91: copy arena base: exec: "git": executable file not found in %PATH%
+--- FAIL: TestStopReclaimsTheProxyPort (10.88s)
+    loom_test.go:985: proxy port 127.0.0.1:64988 is still held after StopDaemon
+--- FAIL: TestStopReclaimsTheGiteaPort (10.30s)
+    loom_test.go:1024: StopDaemon: loom: gitea port 127.0.0.1:65259 is still held after stop by a process loom did not launch
+--- FAIL: TestStopReclaimsAnUnregisteredGiteaByItsArgv (10.31s)
+    loom_test.go:1044: StopDaemon: loom: gitea port 127.0.0.1:65398 is still held after stop by a process loom did not launch
+--- FAIL: TestStartReclaimsAStaleOwnedGiteaByItsArgv (0.26s)
+    loom_test.go:1098: ensureGiteaPortFreeForStart: loom: gitea port 127.0.0.1:65411 is already in use by a process loom did not launch; stop that process or choose --port
+FAIL
+FAIL	github.com/qiangli/yoke/external/loom	40.587s
+ok  	github.com/qiangli/yoke/external/seaweedfs	1.403s
+ok  	github.com/qiangli/yoke/pkg/binmgr	3.976s
+FAIL
+Error: exit status 1
