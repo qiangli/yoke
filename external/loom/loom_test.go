@@ -43,7 +43,7 @@ func sectionValue(ini, section, key string) string {
 
 func TestEnsureConfig_SeedsAndIsIdempotent(t *testing.T) {
 	dir := t.TempDir()
-	cfg, err := ensureConfig(dir, "127.0.0.1", 3000, "https://ai.dhnt.io/matrix/h/dragon/app/loom/", true)
+	cfg, err := ensureConfig(dir, "127.0.0.1", 3000, "https://ai.dhnt.io/matrix/h/dragon/app/loom/", true, nil)
 	if err != nil {
 		t.Fatalf("ensureConfig: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestEnsureConfig_SeedsAndIsIdempotent(t *testing.T) {
 	}
 	// Second call must not overwrite (stable secret across restarts), with the
 	// same actions toggle.
-	if _, err := ensureConfig(dir, "127.0.0.1", 3000, "https://ai.dhnt.io/matrix/h/dragon/app/loom/", true); err != nil {
+	if _, err := ensureConfig(dir, "127.0.0.1", 3000, "https://ai.dhnt.io/matrix/h/dragon/app/loom/", true, nil); err != nil {
 		t.Fatal(err)
 	}
 	if b2, _ := os.ReadFile(cfg); string(b2) != s {
@@ -96,11 +96,11 @@ func TestEnsureConfig_SeedsAndIsIdempotent(t *testing.T) {
 
 func TestEnsureConfig_ReconcilesServerAndActions(t *testing.T) {
 	dir := t.TempDir()
-	cfg, err := ensureConfig(dir, "127.0.0.1", 3000, "http://127.0.0.1:3000/", true)
+	cfg, err := ensureConfig(dir, "127.0.0.1", 3000, "http://127.0.0.1:3000/", true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ensureConfig(dir, "127.0.0.1", 3001, "https://ai.dhnt.io/matrix/h/dragon/app/loom/", false); err != nil {
+	if _, err := ensureConfig(dir, "127.0.0.1", 3001, "https://ai.dhnt.io/matrix/h/dragon/app/loom/", false, nil); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(cfg)
@@ -1120,7 +1120,7 @@ func TestIsLoomGiteaArgs(t *testing.T) {
 func TestStartWithoutRootURLPreservesAConfiguredRootURL(t *testing.T) {
 	dir := t.TempDir()
 	const root = "https://ai.dhnt.io/matrix/h/dragon/app/loom/"
-	cfg, err := ensureConfig(dir, "127.0.0.1", 3000, root, true)
+	cfg, err := ensureConfig(dir, "127.0.0.1", 3000, root, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1142,7 +1142,7 @@ func TestStartWithoutRootURLPreservesAConfiguredRootURL(t *testing.T) {
 	if p := publicPrefix(opts.RootURL); p == "" {
 		t.Fatalf("publicPrefix(%q) is empty; proxy would omit --public-prefix", opts.RootURL)
 	}
-	if _, err := ensureConfig(opts.DataDir, opts.Addr, opts.Port, opts.RootURL, opts.actionsOn()); err != nil {
+	if _, err := ensureConfig(opts.DataDir, opts.Addr, opts.Port, opts.RootURL, opts.actionsOn(), nil); err != nil {
 		t.Fatal(err)
 	}
 	after, err := os.ReadFile(cfg)
@@ -1164,7 +1164,7 @@ func TestStartWithExplicitRootURLRewritesAndSaysSo(t *testing.T) {
 	// and the rewrite assertion would then fail for a reason unrelated to
 	// ROOT_URL handling.
 	port := freeTCPPort(t)
-	cfg, err := ensureConfig(dir, "127.0.0.1", port, oldRoot, true)
+	cfg, err := ensureConfig(dir, "127.0.0.1", port, oldRoot, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
