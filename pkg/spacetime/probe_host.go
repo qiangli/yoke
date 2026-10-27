@@ -10,6 +10,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"mvdan.cc/sh/v3/pathconv"
 )
 
 // --- core probe implementations --------------------------------------
@@ -136,8 +138,18 @@ var versionArgs = map[string][]string{
 
 var versionRe = regexp.MustCompile(`[0-9]+(?:\.[0-9]+)+`)
 
+// LookPath is exec.LookPath for a presence check. On Windows an MSYS drive
+// path (/c/...) is first converted to its native form so PATHEXT applies;
+// elsewhere it is exec.LookPath unchanged.
+func LookPath(name string) (string, error) {
+	if runtime.GOOS == "windows" {
+		name = pathconv.NativePath(name)
+	}
+	return exec.LookPath(name)
+}
+
 func (toolResolver) Eval(key string) (string, error) {
-	path, err := exec.LookPath(key)
+	path, err := LookPath(key)
 	if err != nil {
 		return "absent", nil
 	}
@@ -162,7 +174,7 @@ type engineResolver struct{}
 func (engineResolver) Namespace() string { return "engine" }
 
 func (engineResolver) Eval(key string) (string, error) {
-	if _, err := exec.LookPath(key); err == nil {
+	if _, err := LookPath(key); err == nil {
 		return "present", nil
 	}
 	return "absent", nil
