@@ -30,7 +30,7 @@ import (
 
 var failures []string
 var base string
-var storeEndpoint = "s515self.s515.localhost:31890"
+var storeEndpoint = "127.0.0.1:31890"
 var client = &http.Client{Timeout: 90 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
 func must(err error) {
@@ -224,8 +224,8 @@ func run() {
 	}
 	must(os.WriteFile(filepath.Join(dataDir, "app.ini"), []byte(ini), 0600))
 	cmd := exec.Command(filepath.Join(root, "bashy-s515-fixed.exe"), "loom", "serve", "--data", dataDir, "--port", strconv.Itoa(p))
-	cmd.Env = append(os.Environ(), "LOOM_S3_PEER=s515self", "LOOM_S3_SAT=s515", "LOOM_S3_ACCESS_KEY=s515-proof", "LOOM_S3_SECRET_KEY=s515-proof-secret", "LOOM_S3_BUCKET=loom")
-	if storeEndpoint != "s515self.s515.localhost:31890" {
+	cmd.Env = append(os.Environ(), "LOOM_S3_PEER=s515self", "LOOM_S3_ACCESS_KEY=s515-proof", "LOOM_S3_SECRET_KEY=s515-proof-secret")
+	if storeEndpoint != "127.0.0.1:31890" {
 		cmd.Env = append(cmd.Env, "LOOM_S3_ENDPOINT="+storeEndpoint)
 	}
 	if os.Getenv("S515_DIAGNOSTIC_ANONYMOUS") == "1" {

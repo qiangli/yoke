@@ -68,7 +68,7 @@ Run the actual new outpost in another SSH session:
 
 ```sh
 HOME=C:/s515/round2-633/home USERPROFILE=C:/s515/round2-633/home XDG_CONFIG_HOME=C:/s515/round2-633/home/config XDG_CACHE_HOME=C:/s515/round2-633/home/cache APPDATA=C:/s515/round2-633/home/appdata ./outpost-s515.exe start --admin-addr 127.0.0.1:0 > outpost.log 2>&1
-bashy curl -i http://s515self.s515.localhost:31890/loom
+bashy curl -i http://127.0.0.1:31890/loom
 ```
 
 Copy `acceptance_windows.go` and `dag.md` from this directory to the scratch

@@ -7,54 +7,59 @@ import (
 )
 
 // DefaultStorePort is the one fixed local outpost port that routes
-// <peer-id>.<sat-id>.localhost to that peer's `s3` mesh service.
+// /s3-<peer-id>/... to that peer's `s3` mesh service.
 const DefaultStorePort = 31890
 
-// Storage points loom's [storage] at a peer's S3 gateway. Presigned
-// (SERVE_DIRECT) URLs embed Host, so every member host must resolve it to the
-// same peer: PeerStoreHost builds a stable RFC 6761 loopback name that each
-// outpost routes by Host header (Host is passed through unchanged, which the
-// SigV4 signature requires).
+// Storage points loom's [storage] at a peer's S3 gateway. The peer is named by
+// the bucket (s3-<peer-id>), not by a DNS name: the endpoint is always the
+// loopback outpost store port, so presigned (SERVE_DIRECT) URLs resolve on
+// every OS without hosts/DNS changes and outpost routes by the path prefix.
 type Storage struct {
 	Endpoint  string // host:port, normally PeerStoreEndpoint(...)
 	AccessKey string
 	SecretKey string
-	Bucket    string // default "loom"
+	Bucket    string // default "loom"; normally PeerStoreBucket(peer)
 	Location  string // default "us-east-1"
 	UseSSL    bool
 	// NoServeDirect keeps downloads proxied through loom (default: direct).
 	NoServeDirect bool
 }
 
-// PeerStoreHost is the stable store name for a peer within a satellite.
-func PeerStoreHost(peerID, satID string) string {
-	return strings.ToLower(peerID + "." + satID + ".localhost")
+// PeerStoreBucket is the stable bucket (and outpost route prefix) for a peer.
+func PeerStoreBucket(peerID string) string {
+	return "s3-" + strings.ToLower(peerID)
 }
 
-// PeerStoreEndpoint is PeerStoreHost plus the fixed outpost port.
-func PeerStoreEndpoint(peerID, satID string, port int) string {
+// PeerStoreEndpoint is the loopback outpost store address.
+func PeerStoreEndpoint(port int) string {
 	if port == 0 {
 		port = DefaultStorePort
 	}
-	return fmt.Sprintf("%s:%d", PeerStoreHost(peerID, satID), port)
+	return fmt.Sprintf("127.0.0.1:%d", port)
 }
 
-// StorageFromEnv reads LOOM_S3_ENDPOINT (or LOOM_S3_PEER + LOOM_S3_SAT),
-// LOOM_S3_ACCESS_KEY, LOOM_S3_SECRET_KEY, LOOM_S3_BUCKET. nil when unset.
+// StorageFromEnv reads LOOM_S3_PEER (bucket s3-<peer>, endpoint 127.0.0.1:
+// <store port>), LOOM_S3_ENDPOINT (explicit override), LOOM_S3_ACCESS_KEY,
+// LOOM_S3_SECRET_KEY, LOOM_S3_BUCKET (explicit override). nil when neither
+// LOOM_S3_ENDPOINT nor LOOM_S3_PEER is set.
 func StorageFromEnv() *Storage {
+	peer := os.Getenv("LOOM_S3_PEER")
 	ep := os.Getenv("LOOM_S3_ENDPOINT")
 	if ep == "" {
-		peer, sat := os.Getenv("LOOM_S3_PEER"), os.Getenv("LOOM_S3_SAT")
-		if peer == "" || sat == "" {
+		if peer == "" {
 			return nil
 		}
-		ep = PeerStoreEndpoint(peer, sat, 0)
+		ep = PeerStoreEndpoint(0)
+	}
+	bucket := os.Getenv("LOOM_S3_BUCKET")
+	if bucket == "" && peer != "" {
+		bucket = PeerStoreBucket(peer)
 	}
 	return &Storage{
 		Endpoint:  ep,
 		AccessKey: os.Getenv("LOOM_S3_ACCESS_KEY"),
 		SecretKey: os.Getenv("LOOM_S3_SECRET_KEY"),
-		Bucket:    os.Getenv("LOOM_S3_BUCKET"),
+		Bucket:    bucket,
 	}
 }
 

@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [repo/page] resource watch: install and operate the host resource watcher — How to install, tune and read bashy resource watch — use when a host needs disk/memory/CPU/GPU/network threshold alarms or when auto-registered host resources appear in resource list `bashy resource watch` samples this host's registered resources and  (kb:resource-watch-install-and-operate-the-host-resource-watcher)
+- [repo/page] Verify localhost resolution in the actual storage client — When using peer.satellite.localhost for signed S3 URLs, a successful curl or browser request does not prove Go client resolution. S515.2 Windows Go 1.27.2 Gitea failed with no such host while outpost routing worked. Open SeaweedFS 4.48 also rejected signed writ  (kb:verify-localhost-resolution-in-the-actual-storage-client)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 

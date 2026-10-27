@@ -1,6 +1,9 @@
 package seaweedfs
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -172,3 +175,60 @@ func TestSpecPointsToForkNotUpstream(t *testing.T) {
 		t.Fatal("Spec version should not be latest")
 	}
 }
+
+func TestS3ConfigSingleIdentity(t *testing.T) {
+	dir := t.TempDir()
+	o := Options{DataDir: dir, AccessKey: "ak", SecretKey: "sk"}
+	if err := writeS3Config(o); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "s3-config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Identities []struct {
+			Credentials []struct{ AccessKey, SecretKey string }
+			Actions     []string
+		}
+	}
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Identities) != 1 || cfg.Identities[0].Credentials[0].AccessKey != "ak" ||
+		cfg.Identities[0].Credentials[0].SecretKey != "sk" || !slices.Contains(cfg.Identities[0].Actions, "Admin") {
+		t.Fatalf("bad config: %s", b)
+	}
+	if !slices.Contains(serverArgs(o), "-s3.config="+filepath.Join(dir, "s3-config.json")) {
+		t.Fatalf("args missing -s3.config: %v", serverArgs(o))
+	}
+	// open mode: no flag, stale file removed
+	open := Options{DataDir: dir}
+	if err := writeS3Config(open); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "s3-config.json")); !os.IsNotExist(err) {
+		t.Fatal("stale config not removed")
+	}
+	for _, a := range serverArgs(open) {
+		if strings.HasPrefix(a, "-s3.config") {
+			t.Fatalf("open mode passes %s", a)
+		}
+	}
+	if err := writeS3Config(Options{DataDir: dir, AccessKey: "ak"}); err == nil {
+		t.Fatal("half-configured keys accepted")
+	}
+}
+
+func TestS3ConfigFromEnv(t *testing.T) {
+	t.Setenv("SEAWEEDFS_S3_ACCESS_KEY", "a")
+	t.Setenv("SEAWEEDFS_S3_SECRET_KEY", "b")
+	o := Options{}
+	o.defaults()
+	if o.AccessKey != "a" || o.SecretKey != "b" {
+		t.Fatalf("%+v", o)
+	}
+}
+
+// Signed-accepted / unsigned-rejected needs the real weed binary; it is the
+// live gate in scripts/s515-live.
