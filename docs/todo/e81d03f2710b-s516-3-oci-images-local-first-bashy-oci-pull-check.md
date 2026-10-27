@@ -1,7 +1,7 @@
 ---
 id: e81d03f2710b
 kind: feature
-title: 'S516.3 OCI images once per LAN: zot pull-through mirror with the S3 layer as storage; podman on peers uses it'
+title: 'S516.3 OCI images local first: bashy oci pull checks peers (zot pull-through on the S3 layer; LAN then mesh) before the registry, publishes what it pulls'
 seq: 2778
 status: todo
 priority: p0

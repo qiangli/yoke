@@ -1,7 +1,7 @@
 ---
 id: f5e3b129c35b
 kind: feature
-title: 'S516.2 ollama models once per LAN: pull-through model-blob cache backed by the S3 layer'
+title: 'S516.2 ollama models local first: bashy ollama pull checks peers (S3 cache, then peers; LAN then mesh) before the internet, publishes what it downloads'
 seq: 2777
 status: todo
 priority: p0
