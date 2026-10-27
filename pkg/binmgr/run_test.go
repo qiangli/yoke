@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"testing"
 	"time"
 )
@@ -71,4 +72,54 @@ func TestWaitHealth_Timeout(t *testing.T) {
 	if err := waitHealth(context.Background(), srv.URL, 400*time.Millisecond); err == nil {
 		t.Fatal("expected a timeout error")
 	}
+}
+
+// TestLaunchConfigureRunsBeforeStart pins the Configure seam: it must see the
+// assembled command (path, args, dir, env) and its mutations must reach the
+// started process. `bashy loom` uses it to set SysProcAttr.Credential so Gitea
+// starts under an unprivileged account when loom itself is root.
+func TestLaunchConfigureRunsBeforeStart(t *testing.T) {
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seen *exec.Cmd
+	p, err := Launch(context.Background(), os.Args[0], RunSpec{
+		Env:    []string{"BINMGR_TEST_SLEEP=1"},
+		Dir:    dir,
+		Stdout: io.Discard,
+		Stderr: io.Discard,
+		Configure: func(cmd *exec.Cmd) {
+			seen = cmd
+			if cmd.Process != nil {
+				t.Error("Configure ran after Start — process attributes would be too late")
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	defer func() { _ = p.Stop(5 * time.Second) }()
+	if seen == nil {
+		t.Fatal("Configure was never called")
+	}
+	if seen.Path != p.Cmd.Path || seen.Dir != dir {
+		t.Fatalf("Configure saw path %q dir %q, want %q / %q", seen.Path, seen.Dir, p.Cmd.Path, dir)
+	}
+	if len(seen.Env) == 0 {
+		t.Fatal("Configure saw an unassembled env")
+	}
+}
+
+// A nil Configure is the normal case and must not be called.
+func TestLaunchWithoutConfigure(t *testing.T) {
+	p, err := Launch(context.Background(), os.Args[0], RunSpec{
+		Env:    []string{"BINMGR_TEST_SLEEP=1"},
+		Stdout: io.Discard,
+		Stderr: io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	_ = p.Stop(5 * time.Second)
 }

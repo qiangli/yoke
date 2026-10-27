@@ -1300,6 +1300,11 @@ func TestOwnerIdentities(t *testing.T) {
 	}
 }
 
+// TestRefuseRootWithInjectableUID pins the REFUSAL, which since S515.1/S515.2
+// is macOS-only: a root loom on Linux drops to the loom account instead
+// (TestRootOnLinuxDropsInsteadOfRefusing). The subtests therefore pin
+// privDropGOOS to darwin so they assert that surviving path on any host, rather
+// than silently flipping meaning between the macOS dev box and Linux CI.
 func TestRefuseRootWithInjectableUID(t *testing.T) {
 	const wantErr = "loom: refusing to run as root (Gitea forbids it); run bashy as a regular user"
 
@@ -1310,6 +1315,7 @@ func TestRefuseRootWithInjectableUID(t *testing.T) {
 		}
 		return
 	}
+	withPrivDropGOOS(t, "darwin")
 
 	t.Run("checkNotRoot directly", func(t *testing.T) {
 		// Root (uid 0) -> refusal error

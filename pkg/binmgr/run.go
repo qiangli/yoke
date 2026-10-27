@@ -25,6 +25,12 @@ type RunSpec struct {
 	Stderr     io.Writer     // default os.Stderr
 	HealthURL  string        // optional: GET until it answers (< 500) to consider ready
 	HealthWait time.Duration // max wait for readiness (default 30s)
+	// Configure, when set, is called with the assembled command just before it
+	// is started. It is the one seam for per-OS process attributes binmgr must
+	// not know about: `bashy loom` running as root sets
+	// SysProcAttr.Credential here so Gitea starts under a dedicated
+	// unprivileged account (external/loom/privdrop.go).
+	Configure func(*exec.Cmd)
 }
 
 // Process is a launched managed binary.
@@ -52,6 +58,9 @@ func Launch(ctx context.Context, path string, spec RunSpec) (*Process, error) {
 	cmd.Env = append(os.Environ(), spec.Env...)
 	cmd.Stdout = orWriter(spec.Stdout, os.Stdout)
 	cmd.Stderr = orWriter(spec.Stderr, os.Stderr)
+	if spec.Configure != nil {
+		spec.Configure(cmd)
+	}
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("binmgr: start %s: %w", path, err)
 	}
