@@ -13,8 +13,7 @@ import (
 
 // Gitea executes Git itself. A Windows host can run "bashy git" without a
 // bare git on PATH, so point Gitea at bashy's verified, managed MinGit. The
-// second result is that git's executable path (empty off Windows), which the
-// caller needs for the hook-shell environment (hooks.go).
+// second result is that git's executable path, empty off Windows.
 func ensureRuntimeConfig(ctx context.Context, dataDir, addr string, port int, rootURL string, actions bool, st *Storage) (string, string, error) {
 	cfg, err := ensureConfig(dataDir, addr, port, rootURL, actions, st)
 	if err != nil || runtime.GOOS != "windows" {

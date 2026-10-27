@@ -55,10 +55,14 @@ import (
 //     installs anything: this bash is downloaded, checksum-verified and cached
 //     by bashy itself.
 //
-// loom then puts that usr/bin (and mingw64/bin) on the PATH it gives Gitea, so
-// git's lookup of "env" succeeds however the cmd/git.exe wrapper happens to
-// set up its own search path, and the hook's own `cat`/`basename`/`ls` resolve
-// to the msys tools the script was written for.
+// Nothing else is needed, and loom deliberately does NOT touch the PATH it
+// gives Gitea: measured on the Windows peer with PATH=C:/Windows/System32
+// only, git still resolved `/usr/bin/env` and the hook's own msys tools,
+// because the cmd/git.exe wrapper loom points Gitea at prepends the tree's
+// mingw64/bin and usr/bin itself. The hook ran iff bash.exe existed — with it
+// absent, git reported `/usr/bin/env: 'bash': No such file or directory` and
+// with it present the hook ran, under both a minimal and an extended PATH
+// (docs/s515-4-live-round3.md). The missing NAME was the whole fault.
 
 // hookShellName is the on-disk spelling of a shell binary — git looks up the
 // interpreter with an .exe suffix on Windows.
@@ -81,18 +85,6 @@ func gitRootFromExe(gitExe string) string {
 		return ""
 	}
 	return filepath.Dir(dir)
-}
-
-// hookShellDirs are the managed-git directories git must see on PATH to run a
-// hook script: usr/bin (env, sh/bash, cat, basename, ls) and mingw64/bin.
-func hookShellDirs(root string) []string {
-	if root == "" {
-		return nil
-	}
-	return []string{
-		filepath.Join(root, "usr", "bin"),
-		filepath.Join(root, "mingw64", "bin"),
-	}
 }
 
 // ensureHookShell makes the "bash" name Gitea's hook shebang asks for
@@ -123,55 +115,6 @@ func ensureHookShell(usrBin string) (string, error) {
 		return "", fmt.Errorf("loom: provision hook shell: link %s: %v; copy: %w", bash, err, cerr)
 	}
 	return bash, nil
-}
-
-// hookShellEnv is the extra environment the Gitea process needs so git can
-// execute the hooks Gitea writes: the managed git's own msys directories, at
-// the front of PATH. Appended to the child env, so Go's exec dedup lets it win
-// over the inherited PATH (case-insensitively on Windows, where it is "Path").
-func hookShellEnv(gitExe string) []string {
-	dirs := hookShellDirs(gitRootFromExe(gitExe))
-	if len(dirs) == 0 {
-		return nil
-	}
-	path := prependPathDirs(os.Getenv("PATH"), dirs, string(os.PathListSeparator))
-	if path == "" {
-		return nil
-	}
-	return []string{"PATH=" + path}
-}
-
-// prependPathDirs puts dirs at the front of a PATH value, skipping any already
-// present. Comparison is case-insensitive: this runs on Windows paths.
-func prependPathDirs(current string, dirs []string, sep string) string {
-	existing := strings.Split(current, sep)
-	var add []string
-	for _, dir := range dirs {
-		if dir == "" || containsPathDir(existing, dir) {
-			continue
-		}
-		add = append(add, dir)
-	}
-	if len(add) == 0 {
-		return current
-	}
-	if current == "" {
-		return strings.Join(add, sep)
-	}
-	return strings.Join(add, sep) + sep + current
-}
-
-func containsPathDir(list []string, dir string) bool {
-	want := filepath.Clean(dir)
-	for _, entry := range list {
-		if entry == "" {
-			continue
-		}
-		if strings.EqualFold(filepath.Clean(entry), want) {
-			return true
-		}
-	}
-	return false
 }
 
 func usable(path string) bool {

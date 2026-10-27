@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -20,6 +21,17 @@ import (
 // the platform bash, a PATH that starts with that tree, and $BASH as the
 // witness of which interpreter actually ran.
 func TestHookShellRunsGiteaStyleHook(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// On Windows the shebang is resolved by git and msys, not by the
+		// kernel — and not by Go's os/exec either, which refuses an
+		// extensionless script before CreateProcess can even report it. The
+		// chain can only be driven end to end there by a real push through the
+		// provisioned git, which is the live half of this story
+		// (docs/s515-4-live-round3.md). What is checkable in a unit test on
+		// Windows — ensureHookShell, the tree layout, the PATH — is covered by
+		// the tests below, and those do run there.
+		t.Skip("hook shebang resolution belongs to git/msys on Windows; covered live")
+	}
 	dir := t.TempDir()
 	usrBin := filepath.Join(dir, "usr", "bin")
 	stageShell(t, usrBin)
@@ -57,7 +69,8 @@ echo "gitea-hook interpreter=$BASH refs=$(cat)"
 		cmd := exec.Command(hook)
 		cmd.Dir = dir
 		cmd.Stdin = strings.NewReader("0000 1111 refs/heads/main\n")
-		cmd.Env = append(os.Environ(), "PATH="+prependPathDirs(os.Getenv("PATH"), []string{usrBin}, string(os.PathListSeparator)))
+		// usrBin first, so `env bash` can only resolve to the tree's own shell.
+		cmd.Env = append(os.Environ(), "PATH="+usrBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 		out, err := cmd.CombinedOutput()
 		return string(out), err
 	}
@@ -119,50 +132,17 @@ func TestEnsureHookShellIdempotentAndLoud(t *testing.T) {
 	}
 }
 
-func TestHookShellEnvAndDirs(t *testing.T) {
-	if dirs := hookShellDirs(gitRootFromExe("")); dirs != nil {
-		t.Fatalf("no git exe: got %v", dirs)
-	}
+func TestGitRootFromExe(t *testing.T) {
 	// Only the managed <root>/cmd/git.exe layout yields a tree.
+	if root := gitRootFromExe(""); root != "" {
+		t.Fatalf("no git exe: got %q", root)
+	}
 	if root := gitRootFromExe(filepath.Join("opt", "bin", "git")); root != "" {
 		t.Fatalf("unexpected layout accepted: %q", root)
 	}
-	gitExe := filepath.Join("cache", "mingit", "2.55.0.2", "cmd", "git.exe")
 	root := filepath.Join("cache", "mingit", "2.55.0.2")
-	if got := gitRootFromExe(gitExe); got != root {
+	if got := gitRootFromExe(filepath.Join(root, "cmd", "git.exe")); got != root {
 		t.Fatalf("root: got %q want %q", got, root)
-	}
-	dirs := hookShellDirs(root)
-	want := []string{filepath.Join(root, "usr", "bin"), filepath.Join(root, "mingw64", "bin")}
-	if len(dirs) != len(want) {
-		t.Fatalf("dirs: got %v want %v", dirs, want)
-	}
-	for i := range want {
-		if dirs[i] != want[i] {
-			t.Fatalf("dirs: got %v want %v", dirs, want)
-		}
-	}
-	env := hookShellEnv(gitExe)
-	if len(env) != 1 || !strings.HasPrefix(env[0], "PATH="+want[0]+string(os.PathListSeparator)+want[1]) {
-		t.Fatalf("env: got %v", env)
-	}
-	if hookShellEnv("") != nil {
-		t.Fatal("no git exe: want no env")
-	}
-}
-
-func TestPrependPathDirs(t *testing.T) {
-	const sep = ";"
-	if got := prependPathDirs("", []string{`C:\g\usr\bin`}, sep); got != `C:\g\usr\bin` {
-		t.Fatalf("empty PATH: got %q", got)
-	}
-	if got := prependPathDirs(`C:\windows`, []string{`C:\g\usr\bin`, ""}, sep); got != `C:\g\usr\bin;C:\windows` {
-		t.Fatalf("prepend: got %q", got)
-	}
-	// Already present (Windows compares case-insensitively) — leave PATH alone,
-	// so a restart cannot grow it without bound.
-	if got := prependPathDirs(`C:\G\USR\BIN;C:\windows`, []string{`C:\g\usr\bin`}, sep); got != `C:\G\USR\BIN;C:\windows` {
-		t.Fatalf("duplicate: got %q", got)
 	}
 }
 
