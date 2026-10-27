@@ -3,6 +3,8 @@ package loom
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -77,6 +79,10 @@ func (a *giteaAPI) do(ctx context.Context, method, p string, in, out any) (int, 
 type repoInfo struct {
 	FullName string `json:"full_name"`
 	Private  bool   `json:"private"`
+	Owner    struct {
+		Login string `json:"login"`
+		Type  string `json:"type"` // "User" or "Organization"
+	} `json:"owner"`
 }
 
 type pushMirror struct {
@@ -124,6 +130,44 @@ func replicaRepoURL(base, fullName string) string {
 	return strings.TrimRight(base, "/") + "/" + fullName + ".git"
 }
 
+// randomPassword is a throwaway credential for a replica-side owner that never
+// logs in: mirror pushes authenticate with the replica API token, not this.
+func randomPassword() (string, error) {
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// ensureReplicaOwner makes the repo's owner exist on the replica, as the SAME
+// kind it is on the primary. A user-owned repo cannot be hung off an org: the
+// replica needs the user, and `POST /orgs` with a name an account already holds
+// fails 422 ("user already exists").
+func ensureReplicaOwner(ctx context.Context, r *giteaAPI, owner string, isUser bool) error {
+	if isUser {
+		if _, err := r.do(ctx, "GET", "/users/"+owner, nil, nil); err == nil {
+			return nil
+		}
+		pw, err := randomPassword()
+		if err != nil {
+			return err
+		}
+		_, err = r.do(ctx, "POST", "/admin/users", map[string]any{
+			"username":             owner,
+			"email":                owner + "@loom.invalid",
+			"password":             pw,
+			"must_change_password": false,
+		}, nil)
+		return err
+	}
+	if _, err := r.do(ctx, "GET", "/orgs/"+owner, nil, nil); err == nil {
+		return nil
+	}
+	_, err := r.do(ctx, "POST", "/orgs", map[string]any{"username": owner}, nil)
+	return err
+}
+
 func ensureReplicaRepo(ctx context.Context, r *giteaAPI, ri repoInfo) (created bool, err error) {
 	code, err := r.do(ctx, "GET", "/repos/"+ri.FullName, nil, nil)
 	if err == nil {
@@ -133,15 +177,27 @@ func ensureReplicaRepo(ctx context.Context, r *giteaAPI, ri repoInfo) (created b
 		return false, err
 	}
 	owner, name, _ := strings.Cut(ri.FullName, "/")
+	isUser := !strings.EqualFold(ri.Owner.Type, "Organization")
+	if err := ensureReplicaOwner(ctx, r, owner, isUser); err != nil {
+		return false, fmt.Errorf("replica owner %q: %w", owner, err)
+	}
 	body := map[string]any{"name": name, "private": ri.Private}
-	code, err = r.do(ctx, "POST", "/orgs/"+owner+"/repos", body, nil)
-	if code == http.StatusNotFound { // org missing on the replica
-		if _, oerr := r.do(ctx, "POST", "/orgs", map[string]any{"username": owner}, nil); oerr != nil {
-			return false, oerr
-		}
+	// A user-owned repo is created on the owner's behalf through the admin API;
+	// an org-owned one through the org.
+	if isUser {
+		_, err = r.do(ctx, "POST", "/admin/users/"+owner+"/repos", body, nil)
+	} else {
 		_, err = r.do(ctx, "POST", "/orgs/"+owner+"/repos", body, nil)
 	}
 	return err == nil, err
+}
+
+// syncMirror asks the primary to push now. Without it a freshly added mirror
+// stays EMPTY until the next commit (sync_on_commit) or the 8h interval — so a
+// client that clones the replica right after `replica add` gets nothing.
+func syncMirror(ctx context.Context, p *giteaAPI, fullName string) error {
+	_, err := p.do(ctx, "POST", "/repos/"+fullName+"/push_mirrors-sync", nil, nil)
+	return err
 }
 
 func listMirrors(ctx context.Context, p *giteaAPI, fullName string) ([]pushMirror, error) {
@@ -193,6 +249,10 @@ func ReplicaAdd(ctx context.Context, o ReplicaOptions) ([]string, error) {
 			}
 			state = "mirrored"
 		}
+		if err := syncMirror(ctx, p, ri.FullName); err != nil {
+			return lines, fmt.Errorf("%s: sync mirror: %w", ri.FullName, err)
+		}
+		state += " (sync requested)"
 		if created {
 			state += " (replica repo created)"
 		}

@@ -21,19 +21,42 @@ import (
 
 type fakeGitea struct {
 	mu      sync.Mutex
-	repos   map[string]bool // full name -> exists
+	repos   map[string]bool   // full name -> exists
+	kind    map[string]string // full name -> "Organization" | "User"
 	orgs    map[string]bool
+	users   map[string]bool
 	mirrors map[string][]pushMirror
+	syncs   map[string]int
 	creates int
 }
 
 func newFakeGitea(repos ...string) (*fakeGitea, *httptest.Server) {
-	f := &fakeGitea{repos: map[string]bool{}, orgs: map[string]bool{}, mirrors: map[string][]pushMirror{}}
+	f := &fakeGitea{repos: map[string]bool{}, kind: map[string]string{}, orgs: map[string]bool{},
+		users: map[string]bool{}, mirrors: map[string][]pushMirror{}, syncs: map[string]int{}}
 	for _, r := range repos {
 		f.repos[r] = true
+		f.kind[r] = "Organization"
 		f.orgs[strings.Split(r, "/")[0]] = true
 	}
 	return f, httptest.NewServer(f)
+}
+
+// addUserRepo registers a USER-owned repo — the shape a personal forge has, and
+// the one that must not be mistaken for an org.
+func (f *fakeGitea) addUserRepo(fullName string) {
+	f.repos[fullName] = true
+	f.kind[fullName] = "User"
+	f.users[strings.Split(fullName, "/")[0]] = true
+}
+
+func (f *fakeGitea) info(fullName string) repoInfo {
+	ri := repoInfo{FullName: fullName}
+	ri.Owner.Login = strings.Split(fullName, "/")[0]
+	ri.Owner.Type = f.kind[fullName]
+	if ri.Owner.Type == "" {
+		ri.Owner.Type = "Organization"
+	}
+	return ri
 }
 
 func (f *fakeGitea) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -45,10 +68,54 @@ func (f *fakeGitea) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(v)
 	}
 	switch {
+	case strings.HasSuffix(p, "/push_mirrors-sync") && r.Method == "POST":
+		f.syncs[strings.TrimSuffix(strings.TrimPrefix(p, "/repos/"), "/push_mirrors-sync")]++
+		js(200, map[string]any{})
+	case strings.HasPrefix(p, "/users/") && r.Method == "GET":
+		if f.users[strings.TrimPrefix(p, "/users/")] {
+			js(200, map[string]any{})
+		} else {
+			js(404, "nf")
+		}
+	case p == "/orgs" && r.Method == "GET":
+		js(404, "nf")
+	case strings.HasPrefix(p, "/orgs/") && !strings.HasSuffix(p, "/repos") && r.Method == "GET":
+		if f.orgs[strings.TrimPrefix(p, "/orgs/")] {
+			js(200, map[string]any{})
+		} else {
+			js(404, "nf")
+		}
+	case p == "/admin/users" && r.Method == "POST":
+		var in map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		name, _ := in["username"].(string)
+		if name == "" || in["password"] == "" || in["email"] == "" {
+			js(422, "username, email and password required")
+			return
+		}
+		if f.users[name] || f.orgs[name] {
+			js(422, map[string]string{"message": "user already exists [name: " + name + "]"})
+			return
+		}
+		f.users[name] = true
+		js(201, in)
+	case strings.HasPrefix(p, "/admin/users/") && strings.HasSuffix(p, "/repos") && r.Method == "POST":
+		user := strings.Split(p, "/")[3]
+		if !f.users[user] {
+			js(404, "no user")
+			return
+		}
+		var in map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		name := user + "/" + in["name"].(string)
+		f.repos[name] = true
+		f.kind[name] = "User"
+		f.creates++
+		js(201, in)
 	case p == "/repos/search":
 		var d []repoInfo
 		for n := range f.repos {
-			d = append(d, repoInfo{FullName: n})
+			d = append(d, f.info(n))
 		}
 		js(200, map[string]any{"data": d})
 	case strings.HasSuffix(p, "/push_mirrors") && r.Method == "GET":
@@ -70,13 +137,17 @@ func (f *fakeGitea) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(p, "/repos/") && r.Method == "GET":
 		n := strings.TrimPrefix(p, "/repos/")
 		if f.repos[n] {
-			js(200, repoInfo{FullName: n})
+			js(200, f.info(n))
 		} else {
 			js(404, "nf")
 		}
 	case p == "/orgs" && r.Method == "POST":
 		var in map[string]string
 		_ = json.NewDecoder(r.Body).Decode(&in)
+		if f.users[in["username"]] || f.orgs[in["username"]] {
+			js(422, map[string]string{"message": "user already exists [name: " + in["username"] + "]"})
+			return
+		}
 		f.orgs[in["username"]] = true
 		js(201, in)
 	case strings.HasPrefix(p, "/orgs/") && strings.HasSuffix(p, "/repos") && r.Method == "POST":
@@ -201,5 +272,63 @@ func assertRemote(t *testing.T, dir, wantURL, wantPush string) {
 	}
 	if strings.Count(s, "replica = ") != 3 {
 		t.Fatalf("replicas not persisted:\n%s", s)
+	}
+}
+
+// A user-owned repo must be replicated as a USER repo. Hanging it off an org is
+// what made `replica add` die with 422 "user already exists" on a personal
+// forge, aborting every repo after it.
+func TestReplicaAddUserOwnedRepo(t *testing.T) {
+	prim, ps := newFakeGitea("acme/app")
+	prim.addUserRepo("bob/tool")
+	defer ps.Close()
+	repl, rs := newFakeGitea()
+	defer rs.Close()
+	o := ReplicaOptions{Primary: ps.URL, Replica: rs.URL, Token: "t", ReplicaToken: "r"}
+	for i := 0; i < 2; i++ { // idempotent across both owner kinds
+		if _, err := ReplicaAdd(context.Background(), o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !repl.users["bob"] {
+		t.Fatalf("replica user bob not created: users=%+v", repl.users)
+	}
+	if repl.orgs["bob"] {
+		t.Fatal("bob replicated as an org; a user-owned repo must stay user-owned")
+	}
+	if !repl.repos["bob/tool"] || repl.kind["bob/tool"] != "User" {
+		t.Fatalf("bob/tool = %v kind=%q", repl.repos["bob/tool"], repl.kind["bob/tool"])
+	}
+	if !repl.orgs["acme"] || !repl.repos["acme/app"] {
+		t.Fatalf("org-owned repo regressed: orgs=%+v repos=%+v", repl.orgs, repl.repos)
+	}
+	if repl.creates != 2 {
+		t.Fatalf("creates = %d, want 2 (one per repo, idempotent)", repl.creates)
+	}
+}
+
+// Creating the mirror is not enough: Gitea pushes on the next commit or after
+// the 8h interval, so without an explicit sync the replica stays EMPTY and a
+// client cloning right after `replica add` gets nothing.
+func TestReplicaAddTriggersInitialSync(t *testing.T) {
+	prim, ps := newFakeGitea("acme/app", "acme/lib")
+	defer ps.Close()
+	_, rs := newFakeGitea()
+	defer rs.Close()
+	o := ReplicaOptions{Primary: ps.URL, Replica: rs.URL, Token: "t", ReplicaToken: "r"}
+	if _, err := ReplicaAdd(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"acme/app", "acme/lib"} {
+		if prim.syncs[n] != 1 {
+			t.Fatalf("%s syncs = %d, want 1", n, prim.syncs[n])
+		}
+	}
+	// A re-add converges an already-mirrored repo too.
+	if _, err := ReplicaAdd(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	if prim.syncs["acme/app"] != 2 {
+		t.Fatalf("re-add did not re-sync: %d", prim.syncs["acme/app"])
 	}
 }
