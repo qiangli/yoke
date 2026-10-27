@@ -28,6 +28,11 @@ type fakeGitea struct {
 	mirrors map[string][]pushMirror
 	syncs   map[string]int
 	creates int
+
+	// denyMirrorCreate reproduces Gitea's answer for a push mirror to a
+	// private/loopback replica: 401 "Permission denied" from
+	// HandleRemoteAddressError, which is NOT an auth failure.
+	denyMirrorCreate bool
 }
 
 func newFakeGitea(repos ...string) (*fakeGitea, *httptest.Server) {
@@ -124,6 +129,10 @@ func (f *fakeGitea) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimSuffix(strings.TrimPrefix(p, "/repos/"), "/push_mirrors")
 		var in map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&in)
+		if f.denyMirrorCreate {
+			js(401, map[string]string{"message": "Permission denied"})
+			return
+		}
 		if in["sync_on_commit"] != true {
 			js(400, "sync_on_commit required")
 			return

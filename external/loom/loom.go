@@ -1571,9 +1571,10 @@ func firstNonEmpty(vals ...string) string {
 }
 
 // ensureConfig writes a minimal Gitea app.ini on first run and returns its path.
-// On an existing app.ini it reuses it, but reconciles the server URL/listener and
-// actions toggle so an already-initialized data dir can be exposed over the mesh
-// without manual app.ini surgery.
+// On an existing app.ini it reuses it, but reconciles the server URL/listener,
+// the actions toggle and the mirror allow-list (MirrorAllowedDomainsEnv) so an
+// already-initialized data dir can be exposed over the mesh — and can mirror to
+// a private-address replica — without manual app.ini surgery.
 func ensureConfig(dataDir, addr string, port int, rootURL string, actions bool, st *Storage) (string, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return "", err
@@ -1587,6 +1588,7 @@ func ensureConfig(dataDir, addr string, port int, rootURL string, actions bool, 
 		merged = ensureServiceSection(merged)
 		merged = ensureActionsSection(merged, actions)
 		merged = ensureUpdateCheckerSection(merged)
+		merged = ensureMigrationsSection(merged, mirrorAllowedDomains())
 		merged = ensureStorageSection(merged, st)
 		if merged != string(existing) {
 			if err := os.WriteFile(cfgPath, []byte(merged), 0o600); err != nil {
@@ -1599,7 +1601,8 @@ func ensureConfig(dataDir, addr string, port int, rootURL string, actions bool, 
 	if err != nil {
 		return "", err
 	}
-	ini := ensureStorageSection(renderConfig(dataDir, addr, port, rootURL, secret, actions), st)
+	seeded := ensureMigrationsSection(renderConfig(dataDir, addr, port, rootURL, secret, actions), mirrorAllowedDomains())
+	ini := ensureStorageSection(seeded, st)
 	if err := os.WriteFile(cfgPath, []byte(ini), 0o600); err != nil {
 		return "", err
 	}
