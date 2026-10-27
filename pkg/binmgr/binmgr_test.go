@@ -355,3 +355,77 @@ func TestCachedBinaryExecutablePolicy(t *testing.T) {
 		t.Errorf("non-executable should be ignored, got %q", got)
 	}
 }
+
+// A Tree extraction that died partway leaves the entrypoint executable over an
+// incomplete tree. Ensure must NOT take that for a cache hit — otherwise the
+// cache is poisoned for good (the provisioned Go toolchain whose GOROOT/src
+// stopped mid-alphabet: `go version` worked, every build failed with "package
+// unique is not in std", and re-running never re-downloaded).
+func TestEnsure_TreePartialExtractIsNotACacheHit(t *testing.T) {
+	binv := []byte("go-binary")
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	_ = tw.WriteHeader(&tar.Header{Name: "go/bin/go", Mode: 0o755, Size: int64(len(binv))})
+	_, _ = tw.Write(binv)
+	_ = tw.WriteHeader(&tar.Header{Name: "go/src/unique/handle.go", Mode: 0o644, Size: 7})
+	_, _ = tw.Write([]byte("package"))
+	_ = tw.Close()
+	_ = gz.Close()
+	archive := buf.Bytes()
+
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		_, _ = w.Write(archive)
+	}))
+	defer srv.Close()
+
+	cache := t.TempDir()
+	t.Setenv("BASHY_BIN_CACHE", cache)
+	tool := Tool{
+		Name: "go", Version: "1.2.3",
+		Assets: map[string]Asset{Platform(): {
+			URL: srv.URL + "/go.tar.gz", SHA256: sha256hex(archive),
+			Tree: true, Entrypoint: "go/bin/go",
+		}},
+	}
+
+	// Poison the cache the way a failed extraction would: entrypoint in place,
+	// the rest of the tree missing, no completion marker.
+	dir, dest, err := installLayout(tool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dest, binv, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	path, err := Ensure(context.Background(), tool)
+	if err != nil {
+		t.Fatalf("Ensure over a partial tree: %v", err)
+	}
+	if hits != 1 {
+		t.Fatalf("partial tree was served from cache: %d downloads, want 1", hits)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "go", "src", "unique", "handle.go")); err != nil || string(got) != "package" {
+		t.Fatalf("tree not completed: %v %q", err, got)
+	}
+	if !treeComplete(dir) {
+		t.Fatalf("completion marker missing in %s", dir)
+	}
+
+	// And a complete tree still answers from cache with no second download.
+	if _, err := Ensure(context.Background(), tool); err != nil {
+		t.Fatal(err)
+	}
+	if hits != 1 {
+		t.Fatalf("complete tree re-downloaded: %d", hits)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -290,7 +290,7 @@ func ensure(ctx context.Context, t Tool) (string, error) {
 		return "", err
 	}
 	asset := t.Assets[t.platform()]
-	if isExecutable(dest) {
+	if isExecutable(dest) && (!asset.Tree || treeComplete(dir)) {
 		if t.Sigstore != nil && !signedCacheValid(ctx, t, asset, dest) {
 			return "", fmt.Errorf("%w: %s %s has an unverified or stale cache entry", ErrSigstore, t.Name, t.Version)
 		}
@@ -376,13 +376,34 @@ func ensure(ctx context.Context, t Tool) (string, error) {
 
 	switch {
 	case asset.Tree:
-		// Whole-archive extraction into dir/ (preserves the archive's own
-		// layout + modes); dest is dir/<entrypoint>.
-		if err := extractTree(tmpName, asset.URL, dir); err != nil {
+		// Whole-archive extraction (preserves the archive's own layout +
+		// modes); dest is dir/<entrypoint>. It is STAGED and promoted only
+		// once complete: a tree extracted straight into dir leaves, when it
+		// fails partway, an executable entrypoint over a half-written tree —
+		// and the cache check above would call that a hit forever. That is
+		// not hypothetical: it bricked a provisioned Go toolchain whose
+		// GOROOT/src stopped mid-alphabet, so every build failed with
+		// "package unique is not in std" and no amount of re-running fixed
+		// it (S515.2).
+		stage, err := os.MkdirTemp(dir, ".stage-*")
+		if err != nil {
+			return "", err
+		}
+		defer os.RemoveAll(stage)
+		if err := extractTree(tmpName, asset.URL, stage); err != nil {
+			return "", err
+		}
+		if !isExecutable(filepath.Join(stage, filepath.FromSlash(asset.Entrypoint))) {
+			return "", fmt.Errorf("binmgr: %s %s: entrypoint missing after extract: %s", t.Name, t.Version, asset.Entrypoint)
+		}
+		if err := promoteTree(stage, dir); err != nil {
 			return "", err
 		}
 		if !isExecutable(dest) {
 			return "", fmt.Errorf("binmgr: %s %s: entrypoint missing after extract: %s", t.Name, t.Version, dest)
+		}
+		if err := markTreeComplete(dir); err != nil {
+			return "", err
 		}
 		if t.Sigstore != nil {
 			if err := writeSignedCacheEvidence(asset, dest, tmpName, bundle); err != nil {
@@ -764,3 +785,40 @@ func isExecutable(path string) bool {
 type closerFunc func() error
 
 func (c closerFunc) Close() error { return c() }
+
+// treeMarkerName is dropped in a Tree asset's version dir once the whole
+// archive is in place. It is the only evidence that distinguishes a complete
+// tree from one whose entrypoint survived a failed extraction, so the cache
+// check consults it for Tree assets (a pre-marker cache entry re-installs
+// once, which is idempotent and verified).
+const treeMarkerName = ".binmgr-tree-complete"
+
+// treeComplete reports whether dir holds a fully extracted tree.
+func treeComplete(dir string) bool {
+	fi, err := os.Stat(filepath.Join(dir, treeMarkerName))
+	return err == nil && fi.Mode().IsRegular()
+}
+
+func markTreeComplete(dir string) error {
+	return os.WriteFile(filepath.Join(dir, treeMarkerName), []byte("ok\n"), 0o644)
+}
+
+// promoteTree moves a staged tree's top-level entries into dir, replacing any
+// leftovers from an earlier failed attempt. Per-entry os.Rename within the
+// same version dir means the entrypoint becomes visible only with its tree.
+func promoteTree(stage, dir string) error {
+	ents, err := os.ReadDir(stage)
+	if err != nil {
+		return err
+	}
+	for _, e := range ents {
+		src, dst := filepath.Join(stage, e.Name()), filepath.Join(dir, e.Name())
+		if err := os.RemoveAll(dst); err != nil {
+			return err
+		}
+		if err := os.Rename(src, dst); err != nil {
+			return err
+		}
+	}
+	return nil
+}
