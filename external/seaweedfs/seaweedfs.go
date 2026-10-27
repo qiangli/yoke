@@ -10,6 +10,7 @@ package seaweedfs
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -129,8 +130,12 @@ type Options struct {
 	DataDir string
 	Addr    string
 	Port    int // the S3 gateway port
-	Stdout  io.Writer
-	Stderr  io.Writer
+	// AccessKey/SecretKey configure the single S3 identity (default from
+	// SEAWEEDFS_S3_ACCESS_KEY / SEAWEEDFS_S3_SECRET_KEY). Both empty = open mode.
+	AccessKey string
+	SecretKey string
+	Stdout    io.Writer
+	Stderr    io.Writer
 }
 
 func (o *Options) defaults() {
@@ -145,6 +150,10 @@ func (o *Options) defaults() {
 	}
 	if o.Port == 0 {
 		o.Port = DefaultPort
+	}
+	if o.AccessKey == "" && o.SecretKey == "" {
+		o.AccessKey = os.Getenv("SEAWEEDFS_S3_ACCESS_KEY")
+		o.SecretKey = os.Getenv("SEAWEEDFS_S3_SECRET_KEY")
 	}
 	if o.Stdout == nil {
 		o.Stdout = os.Stdout
@@ -199,6 +208,9 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 	if err := os.MkdirAll(o.DataDir, 0o755); err != nil {
 		return nil, err
 	}
+	if err := writeS3Config(o); err != nil {
+		return nil, err
+	}
 	addr := fmt.Sprintf("%s:%d", o.Addr, o.Port)
 	url := "http://" + addr
 	proc, err := binmgr.Launch(ctx, bin, binmgr.RunSpec{
@@ -216,7 +228,50 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 	return &Instance{URL: url, Addr: addr, Version: tool.Version, proc: proc}, nil
 }
 
+const s3ConfigName = "s3-config.json"
+
+func s3ConfigPath(o Options) string { return filepath.Join(o.DataDir, s3ConfigName) }
+
+// s3ConfigJSON renders the one-identity SeaweedFS S3 config ("" in open mode).
+func s3ConfigJSON(o Options) ([]byte, error) {
+	if o.AccessKey == "" && o.SecretKey == "" {
+		return nil, nil
+	}
+	if o.AccessKey == "" || o.SecretKey == "" {
+		return nil, fmt.Errorf("seaweedfs: SEAWEEDFS_S3_ACCESS_KEY and SEAWEEDFS_S3_SECRET_KEY must be set together")
+	}
+	return json.MarshalIndent(map[string]any{"identities": []any{map[string]any{
+		"name":        "admin",
+		"credentials": []any{map[string]string{"accessKey": o.AccessKey, "secretKey": o.SecretKey}},
+		"actions":     []string{"Admin", "Read", "Write", "List", "Tagging"},
+	}}}, "", "  ")
+}
+
+// writeS3Config writes the identity file into the data dir (0600), or removes
+// a stale one when running open so a dropped key does not linger.
+func writeS3Config(o Options) error {
+	b, err := s3ConfigJSON(o)
+	if err != nil {
+		return err
+	}
+	if b == nil {
+		if err := os.Remove(s3ConfigPath(o)); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	return os.WriteFile(s3ConfigPath(o), b, 0o600)
+}
+
 func serverArgs(o Options) []string {
+	args := serverArgsBase(o)
+	if o.AccessKey != "" || o.SecretKey != "" {
+		args = append(args, "-s3.config="+s3ConfigPath(o))
+	}
+	return args
+}
+
+func serverArgsBase(o Options) []string {
 	return []string{
 		"server",
 		"-dir=" + o.DataDir,

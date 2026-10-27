@@ -1,6 +1,24 @@
-# Stable peer store name (S515.2 live result)
+# Stable peer store address (S515.2)
 
-Status: **not accepted on Windows**. The intended name is
+## Decision (round 3, 2026-10-27): bucket route, no DNS name
+
+The `<peer>.<sat>.localhost` name is dropped. Loom's `[storage]` uses
+`MINIO_ENDPOINT=127.0.0.1:<store port, default 31890>`,
+`MINIO_BUCKET=s3-<peer-id>` (`LOOM_S3_PEER`), path-style lookup,
+`SERVE_DIRECT=true`, keys from `LOOM_S3_ACCESS_KEY`/`LOOM_S3_SECRET_KEY`.
+The peer is selected by the first path segment (`/s3-<peer-id>/...`), which
+outpost routes to that peer's `s3` service; the Host is always loopback, so it
+resolves on every OS and SigV4 stays valid. `LOOM_S3_ENDPOINT` / `LOOM_S3_BUCKET`
+remain explicit overrides.
+
+The seaweedfs wrapper configures one S3 identity from
+`SEAWEEDFS_S3_ACCESS_KEY`/`SEAWEEDFS_S3_SECRET_KEY` (`s3-config.json` in the
+data dir, 0600); unset keeps open mode. Open mode rejects signed writes, so
+SERVE_DIRECT needs the keys set on both sides.
+
+## Why the DNS name failed (historical)
+
+Status of the DNS-name design: **not accepted on Windows**. The intended name is
 `<peer-id>.<sat-id>.localhost:31890`, with outpost routing the HTTP Host to
 that peer's `s3` service. Host must survive unchanged because SigV4 signs it.
 
@@ -32,11 +50,6 @@ unconfigured credentials (`Signed request requires setting up SeaweedFS S3
 authentication`). Anonymous uploads work, but cannot establish the intended
 presigned-download behavior. The requested open-loopback proof must not be
 reported as authenticated S3 acceptance.
-
-Loom configuration remains in `external/loom/storage.go`: `LOOM_S3_ENDPOINT`
-(or `LOOM_S3_PEER` + `LOOM_S3_SAT`) plus `LOOM_S3_ACCESS_KEY`,
-`LOOM_S3_SECRET_KEY`, and `LOOM_S3_BUCKET` configure `[storage]`, path-style
-MinIO access, and `SERVE_DIRECT=true`.
 
 See [round-2 evidence](s515-2-live-round2.md) and the reproducible
 [Windows client](../scripts/s515-live/acceptance_windows.go). This is a
