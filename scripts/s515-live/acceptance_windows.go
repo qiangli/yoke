@@ -29,6 +29,7 @@ import (
 )
 
 var failures []string
+var stack func() func()
 var base string
 var storeEndpoint = "127.0.0.1:31890"
 var client = &http.Client{Timeout: 90 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
@@ -50,7 +51,11 @@ func request(method, target string, body []byte, headers map[string]string) (*ht
 		req.SetBasicAuth("admin", "admin")
 	}
 	for k, v := range headers {
-		req.Header.Set(k, v)
+		if k == "Host" {
+			req.Host = v
+		} else {
+			req.Header.Set(k, v)
+		}
 	}
 	resp, err := client.Do(req)
 	must(err)
@@ -153,22 +158,29 @@ func download(label, target string, want []byte, c *counters) {
 		failures = append(failures, label+" returned 200 with payload through loom")
 		return
 	}
-	check(r.StatusCode >= 300 && r.StatusCode < 400, "%s expected redirect: %s body=%s", label, r.Status, string(b[:min(len(b), 200)]))
+	check(r.StatusCode >= 300 && r.StatusCode < 400, "%s expected redirect: %s bytes=%d loom_tx_before=%d after=%d delta=%d", label, r.Status, len(b), requestBefore, requestAfter, requestAfter-requestBefore)
 	loc := r.Header.Get("Location")
+	fmt.Printf("%s redirect=%d\n", label, r.StatusCode)
+	directDownload(label, loc, want, c)
+}
+func directDownload(label, loc string, want []byte, c *counters) {
 	u, err := url.Parse(loc)
 	must(err)
 	check(u.Host == storeEndpoint, "unexpected store name %s", u.Host)
-	fmt.Printf("%s redirect=%d store=%s path=%s\n", label, r.StatusCode, u.Host, u.Path)
+	check(strings.HasPrefix(u.Path, "/s3-s515self/"), "unexpected bucket path %s", u.Path)
+	check(u.Query().Get("X-Amz-Signature") != "", "missing presigned signature")
+	fmt.Printf("%s store=%s path=%s\n", label, u.Host, u.Path)
 	c.enable()
 	before := c.tx()
-	r, b = request("GET", loc, nil, nil)
+	r, b := request("GET", loc, nil, nil)
 	good(r, b)
 	after := c.tx()
 	check(bytes.Equal(b, want), "%s bytes mismatch", label)
 	fmt.Printf("%s bytes=%d sha256=%s loom_pid=%d tcp_data_tx_before=%d after=%d delta=%d connections=%d\n", label, len(b), digest(b), c.pid, before, after, after-before, len(c.tracked))
 	check(before == after, "%s loom transmitted bytes during direct store fetch", label)
 	direct := "http://127.0.0.1:8333" + u.RequestURI()
-	r, b = request("GET", direct, nil, nil)
+	// Dial SeaweedFS directly while retaining the signed Host header.
+	r, b = request("GET", direct, nil, map[string]string{"Host": u.Host})
 	good(r, b)
 	check(bytes.Equal(b, want), "%s direct SeaweedFS bytes mismatch", label)
 	fmt.Printf("%s direct_seaweedfs_sha256=%s MATCH\n", label, digest(b))
@@ -197,6 +209,10 @@ func verifyStore(label string, want []byte) {
 	panic(label + " matching SeaweedFS object not found")
 }
 func run() {
+	if stack != nil {
+		cleanup := stack()
+		defer cleanup()
+	}
 	root, err := os.Getwd()
 	must(err)
 	if ep := os.Getenv("S515_DIAGNOSTIC_ENDPOINT"); ep != "" {
@@ -270,6 +286,13 @@ func run() {
 	check(ready, "loom did not become ready; inspect loom.log")
 	pid = loomPID(p)
 	fmt.Printf("loom ready pid=%d port=%d\n", pid, p)
+	if os.Getenv("S515_DIAGNOSTIC_ENDPOINT") == "" {
+		for _, endpoint := range []string{"127.0.0.1:8333", storeEndpoint} {
+			r, _ := request("PUT", "http://"+endpoint+"/s3-s515self/unsigned-proof", []byte("must reject"), nil)
+			check(r.StatusCode == http.StatusForbidden, "unsigned write to %s returned %d", endpoint, r.StatusCode)
+			fmt.Printf("unsigned_write endpoint=%s status=%d REJECTED\n", endpoint, r.StatusCode)
+		}
+	}
 	c := &counters{pid: pid, tracked: map[[4]uint32]tcpRow{}}
 	c.enable()
 	// Positive control: ensure this is a functioning process-specific TX counter.
@@ -313,9 +336,7 @@ func run() {
 	r, b = request("PUT", base+"/v2/admin/s515-image/manifests/proof", mb, map[string]string{"Content-Type": "application/vnd.oci.image.manifest.v1+json"})
 	good(r, b)
 	fmt.Printf("OCI push manifest=sha256:%s layer=sha256:%s\n", digest(mb), digest(payload))
-	r, b = request("GET", base+"/v2/admin/s515-image/manifests/proof", nil, map[string]string{"Accept": "application/vnd.oci.image.manifest.v1+json"})
-	good(r, b)
-	check(bytes.Equal(b, mb), "manifest mismatch")
+	download("OCI manifest", base+"/v2/admin/s515-image/manifests/proof", mb, c)
 	download("OCI layer", base+"/v2/admin/s515-image/blobs/sha256:"+digest(payload), payload, c)
 	download("OCI config", base+"/v2/admin/s515-image/blobs/sha256:"+digest(config), config, c)
 
@@ -347,7 +368,11 @@ func run() {
 			good(r, b)
 			fmt.Printf("LFS upload oid=%s bytes=%d\n", oid, len(lfs))
 		} else {
-			// Exercise the authenticated LFS download endpoint so the 30x is observable.
+			// A standard LFS client follows the batch action, which Gitea
+			// supplies as a presigned store URL when SERVE_DIRECT is enabled.
+			directDownload("LFS batch action", action.Href, lfs, c)
+			// Also retain the requested strict HTTP-redirect gate. The pinned
+			// Gitea object endpoint currently proxies despite SERVE_DIRECT.
 			download("LFS", base+"/admin/s515-lfs.git/info/lfs/objects/"+oid, lfs, c)
 		}
 	}
@@ -355,7 +380,7 @@ func run() {
 	if os.Getenv("S515_DIAGNOSTIC_ENDPOINT") != "" {
 		fmt.Println("S515.2 DIAGNOSTIC PASS ONLY; stable-name acceptance remains blocked")
 	} else {
-		fmt.Println("S515.2 LIVE ACCEPTANCE PASS (single-host; unauthenticated loopback S3)")
+		fmt.Println("S515.2 LIVE ACCEPTANCE PASS (single-host; keyed loopback S3; bucket route)")
 	}
 }
 func main() {

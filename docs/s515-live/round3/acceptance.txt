@@ -1,0 +1,28 @@
+==> live
+dag: effect cap: target "live": "bashy-s515-fixed.exe" needs unknown not in Effects: exec,net,write
+loom ready pid=26464 port=50293
+unsigned_write endpoint=127.0.0.1:8333 status=403 REJECTED
+unsigned_write endpoint=127.0.0.1:31890 status=403 REJECTED
+counter_positive_control before=23603 after=24180 delta=577
+OCI push manifest=sha256:ffd0fee0f83e1cc24a0cc7fa60eebef5c10cfbc7b26ee222c8e2a0aa684f2d6a layer=sha256:15d94aec593681b0d38491a6cdb1bf24e0094ae2e34c4ebf7e7b593fd3d7b28b
+OCI manifest redirect=307
+OCI manifest store=127.0.0.1:31890 path=/s3-s515self/packages/ff/d0/ffd0fee0f83e1cc24a0cc7fa60eebef5c10cfbc7b26ee222c8e2a0aa684f2d6a
+OCI manifest bytes=400 sha256=ffd0fee0f83e1cc24a0cc7fa60eebef5c10cfbc7b26ee222c8e2a0aa684f2d6a loom_pid=26464 tcp_data_tx_before=8432918 after=8432918 delta=0 connections=10
+OCI manifest direct_seaweedfs_sha256=ffd0fee0f83e1cc24a0cc7fa60eebef5c10cfbc7b26ee222c8e2a0aa684f2d6a MATCH
+OCI layer redirect=307
+OCI layer store=127.0.0.1:31890 path=/s3-s515self/packages/15/d9/15d94aec593681b0d38491a6cdb1bf24e0094ae2e34c4ebf7e7b593fd3d7b28b
+OCI layer bytes=8390144 sha256=15d94aec593681b0d38491a6cdb1bf24e0094ae2e34c4ebf7e7b593fd3d7b28b loom_pid=26464 tcp_data_tx_before=8434371 after=8434371 delta=0 connections=10
+OCI layer direct_seaweedfs_sha256=15d94aec593681b0d38491a6cdb1bf24e0094ae2e34c4ebf7e7b593fd3d7b28b MATCH
+OCI config redirect=307
+OCI config store=127.0.0.1:31890 path=/s3-s515self/packages/fd/3e/fd3e05f6fa4b3ebbd2023907baf2b4351efc7277816600913a3d99c8a5d2a40a
+OCI config bytes=151 sha256=fd3e05f6fa4b3ebbd2023907baf2b4351efc7277816600913a3d99c8a5d2a40a loom_pid=26464 tcp_data_tx_before=8435824 after=8435824 delta=0 connections=10
+OCI config direct_seaweedfs_sha256=fd3e05f6fa4b3ebbd2023907baf2b4351efc7277816600913a3d99c8a5d2a40a MATCH
+LFS upload oid=6e8176a9a9c16ee413c82794112841b0db4340b4cc499886d451b6ec237ba4b5 bytes=4194304
+LFS batch action store=127.0.0.1:31890 path=/s3-s515self/lfs/6e/81/76a9a9c16ee413c82794112841b0db4340b4cc499886d451b6ec237ba4b5
+LFS batch action bytes=4194304 sha256=6e8176a9a9c16ee413c82794112841b0db4340b4cc499886d451b6ec237ba4b5 loom_pid=26464 tcp_data_tx_before=12642919 after=12642919 delta=0 connections=10
+LFS batch action direct_seaweedfs_sha256=6e8176a9a9c16ee413c82794112841b0db4340b4cc499886d451b6ec237ba4b5 MATCH
+FAIL: LFS expected redirect: 200 OK bytes=4194304 loom_tx_before=12642919 after=16838104 delta=4195185
+exit status 1
+Error: exit status 1
+==> live FAILED (exit 1)
+dag: 1/1 targets failed

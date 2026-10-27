@@ -1,109 +1,83 @@
-# S515.2 Windows live gate
+# S515.2 Windows live gate, round 3
 
-This client drives real loom, outpost, and SeaweedFS processes. It is not a
-replacement server/router. Run all builds and this gate on the assigned peer.
-The current result is **FAIL**, documented in
-[round-2 evidence](../../docs/s515-2-live-round2.md).
+This client drives real loom, outpost, and keyed SeaweedFS processes on one
+Windows peer. Cross-host proof belongs to S515.4. Historical failed evidence:
+[round 2](../../docs/s515-2-live-round2.md).
+The current [round-3 result](../../docs/s515-2-live-round3.md) passes OCI
+redirects and direct LFS batch downloads, but fails the strict LFS object
+endpoint 30x check. The default gate intentionally still exits nonzero.
 
-Use the private manager claim for access; never put the real access string in
-this repository. Every SSH command must start with `export PATH;`:
+Use the manager's private `s515-peer` claim for access. Do not put the real
+access string in this repository. Every remote command begins with:
 
 ```sh
-outpost ssh <user>@<peer>.local:2222 -- 'export PATH; <peer commands>'
+outpost ssh <user>@<peer>.local:2222 -- 'export PATH; <commands>'
 ```
 
-In a dedicated peer scratch directory (this run used `C:/s515/round2-633`):
+In a fresh scratch directory (round 3 used `C:/s515/round3-635`), clone and
+build current mains on the peer:
 
 ```sh
-bashy git clone --depth 1 https://github.com/qiangli/bashy.git bashy
-bashy git clone --depth 1 https://github.com/qiangli/yoke.git yoke
-bashy git clone --depth 1 https://github.com/qiangli/outpost.git outpost
-bashy git clone --depth 1 https://github.com/qiangli/sh.git sh
-bashy git clone --depth 1 https://github.com/qiangli/coreutils.git coreutils
-printf 'package main\nimport "fmt"\nfunc main(){fmt.Println("s515 tiny build PASS")}\n' > tiny.go
-bashy go build -o tiny.exe tiny.go
-./tiny.exe
+for repo in bashy yoke outpost sh coreutils; do
+  bashy git clone --depth 1 https://github.com/qiangli/$repo.git $repo
+done
 cd bashy
 bashy go mod edit -replace=github.com/qiangli/yoke=../yoke -replace=mvdan.cc/sh/v3=../sh
-bashy go build -o ../bashy-s515.exe ./cmd/bashy
+bashy go build -o ../bashy-s515-fixed.exe ./cmd/bashy
 cd ../outpost
 bashy go mod edit -replace=github.com/qiangli/yoke=../yoke -replace=mvdan.cc/sh/v3=../sh
 bashy go build -o ../outpost-s515.exe ./cmd/outpost
 cd ..
 ```
 
-Overlay this delivery's yoke changes before building the fixed candidate:
+Provision Go serially. A version probe is not a compile gate. Record each
+clone's `bashy git rev-parse HEAD` and inspect build logs before proceeding.
 
-```sh
-cd bashy
-../bashy-s515.exe go build -o ../bashy-s515-fixed.exe ./cmd/bashy
-cd ..
-```
-
-Provision Go serially. Old tree caches without the completion marker are
-re-provisioned on first use of the new binary; `go version` alone is not a
-sufficient toolchain gate. The delivered tree lock protects concurrent new
-installers; older binaries do not participate in it.
-
-Run SeaweedFS in a separate SSH session, with its own data directory:
-
-```sh
-./bashy-s515.exe seaweedfs serve --data C:/s515/round2-633/weed --port 8333 > weed.log 2>&1
-```
-
-The wrapper starts the pinned bashy-built SeaweedFS and its internal loopback
-services. No S3 identities are configured in this proof. Create the bucket:
-
-```sh
-bashy curl -i -X PUT http://127.0.0.1:8333/loom
-```
-
-Write `home/config/matrix/agent.json` under the scratch directory:
-
-```json
-{"agent_name":"s515self","admin_addr":"127.0.0.1:0","mesh_enabled":false,"ssh_enabled":false,"mesh_services":[{"name":"s3","addr":"127.0.0.1:8333"}]}
-```
-
-Run the actual new outpost in another SSH session:
-
-```sh
-HOME=C:/s515/round2-633/home USERPROFILE=C:/s515/round2-633/home XDG_CONFIG_HOME=C:/s515/round2-633/home/config XDG_CACHE_HOME=C:/s515/round2-633/home/cache APPDATA=C:/s515/round2-633/home/appdata ./outpost-s515.exe start --admin-addr 127.0.0.1:0 > outpost.log 2>&1
-bashy curl -i http://127.0.0.1:31890/loom
-```
-
-Copy `acceptance_windows.go` and `dag.md` from this directory to the scratch
-root, naming the latter `live-dag.md`. The client starts `bashy-s515-fixed.exe
-loom serve` on a dynamic loopback port, enables LFS in a fresh fixture, and
-uses `LOOM_S3_PEER=s515self`, `LOOM_S3_SAT=s515`, test keys, and bucket `loom`.
-It pushes an OCI manifest/config/tar layer through the Distribution API and
-an LFS object through the batch API. It checks download status, signed store
-hostname, payload hashes, and direct SeaweedFS reads. It kills its loom
-processes when the run finishes.
+Copy `acceptance_windows.go`, `stack_windows.go`, and `dag.md` to the scratch
+root with `outpost scp -P 2222`; rename the latter to `live-dag.md`. Run:
 
 ```sh
 ./bashy-s515-fixed.exe dag live-dag.md live
 ```
 
-Two explicitly non-acceptance diagnostic modes isolate the observed failures:
+The stack helper refuses occupied storage ports, writes an isolated outpost
+configuration with synthetic peer ID `s515self` and mesh disabled, and starts
+real outpost and SeaweedFS processes. It uses scratch HOME/config/cache paths
+for outpost, an independent `weed` directory, and one test S3 identity:
+`SEAWEEDFS_S3_ACCESS_KEY=s515-proof`,
+`SEAWEEDFS_S3_SECRET_KEY=s515-proof-secret`. These are disposable fixture
+credentials, never production credentials. No manual bucket creation is
+needed: loom creates `s3-s515self` using its matching credentials.
 
-```sh
-S515_DIAGNOSTIC_ENDPOINT=127.0.0.1:8333 ./bashy-s515-fixed.exe go run acceptance_windows.go
-S515_DIAGNOSTIC_ENDPOINT=127.0.0.1:8333 S515_DIAGNOSTIC_ANONYMOUS=1 ./bashy-s515-fixed.exe go run acceptance_windows.go
-```
+The client launches loom on a dynamic HTTP port with `LOOM_S3_PEER=s515self`
+and matching `LOOM_S3_ACCESS_KEY`/`LOOM_S3_SECRET_KEY`. No endpoint/bucket
+override is needed. It pushes and pulls a valid OCI manifest/config/tar layer
+and an LFS object, requiring:
 
-The second mode still exits nonzero when downloads are proxied. It reports
-hashes and TX deltas for the image and LFS before reporting the failures.
-Do not call either diagnostic mode stable-name acceptance.
+* unsigned PUT rejected with 403 both directly and through outpost;
+* download 30x to `127.0.0.1:31890/s3-s515self/...`, with a SigV4 signature;
+* complete payload and SHA-256 agreement;
+* loom TCP TX unchanged during the direct transfer;
+* a second direct SeaweedFS read matching the payload, retaining the original
+  signed Host header while dialing port 8333.
+
+For LFS it first fetches the batch response's download action, as a standard
+client does, then checks the object endpoint for the requested HTTP redirect.
+Gitea currently returns 200 from that endpoint, so this last assertion fails.
+
+The stack helper cleans up scratch outpost, the SeaweedFS wrapper and child;
+loom cleanup is owned by the client. The installed outpost is never stopped.
+Inspect `loom.log`, `weed.log`, and `outpost.log` on failure. Run in a fresh
+scratch directory to avoid reusing a previous fixture.
 
 Counters use Windows `GetExtendedTcpTable` to select the loom PID's established
 IPv4 sockets, then `SetPerTcpConnectionEStats`/`GetPerTcpConnectionEStats`
 (`TcpConnectionEstatsData.DataBytesOut`). A normal loom HTTP response is a
 positive control. These are sampled TCP data-byte counters, not whole-host
-NIC counters, disk I/O counters, or a claim about every historical socket.
-For a redirect, the flat-counter window starts after reading the redirect and
-covers the direct store fetch. A 200 fallback instead measures the loom
-request and reports the growing counter as a failure.
+NIC counters or every historical socket. The flat-counter window starts
+after the redirect and covers the direct store fetch.
 
-Stop only the scratch outpost, SeaweedFS, and their wrappers after collecting
-evidence. Preserve the installed outpost and other lanes' processes/data.
-The proof is single-host; cross-host validation belongs to S515.4.
+For manual service setup, run only `go run acceptance_windows.go`; omitting
+`stack_windows.go` leaves service lifecycle to the caller. Historical
+`S515_DIAGNOSTIC_ENDPOINT` / `S515_DIAGNOSTIC_ANONYMOUS` modes are diagnostic
+only and are never stable-address acceptance. Do not set them for this gate.

@@ -15,5 +15,5 @@ Effects: exec,net,write
 
 ```bash
 set -e
-./bashy-s515-fixed.exe go run acceptance_windows.go
+./bashy-s515-fixed.exe go run stack_windows.go acceptance_windows.go
 ```
