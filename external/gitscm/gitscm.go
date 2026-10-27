@@ -127,10 +127,11 @@ func appendGitWindowsEnv(env []string, nonInteractive bool) []string {
 }
 
 // appendGitPagerEnv gives git a pager it can actually spawn when stdout is a
-// terminal. git's default pager is `less`, and the provisioned MinGit ships
-// neither `less` nor a `sh` to find one with — so on a bare Windows host every
-// paged command (`git diff`, `git log`) died with "cannot spawn less" the
-// moment a bashy child inherited the terminal (v0.24.1). git's precedence is
+// terminal. git's default pager is `less`, and the provisioned MinGit ships no
+// `less` for git to spawn (it does ship a shell, under the name usr/bin/sh.exe
+// — see loom's hooks.go) — so on a bare Windows host every paged command
+// (`git diff`, `git log`) died with "cannot spawn less" the moment a bashy
+// child inherited the terminal (v0.24.1). git's precedence is
 // GIT_PAGER > core.pager > PAGER > less, so this sets PAGER only: an operator's
 // GIT_PAGER, PAGER or core.pager still wins, and a host with `less` is left
 // alone. The pager is bashy's own `more` when bashy's path is one git can
