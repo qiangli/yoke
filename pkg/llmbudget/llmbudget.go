@@ -12,6 +12,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/telemetry"
+	"mvdan.cc/sh/v3/pathconv"
 )
 
 type Action string
@@ -490,9 +492,18 @@ func FromFleetModelPlan(m fleet.Model, p fleet.Plan) Model {
 
 func DefaultFromEnv() *Gate {
 	return New(Config{
-		StatePath:    env("BASHY_LLM_BUDGET_STATE", defaultStatePath()),
+		StatePath:    nativeStatePath(env("BASHY_LLM_BUDGET_STATE", defaultStatePath())),
 		AllowPremium: premiumAllowed(),
 	})
+}
+
+// nativeStatePath maps an MSYS drive path (/c/..., inherited through a nested
+// shell exec) to native form on Windows so Go and the shell address one file.
+func nativeStatePath(p string) string {
+	if runtime.GOOS != "windows" || p == "" {
+		return p
+	}
+	return pathconv.NativePath(p)
 }
 
 func defaultStatePath() string {
