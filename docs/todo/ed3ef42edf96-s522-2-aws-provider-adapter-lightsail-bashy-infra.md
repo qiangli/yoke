@@ -3,7 +3,7 @@ id: ed3ef42edf96
 kind: feature
 title: S522.2 AWS provider adapter (Lightsail) + bashy infra provision --provider aws with budget preflight
 seq: 2816
-status: todo
+status: doing
 priority: p0
 labels:
     - cloud
@@ -14,6 +14,7 @@ assignee: claude-opus5
 sprint: 522
 sprint_id: 3413791d-7a40-5514-9970-99b64d1d83cf
 sprint_title: 'AWS cloud integration and satellite hosting: bashy aws provider (Lightsail), budget guard, hosting research, self-hosted + hosted AWS satellites'
+closed_by: s522-manager
 ---
 
 Plan: umbrella docs/sprint-522-master-execution-plan.md (Budget guard section is binding).
@@ -60,3 +61,8 @@ Live: zoo-aws was created (Lightsail, static IP 52.12.110.80) but never enrolled
 1. Static IP FIRST + endpoint hint: for provider aws, `bashy infra provision` must AllocateStaticIp "<name>-ip" (or reuse it if it already exists and is unattached) BEFORE requesting the enrollment bundle, then send endpoint "https://<a-b-c-d>.sslip.io" (dashes) as the bundle endpoint hint unless --endpoint was given, then CreateInstances and AttachStaticIp as today. The satellite then never depends on cloud metadata or on the attach racing first boot. Print the endpoint.
 2. Lifecycle verbs: add `bashy infra inspect|list|destroy --provider aws [--name N] [--region R]` (thin CLI over the adapter's existing inspect/list/destroy ops; destroy requires --yes, refuses resources without dhnt:managed=true, deletes the instance, detaches+releases "<name>-ip", deletes the staged S3 object named in tag dhnt:userdata-key, and reports each step). If DO has equivalents already, keep the flag shape consistent; do not change DO behaviour.
 Tests: fake-backed unit tests for the order (allocate -> bundle(endpoint) -> create -> attach), reuse of an existing unattached static IP, destroy happy path + untagged refusal + already-gone idempotence. Focused packages only; not the CI ratchet. Commit and exit.
+
+REWORK 4 (manager, 2026-10-28 11:30 PDT; live bugs, build on yoke main):
+1. STALE REPLAY: after `bashy infra destroy --provider aws --name zoo-aws`, `bashy infra provision aws --satellite zoo-aws` (default key infra-provision-zoo-aws) printed "provisioned zoo-aws (running)" but made NO AWS call — the provider journal replayed the old create result for an instance that no longer exists (Lightsail GetOperations shows no CreateInstance). Fix: a replayed create must re-inspect the resource and, if it is gone, treat the journal entry as dead and create anew; and/or destroy must retire the journal entries for that resource. Unit test: create -> destroy -> create with the same key really calls CreateInstances.
+2. EARLY RETURN: with a fresh key the create returned "provisioned zoo-aws (unknown)" while the instance was still `pending`; firewall (PutInstancePublicPorts) and AttachStaticIp were NOT applied (Lightsail defaults: 80 + 22 open to the world). Manager fixed the live instance by hand. Fix: finish() must wait until running (bounded, with the existing tolerateMissing) before putPorts + ensureStaticIP; if it times out, return an error that names the steps not done, never success. Unit test with fakelightsail returning pending for N polls.
+Focused packages only; commit and exit.
