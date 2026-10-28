@@ -19,14 +19,20 @@ import (
 	"github.com/qiangli/yoke/pkg/skills"
 )
 
-// SkillOptions are the catalog options the host binary uses for `bashy
-// skill`, so the browser sees the same rings (embedded, repository, host
-// overlay). The consumer sets it at init; nil means the default catalog.
-var SkillOptions []skills.Option
+// SkillOptions returns the catalog options the host binary uses for
+// `bashy skill`, so the browser sees the same rings (embedded, shared,
+// repository, host overlay). The consumer sets it at init; it is called
+// only when a lookup runs, so it costs nothing at startup. nil means the
+// default catalog.
+var SkillOptions func() []skills.Option
 
 // siteSkillCatalog lists the catalog; a variable so tests supply rows.
 var siteSkillCatalog = func() ([]skills.Listing, error) {
-	cat, ps := skills.NewCatalog(SkillOptions...)
+	var opts []skills.Option
+	if SkillOptions != nil {
+		opts = SkillOptions()
+	}
+	cat, ps := skills.NewCatalog(opts...)
 	return cat.List(ps)
 }
 
