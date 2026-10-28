@@ -3,13 +3,15 @@ id: ed3ef42edf96
 kind: feature
 title: S522.2 AWS provider adapter (Lightsail) + bashy infra provision --provider aws with budget preflight
 seq: 2816
-status: todo
+status: assigned
 priority: p0
 labels:
     - cloud
     - aws
     - provider
 created: 2026-10-28T08:13:25.261993Z
+weave: 647
+assignee: claude-opus5
 sprint: 522
 sprint_id: 3413791d-7a40-5514-9970-99b64d1d83cf
 sprint_title: 'AWS cloud integration and satellite hosting: bashy aws provider (Lightsail), budget guard, hosting research, self-hosted + hosted AWS satellites'
@@ -36,3 +38,9 @@ WHAT:
 TESTS (focused, run them): SigV4 known-answer vectors (AWS published test suite values), recorded-response unit tests for each op incl. AccessDenied and budget refusal, conformance suite, infra_provision provider selection. Do NOT create real AWS resources — the manager runs the single live create->inspect->destroy with the vault keys after review.
 
 OUT OF SCOPE: EC2, cloudbox hub/internal/provisioning registration (S522.5 follow-up), bashy release. Keep the change to yoke (+ bashy wiring only if `bashy infra` needs a flag change there).
+
+ADDED BY MANAGER (binding; this is how zoo-aws gets provisioned):
+6. The real caller is `bashy infra provision --satellite <id> --provider aws --region us-west-2 --size <bundleId> --image ubuntu_24_04` (pkg/fleet/infra_provision.go -> pkg/provider/enroll.ProvisionExecutable): the master returns an enrollment bundle whose user_data is the COMPLETE first-boot script (pkg/provider/enroll/enroll.go header). The adapter must pass Spec.UserData through byte-identical as Lightsail CreateInstances userData. The script is ~25-35 KB: verify Lightsail's userData size limit from AWS docs; if it is smaller than the script, wrap it losslessly (gzip+base64 into a tiny `#!/bin/sh` bootstrap that decodes and execs it) and unit-test the round trip.
+7. Static IP: on create, AllocateStaticIp "<instance>-ip" + AttachStaticIp once the instance is running, so the satellite's sslip.io endpoint survives stop/start; report that IP in inspect; destroy releases it (both tagged dhnt:managed=true; static IPs cannot carry tags in Lightsail, so destroy releases only the IP named "<instance>-ip" attached to that instance).
+8. Firewall (PutInstancePublicPorts after create): tcp 80, 443, 6443, 10250; udp 8475-8476; tcp 22 restricted to cidrListAliases ["lightsail-connect"] (browser SSH only). Mirror of the DO `dhnt-satellite` firewall.
+9. infra_provision's size preflight / flag defaults are DO-shaped (r1, s-1vcpu-1gb, img): make them provider-aware so the aws defaults are us-west-2 / small_3_0 / ubuntu_24_04, and --dry-run prints the aws request + budget preflight result.
