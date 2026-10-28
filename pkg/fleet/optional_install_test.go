@@ -96,7 +96,7 @@ func TestServiceAddOptionalRefusals(t *testing.T) {
 	if _, ok := New(opts...).Service("matrix-chat"); ok {
 		t.Fatal("a refused add wrote the unit")
 	}
-	if got := OptionalServiceNames(); len(got) == 0 || got[0] != "matrix-chat" {
+	if got := OptionalServiceNames(); len(got) != 2 || got[0] != "klatch" || got[1] != "matrix-chat" {
 		t.Fatalf("OptionalServiceNames = %v", got)
 	}
 }

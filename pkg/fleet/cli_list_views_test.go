@@ -144,7 +144,7 @@ func TestListBuiltinMatchesRingEmbedded(t *testing.T) {
 			// --ring embedded is an inspection view and also lists hidden
 			// internal tools; --builtin is a user view and does not.
 			if noun == "tool" {
-				embedded = slices.DeleteFunc(embedded, func(n string) bool { return n == "herald" || n == "tuwunel" })
+				embedded = slices.DeleteFunc(embedded, func(n string) bool { return n == "herald" || n == "klatch" || n == "tuwunel" })
 			}
 			if strings.Join(builtin, ",") != strings.Join(embedded, ",") {
 				t.Errorf("--builtin = %v, --ring embedded = %v", builtin, embedded)

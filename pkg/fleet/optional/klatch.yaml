@@ -1,0 +1,47 @@
+# Optional Klatch service. Install only on request. The release server archive
+# supplies the executable and transform scripts; the web UI is a separate
+# signed archive. Keep both unpacked directories under the data directory.
+name: klatch
+kind: service
+description: Klatch chat server — optional, loopback-only
+tool: klatch
+exec:
+  - bashy
+  - -c
+  - |
+    bin=${1:-klatch}
+    data=${2:-${BASHY_HOME:-$HOME/.bashy}/klatch}
+    web=${3:-$data/web}
+    transform=${4:-$data/transform}
+    mkdir -p "$data" || exit 1
+    exec "$bin" -p "127.0.0.1:$5" -s "$data" -w "$web" -t "$transform"
+  - klatch
+  - "{settings.binary}"
+  - "{settings.data_dir}"
+  - "{settings.web_dir}"
+  - "{settings.transform_dir}"
+  - "{port}"
+settings:
+  binary: ""
+  data_dir: ""
+  web_dir: ""
+  transform_dir: ""
+ports:
+  - name: http
+    port: 7100
+    bind: 127.0.0.1
+health:
+  http: /admin/status
+  interval: 10s
+  timeout: 3s
+  failures: 3
+  start_period: 30s
+restart:
+  policy: on-failure
+  backoff: {min: 1s, max: 30s, healthy_after: 30s}
+  start_limit: {burst: 5, interval: 5m}
+stop:
+  signal: TERM
+  timeout: 20s
+upgrade: restart
+enabled: false

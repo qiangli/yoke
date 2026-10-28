@@ -1,0 +1,41 @@
+# Klatch server — signed release of the Apache-2.0 Databag fork.
+# The archive contains the server and transform scripts. binmgr extracts the
+# executable member; an optional service points -t at the separately unpacked
+# scripts. Each asset has a matching .sigstore.json bundle beside it.
+name: klatch
+kind: system
+display: Klatch chat server
+hidden: true
+cli:
+  binary: klatch
+  managed:
+    source: github-release
+    version: 1.2.0-bashy.3
+    license: Apache-2.0
+    license_url: https://github.com/qiangli/klatch/blob/v1.2.0/LICENSE
+    service: true
+    sigstore:
+      identity: https://github.com/qiangli/klatch/.github/workflows/bashy-build.yml@refs/tags/bashy-v1.2.0-3
+      issuer: https://token.actions.githubusercontent.com
+    assets:
+      linux/amd64:
+        url: https://github.com/qiangli/klatch/releases/download/bashy-v1.2.0-3/klatch-v1.2.0-linux-amd64.tar.gz
+        sha256: ee0c10283652df92aa13df555db5a67d837739f5709e5f0715eea4560f35fe00
+        member: klatch
+      linux/arm64:
+        url: https://github.com/qiangli/klatch/releases/download/bashy-v1.2.0-3/klatch-v1.2.0-linux-arm64.tar.gz
+        sha256: 5cd7311c82de8741d20f447b867ab11471c1793f53b0900063f2b5c05e6b597a
+        member: klatch
+      darwin/amd64:
+        url: https://github.com/qiangli/klatch/releases/download/bashy-v1.2.0-3/klatch-v1.2.0-darwin-amd64.tar.gz
+        sha256: 9f1a01569a0139df62a73b45effdb8fc8b88ebec97bfc1ce7f46ff116971bbc1
+        member: klatch
+      darwin/arm64:
+        url: https://github.com/qiangli/klatch/releases/download/bashy-v1.2.0-3/klatch-v1.2.0-darwin-arm64.tar.gz
+        sha256: 6594eed05ee4823589d65f6cf10a062a01df33bc5d5f00d0de9dd112c757a020
+        member: klatch
+    notes: >-
+      Signed Klatch v1.2.0 server release bashy-v1.2.0-3; the optional
+      service is pkg/fleet/optional/klatch.yaml. The static web UI ships
+      separately as klatch-web-v1.2.0.tar.gz.
+quirks: optional Klatch chat server; bashy-signed Linux and macOS builds
