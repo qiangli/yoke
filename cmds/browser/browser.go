@@ -141,6 +141,8 @@ func run(rc *tool.RunContext, args []string) int {
 		return browserSetup(rc, operands[1:], *asJSON)
 	case "fetch":
 		return browserFetch(rc, ctx, operands[1:], *asJSON)
+	case "skills":
+		return browserSkills(rc, ctx, *tabURL, func() (urlReader, error) { return clientForMode(ctx, *mode, *probeURL, *livePort, soloCfg) }, *asJSON)
 	case "login":
 		return browserLogin(rc, ctx, operands[1:], loginOptions{
 			Mode:          *mode,
@@ -190,7 +192,7 @@ func run(rc *tool.RunContext, args []string) int {
 	if err != nil {
 		return printNoBrowser(rc, *asJSON, *mode, err)
 	}
-	return printResult(rc, res, *asJSON)
+	return printResult(rc, withSiteSkillHint(action, res), *asJSON)
 }
 
 type loginOptions struct {
