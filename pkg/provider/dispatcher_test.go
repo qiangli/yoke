@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -710,5 +711,248 @@ func TestJournalNeedsManualReconcileWhenUnprovable(t *testing.T) {
 	}
 	if _, err := d2.Do(ctx, provider.Request{Op: provider.OpCreate, IdempotencyKey: "k", Spec: spec("x")}); code(err) != provider.ErrNeedsManualReconcile {
 		t.Fatalf("retry under manual reconcile: %v", err)
+	}
+}
+
+// ---- a create replay is proven, not believed (S522.2 rework 4) ----
+
+// The live bug: `infra destroy --name zoo-aws` removed the host, and the
+// next `infra provision` with the same default key printed "provisioned
+// zoo-aws (running)" while making no provider call at all — the journal
+// replayed a create whose instance no longer existed. A destroy and a
+// create cannot be made to share one key (they are different operations),
+// so the create key's answer has to be retired when its resource goes.
+func TestCreateAfterDestroyWithTheSameKeyReallyCreates(t *testing.T) {
+	for _, r := range rows(t, lifecycleCaps()) {
+		t.Run(r.name, func(t *testing.T) {
+			ctx := context.Background()
+			d := r.open(t, baseOpts(provider.NewMemoryJournal()))
+			const key = "infra-provision-zoo"
+			first, err := d.Do(ctx, provider.Request{Op: provider.OpCreate, IdempotencyKey: key, Spec: spec("zoo")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := first.Resource.ID
+			if _, err := d.Do(ctx, provider.Request{
+				Op: provider.OpDestroy, IdempotencyKey: "infra-destroy-zoo",
+				ResourceID: id, Authorization: confirm(id, "infra-destroy-zoo"),
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if r.exists(id) {
+				t.Fatalf("%s still exists after the destroy", id)
+			}
+			second, err := d.Do(ctx, provider.Request{Op: provider.OpCreate, IdempotencyKey: key, Spec: spec("zoo")})
+			if err != nil {
+				t.Fatalf("create after destroy: %v", err)
+			}
+			if n := r.creates(); n != 2 {
+				t.Fatalf("creates = %d, want 2: the replay reported a host nobody created", n)
+			}
+			if second.Resource == nil || !r.exists(second.Resource.ID) {
+				t.Fatalf("create reported %+v, which does not exist", second.Resource)
+			}
+			if second.Resource.ID == id {
+				t.Fatalf("create reported the destroyed resource %s", id)
+			}
+			// The journal says what happened: the first answer retired,
+			// the second create is the key's answer now.
+			view, verr := d.View(ctx)
+			if verr != nil {
+				t.Fatal(verr)
+			}
+			op, ok := view.Find(provider.OpCreate, key)
+			if !ok || op.Retired {
+				t.Fatalf("create op = %+v, want a live (not retired) answer", op)
+			}
+			if op.ResourceID != second.Resource.ID {
+				t.Fatalf("op resource = %q, want %q", op.ResourceID, second.Resource.ID)
+			}
+			if jr, known := view.Resource(id); !known || !jr.Destroyed {
+				t.Fatalf("journal resource %s = %+v, want destroyed", id, jr)
+			}
+		})
+	}
+}
+
+// Same hazard without a destroy on this host at all: the resource was
+// removed in the provider's own console. The journal cannot know, so the
+// replay is proven against the provider before it is served.
+func TestCreateReplayRetiresAResourceThatIsGoneAtTheProvider(t *testing.T) {
+	ctx := context.Background()
+	fake := fakedo.New(t)
+	store := provider.NewMemoryJournal()
+	const key = "infra-provision-ghost"
+	at := time.Date(2026, 10, 27, 9, 0, 0, 0, time.UTC)
+	// A completed create of droplet 424242, which no longer exists.
+	for _, e := range []provider.JournalEntry{
+		{At: at, Provider: digitalocean.Name, Op: provider.OpCreate, IdempotencyKey: key, Phase: provider.PhaseIntent, Attempt: 1},
+		{At: at.Add(time.Second), Provider: digitalocean.Name, Op: provider.OpCreate, IdempotencyKey: key, Phase: provider.PhaseResult, Attempt: 1,
+			ResultID: "424242", State: provider.StateRunning, Tags: provider.LeaseTags("t1", key, nil)},
+	} {
+		if err := store.Append(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	opts := baseOpts(store)
+	opts.Credentials = provider.StaticCredential(fakedo.TestToken)
+	opts.Builtins = map[string]provider.BuiltinFactory{digitalocean.Name: doBuiltin(fake)}
+	d, err := provider.Open(ctx, digitalocean.Manifest(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := d.Do(ctx, provider.Request{Op: provider.OpCreate, IdempotencyKey: key, Spec: spec("ghost")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := fake.CreateCount(); n != 1 {
+		t.Fatalf("CreateCount = %d, want 1: a create whose resource is gone must create", n)
+	}
+	if res.Resource == nil || res.Resource.ID == "424242" {
+		t.Fatalf("resource = %+v, want the newly created droplet", res.Resource)
+	}
+	entries, err := store.Load(ctx, digitalocean.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var retired *provider.JournalEntry
+	for i := range entries {
+		if entries[i].Phase == provider.PhaseRetired {
+			retired = &entries[i]
+		}
+	}
+	if retired == nil {
+		t.Fatal("no retirement was journaled; the dead answer could come back")
+	}
+	if retired.ResourceID != "424242" || retired.Op != provider.OpCreate || retired.IdempotencyKey != key {
+		t.Fatalf("retirement = %+v", retired)
+	}
+}
+
+// An inspect that merely FAILS proves nothing: a provider that is down or
+// throttling must not turn a replay into a second host. The journal's
+// answer stands and nothing is created.
+func TestCreateReplayKeepsTheJournalAnswerWhenTheProofFails(t *testing.T) {
+	ctx := context.Background()
+	fake := fakedo.New(t)
+	id := fake.AddDroplet("live", provider.LeaseTags("t1", "infra-provision-live", nil)...)
+	store := provider.NewMemoryJournal()
+	const key = "infra-provision-live"
+	at := time.Date(2026, 10, 27, 9, 0, 0, 0, time.UTC)
+	for _, e := range []provider.JournalEntry{
+		{At: at, Provider: digitalocean.Name, Op: provider.OpCreate, IdempotencyKey: key, Phase: provider.PhaseIntent, Attempt: 1},
+		{At: at.Add(time.Second), Provider: digitalocean.Name, Op: provider.OpCreate, IdempotencyKey: key, Phase: provider.PhaseResult, Attempt: 1,
+			ResultID: strconv.Itoa(id), State: provider.StateRunning, Tags: provider.LeaseTags("t1", key, nil)},
+	} {
+		if err := store.Append(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	opts := baseOpts(store)
+	opts.Credentials = provider.StaticCredential(fakedo.TestToken)
+	opts.Builtins = map[string]provider.BuiltinFactory{digitalocean.Name: doBuiltin(fake)}
+	d, err := provider.Open(ctx, digitalocean.Manifest(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.Inject("GET", "/v2/droplets/"+strconv.Itoa(id), fakedo.Fail5xx, 1)
+	res, err := d.Do(ctx, provider.Request{Op: provider.OpCreate, IdempotencyKey: key, Spec: spec("live")})
+	if err != nil {
+		t.Fatalf("replay must survive a failed proof: %v", err)
+	}
+	if n := fake.CreateCount(); n != 0 {
+		t.Fatalf("CreateCount = %d, want 0: an unproven absence created a second host", n)
+	}
+	if res.Resource == nil || res.Resource.ID != strconv.Itoa(id) {
+		t.Fatalf("resource = %+v, want the journaled droplet %d", res.Resource, id)
+	}
+	// A live resource is reported as it is NOW, not as the journal
+	// remembers it: the proof is a read, so its answer is the fresh one.
+	res, err = d.Do(ctx, provider.Request{Op: provider.OpCreate, IdempotencyKey: key, Spec: spec("live")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drop, _ := fake.Droplet(id)
+	if res.Resource == nil || res.Resource.RawStatus != drop.Status {
+		t.Fatalf("resource = %+v, want the droplet's current status %q", res.Resource, drop.Status)
+	}
+	if n := fake.CreateCount(); n != 0 {
+		t.Fatalf("CreateCount = %d, want 0", n)
+	}
+}
+
+// slowAdapter answers every operation after delay, so a test can watch
+// which per-call budget an operation was given.
+type slowAdapter struct {
+	m     provider.Manifest
+	delay time.Duration
+}
+
+func (s *slowAdapter) Manifest() provider.Manifest { return s.m }
+
+func (s *slowAdapter) Do(ctx context.Context, req provider.Request) (provider.Result, error) {
+	select {
+	case <-ctx.Done():
+		e := &provider.Error{Code: provider.ErrTimeout, Message: "slow: " + ctx.Err().Error(), Retryable: true}
+		return provider.Result{ProtocolVersion: provider.ProtocolVersion, Op: req.Op, Error: e}, e
+	case <-time.After(s.delay):
+	}
+	res := provider.Result{ProtocolVersion: provider.ProtocolVersion, Op: req.Op}
+	if req.Op == provider.OpCreate || req.Op == provider.OpInspect {
+		res.Resource = &provider.Resource{
+			ID: "slow-1", Name: "slow-1", State: provider.StateRunning,
+			Tags: provider.LeaseTags("t1", req.IdempotencyKey, nil),
+		}
+	}
+	return res, nil
+}
+
+// A read answers in a second or it is broken; a create that brings a host
+// all the way to its serving shape (AWS Lightsail waits for "running",
+// then applies the firewall and the static IP) legitimately runs for
+// minutes. Bounding the create at the read budget cancels the adapter
+// mid-sequence, and the dispatcher then reconciles it as "the resource
+// exists" — success for a host whose remaining steps never ran, which is
+// how the live zoo-aws came up with Lightsail's default firewall.
+func TestMutatingTimeoutIsSeparateFromTheReadTimeout(t *testing.T) {
+	ctx := context.Background()
+	m := digitalocean.Manifest()
+	m.Name = "slow"
+	open := func(mutating time.Duration) *provider.Dispatcher {
+		opts := provider.Options{
+			Owner: "t1", Journal: provider.NewMemoryJournal(),
+			Timeout: 20 * time.Millisecond, MutatingTimeout: mutating,
+			Credentials: provider.StaticCredential("t"),
+			Builtins: map[string]provider.BuiltinFactory{"slow": func(context.Context, provider.Manifest, string) (provider.Adapter, error) {
+				return &slowAdapter{m: m, delay: 150 * time.Millisecond}, nil
+			}},
+		}
+		d, err := provider.Open(ctx, m, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	// Without the larger budget the create is cancelled at 20ms, and
+	// what the caller gets is the mess that follows: the outcome is
+	// unprovable because the reconciling read is cancelled too.
+	_, err := open(0).Do(ctx, provider.Request{Op: provider.OpCreate, IdempotencyKey: "k1", Spec: spec("slow-1")})
+	switch code(err) {
+	case provider.ErrTimeout, provider.ErrNeedsManualReconcile:
+	default:
+		t.Fatalf("create err = %v, want it cancelled at the read budget", err)
+	}
+	d := open(5 * time.Second)
+	res, err := d.Do(ctx, provider.Request{Op: provider.OpCreate, IdempotencyKey: "k2", Spec: spec("slow-1")})
+	if err != nil {
+		t.Fatalf("create under the mutating budget: %v", err)
+	}
+	if res.Resource == nil || res.Resource.State != provider.StateRunning {
+		t.Fatalf("resource = %+v", res.Resource)
+	}
+	// A read keeps the read budget: the larger one is not a licence for
+	// every call to hang.
+	if _, err := d.Do(ctx, provider.Request{Op: provider.OpInspect, ResourceID: "slow-1"}); code(err) != provider.ErrTimeout {
+		t.Fatalf("inspect err = %v, want timeout at the read budget", err)
 	}
 }

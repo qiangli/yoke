@@ -690,17 +690,24 @@ func (a *adapter) create(ctx context.Context, req provider.Request) (provider.Re
 // It takes a NAME, not an instance, because a create's own answer is not a
 // readable instance: Lightsail answers CreateInstances with an operation
 // record, and a GetInstance issued immediately after can still answer
-// NotFound. waitState is told to tolerate that here.
+// NotFound, or answer with a record whose state is not populated yet.
+// waitState is told to tolerate both here.
+//
+// An instance that never reaches "running" is a FAILED create, not a
+// create to report: the firewall and the static IP are the difference
+// between a satellite and a machine with Lightsail's defaults (ssh and
+// http open to the whole internet, no stable address), so the error names
+// the steps that did not run rather than letting a caller read "created"
+// as "ready".
 func (a *adapter) finish(ctx context.Context, req provider.Request, name string) (provider.Result, error) {
-	cur, err := a.waitState(ctx, name, anyRestingState, tolerateMissing)
+	cur, err := a.waitState(ctx, name, anyRestingState, tolerateMissing, tolerateUnknown)
 	if err != nil {
-		return fail(req.Op, err)
+		return fail(req.Op, a.unfinished(name, err))
 	}
 	if cur.State.Name != "running" {
 		// A replay against an instance the operator has since stopped:
-		// the create already happened, so report it. Waiting for
-		// "running" would hang out the whole wait budget, and starting it
-		// is the start operation's job, not create's.
+		// the create already happened, so report it. Starting it is the
+		// start operation's job, not create's.
 		return ok(req.Op, &provider.Result{Resource: a.resource(ctx, cur)})
 	}
 	if !a.cfg.SkipFirewall {
@@ -717,6 +724,36 @@ func (a *adapter) finish(ctx context.Context, req provider.Request, name string)
 		}
 	}
 	return ok(req.Op, &provider.Result{Resource: a.resource(ctx, cur)})
+}
+
+// unfinished turns a failed wait for "running" into an error that says
+// what was left undone, so the instance can be finished by hand or by a
+// replay instead of being believed ready.
+//
+// The error is deliberately NOT retryable and not a timeout, whatever the
+// cause was. A timeout is AMBIGUOUS to the dispatcher — the provider may
+// or may not have acted — so it reconciles it by listing the idempotency
+// tag, finds the instance that does exist, and reports the create as
+// SUCCEEDED. That is the live bug restated: the instance may well be
+// real, the host is not finished, and the caller must hear the second
+// half. A plain
+// provider error is reported as the failure it is; re-running the same
+// create finishes the host, because create is idempotent on its key.
+func (a *adapter) unfinished(name string, err error) error {
+	var left []string
+	if !a.cfg.SkipFirewall {
+		left = append(left, "the satellite firewall (PutInstancePublicPorts) was NOT applied, so Lightsail's defaults are still in place")
+	}
+	if !a.cfg.SkipStaticIP {
+		left = append(left, "the static ip "+name+staticIPSuffix+" was NOT attached")
+	}
+	e := normalize(err)
+	if len(left) == 0 {
+		return e
+	}
+	return &provider.Error{Code: provider.ErrProvider, Retryable: false, Message: fmt.Sprintf(
+		"%s; the host is unfinished: %s. Re-run the same create to finish it, or destroy it",
+		e.Message, strings.Join(left, "; "))}
 }
 
 func (a *adapter) list(ctx context.Context, req provider.Request) (provider.Result, error) {
@@ -1022,10 +1059,23 @@ const anyRestingState = ""
 // waitOption tunes waitState.
 type waitOption int
 
-// tolerateMissing keeps waiting while GetInstance answers NotFound, which
-// a just-created instance does until AWS has propagated it. Without it a
-// create would fail on an instance that in fact exists.
-const tolerateMissing waitOption = iota + 1
+const (
+	// tolerateMissing keeps waiting while GetInstance answers NotFound,
+	// which a just-created instance does until AWS has propagated it.
+	// Without it a create would fail on an instance that in fact exists.
+	tolerateMissing waitOption = iota + 1
+	// tolerateUnknown keeps waiting while the instance reports a state
+	// this adapter does not map — including the EMPTY state a Lightsail
+	// record carries for the first moments after CreateInstances, before
+	// the state field is populated.
+	//
+	// It is load-bearing on the create path. Without it an unmapped
+	// state counts as a resting state, so the wait ends on the first
+	// read, and create then skips the firewall and the static IP and
+	// reports a host in state "unknown" as provisioned — which is what
+	// the first live zoo-aws create did.
+	tolerateUnknown
+)
 
 // waitState polls GetInstance until the instance reports want, or the
 // wait budget runs out. Lightsail's own operation records say when an API
@@ -1034,6 +1084,7 @@ const tolerateMissing waitOption = iota + 1
 func (a *adapter) waitState(ctx context.Context, name, want string, opts ...waitOption) (*instance, error) {
 	deadline := a.now().Add(a.cfg.WaitTimeout)
 	missingOK := slices.Contains(opts, tolerateMissing)
+	unknownOK := slices.Contains(opts, tolerateUnknown)
 	for {
 		in, err := a.getInstance(ctx, name)
 		if err != nil {
@@ -1042,11 +1093,22 @@ func (a *adapter) waitState(ctx context.Context, name, want string, opts ...wait
 			}
 			in = &instance{Name: name, State: instanceState{Name: "pending"}}
 		}
-		settled := State(in.State.Name) != provider.StatePending
-		if in.State.Name == want || (want == anyRestingState && settled) {
+		st := State(in.State.Name)
+		// An unmapped state is in flight when the caller says so. The
+		// empty state name a fresh record carries is one of those, and
+		// it is deliberately NOT compared against want: anyRestingState
+		// is the empty string too, and the two meeting would end the
+		// wait the instant AWS answered with an unpopulated record.
+		inFlight := st == provider.StatePending || (unknownOK && st == provider.StateUnknown)
+		switch {
+		case want == anyRestingState:
+			if !inFlight {
+				return in, nil
+			}
+		case in.State.Name == want:
 			return in, nil
 		}
-		if State(in.State.Name) == provider.StateError {
+		if st == provider.StateError {
 			return nil, &provider.Error{Code: provider.ErrProvider,
 				Message: fmt.Sprintf("aws: instance %s is in state %q, not %q", name, in.State.Name, want)}
 		}

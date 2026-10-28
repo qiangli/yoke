@@ -6,6 +6,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/qiangli/yoke/pkg/provider"
 	awsprovider "github.com/qiangli/yoke/pkg/provider/aws"
@@ -45,6 +46,12 @@ type builtinProvider struct {
 	manifest func() provider.Manifest
 	// credential resolves the dispatcher credential (the secret half).
 	credential func(ref string) (string, error)
+	// mutatingTimeout is the per-call budget for a create/destroy/power
+	// operation; zero leaves the dispatcher's default. A provider whose
+	// create brings the host all the way to its serving shape needs more
+	// than a read's worth of time, and being cancelled halfway is how a
+	// half-finished host gets reported as provisioned.
+	mutatingTimeout time.Duration
 	// open builds the adapter from the resolved credential.
 	open func(opts builtinOpenOptions) (provider.Adapter, error)
 }
@@ -92,6 +99,16 @@ var (
 	// different service again, and a different protocol: the object is
 	// the URL, not an X-Amz-Target.
 	awsS3URL string
+	// awsPollInterval shortens the Lightsail state-poll interval. Zero
+	// means the adapter's own default (2s), which is what production
+	// always uses: like the URLs above this is a TEST seam, set by no
+	// flag and no environment variable, so a test that makes an instance
+	// take several reads to come up does not take several seconds.
+	awsPollInterval time.Duration
+	// awsWaitTimeout bounds the adapter's wait for an instance to come
+	// up. Zero means the adapter's own default (5m). A test seam like
+	// awsPollInterval: nothing in production sets it.
+	awsWaitTimeout time.Duration
 )
 
 // builtinProviders is the registry, by manifest name.
@@ -120,6 +137,11 @@ var builtinProviders = map[string]builtinProvider{
 			Image:  awsprovider.DefaultBlueprintID,
 		},
 		manifest: awsprovider.Manifest,
+		// A Lightsail create waits for "running" and then applies the
+		// firewall and the static IP; the adapter's own wait budget is 5
+		// minutes, so the dispatcher's 60s read budget would cancel it
+		// mid-sequence.
+		mutatingTimeout: 10 * time.Minute,
 		// AWS needs a key PAIR. The secret is the dispatcher credential
 		// (so the dispatcher scrubs it); the key id is read from the
 		// environment in open, where it is used and never stored.
@@ -138,6 +160,8 @@ var builtinProviders = map[string]builtinProvider{
 			}
 			return awsprovider.New(awsprovider.Config{
 				Credentials:     creds,
+				PollInterval:    awsPollInterval,
+				WaitTimeout:     awsWaitTimeout,
 				Region:          o.Region,
 				Owner:           o.Owner,
 				BaseURL:         awsLightsailBaseURL,

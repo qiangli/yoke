@@ -133,6 +133,17 @@ again; carrying a key to another resource is refused. A create whose
 answer is lost is reconciled by idempotency tag before any retry, so at
 most one resource results.
 
+A replayed CREATE is the one answer that is proven before it is served:
+its resource is inspected first, because the resource may have been
+destroyed since (here with another key, by a TTL sweep, or in the
+provider's own console) and replaying the old result would report a host
+that does not exist while making no provider call at all. A resource that
+is gone retires the journal entry (phase `retired`, append-only like
+every other record) and the key creates anew; a live one is reported with
+its CURRENT state; an inspect that merely fails proves nothing and the
+journal's answer stands. A successful destroy retires the create entries
+of the resource it removed.
+
 Destroy authorization (amendment A6): destroying a persistent resource
 needs a per-operation confirmation bound to exactly that resource ID
 and that idempotency key; without it the destroy is refused before any
