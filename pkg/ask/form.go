@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/qiangli/yoke/pkg/ctty"
+	"github.com/qiangli/yoke/pkg/sensitive"
 )
 
 type FieldSpec struct{ Name, Kind string }
@@ -36,16 +37,23 @@ func Form(ctx context.Context, spec FormSpec) (FormResult, error) {
 	if spec.Timeout <= 0 {
 		spec.Timeout = 2 * time.Minute
 	}
+	spec.Choices = withClipboardChoice(spec.Choices)
 	if ctx.Err() != nil {
 		return FormResult{Choice: stopChoice(spec.Choices)}, nil
 	}
-	answer, err := formDialog(ctx, ctty.FormRequest{Title: spec.Title, Prompt: sanitizePrompt(spec.Prompt), Name: spec.Field.Name, Kind: spec.Field.Kind, Choices: spec.Choices, Timeout: spec.Timeout})
+	category := sensitive.ClipboardCategory(spec.Field.Name+" "+spec.Prompt, spec.Field.Kind)
+	answer, err := formDialog(ctx, ctty.FormRequest{Title: spec.Title, Prompt: sanitizePrompt(spec.Prompt), Name: spec.Field.Name, Kind: spec.Field.Kind, Choices: spec.Choices, Timeout: spec.Timeout, ClipboardCategory: category})
 	if err != nil {
 		return FormResult{Choice: stopChoice(spec.Choices)}, nil
 	}
 	result := FormResult{Choice: answer.Choice}
-	if answer.Choice != spec.Choices[0] {
+	if answer.Choice != spec.Choices[0] && answer.Choice != "Use clipboard" {
 		return result, nil
+	}
+	if answer.Choice == "Use clipboard" {
+		if valid, reason := sensitive.ClipboardShape(category, answer.Value); !valid {
+			return FormResult{}, fmt.Errorf("ask: %s", reason)
+		}
 	}
 	if answer.Value == "" {
 		return FormResult{}, ctty.ErrDeclined
@@ -67,6 +75,21 @@ func Form(ctx context.Context, spec FormSpec) (FormResult, error) {
 	}
 	result.ID = id
 	return result, nil
+}
+
+func withClipboardChoice(choices []string) []string {
+	if len(choices) < 2 || choices[0] != "Enter it here" || choices[len(choices)-1] != "Stop" {
+		return choices
+	}
+	for _, choice := range choices {
+		if choice == "Use clipboard" {
+			return choices
+		}
+	}
+	out := make([]string, 0, len(choices)+1)
+	out = append(out, choices[0], "Use clipboard")
+	out = append(out, choices[1:]...)
+	return out
 }
 
 // TakeValue consumes a form value exactly once. Callers must pass the opaque ID,

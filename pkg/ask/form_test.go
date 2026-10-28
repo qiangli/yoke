@@ -3,6 +3,7 @@ package ask
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/qiangli/yoke/pkg/ctty"
@@ -15,7 +16,7 @@ func TestFormChoicesAndTakeOnce(t *testing.T) {
 	choices := []string{"Enter it here", "I'll type it in the page myself", "Skip this question", "Stop"}
 	for _, kind := range []string{"text", "secret"} {
 		formDialog = func(_ context.Context, r ctty.FormRequest) (ctty.FormAnswer, error) {
-			if r.Kind != kind || len(r.Choices) != 4 {
+			if r.Kind != kind || len(r.Choices) != 5 || r.Choices[1] != "Use clipboard" {
 				t.Fatalf("request: %+v", r)
 			}
 			return ctty.FormAnswer{Choice: choices[0], Value: "sensitive-value"}, nil
@@ -43,6 +44,22 @@ func TestFormChoicesAndTakeOnce(t *testing.T) {
 		if err != nil || got.Choice != choice || got.ID != "" {
 			t.Fatalf("result=%+v err=%v", got, err)
 		}
+	}
+	formDialog = func(context.Context, ctty.FormRequest) (ctty.FormAnswer, error) {
+		return ctty.FormAnswer{Choice: "Use clipboard", Value: "123-45-6789"}, nil
+	}
+	got, err := Form(context.Background(), FormSpec{Field: FieldSpec{Name: "SSN", Kind: "text"}, Choices: choices})
+	if err != nil || got.Choice != "Use clipboard" || got.ID == "" {
+		t.Fatalf("clipboard result=%+v err=%v", got, err)
+	}
+	if b, err := TakeValue(got.ID); err != nil || string(b) != "123-45-6789" {
+		t.Fatalf("clipboard take err=%v", err)
+	}
+	formDialog = func(context.Context, ctty.FormRequest) (ctty.FormAnswer, error) {
+		return ctty.FormAnswer{Choice: "Use clipboard", Value: "not-an-ssn"}, nil
+	}
+	if _, err := Form(context.Background(), FormSpec{Field: FieldSpec{Name: "SSN", Kind: "text"}, Choices: choices}); err == nil || strings.Contains(err.Error(), "not-an-ssn") {
+		t.Fatalf("shape mismatch leaked or accepted: %v", err)
 	}
 }
 

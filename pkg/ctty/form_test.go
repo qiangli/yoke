@@ -21,15 +21,41 @@ func TestFormPositiveEvidence(t *testing.T) {
 	}
 }
 func TestNativeFormScriptContract(t *testing.T) {
-	for _, want := range []string{"NSAlert", "NSTextField", "NSSecureTextField", "Show", "activateIgnoringOtherApps", "JSON.stringify", "ObjC.registerSubclass"} {
+	for _, want := range []string{"NSAlert", "NSTextField", "NSSecureTextField", "Show", "activateIgnoringOtherApps", "JSON.stringify", "ObjC.registerSubclass", "NSPasteboard", "changeCount", "clearContents", "Clipboard history"} {
 		if !strings.Contains(macFormSrc, want) {
 			t.Errorf("mac form missing %s", want)
 		}
 	}
-	for _, want := range []string{"System.Windows.Forms", "UseSystemPasswordChar", "Show", "ConvertTo-Json", "TopMost"} {
+	for _, want := range []string{"System.Windows.Forms", "UseSystemPasswordChar", "Show", "ConvertTo-Json", "TopMost", "Clipboard-Reason", "Clipboard]::Clear"} {
 		if !strings.Contains(windowsFormSrc, want) {
 			t.Errorf("Windows form missing %s", want)
 		}
+	}
+}
+
+func TestClipboardEligibilityAndConditionalClear(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  bool
+	}{
+		{"", false}, {"not-an-ssn", false}, {"123-45-6789", true},
+	} {
+		if got := clipboardEligible("ssn", tc.value); got != tc.want {
+			t.Fatalf("value shape got %v, want %v", got, tc.want)
+		}
+	}
+	cleared := false
+	clearIfSame("123-45-6789", func() (string, error) { return "123-45-6789", nil }, func() { cleared = true })
+	if !cleared {
+		t.Fatal("unchanged clipboard was not cleared")
+	}
+	cleared = false
+	clearIfSame("123-45-6789", func() (string, error) { return "newer copy", nil }, func() { cleared = true })
+	if cleared {
+		t.Fatal("newer clipboard was cleared")
+	}
+	if clipboardEligible("ssn", "newer copy") {
+		t.Fatal("changed clipboard was not revalidated")
 	}
 }
 
