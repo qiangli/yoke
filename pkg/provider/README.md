@@ -181,8 +181,53 @@ the satellite installs its proprietary artifact from dhnt.io.
   Fixture-only by default (`WithLive(auth)` enables the allocating
   lifecycle); never touches the network beyond httptest.
 
+## Built-in adapters
+
+Two providers ship linked in (`FormBuiltin`): neither is dispatched to the
+declarative engine and neither spawns a program.
+
+- **`digitalocean`** (S472.4a) is the REFERENCE example: droplets over the
+  v2 API, the smallest adapter that passes conformance.
+- **`aws`** (S522.2) is Lightsail over the Lightsail JSON API. What it adds
+  beyond the reference shape, because AWS needs it:
+  - a stdlib **SigV4 signer** (`sigv4.go`), pinned by AWS's published
+    SigV4 test-suite vectors. This module is stdlib-only, so there is no
+    AWS SDK here and no `pkg/provider` package may add one.
+  - a **budget preflight** before every create (`budget.go`): the bundle's
+    monthly price plus the account's month-to-date unblended cost BEFORE
+    CREDITS (Cost Explorer `GetCostAndUsage`, `Not`/`RECORD_TYPE=Credit`)
+    must stay within the operator's monthly cap, and the bundle price
+    within the per-instance ceiling. It FAILS CLOSED: unknown spend
+    refuses. No GPU, ever.
+  - **governance tags** on top of the bashy-lease tags: `dhnt:managed=true`
+    always, plus `dhnt:sprint` / `dhnt:story` / `dhnt:ttl`. The automation
+    IAM policy permits deleting only `dhnt:managed=true` resources, so
+    destroy refuses an untagged instance up front rather than failing as
+    an opaque `AccessDeniedException`.
+  - **lossless user-data wrapping** (`userdata.go`): the master's
+    first-boot script goes through byte-identical, and is gzip+base64
+    wrapped in a tiny `#!/bin/sh` bootstrap only when it exceeds EC2's
+    16 KiB launch limit (which Lightsail inherits).
+  - **a static IP** named `<instance>-ip`, allocated and attached at
+    create so the satellite's endpoint survives a stop/start, reported by
+    inspect, and released by destroy (an unattached Lightsail static IP is
+    billed).
+  - **the satellite firewall**, replacing the instance's public ports with
+    tcp 80/443/6443/10250, udp 8475-8476 and tcp 22 restricted to the
+    `lightsail-connect` CIDR alias — a mirror of the DigitalOcean
+    `dhnt-satellite` firewall.
+
+Which names are built in, their per-provider `--region`/`--size`/`--image`
+defaults and how each is opened all live in ONE place outside this module:
+`pkg/fleet/infra_builtin.go`. `bashy infra provision` carries no
+per-provider branching; the provider is named positionally
+(`infra provision aws`) or with `--provider aws`.
+
+Note a Lightsail resource is addressed by NAME, so `Resource.ID` is the
+instance name; nothing in the contract requires an opaque id.
+
 ## Future work (blocks nothing)
 
-Maintained Lambda/AWS/GCP/Azure adapters and Runpod container-worker
-semantics are future work. The DigitalOcean adapter is the reference
-example; dhnt certification of third-party providers is not a gate.
+Maintained EC2/GCP/Azure/Lambda adapters and Runpod container-worker
+semantics are future work; dhnt certification of third-party providers is
+not a gate.

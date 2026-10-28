@@ -1,0 +1,24 @@
+kind: infra
+name: aws
+form: declarative
+version: "1"
+protocol_version: provider/v1
+summary: AWS Lightsail adapter (built-in; dispatched to the linked-in Go adapter, never the declarative engine, never spawned). Stdlib SigV4, budget preflight, x86_64 only.
+builtin: true
+capabilities: [validate, capacity, plan, create, inspect, list, start, stop, reboot, destroy]
+declarative:
+  endpoints:
+    # Every call is POST "/" to the regional endpoint; the operation is
+    # named by X-Amz-Target, so these are targets, not paths.
+    instances: Lightsail_20161128.GetInstances
+  lifecycle:
+    validate: {endpoint: Lightsail_20161128.GetRegions, method: POST}
+    capacity: {endpoint: Lightsail_20161128.GetBundles, method: POST}
+    plan: {endpoint: Lightsail_20161128.GetBundles, method: POST}
+    create: {endpoint: Lightsail_20161128.CreateInstances, method: POST}
+    inspect: {endpoint: Lightsail_20161128.GetInstance, method: POST}
+    list: {endpoint: Lightsail_20161128.GetInstances, method: POST}
+    start: {endpoint: Lightsail_20161128.StartInstance, method: POST}
+    stop: {endpoint: Lightsail_20161128.StopInstance, method: POST}
+    reboot: {endpoint: Lightsail_20161128.RebootInstance, method: POST}
+    destroy: {endpoint: Lightsail_20161128.DeleteInstance, method: POST}

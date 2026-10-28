@@ -129,9 +129,15 @@ func (c Credentials) RedactedScope() string {
 }
 
 // ProvisioningPermitted never infers write/provisioning permission from a
-// successful login: authentication proves identity, not authorization. The
-// live authorization check needs a real account and is owned by Sprint 465,
-// so this refuses offline even when credentials resolve.
+// successful login: authentication proves identity, not authorization. It
+// is handed nothing but credentials, and no amount of credential
+// inspection can answer whether a create may happen — that answer depends
+// on WHAT would be created. So it still refuses, and names the live check
+// that does answer: ProvisioningAllowed, which runs the Lightsail budget
+// preflight (bundle price + month-to-date spend before credits, against
+// the operator's caps) for one named bundle.
 func ProvisioningPermitted(c Credentials) *Error {
-	return NewError(CodePermissionDenied, fmt.Sprintf("aws: provisioning permission unknown offline for %s — login proves identity, not authorization; live check owned by Sprint 465", c.RedactedScope()), nil)
+	return NewError(CodePermissionDenied, fmt.Sprintf(
+		"aws: provisioning permission is not implied by login for %s — authentication proves identity, not authorization; call ProvisioningAllowed with the region and bundle to run the live budget preflight",
+		c.RedactedScope()), nil)
 }

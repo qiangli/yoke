@@ -209,7 +209,7 @@ var packages = map[string]Package{
 		"(pkg/steward imports it and sits in the cross-OS canary that meet cannot satisfy); "+
 		"role/meetroom opens and closes the rooms, and sweeps the ones whose holder died without "+
 		"releasing. Not a verb: a channel is named by the thing it reaches."),
-	"provider": {Role: RoleUnwired, Note: "S472 host/VM provider contract, lifecycle dispatcher, declarative engine and DigitalOcean reference adapter (nested stdlib-only module cloudbox links directly); reaches no verb until bashy mounts the infra fleet kind (S472.12), then it becomes libPkg(\"infra\", ...)"},
+	"provider": {Role: RoleUnwired, Note: "S472 host/VM provider contract, lifecycle dispatcher, declarative engine and two built-in adapters — DigitalOcean (S472.4a reference) and AWS Lightsail (S522.2: stdlib SigV4, budget preflight) — in a nested stdlib-only module cloudbox links directly; reaches no verb until bashy mounts the infra fleet kind (S472.12), then it becomes libPkg(\"infra\", ...)"},
 	"redact":   libPkg("craft", "strips host identity (hostnames, users, home paths, IPs, MACs, emails) before learned knowledge leaves the machine"),
 	"execlog": libPkg("graph",
 		"the agentic command history — the TIME plane behind `graph history`. Records "+

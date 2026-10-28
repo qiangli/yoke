@@ -168,7 +168,9 @@ func TestProvisioningNeverInferredFromLogin(t *testing.T) {
 	if strings.Contains(perr.Message, "s457-canary") {
 		t.Error("denial leaks the secret")
 	}
-	if !strings.Contains(perr.Message, "Sprint 465") {
-		t.Errorf("denial must name the live-check home, got %q", perr.Message)
+	// The denial must point at the check that DOES answer, so a caller
+	// knows what to call instead of being told only "no".
+	if !strings.Contains(perr.Message, "ProvisioningAllowed") {
+		t.Errorf("denial must name the live check, got %q", perr.Message)
 	}
 }

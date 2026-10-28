@@ -35,7 +35,17 @@ support.
   (`errors_effect_redact_test.go`, `fixture_test.go`: argv, provider error
   bodies, fixture failures).
 - Login never implies provisioning permission: `ProvisioningPermitted`
-  refuses offline even with valid credentials (tested).
+  refuses even with valid credentials, because credentials alone cannot
+  answer whether a create may happen (tested).
+- The LIVE authorization answer exists as of Sprint 522 story
+  ed3ef42edf96: `ProvisioningAllowed` (provisioning.go) takes the region
+  and bundle a create would use and runs the Lightsail adapter's budget
+  preflight — bundle monthly price plus month-to-date unblended cost
+  BEFORE CREDITS, against the operator's $50 monthly cap and $24
+  per-instance ceiling. It fails closed (unknown spend refuses) and
+  refuses GPU plans unconditionally. Evidenced offline against
+  `pkg/provider/aws/fakelightsail`, with a canary secret proving the
+  denial path redacts (`provisioning_test.go`).
 
 ## Deferred / unclaimed (not absent)
 
@@ -87,6 +97,7 @@ support.
 | Artifact verification | fail-closed: no pin, no download; host identity recorded at qualification time; pins owned by Sprint 465 |
 | Read and reversible-write evidence (offline fixtures) | `TestFixtureReadAndPagination`, `TestFixtureReversibleWrite` (`fixture_test.go`); live goes to Sprint 465 |
 | Never infer provisioning permission from login | `ProvisioningPermitted`, `TestProvisioningNeverInferredFromLogin` |
+| Live provisioning authorization (budget preflight, fail-closed) | `ProvisioningAllowed`, `provisioning_test.go` (offline, fakelightsail) |
 
 Moved to Sprint 465 (NOT attempted here): read and reversible write with
 a real account, cleanup, real pagination, denied/expired-auth error

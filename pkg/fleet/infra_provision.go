@@ -4,16 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/qiangli/yoke/pkg/provider"
-	"github.com/qiangli/yoke/pkg/provider/digitalocean"
+	awsprovider "github.com/qiangli/yoke/pkg/provider/aws"
 	"github.com/qiangli/yoke/pkg/provider/enroll"
-	"github.com/qiangli/yoke/pkg/secrets"
 )
 
 // `infra provision` — thin CLI over pkg/provider/enroll (S472.13b item 1,
@@ -24,22 +22,49 @@ import (
 // login/bearer ladder (fleet.ResolveCloud: --token >
 // $BASHY_FLEET_TOKEN > $BASHY_API_KEY > paired outpost via `bashy login`;
 // --master overrides $BASHY_CLOUDBOX_URL).
+//
+// It is PROVIDER-AGNOSTIC (S522.2 item 9): which providers are compiled
+// in, what their region/size/image defaults are, and how each one is
+// opened all live in infra_builtin.go. The flag defaults follow the
+// provider named on the command line — a Lightsail bundle id is not a
+// DigitalOcean size slug — and a flag the caller set explicitly always
+// wins over the provider's default.
 func newInfraProvision(opts []Option) *cobra.Command {
-	var satellite, master, token, endpoint string
+	var satellite, master, token, endpoint, providerFlag string
 	var region, size, image, hostName, owner, credentialRef, key, profile string
+	var sprint, story, ttl string
+	var budgetCap, budgetPerInstance float64
 	var dryRun, asJSON bool
 	cmd := &cobra.Command{
-		Use:   "provision PROVIDER",
+		Use:   "provision [PROVIDER]",
 		Short: "Provision a satellite host via an enrollment bundle (executable path)",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
+			name, err := provisionProviderName(args, providerFlag)
+			if err != nil {
+				return err
+			}
 			p, ok := New(opts...).InfraProvider(name)
 			if !ok {
 				return fmt.Errorf("fleet: no infra provider %q", name)
 			}
 			if satellite == "" {
 				return fmt.Errorf("fleet: infra provision needs --satellite")
+			}
+			// Per-provider flag defaults. --region/--size/--image carry
+			// no cobra default, because the right one depends on the
+			// provider named on the command line: a Lightsail bundle id
+			// is not a DigitalOcean size slug. An unset flag takes the
+			// named provider's value here instead.
+			defaults := infraDefaults(p.Manifest.Name)
+			if region == "" {
+				region = defaults.Region
+			}
+			if size == "" {
+				size = defaults.Size
+			}
+			if image == "" {
+				image = defaults.Image
 			}
 			if key == "" {
 				key = "infra-provision-" + satellite
@@ -50,51 +75,55 @@ func newInfraProvision(opts []Option) *cobra.Command {
 			if err := validateProvisionProfile(profile); err != nil {
 				return err
 			}
+			openOpts := builtinOpenOptions{
+				Owner: owner, Region: region,
+				Sprint: sprint, Story: story, TTL: ttl,
+				BudgetCap: budgetCap, BudgetPerInstance: budgetPerInstance,
+			}
+			builtin, isBuiltin := builtinFor(p)
 			if dryRun {
 				return runProvisionDryRun(cmd, dryRunRequest{
-					Provider: name, Satellite: satellite,
+					Provider: p.Manifest.Name, Satellite: satellite,
 					Region: region, Size: size, Image: image,
 					Profile: profile, IdempotencyKey: key,
 					Name: hostName, Endpoint: endpoint, Owner: owner,
-					CredentialRef: credentialRef, BuiltinDO: p.Builtin && p.Manifest.Name == digitalocean.Name,
-				}, asJSON)
+					CredentialRef: credentialRef, Builtin: isBuiltin,
+				}, openOpts, asJSON)
 			}
 			ref := credentialRef
 			if ref == "" {
 				ref = p.Manifest.Name
 			}
-			cred, err := resolveProviderCredential(ref)
-			if err != nil {
-				return err
+			cred, cerr := resolveProviderCredential(ref)
+			if cerr != nil {
+				return cerr
 			}
 			base, session := ResolveCloud(master, token)
 			if session == "" {
 				return fmt.Errorf("fleet: no master session (pair with `bashy login`, set $BASHY_FLEET_TOKEN / $BASHY_API_KEY, or pass --token)")
 			}
 			manifest := p.Manifest
-			if p.Builtin {
+			builtins := map[string]provider.BuiltinFactory{}
+			if isBuiltin {
 				// A built-in entry dispatches to the linked-in Go
 				// adapter, never the declarative engine and never a
 				// spawned program.
-				manifest = digitalocean.Manifest()
+				manifest = builtin.manifest()
 				manifest.Name = p.Manifest.Name
+				builtins[manifest.Name] = builtinFactory(p.Manifest.Name, openOpts)
 			}
 			ctx := context.Background()
-			d, err := provider.Open(ctx, manifest, provider.Options{
+			d, oerr := provider.Open(ctx, manifest, provider.Options{
 				Owner:       owner,
 				Exec:        provider.ExecAllowed, // user-owned compute only
 				Credentials: provider.StaticCredential(cred),
-				Builtins: map[string]provider.BuiltinFactory{
-					manifest.Name: func(_ context.Context, _ provider.Manifest, credential string) (provider.Adapter, error) {
-						return digitalocean.New(digitalocean.Config{Token: credential, Owner: owner})
-					},
-				},
+				Builtins:    builtins,
 			})
-			if err != nil {
-				return err
+			if oerr != nil {
+				return oerr
 			}
 			out := cmd.OutOrStdout()
-			res, err := enroll.ProvisionExecutable(ctx, enroll.Client{BaseURL: base, Session: session}, d,
+			res, perr := enroll.ProvisionExecutable(ctx, enroll.Client{BaseURL: base, Session: session}, d,
 				enroll.ProvisionRequest{
 					SatelliteID: satellite,
 					Endpoint:    endpoint,
@@ -104,8 +133,8 @@ func newInfraProvision(opts []Option) *cobra.Command {
 					IdempotencyKey: key,
 					Progress:       func(s string) { fmt.Fprintln(out, s) },
 				})
-			if err != nil {
-				return err
+			if perr != nil {
+				return perr
 			}
 			if res.Resource != nil {
 				if asJSON {
@@ -116,63 +145,70 @@ func newInfraProvision(opts []Option) *cobra.Command {
 					if res.Resource.Size != "" {
 						row["size"] = res.Resource.Size
 					}
+					if len(res.Resource.PublicIPs) > 0 {
+						row["public_ips"] = res.Resource.PublicIPs
+					}
 					return json.NewEncoder(out).Encode(row)
 				}
 				fmt.Fprintf(out, "provisioned %s (%s)\n", res.Resource.ID, res.Resource.State)
+				if len(res.Resource.PublicIPs) > 0 {
+					fmt.Fprintf(out, "address: %s\n", strings.Join(res.Resource.PublicIPs, ", "))
+				}
 			}
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&providerFlag, "provider", "", "provider package to use, as an alternative to the PROVIDER argument")
 	cmd.Flags().StringVar(&satellite, "satellite", "", "satellite id the owner names at the master (required)")
 	cmd.Flags().StringVar(&master, "master", "", "master base URL (default $BASHY_CLOUDBOX_URL, else https://ai.dhnt.io)")
 	cmd.Flags().StringVar(&token, "token", "", "master session bearer (default the bashy login/bearer ladder)")
 	cmd.Flags().StringVar(&endpoint, "endpoint", "", "optional public endpoint hint sent to the master")
-	cmd.Flags().StringVar(&region, "region", "r1", "provider region")
-	cmd.Flags().StringVar(&size, "size", "s-1vcpu-1gb", "provider size")
-	cmd.Flags().StringVar(&image, "image", "img", "provider image")
+	// No cobra default on these three: the default is per-provider and is
+	// filled in above. The help text lists every built-in's value,
+	// generated from the registry so it cannot drift from the behavior.
+	cmd.Flags().StringVar(&region, "region", "", "provider region ("+defaultsHelp(func(d provisionDefaults) string { return d.Region })+")")
+	cmd.Flags().StringVar(&size, "size", "", "provider size: a DigitalOcean slug or an AWS Lightsail bundle id ("+defaultsHelp(func(d provisionDefaults) string { return d.Size })+")")
+	cmd.Flags().StringVar(&image, "image", "", "provider image: a DigitalOcean image slug or an AWS Lightsail blueprint id ("+defaultsHelp(func(d provisionDefaults) string { return d.Image })+")")
 	cmd.Flags().StringVar(&profile, "profile", "", "satellite workload profile: \"\" (master default), \"standard\" or \"third_party\"")
 	cmd.Flags().StringVar(&hostName, "name", "", "host name (default the satellite id)")
 	cmd.Flags().StringVar(&owner, "owner", "local", "ownership tag scope")
 	cmd.Flags().StringVar(&credentialRef, "credential-ref", "", "pkg/secrets ref for the provider credential (default the provider name)")
 	cmd.Flags().StringVar(&key, "key", "", "idempotency key (default infra-provision-<satellite>)")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "validate and print the exact request plus the size preflight; create nothing")
+	cmd.Flags().StringVar(&sprint, "sprint", "", "sprint number recorded as a governance tag on created resources")
+	cmd.Flags().StringVar(&story, "story", "", "story number recorded as a governance tag on created resources")
+	cmd.Flags().StringVar(&ttl, "ttl", "", "ttl recorded as a governance tag on created resources")
+	cmd.Flags().Float64Var(&budgetCap, "budget-cap", 0,
+		fmt.Sprintf("monthly spend cap in USD the create must stay within (0 = the provider default, $%.0f for aws)", awsprovider.DefaultMonthlyCapUSD))
+	cmd.Flags().Float64Var(&budgetPerInstance, "budget-per-instance", 0,
+		fmt.Sprintf("per-instance monthly ceiling in USD (0 = the provider default, $%.0f for aws)", awsprovider.DefaultPerInstanceUSD))
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "validate and print the exact request plus the size and budget preflight; create nothing")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "machine-readable output")
 	return cmd
 }
 
-// resolveProviderCredential resolves a provider credential exactly like
-// `bashy secret env` would for one ref: the process environment's
-// conventional names for the ref (via pkg/secrets), never a manifest
-// field and never the master.
-//
-// For the digitalocean provider it also accepts the vault-injected
-// DIGITALOCEAN_ACCESS_TOKEN (the name the vault projects; the generic
-// ladder has no _ACCESS_TOKEN shape). The value is returned, never
-// printed: callers pass it to the adapter, never to output.
-func resolveProviderCredential(ref string) (string, error) {
-	if kv, ok := secrets.ResolveAgentKey(os.Environ(), ref); ok {
-		if i := strings.IndexByte(kv, '='); i >= 0 {
-			return kv[i+1:], nil
-		}
+// provisionProviderName resolves which provider to use. The provider is
+// the command's positional argument, and --provider names the same thing:
+// callers and runbooks write it both ways, so both are accepted. Giving
+// both is only an error when they DISAGREE — a command that names one
+// provider twice is unambiguous, and a command that names two is a
+// mistake worth stopping on rather than silently picking one.
+func provisionProviderName(args []string, flag string) (string, error) {
+	var arg string
+	if len(args) == 1 {
+		arg = strings.TrimSpace(args[0])
 	}
-	if ref == digitalocean.Name {
-		if v := strings.TrimSpace(os.Getenv("DIGITALOCEAN_ACCESS_TOKEN")); v != "" {
-			return v, nil
-		}
+	flag = strings.TrimSpace(flag)
+	switch {
+	case arg != "" && flag != "" && arg != flag:
+		return "", fmt.Errorf("fleet: infra provision names two providers (%q and --provider %q); name one", arg, flag)
+	case arg != "":
+		return arg, nil
+	case flag != "":
+		return flag, nil
 	}
-	names := secrets.CredentialEnvNames(ref)
-	if ref == digitalocean.Name {
-		names = append(names, "DIGITALOCEAN_ACCESS_TOKEN")
-	}
-	return "", fmt.Errorf("fleet: no credential for ref %q (want one of %s in the environment via `bashy secret env`)",
-		ref, strings.Join(names, ", "))
+	return "", fmt.Errorf("fleet: infra provision needs a provider (`infra provision PROVIDER` or --provider PROVIDER); `infra list` shows them, built-in: %s",
+		strings.Join(BuiltinInfraProviders(), ", "))
 }
-
-// digitaloceanBaseURL overrides the DigitalOcean API root used by the
-// provision dry-run preflight. Empty means the public API. Tests point it
-// at fakedo; no flag or environment variable sets it, so production can
-// never be redirected by accident.
-var digitaloceanBaseURL string
 
 // provisionProfiles are the satellite workload contracts the master
 // accepts (mirrors cloudbox provisioning validProfile): "" is the master
@@ -193,8 +229,8 @@ func validateProvisionProfile(profile string) error {
 var provisionKeyPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 
 // dryRunRequest is the exact provision request the dry-run validates and
-// prints. BuiltinDO reports whether the provider resolves to the linked-in
-// DigitalOcean adapter (the only provider with a sizes preflight here).
+// prints. Builtin reports whether the provider resolves to a linked-in Go
+// adapter, which is what makes a preflight possible at all.
 type dryRunRequest struct {
 	Provider       string `json:"provider"`
 	Satellite      string `json:"satellite"`
@@ -207,26 +243,34 @@ type dryRunRequest struct {
 	Endpoint       string `json:"endpoint,omitempty"`
 	Owner          string `json:"owner"`
 	CredentialRef  string `json:"credential_ref"`
-	BuiltinDO      bool   `json:"-"`
+	Builtin        bool   `json:"-"`
 }
 
 // dryRunPreflight is the size-availability verdict. Checked is false when
 // no credential (or no supporting provider) was available: the request
 // still prints, with the skip note, and the command succeeds.
+//
+// Budget is the provider's spend verdict when it has one (AWS). It is
+// reported alongside rather than folded into Note, so `--json` callers can
+// read the numbers the refusal was computed from.
 type dryRunPreflight struct {
-	Checked      bool    `json:"checked"`
-	OK           bool    `json:"ok"`
-	Note         string  `json:"note"`
-	PriceMonthly float64 `json:"price_monthly,omitempty"`
-	PriceHourly  float64 `json:"price_hourly,omitempty"`
+	Checked      bool                 `json:"checked"`
+	OK           bool                 `json:"ok"`
+	Note         string               `json:"note"`
+	PriceMonthly float64              `json:"price_monthly,omitempty"`
+	PriceHourly  float64              `json:"price_hourly,omitempty"`
+	Budget       *awsprovider.Verdict `json:"budget,omitempty"`
+	// Request is the provider-shaped plan the create would send, so a
+	// dry-run shows the actual request and not just its flags.
+	Request json.RawMessage `json:"provider_request,omitempty"`
 }
 
 // runProvisionDryRun validates the exact request, prints it, and runs the
-// size-in-region preflight through the provider's sizes API when a
-// credential is present. It performs no enrollment, no master call and no
-// provider create: a size/region mismatch that the live path would only
-// discover as a 422 at create time fails here instead.
-func runProvisionDryRun(cmd *cobra.Command, req dryRunRequest, asJSON bool) error {
+// provider's own plan preflight when a credential is present. It performs
+// no enrollment, no master call and no provider create: a size/region
+// mismatch that the live path would only discover as a 422 at create
+// time — or a spend that would breach the budget cap — fails here instead.
+func runProvisionDryRun(cmd *cobra.Command, req dryRunRequest, openOpts builtinOpenOptions, asJSON bool) error {
 	if strings.TrimSpace(req.Region) == "" {
 		return fmt.Errorf("fleet: infra provision needs --region")
 	}
@@ -243,7 +287,7 @@ func runProvisionDryRun(cmd *cobra.Command, req dryRunRequest, asJSON bool) erro
 	if ref == "" {
 		ref = req.Provider
 	}
-	preflight, err := provisionPreflight(req, ref)
+	preflight, err := provisionPreflight(req, ref, openOpts)
 	if err != nil {
 		return err
 	}
@@ -268,47 +312,64 @@ func runProvisionDryRun(cmd *cobra.Command, req dryRunRequest, asJSON bool) erro
 	fmt.Fprintf(out, "profile: %s\n", profile)
 	fmt.Fprintf(out, "idempotency_key: %s\n", req.IdempotencyKey)
 	fmt.Fprintf(out, "preflight: %s\n", preflight.Note)
+	if b := preflight.Budget; b != nil {
+		fmt.Fprintf(out, "budget: %s\n", b.Reason)
+	}
+	if len(preflight.Request) > 0 {
+		fmt.Fprintf(out, "provider_request: %s\n", preflight.Request)
+	}
 	return nil
 }
 
-// provisionPreflight checks size availability in region through the
-// provider's sizes API. Without a credential it returns an unchecked
-// verdict with a skip note (success: nothing to check against). A present
-// credential that the provider rejects, or a size missing/unavailable in
-// the region, is an error: the dry-run catches the mismatch the live path
-// would only surface as a 422 at create time.
-func provisionPreflight(req dryRunRequest, ref string) (dryRunPreflight, error) {
+// provisionPreflight runs the provider's plan operation: it validates the
+// size and image in the region and, for a provider with a spend policy,
+// returns that policy's verdict. Without a credential it returns an
+// unchecked verdict with a skip note (success: nothing to check against).
+// A present credential that the provider rejects, a size missing in the
+// region, or a refused budget is an ERROR: the dry-run catches what the
+// live path would only surface at create time.
+func provisionPreflight(req dryRunRequest, ref string, openOpts builtinOpenOptions) (dryRunPreflight, error) {
 	cred, err := resolveProviderCredential(ref)
 	if err != nil {
 		return dryRunPreflight{Note: "skipped (" + err.Error() + ")"}, nil
 	}
-	if !req.BuiltinDO {
-		return dryRunPreflight{Note: "skipped (size preflight is implemented for the digitalocean provider only)"}, nil
+	if !req.Builtin {
+		return dryRunPreflight{Note: "skipped (the preflight runs only for a built-in provider: " +
+			strings.Join(BuiltinInfraProviders(), ", ") + ")"}, nil
 	}
-	a, err := digitalocean.New(digitalocean.Config{Token: cred, Owner: req.Owner, BaseURL: digitaloceanBaseURL})
+	openOpts.Credential = cred
+	a, err := openBuiltin(req.Provider, openOpts)
 	if err != nil {
 		return dryRunPreflight{}, err
 	}
-	res, err := a.Do(context.Background(), provider.Request{
+	res, planErr := a.Do(context.Background(), provider.Request{
 		ProtocolVersion: provider.ProtocolVersion,
 		Op:              provider.OpPlan,
 		Spec: &provider.Spec{
 			Name: req.Name, Region: req.Region, Size: req.Size, Image: req.Image,
 		},
 	})
-	if err != nil {
-		return dryRunPreflight{}, fmt.Errorf("fleet: dry-run preflight: %v", err)
+	pf := dryRunPreflight{Checked: true, Request: res.Data}
+	// The plan payload differs per provider; read the fields they share
+	// and the AWS budget verdict when it is there. A payload the plan
+	// returned alongside a refusal is still reported: it is what explains
+	// the refusal.
+	var shared struct {
+		PriceMonthly float64              `json:"price_monthly"`
+		PriceHourly  float64              `json:"price_hourly"`
+		Budget       *awsprovider.Verdict `json:"budget"`
 	}
-	pf := dryRunPreflight{Checked: true, OK: true}
-	if len(res.Data) != 0 {
-		var plan digitalocean.Plan
-		if json.Unmarshal(res.Data, &plan) == nil {
-			pf.PriceMonthly, pf.PriceHourly = plan.PriceMonthly, plan.PriceHourly
-		}
+	if len(res.Data) != 0 && json.Unmarshal(res.Data, &shared) == nil {
+		pf.PriceMonthly, pf.PriceHourly, pf.Budget = shared.PriceMonthly, shared.PriceHourly, shared.Budget
 	}
-	if pf.PriceMonthly != 0 {
+	if planErr != nil {
+		return dryRunPreflight{}, fmt.Errorf("fleet: dry-run preflight: %v", planErr)
+	}
+	pf.OK = true
+	switch {
+	case pf.PriceMonthly != 0:
 		pf.Note = fmt.Sprintf("size %s is available in region %s ($%.2f/mo)", req.Size, req.Region, pf.PriceMonthly)
-	} else {
+	default:
 		pf.Note = fmt.Sprintf("size %s is available in region %s", req.Size, req.Region)
 	}
 	return pf, nil
