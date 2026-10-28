@@ -104,9 +104,14 @@ type ReplicaOptions struct {
 }
 
 func (o ReplicaOptions) repos(ctx context.Context, p *giteaAPI) ([]repoInfo, error) {
-	if o.Repo != "" {
+	return listRepos(ctx, p, o.Repo)
+}
+
+// listRepos resolves one owner/name, or every repo the token can see.
+func listRepos(ctx context.Context, p *giteaAPI, repo string) ([]repoInfo, error) {
+	if repo != "" {
 		var r repoInfo
-		if _, err := p.do(ctx, "GET", "/repos/"+o.Repo, nil, &r); err != nil {
+		if _, err := p.do(ctx, "GET", "/repos/"+repo, nil, &r); err != nil {
 			return nil, err
 		}
 		return []repoInfo{r}, nil

@@ -2223,7 +2223,7 @@ compiled in). Expose it over the mesh with: outpost mesh service add git <addr>.
 	}
 	pathCmd.Flags().StringVar(&o.Version, "gitea-version", "", "Gitea release tag (default: "+DefaultVersion+")")
 
-	root.AddCommand(serve, start, status, stopCmd, logs, exposeCmd, pathCmd, proxyCmd, newReplicaCmd(), newCloneCmd(), newRemoteCmd())
+	root.AddCommand(serve, start, status, stopCmd, logs, exposeCmd, pathCmd, proxyCmd, newReplicaCmd(), newMirrorCmd(), newCloneCmd(), newRemoteCmd())
 	return root
 }
 
