@@ -100,18 +100,17 @@ func parseFormAnswer(out []byte, choices []string) (FormAnswer, error) {
 }
 
 func zenityForm(ctx context.Context, path string, r FormRequest) (FormAnswer, error) {
+	// Zenity does not expose a button-enabled hook while its dialog is open.
+	// Preview once before opening and always revalidate on a clipboard click.
 	peek := os.Getenv("BASHY_ASK_CLIPBOARD_PEEK") != "0"
 	choices := r.Choices
 	clipNote := ""
 	if peek {
-		value, err := linuxClipboardRead(ctx)
-		if err != nil || !clipboardEligible(r.ClipboardCategory, value) {
+		var state clipboardPreview
+		state.update(0, r.ClipboardCategory, func() (string, error) { return linuxClipboardRead(ctx) })
+		if !state.enabled {
 			choices = withoutClipboard(choices)
-			clipNote = "\nUse clipboard unavailable: clipboard cannot be read"
-			if err == nil {
-				_, reason := sensitive.ClipboardShape(r.ClipboardCategory, value)
-				clipNote = "\nUse clipboard unavailable: " + reason
-			}
+			clipNote = "\nUse clipboard unavailable: " + state.reason
 		}
 	}
 	args := []string{"--forms", "--add-entry=" + r.Name, "--title=" + r.Title,
@@ -166,6 +165,27 @@ func clipboardEligible(category, value string) bool {
 	return ok
 }
 
+// clipboardPreview tracks only the pasteboard change counter and eligibility.
+// The sampled value is discarded after each shape check.
+type clipboardPreview struct {
+	count   int64
+	seen    bool
+	enabled bool
+	reason  string
+}
+
+func (p *clipboardPreview) update(count int64, category string, read func() (string, error)) bool {
+	if p.seen && p.count == count {
+		return false
+	}
+	p.count, p.seen = count, true
+	p.enabled, p.reason = false, "clipboard unavailable"
+	if value, err := read(); err == nil {
+		p.enabled, p.reason = sensitive.ClipboardShape(category, value)
+	}
+	return true
+}
+
 func withoutClipboard(choices []string) []string {
 	out := make([]string, 0, len(choices))
 	for _, choice := range choices {
@@ -215,7 +235,24 @@ const macFormSrc = `ObjC.import('Cocoa');
 function run(argv) {
  var prompt=argv[0], title=argv[1], name=argv[2], kind=argv[3], choices=JSON.parse(argv[4]);
  var pattern=new RegExp(argv[5]), category=argv[6], peek=argv[7]==='true';
- var app=$.NSApplication.sharedApplication; app.setActivationPolicy($.NSApplicationActivationPolicyAccessory);
+ var app=$.NSApplication.sharedApplication; app.setActivationPolicy($.NSApplicationActivationPolicyRegular);
+ // osascript has no Edit menu by default. Cocoa text fields dispatch these
+ // standard actions through the menu's key equivalents.
+ var mainMenu=$.NSMenu.alloc.initWithTitle('Main');
+ var editRoot=$.NSMenuItem.alloc.initWithTitleActionKeyEquivalent('Edit',null,'');
+ var editMenu=$.NSMenu.alloc.initWithTitle('Edit');
+ function editItem(menu,title,action,key,modifiers) {
+  var item=$.NSMenuItem.alloc.initWithTitleActionKeyEquivalent(title,action,key);
+  if(modifiers) item.setKeyEquivalentModifierMask(modifiers);
+  menu.addItem(item); return item;
+ }
+ editItem(editMenu,'Undo','undo:','z'); editItem(editMenu,'Redo','redo:','Z');
+ editMenu.addItem($.NSMenuItem.separatorItem);
+ editItem(editMenu,'Cut','cut:','x'); editItem(editMenu,'Copy','copy:','c');
+ editItem(editMenu,'Paste','paste:','v'); editItem(editMenu,'Select All','selectAll:','a');
+ // Control+V is familiar to operators using the browser's keyboard habits.
+ editItem(editMenu,'Paste (Ctrl+V)','paste:','v',$.NSEventModifierFlagControl);
+ mainMenu.addItem(editRoot); mainMenu.setSubmenuForItem(editMenu,editRoot); app.setMainMenu(mainMenu);
  var alert=$.NSAlert.alloc.init; alert.setMessageText(title);
  alert.setInformativeText(prompt+'\nClipboard history apps and Universal Clipboard may keep a copy.');
  for (var i=0;i<choices.length;i++) alert.addButtonWithTitle(choices[i]);
@@ -223,11 +260,15 @@ function run(argv) {
  var box=$.NSView.alloc.initWithFrame($.NSMakeRect(0,0,480,90));
  var label=$.NSTextField.labelWithString(name); label.setFrame($.NSMakeRect(0,67,480,20)); box.addSubview(label);
  var field=(kind==='secret' ? $.NSSecureTextField : $.NSTextField).alloc.initWithFrame($.NSMakeRect(0,40,480,26)); box.addSubview(field);
+ var contextMenu=$.NSMenu.alloc.initWithTitle('Edit');
+ editItem(contextMenu,'Cut','cut:',''); editItem(contextMenu,'Copy','copy:','');
+ editItem(contextMenu,'Paste','paste:',''); editItem(contextMenu,'Select All','selectAll:','');
+ field.setMenu(contextMenu);
  var status=$.NSTextField.labelWithString(''); status.setFrame($.NSMakeRect(110,8,370,20)); box.addSubview(status);
  var show=$.NSButton.alloc.initWithFrame($.NSMakeRect(0,8,100,20));
  var plain=null;
  if(kind==='secret') {
-  plain=$.NSTextField.alloc.initWithFrame($.NSMakeRect(0,40,480,26)); plain.setHidden(true); box.addSubview(plain);
+  plain=$.NSTextField.alloc.initWithFrame($.NSMakeRect(0,40,480,26)); plain.setHidden(true); plain.setMenu(contextMenu); box.addSubview(plain);
   ObjC.registerSubclass({name:'BashyReveal', methods:{'toggle:':{types:['void',['id']], implementation:function(sender){
    if (Number(sender.state)===1) { plain.setStringValue(field.stringValue); plain.setHidden(false); field.setHidden(true); plain.becomeFirstResponder(); }
    else { field.setStringValue(plain.stringValue); plain.setHidden(true); field.setHidden(false); field.becomeFirstResponder(); }
@@ -250,7 +291,14 @@ function run(argv) {
   if(count!==lastCount) { lastCount=count; refresh(); }
  }}}});
  var watcher=$.BashyClipboardWatcher.alloc.init;
- var timer=peek ? $.NSTimer.scheduledTimerWithTimeIntervalTargetSelectorUserInfoRepeats(0.35,watcher,'refresh:',null,true) : null;
+ // A scheduled timer belongs to the default run-loop mode, while NSAlert
+ // runs in the modal mode. Register in common and modal modes explicitly.
+ var timer=peek ? $.NSTimer.timerWithTimeIntervalTargetSelectorUserInfoRepeats(0.35,watcher,'refresh:',null,true) : null;
+ if(timer) {
+  var loop=$.NSRunLoop.mainRunLoop;
+  loop.addTimerForMode(timer,$.NSRunLoopCommonModes);
+  loop.addTimerForMode(timer,$.NSModalPanelRunLoopMode);
+ }
  app.activateIgnoringOtherApps(true); alert.window.makeKeyAndOrderFront(null);
  var result={choice:'',value:''};
  while(true) {
