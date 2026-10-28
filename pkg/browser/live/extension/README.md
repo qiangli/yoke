@@ -1,53 +1,62 @@
-# ycode-live Chrome extension
+# bashy live Chrome extension
 
-This extension lets ycode drive **this** Chrome instance — using your
-real, logged-in profile — through a local WebSocket to a ycode session.
+Lets `bashy browser --mode live` drive **this** Chrome — your real,
+logged-in profile — through a local WebSocket to `bashy browser hub`.
+(The manifest name `ycode-live` and the folder `ycode-chrome-ext` are
+kept so an extension loaded before the bashy migration keeps working.)
 
 ## License
 
-Apache-2.0. Source bytes shipped in the extension are the same bytes
-checked into `internal/runtime/mcpservers/live/extension/` in the ycode
-repository; the binary embeds them via `go:embed all:extension`. No
-third-party JavaScript, no minified bundles.
+Apache-2.0. The bytes here are embedded in the bashy binary
+(`go:embed all:extension`). No third-party JavaScript, no minified
+bundles.
 
 ## Install (one-time)
 
-1. Run `ycode browser setup live`. ycode prints a path like
-   `~/Downloads/ycode-chrome-ext/`.
-2. Open `chrome://extensions`.
-3. Toggle **Developer mode** (top-right).
-4. Click **Load unpacked** → point at the path from step 1.
-5. Pin the extension to the toolbar (puzzle-piece icon → pin).
+1. Run `bashy browser setup live`. It extracts the extension to
+   `~/Downloads/ycode-chrome-ext/`, opens `chrome://extensions`, opens
+   the folder, and copies its path to the clipboard (`--no-open` skips
+   the desktop actions).
+2. In `chrome://extensions`, turn on **Developer mode**, then drag the
+   folder onto the page (or **Load unpacked** and paste the path).
+3. On the tab to drive, click the extension icon → **Connect this tab**.
 
-## Use
+Developer mode + Load unpacked is the one human step left; it goes away
+with a Chrome Web Store listing (the `chrome-ext-*` release targets
+build the upload package).
 
-1. In the Chrome tab you want ycode to control, click the ycode-live
-   toolbar icon.
-2. Confirm the port matches your ycode setting (default `58082`).
-3. Click **Connect this tab**. The status badge turns green.
-4. From ycode, run any `browser_*` action — they all target the
-   connected tab.
+## After the first Connect
+
+- The extension remembers the Connect until you press Disconnect: it
+  reconnects by itself after a Chrome restart, a worker restart, or a
+  hub restart (a periodic alarm retries while the hub is down).
+- Upgrades are zero-touch: when an older extension connects, the hub
+  refreshes `~/Downloads/ycode-chrome-ext/` from the binary and asks the
+  extension to reload; it reconnects running the new code. (Extensions
+  older than 0.8.0 cannot self-reload — reload them once at
+  `chrome://extensions`.)
 
 ## Wire protocol
 
 Plain JSON over WebSocket; not MCP. See `protocol.go` in the parent Go
-package for the request/response shapes. The extension talks only to
-`ws://127.0.0.1:<port>/ws` — it never reaches the public internet.
+package. The extension talks only to `ws://127.0.0.1:<port>/ws`.
 
 ## Files
 
 - `manifest.json` — Manifest V3 declaration, permissions, popup.
-- `background.js` — service worker; owns the WebSocket and the
-  command dispatch table. `chrome.alarms` keeps it alive.
-- `popup.html` / `popup.js` — Connect / Disconnect UI; persists the
-  port via `chrome.storage.local`.
+- `background.js` — service worker; owns the WebSocket, the dispatch
+  table, reconnect, and frame routing.
+- `page.js` — the page-side core (extract, click, type, select, …),
+  injected into every frame; fixture-tested by `page_test.go`.
+- `frames.js` — pure helpers that number elements tab-wide across
+  frames and route an index back to its frame.
+- `popup.html` / `popup.js` — Connect / Disconnect UI.
 
 ## Security model
 
 - Loopback only. The extension never connects to anything other than
   `127.0.0.1`.
-- Manifest declares the minimum permissions necessary
-  (`tabs`, `scripting`, `activeTab`, `storage`, `alarms`).
 - All page automation runs in your real Chrome session. **Treat what
-  ycode sees as confidential** — never use this mode for prompts that
-  may exfiltrate page contents to a third party without your consent.
+  the agent sees as confidential** — never use this mode for prompts
+  that may exfiltrate page contents to a third party without your
+  consent.

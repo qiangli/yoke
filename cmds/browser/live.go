@@ -5,7 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
+	goruntime "runtime"
+	"strings"
 	"syscall"
 
 	"github.com/qiangli/coreutils/tool"
@@ -48,9 +51,24 @@ func browserHub(rc *tool.RunContext, ctx context.Context, args []string, asJSON 
 	return 0
 }
 
+// setupHooks are the desktop side effects of `setup live`, swappable so
+// tests never launch Chrome or touch the clipboard.
+type setupHooks struct {
+	openExtensions func() error            // open chrome://extensions in Chrome
+	reveal         func(dir string) error  // show the folder in Finder/Explorer
+	copyText       func(text string) error // put the path on the clipboard
+}
+
+var hooks = setupHooks{openExtensions: openChromeExtensions, reveal: revealFolder, copyText: copyToClipboard}
+
 // browserSetup handles `bashy browser setup live` — extract the embedded
-// extension so the user can Load unpacked it in Chrome.
-func browserSetup(rc *tool.RunContext, args []string, asJSON bool) int {
+// extension and walk the human through the one-time Load unpacked step:
+// Chrome opens on chrome://extensions, the folder opens beside it for
+// drag-and-drop, and its path is on the clipboard for the file picker.
+// After that the extension reconnects and upgrades itself (the hub
+// refreshes the folder and asks it to reload). --no-open skips the
+// desktop actions (headless hosts, scripts).
+func browserSetup(rc *tool.RunContext, args []string, asJSON, noOpen bool) int {
 	mode := "live"
 	if len(args) > 0 {
 		mode = args[0]
@@ -66,9 +84,28 @@ func browserSetup(rc *tool.RunContext, args []string, asJSON bool) int {
 			fmt.Fprintf(rc.Err, "browser setup live: %v\n", err)
 			return 1
 		}
-		fmt.Fprintf(rc.Out, "extension extracted to: %s\n", abs)
-		fmt.Fprintln(rc.Out, "load it: chrome://extensions → Developer mode → Load unpacked → pick that folder,")
-		fmt.Fprintln(rc.Out, "then start the hub: bashy browser hub")
+		fmt.Fprintf(rc.Out, "extension v%s extracted to: %s\n", live.EmbeddedVersion(), abs)
+		var did []string
+		if !noOpen {
+			if hooks.openExtensions() == nil {
+				did = append(did, "opened chrome://extensions")
+			}
+			if hooks.reveal(abs) == nil {
+				did = append(did, "opened the folder")
+			}
+			if hooks.copyText(abs) == nil {
+				did = append(did, "copied its path")
+			}
+		}
+		if len(did) > 0 {
+			fmt.Fprintf(rc.Out, "(%s)\n", strings.Join(did, ", "))
+		}
+		fmt.Fprintln(rc.Out, "one-time, in Chrome:")
+		fmt.Fprintln(rc.Out, "  1. chrome://extensions → turn on Developer mode (top right)")
+		fmt.Fprintln(rc.Out, "  2. drag the folder onto that page — or Load unpacked and paste the path")
+		fmt.Fprintln(rc.Out, "  3. on the tab to drive, click the extension icon → Connect this tab")
+		fmt.Fprintln(rc.Out, "then: bashy browser hub. Already installed? Nothing to do — the extension")
+		fmt.Fprintln(rc.Out, "reconnects by itself and the hub reloads it onto these files.")
 		return 0
 	case "probe":
 		fmt.Fprintln(rc.Out, "probe needs no setup — start Chrome with --remote-debugging-port=9222.")
@@ -80,4 +117,51 @@ func browserSetup(rc *tool.RunContext, args []string, asJSON bool) int {
 		fmt.Fprintf(rc.Err, "browser setup: unknown mode %q (live|probe|solo)\n", mode)
 		return 2
 	}
+}
+
+func openChromeExtensions() error {
+	const url = "chrome://extensions"
+	switch goruntime.GOOS {
+	case "darwin":
+		return exec.Command("open", "-a", "Google Chrome", url).Run()
+	case "windows":
+		return exec.Command("cmd", "/c", "start", "", "chrome", url).Run()
+	default:
+		for _, c := range []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser"} {
+			if p, err := exec.LookPath(c); err == nil {
+				return exec.Command(p, url).Start()
+			}
+		}
+		return fmt.Errorf("no Chrome found")
+	}
+}
+
+func revealFolder(dir string) error {
+	switch goruntime.GOOS {
+	case "darwin":
+		return exec.Command("open", dir).Run()
+	case "windows":
+		_ = exec.Command("explorer", dir).Run() // explorer exits 1 on success
+		return nil
+	default:
+		return exec.Command("xdg-open", dir).Start()
+	}
+}
+
+func copyToClipboard(text string) error {
+	var cmd *exec.Cmd
+	switch goruntime.GOOS {
+	case "darwin":
+		cmd = exec.Command("pbcopy")
+	case "windows":
+		cmd = exec.Command("clip")
+	default:
+		if _, err := exec.LookPath("wl-copy"); err == nil {
+			cmd = exec.Command("wl-copy")
+		} else {
+			cmd = exec.Command("xclip", "-selection", "clipboard")
+		}
+	}
+	cmd.Stdin = strings.NewReader(text)
+	return cmd.Run()
 }

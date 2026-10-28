@@ -180,7 +180,7 @@ var subcommands = map[string]subcommand{
 		Out:  "progress on stdout, diagnostics on stderr (this is the ONLY subcommand that logs)",
 	},
 	"setup": {
-		Name: "setup", Args: "[live|probe|solo] [dir]",
+		Name: "setup", Args: "[--no-open] [live|probe|solo] [dir]",
 		One:  "print/extract what a mode needs before first use",
 		Mode: "any",
 		Out:  "instructions on stdout",

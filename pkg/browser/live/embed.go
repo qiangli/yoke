@@ -12,6 +12,7 @@ package live
 
 import (
 	"embed"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -67,4 +68,43 @@ func ExtractExtension(dst string) (string, error) {
 func DefaultExtractDir() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, "Downloads", "ycode-chrome-ext")
+}
+
+// EmbeddedVersion is the version of the extension shipped in this
+// binary (its manifest.json).
+func EmbeddedVersion() string {
+	b, err := extensionFS.ReadFile("extension/manifest.json")
+	if err != nil {
+		return ""
+	}
+	return manifestVersion(b)
+}
+
+func manifestVersion(b []byte) string {
+	var m struct {
+		Version string `json:"version"`
+	}
+	if json.Unmarshal(b, &m) != nil {
+		return ""
+	}
+	return m.Version
+}
+
+// RefreshIfStale re-extracts the embedded extension into dir when dir
+// already holds an older copy (a folder the user loaded unpacked), so
+// a chrome.runtime.reload picks up the new files. A missing folder is
+// left alone: setup, not the hub, creates it. Reports whether it wrote.
+func RefreshIfStale(dir string) (bool, error) {
+	b, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if err != nil {
+		return false, nil
+	}
+	have, want := manifestVersion(b), EmbeddedVersion()
+	if have == "" || want == "" || !versionLess(have, want) {
+		return false, nil
+	}
+	if _, err := ExtractExtension(dir); err != nil {
+		return false, err
+	}
+	return true, nil
 }

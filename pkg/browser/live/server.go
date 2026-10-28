@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -40,13 +41,22 @@ type hub struct {
 	lastTabURL string
 
 	nextID atomic.Int64
+
+	// reloadDir is the unpacked-extension folder the hub refreshes
+	// before asking a stale extension to reload itself; reloaded
+	// remembers versions already asked, so a folder that still holds
+	// the old copy cannot cause a reload loop.
+	reloadDir string
+	reloaded  map[string]bool
 }
 
 func newHub(port int) *hub {
 	return &hub{
-		addr:    fmt.Sprintf("127.0.0.1:%d", port),
-		up:      websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }},
-		pending: make(map[int64]chan wsResponse),
+		addr:      fmt.Sprintf("127.0.0.1:%d", port),
+		up:        websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }},
+		pending:   make(map[int64]chan wsResponse),
+		reloadDir: DefaultExtractDir(),
+		reloaded:  make(map[string]bool),
 	}
 }
 
@@ -195,6 +205,50 @@ func (h *hub) handleUnsolicited(resp wsResponse) {
 		close(hr)
 	}
 	logInfo("live: extension hello", "version", hi.Version, "methods", len(hi.Methods))
+	if dir, ok := h.planReload(hi); ok {
+		go h.hotReload(dir, hi.Version)
+	}
+}
+
+// planReload decides whether a connecting extension is older than the
+// one this binary ships AND can reload itself (it advertises
+// "reload"; 0.8.0+). Once per version per hub, so a folder that still
+// holds the old copy cannot cause a loop.
+func (h *hub) planReload(hi extHello) (string, bool) {
+	want := EmbeddedVersion()
+	if hi.Version == "" || want == "" || !versionLess(hi.Version, want) {
+		return "", false
+	}
+	if !slices.Contains(hi.Methods, "reload") {
+		logInfo("live: extension is older than this bashy and cannot self-reload; reload it once at chrome://extensions",
+			"version", hi.Version, "shipped", want)
+		return "", false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.reloaded[hi.Version] {
+		logWarn("live: extension still stale after a reload; it was loaded from another folder — run `bashy browser setup live`",
+			"version", hi.Version, "shipped", want)
+		return "", false
+	}
+	h.reloaded[hi.Version] = true
+	return h.reloadDir, true
+}
+
+// hotReload refreshes the unpacked folder and asks the extension to
+// chrome.runtime.reload(); it reconnects by itself with the new code.
+func (h *hub) hotReload(dir, from string) {
+	if dir != "" {
+		if wrote, err := RefreshIfStale(dir); err != nil {
+			logWarn("live: refresh extension folder", "dir", dir, "error", err)
+		} else if wrote {
+			logInfo("live: refreshed extension folder", "dir", dir)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, err := h.call(ctx, "reload", nil)
+	logInfo("live: asked extension to reload", "from", from, "to", EmbeddedVersion(), "ack_error", err)
 }
 
 // ExtVersion returns the version reported by the extension's _hello

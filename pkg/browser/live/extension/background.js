@@ -34,12 +34,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     }
     wantConnected = true;
     reconnectMs = RECONNECT_BASE_MS;
+    rememberIntent();
     openWS();
     sendResponse({ status: "connecting", port: connectedPort });
   } else if (msg && msg.type === "ycode-live:disconnect") {
     // Flip intent off *before* closing so the socket's onclose handler
     // doesn't schedule a fresh reconnect.
     wantConnected = false;
+    rememberIntent();
+    chrome.alarms.clear("ycode-live-reconnect");
     if (reconnectTimer !== null) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
@@ -59,6 +62,37 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   return true;
 });
+
+// --- remembered intent: zero-touch reconnect ---
+//
+// The first Connect is remembered (chrome.storage.local) until the user
+// presses Disconnect. A Chrome restart, a service-worker restart, a hub
+// restart, or a hub-requested reload then reconnects by itself: the
+// worker re-reads the intent at startup, and a periodic alarm (which,
+// unlike setTimeout, wakes a suspended MV3 worker) retries while the
+// hub is down. Loopback only; nothing new is reachable.
+
+function rememberIntent() {
+  try {
+    chrome.storage.local.set({ liveIntent: { want: wantConnected, port: connectedPort, tabId: activeTabId } });
+  } catch (_) { /* storage unavailable: intent lasts for this worker only */ }
+}
+
+async function restoreIntent() {
+  try {
+    const { liveIntent } = await chrome.storage.local.get("liveIntent");
+    if (!liveIntent || !liveIntent.want || wantConnected) return;
+    wantConnected = true;
+    connectedPort = liveIntent.port || DEFAULT_PORT;
+    if (liveIntent.tabId) activeTabId = liveIntent.tabId; // stale ids fall back in targetTab()
+    reconnectMs = RECONNECT_BASE_MS;
+    openWS();
+  } catch (_) { /* nothing remembered */ }
+}
+
+chrome.runtime.onStartup.addListener(restoreIntent);
+chrome.runtime.onInstalled.addListener(restoreIntent);
+restoreIntent();
 
 // --- websocket lifecycle ---
 
@@ -80,6 +114,7 @@ function openWS() {
   }
   ws.onopen = () => {
     reconnectMs = RECONNECT_BASE_MS;
+    chrome.alarms.clear("ycode-live-reconnect");
     chrome.alarms.create("ycode-live-keepalive", { periodInMinutes: KEEPALIVE_PERIOD_MIN });
     // _hello envelope — id == 0, method == "_hello", result carries
     // {version, methods, permissions}. The hub uses this to detect
@@ -114,6 +149,8 @@ function scheduleReconnect() {
   if (!wantConnected) {
     return;
   }
+  // Backstop that survives worker suspension (min period ~30s).
+  chrome.alarms.create("ycode-live-reconnect", { periodInMinutes: 0.5 });
   if (reconnectTimer !== null) {
     return; // a reconnect is already pending
   }
@@ -125,6 +162,11 @@ function scheduleReconnect() {
 }
 
 chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === "ycode-live-reconnect") {
+    if (!wantConnected) restoreIntent();
+    else openWS();
+    return;
+  }
   if (alarm.name === "ycode-live-keepalive" && ws && ws.readyState === WebSocket.OPEN) {
     // No-op send keeps the MV3 worker alive without server traffic.
     try { ws.send(JSON.stringify({ id: 0, method: "_ping" })); } catch (e) { /* ignore */ }
@@ -140,6 +182,9 @@ const SUPPORTED_METHODS = [
   "clipboard_read", "clipboard_write",
   "cookies_get", "storage_get", "capabilities",
   "dispatch_event",
+  // The hub asks a stale extension to reload itself after refreshing
+  // its unpacked folder (zero-touch upgrade).
+  "reload",
   // DevTools-flavored — gated on a long-lived chrome.debugger attach
   // managed by debuggerAttach below.
   "network_list", "console_get", "perf_start", "perf_stop", "lighthouse",
@@ -386,6 +431,11 @@ async function targetTab() {
 async function dispatch(method, params) {
   // Capabilities does not need a tab (it's a pure metadata read).
   if (method === "capabilities") return capabilities();
+  if (method === "reload") {
+    // Answer first, then reload; restoreIntent reconnects the new code.
+    setTimeout(() => chrome.runtime.reload(), 200);
+    return { content: "reloading", data: JSON.stringify({ from: chrome.runtime.getManifest().version }) };
+  }
   if (method === "cookies_get") return cookiesGet(params);
   if (method === "tabs") return handleTabs(params);
 

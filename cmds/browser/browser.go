@@ -103,6 +103,7 @@ func run(rc *tool.RunContext, args []string) int {
 	index := fs.Int("index", 0, "click/type: element index from `extract` (1-based)")
 	matchText := fs.String("text", "", "click: match an element by its visible text")
 	scope := fs.String("scope", "", "extract/click: CSS selector constraining the search root")
+	noOpen := fs.Bool("no-open", false, "setup live: do not open Chrome/the folder or touch the clipboard")
 	includeHidden := fs.Bool("include-hidden", false, "extract/click: keep elements that are present but not displayed")
 	limit := fs.Int("limit", 0, "extract: max elements to return (default 50)")
 	offset := fs.Int("offset", 0, "extract: skip this many elements")
@@ -138,7 +139,7 @@ func run(rc *tool.RunContext, args []string) int {
 	case "hub":
 		return browserHub(rc, ctx, operands[1:], *asJSON)
 	case "setup":
-		return browserSetup(rc, operands[1:], *asJSON)
+		return browserSetup(rc, operands[1:], *asJSON, *noOpen)
 	case "fetch":
 		return browserFetch(rc, ctx, operands[1:], *asJSON)
 	case "skills":
