@@ -203,6 +203,9 @@ func adaptiveRun(cfg *config, sk Skill, src Source, ps *ProbeSet, dir string, lo
 	if err != nil {
 		return AttestRecord{}, OutcomeFailed, err
 	}
+	if p.body != "" {
+		return runBashSharp(cfg, sk.Name, p, dir, log, complete, attempts, true)
+	}
 	vs := cfg.versions()
 
 	effective, fromOverlay := p.base, false

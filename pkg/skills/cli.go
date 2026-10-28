@@ -25,10 +25,11 @@ var hostScrubber = redact.FromHost
 
 // config is assembled from Options by NewSkillsCmd.
 type config struct {
-	sources  []Source
-	statics  map[string]string
-	cfgDir   string
-	cacheTTL time.Duration
+	sources         []Source
+	statics         map[string]string
+	cfgDir          string
+	cacheTTL        time.Duration
+	bashSharpRunner BashSharpRunner
 }
 
 type Option func(*config)
@@ -1254,6 +1255,10 @@ func renderReceipt(cmd *cobra.Command, rec AttestRecord, outcome string, asJSON 
 		fmt.Fprintf(cmd.OutOrStdout(), "failed: %s\n", strings.Join(a.Failed, " "))
 	}
 	var effs []string
+	if rec.Status != nil {
+		effs = append(effs, rec.Attestation.Effects...)
+		fmt.Fprintf(cmd.OutOrStdout(), "identity: %s\nexit: %d\n", rec.Identity, *rec.Status)
+	}
 	for _, e := range a.Effects {
 		effs = append(effs, e.String())
 	}
