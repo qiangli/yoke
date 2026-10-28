@@ -26,6 +26,13 @@ const typeformSSN = `<!doctype html><html><body>
 <input type="text" id="answer" placeholder="Type your answer here..."><button>OK</button></div>
 </body></html>`
 
+// typeformTrunc is a page that truncates whatever is typed to five
+// characters: the operator's answer cannot stick, so the fill must fail.
+const typeformTrunc = `<!doctype html><html><body>
+<div data-qa="question"><h1>Social Security Number *</h1>
+<input type="text" id="answer" oninput="this.value=this.value.slice(0,5)"><button>OK</button></div>
+</body></html>`
+
 const orderPage = `<!doctype html><html><body><form>
 <label>Order number <input id="order"></label>
 <label>Phone <input id="phone" type="tel"></label>
@@ -47,7 +54,7 @@ func TestSoloGuardEndToEnd(t *testing.T) {
 	t.Setenv("BASHY_API_KEY", "")
 
 	mux := http.NewServeMux()
-	for path, body := range map[string]string{"/ssn": typeformSSN, "/order": orderPage} {
+	for path, body := range map[string]string{"/ssn": typeformSSN, "/trunc": typeformTrunc, "/order": orderPage} {
 		body := body
 		mux.HandleFunc(path, func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, body) })
 	}
@@ -98,6 +105,18 @@ func TestSoloGuardEndToEnd(t *testing.T) {
 	if res.OutcomeClass != guard.ClassFilledByHuman || value("#answer") != "078-05-1120" ||
 		strings.Contains(res.Content+res.Data+res.Error, "078-05-1120") {
 		t.Fatalf("provide: %+v value=%q", res, value("#answer"))
+	}
+	if !strings.Contains(res.Data, `"verified":"match"`) || !strings.Contains(res.Data, `"field_len":11`) {
+		t.Fatalf("provide not verified: %s", res.Data)
+	}
+	// A page that truncates the answer: the fill is verified as a mismatch
+	// and FAILS (exit 6) — only the verdict and the lengths come back.
+	exec(wire.Action{Type: wire.ActionNavigate, URL: srv.URL + "/trunc"})
+	res = exec(wire.Action{Type: wire.ActionType, Selector: "#answer", Text: "Ada"})
+	if code, _ := guard.ExitCode(res); res.OutcomeClass != guard.ClassFillMismatch || code != guard.ExitFillMismatch || res.Success ||
+		!strings.Contains(res.Data, `"verified":"mismatch"`) || !strings.Contains(res.Data, `"field_len":5`) ||
+		!strings.Contains(res.Data, `"value_len":11`) || strings.Contains(res.Content+res.Data+res.Error, "078-0") {
+		t.Fatalf("truncated provide: %+v value=%q", res, value("#answer"))
 	}
 	t.Setenv(guard.FakeAskEnv, "")
 

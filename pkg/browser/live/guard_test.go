@@ -22,6 +22,30 @@ type fakeExt struct {
 	mu     sync.Mutex
 	frames []string
 	field  guard.Field
+	// page is what the page makes of a guard_fill value (nil: keeps it);
+	// noVerdict plays a 0.9.1 extension that answers without one.
+	page      func(string) string
+	noVerdict bool
+}
+
+// fill answers guard_fill as background.js does: the page's verdict and
+// the two lengths, nothing of the value.
+func (f *fakeExt) fill(params map[string]any) json.RawMessage {
+	if f.noVerdict {
+		return mustJSON(extResult{Content: "filled"})
+	}
+	text, _ := params["text"].(string)
+	got := text
+	if f.page != nil {
+		got = f.page(text)
+	}
+	v := map[string]any{"verified": "mismatch", "field_len": len(got), "value_len": len(text)}
+	if got == text {
+		v["verified"] = "match"
+	}
+	data, _ := json.Marshal(v)
+	v["content"], v["data"] = "filled", string(data)
+	return mustJSON(v)
 }
 
 func (f *fakeExt) seen() string {
@@ -67,6 +91,9 @@ func startHubWithExt(t *testing.T, version string, methods []string, field guard
 		t.Fatal(err)
 	}
 	ext := &fakeExt{field: field}
+	if ver, ok := extSetup[t.Name()]; ok {
+		ext.page, ext.noVerdict = ver.page, ver.noVerdict
+	}
 	go func() {
 		for {
 			_, raw, err := conn.ReadMessage()
@@ -84,6 +111,8 @@ func startHubWithExt(t *testing.T, version string, methods []string, field guard
 			switch req.Method {
 			case "guard_field":
 				result = mustJSON(ext.field)
+			case "guard_fill":
+				result = ext.fill(req.Params)
 			default:
 				result = mustJSON(extResult{Content: req.Method + "-done"})
 			}
@@ -148,7 +177,8 @@ func TestLiveProvideFillsByReference(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if res.OutcomeClass != guard.ClassFilledByHuman || res.Content != guard.ContentFilledByHuman {
+		if res.OutcomeClass != guard.ClassFilledByHuman || res.Content != guard.ContentFilledByHuman ||
+			!strings.Contains(res.Data, `"verified":"match"`) || !strings.Contains(res.Data, `"value_len":11`) {
 			t.Fatalf("%s: %+v", name, res)
 		}
 		if b, _ := json.Marshal(res); strings.Contains(string(b), "078-05-1120") {
@@ -218,5 +248,65 @@ func TestLiveOldExtensionRefusesWritesLoudly(t *testing.T) {
 	}
 	if res, _ := svc.Execute(context.Background(), wire.Action{Type: wire.ActionNavigate, URL: "https://x.test"}); !res.Success {
 		t.Fatalf("navigate broke on an old extension: %+v", res)
+	}
+}
+
+// extSetup scripts the fake extension's page per test (by test name).
+var extSetup = map[string]struct {
+	page      func(string) string
+	noVerdict bool
+}{
+	"TestLiveProvideFillMismatch":  {page: func(s string) string { return strings.ReplaceAll(s, "-", "")[:5] }},
+	"TestLiveProvideNeedsAVerdict": {noVerdict: true},
+}
+
+// A page that truncates or rewrites the operator's answer makes the fill a
+// FAILURE — guard:fill-mismatch, exit 6 — reported as a verdict and two
+// lengths, in both roles; neither the value nor a hash of it comes back.
+func TestLiveProvideFillMismatch(t *testing.T) {
+	guardIsolate(t)
+	t.Setenv(guard.FakeAskEnv, "fake:provide")
+	t.Setenv(guard.FakeValueEnv, "078-05-1120")
+	field := guard.Field{Guarded: true, Reason: "field:label-ssn", Question: "Social Security Number", Site: "acme.typeform.com"}
+	hubSvc, _, port := startHubWithExt(t, "0.9.2", guardedMethods, field)
+	client := New(port)
+	if err := client.EnsureReady(context.Background()); err != nil || client.role != roleClient {
+		t.Fatalf("second service did not take the client role: %v", err)
+	}
+	for name, s := range map[string]*Service{"hub": hubSvc, "client": client} {
+		res, err := s.Execute(context.Background(), wire.Action{Type: wire.ActionType, Selector: "#answer", Text: "Ada Lovelace"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code, _ := guard.ExitCode(res); res.OutcomeClass != guard.ClassFillMismatch || res.Content != guard.ContentFillMismatch ||
+			res.Success || code != guard.ExitFillMismatch {
+			t.Fatalf("%s: %+v", name, res)
+		}
+		if !strings.Contains(res.Data, `"verified":"mismatch"`) || !strings.Contains(res.Data, `"field_len":5`) || !strings.Contains(res.Data, `"value_len":11`) {
+			t.Fatalf("%s: verification = %s", name, res.Data)
+		}
+		b, _ := json.Marshal(res)
+		for _, v := range []string{"078-05-1120", "07805"} {
+			if strings.Contains(string(b), v) {
+				t.Fatalf("%s: a value is in the result: %s", name, b)
+			}
+		}
+	}
+}
+
+// An extension that fills without a verdict cannot prove the fill: it stops
+// (fill-failed) rather than report guard:filled-by-human.
+func TestLiveProvideNeedsAVerdict(t *testing.T) {
+	guardIsolate(t)
+	t.Setenv(guard.FakeAskEnv, "fake:provide")
+	t.Setenv(guard.FakeValueEnv, "078-05-1120")
+	field := guard.Field{Guarded: true, Reason: "field:label-ssn", Question: "Social Security Number", Site: "acme.typeform.com"}
+	svc, _, _ := startHubWithExt(t, "0.9.1", guardedMethods, field)
+	res, err := svc.Execute(context.Background(), wire.Action{Type: wire.ActionType, Selector: "#answer", Text: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.OutcomeClass != guard.ClassStopped || !strings.Contains(res.Data, "fill-failed") {
+		t.Fatalf("an unverified fill was reported: %+v", res)
 	}
 }

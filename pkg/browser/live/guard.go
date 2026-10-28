@@ -6,9 +6,10 @@ package live
 //
 // Old extensions. The page-side field check lives in extension guard.js,
 // advertised as the guard_field method (extension 0.9.0); guard_fill, the
-// by-reference fill of an operator's answer, arrived in 0.9.1 — an older
-// extension makes a provide answer stop (fill-failed), never type the agent's
-// text. Rather than raise
+// by-reference fill of an operator's answer, arrived in 0.9.1 and verifies
+// the field in-page from 0.9.2 — an older extension makes a provide answer
+// stop (fill-failed), never type the agent's text nor report an unproven
+// fill. Rather than raise
 // LiveExtensionMinVersion — which would block navigate/extract/screenshot on
 // every older extension for a check only writes need — the hub gates on the
 // ADVERTISED METHOD: type, select and keyboard_press are refused loudly unless
@@ -168,15 +169,50 @@ func (g guardBackend) FocusField(ctx context.Context, a wire.Action) error {
 }
 
 // FillAdmitted sends an operator's admitted answer to the extension's
-// guard_fill (page.js types it past the field check and answers without the
-// value). The error is generic: an extension error could quote the field.
-func (g guardBackend) FillAdmitted(ctx context.Context, a wire.Action, askID string, value []byte) error {
+// guard_fill: page.js types it past the field check, then compares the
+// field with the answer INSIDE the page and answers only the verdict and
+// the two lengths (extension 0.9.2+) — never the value, never a hash. An
+// extension that answers without a verdict cannot prove the fill and is
+// refused (fill-failed). The error is generic: an extension error could
+// quote the field.
+func (g guardBackend) FillAdmitted(ctx context.Context, a wire.Action, askID string, value []byte) (guard.Verify, error) {
 	p := targetParams(a)
 	p["text"], p["admit"] = string(value), askID
-	if _, err := g.s.callRaw(ctx, fillMethod, p); err != nil {
-		return errors.New("live: guard_fill failed")
+	raw, err := g.s.callRaw(ctx, fillMethod, p)
+	if err != nil {
+		return guard.Verify{}, errors.New("live: guard_fill failed")
 	}
-	return nil
+	return fillVerdict(raw)
+}
+
+// fillVerdict reads guard_fill's {verified, field_len, value_len} — from
+// the result itself or its data document. Any other key is ignored, so a
+// read-back of the field could not leak through here even if one appeared.
+func fillVerdict(raw json.RawMessage) (guard.Verify, error) {
+	type verdict struct {
+		Verified *string `json:"verified"`
+		FieldLen int     `json:"field_len"`
+		ValueLen int     `json:"value_len"`
+	}
+	var top struct {
+		verdict
+		Data string `json:"data"`
+	}
+	if json.Unmarshal(raw, &top) != nil {
+		return guard.Verify{}, errors.New("live: unreadable guard_fill result")
+	}
+	v := top.verdict
+	if v.Verified == nil && top.Data != "" {
+		_ = json.Unmarshal([]byte(top.Data), &v)
+	}
+	if v.Verified == nil {
+		return guard.Verify{}, errors.New("live: guard_fill answered without a verification (extension older than 0.9.2; reload it)")
+	}
+	out := guard.Verify{Verified: guard.VerifiedMismatch, FieldLen: v.FieldLen, ValueLen: v.ValueLen}
+	if *v.Verified == guard.VerifiedMatch {
+		out.Verified = guard.VerifiedMatch
+	}
+	return out, nil
 }
 
 func (g guardBackend) Site(ctx context.Context) string {

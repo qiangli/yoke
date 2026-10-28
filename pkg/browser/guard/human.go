@@ -320,16 +320,32 @@ func outcome(class string, ref refusal, via, askID string) *wire.Result {
 	case ClassSkipped:
 		res.Content, choice = ContentSkipped, ChoiceSkip
 		res.Error = fmt.Sprintf("guard: %s refused (%s); the operator skipped this question", ref.Reason, reasonText(ref.Reason))
+	case ClassFillMismatch:
+		res.Content, choice = ContentFillMismatch, ChoiceProvide
+		res.Error = fmt.Sprintf("guard: %s refused (%s); the operator's answer was filled but the field does not hold it (the page rewrote, truncated or rejected it) — the form needs a human", ref.Reason, reasonText(ref.Reason))
 	default:
 		res.Content, choice = ContentStopped, ChoiceStop
 		res.Error = fmt.Sprintf("guard: %s refused (%s); stopped (%s) — the form needs a human", ref.Reason, reasonText(ref.Reason), via)
 	}
-	fields := map[string]string{
+	fields := map[string]any{
 		"choice": string(choice), "via": via, "reason": ref.Reason, "site": ref.Site, "question": ref.Question,
 	}
 	if askID != "" {
 		fields["ask_id"] = askID
 	}
+	data, _ := json.Marshal(fields)
+	res.Data = string(data)
+	return res
+}
+
+// withVerify adds a by-reference fill's verification to res.Data:
+// verified, field_len, value_len. Nothing else of the fill is reported.
+func withVerify(res *wire.Result, v Verify) *wire.Result {
+	var fields map[string]any
+	if json.Unmarshal([]byte(res.Data), &fields) != nil {
+		fields = map[string]any{}
+	}
+	fields["verified"], fields["field_len"], fields["value_len"] = v.Verified, v.FieldLen, v.ValueLen
 	data, _ := json.Marshal(fields)
 	res.Data = string(data)
 	return res

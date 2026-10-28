@@ -946,15 +946,30 @@ async function typeTrusted(tabId, params, synthetic, frameId) {
 }
 
 // guardFill types an operator's admitted answer (page.js guardFill), with the
-// trusted-input fallback type uses. Whatever goes wrong, the error is
-// generic: neither the value nor a read-back of the field leaves here.
+// trusted-input fallback type uses, then answers the page's own VERIFICATION
+// of the field: verified "match" | "mismatch" plus field_len and value_len.
+// A fill that did not stick is a mismatch (reported, not hidden); only a
+// field that cannot be found or read is an error. Whatever goes wrong, the
+// error is generic, and no read-back of the field — the trusted retry's
+// result carries one — leaves here: the answer is rebuilt from the verdict.
 async function guardFill(tabId, params) {
+  let r = null;
   try {
-    await runInTab(tabId, "guardFill", params);
-  } catch (e) {
-    throw new Error("guard_fill: the operator's answer could not be filled");
+    r = await runInTab(tabId, "guardFill", params);
+  } catch (_) { r = null; }
+  if (!r || typeof r.verified !== "string") {
+    try {
+      r = await runInTab(tabId, "guardVerify", params);
+    } catch (_) {
+      throw new Error("guard_fill: the operator's answer could not be filled");
+    }
   }
-  return { content: "filled" };
+  const v = {
+    verified: r.verified === "match" ? "match" : "mismatch",
+    field_len: Number(r.field_len) | 0,
+    value_len: Number(r.value_len) | 0,
+  };
+  return Object.assign({ content: "filled", data: JSON.stringify(v) }, v);
 }
 
 // guardFocus brings the driven tab to the operator's attention and puts the

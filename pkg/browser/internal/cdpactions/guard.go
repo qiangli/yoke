@@ -104,22 +104,60 @@ func (g GuardBackend) FocusField(ctx context.Context, a wire.Action) error {
 	return nil
 }
 
-// FillAdmitted types an operator's admitted answer. probe/solo have no
-// page-side refusal in their type path, so this is the ordinary Type; its
-// result (which reads the value back) is discarded.
-func (g GuardBackend) FillAdmitted(ctx context.Context, a wire.Action, _ string, value []byte) error {
+// FillAdmitted types an operator's admitted answer and verifies it. probe/
+// solo have no page-side refusal in their type path, so the fill is the
+// ordinary Type; the verification reads the field back in the guard's
+// isolated world (page scripts cannot redefine what it reads) and compares
+// it HERE, in the process that already holds the value. Only the verdict
+// and the two lengths leave this function.
+func (g GuardBackend) FillAdmitted(ctx context.Context, a wire.Action, _ string, value []byte) (guard.Verify, error) {
 	cdpCtx, err := g.Ready(ctx)
 	if err != nil {
-		return err
+		return guard.Verify{}, err
 	}
 	callCtx, cancel := context.WithTimeout(cdpCtx, 30*time.Second)
 	defer cancel()
 	a.Text, a.FromAsk = string(value), ""
 	res, err := Type(callCtx, a)
 	if err != nil || res == nil || !res.Success {
-		return errors.New("guard: fill failed")
+		return guard.Verify{}, errors.New("guard: fill failed")
 	}
-	return nil
+	expr := fmt.Sprintf(`(() => {
+  const el = document.querySelector(%s);
+  if (!el) return { error: "missing" };
+  const v = ("value" in el && !el.isContentEditable) ? String(el.value) : (el.innerText || el.textContent || "").replace(/\n$/, "");
+  return { value: v };
+})()`, JSString(a.Selector))
+	var out struct {
+		Value string `json:"value"`
+		Error string `json:"error"`
+	}
+	if err := evalGuard(callCtx, expr, &out); err != nil || out.Error != "" {
+		return guard.Verify{}, errors.New("guard: fill not verifiable")
+	}
+	return VerifyFill(out.Value, value), nil
+}
+
+// VerifyFill is the comparison both CDP modes report: the field's read-back
+// against the operator's answer, as a verdict and two lengths (UTF-16 code
+// units, as the extension's page core counts them).
+func VerifyFill(field string, value []byte) guard.Verify {
+	v := guard.Verify{Verified: guard.VerifiedMismatch, FieldLen: utf16Len(field), ValueLen: utf16Len(string(value))}
+	if field == string(value) {
+		v.Verified = guard.VerifiedMatch
+	}
+	return v
+}
+
+func utf16Len(s string) int {
+	n := 0
+	for _, r := range s {
+		n++
+		if r >= 0x10000 {
+			n++
+		}
+	}
+	return n
 }
 
 func (g GuardBackend) Site(ctx context.Context) string {

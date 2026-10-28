@@ -1,6 +1,8 @@
 package live
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"testing"
@@ -212,7 +214,8 @@ func TestGuardFillTypesTheOperatorsAnswer(t *testing.T) {
 			t.Fatalf("%s: the agent's type went through: %v", path, res)
 		}
 		res := h.call("guardFill", map[string]any{"selector": "#answer", "text": "078-05-1120"})
-		if res["content"] != "filled" || res["error"] != nil {
+		if res["content"] != "filled" || res["error"] != nil || res["verified"] != "match" ||
+			res["field_len"] != float64(11) || res["value_len"] != float64(11) {
 			t.Fatalf("%s: guardFill = %v", path, res)
 		}
 		if b := fmt.Sprint(res); strings.Contains(b, "078-05-1120") {
@@ -231,5 +234,49 @@ func TestGuardFillTypesTheOperatorsAnswer(t *testing.T) {
 	res := h2.call("guardFill", map[string]any{"selector": "#answer", "text": "078-05-1120"})
 	if msg, _ := res["error"].(string); msg == "" || strings.Contains(fmt.Sprint(res), "078-05-1120") {
 		t.Fatalf("rejected guardFill = %v", res)
+	}
+}
+
+// The by-reference fill is VERIFIED in the page: guardVerify (run by
+// background.js after the synthetic and trusted inserts) compares the field
+// with the operator's answer and answers only match/mismatch and the two
+// lengths. A page that accepts the value matches; one that rewrites,
+// truncates or clears it does not — and nothing of the value, nor a digest
+// of it, comes back.
+func TestGuardFillVerifiesTheField(t *testing.T) {
+	const value = "078-05-1120"
+	cases := map[string]struct {
+		input    string
+		verified string
+		fieldLen float64
+	}{
+		"/accept":   {plainBox, "match", 11},
+		"/truncate": {`<input type="text" id="answer" oninput="this.value=this.value.slice(0,5)">`, "mismatch", 5},
+		"/rewrite":  {`<input type="text" id="answer" oninput="this.value=this.value.replace(/-/g,'')">`, "mismatch", 9},
+		"/clear":    {`<input type="text" id="answer" oninput="this.value=''">`, "mismatch", 0},
+	}
+	fixtures := map[string]string{}
+	for path, tc := range cases {
+		fixtures[path] = typeformScreen("Social Security Number", tc.input)
+	}
+	h := newPageHarness(t, fixtures)
+	sum := sha256.Sum256([]byte(value))
+	for path, tc := range cases {
+		h.open(path)
+		fill := h.call("guardFill", map[string]any{"selector": "#answer", "text": value})
+		res := h.call("guardVerify", map[string]any{"selector": "#answer", "text": value})
+		if res["verified"] != tc.verified || res["field_len"] != tc.fieldLen || res["value_len"] != float64(11) {
+			t.Fatalf("%s: guardVerify = %v", path, res)
+		}
+		if tc.verified == "match" && fill["verified"] != "match" {
+			t.Fatalf("%s: guardFill = %v", path, fill)
+		}
+		for _, out := range []string{fmt.Sprint(fill), fmt.Sprint(res)} {
+			for _, leak := range []string{value, "07805", "078051120", hex.EncodeToString(sum[:]), hex.EncodeToString(sum[:8])} {
+				if strings.Contains(out, leak) {
+					t.Fatalf("%s: the value (or a digest) came back: %s", path, out)
+				}
+			}
+		}
 	}
 }

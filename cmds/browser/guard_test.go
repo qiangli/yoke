@@ -79,6 +79,23 @@ func TestGuardSuccessOutcomesExitZero(t *testing.T) {
 	}
 }
 
+// A by-reference fill the page did not keep is a failure: exit 6, and the
+// output is the outcome and the verification only.
+func TestGuardFillMismatchExitsSix(t *testing.T) {
+	r := &wire.Result{Content: guard.ContentFillMismatch, OutcomeClass: guard.ClassFillMismatch, Reason: "field:label-ssn",
+		Error: "guard: field:label-ssn refused; the field does not hold it",
+		Data:  `{"verified":"mismatch","field_len":5,"value_len":11}`}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{Out: &out, Err: &errb}}
+	if code := printResult(rc, r, false); code != guard.ExitFillMismatch || code == 0 || strings.TrimSpace(out.String()) != guard.ContentFillMismatch {
+		t.Fatalf("code=%d out=%q", code, out.String())
+	}
+	out.Reset()
+	if code := printResult(rc, r, true); code != guard.ExitFillMismatch || !strings.Contains(out.String(), `"verified":"mismatch"`) {
+		t.Fatalf("--json: code=%d out=%q", code, out.String())
+	}
+}
+
 // `type --from-ask ID <target>` takes a target and never text.
 func TestTypeFromAskArgs(t *testing.T) {
 	const id = "0123456789abcdef0123456789abcdef"
