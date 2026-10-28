@@ -82,6 +82,10 @@ type Service struct {
 	role roleKind
 	hub  *hub         // populated when role == roleHub
 	http *http.Client // populated when role == roleClient
+
+	// guardTab is the tab the guard last checked a field in; its
+	// follow-ups (focus, fill) are pinned to it (guard.go).
+	guardTab int
 }
 
 // New returns a live-mode service.

@@ -178,7 +178,12 @@ func fillFromAsk(ctx context.Context, b Backend, a wire.Action) *wire.Result {
 	defer clear(v)
 	ver, err := b.FillAdmitted(ctx, a, adm.ID, v)
 	if err != nil {
-		return outcome(ClassStopped, ref, "fill-failed", "")
+		res := outcome(ClassStopped, ref, "fill-failed", "")
+		var ff FillFailure
+		if errors.As(err, &ff) && causePattern.MatchString(ff.Cause) {
+			res = withFields(res, map[string]any{"cause": ff.Cause})
+		}
+		return res
 	}
 	class := ClassFilledByHuman
 	if ver.Verified != VerifiedMatch {

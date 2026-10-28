@@ -444,7 +444,27 @@ async function targetTab() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   if (tabs.length === 0) throw new Error("no active tab");
   activeTabId = tabs[0].id;
+  rememberIntent(); // a restarted worker drives the same tab
   return tabs[0];
+}
+
+// guardTabId resolves the tab a guard follow-up (guard_fill, guard_focus)
+// names: the tab whose field the guard checked before it asked the
+// operator. The worker may have been stopped or reloaded while the
+// operator answered, losing the driven tab; the answer must still land in
+// THAT tab, and never in whatever tab is active now — when it is gone, the
+// call fails.
+async function guardTabId(params) {
+  const id = params && params.tab_id;
+  if (!Number.isInteger(id) || id <= 0) return targetTabId();
+  try {
+    await chrome.tabs.get(id);
+  } catch (_) {
+    throw new Error("guard: the tab the field was checked in is gone (cause: tab-gone)");
+  }
+  activeTabId = id;
+  rememberIntent();
+  return id;
 }
 
 async function dispatch(method, params) {
@@ -458,7 +478,7 @@ async function dispatch(method, params) {
   if (method === "cookies_get") return cookiesGet(params);
   if (method === "tabs") return handleTabs(params);
 
-  const tabId = await targetTabId();
+  const tabId = (method === "guard_fill" || method === "guard_focus") ? await guardTabId(params) : await targetTabId();
   const out = await dispatchOnTab(method, params, tabId);
   // Stamp the resolved tab on every page-touching result so a caller
   // can prove which page answered instead of inferring it.
@@ -952,6 +972,8 @@ async function typeTrusted(tabId, params, synthetic, frameId) {
 // field that cannot be found or read is an error. Whatever goes wrong, the
 // error is generic, and no read-back of the field — the trusted retry's
 // result carries one — leaves here: the answer is rebuilt from the verdict.
+// The error names only a fixed cause code (fillCause), so a live failure is
+// diagnosable without the page's own message, which can quote the field.
 async function guardFill(tabId, params) {
   let r = null;
   try {
@@ -960,8 +982,8 @@ async function guardFill(tabId, params) {
   if (!r || typeof r.verified !== "string") {
     try {
       r = await runInTab(tabId, "guardVerify", params);
-    } catch (_) {
-      throw new Error("guard_fill: the operator's answer could not be filled");
+    } catch (e) {
+      throw new Error(`guard_fill: the operator's answer could not be filled (cause: ${fillCause(e)})`);
     }
   }
   const v = {
@@ -970,6 +992,15 @@ async function guardFill(tabId, params) {
     value_len: Number(r.value_len) | 0,
   };
   return Object.assign({ content: "filled", data: JSON.stringify(v) }, v);
+}
+
+// fillCause maps a failed fill to a fixed code: never the message itself.
+function fillCause(e) {
+  const m = String((e && e.message) || e);
+  if (/injection failed/.test(m)) return "inject-failed";
+  if (/no frame answered|returned no result/.test(m)) return "no-frame";
+  if (/no element|out of range|only hidden|no selector|equally|not a valid CSS/.test(m)) return "not-found";
+  return "page-error";
 }
 
 // guardFocus brings the driven tab to the operator's attention and puts the
@@ -1349,6 +1380,7 @@ async function handleTabs(params) {
     const tabs = await chrome.tabs.query({});
     const t = selectTab(tabs, params, driven);
     activeTabId = t.id;
+    rememberIntent();
     await chrome.tabs.update(t.id, { active: true });
     return {
       content: `switched to ${t.title || t.url || t.id}`,
@@ -1361,6 +1393,7 @@ async function handleTabs(params) {
   if (action === "new") {
     const t = await chrome.tabs.create({ url: params.url || "about:blank" });
     activeTabId = t.id;
+    rememberIntent();
     return {
       content: `opened tab ${t.id}`,
       url: t.url || "",

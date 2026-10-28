@@ -392,6 +392,26 @@ func TestProvideFillFailureStops(t *testing.T) {
 		t.Fatalf("got %+v", res)
 	}
 	assertNoLeak(t, "212-48-7731", res)
+	if strings.Contains(res.Data, `"cause"`) {
+		t.Fatalf("a plain error became a cause: %s", res.Data)
+	}
+}
+
+// A FillFailure's cause is reported as data.cause — only when it is a code.
+func TestProvideFillFailureCause(t *testing.T) {
+	for cause, want := range map[string]bool{"tab-gone": true, "not-connected": true, "212-48-7731": false, "Ada Lovelace": false, "": false} {
+		isolate(t)
+		install(t, &scriptedAsker{answer: GuardAnswer{Choice: ChoiceProvide, AskID: askA}, values: map[string][]byte{askA: []byte("212-48-7731")}})
+		b := &fakeBackend{human: true, fillErr: FillFailure{Cause: cause}, field: guardedField("field:label-ssn", "SSN")}
+		res := run(t, b, typeAction("x"))
+		if res.OutcomeClass != ClassStopped || !strings.Contains(res.Data, `"via":"fill-failed"`) {
+			t.Fatalf("%q: got %+v", cause, res)
+		}
+		if got := strings.Contains(res.Data, `"cause":"`+cause+`"`); got != want {
+			t.Fatalf("%q: data = %s", cause, res.Data)
+		}
+		assertNoLeak(t, "212-48-7731", res)
+	}
 }
 
 // The live hub's check on a raw guard_fill: only a CLAIMED admission for the

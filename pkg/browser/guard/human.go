@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -341,11 +342,21 @@ func outcome(class string, ref refusal, via, askID string) *wire.Result {
 // withVerify adds a by-reference fill's verification to res.Data:
 // verified, field_len, value_len. Nothing else of the fill is reported.
 func withVerify(res *wire.Result, v Verify) *wire.Result {
+	return withFields(res, map[string]any{"verified": v.Verified, "field_len": v.FieldLen, "value_len": v.ValueLen})
+}
+
+// causePattern admits only a short fixed-alphabet code as data.cause.
+var causePattern = regexp.MustCompile(`^[a-z][a-z-]{0,23}$`)
+
+// withFields merges add into res.Data's JSON object.
+func withFields(res *wire.Result, add map[string]any) *wire.Result {
 	var fields map[string]any
 	if json.Unmarshal([]byte(res.Data), &fields) != nil {
 		fields = map[string]any{}
 	}
-	fields["verified"], fields["field_len"], fields["value_len"] = v.Verified, v.FieldLen, v.ValueLen
+	for k, v := range add {
+		fields[k] = v
+	}
 	data, _ := json.Marshal(fields)
 	res.Data = string(data)
 	return res

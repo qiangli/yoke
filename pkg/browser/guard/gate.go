@@ -83,6 +83,15 @@ type Verify struct {
 	ValueLen int
 }
 
+// FillFailure is a Backend.FillAdmitted error that names WHY nothing could
+// be filled or verified, by a fixed value-free code (live: refused,
+// not-connected, timeout, tab-gone, not-found, no-frame, inject-failed,
+// page-error, ext-threw, no-verdict, parse). The outcome reports it as
+// data.cause beside via "fill-failed"; it never carries page text.
+type FillFailure struct{ Cause string }
+
+func (f FillFailure) Error() string { return "guard: fill failed (" + f.Cause + ")" }
+
 // ExitCode maps a result's outcome class to the CLI exit status; ok is
 // false when the result is not a guard outcome.
 func ExitCode(r *wire.Result) (int, bool) {

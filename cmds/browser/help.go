@@ -45,6 +45,8 @@ var guardHelp = []string{
 	"A fill by reference is VERIFIED where the value already is (the page): data.verified",
 	"= match | mismatch, data.field_len, data.value_len — never the value, never a hash.",
 	"A mismatch (the page rewrote, truncated or rejected it) is a failed fill: exit 6.",
+	"A fill that could not run at all stops (exit 5, data.via fill-failed) with a",
+	"value-free data.cause code (not-connected, tab-gone, not-found, refused, …).",
 	"`browser type --from-ask <id> <target>` refills by reference with an answer the",
 	"guard admitted for that same field, once; it never takes text.",
 	"Page text in every result is masked: such values read as [guarded:<kind>].",
