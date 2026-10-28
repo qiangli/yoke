@@ -220,23 +220,66 @@ type ProvisionRequest struct {
 	Authorization *provider.Authorization
 	// Progress receives one human-readable line per stage; nil is silent.
 	Progress func(string)
+	// Reserved, when set, receives the stable address reserved for the
+	// host before the enrollment bundle was requested. It is not called
+	// when Endpoint was given (the caller named the endpoint, so nothing
+	// is reserved) or when the provider reserves nothing.
+	Reserved func(provider.Reservation)
 }
 
-// ProvisionExecutable provisions one host on the executable path: FIRST it
-// obtains the enrollment bundle from the master — an unreachable master or
-// a 5xx/503 answer fails with kind master_unavailable BEFORE any provider
-// call — then it creates through the dispatcher (opened ExecAllowed: this
-// runs on user-owned compute) with the bundle's user_data script as opaque
-// Spec.UserData, and reports progress. Provider credentials stay in the dispatcher's
-// local CredentialSource and never reach the master.
+// ProvisionExecutable provisions one host on the executable path, in this
+// order:
+//
+//  1. RESERVE the host's stable public address, when the provider can
+//     hold one and the caller did not name an endpoint itself
+//     (provider.EndpointReserver). This is first for a load-bearing
+//     reason: the master renders the first-boot script with the
+//     satellite's endpoint baked in, so the endpoint has to be known
+//     before the bundle is asked for — and an address reserved ahead of
+//     the host cannot race its own attachment at first boot.
+//  2. Obtain the enrollment bundle from the master, with the reserved
+//     address as the endpoint hint. An unreachable master or a 5xx/503
+//     answer fails with kind master_unavailable BEFORE any create.
+//  3. Create through the dispatcher (opened ExecAllowed: this runs on
+//     user-owned compute) with the bundle's user_data script as opaque
+//     Spec.UserData. The provider attaches the reserved address as part
+//     of the create.
+//
+// Provider credentials stay in the dispatcher's local CredentialSource
+// and never reach the master.
 func ProvisionExecutable(ctx context.Context, c Client, d *provider.Dispatcher, req ProvisionRequest) (provider.Result, error) {
 	report := func(s string) {
 		if req.Progress != nil {
 			req.Progress(s)
 		}
 	}
+	endpoint := req.Endpoint
+	if endpoint == "" {
+		res, rerr := provider.ReserveEndpoint(ctx, d.Adapter(), req.Spec)
+		if rerr != nil {
+			// Without the address the bundle would be rendered for an
+			// endpoint the satellite never answers on, which installs a
+			// host that silently never enrolls. Fail before the master
+			// is asked for anything.
+			return provider.Result{ProtocolVersion: provider.ProtocolVersion, Op: provider.OpCreate}, rerr
+		}
+		if res.Held() {
+			verb := "reserved"
+			if res.Reused {
+				verb = "reusing"
+			}
+			report(fmt.Sprintf("%s stable address %s (%s) for satellite %q", verb, res.Address, res.Name, req.SatelliteID))
+			if res.Endpoint != "" {
+				endpoint = res.Endpoint
+				report(fmt.Sprintf("endpoint hint for the enrollment bundle: %s", endpoint))
+			}
+			if req.Reserved != nil {
+				req.Reserved(res)
+			}
+		}
+	}
 	report(fmt.Sprintf("requesting enrollment bundle for satellite %q", req.SatelliteID))
-	bundle, err := c.RequestBundle(ctx, req.SatelliteID, req.Endpoint)
+	bundle, err := c.RequestBundle(ctx, req.SatelliteID, endpoint)
 	if err != nil {
 		return provider.Result{ProtocolVersion: provider.ProtocolVersion, Op: provider.OpCreate}, err
 	}

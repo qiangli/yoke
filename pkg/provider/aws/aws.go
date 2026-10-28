@@ -794,76 +794,6 @@ func (a *adapter) power(ctx context.Context, req provider.Request, op, want stri
 	return ok(req.Op, r)
 }
 
-// destroy deletes an instance this owner created, after the A6 check and
-// the dhnt:managed gate, then releases the instance's static IP.
-//
-// The managed gate is checked HERE rather than left to AWS: the automation
-// IAM policy permits DeleteInstance only on resources tagged
-// dhnt:managed=true, so without this check an untagged instance would fail
-// as an opaque AccessDeniedException instead of saying what is wrong.
-//
-// Order matters. The static IP is read BEFORE the delete (afterwards
-// Lightsail has cleared its attachment, so there is nothing left to
-// identify it by) and released AFTER it, so a delete that fails has not
-// already given away the address. A release that fails is reported as
-// ongoing cost rather than swallowed: an unattached Lightsail static IP is
-// billed.
-//
-// A staged first-boot script (the dhnt:userdata-key tag) is deleted after
-// the instance, for the same reason in reverse: while the instance exists
-// it may still be fetching the object, and once it does not, nothing
-// needs it. That delete is best-effort — the bucket expires objects after
-// a day — so its failure is a note, not a failed destroy.
-func (a *adapter) destroy(ctx context.Context, req provider.Request) (provider.Result, error) {
-	in, res, err := a.owned(ctx, req)
-	if err != nil {
-		return res, err
-	}
-	r := a.resource(ctx, in)
-	if e := provider.AuthorizeDestroy(req, *r); e != nil {
-		return provider.Result{ProtocolVersion: provider.ProtocolVersion, Op: req.Op, Error: e, Cost: provider.RefusedDestroyCost()}, e
-	}
-	if !Managed(r.Tags) {
-		e := &provider.Error{Code: provider.ErrNotOwned, Message: fmt.Sprintf(
-			"aws: instance %s is not tagged %s; the automation IAM policy permits deleting only tagged resources, so this destroy would be denied by AWS",
-			in.Name, ManagedTag)}
-		return provider.Result{ProtocolVersion: provider.ProtocolVersion, Op: req.Op, Error: e, Cost: provider.RefusedDestroyCost()}, e
-	}
-
-	ipName := in.Name + staticIPSuffix
-	attached := false
-	if in.IsStaticIP {
-		if sip, serr := a.getStaticIP(ctx, ipName); serr == nil && sip.AttachedTo == in.Name {
-			attached = true
-		}
-	}
-
-	var out struct {
-		Operations []operation `json:"operations"`
-	}
-	if err := a.ls.call(ctx, "DeleteInstance", map[string]any{"instanceName": in.Name}, &out); err != nil {
-		return fail(req.Op, err)
-	}
-	if err := opsError(out.Operations); err != nil {
-		return fail(req.Op, err)
-	}
-	r.State = provider.StateDeleted
-	cost := &provider.CostReport{}
-	var notes []string
-	if attached {
-		if rerr := a.releaseStaticIP(ctx, ipName); rerr != nil {
-			cost.Ongoing = true
-			cost.Retained = retainedStaticIP(in.Name)
-			notes = append(notes, fmt.Sprintf("the instance is deleted but its static IP %s could not be released (%v), and an unattached Lightsail static IP is billed; release it with `bashy aws lightsail release-static-ip --static-ip-name %s`", ipName, normalize(rerr), ipName))
-		}
-	}
-	if note := a.deleteStagedUserData(ctx, r.Tags); note != "" {
-		notes = append(notes, note)
-	}
-	cost.Note = strings.Join(notes, "; ")
-	return ok(req.Op, &provider.Result{Resource: r, Cost: cost})
-}
-
 // ---- Lightsail reads ----
 
 func (a *adapter) getInstance(ctx context.Context, name string) (*instance, error) {
@@ -1011,9 +941,26 @@ func (a *adapter) getStaticIP(ctx context.Context, name string) (*staticIP, erro
 	return &out.StaticIP, nil
 }
 
+// allocateStaticIP allocates "<name>-ip" and reads it back, so the
+// caller has the address AWS assigned and not just an operation record.
+func (a *adapter) allocateStaticIP(ctx context.Context, ipName string) (*staticIP, error) {
+	var out struct {
+		Operations []operation `json:"operations"`
+	}
+	if err := a.ls.call(ctx, "AllocateStaticIp", map[string]any{"staticIpName": ipName}, &out); err != nil {
+		return nil, err
+	}
+	if err := opsError(out.Operations); err != nil {
+		return nil, err
+	}
+	return a.getStaticIP(ctx, ipName)
+}
+
 // ensureStaticIP allocates "<name>-ip" if needed and attaches it to the
 // instance, so the satellite's sslip.io endpoint survives a stop/start
-// (Lightsail's ordinary public IP does not).
+// (Lightsail's ordinary public IP does not). On the provisioning path the
+// address has usually been reserved already (reserve.go), and then this
+// only has the attach left to do.
 func (a *adapter) ensureStaticIP(ctx context.Context, name string) error {
 	ipName := name + staticIPSuffix
 	sip, err := a.getStaticIP(ctx, ipName)
@@ -1021,16 +968,7 @@ func (a *adapter) ensureStaticIP(ctx context.Context, name string) error {
 		if normalize(err).Code != provider.ErrNotFound {
 			return err
 		}
-		var out struct {
-			Operations []operation `json:"operations"`
-		}
-		if aerr := a.ls.call(ctx, "AllocateStaticIp", map[string]any{"staticIpName": ipName}, &out); aerr != nil {
-			return aerr
-		}
-		if oerr := opsError(out.Operations); oerr != nil {
-			return oerr
-		}
-		if sip, err = a.getStaticIP(ctx, ipName); err != nil {
+		if sip, err = a.allocateStaticIP(ctx, ipName); err != nil {
 			return err
 		}
 	}

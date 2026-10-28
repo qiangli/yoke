@@ -198,6 +198,16 @@ type guard struct{ inner Adapter }
 
 func (g guard) Manifest() Manifest { return g.inner.Manifest() }
 
+// ReserveEndpoint carries the optional endpoint-reservation capability
+// through the guard, so wrapping an adapter does not hide it (an adapter
+// is guarded twice on the dispatcher's built-in path). An inner adapter
+// that does not reserve answers the zero Reservation, which the
+// provisioning sequence reads as "no hint" — the guard has nothing of its
+// own to check here, because reservation is not a contract operation.
+func (g guard) ReserveEndpoint(ctx context.Context, spec Spec) (Reservation, error) {
+	return ReserveEndpoint(ctx, g.inner, spec)
+}
+
 func (g guard) Do(ctx context.Context, req Request) (Result, error) {
 	if e := CheckRequest(g.inner.Manifest(), req); e != nil {
 		r := Result{ProtocolVersion: ProtocolVersion, Op: req.Op, Error: e}

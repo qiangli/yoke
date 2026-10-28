@@ -18,6 +18,9 @@ the vault keys, after review; §Live run below is the exact sequence.
 | `pkg/provider/aws/fakelightsail/` | the signature-verifying fake (Lightsail + Cost Explorer + AWS Budgets + STS) |
 | `pkg/fleet/infra_builtin.go` | the ONE registry of compiled-in providers: names, per-provider flag defaults, credential resolution, how each is opened |
 | `pkg/fleet/infra_provision.go` | now provider-agnostic — no per-provider branching left |
+| `pkg/provider/reserve.go` | `EndpointReserver` — the optional reserve-the-address-first capability, and the sslip.io endpoint spelling |
+| `pkg/provider/aws/reserve.go`, `destroy.go` | the Lightsail reservation, and destroy's per-step report |
+| `pkg/fleet/infra_lifecycle.go` | `infra inspect` / `infra list --provider` / `infra destroy` — provider-agnostic, through the dispatcher |
 | `pkg/fleet/baseline/infra/aws.yaml` | the embedded `builtin: true` manifest entry |
 | `external/aws/provisioning.go` | `ProvisioningAllowed` — the live authorization answer Sprint 457 deferred |
 
@@ -193,9 +196,11 @@ always S3-staged in practice.
 
 ## Static IP and firewall
 
-- **Static IP.** Create allocates and attaches `<instance>-ip` so the
-  satellite's sslip.io endpoint survives a stop/start (Lightsail's
-  ordinary public IP does not). Inspect reports it first. Destroy releases
+- **Static IP.** The address `<instance>-ip` is reserved BEFORE the
+  instance exists and attached as part of the create, so the satellite's
+  sslip.io endpoint survives a stop/start (Lightsail's ordinary public IP
+  does not) and is known early enough to go into the first-boot script —
+  see §Static IP first below. Inspect reports it first. Destroy releases
   it — an **unattached** Lightsail static IP is billed, so a destroy that
   left one behind would keep costing money. Lightsail static IPs cannot
   carry tags, so destroy releases only the address named after the
@@ -207,6 +212,76 @@ always S3-staged in practice.
   `lightsail-connect` CIDR alias — the console's browser SSH client, so a
   satellite has **no internet-facing sshd**. Mirror of the DigitalOcean
   `dhnt-satellite` firewall.
+
+### Static IP first (rework 3, 2026-10-28)
+
+`zoo-aws` was created — Lightsail instance, static IP `52.12.110.80` —
+and **never enrolled**. The master's first-boot script knew only
+DigitalOcean metadata, so the satellite could not learn its own address
+(fixed on the master side in cloudbox S522.8, which also lets an explicit
+`*.sslip.io` endpoint get built-in TLS). The gap on this side was the
+ORDER: the endpoint was discovered from the host after the host existed,
+which is both too late (the script is rendered before the create) and a
+race (the attach can land after first boot).
+
+So provisioning now reserves the address first:
+
+1. **`AllocateStaticIp "<name>-ip"`** — or reuse it when it already
+   exists and is free (or is already attached to this very instance, a
+   replay). An address attached to a DIFFERENT instance is refused, never
+   moved: that would take the address off a host that is working.
+2. **Request the enrollment bundle** with endpoint
+   `https://<a-b-c-d>.sslip.io` — the DASHED spelling, because a dotted
+   address is several labels deep under `sslip.io` and a wildcard
+   certificate covers exactly one label. `--endpoint` still wins: a
+   caller who names an endpoint has decided, and nothing is reserved.
+3. **`CreateInstances`**, then **`AttachStaticIp`** as before.
+
+The satellite therefore never depends on cloud metadata, and the endpoint
+is printed (and carried in `--json` as `endpoint` /`reserved_address`).
+
+The mechanism is a provider-contract capability, not an AWS special case:
+`provider.EndpointReserver` (`pkg/provider/reserve.go`) is OPTIONAL, and
+`enroll.ProvisionExecutable` asks for a reservation only when the adapter
+offers one — a provider without stable addresses behaves exactly as it
+did. `provider.Guard` forwards it, because an adapter is guarded twice on
+the dispatcher's built-in path and a capability lost to wrapping would
+fail silently at the one moment it matters.
+
+### Lifecycle verbs (rework 3, 2026-10-28)
+
+`bashy infra inspect|list|destroy` are the front door the adapters' own
+inspect/list/destroy operations were missing. They are
+**provider-agnostic** — they speak only the contract, so they work for
+digitalocean and for anything added later — and they go through the
+DISPATCHER, so a destroy is journaled, the credential is scrubbed from
+what is recorded, and a replay under the same key is answered from the
+journal instead of deleting twice. DigitalOcean's own `infra
+trash`/`restore` (its soft-delete workflow) are untouched.
+
+```sh
+bashy infra inspect aws --name zoo-aws [--region R] [--json]
+bashy infra list --provider aws [--region R] [--json]
+bashy infra destroy aws --name zoo-aws --yes [--region R] [--json]
+```
+
+- **`--yes` IS the A6 confirmation**, bound to one resource id and one
+  idempotency key. Without it the provider is never called.
+- **Destroy reports every step** — the instance, the address, the staged
+  first-boot script — including the ones it skipped, because a Lightsail
+  satellite is three billable things and an operator cleaning up has to
+  see what is left rather than infer it. The report rides in
+  `Result.Data` (`aws.DestroyReport`).
+- **Destroy is idempotent.** An instance that is already gone is not an
+  error: it reports success AND still releases `<name>-ip` when that
+  address is free to release, since an orphaned static IP — the residue
+  of a provision that reserved one and then failed — bills forever and
+  nothing else comes back for it. An address attached to another instance
+  is left alone.
+- **`infra list` without `--provider` still lists provider PACKAGES**,
+  exactly as before. With `--provider` it lists that provider's
+  resources, which is the question an operator holding a provider name
+  has.
 
 ## Other decisions worth knowing
 
@@ -265,45 +340,48 @@ bashy secret exec AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY -- \
     --region us-west-2 --size small_3_0 --image ubuntu_24_04 \
     --sprint 522 --story 2816 --dry-run --json
 
-# 2. Create. The master issues the enrollment bundle; the adapter passes
-#    its first-boot script through, waits for running, firewalls the
-#    instance and attaches zoo-aws-ip.
+# 2. Create. zoo-aws-ip is reserved FIRST, the master issues the
+#    enrollment bundle rendered for https://<a-b-c-d>.sslip.io, and the
+#    adapter passes its first-boot script through, waits for running,
+#    firewalls the instance and attaches the reserved address. The
+#    endpoint is printed.
 bashy secret exec AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY -- \
   bashy infra provision aws --satellite zoo-aws \
     --region us-west-2 --size small_3_0 --image ubuntu_24_04 \
     --sprint 522 --story 2816
 
-# 3. Inspect. Re-running provision with the same --satellite is
-#    idempotent: it finds the instance by its idempotency tag and reports
-#    it (with its static IP) instead of creating a second one.
+# 3. Inspect: state, bundle, the static IP and the endpoint it answers on.
 bashy secret exec AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY -- \
-  bashy infra provision aws --satellite zoo-aws --json
+  bashy infra inspect aws --name zoo-aws --region us-west-2
+
+# 4. Tear down: the instance, then zoo-aws-ip, then the staged first-boot
+#    script, with each step reported.
+bashy secret exec AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY -- \
+  bashy infra destroy aws --name zoo-aws --region us-west-2 --yes
 ```
 
-**`bashy infra` has no inspect/list/destroy verb for provider resources
-yet** — not for aws and not for digitalocean either. The adapter
-implements all three contract operations and they are exercised by the
-conformance suite, but nothing mounts them on the CLI; adding those verbs
-was not part of this story. Until they exist, read and tear down through
-the AWS front door:
+Re-running `provision` with the same `--satellite` is idempotent: it
+reuses the reserved address, finds the instance by its idempotency tag and
+reports it instead of creating a second one.
+
+`infra list --provider aws --region us-west-2` is the sweep — it shows
+every instance this owner holds, which is how to prove nothing is left.
+`--yes` is the destroy confirmation: without it the provider is never
+called and the instance keeps its ongoing cost. A destroy repeated against
+an already-gone instance still succeeds and still releases a leftover
+`zoo-aws-ip`, so it is the right thing to run after a failed create too.
+
+The AWS front door remains available for anything the verbs do not cover:
 
 ```sh
 bashy secret exec AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY -- \
   bashy aws lightsail get-instance --instance-name zoo-aws --region us-west-2
 bashy secret exec AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY -- \
-  bashy aws lightsail delete-instance --instance-name zoo-aws --region us-west-2
-bashy secret exec AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY -- \
   bashy aws lightsail release-static-ip --static-ip-name zoo-aws-ip --region us-west-2
 ```
 
-Through the contract, destroy needs the A6 per-operation confirmation
-bound to that resource id and that idempotency key; without it the destroy
-is refused before any AWS call and the instance keeps its ongoing cost.
-The adapter's destroy also releases `zoo-aws-ip` itself, which the manual
-path above does not — so when tearing down by hand, **release the static
-IP explicitly**.
-
-Either way, prove zero leftovers afterwards: no instance, and no
+Tearing down by hand that way does NOT release the static IP for you — so
+either way, prove zero leftovers afterwards: no instance, and no
 `zoo-aws-ip` still allocated (an unattached Lightsail static IP is
 billed).
 

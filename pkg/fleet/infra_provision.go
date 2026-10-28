@@ -41,7 +41,7 @@ func newInfraProvision(opts []Option) *cobra.Command {
 		Short: "Provision a satellite host via an enrollment bundle (executable path)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name, err := provisionProviderName(args, providerFlag)
+			name, err := providerName("provision", args, providerFlag)
 			if err != nil {
 				return err
 			}
@@ -82,7 +82,7 @@ func newInfraProvision(opts []Option) *cobra.Command {
 				BudgetCap: budgetCap, BudgetPerInstance: budgetPerInstance,
 				BudgetName: budgetName, UserDataBucket: userDataBucket,
 			}
-			builtin, isBuiltin := builtinFor(p)
+			_, isBuiltin := builtinFor(p)
 			if dryRun {
 				return runProvisionDryRun(cmd, dryRunRequest{
 					Provider: p.Manifest.Name, Satellite: satellite,
@@ -92,39 +92,21 @@ func newInfraProvision(opts []Option) *cobra.Command {
 					CredentialRef: credentialRef, Builtin: isBuiltin,
 				}, openOpts, asJSON)
 			}
-			ref := credentialRef
-			if ref == "" {
-				ref = p.Manifest.Name
-			}
-			cred, cerr := resolveProviderCredential(ref)
-			if cerr != nil {
-				return cerr
-			}
 			base, session := ResolveCloud(master, token)
 			if session == "" {
 				return fmt.Errorf("fleet: no master session (pair with `bashy login`, set $BASHY_FLEET_TOKEN / $BASHY_API_KEY, or pass --token)")
 			}
-			manifest := p.Manifest
-			builtins := map[string]provider.BuiltinFactory{}
-			if isBuiltin {
-				// A built-in entry dispatches to the linked-in Go
-				// adapter, never the declarative engine and never a
-				// spawned program.
-				manifest = builtin.manifest()
-				manifest.Name = p.Manifest.Name
-				builtins[manifest.Name] = builtinFactory(p.Manifest.Name, openOpts)
-			}
 			ctx := context.Background()
-			d, oerr := provider.Open(ctx, manifest, provider.Options{
-				Owner:       owner,
-				Exec:        provider.ExecAllowed, // user-owned compute only
-				Credentials: provider.StaticCredential(cred),
-				Builtins:    builtins,
-			})
+			d, oerr := openProviderDispatcher(ctx, p, credentialRef, openOpts)
 			if oerr != nil {
 				return oerr
 			}
 			out := cmd.OutOrStdout()
+			// The address a provider reserved for this host BEFORE the
+			// enrollment bundle was requested, so the endpoint the
+			// bundle was rendered with can be reported next to the host
+			// it belongs to.
+			var reserved provider.Reservation
 			res, perr := enroll.ProvisionExecutable(ctx, enroll.Client{BaseURL: base, Session: session}, d,
 				enroll.ProvisionRequest{
 					SatelliteID: satellite,
@@ -134,27 +116,29 @@ func newInfraProvision(opts []Option) *cobra.Command {
 					},
 					IdempotencyKey: key,
 					Progress:       func(s string) { fmt.Fprintln(out, s) },
+					Reserved:       func(r provider.Reservation) { reserved = r },
 				})
 			if perr != nil {
 				return perr
 			}
 			if res.Resource != nil {
 				if asJSON {
-					row := map[string]any{"id": res.Resource.ID, "state": string(res.Resource.State)}
-					if res.Resource.Region != "" {
-						row["region"] = res.Resource.Region
+					row := resourceRow(*res.Resource)
+					if reserved.Held() {
+						row["reserved_address"] = reserved.Address
+						row["reserved_address_name"] = reserved.Name
 					}
-					if res.Resource.Size != "" {
-						row["size"] = res.Resource.Size
-					}
-					if len(res.Resource.PublicIPs) > 0 {
-						row["public_ips"] = res.Resource.PublicIPs
+					if ep := provisionEndpoint(endpoint, reserved); ep != "" {
+						row["endpoint"] = ep
 					}
 					return json.NewEncoder(out).Encode(row)
 				}
 				fmt.Fprintf(out, "provisioned %s (%s)\n", res.Resource.ID, res.Resource.State)
 				if len(res.Resource.PublicIPs) > 0 {
 					fmt.Fprintf(out, "address: %s\n", strings.Join(res.Resource.PublicIPs, ", "))
+				}
+				if ep := provisionEndpoint(endpoint, reserved); ep != "" {
+					fmt.Fprintf(out, "endpoint: %s\n", ep)
 				}
 			}
 			return nil
@@ -201,13 +185,28 @@ func newInfraProvision(opts []Option) *cobra.Command {
 	return cmd
 }
 
-// provisionProviderName resolves which provider to use. The provider is
-// the command's positional argument, and --provider names the same thing:
-// callers and runbooks write it both ways, so both are accepted. Giving
-// both is only an error when they DISAGREE — a command that names one
-// provider twice is unambiguous, and a command that names two is a
-// mistake worth stopping on rather than silently picking one.
-func provisionProviderName(args []string, flag string) (string, error) {
+// provisionEndpoint is the endpoint the enrollment bundle was actually
+// rendered for: the caller's own --endpoint, or the endpoint of the
+// address reserved before the bundle was requested.
+//
+// It is deliberately NOT derived from the created host's address when
+// neither applies. A provider that reserves nothing was enrolled with no
+// endpoint hint at all, and printing one computed after the fact would
+// claim the master knows an endpoint it was never told.
+func provisionEndpoint(flag string, reserved provider.Reservation) string {
+	if flag != "" {
+		return flag
+	}
+	return reserved.Endpoint
+}
+
+// providerName resolves which provider an infra verb addresses. The
+// provider is the command's positional argument, and --provider names the
+// same thing: callers and runbooks write it both ways, so both are
+// accepted. Giving both is only an error when they DISAGREE — a command
+// that names one provider twice is unambiguous, and a command that names
+// two is a mistake worth stopping on rather than silently picking one.
+func providerName(verb string, args []string, flag string) (string, error) {
 	var arg string
 	if len(args) == 1 {
 		arg = strings.TrimSpace(args[0])
@@ -215,14 +214,14 @@ func provisionProviderName(args []string, flag string) (string, error) {
 	flag = strings.TrimSpace(flag)
 	switch {
 	case arg != "" && flag != "" && arg != flag:
-		return "", fmt.Errorf("fleet: infra provision names two providers (%q and --provider %q); name one", arg, flag)
+		return "", fmt.Errorf("fleet: infra %s names two providers (%q and --provider %q); name one", verb, arg, flag)
 	case arg != "":
 		return arg, nil
 	case flag != "":
 		return flag, nil
 	}
-	return "", fmt.Errorf("fleet: infra provision needs a provider (`infra provision PROVIDER` or --provider PROVIDER); `infra list` shows them, built-in: %s",
-		strings.Join(BuiltinInfraProviders(), ", "))
+	return "", fmt.Errorf("fleet: infra %s needs a provider (`infra %s PROVIDER` or --provider PROVIDER); `infra list` shows them, built-in: %s",
+		verb, verb, strings.Join(BuiltinInfraProviders(), ", "))
 }
 
 // provisionProfiles are the satellite workload contracts the master

@@ -270,6 +270,24 @@ func (s *Server) AddInstance(name, state string, tags ...string) *Instance {
 	return in
 }
 
+// AddStaticIP seeds a static IP directly, counting no allocation.
+// attachedTo may name an instance (or be empty for a free address), which
+// is how a test stages an address that already belongs to someone.
+func (s *Server) AddStaticIP(name, attachedTo string) *StaticIP {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nextIP++
+	ip := &StaticIP{
+		Name: name, IPAddress: fmt.Sprintf("198.51.100.%d", s.nextIP), AttachedTo: attachedTo,
+	}
+	s.staticIPs[name] = ip
+	if cur, ok := s.instances[attachedTo]; ok {
+		cur.StaticIP = true
+		cur.PublicIP = ip.IPAddress
+	}
+	return ip
+}
+
 // Instance returns the fake's record for name.
 func (s *Server) Instance(name string) (Instance, bool) {
 	s.mu.Lock()

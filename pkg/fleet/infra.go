@@ -584,30 +584,51 @@ func newInfraValidate() *cobra.Command {
 // NewAdaptersCmd. Bashy mounts it later.
 func NewInfraCmd(opts ...Option) *cobra.Command {
 	var asJSON bool
-	list := &cobra.Command{Use: "list", Short: "List provider packages", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		rows, errs := New(opts...).InfraProviders()
-		if len(errs) > 0 {
-			return errs[0]
-		}
-		if asJSON {
-			return json.NewEncoder(cmd.OutOrStdout()).Encode(rows)
-		}
-		for _, p := range rows {
-			caps := make([]string, 0, len(p.Manifest.Capabilities))
-			for _, cp := range p.Manifest.Capabilities {
-				caps = append(caps, string(cp))
+	// `infra list` answers two different questions, and which one is
+	// meant is unambiguous from the command line: without --provider it
+	// lists the provider PACKAGES installed here (its original meaning),
+	// and with --provider it lists what that provider is actually
+	// running for this owner — the question an operator holding a
+	// provider name has. Nothing about the package listing changes.
+	var lf lifecycleFlags
+	list := &cobra.Command{
+		Use:   "list [--provider NAME]",
+		Short: "List provider packages, or one provider's resources with --provider",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if strings.TrimSpace(lf.providerFlag) != "" {
+				lf.asJSON = asJSON
+				return listProviderResources(cmd, opts, &lf)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\t%s\t%s\t%s\t%s\n",
-				p.Manifest.Name, p.Ring, p.Manifest.Form,
-				p.Manifest.Version, p.Manifest.ProtocolVersion, strings.Join(caps, ","))
-		}
-		return nil
-	}}
+			rows, errs := New(opts...).InfraProviders()
+			if len(errs) > 0 {
+				return errs[0]
+			}
+			if asJSON {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(rows)
+			}
+			for _, p := range rows {
+				caps := make([]string, 0, len(p.Manifest.Capabilities))
+				for _, cp := range p.Manifest.Capabilities {
+					caps = append(caps, string(cp))
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\t%s\t%s\t%s\t%s\n",
+					p.Manifest.Name, p.Ring, p.Manifest.Form,
+					p.Manifest.Version, p.Manifest.ProtocolVersion, strings.Join(caps, ","))
+			}
+			return nil
+		},
+	}
 	list.Flags().BoolVar(&asJSON, "json", false, "JSON records")
+	list.Flags().StringVar(&lf.providerFlag, "provider", "", "list this provider's resources instead of the installed provider packages")
+	list.Flags().StringVar(&lf.region, "region", "", "provider region ("+defaultsHelp(func(d provisionDefaults) string { return d.Region })+")")
+	list.Flags().StringVar(&lf.owner, "owner", "local", "ownership tag scope resources must carry")
+	list.Flags().StringVar(&lf.credentialRef, "credential-ref", "", "pkg/secrets ref for the provider credential (default the provider name)")
 	return newRoot(KindInfra, "Provider packages (declarative manifests and executable plugins)",
 		list, newShow(KindInfra, opts), newAdd(KindInfra, opts), newRm(KindInfra, opts, (*Catalog).RemoveInfraProvider),
 		newInfraInit(), newInfraValidate(), newInfraProvision(opts), NewInfraRequestCmd(),
 		NewInfraCredentialCmd(),
+		newInfraInspect(opts), newInfraDestroy(opts),
 		newInfraIP(), newInfraFirewall(), newInfraHarden(),
 		newInfraTrash(), newInfraRestore())
 }
