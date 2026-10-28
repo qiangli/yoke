@@ -267,3 +267,93 @@ func TestPageExtractNamesIconOnlyButtons(t *testing.T) {
 		t.Fatalf("icon-only close not named in extract:\n%s", ex["elements"])
 	}
 }
+
+// dropdownFixture: the widget shapes from the Google for Startups and
+// AWS Startups forms — a Material-style select that opens on mousedown
+// and renders its options in a detached popup, a searchable combobox
+// whose options exist only after typing, a radio group whose inputs
+// are visually hidden behind styled labels, and a native select.
+const dropdownFixture = `<!doctype html><html><head><style>
+.vh { position:absolute; opacity:0; width:1px; height:1px; }
+.pill { display:inline-block; padding:4px; border:1px solid #888; }
+</style></head><body><form>
+<div id="industry" role="combobox" aria-haspopup="listbox" aria-controls="industry-pop" aria-expanded="false" tabindex="0" class="pill">Select industry</div>
+<label for="launch">Launch month</label>
+<input id="launch" role="combobox" aria-autocomplete="list" aria-controls="launch-pop">
+<fieldset id="stage"><legend>Stage</legend>
+  <input class="vh" type="radio" name="stage" id="s1" value="idea"><label class="pill" for="s1">Idea</label>
+  <input class="vh" type="radio" name="stage" id="s2" value="seed"><label class="pill" for="s2">Pre-seed / Seed</label>
+</fieldset>
+<select id="country"><option value="">Choose</option><option value="us">United States</option><option value="ie">Ireland</option></select>
+</form>
+<script>
+const ind = document.getElementById('industry');
+ind.addEventListener('mousedown', () => {
+  if (document.getElementById('industry-pop')) return;
+  const ul = document.createElement('ul');
+  ul.id = 'industry-pop'; ul.setAttribute('role', 'listbox');
+  for (const name of ['Agriculture', 'Developer tools', 'Developer services', 'Fintech']) {
+    const li = document.createElement('li'); li.setAttribute('role', 'option'); li.textContent = name;
+    li.addEventListener('click', () => { ind.textContent = name; ul.remove(); ind.setAttribute('aria-expanded', 'false'); });
+    ul.appendChild(li);
+  }
+  document.body.appendChild(ul); ind.setAttribute('aria-expanded', 'true');
+});
+const months = ['January 2027', 'February 2027', 'March 2027'];
+const launch = document.getElementById('launch');
+launch.addEventListener('input', () => {
+  let ul = document.getElementById('launch-pop'); if (ul) ul.remove();
+  ul = document.createElement('ul'); ul.id = 'launch-pop'; ul.setAttribute('role', 'listbox');
+  for (const m of months.filter((x) => launch.value && x.toLowerCase().startsWith(launch.value.toLowerCase()))) {
+    const li = document.createElement('li'); li.setAttribute('role', 'option'); li.textContent = m;
+    li.addEventListener('mousedown', (e) => { e.preventDefault(); launch.value = m; ul.remove(); });
+    ul.appendChild(li);
+  }
+  document.body.appendChild(ul);
+});
+</script></body></html>`
+
+func TestPageSelectCustomWidgets(t *testing.T) {
+	h := newPageHarness(t, map[string]string{"/d": dropdownFixture})
+	h.open("/d")
+
+	ex := h.call("extract", map[string]any{})
+	els := ex["elements"].(string)
+	for _, want := range []string{`role="combobox"`, `current="Select industry"`, `>Pre-seed / Seed</label>`, `options="Choose | United States | Ireland"`} {
+		if !strings.Contains(els, want) {
+			t.Fatalf("extract does not list %s:\n%s", want, els)
+		}
+	}
+
+	cases := []struct {
+		target map[string]any
+		option string
+		check  string
+		want   string
+	}{
+		{map[string]any{"selector": "#industry"}, "Developer tools", "document.getElementById('industry').textContent", "Developer tools"},
+		{map[string]any{"selector": "#launch"}, "March 2027", "document.getElementById('launch').value", "March 2027"},
+		{map[string]any{"selector": "#stage"}, "Pre-seed", "document.querySelector('input[name=stage]:checked')?.value || ''", "seed"},
+		{map[string]any{"match_text": "Choose"}, "Ireland", "document.getElementById('country').value", "ie"},
+	}
+	for _, c := range cases {
+		p := map[string]any{"option": c.option}
+		for k, v := range c.target {
+			p[k] = v
+		}
+		res := h.call("select", p)
+		if res["error"] != nil {
+			t.Fatalf("select %v %q: %v", c.target, c.option, res["error"])
+		}
+		var got string
+		h.mainEval(c.check, &got)
+		if got != c.want {
+			t.Fatalf("select %v %q reported %v but the page has %q", c.target, c.option, res["data"], got)
+		}
+	}
+
+	res := h.call("select", map[string]any{"selector": "#industry", "option": "Biotech"})
+	if msg, _ := res["error"].(string); !strings.Contains(msg, "no option") || !strings.Contains(msg, "Fintech") {
+		t.Fatalf("a missing option must be an error naming the visible options, got %v", res)
+	}
+}

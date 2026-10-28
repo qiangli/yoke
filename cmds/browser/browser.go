@@ -32,7 +32,7 @@ var cmd = &tool.Tool{
 		"  probe  attach to a Chrome you started with --remote-debugging-port=9222 — persistent session\n" +
 		"  live   drive your real logged-in Chrome via `browser hub` + the MV3 extension (cookies/SSO intact)\n" +
 		"\n" +
-		"Subcommands: status navigate extract eval dispatch-event click type wait-for-selector\n" +
+		"Subcommands: status navigate extract eval dispatch-event click type select wait-for-selector\n" +
 		"  screenshot cookies-get scroll keyboard-press back tabs fetch hub setup login\n" +
 		"Each has its OWN page: `browser <subcommand> --help` documents its operands,\n" +
 		"which modes implement it, and its output contract.\n" +
@@ -603,6 +603,27 @@ func actionFromArgs(args []string, f actionFlags) (wire.Action, error) {
 			a.Selector = rest[0]
 			a.Text = strings.Join(rest[1:], " ")
 		}
+		return a, nil
+
+	case "select":
+		// select <selector|index> <option...> | --index N <option...> | --text LABEL <option...>
+		a := wire.Action{Type: wire.ActionSelect, ElementID: f.Index, MatchText: f.MatchText, Scope: f.Scope}
+		opt := rest
+		if a.ElementID == 0 && a.MatchText == "" {
+			if len(rest) < 2 {
+				return wire.Action{}, fmt.Errorf("select requires a target (selector, index, --index or --text) and an option")
+			}
+			if n, err := strconv.Atoi(rest[0]); err == nil && n > 0 {
+				a.ElementID = n
+			} else {
+				a.Selector = rest[0]
+			}
+			opt = rest[1:]
+		}
+		if len(opt) == 0 {
+			return wire.Action{}, fmt.Errorf("select requires an option")
+		}
+		a.Text = strings.Join(opt, " ")
 		return a, nil
 
 	case "eval", "evaluate":

@@ -13,10 +13,15 @@
 // reported as { error: "..." } rather than thrown, so the caller can
 // tell "the page said no" from "injection failed".
 (() => {
-  const VERSION = 2;
+  const VERSION = 3;
   if (globalThis.__bashyPage && globalThis.__bashyPage.version === VERSION) return;
 
-  const CANDIDATES = "a, button, input, select, textarea, [role='button'], [role='link']";
+  // Native controls plus the ARIA widgets component libraries build
+  // forms from (Material/Fluent/Headless UI selects, comboboxes, radio
+  // groups) and the <label> of a visually hidden radio/checkbox.
+  const CANDIDATES = "a, button, input, select, textarea, label, [role='button'], [role='link'], " +
+    "[role='combobox'], [role='listbox'], [role='option'], [role='radio'], [role='checkbox'], " +
+    "[role='switch'], [role='tab'], [role='menuitem'], [role='menuitemradio'], [aria-haspopup='listbox']";
   const LANDMARKS = "nav, aside, [role='navigation'], [role='complementary']";
 
   function query(root, sel) {
@@ -58,6 +63,38 @@
     return s && !s.__badSelector ? s : null;
   }
 
+  // candidate drops elements that would only duplicate another entry:
+  // a <label> counts only when it stands in for a hidden radio/checkbox
+  // (the visible control of a styled group), and an element nested in
+  // another candidate widget (a span[role=option] inside a button) is
+  // skipped unless it is an option/radio of its own.
+  function candidate(el) {
+    if (el.tagName === "LABEL") {
+      const c = el.control;
+      return !!c && (c.type === "radio" || c.type === "checkbox") && !shown(c);
+    }
+    return true;
+  }
+
+  // valueOf is the widget's CURRENT value as a user sees it.
+  function valueOf(el) {
+    const tag = el.tagName;
+    const role = el.getAttribute("role") || "";
+    if (tag === "SELECT") {
+      const o = el.selectedOptions && el.selectedOptions[0];
+      return o ? o.text.trim() : "";
+    }
+    if (tag === "INPUT" && (el.type === "radio" || el.type === "checkbox")) return el.checked ? "checked" : "unchecked";
+    if (tag === "LABEL" && el.control) return el.control.checked ? "checked" : "unchecked";
+    const ac = el.getAttribute("aria-checked") || el.getAttribute("aria-selected");
+    if (ac) return ac === "true" ? "checked" : "unchecked";
+    if (role === "combobox" || el.getAttribute("aria-haspopup")) {
+      if ("value" in el && tag === "INPUT") return el.value;
+      return (el.getAttribute("aria-valuetext") || el.innerText || "").trim();
+    }
+    return null;
+  }
+
   // candidates is THE enumeration: extract numbers it, and click/type
   // --index resolve through it, so [N] in a listing is the element an
   // index-addressed action hits.
@@ -67,6 +104,7 @@
     const includeHidden = !!params.include_hidden;
     const out = [];
     for (const el of root.querySelectorAll(CANDIDATES)) {
+      if (!candidate(el)) continue;
       if (navFilter && el.closest && el.closest(LANDMARKS)) continue;
       if (!includeHidden && !shown(el)) continue;
       out.push(el);
@@ -116,6 +154,16 @@
           attrs[a] = String(v).slice(0, 60);
           attrPairs.push(`${a}="${String(v).slice(0, 60)}"`);
         }
+      }
+      const val = valueOf(el);
+      if (val !== null) {
+        attrs.current = String(val).slice(0, 60);
+        attrPairs.push(`current="${attrs.current}"`);
+      }
+      if (el.tagName === "SELECT") {
+        const opts = Array.from(el.options).slice(0, 12).map((o) => o.text.trim());
+        attrs.options = opts.join(" | ");
+        attrPairs.push(`options="${attrs.options}${el.options.length > 12 ? " | ..." : ""}"`);
       }
       const vis = shown(el);
       // The index is the CLICK ADDRESS in the full enumeration, so a
@@ -361,6 +409,108 @@
     return { ok: true, matched: describe(el) };
   }
 
+  // realClick fires the pointer/mouse sequence a user produces;
+  // many listboxes open on mousedown/pointerdown, not on click.
+  function realClick(el) {
+    try { el.scrollIntoView({ block: "center", inline: "nearest" }); } catch (_) { /* detached */ }
+    const r = el.getBoundingClientRect();
+    const o = { bubbles: true, cancelable: true, composed: true, view: window, button: 0,
+      clientX: r.x + r.width / 2, clientY: r.y + r.height / 2 };
+    el.dispatchEvent(new PointerEvent("pointerdown", Object.assign({ pointerType: "mouse", isPrimary: true }, o)));
+    el.dispatchEvent(new MouseEvent("mousedown", o));
+    if (focusable(el) && el.focus) el.focus();
+    el.dispatchEvent(new PointerEvent("pointerup", Object.assign({ pointerType: "mouse", isPrimary: true }, o)));
+    el.dispatchEvent(new MouseEvent("mouseup", o));
+    el.click();
+  }
+
+  function pickByName(els, want) {
+    let best = null, bestM = 0;
+    for (const el of els) {
+      const n = norm(labelOf(el)) || norm(el.getAttribute("value"));
+      let m = 0;
+      if (n === want) m = 3; else if (n.startsWith(want)) m = 2; else if (n.indexOf(want) >= 0) m = 1;
+      if (m > bestM) { best = el; bestM = m; }
+    }
+    return best;
+  }
+
+  function visibleOptions(near) {
+    // Options of the popup this widget controls, else any visible ones.
+    const id = near && (near.getAttribute("aria-controls") || near.getAttribute("aria-owns"));
+    const scope = id ? document.getElementById(id) : null;
+    const sel = "[role='option'], [role='menuitem'], [role='menuitemradio'], [role='listbox'] li";
+    const pool = Array.from((scope || document).querySelectorAll(sel)).filter(shown);
+    return pool.length || !scope ? pool : Array.from(document.querySelectorAll(sel)).filter(shown);
+  }
+
+  // select picks an option in a native <select>, a radio group, or a
+  // custom listbox/combobox (open it, filter if it is searchable, pick
+  // the option), then verifies the widget shows the choice.
+  async function select(params) {
+    const want = norm(params.option);
+    if (!want) return { error: "select: an option is required" };
+    const el = resolveTarget(params);
+    if (el && el.__miss) return { error: `select: ${el.__miss}` };
+    const matched = describe(el);
+    const done = (got) => ({ content: "selected", data: JSON.stringify({ matched, selected: got }) });
+
+    if (el.tagName === "SELECT") {
+      const o = pickByName(Array.from(el.options), want);
+      if (!o) return { error: `select: ${matched} has no option ${JSON.stringify(params.option)} (options: ${Array.from(el.options).map((x) => x.text.trim()).join(" | ")})` };
+      if (el.focus) el.focus();
+      setNative(el, o.value);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      await wait(50);
+      const got = valueOf(el);
+      if (norm(got) !== norm(o.text)) return { error: `select: ${matched} shows ${JSON.stringify(got)} after choosing ${JSON.stringify(o.text.trim())}` };
+      return done(got);
+    }
+
+    // A radio group: the target is the group (or any member); choose
+    // the member whose label matches.
+    const group = el.closest("[role='radiogroup'], fieldset") || (el.matches("[role='radiogroup'], fieldset") ? el : null);
+    if (group) {
+      const members = Array.from(group.querySelectorAll("[role='radio'], input[type='radio'], label")).filter((m) => m.tagName !== "INPUT" || shown(m));
+      const m = pickByName(members, want);
+      if (m) {
+        realClick(m);
+        await wait(50);
+        const input = m.tagName === "LABEL" ? m.control : m;
+        const ok = input && (input.checked || input.getAttribute("aria-checked") === "true");
+        if (!ok) return { error: `select: clicked ${describe(m)} in ${matched} but it is not checked` };
+        return done(labelOf(m));
+      }
+    }
+
+    // Custom listbox/combobox: open, filter if searchable, pick.
+    const input = el.tagName === "INPUT" ? el : el.querySelector("input:not([type='hidden'])");
+    realClick(el);
+    let opts = [];
+    for (let i = 0; i < 20 && !(opts = visibleOptions(el)).length; i++) await wait(50);
+    let opt = pickByName(opts, want);
+    if (!opt && input) {
+      if (input.focus) input.focus();
+      insertViaEditing(input, params.option) || (setNative(input, params.option),
+        input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: params.option })));
+      for (let i = 0; i < 30 && !(opt = pickByName(visibleOptions(el), want)); i++) await wait(50);
+    }
+    if (!opt) {
+      const seen = visibleOptions(el).slice(0, 12).map((o) => labelOf(o)).join(" | ");
+      return { error: `select: no option ${JSON.stringify(params.option)} in ${matched}` + (seen ? ` (visible: ${seen})` : " (no options opened)") };
+    }
+    const chosen = labelOf(opt);
+    realClick(opt);
+    await wait(100);
+    const shows = norm(valueOf(el) || labelOf(el) || (input && input.value));
+    const picked = opt.getAttribute("aria-selected") === "true" && opt.isConnected;
+    if (shows.indexOf(norm(chosen)) < 0 && !picked) {
+      return { error: `select: chose ${JSON.stringify(chosen)} but ${matched} shows ${JSON.stringify(shows)}` };
+    }
+    return done(chosen);
+  }
+
   function scroll(params) {
     let amount = params.amount || 500;
     if (params.direction === "up") amount = -amount;
@@ -370,6 +520,6 @@
 
   globalThis.__bashyPage = {
     version: VERSION,
-    extract, click, type, scroll, readValue, focusTarget,
+    extract, click, type, select, scroll, readValue, focusTarget,
   };
 })();

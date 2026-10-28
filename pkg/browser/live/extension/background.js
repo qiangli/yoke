@@ -133,7 +133,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 const SUPPORTED_METHODS = [
   "navigate", "back", "screenshot", "extract",
-  "click", "type", "scroll", "tabs", "evaluate",
+  "click", "type", "select", "scroll", "tabs", "evaluate",
   "wait_for_selector", "keyboard_press",
   "clipboard_read", "clipboard_write",
   "cookies_get", "storage_get", "capabilities",
@@ -411,6 +411,8 @@ async function dispatchOnTab(method, params, tabId) {
       return runInTab(tabId, "click", params);
     case "type":
       return runInTab(tabId, "type", params);
+    case "select":
+      return runInTab(tabId, "select", params);
     case "scroll":
       return runInTab(tabId, "scroll", params);
     case "evaluate":

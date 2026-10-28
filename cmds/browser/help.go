@@ -73,6 +73,18 @@ var subcommands = map[string]subcommand{
 		Mode: "solo, probe, live",
 		Out:  "envelope with content=\"typed\"",
 	},
+	"select": {
+		Name: "select", Args: "<css-selector> | <index> | --index N | --text LABEL  <option...>",
+		One:  "pick an option in a dropdown, combobox, listbox or radio group",
+		Mode: "live",
+		Out:  "envelope with content=\"selected\" and data.selected; an option that is absent or does not stick is success:false naming what the widget shows",
+		Body: []string{
+			"Works on a native <select>, a radio group (target the group or any member),",
+			"and custom ARIA listboxes/comboboxes: opens the widget, types to filter when",
+			"it is searchable, picks the option by name (exact > prefix > substring), then",
+			"verifies. `extract` lists these widgets with their current value.",
+		},
+	},
 	"eval": {
 		Name: "eval", Args: "<javascript>",
 		One:  "evaluate JavaScript in the page and return the value",

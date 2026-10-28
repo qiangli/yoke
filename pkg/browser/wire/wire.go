@@ -259,4 +259,9 @@ const (
 	// and "click whichever element happens to share the handler" is
 	// not always available as a workaround.
 	ActionDispatchEvent = "dispatch_event"
+
+	// ActionSelect picks an option (Action.Text) in a native <select>,
+	// a radio group, or a custom listbox/combobox addressed like click.
+	// Live mode only; it verifies the widget shows the choice.
+	ActionSelect = "select"
 )

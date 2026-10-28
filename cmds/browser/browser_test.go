@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/qiangli/coreutils/tool"
+	"github.com/qiangli/yoke/pkg/browser/wire"
 )
 
 func runTool(t *testing.T, args ...string) (stdout, stderr string, code int) {
@@ -399,5 +400,32 @@ func TestLoginDryRun(t *testing.T) {
 	}
 	if !strings.Contains(out, `success_url="/ok"`) || !strings.Contains(out, `domain="example.test"`) {
 		t.Fatalf("unexpected dry run: %q", out)
+	}
+}
+
+func TestSelectAction(t *testing.T) {
+	cases := []struct {
+		args []string
+		f    actionFlags
+		want wire.Action
+	}{
+		{[]string{"select", "#industry", "Developer", "tools"}, actionFlags{},
+			wire.Action{Type: wire.ActionSelect, Selector: "#industry", Text: "Developer tools"}},
+		{[]string{"select", "12", "Ireland"}, actionFlags{},
+			wire.Action{Type: wire.ActionSelect, ElementID: 12, Text: "Ireland"}},
+		{[]string{"select", "March", "2027"}, actionFlags{MatchText: "Launch month"},
+			wire.Action{Type: wire.ActionSelect, MatchText: "Launch month", Text: "March 2027"}},
+	}
+	for _, c := range cases {
+		a, err := actionFromArgs(c.args, c.f)
+		if err != nil {
+			t.Fatalf("%v: %v", c.args, err)
+		}
+		if a.Type != c.want.Type || a.Selector != c.want.Selector || a.ElementID != c.want.ElementID || a.MatchText != c.want.MatchText || a.Text != c.want.Text {
+			t.Fatalf("%v: got %#v want %#v", c.args, a, c.want)
+		}
+	}
+	if _, err := actionFromArgs([]string{"select", "#industry"}, actionFlags{}); err == nil {
+		t.Fatal("select without an option must be a usage error")
 	}
 }
