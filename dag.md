@@ -267,3 +267,68 @@ Effects: destroy
 ```bash
 rm -rf bin
 ```
+
+### chrome-ext-test
+Test the bashy browser live Chrome extension: the manifest version against the
+hub floor, the release packer, and the browser command surface.
+Sources: pkg/browser/, cmds/browser/, cmd/chrome-ext-release/
+Effects: exec,net,read,write
+
+```bash
+set -e
+go test ./pkg/browser/live/ ./cmds/browser/ ./cmd/chrome-ext-release/
+```
+
+### chrome-ext-release
+Pack the embedded live extension for release into dist/chrome-ext/: the zip the
+Chrome Web Store takes (`bashy-live-<manifest version>.zip`) plus its sha256.
+The version comes from `extension/manifest.json` and must meet the hub floor
+(`LiveExtensionMinVersion`). The pack is reproducible — the target packs twice
+and refuses if the two archives differ.
+Requires: chrome-ext-test
+Sources: pkg/browser/live/, cmd/chrome-ext-release/
+Generates: dist/chrome-ext
+Effects: exec,net,read,write,destroy
+
+```bash
+set -e
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+go run ./cmd/chrome-ext-release -out "$tmp/a" >/dev/null
+go run ./cmd/chrome-ext-release -out "$tmp/b" >/dev/null
+for z in "$tmp"/a/*.zip; do
+  cmp "$z" "$tmp/b/$(basename "$z")" || { echo "chrome-ext-release: pack is not reproducible" >&2; exit 1; }
+done
+go run ./cmd/chrome-ext-release -out dist/chrome-ext
+cat dist/chrome-ext/*.zip.sha256
+```
+
+### chrome-ext-crx
+Also pack a signed CRX3 (for enterprise-policy / self-hosted installs; Chrome on
+Windows and macOS refuses off-store CRX otherwise, so the Web Store zip stays
+the user path). The signing key comes from the secrets vault entry
+`CHROME_EXT_CRX_KEY` (an RSA PEM) and never touches the repository or disk.
+Requires: chrome-ext-release
+Generates: dist/chrome-ext
+Effects: exec,net,write,cred
+
+```bash
+set -e
+CHROME_EXT_CRX_KEY=$(bashy secret show CHROME_EXT_CRX_KEY)
+export CHROME_EXT_CRX_KEY
+go run ./cmd/chrome-ext-release -out dist/chrome-ext -key-env CHROME_EXT_CRX_KEY
+```
+
+### chrome-ext-publish
+Upload the release zip to the Chrome Web Store. Human-gated and deferred to
+v1.0.x: it needs the store listing (developer account, privacy disclosure) that
+a human creates once. Until then this target refuses, so no agent can publish
+by accident; side-loading via `bashy browser setup live` is the v1.0 path.
+Requires: chrome-ext-release
+Effects: net,cred,spend
+
+```bash
+echo "chrome-ext-publish: the Chrome Web Store listing does not exist yet (v1.0.x);" >&2
+echo "upload dist/chrome-ext/*.zip from the developer dashboard after a human approves the release." >&2
+exit 2
+```
