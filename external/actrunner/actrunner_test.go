@@ -1,6 +1,7 @@
 package actrunner
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -10,6 +11,42 @@ import (
 	"github.com/qiangli/yoke/external/internal/serviceenv"
 	"github.com/qiangli/yoke/pkg/binmgr"
 )
+
+func TestExplicitLocalBuild(t *testing.T) {
+	t.Setenv("ACT_RUNNER_VERSION", "")
+	bin := filepath.Join(t.TempDir(), "act_runner.exe")
+	if err := os.WriteFile(bin, []byte("local build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ACT_RUNNER_BIN", bin)
+	got, err := resolve(context.Background(), "")
+	if err != nil || got != bin {
+		t.Fatalf("local build = %q, %v; want %q", got, err, bin)
+	}
+	if _, err := resolve(context.Background(), DefaultVersion); err == nil {
+		t.Fatal("local build must not pretend to select a signed version")
+	}
+	t.Setenv("ACT_RUNNER_VERSION", DefaultVersion)
+	if _, err := resolve(context.Background(), ""); err == nil {
+		t.Fatal("local build must reject an environment version selection too")
+	}
+	t.Setenv("ACT_RUNNER_VERSION", "")
+	for _, bad := range []string{"relative.exe", filepath.Dir(bin), bin + ".missing"} {
+		t.Setenv("ACT_RUNNER_BIN", bad)
+		if _, err := resolve(context.Background(), ""); err == nil {
+			t.Fatalf("accepted invalid local build %q", bad)
+		}
+	}
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(bin, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("ACT_RUNNER_BIN", bin)
+		if _, err := resolve(context.Background(), ""); err == nil {
+			t.Fatal("accepted a non-executable local build")
+		}
+	}
+}
 
 func TestManagedEnvPinsLocalCollector(t *testing.T) {
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "https://vendor.example")
@@ -132,9 +169,9 @@ func TestActrunnerIsVerifiedPin(t *testing.T) {
 	}
 }
 
-func TestActrunnerRejectsWindows(t *testing.T) {
-	// No windows asset may ever be declared: the pin is darwin+linux only
-	// and windows fails closed with no upstream fallback.
+func TestManagedActrunnerRejectsWindows(t *testing.T) {
+	// The current signed pin is darwin+linux only. Managed Windows downloads
+	// still fail closed; selecting a local build is a separate explicit choice.
 	for _, plat := range []string{"windows/amd64", "windows/arm64"} {
 		if _, ok := ActrunnerTool.Assets[plat]; ok {
 			t.Fatalf("%s asset present; windows must fail closed", plat)
@@ -143,7 +180,7 @@ func TestActrunnerRejectsWindows(t *testing.T) {
 	// OS-aware assertion against the actual resolver: on windows every
 	// version (including the pin) is refused with the supply-chain policy;
 	// elsewhere the pin resolves and the refusal is enforced by the asset
-	// absence above plus the windows-only guard (no test bypass exists).
+	// absence above plus the windows-only guard.
 	if runtime.GOOS == "windows" {
 		_, err := resolveTool("")
 		if err == nil {
