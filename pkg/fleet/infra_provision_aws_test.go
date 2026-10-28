@@ -1,7 +1,10 @@
 package fleet
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -22,22 +25,23 @@ func clearAWSCredentialEnv(t *testing.T) {
 		"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
 		"AWS_REGION", "AWS_DEFAULT_REGION",
 		"AWS_API_KEY", "AWS_TOKEN", "AWS_KEY", "AWS",
+		"AWS_USERDATA_BUCKET",
 	} {
 		t.Setenv(k, "")
 	}
 }
 
 // useFakeLightsail points every built-in AWS endpoint (Lightsail, Cost
-// Explorer, Budgets, STS) at the fake for the duration of the test.
+// Explorer, Budgets, STS, S3) at the fake for the duration of the test.
 func useFakeLightsail(t *testing.T) *fakelightsail.Server {
 	t.Helper()
 	srv := fakelightsail.New(t)
-	oldLS, oldCE, oldB, oldSTS := awsLightsailBaseURL, awsCostExplorerURL, awsBudgetsURL, awsSTSURL
+	oldLS, oldCE, oldB, oldSTS, oldS3 := awsLightsailBaseURL, awsCostExplorerURL, awsBudgetsURL, awsSTSURL, awsS3URL
 	awsLightsailBaseURL, awsCostExplorerURL = srv.URL, srv.URL
-	awsBudgetsURL, awsSTSURL = srv.URL, srv.URL
+	awsBudgetsURL, awsSTSURL, awsS3URL = srv.URL, srv.URL, srv.URL
 	t.Cleanup(func() {
 		awsLightsailBaseURL, awsCostExplorerURL = oldLS, oldCE
-		awsBudgetsURL, awsSTSURL = oldB, oldSTS
+		awsBudgetsURL, awsSTSURL, awsS3URL = oldB, oldSTS, oldS3
 	})
 	return srv
 }
@@ -532,4 +536,89 @@ func TestProvisionHelpDocumentsBudgetName(t *testing.T) {
 			t.Fatalf("help missing %q:\n%s", want, out)
 		}
 	}
+}
+
+// `--userdata-bucket` reaches the adapter (S522.2 rework 2).
+//
+// The master's first-boot script is larger than EC2's 16 KiB user-data
+// limit and does not compress into it, so the adapter stages it in S3 and
+// launches a fetch bootstrap. The bucket defaults per account and region;
+// this pins that the flag's value is what the adapter actually writes to,
+// because a flag that is parsed and then dropped looks exactly like one
+// that works.
+func TestProvisionAWSUserDataBucketFlagReachesTheAdapter(t *testing.T) {
+	isolatedFleetRoot(t)
+	srv := useFakeLightsail(t)
+	clearAWSCredentialEnv(t)
+	awsCredentialEnv(t)
+
+	a, err := openBuiltin("aws", builtinOpenOptions{
+		Owner:          "local",
+		Region:         fakelightsail.TestRegion,
+		Credential:     fakelightsail.TestSecretAccessKey,
+		UserDataBucket: "staging-from-the-flag",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = a.Do(t.Context(), provider.Request{
+		ProtocolVersion: provider.ProtocolVersion,
+		Op:              provider.OpCreate,
+		IdempotencyKey:  "infra-provision-zoo-aws",
+		Spec: &provider.Spec{
+			Name: "zoo-aws", Region: fakelightsail.TestRegion,
+			Size: "small_3_0", Image: "ubuntu_24_04",
+			UserData: incompressibleFirstBootScript(t),
+		},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	keys := srv.S3Keys()
+	if len(keys) != 1 || !strings.HasPrefix(keys[0], "staging-from-the-flag/") {
+		t.Fatalf("staged at %v, want the bucket the flag named", keys)
+	}
+	ud, _ := srv.LastCreate()["userData"].(string)
+	if !awsprovider.StagedUserData([]byte(ud)) {
+		t.Fatalf("the instance did not launch with a fetch bootstrap:\n%s", ud)
+	}
+	if n := srv.BadSignatures(); n != 0 {
+		t.Fatalf("%d request(s) failed SigV4 verification", n)
+	}
+}
+
+// The flag is documented where an operator looks for it, and names the
+// default so a runbook does not have to guess the bucket.
+func TestProvisionUserDataBucketFlagIsDocumented(t *testing.T) {
+	isolatedFleetRoot(t)
+	out, err := runInfra(t, "provision", "--help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"--userdata-bucket", awsprovider.EnvUserDataBucket, awsprovider.UserDataBucketPrefix} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("`infra provision --help` does not mention %q:\n%s", want, out)
+		}
+	}
+}
+
+// incompressibleFirstBootScript is a ~43 KB script with enough
+// high-entropy content that gzip+base64 cannot fit it in 16 KiB — the
+// shape of the live master script.
+func incompressibleFirstBootScript(t *testing.T) []byte {
+	t.Helper()
+	raw := make([]byte, 16*1024)
+	if _, err := rand.Read(raw); err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	b.WriteString("#!/bin/bash\nset -euo pipefail\n")
+	enc := base64.StdEncoding.EncodeToString(raw)
+	for i := 0; i < len(enc); i += 76 {
+		b.WriteString(enc[i:min(i+76, len(enc))] + "\n")
+	}
+	for i := 0; b.Len() < 43*1024; i++ {
+		fmt.Fprintf(&b, "printf '%%s\\n' 'first-boot step %d'\n", i)
+	}
+	return []byte(b.String())
 }

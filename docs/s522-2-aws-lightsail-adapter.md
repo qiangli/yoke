@@ -14,7 +14,7 @@ the vault keys, after review; §Live run below is the exact sequence.
 
 | Where | What |
 |---|---|
-| `pkg/provider/aws/` | the `aws` built-in adapter: stdlib SigV4, Lightsail JSON API, budget preflight, governance tags, user-data wrapping, static IP, satellite firewall |
+| `pkg/provider/aws/` | the `aws` built-in adapter: stdlib SigV4 (header + presigned), Lightsail JSON API, budget preflight, governance tags, user-data wrapping and S3 staging, static IP, satellite firewall |
 | `pkg/provider/aws/fakelightsail/` | the signature-verifying fake (Lightsail + Cost Explorer + AWS Budgets + STS) |
 | `pkg/fleet/infra_builtin.go` | the ONE registry of compiled-in providers: names, per-provider flag defaults, credential resolution, how each is opened |
 | `pkg/fleet/infra_provision.go` | now provider-agnostic — no per-provider branching left |
@@ -98,29 +98,87 @@ calling AWS, so an untagged instance is refused with a message that says
 what is wrong — rather than failing as an opaque
 `AccessDeniedException` that reads like a credential problem.
 
-## User data: byte-identical, or losslessly wrapped
+## User data: byte-identical, through whichever layer it fits in
 
 The real caller hands the adapter the master's **complete** first-boot
 script (`pkg/provider/enroll`). A VM given anything else — a JSON encoding
-of the bundle, a truncated script — never installs or enrolls, so:
+of the bundle, a truncated script — never installs or enrolls. So the
+script reaches the host byte-identical in every case, through the first of
+three layers that fits:
 
-- a script within the limit goes through **byte-identical**; a wrapper that
-  is not needed is a wrapper that can go wrong;
-- a larger one is gzip+base64'd into a tiny `#!/bin/sh` bootstrap that
-  decodes and execs it, and the round trip is unit-tested at 16 KiB+1,
-  25 KB, 30 KB, 35 KB and 200 KB;
-- a script that does not fit even compressed is an **error**, never a
-  silent truncation.
+| layer | when | what goes in `userData` |
+| --- | --- | --- |
+| raw | `len <= 16 KiB` | the script itself, byte for byte |
+| gzip wrapper | compresses into 16 KiB | `#!/bin/sh` + base64 payload that decodes and execs it |
+| **S3 staging** | neither fits | `#!/bin/sh` + a presigned GET that fetches, verifies and execs it |
 
-What the wrapper can carry: base64 costs 4/3, so the gzip output has to
-fit in ~11.6 KiB. Shell text compresses 10x or better, so a 25-35 KB
+`Fit` decides between the first two; the adapter takes the third when
+`Fit` reports that nothing fits. Nothing is ever truncated.
+
+What the gzip wrapper can carry: base64 costs 4/3, so the gzip output has
+to fit in ~11.6 KiB. Shell text compresses 10x or better, so a 25-35 KB
 script of mostly shell wraps to 2-3 KB. The binding constraint is
 **incompressible** content — roughly **8 KiB** of raw high-entropy bytes
 (keys, certificate chains, embedded blobs) is the ceiling, measured and
-pinned by `TestWrapUserDataIncompressibleCeiling`. The enrollment bundle's
-Ed25519 key and single-use token are far below it. A caller that ever hits
-it has to stage the payload out of band; that is the caller's decision,
-not something this adapter truncates its way around.
+pinned by `TestWrapUserDataIncompressibleCeiling`.
+
+### Why S3 staging exists (rework 2, 2026-10-28)
+
+The live provision of `zoo-aws` was refused before any AWS call:
+
+```
+user-data script is 43392 bytes and still 21753 bytes after gzip+base64,
+over the 16384 byte limit
+```
+
+The master's script is ~43 KB, carries incompressible material, and only
+grows. Compression is not a path to 16 KiB, so the adapter does what AWS
+documents for a large launch script: **stage it in S3, launch a fetch
+bootstrap.**
+
+- **The object.** `PutObject` of the ORIGINAL script bytes to
+  `dhnt-userdata-<accountId>-<region>` (overridable with
+  `--userdata-bucket` / `$AWS_USERDATA_BUCKET`), key
+  `<instance>/<16 hex>.sh`, with an explicit `x-amz-server-side-encryption:
+  AES256` header. The random half of the key means a replayed create never
+  overwrites the object a still-booting instance is fetching. The bucket is
+  provisioned out of band — private, public access blocked, SSE default, a
+  lifecycle rule expiring objects after one day — and the IAM policy grants
+  `s3:PutObject` / `GetObject` / `DeleteObject` on `bucket/*` and nothing
+  else: no `ListBucket`, no `CreateBucket`. So this adapter never lists and
+  never creates a bucket.
+- **The bootstrap** (`StagedBootstrap`, ~1.9 KB, pinned under a 4 KB
+  budget and syntax-checked with `sh -n`): fetch the presigned URL with
+  `curl`, falling back to `wget`, retrying for up to 10 minutes because a
+  fresh instance's network is not always up when cloud-init runs; verify
+  the script's **sha256** against the digest embedded in the bootstrap;
+  exec it under its own shebang. Any failure writes a reason to
+  `/var/log/dhnt-userdata.log` and exits non-zero.
+- **The presigned URL** (`PresignURL`, SigV4 query-string authentication,
+  `X-Amz-Expires` 1800). This is the whole security argument for the path:
+  the bootstrap is readable by anything that can read the instance's user
+  data, and the ONLY credential-derived material in it authorizes exactly
+  one GET of exactly one object and expires on its own. No access key, no
+  secret, and no enrollment token is ever in the bootstrap — the
+  enrollment token is in the staged script, which is what the URL fetches,
+  and the digest is what makes that fetch trustworthy.
+- **Remembering the key.** Without `s3:ListBucket`, destroy cannot
+  discover the object, so create records it as the Lightsail tag
+  `dhnt:userdata-key`. Destroy deletes that key after the instance is
+  gone (while the instance exists it may still be fetching). A failed
+  delete is a NOTE, not a failed destroy: the lifecycle rule collects it,
+  and an object under a one-day expiry is not an ongoing cost.
+- **Order.** Staging happens after the budget preflight and before
+  `CreateInstances`, so a refused create writes nothing. A staged object
+  whose create then fails is deliberately left alone — the instance may
+  exist anyway (a lost answer reconciles by idempotency tag) and may still
+  be fetching; the lifecycle rule is the collector.
+
+The presigner is pinned by AWS's **published presigned-URL vector**
+(canonical request, its hash, and the signature, all three), and the fake
+S3 in `fakelightsail` verifies every presigned GET by RECOMPUTING its
+signature — so a URL that merely looks plausible fails the test suite
+rather than the live boot.
 
 **The limit is 16 KiB, and it is not in the Lightsail docs.**
 `CreateInstances` documents no length constraint on `userData`
@@ -129,8 +187,9 @@ but a Lightsail instance is an EC2 instance underneath and EC2 enforces
 16384 bytes of raw user data at launch
 (<https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/user-data.html>).
 Over it, the instance launches and then never initializes — which is why
-this is wrapped rather than trusted to a missing doc constraint. The real
-enrollment script is ~25-35 KB, i.e. always wrapped in practice.
+this is handled rather than trusted to a missing doc constraint. The real
+enrollment script is ~43 KB and does not compress into the limit, i.e.
+always S3-staged in practice.
 
 ## Static IP and firewall
 

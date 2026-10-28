@@ -68,6 +68,10 @@ type builtinOpenOptions struct {
 	// BudgetName is the account budget the provider's spend preflight
 	// reads (AWS); empty means that provider's default.
 	BudgetName string
+	// UserDataBucket is the bucket an oversize first-boot script is
+	// staged in (AWS); empty means $AWS_USERDATA_BUCKET, else the
+	// provider's per-account default.
+	UserDataBucket string
 }
 
 // digitaloceanBaseURL and awsLightsailBaseURL override the API roots used
@@ -84,6 +88,10 @@ var (
 	awsCostExplorerURL string
 	awsBudgetsURL      string
 	awsSTSURL          string
+	// awsS3URL is the user-data staging bucket's endpoint seam. S3 is a
+	// different service again, and a different protocol: the object is
+	// the URL, not an X-Amz-Target.
+	awsS3URL string
 )
 
 // builtinProviders is the registry, by manifest name.
@@ -136,6 +144,8 @@ var builtinProviders = map[string]builtinProvider{
 				CostExplorerURL: awsCostExplorerURL,
 				BudgetsURL:      awsBudgetsURL,
 				STSURL:          awsSTSURL,
+				S3URL:           awsS3URL,
+				UserDataBucket:  o.UserDataBucket,
 				Sprint:          o.Sprint,
 				Story:           o.Story,
 				TTL:             o.TTL,

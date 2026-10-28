@@ -34,7 +34,7 @@ func newInfraProvision(opts []Option) *cobra.Command {
 	var region, size, image, hostName, owner, credentialRef, key, profile string
 	var sprint, story, ttl string
 	var budgetCap, budgetPerInstance float64
-	var budgetName string
+	var budgetName, userDataBucket string
 	var dryRun, asJSON bool
 	cmd := &cobra.Command{
 		Use:   "provision [PROVIDER]",
@@ -80,7 +80,7 @@ func newInfraProvision(opts []Option) *cobra.Command {
 				Owner: owner, Region: region,
 				Sprint: sprint, Story: story, TTL: ttl,
 				BudgetCap: budgetCap, BudgetPerInstance: budgetPerInstance,
-				BudgetName: budgetName,
+				BudgetName: budgetName, UserDataBucket: userDataBucket,
 			}
 			builtin, isBuiltin := builtinFor(p)
 			if dryRun {
@@ -188,6 +188,14 @@ func newInfraProvision(opts []Option) *cobra.Command {
 	// explorer may have no data at all; see pkg/provider/aws/budgets.go).
 	cmd.Flags().StringVar(&budgetName, "budget-name", "",
 		fmt.Sprintf("account budget read for month-to-date spend and, without --budget-cap, for the cap itself (default %q for aws)", awsprovider.DefaultBudgetName))
+	// The master's first-boot script is larger than EC2's 16 KiB
+	// user-data limit and does not compress into it either, so the
+	// adapter stages it in S3 and launches a fetch bootstrap instead
+	// (pkg/provider/aws/s3.go). The bucket is per account and region and
+	// is provisioned out of band; this names a different one.
+	cmd.Flags().StringVar(&userDataBucket, "userdata-bucket", "",
+		"bucket an oversize first-boot script is staged in (default $"+awsprovider.EnvUserDataBucket+
+			", else "+awsprovider.UserDataBucketPrefix+"<account-id>-<region> for aws)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "validate and print the exact request plus the size and budget preflight; create nothing")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "machine-readable output")
 	return cmd

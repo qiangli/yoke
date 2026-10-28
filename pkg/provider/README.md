@@ -209,10 +209,18 @@ declarative engine and neither spawns a program.
     IAM policy permits deleting only `dhnt:managed=true` resources, so
     destroy refuses an untagged instance up front rather than failing as
     an opaque `AccessDeniedException`.
-  - **lossless user-data wrapping** (`userdata.go`): the master's
-    first-boot script goes through byte-identical, and is gzip+base64
-    wrapped in a tiny `#!/bin/sh` bootstrap only when it exceeds EC2's
-    16 KiB launch limit (which Lightsail inherits).
+  - **lossless user-data delivery** (`userdata.go`, `s3.go`): the
+    master's first-boot script reaches the host byte-identical, through
+    whichever of three layers it fits in — raw; gzip+base64 inside a tiny
+    `#!/bin/sh` bootstrap when it exceeds EC2's 16 KiB launch limit
+    (which Lightsail inherits); or, when even that does not fit, **staged
+    in S3** and fetched at first boot by a few-hundred-byte bootstrap over
+    a SigV4 query-PRESIGNED GET, which verifies the script's sha256 before
+    running it. The live script is ~43 KB and ~21.7 KB compressed, so the
+    third layer is the one in use; the object key is recorded as the
+    `dhnt:userdata-key` tag (the IAM policy grants no `s3:ListBucket`, so
+    a later destroy has no other way to find it). Nothing is ever
+    truncated.
   - **a static IP** named `<instance>-ip`, allocated and attached at
     create so the satellite's endpoint survives a stop/start, reported by
     inspect, and released by destroy (an unattached Lightsail static IP is

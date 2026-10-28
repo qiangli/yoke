@@ -19,7 +19,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -250,4 +252,172 @@ func hmacSHA256(key, data []byte) []byte {
 func hexSHA256(b []byte) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
+}
+
+// ---- query-string (presigned URL) authentication ----
+//
+// A presigned URL moves the signature out of the Authorization header and
+// into the query string, so something that cannot sign — curl on a host
+// at first boot, with no credentials of its own — can still make ONE
+// authorized request. S522.2 rework 2 uses it for exactly that: the
+// instance's user-data bootstrap fetches the staged first-boot script
+// from S3 with a presigned GET, so the only credential-derived material
+// that reaches the VM is a signature over one object, scoped to one
+// method, and expiring on its own.
+//
+// Two things differ from header signing. The payload hash is the literal
+// UnsignedPayload (the signer never sees the body, and a GET has none),
+// and only "host" is signed — a header the fetching client sends anyway.
+
+// UnsignedPayload is the payload-hash placeholder a query-presigned
+// request carries in place of a body hash.
+const UnsignedPayload = "UNSIGNED-PAYLOAD"
+
+// DefaultPresignTTL is how long a presigned URL stays valid when the
+// caller names no expiry.
+const DefaultPresignTTL = 15 * time.Minute
+
+// MaxPresignTTL is the longest expiry AWS accepts for a SigV4 presigned
+// URL (7 days). A longer request is clamped rather than signed into a URL
+// the service would reject.
+const MaxPresignTTL = 7 * 24 * time.Hour
+
+// canonicalQueryParams renders a canonical query string from params:
+// every key and value percent-encoded, the pairs sorted by their ENCODED
+// form (which is what the specification sorts on, not the raw names).
+func canonicalQueryParams(params map[string]string) string {
+	out := make([]string, 0, len(params))
+	for k, v := range params {
+		out = append(out, uriEncode(k, true)+"="+uriEncode(v, true))
+	}
+	sort.Strings(out)
+	return strings.Join(out, "&")
+}
+
+// presign computes the query-string signature for one request. It returns
+// each stage — the canonical request, the canonical query (which is also
+// the query the final URL carries) and the signature — so a known-answer
+// test can pin them individually rather than only the end result.
+func presign(method string, u *url.URL, c Credentials, t time.Time, region, service string, expires time.Duration) (canonical, query, signature string) {
+	t = t.UTC()
+	switch {
+	case expires <= 0:
+		expires = DefaultPresignTTL
+	case expires > MaxPresignTTL:
+		expires = MaxPresignTTL
+	}
+	// Any query parameters already on the URL are signed too, so a
+	// caller may presign a request that carries its own.
+	params := map[string]string{}
+	for k, vs := range u.Query() {
+		if len(vs) > 0 {
+			params[k] = vs[0]
+		}
+	}
+	params["X-Amz-Algorithm"] = Algorithm
+	params["X-Amz-Credential"] = c.AccessKeyID + "/" + CredentialScope(t, region, service)
+	params["X-Amz-Date"] = t.Format("20060102T150405Z")
+	params["X-Amz-Expires"] = strconv.FormatInt(int64(expires/time.Second), 10)
+	params["X-Amz-SignedHeaders"] = "host"
+	if c.SessionToken != "" {
+		params["X-Amz-Security-Token"] = c.SessionToken
+	}
+	query = canonicalQueryParams(params)
+	path := u.EscapedPath()
+	if path == "" {
+		path = "/"
+	}
+	canonical = strings.Join([]string{
+		method,
+		path,
+		query,
+		"host:" + u.Host + "\n",
+		"host",
+		UnsignedPayload,
+	}, "\n")
+	signature = hex.EncodeToString(hmacSHA256(
+		SigningKey(c.SecretAccessKey, t, region, service),
+		[]byte(StringToSign(canonical, t, region, service))))
+	return canonical, query, signature
+}
+
+// PresignURL returns u with SigV4 query-string authentication appended,
+// valid for expires from t. Nothing but the signature is derived from the
+// secret key: the URL carries the access key id (as AWS itself does), the
+// scope, the expiry and the signature.
+func PresignURL(method string, u *url.URL, c Credentials, t time.Time, region, service string, expires time.Duration) string {
+	_, query, sig := presign(method, u, c, t, region, service, expires)
+	path := u.EscapedPath()
+	if path == "" {
+		path = "/"
+	}
+	return u.Scheme + "://" + u.Host + path + "?" + query + "&X-Amz-Signature=" + sig
+}
+
+// PresignedSignature recomputes the signature a presigned URL should
+// carry, for a verifier that has the same credentials: it strips the
+// X-Amz-Signature parameter, re-signs what is left with the scope the URL
+// itself names, and returns the expected hex signature alongside the one
+// the URL claimed.
+//
+// It exists so a test (and the fake S3 in fakelightsail) can check a
+// presigned URL the way S3 does — by recomputing it — instead of
+// string-matching the generator's own output.
+func PresignedSignature(method string, raw string, c Credentials) (want, got string, err error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", "", err
+	}
+	q := u.Query()
+	got = q.Get("X-Amz-Signature")
+	if got == "" {
+		return "", "", fmt.Errorf("aws: presigned URL has no X-Amz-Signature")
+	}
+	amzDate := q.Get("X-Amz-Date")
+	t, err := time.Parse("20060102T150405Z", amzDate)
+	if err != nil {
+		return "", "", fmt.Errorf("aws: presigned URL has no usable X-Amz-Date: %w", err)
+	}
+	cred := strings.Split(q.Get("X-Amz-Credential"), "/")
+	if len(cred) != 5 {
+		return "", "", fmt.Errorf("aws: presigned URL has no usable X-Amz-Credential")
+	}
+	region, service := cred[2], cred[3]
+	secs, err := strconv.Atoi(q.Get("X-Amz-Expires"))
+	if err != nil {
+		return "", "", fmt.Errorf("aws: presigned URL has no usable X-Amz-Expires: %w", err)
+	}
+	// The session token is taken from the URL, not from c: it is part of
+	// what was signed, so a verifier that substituted its own would
+	// accept a URL whose token had been swapped.
+	c.SessionToken = q.Get("X-Amz-Security-Token")
+	// Re-sign what the URL carried apart from the signature itself: the
+	// signer puts the X-Amz-* parameters back, and any others ride along.
+	for _, k := range []string{"X-Amz-Signature", "X-Amz-Algorithm", "X-Amz-Credential",
+		"X-Amz-Date", "X-Amz-Expires", "X-Amz-SignedHeaders", "X-Amz-Security-Token"} {
+		q.Del(k)
+	}
+	bare := *u
+	bare.RawQuery = q.Encode()
+	_, _, want = presign(method, &bare, c, t, region, service, time.Duration(secs)*time.Second)
+	return want, got, nil
+}
+
+// PresignExpired reports whether a presigned URL's own X-Amz-Date plus
+// X-Amz-Expires is already in the past at now.
+func PresignExpired(raw string, now time.Time) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return true
+	}
+	q := u.Query()
+	t, err := time.Parse("20060102T150405Z", q.Get("X-Amz-Date"))
+	if err != nil {
+		return true
+	}
+	secs, err := strconv.Atoi(q.Get("X-Amz-Expires"))
+	if err != nil {
+		return true
+	}
+	return now.UTC().After(t.Add(time.Duration(secs) * time.Second))
 }

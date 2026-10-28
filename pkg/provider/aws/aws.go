@@ -17,8 +17,9 @@
 //   - Create runs a BUDGET PREFLIGHT first (budget.go) and refuses to spend
 //     over the operator's cap. It fails closed.
 //   - Create passes Spec.UserData through byte-identical, wrapping it
-//     losslessly only when it exceeds EC2's 16 KiB launch limit
-//     (userdata.go), allocates and attaches a static IP named
+//     losslessly when it exceeds EC2's 16 KiB launch limit and STAGING it
+//     in S3 behind a presigned-fetch bootstrap when even the wrapper does
+//     not fit (userdata.go, s3.go), allocates and attaches a static IP named
 //     "<instance>-ip" so the satellite's endpoint survives a stop/start,
 //     and replaces the instance's public ports with the satellite firewall.
 //   - Lightsail is x86_64 only, which is what the satellite installer
@@ -42,6 +43,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/qiangli/yoke/pkg/provider"
@@ -81,6 +83,16 @@ type Config struct {
 	// CostExplorerURL overrides the Cost Explorer endpoint (tests). Empty
 	// means CostExplorerEndpoint.
 	CostExplorerURL string
+	// S3URL overrides the S3 endpoint for the user-data staging bucket
+	// (tests). Empty means the real virtual-hosted bucket endpoint.
+	S3URL string
+	// UserDataBucket is the bucket a too-large first-boot script is
+	// staged in. Empty means $AWS_USERDATA_BUCKET, else
+	// UserDataBucketName(accountID, region).
+	UserDataBucket string
+	// PresignTTL is how long the staged script's presigned GET stays
+	// valid (default UserDataPresignTTL).
+	PresignTTL time.Duration
 	// BudgetsURL and STSURL override the AWS Budgets and STS endpoints
 	// (tests). Empty means the real global endpoints. They are separate
 	// fields because they are separate services, even though one fake
@@ -196,7 +208,17 @@ func New(cfg Config) (provider.Adapter, error) {
 	if stsURL == "" {
 		stsURL = STSEndpoint
 	}
-	for _, u := range []string{lsURL, ceURL, budgetsURL, stsURL} {
+	if cfg.PresignTTL <= 0 {
+		cfg.PresignTTL = UserDataPresignTTL
+	}
+	endpoints := []string{lsURL, ceURL, budgetsURL, stsURL}
+	if cfg.S3URL != "" {
+		// S3 is addressed per-OBJECT, so there is no client to build
+		// here: only the override has to be well-formed, and the bucket
+		// (which may need an STS lookup) is resolved on first use.
+		endpoints = append(endpoints, cfg.S3URL)
+	}
+	for _, u := range endpoints {
 		p, err := url.Parse(u)
 		if err != nil || (p.Scheme != "http" && p.Scheme != "https") || p.Host == "" {
 			return nil, &provider.Error{Code: provider.ErrInvalidRequest, Message: fmt.Sprintf("aws: invalid endpoint %q", u)}
@@ -238,6 +260,45 @@ type adapter struct {
 	sts     *queryClient
 	// account caches the STS account id lookup (sts.go).
 	account accountCache
+	// staging caches the resolved user-data staging bucket client.
+	staging stagingCache
+}
+
+// stagingCache memoizes the S3 staging client. Resolving it can cost an
+// STS call (the default bucket name carries the account id), and a create
+// already makes enough calls. Only a SUCCESSFUL resolution is cached.
+type stagingCache struct {
+	mu     sync.Mutex
+	client *s3Client
+}
+
+// stagingClient returns the S3 client for the user-data staging bucket,
+// resolving the bucket name from the config, then the environment, then
+// the account id and region.
+func (a *adapter) stagingClient(ctx context.Context) (*s3Client, error) {
+	a.staging.mu.Lock()
+	defer a.staging.mu.Unlock()
+	if a.staging.client != nil {
+		return a.staging.client, nil
+	}
+	bucket := strings.TrimSpace(a.cfg.UserDataBucket)
+	if bucket == "" {
+		bucket = strings.TrimSpace(os.Getenv(EnvUserDataBucket))
+	}
+	if bucket == "" {
+		id, err := a.AccountID(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("aws: cannot name the user-data staging bucket without the account id: %w", err)
+		}
+		bucket = UserDataBucketName(id, a.cfg.Region)
+	}
+	c := &s3Client{
+		root: s3ObjectRoot(bucket, a.cfg.Region, a.cfg.S3URL), bucket: bucket,
+		region: a.cfg.Region, creds: a.cfg.Credentials,
+		httpClient: a.cfg.HTTPClient, now: a.now,
+	}
+	a.staging.client = c
+	return c, nil
 }
 
 func (a *adapter) now() time.Time {
@@ -389,13 +450,22 @@ type Plan struct {
 	PriceMonthly     float64  `json:"price_monthly"`
 	PriceHourly      float64  `json:"price_hourly"`
 	Temporary        bool     `json:"temporary"`
-	// UserDataBytes is what would go on the wire, and UserDataWrapped
-	// says whether it had to be compressed to fit EC2's launch limit.
-	UserDataBytes   int      `json:"user_data_bytes"`
-	UserDataWrapped bool     `json:"user_data_wrapped"`
-	StaticIPName    string   `json:"static_ip_name,omitempty"`
-	OpenPorts       []string `json:"open_ports,omitempty"`
-	Budget          Verdict  `json:"budget"`
+	// UserDataBytes is what would go on the wire INLINE, and the two
+	// flags say which of the three layers carried it: raw (both false),
+	// the gzip+base64 wrapper (UserDataWrapped), or an S3 object behind
+	// a fetch bootstrap (UserDataStaged, which names the bucket too).
+	UserDataBytes     int    `json:"user_data_bytes"`
+	UserDataWrapped   bool   `json:"user_data_wrapped"`
+	UserDataStaged    bool   `json:"user_data_staged,omitempty"`
+	UserDataBucket    string `json:"user_data_bucket,omitempty"`
+	UserDataScriptLen int    `json:"user_data_script_bytes,omitempty"`
+	// UserDataSHA256 is the staged script's digest — the one the fetch
+	// bootstrap verifies — so an operator can check what a create would
+	// put in the bucket against what the master rendered.
+	UserDataSHA256 string   `json:"user_data_sha256,omitempty"`
+	StaticIPName   string   `json:"static_ip_name,omitempty"`
+	OpenPorts      []string `json:"open_ports,omitempty"`
+	Budget         Verdict  `json:"budget"`
 }
 
 func (a *adapter) plan(ctx context.Context, req provider.Request) (provider.Result, error) {
@@ -403,21 +473,30 @@ func (a *adapter) plan(ctx context.Context, req provider.Request) (provider.Resu
 	if pe != nil {
 		return provider.Result{ProtocolVersion: provider.ProtocolVersion, Op: req.Op, Error: pe}, pe
 	}
-	ud, err := WrapUserData(req.Spec.UserData)
-	if err != nil {
-		return provider.Failure(req.Op, provider.ErrInvalidRequest, "%v", err)
-	}
 	name := instanceName(req)
+	// A plan STAGES NOTHING: it renders what the create would send, so a
+	// --dry-run reports the real inline size and the bucket it would
+	// write to without putting an object there.
+	ud, err := a.prepareUserData(ctx, name, req.Spec.UserData, false)
+	if err != nil {
+		return fail(req.Op, err)
+	}
 	p := Plan{
 		Provider: Name, Name: name,
 		Region: a.cfg.Region, AvailabilityZone: a.cfg.AvailabilityZone,
 		BundleID: b.BundleID, BlueprintID: req.Spec.Image, Arch: ArchX8664,
-		Tags:            a.createTags(req),
+		Tags:            a.createTags(req, ud.Key),
 		PriceMonthly:    b.Price,
 		PriceHourly:     hourly(b.Price),
 		Temporary:       req.Authorization != nil,
-		UserDataBytes:   len(ud),
-		UserDataWrapped: Wrapped(ud),
+		UserDataBytes:   len(ud.Inline),
+		UserDataWrapped: Wrapped(ud.Inline),
+		UserDataStaged:  ud.Staged(),
+		UserDataBucket:  ud.Bucket,
+	}
+	if ud.Staged() {
+		p.UserDataScriptLen = len(req.Spec.UserData)
+		p.UserDataSHA256 = ud.SHA256
 	}
 	if !a.cfg.SkipStaticIP {
 		p.StaticIPName = name + staticIPSuffix
@@ -507,9 +586,17 @@ func instanceName(req provider.Request) string {
 	return "bashy-" + strings.TrimPrefix(provider.IdempotencyTag(req.IdempotencyKey), "bashy-idem-")[:12]
 }
 
-func (a *adapter) createTags(req provider.Request) []string {
+// createTags is the tag set for one create. stagedKey, when non-empty,
+// adds the dhnt:userdata-key tag that tells a later destroy which S3
+// object to delete (the IAM policy grants no s3:ListBucket, so the tag is
+// the only record).
+func (a *adapter) createTags(req provider.Request, stagedKey string) []string {
 	tags := provider.LeaseTags(a.cfg.Owner, req.IdempotencyKey, req.Authorization)
-	for _, t := range append(a.dhntTags(), req.Spec.Tags...) {
+	dhnt := a.dhntTags()
+	if stagedKey != "" {
+		dhnt = append(dhnt, TagUserDataKey+"="+stagedKey)
+	}
+	for _, t := range append(dhnt, req.Spec.Tags...) {
 		if !slices.Contains(tags, t) {
 			tags = append(tags, t)
 		}
@@ -554,19 +641,22 @@ func (a *adapter) create(ctx context.Context, req provider.Request) (provider.Re
 	if _, be := a.BudgetPreflight(ctx, b); be != nil {
 		return provider.Result{ProtocolVersion: provider.ProtocolVersion, Op: req.Op, Error: be}, be
 	}
-	ud, err := WrapUserData(req.Spec.UserData)
-	if err != nil {
-		return provider.Failure(req.Op, provider.ErrInvalidRequest, "%v", err)
+	// The user data is settled BEFORE CreateInstances: a script too large
+	// to go inline is staged in S3 here, so the request carries a
+	// bootstrap that already has an object to fetch.
+	ud, uerr := a.prepareUserData(ctx, name, req.Spec.UserData, true)
+	if uerr != nil {
+		return fail(req.Op, uerr)
 	}
 	in := map[string]any{
 		"instanceNames":    []string{name},
 		"availabilityZone": a.cfg.AvailabilityZone,
 		"blueprintId":      req.Spec.Image,
 		"bundleId":         b.BundleID,
-		"tags":             encodeTags(a.createTags(req)),
+		"tags":             encodeTags(a.createTags(req, ud.Key)),
 	}
-	if len(ud) > 0 {
-		in["userData"] = string(ud)
+	if len(ud.Inline) > 0 {
+		in["userData"] = string(ud.Inline)
 	}
 	if len(req.Spec.SSHKeys) > 0 {
 		// Lightsail takes one key pair name, not a list.
@@ -718,6 +808,12 @@ func (a *adapter) power(ctx context.Context, req provider.Request, op, want stri
 // already given away the address. A release that fails is reported as
 // ongoing cost rather than swallowed: an unattached Lightsail static IP is
 // billed.
+//
+// A staged first-boot script (the dhnt:userdata-key tag) is deleted after
+// the instance, for the same reason in reverse: while the instance exists
+// it may still be fetching the object, and once it does not, nothing
+// needs it. That delete is best-effort — the bucket expires objects after
+// a day — so its failure is a note, not a failed destroy.
 func (a *adapter) destroy(ctx context.Context, req provider.Request) (provider.Result, error) {
 	in, res, err := a.owned(ctx, req)
 	if err != nil {
@@ -753,13 +849,18 @@ func (a *adapter) destroy(ctx context.Context, req provider.Request) (provider.R
 	}
 	r.State = provider.StateDeleted
 	cost := &provider.CostReport{}
+	var notes []string
 	if attached {
 		if rerr := a.releaseStaticIP(ctx, ipName); rerr != nil {
 			cost.Ongoing = true
 			cost.Retained = retainedStaticIP(in.Name)
-			cost.Note = fmt.Sprintf("the instance is deleted but its static IP %s could not be released (%v), and an unattached Lightsail static IP is billed; release it with `bashy aws lightsail release-static-ip --static-ip-name %s`", ipName, normalize(rerr), ipName)
+			notes = append(notes, fmt.Sprintf("the instance is deleted but its static IP %s could not be released (%v), and an unattached Lightsail static IP is billed; release it with `bashy aws lightsail release-static-ip --static-ip-name %s`", ipName, normalize(rerr), ipName))
 		}
 	}
+	if note := a.deleteStagedUserData(ctx, r.Tags); note != "" {
+		notes = append(notes, note)
+	}
+	cost.Note = strings.Join(notes, "; ")
 	return ok(req.Op, &provider.Result{Resource: r, Cost: cost})
 }
 

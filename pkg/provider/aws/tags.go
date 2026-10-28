@@ -33,6 +33,13 @@ const (
 	TagSprintKey    = "dhnt:sprint"
 	TagStoryKey     = "dhnt:story"
 	TagTTLKey       = "dhnt:ttl"
+	// TagUserDataKey records the S3 object key of a staged first-boot
+	// script (s3.go). It is remembered as a TAG because the automation
+	// IAM policy grants no s3:ListBucket: destroy cannot discover the
+	// object, so create has to say where it put it. The bucket's
+	// one-day lifecycle rule is the backstop for an instance whose tag
+	// is gone.
+	TagUserDataKey = "dhnt:userdata-key"
 )
 
 // ManagedTag is the flat-string form of the managed marker.
@@ -78,6 +85,17 @@ func decodeTags(tags []Tag) []string {
 // automation IAM policy requires before it will permit a delete.
 func Managed(flat []string) bool {
 	return slices.Contains(flat, ManagedTag)
+}
+
+// UserDataKey returns the staged-script object key recorded on a
+// resource, or "" when its user data went inline.
+func UserDataKey(flat []string) string {
+	for _, t := range flat {
+		if k, v, found := strings.Cut(t, "="); found && k == TagUserDataKey {
+			return v
+		}
+	}
+	return ""
 }
 
 // dhntTags are the Sprint 522 governance tags for one create.

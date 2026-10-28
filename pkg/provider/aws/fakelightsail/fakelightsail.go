@@ -1,10 +1,19 @@
 // Package fakelightsail is a deterministic in-process stand-in for the AWS
 // Lightsail and Cost Explorer JSON APIs, for testing pkg/provider/aws.
 //
-// It answers FOUR services on one URL — Lightsail, Cost Explorer, AWS
-// Budgets and STS — because one adapter talks to all four and a test wants
-// one endpoint to point at. The signature check below is what keeps that
-// honest: each operation must be signed for ITS OWN service and region.
+// It answers FIVE services on one URL — Lightsail, Cost Explorer, AWS
+// Budgets, STS and S3 — because one adapter talks to all five and a test
+// wants one endpoint to point at. The signature check below is what keeps
+// that honest: each operation must be signed for ITS OWN service and
+// region.
+//
+// S3 is the odd one out and is routed by METHOD, not by X-Amz-Target: a
+// PUT/DELETE/GET of /<bucket>/<key> is an object operation (S522.2
+// rework 2's user-data staging). A PUT or DELETE is checked the usual
+// way, against its Authorization header; a GET is a PRESIGNED fetch with
+// no header at all, so its query signature is recomputed instead — which
+// is the only way a test can tell a correct presigned URL from a
+// plausible-looking one.
 //
 // It is a recorded-response server, not a mock: it speaks the real wire
 // protocol (POST "/" with X-Amz-Target, application/x-amz-json-1.1 — or
@@ -151,6 +160,9 @@ type Server struct {
 	// scopes records the "<service>/<region>" each operation was signed
 	// for, so a test can assert the signing scope directly.
 	scopes map[string]string
+	// objects is the fake S3: the staged user-data objects, keyed
+	// "<bucket>/<key>".
+	objects map[string]*S3Object
 }
 
 // New starts a fake seeded with the standard catalog and closes it when
@@ -163,6 +175,7 @@ func New(t *testing.T) *Server {
 		faults:      map[string]*fault{},
 		scopes:      map[string]string{},
 		calls:       map[string]int{},
+		objects:     map[string]*S3Object{},
 		monthToDate: 3.50,
 		nextIP:      10,
 	}
@@ -344,6 +357,19 @@ func (s *Server) Observe(fn func(target string, body map[string]any)) {
 	s.observers = append(s.observers, fn)
 }
 
+// notify hands one decoded request to every registered observer. It runs
+// before the operation, and for S3 as well as the JSON services, so a
+// test can assert the ORDER of calls across both protocols (staging an
+// object before the instance that fetches it, for one).
+func (s *Server) notify(op string, in map[string]any) {
+	s.mu.Lock()
+	obs := slices.Clone(s.observers)
+	s.mu.Unlock()
+	for _, fn := range obs {
+		fn(op, in)
+	}
+}
+
 // LastPorts is the last PutInstancePublicPorts request body.
 func (s *Server) LastPorts() map[string]any {
 	s.mu.Lock()
@@ -376,6 +402,12 @@ func awsError(w http.ResponseWriter, status int, typ, msg string) {
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
+	// S3 is addressed by object and verb, not by X-Amz-Target: anything
+	// that is not a POST is an S3 object operation.
+	if r.Method != http.MethodPost {
+		s.serveS3(w, r)
+		return
+	}
 	target := r.Header.Get("X-Amz-Target")
 	_, op, _ := strings.Cut(target, ".")
 	body, _ := readAll(r)
@@ -417,12 +449,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.mu.Lock()
-	obs := slices.Clone(s.observers)
-	s.mu.Unlock()
-	for _, fn := range obs {
-		fn(op, in)
-	}
+	s.notify(op, in)
 
 	// A pre-side-effect fault short-circuits the operation entirely.
 	switch s.takeFault(op) {
@@ -546,6 +573,10 @@ func expectedScope(op string) (service, region string) {
 		return "budgets", "us-east-1"
 	case "GetCallerIdentity":
 		return "sts", "us-east-1"
+	case "PutObject", "DeleteObject", "GetObject":
+		// S3 is regional and signed for the bucket's own region, which
+		// for this fake is the instance's region.
+		return "s3", TestRegion
 	}
 	return "lightsail", TestRegion
 }
@@ -983,4 +1014,193 @@ func sortedInstances(m map[string]*Instance) []*Instance {
 		out = append(out, m[n])
 	}
 	return out
+}
+
+// ---- fake S3 (S522.2 rework 2: user-data staging) ----
+
+// S3Object is one staged object, with the headers it was written under so
+// a test can assert the encryption the bucket policy requires.
+type S3Object struct {
+	Bucket      string
+	Key         string
+	Body        []byte
+	ContentType string
+	// SSE is the x-amz-server-side-encryption header's value.
+	SSE string
+}
+
+// S3Object returns the stored object for a bucket and key.
+func (s *Server) S3Object(bucket, key string) (S3Object, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	o, ok := s.objects[bucket+"/"+key]
+	if !ok {
+		return S3Object{}, false
+	}
+	return *o, true
+}
+
+// S3Keys lists the stored objects as "<bucket>/<key>", sorted.
+func (s *Server) S3Keys() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.objects))
+	for k := range s.objects {
+		out = append(out, k)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// S3ObjectCount is how many objects are stored.
+func (s *Server) S3ObjectCount() int { s.mu.Lock(); defer s.mu.Unlock(); return len(s.objects) }
+
+// splitS3Path splits "/<bucket>/<key...>" into its two halves. The fake is
+// addressed path-style (the adapter's S3URL override puts the bucket in
+// the path) so the bucket name is visible here rather than hidden in an
+// httptest host.
+func splitS3Path(path string) (bucket, key string, ok bool) {
+	p := strings.TrimPrefix(path, "/")
+	bucket, key, found := strings.Cut(p, "/")
+	if !found || bucket == "" || key == "" {
+		return "", "", false
+	}
+	// The adapter builds keys from a name and hex, so no escaping is in
+	// play; unescape anyway so a key that needed it still matches.
+	if u, err := url.PathUnescape(key); err == nil {
+		key = u
+	}
+	return bucket, key, true
+}
+
+// s3ErrorXML answers the way S3 does: an XML <Error> envelope, not the
+// JSON shape the other four services use. An adapter that only parsed
+// JSON errors would report "HTTP 403: <xml...>" here, which is why the
+// fake insists on the real shape.
+func s3ErrorXML(w http.ResponseWriter, status int, code, msg string) {
+	writeXML(w, status, "<Error><Code>"+code+"</Code><Message>"+msg+
+		"</Message><RequestId>req-fake</RequestId></Error>")
+}
+
+// serveS3 answers PutObject, DeleteObject and a presigned GetObject.
+func (s *Server) serveS3(w http.ResponseWriter, r *http.Request) {
+	op := map[string]string{
+		http.MethodPut:    "PutObject",
+		http.MethodDelete: "DeleteObject",
+		http.MethodGet:    "GetObject",
+	}[r.Method]
+	if op == "" {
+		s3ErrorXML(w, http.StatusMethodNotAllowed, "MethodNotAllowed", "unsupported method "+r.Method)
+		return
+	}
+	bucket, key, ok := splitS3Path(r.URL.EscapedPath())
+	if !ok {
+		s3ErrorXML(w, http.StatusBadRequest, "InvalidRequest",
+			"the fake is addressed path-style: /<bucket>/<key>, got "+r.URL.Path)
+		return
+	}
+	body, _ := readAll(r)
+
+	// A GET is presigned and carries no Authorization header: its
+	// signature is in the query string and is verified by recomputing it.
+	authorized := false
+	if op == "GetObject" {
+		authorized = s.verifyPresigned(r, op)
+	} else {
+		authorized = s.verify(r, body, op)
+	}
+	if !authorized {
+		s.mu.Lock()
+		s.badSigs++
+		s.mu.Unlock()
+		s3ErrorXML(w, http.StatusForbidden, "SignatureDoesNotMatch",
+			"the request signature we calculated does not match the signature you provided")
+		return
+	}
+	s.mu.Lock()
+	s.calls[op]++
+	s.requests++
+	s.mu.Unlock()
+	s.notify(op, map[string]any{"bucket": bucket, "key": key, "bytes": len(body)})
+
+	switch s.takeFault(op) {
+	case FaultAccessDenied:
+		s3ErrorXML(w, http.StatusForbidden, "AccessDenied", "Access Denied")
+		return
+	case FaultServiceError, FaultLoseResponse:
+		s3ErrorXML(w, http.StatusInternalServerError, "InternalError", "injected internal error")
+		return
+	case FaultThrottle:
+		s3ErrorXML(w, http.StatusServiceUnavailable, "SlowDown", "Please reduce your request rate.")
+		return
+	case FaultNotFound:
+		s3ErrorXML(w, http.StatusNotFound, "NoSuchKey", "The specified key does not exist.")
+		return
+	}
+
+	path := bucket + "/" + key
+	switch op {
+	case "PutObject":
+		// The staging bucket's policy requires server-side encryption,
+		// so a write without the header is a refusal, not a success.
+		sse := r.Header.Get("X-Amz-Server-Side-Encryption")
+		if sse == "" {
+			s3ErrorXML(w, http.StatusBadRequest, "InvalidRequest",
+				"this bucket requires server-side encryption")
+			return
+		}
+		s.mu.Lock()
+		s.objects[path] = &S3Object{
+			Bucket: bucket, Key: key, Body: slices.Clone(body),
+			ContentType: r.Header.Get("Content-Type"), SSE: sse,
+		}
+		s.mu.Unlock()
+		w.Header().Set("ETag", "\"fake\"")
+		w.WriteHeader(http.StatusOK)
+	case "DeleteObject":
+		// S3's DeleteObject is idempotent: deleting a key that is not
+		// there is a 204, not an error.
+		s.mu.Lock()
+		delete(s.objects, path)
+		s.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	case "GetObject":
+		s.mu.Lock()
+		o, found := s.objects[path]
+		s.mu.Unlock()
+		if !found {
+			s3ErrorXML(w, http.StatusNotFound, "NoSuchKey", "The specified key does not exist.")
+			return
+		}
+		w.Header().Set("Content-Type", o.ContentType)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(o.Body)
+	}
+}
+
+// verifyPresigned checks a presigned URL the way S3 does: recompute the
+// signature over everything but X-Amz-Signature and compare, then check
+// the URL has not expired. It records the scope the URL named so a test
+// can assert it, and refuses a scope that is not S3's.
+func (s *Server) verifyPresigned(r *http.Request, op string) bool {
+	full := "https://" + r.Host + r.URL.RequestURI()
+	q := r.URL.Query()
+	cred := strings.Split(q.Get("X-Amz-Credential"), "/")
+	if len(cred) != 5 || cred[0] != TestAccessKeyID {
+		return false
+	}
+	s.mu.Lock()
+	s.scopes[op] = cred[3] + "/" + cred[2]
+	s.mu.Unlock()
+	if wantService, wantRegion := expectedScope(op); cred[3] != wantService || cred[2] != wantRegion {
+		return false
+	}
+	want, got, err := aws.PresignedSignature(r.Method, full, TestCredentials())
+	if err != nil || want != got {
+		return false
+	}
+	// The expiry is checked against the URL's own X-Amz-Date rather than
+	// the wall clock, so a test that signs at a fixed time still passes.
+	t, terr := time.Parse("20060102T150405Z", q.Get("X-Amz-Date"))
+	return terr == nil && !aws.PresignExpired(full, t.Add(time.Second))
 }
