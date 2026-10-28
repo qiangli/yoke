@@ -1,7 +1,6 @@
 package fleet
 
 import (
-	"regexp"
 	"strings"
 	"testing"
 )
@@ -22,19 +21,27 @@ func TestKlatchManagedServicePin(t *testing.T) {
 	if m.Unverified() || m.License != "Apache-2.0" || m.LicenseURL == "" {
 		t.Fatal("klatch needs a signed, licensed service pin")
 	}
-	const release = "https://github.com/qiangli/klatch/releases/download/bashy-v1.2.0-3/"
-	const identity = "https://github.com/qiangli/klatch/.github/workflows/bashy-build.yml@refs/tags/bashy-v1.2.0-3"
+	if m.Version != "1.2.1-bashy.1" {
+		t.Fatalf("version=%q, want 1.2.1-bashy.1", m.Version)
+	}
+	const release = "https://github.com/qiangli/klatch/releases/download/bashy-v1.2.1-1/"
+	const identity = "https://github.com/qiangli/klatch/.github/workflows/bashy-build.yml@refs/tags/bashy-v1.2.1-1"
 	if m.Sigstore.Identity != identity || m.Sigstore.Issuer != "https://token.actions.githubusercontent.com" {
 		t.Fatalf("wrong signing identity: %+v", m.Sigstore)
 	}
-	sha := regexp.MustCompile(`^[0-9a-f]{64}$`)
-	for _, platform := range []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64"} {
+	assets := map[string]struct{ file, sha256 string }{
+		"linux/amd64":  {"klatch-v1.2.1-linux-amd64.tar.gz", "413d987f172faa82bfbb2a8d443cbe843cd310cd6f276ba6800102802310c726"},
+		"linux/arm64":  {"klatch-v1.2.1-linux-arm64.tar.gz", "bff7dfa16ef614bd014cbaee49421e31bcebab44e1200fa3a5af28c45c9bb5bb"},
+		"darwin/amd64": {"klatch-v1.2.1-darwin-amd64.tar.gz", "d285020a6ecc4066efb22db5d9393bebb84cdb9ed53105fc45bddda0b7630459"},
+		"darwin/arm64": {"klatch-v1.2.1-darwin-arm64.tar.gz", "94baaa72bb1f004906ceeadbf1310264232cd42596dcac9ab8f62703e8585a5d"},
+	}
+	for platform, want := range assets {
 		a, ok := m.Assets[platform]
-		if !ok || !sha.MatchString(a.SHA256) || a.Member != "klatch" || !strings.HasPrefix(a.URL, release) || !strings.HasSuffix(a.URL, ".tar.gz") {
+		if !ok || a.SHA256 != want.sha256 || a.Member != "klatch" || a.URL != release+want.file {
 			t.Errorf("%s: invalid signed archive pin: %+v", platform, a)
 		}
 	}
-	if len(m.Assets) != 4 {
+	if len(m.Assets) != len(assets) {
 		t.Errorf("assets=%d, want four platforms", len(m.Assets))
 	}
 	if _, err := tl.BinmgrTool(); err != nil {
