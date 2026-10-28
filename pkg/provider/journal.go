@@ -54,6 +54,13 @@ const (
 	// PhaseNeedsManualReconcile closes nothing: the outcome could not be
 	// proven and a human has to look.
 	PhaseNeedsManualReconcile Phase = "needs_manual_reconcile"
+	// PhaseRetired says a completed operation no longer answers its key:
+	// the resource it produced is gone (destroyed here, swept, or deleted
+	// in the provider's own console), so replaying its result would
+	// report a resource that does not exist. It closes nothing and
+	// rewrites nothing — the record is the fact that the old answer is
+	// dead, and the key is free to act again.
+	PhaseRetired Phase = "retired"
 )
 
 // JournalEntry is one journal record.
@@ -251,6 +258,10 @@ type Operation struct {
 	// NeedsManualReconcile is true when reconciliation could not prove
 	// the outcome; a human has to look at the provider.
 	NeedsManualReconcile bool
+	// Retired is true when the resource a completed operation produced is
+	// gone, so Result no longer describes anything: the key may act
+	// again. A new attempt (an intent record) clears it.
+	Retired bool
 	// Refused counts refusals before any provider call.
 	Refused int
 	First   time.Time
@@ -319,6 +330,9 @@ func Replay(entries []JournalEntry) JournalView {
 			o.Attempts++
 			o.Pending = true
 			o.NeedsManualReconcile = false
+			// A fresh attempt supersedes a retired answer: whatever this
+			// attempt reports is what the key means from here on.
+			o.Retired = false
 			if e.Op == OpCreate && e.Authorization != nil && e.Authorization.Kind == AuthTemporary && e.ResultID != "" {
 				resource(e.ResultID).Temporary = e.Authorization
 			}
@@ -346,6 +360,17 @@ func Replay(entries []JournalEntry) JournalView {
 		case PhaseNeedsManualReconcile:
 			o.Pending = false
 			o.NeedsManualReconcile = true
+		case PhaseRetired:
+			// The answer is dead, not wrong: Done and Result stay as the
+			// history of what once happened, and Retired is what a
+			// replay reads.
+			o.Pending = false
+			o.Retired = true
+			if e.ResourceID != "" {
+				r := resource(e.ResourceID)
+				r.Destroyed = true
+				r.Last = e.At
+			}
 		}
 		id := e.ResultID
 		if id == "" && e.Op != OpCreate {

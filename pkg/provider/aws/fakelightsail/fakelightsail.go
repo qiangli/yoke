@@ -107,6 +107,9 @@ type Instance struct {
 	StaticIP    bool
 	Ports       []map[string]any
 	CreatedAt   float64
+	// pre is the sequence of states GetInstance reports before the
+	// instance advances on its own (SetInitialStates).
+	pre []string
 }
 
 // StaticIP is the fake's view of one static IP.
@@ -163,6 +166,11 @@ type Server struct {
 	// objects is the fake S3: the staged user-data objects, keyed
 	// "<bucket>/<key>".
 	objects map[string]*S3Object
+	// initialStates is the state sequence a newly created instance
+	// reports before it advances on its own (SetInitialStates).
+	initialStates []string
+	// stuck freezes every in-flight instance where it is (SetStuck).
+	stuck bool
 }
 
 // New starts a fake seeded with the standard catalog and closes it when
@@ -209,6 +217,28 @@ func (s *Server) SetMonthToDate(usd float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.monthToDate = usd
+}
+
+// SetInitialStates makes a newly created instance report states in turn,
+// one per read, before it advances on its own. It is how a test reproduces
+// what Lightsail really does after CreateInstances: the record exists
+// before its state does, so the first reads answer with an EMPTY state
+// name and several more answer "pending".
+//
+//	s.SetInitialStates("", "pending", "pending")
+func (s *Server) SetInitialStates(states ...string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.initialStates = append([]string(nil), states...)
+}
+
+// SetStuck freezes in-flight instances: nothing advances, so an instance
+// created while it is set stays "pending" for as long as the test cares
+// to poll. It is how a test reaches a wait budget running out.
+func (s *Server) SetStuck(stuck bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stuck = stuck
 }
 
 // Budget is the fake's view of the account's AWS Budget.
@@ -728,6 +758,7 @@ func (s *Server) dispatch(op string, in map[string]any, reply func(int, any)) bo
 			UserData: ud, Tags: wireTags(in["tags"]),
 			PublicIP:  fmt.Sprintf("192.0.2.%d", s.nextIP),
 			CreatedAt: float64(time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC).Unix()),
+			pre:       append([]string(nil), s.initialStates...),
 		}
 		s.instances[name] = cur
 		s.creates++
@@ -960,6 +991,13 @@ func money(usd float64) string { return strconv.FormatFloat(usd, 'f', 10, 64) }
 // advance moves an in-flight instance one step toward its resting state,
 // the way Lightsail does between two reads. Callers hold s.mu.
 func (s *Server) advance(in *Instance) {
+	if s.stuck {
+		return
+	}
+	if len(in.pre) > 0 {
+		in.State, in.pre = in.pre[0], in.pre[1:]
+		return
+	}
 	switch in.State {
 	case "pending":
 		in.State = "running"

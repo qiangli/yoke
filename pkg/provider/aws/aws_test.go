@@ -1046,3 +1046,87 @@ func bigScript(n int) []byte {
 	}
 	return []byte(b.String())
 }
+
+// A fresh Lightsail instance is not ready when CreateInstances answers,
+// and the record it answers with is not even populated: the first reads
+// carry an EMPTY state name, then "pending" for a while. The live zoo-aws
+// create took the empty state for a resting state, returned
+// "provisioned (unknown)" and left the firewall and the static IP
+// unapplied — Lightsail's defaults (ssh and http open to the world, no
+// stable address) on a satellite.
+//
+// So create must poll through both, and only then finish the host.
+func TestCreateWaitsOutUnpopulatedAndPendingStatesBeforeFinishing(t *testing.T) {
+	fake := fakelightsail.New(t)
+	fake.SetInitialStates("", "", "pending", "pending", "pending")
+	// What the instance's state was when each finishing call arrived.
+	stateAt := map[string]string{}
+	fake.Observe(func(target string, _ map[string]any) {
+		switch target {
+		case "PutInstancePublicPorts", "AttachStaticIp":
+			if in, ok := fake.Instance("wait-box"); ok {
+				stateAt[target] = in.State
+			}
+		}
+	})
+	a := open(t, fake, nil)
+	res, err := do(t, a, provider.Request{Op: provider.OpCreate, IdempotencyKey: "wait", Spec: spec("wait-box")})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if res.Resource == nil || res.Resource.State != provider.StateRunning {
+		t.Fatalf("resource = %+v, want running", res.Resource)
+	}
+	if n := fake.Calls("GetInstance"); n < 5 {
+		t.Fatalf("GetInstance called %d times, want at least 5: the unpopulated and pending reads must be waited out", n)
+	}
+	for _, target := range []string{"PutInstancePublicPorts", "AttachStaticIp"} {
+		if stateAt[target] != "running" {
+			t.Fatalf("%s arrived while the instance was %q, want running", target, stateAt[target])
+		}
+	}
+	if fake.LastPorts() == nil {
+		t.Fatal("the satellite firewall was never applied")
+	}
+	if sip, ok := fake.StaticIP("wait-box-ip"); !ok || sip.AttachedTo != "wait-box" {
+		t.Fatalf("static ip = %+v, want wait-box-ip attached to wait-box", sip)
+	}
+	mustEnd(t, fake)
+}
+
+// An instance that never leaves "pending" is a FAILED create, however
+// real the instance is: reporting success would tell the caller a host is
+// serving when its firewall is Lightsail's default and it has no stable
+// address. The error has to name both steps so they can be finished by
+// hand or by a replay.
+func TestCreateThatNeverReachesRunningFailsNamingTheUndoneSteps(t *testing.T) {
+	fake := fakelightsail.New(t)
+	fake.SetStuck(true) // nothing ever leaves "pending"
+	a := open(t, fake, func(c *aws.Config) { c.WaitTimeout = 150 * time.Millisecond })
+	res, err := do(t, a, provider.Request{Op: provider.OpCreate, IdempotencyKey: "stuck", Spec: spec("stuck-box")})
+	if err == nil {
+		t.Fatalf("create reported success for an instance that never ran: %+v", res.Resource)
+	}
+	// NOT a timeout: a timeout is ambiguous to the dispatcher, which
+	// would reconcile it by idempotency tag, find the instance that does
+	// exist and report the create as succeeded.
+	if codeOf(err) != provider.ErrProvider {
+		t.Fatalf("code = %q, want %q", codeOf(err), provider.ErrProvider)
+	}
+	var pe *provider.Error
+	if errors.As(err, &pe) && pe.Retryable {
+		t.Fatal("an unfinished create must not be reported as retryable")
+	}
+	for _, want := range []string{"PutInstancePublicPorts", "static ip stuck-box-ip", "unfinished"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not mention %q", err, want)
+		}
+	}
+	if fake.LastPorts() != nil {
+		t.Fatal("the firewall was applied to an instance that is not running")
+	}
+	if fake.StaticIPCount() != 0 {
+		t.Fatalf("static ips = %v, want none attached to an unfinished instance", fake.StaticIPNames())
+	}
+	mustEnd(t, fake)
+}

@@ -33,6 +33,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -108,16 +109,22 @@ func openProviderDispatcher(ctx context.Context, p InfraProvider, credentialRef 
 	}
 	manifest := p.Manifest
 	builtins := map[string]provider.BuiltinFactory{}
+	var mutating time.Duration
 	if b, isBuiltin := builtinFor(p); isBuiltin {
 		manifest = b.manifest()
 		manifest.Name = p.Manifest.Name
 		builtins[manifest.Name] = builtinFactory(p.Manifest.Name, o)
+		mutating = b.mutatingTimeout
 	}
 	return provider.Open(ctx, manifest, provider.Options{
 		Owner:       o.Owner,
 		Exec:        provider.ExecAllowed, // user-owned compute only
 		Credentials: provider.StaticCredential(cred),
 		Builtins:    builtins,
+		// A create that waits for the host to be usable needs more than
+		// a read's budget; a provider that says nothing keeps the
+		// dispatcher default.
+		MutatingTimeout: mutating,
 	})
 }
 

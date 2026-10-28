@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qiangli/yoke/pkg/provider"
 	awsprovider "github.com/qiangli/yoke/pkg/provider/aws"
@@ -456,5 +457,164 @@ func TestInfraLifecycleProviderNaming(t *testing.T) {
 	_, err = runInfra(t, "inspect", "--name", "x")
 	if err == nil || !strings.Contains(err.Error(), "aws, digitalocean") {
 		t.Fatalf("err = %v, want the built-in list", err)
+	}
+}
+
+// ---- provision finishes the host, and a dead journal entry is not a host
+// (S522.2 rework 4) ----
+
+// fastAWSPolls shortens the Lightsail state-poll interval for one test, so
+// an instance that takes several reads to come up does not cost seconds.
+func fastAWSPolls(t *testing.T) {
+	t.Helper()
+	old := awsPollInterval
+	awsPollInterval = time.Millisecond
+	t.Cleanup(func() { awsPollInterval = old })
+}
+
+// The live failure: CreateInstances answered, the first GetInstance came
+// back with a record whose state was not populated yet, and provision
+// took that for a resting state — it printed "provisioned zoo-aws
+// (unknown)" and never applied the firewall or attached the address, so
+// the satellite sat on Lightsail's defaults with ssh and http open to the
+// internet. Provision must wait the instance out and finish it.
+func TestProvisionAWSFinishesTheHostEvenWhenTheRecordIsUnpopulated(t *testing.T) {
+	isolatedFleetRoot(t)
+	fake := useFakeLightsail(t)
+	fastAWSPolls(t)
+	clearAWSCredentialEnv(t)
+	awsCredentialEnv(t)
+	// What AWS really answers right after a create: no state, then
+	// "pending" for a while.
+	fake.SetInitialStates("", "", "pending", "pending")
+	var hints []string
+	master := enrollmentMaster(t, &hints)
+
+	out, err := runInfra(t, "provision", "aws", "--satellite", "zoo-aws",
+		"--region", fakelightsail.TestRegion, "--size", "small_3_0", "--image", "ubuntu_24_04",
+		"--master", master.URL, "--token", "sess")
+	if err != nil {
+		t.Fatalf("provision: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "provisioned zoo-aws (running)") {
+		t.Fatalf("output must report a running host, not an in-flight one:\n%s", out)
+	}
+	if fake.LastPorts() == nil {
+		t.Fatal("the satellite firewall was never applied")
+	}
+	if sip, ok := fake.StaticIP("zoo-aws-ip"); !ok || sip.AttachedTo != "zoo-aws" {
+		t.Fatalf("static ip = %+v, want zoo-aws-ip attached to zoo-aws", sip)
+	}
+	if n := fake.BadSignatures(); n != 0 {
+		t.Fatalf("%d request(s) failed SigV4 verification", n)
+	}
+}
+
+// The other live failure: after `infra destroy --name zoo-aws`, a
+// provision with the same (default) idempotency key printed "provisioned
+// zoo-aws (running)" and made no AWS call at all — the provider journal
+// replayed the create of an instance that had just been deleted. The
+// second provision has to really create.
+func TestProvisionAWSAfterDestroyCreatesTheHostAgain(t *testing.T) {
+	isolatedFleetRoot(t)
+	fake := useFakeLightsail(t)
+	fastAWSPolls(t)
+	clearAWSCredentialEnv(t)
+	awsCredentialEnv(t)
+	var hints []string
+	master := enrollmentMaster(t, &hints)
+	provision := func() string {
+		t.Helper()
+		out, err := runInfra(t, "provision", "aws", "--satellite", "zoo-aws",
+			"--region", fakelightsail.TestRegion, "--size", "small_3_0", "--image", "ubuntu_24_04",
+			"--master", master.URL, "--token", "sess")
+		if err != nil {
+			t.Fatalf("provision: %v\n%s", err, out)
+		}
+		return out
+	}
+	provision()
+	if out, err := runInfra(t, "destroy", "aws", "--name", "zoo-aws",
+		"--region", fakelightsail.TestRegion, "--yes"); err != nil {
+		t.Fatalf("destroy: %v\n%s", err, out)
+	}
+	if fake.Exists("zoo-aws") {
+		t.Fatal("destroy left the instance")
+	}
+
+	out := provision()
+	if n := fake.CreateCount(); n != 2 {
+		t.Fatalf("CreateInstances calls = %d, want 2: provision replayed a host that was destroyed\n%s", n, out)
+	}
+	if !fake.Exists("zoo-aws") {
+		t.Fatalf("provision reported a host that does not exist:\n%s", out)
+	}
+	if !strings.Contains(out, "provisioned zoo-aws (running)") {
+		t.Fatalf("output:\n%s", out)
+	}
+	// The re-created host is finished like any other: the firewall and
+	// a fresh address.
+	if sip, ok := fake.StaticIP("zoo-aws-ip"); !ok || sip.AttachedTo != "zoo-aws" {
+		t.Fatalf("static ip = %+v, want zoo-aws-ip attached to zoo-aws", sip)
+	}
+	if len(hints) != 2 {
+		t.Fatalf("enrollment bundles requested = %d, want 2", len(hints))
+	}
+	if n := fake.BadSignatures(); n != 0 {
+		t.Fatalf("%d request(s) failed SigV4 verification", n)
+	}
+}
+
+// A Lightsail create is not a read: the adapter waits for "running" and
+// then applies the firewall and the static IP, so the dispatcher's
+// per-call budget for it has to cover the adapter's own wait. Bounding it
+// at the read budget cancels the sequence halfway and the dispatcher then
+// reconciles the create as "the resource exists" — success for a host
+// that was never finished.
+func TestAWSMutatingTimeoutCoversTheAdaptersOwnWait(t *testing.T) {
+	b, ok := builtinProviders[awsprovider.Name]
+	if !ok {
+		t.Fatal("no aws built-in")
+	}
+	if b.mutatingTimeout < 5*time.Minute {
+		t.Fatalf("aws mutatingTimeout = %s, want at least the adapter's 5m create wait", b.mutatingTimeout)
+	}
+}
+
+// An instance that never comes up must not reach the operator as a
+// provisioned host — not even by the back door: a timeout is AMBIGUOUS to
+// the dispatcher, so it reconciles the create by idempotency tag, finds
+// the instance that does exist, and would report success for a host whose
+// firewall and address were never applied. Provision has to fail, naming
+// what is missing.
+func TestProvisionAWSFailsWhenTheHostNeverComesUp(t *testing.T) {
+	isolatedFleetRoot(t)
+	fake := useFakeLightsail(t)
+	fastAWSPolls(t)
+	clearAWSCredentialEnv(t)
+	awsCredentialEnv(t)
+	fake.SetStuck(true) // nothing ever leaves "pending"
+	old := awsWaitTimeout
+	awsWaitTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { awsWaitTimeout = old })
+	var hints []string
+	master := enrollmentMaster(t, &hints)
+
+	out, err := runInfra(t, "provision", "aws", "--satellite", "zoo-aws",
+		"--region", fakelightsail.TestRegion, "--size", "small_3_0", "--image", "ubuntu_24_04",
+		"--master", master.URL, "--token", "sess")
+	if err == nil {
+		t.Fatalf("provision reported success for a host that never ran:\n%s", out)
+	}
+	if strings.Contains(out, "provisioned zoo-aws") {
+		t.Fatalf("provision printed a provisioned host:\n%s", out)
+	}
+	for _, want := range []string{"unfinished", "PutInstancePublicPorts", "static ip zoo-aws-ip"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not mention %q", err, want)
+		}
+	}
+	if fake.LastPorts() != nil {
+		t.Fatal("the firewall was applied to an instance that is not running")
 	}
 }

@@ -89,6 +89,18 @@ type Options struct {
 	Journal JournalStore
 	// Timeout bounds each provider call (default 60s).
 	Timeout time.Duration
+	// MutatingTimeout bounds a mutating call (create, destroy, power,
+	// resize) when it is larger than Timeout; zero means Timeout.
+	//
+	// It exists because those two budgets are not the same size. A read
+	// answers in a second or it is broken, but an adapter that brings a
+	// host all the way to its serving shape before answering — AWS
+	// Lightsail waits for "running" and then applies the firewall and
+	// the static IP — legitimately runs for minutes. Bounding it at the
+	// read timeout cancels the adapter mid-sequence and the dispatcher
+	// then reconciles the create as "the resource exists", reporting
+	// success for a host whose remaining steps never ran.
+	MutatingTimeout time.Duration
 	// Retries is how many more attempts a retryable failure gets after
 	// the first (default 0: one attempt). A create is never retried
 	// before its outcome has been reconciled by idempotency tag.
@@ -351,8 +363,9 @@ func (d *Dispatcher) View(ctx context.Context) (JournalView, error) {
 // inspect, list) go to the adapter under the common timeout and retries
 // and are not journaled. A mutating operation is journaled before and
 // after the call; a replay of a completed key answers from the journal
-// without a provider call; a pending key is reconciled first; and a
-// destroy is authorized per A6 before anything reaches the adapter.
+// without a provider call — except a create, whose resource is proven to
+// still exist first (createReplay); a pending key is reconciled first;
+// and a destroy is authorized per A6 before anything reaches the adapter.
 func (d *Dispatcher) Do(ctx context.Context, req Request) (Result, error) {
 	if req.ProtocolVersion == "" {
 		req.ProtocolVersion = ProtocolVersion
@@ -386,7 +399,20 @@ func (d *Dispatcher) Do(ctx context.Context, req Request) (Result, error) {
 			return Failure(req.Op, ErrInvalidRequest, "idempotency key %q was already used for %s of resource %s", req.IdempotencyKey, req.Op, op.ResourceID)
 		}
 		switch {
-		case op.Done:
+		case op.Done && !op.Retired:
+			if req.Op == OpCreate {
+				res, stale, rerr := d.createReplay(ctx, req, op, view)
+				if rerr != nil {
+					return Failure(req.Op, ErrProvider, "%v", rerr)
+				}
+				if !stale {
+					d.logf("create %s: replay answered from the journal", req.IdempotencyKey)
+					return res, nil
+				}
+				// The old answer has been retired: fall through and
+				// create, exactly as a first call with this key would.
+				break
+			}
 			// Idempotent replay: the same key is the same operation; a
 			// destroy confirmation is thereby single use.
 			d.logf("%s %s: replay answered from the journal", req.Op, req.IdempotencyKey)
@@ -407,6 +433,11 @@ func (d *Dispatcher) Do(ctx context.Context, req Request) (Result, error) {
 		if r, e := d.authorizeDestroy(ctx, req, view); e != nil {
 			return r, e
 		}
+		res, err := d.run(ctx, req)
+		if err == nil {
+			d.retireCreates(ctx, view, req.ResourceID)
+		}
+		return res, err
 	}
 	return d.run(ctx, req)
 }
@@ -438,6 +469,91 @@ func (d *Dispatcher) authorizeDestroy(ctx context.Context, req Request, view Jou
 		return refuse(fmt.Sprintf("temporary authorization names work %q, the resource was created for %q", a.WorkRef, jr.Temporary.WorkRef))
 	}
 	return Result{}, nil
+}
+
+// createReplay decides whether a completed create still answers its key.
+//
+// A create is the one operation whose journal entry the world can make
+// obsolete: the resource it produced may have been destroyed since — here
+// with another key, by a TTL sweep, or in the provider's own console —
+// and replaying the old result would then report a running host to a
+// caller who asked for one, without making a single provider call. So the
+// replay is PROVEN before it is served: the resource is inspected, the
+// fresh state is what the caller gets, and a resource that is gone
+// retires the entry (PhaseRetired) so the key creates anew.
+//
+// An inspect that merely FAILS proves nothing and must not cause a second
+// create: the journal's answer stands.
+func (d *Dispatcher) createReplay(ctx context.Context, req Request, op Operation, view JournalView) (res Result, stale bool, err error) {
+	journaled := d.resultFromEntry(req, op.Result)
+	id := op.ResourceID
+	if id == "" {
+		// Nothing to prove it against (a create that reported no
+		// resource); the journal is all there is.
+		return journaled, false, nil
+	}
+	retire := func(why string) (Result, bool, error) {
+		d.logf("create %s: %s is %s; retiring the journal entry so the key creates anew", req.IdempotencyKey, id, why)
+		e := JournalEntry{
+			At: d.now().UTC(), Provider: d.m.Name, Form: d.m.Form, Op: OpCreate,
+			IdempotencyKey: op.IdempotencyKey, Phase: PhaseRetired, ResourceID: id,
+			Note: "create replay retired: " + why,
+		}
+		if rerr := d.record(ctx, e); rerr != nil {
+			return Result{}, false, rerr
+		}
+		return Result{}, true, nil
+	}
+	if jr, known := view.Resource(id); known && jr.Destroyed {
+		// The journal itself says it is gone; no provider call needed.
+		return retire("recorded destroyed in the journal")
+	}
+	if !d.m.Supports(OpInspect) {
+		return journaled, false, nil
+	}
+	ir, ierr, _ := d.attempt(ctx, Request{ProtocolVersion: ProtocolVersion, Op: OpInspect, ResourceID: id})
+	if ierr != nil {
+		var e *Error
+		if errors.As(ierr, &e) && e.Code == ErrNotFound {
+			return retire("gone at the provider")
+		}
+		d.logf("create %s: inspect of %s failed (%v); answering the replay from the journal", req.IdempotencyKey, id, ierr)
+		return journaled, false, nil
+	}
+	if ir.Resource == nil {
+		return journaled, false, nil
+	}
+	if ir.Resource.State == StateDeleted {
+		return retire("deleted at the provider")
+	}
+	// Alive: report what it is NOW, not what it was when it was created.
+	return Result{ProtocolVersion: ProtocolVersion, Op: req.Op, Resource: ir.Resource, Cost: journaled.Cost}, false, nil
+}
+
+// retireCreates marks every completed create of resourceID dead, so the
+// next create with that key really creates instead of replaying a host
+// that this destroy just removed. A failure to record is logged, not
+// returned: the destroy itself succeeded, and createReplay's liveness
+// check catches the same thing one provider call later.
+func (d *Dispatcher) retireCreates(ctx context.Context, view JournalView, resourceID string) {
+	if resourceID == "" {
+		return
+	}
+	for _, op := range view.Operations {
+		if op.Op != OpCreate || op.ResourceID != resourceID || !op.Done || op.Retired {
+			continue
+		}
+		e := JournalEntry{
+			At: d.now().UTC(), Provider: d.m.Name, Form: d.m.Form, Op: OpCreate,
+			IdempotencyKey: op.IdempotencyKey, Phase: PhaseRetired, ResourceID: resourceID,
+			Note: "resource destroyed",
+		}
+		if err := d.record(ctx, e); err != nil {
+			d.logf("destroy %s: could not retire create %s: %v", resourceID, op.IdempotencyKey, err)
+			return
+		}
+		d.logf("destroy %s: retired create %s", resourceID, op.IdempotencyKey)
+	}
 }
 
 func (d *Dispatcher) resultFromEntry(req Request, e *JournalEntry) Result {
@@ -511,10 +627,19 @@ func (d *Dispatcher) fill(je *JournalEntry, res Result) {
 	}
 }
 
+// timeoutFor is the per-call budget for one operation: MutatingTimeout
+// for a mutating op when it is the larger of the two, else Timeout.
+func (d *Dispatcher) timeoutFor(op Op) time.Duration {
+	if op.Mutating() && d.opts.MutatingTimeout > d.opts.Timeout {
+		return d.opts.MutatingTimeout
+	}
+	return d.opts.Timeout
+}
+
 // attempt performs one guarded adapter call under the common timeout.
 // ambiguous is true when the failure leaves open that the provider acted.
 func (d *Dispatcher) attempt(ctx context.Context, req Request) (res Result, err error, ambiguous bool) {
-	cctx, cancel := context.WithTimeout(ctx, d.opts.Timeout)
+	cctx, cancel := context.WithTimeout(ctx, d.timeoutFor(req.Op))
 	defer cancel()
 	res, err = d.adapter.Do(cctx, req)
 	if err == nil {
