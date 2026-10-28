@@ -17,6 +17,7 @@ import (
 	"github.com/qiangli/coreutils/tool"
 	"github.com/qiangli/yoke/pkg/browser"
 	"github.com/qiangli/yoke/pkg/browser/guard"
+	"github.com/qiangli/yoke/pkg/browser/guardask"
 	"github.com/qiangli/yoke/pkg/browser/live"
 	"github.com/qiangli/yoke/pkg/browser/probe"
 	"github.com/qiangli/yoke/pkg/browser/solo"
@@ -41,7 +42,13 @@ var cmd = &tool.Tool{
 		"Guide: coreutils/docs/browser.md",
 }
 
-func init() { cmd.Run = run; tool.Register(cmd) }
+func init() {
+	cmd.Run = run
+	tool.Register(cmd)
+	// The sensitive-input guard asks the operator through pkg/ask's native
+	// forms (pkg/browser/guardask); without this every refusal stops.
+	guardask.Install()
+}
 
 const noBrowserMessage = "no browser: start Chrome with --remote-debugging-port=9222 or run `bashy browser login`"
 
@@ -117,6 +124,7 @@ func run(rc *tool.RunContext, args []string) int {
 	state := fs.String("state", "", "wait-for-selector: visible|attached|detached (default visible)")
 	detail := fs.String("detail", "", "dispatch-event: JSON detail for a CustomEvent")
 	on := fs.String("on", "", "dispatch-event: window|document|<css-selector> (default window)")
+	fromAsk := fs.String("from-ask", "", "type: fill the target BY REFERENCE with the operator answer this guard ask id names (no text)")
 
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
@@ -181,6 +189,7 @@ func run(rc *tool.RunContext, args []string) int {
 		State:         *state,
 		Detail:        *detail,
 		On:            *on,
+		FromAsk:       *fromAsk,
 	})
 	if err != nil {
 		return tool.UsageError(rc, cmd, "%s", err)
@@ -530,6 +539,7 @@ type actionFlags struct {
 	State         string
 	Detail        string
 	On            string
+	FromAsk       string
 }
 
 // tabActions is the valid set for `tabs`. It is exported through the
@@ -595,6 +605,22 @@ func actionFromArgs(args []string, f actionFlags) (wire.Action, error) {
 		return a, nil
 
 	case "type":
+		if f.FromAsk != "" {
+			// By reference: a target, never text — the value is the
+			// operator's answer, resolved inside the guard.
+			a := wire.Action{Type: wire.ActionType, ElementID: f.Index, IncludeHidden: f.IncludeHidden, FromAsk: f.FromAsk}
+			if f.Index == 0 {
+				if len(rest) == 0 {
+					return wire.Action{}, fmt.Errorf("type --from-ask requires a target (selector or --index N)")
+				}
+				a.Selector = rest[0]
+				rest = rest[1:]
+			}
+			if len(rest) > 0 {
+				return wire.Action{}, fmt.Errorf("type --from-ask takes no text: the value is the operator's answer")
+			}
+			return a, nil
+		}
 		if len(rest) < 2 && f.Index == 0 {
 			return wire.Action{}, fmt.Errorf("type requires a selector and text")
 		}

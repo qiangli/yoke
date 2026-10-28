@@ -5,27 +5,30 @@
 //
 //  1. VALUE check — type/select/evaluate/clipboard_write/dispatch_event/
 //     navigate/keyboard_press carry text; that text is checked against strict
-//     validators (SSN/ITIN shape rules, EIN prefixes, ABA routing checksum,
-//     card Luhn + issuer, IBAN mod-97) and against the bashy vault's values
-//     (exact and embedded; digests only, see vault.go).
+//     validators (pkg/sensitive: SSN/ITIN shape rules, EIN prefixes, ABA
+//     routing checksum, card Luhn + issuer, IBAN mod-97) and against the
+//     bashy vault's values (exact and embedded; digests only, see vault.go).
 //  2. FIELD check — before a type (or a printable keypress) the page-side
 //     guard (extension guard.js, also injected by probe/solo) inspects the
 //     target WITHOUT the value: input type=password, sensitive autocomplete
 //     tokens, and name/id/label/aria/placeholder/visible question text
 //     saying ssn/tax/ein/routing/account/card/password/username.
-//  3. HUMAN PATH — a refusal never fails silently and never fills: the
-//     operator gets one bashy approval naming the site, the question and the
-//     reason, with choices type-myself / skip / stop (no answer = stop). On
-//     type-myself the field is focused in the operator's browser and bashy
-//     waits for "done". The value never passes through the agent, bashy, the
-//     ask record, logs or receipts; the caller sees only the outcome.
+//  3. HUMAN PATH — a refusal never fails silently and never fills with the
+//     agent's text: the operator gets ONE question (HumanAsker, human.go)
+//     naming the site, the question and the reason, with choices provide /
+//     self / skip / stop (no answer = stop). provide fills the field BY
+//     REFERENCE from the operator's answer (admit.go); self focuses the field
+//     in the operator's browser and waits for "done". The value never passes
+//     through the agent, the ask record, logs or receipts; the caller sees
+//     only the outcome.
 //  4. MASK — every result's text (extract content/elements/data, eval data,
 //     errors, titles, URLs) has validator- and vault-matched values replaced
 //     by [guarded:<kind>]. Screenshots are NOT masked (recorded gap).
 //  5. PROTECTED — there is no flag, environment variable or skill metadata
-//     that disables any of this. The package (and the extension's guard.js
-//     and the backends' guard wiring) are rows in pkg/src's protected
-//     manifest, so a change merges only with a `bashy approve`d src approval.
+//     that disables any of this. The package, pkg/sensitive (the validators
+//     that decide what is blocked), the extension's guard.js and the
+//     backends' guard wiring are rows in pkg/src's protected manifest, so a
+//     change merges only with a `bashy approve`d src approval.
 package guard
 
 import (
@@ -35,22 +38,27 @@ import (
 	"unicode/utf8"
 
 	"github.com/qiangli/yoke/pkg/browser/wire"
+	"github.com/qiangli/yoke/pkg/sensitive"
 )
 
 // Outcome classes and exit statuses of a guarded refusal (the contract
-// shared with site skills): human-typed 0, skipped 4, stopped 5.
+// shared with site skills): filled-by-human 0, human-typed 0, skipped 4,
+// stopped 5.
 const (
-	ClassHumanTyped = "guard_human_typed"
-	ClassSkipped    = "guard_skipped"
-	ClassStopped    = "guard_stopped"
+	ClassFilledByHuman = "guard_filled_by_human"
+	ClassHumanTyped    = "guard_human_typed"
+	ClassSkipped       = "guard_skipped"
+	ClassStopped       = "guard_stopped"
 
-	ContentHumanTyped = "guard:human-typed"
-	ContentSkipped    = "guard:skipped"
-	ContentStopped    = "guard:stopped"
+	ContentFilledByHuman = "guard:filled-by-human"
+	ContentHumanTyped    = "guard:human-typed"
+	ContentSkipped       = "guard:skipped"
+	ContentStopped       = "guard:stopped"
 
-	ExitHumanTyped = 0
-	ExitSkipped    = 4
-	ExitStopped    = 5
+	ExitFilledByHuman = 0
+	ExitHumanTyped    = 0
+	ExitSkipped       = 4
+	ExitStopped       = 5
 )
 
 // ExitCode maps a result's outcome class to the CLI exit status; ok is
@@ -60,6 +68,8 @@ func ExitCode(r *wire.Result) (int, bool) {
 		return 0, false
 	}
 	switch r.OutcomeClass {
+	case ClassFilledByHuman:
+		return ExitFilledByHuman, true
 	case ClassHumanTyped:
 		return ExitHumanTyped, true
 	case ClassSkipped:
@@ -88,6 +98,10 @@ type Backend interface {
 	// FocusField focuses a's target in the operator's browser so the
 	// human can type into it.
 	FocusField(ctx context.Context, a wire.Action) error
+	// FillAdmitted types value — an operator's answer the guard admitted
+	// for a's target — into that target, bypassing the page-side refusal
+	// that stops an agent's own text. It must not echo value in any error.
+	FillAdmitted(ctx context.Context, a wire.Action, askID string, value []byte) error
 	// Site is the host of the driven page ("" when unknown).
 	Site(ctx context.Context) string
 	// HumanChannel reports whether a human can act in this browser
@@ -109,6 +123,9 @@ type refusal struct {
 // Execute is THE gate. Backends call it from their Execute with their own
 // dispatch as next; nothing reaches the page without passing it.
 func Execute(ctx context.Context, b Backend, a wire.Action, next ExecFunc) (*wire.Result, error) {
+	if a.FromAsk != "" {
+		return Mask(ctx, fillFromAsk(ctx, b, a)), nil
+	}
 	ref, failed := check(ctx, b, a)
 	if failed != nil {
 		return Mask(ctx, failed), nil
@@ -177,7 +194,7 @@ func ValueReason(ctx context.Context, s string) string {
 	if vm.equal(s) || vm.equal(strings.TrimSpace(s)) || len(vm.spans(s)) > 0 {
 		return "value:" + KindVault
 	}
-	if k := CheckValue(s); k != "" {
+	if k := sensitive.CheckValue(s); k != "" {
 		return "value:" + k
 	}
 	return ""

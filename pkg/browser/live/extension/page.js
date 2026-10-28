@@ -14,7 +14,7 @@
 // reported as { error: "..." } rather than thrown, so the caller can
 // tell "the page said no" from "injection failed".
 (() => {
-  const VERSION = 6;
+  const VERSION = 7;
   if (globalThis.__bashyPage && globalThis.__bashyPage.version === VERSION) return;
 
   // Native controls plus the ARIA widgets component libraries build
@@ -404,6 +404,22 @@
     if (g.guarded || g.error) {
       return { error: `type: refused by the sensitive-input guard (${g.reason || g.error}) on ${describe(el)}; a human must type this field (bashy browser routes it to the operator)`, guarded: true, reason: g.reason || "" };
     }
+    return typeInto(el, params);
+  }
+
+  // guardFill types an OPERATOR's answer the Go guard admitted for this
+  // field (the hub checks the admission before this runs), past the field
+  // check that stops an agent's own text. Nothing it returns carries the
+  // value: not the result, not an error.
+  async function guardFill(params) {
+    const el = resolveTarget(params, { visibleOnly: true });
+    if (el && el.__miss) return miss("guard_fill", el);
+    const r = await typeInto(el, params);
+    if (r.error) return { error: `guard_fill: the answer did not stick on ${nameOf(el) || el.tagName.toLowerCase()}`, retry_trusted: !!r.retry_trusted };
+    return { content: "filled" };
+  }
+
+  async function typeInto(el, params) {
     const text = params.text || "";
     try { el.scrollIntoView({ block: "center", inline: "nearest" }); } catch (_) { /* detached */ }
     if (el.focus) el.focus();
@@ -608,6 +624,6 @@
 
   globalThis.__bashyPage = {
     version: VERSION,
-    extract, count, click, type, select, scroll, readValue, focusTarget, guardField, guardFocus,
+    extract, count, click, type, select, scroll, readValue, focusTarget, guardField, guardFocus, guardFill,
   };
 })();

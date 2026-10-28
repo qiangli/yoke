@@ -9,39 +9,44 @@ import (
 )
 
 // ClipboardCategory classifies a guarded field for clipboard shape checks.
+// Terms match on word boundaries, so a prompt that merely contains "being"
+// or "provide" is not taken for an EIN or an ID field.
 func ClipboardCategory(name, kind string) string {
 	n := strings.ToLower(name)
-	switch {
-	case strings.Contains(n, "social security"), strings.Contains(n, "ssn"):
-		return "ssn"
-	case strings.Contains(n, "itin"):
-		return "itin"
-	case strings.Contains(n, "ein"), strings.Contains(n, "employer identification"):
-		return "ein"
-	case strings.Contains(n, "routing"):
-		return "routing"
-	case strings.Contains(n, "iban"):
-		return "iban"
-	case strings.Contains(n, "card"), strings.Contains(n, "credit"):
-		return "card"
-	case strings.Contains(n, "account number"):
-		return "account"
-	case strings.Contains(n, "one-time"), strings.Contains(n, "otp"), strings.Contains(n, "verification code"):
-		return "otp"
-	case strings.Contains(n, "password"), strings.Contains(n, "passcode"):
-		return "password"
-	case strings.Contains(n, "username"), strings.Contains(n, "user name"):
-		return "username"
-	case strings.Contains(n, "id"):
-		return "id"
-	case kind == "secret":
-		return "secret"
-	default:
-		return "unknown"
+	for _, c := range categoryWords {
+		if c.re.MatchString(n) {
+			return c.category
+		}
 	}
+	if kind == "secret" {
+		return "secret"
+	}
+	return "unknown"
 }
 
-// ClipboardShape checks only the expected syntax. It never returns the value.
+// categoryWords is ClipboardCategory's table, first match wins.
+var categoryWords = []struct {
+	category string
+	re       *regexp.Regexp
+}{
+	{"ssn", regexp.MustCompile(`\bsocial security\b|\bssn\b`)},
+	{"itin", regexp.MustCompile(`\bitin\b`)},
+	{"ein", regexp.MustCompile(`\bein\b|\bemployer identification\b`)},
+	{"routing", regexp.MustCompile(`\brouting\b`)},
+	{"iban", regexp.MustCompile(`\biban\b`)},
+	{"card", regexp.MustCompile(`\bcard\b|\bcredit\b`)},
+	{"account", regexp.MustCompile(`\baccount number\b`)},
+	{"otp", regexp.MustCompile(`\bone-time\b|\botp\b|\bverification code\b`)},
+	{"password", regexp.MustCompile(`\bpassword\b|\bpasscode\b`)},
+	{"username", regexp.MustCompile(`\busername\b|\buser name\b`)},
+	{"id", regexp.MustCompile(`\bid\b`)},
+}
+
+// ClipboardShape is the AUTHORITATIVE check of a clipboard value against a
+// field category: the syntax (ClipboardPattern) and then, where the category
+// has one, the same validator the browser guard's value check uses — ABA
+// 3-7-1 checksum, Luhn + issuer, EIN campus prefix, SSN/ITIN group rules,
+// IBAN mod-97. It never returns the value.
 func ClipboardShape(category, value string) (bool, string) {
 	if value == "" {
 		return false, "clipboard is empty"
@@ -53,11 +58,27 @@ func ClipboardShape(category, value string) (bool, string) {
 	if !regexp.MustCompile(pattern).MatchString(value) {
 		return false, "clipboard doesn't look like a " + category
 	}
+	if check := clipboardChecks[category]; check != nil && !check(value) {
+		return false, "clipboard fails the " + category + " check"
+	}
 	return true, ""
 }
 
+// clipboardChecks are the checksum/assignment rules ClipboardShape applies
+// after the syntax matched.
+var clipboardChecks = map[string]func(string) bool{
+	"ssn":     ValidSSN,
+	"itin":    ValidITIN,
+	"ein":     func(v string) bool { return ValidEIN(v) || (len(v) == 9 && ValidEIN(v[:2]+"-"+v[2:])) },
+	"routing": ValidABA,
+	"iban":    func(v string) bool { return ValidIBAN(v) },
+	"card":    ValidCard,
+}
+
 // ClipboardPattern is the portable regex used by native dialogs for their
-// disabled-button preview. The Go check is repeated after the click.
+// disabled-button preview. It is only a PRE-FILTER that may disable the
+// button: a value it rejects is rejected by ClipboardShape too, but one it
+// accepts can still fail ClipboardShape's checksum after the click.
 func ClipboardPattern(category string) (string, bool) {
 	patterns := map[string]string{
 		"ssn":      `^\d{3}-?\d{2}-?\d{4}$`,
@@ -70,8 +91,9 @@ func ClipboardPattern(category string) (string, bool) {
 		"otp":      `^[A-Za-z0-9]{4,10}$`,
 		"username": `^[^\s]{1,128}$`,
 		"id":       `^[A-Za-z0-9][A-Za-z0-9 _-]{0,127}$`,
-		"password": `^[\s\S]{1,1024}$`,
-		"secret":   `^[\s\S]{1,1024}$`,
+		// Go's regexp caps a repeat count at 1000.
+		"password": `^[\s\S]{1,1000}$`,
+		"secret":   `^[\s\S]{1,1000}$`,
 	}
 	pattern, ok := patterns[category]
 	return pattern, ok

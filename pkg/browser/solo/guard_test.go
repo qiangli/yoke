@@ -77,19 +77,27 @@ func TestSoloGuardEndToEnd(t *testing.T) {
 	}
 
 	exec(wire.Action{Type: wire.ActionNavigate, URL: srv.URL + "/ssn"})
-	// Headless solo has no human: stopped, nothing typed.
+	// No human channel installed: stopped, nothing typed.
 	res := exec(wire.Action{Type: wire.ActionType, Selector: "#answer", Text: "Ada"})
 	if res.OutcomeClass != guard.ClassStopped || res.Reason != "field:label-ssn" || value("#answer") != "" {
-		t.Fatalf("headless: %+v value=%q", res, value("#answer"))
+		t.Fatalf("no asker: %+v value=%q", res, value("#answer"))
 	}
-	// The scripted operator chooses type-myself: the field is focused, still
-	// empty, and the caller sees only the outcome.
-	t.Setenv(guard.FakeAskEnv, "fake:type-myself")
+	// Headless: nobody can type into this browser, so "self" is not on
+	// offer — an operator who picks it anyway stops the form.
+	t.Setenv(guard.FakeAskEnv, "fake:self")
 	res = exec(wire.Action{Type: wire.ActionType, Selector: "#answer", Text: "Ada"})
-	var active string
-	_ = chromedp.Run(c.current(), chromedp.Evaluate("document.activeElement.id", &active))
-	if res.OutcomeClass != guard.ClassHumanTyped || active != "answer" || value("#answer") != "" {
-		t.Fatalf("type-myself: %+v active=%q value=%q", res, active, value("#answer"))
+	if res.OutcomeClass != guard.ClassStopped || value("#answer") != "" {
+		t.Fatalf("self headless: %+v value=%q", res, value("#answer"))
+	}
+	// The operator PROVIDES the answer: it is filled by reference through
+	// CDP; the agent's text never reaches the page and the result carries
+	// only the outcome.
+	t.Setenv(guard.FakeAskEnv, "fake:provide")
+	t.Setenv(guard.FakeValueEnv, "078-05-1120")
+	res = exec(wire.Action{Type: wire.ActionType, Selector: "#answer", Text: "Ada"})
+	if res.OutcomeClass != guard.ClassFilledByHuman || value("#answer") != "078-05-1120" ||
+		strings.Contains(res.Content+res.Data+res.Error, "078-05-1120") {
+		t.Fatalf("provide: %+v value=%q", res, value("#answer"))
 	}
 	t.Setenv(guard.FakeAskEnv, "")
 

@@ -197,3 +197,39 @@ func TestGuardMessagesNeverEchoAGuardedValue(t *testing.T) {
 		}
 	}
 }
+
+// provide: guardFill types an operator's ADMITTED answer into a guarded
+// field (the hub checked the admission first) and answers without the value;
+// an unguarded type path is untouched and the agent's own type still fails.
+func TestGuardFillTypesTheOperatorsAnswer(t *testing.T) {
+	h := newPageHarness(t, map[string]string{
+		"/ssn": typeformScreen("Social Security Number", plainBox),
+		"/pw":  typeformScreen("Sign in", `<input type="password" id="answer">`),
+	})
+	for _, path := range []string{"/ssn", "/pw"} {
+		h.open(path)
+		if res := h.call("type", map[string]any{"selector": "#answer", "text": "agent text"}); res["error"] == nil {
+			t.Fatalf("%s: the agent's type went through: %v", path, res)
+		}
+		res := h.call("guardFill", map[string]any{"selector": "#answer", "text": "078-05-1120"})
+		if res["content"] != "filled" || res["error"] != nil {
+			t.Fatalf("%s: guardFill = %v", path, res)
+		}
+		if b := fmt.Sprint(res); strings.Contains(b, "078-05-1120") {
+			t.Fatalf("%s: guardFill echoed the value: %s", path, b)
+		}
+		var v string
+		h.mainEval("document.querySelector('#answer').value", &v)
+		if v != "078-05-1120" {
+			t.Fatalf("%s: field holds %q", path, v)
+		}
+	}
+	// A field that rejects the value: the error names the field, not the value.
+	h2 := newPageHarness(t, map[string]string{"/reject": typeformScreen("SSN",
+		`<input type="text" id="answer" oninput="this.value=''">`)})
+	h2.open("/reject")
+	res := h2.call("guardFill", map[string]any{"selector": "#answer", "text": "078-05-1120"})
+	if msg, _ := res["error"].(string); msg == "" || strings.Contains(fmt.Sprint(res), "078-05-1120") {
+		t.Fatalf("rejected guardFill = %v", res)
+	}
+}

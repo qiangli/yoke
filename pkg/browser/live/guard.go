@@ -5,7 +5,10 @@ package live
 // `bashy approve`d src approval, like the guard package itself.
 //
 // Old extensions. The page-side field check lives in extension guard.js,
-// advertised as the guard_field method (extension 0.9.0). Rather than raise
+// advertised as the guard_field method (extension 0.9.0); guard_fill, the
+// by-reference fill of an operator's answer, arrived in 0.9.1 — an older
+// extension makes a provide answer stop (fill-failed), never type the agent's
+// text. Rather than raise
 // LiveExtensionMinVersion — which would block navigate/extract/screenshot on
 // every older extension for a check only writes need — the hub gates on the
 // ADVERTISED METHOD: type, select and keyboard_press are refused loudly unless
@@ -25,8 +28,12 @@ import (
 	"github.com/qiangli/yoke/pkg/browser/wire"
 )
 
-// guardMethod is the extension method that carries the field check.
-const guardMethod = "guard_field"
+// guardMethod is the extension method that carries the field check;
+// fillMethod types an operator's admitted answer (extension 0.9.1+).
+const (
+	guardMethod = "guard_field"
+	fillMethod  = "guard_fill"
+)
 
 // guardNeeded is the set of methods that write into a field and so need
 // the page-side field check present.
@@ -53,6 +60,21 @@ func (h *hub) guardDispatch(ctx context.Context, method string, params map[strin
 	}
 	a := wire.Action{Type: method}
 	str := func(k string) string { v, _ := params[k].(string); return v }
+	if method == fillMethod {
+		// Typed past the field check: only for an operator answer the
+		// guard claimed for exactly this field, once.
+		t := wire.Action{Selector: str("selector"), MatchText: str("match_text"), Scope: str("scope")}
+		if f, ok := params["element_id"].(float64); ok {
+			t.ElementID = int(f)
+		}
+		if v, ok := params["include_hidden"].(bool); ok {
+			t.IncludeHidden = v
+		}
+		if err := guard.ConsumeClaimed(str("admit"), t); err != nil {
+			return "live: refusing guard_fill: " + err.Error()
+		}
+		return ""
+	}
 	switch method {
 	case "type", "clipboard_write":
 		a.Text = str("text")
@@ -143,6 +165,18 @@ func (g guardBackend) InspectField(ctx context.Context, a wire.Action) (guard.Fi
 func (g guardBackend) FocusField(ctx context.Context, a wire.Action) error {
 	_, err := g.s.callRaw(ctx, "guard_focus", targetParams(a))
 	return err
+}
+
+// FillAdmitted sends an operator's admitted answer to the extension's
+// guard_fill (page.js types it past the field check and answers without the
+// value). The error is generic: an extension error could quote the field.
+func (g guardBackend) FillAdmitted(ctx context.Context, a wire.Action, askID string, value []byte) error {
+	p := targetParams(a)
+	p["text"], p["admit"] = string(value), askID
+	if _, err := g.s.callRaw(ctx, fillMethod, p); err != nil {
+		return errors.New("live: guard_fill failed")
+	}
+	return nil
 }
 
 func (g guardBackend) Site(ctx context.Context) string {

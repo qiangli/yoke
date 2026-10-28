@@ -187,6 +187,9 @@ const SUPPORTED_METHODS = [
   // extension does not advertise it; guard_focus hands a refused field to
   // the human operator.
   "guard_field", "guard_focus",
+  // guard_fill types an operator's answer the guard admitted for one field
+  // (the hub refuses it without that admission); it never echoes the value.
+  "guard_fill",
   // The hub asks a stale extension to reload itself after refreshing
   // its unpacked folder (zero-touch upgrade).
   "reload",
@@ -333,7 +336,7 @@ function broadcastLog(msg) {
 // mirror): a type or clipboard write is logged by length only, so a value
 // the guard refused page-side — or any value — is never retained here.
 function logParams(method, params) {
-  if ((method === "type" || method === "clipboard_write") && params && typeof params.text === "string") {
+  if ((method === "type" || method === "clipboard_write" || method === "guard_fill") && params && typeof params.text === "string") {
     return Object.assign({}, params, { text: `<${params.text.length} chars>` });
   }
   return params;
@@ -489,6 +492,8 @@ async function dispatchOnTab(method, params, tabId) {
       return runInTab(tabId, "guardField", params);
     case "guard_focus":
       return guardFocus(tabId, params);
+    case "guard_fill":
+      return guardFill(tabId, params);
     case "dispatch_event":
       return dispatchEventInTab(tabId, params);
     case "wait_for_selector":
@@ -898,7 +903,7 @@ async function runInTab(tabId, kind, params) {
   } else {
     result = await callPage(tabId, kind, params, kind);
   }
-  if (kind === "type" && result && result.retry_trusted) {
+  if ((kind === "type" || kind === "guardFill") && result && result.retry_trusted) {
     result = await typeTrusted(tabId, local, result, frameId);
   }
   if (result && result.error) {
@@ -938,6 +943,18 @@ async function typeTrusted(tabId, params, synthetic, frameId) {
     return { error: `type: value did not stick on ${read.matched} (synthetic and trusted input): wanted ${JSON.stringify(text)}, field shows ${JSON.stringify(read.value)}` };
   }
   return { content: "typed", data: JSON.stringify({ matched: read.matched, value: read.value, how: "trusted" }) };
+}
+
+// guardFill types an operator's admitted answer (page.js guardFill), with the
+// trusted-input fallback type uses. Whatever goes wrong, the error is
+// generic: neither the value nor a read-back of the field leaves here.
+async function guardFill(tabId, params) {
+  try {
+    await runInTab(tabId, "guardFill", params);
+  } catch (e) {
+    throw new Error("guard_fill: the operator's answer could not be filled");
+  }
+  return { content: "filled" };
 }
 
 // guardFocus brings the driven tab to the operator's attention and puts the

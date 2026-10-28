@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"github.com/qiangli/yoke/pkg/sensitive"
 	"os"
 	"path/filepath"
 	"sort"
@@ -32,6 +33,10 @@ const (
 
 // vaultValues is the value source; a variable so tests supply values without
 // a vault or a network. Production reads the secrets client.
+// KindVault is the value kind (value:vault, [guarded:vault]) of a match
+// against a bashy vault secret; the validator kinds live in pkg/sensitive.
+const KindVault = "vault"
+
 var vaultValues = func(ctx context.Context, remote bool, fn func(string)) error {
 	return secrets.EachVaultValue(ctx, remote, vaultFetchTimeout, fn)
 }
@@ -156,18 +161,18 @@ func (m *vaultMatcher) equal(s string) bool {
 }
 
 // spans finds vault values embedded in s (values of minVaultSubstring+).
-func (m *vaultMatcher) spans(s string) []Span {
+func (m *vaultMatcher) spans(s string) []sensitive.Span {
 	if m == nil {
 		return nil
 	}
-	var out []Span
+	var out []sensitive.Span
 	for n, set := range m.lens {
 		if n < minVaultSubstring || n > len(s) {
 			continue
 		}
 		for i := 0; i+n <= len(s); i++ {
 			if set[m.digest(s[i:i+n])] {
-				out = append(out, Span{Start: i, End: i + n, Kind: KindVault})
+				out = append(out, sensitive.Span{Start: i, End: i + n, Kind: KindVault})
 				i += n - 1
 			}
 		}

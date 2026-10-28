@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"time"
 
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
@@ -99,6 +100,24 @@ func (g GuardBackend) FocusField(ctx context.Context, a wire.Action) error {
 	}
 	if out.Error != "" {
 		return errors.New(out.Error)
+	}
+	return nil
+}
+
+// FillAdmitted types an operator's admitted answer. probe/solo have no
+// page-side refusal in their type path, so this is the ordinary Type; its
+// result (which reads the value back) is discarded.
+func (g GuardBackend) FillAdmitted(ctx context.Context, a wire.Action, _ string, value []byte) error {
+	cdpCtx, err := g.Ready(ctx)
+	if err != nil {
+		return err
+	}
+	callCtx, cancel := context.WithTimeout(cdpCtx, 30*time.Second)
+	defer cancel()
+	a.Text, a.FromAsk = string(value), ""
+	res, err := Type(callCtx, a)
+	if err != nil || res == nil || !res.Success {
+		return errors.New("guard: fill failed")
 	}
 	return nil
 }

@@ -3,56 +3,119 @@ package guard
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/qiangli/yoke/pkg/ask"
 	"github.com/qiangli/yoke/pkg/browser/wire"
+	"github.com/qiangli/yoke/pkg/sensitive"
 )
 
-// The human path. A refusal raises ONE approval on the bashy approve queue
-// naming the site, the question and why it was blocked:
+// The human path (shared contract v2). A refusal asks the operator ONE
+// question naming the site, the question text and why it was blocked:
 //
-//	type-myself  bashy focuses the field in the operator's browser and waits
-//	             for a second "done" approval (allow = done, deny = stop)
-//	skip         leave this question unanswered
-//	stop         stop filling this form (also: deny, no answer, timeout)
+//	provide  the operator answers in bashy's own dialog ("Enter it here" or
+//	         "Use clipboard"); the answer is held under an ask id and the
+//	         guard fills the field BY REFERENCE (admit.go) — the value never
+//	         reaches the agent, its stdout, receipts or logs
+//	self     bashy focuses the field in the operator's browser; the human
+//	         types it there and answers "done"
+//	skip     leave this question unanswered
+//	stop     stop filling this form (also: no answer, timeout, any error)
 //
-//	bashy approve allow ID --option type-myself|skip|stop
-//	bashy approve deny  ID                                 # = stop
-//
-// The caller (agent, skill) sees only the outcome; the value never exists on
-// this path at all — the human types it straight into the page.
+// The question is asked through a HumanAsker the host installs at init
+// (pkg/browser/guardask adapts pkg/ask's native forms); this package does
+// not import pkg/ask. With no asker installed there is no human channel and
+// every refusal stops.
 
-// Choice ids offered on the approval.
+// GuardChoice is the operator's answer to a guard question.
+type GuardChoice string
+
 const (
-	ChoiceTypeMyself = "type-myself"
-	ChoiceSkip       = "skip"
-	ChoiceStop       = "stop"
-	choiceDone       = "done"
+	ChoiceProvide GuardChoice = "provide"
+	ChoiceSelf    GuardChoice = "self"
+	ChoiceSkip    GuardChoice = "skip"
+	ChoiceStop    GuardChoice = "stop"
 )
 
-// Source is the approval source the guard raises under.
-const Source = "browser-guard"
+// GuardAsk is the question put to the operator. It never carries the
+// refused value.
+type GuardAsk struct {
+	Site     string // host of the page ("" when unknown)
+	Question string // the visible question/label text, masked
+	Reason   string // reason code: field:label-ssn, value:luhn, …
+	Why      string // the reason in words
+	Action   string // the refused action type
+	// Category is the pkg/sensitive clipboard category the answer must
+	// have ("ssn", "routing", "card", "password", …; "" when unknown).
+	Category string
+	// Secret: the answer is a credential (masked entry).
+	Secret bool
+	// CanProvide: the operator may answer in the dialog (only a type into
+	// a field can be filled by reference). CanSelf: the operator can type
+	// it into this browser (false for a headless Chrome).
+	CanProvide, CanSelf bool
+	Timeout             time.Duration
+}
 
-// Timeouts for the operator's answer. Variables only so tests can shorten
-// them; there is no flag or environment variable.
+// GuardAnswer is the operator's choice. AskID is set only for provide: the
+// opaque id a ValueSource resolves.
+type GuardAnswer struct {
+	Choice GuardChoice
+	AskID  string
+	Via    string // where the answer came from ("operator", "timeout", …)
+}
+
+// HumanAsker asks the operator. Ask raises the one question; Done waits for
+// the operator to finish typing into the focused field (self) and reports
+// false for stop / no answer.
+type HumanAsker interface {
+	Ask(ctx context.Context, q GuardAsk) (GuardAnswer, error)
+	Done(ctx context.Context, q GuardAsk) (bool, error)
+}
+
+// ValueSource resolves a provide answer's ask id to the operator's value,
+// at most once (the host adapter uses ask.TakeValue).
+type ValueSource func(askID string) ([]byte, error)
+
 var (
-	DecisionTimeout = 10 * time.Minute
-	DoneTimeout     = 15 * time.Minute
+	humanMu     sync.RWMutex
+	humanAsker  HumanAsker
+	valueSource ValueSource
 )
 
-// FakeAskEnv is the TEST-ONLY seam: fake:type-myself | fake:skip | fake:stop
-// | fake:timeout answers the guard's approvals as a scripted operator would.
-// It is honoured only inside a `go test` binary (testing.Testing) or a build
-// made with -tags bashy_guard_fake; a release build ignores it. Even when
-// honoured it cannot let a guarded value through — every fake answer is one
-// of the human-path outcomes, none of which fills the field.
-const FakeAskEnv = "BASHY_BROWSER_GUARD_ASK"
+// SetHumanAsker installs the host's asker (nil removes it).
+func SetHumanAsker(h HumanAsker) {
+	humanMu.Lock()
+	humanAsker = h
+	humanMu.Unlock()
+}
+
+// SetValueSource installs the host's value source (nil removes it).
+func SetValueSource(v ValueSource) {
+	humanMu.Lock()
+	valueSource = v
+	humanMu.Unlock()
+}
+
+// DecisionTimeout bounds the operator's answer. A variable only so tests can
+// shorten it; there is no flag or environment variable.
+var DecisionTimeout = 10 * time.Minute
+
+// FakeAskEnv is the TEST-ONLY seam: fake:provide | fake:clipboard | fake:self
+// (alias fake:type-myself) | fake:skip | fake:stop | fake:timeout answers the
+// guard's question as a scripted operator would. It is honoured only inside
+// a `go test` binary (testing.Testing) or a build made with -tags
+// bashy_guard_fake; a release build ignores it. fake:provide/clipboard
+// "provides" FakeValueEnv's value (default "human-provided") by reference,
+// exactly as the real path does.
+const (
+	FakeAskEnv   = "BASHY_BROWSER_GUARD_ASK"
+	FakeValueEnv = "BASHY_BROWSER_GUARD_ASK_VALUE"
+)
 
 func fakeAnswer() string {
 	if !testing.Testing() && !fakeBuild {
@@ -63,33 +126,162 @@ func fakeAnswer() string {
 		return ""
 	}
 	switch c := strings.TrimPrefix(v, "fake:"); c {
-	case ChoiceTypeMyself, ChoiceSkip, ChoiceStop, "timeout":
+	case "provide", "clipboard":
+		return string(ChoiceProvide)
+	case "self", "type-myself":
+		return string(ChoiceSelf)
+	case string(ChoiceSkip), string(ChoiceStop), "timeout":
 		return c
 	}
 	return ""
 }
 
+// fakeAsker is the scripted operator behind FakeAskEnv.
+type fakeAsker struct{ answer string }
+
+var fakeValues sync.Map // ask id -> value, one take each
+
+func (f fakeAsker) Ask(ctx context.Context, q GuardAsk) (GuardAnswer, error) {
+	switch f.answer {
+	case "timeout":
+		return GuardAnswer{Choice: ChoiceStop, Via: "timeout"}, nil
+	case string(ChoiceProvide):
+		v := os.Getenv(FakeValueEnv)
+		if v == "" {
+			v = "human-provided"
+		}
+		id := fmt.Sprintf("fake%028x", time.Now().UnixNano())
+		fakeValues.Store(id, []byte(v))
+		return GuardAnswer{Choice: ChoiceProvide, AskID: id, Via: "fake-operator"}, nil
+	}
+	return GuardAnswer{Choice: GuardChoice(f.answer), Via: "fake-operator"}, nil
+}
+
+func (fakeAsker) Done(context.Context, GuardAsk) (bool, error) { return true, nil }
+
+func fakeValue(id string) ([]byte, error) {
+	v, ok := fakeValues.LoadAndDelete(id)
+	if !ok {
+		return nil, fmt.Errorf("guard: no live value for this ask")
+	}
+	return v.([]byte), nil
+}
+
+// seams returns the asker and value source in force: the fake (test builds
+// only) or what the host installed.
+func seams() (HumanAsker, ValueSource) {
+	if f := fakeAnswer(); f != "" {
+		return fakeAsker{f}, fakeValue
+	}
+	humanMu.RLock()
+	defer humanMu.RUnlock()
+	return humanAsker, valueSource
+}
+
 func human(ctx context.Context, b Backend, a wire.Action, ref refusal) *wire.Result {
 	ref.Question = maskString(ref.Question, loadVault(ctx))
-	if !b.HumanChannel() && fakeAnswer() == "" {
-		return outcome(ClassStopped, ref, "no-human-channel")
+	asker, values := seams()
+	if asker == nil {
+		return outcome(ClassStopped, ref, "no-human-channel", "")
 	}
-	choice, via := decide(ctx, a, ref)
-	switch choice {
-	case ChoiceTypeMyself:
-		if hasField(a) {
-			if err := b.FocusField(ctx, a); err != nil {
-				return outcome(ClassStopped, ref, "focus-failed")
+	category, secret := categoryOf(ref.Reason)
+	q := GuardAsk{
+		Site: ref.Site, Question: clip(ref.Question), Reason: ref.Reason, Why: reasonText(ref.Reason),
+		Action: a.Type, Category: category, Secret: secret,
+		CanProvide: a.Type == wire.ActionType && values != nil,
+		CanSelf:    b.HumanChannel() && hasField(a),
+		Timeout:    DecisionTimeout,
+	}
+	ans, err := asker.Ask(ctx, q)
+	if err != nil {
+		return outcome(ClassStopped, ref, "ask-unavailable", "")
+	}
+	via := ans.Via
+	if via == "" {
+		via = "operator"
+	}
+	switch ans.Choice {
+	case ChoiceProvide:
+		if !q.CanProvide || ans.AskID == "" {
+			return outcome(ClassStopped, ref, "provide-not-offered", "")
+		}
+		if err := admit(ans.AskID, ref, a); err != nil {
+			return outcome(ClassStopped, ref, "admit-failed", "")
+		}
+		a.FromAsk, a.Text = ans.AskID, ""
+		return fillFromAsk(ctx, b, a)
+	case ChoiceSelf:
+		if !q.CanSelf {
+			return outcome(ClassStopped, ref, "self-not-offered", "")
+		}
+		if err := b.FocusField(ctx, a); err != nil {
+			return outcome(ClassStopped, ref, "focus-failed", "")
+		}
+		if ok, err := asker.Done(ctx, q); err != nil || !ok {
+			how := "operator"
+			if err != nil {
+				how = "timeout"
 			}
+			return outcome(ClassStopped, ref, how, "")
 		}
-		if ok, how := waitDone(ctx, ref); !ok {
-			return outcome(ClassStopped, ref, how)
-		}
-		return outcome(ClassHumanTyped, ref, via)
+		return outcome(ClassHumanTyped, ref, via, "")
 	case ChoiceSkip:
-		return outcome(ClassSkipped, ref, via)
+		return outcome(ClassSkipped, ref, via, "")
 	}
-	return outcome(ClassStopped, ref, via)
+	return outcome(ClassStopped, ref, via, "")
+}
+
+func clip(q string) string {
+	if len(q) > 200 {
+		return q[:200] + "…"
+	}
+	return q
+}
+
+// categoryOf maps a reason code to the pkg/sensitive clipboard category the
+// operator's answer must have, and whether it is a credential.
+func categoryOf(reason string) (string, bool) {
+	switch reason {
+	case "value:" + sensitive.KindSSN:
+		return "ssn", false
+	case "value:" + sensitive.KindITIN:
+		return "itin", false
+	case "value:" + sensitive.KindEIN:
+		return "ein", false
+	case "value:" + sensitive.KindABA:
+		return "routing", false
+	case "value:" + sensitive.KindCard, "field:autocomplete-cc-number":
+		return "card", false
+	case "value:" + sensitive.KindIBAN:
+		return "iban", false
+	case "value:" + KindVault:
+		return "secret", true
+	case "field:type-password", "field:autocomplete-current-password", "field:autocomplete-new-password":
+		return "password", true
+	case "field:autocomplete-one-time-code":
+		return "otp", true
+	case "field:autocomplete-username":
+		return "username", false
+	}
+	switch reason[strings.LastIndexByte(reason, '-')+1:] {
+	case "ssn":
+		return "ssn", false
+	case "ein":
+		return "ein", false
+	case "routing":
+		return "routing", false
+	case "card":
+		return "card", false
+	case "account":
+		return "account", false
+	case "password":
+		return "password", true
+	case "otp":
+		return "otp", true
+	case "username":
+		return "username", false
+	}
+	return "", false
 }
 
 func reasonText(code string) string {
@@ -97,9 +289,9 @@ func reasonText(code string) string {
 	switch {
 	case strings.HasPrefix(code, "value:"):
 		names := map[string]string{
-			KindSSN: "a Social Security number", KindITIN: "an ITIN", KindEIN: "an EIN",
-			KindABA: "a bank routing number", KindCard: "a payment card number",
-			KindIBAN: "an IBAN", KindVault: "a secret from the bashy vault",
+			sensitive.KindSSN: "a Social Security number", sensitive.KindITIN: "an ITIN", sensitive.KindEIN: "an EIN",
+			sensitive.KindABA: "a bank routing number", sensitive.KindCard: "a payment card number",
+			sensitive.KindIBAN: "an IBAN", KindVault: "a secret from the bashy vault",
 		}
 		if n := names[strings.TrimPrefix(code, "value:")]; n != "" {
 			return "the value is " + n
@@ -114,130 +306,17 @@ func reasonText(code string) string {
 	return code
 }
 
-func prompt(ref refusal, a wire.Action) string {
-	q := ref.Question
-	if q == "" {
-		q = ref.Matched
-	}
-	if len(q) > 200 {
-		q = q[:200] + "…"
-	}
-	site := ref.Site
-	if site == "" {
-		site = "(unknown site)"
-	}
-	return fmt.Sprintf("bashy browser guard: an agent tried to %s on %s, question %q — blocked because %s (%s). "+
-		"The agent will not see what you type. Choose: type-myself (bashy focuses the field in your browser; "+
-		"you type it, then answer done), skip (leave this question), stop (stop filling this form; also the "+
-		"answer if nobody replies).",
-		strings.ReplaceAll(a.Type, "_", " "), site, q, reasonText(ref.Reason), ref.Reason)
-}
-
-func decide(ctx context.Context, a wire.Action, ref refusal) (string, string) {
-	fake := fakeAnswer()
-	r, err := ask.Raise(ask.ApprovalSpec{
-		Source:  Source,
-		Argv:    []string{"browser", "guard", a.Type, ref.Site, ref.Reason},
-		Effects: []string{"human-input"},
-		Prompt:  prompt(ref, a),
-		Options: []ask.ApprovalOption{
-			{ID: ChoiceTypeMyself, Name: "I will type it myself", Kind: "allow_once"},
-			{ID: ChoiceSkip, Name: "skip this question", Kind: "allow_once"},
-			{ID: ChoiceStop, Name: "stop filling this form", Kind: "reject_once"},
-		},
-		TTL: DecisionTimeout,
-	})
-	if err != nil {
-		return ChoiceStop, "ask-unavailable"
-	}
-	timeout := DecisionTimeout
-	switch fake {
-	case "timeout":
-		timeout = 50 * time.Millisecond
-	case ChoiceStop:
-		_, _ = ask.Decide(r.ID, ask.Decision{Verdict: ask.VerdictDeny, By: "fake-operator"}, ask.DecideOpts{})
-	case ChoiceTypeMyself, ChoiceSkip:
-		_, _ = ask.Decide(r.ID, ask.Decision{Verdict: ask.VerdictAllow, By: "fake-operator", OptionID: fake}, ask.DecideOpts{})
-	}
-	d, err := wait(ctx, r.ID, timeout)
-	if err != nil {
-		return ChoiceStop, "timeout"
-	}
-	if d.Via == ask.ViaTimeout {
-		return ChoiceStop, "timeout"
-	}
-	if !d.Allowed() {
-		return ChoiceStop, "operator"
-	}
-	switch d.OptionID {
-	case ChoiceSkip:
-		return ChoiceSkip, "operator"
-	case ChoiceStop:
-		return ChoiceStop, "operator"
-	}
-	return ChoiceTypeMyself, "operator"
-}
-
-// wait blocks for a decision; on timeout it records the deny (nobody
-// answered = stop, never a default fill).
-func wait(ctx context.Context, id string, timeout time.Duration) (ask.Decision, error) {
-	wctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	d, err := ask.WaitDecision(wctx, id)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			return ask.DenyUnanswered(id, "browser guard: no answer within "+timeout.String()), nil
-		}
-		return ask.Decision{}, err
-	}
-	return d, nil
-}
-
-// waitDone is the type-myself handshake: the field is focused; the operator
-// types and then answers done (allow) or stop (deny).
-func waitDone(ctx context.Context, ref refusal) (bool, string) {
-	fake := fakeAnswer()
-	q := ref.Question
-	if len(q) > 200 {
-		q = q[:200] + "…"
-	}
-	r, err := ask.Raise(ask.ApprovalSpec{
-		Source:  Source,
-		Argv:    []string{"browser", "guard", choiceDone, ref.Site, ref.Reason},
-		Effects: []string{"human-input"},
-		Prompt: fmt.Sprintf("bashy browser guard: the field for %q on %s is focused in your browser. Type your answer there, "+
-			"then allow this (done) — or deny it to stop filling the form. Do not paste the value here.", q, ref.Site),
-		Options: []ask.ApprovalOption{
-			{ID: choiceDone, Name: "done — I typed it", Kind: "allow_once"},
-			{ID: ChoiceStop, Name: "stop filling this form", Kind: "reject_once"},
-		},
-		TTL: DoneTimeout,
-	})
-	if err != nil {
-		return false, "ask-unavailable"
-	}
-	timeout := DoneTimeout
-	if fake == ChoiceTypeMyself {
-		_, _ = ask.Decide(r.ID, ask.Decision{Verdict: ask.VerdictAllow, By: "fake-operator", OptionID: choiceDone}, ask.DecideOpts{})
-	}
-	d, err := wait(ctx, r.ID, timeout)
-	if err != nil || d.Via == ask.ViaTimeout {
-		return false, "timeout"
-	}
-	if !d.Allowed() || d.OptionID == ChoiceStop {
-		return false, "operator"
-	}
-	return true, "operator"
-}
-
-// outcome builds the result the caller sees: the class, the reason code and
-// where the decision came from. Never the value.
-func outcome(class string, ref refusal, via string) *wire.Result {
+// outcome builds the result the caller sees: the class, the reason code,
+// where the decision came from and (filled-by-human) the opaque ask id.
+// Never the value.
+func outcome(class string, ref refusal, via, askID string) *wire.Result {
 	res := &wire.Result{OutcomeClass: class, Reason: ref.Reason}
-	choice := ""
+	var choice GuardChoice
 	switch class {
+	case ClassFilledByHuman:
+		res.Success, res.Content, choice = true, ContentFilledByHuman, ChoiceProvide
 	case ClassHumanTyped:
-		res.Success, res.Content, choice = true, ContentHumanTyped, ChoiceTypeMyself
+		res.Success, res.Content, choice = true, ContentHumanTyped, ChoiceSelf
 	case ClassSkipped:
 		res.Content, choice = ContentSkipped, ChoiceSkip
 		res.Error = fmt.Sprintf("guard: %s refused (%s); the operator skipped this question", ref.Reason, reasonText(ref.Reason))
@@ -245,9 +324,13 @@ func outcome(class string, ref refusal, via string) *wire.Result {
 		res.Content, choice = ContentStopped, ChoiceStop
 		res.Error = fmt.Sprintf("guard: %s refused (%s); stopped (%s) — the form needs a human", ref.Reason, reasonText(ref.Reason), via)
 	}
-	data, _ := json.Marshal(map[string]string{
-		"choice": choice, "via": via, "reason": ref.Reason, "site": ref.Site, "question": ref.Question,
-	})
+	fields := map[string]string{
+		"choice": string(choice), "via": via, "reason": ref.Reason, "site": ref.Site, "question": ref.Question,
+	}
+	if askID != "" {
+		fields["ask_id"] = askID
+	}
+	data, _ := json.Marshal(fields)
 	res.Data = string(data)
 	return res
 }

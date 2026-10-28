@@ -14,11 +14,16 @@ import (
 // into the right native primitive (CDP command for probe/solo,
 // WebSocket message for live).
 type Action struct {
-	Type      string   `json:"action"`
-	URL       string   `json:"url,omitempty"`
-	ElementID int      `json:"element_id,omitempty"`
-	Selector  string   `json:"selector,omitempty"`
-	Text      string   `json:"text,omitempty"`
+	Type      string `json:"action"`
+	URL       string `json:"url,omitempty"`
+	ElementID int    `json:"element_id,omitempty"`
+	Selector  string `json:"selector,omitempty"`
+	Text      string `json:"text,omitempty"`
+	// FromAsk fills a type BY REFERENCE: the opaque id of an operator
+	// answer the sensitive-input guard admitted for this field. The value
+	// is resolved inside the guard at the last moment and never travels in
+	// the action (Text must be empty).
+	FromAsk   string   `json:"from_ask,omitempty"`
 	Direction string   `json:"direction,omitempty"`
 	Amount    int      `json:"amount,omitempty"`
 	Goal      string   `json:"goal,omitempty"`

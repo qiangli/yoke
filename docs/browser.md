@@ -184,7 +184,9 @@ The page-side **sensitive-input field check** (below) arrived in extension
 advertised `guard_field` method: `type`, `select` and `keyboard-press` on an
 older extension are refused loudly ("no sensitive-input field check … reload
 it"), while navigate/extract/screenshot keep working. A guarded field is never
-filled silently by a stale extension.
+filled silently by a stale extension. The by-reference fill of an operator's
+answer (`guard_fill`) arrived in **0.9.1**; on 0.9.0 a "provide" answer stops
+(`fill-failed`) rather than typing anything.
 
 ## Sensitive-input guard (enforced, every mode, every site)
 
@@ -195,7 +197,8 @@ backend's `Execute` (live, probe, solo) and in front of the live hub's raw
 
 1. **Value check** — the text of `type`, `select`, `eval`, `dispatch-event`,
    clipboard writes, `navigate` URLs and printable `keyboard-press` keys is
-   checked against strict validators — SSN/ITIN (`ddd-dd-dddd`, SSA/IRS shape
+   checked against strict validators (`pkg/sensitive`, shared with the
+   operator's clipboard check) — SSN/ITIN (`ddd-dd-dddd`, SSA/IRS shape
    rules), EIN (`dd-ddddddd`, IRS prefixes), ABA routing (9 digits, Fed prefix,
    3-7-1 checksum), payment cards (Luhn + issuer prefix/length), IBAN
    (registered length + mod-97) — and against the bashy vault's values (exact
@@ -210,39 +213,56 @@ backend's `Execute` (live, probe, solo) and in front of the live hub's raw
    saying ssn, tax id, ein, routing, account, card, password or username.
    `page.js` refuses such a field on its own too, so a client that skipped the
    gate still cannot fill it.
-3. **Human path** — a refusal raises ONE approval for the operator
-   (`bashy approve list`) naming the site, the question and the reason:
-   `bashy approve allow ID --option type-myself` (bashy focuses the field in
-   your browser; type it there, then allow the follow-up "done" approval),
-   `--option skip`, or `bashy approve deny ID` / `--option stop`. No answer
-   within 10 minutes is **stop**, never a default fill. The value never passes
-   through the agent, bashy, the ask record or any log.
+3. **Human path** — a refusal asks the operator ONE question in a native
+   dialog (`pkg/ask` forms, through the `guard.HumanAsker` the host installs —
+   `pkg/browser/guardask`), naming the site, the question and the reason:
+   - **Enter it here** / **Use clipboard** — the answer goes to a 0600 sink
+     under an ask id (the clipboard is checked against the field kind with the
+     same checksums, and cleared only if unchanged); bashy fills the field
+     **by reference** from that id. The value never reaches the agent, its
+     stdout, receipts or logs.
+   - **I will type it myself** — bashy focuses the field in your browser; type
+     it there, then answer **Done**. (Not offered for a headless Chrome.)
+   - **Skip this question**, or **Stop** filling this form. No answer within
+     10 minutes, a dismissed dialog or any error is **stop**, never a default
+     fill.
+   A provided answer is *admitted* once, for that ask id and that field only;
+   `browser type --from-ask <id> <target>` performs that fill (the guard runs
+   it itself; the verb exists so a fill that failed before the value was
+   taken can be retried). It never takes text. The live hub accepts the
+   extension's `guard_fill` only for an admission the guard claimed for the
+   same field.
 4. **Masking** — every result's text (extract content/elements/data, eval
-   data, errors, titles, URLs) shows such values as `[guarded:<kind>]`, and a
-   guarded field's value is never listed. Screenshots are **not** masked — a
-   recorded gap.
+   data, `clipboard_read`, errors, titles, URLs) shows such values as
+   `[guarded:<kind>]`, and a guarded field's value is never listed.
+   Screenshots are **not** masked — a recorded gap.
 5. **Protected** — no flag, environment variable or site-skill metadata turns
-   it off. `pkg/browser/guard`, `live/guard.go`, `extension/guard.js` and
-   `cdpactions/guard.go` are rows of `pkg/src`'s protected manifest, so a
-   change merges only with a `bashy approve`d src approval.
+   it off. `pkg/browser/guard`, `pkg/sensitive`, `pkg/browser/guardask`,
+   `live/guard.go`, `extension/guard.js` and `cdpactions/guard.go` are rows of
+   `pkg/src`'s protected manifest, so a change merges only with a
+   `bashy approve`d src approval.
 
 What the caller sees (the contract site skills build on):
 
 | outcome | stdout | exit | `--json` `outcome_class` |
 |---|---|---|---|
-| the operator typed it | `guard:human-typed` | 0 | `guard_human_typed` |
+| the operator provided it; bashy filled it | `guard:filled-by-human` | 0 | `guard_filled_by_human` |
+| the operator typed it in the browser | `guard:human-typed` | 0 | `guard_human_typed` |
 | the operator skipped the question | `guard:skipped` | 4 | `guard_skipped` |
-| stop / deny / timeout / no human channel | `guard:stopped` | 5 | `guard_stopped` |
+| stop / timeout / no human channel / fill failed | `guard:stopped` | 5 | `guard_stopped` |
 
 `--json` also carries `reason` (`field:label-ssn`, `field:type-password`,
 `value:luhn`, `value:vault`, …) and `data` `{choice, via, reason, site,
-question}`. A headless `solo` Chrome has no human channel: a refusal there is
+question}` plus `ask_id` when filled by reference. With no human channel
+installed (a host that never called `guardask.Install`) a refusal is
 `guard:stopped` immediately.
 
-Test seam: `BASHY_BROWSER_GUARD_ASK=fake:type-myself|fake:skip|fake:stop|fake:timeout`
-answers the approvals as a scripted operator. It is honoured only inside a
-`go test` binary or a build made with `-tags bashy_guard_fake` — never a
-release build — and none of its answers can fill a guarded field.
+Test seam: `BASHY_BROWSER_GUARD_ASK=fake:provide|fake:clipboard|fake:self|fake:type-myself|fake:skip|fake:stop|fake:timeout`
+answers as a scripted operator (`fake:provide` fills
+`BASHY_BROWSER_GUARD_ASK_VALUE`, default `human-provided`, by reference). It is
+honoured only inside a `go test` binary or a build made with
+`-tags bashy_guard_fake` — never a release build — and none of its answers can
+put the AGENT's text into a guarded field.
 
 Known gaps: screenshots; an `eval` that BUILDS a value at run time (the
 literal text is checked, not what the script computes); bare 9-digit SSNs

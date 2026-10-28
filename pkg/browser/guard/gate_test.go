@@ -9,9 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/qiangli/yoke/pkg/ask"
 	"github.com/qiangli/yoke/pkg/browser/wire"
 )
 
@@ -25,7 +23,20 @@ type fakeBackend struct {
 	inspected []wire.Action
 	focused   []wire.Action
 	executed  []wire.Action
+	filled    []string // values FillAdmitted typed (the operator's answers)
+	fillErr   error
 	result    *wire.Result
+}
+
+func (b *fakeBackend) FillAdmitted(_ context.Context, a wire.Action, _ string, v []byte) error {
+	if b.fillErr != nil {
+		return b.fillErr
+	}
+	if a.Text != "" {
+		return errors.New("FillAdmitted got an action carrying text")
+	}
+	b.filled = append(b.filled, string(v))
+	return nil
 }
 
 func (b *fakeBackend) InspectField(_ context.Context, a wire.Action) (Field, error) {
@@ -64,6 +75,10 @@ func isolate(t *testing.T, vault ...string) (askDir, home string) {
 	t.Setenv("BASHY_SECRETS_TOKEN", "")
 	t.Setenv("BASHY_API_KEY", "")
 	t.Setenv(FakeAskEnv, "")
+	t.Setenv(FakeValueEnv, "")
+	SetHumanAsker(nil)
+	SetValueSource(nil)
+	t.Cleanup(func() { SetHumanAsker(nil); SetValueSource(nil) })
 	prev := vaultValues
 	vaultValues = func(_ context.Context, _ bool, fn func(string)) error {
 		for _, v := range vault {
@@ -115,26 +130,31 @@ func assertNoLeak(t *testing.T, value string, res *wire.Result, dirs ...string) 
 }
 
 // (a) A field whose question/label is sensitive is refused BEFORE typing,
-// whatever the answer — and the human path's choices decide the outcome.
+// whatever the answer — and the human path's choices decide the outcome
+// (the fake seam, as S512.6's fixtures drive it).
 func TestGuardedFieldTakesTheHumanPath(t *testing.T) {
 	cases := []struct {
 		fake, class, content string
 		code                 int
-		focused              bool
+		focused, filled      bool
 	}{
-		{"fake:type-myself", ClassHumanTyped, ContentHumanTyped, 0, true},
-		{"fake:skip", ClassSkipped, ContentSkipped, 4, false},
-		{"fake:stop", ClassStopped, ContentStopped, 5, false},
-		{"fake:timeout", ClassStopped, ContentStopped, 5, false},
+		{"fake:provide", ClassFilledByHuman, ContentFilledByHuman, 0, false, true},
+		{"fake:clipboard", ClassFilledByHuman, ContentFilledByHuman, 0, false, true},
+		{"fake:self", ClassHumanTyped, ContentHumanTyped, 0, true, false},
+		{"fake:type-myself", ClassHumanTyped, ContentHumanTyped, 0, true, false},
+		{"fake:skip", ClassSkipped, ContentSkipped, 4, false, false},
+		{"fake:stop", ClassStopped, ContentStopped, 5, false, false},
+		{"fake:timeout", ClassStopped, ContentStopped, 5, false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.fake, func(t *testing.T) {
 			askDir, home := isolate(t)
 			t.Setenv(FakeAskEnv, tc.fake)
+			t.Setenv(FakeValueEnv, "078-05-1120")
 			b := &fakeBackend{human: true, field: guardedField("field:label-ssn", "What is your Social Security Number?")}
 			res := run(t, b, typeAction("Ada Lovelace"))
 			if len(b.executed) != 0 {
-				t.Fatalf("a guarded field was typed into: %+v", b.executed)
+				t.Fatalf("the agent's text reached a guarded field: %+v", b.executed)
 			}
 			if res.OutcomeClass != tc.class || res.Content != tc.content || res.Reason != "field:label-ssn" {
 				t.Fatalf("outcome = %s/%s/%s, want %s/%s/field:label-ssn", res.OutcomeClass, res.Content, res.Reason, tc.class, tc.content)
@@ -145,29 +165,175 @@ func TestGuardedFieldTakesTheHumanPath(t *testing.T) {
 			if (len(b.focused) == 1) != tc.focused {
 				t.Fatalf("focused = %d, want focused=%v", len(b.focused), tc.focused)
 			}
+			if tc.filled != (len(b.filled) == 1 && b.filled[0] == "078-05-1120") {
+				t.Fatalf("filled = %q, want filled=%v", b.filled, tc.filled)
+			}
+			if tc.filled && !strings.Contains(res.Data, `"ask_id":"fake`) {
+				t.Errorf("filled-by-human lacks the ask id: %s", res.Data)
+			}
+			if tc.fake == "fake:timeout" && !strings.Contains(res.Error, "timeout") {
+				t.Errorf("timeout not named: %s", res.Error)
+			}
 			assertNoLeak(t, "Ada Lovelace", res, askDir, home)
-			// The ONE question names the site, the question and the reason.
-			rs, err := ask.ListApprovals()
-			if err != nil || len(rs) == 0 {
-				t.Fatalf("no approval raised: %v", err)
-			}
-			first := rs[0]
-			for _, r := range rs {
-				if r.Created.Before(first.Created) {
-					first = r
-				}
-			}
-			for _, want := range []string{"form.typeform.com", "Social Security Number", "field:label-ssn", "type-myself", "skip", "stop"} {
-				if !strings.Contains(first.Prompt, want) {
-					t.Errorf("ask prompt lacks %q: %s", want, first.Prompt)
-				}
-			}
-			if tc.fake == "fake:timeout" {
-				if d, ok := ask.LoadDecision(first.ID); !ok || d.Via != ask.ViaTimeout || d.Allowed() {
-					t.Errorf("timeout was not recorded as a deny: %+v", d)
-				}
-			}
+			assertNoLeak(t, "078-05-1120", res, askDir, home)
 		})
+	}
+}
+
+// scriptedAsker is an installed HumanAsker (what guardask is in a host):
+// it records the question and answers as told.
+type scriptedAsker struct {
+	answer GuardAnswer
+	done   bool
+	err    error
+	asked  []GuardAsk
+	values map[string][]byte
+}
+
+func (s *scriptedAsker) Ask(_ context.Context, q GuardAsk) (GuardAnswer, error) {
+	s.asked = append(s.asked, q)
+	return s.answer, s.err
+}
+
+func (s *scriptedAsker) Done(context.Context, GuardAsk) (bool, error) { return s.done, nil }
+
+func (s *scriptedAsker) take(id string) ([]byte, error) {
+	v, ok := s.values[id]
+	if !ok {
+		return nil, errors.New("no value")
+	}
+	delete(s.values, id)
+	return v, nil
+}
+
+func install(t *testing.T, s *scriptedAsker) {
+	t.Helper()
+	SetHumanAsker(s)
+	SetValueSource(s.take)
+}
+
+const askA = "0123456789abcdef0123456789abcdef"
+
+// The ONE question names the site, the question and the reason, and offers
+// exactly what this action and browser allow.
+func TestTheQuestionNamesSiteQuestionReason(t *testing.T) {
+	isolate(t)
+	s := &scriptedAsker{answer: GuardAnswer{Choice: ChoiceStop}}
+	install(t, s)
+	run(t, &fakeBackend{human: true, field: guardedField("field:label-routing", "Bank routing number")}, typeAction("x"))
+	q := s.asked[0]
+	if q.Site != "form.typeform.com" || q.Question != "Bank routing number" || q.Reason != "field:label-routing" ||
+		q.Category != "routing" || q.Why == "" || !q.CanProvide || !q.CanSelf || q.Timeout != DecisionTimeout {
+		t.Fatalf("question = %+v", q)
+	}
+	// Headless: nobody can type into the browser, but the operator can
+	// still provide. An evaluate cannot be filled by reference.
+	run(t, &fakeBackend{human: false, field: guardedField("field:type-password", "Password")}, typeAction("pw"))
+	if q := s.asked[1]; q.CanSelf || !q.CanProvide || !q.Secret || q.Category != "password" {
+		t.Fatalf("headless question = %+v", q)
+	}
+	run(t, &fakeBackend{human: true}, wire.Action{Type: wire.ActionEvaluate, Script: `"212-48-7731"`})
+	if q := s.asked[2]; q.CanSelf || q.CanProvide {
+		t.Fatalf("evaluate question = %+v", q)
+	}
+}
+
+// provide: the operator's answer fills the field BY REFERENCE, once per ask
+// id and field; the agent's text never reaches the page.
+func TestProvideFillsByReferenceOnce(t *testing.T) {
+	askDir, home := isolate(t)
+	s := &scriptedAsker{answer: GuardAnswer{Choice: ChoiceProvide, AskID: askA}, values: map[string][]byte{askA: []byte("4111 1111 1111 1111")}}
+	install(t, s)
+	b := &fakeBackend{human: true, field: guardedField("field:autocomplete-cc-number", "Card number")}
+	res := run(t, b, typeAction("the agent's guess"))
+	if res.OutcomeClass != ClassFilledByHuman || res.Content != ContentFilledByHuman || !res.Success {
+		t.Fatalf("got %+v", res)
+	}
+	if len(b.executed) != 0 || len(b.filled) != 1 || b.filled[0] != "4111 1111 1111 1111" {
+		t.Fatalf("executed=%v filled=%q", b.executed, b.filled)
+	}
+	if !strings.Contains(res.Data, askA) {
+		t.Errorf("no ask id in %s", res.Data)
+	}
+	assertNoLeak(t, "4111 1111 1111 1111", res, askDir, home)
+	// The same id again: the admission is spent.
+	again := typeAction("")
+	again.FromAsk = askA
+	s.values[askA] = []byte("4111 1111 1111 1111")
+	if res := run(t, b, again); res.OutcomeClass != ClassStopped || len(b.filled) != 1 {
+		t.Fatalf("a spent admission filled again: %+v", res)
+	}
+}
+
+// --from-ask is admitted for ONE field: another target is refused and the
+// admission survives for the right one; text alongside is refused.
+func TestFromAskIsBoundToTheField(t *testing.T) {
+	isolate(t)
+	s := &scriptedAsker{values: map[string][]byte{askA: []byte("hunter2")}}
+	install(t, s)
+	b := &fakeBackend{human: true}
+	a := typeAction("")
+	a.FromAsk = askA
+	if res := run(t, b, a); res.OutcomeClass != ClassStopped || res.Reason != "from-ask:not-admitted" {
+		t.Fatalf("an unadmitted id filled: %+v", res)
+	}
+	if err := admit(askA, refusal{Reason: "field:type-password", Site: "x"}, a); err != nil {
+		t.Fatal(err)
+	}
+	other := a
+	other.Selector = "input[name=q2]"
+	if res := run(t, b, other); res.OutcomeClass != ClassStopped || len(b.filled) != 0 {
+		t.Fatalf("another field took the answer: %+v", res)
+	}
+	withText := a
+	withText.Text = "hunter2"
+	if res := run(t, b, withText); res.Success || len(b.filled) != 0 {
+		t.Fatalf("--from-ask with text went through: %+v", res)
+	}
+	if res := run(t, b, a); res.OutcomeClass != ClassFilledByHuman || len(b.filled) != 1 {
+		t.Fatalf("the admitted field was not filled: %+v", res)
+	}
+}
+
+// A failed fill stops — and says nothing about the value.
+func TestProvideFillFailureStops(t *testing.T) {
+	isolate(t)
+	install(t, &scriptedAsker{answer: GuardAnswer{Choice: ChoiceProvide, AskID: askA}, values: map[string][]byte{askA: []byte("212-48-7731")}})
+	b := &fakeBackend{human: true, fillErr: errors.New("boom 212-48-7731"), field: guardedField("field:label-ssn", "SSN")}
+	res := run(t, b, typeAction("x"))
+	if res.OutcomeClass != ClassStopped || !strings.Contains(res.Error, "fill-failed") {
+		t.Fatalf("got %+v", res)
+	}
+	assertNoLeak(t, "212-48-7731", res)
+}
+
+// The live hub's check on a raw guard_fill: only a CLAIMED admission for the
+// same field, once.
+func TestConsumeClaimedIsOncePerField(t *testing.T) {
+	isolate(t)
+	a := typeAction("")
+	if err := ConsumeClaimed(askA, a); err == nil {
+		t.Fatal("a raw guard_fill without an admission was accepted")
+	}
+	if err := admit(askA, refusal{}, a); err != nil {
+		t.Fatal(err)
+	}
+	if err := ConsumeClaimed(askA, a); err == nil {
+		t.Fatal("an admitted-but-unclaimed id was accepted (the guard claims before it fills)")
+	}
+	if _, err := claim(askA, a); err != nil {
+		t.Fatal(err)
+	}
+	other := a
+	other.Selector = "#other"
+	if err := ConsumeClaimed(askA, other); err == nil {
+		t.Fatal("a claim was accepted for another field")
+	}
+	if _, err := claim(askA, a); err == nil {
+		t.Fatal("an admission was claimed twice")
+	}
+	if err := ConsumeClaimed("../../etc/passwd", a); err == nil {
+		t.Fatal("a path-like id was accepted")
 	}
 }
 
@@ -267,92 +433,49 @@ func TestFieldCheckFailureFailsClosed(t *testing.T) {
 	}
 }
 
-// No human channel (headless solo) = stopped, without raising an ask nobody
-// can answer.
+// No asker installed = no human channel: stopped, without asking anyone.
 func TestNoHumanChannelStops(t *testing.T) {
 	isolate(t)
-	b := &fakeBackend{human: false, field: guardedField("field:type-password", "Password")}
+	b := &fakeBackend{human: true, field: guardedField("field:type-password", "Password")}
 	res := run(t, b, typeAction("pw"))
-	if res.OutcomeClass != ClassStopped || !strings.Contains(res.Error, "no-human-channel") {
+	if res.OutcomeClass != ClassStopped || !strings.Contains(res.Error, "no-human-channel") || len(b.executed) != 0 {
 		t.Fatalf("got %+v", res)
-	}
-	if rs, _ := ask.ListApprovals(); len(rs) != 0 {
-		t.Fatal("an ask was raised with no human to answer it")
 	}
 }
 
-// The REAL queue: an operator answering through `bashy approve` semantics
-// (ask.Decide with an option) drives each outcome; type-myself waits for the
-// second "done" approval.
-func TestOperatorAnswersThroughTheApprovalQueue(t *testing.T) {
-	answer := func(t *testing.T, decide func(r ask.Request) ask.Decision, n int) {
-		go func() {
-			seen := map[string]bool{}
-			for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline) && len(seen) < n; {
-				rs, _ := ask.PendingApprovals()
-				for _, r := range rs {
-					if !seen[r.ID] {
-						seen[r.ID] = true
-						_, _ = ask.Decide(r.ID, decide(r), ask.DecideOpts{})
-					}
-				}
-				time.Sleep(20 * time.Millisecond)
+// An installed asker drives each outcome; self waits for Done.
+func TestInstalledAskerDrivesEachOutcome(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		s     *scriptedAsker
+		class string
+	}{
+		{"self then done", &scriptedAsker{answer: GuardAnswer{Choice: ChoiceSelf}, done: true}, ClassHumanTyped},
+		{"self then stop", &scriptedAsker{answer: GuardAnswer{Choice: ChoiceSelf}, done: false}, ClassStopped},
+		{"skip", &scriptedAsker{answer: GuardAnswer{Choice: ChoiceSkip}}, ClassSkipped},
+		{"stop", &scriptedAsker{answer: GuardAnswer{Choice: ChoiceStop}}, ClassStopped},
+		{"timeout", &scriptedAsker{answer: GuardAnswer{Choice: ChoiceStop, Via: "timeout"}}, ClassStopped},
+		{"ask error", &scriptedAsker{err: errors.New("no desktop")}, ClassStopped},
+		{"provide without id", &scriptedAsker{answer: GuardAnswer{Choice: ChoiceProvide}}, ClassStopped},
+		{"unknown choice", &scriptedAsker{answer: GuardAnswer{Choice: "fill-it-anyway"}}, ClassStopped},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolate(t)
+			install(t, tc.s)
+			b := &fakeBackend{human: true, field: guardedField("field:label-account", "Bank account")}
+			res := run(t, b, typeAction("x"))
+			if res.OutcomeClass != tc.class || len(b.executed) != 0 || len(b.filled) != 0 {
+				t.Fatalf("got %+v executed=%d filled=%d", res, len(b.executed), len(b.filled))
 			}
-		}()
+		})
 	}
-	t.Run("type-myself then done", func(t *testing.T) {
-		isolate(t)
-		answer(t, func(r ask.Request) ask.Decision {
-			if r.Approval.Argv[2] == "done" {
-				return ask.Decision{Verdict: ask.VerdictAllow, OptionID: "done"}
-			}
-			return ask.Decision{Verdict: ask.VerdictAllow, OptionID: ChoiceTypeMyself}
-		}, 2)
-		b := &fakeBackend{human: true, field: guardedField("field:autocomplete-cc-number", "Card number")}
-		res := run(t, b, typeAction("4111111111111111"))
-		if res.OutcomeClass != ClassHumanTyped || len(b.focused) != 1 || len(b.executed) != 0 {
-			t.Fatalf("got %+v focused=%d executed=%d", res, len(b.focused), len(b.executed))
-		}
-	})
-	t.Run("skip", func(t *testing.T) {
-		isolate(t)
-		answer(t, func(ask.Request) ask.Decision { return ask.Decision{Verdict: ask.VerdictAllow, OptionID: ChoiceSkip} }, 1)
-		res := run(t, &fakeBackend{human: true, field: guardedField("field:label-routing", "Routing number")}, typeAction("x"))
-		if res.OutcomeClass != ClassSkipped {
-			t.Fatalf("got %+v", res)
-		}
-	})
-	t.Run("deny is stop", func(t *testing.T) {
-		isolate(t)
-		answer(t, func(ask.Request) ask.Decision { return ask.Decision{Verdict: ask.VerdictDeny} }, 1)
-		res := run(t, &fakeBackend{human: true, field: guardedField("field:label-account", "Bank account")}, typeAction("x"))
-		if res.OutcomeClass != ClassStopped {
-			t.Fatalf("got %+v", res)
-		}
-	})
-	t.Run("done denied is stop", func(t *testing.T) {
-		isolate(t)
-		answer(t, func(r ask.Request) ask.Decision {
-			if r.Approval.Argv[2] == "done" {
-				return ask.Decision{Verdict: ask.VerdictDeny}
-			}
-			return ask.Decision{Verdict: ask.VerdictAllow, OptionID: ChoiceTypeMyself}
-		}, 2)
-		res := run(t, &fakeBackend{human: true, field: guardedField("field:label-password", "Password")}, typeAction("x"))
-		if res.OutcomeClass != ClassStopped {
-			t.Fatalf("got %+v", res)
-		}
-	})
-	t.Run("no answer is stop", func(t *testing.T) {
-		isolate(t)
-		prev := DecisionTimeout
-		DecisionTimeout = 100 * time.Millisecond
-		t.Cleanup(func() { DecisionTimeout = prev })
-		res := run(t, &fakeBackend{human: true, field: guardedField("field:label-tax", "Tax ID")}, typeAction("x"))
-		if res.OutcomeClass != ClassStopped || !strings.Contains(res.Error, "timeout") {
-			t.Fatalf("got %+v", res)
-		}
-	})
+	// self is not honoured where it was not offered (headless).
+	isolate(t)
+	install(t, &scriptedAsker{answer: GuardAnswer{Choice: ChoiceSelf}, done: true})
+	b := &fakeBackend{human: false, field: guardedField("field:label-account", "Bank account")}
+	if res := run(t, b, typeAction("x")); res.OutcomeClass != ClassStopped || len(b.focused) != 0 {
+		t.Fatalf("self honoured headless: %+v", res)
+	}
 }
 
 // (d)/(4) What a page SHOWS is masked in every result, and structured data
@@ -400,11 +523,33 @@ func TestFakeSeamIsTestOnly(t *testing.T) {
 		t.Skip("built with bashy_guard_fake")
 	}
 	t.Setenv(FakeAskEnv, "fake:skip")
-	if fakeAnswer() != ChoiceSkip {
+	if fakeAnswer() != string(ChoiceSkip) {
 		t.Fatal("fake seam not honoured under go test")
 	}
 	t.Setenv(FakeAskEnv, "fake:allow-the-value")
 	if fakeAnswer() != "" {
 		t.Fatal("an unknown fake answer was honoured")
+	}
+}
+
+// clipboard_read is a read the agent can make through the extension: what
+// the clipboard holds is masked like page text, per data type and for a
+// vault secret; an ordinary clipboard passes unchanged.
+func TestClipboardReadIsMasked(t *testing.T) {
+	const secret = "correct-horse-battery-staple"
+	isolate(t, secret)
+	for v, kind := range map[string]string{
+		"212-48-7731": "ssn", "912-70-1234": "itin", "94-1234567": "ein", "021000021": "aba",
+		"4111 1111 1111 1111": "luhn", "DE89370400440532013000": "iban", secret: "vault",
+	} {
+		b := &fakeBackend{result: &wire.Result{Success: true, Data: v}}
+		res := run(t, b, wire.Action{Type: wire.ActionClipboardRead})
+		if strings.Contains(res.Data+res.Content, v) || res.Data != "[guarded:"+kind+"]" {
+			t.Errorf("clipboard %s not masked: %q", kind, res.Data)
+		}
+	}
+	b := &fakeBackend{result: &wire.Result{Success: true, Data: "ORD-2026-001234 (415) 555-0132"}}
+	if res := run(t, b, wire.Action{Type: wire.ActionClipboardRead}); res.Data != "ORD-2026-001234 (415) 555-0132" {
+		t.Errorf("ordinary clipboard changed: %q", res.Data)
 	}
 }

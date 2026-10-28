@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/qiangli/yoke/pkg/browser/wire"
+	"github.com/qiangli/yoke/pkg/sensitive"
 )
 
 // Mask replaces every guarded value in a result's text with
@@ -30,13 +31,13 @@ func Mask(ctx context.Context, r *wire.Result) *wire.Result {
 // outside a wire.Result).
 func MaskText(ctx context.Context, s string) string { return maskString(s, loadVault(ctx)) }
 
-func spansOf(s string, vm *vaultMatcher) []Span {
+func spansOf(s string, vm *vaultMatcher) []sensitive.Span {
 	if s == "" {
 		return nil
 	}
-	sp := Scan(s)
+	sp := sensitive.Scan(s)
 	sp = append(sp, vm.spans(s)...)
-	return resolveOverlaps(sp)
+	return sensitive.ResolveOverlaps(sp)
 }
 
 func maskString(s string, vm *vaultMatcher) string {

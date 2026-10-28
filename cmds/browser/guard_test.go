@@ -1,6 +1,8 @@
 package browsercmd
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -8,7 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/qiangli/coreutils/tool"
 	"github.com/qiangli/yoke/pkg/browser/guard"
+	"github.com/qiangli/yoke/pkg/browser/wire"
 )
 
 // The CLI contract shared with site skills: a guard outcome prints only
@@ -36,7 +40,8 @@ func TestGuardOutcomeExitCodes(t *testing.T) {
 		fake, content, class string
 		code                 int
 	}{
-		{"fake:type-myself", guard.ContentHumanTyped, guard.ClassHumanTyped, 0},
+		// eval has no field: "self" is not on offer, so it stops.
+		{"fake:self", guard.ContentStopped, guard.ClassStopped, 5},
 		{"fake:skip", guard.ContentSkipped, guard.ClassSkipped, 4},
 		{"fake:stop", guard.ContentStopped, guard.ClassStopped, 5},
 		{"fake:timeout", guard.ContentStopped, guard.ClassStopped, 5},
@@ -57,5 +62,40 @@ func TestGuardOutcomeExitCodes(t *testing.T) {
 		if strings.Contains(out+errb, ssn) {
 			t.Errorf("%s: the refused value was printed", c.fake)
 		}
+	}
+}
+
+// filled-by-human and human-typed both exit 0 and print only the outcome.
+func TestGuardSuccessOutcomesExitZero(t *testing.T) {
+	for _, r := range []*wire.Result{
+		{Success: true, Content: guard.ContentFilledByHuman, OutcomeClass: guard.ClassFilledByHuman, Reason: "field:label-ssn"},
+		{Success: true, Content: guard.ContentHumanTyped, OutcomeClass: guard.ClassHumanTyped, Reason: "field:label-ssn"},
+	} {
+		var out, errb bytes.Buffer
+		rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{Out: &out, Err: &errb}}
+		if code := printResult(rc, r, false); code != 0 || strings.TrimSpace(out.String()) != r.Content {
+			t.Errorf("%s: code=%d out=%q", r.OutcomeClass, code, out.String())
+		}
+	}
+}
+
+// `type --from-ask ID <target>` takes a target and never text.
+func TestTypeFromAskArgs(t *testing.T) {
+	const id = "0123456789abcdef0123456789abcdef"
+	a, err := actionFromArgs([]string{"type", "#ssn"}, actionFlags{FromAsk: id})
+	if err != nil || a.Type != wire.ActionType || a.Selector != "#ssn" || a.FromAsk != id || a.Text != "" {
+		t.Fatalf("got %+v, %v", a, err)
+	}
+	if a, err := actionFromArgs([]string{"type"}, actionFlags{FromAsk: id, Index: 3}); err != nil || a.ElementID != 3 {
+		t.Fatalf("--index: %+v, %v", a, err)
+	}
+	for _, args := range [][]string{{"type", "#ssn", "212-48-7731"}, {"type"}} {
+		if _, err := actionFromArgs(args, actionFlags{FromAsk: id}); err == nil {
+			t.Errorf("%q accepted", args)
+		}
+	}
+	_, _, code := runTool(t, "--mode", "live", "--live-port", "1", "--from-ask", id, "type", "#ssn", "extra")
+	if code != 2 {
+		t.Errorf("text alongside --from-ask: exit %d, want 2", code)
 	}
 }

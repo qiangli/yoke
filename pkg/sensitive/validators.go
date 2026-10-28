@@ -1,4 +1,4 @@
-package guard
+package sensitive
 
 import (
 	"sort"
@@ -8,13 +8,12 @@ import (
 // Value kinds. Each is a reason code suffix (value:<kind>) and the label a
 // masked span carries ([guarded:<kind>]).
 const (
-	KindSSN   = "ssn"
-	KindITIN  = "itin"
-	KindEIN   = "ein"
-	KindABA   = "aba"
-	KindCard  = "luhn"
-	KindIBAN  = "iban"
-	KindVault = "vault"
+	KindSSN  = "ssn"
+	KindITIN = "itin"
+	KindEIN  = "ein"
+	KindABA  = "aba"
+	KindCard = "luhn"
+	KindIBAN = "iban"
 )
 
 // Span is one guarded value found in a text: [Start, End) byte offsets and its
@@ -57,10 +56,13 @@ func Scan(s string) []Span {
 	spans = append(spans, scanCards(s)...)
 	spans = append(spans, scanABA(s)...)
 	spans = append(spans, scanIBAN(s)...)
-	return resolveOverlaps(spans)
+	return ResolveOverlaps(spans)
 }
 
-func resolveOverlaps(spans []Span) []Span {
+// ResolveOverlaps orders spans by position and drops any that overlap an
+// earlier (or, at the same start, longer) one. Callers that merge spans from
+// another matcher (the browser guard's vault) re-resolve with it.
+func ResolveOverlaps(spans []Span) []Span {
 	if len(spans) < 2 {
 		return spans
 	}
