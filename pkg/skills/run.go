@@ -286,13 +286,15 @@ func AppendAttest(storeDir string, rec AttestRecord) (string, error) {
 // runPrep is everything a run (plain or adaptive) needs about one skill
 // at this coordinate.
 type runPrep struct {
-	base   dhntskills.Skill  // the catalog skill's canonical face
-	rootID string            // Identity(base) — the overlay key
-	meta   map[string]string // SKILL.md metadata + learned bindings
-	probes []dhntskills.EnvProbe
-	ctxKey string
-	tier   string
-	prims  map[string]dhntskills.PrimitiveFn // pre-bound primitives (e.g. the dag target)
+	body     string // text-outer Bash# unit, when no canonical face exists
+	document string
+	base     dhntskills.Skill  // the catalog skill's canonical face
+	rootID   string            // Identity(base) — the overlay key
+	meta     map[string]string // SKILL.md metadata + learned bindings
+	probes   []dhntskills.EnvProbe
+	ctxKey   string
+	tier     string
+	prims    map[string]dhntskills.PrimitiveFn // pre-bound primitives (e.g. the dag target)
 	// preflight, when non-nil, replaces the convention-derived needed
 	// set in the audit (dag targets feed their declared Effects: here).
 	preflight []dhntskills.Effect
@@ -301,7 +303,9 @@ type runPrep struct {
 // prepareRun runs the shared gate: valid canonical face, applicable
 // here, canonical parse, merged bindings, coordinate + tier.
 func prepareRun(cfg *config, sk Skill, src Source, ps *ProbeSet) (runPrep, error) {
-	if !sk.Dhnt.Valid() {
+	document, _ := src.File(sk.Name, "SKILL.md")
+	body := bashSharpFences(string(document))
+	if !sk.Dhnt.Valid() && (sk.HasDhnt || body == "") {
 		if sk.HasDhnt {
 			return runPrep{}, fmt.Errorf("skills: %q has an invalid canonical face: %s", sk.Name, sk.Dhnt.Err)
 		}
@@ -310,16 +314,27 @@ func prepareRun(cfg *config, sk Skill, src Source, ps *ProbeSet) (runPrep, error
 	if v := verdictOf(sk, ps); !v.Applicable {
 		return runPrep{}, fmt.Errorf("skills: %q is not applicable here (%s)", sk.Name, v.Failing)
 	}
-	canon, _ := src.File(sk.Name, "skill.dhnt")
-	base, err := dhntskills.ParseDhnt(strings.TrimSpace(string(canon)))
-	if err != nil {
-		return runPrep{}, err
-	}
-	rootID, err := dhntskills.Identity(base)
-	if err != nil {
-		return runPrep{}, err
-	}
+	var base dhntskills.Skill
+	var rootID string
+	if !sk.HasDhnt {
+		if cfg.bashSharpRunner == nil {
+			return runPrep{}, fmt.Errorf("skills: no Bash# runner in this host")
+		}
+		rootID = bashSharpIdentity(body)
+	} else {
+		canon, _ := src.File(sk.Name, "skill.dhnt")
+		var err error
+		base, err = dhntskills.ParseDhnt(strings.TrimSpace(string(canon)))
+		if err != nil {
+			return runPrep{}, err
+		}
+		rootID, err = dhntskills.Identity(base)
+		if err != nil {
+			return runPrep{}, err
+		}
 
+		body = ""
+	}
 	meta := map[string]string{}
 	// Learned host-local bindings supply concrete commands for NEW step
 	// primitives a repair introduced (see adapt.go) — they EXTEND the authored
@@ -341,6 +356,7 @@ func prepareRun(cfg *config, sk Skill, src Source, ps *ProbeSet) (runPrep, error
 		tier = keys[0] + "@" + cfg.statics[keys[0]]
 	}
 	return runPrep{
+		body: body, document: string(document),
 		base:   base,
 		rootID: rootID,
 		meta:   meta,
@@ -403,6 +419,10 @@ func runSkill(cfg *config, sk Skill, src Source, ps *ProbeSet, dir string, log i
 	p, err := prepareRun(cfg, sk, src, ps)
 	if err != nil {
 		return AttestRecord{}, "", err
+	}
+	if p.body != "" {
+		rec, _, err := runBashSharp(cfg, sk.Name, p, dir, log, nil, 0, false)
+		return rec, "", err
 	}
 	effective := p.base
 	if vs := cfg.versions(); vs != nil {
