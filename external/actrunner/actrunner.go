@@ -1,7 +1,8 @@
 // Package actrunner runs Gitea's act_runner (the GitHub-Actions-compatible CI
 // runner) as a managed external binary (pkg/binmgr) — the CI executor for the
 // dhnt mesh. The binary is downloaded → Sigstore-verified → sha256-verified →
-// cached by binmgr, never compiled in. act_runner is the documented CI pick
+// cached by binmgr by default, never compiled in. ACT_RUNNER_BIN explicitly
+// selects a caller-built executable instead. act_runner is the documented CI pick
 // (docs/mesh-wrap-stack.md): it registers against loom/Gitea and dials OUT (so
 // it's NAT-friendly over the mesh), executing .gitea/workflows/*.yml.
 //
@@ -128,7 +129,7 @@ func assetMatch(name, goos, goarch string) bool {
 
 func resolveTool(version string) (binmgr.Tool, error) {
 	if runtime.GOOS == "windows" {
-		return binmgr.Tool{}, fmt.Errorf("act_runner: supply-chain policy: no bashy-signed asset for windows (no upstream fallback) — only linux and darwin assets are signed")
+		return binmgr.Tool{}, fmt.Errorf("act_runner: supply-chain policy: no bashy-signed asset for windows (no upstream fallback) — only linux and darwin assets are signed; explicitly select a local build with ACT_RUNNER_BIN")
 	}
 	tool := ActrunnerTool
 	// Accept empty, the bashy tag, or the upstream version as aliases for the pinned tool.
@@ -327,6 +328,28 @@ func managedEnv(extra ...string) []string {
 }
 
 func resolve(ctx context.Context, version string) (string, error) {
+	if version == "" {
+		version = strings.TrimSpace(os.Getenv("ACT_RUNNER_VERSION"))
+	}
+	// An explicitly selected local build is useful on platforms for which the
+	// fork has not published a signed asset yet. Never search PATH or silently
+	// fall back to an unsigned download. The caller owns this binary's provenance.
+	if bin := strings.TrimSpace(os.Getenv("ACT_RUNNER_BIN")); bin != "" {
+		if version != "" {
+			return "", fmt.Errorf("act_runner: ACT_RUNNER_BIN and a version selection are mutually exclusive")
+		}
+		if !filepath.IsAbs(bin) {
+			return "", fmt.Errorf("act_runner: ACT_RUNNER_BIN must be an absolute executable path")
+		}
+		info, err := os.Stat(bin)
+		if err != nil {
+			return "", fmt.Errorf("act_runner: ACT_RUNNER_BIN: %w", err)
+		}
+		if !info.Mode().IsRegular() || (runtime.GOOS != "windows" && info.Mode()&0o111 == 0) {
+			return "", fmt.Errorf("act_runner: ACT_RUNNER_BIN is not an executable file: %s", bin)
+		}
+		return bin, nil
+	}
 	tool, err := resolveTool(version)
 	if err != nil {
 		return "", err
@@ -342,7 +365,12 @@ func NewCmd() *cobra.Command {
 		Long: `act-runner runs Gitea's act_runner — downloaded, sha256-verified, and cached
 by binmgr (not compiled in). Register it against loom/Gitea, then run the daemon;
 it dials OUT to Gitea so it works over the mesh behind NAT. See
-dhnt/docs/local-p2p-cicd.md.`,
+dhnt/docs/local-p2p-cicd.md.
+
+Set ACT_RUNNER_BIN to an absolute path to explicitly use your own local build
+(including Windows host mode). This bypasses managed downloads and their
+signature verification; you are responsible for that binary's provenance.
+Do not combine it with --version or ACT_RUNNER_VERSION.`,
 	}
 
 	var ro RegisterOptions
@@ -391,6 +419,9 @@ dhnt/docs/local-p2p-cicd.md.`,
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "%s\t(act_runner %s)\n", p, func() string {
+				if strings.TrimSpace(os.Getenv("ACT_RUNNER_BIN")) != "" {
+					return "local build"
+				}
 				if pVersion == "" {
 					return DefaultVersion
 				}
