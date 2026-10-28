@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -67,13 +68,28 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// searchableTempDir is a t.TempDir() with the others-search bit already set, so
-// ensureTraversable's walk up the ancestor chain STOPS there. Without it a test
-// would add +x to the host's per-user temp directories — harmless, but a test
-// has no business touching anything above its own tree.
+// searchableTempDir is a throwaway dir whose WHOLE ancestor chain is already
+// others-searchable, so ensureTraversable's walk to the filesystem root finds
+// nothing above the test's own tree to change.
+//
+// It cannot be t.TempDir(): on macOS that lives under the per-user
+// /var/folders/…/T, which is 0700 and refuses chmod even to its owner, so the
+// walk would fail there. /tmp is 1777 on every unix (and /private/tmp on
+// macOS, reached through the /tmp symlink), which is the property needed.
 func searchableTempDir(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
+	parent := ""
+	if runtime.GOOS != "windows" {
+		parent = "/tmp"
+	}
+	dir, err := os.MkdirTemp(parent, "loom-privdrop-")
+	if err != nil && parent != "" {
+		dir, err = os.MkdirTemp("", "loom-privdrop-") // no /tmp: take what there is
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	if err := os.Chmod(dir, 0o711); err != nil {
 		t.Fatal(err)
 	}

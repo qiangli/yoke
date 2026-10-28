@@ -392,6 +392,37 @@ func TestEnsureTraversableAddsOnlySearchBit(t *testing.T) {
 	}
 }
 
+// TestEnsureTraversableWalksPastASearchableChild is the shape a root pre-flight
+// on WSL actually hit (S515.1b round 2): $HOME is 0700 but the tree binmgr and
+// MkdirAll(…, 0o755) create under it is world-searchable. Stopping the walk at
+// the first dir that already has the bit left /root at 0700 and Gitea died with
+// "fork/exec …/loom: permission denied". Every ancestor must be checked.
+func TestEnsureTraversableWalksPastASearchableChild(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX modes")
+	}
+	home := filepath.Join(searchableTempDir(t), "root")
+	leaf := filepath.Join(home, ".cache", "bashy", "bin", "loom", "bashy-v28.1.0-4")
+	if err := os.MkdirAll(leaf, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(home, 0o700); err != nil { // the /root the satellite has
+		t.Fatal(err)
+	}
+	if err := ensureTraversable(leaf); err != nil {
+		t.Fatal(err)
+	}
+	st, err := os.Stat(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := st.Mode().Perm(); mode&0o001 == 0 {
+		t.Fatalf("%s = %o, want the others-search bit — the walk stopped at a searchable child", home, mode)
+	} else if mode&0o006 != 0 {
+		t.Fatalf("%s = %o, want +x only — never others-read or others-write", home, mode)
+	}
+}
+
 // TestAllowExecMakesManagedBinaryReachable: the gitea binary sits in the root
 // parent's binmgr cache (~/.cache/bashy/bin), unreadable by the loom account.
 func TestAllowExecMakesManagedBinaryReachable(t *testing.T) {
