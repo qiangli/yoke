@@ -13,7 +13,7 @@
 // reported as { error: "..." } rather than thrown, so the caller can
 // tell "the page said no" from "injection failed".
 (() => {
-  const VERSION = 1;
+  const VERSION = 2;
   if (globalThis.__bashyPage && globalThis.__bashyPage.version === VERSION) return;
 
   const CANDIDATES = "a, button, input, select, textarea, [role='button'], [role='link']";
@@ -39,8 +39,17 @@
     return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
   }
 
+  // labelOf is the accessible-ish name: visible text, then value,
+  // aria-label, title, and an inline <svg><title> — so icon-only
+  // buttons (a dialog's X) are listed and addressable by name.
   function labelOf(el) {
-    return ((el.innerText) || el.value || el.getAttribute("aria-label") || "").trim();
+    let s = (el.innerText || "").trim() || (el.value || "").trim() ||
+      (el.getAttribute("aria-label") || "").trim() || (el.getAttribute("title") || "").trim();
+    if (!s) {
+      const t = el.querySelector && el.querySelector("svg title, [aria-label], [title], img[alt]");
+      if (t) s = (t.textContent || t.getAttribute("aria-label") || t.getAttribute("title") || t.getAttribute("alt") || "").trim();
+    }
+    return s.replace(/\s+/g, " ");
   }
 
   function scopeRoot(params) {
@@ -158,15 +167,71 @@
       if (!el) return { __miss: `no element matches selector ${JSON.stringify(params.selector)}` };
       return el;
     }
-    if (params.match_text) {
-      const want = params.match_text.toLowerCase();
-      const root = scopeRoot(params) || document;
-      for (const el of root.querySelectorAll(CANDIDATES)) {
-        if (labelOf(el).toLowerCase().indexOf(want) >= 0) return el;
-      }
-      return { __miss: `no element whose text contains ${JSON.stringify(params.match_text)}` };
-    }
+    if (params.match_text) return byText(params);
     return { __miss: "no selector, element index, or match text given" };
+  }
+
+  function norm(s) {
+    return String(s || "").replace(/\s+/g, " ").trim().toLowerCase();
+  }
+
+  function topmostDialog() {
+    const open = Array.from(document.querySelectorAll(
+      "dialog[open], [role='dialog'], [role='alertdialog'], [aria-modal='true']")).filter(shown);
+    return open.length ? open[open.length - 1] : null;
+  }
+
+  // reachable: the element's centre is not covered by something else
+  // (an overlay, a sticky header).
+  function reachable(el) {
+    const r = el.getBoundingClientRect();
+    const x = r.x + r.width / 2, y = r.y + r.height / 2;
+    if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) return true; // off-screen: click scrolls it in
+    const hit = document.elementFromPoint(x, y);
+    return !hit || hit === el || el.contains(hit) || hit.contains(el);
+  }
+
+  // byText resolves click/type --text by RANK, not document order:
+  // exact name > prefix > substring; inside the open dialog > elsewhere;
+  // buttons/fields > links; main content > nav/aside/header/footer;
+  // uncovered > covered. A tie on the best rank is refused with the
+  // candidates, so the caller picks with --index instead of hitting a
+  // neighbour.
+  function byText(params) {
+    const want = norm(params.match_text);
+    const root = scopeRoot(params) || document;
+    const dialog = params.scope ? null : topmostDialog();
+    const all = candidates(Object.assign({}, params, { scope: params.scope || "", include_hidden: false }));
+    const indexOf = new Map(all.map((el, i) => [el, i + 1]));
+    const pool = Array.from(root.querySelectorAll(CANDIDATES)).filter((el) => shown(el));
+    const scored = [];
+    for (const el of pool) {
+      const names = [labelOf(el), el.getAttribute("aria-label"), el.getAttribute("title"), el.getAttribute("placeholder")].map(norm);
+      let m = 0;
+      for (const n of names) {
+        if (!n) continue;
+        if (n === want) m = Math.max(m, 3);
+        else if (n.startsWith(want)) m = Math.max(m, 2);
+        else if (n.indexOf(want) >= 0) m = Math.max(m, 1);
+      }
+      if (!m) continue;
+      const tag = el.tagName.toLowerCase();
+      const role = el.getAttribute("role") || "";
+      const isLink = tag === "a" || role === "link";
+      const inDialog = dialog ? (dialog.contains(el) ? 1 : 0) : 0;
+      const inChrome = el.closest("nav, aside, header, footer, [role='navigation'], [role='complementary'], [role='banner'], [role='contentinfo']") ? 0 : 1;
+      const key = [inDialog, m, isLink ? 0 : 1, inChrome, reachable(el) ? 1 : 0];
+      scored.push({ el, key });
+    }
+    if (!scored.length) return { __miss: `no element whose text contains ${JSON.stringify(params.match_text)}` };
+    const cmp = (a, b) => { for (let i = 0; i < a.key.length; i++) if (a.key[i] !== b.key[i]) return b.key[i] - a.key[i]; return 0; };
+    scored.sort(cmp);
+    const ties = scored.filter((s) => cmp(s, scored[0]) === 0);
+    if (ties.length > 1) {
+      const list = ties.slice(0, 6).map((s) => `[${indexOf.get(s.el) || "?"}] ${describe(s.el)}`).join("; ");
+      return { __miss: `${ties.length} elements match ${JSON.stringify(params.match_text)} equally (${list}); use --index N or a --scope` };
+    }
+    return scored[0].el;
   }
 
   function describe(el) {

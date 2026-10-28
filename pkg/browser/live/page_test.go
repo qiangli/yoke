@@ -208,3 +208,62 @@ func TestPageClickByIndexFocusesTheField(t *testing.T) {
 		t.Fatalf("click --index %d left focus on %q, want the clicked field", idx, active)
 	}
 }
+
+// clickTargetsFixture reproduces the AWS Budgets page failure: the
+// same words on a nav link, a heading link, a longer link, and the
+// intended button; plus a modal whose close control is an icon.
+const clickTargetsFixture = `<!doctype html><html><body>
+<nav><a href="#nav" id="navlink">Create budget</a></nav>
+<main>
+<h2><a href="#h" id="headlink">Create budget</a></h2>
+<a href="#more" id="morelink">Create budget overview</a>
+<p>Close account settings: <button id="closeacct">Close account</button></p>
+<button id="create" onclick="window.hit='create'">Create budget</button>
+<button class="save" onclick="window.hit='save1'">Save</button>
+<button class="save" onclick="window.hit='save2'">Save</button>
+</main>
+<div role="dialog" aria-modal="true" id="dlg" style="position:fixed;top:10px;right:10px;background:#fff">
+  <button id="x" onclick="window.hit='dialog-close'"><svg width="16" height="16"><title>Close</title><path d="M0 0L16 16"/></svg></button>
+  <p>Cookie preferences</p>
+</div>
+<script>window.hit='';</script>
+</body></html>`
+
+func TestPageClickTextPicksTheIntendedElement(t *testing.T) {
+	h := newPageHarness(t, map[string]string{"/b": clickTargetsFixture})
+	h.open("/b")
+
+	// The open dialog wins first: its icon-only close is named "Close".
+	if res := h.call("click", map[string]any{"match_text": "close"}); res["error"] != nil {
+		t.Fatal(res["error"])
+	}
+	var hit string
+	h.mainEval("window.hit", &hit)
+	if hit != "dialog-close" {
+		t.Fatalf(`click --text close hit %q, want the dialog's icon close`, hit)
+	}
+	h.mainEval("document.getElementById('dlg').remove(); window.hit=''", nil)
+
+	if res := h.call("click", map[string]any{"match_text": "Create budget"}); res["error"] != nil {
+		t.Fatal(res["error"])
+	}
+	h.mainEval("window.hit", &hit)
+	if hit != "create" {
+		t.Fatalf(`click --text "Create budget" hit %q, want the button`, hit)
+	}
+
+	res := h.call("click", map[string]any{"match_text": "Save"})
+	msg, _ := res["error"].(string)
+	if !strings.Contains(msg, "2 elements match") || !strings.Contains(msg, "--index") {
+		t.Fatalf("an exact tie must be refused with candidates, got %v", res)
+	}
+}
+
+func TestPageExtractNamesIconOnlyButtons(t *testing.T) {
+	h := newPageHarness(t, map[string]string{"/b": clickTargetsFixture})
+	h.open("/b")
+	ex := h.call("extract", map[string]any{})
+	if !strings.Contains(ex["elements"].(string), "<button >Close</button>") {
+		t.Fatalf("icon-only close not named in extract:\n%s", ex["elements"])
+	}
+}
