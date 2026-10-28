@@ -33,6 +33,36 @@ func TestNativeFormScriptContract(t *testing.T) {
 	}
 }
 
+func TestRevealToggleStaysInForm(t *testing.T) {
+	start := strings.Index(macFormSrc, "name:'BashyReveal'")
+	end := strings.Index(macFormSrc, "var reveal=$.BashyReveal.alloc.init")
+	if start < 0 || end <= start {
+		t.Fatal("macOS form has no reveal action")
+	}
+	action := macFormSrc[start:end]
+	for _, want := range []string{
+		"from.currentEditor", "editor.selectedRange", "to.setStringValue(from.stringValue)",
+		"sender.window.makeFirstResponder(to)", "to.currentEditor.setSelectedRange(selection)",
+	} {
+		if !strings.Contains(action, want) {
+			t.Errorf("macOS reveal action missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"becomeFirstResponder()", "runModal", "result.choice", "stopModal"} {
+		if strings.Contains(action, forbidden) {
+			t.Errorf("macOS reveal action unexpectedly contains %q", forbidden)
+		}
+	}
+	if !strings.Contains(macFormSrc[end:], "show.setTarget(reveal); show.setAction('toggle:'); box.addSubview(show)") ||
+		strings.Contains(macFormSrc, "alert.addButtonWithTitle('Show')") {
+		t.Fatal("Show must be an accessory-view checkbox with its own action")
+	}
+	if !strings.Contains(windowsFormSrc, "$show.Add_CheckedChanged({ $t.UseSystemPasswordChar = -not $show.Checked })") ||
+		!strings.Contains(windowsFormSrc, "$show.Visible=($Kind -eq 'secret')") {
+		t.Fatal("Windows Show must toggle masking in place for secret fields")
+	}
+}
+
 func TestClipboardPreviewChangeCount(t *testing.T) {
 	var state clipboardPreview
 	value := ""

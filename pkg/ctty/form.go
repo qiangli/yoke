@@ -270,8 +270,11 @@ function run(argv) {
  if(kind==='secret') {
   plain=$.NSTextField.alloc.initWithFrame($.NSMakeRect(0,40,480,26)); plain.setHidden(true); plain.setMenu(contextMenu); box.addSubview(plain);
   ObjC.registerSubclass({name:'BashyReveal', methods:{'toggle:':{types:['void',['id']], implementation:function(sender){
-   if (Number(sender.state)===1) { plain.setStringValue(field.stringValue); plain.setHidden(false); field.setHidden(true); plain.becomeFirstResponder(); }
-   else { field.setStringValue(plain.stringValue); plain.setHidden(true); field.setHidden(false); field.becomeFirstResponder(); }
+   var showing=Number(sender.state)===1, from=showing ? field : plain, to=showing ? plain : field;
+   var editor=from.currentEditor, selection=editor ? editor.selectedRange : null;
+   to.setStringValue(from.stringValue); to.setHidden(false); from.setHidden(true);
+   sender.window.makeFirstResponder(to);
+   if(selection && to.currentEditor) to.currentEditor.setSelectedRange(selection);
   }}}});
   var reveal=$.BashyReveal.alloc.init; show.setButtonType($.NSSwitchButton); show.setTitle('Show'); show.setTarget(reveal); show.setAction('toggle:'); box.addSubview(show);
  }
@@ -332,6 +335,7 @@ $t=New-Object System.Windows.Forms.TextBox; $t.SetBounds(15,170,760,28)
 if($Kind -eq 'secret') { $t.UseSystemPasswordChar=$true }
 $show=New-Object System.Windows.Forms.CheckBox; $show.Text='Show'; $show.SetBounds(15,205,80,24)
 $show.Add_CheckedChanged({ $t.UseSystemPasswordChar = -not $show.Checked })
+$show.Visible=($Kind -eq 'secret')
 $status=New-Object System.Windows.Forms.Label; $status.SetBounds(105,205,670,24)
 $f.Controls.AddRange(@($l,$t,$show,$status))
 $script:chosen=''; $script:value=''; $script:clipButton=$null

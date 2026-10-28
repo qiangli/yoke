@@ -10,6 +10,7 @@ $t=New-Object System.Windows.Forms.TextBox; $t.SetBounds(15,170,760,28)
 if($Kind -eq 'secret') { $t.UseSystemPasswordChar=$true }
 $show=New-Object System.Windows.Forms.CheckBox; $show.Text='Show'; $show.SetBounds(15,205,80,24)
 $show.Add_CheckedChanged({ $t.UseSystemPasswordChar = -not $show.Checked })
+$show.Visible=($Kind -eq 'secret')
 $status=New-Object System.Windows.Forms.Label; $status.SetBounds(105,205,670,24)
 $f.Controls.AddRange(@($l,$t,$show,$status))
 $script:chosen=''; $script:value=''; $script:clipButton=$null
