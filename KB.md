@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [repo/page] Verify localhost resolution in the actual storage client — When using peer.satellite.localhost for signed S3 URLs, a successful curl or browser request does not prove Go client resolution. S515.2 Windows Go 1.27.2 Gitea failed with no such host while outpost routing worked. Open SeaweedFS 4.48 also rejected signed writ  (kb:verify-localhost-resolution-in-the-actual-storage-client)
+- [repo/page] Gitea's 401 on a push mirror is an address refusal, not auth — WHEN a Gitea push mirror to a LAN/loopback replica answers 401 Permission denied (POST /repos/{o}/{r}/push_mirrors): it is not a credential problem — HandleRemoteAddressError maps ErrInvalidCloneAddr{IsPermissionDenied} to 401 and a correct all-scoped  (kb:gitea-s-401-on-a-push-mirror-is-an-address-refusal-not-auth)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 
