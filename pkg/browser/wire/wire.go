@@ -77,9 +77,11 @@ type Action struct {
 	Event  string `json:"event,omitempty"`
 	Detail string `json:"detail,omitempty"`
 
-	// Wait/timeout. TimeoutMs applies to wait_for_selector (default
-	// 5000ms) and is honoured by future polled actions. State is one
-	// of "visible", "attached", "detached" (default "visible").
+	// Wait/timeout. TimeoutMs bounds the selector-resolving probe/solo
+	// actions (click, type, keyboard-press focus, wait_for_selector;
+	// default 5000ms), so a selector whose first match never shows
+	// cannot hang. State is one of "visible", "attached", "detached"
+	// (default "visible").
 	TimeoutMs int    `json:"timeout_ms,omitempty"`
 	State     string `json:"state,omitempty"`
 

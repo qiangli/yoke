@@ -69,6 +69,160 @@ func Navigate(ctx context.Context, url string) (*wire.Result, error) {
 	return &wire.Result{Success: true, Title: title, URL: currentURL, Content: Truncate(body, 16000)}, nil
 }
 
+// DefaultActionTimeout bounds every selector-resolving chromedp action
+// (click, type, keyboard-press focus, wait-for-selector). chromedp's
+// Click/SendKeys/Focus wait for the FIRST match in document order to
+// become visible; on a form that keeps hidden steps in the DOM that
+// first match never shows, so an unbounded action hangs. An action's
+// own TimeoutMs overrides this default.
+const DefaultActionTimeout = 5 * time.Second
+
+func actionTimeout(a wire.Action) time.Duration {
+	if a.TimeoutMs > 0 {
+		return time.Duration(a.TimeoutMs) * time.Millisecond
+	}
+	return DefaultActionTimeout
+}
+
+// hiddenOnlyMessage refuses a selector that matches only hidden
+// elements. The text is the live extension's miss verbatim
+// (page.js resolveTarget, opts.visibleOnly), so probe/solo report the
+// same refusal and the same --include-hidden override.
+func hiddenOnlyMessage(selector string) string {
+	return fmt.Sprintf("selector %s matches only hidden elements (pass --include-hidden to act on one anyway)", JSString(selector))
+}
+
+// resolveSelectorScript reports how sel resolves, as JSON:
+// {"state":"visible"} when a match shows, {"state":"hidden"} when every
+// match is hidden, {"state":"missing"} when nothing matches, and
+// {"state":"bad","reason":...} for an invalid selector.
+// querySelectorAll handles comma lists and :not() natively; the shown
+// predicate mirrors the live extension's shown().
+func resolveSelectorScript(sel string) string {
+	return `(function(){
+  var SEL=` + JSString(sel) + `;
+  function shown(el){var cs=getComputedStyle(el);if(cs.visibility==="hidden"||cs.display==="none"||cs.opacity==="0")return false;var r=el.getBoundingClientRect();return r.width>0&&r.height>0;}
+  var all;
+  try { all = document.querySelectorAll(SEL); }
+  catch (e) { return JSON.stringify({state:"bad", reason:String((e && e.message) || e)}); }
+  if (!all.length) return JSON.stringify({state:"missing"});
+  for (var i=0; i<all.length; i++) { if (shown(all[i])) return JSON.stringify({state:"visible"}); }
+  return JSON.stringify({state:"hidden"});
+})()`
+}
+
+// targetJSPath is a JS expression (for chromedp.ByJSPath) resolving to
+// the element a selector action must act on: the first VISIBLE match,
+// or the first match when includeHidden keeps hidden elements. A
+// resolveSelector check runs first, so this never sees a missing or
+// invalid selector; the fallbacks only cover a DOM that changed
+// between the check and the action.
+func targetJSPath(sel string, includeHidden bool) string {
+	if includeHidden {
+		return `(function(){var SEL=` + JSString(sel) + `;try{return document.querySelector(SEL);}catch(e){return null;}})()`
+	}
+	return `(function(){
+  var SEL=` + JSString(sel) + `;
+  function shown(el){var cs=getComputedStyle(el);if(cs.visibility==="hidden"||cs.display==="none"||cs.opacity==="0")return false;var r=el.getBoundingClientRect();return r.width>0&&r.height>0;}
+  var all;
+  try { all = document.querySelectorAll(SEL); }
+  catch (e) { return null; }
+  for (var i=0; i<all.length; i++) { if (shown(all[i])) return all[i]; }
+  return all[0] || null;
+})()`
+}
+
+// resolveVisibleTarget checks sel and returns the ByJSPath expression
+// for the element to act on, plus whether that element is hidden (true
+// only under --include-hidden). A selector with no match, an invalid
+// selector, or (unless includeHidden) one matching only hidden
+// elements is an error, never a hang.
+func resolveVisibleTarget(ctx context.Context, sel string, includeHidden bool) (path string, hidden bool, err error) {
+	var raw string
+	if err := chromedp.Run(ctx, chromedp.Evaluate(resolveSelectorScript(sel), &raw)); err != nil {
+		return "", false, err
+	}
+	var r struct {
+		State  string `json:"state"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(raw), &r); err != nil {
+		return "", false, fmt.Errorf("selector %s: cannot resolve (%s)", JSString(sel), strings.TrimSpace(raw))
+	}
+	switch r.State {
+	case "visible":
+		return targetJSPath(sel, includeHidden), false, nil
+	case "hidden":
+		if includeHidden {
+			return targetJSPath(sel, includeHidden), true, nil
+		}
+		return "", false, fmt.Errorf("%s", hiddenOnlyMessage(sel))
+	case "missing":
+		return "", false, fmt.Errorf("no element matches selector %s", JSString(sel))
+	case "bad":
+		if r.Reason != "" {
+			return "", false, fmt.Errorf("%s is not a valid CSS selector: %s", JSString(sel), r.Reason)
+		}
+		return "", false, fmt.Errorf("%s is not a valid CSS selector", JSString(sel))
+	}
+	return "", false, fmt.Errorf("selector %s: cannot resolve (%s)", JSString(sel), strings.TrimSpace(raw))
+}
+
+// clickHiddenNode clicks an element chromedp's visibility-gated Click
+// would wait on forever: under --include-hidden the operator accepted
+// a hidden target, so a DOM click dispatches without a box.
+func clickHiddenNode(ctx context.Context, path string) error {
+	script := `(function(){var el=(` + path + `);if(!el)return false;el.click();return true;})()`
+	var ok bool
+	if err := chromedp.Run(ctx, chromedp.Evaluate(script, &ok)); err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("click: element is gone")
+	}
+	return nil
+}
+
+// typeHiddenNode fills an element chromedp's visibility-gated SendKeys
+// would wait on forever: under --include-hidden the operator accepted
+// a hidden target, so the value is set in the DOM with the input and
+// change events a listener expects.
+func typeHiddenNode(ctx context.Context, path, text string) error {
+	script := `(function(){var el=(` + path + `);var TEXT=` + JSString(text) + `;if(!el)return "missing";
+	try{
+		if("value" in el && !el.isContentEditable){el.value=TEXT;}
+		else if(el.isContentEditable){el.focus();document.execCommand("insertText",false,TEXT);}
+		else{el.textContent=TEXT;}
+		el.dispatchEvent(new Event("input",{bubbles:true}));
+		el.dispatchEvent(new Event("change",{bubbles:true}));
+		return "ok";
+	}catch(e){return "error:"+String((e&&e.message)||e);}})()`
+	var out string
+	if err := chromedp.Run(ctx, chromedp.Evaluate(script, &out)); err != nil {
+		return err
+	}
+	if out != "ok" {
+		return fmt.Errorf("type: cannot fill hidden element (%s)", out)
+	}
+	return nil
+}
+
+// focusHiddenNode focuses an element chromedp's Focus would park on:
+// under --include-hidden the operator accepted a hidden target. DOM
+// focus on a non-rendered element is a silent no-op, so existing is
+// enough for the follow-up key press to be dispatched.
+func focusHiddenNode(ctx context.Context, path string) error {
+	script := `(function(){var el=(` + path + `);if(!el)return false;try{el.focus();}catch(e){}return true;})()`
+	var ok bool
+	if err := chromedp.Run(ctx, chromedp.Evaluate(script, &ok)); err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("keyboard_press: element is gone")
+	}
+	return nil
+}
+
 // Click resolves by element index, CSS selector, or visible text — in
 // that order — and every form returns the SAME envelope on success
 // (`content: "clicked"`). The shapes used to differ, and the shape was
@@ -85,7 +239,18 @@ func Click(ctx context.Context, a wire.Action) (*wire.Result, error) {
 		return &wire.Result{Error: fmt.Sprintf("click: element index %d out of range for the current extract enumeration", a.ElementID)}, nil
 	}
 	if a.Selector != "" {
-		if err := chromedp.Run(ctx, chromedp.Click(a.Selector, chromedp.ByQuery)); err != nil {
+		wctx, cancel := context.WithTimeout(ctx, actionTimeout(a))
+		defer cancel()
+		path, hidden, err := resolveVisibleTarget(wctx, a.Selector, a.IncludeHidden)
+		if err != nil {
+			return &wire.Result{Error: err.Error()}, nil
+		}
+		if hidden {
+			err = clickHiddenNode(wctx, path)
+		} else {
+			err = chromedp.Run(wctx, chromedp.Click(path, chromedp.ByJSPath))
+		}
+		if err != nil {
 			return &wire.Result{Error: err.Error()}, nil
 		}
 		return &wire.Result{Success: true, Content: "clicked"}, nil
@@ -191,7 +356,18 @@ func Type(ctx context.Context, a wire.Action) (*wire.Result, error) {
 	if a.Selector == "" {
 		return &wire.Result{Error: "type: selector required"}, nil
 	}
-	if err := chromedp.Run(ctx, chromedp.SendKeys(a.Selector, a.Text, chromedp.ByQuery)); err != nil {
+	wctx, cancel := context.WithTimeout(ctx, actionTimeout(a))
+	defer cancel()
+	path, hidden, err := resolveVisibleTarget(wctx, a.Selector, a.IncludeHidden)
+	if err != nil {
+		return &wire.Result{Error: err.Error()}, nil
+	}
+	if hidden {
+		err = typeHiddenNode(wctx, path, a.Text)
+	} else {
+		err = chromedp.Run(wctx, chromedp.SendKeys(path, a.Text, chromedp.ByJSPath))
+	}
+	if err != nil {
 		return &wire.Result{Error: err.Error()}, nil
 	}
 	return &wire.Result{Success: true, Content: "typed"}, nil
@@ -445,10 +621,7 @@ func WaitForSelector(ctx context.Context, a wire.Action) (*wire.Result, error) {
 	if a.Selector == "" {
 		return &wire.Result{Error: "wait_for_selector: selector required"}, nil
 	}
-	timeout := time.Duration(a.TimeoutMs) * time.Millisecond
-	if timeout <= 0 {
-		timeout = 5 * time.Second
-	}
+	timeout := actionTimeout(a)
 	wctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	state := strings.ToLower(a.State)
@@ -456,7 +629,7 @@ func WaitForSelector(ctx context.Context, a wire.Action) (*wire.Result, error) {
 	switch state {
 	case "", "visible":
 		state = "visible"
-		err = chromedp.Run(wctx, chromedp.WaitVisible(a.Selector, chromedp.ByQuery))
+		err = waitForVisibleMatch(wctx, a.Selector, a.IncludeHidden, timeout)
 	case "attached":
 		err = chromedp.Run(wctx, chromedp.WaitReady(a.Selector, chromedp.ByQuery))
 	case "detached":
@@ -470,16 +643,91 @@ func WaitForSelector(ctx context.Context, a wire.Action) (*wire.Result, error) {
 	return &wire.Result{Success: true, Data: fmt.Sprintf("state=%s", state)}, nil
 }
 
+// waitPollInterval is the re-check cadence of waitForVisibleMatch: fast
+// enough that an appearing element resolves promptly, sparse enough to
+// stay out of the renderer's way.
+const waitPollInterval = 100 * time.Millisecond
+
+// waitForVisibleMatch polls until sel has a visible match — or any match
+// when includeHidden keeps hidden elements — so a hidden first match
+// never parks the wait on a node that will never show. At the deadline
+// a hidden-only selector is refused with the live message; a selector
+// with no match times out. An invalid selector fails immediately.
+func waitForVisibleMatch(ctx context.Context, sel string, includeHidden bool, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	last := ""
+	for {
+		var raw string
+		if err := chromedp.Run(ctx, chromedp.Evaluate(resolveSelectorScript(sel), &raw)); err != nil {
+			if ctx.Err() != nil {
+				break
+			}
+			return err
+		}
+		var r struct {
+			State  string `json:"state"`
+			Reason string `json:"reason"`
+		}
+		if err := json.Unmarshal([]byte(raw), &r); err != nil {
+			return fmt.Errorf("selector %s: cannot resolve (%s)", JSString(sel), strings.TrimSpace(raw))
+		}
+		switch r.State {
+		case "visible":
+			return nil
+		case "hidden":
+			if includeHidden {
+				return nil
+			}
+			last = "hidden"
+		case "missing":
+			last = "missing"
+		case "bad":
+			if r.Reason != "" {
+				return fmt.Errorf("%s is not a valid CSS selector: %s", JSString(sel), r.Reason)
+			}
+			return fmt.Errorf("%s is not a valid CSS selector", JSString(sel))
+		default:
+			last = r.State
+		}
+		if ctx.Err() != nil || time.Now().After(deadline) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(waitPollInterval):
+		}
+	}
+	if last == "hidden" && !includeHidden {
+		return fmt.Errorf("%s", hiddenOnlyMessage(sel))
+	}
+	if includeHidden {
+		return fmt.Errorf("wait_for_selector: no match for selector %s within %s", JSString(sel), timeout)
+	}
+	return fmt.Errorf("wait_for_selector: no visible match for selector %s within %s", JSString(sel), timeout)
+}
+
 func KeyboardPress(ctx context.Context, a wire.Action) (*wire.Result, error) {
 	if a.Key == "" {
 		return &wire.Result{Error: "keyboard_press: key required"}, nil
 	}
+	wctx, cancel := context.WithTimeout(ctx, actionTimeout(a))
+	defer cancel()
 	actions := []chromedp.Action{}
 	if a.Selector != "" {
-		actions = append(actions, chromedp.Focus(a.Selector, chromedp.ByQuery))
+		path, hidden, err := resolveVisibleTarget(wctx, a.Selector, a.IncludeHidden)
+		if err != nil {
+			return &wire.Result{Error: err.Error()}, nil
+		}
+		if hidden {
+			if err := focusHiddenNode(wctx, path); err != nil {
+				return &wire.Result{Error: err.Error()}, nil
+			}
+		} else {
+			actions = append(actions, chromedp.Focus(path, chromedp.ByJSPath))
+		}
 	}
 	actions = append(actions, chromedp.KeyEvent(KeyFor(a.Key)))
-	if err := chromedp.Run(ctx, actions...); err != nil {
+	if err := chromedp.Run(wctx, actions...); err != nil {
 		return &wire.Result{Error: err.Error()}, nil
 	}
 	return &wire.Result{Success: true, Data: "pressed=" + a.Key}, nil

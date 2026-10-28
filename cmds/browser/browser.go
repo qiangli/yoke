@@ -120,7 +120,7 @@ func run(rc *tool.RunContext, args []string) int {
 	tabTitle := fs.String("title", "", "tabs: address a tab by title substring")
 	tabByID := fs.Int("id", 0, "tabs: address a tab by its browser tab id")
 	// wait / events
-	timeoutMs := fs.Int("timeout-ms", 0, "wait-for-selector: budget in ms (default 5000)")
+	timeoutMs := fs.Int("timeout-ms", 0, "click/type/wait-for-selector: budget in ms (default 5000)")
 	state := fs.String("state", "", "wait-for-selector: visible|attached|detached (default visible)")
 	detail := fs.String("detail", "", "dispatch-event: JSON detail for a CustomEvent")
 	on := fs.String("on", "", "dispatch-event: window|document|<css-selector> (default window)")
@@ -584,6 +584,7 @@ func actionFromArgs(args []string, f actionFlags) (wire.Action, error) {
 		a := wire.Action{
 			Type: wire.ActionClick, ElementID: f.Index, MatchText: f.MatchText,
 			Scope: f.Scope, IncludeHidden: f.IncludeHidden,
+			TimeoutMs: f.TimeoutMs,
 		}
 		if len(rest) > 0 {
 			// A bare integer is an ELEMENT INDEX, not a selector: no
@@ -608,7 +609,7 @@ func actionFromArgs(args []string, f actionFlags) (wire.Action, error) {
 		if f.FromAsk != "" {
 			// By reference: a target, never text — the value is the
 			// operator's answer, resolved inside the guard.
-			a := wire.Action{Type: wire.ActionType, ElementID: f.Index, IncludeHidden: f.IncludeHidden, FromAsk: f.FromAsk}
+			a := wire.Action{Type: wire.ActionType, ElementID: f.Index, IncludeHidden: f.IncludeHidden, FromAsk: f.FromAsk, TimeoutMs: f.TimeoutMs}
 			if f.Index == 0 {
 				if len(rest) == 0 {
 					return wire.Action{}, fmt.Errorf("type --from-ask requires a target (selector or --index N)")
@@ -624,7 +625,7 @@ func actionFromArgs(args []string, f actionFlags) (wire.Action, error) {
 		if len(rest) < 2 && f.Index == 0 {
 			return wire.Action{}, fmt.Errorf("type requires a selector and text")
 		}
-		a := wire.Action{Type: wire.ActionType, ElementID: f.Index, IncludeHidden: f.IncludeHidden}
+		a := wire.Action{Type: wire.ActionType, ElementID: f.Index, IncludeHidden: f.IncludeHidden, TimeoutMs: f.TimeoutMs}
 		if f.Index > 0 && len(rest) >= 1 {
 			a.Text = strings.Join(rest, " ")
 		} else {
