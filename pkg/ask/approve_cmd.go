@@ -64,21 +64,22 @@ an approval.`,
 }
 
 type approvalView struct {
-	SchemaVersion string    `json:"schema_version"`
-	ID            string    `json:"id"`
-	State         string    `json:"state"`
-	Token         string    `json:"token"`
-	Source        string    `json:"source"`
-	Argv          []string  `json:"argv,omitempty"`
-	Effects       []string  `json:"effects,omitempty"`
-	Sprint        string    `json:"sprint,omitempty"`
-	Session       string    `json:"session,omitempty"`
-	Mode          string    `json:"mode,omitempty"`
-	Prompt        string    `json:"prompt,omitempty"`
-	Requester     Requester `json:"requester"`
-	Created       time.Time `json:"created"`
-	Expires       time.Time `json:"expires"`
-	Decision      *Decision `json:"decision,omitempty"`
+	SchemaVersion string           `json:"schema_version"`
+	ID            string           `json:"id"`
+	State         string           `json:"state"`
+	Token         string           `json:"token"`
+	Source        string           `json:"source"`
+	Argv          []string         `json:"argv,omitempty"`
+	Effects       []string         `json:"effects,omitempty"`
+	Sprint        string           `json:"sprint,omitempty"`
+	Session       string           `json:"session,omitempty"`
+	Mode          string           `json:"mode,omitempty"`
+	Prompt        string           `json:"prompt,omitempty"`
+	Options       []ApprovalOption `json:"options,omitempty"`
+	Requester     Requester        `json:"requester"`
+	Created       time.Time        `json:"created"`
+	Expires       time.Time        `json:"expires"`
+	Decision      *Decision        `json:"decision,omitempty"`
 	// Resume is the exact flag a yielded @confirm is re-run with.
 	Resume string `json:"resume,omitempty"`
 }
@@ -95,7 +96,7 @@ func viewOf(r Request) approvalView {
 	}
 	if a := r.Approval; a != nil {
 		v.Token, v.Source, v.Argv, v.Effects = a.Token, a.Source, a.Argv, a.Effects
-		v.Sprint, v.Session, v.Mode = a.Sprint, a.Session, a.Mode
+		v.Sprint, v.Session, v.Mode, v.Options = a.Sprint, a.Session, a.Mode, a.Options
 	}
 	if d, ok := LoadDecision(r.ID); ok {
 		v.State = d.Verdict
@@ -194,6 +195,11 @@ func newApproveShowCmd() *cobra.Command {
 			if v.Prompt != "" {
 				fmt.Fprintf(w, "prompt:    %s\n", v.Prompt)
 			}
+			if r.Approval != nil {
+				for _, o := range r.Approval.Options {
+					fmt.Fprintf(w, "option:    %s — %s\n", o.ID, o.Name)
+				}
+			}
 			if d := v.Decision; d != nil {
 				fmt.Fprintf(w, "decision:  %s by %s via %s%s\n", d.Verdict, d.By, d.Via, alwaysSuffix(d))
 				if v.Resume != "" {
@@ -209,17 +215,27 @@ func newApproveShowCmd() *cobra.Command {
 
 func newApproveAllowCmd() *cobra.Command {
 	var always bool
-	var token, reason string
+	var token, reason, option string
 	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "allow ID",
 		Short: "allow an approval; prints the resume flag (--confirm=TOKEN:yes)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			return decideCmd(c, args[0], Decision{Verdict: VerdictAllow, Always: always, Reason: reason}, token, asJSON)
+			if option != "" {
+				r, err := findApproval(args[0])
+				if err != nil {
+					return err
+				}
+				if err := checkOption(r, option); err != nil {
+					return err
+				}
+			}
+			return decideCmd(c, args[0], Decision{Verdict: VerdictAllow, Always: always, Reason: reason, OptionID: option}, token, asJSON)
 		},
 	}
 	cmd.Flags().BoolVar(&always, "always", false, "standing allow for this token (allow-always on ACP and chat grant)")
+	cmd.Flags().StringVar(&option, "option", "", "pick one of the approval's offered choices by id (see `approve show`)")
 	cmd.Flags().StringVar(&token, "token", "", "require the approval's token to match (proves you saw the same plan)")
 	cmd.Flags().StringVar(&reason, "reason", "", "why (recorded)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
@@ -241,6 +257,22 @@ func newApproveDenyCmd() *cobra.Command {
 	cmd.Flags().StringVar(&reason, "reason", "", "why (recorded)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
 	return cmd
+}
+
+// checkOption refuses an --option the approval did not offer, naming the
+// ones it did.
+func checkOption(r Request, option string) error {
+	if r.Approval == nil || len(r.Approval.Options) == 0 {
+		return fmt.Errorf("approve: %s offers no options; allow or deny it without --option", shortID(r.ID))
+	}
+	var ids []string
+	for _, o := range r.Approval.Options {
+		if o.ID == option {
+			return nil
+		}
+		ids = append(ids, o.ID)
+	}
+	return fmt.Errorf("approve: %s has no option %q (options: %s)", shortID(r.ID), option, strings.Join(ids, ", "))
 }
 
 func decideCmd(c *cobra.Command, id string, d Decision, token string, asJSON bool) error {

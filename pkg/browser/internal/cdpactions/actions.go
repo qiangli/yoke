@@ -282,8 +282,10 @@ func Extract(ctx context.Context, a wire.Action) (*wire.Result, error) {
 	if err := chromedp.Run(ctx, chromedp.Title(&title), chromedp.Location(&url)); err != nil {
 		return &wire.Result{Error: err.Error()}, nil
 	}
+	// Evaluated in the guard's isolated world (guard.go): the listing
+	// asks guard.js which fields are guarded and never prints their values.
 	var raw string
-	if err := chromedp.Run(ctx, chromedp.Evaluate(ExtractScript(a), &raw)); err != nil {
+	if err := evalGuard(ctx, ExtractScript(a), &raw); err != nil {
 		return &wire.Result{Error: err.Error()}, nil
 	}
 	out := ParseExtractPayload(raw)
@@ -329,16 +331,21 @@ func ExtractScript(a wire.Action) string {
   var total = matches.length;
   var slice = matches.slice(OFFSET, OFFSET+LIMIT);
   var lines = [], records = [];
+  var G = globalThis.__bashyGuard;
   for (var j=0; j<slice.length; j++) {
     var el = slice[j];
     var tag = el.tagName.toLowerCase();
-    var text = (el.innerText || el.value || el.getAttribute("aria-label") || "").trim().slice(0,80);
+    // A guarded field (sensitive-input guard) never shows its value.
+    var g = G ? G.inspect(el) : {guarded: el.type === "password", reason: "field:type-password"};
+    var text = (g.guarded ? (el.getAttribute("aria-label") || el.getAttribute("placeholder") || "") :
+      (el.innerText || el.value || el.getAttribute("aria-label") || "")).trim().slice(0,80);
     var attrs = [], attrMap = {};
     var keys = ["type","placeholder","href","name","value","role","aria-label"];
     for (var k=0; k<keys.length; k++) {
       var v = el.getAttribute(keys[k]);
-      if (v) { attrs.push(keys[k]+"=\""+String(v).slice(0,60)+"\""); attrMap[keys[k]] = String(v).slice(0,60); }
+      if (v && !(g.guarded && keys[k] === "value")) { attrs.push(keys[k]+"=\""+String(v).slice(0,60)+"\""); attrMap[keys[k]] = String(v).slice(0,60); }
     }
+    if (g.guarded) { attrs.push("guarded=\""+g.reason+"\""); attrMap.guarded = g.reason; }
     var vis = shown(el);
     var r = el.getBoundingClientRect();
     lines.push("["+(OFFSET+j+1)+"]"+(vis?"":" (hidden)")+" <"+tag+" "+attrs.join(" ")+">"+text+"</"+tag+">");

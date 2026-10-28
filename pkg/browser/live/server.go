@@ -411,6 +411,16 @@ func (h *hub) handleDispatch(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
+	// The sensitive-input guard holds at the hub too: a client that
+	// skipped bashy's gate (an older binary, a raw POST) cannot carry a
+	// guarded value through, nor type into an extension without the
+	// page-side field check.
+	if msg := h.guardDispatch(ctx, req.Method, req.Params); msg != "" {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": msg})
+		return
+	}
+
 	resp, err := h.call(ctx, req.Method, req.Params)
 	w.Header().Set("Content-Type", "application/json")
 	if err != nil {

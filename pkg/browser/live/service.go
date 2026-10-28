@@ -34,6 +34,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/qiangli/yoke/pkg/browser/guard"
 	"github.com/qiangli/yoke/pkg/browser/wire"
 )
 
@@ -193,8 +194,13 @@ func probeHealth(port int) bool {
 	return resp.StatusCode == http.StatusOK
 }
 
-// Execute satisfies browser.Client.
+// Execute satisfies browser.Client. Every action passes the sensitive-input
+// guard first (guard.go); execute is what runs once it has.
 func (s *Service) Execute(ctx context.Context, action wire.Action) (*wire.Result, error) {
+	return guard.Execute(ctx, guardBackend{s}, action, s.execute)
+}
+
+func (s *Service) execute(ctx context.Context, action wire.Action) (*wire.Result, error) {
 	s.mu.Lock()
 	role := s.role
 	h := s.hub
@@ -216,6 +222,8 @@ func (s *Service) Execute(ctx context.Context, action wire.Action) (*wire.Result
 			return &wire.Result{Error: staleExtensionError(ver)}, nil
 		} else if methods := h.ExtMethods(); len(methods) > 0 && !slices.Contains(methods, method) {
 			return &wire.Result{Error: methodNotAdvertisedError(method, ver)}, nil
+		} else if msg := guardMissing(method, ver, methods); msg != "" {
+			return &wire.Result{Error: msg}, nil
 		}
 	}
 
@@ -319,47 +327,66 @@ func methodNotAdvertisedError(method, ver string) string {
 }
 
 func (s *Service) executeHub(ctx context.Context, h *hub, method string, params map[string]any) (*wire.Result, error) {
-	resp, err := h.call(ctx, method, params)
+	raw, err := hubCall(ctx, h, method, params)
 	if err != nil {
 		return &wire.Result{Error: err.Error()}, nil
 	}
-	if resp.Error != "" {
-		return &wire.Result{Error: resp.Error}, nil
-	}
-	return unmarshalExt(resp.Result)
+	return unmarshalExt(raw)
 }
 
 func (s *Service) executeClient(ctx context.Context, c *http.Client, method string, params map[string]any) (*wire.Result, error) {
-	body, err := json.Marshal(map[string]any{"method": method, "params": params})
+	raw, err := s.dispatchClient(ctx, c, method, params)
 	if err != nil {
 		return &wire.Result{Error: err.Error()}, nil
+	}
+	return unmarshalExt(raw)
+}
+
+// hubCall is one extension round trip in the hub role, returning the
+// extension's raw result.
+func hubCall(ctx context.Context, h *hub, method string, params map[string]any) (json.RawMessage, error) {
+	resp, err := h.call(ctx, method, params)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Error != "" {
+		return nil, errors.New(resp.Error)
+	}
+	return resp.Result, nil
+}
+
+// dispatchClient is one round trip through another process's hub.
+func (s *Service) dispatchClient(ctx context.Context, c *http.Client, method string, params map[string]any) (json.RawMessage, error) {
+	body, err := json.Marshal(map[string]any{"method": method, "params": params})
+	if err != nil {
+		return nil, err
 	}
 	url := fmt.Sprintf("http://127.0.0.1:%d/dispatch", s.port)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return &wire.Result{Error: err.Error()}, nil
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.Do(req)
 	if err != nil {
-		return &wire.Result{Error: fmt.Sprintf("live: dispatch to hub: %v", err)}, nil
+		return nil, fmt.Errorf("live: dispatch to hub: %v", err)
 	}
 	defer resp.Body.Close()
 	rawBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
-		return &wire.Result{Error: fmt.Sprintf("live: hub returned %d: %s", resp.StatusCode, string(rawBody))}, nil
+		return nil, fmt.Errorf("live: hub returned %d: %s", resp.StatusCode, string(rawBody))
 	}
 	var dispatchResp struct {
 		Result json.RawMessage `json:"result"`
 		Error  string          `json:"error"`
 	}
 	if err := json.Unmarshal(rawBody, &dispatchResp); err != nil {
-		return &wire.Result{Error: fmt.Sprintf("live: bad dispatch payload: %v", err)}, nil
+		return nil, fmt.Errorf("live: bad dispatch payload: %v", err)
 	}
 	if dispatchResp.Error != "" {
-		return &wire.Result{Error: dispatchResp.Error}, nil
+		return nil, errors.New(dispatchResp.Error)
 	}
-	return unmarshalExt(dispatchResp.Result)
+	return dispatchResp.Result, nil
 }
 
 func unmarshalExt(raw json.RawMessage) (*wire.Result, error) {

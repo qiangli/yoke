@@ -48,6 +48,8 @@ func newPageHarness(t *testing.T, fixtures map[string]string) *pageHarness {
 		}
 		script = string(b)
 	}
+	// guard.js loads first, exactly as background.js injects the pair.
+	script = extensionFile(t, "guard.js") + "\n" + script
 	mux := http.NewServeMux()
 	for path, body := range fixtures {
 		body := body

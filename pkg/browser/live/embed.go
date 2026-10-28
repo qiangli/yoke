@@ -108,3 +108,14 @@ func RefreshIfStale(dir string) (bool, error) {
 	}
 	return true, nil
 }
+
+// GuardScript returns the extension's guard.js — the page-side field check of
+// the sensitive-input guard — so probe/solo evaluate the very bytes the live
+// extension injects.
+func GuardScript() string {
+	b, err := extensionFS.ReadFile("extension/guard.js")
+	if err != nil {
+		panic("live: embedded guard.js missing: " + err.Error())
+	}
+	return string(b)
+}

@@ -92,8 +92,8 @@ func TestClickReportsAnUnresolvedTarget(t *testing.T) {
 	if !strings.Contains(page, "const all = candidates(params)") || !strings.Contains(page, "const flat = candidates(params)") {
 		t.Fatal("the click and extract enumerations diverged")
 	}
-	if !strings.Contains(src, `files: ["page.js"]`) {
-		t.Fatal("background.js no longer injects the page.js core")
+	if strings.Count(src, `files: ["guard.js", "page.js"]`) != 2 {
+		t.Fatal("background.js no longer injects the guard.js field check + page.js core in every frame")
 	}
 }
 

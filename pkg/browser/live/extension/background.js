@@ -182,6 +182,11 @@ const SUPPORTED_METHODS = [
   "clipboard_read", "clipboard_write",
   "cookies_get", "storage_get", "capabilities",
   "dispatch_event",
+  // The sensitive-input guard (guard.js): the hub's gate preflights every
+  // type with guard_field and refuses type/select/keypress when this
+  // extension does not advertise it; guard_focus hands a refused field to
+  // the human operator.
+  "guard_field", "guard_focus",
   // The hub asks a stale extension to reload itself after refreshing
   // its unpacked folder (zero-touch upgrade).
   "reload",
@@ -324,7 +329,18 @@ function broadcastLog(msg) {
   }
 }
 
+// logParams keeps typed text out of the tool log (popup panel and debug
+// mirror): a type or clipboard write is logged by length only, so a value
+// the guard refused page-side — or any value — is never retained here.
+function logParams(method, params) {
+  if ((method === "type" || method === "clipboard_write") && params && typeof params.text === "string") {
+    return Object.assign({}, params, { text: `<${params.text.length} chars>` });
+  }
+  return params;
+}
+
 function recordToolCall(call) {
+  call.params = logParams(call.method, call.params);
   const entry = {
     id: call.id,
     method: call.method,
@@ -469,6 +485,10 @@ async function dispatchOnTab(method, params, tabId) {
       return runInTab(tabId, "scroll", params);
     case "evaluate":
       return evaluateInTab(tabId, params.script);
+    case "guard_field":
+      return runInTab(tabId, "guardField", params);
+    case "guard_focus":
+      return guardFocus(tabId, params);
     case "dispatch_event":
       return dispatchEventInTab(tabId, params);
     case "wait_for_selector":
@@ -788,7 +808,7 @@ async function extractInTab(tabId, params) {
 async function callPage(tabId, fn, params, what, frameId) {
   const target = frameId ? { tabId, frameIds: [frameId] } : { tabId };
   try {
-    await chrome.scripting.executeScript({ target, files: ["page.js"] });
+    await chrome.scripting.executeScript({ target, files: ["guard.js", "page.js"] });
   } catch (e) {
     throw new Error(`${what}: injection failed: ${String((e && e.message) || e)}`);
   }
@@ -807,7 +827,7 @@ async function callPage(tabId, fn, params, what, frameId) {
 // top frame alone answers.
 async function callFrames(tabId, fn, params) {
   try {
-    await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ["page.js"] });
+    await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ["guard.js", "page.js"] });
     const out = await chrome.scripting.executeScript({
       target: { tabId, allFrames: true },
       args: [fn, params],
@@ -918,6 +938,17 @@ async function typeTrusted(tabId, params, synthetic, frameId) {
     return { error: `type: value did not stick on ${read.matched} (synthetic and trusted input): wanted ${JSON.stringify(text)}, field shows ${JSON.stringify(read.value)}` };
   }
   return { content: "typed", data: JSON.stringify({ matched: read.matched, value: read.value, how: "trusted" }) };
+}
+
+// guardFocus brings the driven tab to the operator's attention and puts the
+// caret in the refused field, so the human types the value into the page
+// themselves — it never travels through bashy.
+async function guardFocus(tabId, params) {
+  try {
+    const tab = await chrome.tabs.update(tabId, { active: true });
+    if (tab && tab.windowId !== undefined) await chrome.windows.update(tab.windowId, { focused: true });
+  } catch (_) { /* best effort: the field is still focused below */ }
+  return runInTab(tabId, "guardFocus", params);
 }
 
 // dispatchEventInTab fires a named DOM event from the extension's

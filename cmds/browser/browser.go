@@ -16,6 +16,7 @@ import (
 
 	"github.com/qiangli/coreutils/tool"
 	"github.com/qiangli/yoke/pkg/browser"
+	"github.com/qiangli/yoke/pkg/browser/guard"
 	"github.com/qiangli/yoke/pkg/browser/live"
 	"github.com/qiangli/yoke/pkg/browser/probe"
 	"github.com/qiangli/yoke/pkg/browser/solo"
@@ -788,6 +789,20 @@ func printNoBrowser(rc *tool.RunContext, asJSON bool, mode string, cause error) 
 func printResult(rc *tool.RunContext, res *wire.Result, asJSON bool) int {
 	if res == nil {
 		res = &wire.Result{Error: "no result"}
+	}
+	// A sensitive-input guard outcome (the operator typed it, skipped the
+	// question, or stopped the form) has its own exit status: 0, 4, 5.
+	if code, ok := guard.ExitCode(res); ok {
+		if asJSON {
+			b, _ := json.Marshal(res)
+			fmt.Fprintln(rc.Out, string(b))
+		} else {
+			fmt.Fprintln(rc.Out, res.Content)
+			if res.Error != "" {
+				fmt.Fprintf(rc.Err, "browser: %s\n", res.Error)
+			}
+		}
+		return code
 	}
 	if asJSON {
 		b, _ := json.Marshal(res)

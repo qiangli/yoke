@@ -179,6 +179,75 @@ floor is deliberate rather than cosmetic: before 0.7.0 a screenshot could
 capture the wrong tab, and no Go-side change can detect that from the outside —
 the image is real, just of the wrong page.
 
+The page-side **sensitive-input field check** (below) arrived in extension
+**0.9.0**. Rather than raise the floor for every method, the hub gates on the
+advertised `guard_field` method: `type`, `select` and `keyboard-press` on an
+older extension are refused loudly ("no sensitive-input field check … reload
+it"), while navigate/extract/screenshot keep working. A guarded field is never
+filled silently by a stale extension.
+
+## Sensitive-input guard (enforced, every mode, every site)
+
+bashy does not ask agents to keep SSNs, card numbers or passwords out of web
+forms — it enforces it. One gate (`pkg/browser/guard`) sits in front of every
+backend's `Execute` (live, probe, solo) and in front of the live hub's raw
+`/dispatch`:
+
+1. **Value check** — the text of `type`, `select`, `eval`, `dispatch-event`,
+   clipboard writes, `navigate` URLs and printable `keyboard-press` keys is
+   checked against strict validators — SSN/ITIN (`ddd-dd-dddd`, SSA/IRS shape
+   rules), EIN (`dd-ddddddd`, IRS prefixes), ABA routing (9 digits, Fed prefix,
+   3-7-1 checksum), payment cards (Luhn + issuer prefix/length), IBAN
+   (registered length + mod-97) — and against the bashy vault's values (exact
+   or embedded; only keyed digests are kept, in a 0600 cache refreshed every
+   10 minutes through the secrets client). Order numbers, phone numbers,
+   dates, ZIP codes and amounts pass.
+2. **Field check** — before a `type` (or printable keypress) the page-side
+   `guard.js` inspects the target WITHOUT the value: `type=password`,
+   `autocomplete` `username`/`current-password`/`new-password`/
+   `one-time-code`/`cc-*`, and any name/id/`<label>`/aria/placeholder **or
+   visible question text** (a one-question-per-screen Typeform heading counts)
+   saying ssn, tax id, ein, routing, account, card, password or username.
+   `page.js` refuses such a field on its own too, so a client that skipped the
+   gate still cannot fill it.
+3. **Human path** — a refusal raises ONE approval for the operator
+   (`bashy approve list`) naming the site, the question and the reason:
+   `bashy approve allow ID --option type-myself` (bashy focuses the field in
+   your browser; type it there, then allow the follow-up "done" approval),
+   `--option skip`, or `bashy approve deny ID` / `--option stop`. No answer
+   within 10 minutes is **stop**, never a default fill. The value never passes
+   through the agent, bashy, the ask record or any log.
+4. **Masking** — every result's text (extract content/elements/data, eval
+   data, errors, titles, URLs) shows such values as `[guarded:<kind>]`, and a
+   guarded field's value is never listed. Screenshots are **not** masked — a
+   recorded gap.
+5. **Protected** — no flag, environment variable or site-skill metadata turns
+   it off. `pkg/browser/guard`, `live/guard.go`, `extension/guard.js` and
+   `cdpactions/guard.go` are rows of `pkg/src`'s protected manifest, so a
+   change merges only with a `bashy approve`d src approval.
+
+What the caller sees (the contract site skills build on):
+
+| outcome | stdout | exit | `--json` `outcome_class` |
+|---|---|---|---|
+| the operator typed it | `guard:human-typed` | 0 | `guard_human_typed` |
+| the operator skipped the question | `guard:skipped` | 4 | `guard_skipped` |
+| stop / deny / timeout / no human channel | `guard:stopped` | 5 | `guard_stopped` |
+
+`--json` also carries `reason` (`field:label-ssn`, `field:type-password`,
+`value:luhn`, `value:vault`, …) and `data` `{choice, via, reason, site,
+question}`. A headless `solo` Chrome has no human channel: a refusal there is
+`guard:stopped` immediately.
+
+Test seam: `BASHY_BROWSER_GUARD_ASK=fake:type-myself|fake:skip|fake:stop|fake:timeout`
+answers the approvals as a scripted operator. It is honoured only inside a
+`go test` binary or a build made with `-tags bashy_guard_fake` — never a
+release build — and none of its answers can fill a guarded field.
+
+Known gaps: screenshots; an `eval` that BUILDS a value at run time (the
+literal text is checked, not what the script computes); bare 9-digit SSNs
+(taken as order numbers — the field check still catches an SSN question).
+
 **Automated login (capture a token/cookie):**
 ```sh
 bashy browser login --success-url /dashboard --cookie session --timeout 3m

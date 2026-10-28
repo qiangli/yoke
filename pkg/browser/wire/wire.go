@@ -141,6 +141,10 @@ type Result struct {
 	Hints        []string `json:"hints,omitempty"`
 	OutcomeClass string   `json:"outcome_class,omitempty"`
 
+	// Reason is the sensitive-input guard's reason code when it refused
+	// an action (field:label-ssn, value:luhn, …). Never the value.
+	Reason string `json:"reason,omitempty"`
+
 	// Path is set instead of Image when the screenshot exceeded
 	// MaxBytes (or SavePath was requested) and the backend wrote it to
 	// disk. Always absolute.

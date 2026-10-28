@@ -24,6 +24,23 @@ type subcommand struct {
 	Body []string // detail lines
 }
 
+// guardHelp is the sensitive-input guard's contract, shown on the writing
+// verbs. There is no flag that disables it.
+var guardHelp = []string{
+	"SENSITIVE-INPUT GUARD (every mode, every site, no opt-out): bashy refuses to",
+	"type into a password field, an autocomplete username/password/one-time-code/cc-*",
+	"field, or a field whose name, label or visible question says ssn/tax id/ein/",
+	"routing/account/card/password/username — and refuses any SSN/ITIN, EIN, ABA",
+	"routing number, Luhn card number, IBAN or bashy-vault secret as a value",
+	"(type, select, eval, dispatch-event, clipboard write, navigate URL).",
+	"A refusal asks the OPERATOR once (bashy approve list): type-myself (bashy",
+	"focuses the field, the human types, then allows the follow-up `done`), skip,",
+	"or stop; no answer = stop. The caller gets only the outcome:",
+	"  guard:human-typed exit 0 | guard:skipped exit 4 | guard:stopped exit 5",
+	"  (--json: outcome_class guard_human_typed|guard_skipped|guard_stopped, reason)",
+	"Page text in every result is masked: such values read as [guarded:<kind>].",
+}
+
 var subcommands = map[string]subcommand{
 	"status": {
 		Name: "status", Args: "",
@@ -71,7 +88,8 @@ var subcommands = map[string]subcommand{
 		Name: "type", Args: "<css-selector> <text...>",
 		One:  "focus an element and set its value",
 		Mode: "solo, probe, live",
-		Out:  "envelope with content=\"typed\"",
+		Out:  "envelope with content=\"typed\"; a guarded field or value ends in content guard:human-typed (exit 0), guard:skipped (exit 4) or guard:stopped (exit 5), --json outcome_class guard_* + reason",
+		Body: guardHelp,
 	},
 	"select": {
 		Name: "select", Args: "<css-selector> | <index> | --index N | --text LABEL  <option...>",
@@ -83,6 +101,7 @@ var subcommands = map[string]subcommand{
 			"and custom ARIA listboxes/comboboxes: opens the widget, types to filter when",
 			"it is searchable, picks the option by name (exact > prefix > substring), then",
 			"verifies. `extract` lists these widgets with their current value.",
+			"The option text passes the sensitive-input value check (see `browser type --help`).",
 		},
 	},
 	"eval": {

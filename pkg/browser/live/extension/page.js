@@ -2,8 +2,9 @@
 //
 // Every DOM read or write the extension performs on a page lives here,
 // in one file, so that:
-//   - background.js injects it once per frame (ISOLATED world, `files:`)
-//     and then calls globalThis.__bashyPage.<fn>(params);
+//   - background.js injects it once per frame (ISOLATED world, `files:`,
+//     after guard.js — the sensitive-input field check it relies on) and
+//     then calls globalThis.__bashyPage.<fn>(params);
 //   - the Go fixture tests load the very same bytes into a headless
 //     Chrome isolated world and exercise them against local fixture
 //     pages (pkg/browser/live/page_test.go), so a behavior change is
@@ -13,7 +14,7 @@
 // reported as { error: "..." } rather than thrown, so the caller can
 // tell "the page said no" from "injection failed".
 (() => {
-  const VERSION = 5;
+  const VERSION = 6;
   if (globalThis.__bashyPage && globalThis.__bashyPage.version === VERSION) return;
 
   // Native controls plus the ARIA widgets component libraries build
@@ -55,6 +56,12 @@
       if (t) s = (t.textContent || t.getAttribute("aria-label") || t.getAttribute("title") || t.getAttribute("alt") || "").trim();
     }
     return s.replace(/\s+/g, " ");
+  }
+
+  // nameOf is labelOf without the field's value, for guarded fields.
+  function nameOf(el) {
+    return ((el.getAttribute("aria-label") || "").trim() || (el.getAttribute("title") || "").trim() ||
+      (el.getAttribute("placeholder") || "").trim()).replace(/\s+/g, " ");
   }
 
   function scopeRoot(params) {
@@ -145,17 +152,24 @@
     for (let j = 0; j < slice.length; j++) {
       const el = slice[j];
       const tag = el.tagName.toLowerCase();
-      const text = labelOf(el).slice(0, 80);
+      // A guarded field (password, card, SSN question, …) never shows
+      // its value in a listing — not even one a human typed.
+      const g = guardOf(el);
+      const text = (g.guarded ? nameOf(el) : labelOf(el)).slice(0, 80);
       const attrs = {};
       const attrPairs = [];
       for (const a of ["type", "placeholder", "href", "name", "value", "role", "aria-label"]) {
         const v = el.getAttribute(a);
-        if (v) {
+        if (v && !(g.guarded && a === "value")) {
           attrs[a] = String(v).slice(0, 60);
           attrPairs.push(`${a}="${String(v).slice(0, 60)}"`);
         }
       }
-      const val = valueOf(el);
+      if (g.guarded) {
+        attrs.guarded = g.reason;
+        attrPairs.push(`guarded="${g.reason}"`);
+      }
+      const val = g.guarded ? null : valueOf(el);
       if (val !== null) {
         attrs.current = String(val).slice(0, 60);
         attrPairs.push(`current="${attrs.current}"`);
@@ -313,7 +327,9 @@
 
   function describe(el) {
     const tag = el.tagName ? el.tagName.toLowerCase() : "?";
-    const label = labelOf(el).slice(0, 60);
+    // labelOf reads a field's value; a guarded field is described by its
+    // name only, so no message echoes what is in it.
+    const label = (guardOf(el).guarded ? nameOf(el) : labelOf(el)).slice(0, 60);
     return label ? `<${tag}> ${label}` : `<${tag}>`;
   }
 
@@ -381,6 +397,13 @@
   async function type(params) {
     const el = resolveTarget(params, { visibleOnly: true });
     if (el && el.__miss) return miss("type", el);
+    // The sensitive-input guard, enforced here too: a client that skipped
+    // bashy's gate still cannot fill a guarded field. The refusal never
+    // echoes the text.
+    const g = guardOf(el);
+    if (g.guarded || g.error) {
+      return { error: `type: refused by the sensitive-input guard (${g.reason || g.error}) on ${describe(el)}; a human must type this field (bashy browser routes it to the operator)`, guarded: true, reason: g.reason || "" };
+    }
     const text = params.text || "";
     try { el.scrollIntoView({ block: "center", inline: "nearest" }); } catch (_) { /* detached */ }
     if (el.focus) el.focus();
@@ -540,6 +563,42 @@
     return done(chosen);
   }
 
+  // guardOf is guard.js's verdict on el; a page.js without guard.js loaded
+  // refuses rather than guessing.
+  function guardOf(el) {
+    if (!globalThis.__bashyGuard) return { guarded: true, reason: "field:guard-missing", error: "guard.js not loaded" };
+    return globalThis.__bashyGuard.inspect(el);
+  }
+
+  // guardField is the Go gate's preflight: the verdict on the field a
+  // type/keypress would hit, resolved exactly as type resolves it (the
+  // focused element when no target is given). It is never sent the text.
+  function guardField(params) {
+    params = params || {};
+    let el;
+    if (params.element_id || params.selector || params.match_text) {
+      el = resolveTarget(params, { visibleOnly: true });
+      if (el && el.__miss) return miss("guard", el);
+    } else {
+      // The focused element. Focus inside a child frame answers from that
+      // frame: here the active element is the <iframe>, so defer to it.
+      el = document.activeElement;
+      const top = window.top === window;
+      if (el && (el.tagName === "IFRAME" || el.tagName === "FRAME")) return { error: "guard: focus is in a child frame", notfound: true };
+      if (!top && (!el || el === document.body)) return { error: "guard: this frame holds no focus", notfound: true };
+    }
+    return guardOf(el);
+  }
+
+  // guardFocus focuses the field for the HUMAN path: the operator types
+  // the guarded value into it themselves.
+  function guardFocus(params) {
+    const el = resolveTarget(params || {}, { visibleOnly: true });
+    if (el && el.__miss) return miss("guard_focus", el);
+    if (!globalThis.__bashyGuard) return { error: "guard_focus: guard.js not loaded" };
+    return globalThis.__bashyGuard.focusForHuman(el);
+  }
+
   function scroll(params) {
     let amount = params.amount || 500;
     if (params.direction === "up") amount = -amount;
@@ -549,6 +608,6 @@
 
   globalThis.__bashyPage = {
     version: VERSION,
-    extract, count, click, type, select, scroll, readValue, focusTarget,
+    extract, count, click, type, select, scroll, readValue, focusTarget, guardField, guardFocus,
   };
 })();

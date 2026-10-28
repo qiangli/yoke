@@ -13,6 +13,7 @@ import (
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 
+	"github.com/qiangli/yoke/pkg/browser/guard"
 	"github.com/qiangli/yoke/pkg/browser/internal/cdpactions"
 	"github.com/qiangli/yoke/pkg/browser/wire"
 )
@@ -122,24 +123,41 @@ func selectPageTarget(targets []pageTarget) string {
 	return blank
 }
 
+// Execute runs one action. Every action passes the sensitive-input guard
+// first (pkg/browser/guard); the field check reuses the live extension's
+// guard.js in a CDP isolated world.
 func (c *Client) Execute(ctx context.Context, action wire.Action) (*wire.Result, error) {
-	c.mu.Lock()
-	cdpCtx := c.ctx
-	c.mu.Unlock()
-	if cdpCtx == nil {
-		if err := c.EnsureReady(ctx); err != nil {
+	gb := cdpactions.GuardBackend{Ready: c.ready, Current: c.current, Human: true}
+	return guard.Execute(ctx, gb, action, func(ctx context.Context, a wire.Action) (*wire.Result, error) {
+		cdpCtx, err := c.ready(ctx)
+		if err != nil {
 			return nil, err
 		}
-		c.mu.Lock()
-		cdpCtx = c.ctx
-		c.mu.Unlock()
+		callCtx, cancel := context.WithTimeout(cdpCtx, 30*time.Second)
+		defer cancel()
+		return cdpactions.Run(callCtx, Mode, a)
+	})
+}
+
+// current is the attached chromedp context, or nil before EnsureReady.
+func (c *Client) current() context.Context {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ctx
+}
+
+// ready attaches on first use and returns the chromedp context.
+func (c *Client) ready(ctx context.Context) (context.Context, error) {
+	if cdpCtx := c.current(); cdpCtx != nil {
+		return cdpCtx, nil
 	}
-	if cdpCtx == nil {
-		return nil, errors.New("probe: not ready")
+	if err := c.EnsureReady(ctx); err != nil {
+		return nil, err
 	}
-	callCtx, cancel := context.WithTimeout(cdpCtx, 30*time.Second)
-	defer cancel()
-	return cdpactions.Run(callCtx, Mode, action)
+	if cdpCtx := c.current(); cdpCtx != nil {
+		return cdpCtx, nil
+	}
+	return nil, errors.New("probe: not ready")
 }
 
 func (c *Client) Close() error {

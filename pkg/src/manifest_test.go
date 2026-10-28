@@ -69,6 +69,10 @@ func TestManifestTranscribesAppendixA(t *testing.T) {
 		prot("yoke", "pkg/resources/disk_floor.go"),
 		prot("yoke", "pkg/weave/sprint_commit_attribution.go"),
 		prot("yoke", "pkg/weave/weave_story_commit.go"),
+		prot("yoke", "pkg/browser/guard"),
+		prot("yoke", "pkg/browser/live/guard.go"),
+		prot("yoke", "pkg/browser/live/extension/guard.js"),
+		prot("yoke", "pkg/browser/internal/cdpactions/guard.go"),
 	}
 	if got := src.ProtectedManifest(); !slices.Equal(got, want) {
 		t.Errorf("ProtectedManifest() =\n%v\nwant\n%v", got, want)

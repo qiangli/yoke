@@ -85,6 +85,12 @@ func ProtectedManifest() []ProtEntry {
 		{Repo: "yoke", Path: "pkg/resources/disk_floor.go", Core: false},
 		{Repo: "yoke", Path: "pkg/weave/sprint_commit_attribution.go", Core: false},
 		{Repo: "yoke", Path: "pkg/weave/weave_story_commit.go", Core: false},
+		// The browser sensitive-input guard (Sprint 512.5): the gate, its
+		// page-side field check, and each backend's wiring into it.
+		{Repo: "yoke", Path: "pkg/browser/guard", Core: false},
+		{Repo: "yoke", Path: "pkg/browser/live/guard.go", Core: false},
+		{Repo: "yoke", Path: "pkg/browser/live/extension/guard.js", Core: false},
+		{Repo: "yoke", Path: "pkg/browser/internal/cdpactions/guard.go", Core: false},
 	}
 }
 

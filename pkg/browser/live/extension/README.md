@@ -48,6 +48,9 @@ package. The extension talks only to `ws://127.0.0.1:<port>/ws`.
   table, reconnect, and frame routing.
 - `page.js` — the page-side core (extract, click, type, select, …),
   injected into every frame; fixture-tested by `page_test.go`.
+- `guard.js` — the sensitive-input field check (password / autocomplete /
+  label / visible question text), injected before `page.js`; it never reads a
+  field's value. A protected path: see docs/browser.md "Sensitive-input guard".
 - `frames.js` — pure helpers that number elements tab-wide across
   frames and route an index back to its frame.
 - `popup.html` / `popup.js` — Connect / Disconnect UI.
