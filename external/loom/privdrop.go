@@ -281,26 +281,32 @@ func (d *privDrop) chown(path string) error {
 	return nil
 }
 
-// ensureTraversable adds the others-search bit to dir and every ancestor up to
-// the filesystem root, stopping early at the first one that already has it (the
-// chain above a world-searchable dir is world-searchable by construction on a
-// sane host, and / is 0755 everywhere).
+// ensureTraversable adds the others-search bit to dir and EVERY ancestor up to
+// the filesystem root.
 //
 // Only +x is ever added — never +r, never +w. /root goes 0700 -> 0701: the loom
 // account can walk THROUGH it to the data dir it owns, and still cannot list or
 // read anything else in root's home.
+//
+// It walks the whole chain rather than stopping at the first dir that already
+// has the bit. That shortcut looks safe — "the chain above a searchable dir is
+// searchable by construction" — and is FALSE for exactly the two paths this
+// function exists for, as a root pre-flight on WSL proved (S515.1b round 2):
+// a 0700 $HOME with 0755 children. Both the data dir (MkdirAll 0o755 in
+// ensurePrivDrop) and binmgr's cache tree are created world-searchable UNDER a
+// 0700 home, so the first stat already had the bit and /root never got it —
+// Gitea then died with "fork/exec …/loom: permission denied" before it could
+// even start. A handful of extra stats is not worth a wrong answer.
 func ensureTraversable(dir string) error {
 	for p := filepath.Clean(dir); ; p = filepath.Dir(p) {
 		st, err := os.Stat(p)
 		if err != nil {
 			return err
 		}
-		mode := st.Mode().Perm()
-		if mode&0o001 != 0 {
-			return nil // this one and, by construction, the chain above it
-		}
-		if err := os.Chmod(p, mode|0o001); err != nil {
-			return fmt.Errorf("loom: make %s traversable: %w", p, err)
+		if mode := st.Mode().Perm(); mode&0o001 == 0 {
+			if err := os.Chmod(p, mode|0o001); err != nil {
+				return fmt.Errorf("loom: make %s traversable: %w", p, err)
+			}
 		}
 		if parent := filepath.Dir(p); parent == p {
 			return nil
