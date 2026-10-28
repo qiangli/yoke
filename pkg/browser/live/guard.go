@@ -6,9 +6,10 @@ package live
 //
 // Old extensions. The page-side field check lives in extension guard.js,
 // advertised as the guard_field method (extension 0.9.0); guard_fill, the
-// by-reference fill of an operator's answer, arrived in 0.9.1 — an older
-// extension makes a provide answer stop (fill-failed), never type the agent's
-// text. Rather than raise
+// by-reference fill of an operator's answer, arrived in 0.9.1 and verifies
+// the field in-page from 0.9.2 — an older extension makes a provide answer
+// stop (fill-failed), never type the agent's text nor report an unproven
+// fill. Rather than raise
 // LiveExtensionMinVersion — which would block navigate/extract/screenshot on
 // every older extension for a check only writes need — the hub gates on the
 // ADVERTISED METHOD: type, select and keyboard_press are refused loudly unless
@@ -21,7 +22,9 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/qiangli/yoke/pkg/browser/guard"
@@ -29,9 +32,19 @@ import (
 )
 
 // guardMethod is the extension method that carries the field check;
-// fillMethod types an operator's admitted answer (extension 0.9.1+).
+// focusMethod hands the field to the human; fillMethod types an operator's
+// admitted answer (extension 0.9.1+).
+//
+// Both follow-ups are PINNED to the tab the field check ran in (tab_id,
+// honoured from extension 0.9.3; older ones ignore it), and the hub waits
+// for a reconnecting extension before sending one (GuardReconnectWait): the
+// operator's dialog is the longest idle stretch a live session has, and an
+// MV3 worker stopped or hot-reloaded in it comes back without its driven
+// tab. 0.9.2 then filled whatever tab was active — or nothing — and the
+// operator's answer ended as guard:stopped (fill-failed).
 const (
 	guardMethod = "guard_field"
+	focusMethod = "guard_focus"
 	fillMethod  = "guard_fill"
 )
 
@@ -155,28 +168,129 @@ func (g guardBackend) InspectField(ctx context.Context, a wire.Action) (guard.Fi
 	if err != nil {
 		return guard.Field{}, err
 	}
-	var f guard.Field
+	var f struct {
+		guard.Field
+		TabID int `json:"tab_id"`
+	}
 	if err := json.Unmarshal(raw, &f); err != nil {
 		return guard.Field{}, errors.New("live: unreadable guard_field result")
 	}
-	return f, nil
+	if f.TabID > 0 {
+		g.s.mu.Lock()
+		g.s.guardTab = f.TabID
+		g.s.mu.Unlock()
+	}
+	return f.Field, nil
+}
+
+// followUpParams is targetParams pinned to the tab the field was checked in.
+func (g guardBackend) followUpParams(a wire.Action) map[string]any {
+	p := targetParams(a)
+	g.s.mu.Lock()
+	if g.s.guardTab > 0 {
+		p["tab_id"] = g.s.guardTab
+	}
+	g.s.mu.Unlock()
+	return p
 }
 
 func (g guardBackend) FocusField(ctx context.Context, a wire.Action) error {
-	_, err := g.s.callRaw(ctx, "guard_focus", targetParams(a))
+	_, err := g.s.callRaw(ctx, focusMethod, g.followUpParams(a))
 	return err
 }
 
 // FillAdmitted sends an operator's admitted answer to the extension's
-// guard_fill (page.js types it past the field check and answers without the
-// value). The error is generic: an extension error could quote the field.
-func (g guardBackend) FillAdmitted(ctx context.Context, a wire.Action, askID string, value []byte) error {
-	p := targetParams(a)
+// guard_fill: page.js types it past the field check, then compares the
+// field with the answer INSIDE the page and answers only the verdict and
+// the two lengths (extension 0.9.2+) — never the value, never a hash. An
+// extension that answers without a verdict cannot prove the fill and is
+// refused (fill-failed). The error is generic: an extension error could
+// quote the field.
+func (g guardBackend) FillAdmitted(ctx context.Context, a wire.Action, askID string, value []byte) (guard.Verify, error) {
+	p := g.followUpParams(a)
 	p["text"], p["admit"] = string(value), askID
-	if _, err := g.s.callRaw(ctx, fillMethod, p); err != nil {
-		return errors.New("live: guard_fill failed")
+	raw, err := g.s.callRaw(ctx, fillMethod, p)
+	v, verr := fillVerdict(raw)
+	if cause := fillCause(raw, err, verr); cause != "" {
+		logWarn("live: guard_fill failed", "cause", cause)
+		return guard.Verify{}, guard.FillFailure{Cause: cause}
 	}
-	return nil
+	return v, nil
+}
+
+// fillCausePattern is the one shape of cause the extension reports inside
+// its (otherwise generic) guard_fill error: a fixed lower-case code.
+var fillCausePattern = regexp.MustCompile(`\(cause: ([a-z][a-z-]{0,23})\)`)
+
+// fillCause classifies a failed guard_fill into a VALUE-FREE code for the
+// log and the outcome: "" when the fill produced a verdict. Nothing of the
+// extension's message passes but a code matched by fillCausePattern.
+//
+//	refused        the hub refused it (no admission for this field)
+//	not-connected  no extension (or it did not come back in time)
+//	timeout        the call's deadline passed
+//	tab-gone       the tab the field was checked in was closed
+//	not-found, no-frame, inject-failed, page-error
+//	               the extension threw, by its own code
+//	ext-threw      the extension threw without a code (older than 0.9.3)
+//	no-verdict     it answered without a verification (older than 0.9.2)
+//	parse          it answered something unreadable
+func fillCause(raw json.RawMessage, err, verdictErr error) string {
+	if err != nil {
+		msg := err.Error()
+		switch {
+		case strings.Contains(msg, "refusing guard_fill"):
+			return "refused"
+		case errors.Is(err, context.DeadlineExceeded) || strings.Contains(msg, "deadline exceeded"):
+			return "timeout"
+		case strings.Contains(msg, "not connected") || strings.Contains(msg, "extension disconnected") ||
+			strings.Contains(msg, "no hub") || strings.Contains(msg, "dispatch to hub") || strings.Contains(msg, "live: write"):
+			return "not-connected"
+		}
+		if m := fillCausePattern.FindStringSubmatch(msg); m != nil {
+			return m[1]
+		}
+		return "ext-threw"
+	}
+	if verdictErr != nil {
+		if errors.Is(verdictErr, errNoVerdict) {
+			return "no-verdict"
+		}
+		return "parse"
+	}
+	return ""
+}
+
+var errNoVerdict = errors.New("live: guard_fill answered without a verification (extension older than 0.9.2; reload it)")
+
+// fillVerdict reads guard_fill's {verified, field_len, value_len} — from
+// the result itself or its data document. Any other key is ignored, so a
+// read-back of the field could not leak through here even if one appeared.
+func fillVerdict(raw json.RawMessage) (guard.Verify, error) {
+	type verdict struct {
+		Verified *string `json:"verified"`
+		FieldLen int     `json:"field_len"`
+		ValueLen int     `json:"value_len"`
+	}
+	var top struct {
+		verdict
+		Data string `json:"data"`
+	}
+	if json.Unmarshal(raw, &top) != nil {
+		return guard.Verify{}, errors.New("live: unreadable guard_fill result")
+	}
+	v := top.verdict
+	if v.Verified == nil && top.Data != "" {
+		_ = json.Unmarshal([]byte(top.Data), &v)
+	}
+	if v.Verified == nil {
+		return guard.Verify{}, errNoVerdict
+	}
+	out := guard.Verify{Verified: guard.VerifiedMismatch, FieldLen: v.FieldLen, ValueLen: v.ValueLen}
+	if *v.Verified == guard.VerifiedMatch {
+		out.Verified = guard.VerifiedMatch
+	}
+	return out, nil
 }
 
 func (g guardBackend) Site(ctx context.Context) string {

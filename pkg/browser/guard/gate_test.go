@@ -2,6 +2,11 @@ package guard
 
 import (
 	"context"
+	"crypto/md5"
+	"crypto/sha1"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -25,18 +30,27 @@ type fakeBackend struct {
 	executed  []wire.Action
 	filled    []string // values FillAdmitted typed (the operator's answers)
 	fillErr   error
+	page      func(string) string // what the page makes of a filled value (nil: keeps it)
 	result    *wire.Result
 }
 
-func (b *fakeBackend) FillAdmitted(_ context.Context, a wire.Action, _ string, v []byte) error {
+func (b *fakeBackend) FillAdmitted(_ context.Context, a wire.Action, _ string, v []byte) (Verify, error) {
 	if b.fillErr != nil {
-		return b.fillErr
+		return Verify{}, b.fillErr
 	}
 	if a.Text != "" {
-		return errors.New("FillAdmitted got an action carrying text")
+		return Verify{}, errors.New("FillAdmitted got an action carrying text")
 	}
 	b.filled = append(b.filled, string(v))
-	return nil
+	field := string(v)
+	if b.page != nil {
+		field = b.page(field)
+	}
+	ver := Verify{Verified: VerifiedMismatch, FieldLen: len(field), ValueLen: len(v)}
+	if field == string(v) {
+		ver.Verified = VerifiedMatch
+	}
+	return ver, nil
 }
 
 func (b *fakeBackend) InspectField(_ context.Context, a wire.Action) (Field, error) {
@@ -255,7 +269,11 @@ func TestProvideFillsByReferenceOnce(t *testing.T) {
 	if !strings.Contains(res.Data, askA) {
 		t.Errorf("no ask id in %s", res.Data)
 	}
+	if !strings.Contains(res.Data, `"verified":"match"`) || !strings.Contains(res.Data, `"field_len":19`) || !strings.Contains(res.Data, `"value_len":19`) {
+		t.Errorf("no verification in %s", res.Data)
+	}
 	assertNoLeak(t, "4111 1111 1111 1111", res, askDir, home)
+	assertNoHash(t, "4111 1111 1111 1111", res)
 	// The same id again: the admission is spent.
 	again := typeAction("")
 	again.FromAsk = askA
@@ -295,6 +313,75 @@ func TestFromAskIsBoundToTheField(t *testing.T) {
 	}
 }
 
+// assertNoHash fails if a common digest of value (hex or base64) appears in
+// the result: a hash of an SSN-class value is as good as the value.
+func assertNoHash(t *testing.T, value string, res *wire.Result) {
+	t.Helper()
+	b, _ := json.Marshal(res)
+	out := string(b) + res.Data
+	s1, s256, m5 := sha1.Sum([]byte(value)), sha256.Sum256([]byte(value)), md5.Sum([]byte(value))
+	for _, d := range [][]byte{s1[:], s256[:], m5[:]} {
+		for _, enc := range []string{hex.EncodeToString(d), hex.EncodeToString(d[:8]), base64.StdEncoding.EncodeToString(d), base64.RawURLEncoding.EncodeToString(d)} {
+			if strings.Contains(out, enc) {
+				t.Errorf("a digest of the value is in the result: %s", out)
+			}
+		}
+	}
+}
+
+// The fill is VERIFIED: a page that rewrites or truncates the operator's
+// answer turns the fill into guard:fill-mismatch (exit 6, a failure) with
+// only the verdict and the two lengths — never the value, never a hash.
+func TestProvideFillIsVerified(t *testing.T) {
+	cases := map[string]struct {
+		page          func(string) string
+		verified      string
+		class         string
+		fieldLen, val int
+	}{
+		"accepts":  {nil, VerifiedMatch, ClassFilledByHuman, 11, 11},
+		"truncate": {func(s string) string { return s[:9] }, VerifiedMismatch, ClassFillMismatch, 9, 11},
+		"rewrite":  {func(s string) string { return strings.ReplaceAll(s, "-", "") }, VerifiedMismatch, ClassFillMismatch, 9, 11},
+		"rejects":  {func(string) string { return "" }, VerifiedMismatch, ClassFillMismatch, 0, 11},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			askDir, home := isolate(t)
+			t.Setenv(FakeAskEnv, "fake:provide")
+			t.Setenv(FakeValueEnv, "078-05-1120")
+			b := &fakeBackend{human: true, page: tc.page, field: guardedField("field:label-ssn", "Social Security Number")}
+			res := run(t, b, typeAction("Ada Lovelace"))
+			if res.OutcomeClass != tc.class {
+				t.Fatalf("outcome = %+v, want %s", res, tc.class)
+			}
+			var data struct {
+				Verified string `json:"verified"`
+				FieldLen int    `json:"field_len"`
+				ValueLen int    `json:"value_len"`
+				AskID    string `json:"ask_id"`
+			}
+			if err := json.Unmarshal([]byte(res.Data), &data); err != nil {
+				t.Fatal(err)
+			}
+			if data.Verified != tc.verified || data.FieldLen != tc.fieldLen || data.ValueLen != tc.val || data.AskID == "" {
+				t.Fatalf("data = %s", res.Data)
+			}
+			code, _ := ExitCode(res)
+			if tc.class == ClassFillMismatch {
+				if res.Success || res.Content != ContentFillMismatch || code != ExitFillMismatch || res.Error == "" {
+					t.Fatalf("a mismatched fill did not fail: %+v (exit %d)", res, code)
+				}
+			} else if !res.Success || res.Content != ContentFilledByHuman || code != 0 {
+				t.Fatalf("a matched fill failed: %+v (exit %d)", res, code)
+			}
+			for _, v := range []string{"078-05-1120", "078051120", "078-05-11"} {
+				assertNoLeak(t, v, res, askDir, home)
+				assertNoHash(t, v, res)
+			}
+		})
+	}
+}
+
 // A failed fill stops — and says nothing about the value.
 func TestProvideFillFailureStops(t *testing.T) {
 	isolate(t)
@@ -305,6 +392,26 @@ func TestProvideFillFailureStops(t *testing.T) {
 		t.Fatalf("got %+v", res)
 	}
 	assertNoLeak(t, "212-48-7731", res)
+	if strings.Contains(res.Data, `"cause"`) {
+		t.Fatalf("a plain error became a cause: %s", res.Data)
+	}
+}
+
+// A FillFailure's cause is reported as data.cause — only when it is a code.
+func TestProvideFillFailureCause(t *testing.T) {
+	for cause, want := range map[string]bool{"tab-gone": true, "not-connected": true, "212-48-7731": false, "Ada Lovelace": false, "": false} {
+		isolate(t)
+		install(t, &scriptedAsker{answer: GuardAnswer{Choice: ChoiceProvide, AskID: askA}, values: map[string][]byte{askA: []byte("212-48-7731")}})
+		b := &fakeBackend{human: true, fillErr: FillFailure{Cause: cause}, field: guardedField("field:label-ssn", "SSN")}
+		res := run(t, b, typeAction("x"))
+		if res.OutcomeClass != ClassStopped || !strings.Contains(res.Data, `"via":"fill-failed"`) {
+			t.Fatalf("%q: got %+v", cause, res)
+		}
+		if got := strings.Contains(res.Data, `"cause":"`+cause+`"`); got != want {
+			t.Fatalf("%q: data = %s", cause, res.Data)
+		}
+		assertNoLeak(t, "212-48-7731", res)
+	}
 }
 
 // The live hub's check on a raw guard_fill: only a CLAIMED admission for the

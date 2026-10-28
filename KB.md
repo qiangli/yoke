@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [repo/page] Agy model-door text lives in step updates — For cligw stdin-stream-json workers, extract only agent_response step_update.text_delta and use result.response only when no deltas arrived. Select a fresh Agy project explicitly; cwd alone can reuse remembered context. Keep raw provider stderr out of HTTP headers. See docs/validation/cligw  (kb:agy-model-door-text-lives-in-step-updates)
+- [repo/page] Verify localhost resolution in the actual storage client — When using peer.satellite.localhost for signed S3 URLs, a successful curl or browser request does not prove Go client resolution. S515.2 Windows Go 1.27.2 Gitea failed with no such host while outpost routing worked. Open SeaweedFS 4.48 also rejected signed writ  (kb:verify-localhost-resolution-in-the-actual-storage-client)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 

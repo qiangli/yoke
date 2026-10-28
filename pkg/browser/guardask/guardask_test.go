@@ -143,8 +143,8 @@ func (backend) InspectField(context.Context, wire.Action) (guard.Field, error) {
 	return guard.Field{Guarded: true, Reason: "field:type-password", Question: "Password", Site: "x.test"}, nil
 }
 func (backend) FocusField(context.Context, wire.Action) error { return nil }
-func (backend) FillAdmitted(context.Context, wire.Action, string, []byte) error {
-	return errors.New("not offered")
+func (backend) FillAdmitted(context.Context, wire.Action, string, []byte) (guard.Verify, error) {
+	return guard.Verify{}, errors.New("not offered")
 }
 func (backend) Site(context.Context) string { return "x.test" }
 func (backend) HumanChannel() bool          { return true }

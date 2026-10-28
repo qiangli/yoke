@@ -14,7 +14,7 @@
 // reported as { error: "..." } rather than thrown, so the caller can
 // tell "the page said no" from "injection failed".
 (() => {
-  const VERSION = 7;
+  const VERSION = 8;
   if (globalThis.__bashyPage && globalThis.__bashyPage.version === VERSION) return;
 
   // Native controls plus the ARIA widgets component libraries build
@@ -409,14 +409,29 @@
 
   // guardFill types an OPERATOR's answer the Go guard admitted for this
   // field (the hub checks the admission before this runs), past the field
-  // check that stops an agent's own text. Nothing it returns carries the
-  // value: not the result, not an error.
+  // check that stops an agent's own text, and VERIFIES it here, where the
+  // value already is. Nothing it returns carries the value — not the
+  // result, not an error, not a hash: only match/mismatch and two lengths.
   async function guardFill(params) {
     const el = resolveTarget(params, { visibleOnly: true });
     if (el && el.__miss) return miss("guard_fill", el);
     const r = await typeInto(el, params);
     if (r.error) return { error: `guard_fill: the answer did not stick on ${nameOf(el) || el.tagName.toLowerCase()}`, retry_trusted: !!r.retry_trusted };
-    return { content: "filled" };
+    return Object.assign({ content: "filled" }, fillVerdict(el, params.text || ""));
+  }
+
+  // guardVerify compares the addressed field with the operator's answer
+  // after a fill (background.js runs it once the synthetic and, if needed,
+  // trusted insert are done): the verdict and the lengths, never the value.
+  function guardVerify(params) {
+    const el = resolveTarget(params, { visibleOnly: true });
+    if (el && el.__miss) return miss("guard_fill", el);
+    return fillVerdict(el, params.text || "");
+  }
+
+  function fillVerdict(el, text) {
+    const got = currentValue(el);
+    return { verified: got === text ? "match" : "mismatch", field_len: got.length, value_len: text.length };
   }
 
   async function typeInto(el, params) {
@@ -624,6 +639,6 @@
 
   globalThis.__bashyPage = {
     version: VERSION,
-    extract, count, click, type, select, scroll, readValue, focusTarget, guardField, guardFocus, guardFill,
+    extract, count, click, type, select, scroll, readValue, focusTarget, guardField, guardFocus, guardFill, guardVerify,
   };
 })();

@@ -26,6 +26,10 @@ type hub struct {
 	conn    *websocket.Conn // nil when no extension connected
 	pending map[int64]chan wsResponse
 
+	// wmu serializes websocket writes: calls and the keepalive ping share
+	// the connection, and gorilla allows one concurrent writer.
+	wmu sync.Mutex
+
 	// Populated by the extension's `_hello` frame on connect.
 	extVersion     string
 	extMethods     []string
@@ -139,6 +143,70 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 	logInfo("live: extension connected", "remote", r.RemoteAddr)
 
 	go h.readLoop(conn)
+	go h.keepAlive(conn)
+}
+
+// HubPingInterval paces the hub's keepalive frames. Chrome stops an MV3
+// service worker after ~30s without an extension event, and the
+// extension's own keepalive alarm is clamped to 30s, so on its own it can
+// lose that race — typically while the hub is waiting on the human
+// operator (the guard's dialog), which is exactly when the next call is the
+// one that must land. A frame the hub sends is an event that resets the
+// worker's idle timer. A variable only so tests can shorten it.
+var HubPingInterval = 20 * time.Second
+
+// keepAlive sends {"id":0,"method":"_ping"} (which every extension
+// version ignores) on conn until it is replaced or closed.
+func (h *hub) keepAlive(conn *websocket.Conn) {
+	t := time.NewTicker(HubPingInterval)
+	defer t.Stop()
+	ping, _ := json.Marshal(wsRequest{Method: "_ping"})
+	for range t.C {
+		h.mu.Lock()
+		current := h.conn == conn
+		h.mu.Unlock()
+		if !current || h.write(conn, ping) != nil {
+			return
+		}
+	}
+}
+
+func (h *hub) write(conn *websocket.Conn, raw []byte) error {
+	h.wmu.Lock()
+	defer h.wmu.Unlock()
+	return conn.WriteMessage(websocket.TextMessage, raw)
+}
+
+// GuardReconnectWait bounds how long a guard follow-up (guard_fill,
+// guard_focus) waits for the extension to be connected and handshaken.
+// Those calls come after the operator answered a dialog; in that window
+// the worker may have been stopped or hot-reloaded and be reconnecting,
+// and failing the operator's answer for a gap of a second would stop the
+// form. A variable only so tests can shorten it.
+var GuardReconnectWait = 15 * time.Second
+
+// awaitExtension waits (bounded by d and ctx) until an extension is
+// connected and its _hello parsed.
+func (h *hub) awaitExtension(ctx context.Context, d time.Duration) {
+	deadline := time.Now().Add(d)
+	for {
+		h.mu.Lock()
+		ok := h.conn != nil && h.extVersion != ""
+		h.mu.Unlock()
+		if ok || time.Now().After(deadline) || ctx.Err() != nil {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// guardFollowUp reports whether method continues the guard's human path.
+func guardFollowUp(method string) bool {
+	return method == fillMethod || method == focusMethod
 }
 
 func (h *hub) readLoop(conn *websocket.Conn) {
@@ -320,6 +388,9 @@ func (h *hub) awaitHello(ctx context.Context) error {
 // cancellation. Gated by awaitHello so we never dispatch against a
 // pre-handshake extension.
 func (h *hub) call(ctx context.Context, method string, params map[string]any) (wsResponse, error) {
+	if guardFollowUp(method) {
+		h.awaitExtension(ctx, GuardReconnectWait)
+	}
 	h.mu.Lock()
 	conn := h.conn
 	lastTab := h.lastTabURL
@@ -348,7 +419,7 @@ func (h *hub) call(ctx context.Context, method string, params map[string]any) (w
 		h.mu.Unlock()
 	}()
 
-	if err := conn.WriteMessage(websocket.TextMessage, raw); err != nil {
+	if err := h.write(conn, raw); err != nil {
 		return wsResponse{}, fmt.Errorf("live: write: %w", err)
 	}
 
@@ -422,6 +493,20 @@ func (h *hub) handleDispatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, err := h.call(ctx, req.Method, req.Params)
+	if req.Method == fillMethod {
+		// The client's outcome is generic; the hub's log says why, by code.
+		cerr := err
+		if cerr == nil && resp.Error != "" {
+			cerr = errors.New(resp.Error)
+		}
+		var verr error
+		if cerr == nil {
+			_, verr = fillVerdict(resp.Result)
+		}
+		if cause := fillCause(resp.Result, cerr, verr); cause != "" {
+			logWarn("live: guard_fill failed", "cause", cause, "via", "dispatch")
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	if err != nil {
 		w.WriteHeader(http.StatusServiceUnavailable)

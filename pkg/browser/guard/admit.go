@@ -10,8 +10,11 @@ package guard
 //     different field;
 //  2. resolves the value through the ValueSource (ask.TakeValue: once);
 //  3. hands it to Backend.FillAdmitted, which bypasses the page-side refusal
-//     that stops an agent's own text — and nothing else;
-//  4. returns guard:filled-by-human with the ask id, never the value.
+//     that stops an agent's own text — and nothing else — and VERIFIES the
+//     field afterwards, where the value already is;
+//  4. returns guard:filled-by-human (or, when the page does not hold the
+//     answer, guard:fill-mismatch) with the ask id, data.verified and the
+//     two lengths — never the value, never a hash of it.
 //
 // The live hub accepts a raw guard_fill only for an id claimed for that same
 // field (ConsumeClaimed), so a client that skips this package cannot use
@@ -152,7 +155,8 @@ func ConsumeClaimed(id string, a wire.Action) error {
 }
 
 // fillFromAsk fills a's target with the operator's answer named by
-// a.FromAsk. The outcome is guard:filled-by-human or guard:stopped.
+// a.FromAsk. The outcome is guard:filled-by-human, guard:fill-mismatch or
+// guard:stopped.
 func fillFromAsk(ctx context.Context, b Backend, a wire.Action) *wire.Result {
 	if a.Type != wire.ActionType || a.Text != "" {
 		return &wire.Result{Error: "guard: --from-ask fills a type by reference: give a target and no text"}
@@ -172,8 +176,19 @@ func fillFromAsk(ctx context.Context, b Backend, a wire.Action) *wire.Result {
 		return outcome(ClassStopped, ref, "value-unavailable", "")
 	}
 	defer clear(v)
-	if err := b.FillAdmitted(ctx, a, adm.ID, v); err != nil {
-		return outcome(ClassStopped, ref, "fill-failed", "")
+	ver, err := b.FillAdmitted(ctx, a, adm.ID, v)
+	if err != nil {
+		res := outcome(ClassStopped, ref, "fill-failed", "")
+		var ff FillFailure
+		if errors.As(err, &ff) && causePattern.MatchString(ff.Cause) {
+			res = withFields(res, map[string]any{"cause": ff.Cause})
+		}
+		return res
 	}
-	return outcome(ClassFilledByHuman, ref, "operator", adm.ID)
+	class := ClassFilledByHuman
+	if ver.Verified != VerifiedMatch {
+		ver.Verified, class = VerifiedMismatch, ClassFillMismatch
+	}
+	res := outcome(class, ref, "operator", adm.ID)
+	return withVerify(res, ver)
 }

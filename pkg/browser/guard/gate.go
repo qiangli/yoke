@@ -43,23 +43,54 @@ import (
 
 // Outcome classes and exit statuses of a guarded refusal (the contract
 // shared with site skills): filled-by-human 0, human-typed 0, skipped 4,
-// stopped 5.
+// stopped 5, fill-mismatch 6 (a by-reference fill whose page field does not
+// hold the operator's answer afterwards — the page rewrote, truncated or
+// rejected it; the fill FAILED and the form needs a human).
 const (
 	ClassFilledByHuman = "guard_filled_by_human"
 	ClassHumanTyped    = "guard_human_typed"
 	ClassSkipped       = "guard_skipped"
 	ClassStopped       = "guard_stopped"
+	ClassFillMismatch  = "guard_fill_mismatch"
 
 	ContentFilledByHuman = "guard:filled-by-human"
 	ContentHumanTyped    = "guard:human-typed"
 	ContentSkipped       = "guard:skipped"
 	ContentStopped       = "guard:stopped"
+	ContentFillMismatch  = "guard:fill-mismatch"
 
 	ExitFilledByHuman = 0
 	ExitHumanTyped    = 0
 	ExitSkipped       = 4
 	ExitStopped       = 5
+	ExitFillMismatch  = 6
 )
+
+// Verification results of a by-reference fill (data.verified).
+const (
+	VerifiedMatch    = "match"
+	VerifiedMismatch = "mismatch"
+)
+
+// Verify is a by-reference fill's read-back, compared where the value
+// already is (the page, or the backend's own process): whether the field
+// now equals the operator's answer, and both lengths. It never carries the
+// value nor any digest of it — an SSN-class value is brute-forceable from a
+// hash.
+type Verify struct {
+	Verified string // VerifiedMatch | VerifiedMismatch
+	FieldLen int
+	ValueLen int
+}
+
+// FillFailure is a Backend.FillAdmitted error that names WHY nothing could
+// be filled or verified, by a fixed value-free code (live: refused,
+// not-connected, timeout, tab-gone, not-found, no-frame, inject-failed,
+// page-error, ext-threw, no-verdict, parse). The outcome reports it as
+// data.cause beside via "fill-failed"; it never carries page text.
+type FillFailure struct{ Cause string }
+
+func (f FillFailure) Error() string { return "guard: fill failed (" + f.Cause + ")" }
 
 // ExitCode maps a result's outcome class to the CLI exit status; ok is
 // false when the result is not a guard outcome.
@@ -76,6 +107,8 @@ func ExitCode(r *wire.Result) (int, bool) {
 		return ExitSkipped, true
 	case ClassStopped:
 		return ExitStopped, true
+	case ClassFillMismatch:
+		return ExitFillMismatch, true
 	}
 	return 0, false
 }
@@ -100,8 +133,11 @@ type Backend interface {
 	FocusField(ctx context.Context, a wire.Action) error
 	// FillAdmitted types value — an operator's answer the guard admitted
 	// for a's target — into that target, bypassing the page-side refusal
-	// that stops an agent's own text. It must not echo value in any error.
-	FillAdmitted(ctx context.Context, a wire.Action, askID string, value []byte) error
+	// that stops an agent's own text, then reads the field back and reports
+	// whether it equals value (Verify). A field the page rewrote is a
+	// mismatch, not an error; an error means nothing could be filled or
+	// verified. It must not echo value in any error.
+	FillAdmitted(ctx context.Context, a wire.Action, askID string, value []byte) (Verify, error)
 	// Site is the host of the driven page ("" when unknown).
 	Site(ctx context.Context) string
 	// HumanChannel reports whether a human can act in this browser

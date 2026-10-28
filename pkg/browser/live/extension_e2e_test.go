@@ -1,0 +1,369 @@
+package live
+
+import (
+	"context"
+	"crypto/md5"
+	"crypto/sha1"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/target"
+	"github.com/chromedp/chromedp"
+
+	"github.com/qiangli/yoke/pkg/browser/guard"
+	"github.com/qiangli/yoke/pkg/browser/wire"
+)
+
+// End to end through the REAL extension: a hub Service, the shipped
+// extension (background.js + guard.js + page.js, unpacked) loaded into a
+// headless Chrome and connected to that hub over its websocket, and a
+// Typeform-style fixture in the driven tab. Service.Execute runs the guard,
+// the fake asker answers "provide", and guard_fill goes hub → background.js
+// guardFill → page.js guardFill/guardVerify → back to FillAdmitted, the one
+// path the page tests (page.js alone) and the hub tests (a scripted fake
+// extension) do not cover between them.
+//
+// Opt-in like the other Chrome tests:
+//
+//	BASHY_BROWSER_LIVE=1 go test ./pkg/browser/live -run TestExtensionE2E
+//
+// Needs a Chrome that still honours --load-extension: Chrome for Testing /
+// Chromium (branded Chrome 137+ ignores it). BASHY_BROWSER_EXT_CHROME names
+// one; otherwise a Playwright Chrome for Testing is looked up, then the
+// chromedp default.
+
+const e2eValue = "078-05-1120"
+
+func e2eChrome(t *testing.T) string {
+	t.Helper()
+	if p := os.Getenv("BASHY_BROWSER_EXT_CHROME"); p != "" {
+		return p
+	}
+	home, _ := os.UserHomeDir()
+	pats := []string{
+		filepath.Join(home, "Library/Caches/ms-playwright/chromium-*/chrome-mac*/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"),
+		filepath.Join(home, ".cache/ms-playwright/chromium-*/chrome-linux*/chrome"),
+	}
+	for _, pat := range pats {
+		if m, _ := filepath.Glob(pat); len(m) > 0 {
+			return m[len(m)-1]
+		}
+	}
+	return ""
+}
+
+// startExtensionE2E starts a hub, loads the real extension against it and
+// opens path of fixtures in the tab the extension drives.
+func startExtensionE2E(t *testing.T, fixtures map[string]string, path string) (*Service, context.Context) {
+	t.Helper()
+	if os.Getenv("BASHY_BROWSER_LIVE") == "" {
+		t.Skip("live Chrome test disabled; set BASHY_BROWSER_LIVE=1 to run (launches a headless Chrome with the extension)")
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	// Every hub log line of the run is kept, and must not carry the value.
+	var logMu sync.Mutex
+	var logs strings.Builder
+	SetLogger(NewWriterLogger(writerFunc(func(p []byte) (int, error) {
+		logMu.Lock()
+		defer logMu.Unlock()
+		return logs.Write(p)
+	})))
+	t.Cleanup(func() {
+		SetLogger(nil)
+		logMu.Lock()
+		defer logMu.Unlock()
+		noValueOrDigest(t, "the hub log", logs.String())
+	})
+	svc := New(port)
+	if err := svc.EnsureReady(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { svc.Close() })
+	waitHealthy(t, port)
+
+	// The shipped extension, unchanged but for one appended line that
+	// connects it to this hub (the popup's "connect" does the same).
+	dir := filepath.Join(t.TempDir(), "ext")
+	if _, err := ExtractExtension(dir); err != nil {
+		t.Fatal(err)
+	}
+	bg := filepath.Join(dir, "background.js")
+	src, err := os.ReadFile(bg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	boot := fmt.Sprintf("\n;connectedPort = %d; wantConnected = true; openWS();\n", port)
+	if err := os.WriteFile(bg, append(src, boot...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	for p, body := range fixtures {
+		body := body
+		mux.HandleFunc(p, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			fmt.Fprint(w, body)
+		})
+	}
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	opts := []chromedp.ExecAllocatorOption{
+		chromedp.NoFirstRun, chromedp.NoDefaultBrowserCheck,
+		chromedp.Flag("headless", "new"),
+		chromedp.WindowSize(1200, 900),
+		chromedp.UserDataDir(filepath.Join(t.TempDir(), "profile")),
+		chromedp.Flag("disable-extensions-except", dir),
+		chromedp.Flag("load-extension", dir),
+		chromedp.Flag("disable-features", "DisableLoadExtensionCommandLineSwitch"),
+	}
+	if exe := e2eChrome(t); exe != "" {
+		opts = append(opts, chromedp.ExecPath(exe))
+	}
+	alloc, cancelAlloc := chromedp.NewExecAllocator(context.Background(), opts...)
+	ctx, cancelCtx := chromedp.NewContext(alloc)
+	t.Cleanup(func() { cancelCtx(); cancelAlloc() })
+	// The first Run starts the browser and binds its life to ctx: a timeout
+	// context here would close Chrome the moment it is cancelled.
+	if err := chromedp.Run(ctx, chromedp.Navigate(srv.URL+path)); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(20 * time.Second); svc.hub.ExtVersion() == ""; {
+		if time.Now().After(deadline) {
+			t.Fatal("the real extension never connected to the hub (does this Chrome honour --load-extension? set BASHY_BROWSER_EXT_CHROME)")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if got, want := svc.hub.ExtVersion(), EmbeddedVersion(); got != want {
+		t.Fatalf("connected extension v%s, shipped v%s", got, want)
+	}
+	return svc, ctx
+}
+
+// restartWorkerAndSwitchTab plays what can happen while the operator reads
+// the dialog: the extension's worker is stopped (Chrome's idle stop of an
+// MV3 worker; a hot reload does the same) and comes back without its driven
+// tab, and another tab is now the active one. The worker is woken the way
+// a person would wake it: by opening the extension's popup page — in a new
+// tab, which becomes the active one. It returns before the worker has
+// reconnected.
+func restartWorkerAndSwitchTab(t *testing.T, ctx context.Context, svc *Service) {
+	t.Helper()
+	svc.hub.mu.Lock()
+	old := svc.hub.conn
+	svc.hub.mu.Unlock()
+	worker, base := ourWorker(t, ctx)
+	c := chromedp.FromContext(ctx)
+	if err := target.CloseTarget(worker).Do(cdp.WithExecutor(ctx, c.Browser)); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		svc.hub.mu.Lock()
+		gone := svc.hub.conn != old
+		svc.hub.mu.Unlock()
+		if gone {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the stopped worker's websocket never closed")
+		}
+	}
+	id, err := target.CreateTarget(base + "popup.html").Do(cdp.WithExecutor(ctx, c.Browser))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := target.ActivateTarget(id).Do(cdp.WithExecutor(ctx, c.Browser)); err != nil {
+		t.Fatal(err)
+	}
+	// Return at once: the operator's answer arrives while the worker is
+	// still coming back.
+}
+
+// ourWorker finds the extension's service worker among the browser's
+// (Chrome runs component extensions too): the one whose manifest is ours.
+func ourWorker(t *testing.T, ctx context.Context) (target.ID, string) {
+	t.Helper()
+	ts, err := chromedp.Targets(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ti := range ts {
+		if ti.Type != "service_worker" || !strings.HasPrefix(ti.URL, "chrome-extension://") {
+			continue
+		}
+		wctx, cancel := chromedp.NewContext(ctx, chromedp.WithTargetID(ti.TargetID))
+		var name string
+		err := chromedp.Run(wctx, chromedp.Evaluate(`chrome.runtime.getManifest().name`, &name))
+		cancel()
+		if err == nil && name == "ycode-live" {
+			return ti.TargetID, ti.URL[:strings.LastIndex(ti.URL, "/")+1]
+		}
+	}
+	t.Fatal("the extension's service worker is not running")
+	return "", ""
+}
+
+// slowOperator answers provide after during() ran — the window in which a
+// real operator reads the dialog and types.
+type slowOperator struct {
+	during func()
+	value  string
+	mu     sync.Mutex
+	vals   map[string][]byte
+}
+
+func (o *slowOperator) Ask(ctx context.Context, q guard.GuardAsk) (guard.GuardAnswer, error) {
+	o.during()
+	id := fmt.Sprintf("%032x", time.Now().UnixNano())
+	o.mu.Lock()
+	o.vals[id] = []byte(o.value)
+	o.mu.Unlock()
+	return guard.GuardAnswer{Choice: guard.ChoiceProvide, AskID: id, Via: "operator"}, nil
+}
+
+func (o *slowOperator) Done(context.Context, guard.GuardAsk) (bool, error) { return true, nil }
+
+func (o *slowOperator) take(id string) ([]byte, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	v, ok := o.vals[id]
+	delete(o.vals, id)
+	if !ok {
+		return nil, fmt.Errorf("no value")
+	}
+	return v, nil
+}
+
+// noValueOrDigest fails when out carries the value, a separator-free form
+// of it, or a hex digest (full or truncated) of it.
+func noValueOrDigest(t *testing.T, what, out string) {
+	t.Helper()
+	s256, s1, m5 := sha256.Sum256([]byte(e2eValue)), sha1.Sum([]byte(e2eValue)), md5.Sum([]byte(e2eValue))
+	for _, leak := range []string{e2eValue, strings.ReplaceAll(e2eValue, "-", ""),
+		hex.EncodeToString(s256[:]), hex.EncodeToString(s256[:8]), hex.EncodeToString(s1[:]), hex.EncodeToString(m5[:])} {
+		if strings.Contains(out, leak) {
+			t.Fatalf("%s carries the value or a digest of it: %s", what, out)
+		}
+	}
+}
+
+func e2eProvide(t *testing.T, svc *Service) *wire.Result {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	res, err := svc.Execute(ctx, wire.Action{Type: wire.ActionType, Selector: "input[aria-label=ssn]", Text: "Ada Lovelace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(res)
+	noValueOrDigest(t, "the result", string(b))
+	return res
+}
+
+func e2eData(t *testing.T, res *wire.Result) map[string]any {
+	t.Helper()
+	var d map[string]any
+	if err := json.Unmarshal([]byte(res.Data), &d); err != nil {
+		t.Fatalf("data %q: %v", res.Data, err)
+	}
+	return d
+}
+
+func e2eSSNScreen(input string) map[string]string {
+	return map[string]string{"/ssn": typeformScreen("Social Security Number", input)}
+}
+
+// provide → guard_fill through the real extension: the field holds the
+// answer and the verdict is a match with both lengths.
+func TestExtensionE2EGuardFillMatch(t *testing.T) {
+	guardIsolate(t)
+	t.Setenv(guard.FakeAskEnv, "fake:provide")
+	t.Setenv(guard.FakeValueEnv, e2eValue)
+	svc, _ := startExtensionE2E(t, e2eSSNScreen(`<input type="text" aria-label="ssn" placeholder="Type your answer here...">`), "/ssn")
+	client := New(svc.port)
+	if err := client.EnsureReady(context.Background()); err != nil || client.role != roleClient {
+		t.Fatalf("client role: %v", err)
+	}
+	for name, s := range map[string]*Service{"client": client, "hub": svc} {
+		res := e2eProvide(t, s)
+		if res.OutcomeClass != guard.ClassFilledByHuman || res.Content != guard.ContentFilledByHuman {
+			t.Fatalf("%s: outcome = %+v", name, res)
+		}
+		if code, _ := guard.ExitCode(res); code != guard.ExitFilledByHuman {
+			t.Fatalf("%s: exit %d", name, code)
+		}
+		d := e2eData(t, res)
+		if d["verified"] != guard.VerifiedMatch || d["field_len"] != float64(11) || d["value_len"] != float64(11) {
+			t.Fatalf("%s: data = %v", name, d)
+		}
+	}
+}
+
+// A page that rewrites the answer (strips the dashes): the fill is a
+// mismatch, guard:fill-mismatch exit 6, with the lengths and nothing else.
+func TestExtensionE2EGuardFillMismatch(t *testing.T) {
+	guardIsolate(t)
+	t.Setenv(guard.FakeAskEnv, "fake:provide")
+	t.Setenv(guard.FakeValueEnv, e2eValue)
+	svc, _ := startExtensionE2E(t, e2eSSNScreen(
+		`<input type="text" aria-label="ssn" oninput="this.value=this.value.replace(/-/g,'')">`), "/ssn")
+	client := New(svc.port)
+	if err := client.EnsureReady(context.Background()); err != nil || client.role != roleClient {
+		t.Fatalf("client role: %v", err)
+	}
+	for name, s := range map[string]*Service{"client": client, "hub": svc} {
+		res := e2eProvide(t, s)
+		if res.OutcomeClass != guard.ClassFillMismatch || res.Content != guard.ContentFillMismatch || res.Success {
+			t.Fatalf("%s: outcome = %+v", name, res)
+		}
+		if code, _ := guard.ExitCode(res); code != 6 {
+			t.Fatalf("%s: exit %d", name, code)
+		}
+		d := e2eData(t, res)
+		if d["verified"] != guard.VerifiedMismatch || d["field_len"] != float64(9) || d["value_len"] != float64(11) {
+			t.Fatalf("%s: data = %v", name, d)
+		}
+	}
+}
+
+// The worker restarts and another tab becomes active while the operator
+// answers. The fill must still land in the tab whose field was checked,
+// with its verdict — 0.9.2 filled whatever tab was active (or nothing) and
+// the answer ended guard:stopped (fill-failed), the run 662 live failure.
+func TestExtensionE2EGuardFillAfterWorkerRestart(t *testing.T) {
+	guardIsolate(t)
+	t.Setenv(guard.FakeAskEnv, "")
+	var svc *Service
+	var ctx context.Context
+	op := &slowOperator{value: e2eValue, vals: map[string][]byte{}}
+	op.during = func() { restartWorkerAndSwitchTab(t, ctx, svc) }
+	guard.SetHumanAsker(op)
+	guard.SetValueSource(op.take)
+	t.Cleanup(func() { guard.SetHumanAsker(nil); guard.SetValueSource(nil) })
+	svc, ctx = startExtensionE2E(t, e2eSSNScreen(`<input type="text" aria-label="ssn">`), "/ssn")
+	res := e2eProvide(t, svc)
+	if res.OutcomeClass != guard.ClassFilledByHuman {
+		t.Fatalf("outcome = %+v", res)
+	}
+	d := e2eData(t, res)
+	if d["verified"] != guard.VerifiedMatch || d["field_len"] != float64(11) || d["value_len"] != float64(11) {
+		t.Fatalf("data = %v", d)
+	}
+}
