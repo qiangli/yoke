@@ -3,17 +3,19 @@ id: f81b00360447
 kind: feature
 title: 'S515.4b yoke half of S515.4: bashy loom replica (Gitea push mirrors, sync on commit, to a peer loom) + bashy loom clone (url = nearest reachable replica, pushurl = primary, failover)'
 seq: 2783
-status: todo
+status: done
 priority: p0
 labels:
     - loom
 created: 2026-10-27T19:20:47.932059Z
+weave: 640
 assignee: claude-opus5
 sprint: 515
 sprint_id: e82160ea-95db-5f2a-b69e-b2d784b2996b
 sprint_title: 'satellite loom: private forge + CI + groups (KISS/MVP, reuse loom/act_runner/scopes)'
+closed: 2026-10-27T22:32:03.578064Z
 resolution: fixed
-closed_by: claude-opus5-n
+closed_by: claude-opus5-p
 ---
 
 Companion of S515.4 (umbrella 5955124e): one repo per run. Spec: umbrella docs/sprint-515-satellite-loom.md (S515.4; "So git read traffic is offloaded with standard git"); design of record docs/selvedge-self-hosted-git.md (one-way mirror primary -> replicas; NO symmetric multi-master).
