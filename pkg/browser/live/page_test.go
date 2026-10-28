@@ -471,3 +471,35 @@ func TestPageFramesAreOnePage(t *testing.T) {
 		t.Fatalf("a miss in one frame must be flagged notfound so the next frame is tried: %v", r)
 	}
 }
+
+// TestPageTypeSkipsHiddenSteps: a one-question-per-screen form keeps
+// earlier/later steps in display:none sections, so a generic selector
+// also matches inputs the user cannot see (found by the S512 typeform
+// proof). type must fill the visible match, and refuse when every
+// match is hidden instead of reporting "typed".
+func TestPageTypeSkipsHiddenSteps(t *testing.T) {
+	steps := `<!doctype html><html><body>
+<section style="display:none"><input type="text" id="q3"></section>
+<section><input type="text" id="q4"></section>
+<section style="display:none"><input type="text" id="q5"></section>
+<section style="display:none"><input type="email" id="only-hidden"></section>
+</body></html>`
+	h := newPageHarness(t, map[string]string{"/s": steps})
+	h.open("/s")
+	if res := h.call("type", map[string]any{"selector": "input[type=text]", "text": "x"}); res["error"] != nil {
+		t.Fatal(res["error"])
+	}
+	var q3, q4 string
+	h.mainEval("document.getElementById('q3').value", &q3)
+	h.mainEval("document.getElementById('q4').value", &q4)
+	if q4 != "x" || q3 != "" {
+		t.Fatalf("type hit a hidden step: q3=%q q4=%q", q3, q4)
+	}
+	res := h.call("type", map[string]any{"selector": "input[type=email]", "text": "a@b.c"})
+	if msg, _ := res["error"].(string); !strings.Contains(msg, "only hidden") {
+		t.Fatalf("typing into a field the user cannot see must be refused, got %v", res)
+	}
+	if res := h.call("type", map[string]any{"selector": "input[type=email]", "text": "a@b.c", "include_hidden": true}); res["error"] != nil {
+		t.Fatalf("include_hidden is the explicit override: %v", res["error"])
+	}
+}

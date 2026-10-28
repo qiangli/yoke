@@ -423,14 +423,18 @@ func actionToParams(a wire.Action) (string, map[string]any, error) {
 			"include_hidden": a.IncludeHidden,
 		}, nil
 	case wire.ActionType:
-		return "type", map[string]any{"selector": a.Selector, "element_id": a.ElementID, "text": a.Text}, nil
+		return "type", map[string]any{
+			"selector": a.Selector, "element_id": a.ElementID, "text": a.Text,
+			"include_hidden": a.IncludeHidden,
+		}, nil
 	case wire.ActionSelect:
 		return "select", map[string]any{
-			"selector":   a.Selector,
-			"element_id": a.ElementID,
-			"match_text": a.MatchText,
-			"scope":      a.Scope,
-			"option":     a.Text,
+			"selector":       a.Selector,
+			"element_id":     a.ElementID,
+			"match_text":     a.MatchText,
+			"scope":          a.Scope,
+			"option":         a.Text,
+			"include_hidden": a.IncludeHidden,
 		}, nil
 	case wire.ActionScroll:
 		return "scroll", map[string]any{"direction": a.Direction, "amount": a.Amount}, nil

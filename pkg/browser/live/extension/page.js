@@ -13,7 +13,7 @@
 // reported as { error: "..." } rather than thrown, so the caller can
 // tell "the page said no" from "injection failed".
 (() => {
-  const VERSION = 4;
+  const VERSION = 5;
   if (globalThis.__bashyPage && globalThis.__bashyPage.version === VERSION) return;
 
   // Native controls plus the ARIA widgets component libraries build
@@ -193,7 +193,11 @@
     };
   }
 
-  function resolveTarget(params) {
+  // opts.visibleOnly refuses a selector that matches only hidden
+  // elements (type/select: filling a field the user cannot see is the
+  // silent-wrongness case). click keeps hidden matches, since toggling a
+  // visually hidden radio/checkbox input is legitimate.
+  function resolveTarget(params, opts) {
     if (params.element_id && params.element_id > 0) {
       const flat = candidates(params);
       const el = flat[params.element_id - 1];
@@ -215,6 +219,15 @@
         };
       }
       if (!el) return { __miss: `no element matches selector ${JSON.stringify(params.selector)}`, __notfound: true };
+      // Prefer the first VISIBLE match: a selector like input[type=text]
+      // also matches inputs in collapsed/display:none steps.
+      if (!params.include_hidden && !shown(el)) {
+        const vis = Array.from((scoped || document).querySelectorAll(params.selector)).find(shown);
+        if (vis) return vis;
+        if (opts && opts.visibleOnly) {
+          return { __miss: `selector ${JSON.stringify(params.selector)} matches only hidden elements (pass --include-hidden to act on one anyway)`, __notfound: true };
+        }
+      }
       return el;
     }
     if (params.match_text) return byText(params);
@@ -366,7 +379,7 @@
   // resets the value is reported as an error naming what the field
   // shows, never as "typed".
   async function type(params) {
-    const el = resolveTarget(params);
+    const el = resolveTarget(params, { visibleOnly: true });
     if (el && el.__miss) return miss("type", el);
     const text = params.text || "";
     try { el.scrollIntoView({ block: "center", inline: "nearest" }); } catch (_) { /* detached */ }
@@ -409,7 +422,7 @@
   // focusTarget focuses and selects the field's contents so a trusted
   // Input.insertText replaces it.
   function focusTarget(params) {
-    const el = resolveTarget(params);
+    const el = resolveTarget(params, { visibleOnly: true });
     if (el && el.__miss) return miss("type", el);
     if (el.focus) el.focus();
     try {
@@ -466,7 +479,7 @@
   async function select(params) {
     const want = norm(params.option);
     if (!want) return { error: "select: an option is required" };
-    const el = resolveTarget(params);
+    const el = resolveTarget(params, { visibleOnly: true });
     if (el && el.__miss) return miss("select", el);
     const matched = describe(el);
     const done = (got) => ({ content: "selected", data: JSON.stringify({ matched, selected: got }) });

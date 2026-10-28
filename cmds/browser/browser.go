@@ -597,7 +597,7 @@ func actionFromArgs(args []string, f actionFlags) (wire.Action, error) {
 		if len(rest) < 2 && f.Index == 0 {
 			return wire.Action{}, fmt.Errorf("type requires a selector and text")
 		}
-		a := wire.Action{Type: wire.ActionType, ElementID: f.Index}
+		a := wire.Action{Type: wire.ActionType, ElementID: f.Index, IncludeHidden: f.IncludeHidden}
 		if f.Index > 0 && len(rest) >= 1 {
 			a.Text = strings.Join(rest, " ")
 		} else {
@@ -608,7 +608,7 @@ func actionFromArgs(args []string, f actionFlags) (wire.Action, error) {
 
 	case "select":
 		// select <selector|index> <option...> | --index N <option...> | --text LABEL <option...>
-		a := wire.Action{Type: wire.ActionSelect, ElementID: f.Index, MatchText: f.MatchText, Scope: f.Scope}
+		a := wire.Action{Type: wire.ActionSelect, ElementID: f.Index, MatchText: f.MatchText, Scope: f.Scope, IncludeHidden: f.IncludeHidden}
 		opt := rest
 		if a.ElementID == 0 && a.MatchText == "" {
 			if len(rest) < 2 {
