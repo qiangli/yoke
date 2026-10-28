@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
@@ -58,7 +59,12 @@ func newPageHarness(t *testing.T, fixtures map[string]string) *pageHarness {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	opts := append(chromedp.DefaultExecAllocatorOptions[:], chromedp.Headless, chromedp.WindowSize(1200, 900))
+	// Site isolation off: a cross-origin iframe then stays in the page's
+	// frame tree, where the harness can open a world in it. (The
+	// extension reaches out-of-process frames through allFrames.)
+	opts := append(chromedp.DefaultExecAllocatorOptions[:], chromedp.Headless, chromedp.WindowSize(1200, 900),
+		chromedp.Flag("disable-features", "IsolateOrigins,site-per-process"),
+		chromedp.Flag("disable-site-isolation-trials", true))
 	alloc, cancelAlloc := chromedp.NewExecAllocator(context.Background(), opts...)
 	ctx, cancelCtx := chromedp.NewContext(alloc)
 	ctx, cancelTimeout := context.WithTimeout(ctx, 60*time.Second)
@@ -77,14 +83,49 @@ func (h *pageHarness) open(path string) {
 // top frame, after loading page.js there, and decodes the result.
 func (h *pageHarness) call(fn string, params map[string]any) map[string]any {
 	h.t.Helper()
-	pj, _ := json.Marshal(params)
-	var out map[string]any
+	return h.callIn("", fn, params)
+}
+
+// frames lists the tab's frames in tree order (top first), the order
+// the extension's frameIds follow for a freshly loaded page.
+func (h *pageHarness) frames() []cdp.FrameID {
+	h.t.Helper()
+	var ids []cdp.FrameID
 	err := chromedp.Run(h.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
 		tree, err := page.GetFrameTree().Do(ctx)
 		if err != nil {
 			return err
 		}
-		world, err := page.CreateIsolatedWorld(tree.Frame.ID).WithWorldName("bashy-live").Do(ctx)
+		var walk func(*page.FrameTree)
+		walk = func(n *page.FrameTree) {
+			ids = append(ids, n.Frame.ID)
+			for _, c := range n.ChildFrames {
+				walk(c)
+			}
+		}
+		walk(tree)
+		return nil
+	}))
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return ids
+}
+
+// callIn is call in a given frame ("" = top).
+func (h *pageHarness) callIn(frame cdp.FrameID, fn string, params map[string]any) map[string]any {
+	h.t.Helper()
+	pj, _ := json.Marshal(params)
+	var out map[string]any
+	err := chromedp.Run(h.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		if frame == "" {
+			tree, err := page.GetFrameTree().Do(ctx)
+			if err != nil {
+				return err
+			}
+			frame = tree.Frame.ID
+		}
+		world, err := page.CreateIsolatedWorld(frame).WithWorldName("bashy-live").Do(ctx)
 		if err != nil {
 			return err
 		}
@@ -355,5 +396,78 @@ func TestPageSelectCustomWidgets(t *testing.T) {
 	res := h.call("select", map[string]any{"selector": "#industry", "option": "Biotech"})
 	if msg, _ := res["error"].(string); !strings.Contains(msg, "no option") || !strings.Contains(msg, "Fintech") {
 		t.Fatalf("a missing option must be an error naming the visible options, got %v", res)
+	}
+}
+
+// TestPageFramesAreOnePage: the Azure investor-code step lives in a
+// cross-origin, sandboxed iframe. Every frame runs page.js; frames.js
+// numbers their elements tab-wide and routes an index back to its
+// frame — the same code background.js runs.
+func TestPageFramesAreOnePage(t *testing.T) {
+	inner := `<!doctype html><html><body><p>Investor code</p>
+<input id="code" aria-label="Investor code"><button id="go" onclick="window.hit='go'">Apply code</button>
+<script>window.hit='';</script></body></html>`
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, inner)
+	}))
+	defer other.Close()
+	top := `<!doctype html><html><body><h1>Offer</h1><button id="top">Continue</button>
+<iframe src="/same" width="400" height="120"></iframe>
+<iframe sandbox="allow-scripts allow-forms" src="` + other.URL + `/x" width="400" height="160"></iframe>
+</body></html>`
+	same := `<!doctype html><html><body><a href="#terms">Terms</a></body></html>`
+	h := newPageHarness(t, map[string]string{"/top": top, "/same": same})
+	h.open("/top")
+	time.Sleep(300 * time.Millisecond) // let the iframes load
+
+	ids := h.frames()
+	if len(ids) != 3 {
+		t.Fatalf("want 3 frames (top, same-origin, cross-origin), got %d", len(ids))
+	}
+	// Collect per-frame answers the way callFrames does.
+	type frameAnswer struct {
+		FrameID int            `json:"frameId"`
+		Result  map[string]any `json:"result"`
+	}
+	var extracts, counts []frameAnswer
+	for i, id := range ids {
+		extracts = append(extracts, frameAnswer{i, h.callIn(id, "extract", map[string]any{"limit": 1000000})})
+		counts = append(counts, frameAnswer{i, h.callIn(id, "count", map[string]any{})})
+	}
+	framesJS := extensionFile(t, "frames.js")
+	ej, _ := json.Marshal(extracts)
+	cj, _ := json.Marshal(counts)
+	var merged struct {
+		Elements string `json:"elements"`
+		Total    int    `json:"total"`
+		Content  string `json:"content"`
+		At       struct {
+			FrameID int `json:"frameId"`
+			Local   int `json:"local"`
+		} `json:"at"`
+	}
+	// Find "Apply code" in the merged listing, then route its index.
+	h.mainEval(fmt.Sprintf(`(() => { %s
+	  const m = mergeExtract(%s, {});
+	  const line = m.elements.split("\n").find((l) => l.includes("Apply code"));
+	  const n = line ? parseInt(line.slice(1)) : 0;
+	  return { elements: m.elements, total: m.total, content: m.content, at: locateIndex(%s, n) };
+	})()`, framesJS, ej, cj), &merged)
+	if merged.Total != 4 || !strings.Contains(merged.Elements, "(frame 2)") || !strings.Contains(merged.Content, "Investor code") {
+		t.Fatalf("frames not merged into one listing (total %d):\n%s\n%s", merged.Total, merged.Elements, merged.Content)
+	}
+	if merged.At.FrameID != 2 {
+		t.Fatalf("Apply code routed to frame %d (local %d), want the cross-origin frame 2:\n%s", merged.At.FrameID, merged.At.Local, merged.Elements)
+	}
+	if r := h.callIn(ids[2], "type", map[string]any{"match_text": "Investor code", "text": "DHNT-2026"}); r["error"] != nil {
+		t.Fatal(r["error"])
+	}
+	if r := h.callIn(ids[2], "click", map[string]any{"element_id": merged.At.Local}); r["error"] != nil {
+		t.Fatal(r["error"])
+	}
+	// The text in the top frame is not found there: background.js moves on.
+	if r := h.callIn(ids[0], "click", map[string]any{"match_text": "Apply code"}); r["notfound"] != true {
+		t.Fatalf("a miss in one frame must be flagged notfound so the next frame is tried: %v", r)
 	}
 }

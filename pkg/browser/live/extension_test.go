@@ -221,3 +221,15 @@ func TestHiddenTabSkipsThePaintBarrier(t *testing.T) {
 		t.Fatal("takeScreenshot settles BEFORE resolving visibility — that is the hang")
 	}
 }
+
+// TestActionsReachEveryFrame: extract and click/type/select must span
+// iframes (the merge and routing are behavior-tested in page_test.go
+// through frames.js; this pins that background.js uses them).
+func TestActionsReachEveryFrame(t *testing.T) {
+	src := extensionFile(t, "background.js")
+	for _, want := range []string{`importScripts("frames.js")`, "allFrames: true", "mergeExtract(frames, params)", "locateIndex(counted, params.element_id)", "frameIds: [frameId]"} {
+		if !strings.Contains(src, want) {
+			t.Fatalf("background.js lost frame routing: %q missing", want)
+		}
+	}
+}

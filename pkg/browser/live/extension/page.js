@@ -13,7 +13,7 @@
 // reported as { error: "..." } rather than thrown, so the caller can
 // tell "the page said no" from "injection failed".
 (() => {
-  const VERSION = 3;
+  const VERSION = 4;
   if (globalThis.__bashyPage && globalThis.__bashyPage.version === VERSION) return;
 
   // Native controls plus the ARIA widgets component libraries build
@@ -171,7 +171,8 @@
       // --index resolves to the same element.
       const idx = want ? indexOf.get(el) : OFFSET + j + 1;
       lines.push(`[${idx}]${vis ? "" : " (hidden)"} <${tag} ${attrPairs.join(" ")}>${text}</${tag}>`);
-      records.push({ index: idx, tag: tag, text: text, attrs: attrs, visible: vis, box: boxOf(el) });
+      const line = `<${tag} ${attrPairs.join(" ")}>${text}</${tag}>`;
+      records.push({ index: idx, tag: tag, text: text, attrs: attrs, visible: vis, box: boxOf(el), line: line });
     }
     const body = (root === document ? (document.body && document.body.innerText) : root.innerText) || "";
     const viewport = {
@@ -185,6 +186,7 @@
       content: body.length > 16000 ? body.slice(0, 16000) + "\n... (truncated)" : body,
       elements: lines.join("\n"),
       total: total,
+      count: all.length,
       truncated: total > (OFFSET + LIMIT),
       viewport: viewport,
       data: JSON.stringify({ viewport: viewport, elements: records }),
@@ -195,7 +197,7 @@
     if (params.element_id && params.element_id > 0) {
       const flat = candidates(params);
       const el = flat[params.element_id - 1];
-      if (!el) return { __miss: `element index ${params.element_id} out of range (extract listed ${flat.length})` };
+      if (!el) return { __miss: `element index ${params.element_id} out of range (extract listed ${flat.length})`, __notfound: true };
       return el;
     }
     if (params.selector) {
@@ -212,7 +214,7 @@
             : `${JSON.stringify(params.selector)} is not a valid CSS selector: ${el.__reason}`,
         };
       }
-      if (!el) return { __miss: `no element matches selector ${JSON.stringify(params.selector)}` };
+      if (!el) return { __miss: `no element matches selector ${JSON.stringify(params.selector)}`, __notfound: true };
       return el;
     }
     if (params.match_text) return byText(params);
@@ -271,7 +273,7 @@
       const key = [inDialog, m, isLink ? 0 : 1, inChrome, reachable(el) ? 1 : 0];
       scored.push({ el, key });
     }
-    if (!scored.length) return { __miss: `no element whose text contains ${JSON.stringify(params.match_text)}` };
+    if (!scored.length) return { __miss: `no element whose text contains ${JSON.stringify(params.match_text)}`, __notfound: true };
     const cmp = (a, b) => { for (let i = 0; i < a.key.length; i++) if (a.key[i] !== b.key[i]) return b.key[i] - a.key[i]; return 0; };
     scored.sort(cmp);
     const ties = scored.filter((s) => cmp(s, scored[0]) === 0);
@@ -280,6 +282,20 @@
       return { __miss: `${ties.length} elements match ${JSON.stringify(params.match_text)} equally (${list}); use --index N or a --scope` };
     }
     return scored[0].el;
+  }
+
+  // miss reports an unresolved target; notfound tells background.js to
+  // try the next frame rather than fail.
+  function miss(verb, el) {
+    return { error: `${verb}: ${el.__miss}`, notfound: !!el.__notfound };
+  }
+
+  // count is this frame's enumeration size, so background.js can map a
+  // tab-wide index onto (frame, local index) exactly as extract numbers.
+  function count(params) {
+    params = params || {};
+    if (params.scope && !scopeRoot(params)) return { count: 0 };
+    return { count: candidates(params).length };
   }
 
   function describe(el) {
@@ -294,7 +310,7 @@
 
   function click(params) {
     const el = resolveTarget(params);
-    if (el && el.__miss) return { error: `click: ${el.__miss}` };
+    if (el && el.__miss) return miss("click", el);
     try { el.scrollIntoView({ block: "center", inline: "nearest" }); } catch (_) { /* detached */ }
     // HTMLElement.click() never moves focus; a real click on a field
     // does. Without this a following `type --selector input:focus`
@@ -351,7 +367,7 @@
   // shows, never as "typed".
   async function type(params) {
     const el = resolveTarget(params);
-    if (el && el.__miss) return { error: `type: ${el.__miss}` };
+    if (el && el.__miss) return miss("type", el);
     const text = params.text || "";
     try { el.scrollIntoView({ block: "center", inline: "nearest" }); } catch (_) { /* detached */ }
     if (el.focus) el.focus();
@@ -394,7 +410,7 @@
   // Input.insertText replaces it.
   function focusTarget(params) {
     const el = resolveTarget(params);
-    if (el && el.__miss) return { error: `type: ${el.__miss}` };
+    if (el && el.__miss) return miss("type", el);
     if (el.focus) el.focus();
     try {
       if (el.isContentEditable) {
@@ -451,7 +467,7 @@
     const want = norm(params.option);
     if (!want) return { error: "select: an option is required" };
     const el = resolveTarget(params);
-    if (el && el.__miss) return { error: `select: ${el.__miss}` };
+    if (el && el.__miss) return miss("select", el);
     const matched = describe(el);
     const done = (got) => ({ content: "selected", data: JSON.stringify({ matched, selected: got }) });
 
@@ -520,6 +536,6 @@
 
   globalThis.__bashyPage = {
     version: VERSION,
-    extract, click, type, select, scroll, readValue, focusTarget,
+    extract, count, click, type, select, scroll, readValue, focusTarget,
   };
 })();

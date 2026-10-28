@@ -6,6 +6,8 @@
 // back over the same socket. A chrome.alarms ping every 25 seconds
 // keeps the MV3 service worker from being killed mid-session.
 
+importScripts("frames.js"); // frameOrder, locateIndex, totalCount, mergeExtract
+
 const DEFAULT_PORT = 58082;
 const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 15000;
@@ -723,24 +725,49 @@ function screenshotResult(data, tab, method, fullPage) {
 }
 
 async function extractInTab(tabId, params) {
-  return callPage(tabId, "extract", params || {}, "extract");
+  params = params || {};
+  const frames = await callFrames(tabId, "extract", Object.assign({}, params, { limit: 1e6, offset: 0 }));
+  if (frames.length <= 1) return callPage(tabId, "extract", params, "extract");
+  return mergeExtract(frames, params);
 }
 
 // callPage injects page.js (the page-side core; idempotent per frame)
-// and calls one of its functions in the same ISOLATED world. All DOM
-// logic lives in page.js so the Go fixture tests exercise the same
-// bytes the extension runs.
-async function callPage(tabId, fn, params, what) {
+// and calls one of its functions in the same ISOLATED world of one
+// frame (default: the top frame). All DOM logic lives in page.js so
+// the Go fixture tests exercise the same bytes the extension runs.
+async function callPage(tabId, fn, params, what, frameId) {
+  const target = frameId ? { tabId, frameIds: [frameId] } : { tabId };
   try {
-    await chrome.scripting.executeScript({ target: { tabId }, files: ["page.js"] });
+    await chrome.scripting.executeScript({ target, files: ["page.js"] });
   } catch (e) {
     throw new Error(`${what}: injection failed: ${String((e && e.message) || e)}`);
   }
   return injectOne({
-    target: { tabId },
+    target,
     args: [fn, params],
     func: (fn, params) => globalThis.__bashyPage[fn](params),
   }, what);
+}
+
+// callFrames runs one page.js function in EVERY frame of the tab (top +
+// iframes, cross-origin included — <all_urls> is granted) and returns
+// [{frameId, result}]. A frame the extension cannot script (a sandboxed
+// frame without allow-scripts, a chrome:// or Web Store frame) answers
+// null and is skipped. If the all-frames call is refused outright, the
+// top frame alone answers.
+async function callFrames(tabId, fn, params) {
+  try {
+    await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ["page.js"] });
+    const out = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      args: [fn, params],
+      func: (fn, params) => (globalThis.__bashyPage ? globalThis.__bashyPage[fn](params) : null),
+    });
+    return frameOrder((out || []).map((f) => ({ frameId: f.frameId, result: f.result })));
+  } catch (_) {
+    const r = await callPage(tabId, fn, params, fn);
+    return [{ frameId: 0, result: r }];
+  }
 }
 
 // injectOne runs one scripting.executeScript and returns the single
@@ -775,14 +802,39 @@ async function injectOne(opts, what) {
   return frame.result;
 }
 
+// runInTab runs click/type/select in the frame that holds the target:
+// an index is tab-wide (as extract numbers it) and maps to one frame; a
+// selector or text is tried in frame order until a frame finds it.
 async function runInTab(tabId, kind, params) {
-  let result = await callPage(tabId, kind, params, kind);
+  if (kind === "scroll") return callPage(tabId, kind, params, kind);
+  let frameId = 0, local = params, result = null;
+  const counted = await callFrames(tabId, "count", params);
+  if (counted.length > 1) {
+    if (params.element_id > 0) {
+      const at = locateIndex(counted, params.element_id);
+      if (!at) throw new Error(`${kind}: element index ${params.element_id} out of range (extract listed ${totalCount(counted)} across ${counted.length} frames)`);
+      frameId = at.frameId;
+      local = Object.assign({}, params, { element_id: at.local });
+      result = await callPage(tabId, kind, local, kind, frameId);
+    } else {
+      for (const f of counted) {
+        const r = await callPage(tabId, kind, params, kind, f.frameId);
+        if (r && r.notfound && !result) { result = r; continue; }
+        if (r && r.notfound) continue;
+        result = r; frameId = f.frameId;
+        break;
+      }
+    }
+  } else {
+    result = await callPage(tabId, kind, params, kind);
+  }
   if (kind === "type" && result && result.retry_trusted) {
-    result = await typeTrusted(tabId, params, result);
+    result = await typeTrusted(tabId, local, result, frameId);
   }
   if (result && result.error) {
     throw new Error(result.error);
   }
+  if (result && frameId) result.frame_id = frameId;
   return result;
 }
 
@@ -791,8 +843,8 @@ async function runInTab(tabId, kind, params) {
 // select the field, insert the text through chrome.debugger
 // Input.insertText (a real IME-style insert), then verify the value.
 // Reports the page's own mismatch if the trusted path is unavailable.
-async function typeTrusted(tabId, params, synthetic) {
-  const focus = await callPage(tabId, "focusTarget", params, "type");
+async function typeTrusted(tabId, params, synthetic, frameId) {
+  const focus = await callPage(tabId, "focusTarget", params, "type", frameId);
   if (focus && focus.error) return focus;
   const text = params.text || "";
   try {
@@ -810,7 +862,7 @@ async function typeTrusted(tabId, params, synthetic) {
     return { error: `${synthetic.error} (trusted retry unavailable: ${String((e && e.message) || e)})` };
   }
   await new Promise((res) => setTimeout(res, 80));
-  const read = await callPage(tabId, "readValue", {}, "type");
+  const read = await callPage(tabId, "readValue", {}, "type", frameId);
   if (read.error) return read;
   if (read.value !== text) {
     return { error: `type: value did not stick on ${read.matched} (synthetic and trusted input): wanted ${JSON.stringify(text)}, field shows ${JSON.stringify(read.value)}` };
