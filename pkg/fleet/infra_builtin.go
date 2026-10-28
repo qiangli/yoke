@@ -65,6 +65,9 @@ type builtinOpenOptions struct {
 	// BudgetCap and BudgetPerInstance override a provider's spend caps;
 	// zero means that provider's default.
 	BudgetCap, BudgetPerInstance float64
+	// BudgetName is the account budget the provider's spend preflight
+	// reads (AWS); empty means that provider's default.
+	BudgetName string
 }
 
 // digitaloceanBaseURL and awsLightsailBaseURL override the API roots used
@@ -74,10 +77,13 @@ type builtinOpenOptions struct {
 var (
 	digitaloceanBaseURL string
 	awsLightsailBaseURL string
-	// awsCostExplorerURL is the budget preflight's endpoint seam, held
-	// separately because Cost Explorer is a different service from
-	// Lightsail even though one fake serves both in tests.
+	// awsCostExplorerURL, awsBudgetsURL and awsSTSURL are the budget
+	// preflight's endpoint seams, held separately because Cost Explorer,
+	// AWS Budgets and STS are different services from Lightsail even
+	// though one fake serves all of them in tests.
 	awsCostExplorerURL string
+	awsBudgetsURL      string
+	awsSTSURL          string
 )
 
 // builtinProviders is the registry, by manifest name.
@@ -128,10 +134,13 @@ var builtinProviders = map[string]builtinProvider{
 				Owner:           o.Owner,
 				BaseURL:         awsLightsailBaseURL,
 				CostExplorerURL: awsCostExplorerURL,
+				BudgetsURL:      awsBudgetsURL,
+				STSURL:          awsSTSURL,
 				Sprint:          o.Sprint,
 				Story:           o.Story,
 				TTL:             o.TTL,
 				Budget: awsprovider.Budget{
+					Name:           o.BudgetName,
 					MonthlyCapUSD:  o.BudgetCap,
 					PerInstanceUSD: o.BudgetPerInstance,
 				},

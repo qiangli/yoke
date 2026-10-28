@@ -81,6 +81,14 @@ type Config struct {
 	// CostExplorerURL overrides the Cost Explorer endpoint (tests). Empty
 	// means CostExplorerEndpoint.
 	CostExplorerURL string
+	// BudgetsURL and STSURL override the AWS Budgets and STS endpoints
+	// (tests). Empty means the real global endpoints. They are separate
+	// fields because they are separate services, even though one fake
+	// serves all of them in tests.
+	BudgetsURL, STSURL string
+	// AccountID is the account the budget belongs to. Empty asks STS
+	// GetCallerIdentity for it, once (sts.go).
+	AccountID string
 	// Budget is the spend policy enforced before any create.
 	Budget Budget
 	// Sprint, Story and TTL become the dhnt:sprint / dhnt:story /
@@ -180,7 +188,15 @@ func New(cfg Config) (provider.Adapter, error) {
 	if ceURL == "" {
 		ceURL = CostExplorerEndpoint
 	}
-	for _, u := range []string{lsURL, ceURL} {
+	budgetsURL := cfg.BudgetsURL
+	if budgetsURL == "" {
+		budgetsURL = BudgetsEndpoint
+	}
+	stsURL := cfg.STSURL
+	if stsURL == "" {
+		stsURL = STSEndpoint
+	}
+	for _, u := range []string{lsURL, ceURL, budgetsURL, stsURL} {
 		p, err := url.Parse(u)
 		if err != nil || (p.Scheme != "http" && p.Scheme != "https") || p.Host == "" {
 			return nil, &provider.Error{Code: provider.ErrInvalidRequest, Message: fmt.Sprintf("aws: invalid endpoint %q", u)}
@@ -199,13 +215,29 @@ func New(cfg Config) (provider.Adapter, error) {
 		prefix: costExplorerTargetPrefix, creds: cfg.Credentials,
 		httpClient: cfg.HTTPClient, now: a.now,
 	}
+	// Budgets and STS are global too, and for the same reason signed for
+	// us-east-1 rather than the instance's region.
+	a.budgets = &client{
+		endpoint: budgetsURL, region: BudgetsRegion, service: ServiceBudgets,
+		prefix: budgetsTargetPrefix, creds: cfg.Credentials,
+		httpClient: cfg.HTTPClient, now: a.now,
+	}
+	a.sts = &queryClient{
+		endpoint: stsURL, region: STSRegion, service: ServiceSTS,
+		version: stsAPIVersion, creds: cfg.Credentials,
+		httpClient: cfg.HTTPClient, now: a.now,
+	}
 	return provider.Guard(a), nil
 }
 
 type adapter struct {
-	cfg Config
-	ls  *client
-	ce  *client
+	cfg     Config
+	ls      *client
+	ce      *client
+	budgets *client
+	sts     *queryClient
+	// account caches the STS account id lookup (sts.go).
+	account accountCache
 }
 
 func (a *adapter) now() time.Time {

@@ -60,6 +60,8 @@ func intent(srv *fakelightsail.Server, bundle string) ProvisionIntent {
 		BlueprintID:     "ubuntu_24_04",
 		LightsailURL:    srv.URL,
 		CostExplorerURL: srv.URL,
+		BudgetsURL:      srv.URL,
+		STSURL:          srv.URL,
 	}
 }
 
@@ -137,8 +139,32 @@ func TestProvisioningRefusesGPU(t *testing.T) {
 	}
 }
 
-// It fails CLOSED: Cost Explorer denied means spend is unknown, and
-// unknown spend is not an authorization.
+// The account's own AWS BUDGET is the primary spend source, and it is what
+// makes the live preflight answerable: Cost Explorer on this account
+// answers DataUnavailableException (no cost data ingested yet), and the
+// authorization still comes back yes with the numbers from the budget.
+func TestProvisioningAllowedFromTheAccountBudgetWhenCostExplorerHasNoData(t *testing.T) {
+	srv := fakelightsail.New(t)
+	srv.SetBudget(fakelightsail.Budget{
+		Name: awsprovider.DefaultBudgetName, LimitUSD: 50, ActualSpendUSD: 8,
+	})
+	srv.Inject("GetCostAndUsage", fakelightsail.FaultDataUnavailable, 100)
+	awsPreflightEnv(t)
+	v, perr := ProvisioningAllowed(t.Context(), fixtureCredentials(t), intent(srv, "small_3_0"))
+	if perr != nil {
+		t.Fatalf("a budget-sourced preflight must authorize: %v", perr)
+	}
+	if v.SpendSource != awsprovider.SourceBudget || v.MonthToDateUSD != 8 {
+		t.Fatalf("verdict = %+v, want $8 month-to-date from the budget", v)
+	}
+	if v.ProjectedMonthlyUSD != 20 || v.MonthlyCapUSD != 50 {
+		t.Fatalf("verdict numbers = %+v, want $20 projected against the $50 budget limit", v)
+	}
+}
+
+// It fails CLOSED only when BOTH sources are unreadable: no budget on the
+// account and Cost Explorer denied means spend is unknown, and unknown
+// spend is not an authorization.
 func TestProvisioningFailsClosedWhenSpendIsUnknown(t *testing.T) {
 	srv := fakelightsail.New(t)
 	srv.Inject("GetCostAndUsage", fakelightsail.FaultAccessDenied, 1)

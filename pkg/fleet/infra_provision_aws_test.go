@@ -27,14 +27,18 @@ func clearAWSCredentialEnv(t *testing.T) {
 	}
 }
 
-// useFakeLightsail points both built-in AWS endpoints at the fake for the
-// duration of the test.
+// useFakeLightsail points every built-in AWS endpoint (Lightsail, Cost
+// Explorer, Budgets, STS) at the fake for the duration of the test.
 func useFakeLightsail(t *testing.T) *fakelightsail.Server {
 	t.Helper()
 	srv := fakelightsail.New(t)
-	oldLS, oldCE := awsLightsailBaseURL, awsCostExplorerURL
+	oldLS, oldCE, oldB, oldSTS := awsLightsailBaseURL, awsCostExplorerURL, awsBudgetsURL, awsSTSURL
 	awsLightsailBaseURL, awsCostExplorerURL = srv.URL, srv.URL
-	t.Cleanup(func() { awsLightsailBaseURL, awsCostExplorerURL = oldLS, oldCE })
+	awsBudgetsURL, awsSTSURL = srv.URL, srv.URL
+	t.Cleanup(func() {
+		awsLightsailBaseURL, awsCostExplorerURL = oldLS, oldCE
+		awsBudgetsURL, awsSTSURL = oldB, oldSTS
+	})
 	return srv
 }
 
@@ -433,5 +437,99 @@ func TestAWSCredentialResolution(t *testing.T) {
 	}
 	if got != "s3cr3t-value" {
 		t.Fatalf("resolved credential = %q", got)
+	}
+}
+
+// The dry-run reads spend from the ACCOUNT BUDGET (S522.2 rework 1): on
+// the live account Cost Explorer answers DataUnavailableException, so the
+// budget — named by --budget-name, whose own limit is the cap when
+// --budget-cap is not given — is what makes the preflight answerable at
+// all.
+func TestProvisionDryRunAWSSpendFromTheAccountBudget(t *testing.T) {
+	isolatedFleetRoot(t)
+	srv := useFakeLightsail(t)
+	srv.SetBudget(fakelightsail.Budget{
+		Name: awsprovider.DefaultBudgetName, LimitUSD: 40, ActualSpendUSD: 6.5,
+	})
+	// Exactly the live failure: cost explorer has nothing to say.
+	srv.Inject("GetCostAndUsage", fakelightsail.FaultDataUnavailable, 100)
+	clearAWSCredentialEnv(t)
+	awsCredentialEnv(t)
+
+	out, err := runInfra(t, "provision", "aws", "--satellite", "zoo-aws",
+		"--region", fakelightsail.TestRegion, "--size", "small_3_0",
+		"--image", "ubuntu_24_04", "--dry-run")
+	if err != nil {
+		t.Fatalf("dry-run: %v", err)
+	}
+	for _, want := range []string{
+		"budget: month-to-date spend $6.50",
+		"within the $40.00 monthly cap",
+		"spend from the " + awsprovider.DefaultBudgetName + " budget",
+		"cap from its $40.00 limit",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+	if n := srv.CreateCount(); n != 0 {
+		t.Fatalf("dry-run created %d instance(s)", n)
+	}
+	if n := srv.BadSignatures(); n != 0 {
+		t.Fatalf("%d request(s) failed SigV4 verification", n)
+	}
+}
+
+// --budget-name reaches the adapter: a budget under a different name is
+// the one read, and the default name is not.
+func TestProvisionAWSBudgetNameFlag(t *testing.T) {
+	isolatedFleetRoot(t)
+	srv := useFakeLightsail(t)
+	srv.SetBudget(fakelightsail.Budget{
+		Name: "sprint-522-cap", LimitUSD: 30, ActualSpendUSD: 1.25,
+	})
+	srv.Inject("GetCostAndUsage", fakelightsail.FaultDataUnavailable, 100)
+	clearAWSCredentialEnv(t)
+	awsCredentialEnv(t)
+
+	out, err := runInfra(t, "provision", "aws", "--satellite", "zoo-aws",
+		"--region", fakelightsail.TestRegion, "--size", "small_3_0",
+		"--image", "ubuntu_24_04", "--budget-name", "sprint-522-cap", "--dry-run")
+	if err != nil {
+		t.Fatalf("dry-run: %v", err)
+	}
+	for _, want := range []string{
+		"month-to-date spend $1.25", "spend from the sprint-522-cap budget",
+		"within the $30.00 monthly cap",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+	// Without the flag the default budget name does not exist on this
+	// account, and cost explorer is still blind: the preflight refuses
+	// rather than guessing.
+	if _, err := runInfra(t, "provision", "aws", "--satellite", "zoo-aws",
+		"--region", fakelightsail.TestRegion, "--size", "small_3_0",
+		"--image", "ubuntu_24_04", "--dry-run"); err == nil {
+		t.Fatal("a dry-run with no readable spend source must fail")
+	}
+	if n := srv.BadSignatures(); n != 0 {
+		t.Fatalf("%d request(s) failed SigV4 verification", n)
+	}
+}
+
+// The --budget-name flag is documented with its default, so an operator
+// does not have to read the adapter to find the budget it reads.
+func TestProvisionHelpDocumentsBudgetName(t *testing.T) {
+	isolatedFleetRoot(t)
+	out, err := runInfra(t, "provision", "--help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"--budget-name", awsprovider.DefaultBudgetName} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("help missing %q:\n%s", want, out)
+		}
 	}
 }

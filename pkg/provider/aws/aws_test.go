@@ -16,9 +16,9 @@ import (
 
 const testOwner = "t1"
 
-// open builds an adapter against the fake, with both endpoints pointed at
-// it and the poll interval short enough that wait loops do not dominate
-// the test runtime.
+// open builds an adapter against the fake, with every endpoint it talks to
+// (Lightsail, Cost Explorer, Budgets, STS) pointed at it and the poll
+// interval short enough that wait loops do not dominate the test runtime.
 func open(t *testing.T, fake *fakelightsail.Server, tweak func(*aws.Config)) provider.Adapter {
 	t.Helper()
 	cfg := aws.Config{
@@ -27,6 +27,8 @@ func open(t *testing.T, fake *fakelightsail.Server, tweak func(*aws.Config)) pro
 		Owner:           testOwner,
 		BaseURL:         fake.URL,
 		CostExplorerURL: fake.URL,
+		BudgetsURL:      fake.URL,
+		STSURL:          fake.URL,
 		PollInterval:    time.Millisecond,
 		WaitTimeout:     5 * time.Second,
 		Sprint:          "522",

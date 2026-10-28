@@ -34,6 +34,7 @@ func newInfraProvision(opts []Option) *cobra.Command {
 	var region, size, image, hostName, owner, credentialRef, key, profile string
 	var sprint, story, ttl string
 	var budgetCap, budgetPerInstance float64
+	var budgetName string
 	var dryRun, asJSON bool
 	cmd := &cobra.Command{
 		Use:   "provision [PROVIDER]",
@@ -79,6 +80,7 @@ func newInfraProvision(opts []Option) *cobra.Command {
 				Owner: owner, Region: region,
 				Sprint: sprint, Story: story, TTL: ttl,
 				BudgetCap: budgetCap, BudgetPerInstance: budgetPerInstance,
+				BudgetName: budgetName,
 			}
 			builtin, isBuiltin := builtinFor(p)
 			if dryRun {
@@ -178,9 +180,14 @@ func newInfraProvision(opts []Option) *cobra.Command {
 	cmd.Flags().StringVar(&story, "story", "", "story number recorded as a governance tag on created resources")
 	cmd.Flags().StringVar(&ttl, "ttl", "", "ttl recorded as a governance tag on created resources")
 	cmd.Flags().Float64Var(&budgetCap, "budget-cap", 0,
-		fmt.Sprintf("monthly spend cap in USD the create must stay within (0 = the provider default, $%.0f for aws)", awsprovider.DefaultMonthlyCapUSD))
+		fmt.Sprintf("monthly spend cap in USD the create must stay within (0 = the account budget's own limit, else the provider default, $%.0f for aws)", awsprovider.DefaultMonthlyCapUSD))
 	cmd.Flags().Float64Var(&budgetPerInstance, "budget-per-instance", 0,
 		fmt.Sprintf("per-instance monthly ceiling in USD (0 = the provider default, $%.0f for aws)", awsprovider.DefaultPerInstanceUSD))
+	// The budget is the PRIMARY spend source for aws, and its own limit
+	// is the cap when --budget-cap is not given (the account's cost
+	// explorer may have no data at all; see pkg/provider/aws/budgets.go).
+	cmd.Flags().StringVar(&budgetName, "budget-name", "",
+		fmt.Sprintf("account budget read for month-to-date spend and, without --budget-cap, for the cap itself (default %q for aws)", awsprovider.DefaultBudgetName))
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "validate and print the exact request plus the size and budget preflight; create nothing")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "machine-readable output")
 	return cmd

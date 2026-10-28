@@ -43,6 +43,8 @@ func setup(t *testing.T, fake *fakelightsail.Server, s seeds) conformance.Setup 
 					Owner:           confOwner,
 					BaseURL:         fake.URL,
 					CostExplorerURL: fake.URL,
+					BudgetsURL:      fake.URL,
+					STSURL:          fake.URL,
 					PollInterval:    time.Millisecond,
 					WaitTimeout:     5 * time.Second,
 					Sprint:          "522",

@@ -40,9 +40,13 @@ support.
 - The LIVE authorization answer exists as of Sprint 522 story
   ed3ef42edf96: `ProvisioningAllowed` (provisioning.go) takes the region
   and bundle a create would use and runs the Lightsail adapter's budget
-  preflight — bundle monthly price plus month-to-date unblended cost
-  BEFORE CREDITS, against the operator's $50 monthly cap and $24
-  per-instance ceiling. It fails closed (unknown spend refuses) and
+  preflight — bundle monthly price plus month-to-date spend BEFORE
+  CREDITS, against the operator's monthly cap ($50, or the account
+  budget's own limit) and $24 per-instance ceiling. Spend comes from the
+  account's AWS Budget first and Cost Explorer second (rework 1,
+  2026-10-28: the live account's Cost Explorer answers
+  DataUnavailableException, so a Cost-Explorer-only guard refused
+  everything). It fails closed when NEITHER source can be read, and
   refuses GPU plans unconditionally. Evidenced offline against
   `pkg/provider/aws/fakelightsail`, with a canary secret proving the
   denial path redacts (`provisioning_test.go`).

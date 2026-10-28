@@ -1,10 +1,16 @@
 // Package fakelightsail is a deterministic in-process stand-in for the AWS
 // Lightsail and Cost Explorer JSON APIs, for testing pkg/provider/aws.
 //
+// It answers FOUR services on one URL — Lightsail, Cost Explorer, AWS
+// Budgets and STS — because one adapter talks to all four and a test wants
+// one endpoint to point at. The signature check below is what keeps that
+// honest: each operation must be signed for ITS OWN service and region.
+//
 // It is a recorded-response server, not a mock: it speaks the real wire
-// protocol (POST "/" with X-Amz-Target, application/x-amz-json-1.1), keeps
-// real state so a create is visible to the next list, and — importantly —
-// VERIFIES THE SIGV4 SIGNATURE of every request it answers. An adapter that
+// protocol (POST "/" with X-Amz-Target, application/x-amz-json-1.1 — or
+// the query protocol for STS, which is form-encoded and answers XML),
+// keeps real state so a create is visible to the next list, and —
+// importantly — VERIFIES THE SIGV4 SIGNATURE of every request it answers. An adapter that
 // signed the wrong canonical request, forgot a header or sent the wrong
 // payload hash fails here rather than only against the live account.
 //
@@ -16,9 +22,12 @@ package fakelightsail
 
 import (
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -65,6 +74,11 @@ const (
 	// FaultNotFound answers NotFoundException, the way a read of a
 	// just-created resource does before AWS has propagated it.
 	FaultNotFound
+	// FaultDataUnavailable answers HTTP 400 DataUnavailableException —
+	// what Cost Explorer really answers on an account whose cost data has
+	// never been ingested. It is the live failure that made the budget
+	// the primary spend source (S522.2 rework 1).
+	FaultDataUnavailable
 )
 
 type fault struct {
@@ -111,6 +125,11 @@ type Server struct {
 	// bundlePrice is the monthly price GetBundles reports for
 	// TestBundleID.
 	bundles []map[string]any
+	// budget is what DescribeBudget answers, or nil for an account with
+	// no such budget (NotFoundException). A fresh fake has NONE: the
+	// Cost-Explorer-only path is the historical behavior, and a test that
+	// wants the budget source says so with SetBudget.
+	budget *Budget
 
 	creates  int
 	deletes  int
@@ -125,6 +144,10 @@ type Server struct {
 	// observers see every decoded request, so a test can assert on the
 	// exact document that went on the wire for one target.
 	observers []func(target string, body map[string]any)
+	// calls counts how many times each operation was called, so a test
+	// can assert that a source was NOT consulted (the budget path must
+	// not touch Cost Explorer) and that a cached lookup happened once.
+	calls map[string]int
 	// scopes records the "<service>/<region>" each operation was signed
 	// for, so a test can assert the signing scope directly.
 	scopes map[string]string
@@ -139,6 +162,7 @@ func New(t *testing.T) *Server {
 		staticIPs:   map[string]*StaticIP{},
 		faults:      map[string]*fault{},
 		scopes:      map[string]string{},
+		calls:       map[string]int{},
 		monthToDate: 3.50,
 		nextIP:      10,
 	}
@@ -173,6 +197,43 @@ func (s *Server) SetMonthToDate(usd float64) {
 	defer s.mu.Unlock()
 	s.monthToDate = usd
 }
+
+// Budget is the fake's view of the account's AWS Budget.
+type Budget struct {
+	// Name is the budget name DescribeBudget matches.
+	Name string
+	// LimitUSD is BudgetLimit, the operator's cap.
+	LimitUSD float64
+	// ActualSpendUSD is CalculatedSpend.ActualSpend, month-to-date.
+	ActualSpendUSD float64
+	// NoSpend omits CalculatedSpend entirely, the way a budget AWS has
+	// not evaluated yet looks.
+	NoSpend bool
+	// IncludeCredit is CostTypes.IncludeCredit. The real
+	// dhnt-monthly-cap budget sets it false, so the spend figure is
+	// before credits.
+	IncludeCredit bool
+	// Unit overrides the money unit ("USD" when empty).
+	Unit string
+}
+
+// SetBudget makes DescribeBudget answer with b (matched by name).
+func (s *Server) SetBudget(b Budget) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.budget = &b
+}
+
+// ClearBudget removes the budget, so DescribeBudget answers
+// NotFoundException the way an account without one does.
+func (s *Server) ClearBudget() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.budget = nil
+}
+
+// TestAccountID is the account id STS GetCallerIdentity reports.
+const TestAccountID = "123456789012"
 
 // Inject arms a fault on the next n calls to target (the bare operation
 // name, e.g. "CreateInstances").
@@ -216,6 +277,13 @@ func (s *Server) StaticIP(name string) (StaticIP, bool) {
 		return StaticIP{}, false
 	}
 	return *ip, true
+}
+
+// Calls is how many times the given operation was called.
+func (s *Server) Calls(op string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls[op]
 }
 
 // Scope is the "<service>/<region>" credential scope the given operation
@@ -311,6 +379,12 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	target := r.Header.Get("X-Amz-Target")
 	_, op, _ := strings.Cut(target, ".")
 	body, _ := readAll(r)
+	// A request with no X-Amz-Target is the QUERY protocol (STS): the
+	// operation is the form body's Action, and the answer is XML.
+	query := op == ""
+	if query {
+		op = formAction(body)
+	}
 
 	if !s.verify(r, body, op) {
 		s.mu.Lock()
@@ -318,6 +392,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 		awsError(w, http.StatusForbidden, "InvalidSignatureException",
 			"the request signature we calculated does not match the signature you provided")
+		return
+	}
+	s.mu.Lock()
+	s.calls[op]++
+	s.mu.Unlock()
+	if query {
+		s.serveQuery(w, r, op)
 		return
 	}
 	if ct := r.Header.Get("Content-Type"); ct != "application/x-amz-json-1.1" {
@@ -358,6 +439,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	case FaultNotFound:
 		awsError(w, http.StatusBadRequest, "NotFoundException", "injected: does not exist yet")
 		return
+	case FaultDataUnavailable:
+		awsError(w, http.StatusBadRequest, "DataUnavailableException",
+			"injected: no cost data is available for this account yet")
+		return
 	case FaultLoseResponse:
 		// Handled below, after the side effect.
 		s.mu.Lock()
@@ -370,6 +455,66 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if !s.dispatch(op, in, func(status int, v any) { writeJSON(w, status, v) }) {
 		awsError(w, http.StatusBadRequest, "InvalidInputException", "unknown target "+target)
+	}
+}
+
+// formAction reads the Action parameter out of a query-protocol body.
+func formAction(body []byte) string {
+	v, err := url.ParseQuery(string(body))
+	if err != nil {
+		return ""
+	}
+	return v.Get("Action")
+}
+
+// writeXML answers the query protocol's way.
+func writeXML(w http.ResponseWriter, status int, doc string) {
+	w.Header().Set("Content-Type", "text/xml")
+	w.WriteHeader(status)
+	_, _ = io.WriteString(w, xml.Header+doc)
+}
+
+// queryErrorXML is the query protocol's error envelope, which is XML and
+// not the JSON shape the other three services use.
+func queryErrorXML(w http.ResponseWriter, status int, code, msg string) {
+	writeXML(w, status, "<ErrorResponse><Error><Type>Sender</Type><Code>"+code+
+		"</Code><Message>"+msg+"</Message></Error><RequestId>req-fake</RequestId></ErrorResponse>")
+}
+
+// serveQuery answers the STS query-protocol operations.
+func (s *Server) serveQuery(w http.ResponseWriter, r *http.Request, action string) {
+	if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/x-www-form-urlencoded") {
+		queryErrorXML(w, http.StatusBadRequest, "InvalidAction", "unexpected content type "+ct)
+		return
+	}
+	s.mu.Lock()
+	s.requests++
+	s.mu.Unlock()
+	switch s.takeFault(action) {
+	case FaultAccessDenied:
+		queryErrorXML(w, http.StatusForbidden, "AccessDenied",
+			"User: arn:aws:iam::"+TestAccountID+":user/dhnt-automation is not authorized to perform: sts:"+action)
+		return
+	case FaultServiceError, FaultLoseResponse:
+		queryErrorXML(w, http.StatusInternalServerError, "InternalFailure", "injected internal failure")
+		return
+	case FaultThrottle:
+		queryErrorXML(w, http.StatusBadRequest, "Throttling", "Rate exceeded")
+		return
+	}
+	switch action {
+	case "GetCallerIdentity":
+		writeXML(w, http.StatusOK,
+			"<GetCallerIdentityResponse xmlns=\"https://sts.amazonaws.com/doc/2011-06-15/\">"+
+				"<GetCallerIdentityResult>"+
+				"<Arn>arn:aws:iam::"+TestAccountID+":user/dhnt-automation</Arn>"+
+				"<UserId>AIDAFAKEUSERID</UserId>"+
+				"<Account>"+TestAccountID+"</Account>"+
+				"</GetCallerIdentityResult>"+
+				"<ResponseMetadata><RequestId>req-fake</RequestId></ResponseMetadata>"+
+				"</GetCallerIdentityResponse>")
+	default:
+		queryErrorXML(w, http.StatusBadRequest, "InvalidAction", "unknown action "+action)
 	}
 }
 
@@ -388,14 +533,19 @@ func readAll(r *http.Request) ([]byte, error) {
 
 // expectedScope is the SigV4 service and region an operation MUST be
 // signed for. Real AWS derives these from the endpoint it is, and gets to
-// reject a mismatch; one fake serves both services here, so it has to
-// derive them from the target instead — and it does, because signing a
+// reject a mismatch; one fake serves all four services here, so it has to
+// derive them from the operation instead — and it does, because signing a
 // Cost Explorer call with the instance's region (rather than Cost
 // Explorer's global us-east-1) is one of the easiest things to get wrong
 // and would otherwise only show up as a live SignatureDoesNotMatch.
 func expectedScope(op string) (service, region string) {
-	if op == "GetCostAndUsage" {
+	switch op {
+	case "GetCostAndUsage":
 		return "ce", "us-east-1"
+	case "DescribeBudget":
+		return "budgets", "us-east-1"
+	case "GetCallerIdentity":
+		return "sts", "us-east-1"
 	}
 	return "lightsail", TestRegion
 }
@@ -689,6 +839,38 @@ func (s *Server) dispatch(op string, in map[string]any, reply func(int, any)) bo
 			{"id": "op-release-" + ipName, "resourceName": ipName, "status": "Succeeded",
 				"operationType": "ReleaseStaticIp", "isTerminal": true},
 		}})
+	case "DescribeBudget":
+		s.mu.Lock()
+		b := s.budget
+		s.mu.Unlock()
+		name, _ := in["BudgetName"].(string)
+		account, _ := in["AccountId"].(string)
+		if account != TestAccountID {
+			return s.invalid(reply, "AccountId "+account+" is not this account")
+		}
+		if b == nil || b.Name != name {
+			awsErrorReply(reply, http.StatusBadRequest, "NotFoundException",
+				"Unable to get budget: "+name+" - the budget doesn't exist.")
+			return true
+		}
+		unit := b.Unit
+		if unit == "" {
+			unit = "USD"
+		}
+		out := map[string]any{
+			"BudgetName":  b.Name,
+			"BudgetType":  "COST",
+			"TimeUnit":    "MONTHLY",
+			"BudgetLimit": map[string]string{"Amount": money(b.LimitUSD), "Unit": unit},
+			"CostTypes":   map[string]any{"IncludeCredit": b.IncludeCredit, "IncludeRefund": false},
+		}
+		if !b.NoSpend {
+			out["CalculatedSpend"] = map[string]any{
+				"ActualSpend":     map[string]string{"Amount": money(b.ActualSpendUSD), "Unit": unit},
+				"ForecastedSpend": map[string]string{"Amount": money(b.ActualSpendUSD), "Unit": unit},
+			}
+		}
+		reply(200, map[string]any{"Budget": out})
 	case "GetCostAndUsage":
 		s.mu.Lock()
 		mtd := s.monthToDate
@@ -721,6 +903,10 @@ func (s *Server) invalid(reply func(int, any), msg string) bool {
 	awsErrorReply(reply, http.StatusBadRequest, "InvalidInputException", msg)
 	return true
 }
+
+// money renders a USD figure the way AWS does: a decimal STRING, not a
+// JSON number.
+func money(usd float64) string { return strconv.FormatFloat(usd, 'f', 10, 64) }
 
 // advance moves an in-flight instance one step toward its resting state,
 // the way Lightsail does between two reads. Callers hold s.mu.

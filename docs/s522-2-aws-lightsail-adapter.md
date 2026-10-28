@@ -15,7 +15,7 @@ the vault keys, after review; §Live run below is the exact sequence.
 | Where | What |
 |---|---|
 | `pkg/provider/aws/` | the `aws` built-in adapter: stdlib SigV4, Lightsail JSON API, budget preflight, governance tags, user-data wrapping, static IP, satellite firewall |
-| `pkg/provider/aws/fakelightsail/` | the signature-verifying fake (Lightsail + Cost Explorer) |
+| `pkg/provider/aws/fakelightsail/` | the signature-verifying fake (Lightsail + Cost Explorer + AWS Budgets + STS) |
 | `pkg/fleet/infra_builtin.go` | the ONE registry of compiled-in providers: names, per-provider flag defaults, credential resolution, how each is opened |
 | `pkg/fleet/infra_provision.go` | now provider-agnostic — no per-provider branching left |
 | `pkg/fleet/baseline/infra/aws.yaml` | the embedded `builtin: true` manifest entry |
@@ -33,23 +33,58 @@ Before any create, and again on `--dry-run` (which runs the same
 preflight through `plan`, allocating nothing):
 
 - the bundle's **monthly price** (Lightsail `GetBundles`) plus the
-  account's **month-to-date unblended cost BEFORE CREDITS** (Cost Explorer
-  `GetCostAndUsage` at `ce.us-east-1.amazonaws.com`, filtered
-  `Not`/`RECORD_TYPE=Credit`) must stay within the monthly cap
-  (**$50**, `--budget-cap`);
+  account's **month-to-date spend BEFORE CREDITS** must stay within the
+  monthly cap (**$50** by default, `--budget-cap`, and see the spend
+  ladder below — the cap can come from the budget itself);
 - the bundle price alone must stay within the per-instance ceiling
   (**$24**, `--budget-per-instance`);
 - **no GPU, ever** — a GPU plan is refused by shape, before any price
   arithmetic, so a cheap one is still refused.
 
-It **fails closed.** A Cost Explorer read that is denied or unreachable
-leaves spend unknown, and unknown spend refuses the create: a budget guard
-that passes when it cannot see the bill is not a guard. `Budget.
+### Where month-to-date spend comes from (rework 1, 2026-10-28)
+
+The first live dry-run against the real account refused everything: Cost
+Explorer answered **HTTP 400 `DataUnavailableException`** because the
+account is new and no cost data had been ingested yet. Cost Explorer only
+reports what it has already processed, so on a fresh account it cannot
+answer "what have I spent this month" at all — and a guard that fails
+closed turns that into a permanent refusal.
+
+The account's **AWS Budget** does not have that problem, so it is now the
+PRIMARY source (`pkg/provider/aws/budgets.go`):
+
+1. **Budgets `DescribeBudget`** (`https://budgets.amazonaws.com`, SigV4
+   `us-east-1` / `budgets`, `X-Amz-Target:
+   AWSBudgetServiceGateway.DescribeBudget`) for the budget named by
+   `--budget-name` (default **`dhnt-monthly-cap`**). Its
+   `CalculatedSpend.ActualSpend` is month-to-date — that budget is
+   `IncludeCredit=false`, i.e. before credits — and its `BudgetLimit` is
+   the **cap** when `--budget-cap` is not given, so the number lives where
+   the operator set it and the two cannot drift. The `AccountId` the call
+   needs comes from **STS `GetCallerIdentity`** (asked once per adapter;
+   it requires no IAM permission, so it cannot be the thing that denies a
+   preflight). IAM already allows `budgets:ViewBudget`.
+2. **Cost Explorer `GetCostAndUsage`** at `ce.us-east-1.amazonaws.com`,
+   filtered `Not`/`RECORD_TYPE=Credit`, as the fallback — when the budget
+   does not exist, cannot be read, or has no `CalculatedSpend` yet (a
+   budget AWS has not evaluated is an unanswered question, **not** zero
+   spend).
+
+It **fails closed**, but only on losing BOTH: one working source is
+enough, and a refusal names what went wrong with each. `Budget.
 AllowUnknownSpend` is the explicit operator override, and it is never the
 default.
 
 "Before credits" is the load-bearing part. Credit-covered usage still
 counts against the cap, so a credit balance cannot quietly fund a fleet.
+A budget whose `CostTypes` say otherwise is still used — on a fresh
+account it is the only figure there is — but the verdict says so in as
+many words (`credits_included`, and "may understate the bill" in the
+reason), and a non-USD budget is not used at all.
+
+The verdict records its provenance (`spend_source`, `budget_name`,
+`cap_source`), so a dry-run and an incident review can both tell which
+source answered.
 
 ## Tags, and why destroy checks them itself
 
@@ -132,8 +167,15 @@ enrollment script is ~25-35 KB, i.e. always wrapped in practice.
   adapter's region is an `invalid_request` naming the mismatch, because
   Lightsail's catalog is per-endpoint — silently querying the wrong
   endpoint would price the wrong bundle.
-- **Cost Explorer is global**: its endpoint and signing region are
-  `us-east-1` no matter where the instance lands.
+- **Cost Explorer, Budgets and STS are global**: their endpoints and
+  signing regions are `us-east-1` no matter where the instance lands.
+  Signing one of them for the instance's region would only surface as a
+  live `SignatureDoesNotMatch`, so the fake verifies the scope per
+  operation.
+- **STS is the one service here that is not JSON 1.1**: it speaks the
+  older AWS *query* protocol (form-encoded request, XML answer), which is
+  why `sts.go` has its own tiny client. The signer is shared, unchanged —
+  a canonical request does not care what the body means.
 
 ## Dry run (safe, creates nothing)
 
@@ -147,6 +189,11 @@ The provider may be named positionally (`provision aws`) or with
 DigitalOcean: `us-west-2` / `small_3_0` / `ubuntu_24_04`. It prints the request, the size verdict, the
 budget verdict and the exact provider request the create would send;
 `--json` carries the numbers the verdict was computed from.
+
+The budget verdict needs a readable spend source. On this account that is
+the `dhnt-monthly-cap` budget (`--budget-name` names another); if neither
+it nor Cost Explorer can be read, the dry-run FAILS rather than printing a
+pass it cannot justify.
 
 ## Live run (manager, after review)
 

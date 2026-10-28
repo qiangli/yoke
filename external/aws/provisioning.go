@@ -16,9 +16,15 @@
 // Lightsail, the account's month-to-date unblended cost BEFORE CREDITS
 // from Cost Explorer, both against the operator's caps.
 //
-// It FAILS CLOSED, the same way the adapter does: a Cost Explorer read
-// that is denied or unreachable leaves spend unknown, and unknown spend
-// refuses. Credential material never reaches a message here — every string
+// (S522.2 rework 1: "asks AWS" now means the account's own AWS BUDGET
+// first — DescribeBudget's CalculatedSpend.ActualSpend, and its
+// BudgetLimit as the cap when none is given — with Cost Explorer as the
+// fallback. The live account's Cost Explorer answers
+// DataUnavailableException because no cost data has been ingested yet;
+// pkg/provider/aws/budgets.go holds the ladder.)
+//
+// It FAILS CLOSED, the same way the adapter does: when NEITHER spend
+// source can be read, spend is unknown, and unknown spend refuses. Credential material never reaches a message here — every string
 // that could carry provider text goes through RedactText with the live
 // secret as a declared literal.
 package aws
@@ -49,12 +55,17 @@ type ProvisionIntent struct {
 	// Owner scopes the ownership tags; empty means "local".
 	Owner string
 	// MonthlyCapUSD and PerInstanceUSD override the operator's caps; zero
-	// means the adapter's defaults ($50 and $24).
+	// means the adapter's defaults (the account budget's own limit, else
+	// $50, and $24).
 	MonthlyCapUSD, PerInstanceUSD float64
-	// Endpoints override the Lightsail and Cost Explorer URLs. They exist
-	// for tests; no flag or environment variable sets them, so production
-	// cannot be redirected by accident.
-	LightsailURL, CostExplorerURL string
+	// BudgetName is the account budget read for month-to-date spend (and
+	// for the cap, when MonthlyCapUSD is zero); empty means the adapter's
+	// default, dhnt-monthly-cap.
+	BudgetName string
+	// Endpoints override the Lightsail, Cost Explorer, Budgets and STS
+	// URLs. They exist for tests; no flag or environment variable sets
+	// them, so production cannot be redirected by accident.
+	LightsailURL, CostExplorerURL, BudgetsURL, STSURL string
 }
 
 // ProvisioningAllowed answers whether one create may happen, by running
@@ -93,7 +104,10 @@ func ProvisioningAllowed(ctx context.Context, c Credentials, intent ProvisionInt
 		Owner:           owner,
 		BaseURL:         intent.LightsailURL,
 		CostExplorerURL: intent.CostExplorerURL,
+		BudgetsURL:      intent.BudgetsURL,
+		STSURL:          intent.STSURL,
 		Budget: awsprovider.Budget{
+			Name:           intent.BudgetName,
 			MonthlyCapUSD:  intent.MonthlyCapUSD,
 			PerInstanceUSD: intent.PerInstanceUSD,
 		},

@@ -193,12 +193,17 @@ declarative engine and neither spawns a program.
   - a stdlib **SigV4 signer** (`sigv4.go`), pinned by AWS's published
     SigV4 test-suite vectors. This module is stdlib-only, so there is no
     AWS SDK here and no `pkg/provider` package may add one.
-  - a **budget preflight** before every create (`budget.go`): the bundle's
-    monthly price plus the account's month-to-date unblended cost BEFORE
-    CREDITS (Cost Explorer `GetCostAndUsage`, `Not`/`RECORD_TYPE=Credit`)
-    must stay within the operator's monthly cap, and the bundle price
-    within the per-instance ceiling. It FAILS CLOSED: unknown spend
-    refuses. No GPU, ever.
+  - a **budget preflight** before every create (`budget.go` for the
+    policy, `budgets.go` for the spend ladder): the bundle's monthly price
+    plus the account's month-to-date spend BEFORE CREDITS must stay within
+    the operator's monthly cap, and the bundle price within the
+    per-instance ceiling. Spend comes from the account's own AWS BUDGET
+    first (`DescribeBudget`'s `CalculatedSpend.ActualSpend`, with
+    `BudgetLimit` as the cap when none is given) and Cost Explorer
+    (`GetCostAndUsage`, `Not`/`RECORD_TYPE=Credit`) second — because Cost
+    Explorer cannot answer at all on an account whose cost data has never
+    been ingested. It FAILS CLOSED: when NEITHER source can be read, spend
+    is unknown and the create is refused. No GPU, ever.
   - **governance tags** on top of the bashy-lease tags: `dhnt:managed=true`
     always, plus `dhnt:sprint` / `dhnt:story` / `dhnt:ttl`. The automation
     IAM policy permits deleting only `dhnt:managed=true` resources, so
