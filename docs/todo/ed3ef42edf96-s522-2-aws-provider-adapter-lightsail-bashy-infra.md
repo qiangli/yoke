@@ -3,14 +3,13 @@ id: ed3ef42edf96
 kind: feature
 title: S522.2 AWS provider adapter (Lightsail) + bashy infra provision --provider aws with budget preflight
 seq: 2816
-status: assigned
+status: todo
 priority: p0
 labels:
     - cloud
     - aws
     - provider
 created: 2026-10-28T08:13:25.261993Z
-weave: 647
 assignee: claude-opus5
 sprint: 522
 sprint_id: 3413791d-7a40-5514-9970-99b64d1d83cf
@@ -44,3 +43,6 @@ ADDED BY MANAGER (binding; this is how zoo-aws gets provisioned):
 7. Static IP: on create, AllocateStaticIp "<instance>-ip" + AttachStaticIp once the instance is running, so the satellite's sslip.io endpoint survives stop/start; report that IP in inspect; destroy releases it (both tagged dhnt:managed=true; static IPs cannot carry tags in Lightsail, so destroy releases only the IP named "<instance>-ip" attached to that instance).
 8. Firewall (PutInstancePublicPorts after create): tcp 80, 443, 6443, 10250; udp 8475-8476; tcp 22 restricted to cidrListAliases ["lightsail-connect"] (browser SSH only). Mirror of the DO `dhnt-satellite` firewall.
 9. infra_provision's size preflight / flag defaults are DO-shaped (r1, s-1vcpu-1gb, img): make them provider-aware so the aws defaults are us-west-2 / small_3_0 / ubuntu_24_04, and --dry-run prints the aws request + budget preflight result.
+
+REWORK 1 (manager, 2026-10-28; the adapter itself is merged in yoke main 65ccfb3d — build on it, do not redo it):
+Live dry-run against the real account: the budget preflight refuses because Cost Explorer returns HTTP 400 DataUnavailableException on this new account (no data ingested yet). Make the PRIMARY spend source the AWS Budget itself: Budgets DescribeBudget (https://budgets.amazonaws.com, SigV4 region us-east-1 service budgets, X-Amz-Target AWSBudgetServiceGateway.DescribeBudget, AccountId from STS GetCallerIdentity) for budget name 'dhnt-monthly-cap' (new flag --budget-name, default dhnt-monthly-cap): use CalculatedSpend.ActualSpend as month-to-date (that budget is IncludeCredit=false, i.e. before credits) and BudgetLimit as the cap when --budget-cap is not given. Fall back to Cost Explorer only when the budget does not exist (NotFoundException); refuse only when BOTH are unavailable. IAM already allows budgets:ViewBudget. Unit tests (fake): budget source used; CE DataUnavailable + budget present -> proceeds; both unavailable -> refuses; cap from BudgetLimit. Run only the focused packages (pkg/provider/..., pkg/fleet, external/aws) — NOT the CI ratchet (it outlives the idle timeout). Commit and exit.
