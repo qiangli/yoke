@@ -2,7 +2,6 @@ package ctty
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -179,30 +178,27 @@ end run`
 // Retry re-prompts; the context deadline bounds the whole exchange to the
 // request's timeout.
 func runOsascript(ctx context.Context, path string, req Request) ([]byte, error) {
-	hidden := "0"
+	kind := "text"
 	if req.Hidden {
-		hidden = "1"
+		kind = "secret"
 	}
-	secs := strconv.Itoa(int(req.timeout().Seconds()))
-	for {
-		cmd := exec.CommandContext(ctx, path, "-e", osascriptSrc,
-			req.text(), req.title(), hidden, secs)
-		out, err := cmd.Output()
-		if err != nil {
-			return nil, guiFailure("osascript", err)
-		}
-		v, err := parseTaggedResult("osascript", string(out))
-		if err != nil || !req.Hidden {
-			return v, err
-		}
-		retry, err := confirmReceipt(ctx, path, req, v)
-		if err != nil {
-			return nil, err
-		}
-		if !retry {
-			return v, nil
-		}
+	cmd := exec.CommandContext(ctx, path, "-l", "JavaScript", "-e", macFormSrc,
+		req.text(), req.title(), req.Prompt, kind, `["OK","Cancel"]`)
+	out, err := cmd.Output()
+	if ctx.Err() != nil {
+		return nil, ErrTimeout
 	}
+	if err != nil {
+		return nil, guiFailure("osascript", err)
+	}
+	answer, err := parseFormAnswer(out, []string{"OK", "Cancel"})
+	if err != nil {
+		return nil, err
+	}
+	if answer.Choice != "OK" {
+		return nil, ErrDeclined
+	}
+	return answered([]byte(answer.Value))
 }
 
 // confirmReceipt shows the non-secret receipt for a hidden value and reports
@@ -438,19 +434,27 @@ Write-Output ('OK:' + $t.Text)
 `
 
 func runPowerShell(ctx context.Context, path string, req Request) ([]byte, error) {
-	hidden := "0"
+	kind := "text"
 	if req.Hidden {
-		hidden = "1"
+		kind = "secret"
 	}
-	cmd := exec.CommandContext(ctx, path,
-		"-NoProfile", "-NonInteractive", "-STA", "-Command", powerShellSrc,
-		"-Text", req.text(), "-Title", req.title(), "-Hidden", hidden)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	if err := cmd.Run(); err != nil {
+	cmd := exec.CommandContext(ctx, path, "-NoProfile", "-NonInteractive", "-STA", "-Command", windowsFormSrc,
+		"-Text", req.text(), "-Title", req.title(), "-Kind", kind, "-Choices", `["OK","Cancel"]`)
+	out, err := cmd.Output()
+	if ctx.Err() != nil {
+		return nil, ErrTimeout
+	}
+	if err != nil {
 		return nil, guiFailure("powershell", err)
 	}
-	return parseTaggedResult("powershell", out.String())
+	answer, err := parseFormAnswer(out, []string{"OK", "Cancel"})
+	if err != nil {
+		return nil, err
+	}
+	if answer.Choice != "OK" {
+		return nil, ErrDeclined
+	}
+	return answered([]byte(answer.Value))
 }
 
 // guiFailure maps a helper malfunction to ErrNoGUI so the caller falls through to

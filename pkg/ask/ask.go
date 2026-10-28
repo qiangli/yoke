@@ -55,6 +55,7 @@ type options struct {
 	prompt  string
 	name    string
 	secret  bool
+	kind    string
 	timeout time.Duration
 	ttl     time.Duration
 	channel string
@@ -94,8 +95,7 @@ Channels are tried in order and the first that reaches a human wins:
      which works even when the harness has detached us from the terminal —
      but only when the session is one you can actually SEE, so a remote SSH
      session never pops a dialog on the far machine's screen;
-  3. an out-of-band rendezvous: bashy prints a command, you run it in your own
-     terminal and type the value there.
+  3. a connected human interface, when available.
 
 For durable secrets use 'bashy secret', which is the managed vault. This
 command is for one-off values and stores nothing long-lived.`,
@@ -112,6 +112,7 @@ command is for one-off values and stores nothing long-lived.`,
 	f.StringVar(&o.prompt, "prompt", "", "message the human sees (sanitized; shown inside a frame that names the requester)")
 	f.StringVar(&o.name, "name", "", "label for the value (letters, digits, _ . -)")
 	f.BoolVar(&o.secret, "secret", true, "hide the value as it is typed (--secret=false to echo it)")
+	f.StringVar(&o.kind, "kind", "", "field kind: text (visible) or secret (masked with Show toggle)")
 	f.DurationVar(&o.timeout, "timeout", 2*time.Minute, "how long to wait for the human")
 	f.DurationVar(&o.ttl, "ttl", 15*time.Minute, "how long the delivered value survives on disk")
 	f.StringVar(&o.channel, "channel", "auto", "force a channel: auto|tty|gui|rendezvous")
@@ -124,6 +125,16 @@ command is for one-off values and stores nothing long-lived.`,
 }
 
 func runAsk(c *cobra.Command, o *options) error {
+	if o.kind != "" {
+		switch o.kind {
+		case "text":
+			o.secret = false
+		case "secret":
+			o.secret = true
+		default:
+			return fmt.Errorf("ask: invalid --kind %q (want text or secret)", o.kind)
+		}
+	}
 	if err := validateName(o.name); err != nil {
 		return err
 	}
@@ -244,7 +255,7 @@ func obtain(r Request, probe ctty.Probe, status io.Writer) ([]byte, error) {
 				// Nobody answered — possibly nobody was ever shown anything.
 				// Loud note first, then the rendezvous, which prints the exact
 				// answer command. Never a silent cancel.
-				fmt.Fprintf(status, "bashy ask: the %s dialog was dismissed without an operator answer (%v); answer in YOUR OWN terminal with the command below\n", ch, err)
+				fmt.Fprintf(status, "bashy ask: the %s dialog was dismissed without an operator answer (%v)\n", ch, err)
 				v, err := waitForAnswer(r, status)
 				if err != nil {
 					return nil, err

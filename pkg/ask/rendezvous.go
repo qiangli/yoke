@@ -239,8 +239,7 @@ func waitForAnswer(r Request, status io.Writer) ([]byte, error) {
 		return nil, err
 	}
 	fmt.Fprintf(status, "%s %s\n", SchemaVersion, sentinel)
-	fmt.Fprintf(status, "bashy ask: waiting for a human. In YOUR OWN terminal, run:  bashy ask claim %s\n",
-		shortID(r.ID))
+	fmt.Fprintln(status, "bashy ask: waiting for the operator in a connected human interface")
 
 	ctx, cancel := context.WithDeadline(context.Background(), r.Expires)
 	defer cancel()
