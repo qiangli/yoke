@@ -233,11 +233,18 @@ func TestM2ProtectedNeedsApproval(t *testing.T) {
 }
 
 // The browser sensitive-input guard is a protected set (S512.5): a skill-tier
-// change to the shared validators or to the gate — say, dropping the SSN
-// check — is refused at merge until a `bashy approve`d src approval covers
+// change to the shared validators, the gate, or the extension's guard files
+// (tab pin, field check, in-page verify) — say, dropping the SSN check — is
+// refused at merge until a `bashy approve`d src approval covers
 // exactly that path.
 func TestM2BrowserGuardChangeNeedsApproval(t *testing.T) {
-	for _, rel := range []string{"pkg/sensitive/validators.go", "pkg/browser/guard/gate.go"} {
+	for _, rel := range []string{
+		"pkg/sensitive/validators.go",
+		"pkg/browser/guard/gate.go",
+		"pkg/browser/live/extension/background.js",
+		"pkg/browser/live/extension/page.js",
+		"pkg/browser/live/extension/guard.js",
+	} {
 		t.Run(rel, func(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("BASHY_AGENT", "skill-agent")

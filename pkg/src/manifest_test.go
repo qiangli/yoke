@@ -74,6 +74,8 @@ func TestManifestTranscribesAppendixA(t *testing.T) {
 		prot("yoke", "pkg/browser/guardask"),
 		prot("yoke", "pkg/browser/live/guard.go"),
 		prot("yoke", "pkg/browser/live/extension/guard.js"),
+		prot("yoke", "pkg/browser/live/extension/background.js"),
+		prot("yoke", "pkg/browser/live/extension/page.js"),
 		prot("yoke", "pkg/browser/internal/cdpactions/guard.go"),
 	}
 	if got := src.ProtectedManifest(); !slices.Equal(got, want) {
@@ -108,7 +110,9 @@ func TestPathClassTiers(t *testing.T) {
 		{"yoke", "pkg/browser/guard/gate.go", src.ClassProtected, "the browser guard gate"},
 		{"yoke", "pkg/browser/guardask/guardask.go", src.ClassProtected, "the guard's human path"},
 		{"yoke", "pkg/browser/live/extension/guard.js", src.ClassProtected, "the page-side field check"},
-		{"yoke", "pkg/browser/live/extension/page.js", src.ClassSkill, "page logic stays editable"},
+		{"yoke", "pkg/browser/live/extension/page.js", src.ClassProtected, "the in-page fill verify"},
+		{"yoke", "pkg/browser/live/extension/background.js", src.ClassProtected, "the guard tab pin"},
+		{"yoke", "pkg/browser/live/extension/frames.js", src.ClassSkill, "unlisted extension file stays editable"},
 		{"bashy", "internal/agentos/sprint.go", src.ClassSkill, "skill tier stays editable"},
 		{"yoke", "pkg/weave/weave.go", src.ClassSkill, "skill tier stays editable"},
 		{"yoke", "pkg/weave/engine.go", src.ClassSkill, "unlisted file stays editable"},
