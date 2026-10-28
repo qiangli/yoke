@@ -80,15 +80,20 @@ func TestClickReportsAnUnresolvedTarget(t *testing.T) {
 	if strings.Contains(src, "return result || {}") {
 		t.Fatal("a bare `result || {}` fallback is back — that is the success-that-did-not-happen bug")
 	}
+	page := extensionFile(t, "page.js")
 	for _, want := range []string{"__miss", "is not a CSS selector", "out of range"} {
-		if !strings.Contains(src, want) {
+		if !strings.Contains(page, want) {
 			t.Fatalf("click lost its unresolved-target reason: %q missing", want)
 		}
 	}
 	// click-by-index and extract must enumerate identically, or [N]
-	// from a listing addresses a different element than it names.
-	if strings.Count(src, `"a, button, input, select, textarea, [role='button'], [role='link']"`) < 2 {
+	// from a listing addresses a different element than it names: both
+	// go through the one candidates() in page.js.
+	if !strings.Contains(page, "const all = candidates(params)") || !strings.Contains(page, "const flat = candidates(params)") {
 		t.Fatal("the click and extract enumerations diverged")
+	}
+	if !strings.Contains(src, `files: ["page.js"]`) {
+		t.Fatal("background.js no longer injects the page.js core")
 	}
 }
 
@@ -121,7 +126,7 @@ func TestTabActionsAndMethodsAreDiscoverable(t *testing.T) {
 // other way to read window.innerWidth, and "a responsive breakpoint
 // hid it" vs "it is absent" is otherwise untestable.
 func TestExtractReportsViewport(t *testing.T) {
-	src := extensionFile(t, "background.js")
+	src := extensionFile(t, "page.js")
 	for _, want := range []string{"devicePixelRatio", "viewport: viewport", "include_hidden", "visible: vis"} {
 		if !strings.Contains(src, want) {
 			t.Fatalf("extract lost %q", want)

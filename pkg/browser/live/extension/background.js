@@ -721,102 +721,24 @@ function screenshotResult(data, tab, method, fullPage) {
 }
 
 async function extractInTab(tabId, params) {
-  const result = await injectOne({
+  return callPage(tabId, "extract", params || {}, "extract");
+}
+
+// callPage injects page.js (the page-side core; idempotent per frame)
+// and calls one of its functions in the same ISOLATED world. All DOM
+// logic lives in page.js so the Go fixture tests exercise the same
+// bytes the extension runs.
+async function callPage(tabId, fn, params, what) {
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["page.js"] });
+  } catch (e) {
+    throw new Error(`${what}: injection failed: ${String((e && e.message) || e)}`);
+  }
+  return injectOne({
     target: { tabId },
-    args: [params || {}],
-    func: (params) => {
-      const SCOPE_SEL = (params.scope || "").trim();
-      const MATCH = (params.match_text || params.goal || "").trim();
-      const LIMIT = params.limit && params.limit > 0 ? params.limit : 50;
-      const OFFSET = params.offset && params.offset > 0 ? params.offset : 0;
-      const root = SCOPE_SEL ? document.querySelector(SCOPE_SEL) : document;
-      if (!root) {
-        return { title: document.title, url: location.href, content: "", elements: "", error: "extract: scope " + SCOPE_SEL + " not found" };
-      }
-      const navFilter = !SCOPE_SEL;
-      const INCLUDE_HIDDEN = !!params.include_hidden;
-      function boxOf(el) {
-        const r = el.getBoundingClientRect();
-        return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
-      }
-      function shown(el) {
-        const cs = getComputedStyle(el);
-        if (cs.visibility === "hidden" || cs.display === "none" || cs.opacity === "0") return false;
-        const r = el.getBoundingClientRect();
-        return r.width > 0 && r.height > 0;
-      }
-      const all = root.querySelectorAll(
-        "a, button, input, select, textarea, [role='button'], [role='link']"
-      );
-      const matches = [];
-      const want = MATCH.toLowerCase();
-      for (let i = 0; i < all.length; i++) {
-        const el = all[i];
-        if (navFilter && el.closest && el.closest("nav, aside, [role='navigation'], [role='complementary']")) continue;
-        const visible = ((el.innerText) || el.value || el.getAttribute("aria-label") || "").trim();
-        if (want) {
-          const ph = el.getAttribute("placeholder") || "";
-          const ar = el.getAttribute("aria-label") || "";
-          if (visible.toLowerCase().indexOf(want) < 0 &&
-              ph.toLowerCase().indexOf(want) < 0 &&
-              ar.toLowerCase().indexOf(want) < 0) continue;
-        }
-        if (!INCLUDE_HIDDEN && !shown(el)) continue;
-        matches.push(el);
-      }
-      const total = matches.length;
-      const slice = matches.slice(OFFSET, OFFSET + LIMIT);
-      const lines = [];
-      const records = [];
-      for (let j = 0; j < slice.length; j++) {
-        const el = slice[j];
-        const tag = el.tagName.toLowerCase();
-        const text = ((el.innerText) || el.value || el.getAttribute("aria-label") || "").trim().slice(0, 80);
-        const attrs = {};
-        const attrPairs = [];
-        for (const a of ["type", "placeholder", "href", "name", "value", "role", "aria-label"]) {
-          const v = el.getAttribute(a);
-          if (v) {
-            attrs[a] = String(v).slice(0, 60);
-            attrPairs.push(`${a}="${String(v).slice(0, 60)}"`);
-          }
-        }
-        const vis = shown(el);
-        // The index is the CLICK ADDRESS: `click --index N` resolves
-        // through the identical enumeration, so what is listed here is
-        // what gets clicked.
-        lines.push(`[${OFFSET + j + 1}]${vis ? "" : " (hidden)"} <${tag} ${attrPairs.join(" ")}>${text}</${tag}>`);
-        records.push({
-          index: OFFSET + j + 1,
-          tag: tag,
-          text: text,
-          attrs: attrs,
-          visible: vis,
-          box: boxOf(el),
-        });
-      }
-      const body = (root === document ? (document.body && document.body.innerText) : root.innerText) || "";
-      const viewport = {
-        width: Math.round(document.documentElement.clientWidth || window.innerWidth || 0),
-        height: Math.round(document.documentElement.clientHeight || window.innerHeight || 0),
-        dpr: window.devicePixelRatio || 1,
-      };
-      return {
-        title: document.title,
-        url: location.href,
-        content: body.length > 16000 ? body.slice(0, 16000) + "\n... (truncated)" : body,
-        elements: lines.join("\n"),
-        total: total,
-        truncated: total > (OFFSET + LIMIT),
-        viewport: viewport,
-        // Structured mirror of `elements`, so a --json caller never
-        // has to re-parse a pretty-printer's output to recover data
-        // the tool already had.
-        data: JSON.stringify({ viewport: viewport, elements: records }),
-      };
-    },
-  }, "extract");
-  return result;
+    args: [fn, params],
+    func: (fn, params) => globalThis.__bashyPage[fn](params),
+  }, what);
 }
 
 // injectOne runs one scripting.executeScript and returns the single
@@ -852,123 +774,46 @@ async function injectOne(opts, what) {
 }
 
 async function runInTab(tabId, kind, params) {
-  const result = await injectOne({
-    target: { tabId },
-    args: [kind, params],
-    func: (kind, params) => {
-      const matchText = params.match_text || "";
-      function query(root, sel) {
-        try {
-          return root.querySelector(sel);
-        } catch (e) {
-          return { __badSelector: sel, __reason: String((e && e.message) || e) };
-        }
-      }
-      function elemsInScope() {
-        const scoped = params.scope ? query(document, params.scope) : document;
-        const scope = scoped && !scoped.__badSelector ? scoped : document;
-        return scope.querySelectorAll(
-          "a, button, input, select, textarea, [role='button'], [role='link']"
-        );
-      }
-      function shown(el) {
-        const cs = getComputedStyle(el);
-        if (cs.visibility === "hidden" || cs.display === "none" || cs.opacity === "0") return false;
-        const r = el.getBoundingClientRect();
-        return r.width > 0 && r.height > 0;
-      }
-      function flatCandidates() {
-        // Mirror the extract enumeration EXACTLY — same landmark skip,
-        // same visibility filter. `extract` numbers this list, so [N]
-        // there is the element clicked by element_id N here. If the
-        // two predicates ever diverge, click-by-index silently hits a
-        // neighbour, which is the failure this whole path exists to
-        // remove.
-        const navFilter = !params.scope;
-        const includeHidden = !!params.include_hidden;
-        const flat = [];
-        for (const el of elemsInScope()) {
-          if (navFilter && el.closest && el.closest("nav, aside, [role='navigation'], [role='complementary']")) continue;
-          if (!includeHidden && !shown(el)) continue;
-          flat.push(el);
-        }
-        return flat;
-      }
-      function resolveTarget() {
-        if (params.element_id && params.element_id > 0) {
-          const flat = flatCandidates();
-          const el = flat[params.element_id - 1];
-          if (!el) {
-            return { __miss: `element index ${params.element_id} out of range (extract listed ${flat.length})` };
-          }
-          return el;
-        }
-        if (params.selector) {
-          const scoped = params.scope ? query(document, params.scope) : document;
-          if (scoped && scoped.__badSelector) {
-            return { __miss: `scope ${JSON.stringify(params.scope)} is not a valid CSS selector: ${scoped.__reason}` };
-          }
-          const el = query(scoped || document, params.selector);
-          if (el && el.__badSelector) {
-            const numeric = /^[0-9]+$/.test(params.selector);
-            return {
-              __miss: numeric
-                ? `${JSON.stringify(params.selector)} is not a CSS selector; pass an element index as element_id (bashy browser click --index ${params.selector})`
-                : `${JSON.stringify(params.selector)} is not a valid CSS selector: ${el.__reason}`,
-            };
-          }
-          if (!el) return { __miss: `no element matches selector ${JSON.stringify(params.selector)}` };
-          return el;
-        }
-        if (matchText) {
-          const want = matchText.toLowerCase();
-          for (const el of elemsInScope()) {
-            const v = ((el.innerText) || el.value || el.getAttribute("aria-label") || "").trim().toLowerCase();
-            if (v.indexOf(want) >= 0) return el;
-          }
-          return { __miss: `no element whose text contains ${JSON.stringify(matchText)}` };
-        }
-        return { __miss: "no selector, element index, or match text given" };
-      }
-      function describe(el) {
-        const tag = el.tagName ? el.tagName.toLowerCase() : "?";
-        const label = ((el.innerText) || el.value || el.getAttribute("aria-label") || "").trim().slice(0, 60);
-        return label ? `<${tag}> ${label}` : `<${tag}>`;
-      }
-      switch (kind) {
-        case "click": {
-          const el = resolveTarget();
-          if (el && el.__miss) return { error: `click: ${el.__miss}` };
-          el.click();
-          return { content: "clicked", data: JSON.stringify({ matched: describe(el) }) };
-        }
-        case "type": {
-          const el = resolveTarget();
-          if (el && el.__miss) return { error: `type: ${el.__miss}` };
-          el.focus();
-          if ("value" in el) {
-            el.value = params.text || "";
-          } else {
-            el.textContent = params.text || "";
-          }
-          el.dispatchEvent(new Event("input", { bubbles: true }));
-          el.dispatchEvent(new Event("change", { bubbles: true }));
-          return { content: "typed", data: JSON.stringify({ matched: describe(el) }) };
-        }
-        case "scroll": {
-          let amount = params.amount || 500;
-          if (params.direction === "up") amount = -amount;
-          window.scrollBy(0, amount);
-          return { content: `scrolled to ${window.scrollY}`, data: String(window.scrollY) };
-        }
-      }
-      return { error: `runInTab: unknown kind ${kind}` };
-    },
-  }, kind);
+  let result = await callPage(tabId, kind, params, kind);
+  if (kind === "type" && result && result.retry_trusted) {
+    result = await typeTrusted(tabId, params, result);
+  }
   if (result && result.error) {
     throw new Error(result.error);
   }
   return result;
+}
+
+// typeTrusted is the fallback for fields that reject synthetic input
+// (masks, isTrusted checks, frameworks that reset on render): focus +
+// select the field, insert the text through chrome.debugger
+// Input.insertText (a real IME-style insert), then verify the value.
+// Reports the page's own mismatch if the trusted path is unavailable.
+async function typeTrusted(tabId, params, synthetic) {
+  const focus = await callPage(tabId, "focusTarget", params, "type");
+  if (focus && focus.error) return focus;
+  const text = params.text || "";
+  try {
+    await debuggerAttach.acquire(tabId, null);
+    try {
+      if (text === "") {
+        await dispatchTrustedKey(tabId, "Delete", []);
+      } else {
+        await chrome.debugger.sendCommand({ tabId }, "Input.insertText", { text });
+      }
+    } finally {
+      await debuggerAttach.release(tabId);
+    }
+  } catch (e) {
+    return { error: `${synthetic.error} (trusted retry unavailable: ${String((e && e.message) || e)})` };
+  }
+  await new Promise((res) => setTimeout(res, 80));
+  const read = await callPage(tabId, "readValue", {}, "type");
+  if (read.error) return read;
+  if (read.value !== text) {
+    return { error: `type: value did not stick on ${read.matched} (synthetic and trusted input): wanted ${JSON.stringify(text)}, field shows ${JSON.stringify(read.value)}` };
+  }
+  return { content: "typed", data: JSON.stringify({ matched: read.matched, value: read.value, how: "trusted" }) };
 }
 
 // dispatchEventInTab fires a named DOM event from the extension's
