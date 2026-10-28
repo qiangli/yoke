@@ -232,6 +232,51 @@ func TestM2ProtectedNeedsApproval(t *testing.T) {
 	}
 }
 
+// The browser sensitive-input guard is a protected set (S512.5): a skill-tier
+// change to the shared validators or to the gate — say, dropping the SSN
+// check — is refused at merge until a `bashy approve`d src approval covers
+// exactly that path.
+func TestM2BrowserGuardChangeNeedsApproval(t *testing.T) {
+	for _, rel := range []string{"pkg/sensitive/validators.go", "pkg/browser/guard/gate.go"} {
+		t.Run(rel, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("BASHY_AGENT", "skill-agent")
+			_, newSHA := seedFixture(t, home)
+			fetchAt(t, home, newSHA)
+			dir := destOf(home)
+			if err := src.CreateBranch(home, "yoke", "weaken-guard"); err != nil {
+				t.Fatal(err)
+			}
+			writeWork(t, dir, rel, "package x\n// the SSN check is gone\n")
+			commitWork(t, dir, "weaken the guard")
+			pr, err := src.OpenPR(home, "yoke", "weaken-guard", "Weaken guard", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := src.MergePR(home, pr.ID); err == nil || !strings.Contains(strings.ToLower(err.Error()), "approv") {
+				t.Fatalf("MergePR err = %v, want an approval refusal", err)
+			}
+			// An approval for some OTHER path does not cover it.
+			if _, err := src.WriteApproval(home, src.ApprovalRecord{
+				Repo: "yoke", Paths: []string{"pkg/weave/weave_story_commit.go"}, Approver: "op", Reason: "unrelated",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := src.MergePR(home, pr.ID); err == nil {
+				t.Fatal("an unrelated approval let the guard change merge")
+			}
+			if _, err := src.WriteApproval(home, src.ApprovalRecord{
+				Repo: "yoke", Paths: []string{rel}, Approver: "op", Reason: "reviewed",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := src.MergePR(home, pr.ID); err != nil {
+				t.Fatalf("MergePR with approval: %v", err)
+			}
+		})
+	}
+}
+
 func TestM2CoreAlwaysRefused(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("BASHY_AGENT", "test-agent")
