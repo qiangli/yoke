@@ -107,6 +107,7 @@ func newWeaveStartCmd() *cobra.Command {
 	var blind bool
 	var sealed bool
 	var sealedAllow []string
+	var baseOverride string
 	cmd := &cobra.Command{
 		Use:   "start [-- <agent>|<tool> [args...]]",
 		Short: "Allocate a workspace and launch an agent",
@@ -165,7 +166,12 @@ A dirty terminal tree is committed to its isolated branch for recovery before
 that state is recorded; this preservation does not assert that the work passed.
 The exit_code and finished_at are persisted.
 "weave pull" picks up submitted branches; "weave wait --issue N"
-blocks until N reaches a terminal state.`,
+blocks until N reaches a terminal state.
+
+With --base <sha>, the isolated workspace starts at that commit instead
+of the source HEAD, for previewing an older or newer tree. The commit
+must exist in the source repo; nothing else moves — the queue, the
+branches, and any active revision stay exactly where they were.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if sealed && arena == "" && !resume {
 				return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "weave start",
@@ -184,6 +190,7 @@ blocks until N reaches a terminal state.`,
 				idleTimeout: idleTimeout,
 				maxRuntime:  maxRuntime,
 				memLimit:    memLimit,
+				base:        baseOverride,
 			}, &flags)
 		},
 	}
@@ -203,6 +210,7 @@ blocks until N reaches a terminal state.`,
 	cmd.Flags().DurationVar(&idleTimeout, "idle-timeout", 0, "Kill the subagent tree if no PTY output for this long (e.g. 5m); default off — caught the claude-TUI stuck case in the dogfood")
 	cmd.Flags().DurationVar(&maxRuntime, "max-runtime", 0, "Hard wall-clock ceiling; pointed runs derive 1=20m,2=32m,3=48m,5=80m,8=2h (4x the ladder estimate) and reject a larger explicit value; unpointed default off")
 	cmd.Flags().StringVar(&memLimit, "mem-limit", "16g", "Kill the subagent tree when its total RSS exceeds this (e.g. 16g, 512m); 0 disables — the OOM backstop")
+	cmd.Flags().StringVar(&baseOverride, "base", "", "Start the isolated workspace at this commit instead of the source HEAD (preview; never moves the active revision)")
 	return cmd
 }
 
