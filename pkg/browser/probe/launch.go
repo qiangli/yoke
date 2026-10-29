@@ -8,7 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"time"
+	"strings"
+	"sync"
 
 	"github.com/qiangli/yoke/pkg/binmgr"
 )
@@ -16,51 +17,135 @@ import (
 const DefaultURL = "http://localhost:9222"
 
 func LaunchChrome(chromePath string, port int, userDataDir string) (pid int, resolved string, err error) {
+	process, err := LaunchBrowser(chromePath, port, userDataDir)
+	if err != nil {
+		return 0, "", err
+	}
+	return process.PID, process.Path, nil
+}
+
+// BrowserProcess retains the diagnostics from a detached browser until the
+// session either becomes ready or reports why the child exited.
+type BrowserProcess struct {
+	PID    int
+	Path   string
+	done   <-chan error
+	stderr *lockedBuffer
+}
+
+func (p *BrowserProcess) exited() (bool, error) {
+	if p == nil || p.done == nil {
+		return false, nil
+	}
+	select {
+	case err := <-p.done:
+		return true, err
+	default:
+		return false, nil
+	}
+}
+
+func (p *BrowserProcess) stderrText() string {
+	if p == nil || p.stderr == nil {
+		return ""
+	}
+	return strings.TrimSpace(p.stderr.String())
+}
+
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  []byte
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	const limit = 64 << 10
+	n := len(p)
+	b.b = append(b.b, p...)
+	if len(b.b) > limit {
+		b.b = append([]byte(nil), b.b[len(b.b)-limit:]...)
+	}
+	return n, nil
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return string(b.b)
+}
+
+// LaunchBrowser starts the resolved browser and retains its stderr for the
+// session readiness check. Linux root gets Chromium's own --no-sandbox flag;
+// any binmgr-provisioned shared libraries are visible to this child only.
+func LaunchBrowser(chromePath string, port int, userDataDir string) (*BrowserProcess, error) {
 	if port <= 0 {
 		port = 9222
 	}
 	if portInUse(port) {
-		return 0, "", fmt.Errorf("port %d is already in use", port)
+		return nil, fmt.Errorf("port %d is already in use", port)
 	}
-	resolved = chromePath
+	resolved := chromePath
 	if resolved == "" {
+		var err error
 		resolved, err = DefaultResolver().Resolve(context.Background(), "")
 		if err != nil {
-			return 0, "", err
+			return nil, err
 		}
 	}
 	if resolved == "" {
-		return 0, "", fmt.Errorf("Chromium-family browser not found")
+		return nil, fmt.Errorf("Chromium-family browser not found")
 	}
 	if _, err := os.Stat(resolved); err != nil {
-		return 0, "", fmt.Errorf("Chrome at %q: %w", resolved, err)
+		return nil, fmt.Errorf("Chrome at %q: %w", resolved, err)
 	}
 	if userDataDir == "" {
 		userDataDir = DefaultUserDataDir(port)
 	}
 	if err := os.MkdirAll(userDataDir, 0o755); err != nil {
-		return 0, "", fmt.Errorf("user-data-dir: %w", err)
+		return nil, fmt.Errorf("user-data-dir: %w", err)
 	}
-	cmd := exec.Command(resolved,
+	libraryPath, err := binmgr.PrepareChromeRuntime(context.Background(), resolved)
+	if err != nil {
+		return nil, fmt.Errorf("prepare Chrome runtime: %w", err)
+	}
+	cmd := chromeCommand(resolved, port, userDataDir, runtime.GOOS, os.Geteuid(), libraryPath)
+	stderr := &lockedBuffer{}
+	cmd.Stderr = stderr
+	cmd.SysProcAttr = browserDetachedSysProcAttr()
+	if err := startBrowserDetached(cmd); err != nil {
+		return nil, fmt.Errorf("launch chrome: %w", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	return &BrowserProcess{PID: cmd.Process.Pid, Path: resolved, done: done, stderr: stderr}, nil
+}
+
+func chromeCommand(resolved string, port int, userDataDir, goos string, euid int, libraryPath string) *exec.Cmd {
+	args := []string{
 		fmt.Sprintf("--remote-debugging-port=%d", port),
 		fmt.Sprintf("--user-data-dir=%s", userDataDir),
 		"--headless=new",
 		"--no-first-run",
 		"--no-default-browser-check",
-	)
-	cmd.SysProcAttr = browserDetachedSysProcAttr()
-	if err := startBrowserDetached(cmd); err != nil {
-		return 0, "", fmt.Errorf("launch chrome: %w", err)
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if portInUse(port) {
-			break
+	if goos == "linux" && euid == 0 {
+		args = append(args, "--no-sandbox")
+	}
+	cmd := exec.Command(resolved, args...)
+	if libraryPath != "" {
+		value := libraryPath
+		if inherited := os.Getenv("LD_LIBRARY_PATH"); inherited != "" {
+			value += string(os.PathListSeparator) + inherited
 		}
-		time.Sleep(100 * time.Millisecond)
+		for _, entry := range os.Environ() {
+			if !strings.HasPrefix(entry, "LD_LIBRARY_PATH=") {
+				cmd.Env = append(cmd.Env, entry)
+			}
+		}
+		cmd.Env = append(cmd.Env, "LD_LIBRARY_PATH="+value)
 	}
-	go func() { _ = cmd.Wait() }()
-	return cmd.Process.Pid, resolved, nil
+	return cmd
 }
 
 // Resolver selects an installed browser first and provisions the pinned

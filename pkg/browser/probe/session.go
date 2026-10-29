@@ -33,7 +33,7 @@ type LaunchResult struct {
 type SessionManager struct {
 	Available func(context.Context, string) bool
 	Resolve   func(context.Context, string) (string, error)
-	Launch    func(string, int, string) (int, string, error)
+	Launch    func(string, int, string) (*BrowserProcess, error)
 }
 
 func DefaultSessionManager() SessionManager {
@@ -41,7 +41,7 @@ func DefaultSessionManager() SessionManager {
 	return SessionManager{
 		Available: func(ctx context.Context, endpoint string) bool { return New(endpoint).Available(ctx) },
 		Resolve:   r.Resolve,
-		Launch:    LaunchChrome,
+		Launch:    LaunchBrowser,
 	}
 }
 
@@ -68,24 +68,38 @@ func (m SessionManager) EnsureRunning(ctx context.Context, cfg SessionConfig) (L
 	if userDataDir == "" {
 		userDataDir = DefaultUserDataDir(port)
 	}
-	pid, resolved, err := m.Launch(path, port, userDataDir)
+	process, err := m.Launch(path, port, userDataDir)
 	if err != nil {
 		return LaunchResult{}, fmt.Errorf("probe: auto-launch: %w", err)
 	}
-	result := LaunchResult{Started: true, PID: pid, BrowserPath: resolved, Port: port, UserDataDir: userDataDir}
+	result := LaunchResult{Started: true, PID: process.PID, BrowserPath: process.Path, Port: port, UserDataDir: userDataDir}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if m.Available(ctx, endpoint) {
 			return result, nil
 		}
+		if exited, exitErr := process.exited(); exited {
+			return result, browserLaunchFailure(endpoint, "exited before becoming ready", exitErr, process.stderrText())
+		}
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
 		if time.Now().After(deadline) {
-			return result, fmt.Errorf("probe: browser launched but %s did not become ready", endpoint)
+			return result, browserLaunchFailure(endpoint, "did not become ready", nil, process.stderrText())
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+func browserLaunchFailure(endpoint, reason string, exitErr error, stderr string) error {
+	detail := ""
+	if exitErr != nil {
+		detail = ": " + exitErr.Error()
+	}
+	if stderr != "" {
+		detail += ": " + stderr
+	}
+	return fmt.Errorf("probe: browser launched but %s %s%s", endpoint, reason, detail)
 }
 
 func localProbePort(endpoint string) (int, error) {

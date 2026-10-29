@@ -286,8 +286,11 @@ bashy browser login --token-selector '#api-token' --dry-run   # preview what it 
 - `--json` returns **data, not rendered display strings**: `tabs list` gives an
   array of `{index,id,title,url,active,driven}` and `extract` gives
   `{viewport, elements[]}` with per-element `visible` and `box`.
-- `solo` needs a Chrome/Chromium on the system (`--chrome-path` to point at one;
-  `--user-data-dir` for a persistent profile).
+- `solo` and `probe` prefer an installed Chrome, Chromium, or Edge. When none
+  is installed, bashy provisions its SHA-256-pinned headless Chromium build in
+  the binary cache; on minimal Linux it also provisions the pinned NSS/NSPR and
+  alsa-lib runtime files required by that child. `--chrome-path` selects an
+  explicit browser and `--user-data-dir` selects a persistent profile.
 - Headless Chrome has its own network stack — if `navigate <live-url>` times out
   with `context deadline exceeded` while `bashy fetch <url>` succeeds, the
   browser's network path is being blocked (e.g. a restricted sandbox), not bashy.

@@ -2,6 +2,8 @@ package probe
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 )
 
@@ -12,9 +14,9 @@ func TestEnsureRunningKeepsReachableProbe(t *testing.T) {
 			t.Fatal("reachable probe must not resolve a browser")
 			return "", nil
 		},
-		Launch: func(string, int, string) (int, string, error) {
+		Launch: func(string, int, string) (*BrowserProcess, error) {
 			t.Fatal("reachable probe must not launch a browser")
-			return 0, "", nil
+			return nil, nil
 		},
 	}
 	got, err := m.EnsureRunning(context.Background(), SessionConfig{URL: "http://127.0.0.1:9222"})
@@ -39,12 +41,12 @@ func TestEnsureRunningAutoLaunchesResolvedBrowser(t *testing.T) {
 			}
 			return "/edge", nil
 		},
-		Launch: func(path string, port int, profile string) (int, string, error) {
+		Launch: func(path string, port int, profile string) (*BrowserProcess, error) {
 			launched = true
 			if path != "/edge" || port != 9333 || profile != "/profile" {
 				t.Fatalf("launch(%q, %d, %q)", path, port, profile)
 			}
-			return 42, path, nil
+			return &BrowserProcess{PID: 42, Path: path}, nil
 		},
 	}
 	got, err := m.EnsureRunning(context.Background(), SessionConfig{
@@ -65,12 +67,30 @@ func TestEnsureRunningDoesNotLaunchForRemoteProbe(t *testing.T) {
 			t.Fatal("remote endpoint must be rejected before resolution")
 			return "", nil
 		},
-		Launch: func(string, int, string) (int, string, error) {
+		Launch: func(string, int, string) (*BrowserProcess, error) {
 			t.Fatal("remote endpoint must not launch")
-			return 0, "", nil
+			return nil, nil
 		},
 	}
 	if _, err := m.EnsureRunning(context.Background(), SessionConfig{URL: "http://example.test:9222"}); err == nil {
 		t.Fatal("expected remote probe refusal")
+	}
+}
+
+func TestEnsureRunningSurfacesBrowserStderr(t *testing.T) {
+	done := make(chan error, 1)
+	done <- errors.New("exit status 127")
+	stderr := &lockedBuffer{}
+	_, _ = stderr.Write([]byte("error while loading shared libraries: libnss3.so"))
+	m := SessionManager{
+		Available: func(context.Context, string) bool { return false },
+		Resolve:   func(context.Context, string) (string, error) { return "/managed/chrome", nil },
+		Launch: func(path string, _ int, _ string) (*BrowserProcess, error) {
+			return &BrowserProcess{PID: 42, Path: path, done: done, stderr: stderr}, nil
+		},
+	}
+	_, err := m.EnsureRunning(context.Background(), SessionConfig{URL: "http://127.0.0.1:9335"})
+	if err == nil || !strings.Contains(err.Error(), "libnss3.so") || !strings.Contains(err.Error(), "exit status 127") {
+		t.Fatalf("EnsureRunning error = %v", err)
 	}
 }

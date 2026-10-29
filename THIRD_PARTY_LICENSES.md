@@ -473,9 +473,20 @@ websocket deps are all MIT (permissive, pure-Go — allowed compiled-in):
 - `github.com/gobwas/httphead` — MIT
 - `github.com/gobwas/pool` — MIT
 
-No Chrome/Chromium binary is bundled: `probe` mode attaches to the user's
-already-running browser (`--remote-debugging-port`); `solo` mode uses a
-Chrome/Chromium found on `$PATH`.
+No Chrome/Chromium binary is bundled. When the host has no Chromium-family
+browser, `bashy browser` downloads the reviewed Chrome for Testing headless
+shell archive from Google, verifies the SHA-256 committed in
+`pkg/binmgr/chrome_headless_shell.go`, and executes it from bashy's cache.
+The Chromium archive carries its upstream BSD-style and third-party notices.
+
+On a minimal Linux host, binmgr may separately download the exact Ubuntu 24.04
+runtime packages pinned in `pkg/binmgr/chrome_runtime.go` into that same cache:
+
+- Mozilla NSS and NSPR — MPL-2.0
+- alsa-lib — LGPL-2.1-or-later
+
+Those shared libraries are not vendored or linked into bashy. They are loaded
+only by the headless browser child through its private `LD_LIBRARY_PATH`.
 
 ### Live mode (`pkg/browser/live`, `bashy browser --mode live`)
 

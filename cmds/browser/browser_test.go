@@ -103,7 +103,7 @@ func TestActionWithoutBrowserPrintsClearMessage(t *testing.T) {
 		return probe.SessionManager{
 			Available: func(context.Context, string) bool { return false },
 			Resolve:   func(context.Context, string) (string, error) { return "", errors.New("not installed") },
-			Launch:    probe.LaunchChrome,
+			Launch:    probe.LaunchBrowser,
 		}
 	}
 	t.Cleanup(func() { newProbeSessionManager = old })
