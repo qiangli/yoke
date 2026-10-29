@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [repo/page] Verify localhost resolution in the actual storage client — When using peer.satellite.localhost for signed S3 URLs, a successful curl or browser request does not prove Go client resolution. S515.2 Windows Go 1.27.2 Gitea failed with no such host while outpost routing worked. Open SeaweedFS 4.48 also rejected signed writ  (kb:verify-localhost-resolution-in-the-actual-storage-client)
+- [repo/page] Seed effects must cover the atlas effects of every command they run — A usage-probe seed's Effects: line becomes advice.WithCap in the snippet runner, and every command the body dispatches is classified by atlas.Lookup — fetch is read+net, so a [net]-only balance seed died 126 (effect cap denied). WHEN authori  (kb:seed-effects-must-cover-the-atlas-effects-of-every-command-they)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 
