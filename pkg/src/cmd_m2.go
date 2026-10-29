@@ -142,12 +142,41 @@ func newStatusCmd() *cobra.Command {
 }
 
 func newDiffCmd() *cobra.Command {
-	var base string
+	var base, user string
 	c := &cobra.Command{
-		Use:   "diff <repo>",
-		Short: "Diff the base branch tip (pristine|local) to HEAD",
-		Args:  cobra.ExactArgs(1),
+		Use:   "diff <repo> [a [b]]",
+		Short: "Diff the base branch tip (pristine|local) to HEAD, or two versions",
+		Long: `diff with one repo diffs the base branch tip to HEAD, as
+before. With two versions (commits, named labels, or base) it diffs one
+version to the other for that principal (--user or $BASHY_PRINCIPAL,
+only needed to resolve that principal's labels).`,
+		Args: cobra.RangeArgs(1, 3),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 2 {
+				return fmt.Errorf("src: diff takes <repo> or <repo> <a> <b>")
+			}
+			if len(args) == 3 {
+				if cmd.Flags().Changed("base") {
+					return fmt.Errorf("src: --base applies only to the <repo> form of diff")
+				}
+				p := strings.TrimSpace(user)
+				if p == "" {
+					p = strings.TrimSpace(os.Getenv(principalEnv))
+				}
+				text, err := Diff("", args[0], p, args[1], args[2])
+				if err != nil {
+					return err
+				}
+				if strings.TrimSpace(text) == "" {
+					fmt.Fprintln(cmd.OutOrStdout(), "(no differences)")
+					return nil
+				}
+				fmt.Fprint(cmd.OutOrStdout(), text)
+				if !strings.HasSuffix(text, "\n") {
+					fmt.Fprintln(cmd.OutOrStdout())
+				}
+				return nil
+			}
 			if base != pristineBranch && base != localBranch {
 				return fmt.Errorf("src: --base must be pristine or local, got %q", base)
 			}
@@ -179,6 +208,7 @@ func newDiffCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&base, "base", localBranch, "base branch: pristine or local")
+	userFlag(c, &user)
 	return c
 }
 

@@ -43,6 +43,11 @@ type State struct {
 	LastKnownGood  string    `json:"last_known_good,omitempty"`
 	Adopted        []Adopted `json:"adopted,omitempty"`
 	Notices        []Notice  `json:"notices,omitempty"`
+	// DataSchema is the version of the app-data format the principal's
+	// private data directory is currently stored in. Zero means unknown
+	// (recorded before any version declared a schema range); no guard
+	// applies until a version declares one.
+	DataSchema int `json:"data_schema,omitempty"`
 }
 
 // Store addresses exactly one app and one authenticated principal.

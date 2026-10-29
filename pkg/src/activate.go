@@ -353,6 +353,13 @@ func Activate(home, app, rev, principal string, opts ActivateOptions) (ActivateR
 		st.LastKnownGood = st.ActiveRevision
 	}
 	st.ActiveRevision = revSHA
+	// A version that declares what it can read leaves the data schema it
+	// stores behind, so a later restore can refuse a target that cannot
+	// read the current data. Versions without metadata leave the recorded
+	// schema alone.
+	if schema, err := dataSchemaOf(dir, revSHA); err == nil && schema != 0 {
+		st.DataSchema = schema
+	}
 	if err := store.Write(st); err != nil {
 		return out, err
 	}
