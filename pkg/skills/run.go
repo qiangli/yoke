@@ -62,8 +62,8 @@ type AttestRecord struct {
 	//
 	// Its Capability is shadowed by the record's own field above (Go's
 	// shallower-field rule): one `capability` key in the JSON, the one that
-	// has always shipped. Its Identity is empty for now; story #1897
-	// stamps it.
+	// has always shipped. Its Identity is stamped by the run that seals the
+	// record (runEffective, executeBashSharp).
 	unit.Attestation
 	// Status and StoreRevision are stamped when the receipt attests a Bash#
 	// FUNCTION CALL completing under bashy's decorator seam — a @require /
@@ -87,8 +87,8 @@ type AttestRecord struct {
 // converted, never forked or edited. The wrapped original stays in
 // AttestRecord.Attest, so nothing the projection cannot spell yet (the
 // dhnt tier, already the record's Tier; the opaque WorldDiff) is lost from
-// storage. Identity and Capability are left empty here; story #1897
-// stamps them.
+// storage. Identity and Capability are left empty here; the run that seals
+// the record (runEffective, executeBashSharp) stamps them.
 func Receipt(name string, att dhntskills.Attestation) unit.Attestation {
 	a := unit.Attestation{Target: name, Valid: att.Valid}
 	for _, p := range att.Passed {
@@ -304,23 +304,29 @@ type runPrep struct {
 // here, canonical parse, merged bindings, coordinate + tier.
 func prepareRun(cfg *config, sk Skill, src Source, ps *ProbeSet) (runPrep, error) {
 	document, _ := src.File(sk.Name, "SKILL.md")
-	body := bashSharpFences(string(document))
-	if !sk.Dhnt.Valid() && (sk.HasDhnt || body == "") {
-		if sk.HasDhnt {
-			return runPrep{}, fmt.Errorf("skills: %q has an invalid canonical face: %s", sk.Name, sk.Dhnt.Err)
-		}
+	u := sk.Unit
+	if u.Face == "" {
+		u = ResolveUnit(document, sk.Meta, sk.Dhnt)
+	}
+	switch {
+	case u.Err != "":
+		return runPrep{}, fmt.Errorf("skills: %q: %s", sk.Name, u.Err)
+	case u.Face == "":
 		return runPrep{}, fmt.Errorf("skills: %q has no skill.dhnt — a prose-only skill is read by a model, not machine-run", sk.Name)
 	}
 	if v := verdictOf(sk, ps); !v.Applicable {
 		return runPrep{}, fmt.Errorf("skills: %q is not applicable here (%s)", sk.Name, v.Failing)
 	}
 	var base dhntskills.Skill
-	var rootID string
-	if !sk.HasDhnt {
+	var rootID, body string
+	// The canonical Bash# body runs whenever the host has a Bash# runner; a
+	// face DERIVED from it (declared and capability-matched by ResolveUnit)
+	// stands in only on a host without one.
+	if u.Face == FaceBashSharp && (cfg.bashSharpRunner != nil || !u.Derived) {
 		if cfg.bashSharpRunner == nil {
 			return runPrep{}, fmt.Errorf("skills: no Bash# runner in this host")
 		}
-		rootID = bashSharpIdentity(body)
+		body, rootID = unit.BashSharpBody(string(document)), u.Identity
 	} else {
 		canon, _ := src.File(sk.Name, "skill.dhnt")
 		var err error
@@ -332,8 +338,6 @@ func prepareRun(cfg *config, sk Skill, src Source, ps *ProbeSet) (runPrep, error
 		if err != nil {
 			return runPrep{}, err
 		}
-
-		body = ""
 	}
 	meta := map[string]string{}
 	// Learned host-local bindings supply concrete commands for NEW step
@@ -409,7 +413,23 @@ func runEffective(name string, effective dhntskills.Skill, p runPrep, dir string
 	// The unified receipt: the same verdict in the one vocabulary dag
 	// target receipts use, sealed beside the wrapped dhnt original.
 	rec.Attestation = Receipt(name, att)
+	rec.Attestation.Identity, rec.Attestation.Capability = att.Skill, capKey
+	if capKey == "" {
+		// No contract, nothing verified — whatever the steps did. The wrapped
+		// dhnt original is left as dhnt shipped it.
+		rec.Attestation.Valid, rec.Uncontracted = false, true
+	}
 	return rec, nil
+}
+
+// ranClean reports a run that succeeded on its own terms: verified, or — for
+// an uncontracted unit, which can never be verified — completed cleanly (a
+// Bash# body exited 0; a dhnt face's steps all held).
+func ranClean(rec AttestRecord) bool {
+	if rec.Uncontracted && rec.Status != nil {
+		return *rec.Status == 0
+	}
+	return rec.Attest.Valid
 }
 
 // runSkill is the plain run engine: gate → resolve the host's overlay
@@ -434,6 +454,9 @@ func runSkill(cfg *config, sk Skill, src Source, ps *ProbeSet, dir string, log i
 	rec, err := runEffective(sk.Name, effective, p, dir, log)
 	if err != nil {
 		return AttestRecord{}, "", err
+	}
+	if rec.Uncontracted {
+		return rec, "", nil // no promise, no evidence: an uncontracted run leaves no receipt
 	}
 	path := storeAttest(cfg, rec, log)
 	return rec, path, nil

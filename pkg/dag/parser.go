@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/qiangli/coreutils/pkg/weavecli"
+	"github.com/qiangli/yoke/pkg/unit"
 	"github.com/qiangli/yoke/pkg/unit/frontmatter"
 )
 
@@ -691,17 +692,9 @@ func parseHeading(line string) (level int, text string, ok bool) {
 }
 
 // fenceOpen reports an opening code fence, the fence marker ("```" or "~~~"),
-// and the trimmed info string (interpreter tag).
-func fenceOpen(line string) (marker, info string, ok bool) {
-	s := strings.TrimSpace(line)
-	switch {
-	case strings.HasPrefix(s, "```"):
-		return "```", strings.TrimSpace(strings.TrimPrefix(s, "```")), true
-	case strings.HasPrefix(s, "~~~"):
-		return "~~~", strings.TrimSpace(strings.TrimPrefix(s, "~~~")), true
-	}
-	return "", "", false
-}
+// and the trimmed info string (interpreter tag). The grammar is the one
+// unit.FenceOpen owns, shared with every Bash# unit reader.
+func fenceOpen(line string) (marker, info string, ok bool) { return unit.FenceOpen(line) }
 
 // parseMeta recognizes a metadata line "Key: value" where Key is one of the
 // known metadata keys (case-insensitive). Non-metadata "x: y" prose lines are

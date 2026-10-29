@@ -896,8 +896,8 @@ func runList(cmd *cobra.Command, cfg *config, filter fleet.ListFilter, inapplica
 		out := make([]row, 0, len(kept))
 		for _, r := range kept {
 			var id string
-			if r.Dhnt.Valid() {
-				id = r.Dhnt.Identity
+			if r.Unit.Valid() {
+				id = r.Unit.Identity
 			}
 			out = append(out, row{r.Name, r.Description, r.Ring.String(), r.Verdict.Applicable,
 				r.Verdict.Failing, r.Verdict.Unchecked, r.Shadows, r.HasDhnt, id, r.Warning, r.Retired})
@@ -988,7 +988,17 @@ func runShow(cmd *cobra.Command, cfg *config, name string, ref, asYAML, asJSON b
 		} else if sk.HasDhnt {
 			dhnt = "invalid"
 		}
-		fmt.Fprintf(cmd.ErrOrStderr(), "skills: %s — ring=%s dhnt=%s %s\n", sk.Name, sk.Ring, dhnt, status)
+		face := ""
+		switch {
+		case sk.Unit.Err != "":
+			face = " unit=refused"
+		case sk.Unit.Face == FaceBashSharp:
+			face = " bashsharp=" + sk.Unit.Identity[:13]
+		}
+		fmt.Fprintf(cmd.ErrOrStderr(), "skills: %s — ring=%s dhnt=%s%s %s\n", sk.Name, sk.Ring, dhnt, face, status)
+		if sk.Unit.Err != "" {
+			fmt.Fprintf(cmd.ErrOrStderr(), "skills: %s: %s\n", sk.Name, sk.Unit.Err)
+		}
 	}
 	return nil
 }
@@ -1170,6 +1180,16 @@ func runRun(cmd *cobra.Command, cfg *config, name string, asJSON, adapt bool, re
 	if err != nil && rec.Name == "" {
 		return err
 	}
+	if rec.Uncontracted && err == nil && ranClean(rec) {
+		// Executable-but-uncontracted rung: plain result, never "valid".
+		if asJSON {
+			return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{
+				"skill": name, "identity": rec.Identity, "uncontracted": true, "ok": true,
+			})
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "skill: %s\nuncontracted: true\nok: true\n", name)
+		return nil
+	}
 	renderReceipt(cmd, rec, string(outcome), asJSON)
 	if err != nil {
 		return err
@@ -1337,7 +1357,7 @@ type Advertised struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	Ring        string `json:"ring,omitempty"`
-	Verified    bool   `json:"verified,omitempty"` // carries a valid canonical face (identity + contract)
+	Verified    bool   `json:"verified,omitempty"` // one valid, contracted unit (identity + capability)
 }
 
 // Applicable returns the skills applicable at this host's coordinate,
@@ -1365,7 +1385,7 @@ func Applicable(opts ...Option) []Advertised {
 			Name:        r.Name,
 			Description: truncate(r.Description, 160),
 			Ring:        r.Ring.String(),
-			Verified:    r.Dhnt.Valid(),
+			Verified:    r.Unit.Verified(),
 		})
 	}
 	return out

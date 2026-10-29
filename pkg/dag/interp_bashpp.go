@@ -13,6 +13,7 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 
 	"github.com/qiangli/coreutils/shell"
+	"github.com/qiangli/yoke/pkg/unit"
 )
 
 // bashppInterp runs a target body tagged ```bsh (or ```bashsharp) as Bash#:
@@ -81,7 +82,7 @@ func (bashppInterp) Run(ctx context.Context, t *Task, tio TaskIO) TaskResult {
 // BashSharpTags are every body tag that runs as Bash#, official spellings
 // first. An embedder that overrides the interpreter registers all of them,
 // or a body under the missing spelling falls through to this one.
-var BashSharpTags = []string{"bsh", "bashsharp", "bashpp", "bash++"}
+var BashSharpTags = unit.BashSharpTags
 
 func init() {
 	bi := bashppInterp{}

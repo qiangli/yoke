@@ -135,6 +135,7 @@ func parseSkill(dirName string, body []byte, src Source) Skill {
 		sk.HasDhnt = true
 		sk.Dhnt = parseDhntInfo(canon)
 	}
+	sk.Unit = ResolveUnit(body, sk.Meta, sk.Dhnt)
 	_, sk.HasTasks = src.File(dirName, "tasks.md")
 	if !sk.HasTasks && sk.Meta["tasks"] != "" {
 		sk.HasTasks = true // tasks POINTER (resolved under cwd at run time)

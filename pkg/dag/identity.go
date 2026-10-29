@@ -6,8 +6,9 @@ package dag
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"slices"
 	"strings"
+
+	"github.com/qiangli/yoke/pkg/unit"
 )
 
 // TargetIdentity computes the target's canonical identity hash ("h" + sha256)
@@ -41,56 +42,17 @@ func TargetIdentity(t *Task) string {
 	return "h" + hex.EncodeToString(sum[:])
 }
 
-// TargetCapability computes the target's contract projection hash ("k" + sha256)
-// over its Require/Ensure/Effects contract projection.
-// Name, description, prerequisites, body/steps, and placement policy are
-// projected away. Returns empty string when the target declares no contract.
+// TargetCapability computes the target's capability key ("k" + sha256)
+// through the one unit formula (unit.CapabilityKey) over its Require/Ensure/
+// Effects contract. Name, description, prerequisites, body/steps, and
+// placement policy are projected away. Returns empty string when the target
+// is uncontracted (no Require and no Ensure).
 func TargetCapability(t *Task) string {
 	if t == nil {
 		return ""
 	}
-	req := normaliseList(t.Require)
-	ens := normaliseList(t.Ensure)
-	eff := normaliseList(t.Effects)
-	if len(req) == 0 && len(ens) == 0 && len(eff) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	for _, r := range req {
-		b.WriteString("require: ")
-		b.WriteString(r)
-		b.WriteByte('\n')
-	}
-	for _, e := range ens {
-		b.WriteString("ensure: ")
-		b.WriteString(e)
-		b.WriteByte('\n')
-	}
-	for _, ef := range eff {
-		b.WriteString("effects: ")
-		b.WriteString(ef)
-		b.WriteByte('\n')
-	}
-	sum := sha256.Sum256([]byte(b.String()))
-	return "k" + hex.EncodeToString(sum[:])
-}
-
-func normaliseList(in []string) []string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(in))
-	for _, s := range in {
-		s = strings.TrimSpace(s)
-		if s != "" {
-			out = append(out, s)
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	slices.Sort(out)
-	return slices.Compact(out)
+	key, _ := unit.CapabilityKey(unit.Contract{Require: t.Require, Ensure: t.Ensure, Effects: t.Effects})
+	return key
 }
 
 // TargetIdentity returns the target's canonical identity hash, recomputing

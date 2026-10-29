@@ -199,14 +199,20 @@ func observationOf(rec skills.AttestRecord, fallbackName string) Observation {
 	if name == "" {
 		name = fallbackName
 	}
+	// The unit identity a receipt stamps is THE identity (Bash# and dhnt
+	// receipts alike); older receipts carry only the wrapped dhnt one.
+	id := rec.Attestation.Identity
+	if id == "" {
+		id = rec.Attest.Skill
+	}
 	return Observation{
 		At:            rec.At,
 		Name:          name,
-		Identity:      rec.Attest.Skill,
+		Identity:      id,
 		Capability:    rec.Capability,
 		Tier:          rec.Tier,
 		ContextKey:    rec.ContextKey,
-		Valid:         rec.Attest.Valid,
+		Valid:         rec.Attest.Valid && !rec.Uncontracted, // an uncontracted run is never verified
 		Passed:        rec.Attest.Passed,
 		Failed:        rec.Attest.Failed,
 		Status:        rec.Status,

@@ -58,11 +58,15 @@ func skillRows(t *testing.T) []SkillRow {
 // skillRowOf is the conversion an embedding shell writes at its call site:
 // lexicon takes the executor-free view, never the skills.Skill itself.
 func skillRowOf(sk skills.Skill) SkillRow {
-	row := SkillRow{Name: sk.Name, Description: sk.Description, Meta: sk.Meta}
-	if sk.Dhnt.Valid() {
+	row := SkillRow{Name: sk.Name, Description: sk.Description, Meta: sk.Meta,
+		Face: sk.Unit.Face, Capability: sk.Unit.Capability, UnitErr: sk.Unit.Err}
+	if sk.Unit.Valid() {
 		row.FaceValid = true
-		row.Identity = sk.Dhnt.Identity
-		row.EffectCap = sk.Dhnt.EffectCap
+		row.Identity = sk.Unit.Identity
+		row.EffectCap = sk.Unit.Contract.EffectCap()
+		row.Uncontracted = sk.Unit.Capability == ""
+	}
+	if sk.Dhnt.Valid() {
 		row.HasJudgeStep = sk.Dhnt.HasJudgeStep
 	}
 	return row

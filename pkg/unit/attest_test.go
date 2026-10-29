@@ -127,9 +127,11 @@ func TestDagAndSkillReceiptsAreOneType(t *testing.T) {
 	if len(s.Effects) != 1 || s.Effects[0] != "read" {
 		t.Errorf("skill effects = %v", s.Effects)
 	}
-	// Identity and capability are added but not stamped yet (#1897).
-	if s.Identity != "" || s.Capability != "" {
-		t.Errorf("skill receipt stamped identity/capability early: %+v", s)
+	// Identity and capability are stamped: the unit that ran, the promise
+	// it was keeping. The record's own capability shadows the embedded one,
+	// so it is the one `capability` key the stored JSON carries.
+	if s.Identity != rec.Attest.Skill || !strings.HasPrefix(rec.Capability, "k") {
+		t.Errorf("skill receipt identity/capability not stamped: %+v (record capability %q)", s, rec.Capability)
 	}
 	// The dhnt half is still there, wrapped not forked: the exact version
 	// that ran and the tier it ran under.

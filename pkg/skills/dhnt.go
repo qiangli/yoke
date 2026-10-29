@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	dhntskills "github.com/dhnt/dhnt/skills"
+	"github.com/qiangli/yoke/pkg/unit"
 )
 
 // DhntInfo is the parsed summary of a skill's canonical face.
@@ -22,8 +23,11 @@ type DhntInfo struct {
 	// matched by guarantee, and must not be merged with one that has.
 	Capability string
 	Contract   []string // contract predicate ids (dhnt-canonical)
-	EffectCap  []string // declared effect-cap atoms
-	Steps      int
+	// UnitContract is the face projected onto the one unit contract
+	// (DhntContract) — what its capability key is computed over.
+	UnitContract unit.Contract
+	EffectCap    []string // declared effect-cap atoms
+	Steps        int
 	// HasJudgeStep reports a step whose latitude is judge (P4) anywhere in the
 	// body, branches included. It is what turns a skill from a deterministic
 	// runbook into an agentic one, so a consumer projecting "how much freedom
@@ -34,6 +38,10 @@ type DhntInfo struct {
 
 // Valid reports whether the canonical face parsed and hashed cleanly.
 func (d *DhntInfo) Valid() bool { return d != nil && d.Err == "" && d.Identity != "" }
+
+// ParseDhntInfo is parseDhntInfo for readers outside the catalog (craft's
+// absorption reads candidates that are not in any source yet).
+func ParseDhntInfo(canon []byte) *DhntInfo { return parseDhntInfo(canon) }
 
 // parseDhntInfo validates a skill.dhnt body. Invalid content degrades to
 // an Err — a broken canonical face never hides the prose skill.
@@ -50,7 +58,7 @@ func parseDhntInfo(canon []byte) *DhntInfo {
 	if err != nil {
 		return &DhntInfo{Err: err.Error()}
 	}
-	info := &DhntInfo{Identity: id, Steps: len(sk.Steps), HasJudgeStep: anyJudgeStep(sk.Steps)}
+	info := &DhntInfo{Identity: id, Steps: len(sk.Steps), HasJudgeStep: anyJudgeStep(sk.Steps), UnitContract: DhntContract(sk)}
 	// A missing capability key is a legitimate state (no contract), not a
 	// parse failure — it must never invalidate an otherwise-good face.
 	if key, err := CapabilityKey(sk); err == nil {

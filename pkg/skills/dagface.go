@@ -291,6 +291,9 @@ func runTargetSkill(cfg *config, sk Skill, src Source, ps *ProbeSet, target, cwd
 		return AttestRecord{}, false, fmt.Errorf("skills: %q has no target %q (targets: %v)", sk.Name, target, doc.Order)
 	}
 
+	if sk.Unit.Err != "" {
+		return AttestRecord{}, false, fmt.Errorf("skills: %q: %s", sk.Name, sk.Unit.Err)
+	}
 	if !sk.Dhnt.Valid() {
 		// Executable but uncontracted: run the target, report plainly.
 		return AttestRecord{}, false, runDagTarget(tasksPath, target, log)

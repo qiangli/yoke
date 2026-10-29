@@ -9,7 +9,7 @@ import (
 // A target's receipt carries the identity and capability of the exact target
 // that ran, so a receipt names its unit the way a skill receipt does.
 func TestAttestStampsIdentity(t *testing.T) {
-	doc, err := Parse(strings.NewReader("## build\nEffects: write\n```sh\ntrue\n```\n"), "dag.md")
+	doc, err := Parse(strings.NewReader("## build\nEnsure: true\nEffects: write\n```sh\ntrue\n```\n"), "dag.md")
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -19,6 +19,11 @@ func TestAttestStampsIdentity(t *testing.T) {
 	}
 	if !strings.HasPrefix(task.Identity, "h") || !strings.HasPrefix(task.Capability, "k") {
 		t.Fatalf("parse did not stamp identity/capability: %q %q", task.Identity, task.Capability)
+	}
+	// Effects alone is a cap, not a guarantee: the target is uncontracted.
+	bare, _ := Parse(strings.NewReader("## build\nEffects: write\n```sh\ntrue\n```\n"), "dag.md")
+	if bt, _ := bare.Lookup("build"); bt.Capability != "" {
+		t.Fatalf("effects-only target got capability %q, want none", bt.Capability)
 	}
 	a := attest(context.Background(), task, t.TempDir(), nil, true)
 	if a == nil {
