@@ -5,6 +5,7 @@ package contain
 
 import (
 	"os"
+	"runtime/debug"
 	"strconv"
 	"strings"
 )
@@ -23,6 +24,35 @@ type OCIRunner interface {
 // provide the unit's interpreter (bashy) on its PATH.
 const SandboxImageEnv = "BASHY_SANDBOX_IMAGE"
 
+// DefaultSandboxImagePrefix is the repository of bashy's own runtime image:
+// the FROM-scratch image `bashy self image` builds for the running release,
+// tagged with the first 8 hex of its commit. The release pipeline publishes
+// it every release (the same image DKS defaults to for its Linux executor),
+// so a default install pulls it on first use with no local image present
+// and no user action — on every OS bashy oci supports, where the engine
+// fetches a missing registry image automatically.
+const DefaultSandboxImagePrefix = "ghcr.io/qiangli/bashy-scratch:"
+
+// sandboxReleaseCommit reports the running release's commit for the default
+// image tag. It is a variable so tests can pin it; production reads the
+// running binary's build info, the same source DKS uses for its own default.
+var sandboxReleaseCommit = func() string {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+	return sandboxCommitFromBuildInfo(bi)
+}
+
+// DefaultSandboxImage is the sandbox image of the running release: its own
+// bashy build. "" when the build carries no commit to name its own image.
+func DefaultSandboxImage() string {
+	if c := sandboxReleaseCommit(); len(c) >= 8 {
+		return DefaultSandboxImagePrefix + c[:8]
+	}
+	return ""
+}
+
 // ociWorkdir is where the clone is mounted inside the container.
 const ociWorkdir = "/work"
 
@@ -38,11 +68,13 @@ var launcherEnv = []string{
 // BashyOCI routes a sandbox run to `bashy oci run`: bashy's podman engine,
 // provisioned by bashy itself on Windows, macOS and Linux. The run gets the
 // clone at /work as its only mount, no network, the candidate's scrubbed
-// environment, and the spec's resource limits.
+// environment, and the spec's resource limits. The image needs no setup:
+// Image, then $BASHY_SANDBOX_IMAGE, then the running release's own image,
+// which the engine pulls on first use.
 type BashyOCI struct {
 	// Bin is the bashy launcher; empty = "bashy" on PATH.
 	Bin string
-	// Image overrides $BASHY_SANDBOX_IMAGE.
+	// Image overrides $BASHY_SANDBOX_IMAGE and the release default.
 	Image string
 }
 
@@ -53,7 +85,10 @@ func (b BashyOCI) Argv(dir string, argv, env []string, s Spec) ([]string, error)
 		image = strings.TrimSpace(os.Getenv(SandboxImageEnv))
 	}
 	if image == "" {
-		return nil, &UnavailableError{Level: LevelSandbox, Reason: "no sandbox image: set $" + SandboxImageEnv + " to an image that provides bashy"}
+		image = DefaultSandboxImage()
+	}
+	if image == "" {
+		return nil, &UnavailableError{Level: LevelSandbox, Reason: "no sandbox image: this build carries no commit to name its own image — set $" + SandboxImageEnv + " to an image that provides bashy"}
 	}
 	bin := b.Bin
 	if bin == "" {
@@ -76,6 +111,48 @@ func (b BashyOCI) Argv(dir string, argv, env []string, s Spec) ([]string, error)
 	}
 	out = append(out, image)
 	return append(out, argv...), nil
+}
+
+// sandboxCommitFromBuildInfo is the commit a binary was built from: the
+// full vcs.revision stamped by the go command, else the 12-hex suffix of a
+// Go pseudo-version main module, else "". It mirrors DKS's release identity
+// (external/dks/userland_run.go), the same running release whose own image
+// names the sandbox default.
+func sandboxCommitFromBuildInfo(bi *debug.BuildInfo) string {
+	if bi == nil {
+		return ""
+	}
+	for _, s := range bi.Settings {
+		if s.Key == "vcs.revision" && isSandboxHex(s.Value) {
+			return s.Value
+		}
+	}
+	v, _, _ := strings.Cut(bi.Main.Version, "+")
+	i := strings.LastIndexByte(v, '-')
+	if i < 0 {
+		return ""
+	}
+	rev, stamp := v[i+1:], v[:i]
+	j := strings.LastIndexAny(stamp, "-.")
+	if j < 0 || len(rev) != 12 || !isSandboxHex(rev) {
+		return ""
+	}
+	if ts := stamp[j+1:]; len(ts) != 14 || strings.Trim(ts, "0123456789") != "" {
+		return ""
+	}
+	return rev
+}
+
+func isSandboxHex(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 // containerPath rewrites a host path under dir to its mount inside the

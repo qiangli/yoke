@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [repo/page] Seed effects must cover the atlas effects of every command they run — A usage-probe seed's Effects: line becomes advice.WithCap in the snippet runner, and every command the body dispatches is classified by atlas.Lookup — fetch is read+net, so a [net]-only balance seed died 126 (effect cap denied). WHEN authori  (kb:seed-effects-must-cover-the-atlas-effects-of-every-command-they)
+- [repo/page] Run llmgw gates from its nested module — WHEN a yoke gate names ./pkg/llmgw/..., the root Go module rejects that pattern because pkg/llmgw has its own go.mod. Run go test ./... (and go vet ./...) with cwd pkg/llmgw; keep the root cligw, broker, and fleet gates separate so the nested-module setup error cannot mask their results.  (kb:run-llmgw-gates-from-its-nested-module)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 

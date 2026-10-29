@@ -273,21 +273,109 @@ func TestBashyOCIArgv(t *testing.T) {
 	spec := Spec{Dir: dir, MaxRSSBytes: 1 << 20, MaxProcs: 8}
 	env := []string{"HOME=" + dir, "PATH=/usr/bin:/bin", "BASHY_APP_DATA=" + filepath.Join(dir, "data"), "X=1"}
 
-	t.Setenv(SandboxImageEnv, "")
-	if _, err := (BashyOCI{}).Argv(dir, []string{"bashy"}, env, spec); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("missing image: want ErrUnavailable, got %v", err)
-	}
+	t.Run("explicit image wins", func(t *testing.T) {
+		t.Setenv(SandboxImageEnv, "example.invalid/bashy:test")
+		got, err := (BashyOCI{}).Argv(dir, []string{"bashy", "-c", "true"}, env, spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"bashy", "oci", "run", "--rm", "-i", "--network=none",
+			"-v", dir + ":/work", "-w", "/work", "--memory", "1048576", "--pids-limit", "8",
+			"-e", "HOME=/work", "-e", "BASHY_APP_DATA=/work/data", "-e", "X=1",
+			"example.invalid/bashy:test", "bashy", "-c", "true"}
+		if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+			t.Fatalf("argv =\n%q\nwant\n%q", got, want)
+		}
+	})
 
-	t.Setenv(SandboxImageEnv, "example.invalid/bashy:test")
-	got, err := (BashyOCI{}).Argv(dir, []string{"bashy", "-c", "true"}, env, spec)
+	t.Run("no env means the running release's own image, not a refusal", func(t *testing.T) {
+		t.Setenv(SandboxImageEnv, "")
+		pinSandboxCommit(t, "deadbeefcafef00d")
+		got, err := (BashyOCI{}).Argv(dir, []string{"bashy", "-c", "true"}, env, spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "ghcr.io/qiangli/bashy-scratch:deadbeef"
+		if !containsArg(got, want) {
+			t.Fatalf("argv lacks the default image %q: %q", want, got)
+		}
+		if got := DefaultSandboxImage(); got != want {
+			t.Fatalf("DefaultSandboxImage() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("no commit anywhere is the last refusal", func(t *testing.T) {
+		t.Setenv(SandboxImageEnv, "")
+		pinSandboxCommit(t, "")
+		if _, err := (BashyOCI{Image: "  "}).Argv(dir, []string{"bashy"}, env, spec); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("commitless build: want ErrUnavailable, got %v", err)
+		}
+	})
+}
+
+// pinSandboxCommit pins the release commit behind DefaultSandboxImage for
+// one test. Production always reads the running binary's build info.
+func pinSandboxCommit(t *testing.T, commit string) {
+	t.Helper()
+	old := sandboxReleaseCommit
+	sandboxReleaseCommit = func() string { return commit }
+	t.Cleanup(func() { sandboxReleaseCommit = old })
+}
+
+func containsArg(argv []string, want string) bool {
+	for _, a := range argv {
+		if a == want {
+			return true
+		}
+	}
+	return false
+}
+
+// defaultResolvingOCI proves the zero-setup path with a fake runner: it
+// resolves the image through the real BashyOCI (no env, no override —
+// Dragon has no podman, so the engine itself is never touched) and then
+// runs the helper exactly like fakeOCI.
+type defaultResolvingOCI struct {
+	image string
+}
+
+func (f *defaultResolvingOCI) Argv(dir string, argv, env []string, s Spec) ([]string, error) {
+	resolved, err := (BashyOCI{}).Argv(dir, argv, env, s)
+	if err != nil {
+		return nil, err
+	}
+	want := DefaultSandboxImage()
+	if want == "" || !containsArg(resolved, want) {
+		return nil, fmt.Errorf("test: resolved argv lacks the default image %q: %q", want, resolved)
+	}
+	f.image = want
+	return append([]string{helperExe, helperArg, "args"}, argv...), nil
+}
+
+func TestSandboxZeroSetupDefaultImage(t *testing.T) {
+	t.Setenv(SandboxImageEnv, "")
+	pinSandboxCommit(t, "deadbeefcafef00d")
+	want := "ghcr.io/qiangli/bashy-scratch:deadbeef"
+	clone := t.TempDir()
+	out, err := os.CreateTemp(t.TempDir(), "out")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"bashy", "oci", "run", "--rm", "-i", "--network=none",
-		"-v", dir + ":/work", "-w", "/work", "--memory", "1048576", "--pids-limit", "8",
-		"-e", "HOME=/work", "-e", "BASHY_APP_DATA=/work/data", "-e", "X=1",
-		"example.invalid/bashy:test", "bashy", "-c", "true"}
-	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
-		t.Fatalf("argv =\n%q\nwant\n%q", got, want)
+	defer out.Close()
+	oci := &defaultResolvingOCI{}
+	r, err := Run(context.Background(), Spec{
+		Dir: clone, Argv: []string{"bashy", "-c", "true"}, Level: LevelSandbox,
+		Cap: "read", Effects: []string{"read"}, OCI: oci,
+		Stdout: out, Stderr: out,
+	})
+	if err != nil || r.ExitCode != 0 || r.Level != LevelSandbox {
+		t.Fatalf("r=%+v err=%v", r, err)
+	}
+	if oci.image != want {
+		t.Fatalf("image = %q, want default %q", oci.image, want)
+	}
+	b, _ := os.ReadFile(out.Name())
+	if string(b) != "bashy\n-c\ntrue\n" {
+		t.Fatalf("launcher output = %q", b)
 	}
 }

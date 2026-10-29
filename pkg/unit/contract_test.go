@@ -76,3 +76,41 @@ func TestReadContractSandboxIsRunPolicy(t *testing.T) {
 		t.Fatal("a quoted @sandbox is not a request")
 	}
 }
+
+func TestReadContractBareSandboxNeverRunsUnsandboxed(t *testing.T) {
+	plain := "@ensure(\"test -f out\")\nwork() { touch out; }\n"
+	// A bare @sandbox (no parens) is not valid decorator grammar — the
+	// parser leaves it as a plain command — but it is still an isolation
+	// request. Every spelling below must read as a sandbox.
+	for _, body := range []string{
+		"@sandbox\n" + plain,
+		"  @sandbox  \n" + plain,
+		"@sandbox # isolate this unit\n" + plain,
+		"@sandbox\n\n" + plain,
+	} {
+		c, err := unit.ReadContract(body)
+		if err != nil {
+			t.Fatalf("%q: %v", body, err)
+		}
+		if !c.Sandbox {
+			t.Fatalf("%q: bare @sandbox not read as a sandbox request: %+v", body, c)
+		}
+		p, _ := unit.ReadContract(plain)
+		k1, _ := unit.CapabilityKey(c)
+		k2, _ := unit.CapabilityKey(p)
+		if p.Sandbox || k1 != k2 {
+			t.Fatalf("%q: sandbox must not change the capability key", body)
+		}
+	}
+	// Prose is not a request: quoted forms and other commands naming
+	// @sandbox as an argument must not route a unit to oci.
+	for _, body := range []string{
+		"echo '@sandbox'\n" + plain,
+		"echo \"@sandbox\"\n" + plain,
+		"echo @sandbox\n" + plain,
+	} {
+		if c, _ := unit.ReadContract(body); c.Sandbox {
+			t.Fatalf("%q: prose read as a sandbox request", body)
+		}
+	}
+}
