@@ -492,10 +492,54 @@ func (a *Adapter) Discover(ctx context.Context) ([]accounts.Observation, error) 
 		// Daemon unreachable: overlay satellites from the last good snapshot.
 		out = a.mergeCached(out)
 		a.store(out)
+		recordProven(ctx, out)
 		return out, nil
 	}
 	a.store(out)
+	recordProven(ctx, out)
 	return out, nil
+}
+
+// recordProven reports to the account inventory what the outpost CLI just
+// proved. A completed `outpost status` IS the login check for the active
+// profile, so a profile that answered records its identity and one whose
+// credential expired or was rejected records the transition instead — in both
+// cases keeping whatever the inventory already knew about the account.
+//
+// Only the profile's own connection travels with the fact: the full set of
+// connections belongs to the observation this function's caller returns.
+func recordProven(ctx context.Context, obs []accounts.Observation) {
+	for _, o := range obs {
+		acc := o.Account
+		if acc.ProviderAccountID == "" || len(acc.Connections) == 0 {
+			// An unresolved profile names no identity; inventing one from a
+			// config file is exactly what discovery must not do.
+			continue
+		}
+		c := acc.Connections[0]
+		for _, cand := range acc.Connections {
+			for _, scope := range cand.Scopes {
+				if scope == "active" {
+					c = cand
+				}
+			}
+		}
+		f := accounts.Facts{
+			Adapter: Name, Provider: Name, ProviderAccountID: acc.ProviderAccountID,
+			Name: acc.Name, Username: acc.Username, ConnectionID: c.ID,
+			Endpoint: c.Endpoint, Profile: c.Profile, CredentialRef: c.CredentialRef,
+			AuthMethod: c.AuthMethod, Scopes: c.Scopes, ExpiresAt: c.ExpiresAt,
+			Links: acc.Links, Source: "outpost-profile",
+		}
+		if acc.ObservedAt != nil {
+			f.At = *acc.ObservedAt
+		}
+		if acc.LastError == "" {
+			accounts.ObserveSuccess(ctx, accounts.Cloudbox, f)
+			continue
+		}
+		accounts.ObserveTransition(ctx, accounts.Cloudbox, f, accounts.Error, acc.LastError)
+	}
 }
 
 func appendUniq(s []string, v string) []string {

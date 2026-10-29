@@ -1,5 +1,12 @@
 // Package accounts keeps a private, host-local inventory of account metadata.
 // Credential values belong in credential stores; this package accepts references only.
+//
+// Records arrive two ways. An explicit `account discover` / `account refresh`
+// asks the adapters; ObserveSuccess collects what an ordinary operation
+// already proved on its way out — a connect, a provider call, a model run —
+// without the operator running anything. Hosts outside this module (bashy's
+// `connect`) call ObserveSuccess and ObserveTransition; see hook.go for what
+// the hook will and will not record.
 package accounts
 
 import (

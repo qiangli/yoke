@@ -85,6 +85,17 @@ func (a *DigitalOceanAdapter) verified(ctx context.Context, acct Account) (*do.C
 	if acct.ProviderAccountID != "" && acct.ProviderAccountID != info.Team.UUID {
 		return nil, nil, c, errCloudIdentity
 	}
+	// The call succeeded, so this token belongs to this team: record the
+	// identity it proved before the caller does anything else with it. Every
+	// capability goes through here, so one hook covers verify, resources,
+	// usage and billing.
+	ObserveSuccess(ctx, DigitalOcean, Facts{
+		Adapter: a.Name(), Provider: a.Name(), ProviderAccountID: info.Team.UUID,
+		Team: info.Team.Name, Name: info.Team.Name, Email: info.Email,
+		ConnectionID: c.ID, Endpoint: c.Endpoint, Profile: c.Profile,
+		CredentialRef: c.CredentialRef, AuthMethod: c.AuthMethod,
+		Source: "digitalocean/account",
+	})
 	return client, info, c, nil
 }
 func (a *DigitalOceanAdapter) Verify(ctx context.Context, acct Account) (Observation, error) {

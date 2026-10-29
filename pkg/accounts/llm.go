@@ -26,7 +26,27 @@ func NewLLMAdapter() *LLMAdapter {
 // The LLM adapter joins the default registry through the one adapter
 // mechanism. Subpackage adapters join the same registry from builtin, so
 // `account discover` sees every Discover-capable adapter by default.
-func init() { MustRegisterAdapter(NewLLMAdapter()) }
+func init() {
+	MustRegisterAdapter(NewLLMAdapter())
+	// A journaled quota observation means a run actually reached this seat.
+	// llmbudget cannot import this package (we import it), so it exposes a
+	// function variable and the inventory installs itself here.
+	llmbudget.AccountObserver = observeLLMRun
+}
+
+// observeLLMRun records the seat one completed run proved. The model and agent
+// become links, which is the relationship the run established; no usage number
+// is copied, because usage belongs to the cached report.
+func observeLLMRun(ctx context.Context, provider, account, model, agent string) {
+	f := Facts{Adapter: "llm", Provider: provider, ProviderAccountID: account, Source: "llmbudget/observation"}
+	if model != "" {
+		f.Links.Models = []string{model}
+	}
+	if agent != "" {
+		f.Links.Agents = []string{agent}
+	}
+	ObserveSuccess(ctx, LLM, f)
+}
 
 func (a *LLMAdapter) Name() string { return "llm" }
 

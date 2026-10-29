@@ -86,15 +86,24 @@ func (a *AWSAdapter) verified(ctx context.Context, acct Account) (*awsprovider.I
 	if id == "" || (acct.ProviderAccountID != "" && acct.ProviderAccountID != id) {
 		return nil, "", c, errCloudIdentity
 	}
+	role := ""
 	if acct.Role != "" {
-		role, err := client.PrincipalARN(ctx)
-		if err != nil {
+		role, e = client.PrincipalARN(ctx)
+		if e != nil {
 			return nil, "", c, errCloudRead
 		}
 		if role != acct.Role {
 			return nil, "", c, errCloudIdentity
 		}
 	}
+	// STS answered, so this profile really does reach this account number:
+	// record what the call proved. Shared by verify, resources and billing.
+	ObserveSuccess(ctx, AWS, Facts{
+		Adapter: a.Name(), Provider: a.Name(), ProviderAccountID: id, Role: role,
+		Region: acct.Region, ConnectionID: c.ID, Profile: c.Profile,
+		CredentialRef: c.CredentialRef, AuthMethod: c.AuthMethod,
+		Source: "aws/sts",
+	})
 	return client, id, c, nil
 }
 func (a *AWSAdapter) Verify(ctx context.Context, acct Account) (Observation, error) {
