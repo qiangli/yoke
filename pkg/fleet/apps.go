@@ -167,7 +167,21 @@ func (c *Catalog) checkApp(a App) error {
 // SaveApp validates and writes an app into the local store.
 func (c *Catalog) SaveApp(a App) error {
 	a.Kind = KindApp
-	if err := c.checkApp(a); err != nil {
+	if a.IsShaped() {
+		// Validate policy before acquisition so a reserved mount or malformed
+		// record cannot leave an orphaned managed checkout behind.
+		prospective := a
+		prospective.Source = shapedManagedDir(a.Name)
+		if abs, err := filepath.Abs(prospective.Source); err == nil {
+			prospective.Source = abs
+		}
+		if err := c.checkApp(prospective); err != nil {
+			return err
+		}
+		if err := importShapedApp(&a); err != nil {
+			return err
+		}
+	} else if err := c.checkApp(a); err != nil {
 		return err
 	}
 	data, err := Marshal(a)

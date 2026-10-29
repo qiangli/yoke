@@ -1377,15 +1377,27 @@ func nativeBranch(_ context.Context, dir string, args []string) (*ExecResult, er
 		return &ExecResult{Stdout: fmt.Sprintf("Deleted branch %s\n", branchName)}, nil
 	}
 
-	// Create branch (single name argument)
-	if len(args) == 1 && !strings.HasPrefix(args[0], "-") {
+	// Create branch at HEAD or an explicit start point.
+	if (len(args) == 1 || len(args) == 2) && !strings.HasPrefix(args[0], "-") {
 		branchName := args[0]
-		head, err := repo.Head()
-		if err != nil {
+		refName := plumbing.NewBranchReferenceName(branchName)
+		if err := refName.Validate(); err != nil {
+			return &ExecResult{Stderr: fmt.Sprintf("fatal: '%s' is not a valid branch name\n", branchName), ExitCode: 128}, nil
+		}
+		if _, err := repo.Reference(refName, false); err == nil {
+			return &ExecResult{Stderr: fmt.Sprintf("fatal: a branch named '%s' already exists\n", branchName), ExitCode: 128}, nil
+		} else if !errors.Is(err, plumbing.ErrReferenceNotFound) {
 			return nil, ErrUnsupported
 		}
-		refName := plumbing.NewBranchReferenceName(branchName)
-		ref := plumbing.NewHashReference(refName, head.Hash())
+		start := "HEAD"
+		if len(args) == 2 {
+			start = args[1]
+		}
+		hash, err := repo.ResolveRevision(plumbing.Revision(start))
+		if err != nil {
+			return &ExecResult{Stderr: fmt.Sprintf("fatal: not a valid object name: '%s'\n", start), ExitCode: 128}, nil
+		}
+		ref := plumbing.NewHashReference(refName, *hash)
 		if err := repo.Storer.SetReference(ref); err != nil {
 			return nil, ErrUnsupported
 		}

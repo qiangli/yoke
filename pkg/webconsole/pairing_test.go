@@ -81,6 +81,7 @@ func TestPairedDeviceCanLoadSharedChromeAssets(t *testing.T) {
 	cookie := redeemScan(t, h, store, nil, time.Hour)
 	for _, asset := range []string{
 		"/app.css", "/backgrounds.css", "/app.js", "/board.js", "/mb.js",
+		"/shape.js",
 		"/vendor/xterm.css", "/vendor/xterm.js", "/vendor/xterm-addon-fit.js",
 	} {
 		w := do(h, "GET", asset, "192.168.1.44:5555", withCookie(cookie))

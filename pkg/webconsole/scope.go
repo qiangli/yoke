@@ -59,7 +59,7 @@ func consoleWidePath(p string) bool {
 	switch p {
 	case "/", "/api/apps", "/api/session", "/api/login", "/api/logout",
 		"/healthz", "/meta", "/login", "/favicon.ico",
-		"/app.css", "/backgrounds.css", "/app.js", "/board.js", "/mb.js", "/inbox.js", "/term.js", "/accounts.js",
+		"/app.css", "/backgrounds.css", "/app.js", "/board.js", "/mb.js", "/inbox.js", "/term.js", "/accounts.js", "/shape.js",
 		"/vendor/xterm.css", "/vendor/xterm.js", "/vendor/xterm-addon-fit.js":
 		return true
 	}
