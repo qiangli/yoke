@@ -111,7 +111,7 @@ func newServeCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			var shapeOpts ShapeOptions
+			shapeOpts := productionShapeOptions()
 			if shaper != "" {
 				shapeOpts.Delegate = BashyDelegate{Agent: shaper}
 			}

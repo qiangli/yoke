@@ -112,7 +112,7 @@ func (f *fakeActivator) Activate(ctx context.Context, req ActivateRequest) error
 	if err != nil {
 		return err
 	}
-	line := "refs/shape/" + principalKey(req.Principal) + "/head"
+	line := "refs/shaping/" + principalKey(req.Principal) + "/head"
 	rem := gogit.NewRemote(src.Storer, &config.RemoteConfig{Name: "candidate", URLs: []string{req.CandidateDir}})
 	if err := rem.FetchContext(ctx, &gogit.FetchOptions{RefSpecs: []config.RefSpec{config.RefSpec("+refs/heads/candidate:" + line)}}); err != nil {
 		return err

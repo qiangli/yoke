@@ -1,0 +1,6 @@
+set -eu
+test -f public/index.html
+test -f public/notes.js
+test -f api/list.md
+grep -q '<h1>Notes' public/index.html
+! grep -q 'BROKEN' public/index.html

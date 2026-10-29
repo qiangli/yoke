@@ -72,7 +72,8 @@ func discoverRegistered(taken map[string]bool) ([]Panel, []error) {
 		if a.IsShaped() {
 			out = append(out, Panel{
 				Name: m.Mount, Label: m.Label, Path: "/" + m.Mount + "/",
-				Mode: atlas.WebInProcess, Icon: m.Icon, Tip: m.Tip, Auth: m.Auth,
+				LaunchPath: "/shape/" + m.Mount + "/",
+				Mode:       atlas.WebInProcess, Icon: m.Icon, Tip: m.Tip, Auth: m.Auth,
 				ShapedSource: a.Source, Source: "registered", Available: true,
 			})
 			continue

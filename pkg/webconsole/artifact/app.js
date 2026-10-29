@@ -309,7 +309,7 @@ function tile(a, opts = {}) {
   btn.dataset.app = a.name;
   btn.dataset.focusKey = "tile:" + (opts.section || "") + ":" + a.name;
   if (open) {
-    btn.href = url(a.path.replace(/^\//, ""));
+    btn.href = url((a.launch_path || a.path).replace(/^\//, ""));
     if (openApps === "new-tab") {
       btn.target = "_blank";
       btn.rel = "noopener";

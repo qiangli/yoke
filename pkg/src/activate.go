@@ -198,17 +198,18 @@ func setRefTarget(dir, ref, sha string) error {
 
 // recordLineCommit appends a commit with treeHash on parentHash to the repo's
 // object store without touching the worktree, and returns its SHA.
-func recordLineCommit(dir string, parentHash, treeHash plumbing.Hash, msg, name, email string) (string, error) {
+func recordLineCommit(dir string, parentHash, treeHash plumbing.Hash, msg, name, email string, extraParents ...plumbing.Hash) (string, error) {
 	r, err := gogit.PlainOpen(dir)
 	if err != nil {
 		return "", fmt.Errorf("src: open %s: %w", dir, err)
 	}
+	parents := append([]plumbing.Hash{parentHash}, extraParents...)
 	c := &object.Commit{
 		Author:       object.Signature{Name: name, Email: email},
 		Committer:    object.Signature{Name: name, Email: email},
 		Message:      msg,
 		TreeHash:     treeHash,
-		ParentHashes: []plumbing.Hash{parentHash},
+		ParentHashes: parents,
 	}
 	eo := r.Storer.NewEncodedObject()
 	if err := c.Encode(eo); err != nil {
@@ -303,18 +304,30 @@ func Activate(home, app, rev, principal string, opts ActivateOptions) (ActivateR
 	if err != nil {
 		return out, fmt.Errorf("src: activate %s: unknown revision %q", app, shortSHA(rev))
 	}
+	store, err := state.OpenAt(home, app, principal)
+	if err != nil {
+		return out, err
+	}
+	st, err := store.Read()
+	if err != nil {
+		return out, err
+	}
 	line := VersionLineRef(principal)
 	tip, ok, err := refTarget(dir, line)
 	if err != nil {
 		return out, err
 	}
-	base := tip
+	lineParent := tip
 	if !ok {
-		if base, err = ygit.ResolveCommit(dir, pristineBranch); err != nil {
+		if lineParent, err = ygit.ResolveCommit(dir, pristineBranch); err != nil {
 			return out, fmt.Errorf("src: activate %s: no version line and no %s branch (%v)", app, pristineBranch, err)
 		}
 	}
-	verdict, err := opts.Gate.Check(revSHA, base, principal)
+	gateBase := st.ActiveRevision
+	if gateBase == "" {
+		gateBase = lineParent
+	}
+	verdict, err := opts.Gate.Check(revSHA, gateBase, principal)
 	if err != nil {
 		return out, fmt.Errorf("src: activate refused: %w", err)
 	}
@@ -328,7 +341,11 @@ func Activate(home, app, rev, principal string, opts ActivateOptions) (ActivateR
 	}
 	msg := fmt.Sprintf("Activate %s %s for %s\n\nRequest: %s\nVerdict: %s\nEvidence: %s\nPrincipal: %s\n",
 		app, shortSHA(revSHA), principal, revSHA, verdict.Verdict, verdict.EvidenceID, principal)
-	activation, err := recordLineCommit(dir, plumbing.NewHash(base), candidate.TreeHash, msg, agentName(), "bashy@localhost")
+	// Keep the candidate commit reachable from the version line as a second
+	// parent. Its tree is what state.ActiveRevision names and what the next
+	// shaping request clones; the first parent remains the linear audit line.
+	activation, err := recordLineCommit(dir, plumbing.NewHash(lineParent), candidate.TreeHash, msg,
+		agentName(), "bashy@localhost", candidate.Hash)
 	if err != nil {
 		return out, err
 	}
@@ -339,14 +356,6 @@ func Activate(home, app, rev, principal string, opts ActivateOptions) (ActivateR
 		if err := opts.PreSwitchHook(); err != nil {
 			return out, fmt.Errorf("src: activate interrupted before the switch: %w", err)
 		}
-	}
-	store, err := state.OpenAt(home, app, principal)
-	if err != nil {
-		return out, err
-	}
-	st, err := store.Read()
-	if err != nil {
-		return out, err
 	}
 	out = ActivateResult{App: app, Principal: principal, Revision: revSHA, Activation: activation, Previous: st.ActiveRevision}
 	if st.ActiveRevision != "" && st.ActiveRevision != revSHA {

@@ -32,8 +32,11 @@ type Panel struct {
 	Name  string `json:"name"`  // stable id, also the mount segment
 	Label string `json:"label"` // tile title
 	Path  string `json:"path"`  // app-relative path, always trailing-slashed
-	Mode  string `json:"mode"`  // atlas.WebSelf | WebInProcess | WebProxy
-	Port  int    `json:"port,omitempty"`
+	// LaunchPath overrides Path only for the launcher's tile. Shaped apps open
+	// in their editor/review surface while Path remains their serving mount.
+	LaunchPath string `json:"launch_path,omitempty"`
+	Mode       string `json:"mode"` // atlas.WebSelf | WebInProcess | WebProxy
+	Port       int    `json:"port,omitempty"`
 	// ProxyHost is the host half for proxy panels. Empty means 127.0.0.1, which
 	// is the historical convention for atlas panels that only declare a port.
 	ProxyHost string `json:"-"`
