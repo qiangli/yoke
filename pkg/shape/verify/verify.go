@@ -32,6 +32,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/qiangli/yoke/pkg/shape/selfbin"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -532,9 +533,7 @@ func (r TrustedRunner) RunCheck(ctx context.Context, c CheckRun) (Outcome, error
 	if bin == "" {
 		bin = strings.TrimSpace(os.Getenv("BASHY_SHAPE_RUNNER"))
 	}
-	if bin == "" {
-		bin = "bashy"
-	}
+	bin = selfbin.Resolve(bin)
 	argv := []string{bin, c.Script}
 	if r.Args != nil {
 		argv = append([]string{bin}, r.Args(c.Script)...)

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/qiangli/yoke/pkg/shape/selfbin"
 	"io"
 	"log/slog"
 	"mime"
@@ -88,7 +89,7 @@ func (o ShapeOptions) runner() []string {
 	if len(o.Runner) > 0 {
 		return o.Runner
 	}
-	return []string{"bashy"}
+	return []string{selfbin.Resolve("")}
 }
 
 // shapedApp is one shaped panel bound to its checkout.
