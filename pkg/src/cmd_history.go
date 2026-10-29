@@ -64,6 +64,9 @@ review versions. The principal comes from --user or $BASHY_PRINCIPAL.`,
 			if h.Active != "" {
 				fmt.Fprintf(out, "active: %s\n", h.Active)
 			}
+			if h.Base != "" {
+				fmt.Fprintf(out, "base: %s\n", h.Base)
+			}
 			if len(h.Entries) == 0 {
 				fmt.Fprintf(out, "(no versions on %s)\n", h.Line)
 			}

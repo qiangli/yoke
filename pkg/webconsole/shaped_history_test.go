@@ -138,6 +138,7 @@ type historyTestView struct {
 	Principal string               `json:"principal"`
 	Tip       string               `json:"tip"`
 	Active    string               `json:"active"`
+	Base      string               `json:"base"`
 	Versions  []historyTestVersion `json:"versions"`
 	Named     []struct {
 		Name     string `json:"name"`

@@ -67,6 +67,13 @@ func resolveHistoryTarget(h VersionHistory, dir, rev string) (string, error) {
 		}
 		return sha, nil
 	}
+	// The base release travels as a raw SHA in the history view's oldest
+	// row, so accept that SHA exactly like the "base" label: it names the
+	// shared release every principal started from, never another
+	// principal's version.
+	if sha, err := ygit.ResolveCommit(dir, pristineBranch); err == nil && strings.EqualFold(rev, sha) {
+		return sha, nil
+	}
 	return "", ErrUnknownVersion
 }
 

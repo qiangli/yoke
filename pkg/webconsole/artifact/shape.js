@@ -176,7 +176,15 @@ async function refreshHistory() {
   try { h = await historyCall("GET", ""); }
   catch (e) { historyStatus(e.message); return; }
   const list = $("history-list");
-  list.replaceChildren(...(h.versions || []).map(renderVersion));
+  const rows = (h.versions || []).map(renderVersion);
+  // The base release is the oldest restorable version: its Restore button
+  // is the last one, and restoring it reverts the app to how it started.
+  // It is only offered once a version is recorded; with no versions yet the
+  // app is already the base release.
+  if (h.base && (h.versions || []).length) {
+    rows.push(renderVersion({ revision: h.base, kind: "base", request: "base release", active: h.active === h.base }));
+  }
+  list.replaceChildren(...rows);
   if (!(h.versions || []).length) historyStatus("No versions yet. Shaped changes you keep will appear here.");
 }
 
