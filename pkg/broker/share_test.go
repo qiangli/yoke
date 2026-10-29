@@ -19,6 +19,12 @@ import (
 	"github.com/qiangli/yoke/pkg/toolcmd"
 )
 
+// exitError models a non-zero exit from the outpost CLI whose stderr
+// carries the remote command's own error text (e.g. cobra usage).
+type exitError struct{ msg string }
+
+func (e exitError) Error() string { return e.msg }
+
 // fakeOutpost stands in for the outpost CLI: canned answers by verb, every
 // call recorded with its stdin.
 type fakeOutpost struct {
@@ -57,7 +63,7 @@ func (f *fakeOutpost) run(_ context.Context, stdin io.Reader, args ...string) ([
 		}
 		return []byte(f.apps), nil
 	case "apps add llm":
-		f.apps = fmt.Sprintf(`{"apps":[{"name":"llm","port":%d,"enabled":true,"require_login":false}]}`, door.Port())
+		f.apps = fmt.Sprintf(`{"apps":[{"name":"llm","host":"127.0.0.1","port":%d,"enabled":true,"require_login":false}]}`, door.Port())
 		return nil, nil
 	case "mesh consume ls":
 		return []byte(f.consumes), nil
@@ -176,6 +182,56 @@ func TestShareMeshReusesAnExistingDoorService(t *testing.T) {
 	var g DoorGrant
 	if err := json.Unmarshal([]byte(out), &g); err != nil || g.MeshService != "llm-door" || g.CloudboxURL != "" {
 		t.Fatalf("--print grant = %+v (%v)", g, err)
+	}
+}
+
+// A stale hand-wired llm app (host carrying an embedded port, e.g.
+// "127.0.0.1:17788" with the door's port) must not count as present:
+// share re-adds it against the door's real loopback address.
+func TestShareCloudboxReaddsAppWithAnEmbeddedHostPort(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	t.Setenv(door.PortEnv, "")
+	f := useFakeOutpost(t)
+	f.apps = fmt.Sprintf(`{"apps":[{"name":"llm","host":"127.0.0.1:17788","port":%d,"enabled":true,"require_login":false}]}`, door.Port())
+	out, err := runShareLLM(t, "", "share", "peer", "--via", "cloudbox")
+	if err != nil {
+		t.Fatalf("share: %v\n%s", err, out)
+	}
+	if f.count("apps add llm --url http://127.0.0.1:24556") != 1 {
+		t.Fatalf("stale app kept as present: %v", f.calls)
+	}
+}
+
+// A correctly wired app (plain loopback host, no embedded port) is
+// reused as-is: share must not re-add it.
+func TestShareCloudboxReusesAppOnPlainLoopbackHost(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	t.Setenv(door.PortEnv, "")
+	f := useFakeOutpost(t)
+	f.apps = fmt.Sprintf(`{"apps":[{"name":"llm","host":"localhost","port":%d,"enabled":true,"require_login":false}]}`, door.Port())
+	out, err := runShareLLM(t, "", "share", "peer", "--via", "cloudbox")
+	if err != nil {
+		t.Fatalf("share: %v\n%s", err, out)
+	}
+	if f.count("apps add") != 0 {
+		t.Fatalf("healthy app re-added: %v", f.calls)
+	}
+}
+
+// A peer whose PATH bashy predates `llm door import` answers with
+// cobra's unknown-subcommand error; share must translate it instead of
+// surfacing the raw text.
+func TestSharePushOverOlderPeerBashyNamesUpgrade(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	t.Setenv(door.PortEnv, "")
+	f := useFakeOutpost(t)
+	f.sshErr = exitError{msg: `Error: unknown command "import" for "bashy llm door"` + "\n" + `Run 'bashy llm door --help' for usage.`}
+	_, err := runShareLLM(t, "", "share", "peer", "--via", "mesh")
+	if err == nil || !strings.Contains(err.Error(), "the bashy on peer is older than this door; upgrade it") {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(err.Error(), "unknown command") {
+		t.Fatalf("raw cobra error surfaced: %v", err)
 	}
 }
 

@@ -168,6 +168,7 @@ func ensureCloudboxApp(ctx context.Context, host, cloudbox string, port int) (st
 	var list struct {
 		Apps []struct {
 			Name         string `json:"name"`
+			Host         string `json:"host"`
 			Port         int    `json:"port"`
 			Enabled      bool   `json:"enabled"`
 			RequireLogin bool   `json:"require_login"`
@@ -176,9 +177,13 @@ func ensureCloudboxApp(ctx context.Context, host, cloudbox string, port int) (st
 	if err := json.Unmarshal(out, &list); err != nil {
 		return "", fmt.Errorf("outpost apps list: %w", err)
 	}
+	// Name+port+enabled+!login is not enough: an app wired by hand before
+	// share existed can carry the port inside its host ("127.0.0.1:17788"
+	// plus the door's port), which cloudbox proxies to a 502. Only a bare
+	// loopback host counts as present; anything else is re-added below.
 	present := false
 	for _, a := range list.Apps {
-		if a.Name == doorServiceName && a.Port == port && a.Enabled && !a.RequireLogin {
+		if a.Name == doorServiceName && a.Port == port && a.Enabled && !a.RequireLogin && bareLoopbackHost(a.Host) {
 			present = true
 		}
 	}
@@ -188,6 +193,43 @@ func ensureCloudboxApp(ctx context.Context, host, cloudbox string, port int) (st
 		}
 	}
 	return cloudbox + "/matrix/h/" + url.PathEscape(host) + "/app/" + doorServiceName, nil
+}
+
+// olderPeerBashy reports whether err is the peer's bashy refusing the
+// `llm door import` subcommand — cobra's unknown-command text carried back
+// over outpost ssh. That is version skew, not an unreachable host, so share
+// names the fix instead of surfacing the raw usage error.
+func olderPeerBashy(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		`unknown command "import" for "bashy llm door"`,
+		`unknown command "door" for "bashy llm"`,
+	} {
+		if strings.Contains(msg, want) {
+			return true
+		}
+	}
+	return false
+}
+
+// bareLoopbackHost reports whether an app entry's host is a bare
+// loopback name — 127.0.0.1, localhost or ::1 — with no port embedded in
+// it. An app whose host carries a port ("127.0.0.1:17788") points at the
+// wrong upstream and must be re-added.
+func bareLoopbackHost(host string) bool {
+	h := strings.TrimSpace(host)
+	if _, _, err := net.SplitHostPort(h); err == nil {
+		return false
+	}
+	for _, loop := range []string{"127.0.0.1", "localhost", "::1", "[::1]"} {
+		if strings.EqualFold(h, loop) {
+			return true
+		}
+	}
+	return false
 }
 
 func newShareCmd() *cobra.Command {
@@ -258,6 +300,9 @@ cannot reach; pipe it to ` + "`bashy llm door import`" + ` there and keep it sec
 			}
 			target := firstNonEmpty(strings.TrimSpace(sshTarget), peer)
 			if _, err := outpostRun(ctx, bytes.NewReader(data), "ssh", target, "bashy", "llm", "door", "import"); err != nil {
+				if olderPeerBashy(err) {
+					return fmt.Errorf("llm share: the bashy on %s is older than this door; upgrade it (or --print | <candidate> llm door import)", peer)
+				}
 				return fmt.Errorf("llm share: push the credential to %s: %w (rerun when it is reachable, or see --print)", target, err)
 			}
 			fmt.Fprintf(out, "shared this door with peer:%s via %s\non %s: eval \"$(bashy llm env --from %s)\"\n", peer, via, peer, g.Door)
