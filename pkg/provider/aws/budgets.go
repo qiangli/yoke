@@ -47,6 +47,7 @@ package aws
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -132,12 +133,12 @@ func usdAmount(a *budgetAmount) (float64, error) {
 	if a == nil || strings.TrimSpace(a.Amount) == "" {
 		return 0, fmt.Errorf("aws: budget reported no amount")
 	}
-	if u := strings.ToUpper(strings.TrimSpace(a.Unit)); u != "" && u != "USD" {
+	if u := strings.ToUpper(strings.TrimSpace(a.Unit)); u != "USD" {
 		return 0, fmt.Errorf("aws: budget amount is in %s, not USD", u)
 	}
 	v, err := strconv.ParseFloat(strings.TrimSpace(a.Amount), 64)
-	if err != nil {
-		return 0, fmt.Errorf("aws: budget reported an unparseable amount %q", a.Amount)
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0, fmt.Errorf("aws: budget reported an invalid amount")
 	}
 	return v, nil
 }
@@ -153,6 +154,9 @@ func (a *adapter) DescribeBudget(ctx context.Context) (*awsBudget, error) {
 	var out describeBudgetResponse
 	if err := a.budgets.call(ctx, "DescribeBudget", in, &out); err != nil {
 		return nil, err
+	}
+	if out.Budget != nil && (out.Budget.TimeUnit != "MONTHLY" || out.Budget.BudgetType != "COST") {
+		return nil, fmt.Errorf("aws: budget is not a monthly cost budget")
 	}
 	if out.Budget == nil {
 		return nil, &callError{status: 400, typ: "NotFoundException",
@@ -172,6 +176,8 @@ type Spend struct {
 	// Cost Explorer: a budget that answered with a limit but no usable
 	// spend still told us the operator's cap.
 	CapUSD float64
+	// CapKnown distinguishes an unavailable limit from a reported zero.
+	CapKnown bool
 	// CreditsIncluded is true when the budget's CostTypes say credits
 	// count toward its spend, i.e. the figure is NOT before credits.
 	CreditsIncluded bool
@@ -210,6 +216,7 @@ func (a *adapter) MonthToDateSpend(ctx context.Context) Spend {
 		// even if its spend figure turns out to be unusable.
 		if limit, lerr := usdAmount(b.BudgetLimit); lerr == nil {
 			s.CapUSD = limit
+			s.CapKnown = true
 		}
 		if b.CostTypes != nil && b.CostTypes.IncludeCredit != nil {
 			s.CreditsIncluded = *b.CostTypes.IncludeCredit

@@ -15,12 +15,12 @@ func TestBuiltinAdaptersRegistered(t *testing.T) {
 	for _, a := range r.Adapters(accounts.Discover) {
 		seen[a.Name()] = true
 	}
-	for _, want := range []string{"cloudbox", "llm"} {
+	for _, want := range []string{"cloudbox", "llm", "digitalocean", "aws"} {
 		if !seen[want] {
 			t.Fatalf("default registry missing %q (discoverable: %v)", want, r.Adapters(accounts.Discover))
 		}
 	}
-	for _, name := range []string{"cloudbox", "llm"} {
+	for _, name := range []string{"cloudbox", "llm", "digitalocean", "aws"} {
 		a, err := r.Adapter(name, accounts.Discover)
 		if err != nil {
 			t.Fatalf("adapter %q: %v", name, err)

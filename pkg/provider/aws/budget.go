@@ -28,6 +28,7 @@ package aws
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -211,14 +212,17 @@ func (a *adapter) MonthToDateUSD(ctx context.Context) (float64, error) {
 		return 0, err
 	}
 	var total float64
+	if len(out.ResultsByTime) == 0 {
+		return 0, fmt.Errorf("aws: cost explorer returned no spend")
+	}
 	for _, r := range out.ResultsByTime {
 		m, ok := r.Total["UnblendedCost"]
-		if !ok {
-			continue
+		if !ok || strings.ToUpper(strings.TrimSpace(m.Unit)) != "USD" {
+			return 0, fmt.Errorf("aws: cost explorer returned no USD amount")
 		}
 		v, err := strconv.ParseFloat(strings.TrimSpace(m.Amount), 64)
-		if err != nil {
-			return 0, fmt.Errorf("aws: cost explorer returned an unparseable amount %q", m.Amount)
+		if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+			return 0, fmt.Errorf("aws: cost explorer returned an invalid amount")
 		}
 		total += v
 	}
