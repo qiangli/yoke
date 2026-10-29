@@ -114,3 +114,20 @@ func TestReadContractBareSandboxNeverRunsUnsandboxed(t *testing.T) {
 		}
 	}
 }
+
+func TestReadContractBoundaryEffectsAreRunPolicy(t *testing.T) {
+	plain := "@ensure(\"test -f out\")\nwork() { touch out; }\n"
+	c, err := unit.ReadContract("@reads(\"~/Documents\")\n@writes(\"~/Documents/out\")\n@runs(\"git, rclone\")\n" + plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Reads) != 1 || c.Reads[0] != "~/Documents" || len(c.Writes) != 1 || len(c.Runs) != 2 || c.Runs[1] != "rclone" {
+		t.Fatalf("boundary effects not read: %+v", c)
+	}
+	p, _ := unit.ReadContract(plain)
+	k1, _ := unit.CapabilityKey(c)
+	k2, _ := unit.CapabilityKey(p)
+	if k1 != k2 {
+		t.Fatal("declared boundary effects must not change the capability key")
+	}
+}

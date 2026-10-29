@@ -40,6 +40,12 @@ type Contract struct {
 	// @sandbox line): its host runs it in a bashy oci island instead of
 	// under the ordinary guards alone.
 	Sandbox bool `json:"sandbox,omitempty"`
+	// Reads, Writes and Runs are the unit's declared effects outside its
+	// app data (@reads(PATH...), @writes(PATH...), @runs(PROGRAM...)): run
+	// policy a host honours only within what the user granted at adoption.
+	Reads  []string `json:"reads,omitempty"`
+	Writes []string `json:"writes,omitempty"`
+	Runs   []string `json:"runs,omitempty"`
 }
 
 // Contracted reports whether the unit states a checkable guarantee. An
@@ -123,7 +129,8 @@ func normalise(in []string) []string {
 // duration; @sandbox() marks the unit's isolation request, as does a bare
 // @sandbox line the decorator grammar does not attach (it parses as a plain
 // `@sandbox` command, which can only be an isolation request misspelled
-// without parens). A non-literal argument is kept as its source text.
+// without parens); @reads/@writes record their paths and @runs its
+// programs. A non-literal argument is kept as its source text.
 func ReadContract(body string) (Contract, error) {
 	var c Contract
 	file, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(body), "")
@@ -171,6 +178,12 @@ func ReadContract(body string) (Contract, error) {
 				}
 			case "sandbox":
 				c.Sandbox = true
+			case "reads":
+				c.Reads = append(c.Reads, args...)
+			case "writes":
+				c.Writes = append(c.Writes, args...)
+			case "runs":
+				c.Runs = append(c.Runs, atoms(args)...)
 			}
 		}
 		return true
