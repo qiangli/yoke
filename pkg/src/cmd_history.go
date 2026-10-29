@@ -219,7 +219,7 @@ $BASHY_PRINCIPAL.`,
 			if strings.TrimSpace(st.LastKnownGood) == "" {
 				return fmt.Errorf("src: nothing to undo: no previous version is recorded")
 			}
-			res, err := Restore("", args[0], st.LastKnownGood, p, RestoreOptions{Gate: effectiveGate()})
+			res, err := Restore("", args[0], st.LastKnownGood, p, RestoreOptions{Gate: effectiveGate(), Request: "undo"})
 			if err != nil {
 				return err
 			}

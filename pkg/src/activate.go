@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -197,16 +198,22 @@ func setRefTarget(dir, ref, sha string) error {
 }
 
 // recordLineCommit appends a commit with treeHash on parentHash to the repo's
-// object store without touching the worktree, and returns its SHA.
-func recordLineCommit(dir string, parentHash, treeHash plumbing.Hash, msg, name, email string, extraParents ...plumbing.Hash) (string, error) {
+// object store without touching the worktree, and returns its SHA. The
+// author/committer carry name and the activation time; a zero when means the
+// server clock now (UTC).
+func recordLineCommit(dir string, parentHash, treeHash plumbing.Hash, msg, name, email string, when time.Time, extraParents ...plumbing.Hash) (string, error) {
 	r, err := gogit.PlainOpen(dir)
 	if err != nil {
 		return "", fmt.Errorf("src: open %s: %w", dir, err)
 	}
+	if when.IsZero() {
+		when = time.Now().UTC()
+	}
+	when = when.UTC()
 	parents := append([]plumbing.Hash{parentHash}, extraParents...)
 	c := &object.Commit{
-		Author:       object.Signature{Name: name, Email: email},
-		Committer:    object.Signature{Name: name, Email: email},
+		Author:       object.Signature{Name: name, Email: email, When: when},
+		Committer:    object.Signature{Name: name, Email: email, When: when},
 		Message:      msg,
 		TreeHash:     treeHash,
 		ParentHashes: parents,
@@ -248,11 +255,19 @@ func recordReviewVersion(dir, slug, tipSHA, targetSHA string) (string, error) {
 // closed when it refuses. PreSwitchHook runs after the activation commit is
 // recorded but before the active revision switches; a non-nil error aborts
 // the switch and keeps the previous active revision. Tests use it to stand
-// in for a crash mid-activation.
+// in for a crash mid-activation. Request is the user's request text recorded
+// in the activation commit; empty falls back to the revision SHA for older
+// callers. When overrides the activation time; zero means the server clock
+// now (UTC).
 type ActivateOptions struct {
 	Gate          state.ActivationGate
 	PreSwitchHook func() error
+	Request       string
+	When          time.Time
 }
+
+// oneLineRequest collapses request text to one trailer-safe line.
+func oneLineRequest(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // ActivateResult reports one activation: the requested revision, the audit
 // commit recorded on the principal's version line, and the previously
@@ -339,13 +354,17 @@ func Activate(home, app, rev, principal string, opts ActivateOptions) (ActivateR
 	if err != nil {
 		return out, fmt.Errorf("src: commit %s: %w", shortSHA(revSHA), err)
 	}
-	msg := fmt.Sprintf("Activate %s %s for %s\n\nRequest: %s\nVerdict: %s\nEvidence: %s\nPrincipal: %s\n",
-		app, shortSHA(revSHA), principal, revSHA, verdict.Verdict, verdict.EvidenceID, principal)
+	reqText := oneLineRequest(opts.Request)
+	if reqText == "" {
+		reqText = revSHA
+	}
+	msg := fmt.Sprintf("Activate %s %s for %s\n\nRevision: %s\nRequest: %s\nVerdict: %s\nEvidence: %s\nPrincipal: %s\n",
+		app, shortSHA(revSHA), principal, revSHA, reqText, verdict.Verdict, verdict.EvidenceID, principal)
 	// Keep the candidate commit reachable from the version line as a second
 	// parent. Its tree is what state.ActiveRevision names and what the next
 	// shaping request clones; the first parent remains the linear audit line.
 	activation, err := recordLineCommit(dir, plumbing.NewHash(lineParent), candidate.TreeHash, msg,
-		agentName(), "bashy@localhost", candidate.Hash)
+		principal, "bashy@localhost", opts.When, candidate.Hash)
 	if err != nil {
 		return out, err
 	}
