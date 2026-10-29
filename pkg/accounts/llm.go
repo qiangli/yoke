@@ -23,6 +23,11 @@ func NewLLMAdapter() *LLMAdapter {
 	return &LLMAdapter{collect: llmbudget.CollectReport}
 }
 
+// The LLM adapter joins the default registry through the one adapter
+// mechanism. Subpackage adapters join the same registry from builtin, so
+// `account discover` sees every Discover-capable adapter by default.
+func init() { MustRegisterAdapter(NewLLMAdapter()) }
+
 func (a *LLMAdapter) Name() string { return "llm" }
 
 func (a *LLMAdapter) Capabilities() Capability { return Discover | Verify | Usage | Billing }

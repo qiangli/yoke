@@ -74,6 +74,10 @@ type Panel struct {
 	Available bool   `json:"available"`
 	Note      string `json:"note,omitempty"`
 
+	// ShapedSource is the git checkout of a shaped app (shaped.go). Non-empty
+	// means the console serves the app itself, per principal, from this tree.
+	ShapedSource string `json:"-"`
+
 	handler http.Handler
 }
 

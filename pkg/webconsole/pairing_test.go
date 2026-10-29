@@ -263,6 +263,11 @@ func TestScopeSegmentResolution(t *testing.T) {
 		"/term/ws":            "term",
 		"/files/x/y":          "files",
 		"/":                   "",
+		// Shaping an app is scoped as that app, never as a "shape" grant.
+		"/shape/notes/":                      "notes",
+		"/shape/notes/preview/0123/api/list": "notes",
+		"/api/shape/notes/candidates":        "notes",
+		"/shape/":                            "shape",
 	}
 	for path, want := range cases {
 		if got := scopeSegment(path); got != want {

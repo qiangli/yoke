@@ -259,8 +259,10 @@ func TestCloudFailuresAndUnsupported(t *testing.T) {
 	if e = r.Register(hook); e != nil {
 		t.Fatal(e)
 	}
-	if e = RegisterDefaults(r); e != nil {
-		t.Fatal(e)
+	for _, a := range []Adapter{NewDigitalOceanAdapter(), NewAWSAdapter()} {
+		if e = r.Register(a); e != nil {
+			t.Fatal(e)
+		}
 	}
 	for _, p := range []string{"digitalocean", "aws"} {
 		if _, e = r.Adapter(p, Billing); e != nil {

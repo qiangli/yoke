@@ -23,8 +23,9 @@ type record struct {
 	Bindings    []string `json:"bindings,omitempty"`
 }
 type document struct {
-	SchemaVersion int      `json:"schema_version"`
-	Records       []record `json:"records"`
+	SchemaVersion int        `json:"schema_version"`
+	Records       []record   `json:"records"`
+	Snapshots     []Snapshot `json:"snapshots,omitempty"`
 }
 type Store struct{ Path string }
 
@@ -91,6 +92,7 @@ func (s *Store) mutate(fn func(*document) error) error {
 		return err
 	}
 	sort.Slice(d.Records, func(i, j int) bool { return d.Records[i].Key < d.Records[j].Key })
+	sortSnapshots(d.Snapshots)
 	after, err := json.MarshalIndent(d, "", "  ")
 	if err != nil {
 		return err

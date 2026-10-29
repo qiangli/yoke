@@ -325,11 +325,15 @@ func appRecord() *recordSpec {
 			listFlag("start", "start", "start-hint argv element shown when the app is down (repeatable; never run)", "start-hint argv element shown when the app is down (repeatable; never run)",
 				func(a *App, argv []string) error { a.Start = argv; return nil }),
 			strFlag("auth", "auth", "auth tier: system (default), public or custom", "auth tier: system (default), public or custom", func(a *App) *string { return &a.Auth }),
+			strFlag("type", "type", "app type: proxy (default) or shaped", "app type: proxy (default) or shaped", func(a *App) *string { return &a.Type }),
+			strFlag("source", "source", "shaped only: absolute path of the app's git checkout", "shaped only: absolute path of the app's git checkout", func(a *App) *string { return &a.Source }),
 			strFlag("login-path", "login_path", "custom auth only: app-relative login path", "custom auth only: app-relative login path", func(a *App) *string { return &a.LoginPath }),
 		},
 		Saved: func(cmd *cobra.Command, _ *Catalog, a App, set bool) error {
 			if set {
 				fmt.Fprintln(cmd.OutOrStdout(), a.Name)
+			} else if a.IsShaped() {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s -> /%s/ (shaped, %s)\n", a.Name, a.Name, a.Source)
 			} else {
 				fmt.Fprintf(cmd.OutOrStdout(), "%s -> /%s/ (127.0.0.1:%d)\n", a.Name, a.Name, a.Port)
 			}

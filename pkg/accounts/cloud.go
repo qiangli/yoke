@@ -9,6 +9,11 @@ import (
 	"time"
 )
 
+func init() {
+	MustRegisterAdapter(NewDigitalOceanAdapter())
+	MustRegisterAdapter(NewAWSAdapter())
+}
+
 var errCloudRead = errors.New("accounts: provider read failed")
 var errCloudIdentity = errors.New("accounts: provider identity mismatch")
 

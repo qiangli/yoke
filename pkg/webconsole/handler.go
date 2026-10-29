@@ -120,6 +120,9 @@ type Options struct {
 	// keys the SSO secret that signs tunnel-arrived requests. Empty means
 	// "apps". Only the Host tile's cloud-owner bridge reads it.
 	CloudApp string
+
+	// Shape configures shaped apps and the Shape panel (shaped.go).
+	Shape ShapeOptions
 }
 
 func (s *server) cloudApp() string {
@@ -162,6 +165,7 @@ type server struct {
 	probes        probeCache
 	inboxes       inboxCache
 	boards        boardCache
+	shapes        shapeHub
 }
 
 // consoleGuard mirrors meet's: an SSO secret, when configured, makes the vouch
@@ -420,6 +424,11 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 		mux.HandleFunc("GET /api/sprint/leaderboard/duty/agent", s.handleDutyAgentEvents)
 	}
 
+	// Shaped apps: the Shape panel, its API and candidate previews. Gated by
+	// the console ladder like every other route; each handler additionally
+	// requires exactly one principal.
+	s.shapedRoutes(mux)
+
 	closers := []func() error{}
 	for _, p := range s.panels {
 		if !p.Available {
@@ -453,6 +462,7 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 		otelServiceName,
 	)
 	closer := func() error {
+		s.shapes.wg.Wait()
 		var err error
 		for _, c := range closers {
 			if cerr := c(); cerr != nil && err == nil {
@@ -485,6 +495,9 @@ func (s *server) panelHandler(p Panel) (http.Handler, func() error) {
 		// engine, one lease, one transcript. The pass-through gate is required —
 		// see meet.MountOptions.
 		return meet.HandlerWith(s.opts.Ctx, meet.MountOptions{Gate: passthrough}), nil
+	}
+	if p.ShapedSource != "" {
+		return s.shapedApp(p).handler(), nil
 	}
 	if p.Mode == atlas.WebProxy && p.Port > 0 {
 		return s.proxyTo(p), nil

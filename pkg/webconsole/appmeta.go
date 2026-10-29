@@ -84,6 +84,9 @@ type AppMeta struct {
 
 	Auth      string `json:"auth,omitempty"`       // request only; operator --app-auth is authoritative
 	LoginPath string `json:"login_path,omitempty"` // custom only, app-relative
+
+	// shaped marks a registered shaped app: served in-process, no port.
+	shaped bool
 }
 
 // consoleReserved are mounts the console itself owns. This is deliberately NOT
@@ -94,7 +97,7 @@ type AppMeta struct {
 // declare a mount at all; admitting one without this would let an app claim
 // `login` and shadow the console's own sign-in page.
 var consoleReserved = map[string]bool{
-	"meta": true, "login": true, "shell": true, "term": true,
+	"meta": true, "login": true, "shell": true, "term": true, "shape": true,
 }
 
 // iconPath accepts only what is safe to interpolate into an SVG `d=` attribute.
@@ -276,10 +279,14 @@ func (m AppMeta) Validate(taken map[string]bool) error {
 	// A third party owns its own lifecycle, so it can only ever be proxied —
 	// in-process means the console links the handler, which only a Go package
 	// compiled into this binary can be.
-	if m.Mode != atlas.WebProxy {
+	if m.shaped {
+		if m.Port != 0 {
+			return errors.New("a shaped app is served from its source tree and has no port")
+		}
+	} else if m.Mode != atlas.WebProxy {
 		return fmt.Errorf("mode %q: a third-party app must be %q", m.Mode, atlas.WebProxy)
 	}
-	if m.Port < 1 || m.Port > 65535 {
+	if !m.shaped && (m.Port < 1 || m.Port > 65535) {
 		return fmt.Errorf("port %d out of range (give one in the meta payload, or as --app <bin>@<port>)", m.Port)
 	}
 	switch m.Auth {
