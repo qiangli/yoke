@@ -56,6 +56,35 @@ func TestReplayAttributedInstancesAccumulateByFamily(t *testing.T) {
 	}
 }
 
+func TestReplayGenieDelegateNeverFoldsIntoFamily(t *testing.T) {
+	del := eventTestDelivery("del", "genie-delegate:codex-gpt6-sol", "story-del", 1, 1)
+	del.FamilyID = "family:ycode-v1"
+	del.InstanceUUID = "uuid-ycode"
+
+	if got := del.RatingAgent(); got != "genie-delegate:codex-gpt6-sol" {
+		t.Fatalf("RatingAgent = %q, want genie-delegate:codex-gpt6-sol", got)
+	}
+
+	ycode := eventTestDelivery("yc", "ycode:gpt6-sol", "story-yc", 1, 1)
+	ycode.FamilyID = "family:ycode-v1"
+	ycode.InstanceUUID = "uuid-ycode"
+
+	vendor := eventTestDelivery("ven", "codex:gpt6-sol", "story-ven", 1, 1)
+	vendor.FamilyID = "family:codex-v1"
+	vendor.InstanceUUID = "uuid-codex"
+
+	got := Replay([]Event{del, ycode, vendor}, 1)
+	if fam := got.Agents["family:ycode-v1"]; fam == nil || fam.Standings[DutyCode].Events != 1 {
+		t.Fatalf("ycode family got %v events, want exactly 1 (delegate must not fold into ycode)", fam)
+	}
+	if ven := got.Agents["family:codex-v1"]; ven == nil || ven.Standings[DutyCode].Events != 1 {
+		t.Fatalf("vendor family got %v events, want exactly 1 (delegate must not fold into vendor)", ven)
+	}
+	if d := got.Agents["genie-delegate:codex-gpt6-sol"]; d == nil || d.Standings[DutyCode].Events != 1 {
+		t.Fatalf("delegate got %v events, want exactly 1 under its own row", d)
+	}
+}
+
 func TestReplayNewFamilyDoesNotInheritAndLegacyIsUnchanged(t *testing.T) {
 	legacy := eventTestDelivery("legacy", "tool:model", "story-a", 1, 1)
 	configured := eventTestDelivery("configured", "tool:model", "story-b", 1, 1)

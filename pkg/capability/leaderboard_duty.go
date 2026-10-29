@@ -183,6 +183,14 @@ func ComputeDutyBoard(events []ladder.Event, season int, override *ladder.Lines,
 
 func dutySeedBand(agent string) int {
 	cat := fleet.New()
+	if IsDelegateIdentity(agent) {
+		if _, modelName, ok := ParseDelegateIdentity(agent); ok {
+			if m, ok := cat.Model(modelName); ok && m.Band > 0 {
+				return m.Band
+			}
+		}
+		return 1
+	}
 	if a, _, model, err := cat.Binding(agent); err == nil {
 		if a.IsCascade() && a.Band > 0 {
 			return a.Band
@@ -198,6 +206,12 @@ func dutySeedBandForEvidence(identity string, events []ladder.Event) int {
 	for _, e := range events {
 		if e.RatingAgent() != identity {
 			continue
+		}
+		if IsDelegateIdentity(identity) {
+			if e.SeedBand > 0 {
+				return e.SeedBand
+			}
+			return dutySeedBand(identity)
 		}
 		if e.FamilyID != "" {
 			// A family prior is immutable evidence. The selected composite
