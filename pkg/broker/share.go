@@ -446,7 +446,10 @@ func ensureMeshForward(ctx context.Context, g DoorGrant, bindHost string) (strin
 	// Lines read "SERVICE <- peer PEERID -> ADDR".
 	for _, line := range strings.Split(string(out), "\n") {
 		f := strings.Fields(line)
-		if len(f) == 6 && f[0] == g.MeshService && f[3] == g.MeshPeerID {
+		if len(f) == 7 && f[6] != "[live]" {
+			continue
+		}
+		if (len(f) == 6 || len(f) == 7) && f[0] == g.MeshService && f[3] == g.MeshPeerID {
 			if h, _, err := net.SplitHostPort(f[5]); err == nil && h == bindHost {
 				return f[5], nil
 			}

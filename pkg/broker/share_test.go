@@ -454,3 +454,27 @@ func TestPeerMayListModelsOnly(t *testing.T) {
 		t.Fatal("peer route gate")
 	}
 }
+
+func TestMeshForwardStateField(t *testing.T) {
+	g := testGrant()
+	cases := []struct {
+		name, consumes string
+		wantAdds       int
+	}{
+		{"live reused", "llm <- peer PEERID-DOOR -> 127.0.0.1:40123 [live]\n", 0},
+		{"stateless reused", "llm <- peer PEERID-DOOR -> 127.0.0.1:40123\n", 0},
+		{"down not reused", "llm <- peer PEERID-DOOR -> 127.0.0.1:40123 [down]\n", 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := useFakeOutpost(t)
+			f.consumes = c.consumes
+			if _, err := ensureMeshForward(context.Background(), g, "127.0.0.1"); err != nil {
+				t.Fatal(err)
+			}
+			if n := f.count("mesh consume add"); n != c.wantAdds {
+				t.Fatalf("adds = %d, want %d", n, c.wantAdds)
+			}
+		})
+	}
+}
