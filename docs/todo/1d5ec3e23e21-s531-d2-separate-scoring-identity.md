@@ -3,14 +3,19 @@ id: 1d5ec3e23e21
 kind: feature
 title: S531.D2 Separate scoring identity
 seq: 2889
-status: todo
+status: done
 priority: p0
 labels:
     - genie
 created: 2026-10-29T07:01:15.748395Z
+weave: 673
+assignee: agy-gemini3.8-flash
 sprint: 531
 sprint_id: f7bc2570-ca8e-59b0-8163-c3c51ba23610
 sprint_title: 'Genie core harness: drive vendor agent CLIs as tools'
+closed: 2026-10-29T07:35:21.943815Z
+resolution: fixed
+closed_by: agy-gemini3.8-flash-w
 ---
 
 Spec: dhnt umbrella plan §D0 item 5 (decided f7d071321). Depends: D0 (accepted). Repo: yoke (pkg/capability, pkg/ladder).
