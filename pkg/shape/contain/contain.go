@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -109,11 +110,7 @@ type Result struct {
 // Scrub builds the child environment: a fixed minimal PATH/HOME/TMPDIR inside
 // the clone, the allowlisted parent variables, then explicit values.
 func Scrub(dir string, allow []string, set map[string]string) []string {
-	env := map[string]string{
-		"PATH":   "/usr/bin:/bin",
-		"HOME":   dir,
-		"TMPDIR": dir,
-	}
+	env := scrubBase(runtime.GOOS, dir, os.Getenv)
 	for _, k := range allow {
 		if v, ok := os.LookupEnv(k); ok {
 			env[k] = v
@@ -132,6 +129,36 @@ func Scrub(dir string, allow []string, set map[string]string) []string {
 		out = append(out, k+"="+env[k])
 	}
 	return out
+}
+
+// scrubBase is the fixed, secret-free floor of a contained environment for
+// goos. On Windows a process cannot start without SystemRoot, and HOME/TMPDIR
+// are spelled USERPROFILE/APPDATA/LOCALAPPDATA/TEMP/TMP — all pointed inside
+// the clone exactly as HOME and TMPDIR are, so the unit's state stays there.
+// SystemRoot is the only value taken from the parent; it names the OS
+// directory and carries nothing secret.
+func scrubBase(goos, dir string, getenv func(string) string) map[string]string {
+	env := map[string]string{
+		"PATH":   "/usr/bin:/bin",
+		"HOME":   dir,
+		"TMPDIR": dir,
+	}
+	if goos != "windows" {
+		return env
+	}
+	root := getenv("SystemRoot")
+	if root == "" {
+		root = `C:\Windows`
+	}
+	env["SystemRoot"] = root
+	env["PATH"] = root + `\System32;` + root
+	env["PATHEXT"] = ".COM;.EXE;.BAT;.CMD"
+	env["USERPROFILE"] = dir
+	env["APPDATA"] = dir + `\AppData\Roaming`
+	env["LOCALAPPDATA"] = dir + `\AppData\Local`
+	env["TEMP"] = dir
+	env["TMP"] = dir
+	return env
 }
 
 // Run executes the spec under the requested containment.
