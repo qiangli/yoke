@@ -48,6 +48,19 @@ type State struct {
 	// (recorded before any version declared a schema range); no guard
 	// applies until a version declares one.
 	DataSchema int `json:"data_schema,omitempty"`
+	// Granted is what the principal granted this app at adoption beyond its
+	// own data: locations it may read or write and external programs it may
+	// run. A unit gets only what its Bash# declares AND this grants; nil
+	// grants nothing, and clearing it revokes.
+	Granted *Grants `json:"granted,omitempty"`
+}
+
+// Grants are effects outside app data, by absolute (or ~-relative) path
+// and program name.
+type Grants struct {
+	Read     []string `json:"read,omitempty"`
+	Write    []string `json:"write,omitempty"`
+	Programs []string `json:"programs,omitempty"`
 }
 
 // Store addresses exactly one app and one authenticated principal.

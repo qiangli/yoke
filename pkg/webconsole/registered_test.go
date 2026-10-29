@@ -22,6 +22,9 @@ import (
 // message board stores so developer overlays and live board traffic cannot
 // leak into test assertions.
 func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && os.Args[1] == boundaryInterpArg {
+		os.Exit(boundaryInterpMain(os.Args[2:]))
+	}
 	dir, err := os.MkdirTemp("", "webconsole-apps-")
 	if err != nil {
 		panic(err)

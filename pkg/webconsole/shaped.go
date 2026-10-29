@@ -24,6 +24,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	_ "github.com/qiangli/yoke/git" // pure-Go file transport for local clones
+	"github.com/qiangli/yoke/pkg/shape/boundary"
 	"github.com/qiangli/yoke/pkg/shape/contain"
 	shape "github.com/qiangli/yoke/pkg/shape/state"
 	"github.com/qiangli/yoke/pkg/unit"
@@ -95,13 +96,14 @@ func (o ShapeOptions) runner() []string {
 
 // shapedApp is one shaped panel bound to its checkout.
 type shapedApp struct {
-	name string
-	repo string
-	opts ShapeOptions
+	name  string
+	repo  string
+	opts  ShapeOptions
+	calls *callBroker
 }
 
 func (s *server) shapedApp(p Panel) *shapedApp {
-	return &shapedApp{name: p.Name, repo: p.ShapedSource, opts: s.opts.Shape}
+	return &shapedApp{name: p.Name, repo: p.ShapedSource, opts: s.opts.Shape, calls: &s.calls}
 }
 
 // store opens the principal's private state. principal must be non-empty.
@@ -294,6 +296,7 @@ func (a *shapedApp) serveAPI(w http.ResponseWriter, r *http.Request, tree *objec
 	// the host provides it.
 	effects := []string{"read", "write"}
 	level := a.opts.Level
+	var declared boundary.Grants
 	if c, cerr := unit.ReadContract(body); cerr != nil {
 		// Fail closed: an unreadable contract whose text names @sandbox
 		// may be asking for isolation we cannot see; never run it
@@ -309,13 +312,22 @@ func (a *shapedApp) serveAPI(w http.ResponseWriter, r *http.Request, tree *objec
 		if c.Sandbox {
 			level = contain.LevelSandbox
 		}
+		declared = boundary.Grants{Read: c.Reads, Write: c.Writes, Programs: c.Runs}
+	}
+	// Outside its own data a unit has only what its Bash# declares AND the
+	// principal granted at adoption; declaring more is the candidate
+	// widening its own grants, refused before it starts.
+	grants, err := a.admit(principal, declared)
+	if err != nil {
+		http.Error(w, "unit "+name+": "+err.Error(), http.StatusForbidden)
+		return
 	}
 	reqBody, err := io.ReadAll(http.MaxBytesReader(w, r.Body, apiBodyLimit))
 	if err != nil {
 		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 		return
 	}
-	out, res, err := a.runUnit(r.Context(), dataDir, body, name, level, effects, map[string]string{
+	out, res, err := a.runUnit(r.Context(), dataDir, body, name, level, effects, principal, grants, map[string]string{
 		"REQUEST_METHOD":     r.Method,
 		"QUERY_STRING":       r.URL.RawQuery,
 		"CONTENT_TYPE":       r.Header.Get("Content-Type"),
@@ -369,8 +381,10 @@ func mentionsSandboxRequest(body string) bool {
 }
 
 // runUnit runs one Bash# body under pkg/shape/contain with dataDir as its
-// cwd and its BASHY_APP_DATA (and, in a sandbox, its only mount).
-func (a *shapedApp) runUnit(ctx context.Context, dataDir, body, name string, level contain.Level, effects []string, env map[string]string) ([]byte, contain.Result, error) {
+// cwd and its BASHY_APP_DATA (and, in a sandbox, its only mount). Outside a
+// sandbox the interpreter enforces the app data boundary (pkg/shape/boundary)
+// it receives in $BASHY_APP_BOUNDARY, including the cross-app call endpoint.
+func (a *shapedApp) runUnit(ctx context.Context, dataDir, body, name string, level contain.Level, effects []string, principal string, grants boundary.Grants, env map[string]string) ([]byte, contain.Result, error) {
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		return nil, contain.Result{}, err
@@ -385,6 +399,22 @@ func (a *shapedApp) runUnit(ctx context.Context, dataDir, body, name string, lev
 	set := map[string]string{shape.AppDataEnv: dataDir}
 	for k, v := range env {
 		set[k] = v
+	}
+	if level != contain.LevelSandbox {
+		pol, revoke, err := a.policy(ctx, principal, dataDir, grants)
+		if err != nil {
+			_ = pw.Close()
+			<-got
+			return nil, contain.Result{}, err
+		}
+		defer revoke()
+		v, err := boundary.Env(pol)
+		if err != nil {
+			_ = pw.Close()
+			<-got
+			return nil, contain.Result{}, err
+		}
+		set[boundary.EnvVar] = v
 	}
 	timeout := a.opts.APITimeout
 	if timeout == 0 {
