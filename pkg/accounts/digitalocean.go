@@ -44,7 +44,9 @@ func (a *DigitalOceanAdapter) client(ctx context.Context, c Connection) (*do.Cli
 	if !ok {
 		return nil, ErrUnsupported
 	}
-	v, e := do.NewClient(do.ClientConfig{Token: os.Getenv(name)})
+	// Either DigitalOcean spelling satisfies either reference — see
+	// doEnvAliases in materialize.go for why the two names exist.
+	v, e := do.NewClient(do.ClientConfig{Token: envCredential(os.Getenv, name)})
 	if e != nil {
 		return nil, errCloudRead
 	}
@@ -54,8 +56,16 @@ func (a *DigitalOceanAdapter) Discover(_ context.Context) ([]Observation, error)
 	// Discovery is local-only: an environment variable is configuration, not
 	// proof of a team identity. Verification is an explicit refresh.
 	cs := a.Connections
-	if len(cs) == 0 && os.Getenv("DIGITALOCEAN_TOKEN") != "" {
-		cs = []Connection{{ID: "env", CredentialRef: "env:DIGITALOCEAN_TOKEN"}}
+	if len(cs) == 0 {
+		// Both spellings count as configuration: pkg/fleet's provider path
+		// reads $DIGITALOCEAN_ACCESS_TOKEN, so a host that only set that
+		// one used to be invisible to discovery.
+		for _, name := range DigitalOceanEnvNames() {
+			if strings.TrimSpace(os.Getenv(name)) != "" {
+				cs = []Connection{{ID: "env", CredentialRef: "env:" + name}}
+				break
+			}
+		}
 	}
 	var out []Observation
 	for _, c := range cs {

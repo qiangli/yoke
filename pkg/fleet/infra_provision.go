@@ -36,6 +36,12 @@ func newInfraProvision(opts []Option) *cobra.Command {
 	var budgetCap, budgetPerInstance float64
 	var budgetName, userDataBucket string
 	var dryRun, asJSON bool
+	// `--account` names the PROVIDER identity (a DigitalOcean team, an AWS
+	// profile). It is deliberately unrelated to --master/--token, which are
+	// the cloudbox session this provision enrolls against, and to --profile,
+	// which is the satellite's workload profile — so none of those three is
+	// a conflict here.
+	var acct accountFlag
 	cmd := &cobra.Command{
 		Use:   "provision [PROVIDER]",
 		Short: "Provision a satellite host via an enrollment bundle (executable path)",
@@ -76,11 +82,22 @@ func newInfraProvision(opts []Option) *cobra.Command {
 			if err := validateProvisionProfile(profile); err != nil {
 				return err
 			}
+			// Both account refusals land before the dry-run print and
+			// before the master session is resolved, so neither a network
+			// call nor an output line precedes them.
+			if err := acct.credentialRefConflict(credentialRef); err != nil {
+				return err
+			}
+			sel, aerr := resolveInfraAccount(cmd.Context(), &acct, p.Manifest.Name)
+			if aerr != nil {
+				return aerr
+			}
 			openOpts := builtinOpenOptions{
 				Owner: owner, Region: region,
 				Sprint: sprint, Story: story, TTL: ttl,
 				BudgetCap: budgetCap, BudgetPerInstance: budgetPerInstance,
 				BudgetName: budgetName, UserDataBucket: userDataBucket,
+				Account: sel,
 			}
 			_, isBuiltin := builtinFor(p)
 			if dryRun {
@@ -159,6 +176,7 @@ func newInfraProvision(opts []Option) *cobra.Command {
 	cmd.Flags().StringVar(&hostName, "name", "", "host name (default the satellite id)")
 	cmd.Flags().StringVar(&owner, "owner", "local", "ownership tag scope")
 	cmd.Flags().StringVar(&credentialRef, "credential-ref", "", "pkg/secrets ref for the provider credential (default the provider name)")
+	acct.bind(cmd)
 	cmd.Flags().StringVar(&key, "key", "", "idempotency key (default infra-provision-<satellite>)")
 	cmd.Flags().StringVar(&sprint, "sprint", "", "sprint number recorded as a governance tag on created resources")
 	cmd.Flags().StringVar(&story, "story", "", "story number recorded as a governance tag on created resources")
@@ -343,8 +361,15 @@ func runProvisionDryRun(cmd *cobra.Command, req dryRunRequest, openOpts builtinO
 // region, or a refused budget is an ERROR: the dry-run catches what the
 // live path would only surface at create time.
 func provisionPreflight(req dryRunRequest, ref string, openOpts builtinOpenOptions) (dryRunPreflight, error) {
-	cred, err := resolveProviderCredential(ref)
+	cred, err := resolveProviderCredentialFor(ref, openOpts.Account)
 	if err != nil {
+		// A dry run tolerates a missing AMBIENT credential — it creates
+		// nothing, so reporting the skip is more useful than refusing. An
+		// explicitly named account is different: the operator asked for
+		// that identity, and skipping would quietly answer about another.
+		if openOpts.Account != nil {
+			return dryRunPreflight{}, err
+		}
 		return dryRunPreflight{Note: "skipped (" + err.Error() + ")"}, nil
 	}
 	if !req.Builtin {

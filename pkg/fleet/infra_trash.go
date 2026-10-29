@@ -13,6 +13,7 @@ import (
 )
 
 func newInfraTrash() *cobra.Command {
+	var acct accountFlag
 	var dropletID, satID int
 	var grace string
 	var reason string
@@ -46,7 +47,7 @@ func newInfraTrash() *cobra.Command {
 				graceDur = 24 * time.Hour
 			}
 
-			client, err := resolveDOClient()
+			client, err := acct.doClient(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -110,10 +111,12 @@ func newInfraTrash() *cobra.Command {
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
 
 	cmd.AddCommand(newInfraTrashList())
+	acct.bind(cmd)
 	return cmd
 }
 
 func newInfraTrashList() *cobra.Command {
+	var acct accountFlag
 	var asJSON bool
 
 	cmd := &cobra.Command{
@@ -122,7 +125,7 @@ func newInfraTrashList() *cobra.Command {
 		Short:   "List trashed droplets with purge-after and reason",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			client, err := resolveDOClient()
+			client, err := acct.doClient(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -154,10 +157,12 @@ func newInfraTrashList() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
+	acct.bind(cmd)
 	return cmd
 }
 
 func newInfraRestore() *cobra.Command {
+	var acct accountFlag
 	var dropletID, satID int
 	var dryRun, asJSON bool
 
@@ -173,7 +178,7 @@ func newInfraRestore() *cobra.Command {
 				return errors.New("infra restore: --droplet ID is required")
 			}
 
-			client, err := resolveDOClient()
+			client, err := acct.doClient(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -224,5 +229,6 @@ func newInfraRestore() *cobra.Command {
 	cmd.Flags().IntVar(&satID, "sat", 0, "Satellite droplet ID (alias for --droplet)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview restore actions without making changes")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
+	acct.bind(cmd)
 	return cmd
 }

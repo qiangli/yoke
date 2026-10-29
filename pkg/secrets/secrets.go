@@ -69,6 +69,7 @@ bashy secret exec for one-off commands.`,
 	cmd.CompletionOptions.DisableDefaultCmd = true
 	cmd.PersistentFlags().StringVar(&cfg.URL, "url", "", "cloudbox base URL (default $BASHY_CLOUDBOX_URL, else https://ai.dhnt.io)")
 	cmd.PersistentFlags().StringVar(&cfg.Token, "token", "", "Bearer token (default $BASHY_SECRETS_TOKEN, ~/.config/bashy/secrets-token, or $BASHY_API_KEY)")
+	cmd.PersistentFlags().StringVar(&cfg.Account, "account", "", "use this account alias or id's cloudbox endpoint and token for THIS invocation only (see 'bashy account'); conflicts with --url/--token")
 
 	cmd.AddCommand(newEnvCmd(&cfg))
 	cmd.AddCommand(newExecCmd(&cfg))
@@ -150,10 +151,15 @@ func runEnv(out, errOut io.Writer, cfg Config, tmplPath string, noCache bool) er
 		tmplPath = defaultTemplatePath()
 	}
 
-	// Cache only the default-template render (a custom path is an ad-hoc
-	// invocation; caching it under the shared key would poison the default).
+	// Cache only the default-template render under the DEFAULT identity. A
+	// custom path is an ad-hoc invocation, and so is an explicit --account:
+	// the shared cache file is not keyed by account, so caching one account's
+	// values there would let the next invocation — another account's, or none
+	// at all — be served credentials belonging to someone else. That is the
+	// exact cross-identity leak --account exists to prevent, so an explicit
+	// selection neither reads nor writes the cache.
 	cachePath := ""
-	if usingDefault {
+	if usingDefault && strings.TrimSpace(cfg.Account) == "" {
 		cachePath = cacheFile()
 	}
 	bindings, terr := readTemplate(tmplPath)

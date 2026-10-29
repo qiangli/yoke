@@ -211,6 +211,7 @@ func errNoSatelliteFilter() error {
 // master sees. Read-only; the only verb in this run is `ls`.
 func NewPairedHostCmd() *cobra.Command {
 	var master, token, satellite string
+	var acct accountFlag
 	var asJSON bool
 	c := &cobra.Command{
 		Use:   "host",
@@ -225,6 +226,7 @@ func NewPairedHostCmd() *cobra.Command {
 	c.PersistentFlags().StringVar(&master, "master", "", "master base URL (default $BASHY_CLOUDBOX_URL, else https://ai.dhnt.io)")
 	c.PersistentFlags().StringVar(&token, "token", "", "master Bearer [REDACTED] (default $BASHY_FLEET_TOKEN, else $BASHY_API_KEY, else the paired credential)")
 	c.PersistentFlags().BoolVar(&asJSON, "json", false, "machine-readable output")
+	acct.bindPersistent(c)
 
 	ls := &cobra.Command{
 		Use:   "ls",
@@ -234,7 +236,7 @@ func NewPairedHostCmd() *cobra.Command {
 			if strings.TrimSpace(satellite) != "" {
 				return errNoSatelliteFilter()
 			}
-			client, err := NewPairedHostsClient(master, token)
+			client, err := newPairedHostsClientFor(cmd.Context(), &acct, master, token)
 			if err != nil {
 				return err
 			}

@@ -25,6 +25,27 @@ const PortalURL = "https://ai.dhnt.io"
 
 var errHandled = errors.New("tessaro: handled")
 
+// accountUnsupported refuses `--account` on these verbs (S524.7).
+//
+// Both commands PASS THEIR ARGV STRAIGHT THROUGH to the outpost agent
+// (DisableFlagParsing), and pairing is what creates an account rather than
+// something an account can be selected for. Silently forwarding --account
+// would hand outpost a flag it does not know; worse, it would read as though a
+// selection had been honored. So it is refused by name, before the exec.
+func accountUnsupported(args []string) bool {
+	for _, a := range args {
+		if a == "--" {
+			return false
+		}
+		if a == "--account" || strings.HasPrefix(a, "--account=") {
+			return true
+		}
+	}
+	return false
+}
+
+const accountUnsupportedMsg = "tessaro: account_unsupported: --account is not supported here — pairing establishes an account rather than selecting one (see 'bashy account')"
+
 // subVerbs maps `bashy tessaro <verb>` to the outpost account subcommand.
 var subVerbs = map[string]string{
 	"login":   "register", // pair this machine with the portal (sign in)
@@ -50,6 +71,10 @@ func NewTessaroCmd() *cobra.Command {
 			if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
 				fmt.Fprint(cmd.OutOrStdout(), tessaroLong, "\n")
 				return nil
+			}
+			if accountUnsupported(args) {
+				fmt.Fprintln(cmd.ErrOrStderr(), accountUnsupportedMsg)
+				return errHandled
 			}
 			sub := args[0]
 			rest := args[1:]
@@ -79,6 +104,10 @@ Everything after ` + "`login`" + ` passes through to the outpost pairing flow.`,
 		SilenceUsage:       true,
 		SilenceErrors:      true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if accountUnsupported(args) {
+				fmt.Fprintln(cmd.ErrOrStderr(), accountUnsupportedMsg)
+				return errHandled
+			}
 			return runAgent(cmd, append([]string{"register"}, args...)...)
 		},
 	}

@@ -240,6 +240,7 @@ func parseCredentialExpiry(s string) (string, error) {
 // ls, rm and rotate over the master v1 credential endpoints.
 func NewInfraCredentialCmd() *cobra.Command {
 	var master, token string
+	var acct accountFlag
 	var asJSON bool
 	c := &cobra.Command{
 		Use:   "credential",
@@ -248,6 +249,7 @@ func NewInfraCredentialCmd() *cobra.Command {
 	c.PersistentFlags().StringVar(&master, "master", "", "master base URL (default $BASHY_CLOUDBOX_URL, else https://ai.dhnt.io)")
 	c.PersistentFlags().StringVar(&token, "token", "", "master Bearer [REDACTED] (default $BASHY_FLEET_TOKEN, else $BASHY_API_KEY, else the paired credential)")
 	c.PersistentFlags().BoolVar(&asJSON, "json", false, "machine-readable output")
+	acct.bindPersistent(c)
 
 	var addProvider, addRole, addExpires string
 	add := &cobra.Command{
@@ -266,7 +268,7 @@ func NewInfraCredentialCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client, err := NewCredentialClient(master, token)
+			client, err := newCredentialClientFor(cmd.Context(), &acct, master, token)
 			if err != nil {
 				return err
 			}
@@ -295,7 +297,7 @@ func NewInfraCredentialCmd() *cobra.Command {
 		Short:   "List credential metadata (never the value)",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			client, err := NewCredentialClient(master, token)
+			client, err := newCredentialClientFor(cmd.Context(), &acct, master, token)
 			if err != nil {
 				return err
 			}
@@ -371,7 +373,7 @@ func NewInfraCredentialCmd() *cobra.Command {
 			if rmID == 0 && (strings.TrimSpace(rmProvider) == "" || strings.TrimSpace(rmRole) == "") {
 				return fmt.Errorf("fleet: infra credential rm: --id ID (or --provider and --role) is required")
 			}
-			client, err := NewCredentialClient(master, token)
+			client, err := newCredentialClientFor(cmd.Context(), &acct, master, token)
 			if err != nil {
 				return err
 			}
@@ -441,7 +443,7 @@ func NewInfraCredentialCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client, err := NewCredentialClient(master, token)
+			client, err := newCredentialClientFor(cmd.Context(), &acct, master, token)
 			if err != nil {
 				return err
 			}

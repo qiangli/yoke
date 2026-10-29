@@ -26,6 +26,7 @@ func newInfraFirewall() *cobra.Command {
 }
 
 func newInfraFirewallList() *cobra.Command {
+	var acct accountFlag
 	var name string
 	var asJSON bool
 
@@ -34,7 +35,7 @@ func newInfraFirewallList() *cobra.Command {
 		Short: "List cloud firewalls",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			client, err := resolveDOClient()
+			client, err := acct.doClient(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -74,10 +75,12 @@ func newInfraFirewallList() *cobra.Command {
 
 	cmd.Flags().StringVar(&name, "name", "", "filter by firewall name")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
+	acct.bind(cmd)
 	return cmd
 }
 
 func newInfraFirewallAllow() *cobra.Command {
+	var acct accountFlag
 	var name, tag, portProto, sourceCIDR string
 	var dropletID, satID int
 	var dryRun, asJSON bool
@@ -97,7 +100,7 @@ func newInfraFirewallAllow() *cobra.Command {
 				return errors.New("infra firewall allow: at least one of --tag, --droplet, or --port must be specified")
 			}
 
-			client, err := resolveDOClient()
+			client, err := acct.doClient(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -276,10 +279,12 @@ func newInfraFirewallAllow() *cobra.Command {
 	cmd.Flags().StringVar(&sourceCIDR, "source", "", "Source CIDR for inbound rule (default: 0.0.0.0/0,::/0)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview action without making changes")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
+	acct.bind(cmd)
 	return cmd
 }
 
 func newInfraFirewallDeny() *cobra.Command {
+	var acct accountFlag
 	var name, tag, portProto, sourceCIDR string
 	var dropletID, satID int
 	var dryRun, asJSON bool
@@ -299,7 +304,7 @@ func newInfraFirewallDeny() *cobra.Command {
 				return errors.New("infra firewall deny: at least one of --tag, --droplet, or --port must be specified")
 			}
 
-			client, err := resolveDOClient()
+			client, err := acct.doClient(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -403,5 +408,6 @@ func newInfraFirewallDeny() *cobra.Command {
 	cmd.Flags().StringVar(&sourceCIDR, "source", "", "Source CIDR for rule matching")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview action without making changes")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
+	acct.bind(cmd)
 	return cmd
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 
@@ -12,24 +11,6 @@ import (
 
 	"github.com/qiangli/yoke/pkg/provider/digitalocean"
 )
-
-func resolveDOClient() (*digitalocean.Client, error) {
-	token := os.Getenv("DIGITALOCEAN_ACCESS_TOKEN")
-	if token == "" {
-		return nil, errors.New("digitalocean: DIGITALOCEAN_ACCESS_TOKEN environment variable is required")
-	}
-	baseURL := os.Getenv("DIGITALOCEAN_API_URL")
-	if baseURL == "" {
-		baseURL = os.Getenv("DIGITALOCEAN_BASE_URL")
-	}
-	if baseURL == "" {
-		baseURL = digitalocean.DefaultBaseURL
-	}
-	return digitalocean.NewClient(digitalocean.ClientConfig{
-		BaseURL: baseURL,
-		Token:   token,
-	})
-}
 
 func newInfraIP() *cobra.Command {
 	ipCmd := &cobra.Command{
@@ -45,6 +26,7 @@ func newInfraIP() *cobra.Command {
 }
 
 func newInfraIPList() *cobra.Command {
+	var acct accountFlag
 	var dropletID, satID int
 	var region, ipAddr string
 	var asJSON bool
@@ -57,7 +39,7 @@ func newInfraIPList() *cobra.Command {
 			if dropletID == 0 && satID > 0 {
 				dropletID = satID
 			}
-			client, err := resolveDOClient()
+			client, err := acct.doClient(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -110,10 +92,12 @@ func newInfraIPList() *cobra.Command {
 	cmd.Flags().StringVar(&region, "region", "", "filter by region")
 	cmd.Flags().StringVar(&ipAddr, "ip", "", "filter by IP address")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
+	acct.bind(cmd)
 	return cmd
 }
 
 func newInfraIPAttach() *cobra.Command {
+	var acct accountFlag
 	var dropletID, satID int
 	var region, ipAddr string
 	var dryRun, asJSON bool
@@ -130,7 +114,7 @@ func newInfraIPAttach() *cobra.Command {
 				return errors.New("infra ip attach: --droplet ID is required")
 			}
 
-			client, err := resolveDOClient()
+			client, err := acct.doClient(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -236,10 +220,12 @@ func newInfraIPAttach() *cobra.Command {
 	cmd.Flags().StringVar(&ipAddr, "ip", "", "Existing reserved IP to attach")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview action without making changes")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
+	acct.bind(cmd)
 	return cmd
 }
 
 func newInfraIPDetach() *cobra.Command {
+	var acct accountFlag
 	var dropletID, satID int
 	var ipAddr string
 	var dryRun, asJSON bool
@@ -256,7 +242,7 @@ func newInfraIPDetach() *cobra.Command {
 				return errors.New("infra ip detach: --droplet ID is required")
 			}
 
-			client, err := resolveDOClient()
+			client, err := acct.doClient(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -320,5 +306,6 @@ func newInfraIPDetach() *cobra.Command {
 	cmd.Flags().StringVar(&ipAddr, "ip", "", "Specific reserved IP to detach")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview action without making changes")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
+	acct.bind(cmd)
 	return cmd
 }
