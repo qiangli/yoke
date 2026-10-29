@@ -3,7 +3,7 @@ id: ed3ef42edf96
 kind: feature
 title: S522.2 AWS provider adapter (Lightsail) + bashy infra provision --provider aws with budget preflight
 seq: 2816
-status: doing
+status: done
 priority: p0
 labels:
     - cloud
@@ -14,6 +14,7 @@ assignee: claude-opus5
 sprint: 522
 sprint_id: 3413791d-7a40-5514-9970-99b64d1d83cf
 sprint_title: 'AWS cloud integration and satellite hosting: bashy aws provider (Lightsail), budget guard, hosting research, self-hosted + hosted AWS satellites'
+closed: 2026-10-28T20:08:21.946187Z
 closed_by: s522-manager
 ---
 
