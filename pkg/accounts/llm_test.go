@@ -461,7 +461,7 @@ func TestLLMVerifySelectResources(t *testing.T) {
 
 func TestLLMRegistry(t *testing.T) {
 	r := NewRegistry()
-	if err := RegisterDefaults(r); err != nil {
+	if err := r.Register(NewLLMAdapter()); err != nil {
 		t.Fatal(err)
 	}
 	a, err := r.Adapter("llm", Usage|Billing)
@@ -475,7 +475,7 @@ func TestLLMRegistry(t *testing.T) {
 	if _, err := r.Adapter("llm", Resources); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("resources capability = %v", err)
 	}
-	if err := RegisterDefaults(r); err == nil {
+	if err := r.Register(NewLLMAdapter()); err == nil {
 		t.Fatal("double registration accepted")
 	}
 }
