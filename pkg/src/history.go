@@ -56,7 +56,9 @@ type ReviewVersion struct {
 
 // VersionHistory is one principal's version line: every recorded version
 // newest-first, plus the named labels, the review versions, and the
-// currently active revision.
+// currently active revision. Base is the shared base release the line
+// started from: the oldest restorable version, so restoring the oldest
+// listed version reverts the app to how it started.
 //
 // Versions mirrors Entries under the name the web history view uses, so the
 // app view and `src history --json` are the same history view. Entries
@@ -67,6 +69,7 @@ type VersionHistory struct {
 	Line      string          `json:"line"`
 	Tip       string          `json:"tip,omitempty"`
 	Active    string          `json:"active,omitempty"`
+	Base      string          `json:"base,omitempty"`
 	Entries   []VersionEntry  `json:"entries,omitempty"`
 	Versions  []VersionEntry  `json:"versions,omitempty"`
 	Named     []NamedVersion  `json:"named,omitempty"`
@@ -97,6 +100,9 @@ func History(home, app, principal string) (VersionHistory, error) {
 	r, err := gogit.PlainOpen(dir)
 	if err != nil {
 		return out, fmt.Errorf("src: open %s: %w", dir, err)
+	}
+	if sha, err := ygit.ResolveCommit(dir, pristineBranch); err == nil {
+		out.Base = sha
 	}
 	tip, ok, err := refTarget(dir, out.Line)
 	if err != nil {

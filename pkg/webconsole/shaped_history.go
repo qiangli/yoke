@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -45,13 +46,17 @@ type historyVersion struct {
 
 // historyView is the GET history response: every version newest-first with
 // who, when, request text, verifier result, evidence reference, names and
-// the active marker, plus the raw named and review labels.
+// the active marker, plus the raw named and review labels. Base is the
+// shared base release the app started from: the oldest restorable version,
+// rendered as the last row so restoring it reverts the app to how it
+// started.
 type historyView struct {
 	App       string              `json:"app"`
 	Principal string              `json:"principal"`
 	Line      string              `json:"line"`
 	Tip       string              `json:"tip,omitempty"`
 	Active    string              `json:"active,omitempty"`
+	Base      string              `json:"base,omitempty"`
 	Versions  []historyVersion    `json:"versions,omitempty"`
 	Named     []src.NamedVersion  `json:"named,omitempty"`
 	Reviews   []src.ReviewVersion `json:"reviews,omitempty"`
@@ -64,7 +69,7 @@ func toHistoryView(h src.VersionHistory) historyView {
 	}
 	v := historyView{
 		App: h.App, Principal: h.Principal, Line: h.Line,
-		Tip: h.Tip, Active: h.Active, Named: h.Named, Reviews: h.Reviews,
+		Tip: h.Tip, Active: h.Active, Base: h.Base, Named: h.Named, Reviews: h.Reviews,
 	}
 	for _, e := range h.Entries {
 		v.Versions = append(v.Versions, historyVersion{
@@ -114,13 +119,17 @@ func (a *shapedApp) srcRepo() (home string, err error) {
 }
 
 // resolveHistoryVersion maps anything the caller may name — a full commit, a
-// label they pinned, a review id — to the content revision, but only among
-// versions on THEIR OWN line. Anything else, including another principal's
+// label they pinned, a review id, or the shared base release ("base" or its
+// SHA) — to the content revision, but only among versions on THEIR OWN
+// line plus that shared base. Anything else, including another principal's
 // versions, is simply unknown: 404, never a cross-principal read.
 func resolveHistoryVersion(h src.VersionHistory, rev string) (string, bool) {
 	rev = strings.TrimSpace(rev)
 	if rev == "" {
 		return "", false
+	}
+	if h.Base != "" && (rev == "base" || strings.EqualFold(rev, h.Base)) {
+		return h.Base, true
 	}
 	for _, e := range h.Entries {
 		if rev == e.Activation || rev == e.Revision {
@@ -312,6 +321,7 @@ func (s *server) handleShapeHistoryRestore(w http.ResponseWriter, r *http.Reques
 	}
 	res, err := s.restoreVersion(r.Context(), a, principal, home, in.Rev)
 	if err != nil {
+		slog.Warn("shape history restore refused", "app", a.name, "principal", principal, "rev", in.Rev, "err", err)
 		if errors.Is(err, errUnknownHistoryVersion) {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
@@ -332,6 +342,7 @@ func (s *server) handleShapeHistoryUndo(w http.ResponseWriter, r *http.Request) 
 	}
 	res, err := s.undoVersion(r.Context(), a, principal, home)
 	if err != nil {
+		slog.Warn("shape history undo refused", "app", a.name, "principal", principal, "err", err)
 		if errors.Is(err, errUnknownHistoryVersion) {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
