@@ -29,6 +29,7 @@ import (
 
 	"github.com/qiangli/yoke/pkg/coopauth"
 	"github.com/qiangli/yoke/pkg/shape/contain"
+	shapegate "github.com/qiangli/yoke/pkg/shape/gate"
 	shape "github.com/qiangli/yoke/pkg/shape/state"
 	shapeverify "github.com/qiangli/yoke/pkg/shape/verify"
 	"github.com/qiangli/yoke/pkg/src"
@@ -220,12 +221,10 @@ func (a *productionActivator) Activate(ctx context.Context, req ActivateRequest)
 	}
 	defer sourceRepo.Storer.RemoveReference(to)
 
-	gate := shape.GateFunc(func(candidate, base, principal string) (shape.EvidenceRef, error) {
-		if err := src.Gate(home, candidate, base, principal); err != nil {
-			return shape.EvidenceRef{}, err
-		}
-		return shape.EvidenceRef{Verdict: "pass", EvidenceID: req.Evidence}, nil
-	})
+	// The gate is the shared production gate: the sealed verifier
+	// evidence is re-checked here, and the Verdict received over HTTP is
+	// never itself authority to activate.
+	gate := shapegate.New(home, req.Evidence)
 	_, err = src.Activate(home, req.App, req.CandidateRev, req.Principal, src.ActivateOptions{Gate: gate})
 	return err
 }

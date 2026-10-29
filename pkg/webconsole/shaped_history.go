@@ -17,6 +17,7 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 
+	shapegate "github.com/qiangli/yoke/pkg/shape/gate"
 	shape "github.com/qiangli/yoke/pkg/shape/state"
 	"github.com/qiangli/yoke/pkg/src"
 )
@@ -233,18 +234,12 @@ func (s *server) handleShapeHistoryName(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// restoreGate is the activation gate a history restore passes: the sealed
-// verifier evidence for this exact target, base and principal — the same
-// src.Gate check the production activator runs before switching an
+// restoreGate is the activation gate a history restore passes: the shared
+// production gate the production activator runs before switching an
 // approval. Evidence sealed by the pre-restore verification below is what
 // satisfies it; anything else refuses with the evidence reason.
 func restoreGate(home, evidence string) shape.ActivationGate {
-	return shape.GateFunc(func(candidate, base, principal string) (shape.EvidenceRef, error) {
-		if err := src.Gate(home, candidate, base, principal); err != nil {
-			return shape.EvidenceRef{}, err
-		}
-		return shape.EvidenceRef{Verdict: "pass", EvidenceID: evidence}, nil
-	})
+	return shapegate.New(home, evidence)
 }
 
 // verifyRestoreTarget runs the console verifier over the restore target

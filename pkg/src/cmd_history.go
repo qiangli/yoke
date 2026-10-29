@@ -173,10 +173,53 @@ unchanged. The principal comes from --user or $BASHY_PRINCIPAL.`,
 			if err != nil {
 				return err
 			}
-			if cliGate == nil {
-				return fmt.Errorf("src: restore refused: no activation gate is wired")
+			res, err := Restore("", args[0], args[1], p, RestoreOptions{Gate: effectiveGate()})
+			if err != nil {
+				return err
 			}
-			res, err := Restore("", args[0], args[1], p, RestoreOptions{Gate: cliGate})
+			prev := "(none)"
+			if res.Previous != "" {
+				prev = shortSHA(res.Previous)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "restored %s for %s at %s (was %s)\n",
+				res.App, res.Principal, shortSHA(res.Revision), prev)
+			return nil
+		},
+	}
+	userFlag(c, &user)
+	return c
+}
+
+func newUndoCmd() *cobra.Command {
+	var user string
+	c := &cobra.Command{
+		Use:   "undo <app>",
+		Short: "Return to the previous active revision through a new gated commit",
+		Long: `undo restores the principal's previous active revision (the
+last-known-good the last activation or restore recorded) by recording a
+NEW forward commit on the principal's version line, passing it through
+the activation gate, and activating it. History is never rewritten: the
+undo of a restore is a restore. With nothing to undo it refuses and the
+active revision stays where it is. The principal comes from --user or
+$BASHY_PRINCIPAL.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			p, err := resolveUser(user)
+			if err != nil {
+				return err
+			}
+			store, err := state.OpenAt(Home(), args[0], p)
+			if err != nil {
+				return err
+			}
+			st, err := store.Read()
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(st.LastKnownGood) == "" {
+				return fmt.Errorf("src: nothing to undo: no previous version is recorded")
+			}
+			res, err := Restore("", args[0], st.LastKnownGood, p, RestoreOptions{Gate: effectiveGate()})
 			if err != nil {
 				return err
 			}

@@ -119,7 +119,7 @@ revision unchanged.`,
 			}
 			res, err := Adopt("", args[0], args[1], p, AdoptOptions{
 				Preview: preview,
-				Gate:    cliGate,
+				Gate:    effectiveGate(),
 			})
 			if err != nil {
 				return err
