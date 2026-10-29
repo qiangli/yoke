@@ -36,6 +36,8 @@ func newSrcCmd() *cobra.Command {
                    pin a label to a version
   src restore <app> <rev> [--user P]
                    return to a version through a new gated commit
+  src undo <app> [--user P]
+                   return to the previous active revision, gated
   src offer <app> <rev> [--to P,...|--all]
                    publish a revision as a host offering
   src offers <app> [--user P] [--json]
@@ -76,6 +78,7 @@ func newSrcCmd() *cobra.Command {
 	cmd.AddCommand(newPreviewCmd())
 	cmd.AddCommand(newNameCmd())
 	cmd.AddCommand(newRestoreCmd())
+	cmd.AddCommand(newUndoCmd())
 	cmd.AddCommand(newOfferCmd())
 	cmd.AddCommand(newOffersCmd())
 	cmd.AddCommand(newAdoptCmd())

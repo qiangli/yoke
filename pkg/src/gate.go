@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/qiangli/yoke/pkg/shape/evidence"
+	shapegate "github.com/qiangli/yoke/pkg/shape/gate"
 	"github.com/qiangli/yoke/pkg/shape/verify"
 )
 
@@ -34,13 +35,10 @@ func Gate(home, candidate, base, principal string) error {
 		return fmt.Errorf("src: refusing to activate %s: no principal (a verdict is always for someone)",
 			shortSHA(candidate))
 	}
-	_, err := evidence.Require(home, evidence.Binding{
-		Candidate: candidate,
-		Base:      base,
-		Verifier:  verify.BuildID(),
-		Principal: principal,
-	})
-	if err != nil {
+	// The check itself lives in pkg/shape/gate, shared with the web
+	// console; this wrapper keeps the src refusal wording the CLI and
+	// the production activator report.
+	if _, err := shapegate.Require(home, candidate, base, principal); err != nil {
 		return fmt.Errorf("src: refusing to activate %s: %w", shortSHA(candidate), err)
 	}
 	return nil

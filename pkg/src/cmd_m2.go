@@ -37,10 +37,7 @@ gate the command refuses rather than activate ungated.`,
 			if p == "" {
 				return fmt.Errorf("src: activate needs --principal or $%s", principalEnv)
 			}
-			if cliGate == nil {
-				return fmt.Errorf("src: activate refused: no activation gate is wired")
-			}
-			res, err := Activate("", args[0], args[1], p, ActivateOptions{Gate: cliGate})
+			res, err := Activate("", args[0], args[1], p, ActivateOptions{Gate: effectiveGate()})
 			if err != nil {
 				return err
 			}
