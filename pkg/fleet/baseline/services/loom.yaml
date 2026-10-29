@@ -1,7 +1,14 @@
 name: loom
 kind: service
 description: loom — the Gitea forge (binmgr-provisioned) behind git clone and Actions
-exec: [bashy, loom, serve, --port, "{port}", --addr, "{bind}", --root-url, "{settings.root_url}"]
+# One foreground process serves BOTH: gitea on the loopback http listener and
+# loom's translating front proxy on the proxy listener. Everything that reaches
+# loom from off-host (the app route, the mesh service) must arrive at the
+# PROXY: it is what turns outpost's Remote-User/Remote-Email into X-WEBAUTH-*
+# (the SSO sign-in) and what strips a client's own X-WEBAUTH-* (a spoofed
+# login). --addr is therefore the proxy's bind; gitea is pinned to loopback
+# whatever it says, because on gitea's listener X-WEBAUTH-USER IS a login.
+exec: [bashy, loom, serve, --port, "{port}", --addr, "{bind.proxy}", --proxy-port, "{port.proxy}", --root-url, "{settings.root_url}"]
 settings:
   root_url: ""
 ports:
@@ -20,7 +27,10 @@ restart:
   backoff: {min: 2s, max: 60s, healthy_after: 60s}
   start_limit: {burst: 5, interval: 10m}
 expose:
-  app: {name: loom, require_login: true}
+  # port: proxy — NOT the primary listener. Routing the app at gitea itself is
+  # what made /app/loom/ show the anonymous Sign In page (S515.1 round 5).
+  app: {name: loom, port: proxy, require_login: true, trust_cloud_identity: true}
   mesh:
     - name: git
+      port: proxy
 enabled: false
