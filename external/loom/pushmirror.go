@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/http"
 	"net/url"
 	"os"
 	"runtime"
@@ -14,13 +13,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Push mirrors to a FOREIGN forge (S515.5: cloudbox on loom, mirrored to
-// GitHub). `loom replica` is Gitea-to-Gitea by construction — it provisions the
-// owner and the repo on the target through the Gitea admin API — so it cannot
-// target GitHub, and the S515.5 run had to POST /push_mirrors by hand. This is
-// that raw call as a bashy verb: same Gitea push-mirror mechanism, no target
-// provisioning, and the push credential never passes through argv or the
-// environment.
+// Legacy push-mirror inventory/removal is kept for safe migration to backups.
+// Creating new destructive mirrors is disabled; replica has a separate contract.
 
 // defaultMirrorInterval matches `replica add`: Gitea's own default periodic
 // push. sync_on_commit is what keeps a mirror current; the interval is the
@@ -148,72 +142,12 @@ is the credential — check --username and that the token in --token-file can
 push to the target repo.`, MirrorAllowedDomainsEnv)
 }
 
-// MirrorAdd creates a push mirror from o.Repo on the source loom to the
-// already-existing o.Remote. Idempotent: an existing mirror to the same address
-// is left alone (and re-synced). The target is NEVER provisioned — that is the
-// whole difference from ReplicaAdd.
+// MirrorAdd refuses destructive mirror creation and directs callers to backup.
 func MirrorAdd(ctx context.Context, o MirrorOptions) ([]string, error) {
-	if strings.TrimSpace(o.Repo) == "" {
-		return nil, fmt.Errorf("loom: mirror add needs --repo owner/name (the SOURCE repo on this loom)")
-	}
-	addr, err := validateMirrorRemote(o.Remote)
-	if err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(o.Username) == "" {
-		return nil, fmt.Errorf("loom: mirror add needs --username (the account the mirror push authenticates as on the target)")
-	}
-	if o.Password == "" {
-		return nil, fmt.Errorf("loom: mirror add needs a push token (--token-file <path>, or --token-file - to read it from stdin)")
-	}
-	interval := o.Interval
-	if interval <= 0 {
-		interval = defaultMirrorInterval
-	}
-	p := newGiteaAPI(o.Primary, o.Token)
-	var ri repoInfo
-	if _, err := p.do(ctx, "GET", "/repos/"+o.Repo, nil, &ri); err != nil {
-		return nil, fmt.Errorf("%s: source repo: %w", o.Repo, err)
-	}
-	ms, err := listMirrors(ctx, p, o.Repo)
-	if err != nil {
-		return nil, fmt.Errorf("%s: list mirrors: %w", o.Repo, err)
-	}
-	want := mirrorAddr(addr)
-	have := false
-	for _, m := range ms {
-		if mirrorAddr(m.RemoteAddress) == want {
-			have = true
-		}
-	}
-	state := "exists"
-	if !have {
-		status, err := p.do(ctx, "POST", "/repos/"+o.Repo+"/push_mirrors", map[string]any{
-			"remote_address":  addr,
-			"remote_username": o.Username,
-			"remote_password": o.Password,
-			"interval":        interval.String(),
-			"sync_on_commit":  o.SyncOnCommit,
-		}, nil)
-		if err != nil {
-			if status == http.StatusUnauthorized {
-				return nil, fmt.Errorf("%s: create mirror: %w\n\n%s", o.Repo, err, mirrorHint(addr))
-			}
-			return nil, fmt.Errorf("%s: create mirror: %w", o.Repo, err)
-		}
-		state = "mirrored"
-	}
-	// Without an explicit sync a fresh mirror stays EMPTY until the next commit
-	// (sync_on_commit) or the interval elapses — same trap as `replica add`.
-	if err := syncMirror(ctx, p, o.Repo); err != nil {
-		return nil, fmt.Errorf("%s: sync mirror: %w", o.Repo, err)
-	}
-	return []string{fmt.Sprintf("%s -> %s: %s (sync requested) sync_on_commit=%t interval=%s",
-		o.Repo, addr, state, o.SyncOnCommit, interval)}, nil
+	return nil, fmt.Errorf("loom: mirror add disabled: Gitea force-syncs and prunes; use loom backup add (local or github)")
 }
 
-// MirrorList lists push mirrors: for o.Repo, or every repo when it is empty,
-// optionally narrowed to o.Remote.
+// MirrorList inventories existing destructive mirrors for migration.
 func MirrorList(ctx context.Context, o MirrorOptions) ([]string, error) {
 	p := newGiteaAPI(o.Primary, o.Token)
 	repos, err := listRepos(ctx, p, o.Repo)
@@ -272,34 +206,23 @@ func MirrorRm(ctx context.Context, o MirrorOptions) ([]string, error) {
 	return lines, nil
 }
 
-const mirrorLong = `mirror manages Gitea push mirrors from a repo on this loom to a remote repo
-that ALREADY EXISTS — GitHub, GitLab, or another forge. Unlike ` + "`loom replica`" + `,
-which is Gitea-to-Gitea and provisions the owner and the repo on the target,
-mirror creates NOTHING on the remote: you point it at a repo you already own.
+const mirrorLong = `Legacy Gitea push mirrors: list and remove only.
 
-The push credential is read from a file (mode 0600) or from stdin, never from
-the command line or the environment, so it cannot leak into shell history, a
-process listing, or an env dump:
+mirror add is disabled: Gitea FORCE-syncs and prunes, so target-only refs are
+DELETED and divergent commits are OVERWRITTEN. Use bashy loom backup add for
+never-delete local or GitHub backups. A GitHub backup target ALREADY EXISTS;
+provide its credential through a persistent mode-0600 --token-file.
 
-    bashy loom mirror add --repo acme/app \
-      --remote https://github.com/acme/app.git \
-      --username acme-bot --token-file ~/.config/gh-mirror.token --sync-on-commit
-
-HAZARDS — a push mirror is a FORCE, PRUNING push, and ` + "`add`" + ` syncs immediately:
-
-  * refs missing on the source are DELETED on the target. A branch or tag that
-    exists only on the remote is gone after the next sync.
-  * a commit made directly on the target is OVERWRITTEN (force-pushed away) on
-    the next sync. The target is a replica, not a place to work.
-  * so point --remote at a repo whose history you are willing to lose, and move
-    any remote-only work to the source BEFORE adding the mirror.`
+Before migration, use mirror list --repo owner/name, then mirror rm --repo
+owner/name --remote URL. rm removes the mirror configuration, not remote data.
+Existing mirrors are NOT automatically disabled; remove them before backup add.`
 
 func newMirrorCmd() *cobra.Command {
 	var o MirrorOptions
 	var data, tokenFile string
 	root := &cobra.Command{
 		Use:   "mirror",
-		Short: "Manage push mirrors to an EXISTING remote repo (GitHub, GitLab, another forge)",
+		Short: "List/remove legacy destructive mirrors; use backup for new targets",
 		Long:  mirrorLong,
 	}
 	// Resolve the SOURCE loom the same way `replica` does: --primary, else the
@@ -335,18 +258,15 @@ func newMirrorCmd() *cobra.Command {
 				return emit(c, lines, err)
 			}}
 	}
-	add := mk("add", "Create a push mirror to an existing remote repo (syncs immediately)", func(ctx context.Context, mo MirrorOptions) ([]string, error) {
+	add := mk("add", "Disabled: use backup add", func(ctx context.Context, mo MirrorOptions) ([]string, error) {
 		return MirrorAdd(ctx, mo)
 	})
 	add.Long = mirrorLong
-	add.PreRunE = func(c *cobra.Command, _ []string) error {
-		tok, err := readMirrorToken(tokenFile, c.InOrStdin())
-		if err != nil {
-			return err
-		}
-		o.Password = tok
-		return nil
+	add.RunE = func(c *cobra.Command, _ []string) error {
+		_, err := MirrorAdd(c.Context(), o)
+		return err
 	}
+
 	list := mk("list", "List push mirrors", MirrorList)
 	rm := mk("rm", "Remove a push mirror", MirrorRm)
 

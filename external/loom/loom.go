@@ -402,6 +402,7 @@ func Serve(ctx context.Context, o Options) error {
 
 	// Auto-seed SDLC labels on every repo (created or migrated), continuously.
 	go startLabelReconciler(ctx, inst.URL)
+	go runBackups(ctx, o.DataDir, o.Stderr)
 
 	<-ctx.Done()
 	fmt.Fprintln(o.Stdout, "loom: shutting down…")
@@ -512,7 +513,7 @@ func StartDaemon(ctx context.Context, o Options) (State, error) {
 	_ = recordOwnedProxy(o.DataDir, addr, cmd.Process.Pid)
 	proxyAddr := fmt.Sprintf("%s:%d", o.Addr, o.ProxyPort)
 	proxyURL := "http://" + proxyAddr
-	proxyArgs := []string{"loom", "proxy", "--target", "http://" + addr, "--addr", o.Addr, "--port", strconv.Itoa(o.ProxyPort)}
+	proxyArgs := []string{"loom", "proxy", "--data", o.DataDir, "--target", "http://" + addr, "--addr", o.Addr, "--port", strconv.Itoa(o.ProxyPort)}
 	if p := publicPrefix(o.RootURL); p != "" {
 		proxyArgs = append(proxyArgs, "--public-prefix", p)
 	}
@@ -2196,9 +2197,11 @@ compiled in). Expose it over the mesh with: outpost mesh service add git <addr>.
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
+			go runBackups(ctx, o.DataDir, cmd.ErrOrStderr())
 			return runProxy(ctx, o.Addr, o.ProxyPort, proxyTarget, proxyPublicPrefix, proxyAutoProvision || autoProvisionEnv())
 		},
 	}
+	proxyCmd.Flags().StringVar(&o.DataDir, "data", DefaultDataDir(), "loom data directory")
 	proxyCmd.Flags().StringVar(&o.Addr, "addr", DefaultAddr, "HTTP bind address")
 	proxyCmd.Flags().IntVar(&o.ProxyPort, "port", DefaultProxyPort, "HTTP proxy port")
 	proxyCmd.Flags().StringVar(&proxyTarget, "target", "", "backend Gitea URL")
@@ -2223,7 +2226,7 @@ compiled in). Expose it over the mesh with: outpost mesh service add git <addr>.
 	}
 	pathCmd.Flags().StringVar(&o.Version, "gitea-version", "", "Gitea release tag (default: "+DefaultVersion+")")
 
-	root.AddCommand(serve, start, status, stopCmd, logs, exposeCmd, pathCmd, proxyCmd, newReplicaCmd(), newMirrorCmd(), newCloneCmd(), newRemoteCmd())
+	root.AddCommand(serve, start, status, stopCmd, logs, exposeCmd, pathCmd, proxyCmd, newReplicaCmd(), newMirrorCmd(), newBackupCmd(), newCloneCmd(), newRemoteCmd())
 	return root
 }
 
