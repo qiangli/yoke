@@ -8,10 +8,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -103,9 +105,9 @@ func (a *Adapter) run(ctx context.Context, args ...string) ([]byte, error) {
 }
 
 type profile struct {
-	name, server, host, user string
-	expires                  *time.Time
-	auth                     string
+	name, server, host, user, agentName string
+	expires                             *time.Time
+	auth                                string
 }
 
 // strField reads whitelisted string keys only; no other value is retained.
@@ -118,6 +120,41 @@ func strField(m map[string]any, keys ...string) string {
 	return ""
 }
 
+func intField(m map[string]any, keys ...string) int {
+	for _, k := range keys {
+		switch v := m[k].(type) {
+		case float64:
+			return int(v)
+		case float32:
+			return int(v)
+		case int:
+			return v
+		case int64:
+			return int(v)
+		case json.Number:
+			if n, err := v.Int64(); err == nil {
+				return int(n)
+			}
+		case string:
+			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+				return n
+			}
+		}
+	}
+	return 0
+}
+
+func findField(m map[string]any, objKeys []string, fieldKeys ...string) string {
+	for _, ok := range objKeys {
+		if sub, ok := m[ok].(map[string]any); ok {
+			if s := strField(sub, fieldKeys...); s != "" {
+				return s
+			}
+		}
+	}
+	return strField(m, fieldKeys...)
+}
+
 func readProfile(dir, name string) (profile, bool) {
 	p := profile{name: name}
 	b, err := os.ReadFile(filepath.Join(dir, "agent.json"))
@@ -128,22 +165,58 @@ func readProfile(dir, name string) (profile, bool) {
 	if json.Unmarshal(b, &m) != nil {
 		return p, false
 	}
-	p.server = strField(m, "server", "server_url", "endpoint")
+
+	// Derive endpoint from sidecar if present, else from protocol/server_addr/server_port in agent.json.
+	if sb, err := os.ReadFile(filepath.Join(dir, "server")); err == nil {
+		sidecar := strings.TrimSpace(strings.SplitN(string(sb), "\n", 2)[0])
+		if sidecar != "" {
+			p.server = sidecar
+		}
+	}
+	if p.server == "" {
+		serverAddr := strField(m, "server_addr")
+		if serverAddr != "" {
+			if strings.Contains(serverAddr, "://") {
+				p.server = serverAddr
+			} else {
+				protocol := strings.ToLower(strField(m, "protocol"))
+				serverPort := intField(m, "server_port")
+				scheme := "https"
+				switch protocol {
+				case "http", "ws", "websocket", "tcp":
+					scheme = "http"
+				case "https", "wss":
+					scheme = "https"
+				default:
+					if serverPort == 443 {
+						scheme = "https"
+					} else {
+						scheme = "http"
+					}
+				}
+				port := ""
+				if serverPort != 0 && !((scheme == "https" && serverPort == 443) || (scheme == "http" && serverPort == 80)) {
+					port = fmt.Sprintf(":%d", serverPort)
+				}
+				p.server = scheme + "://" + serverAddr + port
+			}
+		}
+	}
+	if p.server == "" {
+		p.server = strField(m, "server", "server_url", "endpoint")
+	}
+	p.server = strings.TrimRight(p.server, "/")
+
+	p.agentName = strField(m, "agent_name")
 	p.host = strField(m, "host", "hostname")
 	p.user = strField(m, "user", "username", "owner")
 	p.auth = strField(m, "auth_method")
 	if t, err := time.Parse(time.RFC3339, strField(m, "expires_at")); err == nil {
 		p.expires = &t
 	}
-	for _, f := range []struct {
-		name string
-		dst  *string
-	}{{"server", &p.server}, {"host", &p.host}} {
-		if sb, err := os.ReadFile(filepath.Join(dir, f.name)); err == nil && *f.dst == "" {
-			*f.dst = strings.TrimSpace(strings.SplitN(string(sb), "\n", 2)[0])
-		}
+	if sb, err := os.ReadFile(filepath.Join(dir, "host")); err == nil && p.host == "" {
+		p.host = strings.TrimSpace(strings.SplitN(string(sb), "\n", 2)[0])
 	}
-	p.server = strings.TrimRight(p.server, "/")
 	return p, true
 }
 
@@ -167,6 +240,9 @@ func (a *Adapter) profiles() (profiles []profile, active string) {
 			profiles = append(profiles, p)
 		}
 	}
+	if active == "" && len(profiles) > 0 {
+		active = profiles[0].name
+	}
 	return
 }
 
@@ -175,11 +251,18 @@ type remote struct{ name, server, user string }
 func parseRemotes(b []byte) []remote {
 	var raw []map[string]any
 	if json.Unmarshal(b, &raw) != nil {
+		if idx := bytes.IndexByte(b, '['); idx >= 0 {
+			_ = json.Unmarshal(b[idx:], &raw)
+		}
+	}
+	if len(raw) == 0 {
 		var wrap struct {
 			Remotes []map[string]any `json:"remotes"`
 		}
 		if json.Unmarshal(b, &wrap) != nil {
-			return nil
+			if idx := bytes.IndexByte(b, '{'); idx >= 0 {
+				_ = json.Unmarshal(b[idx:], &wrap)
+			}
 		}
 		raw = wrap.Remotes
 	}
@@ -221,16 +304,60 @@ func (a *Adapter) Discover(ctx context.Context) ([]accounts.Observation, error) 
 	} else {
 		remotes = parseRemotes(rb)
 	}
-	var statusUser string
+
+	var statusUser, statusAgentName, statusCloudboxURL string
 	if lastErr == "" {
 		var m map[string]any
-		if json.Unmarshal(statusOut, &m) == nil {
-			statusUser = strField(m, "user", "username")
+		if json.Unmarshal(statusOut, &m) != nil {
+			if idx := bytes.IndexByte(statusOut, '{'); idx >= 0 {
+				_ = json.Unmarshal(statusOut[idx:], &m)
+			}
+		}
+		if m != nil {
+			statusAgentName = findField(m, []string{"status", "config"}, "agent_name")
+			if statusAgentName == "" {
+				statusAgentName = strField(m, "agent_name")
+			}
+			statusUser = findField(m, []string{"config", "status"}, "user", "username", "oauth2_email")
+			if statusUser == "" {
+				statusUser = strField(m, "user", "username")
+			}
+			statusCloudboxURL = findField(m, []string{"status", "config"}, "cloudbox_url")
+			if statusCloudboxURL == "" {
+				statusCloudboxURL = strField(m, "cloudbox_url")
+			}
 		}
 	}
 
 	if len(profiles) == 0 && lastErr != "" {
 		return a.cached(lastErr)
+	}
+
+	var activeEndpoint, activeAgentName string
+	for i := range profiles {
+		if profiles[i].name == active {
+			if profiles[i].agentName == "" && statusAgentName != "" {
+				profiles[i].agentName = statusAgentName
+			}
+			if profiles[i].server == "" && statusCloudboxURL != "" {
+				profiles[i].server = strings.TrimRight(statusCloudboxURL, "/")
+			}
+			activeEndpoint = profiles[i].server
+			activeAgentName = profiles[i].agentName
+			break
+		}
+	}
+	if activeEndpoint == "" && len(profiles) > 0 {
+		activeEndpoint = profiles[0].server
+		if activeAgentName == "" {
+			activeAgentName = profiles[0].agentName
+		}
+	}
+	if activeAgentName == "" {
+		activeAgentName = statusAgentName
+	}
+	if activeEndpoint == "" && statusCloudboxURL != "" {
+		activeEndpoint = strings.TrimRight(statusCloudboxURL, "/")
 	}
 
 	byKey := map[string]*accounts.Observation{}
@@ -240,18 +367,46 @@ func (a *Adapter) Discover(ctx context.Context) ([]accounts.Observation, error) 
 		if user == "" && p.name == active {
 			user = statusUser
 		}
+		agentName := p.agentName
+		if agentName == "" && p.name == active {
+			agentName = statusAgentName
+		}
+
 		acc := accounts.Account{
 			Category: accounts.Cloudbox, Provider: Name, Username: user,
 			Name: p.host, Source: "outpost-profile", Provenance: "local-observation",
 			Status: accounts.Resolved,
 		}
-		key := p.server + "|" + user
-		if p.server == "" || user == "" {
+
+		var key string
+		if p.server == "" && agentName == "" {
 			acc.Status = accounts.Unresolved
 			key = "profile:" + p.name
 		} else {
-			acc.ProviderAccountID = key
+			acc.Status = accounts.Resolved
+			if user != "" {
+				key = p.server + "|" + user
+				acc.Username = user
+				if p.host != "" {
+					acc.Name = p.host
+				} else {
+					acc.Name = agentName
+				}
+				acc.ProviderAccountID = key
+			} else {
+				acc.Username = ""
+				acc.Name = agentName
+				if p.server != "" && agentName != "" {
+					key = p.server + "|" + agentName
+				} else if p.server != "" {
+					key = p.server
+				} else {
+					key = agentName
+				}
+				acc.ProviderAccountID = key
+			}
 		}
+
 		conn := accounts.Connection{
 			ID: p.name, Endpoint: p.server, Profile: p.name,
 			CredentialRef: "profile:" + p.name, AuthMethod: p.auth, ExpiresAt: p.expires,
@@ -287,6 +442,40 @@ func (a *Adapter) Discover(ctx context.Context) ([]accounts.Observation, error) 
 			o.Account.Links.Satellites = appendUniq(o.Account.Links.Satellites, r.name)
 		}
 	}
+
+	// Link satellite profiles: a profile whose endpoint differs from the default/active
+	// cloudbox endpoint is a satellite instance of the same user/host; link it via
+	// Links.Satellites on the account for the active endpoint ONLY when the agent_name matches;
+	// otherwise keep it its own account. Do not invent links.
+	for _, p := range profiles {
+		if p.server == "" || activeEndpoint == "" || p.server == activeEndpoint {
+			continue
+		}
+		pAgentName := p.agentName
+		if pAgentName == "" && p.name == active {
+			pAgentName = statusAgentName
+		}
+		if pAgentName == "" || pAgentName != activeAgentName {
+			continue
+		}
+		for _, o := range byKey {
+			isCurrentEndpoint := false
+			for _, c := range o.Account.Connections {
+				if c.Endpoint == activeEndpoint {
+					isCurrentEndpoint = true
+					break
+				}
+			}
+			if !isCurrentEndpoint {
+				continue
+			}
+			if o.Account.Username != "" && p.user != "" && o.Account.Username != p.user {
+				continue
+			}
+			o.Account.Links.Satellites = appendUniq(o.Account.Links.Satellites, p.name)
+		}
+	}
+
 	var out []accounts.Observation
 	for _, k := range order {
 		o := byKey[k]
