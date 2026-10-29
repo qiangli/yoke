@@ -301,6 +301,54 @@ func (s *Store) Override(ref string, o Override) error {
 		return ErrNotFound
 	})
 }
+
+// PatchOverride applies CLI-editable metadata without replacing unrelated
+// manual overrides. An unset reveals the adapter observation again.
+func (s *Store) PatchOverride(ref string, set map[string]string, unset []string) error {
+	return s.mutate(func(d *document) error {
+		for i := range d.Records {
+			a := effective(d.Records[i])
+			if a.ID != ref && a.Alias != ref {
+				continue
+			}
+			o := &d.Records[i].Override
+			for key, value := range set {
+				v := value
+				switch key {
+				case "alias":
+					if v == "" {
+						return errors.New("accounts: alias cannot be empty")
+					}
+					o.Alias = &v
+				case "name":
+					o.Name = &v
+				case "region":
+					o.Region = &v
+				case "environment":
+					o.Environment = &v
+				default:
+					return errors.New("accounts: invalid editable field")
+				}
+			}
+			for _, key := range unset {
+				switch key {
+				case "alias":
+					o.Alias = nil
+				case "name":
+					o.Name = nil
+				case "region":
+					o.Region = nil
+				case "environment":
+					o.Environment = nil
+				default:
+					return errors.New("accounts: invalid editable field")
+				}
+			}
+			return checkAliases(d)
+		}
+		return ErrNotFound
+	})
+}
 func (s *Store) SetBindings(ref string, bindings []string) error {
 	return s.mutate(func(d *document) error {
 		for i := range d.Records {
