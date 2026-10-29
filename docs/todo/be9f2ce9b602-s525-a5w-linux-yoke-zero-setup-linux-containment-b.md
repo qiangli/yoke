@@ -3,7 +3,7 @@ id: be9f2ce9b602
 kind: bug
 title: 'S525.A5w-linux yoke: zero-setup Linux containment (bashy-owned namespaces, no host bwrap, runner anywhere)'
 seq: 2917
-status: todo
+status: wontfix
 priority: p0
 labels:
     - linux
@@ -11,6 +11,7 @@ created: 2026-10-29T16:25:12.881454Z
 sprint: 525
 sprint_id: 9a9a4443-02c8-53a3-b0bd-96bd67980643
 sprint_title: 'Software Shaping foundation: verified personal features and same-host promotion'
+closed: 2026-10-29T16:26:19.646822Z
 ---
 
 Sprint 525, goal a5w (parent 944522763e8f, p0, security-critical). Operator: shaping must need zero setup on every OS; any manual host step is a bug. Today pkg/shape/contain/sandbox_linux.go shells out to bwrap. On a stock Ubuntu (WSL2 or server) without bubblewrap, RequireSandbox refuses ("bwrap not found"), so shaped preview, activation, history preview and even the base app's api/ units return 503. Also, only /usr, /bin, /lib and /lib64 are bound, so a bashy runner installed in ~/.local/bin (bashy's default install dir) fails inside the sandbox with 500 "unit list failed (exit 1)".
