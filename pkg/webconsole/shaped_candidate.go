@@ -28,6 +28,9 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"github.com/qiangli/yoke/pkg/coopauth"
+	shape "github.com/qiangli/yoke/pkg/shape/state"
+	shapeverify "github.com/qiangli/yoke/pkg/shape/verify"
+	"github.com/qiangli/yoke/pkg/src"
 )
 
 // The Shape panel: a principal types a request, a candidate workspace is
@@ -82,6 +85,56 @@ type Verdict struct {
 	Detail   string `json:"detail,omitempty"`
 }
 
+// productionVerifier is the console's trusted verifier. Tests may supply a
+// runner, but production leaves it nil so verify.Run uses TrustedRunner.
+type productionVerifier struct {
+	home   string
+	runner shapeverify.Runner
+}
+
+func (v productionVerifier) Verify(ctx context.Context, req VerifyRequest) (Verdict, error) {
+	home := v.home
+	if home == "" {
+		var err error
+		home, err = shape.Home()
+		if err != nil {
+			return Verdict{}, err
+		}
+	}
+	// Candidate workspaces are detached by design. Give the verifier's local
+	// clone one temporary advertised branch; go-git's clone transport cannot
+	// clone a repository whose HEAD is detached.
+	repo, err := gogit.PlainOpen(req.CandidateDir)
+	if err != nil {
+		return Verdict{}, err
+	}
+	oldHead, err := repo.Storer.Reference(plumbing.HEAD)
+	if err != nil {
+		return Verdict{}, err
+	}
+	verifyRef := plumbing.ReferenceName("refs/heads/bashy-shape-verify")
+	if err := repo.Storer.SetReference(plumbing.NewHashReference(verifyRef, plumbing.NewHash(req.CandidateRev))); err != nil {
+		return Verdict{}, err
+	}
+	if err := repo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, verifyRef)); err != nil {
+		_ = repo.Storer.RemoveReference(verifyRef)
+		return Verdict{}, err
+	}
+	defer func() {
+		_ = repo.Storer.SetReference(oldHead)
+		_ = repo.Storer.RemoveReference(verifyRef)
+	}()
+
+	report, err := shapeverify.Run(ctx, shapeverify.Options{
+		Home: home, RepoDir: req.CandidateDir, BaseSHA: req.BaseRev,
+		CandidateSHA: req.CandidateRev, Principal: req.Principal, Runner: v.runner,
+	})
+	if err != nil {
+		return Verdict{}, err
+	}
+	return Verdict{Pass: report.Passed(), Evidence: report.Path, Detail: report.Record.Reason}, nil
+}
+
 // Activator makes an approved candidate the principal's active revision.
 // The versioned activation store satisfies it.
 type Activator interface {
@@ -99,6 +152,85 @@ type ActivateRequest struct {
 	Request      string
 	Agent        string
 	Evidence     string
+}
+
+// productionActivator imports the verified candidate into the canonical src
+// checkout, then delegates the per-principal switch to pkg/src. The src gate
+// reads the sealed verifier evidence again; the Verdict received over HTTP is
+// never itself authority to activate.
+type productionActivator struct {
+	home string
+	mu   sync.Mutex
+}
+
+func (a *productionActivator) Activate(ctx context.Context, req ActivateRequest) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	home := a.home
+	if home == "" {
+		home = src.Home()
+	}
+	wantSource := filepath.Join(src.SrcDir(home), req.App)
+	wantSource, err := filepath.Abs(wantSource)
+	if err != nil {
+		return err
+	}
+	gotSource, err := filepath.Abs(req.SourceDir)
+	if err != nil {
+		return err
+	}
+	if resolved, rerr := filepath.EvalSymlinks(wantSource); rerr == nil {
+		wantSource = resolved
+	}
+	if resolved, rerr := filepath.EvalSymlinks(gotSource); rerr == nil {
+		gotSource = resolved
+	}
+	if gotSource != wantSource {
+		return fmt.Errorf("shaped app %s source is %s, want the managed src checkout %s", req.App, gotSource, wantSource)
+	}
+
+	candidateRepo, err := gogit.PlainOpen(req.CandidateDir)
+	if err != nil {
+		return fmt.Errorf("open candidate: %w", err)
+	}
+	var nonce [8]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return err
+	}
+	id := hex.EncodeToString(nonce[:])
+	from := plumbing.ReferenceName("refs/heads/bashy-shape-import-" + id)
+	to := plumbing.ReferenceName("refs/bashy-shape/import/" + id)
+	if err := candidateRepo.Storer.SetReference(plumbing.NewHashReference(from, plumbing.NewHash(req.CandidateRev))); err != nil {
+		return fmt.Errorf("publish candidate object: %w", err)
+	}
+	defer candidateRepo.Storer.RemoveReference(from)
+
+	sourceRepo, err := gogit.PlainOpen(gotSource)
+	if err != nil {
+		return fmt.Errorf("open shaped source: %w", err)
+	}
+	remote := gogit.NewRemote(sourceRepo.Storer, &config.RemoteConfig{Name: "shape-candidate-" + id, URLs: []string{req.CandidateDir}})
+	err = remote.FetchContext(ctx, &gogit.FetchOptions{RefSpecs: []config.RefSpec{
+		config.RefSpec("+" + from.String() + ":" + to.String()),
+	}})
+	if err != nil && !errors.Is(err, gogit.NoErrAlreadyUpToDate) {
+		return fmt.Errorf("import candidate: %w", err)
+	}
+	defer sourceRepo.Storer.RemoveReference(to)
+
+	gate := shape.GateFunc(func(candidate, base, principal string) (shape.EvidenceRef, error) {
+		if err := src.Gate(home, candidate, base, principal); err != nil {
+			return shape.EvidenceRef{}, err
+		}
+		return shape.EvidenceRef{Verdict: "pass", EvidenceID: req.Evidence}, nil
+	})
+	_, err = src.Activate(home, req.App, req.CandidateRev, req.Principal, src.ActivateOptions{Gate: gate})
+	return err
+}
+
+func productionShapeOptions() ShapeOptions {
+	return ShapeOptions{Verifier: productionVerifier{}, Activator: &productionActivator{}}
 }
 
 // Candidate statuses.
@@ -312,7 +444,7 @@ func cloneAt(ctx context.Context, src, dst, rev string) (*gogit.Repository, erro
 		return nil, err
 	}
 	err = r.FetchContext(ctx, &gogit.FetchOptions{RemoteName: "origin", RefSpecs: []config.RefSpec{
-		"+refs/heads/*:refs/remotes/origin/*", "+refs/shape/*:refs/shape/*",
+		"+refs/heads/*:refs/remotes/origin/*", "+refs/shaping/*:refs/shaping/*",
 	}})
 	if err != nil && !errors.Is(err, gogit.NoErrAlreadyUpToDate) {
 		return nil, err

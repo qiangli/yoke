@@ -156,9 +156,20 @@ func Run(ctx context.Context, s Spec) (Result, error) {
 	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 		return res, errors.New("contain: clone dir is not a directory")
 	}
-	argv := s.Argv
+	runner, err := resolveOnPath(s.Argv[0])
+	if err != nil {
+		return res, fmt.Errorf("contain: %w", err)
+	}
+	runner, err = filepath.Abs(runner)
+	if err != nil {
+		return res, fmt.Errorf("contain: runner: %w", err)
+	}
+	if resolved, rerr := filepath.EvalSymlinks(runner); rerr == nil {
+		runner = resolved
+	}
+	argv := append([]string{runner}, s.Argv[1:]...)
 	if s.Level == LevelSandbox {
-		argv, err = sandboxArgv(dir, s.Argv)
+		argv, err = sandboxArgv(dir, argv)
 		if err != nil {
 			return res, err
 		}
