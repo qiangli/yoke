@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -72,7 +73,7 @@ echo delegated
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	cat := newCatalog()
-	if err := cat.SaveTool(fleet.Tool{Name: vendor, Kind: fleet.ToolKindCLI, CLI: fleet.ToolCLI{Binary: vendor, Launch: fleet.ToolLaunch{Exec: vendor + " --model {model} {prompt}", Env: []string{"OPENAI_API_KEY=recipe-secret"}}}}); err != nil {
+	if err := cat.SaveTool(fleet.Tool{Name: vendor, Aliases: aliasesFor(vendor), Kind: fleet.ToolKindCLI, CLI: fleet.ToolCLI{Binary: vendor, Launch: fleet.ToolLaunch{Exec: vendor + " --model {model} {prompt}", Env: []string{"OPENAI_API_KEY=recipe-secret"}}}}); err != nil {
 		t.Fatal(err)
 	}
 	return marker
@@ -268,4 +269,57 @@ func TestDelegateStartFailureDoesNotScore(t *testing.T) {
 		t.Fatalf("task marker: %v", err)
 	}
 	assertDelegateEvents(t, 0, "", 0)
+}
+
+func TestDelegateFirstPartyGenie(t *testing.T) {
+	marker := fakeDelegateVendor(t, "ycode")
+	bin, err := exec.LookPath("ycode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := "#!/bin/sh\n[ -z \"$OPENAI_API_KEY\" ] || exit 19\nprintf task > \"$DELEGATE_TEST_MARKER\"\necho delegated\n"
+	if err := os.WriteFile(bin, []byte(fake), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENAI_API_KEY", "parent-secret")
+	for _, tc := range []struct {
+		name, allow, target string
+		denied              bool
+	}{
+		{"ycode spelling", "ycode:test-model", "genie:test-model", false},
+		{"genie spelling", "genie:test-model", "genie:test-model", false},
+		{"not allowed", "ycode:other", "genie:test-model", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_ = os.Remove(marker)
+			t.Setenv("DELEGATE_TEST_MODE", "auth") // a vendor probe would fail
+			cmd := NewDelegateCmd()
+			cmd.SetArgs([]string{"--json", "--allow=" + tc.allow, "--agent", tc.target, "do work"})
+			var stdout, stderr bytes.Buffer
+			cmd.SetOut(&stdout)
+			cmd.SetErr(&stderr)
+			err := cmd.Execute()
+			var res delegateResult
+			if e := json.Unmarshal(stdout.Bytes(), &res); e != nil {
+				t.Fatalf("envelope: %v: %s (%v)", e, stdout.String(), err)
+			}
+			_, e := os.Stat(marker)
+			if tc.denied {
+				if err == nil || res.Error == nil || res.Error.Kind != "denied" || e == nil {
+					t.Fatalf("want denied: %+v %v", res, err)
+				}
+				return
+			}
+			if err != nil || res.Exit != 0 || res.Error != nil || e != nil {
+				t.Fatalf("want ok: %+v %v marker=%v", res, err, e)
+			}
+		})
+	}
+}
+
+func aliasesFor(vendor string) []string {
+	if vendor == "ycode" {
+		return []string{"genie"}
+	}
+	return nil
 }
