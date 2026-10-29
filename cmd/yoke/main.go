@@ -24,6 +24,9 @@ import (
 	"mvdan.cc/sh/v3/interp/ownedexec"
 
 	_ "github.com/qiangli/yoke/cmds/all"
+	// Side effect: every built-in account adapter joins the default
+	// registry, so `account discover` sees cloudbox and llm.
+	_ "github.com/qiangli/yoke/pkg/accounts/builtin"
 )
 
 func main() {

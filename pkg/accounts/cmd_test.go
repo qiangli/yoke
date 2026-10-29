@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -184,6 +185,247 @@ func TestAccountCommandAdapterVerbs(t *testing.T) {
 	if err != nil || len(decodeEnvelope(t, out)["accounts"].([]any)) != 1 {
 		t.Fatalf("refresh all: out=%s err=%v", out, err)
 	}
+}
+
+// cacheProofAdapter dies loudly if any adapter method runs. Cached reads
+// (list, show, usage, resources) must succeed against it: only explicit
+// refresh may call adapters.
+type cacheProofAdapter struct {
+	t   *testing.T
+	now time.Time
+}
+
+func (a *cacheProofAdapter) Name() string { return "snap" }
+func (a *cacheProofAdapter) Capabilities() Capability {
+	return Discover | Verify | Resources | Usage | Billing | Select
+}
+func (a *cacheProofAdapter) observation() Observation {
+	return Observation{Account: Account{
+		Alias: "snap", Category: DigitalOcean, Provider: "snap", ProviderAccountID: "acct-snap",
+		Status: Resolved, Connections: []Connection{{ID: "primary", Profile: "snap", CredentialRef: "profile:snap"}},
+	}}
+}
+func (a *cacheProofAdapter) Discover(context.Context) ([]Observation, error) {
+	a.t.Fatal("cache-only read called Discover")
+	return nil, nil
+}
+func (a *cacheProofAdapter) Verify(context.Context, Account) (Observation, error) {
+	a.t.Fatal("cache-only read called Verify")
+	return Observation{}, nil
+}
+func (a *cacheProofAdapter) Resources(context.Context, Account) ([]ResourceRef, error) {
+	a.t.Fatal("cache-only read called Resources")
+	return nil, nil
+}
+func (a *cacheProofAdapter) Usage(context.Context, Account, string) ([]Metric, error) {
+	a.t.Fatal("cache-only read called Usage")
+	return nil, nil
+}
+func (a *cacheProofAdapter) Billing(context.Context, Account, string) ([]Metric, error) {
+	a.t.Fatal("cache-only read called Billing")
+	return nil, nil
+}
+func (a *cacheProofAdapter) Select(_ context.Context, account Account, _ Operation) (Selection, error) {
+	a.t.Fatal("cache-only read called Select")
+	return Selection{}, nil
+}
+
+func seedSnapAccount(t *testing.T, store *Store) string {
+	t.Helper()
+	if err := store.Observe("snap", []Observation{(&cacheProofAdapter{}).observation()}); err != nil {
+		t.Fatal(err)
+	}
+	items, err := store.List()
+	if err != nil || len(items) != 1 {
+		t.Fatalf("seeded accounts = %v, %v", items, err)
+	}
+	return items[0].ID
+}
+
+func snapMetric(name string, v float64) Metric {
+	return Metric{Name: name, Value: &v, Unit: "count", Source: "snap/usage", Classification: ProviderReported, ObservedAt: time.Date(2026, 10, 29, 8, 0, 0, 0, time.UTC), Period: "month", Coverage: Complete}
+}
+
+func TestAccountCacheOnlyReadsNeverCallAdapter(t *testing.T) {
+	store := Open(t.TempDir() + "/accounts.json")
+	id := seedSnapAccount(t, store)
+	observed := time.Date(2026, 10, 29, 9, 30, 0, 0, time.UTC)
+	if err := store.SaveSnapshot(Snapshot{
+		AccountID:  id,
+		Resources:  []ResourceRef{{ID: "r-1", Kind: "server", Name: "owl"}},
+		Metrics:    map[string][]Metric{"day": {snapMetric("requests", 1)}, "week": {snapMetric("requests", 2)}, "month": {snapMetric("requests", 3)}},
+		ObservedAt: observed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry()
+	if err := registry.Register(&cacheProofAdapter{t: t}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := invokeAccount(t, store, registry, "list", "--json"); err != nil {
+		t.Fatalf("cached list: %v", err)
+	}
+	out, _, err := invokeAccount(t, store, registry, "show", id[:10], "--json")
+	if err != nil || decodeEnvelope(t, out)["account"] == nil {
+		t.Fatalf("cached show: out=%s err=%v", out, err)
+	}
+	for _, period := range []string{"day", "week", "month"} {
+		out, _, err = invokeAccount(t, store, registry, "usage", "snap", "--period", period, "--json")
+		if err != nil {
+			t.Fatalf("cached usage %s: %v", period, err)
+		}
+		envelope := decodeEnvelope(t, out)
+		rows := envelope["metrics"].([]any)
+		if len(rows) != 1 || rows[0].(map[string]any)["name"] != "requests" {
+			t.Fatalf("cached usage %s = %#v", period, rows)
+		}
+		if envelope["observed_at"] != observed.UTC().Format(time.RFC3339) {
+			t.Fatalf("usage %s hides snapshot age: %#v", period, envelope["observed_at"])
+		}
+		if _, ok := envelope["last_error"]; ok {
+			t.Fatalf("usage %s reports an error on a good snapshot: %v", period, envelope)
+		}
+	}
+	out, _, err = invokeAccount(t, store, registry, "resources", "snap", "--json")
+	if err != nil {
+		t.Fatalf("cached resources: %v", err)
+	}
+	envelope := decodeEnvelope(t, out)
+	rows := envelope["resources"].([]any)
+	if len(rows) != 1 || rows[0].(map[string]any)["id"] != "r-1" {
+		t.Fatalf("cached resources = %#v", rows)
+	}
+	if envelope["observed_at"] != observed.UTC().Format(time.RFC3339) {
+		t.Fatalf("resources hides snapshot age: %#v", envelope["observed_at"])
+	}
+	out, _, err = invokeAccount(t, store, registry, "resources", "snap")
+	if err != nil || !strings.Contains(out, "observed_at") {
+		t.Fatalf("table resources hides snapshot age: out=%s err=%v", out, err)
+	}
+}
+
+// flakySnapAdapter serves one good refresh and then fails mid-refresh with an
+// error carrying the secret canary. The failure must surface as a safe code
+// while the previous resources and metrics survive.
+type flakySnapAdapter struct {
+	now time.Time
+	bad bool
+}
+
+func (a *flakySnapAdapter) Name() string { return "snap" }
+func (a *flakySnapAdapter) Capabilities() Capability {
+	return Discover | Verify | Resources | Usage | Billing | Select
+}
+func (a *flakySnapAdapter) observation() Observation {
+	return Observation{Account: Account{
+		Alias: "snap", Category: DigitalOcean, Provider: "snap", ProviderAccountID: "acct-snap",
+		Status: Resolved, Connections: []Connection{{ID: "primary", Profile: "snap", CredentialRef: "profile:snap"}},
+	}}
+}
+func (a *flakySnapAdapter) Discover(context.Context) ([]Observation, error) {
+	return []Observation{a.observation()}, nil
+}
+func (a *flakySnapAdapter) Verify(context.Context, Account) (Observation, error) {
+	return a.observation(), nil
+}
+func (a *flakySnapAdapter) Resources(context.Context, Account) ([]ResourceRef, error) {
+	return []ResourceRef{{ID: "r-1", Kind: "server", Name: "owl"}}, nil
+}
+func (a *flakySnapAdapter) Usage(context.Context, Account, string) ([]Metric, error) {
+	if a.bad {
+		return nil, errors.New("adapter boom " + accountstest.CanarySecret)
+	}
+	v := 3.0
+	return []Metric{{Name: "requests", Value: &v, Unit: "count", Source: "snap/usage", Classification: ProviderReported, ObservedAt: a.now, Period: "month", Coverage: Complete}}, nil
+}
+func (a *flakySnapAdapter) Billing(context.Context, Account, string) ([]Metric, error) {
+	v := 4.0
+	return []Metric{{Name: "cost", Value: &v, Unit: "usd", Currency: "USD", Source: "snap/billing", Classification: ProviderReported, ObservedAt: a.now, Period: "month", Coverage: Complete}}, nil
+}
+func (a *flakySnapAdapter) Select(_ context.Context, account Account, _ Operation) (Selection, error) {
+	return Selection{AccountID: account.ID, ConnectionID: "primary", Profile: "snap", CredentialRef: "profile:snap"}, nil
+}
+
+func TestAccountRefreshKeepsLastGoodOnError(t *testing.T) {
+	path := t.TempDir() + "/accounts.json"
+	store := Open(path)
+	good := &flakySnapAdapter{now: time.Date(2026, 10, 29, 8, 0, 0, 0, time.UTC)}
+	registry := NewRegistry()
+	if err := registry.Register(good); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := invokeAccount(t, store, registry, "discover", "--json"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := invokeAccount(t, store, registry, "refresh", "snap", "--json"); err != nil {
+		t.Fatalf("good refresh: %v", err)
+	}
+	snap, err := store.Snapshot(mustAccountID(t, store, "snap"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Resources) != 1 || len(snap.Metrics["month"]) != 2 || snap.LastError != "" {
+		t.Fatalf("good snapshot = %+v", snap)
+	}
+
+	bad := &flakySnapAdapter{bad: true}
+	registry = NewRegistry()
+	if err := registry.Register(bad); err != nil {
+		t.Fatal(err)
+	}
+	_, stderr, err := invokeAccount(t, store, registry, "refresh", "snap", "--json")
+	if err == nil {
+		t.Fatal("failing refresh unexpectedly succeeded")
+	}
+	if code := decodeEnvelope(t, stderr)["error"].(map[string]any)["code"]; code != "adapter_failed" {
+		t.Fatalf("refresh error code = %v", code)
+	}
+	after, err := store.Snapshot(mustAccountID(t, store, "snap"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Resources) != 1 || after.Resources[0].ID != "r-1" {
+		t.Fatalf("last-good resources lost: %+v", after.Resources)
+	}
+	if len(after.Metrics["month"]) != 2 {
+		t.Fatalf("last-good metrics lost: %+v", after.Metrics)
+	}
+	if after.LastError != refreshFailed {
+		t.Fatalf("last_error = %q", after.LastError)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accountstest.AssertNoSecret(t, string(raw))
+
+	out, _, err := invokeAccount(t, store, registry, "usage", "snap", "--period", "month", "--json")
+	if err != nil {
+		t.Fatalf("usage after failed refresh: %v", err)
+	}
+	envelope := decodeEnvelope(t, out)
+	if len(envelope["metrics"].([]any)) != 2 {
+		t.Fatalf("usage lost last-good metrics: %v", envelope["metrics"])
+	}
+	if envelope["last_error"] != refreshFailed || envelope["observed_at"] == nil {
+		t.Fatalf("usage hides refresh failure: %v", envelope)
+	}
+}
+
+func mustAccountID(t *testing.T, store *Store, alias string) string {
+	t.Helper()
+	items, err := store.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range items {
+		if a.Alias == alias {
+			return a.ID
+		}
+	}
+	t.Fatalf("account %q not found", alias)
+	return ""
 }
 
 func TestAccountCommandStructuredErrorsAndFilters(t *testing.T) {

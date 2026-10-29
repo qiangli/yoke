@@ -9,9 +9,22 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 )
+
+// refreshTimeout bounds every adapter call made by `account refresh`. Refresh
+// walks accounts sequentially so one slow provider cannot stall the rest of
+// the inventory past this budget per account.
+const refreshTimeout = 30 * time.Second
+
+// refreshFailed is the safe snapshot code recorded when an adapter call
+// fails. Raw adapter errors are never persisted: they may carry credential
+// material, so the CLI and the store only keep this code.
+const refreshFailed = "refresh_failed"
+
+var refreshPeriods = []string{"day", "week", "month"}
 
 const CommandSchemaVersion = "bashy-account-v1"
 
@@ -48,8 +61,9 @@ func (e *commandError) Error() string { return "account: " + e.Code + ": " + e.M
 func fail(code, message string) error { return &commandError{Code: code, Message: message} }
 
 // NewAccountCmd returns the host-local account inventory command tree. Cached
-// reads (list, show and schema) only consult the local Store; provider calls are
-// confined to discover, refresh, usage and resources.
+// reads (list, show, schema, usage and resources) only consult the local
+// Store; provider calls are confined to discover and refresh. Usage and
+// resources render the snapshot written by refresh and never call adapters.
 func NewAccountCmd(opts ...CommandOption) *cobra.Command {
 	cfg := commandConfig{store: Open(""), registry: DefaultRegistry()}
 	for _, opt := range opts {
@@ -567,14 +581,38 @@ func (s *commandState) adapterFor(a Account, capability Capability) (Adapter, er
 	return nil, ErrUnsupported
 }
 
+func hasCapability(a Adapter, cap Capability) bool { return a.Capabilities()&cap != 0 }
+
+func sortMetrics(metrics []Metric) {
+	sort.Slice(metrics, func(i, j int) bool {
+		if metrics[i].Name != metrics[j].Name {
+			return metrics[i].Name < metrics[j].Name
+		}
+		return metrics[i].Source < metrics[j].Source
+	})
+}
+
+// refreshOne re-reads one account through its adapter and persists a snapshot
+// (resources, metrics per period, observed_at). Only refresh calls adapters:
+// usage and resources render the snapshot it writes. An adapter error records
+// a safe code and keeps the previous resources and metrics.
 func (s *commandState) refreshOne(ctx context.Context, a Account) (Account, error) {
 	adapter, err := s.adapterFor(a, Verify)
 	if err != nil {
 		return Account{}, err
 	}
+	ctx, cancel := context.WithTimeout(ctx, refreshTimeout)
+	defer cancel()
+	now := time.Now()
+	failSnapshot := func() error {
+		if rerr := s.store.RecordSnapshotError(a.ID, refreshFailed, now); rerr != nil {
+			return rerr
+		}
+		return fail("adapter_failed", "account refresh failed")
+	}
 	observation, err := adapter.Verify(ctx, a)
 	if err != nil {
-		return Account{}, fail("adapter_failed", "account refresh failed")
+		return Account{}, failSnapshot()
 	}
 	if err := s.store.Observe(adapter.Name(), []Observation{observation}); err != nil {
 		return Account{}, err
@@ -582,6 +620,44 @@ func (s *commandState) refreshOne(ctx context.Context, a Account) (Account, erro
 	items, err := materialize(adapter.Name(), []Observation{observation})
 	if err != nil || len(items) != 1 {
 		return Account{}, fail("invalid_observation", "adapter returned invalid account metadata")
+	}
+	var resources []ResourceRef
+	if hasCapability(adapter, Resources) {
+		resources, err = adapter.Resources(ctx, a)
+		if err != nil {
+			return Account{}, failSnapshot()
+		}
+		sort.Slice(resources, func(i, j int) bool {
+			if resources[i].Kind != resources[j].Kind {
+				return resources[i].Kind < resources[j].Kind
+			}
+			return resources[i].ID < resources[j].ID
+		})
+	}
+	metrics := map[string][]Metric{}
+	if hasCapability(adapter, Usage) || hasCapability(adapter, Billing) {
+		for _, period := range refreshPeriods {
+			var combined []Metric
+			if hasCapability(adapter, Usage) {
+				used, err := adapter.Usage(ctx, a, period)
+				if err != nil {
+					return Account{}, failSnapshot()
+				}
+				combined = append(combined, used...)
+			}
+			if hasCapability(adapter, Billing) {
+				billed, err := adapter.Billing(ctx, a, period)
+				if err != nil {
+					return Account{}, failSnapshot()
+				}
+				combined = append(combined, billed...)
+			}
+			sortMetrics(combined)
+			metrics[period] = combined
+		}
+	}
+	if err := s.store.SaveSnapshot(Snapshot{AccountID: a.ID, Resources: resources, Metrics: metrics, ObservedAt: now}); err != nil {
+		return Account{}, err
 	}
 	return items[0], nil
 }
@@ -639,11 +715,30 @@ func (s *commandState) refreshCmd() *cobra.Command {
 	return c
 }
 
+// snapshotEnvelope carries the snapshot age (and any refresh error) alongside
+// cached rows so callers can tell how fresh the cache is without calling an
+// adapter.
+func (s *commandState) snapshotEnvelope(snap Snapshot, value map[string]any) map[string]any {
+	value["schema_version"] = CommandSchemaVersion
+	value["observed_at"] = snap.ObservedAt.UTC().Format(time.RFC3339)
+	if snap.LastError != "" {
+		value["last_error"] = snap.LastError
+	}
+	return value
+}
+
+func writeSnapshotAge(cmd *cobra.Command, snap Snapshot) {
+	fmt.Fprintln(cmd.OutOrStdout(), "# observed_at "+snap.ObservedAt.UTC().Format(time.RFC3339))
+	if snap.LastError != "" {
+		fmt.Fprintln(cmd.OutOrStdout(), "# last_error "+snap.LastError)
+	}
+}
+
 func (s *commandState) usageCmd() *cobra.Command {
 	var period string
 	c := &cobra.Command{
 		Use:   "usage ID",
-		Short: "Query sourced usage and billing metrics",
+		Short: "Show cached usage and billing metrics (run refresh to update)",
 		Args:  s.args("usage", cobra.ExactArgs(1)),
 		RunE: s.run("usage", func(cmd *cobra.Command, args []string) error {
 			if period != "day" && period != "week" && period != "month" {
@@ -657,34 +752,20 @@ func (s *commandState) usageCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			adapter, err := s.adapterFor(a, Usage)
+			snap, err := s.store.Snapshot(a.ID)
 			if err != nil {
 				return err
 			}
-			metrics, err := adapter.Usage(cmd.Context(), a, period)
-			if err != nil {
-				return fail("adapter_failed", "account usage query failed")
-			}
-			if billing, berr := s.adapterFor(a, Billing); berr == nil && billing.Name() == adapter.Name() {
-				more, berr := billing.Billing(cmd.Context(), a, period)
-				if berr != nil {
-					return fail("adapter_failed", "account billing query failed")
-				}
-				metrics = append(metrics, more...)
-			}
-			sort.Slice(metrics, func(i, j int) bool {
-				if metrics[i].Name != metrics[j].Name {
-					return metrics[i].Name < metrics[j].Name
-				}
-				return metrics[i].Source < metrics[j].Source
-			})
+			metrics := append([]Metric(nil), snap.Metrics[period]...)
+			sortMetrics(metrics)
 			rows, err := projectMany(metrics, fields)
 			if err != nil {
 				return err
 			}
 			if s.json {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{"schema_version": CommandSchemaVersion, "command": "usage", "account_id": a.ID, "period": period, "metrics": rows})
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(s.snapshotEnvelope(snap, map[string]any{"command": "usage", "account_id": a.ID, "period": period, "metrics": rows}))
 			}
+			writeSnapshotAge(cmd, snap)
 			return writeTable(cmd.OutOrStdout(), fields, rows)
 		}),
 	}
@@ -695,7 +776,7 @@ func (s *commandState) usageCmd() *cobra.Command {
 func (s *commandState) resourcesCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "resources ID",
-		Short: "Query resources through the account adapter",
+		Short: "Show cached resources (run refresh to update)",
 		Args:  s.args("resources", cobra.ExactArgs(1)),
 		RunE: s.run("resources", func(cmd *cobra.Command, args []string) error {
 			fields, err := selectedFields(s.fields, resourceFieldOrder)
@@ -706,14 +787,11 @@ func (s *commandState) resourcesCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			adapter, err := s.adapterFor(a, Resources)
+			snap, err := s.store.Snapshot(a.ID)
 			if err != nil {
 				return err
 			}
-			resources, err := adapter.Resources(cmd.Context(), a)
-			if err != nil {
-				return fail("adapter_failed", "account resource query failed")
-			}
+			resources := append([]ResourceRef(nil), snap.Resources...)
 			sort.Slice(resources, func(i, j int) bool {
 				if resources[i].Kind != resources[j].Kind {
 					return resources[i].Kind < resources[j].Kind
@@ -725,8 +803,9 @@ func (s *commandState) resourcesCmd() *cobra.Command {
 				return err
 			}
 			if s.json {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{"schema_version": CommandSchemaVersion, "command": "resources", "account_id": a.ID, "resources": rows})
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(s.snapshotEnvelope(snap, map[string]any{"command": "resources", "account_id": a.ID, "resources": rows}))
 			}
+			writeSnapshotAge(cmd, snap)
 			return writeTable(cmd.OutOrStdout(), fields, rows)
 		}),
 	}
