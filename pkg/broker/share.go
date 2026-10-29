@@ -344,7 +344,10 @@ func newDoorCmd() *cobra.Command {
 		Long: `import reads a ` + GrantSchemaVersion + ` grant on stdin and stores it owner-only
 under $BASHY_HOME/llm/doors/<door>.json. It also opens the persistent mesh
 forward and records the door in the toolcmd peers file, so ` + "`tool cmd run --peer`" + `
-reaches it. ` + "`llm share`" + ` on the door host runs this for you.`,
+reaches it. The grant is also a live model source: ` + "`genie -m MODEL@DOOR`" + `
+(or DOOR-door-MODEL) reads its current credential each invocation, including
+after a share rotation; no model YAML or secrets.map is needed.
+` + "`llm share`" + ` on the door host runs this for you.`,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -368,6 +371,7 @@ reaches it. ` + "`llm share`" + ` on the door host runs this for you.`,
 				fmt.Fprintf(c.ErrOrStderr(), "llm door import: toolcmd peer %s not recorded: %v\n", g.Door, err)
 			}
 			fmt.Fprintf(out, "imported door %s as peer:%s; eval \"$(bashy llm env --from %s)\"\n", g.Door, g.Peer, g.Door)
+			fmt.Fprintf(out, "genie model source: bashy genie -m MODEL@%s PROMPT (also %s-door-MODEL); credentials follow share rotations\n", g.Door, g.Door)
 			return nil
 		},
 	}
