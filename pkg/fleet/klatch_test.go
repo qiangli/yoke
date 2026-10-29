@@ -21,19 +21,19 @@ func TestKlatchManagedServicePin(t *testing.T) {
 	if m.Unverified() || m.License != "Apache-2.0" || m.LicenseURL == "" {
 		t.Fatal("klatch needs a signed, licensed service pin")
 	}
-	if m.Version != "1.2.4-bashy.1" {
-		t.Fatalf("version=%q, want 1.2.4-bashy.1", m.Version)
+	if m.Version != "1.2.5-bashy.1" {
+		t.Fatalf("version=%q, want 1.2.5-bashy.1", m.Version)
 	}
-	const release = "https://github.com/qiangli/klatch/releases/download/bashy-v1.2.4-1/"
-	const identity = "https://github.com/qiangli/klatch/.github/workflows/bashy-build.yml@refs/tags/bashy-v1.2.4-1"
+	const release = "https://github.com/qiangli/klatch/releases/download/bashy-v1.2.5-1/"
+	const identity = "https://github.com/qiangli/klatch/.github/workflows/bashy-build.yml@refs/tags/bashy-v1.2.5-1"
 	if m.Sigstore.Identity != identity || m.Sigstore.Issuer != "https://token.actions.githubusercontent.com" {
 		t.Fatalf("wrong signing identity: %+v", m.Sigstore)
 	}
 	assets := map[string]struct{ file, sha256 string }{
-		"linux/amd64":  {"klatch-v1.2.4-linux-amd64.tar.gz", "7e0619dbaaacc3c02a84dae477e614db45edda5b0cec1b9fa5a7d0acb122a4a2"},
-		"linux/arm64":  {"klatch-v1.2.4-linux-arm64.tar.gz", "ca334ce488f1a9b2581a8442835c6a0167ced7b9a9d55de94486adc2f1eb7c9d"},
-		"darwin/amd64": {"klatch-v1.2.4-darwin-amd64.tar.gz", "e032567616c51890c62cb71dd7817714f02183f0ed7796a21aae317bc7576b90"},
-		"darwin/arm64": {"klatch-v1.2.4-darwin-arm64.tar.gz", "356158e7b0420b835846ccf795a3d22c1f1666c88623edc4c7506fbf1487689b"},
+		"linux/amd64":  {"klatch-v1.2.5-linux-amd64.tar.gz", "c0ef0d9dc7596aa256944869faa5a39a291bf2240213074d08d0b2574cbc0347"},
+		"linux/arm64":  {"klatch-v1.2.5-linux-arm64.tar.gz", "879e18276c65aca4b208e92443ca2c63d752fe9feb1b1d9d08437834e71cf37b"},
+		"darwin/amd64": {"klatch-v1.2.5-darwin-amd64.tar.gz", "7508bf9f24e42be496f602ab47c992de888cc856e6c9264cba4569e19c5dbd3e"},
+		"darwin/arm64": {"klatch-v1.2.5-darwin-arm64.tar.gz", "f3044c53f8ff04fa234b6a51e9c037a10a0d92a7106ce230ce55b55068139219"},
 	}
 	for platform, want := range assets {
 		a, ok := m.Assets[platform]
