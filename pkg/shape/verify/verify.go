@@ -79,7 +79,7 @@ type Options struct {
 	CandidateSHA string
 	// Principal is who the verdict is for.
 	Principal string
-	// Reader reads a contract from a tree; DecoratorReader{} by default.
+	// Reader reads a contract from a tree; UnitReader{} by default.
 	Reader ContractReader
 	// Runner executes one frozen check; TrustedRunner{} by default.
 	Runner Runner
@@ -180,7 +180,7 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	}
 	reader := o.Reader
 	if reader == nil {
-		reader = DecoratorReader{}
+		reader = UnitReader{}
 	}
 	runner := o.Runner
 	if runner == nil {
@@ -604,7 +604,7 @@ func Binding(repoDir, candidateSHA, baseSHA, principal string, reader ContractRe
 		return evidence.Binding{}, errors.New("verify: repo dir, base and candidate are required")
 	}
 	if reader == nil {
-		reader = DecoratorReader{}
+		reader = UnitReader{}
 	}
 	clone, err := IsolatedClone(repoDir, baseSHA)
 	if err != nil {

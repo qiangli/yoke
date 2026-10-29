@@ -11,6 +11,8 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/qiangli/yoke/pkg/shape/evidence"
+	"github.com/qiangli/yoke/pkg/shape/verify/repair"
 	"github.com/qiangli/yoke/pkg/unit"
 )
 
@@ -70,9 +72,26 @@ func TestBashSharpAdapt(t *testing.T) {
 	for _, mutation := range []string{"steps", "ensure", "guard", "effects", "require", "fails"} {
 		t.Run(mutation, func(t *testing.T) {
 			calls := 0
-			cfg, sk, src, ps := sharpFixture(t, func(_ context.Context, _ string, _ []string, body string, out, errout io.Writer) (int, error) {
+			cfg, sk, src, ps := sharpFixture(t, func(_ context.Context, dir string, env []string, body string, out, errout io.Writer) (int, error) {
 				calls++
 				if strings.Contains(body, "fixed") {
+					// A genuine repair: the host interpreter records the
+					// contracted call and the fixed steps produce their
+					// effect. Exit 0 alone never promotes — without the
+					// call and the effect the repair is unverified.
+					old, had := os.LookupEnv(repair.CallLogEnv)
+					for _, e := range env {
+						if v, ok := strings.CutPrefix(e, repair.CallLogEnv+"="); ok {
+							os.Setenv(repair.CallLogEnv, v)
+						}
+					}
+					repair.RecordCall("work")
+					if had {
+						os.Setenv(repair.CallLogEnv, old)
+					} else {
+						os.Unsetenv(repair.CallLogEnv)
+					}
+					os.WriteFile(filepath.Join(dir, "done"), []byte{}, 0o644)
 					return 0, nil
 				}
 				fmt.Fprintln(errout, "failure detail")
@@ -127,6 +146,177 @@ func TestBashSharpAdapt(t *testing.T) {
 			}
 		})
 	}
+}
+
+const verifiedDecorators = "@guard(effects: \"read,write\")\n@effects(\"read,write\")\n@require('true')\n@ensure('test -f done')\n"
+
+// verifiedRunner stands in for the host's decorator-aware interpreter: it
+// records contracted-function invocations through the call log the run
+// carries (the accounting the verifier checks), performs the file effect
+// the repaired steps claim, and fails bodies that still carry the bug.
+func verifiedRunner(calls *int, seen *[]string) BashSharpRunner {
+	return func(_ context.Context, dir string, env []string, body string, out, errout io.Writer) (int, error) {
+		*calls++
+		*seen = append(*seen, body)
+		var logPath string
+		for _, e := range env {
+			if v, ok := strings.CutPrefix(e, repair.CallLogEnv+"="); ok {
+				logPath = v
+			}
+		}
+		// Bridge the run's call log into the process environment the way
+		// the real interpreter receives it, so RecordCall accounts here.
+		old, had := os.LookupEnv(repair.CallLogEnv)
+		if logPath == "" {
+			os.Unsetenv(repair.CallLogEnv)
+		} else {
+			os.Setenv(repair.CallLogEnv, logPath)
+		}
+		defer func() {
+			if had {
+				os.Setenv(repair.CallLogEnv, old)
+			} else {
+				os.Unsetenv(repair.CallLogEnv)
+			}
+		}()
+		for _, line := range strings.Split(body, "\n") {
+			if strings.TrimSpace(line) == "work" {
+				repair.RecordCall("work")
+			}
+		}
+		if strings.Contains(body, "broken") {
+			fmt.Fprintln(errout, "failure detail")
+			return 3, nil
+		}
+		if strings.Contains(body, "touch done") {
+			if err := os.WriteFile(filepath.Join(dir, "done"), []byte{}, 0o644); err != nil {
+				return 1, err
+			}
+		}
+		return 0, nil
+	}
+}
+
+// promoteGenuine runs one repair round with the genuine fix and returns the
+// fixture alongside the promoted overlay body.
+func promoteGenuine(t *testing.T, calls *int, seen *[]string) (*config, Skill, Source, *ProbeSet, string, string) {
+	t.Helper()
+	cfg, sk, src, ps := sharpFixture(t, verifiedRunner(calls, seen))
+	genuine := verifiedDecorators + "work() { touch done; }\nwork\n"
+	complete := func(prompt string) (string, error) {
+		return "```bashsharp\n" + genuine + "```\n", nil
+	}
+	var log strings.Builder
+	rec, outcome, err := adaptiveRun(cfg, sk, src, ps, t.TempDir(), &log, complete, 1)
+	if err != nil || outcome != OutcomeRepaired || !rec.Valid {
+		t.Fatalf("genuine repair refused: %+v %s %v", rec, outcome, err)
+	}
+	return cfg, sk, src, ps, genuine, log.String()
+}
+
+// Only a verified repair reaches the overlay: a weakened @ensure, an
+// early exit and an uncalled contract are refused, and the genuine repair
+// is promoted, sealed under its identity, and runs next time.
+func TestBashSharpOverlayVerified(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		body    string
+		reason  string
+		promote bool
+	}{
+		{"weakened ensure", strings.Replace(sharpBody, "@ensure('test -f done')", "@ensure('true')", 1), "changed decorator", false},
+		{"early exit", verifiedDecorators + "work() { :; }\nwork\n", "postcondition", false},
+		{"uncalled contract", verifiedDecorators + "work() { :; }\ntouch done\n", "never called", false},
+		{"genuine repair", verifiedDecorators + "work() { touch done; }\nwork\n", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls int
+			var seen []string
+			cfg, sk, src, ps := sharpFixture(t, verifiedRunner(&calls, &seen))
+			complete := func(prompt string) (string, error) {
+				return "```bashsharp\n" + tc.body + "```\n", nil
+			}
+			var log strings.Builder
+			rec, outcome, err := adaptiveRun(cfg, sk, src, ps, t.TempDir(), &log, complete, 1)
+			p, perr := prepareRun(cfg, sk, src, ps)
+			if perr != nil {
+				t.Fatal(perr)
+			}
+			overlay := bashSharpOverlay(cfg, p)
+			if !tc.promote {
+				if err == nil || outcome != OutcomeFailed {
+					t.Fatalf("promoted an unverified repair: %+v %s %v", rec, outcome, err)
+				}
+				if !strings.Contains(err.Error(), tc.reason) {
+					t.Fatalf("err = %v, want %q", err, tc.reason)
+				}
+				if _, serr := os.Stat(overlay); !os.IsNotExist(serr) {
+					t.Fatal("an unverified repair reached the overlay")
+				}
+				return
+			}
+			if err != nil || outcome != OutcomeRepaired || !rec.Valid {
+				t.Fatalf("verified repair refused: %+v %s %v", rec, outcome, err)
+			}
+			raw, serr := os.ReadFile(overlay)
+			if serr != nil || string(raw) != tc.body {
+				t.Fatalf("overlay = %q, %v", raw, serr)
+			}
+			// The pass is sealed in an evidence record bound to the
+			// overlay body's identity.
+			if _, serr := os.Stat(evidence.Path(cfg.cfgDir, unit.BodyIdentity([]byte(tc.body)))); serr != nil {
+				t.Fatalf("no evidence bound to the overlay identity: %v", serr)
+			}
+			// Next time the learned version runs.
+			var again strings.Builder
+			rec2, _, err2 := runSkill(cfg, sk, src, ps, t.TempDir(), &again)
+			if err2 != nil || !rec2.Valid || !strings.Contains(again.String(), "running the host's learned version") {
+				t.Fatalf("overlay rerun: %+v %v %s", rec2, err2, again.String())
+			}
+			if seen[len(seen)-1] != tc.body {
+				t.Fatal("the rerun did not execute the overlay body")
+			}
+		})
+	}
+
+	t.Run("stale overlay runs the authored unit", func(t *testing.T) {
+		var calls int
+		var seen []string
+		cfg, sk, src, ps, _, _ := promoteGenuine(t, &calls, &seen)
+		p, perr := prepareRun(cfg, sk, src, ps)
+		if perr != nil {
+			t.Fatal(perr)
+		}
+		tampered := verifiedDecorators + "work() { :; }\nwork\n"
+		if err := os.WriteFile(bashSharpOverlay(cfg, p), []byte(tampered), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		var log strings.Builder
+		rec, _, err := runSkill(cfg, sk, src, ps, t.TempDir(), &log)
+		if err != nil || rec.Valid || *rec.Status != 3 || strings.Contains(log.String(), "learned version") {
+			t.Fatalf("stale overlay ran: %+v %v %s", rec, err, log.String())
+		}
+		if seen[len(seen)-1] != sharpBody {
+			t.Fatal("a stale overlay shadowed the authored unit")
+		}
+	})
+
+	t.Run("missing evidence runs the authored unit", func(t *testing.T) {
+		var calls int
+		var seen []string
+		cfg, sk, src, ps, _, _ := promoteGenuine(t, &calls, &seen)
+		if err := os.RemoveAll(filepath.Join(cfg.cfgDir, "src")); err != nil {
+			t.Fatal(err)
+		}
+		var log strings.Builder
+		rec, _, err := runSkill(cfg, sk, src, ps, t.TempDir(), &log)
+		if err != nil || rec.Valid || *rec.Status != 3 || strings.Contains(log.String(), "learned version") {
+			t.Fatalf("overlay without evidence ran: %+v %v %s", rec, err, log.String())
+		}
+		if seen[len(seen)-1] != sharpBody {
+			t.Fatal("an overlay without evidence shadowed the authored unit")
+		}
+	})
 }
 
 func TestBashSharpMissingRunnerAndFences(t *testing.T) {

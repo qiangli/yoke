@@ -14,9 +14,10 @@ import (
 )
 
 // ContractReader reads the shaping contract out of one checked-out tree.
-// It is an interface so the unified unit contract reader can replace the
-// minimal one below without touching the verifier: the verifier only ever
-// needs the contracted functions, the required checks and the effect cap.
+// It is an interface so tests can stand in a fixed contract without
+// touching the verifier: the verifier only ever needs the contracted
+// functions, the required checks and the effect cap. Production uses
+// UnitReader, the pkg/unit-backed reader.
 type ContractReader interface {
 	// ReadContract reads the contract from the tree rooted at dir.
 	ReadContract(dir string) (Contract, error)
@@ -107,9 +108,8 @@ func (c Contract) Cap() string { return strings.Join(c.Effects, ",") }
 // @ensure, @guard and @effects decorators out of the tree's Bash# units.
 // A unit is a .bsh/.bash file or a Markdown document with bsh fences.
 //
-// It is deliberately small. It exists so the verifier is runnable and
-// testable now, and so the shape of what a reader must answer is fixed
-// before the unified reader lands behind the same interface.
+// It is deliberately small, and it stays as the fallback inside UnitReader
+// for files where pkg/unit finds no contract.
 type DecoratorReader struct {
 	// Exts are the file extensions read as raw Bash# bodies.
 	// Empty means .bsh and .bash.

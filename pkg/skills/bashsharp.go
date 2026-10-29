@@ -13,6 +13,7 @@ import (
 	"time"
 
 	dhntskills "github.com/dhnt/dhnt/skills"
+	"github.com/qiangli/yoke/pkg/shape/verify/repair"
 	"github.com/qiangli/yoke/pkg/unit"
 )
 
@@ -44,6 +45,27 @@ func bashSharpOverlay(cfg *config, p runPrep) string {
 	return filepath.Join(cfg.cfgDir, "bashsharp", fmt.Sprintf("%x.bsh", key))
 }
 
+// attestBashSharp seals the receipt for one Bash# run: one identity, one
+// contract reader, one capability key (pkg/unit) — the receipt names the
+// exact body that ran and the promise it was keeping.
+func attestBashSharp(name, body string, p runPrep, code int) AttestRecord {
+	id := unit.BodyIdentity([]byte(body))
+	contract, _ := unit.ReadContract(body)
+	capKey, _ := unit.CapabilityKey(contract)
+	contracted := contract.Contracted()
+	rec := AttestRecord{
+		At: time.Now().UTC(), Name: name, Tier: p.tier, ContextKey: p.ctxKey, Status: &code,
+		Capability: capKey,
+		Attest:     dhntskills.Attestation{Skill: id, Valid: code == 0 && contracted},
+		Attestation: unit.Attestation{Target: name, Identity: id, Capability: capKey, Valid: code == 0 && contracted,
+			Effects: contract.EffectCap(), Uncontracted: !contracted},
+	}
+	if code != 0 {
+		rec.Attest.Failed = []string{fmt.Sprintf("Bash# exit %d", code)}
+	}
+	return rec
+}
+
 func executeBashSharp(cfg *config, name, body string, p runPrep, dir string, log io.Writer) (AttestRecord, string) {
 	var output bytes.Buffer
 	sink := io.MultiWriter(log, &output)
@@ -56,30 +78,15 @@ func executeBashSharp(cfg *config, name, body string, p runPrep, dir string, log
 			code = 1
 		}
 	}
-	// One identity, one contract reader, one capability key (pkg/unit): the
-	// receipt names the exact body that ran and the promise it was keeping.
-	id := unit.BodyIdentity([]byte(body))
-	contract, _ := unit.ReadContract(body)
-	capKey, _ := unit.CapabilityKey(contract)
-	contracted := contract.Contracted()
-	rec := AttestRecord{
-		At: time.Now().UTC(), Name: name, Tier: p.tier, ContextKey: p.ctxKey, Status: &code,
-		Capability: capKey,
-		Attest:     dhntskills.Attestation{Skill: id, Valid: code == 0 && contracted},
-		Attestation: unit.Attestation{Target: name, Identity: id, Capability: capKey, Valid: code == 0 && contracted,
-			Effects: contract.EffectCap(), Uncontracted: !contracted},
-	}
-	switch {
-	case code != 0:
-		rec.Attest.Failed = []string{fmt.Sprintf("Bash# exit %d", code)}
-	case !contracted:
+	rec := attestBashSharp(name, body, p, code)
+	if code == 0 && rec.Uncontracted {
 		// Exit 0 is not a verdict: with no @require/@ensure there is nothing
 		// the run could have been checked against, so it is never verified.
 		// Like an uncontracted dag target, it leaves no receipt: a receipt is
 		// evidence about a promise, and this unit made none.
 		fmt.Fprintf(log, "skills: %s: uncontracted Bash# unit — ran, not verified\n", name)
 	}
-	if contracted {
+	if !rec.Uncontracted {
 		storeAttest(cfg, rec, log)
 	}
 	return rec, output.String()
@@ -90,7 +97,10 @@ func runBashSharp(cfg *config, name string, p runPrep, dir string, log io.Writer
 	overlay := bashSharpOverlay(cfg, p)
 	if cfg.cfgDir != "" {
 		learned, err := os.ReadFile(overlay)
-		if err == nil && bashSharpDecorators(string(learned)) == bashSharpDecorators(p.body) {
+		// A stale, missing or failed evidence record runs the authored
+		// body, never the overlay: the learned version runs only on a
+		// passing record bound to its exact identity.
+		if err == nil && overlayVerified(cfg, name, p, string(learned), log) {
 			body, outcome = string(learned), OutcomeOverlay
 			fmt.Fprintf(log, "skills: %s: running the host's learned version (overlay of %s)\n", name, shortID(p.rootID))
 		}
@@ -118,14 +128,26 @@ func runBashSharp(cfg *config, name string, p runPrep, dir string, log io.Writer
 			lastErr = fmt.Errorf("repair rejected: missing Bash# fence or changed decorator lines")
 			continue
 		}
-		trial, output := executeBashSharp(cfg, name, candidate, p, dir, log)
-		if !ranClean(trial) {
-			failure = output
-			lastErr = fmt.Errorf("candidate failed with exit %d", *trial.Status)
+		// The trial is also the verification run: the candidate executes
+		// once, under call accounting, against the contract frozen from
+		// the original body. Only a verified repair is promoted below.
+		ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+		var capture bytes.Buffer
+		sink := io.MultiWriter(log, &capture)
+		_, verr := repair.VerifyRepair(ctx, p.body, candidate, dir, os.Environ(), repair.BashSharpRunner(cfg.bashSharpRunner), sink, sink, evalContractClause)
+		cancel()
+		if verr != nil {
+			failure = strings.TrimSpace(strings.TrimSpace(capture.String()) + "\nverification: " + verr.Error())
+			lastErr = verr
 			continue
 		}
+		trial := attestBashSharp(name, candidate, p, 0)
+		storeAttest(cfg, trial, log)
 		if cfg.cfgDir == "" {
 			return trial, OutcomeFailed, fmt.Errorf("skills: no host-local store directory configured")
+		}
+		if err := sealBashSharpOverlay(cfg, p, candidate); err != nil {
+			return trial, OutcomeFailed, err
 		}
 		if err := os.MkdirAll(filepath.Dir(overlay), 0o755); err != nil {
 			return trial, OutcomeFailed, err
