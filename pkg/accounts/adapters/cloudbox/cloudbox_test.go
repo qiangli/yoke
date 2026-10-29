@@ -140,7 +140,9 @@ func TestDaemonDownKeepsProfiles(t *testing.T) {
 	if find(obs, "https://one.example.com|bob").LastError != "unreachable" {
 		t.Fatal("expected unreachable")
 	}
-	_, err = (&Adapter{ConfigDir: t.TempDir(), Exec: func(context.Context, ...string) ([]byte, error) { return nil, errors.New("x " + accountstest.CanarySecret) }}).Discover(context.Background())
+	_, err = (&Adapter{ConfigDir: t.TempDir(), Exec: func(context.Context, ...string) ([]byte, error) {
+		return nil, errors.New("x " + accountstest.CanarySecret)
+	}}).Discover(context.Background())
 	if err == nil || strings.Contains(err.Error(), accountstest.CanarySecret) {
 		t.Fatal(err)
 	}
@@ -159,4 +161,154 @@ func TestRegisterAndSelect(t *testing.T) {
 	if _, err := ad.Select(context.Background(), two, "x"); !errors.Is(err, accounts.ErrAmbiguous) {
 		t.Fatal(err)
 	}
+}
+
+func TestDiscoverRealShapeFixtures(t *testing.T) {
+	root := t.TempDir()
+
+	// Top-level agent.json without sidecar files (no "server" or "host" sidecar)
+	write(t, filepath.Join(root, "agent.json"), `{
+		"agent_name": "owl",
+		"server_addr": "one.example.com",
+		"server_port": 443,
+		"protocol": "wss",
+		"token": "`+accountstest.CanarySecret+`",
+		"access_token": "`+accountstest.CanarySecret+`",
+		"admin_session_key": "`+accountstest.CanarySecret+`",
+		"mcp_bearer_token": "`+accountstest.CanarySecret+`",
+		"files_signing_key": "`+accountstest.CanarySecret+`",
+		"cloudbox_ticket_pubkey": "`+accountstest.CanarySecret+`",
+		"cluster_node_token": "`+accountstest.CanarySecret+`",
+		"custom_key": "`+accountstest.CanarySecret+`",
+		"cookie": "`+accountstest.CanarySecret+`",
+		"password": "`+accountstest.CanarySecret+`"
+	}`)
+
+	// Profile 1: with sidecar "server" file, same agent_name "owl"
+	p1Dir := filepath.Join(root, "profiles", "sat")
+	write(t, filepath.Join(p1Dir, "server"), "https://two.example.com\n")
+	write(t, filepath.Join(p1Dir, "agent.json"), `{
+		"agent_name": "owl",
+		"server_addr": "two.example.com",
+		"server_port": 443,
+		"protocol": "wss",
+		"token": "`+accountstest.CanarySecret+`",
+		"access_token": "`+accountstest.CanarySecret+`",
+		"admin_session_key": "`+accountstest.CanarySecret+`",
+		"mcp_bearer_token": "`+accountstest.CanarySecret+`",
+		"files_signing_key": "`+accountstest.CanarySecret+`"
+	}`)
+
+	// Profile 2: with sidecar "server" file, different agent_name "otter"
+	p2Dir := filepath.Join(root, "profiles", "other")
+	write(t, filepath.Join(p2Dir, "server"), "https://three.example.com\n")
+	write(t, filepath.Join(p2Dir, "agent.json"), `{
+		"agent_name": "otter",
+		"server_addr": "three.example.com",
+		"server_port": 443,
+		"protocol": "wss",
+		"token": "`+accountstest.CanarySecret+`",
+		"access_token": "`+accountstest.CanarySecret+`"
+	}`)
+
+	// Profile 3: empty config (neither endpoint nor agent_name known)
+	p3Dir := filepath.Join(root, "profiles", "unresolved")
+	write(t, filepath.Join(p3Dir, "agent.json"), `{}`)
+
+	mockExec := func(_ context.Context, args ...string) ([]byte, error) {
+		if args[0] == "status" {
+			return []byte(`{
+				"config": {
+					"agent_name": "owl",
+					"server_addr": "one.example.com",
+					"server_port": 443,
+					"protocol": "wss",
+					"cloudbox_url": "https://one.example.com"
+				},
+				"state": "active (paired as owl)",
+				"status": {
+					"configured": true,
+					"agent_name": "owl",
+					"server_addr": "one.example.com",
+					"cloudbox_url": "https://one.example.com",
+					"current_os_user": "tester"
+				}
+			}`), nil
+		}
+		return []byte(`[]`), nil
+	}
+
+	a := &Adapter{ConfigDir: root, Exec: mockExec, Now: func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }}
+	obs, err := a.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Active endpoint: resolved, username empty, name = agent_name, links satellite "sat"
+	activeAcc := find(obs, "https://one.example.com|owl")
+	if activeAcc.Status != accounts.Resolved {
+		t.Fatalf("expected active account to be Resolved, got %v", activeAcc.Status)
+	}
+	if activeAcc.Username != "" {
+		t.Fatalf("expected Username to be empty, got %q", activeAcc.Username)
+	}
+	if activeAcc.Name != "owl" {
+		t.Fatalf("expected Name to be 'owl', got %q", activeAcc.Name)
+	}
+	if len(activeAcc.Connections) == 0 || activeAcc.Connections[0].Endpoint != "https://one.example.com" {
+		t.Fatalf("expected endpoint 'https://one.example.com', got %+v", activeAcc.Connections)
+	}
+	if len(activeAcc.Links.Satellites) != 1 || activeAcc.Links.Satellites[0] != "sat" {
+		t.Fatalf("expected satellite 'sat' linked, got %v", activeAcc.Links.Satellites)
+	}
+
+	// Satellite endpoint: separate resolved account, username empty, name = agent_name
+	satAcc := find(obs, "https://two.example.com|owl")
+	if satAcc.Status != accounts.Resolved {
+		t.Fatalf("expected sat account to be Resolved, got %v", satAcc.Status)
+	}
+	if satAcc.Username != "" {
+		t.Fatalf("expected sat Username to be empty, got %q", satAcc.Username)
+	}
+	if satAcc.Name != "owl" {
+		t.Fatalf("expected sat Name to be 'owl', got %q", satAcc.Name)
+	}
+	if len(satAcc.Connections) == 0 || satAcc.Connections[0].Endpoint != "https://two.example.com" {
+		t.Fatalf("expected endpoint 'https://two.example.com', got %+v", satAcc.Connections)
+	}
+	// Two endpoints stay separate; sat does not link itself
+	if len(satAcc.Links.Satellites) != 0 {
+		t.Fatalf("expected sat satellites to be empty, got %v", satAcc.Links.Satellites)
+	}
+
+	// Other endpoint with different agent_name: separate account, not linked to owl
+	otherAcc := find(obs, "https://three.example.com|otter")
+	if otherAcc.Status != accounts.Resolved {
+		t.Fatalf("expected other account to be Resolved, got %v", otherAcc.Status)
+	}
+	if otherAcc.Username != "" || otherAcc.Name != "otter" {
+		t.Fatalf("expected otter account, got Username=%q Name=%q", otherAcc.Username, otherAcc.Name)
+	}
+
+	// Unresolved account when neither endpoint nor agent_name is known
+	var unresAcc accounts.Account
+	for _, o := range obs {
+		if o.Account.Status == accounts.Unresolved {
+			unresAcc = o.Account
+			break
+		}
+	}
+	if unresAcc.Status != accounts.Unresolved {
+		t.Fatalf("expected an Unresolved account for empty profile, got none")
+	}
+
+	// Sentinel test: verify secrets are never present in records, JSON, or store
+	st := accounts.Open(filepath.Join(t.TempDir(), "store.json"))
+	if err := st.Observe(Name, obs); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := st.List()
+	b, _ := json.Marshal(list)
+	raw, _ := os.ReadFile(st.Path)
+	accountstest.AssertNoSecret(t, obs, string(b), string(raw))
 }
