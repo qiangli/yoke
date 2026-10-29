@@ -95,6 +95,46 @@ type Result struct {
 	Limited  string // non-empty when a resource limit killed the run
 }
 
+// RequireSandbox refuses levels and hosts that cannot enforce the filesystem
+// and network boundary promised by LevelSandbox. Callers use this before an
+// operation such as activation that does not itself start a contained process
+// but must not proceed unless later candidate code can be confined.
+func RequireSandbox(level Level) error {
+	if level == "" {
+		level = LevelSandbox
+	}
+	if level != LevelSandbox {
+		return &UnavailableError{Level: level, Reason: "filesystem and network isolation require sandbox containment"}
+	}
+	dir, err := os.MkdirTemp("", "contain-probe-*")
+	if err != nil {
+		return &UnavailableError{Level: level, Reason: "create sandbox probe: " + err.Error()}
+	}
+	defer os.RemoveAll(dir)
+	runner, err := resolveOnPath("true")
+	if err != nil {
+		return &UnavailableError{Level: level, Reason: "sandbox probe runner: " + err.Error()}
+	}
+	runner, err = filepath.Abs(runner)
+	if err != nil {
+		return &UnavailableError{Level: level, Reason: "sandbox probe runner: " + err.Error()}
+	}
+	if resolved, rerr := filepath.EvalSymlinks(runner); rerr == nil {
+		runner = resolved
+	}
+	argv, err := sandboxArgv(dir, []string{runner})
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Dir = dir
+	cmd.Env = Scrub(dir, nil, nil)
+	if err := cmd.Run(); err != nil {
+		return &UnavailableError{Level: level, Reason: "sandbox probe failed: " + err.Error()}
+	}
+	return nil
+}
+
 // Scrub builds the child environment: a fixed minimal PATH/HOME/TMPDIR inside
 // the clone, the allowlisted parent variables, then explicit values.
 func Scrub(dir string, allow []string, set map[string]string) []string {

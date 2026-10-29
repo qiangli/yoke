@@ -89,6 +89,13 @@ func TestDenialTable(t *testing.T) {
 		}
 	})
 
+	t.Run("process level cannot stand in for sandbox", func(t *testing.T) {
+		err := RequireSandbox(LevelProcess)
+		if !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("want ErrUnavailable, got %v", err)
+		}
+	})
+
 	t.Run("process level runs with scrubbed env", func(t *testing.T) {
 		r, out, err := runCat(t, LevelProcess, clone, inside, "read")
 		if err != nil || r.ExitCode != 0 || out != "inside-ok" {

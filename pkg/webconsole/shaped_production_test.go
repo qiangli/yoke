@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -84,6 +85,10 @@ func productionCandidate(t *testing.T, app *shapedApp, id, baseRev string, mutat
 	return c
 }
 
+func shellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+}
+
 func pairedPrincipal(t *testing.T, h http.Handler, store *pairStore, name string) http.Header {
 	t.Helper()
 	_, secret, err := store.issueTicketForPrincipal([]string{"notes"}, time.Hour, time.Minute, name)
@@ -107,9 +112,9 @@ func TestShapedProductionGates(t *testing.T) {
 	t.Setenv("BASHY_HOME", home)
 	source, baseRev := productionNotesSource(t, home)
 	workRoot := filepath.Join(t.TempDir(), "shape-work")
-	runner := shapeverify.TrustedRunner{Bin: "/bin/sh", Effects: []string{"read"}, Level: contain.LevelProcess}
+	runner := shapeverify.TrustedRunner{Bin: "/bin/sh", Effects: []string{"read"}, Level: contain.LevelSandbox}
 	opts := productionShapeOptions()
-	opts.Home, opts.WorkRoot, opts.Runner, opts.Level = home, workRoot, []string{"/bin/sh"}, contain.LevelProcess
+	opts.Home, opts.WorkRoot, opts.Runner, opts.Level = home, workRoot, []string{"/bin/sh"}, contain.LevelSandbox
 	opts.Verifier = productionVerifier{home: home, runner: runner}
 	opts.Activator.(*productionActivator).home = home
 	panel := Panel{Name: "notes", Label: "Notes", Path: "/notes/", LaunchPath: "/shape/notes/",
@@ -128,6 +133,13 @@ func TestShapedProductionGates(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := aliceStore.WriteData("notes.txt", []byte("private original\n")); err != nil {
+		t.Fatal(err)
+	}
+	bobStore, err := shape.OpenAt(home, "notes", "device:bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bobStore.WriteData("notes.txt", []byte("bob original\n")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -216,33 +228,117 @@ func TestShapedProductionGates(t *testing.T) {
 	})
 
 	t.Run("preview escape", func(t *testing.T) {
-		preview := productionCandidate(t, app, "4444444444444444", good.Rev, func(work string) {
-			p := filepath.Join(work, "public", "notes.css")
-			if err := os.WriteFile(p, []byte("body { color: teal; }\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-		})
-		w := send(h, http.MethodPost, "/shape/notes/preview/"+preview.ID+"/api/add",
-			"192.0.2.20:5555", alice, "preview only")
-		if w.Code != http.StatusOK {
-			t.Fatalf("preview write = %d: %s", w.Code, w.Body.String())
-		}
-		got, err := aliceStore.ReadData("notes.txt")
+		aliceData, err := aliceStore.DataDir()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if string(got) != "private original\n" {
-			t.Fatalf("preview escaped into active data: %q", got)
+		bobData, err := bobStore.DataDir()
+		if err != nil {
+			t.Fatal(err)
+		}
+		aliceEscape := filepath.Join(aliceData, "escape.txt")
+		bobEscape := filepath.Join(bobData, "escape.txt")
+		homeEscape := filepath.Join(home, "escape.txt")
+		nc := "nc -w 1"
+		if runtime.GOOS == "darwin" {
+			nc = "nc -G 1 -w 1"
+		}
+		body := strings.Join([]string{
+			"try_write() {",
+			"  if printf 'escaped\\n' > \"$1\"; then printf 'WRITE_ALLOWED:%s\\n' \"$1\"; else printf 'WRITE_DENIED:%s\\n' \"$1\"; fi",
+			"}",
+			"try_write " + shellSingleQuote(aliceEscape),
+			"try_write " + shellSingleQuote(bobEscape),
+			"BASHY_HOME=" + shellSingleQuote(home),
+			"export BASHY_HOME",
+			"try_write \"$BASHY_HOME/escape.txt\"",
+			"if " + nc + " 192.0.2.1 80 </dev/null; then echo CONNECT_ALLOWED; else echo CONNECT_DENIED; fi",
+		}, "\n") + "\n"
+		preview := productionCandidate(t, app, "4444444444444444", good.Rev, func(work string) {
+			p := filepath.Join(work, "api", "add.md")
+			if err := os.WriteFile(p, []byte("# adversarial preview\n\n```bsh\n"+body+"```\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		})
+		weakOpts := opts
+		weakOpts.Level = contain.LevelProcess
+		weak := newTestHandler(t, Options{
+			RequireLogin: true, Sessions: websession.NewStore(time.Hour, []byte("test-key-test-key-test-key-32byt")),
+			Pairing: true, PairStorePath: pairPath, Panels: []Panel{panel}, Shape: weakOpts,
+		})
+		for _, path := range []string{
+			"/shape/notes/preview/" + preview.ID + "/api/add",
+			"/api/shape/notes/candidates/" + preview.ID + "/approve",
+		} {
+			w := send(weak, http.MethodPost, path, "192.0.2.20:5555", alice, "preview only")
+			if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "cannot contain") {
+				t.Fatalf("process containment did not refuse %s: %d: %s", path, w.Code, w.Body.String())
+			}
+		}
+		w := send(h, http.MethodPost, "/shape/notes/preview/"+preview.ID+"/api/add",
+			"192.0.2.20:5555", alice, "preview only")
+		switch w.Code {
+		case http.StatusOK:
+			out := w.Body.String()
+			if strings.Contains(out, "WRITE_ALLOWED:") || !strings.Contains(out, "CONNECT_DENIED") || strings.Contains(out, "CONNECT_ALLOWED") {
+				t.Fatalf("preview escape was not denied by containment: %s", out)
+			}
+			if got := strings.Count(out, "WRITE_DENIED:"); got != 3 {
+				t.Fatalf("preview denied %d/3 writes: %s", got, out)
+			}
+		case http.StatusServiceUnavailable:
+			if !strings.Contains(w.Body.String(), "cannot contain") {
+				t.Fatalf("preview refusal did not identify containment: %s", w.Body.String())
+			}
+		default:
+			t.Fatalf("preview escape = %d: %s", w.Code, w.Body.String())
+		}
+		for _, p := range []string{aliceEscape, bobEscape, homeEscape} {
+			if _, err := os.Stat(p); !os.IsNotExist(err) {
+				t.Fatalf("escape file exists at %s (stat err %v)", p, err)
+			}
+		}
+		for label, check := range map[string]struct {
+			store *shape.Store
+			want  string
+		}{"alice": {aliceStore, "private original\n"}, "bob": {bobStore, "bob original\n"}} {
+			got, err := check.store.ReadData("notes.txt")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != check.want {
+				t.Fatalf("preview changed %s real data: %q", label, got)
+			}
+		}
+		if got := stateOf("device:alice").ActiveRevision; got != good.Rev {
+			t.Fatalf("preview moved alice active to %s", got)
 		}
 	})
 
 	t.Run("revoked grant", func(t *testing.T) {
+		existing := productionCandidate(t, app, "5555555555555555", good.Rev, func(work string) {
+			p := filepath.Join(work, "public", "notes.css")
+			if err := os.WriteFile(p, []byte("body { color: maroon; }\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		})
+		activeBefore := stateOf("device:alice").ActiveRevision
 		if _, err := pairs.revokeAll(); err != nil {
 			t.Fatal(err)
 		}
-		w := send(h, http.MethodPost, "/api/shape/notes/candidates", "192.0.2.20:5555", alice, `{"request":"x"}`)
-		if w.Code != http.StatusUnauthorized && w.Code != http.StatusForbidden {
-			t.Fatalf("revoked shaping = %d: %s", w.Code, w.Body.String())
+		assertRefused := func(method, path, body string) {
+			t.Helper()
+			w := send(h, method, path, "192.0.2.20:5555", alice, body)
+			if w.Code != http.StatusUnauthorized && w.Code != http.StatusForbidden {
+				t.Fatalf("revoked %s %s = %d: %s", method, path, w.Code, w.Body.String())
+			}
+		}
+		assertRefused(http.MethodPost, "/api/shape/notes/candidates", `{"request":"x"}`)
+		assertRefused(http.MethodPost, "/api/shape/notes/candidates/"+existing.ID+"/approve", "")
+		assertRefused(http.MethodGet, "/notes/api/list", "")
+		assertRefused(http.MethodPost, "/notes/api/list", "")
+		if got := stateOf("device:alice").ActiveRevision; got != activeBefore {
+			t.Fatalf("revoked requests moved alice active from %s to %s", activeBefore, got)
 		}
 	})
 }
