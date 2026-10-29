@@ -424,6 +424,10 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 		mux.HandleFunc("GET /api/sprint/leaderboard/duty/agent", s.handleDutyAgentEvents)
 	}
 
+	if on["accounts"] {
+		s.wireAccountsRoutes(mux)
+	}
+
 	// Shaped apps: the Shape panel, its API and candidate previews. Gated by
 	// the console ladder like every other route; each handler additionally
 	// requires exactly one principal.
@@ -478,7 +482,7 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 // when the console has nothing to serve for it.
 func (s *server) panelHandler(p Panel) (http.Handler, func() error) {
 	switch p.Name {
-	case "terminal", "mb", "sprint", "inbox":
+	case "terminal", "mb", "sprint", "inbox", "accounts":
 		// Served above, at the launcher's own root, not mounted here.
 		return nil, nil
 	case "files":

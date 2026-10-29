@@ -18,7 +18,9 @@ import (
 
 // TestMain keeps every test in this package off the developer's real
 // registered-app ring: Discover reads it, and a stray record would change
-// the tile list under every other test.
+// the tile list under every other test. It also isolates the fleet and
+// message board stores so developer overlays and live board traffic cannot
+// leak into test assertions.
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "webconsole-apps-")
 	if err != nil {
@@ -26,8 +28,23 @@ func TestMain(m *testing.M) {
 	}
 	os.Setenv("BASHY_APPS_DIR", dir)
 	os.Setenv("BASHY_APPS_PATH", "")
+
+	fleetDir, err := os.MkdirTemp("", "webconsole-fleet-")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("BASHY_FLEET_DIR", fleetDir)
+
+	mbDir, err := os.MkdirTemp("", "webconsole-mb-")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("BASHY_MB_DIR", mbDir)
+
 	code := m.Run()
 	os.RemoveAll(dir)
+	os.RemoveAll(fleetDir)
+	os.RemoveAll(mbDir)
 	os.Exit(code)
 }
 
