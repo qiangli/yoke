@@ -3,7 +3,7 @@ id: 7d177fb33a48
 kind: feature
 title: 'S515.5b yoke half of S515.5: bashy loom mirror add|list|rm — push mirror to a non-Gitea remote (GitHub) reusing syncMirror/listMirrors/localNetworkHint'
 seq: 2815
-status: todo
+status: done
 priority: p1
 labels:
     - loom
@@ -12,6 +12,8 @@ assignee: claude-opus5
 sprint: 515
 sprint_id: e82160ea-95db-5f2a-b69e-b2d784b2996b
 sprint_title: 'satellite loom: private forge + CI + groups (KISS/MVP, reuse loom/act_runner/scopes)'
+closed: 2026-10-29T17:16:56.478669Z
+closed_by: s515r-manager
 ---
 
 Companion of S515.5 (umbrella 3151ba39; evidence + cutover runbook umbrella docs/s515-5-cloudbox-on-loom.md on origin/dev c0fabf0e8). Found live: `bashy loom replica` is Gitea-to-Gitea by construction (ensureReplicaOwner/ensureReplicaRepo provision the target), so it cannot target GitHub; the S515.5 run used a raw POST /push_mirrors. Rule: agents use bashy commands only — close the gap.
