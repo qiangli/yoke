@@ -226,8 +226,9 @@ func olderPeerBashy(err error) bool {
 	}
 	msg := err.Error()
 	for _, want := range []string{
-		`unknown command "import" for "bashy llm door"`,
-		`unknown command "door" for "bashy llm"`,
+		// cobra names the command path with or without the "bashy " root.
+		`unknown command "import" for "`,
+		`unknown command "door" for "`,
 	} {
 		if strings.Contains(msg, want) {
 			return true

@@ -218,6 +218,19 @@ func TestShareCloudboxReusesAppOnPlainLoopbackHost(t *testing.T) {
 	}
 }
 
+// The live elephant error (10-29): the old bashy names its command path
+// without the "bashy " prefix, so the matcher must not require it.
+func TestSharePushOverOlderPeerBashyLiveText(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	t.Setenv(door.PortEnv, "")
+	f := useFakeOutpost(t)
+	f.sshErr = exitError{msg: `bashy llm: unknown command "door" for "llm"` + "\n\nDid you mean this?\n\tdown"}
+	_, err := runShareLLM(t, "", "share", "peer", "--via", "mesh")
+	if err == nil || !strings.Contains(err.Error(), "older than this door") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 // A peer whose PATH bashy predates `llm door import` answers with
 // cobra's unknown-subcommand error; share must translate it instead of
 // surfacing the raw text.
