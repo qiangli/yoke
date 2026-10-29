@@ -10,6 +10,9 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/qiangli/yoke/pkg/capability"
+	"github.com/qiangli/yoke/pkg/ladder"
 )
 
 // DelegateError is a machine-readable failure of a bounded delegation.
@@ -28,6 +31,8 @@ type delegateGuard struct {
 	idle        time.Duration
 	capRequired bool
 	identity    string
+	tool, model string
+	started     bool
 }
 
 func delegation(ctx context.Context) *delegateGuard {
@@ -42,7 +47,8 @@ func (g *delegateGuard) check(l Launch) error {
 	}
 	target := l.ToolName + ":" + model
 	if g.genie {
-		g.identity = "genie-delegate:" + l.ToolName + "-" + model
+		g.tool, g.model = l.ToolName, model
+		g.identity = capability.DelegateIdentity(l.ToolName, model)
 	}
 	allowed := strings.TrimSpace(g.allow) == "" && !g.genie
 	for _, entry := range strings.Split(g.allow, ",") {
@@ -203,6 +209,18 @@ func watchDelegateIdle(ctx context.Context, cmdOut, cmdErr io.Writer, idle time.
 }
 
 func finishDelegate(res Result, err error, g *delegateGuard) (delegateResult, error) {
+	// Only the task process marks started; authentication and admission never do.
+	if g.genie && g.started {
+		outcome := 0.0
+		if res.ExitCode == 0 {
+			outcome = 1
+		}
+		recordErr := capability.RecordDelegateRun(g.tool, g.model, ladder.Event{
+			Outcome: outcome, Duty: ladder.DutyCode, Points: ladder.Points(1),
+		}, os.Getenv("BASHY_LADDER_STORE"))
+		err = errors.Join(err, recordErr)
+	}
+
 	if err == nil && res.ExitCode != 0 {
 		err = fmt.Errorf("delegate: vendor exited %d", res.ExitCode)
 	}
