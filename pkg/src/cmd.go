@@ -36,6 +36,14 @@ func newSrcCmd() *cobra.Command {
                    pin a label to a version
   src restore <app> <rev> [--user P]
                    return to a version through a new gated commit
+  src offer <app> <rev> [--to P,...|--all]
+                   publish a revision as a host offering
+  src offers <app> [--user P] [--json]
+                   list offerings visible to the principal
+  src adopt <app> <offer> [--preview] [--user P]
+                   preview or merge and activate an offering
+  src decline <app> <offer> [--user P]
+                   decline an offering and clear its notice
   src log [repo]   show recent commits
   src pr open <repo> <branch> --title T [--test CMD]
   src pr show <id> | src pr list [--repo R] | src pr merge <id> | src pr close <id>
@@ -68,6 +76,10 @@ func newSrcCmd() *cobra.Command {
 	cmd.AddCommand(newPreviewCmd())
 	cmd.AddCommand(newNameCmd())
 	cmd.AddCommand(newRestoreCmd())
+	cmd.AddCommand(newOfferCmd())
+	cmd.AddCommand(newOffersCmd())
+	cmd.AddCommand(newAdoptCmd())
+	cmd.AddCommand(newDeclineCmd())
 	cmd.AddCommand(newRevertCmd())
 	cmd.AddCommand(prune.NewNounCommand(Pruner{}))
 	return cmd
