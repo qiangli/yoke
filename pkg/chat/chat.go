@@ -517,6 +517,11 @@ func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd st
 	if p := ResolveToolBinary(agent); p != "" {
 		stripQuarantine(p)
 	}
+	if delegation(ctx) != nil {
+		if err := delegateAuth(ctx, agent, cwd, launch); err != nil {
+			return "", 1, err
+		}
+	}
 	cmd := agentCommand(ctx, agent, args, cwd)
 	defer func() { observeBudgetProcess(ctx, cmd) }()
 
@@ -585,7 +590,17 @@ func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd st
 			return "", 127, err
 		}
 	}
+	var idleStarted chan struct{}
+	if g := delegation(ctx); g != nil && g.idle > 0 {
+		idleStarted = make(chan struct{})
+		var stop func()
+		ctx, cmd.Stdout, cmd.Stderr, stop = watchDelegateIdle(ctx, cmd.Stdout, cmd.Stderr, g.idle, idleStarted)
+		defer stop()
+	}
 	startErr := cmd.Start()
+	if idleStarted != nil {
+		close(idleStarted)
+	}
 	if parentGuard != nil {
 		parentGuard.Started(startErr)
 	}
@@ -599,9 +614,7 @@ func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd st
 	NoteCoach(coach, nil)
 	out := stdout.String()
 	if ctx.Err() != nil {
-		if !errors.Is(err, ctx.Err()) {
-			err = errors.Join(ctx.Err(), err)
-		}
+		err = errors.Join(context.Cause(ctx), err)
 		return appendStderr(out, stderr.String()), 124, err
 	}
 	if err == nil {
@@ -679,6 +692,9 @@ func agentCommand(ctx context.Context, agent string, args []string, cwd string) 
 	// default; BASHY_FORCE_AGENT_SHELL=0 disables. cmd.Path is already resolved
 	// against the real PATH, so prepending the shim dir never shadows the agent.
 	cmd.Env = agentChildEnv(ctx)
+	if delegation(ctx) != nil {
+		cmd.Env = scrubDelegateEnv(cmd.Env)
+	}
 	return cmd
 }
 
@@ -782,10 +798,12 @@ func agentChildEnv(ctx context.Context) []string {
 	// Preserving the model's own declared key — and only declared names — makes
 	// the firewall a security boundary rather than an outage.
 	if l, ok := LaunchFrom(ctx); ok {
-		env = secrets.ProjectAgentEnv(env, parent, l.PreserveEnv, l.CredentialEnvAliases)
+		if delegation(ctx) == nil {
+			env = secrets.ProjectAgentEnv(env, parent, l.PreserveEnv, l.CredentialEnvAliases)
+		}
 		// The recipe's own pairs (a managed install's self-update switch).
 		env = agentlaunch.ApplyLaunchEnv(env, toAgentLaunch(l))
-		if len(l.CredentialEnvAliases) == 0 && len(l.PreserveEnv) == 0 && l.ModelName != "" {
+		if delegation(ctx) == nil && len(l.CredentialEnvAliases) == 0 && len(l.PreserveEnv) == 0 && l.ModelName != "" {
 			// Backward compatibility: callers may still construct Launch values
 			// manually. Resolve the same catalog declaration the old path used,
 			// and grant only its first matching credential rather than widening
@@ -1379,6 +1397,11 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 	if err != nil {
 		return Result{SchemaVersion: schemaVersion, Agent: lnch.Tool, Nick: name, Role: opt.Role, ExitCode: 2}, err
 	}
+	if g := delegation(ctx); g != nil {
+		if err := g.check(lnch); err != nil {
+			return Result{SchemaVersion: schemaVersion, Agent: lnch.Tool, Model: lnch.Model, ExitCode: 1}, err
+		}
+	}
 	prompt, err := BuildPrompt(opt)
 	if err != nil {
 		return Result{SchemaVersion: schemaVersion, Agent: lnch.Tool, Nick: name, Role: opt.Role, ExitCode: 2}, err
@@ -1387,7 +1410,13 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 		var d llmbudget.Decision
 		lnch, d, err = governLaunch(ctx, name, lnch, prompt, opt)
 		if err != nil {
+			if delegation(ctx) != nil {
+				err = delegateBudgetFailure(err)
+			}
 			return Result{SchemaVersion: schemaVersion, Agent: lnch.Tool, Nick: name, Role: opt.Role, ExitCode: 2}, err
+		}
+		if delegation(ctx) != nil && (d.Action == llmbudget.Queue || d.Action == llmbudget.Block) {
+			return Result{SchemaVersion: schemaVersion, Agent: lnch.Tool, ExitCode: 75}, delegateFailure("budget", "delegate: budget admission refused: "+d.Reason)
 		}
 		if d.Action == llmbudget.Queue {
 			return Result{SchemaVersion: schemaVersion, Agent: lnch.Tool, Nick: name, Role: opt.Role, ExitCode: 75}, fmt.Errorf("chat: LLM budget queued %s for %s: %s", d.Delay, lnch.Binding(), d.Reason)
@@ -1422,6 +1451,9 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 		}
 	}
 	args := append(lnch.Args, prompt)
+	if delegation(ctx) != nil {
+		args = agentlaunch.InsertBeforePrompt(args, delegateSubscriptionArgs(lnch.ToolName))
+	}
 	if opt.ExecArgv != nil {
 		args = append([]string(nil), opt.ExecArgv...)
 		// An exec override is the tool's own subcommand, not an agent turn:
@@ -1554,6 +1586,9 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 	// is. execRunner reads this back out to stamp the child's environment.
 	budgetWork, budgetErr := reserveBudgetWork(ctx, lnch, prompt, taskCard.ID, true, opt.AllowPremium)
 	if budgetErr != nil {
+		if delegation(ctx) != nil {
+			budgetErr = delegateBudgetFailure(budgetErr)
+		}
 		res.ExitCode = 75
 		return res, budgetErr
 	}
@@ -1577,6 +1612,9 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 		finishErr = budgetWork.finish(out, budgetErr)
 	}
 	if finishErr != nil {
+		if delegation(ctx) != nil {
+			finishErr = delegateBudgetFailure(finishErr)
+		}
 		err = errors.Join(err, finishErr)
 	}
 	// This is the shared return seam for every unattended agent turn.  Do not
@@ -1689,6 +1727,9 @@ func governLaunch(ctx context.Context, originalName string, l Launch, prompt str
 		case "", llmbudget.Allow:
 			return l, d, nil
 		case llmbudget.Downgrade, llmbudget.RouteAlt:
+			if delegation(ctx) != nil {
+				return l, d, delegateFailure("budget", "delegate: budget routing cannot change the requested target")
+			}
 			target := d.Model
 			if target == "" {
 				return l, d, fmt.Errorf("chat: LLM budget returned %s without a target for %s", d.Action, l.Binding())

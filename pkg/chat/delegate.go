@@ -4,10 +4,12 @@
 package chat
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -28,6 +30,10 @@ func NewDelegateCmd() *cobra.Command {
 	var opt Options
 	var self bool
 	var model string
+	var allow string
+	var idle time.Duration
+	var budget float64
+	var tokens int64
 	cmd := &cobra.Command{
 		Use:   "delegate <agent|self> <instruction...>",
 		Short: "hand a task to an agent — another one, or yourself (same tool, run detached)",
@@ -42,7 +48,14 @@ the instruction. Or set --agent/--self and pass the whole line as the instructio
 
 delegate is the lightweight one-shot. For heavier ISOLATED work (its own workspace + gate +
 merge), route to 'bashy weave' / the conductor; delegating a tracked todo with
-'weave add --from-todo' also auto-flips its status to 'assigned'.`,
+'weave add --from-todo' also auto-flips its status to 'assigned'.
+
+Delegation requires a verified subscription login (currently claude and codex).
+--allow or BASHY_DELEGATE_ALLOW restricts resolved tool:model bindings; a caller
+with BASHY_DELEGATE_CALLER=genie must supply a nonempty allow policy.
+--idle-timeout watches stdout/stderr activity. Required --budget-usd/--max-tokens
+caps fail closed when the vendor adapter cannot enforce them.
+An enclosing attestation launcher may export its receipt as BASHY_ATTEST_ID.`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// The first positional is the target unless --agent/--self already named one.
@@ -94,7 +107,26 @@ merge), route to 'bashy weave' / the conductor; delegating a tracked todo with
 			}
 			plain, _ := cmd.Flags().GetBool("plain")
 			opt.JSON = opt.JSON || (os.Getenv("BASHY_AGENTIC") != "" && !plain)
-			res, err := Invoke(cmd.Context(), opt, execRunner{})
+			g := &delegateGuard{allow: allow, genie: os.Getenv("BASHY_DELEGATE_CALLER") == "genie", idle: idle,
+				capRequired: cmd.Flags().Changed("budget-usd") || cmd.Flags().Changed("max-tokens")}
+			if !cmd.Flags().Changed("allow") {
+				g.allow = os.Getenv("BASHY_DELEGATE_ALLOW")
+			}
+			ctx := context.WithValue(cmd.Context(), delegateKey{}, g)
+			if opt.Timeout > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, opt.Timeout)
+				defer cancel()
+			}
+			var raw Result
+			var invokeErr error
+			if idle < 0 || opt.Timeout < 0 {
+				raw = Result{SchemaVersion: schemaVersion, Agent: opt.Agent}
+				invokeErr = delegateFailure("denied", "delegate: timeouts must not be negative")
+			} else {
+				raw, invokeErr = Invoke(ctx, opt, execRunner{})
+			}
+			res, err := finishDelegate(raw, invokeErr, g)
 			if opt.JSON {
 				b, _ := json.Marshal(res)
 				fmt.Fprintln(cmd.OutOrStdout(), string(b))
@@ -118,6 +150,10 @@ merge), route to 'bashy weave' / the conductor; delegating a tracked todo with
 	cmd.Flags().StringArrayVar(&opt.Context, "context", nil, "append context text to the instruction")
 	cmd.Flags().StringVar(&opt.Cwd, "cwd", "", "working directory for the agent process")
 	cmd.Flags().DurationVar(&opt.Timeout, "timeout", 0, "agent timeout, e.g. 30m")
+	cmd.Flags().DurationVar(&idle, "idle-timeout", 0, "fail when the child stops writing output for this duration")
+	cmd.Flags().StringVar(&allow, "allow", "", "allowed tool:model pairs (comma separated); defaults to BASHY_DELEGATE_ALLOW")
+	cmd.Flags().Float64Var(&budget, "budget-usd", 0, "require a hard dollar cap; refuse adapters that cannot enforce it")
+	cmd.Flags().Int64Var(&tokens, "max-tokens", 0, "require a hard total token cap; refuse adapters that cannot enforce it")
 	cmd.Flags().StringVar(&opt.Sandbox, "sandbox", "", "sandbox override, e.g. workspace-write or danger-full-access")
 	cmd.Flags().StringArrayVar(&opt.WritableRoots, "writable-root", nil, "explicitly grant an extra writable path to a --sandbox workspace-write launch (repeatable)")
 	cmd.Flags().BoolVar(&opt.JSON, "json", false, "print a bashy-chat-v1 JSON result envelope")
