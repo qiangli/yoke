@@ -131,15 +131,16 @@ func (g *grant) live(now time.Time) bool {
 // ticket is one outstanding QR. Single-use: Redeemed closes it, and so does
 // Expires — whichever comes first.
 type ticket struct {
-	ID       string     `json:"id"`
-	Hash     string     `json:"hash"` // sha256(secret); the secret is never stored
-	Grant    string     `json:"grant"`
-	Scope    []string   `json:"scope"`
-	TTL      string     `json:"ttl"` // the device TTL this ticket will confer
-	Issued   time.Time  `json:"issued"`
-	Expires  time.Time  `json:"expires"`
-	Redeemed *time.Time `json:"redeemed,omitempty"`
-	DeviceID string     `json:"device_id,omitempty"`
+	ID        string     `json:"id"`
+	Hash      string     `json:"hash"` // sha256(secret); the secret is never stored
+	Grant     string     `json:"grant"`
+	Scope     []string   `json:"scope"`
+	TTL       string     `json:"ttl"` // the device TTL this ticket will confer
+	Issued    time.Time  `json:"issued"`
+	Expires   time.Time  `json:"expires"`
+	Redeemed  *time.Time `json:"redeemed,omitempty"`
+	DeviceID  string     `json:"device_id,omitempty"`
+	Principal string     `json:"principal,omitempty"`
 	// Peer marks a ticket a messenger sender asked for through `bashy meet
 	// dm` rather than one the operator minted for a browser. See
 	// pair_peer.go; Denied closes such a ticket on the operator's refusal.
@@ -163,6 +164,7 @@ type device struct {
 	UserAgent string    `json:"user_agent,omitempty"`
 	Revoked   bool      `json:"revoked,omitempty"`
 	RevokedAt time.Time `json:"revoked_at,omitempty"`
+	Principal string    `json:"principal,omitempty"`
 	// Peer binds the device to one messenger identity. Such a device never
 	// holds a browser session: the gate refuses it (deviceAdmits) and its
 	// scope is drawn from peerScopes, not from the panel names.
@@ -404,6 +406,18 @@ func (st *pairState) findDevice(id string, now time.Time) (device, bool) {
 // The device TTL is min(ttl, remaining grant) — a paired phone inherits the
 // operator's authority and can never exceed it.
 func (s *pairStore) issueTicket(scope []string, ttl, window time.Duration) (ticket, string, error) {
+	return s.issueTicketForPrincipal(scope, ttl, window, "")
+}
+
+// issueTicketForPrincipal mints a browser ticket for an operator-chosen web
+// principal. An empty principal intentionally produces a base-only session.
+func (s *pairStore) issueTicketForPrincipal(scope []string, ttl, window time.Duration, principal string) (ticket, string, error) {
+	principal = strings.TrimSpace(principal)
+	if principal != "" {
+		if err := validatePrincipalName(principal); err != nil {
+			return ticket{}, "", err
+		}
+	}
 	if ttl <= 0 {
 		ttl = defaultDeviceTTL
 	}
@@ -456,7 +470,7 @@ func (s *pairStore) issueTicket(scope []string, ttl, window time.Duration) (tick
 			// its way through this file.
 			TTL:     deviceExp.Sub(now).String(),
 			Issued:  now,
-			Expires: now.Add(window),
+			Expires: now.Add(window), Principal: principal,
 		}
 		st.Tickets = append(st.Tickets, out)
 		return nil
@@ -513,7 +527,7 @@ func (s *pairStore) redeem(secret, name, userAgent string) (device, error) {
 				ID: id, Name: name, Grant: t.Grant,
 				Scope:  append([]string(nil), t.Scope...),
 				Issued: now, Expires: exp, LastSeen: now,
-				UserAgent: userAgent,
+				UserAgent: userAgent, Principal: t.Principal,
 			}
 			st.Devices = append(st.Devices, out)
 			t.Redeemed = &now

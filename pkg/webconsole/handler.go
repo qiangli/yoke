@@ -449,7 +449,7 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	// otelhttp costs nothing without an exporter: the global provider is a no-op,
 	// so this is span-shaped bookkeeping that never leaves the process.
 	h := otelhttp.NewHandler(
-		coopauth.StripSpoofedTrustHeaders(s.consoleGate(mux)),
+		stripInboundPrincipal(coopauth.StripSpoofedTrustHeaders(s.consoleGate(mux))),
 		otelServiceName,
 	)
 	closer := func() error {
@@ -510,9 +510,14 @@ func (s *server) proxyTo(p Panel) http.Handler {
 	// the contract app authors are told to read instead of Host/r.TLS.
 	inner := rp.Director
 	rp.Director = func(req *http.Request) {
+		principal, hasPrincipal := PrincipalFromRequest(req)
 		prefix := coopauth.BasePrefix(req)
 		host, proto := forwardedHostProto(req)
 		inner(req)
+		req.Header.Del(PrincipalHeader)
+		if hasPrincipal {
+			req.Header.Set(PrincipalHeader, principal)
+		}
 		if p.hostAdmin {
 			applyHostAdminAuth(req, p, s.cloudApp())
 		}
