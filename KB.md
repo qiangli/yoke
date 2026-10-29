@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [repo/page] Windows shell paths: program names and file operands use different conversions — WHEN a Bash or Bash# fixture passes paths into Go on Windows, convert executable program paths with pathconv.NativePath (program only, never argv), but convert filesystem operands such as /tmp state files with pathconv.ToOS so virt  (kb:windows-shell-paths-program-names-and-file-operands-use-differen)
+- [repo/page] Account observation hook: where it can and cannot live — WHEN wiring an automatic account-collection hook (pkg/accounts) into a provider or budget path in yoke — pkg/provider is a stdlib-only nested module and pkg/llmbudget is imported BY accounts, so neither can call the hook directly pkg/accounts.ObserveSuccess cannot  (kb:account-observation-hook-where-it-can-and-cannot-live)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 

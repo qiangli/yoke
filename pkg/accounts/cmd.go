@@ -1,7 +1,6 @@
 package accounts
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,18 +12,6 @@ import (
 
 	"github.com/spf13/cobra"
 )
-
-// refreshTimeout bounds every adapter call made by `account refresh`. Refresh
-// walks accounts sequentially so one slow provider cannot stall the rest of
-// the inventory past this budget per account.
-const refreshTimeout = 30 * time.Second
-
-// refreshFailed is the safe snapshot code recorded when an adapter call
-// fails. Raw adapter errors are never persisted: they may carry credential
-// material, so the CLI and the store only keep this code.
-const refreshFailed = "refresh_failed"
-
-var refreshPeriods = []string{"day", "week", "month"}
 
 const CommandSchemaVersion = "bashy-account-v1"
 
@@ -152,6 +139,8 @@ func classifyError(err error) *commandError {
 		return &commandError{Code: "referenced", Message: "account still has bindings"}
 	case errors.Is(err, ErrAmbiguous):
 		return &commandError{Code: "ambiguous", Message: "account reference is ambiguous"}
+	case errors.Is(err, ErrAdapterFailed):
+		return &commandError{Code: "adapter_failed", Message: "account refresh failed"}
 	case errors.Is(err, ErrUnsupported):
 		return &commandError{Code: "unsupported", Message: "operation is not supported for this account"}
 	default:
@@ -583,18 +572,6 @@ func (s *commandState) discoverCmd() *cobra.Command {
 	return c
 }
 
-func (s *commandState) adapterFor(a Account, capability Capability) (Adapter, error) {
-	for _, name := range []string{a.Provenance, a.Provider, string(a.Category)} {
-		if name == "" || name == "manual" {
-			continue
-		}
-		if adapter, err := s.registry.Adapter(name, capability); err == nil {
-			return adapter, nil
-		}
-	}
-	return nil, ErrUnsupported
-}
-
 func hasCapability(a Adapter, cap Capability) bool { return a.Capabilities()&cap != 0 }
 
 func sortMetrics(metrics []Metric) {
@@ -604,76 +581,6 @@ func sortMetrics(metrics []Metric) {
 		}
 		return metrics[i].Source < metrics[j].Source
 	})
-}
-
-// refreshOne re-reads one account through its adapter and persists a snapshot
-// (resources, metrics per period, observed_at). Only refresh calls adapters:
-// usage and resources render the snapshot it writes. An adapter error records
-// a safe code and keeps the previous resources and metrics.
-func (s *commandState) refreshOne(ctx context.Context, a Account) (Account, error) {
-	adapter, err := s.adapterFor(a, Verify)
-	if err != nil {
-		return Account{}, err
-	}
-	ctx, cancel := context.WithTimeout(ctx, refreshTimeout)
-	defer cancel()
-	now := time.Now()
-	failSnapshot := func() error {
-		if rerr := s.store.RecordSnapshotError(a.ID, refreshFailed, now); rerr != nil {
-			return rerr
-		}
-		return fail("adapter_failed", "account refresh failed")
-	}
-	observation, err := adapter.Verify(ctx, a)
-	if err != nil {
-		return Account{}, failSnapshot()
-	}
-	if err := s.store.Observe(adapter.Name(), []Observation{observation}); err != nil {
-		return Account{}, err
-	}
-	items, err := materialize(adapter.Name(), []Observation{observation})
-	if err != nil || len(items) != 1 {
-		return Account{}, fail("invalid_observation", "adapter returned invalid account metadata")
-	}
-	var resources []ResourceRef
-	if hasCapability(adapter, Resources) {
-		resources, err = adapter.Resources(ctx, a)
-		if err != nil {
-			return Account{}, failSnapshot()
-		}
-		sort.Slice(resources, func(i, j int) bool {
-			if resources[i].Kind != resources[j].Kind {
-				return resources[i].Kind < resources[j].Kind
-			}
-			return resources[i].ID < resources[j].ID
-		})
-	}
-	metrics := map[string][]Metric{}
-	if hasCapability(adapter, Usage) || hasCapability(adapter, Billing) {
-		for _, period := range refreshPeriods {
-			var combined []Metric
-			if hasCapability(adapter, Usage) {
-				used, err := adapter.Usage(ctx, a, period)
-				if err != nil {
-					return Account{}, failSnapshot()
-				}
-				combined = append(combined, used...)
-			}
-			if hasCapability(adapter, Billing) {
-				billed, err := adapter.Billing(ctx, a, period)
-				if err != nil {
-					return Account{}, failSnapshot()
-				}
-				combined = append(combined, billed...)
-			}
-			sortMetrics(combined)
-			metrics[period] = combined
-		}
-	}
-	if err := s.store.SaveSnapshot(Snapshot{AccountID: a.ID, Resources: resources, Metrics: metrics, ObservedAt: now}); err != nil {
-		return Account{}, err
-	}
-	return items[0], nil
 }
 
 func (s *commandState) refreshCmd() *cobra.Command {
@@ -690,30 +597,22 @@ func (s *commandState) refreshCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			var targets []Account
+			var refreshed []Account
 			if all {
-				targets, err = s.store.List()
+				refreshed, err = RefreshAll(cmd.Context(), s.store, s.registry)
 			} else {
 				var a Account
 				a, err = s.lookup(args[0])
-				targets = []Account{a}
+				if err == nil && a.Status != Suppressed {
+					var item Account
+					item, err = RefreshOne(cmd.Context(), s.store, s.registry, a)
+					if err == nil {
+						refreshed = []Account{item}
+					}
+				}
 			}
 			if err != nil {
 				return err
-			}
-			var refreshed []Account
-			for _, a := range targets {
-				if a.Status == Suppressed {
-					continue
-				}
-				item, err := s.refreshOne(cmd.Context(), a)
-				if err != nil {
-					if all && errors.Is(err, ErrUnsupported) {
-						continue
-					}
-					return err
-				}
-				refreshed = append(refreshed, item)
 			}
 			rows, err := projectMany(refreshed, fields)
 			if err != nil {
@@ -844,7 +743,7 @@ func (s *commandState) resolveCmd() *cobra.Command {
 				return err
 			}
 			var selection Selection
-			if adapter, aerr := s.adapterFor(a, Select); aerr == nil {
+			if adapter, aerr := AdapterFor(s.registry, a, Select); aerr == nil {
 				selection, err = adapter.Select(cmd.Context(), a, Operation(operation))
 				if err != nil {
 					return fail("selection_failed", "adapter could not select this account")

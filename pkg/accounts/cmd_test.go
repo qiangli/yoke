@@ -391,7 +391,7 @@ func TestAccountRefreshKeepsLastGoodOnError(t *testing.T) {
 	if len(after.Metrics["month"]) != 2 {
 		t.Fatalf("last-good metrics lost: %+v", after.Metrics)
 	}
-	if after.LastError != refreshFailed {
+	if after.LastError != RefreshFailed {
 		t.Fatalf("last_error = %q", after.LastError)
 	}
 	raw, err := os.ReadFile(path)
@@ -408,7 +408,7 @@ func TestAccountRefreshKeepsLastGoodOnError(t *testing.T) {
 	if len(envelope["metrics"].([]any)) != 2 {
 		t.Fatalf("usage lost last-good metrics: %v", envelope["metrics"])
 	}
-	if envelope["last_error"] != refreshFailed || envelope["observed_at"] == nil {
+	if envelope["last_error"] != RefreshFailed || envelope["observed_at"] == nil {
 		t.Fatalf("usage hides refresh failure: %v", envelope)
 	}
 }
