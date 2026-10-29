@@ -324,7 +324,10 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 	if err := prepareForRunUser(cfg, bin, o.DataDir, drop); err != nil {
 		return nil, err
 	}
-	addr := fmt.Sprintf("%s:%d", o.Addr, o.Port)
+	// o.Addr is the PUBLIC bind — it belongs to the front proxy. gitea itself
+	// is loopback-only (giteaBindAddr), so this is the address it really
+	// listens on and the one Start health-probes and advertises.
+	addr := fmt.Sprintf("%s:%d", giteaBindAddr(o.Addr), o.Port)
 	url := "http://" + addr
 	proc, err := binmgr.Launch(ctx, bin, giteaWebRunSpec(cfg, url, o, drop))
 	if err != nil {
@@ -385,6 +388,14 @@ func prepareForRunUser(cfg, bin, dataDir string, drop *privDrop) error {
 
 // Serve runs loom in the foreground, blocking until the context is cancelled or
 // SIGINT/SIGTERM arrives (the `bashy loom serve` path).
+//
+// ONE process, TWO listeners: gitea on loopback and loom's translating front
+// proxy on o.Addr:o.ProxyPort. That is not a convenience — `loom serve` is the
+// argv a supervised service unit runs (pkg/fleet/baseline/services/loom.yaml),
+// and a unit supervises a single foreground command, so a proxy that only
+// `loom start` spawns is a proxy a satellite never has. Without it in the
+// path, outpost's Remote-User/Remote-Email never become X-WEBAUTH-* and
+// /app/loom/ serves gitea's anonymous Sign In page (S515.1 live round 5).
 func Serve(ctx context.Context, o Options) error {
 	o.defaults()
 	if err := checkNotRoot(o.UIDGetter); err != nil {
@@ -397,15 +408,34 @@ func Serve(ctx context.Context, o Options) error {
 	if err != nil {
 		return err
 	}
+	proxyAddr := fmt.Sprintf("%s:%d", o.Addr, o.ProxyPort)
 	fmt.Fprintf(o.Stdout, "loom (gitea %s) serving on %s — work dir %s\n", inst.Version, inst.URL, o.DataDir)
-	fmt.Fprintln(o.Stdout, "expose it over the mesh:  outpost mesh service add git "+inst.Addr)
+	fmt.Fprintf(o.Stdout, "loom front proxy (SSO identity → X-WEBAUTH-*) on http://%s\n", proxyAddr)
+	fmt.Fprintln(o.Stdout, "expose it over the mesh:  outpost mesh service add git "+proxyAddr)
 
 	// Auto-seed SDLC labels on every repo (created or migrated), continuously.
 	go startLabelReconciler(ctx, inst.URL)
 
-	<-ctx.Done()
+	// The proxy owns the foreground: if it cannot bind, or stops serving, this
+	// process must fail rather than keep a forge up that nobody can sign in to.
+	proxyErr := make(chan error, 1)
+	go func() {
+		proxyErr <- serveProxy(ctx, o.Addr, o.ProxyPort, inst.URL, publicPrefix(o.RootURL), autoProvisionEnv())
+	}()
+
+	var serveErr error
+	select {
+	case <-ctx.Done():
+	case serveErr = <-proxyErr:
+		if serveErr == nil {
+			serveErr = errors.New("loom: front proxy stopped")
+		}
+	}
 	fmt.Fprintln(o.Stdout, "loom: shutting down…")
-	return inst.Stop()
+	if err := inst.Stop(); err != nil && serveErr == nil {
+		serveErr = err
+	}
+	return serveErr
 }
 
 func statePath(dataDir string) string { return filepath.Join(dataDir, "loom-state.json") }
@@ -455,12 +485,12 @@ func StartDaemon(ctx context.Context, o Options) (State, error) {
 	}
 	if st, err := readState(o.DataDir); err == nil && healthy(ctx, st.URL, 2*time.Second) {
 		proxyOK := st.ProxyURL == "" || healthy(ctx, st.ProxyURL, 2*time.Second)
-		if st.RootURL == o.RootURL && st.Addr == fmt.Sprintf("%s:%d", o.Addr, o.Port) && proxyOK {
+		if st.RootURL == o.RootURL && st.Addr == fmt.Sprintf("%s:%d", giteaBindAddr(o.Addr), o.Port) && proxyOK {
 			return st, nil
 		}
 		_, _ = StopDaemon(o.DataDir, 10*time.Second)
 	}
-	if err := ensureGiteaPortFreeForStart(o.DataDir, o.Addr, o.Port); err != nil {
+	if err := ensureGiteaPortFreeForStart(o.DataDir, giteaBindAddr(o.Addr), o.Port); err != nil {
 		return State{}, err
 	}
 	if err := ensureProxyPortFreeForStart(o.DataDir, o.Addr, o.ProxyPort); err != nil {
@@ -508,7 +538,8 @@ func StartDaemon(ctx context.Context, o Options) (State, error) {
 		_ = cmd.Wait()
 		_ = log.Close()
 	}()
-	addr := fmt.Sprintf("%s:%d", o.Addr, o.Port)
+	// gitea on loopback (giteaBindAddr), the front proxy on the public bind.
+	addr := fmt.Sprintf("%s:%d", giteaBindAddr(o.Addr), o.Port)
 	_ = recordOwnedProxy(o.DataDir, addr, cmd.Process.Pid)
 	proxyAddr := fmt.Sprintf("%s:%d", o.Addr, o.ProxyPort)
 	proxyURL := "http://" + proxyAddr
@@ -993,31 +1024,53 @@ func healthy(ctx context.Context, url string, timeout time.Duration) bool {
 }
 
 func runProxy(ctx context.Context, addr string, port int, target, publicPrefix string, autoProvision bool) error {
+	target = proxyTargetOrDefault(target)
+	// The proxy is the long-lived process in daemon mode — run the SDLC-label
+	// reconciler here so repos created/migrated at runtime get auto-labelled.
+	// `loom serve` runs its own (it owns gitea too), which is why the
+	// reconciler is started here and not inside serveProxy.
+	go startLabelReconciler(ctx, target)
+	return serveProxy(ctx, addr, port, target, publicPrefix, autoProvision)
+}
+
+func proxyTargetOrDefault(target string) string {
+	if target == "" {
+		return fmt.Sprintf("http://127.0.0.1:%d", DefaultPort)
+	}
+	return target
+}
+
+// serveProxy binds the front proxy and serves until ctx is cancelled. This is
+// the ONLY door into loom that may carry a routable address: it strips every
+// client-supplied X-WEBAUTH-* header before stamping the identity outpost
+// vouched for, where gitea's own listener treats X-WEBAUTH-USER as a completed
+// login (ENABLE_REVERSE_PROXY_AUTHENTICATION). `loom serve` and the detached
+// `loom proxy` child both land here.
+func serveProxy(ctx context.Context, addr string, port int, target, publicPrefix string, autoProvision bool) error {
 	if addr == "" {
 		addr = DefaultAddr
 	}
 	if port == 0 {
 		port = DefaultProxyPort
 	}
-	if target == "" {
-		target = fmt.Sprintf("http://127.0.0.1:%d", DefaultPort)
-	}
-	handler, err := loomProxyHandler(target, publicPrefix, autoProvision)
+	ln, err := net.Listen("tcp", fmt.Sprintf("%s:%d", addr, port))
 	if err != nil {
+		return fmt.Errorf("loom proxy: listen: %w", err)
+	}
+	return serveProxyListener(ctx, ln, target, publicPrefix, autoProvision)
+}
+
+func serveProxyListener(ctx context.Context, ln net.Listener, target, publicPrefix string, autoProvision bool) error {
+	handler, err := loomProxyHandler(proxyTargetOrDefault(target), publicPrefix, autoProvision)
+	if err != nil {
+		_ = ln.Close()
 		return err
 	}
-	server := &http.Server{
-		Addr:              fmt.Sprintf("%s:%d", addr, port),
-		Handler:           handler,
-		ReadHeaderTimeout: 10 * time.Second,
-	}
+	server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- server.ListenAndServe()
+		errCh <- server.Serve(ln)
 	}()
-	// The proxy is the long-lived process in daemon mode — run the SDLC-label
-	// reconciler here so repos created/migrated at runtime get auto-labelled.
-	go startLabelReconciler(ctx, target)
 	select {
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1623,6 +1676,24 @@ func createRepoLabel(ctx context.Context, baseURL, full, name, color, desc strin
 	return nil
 }
 
+// giteaBindAddr is the address gitea is allowed to listen on, and it is always
+// a loopback one. app.ini turns ENABLE_REVERSE_PROXY_AUTHENTICATION on
+// unconditionally (that is how SSO works at all), so on gitea's own listener an
+// `X-WEBAUTH-USER: admin` header IS a completed login as admin. A routable
+// HTTP_ADDR would hand that to anyone who can reach the port. The front proxy
+// (serveProxy) is the only thing that may bind a routable address: it strips
+// client-supplied X-WEBAUTH-* first and stamps only what outpost vouched for.
+// A non-loopback request is anyway refused by gitea itself —
+// REVERSE_PROXY_TRUSTED_PROXIES is loopback-only — so a routable bind buys
+// nothing but a spoofing surface.
+func giteaBindAddr(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if ip := net.ParseIP(addr); ip != nil && ip.IsLoopback() {
+		return addr
+	}
+	return DefaultAddr
+}
+
 func isLoopbackRemote(addr string) bool {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -1647,6 +1718,11 @@ func firstNonEmpty(vals ...string) string {
 // already-initialized data dir can be exposed over the mesh — and can mirror to
 // a private-address replica — without manual app.ini surgery.
 func ensureConfig(dataDir, addr string, port int, rootURL string, actions bool, st *Storage) (string, error) {
+	// Every path that writes app.ini goes through here, so this is where the
+	// loopback-only rule for gitea's listener is enforced — including on an
+	// app.ini an older build (or an operator) left bound to 0.0.0.0, which is
+	// reconciled back rather than inherited. See giteaBindAddr.
+	addr = giteaBindAddr(addr)
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return "", err
 	}
@@ -2024,7 +2100,10 @@ func NewLoomCmd() *cobra.Command {
 		Use:   "loom",
 		Short: "Run Gitea (the mesh git forge) as a managed external binary",
 		Long: `loom runs Gitea — downloaded, sha256-verified, and cached by binmgr (not
-compiled in). Expose it over the mesh with: outpost mesh service add git <addr>.`,
+compiled in). Expose it over the mesh with: outpost mesh service add git <addr>,
+where <addr> is the FRONT PROXY's address (the default 31881, not gitea's
+31880): the proxy is what turns a vouched SSO identity into gitea's
+X-WEBAUTH-* headers and what strips a client's own.`,
 	}
 	var o Options
 	var actions bool
@@ -2044,8 +2123,9 @@ compiled in). Expose it over the mesh with: outpost mesh service add git <addr>.
 	}
 	serve.Flags().StringVar(&o.Version, "gitea-version", "", "Gitea release tag (default: "+DefaultVersion+")")
 	serve.Flags().StringVar(&o.DataDir, "data", "", "work dir (default ~/.agents/bashy/loom)")
-	serve.Flags().StringVar(&o.Addr, "addr", DefaultAddr, "HTTP bind address")
-	serve.Flags().IntVar(&o.Port, "port", DefaultPort, "HTTP port")
+	serve.Flags().StringVar(&o.Addr, "addr", DefaultAddr, "front-proxy bind address (gitea itself always binds loopback)")
+	serve.Flags().IntVar(&o.Port, "port", DefaultPort, "gitea HTTP port (loopback only)")
+	serve.Flags().IntVar(&o.ProxyPort, "proxy-port", DefaultProxyPort, "front-proxy HTTP port — the door outpost apps and mesh peers must use")
 	serve.Flags().StringVar(&o.RootURL, "root-url", "", "Gitea ROOT_URL for UI links and clone URLs; use the stable cloudbox HTTPS URL for internet access")
 	serve.Flags().BoolVar(&actions, "actions", true, "enable Gitea Actions (local CI; $LOOM_ACTIONS=0 to disable)")
 
@@ -2077,9 +2157,9 @@ compiled in). Expose it over the mesh with: outpost mesh service add git <addr>.
 	}
 	start.Flags().StringVar(&o.Version, "gitea-version", "", "Gitea release tag (default: "+DefaultVersion+")")
 	start.Flags().StringVar(&o.DataDir, "data", "", "work dir (default ~/.agents/bashy/loom)")
-	start.Flags().StringVar(&o.Addr, "addr", DefaultAddr, "HTTP bind address")
-	start.Flags().IntVar(&o.Port, "port", DefaultPort, "HTTP port")
-	start.Flags().IntVar(&o.ProxyPort, "proxy-port", DefaultProxyPort, "HTTP proxy port for outpost/custom-app access")
+	start.Flags().StringVar(&o.Addr, "addr", DefaultAddr, "front-proxy bind address (gitea itself always binds loopback)")
+	start.Flags().IntVar(&o.Port, "port", DefaultPort, "gitea HTTP port (loopback only)")
+	start.Flags().IntVar(&o.ProxyPort, "proxy-port", DefaultProxyPort, "front-proxy HTTP port — the door outpost apps and mesh peers must use")
 	start.Flags().StringVar(&o.RootURL, "root-url", "", "Gitea ROOT_URL for UI links and clone URLs; use the stable cloudbox HTTPS URL for internet access")
 	start.Flags().BoolVar(&actions, "actions", true, "enable Gitea Actions (local CI; $LOOM_ACTIONS=0 to disable)")
 	start.Flags().BoolVar(&expose, "expose", false, "also publish loom through outpost mesh")
@@ -2115,12 +2195,15 @@ compiled in). Expose it over the mesh with: outpost mesh service add git <addr>.
 				if st.ProxyURL != "" {
 					fmt.Fprintf(cmd.OutOrStdout(), "point outpost app at: outpost apps add loom --url %s --require-login --trust-cloud-identity\n", st.ProxyURL)
 				}
-				shareAddr := st.ProxyAddr
-				if shareAddr == "" {
-					shareAddr = st.Addr
+				// Only ever the PROXY address: a mesh forward terminates on
+				// loopback, so a peer handed gitea's own port could send
+				// X-WEBAUTH-USER and be logged in as anyone.
+				if shareAddr := st.ProxyAddr; shareAddr != "" {
+					fmt.Fprintf(cmd.OutOrStdout(), "share over outpost mesh: outpost mesh service add git %s\n", shareAddr)
+					fmt.Fprintf(cmd.OutOrStdout(), "remote peers can run: outpost mesh dial --local %s git\n", shareAddr)
+				} else {
+					fmt.Fprintln(cmd.OutOrStdout(), "no front proxy in this state file — restart loom before exposing it (gitea's own port must never be shared)")
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "share over outpost mesh: outpost mesh service add git %s\n", shareAddr)
-				fmt.Fprintf(cmd.OutOrStdout(), "remote peers can run: outpost mesh dial --local %s git\n", shareAddr)
 			}
 			return nil
 		},
@@ -2173,9 +2256,11 @@ compiled in). Expose it over the mesh with: outpost mesh service add git <addr>.
 			if !healthy(cmd.Context(), st.URL, 2*time.Second) {
 				return fmt.Errorf("loom: service is not running at %s", st.URL)
 			}
+			// The front proxy is the ONLY address loom is ever exposed on —
+			// see the status note above. No fallback to gitea's listener.
 			addr := st.ProxyAddr
 			if addr == "" {
-				addr = st.Addr
+				return fmt.Errorf("loom: no front proxy address in %s — restart loom (`bashy loom start`) before exposing it", statePath(o.DataDir))
 			}
 			if err := ExposeService(cmd.Context(), service, addr); err != nil {
 				return err

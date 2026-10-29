@@ -67,7 +67,14 @@ going to be refused anyway never creates an OS account.
    root-owned files in a tree the server can only touch as the loom account.
 
 The front **proxy stays in the parent process** — it only binds a loopback port
-and forwards, and keeping it there is what the decision allows.
+and forwards, and keeping it there is what the decision allows. Since S515.1
+round 5 that is literal for `loom serve` too: it serves the proxy itself
+(`serveProxy`) instead of leaving it to `loom start`'s detached child, because
+`loom serve` is the argv the service unit supervises and a unit supervises ONE
+foreground command. Gitea's own listener is pinned to loopback
+(`giteaBindAddr`) whatever `--addr` says: `ENABLE_REVERSE_PROXY_AUTHENTICATION`
+is always on, so there an `X-WEBAUTH-USER` header IS a login, and only the
+proxy — which strips a client's own `X-WEBAUTH-*` — may face anything else.
 
 ### The two traversal problems
 

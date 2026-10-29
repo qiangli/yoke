@@ -63,7 +63,10 @@ Changes from the S14 example, each needed for coverage:
 
 - **`ports[]` replaces the single `port`.** loom has two listeners (31880
   and 31881), and Zot / SeaweedFS / Kopia need named listeners for mesh
-  names.
+  names. loom is also why `expose.app.port` matters: both exposures name the
+  `proxy` listener, because the default — the PRIMARY listener — is gitea
+  itself, which neither translates the cloud identity into `X-WEBAUTH-*` nor
+  strips a client's own (S515.1 live round 5).
 - **`provider` / `capability` / `owner` are new.** They implement the
   rod-not-fish internal provider.
 - **`settings`, `secrets`, `download`, `stop` and `upgrade` are new.** They
@@ -92,7 +95,7 @@ shared (`$BASHY_SERVICES_PATH`) → org cache → local
 |---|---|---|---|---|---|
 | `apps` | process | `bashy apps serve --port {port} --bind {bind}` | 22749 | http `/healthz` | app `apps`, login |
 | `meet` | process | `bashy meet serve --port {port} --bind {bind}` | 8637 | http `/healthz` | app `meet`, login, cloud identity |
-| `loom` | process | `bashy loom serve --port {port} --addr {bind} --root-url {settings.root_url}` | 31880 http, 31881 proxy | http `/api/healthz` | app `loom`, login; mesh `git` |
+| `loom` | process | `bashy loom serve --port {port} --addr {bind.proxy} --proxy-port {port.proxy} --root-url {settings.root_url}` | 31880 http (gitea, loopback-only), 31881 proxy | http `/api/healthz` | app `loom` **on `proxy`**, login, cloud identity; mesh `git` on `proxy` |
 | `sdlc` | process | `bashy sdlc service run --interval {settings.interval}` | none | process alive | none |
 | `schedule` | process | `bashy schedule daemon` | none | process alive | none |
 | `llm` | process | `bashy llm serve --port {port} --bind {bind}` | 24556 loopback | tcp | none (the mesh door is S5/S13) |
@@ -242,7 +245,7 @@ Paths: `O` = outpost, `Y` = yoke, `B` = bashy, `C` = coreutils.
 |---|---|---|---|
 | Apps console (`bashy_apps_*`, svcd) | seed `apps` (S17) | `--pair` and `--launcher` in exec. Port 22749 (the legacy 8639 is gone). `bind: lan`. App with login, elevation and cloud identity. SSO secret through `secrets`. | `O/cmd/outpost/bashy_apps_test.go` (12 tests); `Y/pkg/webconsole/service_test.go`, `e2e_test.go`; `adminui/builtins_test.go` TestBuiltinsToggleBashyAppsREST |
 | meet (`meet_enabled`, `meet_port`) | seed `meet` (S17) | Port 8637. App with login and cloud identity. Today's bug (a `meet_port` override never reaches `--port`) disappears because exec expands `{port}`. | `O/cmd/outpost/meet_test.go` (7); `Y/pkg/meet/service_test.go`, `service_json_stopped_test.go`, `serve_test.go` |
-| loom / Gitea (`loom_enabled`, `loom_port`) | seed `loom` (S17) | Gitea pinned (v28.1.0) by loom's binmgr spec. Ports 31880 and 31881. `settings.root_url` from cloudbox. Mesh `git`. App with login. `LOOM_*` env. | `Y/external/loom/loom_test.go` (~40, e.g. TestStartRefusesWhenTheGiteaPortIsHeldByAForeignProcess); `admincore/builtins_loom_optin_test.go` |
+| loom / Gitea (`loom_enabled`, `loom_port`) | seed `loom` (S17) | Gitea pinned (v28.1.0) by loom's binmgr spec. Ports 31880 and 31881. `settings.root_url` from cloudbox. Mesh `git` and the app BOTH on the `proxy` listener (31881), never on gitea's own. App with login + cloud identity. `LOOM_*` env. | `Y/external/loom/loom_test.go` (~40, e.g. TestStartRefusesWhenTheGiteaPortIsHeldByAForeignProcess); `admincore/builtins_loom_optin_test.go` |
 | SDLC loop | seed `sdlc` (S17) | `settings.interval`. `--runs-dir`, `--config`, `--cwd` and `--sandbox` through an exec override. | `Y/pkg/sdlc/service_test.go` |
 | schedule daemon | seed `schedule` (S17). The service code moves above coreutils (import rule). | `--interval` through exec. The kernel lease stays inside the daemon. | `C/pkg/schedule/service_concurrency_unix_test.go`, `schedule_test.go` |
 | LLM door (`llm up/down`, `EnsureUp`) | seed `llm` (S17) | Port 24556. Bind loopback or lan. `--policy`, `--max-in-flight`, `--no-engine` and `--no-cli` through exec. Owner socket unchanged. | `Y/pkg/broker/broker_test.go`, `stop_test.go`, `sticky_live_test.go` (live) |
