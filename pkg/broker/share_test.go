@@ -518,3 +518,24 @@ func TestMeshForwardInWSLWithoutOutpostUsesWindows(t *testing.T) {
 		t.Fatalf("Linux outpost not preferred when present: %v", lin.calls)
 	}
 }
+
+// Live D4w check 10-29: a WSL grant's env came back on the Windows-side
+// 127.0.0.1 forward, unreachable from WSL. With no outpost in WSL the default
+// bind host is the WSL gateway.
+func TestMeshBindHostInWSLWithoutOutpostIsGateway(t *testing.T) {
+	prevWSL, prevPath, prevGW := inWSL, outpostOnPath, wslGateway
+	t.Cleanup(func() { inWSL, outpostOnPath, wslGateway = prevWSL, prevPath, prevGW })
+	inWSL, outpostOnPath = func() bool { return true }, func() bool { return false }
+	wslGateway = func() (string, error) { return "172.20.0.1", nil }
+	if got := meshBindHost(); got != "172.20.0.1" {
+		t.Fatalf("meshBindHost = %q, want the WSL gateway", got)
+	}
+	outpostOnPath = func() bool { return true }
+	if got := meshBindHost(); got != "127.0.0.1" {
+		t.Fatalf("with a WSL outpost meshBindHost = %q, want loopback", got)
+	}
+	inWSL = func() bool { return false }
+	if got := meshBindHost(); got != "127.0.0.1" {
+		t.Fatalf("outside WSL meshBindHost = %q, want loopback", got)
+	}
+}

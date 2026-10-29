@@ -450,12 +450,25 @@ after a share rotation; no model YAML or secrets.map is needed.
 // door shares over the mesh, else its cloudbox app keyed in the path.
 func grantPeerDoor(ctx context.Context, g DoorGrant) (toolcmd.PeerDoor, error) {
 	if g.MeshPeerID != "" {
-		addr, err := ensureMeshForward(ctx, g, "127.0.0.1")
+		addr, err := ensureMeshForward(ctx, g, meshBindHost())
 		if err == nil || g.CloudboxURL == "" {
 			return toolcmd.PeerDoor{URL: "http://" + addr, Credential: g.Credential}, err
 		}
 	}
 	return toolcmd.PeerDoor{URL: g.CloudboxURL + "/k/" + g.Credential, Credential: g.Credential}, nil
+}
+
+// meshBindHost is where a new mesh forward listens by default: loopback,
+// except in a WSL distro with no outpost of its own, where the forward lives
+// in the Windows outpost and must listen on the address WSL reaches Windows
+// at (a Windows loopback port is unreachable from WSL).
+func meshBindHost() string {
+	if inWSL() && !outpostOnPath() {
+		if gw, err := wslGateway(); err == nil && gw != "" {
+			return gw
+		}
+	}
+	return "127.0.0.1"
 }
 
 // ensureMeshForward returns the local address of a persistent mesh forward to
@@ -544,7 +557,7 @@ func envFrom(ctx context.Context, from, via, bindHost string) (string, map[strin
 			return "", nil, "", fmt.Errorf("llm env: %s did not share its door over the mesh; use --via cloudbox, or run `bashy llm share %s --via both` on %s", g.Door, thisHostName(), g.Door)
 		}
 		if bindHost == "" {
-			bindHost = "127.0.0.1"
+			bindHost = meshBindHost()
 		}
 		addr, err := ensureMeshForward(ctx, g, bindHost)
 		if err != nil {
