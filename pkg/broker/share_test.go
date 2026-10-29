@@ -478,3 +478,30 @@ func TestMeshForwardStateField(t *testing.T) {
 		})
 	}
 }
+
+func TestMeshForwardInWSLWithoutOutpostUsesWindows(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	lin := useFakeOutpost(t)
+	win := &fakeOutpost{}
+	prevWin, prevWSL, prevPath := outpostWinRun, inWSL, outpostOnPath
+	outpostWinRun, inWSL, outpostOnPath = win.run, func() bool { return true }, func() bool { return false }
+	t.Cleanup(func() { outpostWinRun, inWSL, outpostOnPath = prevWin, prevWSL, prevPath })
+
+	if _, err := ensureMeshForward(context.Background(), testGrant(), "172.20.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(lin.calls) != 0 {
+		t.Fatalf("Linux outpost used: %v", lin.calls)
+	}
+	if win.count("mesh consume add llm PEERID-DOOR --local 172.20.0.1:0") != 1 {
+		t.Fatalf("Windows forward not opened on the gateway: %v", win.calls)
+	}
+
+	outpostOnPath = func() bool { return true }
+	if _, err := ensureMeshForward(context.Background(), testGrant(), "127.0.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	if lin.count("mesh consume ls") != 1 {
+		t.Fatalf("Linux outpost not preferred when present: %v", lin.calls)
+	}
+}

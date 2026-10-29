@@ -95,6 +95,27 @@ var outpostRun = func(ctx context.Context, stdin io.Reader, args ...string) ([]b
 	return out, nil
 }
 
+// outpostOnPath reports whether a Linux-side outpost exists (a seam for tests).
+var outpostOnPath = func() bool {
+	_, err := exec.LookPath("outpost")
+	return err == nil
+}
+
+// outpostWinRun runs the Windows outpost through WSL interop, for a WSL distro
+// that holds its own grant but no outpost: the forward lives on the Windows
+// side, bound on the address WSL reaches Windows at (a seam for tests).
+var outpostWinRun = func(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error) {
+	c := exec.CommandContext(ctx, "outpost.exe", args...)
+	c.Stdin = stdin
+	var stderr bytes.Buffer
+	c.Stderr = &stderr
+	out, err := c.Output()
+	if err != nil {
+		return out, fmt.Errorf("outpost.exe %s: %v: %s", strings.Join(args[:min(len(args), 3)], " "), err, strings.TrimSpace(stderr.String()))
+	}
+	return out, nil
+}
+
 // ---- door host ---------------------------------------------------------------
 
 // outpostSelf reads this host's outpost name and cloudbox URL.
@@ -439,7 +460,11 @@ func grantPeerDoor(ctx context.Context, g DoorGrant) (toolcmd.PeerDoor, error) {
 // ensureMeshForward returns the local address of a persistent mesh forward to
 // g's door bound on bindHost, opening one on a free port when none exists.
 func ensureMeshForward(ctx context.Context, g DoorGrant, bindHost string) (string, error) {
-	out, err := outpostRun(ctx, nil, "mesh", "consume", "ls")
+	run, winPort := outpostRun, false
+	if inWSL() && !outpostOnPath() {
+		run, winPort = outpostWinRun, true
+	}
+	out, err := run(ctx, nil, "mesh", "consume", "ls")
 	if err != nil {
 		return "", err
 	}
@@ -455,13 +480,16 @@ func ensureMeshForward(ctx context.Context, g DoorGrant, bindHost string) (strin
 			}
 		}
 	}
-	ln, err := net.Listen("tcp", net.JoinHostPort(bindHost, "0"))
-	if err != nil {
-		return "", fmt.Errorf("pick a local port on %s: %w", bindHost, err)
+	addr := net.JoinHostPort(bindHost, "0")
+	if !winPort {
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			return "", fmt.Errorf("pick a local port on %s: %w", bindHost, err)
+		}
+		addr = ln.Addr().String()
+		ln.Close()
 	}
-	addr := ln.Addr().String()
-	ln.Close()
-	out, err = outpostRun(ctx, nil, "mesh", "consume", "add", g.MeshService, g.MeshPeerID, "--local", addr)
+	out, err = run(ctx, nil, "mesh", "consume", "add", g.MeshService, g.MeshPeerID, "--local", addr)
 	if err != nil {
 		return "", err
 	}
