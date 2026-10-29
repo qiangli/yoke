@@ -1,9 +1,9 @@
 // Copyright (c) 2026 qiangli
 // See LICENSE for licensing information
 
-// Package shape owns the per-app, per-web-principal state and private data
+// Package state owns the per-app, per-web-principal state and private data
 // plane used by shaped applications.
-package shape
+package state
 
 import (
 	"encoding/json"

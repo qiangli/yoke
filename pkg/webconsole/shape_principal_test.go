@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/qiangli/yoke/pkg/atlas"
-	"github.com/qiangli/yoke/pkg/shape"
+	"github.com/qiangli/yoke/pkg/shape/state"
 	"github.com/qiangli/yoke/pkg/websession"
 )
 
@@ -104,11 +104,11 @@ func TestShapedAppPrincipalsStayIsolated(t *testing.T) {
 	}
 
 	for principal, rev := range map[string]string{"device:alice": "alice-rev", "device:bob": "bob-rev"} {
-		s, err := shape.OpenAt(home, "notes", principal)
+		s, err := state.OpenAt(home, "notes", principal)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := s.Write(shape.State{ActiveRevision: rev, LastKnownGood: "base"}); err != nil {
+		if err := s.Write(state.State{ActiveRevision: rev, LastKnownGood: "base"}); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.WriteData("note.txt", []byte(principal)); err != nil {
@@ -116,7 +116,7 @@ func TestShapedAppPrincipalsStayIsolated(t *testing.T) {
 		}
 	}
 	for principal, want := range map[string]string{"device:alice": "alice-rev", "device:bob": "bob-rev"} {
-		s, _ := shape.OpenAt(home, "notes", principal)
+		s, _ := state.OpenAt(home, "notes", principal)
 		got, err := s.Read()
 		if err != nil || got.ActiveRevision != want {
 			t.Fatalf("%s state = %+v, %v", principal, got, err)
@@ -148,15 +148,15 @@ func TestShapedAppPrincipalsStayIsolated(t *testing.T) {
 	if err := os.WriteFile(metadataPath, []byte("schema_version: bashy-shape-feature-v1\nid: compact\norigin: device:alice\nbase_app: notes\nrevision: a1\nconflicts: [wide]\nscope: [user]\nschema_range: {min: 1, max: 2}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	compact, err := shape.ReadFeature(metadataPath)
+	compact, err := state.ReadFeature(metadataPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	features := []shape.Feature{
+	features := []state.Feature{
 		compact,
-		{SchemaVersion: shape.FeatureSchemaV1, ID: "wide", Origin: "device:bob", BaseApp: "notes", Revision: "b1", Schema: shape.SchemaRange{Min: 2, Max: 3}},
+		{SchemaVersion: state.FeatureSchemaV1, ID: "wide", Origin: "device:bob", BaseApp: "notes", Revision: "b1", Schema: state.SchemaRange{Min: 2, Max: 3}},
 	}
-	if err := shape.CheckCompatible(features); err == nil {
+	if err := state.CheckCompatible(features); err == nil {
 		t.Fatal("conflicting features reported compatible")
 	}
 }

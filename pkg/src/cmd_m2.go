@@ -11,6 +11,51 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// principalEnv is the environment fallback for the principal `src activate`
+// acts for: the launcher sets it for the worker it starts.
+const principalEnv = "BASHY_PRINCIPAL"
+
+func newActivateCmd() *cobra.Command {
+	var principal string
+	c := &cobra.Command{
+		Use:   "activate <app> <rev>",
+		Short: "Activate a revision for a principal: gated, atomic, and recorded",
+		Long: `activate checks a revision through the activation gate, records a
+commit on the principal's version line, and switches that principal's
+active revision to it while keeping the previous revision as
+last-known-good. Only the named principal's line and record move.
+
+The principal comes from --principal or $BASHY_PRINCIPAL. Without a wired
+gate the command refuses rather than activate ungated.`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			p := strings.TrimSpace(principal)
+			if p == "" {
+				p = strings.TrimSpace(os.Getenv(principalEnv))
+			}
+			if p == "" {
+				return fmt.Errorf("src: activate needs --principal or $%s", principalEnv)
+			}
+			if cliGate == nil {
+				return fmt.Errorf("src: activate refused: no activation gate is wired")
+			}
+			res, err := Activate("", args[0], args[1], p, ActivateOptions{Gate: cliGate})
+			if err != nil {
+				return err
+			}
+			prev := "(none)"
+			if res.Previous != "" {
+				prev = shortSHA(res.Previous)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "activated %s for %s at %s (was %s)\n",
+				res.App, res.Principal, shortSHA(res.Revision), prev)
+			return nil
+		},
+	}
+	c.Flags().StringVar(&principal, "principal", "", "web principal to activate for (default $"+principalEnv+")")
+	return c
+}
+
 func newBranchCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "branch <repo> <name>",
