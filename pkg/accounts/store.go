@@ -284,7 +284,7 @@ func (s *Store) Add(a Account) (Account, error) {
 		}
 		for _, r := range d.Records {
 			if r.Key == key {
-				return errors.New("accounts: account already exists")
+				return &DuplicateIdentityError{Existing: effective(r)}
 			}
 		}
 		a.ID = localID(key)
