@@ -3,6 +3,7 @@ package accounts
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 )
 
@@ -64,6 +65,39 @@ func (r *Registry) Adapter(name string, cap Capability) (Adapter, error) {
 	}
 	return a, nil
 }
+
+// Adapters returns adapters with the requested capability in deterministic
+// name order. Callers can therefore reconcile several independent sources
+// without making output depend on package initialization order.
+func (r *Registry) Adapters(cap Capability) []Adapter {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]Adapter, 0, len(r.adapters))
+	for _, a := range r.adapters {
+		if a.Capabilities()&cap != 0 {
+			out = append(out, a)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name() < out[j].Name() })
+	return out
+}
+
+var defaultRegistry = NewRegistry()
+
+// RegisterAdapter adds one built-in adapter to the account front door. Adapter
+// packages should have exactly one registration call in their wiring package;
+// the registry itself remains free of provider imports and import cycles.
+func RegisterAdapter(a Adapter) error { return defaultRegistry.Register(a) }
+
+// MustRegisterAdapter is the one-line init hook for built-in adapters.
+func MustRegisterAdapter(a Adapter) {
+	if err := RegisterAdapter(a); err != nil {
+		panic(err)
+	}
+}
+
+// DefaultRegistry is the process-wide registry used by NewAccountCmd.
+func DefaultRegistry() *Registry { return defaultRegistry }
 
 // Resolve selects one account connection and returns safe metadata only.
 func (s *Store) Resolve(ref string, _ Operation) (Selection, error) {

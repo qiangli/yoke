@@ -1445,6 +1445,7 @@ func init() {
 		Caps: []string{CapCached, CapNeedsNetwork}})
 	addVerb("run", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapJSON, CapSpawnsProcesses}})
 	addVerb("secret", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapNeedsNetwork, CapNeedsPairing}})
+	addVerb("account", Entry{Stage: StageCross, Group: GroupAccount, Tier: TierAccount, Caps: []string{CapJSON}})
 	// ask declares NO caps beyond --json, and that is the point of it being its own
 	// verb rather than `secrets input`. Caps say what a verb REQUIRES: `secrets`
 	// genuinely requires a network and a paired cloudbox, because every one of its
@@ -1527,7 +1528,7 @@ func init() {
 		"kb", "skill", "lexicon", "claim", "db", "git", "web", "rclone", "kopia", "commands", "context",
 		// craft READS the attestation ledger skills writes; it never writes it.
 		"craft", "define",
-		"doctor", "otel", "audit", "check", "sprint",
+		"doctor", "otel", "audit", "check", "sprint", "account",
 		// inspect READS every store it maps and never writes one — its contract.
 		"inspect",
 		// app READS every store its panels render, and the Files panel reads the
@@ -1574,7 +1575,7 @@ func init() {
 		"ask",
 		// verbs
 		"weave", "genie", "ycode", "sprint", "dag", "sdlc", "supervise", "capability", "leaderboard", "agent", "dks",
-		"tool", "model", "person", "kb", "skill", "lexicon", "claim", "db", "mirror", "feed", "git",
+		"tool", "model", "person", "kb", "skill", "lexicon", "claim", "db", "mirror", "feed", "git", "account",
 		"git-scm", "gh", "curl", "helm", "self", "bootstrap", "upgrade",
 		// commands add/set write the registered-command ring (Sprint 179).
 		"commands",
@@ -1611,7 +1612,7 @@ func init() {
 		"act-runner", "mirror", "oci", "podman", "docker", "sandbox", "ollama", "dks", "peer", "git",
 		"git-scm", "gh", "loom", "web", "curl", "rclone", "zot", "seaweedfs",
 		"kopia", "kubectl", "helm", "self", "bootstrap", "upgrade", "secret",
-		"otel", "tessaro", "login", "app",
+		"otel", "tessaro", "login", "app", "account",
 		// src fetch clones the OSS remote (or the offline seed) over the net.
 		"src",
 		// llm's workers are agent CLIs, and they reach their vendor.
@@ -1644,7 +1645,7 @@ func init() {
 	// cred — reads or writes credentials / secrets. `env`/`printenv` are here
 	// because they emit the whole environment, secrets included — the reason the
 	// context-redaction allowlist must also cover them.
-	eff(EffCred, "env", "printenv", "git", "git-scm", "gh", "secret", "ask", "tessaro", "login")
+	eff(EffCred, "env", "printenv", "git", "git-scm", "gh", "secret", "ask", "tessaro", "login", "account")
 
 	// priv — changes privilege, ownership, or a security label.
 	// newgrp changes the caller's GROUP CREDENTIAL before spawning the shell -
@@ -1792,7 +1793,7 @@ func init() {
 		// Whole command rows include deletion, replacement, migration, or lifecycle
 		// operations. No per-invocation prior state or recovery guarantee exists.
 		"graph", "sprint", "capability", "leaderboard", "person", "handoff", "resume", "db",
-		"kb", "lexicon", "claim", "steward", "todo", "secret", "ask",
+		"kb", "lexicon", "claim", "steward", "todo", "secret", "ask", "account",
 		"feed", // a published post cannot be recalled from the sinks that mirrored it
 		"self", "bootstrap", "upgrade",
 		// destructive data loss
@@ -1890,7 +1891,7 @@ func init() {
 		// orchestration / knowledge / fleet verbs outside the v1.0.0 table
 		"agentic", "capability", "claim", "coach", "define", "delegate", "dks", "db",
 		"gate", "handoff", "leaderboard", "login", "mirror", "otel", "peer",
-		"person", "resume", "search", "secret", "src", "stats", "steward", "tessaro",
+		"person", "resume", "search", "secret", "src", "stats", "steward", "tessaro", "account",
 		// engines, forges and managed externals fronted by a verb
 		"act", "act-runner", "curl", "gh", "git", "git-scm", "helm", "kopia",
 		"kubectl", "rclone", "seaweedfs", "zot",
