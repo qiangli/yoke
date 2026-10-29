@@ -224,7 +224,7 @@ func (a *productionActivator) Activate(ctx context.Context, req ActivateRequest)
 	// evidence is re-checked here, and the Verdict received over HTTP is
 	// never itself authority to activate.
 	gate := shapegate.New(home, req.Evidence)
-	_, err = src.Activate(home, req.App, req.CandidateRev, req.Principal, src.ActivateOptions{Gate: gate})
+	_, err = src.Activate(home, req.App, req.CandidateRev, req.Principal, src.ActivateOptions{Gate: gate, Request: req.Request})
 	return err
 }
 

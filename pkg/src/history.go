@@ -119,7 +119,9 @@ func History(home, app, principal string) (VersionHistory, error) {
 
 // walkLine follows the version line back from tip, newest-first. Line
 // commits carry the Principal trailer; the first commit without one is the
-// release the line started from, where the walk stops.
+// release the line started from, where the walk stops. Revision prefers the
+// Revision trailer and falls back to Request so commits written before the
+// Revision trailer still resolve.
 func walkLine(r *gogit.Repository, tip string) []VersionEntry {
 	var out []VersionEntry
 	hash := plumbing.NewHash(tip)
@@ -136,9 +138,16 @@ func walkLine(r *gogit.Repository, tip string) []VersionEntry {
 		if strings.HasPrefix(subject, "Restore ") {
 			kind = "restore"
 		}
+		if strings.HasPrefix(subject, "Undo ") {
+			kind = "undo"
+		}
+		revision := commitTrailer(c.Message, "Revision")
+		if revision == "" {
+			revision = commitTrailer(c.Message, "Request")
+		}
 		out = append(out, VersionEntry{
 			Activation: c.Hash.String(),
-			Revision:   commitTrailer(c.Message, "Request"),
+			Revision:   revision,
 			Kind:       kind,
 			Request:    commitTrailer(c.Message, "Request"),
 			Verdict:    commitTrailer(c.Message, "Verdict"),
@@ -437,9 +446,37 @@ func itoaSmall(n int) string {
 }
 
 // RestoreOptions tunes Restore. Gate is required and fails the restore
-// closed when it refuses, exactly like Activate.
+// closed when it refuses, exactly like Activate. Request overrides the
+// recorded request line; empty derives "restore to <name or short sha>" from
+// the rev argument. The undo verbs pass "undo". When overrides the commit
+// time; zero means the server clock now (UTC).
 type RestoreOptions struct {
-	Gate state.ActivationGate
+	Gate    state.ActivationGate
+	Request string
+	When    time.Time
+}
+
+// restoreDisplay names the restore target the way the request line does: the
+// caller's label when they named one, else the short SHA.
+func restoreDisplay(rev, targetSHA string) string {
+	rev = strings.TrimSpace(rev)
+	if rev == "" || strings.EqualFold(rev, targetSHA) {
+		return shortSHA(targetSHA)
+	}
+	if len(rev) >= 7 && len(rev) <= 64 && isHexSHA(rev) {
+		return shortSHA(targetSHA)
+	}
+	return rev
+}
+
+func isHexSHA(s string) bool {
+	for _, r := range s {
+		if r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // Restore returns the principal's active revision to rev through a NEW
@@ -510,9 +547,17 @@ func Restore(home, app, rev, principal string, opts RestoreOptions) (ActivateRes
 	if err != nil {
 		return out, fmt.Errorf("src: commit %s: %w", shortSHA(targetSHA), err)
 	}
-	msg := fmt.Sprintf("Restore %s %s for %s\n\nRequest: %s\nVerdict: %s\nEvidence: %s\nPrincipal: %s\n",
-		app, shortSHA(targetSHA), principal, targetSHA, verdict.Verdict, verdict.EvidenceID, principal)
-	restoration, err := recordLineCommit(dir, plumbing.NewHash(base), target.TreeHash, msg, agentName(), "bashy@localhost")
+	reqText := oneLineRequest(opts.Request)
+	if reqText == "" {
+		reqText = "restore to " + restoreDisplay(rev, targetSHA)
+	}
+	subject := fmt.Sprintf("Restore %s %s for %s", app, shortSHA(targetSHA), principal)
+	if reqText == "undo" {
+		subject = fmt.Sprintf("Undo %s %s for %s", app, shortSHA(targetSHA), principal)
+	}
+	msg := fmt.Sprintf("%s\n\nRevision: %s\nRequest: %s\nVerdict: %s\nEvidence: %s\nPrincipal: %s\n",
+		subject, targetSHA, reqText, verdict.Verdict, verdict.EvidenceID, principal)
+	restoration, err := recordLineCommit(dir, plumbing.NewHash(base), target.TreeHash, msg, principal, "bashy@localhost", opts.When)
 	if err != nil {
 		return out, err
 	}

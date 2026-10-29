@@ -17,7 +17,7 @@ import (
 const principalEnv = "BASHY_PRINCIPAL"
 
 func newActivateCmd() *cobra.Command {
-	var principal string
+	var principal, request string
 	c := &cobra.Command{
 		Use:   "activate <app> <rev>",
 		Short: "Activate a revision for a principal: gated, atomic, and recorded",
@@ -37,7 +37,7 @@ gate the command refuses rather than activate ungated.`,
 			if p == "" {
 				return fmt.Errorf("src: activate needs --principal or $%s", principalEnv)
 			}
-			res, err := Activate("", args[0], args[1], p, ActivateOptions{Gate: effectiveGate()})
+			res, err := Activate("", args[0], args[1], p, ActivateOptions{Gate: effectiveGate(), Request: request})
 			if err != nil {
 				return err
 			}
@@ -51,6 +51,7 @@ gate the command refuses rather than activate ungated.`,
 		},
 	}
 	c.Flags().StringVar(&principal, "principal", "", "web principal to activate for (default $"+principalEnv+")")
+	c.Flags().StringVar(&request, "request", "", "request text recorded in the version history")
 	return c
 }
 

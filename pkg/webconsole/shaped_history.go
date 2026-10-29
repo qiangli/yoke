@@ -275,8 +275,10 @@ func (s *server) verifyRestoreTarget(ctx context.Context, a *shapedApp, principa
 // restoreVersion verifies the target and records the restore as a new
 // forward commit through the evidence gate. Every refusal — unknown
 // version, failed verification, schema incompatibility, gate refusal —
-// returns the reason and leaves the active revision unchanged.
-func (s *server) restoreVersion(ctx context.Context, a *shapedApp, principal, home string, h src.VersionHistory, rev string) (src.ActivateResult, error) {
+// returns the reason and leaves the active revision unchanged. When undo is
+// true the request line is "undo"; otherwise it is "restore to <name or
+// short sha>" derived from the caller's rev label.
+func (s *server) restoreVersion(ctx context.Context, a *shapedApp, principal, home string, h src.VersionHistory, rev string, undo bool) (src.ActivateResult, error) {
 	var out src.ActivateResult
 	target, ok := resolveHistoryVersion(h, rev)
 	if !ok {
@@ -296,7 +298,51 @@ func (s *server) restoreVersion(ctx context.Context, a *shapedApp, principal, ho
 		}
 		return out, fmt.Errorf("restore refused: %s", reason)
 	}
-	return src.Restore(home, a.name, target, principal, src.RestoreOptions{Gate: restoreGate(home, v.Evidence)})
+	request := "restore to " + restoreLabel(h, rev, target)
+	if undo {
+		request = "undo"
+	}
+	return src.Restore(home, a.name, target, principal, src.RestoreOptions{Gate: restoreGate(home, v.Evidence), Request: request})
+}
+
+// restoreLabel names the restore target the way the request line does: the
+// caller's label when they named one, else the short SHA.
+func restoreLabel(h src.VersionHistory, rev, target string) string {
+	rev = strings.TrimSpace(rev)
+	if rev == "" {
+		return shortRev(target)
+	}
+	for _, n := range h.Named {
+		if rev == n.Name {
+			return rev
+		}
+	}
+	for _, e := range h.Entries {
+		if rev == e.Activation {
+			return shortRev(target)
+		}
+	}
+	if len(rev) >= 7 && isHexRev(rev) {
+		return shortRev(target)
+	}
+	return rev
+}
+
+func shortRev(s string) string {
+	if len(s) > 12 {
+		return s[:12]
+	}
+	return s
+}
+
+func isHexRev(s string) bool {
+	for _, r := range s {
+		if r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 var errUnknownHistoryVersion = errors.New("unknown version: restore a version from your own history")
@@ -328,7 +374,7 @@ func (s *server) handleShapeHistoryRestore(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "send {\"rev\": \"<version>\"}", http.StatusBadRequest)
 		return
 	}
-	res, err := s.restoreVersion(r.Context(), a, principal, home, h, in.Rev)
+	res, err := s.restoreVersion(r.Context(), a, principal, home, h, in.Rev, false)
 	if err != nil {
 		if errors.Is(err, errUnknownHistoryVersion) {
 			http.Error(w, err.Error(), http.StatusNotFound)
@@ -362,7 +408,7 @@ func (s *server) handleShapeHistoryUndo(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "nothing to undo: no previous version is recorded", http.StatusConflict)
 		return
 	}
-	res, err := s.restoreVersion(r.Context(), a, principal, home, h, state.LastKnownGood)
+	res, err := s.restoreVersion(r.Context(), a, principal, home, h, state.LastKnownGood, true)
 	if err != nil {
 		if errors.Is(err, errUnknownHistoryVersion) {
 			http.Error(w, err.Error(), http.StatusNotFound)
