@@ -312,3 +312,56 @@ func TestDiscoverRealShapeFixtures(t *testing.T) {
 	raw, _ := os.ReadFile(st.Path)
 	accountstest.AssertNoSecret(t, obs, string(b), string(raw))
 }
+
+// A completed `outpost status` is the login check for the active profile, so
+// discovery reports what it proved to the inventory without waiting for a
+// refresh — and an expired profile reports the transition instead.
+func TestDiscoverRecordsProvenProfiles(t *testing.T) {
+	store := accounts.Open(filepath.Join(t.TempDir(), "accounts.json"))
+	accounts.SetHookStore(store)
+	t.Cleanup(func() { accounts.SetHookStore(nil) })
+	a := &Adapter{ConfigDir: fixture(t), Exec: okExec, Now: func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }}
+	if _, err := a.Discover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	list, err := store.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 4 {
+		t.Fatalf("recorded %d accounts: %+v", len(list), list)
+	}
+	var expired, good int
+	for _, acc := range list {
+		if acc.Category != accounts.Cloudbox || acc.Provenance != Name || acc.Source != "outpost-profile" {
+			t.Fatalf("provenance: %+v", acc)
+		}
+		switch acc.ProviderAccountID {
+		case "https://two.example.com|bob":
+			expired++
+			if acc.Status != accounts.Error || acc.LastError != "credential_expired" {
+				t.Fatalf("expiry not recorded: %+v", acc)
+			}
+		default:
+			good++
+			if acc.Status != accounts.Resolved || acc.LastError != "" {
+				t.Fatalf("login not recorded: %+v", acc)
+			}
+			if len(acc.Connections) != 1 || !strings.HasPrefix(acc.Connections[0].CredentialRef, "profile:") {
+				t.Fatalf("connection: %+v", acc.Connections)
+			}
+		}
+	}
+	if expired != 1 || good != 3 {
+		t.Fatalf("expired=%d good=%d", expired, good)
+	}
+	// A repeated discovery is the same four accounts, not eight.
+	if _, err = a.Discover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if list, err = store.List(); err != nil || len(list) != 4 {
+		t.Fatalf("repeat discovery: %d %v", len(list), err)
+	}
+	raw, _ := os.ReadFile(store.Path)
+	accountstest.AssertNoSecret(t, string(raw))
+}

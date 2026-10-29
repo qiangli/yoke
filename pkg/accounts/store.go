@@ -67,9 +67,21 @@ func (s *Store) read() (document, error) {
 	}
 	return d, nil
 }
+
+// storeLockWait is how long an ordinary mutation waits for the inventory lock.
+// The observation hook passes a much shorter budget: it must never hold up the
+// operation that produced the fact.
+const storeLockWait = 30 * time.Second
+
 func (s *Store) mutate(fn func(*document) error) error {
-	if s.Path == "" {
+	return s.mutateWithin(storeLockWait, fn)
+}
+func (s *Store) mutateWithin(wait time.Duration, fn func(*document) error) error {
+	if s == nil || s.Path == "" {
 		return errors.New("accounts: home unavailable")
+	}
+	if wait <= 0 {
+		return errors.New("accounts: no time left to record")
 	}
 	dir := filepath.Dir(s.Path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -78,7 +90,7 @@ func (s *Store) mutate(fn func(*document) error) error {
 	if err := os.Chmod(dir, 0o700); err != nil {
 		return err
 	}
-	lock, err := lockfile.AcquireWithin(s.Path+".lock", 30*time.Second, lockfile.Holder{Name: "accounts", PID: os.Getpid(), Intent: "update account inventory", Since: time.Now()})
+	lock, err := lockfile.AcquireWithin(s.Path+".lock", wait, lockfile.Holder{Name: "accounts", PID: os.Getpid(), Intent: "update account inventory", Since: time.Now()})
 	if err != nil {
 		return fmt.Errorf("accounts: lock: %w", err)
 	}
@@ -128,6 +140,38 @@ func (s *Store) mutate(fn func(*document) error) error {
 	}
 	return os.Rename(f.Name(), s.Path)
 }
+
+// identityKey is the one place that decides when a record names a real
+// identity by itself: a host login proven by endpoint plus user, or a provider
+// account id. Manual records and adapter observations go through it alike, so
+// adding an account by hand and later observing the same identity converge on
+// one record instead of two.
+func identityKey(a Account) (string, bool) {
+	base := string(a.Category) + "\x00" + strings.ToLower(a.Provider) + "\x00"
+	if a.Category == HostLogin {
+		if a.Username != "" && len(a.Connections) > 0 && a.Connections[0].Endpoint != "" {
+			return base + "host\x00" + a.Connections[0].Endpoint + "\x00" + a.Username, true
+		}
+		return "", false
+	}
+	if a.ProviderAccountID != "" {
+		// A profile is a selectable identity for AWS, even if profiles share an account number.
+		if a.Category == AWS && len(a.Connections) > 0 && a.Connections[0].Profile != "" {
+			return base + "id\x00" + a.ProviderAccountID + "\x00" + a.Connections[0].Profile, true
+		}
+		return base + "id\x00" + a.ProviderAccountID, true
+	}
+	return "", false
+}
+
+// unresolvedKey names a record that proves no identity of its own. The adapter
+// is part of the key because one adapter's source key means nothing in
+// another's namespace. Both the discovery path and the observation hook build
+// it here: two spellings of this key would split one account into two records.
+func unresolvedKey(a Account, adapter, sourceKey string) string {
+	return string(a.Category) + "\x00" + strings.ToLower(a.Provider) + "\x00unresolved\x00" + adapter + "\x00" + sourceKey
+}
+
 func identity(adapter string, o Observation) (string, Status, error) {
 	a := o.Account
 	if err := validateAccount(a); err != nil {
@@ -136,22 +180,13 @@ func identity(adapter string, o Observation) (string, Status, error) {
 	if adapter == "" {
 		return "", "", errors.New("accounts: adapter required")
 	}
-	base := string(a.Category) + "\x00" + strings.ToLower(a.Provider) + "\x00"
-	if a.Category == HostLogin {
-		if a.Username != "" && len(a.Connections) > 0 && a.Connections[0].Endpoint != "" {
-			return base + "host\x00" + a.Connections[0].Endpoint + "\x00" + a.Username, Resolved, nil
-		}
-	} else if a.ProviderAccountID != "" {
-		// A profile is a selectable identity for AWS, even if profiles share an account number.
-		if a.Category == AWS && len(a.Connections) > 0 && a.Connections[0].Profile != "" {
-			return base + "id\x00" + a.ProviderAccountID + "\x00" + a.Connections[0].Profile, Resolved, nil
-		}
-		return base + "id\x00" + a.ProviderAccountID, Resolved, nil
+	if key, ok := identityKey(a); ok {
+		return key, Resolved, nil
 	}
 	if o.SourceKey == "" {
 		return "", "", errors.New("accounts: unresolved observation needs source key")
 	}
-	return base + "unresolved\x00" + adapter + "\x00" + o.SourceKey, Unresolved, nil
+	return unresolvedKey(a, adapter, o.SourceKey), Unresolved, nil
 }
 func localID(key string) string {
 	sum := sha256.Sum256([]byte(key))
@@ -241,7 +276,12 @@ func (s *Store) Add(a Account) (Account, error) {
 	}
 	var added Account
 	err := s.mutate(func(d *document) error {
-		key := "manual\x00" + strings.ToLower(a.Alias)
+		key, identifiable := identityKey(a)
+		if !identifiable {
+			// Nothing in the record names an identity an adapter could ever
+			// reach, so the alias is the only key available.
+			key = "manual\x00" + strings.ToLower(a.Alias)
+		}
 		for _, r := range d.Records {
 			if r.Key == key {
 				return errors.New("accounts: account already exists")
@@ -249,17 +289,51 @@ func (s *Store) Add(a Account) (Account, error) {
 		}
 		a.ID = localID(key)
 		if a.Status == "" {
+			// Adding by hand is not proof that a provider verified anything;
+			// only a fully specified host login is usable as entered.
 			a.Status = Unresolved
 			if a.Category == HostLogin && a.Username != "" && len(a.Connections) == 1 && a.Connections[0].Endpoint != "" && a.Connections[0].CredentialRef != "" {
 				a.Status = Resolved
 			}
 		}
 		a.Provenance = "manual"
-		added = a
-		d.Records = append(d.Records, record{Key: key, Observation: a})
+		r := record{Key: key}
+		if identifiable {
+			// An adapter observation of this identity replaces the whole
+			// observation, so manual metadata only survives as an override.
+			r.Override = manualOverride(a)
+			a.Alias = ""
+		}
+		r.Observation = a
+		added = effective(r)
+		d.Records = append(d.Records, r)
 		return checkAliases(d)
 	})
 	return added, err
+}
+
+// manualOverride lifts the hand-entered fields of an identifiable account into
+// the override layer. Everything an adapter can legitimately re-observe stays
+// in the observation and is free to change underneath.
+func manualOverride(a Account) Override {
+	o := Override{Alias: &a.Alias}
+	if a.Name != "" {
+		name := a.Name
+		o.Name = &name
+	}
+	if a.Region != "" {
+		region := a.Region
+		o.Region = &region
+	}
+	if a.Environment != "" {
+		env := a.Environment
+		o.Environment = &env
+	}
+	if len(a.Links.Satellites) > 0 || len(a.Links.Hosts) > 0 || len(a.Links.Models) > 0 || len(a.Links.Agents) > 0 {
+		links := a.Links
+		o.Links = &links
+	}
+	return o
 }
 func (s *Store) List() ([]Account, error) {
 	d, err := s.read()
