@@ -64,6 +64,12 @@ var subcommands = map[string]subcommand{
 			"unreachable answer names which of those is missing.",
 		},
 	},
+	"stop": {
+		Name: "stop", Args: "",
+		One:  "end the persistent probe browser session",
+		Mode: "probe",
+		Out:  "text naming the stopped endpoint; --json emits {success,mode,stopped,probe_url}",
+	},
 	"navigate": {
 		Name: "navigate", Args: "<url>",
 		One:  "load a page and return its title/url/content",

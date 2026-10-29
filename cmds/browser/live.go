@@ -108,10 +108,10 @@ func browserSetup(rc *tool.RunContext, args []string, asJSON, noOpen bool) int {
 		fmt.Fprintln(rc.Out, "reconnects by itself and the hub reloads it onto these files.")
 		return 0
 	case "probe":
-		fmt.Fprintln(rc.Out, "probe needs no setup — start Chrome with --remote-debugging-port=9222.")
+		fmt.Fprintln(rc.Out, "probe needs no setup — the first action starts a persistent headless browser; `browser --mode probe stop` ends it.")
 		return 0
 	case "solo":
-		fmt.Fprintln(rc.Out, "solo needs no setup — host Chrome is auto-detected.")
+		fmt.Fprintln(rc.Out, "solo needs no setup — Chrome, Chromium, or Edge is auto-detected; otherwise a pinned headless shell is provisioned.")
 		return 0
 	default:
 		fmt.Fprintf(rc.Err, "browser setup: unknown mode %q (live|probe|solo)\n", mode)

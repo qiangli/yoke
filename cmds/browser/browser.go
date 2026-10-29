@@ -31,10 +31,10 @@ var cmd = &tool.Tool{
 		"\n" +
 		"Modes (--mode) — how it gets a browser:\n" +
 		"  solo   (default) private headless Chrome, zero setup; `navigate URL` returns title/url/content — best for one-shot scrapes\n" +
-		"  probe  attach to a Chrome you started with --remote-debugging-port=9222 — persistent session\n" +
+		"  probe  zero-setup persistent headless session; auto-launches when the endpoint is absent\n" +
 		"  live   drive your real logged-in Chrome via `browser hub` + the MV3 extension (cookies/SSO intact)\n" +
 		"\n" +
-		"Subcommands: status navigate extract eval dispatch-event click type select wait-for-selector\n" +
+		"Subcommands: status stop navigate extract eval dispatch-event click type select wait-for-selector\n" +
 		"  screenshot cookies-get scroll keyboard-press back tabs fetch hub setup login\n" +
 		"Each has its OWN page: `browser <subcommand> --help` documents its operands,\n" +
 		"which modes implement it, and its output contract.\n" +
@@ -50,7 +50,9 @@ func init() {
 	guardask.Install()
 }
 
-const noBrowserMessage = "no browser: start Chrome with --remote-debugging-port=9222 or run `bashy browser login`"
+const noBrowserMessage = "no browser: bashy could not resolve, provision, or launch a Chromium-family browser"
+
+var newProbeSessionManager = probe.DefaultSessionManager
 
 // helpForSubcommand intercepts `browser <sub> --help` BEFORE the
 // shared flagset swallows --help and prints the tool-wide page. That
@@ -92,8 +94,8 @@ func run(rc *tool.RunContext, args []string) int {
 	mode := fs.String("mode", "solo", "browser mode: solo (zero-setup headless Chrome), probe, or live")
 	probeURL := fs.String("probe-url", probe.DefaultURL, "Chrome remote debugging URL for probe mode")
 	livePort := fs.Int("live-port", live.DefaultPort, "loopback port of the live-mode hub")
-	chromePath := fs.String("chrome-path", "", "Chrome/Chromium executable path for solo mode")
-	userDataDir := fs.String("user-data-dir", "", "Chrome user-data-dir for solo mode")
+	chromePath := fs.String("chrome-path", "", "Chrome/Chromium/Edge executable path (normally auto-detected or provisioned)")
+	userDataDir := fs.String("user-data-dir", "", "browser profile directory (probe defaults to a persistent bashy cache path)")
 	headed := fs.Bool("headed", false, "run solo Chrome headed instead of headless")
 	successURL := fs.String("success-url", "", "login completion URL substring")
 	tokenSelector := fs.String("token-selector", "", "CSS selector whose value/text is the login token")
@@ -145,6 +147,21 @@ func run(rc *tool.RunContext, args []string) int {
 	switch operands[0] {
 	case "status":
 		return browserStatus(rc, ctx, *mode, *probeURL, *livePort, soloCfg, *asJSON)
+	case "stop":
+		if *mode != "probe" {
+			return tool.UsageError(rc, cmd, "stop is available only in probe mode")
+		}
+		if len(operands) != 1 {
+			return tool.UsageError(rc, cmd, "stop takes no operands")
+		}
+		if err := probe.Stop(ctx, *probeURL); err != nil {
+			return printNoBrowser(rc, *asJSON, *mode, err)
+		}
+		if *asJSON {
+			return writeJSON(rc, map[string]any{"success": true, "mode": "probe", "stopped": true, "probe_url": *probeURL})
+		}
+		fmt.Fprintf(rc.Out, "stopped probe browser at %s\n", *probeURL)
+		return 0
 	case "hub":
 		return browserHub(rc, ctx, operands[1:], *asJSON)
 	case "setup":
@@ -363,19 +380,18 @@ func domainForURL(raw string) string {
 func clientForMode(ctx context.Context, mode, probeURL string, livePort int, soloCfg solo.Config) (browser.Client, error) {
 	switch mode {
 	case "", "probe":
-		c := probe.New(probeURL)
-		if !c.Available(ctx) {
-			return nil, fmt.Errorf("probe target %s not reachable", c.URL())
+		if _, err := newProbeSessionManager().EnsureRunning(ctx, probe.SessionConfig{
+			URL: probeURL, ChromePath: soloCfg.ChromePath, UserDataDir: soloCfg.UserDataDir,
+		}); err != nil {
+			return nil, err
 		}
+		c := probe.New(probeURL)
 		if err := c.EnsureReady(ctx); err != nil {
 			return nil, err
 		}
 		return c, nil
 	case "solo":
 		c := solo.New(soloCfg)
-		if !c.Available(ctx) {
-			return nil, fmt.Errorf("solo Chrome not found")
-		}
 		if err := c.EnsureReady(ctx); err != nil {
 			return nil, err
 		}
@@ -442,7 +458,7 @@ func browserStatus(rc *tool.RunContext, ctx context.Context, mode, probeURL stri
 		reachable := c.Available(ctx)
 		message := ""
 		if !reachable {
-			message = "no browser: Chrome or Chromium was not found for solo mode (pass --chrome-path)"
+			message = "no browser is installed or cached; the first browser action will provision Chrome Headless Shell"
 		}
 		if asJSON {
 			return writeJSON(rc, map[string]any{

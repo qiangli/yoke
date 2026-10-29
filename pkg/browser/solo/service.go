@@ -23,6 +23,7 @@ type Config struct {
 	ChromePath  string
 	Headed      bool
 	UserDataDir string
+	Resolver    *probe.Resolver
 }
 
 type Client struct {
@@ -46,13 +47,14 @@ func (c *Client) Available(ctx context.Context) bool {
 }
 
 func (c *Client) ResolveChromePath() string {
-	if c.cfg.ChromePath != "" {
-		if _, err := os.Stat(c.cfg.ChromePath); err == nil {
-			return c.cfg.ChromePath
-		}
-		return ""
+	return c.resolver().CachedPath(c.cfg.ChromePath)
+}
+
+func (c *Client) resolver() probe.Resolver {
+	if c.cfg.Resolver != nil {
+		return *c.cfg.Resolver
 	}
-	return probe.DetectChrome()
+	return probe.DefaultResolver()
 }
 
 func (c *Client) EnsureReady(ctx context.Context) error {
@@ -61,9 +63,9 @@ func (c *Client) EnsureReady(ctx context.Context) error {
 	if c.ctx != nil {
 		return nil
 	}
-	chrome := c.ResolveChromePath()
-	if chrome == "" {
-		return errors.New("solo: no Chrome or Chromium binary found on PATH or in standard locations")
+	chrome, err := c.resolver().Resolve(ctx, c.cfg.ChromePath)
+	if err != nil {
+		return fmt.Errorf("solo: resolve browser: %w", err)
 	}
 	userData := c.cfg.UserDataDir
 	if userData == "" {

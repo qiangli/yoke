@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/qiangli/coreutils/tool"
+	"github.com/qiangli/yoke/pkg/browser/probe"
 	"github.com/qiangli/yoke/pkg/browser/wire"
 )
 
@@ -30,7 +32,7 @@ func TestStatusWorksWithoutBrowser(t *testing.T) {
 	if code != 0 || errb != "" {
 		t.Fatalf("status code=%d stderr=%q", code, errb)
 	}
-	if !strings.Contains(out, "reachable=false") || !strings.Contains(out, "start Chrome") {
+	if !strings.Contains(out, "reachable=false") || !strings.Contains(out, noBrowserMessage) {
 		t.Fatalf("unexpected status output: %q", out)
 	}
 }
@@ -96,6 +98,15 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 func TestActionWithoutBrowserPrintsClearMessage(t *testing.T) {
+	old := newProbeSessionManager
+	newProbeSessionManager = func() probe.SessionManager {
+		return probe.SessionManager{
+			Available: func(context.Context, string) bool { return false },
+			Resolve:   func(context.Context, string) (string, error) { return "", errors.New("not installed") },
+			Launch:    probe.LaunchChrome,
+		}
+	}
+	t.Cleanup(func() { newProbeSessionManager = old })
 	_, errb, code := runTool(t, "--mode", "probe", "--probe-url", "http://127.0.0.1:1", "navigate", "https://example.com")
 	if code == 0 || !strings.Contains(errb, noBrowserMessage) {
 		t.Fatalf("action without browser = code=%d stderr=%q", code, errb)
