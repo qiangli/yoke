@@ -53,12 +53,26 @@ func RefreshOne(ctx context.Context, s *Store, reg *Registry, a Account) (Accoun
 	if err != nil {
 		return Account{}, failSnapshot()
 	}
-	if err := s.Observe(adapter.Name(), []Observation{observation}); err != nil {
-		return Account{}, err
-	}
 	items, err := materialize(adapter.Name(), []Observation{observation})
 	if err != nil || len(items) != 1 {
 		return Account{}, fail("invalid_observation", "adapter returned invalid account metadata")
+	}
+	adoptedManual := false
+	if _, identified := identityKey(a); a.Provenance == "manual" && !identified {
+		if _, proven := identityKey(observation.Account); proven {
+			adopted, aerr := s.Adopt(a.ID, adapter.Name(), observation)
+			if aerr != nil {
+				return Account{}, aerr
+			}
+			a.ID = adopted.ID
+			items[0] = adopted
+			adoptedManual = true
+		}
+	}
+	if !adoptedManual {
+		if err := s.Observe(adapter.Name(), []Observation{observation}); err != nil {
+			return Account{}, err
+		}
 	}
 	var resources []ResourceRef
 	if hasCapability(adapter, Resources) {

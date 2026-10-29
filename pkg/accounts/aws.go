@@ -17,6 +17,10 @@ type AWSAdapter struct {
 	ManagedAdapter
 	Connections []Connection
 	Client      func(context.Context, Connection, string) (*awsprovider.InventoryClient, error)
+	// Materializer resolves the profile: reference to a key pair; nil uses
+	// the real shared credentials file.
+	Materializer *Materializer
+	configure    func(*awsprovider.Config)
 }
 
 func NewAWSAdapter() *AWSAdapter {
@@ -67,11 +71,20 @@ func (a *AWSAdapter) verified(ctx context.Context, acct Account) (*awsprovider.I
 		client, e = a.Client(ctx, c, acct.Region)
 	} else {
 		var cfg awsprovider.Config
-		cfg.Credentials, e = awsauth.ResolveProfileKeys(c.Profile)
+		m := DefaultMaterializer()
+		if a.Materializer != nil {
+			m = *a.Materializer
+		}
+		var cred Credential
+		cred, e = m.Materialize(ctx, Selection{CredentialRef: c.CredentialRef, Profile: c.Profile}, AWS)
+		cfg.Credentials = cred.AWS
 		if e == nil {
 			cfg.Region = acct.Region
 			if cfg.Region == "" {
 				cfg.Region = awsprovider.RegionFromEnv(os.Environ())
+			}
+			if a.configure != nil {
+				a.configure(&cfg)
 			}
 			client, e = awsprovider.NewInventoryClient(cfg)
 		}

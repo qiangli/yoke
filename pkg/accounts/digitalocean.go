@@ -20,6 +20,10 @@ type DigitalOceanAdapter struct {
 	// DropletKeys supplies previously proven associations, keyed by credential
 	// reference then droplet ID. The API does not report installed SSH keys.
 	DropletKeys map[string]map[int][]string
+	// Materializer resolves secret: and env: references; nil uses the real
+	// vault and environment.
+	Materializer *Materializer
+	configure    func(*do.ClientConfig)
 }
 
 func NewDigitalOceanAdapter() *DigitalOceanAdapter {
@@ -40,13 +44,19 @@ func (a *DigitalOceanAdapter) client(ctx context.Context, c Connection) (*do.Cli
 		}
 		return v, nil
 	}
-	name, ok := strings.CutPrefix(c.CredentialRef, "env:")
-	if !ok {
-		return nil, ErrUnsupported
+	m := DefaultMaterializer()
+	if a.Materializer != nil {
+		m = *a.Materializer
 	}
-	// Either DigitalOcean spelling satisfies either reference — see
-	// doEnvAliases in materialize.go for why the two names exist.
-	v, e := do.NewClient(do.ClientConfig{Token: envCredential(os.Getenv, name)})
+	cred, e := m.Materialize(ctx, Selection{CredentialRef: c.CredentialRef}, DigitalOcean)
+	if e != nil || cred.Token == "" {
+		return nil, errCloudRead
+	}
+	cfg := do.ClientConfig{Token: cred.Token}
+	if a.configure != nil {
+		a.configure(&cfg)
+	}
+	v, e := do.NewClient(cfg)
 	if e != nil {
 		return nil, errCloudRead
 	}
