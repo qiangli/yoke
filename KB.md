@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [repo/page] Run llmgw gates from its nested module — WHEN a yoke gate names ./pkg/llmgw/..., the root Go module rejects that pattern because pkg/llmgw has its own go.mod. Run go test ./... (and go vet ./...) with cwd pkg/llmgw; keep the root cligw, broker, and fleet gates separate so the nested-module setup error cannot mask their results.  (kb:run-llmgw-gates-from-its-nested-module)
+- [repo/page] Account observation hook: where it can and cannot live — WHEN wiring an automatic account-collection hook (pkg/accounts) into a provider or budget path in yoke — pkg/provider is a stdlib-only nested module and pkg/llmbudget is imported BY accounts, so neither can call the hook directly pkg/accounts.ObserveSuccess cannot  (kb:account-observation-hook-where-it-can-and-cannot-live)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 
