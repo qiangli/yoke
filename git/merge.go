@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -248,6 +249,7 @@ type MergeOptions struct {
 	Ref      string // branch, tag, or commit to merge into HEAD
 	NoFF     bool   // record a merge commit even when fast-forward is possible
 	Message  string // merge-commit message override (NoFF only)
+	Context  context.Context
 }
 
 // Merge integrates opts.Ref into the current branch. Fast-forward
@@ -256,6 +258,10 @@ type MergeOptions struct {
 // 3-way merge via threeWayMerge; unreconcilable paths come back as a
 // *ConflictError with the repository left untouched.
 func Merge(opts MergeOptions) (*Result, error) {
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if opts.RepoPath == "" {
 		opts.RepoPath = "."
 	}
@@ -298,7 +304,7 @@ func Merge(opts MergeOptions) (*Result, error) {
 		// anything when paths can't be reconciled, so no separate
 		// --abort step is needed. A real merge always records a merge
 		// commit, so NoFF is implied here.
-		sig, err := commitSignature(r)
+		sig, err := commitSignatureWithContext(ctx, r)
 		if err != nil {
 			return nil, err
 		}
@@ -330,7 +336,7 @@ func Merge(opts MergeOptions) (*Result, error) {
 	if !st.IsClean() {
 		return nil, errors.New("merge --no-ff: working tree is not clean — commit or discard local changes first")
 	}
-	sig, err := commitSignature(r)
+	sig, err := commitSignatureWithContext(ctx, r)
 	if err != nil {
 		return nil, err
 	}
@@ -359,14 +365,50 @@ func Merge(opts MergeOptions) (*Result, error) {
 // (repo then global). Errors with a how-to-fix hint when absent —
 // callers use this to fail fast before mutating any ref.
 func commitSignature(r *gogit.Repository) (*object.Signature, error) {
-	// go-git's SystemScope is the widest view: system + global + repo-local,
-	// with repo-local taking precedence — real git's identity resolution.
-	// (LocalScope is the repo config ALONE.)
+	return commitSignatureWithContext(context.Background(), r)
+}
+
+func commitSignatureWithContext(ctx context.Context, r *gogit.Repository) (*object.Signature, error) {
+	overrides := ConfigOverridesFromContext(ctx)
+	nameOverride := ""
+	emailOverride := ""
+	hasName := false
+	hasEmail := false
+	if overrides != nil {
+		if v, ok := overrides["author.name"]; ok {
+			nameOverride = v
+			hasName = true
+		} else if v, ok := overrides["user.name"]; ok {
+			nameOverride = v
+			hasName = true
+		}
+		if v, ok := overrides["author.email"]; ok {
+			emailOverride = v
+			hasEmail = true
+		} else if v, ok := overrides["user.email"]; ok {
+			emailOverride = v
+			hasEmail = true
+		}
+	}
+
 	cfg, err := r.ConfigScoped(config.SystemScope)
-	if err != nil || cfg.User.Name == "" || cfg.User.Email == "" {
+	name := ""
+	email := ""
+	if hasName {
+		name = nameOverride
+	} else if err == nil && cfg.User.Name != "" {
+		name = cfg.User.Name
+	}
+	if hasEmail {
+		email = emailOverride
+	} else if err == nil && cfg.User.Email != "" {
+		email = cfg.User.Email
+	}
+
+	if name == "" || email == "" {
 		return nil, fmt.Errorf("user identity not configured — run %q and %q first", CLIName+" config user.name <name>", CLIName+" config user.email <email>")
 	}
-	return &object.Signature{Name: cfg.User.Name, Email: cfg.User.Email, When: time.Now()}, nil
+	return &object.Signature{Name: name, Email: email, When: time.Now()}, nil
 }
 
 func shortHash(h plumbing.Hash) string {

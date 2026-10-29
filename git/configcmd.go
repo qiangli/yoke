@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +12,47 @@ import (
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 )
+
+type configOverridesKey struct{}
+
+// WithConfigOverrides returns a context carrying git config key=value overrides
+// specified via -c arguments.
+func WithConfigOverrides(ctx context.Context, overrides map[string]string) context.Context {
+	if len(overrides) == 0 {
+		return ctx
+	}
+	existing := ConfigOverridesFromContext(ctx)
+	merged := make(map[string]string, len(existing)+len(overrides))
+	for k, v := range existing {
+		merged[k] = v
+	}
+	for k, v := range overrides {
+		merged[k] = v
+	}
+	return context.WithValue(ctx, configOverridesKey{}, merged)
+}
+
+// ConfigOverridesFromContext retrieves git config overrides from ctx.
+func ConfigOverridesFromContext(ctx context.Context) map[string]string {
+	if ctx == nil {
+		return nil
+	}
+	if v, ok := ctx.Value(configOverridesKey{}).(map[string]string); ok {
+		return v
+	}
+	return nil
+}
+
+// ConfigGetWithContext reads a config key consulting config overrides in ctx first,
+// then repo-local, then global.
+func ConfigGetWithContext(ctx context.Context, repoPath, key string) (value string, found bool, err error) {
+	if overrides := ConfigOverridesFromContext(ctx); overrides != nil {
+		if v, ok := overrides[key]; ok {
+			return v, true, nil
+		}
+	}
+	return ConfigGet(repoPath, key)
+}
 
 // splitConfigKey parses "section.name" or "section.subsection.name"
 // (subsection may itself contain dots, e.g. branch.feat.x.merge —

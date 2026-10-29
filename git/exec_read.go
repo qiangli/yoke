@@ -63,10 +63,59 @@ func withAlternates(r *gogit.Repository) *gogit.Repository {
 	return r
 }
 
-// resolveAuthor reads the git user.name/user.email config from the repository.
-// Returns nil if the config provides valid author info (letting go-git resolve it),
-// or a default signature if no config is available.
-func resolveAuthor(repo *gogit.Repository) *object.Signature {
+// resolveAuthor reads the git user.name/user.email config from context overrides,
+// then repo/global config, or provides a default signature if no config is available.
+func resolveAuthor(ctx context.Context, repo *gogit.Repository) *object.Signature {
+	overrides := ConfigOverridesFromContext(ctx)
+	nameOverride := ""
+	emailOverride := ""
+	hasName := false
+	hasEmail := false
+
+	if overrides != nil {
+		if v, ok := overrides["author.name"]; ok {
+			nameOverride = v
+			hasName = true
+		} else if v, ok := overrides["user.name"]; ok {
+			nameOverride = v
+			hasName = true
+		}
+		if v, ok := overrides["author.email"]; ok {
+			emailOverride = v
+			hasEmail = true
+		} else if v, ok := overrides["user.email"]; ok {
+			emailOverride = v
+			hasEmail = true
+		}
+	}
+
+	if hasName || hasEmail {
+		name := nameOverride
+		email := emailOverride
+		if !hasName || !hasEmail {
+			cfg, _ := repo.ConfigScoped(config.SystemScope)
+			if !hasName {
+				if cfg != nil && cfg.User.Name != "" {
+					name = cfg.User.Name
+				} else {
+					name = "ycode"
+				}
+			}
+			if !hasEmail {
+				if cfg != nil && cfg.User.Email != "" {
+					email = cfg.User.Email
+				} else {
+					email = "ycode@localhost"
+				}
+			}
+		}
+		return &object.Signature{
+			Name:  name,
+			Email: email,
+			When:  time.Now(),
+		}
+	}
+
 	cfg, err := repo.ConfigScoped(config.GlobalScope)
 	if err == nil && cfg.User.Name != "" && cfg.User.Email != "" {
 		return nil // go-git will read from config
@@ -75,6 +124,37 @@ func resolveAuthor(repo *gogit.Repository) *object.Signature {
 	return &object.Signature{
 		Name:  "ycode",
 		Email: "ycode@localhost",
+		When:  time.Now(),
+	}
+}
+
+func resolveCommitter(ctx context.Context, repo *gogit.Repository) *object.Signature {
+	overrides := ConfigOverridesFromContext(ctx)
+	if overrides == nil {
+		return nil
+	}
+	cname, hasName := overrides["committer.name"]
+	cemail, hasEmail := overrides["committer.email"]
+	if !hasName && !hasEmail {
+		return nil
+	}
+	if !hasName {
+		if sig := resolveAuthor(ctx, repo); sig != nil {
+			cname = sig.Name
+		} else {
+			cname = "ycode"
+		}
+	}
+	if !hasEmail {
+		if sig := resolveAuthor(ctx, repo); sig != nil {
+			cemail = sig.Email
+		} else {
+			cemail = "ycode@localhost"
+		}
+	}
+	return &object.Signature{
+		Name:  cname,
+		Email: cemail,
 		When:  time.Now(),
 	}
 }
@@ -398,6 +478,10 @@ func nativeLog(_ context.Context, dir string, args []string) (*ExecResult, error
 	oneline := false
 	formatStr := ""
 	var sinceTime, untilTime *time.Time
+	logOpts := &gogit.LogOptions{
+		Order: gogit.LogOrderCommitterTime,
+	}
+
 	for i := 0; i < len(args); i++ {
 		switch {
 		case args[i] == "--oneline":
@@ -435,13 +519,25 @@ func nativeLog(_ context.Context, dir string, args []string) (*ExecResult, error
 		case strings.HasPrefix(args[i], "--author="):
 			// Author filter — fall through to host git for now
 			return nil, ErrUnsupported
+		case args[i] == "--":
+			// End of flags. If path follows, fall through to ErrUnsupported
+			if i+1 < len(args) {
+				return nil, ErrUnsupported
+			}
+		case !strings.HasPrefix(args[i], "-"):
+			// Revision argument (e.g. HEAD, HEAD~1, branch name, sha)
+			rev := args[i]
+			fromHash, herr := repo.ResolveRevision(plumbing.Revision(rev))
+			if herr != nil {
+				return nil, ErrUnsupported
+			}
+			logOpts.From = *fromHash
 		default:
 			// Unsupported flags (e.g., path specs)
 			return nil, ErrUnsupported
 		}
 	}
 
-	logOpts := &gogit.LogOptions{}
 	if sinceTime != nil {
 		logOpts.Since = sinceTime
 	}
@@ -450,6 +546,16 @@ func nativeLog(_ context.Context, dir string, args []string) (*ExecResult, error
 	}
 	iter, err := repo.Log(logOpts)
 	if err != nil {
+		if errors.Is(err, plumbing.ErrReferenceNotFound) {
+			branch := "main"
+			if ref, rerr := repo.Reference(plumbing.HEAD, false); rerr == nil && ref.Target().IsBranch() {
+				branch = ref.Target().Short()
+			}
+			return &ExecResult{
+				Stderr:   fmt.Sprintf("fatal: your current branch '%s' does not have any commits yet\n", branch),
+				ExitCode: 128,
+			}, nil
+		}
 		return nil, ErrUnsupported
 	}
 
@@ -462,7 +568,7 @@ func nativeLog(_ context.Context, dir string, args []string) (*ExecResult, error
 			return fmt.Errorf("stop")
 		}
 		count++
-		if c.NumParents() > 1 {
+		if c.NumParents() > 1 && !oneline && formatStr == "" {
 			// Past a merge host git orders by commit date with its own
 			// tie rules (and the default format adds a "Merge:" line);
 			// go-git walks depth-first. Decline rather than reorder.
@@ -470,12 +576,16 @@ func nativeLog(_ context.Context, dir string, args []string) (*ExecResult, error
 		}
 
 		if oneline {
-			if abbr == nil {
-				if abbr, abbrErr = newAbbreviator(repo); abbrErr != nil {
-					return ErrUnsupported
-				}
+			hashStr := ""
+			if abbr == nil && abbrErr == nil {
+				abbr, abbrErr = newAbbreviator(repo)
 			}
-			b.WriteString(abbr.abbrev(c.Hash, 0))
+			if abbr != nil {
+				hashStr = abbr.abbrev(c.Hash, 0)
+			} else {
+				hashStr = c.Hash.String()[:7]
+			}
+			b.WriteString(hashStr)
 			b.WriteByte(' ')
 			// First line of commit message
 			msg := strings.SplitN(c.Message, "\n", 2)[0]
@@ -918,7 +1028,7 @@ func walkAncestors(repo *gogit.Repository, from plumbing.Hash, visit func(*objec
 	return nil
 }
 
-func nativeConfig(_ context.Context, dir string, args []string) (*ExecResult, error) {
+func nativeConfig(ctx context.Context, dir string, args []string) (*ExecResult, error) {
 	if len(args) == 0 {
 		return nil, ErrUnsupported
 	}
@@ -946,30 +1056,14 @@ func nativeConfig(_ context.Context, dir string, args []string) (*ExecResult, er
 		return nil, ErrUnsupported
 	}
 
-	repo, err := openRepo(dir)
+	val, found, err := ConfigGetWithContext(ctx, dir, key)
 	if err != nil {
 		return nil, ErrUnsupported
 	}
-
-	cfg, err := repo.ConfigScoped(config.GlobalScope)
-	if err != nil {
-		return nil, ErrUnsupported
+	if !found {
+		return &ExecResult{ExitCode: 1}, nil
 	}
-
-	switch key {
-	case "user.name":
-		if cfg.User.Name == "" {
-			return &ExecResult{ExitCode: 1}, nil
-		}
-		return &ExecResult{Stdout: cfg.User.Name + "\n"}, nil
-	case "user.email":
-		if cfg.User.Email == "" {
-			return &ExecResult{ExitCode: 1}, nil
-		}
-		return &ExecResult{Stdout: cfg.User.Email + "\n"}, nil
-	default:
-		return nil, ErrUnsupported
-	}
+	return &ExecResult{Stdout: val + "\n"}, nil
 }
 
 func nativeAdd(_ context.Context, dir string, args []string) (*ExecResult, error) {
@@ -1029,24 +1123,69 @@ func nativeAdd(_ context.Context, dir string, args []string) (*ExecResult, error
 	return staged()
 }
 
-func nativeCommit(_ context.Context, dir string, args []string) (*ExecResult, error) {
-	// Extract -m message
+func nativeCommit(ctx context.Context, dir string, args []string) (*ExecResult, error) {
 	msg := ""
 	amend := false
 	quiet := false
+	all := false
+
 	for i := 0; i < len(args); i++ {
-		if args[i] == "-m" && i+1 < len(args) {
+		arg := args[i]
+		switch {
+		case arg == "-m":
+			if i+1 >= len(args) {
+				return nil, ErrUnsupported
+			}
 			i++
 			msg = args[i]
-		} else if strings.HasPrefix(args[i], "-m") {
-			msg = args[i][2:]
-		} else if args[i] == "--amend" {
-			amend = true
-		} else if args[i] == "-q" {
+		case strings.HasPrefix(arg, "-m"):
+			msg = arg[2:]
+		case arg == "--message":
+			if i+1 >= len(args) {
+				return nil, ErrUnsupported
+			}
+			i++
+			msg = args[i]
+		case strings.HasPrefix(arg, "--message="):
+			msg = strings.TrimPrefix(arg, "--message=")
+		case arg == "-q" || arg == "--quiet":
 			quiet = true
-		} else if args[i] == "--allow-empty" || args[i] == "--no-verify" {
+		case arg == "-a" || arg == "--all":
+			all = true
+		case arg == "--amend":
+			amend = true
+		case arg == "--allow-empty" || arg == "--no-verify":
 			// Accepted flags, no-op
-		} else {
+		case strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "--") && len(arg) > 1:
+			// Clustered short flags, e.g. -qm, -am, -qam, -qa, etc.
+			matched := true
+			for j := 1; j < len(arg); j++ {
+				switch arg[j] {
+				case 'q':
+					quiet = true
+				case 'a':
+					all = true
+				case 'm':
+					if j+1 < len(arg) {
+						msg = arg[j+1:]
+					} else if i+1 < len(args) {
+						i++
+						msg = args[i]
+					} else {
+						return nil, ErrUnsupported
+					}
+					j = len(arg) // consumed remainder
+				default:
+					matched = false
+				}
+				if !matched {
+					break
+				}
+			}
+			if !matched {
+				return nil, ErrUnsupported
+			}
+		default:
 			return nil, ErrUnsupported
 		}
 	}
@@ -1077,11 +1216,37 @@ func nativeCommit(_ context.Context, dir string, args []string) (*ExecResult, er
 		return nil, ErrUnsupported
 	}
 
-	opts := &gogit.CommitOptions{Amend: amend}
-	// Provide an explicit author when git config is not available (e.g. in containers).
-	// Try repo-level config first, then fall back to a default signature.
-	if sig := resolveAuthor(repo); sig != nil {
+	opts := &gogit.CommitOptions{Amend: amend, All: all}
+	if mode := coreAutoCRLF(repo); all && (mode == "true" || mode == "input" || !coreFileMode(repo)) {
+		st, err := worktreeStatus(wt)
+		if err != nil {
+			return nil, ErrUnsupported
+		}
+		before, beforeMode := indexSnapshot(repo), indexModes(repo)
+		for path, fs := range st {
+			switch fs.Worktree {
+			case gogit.Modified:
+				if _, err := wt.Add(path); err != nil {
+					return nil, ErrUnsupported
+				}
+			case gogit.Deleted:
+				if _, err := wt.Remove(path); err != nil {
+					return nil, ErrUnsupported
+				}
+			}
+		}
+		if err := finishAdd(repo, wt.Filesystem.Root(), before, beforeMode); err != nil {
+			return nil, ErrUnsupported
+		}
+		opts.All = false
+	}
+
+	// Provide an explicit author when git config is not available or overridden via -c.
+	if sig := resolveAuthor(ctx, repo); sig != nil {
 		opts.Author = sig
+	}
+	if sig := resolveCommitter(ctx, repo); sig != nil {
+		opts.Committer = sig
 	}
 
 	hash, err := wt.Commit(msg, opts)
@@ -2022,7 +2187,7 @@ func nativeShow(_ context.Context, dir string, args []string) (*ExecResult, erro
 	return &ExecResult{Stdout: b.String()}, nil
 }
 
-func nativeMerge(_ context.Context, dir string, args []string) (*ExecResult, error) {
+func nativeMerge(ctx context.Context, dir string, args []string) (*ExecResult, error) {
 	if len(args) == 0 {
 		return nil, ErrUnsupported
 	}
@@ -2066,7 +2231,7 @@ func nativeMerge(_ context.Context, dir string, args []string) (*ExecResult, err
 	// and real diverged 3-way merge all share that one code path. A
 	// conflict comes back as *ConflictError, which we render git-style
 	// with exit 1 and no mutation (the all-or-nothing contract).
-	res, err := Merge(MergeOptions{RepoPath: dir, Ref: targetBranch, NoFF: noFF})
+	res, err := Merge(MergeOptions{RepoPath: dir, Ref: targetBranch, NoFF: noFF, Context: ctx})
 	if err != nil {
 		var ce *ConflictError
 		if errors.As(err, &ce) {

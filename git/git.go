@@ -193,7 +193,10 @@ func cloneResult(r *gogit.Repository, path string) (*Result, error) {
 
 // InitOptions configures an Init call.
 type InitOptions struct {
-	Path string
+	Path          string
+	Quiet         bool
+	Bare          bool
+	InitialBranch string
 }
 
 // Init creates an empty repository at Path (or cwd when Path is empty).
@@ -201,12 +204,48 @@ func Init(opts InitOptions) (*Result, error) {
 	if opts.Path == "" {
 		opts.Path = "."
 	}
-	if _, err := gogit.PlainInit(opts.Path, false); err != nil {
+	if err := os.MkdirAll(opts.Path, 0o755); err != nil {
 		return nil, fmt.Errorf("init failed: %w", err)
+	}
+	absPath, err := filepath.Abs(opts.Path)
+	if err != nil {
+		absPath = opts.Path
+	}
+	reinit := false
+	var initErr error
+	if opts.InitialBranch != "" || opts.Bare {
+		initOpts := &gogit.PlainInitOptions{
+			Bare: opts.Bare,
+			InitOptions: gogit.InitOptions{
+				DefaultBranch: plumbing.NewBranchReferenceName(opts.InitialBranch),
+			},
+		}
+		_, initErr = gogit.PlainInitWithOptions(opts.Path, initOpts)
+	} else {
+		_, initErr = gogit.PlainInit(opts.Path, opts.Bare)
+	}
+	if initErr != nil {
+		if errors.Is(initErr, gogit.ErrRepositoryAlreadyExists) {
+			reinit = true
+		} else {
+			return nil, fmt.Errorf("init failed: %w", initErr)
+		}
+	}
+	dotGit := "/.git/"
+	if opts.Bare {
+		dotGit = "/"
+	}
+	msg := ""
+	if !opts.Quiet {
+		verb := "Initialized empty"
+		if reinit {
+			verb = "Reinitialized existing"
+		}
+		msg = fmt.Sprintf("%s Git repository in %s%s", verb, filepath.ToSlash(absPath), dotGit)
 	}
 	return &Result{
 		Success: true,
-		Message: fmt.Sprintf("Initialized empty git repository in %s/.git/", opts.Path),
+		Message: msg,
 	}, nil
 }
 

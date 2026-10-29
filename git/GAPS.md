@@ -40,6 +40,16 @@ tracks the OPEN gaps**, prioritized by consumer-workflow impact.
       never touched, embedded repos skipped with a note, bare clean
       fatals 128, single-dash bundles). Proven by
       `TestNativeClean_DryRunAndForce`.
+- [x] **`init [-q|--quiet] [--bare] [-b <branch>] [<dir>]`** — repo initialization in Exec. **HIGH** —
+      zero-setup agent initialization on hosts without host git.
+      CLOSED 2026-10-29 (sprint 531, #2939): `nativeInit` in `exec.go`,
+      InitOptions.Quiet in `git.go`. Proven by `TestNativeAgentWorkflow_FreshRepo`
+      and `TestNativeInit_Variants`.
+- [x] **`-c <name>=<value>` global config overrides** in Exec. **HIGH** —
+      transient configuration without mutating on-disk git config.
+      CLOSED 2026-10-29 (sprint 531, #2939): `Exec` leading flag parser in `exec.go`,
+      `WithConfigOverrides` / `ConfigOverridesFromContext` in `configcmd.go`,
+      author/committer signature resolution in `exec_read.go`.
 - [ ] `bisect`, `reflog`, `describe`, `submodule`, `gc`, `prune`, `fsck`,
       `verify-tag`, `mktag`, `pack-refs`, `index-pack`, `verify-pack` — **LOW**.
 

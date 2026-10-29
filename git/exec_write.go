@@ -249,7 +249,7 @@ func nativeCherryPick(_ context.Context, dir string, args []string) (*ExecResult
 // all-or-nothing contract shared with cherry-pick. Sequencer flags
 // (--continue/--abort/--skip), -m (merges), and multi-commit reverts stay
 // loud ErrUnsupported.
-func nativeRevert(_ context.Context, dir string, args []string) (*ExecResult, error) {
+func nativeRevert(ctx context.Context, dir string, args []string) (*ExecResult, error) {
 	noCommit := false
 	var positionals []string
 	for _, arg := range args {
@@ -318,7 +318,7 @@ func nativeRevert(_ context.Context, dir string, args []string) (*ExecResult, er
 	subject, _, _ := strings.Cut(strings.TrimSpace(commit.Message), "\n")
 	msg := fmt.Sprintf("Revert %q\n\nThis reverts commit %s.\n", subject, commit.Hash.String())
 	copts := &gogit.CommitOptions{}
-	if sig := resolveAuthor(repo); sig != nil {
+	if sig := resolveAuthor(ctx, repo); sig != nil {
 		copts.Author = sig
 	}
 	newHash, err := wt.Commit(msg, copts)

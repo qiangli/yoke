@@ -47,6 +47,7 @@ var execHandlers = map[string]execFunc{
 	"remote":       nativeRemote,
 	"show":         nativeShow,
 	// local writes
+	"init":     nativeInit,
 	"add":      nativeAdd,
 	"clean":    nativeClean,
 	"commit":   nativeCommit,
@@ -98,8 +99,66 @@ func ExecCommands() []string {
 // Exec runs a git command argv-style: args[0] is the subcommand, the
 // rest its arguments, dir the working directory. Returns ErrUnsupported
 // when the subcommand (or a flag combination inside it) is not
-// implemented natively.
+// implemented natively. Global options preceding the subcommand
+// (-c key=value, -C dir, --no-pager, …) are parsed and applied.
 func Exec(ctx context.Context, dir string, args []string) (*ExecResult, error) {
+	var overrides map[string]string
+	i := 0
+	for i < len(args) {
+		a := args[i]
+		if a == "-c" {
+			if i+1 >= len(args) {
+				return &ExecResult{Stderr: "error: -c requires a string of the form 'name=value'\n", ExitCode: 128}, nil
+			}
+			eq := strings.IndexByte(args[i+1], '=')
+			if eq < 0 {
+				return &ExecResult{Stderr: "error: -c requires a string of the form 'name=value'\n", ExitCode: 128}, nil
+			}
+			if overrides == nil {
+				overrides = make(map[string]string)
+			}
+			overrides[args[i+1][:eq]] = args[i+1][eq+1:]
+			i += 2
+			continue
+		}
+		if strings.HasPrefix(a, "-c") && len(a) > 2 {
+			rest := a[2:]
+			eq := strings.IndexByte(rest, '=')
+			if eq < 0 {
+				return &ExecResult{Stderr: "error: -c requires a string of the form 'name=value'\n", ExitCode: 128}, nil
+			}
+			if overrides == nil {
+				overrides = make(map[string]string)
+			}
+			overrides[rest[:eq]] = rest[eq+1:]
+			i++
+			continue
+		}
+		if a == "-C" {
+			if i+1 >= len(args) {
+				return &ExecResult{Stderr: "error: -C requires a directory\n", ExitCode: 128}, nil
+			}
+			cdir := args[i+1]
+			if filepath.IsAbs(cdir) {
+				dir = cdir
+			} else if dir != "" {
+				dir = filepath.Join(dir, cdir)
+			} else {
+				dir = cdir
+			}
+			i += 2
+			continue
+		}
+		if a == "--no-pager" || a == "-P" || a == "--paginate" || a == "-p" || a == "--no-optional-locks" || a == "--no-advice" {
+			i++
+			continue
+		}
+		break
+	}
+	args = args[i:]
+	if len(overrides) > 0 {
+		ctx = WithConfigOverrides(ctx, overrides)
+	}
 	if len(args) == 0 {
 		return &ExecResult{Stderr: "usage: " + CLIName + " <subcommand> [args...]\n", ExitCode: 2}, nil
 	}
@@ -108,6 +167,64 @@ func Exec(ctx context.Context, dir string, args []string) (*ExecResult, error) {
 		return nil, ErrUnsupported
 	}
 	return h(ctx, dir, args[1:])
+}
+
+// nativeInit implements `git init [-q | --quiet] [--bare] [-b <branch> | --initial-branch=<branch>] [directory]`.
+func nativeInit(_ context.Context, dir string, args []string) (*ExecResult, error) {
+	quiet := false
+	bare := false
+	initialBranch := ""
+	var positional []string
+
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "-q" || a == "--quiet":
+			quiet = true
+		case a == "--bare":
+			bare = true
+		case (a == "-b" || a == "--initial-branch") && i+1 < len(args):
+			i++
+			initialBranch = args[i]
+		case strings.HasPrefix(a, "--initial-branch="):
+			initialBranch = strings.TrimPrefix(a, "--initial-branch=")
+		case strings.HasPrefix(a, "-"):
+			return nil, ErrUnsupported
+		default:
+			positional = append(positional, a)
+		}
+	}
+
+	if len(positional) > 1 {
+		return nil, ErrUnsupported
+	}
+
+	target := dir
+	if len(positional) == 1 {
+		target = positional[0]
+		if !filepath.IsAbs(target) {
+			if dir != "" {
+				target = filepath.Join(dir, target)
+			}
+		}
+	} else if target == "" {
+		target = "."
+	}
+
+	res, err := Init(InitOptions{
+		Path:          target,
+		Quiet:         quiet,
+		Bare:          bare,
+		InitialBranch: initialBranch,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if quiet {
+		return &ExecResult{Stdout: ""}, nil
+	}
+	return &ExecResult{Stdout: res.Message + "\n"}, nil
 }
 
 // nativePull delegates to the typed Pull (fetch + fast-forward with
