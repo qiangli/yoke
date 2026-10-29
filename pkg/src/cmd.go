@@ -26,6 +26,16 @@ func newSrcCmd() *cobra.Command {
                    show branch pins and the pristine|modified|modified-protected state
   src diff <repo> [--base pristine|local]
                    diff the base tip to HEAD
+  src diff <app> <a> <b> [--user P]
+                   diff one version to another (commits, labels, or base)
+  src history <app> [--user P] [--json]
+                   list the principal's versions, labels, and review copies
+  src preview <app> <rev>
+                   check a version out in an isolated workspace
+  src name <app> <rev> <label> [--user P]
+                   pin a label to a version
+  src restore <app> <rev> [--user P]
+                   return to a version through a new gated commit
   src log [repo]   show recent commits
   src pr open <repo> <branch> --title T [--test CMD]
   src pr show <id> | src pr list [--repo R] | src pr merge <id> | src pr close <id>
@@ -54,6 +64,10 @@ func newSrcCmd() *cobra.Command {
 	cmd.AddCommand(newPatchCmd())
 	cmd.AddCommand(newUpgradeCmd())
 	cmd.AddCommand(newActivateCmd())
+	cmd.AddCommand(newHistoryCmd())
+	cmd.AddCommand(newPreviewCmd())
+	cmd.AddCommand(newNameCmd())
+	cmd.AddCommand(newRestoreCmd())
 	cmd.AddCommand(newRevertCmd())
 	cmd.AddCommand(prune.NewNounCommand(Pruner{}))
 	return cmd
