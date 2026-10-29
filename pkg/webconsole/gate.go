@@ -103,6 +103,7 @@ func (s *server) consoleGate(next http.Handler) http.Handler {
 		if cloudOwnerVerified(r, s.cloudApp()) {
 			r = markHostBridge(r, bridgeCloudOwner)
 		}
+		r = withPrincipal(r, cloudPrincipal(r))
 		next.ServeHTTP(w, r)
 	}))
 
@@ -129,21 +130,28 @@ func (s *server) consoleGate(next http.Handler) http.Handler {
 					// that minted it. It is checked after the cookie, never
 					// instead of it: a scope can only remove reach.
 					if _, deviceID, isDevice := splitDeviceSubject(subject); isDevice {
-						if !s.deviceAdmits(w, r, deviceID) {
+						d, ok := s.deviceAdmits(w, r, deviceID)
+						if !ok {
 							return
 						}
 						// deviceAdmits has just re-checked liveness, expiry, the
 						// operator grant and that this path is in the device's scope.
-						next.ServeHTTP(w, markHostBridge(r, bridgeDevice))
+						r = markHostBridge(r, bridgeDevice)
+						r = withPrincipal(r, devicePrincipal(d.Principal))
+						next.ServeHTTP(w, r)
 						return
 					}
-					next.ServeHTTP(w, markHostBridge(r, bridgeOperator))
+					r = markHostBridge(r, bridgeOperator)
+					r = withPrincipal(r, osPrincipal(subject))
+					next.ServeHTTP(w, r)
 					return
 				}
 			}
 		}
 		if !s.requireLogin && coopauth.IsLoopbackAddr(r.RemoteAddr) {
-			next.ServeHTTP(w, markHostBridge(r, bridgeOperator))
+			r = markHostBridge(r, bridgeOperator)
+			r = withPrincipal(r, osPrincipal(currentOSUser()))
+			next.ServeHTTP(w, r)
 			return
 		}
 		s.denied(w, r)
@@ -177,24 +185,24 @@ func passthrough(h http.Handler) http.Handler { return h }
 //   - the device was revoked, expired, or its operator grant ended
 //   - the panel is outside the device's scope
 //   - the pairing store is unreadable, in which case we FAIL CLOSED
-func (s *server) deviceAdmits(w http.ResponseWriter, r *http.Request, deviceID string) bool {
+func (s *server) deviceAdmits(w http.ResponseWriter, r *http.Request, deviceID string) (device, bool) {
 	if s.pairing == nil {
 		// A device cookie exists but this console serves no pairing state.
 		// Nothing can vouch for it, so nothing does.
 		s.clearSession(w, r)
 		http.Error(w, "this device pairing is no longer recognised; scan a fresh code from `bashy app pair`", http.StatusForbidden)
-		return false
+		return device{}, false
 	}
 	st, err := s.pairing.load()
 	if err != nil {
 		http.Error(w, "pairing state is unreadable; refusing rather than guessing", http.StatusServiceUnavailable)
-		return false
+		return device{}, false
 	}
 	d, live := st.findDevice(deviceID, time.Now())
 	if !live || d.Peer != nil {
 		s.clearSession(w, r)
 		http.Error(w, "this device pairing has ended (revoked or expired); scan a fresh code from `bashy app pair`", http.StatusForbidden)
-		return false
+		return device{}, false
 	}
 	if !s.scopeAllows(d.Scope, r.URL.Path) {
 		seg := scopeSegment(r.URL.Path)
@@ -209,10 +217,10 @@ func (s *server) deviceAdmits(w http.ResponseWriter, r *http.Request, deviceID s
 		http.Error(w, fmt.Sprintf(
 			"this device is paired for %s and %q is not in that scope; re-pair with: bashy app pair --allow %s",
 			strings.Join(d.Scope, ", "), name, name), http.StatusForbidden)
-		return false
+		return device{}, false
 	}
 	s.pairing.touch(deviceID)
-	return true
+	return d, true
 }
 
 // clearSession removes a cookie whose backing device is gone, so the phone

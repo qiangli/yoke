@@ -197,6 +197,16 @@ func (st *pairState) findPeerTicket(code string, now time.Time) (*ticket, error)
 // the operator acting, so — exactly as issueTicket does for a QR — it opens an
 // operator grant when none is live and extends it to the device's lifetime.
 func (s *pairStore) approvePeer(code string, scope []string, ttl time.Duration) (device, error) {
+	return s.approvePeerAs(code, scope, ttl, "")
+}
+
+func (s *pairStore) approvePeerAs(code string, scope []string, ttl time.Duration, principal string) (device, error) {
+	principal = strings.TrimSpace(principal)
+	if principal != "" {
+		if err := validatePrincipalName(principal); err != nil {
+			return device{}, err
+		}
+	}
 	scope, err := normalizePeerScope(scope)
 	if err != nil {
 		return device{}, err
@@ -229,7 +239,7 @@ func (s *pairStore) approvePeer(code string, scope []string, ttl time.Duration) 
 		p := *t.Peer
 		out = device{
 			ID: id, Name: p.Channel + ":" + p.Sender, Grant: st.Grant.ID,
-			Scope: scope, Issued: now, Expires: exp, Peer: &p,
+			Scope: scope, Issued: now, Expires: exp, Peer: &p, Principal: principal,
 		}
 		st.Devices = append(st.Devices, out)
 		t.Grant, t.Scope, t.TTL = st.Grant.ID, scope, ttl.String()
@@ -341,8 +351,9 @@ func (peerPairing) Revoke(channel, sender string) (int, error) {
 
 func newPairApproveCmd() *cobra.Command {
 	var (
-		allow []string
-		ttl   time.Duration
+		allow     []string
+		ttl       time.Duration
+		principal string
 	)
 	cmd := &cobra.Command{
 		Use:   "approve CODE",
@@ -361,18 +372,22 @@ func newPairApproveCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			d, err := store.approvePeer(args[0], allow, ttl)
+			d, err := store.approvePeerAs(args[0], allow, ttl, principal)
 			if err != nil {
 				return fmt.Errorf("apps pair approve: %w", err)
 			}
 			fmt.Fprintf(c.OutOrStdout(), "paired %s on channel %s as %s\n  scope:  %s\n  until:  %s\n  revoke: bashy app revoke %s\n",
 				d.Peer.Sender, d.Peer.Channel, d.ID, strings.Join(d.Scope, ", "),
 				d.Expires.Local().Format(time.RFC1123), d.ID)
+			if d.Principal != "" {
+				fmt.Fprintf(c.OutOrStdout(), "  principal: %s\n", d.Principal)
+			}
 			return nil
 		},
 	}
 	cmd.Flags().StringSliceVar(&allow, "allow", nil, "sender scope: ask, control, approve (default ask)")
 	cmd.Flags().DurationVar(&ttl, "ttl", defaultDeviceTTL, "how long the sender stays paired")
+	cmd.Flags().StringVar(&principal, "principal", "", "named web principal for this pairing (empty means base-only)")
 	return cmd
 }
 

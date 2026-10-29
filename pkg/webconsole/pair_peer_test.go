@@ -211,12 +211,20 @@ func TestPairApproveAndDenyCommands(t *testing.T) {
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
 	cmd.SetContext(context.Background())
-	cmd.SetArgs([]string{"pair", "approve", req.Code, "--allow", "ask,approve", "--ttl", "1h"})
+	cmd.SetArgs([]string{"pair", "approve", req.Code, "--principal", "alice-web", "--allow", "ask,approve", "--ttl", "1h"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("approve: %v (%s)", err, out.String())
 	}
 	if !strings.Contains(out.String(), "paired alice on channel slack") || !strings.Contains(out.String(), "approve, ask") {
 		t.Fatalf("approve output = %q", out.String())
+	}
+	store, err := openPairStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	device, ok, err := store.peerDevice("slack", "alice")
+	if err != nil || !ok || device.Principal != "alice-web" {
+		t.Fatalf("approved principal = %q ok=%v err=%v", device.Principal, ok, err)
 	}
 	p, ok, err := peerPairing{}.Paired("slack", "alice")
 	if err != nil || !ok || len(p.Scope) != 2 {

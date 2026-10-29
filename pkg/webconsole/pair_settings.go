@@ -111,7 +111,8 @@ func (s *server) handlePairMint(w http.ResponseWriter, r *http.Request) {
 	// session, never add any. An absent or empty scope keeps the default, so
 	// the fail-safe is still sprint/mb/meet.
 	var req struct {
-		Scope []string `json:"scope"`
+		Scope     []string `json:"scope"`
+		Principal string   `json:"principal"`
 		// TTLHours is how long the paired device keeps access. Absent or
 		// negative means the default; ZERO MEANS NEVER — the operator asking
 		// for a phone that stays paired until they revoke it, which is the
@@ -131,11 +132,17 @@ func (s *server) handlePairMint(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if strings.TrimSpace(req.Principal) != "" {
+		if err := validatePrincipalName(req.Principal); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"enabled": true, "error": err.Error()})
+			return
+		}
+	}
 
 	// window 0: the two-minute scan window a bare `bashy app pair` confers —
 	// it only has to survive the walk from the screen to the phone, and it is
 	// not the clock anyone was fighting.
-	t, secret, err := s.pairing.issueTicket(req.Scope, deviceTTLFrom(req.TTLHours), 0)
+	t, secret, err := s.pairing.issueTicketForPrincipal(req.Scope, deviceTTLFrom(req.TTLHours), 0, req.Principal)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{
 			"enabled": true,
@@ -156,6 +163,7 @@ func (s *server) handlePairMint(w http.ResponseWriter, r *http.Request) {
 		"schema":     "bashy-apps-pair-v1",
 		"ticket_id":  t.ID,
 		"scope":      t.Scope,
+		"principal":  t.Principal,
 		"device_ttl": t.TTL,
 		"expires":    t.Expires,
 		// Said in words as well as in a date, because "expires 2126-09-04" is a

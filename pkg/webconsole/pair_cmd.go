@@ -49,14 +49,15 @@ import (
 
 func newPairCmd() *cobra.Command {
 	var (
-		ttl    time.Duration
-		window time.Duration
-		allow  []string
-		host   string
-		port   int
-		asJSON bool
-		noWait bool
-		noQR   bool
+		ttl       time.Duration
+		window    time.Duration
+		allow     []string
+		host      string
+		port      int
+		asJSON    bool
+		noWait    bool
+		noQR      bool
+		principal string
 	)
 	cmd := &cobra.Command{
 		Use:   "pair",
@@ -74,6 +75,7 @@ func newPairCmd() *cobra.Command {
 				TTL: ttl, Window: window, Allow: allow,
 				Host: host, Port: port, JSON: asJSON,
 				NoWait: noWait, NoQR: noQR,
+				Principal: principal,
 			})
 		},
 	}
@@ -88,19 +90,21 @@ func newPairCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the ticket as a typed object instead of a QR")
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "print the code and exit instead of waiting for a scan")
 	cmd.Flags().BoolVar(&noQR, "no-qr", false, "print the URL only, no QR block")
+	cmd.Flags().StringVar(&principal, "principal", "", "named web principal for this device (empty means base-only)")
 	cmd.AddCommand(newPairApproveCmd(), newPairDenyCmd())
 	return cmd
 }
 
 type pairOptions struct {
-	TTL    time.Duration
-	Window time.Duration
-	Allow  []string
-	Host   string
-	Port   int
-	JSON   bool
-	NoWait bool
-	NoQR   bool
+	TTL       time.Duration
+	Window    time.Duration
+	Allow     []string
+	Host      string
+	Port      int
+	JSON      bool
+	NoWait    bool
+	NoQR      bool
+	Principal string
 }
 
 // pairEnvelope is the --json shape: typed data, never a rendered table.
@@ -111,6 +115,7 @@ type pairEnvelope struct {
 	LANURL     string    `json:"lan_url,omitempty"`
 	MDNSURL    string    `json:"mdns_url,omitempty"`
 	Scope      []string  `json:"scope"`
+	Principal  string    `json:"principal,omitempty"`
 	DeviceTTL  string    `json:"device_ttl"`
 	Expires    time.Time `json:"expires"`
 	PayloadVer string    `json:"payload_version"`
@@ -137,7 +142,7 @@ func runPair(ctx context.Context, out io.Writer, opt pairOptions) error {
 		return fmt.Errorf("apps pair: could not work out this host's LAN address; pass --host <ip>")
 	}
 
-	t, secret, err := store.issueTicket(scope, opt.TTL, opt.Window)
+	t, secret, err := store.issueTicketForPrincipal(scope, opt.TTL, opt.Window, opt.Principal)
 	if err != nil {
 		return err
 	}
@@ -169,7 +174,7 @@ func runPair(ctx context.Context, out io.Writer, opt pairOptions) error {
 		if err := enc.Encode(pairEnvelope{
 			Schema: "bashy-apps-pair-v1", TicketID: t.ID,
 			URL: primary, LANURL: lanURL, MDNSURL: mdnsURL,
-			Scope: scope, DeviceTTL: t.TTL, Expires: t.Expires,
+			Scope: scope, Principal: t.Principal, DeviceTTL: t.TTL, Expires: t.Expires,
 			PayloadVer: pairQRVersion, Encrypted: false,
 			Note: "plaintext HTTP: the pairing stops the OS password from crossing the wire, it does not encrypt the link",
 		}); err != nil {
@@ -373,7 +378,8 @@ func newDevicesCmd() *cobra.Command {
 						"id": d.ID, "name": d.Name, "scope": d.Scope,
 						"issued": d.Issued, "expires": d.Expires,
 						"last_seen": d.LastSeen, "user_agent": d.UserAgent,
-						"live": st.deviceLive(d, now), "revoked": d.Revoked,
+						"principal": d.Principal,
+						"live":      st.deviceLive(d, now), "revoked": d.Revoked,
 					}
 					if d.Peer != nil {
 						row["channel"], row["sender"] = d.Peer.Channel, d.Peer.Sender
@@ -387,7 +393,7 @@ func newDevicesCmd() *cobra.Command {
 				return nil
 			}
 			w := tabwriter.NewWriter(c.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "ID\tNAME\tSCOPE\tSTATE\tEXPIRES\tLAST SEEN")
+			fmt.Fprintln(w, "ID\tNAME\tPRINCIPAL\tSCOPE\tSTATE\tEXPIRES\tLAST SEEN")
 			for _, d := range list {
 				state := "live"
 				switch {
@@ -402,8 +408,8 @@ func newDevicesCmd() *cobra.Command {
 				if !d.LastSeen.IsZero() {
 					seen = d.LastSeen.Local().Format("15:04:05")
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-					d.ID, d.Name, strings.Join(d.Scope, ","), state,
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					d.ID, d.Name, d.Principal, strings.Join(d.Scope, ","), state,
 					d.Expires.Local().Format("15:04:05"), seen)
 			}
 			return w.Flush()
