@@ -457,3 +457,155 @@ func TestAccountCommandStructuredErrorsAndFilters(t *testing.T) {
 		}
 	}
 }
+
+func TestAccountCommandTextModeErrors(t *testing.T) {
+	store := Open(t.TempDir() + "/accounts.json")
+	registry := NewRegistry()
+	if err := registry.Register(&fixtureAdapter{fail: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name     string
+		args     []string
+		wantCode string
+	}{
+		{
+			name:     "add missing args",
+			args:     []string{"add"},
+			wantCode: "usage",
+		},
+		{
+			name:     "add invalid kind",
+			args:     []string{"add", "bad", "--kind", "nonexistent"},
+			wantCode: "invalid_category",
+		},
+		{
+			name:     "add invalid credential",
+			args:     []string{"add", "bad", "--kind", "host-login", "--user", "alice", "--endpoint", "example.com:22", "--credential", "raw-secret"},
+			wantCode: "invalid_credential_ref",
+		},
+		{
+			name:     "add missing host-login details",
+			args:     []string{"add", "bad", "--kind", "host-login", "--user", "alice"},
+			wantCode: "invalid_account",
+		},
+		{
+			name:     "set missing flags",
+			args:     []string{"set", "owl"},
+			wantCode: "usage",
+		},
+		{
+			name:     "rm missing account",
+			args:     []string{"rm", "missing-id"},
+			wantCode: "not_found",
+		},
+		{
+			name:     "restore missing account",
+			args:     []string{"restore", "missing-id"},
+			wantCode: "not_found",
+		},
+		{
+			name:     "refresh missing account",
+			args:     []string{"refresh", "missing-id"},
+			wantCode: "not_found",
+		},
+		{
+			name:     "discover adapter failure",
+			args:     []string{"discover"},
+			wantCode: "adapter_failed",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stdout, stderr, err := invokeAccount(t, store, registry, tc.args...)
+			if err == nil {
+				t.Fatalf("%s unexpectedly succeeded (stdout: %s, stderr: %s)", tc.name, stdout, stderr)
+			}
+			if !strings.Contains(stderr, "account: "+tc.wantCode+":") {
+				t.Fatalf("%s: stderr = %q, want prefix 'account: %s:'", tc.name, stderr, tc.wantCode)
+			}
+		})
+	}
+}
+
+func TestAccountCommandDuplicateIdentity(t *testing.T) {
+	store := Open(t.TempDir() + "/accounts.json")
+	registry := NewRegistry()
+
+	// Initial account creation with OpenSSH fingerprint credential
+	out, _, err := invokeAccount(t, store, registry, "add", "owl", "--kind", "host-login", "--user", "alice", "--endpoint", "example.com:22", "--credential", "ssh-key:SHA256:oFTyb/wLPkeVpfBjq8i4XoY9zs4+AoWome8V4/m5jxg", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := decodeEnvelope(t, out)
+	acc := env["account"].(map[string]any)
+	id := acc["id"].(string)
+
+	// Attempt duplicate identity in text mode: must name alias and id, exit 1, no secrets
+	stdout, stderr, err := invokeAccount(t, store, registry, "add", "owl2", "--kind", "host-login", "--user", "alice", "--endpoint", "example.com:22", "--credential", "secret:owl2")
+	if err == nil {
+		t.Fatal("duplicate add unexpectedly succeeded in text mode")
+	}
+	wantTextErr := "account: duplicate_identity: identity already recorded as owl (" + id + ")\n"
+	if stderr != wantTextErr {
+		t.Fatalf("duplicate add text stderr = %q, want %q", stderr, wantTextErr)
+	}
+	if stdout != "" {
+		t.Fatalf("duplicate add text stdout = %q, want empty", stdout)
+	}
+
+	// Attempt duplicate identity in JSON mode: structured error with code + message naming alias and id
+	stdout, stderr, err = invokeAccount(t, store, registry, "add", "owl3", "--kind", "host-login", "--user", "alice", "--endpoint", "example.com:22", "--credential", "secret:owl3", "--json")
+	if err == nil {
+		t.Fatal("duplicate add unexpectedly succeeded in JSON mode")
+	}
+	jsonEnv := decodeEnvelope(t, stderr)
+	errObj := jsonEnv["error"].(map[string]any)
+	if errObj["code"] != "duplicate_identity" {
+		t.Fatalf("error code = %v, want duplicate_identity", errObj["code"])
+	}
+	wantMsg := "identity already recorded as owl (" + id + ")"
+	if errObj["message"] != wantMsg {
+		t.Fatalf("error message = %v, want %q", errObj["message"], wantMsg)
+	}
+
+	// Duplicate identity when existing account has no alias (e.g. from adapter observation)
+	obs := Observation{
+		Account: Account{
+			Category: HostLogin,
+			Provider: "host-login",
+			Username: "bob",
+			Connections: []Connection{{
+				ID:            "main",
+				Endpoint:      "box.example.com:22",
+				CredentialRef: "ssh-key:MD5:aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99",
+			}},
+		},
+	}
+	if err := store.Observe("fake", []Observation{obs}); err != nil {
+		t.Fatal(err)
+	}
+	list, err := store.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bobID string
+	for _, a := range list {
+		if a.Username == "bob" {
+			bobID = a.ID
+			break
+		}
+	}
+	if bobID == "" {
+		t.Fatal("bob account not found in store")
+	}
+
+	_, stderr, err = invokeAccount(t, store, registry, "add", "bob-box", "--kind", "host-login", "--user", "bob", "--endpoint", "box.example.com:22", "--credential", "secret:bob")
+	if err == nil {
+		t.Fatal("duplicate add without alias unexpectedly succeeded")
+	}
+	wantNoAliasErr := "account: duplicate_identity: identity already recorded as " + bobID + "\n"
+	if stderr != wantNoAliasErr {
+		t.Fatalf("stderr = %q, want %q", stderr, wantNoAliasErr)
+	}
+}

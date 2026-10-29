@@ -118,8 +118,30 @@ var ErrReferenced = errors.New("accounts: account has bindings")
 var ErrUnsupported = errors.New("accounts: unsupported capability")
 var ErrAmbiguous = errors.New("accounts: ambiguous selection")
 var ErrNewerSchema = errors.New("accounts: newer schema version")
+var ErrDuplicateIdentity = errors.New("accounts: duplicate identity")
 
-var refPattern = regexp.MustCompile(`^(secret:[A-Za-z0-9][A-Za-z0-9_.-]*|ssh-key:[A-Za-z0-9][A-Za-z0-9:_.-]*|env:[A-Za-z_][A-Za-z0-9_]*|profile:[A-Za-z0-9][A-Za-z0-9_.-]*)$`)
+// DuplicateIdentityError is returned when an operation attempts to record an
+// account whose proven identity already exists in the store.
+type DuplicateIdentityError struct {
+	Existing Account
+}
+
+func (e *DuplicateIdentityError) Error() string {
+	return "accounts: " + e.Message()
+}
+
+func (e *DuplicateIdentityError) Message() string {
+	if e.Existing.Alias != "" {
+		return fmt.Sprintf("identity already recorded as %s (%s)", e.Existing.Alias, e.Existing.ID)
+	}
+	return fmt.Sprintf("identity already recorded as %s", e.Existing.ID)
+}
+
+func (e *DuplicateIdentityError) Is(target error) bool {
+	return target == ErrDuplicateIdentity
+}
+
+var refPattern = regexp.MustCompile(`^(secret:[A-Za-z0-9][A-Za-z0-9_.-]*|ssh-key:[A-Za-z0-9][A-Za-z0-9:_./+=-]*|env:[A-Za-z_][A-Za-z0-9_]*|profile:[A-Za-z0-9][A-Za-z0-9_.-]*)$`)
 var errorCodePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 
 func ValidCredentialRef(ref string) bool { return refPattern.MatchString(ref) }

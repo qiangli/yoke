@@ -80,6 +80,8 @@ func NewAccountCmd(opts ...CommandOption) *cobra.Command {
 		ce := &commandError{Code: "usage", Message: "invalid command flags"}
 		if s.json {
 			_ = json.NewEncoder(cmd.ErrOrStderr()).Encode(map[string]any{"schema_version": CommandSchemaVersion, "command": cmd.Name(), "error": ce})
+		} else {
+			fmt.Fprintf(cmd.ErrOrStderr(), "account: %s: %s\n", ce.Code, ce.Message)
 		}
 		return ce
 	})
@@ -107,6 +109,8 @@ func (s *commandState) args(name string, validate cobra.PositionalArgs) cobra.Po
 		ce := &commandError{Code: "usage", Message: "invalid command arguments"}
 		if s.json {
 			_ = json.NewEncoder(cmd.ErrOrStderr()).Encode(map[string]any{"schema_version": CommandSchemaVersion, "command": name, "error": ce})
+		} else {
+			fmt.Fprintf(cmd.ErrOrStderr(), "account: %s: %s\n", ce.Code, ce.Message)
 		}
 		return ce
 	}
@@ -125,6 +129,8 @@ func (s *commandState) run(name string, fn func(*cobra.Command, []string) error)
 				"command":        name,
 				"error":          ce,
 			})
+		} else {
+			fmt.Fprintf(cmd.ErrOrStderr(), "account: %s: %s\n", ce.Code, ce.Message)
 		}
 		return ce
 	}
@@ -134,6 +140,10 @@ func classifyError(err error) *commandError {
 	var ce *commandError
 	if errors.As(err, &ce) {
 		return ce
+	}
+	var dup *DuplicateIdentityError
+	if errors.As(err, &dup) {
+		return &commandError{Code: "duplicate_identity", Message: dup.Message()}
 	}
 	switch {
 	case errors.Is(err, ErrNotFound):
@@ -374,6 +384,10 @@ func (s *commandState) addCmd() *cobra.Command {
 			}
 			added, err := s.store.Add(a)
 			if err != nil {
+				var dup *DuplicateIdentityError
+				if errors.As(err, &dup) {
+					return dup
+				}
 				return fail("invalid_account", "account metadata was rejected")
 			}
 			row, err := project(added, fields)

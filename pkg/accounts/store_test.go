@@ -243,3 +243,57 @@ func TestManualHostAndDistinctProfiles(t *testing.T) {
 		t.Fatalf("profiles merged: %d %v", len(list), err)
 	}
 }
+
+func TestStoreAddDuplicateIdentity(t *testing.T) {
+	s := Open(filepath.Join(t.TempDir(), "accounts.json"))
+	host := Account{
+		Alias:    "owl",
+		Category: HostLogin,
+		Provider: "ssh",
+		Username: "alice",
+		Connections: []Connection{{
+			ID:            "main",
+			Endpoint:      "example.com:22",
+			AuthMethod:    "password",
+			CredentialRef: "secret:owl",
+		}},
+	}
+	added, err := s.Add(host)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	duplicate := Account{
+		Alias:    "owl2",
+		Category: HostLogin,
+		Provider: "ssh",
+		Username: "alice",
+		Connections: []Connection{{
+			ID:            "main",
+			Endpoint:      "example.com:22",
+			AuthMethod:    "password",
+			CredentialRef: "secret:owl2",
+		}},
+	}
+	_, err = s.Add(duplicate)
+	if err == nil {
+		t.Fatal("expected duplicate identity error, got nil")
+	}
+	if !errors.Is(err, ErrDuplicateIdentity) {
+		t.Fatalf("expected ErrDuplicateIdentity, got %v", err)
+	}
+	var dupErr *DuplicateIdentityError
+	if !errors.As(err, &dupErr) {
+		t.Fatalf("expected *DuplicateIdentityError, got %T", err)
+	}
+	if dupErr.Existing.ID != added.ID {
+		t.Fatalf("dupErr.Existing.ID = %q, want %q", dupErr.Existing.ID, added.ID)
+	}
+	if dupErr.Existing.Alias != "owl" {
+		t.Fatalf("dupErr.Existing.Alias = %q, want owl", dupErr.Existing.Alias)
+	}
+	wantMsg := "accounts: identity already recorded as owl (" + added.ID + ")"
+	if err.Error() != wantMsg {
+		t.Fatalf("err.Error() = %q, want %q", err.Error(), wantMsg)
+	}
+}
