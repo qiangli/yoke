@@ -23,11 +23,20 @@ import (
 
 // Store mints and validates HMAC-signed admin session cookies.
 //
-// Cookies are stateless: `user|expUnixSecs|sigBase64`. Validation
-// re-HMACs the prefix with the server's secret and compares. This means
-// the session SURVIVES process restarts (the secret is loaded from the
-// FileConfig on every boot), so flipping a built-in toggle — which
-// re-execs the binary — no longer logs the admin user out.
+// Cookies are stateless: `v1|<base64url(subject)>|<expUnixSecs>|<sigBase64>`.
+// Validation decodes the subject first, then re-HMACs the decoded subject
+// with the server's secret and compares. This means the session SURVIVES
+// process restarts (the secret is loaded from the FileConfig on every
+// boot), so flipping a built-in toggle — which re-execs the binary — no
+// longer logs the admin user out.
+//
+// The subject is base64url-encoded so the cookie value only ever uses valid
+// cookie-value bytes on every OS. A Windows account name such as
+// `DOMAIN\user` carries a backslash, which Go's net/http drops from Cookie
+// values — silently breaking the MAC and locking every session out with a
+// 403. The MAC covers the DECODED subject, so a tampered encoding cannot
+// upgrade privileges, and a pre-v1 cookie (`user|exp|sig`) has the wrong
+// shape and fails closed (re-pair or log in again).
 //
 // Revocation is best-effort: an in-memory set tracks cookies that were
 // explicitly logged out. The set is lost on restart, but the cookie that
@@ -61,20 +70,23 @@ func NewStore(ttl time.Duration, secret []byte) *Store {
 	}
 }
 
+// cookieVersion marks the encoded-subject format. Any cookie without it is
+// pre-v1 and fails closed in Validate — never upgraded, never admitted.
+const cookieVersion = "v1"
+
 // Mint returns a signed session cookie. The user string is opaque to the
-// store — it's encoded into the cookie verbatim and surfaced from
-// Validate. Must not contain '|' (the field separator). Practically the
-// only caller is handleLogin, which passes hostauth.CurrentUser() — a
-// plain OS user name.
+// store — it is base64url-encoded into the cookie and the decoded subject
+// is surfaced from Validate. Must not contain '|' (the MAC input
+// separator). Practically the callers pass an OS account name
+// (`DOMAIN\user` on Windows) or a `user#dev:<device>` device subject.
 func (s *Store) Mint(user string) (string, error) {
 	if strings.ContainsRune(user, '|') {
-		// Defensive: refuse separator chars so the format stays unambiguous.
+		// Defensive: refuse separator chars so the MAC input stays unambiguous.
 		return "", errSeparatorInUser
 	}
-	exp := s.now().Add(s.ttl).Unix()
-	payload := user + "|" + strconv.FormatInt(exp, 10)
-	sig := s.sign(payload)
-	return payload + "|" + sig, nil
+	exp := strconv.FormatInt(s.now().Add(s.ttl).Unix(), 10)
+	sig := s.sign(user + "|" + exp)
+	return cookieVersion + "|" + base64.RawURLEncoding.EncodeToString([]byte(user)) + "|" + exp + "|" + sig, nil
 }
 
 // Validate returns the user owning the cookie if signature checks pass
@@ -90,11 +102,18 @@ func (s *Store) Validate(cookie string) (string, bool) {
 	if gone {
 		return "", false
 	}
-	parts := strings.SplitN(cookie, "|", 3)
-	if len(parts) != 3 {
+	parts := strings.SplitN(cookie, "|", 4)
+	if len(parts) != 4 || parts[0] != cookieVersion {
+		// Wrong shape — including every pre-v1 `user|exp|sig` cookie.
 		return "", false
 	}
-	user, expStr, sig := parts[0], parts[1], parts[2]
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", false
+	}
+	user, expStr, sig := string(raw), parts[2], parts[3]
+	// The MAC covers the DECODED subject: swapping the encoding changes the
+	// subject and therefore the MAC input, so it cannot slip past.
 	want := s.sign(user + "|" + expStr)
 	// Constant-time compare to avoid timing leaks of the signature.
 	if !hmac.Equal([]byte(want), []byte(sig)) {
