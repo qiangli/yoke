@@ -1,8 +1,10 @@
 package ladder
 
 import (
-	"github.com/qiangli/yoke/pkg/ladder/blame"
+	"strings"
 	"time"
+
+	"github.com/qiangli/yoke/pkg/ladder/blame"
 )
 
 // EventSchema identifies the append-only ledger format.
@@ -73,9 +75,14 @@ type Event struct {
 
 // RatingAgent is the rating identity recorded by the event. New attributed
 // evidence accumulates under the frozen family configuration; legacy evidence
-// retains its original Agent attribution.
+// retains its original Agent attribution. Delegated runs (genie-delegate:*)
+// are scored under their own identity and are never folded into a family
+// configuration (such as ycode or the vendor family).
 func (e Event) RatingAgent() string {
-	if e.FamilyID != "" {
+	if strings.HasPrefix(e.Agent, "genie-delegate:") {
+		return e.Agent
+	}
+	if e.FamilyID != "" && !strings.HasPrefix(e.FamilyID, "genie-delegate:") {
 		return e.FamilyID
 	}
 	return e.Agent
