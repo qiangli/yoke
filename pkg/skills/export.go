@@ -72,8 +72,8 @@ func ExportTo(sk Skill, src Source, dstRoot string, force bool) (string, error) 
 		}
 	}
 	rec := exportRecord{Name: sk.Name, ExportedAt: time.Now().UTC(), By: "bashy skill export"}
-	if sk.Dhnt.Valid() {
-		rec.Identity = sk.Dhnt.Identity
+	if sk.Unit.Valid() {
+		rec.Identity = sk.Unit.Identity
 	}
 	data, _ := json.MarshalIndent(rec, "", "  ")
 	if err := os.WriteFile(filepath.Join(dst, exportMarker), data, 0o644); err != nil {

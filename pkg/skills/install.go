@@ -22,7 +22,8 @@ type Admission struct {
 	Applicable bool     `json:"applicable"` // requires hold at this coordinate
 	Failing    string   `json:"failing,omitempty"`
 	Unchecked  string   `json:"unchecked_compat,omitempty"`
-	Identity   string   `json:"identity,omitempty"` // dhnt content address (dual bundle only)
+	Identity   string   `json:"identity,omitempty"`   // the unit's content address (Bash# body or dhnt face)
+	Capability string   `json:"capability,omitempty"` // the unit's capability key ("" when uncontracted)
 	Contract   []string `json:"contract,omitempty"`
 	EffectCap  []string `json:"effect_cap,omitempty"`
 	ContextKey string   `json:"context_key,omitempty"` // over KeyProbes(skill)
@@ -43,15 +44,17 @@ func admit(sk Skill, ps *ProbeSet) Admission {
 		a.Valid = false
 		a.Problems = append(a.Problems, sk.RequiresErr)
 	}
-	if sk.Dhnt != nil {
-		if sk.Dhnt.Valid() {
-			a.Identity = sk.Dhnt.Identity
-			a.Contract = sk.Dhnt.Contract
-			a.EffectCap = sk.Dhnt.EffectCap
-		} else {
-			a.Valid = false
-			a.Problems = append(a.Problems, "skill.dhnt: "+sk.Dhnt.Err)
-		}
+	// One unit, whichever face carries it: an invalid face or an ambiguous
+	// pair (Bash# body + an undeclared skill.dhnt) is refused here, never
+	// admitted with one face silently preferred.
+	if sk.Unit.Err != "" {
+		a.Valid = false
+		a.Problems = append(a.Problems, sk.Unit.Err)
+	} else if sk.Unit.Valid() {
+		a.Identity = sk.Unit.Identity
+		a.Capability = sk.Unit.Capability
+		a.Contract = sk.Unit.Contract.Ensure
+		a.EffectCap = sk.Unit.Contract.EffectCap()
 	}
 	v := verdictOf(sk, ps)
 	a.Applicable = v.Applicable
@@ -80,6 +83,7 @@ func loadSkillDir(dir string) (Skill, error) {
 		sk.HasDhnt = true
 		sk.Dhnt = parseDhntInfo(canon)
 	}
+	sk.Unit = ResolveUnit(body, sk.Meta, sk.Dhnt)
 	return sk, nil
 }
 

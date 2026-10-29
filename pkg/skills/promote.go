@@ -21,6 +21,9 @@ import (
 // else the base), bindings.json (learned executor bindings, if any),
 // and PROMOTION.md (lineage + reviewer checklist).
 func promoteBundle(cfg *config, sk Skill, src Source, out string) (string, error) {
+	if sk.Unit.Err != "" {
+		return "", fmt.Errorf("skills: %q: %s", sk.Name, sk.Unit.Err)
+	}
 	if !sk.Dhnt.Valid() {
 		return "", fmt.Errorf("skills: %q has no valid canonical face — nothing to promote", sk.Name)
 	}

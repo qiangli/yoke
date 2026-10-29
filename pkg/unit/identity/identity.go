@@ -8,18 +8,16 @@
 package identity
 
 import (
-	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
-	"errors"
 	"strings"
 
 	"github.com/qiangli/yoke/pkg/dag"
+	"github.com/qiangli/yoke/pkg/unit"
 	"github.com/qiangli/yoke/pkg/unit/frontmatter"
 )
 
-// ErrNoContract reports that a unit declares no contract (Require, Ensure, or Effects).
-var ErrNoContract = errors.New("unit: unit declares no contract, so it has no capability key")
+// ErrNoContract reports that a unit declares no contract (no Require and no
+// Ensure), so it has no capability key. It is unit.ErrNoContract.
+var ErrNoContract = unit.ErrNoContract
 
 // Header is the envelope metadata read from a script's leading comment block.
 type Header struct {
@@ -65,10 +63,44 @@ func DagTargetCapabilityKey(task *dag.Task) (string, error) {
 
 // ScriptIdentity computes the content address ("h" + sha256) of a .bsh script
 // over whole file bytes with CRLF normalized to LF.
-func ScriptIdentity(src []byte) string {
-	norm := bytes.ReplaceAll(src, []byte("\r\n"), []byte("\n"))
-	sum := sha256.Sum256(norm)
-	return "h" + hex.EncodeToString(sum[:])
+func ScriptIdentity(src []byte) string { return unit.BodyIdentity(src) }
+
+// Capability is the one capability key over a contract, whichever face
+// stated it. Returns ErrNoContract for an uncontracted unit.
+func Capability(c unit.Contract) (string, error) { return unit.CapabilityKey(c) }
+
+// BashSharpUnit is the executable face of a SKILL.md, read the one way: the
+// extracted Bash# body, its content address, its contract and the
+// capability key that contract projects to.
+type BashSharpUnit struct {
+	Body       string        `json:"-"`
+	Identity   string        `json:"identity"`             // unit.BodyIdentity(Body)
+	Contract   unit.Contract `json:"contract"`             // unit.ReadContract(Body)
+	Capability string        `json:"capability,omitempty"` // "" when uncontracted
+	Err        string        `json:"error,omitempty"`      // the body does not parse as Bash#
+}
+
+// Contracted reports whether the unit states a checkable guarantee.
+func (u BashSharpUnit) Contracted() bool { return u.Err == "" && u.Contract.Contracted() }
+
+// BashSharp reads a document's Bash# face through the one fence extractor
+// and the one contract reader. ok is false for a prose-only document. The
+// identity covers the body bytes only, so frontmatter and prose never move
+// it, while any byte of the executable unit does.
+func BashSharp(document []byte) (u BashSharpUnit, ok bool) {
+	body := unit.BashSharpBody(string(document))
+	if body == "" {
+		return BashSharpUnit{}, false
+	}
+	u = BashSharpUnit{Body: body, Identity: unit.BodyIdentity([]byte(body))}
+	c, err := unit.ReadContract(body)
+	if err != nil {
+		u.Err = err.Error()
+		return u, true
+	}
+	u.Contract = c
+	u.Capability, _ = unit.CapabilityKey(c)
+	return u, true
 }
 
 // ScriptHeader reads the envelope (name, description, type) from a script's

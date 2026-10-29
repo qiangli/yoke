@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/qiangli/yoke/pkg/unit"
 )
 
 const sharpBody = "@guard(effects: \"read,write\")\n@effects(\"read,write\")\n@require('true')\n@ensure('test -f done')\nwork() { broken; }\nwork\n"
@@ -41,7 +43,7 @@ func TestBashSharpRun(t *testing.T) {
 			})
 			var log strings.Builder
 			rec, _, err := runSkill(cfg, sk, src, ps, cwd, &log)
-			if err != nil || rec.Valid != (code == 0) || *rec.Status != code || rec.Identity != bashSharpIdentity(sharpBody) || rec.Tier != "bashy@test" || rec.ContextKey == "" {
+			if err != nil || rec.Valid != (code == 0) || *rec.Status != code || rec.Identity != unit.BodyIdentity([]byte(sharpBody)) || rec.Capability == "" || rec.Tier != "bashy@test" || rec.ContextKey == "" {
 				t.Fatalf("%+v %v", rec, err)
 			}
 			if strings.Join(rec.Effects, ",") != "read,write" || log.String() != "command output" {
@@ -57,7 +59,7 @@ func TestBashSharpRun(t *testing.T) {
 			cfg.bashSharpRunner = func(context.Context, string, []string, string, io.Writer, io.Writer) (int, error) { return code, nil }
 			f.opts[2] = WithBashSharpRunner(cfg.bashSharpRunner)
 			stdout, _, err := f.run("run", "sharp", "--json")
-			if (err == nil) != (code == 0) || !strings.Contains(stdout, `"identity":"sha256:`) {
+			if (err == nil) != (code == 0) || !strings.Contains(stdout, `"identity":"h`) {
 				t.Fatalf("CLI: %s %v", stdout, err)
 			}
 		})
@@ -133,7 +135,7 @@ func TestBashSharpMissingRunnerAndFences(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc := "```text\n```bsh\nignored\n```\n```bsh\nfirst\n```\nprose\n```bashsharp\nsecond\n```\n"
-	if got := bashSharpFences(doc); got != "first\nsecond\n" {
+	if got := unit.BashSharpBody(doc); got != "first\nsecond\n" {
 		t.Fatalf("fences: %q", got)
 	}
 }

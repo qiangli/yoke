@@ -47,7 +47,9 @@ func LoadImplementations(cat *skills.Catalog, ps *skills.ProbeSet) []Implementat
 			continue
 		}
 		sk, src, ok := cat.Get(r.Name)
-		if !ok || !sk.HasDhnt {
+		// An ambiguous unit (a Bash# body beside an undeclared skill.dhnt) is
+		// refused by the one unit model, not resolved here by picking a face.
+		if !ok || !sk.HasDhnt || sk.Unit.Err != "" {
 			continue
 		}
 		// Read through the SOURCE, not the filesystem. An embedded skill has no

@@ -60,10 +60,11 @@ const (
 	ActionAgent     = "agent"
 	ActionSkill     = "skill"
 
-	ContractNone     = "none"
-	ContractDhnt     = "dhnt"
-	ContractDag      = "dag"
-	ContractMetadata = "metadata-checks"
+	ContractNone      = "none"
+	ContractDhnt      = "dhnt"
+	ContractBashSharp = "bashsharp"
+	ContractDag       = "dag"
+	ContractMetadata  = "metadata-checks"
 
 	LatitudeExact = "exact"
 	LatitudeJudge = "judge"
@@ -76,6 +77,7 @@ const (
 	ExecutorPath      = "path"
 	ExecutorVerb      = "verb"
 	ExecutorDhnt      = "dhnt"
+	ExecutorBashSharp = "bashsharp"
 	ExecutorDag       = "dag"
 	// ExecutorRegistered runs a command the operator registered with `bashy
 	// commands add` (fleet.Command): an exec'd program, a provisioned release
@@ -140,6 +142,19 @@ type SkillRow struct {
 	Identity     string   // "h…" content address of the canonical line
 	EffectCap    []string // declared effect-cap atoms (dhnt-6)
 	HasJudgeStep bool     // any step (branches included) carries judge latitude
+
+	// The one unit model (skills.UnitInfo), additive: a caller that leaves
+	// these zero gets the dhnt-face projection above unchanged.
+	//
+	// Face is the face the unit is read from ("bashsharp" for SKILL.md Bash#
+	// fences, "dhnt", "" for unknown/legacy). Capability is its capability
+	// key; Uncontracted marks a unit that states no contract, which never
+	// projects a contract. UnitErr is a refused unit (ambiguous faces or an
+	// invalid body): it projects no identity and no contract at all.
+	Face         string
+	Capability   string
+	Uncontracted bool
+	UnitErr      string
 }
 
 // skillFacet projects a catalog skill. The contract is the strongest thing the
@@ -156,10 +171,22 @@ func skillFacet(sk SkillRow) *ActionFacet {
 		Envelope:  EnvelopeAttest,
 		Scope:     ScopeGeneric,
 	}
+	if sk.Face == ContractBashSharp {
+		f.Executor = ExecutorBashSharp
+	}
 	switch {
+	case sk.UnitErr != "":
+		// Refused unit: whichever face a reader would have picked is exactly
+		// the guess the unit model forbids.
+	case sk.FaceValid && sk.Uncontracted:
+		f.Identity = sk.Identity
+		f.EffectsDeclared = append([]string(nil), sk.EffectCap...)
 	case sk.FaceValid:
 		f.Identity = sk.Identity
 		f.Contract = ContractDhnt
+		if sk.Face == ContractBashSharp {
+			f.Contract = ContractBashSharp
+		}
 		f.EffectsDeclared = append([]string(nil), sk.EffectCap...)
 		if sk.HasJudgeStep {
 			f.Latitude = LatitudeJudge

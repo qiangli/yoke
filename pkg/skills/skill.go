@@ -25,6 +25,7 @@ type Skill struct {
 	RequiresErr   string            // non-empty when Meta["requires"] did not parse
 	HasDhnt       bool              // a skill.dhnt sits beside SKILL.md
 	Dhnt          *DhntInfo         // parsed canonical face (nil when absent)
+	Unit          UnitInfo          // the one unit, read from whichever face carries it (ResolveUnit)
 	HasTasks      bool              // a tasks face (tasks.md, metadata.tasks pointer, or inline ## Tasks) exists
 }
 

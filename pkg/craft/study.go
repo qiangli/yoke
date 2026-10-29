@@ -200,29 +200,48 @@ func studyOne(c Candidate, seen map[string][]string, norm Normaliser) Outcome {
 		return out
 	}
 
-	sk, err := typedSkill(c, norm)
-	if err != nil {
-		out.Disposition = DispQuarantined
-		out.Reason = err.Error()
-		return out
-	}
+	// The one unit model decides the face: a Bash# body is the canonical
+	// unit, a shipped skill.dhnt beside it must be a declared derivation, and
+	// a pair that is not is ambiguous — refused, never resolved by picking.
+	var id, key string
+	if u := candidateUnit(c); u.Face == skills.FaceBashSharp {
+		if u.Err != "" {
+			out.Disposition = DispRefused
+			out.Reason = u.Err
+			return out
+		}
+		if !u.Verified() {
+			out.Disposition = DispQuarantined
+			out.Reason = "declares no contract, so no capability can be determined"
+			return out
+		}
+		id, key = u.Identity, u.Capability
+		out.Identity = id
+	} else {
+		sk, terr := typedSkill(c, norm)
+		if terr != nil {
+			out.Disposition = DispQuarantined
+			out.Reason = terr.Error()
+			return out
+		}
+		var err error
+		id, err = dhntskills.Identity(sk)
+		if err != nil {
+			out.Disposition = DispRefused
+			out.Reason = "typed skill has no valid identity: " + err.Error()
+			return out
+		}
+		out.Identity = id
 
-	id, err := dhntskills.Identity(sk)
-	if err != nil {
-		out.Disposition = DispRefused
-		out.Reason = "typed skill has no valid identity: " + err.Error()
-		return out
-	}
-	out.Identity = id
-
-	key, err := skills.CapabilityKey(sk)
-	if err != nil {
-		// A typed skill with no contract states no guarantee. It is held, not
-		// merged: filing it under a shared "no contract" bucket would silently
-		// unify skills that have nothing in common.
-		out.Disposition = DispQuarantined
-		out.Reason = "declares no contract, so no capability can be determined"
-		return out
+		key, err = skills.CapabilityKey(sk)
+		if err != nil {
+			// A typed skill with no contract states no guarantee. It is held, not
+			// merged: filing it under a shared "no contract" bucket would silently
+			// unify skills that have nothing in common.
+			out.Disposition = DispQuarantined
+			out.Reason = "declares no contract, so no capability can be determined"
+			return out
+		}
 	}
 	out.Capability = key
 
@@ -238,6 +257,20 @@ func studyOne(c Candidate, seen map[string][]string, norm Normaliser) Outcome {
 		out.Reason = fmt.Sprintf("same guarantee as %d implementation(s) already held", len(impls))
 	}
 	return out
+}
+
+// candidateUnit reads a candidate through the one unit model (skills.ResolveUnit)
+// over its prose body and shipped canonical face.
+func candidateUnit(c Candidate) skills.UnitInfo {
+	var meta map[string]string
+	if sk, err := skills.ParseFrontmatter([]byte(c.Body)); err == nil {
+		meta = sk.Meta
+	}
+	var dhnt *skills.DhntInfo
+	if strings.TrimSpace(c.Canonical) != "" {
+		dhnt = skills.ParseDhntInfo([]byte(c.Canonical))
+	}
+	return skills.ResolveUnit([]byte(c.Body), meta, dhnt)
 }
 
 // typedSkill resolves a candidate to a typed skill: its own canonical face when

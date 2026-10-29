@@ -16,7 +16,10 @@
 // evidence and every reader must keep decoding them.
 //
 // The sibling package unit/frontmatter is the other half of this story: the
-// one reader of the `---` blocks that carry a unit's prose face.
+// one reader of the `---` blocks that carry a unit's prose face. fence.go is
+// the one Bash# fence extractor (dag.md's fence grammar) and contract.go the
+// one contract reader and capability key, so a SKILL.md Bash# body, a dag
+// target and a dhnt face keeping the same promise share one key.
 package unit
 
 // CheckResult is the outcome of one contract check (a Require
@@ -53,4 +56,8 @@ type Attestation struct {
 	// across interchangeable implementations of the same promise rather
 	// than only per name. Empty in receipts written before it is stamped.
 	Capability string `json:"capability,omitempty"`
+	// Uncontracted marks the receipt of a unit that states no contract (no
+	// Require, no Ensure): it ran, but there was nothing to verify, so Valid
+	// is never set for it. Absent on every contracted receipt.
+	Uncontracted bool `json:"uncontracted,omitempty"`
 }

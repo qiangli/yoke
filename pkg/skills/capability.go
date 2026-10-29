@@ -32,19 +32,17 @@ package skills
 // interchangeable, however identical their postconditions.
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"errors"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
 
 	dhntskills "github.com/dhnt/dhnt/skills"
+	"github.com/qiangli/yoke/pkg/unit"
 )
 
 // ErrNoContract reports that a skill declares no contract, and therefore has no
-// capability key.
+// capability key. It is unit.ErrNoContract — one refusal for every face.
 //
 // This is a REFUSAL, not a fallback. Hashing an empty projection would give
 // every contract-less skill one shared key, silently merging skills that
@@ -55,124 +53,65 @@ import (
 //
 // That is also the incentive the formalization ladder needs: writing a contract
 // is what buys exact dedup and election.
-var ErrNoContract = errors.New("skills: skill declares no contract, so it has no capability key")
+var ErrNoContract = unit.ErrNoContract
 
-// capabilityProjectionName is the fixed skill name used for the contract-only
-// projection.
+// CapabilityKey returns the content address of what a skill GUARANTEES: the
+// one unit capability key (unit.CapabilityKey) over the dhnt face's contract
+// projection (DhntContract), with name, capabilities, steps and failure policy
+// projected away.
 //
-// LineariseDhnt REQUIRES a canonical, non-empty name, so the projection cannot
-// simply zero it. Using one constant for every projection is what erases the
-// name from the key: two skills under different names but one contract linearise
-// identically here. The word is canonical dhnt (every consonant followed by a
-// vowel) so the encoder accepts it.
-const capabilityProjectionName = "kapabiliti"
-
-// CapabilityKey returns the content address of what a skill GUARANTEES: a hash
-// over its contract and effect cap alone, with name, capabilities, steps and
-// failure policy projected away.
-//
-// The "k" prefix distinguishes it at a glance from Identity's "h". It reuses
-// LineariseDhnt rather than introducing a serialiser, so the key is byte-
-// compatible with every other dhnt fingerprint and cannot drift from the
-// canonical form.
+// The key is orientation-neutral: a Bash# body whose @ensure/@effects state the
+// same clauses keys identically, so a dhnt face and a Bash# face of one
+// promise are one capability.
 //
 // Returns ErrNoContract when the skill declares no postconditions.
 func CapabilityKey(s dhntskills.Skill) (string, error) {
-	if len(s.Contract) == 0 {
-		return "", ErrNoContract
-	}
-	canon, err := dhntskills.LineariseDhnt(capabilityProjection(s))
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256([]byte(canon))
-	return "k" + hex.EncodeToString(sum[:]), nil
+	return unit.CapabilityKey(DhntContract(s))
 }
 
-// capabilityProjection strips a skill to the part that states its guarantee,
-// then normalises the ordering of what remains.
-//
-// Normalisation matters because the key must not depend on authoring accidents.
-// A contract is a SET of postconditions and an effect cap is a SET of atoms —
-// neither carries meaning in its written order — so both are sorted and
-// deduplicated. Without that, re-ordering two `enisure` clauses would mint a new
-// capability and split a matched pair apart.
-func capabilityProjection(s dhntskills.Skill) dhntskills.Skill {
-	return dhntskills.Skill{
-		Name:      capabilityProjectionName,
-		EffectCap: normaliseEffects(s.EffectCap),
-		Contract:  normaliseContract(s.Contract),
+// DhntContract projects a dhnt face onto the one unit contract: each contract
+// clause becomes an Ensure (rendered by CheckText) and each effect-cap atom an
+// Effects entry under its stable name (read, write, net, …) — the same
+// vocabulary @effects and dag's Effects: use. Order is not semantic; the key
+// sorts and deduplicates.
+func DhntContract(s dhntskills.Skill) unit.Contract {
+	var c unit.Contract
+	for _, chk := range s.Contract {
+		c.Ensure = append(c.Ensure, CheckText(chk))
 	}
+	for _, e := range s.EffectCap {
+		c.Effects = append(c.Effects, e.String())
+	}
+	return c
 }
 
-// normaliseEffects sorts the cap into lattice order and drops duplicates.
-func normaliseEffects(in []dhntskills.Effect) []dhntskills.Effect {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]dhntskills.Effect, len(in))
-	copy(out, in)
-	slices.Sort(out)
-	return slices.Compact(out)
-}
-
-// normaliseContract sorts contract clauses by their canonical text and drops
-// exact duplicates. Each clause's own arguments are sorted too: args are NAMED
-// bindings, so their written order is not semantic even though linearisation
-// emits them positionally.
-func normaliseContract(in []dhntskills.Check) []dhntskills.Check {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]dhntskills.Check, 0, len(in))
-	for _, c := range in {
-		out = append(out, dhntskills.Check{Predicate: c.Predicate, Args: normaliseArgs(c.Args)})
-	}
-	sort.SliceStable(out, func(i, j int) bool { return checkKey(out[i]) < checkKey(out[j]) })
-	return slices.CompactFunc(out, func(a, b dhntskills.Check) bool { return checkKey(a) == checkKey(b) })
-}
-
-// normaliseArgs sorts named bindings by name, tie-breaking on value so the
-// result is total even if a name repeats.
-func normaliseArgs(in []dhntskills.Arg) []dhntskills.Arg {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]dhntskills.Arg, len(in))
-	copy(out, in)
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Name != out[j].Name {
-			return out[i].Name < out[j].Name
+// CheckText renders one dhnt contract clause as the text a Bash# @ensure
+// states for it: the predicate id, then its named bindings sorted by name
+// (args are NAMED, so their written order is not semantic) as name=value.
+func CheckText(c dhntskills.Check) string {
+	args := slices.Clone(c.Args)
+	sort.SliceStable(args, func(i, j int) bool {
+		if args[i].Name != args[j].Name {
+			return args[i].Name < args[j].Name
 		}
-		return exprKey(out[i].Value) < exprKey(out[j].Value)
+		return exprText(args[i].Value) < exprText(args[j].Value)
 	})
-	return out
-}
-
-// checkKey renders one contract clause as a comparable string. It is an
-// ordering aid only — never hashed, never stored — so its shape can change
-// freely without moving any capability key.
-func checkKey(c dhntskills.Check) string {
 	var b strings.Builder
 	b.WriteString(c.Predicate)
-	for _, a := range c.Args {
-		b.WriteByte('\x00')
-		b.WriteString(a.Name)
-		b.WriteByte('=')
-		b.WriteString(exprKey(a.Value))
+	for _, a := range args {
+		b.WriteString(" " + a.Name + "=" + exprText(a.Value))
 	}
 	return b.String()
 }
 
-// exprKey renders a value expression comparably, keeping the variants in
-// distinct namespaces so a ref never collides with a numeral.
-func exprKey(e dhntskills.Expr) string {
+// exprText renders a value expression: a ref by name, a numeral in decimal.
+func exprText(e dhntskills.Expr) string {
 	switch e.Kind {
 	case dhntskills.ExprRef:
-		return "r:" + e.Ref
+		return e.Ref
 	case dhntskills.ExprNumber:
-		return "n:" + strconv.FormatUint(e.Number, 10)
+		return strconv.FormatUint(e.Number, 10)
 	default:
-		return "?:"
+		return "?"
 	}
 }

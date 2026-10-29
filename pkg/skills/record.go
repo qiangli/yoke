@@ -144,13 +144,15 @@ func RecordFrom(sk *Skill, src Source, scrub *redact.Scrubber) (Record, error) {
 			rec.Bindings[k] = v
 		}
 	}
-	if sk.Dhnt.Valid() {
-		rec.Identity = sk.Dhnt.Identity
-		rec.Capability = sk.Dhnt.Capability
+	if sk.Unit.Valid() {
+		rec.Identity = sk.Unit.Identity
+		rec.Capability = sk.Unit.Capability
 		rec.Contract = RecordContract{
-			Effects: append([]string(nil), sk.Dhnt.EffectCap...),
-			Ensure:  append([]string(nil), sk.Dhnt.Contract...),
-			Steps:   sk.Dhnt.Steps,
+			Effects: append([]string(nil), sk.Unit.Contract.EffectCap()...),
+			Ensure:  append([]string(nil), sk.Unit.Contract.Ensure...),
+		}
+		if sk.Dhnt.Valid() {
+			rec.Contract.Steps = sk.Dhnt.Steps
 		}
 	}
 	return rec, nil

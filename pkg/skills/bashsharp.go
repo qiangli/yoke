@@ -25,44 +25,7 @@ func WithBashSharpRunner(run BashSharpRunner) Option {
 	return func(c *config) { c.bashSharpRunner = run }
 }
 
-// Preserve body bytes, including newlines, and ignore examples nested in other
-// fenced blocks. An unterminated fence is not an executable unit.
-func bashSharpFences(document string) string {
-	var body strings.Builder
-	var fence string
-	var selected bool
-	for _, line := range strings.SplitAfter(document, "\n") {
-		trim := strings.TrimSpace(line)
-		if fence != "" {
-			if strings.HasPrefix(trim, fence) && strings.Trim(trim, string(fence[0])) == "" {
-				fence, selected = "", false
-			} else if selected {
-				body.WriteString(line)
-			}
-			continue
-		}
-		if strings.HasPrefix(trim, "```") || strings.HasPrefix(trim, "~~~") {
-			n := 0
-			for n < len(trim) && trim[n] == trim[0] {
-				n++
-			}
-			fence = trim[:n]
-			tag := strings.TrimSpace(trim[n:])
-			selected = tag == "bsh" || tag == "bashsharp"
-		}
-	}
-	if fence != "" && selected {
-		return ""
-	}
-	return body.String()
-}
-
-func bashSharpIdentity(body string) string {
-	return fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(body)))
-}
-
 var decoratorLine = regexp.MustCompile(`^\s*@(require|ensure|guard|effects)\b`)
-var guardEffects = regexp.MustCompile(`@guard\s*\(\s*effects\s*:\s*["']([^"']*)["']`)
 
 func bashSharpDecorators(body string) string {
 	var lines strings.Builder
@@ -72,21 +35,6 @@ func bashSharpDecorators(body string) string {
 		}
 	}
 	return lines.String()
-}
-
-func bashSharpCap(body string) []string {
-	var cap []string
-	seen := map[string]bool{}
-	for _, match := range guardEffects.FindAllStringSubmatch(body, -1) {
-		for _, atom := range strings.Split(match[1], ",") {
-			atom = strings.TrimSpace(atom)
-			if atom != "" && !seen[atom] {
-				cap = append(cap, atom)
-				seen[atom] = true
-			}
-		}
-	}
-	return cap
 }
 
 // Overlay keys include the authored identity AND coordinate: a repair proven
@@ -108,16 +56,32 @@ func executeBashSharp(cfg *config, name, body string, p runPrep, dir string, log
 			code = 1
 		}
 	}
-	identity := bashSharpIdentity(body)
+	// One identity, one contract reader, one capability key (pkg/unit): the
+	// receipt names the exact body that ran and the promise it was keeping.
+	id := unit.BodyIdentity([]byte(body))
+	contract, _ := unit.ReadContract(body)
+	capKey, _ := unit.CapabilityKey(contract)
+	contracted := contract.Contracted()
 	rec := AttestRecord{
 		At: time.Now().UTC(), Name: name, Tier: p.tier, ContextKey: p.ctxKey, Status: &code,
-		Attest:      dhntskills.Attestation{Skill: identity, Valid: code == 0},
-		Attestation: unit.Attestation{Target: name, Identity: identity, Valid: code == 0, Effects: bashSharpCap(body)},
+		Capability: capKey,
+		Attest:     dhntskills.Attestation{Skill: id, Valid: code == 0 && contracted},
+		Attestation: unit.Attestation{Target: name, Identity: id, Capability: capKey, Valid: code == 0 && contracted,
+			Effects: contract.EffectCap(), Uncontracted: !contracted},
 	}
-	if code != 0 {
+	switch {
+	case code != 0:
 		rec.Attest.Failed = []string{fmt.Sprintf("Bash# exit %d", code)}
+	case !contracted:
+		// Exit 0 is not a verdict: with no @require/@ensure there is nothing
+		// the run could have been checked against, so it is never verified.
+		// Like an uncontracted dag target, it leaves no receipt: a receipt is
+		// evidence about a promise, and this unit made none.
+		fmt.Fprintf(log, "skills: %s: uncontracted Bash# unit — ran, not verified\n", name)
 	}
-	storeAttest(cfg, rec, log)
+	if contracted {
+		storeAttest(cfg, rec, log)
+	}
 	return rec, output.String()
 }
 
@@ -132,7 +96,7 @@ func runBashSharp(cfg *config, name string, p runPrep, dir string, log io.Writer
 		}
 	}
 	rec, failure := executeBashSharp(cfg, name, body, p, dir, log)
-	if rec.Valid || !adapt {
+	if ranClean(rec) || !adapt {
 		return rec, outcome, nil
 	}
 	if complete == nil {
@@ -149,13 +113,13 @@ func runBashSharp(cfg *config, name string, p runPrep, dir string, log io.Writer
 			lastErr = err
 			continue
 		}
-		candidate := bashSharpFences(reply)
+		candidate := unit.BashSharpBody(reply)
 		if candidate == "" || bashSharpDecorators(candidate) != bashSharpDecorators(p.body) {
 			lastErr = fmt.Errorf("repair rejected: missing Bash# fence or changed decorator lines")
 			continue
 		}
 		trial, output := executeBashSharp(cfg, name, candidate, p, dir, log)
-		if !trial.Valid {
+		if !ranClean(trial) {
 			failure = output
 			lastErr = fmt.Errorf("candidate failed with exit %d", *trial.Status)
 			continue
