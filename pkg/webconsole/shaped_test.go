@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -24,12 +25,116 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
+	ygit "github.com/qiangli/yoke/git"
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/shape/contain"
 	shape "github.com/qiangli/yoke/pkg/shape/state"
 	"github.com/qiangli/yoke/pkg/websession"
 )
 
 const notesFixture = "testdata/shaped/notes"
+
+// TestShapedAppAddZeroSetup is the live-smoke regression: a plain directory
+// becomes a managed, versioned app without a host git identity or any manual
+// repository setup, and an app-scoped paired device can immediately use both
+// the app API and the shape panel asset without gaining another app's API.
+func TestShapedAppAddZeroSetup(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BASHY_HOME", home)
+	t.Setenv("HOME", filepath.Join(home, "empty-user-home"))
+	registry := filepath.Join(home, "registry")
+	plain := filepath.Join(t.TempDir(), "plain-notes")
+	if err := copyTree(filepath.Join(notesFixture, "app"), plain); err != nil {
+		t.Fatal(err)
+	}
+
+	add := func() {
+		t.Helper()
+		for _, cmd := range fleet.NewAppCmds(fleet.WithRoot(registry), fleet.WithAppValidate(ValidateRegisteredApp)) {
+			if cmd.Name() != "add" {
+				continue
+			}
+			cmd.SetOut(io.Discard)
+			cmd.SetErr(io.Discard)
+			cmd.SetArgs([]string{"notes", "--type", "shaped", "--source", plain})
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("app add: %v", err)
+			}
+			return
+		}
+		t.Fatal("app add command is not registered")
+	}
+	add()
+	add() // importing and registering the same app is idempotent.
+
+	app, ok := fleet.New(fleet.WithRoot(registry), fleet.WithoutCloudOverlay()).App("notes")
+	if !ok {
+		t.Fatal("registered app is missing")
+	}
+	wantSource := filepath.Join(home, "src", "notes")
+	if app.Source != wantSource {
+		t.Fatalf("registered source = %q, want managed checkout %q", app.Source, wantSource)
+	}
+	base, err := ygit.ResolveCommit(app.Source, "HEAD")
+	if err != nil {
+		t.Fatalf("managed checkout has no base commit: %v", err)
+	}
+	pristine, err := ygit.ResolveCommit(app.Source, "pristine")
+	if err != nil || pristine != base {
+		t.Fatalf("pristine = %q, %v; want base %q", pristine, err, base)
+	}
+	repo, err := gogit.PlainOpen(app.Source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit, err := repo.CommitObject(plumbing.NewHash(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if commit.Author.Name != "bashy" || commit.Author.Email != "bashy@localhost" {
+		t.Fatalf("base author = %s <%s>, want bashy-owned fallback", commit.Author.Name, commit.Author.Email)
+	}
+
+	panel := Panel{Name: app.Name, Label: app.Name, Path: "/notes/", ShapedSource: app.Source,
+		Auth: AuthSystem, Source: "registered", Available: true}
+	pairPath := filepath.Join(home, "pairing.json")
+	sessions := websession.NewStore(time.Hour, []byte("test-key-test-key-test-key-32byt"))
+	h := newTestHandler(t, Options{
+		RequireLogin: true, Sessions: sessions, Pairing: true, PairStorePath: pairPath,
+		Panels: []Panel{panel}, Shape: ShapeOptions{Home: home, Runner: []string{"/bin/sh"}, Level: contain.LevelProcess},
+	})
+	store := newPairStore(pairPath)
+	_, secret, err := store.issueTicketForPrincipal([]string{"notes"}, time.Hour, time.Minute, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const peer = "192.0.2.10:5555"
+	redeemed := do(h, http.MethodGet, pairRedeemPath+"?v="+pairQRVersion+"&t="+url.QueryEscape(secret), peer, nil)
+	var device http.Header
+	for _, cookie := range redeemed.Result().Cookies() {
+		if cookie.Name == sessionCookie && cookie.Value != "" {
+			device = withCookie(cookie)
+		}
+	}
+	if device == nil {
+		t.Fatalf("pair redemption = %d without a session cookie", redeemed.Code)
+	}
+	if w := do(h, http.MethodGet, "/notes/api/list", peer, device); w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != "[]" {
+		t.Fatalf("initial list = %d %q", w.Code, w.Body.String())
+	}
+	if w := send(h, http.MethodPost, "/notes/api/add", peer, device, "first note"); w.Code != http.StatusOK {
+		t.Fatalf("add = %d %q", w.Code, w.Body.String())
+	}
+	if w := do(h, http.MethodGet, "/notes/api/list", peer, device); w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != `["first note"]` {
+		t.Fatalf("list after add = %d %q", w.Code, w.Body.String())
+	}
+	if w := do(h, http.MethodGet, "/shape.js", peer, device); w.Code != http.StatusOK {
+		t.Fatalf("shape.js = %d %q", w.Code, w.Body.String())
+	}
+	if w := do(h, http.MethodGet, "/api/shape/other", peer, device); w.Code != http.StatusForbidden {
+		t.Fatalf("other app shape API = %d, want 403", w.Code)
+	}
+}
 
 // newNotesSource commits the notes fixture into a fresh checkout — the app's
 // base revision.

@@ -473,6 +473,50 @@ func TestNativeBranch_CreateAndCheckout(t *testing.T) {
 	}
 }
 
+func TestNativeBranch_CreateAtStartPoint(t *testing.T) {
+	dir := setupTestRepo(t)
+	ctx := context.Background()
+	base, err := nativeRevParse(ctx, dir, []string{"HEAD"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := nativeBranch(ctx, dir, []string{"later"}); err != nil {
+		t.Fatalf("branch later: %v", err)
+	}
+	if _, err := nativeCheckout(ctx, dir, []string{"later"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "later.txt"), []byte("later\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := nativeAdd(ctx, dir, []string{"later.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := nativeCommit(ctx, dir, []string{"-m", "later"}); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := ExecOrExternal(ctx, dir, []string{"branch", "from-base", strings.TrimSpace(base.Stdout)}, false)
+	if err != nil || res.ExitCode != 0 {
+		t.Fatalf("native branch from-base <start>: result=%+v err=%v", res, err)
+	}
+	got, err := nativeRevParse(ctx, dir, []string{"from-base"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(got.Stdout) != strings.TrimSpace(base.Stdout) {
+		t.Fatalf("from-base = %q, want %q", got.Stdout, base.Stdout)
+	}
+
+	res, err = ExecOrExternal(ctx, dir, []string{"branch", "from-base"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode == 0 || !strings.Contains(res.Stderr, "already exists") {
+		t.Fatalf("duplicate branch = %+v, want already-exists refusal", res)
+	}
+}
+
 func TestNativeCheckout_CreateBranch(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping in short mode")
