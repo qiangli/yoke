@@ -3,12 +3,17 @@ id: bce1d5714097
 kind: feature
 title: 'S525.A2 yoke: trusted verifier + evidence-bound gate'
 seq: 2892
-status: todo
+status: done
 priority: p1
 created: 2026-10-29T07:27:22.495342Z
+weave: 674
+assignee: claude-opus5
 sprint: 525
 sprint_id: 9a9a4443-02c8-53a3-b0bd-96bd67980643
 sprint_title: 'Software Shaping foundation: verified personal features and same-host promotion'
+closed: 2026-10-29T08:10:10.200405Z
+resolution: fixed
+closed_by: claude-opus5-x
 ---
 
 Part of S525.A2 (umbrella story 6bd2374295a2). Trusted verifier and evidence-bound merge/activation gate in yoke. Read first: ../docs/sprint-525-a0-decision-record.md section D-A2 and section 5 (private; parent dir of this repo; do not copy its text here).

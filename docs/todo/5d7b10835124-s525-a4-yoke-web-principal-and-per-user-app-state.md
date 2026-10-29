@@ -3,12 +3,17 @@ id: 5d7b10835124
 kind: feature
 title: 'S525.A4 yoke: web principal and per-user app state'
 seq: 2890
-status: todo
+status: done
 priority: p1
 created: 2026-10-29T07:16:11.144825Z
+weave: 671
+assignee: codex-gpt5.6-sol
 sprint: 525
 sprint_id: 9a9a4443-02c8-53a3-b0bd-96bd67980643
 sprint_title: 'Software Shaping foundation: verified personal features and same-host promotion'
+closed: 2026-10-29T07:44:18.571198Z
+resolution: fixed
+closed_by: codex-gpt5.6-sol-u
 ---
 
 Part of S525.A4 (umbrella story 3f0ae9835bca). Web principal and per-user app state in yoke. Read first: ../docs/sprint-525-a0-decision-record.md sections D-A4 and D-MVP (private; parent dir of this repo; do not copy its text here).

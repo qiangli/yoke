@@ -3,12 +3,17 @@ id: c02eb8e443c8
 kind: refactor
 title: 'S525.A1 yoke: unify Bash# skill/script unit model'
 seq: 2832
-status: todo
+status: done
 priority: p1
 created: 2026-10-29T07:15:54.000759Z
+weave: 669
+assignee: claude-opus5.5
 sprint: 525
 sprint_id: 9a9a4443-02c8-53a3-b0bd-96bd67980643
 sprint_title: 'Software Shaping foundation: verified personal features and same-host promotion'
+closed: 2026-10-29T07:42:30.372061Z
+resolution: fixed
+closed_by: claude-opus5.5-s
 ---
 
 Part of S525.A1 (umbrella story b976805c404f). Unify Bash# skill and script executable units in yoke. Read first: ../docs/sprint-525-a0-decision-record.md section D-A1 (umbrella checkout = parent dir of this repo; private, do not copy text into this repo).

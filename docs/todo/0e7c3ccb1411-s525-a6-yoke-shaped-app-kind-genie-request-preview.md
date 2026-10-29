@@ -3,12 +3,17 @@ id: 0e7c3ccb1411
 kind: feature
 title: 'S525.A6 yoke: shaped app kind + Genie request/preview/review'
 seq: 2895
-status: todo
+status: done
 priority: p1
 created: 2026-10-29T07:55:06.336699Z
+weave: 677
+assignee: claude-opus5.5
 sprint: 525
 sprint_id: 9a9a4443-02c8-53a3-b0bd-96bd67980643
 sprint_title: 'Software Shaping foundation: verified personal features and same-host promotion'
+closed: 2026-10-29T09:27:47.588516Z
+resolution: fixed
+closed_by: claude-opus5.5-a
 ---
 
 Part of S525.A6 (umbrella story 0f0f7abad866). The shaped app kind + Genie request/preview/review experience, in yoke. Read first: ../docs/sprint-525-a0-decision-record.md sections D-A6, D-MVP, D-A4, D-A5 (private; parent dir of this repo; do NOT copy its text or describe internal mechanisms in public docs/commits — describe behavior only).

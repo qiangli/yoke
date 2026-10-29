@@ -3,12 +3,17 @@ id: 3561440d188f
 kind: feature
 title: 'S525.A10 yoke: version history list/preview/diff/name/restore'
 seq: 2897
-status: todo
+status: done
 priority: p1
 created: 2026-10-29T08:00:58.420318Z
+weave: 678
+assignee: muse-conductor
 sprint: 525
 sprint_id: 9a9a4443-02c8-53a3-b0bd-96bd67980643
 sprint_title: 'Software Shaping foundation: verified personal features and same-host promotion'
+closed: 2026-10-29T08:07:41.059737Z
+resolution: fixed
+closed_by: muse-conductor-b
 ---
 
 Part of S525.A10 (umbrella story 671de6e307ac). Version history for shaped apps, in yoke. Builds directly on S525.A7 (pkg/src/activate.go version lines/named/review refs, pkg/shape/state store + ActivationGate, src activate, weave start --base). Public docs and commit messages describe user-visible behavior only, not the internal mechanism.

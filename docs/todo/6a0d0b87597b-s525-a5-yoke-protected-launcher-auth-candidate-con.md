@@ -3,12 +3,17 @@ id: 6a0d0b87597b
 kind: feature
 title: 'S525.A5 yoke: protected launcher auth + candidate containment'
 seq: 2891
-status: todo
+status: done
 priority: p1
 created: 2026-10-29T07:16:11.410953Z
+weave: 670
+assignee: claude-sonnet5.5
 sprint: 525
 sprint_id: 9a9a4443-02c8-53a3-b0bd-96bd67980643
 sprint_title: 'Software Shaping foundation: verified personal features and same-host promotion'
+closed: 2026-10-29T07:26:34.862037Z
+resolution: fixed
+closed_by: claude-sonnet5.5-t
 ---
 
 Part of S525.A5 (umbrella story 5c7b49ea6ae9). Enforced shaping security in yoke. Read first: ../docs/sprint-525-a0-decision-record.md sections D-A5 and 5 (threat model) (private; parent dir of this repo; do not copy its text here).

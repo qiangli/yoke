@@ -3,12 +3,17 @@ id: 3d27603dc63e
 kind: feature
 title: 'S525.A7 yoke: per-user versions, atomic activation, rollback'
 seq: 2894
-status: todo
+status: done
 priority: p1
 created: 2026-10-29T07:44:57.252178Z
+weave: 675
+assignee: muse-conductor
 sprint: 525
 sprint_id: 9a9a4443-02c8-53a3-b0bd-96bd67980643
 sprint_title: 'Software Shaping foundation: verified personal features and same-host promotion'
+closed: 2026-10-29T07:59:25.447438Z
+resolution: fixed
+closed_by: muse-conductor-y
 ---
 
 Part of S525.A7 (umbrella story a48023916878). Per-user versions, atomic activation and rollback on the local Git/Weave path, in yoke. Read first: ../docs/sprint-525-a0-decision-record.md sections D-A7/A10 and D-MVP (private; parent dir of this repo; do NOT copy its text or describe the internal mechanism in public docs/commits — describe behavior only).
