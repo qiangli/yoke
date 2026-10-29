@@ -466,3 +466,94 @@ func (s *Store) Restore(ref string) error {
 		return ErrNotFound
 	})
 }
+
+// Adopt folds a verified identity into the MANUAL record that proved it, so
+// `account refresh <alias>` leaves one resolved record rather than the manual
+// one plus a new unaliased observation. The record is re-keyed to the identity
+// key; the manual alias and overrides survive as overrides. When a record for
+// that identity already exists (the observation hook writes one during the
+// verify call) the manual alias/overrides merge into it and the manual record
+// is removed — no data is lost. The account ID follows the identity key, so
+// the manual record's snapshot moves with it. It returns the adopted account.
+func (s *Store) Adopt(manualID, adapter string, o Observation) (Account, error) {
+	var out Account
+	err := s.mutate(func(d *document) error {
+		mi := -1
+		for i := range d.Records {
+			if d.Records[i].Observation.ID == manualID && d.Records[i].Observation.Provenance == "manual" {
+				mi = i
+				break
+			}
+		}
+		if mi < 0 {
+			return ErrNotFound
+		}
+		key, status, err := identity(adapter, o)
+		if err != nil {
+			return err
+		}
+		if status != Resolved {
+			return errors.New("accounts: observation proves no identity")
+		}
+		manual := d.Records[mi]
+		if manual.Key == key {
+			return ErrNotFound
+		}
+		ov := manualOverride(effective(manual))
+		if manual.Override.Alias != nil {
+			ov.Alias = manual.Override.Alias
+		}
+		a := o.Account
+		a.ID = localID(key)
+		a.Provenance = adapter
+		a.Status = Resolved
+		d.Records = append(d.Records[:mi], d.Records[mi+1:]...)
+		idx := -1
+		for i := range d.Records {
+			if d.Records[i].Key == key {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			d.Records = append(d.Records, record{Key: key, Observation: a, Override: ov, Bindings: manual.Bindings, Suppressed: manual.Suppressed})
+			out = effective(d.Records[len(d.Records)-1])
+		} else {
+			r := &d.Records[idx]
+			r.Observation = a
+			if ov.Alias != nil {
+				r.Override.Alias = ov.Alias
+			}
+			if ov.Name != nil {
+				r.Override.Name = ov.Name
+			}
+			if ov.Region != nil {
+				r.Override.Region = ov.Region
+			}
+			if ov.Environment != nil {
+				r.Override.Environment = ov.Environment
+			}
+			if ov.Links != nil {
+				r.Override.Links = ov.Links
+			}
+			for _, b := range manual.Bindings {
+				dup := false
+				for _, x := range r.Bindings {
+					dup = dup || x == b
+				}
+				if !dup {
+					r.Bindings = append(r.Bindings, b)
+				}
+			}
+			r.Suppressed = r.Suppressed && manual.Suppressed
+			out = effective(*r)
+		}
+		for i := range d.Snapshots {
+			if d.Snapshots[i].AccountID == manualID {
+				d.Snapshots[i].AccountID = out.ID
+			}
+		}
+		return checkAliases(d)
+	})
+	return out, err
+}

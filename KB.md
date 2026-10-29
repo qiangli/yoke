@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [repo/page] Run llmgw gates from its nested module — WHEN a yoke gate names ./pkg/llmgw/..., the root Go module rejects that pattern because pkg/llmgw has its own go.mod. Run go test ./... (and go vet ./...) with cwd pkg/llmgw; keep the root cligw, broker, and fleet gates separate so the nested-module setup error cannot mask their results.  (kb:run-llmgw-gates-from-its-nested-module)
+- [repo/page] Windows shell paths: program names and file operands use different conversions — WHEN a Bash or Bash# fixture passes paths into Go on Windows, convert executable program paths with pathconv.NativePath (program only, never argv), but convert filesystem operands such as /tmp state files with pathconv.ToOS so virt  (kb:windows-shell-paths-program-names-and-file-operands-use-differen)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 
