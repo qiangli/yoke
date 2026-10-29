@@ -142,3 +142,51 @@ func TestAdoptMergesIntoExistingObservedRecord(t *testing.T) {
 		t.Fatalf("merge lost data: %+v", rows)
 	}
 }
+
+func TestCLIRefreshAdoptsIntoOneResolvedRecord(t *testing.T) {
+	for _, all := range []bool{false, true} {
+		reg, _, _ := adoptRegistry(t)
+		store := Open(filepath.Join(t.TempDir(), "accounts.json"))
+		SetHookStore(nil)
+		aliases := []string{"x"}
+		if all {
+			aliases = []string{"x", "y"}
+		}
+		for _, al := range aliases {
+			if _, _, err := invokeAccount(t, store, reg, "add", al, "--kind", "digitalocean", "--credential", "secret:secret-"+al); err != nil {
+				t.Fatal(err)
+			}
+		}
+		args := []string{"refresh", "x"}
+		if all {
+			args = []string{"refresh", "--all"}
+		}
+		if _, _, err := invokeAccount(t, store, reg, args...); err != nil {
+			t.Fatalf("refresh all=%v: %v", all, err)
+		}
+		out, _, err := invokeAccount(t, store, reg, "list", "--json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows := decodeEnvelope(t, out)["accounts"].([]any)
+		if len(rows) != len(aliases) {
+			t.Fatalf("all=%v want %d records, got %d: %s", all, len(aliases), len(rows), out)
+		}
+		seen := map[string]bool{}
+		for _, r := range rows {
+			m := r.(map[string]any)
+			if m["status"] != string(Resolved) || m["provider_account_id"] == nil || m["provider_account_id"] == "" {
+				t.Fatalf("not adopted: %v", m)
+			}
+			seen[m["alias"].(string)] = true
+		}
+		for _, al := range aliases {
+			if !seen[al] {
+				t.Fatalf("alias %s missing: %s", al, out)
+			}
+			if _, err := store.Resolve(al, OpInfra); err != nil {
+				t.Fatalf("resolve %s: %v", al, err)
+			}
+		}
+	}
+}
