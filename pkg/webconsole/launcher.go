@@ -33,6 +33,10 @@ func (s *server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	for _, p := range s.requestPanels(r) {
 		if s.liveRegistered && p.Source == "registered" && firstSegment(r.URL.Path) == strings.Trim(p.Path, "/") {
 			mount := strings.TrimSuffix(p.Path, "/")
+			if p.ShapedSource != "" {
+				coopauth.Mount(mount, s.shapedApp(p).handler()).ServeHTTP(w, r)
+				return
+			}
 			coopauth.Mount(mount, s.proxyTo(p)).ServeHTTP(w, r)
 			return
 		}

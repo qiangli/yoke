@@ -68,6 +68,10 @@ type Spec struct {
 	Level Level
 	// Cap is the @guard effect cap spec (e.g. "read,write"); required.
 	Cap string
+	// Effects, when non-empty, are the declared effects of what Argv runs and
+	// are checked against Cap instead of argv[0]'s atlas row. It exists for
+	// interpreters: `sh -c BODY` has the effects of BODY's contract, not of sh.
+	Effects []string
 	// EnvAllow lists parent environment variable names the principal may
 	// see; nothing else is inherited. EnvSet adds explicit values.
 	EnvAllow []string
@@ -132,9 +136,11 @@ func Run(ctx context.Context, s Spec) (Result, error) {
 		return res, fmt.Errorf("contain: %w", err)
 	}
 	name := filepath.Base(s.Argv[0])
-	var effects []string
-	if e, ok := atlas.Lookup(name); ok {
-		effects = e.Effects
+	effects := s.Effects
+	if len(effects) == 0 {
+		if e, ok := atlas.Lookup(name); ok {
+			effects = e.Effects
+		}
 	}
 	if ex := capv.Exceeded(effects); len(ex) > 0 {
 		return res, &EffectError{Command: name, Exceeded: ex}

@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -32,6 +33,8 @@ type App struct {
 	Start           []string `yaml:"start,omitempty" json:"start,omitempty" doc:"argv shown as the start hint when the app is down (never run by the console)"`
 	Auth            string   `yaml:"auth,omitempty" json:"auth,omitempty" doc:"auth tier: system (default), public or custom"`
 	LoginPath       string   `yaml:"login_path,omitempty" json:"login_path,omitempty" doc:"custom auth only: app-relative login path"`
+	Type            string   `yaml:"type,omitempty" json:"type,omitempty" doc:"app type: proxy (default, a loopback server) or shaped (served from a versioned source tree)"`
+	Source          string   `yaml:"source,omitempty" json:"source,omitempty" doc:"shaped only: absolute path of the app's git checkout"`
 
 	Ring assetring.Ring `yaml:"-" json:"ring"`
 }
@@ -75,11 +78,39 @@ func (a App) Validate() error {
 	if a.Kind != "" && a.Kind != KindApp {
 		return fmt.Errorf("fleet: app %q: kind %q, want %s", a.Name, a.Kind, KindApp)
 	}
+	switch a.Type {
+	case "", AppTypeProxy:
+		if a.Source != "" {
+			return fmt.Errorf("fleet: app %q: source is valid only with type %s", a.Name, AppTypeShaped)
+		}
+	case AppTypeShaped:
+		// A shaped app is served by the console from its source tree; there is
+		// no server of its own to proxy, so a port would be a lie.
+		if a.Port != 0 {
+			return fmt.Errorf("fleet: app %q: a %s app has no port", a.Name, AppTypeShaped)
+		}
+		if !filepath.IsAbs(a.Source) {
+			return fmt.Errorf("fleet: app %q: a %s app needs an absolute --source checkout", a.Name, AppTypeShaped)
+		}
+		return nil
+	default:
+		return fmt.Errorf("fleet: app %q: type %q, want %s or %s", a.Name, a.Type, AppTypeProxy, AppTypeShaped)
+	}
 	if a.Port < 1 || a.Port > 65535 {
 		return fmt.Errorf("fleet: app %q: port %d out of range (--port N)", a.Name, a.Port)
 	}
 	return nil
 }
+
+// App types. Proxy is the default: a separately supervised loopback server.
+// Shaped apps are versioned source trees the console serves per principal.
+const (
+	AppTypeProxy  = "proxy"
+	AppTypeShaped = "shaped"
+)
+
+// IsShaped reports whether the console serves this app from its source tree.
+func (a App) IsShaped() bool { return a.Type == AppTypeShaped }
 
 // Apps returns every registered app, name-sorted, across the shared and
 // local rings. Entries that fail to parse are reported, never hidden.
