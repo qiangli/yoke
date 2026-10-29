@@ -15,6 +15,9 @@ type ProtEntry struct {
 	Path string
 	// Core is true for trust-root paths, false for protected (non-core) ones.
 	Core bool
+	// Reason records why a post-Appendix-A row exists. Appendix-A rows leave
+	// it empty; every later addition must set it.
+	Reason string
 }
 
 // Kind returns "core" or "protected" for reports.
@@ -98,6 +101,23 @@ func ProtectedManifest() []ProtEntry {
 		{Repo: "yoke", Path: "pkg/browser/live/extension/background.js", Core: false},
 		{Repo: "yoke", Path: "pkg/browser/live/extension/page.js", Core: false},
 		{Repo: "yoke", Path: "pkg/browser/internal/cdpactions/guard.go", Core: false},
+		// Sprint 525.A5: the launcher auth surface and the shaping trust
+		// roots. A skill that can rewrite these can mint its own approval
+		// or forge the evidence it is judged by. Rows for paths created by
+		// later stories are harmless while the path is absent.
+		{Repo: "yoke", Path: "pkg/webconsole/host_auth.go", Reason: "launcher host authentication decides who may drive the console"},
+		{Repo: "yoke", Path: "pkg/webconsole/pairing.go", Reason: "pairing mints the credentials a peer is later trusted by"},
+		{Repo: "yoke", Path: "pkg/webconsole/pair_cmd.go", Reason: "pairing command surface"},
+		{Repo: "yoke", Path: "pkg/webconsole/pair_http.go", Reason: "pairing HTTP surface"},
+		{Repo: "yoke", Path: "pkg/webconsole/pair_peer.go", Reason: "pairing peer trust record"},
+		{Repo: "yoke", Path: "pkg/webconsole/pair_settings.go", Reason: "pairing policy settings"},
+		{Repo: "yoke", Path: "pkg/webconsole/login.go", Reason: "login establishes the operator session"},
+		{Repo: "yoke", Path: "pkg/webconsole/gate.go", Reason: "the gate files enforce the auth decision on every request"},
+		{Repo: "yoke", Path: "pkg/coopauth", Reason: "the shared cooperative-auth implementation behind cloudbox/outpost trust"},
+		{Repo: "yoke", Path: "pkg/shape/contain", Reason: "the candidate containment boundary; a candidate must not loosen its own sandbox"},
+		{Repo: "yoke", Path: "pkg/shape/verify", Reason: "reserved: the shaping verifier decides whether a candidate activates"},
+		{Repo: "yoke", Path: "pkg/shape/evidence", Reason: "reserved: the evidence store a verifier verdict is read from"},
+		{Repo: "yoke", Path: "pkg/shape/state", Reason: "reserved: shape state code tracks activation and rollback"},
 	}
 }
 
