@@ -484,13 +484,7 @@ type ProjectResource struct {
 
 // ListProjects returns all projects.
 func (c *Client) ListProjects(ctx context.Context) ([]Project, error) {
-	var out struct {
-		Projects []Project `json:"projects"`
-	}
-	if err := c.call(ctx, http.MethodGet, "/v2/projects", nil, &out); err != nil {
-		return nil, err
-	}
-	return out.Projects, nil
+	return accountPages[Project](ctx, c, "/v2/projects", "projects")
 }
 
 // GetProject returns a project by ID.

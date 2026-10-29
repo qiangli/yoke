@@ -140,18 +140,17 @@ type callerIdentity struct {
 // is cached: a cancelled context or a transient STS failure must not
 // poison every later preflight on the same adapter.
 type accountCache struct {
-	mu sync.Mutex
-	id string
+	mu  sync.Mutex
+	id  string
+	arn string
 }
 
 // AccountID returns the account id the credentials belong to, from
 // Config.AccountID when the caller supplied one and otherwise from STS
 // GetCallerIdentity (asked at most once per adapter).
 //
-// Only the ACCOUNT id is kept. The caller ARN and user id in the same
-// answer name the principal, which is credential-adjacent material this
-// package has no use for, so they are dropped here rather than stored
-// where a later error message could pick them up.
+// The account id and principal ARN are cached for inventory attribution.
+// The user id is discarded; neither credentials nor raw responses are cached.
 func (a *adapter) AccountID(ctx context.Context) (string, error) {
 	if id := strings.TrimSpace(a.cfg.AccountID); id != "" {
 		return id, nil
@@ -170,5 +169,6 @@ func (a *adapter) AccountID(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("aws: sts GetCallerIdentity returned no account id")
 	}
 	a.account.id = id
+	a.account.arn = out.Result.ARN
 	return id, nil
 }

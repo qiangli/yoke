@@ -173,6 +173,16 @@ type Server struct {
 	regions          []map[string]any
 	sizes            []map[string]any
 	account          map[string]any
+	accountKeys      []map[string]any
+	balance          map[string]any
+}
+
+// SetAccountInventory configures read-only keys and balance fixtures.
+func (s *Server) SetAccountInventory(keys []map[string]any, balance map[string]any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.accountKeys = keys
+	s.balance = balance
 }
 
 // SetCatalog replaces the served /v2/regions and /v2/sizes entries.
@@ -494,6 +504,13 @@ func (s *Server) route(r *http.Request) (int, any) {
 		return notFound()
 	}
 	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/v2/account/keys":
+		return http.StatusOK, map[string]any{"ssh_keys": s.accountKeys}
+	case r.Method == http.MethodGet && r.URL.Path == "/v2/customers/my/balance":
+		if s.balance == nil {
+			return notFound()
+		}
+		return http.StatusOK, s.balance
 	case len(parts) == 2 && parts[1] == "account" && r.Method == http.MethodGet:
 		if s.account != nil {
 			return http.StatusOK, map[string]any{"account": s.account}

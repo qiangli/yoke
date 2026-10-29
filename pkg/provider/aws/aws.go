@@ -158,6 +158,14 @@ func regionOf(s string) string {
 // New returns the adapter, wrapped in provider.Guard so capability,
 // idempotency-key and destroy-authorization checks run before any API call.
 func New(cfg Config) (provider.Adapter, error) {
+	a, err := newAdapter(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return provider.Guard(a), nil
+}
+
+func newAdapter(cfg Config) (*adapter, error) {
 	if !cfg.Credentials.Valid() {
 		return nil, &provider.Error{Code: provider.ErrInvalidCredentials,
 			Message: "aws: " + EnvAccessKeyID + " and " + EnvSecretAccessKey + " are both required"}
@@ -249,7 +257,7 @@ func New(cfg Config) (provider.Adapter, error) {
 		version: stsAPIVersion, creds: cfg.Credentials,
 		httpClient: cfg.HTTPClient, now: a.now,
 	}
-	return provider.Guard(a), nil
+	return a, nil
 }
 
 type adapter struct {
