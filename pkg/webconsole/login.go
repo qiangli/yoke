@@ -184,7 +184,12 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cookie, err := s.sessions.Mint(hostauth.BareUsername(user))
+	// Mint the canonical owner — the full `DOMAIN\user` form on Windows, the
+	// bare name everywhere else — so the gate's os: principal matches on
+	// every OS. The session cookie encoding keeps the qualified name
+	// wire-safe; SameUser above already accepted the bare form the operator
+	// actually typed.
+	cookie, err := s.sessions.Mint(owner)
 	if err != nil {
 		s.renderLogin(w, r, "Could not start a session.")
 		return
@@ -211,14 +216,21 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, coopauth.PrefixPath(r, "/login"), http.StatusSeeOther)
 }
 
-// currentOSUser is the account this process runs as, and therefore the only
-// account that may sign in — see handleLogin.
-func currentOSUser() string {
+// osUserLookup resolves the account this process runs as. A variable rather
+// than a direct call so tests can inject the qualified name Go reports on
+// native Windows (`DOMAIN\user`), which no Unix test host will ever have.
+var osUserLookup = func() string {
 	u, err := hostauth.CurrentUser()
 	if err != nil {
 		return ""
 	}
 	return u
+}
+
+// currentOSUser is the account this process runs as, and therefore the only
+// account that may sign in — see handleLogin.
+func currentOSUser() string {
+	return osUserLookup()
 }
 
 func htmlEscape(s string) string {
