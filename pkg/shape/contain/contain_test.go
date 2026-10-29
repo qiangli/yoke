@@ -57,6 +57,30 @@ func TestDenialTable(t *testing.T) {
 		}
 	})
 
+	t.Run("declared effects stand in for the atlas lookup", func(t *testing.T) {
+		// A host-installed interpreter has no atlas row, and an absent
+		// declaration denies as unknown. Declaring effects says what is
+		// about to run; it does not exempt it from the cap.
+		out, err := os.CreateTemp(t.TempDir(), "out")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer out.Close()
+		run := func(cap string, effects []string) (Result, error) {
+			return Run(context.Background(), Spec{
+				Dir: clone, Argv: []string{"cat", inside}, Level: LevelProcess,
+				Cap: cap, Effects: effects, Stdout: out, Stderr: out,
+			})
+		}
+		if _, err := run("read", []string{"net"}); err == nil {
+			t.Fatal("declared effects outside the cap were allowed")
+		}
+		r, err := run("read,net", []string{"net"})
+		if err != nil || r.ExitCode != 0 {
+			t.Fatalf("r=%+v err=%v", r, err)
+		}
+	})
+
 	t.Run("unsupported level is typed refusal", func(t *testing.T) {
 		_, _, err := runCat(t, Level("vm"), clone, inside, "read")
 		var ue *UnavailableError

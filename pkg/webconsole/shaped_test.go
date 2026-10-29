@@ -24,8 +24,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
-	"github.com/qiangli/yoke/pkg/shape"
 	"github.com/qiangli/yoke/pkg/shape/contain"
+	shape "github.com/qiangli/yoke/pkg/shape/state"
 	"github.com/qiangli/yoke/pkg/websession"
 )
 

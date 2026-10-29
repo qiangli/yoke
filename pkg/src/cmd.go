@@ -26,6 +26,24 @@ func newSrcCmd() *cobra.Command {
                    show branch pins and the pristine|modified|modified-protected state
   src diff <repo> [--base pristine|local]
                    diff the base tip to HEAD
+  src diff <app> <a> <b> [--user P]
+                   diff one version to another (commits, labels, or base)
+  src history <app> [--user P] [--json]
+                   list the principal's versions, labels, and review copies
+  src preview <app> <rev>
+                   check a version out in an isolated workspace
+  src name <app> <rev> <label> [--user P]
+                   pin a label to a version
+  src restore <app> <rev> [--user P]
+                   return to a version through a new gated commit
+  src offer <app> <rev> [--to P,...|--all]
+                   publish a revision as a host offering
+  src offers <app> [--user P] [--json]
+                   list offerings visible to the principal
+  src adopt <app> <offer> [--preview] [--user P]
+                   preview or merge and activate an offering
+  src decline <app> <offer> [--user P]
+                   decline an offering and clear its notice
   src log [repo]   show recent commits
   src pr open <repo> <branch> --title T [--test CMD]
   src pr show <id> | src pr list [--repo R] | src pr merge <id> | src pr close <id>
@@ -34,6 +52,8 @@ func newSrcCmd() *cobra.Command {
                    apply a patch file on a fresh branch and open a PR
   src upgrade <repo> <commit>
 				   move pristine to the release commit and rebase local onto it
+  src activate <app> <rev> [--principal P]
+				   gate, record, and switch P's active revision to <rev>
   src revert <repo> [--apply]
                    reset the local src checkout to pristine (base tip)
   src prune        list stale derived builds; --apply removes them`,
@@ -51,6 +71,15 @@ func newSrcCmd() *cobra.Command {
 	cmd.AddCommand(newPrCmd())
 	cmd.AddCommand(newPatchCmd())
 	cmd.AddCommand(newUpgradeCmd())
+	cmd.AddCommand(newActivateCmd())
+	cmd.AddCommand(newHistoryCmd())
+	cmd.AddCommand(newPreviewCmd())
+	cmd.AddCommand(newNameCmd())
+	cmd.AddCommand(newRestoreCmd())
+	cmd.AddCommand(newOfferCmd())
+	cmd.AddCommand(newOffersCmd())
+	cmd.AddCommand(newAdoptCmd())
+	cmd.AddCommand(newDeclineCmd())
 	cmd.AddCommand(newRevertCmd())
 	cmd.AddCommand(prune.NewNounCommand(Pruner{}))
 	return cmd

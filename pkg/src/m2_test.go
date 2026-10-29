@@ -120,6 +120,21 @@ func openSkillPR(t *testing.T, home, branch, title, testCmd string) src.PR {
 	return pr
 }
 
+// reviewWaiver records the one non-silent override of the merge gate's
+// verification requirement: an approval covering the whole change. A
+// fixture that is about patches, upgrades or reverts uses it so it tests
+// that thing rather than the verifier; the adversarial evidence table in
+// evidence_gate_test.go is where the requirement itself is exercised.
+func reviewWaiver(t *testing.T, home string) {
+	t.Helper()
+	if _, err := src.WriteApproval(home, src.ApprovalRecord{
+		Repo: "yoke", Paths: []string{""},
+		Approver: "test-operator", Reason: "fixture: reviewed in full",
+	}); err != nil {
+		t.Fatalf("WriteApproval: %v", err)
+	}
+}
+
 func TestM2BranchPropenMergeLocalOnly(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("BASHY_AGENT", "test-agent")
@@ -128,6 +143,7 @@ func TestM2BranchPropenMergeLocalOnly(t *testing.T) {
 	dir := destOf(home)
 
 	pristineBefore := resolve(t, dir, "pristine")
+	reviewWaiver(t, home)
 	pr := openSkillPR(t, home, "feature-a", "Add a skill", "")
 	if pr.Base != "local" || pr.Head != "feature-a" || pr.Author != "test-agent" || pr.State != "open" {
 		t.Fatalf("PR record = %+v, want base=local head=feature-a author=test-agent state=open", pr)
@@ -177,6 +193,7 @@ func TestM2MergeRefusesFailingTest(t *testing.T) {
 	_, newSHA := seedFixture(t, home)
 	fetchAt(t, home, newSHA)
 
+	reviewWaiver(t, home)
 	pr := openSkillPR(t, home, "feature-bad", "Breaking change", "false")
 	if pr.TestResult != "fail" {
 		t.Fatalf("TestResult = %q, want fail", pr.TestResult)
@@ -322,6 +339,7 @@ func TestM2PatchRoundTripAcrossHomes(t *testing.T) {
 	fetchAt(t, homeA, newSHA)
 
 	pr := openSkillPR(t, homeA, "patch-src", "Patch source", "")
+	reviewWaiver(t, homeA)
 	patch, err := src.ExportPatch(homeA, pr.ID)
 	if err != nil {
 		t.Fatalf("ExportPatch: %v", err)
@@ -338,6 +356,7 @@ func TestM2PatchRoundTripAcrossHomes(t *testing.T) {
 	homeB := t.TempDir()
 	_, newSHAB := seedFixture(t, homeB)
 	fetchAt(t, homeB, newSHAB)
+	reviewWaiver(t, homeB)
 	prB, err := src.ApplyPatch(homeB, "yoke", patchFile, "Applied from file")
 	if err != nil {
 		t.Fatalf("ApplyPatch: %v", err)
@@ -364,6 +383,7 @@ func TestM2UpgradeRebasesCleanly(t *testing.T) {
 	fetchAt(t, home, oldSHA)
 	dir := destOf(home)
 
+	reviewWaiver(t, home)
 	pr := openSkillPR(t, home, "pre-upgrade", "Before upgrade", "")
 	if _, err := src.MergePR(home, pr.ID); err != nil {
 		t.Fatal(err)
@@ -411,6 +431,7 @@ func TestM2UpgradeConflictAbortsUntouched(t *testing.T) {
 	fetchAt(t, home, oldSHA)
 	dir := destOf(home)
 
+	reviewWaiver(t, home)
 	if err := src.CreateBranch(home, "yoke", "clash"); err != nil {
 		t.Fatal(err)
 	}

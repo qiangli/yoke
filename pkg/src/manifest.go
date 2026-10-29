@@ -106,6 +106,7 @@ func ProtectedManifest() []ProtEntry {
 		// or forge the evidence it is judged by. Rows for paths created by
 		// later stories are harmless while the path is absent.
 		{Repo: "yoke", Path: "pkg/webconsole/host_auth.go", Reason: "launcher host authentication decides who may drive the console"},
+		{Repo: "yoke", Path: "pkg/webconsole/principal.go", Reason: "web principal resolution decides which per-user state an app receives"},
 		{Repo: "yoke", Path: "pkg/webconsole/pairing.go", Reason: "pairing mints the credentials a peer is later trusted by"},
 		{Repo: "yoke", Path: "pkg/webconsole/pair_cmd.go", Reason: "pairing command surface"},
 		{Repo: "yoke", Path: "pkg/webconsole/pair_http.go", Reason: "pairing HTTP surface"},

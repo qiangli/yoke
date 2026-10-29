@@ -17,6 +17,7 @@ func TestRevert_DryRunAndApply(t *testing.T) {
 	fetchAt(t, home, newSHA)
 	dir := destOf(home)
 
+	reviewWaiver(t, home)
 	pristineSHA := resolve(t, dir, "pristine")
 
 	// 1. Initially at pristine and clean.
@@ -150,6 +151,7 @@ func TestRevert_NeverTouchesOtherRepos(t *testing.T) {
 	}
 
 	// Make changes in yoke
+	reviewWaiver(t, home)
 	prA := openSkillPR(t, home, "yoke-branch", "Yoke PR", "")
 	if _, err := src.MergePR(home, prA.ID); err != nil {
 		t.Fatal(err)

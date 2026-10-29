@@ -8,8 +8,54 @@ import (
 	"strings"
 
 	ygit "github.com/qiangli/yoke/git"
+	"github.com/qiangli/yoke/pkg/shape/evidence"
 	"github.com/spf13/cobra"
 )
+
+// principalEnv is the environment fallback for the principal `src activate`
+// acts for: the launcher sets it for the worker it starts.
+const principalEnv = "BASHY_PRINCIPAL"
+
+func newActivateCmd() *cobra.Command {
+	var principal string
+	c := &cobra.Command{
+		Use:   "activate <app> <rev>",
+		Short: "Activate a revision for a principal: gated, atomic, and recorded",
+		Long: `activate checks a revision through the activation gate, records a
+commit on the principal's version line, and switches that principal's
+active revision to it while keeping the previous revision as
+last-known-good. Only the named principal's line and record move.
+
+The principal comes from --principal or $BASHY_PRINCIPAL. Without a wired
+gate the command refuses rather than activate ungated.`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			p := strings.TrimSpace(principal)
+			if p == "" {
+				p = strings.TrimSpace(os.Getenv(principalEnv))
+			}
+			if p == "" {
+				return fmt.Errorf("src: activate needs --principal or $%s", principalEnv)
+			}
+			if cliGate == nil {
+				return fmt.Errorf("src: activate refused: no activation gate is wired")
+			}
+			res, err := Activate("", args[0], args[1], p, ActivateOptions{Gate: cliGate})
+			if err != nil {
+				return err
+			}
+			prev := "(none)"
+			if res.Previous != "" {
+				prev = shortSHA(res.Previous)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "activated %s for %s at %s (was %s)\n",
+				res.App, res.Principal, shortSHA(res.Revision), prev)
+			return nil
+		},
+	}
+	c.Flags().StringVar(&principal, "principal", "", "web principal to activate for (default $"+principalEnv+")")
+	return c
+}
 
 func newBranchCmd() *cobra.Command {
 	return &cobra.Command{
@@ -97,12 +143,41 @@ func newStatusCmd() *cobra.Command {
 }
 
 func newDiffCmd() *cobra.Command {
-	var base string
+	var base, user string
 	c := &cobra.Command{
-		Use:   "diff <repo>",
-		Short: "Diff the base branch tip (pristine|local) to HEAD",
-		Args:  cobra.ExactArgs(1),
+		Use:   "diff <repo> [a [b]]",
+		Short: "Diff the base branch tip (pristine|local) to HEAD, or two versions",
+		Long: `diff with one repo diffs the base branch tip to HEAD, as
+before. With two versions (commits, named labels, or base) it diffs one
+version to the other for that principal (--user or $BASHY_PRINCIPAL,
+only needed to resolve that principal's labels).`,
+		Args: cobra.RangeArgs(1, 3),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 2 {
+				return fmt.Errorf("src: diff takes <repo> or <repo> <a> <b>")
+			}
+			if len(args) == 3 {
+				if cmd.Flags().Changed("base") {
+					return fmt.Errorf("src: --base applies only to the <repo> form of diff")
+				}
+				p := strings.TrimSpace(user)
+				if p == "" {
+					p = strings.TrimSpace(os.Getenv(principalEnv))
+				}
+				text, err := Diff("", args[0], p, args[1], args[2])
+				if err != nil {
+					return err
+				}
+				if strings.TrimSpace(text) == "" {
+					fmt.Fprintln(cmd.OutOrStdout(), "(no differences)")
+					return nil
+				}
+				fmt.Fprint(cmd.OutOrStdout(), text)
+				if !strings.HasSuffix(text, "\n") {
+					fmt.Fprintln(cmd.OutOrStdout())
+				}
+				return nil
+			}
 			if base != pristineBranch && base != localBranch {
 				return fmt.Errorf("src: --base must be pristine or local, got %q", base)
 			}
@@ -134,6 +209,7 @@ func newDiffCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&base, "base", localBranch, "base branch: pristine or local")
+	userFlag(c, &user)
 	return c
 }
 
@@ -171,7 +247,8 @@ func newPrCmd() *cobra.Command {
 		Use:   "pr",
 		Short: "Local pull requests against the host's own local branch",
 	}
-	c.AddCommand(newPrOpenCmd(), newPrShowCmd(), newPrListCmd(), newPrMergeCmd(), newPrCloseCmd())
+	c.AddCommand(newPrOpenCmd(), newPrShowCmd(), newPrListCmd(), newPrVerifyCmd(),
+		newPrMergeCmd(), newPrCloseCmd())
 	return c
 }
 
@@ -243,6 +320,39 @@ func newPrListCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&repo, "repo", "", "only PRs for this repo")
 	return c
+}
+
+func newPrVerifyCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "verify <id>",
+		Short: "Verify a PR's candidate against the base contract and seal the result",
+		Long: `verify runs the base commit's checks against the PR's recorded head in
+an isolated clone, accounts for every contracted function the check set
+reaches, and seals the verdict for the resolved principal. Merging reads
+that record; a failing verdict is recorded too, and blocks.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rec, err := VerifyPR(cmd.Context(), "", args[0], nil)
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			for _, c := range rec.Checks {
+				fmt.Fprintf(out, "%-8s %s\n", c.Status, c.Name)
+			}
+			for _, fn := range rec.Uncalled {
+				fmt.Fprintf(out, "%-8s %s (no check reached it)\n", "uncalled", fn)
+			}
+			fmt.Fprintf(out, "verdict: %s for %s at %s\n", rec.Verdict, rec.Binding.Principal, shortSHA(rec.Binding.Candidate))
+			if rec.Reason != "" {
+				fmt.Fprintf(out, "reason: %s\n", rec.Reason)
+			}
+			if rec.Verdict != evidence.VerdictPass {
+				return fmt.Errorf("src: PR %s is not verified", args[0])
+			}
+			return nil
+		},
+	}
 }
 
 func newPrMergeCmd() *cobra.Command {

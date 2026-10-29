@@ -23,8 +23,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	_ "github.com/qiangli/yoke/git" // pure-Go file transport for local clones
-	"github.com/qiangli/yoke/pkg/shape"
 	"github.com/qiangli/yoke/pkg/shape/contain"
+	shape "github.com/qiangli/yoke/pkg/shape/state"
 	"github.com/qiangli/yoke/pkg/unit"
 )
 

@@ -3379,6 +3379,21 @@ type weaveStartOptions struct {
 	idleTimeout time.Duration
 	maxRuntime  time.Duration
 	memLimit    string // e.g. "16g"; "0" disables
+	// base, when non-empty, starts the isolated workspace at this commit
+	// instead of the source HEAD (preview). It must name a commit present
+	// in the source repo; it never moves the active revision.
+	base string
+}
+
+// weaveBaseSHAForStart resolves an explicit --base commit for an isolated
+// preview workspace. An empty override keeps the source HEAD; anything else
+// must name a commit present in the source repo.
+func weaveBaseSHAForStart(root, override string) (string, error) {
+	sha, err := yokegit.ResolveCommit(root, override)
+	if err != nil {
+		return "", fmt.Errorf("unknown --base commit %q in %s", override, root)
+	}
+	return sha, nil
 }
 
 // weaveGuards bundles the subagent watchdog limits threaded into
@@ -3820,6 +3835,18 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	if baseErr != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 			weavecli.ExitPrecondFail, fmt.Errorf("resolve source HEAD: %w", baseErr)))
+	}
+	if override := strings.TrimSpace(opts.base); override != "" {
+		if opts.resume {
+			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
+				weavecli.ExitInvalidArg, fmt.Errorf("--base starts a fresh workspace and cannot combine with --resume")))
+		}
+		resolved, err := weaveBaseSHAForStart(root, override)
+		if err != nil {
+			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
+				weavecli.ExitInvalidArg, err))
+		}
+		baseSHA = resolved
 	}
 	boothFork, boothCred, boothUser := "", "", ""
 	boothSprint := it.ArenaSprint
