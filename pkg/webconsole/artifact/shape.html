@@ -19,16 +19,31 @@
 <main id="shape-page">
   <form id="shape-ask" autocomplete="off">
     <label for="shape-request">What should change in <b id="shape-app"></b>?</label>
-    <textarea id="shape-request" rows="3" placeholder="e.g. show the newest note first"></textarea>
+    <textarea id="shape-request" rows="3" placeholder="e.g. show the newest note first" aria-describedby="shape-result"></textarea>
     <div class="row foot">
       <span id="shape-active"></span>
       <span class="spacer"></span>
-      <span id="shape-result"></span>
-      <button id="shape-send" class="btn primary" type="submit">Shape</button>
+      <span id="shape-result" role="status" aria-live="polite"></span>
+      <button id="shape-send" class="btn primary" type="submit" aria-label="Send shaping request">Shape</button>
     </div>
   </form>
 
-  <section id="shape-list" aria-live="polite"></section>
+  <section id="shape-list" aria-label="Shaping candidates" aria-live="polite"></section>
+
+  <section id="shape-history" aria-label="Version history">
+    <div class="row foot">
+      <h2 id="history-heading">Versions</h2>
+      <span class="spacer"></span>
+      <button id="history-undo" class="btn" type="button" aria-label="Undo the last restore">Undo restore</button>
+    </div>
+    <div id="history-status" role="status" aria-live="polite"></div>
+    <div id="history-diff-actions" class="row foot">
+      <span class="spacer"></span>
+      <button id="history-compare" class="btn" type="button" aria-label="Compare the two selected versions">Compare selected</button>
+    </div>
+    <ol id="history-list"></ol>
+    <div id="history-diff-host" aria-label="Version comparison"></div>
+  </section>
 </main>
 
 <script src="shape.js"></script>
