@@ -21,7 +21,7 @@ import (
 
 // Peer capability dispatch (Sprint 418 S9). `tool cmd run --capability X
 // --peer NAME` sends the capability request to NAME's model door — normally
-// reached through the outpost mesh forwarder (`outpost mesh dial llm`) — as an
+// reached through the outpost mesh forwarder `llm share` sets up — as an
 // ordinary chat completion carrying the capability header. The PEER's door
 // selects the provider from its own host measurements and quota and runs the
 // declared command through its slash path (pkg/cligw capability.go); the door
@@ -30,7 +30,7 @@ import (
 // is the door's existing inference route.
 //
 // The caller's side of that contract is a local 0600 file naming each peer's
-// door URL and credential:
+// door URL and credential (`bashy llm door import` records a shared door):
 //
 //	$BASHY_HOME/toolcmd/peers.json  (else ~/.bashy/toolcmd/peers.json)
 //	{"peers": {"dragon": {"url": "http://127.0.0.1:24600", "credential": "bpeer_..."}}}
@@ -222,4 +222,42 @@ func peerErrorText(data []byte) string {
 		t = t[:400] + "..."
 	}
 	return t
+}
+
+// SavePeer upserts name in the peers file (0600, other peers kept). `bashy
+// llm door import` calls it so a door shared with this host is reachable by
+// `tool cmd run --peer` without a hand-written file.
+func SavePeer(name string, p PeerDoor) error {
+	name = strings.TrimSpace(name)
+	if !peerNameRE.MatchString(name) {
+		return fmt.Errorf("%w: invalid peer name", ErrUnknownPeer)
+	}
+	path, err := PeersPath()
+	if err != nil {
+		return err
+	}
+	pf := peersFile{Peers: map[string]PeerDoor{}}
+	if data, err := os.ReadFile(path); err == nil {
+		if err := json.Unmarshal(data, &pf); err != nil {
+			return fmt.Errorf("toolcmd: peers file %s is not valid JSON", path)
+		}
+		if pf.Peers == nil {
+			pf.Peers = map[string]PeerDoor{}
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("toolcmd: peers file: %w", err)
+	}
+	pf.Peers[name] = p
+	data, err := json.MarshalIndent(pf, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }

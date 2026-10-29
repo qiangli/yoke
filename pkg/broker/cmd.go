@@ -370,7 +370,7 @@ its share policy is allow.`
 			cmd.RemoveCommand(c)
 		}
 	}
-	cmd.AddCommand(newServeCmd(), newUpCmd(), newDownCmd(), newEnvCmd(), newStatusCmd(), newStickyCmd(), newPeerCmd(), newCaptureCmd())
+	cmd.AddCommand(newServeCmd(), newUpCmd(), newDownCmd(), newEnvCmd(), newStatusCmd(), newStickyCmd(), newPeerCmd(), newShareCmd(), newDoorCmd(), newCaptureCmd())
 	return cmd
 }
 
@@ -654,6 +654,7 @@ func newEnvCmd() *cobra.Command {
 	var asJSON bool
 	var client string
 	var via string
+	var from, bindForWSL string
 	var spec StickySpec
 	cmd := &cobra.Command{
 		Use:   "env",
@@ -677,17 +678,18 @@ prints a complete JSON provider block selecting bashy/L4. Codync prints the
 env block for its service unit; codync-host passes that environment to the ACP
 agents it starts.
 
---via mesh is configuration-only. First expose the door on its host and bind
-the remote service to this host's ordinary door address, then print the same
-client block with that dialed loopback address:
+--from DOOR configures a client on a peer of another host's door. On the door
+host, ` + "`bashy llm share THIS-HOST`" + ` exposes the door and pushes this host a
+credential of its own; then here:
 
-  door$ outpost mesh service add llm 127.0.0.1:24556
-  door$ bashy llm env --client openclaw --via mesh >openclaw-bashy.json
-  client$ outpost mesh dial --local 127.0.0.1:24556 llm
+  eval "$(bashy llm env --from DOOR)"            # over the mesh (default)
+  bashy llm env --from DOOR --via cloudbox       # through the door's cloudbox app
 
-Generate the block on the door host so it contains that door's owner token,
-then transfer it securely to the client. Set BASHY_LLM_PORT while printing
-when the mesh dial uses another local port.
+The keys are the peer credential, never the door's owner token. Over the mesh
+the base URL is a persistent local forward (opened on first use); through
+cloudbox the credential rides in the path (/k/...), since the cloudbox front
+strips Authorization. Inside WSL with no grant of its own, the Windows user's
+grant is used through interop.
 
 --json emits the bashy-llm-env-v1 envelope (base_url, session, sticky, env)
 instead of shell assignments. Both forms carry the owner token: never commit
@@ -705,15 +707,42 @@ either, record only the schema name as evidence.`,
 				return fmt.Errorf("llm env: unknown client %q (want generic, openclaw, or codync)", client)
 			}
 			via = strings.ToLower(strings.TrimSpace(via))
+			if asJSON && client != "" && client != "generic" {
+				return errors.New("llm env: --json cannot be combined with --client openclaw or codync")
+			}
+			if from = strings.TrimSpace(from); from != "" {
+				if sticky != "" || spec.Model != "" {
+					return errors.New("llm env: --sticky and --model are the door owner's; they do not combine with --from")
+				}
+				if !c.Flags().Changed("via") {
+					via = ""
+				}
+				base, env, route, err := envFrom(c.Context(), from, via, strings.TrimSpace(bindForWSL))
+				if err != nil {
+					return err
+				}
+				out := c.OutOrStdout()
+				if asJSON {
+					enc := json.NewEncoder(out)
+					enc.SetIndent("", "  ")
+					return enc.Encode(struct {
+						SchemaVersion string            `json:"schema_version"`
+						BaseURL       string            `json:"base_url"`
+						Door          string            `json:"door"`
+						Via           string            `json:"via"`
+						Env           map[string]string `json:"env"`
+					}{EnvSchemaVersion, base, strings.ToLower(from), route, env})
+				}
+				return writeClientEnv(out, client, route, env)
+			}
 			switch via {
 			case "", "local":
 				via = "local"
 			case "mesh":
+			case "cloudbox":
+				return errors.New("llm env: --via cloudbox needs --from DOOR (a door another host shared with this one)")
 			default:
-				return fmt.Errorf("llm env: unknown route %q (want local or mesh)", via)
-			}
-			if asJSON && client != "" && client != "generic" {
-				return errors.New("llm env: --json cannot be combined with --client openclaw or codync")
+				return fmt.Errorf("llm env: unknown route %q (want local, mesh or cloudbox)", via)
 			}
 			token, err := door.Token()
 			if err != nil {
@@ -777,7 +806,10 @@ either, record only the schema name as evidence.`,
 	cmd.Flags().StringVar(&spec.Bind, "bind", "", "with --model: identity|worker")
 	cmd.Flags().StringVar(&spec.Reset, "reset", "", "with --model: each|none")
 	cmd.Flags().StringVar(&client, "client", "generic", "ready configuration for generic|openclaw|codync")
-	cmd.Flags().StringVar(&via, "via", "local", "reach the door through local|mesh (mesh uses the dialed local BASHY_LLM_PORT)")
+	cmd.Flags().StringVar(&via, "via", "local", "reach the door through local|mesh|cloudbox (with --from: mesh or cloudbox, default mesh when shared)")
+	cmd.Flags().StringVar(&from, "from", "", "configure a client for DOOR, another host's door shared with this one (`llm share` there)")
+	cmd.Flags().StringVar(&bindForWSL, "bind-for-wsl", "", "with --from --via mesh: bind the forward on this address (WSL's view of Windows)")
+	_ = cmd.Flags().MarkHidden("bind-for-wsl")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the "+EnvSchemaVersion+" envelope instead of shell assignments")
 	return cmd
 }

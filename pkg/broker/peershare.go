@@ -199,10 +199,12 @@ func (b *Broker) authorizePeer(presented string) (string, error) {
 }
 
 // peerRouteAllowed is the whole surface a shared peer may reach: inference
-// (including slash / capability tool-command runs) and health. Sticky
-// management, the native engine API and cligw's own surface stay owner-only.
+// (including slash / capability tool-command runs), the model listing (so a
+// peer's client can discover the served ids) and health. Sticky management,
+// the native engine API and cligw's own surface stay owner-only.
 func peerRouteAllowed(method, path string) bool {
-	if path == "/health" {
+	switch path {
+	case "/health", "/v1/models", "/openai/v1/models":
 		return method == "GET"
 	}
 	if method != "POST" {

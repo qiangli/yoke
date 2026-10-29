@@ -47,25 +47,31 @@ eval "$(bashy llm env --sticky conv)"
 
 `--bind worker --reset each` stays one-shot on every tool.
 
-## Reach a door through the outpost mesh
+## Use another host's door
 
-Expose the door on the host that owns the seats:
-
-```sh
-outpost mesh service add llm 127.0.0.1:24556
-bashy llm env --client openclaw --via mesh >openclaw-bashy.json
-```
-
-On the paired client host, bind that service to the same loopback address, then
-use the block produced on the owner host:
+Vendor logins stay on the host that owns the seats (the door host). On it, one
+command shares the door with an owned peer host:
 
 ```sh
-outpost mesh dial --local 127.0.0.1:24556 llm
+bashy llm share PEER                 # mesh (default); --via cloudbox|both
 ```
 
-If port 24556 is occupied on the client, choose another fixed port for the
-dial and set `BASHY_LLM_PORT` to that port while printing the block. Mesh reach
-is only configuration: the door and client code do not change.
+It exposes the door (a persistent mesh service and/or the host's cloudbox app
+`llm`), mints PEER's own credential, and pushes it to PEER over `outpost ssh`.
+No token is copied by hand. On PEER, one command configures any client:
+
+```sh
+eval "$(bashy llm env --from DOOR)"              # over the mesh
+bashy llm env --from DOOR --via cloudbox         # through cloudbox
+bashy llm env --from DOOR --client openclaw      # a ready provider block
+```
+
+The keys are the peer credential, never the door's owner token; a peer reaches
+inference, the model listing and health only. Through cloudbox the credential
+rides in the base URL path (`/k/...`) because the cloudbox front strips
+`Authorization`. Inside WSL, `--from` uses the Windows user's grant through
+interop. `bashy llm peer share PEER deny` suspends a peer; `bashy llm peer
+revoke PEER` removes it.
 
 ## Register an external OpenAI-compatible gateway
 

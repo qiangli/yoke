@@ -127,3 +127,14 @@ func PeersPath() (string, error) {
 	}
 	return filepath.Join(h, "cligw", "peers.json"), nil
 }
+
+// DoorsDir holds, on a PEER, the grants other hosts' doors pushed to it
+// (`llm share` on the door host, `llm door import` here): one
+// <doorhost>.json each, carrying that door's peer credential.
+func DoorsDir() (string, error) {
+	h, err := home()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(h, "llm", "doors"), nil
+}
