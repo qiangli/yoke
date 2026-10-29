@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"net"
 	"net/url"
@@ -489,30 +490,57 @@ func ensureMeshForward(ctx context.Context, g DoorGrant, bindHost string) (strin
 			continue
 		}
 		if (len(f) == 6 || len(f) == 7) && f[0] == g.MeshService && f[3] == g.MeshPeerID {
-			if h, _, err := net.SplitHostPort(f[5]); err == nil && h == bindHost {
+			if h, p, err := net.SplitHostPort(f[5]); err == nil && h == bindHost {
+				if p == "0" {
+					// A persisted ephemeral request is not a real address.
+					_, _ = run(ctx, nil, "mesh", "consume", "rm", g.MeshService, g.MeshPeerID)
+					continue
+				}
 				return f[5], nil
 			}
 		}
 	}
-	addr := net.JoinHostPort(bindHost, "0")
-	if !winPort {
-		ln, err := net.Listen("tcp", addr)
-		if err != nil {
-			return "", fmt.Errorf("pick a local port on %s: %w", bindHost, err)
+	if winPort {
+		// WSL cannot probe a port on the Windows side, and outpost persists
+		// the requested address verbatim, so request a concrete one.
+		h := fnv.New32a()
+		h.Write([]byte(g.MeshService + "\x00" + g.MeshPeerID))
+		base := int(h.Sum32() % 16000)
+		var lastErr error
+		for i := 0; i < 16; i++ {
+			addr := net.JoinHostPort(bindHost, strconv.Itoa(48000+(base+i)%16000))
+			out, err := run(ctx, nil, "mesh", "consume", "add", g.MeshService, g.MeshPeerID, "--local", addr)
+			if err != nil {
+				lastErr = err
+				if strings.Contains(strings.ToLower(err.Error()), "address already in use") || strings.Contains(strings.ToLower(err.Error()), "address in use") {
+					continue
+				}
+				return "", err
+			}
+			return meshAddrFrom(out, addr), nil
 		}
-		addr = ln.Addr().String()
-		ln.Close()
+		return "", lastErr
 	}
+	ln, err := net.Listen("tcp", net.JoinHostPort(bindHost, "0"))
+	if err != nil {
+		return "", fmt.Errorf("pick a local port on %s: %w", bindHost, err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
 	out, err = run(ctx, nil, "mesh", "consume", "add", g.MeshService, g.MeshPeerID, "--local", addr)
 	if err != nil {
 		return "", err
 	}
+	return meshAddrFrom(out, addr), nil
+}
+
+func meshAddrFrom(out []byte, addr string) string {
 	if _, got, ok := strings.Cut(strings.TrimSpace(string(out)), " -> "); ok {
-		if _, _, err := net.SplitHostPort(got); err == nil {
-			addr = got
+		if _, p, err := net.SplitHostPort(got); err == nil && p != "0" {
+			return got
 		}
 	}
-	return addr, nil
+	return addr
 }
 
 // peerEnvVars is the client environment for a peer: base already carries

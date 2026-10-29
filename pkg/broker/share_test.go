@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -506,7 +507,7 @@ func TestMeshForwardInWSLWithoutOutpostUsesWindows(t *testing.T) {
 	if len(lin.calls) != 0 {
 		t.Fatalf("Linux outpost used: %v", lin.calls)
 	}
-	if win.count("mesh consume add llm PEERID-DOOR --local 172.20.0.1:0") != 1 {
+	if win.count("mesh consume add llm PEERID-DOOR --local 172.20.0.1:") != 1 || win.count("--local 172.20.0.1:0") != 0 {
 		t.Fatalf("Windows forward not opened on the gateway: %v", win.calls)
 	}
 
@@ -537,5 +538,27 @@ func TestMeshBindHostInWSLWithoutOutpostIsGateway(t *testing.T) {
 	inWSL = func() bool { return false }
 	if got := meshBindHost(); got != "127.0.0.1" {
 		t.Fatalf("outside WSL meshBindHost = %q, want loopback", got)
+	}
+}
+
+func TestMeshForwardNeverReusesPortZero(t *testing.T) {
+	win := &fakeOutpost{consumes: "llm <- peer PEERID-DOOR -> 172.20.0.1:0\n"}
+	prevWin, prevWSL, prevPath := outpostWinRun, inWSL, outpostOnPath
+	outpostWinRun, inWSL, outpostOnPath = win.run, func() bool { return true }, func() bool { return false }
+	t.Cleanup(func() { outpostWinRun, inWSL, outpostOnPath = prevWin, prevWSL, prevPath })
+
+	a1, err := ensureMeshForward(context.Background(), testGrant(), "172.20.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, p, _ := net.SplitHostPort(a1); p == "0" || p == "" {
+		t.Fatalf("returned port-0 addr %q", a1)
+	}
+	if win.count("mesh consume add") != 1 {
+		t.Fatalf("calls: %v", win.calls)
+	}
+	a2, err := ensureMeshForward(context.Background(), testGrant(), "172.20.0.1")
+	if err != nil || a2 != a1 || win.count("mesh consume add") != 1 {
+		t.Fatalf("second call %q (%v), want reuse of %q: %v", a2, err, a1, win.calls)
 	}
 }
