@@ -478,6 +478,33 @@ func TestShapedNotesRequestPreviewApprove(t *testing.T) {
 	}
 }
 
+func TestMentionsSandboxRequest(t *testing.T) {
+	for _, body := range []string{
+		"@sandbox\nwork() { :; }\n",
+		"  @sandbox  \nwork() { :; }\n",
+		"@sandbox()\nwork() { :; }\n",
+		"@sandbox(\"oci\")\nwork() { :; }\n",
+		"@sandbox # isolate\nwork() { :; }\n",
+		"@sandbox()\nwork() { :; }\nwork\n",
+	} {
+		if !mentionsSandboxRequest(body) {
+			t.Fatalf("%q: sandbox request not seen", body)
+		}
+	}
+	for _, body := range []string{
+		"",
+		"work() { :; }\n",
+		"echo '@sandbox'\nwork() { :; }\n",
+		"echo \"@sandbox\"\nwork() { :; }\n",
+		"echo @sandbox\nwork() { :; }\n",
+		"@sandboxfoo\nwork() { :; }\n",
+	} {
+		if mentionsSandboxRequest(body) {
+			t.Fatalf("%q: prose seen as a sandbox request", body)
+		}
+	}
+}
+
 func TestShapedDelegateUsesResolvedBinary(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "no-such-bashy")
 	d := BashyDelegate{Bashy: missing, Agent: "codex:m"}

@@ -53,9 +53,10 @@ type ShapeOptions struct {
 	// Level is the containment for api units and previews. Empty = process:
 	// bashy's guards (scrubbed env, effect cap, timeout, limits), which
 	// every OS provides — shaping never requires a sandbox. A unit that
-	// declares @sandbox() runs at contain.LevelSandbox through bashy oci
-	// whatever Level says, and setting LevelSandbox here routes every unit
-	// there. A sandbox bashy oci cannot provide refuses (never downgrades).
+	// declares @sandbox() or a bare @sandbox line runs at
+	// contain.LevelSandbox through bashy oci whatever Level says, and
+	// setting LevelSandbox here routes every unit there. A sandbox bashy
+	// oci cannot provide refuses (never downgrades).
 	Level contain.Level
 	// OCI routes sandbox runs; nil = contain.BashyOCI{} (`bashy oci run`).
 	OCI contain.OCIRunner
@@ -288,11 +289,20 @@ func (a *shapedApp) serveAPI(w http.ResponseWriter, r *http.Request, tree *objec
 	// The cap is the shaped-app ceiling; the effects are what the unit's
 	// contract declares (an uncontracted unit is taken at the ceiling). A
 	// unit declaring more — network, exec, credentials — is refused before
-	// it starts. Isolation is the unit's own request: @sandbox() routes it
-	// to bashy oci; the app never sees how the host provides it.
+	// it starts. Isolation is the unit's own request: @sandbox() — or a
+	// bare @sandbox line — routes it to bashy oci; the app never sees how
+	// the host provides it.
 	effects := []string{"read", "write"}
 	level := a.opts.Level
-	if c, err := unit.ReadContract(body); err == nil {
+	if c, cerr := unit.ReadContract(body); cerr != nil {
+		// Fail closed: an unreadable contract whose text names @sandbox
+		// may be asking for isolation we cannot see; never run it
+		// unsandboxed.
+		if mentionsSandboxRequest(body) {
+			http.Error(w, "unit "+name+" may ask for a sandbox but its contract is unreadable: "+cerr.Error(), http.StatusServiceUnavailable)
+			return
+		}
+	} else {
 		if len(c.EffectCap()) > 0 {
 			effects = c.EffectCap()
 		}
@@ -337,6 +347,25 @@ func (a *shapedApp) serveAPI(w http.ResponseWriter, r *http.Request, tree *objec
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	}
 	_, _ = w.Write(out)
+}
+
+// mentionsSandboxRequest reports whether body has a decorator-position
+// @sandbox line: the first non-blank characters name @sandbox, followed by
+// end of line, parens or whitespace. Quoted prose (echo '@sandbox') never
+// matches; a heredoc line could, but that only matters for a body whose
+// contract already failed to parse — refusing a broken unit is safe.
+func mentionsSandboxRequest(body string) bool {
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimLeft(line, " \t")
+		if !strings.HasPrefix(line, "@sandbox") {
+			continue
+		}
+		rest := line[len("@sandbox"):]
+		if rest == "" || rest[0] == '(' || rest[0] == ' ' || rest[0] == '\t' || rest[0] == '\r' {
+			return true
+		}
+	}
+	return false
 }
 
 // runUnit runs one Bash# body under pkg/shape/contain with dataDir as its

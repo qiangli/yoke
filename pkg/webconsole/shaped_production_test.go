@@ -108,14 +108,21 @@ func pairedPrincipal(t *testing.T, h http.Handler, store *pairStore, name string
 // fakeOCI stands in for bashy oci. Dragon has no podman, so it launches the
 // requested argv on the host under exactly the environment the container
 // would get, and records every call. With allow unset any call fails the
-// test: that is the proof a run did not need a sandbox.
+// test: that is the proof a run did not need a sandbox. With unavailable
+// set it records the call and refuses instead: the engine the sandbox
+// asked for is missing, so the run must refuse rather than run directly.
 type fakeOCI struct {
-	t     *testing.T
-	allow bool
-	calls []string
+	t           *testing.T
+	allow       bool
+	unavailable bool
+	calls       []string
 }
 
 func (f *fakeOCI) Argv(dir string, argv, env []string, _ contain.Spec) ([]string, error) {
+	if f.unavailable {
+		f.calls = append(f.calls, strings.Join(argv, " "))
+		return nil, &contain.UnavailableError{Level: contain.LevelSandbox, Reason: "test: no engine on this host"}
+	}
 	if !f.allow {
 		f.t.Errorf("unit routed to oci without asking for a sandbox: %q", argv)
 		return nil, &contain.UnavailableError{Level: contain.LevelSandbox, Reason: "test: no sandbox on this host"}
@@ -367,6 +374,30 @@ func TestShapedProductionGates(t *testing.T) {
 		w = do(h, http.MethodGet, "/shape/notes/preview/"+c.ID+"/api/list", "192.0.2.20:5555", alice)
 		if w.Code != http.StatusOK || len(oci.calls) != 1 {
 			t.Fatalf("an undeclared unit reached oci: %d %q", w.Code, oci.calls)
+		}
+	})
+
+	t.Run("a bare @sandbox never runs unsandboxed", func(t *testing.T) {
+		c := apiCandidate("9999999999999999", "bare", "@sandbox\niso() { printf 'bare:%s\\n' \"$(cat \"$BASHY_APP_DATA/notes.txt\")\"; }\niso\n")
+		// No engine: the bare request routes to oci and refuses with 503.
+		// A direct run would answer 200, so 503 is the proof it never
+		// ran unsandboxed.
+		oci.unavailable = true
+		before := len(oci.calls)
+		w := do(h, http.MethodGet, "/shape/notes/preview/"+c.ID+"/api/bare", "192.0.2.20:5555", alice)
+		oci.unavailable = false
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("bare sandbox without an engine = %d: %s (must refuse, never run direct)", w.Code, w.Body.String())
+		}
+		if len(oci.calls) != before+1 {
+			t.Fatalf("bare @sandbox did not route to oci: %q", oci.calls)
+		}
+		// With an engine it runs isolated like the paren form.
+		oci.allow = true
+		defer func() { oci.allow = false }()
+		w = do(h, http.MethodGet, "/shape/notes/preview/"+c.ID+"/api/bare", "192.0.2.20:5555", alice)
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "bare:private original") {
+			t.Fatalf("bare island = %d: %s", w.Code, w.Body.String())
 		}
 	})
 

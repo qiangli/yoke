@@ -36,8 +36,9 @@ type Contract struct {
 	Guard   []string `json:"guard,omitempty"`   // enforced effect cap (@guard)
 	Confirm []string `json:"confirm,omitempty"` // @confirm arguments ("on" when bare)
 	Timeout string   `json:"timeout,omitempty"` // @timeout duration
-	// Sandbox is the unit's own isolation request (@sandbox()): its host runs
-	// it in a bashy oci island instead of under the ordinary guards alone.
+	// Sandbox is the unit's own isolation request (@sandbox() or a bare
+	// @sandbox line): its host runs it in a bashy oci island instead of
+	// under the ordinary guards alone.
 	Sandbox bool `json:"sandbox,omitempty"`
 }
 
@@ -119,7 +120,10 @@ func normalise(in []string) []string {
 // keyword (`@guard(effects: "read,write")`). @require/@ensure contribute one
 // check per argument; @effects/@guard split their atoms on commas and
 // spaces; @confirm records its arguments ("on" when bare); @timeout its
-// duration; @sandbox() marks the unit's isolation request. A non-literal argument is kept as its source text.
+// duration; @sandbox() marks the unit's isolation request, as does a bare
+// @sandbox line the decorator grammar does not attach (it parses as a plain
+// `@sandbox` command, which can only be an isolation request misspelled
+// without parens). A non-literal argument is kept as its source text.
 func ReadContract(body string) (Contract, error) {
 	var c Contract
 	file, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(body), "")
@@ -127,6 +131,12 @@ func ReadContract(body string) (Contract, error) {
 		return c, err
 	}
 	syntax.Walk(file, func(node syntax.Node) bool {
+		if call, ok := node.(*syntax.CallExpr); ok && isBareSandbox(call) {
+			// Fail closed: a unit that names @sandbox without parens
+			// asked for isolation; never run it unsandboxed.
+			c.Sandbox = true
+			return true
+		}
 		var decs []*syntax.BashPPDecorator
 		switch decl := node.(type) {
 		case *syntax.FuncDecl:
@@ -166,6 +176,25 @@ func ReadContract(body string) (Contract, error) {
 		return true
 	})
 	return c, nil
+}
+
+// isBareSandbox reports whether call names `@sandbox` as its command: the
+// decorator grammar leaves the bare spelling unattached, so it parses as a
+// plain command. A quoted '@sandbox' (a string part, not a literal) is
+// prose, not a request; `echo @sandbox` names echo, not the sandbox. Any
+// other spelling with @sandbox in command position still counts: it can
+// only be an isolation request, and failing that reading must not run the
+// unit unsandboxed.
+func isBareSandbox(call *syntax.CallExpr) bool {
+	if call == nil || len(call.Assigns) > 0 || len(call.Args) == 0 {
+		return false
+	}
+	w := call.Args[0]
+	if w == nil || len(w.Parts) != 1 {
+		return false
+	}
+	lit, ok := w.Parts[0].(*syntax.Lit)
+	return ok && lit.Value == "@sandbox"
 }
 
 // decoratorValues returns a decorator's argument values, positional and
