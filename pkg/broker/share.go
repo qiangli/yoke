@@ -493,7 +493,9 @@ func ensureMeshForward(ctx context.Context, g DoorGrant, bindHost string) (strin
 			if h, p, err := net.SplitHostPort(f[5]); err == nil && h == bindHost {
 				if p == "0" {
 					// A persisted ephemeral request is not a real address.
-					_, _ = run(ctx, nil, "mesh", "consume", "rm", g.MeshService, g.MeshPeerID)
+					// outpost's syntax is `consume rm SERVICE --local ADDR`:
+					// remove exactly this entry, not every consume of the service.
+					_, _ = run(ctx, nil, "mesh", "consume", "rm", g.MeshService, "--local", f[5])
 					continue
 				}
 				return f[5], nil

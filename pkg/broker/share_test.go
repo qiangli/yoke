@@ -557,6 +557,11 @@ func TestMeshForwardNeverReusesPortZero(t *testing.T) {
 	if win.count("mesh consume add") != 1 {
 		t.Fatalf("calls: %v", win.calls)
 	}
+	// outpost's rm syntax is `consume rm SERVICE --local ADDR`: remove exactly
+	// the stale entry, never every consume of the service.
+	if win.count("mesh consume rm llm --local 172.20.0.1:0") != 1 {
+		t.Fatalf("stale :0 consume not removed by its address: %v", win.calls)
+	}
 	a2, err := ensureMeshForward(context.Background(), testGrant(), "172.20.0.1")
 	if err != nil || a2 != a1 || win.count("mesh consume add") != 1 {
 		t.Fatalf("second call %q (%v), want reuse of %q: %v", a2, err, a1, win.calls)
