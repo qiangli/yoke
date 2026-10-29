@@ -105,16 +105,59 @@ func pairedPrincipal(t *testing.T, h http.Handler, store *pairStore, name string
 	return nil
 }
 
+// fakeOCI stands in for bashy oci. Dragon has no podman, so it launches the
+// requested argv on the host under exactly the environment the container
+// would get, and records every call. With allow unset any call fails the
+// test: that is the proof a run did not need a sandbox.
+type fakeOCI struct {
+	t     *testing.T
+	allow bool
+	calls []string
+}
+
+func (f *fakeOCI) Argv(dir string, argv, env []string, _ contain.Spec) ([]string, error) {
+	if !f.allow {
+		f.t.Errorf("unit routed to oci without asking for a sandbox: %q", argv)
+		return nil, &contain.UnavailableError{Level: contain.LevelSandbox, Reason: "test: no sandbox on this host"}
+	}
+	f.calls = append(f.calls, strings.Join(argv, " "))
+	// The image's bashy consumes Bash# decorators; the fixture's /bin/sh
+	// cannot, so the fake drops them from the `-c BODY` it was handed.
+	args := append([]string(nil), argv[1:]...)
+	if len(args) > 1 && args[0] == "-c" {
+		var keep []string
+		for _, line := range strings.Split(args[1], "\n") {
+			if !strings.HasPrefix(line, "@") {
+				keep = append(keep, line)
+			}
+		}
+		args[1] = strings.Join(keep, "\n")
+	}
+	out := append([]string{"/usr/bin/env", "-i"}, env...)
+	return append(append(out, "/bin/sh"), args...), nil
+}
+
 // TestShapedProductionGates is the A9 red/green proof: the HTTP approval path
-// uses the real verifier, sealed evidence gate and src activation store.
+// uses the real verifier, sealed evidence gate and src activation store. It
+// runs with NO sandbox available — no bwrap, no sandbox-exec, no podman on
+// PATH, and an oci route that fails the test if used — because shaping must
+// never require one, on any OS. What it asserts is what bashy's guards and
+// the shaping trust roots provide: scrubbed env, effect cap, per-user data
+// separation through the routes, frozen checks, evidence, revoked grants.
 func TestShapedProductionGates(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture units run under /bin/sh")
+	}
 	home := t.TempDir()
 	t.Setenv("BASHY_HOME", home)
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("SHAPE_TEST_SECRET", "hunter2")
 	source, baseRev := productionNotesSource(t, home)
 	workRoot := filepath.Join(t.TempDir(), "shape-work")
-	runner := shapeverify.TrustedRunner{Bin: "/bin/sh", Effects: []string{"read"}, Level: contain.LevelSandbox}
+	runner := shapeverify.TrustedRunner{Bin: "/bin/sh", Effects: []string{"read"}}
+	oci := &fakeOCI{t: t}
 	opts := productionShapeOptions()
-	opts.Home, opts.WorkRoot, opts.Runner, opts.Level = home, workRoot, []string{"/bin/sh"}, contain.LevelSandbox
+	opts.Home, opts.WorkRoot, opts.Runner, opts.OCI = home, workRoot, []string{"/bin/sh"}, oci
 	opts.Verifier = productionVerifier{home: home, runner: runner}
 	opts.Activator.(*productionActivator).home = home
 	panel := Panel{Name: "notes", Label: "Notes", Path: "/notes/", LaunchPath: "/shape/notes/",
@@ -175,6 +218,10 @@ func TestShapedProductionGates(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+	// The static UI change previews with no sandbox anywhere.
+	if page := do(h, http.MethodGet, "/shape/notes/preview/"+good.ID+"/", "192.0.2.20:5555", alice); page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "newest first") {
+		t.Fatalf("static preview = %d: %s", page.Code, page.Body.String())
+	}
 	var approved Candidate
 	if err := json.Unmarshal([]byte(post(alice, "/api/shape/notes/candidates/"+good.ID+"/approve", http.StatusOK)), &approved); err != nil {
 		t.Fatal(err)
@@ -227,77 +274,18 @@ func TestShapedProductionGates(t *testing.T) {
 		}
 	})
 
-	t.Run("preview escape", func(t *testing.T) {
-		aliceData, err := aliceStore.DataDir()
-		if err != nil {
-			t.Fatal(err)
-		}
-		bobData, err := bobStore.DataDir()
-		if err != nil {
-			t.Fatal(err)
-		}
-		aliceEscape := filepath.Join(aliceData, "escape.txt")
-		bobEscape := filepath.Join(bobData, "escape.txt")
-		homeEscape := filepath.Join(home, "escape.txt")
-		nc := "nc -w 1"
-		if runtime.GOOS == "darwin" {
-			nc = "nc -G 1 -w 1"
-		}
-		body := strings.Join([]string{
-			"try_write() {",
-			"  if printf 'escaped\\n' > \"$1\"; then printf 'WRITE_ALLOWED:%s\\n' \"$1\"; else printf 'WRITE_DENIED:%s\\n' \"$1\"; fi",
-			"}",
-			"try_write " + shellSingleQuote(aliceEscape),
-			"try_write " + shellSingleQuote(bobEscape),
-			"BASHY_HOME=" + shellSingleQuote(home),
-			"export BASHY_HOME",
-			"try_write \"$BASHY_HOME/escape.txt\"",
-			"if " + nc + " 192.0.2.1 80 </dev/null; then echo CONNECT_ALLOWED; else echo CONNECT_DENIED; fi",
-		}, "\n") + "\n"
-		preview := productionCandidate(t, app, "4444444444444444", good.Rev, func(work string) {
-			p := filepath.Join(work, "api", "add.md")
-			if err := os.WriteFile(p, []byte("# adversarial preview\n\n```bsh\n"+body+"```\n"), 0o644); err != nil {
+	// apiCandidate commits api/<name>.md with body as its Bash# unit.
+	apiCandidate := func(id, name, body string) Candidate {
+		t.Helper()
+		return productionCandidate(t, app, id, stateOf("device:alice").ActiveRevision, func(work string) {
+			p := filepath.Join(work, "api", name+".md")
+			if err := os.WriteFile(p, []byte("# "+name+"\n\n```bsh\n"+body+"```\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
 		})
-		weakOpts := opts
-		weakOpts.Level = contain.LevelProcess
-		weak := newTestHandler(t, Options{
-			RequireLogin: true, Sessions: websession.NewStore(time.Hour, []byte("test-key-test-key-test-key-32byt")),
-			Pairing: true, PairStorePath: pairPath, Panels: []Panel{panel}, Shape: weakOpts,
-		})
-		for _, path := range []string{
-			"/shape/notes/preview/" + preview.ID + "/api/add",
-			"/api/shape/notes/candidates/" + preview.ID + "/approve",
-		} {
-			w := send(weak, http.MethodPost, path, "192.0.2.20:5555", alice, "preview only")
-			if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "cannot contain") {
-				t.Fatalf("process containment did not refuse %s: %d: %s", path, w.Code, w.Body.String())
-			}
-		}
-		w := send(h, http.MethodPost, "/shape/notes/preview/"+preview.ID+"/api/add",
-			"192.0.2.20:5555", alice, "preview only")
-		switch w.Code {
-		case http.StatusOK:
-			out := w.Body.String()
-			if strings.Contains(out, "WRITE_ALLOWED:") || !strings.Contains(out, "CONNECT_DENIED") || strings.Contains(out, "CONNECT_ALLOWED") {
-				t.Fatalf("preview escape was not denied by containment: %s", out)
-			}
-			if got := strings.Count(out, "WRITE_DENIED:"); got != 3 {
-				t.Fatalf("preview denied %d/3 writes: %s", got, out)
-			}
-		case http.StatusServiceUnavailable:
-			if !strings.Contains(w.Body.String(), "cannot contain") {
-				t.Fatalf("preview refusal did not identify containment: %s", w.Body.String())
-			}
-		default:
-			t.Fatalf("preview escape = %d: %s", w.Code, w.Body.String())
-		}
-		for _, p := range []string{aliceEscape, bobEscape, homeEscape} {
-			if _, err := os.Stat(p); !os.IsNotExist(err) {
-				t.Fatalf("escape file exists at %s (stat err %v)", p, err)
-			}
-		}
+	}
+	realData := func(stage string) {
+		t.Helper()
 		for label, check := range map[string]struct {
 			store *shape.Store
 			want  string
@@ -307,11 +295,78 @@ func TestShapedProductionGates(t *testing.T) {
 				t.Fatal(err)
 			}
 			if string(got) != check.want {
-				t.Fatalf("preview changed %s real data: %q", label, got)
+				t.Fatalf("%s changed %s real data: %q", stage, label, got)
 			}
 		}
-		if got := stateOf("device:alice").ActiveRevision; got != good.Rev {
+	}
+
+	t.Run("api unit previews, verifies and activates without a sandbox", func(t *testing.T) {
+		before := stateOf("device:alice").ActiveRevision
+		c := apiCandidate("4444444444444444", "list",
+			"f=\"$BASHY_APP_DATA/notes.txt\"\nprintf '{\"v\":2,\"notes\":\"%s\"}\\n' \"$(tr -d '\\n\"' < \"$f\")\"\n")
+		preview := "/shape/notes/preview/" + c.ID + "/api/"
+		if w := send(h, http.MethodPost, preview+"add", "192.0.2.20:5555", alice, "preview only"); w.Code != http.StatusOK {
+			t.Fatalf("preview add = %d: %s", w.Code, w.Body.String())
+		}
+		w := do(h, http.MethodGet, preview+"list", "192.0.2.20:5555", alice)
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"v":2`) || !strings.Contains(w.Body.String(), "preview only") {
+			t.Fatalf("preview list = %d: %s", w.Code, w.Body.String())
+		}
+		realData("preview")
+		if got := stateOf("device:alice").ActiveRevision; got != before {
 			t.Fatalf("preview moved alice active to %s", got)
+		}
+		post(alice, "/api/shape/notes/candidates/"+c.ID+"/approve", http.StatusOK)
+		if got := stateOf("device:alice").ActiveRevision; got != c.Rev {
+			t.Fatalf("alice active = %s, want %s", got, c.Rev)
+		}
+		// Per-user data separation through the routes: alice's new unit
+		// reads only alice's data; bob keeps the base unit over his own.
+		w = do(h, http.MethodGet, "/notes/api/list", "192.0.2.20:5555", alice)
+		if !strings.Contains(w.Body.String(), `"v":2`) || !strings.Contains(w.Body.String(), "private original") || strings.Contains(w.Body.String(), "bob") {
+			t.Fatalf("alice list = %d: %s", w.Code, w.Body.String())
+		}
+		w = do(h, http.MethodGet, "/notes/api/list", "192.0.2.20:5555", bob)
+		if strings.Contains(w.Body.String(), `"v":2`) || !strings.Contains(w.Body.String(), "bob original") || strings.Contains(w.Body.String(), "private original") {
+			t.Fatalf("bob list = %d: %s", w.Code, w.Body.String())
+		}
+		realData("activation")
+	})
+
+	t.Run("unit env is scrubbed", func(t *testing.T) {
+		c := apiCandidate("6666666666666666", "env", "env\n")
+		w := do(h, http.MethodGet, "/shape/notes/preview/"+c.ID+"/api/env", "192.0.2.20:5555", alice)
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "BASHY_APP_DATA=") {
+			t.Fatalf("env = %d: %s", w.Code, w.Body.String())
+		}
+		if strings.Contains(w.Body.String(), "hunter2") || strings.Contains(w.Body.String(), "SHAPE_TEST_SECRET") {
+			t.Fatalf("secret leaked into the unit env: %s", w.Body.String())
+		}
+	})
+
+	t.Run("effect cap refuses a unit declaring network", func(t *testing.T) {
+		c := apiCandidate("7777777777777777", "fetch", "@effects(\"read,net\")\nfetch() { echo fetched; }\nfetch\n")
+		w := do(h, http.MethodGet, "/shape/notes/preview/"+c.ID+"/api/fetch", "192.0.2.20:5555", alice)
+		if w.Code != http.StatusForbidden || strings.Contains(w.Body.String(), "fetched") {
+			t.Fatalf("net unit = %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("a declared sandbox island routes to bashy oci", func(t *testing.T) {
+		oci.allow = true
+		defer func() { oci.allow = false }()
+		c := apiCandidate("8888888888888888", "iso", "@sandbox()\niso() { printf 'iso:%s\\n' \"$(cat \"$BASHY_APP_DATA/notes.txt\")\"; }\niso\n")
+		w := do(h, http.MethodGet, "/shape/notes/preview/"+c.ID+"/api/iso", "192.0.2.20:5555", alice)
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "iso:private original") {
+			t.Fatalf("island = %d: %s", w.Code, w.Body.String())
+		}
+		if len(oci.calls) != 1 || !strings.HasPrefix(oci.calls[0], "sh -c @sandbox()") {
+			t.Fatalf("oci calls = %q", oci.calls)
+		}
+		oci.allow = false
+		w = do(h, http.MethodGet, "/shape/notes/preview/"+c.ID+"/api/list", "192.0.2.20:5555", alice)
+		if w.Code != http.StatusOK || len(oci.calls) != 1 {
+			t.Fatalf("an undeclared unit reached oci: %d %q", w.Code, oci.calls)
 		}
 	})
 

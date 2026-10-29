@@ -17,7 +17,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
-	"github.com/qiangli/yoke/pkg/shape/contain"
 	shape "github.com/qiangli/yoke/pkg/shape/state"
 	shapeverify "github.com/qiangli/yoke/pkg/shape/verify"
 	"github.com/qiangli/yoke/pkg/src"
@@ -184,8 +183,8 @@ func TestShapedHistoryView(t *testing.T) {
 	}
 
 	opts := productionShapeOptions()
-	opts.Home, opts.WorkRoot, opts.Runner, opts.Level = home, filepath.Join(t.TempDir(), "shape-work"), []string{"/bin/sh"}, contain.LevelSandbox
-	opts.Verifier = productionVerifier{home: home, runner: shapeverify.TrustedRunner{Bin: "/bin/sh", Effects: []string{"read"}, Level: contain.LevelSandbox}}
+	opts.Home, opts.WorkRoot, opts.Runner = home, filepath.Join(t.TempDir(), "shape-work"), []string{"/bin/sh"}
+	opts.Verifier = productionVerifier{home: home, runner: shapeverify.TrustedRunner{Bin: "/bin/sh", Effects: []string{"read"}}}
 	opts.Activator.(*productionActivator).home = home
 	panel := Panel{Name: "notes", Label: "Notes", Path: "/notes/",
 		ShapedSource: source, Auth: AuthSystem, Source: "registered", Available: true}

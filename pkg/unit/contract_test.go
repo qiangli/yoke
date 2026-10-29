@@ -54,3 +54,25 @@ func TestBashSharpBodyNestedAndUnterminated(t *testing.T) {
 		t.Fatalf("unterminated fence yielded %q", got)
 	}
 }
+
+func TestReadContractSandboxIsRunPolicy(t *testing.T) {
+	plain := "@ensure(\"test -f out\")\nwork() { touch out; }\n"
+	for _, dec := range []string{"@sandbox()", "@sandbox(\"oci\")"} {
+		c, err := unit.ReadContract(dec + "\n" + plain)
+		if err != nil {
+			t.Fatalf("%s: %v", dec, err)
+		}
+		if !c.Sandbox {
+			t.Fatalf("%s: sandbox request not read: %+v", dec, c)
+		}
+		p, _ := unit.ReadContract(plain)
+		k1, _ := unit.CapabilityKey(c)
+		k2, _ := unit.CapabilityKey(p)
+		if p.Sandbox || k1 != k2 {
+			t.Fatalf("%s: sandbox must not change the capability key", dec)
+		}
+	}
+	if c, _ := unit.ReadContract("echo '@sandbox'\n" + plain); c.Sandbox {
+		t.Fatal("a quoted @sandbox is not a request")
+	}
+}

@@ -32,7 +32,7 @@ import (
 // public/ assets come from the requesting principal's active revision (the
 // base revision when the principal has none, or there is no principal at
 // all), and each api/<name>.md is a Bash# unit run once per request under
-// containment with that principal's private data directory. There is no
+// bashy's guards with that principal's private data directory. There is no
 // long-lived process per version — a revision is just a commit.
 
 // ShapeOptions configures shaped apps and the Shape panel. The zero value is
@@ -49,9 +49,15 @@ type ShapeOptions struct {
 	// Runner is the argv prefix that runs a Bash# body given as `-c BODY`.
 	// Empty = {"bashy"}.
 	Runner []string
-	// Level is the containment for api units and previews. Empty = sandbox;
-	// a host that cannot provide it refuses the request (never downgrades).
+	// Level is the containment for api units and previews. Empty = process:
+	// bashy's guards (scrubbed env, effect cap, timeout, limits), which
+	// every OS provides — shaping never requires a sandbox. A unit that
+	// declares @sandbox() runs at contain.LevelSandbox through bashy oci
+	// whatever Level says, and setting LevelSandbox here routes every unit
+	// there. A sandbox bashy oci cannot provide refuses (never downgrades).
 	Level contain.Level
+	// OCI routes sandbox runs; nil = contain.BashyOCI{} (`bashy oci run`).
+	OCI contain.OCIRunner
 	// APITimeout bounds one api unit run. Zero = 30s.
 	APITimeout time.Duration
 
@@ -279,19 +285,26 @@ func (a *shapedApp) serveAPI(w http.ResponseWriter, r *http.Request, tree *objec
 		return
 	}
 	// The cap is the shaped-app ceiling; the effects are what the unit's
-	// contract declares (an uncontracted unit is taken at the ceiling, which
-	// containment then confines to its data directory). A unit declaring more
-	// — network, exec, credentials — is refused before it starts.
+	// contract declares (an uncontracted unit is taken at the ceiling). A
+	// unit declaring more — network, exec, credentials — is refused before
+	// it starts. Isolation is the unit's own request: @sandbox() routes it
+	// to bashy oci; the app never sees how the host provides it.
 	effects := []string{"read", "write"}
-	if c, err := unit.ReadContract(body); err == nil && len(c.EffectCap()) > 0 {
-		effects = c.EffectCap()
+	level := a.opts.Level
+	if c, err := unit.ReadContract(body); err == nil {
+		if len(c.EffectCap()) > 0 {
+			effects = c.EffectCap()
+		}
+		if c.Sandbox {
+			level = contain.LevelSandbox
+		}
 	}
 	reqBody, err := io.ReadAll(http.MaxBytesReader(w, r.Body, apiBodyLimit))
 	if err != nil {
 		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 		return
 	}
-	out, res, err := a.runUnit(r.Context(), dataDir, body, name, effects, map[string]string{
+	out, res, err := a.runUnit(r.Context(), dataDir, body, name, level, effects, map[string]string{
 		"REQUEST_METHOD":     r.Method,
 		"QUERY_STRING":       r.URL.RawQuery,
 		"CONTENT_TYPE":       r.Header.Get("Content-Type"),
@@ -306,7 +319,7 @@ func (a *shapedApp) serveAPI(w http.ResponseWriter, r *http.Request, tree *objec
 			return
 		}
 		if errors.Is(err, contain.ErrUnavailable) {
-			http.Error(w, "this host cannot contain app units: "+err.Error(), http.StatusServiceUnavailable)
+			http.Error(w, "unit "+name+" could not run as it asked (a requested sandbox comes from bashy oci): "+err.Error(), http.StatusServiceUnavailable)
 			return
 		}
 		slog.Error("shaped app unit", "app", a.name, "unit", name, "err", err)
@@ -325,9 +338,9 @@ func (a *shapedApp) serveAPI(w http.ResponseWriter, r *http.Request, tree *objec
 	_, _ = w.Write(out)
 }
 
-// runUnit runs one Bash# body under pkg/shape/contain with dataDir as both
-// its only writable directory and its BASHY_APP_DATA.
-func (a *shapedApp) runUnit(ctx context.Context, dataDir, body, name string, effects []string, env map[string]string) ([]byte, contain.Result, error) {
+// runUnit runs one Bash# body under pkg/shape/contain with dataDir as its
+// cwd and its BASHY_APP_DATA (and, in a sandbox, its only mount).
+func (a *shapedApp) runUnit(ctx context.Context, dataDir, body, name string, level contain.Level, effects []string, env map[string]string) ([]byte, contain.Result, error) {
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		return nil, contain.Result{}, err
@@ -349,7 +362,7 @@ func (a *shapedApp) runUnit(ctx context.Context, dataDir, body, name string, eff
 	}
 	argv := append(append([]string(nil), a.opts.runner()...), "-c", body, "api/"+name)
 	res, runErr := contain.Run(ctx, contain.Spec{
-		Dir: dataDir, Argv: argv, Level: a.opts.Level, Cap: "read,write", Effects: effects,
+		Dir: dataDir, Argv: argv, Level: level, OCI: a.opts.OCI, Cap: "read,write", Effects: effects,
 		EnvSet: set, Timeout: timeout, Stdout: pw,
 	})
 	_ = pw.Close()

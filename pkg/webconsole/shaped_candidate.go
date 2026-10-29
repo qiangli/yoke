@@ -28,7 +28,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"github.com/qiangli/yoke/pkg/coopauth"
-	"github.com/qiangli/yoke/pkg/shape/contain"
 	shapegate "github.com/qiangli/yoke/pkg/shape/gate"
 	shape "github.com/qiangli/yoke/pkg/shape/state"
 	shapeverify "github.com/qiangli/yoke/pkg/shape/verify"
@@ -712,10 +711,6 @@ func (s *server) handleShapeApprove(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := a.requireProductionCandidateContainment(); err != nil {
-		http.Error(w, "activation refused: this host cannot contain candidate app units: "+err.Error(), http.StatusServiceUnavailable)
-		return
-	}
 	if c.Rev == "" || (c.Status != candReady && c.Status != candVerified) {
 		http.Error(w, "candidate is "+c.Status+"; it cannot be approved", http.StatusConflict)
 		return
@@ -773,10 +768,6 @@ func (s *server) handleShapePreview(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := a.requireProductionCandidateContainment(); err != nil {
-		http.Error(w, "preview refused: this host cannot contain candidate app units: "+err.Error(), http.StatusServiceUnavailable)
-		return
-	}
 	if c.Rev == "" {
 		http.Error(w, "candidate has no result yet", http.StatusConflict)
 		return
@@ -805,18 +796,6 @@ func (s *server) handleShapePreview(w http.ResponseWriter, r *http.Request) {
 	r2 := r.Clone(r.Context())
 	r2.URL.Path = rest
 	a.serveTree(w, r2, commit, mountRel(r2), c.Principal, data)
-}
-
-// Production candidates may introduce executable API units. Preview and
-// activation therefore require the sandbox boundary up front; process-only
-// containment scrubs the environment but cannot stop an absolute-path write
-// or a non-loopback connection. Alternate Activators are explicit test seams
-// and keep their own containment contract.
-func (a *shapedApp) requireProductionCandidateContainment() error {
-	if _, production := a.opts.Activator.(*productionActivator); !production {
-		return nil
-	}
-	return contain.RequireSandbox(a.opts.Level)
 }
 
 // previewData seeds, once, a private copy of the owner's data for previews.
