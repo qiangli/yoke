@@ -52,7 +52,8 @@ func (g *delegateGuard) check(l Launch) error {
 	}
 	allowed := strings.TrimSpace(g.allow) == "" && !g.genie
 	for _, entry := range strings.Split(g.allow, ",") {
-		if strings.TrimSpace(entry) == target {
+		entry = strings.TrimSpace(entry)
+		if entry == target || (firstPartyTool(l.ToolName) && entry == firstPartyAlias(l.ToolName)+":"+model) {
 			allowed = true
 		}
 	}
@@ -64,10 +65,23 @@ func (g *delegateGuard) check(l Launch) error {
 	if g.capRequired {
 		return delegateFailure("budget", "delegate: required dollar/token cap cannot be enforced by this vendor adapter")
 	}
-	if len(l.PreserveEnv) != 0 || len(l.CredentialEnvAliases) != 0 {
+	// A first-party agent resolves its own model credential; the env scrub
+	// still strips any metered vendor key from the child.
+	if !firstPartyTool(l.ToolName) && (len(l.PreserveEnv) != 0 || len(l.CredentialEnvAliases) != 0) {
 		return delegateFailure("denied", "delegate: metered credential bindings are not permitted")
 	}
 	return nil
+}
+
+// firstPartyTool reports bashy's own agent (fleet tool ycode, alias genie). It
+// authenticates its model itself, so no vendor subscription login applies.
+func firstPartyTool(name string) bool { return name == "ycode" || name == "genie" }
+
+func firstPartyAlias(name string) string {
+	if name == "ycode" {
+		return "genie"
+	}
+	return "ycode"
 }
 
 // Defense in depth AFTER launch environment overlays: no recipe may restore a
@@ -94,6 +108,9 @@ func scrubDelegateEnv(env []string) []string {
 // output is deliberately not returned: status errors can contain account data.
 func delegateAuth(ctx context.Context, agent, cwd string, l Launch) error {
 	var args []string
+	if firstPartyTool(l.ToolName) {
+		return nil
+	}
 	switch l.ToolName {
 	case "claude":
 		args = []string{"auth", "status", "--json"}
