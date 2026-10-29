@@ -66,6 +66,15 @@ type ProvisionIntent struct {
 	// URLs. They exist for tests; no flag or environment variable sets
 	// them, so production cannot be redirected by accident.
 	LightsailURL, CostExplorerURL, BudgetsURL, STSURL string
+	// Keys is an explicit key pair for THIS check only (S524.7): the pair
+	// `bashy infra --account <alias>` resolved from that account's profile.
+	//
+	// It exists because the budget guard is the one authorization step that
+	// must run as the SAME identity as the create it is guarding. Reading
+	// the ambient environment instead would let a guard pass on one
+	// account's budget while the create spends from another's. Zero value
+	// keeps the historical behavior: the explicit environment key pair.
+	Keys awsprovider.Credentials
 }
 
 // ProvisioningAllowed answers whether one create may happen, by running
@@ -81,10 +90,14 @@ func ProvisioningAllowed(ctx context.Context, c Credentials, intent ProvisionInt
 		return awsprovider.Verdict{}, NewError(CodeInvalidInput,
 			"aws: provisioning authorization needs a bundle id — the budget verdict is arithmetic about one plan's monthly price", nil)
 	}
-	keys, perr := awsprovider.CredentialsFromEnv(os.Environ())
-	if perr != nil {
-		return awsprovider.Verdict{}, NewError(CodeMissingCredentials,
-			fmt.Sprintf("aws: provisioning authorization for %s needs an explicit key pair: %s", c.RedactedScope(), perr.Message), nil)
+	keys := intent.Keys
+	if !keys.Valid() {
+		fromEnv, perr := awsprovider.CredentialsFromEnv(os.Environ())
+		if perr != nil {
+			return awsprovider.Verdict{}, NewError(CodeMissingCredentials,
+				fmt.Sprintf("aws: provisioning authorization for %s needs an explicit key pair: %s", c.RedactedScope(), perr.Message), nil)
+		}
+		keys = fromEnv
 	}
 	region := intent.Region
 	if region == "" {

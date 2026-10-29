@@ -2,6 +2,7 @@ package secrets
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -36,6 +37,11 @@ type Client struct {
 type Config struct {
 	URL   string
 	Token string
+	// Account is a `bashy account` alias or id whose cloudbox connection
+	// supplies the URL and the token for THIS invocation only. It conflicts
+	// with URL/Token rather than taking a place in the ladder below; see
+	// account.go.
+	Account string
 }
 
 // Resolve determines the cloudbox base URL and Bearer token, in order:
@@ -51,7 +57,24 @@ type Config struct {
 // secrets credential stays separate from the broader LLM-gateway token (and
 // can be minted read-only). $BASHY_SECRETS_TOKEN (env / Keychain) is the
 // preferred primary; the file is just a no-config convenience.
-func (c Config) Resolve() (Client, error) {
+func (c Config) Resolve() (Client, error) { return c.ResolveContext(context.Background()) }
+
+// ResolveContext is Resolve with a context, for the `--account` lookup. The
+// ladder below is unchanged; an account simply fills URL and Token first and
+// then short-circuits every rung, because an explicitly named identity may not
+// fall back to another one.
+func (c Config) ResolveContext(ctx context.Context) (Client, error) {
+	accountURL, accountToken, aerr := c.resolveAccount(ctx)
+	if aerr != nil {
+		return Client{}, aerr
+	}
+	if strings.TrimSpace(c.Account) != "" {
+		return Client{
+			BaseURL: accountURL,
+			Token:   accountToken,
+			HTTP:    &http.Client{Timeout: 15 * time.Second},
+		}, nil
+	}
 	base := c.URL
 	if base == "" {
 		base = os.Getenv("BASHY_CLOUDBOX_URL")

@@ -229,6 +229,7 @@ func decodeProvisionItem(op string, raw []byte) (ProvisionRequest, json.RawMessa
 // resume and stop over the master v1 provisioning-request endpoints.
 func NewInfraRequestCmd() *cobra.Command {
 	var master, token string
+	var acct accountFlag
 	var asJSON bool
 	c := &cobra.Command{
 		Use:   "request",
@@ -237,13 +238,14 @@ func NewInfraRequestCmd() *cobra.Command {
 	c.PersistentFlags().StringVar(&master, "master", "", "master base URL (default $BASHY_CLOUDBOX_URL, else https://ai.dhnt.io)")
 	c.PersistentFlags().StringVar(&token, "token", "", "master Bearer [REDACTED] (default $BASHY_FLEET_TOKEN, else $BASHY_API_KEY, else the paired credential)")
 	c.PersistentFlags().BoolVar(&asJSON, "json", false, "machine-readable output")
+	acct.bindPersistent(c)
 
 	ls := &cobra.Command{
 		Use:   "ls",
 		Short: "List the caller's provisioning requests",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			client, err := NewProvisioningClient(master, token)
+			client, err := newProvisioningClientFor(cmd.Context(), &acct, master, token)
 			if err != nil {
 				return err
 			}
@@ -275,7 +277,7 @@ func NewInfraRequestCmd() *cobra.Command {
 		Short: "Show one provisioning request",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			client, err := NewProvisioningClient(master, token)
+			client, err := newProvisioningClientFor(cmd.Context(), &acct, master, token)
 			if err != nil {
 				return err
 			}
@@ -325,7 +327,7 @@ func NewInfraRequestCmd() *cobra.Command {
 				}
 				provToken = tok
 			}
-			client, err := NewProvisioningClient(master, token)
+			client, err := newProvisioningClientFor(cmd.Context(), &acct, master, token)
 			if err != nil {
 				return err
 			}
@@ -351,7 +353,7 @@ func NewInfraRequestCmd() *cobra.Command {
 		Short: "Power a request's VM off (it keeps billing until destroyed)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			client, err := NewProvisioningClient(master, token)
+			client, err := newProvisioningClientFor(cmd.Context(), &acct, master, token)
 			if err != nil {
 				return err
 			}

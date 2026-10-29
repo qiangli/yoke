@@ -374,6 +374,7 @@ func firstNonEmpty(vals ...string) string {
 // an unpaired host never needed it.
 func newSync(noun string, opts []Option) *cobra.Command {
 	var cfg CloudConfig
+	var acct accountFlag
 	var asJSON bool
 	c := &cobra.Command{
 		Use:   "sync",
@@ -386,7 +387,14 @@ func newSync(noun string, opts []Option) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			client, err := cfg.Resolve()
+			// `--account` is the explicit endpoint + bearer for this pull
+			// only; it refuses alongside --url/--token rather than guessing
+			// a precedence, and it changes no cloudbox profile.
+			url, tok, aerr := cloudOverrides(cmd.Context(), &acct, cfg.URL, cfg.Token)
+			if aerr != nil {
+				return aerr
+			}
+			client, err := CloudConfig{URL: url, Token: tok}.Resolve()
 			if err != nil {
 				return err
 			}
@@ -407,6 +415,7 @@ func newSync(noun string, opts []Option) *cobra.Command {
 	}
 	c.Flags().StringVar(&cfg.URL, "url", "", "control-plane base URL (default $BASHY_CLOUDBOX_URL)")
 	c.Flags().StringVar(&cfg.Token, "token", "", "Bearer token (default $BASHY_FLEET_TOKEN, else $BASHY_API_KEY)")
+	acct.bind(c)
 	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
 	return c
 }

@@ -55,6 +55,7 @@ type lifecycleFlags struct {
 	userDataBucket string
 	yes            bool
 	asJSON         bool
+	account        accountFlag
 }
 
 func (f *lifecycleFlags) bind(cmd *cobra.Command, verb string) {
@@ -63,6 +64,7 @@ func (f *lifecycleFlags) bind(cmd *cobra.Command, verb string) {
 	cmd.Flags().StringVar(&f.region, "region", "", "provider region ("+defaultsHelp(func(d provisionDefaults) string { return d.Region })+")")
 	cmd.Flags().StringVar(&f.owner, "owner", "local", "ownership tag scope the resource must carry")
 	cmd.Flags().StringVar(&f.credentialRef, "credential-ref", "", "pkg/secrets ref for the provider credential (default the provider name)")
+	f.account.bind(cmd)
 	cmd.Flags().BoolVar(&f.asJSON, "json", false, "machine-readable output")
 	if verb == "destroy" {
 		cmd.Flags().StringVar(&f.key, "key", "", "idempotency key (default infra-destroy-<name>)")
@@ -86,9 +88,36 @@ func (f *lifecycleFlags) resolve(ctx context.Context, verb string, args []string
 	if f.region == "" {
 		f.region = infraDefaults(p.Manifest.Name).Region
 	}
+	// Both refusals happen HERE — before the dispatcher is opened and so
+	// before any network call: two answers to "which credential" is a
+	// conflict, and an account that cannot drive this provider is
+	// unsupported.
+	if err := f.account.credentialRefConflict(f.credentialRef); err != nil {
+		return nil, err
+	}
+	sel, err := resolveInfraAccount(ctx, &f.account, p.Manifest.Name)
+	if err != nil {
+		return nil, err
+	}
 	return openProviderDispatcher(ctx, p, f.credentialRef, builtinOpenOptions{
 		Owner: f.owner, Region: f.region, UserDataBucket: f.userDataBucket,
+		Account: sel,
 	})
+}
+
+// resolveInfraAccount resolves `--account` for one provider: only the category
+// that provider belongs to may drive it, so a DigitalOcean account named for
+// an AWS provision is refused by name rather than used as a token.
+func resolveInfraAccount(ctx context.Context, flag *accountFlag, providerName string) (*AccountSelection, error) {
+	if !flag.given() {
+		return nil, nil
+	}
+	category, ok := accountCategoryForProvider(providerName)
+	if !ok {
+		return nil, accountFail(accountCodeUnsupported,
+			"provider "+providerName+" has no account category; --account is not supported for it")
+	}
+	return flag.resolve(ctx, accountOpInfra, category)
 }
 
 // openProviderDispatcher resolves a loaded provider's credential and
@@ -103,7 +132,7 @@ func openProviderDispatcher(ctx context.Context, p InfraProvider, credentialRef 
 	if ref == "" {
 		ref = p.Manifest.Name
 	}
-	cred, err := resolveProviderCredential(ref)
+	cred, err := resolveProviderCredentialFor(ref, o.Account)
 	if err != nil {
 		return nil, err
 	}

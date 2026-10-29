@@ -30,6 +30,7 @@ func NewDelegateCmd() *cobra.Command {
 	var opt Options
 	var self bool
 	var model string
+	var account string
 	var allow string
 	var idle time.Duration
 	var budget float64
@@ -58,6 +59,20 @@ caps fail closed when the vendor adapter cannot enforce them.
 An enclosing attestation launcher may export its receipt as BASHY_ATTEST_ID.`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// --account resolves to the agent binding linked to that
+			// account and then behaves as --agent. It runs FIRST, so the
+			// conflicts refuse before anything launches and the positional
+			// below stays part of the instruction.
+			if err := delegateAccountConflict(account, opt.Agent, model, self); err != nil {
+				return err
+			}
+			if strings.TrimSpace(account) != "" {
+				binding, err := resolveDelegateAccount(cmd.Context(), strings.TrimSpace(account))
+				if err != nil {
+					return err
+				}
+				opt.Agent = binding
+			}
 			// The first positional is the target unless --agent/--self already named one.
 			if opt.Agent == "" && !self && len(args) > 0 {
 				if first := strings.TrimSpace(args[0]); strings.EqualFold(first, "self") {
@@ -143,6 +158,7 @@ An enclosing attestation launcher may export its receipt as BASHY_ATTEST_ID.`,
 	cmd.Flags().StringVar(&opt.Agent, "agent", "", "target agent (nickname or tool:model); alternative to the first positional")
 	cmd.Flags().BoolVar(&self, "self", false, "delegate to YOURSELF — the same tool driving this shell, run detached (forks your live context when the tool can)")
 	cmd.Flags().StringVar(&model, "model", "", "with --self: transplant your inherited context onto a DIFFERENT model (e.g. opus) — best-effort")
+	cmd.Flags().StringVar(&account, "account", "", "delegate to the agent binding linked to this account alias or id (see 'bashy account'); conflicts with --agent/--self/--model")
 	cmd.Flags().StringVar(&opt.Role, "role", "", "role alias when no agent is named: conductor, reviewer, qa, release")
 	cmd.Flags().StringVar(&opt.Task, "task", "", "safe one-line assignment label shown in the live agent roster")
 	cmd.Flags().StringVar(&opt.Instruction, "instruction", "", "the instruction (or pass it as positional words)")

@@ -79,6 +79,11 @@ type builtinOpenOptions struct {
 	// staged in (AWS); empty means $AWS_USERDATA_BUCKET, else the
 	// provider's per-account default.
 	UserDataBucket string
+	// Account is the per-invocation identity `--account` selected, or nil
+	// for the ambient one. When set it is the ONLY identity this open may
+	// use: its credential replaces the environment's rather than extending
+	// a ladder, and nothing about the host's global provider state changes.
+	Account *AccountSelection
 }
 
 // digitaloceanBaseURL and awsLightsailBaseURL override the API roots used
@@ -149,7 +154,7 @@ var builtinProviders = map[string]builtinProvider{
 			return resolveEnvCredential(ref, awsprovider.EnvSecretAccessKey)
 		},
 		open: func(o builtinOpenOptions) (provider.Adapter, error) {
-			creds, perr := awsprovider.CredentialsFromEnv(os.Environ())
+			creds, perr := awsAccountCredentials(o)
 			if perr != nil {
 				return nil, perr
 			}
@@ -255,6 +260,67 @@ func resolveProviderCredential(ref string) (string, error) {
 		return b.credential(ref)
 	}
 	return resolveEnvCredential(ref)
+}
+
+// resolveProviderCredentialFor is resolveProviderCredential with an optional
+// per-invocation identity. An account REPLACES the environment ladder: the
+// whole point of `--account` is that the operation runs as that account or
+// not at all, so a selection with no usable credential refuses instead of
+// falling back to whatever the shell happens to export.
+//
+// For AWS the dispatcher credential is the SECRET half of the key pair (that
+// is what the journal scrubs); the key id travels with it through
+// builtinOpenOptions.Account into the open closure.
+func resolveProviderCredentialFor(ref string, sel *AccountSelection) (string, error) {
+	if sel == nil {
+		return resolveProviderCredential(ref)
+	}
+	switch sel.Category {
+	case AccountAWS:
+		if !sel.AWSKeys.Valid() {
+			return "", accountFail(accountCodeCredential, "account "+sel.Ref+" has no usable AWS key pair")
+		}
+		return sel.AWSKeys.SecretAccessKey, nil
+	case AccountDigitalOcean:
+		if strings.TrimSpace(sel.Token) == "" {
+			return "", accountFail(accountCodeCredential, "account "+sel.Ref+" has no usable DigitalOcean token")
+		}
+		return sel.Token, nil
+	default:
+		return "", accountFail(accountCodeUnsupported,
+			"account category "+sel.Category+" cannot supply a provider credential")
+	}
+}
+
+// awsAccountCredentials is the key pair the Lightsail adapter (and its budget
+// preflight, which runs inside it) is built with: the selected account's
+// profile keys, else the explicit environment pair as before.
+func awsAccountCredentials(o builtinOpenOptions) (awsprovider.Credentials, error) {
+	if o.Account != nil {
+		if !o.Account.AWSKeys.Valid() {
+			return awsprovider.Credentials{}, accountFail(accountCodeCredential,
+				"account "+o.Account.Ref+" has no usable AWS key pair")
+		}
+		return o.Account.AWSKeys, nil
+	}
+	creds, perr := awsprovider.CredentialsFromEnv(os.Environ())
+	if perr != nil {
+		return awsprovider.Credentials{}, perr
+	}
+	return creds, nil
+}
+
+// accountCategoryForProvider names the account category that may drive one
+// built-in provider. A provider with no entry has no account category, so
+// `--account` on it is account_unsupported rather than a silent no-op.
+func accountCategoryForProvider(name string) (string, bool) {
+	switch name {
+	case digitalocean.Name:
+		return AccountDigitalOcean, true
+	case awsprovider.Name:
+		return AccountAWS, true
+	}
+	return "", false
 }
 
 // openBuiltin builds a linked-in adapter for a provider name.

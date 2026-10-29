@@ -1,6 +1,8 @@
 package aws
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -230,5 +232,76 @@ func TestProvisioningNeedsABundle(t *testing.T) {
 	}
 	if !strings.Contains(perr.Message, "bundle id") {
 		t.Fatalf("error = %s", perr.Message)
+	}
+}
+
+// The budget guard under an explicit per-invocation key pair (S524.7): the
+// identity that would pay must be the identity the guard asks about, so
+// `--account` hands its own keys in rather than letting the ambient
+// environment answer.
+func TestProvisioningAllowedUsesTheIntentsExplicitKeys(t *testing.T) {
+	srv := fakelightsail.New(t)
+	// No ambient key pair at all: before this, the check could not run.
+	clearCredEnv(t)
+	t.Setenv(EnvProfile, "alice")
+	t.Setenv(EnvSharedCredentials, writeFixtureProfiles(t))
+
+	in := intent(srv, "small_3_0")
+	in.Keys = awsprovider.Credentials{
+		AccessKeyID:     fakelightsail.TestAccessKeyID,
+		SecretAccessKey: fakelightsail.TestSecretAccessKey,
+	}
+	v, perr := ProvisioningAllowed(t.Context(), Credentials{Profile: "alice", Kind: AuthSharedFile, Region: fakelightsail.TestRegion}, in)
+	if perr != nil {
+		t.Fatalf("ProvisioningAllowed with explicit keys: %v", perr)
+	}
+	if !v.OK {
+		t.Fatalf("verdict not OK: %+v", v)
+	}
+	if n := srv.BadSignatures(); n != 0 {
+		t.Fatalf("%d request(s) failed SigV4 under the intent's keys", n)
+	}
+
+	// A different account's pair is the one actually presented, so the fake
+	// rejects it — proof the guard runs as the selected identity.
+	in.Keys = awsprovider.Credentials{AccessKeyID: "AKIDBOB", SecretAccessKey: "bob-secret"}
+	if _, perr = ProvisioningAllowed(t.Context(), Credentials{Profile: "bob", Kind: AuthSharedFile}, in); perr == nil {
+		t.Fatal("a foreign key pair must not be accepted")
+	}
+	if strings.Contains(perr.Message, "bob-secret") {
+		t.Fatal("the refusal carried credential material")
+	}
+}
+
+// writeFixtureProfiles lays out a two-profile shared credentials file, the
+// `--account` shape: one host, two AWS identities, neither ambient.
+func writeFixtureProfiles(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "credentials")
+	body := "[alice]\naws_access_key_id = " + fakelightsail.TestAccessKeyID +
+		"\naws_secret_access_key = " + fakelightsail.TestSecretAccessKey + "\n" +
+		"[bob]\naws_access_key_id = AKIDBOB\naws_secret_access_key = bob-secret\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// ResolveProfileKeys is what `--account` reads for an AWS profile: exactly the
+// named section, never [default], and never a role/SSO profile.
+func TestResolveProfileKeysPerAccount(t *testing.T) {
+	clearCredEnv(t)
+	t.Setenv(EnvSharedCredentials, writeFixtureProfiles(t))
+	for profile, wantID := range map[string]string{"alice": fakelightsail.TestAccessKeyID, "bob": "AKIDBOB"} {
+		keys, err := ResolveProfileKeys(profile)
+		if err != nil {
+			t.Fatalf("profile %s: %v", profile, err)
+		}
+		if keys.AccessKeyID != wantID {
+			t.Fatalf("profile %s resolved %q, want %q", profile, keys.AccessKeyID, wantID)
+		}
+	}
+	if _, err := ResolveProfileKeys("carol"); err == nil {
+		t.Fatal("an absent profile must not fall back to another identity")
 	}
 }

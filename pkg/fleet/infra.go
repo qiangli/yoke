@@ -624,6 +624,7 @@ func NewInfraCmd(opts ...Option) *cobra.Command {
 	list.Flags().StringVar(&lf.region, "region", "", "provider region ("+defaultsHelp(func(d provisionDefaults) string { return d.Region })+")")
 	list.Flags().StringVar(&lf.owner, "owner", "local", "ownership tag scope resources must carry")
 	list.Flags().StringVar(&lf.credentialRef, "credential-ref", "", "pkg/secrets ref for the provider credential (default the provider name)")
+	lf.account.bind(list)
 	return newRoot(KindInfra, "Provider packages (declarative manifests and executable plugins)",
 		list, newShow(KindInfra, opts), newAdd(KindInfra, opts), newRm(KindInfra, opts, (*Catalog).RemoveInfraProvider),
 		newInfraInit(), newInfraValidate(), newInfraProvision(opts), NewInfraRequestCmd(),

@@ -259,12 +259,14 @@ func writeSecretToVault(name, value string) error {
 // humans at a terminal) is the only way to print it.
 func NewTokenCmd() *cobra.Command {
 	var urlOverride, tokenOverride string
+	var acct accountFlag
 	c := &cobra.Command{
 		Use:   "token",
 		Short: "Mint and manage scoped coordination tokens (attenuated Bearer [REDACTED])",
 	}
 	c.PersistentFlags().StringVar(&urlOverride, "url", "", "control-plane base URL (default $BASHY_CLOUDBOX_URL)")
 	c.PersistentFlags().StringVar(&tokenOverride, "token", "", "Bearer [REDACTED] (default $BASHY_FLEET_TOKEN, else $BASHY_API_KEY)")
+	acct.bindPersistent(c)
 
 	var name, ttl, toSecret string
 	var scopeVals []string
@@ -287,7 +289,7 @@ func NewTokenCmd() *cobra.Command {
 			if toSecret == "" && !stdout {
 				return fmt.Errorf("fleet: give --to-secret VAULT_NAME or --stdout (the value is never printed by default)")
 			}
-			client, err := NewTokenClient(urlOverride, tokenOverride)
+			client, err := newTokenClientFor(cmd.Context(), &acct, urlOverride, tokenOverride)
 			if err != nil {
 				return err
 			}
@@ -329,7 +331,7 @@ func NewTokenCmd() *cobra.Command {
 		Short: "List the owner's tokens (never their values)",
 		Args:  cobra.NoArgs, SilenceUsage: true, SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			client, err := NewTokenClient(urlOverride, tokenOverride)
+			client, err := newTokenClientFor(cmd.Context(), &acct, urlOverride, tokenOverride)
 			if err != nil {
 				return err
 			}
@@ -354,7 +356,7 @@ func NewTokenCmd() *cobra.Command {
 		Short: "Revoke one token by id (owner-scoped)",
 		Args:  cobra.ExactArgs(1), SilenceUsage: true, SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := NewTokenClient(urlOverride, tokenOverride)
+			client, err := newTokenClientFor(cmd.Context(), &acct, urlOverride, tokenOverride)
 			if err != nil {
 				return err
 			}

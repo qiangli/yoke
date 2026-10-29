@@ -28,6 +28,7 @@ type HardenResult struct {
 }
 
 func newInfraHarden() *cobra.Command {
+	var acct accountFlag
 	var dropletID, satID int
 	var projectName, firewallName string
 	var tags []string
@@ -45,7 +46,7 @@ func newInfraHarden() *cobra.Command {
 				return errors.New("infra harden: --droplet ID is required")
 			}
 
-			client, err := resolveDOClient()
+			client, err := acct.doClient(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -332,5 +333,6 @@ func newInfraHarden() *cobra.Command {
 	cmd.Flags().BoolVar(&reservedIP, "reserved-ip", false, "Ensure a reserved IP is attached to the droplet")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview reconciliation plan without making changes")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
+	acct.bind(cmd)
 	return cmd
 }
