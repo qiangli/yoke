@@ -251,12 +251,51 @@ func resolveSprintStory(ref sprintStoryRef) sprintStoryState {
 	return sprintStoryState{Ref: sprintStoryRef{Repo: ref.Repo, ID: it.ID}, Title: it.Title, Status: it.Status, Priority: it.Priority, Seq: it.Seq}
 }
 
-func sprintGoalDone(g sprintGoalItem) bool {
+// sameGoalStoryID matches a stored goal link to a resolved story by content
+// id alone, across repos: the link pins whatever checkout was current when it
+// was written, and checkouts move. A bare running number is never a content
+// id, so the match is exact-or-prefix in both directions (the checklist shows
+// 8 characters of a 12-character id) rather than ResolveRef's number-first
+// lookup, which could land on another repo's Seq.
+func sameGoalStoryID(a, b string) bool {
+	x, y := strings.TrimSpace(a), strings.TrimSpace(b)
+	if x == "" || y == "" {
+		return false
+	}
+	return x == y || strings.HasPrefix(x, y) || strings.HasPrefix(y, x)
+}
+
+// resolveSprintGoalStory resolves a stored goal link, tolerating the stale
+// repo above: the stored repo is tried first, and only when it misses is the
+// same story id looked up across the sprint's other tracked roots. A hit
+// elsewhere keeps an accepted story checking its goal instead of wedging the
+// checklist on a WARNING it can never clear.
+func resolveSprintGoalStory(s *weaveStory, ref sprintStoryRef) sprintStoryState {
+	if st := resolveSprintStory(ref); !st.Missing {
+		return st
+	}
+	if s == nil {
+		return resolveSprintStory(ref)
+	}
+	for _, root := range sprintStoryRoots(s) {
+		if root == ref.Repo {
+			continue
+		}
+		it, err := todopkg.ResolveRef(todopkg.RepoStore(root), ref.ID)
+		if err != nil || it == nil || !sameGoalStoryID(it.ID, ref.ID) {
+			continue
+		}
+		return sprintStoryState{Ref: sprintStoryRef{Repo: root, ID: it.ID}, Title: it.Title, Status: it.Status, Priority: it.Priority, Seq: it.Seq, SprintID: it.SprintID}
+	}
+	return resolveSprintStory(ref)
+}
+
+func sprintGoalDone(s *weaveStory, g sprintGoalItem) bool {
 	if len(g.Stories) == 0 {
 		return strings.TrimSpace(g.Evidence) != ""
 	}
 	for _, ref := range g.Stories {
-		story := resolveSprintStory(ref)
+		story := resolveSprintGoalStory(s, ref)
 		if story.Missing || (!todopkg.IsClosed(story.Status)) {
 			return false
 		}
@@ -267,22 +306,22 @@ func sprintGoalDone(g sprintGoalItem) bool {
 // sprintGoalWontfix reports whether a goal item was closed by decision: it
 // has stories and every one of them is wontfix. The item counts as closed
 // (sprintGoalDone), but the checklist must not show it as delivered.
-func sprintGoalWontfix(g sprintGoalItem) bool {
+func sprintGoalWontfix(s *weaveStory, g sprintGoalItem) bool {
 	if len(g.Stories) == 0 {
 		return false
 	}
 	for _, ref := range g.Stories {
-		if resolveSprintStory(ref).Status != todopkg.StatusWontfix {
+		if resolveSprintGoalStory(s, ref).Status != todopkg.StatusWontfix {
 			return false
 		}
 	}
 	return true
 }
 
-func sprintGoalDangling(g sprintGoalItem) []string {
+func sprintGoalDangling(s *weaveStory, g sprintGoalItem) []string {
 	var out []string
 	for _, ref := range g.Stories {
-		if resolveSprintStory(ref).Missing {
+		if resolveSprintGoalStory(s, ref).Missing {
 			out = append(out, ref.Repo+"#"+ref.ID)
 		}
 	}
@@ -297,7 +336,12 @@ func sprintRetireMovedGoals(s *weaveStory) {
 		moved := len(g.Stories) > 0
 		var destinations []string
 		for _, ref := range g.Stories {
-			it, err := todopkg.ResolveRef(todopkg.RepoStore(ref.Repo), ref.ID)
+			st := resolveSprintGoalStory(s, ref)
+			if st.Missing {
+				moved = false
+				break
+			}
+			it, err := todopkg.ResolveRef(todopkg.RepoStore(st.Ref.Repo), st.Ref.ID)
 			if err != nil || it.Sprint == 0 || storyBelongsToSprint(it, s) {
 				moved = false
 				break
@@ -316,7 +360,7 @@ func sprintRetireMovedGoals(s *weaveStory) {
 func sprintUncheckedGoals(s *weaveStory) []string {
 	var out []string
 	for _, g := range s.Goal {
-		if !sprintGoalDone(g) {
+		if !sprintGoalDone(s, g) {
 			out = append(out, g.ID)
 		}
 	}
@@ -349,14 +393,14 @@ func renderSprintExecution(w io.Writer, s *weaveStory) {
 		fmt.Fprintln(w, "  ── goal checklist (derived from story closure + evidence) ──")
 		for _, g := range s.Goal {
 			mark, note := " ", ""
-			if sprintGoalDone(g) {
+			if sprintGoalDone(s, g) {
 				mark = "x"
-				if sprintGoalWontfix(g) {
+				if sprintGoalWontfix(s, g) {
 					mark, note = "-", " (won't do)"
 				}
 			}
 			warning := ""
-			if dangling := sprintGoalDangling(g); len(dangling) > 0 {
+			if dangling := sprintGoalDangling(s, g); len(dangling) > 0 {
 				warning = "  WARNING dangling: " + strings.Join(dangling, ", ")
 			}
 			fmt.Fprintf(w, "  [%s] %s — %s%s%s\n", mark, g.ID, g.Text, note, warning)
@@ -628,26 +672,7 @@ func newSprintGoalLinkCmd() *cobra.Command {
 			return fmt.Errorf("story %s belongs to sprint #%d, not #%d", it.ID, it.Sprint, id)
 		}
 		return runWeaveStoryMutate(cmd, id, "sprint goal link", &flags, func(s *weaveStory) (string, error) {
-			g := findSprintGoal(s, args[1])
-			if g == nil {
-				return "", fmt.Errorf("goal item %q not found", args[1])
-			}
-			ref := sprintStoryRef{Repo: root, ID: it.ID}
-			for _, old := range g.Stories {
-				if old == ref {
-					return fmt.Sprintf("goal %s already links %s", g.ID, it.ID), nil
-				}
-			}
-			g.Stories = append(g.Stories, ref)
-			found := false
-			for _, old := range s.StoryRoots {
-				found = found || old == root
-			}
-			if !found {
-				s.StoryRoots = append(s.StoryRoots, root)
-			}
-			weaveStoryAppend(s, weaveStoryConductorName(s, ""), "system", fmt.Sprintf("linked story %s to goal %s", it.ID, g.ID))
-			return fmt.Sprintf("sprint #%d goal %s linked %s", id, g.ID, it.ID), nil
+			return linkSprintGoalStory(s, args[1], root, it)
 		})
 	}
 	cmd.Flags().StringVar(&repo, "repo", "", "story repo root (default current)")
@@ -655,6 +680,63 @@ func newSprintGoalLinkCmd() *cobra.Command {
 	_ = cmd.MarkFlagRequired("story")
 	flags.attach(cmd)
 	return cmd
+}
+
+// linkSprintGoalStory records it (living in root) on the named goal item.
+//
+// A stored link pins whatever checkout was current when it was written, and
+// checkouts move — the sprint #531 shape is a goal that names a story id under
+// a repo that no longer holds it, so the checklist warns dangling and never
+// checks even though the story is accepted. Re-linking with the right --repo
+// must therefore overwrite the stored repo for the same story id (matched by
+// sameGoalStoryID, not by exact ref equality), never stack a second ref the
+// checklist cannot clear. Duplicates the old exact-match check did stack are
+// collapsed to the healed ref on the way through.
+func linkSprintGoalStory(s *weaveStory, goalID, root string, it *issue.Issue) (string, error) {
+	g := findSprintGoal(s, goalID)
+	if g == nil {
+		return "", fmt.Errorf("goal item %q not found", goalID)
+	}
+	matched, healedFrom := false, ""
+	kept := g.Stories[:0]
+	for _, old := range g.Stories {
+		if !sameGoalStoryID(old.ID, it.ID) {
+			kept = append(kept, old)
+			continue
+		}
+		if !matched {
+			matched = true
+			if old.Repo != root || old.ID != it.ID {
+				healedFrom = old.Repo
+			}
+			kept = append(kept, sprintStoryRef{Repo: root, ID: it.ID})
+			continue
+		}
+		if healedFrom == "" {
+			healedFrom = old.Repo
+		}
+	}
+	g.Stories = kept
+	trackGoalStoryRoot(s, root)
+	if !matched {
+		weaveStoryAppend(s, weaveStoryConductorName(s, ""), "system", fmt.Sprintf("linked story %s to goal %s", it.ID, g.ID))
+		return fmt.Sprintf("sprint #%d goal %s linked %s", s.ID, g.ID, it.ID), nil
+	}
+	if healedFrom != "" {
+		weaveStoryAppend(s, weaveStoryConductorName(s, ""), "system",
+			fmt.Sprintf("corrected goal %s story link %s: repo %s → %s", g.ID, it.ID, healedFrom, root))
+		return fmt.Sprintf("sprint #%d goal %s corrected link for %s to %s", s.ID, g.ID, it.ID, root), nil
+	}
+	return fmt.Sprintf("goal %s already links %s", g.ID, it.ID), nil
+}
+
+func trackGoalStoryRoot(s *weaveStory, root string) {
+	for _, old := range s.StoryRoots {
+		if old == root {
+			return
+		}
+	}
+	s.StoryRoots = append(s.StoryRoots, root)
 }
 
 func newSprintGoalEvidenceCmd() *cobra.Command {

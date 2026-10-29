@@ -55,7 +55,7 @@ func TestSprintGoalCompletionFollowsStoryClosureAndReopen(t *testing.T) {
 	s := &weaveStory{ID: 99124, StoryRoots: []string{root}}
 	id := sprintTestStory(t, root, s.ID, "deliver", "p0", todopkg.StatusTodo)
 	g := sprintGoalItem{ID: "delivery", Text: "deliver it", Stories: []sprintStoryRef{{Repo: root, ID: id}}}
-	if sprintGoalDone(g) {
+	if sprintGoalDone(s, g) {
 		t.Fatal("open story checked the goal")
 	}
 	st := todopkg.RepoStore(root)
@@ -69,7 +69,7 @@ func TestSprintGoalCompletionFollowsStoryClosureAndReopen(t *testing.T) {
 	if _, err := st.Save(it); err != nil {
 		t.Fatal(err)
 	}
-	if !sprintGoalDone(g) {
+	if !sprintGoalDone(s, g) {
 		t.Fatal("closed story did not check the goal")
 	}
 	it.Status = todopkg.StatusTodo
@@ -77,20 +77,21 @@ func TestSprintGoalCompletionFollowsStoryClosureAndReopen(t *testing.T) {
 	if _, err := st.Save(it); err != nil {
 		t.Fatal(err)
 	}
-	if sprintGoalDone(g) {
+	if sprintGoalDone(s, g) {
 		t.Fatal("reopened story did not uncheck the goal")
 	}
 }
 
 func TestSprintGateEvidence(t *testing.T) {
 	root := t.TempDir()
-	id := sprintTestStory(t, root, 99125, "gated", "p0", todopkg.StatusDone)
+	s := &weaveStory{ID: 99125, StoryRoots: []string{root}}
+	id := sprintTestStory(t, root, s.ID, "gated", "p0", todopkg.StatusDone)
 	g := sprintGoalItem{ID: "gate", Stories: []sprintStoryRef{{Repo: root, ID: id}}, GateRequired: true}
-	if sprintGoalDone(g) {
+	if sprintGoalDone(s, g) {
 		t.Fatal("gate-required goal checked without evidence")
 	}
 	g.Evidence = "go test ./... PASS"
-	if !sprintGoalDone(g) {
+	if !sprintGoalDone(s, g) {
 		t.Fatal("closed story plus evidence did not check goal")
 	}
 }

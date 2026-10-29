@@ -16,11 +16,11 @@ func TestSprintWontfixStoryClosesGoalWithoutDelivery(t *testing.T) {
 	dropped := sprintTestStory(t, root, s.ID, "dropped", "p1", todopkg.StatusWontfix)
 	shipped := sprintTestStory(t, root, s.ID, "shipped", "p1", todopkg.StatusDone)
 	only := sprintGoalItem{ID: "T7", Stories: []sprintStoryRef{{Repo: root, ID: dropped}}}
-	if !sprintGoalDone(only) || !sprintGoalWontfix(only) {
+	if !sprintGoalDone(s, only) || !sprintGoalWontfix(s, only) {
 		t.Fatal("a goal whose stories are all wontfix must be closed and marked won't-do")
 	}
 	mixed := sprintGoalItem{ID: "T2", Stories: []sprintStoryRef{{Repo: root, ID: dropped}, {Repo: root, ID: shipped}}}
-	if !sprintGoalDone(mixed) || sprintGoalWontfix(mixed) {
+	if !sprintGoalDone(s, mixed) || sprintGoalWontfix(s, mixed) {
 		t.Fatal("a goal with a delivered story is closed and delivered, not won't-do")
 	}
 	if !sprintOpenStory(sprintStoryState{Status: todopkg.StatusTodo}) || sprintOpenStory(sprintStoryState{Status: todopkg.StatusWontfix}) {
