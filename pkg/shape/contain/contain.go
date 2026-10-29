@@ -68,6 +68,14 @@ type Spec struct {
 	Level Level
 	// Cap is the @guard effect cap spec (e.g. "read,write"); required.
 	Cap string
+	// Effects declares the command's own effect atoms when argv[0] is not an
+	// atlas tool — a trusted interpreter the host installed, say, rather than
+	// a certified utility. It is only ever a substitute for the atlas lookup:
+	// the declared atoms are still measured against Cap, and an empty value
+	// keeps the atlas lookup (whose absence denies as "unknown"). Declaring
+	// effects does NOT relax anything a caller gets for free; the caller is
+	// asserting what it is about to run, and remains answerable for it.
+	Effects []string
 	// EnvAllow lists parent environment variable names the principal may
 	// see; nothing else is inherited. EnvSet adds explicit values.
 	EnvAllow []string
@@ -132,9 +140,11 @@ func Run(ctx context.Context, s Spec) (Result, error) {
 		return res, fmt.Errorf("contain: %w", err)
 	}
 	name := filepath.Base(s.Argv[0])
-	var effects []string
-	if e, ok := atlas.Lookup(name); ok {
-		effects = e.Effects
+	effects := s.Effects
+	if len(effects) == 0 {
+		if e, ok := atlas.Lookup(name); ok {
+			effects = e.Effects
+		}
 	}
 	if ex := capv.Exceeded(effects); len(ex) > 0 {
 		return res, &EffectError{Command: name, Exceeded: ex}

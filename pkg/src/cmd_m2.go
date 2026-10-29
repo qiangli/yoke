@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	ygit "github.com/qiangli/yoke/git"
+	"github.com/qiangli/yoke/pkg/shape/evidence"
 	"github.com/spf13/cobra"
 )
 
@@ -171,7 +172,8 @@ func newPrCmd() *cobra.Command {
 		Use:   "pr",
 		Short: "Local pull requests against the host's own local branch",
 	}
-	c.AddCommand(newPrOpenCmd(), newPrShowCmd(), newPrListCmd(), newPrMergeCmd(), newPrCloseCmd())
+	c.AddCommand(newPrOpenCmd(), newPrShowCmd(), newPrListCmd(), newPrVerifyCmd(),
+		newPrMergeCmd(), newPrCloseCmd())
 	return c
 }
 
@@ -243,6 +245,39 @@ func newPrListCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&repo, "repo", "", "only PRs for this repo")
 	return c
+}
+
+func newPrVerifyCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "verify <id>",
+		Short: "Verify a PR's candidate against the base contract and seal the result",
+		Long: `verify runs the base commit's checks against the PR's recorded head in
+an isolated clone, accounts for every contracted function the check set
+reaches, and seals the verdict for the resolved principal. Merging reads
+that record; a failing verdict is recorded too, and blocks.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rec, err := VerifyPR(cmd.Context(), "", args[0], nil)
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			for _, c := range rec.Checks {
+				fmt.Fprintf(out, "%-8s %s\n", c.Status, c.Name)
+			}
+			for _, fn := range rec.Uncalled {
+				fmt.Fprintf(out, "%-8s %s (no check reached it)\n", "uncalled", fn)
+			}
+			fmt.Fprintf(out, "verdict: %s for %s at %s\n", rec.Verdict, rec.Binding.Principal, shortSHA(rec.Binding.Candidate))
+			if rec.Reason != "" {
+				fmt.Fprintf(out, "reason: %s\n", rec.Reason)
+			}
+			if rec.Verdict != evidence.VerdictPass {
+				return fmt.Errorf("src: PR %s is not verified", args[0])
+			}
+			return nil
+		},
+	}
 }
 
 func newPrMergeCmd() *cobra.Command {

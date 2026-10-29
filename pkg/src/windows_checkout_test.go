@@ -155,6 +155,7 @@ func TestWindowsPRMergeExecutableCheckout(t *testing.T) {
 	if err := r.Storer.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("topic"), tip)); err != nil {
 		t.Fatal(err)
 	}
+	reviewWaiver(t, home)
 	pr, err := src.OpenPR(home, "yoke", "topic", "change README", "")
 	if err != nil {
 		t.Fatal(err)

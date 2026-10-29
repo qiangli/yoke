@@ -16,6 +16,8 @@ import (
 	"time"
 
 	ygit "github.com/qiangli/yoke/git"
+	"github.com/qiangli/yoke/pkg/shape/contain"
+	"github.com/qiangli/yoke/pkg/shape/verify"
 )
 
 // PR states: a record is open until merged into local or closed unmerged.
@@ -85,9 +87,10 @@ func nextPRID(home string) (string, error) {
 }
 
 // OpenPR records branch as a pull request against `local`. When testCmd is
-// given it runs now in the checkout and the pass/fail result is stored on
-// the record; MergePR refuses a PR whose recorded test failed. A PR with
-// no test command carries no result and merges on policy gates alone.
+// given it runs now, at the recorded head SHA in an isolated clone, and
+// the pass/fail result is stored on the record; MergePR refuses a PR whose
+// recorded test failed. A PR with no test command carries no result and is
+// gated on verification evidence and policy alone.
 func OpenPR(home, repo, branch, title, testCmd string) (PR, error) {
 	if strings.TrimSpace(title) == "" {
 		return PR{}, fmt.Errorf("src: pr open needs --title")
@@ -136,7 +139,7 @@ func OpenPR(home, repo, branch, title, testCmd string) (PR, error) {
 	}
 	if testCmd != "" {
 		pr.TestCmd = testCmd
-		out, ok := runPRTest(dir, testCmd)
+		out, ok := runPRTest(dir, headSHA, testCmd)
 		pr.TestOutput = out
 		if ok {
 			pr.TestResult = "pass"
@@ -150,9 +153,21 @@ func OpenPR(home, repo, branch, title, testCmd string) (PR, error) {
 	return pr, nil
 }
 
-// runPRTest executes cmd in dir and reports pass/fail with truncated
-// combined output. This runs the author's own test command, not git.
-func runPRTest(dir, cmd string) (string, bool) {
+// runPRTest executes the author's own test command at headSHA and reports
+// pass/fail with truncated combined output.
+//
+// It runs in an isolated clone detached at that commit, never in the live
+// checkout: the checkout is the version the user is running, and a test
+// that can edit it is not a test of the candidate. The environment is
+// scrubbed the same way a contained run's is, so the command sees a
+// minimal PATH and a HOME inside the clone rather than the operator's.
+// A clone that cannot be made is a failed test, not a skipped one.
+func runPRTest(dir, headSHA, cmd string) (string, bool) {
+	clone, err := verify.IsolatedClone(dir, headSHA)
+	if err != nil {
+		return "src: could not isolate the candidate for testing: " + err.Error(), false
+	}
+	defer os.RemoveAll(clone)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	var c *exec.Cmd
@@ -161,11 +176,17 @@ func runPRTest(dir, cmd string) (string, bool) {
 	} else {
 		c = exec.CommandContext(ctx, "sh", "-c", cmd)
 	}
-	c.Dir = dir
+	c.Dir = clone
+	if runtime.GOOS != "windows" {
+		// The scrub builds a POSIX PATH/HOME/TMPDIR. Imposing that on
+		// cmd.exe would break the shell rather than contain it, so on
+		// Windows the command keeps the parent environment for now.
+		c.Env = contain.Scrub(clone, nil, nil)
+	}
 	var buf bytes.Buffer
 	c.Stdout = &buf
 	c.Stderr = &buf
-	err := c.Run()
+	err = c.Run()
 	out := buf.String()
 	const maxOutput = 4000
 	if len(out) > maxOutput {
@@ -260,9 +281,17 @@ func ClosePR(home, id string) (PR, error) {
 
 // MergePR merges the PR's recorded head SHA into `local` and records the
 // merge. It refuses, changing nothing, when the recorded test failed, when
-// the diff touches a core path (always), or when it touches a protected
-// path without an approval covering it. `pristine` and all remotes are
-// never touched; no fetch, no push.
+// the diff touches a core path (always), when no sealed passing
+// verification evidence is bound to exactly this candidate, or when the
+// diff touches a protected path without an approval covering it.
+// `pristine` and all remotes are never touched; no fetch, no push.
+//
+// The evidence requirement has exactly one override, and it is never
+// silent: an approval record covering every path in the change. An
+// operator who has reviewed the whole diff may merge it unverified, and
+// the approval is the record that they did. Core and protected rules are
+// unchanged by it — a core path is still immutable, and a protected path
+// still needs its own approval.
 func MergePR(home, id string) (PR, error) {
 	pr, err := GetPR(home, id)
 	if err != nil {
@@ -302,6 +331,22 @@ func MergePR(home, id string) (PR, error) {
 	if !covered {
 		return PR{}, fmt.Errorf("src: refusing PR %s: protected path(s) %s need an approval record (see the approve verb)",
 			id, strings.Join(prot, ", "))
+	}
+	// Policy said yes; evidence still has to. The override is checked
+	// first only so an operator who already reviewed the whole change is
+	// not sent to re-verify something they have signed off.
+	waived, err := approvalsCoverAll(home, pr.Repo, files)
+	if err != nil {
+		return PR{}, err
+	}
+	if !waived {
+		baseSHA, err := mergeBase(dir, localBranch, pr.HeadSHA)
+		if err != nil {
+			return PR{}, fmt.Errorf("src: PR %s head %s: %w", id, shortSHA(pr.HeadSHA), err)
+		}
+		if err := requireEvidence(home, dir, pr, baseSHA); err != nil {
+			return PR{}, err
+		}
 	}
 
 	cur, err := currentBranch(dir)
