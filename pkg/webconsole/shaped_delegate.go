@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/qiangli/yoke/pkg/shape/selfbin"
 	"os"
 	"os/exec"
 	"strings"
@@ -48,10 +49,7 @@ func (d BashyDelegate) Delegate(ctx context.Context, req DelegateRequest) (Deleg
 	if strings.TrimSpace(d.Agent) == "" {
 		return DelegateResult{}, errors.New("no shaping agent configured (tool:model)")
 	}
-	bin := d.Bashy
-	if bin == "" {
-		bin = "bashy"
-	}
+	bin := selfbin.Resolve(d.Bashy)
 	timeout, idle := d.Timeout, d.IdleTimeout
 	if timeout == 0 {
 		timeout = 20 * time.Minute

@@ -28,6 +28,7 @@ import (
 	ygit "github.com/qiangli/yoke/git"
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/shape/contain"
+	"github.com/qiangli/yoke/pkg/shape/selfbin"
 	shape "github.com/qiangli/yoke/pkg/shape/state"
 	"github.com/qiangli/yoke/pkg/websession"
 )
@@ -474,5 +475,18 @@ func TestShapedNotesRequestPreviewApprove(t *testing.T) {
 	}
 	if len(shaper.tasks) != 2 {
 		t.Fatalf("anonymous request reached the agent: %d tasks", len(shaper.tasks))
+	}
+}
+
+func TestShapedDelegateUsesResolvedBinary(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "no-such-bashy")
+	d := BashyDelegate{Bashy: missing, Agent: "codex:m"}
+	_, err := d.Delegate(context.Background(), DelegateRequest{Dir: t.TempDir(), Task: "x"})
+	if err == nil || !strings.Contains(err.Error(), missing) {
+		t.Fatalf("delegate must launch the configured binary %q, err=%v", missing, err)
+	}
+	so := ShapeOptions{}
+	if got := so.runner(); len(got) != 1 || got[0] != selfbin.Resolve("") {
+		t.Fatalf("runner = %v", got)
 	}
 }
