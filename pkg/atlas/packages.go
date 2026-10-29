@@ -358,6 +358,7 @@ var packages = map[string]Package{
 	"pax":       supPkg("safe portable archive manifest and extraction-preflight kernel; deliberately has no command front door until the POSIX pax surface is complete"),
 	"pricing":   supPkg("local token price catalog consumed by pkg/llmbudget"),
 	"procguard": supPkg("parent-death process-group containment shared by agentpty and chat"),
+	"shape":     supPkg("shaping security: candidate containment (sandbox, env scrub, effect cap) before activation"),
 	"recommend": supPkg("the shell's did-you-mean; reached on command-not-found, never typed"),
 	"scope":     supPkg("the git-repo-aware store resolver shared by every store"),
 	"unit":      supPkg("the one contract and receipt vocabulary shared by skills and dag"),
