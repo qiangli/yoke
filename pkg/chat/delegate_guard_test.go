@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/qiangli/yoke/pkg/fleet"
+	"github.com/qiangli/yoke/pkg/ladder"
 )
 
 func fakeDelegateVendor(t *testing.T, vendor string) string {
@@ -28,6 +29,7 @@ func fakeDelegateVendor(t *testing.T, vendor string) string {
 	t.Setenv("BASHY_DELEGATE_CALLER", "genie")
 	t.Setenv("BASHY_DELEGATE_ALLOW", vendor+":test-model")
 	t.Setenv("BASHY_ATTEST_ID", "receipt-test")
+	t.Setenv("BASHY_LADDER_STORE", filepath.Join(t.TempDir(), "events.jsonl"))
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "launched")
 	t.Setenv("DELEGATE_TEST_MARKER", marker)
@@ -47,6 +49,7 @@ case "$*" in
    auth) echo 'not logged in'; exit 1;;
    metered) echo 'Logged in using an API key'; exit 0;;
    authhang) sleep 10; exit 0;;
+   startfail) printf '#!/nonexistent/delegate-test-interpreter\n' > "$0";;
   esac
   if [ "` + vendor + `" = claude ]; then
    echo '{"loggedIn":true,"authMethod":"oauth_token","subscriptionType":"max"}'
@@ -103,6 +106,7 @@ func TestDelegateVendorContract(t *testing.T) {
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					_ = os.Remove(marker)
+					t.Setenv("BASHY_LADDER_STORE", filepath.Join(t.TempDir(), "events.jsonl"))
 					t.Setenv("DELEGATE_TEST_MODE", tc.mode)
 					cmd := NewDelegateCmd()
 					cmd.SetArgs(append([]string{"--json", vendor + ":test-model", "do work"}, tc.flags...))
@@ -131,6 +135,15 @@ func TestDelegateVendorContract(t *testing.T) {
 					_, e := os.Stat(marker)
 					// The wall deadline also covers admission and authentication, so
 					// an overloaded host may legitimately expire it before task launch.
+					wantEvents := 0
+					if e == nil {
+						wantEvents = 1
+					}
+					outcome := 0.0
+					if res.Exit == 0 {
+						outcome = 1
+					}
+					assertDelegateEvents(t, wantEvents, "genie-delegate:"+vendor+"-test-model", outcome)
 					if tc.mode != "timeout" && (e == nil) != tc.launched {
 						t.Fatalf("task launched=%v want %v", e == nil, tc.launched)
 					}
@@ -156,6 +169,7 @@ func TestDelegateOrdinaryCaller(t *testing.T) {
 	if err := json.Unmarshal(b.Bytes(), &res); err != nil {
 		t.Fatal(err)
 	}
+	assertDelegateEvents(t, 0, "", 0)
 	if res.Identity != "" || res.Receipt != "" || res.Exit != 0 {
 		t.Fatalf("ordinary caller: %+v", res)
 	}
@@ -184,6 +198,7 @@ func TestDelegatePolicyUsesResolvedBinding(t *testing.T) {
 			cmd.SetOut(&b)
 			cmd.SetErr(&b)
 			err := cmd.Execute()
+			assertDelegateEvents(t, 0, "", 0)
 			// Cobra may append its diagnostic after the envelope on failure.
 			var res delegateResult
 			if e := json.NewDecoder(&b).Decode(&res); e != nil {
@@ -209,4 +224,48 @@ func TestDelegateAuthPreservesExpiredDeadline(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expired auth probe: %v", err)
 	}
+}
+
+func assertDelegateEvents(t *testing.T, count int, identity string, outcome float64) {
+	t.Helper()
+	st, err := ladder.OpenStore(os.Getenv("BASHY_LADDER_STORE"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := st.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != count {
+		t.Fatalf("ladder events = %d, want %d: %+v", len(events), count, events)
+	}
+	for _, ev := range events {
+		if ev.Agent != identity || ev.RatingAgent() != identity || ev.Outcome != outcome || ev.Duty != ladder.DutyCode || ev.Points != 1 {
+			t.Fatalf("unexpected delegate event: %+v", ev)
+		}
+	}
+}
+
+func TestDelegateStartFailureDoesNotScore(t *testing.T) {
+	marker := fakeDelegateVendor(t, "codex")
+	t.Setenv("DELEGATE_TEST_MODE", "startfail")
+	cmd := NewDelegateCmd()
+	cmd.SetArgs([]string{"--json", "codex:test-model", "hi"})
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected launch failure")
+	}
+	var res delegateResult
+	if err := json.Unmarshal(stdout.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.Error == nil || res.Error.Kind != "vendor" {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("task marker: %v", err)
+	}
+	assertDelegateEvents(t, 0, "", 0)
 }

@@ -607,6 +607,9 @@ func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd st
 	if startErr != nil {
 		return "", 127, startErr
 	}
+	if g := delegation(ctx); g != nil {
+		g.started = true
+	}
 	err := waitForProcessTree(ctx, cmd, func() error { return killProcessTree(cmd) })
 	if parentGuard != nil {
 		parentGuard.Disarm()
