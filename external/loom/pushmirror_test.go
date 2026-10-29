@@ -129,99 +129,15 @@ func mirrorOpts(primary string) MirrorOptions {
 		Remote: ghRemote, Username: "acme-bot", Password: "gh-secret", SyncOnCommit: true}
 }
 
-// add is idempotent, carries the credential in the create body, and re-syncs
-// an already-mirrored repo (a fresh mirror is EMPTY until something pushes).
-func TestMirrorAddIdempotent(t *testing.T) {
+func TestMirrorAddDisabled(t *testing.T) {
 	f, s := newFakeForge("acme/app")
 	defer s.Close()
-	o := mirrorOpts(s.URL)
-	for i := 0; i < 2; i++ {
-		lines, err := MirrorAdd(context.Background(), o)
-		if err != nil {
-			t.Fatalf("add #%d: %v", i, err)
-		}
-		if len(lines) != 1 || !strings.Contains(lines[0], ghRemote) {
-			t.Fatalf("add #%d lines = %v", i, lines)
-		}
-	}
-	if got := f.mirrors["acme/app"]; len(got) != 1 {
-		t.Fatalf("mirrors = %+v, want exactly 1 after two adds", got)
-	}
-	if len(f.created) != 1 {
-		t.Fatalf("create bodies = %d, want 1", len(f.created))
-	}
-	in := f.created[0]
-	if in["remote_address"] != ghRemote || in["remote_username"] != "acme-bot" ||
-		in["remote_password"] != "gh-secret" || in["sync_on_commit"] != true || in["interval"] != "8h0m0s" {
-		t.Fatalf("create body = %+v", in)
-	}
-	if f.syncs["acme/app"] != 2 {
-		t.Fatalf("syncs = %d, want 2 (every add requests one)", f.syncs["acme/app"])
-	}
-}
-
-// The whole point of this verb: unlike `replica add`, nothing is provisioned on
-// the target — no owner, no repo, no admin call anywhere.
-func TestMirrorAddNeverProvisions(t *testing.T) {
-	f, s := newFakeForge("acme/app")
-	defer s.Close()
-	if _, err := MirrorAdd(context.Background(), mirrorOpts(s.URL)); err != nil {
-		t.Fatal(err)
-	}
-	for _, bad := range []string{"/admin/users", "/orgs"} {
-		if strings.Contains(f.log(), " "+bad) {
-			t.Fatalf("provisioning call %q issued:\n%s", bad, f.log())
-		}
-	}
-}
-
-func TestMirrorAddUnknownSourceRepo(t *testing.T) {
-	_, s := newFakeForge("acme/other")
-	defer s.Close()
-	if _, err := MirrorAdd(context.Background(), mirrorOpts(s.URL)); err == nil ||
-		!strings.Contains(err.Error(), "source repo") {
-		t.Fatalf("err = %v, want a source-repo error", err)
-	}
-}
-
-func TestMirrorAddValidation(t *testing.T) {
-	_, s := newFakeForge("acme/app")
-	defer s.Close()
-	for name, mut := range map[string]func(*MirrorOptions){
-		"no repo":      func(o *MirrorOptions) { o.Repo = "" },
-		"no remote":    func(o *MirrorOptions) { o.Remote = "" },
-		"no username":  func(o *MirrorOptions) { o.Username = "" },
-		"no token":     func(o *MirrorOptions) { o.Password = "" },
-		"ssh remote":   func(o *MirrorOptions) { o.Remote = "git@github.com:acme/app.git" },
-		"creds in url": func(o *MirrorOptions) { o.Remote = "https://bot:pw@github.com/acme/app.git" },
-		"not a repo":   func(o *MirrorOptions) { o.Remote = "https://github.com/acme" },
-		"blank repo":   func(o *MirrorOptions) { o.Repo = "   " },
-	} {
-		o := mirrorOpts(s.URL)
-		mut(&o)
-		if _, err := MirrorAdd(context.Background(), o); err == nil {
-			t.Fatalf("%s: want an error", name)
-		}
-	}
-}
-
-// A 401 from push_mirrors creation reads like a credential failure and often is
-// not one, so it must name the knob (and the credential) — as replica does.
-func TestMirrorAdd401Hint(t *testing.T) {
-	f, s := newFakeForge("acme/app")
-	defer s.Close()
-	f.deny401 = true
 	_, err := MirrorAdd(context.Background(), mirrorOpts(s.URL))
-	if err == nil {
-		t.Fatal("want an error")
+	if err == nil || !strings.Contains(err.Error(), "backup add") {
+		t.Fatalf("want safe migration error: %v", err)
 	}
-	for _, want := range []string{MirrorAllowedDomainsEnv, "github.com", "--token-file"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("hint missing %q:\n%s", want, err)
-		}
-	}
-	if strings.Contains(err.Error(), "gh-secret") {
-		t.Fatalf("the push token leaked into the error:\n%s", err)
+	if len(f.seen) != 0 {
+		t.Fatal("disabled mirror contacted forge")
 	}
 }
 
@@ -229,15 +145,7 @@ func TestMirrorListAndRm(t *testing.T) {
 	f, s := newFakeForge("acme/app")
 	defer s.Close()
 	ctx := context.Background()
-	o := mirrorOpts(s.URL)
-	if _, err := MirrorAdd(ctx, o); err != nil {
-		t.Fatal(err)
-	}
-	other := o
-	other.Remote = "https://gitlab.com/acme/app.git"
-	if _, err := MirrorAdd(ctx, other); err != nil {
-		t.Fatal(err)
-	}
+	f.mirrors["acme/app"] = []pushMirror{{RemoteName: "mirror-1", RemoteAddress: ghRemote}, {RemoteName: "mirror-2", RemoteAddress: "https://gitlab.com/acme/app.git"}}
 
 	lines, err := MirrorList(ctx, MirrorOptions{Primary: s.URL, Repo: "acme/app"})
 	if err != nil || len(lines) != 2 {
@@ -307,51 +215,19 @@ func TestReadMirrorTokenRefusesLooseMode(t *testing.T) {
 	}
 }
 
-// End to end through cobra: the token reaches the forge, and appears NOWHERE in
-// the argv, the output, or the request log outside the create body.
-func TestMirrorCmdKeepsTokenOffArgvAndOutput(t *testing.T) {
+func TestMirrorCommandRefusesDestructiveAdd(t *testing.T) {
 	f, s := newFakeForge("acme/app")
 	defer s.Close()
-	const secret = "ghp_liveSecret123"
-	args := []string{"mirror", "add", "--primary", s.URL, "--token", "src-token",
-		"--repo", "acme/app", "--remote", ghRemote, "--username", "acme-bot",
-		"--token-file", tokenFileAt(t, secret+"\n", 0o600), "--sync-on-commit"}
-
 	root := NewLoomCmd()
 	out := new(bytes.Buffer)
 	root.SetOut(out)
 	root.SetErr(out)
-	root.SetArgs(args)
-	if err := root.Execute(); err != nil {
-		t.Fatalf("execute: %v\n%s", err, out)
+	root.SetArgs([]string{"mirror", "add", "--primary", s.URL, "--repo", "acme/app", "--remote", ghRemote, "--token-file", tokenFileAt(t, "secret", 0600)})
+	if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "backup add") {
+		t.Fatalf("want migration error, got %v", err)
 	}
-	if strings.Contains(strings.Join(args, " "), secret) {
-		t.Fatal("the secret must never be an argument")
-	}
-	if strings.Contains(out.String(), secret) {
-		t.Fatalf("the token was echoed:\n%s", out)
-	}
-	if len(f.created) != 1 || f.created[0]["remote_password"] != secret {
-		t.Fatalf("the forge did not receive the token: %+v", f.created)
-	}
-	// The create body is the only place it may appear.
-	f.mu.Lock()
-	seen, bodies := strings.Join(f.seen, "\n"), f.bodies
-	f.mu.Unlock()
-	if strings.Contains(seen, secret) {
-		t.Fatalf("the token reached a URL path or query:\n%s", seen)
-	}
-	hits := 0
-	for _, b := range bodies {
-		if strings.Contains(b, secret) {
-			hits++
-		}
-	}
-	if hits != 1 {
-		t.Fatalf("token appears in %d request bodies, want exactly 1 (the create)", hits)
-	}
-	if !strings.Contains(out.String(), "mirrored") {
-		t.Fatalf("no result line:\n%s", out)
+	if len(f.seen) != 0 {
+		t.Fatal("disabled command contacted forge")
 	}
 }
 
