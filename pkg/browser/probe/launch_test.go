@@ -3,7 +3,9 @@ package probe
 import (
 	"context"
 	"errors"
+	"os"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/qiangli/yoke/pkg/binmgr"
@@ -83,5 +85,29 @@ func TestResolverReportsProvisionFailure(t *testing.T) {
 	}
 	if _, err := r.Resolve(context.Background(), ""); err == nil {
 		t.Fatal("expected provisioning error")
+	}
+}
+
+func TestChromeCommandLinuxRootAndRuntime(t *testing.T) {
+	t.Setenv("LD_LIBRARY_PATH", "/host/libs")
+	cmd := chromeCommand("/managed/chrome", 9335, "/profile", "linux", 0, "/managed/runtime")
+	if !slices.Contains(cmd.Args, "--no-sandbox") {
+		t.Fatalf("root Linux args missing --no-sandbox: %v", cmd.Args)
+	}
+	want := "LD_LIBRARY_PATH=/managed/runtime" + string(os.PathListSeparator) + "/host/libs"
+	if !slices.Contains(cmd.Env, want) {
+		t.Fatalf("child env missing %q: %v", want, cmd.Env)
+	}
+	for _, inherited := range os.Environ() {
+		if strings.HasPrefix(inherited, "LD_LIBRARY_PATH=") && inherited != want && slices.Contains(cmd.Env, inherited) {
+			t.Fatalf("child retained duplicate LD_LIBRARY_PATH: %v", cmd.Env)
+		}
+	}
+}
+
+func TestChromeCommandDoesNotDisableSandboxForNonRoot(t *testing.T) {
+	cmd := chromeCommand("/managed/chrome", 9335, "/profile", "linux", 1000, "")
+	if slices.Contains(cmd.Args, "--no-sandbox") {
+		t.Fatalf("non-root Linux args contain --no-sandbox: %v", cmd.Args)
 	}
 }
