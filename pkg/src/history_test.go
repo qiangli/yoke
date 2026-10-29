@@ -79,6 +79,15 @@ func itoa(n int) string {
 	return string(b[i:])
 }
 
+// s525a10Contract is the fixture's shaping contract: a read-only effect
+// cap and one smoke check every version tree passes, so the trusted
+// verifier judges fixture versions the way it judges the notes app. A tree
+// containing BROKEN fails the frozen check, so restoring it is a
+// verifier-failing restore.
+const s525a10Contract = "@effects(\"read\")\n"
+
+const s525a10Smoke = "set -eu\ntest -f app.txt\ntest -f shape.yaml\n! grep -q BROKEN app.txt\n"
+
 // s525a10Fixture builds a work repo with sequential shaped versions and
 // clones it to home/src/demoapp with pristine at the base release:
 //
@@ -86,13 +95,17 @@ func itoa(n int) string {
 //	v1..v4: app.txt moves forward; shape.yaml declares range 1..5
 //	narrow: app.txt moves again; shape.yaml declares range 1..2
 //	vb: bob's own version; shape.yaml declares range 1..5
-func s525a10Fixture(t *testing.T, home string) (dest, v1, v2, v3, v4, narrow, vb string) {
+//	broken: app.txt carries BROKEN; shape.yaml declares range 1..5, so a
+//	restore of it fails verification rather than the schema gate
+func s525a10Fixture(t *testing.T, home string) (dest, v1, v2, v3, v4, narrow, vb, broken string) {
 	t.Helper()
 	work := filepath.Join(t.TempDir(), "work")
 	if _, err := ygit.Init(ygit.InitOptions{Path: work}); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 	s525a10Write(t, work, "app.txt", "app-base\n")
+	s525a10Write(t, work, "contract.bsh", s525a10Contract)
+	s525a10Write(t, work, "checks/smoke.bsh", s525a10Smoke)
 	p0 := s525a10Commit(t, work, "p0 base release")
 	_ = p0
 
@@ -107,6 +120,7 @@ func s525a10Fixture(t *testing.T, home string) (dest, v1, v2, v3, v4, narrow, vb
 		{"app-v4\n", 1, 5, "v4", "version four"},
 		{"app-narrow\n", 1, 2, "narrow", "narrow schema version"},
 		{"app-bob\n", 1, 5, "vb", "bob version"},
+		{"app-broken\nBROKEN\n", 1, 5, "broken", "broken check version"},
 	}
 	var out []string
 	for _, v := range versions {
@@ -114,7 +128,7 @@ func s525a10Fixture(t *testing.T, home string) (dest, v1, v2, v3, v4, narrow, vb
 		s525a10Write(t, work, "shape.yaml", s525a10Shape(v.min, v.max, v.rev))
 		out = append(out, s525a10Commit(t, work, v.subject))
 	}
-	v1, v2, v3, v4, narrow, vb = out[0], out[1], out[2], out[3], out[4], out[5]
+	v1, v2, v3, v4, narrow, vb, broken = out[0], out[1], out[2], out[3], out[4], out[5], out[6]
 
 	dest = filepath.Join(home, "src", s525a10App)
 	if _, err := gogit.PlainClone(dest, false, &gogit.CloneOptions{URL: work}); err != nil {
@@ -127,7 +141,7 @@ func s525a10Fixture(t *testing.T, home string) (dest, v1, v2, v3, v4, narrow, vb
 	if err := r.Storer.SetReference(plumbing.NewHashReference("refs/heads/pristine", plumbing.NewHash(p0))); err != nil {
 		t.Fatalf("pristine: %v", err)
 	}
-	return dest, v1, v2, v3, v4, narrow, vb
+	return dest, v1, v2, v3, v4, narrow, vb, broken
 }
 
 func s525a10Tree(t *testing.T, dest, sha string) string {
@@ -190,7 +204,7 @@ func s525a10State(t *testing.T, home, principal string) state.State {
 func TestS525A10VersionHistory(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("BASHY_HOME", home)
-	dest, v1, v2, v3, v4, narrow, vb := s525a10Fixture(t, home)
+	dest, v1, v2, v3, v4, narrow, vb, _ := s525a10Fixture(t, home)
 	gate := state.GateFunc(func(candidate, base, principal string) (state.EvidenceRef, error) {
 		return state.EvidenceRef{Verdict: "pass", EvidenceID: "ev-test"}, nil
 	})
@@ -401,7 +415,8 @@ func TestS525A10VersionHistory(t *testing.T) {
 	dataUntouched("at the end")
 
 	// The CLI verbs ride the same paths: history text and JSON, preview,
-	// diff, name, and restore for an untouched third principal.
+	// diff, and name. A third principal naming another line's version is
+	// refused as unknown, the same scoping the web route enforces.
 	src.RegisterActivationGate(gate)
 	defer src.RegisterActivationGate(nil)
 	runCLI := func(args ...string) (string, error) {
@@ -421,10 +436,15 @@ func TestS525A10VersionHistory(t *testing.T) {
 		t.Fatalf("history --json CLI: %v", err)
 	} else {
 		var decoded struct {
-			Entries []map[string]any `json:"entries"`
+			Entries  []map[string]any `json:"entries"`
+			Versions []map[string]any `json:"versions"`
 		}
-		if err := json.Unmarshal([]byte(out), &decoded); err != nil || len(decoded.Entries) == 0 {
-			t.Fatalf("history --json = %q, want a JSON history with entries", out)
+		if err := json.Unmarshal([]byte(out), &decoded); err != nil || len(decoded.Versions) == 0 {
+			t.Fatalf("history --json = %q, want a JSON history with versions", out)
+		}
+		if len(decoded.Entries) != len(decoded.Versions) {
+			t.Fatalf("history --json entries = %d, versions = %d; want the entries alias to mirror versions",
+				len(decoded.Entries), len(decoded.Versions))
 		}
 	}
 	if out, err := runCLI("preview", s525a10App, v1, "--user", s525a10Alice); err != nil ||
@@ -439,9 +459,12 @@ func TestS525A10VersionHistory(t *testing.T) {
 		!strings.Contains(out, "named first") {
 		t.Fatalf("name CLI = %q, %v", out, err)
 	}
-	if out, err := runCLI("restore", s525a10App, v1, "--user", "device:carol"); err != nil ||
-		!strings.Contains(out, "restored") {
-		t.Fatalf("restore CLI = %q, %v", out, err)
+	// Carol names a version from another principal's line: the shared
+	// restore resolves only the caller's own line, so the CLI refuses with
+	// the unknown-version reason and nothing moves.
+	if out, err := runCLI("restore", s525a10App, v1, "--user", "device:carol"); err == nil ||
+		!strings.Contains(err.Error(), "unknown version") {
+		t.Fatalf("cross-principal restore CLI = %q, %v; want an unknown-version refusal", out, err)
 	}
 	t.Setenv("BASHY_PRINCIPAL", "")
 	if _, err := runCLI("history", s525a10App); err == nil {

@@ -159,21 +159,24 @@ func newRestoreCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "restore <app> <rev>",
 		Short: "Return to a version through a new forward commit, gated and activated",
-		Long: `restore returns to a version (a commit, a named label, or
-base) by recording a NEW forward commit on the principal's version line
-whose tree equals that version's, passing it through the activation gate,
-and activating it. History is never rewritten: undoing a restore is
+		Long: `restore returns to a version (a version-line activation
+commit, a revision, a named label, or base) by verifying it against the
+current line tip through the trusted verifier, sealing fresh evidence,
+and recording a NEW forward commit on the principal's version line whose
+tree equals that version's, passing it through the activation gate, and
+activating it. History is never rewritten: undoing a restore is
 restoring the pre-restore version. Only code and config move; the
 principal data directory is untouched, and a target that cannot read the
-current data schema, or a gate refusal, leaves the active revision
-unchanged. The principal comes from --user or $BASHY_PRINCIPAL.`,
+current data schema, a verifier refusal, or a gate refusal leaves the
+active revision unchanged. The principal comes from --user or
+$BASHY_PRINCIPAL.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p, err := resolveUser(user)
 			if err != nil {
 				return err
 			}
-			res, err := Restore("", args[0], args[1], p, RestoreOptions{Gate: effectiveGate()})
+			res, err := RestoreSealed(cmd.Context(), "", args[0], args[1], p, RestoreSealedOptions{})
 			if err != nil {
 				return err
 			}
@@ -208,18 +211,7 @@ $BASHY_PRINCIPAL.`,
 			if err != nil {
 				return err
 			}
-			store, err := state.OpenAt(Home(), args[0], p)
-			if err != nil {
-				return err
-			}
-			st, err := store.Read()
-			if err != nil {
-				return err
-			}
-			if strings.TrimSpace(st.LastKnownGood) == "" {
-				return fmt.Errorf("src: nothing to undo: no previous version is recorded")
-			}
-			res, err := Restore("", args[0], st.LastKnownGood, p, RestoreOptions{Gate: effectiveGate(), Request: "undo"})
+			res, err := UndoSealed(cmd.Context(), "", args[0], p, RestoreSealedOptions{})
 			if err != nil {
 				return err
 			}
