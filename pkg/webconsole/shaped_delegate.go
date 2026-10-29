@@ -12,6 +12,7 @@ import (
 	"github.com/qiangli/yoke/pkg/shape/selfbin"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -34,9 +35,23 @@ type BashyDelegate struct {
 // app data location can ride along.
 var delegateEnvAllow = []string{"PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR", "TERM", "BASHY_HOME"}
 
+// delegateEnvAllowWindows is what a Windows process needs on top of that to
+// locate its profile, state and temp directories and to start at all — the
+// Windows spelling of HOME/TMPDIR, plus the system root and executable
+// lookup. None of these carries a secret.
+var delegateEnvAllowWindows = []string{"USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "SystemRoot", "PATHEXT", "ComSpec"}
+
+// delegateEnvNames is the allow-list for goos.
+func delegateEnvNames(goos string) []string {
+	if goos == "windows" {
+		return append(append([]string(nil), delegateEnvAllow...), delegateEnvAllowWindows...)
+	}
+	return delegateEnvAllow
+}
+
 func delegateEnv(agent string) []string {
 	var env []string
-	for _, k := range delegateEnvAllow {
+	for _, k := range delegateEnvNames(runtime.GOOS) {
 		if v, ok := os.LookupEnv(k); ok {
 			env = append(env, k+"="+v)
 		}
