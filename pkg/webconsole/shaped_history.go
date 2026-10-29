@@ -389,10 +389,6 @@ func (s *server) handleShapeHistoryPreview(w http.ResponseWriter, r *http.Reques
 		http.NotFound(w, r)
 		return
 	}
-	if err := a.requireProductionCandidateContainment(); err != nil {
-		http.Error(w, "preview refused: this host cannot contain app units: "+err.Error(), http.StatusServiceUnavailable)
-		return
-	}
 	repo, err := a.open()
 	if err != nil {
 		http.Error(w, "version unavailable", http.StatusInternalServerError)

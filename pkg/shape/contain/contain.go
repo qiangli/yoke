@@ -1,8 +1,15 @@
-// Package contain runs a shaping candidate command inside an isolated clone
-// directory: cwd-only writes, no reads outside the clone and a system
-// allowlist, a scrubbed environment, loopback-only network, an @guard effect
-// cap, and procguard plus resource limits. When a requested level cannot be
-// provided on the host it refuses with a typed error; it never downgrades.
+// Package contain runs a shaping candidate command as ordinary Bash# under
+// bashy's guards: a scrubbed, secret-free environment, an @guard effect cap,
+// procguard, a timeout, and resource limits, with the clone directory as cwd.
+// It is deliberately NOT a sandbox and needs none, on any OS.
+//
+// Isolation is something a unit asks for, never something shaping imposes:
+// a unit that declares a sandbox island runs at LevelSandbox, which contain
+// does not implement itself — it routes the run to bashy oci (the podman
+// engine bashy provisions on Windows, macOS and Linux) through OCIRunner.
+// When bashy oci cannot serve that request it refuses with a typed error;
+// it never downgrades, and a failure there is bashy oci's bug to fix, not
+// shaping's to work around.
 package contain
 
 import (
@@ -26,16 +33,18 @@ import (
 type Level string
 
 const (
-	// LevelProcess: procguard, scrubbed env, effect cap, resource limits. It
-	// does NOT confine file access or network; it never claims to.
+	// LevelProcess, the default: procguard, scrubbed env, effect cap, timeout
+	// and resource limits — bashy's normal guards. It does NOT confine file
+	// access or network; it never claims to.
 	LevelProcess Level = "process"
-	// LevelSandbox: LevelProcess plus kernel-enforced cwd-only writes, no
-	// reads outside the clone and system allowlist, loopback-only network.
+	// LevelSandbox: an explicit isolation request, routed to bashy oci with
+	// the clone as the only mount and no network. Only a unit (or operator)
+	// that asks for it gets it.
 	LevelSandbox Level = "sandbox"
 )
 
 // ErrUnavailable is matched (errors.Is) by every refusal for a containment
-// level the host cannot provide. Activation must block on it.
+// level the host cannot provide. A run that asked for it must not proceed.
 var ErrUnavailable = errors.New("contain: containment unavailable")
 
 // UnavailableError is the typed refusal for an unsupported level.
@@ -64,8 +73,10 @@ type Spec struct {
 	// Dir is the isolated clone directory: the only writable location.
 	Dir  string
 	Argv []string
-	// Level defaults to LevelSandbox.
+	// Level defaults to LevelProcess.
 	Level Level
+	// OCI routes a LevelSandbox run; nil = BashyOCI{}. Ignored otherwise.
+	OCI OCIRunner
 	// Cap is the @guard effect cap spec (e.g. "read,write"); required.
 	Cap string
 	// Effects declares the command's own effect atoms when argv[0] is not an
@@ -93,46 +104,6 @@ type Result struct {
 	ExitCode int
 	Level    Level
 	Limited  string // non-empty when a resource limit killed the run
-}
-
-// RequireSandbox refuses levels and hosts that cannot enforce the filesystem
-// and network boundary promised by LevelSandbox. Callers use this before an
-// operation such as activation that does not itself start a contained process
-// but must not proceed unless later candidate code can be confined.
-func RequireSandbox(level Level) error {
-	if level == "" {
-		level = LevelSandbox
-	}
-	if level != LevelSandbox {
-		return &UnavailableError{Level: level, Reason: "filesystem and network isolation require sandbox containment"}
-	}
-	dir, err := os.MkdirTemp("", "contain-probe-*")
-	if err != nil {
-		return &UnavailableError{Level: level, Reason: "create sandbox probe: " + err.Error()}
-	}
-	defer os.RemoveAll(dir)
-	runner, err := resolveOnPath("true")
-	if err != nil {
-		return &UnavailableError{Level: level, Reason: "sandbox probe runner: " + err.Error()}
-	}
-	runner, err = filepath.Abs(runner)
-	if err != nil {
-		return &UnavailableError{Level: level, Reason: "sandbox probe runner: " + err.Error()}
-	}
-	if resolved, rerr := filepath.EvalSymlinks(runner); rerr == nil {
-		runner = resolved
-	}
-	argv, err := sandboxArgv(dir, []string{runner})
-	if err != nil {
-		return err
-	}
-	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Dir = dir
-	cmd.Env = Scrub(dir, nil, nil)
-	if err := cmd.Run(); err != nil {
-		return &UnavailableError{Level: level, Reason: "sandbox probe failed: " + err.Error()}
-	}
-	return nil
 }
 
 // Scrub builds the child environment: a fixed minimal PATH/HOME/TMPDIR inside
@@ -166,7 +137,7 @@ func Scrub(dir string, allow []string, set map[string]string) []string {
 // Run executes the spec under the requested containment.
 func Run(ctx context.Context, s Spec) (Result, error) {
 	if s.Level == "" {
-		s.Level = LevelSandbox
+		s.Level = LevelProcess
 	}
 	res := Result{Level: s.Level, ExitCode: -1}
 	if len(s.Argv) == 0 || s.Dir == "" {
@@ -196,31 +167,49 @@ func Run(ctx context.Context, s Spec) (Result, error) {
 	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 		return res, errors.New("contain: clone dir is not a directory")
 	}
-	runner, err := resolveOnPath(s.Argv[0])
-	if err != nil {
-		return res, fmt.Errorf("contain: %w", err)
-	}
-	runner, err = filepath.Abs(runner)
-	if err != nil {
-		return res, fmt.Errorf("contain: runner: %w", err)
-	}
-	if resolved, rerr := filepath.EvalSymlinks(runner); rerr == nil {
-		runner = resolved
-	}
-	argv := append([]string{runner}, s.Argv[1:]...)
+	env := Scrub(dir, s.EnvAllow, s.EnvSet)
+	var argv []string
 	if s.Level == LevelSandbox {
-		argv, err = sandboxArgv(dir, argv)
+		// The host never resolves the candidate's interpreter: it runs
+		// inside the image, by name, where the image's PATH finds it.
+		oci := s.OCI
+		if oci == nil {
+			oci = BashyOCI{}
+		}
+		argv, err = oci.Argv(dir, append([]string{filepath.Base(s.Argv[0])}, s.Argv[1:]...), env, s)
 		if err != nil {
 			return res, err
 		}
+		if len(argv) == 0 {
+			return res, &UnavailableError{Level: s.Level, Reason: "oci runner produced no command"}
+		}
+		// The launcher is trusted host bashy: it sees what it needs to
+		// find its engine, and hands the candidate only the scrubbed env.
+		env = Scrub(dir, launcherEnv, nil)
+	} else {
+		runner, err := resolveOnPath(s.Argv[0])
+		if err != nil {
+			return res, fmt.Errorf("contain: %w", err)
+		}
+		runner, err = filepath.Abs(runner)
+		if err != nil {
+			return res, fmt.Errorf("contain: runner: %w", err)
+		}
+		if resolved, rerr := filepath.EvalSymlinks(runner); rerr == nil {
+			runner = resolved
+		}
+		argv = append([]string{runner}, s.Argv[1:]...)
 	}
 	path, err := resolveOnPath(argv[0])
 	if err != nil {
+		if s.Level == LevelSandbox {
+			return res, &UnavailableError{Level: s.Level, Reason: "oci launcher: " + err.Error()}
+		}
 		return res, fmt.Errorf("contain: %w", err)
 	}
 	cmd := exec.Command(path, argv[1:]...)
 	cmd.Dir = dir
-	cmd.Env = Scrub(dir, s.EnvAllow, s.EnvSet)
+	cmd.Env = env
 	cmd.Stdout, cmd.Stderr = s.Stdout, s.Stderr
 	guard, err := procguard.Arm(cmd)
 	if err != nil {

@@ -499,8 +499,10 @@ func DependencyDigest(dir string) (string, error) {
 }
 
 // TrustedRunner dispatches each frozen check to the host's trusted
-// interpreter inside the candidate clone, under pkg/shape/contain. The
-// interpreter is installed on the host, not supplied by the candidate.
+// interpreter inside the candidate clone, under pkg/shape/contain's bashy
+// guards. The interpreter is installed on the host, not supplied by the
+// candidate. No sandbox is required: the verifier's protection is that the
+// checks and evidence are frozen outside the candidate's reach.
 type TrustedRunner struct {
 	// Bin is the interpreter; $BASHY_SHAPE_RUNNER, else "bashy".
 	Bin string
@@ -509,10 +511,13 @@ type TrustedRunner struct {
 	// Effects declares the interpreter's own effect atoms to contain,
 	// which has no atlas entry for a host-installed interpreter. The
 	// contract's cap is what actually bounds the checks, inside the
-	// interpreter and through the sandbox; this only lets the run start.
+	// interpreter and through contain's cap; this only lets the run start.
 	Effects []string
-	// Level is the containment level; contain.LevelSandbox by default.
+	// Level is the containment level; contain.LevelProcess by default.
+	// contain.LevelSandbox is an explicit request routed to bashy oci.
 	Level contain.Level
+	// OCI routes a LevelSandbox run; nil = contain.BashyOCI{}.
+	OCI contain.OCIRunner
 	// EnvAllow lists parent variables the check may see. Nothing else is
 	// inherited.
 	EnvAllow []string
@@ -543,7 +548,7 @@ func (r TrustedRunner) RunCheck(ctx context.Context, c CheckRun) (Outcome, error
 	}
 	level := r.Level
 	if level == "" {
-		level = contain.LevelSandbox
+		level = contain.LevelProcess
 	}
 	out, err := os.CreateTemp(c.Dir, ".check-out-")
 	if err != nil {
@@ -553,7 +558,7 @@ func (r TrustedRunner) RunCheck(ctx context.Context, c CheckRun) (Outcome, error
 	defer out.Close()
 
 	res, err := contain.Run(ctx, contain.Spec{
-		Dir: c.Dir, Argv: argv, Level: level, Cap: c.Cap, Effects: effects,
+		Dir: c.Dir, Argv: argv, Level: level, OCI: r.OCI, Cap: c.Cap, Effects: effects,
 		EnvAllow: r.EnvAllow,
 		EnvSet:   map[string]string{CallLogEnv: c.CallLog},
 		Timeout:  c.Timeout, MaxRSSBytes: r.MaxRSSBytes, MaxProcs: r.MaxProcs,

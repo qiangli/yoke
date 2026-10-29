@@ -26,8 +26,9 @@ var ErrNoContract = errors.New("unit: unit declares no contract, so it has no ca
 // Contract is what a unit promises, read the one way whichever face states
 // it: a dag target's metadata lines, a Bash# body's decorators, or a dhnt
 // skill's contract + effect cap. Only Require, Ensure and the effect cap feed
-// the capability key; Guard, Confirm and Timeout are run policy, recorded so
-// every reader sees them but projected away like a dag target's placement.
+// the capability key; Guard, Confirm, Timeout and Sandbox are run policy,
+// recorded so every reader sees them but projected away like a dag target's
+// placement.
 type Contract struct {
 	Require []string `json:"require,omitempty"` // preconditions (@require, Require:)
 	Ensure  []string `json:"ensure,omitempty"`  // postconditions (@ensure, Ensure:, dhnt contract)
@@ -35,6 +36,9 @@ type Contract struct {
 	Guard   []string `json:"guard,omitempty"`   // enforced effect cap (@guard)
 	Confirm []string `json:"confirm,omitempty"` // @confirm arguments ("on" when bare)
 	Timeout string   `json:"timeout,omitempty"` // @timeout duration
+	// Sandbox is the unit's own isolation request (@sandbox()): its host runs
+	// it in a bashy oci island instead of under the ordinary guards alone.
+	Sandbox bool `json:"sandbox,omitempty"`
 }
 
 // Contracted reports whether the unit states a checkable guarantee. An
@@ -115,7 +119,7 @@ func normalise(in []string) []string {
 // keyword (`@guard(effects: "read,write")`). @require/@ensure contribute one
 // check per argument; @effects/@guard split their atoms on commas and
 // spaces; @confirm records its arguments ("on" when bare); @timeout its
-// duration. A non-literal argument is kept as its source text.
+// duration; @sandbox() marks the unit's isolation request. A non-literal argument is kept as its source text.
 func ReadContract(body string) (Contract, error) {
 	var c Contract
 	file, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(body), "")
@@ -155,6 +159,8 @@ func ReadContract(body string) (Contract, error) {
 				if len(args) > 0 {
 					c.Timeout = args[0]
 				}
+			case "sandbox":
+				c.Sandbox = true
 			}
 		}
 		return true

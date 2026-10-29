@@ -1,10 +1,10 @@
 package contain
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -89,10 +89,21 @@ func TestDenialTable(t *testing.T) {
 		}
 	})
 
-	t.Run("process level cannot stand in for sandbox", func(t *testing.T) {
-		err := RequireSandbox(LevelProcess)
-		if !errors.Is(err, ErrUnavailable) {
-			t.Fatalf("want ErrUnavailable, got %v", err)
+	t.Run("default level is bashy guards, no sandbox needed", func(t *testing.T) {
+		// No bwrap, no sandbox-exec, no podman on PATH — only cat: the
+		// default run must not care, on any OS.
+		cat, err := exec.LookPath("cat")
+		if err != nil {
+			t.Skip("no cat")
+		}
+		bin := t.TempDir()
+		if err := os.Symlink(cat, filepath.Join(bin, filepath.Base(cat))); err != nil {
+			t.Skip("symlink:", err)
+		}
+		t.Setenv("PATH", bin)
+		r, out, err := runCat(t, "", clone, inside, "read")
+		if err != nil || r.ExitCode != 0 || r.Level != LevelProcess || out != "inside-ok" {
+			t.Fatalf("r=%+v out=%q err=%v", r, out, err)
 		}
 	})
 
@@ -102,28 +113,98 @@ func TestDenialTable(t *testing.T) {
 			t.Fatalf("r=%+v out=%q err=%v", r, out, err)
 		}
 	})
+}
 
-	t.Run("sandbox confines reads to the clone", func(t *testing.T) {
-		if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
-			_, _, err := runCat(t, LevelSandbox, clone, inside, "read")
-			if !errors.Is(err, ErrUnavailable) {
-				t.Fatalf("want ErrUnavailable, got %v", err)
-			}
-			return
-		}
-		r, out, err := runCat(t, LevelSandbox, clone, inside, "read")
-		if errors.Is(err, ErrUnavailable) {
-			t.Skipf("sandbox backend absent: %v", err)
-		}
-		if err != nil || r.ExitCode != 0 || out != "inside-ok" {
-			t.Fatalf("inside read: r=%+v out=%q err=%v", r, out, err)
-		}
-		r, out, err = runCat(t, LevelSandbox, clone, secretFile, "read")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if r.ExitCode == 0 || bytes.Contains([]byte(out), []byte("outside-secret")) {
-			t.Fatalf("outside file readable: r=%+v out=%q", r, out)
+// fakeOCI stands in for bashy oci: it records the request and runs a host
+// shell that prints the argv it was asked to launch.
+type fakeOCI struct {
+	calls int
+	dir   string
+	argv  []string
+	env   []string
+}
+
+func (f *fakeOCI) Argv(dir string, argv, env []string, _ Spec) ([]string, error) {
+	f.calls++
+	f.dir, f.argv, f.env = dir, argv, env
+	return append([]string{"/bin/sh", "-c", `printf '%s\n' "$@"`, "oci"}, argv...), nil
+}
+
+func TestSandboxRoutesToOCI(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake launcher is /bin/sh")
+	}
+	t.Setenv("SHAPE_TEST_SECRET", "hunter2")
+	clone := t.TempDir()
+	out, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer out.Close()
+	oci := &fakeOCI{}
+	r, err := Run(context.Background(), Spec{
+		Dir: clone, Argv: []string{"/opt/host/bashy", "-c", "echo hi"}, Level: LevelSandbox,
+		Cap: "read", Effects: []string{"read"}, OCI: oci, EnvSet: map[string]string{"X": "1"},
+		Stdout: out, Stderr: out,
+	})
+	if err != nil || r.ExitCode != 0 || r.Level != LevelSandbox {
+		t.Fatalf("r=%+v err=%v", r, err)
+	}
+	if oci.calls != 1 || strings.Join(oci.argv, " ") != "bashy -c echo hi" {
+		t.Fatalf("oci calls=%d argv=%q", oci.calls, oci.argv)
+	}
+	env := strings.Join(oci.env, "\n")
+	if strings.Contains(env, "hunter2") || !strings.Contains(env, "X=1") {
+		t.Fatalf("container env not the scrubbed candidate env: %s", env)
+	}
+	b, _ := os.ReadFile(out.Name())
+	if string(b) != "bashy\n-c\necho hi\n" {
+		t.Fatalf("launcher output = %q", b)
+	}
+
+	t.Run("effect cap refuses before the container starts", func(t *testing.T) {
+		oci := &fakeOCI{}
+		_, err := Run(context.Background(), Spec{
+			Dir: clone, Argv: []string{"bashy"}, Level: LevelSandbox,
+			Cap: "read", Effects: []string{"net"}, OCI: oci,
+		})
+		var ee *EffectError
+		if !errors.As(err, &ee) || oci.calls != 0 {
+			t.Fatalf("err=%v calls=%d", err, oci.calls)
 		}
 	})
+
+	t.Run("process level never reaches oci", func(t *testing.T) {
+		oci := &fakeOCI{}
+		if _, err := Run(context.Background(), Spec{
+			Dir: clone, Argv: []string{"true"}, Level: LevelProcess,
+			Cap: "read", Effects: []string{"read"}, OCI: oci,
+		}); err != nil || oci.calls != 0 {
+			t.Fatalf("err=%v calls=%d", err, oci.calls)
+		}
+	})
+}
+
+func TestBashyOCIArgv(t *testing.T) {
+	dir := filepath.Join(string(filepath.Separator)+"clone", "c1")
+	spec := Spec{Dir: dir, MaxRSSBytes: 1 << 20, MaxProcs: 8}
+	env := []string{"HOME=" + dir, "PATH=/usr/bin:/bin", "BASHY_APP_DATA=" + filepath.Join(dir, "data"), "X=1"}
+
+	t.Setenv(SandboxImageEnv, "")
+	if _, err := (BashyOCI{}).Argv(dir, []string{"bashy"}, env, spec); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("missing image: want ErrUnavailable, got %v", err)
+	}
+
+	t.Setenv(SandboxImageEnv, "example.invalid/bashy:test")
+	got, err := (BashyOCI{}).Argv(dir, []string{"bashy", "-c", "true"}, env, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"bashy", "oci", "run", "--rm", "-i", "--network=none",
+		"-v", dir + ":/work", "-w", "/work", "--memory", "1048576", "--pids-limit", "8",
+		"-e", "HOME=/work", "-e", "BASHY_APP_DATA=/work/data", "-e", "X=1",
+		"example.invalid/bashy:test", "bashy", "-c", "true"}
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("argv =\n%q\nwant\n%q", got, want)
+	}
 }
