@@ -76,11 +76,21 @@ func consoleWidePath(p string) bool {
 // was refused. So "api" defers to the SECOND segment.
 func scopeSegment(p string) string {
 	seg := firstSegment(p)
-	if seg != "api" {
-		return seg
+	if seg == "api" {
+		p = strings.TrimPrefix(p, "/api")
+		seg = firstSegment(p)
 	}
-	rest := strings.TrimPrefix(p, "/api")
-	return firstSegment(rest)
+	if seg == "shape" {
+		// Shaping an app is reaching that app: /shape/<app>/… and
+		// /api/shape/<app>/… are scoped as <app>, never as a console-wide
+		// "shape" grant that would open every shaped app at once.
+		rest := firstSegment(strings.TrimPrefix(p, "/shape"))
+		if rest == "" {
+			return "shape"
+		}
+		return rest
+	}
+	return seg
 }
 
 // scopeSet is a session's allowed panel names, resolved to mount segments.

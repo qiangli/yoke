@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en" data-bashy-console="1">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<base href="/">
+<title>Shape — bashy</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body class="standalone">
+<header id="bar">
+  <a id="brand" href="./" title="bashy apps">
+    <span id="wordmark">bashy<b>shape</b></span>
+  </a>
+  <span class="spacer"></span>
+  <span id="shape-who" title="changes you make here are yours alone"></span>
+</header>
+
+<main id="shape-page">
+  <form id="shape-ask" autocomplete="off">
+    <label for="shape-request">What should change in <b id="shape-app"></b>?</label>
+    <textarea id="shape-request" rows="3" placeholder="e.g. show the newest note first"></textarea>
+    <div class="row foot">
+      <span id="shape-active"></span>
+      <span class="spacer"></span>
+      <span id="shape-result"></span>
+      <button id="shape-send" class="btn primary" type="submit">Shape</button>
+    </div>
+  </form>
+
+  <section id="shape-list" aria-live="polite"></section>
+</main>
+
+<script src="shape.js"></script>
+</body>
+</html>

@@ -99,6 +99,7 @@ func newServeCmd() *cobra.Command {
 		disable  []string
 		apps     []string
 		appAuth  []string
+		shaper   string
 	)
 	cmd := &cobra.Command{
 		Use:           "serve",
@@ -110,7 +111,12 @@ func newServeCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			var shapeOpts ShapeOptions
+			if shaper != "" {
+				shapeOpts.Delegate = BashyDelegate{Agent: shaper}
+			}
 			return runServe(c.Context(), c.OutOrStdout(), Options{
+				Shape:      shapeOpts,
 				Scope:      scope,
 				Launcher:   launcher,
 				AllowWrite: write,
@@ -133,6 +139,8 @@ func newServeCmd() *cobra.Command {
 			"(described by `<bin> meta --json`)")
 	cmd.Flags().StringArrayVar(&appAuth, "app-auth", nil,
 		"operator-authorized auth tier for a third-party mount: <mount>=public|system|custom, repeatable")
+	cmd.Flags().StringVar(&shaper, "shape-agent", "",
+		"the tool:model the Shape panel delegates to for shaped apps (e.g. codex:<model>); empty disables new requests")
 	cmd.Flags().BoolVar(&pair, "pair", false,
 		"accept QR device pairings (`bashy app pair`), and keep the LAN listener open "+
 			"only while a paired device exists")

@@ -1072,3 +1072,20 @@ body.standalone #bar { flex: none; }
 #desktop-page .creds .btn { align-self: flex-end; }
 #screen { flex: 1; min-height: 0; min-width: 0; }
 #desktop-peer { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .75rem; color: var(--muted-foreground); }
+
+/* Shape panel (shape.html) */
+#shape-page { max-width: 60rem; margin: 0 auto; padding: 1rem; display: grid; gap: 1rem; }
+#shape-ask { display: grid; gap: .5rem; }
+#shape-ask textarea { width: 100%; font: inherit; }
+#shape-page .row { display: flex; align-items: center; gap: .5rem; }
+#shape-page .spacer { flex: 1; }
+.shape-card { border: 1px solid var(--border, #e4e4e7); border-radius: .5rem; padding: .75rem; display: grid; gap: .5rem; }
+.shape-meta, #shape-active, #shape-who { color: var(--muted-foreground); font-size: .8rem; }
+.shape-status { font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; }
+.shape-status.failed { color: #dc2626; }
+.shape-status.verified { color: #16a34a; }
+.shape-diff { margin: 0; padding: .5rem; overflow: auto; max-height: 24rem; background: var(--muted); font-size: .78rem; }
+.shape-diff .add { color: #16a34a; }
+.shape-diff .del { color: #dc2626; }
+.shape-diff .hunk { color: #2563eb; }
+.shape-diff .file { font-weight: 600; }

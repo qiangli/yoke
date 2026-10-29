@@ -41,6 +41,9 @@ func appMeta(a fleet.App) AppMeta {
 	if m.Auth != AuthCustom {
 		m.LoginPath = ""
 	}
+	if a.IsShaped() {
+		m.shaped, m.Mode = true, atlas.WebInProcess
+	}
 	return m
 }
 
@@ -66,6 +69,14 @@ func discoverRegistered(taken map[string]bool) ([]Panel, []error) {
 			continue
 		}
 		taken[m.Mount] = true
+		if a.IsShaped() {
+			out = append(out, Panel{
+				Name: m.Mount, Label: m.Label, Path: "/" + m.Mount + "/",
+				Mode: atlas.WebInProcess, Icon: m.Icon, Tip: m.Tip, Auth: m.Auth,
+				ShapedSource: a.Source, Source: "registered", Available: true,
+			})
+			continue
+		}
 		out = append(out, Panel{
 			Name:        m.Mount,
 			Label:       m.Label,
