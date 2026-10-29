@@ -10,15 +10,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
 
-	shapegate "github.com/qiangli/yoke/pkg/shape/gate"
-	shape "github.com/qiangli/yoke/pkg/shape/state"
+	shapeverify "github.com/qiangli/yoke/pkg/shape/verify"
 	"github.com/qiangli/yoke/pkg/src"
 )
 
@@ -234,115 +232,53 @@ func (s *server) handleShapeHistoryName(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// restoreGate is the activation gate a history restore passes: the shared
-// production gate the production activator runs before switching an
-// approval. Evidence sealed by the pre-restore verification below is what
-// satisfies it; anything else refuses with the evidence reason.
-func restoreGate(home, evidence string) shape.ActivationGate {
-	return shapegate.New(home, evidence)
-}
-
-// verifyRestoreTarget runs the console verifier over the restore target
-// against the current line tip, sealing fresh evidence bound to exactly
-// that pair. The workspace is a throwaway clone: the canonical checkout is
-// never touched and the active revision does not move.
-func (s *server) verifyRestoreTarget(ctx context.Context, a *shapedApp, principal, target, base string) (Verdict, error) {
+// restoreRunner is the check runner a history restore verifies through:
+// the same runner approvals judge candidates with, so the web route and
+// the src CLI seal through one shared verify-seal-gate function.
+func restoreRunner(a *shapedApp) (shapeverify.Runner, error) {
 	if a.opts.Verifier == nil {
-		return Verdict{}, errors.New("no verifier is configured on this console; nothing can be restored")
+		return nil, errors.New("no verifier is configured on this console; nothing can be restored")
 	}
-	work, err := os.MkdirTemp("", "shape-restore-*")
+	if pv, ok := a.opts.Verifier.(interface{ VerifyRunner() shapeverify.Runner }); ok {
+		return pv.VerifyRunner(), nil
+	}
+	return nil, errors.New("this console's verifier cannot judge a restore")
+}
+
+// restoreVersion records the restore as a new forward commit through the
+// shared verify-seal-gate function the src CLI uses too. Every refusal —
+// unknown version, failed verification, schema incompatibility, gate
+// refusal — returns the reason and leaves the active revision unchanged.
+func (s *server) restoreVersion(ctx context.Context, a *shapedApp, principal, home, rev string) (src.ActivateResult, error) {
+	runner, err := restoreRunner(a)
 	if err != nil {
-		return Verdict{}, err
+		return src.ActivateResult{}, err
 	}
-	defer os.RemoveAll(work)
-	dir := filepath.Join(work, "work")
-	wr, err := cloneAt(ctx, a.repo, dir, target)
+	res, err := src.RestoreSealed(ctx, home, a.name, rev, principal, src.RestoreSealedOptions{Runner: runner})
 	if err != nil {
-		return Verdict{}, fmt.Errorf("prepare restore workspace: %w", err)
+		if errors.Is(err, src.ErrUnknownVersion) {
+			return src.ActivateResult{}, errUnknownHistoryVersion
+		}
+		return src.ActivateResult{}, err
 	}
-	// The verifier clones this workspace whole and detaches at the base and
-	// then the target, so both must be on branches here: the candidate
-	// branch is the verifier's own, the base branch is ours.
-	if err := wr.Storer.SetReference(plumbing.NewHashReference("refs/heads/restore-base", plumbing.NewHash(base))); err != nil {
-		return Verdict{}, fmt.Errorf("prepare restore workspace: %w", err)
-	}
-	return a.opts.Verifier.Verify(ctx, VerifyRequest{
-		App: a.name, Principal: principal, SourceDir: a.repo, CandidateDir: dir,
-		BaseRev: base, CandidateRev: target, Agent: "history-restore",
-	})
+	return res, nil
 }
 
-// restoreVersion verifies the target and records the restore as a new
-// forward commit through the evidence gate. Every refusal — unknown
-// version, failed verification, schema incompatibility, gate refusal —
-// returns the reason and leaves the active revision unchanged. When undo is
-// true the request line is "undo"; otherwise it is "restore to <name or
-// short sha>" derived from the caller's rev label.
-func (s *server) restoreVersion(ctx context.Context, a *shapedApp, principal, home string, h src.VersionHistory, rev string, undo bool) (src.ActivateResult, error) {
-	var out src.ActivateResult
-	target, ok := resolveHistoryVersion(h, rev)
-	if !ok {
-		return out, errUnknownHistoryVersion
-	}
-	if h.Tip == "" {
-		return out, errors.New("restore refused: no versions are recorded on your line yet")
-	}
-	v, err := s.verifyRestoreTarget(ctx, a, principal, target, h.Tip)
+// undoVersion returns to the previous active revision through the same
+// shared function: the undo of a restore is a restore.
+func (s *server) undoVersion(ctx context.Context, a *shapedApp, principal, home string) (src.ActivateResult, error) {
+	runner, err := restoreRunner(a)
 	if err != nil {
-		return out, err
+		return src.ActivateResult{}, err
 	}
-	if !v.Pass {
-		reason := strings.TrimSpace(v.Detail)
-		if reason == "" {
-			reason = "the verifier did not pass this version"
+	res, err := src.UndoSealed(ctx, home, a.name, principal, src.RestoreSealedOptions{Runner: runner})
+	if err != nil {
+		if errors.Is(err, src.ErrUnknownVersion) {
+			return src.ActivateResult{}, errUnknownHistoryVersion
 		}
-		return out, fmt.Errorf("restore refused: %s", reason)
+		return src.ActivateResult{}, err
 	}
-	request := "restore to " + restoreLabel(h, rev, target)
-	if undo {
-		request = "undo"
-	}
-	return src.Restore(home, a.name, target, principal, src.RestoreOptions{Gate: restoreGate(home, v.Evidence), Request: request})
-}
-
-// restoreLabel names the restore target the way the request line does: the
-// caller's label when they named one, else the short SHA.
-func restoreLabel(h src.VersionHistory, rev, target string) string {
-	rev = strings.TrimSpace(rev)
-	if rev == "" {
-		return shortRev(target)
-	}
-	for _, n := range h.Named {
-		if rev == n.Name {
-			return rev
-		}
-	}
-	for _, e := range h.Entries {
-		if rev == e.Activation {
-			return shortRev(target)
-		}
-	}
-	if len(rev) >= 7 && isHexRev(rev) {
-		return shortRev(target)
-	}
-	return rev
-}
-
-func shortRev(s string) string {
-	if len(s) > 12 {
-		return s[:12]
-	}
-	return s
-}
-
-func isHexRev(s string) bool {
-	for _, r := range s {
-		if r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F' {
-			continue
-		}
-		return false
-	}
-	return true
+	return res, nil
 }
 
 var errUnknownHistoryVersion = errors.New("unknown version: restore a version from your own history")
@@ -374,7 +310,7 @@ func (s *server) handleShapeHistoryRestore(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "send {\"rev\": \"<version>\"}", http.StatusBadRequest)
 		return
 	}
-	res, err := s.restoreVersion(r.Context(), a, principal, home, h, in.Rev, false)
+	res, err := s.restoreVersion(r.Context(), a, principal, home, in.Rev)
 	if err != nil {
 		if errors.Is(err, errUnknownHistoryVersion) {
 			http.Error(w, err.Error(), http.StatusNotFound)
@@ -394,21 +330,7 @@ func (s *server) handleShapeHistoryUndo(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	st, err := a.store(principal)
-	if err != nil {
-		http.Error(w, "version history unavailable: "+err.Error(), http.StatusServiceUnavailable)
-		return
-	}
-	state, err := st.Read()
-	if err != nil {
-		http.Error(w, "version history unavailable: "+err.Error(), http.StatusServiceUnavailable)
-		return
-	}
-	if strings.TrimSpace(state.LastKnownGood) == "" {
-		http.Error(w, "nothing to undo: no previous version is recorded", http.StatusConflict)
-		return
-	}
-	res, err := s.restoreVersion(r.Context(), a, principal, home, h, state.LastKnownGood, true)
+	res, err := s.undoVersion(r.Context(), a, principal, home)
 	if err != nil {
 		if errors.Is(err, errUnknownHistoryVersion) {
 			http.Error(w, err.Error(), http.StatusNotFound)

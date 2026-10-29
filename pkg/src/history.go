@@ -57,6 +57,10 @@ type ReviewVersion struct {
 // VersionHistory is one principal's version line: every recorded version
 // newest-first, plus the named labels, the review versions, and the
 // currently active revision.
+//
+// Versions mirrors Entries under the name the web history view uses, so the
+// app view and `src history --json` are the same history view. Entries
+// stays as an alias for one release.
 type VersionHistory struct {
 	App       string          `json:"app"`
 	Principal string          `json:"principal"`
@@ -64,6 +68,7 @@ type VersionHistory struct {
 	Tip       string          `json:"tip,omitempty"`
 	Active    string          `json:"active,omitempty"`
 	Entries   []VersionEntry  `json:"entries,omitempty"`
+	Versions  []VersionEntry  `json:"versions,omitempty"`
 	Named     []NamedVersion  `json:"named,omitempty"`
 	Reviews   []ReviewVersion `json:"reviews,omitempty"`
 }
@@ -100,6 +105,7 @@ func History(home, app, principal string) (VersionHistory, error) {
 	if ok {
 		out.Tip = tip
 		out.Entries = walkLine(r, tip)
+		out.Versions = out.Entries
 	}
 	out.Named, err = namedVersions(dir, principal)
 	if err != nil {

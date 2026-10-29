@@ -93,6 +93,10 @@ type productionVerifier struct {
 	runner shapeverify.Runner
 }
 
+// VerifyRunner exposes the check runner approvals verify through, so
+// history restores seal through the same runner as approvals.
+func (v productionVerifier) VerifyRunner() shapeverify.Runner { return v.runner }
+
 func (v productionVerifier) Verify(ctx context.Context, req VerifyRequest) (Verdict, error) {
 	home := v.home
 	if home == "" {
