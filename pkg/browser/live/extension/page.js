@@ -14,15 +14,18 @@
 // reported as { error: "..." } rather than thrown, so the caller can
 // tell "the page said no" from "injection failed".
 (() => {
-  const VERSION = 18;
+  const VERSION = 19;
   if (globalThis.__bashyPage && globalThis.__bashyPage.version === VERSION) return;
 
   // Native controls plus the ARIA widgets component libraries build
   // forms from (Material/Fluent/Headless UI selects, comboboxes, radio
   // groups) and the <label> of a visually hidden radio/checkbox.
+  // contenteditable is editable for "", "true" and "plaintext-only"; "false" is not.
+  const EDITABLE_SEL = "[contenteditable=''], [contenteditable='true' i], [contenteditable='plaintext-only' i]";
   const CANDIDATES = "a, button, input, select, textarea, label, [role='button'], [role='link'], " +
     "[role='combobox'], [role='listbox'], [role='option'], [role='radio'], [role='checkbox'], " +
-    "[role='switch'], [role='tab'], [role='menuitem'], [role='menuitemradio'], [aria-haspopup='listbox']";
+    "[role='switch'], [role='tab'], [role='menuitem'], [role='menuitemradio'], [aria-haspopup='listbox'], " +
+    EDITABLE_SEL;
   const LANDMARKS = "nav, aside, [role='navigation'], [role='complementary']";
   // Indexes are ephemeral addresses. Keep the identity captured by the last
   // extract so a later insertion cannot redirect a write to another field.
@@ -47,10 +50,23 @@
     const labelled = (el.getAttribute("aria-labelledby") || "").split(/\s+/).filter(Boolean)
       .map((id) => el.getRootNode().getElementById && el.getRootNode().getElementById(id))
       .filter(Boolean).map((node) => node.textContent.trim()).join(" ");
-    const labels = el.labels && Array.from(el.labels).map((node) => node.textContent.trim()).join(" ");
+    let labels = el.labels && Array.from(el.labels).map((node) => node.textContent.trim()).join(" ");
+    if (!labels && el.id && !el.labels && el.getRootNode().querySelectorAll) {
+      labels = Array.from(el.getRootNode().querySelectorAll("label[for]"))
+        .filter((l) => l.getAttribute("for") === el.id).map((l) => l.textContent.trim()).join(" ");
+    }
     return (el.getAttribute("aria-label") || labelled || labels ||
       (el.closest("label") && el.closest("label").textContent) ||
       el.getAttribute("placeholder") || el.getAttribute("title") || "").replace(/\s+/g, " ").trim();
+  }
+
+  // labelTarget: a label's control, including a contenteditable it points at
+  // with for= (not a labelable element, so label.control is null).
+  function labelTarget(label) {
+    if (label.control) return label.control;
+    const id = label.getAttribute("for");
+    const t = id && label.getRootNode().getElementById && label.getRootNode().getElementById(id);
+    return t && t.matches(EDITABLE_SEL) ? t : null;
   }
 
   function cssEscape(value) {
@@ -125,11 +141,11 @@
       const pool = deepElements(root, CANDIDATES);
       if (s.startsWith("label=")) {
         const matches = pool.filter((el) => norm(fieldLabel(el)).includes(want))
-          .map((el) => el.tagName === "LABEL" ? el.control : el).filter(Boolean);
+          .map((el) => el.tagName === "LABEL" ? labelTarget(el) : el).filter(Boolean);
         return [...new Set(matches)];
       }
       return [...new Set(pool.filter((el) => norm(labelOf(el) || el.textContent).includes(want))
-        .map((el) => el.tagName === "LABEL" && el.control ? el.control : el))];
+        .map((el) => el.tagName === "LABEL" && labelTarget(el) ? labelTarget(el) : el))];
     }
     if (s.startsWith("xpath=") || s.startsWith("/") || s.startsWith("(")) {
       const expr = s.startsWith("xpath=") ? s.slice(6) : s;
@@ -494,7 +510,7 @@
   }
 
   function focusable(el) {
-    return el.matches && el.matches("input, textarea, select, [contenteditable=''], [contenteditable='true'], [tabindex]");
+    return el.matches && el.matches("input, textarea, select, " + EDITABLE_SEL + ", [tabindex]");
   }
 
   // CLICK_OBSERVE_MS bounds the post-click watch. A click's effect is
