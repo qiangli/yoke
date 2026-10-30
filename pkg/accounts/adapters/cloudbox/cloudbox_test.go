@@ -141,10 +141,22 @@ func TestDaemonDownKeepsProfiles(t *testing.T) {
 		t.Fatal("expected unreachable")
 	}
 	_, err = (&Adapter{ConfigDir: t.TempDir(), Exec: func(context.Context, ...string) ([]byte, error) {
-		return nil, errors.New("x " + accountstest.CanarySecret)
+		return nil, errors.New("HTTP 403 " + accountstest.CanarySecret)
 	}}).Discover(context.Background())
 	if err == nil || strings.Contains(err.Error(), accountstest.CanarySecret) {
 		t.Fatal(err)
+	}
+}
+
+// A host with no outpost installed, no profiles and nothing cached has no
+// cloudbox account; that must not fail the whole discover.
+func TestDiscoverNotInstalledNoProfilesIsEmpty(t *testing.T) {
+	a := &Adapter{ConfigDir: t.TempDir(), CachePath: filepath.Join(t.TempDir(), "cache.json"), Exec: func(context.Context, ...string) ([]byte, error) {
+		return nil, errors.New("outpost not installed")
+	}}
+	obs, err := a.Discover(context.Background())
+	if err != nil || len(obs) != 0 {
+		t.Fatalf("want no observations and no error, got %v %+v", err, obs)
 	}
 }
 

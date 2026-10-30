@@ -330,6 +330,12 @@ func (a *Adapter) Discover(ctx context.Context) ([]accounts.Observation, error) 
 	}
 
 	if len(profiles) == 0 && lastErr != "" {
+		// Discovery is local-only: a host with no profiles, no previous
+		// observation and no reachable outpost (typically not installed) simply
+		// has no cloudbox account. That is not an adapter failure.
+		if lastErr == "unreachable" && len(a.load()) == 0 {
+			return nil, nil
+		}
 		return a.cached(lastErr)
 	}
 
