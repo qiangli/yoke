@@ -34,7 +34,7 @@ var cmd = &tool.Tool{
 		"  probe  zero-setup persistent headless session; auto-launches when the endpoint is absent\n" +
 		"  live   drive your real logged-in Chrome via `browser hub` + the MV3 extension (cookies/SSO intact)\n" +
 		"\n" +
-		"Subcommands: status stop navigate extract eval dispatch-event click type select wait-for-selector\n" +
+		"Subcommands: status stop navigate extract text eval dispatch-event click type select wait-for-selector\n" +
 		"  screenshot cookies-get scroll keyboard-press back tabs fetch hub setup login\n" +
 		"Each has its OWN page: `browser <subcommand> --help` documents its operands,\n" +
 		"which modes implement it, and its output contract.\n" +
@@ -704,6 +704,27 @@ func buildAction(args []string, f actionFlags) (wire.Action, error) {
 		a.Text = strings.Join(opt, " ")
 		return a, nil
 
+	case "text":
+		// browser text [selector]: visible text of the addressed
+		// element, or of the whole page when no target is given. The
+		// shared selector syntax applies (CSS, xpath=, text=, label=);
+		// --index N and --text address like click.
+		a := wire.Action{
+			Type: wire.ActionText, ElementID: f.Index, MatchText: f.MatchText,
+			Scope: f.Scope, IncludeHidden: f.IncludeHidden,
+		}
+		if len(rest) > 0 {
+			if n, err := strconv.Atoi(rest[0]); err == nil && n > 0 {
+				a.ElementID = n
+			} else {
+				a.Selector = rest[0]
+			}
+		}
+		if err := extraOperands(sub, rest, 1); err != nil {
+			return wire.Action{}, err
+		}
+		return a, nil
+
 	case "eval", "evaluate":
 		if len(rest) == 0 {
 			return wire.Action{}, fmt.Errorf("eval requires a script")
@@ -809,10 +830,18 @@ func buildAction(args []string, f actionFlags) (wire.Action, error) {
 		return a, nil
 
 	case "scroll":
-		a := wire.Action{Type: wire.ActionScroll, Direction: "down"}
+		// scroll [up|down] [amount] [selector]: without a target the
+		// window scrolls; with one its nearest scrollable ancestor (an
+		// inner panel) moves instead. --index N and --text address like
+		// click; a bare integer third operand is an element index.
+		a := wire.Action{
+			Type: wire.ActionScroll, Direction: "down",
+			ElementID: f.Index, MatchText: f.MatchText,
+			Scope: f.Scope, IncludeHidden: f.IncludeHidden,
+		}
 		if len(rest) > 0 {
 			if rest[0] != "up" && rest[0] != "down" {
-				return wire.Action{}, fmt.Errorf("scroll: unknown direction %q; expected one of: up, down", rest[0])
+				return wire.Action{}, fmt.Errorf("scroll: unknown direction %q; expected one of: up, down (a target selector goes third: scroll [up|down] [amount] SELECTOR)", rest[0])
 			}
 			a.Direction = rest[0]
 		}
@@ -823,7 +852,14 @@ func buildAction(args []string, f actionFlags) (wire.Action, error) {
 			}
 			a.Amount = n
 		}
-		if err := extraOperands(sub, rest, 2); err != nil {
+		if len(rest) > 2 {
+			if n, err := strconv.Atoi(rest[2]); err == nil && n > 0 {
+				a.ElementID = n
+			} else {
+				a.Selector = rest[2]
+			}
+		}
+		if err := extraOperands(sub, rest, 3); err != nil {
 			return wire.Action{}, err
 		}
 		return a, nil

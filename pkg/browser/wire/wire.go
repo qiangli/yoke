@@ -275,4 +275,15 @@ const (
 	// a radio group, or a custom listbox/combobox addressed like click.
 	// Live mode only; it verifies the widget shows the choice.
 	ActionSelect = "select"
+
+	// ActionText reads visible text without evaluating page script:
+	// the addressed element's text, or the whole page when no target
+	// is given. It runs in the extension's isolated world (live) or a
+	// CDP isolated world (probe/solo), so a page whose
+	// Content-Security-Policy omits 'unsafe-eval' still answers. Raw
+	// password-input values are never returned (the browser itself
+	// never displays them); a password field reads as its name only.
+	// A read, never a write: the sensitive-input guard passes it
+	// through (gate.go readsPage) without masking.
+	ActionText = "text"
 )

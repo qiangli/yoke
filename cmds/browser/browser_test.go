@@ -279,7 +279,7 @@ func TestUnknownSubcommandNamesTheValidSet(t *testing.T) {
 // page that documented none of them.
 func TestPerSubcommandHelp(t *testing.T) {
 	toolHelp, _, _ := runTool(t, "--help")
-	for _, sub := range []string{"tabs", "screenshot", "click", "extract", "status"} {
+	for _, sub := range []string{"tabs", "screenshot", "click", "extract", "text", "status"} {
 		out, _, code := runTool(t, sub, "--help")
 		if code != 0 {
 			t.Fatalf("%s --help exit=%d", sub, code)
@@ -301,6 +301,13 @@ func TestPerSubcommandHelp(t *testing.T) {
 	for _, want := range []string{"list", "switch", "new", "close"} {
 		if !strings.Contains(tabs, want) {
 			t.Fatalf("tabs help omits %q", want)
+		}
+	}
+	// click must name the observed outcomes, not the old dispatch receipt.
+	click, _, _ := runTool(t, "click", "--help")
+	for _, want := range []string{"navigated", "dialog", "dom-changed", "no-effect"} {
+		if !strings.Contains(click, want) {
+			t.Fatalf("click help omits outcome %q", want)
 		}
 	}
 }
@@ -441,11 +448,82 @@ func TestSelectAction(t *testing.T) {
 	}
 }
 
+// TestTextAction pins the CSP-safe read's plumbing: bare `text` reads
+// the page, an operand addresses an element (a bare integer is an index,
+// like click), and anything else fails with a clear error.
+func TestTextAction(t *testing.T) {
+	a, err := actionFromArgs([]string{"text"}, actionFlags{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Type != wire.ActionText || a.Selector != "" || a.ElementID != 0 {
+		t.Fatalf("bare text must read the page: %#v", a)
+	}
+	b, err := actionFromArgs([]string{"text", "#bio"}, actionFlags{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Type != wire.ActionText || b.Selector != "#bio" {
+		t.Fatalf("text selector mis-parsed: %#v", b)
+	}
+	c, err := actionFromArgs([]string{"text", "3"}, actionFlags{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ElementID != 3 || c.Selector != "" {
+		t.Fatalf("text 3: ElementID=%d Selector=%q, want index 3", c.ElementID, c.Selector)
+	}
+	d, err := actionFromArgs([]string{"text"}, actionFlags{Index: 7, MatchText: ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.ElementID != 7 {
+		t.Fatalf("--index 7: ElementID=%d want 7", d.ElementID)
+	}
+	if _, err := actionFromArgs([]string{"text", "#a", "extra"}, actionFlags{}); err == nil {
+		t.Fatal("text with two operands must be a usage error, not a silent pick")
+	}
+}
+
+// TestScrollTargetAction pins the addressed scroll's plumbing: the
+// window form is unchanged, and a target (operand, --index or --text)
+// rides the action to the backend that moves the panel.
+func TestScrollTargetAction(t *testing.T) {
+	a, err := actionFromArgs([]string{"scroll", "down"}, actionFlags{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Direction != "down" || a.Selector != "" || a.ElementID != 0 {
+		t.Fatalf("plain scroll changed shape: %#v", a)
+	}
+	b, err := actionFromArgs([]string{"scroll", "down", "500", "#panel"}, actionFlags{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Direction != "down" || b.Amount != 500 || b.Selector != "#panel" {
+		t.Fatalf("scroll target mis-parsed: %#v", b)
+	}
+	c, err := actionFromArgs([]string{"scroll", "down", "500"}, actionFlags{Index: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ElementID != 4 {
+		t.Fatalf("scroll --index 4: ElementID=%d want 4", c.ElementID)
+	}
+	if _, err := actionFromArgs([]string{"scroll", "sideways"}, actionFlags{}); err == nil {
+		t.Fatal("scroll with a bad direction must be a usage error")
+	}
+	if _, err := actionFromArgs([]string{"scroll", "down", "500", "#p", "extra"}, actionFlags{}); err == nil {
+		t.Fatal("scroll with four operands must be a usage error")
+	}
+}
+
 func TestEveryActionHonorsTheTabAddress(t *testing.T) {
 	f := actionFlags{TabURL: "app.local", TabTitle: "Inbox", TabByID: 9}
 	for _, args := range [][]string{
 		{"navigate", "http://x.test"}, {"click", "#a"}, {"type", "#a", "hi"},
-		{"extract"}, {"screenshot", "/tmp/s.png"}, {"scroll", "down"},
+		{"extract"}, {"text"}, {"text", "#a"}, {"screenshot", "/tmp/s.png"}, {"scroll", "down"},
+		{"scroll", "down", "500", "#panel"},
 		{"evaluate", "1+1"}, {"back"},
 	} {
 		a, err := actionFromArgs(args, f)

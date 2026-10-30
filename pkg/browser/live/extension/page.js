@@ -14,7 +14,7 @@
 // reported as { error: "..." } rather than thrown, so the caller can
 // tell "the page said no" from "injection failed".
 (() => {
-  const VERSION = 16;
+  const VERSION = 17;
   if (globalThis.__bashyPage && globalThis.__bashyPage.version === VERSION) return;
 
   // Native controls plus the ARIA widgets component libraries build
@@ -497,16 +497,50 @@
     return el.matches && el.matches("input, textarea, select, [contenteditable=''], [contenteditable='true'], [tabindex]");
   }
 
-  function click(params) {
+  // CLICK_OBSERVE_MS bounds the post-click watch. A click's effect is
+  // almost always synchronous (handler runs on dispatch); a short watch
+  // also catches the first paint of a same-tick re-render, while a long
+  // one would report whatever the page did next on its own. Polled in
+  // slices so a navigation — which unloads this world mid-watch — is
+  // reported as soon as the URL moves instead of at the bound.
+  const CLICK_OBSERVE_MS = 350;
+
+  // click reports the OBSERVED effect, not the dispatch: navigated (the
+  // URL moved), dialog (a DOM dialog opened), dom-changed (the observer
+  // saw a mutation), or no-effect (nothing observable within the bound).
+  // A click that resolved nothing is still an error, never a success.
+  async function click(params) {
     const el = resolveTarget(params, { visibleOnly: true, write: true });
     if (el && el.__miss) return miss("click", el);
+    const matched = describe(el);
+    const beforeURL = location.href;
+    const hadDialog = !!topmostDialog();
+    let changed = false;
+    let observer = null;
+    try {
+      observer = new MutationObserver(() => { changed = true; });
+      observer.observe(document, { childList: true, attributes: true, characterData: true, subtree: true });
+    } catch (_) { observer = null; }
     try { el.scrollIntoView({ block: "center", inline: "nearest" }); } catch (_) { /* detached */ }
     // HTMLElement.click() never moves focus; a real click on a field
     // does. Without this a following `type --selector input:focus`
     // (or a keyboard_press) lands on the previous element.
     if (focusable(el) && el.focus) el.focus();
     el.click();
-    return { content: "clicked", data: JSON.stringify({ matched: describe(el) }) };
+    let effect = "no-effect";
+    const slice = 70;
+    for (let waited = 0; waited < CLICK_OBSERVE_MS; waited += slice) {
+      await wait(slice);
+      try {
+        if (location.href !== beforeURL) { effect = "navigated"; break; }
+      } catch (_) { effect = "navigated"; break; } // the world went away with the page
+      if (!hadDialog && topmostDialog()) { effect = "dialog"; break; }
+      if (changed) { effect = "dom-changed"; break; }
+    }
+    try { if (observer) observer.disconnect(); } catch (_) { /* unloaded */ }
+    // One last read: a mutation that landed on the final slice.
+    if (effect === "no-effect" && changed) effect = "dom-changed";
+    return { content: `clicked: ${effect}`, data: JSON.stringify({ matched, effect }) };
   }
 
   function currentValue(el) {
@@ -878,16 +912,213 @@
     return { ok: true };
   }
 
+  // scrollTargetScroller finds what an addressed scroll must move: the
+  // nearest scrollable ancestor of el, or el itself when it scrolls.
+  // The walk crosses into the host document when el lives in a
+  // same-origin frame (via frameElement); otherwise the window scrolls.
+  function scrollTargetScroller(el) {
+    let node = el;
+    while (node && node.nodeType === Node.ELEMENT_NODE) {
+      const view = node.ownerDocument.defaultView || window;
+      let oy = "";
+      try { oy = view.getComputedStyle(node).overflowY; } catch (_) { oy = ""; }
+      if ((oy === "auto" || oy === "scroll") && node.scrollHeight > node.clientHeight + 1) {
+        return { node, view };
+      }
+      if (node.parentElement) {
+        node = node.parentElement;
+        continue;
+      }
+      // Top of this document: continue from the host <iframe>, if any.
+      const frame = node.ownerDocument.defaultView && node.ownerDocument.defaultView.frameElement;
+      node = frame || null;
+    }
+    return { node: null, view: window };
+  }
+
   function scroll(params) {
+    params = params || {};
     let amount = params.amount || 500;
     if (params.direction === "up") amount = -amount;
-    window.scrollBy(0, amount);
-    return { content: `scrolled to ${window.scrollY}`, data: String(window.scrollY) };
+    if (!(params.selector || params.element_id || params.match_text)) {
+      window.scrollBy(0, amount);
+      return { content: `scrolled to ${window.scrollY}`, data: String(window.scrollY) };
+    }
+    // An addressed scroll moves the panel, never blindly the window:
+    // resolveTarget without visibleOnly — scrolling an off-screen
+    // element's container into motion is the point.
+    const el = resolveTarget(params, {});
+    if (el && el.__miss) return miss("scroll", el);
+    const scroller = scrollTargetScroller(el);
+    if (!scroller.node) {
+      window.scrollBy(0, amount);
+      return { content: `scrolled to ${window.scrollY}`, data: String(window.scrollY) };
+    }
+    scroller.node.scrollTop += amount;
+    const top = scroller.node.scrollTop, left = scroller.node.scrollLeft;
+    const what = describe(scroller.node);
+    return {
+      content: `scrolled ${what} to ${top}`,
+      data: JSON.stringify({ scrolled: what, top, left }),
+    };
+  }
+
+  // text reads visible text without compiling page script, so a strict
+  // Content-Security-Policy (no 'unsafe-eval') does not block it: the
+  // extension runs this from its isolated world, CDP from an isolated
+  // world of its own. With no address it reads the page (or the scope
+  // root); with one it reads the addressed element. A password input's
+  // value is never returned — the field reads as its name only, the
+  // same suppression extract applies to its listings.
+  function text(params) {
+    params = params || {};
+    if (!(params.selector || params.element_id || params.match_text)) {
+      const root = params.scope ? scopeRoot(params) : document;
+      if (!root) return { error: `text: scope ${JSON.stringify(params.scope)} not found`, notfound: true };
+      return { content: visibleTextOf(root === document ? document.body : root) };
+    }
+    const el = resolveTarget(params, {});
+    if (el && el.__miss) return miss("text", el);
+    if (isPasswordInput(el)) {
+      return { content: nameOf(el), data: JSON.stringify({ matched: describe(el), suppressed: "password" }) };
+    }
+    return { content: visibleTextOf(el), data: JSON.stringify({ matched: describe(el) }) };
+  }
+
+  function visibleTextOf(root) {
+    // innerText is the RENDERED text (hidden subtrees excluded); fall
+    // back to textContent where innerText is unavailable (SVG roots).
+    let s = "";
+    try { s = root.innerText; } catch (_) { s = ""; }
+    if (typeof s !== "string" || !s) {
+      try { s = root.textContent || ""; } catch (_) { s = ""; }
+    }
+    // Input values are not rendered text, so they never appear here;
+    // an addressed password input is suppressed by text() above.
+    return String(s).replace(/\s+$/g, "");
+  }
+
+  // shotLayout/shotSet/shotRestore tile a full-page capture with inner
+  // scroll areas stitched in. The SAME functions drive the CDP stitcher
+  // (probe/solo, over a persistent isolated world) and the live
+  // extension (callPage in its isolated world), so both modes tile the
+  // same geometry: viewport, document size, scroll, and every inner
+  // scroll panel (open shadow roots included; cross-frame panels are
+  // captured at their current scroll, like the legacy path).
+  //
+  // The panel cache lives on this world's globalThis.__bashyShot — one
+  // stitch per world at a time. shotLayout first restores a previous
+  // cache (a stitch that died mid-tile must not strand hidden fixed
+  // elements), then rebuilds it. Scrolls apply with behavior "instant"
+  // so a smooth-scrolling page still lands exactly where asked; every
+  // set reports the ACTUAL positions, because a page that snaps scroll
+  // is detected, not assumed.
+  const SHOT_MAX_PANELS = 8;
+
+  function shotPanelsIn(root, out) {
+    const els = root.querySelectorAll("*");
+    for (const el of els) {
+      if (el.shadowRoot) shotPanelsIn(el.shadowRoot, out);
+      let cs;
+      try { cs = (el.ownerDocument.defaultView || window).getComputedStyle(el); } catch (_) { continue; }
+      if (cs.display === "none" || cs.visibility === "hidden") continue;
+      const oy = cs.overflowY;
+      if (oy !== "auto" && oy !== "scroll" && oy !== "overlay") continue;
+      if (el.scrollHeight <= el.clientHeight + 4) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < 4 || r.height < 4) continue;
+      out.push(el);
+      if (out.length >= SHOT_MAX_PANELS) break;
+    }
+  }
+
+  function shotRestoreCache() {
+    const c = globalThis.__bashyShot;
+    if (!c) return;
+    try {
+      const s = c.saved;
+      if (s) {
+        try { window.scrollTo(s.x, s.y); } catch (_) { /* gone */ }
+        for (let i = 0; i < s.panels.length && i < c.panels.length; i++) {
+          try { c.panels[i].scrollTop = s.panels[i].st; c.panels[i].scrollLeft = s.panels[i].sl; } catch (_) { /* mutated */ }
+        }
+      }
+      for (const pair of c.fixed) { try { pair[0].style.display = pair[1]; } catch (_) { /* gone */ } }
+    } finally {
+      globalThis.__bashyShot = undefined;
+    }
+  }
+
+  function shotLayout() {
+    shotRestoreCache();
+    const found = [];
+    try { shotPanelsIn(document, found); } catch (_) { /* detached */ }
+    const vw = window.innerWidth || 0, vh = window.innerHeight || 0;
+    const de = document.documentElement;
+    const docW = Math.max(de ? de.scrollWidth : 0, document.body ? document.body.scrollWidth : 0, vw);
+    const docH = Math.max(de ? de.scrollHeight : 0, document.body ? document.body.scrollHeight : 0, vh);
+    const panels = found.map((el) => {
+      const r = el.getBoundingClientRect();
+      return {
+        x: Math.round(r.left + window.scrollX), y: Math.round(r.top + window.scrollY),
+        w: Math.round(r.width), h: Math.round(r.height),
+        sh: el.scrollHeight, sw: el.scrollWidth, st: el.scrollTop, sl: el.scrollLeft,
+      };
+    });
+    const saved = {
+      x: Math.round(window.scrollX), y: Math.round(window.scrollY),
+      panels: panels.map((p) => ({ st: p.st, sl: p.sl })),
+    };
+    const fixed = [];
+    try {
+      for (const el of document.querySelectorAll("*")) {
+        let cs;
+        try { cs = getComputedStyle(el); } catch (_) { continue; }
+        // Fixed elements would repeat on every tile; hide them for the
+        // stitch (restored with everything else).
+        if (cs.position === "fixed") { fixed.push([el, el.style.display]); el.style.display = "none"; }
+      }
+    } catch (_) { /* detached */ }
+    globalThis.__bashyShot = { panels: found, fixed, saved };
+    return {
+      dpr: window.devicePixelRatio || 1, vw, vh, docW, docH,
+      x: saved.x, y: saved.y, panels,
+    };
+  }
+
+  function shotSet(s) {
+    s = s || {};
+    try { window.scrollTo({ left: s.x || 0, top: s.y || 0, behavior: "instant" }); }
+    catch (_) { try { window.scrollTo(s.x || 0, s.y || 0); } catch (_) { /* gone */ } }
+    let pst = -1;
+    const c = globalThis.__bashyShot;
+    if (s.p >= 0 && c && c.panels[s.p]) {
+      const el = c.panels[s.p];
+      try {
+        if (el.scrollTo) el.scrollTo({ top: s.pt || 0, behavior: "instant" });
+        else el.scrollTop = s.pt || 0;
+      } catch (_) { try { el.scrollTop = s.pt || 0; } catch (_) { /* gone */ } }
+      try { pst = Math.round(el.scrollTop); } catch (_) { /* gone */ }
+    }
+    return { x: Math.round(window.scrollX), y: Math.round(window.scrollY), pst };
+  }
+
+  function shotRestore(s) {
+    if (s && globalThis.__bashyShot) {
+      // The caller hands back the saved layout; align it with the live
+      // cache (same order shotLayout built) and restore through it.
+      globalThis.__bashyShot.saved = {
+        x: s.x || 0, y: s.y || 0,
+        panels: (s.panels || []).map((p) => ({ st: p.st || 0, sl: p.sl || 0 })),
+      };
+    }
+    shotRestoreCache();
+    return { ok: true };
   }
 
   globalThis.__bashyPage = {
     version: VERSION,
-    extract, count, click, type, select, scroll, readValue, focusTarget, guardField, guardFocus, guardFill, guardVerify,
-    resolveSelector, probe, dispatch, keyFocus, keySynthetic,
+    extract, count, click, type, select, scroll, text, readValue, focusTarget, guardField, guardFocus, guardFill, guardVerify,
+    resolveSelector, probe, dispatch, keyFocus, keySynthetic, shotLayout, shotSet, shotRestore,
   };
 })();

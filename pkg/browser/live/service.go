@@ -506,8 +506,24 @@ func baseActionParams(a wire.Action) (string, map[string]any, error) {
 			"option":         a.Text,
 			"include_hidden": a.IncludeHidden,
 		}, nil
+	case wire.ActionText:
+		return "text", map[string]any{
+			"selector":       a.Selector,
+			"element_id":     a.ElementID,
+			"match_text":     a.MatchText,
+			"scope":          a.Scope,
+			"include_hidden": a.IncludeHidden,
+		}, nil
 	case wire.ActionScroll:
-		return "scroll", map[string]any{"direction": a.Direction, "amount": a.Amount}, nil
+		return "scroll", map[string]any{
+			"direction":      a.Direction,
+			"amount":         a.Amount,
+			"selector":       a.Selector,
+			"element_id":     a.ElementID,
+			"match_text":     a.MatchText,
+			"scope":          a.Scope,
+			"include_hidden": a.IncludeHidden,
+		}, nil
 	case wire.ActionScreenshot:
 		return "screenshot", map[string]any{
 			"full_page": a.FullPage,

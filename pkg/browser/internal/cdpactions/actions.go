@@ -110,8 +110,10 @@ func Run(ctx context.Context, mode string, action wire.Action) (*wire.Result, er
 		return Click(ctx, action)
 	case wire.ActionType:
 		return Type(ctx, action)
+	case wire.ActionText:
+		return Text(ctx, action)
 	case wire.ActionScroll:
-		return Scroll(ctx, action.Direction, action.Amount)
+		return Scroll(ctx, action)
 	case wire.ActionScreenshot:
 		return Screenshot(ctx, action)
 	case wire.ActionExtract:
@@ -308,56 +310,56 @@ func focusHiddenNode(ctx context.Context, path string) error {
 }
 
 // Click resolves by element index, CSS selector, or visible text — in
-// that order — and every form returns the SAME envelope on success
-// (`content: "clicked"`). The shapes used to differ, and the shape was
-// the only signal that a form had silently resolved nothing.
+// that order — and every form returns the SAME envelope on success:
+// the OBSERVED effect (`content: "clicked: navigated" | "clicked:
+// dialog" | "clicked: dom-changed" | "clicked: no-effect"`, with
+// data.effect naming it). A click that resolved nothing is an error,
+// never a success; a click that resolved but observably did nothing
+// reports no-effect (the click happened; the page did not react
+// within the bounded watch).
 func Click(ctx context.Context, a wire.Action) (*wire.Result, error) {
 	if a.ElementID > 0 {
 		params, err := expectedIdentity(ctx, a)
 		if err != nil {
 			return &wire.Result{Error: err.Error()}, nil
 		}
-		var out struct {
-			Content string `json:"content"`
-			Error   string `json:"error"`
-		}
-		if err := evalGuard(ctx, pageCall("click", params), &out); err != nil {
-			return &wire.Result{Error: err.Error()}, nil
-		}
-		if out.Error == "" {
-			return &wire.Result{Success: true, Content: "clicked"}, nil
-		}
-		return &wire.Result{Error: out.Error}, nil
+		return clickPage(ctx, params)
 	}
 	if a.Selector != "" {
 		wctx, cancel := context.WithTimeout(ctx, actionTimeout(a))
 		defer cancel()
 		params, _ := expectedIdentity(wctx, a)
-		var out struct {
-			Error string `json:"error"`
-		}
-		if err := evalGuard(wctx, pageCall("click", params), &out); err != nil {
-			return &wire.Result{Error: err.Error()}, nil
-		}
-		if out.Error != "" {
-			return &wire.Result{Error: out.Error}, nil
-		}
-		return &wire.Result{Success: true, Content: "clicked"}, nil
+		return clickPage(wctx, params)
 	}
 	if a.MatchText != "" {
 		params, _ := expectedIdentity(ctx, a)
-		var out struct {
-			Error string `json:"error"`
-		}
-		if err := evalGuard(ctx, pageCall("click", params), &out); err != nil {
-			return &wire.Result{Error: err.Error()}, nil
-		}
-		if out.Error != "" {
-			return &wire.Result{Error: out.Error}, nil
-		}
-		return &wire.Result{Success: true, Content: "clicked"}, nil
+		return clickPage(ctx, params)
 	}
 	return &wire.Result{Error: "click: selector, element index, or match_text required"}, nil
+}
+
+// clickPage runs page.js click — which watches the page for a bounded
+// moment after dispatching — and reports the observed outcome.
+func clickPage(ctx context.Context, params map[string]any) (*wire.Result, error) {
+	var out struct {
+		Content string `json:"content"`
+		Data    string `json:"data"`
+		Error   string `json:"error"`
+	}
+	if err := evalGuard(ctx, pageCall("click", params), &out); err != nil {
+		return &wire.Result{Error: err.Error()}, nil
+	}
+	if out.Error != "" {
+		return &wire.Result{Error: out.Error}, nil
+	}
+	if out.Content == "" {
+		out.Content = "clicked: no-effect"
+	}
+	res := &wire.Result{Success: true, Content: out.Content}
+	if out.Data != "" {
+		res.Data = out.Data
+	}
+	return res, nil
 }
 
 // ClickByIndexScript mirrors ExtractScript's enumeration exactly — same
@@ -470,19 +472,41 @@ func Type(ctx context.Context, a wire.Action) (*wire.Result, error) {
 	return &wire.Result{Success: true, Content: "typed"}, nil
 }
 
-func Scroll(ctx context.Context, direction string, amount int) (*wire.Result, error) {
-	if amount == 0 {
-		amount = 500
+// Scroll moves the window, or — when the action addresses an element —
+// the element's nearest scrollable ancestor (an inner panel, not the
+// window behind it). The addressed form runs page.js scroll in the
+// guard's isolated world, so the shared selector syntax applies.
+func Scroll(ctx context.Context, a wire.Action) (*wire.Result, error) {
+	if a.Selector == "" && a.ElementID == 0 && a.MatchText == "" {
+		amount := a.Amount
+		if amount == 0 {
+			amount = 500
+		}
+		if a.Direction == "up" {
+			amount = -amount
+		}
+		script := fmt.Sprintf("window.scrollBy(0, %d); window.scrollY", amount)
+		var y float64
+		if err := chromedp.Run(ctx, chromedp.Evaluate(script, &y)); err != nil {
+			return &wire.Result{Error: err.Error()}, nil
+		}
+		return &wire.Result{Success: true, Data: fmt.Sprintf("scrollY=%g", y)}, nil
 	}
-	if direction == "up" {
-		amount = -amount
+	params := map[string]any{"scope": a.Scope, "element_id": a.ElementID, "selector": a.Selector,
+		"match_text": a.MatchText, "include_hidden": a.IncludeHidden,
+		"direction": a.Direction, "amount": a.Amount}
+	var out struct {
+		Content string `json:"content"`
+		Data    string `json:"data"`
+		Error   string `json:"error"`
 	}
-	script := fmt.Sprintf("window.scrollBy(0, %d); window.scrollY", amount)
-	var y float64
-	if err := chromedp.Run(ctx, chromedp.Evaluate(script, &y)); err != nil {
+	if err := evalGuard(ctx, pageCall("scroll", params), &out); err != nil {
 		return &wire.Result{Error: err.Error()}, nil
 	}
-	return &wire.Result{Success: true, Data: fmt.Sprintf("scrollY=%g", y)}, nil
+	if out.Error != "" {
+		return &wire.Result{Error: out.Error}, nil
+	}
+	return &wire.Result{Success: true, Content: out.Content, Data: out.Data}, nil
 }
 
 func Screenshot(ctx context.Context, a wire.Action) (*wire.Result, error) {
@@ -499,21 +523,42 @@ func Screenshot(ctx context.Context, a wire.Action) (*wire.Result, error) {
 		}
 	}
 	var buf []byte
-	capture := chromedp.CaptureScreenshot(&buf)
 	if a.FullPage {
+		// Inner scroll areas show only their visible slice in a
+		// beyond-viewport capture, so a page with panels gets its
+		// regions stitched tile by tile (positions restored even on
+		// failure — the stitch's own defer). Without panels the single
+		// capture below is exact; a failed stitch falls back to it too
+		// (the meta names the path taken, so a silent downgrade reads
+		// as one — the same fallback the live extension takes).
+		if stitched, ok, err := StitchFullPage(ctx); err != nil {
+			return finishFullPageFallback(ctx, a, err)
+		} else if ok {
+			buf = stitched
+			return finishCapture(a, buf, captureMetaStitched())
+		}
 		// quality 100 selects PNG in chromedp; anything else silently
 		// yields a JPEG, which would write JPEG bytes to a .png path.
-		capture = chromedp.FullScreenshot(&buf, 100)
+		if err := chromedp.Run(ctx, chromedp.FullScreenshot(&buf, 100)); err != nil {
+			return &wire.Result{Error: err.Error()}, nil
+		}
+		return finishCapture(a, buf, captureMetaFullPage())
 	}
-	if err := chromedp.Run(ctx, capture); err != nil {
+	if err := chromedp.Run(ctx, chromedp.CaptureScreenshot(&buf)); err != nil {
 		return &wire.Result{Error: err.Error()}, nil
 	}
+	return finishCapture(a, buf, "")
+}
+
+// finishCapture applies SavePath / MaxBytes to a finished PNG,
+// honouring the existing output contract in one place.
+func finishCapture(a wire.Action, buf []byte, meta string) (*wire.Result, error) {
 	if a.SavePath != "" {
 		path, err := writeScreenshot(buf, a.SavePath)
 		if err != nil {
 			return &wire.Result{Error: err.Error()}, nil
 		}
-		return &wire.Result{Success: true, Path: path}, nil
+		return &wire.Result{Success: true, Path: path, Data: meta}, nil
 	}
 	img := base64.StdEncoding.EncodeToString(buf)
 	if a.MaxBytes > 0 && len(img) > a.MaxBytes {
@@ -521,9 +566,9 @@ func Screenshot(ctx context.Context, a wire.Action) (*wire.Result, error) {
 		if err != nil {
 			return &wire.Result{Error: err.Error()}, nil
 		}
-		return &wire.Result{Success: true, Path: path}, nil
+		return &wire.Result{Success: true, Path: path, Data: meta}, nil
 	}
-	return &wire.Result{Success: true, Image: img}, nil
+	return &wire.Result{Success: true, Image: img, Data: meta}, nil
 }
 
 func writeScreenshot(buf []byte, savePath string) (string, error) {
@@ -916,6 +961,7 @@ func Capabilities(mode string) (*wire.Result, error) {
 			wire.ActionScroll,
 			wire.ActionScreenshot,
 			wire.ActionExtract,
+			wire.ActionText,
 			wire.ActionBack,
 			wire.ActionTabs,
 			wire.ActionEvaluate,
