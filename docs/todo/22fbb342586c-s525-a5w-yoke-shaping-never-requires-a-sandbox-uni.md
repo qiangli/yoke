@@ -3,15 +3,20 @@ id: 22fbb342586c
 kind: bug
 title: 'S525.A5w yoke: shaping never requires a sandbox; units run under bashy guards; explicit sandbox islands route to bashy oci; retire contain backends'
 seq: 2916
-status: todo
+status: done
 priority: p0
 labels:
     - windows
     - linux
 created: 2026-10-29T16:25:12.660379Z
+weave: 702
+assignee: claude-opus5.5
 sprint: 525
 sprint_id: 9a9a4443-02c8-53a3-b0bd-96bd67980643
 sprint_title: 'Software Shaping foundation: verified personal features and same-host promotion'
+closed: 2026-10-29T16:54:00.689613Z
+resolution: fixed
+closed_by: claude-opus5.5-z
 ---
 
 Sprint 525, goal a5w (parent 944522763e8f, p0). OPERATOR 2026-10-29, FINAL; supersedes both earlier A5w designs, which were wrong. Full scope: umbrella docs/todo/944522763e8f-* (dhnt dev f8e305a3d) and docs/software-shaping-epic.md.

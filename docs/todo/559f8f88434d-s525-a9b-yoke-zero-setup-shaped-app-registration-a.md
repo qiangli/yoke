@@ -3,14 +3,19 @@ id: 559f8f88434d
 kind: bug
 title: 'S525.A9b yoke: zero-setup shaped app registration (app add imports + base commit + pristine) and /shape.js under an app-scoped device grant'
 seq: 2920
-status: todo
+status: done
 priority: p0
 labels:
     - software-shaping
 created: 2026-10-29T17:01:05.646658Z
+weave: 705
+assignee: codex-gpt5.6-sol
 sprint: 525
 sprint_id: 9a9a4443-02c8-53a3-b0bd-96bd67980643
 sprint_title: 'Software Shaping foundation: verified personal features and same-host promotion'
+closed: 2026-10-29T17:19:34.274424Z
+resolution: fixed
+closed_by: codex-gpt5.6-sol-c
 ---
 
 Sprint 525, goal a9 (parent eb1be776). Bugs found by the live A9 smoke on the installed candidate (bashy 84be5506 / yoke c9e58916, Linux, elephant WSL). Operator rule: users never handle technical details, and any manual step is a bug.

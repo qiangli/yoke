@@ -3,14 +3,19 @@ id: dd341e0ad522
 kind: bug
 title: 'S525.A9c yoke: Windows session/device cookie carries DOMAIN\user, invalid cookie byte, so every paired request is 403'
 seq: 2921
-status: todo
+status: done
 priority: p0
 labels:
     - windows
 created: 2026-10-29T17:03:17.641775Z
+weave: 706
+assignee: muse-conductor
 sprint: 525
 sprint_id: 9a9a4443-02c8-53a3-b0bd-96bd67980643
 sprint_title: 'Software Shaping foundation: verified personal features and same-host promotion'
+closed: 2026-10-29T17:14:45.448279Z
+resolution: fixed
+closed_by: muse-conductor-d
 ---
 
 Sprint 525, goal a9 (parent eb1be776). OS divergence (operator: any OS difference is a bug), found by the live A9 smoke on native Windows (installed candidate bashy 84be5506 / yoke c9e58916). The identical scenario passes pairing on Linux.

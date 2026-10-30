@@ -3,14 +3,19 @@ id: 5baac24f32d2
 kind: bug
 title: 'S525.A10e yoke: installed CLI src restore/undo never verify (refuse on real data), take activation ids; CLI history JSON key differs from web'
 seq: 2925
-status: todo
+status: done
 priority: p0
 labels:
     - software-shaping
 created: 2026-10-29T17:40:17.893191Z
+weave: 710
+assignee: muse-conductor
 sprint: 525
 sprint_id: 9a9a4443-02c8-53a3-b0bd-96bd67980643
 sprint_title: 'Software Shaping foundation: verified personal features and same-host promotion'
+closed: 2026-10-29T17:55:10.967004Z
+resolution: fixed
+closed_by: muse-conductor-h
 ---
 
 Sprint 525, goal a10 (parent 671de6e3), p0. Bug found by the full live A9 run (Linux, installed candidate bashy b044891d / yoke 583e4c7f). Web history, restore and undo all pass live. The installed CLI does not.

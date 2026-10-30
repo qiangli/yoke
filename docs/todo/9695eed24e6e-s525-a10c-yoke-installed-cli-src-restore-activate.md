@@ -3,14 +3,19 @@ id: 9695eed24e6e
 kind: bug
 title: 'S525.A10c yoke: installed CLI src restore/activate refuse, so register the production activation gate'
 seq: 2918
-status: todo
+status: done
 priority: p0
 labels:
     - software-shaping
 created: 2026-10-29T16:25:13.103588Z
+weave: 700
+assignee: muse-conductor
 sprint: 525
 sprint_id: 9a9a4443-02c8-53a3-b0bd-96bd67980643
 sprint_title: 'Software Shaping foundation: verified personal features and same-host promotion'
+closed: 2026-10-29T16:37:09.583616Z
+resolution: fixed
+closed_by: muse-conductor-x
 ---
 
 Sprint 525, goal a10 (parent 671de6e307ac). Bug found in A9 prep: in the INSTALLED binary, `bashy src restore <app> <rev>` and `bashy src activate <app> <rev>` always refuse with "src: restore refused: no activation gate is wired" (or "activate refused"). src.RegisterActivationGate (pkg/src/activate.go:274) is called only in tests, never in production code (yoke or bashy). A10 requires the real installed CLI to restore and undo, so the CLI must use the same evidence-bound gate the web console uses (productionShapeOptions / the production activator in pkg/webconsole/shaped_candidate.go).

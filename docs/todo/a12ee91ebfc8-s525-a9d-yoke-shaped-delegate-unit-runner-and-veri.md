@@ -3,14 +3,19 @@ id: a12ee91ebfc8
 kind: bug
 title: 'S525.A9d yoke: shaped delegate, unit runner and verifier exec ''bashy'' from PATH, not the running binary (old bashy ran, so every request failed)'
 seq: 2922
-status: todo
+status: done
 priority: p0
 labels:
     - software-shaping
 created: 2026-10-29T17:12:58.518104Z
+weave: 707
+assignee: claude-sonnet5.5
 sprint: 525
 sprint_id: 9a9a4443-02c8-53a3-b0bd-96bd67980643
 sprint_title: 'Software Shaping foundation: verified personal features and same-host promotion'
+closed: 2026-10-29T17:29:36.976806Z
+resolution: fixed
+closed_by: claude-sonnet5.5-e
 ---
 
 Sprint 525, goal a9 (parent eb1be776). Bug found by the live A9 smoke (Linux, elephant WSL, installed candidate bashy c7680732 / yoke e2842bb5). Every shaping request failed with:

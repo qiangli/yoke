@@ -3,14 +3,19 @@ id: 9cac261d8d6e
 kind: bug
 title: 'S525.A5w-oci yoke: @sandbox() zero setup (default bashy image) + bare @sandbox never runs unsandboxed'
 seq: 2919
-status: todo
+status: done
 priority: p1
 labels:
     - software-shaping
 created: 2026-10-29T16:54:32.383847Z
+weave: 721
+assignee: muse-conductor
 sprint: 525
 sprint_id: 9a9a4443-02c8-53a3-b0bd-96bd67980643
 sprint_title: 'Software Shaping foundation: verified personal features and same-host promotion'
+closed: 2026-10-29T19:28:21.24686Z
+resolution: fixed
+closed_by: muse-conductor-s
 ---
 
 Sprint 525, goal a5w. Follow-up bugs from A5w (yoke c9e58916), found in the manager review.
