@@ -14,7 +14,7 @@
 // reported as { error: "..." } rather than thrown, so the caller can
 // tell "the page said no" from "injection failed".
 (() => {
-  const VERSION = 14;
+  const VERSION = 16;
   if (globalThis.__bashyPage && globalThis.__bashyPage.version === VERSION) return;
 
   // Native controls plus the ARIA widgets component libraries build
@@ -65,20 +65,27 @@
     let cur = el;
     while (cur && cur.nodeType === Node.ELEMENT_NODE) {
       const root = cur.getRootNode();
+      let anchored = false;
       if (cur.id && root.querySelectorAll("#" + cssEscape(cur.id)).length === 1) {
         parts.unshift("#" + cssEscape(cur.id));
+        anchored = true;
       } else if (cur.getAttribute("name") && root.querySelectorAll(`${cur.localName}[name=${JSON.stringify(cur.getAttribute("name"))}]`).length === 1) {
         parts.unshift(`${cur.localName}[name=${JSON.stringify(cur.getAttribute("name"))}]`);
+        anchored = true;
       } else {
         const tag = cur.localName;
-        const siblings = cur.parentElement ? Array.from(cur.parentElement.children).filter((x) => x.localName === tag) : [];
+        const siblings = cur.parentNode && cur.parentNode.children ? Array.from(cur.parentNode.children).filter((x) => x.localName === tag) : [];
         parts.unshift(tag + (siblings.length > 1 ? `:nth-of-type(${siblings.indexOf(cur) + 1})` : ""));
       }
-      if (root.nodeType === Node.DOCUMENT_FRAGMENT_NODE && root.host) {
-        parts.unshift(">>>");
-        cur = root.host;
-      } else if (parts[0].startsWith("#") || parts[0].includes("[name=")) break;
-      else cur = cur.parentElement;
+      if (anchored || !cur.parentElement) {
+        if (root.nodeType === Node.DOCUMENT_FRAGMENT_NODE && root.host) {
+          parts.unshift(">>>");
+          cur = root.host;
+          continue;
+        }
+        break;
+      }
+      cur = cur.parentElement;
     }
     const local = parts.join(" ").replace(/\s*>>>\s*/g, " >>> ");
     const frame = el.ownerDocument && el.ownerDocument.defaultView && el.ownerDocument.defaultView.frameElement;
@@ -89,8 +96,12 @@
     const tag = el.localName;
     const name = el.getAttribute("name") || "";
     const label = fieldLabel(el);
-    const inFrame = el.ownerDocument && el.ownerDocument !== document;
-    const stable_id = inFrame && globalThis.__bashyCDPTraverseFrames ? selectorOf(el) : (el.id || selectorOf(el));
+    // HTML IDs are scoped to their document/root and need not be unique.
+    // Keep familiar IDs only when they uniquely identify a top-document
+    // element; qualify shadow, duplicate-ID and traversed-frame fields.
+    const uniqueDocumentID = el.id && el.getRootNode() === document &&
+      document.querySelectorAll("#" + cssEscape(el.id)).length === 1;
+    const stable_id = uniqueDocumentID ? el.id : selectorOf(el);
     return { tag, name, label, stable_id };
   }
 

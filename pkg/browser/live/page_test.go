@@ -315,6 +315,35 @@ func TestPageStableFieldIndexRefusesShiftAndAllowsValueChange(t *testing.T) {
 	}
 }
 
+func TestPageStableIDsAndSelectorsDistinguishDuplicateAndShadowFields(t *testing.T) {
+	h := newPageHarness(t, map[string]string{"/form": `<!doctype html><body>
+<input id="duplicate" aria-label="Alpha"><input id="duplicate" aria-label="Bravo">
+<div id="host-one"></div><div id="host-two"></div><script>
+document.getElementById('host-one').attachShadow({mode:'open'}).innerHTML = '<input id="shared" aria-label="Charlie"><div><input aria-label="Echo"></div><div><input aria-label="Foxtrot"></div>';
+document.getElementById('host-two').attachShadow({mode:'open'}).innerHTML = '<input id="shared" aria-label="Delta">';
+</script></body>`})
+	h.open("/form")
+	seen := map[string]bool{}
+	for _, rec := range extractElements(t, h.call("extract", nil)) {
+		if rec["tag"] != "input" {
+			continue
+		}
+		id := fmt.Sprint(rec["stable_id"])
+		if seen[id] {
+			t.Fatalf("distinct fields share stable_id %q", id)
+		}
+		seen[id] = true
+		if got := h.call("type", map[string]any{"selector": rec["selector"], "text": rec["label"]}); got["error"] != nil {
+			t.Fatalf("selector %v: %v", rec["selector"], got)
+		}
+	}
+	var values []string
+	h.mainEval(`(() => { const out=[]; function walk(root) { for (const el of root.querySelectorAll('*')) { if(el.tagName==='INPUT') out.push(el.value); if(el.shadowRoot) walk(el.shadowRoot); } } walk(document); return out; })()`, &values)
+	if got := strings.Join(values, ","); got != "Alpha,Bravo,Charlie,Echo,Foxtrot,Delta" {
+		t.Fatalf("stable selectors wrote the wrong fields: %s", got)
+	}
+}
+
 func TestPageSelectorModesShadowAndFrame(t *testing.T) {
 	h := newPageHarness(t, map[string]string{"/form": selectorFixture, "/child": `<input name="child" aria-label="Child name">`})
 	h.open("/form")
