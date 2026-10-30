@@ -26,6 +26,7 @@ const hiddenFirstFixture = `<!doctype html><html><body>
 <section style="display:none"><input type="email" id="q-only-hidden"></section>
 <label for="q-labelled">Labelled answer</label><input id="q-labelled" name="labelled">
 <div id="shadow-host"></div>
+<iframe id="answer-frame" src="/child"></iframe>
 <script>
 document.getElementById('shadow-host').attachShadow({mode:'open'}).innerHTML = '<label for="shadow-answer">Shadow answer</label><input id="shadow-answer" name="shadow">';
 window.hit='';
@@ -46,8 +47,12 @@ func TestSoloSelectorPrefersVisibleMatch(t *testing.T) {
 	t.Setenv("BASHY_SECRETS_TOKEN", "")
 	t.Setenv("BASHY_API_KEY", "")
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if r.URL.Path == "/child" {
+			fmt.Fprint(w, `<!doctype html><label for="q-labelled">Child answer</label><input id="q-labelled" name="child">`)
+			return
+		}
 		fmt.Fprint(w, hiddenFirstFixture)
 	}))
 	defer srv.Close()
@@ -124,6 +129,14 @@ func TestSoloSelectorPrefersVisibleMatch(t *testing.T) {
 		if res := exec(wire.Action{Type: wire.ActionType, Selector: sel, Text: "shadow"}); !res.Success {
 			t.Fatalf("shadow selector %q: %+v", sel, res)
 		}
+	}
+	for _, sel := range []string{"label=Child answer", "xpath=//*[@name='child']", "framecss:#answer-frame::#q-labelled"} {
+		if res := exec(wire.Action{Type: wire.ActionType, Selector: sel, Text: "frame"}); !res.Success {
+			t.Fatalf("frame selector %q: %+v", sel, res)
+		}
+	}
+	if got := str(`document.querySelector('iframe').contentDocument.getElementById('q-labelled').value`); got != "frame" {
+		t.Fatalf("same-origin frame value %q", got)
 	}
 
 	// click lands on the visible match too.
@@ -203,6 +216,7 @@ func TestSoloSelectorPrefersVisibleMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	var idx int
+	var childIdx int
 	for _, e := range listing.Elements {
 		if e.Name == "labelled" {
 			idx = e.Index
@@ -210,9 +224,21 @@ func TestSoloSelectorPrefersVisibleMatch(t *testing.T) {
 				t.Fatalf("field metadata: %+v", e)
 			}
 		}
+		if e.Name == "child" {
+			childIdx = e.Index
+			if !strings.HasPrefix(e.StableID, "framecss:") || !strings.HasPrefix(e.Selector, "framecss:") || e.Label != "Child answer" {
+				t.Fatalf("frame metadata: %+v", e)
+			}
+		}
 	}
 	if idx == 0 {
 		t.Fatalf("labelled field absent: %s", ex.Data)
+	}
+	if childIdx == 0 {
+		t.Fatalf("child field absent: %s", ex.Data)
+	}
+	if res := exec(wire.Action{Type: wire.ActionType, ElementID: childIdx, Text: "child index"}); !res.Success {
+		t.Fatalf("frame index fill: %+v", res)
 	}
 	if res := exec(wire.Action{Type: wire.ActionType, ElementID: idx, Text: "first"}); !res.Success {
 		t.Fatalf("index fill: %+v", res)

@@ -14,7 +14,7 @@
 // reported as { error: "..." } rather than thrown, so the caller can
 // tell "the page said no" from "injection failed".
 (() => {
-  const VERSION = 12;
+  const VERSION = 13;
   if (globalThis.__bashyPage && globalThis.__bashyPage.version === VERSION) return;
 
   // Native controls plus the ARIA widgets component libraries build
@@ -34,6 +34,9 @@
       for (const el of node.querySelectorAll("*")) {
         if (el.matches(selector)) found.push(el);
         if (el.shadowRoot) walk(el.shadowRoot);
+        if (globalThis.__bashyCDPTraverseFrames && (el.localName === "iframe" || el.localName === "frame")) {
+          try { if (el.contentDocument) walk(el.contentDocument); } catch (_) { /* cross-origin frame */ }
+        }
       }
     }
     walk(root);
@@ -71,20 +74,23 @@
         const siblings = cur.parentElement ? Array.from(cur.parentElement.children).filter((x) => x.localName === tag) : [];
         parts.unshift(tag + (siblings.length > 1 ? `:nth-of-type(${siblings.indexOf(cur) + 1})` : ""));
       }
-      if (root instanceof ShadowRoot) {
+      if (root.nodeType === Node.DOCUMENT_FRAGMENT_NODE && root.host) {
         parts.unshift(">>>");
         cur = root.host;
       } else if (parts[0].startsWith("#") || parts[0].includes("[name=")) break;
       else cur = cur.parentElement;
     }
-    return parts.join(" ").replace(/\s*>>>\s*/g, " >>> ");
+    const local = parts.join(" ").replace(/\s*>>>\s*/g, " >>> ");
+    const frame = el.ownerDocument && el.ownerDocument.defaultView && el.ownerDocument.defaultView.frameElement;
+    return frame && globalThis.__bashyCDPTraverseFrames ? `framecss:${selectorOf(frame)}::${local}` : local;
   }
 
   function identityOf(el) {
     const tag = el.localName;
     const name = el.getAttribute("name") || "";
     const label = fieldLabel(el);
-    const stable_id = el.id || selectorOf(el);
+    const inFrame = el.ownerDocument && el.ownerDocument !== document;
+    const stable_id = inFrame && globalThis.__bashyCDPTraverseFrames ? selectorOf(el) : (el.id || selectorOf(el));
     return { tag, name, label, stable_id };
   }
 
@@ -94,6 +100,15 @@
 
   function resolveSelector(root, selector) {
     const s = String(selector || "").trim();
+    if (s.startsWith("framecss:")) {
+      const cut = s.lastIndexOf("::");
+      if (cut < 0) return [];
+      const frames = resolveSelector(root, s.slice(9, cut));
+      return frames.flatMap((frame) => {
+        try { return frame.contentDocument ? resolveSelector(frame.contentDocument, s.slice(cut + 2)) : []; }
+        catch (_) { return []; }
+      });
+    }
     if (s.startsWith("text=") || s.startsWith("label=")) {
       const want = norm(s.slice(s.indexOf("=") + 1));
       const pool = deepElements(root, CANDIDATES);
@@ -111,8 +126,8 @@
       function evaluate(node) {
         // Chrome rejects a ShadowRoot as an XPath context. Evaluate a
         // detached mirror and map its elements back to the open root.
-        let context = node, doc = document, original = null, mirrored = null;
-        if (node instanceof ShadowRoot) {
+        let context = node, doc = node.nodeType === Node.DOCUMENT_NODE ? node : (node.ownerDocument || document), original = null, mirrored = null;
+        if (node.nodeType === Node.DOCUMENT_FRAGMENT_NODE && node.host) {
           doc = document.implementation.createHTMLDocument("");
           const clone = (from, to) => {
             for (const child of from.children) {
@@ -135,7 +150,12 @@
       }
       function walk(node) {
         evaluate(node);
-        for (const el of node.querySelectorAll("*")) if (el.shadowRoot) walk(el.shadowRoot);
+        for (const el of node.querySelectorAll("*")) {
+          if (el.shadowRoot) walk(el.shadowRoot);
+          if (globalThis.__bashyCDPTraverseFrames && (el.localName === "iframe" || el.localName === "frame")) {
+            try { if (el.contentDocument) walk(el.contentDocument); } catch (_) { /* cross-origin frame */ }
+          }
+        }
       }
       walk(root);
       return [...new Set(found)];
@@ -153,7 +173,7 @@
   }
 
   function shown(el) {
-    const cs = getComputedStyle(el);
+    const cs = el.ownerDocument.defaultView.getComputedStyle(el);
     if (cs.visibility === "hidden" || cs.display === "none" || cs.opacity === "0") return false;
     const r = el.getBoundingClientRect();
     return r.width > 0 && r.height > 0;
@@ -488,9 +508,10 @@
   // shadow `value` on the instance (React's tracker, Lit, Angular's
   // value accessor) then see the input event as a real change.
   function setNative(el, text) {
-    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype
-      : el instanceof HTMLSelectElement ? HTMLSelectElement.prototype
-      : HTMLInputElement.prototype;
+    const view = el.ownerDocument.defaultView;
+    const proto = el instanceof view.HTMLTextAreaElement ? view.HTMLTextAreaElement.prototype
+      : el instanceof view.HTMLSelectElement ? view.HTMLSelectElement.prototype
+      : view.HTMLInputElement.prototype;
     const desc = Object.getOwnPropertyDescriptor(proto, "value");
     if (desc && desc.set) desc.set.call(el, text);
     else el.value = text;

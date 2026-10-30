@@ -53,7 +53,7 @@ func evalGuard(cdpCtx context.Context, expr string, out any) error {
 			}
 			return fmt.Errorf("guard: load guard.js: %w", err)
 		}
-		res, exc, err := runtime.Evaluate(expr).WithContextID(world).WithAwaitPromise(true).WithReturnByValue(true).Do(ctx)
+		res, exc, err := runtime.Evaluate("globalThis.__bashyCDPTraverseFrames=true;\n" + expr).WithContextID(world).WithAwaitPromise(true).WithReturnByValue(true).Do(ctx)
 		if err != nil {
 			return err
 		}

@@ -182,7 +182,7 @@ func hiddenOnlyMessage(selector string) string {
 // querySelectorAll handles comma lists and :not() natively; the shown
 // predicate mirrors the live extension's shown().
 func resolveSelectorScript(sel string) string {
-	return extension.PageJS + "\n" + `(function(){
+	return "globalThis.__bashyCDPTraverseFrames=true;\n" + extension.PageJS + "\n" + `(function(){
   var SEL=` + JSString(sel) + `;
   function shown(el){var cs=getComputedStyle(el);if(cs.visibility==="hidden"||cs.display==="none"||cs.opacity==="0")return false;var r=el.getBoundingClientRect();return r.width>0&&r.height>0;}
   var all;
@@ -202,9 +202,9 @@ func resolveSelectorScript(sel string) string {
 // between the check and the action.
 func targetJSPath(sel string, includeHidden bool) string {
 	if includeHidden {
-		return `(function(){` + extension.PageJS + `var SEL=` + JSString(sel) + `;try{return globalThis.__bashyPage.resolveSelector(document, SEL)[0] || null;}catch(e){return null;}})()`
+		return `(function(){globalThis.__bashyCDPTraverseFrames=true;` + extension.PageJS + `var SEL=` + JSString(sel) + `;try{return globalThis.__bashyPage.resolveSelector(document, SEL)[0] || null;}catch(e){return null;}})()`
 	}
-	return `(function(){` + extension.PageJS + `
+	return `(function(){globalThis.__bashyCDPTraverseFrames=true;` + extension.PageJS + `
   var SEL=` + JSString(sel) + `;
   function shown(el){var cs=getComputedStyle(el);if(cs.visibility==="hidden"||cs.display==="none"||cs.opacity==="0")return false;var r=el.getBoundingClientRect();return r.width>0&&r.height>0;}
   var all;
@@ -378,7 +378,7 @@ func DispatchEvent(ctx context.Context, a wire.Action) (*wire.Result, error) {
 	if strings.TrimSpace(a.Event) == "" {
 		return &wire.Result{Error: "dispatch_event: event name required"}, nil
 	}
-	script := extension.PageJS + "\n" + `(function(){
+	script := "globalThis.__bashyCDPTraverseFrames=true;\n" + extension.PageJS + "\n" + `(function(){
   var NAME=` + JSString(a.Event) + `, DETAIL=` + JSString(a.Detail) + `, SEL=` + JSString(a.Selector) + `;
   var detail = null;
   if (DETAIL) { try { detail = JSON.parse(DETAIL); } catch (e) { detail = DETAIL; } }
