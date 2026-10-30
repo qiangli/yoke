@@ -14,7 +14,7 @@
 // reported as { error: "..." } rather than thrown, so the caller can
 // tell "the page said no" from "injection failed".
 (() => {
-  const VERSION = 9;
+  const VERSION = 11;
   if (globalThis.__bashyPage && globalThis.__bashyPage.version === VERSION) return;
 
   // Native controls plus the ARIA widgets component libraries build
@@ -102,16 +102,33 @@
     if (s.startsWith("xpath=") || s.startsWith("/") || s.startsWith("(")) {
       const expr = s.startsWith("xpath=") ? s.slice(6) : s;
       const found = [];
-      function walk(node) {
-        try {
-          const result = document.evaluate(expr, node, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
-          for (let i = 0; i < result.snapshotLength; i++) {
-            const el = result.snapshotItem(i);
-            if (el && el.nodeType === Node.ELEMENT_NODE) found.push(el);
-          }
-        } catch (e) {
-          if (node === root) throw e;
+      function evaluate(node) {
+        // Chrome rejects a ShadowRoot as an XPath context. Evaluate a
+        // detached mirror and map its elements back to the open root.
+        let context = node, doc = document, original = null, mirrored = null;
+        if (node instanceof ShadowRoot) {
+          doc = document.implementation.createHTMLDocument("");
+          const clone = (from, to) => {
+            for (const child of from.children) {
+              const copy = child.cloneNode(false);
+              to.appendChild(copy);
+              original.push(child); mirrored.push(copy);
+              clone(child, copy);
+            }
+          };
+          original = []; mirrored = [];
+          clone(node, doc.body);
+          context = doc;
         }
+        const result = doc.evaluate(expr, context, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+        for (let i = 0; i < result.snapshotLength; i++) {
+          const el = result.snapshotItem(i);
+          const mapped = mirrored ? original[mirrored.indexOf(el)] : el;
+          if (mapped && mapped.nodeType === Node.ELEMENT_NODE) found.push(mapped);
+        }
+      }
+      function walk(node) {
+        evaluate(node);
         for (const el of node.querySelectorAll("*")) if (el.shadowRoot) walk(el.shadowRoot);
       }
       walk(root);
@@ -318,7 +335,7 @@
       if (!el) return { __miss: `element index ${params.element_id} out of range (extract listed ${flat.length})`, __notfound: true };
       if (opts && opts.write) {
         const identities = extracted.get(JSON.stringify([params.scope || "", !!params.include_hidden]));
-        const expected = identities && identities[params.element_id - 1];
+        const expected = params.expected_identity || (identities && identities[params.element_id - 1]);
         if (!sameIdentity(expected, identityOf(el))) return {
           __miss: `guard:fill-mismatch: index ${params.element_id} no longer identifies the extracted field`,
           __mismatch: true,

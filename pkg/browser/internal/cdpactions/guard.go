@@ -19,6 +19,7 @@ import (
 
 	"github.com/qiangli/yoke/pkg/browser/guard"
 	"github.com/qiangli/yoke/pkg/browser/live"
+	"github.com/qiangli/yoke/pkg/browser/live/extension"
 	"github.com/qiangli/yoke/pkg/browser/wire"
 )
 
@@ -52,7 +53,7 @@ func evalGuard(cdpCtx context.Context, expr string, out any) error {
 			}
 			return fmt.Errorf("guard: load guard.js: %w", err)
 		}
-		res, exc, err := runtime.Evaluate(expr).WithContextID(world).WithReturnByValue(true).Do(ctx)
+		res, exc, err := runtime.Evaluate(expr).WithContextID(world).WithAwaitPromise(true).WithReturnByValue(true).Do(ctx)
 		if err != nil {
 			return err
 		}
@@ -72,7 +73,8 @@ func (g GuardBackend) InspectField(ctx context.Context, a wire.Action) (guard.Fi
 		guard.Field
 		Error string `json:"error"`
 	}
-	if err := evalGuard(cdpCtx, fmt.Sprintf("globalThis.__bashyGuard.inspectSelector(%s)", JSString(a.Selector)), &out); err != nil {
+	params, _ := json.Marshal(a)
+	if err := evalGuard(cdpCtx, extension.PageJS+"\n"+fmt.Sprintf("globalThis.__bashyPage.guardField(%s)", params), &out); err != nil {
 		return guard.Field{}, err
 	}
 	if out.Error != "" {
@@ -86,12 +88,8 @@ func (g GuardBackend) FocusField(ctx context.Context, a wire.Action) error {
 	if err != nil {
 		return err
 	}
-	expr := fmt.Sprintf(`(() => {
-  const sel = %s;
-  const el = sel ? document.querySelector(sel) : document.activeElement;
-  if (!el) return { error: "guard: no element matches " + JSON.stringify(sel) };
-  return globalThis.__bashyGuard.focusForHuman(el);
-})()`, JSString(a.Selector))
+	params, _ := json.Marshal(a)
+	expr := extension.PageJS + "\n" + fmt.Sprintf("globalThis.__bashyPage.guardFocus(%s)", params)
 	var out struct {
 		Error string `json:"error"`
 	}
@@ -122,12 +120,8 @@ func (g GuardBackend) FillAdmitted(ctx context.Context, a wire.Action, _ string,
 	if err != nil || res == nil || !res.Success {
 		return guard.Verify{}, errors.New("guard: fill failed")
 	}
-	expr := fmt.Sprintf(`(() => {
-  const el = document.querySelector(%s);
-  if (!el) return { error: "missing" };
-  const v = ("value" in el && !el.isContentEditable) ? String(el.value) : (el.innerText || el.textContent || "").replace(/\n$/, "");
-  return { value: v };
-})()`, JSString(a.Selector))
+	params, _ := json.Marshal(a)
+	expr := extension.PageJS + "\n" + fmt.Sprintf(`(() => { const r = globalThis.__bashyPage.readValue(%s); return r.error ? {error:r.error} : {value:r.value}; })()`, params)
 	var out struct {
 		Value string `json:"value"`
 		Error string `json:"error"`

@@ -323,7 +323,7 @@ func TestPageSelectorModesShadowAndFrame(t *testing.T) {
 	if got := h.call("click", map[string]any{"selector": "text=Save"}); got["error"] != nil {
 		t.Fatal(got)
 	}
-	for _, selector := range []string{"#shadow-field", "#host >>> #shadow-field", "label=Shadow name"} {
+	for _, selector := range []string{"#shadow-field", "#host >>> #shadow-field", "label=Shadow name", "xpath=//*[@id='shadow-field']", "(//*[@id='shadow-field'])[1]"} {
 		if got := h.call("type", map[string]any{"selector": selector, "text": "shadow"}); got["error"] != nil {
 			t.Fatalf("shadow %s: %v", selector, got)
 		}

@@ -120,9 +120,9 @@ func resolveSelectorScript(sel string) string {
 // between the check and the action.
 func targetJSPath(sel string, includeHidden bool) string {
 	if includeHidden {
-		return extension.PageJS + "\n" + `(function(){var SEL=` + JSString(sel) + `;try{return globalThis.__bashyPage.resolveSelector(document, SEL)[0] || null;}catch(e){return null;}})()`
+		return `(function(){` + extension.PageJS + `var SEL=` + JSString(sel) + `;try{return globalThis.__bashyPage.resolveSelector(document, SEL)[0] || null;}catch(e){return null;}})()`
 	}
-	return extension.PageJS + "\n" + `(function(){
+	return `(function(){` + extension.PageJS + `
   var SEL=` + JSString(sel) + `;
   function shown(el){var cs=getComputedStyle(el);if(cs.visibility==="hidden"||cs.display==="none"||cs.opacity==="0")return false;var r=el.getBoundingClientRect();return r.width>0&&r.height>0;}
   var all;
@@ -230,14 +230,17 @@ func focusHiddenNode(ctx context.Context, path string) error {
 // the only signal that a form had silently resolved nothing.
 func Click(ctx context.Context, a wire.Action) (*wire.Result, error) {
 	if a.ElementID > 0 {
-		var out any
-		if err := chromedp.Run(ctx, chromedp.Evaluate(ClickByIndexScript(a), &out)); err != nil {
+		var out struct {
+			Content string `json:"content"`
+			Error   string `json:"error"`
+		}
+		if err := evalGuard(ctx, ClickByIndexScript(a), &out); err != nil {
 			return &wire.Result{Error: err.Error()}, nil
 		}
-		if b, ok := out.(bool); ok && b {
+		if out.Error == "" {
 			return &wire.Result{Success: true, Content: "clicked"}, nil
 		}
-		return &wire.Result{Error: fmt.Sprintf("click: element index %d out of range for the current extract enumeration", a.ElementID)}, nil
+		return &wire.Result{Error: out.Error}, nil
 	}
 	if a.Selector != "" {
 		wctx, cancel := context.WithTimeout(ctx, actionTimeout(a))
@@ -273,25 +276,7 @@ func Click(ctx context.Context, a wire.Action) (*wire.Result, error) {
 // landmark skip, same visibility filter — so [N] in an extract listing
 // is the element this clicks.
 func ClickByIndexScript(a wire.Action) string {
-	return `(function(){
-  var SCOPE_SEL=` + JSString(a.Scope) + `, IDX=` + fmt.Sprintf("%d", a.ElementID) + `, INCLUDE_HIDDEN=` + fmt.Sprintf("%v", a.IncludeHidden) + `;
-  var root = SCOPE_SEL ? document.querySelector(SCOPE_SEL) : document;
-  if (!root) return false;
-  var navFilter = !SCOPE_SEL;
-  function shown(el){var cs=getComputedStyle(el);if(cs.visibility==="hidden"||cs.display==="none"||cs.opacity==="0")return false;var r=el.getBoundingClientRect();return r.width>0&&r.height>0;}
-  var all = root.querySelectorAll("a, button, input, select, textarea, [role='button'], [role='link']");
-  var flat = [];
-  for (var i=0;i<all.length;i++){
-    var el=all[i];
-    if (navFilter && el.closest && el.closest("nav, aside, [role='navigation'], [role='complementary']")) continue;
-    if (!INCLUDE_HIDDEN && !shown(el)) continue;
-    flat.push(el);
-  }
-  var t = flat[IDX-1];
-  if (!t) return false;
-  t.click();
-  return true;
-})()`
+	return extension.PageJS + "\n" + `globalThis.__bashyPage.click({scope:` + JSString(a.Scope) + `,element_id:` + fmt.Sprintf("%d", a.ElementID) + `,include_hidden:` + fmt.Sprintf("%v", a.IncludeHidden) + `})`
 }
 
 // DispatchEvent fires a named DOM event. Over CDP this is a genuine
@@ -354,6 +339,20 @@ func ClickByTextScript(matchText, scope string) string {
 }
 
 func Type(ctx context.Context, a wire.Action) (*wire.Result, error) {
+	if a.ElementID > 0 {
+		var out struct {
+			Content string `json:"content"`
+			Error   string `json:"error"`
+		}
+		expr := extension.PageJS + "\n" + `(async()=>globalThis.__bashyPage.type({scope:` + JSString(a.Scope) + `,element_id:` + fmt.Sprintf("%d", a.ElementID) + `,include_hidden:` + fmt.Sprintf("%v", a.IncludeHidden) + `,text:` + JSString(a.Text) + `}))()`
+		if err := evalGuard(ctx, expr, &out); err != nil {
+			return &wire.Result{Error: err.Error()}, nil
+		}
+		if out.Error != "" {
+			return &wire.Result{Error: out.Error}, nil
+		}
+		return &wire.Result{Success: true, Content: "typed"}, nil
+	}
 	if a.Selector == "" {
 		return &wire.Result{Error: "type: selector required"}, nil
 	}
@@ -485,65 +484,7 @@ func ExtractScript(a wire.Action) string {
 	if offset < 0 {
 		offset = 0
 	}
-	return `(function(){
-  var SCOPE_SEL=` + scope + `, MATCH=` + match + `, LIMIT=` + fmt.Sprintf("%d", limit) + `, OFFSET=` + fmt.Sprintf("%d", offset) + `, INCLUDE_HIDDEN=` + fmt.Sprintf("%v", a.IncludeHidden) + `;
-  var root = SCOPE_SEL ? document.querySelector(SCOPE_SEL) : document;
-  if (!root) return JSON.stringify({error:"extract: scope "+SCOPE_SEL+" not found"});
-  var navFilter = !SCOPE_SEL;
-  function shown(el){var cs=getComputedStyle(el);if(cs.visibility==="hidden"||cs.display==="none"||cs.opacity==="0")return false;var r=el.getBoundingClientRect();return r.width>0&&r.height>0;}
-  var all = root.querySelectorAll("a, button, input, select, textarea, [role='button'], [role='link']");
-  var matches = [];
-  for (var i=0; i<all.length; i++) {
-    var el = all[i];
-    if (navFilter && el.closest && el.closest("nav, aside, [role='navigation'], [role='complementary']")) continue;
-    var text = (el.innerText || el.value || el.getAttribute("aria-label") || "").trim();
-    if (MATCH && text.toLowerCase().indexOf(MATCH.toLowerCase()) < 0) {
-      var ph = el.getAttribute && el.getAttribute("placeholder");
-      var ar = el.getAttribute && el.getAttribute("aria-label");
-      if (!(ph && ph.toLowerCase().indexOf(MATCH.toLowerCase())>=0) && !(ar && ar.toLowerCase().indexOf(MATCH.toLowerCase())>=0)) continue;
-    }
-    if (!INCLUDE_HIDDEN && !shown(el)) continue;
-    matches.push(el);
-  }
-  var total = matches.length;
-  var slice = matches.slice(OFFSET, OFFSET+LIMIT);
-  var lines = [], records = [];
-  var G = globalThis.__bashyGuard;
-  for (var j=0; j<slice.length; j++) {
-    var el = slice[j];
-    var tag = el.tagName.toLowerCase();
-    // A guarded field (sensitive-input guard) never shows its value.
-    var g = G ? G.inspect(el) : {guarded: el.type === "password", reason: "field:type-password"};
-    var text = (g.guarded ? (el.getAttribute("aria-label") || el.getAttribute("placeholder") || "") :
-      (el.innerText || el.value || el.getAttribute("aria-label") || "")).trim().slice(0,80);
-    var attrs = [], attrMap = {};
-    var keys = ["type","placeholder","href","name","value","role","aria-label"];
-    for (var k=0; k<keys.length; k++) {
-      var v = el.getAttribute(keys[k]);
-      if (v && !(g.guarded && keys[k] === "value")) { attrs.push(keys[k]+"=\""+String(v).slice(0,60)+"\""); attrMap[keys[k]] = String(v).slice(0,60); }
-    }
-    if (g.guarded) { attrs.push("guarded=\""+g.reason+"\""); attrMap.guarded = g.reason; }
-    var vis = shown(el);
-    var r = el.getBoundingClientRect();
-    lines.push("["+(OFFSET+j+1)+"]"+(vis?"":" (hidden)")+" <"+tag+" "+attrs.join(" ")+">"+text+"</"+tag+">");
-    records.push({index:OFFSET+j+1, tag:tag, text:text, attrs:attrMap, visible:vis,
-                  box:{x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)}});
-  }
-  var body = (root === document ? (document.body && document.body.innerText) : root.innerText) || "";
-  var viewport = {
-    width: Math.round(document.documentElement.clientWidth || window.innerWidth || 0),
-    height: Math.round(document.documentElement.clientHeight || window.innerHeight || 0),
-    dpr: window.devicePixelRatio || 1,
-  };
-  return JSON.stringify({
-    content: body.length>16000 ? body.slice(0,16000)+"\n... (truncated)" : body,
-    elements: lines.join("\n"),
-    total: total,
-    truncated: total > (OFFSET+LIMIT),
-    viewport: viewport,
-    data: JSON.stringify({viewport: viewport, elements: records}),
-  });
-})()`
+	return extension.PageJS + "\n" + `var SCOPE_SEL=` + scope + `, MATCH=` + match + `, LIMIT=` + fmt.Sprintf("%d", limit) + `, OFFSET=` + fmt.Sprintf("%d", offset) + `, INCLUDE_HIDDEN=` + fmt.Sprintf("%v", a.IncludeHidden) + `;` + "\n" + `JSON.stringify(globalThis.__bashyPage.extract({scope:SCOPE_SEL,match_text:MATCH,limit:LIMIT,offset:OFFSET,include_hidden:INCLUDE_HIDDEN}))`
 }
 
 func ParseExtractPayload(raw string) *wire.Result {
