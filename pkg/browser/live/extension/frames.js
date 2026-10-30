@@ -67,7 +67,7 @@ function mergeExtract(frames, params) {
   }
   const page = recs.slice(OFFSET, OFFSET + LIMIT);
   const lines = page.map((e) =>
-    `[${e.index}]${e.visible ? "" : " (hidden)"} ${e.line || `<${e.tag}>${e.text}</${e.tag}>`}` +
+    `[${e.index}]${e.visible ? "" : " (hidden)"} ${e.selector ? e.selector + " " : ""}${e.line || `<${e.tag}>${e.text}</${e.tag}>`}` +
     (e.frame_id ? ` (frame ${e.frame_id})` : ""));
   let content = (top && top.result.content) || "";
   if (texts.length) content += "\n\n" + texts.join("\n\n");

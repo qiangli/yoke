@@ -252,6 +252,95 @@ func TestPageClickByIndexFocusesTheField(t *testing.T) {
 	}
 }
 
+const selectorFixture = `<!doctype html><html><body>
+<form id="form"><label for="first">First name</label><input id="first" name="first">
+<label for="second">Second name</label><input id="second" name="second"></form>
+<button id="save">Save</button><div id="host"></div>
+<iframe src="/child"></iframe>
+<script>
+document.getElementById('host').attachShadow({mode:'open'}).innerHTML =
+  '<label for="shadow-field">Shadow name</label><input id="shadow-field" name="shadow">';
+</script></body></html>`
+
+func extractElements(t *testing.T, result map[string]any) []map[string]any {
+	t.Helper()
+	var data struct {
+		Elements []map[string]any `json:"elements"`
+	}
+	if err := json.Unmarshal([]byte(result["data"].(string)), &data); err != nil {
+		t.Fatal(err)
+	}
+	return data.Elements
+}
+
+func fieldRecord(t *testing.T, records []map[string]any, name string) map[string]any {
+	t.Helper()
+	for _, rec := range records {
+		if rec["name"] == name {
+			return rec
+		}
+	}
+	t.Fatalf("field %q absent from extract: %v", name, records)
+	return nil
+}
+
+func TestPageStableFieldIndexRefusesShiftAndAllowsValueChange(t *testing.T) {
+	h := newPageHarness(t, map[string]string{"/form": selectorFixture, "/child": `<input name="child" aria-label="Child name">`})
+	h.open("/form")
+	rec := fieldRecord(t, extractElements(t, h.call("extract", nil)), "second")
+	idx := int(rec["index"].(float64))
+	if rec["stable_id"] != "second" || rec["label"] != "Second name" || rec["selector"] != "#second" || rec["tag"] != "input" {
+		t.Fatalf("unexpected additive field metadata: %v", rec)
+	}
+	h.mainEval(`document.getElementById('second').value = 'old'; document.getElementById('second').value = 'new'`, nil)
+	if got := h.call("type", map[string]any{"element_id": idx, "text": "safe"}); got["error"] != nil {
+		t.Fatalf("same field with changed value refused: %v", got)
+	}
+	h.mainEval(`document.getElementById('second').outerHTML = '<input id="second" name="second" value="rendered">'`, nil)
+	if got := h.call("type", map[string]any{"element_id": idx, "text": "rerendered"}); got["error"] != nil {
+		t.Fatalf("same field after re-render refused: %v", got)
+	}
+	h.mainEval(`document.getElementById('form').insertAdjacentHTML('afterbegin', '<input name="inserted" aria-label="Inserted">')`, nil)
+	got := h.call("type", map[string]any{"element_id": idx, "text": "wrong"})
+	if !strings.Contains(fmt.Sprint(got["error"]), "guard:fill-mismatch") {
+		t.Fatalf("shifted index accepted: %v", got)
+	}
+	var values []string
+	h.mainEval(`[document.querySelector('[name=inserted]').value, document.getElementById('first').value, document.getElementById('second').value]`, &values)
+	if values[2] != "rerendered" || values[0] != "" {
+		t.Fatalf("shifted write changed a field: %v", values)
+	}
+}
+
+func TestPageSelectorModesShadowAndFrame(t *testing.T) {
+	h := newPageHarness(t, map[string]string{"/form": selectorFixture, "/child": `<input name="child" aria-label="Child name">`})
+	h.open("/form")
+	for _, selector := range []string{"#first", "xpath=//*[@id='first']", "//*[@id='first']", "(//*[@id='first'])[1]", "label=First name"} {
+		if got := h.call("type", map[string]any{"selector": selector, "text": selector}); got["error"] != nil {
+			t.Fatalf("%s: %v", selector, got)
+		}
+	}
+	if got := h.call("click", map[string]any{"selector": "text=Save"}); got["error"] != nil {
+		t.Fatal(got)
+	}
+	for _, selector := range []string{"#shadow-field", "#host >>> #shadow-field", "label=Shadow name"} {
+		if got := h.call("type", map[string]any{"selector": selector, "text": "shadow"}); got["error"] != nil {
+			t.Fatalf("shadow %s: %v", selector, got)
+		}
+	}
+	rec := fieldRecord(t, extractElements(t, h.call("extract", nil)), "shadow")
+	if !strings.Contains(rec["selector"].(string), ">>>") {
+		t.Fatalf("shadow selector lacks boundary: %v", rec)
+	}
+	frames := h.frames()
+	if len(frames) != 2 {
+		t.Fatalf("frames: %v", frames)
+	}
+	if got := h.callIn(frames[1], "type", map[string]any{"selector": "label=Child name", "text": "child"}); got["error"] != nil {
+		t.Fatalf("child frame: %v", got)
+	}
+}
+
 // clickTargetsFixture reproduces the AWS Budgets page failure: the
 // same words on a nav link, a heading link, a longer link, and the
 // intended button; plus a modal whose close control is an icon.

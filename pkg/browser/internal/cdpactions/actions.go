@@ -14,6 +14,7 @@ import (
 	"github.com/chromedp/chromedp"
 	"github.com/chromedp/chromedp/kb"
 
+	"github.com/qiangli/yoke/pkg/browser/live/extension"
 	"github.com/qiangli/yoke/pkg/browser/wire"
 )
 
@@ -99,11 +100,11 @@ func hiddenOnlyMessage(selector string) string {
 // querySelectorAll handles comma lists and :not() natively; the shown
 // predicate mirrors the live extension's shown().
 func resolveSelectorScript(sel string) string {
-	return `(function(){
+	return extension.PageJS + "\n" + `(function(){
   var SEL=` + JSString(sel) + `;
   function shown(el){var cs=getComputedStyle(el);if(cs.visibility==="hidden"||cs.display==="none"||cs.opacity==="0")return false;var r=el.getBoundingClientRect();return r.width>0&&r.height>0;}
   var all;
-  try { all = document.querySelectorAll(SEL); }
+  try { all = globalThis.__bashyPage.resolveSelector(document, SEL); }
   catch (e) { return JSON.stringify({state:"bad", reason:String((e && e.message) || e)}); }
   if (!all.length) return JSON.stringify({state:"missing"});
   for (var i=0; i<all.length; i++) { if (shown(all[i])) return JSON.stringify({state:"visible"}); }
@@ -119,13 +120,13 @@ func resolveSelectorScript(sel string) string {
 // between the check and the action.
 func targetJSPath(sel string, includeHidden bool) string {
 	if includeHidden {
-		return `(function(){var SEL=` + JSString(sel) + `;try{return document.querySelector(SEL);}catch(e){return null;}})()`
+		return extension.PageJS + "\n" + `(function(){var SEL=` + JSString(sel) + `;try{return globalThis.__bashyPage.resolveSelector(document, SEL)[0] || null;}catch(e){return null;}})()`
 	}
-	return `(function(){
+	return extension.PageJS + "\n" + `(function(){
   var SEL=` + JSString(sel) + `;
   function shown(el){var cs=getComputedStyle(el);if(cs.visibility==="hidden"||cs.display==="none"||cs.opacity==="0")return false;var r=el.getBoundingClientRect();return r.width>0&&r.height>0;}
   var all;
-  try { all = document.querySelectorAll(SEL); }
+  try { all = globalThis.__bashyPage.resolveSelector(document, SEL); }
   catch (e) { return null; }
   for (var i=0; i<all.length; i++) { if (shown(all[i])) return all[i]; }
   return all[0] || null;
