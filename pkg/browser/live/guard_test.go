@@ -168,8 +168,8 @@ func TestLiveGuardedTypeNeverSendsTheText(t *testing.T) {
 	if strings.Contains(seen, "Ada Lovelace") || strings.Contains(seen, `"method":"type"`) {
 		t.Fatalf("the extension was sent the guarded type:\n%s", seen)
 	}
-	if strings.Count(seen, `"method":"guard_field"`) != 2 || strings.Count(seen, `"method":"guard_focus"`) != 2 {
-		t.Fatalf("expected a preflight and a focus per call:\n%s", seen)
+	if strings.Count(seen, `"method":"guard_field"`) != 2 || strings.Count(seen, `"method":"guard_focus"`) != 4 || strings.Count(seen, `"release":true`) != 2 {
+		t.Fatalf("expected a preflight, a focus and a release per call:\n%s", seen)
 	}
 }
 
@@ -352,6 +352,12 @@ func TestLiveGuardFollowUpsArePinnedToTheCheckedTab(t *testing.T) {
 		for _, f := range strings.Split(ext.seen(), "\n") {
 			var req wsRequest
 			if json.Unmarshal([]byte(f), &req) != nil || req.Method != method {
+				continue
+			}
+			if req.Params["tab_id"] != float64(fakeTab) {
+				t.Fatalf("%s: %s not pinned to the checked tab: %s", ans, method, f)
+			}
+			if req.Params["release"] == true {
 				continue
 			}
 			if req.Params["tab_id"] != float64(fakeTab) {

@@ -104,6 +104,24 @@ func (g GuardBackend) FocusField(ctx context.Context, a wire.Action) error {
 	return nil
 }
 
+// ReleaseField removes the human-focus outline FocusField added.
+func (g GuardBackend) ReleaseField(ctx context.Context, a wire.Action) error {
+	cdpCtx, err := g.Ready(ctx)
+	if err != nil {
+		return err
+	}
+	expr := fmt.Sprintf(`(() => {
+  const sel = %s;
+  const el = sel ? document.querySelector(sel) : document.activeElement;
+  if (!el) return {};
+  return globalThis.__bashyGuard.releaseFocus(el);
+})()`, JSString(a.Selector))
+	var out struct {
+		Error string `json:"error"`
+	}
+	return evalGuard(cdpCtx, expr, &out)
+}
+
 // FillAdmitted types an operator's admitted answer and verifies it. probe/
 // solo have no page-side refusal in their type path, so the fill is the
 // ordinary Type; the verification reads the field back in the guard's

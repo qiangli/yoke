@@ -179,8 +179,20 @@ func seams() (HumanAsker, ValueSource) {
 	return humanAsker, valueSource
 }
 
+// FieldReleaser is an optional Backend capability: undo FocusField's
+// human-focus outline once the operator answered Done, Skip or Stop.
+type FieldReleaser interface {
+	ReleaseField(ctx context.Context, a wire.Action) error
+}
+
 func human(ctx context.Context, b Backend, a wire.Action, ref refusal) *wire.Result {
-	ref.Question = maskString(ref.Question, loadVault(ctx))
+	focused := false
+	defer func() {
+		if r, ok := b.(FieldReleaser); ok && focused {
+			_ = r.ReleaseField(context.WithoutCancel(ctx), a)
+		}
+	}()
+	ref.Question = maskWith(ref.Question, loadVault(ctx), true)
 	asker, values := seams()
 	if asker == nil {
 		return outcome(ClassStopped, ref, "no-human-channel", "")
@@ -215,6 +227,7 @@ func human(ctx context.Context, b Backend, a wire.Action, ref refusal) *wire.Res
 		if !q.CanSelf {
 			return outcome(ClassStopped, ref, "self-not-offered", "")
 		}
+		focused = true
 		if err := b.FocusField(ctx, a); err != nil {
 			return outcome(ClassStopped, ref, "focus-failed", "")
 		}

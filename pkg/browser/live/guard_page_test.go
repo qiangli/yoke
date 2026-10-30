@@ -33,24 +33,19 @@ func typeformScreen(question, input string) string {
 
 const plainBox = `<input type="text" id="answer" placeholder="Type your answer here...">`
 
-// (a) The visible question text counts as the field's label: refused
-// BEFORE typing whatever the answer, per kind.
-func TestGuardFieldReadsTheVisibleQuestion(t *testing.T) {
+const ssnBox = `<input type="text" id="answer" aria-label="Social Security Number">`
+
+// (a) The surrounding/visible question never classifies a field: a
+// Typeform heading over an unlabelled box is NOT guarded whatever it says —
+// but the question text is still reported for the ask. The field's OWN
+// identity (label, aria-label, name) still guards.
+func TestGuardFieldIgnoresSurroundingQuestion(t *testing.T) {
 	cases := map[string]string{
-		"/ssn":      "Social Security Number",
-		"/ssn2":     "Please enter your SSN",
-		"/tax":      "Tax ID (TIN / EIN)",
-		"/ein":      "Employer Identification Number",
-		"/bank":     "Bank account",
-		"/routing":  "Bank routing number",
-		"/card":     "Credit card number",
-		"/password": "Password",
-		"/username": "Username",
-	}
-	want := map[string]string{
-		"/ssn": "field:label-ssn", "/ssn2": "field:label-ssn", "/tax": "field:label-tax",
-		"/ein": "field:label-ein", "/bank": "field:label-account", "/routing": "field:label-routing",
-		"/card": "field:label-card", "/password": "field:label-password", "/username": "field:label-username",
+		"/aws":    "AWS account ID",
+		"/org":    "Org ID",
+		"/nvidia": "Which NVIDIA card and account tier do you use for your password manager GPU?",
+		"/bank":   "Bank account number",
+		"/card":   "Credit card number",
 	}
 	fixtures := map[string]string{}
 	for path, q := range cases {
@@ -60,23 +55,47 @@ func TestGuardFieldReadsTheVisibleQuestion(t *testing.T) {
 	for path, q := range cases {
 		h.open(path)
 		g := h.call("guardField", map[string]any{"selector": "#answer"})
-		if g["guarded"] != true || g["reason"] != want[path] {
-			t.Errorf("%s (%q): guardField = %v, want guarded %s", path, q, g, want[path])
+		if g["guarded"] != false {
+			t.Errorf("%s (%q): heading alone guarded the field: %v", path, q, g)
 		}
 		if qt, _ := g["question"].(string); !strings.Contains(qt, q) || strings.Contains(qt, "first name") || strings.Contains(qt, "Powered") {
 			t.Errorf("%s: question text = %q, want the visible question only", path, qt)
 		}
-		// page.js type refuses on its own (a client that skipped the gate),
-		// without echoing the text.
-		res := h.call("type", map[string]any{"selector": "#answer", "text": "Ada Lovelace"})
-		msg, _ := res["error"].(string)
-		if !strings.Contains(msg, "sensitive-input guard") || strings.Contains(msg, "Ada Lovelace") {
-			t.Errorf("%s: type was not refused page-side (or echoed the text): %v", path, res)
+	}
+}
+
+// Red/green: ordinary identifiers pass; the credential/bank/card set stays
+// guarded. describedby/help text naming a sensitive word never counts.
+func TestGuardFieldOrdinaryVersusSensitive(t *testing.T) {
+	page := `<!doctype html><html><body><form>
+<div><label for="aws">AWS account ID</label><input id="aws"></div>
+<div><label for="org">Org ID</label><input id="org" name="org_id"></div>
+<div><label for="em">Company email</label><input id="em" type="email" autocomplete="email"></div>
+<div><label for="cc">CC</label><input id="cc" name="cc_recipients"></div>
+<div><label for="hp">Project name</label><input id="hp" aria-describedby="help"><span id="help">Never enter your password, card number or bank account here</span></div>
+<div><label for="gpu">NVIDIA technology you use</label><input id="gpu" placeholder="e.g. GPU card"></div>
+<div><label for="pw">Password</label><input id="pw"></div>
+<div><label for="otp">One time code</label><input id="otp"></div>
+<div><label for="ba">Bank account number</label><input id="ba"></div>
+<div><label for="cn">Card number</label><input id="cn"></div>
+<div><label for="cv">CVV</label><input id="cv"></div>
+<div><label for="a1">Account number</label><input id="a1"></div>
+<div><label for="a2">Acct #</label><input id="a2"></div>
+<div><label for="a3">Account no.</label><input id="a3"></div>
+<div><label for="a4">Routing number</label><input id="a4"></div>
+</form></body></html>`
+	h := newPageHarness(t, map[string]string{"/mix": page})
+	h.open("/mix")
+	for _, sel := range []string{"#aws", "#org", "#em", "#cc", "#hp", "#gpu"} {
+		if g := h.call("guardField", map[string]any{"selector": sel}); g["guarded"] != false {
+			t.Errorf("%s guarded: %v", sel, g)
 		}
-		var v string
-		h.mainEval("document.querySelector('#answer').value", &v)
-		if v != "" {
-			t.Errorf("%s: the guarded field was filled: %q", path, v)
+	}
+	for sel, reason := range map[string]string{"#pw": "field:label-password", "#otp": "field:name-otp",
+		"#ba": "field:label-account", "#cn": "field:label-card", "#cv": "field:label-card",
+		"#a1": "field:label-account", "#a2": "field:label-account", "#a3": "field:label-account", "#a4": "field:label-routing"} {
+		if g := h.call("guardField", map[string]any{"selector": sel}); g["guarded"] != true || g["reason"] != reason {
+			t.Errorf("%s: %v, want guarded %s", sel, g, reason)
 		}
 	}
 }
@@ -92,16 +111,16 @@ func TestGuardFieldKinds(t *testing.T) {
 <div><input id="ac-cvc" autocomplete="section-pay cc-csc"></div>
 <div><input id="nm" name="taxId"></div>
 <div><input id="routing_number"></div>
-<div><label for="lb">Account number</label><input id="lb"></div>
+<div><label for="lb">Bank account number</label><input id="lb"></div>
 <div><input id="aria" aria-label="Card security code"></div>
 <div><span id="lbl">Social security no.</span><input id="by" aria-labelledby="lbl"></div>
 <div><input id="ph" placeholder="Enter password"></div>
 </form></body></html>`
 	want := map[string]string{
-		"#pw": "field:type-password", "#ac-user": "field:autocomplete-username", "#ac-otp": "field:autocomplete-one-time-code",
+		"#pw": "field:type-password", "#ac-otp": "field:autocomplete-one-time-code",
 		"#ac-cc": "field:autocomplete-cc-number", "#ac-cvc": "field:autocomplete-cc-csc", "#nm": "field:name-tax",
 		"#routing_number": "field:name-routing", "#lb": "field:label-account", "#aria": "field:label-card",
-		"#by": "field:label-ssn", "#ph": "field:label-password",
+		"#by": "field:label-ssn", "#ph": "field:label-password", "#ac-user": "field:autocomplete-username",
 	}
 	h := newPageHarness(t, map[string]string{"/kinds": page})
 	h.open("/kinds")
@@ -156,7 +175,7 @@ func TestGuardExtractHidesGuardedValues(t *testing.T) {
 	h.open("/x")
 	ex := h.call("extract", map[string]any{})
 	el := ex["elements"].(string)
-	if strings.Contains(el, "hunter2") || strings.Contains(el, "4111111111111111") {
+	if strings.Contains(el, "hunter2") {
 		t.Fatalf("extract shows a guarded value:\n%s", el)
 	}
 	if !strings.Contains(el, `guarded="field:type-password"`) || !strings.Contains(el, `value="ada"`) {
@@ -165,12 +184,15 @@ func TestGuardExtractHidesGuardedValues(t *testing.T) {
 	if strings.Contains(ex["data"].(string), "hunter2") {
 		t.Fatal("extract data shows a guarded value")
 	}
+	if !strings.Contains(el, "4111111111111111") {
+		t.Fatalf("non-password reads must be unmasked:\n%s", el)
+	}
 }
 
 // The human path's focus: guardFocus puts the caret in the refused field
 // (and nothing types into it).
 func TestGuardFocusHandsTheFieldToTheHuman(t *testing.T) {
-	h := newPageHarness(t, map[string]string{"/ssn": typeformScreen("Social Security Number", plainBox)})
+	h := newPageHarness(t, map[string]string{"/ssn": typeformScreen("Social Security Number", ssnBox)})
 	h.open("/ssn")
 	if res := h.call("guardFocus", map[string]any{"selector": "#answer"}); res["error"] != nil {
 		t.Fatal(res["error"])
@@ -205,7 +227,7 @@ func TestGuardMessagesNeverEchoAGuardedValue(t *testing.T) {
 // an unguarded type path is untouched and the agent's own type still fails.
 func TestGuardFillTypesTheOperatorsAnswer(t *testing.T) {
 	h := newPageHarness(t, map[string]string{
-		"/ssn": typeformScreen("Social Security Number", plainBox),
+		"/ssn": typeformScreen("Social Security Number", ssnBox),
 		"/pw":  typeformScreen("Sign in", `<input type="password" id="answer">`),
 	})
 	for _, path := range []string{"/ssn", "/pw"} {
@@ -278,5 +300,26 @@ func TestGuardFillVerifiesTheField(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// Done/Skip/Stop: the human-focus outline is removed again (and an outline
+// the page had set is restored).
+func TestGuardReleaseClearsHumanFocusOutline(t *testing.T) {
+	page := `<!doctype html><html><body><input id="answer" aria-label="Social Security Number" style="outline:1px dotted blue"></body></html>`
+	h := newPageHarness(t, map[string]string{"/r": page})
+	h.open("/r")
+	h.call("guardFocus", map[string]any{"selector": "#answer"})
+	var o string
+	h.mainEval("document.querySelector('#answer').style.outline", &o)
+	if !strings.Contains(o, "217") && !strings.Contains(o, "d93025") {
+		t.Fatalf("focus did not outline the field: %q", o)
+	}
+	if res := h.call("guardFocus", map[string]any{"selector": "#answer", "release": true}); res["error"] != nil {
+		t.Fatal(res["error"])
+	}
+	h.mainEval("document.querySelector('#answer').style.outline", &o)
+	if strings.Contains(o, "217") || strings.Contains(o, "d93025") || !strings.Contains(o, "dotted") {
+		t.Fatalf("outline not restored: %q", o)
 	}
 }

@@ -14,7 +14,7 @@
 // reported as { error: "..." } rather than thrown, so the caller can
 // tell "the page said no" from "injection failed".
 (() => {
-  const VERSION = 8;
+  const VERSION = 10;
   if (globalThis.__bashyPage && globalThis.__bashyPage.version === VERSION) return;
 
   // Native controls plus the ARIA widgets component libraries build
@@ -152,15 +152,16 @@
     for (let j = 0; j < slice.length; j++) {
       const el = slice[j];
       const tag = el.tagName.toLowerCase();
-      // A guarded field (password, card, SSN question, …) never shows
-      // its value in a listing — not even one a human typed.
+      // A password input never shows its value in a listing; other
+      // fields are read as-is.
       const g = guardOf(el);
-      const text = (g.guarded ? nameOf(el) : labelOf(el)).slice(0, 80);
+      const pw = isPasswordInput(el);
+      const text = (pw ? nameOf(el) : labelOf(el)).slice(0, 80);
       const attrs = {};
       const attrPairs = [];
       for (const a of ["type", "placeholder", "href", "name", "value", "role", "aria-label"]) {
         const v = el.getAttribute(a);
-        if (v && !(g.guarded && a === "value")) {
+        if (v && !(pw && a === "value")) {
           attrs[a] = String(v).slice(0, 60);
           attrPairs.push(`${a}="${String(v).slice(0, 60)}"`);
         }
@@ -169,7 +170,7 @@
         attrs.guarded = g.reason;
         attrPairs.push(`guarded="${g.reason}"`);
       }
-      const val = g.guarded ? null : valueOf(el);
+      const val = pw ? null : valueOf(el);
       if (val !== null) {
         attrs.current = String(val).slice(0, 60);
         attrPairs.push(`current="${attrs.current}"`);
@@ -596,6 +597,11 @@
 
   // guardOf is guard.js's verdict on el; a page.js without guard.js loaded
   // refuses rather than guessing.
+  // Reads are unmasked except a password input's value.
+  function isPasswordInput(el) {
+    return !!el && el.tagName === "INPUT" && (el.getAttribute("type") || "").toLowerCase() === "password";
+  }
+
   function guardOf(el) {
     if (!globalThis.__bashyGuard) return { guarded: true, reason: "field:guard-missing", error: "guard.js not loaded" };
     return globalThis.__bashyGuard.inspect(el);
@@ -627,6 +633,7 @@
     const el = resolveTarget(params || {}, { visibleOnly: true });
     if (el && el.__miss) return miss("guard_focus", el);
     if (!globalThis.__bashyGuard) return { error: "guard_focus: guard.js not loaded" };
+    if ((params || {}).release) return globalThis.__bashyGuard.releaseFocus(el);
     return globalThis.__bashyGuard.focusForHuman(el);
   }
 

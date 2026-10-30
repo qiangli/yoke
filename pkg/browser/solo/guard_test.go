@@ -22,14 +22,14 @@ import (
 // solo smoke test: BASHY_BROWSER_LIVE=1.
 
 const typeformSSN = `<!doctype html><html><body>
-<div data-qa="question"><h1>Social Security Number *</h1>
+<div data-qa="question"><h1>Question</h1><label for="answer">Social Security Number *</label>
 <input type="text" id="answer" placeholder="Type your answer here..."><button>OK</button></div>
 </body></html>`
 
 // typeformTrunc is a page that truncates whatever is typed to five
 // characters: the operator's answer cannot stick, so the fill must fail.
 const typeformTrunc = `<!doctype html><html><body>
-<div data-qa="question"><h1>Social Security Number *</h1>
+<div data-qa="question"><h1>Question</h1><label for="answer">Social Security Number *</label>
 <input type="text" id="answer" oninput="this.value=this.value.slice(0,5)"><button>OK</button></div>
 </body></html>`
 
@@ -132,10 +132,10 @@ func TestSoloGuardEndToEnd(t *testing.T) {
 	if res.Reason != "value:luhn" || value("#notes") != "" {
 		t.Fatalf("card into notes: %+v value=%q", res, value("#notes"))
 	}
-	// extract masks the SSN the page shows.
+	// Reads are unmasked: page text is returned as shown.
 	res = exec(wire.Action{Type: wire.ActionExtract})
-	if strings.Contains(res.Content, "212-48-7731") || !strings.Contains(res.Content, "[guarded:ssn]") {
-		t.Fatalf("extract not masked: %q", res.Content)
+	if !strings.Contains(res.Content, "212-48-7731") {
+		t.Fatalf("extract should be unmasked: %q", res.Content)
 	}
 }
 

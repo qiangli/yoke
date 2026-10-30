@@ -199,6 +199,15 @@ func (g guardBackend) FocusField(ctx context.Context, a wire.Action) error {
 	return err
 }
 
+// ReleaseField clears the outline guard_focus put on the field (guard_focus
+// with release set; page.js routes it to guard.js releaseFocus).
+func (g guardBackend) ReleaseField(ctx context.Context, a wire.Action) error {
+	p := g.followUpParams(a)
+	p["release"] = true
+	_, err := g.s.callRaw(ctx, focusMethod, p)
+	return err
+}
+
 // FillAdmitted sends an operator's admitted answer to the extension's
 // guard_fill: page.js types it past the field check, then compares the
 // field with the answer INSIDE the page and answers only the verdict and
