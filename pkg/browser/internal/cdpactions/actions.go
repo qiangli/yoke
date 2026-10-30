@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chromedp/cdproto/network"
@@ -15,8 +16,90 @@ import (
 	"github.com/chromedp/chromedp/kb"
 
 	"github.com/qiangli/yoke/pkg/browser/guard"
+	"github.com/qiangli/yoke/pkg/browser/live/extension"
 	"github.com/qiangli/yoke/pkg/browser/wire"
 )
+
+type extractedIdentity struct {
+	Tag      string `json:"tag"`
+	Name     string `json:"name"`
+	Label    string `json:"label"`
+	StableID string `json:"stable_id"`
+}
+
+type extractSnapshot struct {
+	Scope         string
+	IncludeHidden bool
+	URL           string
+	Fields        map[int]extractedIdentity
+}
+
+var extractSnapshots = struct {
+	sync.Mutex
+	byTarget map[string]extractSnapshot
+}{byTarget: make(map[string]extractSnapshot)}
+
+func targetKey(ctx context.Context) string {
+	if c := chromedp.FromContext(ctx); c != nil && c.Target != nil {
+		return string(c.Target.TargetID)
+	}
+	return ""
+}
+
+func rememberExtract(ctx context.Context, a wire.Action, url, data string) {
+	key := targetKey(ctx)
+	if key == "" {
+		return
+	}
+	fields := parseExtractIdentities(data)
+	extractSnapshots.Lock()
+	extractSnapshots.byTarget[key] = extractSnapshot{Scope: a.Scope, IncludeHidden: a.IncludeHidden, URL: url, Fields: fields}
+	extractSnapshots.Unlock()
+}
+
+func parseExtractIdentities(data string) map[int]extractedIdentity {
+	var listing struct {
+		Elements []struct {
+			Index int `json:"index"`
+			extractedIdentity
+		} `json:"elements"`
+	}
+	if json.Unmarshal([]byte(data), &listing) != nil {
+		return nil
+	}
+	fields := make(map[int]extractedIdentity, len(listing.Elements))
+	for _, e := range listing.Elements {
+		fields[e.Index] = e.extractedIdentity
+	}
+	return fields
+}
+
+// expectedIdentity supplies the extract-time field identity to every CDP
+// write and its guard preflight. Never trust a fresh index enumeration alone.
+func expectedIdentity(ctx context.Context, a wire.Action) (map[string]any, error) {
+	params := map[string]any{"scope": a.Scope, "element_id": a.ElementID, "selector": a.Selector,
+		"match_text": a.MatchText, "include_hidden": a.IncludeHidden}
+	if a.ElementID <= 0 {
+		return params, nil
+	}
+	key := targetKey(ctx)
+	extractSnapshots.Lock()
+	snap, ok := extractSnapshots.byTarget[key]
+	extractSnapshots.Unlock()
+	identity, found := snap.Fields[a.ElementID]
+	if !ok || !found || snap.Scope != a.Scope || snap.IncludeHidden != a.IncludeHidden {
+		return nil, fmt.Errorf("guard:fill-mismatch: index %d has no matching extract identity", a.ElementID)
+	}
+	var currentURL string
+	if err := chromedp.Run(ctx, chromedp.Location(&currentURL)); err != nil {
+		return nil, err
+	}
+	if currentURL != snap.URL {
+		return nil, fmt.Errorf("guard:fill-mismatch: page for index %d changed", a.ElementID)
+	}
+	params["expected_identity"] = identity
+	return params, nil
+}
 
 // Run dispatches one wire action to an already-attached chromedp target.
 func Run(ctx context.Context, mode string, action wire.Action) (*wire.Result, error) {
@@ -100,11 +183,11 @@ func hiddenOnlyMessage(selector string) string {
 // querySelectorAll handles comma lists and :not() natively; the shown
 // predicate mirrors the live extension's shown().
 func resolveSelectorScript(sel string) string {
-	return `(function(){
+	return "globalThis.__bashyCDPTraverseFrames=true;\n" + extension.PageJS + "\n" + `(function(){
   var SEL=` + JSString(sel) + `;
   function shown(el){var cs=getComputedStyle(el);if(cs.visibility==="hidden"||cs.display==="none"||cs.opacity==="0")return false;var r=el.getBoundingClientRect();return r.width>0&&r.height>0;}
   var all;
-  try { all = document.querySelectorAll(SEL); }
+  try { all = globalThis.__bashyPage.resolveSelector(document, SEL); }
   catch (e) { return JSON.stringify({state:"bad", reason:String((e && e.message) || e)}); }
   if (!all.length) return JSON.stringify({state:"missing"});
   for (var i=0; i<all.length; i++) { if (shown(all[i])) return JSON.stringify({state:"visible"}); }
@@ -120,13 +203,13 @@ func resolveSelectorScript(sel string) string {
 // between the check and the action.
 func targetJSPath(sel string, includeHidden bool) string {
 	if includeHidden {
-		return `(function(){var SEL=` + JSString(sel) + `;try{return document.querySelector(SEL);}catch(e){return null;}})()`
+		return `(function(){globalThis.__bashyCDPTraverseFrames=true;` + extension.PageJS + `var SEL=` + JSString(sel) + `;try{return globalThis.__bashyPage.resolveSelector(document, SEL)[0] || null;}catch(e){return null;}})()`
 	}
-	return `(function(){
+	return `(function(){globalThis.__bashyCDPTraverseFrames=true;` + extension.PageJS + `
   var SEL=` + JSString(sel) + `;
   function shown(el){var cs=getComputedStyle(el);if(cs.visibility==="hidden"||cs.display==="none"||cs.opacity==="0")return false;var r=el.getBoundingClientRect();return r.width>0&&r.height>0;}
   var all;
-  try { all = document.querySelectorAll(SEL); }
+  try { all = globalThis.__bashyPage.resolveSelector(document, SEL); }
   catch (e) { return null; }
   for (var i=0; i<all.length; i++) { if (shown(all[i])) return all[i]; }
   return all[0] || null;
@@ -230,41 +313,49 @@ func focusHiddenNode(ctx context.Context, path string) error {
 // the only signal that a form had silently resolved nothing.
 func Click(ctx context.Context, a wire.Action) (*wire.Result, error) {
 	if a.ElementID > 0 {
-		var out any
-		if err := chromedp.Run(ctx, chromedp.Evaluate(ClickByIndexScript(a), &out)); err != nil {
+		params, err := expectedIdentity(ctx, a)
+		if err != nil {
 			return &wire.Result{Error: err.Error()}, nil
 		}
-		if b, ok := out.(bool); ok && b {
+		var out struct {
+			Content string `json:"content"`
+			Error   string `json:"error"`
+		}
+		if err := evalGuard(ctx, pageCall("click", params), &out); err != nil {
+			return &wire.Result{Error: err.Error()}, nil
+		}
+		if out.Error == "" {
 			return &wire.Result{Success: true, Content: "clicked"}, nil
 		}
-		return &wire.Result{Error: fmt.Sprintf("click: element index %d out of range for the current extract enumeration", a.ElementID)}, nil
+		return &wire.Result{Error: out.Error}, nil
 	}
 	if a.Selector != "" {
 		wctx, cancel := context.WithTimeout(ctx, actionTimeout(a))
 		defer cancel()
-		path, hidden, err := resolveVisibleTarget(wctx, a.Selector, a.IncludeHidden)
-		if err != nil {
+		params, _ := expectedIdentity(wctx, a)
+		var out struct {
+			Error string `json:"error"`
+		}
+		if err := evalGuard(wctx, pageCall("click", params), &out); err != nil {
 			return &wire.Result{Error: err.Error()}, nil
 		}
-		if hidden {
-			err = clickHiddenNode(wctx, path)
-		} else {
-			err = chromedp.Run(wctx, chromedp.Click(path, chromedp.ByJSPath))
-		}
-		if err != nil {
-			return &wire.Result{Error: err.Error()}, nil
+		if out.Error != "" {
+			return &wire.Result{Error: out.Error}, nil
 		}
 		return &wire.Result{Success: true, Content: "clicked"}, nil
 	}
 	if a.MatchText != "" {
-		var out any
-		if err := chromedp.Run(ctx, chromedp.Evaluate(ClickByTextScript(a.MatchText, a.Scope), &out)); err != nil {
+		params, _ := expectedIdentity(ctx, a)
+		var out struct {
+			Error string `json:"error"`
+		}
+		if err := evalGuard(ctx, pageCall("click", params), &out); err != nil {
 			return &wire.Result{Error: err.Error()}, nil
 		}
-		if b, ok := out.(bool); ok && b {
-			return &wire.Result{Success: true, Content: "clicked"}, nil
+		if out.Error != "" {
+			return &wire.Result{Error: out.Error}, nil
 		}
-		return &wire.Result{Error: fmt.Sprintf("click: no element whose text contains %q", a.MatchText)}, nil
+		return &wire.Result{Success: true, Content: "clicked"}, nil
 	}
 	return &wire.Result{Error: "click: selector, element index, or match_text required"}, nil
 }
@@ -273,25 +364,12 @@ func Click(ctx context.Context, a wire.Action) (*wire.Result, error) {
 // landmark skip, same visibility filter — so [N] in an extract listing
 // is the element this clicks.
 func ClickByIndexScript(a wire.Action) string {
-	return `(function(){
-  var SCOPE_SEL=` + JSString(a.Scope) + `, IDX=` + fmt.Sprintf("%d", a.ElementID) + `, INCLUDE_HIDDEN=` + fmt.Sprintf("%v", a.IncludeHidden) + `;
-  var root = SCOPE_SEL ? document.querySelector(SCOPE_SEL) : document;
-  if (!root) return false;
-  var navFilter = !SCOPE_SEL;
-  function shown(el){var cs=getComputedStyle(el);if(cs.visibility==="hidden"||cs.display==="none"||cs.opacity==="0")return false;var r=el.getBoundingClientRect();return r.width>0&&r.height>0;}
-  var all = root.querySelectorAll("a, button, input, select, textarea, [role='button'], [role='link']");
-  var flat = [];
-  for (var i=0;i<all.length;i++){
-    var el=all[i];
-    if (navFilter && el.closest && el.closest("nav, aside, [role='navigation'], [role='complementary']")) continue;
-    if (!INCLUDE_HIDDEN && !shown(el)) continue;
-    flat.push(el);
-  }
-  var t = flat[IDX-1];
-  if (!t) return false;
-  t.click();
-  return true;
-})()`
+	return extension.PageJS + "\n" + `globalThis.__bashyPage.click({scope:` + JSString(a.Scope) + `,element_id:` + fmt.Sprintf("%d", a.ElementID) + `,include_hidden:` + fmt.Sprintf("%v", a.IncludeHidden) + `})`
+}
+
+func pageCall(method string, params any) string {
+	b, _ := json.Marshal(params)
+	return extension.PageJS + "\n" + "globalThis.__bashyPage." + method + "(" + string(b) + ")"
 }
 
 // DispatchEvent fires a named DOM event. Over CDP this is a genuine
@@ -301,14 +379,14 @@ func DispatchEvent(ctx context.Context, a wire.Action) (*wire.Result, error) {
 	if strings.TrimSpace(a.Event) == "" {
 		return &wire.Result{Error: "dispatch_event: event name required"}, nil
 	}
-	script := `(function(){
+	script := "globalThis.__bashyCDPTraverseFrames=true;\n" + extension.PageJS + "\n" + `(function(){
   var NAME=` + JSString(a.Event) + `, DETAIL=` + JSString(a.Detail) + `, SEL=` + JSString(a.Selector) + `;
   var detail = null;
   if (DETAIL) { try { detail = JSON.parse(DETAIL); } catch (e) { detail = DETAIL; } }
   var target = window, where = "window";
   if (SEL === "document") { target = document; where = "document"; }
   else if (SEL) {
-    try { target = document.querySelector(SEL); } catch (e) { return JSON.stringify({error:"dispatch_event: "+SEL+" is not a valid CSS selector"}); }
+    try { target = globalThis.__bashyPage.resolveSelector(document, SEL)[0]; } catch (e) { return JSON.stringify({error:"dispatch_event: "+SEL+" is not a valid selector"}); }
     if (!target) return JSON.stringify({error:"dispatch_event: no element matches "+SEL});
     where = SEL;
   }
@@ -354,22 +432,40 @@ func ClickByTextScript(matchText, scope string) string {
 }
 
 func Type(ctx context.Context, a wire.Action) (*wire.Result, error) {
+	if a.ElementID > 0 {
+		params, err := expectedIdentity(ctx, a)
+		if err != nil {
+			return &wire.Result{Error: err.Error()}, nil
+		}
+		params["text"] = a.Text
+		var out struct {
+			Content string `json:"content"`
+			Error   string `json:"error"`
+		}
+		expr := pageCall("type", params)
+		if err := evalGuard(ctx, expr, &out); err != nil {
+			return &wire.Result{Error: err.Error()}, nil
+		}
+		if out.Error != "" {
+			return &wire.Result{Error: out.Error}, nil
+		}
+		return &wire.Result{Success: true, Content: "typed"}, nil
+	}
 	if a.Selector == "" {
 		return &wire.Result{Error: "type: selector required"}, nil
 	}
 	wctx, cancel := context.WithTimeout(ctx, actionTimeout(a))
 	defer cancel()
-	path, hidden, err := resolveVisibleTarget(wctx, a.Selector, a.IncludeHidden)
-	if err != nil {
+	params, _ := expectedIdentity(wctx, a)
+	params["text"] = a.Text
+	var out struct {
+		Error string `json:"error"`
+	}
+	if err := evalGuard(wctx, pageCall("type", params), &out); err != nil {
 		return &wire.Result{Error: err.Error()}, nil
 	}
-	if hidden {
-		err = typeHiddenNode(wctx, path, a.Text)
-	} else {
-		err = chromedp.Run(wctx, chromedp.SendKeys(path, a.Text, chromedp.ByJSPath))
-	}
-	if err != nil {
-		return &wire.Result{Error: err.Error()}, nil
+	if out.Error != "" {
+		return &wire.Result{Error: out.Error}, nil
 	}
 	return &wire.Result{Success: true, Content: "typed"}, nil
 }
@@ -468,6 +564,9 @@ func Extract(ctx context.Context, a wire.Action) (*wire.Result, error) {
 	out := ParseExtractPayload(raw)
 	out.Title = title
 	out.URL = url
+	if out.Success {
+		rememberExtract(ctx, a, url, out.Data)
+	}
 	return out, nil
 }
 
@@ -485,65 +584,7 @@ func ExtractScript(a wire.Action) string {
 	if offset < 0 {
 		offset = 0
 	}
-	return `(function(){
-  var SCOPE_SEL=` + scope + `, MATCH=` + match + `, LIMIT=` + fmt.Sprintf("%d", limit) + `, OFFSET=` + fmt.Sprintf("%d", offset) + `, INCLUDE_HIDDEN=` + fmt.Sprintf("%v", a.IncludeHidden) + `;
-  var root = SCOPE_SEL ? document.querySelector(SCOPE_SEL) : document;
-  if (!root) return JSON.stringify({error:"extract: scope "+SCOPE_SEL+" not found"});
-  var navFilter = !SCOPE_SEL;
-  function shown(el){var cs=getComputedStyle(el);if(cs.visibility==="hidden"||cs.display==="none"||cs.opacity==="0")return false;var r=el.getBoundingClientRect();return r.width>0&&r.height>0;}
-  var all = root.querySelectorAll("a, button, input, select, textarea, [role='button'], [role='link']");
-  var matches = [];
-  for (var i=0; i<all.length; i++) {
-    var el = all[i];
-    if (navFilter && el.closest && el.closest("nav, aside, [role='navigation'], [role='complementary']")) continue;
-    var text = (el.innerText || el.value || el.getAttribute("aria-label") || "").trim();
-    if (MATCH && text.toLowerCase().indexOf(MATCH.toLowerCase()) < 0) {
-      var ph = el.getAttribute && el.getAttribute("placeholder");
-      var ar = el.getAttribute && el.getAttribute("aria-label");
-      if (!(ph && ph.toLowerCase().indexOf(MATCH.toLowerCase())>=0) && !(ar && ar.toLowerCase().indexOf(MATCH.toLowerCase())>=0)) continue;
-    }
-    if (!INCLUDE_HIDDEN && !shown(el)) continue;
-    matches.push(el);
-  }
-  var total = matches.length;
-  var slice = matches.slice(OFFSET, OFFSET+LIMIT);
-  var lines = [], records = [];
-  var G = globalThis.__bashyGuard;
-  for (var j=0; j<slice.length; j++) {
-    var el = slice[j];
-    var tag = el.tagName.toLowerCase();
-    // A guarded field (sensitive-input guard) never shows its value.
-    var g = G ? G.inspect(el) : {guarded: el.type === "password", reason: "field:type-password"};
-    var text = (g.guarded ? (el.getAttribute("aria-label") || el.getAttribute("placeholder") || "") :
-      (el.innerText || el.value || el.getAttribute("aria-label") || "")).trim().slice(0,80);
-    var attrs = [], attrMap = {};
-    var keys = ["type","placeholder","href","name","value","role","aria-label"];
-    for (var k=0; k<keys.length; k++) {
-      var v = el.getAttribute(keys[k]);
-      if (v && !(g.guarded && keys[k] === "value")) { attrs.push(keys[k]+"=\""+String(v).slice(0,60)+"\""); attrMap[keys[k]] = String(v).slice(0,60); }
-    }
-    if (g.guarded) { attrs.push("guarded=\""+g.reason+"\""); attrMap.guarded = g.reason; }
-    var vis = shown(el);
-    var r = el.getBoundingClientRect();
-    lines.push("["+(OFFSET+j+1)+"]"+(vis?"":" (hidden)")+" <"+tag+" "+attrs.join(" ")+">"+text+"</"+tag+">");
-    records.push({index:OFFSET+j+1, tag:tag, text:text, attrs:attrMap, visible:vis,
-                  box:{x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)}});
-  }
-  var body = (root === document ? (document.body && document.body.innerText) : root.innerText) || "";
-  var viewport = {
-    width: Math.round(document.documentElement.clientWidth || window.innerWidth || 0),
-    height: Math.round(document.documentElement.clientHeight || window.innerHeight || 0),
-    dpr: window.devicePixelRatio || 1,
-  };
-  return JSON.stringify({
-    content: body.length>16000 ? body.slice(0,16000)+"\n... (truncated)" : body,
-    elements: lines.join("\n"),
-    total: total,
-    truncated: total > (OFFSET+LIMIT),
-    viewport: viewport,
-    data: JSON.stringify({viewport: viewport, elements: records}),
-  });
-})()`
+	return extension.PageJS + "\n" + `var SCOPE_SEL=` + scope + `, MATCH=` + match + `, LIMIT=` + fmt.Sprintf("%d", limit) + `, OFFSET=` + fmt.Sprintf("%d", offset) + `, INCLUDE_HIDDEN=` + fmt.Sprintf("%v", a.IncludeHidden) + `;` + "\n" + `JSON.stringify(globalThis.__bashyPage.extract({scope:SCOPE_SEL,match_text:MATCH,limit:LIMIT,offset:OFFSET,include_hidden:INCLUDE_HIDDEN}))`
 }
 
 func ParseExtractPayload(raw string) *wire.Result {
@@ -643,9 +684,9 @@ func WaitForSelector(ctx context.Context, a wire.Action) (*wire.Result, error) {
 		state = "visible"
 		err = waitForVisibleMatch(wctx, a.Selector, a.IncludeHidden, timeout)
 	case "attached":
-		err = chromedp.Run(wctx, chromedp.WaitReady(a.Selector, chromedp.ByQuery))
+		err = waitForPresenceMatch(wctx, a.Selector, true, timeout)
 	case "detached":
-		err = chromedp.Run(wctx, chromedp.WaitNotPresent(a.Selector, chromedp.ByQuery))
+		err = waitForPresenceMatch(wctx, a.Selector, false, timeout)
 	default:
 		return &wire.Result{Error: fmt.Sprintf("wait_for_selector: unknown state %q (visible|attached|detached)", a.State)}, nil
 	}
@@ -653,6 +694,45 @@ func WaitForSelector(ctx context.Context, a wire.Action) (*wire.Result, error) {
 		return &wire.Result{Error: err.Error()}, nil
 	}
 	return &wire.Result{Success: true, Data: fmt.Sprintf("state=%s", state)}, nil
+}
+
+func waitForPresenceMatch(ctx context.Context, sel string, attached bool, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		var raw string
+		if err := chromedp.Run(ctx, chromedp.Evaluate(resolveSelectorScript(sel), &raw)); err != nil {
+			if ctx.Err() != nil {
+				break
+			}
+			return err
+		}
+		var r struct {
+			State  string `json:"state"`
+			Reason string `json:"reason"`
+		}
+		if err := json.Unmarshal([]byte(raw), &r); err != nil {
+			return err
+		}
+		if r.State == "bad" {
+			return fmt.Errorf("%s is not a valid selector: %s", JSString(sel), r.Reason)
+		}
+		present := r.State == "visible" || r.State == "hidden"
+		if present == attached {
+			return nil
+		}
+		if ctx.Err() != nil || time.Now().After(deadline) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(waitPollInterval):
+		}
+	}
+	state := "attached"
+	if !attached {
+		state = "detached"
+	}
+	return fmt.Errorf("wait_for_selector: selector %s did not become %s within %s", JSString(sel), state, timeout)
 }
 
 // waitPollInterval is the re-check cadence of waitForVisibleMatch: fast

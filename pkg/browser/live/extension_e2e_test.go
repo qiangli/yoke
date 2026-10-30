@@ -277,6 +277,63 @@ func e2eProvide(t *testing.T, svc *Service) *wire.Result {
 	return res
 }
 
+func TestExtensionE2EFrameSelectorAndStaleIndex(t *testing.T) {
+	fixtures := map[string]string{
+		"/form":  `<!doctype html><label for="answer">Top answer</label><input id="answer" name="top"><iframe src="/child"></iframe>`,
+		"/child": `<!doctype html><label for="answer">Child answer</label><input id="answer" name="child">`,
+	}
+	svc, browserCtx := startExtensionE2E(t, fixtures, "/form")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ex, err := svc.Execute(ctx, wire.Action{Type: wire.ActionExtract})
+	if err != nil || ex == nil || !ex.Success {
+		t.Fatalf("extract: %v %v", ex, err)
+	}
+	var data struct {
+		Elements []struct {
+			Index    int    `json:"index"`
+			Name     string `json:"name"`
+			StableID string `json:"stable_id"`
+			Selector string `json:"selector"`
+			Label    string `json:"label"`
+		} `json:"elements"`
+	}
+	if err := json.Unmarshal([]byte(ex.Data), &data); err != nil {
+		t.Fatal(err)
+	}
+	var childIndex int
+	var childSelector string
+	for _, e := range data.Elements {
+		if e.Name == "child" {
+			childIndex, childSelector = e.Index, e.Selector
+			if !strings.HasPrefix(e.StableID, "frame:") || e.Label != "Child answer" {
+				t.Fatalf("child metadata: %+v", e)
+			}
+		}
+	}
+	if childIndex == 0 || childSelector == "" {
+		t.Fatalf("child absent: %s", ex.Data)
+	}
+	res, err := svc.Execute(ctx, wire.Action{Type: wire.ActionType, Selector: childSelector, Text: "child value"})
+	if err != nil || res == nil || !res.Success {
+		t.Fatalf("frame-qualified type: %v %v", res, err)
+	}
+	var got string
+	if err := chromedp.Run(browserCtx, chromedp.Evaluate(`document.querySelector('iframe').contentDocument.getElementById('answer').value`, &got)); err != nil || got != "child value" {
+		t.Fatalf("child value %q: %v", got, err)
+	}
+	if err := chromedp.Run(browserCtx, chromedp.Evaluate(`document.querySelector('iframe').outerHTML = '<iframe src="/child"></iframe>'`, nil)); err != nil {
+		t.Fatal(err)
+	}
+	res, err = svc.Execute(ctx, wire.Action{Type: wire.ActionType, ElementID: childIndex, Text: "wrong"})
+	if err == nil && res != nil && res.Success {
+		t.Fatalf("stale frame index wrote: %+v", res)
+	}
+	if res != nil && !strings.Contains(res.Error, "guard:fill-mismatch") && err == nil {
+		t.Fatalf("missing drift reason: %+v", res)
+	}
+}
+
 func e2eData(t *testing.T, res *wire.Result) map[string]any {
 	t.Helper()
 	var d map[string]any

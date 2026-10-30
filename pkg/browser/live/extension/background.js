@@ -841,10 +841,24 @@ function screenshotResult(data, tab, method, fullPage) {
   };
 }
 
+const extractedFrames = new Map();
+
 async function extractInTab(tabId, params) {
   params = params || {};
   const frames = await callFrames(tabId, "extract", Object.assign({}, params, { limit: 1e6, offset: 0 }));
-  if (frames.length <= 1) return callPage(tabId, "extract", params, "extract");
+  const ordered = frameOrder(frames);
+  const byIndex = new Map();
+  let base = 0;
+  for (const f of ordered) {
+    let data = {};
+    try { data = JSON.parse(f.result.data || "{}"); } catch (_) { /* empty frame */ }
+    for (const e of data.elements || []) byIndex.set(base + e.index, {
+      frameId: f.frameId, local: e.index, frameURL: f.result.url,
+      identity: { tag: e.tag, name: e.name, label: e.label, stable_id: e.stable_id },
+    });
+    base += f.result.count || 0;
+  }
+  extractedFrames.set(tabId, { byIndex, scope: params.scope || "", includeHidden: !!params.include_hidden });
   return mergeExtract(frames, params);
 }
 
@@ -925,15 +939,27 @@ async function injectOne(opts, what) {
 async function runInTab(tabId, kind, params) {
   if (kind === "scroll") return callPage(tabId, kind, params, kind);
   let frameId = 0, local = params, result = null;
+  const qualified = parseFrameSelector(params.selector);
+  if (qualified) params = Object.assign({}, params, { selector: qualified.selector });
   const counted = await callFrames(tabId, "count", params);
+  if (params.element_id > 0) {
+    const snapshot = extractedFrames.get(tabId);
+    const at = snapshot && snapshot.byIndex.get(params.element_id);
+    if (!at || snapshot.scope !== (params.scope || "") || snapshot.includeHidden !== !!params.include_hidden)
+      throw new Error(`${kind}: guard:fill-mismatch: index ${params.element_id} has no matching extract identity`);
+    const current = counted.find((f) => f.frameId === at.frameId);
+    if (!current || (current.result.url && at.frameURL && current.result.url !== at.frameURL))
+      throw new Error(`${kind}: guard:fill-mismatch: frame for index ${params.element_id} changed`);
+    frameId = at.frameId;
+    local = Object.assign({}, params, { element_id: at.local, expected_identity: at.identity });
+    result = await callPage(tabId, kind, local, kind, frameId);
+  } else if (qualified) {
+    if (!counted.some((f) => f.frameId === qualified.frameId))
+      throw new Error(`${kind}: frame ${qualified.frameId} is gone`);
+    frameId = qualified.frameId;
+    result = await callPage(tabId, kind, params, kind, frameId);
+  } else
   if (counted.length > 1) {
-    if (params.element_id > 0) {
-      const at = locateIndex(counted, params.element_id);
-      if (!at) throw new Error(`${kind}: element index ${params.element_id} out of range (extract listed ${totalCount(counted)} across ${counted.length} frames)`);
-      frameId = at.frameId;
-      local = Object.assign({}, params, { element_id: at.local });
-      result = await callPage(tabId, kind, local, kind, frameId);
-    } else {
       for (const f of counted) {
         const r = await callPage(tabId, kind, params, kind, f.frameId);
         if (r && r.notfound && !result) { result = r; continue; }
@@ -941,7 +967,6 @@ async function runInTab(tabId, kind, params) {
         result = r; frameId = f.frameId;
         break;
       }
-    }
   } else {
     result = await callPage(tabId, kind, params, kind);
   }

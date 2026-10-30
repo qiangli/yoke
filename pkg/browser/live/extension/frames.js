@@ -33,6 +33,17 @@ function totalCount(counted) {
   return frameOrder(counted).reduce((s, f) => s + (f.result.count || 0), 0);
 }
 
+// A child-frame selector is an explicit address. The frame prefix also
+// keeps identical ids in two documents distinct for downstream consumers.
+function frameSelector(frameId, selector) {
+  return frameId ? `frame:${frameId}::${selector}` : selector;
+}
+
+function parseFrameSelector(selector) {
+  const m = /^frame:(\d+)::([\s\S]+)$/.exec(selector || "");
+  return m ? { frameId: Number(m[1]), selector: m[2] } : null;
+}
+
 // mergeExtract folds per-frame extract answers (each produced with no
 // paging) into one listing with tab-wide indexes, then applies the
 // caller's offset/limit. Child-frame elements are tagged with their
@@ -58,6 +69,8 @@ function mergeExtract(frames, params) {
         index: base + e.index,
         frame_id: f.frameId,
         frame_url: f.frameId === 0 ? undefined : r.url,
+        selector: frameSelector(f.frameId, e.selector),
+        stable_id: frameSelector(f.frameId, e.stable_id),
       }));
     }
     if (f !== top && (r.content || "").trim()) {
@@ -67,7 +80,7 @@ function mergeExtract(frames, params) {
   }
   const page = recs.slice(OFFSET, OFFSET + LIMIT);
   const lines = page.map((e) =>
-    `[${e.index}]${e.visible ? "" : " (hidden)"} ${e.line || `<${e.tag}>${e.text}</${e.tag}>`}` +
+    `[${e.index}]${e.visible ? "" : " (hidden)"} ${e.selector ? e.selector + " " : ""}${e.line || `<${e.tag}>${e.text}</${e.tag}>`}` +
     (e.frame_id ? ` (frame ${e.frame_id})` : ""));
   let content = (top && top.result.content) || "";
   if (texts.length) content += "\n\n" + texts.join("\n\n");

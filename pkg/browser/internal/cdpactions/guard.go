@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/chromedp/cdproto/page"
@@ -52,7 +53,7 @@ func evalGuard(cdpCtx context.Context, expr string, out any) error {
 			}
 			return fmt.Errorf("guard: load guard.js: %w", err)
 		}
-		res, exc, err := runtime.Evaluate(expr).WithContextID(world).WithReturnByValue(true).Do(ctx)
+		res, exc, err := runtime.Evaluate("globalThis.__bashyCDPTraverseFrames=true;\n" + expr).WithContextID(world).WithAwaitPromise(true).WithReturnByValue(true).Do(ctx)
 		if err != nil {
 			return err
 		}
@@ -83,7 +84,11 @@ func (g GuardBackend) InspectField(ctx context.Context, a wire.Action) (guard.Fi
 		guard.Field
 		Error string `json:"error"`
 	}
-	if err := evalGuard(cdpCtx, fmt.Sprintf("globalThis.__bashyGuard.inspectSelector(%s)", JSString(a.Selector)), &out); err != nil {
+	params, err := expectedIdentity(cdpCtx, a)
+	if err != nil {
+		return guard.Field{}, err
+	}
+	if err := evalGuard(cdpCtx, pageCall("guardField", params), &out); err != nil {
 		return guard.Field{}, err
 	}
 	if out.Error != "" {
@@ -97,12 +102,11 @@ func (g GuardBackend) FocusField(ctx context.Context, a wire.Action) error {
 	if err != nil {
 		return err
 	}
-	expr := fmt.Sprintf(`(() => {
-  const sel = %s;
-  const el = sel ? document.querySelector(sel) : document.activeElement;
-  if (!el) return { error: "guard: no element matches " + JSON.stringify(sel) };
-  return globalThis.__bashyGuard.focusForHuman(el);
-})()`, JSString(a.Selector))
+	params, err := expectedIdentity(cdpCtx, a)
+	if err != nil {
+		return err
+	}
+	expr := pageCall("guardFocus", params)
 	var out struct {
 		Error string `json:"error"`
 	}
@@ -147,24 +151,39 @@ func (g GuardBackend) FillAdmitted(ctx context.Context, a wire.Action, _ string,
 	callCtx, cancel := context.WithTimeout(cdpCtx, 30*time.Second)
 	defer cancel()
 	a.Text, a.FromAsk = string(value), ""
-	res, err := Type(callCtx, a)
-	if err != nil || res == nil || !res.Success {
-		return guard.Verify{}, errors.New("guard: fill failed")
+	params, err := expectedIdentity(callCtx, a)
+	if err != nil {
+		return guard.Verify{}, err
 	}
-	expr := fmt.Sprintf(`(() => {
-  const el = document.querySelector(%s);
-  if (!el) return { error: "missing" };
-  const v = ("value" in el && !el.isContentEditable) ? String(el.value) : (el.innerText || el.textContent || "").replace(/\n$/, "");
-  return { value: v };
-})()`, JSString(a.Selector))
+	params["text"] = a.Text
+	expr := pageCall("guardFill", params)
 	var out struct {
-		Value string `json:"value"`
-		Error string `json:"error"`
+		Verified string `json:"verified"`
+		FieldLen int    `json:"field_len"`
+		ValueLen int    `json:"value_len"`
+		Error    string `json:"error"`
 	}
-	if err := evalGuard(callCtx, expr, &out); err != nil || out.Error != "" {
+	if err := evalGuard(callCtx, expr, &out); err != nil {
 		return guard.Verify{}, errors.New("guard: fill not verifiable")
 	}
-	return VerifyFill(out.Value, value), nil
+	if out.Error != "" {
+		if strings.Contains(out.Error, "guard:fill-mismatch") {
+			return guard.Verify{}, errors.New(out.Error)
+		}
+		// A controlled field may truncate or reject the inserted answer.
+		// Read it back before treating the failed fill as unverifiable.
+		var readback struct {
+			Verified string `json:"verified"`
+			FieldLen int    `json:"field_len"`
+			ValueLen int    `json:"value_len"`
+			Error    string `json:"error"`
+		}
+		if err := evalGuard(callCtx, pageCall("guardVerify", params), &readback); err == nil && readback.Error == "" && readback.Verified == guard.VerifiedMismatch {
+			return guard.Verify{Verified: readback.Verified, FieldLen: readback.FieldLen, ValueLen: readback.ValueLen}, nil
+		}
+		return guard.Verify{}, errors.New("guard: fill not verifiable")
+	}
+	return guard.Verify{Verified: out.Verified, FieldLen: out.FieldLen, ValueLen: out.ValueLen}, nil
 }
 
 // VerifyFill is the comparison both CDP modes report: the field's read-back

@@ -14,7 +14,7 @@
 // reported as { error: "..." } rather than thrown, so the caller can
 // tell "the page said no" from "injection failed".
 (() => {
-  const VERSION = 10;
+  const VERSION = 14;
   if (globalThis.__bashyPage && globalThis.__bashyPage.version === VERSION) return;
 
   // Native controls plus the ARIA widgets component libraries build
@@ -24,17 +24,156 @@
     "[role='combobox'], [role='listbox'], [role='option'], [role='radio'], [role='checkbox'], " +
     "[role='switch'], [role='tab'], [role='menuitem'], [role='menuitemradio'], [aria-haspopup='listbox']";
   const LANDMARKS = "nav, aside, [role='navigation'], [role='complementary']";
+  // Indexes are ephemeral addresses. Keep the identity captured by the last
+  // extract so a later insertion cannot redirect a write to another field.
+  const extracted = new Map();
 
-  function query(root, sel) {
-    try {
-      return root.querySelector(sel);
-    } catch (e) {
-      return { __badSelector: sel, __reason: String((e && e.message) || e) };
+  function deepElements(root, selector) {
+    const found = [];
+    function walk(node) {
+      for (const el of node.querySelectorAll("*")) {
+        if (el.matches(selector)) found.push(el);
+        if (el.shadowRoot) walk(el.shadowRoot);
+        if (globalThis.__bashyCDPTraverseFrames && (el.localName === "iframe" || el.localName === "frame")) {
+          try { if (el.contentDocument) walk(el.contentDocument); } catch (_) { /* cross-origin frame */ }
+        }
+      }
     }
+    walk(root);
+    return found;
+  }
+
+  function fieldLabel(el) {
+    const labelled = (el.getAttribute("aria-labelledby") || "").split(/\s+/).filter(Boolean)
+      .map((id) => el.getRootNode().getElementById && el.getRootNode().getElementById(id))
+      .filter(Boolean).map((node) => node.textContent.trim()).join(" ");
+    const labels = el.labels && Array.from(el.labels).map((node) => node.textContent.trim()).join(" ");
+    return (el.getAttribute("aria-label") || labelled || labels ||
+      (el.closest("label") && el.closest("label").textContent) ||
+      el.getAttribute("placeholder") || el.getAttribute("title") || "").replace(/\s+/g, " ").trim();
+  }
+
+  function cssEscape(value) {
+    return globalThis.CSS && CSS.escape ? CSS.escape(value) : String(value).replace(/[^a-zA-Z0-9_-]/g, (c) => "\\" + c.codePointAt(0).toString(16) + " ");
+  }
+
+  // A selector is stable across sibling insertions when the field has an id.
+  // For unmarked controls, the structural path remains a useful explicit
+  // address and identity checks protect index writes if that path shifts.
+  function selectorOf(el) {
+    const parts = [];
+    let cur = el;
+    while (cur && cur.nodeType === Node.ELEMENT_NODE) {
+      const root = cur.getRootNode();
+      if (cur.id && root.querySelectorAll("#" + cssEscape(cur.id)).length === 1) {
+        parts.unshift("#" + cssEscape(cur.id));
+      } else if (cur.getAttribute("name") && root.querySelectorAll(`${cur.localName}[name=${JSON.stringify(cur.getAttribute("name"))}]`).length === 1) {
+        parts.unshift(`${cur.localName}[name=${JSON.stringify(cur.getAttribute("name"))}]`);
+      } else {
+        const tag = cur.localName;
+        const siblings = cur.parentElement ? Array.from(cur.parentElement.children).filter((x) => x.localName === tag) : [];
+        parts.unshift(tag + (siblings.length > 1 ? `:nth-of-type(${siblings.indexOf(cur) + 1})` : ""));
+      }
+      if (root.nodeType === Node.DOCUMENT_FRAGMENT_NODE && root.host) {
+        parts.unshift(">>>");
+        cur = root.host;
+      } else if (parts[0].startsWith("#") || parts[0].includes("[name=")) break;
+      else cur = cur.parentElement;
+    }
+    const local = parts.join(" ").replace(/\s*>>>\s*/g, " >>> ");
+    const frame = el.ownerDocument && el.ownerDocument.defaultView && el.ownerDocument.defaultView.frameElement;
+    return frame && globalThis.__bashyCDPTraverseFrames ? `framecss:${selectorOf(frame)}::${local}` : local;
+  }
+
+  function identityOf(el) {
+    const tag = el.localName;
+    const name = el.getAttribute("name") || "";
+    const label = fieldLabel(el);
+    const inFrame = el.ownerDocument && el.ownerDocument !== document;
+    const stable_id = inFrame && globalThis.__bashyCDPTraverseFrames ? selectorOf(el) : (el.id || selectorOf(el));
+    return { tag, name, label, stable_id };
+  }
+
+  function sameIdentity(a, b) {
+    return a && b && a.tag === b.tag && a.name === b.name && a.label === b.label && a.stable_id === b.stable_id;
+  }
+
+  function resolveSelector(root, selector) {
+    const s = String(selector || "").trim();
+    if (s.startsWith("framecss:")) {
+      const cut = s.lastIndexOf("::");
+      if (cut < 0) return [];
+      const frames = resolveSelector(root, s.slice(9, cut));
+      return frames.flatMap((frame) => {
+        try { return frame.contentDocument ? resolveSelector(frame.contentDocument, s.slice(cut + 2)) : []; }
+        catch (_) { return []; }
+      });
+    }
+    if (s.startsWith("text=") || s.startsWith("label=")) {
+      const want = norm(s.slice(s.indexOf("=") + 1));
+      const pool = deepElements(root, CANDIDATES);
+      if (s.startsWith("label=")) {
+        const matches = pool.filter((el) => norm(fieldLabel(el)).includes(want))
+          .map((el) => el.tagName === "LABEL" ? el.control : el).filter(Boolean);
+        return [...new Set(matches)];
+      }
+      return [...new Set(pool.filter((el) => norm(labelOf(el) || el.textContent).includes(want))
+        .map((el) => el.tagName === "LABEL" && el.control ? el.control : el))];
+    }
+    if (s.startsWith("xpath=") || s.startsWith("/") || s.startsWith("(")) {
+      const expr = s.startsWith("xpath=") ? s.slice(6) : s;
+      const found = [];
+      function evaluate(node) {
+        // Chrome rejects a ShadowRoot as an XPath context. Evaluate a
+        // detached mirror and map its elements back to the open root.
+        let context = node, doc = node.nodeType === Node.DOCUMENT_NODE ? node : (node.ownerDocument || document), original = null, mirrored = null;
+        if (node.nodeType === Node.DOCUMENT_FRAGMENT_NODE && node.host) {
+          doc = document.implementation.createHTMLDocument("");
+          const clone = (from, to) => {
+            for (const child of from.children) {
+              const copy = child.cloneNode(false);
+              to.appendChild(copy);
+              original.push(child); mirrored.push(copy);
+              clone(child, copy);
+            }
+          };
+          original = []; mirrored = [];
+          clone(node, doc.body);
+          context = doc;
+        }
+        const result = doc.evaluate(expr, context, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+        for (let i = 0; i < result.snapshotLength; i++) {
+          const el = result.snapshotItem(i);
+          const mapped = mirrored ? original[mirrored.indexOf(el)] : el;
+          if (mapped && mapped.nodeType === Node.ELEMENT_NODE) found.push(mapped);
+        }
+      }
+      function walk(node) {
+        evaluate(node);
+        for (const el of node.querySelectorAll("*")) {
+          if (el.shadowRoot) walk(el.shadowRoot);
+          if (globalThis.__bashyCDPTraverseFrames && (el.localName === "iframe" || el.localName === "frame")) {
+            try { if (el.contentDocument) walk(el.contentDocument); } catch (_) { /* cross-origin frame */ }
+          }
+        }
+      }
+      walk(root);
+      return [...new Set(found)];
+    }
+    // Explicit shadow boundary syntax. An ordinary CSS selector searches
+    // every open root, so callers need not know whether a widget is shadowed.
+    const stages = s.split(/\s*>>>\s*/);
+    let roots = [root];
+    for (let i = 0; i < stages.length; i++) {
+      const matches = roots.flatMap((r) => i ? Array.from(r.querySelectorAll(stages[i])) : deepElements(r, stages[i]));
+      if (i === stages.length - 1) return matches;
+      roots = matches.map((el) => el.shadowRoot).filter(Boolean);
+    }
+    return [];
   }
 
   function shown(el) {
-    const cs = getComputedStyle(el);
+    const cs = el.ownerDocument.defaultView.getComputedStyle(el);
     if (cs.visibility === "hidden" || cs.display === "none" || cs.opacity === "0") return false;
     const r = el.getBoundingClientRect();
     return r.width > 0 && r.height > 0;
@@ -66,8 +205,8 @@
 
   function scopeRoot(params) {
     if (!params.scope) return document;
-    const s = query(document, params.scope);
-    return s && !s.__badSelector ? s : null;
+    try { return resolveSelector(document, params.scope)[0] || null; }
+    catch (_) { return null; }
   }
 
   // candidate drops elements that would only duplicate another entry:
@@ -110,7 +249,7 @@
     const navFilter = !params.scope;
     const includeHidden = !!params.include_hidden;
     const out = [];
-    for (const el of root.querySelectorAll(CANDIDATES)) {
+    for (const el of deepElements(root, CANDIDATES)) {
       if (!candidate(el)) continue;
       if (navFilter && el.closest && el.closest(LANDMARKS)) continue;
       if (!includeHidden && !shown(el)) continue;
@@ -133,6 +272,7 @@
     const matches = [];
     const indexOf = new Map();
     const all = candidates(params);
+    extracted.set(JSON.stringify([params.scope || "", !!params.include_hidden]), all.map(identityOf));
     for (let i = 0; i < all.length; i++) {
       const el = all[i];
       if (want) {
@@ -185,9 +325,12 @@
       // filtered (--match) listing still prints indexes that click
       // --index resolves to the same element.
       const idx = want ? indexOf.get(el) : OFFSET + j + 1;
-      lines.push(`[${idx}]${vis ? "" : " (hidden)"} <${tag} ${attrPairs.join(" ")}>${text}</${tag}>`);
+      const identity = identityOf(el);
+      const selector = selectorOf(el);
+      lines.push(`[${idx}]${vis ? "" : " (hidden)"} ${selector} <${tag} ${attrPairs.join(" ")}>${text}</${tag}>`);
       const line = `<${tag} ${attrPairs.join(" ")}>${text}</${tag}>`;
-      records.push({ index: idx, tag: tag, text: text, attrs: attrs, visible: vis, box: boxOf(el), line: line });
+      records.push({ index: idx, tag: tag, text: text, attrs: attrs, visible: vis, box: boxOf(el), line: line,
+        stable_id: identity.stable_id, label: identity.label, selector: selector, name: identity.name });
     }
     const body = (root === document ? (document.body && document.body.innerText) : root.innerText) || "";
     const viewport = {
@@ -209,35 +352,40 @@
   }
 
   // opts.visibleOnly refuses a selector that matches only hidden
-  // elements (type/select: filling a field the user cannot see is the
-  // silent-wrongness case). click keeps hidden matches, since toggling a
-  // visually hidden radio/checkbox input is legitimate.
+  // elements. Explicit --include-hidden still permits hidden controls.
   function resolveTarget(params, opts) {
     if (params.element_id && params.element_id > 0) {
       const flat = candidates(params);
       const el = flat[params.element_id - 1];
       if (!el) return { __miss: `element index ${params.element_id} out of range (extract listed ${flat.length})`, __notfound: true };
+      if (opts && opts.write) {
+        const identities = extracted.get(JSON.stringify([params.scope || "", !!params.include_hidden]));
+        const expected = params.expected_identity || (identities && identities[params.element_id - 1]);
+        if (!sameIdentity(expected, identityOf(el))) return {
+          __miss: `guard:fill-mismatch: index ${params.element_id} no longer identifies the extracted field`,
+          __mismatch: true,
+        };
+      }
       return el;
     }
     if (params.selector) {
-      const scoped = params.scope ? query(document, params.scope) : document;
-      if (scoped && scoped.__badSelector) {
-        return { __miss: `scope ${JSON.stringify(params.scope)} is not a valid CSS selector: ${scoped.__reason}` };
-      }
-      const el = query(scoped || document, params.selector);
-      if (el && el.__badSelector) {
+      const scoped = scopeRoot(params);
+      let matches;
+      try { matches = resolveSelector(scoped || document, params.selector); }
+      catch (e) {
         const numeric = /^[0-9]+$/.test(params.selector);
         return {
           __miss: numeric
             ? `${JSON.stringify(params.selector)} is not a CSS selector; pass an element index as element_id (bashy browser click --index ${params.selector})`
-            : `${JSON.stringify(params.selector)} is not a valid CSS selector: ${el.__reason}`,
+            : `${JSON.stringify(params.selector)} is not a valid selector: ${String((e && e.message) || e)}`,
         };
       }
+      const el = matches[0];
       if (!el) return { __miss: `no element matches selector ${JSON.stringify(params.selector)}`, __notfound: true };
       // Prefer the first VISIBLE match: a selector like input[type=text]
       // also matches inputs in collapsed/display:none steps.
       if (!params.include_hidden && !shown(el)) {
-        const vis = Array.from((scoped || document).querySelectorAll(params.selector)).find(shown);
+        const vis = matches.find(shown);
         if (vis) return vis;
         if (opts && opts.visibleOnly) {
           return { __miss: `selector ${JSON.stringify(params.selector)} matches only hidden elements (pass --include-hidden to act on one anyway)`, __notfound: true };
@@ -281,7 +429,7 @@
     const dialog = params.scope ? null : topmostDialog();
     const all = candidates(Object.assign({}, params, { scope: params.scope || "", include_hidden: false }));
     const indexOf = new Map(all.map((el, i) => [el, i + 1]));
-    const pool = Array.from(root.querySelectorAll(CANDIDATES)).filter((el) => shown(el));
+    const pool = deepElements(root, CANDIDATES).filter((el) => shown(el));
     const scored = [];
     for (const el of pool) {
       const names = [labelOf(el), el.getAttribute("aria-label"), el.getAttribute("title"), el.getAttribute("placeholder")].map(norm);
@@ -339,7 +487,7 @@
   }
 
   function click(params) {
-    const el = resolveTarget(params);
+    const el = resolveTarget(params, { visibleOnly: true, write: true });
     if (el && el.__miss) return miss("click", el);
     try { el.scrollIntoView({ block: "center", inline: "nearest" }); } catch (_) { /* detached */ }
     // HTMLElement.click() never moves focus; a real click on a field
@@ -359,9 +507,10 @@
   // shadow `value` on the instance (React's tracker, Lit, Angular's
   // value accessor) then see the input event as a real change.
   function setNative(el, text) {
-    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype
-      : el instanceof HTMLSelectElement ? HTMLSelectElement.prototype
-      : HTMLInputElement.prototype;
+    const view = el.ownerDocument.defaultView;
+    const proto = el instanceof view.HTMLTextAreaElement ? view.HTMLTextAreaElement.prototype
+      : el instanceof view.HTMLSelectElement ? view.HTMLSelectElement.prototype
+      : view.HTMLInputElement.prototype;
     const desc = Object.getOwnPropertyDescriptor(proto, "value");
     if (desc && desc.set) desc.set.call(el, text);
     else el.value = text;
@@ -396,7 +545,7 @@
   // resets the value is reported as an error naming what the field
   // shows, never as "typed".
   async function type(params) {
-    const el = resolveTarget(params, { visibleOnly: true });
+    const el = resolveTarget(params, { visibleOnly: true, write: true });
     if (el && el.__miss) return miss("type", el);
     // The sensitive-input guard, enforced here too: a client that skipped
     // bashy's gate still cannot fill a guarded field. The refusal never
@@ -414,7 +563,7 @@
   // value already is. Nothing it returns carries the value — not the
   // result, not an error, not a hash: only match/mismatch and two lengths.
   async function guardFill(params) {
-    const el = resolveTarget(params, { visibleOnly: true });
+    const el = resolveTarget(params, { visibleOnly: true, write: true });
     if (el && el.__miss) return miss("guard_fill", el);
     const r = await typeInto(el, params);
     if (r.error) return { error: `guard_fill: the answer did not stick on ${nameOf(el) || el.tagName.toLowerCase()}`, retry_trusted: !!r.retry_trusted };
@@ -425,7 +574,7 @@
   // after a fill (background.js runs it once the synthetic and, if needed,
   // trusted insert are done): the verdict and the lengths, never the value.
   function guardVerify(params) {
-    const el = resolveTarget(params, { visibleOnly: true });
+    const el = resolveTarget(params, { visibleOnly: true, write: true });
     if (el && el.__miss) return miss("guard_fill", el);
     return fillVerdict(el, params.text || "");
   }
@@ -477,7 +626,7 @@
   // focusTarget focuses and selects the field's contents so a trusted
   // Input.insertText replaces it.
   function focusTarget(params) {
-    const el = resolveTarget(params, { visibleOnly: true });
+    const el = resolveTarget(params, { visibleOnly: true, write: true });
     if (el && el.__miss) return miss("type", el);
     if (el.focus) el.focus();
     try {
@@ -534,7 +683,7 @@
   async function select(params) {
     const want = norm(params.option);
     if (!want) return { error: "select: an option is required" };
-    const el = resolveTarget(params, { visibleOnly: true });
+    const el = resolveTarget(params, { visibleOnly: true, write: true });
     if (el && el.__miss) return miss("select", el);
     const matched = describe(el);
     const done = (got) => ({ content: "selected", data: JSON.stringify({ matched, selected: got }) });
@@ -614,7 +763,7 @@
     params = params || {};
     let el;
     if (params.element_id || params.selector || params.match_text) {
-      el = resolveTarget(params, { visibleOnly: true });
+      el = resolveTarget(params, { visibleOnly: true, write: true });
       if (el && el.__miss) return miss("guard", el);
     } else {
       // The focused element. Focus inside a child frame answers from that
@@ -630,7 +779,7 @@
   // guardFocus focuses the field for the HUMAN path: the operator types
   // the guarded value into it themselves.
   function guardFocus(params) {
-    const el = resolveTarget(params || {}, { visibleOnly: true });
+    const el = resolveTarget(params || {}, { visibleOnly: true, write: true });
     if (el && el.__miss) return miss("guard_focus", el);
     if (!globalThis.__bashyGuard) return { error: "guard_focus: guard.js not loaded" };
     if ((params || {}).release) return globalThis.__bashyGuard.releaseFocus(el);
@@ -647,5 +796,6 @@
   globalThis.__bashyPage = {
     version: VERSION,
     extract, count, click, type, select, scroll, readValue, focusTarget, guardField, guardFocus, guardFill, guardVerify,
+    resolveSelector,
   };
 })();

@@ -2,6 +2,7 @@ package solo
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -20,10 +21,14 @@ import (
 // the field the user sees comes later. Both a comma list and a :not()
 // selector match the hidden input first.
 const hiddenFirstFixture = `<!doctype html><html><body>
-<section style="display:none"><input type="text" id="q-hidden"></section>
+<section style="display:none"><input type="password" id="q-hidden"></section>
 <section><input type="text" id="q-visible"><textarea id="q-area"></textarea></section>
 <section style="display:none"><input type="email" id="q-only-hidden"></section>
+<label for="q-labelled">Labelled answer</label><input id="q-labelled" name="labelled">
+<div id="shadow-host"></div>
+<iframe id="answer-frame" src="/child"></iframe>
 <script>
+document.getElementById('shadow-host').attachShadow({mode:'open'}).innerHTML = '<label for="shadow-answer">Shadow answer</label><input id="shadow-answer" name="shadow">';
 window.hit='';
 document.getElementById('q-visible').addEventListener('click', () => { window.hit = 'visible'; });
 document.getElementById('q-hidden').addEventListener('click', () => { window.hit = 'hidden'; });
@@ -42,8 +47,12 @@ func TestSoloSelectorPrefersVisibleMatch(t *testing.T) {
 	t.Setenv("BASHY_SECRETS_TOKEN", "")
 	t.Setenv("BASHY_API_KEY", "")
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if r.URL.Path == "/child" {
+			fmt.Fprint(w, `<!doctype html><label for="q-labelled">Child answer</label><input id="q-labelled" name="child">`)
+			return
+		}
 		fmt.Fprint(w, hiddenFirstFixture)
 	}))
 	defer srv.Close()
@@ -108,6 +117,27 @@ func TestSoloSelectorPrefersVisibleMatch(t *testing.T) {
 			t.Fatalf("type %q skipped past the first visible match into the textarea: %q", sel, got)
 		}
 	}
+	for _, sel := range []string{"xpath=//*[@id='q-labelled']", "//*[@id='q-labelled']", "(//*[@id='q-labelled'])[1]", "label=Labelled answer"} {
+		if res := exec(wire.Action{Type: wire.ActionType, Selector: sel, Text: "labelled"}); !res.Success {
+			t.Fatalf("selector %q: %+v", sel, res)
+		}
+		if res := exec(wire.Action{Type: wire.ActionWaitForSelector, Selector: sel, State: "attached"}); !res.Success {
+			t.Fatalf("attached %q: %+v", sel, res)
+		}
+	}
+	for _, sel := range []string{"#shadow-answer", "label=Shadow answer", "xpath=//*[@id='shadow-answer']"} {
+		if res := exec(wire.Action{Type: wire.ActionType, Selector: sel, Text: "shadow"}); !res.Success {
+			t.Fatalf("shadow selector %q: %+v", sel, res)
+		}
+	}
+	for _, sel := range []string{"label=Child answer", "xpath=//*[@name='child']", "framecss:#answer-frame::#q-labelled"} {
+		if res := exec(wire.Action{Type: wire.ActionType, Selector: sel, Text: "frame"}); !res.Success {
+			t.Fatalf("frame selector %q: %+v", sel, res)
+		}
+	}
+	if got := str(`document.querySelector('iframe').contentDocument.getElementById('q-labelled').value`); got != "frame" {
+		t.Fatalf("same-origin frame value %q", got)
+	}
 
 	// click lands on the visible match too.
 	open()
@@ -166,5 +196,63 @@ func TestSoloSelectorPrefersVisibleMatch(t *testing.T) {
 	}
 	if d := time.Since(start); d < time.Second || d > 15*time.Second {
 		t.Fatalf("missing wait took %v, want about the 1.5s budget", d)
+	}
+
+	open()
+	ex := exec(wire.Action{Type: wire.ActionExtract})
+	if !ex.Success {
+		t.Fatalf("extract: %+v", ex)
+	}
+	var listing struct {
+		Elements []struct {
+			Index    int    `json:"index"`
+			Name     string `json:"name"`
+			StableID string `json:"stable_id"`
+			Label    string `json:"label"`
+			Selector string `json:"selector"`
+		} `json:"elements"`
+	}
+	if err := json.Unmarshal([]byte(ex.Data), &listing); err != nil {
+		t.Fatal(err)
+	}
+	var idx int
+	var childIdx int
+	for _, e := range listing.Elements {
+		if e.Name == "labelled" {
+			idx = e.Index
+			if e.StableID != "q-labelled" || e.Label != "Labelled answer" || e.Selector != "#q-labelled" {
+				t.Fatalf("field metadata: %+v", e)
+			}
+		}
+		if e.Name == "child" {
+			childIdx = e.Index
+			if !strings.HasPrefix(e.StableID, "framecss:") || !strings.HasPrefix(e.Selector, "framecss:") || e.Label != "Child answer" {
+				t.Fatalf("frame metadata: %+v", e)
+			}
+		}
+	}
+	if idx == 0 {
+		t.Fatalf("labelled field absent: %s", ex.Data)
+	}
+	if childIdx == 0 {
+		t.Fatalf("child field absent: %s", ex.Data)
+	}
+	if res := exec(wire.Action{Type: wire.ActionType, ElementID: childIdx, Text: "child index"}); !res.Success {
+		t.Fatalf("frame index fill: %+v", res)
+	}
+	if res := exec(wire.Action{Type: wire.ActionType, ElementID: idx, Text: "first"}); !res.Success {
+		t.Fatalf("index fill: %+v", res)
+	}
+	if err := chromedp.Run(c.current(), chromedp.Evaluate(`document.getElementById('q-labelled').outerHTML = '<input id="q-labelled" name="labelled" aria-label="Labelled answer">'`, nil)); err != nil {
+		t.Fatal(err)
+	}
+	if res := exec(wire.Action{Type: wire.ActionType, ElementID: idx, Text: "rerendered"}); !res.Success {
+		t.Fatalf("same field rerender: %+v", res)
+	}
+	if err := chromedp.Run(c.current(), chromedp.Evaluate(`document.body.insertAdjacentHTML('afterbegin', '<input id="new" name="new">')`, nil)); err != nil {
+		t.Fatal(err)
+	}
+	if res := exec(wire.Action{Type: wire.ActionType, ElementID: idx, Text: "wrong"}); res.Success || !strings.Contains(res.Error, "guard:fill-mismatch") {
+		t.Fatalf("shifted index: %+v", res)
 	}
 }
