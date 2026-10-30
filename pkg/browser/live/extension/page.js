@@ -786,6 +786,57 @@
     return globalThis.__bashyGuard.focusForHuman(el);
   }
 
+  // probe counts this frame's matches for selector: all of them, and the
+  // ones a user could see. wait_for_selector and keyboard_press route
+  // through it so they share click/type's selector grammar.
+  function probe(params) {
+    let matches;
+    try { matches = resolveSelector(document, params.selector); }
+    catch (e) { return { error: `${JSON.stringify(params.selector)} is not a valid selector: ${String((e && e.message) || e)}` }; }
+    return { matches: matches.length, visible: matches.filter(shown).length };
+  }
+
+  // dispatch fires a named event at window, document or the first element
+  // matching selector. Nothing is compiled from a string (CSP-safe).
+  function dispatch(params) {
+    const name = String(params.event || "");
+    let detail = null;
+    if (params.detail) { try { detail = JSON.parse(params.detail); } catch (_) { detail = params.detail; } }
+    let target = window, where = "window";
+    if (params.selector === "document") { target = document; where = "document"; }
+    else if (params.selector) {
+      let matches;
+      try { matches = resolveSelector(document, params.selector); }
+      catch (e) { return { error: `dispatch_event: ${JSON.stringify(params.selector)} is not a valid selector` }; }
+      if (!matches.length) return { error: `dispatch_event: no element matches ${JSON.stringify(params.selector)}`, notfound: true };
+      target = matches[0]; where = params.selector;
+    }
+    const ev = detail === null
+      ? new Event(name, { bubbles: true, cancelable: true })
+      : new CustomEvent(name, { bubbles: true, cancelable: true, detail });
+    const notCancelled = target.dispatchEvent(ev);
+    return {
+      content: `dispatched ${name} on ${where}`,
+      data: JSON.stringify({ event: name, target: where, default_prevented: !notCancelled }),
+    };
+  }
+
+  // keyFocus focuses the single visible match of selector and confirms it
+  // holds focus; the caller sends no key unless this answers ok.
+  function keyFocus(params) {
+    let matches;
+    try { matches = resolveSelector(document, params.selector); }
+    catch (e) { return { error: `keyboard_press: ${JSON.stringify(params.selector)} is not a valid selector` }; }
+    const visible = matches.filter(shown);
+    if (visible.length !== 1) return { error: `keyboard_press: selector ${JSON.stringify(params.selector)} matches ${visible.length} visible elements` };
+    const el = visible[0];
+    if (el.focus) el.focus();
+    let active = document.activeElement;
+    while (active && active.shadowRoot && active.shadowRoot.activeElement) active = active.shadowRoot.activeElement;
+    if (active !== el) return { error: `keyboard_press: ${JSON.stringify(params.selector)} did not take focus` };
+    return { ok: true };
+  }
+
   function scroll(params) {
     let amount = params.amount || 500;
     if (params.direction === "up") amount = -amount;
@@ -796,6 +847,6 @@
   globalThis.__bashyPage = {
     version: VERSION,
     extract, count, click, type, select, scroll, readValue, focusTarget, guardField, guardFocus, guardFill, guardVerify,
-    resolveSelector,
+    resolveSelector, probe, dispatch, keyFocus,
   };
 })();
