@@ -320,6 +320,11 @@ func TestPageSelectorModesShadowAndFrame(t *testing.T) {
 			t.Fatalf("%s: %v", selector, got)
 		}
 	}
+	var firstValue string
+	h.mainEval(`document.getElementById('first').value`, &firstValue)
+	if firstValue != "label=First name" {
+		t.Fatalf("label selector filled %q, want the input", firstValue)
+	}
 	if got := h.call("click", map[string]any{"selector": "text=Save"}); got["error"] != nil {
 		t.Fatal(got)
 	}

@@ -97,7 +97,13 @@
     if (s.startsWith("text=") || s.startsWith("label=")) {
       const want = norm(s.slice(s.indexOf("=") + 1));
       const pool = deepElements(root, CANDIDATES);
-      return pool.filter((el) => norm(s.startsWith("label=") ? fieldLabel(el) : labelOf(el) || el.textContent).includes(want));
+      if (s.startsWith("label=")) {
+        const matches = pool.filter((el) => norm(fieldLabel(el)).includes(want))
+          .map((el) => el.tagName === "LABEL" ? el.control : el).filter(Boolean);
+        return [...new Set(matches)];
+      }
+      return [...new Set(pool.filter((el) => norm(labelOf(el) || el.textContent).includes(want))
+        .map((el) => el.tagName === "LABEL" && el.control ? el.control : el))];
     }
     if (s.startsWith("xpath=") || s.startsWith("/") || s.startsWith("(")) {
       const expr = s.startsWith("xpath=") ? s.slice(6) : s;
