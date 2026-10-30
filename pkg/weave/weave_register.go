@@ -279,13 +279,15 @@ func weaveCloseRegisterOnMerge(root, base string, it *weaveItem) {
 // explicitly drops the work. A retryable failure/kill is NOT an abandonment (the item
 // stays "assigned" to be re-run); only dropping it returns the todo to the backlog.
 // Clears the link and reverts assigned -> todo, so the list never shows a stale
-// "assigned" for work nobody will do.
+// "assigned" for work nobody will do. A CLOSED item is left untouched: its
+// `weave:` link is history, and clearing it only dirties a committed story
+// (often a sprint's) that no one asked to change.
 func weaveReleaseRegister(root string, it *weaveItem) {
 	if it == nil || it.Register == "" {
 		return
 	}
 	st, ri, err := findRegisterItem(root, it.Register)
-	if err != nil {
+	if err != nil || todopkg.IsClosed(ri.Status) {
 		return
 	}
 	changed := false
