@@ -177,8 +177,9 @@ Three things that session depends on, each of which was once broken:
   `Page.captureScreenshot`, which addresses the tab itself. `--full-page`
   additionally stitches inner scroll areas tile by tile, so every panel
   appears at its full content height; page and panel positions are restored
-  even when the stitch fails (then the beyond-viewport capture answers and
-  `data` names the fallback).
+  even when the stitch fails. A failed stitch is an explicit error, never a
+  silent single capture: once panels exist that fallback would be missing
+  rows below each panel's fold.
 - **Step 2 tells the truth.** `status` used to answer `mode "live" is not
   supported` while every sibling subcommand drove live mode happily.
 

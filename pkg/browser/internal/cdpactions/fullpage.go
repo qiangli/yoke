@@ -10,6 +10,7 @@ import (
 	"image/draw"
 	"image/png"
 	"sort"
+	"time"
 
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
@@ -98,17 +99,44 @@ func captureMetaFullPage() string {
 	return string(b)
 }
 
-// finishFullPageFallback answers a failed stitch with the legacy
-// beyond-viewport capture instead of nothing: the stitch already
-// restored the saved positions, so this captures the settled page. The
-// meta names the fallback (and why), so it never reads as a stitch.
-func finishFullPageFallback(ctx context.Context, a wire.Action, cause error) (*wire.Result, error) {
-	var buf []byte
-	if err := chromedp.Run(ctx, chromedp.FullScreenshot(&buf, 100)); err != nil {
-		return &wire.Result{Error: err.Error()}, nil
+// cleanupCtx detaches stitch cleanup from the operation's cancellation:
+// a timed-out (or failed) stitch still leaves the page hidden and
+// scrolled, and a restore issued on the expired ctx fails instantly —
+// stranding it. Values (the chromedp executor) are preserved; only
+// cancellation is shed, with a fresh bound. Every restore in the stitch
+// runs on one.
+func cleanupCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+}
+
+// stitchError is a failed stitch: panels counts the inner panels the
+// layout found, or -1 when the layout itself never answered. A failed
+// stitch is never answered with the single capture — see Screenshot.
+type stitchError struct {
+	cause  error
+	panels int
+}
+
+func (e *stitchError) Error() string { return e.cause.Error() }
+func (e *stitchError) Unwrap() error { return e.cause }
+
+// refuseStitchFallback answers a failed stitch with an explicit error,
+// never the single capture: once panels exist that fallback is missing
+// rows below each panel's fold, and when the layout itself failed its
+// completeness is unproven. Mirrors the live extension's refusal.
+func refuseStitchFallback(err error) (*wire.Result, error) {
+	n := -1
+	var se *stitchError
+	if errors.As(err, &se) {
+		n = se.panels
 	}
-	b, _ := json.Marshal(map[string]any{"capture": "full_page", "stitched": false, "stitch_error": cause.Error()})
-	return finishCapture(a, buf, string(b))
+	msg := fmt.Sprintf("screenshot: full_page stitch failed (%v); refusing the single-capture fallback", err)
+	if n > 0 {
+		msg += fmt.Sprintf(" — %d inner panel(s) would lose rows below the fold", n)
+	} else {
+		msg += " — completeness unproven"
+	}
+	return &wire.Result{Error: msg}, nil
 }
 
 // StitchFullPage captures the page and every inner scroll area tile by
@@ -122,36 +150,53 @@ func StitchFullPage(ctx context.Context) (buf []byte, stitched bool, err error) 
 	}
 	layout, err := shotLayoutOf(ctx, world)
 	if err != nil {
-		return nil, false, err
+		// Best effort: the layout hid fixed elements before failing to
+		// answer, so restore from the live cache before reporting. The
+		// restore itself is never the error — the layout failure is.
+		// Cleanup runs detached from the operation's cancellation: on an
+		// expired ctx the restore below would fail instantly and strand
+		// the page hidden.
+		clean, stop := cleanupCtx(ctx)
+		_ = shotRestoreCacheOnly(clean, world)
+		stop()
+		return nil, false, &stitchError{cause: err, panels: -1}
 	}
 	if len(layout.Panels) == 0 {
 		// Untouched page, legacy single capture. (The setup hid fixed
 		// elements; restore before leaving so nothing is stranded.)
-		_ = shotRestoreTo(ctx, world, layout)
+		clean, stop := cleanupCtx(ctx)
+		_ = shotRestoreTo(clean, world, layout)
+		stop()
 		return nil, false, nil
 	}
 	jobs := outermostJobs(layout.Panels)
+	// fail wraps a tiling error with the panel count the refusal names.
+	fail := func(err error) ([]byte, bool, error) {
+		return nil, false, &stitchError{cause: err, panels: len(jobs)}
+	}
+	clean, stop := cleanupCtx(ctx)
+	defer stop()
 	restored := false
 	restore := func() {
 		if restored {
 			return
 		}
 		restored = true
-		_ = shotRestoreTo(ctx, world, layout)
+		_ = shotRestoreTo(clean, world, layout)
 	}
 	defer restore()
 
 	plan := planStitch(layout, jobs)
 	if plan.tiles > maxShotTiles {
-		return nil, false, fmt.Errorf("full_page: stitch needs %d captures, over the %d cap", plan.tiles, maxShotTiles)
+		return fail(fmt.Errorf("full_page: stitch needs %d captures, over the %d cap", plan.tiles, maxShotTiles))
 	}
 	scale, err := shotScale(ctx, world, layout)
 	if err != nil {
-		return nil, false, err
+		return fail(err)
 	}
 	final := image.NewRGBA(image.Rect(0, 0, plan.width(scale), plan.height(scale)))
 	if final.Bounds().Dy() > maxShotHeight {
-		return nil, false, fmt.Errorf("full_page: stitched image is %dpx tall, over the %dpx cap", final.Bounds().Dy(), maxShotHeight)
+		return fail(fmt.Errorf("full_page: stitched image is %dpx tall, over the %dpx cap", final.Bounds().Dy(), maxShotHeight))
 	}
 	tiles := 1 // the scale probe above captured one tile already
 	tick := func() error {
@@ -171,17 +216,17 @@ func StitchFullPage(ctx context.Context) (buf []byte, stitched bool, err error) 
 		for st < p.SH {
 			got, tile, err := shotPanelTile(ctx, world, layout, job, st)
 			if err != nil {
-				return nil, false, err
+				return fail(err)
 			}
 			if err := tick(); err != nil {
-				return nil, false, err
+				return fail(err)
 			}
 			next, err := paintPanelSlice(full, tile, scale, p, got, st)
 			if err != nil {
-				return nil, false, err
+				return fail(err)
 			}
 			if next <= st {
-				return nil, false, fmt.Errorf("full_page: panel %d would not scroll (pinned at %d of %d)", i, st, p.SH)
+				return fail(fmt.Errorf("full_page: panel %d would not scroll (pinned at %d of %d)", i, st, p.SH))
 			}
 			st = next
 		}
@@ -200,10 +245,10 @@ func StitchFullPage(ctx context.Context) (buf []byte, stitched bool, err error) 
 		}
 		got, tile, err := shotWindowTile(ctx, world, top)
 		if err != nil {
-			return nil, false, err
+			return fail(err)
 		}
 		if err := tick(); err != nil {
-			return nil, false, err
+			return fail(err)
 		}
 		lo, hi := y, layout.DocH
 		if got.Y > lo {
@@ -214,7 +259,7 @@ func StitchFullPage(ctx context.Context) (buf []byte, stitched bool, err error) 
 		}
 		paintPageStrip(final, tile, scale, plan, layout, got.Y, lo, hi)
 		if hi <= y {
-			return nil, false, fmt.Errorf("full_page: page would not scroll (pinned at %d of %d)", y, layout.DocH)
+			return fail(fmt.Errorf("full_page: page would not scroll (pinned at %d of %d)", y, layout.DocH))
 		}
 		y = hi
 		if layout.DocH <= layout.VH {
@@ -229,7 +274,7 @@ func StitchFullPage(ctx context.Context) (buf []byte, stitched bool, err error) 
 
 	var out bytes.Buffer
 	if err := png.Encode(&out, final); err != nil {
-		return nil, false, err
+		return fail(err)
 	}
 	restore()
 	return out.Bytes(), true, nil
@@ -393,8 +438,28 @@ func shotLayoutOf(ctx context.Context, world runtime.ExecutionContextID) (shotLa
 }
 
 func shotRestoreTo(ctx context.Context, world runtime.ExecutionContextID, layout shotLayout) error {
+	return worldEval(ctx, world, shotRestoreCall(layout), nil)
+}
+
+// shotRestoreCall builds the restore invocation for a saved layout,
+// separate so tests can pin the payload without a browser: the restore
+// must carry the NONZERO saved page/panel offsets back, or the page
+// lands at 0,0 instead of where the stitch found it.
+func shotRestoreCall(layout shotLayout) string {
 	saved, _ := json.Marshal(layout)
-	return worldEval(ctx, world, "globalThis.__bashyPage.shotRestore("+string(saved)+")", nil)
+	return "globalThis.__bashyPage.shotRestore(" + string(saved) + ")"
+}
+
+// shotRestoreCacheOnly restores from the page's live stitch cache: the
+// layout call hides fixed elements BEFORE answering, so a layout answer
+// that never arrives (undecodable, or the world died mid-layout) still
+// leaves the page hidden — and the saved positions it would have
+// carried are exactly what the cache already holds. Calling shotRestore
+// with no argument restores those live values instead of clobbering
+// them with zeros (which a zero shotLayout argument would do: the page
+// restores scroll 0,0 and loses the true saved offsets).
+func shotRestoreCacheOnly(ctx context.Context, world runtime.ExecutionContextID) error {
+	return worldEval(ctx, world, "globalThis.__bashyPage.shotRestore()", nil)
 }
 
 type shotPos struct {
@@ -456,20 +521,23 @@ func shotWindowTile(ctx context.Context, world runtime.ExecutionContextID, top i
 	return pos, tile, nil
 }
 
-// shotPanelTile pins the window on job's box and sets the panel to st,
-// then captures one viewport. The window must NOT follow st: the panel
-// box is fixed in the document, so scrolling the window by the content
-// offset pushes the box itself out of view. The paint math uses only
-// the ACTUAL positions that come back in pos.
-func shotPanelTile(ctx context.Context, world runtime.ExecutionContextID, layout shotLayout, job shotJob, st int) (shotPos, *image.RGBA, error) {
-	sy := 0
-	if layout.DocH > layout.VH {
-		if max := layout.DocH - layout.VH; job.panel.Y > max {
-			sy = max
-		} else if job.panel.Y > 0 {
-			sy = job.panel.Y
-		}
+// panelWindowY pins the window on the panel's box for the whole panel
+// tile run: the box is fixed in the document, so scrolling the window by
+// the panel's content offset would push the box itself out of view. The
+// paint math uses only the ACTUAL positions that come back in pos.
+// Separate so tests pin the clamping without a browser; the live
+// extension's panel loop applies the same clamp.
+func panelWindowY(layout shotLayout, panelY int) int {
+	if layout.DocH <= layout.VH {
+		return 0
 	}
+	return min(max(panelY, 0), layout.DocH-layout.VH)
+}
+
+// shotPanelTile pins the window on job's box and sets the panel to st,
+// then captures one viewport.
+func shotPanelTile(ctx context.Context, world runtime.ExecutionContextID, layout shotLayout, job shotJob, st int) (shotPos, *image.RGBA, error) {
+	sy := panelWindowY(layout, job.panel.Y)
 	pos, err := shotSetTo(ctx, world, 0, sy, job.cache, st)
 	if err != nil {
 		return shotPos{}, nil, err

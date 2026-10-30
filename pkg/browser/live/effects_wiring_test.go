@@ -6,11 +6,6 @@ import (
 	"github.com/qiangli/yoke/pkg/browser/wire"
 )
 
-// Structural pins for the S536.4 live wire-up: the new text method is
-// advertised (so the hub's per-method gate lets it through), routed,
-// and carried end to end; the click/scroll/screenshot paths keep their
-// shape while reporting the new outcomes.
-
 // TestEffectsParamsReachTheExtension guards the silent-drop class for
 // the new and extended knobs: a flag the CLI accepts but the transport
 // discards is exactly how `screenshot <path>` came to exit 0 having

@@ -301,3 +301,104 @@ func TestExtensionE2EEffects(t *testing.T) {
 		t.Fatalf("text under strict CSP leaks the password:\n%s", res.Content)
 	}
 }
+
+// hugePanelFixture serves one panel whose content (300 rows) needs far
+// more tiles than the stitch cap covers, below a tall outer document
+// with a fixed banner: the stitch must refuse explicitly (never answer
+// the downgraded single capture) and still unhide the banner.
+func hugePanelFixture() string {
+	var b strings.Builder
+	b.WriteString(`<!doctype html><html><body style="margin:0">` +
+		`<div id="banner" style="position:fixed;top:0;left:0;right:0;height:30px;background:#c00;color:#fff">banner</div>` +
+		`<div style="height:500px">above the panel</div>` +
+		`<div id="panel" style="height:200px;overflow-y:auto;border:1px solid #000">`)
+	for i := 1; i <= 300; i++ {
+		fmt.Fprintf(&b, `<div style="height:40px">Row %d</div>`, i)
+	}
+	b.WriteString(`</div><div style="height:2000px">below the fold</div></body></html>`)
+	return b.String()
+}
+
+// TestExtensionE2EScreenshotRestoreAndRefusal runs on the manager's
+// remote Chrome (BASHY_BROWSER_LIVE=1): a stitched capture from NONZERO
+// window/panel positions restores those exact offsets (not 0,0), and a
+// panel past the tile cap is an explicit refusal with the page restored.
+func TestExtensionE2EScreenshotRestoreAndRefusal(t *testing.T) {
+	guardIsolate(t)
+	fixtures := map[string]headerFixture{
+		"/fx":   {body: e2eEffectsFixture},
+		"/huge": {body: hugePanelFixture()},
+	}
+	svc, _, site := startEffectsE2E(t, fixtures, "/fx")
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	do := func(a wire.Action) *wire.Result {
+		t.Helper()
+		res, err := svc.Execute(ctx, a)
+		if err != nil {
+			t.Fatalf("%s: %v", a.Type, err)
+		}
+		if res == nil {
+			t.Fatalf("%s: no result", a.Type)
+		}
+		return res
+	}
+	eval := func(script string) (string, string) {
+		t.Helper()
+		res := do(wire.Action{Type: wire.ActionEvaluate, Script: script})
+		return res.Data, res.Error
+	}
+	must := func(script string) string {
+		t.Helper()
+		got, evalErr := eval(script)
+		if evalErr != "" {
+			t.Fatalf("eval %s: %s", script, evalErr)
+		}
+		return got
+	}
+
+	// From nonzero positions the stitch restores THOSE offsets.
+	must(`window.scrollTo(0, 250), document.getElementById('panel').scrollTop = 120, "set"`)
+	wantWin := must(`String(window.scrollY)`)
+	wantPst := must(`String(document.getElementById('panel').scrollTop)`)
+	if wantWin == "0" {
+		t.Fatalf("fixture window did not scroll (win=%s)", wantWin)
+	}
+	shot := do(wire.Action{Type: wire.ActionScreenshot, FullPage: true})
+	if !shot.Success || shot.Image == "" {
+		t.Fatalf("nonzero full-page screenshot: %+v", shot)
+	}
+	var meta struct {
+		Capture string `json:"capture"`
+	}
+	if err := json.Unmarshal([]byte(shot.Data), &meta); err != nil || meta.Capture != "stitched_full_page" {
+		t.Fatalf("capture path = %q (%v), want stitched_full_page", shot.Data, err)
+	}
+	if got, evalErr := eval(`window.scrollY + '/' + document.getElementById('panel').scrollTop`); evalErr != "" || got != wantWin+"/"+wantPst {
+		t.Fatalf("positions after stitch = %q (err %q), want %s/%s", got, evalErr, wantWin, wantPst)
+	}
+
+	// Past the tile cap the stitch refuses instead of downgrading, and
+	// the failed layout still restores positions and the banner.
+	if res := do(wire.Action{Type: wire.ActionNavigate, URL: site + "/huge"}); !res.Success {
+		t.Fatalf("navigate to huge page: %+v", res)
+	}
+	must(`window.scrollTo(0, 250), "set"`)
+	wantWin = must(`String(window.scrollY)`)
+	shot = do(wire.Action{Type: wire.ActionScreenshot, FullPage: true})
+	if shot.Success {
+		t.Fatalf("over-cap stitch succeeded (a downgraded full_page must never read as success)")
+	}
+	for _, want := range []string{"over the", "cap", "refusing the single-capture fallback"} {
+		if !strings.Contains(shot.Error, want) {
+			t.Fatalf("refusal misses %q: %q", want, shot.Error)
+		}
+	}
+	if got, evalErr := eval(`window.scrollY`); evalErr != "" || got != wantWin {
+		t.Fatalf("window after refusal = %q (err %q), want %s", got, evalErr, wantWin)
+	}
+	if got, evalErr := eval(`getComputedStyle(document.getElementById('banner')).display`); evalErr != "" || got == "none" {
+		t.Fatalf("banner after refusal = %q (err %q), want it reshown", got, evalErr)
+	}
+}

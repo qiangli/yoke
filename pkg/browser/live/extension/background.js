@@ -654,10 +654,59 @@ const SETTLE_TIMEOUT_MS = 2000;
 // restored by the stitch's own finally — reaches the caller.
 const STITCH_TIMEOUT_MS = 20000;
 
+// stitchTimeoutMs is the stitch budget (the hub's call ceiling is 30 s).
+// Tests override it per-load through globalThis.__bashyStitchTimeoutMs so
+// the timeout path is exercisable without waiting out the production
+// budget; production never sets that global.
+function stitchTimeoutMs() {
+  try {
+    const v = globalThis.__bashyStitchTimeoutMs;
+    if (typeof v === "number" && v > 0) return v;
+  } catch (_) { /* no global: production budget */ }
+  return STITCH_TIMEOUT_MS;
+}
+
 // STITCH_MAX_TILES caps a stitched capture (scale probe included), the
 // live mirror of the CDP stitcher's cap in
 // pkg/browser/internal/cdpactions/fullpage.go.
 const STITCH_MAX_TILES = 48;
+
+// STITCH_RESTORE_MS bounds the stitch's own cleanup: the layout hides
+// fixed elements, so the restore in the stitch's finally must settle even
+// when the operation already timed out. Best-effort past the bound —
+// never an unbounded wait on the way out.
+const STITCH_RESTORE_MS = 5000;
+
+// newStitchCancel makes the token takeScreenshot hands stitchFullPage:
+// { cancelled } plus a promise that fires when it does, so a stitch
+// stuck awaiting a chrome RPC that never settles can be released instead
+// of hanging the caller past the timeout.
+function newStitchCancel() {
+  const cancel = { cancelled: false, fired: null, fire: null };
+  cancel.fired = new Promise((resolve) => { cancel.fire = resolve; });
+  return cancel;
+}
+
+function cancelStitch(cancel) {
+  if (cancel && !cancel.cancelled) {
+    cancel.cancelled = true;
+    try { cancel.fire(); } catch (_) { /* no waiter */ }
+  }
+}
+
+// vsCancel races a hanging chrome RPC against the stitch cancel. When the
+// timeout already fired, the race rejects instead of awaiting a promise
+// that may never settle — and because every scroll/capture mutation in
+// the stitch awaits through here first, no further mutation is issued
+// after a cancel. Restoration is NOT raced through here (a cancelled
+// stitch still needs its page back); the finally time-boxes it instead.
+function vsCancel(p, cancel) {
+  if (!cancel || !cancel.fired) return p;
+  if (cancel.cancelled) return Promise.reject(new Error("screenshot: stitched capture cancelled"));
+  return Promise.race([p, cancel.fired.then(() => {
+    throw new Error("screenshot: stitched capture cancelled");
+  })]);
+}
 
 // withTimeout rejects if p has not settled within ms. The underlying promise
 // is left to finish on its own — it cannot be cancelled — so callers that hold
@@ -775,20 +824,44 @@ async function takeScreenshot(tabId, params) {
   // TIME-BOUNDED: see CDP_CAPTURE_TIMEOUT_MS. A hidden tab can leave
   // Page.captureScreenshot pending forever, and an unbounded await here would
   // never reach the fallback below.
+  // A failed stitch is an explicit error below: without panels the
+  // stitch reports null (the single capture below is exact, no downgrade),
+  // but once panels exist a beyond-viewport fallback is MISSING rows below
+  // each panel's fold — reporting it as a clean full-page success would be
+  // a silent downgrade. Completeness is equally unproven when the layout
+  // itself failed, so that path refuses the fallback too.
   if (fullPage) {
     // Inner scroll areas show only their visible slice in a
     // beyond-viewport capture: stitch them tile by tile (positions
     // restored even on failure — the stitch's own finally). Without
     // panels the stitch reports null and the single capture below is
-    // exact; a failed stitch falls back to it too (its meta names the
-    // path taken, so a silent downgrade reads as one).
+    // exact.
+    //
+    // TIME-BOUNDED WITH CANCELLATION: withTimeout only stops WAITING —
+    // the stitch promise keeps scrolling and capturing after the race is
+    // lost, and its tiles would race whatever runs next. So a timeout (or
+    // any stitch error) first cancels the stitch, then AWAITS it: every
+    // scroll/capture RPC in the stitch races the cancel, so the cancelled
+    // stitch issues no further mutations and its finally restores the
+    // page before this frame throws. Never return while the stitch still
+    // moves.
+    const cancel = newStitchCancel();
+    const stitchP = stitchFullPage(tabId, cancel);
     try {
-      const stitched = await withTimeout(stitchFullPage(tabId), STITCH_TIMEOUT_MS, "stitched capture");
+      const stitched = await withTimeout(stitchP, stitchTimeoutMs(), "stitched capture");
       if (stitched) {
         return screenshotResult(stitched.image, tab, "stitched_full_page", true, stitched.meta);
       }
     } catch (e) {
-      console.warn("ycode-live: stitched capture failed, falling back", e);
+      cancelStitch(cancel);
+      try { await stitchP; } catch (_) { /* restoration already ran in the stitch's finally */ }
+      console.warn("ycode-live: stitched capture failed", e);
+      const why = String((e && e.message) || e);
+      const panels = (e && e.panels) || 0;
+      throw new Error(
+        `screenshot: full_page stitch failed (${why}); refusing the single-capture fallback` +
+        (panels > 0 ? ` — ${panels} inner panel(s) would lose rows below the fold` : " — completeness unproven"),
+      );
     }
   }
   try {
@@ -878,26 +951,98 @@ function base64Of(bytes) {
 // each panel, tile the page skipping panel rows, paint panels over
 // their expanded zones. Returns null when there is nothing to stitch
 // (the caller falls back to the single beyond-viewport capture); the
-// page is restored either way — the finally covers failure, and the
-// null path restores the layout's fixed-element hiding first.
-async function stitchFullPage(tabId) {
-  const lay = await callPage(tabId, "shotLayout", {}, "screenshot");
-  const panels = ((lay && lay.panels) || []).map((p, i) => ({ p, i }))
-    .filter((a) => !lay.panels.some((q, j) => j !== a.i && q.x <= a.p.x && q.y <= a.p.y &&
-      q.x + q.w >= a.p.x + a.p.w && q.y + q.h >= a.p.y + a.p.h &&
-      (q.w * q.h > a.p.w * a.p.h || (q.w === a.p.w && q.h === a.p.h && j < a.i))));
-  if (!lay || !lay.vw || !lay.vh || !panels.length) {
-    try { await callPage(tabId, "shotRestore", lay || {}, "screenshot"); } catch (_) { /* gone */ }
+// page is restored on EVERY post-layout path — the null path restores
+// the layout's fixed-element hiding first, and the tiling path holds
+// its debugger attach AND its restore inside one try/finally, so even
+// an attach failure cannot strand the page hidden or scrolled.
+//
+// stitchTileEstimate counts the captures a stitch is expected to need —
+// one scale probe, one tile per viewport of document, one per stride of
+// panel content — so a plan the cap cannot cover fails BEFORE scrolling,
+// mirroring the CDP stitcher's plan cap in fullpage.go.
+function stitchTileEstimate(lay, panels) {
+  let n = 2; // the scale probe plus the no-panels single row
+  n += lay.docH > lay.vh ? Math.ceil(lay.docH / lay.vh) : 1;
+  for (const a of panels) {
+    const step = Math.min(a.p.h, lay.vh) || 1;
+    n += Math.ceil(a.p.sh / step);
+  }
+  return n;
+}
+
+// cancel is newStitchCancel's token (see takeScreenshot): once set, no
+// further scroll/capture mutations are issued — every setPos and shot
+// races it first — while the finally still restores the page, so
+// awaiting this promise after cancelling always lands on a restored
+// page with nothing still moving it. A token without a fired promise
+// (a bare { cancelled }) only gets the pre-await checks.
+async function stitchFullPage(tabId, cancel) {
+  // The layout hides fixed elements BEFORE answering, so even the
+  // layout call itself is cancel-raced: a timeout that lands mid-layout
+  // still waits out (bounded) a late answer and restores from it, rather
+  // than stranding the page hidden.
+  const rawLayout = callPage(tabId, "shotLayout", {}, "screenshot");
+  let lay;
+  try {
+    lay = await vsCancel(rawLayout, cancel);
+  } catch (e) {
+    try { lay = await withTimeout(rawLayout, STITCH_RESTORE_MS, "late layout"); }
+    catch (_) { lay = null; }
+    await restoreStitch(tabId, lay);
+    throw e;
+  }
+  if (!lay || !lay.vw || !lay.vh) {
+    await restoreStitch(tabId, lay);
     return null;
   }
-  const setPos = (x, y, p, pt) => callPage(tabId, "shotSet", { x, y, p, pt }, "screenshot");
-  await debuggerAttach.acquire(tabId, "Page");
+  const listed = Array.isArray(lay.panels) ? lay.panels : [];
+  const panels = listed.map((p, i) => ({ p, i }))
+    .filter((a) => !listed.some((q, j) => j !== a.i && q.x <= a.p.x && q.y <= a.p.y &&
+      q.x + q.w >= a.p.x + a.p.w && q.y + q.h >= a.p.y + a.p.h &&
+      (q.w * q.h > a.p.w * a.p.h || (q.w === a.p.w && q.h === a.p.h && j < a.i))));
+  if (!panels.length) {
+    await restoreStitch(tabId, lay);
+    return null;
+  }
+  const est = stitchTileEstimate(lay, panels);
+  if (est > STITCH_MAX_TILES) {
+    await restoreStitch(tabId, lay);
+    const over = new Error(`screenshot: stitch needs ~${est} captures, over the ${STITCH_MAX_TILES} cap`);
+    over.panels = panels.length;
+    throw over;
+  }
+  const throwIfCancelled = () => {
+    if (cancel && cancel.cancelled) throw new Error("screenshot: stitched capture cancelled");
+  };
+  const setPos = async (x, y, p, pt) => {
+    throwIfCancelled();
+    return vsCancel(callPage(tabId, "shotSet", { x, y, p, pt }, "screenshot"), cancel);
+  };
+  let acquired = false;
   let tiles = 0;
   try {
+    // The acquire itself can hang (a contested debugger target never
+    // answers), so it races the cancel too. A completion that lands
+    // AFTER the race was lost owns its ref — it releases it here, never
+    // in the finally (acquired stays false on that path, so the finally
+    // cannot double-release another consumer's session).
+    const rawAcquire = debuggerAttach.acquire(tabId, "Page");
+    rawAcquire.then(
+      () => { if (cancel && cancel.cancelled && !acquired) debuggerAttach.release(tabId).catch(() => {}); },
+      () => {},
+    );
+    await vsCancel(rawAcquire, cancel);
+    acquired = true;
     const shot = async () => {
+      throwIfCancelled();
       tiles++;
-      if (tiles > STITCH_MAX_TILES) throw new Error(`screenshot: stitch exceeded the ${STITCH_MAX_TILES}-capture cap`);
-      const res = await chrome.debugger.sendCommand({ tabId }, "Page.captureScreenshot", { format: "png" });
+      if (tiles > STITCH_MAX_TILES) {
+        const over = new Error(`screenshot: stitch exceeded the ${STITCH_MAX_TILES}-capture cap`);
+        over.panels = panels.length;
+        throw over;
+      }
+      const res = await vsCancel(
+        chrome.debugger.sendCommand({ tabId }, "Page.captureScreenshot", { format: "png" }), cancel);
       if (!res || !res.data) throw new Error("Page.captureScreenshot returned no data");
       return tileBitmap(res.data);
     };
@@ -998,10 +1143,37 @@ async function stitchFullPage(tabId) {
     const blob = await canvas.convertToBlob({ type: "image/png" });
     const bytes = new Uint8Array(await blob.arrayBuffer());
     return { image: base64Of(bytes), meta: { tiles, panels: panels.length } };
+  } catch (e) {
+    // takeScreenshot names the panel count in its refusal; stamp it here
+    // so every tiling failure carries it, wherever it was thrown.
+    if (e && !e.panels) e.panels = panels.length;
+    throw e;
   } finally {
-    try { await callPage(tabId, "shotRestore", lay, "screenshot"); } catch (_) { /* gone */ }
-    await debuggerAttach.release(tabId);
+    // Restore FIRST: the layout hid fixed elements, so even an attach
+    // failure (acquired === false) must reach this line. The restore is
+    // time-boxed, never cancel-boxed — a cancelled stitch still needs
+    // its page back. Release only what this stitch acquired: releasing
+    // an unheld attach would steal another consumer's session, and a
+    // late acquire that lost its race already released itself above.
+    await restoreStitch(tabId, lay);
+    if (acquired) {
+      try { await withTimeout(debuggerAttach.release(tabId), STITCH_RESTORE_MS, "debugger release"); }
+      catch (_) { /* session already gone */ }
+    }
   }
+}
+
+// restoreStitch hands the saved layout back to the page — or nothing,
+// restoring from the page's live cache when the layout never answered
+// (a zeroed layout would land the page at 0,0 instead of where the
+// stitch found it). Time-boxed and best-effort: cleanup must settle even
+// when the operation already timed out.
+async function restoreStitch(tabId, lay) {
+  try {
+    // null (not a zeroed layout) restores from the page's live cache.
+    await withTimeout(callPage(tabId, "shotRestore", lay || null, "screenshot"),
+      STITCH_RESTORE_MS, "stitch restore");
+  } catch (_) { /* gone, or too slow: nothing more to do */ }
 }
 
 // screenshotResult normalises the capture paths onto one envelope.

@@ -527,12 +527,15 @@ func Screenshot(ctx context.Context, a wire.Action) (*wire.Result, error) {
 		// Inner scroll areas show only their visible slice in a
 		// beyond-viewport capture, so a page with panels gets its
 		// regions stitched tile by tile (positions restored even on
-		// failure — the stitch's own defer). Without panels the single
-		// capture below is exact; a failed stitch falls back to it too
-		// (the meta names the path taken, so a silent downgrade reads
-		// as one — the same fallback the live extension takes).
+		// failure — the stitch's own defer, on a cleanup context
+		// detached from the operation's cancellation). Without panels
+		// the single capture below is exact; a FAILED stitch is an
+		// explicit error, never that capture — once panels exist it is
+		// missing rows below each panel's fold, and answering it as a
+		// clean full-page success would be a silent downgrade (the same
+		// refusal the live extension makes).
 		if stitched, ok, err := StitchFullPage(ctx); err != nil {
-			return finishFullPageFallback(ctx, a, err)
+			return refuseStitchFallback(err)
 		} else if ok {
 			buf = stitched
 			return finishCapture(a, buf, captureMetaStitched())
