@@ -21,7 +21,7 @@
   // forms from (Material/Fluent/Headless UI selects, comboboxes, radio
   // groups) and the <label> of a visually hidden radio/checkbox.
   // contenteditable is editable for "", "true" and "plaintext-only"; "false" is not.
-  const EDITABLE_SEL = "[contenteditable=''], [contenteditable='true'], [contenteditable='plaintext-only' i]";
+  const EDITABLE_SEL = "[contenteditable=''], [contenteditable='true' i], [contenteditable='plaintext-only' i]";
   const CANDIDATES = "a, button, input, select, textarea, label, [role='button'], [role='link'], " +
     "[role='combobox'], [role='listbox'], [role='option'], [role='radio'], [role='checkbox'], " +
     "[role='switch'], [role='tab'], [role='menuitem'], [role='menuitemradio'], [aria-haspopup='listbox'], " +

@@ -69,7 +69,7 @@
 
   const FIELD = "input:not([type='hidden']):not([type='button']):not([type='submit']):not([type='reset'])" +
     ":not([type='image']):not([type='checkbox']):not([type='radio']), textarea, select, " +
-    "[contenteditable=''], [contenteditable='true'], [contenteditable='plaintext-only' i], [role='textbox'], [role='combobox']";
+    "[contenteditable=''], [contenteditable='true' i], [contenteditable='plaintext-only' i], [role='textbox'], [role='combobox']";
 
   function textOf(id) {
     const n = id && document.getElementById(id);
@@ -83,6 +83,12 @@
     push("name", el.getAttribute("name"));
     push("name", el.id);
     if (el.labels) for (const l of el.labels) push("label", l.innerText || l.textContent);
+    if (!el.labels && el.id) {
+      const root = el.getRootNode();
+      for (const label of root.querySelectorAll("label[for]")) {
+        if (label.getAttribute("for") === el.id) push("label", label.innerText || label.textContent);
+      }
+    }
     const wrap = el.closest && el.closest("label");
     if (wrap) push("label", wrap.innerText || wrap.textContent);
     push("label", el.getAttribute("aria-label"));

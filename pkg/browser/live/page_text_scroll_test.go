@@ -1,6 +1,7 @@
 package live
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -86,7 +87,7 @@ const editableFixture = `<!doctype html><html><body>
 <label for="pt">Plain notes</label>
 <div id="pt" contenteditable="plaintext-only" style="min-height:30px;border:1px solid #000"></div>
 <div id="lbl">Rich notes</div>
-<div id="rt" contenteditable="true" aria-labelledby="lbl" style="min-height:30px;border:1px solid #000"></div>
+<div id="rt" contenteditable="TRUE" aria-labelledby="lbl" style="min-height:30px;border:1px solid #000"></div>
 <div id="em" contenteditable="" aria-label="Empty attr" style="min-height:30px;border:1px solid #000"></div>
 <div id="off" contenteditable="false" aria-label="Not editable" style="min-height:30px">locked</div>
 </body></html>`
@@ -99,6 +100,27 @@ func TestPageExtractsAndAddressesContenteditable(t *testing.T) {
 	out, _ := ex["elements"].(string)
 	data, _ := ex["data"].(string)
 	out += data
+	var extracted struct {
+		Elements []struct {
+			ID       string `json:"stable_id"`
+			Label    string `json:"label"`
+			Selector string `json:"selector"`
+		} `json:"elements"`
+	}
+	if err := json.Unmarshal([]byte(data), &extracted); err != nil {
+		t.Fatal(err)
+	}
+	for id, label := range map[string]string{"pt": "Plain notes", "rt": "Rich notes", "em": "Empty attr"} {
+		found := false
+		for _, row := range extracted.Elements {
+			if row.ID == id && row.Label == label && row.Selector == "#"+id {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("missing stable metadata for %s: %s", id, data)
+		}
+	}
 	for _, want := range []string{"Plain notes", "Rich notes", "Empty attr"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("extract lost editable field %q:\n%s", want, out)
@@ -115,6 +137,17 @@ func TestPageExtractsAndAddressesContenteditable(t *testing.T) {
 		h.mainEval("document.getElementById('"+id+"').innerText", &got)
 		if got != "v-"+id {
 			t.Fatalf("#%s text = %q, want %q", id, got, "v-"+id)
+		}
+	}
+}
+
+func TestGuardContenteditableDirectLabels(t *testing.T) {
+	h := newPageHarness(t, map[string]string{"/editable": `<!doctype html><label for="a">Password</label><div id="a" contenteditable="plaintext-only"></div><label for="b">Company Email Address</label><div id="b" contenteditable="TRUE"></div>`})
+	h.open("/editable")
+	for selector, want := range map[string]bool{"label=Password": true, "label=Company Email Address": false} {
+		got := h.call("guardField", map[string]any{"selector": selector})
+		if got["guarded"] != want {
+			t.Fatalf("%s: %v, want guarded=%v", selector, got, want)
 		}
 	}
 }
