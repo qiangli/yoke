@@ -174,14 +174,15 @@ func StitchFullPage(ctx context.Context) (buf []byte, stitched bool, err error) 
 	fail := func(err error) ([]byte, bool, error) {
 		return nil, false, &stitchError{cause: err, panels: len(jobs)}
 	}
-	clean, stop := cleanupCtx(ctx)
-	defer stop()
 	restored := false
 	restore := func() {
 		if restored {
 			return
 		}
 		restored = true
+		// Start the cleanup budget now, not before a potentially long stitch.
+		clean, stop := cleanupCtx(ctx)
+		defer stop()
 		_ = shotRestoreTo(clean, world, layout)
 	}
 	defer restore()

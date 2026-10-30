@@ -60,7 +60,7 @@ states its operands, which modes implement it, and its output contract.
 
 ### Tab and field addresses
 
-In live mode, every action honors `--tab-id`, `--tab-url` and `--tab-title`.
+In live mode, every action honors `--id`, `--url` and `--title`.
 Combined constraints must identify the same tab; ambiguous matches fail with
 candidate details. An unaddressed `navigate` opens a new tab. Address it
 explicitly when navigation should replace an existing page.

@@ -118,9 +118,9 @@ func run(rc *tool.RunContext, args []string) int {
 	limit := fs.Int("limit", 0, "extract: max elements to return (default 50)")
 	offset := fs.Int("offset", 0, "extract: skip this many elements")
 	// tab addressing
-	tabURL := fs.String("url", "", "tabs: address a tab by URL substring")
-	tabTitle := fs.String("title", "", "tabs: address a tab by title substring")
-	tabByID := fs.Int("id", 0, "tabs: address a tab by its browser tab id")
+	tabURL := fs.String("url", "", "address an action to a tab by URL substring")
+	tabTitle := fs.String("title", "", "address an action to a tab by title substring")
+	tabByID := fs.Int("id", 0, "address an action to a browser tab id")
 	// wait / events
 	timeoutMs := fs.Int("timeout-ms", 0, "click/type/wait-for-selector: budget in ms (default 5000)")
 	state := fs.String("state", "", "wait-for-selector: visible|attached|detached (default visible)")
