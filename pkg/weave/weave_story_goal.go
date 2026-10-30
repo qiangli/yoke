@@ -169,7 +169,8 @@ func sprintReadyLine(id int64, owner string) string {
 		"next: `bashy skill show conductor` — the PROCEDURE for this seat, written for an agent: "+
 		"decompose, file stories, launch and monitor the fleet, gate every merge. Then "+
 		"`bashy sprint show %d` for the backlog · `bashy inbox --as %s` (reads your mail and keeps "+
-		"the seat live; `--watch` to stay attached; `bashy skill show inbox` for how mail works)"+
+		"the seat live; `--watch` to stay attached; `bashy skill show inbox` for how mail works) · "+
+		"`bashy skill show collaborate` — find the owner of a change or resource and coordinate before you act"+
 		sprintSeatToolMismatch(owner)+sprintSeatDeliveryAdvisory(owner), id, id, owner)
 }
 

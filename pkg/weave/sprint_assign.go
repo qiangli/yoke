@@ -226,6 +226,21 @@ func sprintAssignRecord(cmd *cobra.Command, id int64, kind string, event sprintA
 	})
 }
 
+// sprintAssignCollaborationPreamble is appended to every fleet worker brief.
+// Workers share the host with other lanes; before this, only managers and
+// conductors ever saw the collaboration rules, so a worker that met a diff it
+// did not make could only guess. The full procedure lives in the collaborate
+// skill; this is the pointer plus the rules that must hold without reading it.
+const sprintAssignCollaborationPreamble = `
+Collaboration (other agents share this host; ` + "`bashy skill show collaborate`" + ` is the procedure):
+- Watch your mail: ` + "`bashy inbox`" + ` every few minutes; answer blocking requests first.
+- A change you did not make is someone's work: never stash, revert, reset, ` + "`git add -A`" + ` or commit it.
+  Find the owner with ` + "`bashy claim who [PATH]`" + ` and ask with ` + "`bashy mb send <holder> \"...\"`" + `.
+- Claim before exclusive use (host, ollama, podman, GPU, account): ` + "`bashy claim NAME --intent TEXT`" + `;
+  on refusal ` + "`bashy claim request NAME -m TEXT`" + ` or wait — never --force without contact.
+- Announce a freeze, a build cut or a pin bump: ` + "`bashy mb post --topic announce \"...\"`" + `.
+`
+
 func sprintAssignSeed(cmd *cobra.Command, sprint int64, root string, story *issue.Issue, points, band int, scriptBody ...*weaveScriptAssignment) (int64, error) {
 	if todopkg.IsClosed(story.Status) || story.Weave != 0 {
 		return 0, fmt.Errorf("story %s is closed or already linked to run #%d", story.ID, story.Weave)
@@ -239,6 +254,7 @@ func sprintAssignSeed(cmd *cobra.Command, sprint int64, root string, story *issu
 		body += fmt.Sprintf("\n\nThis issue also touches: %v\n", story.Refs)
 	}
 	body += fmt.Sprintf("\n\nDelivery commit trailers:\nSprint: #%d\nStory: #%d\nStory-ID: %s\n", sprint, story.Seq, story.ID)
+	body += sprintAssignCollaborationPreamble
 	if len(scriptBody) > 0 {
 		body = scriptBody[0].Body
 	}

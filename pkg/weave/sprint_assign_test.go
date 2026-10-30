@@ -186,6 +186,13 @@ func TestAssignCommandSeedsLinksAndInjectsIdentity(t *testing.T) {
 		if run == nil || run.Points != 5 || run.Register != story.ID || !strings.Contains(run.Body, "story body") || !strings.Contains(run.Body, "Story-ID: "+story.ID) {
 			t.Fatalf("run %+v", run)
 		}
+		// Every worker brief carries the collaboration rules: a worker is the
+		// agent most likely to meet a diff it did not make.
+		for _, want := range []string{"bashy skill show collaborate", "bashy claim who", "never stash, revert, reset", "bashy claim request"} {
+			if !strings.Contains(run.Body, want) {
+				t.Fatalf("worker brief missing %q:\n%s", want, run.Body)
+			}
+		}
 		b, err := loadWeaveQueue(board)
 		if err != nil {
 			t.Fatal(err)
