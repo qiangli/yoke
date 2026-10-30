@@ -461,3 +461,24 @@ func TestEveryActionHonorsTheTabAddress(t *testing.T) {
 		t.Fatalf("unaddressed action grew an address: %+v", a)
 	}
 }
+
+func TestTabAddressRequiresLiveMode(t *testing.T) {
+	for _, mode := range []string{"solo", "probe"} {
+		for _, f := range []actionFlags{{TabURL: "a"}, {TabTitle: "b"}, {TabByID: 7}} {
+			a, err := actionFromArgs([]string{"extract"}, f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := requireLiveForTabAddress(mode, a); err == nil {
+				t.Fatalf("%s %+v: address silently ignored", mode, f)
+			}
+			if err := requireLiveForTabAddress("live", a); err != nil {
+				t.Fatalf("live %+v: %v", f, err)
+			}
+		}
+		a, _ := actionFromArgs([]string{"extract"}, actionFlags{})
+		if err := requireLiveForTabAddress(mode, a); err != nil {
+			t.Fatalf("%s unaddressed: %v", mode, err)
+		}
+	}
+}

@@ -528,3 +528,15 @@ func TestHubKeepAlivePings(t *testing.T) {
 		}
 	}
 }
+
+func TestGuardTargetParamsCarryTheTabAddress(t *testing.T) {
+	for _, typ := range []string{wire.ActionType, wire.ActionKeyboardPress, wire.ActionClick} {
+		p := targetParams(wire.Action{Type: typ, Selector: "#a", MatchURL: "two", MatchTitle: "T", TabID: 9})
+		if p["match_url"] != "two" || p["match_title"] != "T" || p["tab_id"] != 9 || p["by_id"] != true {
+			t.Fatalf("%s: address dropped from guard params: %v", typ, p)
+		}
+	}
+	if p := targetParams(wire.Action{Type: wire.ActionType, Selector: "#a"}); p["tab_id"] != nil || p["match_url"] != nil {
+		t.Fatalf("unaddressed params gained an address: %v", p)
+	}
+}

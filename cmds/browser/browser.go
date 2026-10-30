@@ -211,6 +211,9 @@ func run(rc *tool.RunContext, args []string) int {
 	if err != nil {
 		return tool.UsageError(rc, cmd, "%s", err)
 	}
+	if err := requireLiveForTabAddress(*mode, action); err != nil {
+		return tool.UsageError(rc, cmd, "%s", err)
+	}
 	client, err := clientForMode(ctx, *mode, *probeURL, *livePort, soloCfg)
 	if err != nil {
 		return printNoBrowser(rc, *asJSON, *mode, err)
@@ -588,6 +591,19 @@ func actionFromArgs(args []string, f actionFlags) (wire.Action, error) {
 		}
 	}
 	return a, nil
+}
+
+// requireLiveForTabAddress refuses --url/--title/--id outside live mode:
+// solo and probe cannot address a tab, and ignoring the address would act on
+// whatever page they have.
+func requireLiveForTabAddress(mode string, a wire.Action) error {
+	if mode == "live" || a.Type == wire.ActionTabs {
+		return nil
+	}
+	if a.MatchURL != "" || a.MatchTitle != "" || a.TabID > 0 {
+		return fmt.Errorf("--url/--title/--id address a tab and need --mode live; %s mode cannot address tabs", mode)
+	}
+	return nil
 }
 
 func buildAction(args []string, f actionFlags) (wire.Action, error) {

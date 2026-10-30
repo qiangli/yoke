@@ -201,6 +201,9 @@ func probeHealth(port int) bool {
 // Execute satisfies browser.Client. Every action passes the sensitive-input
 // guard first (guard.go); execute is what runs once it has.
 func (s *Service) Execute(ctx context.Context, action wire.Action) (*wire.Result, error) {
+	s.mu.Lock()
+	s.guardTab = 0
+	s.mu.Unlock()
 	return guard.Execute(ctx, guardBackend{s}, action, s.execute)
 }
 
@@ -215,6 +218,13 @@ func (s *Service) execute(ctx context.Context, action wire.Action) (*wire.Result
 	if err != nil {
 		return &wire.Result{Error: err.Error()}, nil
 	}
+	// A write that follows a guard inspection lands in the tab inspected: an
+	// address that resolves elsewhere by now fails (tab-mismatch).
+	s.mu.Lock()
+	if gt := s.guardTab; gt > 0 && len(tabSelector(action)) > 0 && params["by_id"] == nil {
+		params["tab_id"] = gt
+	}
+	s.mu.Unlock()
 
 	// Hard staleness + per-method gate, only meaningful in roleHub (in
 	// roleClient the hub-owning process runs the same checks). Allow
