@@ -814,6 +814,38 @@
     };
   }
 
+  function deepActive() {
+    let active = document.activeElement;
+    while (active && active.shadowRoot && active.shadowRoot.activeElement) active = active.shadowRoot.activeElement;
+    return active;
+  }
+
+  // keySynthetic is the untrusted fallback for keyboard_press: it targets the
+  // deepest focused element (through open shadow roots), never the shadow host.
+  function keySynthetic(params) {
+    const key = params.key;
+    const mods = new Set((params.modifiers || []).map((m) => String(m).toLowerCase()));
+    const opts = {
+      key: key,
+      code: key.length === 1 ? "Key" + key.toUpperCase() : key,
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      shiftKey: mods.has("shift"),
+      ctrlKey: mods.has("control") || mods.has("ctrl"),
+      altKey: mods.has("alt"),
+      metaKey: mods.has("meta") || mods.has("cmd") || mods.has("command"),
+    };
+    const target = deepActive() || document.body;
+    target.dispatchEvent(new KeyboardEvent("keydown", opts));
+    target.dispatchEvent(new KeyboardEvent("keypress", opts));
+    if (key === "Enter" && target.form) {
+      try { target.form.requestSubmit ? target.form.requestSubmit() : target.form.submit(); } catch (_) { /* ignore */ }
+    }
+    target.dispatchEvent(new KeyboardEvent("keyup", opts));
+    return { ok: true };
+  }
+
   // keyFocus focuses the single visible match of selector and confirms it
   // holds focus; the caller sends no key unless this answers ok.
   function keyFocus(params) {
@@ -824,9 +856,7 @@
     if (visible.length !== 1) return { error: `keyboard_press: selector ${JSON.stringify(params.selector)} matches ${visible.length} visible elements` };
     const el = visible[0];
     if (el.focus) el.focus();
-    let active = document.activeElement;
-    while (active && active.shadowRoot && active.shadowRoot.activeElement) active = active.shadowRoot.activeElement;
-    if (active !== el) return { error: `keyboard_press: ${JSON.stringify(params.selector)} did not take focus` };
+    if (deepActive() !== el) return { error: `keyboard_press: ${JSON.stringify(params.selector)} did not take focus` };
     return { ok: true };
   }
 
@@ -840,6 +870,6 @@
   globalThis.__bashyPage = {
     version: VERSION,
     extract, count, click, type, select, scroll, readValue, focusTarget, guardField, guardFocus, guardFill, guardVerify,
-    resolveSelector, probe, dispatch, keyFocus,
+    resolveSelector, probe, dispatch, keyFocus, keySynthetic,
   };
 })();

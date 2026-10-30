@@ -1178,31 +1178,7 @@ async function keyboardPress(tabId, params) {
     // Fall back to synthetic events.
     console.warn("ycode-live: trusted key dispatch failed, falling back", e);
   }
-  const [{ result } = {}] = await chrome.scripting.executeScript({
-    target: frameId ? { tabId, frameIds: [frameId] } : { tabId },
-    args: [params.key, params.modifiers || []],
-    func: (key, modifiers) => {
-      const mods = new Set(modifiers.map((m) => String(m).toLowerCase()));
-      const opts = {
-        key: key,
-        code: key.length === 1 ? "Key" + key.toUpperCase() : key,
-        bubbles: true,
-        cancelable: true,
-        shiftKey: mods.has("shift"),
-        ctrlKey: mods.has("control") || mods.has("ctrl"),
-        altKey: mods.has("alt"),
-        metaKey: mods.has("meta") || mods.has("cmd") || mods.has("command"),
-      };
-      const target = document.activeElement || document.body;
-      target.dispatchEvent(new KeyboardEvent("keydown", opts));
-      target.dispatchEvent(new KeyboardEvent("keypress", opts));
-      if (key === "Enter" && target.form) {
-        try { target.form.requestSubmit ? target.form.requestSubmit() : target.form.submit(); } catch (_) { /* ignore */ }
-      }
-      target.dispatchEvent(new KeyboardEvent("keyup", opts));
-      return { ok: true };
-    },
-  });
+  const result = await callPage(tabId, "keySynthetic", { key: params.key, modifiers: params.modifiers || [] }, "keyboard_press", frameId);
   if (result && result.error) throw new Error(result.error);
   return { data: "pressed=" + params.key + " (synthetic)" };
 }
