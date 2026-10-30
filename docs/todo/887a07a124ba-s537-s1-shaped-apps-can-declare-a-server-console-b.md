@@ -3,14 +3,17 @@ id: 887a07a124ba
 kind: bug
 title: 'S537.S1 shaped apps can declare a server: console builds + runs the principal''s revision (desk tools become shapable)'
 seq: 2949
-status: todo
+status: done
 priority: p1
 labels:
     - desk
 created: 2026-10-30T17:38:45.905815Z
+assignee: claude-opus5.5
 sprint: 537
 sprint_id: 3ec79210-039c-57d7-a0b5-7abfeeefbb1c
 sprint_title: 'bashy desk: agent-human tool suite (notepad, form, chart, whiteboard, brainstorm) on one contract + UI kit'
+closed: 2026-10-30T19:51:15.502644Z
+closed_by: s537-manager
 ---
 
 Gap found in S537 (contract point 6 "shapable"; plan pre-authorizes shaping gaps as in-sprint bugs). Today a shaped app (`bashy app add NAME --type shaped --source DIR`) is served by the console only as public/ assets + per-request api/<name>.md Bash# units (yoke/pkg/webconsole/shaped.go serveTree/serveAPI), and type shaped forbids a port (yoke/pkg/fleet/apps.go). Desk tools (bashy/examples/desk/<tool>, also whiteboard/brainstorm) are a Bash# front + a long-running pure-Go server, so they cannot get src history/preview/restore/undo.
