@@ -681,3 +681,17 @@ func TestSelfFocusIsReleased(t *testing.T) {
 		}
 	}
 }
+
+// Reads (extract/text/evaluate) hand a vault value over; a write carrying it
+// is still refused.
+func TestReadsUnmaskedWritesStillMatchVault(t *testing.T) {
+	const secret = "correct-horse-battery-staple"
+	isolate(t, secret)
+	for _, typ := range []string{wire.ActionExtract, "text", wire.ActionEvaluate} {
+		b := &fakeBackend{human: true, result: &wire.Result{Success: true, Content: "v " + secret, Data: secret}}
+		res := run(t, b, wire.Action{Type: typ})
+		if !strings.Contains(res.Content, secret) || res.Data != secret {
+			t.Errorf("%s masked a read: %+v", typ, res)
+		}
+	}
+}

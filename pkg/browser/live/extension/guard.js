@@ -21,7 +21,7 @@
 // with a `bashy approve`d src approval. Site skills cannot switch it off;
 // there is no parameter that does.
 (() => {
-  const VERSION = 2;
+  const VERSION = 3;
   if (globalThis.__bashyGuard && globalThis.__bashyGuard.version === VERSION) return;
 
   // autocomplete tokens that mark credentials, one-time codes, and cards.

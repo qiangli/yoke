@@ -91,7 +91,7 @@ func TestGuardFieldOrdinaryVersusSensitive(t *testing.T) {
 			t.Errorf("%s guarded: %v", sel, g)
 		}
 	}
-	for sel, reason := range map[string]string{"#pw": "field:label-password", "#otp": "field:label-otp",
+	for sel, reason := range map[string]string{"#pw": "field:label-password", "#otp": "field:name-otp",
 		"#ba": "field:label-account", "#cn": "field:label-card", "#cv": "field:label-card",
 		"#a1": "field:label-account", "#a2": "field:label-account", "#a3": "field:label-account", "#a4": "field:label-routing"} {
 		if g := h.call("guardField", map[string]any{"selector": sel}); g["guarded"] != true || g["reason"] != reason {
