@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 	"github.com/chromedp/chromedp/kb"
 
@@ -338,15 +339,98 @@ func Click(ctx context.Context, a wire.Action) (*wire.Result, error) {
 	return &wire.Result{Error: "click: selector, element index, or match_text required"}, nil
 }
 
+// Bounds for clickPage's host-side watch: the page-side watch is
+// ~350ms; the grace covers a main-frame navigation event still in
+// flight when the page answers.
+const (
+	clickPendingBound = 4 * time.Second
+	clickEventGrace   = 250 * time.Millisecond
+)
+
+// clickEvents records the two effects page script cannot report: a
+// main-frame navigation (including a reload to the same URL, which
+// emits Page.frameNavigated) and a native JS dialog. A native dialog
+// blocks the page's main thread, so the evaluate never returns; the
+// event ends the wait and the dialog is left OPEN for the operator.
+type clickEvents struct {
+	navigated chan struct{}
+	dialog    chan struct{}
+}
+
+func watchClickEvents(ctx context.Context) *clickEvents {
+	ev := &clickEvents{navigated: make(chan struct{}, 1), dialog: make(chan struct{}, 1)}
+	chromedp.ListenTarget(ctx, func(e any) {
+		switch e := e.(type) {
+		case *page.EventFrameNavigated:
+			if e.Frame != nil && e.Frame.ParentID == "" {
+				select {
+				case ev.navigated <- struct{}{}:
+				default:
+				}
+			}
+		case *page.EventJavascriptDialogOpening:
+			select {
+			case ev.dialog <- struct{}{}:
+			default:
+			}
+		}
+	})
+	return ev
+}
+
 // clickPage runs page.js click — which watches the page for a bounded
-// moment after dispatching — and reports the observed outcome.
+// moment after dispatching — and reports the observed outcome, upgraded
+// to navigated / dialog when the host-side events say so.
 func clickPage(ctx context.Context, params map[string]any) (*wire.Result, error) {
 	var out struct {
 		Content string `json:"content"`
 		Data    string `json:"data"`
 		Error   string `json:"error"`
 	}
-	if err := evalGuard(ctx, pageCall("click", params), &out); err != nil {
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ev := watchClickEvents(runCtx)
+	done := make(chan error, 1)
+	go func() { done <- evalGuard(runCtx, pageCall("click", params), &out) }()
+
+	answered := false // out is read only after the goroutine has finished
+	finish := func(effect string) *wire.Result {
+		data := map[string]any{}
+		if answered && out.Data != "" {
+			_ = json.Unmarshal([]byte(out.Data), &data)
+		}
+		data["effect"] = effect
+		b, _ := json.Marshal(data)
+		return &wire.Result{Success: true, Content: "clicked: " + effect, Data: string(b)}
+	}
+	timer := time.NewTimer(clickPendingBound)
+	defer timer.Stop()
+	var err error
+	select {
+	case <-ev.dialog:
+		return finish("dialog"), nil
+	case <-ev.navigated:
+		// The world is unloading; take whatever the page managed to say.
+		select {
+		case <-done:
+			answered = true
+		case <-time.After(clickEventGrace):
+		}
+		return finish("navigated"), nil
+	case err = <-done:
+		answered = true
+	case <-timer.C:
+		return &wire.Result{Error: fmt.Sprintf("click: the page did not answer within %s (busy script, or a dialog that could not be reported)", clickPendingBound)}, nil
+	}
+	// The page answered; a late event can still upgrade the outcome.
+	select {
+	case <-ev.dialog:
+		return finish("dialog"), nil
+	case <-ev.navigated:
+		return finish("navigated"), nil
+	case <-time.After(clickEventGrace):
+	}
+	if err != nil {
 		return &wire.Result{Error: err.Error()}, nil
 	}
 	if out.Error != "" {

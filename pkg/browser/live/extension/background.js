@@ -523,7 +523,7 @@ async function dispatchOnTab(method, params, tabId) {
     case "text":
       return textInTab(tabId, params);
     case "click":
-      return runInTab(tabId, "click", params);
+      return clickObserved(tabId, params);
     case "type":
       return runInTab(tabId, "type", params);
     case "select":
@@ -1375,6 +1375,82 @@ async function runInTab(tabId, kind, params) {
   }
   if (result && frameId) result.frame_id = frameId;
   return result;
+}
+
+// Bounds for clickObserved. The page-side watch (page.js click) is
+// ~350ms; the extra time covers a navigation unloading that world and
+// the debugger's dialog event arriving.
+const CLICK_PENDING_MS = 4000;
+const CLICK_SETTLE_MS = 150;
+const CLICK_UNLOAD_MS = 600;
+const CLICK_ATTACH_MS = 1500;
+
+// clickObserved wraps the page-side click with the two effects a
+// content script cannot see: a real navigation (including a reload to
+// the SAME URL, which tabs.onUpdated reports as status "loading") and a
+// native JS dialog (alert/confirm/prompt, announced by the debugger's
+// Page.javascriptDialogOpening). A native dialog blocks the page's main
+// thread, so the injected click never returns; the dialog event ends
+// the wait and the dialog is left OPEN for the operator — nothing here
+// ever answers it.
+async function clickObserved(tabId, params) {
+  let navigated = false, dialog = false;
+  const onUpdated = (id, info) => { if (id === tabId && info && info.status === "loading") navigated = true; };
+  const onEvent = (src, method) => {
+    if (src && src.tabId === tabId && method === "Page.javascriptDialogOpening") dialog = true;
+  };
+  chrome.tabs.onUpdated.addListener(onUpdated);
+  chrome.debugger.onEvent.addListener(onEvent);
+  let attached = false;
+  try {
+    // Best effort: a tab another debugger owns still clicks, it just
+    // cannot report a native dialog.
+    // Bounded: a hung attach must not stall the click. A late acquire
+    // that finishes after the deadline releases its own ref.
+    let acquireTimedOut = false;
+    const acq = debuggerAttach.acquire(tabId, "Page").then(
+      () => { if (acquireTimedOut) debuggerAttach.release(tabId).catch(() => {}); return true; },
+      () => false);
+    const acqTimer = new Promise((res) => setTimeout(() => res("timeout"), CLICK_ATTACH_MS));
+    const got = await Promise.race([acq, acqTimer]);
+    if (got === true) attached = true; else if (got === "timeout") acquireTimedOut = true;
+    let settled = null;
+    runInTab(tabId, "click", params).then((r) => { settled = { r }; }, (e) => { settled = { e }; });
+    const pause = (ms) => new Promise((res) => setTimeout(res, ms));
+    const start = Date.now();
+    let unloadAt = 0;
+    while (!settled && !dialog && Date.now() - start < CLICK_PENDING_MS) {
+      await pause(25);
+      if (navigated && !unloadAt) unloadAt = Date.now();
+      if (unloadAt && Date.now() - unloadAt > CLICK_UNLOAD_MS) break;
+    }
+    if (!settled && !dialog && !navigated) {
+      throw new Error("click: the page did not answer within " + CLICK_PENDING_MS + "ms (busy script, or a dialog this browser could not report)");
+    }
+    if (settled && settled.e && !dialog && !navigated) {
+      // The world may have gone with a navigation whose event is still in flight.
+      await pause(CLICK_UNLOAD_MS);
+      if (!dialog && !navigated) throw settled.e;
+    } else if (settled && !dialog && !navigated) {
+      await pause(CLICK_SETTLE_MS);
+    }
+    const effect = dialog ? "dialog" : navigated ? "navigated" : null;
+    if (!effect) return settled.r;
+    let data = {};
+    if (settled && settled.r && settled.r.data) { try { data = JSON.parse(settled.r.data); } catch (_) { data = {}; } }
+    data.effect = effect;
+    const out = Object.assign({}, settled && settled.r, { content: `clicked: ${effect}`, data: JSON.stringify(data) });
+    return out;
+  } finally {
+    chrome.tabs.onUpdated.removeListener(onUpdated);
+    chrome.debugger.onEvent.removeListener(onEvent);
+    if (attached) {
+      await Promise.race([
+        debuggerAttach.release(tabId).catch(() => {}),
+        new Promise((res) => setTimeout(res, CLICK_ATTACH_MS)),
+      ]);
+    }
+  }
 }
 
 // typeTrusted is the fallback for fields that reject synthetic input

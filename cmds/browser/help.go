@@ -103,7 +103,7 @@ var subcommands = map[string]subcommand{
 			"operand is an element index (no CSS selector is a bare integer), the",
 			"same numbering `extract` prints.",
 			"The outcome is OBSERVED within a bounded watch after the dispatch:",
-			"navigated (the URL moved), dialog (a DOM dialog opened), dom-changed",
+			"navigated (including same-URL reload), dialog (native or DOM), dom-changed",
 			"(a mutation was seen), or no-effect (the click landed but the page",
 			"did not react). no-effect is still success — the report is the result.",
 		},
