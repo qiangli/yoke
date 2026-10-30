@@ -95,8 +95,8 @@ fi
 			Name: "fake",
 			Tool: &DeclTool{Bin: fakeBin},
 			Outbound: &DeclOutbound{
-				Argv: []string{fakeBin, "--channel", "{{.Channel}}", "--target", "{{.ConversationID}}"},
-				Stdin: &DeclStdin{Mode: "json"},
+				Argv:    []string{fakeBin, "--channel", "{{.Channel}}", "--target", "{{.ConversationID}}"},
+				Stdin:   &DeclStdin{Mode: "json"},
 				Receipt: &DeclReceipt{JSONPath: "$.delivered_ids[0]"},
 			},
 		}
@@ -119,7 +119,7 @@ fi
 			Name: "fake2",
 			Tool: &DeclTool{Bin: fakeBin},
 			Outbound: &DeclOutbound{
-				Argv:  []string{fakeBin, "--message", "{{.Text}}"},
+				Argv:    []string{fakeBin, "--message", "{{.Text}}"},
 				Receipt: &DeclReceipt{JSONPath: "$.delivered_ids[0]"},
 			},
 		}
@@ -146,7 +146,7 @@ fi
 			Name: "regextest",
 			Tool: &DeclTool{Bin: fakeBin2},
 			Outbound: &DeclOutbound{
-				Argv: []string{fakeBin2},
+				Argv:    []string{fakeBin2},
 				Receipt: &DeclReceipt{Regex: `message_id:\s*(\S+)`},
 			},
 		}
@@ -165,8 +165,8 @@ fi
 		fakeFail := filepath.Join(tmpdir, "fake-fail")
 		os.WriteFile(fakeFail, []byte("#!/bin/sh\necho 'oops' >&2\nexit 2\n"), 0o755)
 		spec := &DeclSpec{
-			Name: "failtest",
-			Tool: &DeclTool{Bin: fakeFail},
+			Name:     "failtest",
+			Tool:     &DeclTool{Bin: fakeFail},
 			Outbound: &DeclOutbound{Argv: []string{fakeFail}},
 		}
 		adapter, _ := NewDeclAdapter(spec)
@@ -184,7 +184,7 @@ fi
 			Name: "textstdin",
 			Tool: &DeclTool{Bin: fakeEcho},
 			Outbound: &DeclOutbound{
-				Argv: []string{fakeEcho},
+				Argv:  []string{fakeEcho},
 				Stdin: &DeclStdin{Mode: "text", Template: "prefix:{{.Text}}:suffix"},
 			},
 		}
@@ -267,7 +267,7 @@ fi
 
 	t.Run("address mapping channel:kind:id", func(t *testing.T) {
 		spec := &DeclSpec{
-			Name: "addrtest",
+			Name:    "addrtest",
 			Address: &DeclAddress{ChannelFlag: "--channel", KindFlag: "--kind", IDFlag: "--target"},
 			Inbound: &DeclInbound{Mapping: map[string]string{"channel": "$.c"}},
 		}

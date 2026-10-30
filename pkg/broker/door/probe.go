@@ -45,10 +45,10 @@ type Status struct {
 	AgentEntries  int       `json:"agent_entries"`
 	// CountsKnown is false when the listing did not answer in time: the two
 	// counts above are then unknown, not zero.
-	CountsKnown bool `json:"counts_known"`
-	MaxInFlight   int       `json:"max_in_flight,omitempty"`
-	QueueDepth    int       `json:"queue_depth"`
-	Error         string    `json:"error,omitempty"`
+	CountsKnown bool   `json:"counts_known"`
+	MaxInFlight int    `json:"max_in_flight,omitempty"`
+	QueueDepth  int    `json:"queue_depth"`
+	Error       string `json:"error,omitempty"`
 }
 
 // Probe asks the door at BaseURL for its status. A door that is not running

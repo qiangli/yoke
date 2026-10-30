@@ -222,7 +222,7 @@ var pinnedDigests = map[string]string{
 	// (assets_count = 0) and nightly builds (b5454) are excluded by policy.
 	// This pinned source tarball provides the admitted source build path across all
 	// six native targets when CMake and C/C++ compilation toolchains are present.
-	"whisper-cpp-source@v1.9.5/":             "ff1a9053feb509ff9d7729703355541ae9690073a6b1c40eb692c962e0dc1720",
+	"whisper-cpp-source@v1.9.5/":              "ff1a9053feb509ff9d7729703355541ae9690073a6b1c40eb692c962e0dc1720",
 	"whisper-cpp-source@v1.9.5/linux/amd64":   "ff1a9053feb509ff9d7729703355541ae9690073a6b1c40eb692c962e0dc1720",
 	"whisper-cpp-source@v1.9.5/linux/arm64":   "ff1a9053feb509ff9d7729703355541ae9690073a6b1c40eb692c962e0dc1720",
 	"whisper-cpp-source@v1.9.5/darwin/amd64":  "ff1a9053feb509ff9d7729703355541ae9690073a6b1c40eb692c962e0dc1720",
@@ -244,7 +244,7 @@ var pinnedDigests = map[string]string{
 	// yt-dlp-ejs@0.8.0 — official standalone external JavaScript component for yt-dlp (The Unlicense + ISC + MIT, S503.6).
 	// Bundled directly into the pure Python yt-dlp 2026.10.21 zipapp, and pinned here
 	// as an independent package and solver script for offline challenge solving and decoupled runtimes.
-	"yt-dlp-ejs@0.8.0/":             "79300e5fca7f937a1eeede11f0456862c1b41107ce1d726871e0207424f4bdb4",
+	"yt-dlp-ejs@0.8.0/":              "79300e5fca7f937a1eeede11f0456862c1b41107ce1d726871e0207424f4bdb4",
 	"yt-dlp-ejs@0.8.0/linux/amd64":   "79300e5fca7f937a1eeede11f0456862c1b41107ce1d726871e0207424f4bdb4",
 	"yt-dlp-ejs@0.8.0/linux/arm64":   "79300e5fca7f937a1eeede11f0456862c1b41107ce1d726871e0207424f4bdb4",
 	"yt-dlp-ejs@0.8.0/darwin/amd64":  "79300e5fca7f937a1eeede11f0456862c1b41107ce1d726871e0207424f4bdb4",

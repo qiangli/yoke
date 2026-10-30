@@ -207,14 +207,16 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 
 // kopiaPrivacyArgs returns the global flags shared by every kopia invocation.
 // --no-persist-credentials is a global app flag (cli/app.go at v0.23.1:
-//   app.Flag("persist-credentials" … Default("true") …), whose negated form
-//   is --no-persist-credentials; strategy passwordPersistenceStrategy at
-//   cli/app.go:234-246 selects Keychain+File vs None, with Darwin defaulting
-//   to Keychain at cli/password_darwin.go). Without it, KOPIA_PASSWORD
-//   triggers persistence to the OS keychain on macOS and blocks headless
-//   operation (the server never listens until the Keychain prompt is
-//   dismissed). See bashy builds/kopia/files/no-egress-test.sh at 98300aeb
-//   and builds/kopia/README.md for the headless gate.
+//
+//	app.Flag("persist-credentials" … Default("true") …), whose negated form
+//	is --no-persist-credentials; strategy passwordPersistenceStrategy at
+//	cli/app.go:234-246 selects Keychain+File vs None, with Darwin defaulting
+//	to Keychain at cli/password_darwin.go). Without it, KOPIA_PASSWORD
+//	triggers persistence to the OS keychain on macOS and blocks headless
+//	operation (the server never listens until the Keychain prompt is
+//	dismissed). See bashy builds/kopia/files/no-egress-test.sh at 98300aeb
+//	and builds/kopia/README.md for the headless gate.
+//
 // --otlp-trace is also a global app flag (cli/observability_flags.go at v0.23.1),
 // so both are valid before any subcommand. --no-check-for-updates is NOT: it
 // only exists on `repository connect/create`, and `server start` rejects it.
