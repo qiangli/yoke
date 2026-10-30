@@ -442,6 +442,35 @@ func versionLess(a, b string) bool {
 // for the WebSocket protocol. Keep in sync with the extension's
 // background.js dispatch table.
 func actionToParams(a wire.Action) (string, map[string]any, error) {
+	method, params, err := baseActionParams(a)
+	if err != nil || a.Type == wire.ActionTabs {
+		return method, params, err
+	}
+	for k, v := range tabSelector(a) {
+		params[k] = v
+	}
+	return method, params, nil
+}
+
+// tabSelector is the tab address of a non-tabs action; empty when the
+// action is unaddressed. TabID on a non-tabs action always means a browser
+// tab id (there is no index form).
+func tabSelector(a wire.Action) map[string]any {
+	p := map[string]any{}
+	if a.MatchURL != "" {
+		p["match_url"] = a.MatchURL
+	}
+	if a.MatchTitle != "" {
+		p["match_title"] = a.MatchTitle
+	}
+	if a.TabID > 0 {
+		p["tab_id"] = a.TabID
+		p["by_id"] = true
+	}
+	return p
+}
+
+func baseActionParams(a wire.Action) (string, map[string]any, error) {
 	switch a.Type {
 	case wire.ActionNavigate:
 		return "navigate", map[string]any{"url": a.URL}, nil

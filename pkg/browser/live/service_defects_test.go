@@ -199,3 +199,22 @@ func TestLiveStatusReadsAConnectedHub(t *testing.T) {
 		t.Fatalf("stale message does not name the required version: %q", st.Message)
 	}
 }
+
+func TestAddressedActionsForwardTheTabSelector(t *testing.T) {
+	for _, typ := range []string{
+		wire.ActionNavigate, wire.ActionClick, wire.ActionExtract,
+		wire.ActionScreenshot, wire.ActionScroll, wire.ActionEvaluate,
+	} {
+		_, p, err := actionToParams(wire.Action{Type: typ, MatchURL: "u", MatchTitle: "t", TabID: 5})
+		if err != nil {
+			t.Fatalf("%s: %v", typ, err)
+		}
+		if p["match_url"] != "u" || p["match_title"] != "t" || p["tab_id"] != 5 || p["by_id"] != true {
+			t.Fatalf("%s: selector not forwarded: %v", typ, p)
+		}
+		_, q, _ := actionToParams(wire.Action{Type: typ})
+		if _, ok := q["match_url"]; ok {
+			t.Fatalf("%s: unaddressed action carries a selector", typ)
+		}
+	}
+}

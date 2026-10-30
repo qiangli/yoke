@@ -573,7 +573,24 @@ func extraOperands(sub string, rest []string, want int) error {
 	return fmt.Errorf("%s: unexpected operand %q (see `browser %s --help`)", sub, rest[want], sub)
 }
 
+// actionFromArgs builds the action and stamps the tab address (--url,
+// --title, --id) on every non-tabs action; the tabs verb consumes the same
+// flags itself.
 func actionFromArgs(args []string, f actionFlags) (wire.Action, error) {
+	a, err := buildAction(args, f)
+	if err != nil {
+		return a, err
+	}
+	if a.Type != wire.ActionTabs {
+		a.MatchURL, a.MatchTitle = f.TabURL, f.TabTitle
+		if f.TabByID > 0 {
+			a.TabID = f.TabByID
+		}
+	}
+	return a, nil
+}
+
+func buildAction(args []string, f actionFlags) (wire.Action, error) {
 	sub := args[0]
 	rest := args[1:]
 	switch sub {

@@ -478,7 +478,29 @@ async function dispatch(method, params) {
   if (method === "cookies_get") return cookiesGet(params);
   if (method === "tabs") return handleTabs(params);
 
-  const tabId = (method === "guard_fill" || method === "guard_focus") ? await guardTabId(params) : await targetTabId();
+  const addressed = !!(params && (params.match_url || params.match_title || params.by_id));
+  let tabId;
+  if (addressed) {
+    // An addressed call acts on the one tab it names or fails; it never
+    // falls back to the active tab.
+    const tabs = await chrome.tabs.query({});
+    const t = selectTab(tabs, params, null);
+    const pinned = params.tab_id;
+    if (!params.by_id && Number.isInteger(pinned) && pinned > 0 && pinned !== t.id) {
+      throw new Error(`tabs: target changed — the address now resolves to tab ${t.id}, not tab ${pinned} (cause: tab-mismatch)`);
+    }
+    tabId = t.id;
+    activeTabId = tabId;
+    rememberIntent();
+  } else if (method === "navigate") {
+    // Unaddressed navigate opens a new tab instead of hijacking the active one.
+    const t = await chrome.tabs.create({ url: "about:blank" });
+    activeTabId = t.id;
+    rememberIntent();
+    tabId = t.id;
+  } else {
+    tabId = (method === "guard_fill" || method === "guard_focus") ? await guardTabId(params) : await targetTabId();
+  }
   const out = await dispatchOnTab(method, params, tabId);
   // Stamp the resolved tab on every page-touching result so a caller
   // can prove which page answered instead of inferring it.
