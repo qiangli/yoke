@@ -76,20 +76,40 @@ func TestPageCoreExportsEffectsFunctions(t *testing.T) {
 }
 
 // TestStitchedCaptureIsBoundedAndRestoring: the live stitch must be
-// time-bounded (the hub ceiling is 30 s), restore positions on failure,
-// and name its path in the result — a silent downgrade reads as one.
+// time-bounded (the hub ceiling is 30 s), restore positions on EVERY
+// post-layout path (even an attach failure), and cancel-then-await on
+// timeout so a lost race cannot keep scrolling under the fallback.
 func TestStitchedCaptureIsBoundedAndRestoring(t *testing.T) {
 	src := extensionFile(t, "background.js")
 	for _, want := range []string{
 		"STITCH_TIMEOUT_MS",
-		"withTimeout(stitchFullPage(tabId), STITCH_TIMEOUT_MS",
-		"async function stitchFullPage(tabId)",
+		"withTimeout(stitchP, STITCH_TIMEOUT_MS",
+		"async function stitchFullPage(tabId, cancel)",
+		"cancel.cancelled = true",
+		"await stitchP;",
 		"shotRestore",
+		"if (acquired) await debuggerAttach.release(tabId)",
 		"stitched_full_page",
 		"stitched capture failed, falling back",
 	} {
 		if !strings.Contains(src, want) {
 			t.Fatalf("live stitch lost %q", want)
+		}
+	}
+}
+
+// TestStitchFailureStaysTruthful: once panels exist, a beyond-viewport
+// fallback is MISSING rows below each panel's fold — answering it as a
+// clean full-page success is a silent downgrade, so the result must
+// carry stitched:false plus why.
+func TestStitchFailureStaysTruthful(t *testing.T) {
+	src := extensionFile(t, "background.js")
+	for _, want := range []string{
+		"stitch_error",
+		"stitched: false",
+	} {
+		if !strings.Contains(src, want) {
+			t.Fatalf("live stitch fallback lost %q", want)
 		}
 	}
 }

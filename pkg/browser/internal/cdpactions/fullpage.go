@@ -122,6 +122,10 @@ func StitchFullPage(ctx context.Context) (buf []byte, stitched bool, err error) 
 	}
 	layout, err := shotLayoutOf(ctx, world)
 	if err != nil {
+		// Best effort: the layout hid fixed elements before failing to
+		// answer, so restore from the live cache before reporting. The
+		// restore itself is never the error — the layout failure is.
+		_ = shotRestoreCacheOnly(ctx, world)
 		return nil, false, err
 	}
 	if len(layout.Panels) == 0 {
@@ -393,8 +397,28 @@ func shotLayoutOf(ctx context.Context, world runtime.ExecutionContextID) (shotLa
 }
 
 func shotRestoreTo(ctx context.Context, world runtime.ExecutionContextID, layout shotLayout) error {
+	return worldEval(ctx, world, shotRestoreCall(layout), nil)
+}
+
+// shotRestoreCall builds the restore invocation for a saved layout,
+// separate so tests can pin the payload without a browser: the restore
+// must carry the NONZERO saved page/panel offsets back, or the page
+// lands at 0,0 instead of where the stitch found it.
+func shotRestoreCall(layout shotLayout) string {
 	saved, _ := json.Marshal(layout)
-	return worldEval(ctx, world, "globalThis.__bashyPage.shotRestore("+string(saved)+")", nil)
+	return "globalThis.__bashyPage.shotRestore(" + string(saved) + ")"
+}
+
+// shotRestoreCacheOnly restores from the page's live stitch cache: the
+// layout call hides fixed elements BEFORE answering, so a layout answer
+// that never arrives (undecodable, or the world died mid-layout) still
+// leaves the page hidden — and the saved positions it would have
+// carried are exactly what the cache already holds. Calling shotRestore
+// with no argument restores those live values instead of clobbering
+// them with zeros (which a zero shotLayout argument would do: the page
+// restores scroll 0,0 and loses the true saved offsets).
+func shotRestoreCacheOnly(ctx context.Context, world runtime.ExecutionContextID) error {
+	return worldEval(ctx, world, "globalThis.__bashyPage.shotRestore()", nil)
 }
 
 type shotPos struct {

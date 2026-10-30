@@ -775,26 +775,48 @@ async function takeScreenshot(tabId, params) {
   // TIME-BOUNDED: see CDP_CAPTURE_TIMEOUT_MS. A hidden tab can leave
   // Page.captureScreenshot pending forever, and an unbounded await here would
   // never reach the fallback below.
+  // A failed stitch leaves its downgrade named here: without panels the
+  // stitch reports null (the single capture below is exact, no downgrade),
+  // but once panels exist a beyond-viewport fallback is MISSING rows below
+  // each panel's fold — reporting it as a clean full-page success would be
+  // a silent downgrade, so the result carries stitched:false plus why.
+  let stitchErr = null;
   if (fullPage) {
     // Inner scroll areas show only their visible slice in a
     // beyond-viewport capture: stitch them tile by tile (positions
     // restored even on failure — the stitch's own finally). Without
     // panels the stitch reports null and the single capture below is
-    // exact; a failed stitch falls back to it too (its meta names the
-    // path taken, so a silent downgrade reads as one).
+    // exact; a failed stitch falls back to it too (the meta below names
+    // the path taken, so a silent downgrade reads as one).
+    //
+    // TIME-BOUNDED WITH CANCELLATION: withTimeout only stops WAITING —
+    // the stitch promise keeps scrolling and capturing after the race is
+    // lost, and its tiles would race the fallback capture below. So a
+    // timeout (or any stitch error) first cancels the stitch, then AWAITS
+    // it: the cancelled stitch issues no further scroll/capture
+    // mutations and its finally restores the page before the fallback
+    // runs. Never return to the fallback while the stitch still moves.
+    const cancel = { cancelled: false };
+    const stitchP = stitchFullPage(tabId, cancel);
     try {
-      const stitched = await withTimeout(stitchFullPage(tabId), STITCH_TIMEOUT_MS, "stitched capture");
+      const stitched = await withTimeout(stitchP, STITCH_TIMEOUT_MS, "stitched capture");
       if (stitched) {
         return screenshotResult(stitched.image, tab, "stitched_full_page", true, stitched.meta);
       }
     } catch (e) {
+      stitchErr = e;
+      cancel.cancelled = true;
+      try { await stitchP; } catch (_) { /* restoration already ran in the stitch's finally */ }
       console.warn("ycode-live: stitched capture failed, falling back", e);
     }
   }
   try {
     const dataUrl = await withTimeout(
       captureViaDebugger(tabId, fullPage), CDP_CAPTURE_TIMEOUT_MS, "cdp capture");
-    return screenshotResult(dataUrl, tab, "cdp_capture_screenshot", fullPage);
+    const extra = stitchErr
+      ? { stitched: false, stitch_error: String((stitchErr && stitchErr.message) || stitchErr) }
+      : undefined;
+    return screenshotResult(dataUrl, tab, "cdp_capture_screenshot", fullPage, extra);
   } catch (cdpErr) {
     // The raced promise may still be in flight holding the attach; drop our
     // reference so a timed-out capture cannot leak a debugger session.
@@ -878,23 +900,45 @@ function base64Of(bytes) {
 // each panel, tile the page skipping panel rows, paint panels over
 // their expanded zones. Returns null when there is nothing to stitch
 // (the caller falls back to the single beyond-viewport capture); the
-// page is restored either way — the finally covers failure, and the
-// null path restores the layout's fixed-element hiding first.
-async function stitchFullPage(tabId) {
+// page is restored on EVERY post-layout path — the null path restores
+// the layout's fixed-element hiding first, and the tiling path holds
+// its debugger attach AND its restore inside one try/finally, so even
+// an attach failure cannot strand the page hidden or scrolled.
+//
+// cancel is an optional { cancelled } token (see takeScreenshot): once
+// set, no further scroll/capture mutations are issued — every setPos
+// and shot throws instead — while the finally still restores the page,
+// so awaiting this promise after cancelling always lands on a restored
+// page with nothing still moving it.
+async function stitchFullPage(tabId, cancel) {
   const lay = await callPage(tabId, "shotLayout", {}, "screenshot");
-  const panels = ((lay && lay.panels) || []).map((p, i) => ({ p, i }))
-    .filter((a) => !lay.panels.some((q, j) => j !== a.i && q.x <= a.p.x && q.y <= a.p.y &&
-      q.x + q.w >= a.p.x + a.p.w && q.y + q.h >= a.p.y + a.p.h &&
-      (q.w * q.h > a.p.w * a.p.h || (q.w === a.p.w && q.h === a.p.h && j < a.i))));
-  if (!lay || !lay.vw || !lay.vh || !panels.length) {
+  if (!lay || !lay.vw || !lay.vh) {
     try { await callPage(tabId, "shotRestore", lay || {}, "screenshot"); } catch (_) { /* gone */ }
     return null;
   }
-  const setPos = (x, y, p, pt) => callPage(tabId, "shotSet", { x, y, p, pt }, "screenshot");
-  await debuggerAttach.acquire(tabId, "Page");
+  const listed = Array.isArray(lay.panels) ? lay.panels : [];
+  const panels = listed.map((p, i) => ({ p, i }))
+    .filter((a) => !listed.some((q, j) => j !== a.i && q.x <= a.p.x && q.y <= a.p.y &&
+      q.x + q.w >= a.p.x + a.p.w && q.y + q.h >= a.p.y + a.p.h &&
+      (q.w * q.h > a.p.w * a.p.h || (q.w === a.p.w && q.h === a.p.h && j < a.i))));
+  if (!panels.length) {
+    try { await callPage(tabId, "shotRestore", lay || {}, "screenshot"); } catch (_) { /* gone */ }
+    return null;
+  }
+  const throwIfCancelled = () => {
+    if (cancel && cancel.cancelled) throw new Error("screenshot: stitched capture cancelled");
+  };
+  const setPos = async (x, y, p, pt) => {
+    throwIfCancelled();
+    return callPage(tabId, "shotSet", { x, y, p, pt }, "screenshot");
+  };
+  let acquired = false;
   let tiles = 0;
   try {
+    await debuggerAttach.acquire(tabId, "Page");
+    acquired = true;
     const shot = async () => {
+      throwIfCancelled();
       tiles++;
       if (tiles > STITCH_MAX_TILES) throw new Error(`screenshot: stitch exceeded the ${STITCH_MAX_TILES}-capture cap`);
       const res = await chrome.debugger.sendCommand({ tabId }, "Page.captureScreenshot", { format: "png" });
@@ -999,8 +1043,12 @@ async function stitchFullPage(tabId) {
     const bytes = new Uint8Array(await blob.arrayBuffer());
     return { image: base64Of(bytes), meta: { tiles, panels: panels.length } };
   } finally {
+    // Restore FIRST: the layout hid fixed elements, so even an attach
+    // failure (acquired === false) must reach this line. Release only
+    // what this stitch acquired — releasing an unheld attach would
+    // steal another consumer's debugger session.
     try { await callPage(tabId, "shotRestore", lay, "screenshot"); } catch (_) { /* gone */ }
-    await debuggerAttach.release(tabId);
+    if (acquired) await debuggerAttach.release(tabId);
   }
 }
 
