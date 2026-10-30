@@ -17,7 +17,7 @@ import (
 // E2E tests (BASHY_BROWSER_LIVE=1).
 func TestExtensionE2ETabAddressing(t *testing.T) {
 	guardIsolate(t)
-	t.Setenv(guard.FakeAskEnv, "fake:refuse")
+	t.Setenv(guard.FakeAskEnv, "fake:stop")
 	svc, ctx1 := startExtensionE2E(t, map[string]string{
 		"/one": `<!doctype html><title>Alpha</title><input type="text" id="note" aria-label="note"><p>first tab</p>`,
 		"/two": typeformScreen("Social Security Number", `<input type="text" aria-label="ssn">`),
