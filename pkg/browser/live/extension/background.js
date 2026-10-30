@@ -176,7 +176,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 // --- request dispatch ---
 
 const SUPPORTED_METHODS = [
-  "navigate", "back", "screenshot", "extract",
+  "navigate", "back", "screenshot", "extract", "text",
   "click", "type", "select", "scroll", "tabs", "evaluate",
   "wait_for_selector", "keyboard_press",
   "clipboard_read", "clipboard_write",
@@ -520,6 +520,8 @@ async function dispatchOnTab(method, params, tabId) {
       return takeScreenshot(tabId, params);
     case "extract":
       return extractInTab(tabId, params);
+    case "text":
+      return textInTab(tabId, params);
     case "click":
       return runInTab(tabId, "click", params);
     case "type":
@@ -646,6 +648,17 @@ const CDP_CAPTURE_TIMEOUT_MS = 4000;
 // early frame, never the whole request.
 const SETTLE_TIMEOUT_MS = 2000;
 
+// STITCH_TIMEOUT_MS bounds a stitched full-page capture: tiles ×
+// (position + capture round trips). The hub's call ceiling is 30 s;
+// the stitch must fail before it so the error — with positions already
+// restored by the stitch's own finally — reaches the caller.
+const STITCH_TIMEOUT_MS = 20000;
+
+// STITCH_MAX_TILES caps a stitched capture (scale probe included), the
+// live mirror of the CDP stitcher's cap in
+// pkg/browser/internal/cdpactions/fullpage.go.
+const STITCH_MAX_TILES = 48;
+
 // withTimeout rejects if p has not settled within ms. The underlying promise
 // is left to finish on its own — it cannot be cancelled — so callers that hold
 // a resource must release it on the timeout path too.
@@ -762,6 +775,22 @@ async function takeScreenshot(tabId, params) {
   // TIME-BOUNDED: see CDP_CAPTURE_TIMEOUT_MS. A hidden tab can leave
   // Page.captureScreenshot pending forever, and an unbounded await here would
   // never reach the fallback below.
+  if (fullPage) {
+    // Inner scroll areas show only their visible slice in a
+    // beyond-viewport capture: stitch them tile by tile (positions
+    // restored even on failure — the stitch's own finally). Without
+    // panels the stitch reports null and the single capture below is
+    // exact; a failed stitch falls back to it too (its meta names the
+    // path taken, so a silent downgrade reads as one).
+    try {
+      const stitched = await withTimeout(stitchFullPage(tabId), STITCH_TIMEOUT_MS, "stitched capture");
+      if (stitched) {
+        return screenshotResult(stitched.image, tab, "stitched_full_page", true, stitched.meta);
+      }
+    } catch (e) {
+      console.warn("ycode-live: stitched capture failed, falling back", e);
+    }
+  }
   try {
     const dataUrl = await withTimeout(
       captureViaDebugger(tabId, fullPage), CDP_CAPTURE_TIMEOUT_MS, "cdp capture");
@@ -825,23 +854,216 @@ async function captureViaDebugger(tabId, fullPage) {
   }
 }
 
-// screenshotResult normalises the two capture paths onto one envelope.
+// tileBitmap decodes one viewport PNG (bare base64) into a bitmap for
+// the stitcher's canvas compositing.
+async function tileBitmap(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return createImageBitmap(new Blob([bytes], { type: "image/png" }));
+}
+
+function base64Of(bytes) {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 8192) {
+    s += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+  }
+  return btoa(s);
+}
+
+// stitchFullPage tiles the page and every inner scroll panel through
+// their full extents and composites one PNG. It mirrors the CDP
+// stitcher (pkg/browser/internal/cdpactions/fullpage.go) on the same
+// page.js geometry (shotLayout/shotSet/shotRestore): layout once, tile
+// each panel, tile the page skipping panel rows, paint panels over
+// their expanded zones. Returns null when there is nothing to stitch
+// (the caller falls back to the single beyond-viewport capture); the
+// page is restored either way — the finally covers failure, and the
+// null path restores the layout's fixed-element hiding first.
+async function stitchFullPage(tabId) {
+  const lay = await callPage(tabId, "shotLayout", {}, "screenshot");
+  const panels = ((lay && lay.panels) || []).map((p, i) => ({ p, i }))
+    .filter((a) => !lay.panels.some((q, j) => j !== a.i && q.x <= a.p.x && q.y <= a.p.y &&
+      q.x + q.w >= a.p.x + a.p.w && q.y + q.h >= a.p.y + a.p.h &&
+      (q.w * q.h > a.p.w * a.p.h || (q.w === a.p.w && q.h === a.p.h && j < a.i))));
+  if (!lay || !lay.vw || !lay.vh || !panels.length) {
+    try { await callPage(tabId, "shotRestore", lay || {}, "screenshot"); } catch (_) { /* gone */ }
+    return null;
+  }
+  const setPos = (x, y, p, pt) => callPage(tabId, "shotSet", { x, y, p, pt }, "screenshot");
+  await debuggerAttach.acquire(tabId, "Page");
+  let tiles = 0;
+  try {
+    const shot = async () => {
+      tiles++;
+      if (tiles > STITCH_MAX_TILES) throw new Error(`screenshot: stitch exceeded the ${STITCH_MAX_TILES}-capture cap`);
+      const res = await chrome.debugger.sendCommand({ tabId }, "Page.captureScreenshot", { format: "png" });
+      if (!res || !res.data) throw new Error("Page.captureScreenshot returned no data");
+      return tileBitmap(res.data);
+    };
+    await setPos(0, 0, -1, 0);
+    const first = await shot();
+    const scale = first.width / lay.vw;
+    if (!(scale >= 0.5 && scale <= 4)) throw new Error(`screenshot: implausible tile scale ${scale}`);
+    const dev = (css) => { const n = Math.round(css * scale); return (n < 1 && css > 0) ? 1 : n; };
+    const shiftAbove = (row) => {
+      let s = 0;
+      for (const a of panels) { if (a.p.y + a.p.h <= row) s += a.p.sh - a.p.h; }
+      return s;
+    };
+    const finalRow = (row) => row + shiftAbove(row);
+    const inPanel = (row) => panels.some((a) => row >= a.p.y && row < a.p.y + a.p.h);
+    const finalH = dev(lay.docH + shiftAbove(1e9));
+    if (finalH > 16000) throw new Error(`screenshot: stitched image is ${finalH}px tall, over the 16000px cap`);
+    const canvas = new OffscreenCanvas(dev(lay.docW), finalH);
+    const g = canvas.getContext("2d");
+    // 1. Every panel's full content, at its own scroll positions. The
+    // page — not the plan — decides the stride, so a snapped scroll can
+    // neither skip rows nor tile one row forever.
+    const fulls = [];
+    for (const a of panels) {
+      const p = a.p;
+      const full = new OffscreenCanvas(dev(p.w), dev(p.sh));
+      const fg = full.getContext("2d");
+      let st = 0;
+      // The window stays pinned on the panel box for the whole panel:
+      // the box is fixed in the document, so scrolling the window by the
+      // content offset would push the box itself out of view.
+      let sy = 0;
+      if (lay.docH > lay.vh) sy = Math.min(Math.max(p.y, 0), lay.docH - lay.vh);
+      for (;;) {
+        const got = await setPos(0, sy, a.i, st);
+        const tile = await shot();
+        const vx = dev(p.x - got.x), vy = dev(p.y - got.y);
+        const x0 = Math.max(vx, 0), x1 = Math.min(vx + dev(p.w), tile.width);
+        const y0 = Math.max(vy, 0), y1 = Math.min(vy + dev(p.h), tile.height);
+        if (x1 <= x0 || y1 <= y0) {
+          throw new Error(`screenshot: panel at ${p.x},${p.y} is not visible at window ${got.x},${got.y}`);
+        }
+        let base = dev(got.pst) + (y0 - vy), sy0 = y0;
+        if (base < 0) { sy0 = y0 - base; base = 0; }
+        let h = y1 - sy0;
+        if (base + h > full.height) h = full.height - base;
+        if (h > 0) fg.drawImage(tile, x0, sy0, x1 - x0, h, 0, base, x1 - x0, h);
+        const rows = base + Math.max(h, 0);
+        let next = Math.round(rows / scale);
+        if (next < 1 && rows > 0) next = 1;
+        if (next <= st) throw new Error(`screenshot: panel would not scroll (pinned at ${st} of ${p.sh})`);
+        st = next;
+        if (st >= p.sh) break;
+      }
+      fulls.push(full);
+    }
+    // 2. The page rows, skipping the rows panels cover. Driven by ACTUAL
+    // scroll positions: a page that snaps is painted where it really is,
+    // and one that will not advance fails loudly instead of tiling one
+    // row forever.
+    const paintStrip = (actualY, lo, hi, tile) => {
+      const w = Math.min(dev(lay.docW), tile.width);
+      const bounds = [lo, hi];
+      for (const a of panels) {
+        if (a.p.y + a.p.h > lo && a.p.y < hi) bounds.push(Math.max(a.p.y, lo), Math.min(a.p.y + a.p.h, hi));
+      }
+      bounds.sort((x, y) => x - y);
+      for (let i = 0; i + 1 < bounds.length; i++) {
+        const s0 = bounds[i], s1 = bounds[i + 1];
+        if (s0 >= s1 || inPanel((s0 + s1) / 2)) continue;
+        let srcY0 = dev(s0 - actualY);
+        const srcY1 = dev(s1 - actualY);
+        if (srcY1 <= 0 || srcY0 >= tile.height) continue;
+        let skip = 0;
+        if (srcY0 < 0) { skip = -srcY0; srcY0 = 0; }
+        let srcH = srcY1 - srcY0;
+        if (srcY0 + srcH > tile.height) srcH = tile.height - srcY0;
+        if (srcH <= 0) continue;
+        g.drawImage(tile, 0, srcY0, w, srcH, 0, dev(finalRow(s0)) + skip, w, srcH);
+      }
+    };
+    let y = 0;
+    for (;;) {
+      let top = y;
+      if (lay.docH > lay.vh) top = Math.min(y, lay.docH - lay.vh);
+      const got = await setPos(0, top, -1, 0);
+      const tile = await shot();
+      const lo = Math.max(y, got.y), hi = Math.min(lay.docH, got.y + lay.vh);
+      paintStrip(got.y, lo, hi, tile);
+      if (hi <= y) throw new Error(`screenshot: page would not scroll (pinned at ${y} of ${lay.docH})`);
+      y = hi;
+      if (y >= lay.docH || lay.docH <= lay.vh) break;
+    }
+    // 3. The panels over their expanded zones.
+    panels.forEach((a, i) => {
+      g.drawImage(fulls[i], dev(a.p.x), dev(finalRow(a.p.y)));
+    });
+    const blob = await canvas.convertToBlob({ type: "image/png" });
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    return { image: base64Of(bytes), meta: { tiles, panels: panels.length } };
+  } finally {
+    try { await callPage(tabId, "shotRestore", lay, "screenshot"); } catch (_) { /* gone */ }
+    await debuggerAttach.release(tabId);
+  }
+}
+
+// screenshotResult normalises the capture paths onto one envelope.
 // Caller (Go side) is responsible for MaxBytes / SavePath
 // post-processing; the extension always emits a raw base64 PNG so the
-// re-encode/write path lives in one place.
-function screenshotResult(data, tab, method, fullPage) {
+// re-encode/write path lives in one place. extra merges additional
+// capture metadata (a stitch reports its tiles/panels) into data.
+function screenshotResult(data, tab, method, fullPage, extra) {
   const idx = data.indexOf(",");
   const image = data.startsWith("data:") && idx >= 0 ? data.slice(idx + 1) : data;
+  const info = { capture: method, full_page: !!fullPage, tab_id: tab.id };
+  if (extra && typeof extra === "object") Object.assign(info, extra);
   return {
     image,
     tab_id: tab.id,
     url: tab.url || "",
     title: tab.title || "",
-    data: JSON.stringify({ capture: method, full_page: !!fullPage, tab_id: tab.id }),
+    data: JSON.stringify(info),
   };
 }
 
 const extractedFrames = new Map();
+
+// textInTab reads visible text without compiling page script (the
+// CSP-safe read): an addressed target resolves through the shared frame
+// router, while the whole page concatenates every frame's text. Runs in
+// the extension's isolated world, so no page CSP directive applies; a
+// password input reads as its name only (page.js text).
+async function textInTab(tabId, params) {
+  params = params || {};
+  if (params.selector || params.match_text) {
+    return runInTab(tabId, "text", params);
+  }
+  if (params.element_id > 0) {
+    // A read resolves through the CURRENT tab-wide enumeration — the
+    // fill-mismatch lock-in protects writes from landing in the wrong
+    // field, while a read names whatever the address holds now (what a
+    // fresh extract would list). Counted per frame exactly as extract
+    // numbers, so [N] reads the Nth listed element.
+    const counted = await callFrames(tabId, "count", params);
+    let rest = params.element_id;
+    for (const f of counted) {
+      const n = (f.result && f.result.count) || 0;
+      if (rest <= n) {
+        return callPage(tabId, "text", Object.assign({}, params, { element_id: rest }), "text", f.frameId);
+      }
+      rest -= n;
+    }
+    throw new Error(`text: element index ${params.element_id} out of range`);
+  }
+  const frames = await callFrames(tabId, "text", params);
+  const parts = [];
+  let firstError = "";
+  for (const f of frameOrder(frames)) {
+    const r = f.result;
+    if (!r) continue;
+    if (typeof r.content === "string" && r.content) parts.push(r.content);
+    else if (r.error && !firstError) firstError = r.error;
+  }
+  if (!parts.length && firstError) throw new Error(firstError);
+  return { content: parts.join("\n"), data: JSON.stringify({ frames: parts.length }) };
+}
 
 async function extractInTab(tabId, params) {
   params = params || {};
@@ -933,11 +1155,14 @@ async function injectOne(opts, what) {
   return frame.result;
 }
 
-// runInTab runs click/type/select in the frame that holds the target:
-// an index is tab-wide (as extract numbers it) and maps to one frame; a
-// selector or text is tried in frame order until a frame finds it.
+// runInTab runs click/type/select/scroll/text in the frame that holds
+// the target: an index is tab-wide (as extract numbers it) and maps to
+// one frame; a selector or text is tried in frame order until a frame
+// finds it. An unaddressed scroll stays on the top frame's window.
 async function runInTab(tabId, kind, params) {
-  if (kind === "scroll") return callPage(tabId, kind, params, kind);
+  if (kind === "scroll" && !(params.element_id > 0 || params.selector || params.match_text)) {
+    return callPage(tabId, kind, params, kind);
+  }
   let frameId = 0, local = params, result = null;
   const qualified = parseFrameSelector(params.selector);
   if (qualified) params = Object.assign({}, params, { selector: qualified.selector });

@@ -40,14 +40,16 @@ states its operands, which modes implement it, and its output contract.
 | `status` | ✅ | ✅ | ✅ | per-mode fields; a field that does not apply to the mode is omitted, not defaulted |
 | `navigate <url>` | ✅ | ✅ | ✅ | solo: this *is* the scrape — returns title/url/content |
 | `extract [scope]` | ✅ | ✅ | ✅ | carries `viewport`; `--include-hidden` |
-| `eval '<js>'` | ✅ | ✅ | ⚠️ | live compiles a string in the page's MAIN world → **refused by a strict page CSP**; use `dispatch-event` |
+| `eval '<js>'` | ✅ | ✅ | ⚠️ | live compiles a string in the page's MAIN world → **refused by a strict page CSP**; use `dispatch-event`, or `text` to read |
 | `dispatch-event <name>` | ✅ | ✅ | ✅ | the CSP remedy — nothing is compiled from a string |
-| `click <sel>\|<index>` | ✅ | ✅ | ✅ | index resolves through the same enumeration `extract` prints |
+| `text [selector]` | ✅ | ✅ | ✅ | visible text without eval — answers under a strict CSP; a password input reads as its name only |
+| `click <sel>\|<index>` | ✅ | ✅ | ✅ | index resolves through the same enumeration `extract` prints; reports `navigated` / `dialog` / `dom-changed` / `no-effect` |
 | `type <sel> <text>` | ✅ | ✅ | ✅ | |
 | `wait-for-selector <sel>` | ✅ | ✅ | ✅ | `--timeout-ms`, `--state visible\|attached\|detached` |
-| `screenshot` | ✅ | ✅ | ✅ | writes a file by default; `--base64`, `--full-page`, `--settle-ms` |
+| `screenshot` | ✅ | ✅ | ✅ | writes a file by default; `--base64`, `--full-page` (stitches inner scroll areas; `data` names `stitched_full_page` vs `full_page`), `--settle-ms` |
 | `cookies-get [name [domain]]` | ✅ | ✅ | ✅ | live sees HttpOnly cookies (chrome.cookies) |
-| `scroll` · `keyboard-press` · `back` | ✅ | ✅ | ✅ | |
+| `scroll [up\|down] [amount] [selector]` | ✅ | ✅ | ✅ | without a target the window scrolls; with one its nearest scrollable ancestor moves |
+| `keyboard-press` · `back` | ✅ | ✅ | ✅ | |
 | `tabs list` | ✅ | ✅ | ✅ | typed records under `--json` |
 | `tabs switch\|new\|close` | ❌ | ❌ | ✅ | live only; address with `--url`/`--title` |
 | `clipboard-*` · `storage-get` | ❌ | ❌ | ✅ | needs the extension's chrome.* permissions |
@@ -63,7 +65,10 @@ states its operands, which modes implement it, and its output contract.
 | `screenshot` | **path on stdout** (a PNG is written); `--base64` for inline | `path`, or `image` with `--base64` |
 | `extract` | element listing on stdout | `content`, `elements`, `total`, `truncated`, `viewport`, `data` = `{viewport, elements[]}` |
 | `tabs list` | `[N] title / url` on stdout | `content`, `data` = `[{index,id,title,url,active,driven}]` |
-| `click` / `type` | `clicked` / `typed` on stdout | `content`; **`success:false` with a reason when nothing resolved** |
+| `click` | `clicked: navigated` / `dialog` / `dom-changed` / `no-effect` on stdout | `content`, `data.effect`; **`success:false` with a reason when nothing resolved** |
+| `type` | `typed` on stdout | `content`; **`success:false` with a reason when nothing resolved** |
+| `text` | the rendered text on stdout | `content` (a password input reads as its name only) |
+| `scroll` | the new position on stdout | `content` (names the panel for an addressed scroll) |
 | `dispatch-event` | one line on stdout | `content`, `data` = `{event,target,default_prevented}` |
 | `eval` | the value on stdout | `data` |
 | `cookies-get` | JSON on stdout | `data` = array of cookie objects |
@@ -139,17 +144,25 @@ bashy browser --mode live screenshot --output /tmp/after.png      # 6. capture T
 
 Three things that session depends on, each of which was once broken:
 
-- **Step 5 fails loudly if nothing resolved.** A click that matches no element
-  is `success:false` with a reason, and both the index and selector forms
-  return the same envelope. (`click 36` used to be sent as the CSS selector
-  `"36"`, which is invalid CSS; the injected `querySelector` threw, the
-  extension returned an empty frame, and the caller was told `{"success":true}`.)
+- **Step 5 fails loudly if nothing resolved — and reports what happened when
+  something did.** A click that matches no element is `success:false` with a
+  reason, and both the index and selector forms return the same envelope.
+  A click that resolved reports its OBSERVED effect within a bounded watch:
+  `clicked: navigated`, `clicked: dialog`, `clicked: dom-changed`, or
+  `clicked: no-effect` (the click landed; the page did not react).
+  (`click 36` used to be sent as the CSS selector `"36"`, which is invalid
+  CSS; the injected `querySelector` threw, the extension returned an empty
+  frame, and the caller was told `{"success":true}`.)
 - **Step 6 captures the tab step 3 selected**, not whatever is in the
   foreground, and waits for a paint first. `chrome.tabs.captureVisibleTab`
   captures a *window's* visible tab, so driving a background tab produced a
   real, well-formed PNG of a different page — a failure that reads as a
   success. Non-foreground and `--full-page` captures now go through CDP
-  `Page.captureScreenshot`, which addresses the tab itself.
+  `Page.captureScreenshot`, which addresses the tab itself. `--full-page`
+  additionally stitches inner scroll areas tile by tile, so every panel
+  appears at its full content height; page and panel positions are restored
+  even when the stitch fails (then the beyond-viewport capture answers and
+  `data` names the fallback).
 - **Step 2 tells the truth.** `status` used to answer `mode "live" is not
   supported` while every sibling subcommand drove live mode happily.
 
@@ -164,11 +177,14 @@ Policy directive because 'unsafe-eval' is not an allowed source of script…
 ```
 
 That is the page's policy, not a bashy limit. The remedy is `dispatch-event`,
-which fires a named event without compiling anything from a string:
+which fires a named event without compiling anything from a string — and
+`text`, which reads visible text the same way:
 
 ```sh
 bashy browser --mode live dispatch-event toggle-activity-panel
 bashy browser --mode live dispatch-event my:event --detail '{"open":true}' --on '#root'
+bashy browser --mode live text                  # the whole page, every frame
+bashy browser --mode live text '#price'         # one element; password inputs read as their name only
 ```
 
 ### Extension version floor
