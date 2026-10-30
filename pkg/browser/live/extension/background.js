@@ -1074,6 +1074,11 @@ async function evaluateInTab(tabId, script) {
           for (const el of root.querySelectorAll("*")) {
             if (el.tagName === "INPUT" && (el.getAttribute("type") || "").toLowerCase() === "password" && el.value) out.push(String(el.value));
             if (el.shadowRoot) walk(el.shadowRoot);
+            if (el.tagName === "IFRAME" || el.tagName === "FRAME") {
+              let d = null;
+              try { d = el.contentDocument; } catch (_) { /* inaccessible */ }
+              if (d) { try { walk(d); } catch (_) { /* skip */ } }
+            }
           }
         };
         try { walk(document); } catch (_) { /* detached */ }

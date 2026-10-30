@@ -202,7 +202,7 @@ func needsFieldCheck(a wire.Action) bool {
 	case wire.ActionType:
 		return true
 	case wire.ActionKeyboardPress:
-		return len(a.Modifiers) == 0 && utf8.RuneCountInString(a.Key) == 1
+		return (len(a.Modifiers) == 0 && utf8.RuneCountInString(a.Key) == 1) || isPasteChord(a)
 	case wire.ActionDispatchEvent:
 		return fieldTargetedDispatch(a)
 	}
@@ -305,4 +305,18 @@ func check(ctx context.Context, b Backend, a wire.Action) (*refusal, *wire.Resul
 		}
 	}
 	return ref, nil
+}
+
+// isPasteChord is Control/Meta+v (or Shift+Insert): it writes the clipboard
+// into the focused field, so a sensitive target is refused like a type.
+func isPasteChord(a wire.Action) bool {
+	key := strings.ToLower(a.Key)
+	mods := make(map[string]bool, len(a.Modifiers))
+	for _, m := range a.Modifiers {
+		mods[strings.ToLower(m)] = true
+	}
+	if key == "v" && (mods["control"] || mods["ctrl"] || mods["meta"] || mods["cmd"] || mods["command"]) {
+		return true
+	}
+	return key == "insert" && mods["shift"]
 }

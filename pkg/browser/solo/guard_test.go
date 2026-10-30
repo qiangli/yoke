@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chromedp/chromedp"
 
@@ -213,5 +214,40 @@ func TestSoloEvaluateSuppressesPasswordValues(t *testing.T) {
 	}
 	if d := eval(`document.querySelector('#msg').textContent`); d != "hello visible" {
 		t.Fatalf("ordinary text = %q", d)
+	}
+}
+
+func TestSoloEvaluateSuppressesIframePasswordValues(t *testing.T) {
+	if os.Getenv("BASHY_BROWSER_LIVE") == "" {
+		t.Skip("live Chrome test disabled; set BASHY_BROWSER_LIVE=1 to run (launches a real Chrome)")
+	}
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("BASHY_SECRETS_TOKEN", "")
+	t.Setenv("BASHY_API_KEY", "")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/inner" {
+			fmt.Fprint(w, `<!doctype html><body><input type="password" id="pw" value="framepw-9981"><p id="t">inner text</p></body>`)
+			return
+		}
+		fmt.Fprint(w, `<!doctype html><body><p id="msg">outer visible</p><iframe id="f" src="/inner"></iframe><iframe id="x" src="https://invalid.invalid/"></iframe></body>`)
+	}))
+	defer srv.Close()
+	ctx := context.Background()
+	c := New(Config{})
+	if !c.Available(ctx) {
+		t.Skip("no Chrome or Chromium binary found")
+	}
+	defer c.Close()
+	if _, err := c.Execute(ctx, wire.Action{Type: wire.ActionNavigate, URL: srv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Second)
+	res, err := c.Execute(ctx, wire.Action{Type: wire.ActionEvaluate, Script: `({pw: document.getElementById('f').contentDocument.getElementById('pw').value, msg: document.getElementById('msg').textContent, inner: document.getElementById('f').contentDocument.getElementById('t').textContent})`})
+	if err != nil || !res.Success {
+		t.Fatalf("%v %+v", err, res)
+	}
+	if strings.Contains(res.Data, "framepw") || !strings.Contains(res.Data, guard.PasswordMark) ||
+		!strings.Contains(res.Data, "outer visible") || !strings.Contains(res.Data, "inner text") {
+		t.Fatalf("iframe password not suppressed / ordinary text lost: %s", res.Data)
 	}
 }

@@ -719,3 +719,31 @@ func TestFieldTargetedDispatchIsFieldChecked(t *testing.T) {
 		}
 	}
 }
+
+// A paste chord into a guarded field is a type by another name, and is not
+// executed without the human path; ordinary chords are not field-checked.
+func TestPasteChordIsFieldChecked(t *testing.T) {
+	isolate(t)
+	t.Setenv(FakeAskEnv, "fake:skip")
+	for _, a := range []wire.Action{
+		{Type: wire.ActionKeyboardPress, Key: "v", Modifiers: []string{"Control"}},
+		{Type: wire.ActionKeyboardPress, Key: "V", Modifiers: []string{"Meta"}},
+		{Type: wire.ActionKeyboardPress, Key: "Insert", Modifiers: []string{"Shift"}},
+	} {
+		b := &fakeBackend{human: true, field: Field{Guarded: true, Reason: "field:type-password", Site: "x"}}
+		res := run(t, b, a)
+		if len(b.executed) != 0 || res.OutcomeClass != ClassSkipped {
+			t.Fatalf("paste %v into a password field went through: %+v", a.Modifiers, res)
+		}
+	}
+	b := &fakeBackend{human: true, field: Field{Guarded: true, Reason: "field:type-password"}}
+	run(t, b, wire.Action{Type: wire.ActionKeyboardPress, Key: "a", Modifiers: []string{"Control"}})
+	if len(b.inspected) != 0 || len(b.executed) != 1 {
+		t.Fatal("select-all chord was field-checked")
+	}
+	b = &fakeBackend{human: true}
+	run(t, b, wire.Action{Type: wire.ActionKeyboardPress, Key: "v", Modifiers: []string{"Control"}})
+	if len(b.executed) != 1 {
+		t.Fatal("paste into an ordinary field was blocked")
+	}
+}

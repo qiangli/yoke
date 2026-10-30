@@ -402,3 +402,21 @@ func TestExtensionE2EEvaluateSuppressesPasswordValues(t *testing.T) {
 		}
 	}
 }
+
+func TestExtensionE2EEvaluateSuppressesIframePasswordValues(t *testing.T) {
+	guardIsolate(t)
+	outer := `<!doctype html><body><p id="msg">outer visible</p><iframe id="f" src="/inner"></iframe></body>`
+	inner := `<!doctype html><body><input type="password" id="pw" value="framepw-9981"><p id="t">inner text</p></body>`
+	svc, _ := startExtensionE2E(t, map[string]string{"/outer": outer, "/inner": inner}, "/outer")
+	time.Sleep(time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	res, err := svc.Execute(ctx, wire.Action{Type: wire.ActionEvaluate, Script: `({pw: document.getElementById('f').contentDocument.getElementById('pw').value, msg: document.getElementById('msg').textContent, inner: document.getElementById('f').contentDocument.getElementById('t').textContent})`})
+	if err != nil || res == nil || res.Error != "" {
+		t.Fatalf("%v %+v", err, res)
+	}
+	if strings.Contains(res.Data, "framepw") || !strings.Contains(res.Data, guard.PasswordMark) ||
+		!strings.Contains(res.Data, "outer visible") || !strings.Contains(res.Data, "inner text") {
+		t.Fatalf("iframe password not suppressed: %s", res.Data)
+	}
+}
