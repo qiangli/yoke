@@ -819,10 +819,24 @@ function screenshotResult(data, tab, method, fullPage) {
   };
 }
 
+const extractedFrames = new Map();
+
 async function extractInTab(tabId, params) {
   params = params || {};
   const frames = await callFrames(tabId, "extract", Object.assign({}, params, { limit: 1e6, offset: 0 }));
-  if (frames.length <= 1) return callPage(tabId, "extract", params, "extract");
+  const ordered = frameOrder(frames);
+  const byIndex = new Map();
+  let base = 0;
+  for (const f of ordered) {
+    let data = {};
+    try { data = JSON.parse(f.result.data || "{}"); } catch (_) { /* empty frame */ }
+    for (const e of data.elements || []) byIndex.set(base + e.index, {
+      frameId: f.frameId, local: e.index, frameURL: f.result.url,
+      identity: { tag: e.tag, name: e.name, label: e.label, stable_id: e.stable_id },
+    });
+    base += f.result.count || 0;
+  }
+  extractedFrames.set(tabId, { byIndex, scope: params.scope || "", includeHidden: !!params.include_hidden });
   return mergeExtract(frames, params);
 }
 
@@ -903,15 +917,27 @@ async function injectOne(opts, what) {
 async function runInTab(tabId, kind, params) {
   if (kind === "scroll") return callPage(tabId, kind, params, kind);
   let frameId = 0, local = params, result = null;
+  const qualified = parseFrameSelector(params.selector);
+  if (qualified) params = Object.assign({}, params, { selector: qualified.selector });
   const counted = await callFrames(tabId, "count", params);
+  if (params.element_id > 0) {
+    const snapshot = extractedFrames.get(tabId);
+    const at = snapshot && snapshot.byIndex.get(params.element_id);
+    if (!at || snapshot.scope !== (params.scope || "") || snapshot.includeHidden !== !!params.include_hidden)
+      throw new Error(`${kind}: guard:fill-mismatch: index ${params.element_id} has no matching extract identity`);
+    const current = counted.find((f) => f.frameId === at.frameId);
+    if (!current || (current.result.url && at.frameURL && current.result.url !== at.frameURL))
+      throw new Error(`${kind}: guard:fill-mismatch: frame for index ${params.element_id} changed`);
+    frameId = at.frameId;
+    local = Object.assign({}, params, { element_id: at.local, expected_identity: at.identity });
+    result = await callPage(tabId, kind, local, kind, frameId);
+  } else if (qualified) {
+    if (!counted.some((f) => f.frameId === qualified.frameId))
+      throw new Error(`${kind}: frame ${qualified.frameId} is gone`);
+    frameId = qualified.frameId;
+    result = await callPage(tabId, kind, params, kind, frameId);
+  } else
   if (counted.length > 1) {
-    if (params.element_id > 0) {
-      const at = locateIndex(counted, params.element_id);
-      if (!at) throw new Error(`${kind}: element index ${params.element_id} out of range (extract listed ${totalCount(counted)} across ${counted.length} frames)`);
-      frameId = at.frameId;
-      local = Object.assign({}, params, { element_id: at.local });
-      result = await callPage(tabId, kind, local, kind, frameId);
-    } else {
       for (const f of counted) {
         const r = await callPage(tabId, kind, params, kind, f.frameId);
         if (r && r.notfound && !result) { result = r; continue; }
@@ -919,7 +945,6 @@ async function runInTab(tabId, kind, params) {
         result = r; frameId = f.frameId;
         break;
       }
-    }
   } else {
     result = await callPage(tabId, kind, params, kind);
   }
@@ -1022,40 +1047,28 @@ async function guardFocus(tabId, params) {
 async function dispatchEventInTab(tabId, params) {
   const name = (params && params.event || "").trim();
   if (!name) throw new Error("dispatch_event: event name required");
-  const result = await injectOne({
-    target: { tabId },
-    args: [name, params.detail || "", params.selector || ""],
-    world: "MAIN",
-    func: (name, detailRaw, selector) => {
-      let detail = null;
-      if (detailRaw) {
-        try { detail = JSON.parse(detailRaw); } catch (_) { detail = detailRaw; }
-      }
-      let target = window;
-      let where = "window";
-      if (selector === "document") {
-        target = document; where = "document";
-      } else if (selector) {
-        try {
-          target = document.querySelector(selector);
-        } catch (e) {
-          return { error: `dispatch_event: ${JSON.stringify(selector)} is not a valid CSS selector` };
-        }
-        if (!target) return { error: `dispatch_event: no element matches ${JSON.stringify(selector)}` };
-        where = selector;
-      }
-      const ev = detail === null
-        ? new Event(name, { bubbles: true, cancelable: true })
-        : new CustomEvent(name, { bubbles: true, cancelable: true, detail });
-      const notCancelled = target.dispatchEvent(ev);
-      return {
-        content: `dispatched ${name} on ${where}`,
-        data: JSON.stringify({ event: name, target: where, default_prevented: !notCancelled }),
-      };
-    },
-  }, "dispatch_event");
-  if (result && result.error) throw new Error(result.error);
-  return result;
+  const selector = params.selector || "";
+  const call = { event: name, detail: params.detail || "", selector };
+  if (!selector || selector === "document") {
+    const r = await callPage(tabId, "dispatch", call, "dispatch_event");
+    if (r && r.error) throw new Error(r.error);
+    return r;
+  }
+  const q = parseFrameSelector(selector);
+  if (q) {
+    call.selector = q.selector;
+    const r = await callPage(tabId, "dispatch", call, "dispatch_event", q.frameId);
+    if (r && r.error) throw new Error(r.error);
+    return r;
+  }
+  let miss = null;
+  for (const f of await callFrames(tabId, "count", {})) {
+    const r = await callPage(tabId, "dispatch", call, "dispatch_event", f.frameId);
+    if (r && r.notfound) { miss = miss || r; continue; }
+    if (r && r.error) throw new Error(r.error);
+    return r;
+  }
+  throw new Error(miss ? miss.error : `dispatch_event: no element matches ${JSON.stringify(selector)}`);
 }
 
 async function evaluateInTab(tabId, script) {
@@ -1100,38 +1113,54 @@ async function waitForSelector(tabId, params) {
   if (!sel) throw new Error("wait_for_selector: selector required");
   const timeoutMs = params.timeout_ms && params.timeout_ms > 0 ? params.timeout_ms : 5000;
   const state = params.state || "visible";
-  // Poll inside the page in 100 ms ticks. Cheaper than IPC because
-  // chrome.scripting.executeScript per tick would burn quota.
-  const [{ result } = {}] = await chrome.scripting.executeScript({
-    target: { tabId },
-    args: [sel, timeoutMs, state],
-    func: async (sel, timeoutMs, state) => {
-      const deadline = Date.now() + timeoutMs;
-      function visible(el) {
-        if (!el) return false;
-        const cs = getComputedStyle(el);
-        if (cs.visibility === "hidden" || cs.display === "none") return false;
-        const r = el.getBoundingClientRect();
-        return r.width > 0 && r.height > 0;
+  const q = parseFrameSelector(sel);
+  const call = { selector: q ? q.selector : sel };
+  const deadline = Date.now() + timeoutMs;
+  do {
+    let matches = 0, visible = 0;
+    if (q) {
+      const r = await callPage(tabId, "probe", call, "wait_for_selector", q.frameId);
+      if (r.error) throw new Error(`wait_for_selector: ${r.error}`);
+      matches = r.matches; visible = r.visible;
+    } else {
+      for (const f of await callFrames(tabId, "probe", call)) {
+        if (f.result.error) throw new Error(`wait_for_selector: ${f.result.error}`);
+        matches += f.result.matches; visible += f.result.visible;
       }
-      while (Date.now() < deadline) {
-        const el = document.querySelector(sel);
-        if (state === "detached") {
-          if (!el) return { ok: true };
-        } else if (state === "attached") {
-          if (el) return { ok: true };
-        } else {
-          if (visible(el)) return { ok: true };
-        }
-        await new Promise((r) => setTimeout(r, 100));
-      }
-      return { ok: false };
-    },
-  });
-  if (!result || !result.ok) {
-    throw new Error(`wait_for_selector: timeout after ${timeoutMs}ms (state=${state})`);
+    }
+    if (state === "detached" ? matches === 0 : state === "attached" ? matches > 0 : visible > 0) {
+      return { data: `state=${state}` };
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  } while (Date.now() < deadline);
+  throw new Error(`wait_for_selector: timeout after ${timeoutMs}ms (state=${state})`);
+}
+
+// resolveKeyTarget focuses the one visible element selector names, in the
+// frame that holds it. Missing, hidden-only, ambiguous or unfocusable
+// targets throw BEFORE any key event is sent.
+async function resolveKeyTarget(tabId, selector) {
+  const q = parseFrameSelector(selector);
+  const call = { selector: q ? q.selector : selector };
+  let frameId = 0;
+  if (q) {
+    frameId = q.frameId;
+  } else {
+    const holders = [];
+    let matches = 0;
+    for (const f of await callFrames(tabId, "probe", call)) {
+      if (f.result.error) throw new Error(`keyboard_press: ${f.result.error}`);
+      matches += f.result.matches;
+      if (f.result.visible) holders.push({ frameId: f.frameId, n: f.result.visible });
+    }
+    if (!matches) throw new Error(`keyboard_press: no element matches ${JSON.stringify(selector)}`);
+    if (!holders.length) throw new Error(`keyboard_press: ${JSON.stringify(selector)} matches only hidden elements`);
+    if (holders.length > 1 || holders[0].n > 1) throw new Error(`keyboard_press: ${JSON.stringify(selector)} is ambiguous (matches ${holders.reduce((a, h) => a + h.n, 0)} visible elements)`);
+    frameId = holders[0].frameId;
   }
-  return { data: `state=${state}` };
+  const r = await callPage(tabId, "keyFocus", call, "keyboard_press", frameId);
+  if (r.error) throw new Error(r.error.startsWith("keyboard_press") ? r.error : `keyboard_press: ${r.error}`);
+  return frameId;
 }
 
 async function keyboardPress(tabId, params) {
@@ -1140,18 +1169,8 @@ async function keyboardPress(tabId, params) {
   // keystrokes (manifest 0.4.0). Falls back to the synthetic
   // KeyboardEvent path if the debugger attach fails — for example
   // if DevTools is open on the same tab.
-  if (params.selector) {
-    try {
-      await chrome.scripting.executeScript({
-        target: { tabId },
-        args: [params.selector],
-        func: (sel) => {
-          const el = document.querySelector(sel);
-          if (el && el.focus) el.focus();
-        },
-      });
-    } catch (_) { /* ignore focus failures; keystrokes still go to body */ }
-  }
+  let frameId = 0;
+  if (params.selector) frameId = await resolveKeyTarget(tabId, params.selector);
   try {
     await dispatchTrustedKey(tabId, params.key, params.modifiers || []);
     return { data: "pressed=" + params.key + " (trusted)" };
@@ -1160,7 +1179,7 @@ async function keyboardPress(tabId, params) {
     console.warn("ycode-live: trusted key dispatch failed, falling back", e);
   }
   const [{ result } = {}] = await chrome.scripting.executeScript({
-    target: { tabId },
+    target: frameId ? { tabId, frameIds: [frameId] } : { tabId },
     args: [params.key, params.modifiers || []],
     func: (key, modifiers) => {
       const mods = new Set(modifiers.map((m) => String(m).toLowerCase()));

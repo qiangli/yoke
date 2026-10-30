@@ -29,13 +29,11 @@ func TestHiddenOnlyMessageMatchesLive(t *testing.T) {
 	}
 }
 
-// Comma lists and :not() must work: resolution goes through
-// querySelectorAll, never by splitting the selector, and the
-// visibility predicate mirrors live's shown().
+// Selector syntax is supplied by the same page.js resolver as live mode.
 func TestResolveSelectorScriptCoversCommaLists(t *testing.T) {
 	script := resolveSelectorScript("input, textarea")
-	if !strings.Contains(script, "querySelectorAll") {
-		t.Fatalf("resolution must use querySelectorAll:\n%s", script)
+	if !strings.Contains(script, "globalThis.__bashyPage.resolveSelector(document, SEL)") {
+		t.Fatalf("resolution must use the live page resolver")
 	}
 	if strings.Contains(script, `split(",")`) || strings.Contains(script, `split(',')`) {
 		t.Fatalf("resolution must not split comma lists:\n%s", script)
@@ -45,18 +43,20 @@ func TestResolveSelectorScriptCoversCommaLists(t *testing.T) {
 			t.Fatalf("resolution script missing %s:\n%s", want, script)
 		}
 	}
-	if !strings.Contains(resolveSelectorScript(`input:not([type=hidden])`), `"input:not([type=hidden])"`) {
-		t.Fatalf(":not() selector must reach querySelectorAll intact")
+	for _, sel := range []string{`input:not([type=hidden])`, `xpath=//*[@id='name']`, `text=Submit`, `label=First name`} {
+		if !strings.Contains(resolveSelectorScript(sel), JSString(sel)) {
+			t.Fatalf("selector %q did not reach the shared resolver", sel)
+		}
 	}
 }
 
 func TestTargetJSPathPrefersVisible(t *testing.T) {
 	vis := targetJSPath("input, textarea", false)
-	if !strings.Contains(vis, "querySelectorAll") || !strings.Contains(vis, "shown(") {
+	if !strings.Contains(vis, "globalThis.__bashyPage.resolveSelector(document, SEL)") || !strings.Contains(vis, "shown(") {
 		t.Fatalf("default target must pick the first visible match:\n%s", vis)
 	}
 	hidden := targetJSPath("input, textarea", true)
-	if !strings.Contains(hidden, "querySelector(") || strings.Contains(hidden, "shown(") {
+	if !strings.Contains(hidden, "globalThis.__bashyPage.resolveSelector(document, SEL)[0]") {
 		t.Fatalf("--include-hidden must keep the first match, hidden or not:\n%s", hidden)
 	}
 }
@@ -70,5 +70,13 @@ func TestActionTimeoutDefaultsAndOverrides(t *testing.T) {
 	}
 	if DefaultActionTimeout != 5*time.Second {
 		t.Fatalf("DefaultActionTimeout=%v, want 5s", DefaultActionTimeout)
+	}
+}
+
+func TestExtractIdentityRetainsFieldMetadata(t *testing.T) {
+	fields := parseExtractIdentities(`{"elements":[{"index":7,"tag":"input","name":"answer","label":"Answer","stable_id":"answer","selector":"#answer","attrs":{"current":"changed"}}]}`)
+	got, ok := fields[7]
+	if !ok || got.Tag != "input" || got.Name != "answer" || got.Label != "Answer" || got.StableID != "answer" {
+		t.Fatalf("extract identity missing: %+v", fields)
 	}
 }

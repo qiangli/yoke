@@ -227,7 +227,7 @@ func TestHiddenTabSkipsThePaintBarrier(t *testing.T) {
 // through frames.js; this pins that background.js uses them).
 func TestActionsReachEveryFrame(t *testing.T) {
 	src := extensionFile(t, "background.js")
-	for _, want := range []string{`importScripts("frames.js")`, "allFrames: true", "mergeExtract(frames, params)", "locateIndex(counted, params.element_id)", "frameIds: [frameId]"} {
+	for _, want := range []string{`importScripts("frames.js")`, "allFrames: true", "mergeExtract(frames, params)", "snapshot.byIndex.get(params.element_id)", "frameIds: [frameId]"} {
 		if !strings.Contains(src, want) {
 			t.Fatalf("background.js lost frame routing: %q missing", want)
 		}

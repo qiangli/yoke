@@ -277,6 +277,63 @@ func e2eProvide(t *testing.T, svc *Service) *wire.Result {
 	return res
 }
 
+func TestExtensionE2EFrameSelectorAndStaleIndex(t *testing.T) {
+	fixtures := map[string]string{
+		"/form":  `<!doctype html><label for="answer">Top answer</label><input id="answer" name="top"><iframe src="/child"></iframe>`,
+		"/child": `<!doctype html><label for="answer">Child answer</label><input id="answer" name="child">`,
+	}
+	svc, browserCtx := startExtensionE2E(t, fixtures, "/form")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ex, err := svc.Execute(ctx, wire.Action{Type: wire.ActionExtract})
+	if err != nil || ex == nil || !ex.Success {
+		t.Fatalf("extract: %v %v", ex, err)
+	}
+	var data struct {
+		Elements []struct {
+			Index    int    `json:"index"`
+			Name     string `json:"name"`
+			StableID string `json:"stable_id"`
+			Selector string `json:"selector"`
+			Label    string `json:"label"`
+		} `json:"elements"`
+	}
+	if err := json.Unmarshal([]byte(ex.Data), &data); err != nil {
+		t.Fatal(err)
+	}
+	var childIndex int
+	var childSelector string
+	for _, e := range data.Elements {
+		if e.Name == "child" {
+			childIndex, childSelector = e.Index, e.Selector
+			if !strings.HasPrefix(e.StableID, "frame:") || e.Label != "Child answer" {
+				t.Fatalf("child metadata: %+v", e)
+			}
+		}
+	}
+	if childIndex == 0 || childSelector == "" {
+		t.Fatalf("child absent: %s", ex.Data)
+	}
+	res, err := svc.Execute(ctx, wire.Action{Type: wire.ActionType, Selector: childSelector, Text: "child value"})
+	if err != nil || res == nil || !res.Success {
+		t.Fatalf("frame-qualified type: %v %v", res, err)
+	}
+	var got string
+	if err := chromedp.Run(browserCtx, chromedp.Evaluate(`document.querySelector('iframe').contentDocument.getElementById('answer').value`, &got)); err != nil || got != "child value" {
+		t.Fatalf("child value %q: %v", got, err)
+	}
+	if err := chromedp.Run(browserCtx, chromedp.Evaluate(`document.querySelector('iframe').outerHTML = '<iframe src="/child"></iframe>'`, nil)); err != nil {
+		t.Fatal(err)
+	}
+	res, err = svc.Execute(ctx, wire.Action{Type: wire.ActionType, ElementID: childIndex, Text: "wrong"})
+	if err == nil && res != nil && res.Success {
+		t.Fatalf("stale frame index wrote: %+v", res)
+	}
+	if res != nil && !strings.Contains(res.Error, "guard:fill-mismatch") && err == nil {
+		t.Fatalf("missing drift reason: %+v", res)
+	}
+}
+
 func e2eData(t *testing.T, res *wire.Result) map[string]any {
 	t.Helper()
 	var d map[string]any
@@ -365,5 +422,117 @@ func TestExtensionE2EGuardFillAfterWorkerRestart(t *testing.T) {
 	d := e2eData(t, res)
 	if d["verified"] != guard.VerifiedMatch || d["field_len"] != float64(11) || d["value_len"] != float64(11) {
 		t.Fatalf("data = %v", d)
+	}
+}
+
+const selectorE2EPage = `<!doctype html><body>
+<label for="who">Who</label><input id="who" name="who">
+<input id="other" name="other" placeholder="other">
+<input class="dup" id="d1"><input class="dup" id="d2">
+<input id="hid" style="display:none">
+<div id="host"></div><iframe src="/selchild"></iframe>
+<script>
+window.log = [];
+document.addEventListener('keydown', e => window.log.push('key:' + e.key + ':' + (e.target.id || e.target.tagName)));
+document.getElementById('host').attachShadow({mode: 'open'}).innerHTML = '<button id="sb">Shadow go</button>';
+document.getElementById('host').shadowRoot.getElementById('sb').addEventListener('ping', e => window.log.push('shadow:' + JSON.stringify(e.detail)));
+setTimeout(() => { const b = document.createElement('button'); b.id = 'late'; b.textContent = 'Late'; document.body.appendChild(b); }, 400);
+</script></body>`
+
+const selectorE2EChild = `<!doctype html><body><label for="cin">Child field</label><input id="cin">
+<button id="cb">Child go</button>
+<script>
+document.addEventListener('keydown', e => { parent.log.push('childkey:' + e.key + ':' + (e.target.id || e.target.tagName)); });
+document.getElementById('cb').addEventListener('ping', e => parent.log.push('child:' + (e.detail && e.detail.n)));
+</script></body>`
+
+func e2eLog(t *testing.T, ctx context.Context) string {
+	t.Helper()
+	var out string
+	if err := chromedp.Run(ctx, chromedp.Evaluate(`JSON.stringify(window.log)`, &out)); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func TestExtensionE2ESelectorWaitDispatchKeyboard(t *testing.T) {
+	svc, browserCtx := startExtensionE2E(t, map[string]string{"/sel": selectorE2EPage, "/selchild": selectorE2EChild}, "/sel")
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	run := func(a wire.Action) (*wire.Result, error) { return svc.Execute(ctx, a) }
+	ok := func(what string, a wire.Action) *wire.Result {
+		t.Helper()
+		res, err := run(a)
+		if err != nil || res == nil || !res.Success {
+			t.Fatalf("%s: %+v %v", what, res, err)
+		}
+		return res
+	}
+	fails := func(what, want string, a wire.Action) {
+		t.Helper()
+		res, err := run(a)
+		msg := ""
+		if err != nil {
+			msg = err.Error()
+		}
+		if res != nil {
+			if res.Success {
+				t.Fatalf("%s: unexpectedly succeeded: %+v", what, res)
+			}
+			msg += res.Error
+		}
+		if !strings.Contains(msg, want) {
+			t.Fatalf("%s: error %q lacks %q", what, msg, want)
+		}
+	}
+	if err := chromedp.Run(browserCtx, chromedp.WaitReady("iframe")); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(500 * time.Millisecond)
+
+	// XPath / label / text / shadow / frame selectors in wait_for_selector.
+	ok("xpath wait late", wire.Action{Type: wire.ActionWaitForSelector, Selector: "xpath=//button[@id='late']", State: "visible", TimeoutMs: 5000})
+	ok("label wait", wire.Action{Type: wire.ActionWaitForSelector, Selector: "label=Who", State: "visible", TimeoutMs: 3000})
+	ok("child label wait", wire.Action{Type: wire.ActionWaitForSelector, Selector: "label=Child field", State: "attached", TimeoutMs: 3000})
+	ok("shadow css wait", wire.Action{Type: wire.ActionWaitForSelector, Selector: "#sb", State: "visible", TimeoutMs: 3000})
+	ok("text wait", wire.Action{Type: wire.ActionWaitForSelector, Selector: "text=Shadow go", State: "attached", TimeoutMs: 3000})
+	ok("detached", wire.Action{Type: wire.ActionWaitForSelector, Selector: "xpath=//nothing", State: "detached", TimeoutMs: 2000})
+	fails("missing wait", "timeout", wire.Action{Type: wire.ActionWaitForSelector, Selector: "xpath=//nothing", State: "attached", TimeoutMs: 600})
+	fails("hidden wait", "timeout", wire.Action{Type: wire.ActionWaitForSelector, Selector: "xpath=//input[@id='hid']", State: "visible", TimeoutMs: 600})
+
+	// dispatch_event reaches page listeners (with detail) through open
+	// shadow roots and same-origin frames.
+	ok("dispatch shadow", wire.Action{Type: wire.ActionDispatchEvent, Event: "ping", Detail: `{"a":1}`, Selector: "xpath=//*[@id='sb']"})
+	ok("dispatch frame", wire.Action{Type: wire.ActionDispatchEvent, Event: "ping", Detail: `{"n":7}`, Selector: "text=Child go"})
+	fails("dispatch missing", "no element matches", wire.Action{Type: wire.ActionDispatchEvent, Event: "ping", Selector: "xpath=//nothing"})
+	if got := e2eLog(t, browserCtx); got != `["shadow:{\"a\":1}","child:7"]` {
+		t.Fatalf("dispatch log: %s", got)
+	}
+
+	// keyboard_press: one visible target gets the key; missing, hidden,
+	// ambiguous targets fail before any key event, even with another
+	// element focused.
+	if err := chromedp.Run(browserCtx, chromedp.Evaluate(`window.log = []; document.getElementById('other').focus()`, nil)); err != nil {
+		t.Fatal(err)
+	}
+	for what, sel := range map[string]string{
+		"missing":   "xpath=//nothing",
+		"hidden":    "xpath=//input[@id='hid']",
+		"ambiguous": "input.dup",
+		"ambig-xp":  "xpath=//input[@class='dup']",
+	} {
+		fails("keyboard "+what, "keyboard_press", wire.Action{Type: wire.ActionKeyboardPress, Key: "x", Selector: sel})
+	}
+	if got := e2eLog(t, browserCtx); got != `[]` {
+		t.Fatalf("a refused keyboard target still produced events: %s", got)
+	}
+	var active string
+	if err := chromedp.Run(browserCtx, chromedp.Evaluate(`document.activeElement.id`, &active)); err != nil || active != "other" {
+		t.Fatalf("focus moved on refusal: %q %v", active, err)
+	}
+	ok("keyboard label", wire.Action{Type: wire.ActionKeyboardPress, Key: "x", Selector: "label=Who"})
+	ok("keyboard child label", wire.Action{Type: wire.ActionKeyboardPress, Key: "y", Selector: "label=Child field"})
+	if got := e2eLog(t, browserCtx); !strings.Contains(got, "key:x:who") || !strings.Contains(got, "childkey:y:cin") {
+		t.Fatalf("keyboard log: %s", got)
 	}
 }
