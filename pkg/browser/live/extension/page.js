@@ -351,9 +351,7 @@
   }
 
   // opts.visibleOnly refuses a selector that matches only hidden
-  // elements (type/select: filling a field the user cannot see is the
-  // silent-wrongness case). click keeps hidden matches, since toggling a
-  // visually hidden radio/checkbox input is legitimate.
+  // elements. Explicit --include-hidden still permits hidden controls.
   function resolveTarget(params, opts) {
     if (params.element_id && params.element_id > 0) {
       const flat = candidates(params);
@@ -488,7 +486,7 @@
   }
 
   function click(params) {
-    const el = resolveTarget(params, { write: true });
+    const el = resolveTarget(params, { visibleOnly: true, write: true });
     if (el && el.__miss) return miss("click", el);
     try { el.scrollIntoView({ block: "center", inline: "nearest" }); } catch (_) { /* detached */ }
     // HTMLElement.click() never moves focus; a real click on a field

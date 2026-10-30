@@ -141,6 +141,17 @@ func (g GuardBackend) FillAdmitted(ctx context.Context, a wire.Action, _ string,
 		if strings.Contains(out.Error, "guard:fill-mismatch") {
 			return guard.Verify{}, errors.New(out.Error)
 		}
+		// A controlled field may truncate or reject the inserted answer.
+		// Read it back before treating the failed fill as unverifiable.
+		var readback struct {
+			Verified string `json:"verified"`
+			FieldLen int    `json:"field_len"`
+			ValueLen int    `json:"value_len"`
+			Error    string `json:"error"`
+		}
+		if err := evalGuard(callCtx, pageCall("guardVerify", params), &readback); err == nil && readback.Error == "" && readback.Verified == guard.VerifiedMismatch {
+			return guard.Verify{Verified: readback.Verified, FieldLen: readback.FieldLen, ValueLen: readback.ValueLen}, nil
+		}
 		return guard.Verify{}, errors.New("guard: fill not verifiable")
 	}
 	return guard.Verify{Verified: out.Verified, FieldLen: out.FieldLen, ValueLen: out.ValueLen}, nil
