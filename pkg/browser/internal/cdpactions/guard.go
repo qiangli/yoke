@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/chromedp/cdproto/page"
@@ -19,7 +20,6 @@ import (
 
 	"github.com/qiangli/yoke/pkg/browser/guard"
 	"github.com/qiangli/yoke/pkg/browser/live"
-	"github.com/qiangli/yoke/pkg/browser/live/extension"
 	"github.com/qiangli/yoke/pkg/browser/wire"
 )
 
@@ -73,8 +73,11 @@ func (g GuardBackend) InspectField(ctx context.Context, a wire.Action) (guard.Fi
 		guard.Field
 		Error string `json:"error"`
 	}
-	params, _ := json.Marshal(a)
-	if err := evalGuard(cdpCtx, extension.PageJS+"\n"+fmt.Sprintf("globalThis.__bashyPage.guardField(%s)", params), &out); err != nil {
+	params, err := expectedIdentity(cdpCtx, a)
+	if err != nil {
+		return guard.Field{}, err
+	}
+	if err := evalGuard(cdpCtx, pageCall("guardField", params), &out); err != nil {
 		return guard.Field{}, err
 	}
 	if out.Error != "" {
@@ -88,8 +91,11 @@ func (g GuardBackend) FocusField(ctx context.Context, a wire.Action) error {
 	if err != nil {
 		return err
 	}
-	params, _ := json.Marshal(a)
-	expr := extension.PageJS + "\n" + fmt.Sprintf("globalThis.__bashyPage.guardFocus(%s)", params)
+	params, err := expectedIdentity(cdpCtx, a)
+	if err != nil {
+		return err
+	}
+	expr := pageCall("guardFocus", params)
 	var out struct {
 		Error string `json:"error"`
 	}
@@ -116,20 +122,28 @@ func (g GuardBackend) FillAdmitted(ctx context.Context, a wire.Action, _ string,
 	callCtx, cancel := context.WithTimeout(cdpCtx, 30*time.Second)
 	defer cancel()
 	a.Text, a.FromAsk = string(value), ""
-	res, err := Type(callCtx, a)
-	if err != nil || res == nil || !res.Success {
-		return guard.Verify{}, errors.New("guard: fill failed")
+	params, err := expectedIdentity(callCtx, a)
+	if err != nil {
+		return guard.Verify{}, err
 	}
-	params, _ := json.Marshal(a)
-	expr := extension.PageJS + "\n" + fmt.Sprintf(`(() => { const r = globalThis.__bashyPage.readValue(%s); return r.error ? {error:r.error} : {value:r.value}; })()`, params)
+	params["text"] = a.Text
+	expr := pageCall("guardFill", params)
 	var out struct {
-		Value string `json:"value"`
-		Error string `json:"error"`
+		Verified string `json:"verified"`
+		FieldLen int    `json:"field_len"`
+		ValueLen int    `json:"value_len"`
+		Error    string `json:"error"`
 	}
-	if err := evalGuard(callCtx, expr, &out); err != nil || out.Error != "" {
+	if err := evalGuard(callCtx, expr, &out); err != nil {
 		return guard.Verify{}, errors.New("guard: fill not verifiable")
 	}
-	return VerifyFill(out.Value, value), nil
+	if out.Error != "" {
+		if strings.Contains(out.Error, "guard:fill-mismatch") {
+			return guard.Verify{}, errors.New(out.Error)
+		}
+		return guard.Verify{}, errors.New("guard: fill not verifiable")
+	}
+	return guard.Verify{Verified: out.Verified, FieldLen: out.FieldLen, ValueLen: out.ValueLen}, nil
 }
 
 // VerifyFill is the comparison both CDP modes report: the field's read-back

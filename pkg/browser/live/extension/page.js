@@ -14,7 +14,7 @@
 // reported as { error: "..." } rather than thrown, so the caller can
 // tell "the page said no" from "injection failed".
 (() => {
-  const VERSION = 11;
+  const VERSION = 12;
   if (globalThis.__bashyPage && globalThis.__bashyPage.version === VERSION) return;
 
   // Native controls plus the ARIA widgets component libraries build
@@ -738,7 +738,7 @@
     params = params || {};
     let el;
     if (params.element_id || params.selector || params.match_text) {
-      el = resolveTarget(params, { visibleOnly: true });
+      el = resolveTarget(params, { visibleOnly: true, write: true });
       if (el && el.__miss) return miss("guard", el);
     } else {
       // The focused element. Focus inside a child frame answers from that
@@ -754,7 +754,7 @@
   // guardFocus focuses the field for the HUMAN path: the operator types
   // the guarded value into it themselves.
   function guardFocus(params) {
-    const el = resolveTarget(params || {}, { visibleOnly: true });
+    const el = resolveTarget(params || {}, { visibleOnly: true, write: true });
     if (el && el.__miss) return miss("guard_focus", el);
     if (!globalThis.__bashyGuard) return { error: "guard_focus: guard.js not loaded" };
     return globalThis.__bashyGuard.focusForHuman(el);

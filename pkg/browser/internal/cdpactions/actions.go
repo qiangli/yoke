@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chromedp/cdproto/network"
@@ -17,6 +18,87 @@ import (
 	"github.com/qiangli/yoke/pkg/browser/live/extension"
 	"github.com/qiangli/yoke/pkg/browser/wire"
 )
+
+type extractedIdentity struct {
+	Tag      string `json:"tag"`
+	Name     string `json:"name"`
+	Label    string `json:"label"`
+	StableID string `json:"stable_id"`
+}
+
+type extractSnapshot struct {
+	Scope         string
+	IncludeHidden bool
+	URL           string
+	Fields        map[int]extractedIdentity
+}
+
+var extractSnapshots = struct {
+	sync.Mutex
+	byTarget map[string]extractSnapshot
+}{byTarget: make(map[string]extractSnapshot)}
+
+func targetKey(ctx context.Context) string {
+	if c := chromedp.FromContext(ctx); c != nil && c.Target != nil {
+		return string(c.Target.TargetID)
+	}
+	return ""
+}
+
+func rememberExtract(ctx context.Context, a wire.Action, url, data string) {
+	key := targetKey(ctx)
+	if key == "" {
+		return
+	}
+	fields := parseExtractIdentities(data)
+	extractSnapshots.Lock()
+	extractSnapshots.byTarget[key] = extractSnapshot{Scope: a.Scope, IncludeHidden: a.IncludeHidden, URL: url, Fields: fields}
+	extractSnapshots.Unlock()
+}
+
+func parseExtractIdentities(data string) map[int]extractedIdentity {
+	var listing struct {
+		Elements []struct {
+			Index int `json:"index"`
+			extractedIdentity
+		} `json:"elements"`
+	}
+	if json.Unmarshal([]byte(data), &listing) != nil {
+		return nil
+	}
+	fields := make(map[int]extractedIdentity, len(listing.Elements))
+	for _, e := range listing.Elements {
+		fields[e.Index] = e.extractedIdentity
+	}
+	return fields
+}
+
+// expectedIdentity supplies the extract-time field identity to every CDP
+// write and its guard preflight. Never trust a fresh index enumeration alone.
+func expectedIdentity(ctx context.Context, a wire.Action) (map[string]any, error) {
+	params := map[string]any{"scope": a.Scope, "element_id": a.ElementID, "selector": a.Selector,
+		"match_text": a.MatchText, "include_hidden": a.IncludeHidden}
+	if a.ElementID <= 0 {
+		return params, nil
+	}
+	key := targetKey(ctx)
+	extractSnapshots.Lock()
+	snap, ok := extractSnapshots.byTarget[key]
+	extractSnapshots.Unlock()
+	identity, found := snap.Fields[a.ElementID]
+	if !ok || !found || snap.Scope != a.Scope || snap.IncludeHidden != a.IncludeHidden {
+		return nil, fmt.Errorf("guard:fill-mismatch: index %d has no matching extract identity", a.ElementID)
+	}
+	var currentURL string
+	if err := chromedp.Run(ctx, chromedp.Location(&currentURL)); err != nil {
+		return nil, err
+	}
+	if currentURL != snap.URL {
+		return nil, fmt.Errorf("guard:fill-mismatch: page for index %d changed", a.ElementID)
+	}
+	params["expected_identity"] = identity
+	return params, nil
+}
 
 // Run dispatches one wire action to an already-attached chromedp target.
 func Run(ctx context.Context, mode string, action wire.Action) (*wire.Result, error) {
@@ -230,11 +312,15 @@ func focusHiddenNode(ctx context.Context, path string) error {
 // the only signal that a form had silently resolved nothing.
 func Click(ctx context.Context, a wire.Action) (*wire.Result, error) {
 	if a.ElementID > 0 {
+		params, err := expectedIdentity(ctx, a)
+		if err != nil {
+			return &wire.Result{Error: err.Error()}, nil
+		}
 		var out struct {
 			Content string `json:"content"`
 			Error   string `json:"error"`
 		}
-		if err := evalGuard(ctx, ClickByIndexScript(a), &out); err != nil {
+		if err := evalGuard(ctx, pageCall("click", params), &out); err != nil {
 			return &wire.Result{Error: err.Error()}, nil
 		}
 		if out.Error == "" {
@@ -245,29 +331,30 @@ func Click(ctx context.Context, a wire.Action) (*wire.Result, error) {
 	if a.Selector != "" {
 		wctx, cancel := context.WithTimeout(ctx, actionTimeout(a))
 		defer cancel()
-		path, hidden, err := resolveVisibleTarget(wctx, a.Selector, a.IncludeHidden)
-		if err != nil {
+		params, _ := expectedIdentity(wctx, a)
+		var out struct {
+			Error string `json:"error"`
+		}
+		if err := evalGuard(wctx, pageCall("click", params), &out); err != nil {
 			return &wire.Result{Error: err.Error()}, nil
 		}
-		if hidden {
-			err = clickHiddenNode(wctx, path)
-		} else {
-			err = chromedp.Run(wctx, chromedp.Click(path, chromedp.ByJSPath))
-		}
-		if err != nil {
-			return &wire.Result{Error: err.Error()}, nil
+		if out.Error != "" {
+			return &wire.Result{Error: out.Error}, nil
 		}
 		return &wire.Result{Success: true, Content: "clicked"}, nil
 	}
 	if a.MatchText != "" {
-		var out any
-		if err := chromedp.Run(ctx, chromedp.Evaluate(ClickByTextScript(a.MatchText, a.Scope), &out)); err != nil {
+		params, _ := expectedIdentity(ctx, a)
+		var out struct {
+			Error string `json:"error"`
+		}
+		if err := evalGuard(ctx, pageCall("click", params), &out); err != nil {
 			return &wire.Result{Error: err.Error()}, nil
 		}
-		if b, ok := out.(bool); ok && b {
-			return &wire.Result{Success: true, Content: "clicked"}, nil
+		if out.Error != "" {
+			return &wire.Result{Error: out.Error}, nil
 		}
-		return &wire.Result{Error: fmt.Sprintf("click: no element whose text contains %q", a.MatchText)}, nil
+		return &wire.Result{Success: true, Content: "clicked"}, nil
 	}
 	return &wire.Result{Error: "click: selector, element index, or match_text required"}, nil
 }
@@ -277,6 +364,11 @@ func Click(ctx context.Context, a wire.Action) (*wire.Result, error) {
 // is the element this clicks.
 func ClickByIndexScript(a wire.Action) string {
 	return extension.PageJS + "\n" + `globalThis.__bashyPage.click({scope:` + JSString(a.Scope) + `,element_id:` + fmt.Sprintf("%d", a.ElementID) + `,include_hidden:` + fmt.Sprintf("%v", a.IncludeHidden) + `})`
+}
+
+func pageCall(method string, params any) string {
+	b, _ := json.Marshal(params)
+	return extension.PageJS + "\n" + "globalThis.__bashyPage." + method + "(" + string(b) + ")"
 }
 
 // DispatchEvent fires a named DOM event. Over CDP this is a genuine
@@ -340,11 +432,16 @@ func ClickByTextScript(matchText, scope string) string {
 
 func Type(ctx context.Context, a wire.Action) (*wire.Result, error) {
 	if a.ElementID > 0 {
+		params, err := expectedIdentity(ctx, a)
+		if err != nil {
+			return &wire.Result{Error: err.Error()}, nil
+		}
+		params["text"] = a.Text
 		var out struct {
 			Content string `json:"content"`
 			Error   string `json:"error"`
 		}
-		expr := extension.PageJS + "\n" + `(async()=>globalThis.__bashyPage.type({scope:` + JSString(a.Scope) + `,element_id:` + fmt.Sprintf("%d", a.ElementID) + `,include_hidden:` + fmt.Sprintf("%v", a.IncludeHidden) + `,text:` + JSString(a.Text) + `}))()`
+		expr := pageCall("type", params)
 		if err := evalGuard(ctx, expr, &out); err != nil {
 			return &wire.Result{Error: err.Error()}, nil
 		}
@@ -358,17 +455,16 @@ func Type(ctx context.Context, a wire.Action) (*wire.Result, error) {
 	}
 	wctx, cancel := context.WithTimeout(ctx, actionTimeout(a))
 	defer cancel()
-	path, hidden, err := resolveVisibleTarget(wctx, a.Selector, a.IncludeHidden)
-	if err != nil {
+	params, _ := expectedIdentity(wctx, a)
+	params["text"] = a.Text
+	var out struct {
+		Error string `json:"error"`
+	}
+	if err := evalGuard(wctx, pageCall("type", params), &out); err != nil {
 		return &wire.Result{Error: err.Error()}, nil
 	}
-	if hidden {
-		err = typeHiddenNode(wctx, path, a.Text)
-	} else {
-		err = chromedp.Run(wctx, chromedp.SendKeys(path, a.Text, chromedp.ByJSPath))
-	}
-	if err != nil {
-		return &wire.Result{Error: err.Error()}, nil
+	if out.Error != "" {
+		return &wire.Result{Error: out.Error}, nil
 	}
 	return &wire.Result{Success: true, Content: "typed"}, nil
 }
@@ -467,6 +563,9 @@ func Extract(ctx context.Context, a wire.Action) (*wire.Result, error) {
 	out := ParseExtractPayload(raw)
 	out.Title = title
 	out.URL = url
+	if out.Success {
+		rememberExtract(ctx, a, url, out.Data)
+	}
 	return out, nil
 }
 

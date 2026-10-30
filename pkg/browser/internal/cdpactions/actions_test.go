@@ -72,3 +72,11 @@ func TestActionTimeoutDefaultsAndOverrides(t *testing.T) {
 		t.Fatalf("DefaultActionTimeout=%v, want 5s", DefaultActionTimeout)
 	}
 }
+
+func TestExtractIdentityRetainsFieldMetadata(t *testing.T) {
+	fields := parseExtractIdentities(`{"elements":[{"index":7,"tag":"input","name":"answer","label":"Answer","stable_id":"answer","selector":"#answer","attrs":{"current":"changed"}}]}`)
+	got, ok := fields[7]
+	if !ok || got.Tag != "input" || got.Name != "answer" || got.Label != "Answer" || got.StableID != "answer" {
+		t.Fatalf("extract identity missing: %+v", fields)
+	}
+}

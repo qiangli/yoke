@@ -301,6 +301,9 @@ func TestPageStableFieldIndexRefusesShiftAndAllowsValueChange(t *testing.T) {
 		t.Fatalf("same field after re-render refused: %v", got)
 	}
 	h.mainEval(`document.getElementById('form').insertAdjacentHTML('afterbegin', '<input name="inserted" aria-label="Inserted">')`, nil)
+	if got := h.call("guardField", map[string]any{"element_id": idx}); !strings.Contains(fmt.Sprint(got["error"]), "guard:fill-mismatch") {
+		t.Fatalf("guard inspected a shifted field: %v", got)
+	}
 	got := h.call("type", map[string]any{"element_id": idx, "text": "wrong"})
 	if !strings.Contains(fmt.Sprint(got["error"]), "guard:fill-mismatch") {
 		t.Fatalf("shifted index accepted: %v", got)
