@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chromedp/chromedp"
 
@@ -166,5 +167,87 @@ func TestSoloExtractHidesGuardedValues(t *testing.T) {
 	}
 	if strings.Contains(res.Elements+res.Data, "hunter2") || !strings.Contains(res.Elements, `guarded="field:type-password"`) || !strings.Contains(res.Elements, `value="ada"`) {
 		t.Fatalf("extract listing:\n%s", res.Elements)
+	}
+}
+
+// probe/solo evaluate never hands back a password input's raw value, whether
+// the script returns it directly or inside a structured object; ordinary
+// visible text and structure survive.
+func TestSoloEvaluateSuppressesPasswordValues(t *testing.T) {
+	if os.Getenv("BASHY_BROWSER_LIVE") == "" {
+		t.Skip("live Chrome test disabled; set BASHY_BROWSER_LIVE=1 to run (launches a real Chrome)")
+	}
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("BASHY_SECRETS_TOKEN", "")
+	t.Setenv("BASHY_API_KEY", "")
+	page := `<!doctype html><html><body><label>Password <input type="password" id="pw" value="hunter2-initial"></label>
+<label>Nickname <input id="nick" value="ada"></label><p id="msg">hello visible</p></body></html>`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, page) }))
+	defer srv.Close()
+	ctx := context.Background()
+	c := New(Config{})
+	if !c.Available(ctx) {
+		t.Skip("no Chrome or Chromium binary found")
+	}
+	defer c.Close()
+	if _, err := c.Execute(ctx, wire.Action{Type: wire.ActionNavigate, URL: srv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	eval := func(script string) string {
+		res, err := c.Execute(ctx, wire.Action{Type: wire.ActionEvaluate, Script: script})
+		if err != nil || !res.Success {
+			t.Fatalf("%q: %v %+v", script, err, res)
+		}
+		return res.Data
+	}
+	if d := eval(`document.querySelector('#pw').value`); d != guard.PasswordMark {
+		t.Fatalf("direct value = %q", d)
+	}
+	d := eval(`({pw: document.querySelector('#pw').value, list: [document.querySelector('#pw').value], nick: document.querySelector('#nick').value, msg: document.querySelector('#msg').textContent, n: 3})`)
+	for _, want := range []string{guard.PasswordMark, "ada", "hello visible"} {
+		if !strings.Contains(d, want) {
+			t.Fatalf("structured result lost %q: %s", want, d)
+		}
+	}
+	if strings.Contains(d, "hunter2") {
+		t.Fatalf("structured result leaked: %s", d)
+	}
+	if d := eval(`document.querySelector('#msg').textContent`); d != "hello visible" {
+		t.Fatalf("ordinary text = %q", d)
+	}
+}
+
+func TestSoloEvaluateSuppressesIframePasswordValues(t *testing.T) {
+	if os.Getenv("BASHY_BROWSER_LIVE") == "" {
+		t.Skip("live Chrome test disabled; set BASHY_BROWSER_LIVE=1 to run (launches a real Chrome)")
+	}
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("BASHY_SECRETS_TOKEN", "")
+	t.Setenv("BASHY_API_KEY", "")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/inner" {
+			fmt.Fprint(w, `<!doctype html><body><input type="password" id="pw" value="framepw-9981"><p id="t">inner text</p></body>`)
+			return
+		}
+		fmt.Fprint(w, `<!doctype html><body><p id="msg">outer visible</p><iframe id="f" src="/inner"></iframe><iframe id="x" src="https://invalid.invalid/"></iframe></body>`)
+	}))
+	defer srv.Close()
+	ctx := context.Background()
+	c := New(Config{})
+	if !c.Available(ctx) {
+		t.Skip("no Chrome or Chromium binary found")
+	}
+	defer c.Close()
+	if _, err := c.Execute(ctx, wire.Action{Type: wire.ActionNavigate, URL: srv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Second)
+	res, err := c.Execute(ctx, wire.Action{Type: wire.ActionEvaluate, Script: `({pw: document.getElementById('f').contentDocument.getElementById('pw').value, msg: document.getElementById('msg').textContent, inner: document.getElementById('f').contentDocument.getElementById('t').textContent})`})
+	if err != nil || !res.Success {
+		t.Fatalf("%v %+v", err, res)
+	}
+	if strings.Contains(res.Data, "framepw") || !strings.Contains(res.Data, guard.PasswordMark) ||
+		!strings.Contains(res.Data, "outer visible") || !strings.Contains(res.Data, "inner text") {
+		t.Fatalf("iframe password not suppressed / ordinary text lost: %s", res.Data)
 	}
 }

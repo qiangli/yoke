@@ -177,9 +177,10 @@ func Execute(ctx context.Context, b Backend, a wire.Action, next ExecFunc) (*wir
 }
 
 // readsPage reports whether an action only reads page text: extract, text and
-// evaluate results are handed over unmasked. Only extract/text withhold a
-// password input's value page-side; an evaluate script can read el.value
-// itself (unsupported boundary). Writes and the ask record stay masked.
+// evaluate results are handed over without vault masking. Raw password-input
+// values are instead suppressed in the browser context before the result
+// leaves it (extract/text page-side; evaluate via RedactSecrets / the live
+// extension). Writes and the ask record stay masked.
 func readsPage(t string) bool {
 	return t == wire.ActionExtract || t == wire.ActionEvaluate || t == "text"
 }
@@ -201,15 +202,24 @@ func needsFieldCheck(a wire.Action) bool {
 	case wire.ActionType:
 		return true
 	case wire.ActionKeyboardPress:
-		return len(a.Modifiers) == 0 && utf8.RuneCountInString(a.Key) == 1
+		return (len(a.Modifiers) == 0 && utf8.RuneCountInString(a.Key) == 1) || isPasteChord(a)
+	case wire.ActionDispatchEvent:
+		return fieldTargetedDispatch(a)
 	}
 	return false
+}
+
+// fieldTargetedDispatch is a dispatch_event that names an element and carries
+// a payload: it can write into that field, so the field check applies.
+func fieldTargetedDispatch(a wire.Action) bool {
+	return a.Selector != "" && a.Selector != "document" && strings.TrimSpace(a.Detail) != ""
 }
 
 // hasField reports whether the action addresses a field the human path can
 // focus.
 func hasField(a wire.Action) bool {
-	return a.Type == wire.ActionType || a.Type == wire.ActionSelect || a.Type == wire.ActionKeyboardPress
+	return a.Type == wire.ActionType || a.Type == wire.ActionSelect || a.Type == wire.ActionKeyboardPress ||
+		(a.Type == wire.ActionDispatchEvent && fieldTargetedDispatch(a))
 }
 
 // actionValues is the text an action would put on a page.
@@ -295,4 +305,18 @@ func check(ctx context.Context, b Backend, a wire.Action) (*refusal, *wire.Resul
 		}
 	}
 	return ref, nil
+}
+
+// isPasteChord is Control/Meta+v (or Shift+Insert): it writes the clipboard
+// into the focused field, so a sensitive target is refused like a type.
+func isPasteChord(a wire.Action) bool {
+	key := strings.ToLower(a.Key)
+	mods := make(map[string]bool, len(a.Modifiers))
+	for _, m := range a.Modifiers {
+		mods[strings.ToLower(m)] = true
+	}
+	if key == "v" && (mods["control"] || mods["ctrl"] || mods["meta"] || mods["cmd"] || mods["command"]) {
+		return true
+	}
+	return key == "insert" && mods["shift"]
 }

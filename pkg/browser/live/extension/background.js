@@ -1089,7 +1089,42 @@ async function evaluateInTab(tabId, script) {
     args: [script],
     world: "MAIN",
     func: (src) => {
+      // Result sanitization: raw password-input values never leave the tab.
+      const secrets = () => {
+        const out = [];
+        const walk = (root) => {
+          for (const el of root.querySelectorAll("*")) {
+            if (el.tagName === "INPUT" && (el.getAttribute("type") || "").toLowerCase() === "password" && el.value) out.push(String(el.value));
+            if (el.shadowRoot) walk(el.shadowRoot);
+            if (el.tagName === "IFRAME" || el.tagName === "FRAME") {
+              let d = null;
+              try { d = el.contentDocument; } catch (_) { /* inaccessible */ }
+              if (d) { try { walk(d); } catch (_) { /* skip */ } }
+            }
+          }
+        };
+        try { walk(document); } catch (_) { /* detached */ }
+        return out;
+      };
+      const MARK = "[guarded:password]";
+      const redact = (v, pw, seen) => {
+        if (!pw.length) return v;
+        if (typeof v === "string") {
+          for (const p of pw) { if (v === p) return MARK; if (p.length >= 4 && v.includes(p)) v = v.split(p).join(MARK); }
+          return v;
+        }
+        if (typeof v === "number" || typeof v === "bigint") return pw.includes(String(v)) ? MARK : v;
+        if (!v || typeof v !== "object" || seen.has(v)) return v;
+        seen.add(v);
+        if (typeof v.toJSON === "function") { try { return redact(v.toJSON(), pw, seen); } catch (_) { return v; } }
+        if (Array.isArray(v)) return v.map((e) => redact(e, pw, seen));
+        const o = {};
+        for (const k of Object.keys(v)) o[k] = redact(v[k], pw, seen);
+        return o;
+      };
+      const before = secrets();
       const stringify = (v) => {
+        v = redact(v, before.concat(secrets()), new WeakSet());
         if (v === undefined) return "";
         if (typeof v === "string") return v;
         try { return JSON.stringify(v); } catch (_) { return String(v); }

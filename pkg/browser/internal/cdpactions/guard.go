@@ -63,6 +63,17 @@ func evalGuard(cdpCtx context.Context, expr string, out any) error {
 	}))
 }
 
+// passwordValues reads the page's password-input values in the guard's
+// isolated world. Fail closed: if they cannot be read, the caller must not
+// return an unsanitized result.
+func passwordValues(ctx context.Context) ([]string, error) {
+	var out []string
+	if err := evalGuard(ctx, "globalThis.__bashyGuard.passwordValues()", &out); err != nil {
+		return nil, fmt.Errorf("cannot sanitize result: %w", err)
+	}
+	return out, nil
+}
+
 func (g GuardBackend) InspectField(ctx context.Context, a wire.Action) (guard.Field, error) {
 	cdpCtx, err := g.Ready(ctx)
 	if err != nil {

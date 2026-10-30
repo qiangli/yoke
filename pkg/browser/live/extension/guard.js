@@ -21,7 +21,7 @@
 // with a `bashy approve`d src approval. Site skills cannot switch it off;
 // there is no parameter that does.
 (() => {
-  const VERSION = 3;
+  const VERSION = 5;
   if (globalThis.__bashyGuard && globalThis.__bashyGuard.version === VERSION) return;
 
   // autocomplete tokens that mark credentials, one-time codes, and cards.
@@ -195,5 +195,26 @@
     return { content: "released", data: JSON.stringify({ matched: describe(el) }) };
   }
 
-  globalThis.__bashyGuard = { version: VERSION, inspect, inspectSelector, focusForHuman, releaseFocus, sensitiveWord };
+  // passwordValues lists the non-empty values of every password input in the
+  // document (open shadow roots and same-origin frames included). Result sanitization only: callers
+  // redact these from what they hand back; the list itself stays in-process.
+  function passwordValues() {
+    const out = [];
+    const walk = (root) => {
+      for (const el of root.querySelectorAll("*")) {
+        if (el.tagName === "INPUT" && (el.getAttribute("type") || "").toLowerCase() === "password" && el.value) out.push(String(el.value));
+        if (el.shadowRoot) walk(el.shadowRoot);
+        if (el.tagName === "IFRAME" || el.tagName === "FRAME") {
+          // Same-origin frames only; a cross-origin frame has no accessible document.
+          let d = null;
+          try { d = el.contentDocument; } catch (_) { /* inaccessible */ }
+          if (d) { try { walk(d); } catch (_) { /* skip */ } }
+        }
+      }
+    };
+    try { walk(document); } catch (_) { /* detached */ }
+    return out;
+  }
+
+  globalThis.__bashyGuard = { version: VERSION, inspect, inspectSelector, focusForHuman, releaseFocus, sensitiveWord, passwordValues };
 })();
