@@ -81,3 +81,40 @@ func TestPageScrollCrossesShadowHost(t *testing.T) {
 		t.Fatalf("shadow-addressed scroll moved outer=%v window=%v, want 80 and 0 (res %v)", outerTop, winY, res)
 	}
 }
+
+const editableFixture = `<!doctype html><html><body>
+<label for="pt">Plain notes</label>
+<div id="pt" contenteditable="plaintext-only" style="min-height:30px;border:1px solid #000"></div>
+<div id="lbl">Rich notes</div>
+<div id="rt" contenteditable="true" aria-labelledby="lbl" style="min-height:30px;border:1px solid #000"></div>
+<div id="em" contenteditable="" aria-label="Empty attr" style="min-height:30px;border:1px solid #000"></div>
+<div id="off" contenteditable="false" aria-label="Not editable" style="min-height:30px">locked</div>
+</body></html>`
+
+func TestPageExtractsAndAddressesContenteditable(t *testing.T) {
+	h := newHeaderHarness(t, map[string]headerFixture{"/e": {body: editableFixture}})
+	h.open("/e")
+
+	ex := h.call("extract", map[string]any{})
+	out, _ := ex["elements"].(string)
+	data, _ := ex["data"].(string)
+	out += data
+	for _, want := range []string{"Plain notes", "Rich notes", "Empty attr"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("extract lost editable field %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "Not editable") {
+		t.Fatalf("extract listed contenteditable=false:\n%s", out)
+	}
+	for label, id := range map[string]string{"Plain notes": "pt", "Rich notes": "rt"} {
+		if res := h.call("type", map[string]any{"selector": "label=" + label, "text": "v-" + id}); res["error"] != nil {
+			t.Fatalf("type label=%s: %v", label, res["error"])
+		}
+		var got string
+		h.mainEval("document.getElementById('"+id+"').innerText", &got)
+		if got != "v-"+id {
+			t.Fatalf("#%s text = %q, want %q", id, got, "v-"+id)
+		}
+	}
+}

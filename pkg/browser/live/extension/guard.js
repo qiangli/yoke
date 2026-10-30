@@ -21,7 +21,7 @@
 // with a `bashy approve`d src approval. Site skills cannot switch it off;
 // there is no parameter that does.
 (() => {
-  const VERSION = 5;
+  const VERSION = 6;
   if (globalThis.__bashyGuard && globalThis.__bashyGuard.version === VERSION) return;
 
   // autocomplete tokens that mark credentials, one-time codes, and cards.
@@ -69,7 +69,7 @@
 
   const FIELD = "input:not([type='hidden']):not([type='button']):not([type='submit']):not([type='reset'])" +
     ":not([type='image']):not([type='checkbox']):not([type='radio']), textarea, select, " +
-    "[contenteditable=''], [contenteditable='true'], [role='textbox'], [role='combobox']";
+    "[contenteditable=''], [contenteditable='true'], [contenteditable='plaintext-only' i], [role='textbox'], [role='combobox']";
 
   function textOf(id) {
     const n = id && document.getElementById(id);
