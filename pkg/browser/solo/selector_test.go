@@ -116,6 +116,9 @@ func TestSoloSelectorPrefersVisibleMatch(t *testing.T) {
 		if res := exec(wire.Action{Type: wire.ActionType, Selector: sel, Text: "labelled"}); !res.Success {
 			t.Fatalf("selector %q: %+v", sel, res)
 		}
+		if res := exec(wire.Action{Type: wire.ActionWaitForSelector, Selector: sel, State: "attached"}); !res.Success {
+			t.Fatalf("attached %q: %+v", sel, res)
+		}
 	}
 	for _, sel := range []string{"#shadow-answer", "label=Shadow answer", "xpath=//*[@id='shadow-answer']"} {
 		if res := exec(wire.Action{Type: wire.ActionType, Selector: sel, Text: "shadow"}); !res.Success {

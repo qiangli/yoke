@@ -286,14 +286,14 @@ func DispatchEvent(ctx context.Context, a wire.Action) (*wire.Result, error) {
 	if strings.TrimSpace(a.Event) == "" {
 		return &wire.Result{Error: "dispatch_event: event name required"}, nil
 	}
-	script := `(function(){
+	script := extension.PageJS + "\n" + `(function(){
   var NAME=` + JSString(a.Event) + `, DETAIL=` + JSString(a.Detail) + `, SEL=` + JSString(a.Selector) + `;
   var detail = null;
   if (DETAIL) { try { detail = JSON.parse(DETAIL); } catch (e) { detail = DETAIL; } }
   var target = window, where = "window";
   if (SEL === "document") { target = document; where = "document"; }
   else if (SEL) {
-    try { target = document.querySelector(SEL); } catch (e) { return JSON.stringify({error:"dispatch_event: "+SEL+" is not a valid CSS selector"}); }
+    try { target = globalThis.__bashyPage.resolveSelector(document, SEL)[0]; } catch (e) { return JSON.stringify({error:"dispatch_event: "+SEL+" is not a valid selector"}); }
     if (!target) return JSON.stringify({error:"dispatch_event: no element matches "+SEL});
     where = SEL;
   }
@@ -573,9 +573,9 @@ func WaitForSelector(ctx context.Context, a wire.Action) (*wire.Result, error) {
 		state = "visible"
 		err = waitForVisibleMatch(wctx, a.Selector, a.IncludeHidden, timeout)
 	case "attached":
-		err = chromedp.Run(wctx, chromedp.WaitReady(a.Selector, chromedp.ByQuery))
+		err = waitForPresenceMatch(wctx, a.Selector, true, timeout)
 	case "detached":
-		err = chromedp.Run(wctx, chromedp.WaitNotPresent(a.Selector, chromedp.ByQuery))
+		err = waitForPresenceMatch(wctx, a.Selector, false, timeout)
 	default:
 		return &wire.Result{Error: fmt.Sprintf("wait_for_selector: unknown state %q (visible|attached|detached)", a.State)}, nil
 	}
@@ -583,6 +583,45 @@ func WaitForSelector(ctx context.Context, a wire.Action) (*wire.Result, error) {
 		return &wire.Result{Error: err.Error()}, nil
 	}
 	return &wire.Result{Success: true, Data: fmt.Sprintf("state=%s", state)}, nil
+}
+
+func waitForPresenceMatch(ctx context.Context, sel string, attached bool, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		var raw string
+		if err := chromedp.Run(ctx, chromedp.Evaluate(resolveSelectorScript(sel), &raw)); err != nil {
+			if ctx.Err() != nil {
+				break
+			}
+			return err
+		}
+		var r struct {
+			State  string `json:"state"`
+			Reason string `json:"reason"`
+		}
+		if err := json.Unmarshal([]byte(raw), &r); err != nil {
+			return err
+		}
+		if r.State == "bad" {
+			return fmt.Errorf("%s is not a valid selector: %s", JSString(sel), r.Reason)
+		}
+		present := r.State == "visible" || r.State == "hidden"
+		if present == attached {
+			return nil
+		}
+		if ctx.Err() != nil || time.Now().After(deadline) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(waitPollInterval):
+		}
+	}
+	state := "attached"
+	if !attached {
+		state = "detached"
+	}
+	return fmt.Errorf("wait_for_selector: selector %s did not become %s within %s", JSString(sel), state, timeout)
 }
 
 // waitPollInterval is the re-check cadence of waitForVisibleMatch: fast
