@@ -244,6 +244,131 @@ func TestSoloEffectsClickTextScrollCapture(t *testing.T) {
 	}
 }
 
+// hugePanelFixture serves one panel whose content (300 rows) needs far
+// more tiles than the stitch cap covers, below a tall outer document
+// with a fixed banner: the stitch must refuse explicitly (never answer
+// the downgraded single capture) and still unhide the banner.
+func hugePanelFixture() string {
+	var rows strings.Builder
+	for i := 1; i <= 300; i++ {
+		fmt.Fprintf(&rows, `<div style="height:40px">Row %d</div>`, i)
+	}
+	return `<!doctype html><html><body style="margin:0">` +
+		`<div id="banner" style="position:fixed;top:0;left:0;right:0;height:30px;background:#c00;color:#fff">banner</div>` +
+		`<div style="height:500px">above the panel</div>` +
+		`<div id="panel" style="height:200px;overflow-y:auto;border:1px solid #000">` + rows.String() + `</div>` +
+		`<div style="height:2000px">below the fold</div>` +
+		`</body></html>`
+}
+
+// TestSoloScreenshotNonzeroRestoreAndCapRefusal runs on the manager's
+// remote Chrome (BASHY_BROWSER_LIVE=1): a stitched capture from NONZERO
+// window/panel positions restores those exact offsets (not 0,0), and a
+// panel past the tile cap is an explicit refusal with the page untouched.
+func TestSoloScreenshotNonzeroRestoreAndCapRefusal(t *testing.T) {
+	if os.Getenv("BASHY_BROWSER_LIVE") == "" {
+		t.Skip("live Chrome test disabled; set BASHY_BROWSER_LIVE=1 to run (launches a real Chrome)")
+	}
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("BASHY_SECRETS_TOKEN", "")
+	t.Setenv("BASHY_API_KEY", "")
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/fx", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, effectsFixture)
+	})
+	mux.HandleFunc("/huge", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, hugePanelFixture())
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	ctx := context.Background()
+	c := New(Config{})
+	if !c.Available(ctx) {
+		t.Skip("no Chrome or Chromium binary found")
+	}
+	defer c.Close()
+
+	exec := func(a wire.Action) *wire.Result {
+		t.Helper()
+		res, err := c.Execute(ctx, a)
+		if err != nil {
+			t.Fatalf("%s: %v", a.Type, err)
+		}
+		if res == nil {
+			t.Fatalf("%s: no result", a.Type)
+		}
+		return res
+	}
+	eval := func(expr string, v any) {
+		t.Helper()
+		if err := chromedp.Run(c.current(), chromedp.Evaluate(expr, v)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	open := func(path string) {
+		t.Helper()
+		if res := exec(wire.Action{Type: wire.ActionNavigate, URL: srv.URL + path}); !res.Success {
+			t.Fatalf("navigate %s: %+v", path, res)
+		}
+	}
+	var f float64
+	positions := func() (winY, pst float64) {
+		t.Helper()
+		eval("window.scrollY", &winY)
+		eval("document.getElementById('panel').scrollTop", &pst)
+		return winY, pst
+	}
+
+	// From nonzero positions the stitch restores THOSE offsets.
+	open("/fx")
+	eval("window.scrollTo(0, 250); document.getElementById('panel').scrollTop = 120; 0", &f)
+	wantWin, wantPst := positions()
+	if wantWin == 0 {
+		t.Fatalf("fixture window did not scroll (viewport taller than the page?): win=%v", wantWin)
+	}
+	shotPath := filepath.Join(t.TempDir(), "stitched-nonzero.png")
+	res := exec(wire.Action{Type: wire.ActionScreenshot, FullPage: true, SavePath: shotPath})
+	if !res.Success {
+		t.Fatalf("nonzero full-page screenshot: %+v", res)
+	}
+	var meta struct {
+		Capture string `json:"capture"`
+	}
+	if err := json.Unmarshal([]byte(res.Data), &meta); err != nil || meta.Capture != "stitched_full_page" {
+		t.Fatalf("capture path = %q (%v), want stitched_full_page", res.Data, err)
+	}
+	if gotWin, gotPst := positions(); gotWin != wantWin || gotPst != wantPst {
+		t.Fatalf("positions not restored: window=%v panel=%v, want %v/%v", gotWin, gotPst, wantWin, wantPst)
+	}
+
+	// Past the tile cap the stitch refuses instead of downgrading, and
+	// the failed layout still unhides the fixed banner.
+	open("/huge")
+	eval("window.scrollTo(0, 250); 0", &f)
+	wantWin, _ = positions()
+	res = exec(wire.Action{Type: wire.ActionScreenshot, FullPage: true})
+	if res.Success {
+		t.Fatalf("over-cap stitch succeeded: %+v (a downgraded full_page must never read as success)", res)
+	}
+	for _, want := range []string{"over the", "cap", "refusing the single-capture fallback"} {
+		if !strings.Contains(res.Error, want) {
+			t.Fatalf("refusal misses %q: %q", want, res.Error)
+		}
+	}
+	if gotWin, _ := positions(); gotWin != wantWin {
+		t.Fatalf("window not preserved through refusal: %v, want %v", gotWin, wantWin)
+	}
+	var banner string
+	eval("getComputedStyle(document.getElementById('banner')).display", &banner)
+	if banner == "none" {
+		t.Fatal("fixed banner stranded hidden by the refused stitch")
+	}
+}
+
 func decodeShot(t *testing.T, path string) image.Image {
 	t.Helper()
 	f, err := os.Open(path)

@@ -2,6 +2,7 @@ package cdpactions
 
 import (
 	"encoding/json"
+	"errors"
 	"image"
 	"image/color"
 	"os"
@@ -267,21 +268,76 @@ func TestShotRestoreCallKeepsSavedPositions(t *testing.T) {
 // TestLayoutFailureRestoresFromLiveCache pins the forced-failure path:
 // the layout call hides fixed elements BEFORE answering, so an
 // undecodable layout answer must still restore — from the live cache,
-// never from a zeroed layout (which would land the page at 0,0). The
-// stitch itself needs Chrome, so this pins the wiring the manager's
-// remote gate exercises; the pixel/restoration behavior it protects is
-// covered by the paint and payload tests above.
+// never from a zeroed layout (which would land the page at 0,0) — and
+// on a cleanup context detached from the operation's cancellation (a
+// restore issued on an expired ctx fails instantly and strands the page
+// hidden). The stitch itself needs Chrome, so this pins the wiring the
+// manager's remote gate exercises; the pixel/restoration behavior it
+// protects is covered by the paint and payload tests above.
 func TestLayoutFailureRestoresFromLiveCache(t *testing.T) {
 	src, err := os.ReadFile("fullpage.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"_ = shotRestoreCacheOnly(ctx, world)",
+		"clean, stop := cleanupCtx(ctx)",
+		"_ = shotRestoreCacheOnly(clean, world)",
 		`globalThis.__bashyPage.shotRestore()`,
 	} {
 		if !strings.Contains(string(src), want) {
 			t.Fatalf("stitch failure path lost %q", want)
 		}
+	}
+}
+
+// The window stays pinned on the panel box while the panel's own
+// scrollTop moves: on a tall outer page the row is the clamped box row,
+// never the box plus the content offset (which would scroll the panel
+// itself offscreen). A short page pins at 0.
+func TestPanelWindowYClamped(t *testing.T) {
+	tall := shotLayout{DocH: 3000, VH: 500}
+	for _, tc := range []struct {
+		y, want int
+	}{
+		{100, 100},   // box in reach: window sits on it
+		{2000, 2000}, // deep box on a tall page: still its own row
+		{2800, 2500}, // box past the last window: clamped to docH-vh
+		{-50, 0},     // box above the fold: clamped to 0
+		{0, 0},
+	} {
+		if got := panelWindowY(tall, tc.y); got != tc.want {
+			t.Fatalf("panelWindowY(tall, %d) = %d, want %d", tc.y, got, tc.want)
+		}
+	}
+	short := shotLayout{DocH: 400, VH: 500}
+	if got := panelWindowY(short, 100); got != 0 {
+		t.Fatalf("panelWindowY(short, 100) = %d, want 0", got)
+	}
+}
+
+// A failed stitch is refused, never downgraded: panels known names the
+// missing rows, panels unknown (or an unwrapped error) refuses on
+// unproven completeness. Pure formatting — no browser.
+func TestRefuseStitchFallback(t *testing.T) {
+	known, _ := refuseStitchFallback(&stitchError{cause: errors.New("Target crashed"), panels: 2})
+	if known.Success || known.Error == "" {
+		t.Fatalf("refusal must arrive as a result error, got %+v", known)
+	}
+	for _, want := range []string{"full_page stitch failed", "Target crashed",
+		"refusing the single-capture fallback", "2 inner panel(s) would lose rows below the fold"} {
+		if !strings.Contains(known.Error, want) {
+			t.Fatalf("refusal with panels misses %q: %q", want, known.Error)
+		}
+	}
+	unknown, _ := refuseStitchFallback(&stitchError{cause: errors.New("no size"), panels: -1})
+	if !strings.Contains(unknown.Error, "completeness unproven") {
+		t.Fatalf("refusal without panels misses completeness: %q", unknown.Error)
+	}
+	if strings.Contains(unknown.Error, "would lose rows") {
+		t.Fatalf("refusal without panels must not claim panel rows: %q", unknown.Error)
+	}
+	plain, _ := refuseStitchFallback(errors.New("boom"))
+	if !strings.Contains(plain.Error, "full_page stitch failed (boom)") {
+		t.Fatalf("plain error not refused as a stitch failure: %q", plain.Error)
 	}
 }

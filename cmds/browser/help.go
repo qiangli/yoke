@@ -187,8 +187,9 @@ var subcommands = map[string]subcommand{
 			"--full-page captures beyond the viewport AND stitches inner scroll",
 			"areas tile by tile, so every panel appears at its full content height",
 			"(rows below shift down). Page and panel positions are restored even",
-			"when the stitch fails — then the beyond-viewport capture answers",
-			"instead, and data names the fallback.",
+			"when the stitch fails; a failed stitch is an explicit error, never",
+			"a silent single capture (once panels exist that fallback would be",
+			"missing rows below each panel's fold).",
 		},
 	},
 	"cookies-get": {
