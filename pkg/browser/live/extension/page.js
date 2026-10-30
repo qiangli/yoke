@@ -837,6 +837,13 @@
         node = node.parentElement;
         continue;
       }
+      // Inside a shadow tree the top element has no parentElement: the
+      // walk continues from the shadow host.
+      const rootNode = node.getRootNode && node.getRootNode();
+      if (rootNode && rootNode.host && rootNode.host.nodeType === Node.ELEMENT_NODE) {
+        node = rootNode.host;
+        continue;
+      }
       // Top of this document: continue from the host <iframe>, if any.
       const frame = node.ownerDocument.defaultView && node.ownerDocument.defaultView.frameElement;
       node = frame || null;
@@ -893,14 +900,44 @@
     return { content: visibleTextOf(el), data: JSON.stringify({ matched: describe(el) }) };
   }
 
-  function visibleTextOf(root) {
-    // innerText is the RENDERED text (hidden subtrees excluded); fall
-    // back to textContent where innerText is unavailable (SVG roots).
-    let s = "";
-    try { s = root.innerText; } catch (_) { s = ""; }
-    if (typeof s !== "string" || !s) {
-      try { s = root.textContent || ""; } catch (_) { s = ""; }
+  // notRendered: the element or a flat-tree ancestor is display:none.
+  // innerText on such a root returns its textContent (the spec's
+  // not-being-rendered case), which would leak hidden-only text.
+  function notRendered(el) {
+    for (let n = el; n && n.nodeType === Node.ELEMENT_NODE;
+      n = n.parentElement || (n.getRootNode && n.getRootNode().host) || null) {
+      const view = n.ownerDocument.defaultView || window;
+      try { if (view.getComputedStyle(n).display === "none") return true; } catch (_) { /* detached */ }
     }
+    return false;
+  }
+
+  // renderedTextOf is the fallback for roots without innerText (SVG):
+  // text nodes only, skipping hidden subtrees.
+  function renderedTextOf(root) {
+    const parts = [];
+    const walk = (n) => {
+      if (n.nodeType === Node.TEXT_NODE) { parts.push(n.nodeValue); return; }
+      if (n.nodeType !== Node.ELEMENT_NODE) return;
+      const view = n.ownerDocument.defaultView || window;
+      let cs = null;
+      try { cs = view.getComputedStyle(n); } catch (_) { cs = null; }
+      if (cs && (cs.display === "none" || cs.visibility === "hidden" || cs.visibility === "collapse")) return;
+      for (const c of n.childNodes) walk(c);
+    };
+    walk(root);
+    return parts.join("").replace(/\s+/g, " ").trim();
+  }
+
+  function visibleTextOf(root) {
+    if (notRendered(root)) return "";
+    // innerText is the RENDERED text (hidden subtrees excluded). An
+    // empty string is an answer, never a reason to fall back to
+    // textContent, which includes hidden text. Roots without innerText
+    // (SVG) are read by a hidden-skipping walk instead.
+    let s;
+    try { s = root.innerText; } catch (_) { s = undefined; }
+    if (typeof s !== "string") s = renderedTextOf(root);
     // Input values are not rendered text, so they never appear here;
     // an addressed password input is suppressed by text() above.
     return String(s).replace(/\s+$/g, "");
