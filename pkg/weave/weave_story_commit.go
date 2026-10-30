@@ -219,6 +219,58 @@ func parseCommitTrace(message string) (commitTrace, error) {
 	return trace, nil
 }
 
+// parseAdhocTrailer recognizes an ad-hoc commit: quick work with no goal or
+// plan behind it (a cleanup, a typo) that no sprint owns. It declares itself
+// with an `Adhoc: <reason>` trailer in the final trailer paragraph, in place
+// of Sprint/Story provenance. ok reports that the trailer is present and
+// valid; err reports a present but invalid one (no reason, mixed with sprint
+// provenance, or made inside a weave run, whose worker executes a story and
+// must cite it). Without the trailer it returns ok=false, err=nil and the
+// strict contract applies.
+func parseAdhocTrailer(message string) (reason string, ok bool, err error) {
+	message = strings.TrimRight(strings.ReplaceAll(message, "\r\n", "\n"), " \t\n")
+	var lines []string
+	for _, line := range strings.Split(message, "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "#") {
+			lines = append(lines, line)
+		}
+	}
+	start := len(lines) - 1
+	for start >= 0 && strings.TrimSpace(lines[start]) != "" {
+		start--
+	}
+	if start <= 0 || start == len(lines)-1 {
+		return "", false, nil
+	}
+	var reasons []string
+	sprintProvenance := false
+	for _, line := range lines[start+1:] {
+		m := commitTrailerLine.FindStringSubmatch(line)
+		if m == nil {
+			return "", false, nil
+		}
+		switch strings.ToLower(m[1]) {
+		case "adhoc":
+			reasons = append(reasons, strings.TrimSpace(m[2]))
+		case "sprint", "sprint-id", "story", "story-id":
+			sprintProvenance = true
+		}
+	}
+	switch {
+	case len(reasons) == 0:
+		return "", false, nil
+	case len(reasons) > 1:
+		return "", false, fmt.Errorf("want at most one `Adhoc: <reason>` trailer, got %d", len(reasons))
+	case reasons[0] == "":
+		return "", false, fmt.Errorf("Adhoc trailer needs a reason, e.g. `Adhoc: weave workspace cleanup`")
+	case sprintProvenance:
+		return "", false, fmt.Errorf("Adhoc cannot be combined with Sprint/Story trailers: a commit is either sprint delivery or ad hoc")
+	case strings.TrimSpace(os.Getenv("WEAVE_ISSUE")) != "":
+		return "", false, fmt.Errorf("Adhoc is refused inside a weave run (WEAVE_ISSUE=%s): the run executes a story, so cite its Sprint/Story/Story-ID", os.Getenv("WEAVE_ISSUE"))
+	}
+	return reasons[0], true, nil
+}
+
 // todoBlobSprintLinked reports whether a docs/todo blob carries any sprint
 // linkage: the numeric frontmatter/body link, or the sprint_id/sprint_title
 // metadata that travels with a claimed story. Unparseable blobs report no
@@ -384,6 +436,16 @@ func newSprintCommitMsgCmd() *cobra.Command {
 		if err != nil {
 			return fail(fmt.Errorf("read commit message: %w", err))
 		}
+		if reason, ok, aerr := parseAdhocTrailer(string(raw)); ok || aerr != nil {
+			if aerr != nil {
+				return fail(fmt.Errorf("commit provenance: %w", aerr))
+			}
+			if flags.mode() == weavecli.OutputJSON {
+				return ec(emitOK(cmd.OutOrStdout(), flags.mode(), "sprint commit-msg", map[string]any{"adhoc": reason}))
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "commit provenance: ad-hoc commit (%s), no sprint\n", reason)
+			return nil
+		}
 		trace, err := parseCommitTrace(string(raw))
 		if err != nil {
 			// A standalone todo (`todo add --no-sprint`) carries no sprint,
@@ -398,7 +460,7 @@ func newSprintCommitMsgCmd() *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "commit provenance: standalone todo-only filing, no story trailers needed\n")
 				return nil
 			}
-			return fail(fmt.Errorf("commit provenance: %w\n\nrequired form:\n\n  Sprint: #87\n  Story: #110\n  Story-ID: d1e86f29d7a7", err))
+			return fail(fmt.Errorf("commit provenance: %w\n\nrequired form:\n\n  Sprint: #87\n  Story: #110\n  Story-ID: d1e86f29d7a7\n\nor, for quick work no sprint owns (a cleanup, a typo):\n\n  Adhoc: <reason>", err))
 		}
 		dir, err := weaveStoryDir(cmd, flags.mode(), "sprint commit-msg")
 		if err != nil {

@@ -834,3 +834,95 @@ func TestParseCommitAgentTrailer(t *testing.T) {
 		t.Fatal("duplicate Agent accepted")
 	}
 }
+
+// An ad-hoc commit (quick cleanup with no goal or plan behind it) declares
+// itself with an `Adhoc: <reason>` trailer instead of Sprint/Story provenance.
+// The motivating case: weave cleanup unlinked `weave: N` from closed
+// sprint-linked stories, a change no sprint owns.
+func TestSprintCommitMsgAdhocCommit(t *testing.T) {
+	sprintLinked := `---
+id: 9c92c36b506c
+seq: 2375
+title: Sprint story
+status: done
+sprint: 467
+---
+
+sprint work
+`
+	tests := []struct {
+		name    string
+		message string
+		env     map[string]string
+		wantErr string
+	}{
+		{"adhoc cleanup accepted", "chore: unlink abandoned weave runs\n\nAdhoc: weave cleanup, no sprint\n", nil, ""},
+		{"adhoc with agent and co-author accepted", "chore: tidy\n\nAdhoc: quick cleanup\nAgent: claude-opus5.5\nCo-Authored-By: A <a@example.com>\n", nil, ""},
+		{"adhoc needs a reason", "chore: tidy\n\nAdhoc:\n", nil, "Adhoc trailer needs a reason"},
+		{"adhoc cannot mix with sprint provenance", "chore: tidy\n\nAdhoc: cleanup\nSprint: #467\nStory: #2375\nStory-ID: 9c92c36b506c\n", nil, "cannot be combined"},
+		{"adhoc refused inside a weave run", "chore: tidy\n\nAdhoc: cleanup\n", map[string]string{"WEAVE_ISSUE": "12"}, "weave run"},
+		{"adhoc must be in the final trailer paragraph", "chore: tidy\n\nAdhoc: cleanup\n\nmore prose\n", nil, "commit provenance"},
+		{"no trailer still refused", "chore: tidy\n", nil, "commit provenance"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("WEAVE_ISSUE", "")
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+			repo := t.TempDir()
+			git := func(args ...string) {
+				t.Helper()
+				c := exec.Command("git", append([]string{"-C", repo, "-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)...)
+				if raw, err := c.CombinedOutput(); err != nil {
+					t.Fatalf("git %v: %v\n%s", args, err, raw)
+				}
+			}
+			git("init", "-q")
+			story := filepath.Join(repo, "docs", "todo", "9c92c36b506c-sprint-story.md")
+			if err := os.MkdirAll(filepath.Dir(story), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(story, []byte(strings.Replace(sprintLinked, "status: done\n", "status: done\nweave: 14\n", 1)), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			git("add", "-A")
+			git("commit", "-q", "--no-verify", "-m", "seed")
+			if err := os.WriteFile(story, []byte(sprintLinked), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(repo, "notes.go"), []byte("package notes\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			git("add", "-A")
+			wd, _ := os.Getwd()
+			if err := os.Chdir(repo); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chdir(wd) })
+
+			msg := filepath.Join(t.TempDir(), "COMMIT_EDITMSG")
+			if err := os.WriteFile(msg, []byte(tt.message), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cmd := NewSprintCmd()
+			var out bytes.Buffer
+			cmd.SetOut(&out)
+			cmd.SetErr(&out)
+			cmd.SetArgs([]string{"commit-msg", msg})
+			err := cmd.Execute()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("ad-hoc commit must validate: %v\n%s", err, out.String())
+				}
+				if !strings.Contains(out.String(), "ad-hoc") {
+					t.Fatalf("acceptance must name the ad-hoc path:\n%s", out.String())
+				}
+				return
+			}
+			if err == nil || !strings.Contains(out.String(), tt.wantErr) {
+				t.Fatalf("err = %v, want output containing %q:\n%s", err, tt.wantErr, out.String())
+			}
+		})
+	}
+}
