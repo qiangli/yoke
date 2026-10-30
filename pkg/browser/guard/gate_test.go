@@ -695,3 +695,27 @@ func TestReadsUnmaskedWritesStillMatchVault(t *testing.T) {
 		}
 	}
 }
+
+// A dispatch_event that names a field and carries a payload is a write into
+// that field: the field check gates it. Window/document dispatches and
+// payload-free events on a field are not field writes.
+func TestFieldTargetedDispatchIsFieldChecked(t *testing.T) {
+	isolate(t)
+	t.Setenv(FakeAskEnv, "fake:skip")
+	b := &fakeBackend{human: true, field: Field{Guarded: true, Reason: "field:type-password", Site: "x"}}
+	res := run(t, b, wire.Action{Type: wire.ActionDispatchEvent, Event: "fill", Selector: "#pw", Detail: `{"v":"x"}`})
+	if len(b.executed) != 0 || len(b.inspected) != 1 || res.OutcomeClass != ClassSkipped {
+		t.Fatalf("field-targeted dispatch went through: executed=%d inspected=%d %+v", len(b.executed), len(b.inspected), res)
+	}
+	for _, a := range []wire.Action{
+		{Type: wire.ActionDispatchEvent, Event: "fill", Detail: `{"v":"x"}`},
+		{Type: wire.ActionDispatchEvent, Event: "fill", Selector: "document", Detail: `{"v":"x"}`},
+		{Type: wire.ActionDispatchEvent, Event: "focus", Selector: "#pw"},
+	} {
+		b := &fakeBackend{human: true, field: Field{Guarded: true, Reason: "field:type-password"}}
+		run(t, b, a)
+		if len(b.executed) != 1 || len(b.inspected) != 0 {
+			t.Errorf("%+v: executed=%d inspected=%d", a, len(b.executed), len(b.inspected))
+		}
+	}
+}

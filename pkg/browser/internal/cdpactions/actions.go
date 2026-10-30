@@ -14,6 +14,7 @@ import (
 	"github.com/chromedp/chromedp"
 	"github.com/chromedp/chromedp/kb"
 
+	"github.com/qiangli/yoke/pkg/browser/guard"
 	"github.com/qiangli/yoke/pkg/browser/wire"
 )
 
@@ -610,10 +611,21 @@ func Evaluate(ctx context.Context, script string) (*wire.Result, error) {
 	if script == "" {
 		return &wire.Result{Error: "evaluate: argument 'script' is required (alias 'expression' also accepted)"}, nil
 	}
+	// Raw password-input values never leave the browser context: collect them
+	// (guard's isolated world) around the evaluation and redact the result.
+	secrets, err := passwordValues(ctx)
+	if err != nil {
+		return &wire.Result{Error: "evaluate: " + err.Error()}, nil
+	}
 	var out any
 	if err := chromedp.Run(ctx, chromedp.Evaluate(script, &out)); err != nil {
 		return &wire.Result{Error: err.Error()}, nil
 	}
+	after, err := passwordValues(ctx)
+	if err != nil {
+		return &wire.Result{Error: "evaluate: " + err.Error()}, nil
+	}
+	out = guard.RedactSecrets(out, append(secrets, after...))
 	return &wire.Result{Success: true, Data: fmt.Sprintf("%v", out)}, nil
 }
 

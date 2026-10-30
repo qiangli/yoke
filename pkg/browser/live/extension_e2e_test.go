@@ -367,3 +367,38 @@ func TestExtensionE2EGuardFillAfterWorkerRestart(t *testing.T) {
 		t.Fatalf("data = %v", d)
 	}
 }
+
+// Live evaluate never hands back a password input's raw value, directly or
+// inside a structured object; ordinary visible text and structure survive.
+func TestExtensionE2EEvaluateSuppressesPasswordValues(t *testing.T) {
+	guardIsolate(t)
+	page := `<!doctype html><html><body><label>Password <input type="password" id="pw" value="hunter2-initial"></label>
+<label>Nickname <input id="nick" value="ada"></label><p id="msg">hello visible</p></body></html>`
+	svc, _ := startExtensionE2E(t, map[string]string{"/pw": page}, "/pw")
+	client := New(svc.port)
+	if err := client.EnsureReady(context.Background()); err != nil || client.role != roleClient {
+		t.Fatalf("client role: %v", err)
+	}
+	for name, s := range map[string]*Service{"client": client, "hub": svc} {
+		eval := func(script string) string {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			res, err := s.Execute(ctx, wire.Action{Type: wire.ActionEvaluate, Script: script})
+			if err != nil || res == nil || res.Error != "" {
+				t.Fatalf("%s %q: %v %+v", name, script, err, res)
+			}
+			return res.Data
+		}
+		if d := eval(`document.querySelector('#pw').value`); d != guard.PasswordMark {
+			t.Fatalf("%s: direct value = %q", name, d)
+		}
+		d := eval(`({pw: document.querySelector('#pw').value, list: [document.querySelector('#pw').value], nick: document.querySelector('#nick').value, msg: document.querySelector('#msg').textContent})`)
+		var obj map[string]any
+		if err := json.Unmarshal([]byte(d), &obj); err != nil || obj["nick"] != "ada" || obj["msg"] != "hello visible" || obj["pw"] != guard.PasswordMark {
+			t.Fatalf("%s: structured = %s (%v)", name, d, err)
+		}
+		if strings.Contains(d, "hunter2") {
+			t.Fatalf("%s: leaked: %s", name, d)
+		}
+	}
+}

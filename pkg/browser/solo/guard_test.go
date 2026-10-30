@@ -168,3 +168,50 @@ func TestSoloExtractHidesGuardedValues(t *testing.T) {
 		t.Fatalf("extract listing:\n%s", res.Elements)
 	}
 }
+
+// probe/solo evaluate never hands back a password input's raw value, whether
+// the script returns it directly or inside a structured object; ordinary
+// visible text and structure survive.
+func TestSoloEvaluateSuppressesPasswordValues(t *testing.T) {
+	if os.Getenv("BASHY_BROWSER_LIVE") == "" {
+		t.Skip("live Chrome test disabled; set BASHY_BROWSER_LIVE=1 to run (launches a real Chrome)")
+	}
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("BASHY_SECRETS_TOKEN", "")
+	t.Setenv("BASHY_API_KEY", "")
+	page := `<!doctype html><html><body><label>Password <input type="password" id="pw" value="hunter2-initial"></label>
+<label>Nickname <input id="nick" value="ada"></label><p id="msg">hello visible</p></body></html>`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, page) }))
+	defer srv.Close()
+	ctx := context.Background()
+	c := New(Config{})
+	if !c.Available(ctx) {
+		t.Skip("no Chrome or Chromium binary found")
+	}
+	defer c.Close()
+	if _, err := c.Execute(ctx, wire.Action{Type: wire.ActionNavigate, URL: srv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	eval := func(script string) string {
+		res, err := c.Execute(ctx, wire.Action{Type: wire.ActionEvaluate, Script: script})
+		if err != nil || !res.Success {
+			t.Fatalf("%q: %v %+v", script, err, res)
+		}
+		return res.Data
+	}
+	if d := eval(`document.querySelector('#pw').value`); d != guard.PasswordMark {
+		t.Fatalf("direct value = %q", d)
+	}
+	d := eval(`({pw: document.querySelector('#pw').value, list: [document.querySelector('#pw').value], nick: document.querySelector('#nick').value, msg: document.querySelector('#msg').textContent, n: 3})`)
+	for _, want := range []string{guard.PasswordMark, "ada", "hello visible"} {
+		if !strings.Contains(d, want) {
+			t.Fatalf("structured result lost %q: %s", want, d)
+		}
+	}
+	if strings.Contains(d, "hunter2") {
+		t.Fatalf("structured result leaked: %s", d)
+	}
+	if d := eval(`document.querySelector('#msg').textContent`); d != "hello visible" {
+		t.Fatalf("ordinary text = %q", d)
+	}
+}
