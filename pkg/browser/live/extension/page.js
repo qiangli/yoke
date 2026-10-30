@@ -14,7 +14,7 @@
 // reported as { error: "..." } rather than thrown, so the caller can
 // tell "the page said no" from "injection failed".
 (() => {
-  const VERSION = 15;
+  const VERSION = 16;
   if (globalThis.__bashyPage && globalThis.__bashyPage.version === VERSION) return;
 
   // Native controls plus the ARIA widgets component libraries build

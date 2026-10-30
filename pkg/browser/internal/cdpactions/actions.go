@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/chromedp/cdproto/network"
@@ -354,18 +353,13 @@ const (
 // blocks the page's main thread, so the evaluate never returns; the
 // event ends the wait and the dialog is left OPEN for the operator.
 type clickEvents struct {
-	active    atomic.Bool
 	navigated chan struct{}
 	dialog    chan struct{}
 }
 
 func watchClickEvents(ctx context.Context) *clickEvents {
 	ev := &clickEvents{navigated: make(chan struct{}, 1), dialog: make(chan struct{}, 1)}
-	ev.active.Store(true)
 	chromedp.ListenTarget(ctx, func(e any) {
-		if !ev.active.Load() {
-			return
-		}
 		switch e := e.(type) {
 		case *page.EventFrameNavigated:
 			if e.Frame != nil && e.Frame.ParentID == "" {
@@ -384,15 +378,6 @@ func watchClickEvents(ctx context.Context) *clickEvents {
 	return ev
 }
 
-func (ev *clickEvents) sawNavigation() bool {
-	select {
-	case <-ev.navigated:
-		return true
-	default:
-		return false
-	}
-}
-
 // clickPage runs page.js click — which watches the page for a bounded
 // moment after dispatching — and reports the observed outcome, upgraded
 // to navigated / dialog when the host-side events say so.
@@ -402,10 +387,9 @@ func clickPage(ctx context.Context, params map[string]any) (*wire.Result, error)
 		Data    string `json:"data"`
 		Error   string `json:"error"`
 	}
-	ev := watchClickEvents(ctx)
-	defer ev.active.Store(false)
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	ev := watchClickEvents(runCtx)
 	done := make(chan error, 1)
 	go func() { done <- evalGuard(runCtx, pageCall("click", params), &out) }()
 

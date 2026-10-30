@@ -2,7 +2,6 @@ package live
 
 import (
 	"context"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -104,7 +103,7 @@ func TestExtensionE2EClickNavigationAndNativeDialog(t *testing.T) {
 		// The fixture dialog is the test's own: dismiss it.
 		if err := chromedp.Run(tab, chromedp.ActionFunc(func(ctx context.Context) error {
 			return page.HandleJavaScriptDialog(false).Do(ctx)
-		})); err != nil && !strings.Contains(err.Error(), "No dialog") {
+		})); err != nil {
 			t.Fatalf("dialog was not open for the operator after %s: %v", sel, err)
 		}
 	}

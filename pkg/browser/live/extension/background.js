@@ -1211,6 +1211,7 @@ async function runInTab(tabId, kind, params) {
 const CLICK_PENDING_MS = 4000;
 const CLICK_SETTLE_MS = 150;
 const CLICK_UNLOAD_MS = 600;
+const CLICK_ATTACH_MS = 1500;
 
 // clickObserved wraps the page-side click with the two effects a
 // content script cannot see: a real navigation (including a reload to
@@ -1232,7 +1233,15 @@ async function clickObserved(tabId, params) {
   try {
     // Best effort: a tab another debugger owns still clicks, it just
     // cannot report a native dialog.
-    try { await debuggerAttach.acquire(tabId, "Page"); attached = true; } catch (_) { attached = false; }
+    // Bounded: a hung attach must not stall the click. A late acquire
+    // that finishes after the deadline releases its own ref.
+    let acquireTimedOut = false;
+    const acq = debuggerAttach.acquire(tabId, "Page").then(
+      () => { if (acquireTimedOut) debuggerAttach.release(tabId).catch(() => {}); return true; },
+      () => false);
+    const acqTimer = new Promise((res) => setTimeout(() => res("timeout"), CLICK_ATTACH_MS));
+    const got = await Promise.race([acq, acqTimer]);
+    if (got === true) attached = true; else if (got === "timeout") acquireTimedOut = true;
     let settled = null;
     runInTab(tabId, "click", params).then((r) => { settled = { r }; }, (e) => { settled = { e }; });
     const pause = (ms) => new Promise((res) => setTimeout(res, ms));
@@ -1263,7 +1272,12 @@ async function clickObserved(tabId, params) {
   } finally {
     chrome.tabs.onUpdated.removeListener(onUpdated);
     chrome.debugger.onEvent.removeListener(onEvent);
-    if (attached) { try { await debuggerAttach.release(tabId); } catch (_) { /* gone */ } }
+    if (attached) {
+      await Promise.race([
+        debuggerAttach.release(tabId).catch(() => {}),
+        new Promise((res) => setTimeout(res, CLICK_ATTACH_MS)),
+      ]);
+    }
   }
 }
 
