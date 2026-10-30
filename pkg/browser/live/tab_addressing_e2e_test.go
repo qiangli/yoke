@@ -78,12 +78,16 @@ func TestExtensionE2ETabAddressing(t *testing.T) {
 	if r := do(byID); !r.Success || !strings.HasSuffix(r.URL, "/one") {
 		t.Fatalf("extract by id: %+v", r)
 	}
+	if r := do(wire.Action{Type: wire.ActionExtract, TabID: firstID, MatchURL: "127.0.0.1"}); !r.Success || r.TabID != firstID {
+		t.Fatalf("id must narrow the URL address: %+v", r)
+	}
 
 	for name, a := range map[string]wire.Action{
-		"ambiguous": {Type: wire.ActionExtract, MatchURL: "127.0.0.1"},
-		"missing":   {Type: wire.ActionExtract, MatchURL: "no-such-tab"},
-		"bad id":    {Type: wire.ActionExtract, TabID: 999999},
-		"write":     {Type: wire.ActionType, Selector: "#note", Text: "x", MatchTitle: "no-such-title"},
+		"ambiguous":              {Type: wire.ActionExtract, MatchURL: "127.0.0.1"},
+		"missing":                {Type: wire.ActionExtract, MatchURL: "no-such-tab"},
+		"bad id":                 {Type: wire.ActionExtract, TabID: 999999},
+		"conflicting id and url": {Type: wire.ActionType, TabID: 999999, MatchURL: "/one", Selector: "#note", Text: "wrong"},
+		"write":                  {Type: wire.ActionType, Selector: "#note", Text: "x", MatchTitle: "no-such-title"},
 	} {
 		if r := do(a); r.Success || r.Error == "" {
 			t.Fatalf("%s must fail, got %+v", name, r)

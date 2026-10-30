@@ -1407,6 +1407,7 @@ function selectTab(tabs, params, driven) {
   const wantTitle = (params.match_title || "").toLowerCase();
   if (wantURL || wantTitle) {
     const hits = tabs.filter((t) => {
+      if (params.by_id && params.tab_id && t.id !== params.tab_id) return false;
       if (wantURL && (t.url || "").toLowerCase().indexOf(wantURL) < 0) return false;
       if (wantTitle && (t.title || "").toLowerCase().indexOf(wantTitle) < 0) return false;
       return true;
