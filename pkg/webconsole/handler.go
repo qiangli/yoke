@@ -166,7 +166,8 @@ type server struct {
 	inboxes       inboxCache
 	boards        boardCache
 	shapes        shapeHub
-	calls         callBroker // cross-app unit calls (shaped_call.go)
+	calls         callBroker    // cross-app unit calls (shaped_call.go)
+	servers       shapedServers // declared shaped app servers (shaped_server.go)
 }
 
 // consoleGuard mirrors meet's: an SSO secret, when configured, makes the vouch
@@ -470,6 +471,7 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	closer := func() error {
 		s.shapes.wg.Wait()
 		err := s.calls.close()
+		_ = s.servers.close()
 		for _, c := range closers {
 			if cerr := c(); cerr != nil && err == nil {
 				err = cerr

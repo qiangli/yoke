@@ -84,8 +84,10 @@ func (a App) Validate() error {
 			return fmt.Errorf("fleet: app %q: source is valid only with type %s", a.Name, AppTypeShaped)
 		}
 	case AppTypeShaped:
-		// A shaped app is served by the console from its source tree; there is
-		// no server of its own to proxy, so a port would be a lie.
+		// A shaped app is served by the console from its source tree. A
+		// server it declares (shaped.json, pkg/shape/appserver) is built and
+		// started per revision on a port the console picks, so a fixed port
+		// would be a lie either way.
 		if a.Port != 0 {
 			return fmt.Errorf("fleet: app %q: a %s app has no port", a.Name, AppTypeShaped)
 		}

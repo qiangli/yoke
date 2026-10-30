@@ -1,0 +1,3 @@
+set -eu
+test -f shaped.json
+test -f main.go

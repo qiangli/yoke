@@ -8,10 +8,14 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
+	"golang.org/x/mod/modfile"
+
 	ygit "github.com/qiangli/yoke/git"
+	"github.com/qiangli/yoke/pkg/shape/appserver"
 )
 
 const (
@@ -82,6 +86,9 @@ func importShapedApp(a *App) error {
 		if err := copyShapedTree(absSource, tmp); err != nil {
 			return fmt.Errorf("fleet: app %q: import %s: %w", a.Name, source, err)
 		}
+		if err := vendorOutOfTreeReplaces(absSource, tmp); err != nil {
+			return fmt.Errorf("fleet: app %q: import %s: %w", a.Name, source, err)
+		}
 		if _, err := ygit.Init(ygit.InitOptions{Path: tmp}); err != nil {
 			return fmt.Errorf("fleet: app %q: initialize managed checkout: %w", a.Name, err)
 		}
@@ -95,6 +102,9 @@ func importShapedApp(a *App) error {
 			return fmt.Errorf("fleet: app %q: clone source: %w", a.Name, err)
 		}
 	}
+	if err := checkShapedManifest(tmp); err != nil {
+		return fmt.Errorf("fleet: app %q: %w", a.Name, err)
+	}
 	if err := ensureShapedBase(tmp); err != nil {
 		return fmt.Errorf("fleet: app %q: prepare managed checkout: %w", a.Name, err)
 	}
@@ -102,6 +112,88 @@ func importShapedApp(a *App) error {
 		return fmt.Errorf("fleet: app %q: install managed checkout: %w", a.Name, err)
 	}
 	a.Source = dest
+	return nil
+}
+
+// checkShapedManifest refuses an import whose server manifest (shaped.json)
+// the console would refuse to serve, so the mistake surfaces at `app add`
+// rather than as a 5xx on first use. No manifest is the common case.
+func checkShapedManifest(dir string) error {
+	b, err := os.ReadFile(filepath.Join(dir, appserver.File))
+	if os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	_, err = appserver.Parse(b)
+	return err
+}
+
+// vendorOutOfTreeReplaces makes a declared server buildable from its own
+// tree. A revision is built from that commit alone, so a go.mod replace
+// pointing outside the app (`replace desk-kit => ../kit`, the desk tools'
+// shape) would break every build. When the source has such a replace and no
+// vendor/ of its own, `go mod vendor` runs where the replace resolves and
+// writes into the managed checkout: the outside module is captured into the
+// base revision like any other source. An app without a server manifest, or
+// whose go.mod stays inside the tree, is copied untouched.
+func vendorOutOfTreeReplaces(source, dest string) error {
+	b, err := os.ReadFile(filepath.Join(source, appserver.File))
+	if err != nil {
+		return nil
+	}
+	m, err := appserver.Parse(b)
+	if err != nil || m.Server == nil {
+		return err
+	}
+	modDir := ""
+	for d := filepath.Join(source, filepath.FromSlash(m.Server.Main)); ; d = filepath.Dir(d) {
+		if _, err := os.Stat(filepath.Join(d, "go.mod")); err == nil {
+			modDir = d
+			break
+		}
+		if samePath(d, source) || filepath.Dir(d) == d {
+			return nil
+		}
+	}
+	if _, err := os.Stat(filepath.Join(modDir, "vendor")); err == nil {
+		return nil
+	}
+	data, err := os.ReadFile(filepath.Join(modDir, "go.mod"))
+	if err != nil {
+		return err
+	}
+	mf, err := modfile.Parse("go.mod", data, nil)
+	if err != nil {
+		return fmt.Errorf("go.mod: %w", err)
+	}
+	outside := ""
+	for _, r := range mf.Replace {
+		if r.New.Version != "" {
+			continue
+		}
+		target := r.New.Path
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(modDir, target)
+		}
+		if rel, err := filepath.Rel(source, target); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			outside = r.New.Path
+			break
+		}
+	}
+	if outside == "" {
+		return nil
+	}
+	rel, err := filepath.Rel(source, modDir)
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command("go", "mod", "vendor", "-o", filepath.Join(dest, rel, "vendor"))
+	cmd.Dir = modDir
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("capture out-of-tree replace %s with go mod vendor: %v\n%s", outside, err, strings.TrimSpace(string(out)))
+	}
 	return nil
 }
 

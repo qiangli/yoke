@@ -34,8 +34,9 @@ import (
 // public/ assets come from the requesting principal's active revision (the
 // base revision when the principal has none, or there is no principal at
 // all), and each api/<name>.md is a Bash# unit run once per request under
-// bashy's guards with that principal's private data directory. There is no
-// long-lived process per version — a revision is just a commit.
+// bashy's guards with that principal's private data directory. A revision
+// is just a commit; an app that declares a server in shaped.json gets one
+// built and started per active revision instead (shaped_server.go).
 
 // ShapeOptions configures shaped apps and the Shape panel. The zero value is
 // the production configuration minus the shaping seams: without a Delegator
@@ -63,6 +64,12 @@ type ShapeOptions struct {
 	OCI contain.OCIRunner
 	// APITimeout bounds one api unit run. Zero = 30s.
 	APITimeout time.Duration
+	// GoTool builds the server a shaped app declares in shaped.json
+	// (shaped_server.go). Empty = "go" on PATH.
+	GoTool string
+	// ServerIdle stops a shaped app server no request has used for this
+	// long. Zero = 10m.
+	ServerIdle time.Duration
 
 	Delegate  Delegator
 	Verifier  Verifier
@@ -96,14 +103,15 @@ func (o ShapeOptions) runner() []string {
 
 // shapedApp is one shaped panel bound to its checkout.
 type shapedApp struct {
-	name  string
-	repo  string
-	opts  ShapeOptions
-	calls *callBroker
+	name    string
+	repo    string
+	opts    ShapeOptions
+	calls   *callBroker
+	servers *shapedServers
 }
 
 func (s *server) shapedApp(p Panel) *shapedApp {
-	return &shapedApp{name: p.Name, repo: p.ShapedSource, opts: s.opts.Shape, calls: &s.calls}
+	return &shapedApp{name: p.Name, repo: p.ShapedSource, opts: s.opts.Shape, calls: &s.calls, servers: &s.servers}
 }
 
 // store opens the principal's private state. principal must be non-empty.
@@ -182,6 +190,17 @@ func (a *shapedApp) handler() http.Handler {
 			http.Error(w, "shaped app has no base revision", http.StatusServiceUnavailable)
 			return
 		}
+		if principal == "" {
+			// A declared server outlives the request, so an anonymous
+			// caller's scratch directory belongs to the server (removed
+			// when it stops), not to this request.
+			if tree, terr := c.Tree(); terr == nil {
+				if _, ok, _ := serverManifest(tree); ok {
+					a.serveTree(w, r, c, mountRel(r), "", "")
+					return
+				}
+			}
+		}
 		dataDir, cleanup, err := a.dataDir(principal)
 		if err != nil {
 			http.Error(w, "shaped app data unavailable", http.StatusServiceUnavailable)
@@ -227,6 +246,15 @@ func (a *shapedApp) serveTree(w http.ResponseWriter, r *http.Request, c *object.
 	tree, err := c.Tree()
 	if err != nil {
 		http.Error(w, "revision unreadable", http.StatusInternalServerError)
+		return
+	}
+	srv, ok, err := serverManifest(tree)
+	if err != nil {
+		http.Error(w, "shaped app "+a.name+": "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if ok {
+		a.serveServer(w, r, c, srv, principal, dataDir)
 		return
 	}
 	if name, ok := strings.CutPrefix(rel, "api/"); ok {
