@@ -21,11 +21,11 @@
 // with a `bashy approve`d src approval. Site skills cannot switch it off;
 // there is no parameter that does.
 (() => {
-  const VERSION = 1;
+  const VERSION = 2;
   if (globalThis.__bashyGuard && globalThis.__bashyGuard.version === VERSION) return;
 
   // autocomplete tokens that mark credentials, one-time codes, and cards.
-  const AUTOCOMPLETE = new Set(["current-password", "new-password", "one-time-code"]);
+  const AUTOCOMPLETE = new Set(["current-password", "new-password", "one-time-code", "username"]);
 
   // Words that name a sensitive field. Matched on whole words of the
   // normalised text (camelCase and snake_case split), so "accountant" or
@@ -35,7 +35,7 @@
     ["tax", /\b(tax ?id|tax identification|taxpayer|tax number|tax no|tin|itin|vat id)\b/],
     ["ein", /\b(ein|fein|employer identification)\b/],
     ["routing", /\b(routing|aba|sort code|swift|bic|iban)\b/],
-    ["account", /\b(bank|checking|savings|deposit|wire|ach) (account|acct)\b/],
+    ["account", /\b((bank|checking|savings|deposit|wire|ach) (account|acct)|(account|acct) (number|num|no))\b/],
     ["card", /\b((credit|debit|payment|bank) card|card (number|no|num|security|verification|expiry|expiration)|cc ?(num|number)|ccnum|cvv|cvc|csc|security code)\b/],
     ["password", /\b(password|passwd|passcode|passphrase|pwd|pass word)\b/],
     ["username", /\b(username|user name|user id|userid|login id|login name)\b/],
@@ -45,7 +45,8 @@
   function words(s) {
     return String(s || "")
       .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-      .replace(/[_\-.:\[\]#/]+/g, " ")
+      .replace(/#/g, " no ")
+      .replace(/[_\-.:\[\]/]+/g, " ")
       .replace(/\s+/g, " ")
       .trim()
       .toLowerCase();

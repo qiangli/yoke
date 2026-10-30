@@ -70,7 +70,7 @@ func TestGuardFieldOrdinaryVersusSensitive(t *testing.T) {
 	page := `<!doctype html><html><body><form>
 <div><label for="aws">AWS account ID</label><input id="aws"></div>
 <div><label for="org">Org ID</label><input id="org" name="org_id"></div>
-<div><label for="em">Company email</label><input id="em" type="email" autocomplete="username"></div>
+<div><label for="em">Company email</label><input id="em" type="email" autocomplete="email"></div>
 <div><label for="cc">CC</label><input id="cc" name="cc_recipients"></div>
 <div><label for="hp">Project name</label><input id="hp" aria-describedby="help"><span id="help">Never enter your password, card number or bank account here</span></div>
 <div><label for="gpu">NVIDIA technology you use</label><input id="gpu" placeholder="e.g. GPU card"></div>
@@ -79,6 +79,10 @@ func TestGuardFieldOrdinaryVersusSensitive(t *testing.T) {
 <div><label for="ba">Bank account number</label><input id="ba"></div>
 <div><label for="cn">Card number</label><input id="cn"></div>
 <div><label for="cv">CVV</label><input id="cv"></div>
+<div><label for="a1">Account number</label><input id="a1"></div>
+<div><label for="a2">Acct #</label><input id="a2"></div>
+<div><label for="a3">Account no.</label><input id="a3"></div>
+<div><label for="a4">Routing number</label><input id="a4"></div>
 </form></body></html>`
 	h := newPageHarness(t, map[string]string{"/mix": page})
 	h.open("/mix")
@@ -88,7 +92,8 @@ func TestGuardFieldOrdinaryVersusSensitive(t *testing.T) {
 		}
 	}
 	for sel, reason := range map[string]string{"#pw": "field:label-password", "#otp": "field:label-otp",
-		"#ba": "field:label-account", "#cn": "field:label-card", "#cv": "field:label-card"} {
+		"#ba": "field:label-account", "#cn": "field:label-card", "#cv": "field:label-card",
+		"#a1": "field:label-account", "#a2": "field:label-account", "#a3": "field:label-account", "#a4": "field:label-routing"} {
 		if g := h.call("guardField", map[string]any{"selector": sel}); g["guarded"] != true || g["reason"] != reason {
 			t.Errorf("%s: %v, want guarded %s", sel, g, reason)
 		}
@@ -115,7 +120,7 @@ func TestGuardFieldKinds(t *testing.T) {
 		"#pw": "field:type-password", "#ac-otp": "field:autocomplete-one-time-code",
 		"#ac-cc": "field:autocomplete-cc-number", "#ac-cvc": "field:autocomplete-cc-csc", "#nm": "field:name-tax",
 		"#routing_number": "field:name-routing", "#lb": "field:label-account", "#aria": "field:label-card",
-		"#by": "field:label-ssn", "#ph": "field:label-password",
+		"#by": "field:label-ssn", "#ph": "field:label-password", "#ac-user": "field:autocomplete-username",
 	}
 	h := newPageHarness(t, map[string]string{"/kinds": page})
 	h.open("/kinds")

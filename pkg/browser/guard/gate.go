@@ -170,8 +170,16 @@ func Execute(ctx context.Context, b Backend, a wire.Action, next ExecFunc) (*wir
 		return human(ctx, b, a, *ref), nil
 	}
 	res, err := next(ctx, a)
+	if readsPage(a.Type) {
+		return res, err
+	}
 	return Mask(ctx, res), err
 }
+
+// readsPage reports whether an action only reads page text: extract and
+// evaluate results are handed over unmasked (a password input's value is
+// withheld page-side). Writes and the ask record stay masked.
+func readsPage(t string) bool { return t == wire.ActionExtract || t == wire.ActionEvaluate }
 
 // Guarded reports whether an action type passes through the value check.
 func Guarded(actionType string) bool {

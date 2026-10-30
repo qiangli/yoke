@@ -603,8 +603,8 @@ func TestResultsAreMasked(t *testing.T) {
 		Data:     `{"elements":[{"text":"IBAN DE89370400440532013000","box":{"x":12}}],"total":2}`,
 	}}
 	res := run(t, b, wire.Action{Type: wire.ActionExtract})
-	if strings.Contains(res.Content, secret) || !strings.Contains(res.Content, "[guarded:vault]") {
-		t.Errorf("vault value not masked: %s", res.Content)
+	if !strings.Contains(res.Content, secret) || strings.Contains(res.Content, "[guarded:vault]") {
+		t.Errorf("an extract read must not mask a vault value: %s", res.Content)
 	}
 	for _, kept := range []string{"212-48-7731", "4111 1111 1111 1111", "ORD-2026-001234", "(415) 555-0132"} {
 		if !strings.Contains(res.Content, kept) {
