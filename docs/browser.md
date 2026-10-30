@@ -5,8 +5,8 @@ DevTools protocol. One command, two dials: a **mode** (how it gets a browser)
 and a **subcommand** (the action). Add `--json` for structured envelopes — the
 agent-facing form, and the default under `$BASHY_AGENTIC`.
 
-Engine: `coreutils/pkg/browser` (`probe` / `solo` / `live` clients + the
-`wire` action/result protocol); command: `coreutils/cmds/browser`.
+Engine: `yoke/pkg/browser` (`probe` / `solo` / `live` clients + the
+`wire` action/result protocol); command: `yoke/cmds/browser`.
 
 ## Modes (`--mode`)
 
@@ -57,6 +57,22 @@ states its operands, which modes implement it, and its output contract.
 | `fetch <url>` | n/a | n/a | n/a | plain HTTP — see below |
 | `hub` · `setup` | n/a | n/a | ✅ | live-mode plumbing |
 | `login` | ✅ | ✅ | ✅ | `--success-url`, `--token-selector`, `--cookie`, `--timeout`, `--dry-run` |
+
+### Tab and field addresses
+
+In live mode, every action honors `--tab-id`, `--tab-url` and `--tab-title`.
+Combined constraints must identify the same tab; ambiguous matches fail with
+candidate details. An unaddressed `navigate` opens a new tab. Address it
+explicitly when navigation should replace an existing page.
+
+Field actions share CSS, `xpath=` (or `//`), `text=` and `label=` selectors.
+Open shadow roots use `>>>`; same-origin frame selectors retain their frame
+qualification. Reuse an extracted `selector` verbatim. Extraction rows add
+`stable_id`, `label`, `selector` and `name`; treat `stable_id` as opaque.
+An index is valid only for the extracted field identity: a shifted index
+write is refused instead of filling a different field. With CLI `--json`,
+`data` is a decoded object containing `viewport` and `elements`, not a
+second JSON string to parse.
 
 ### Output contracts
 
@@ -224,9 +240,10 @@ backend's `Execute` (live, probe, solo) and in front of the live hub's raw
 2. **Field check** — before a `type` (or printable keypress) the page-side
    `guard.js` inspects the target WITHOUT the value: `type=password`,
    `autocomplete` `username`/`current-password`/`new-password`/
-   `one-time-code`/`cc-*`, and any name/id/`<label>`/aria/placeholder **or
-   visible question text** (a one-question-per-screen Typeform heading counts)
-   saying ssn, tax id, ein, routing, account, card, password or username.
+   `one-time-code`/`cc-*`, and the field’s own name/id/associated `<label>`/aria/placeholder
+   identifying ssn, tax id, ein, routing, bank account/account number, payment
+   card/card number/security code, password or username. Generic “account” or
+   “card”, surrounding prose and nearby question headings do not classify it.
    `page.js` refuses such a field on its own too, so a client that skipped the
    gate still cannot fill it.
 3. **Human path** — a refusal asks the operator ONE question in a native
@@ -248,10 +265,11 @@ backend's `Execute` (live, probe, solo) and in front of the live hub's raw
    taken can be retried). It never takes text. The live hub accepts the
    extension's `guard_fill` only for an admission the guard claimed for the
    same field.
-4. **Masking** — every result's text (extract content/elements/data, eval
-   data, `clipboard_read`, errors, titles, URLs) shows such values as
-   `[guarded:<kind>]`, and a guarded field's value is never listed.
-   Screenshots are **not** masked — a recorded gap.
+4. **Read access and write privacy** — read-only results pass through without
+   value-based blocking or blanket masking. Password input values remain
+   suppressed in structured extraction and visible-text results. Sensitive
+   write results and operator-answer records retain masking. Screenshots
+   remain available as reads.
 5. **Protected** — no flag, environment variable or site-skill metadata turns
    it off. `pkg/browser/guard`, `pkg/sensitive`, `pkg/browser/guardask`,
    `live/guard.go`, `extension/guard.js` and `cdpactions/guard.go` are rows of

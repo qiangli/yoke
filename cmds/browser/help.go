@@ -29,8 +29,8 @@ type subcommand struct {
 var guardHelp = []string{
 	"SENSITIVE-INPUT GUARD (every mode, every site, no opt-out): bashy refuses to",
 	"type into a password field, an autocomplete username/password/one-time-code/cc-*",
-	"field, or a field whose name, label or visible question says ssn/tax id/ein/",
-	"routing/account/card/password/username — and refuses any SSN/ITIN, EIN, ABA",
+	"field, or a field whose own name/id/label/aria/placeholder identifies ssn/tax id/ein/",
+	"routing/bank account/card number/password/username — and refuses any SSN/ITIN, EIN, ABA",
 	"routing number, Luhn card number, IBAN or bashy-vault secret as a value",
 	"(type, select, eval, dispatch-event, clipboard write, navigate URL).",
 	"A refusal asks the OPERATOR once, in a native dialog naming the site, the",
@@ -49,7 +49,8 @@ var guardHelp = []string{
 	"value-free data.cause code (not-connected, tab-gone, not-found, refused, …).",
 	"`browser type --from-ask <id> <target>` refills by reference with an answer the",
 	"guard admitted for that same field, once; it never takes text.",
-	"Page text in every result is masked: such values read as [guarded:<kind>].",
+	"Read results pass through; password input values stay suppressed. Sensitive write",
+	"and operator-answer records stay masked. Surrounding prose does not classify a field.",
 }
 
 var subcommands = map[string]subcommand{
@@ -82,8 +83,10 @@ var subcommands = map[string]subcommand{
 		Mode: "solo, probe, live",
 		Out:  "envelope with content (page text), elements (numbered listing), total, truncated, viewport, and --json `data` = {viewport, elements[]} as typed data",
 		Body: []string{
-			"The [N] index printed for each element is a CLICK ADDRESS:",
-			"`browser click --index N` resolves through the identical enumeration.",
+			"The [N] index is an ephemeral address from this extraction:",
+			"`browser click --index N` uses that enumeration; stale index writes are refused.",
+			"Rows include stable_id, label, selector and name. Keep stable_id opaque and",
+			"reuse selector verbatim (including frame/shadow qualification).",
 			"Hidden elements are omitted; --include-hidden keeps them and marks",
 			"each `visible:false`, so \"absent\" and \"not displayed\" stay separable.",
 			"`viewport` answers \"is a responsive breakpoint hiding this?\" without",
@@ -91,7 +94,7 @@ var subcommands = map[string]subcommand{
 		},
 	},
 	"click": {
-		Name: "click", Args: "<css-selector> | <index> | --index N | --text STRING",
+		Name: "click", Args: "<selector> | <index> | --index N | --text STRING",
 		One:  "click one element and report what it did",
 		Mode: "solo, probe, live",
 		Out:  "envelope with content=\"clicked: navigated\" | \"clicked: dialog\" | \"clicked: dom-changed\" | \"clicked: no-effect\" (data.effect names it); a click that resolves NOTHING is success:false with a reason",
@@ -122,14 +125,14 @@ var subcommands = map[string]subcommand{
 		},
 	},
 	"type": {
-		Name: "type", Args: "<css-selector> <text...> | --from-ask ID <css-selector>",
+		Name: "type", Args: "<selector> <text...> | --from-ask ID <selector>",
 		One:  "focus an element and set its value",
 		Mode: "solo, probe, live",
 		Out:  "envelope with content=\"typed\"; a guarded field or value ends in content guard:filled-by-human or guard:human-typed (exit 0), guard:skipped (exit 4), guard:stopped (exit 5) or guard:fill-mismatch (exit 6, a by-reference fill the page did not keep), --json outcome_class guard_* + reason",
 		Body: guardHelp,
 	},
 	"select": {
-		Name: "select", Args: "<css-selector> | <index> | --index N | --text LABEL  <option...>",
+		Name: "select", Args: "<selector> | <index> | --index N | --text LABEL  <option...>",
 		One:  "pick an option in a dropdown, combobox, listbox or radio group",
 		Mode: "live",
 		Out:  "envelope with content=\"selected\" and data.selected; an option that is absent or does not stick is success:false naming what the widget shows",
@@ -166,7 +169,7 @@ var subcommands = map[string]subcommand{
 		},
 	},
 	"wait-for-selector": {
-		Name: "wait-for-selector", Args: "<css-selector>",
+		Name: "wait-for-selector", Args: "<selector>",
 		One:  "block until an element is visible/attached/detached",
 		Mode: "solo, probe, live",
 		Out:  "envelope; success:false on timeout",
