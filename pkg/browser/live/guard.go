@@ -123,16 +123,14 @@ func (h *hub) guardDispatch(ctx context.Context, method string, params map[strin
 type guardBackend struct{ s *Service }
 
 func targetParams(a wire.Action) map[string]any {
-	if a.Type == wire.ActionKeyboardPress {
-		return map[string]any{"selector": a.Selector}
+	p := map[string]any{"selector": a.Selector}
+	if a.Type != wire.ActionKeyboardPress {
+		p["element_id"], p["match_text"], p["scope"], p["include_hidden"] = a.ElementID, a.MatchText, a.Scope, a.IncludeHidden
 	}
-	return map[string]any{
-		"selector":       a.Selector,
-		"element_id":     a.ElementID,
-		"match_text":     a.MatchText,
-		"scope":          a.Scope,
-		"include_hidden": a.IncludeHidden,
+	for k, v := range tabSelector(a) {
+		p[k] = v
 	}
+	return p
 }
 
 // callRaw is one extension round trip in either role, returning the raw

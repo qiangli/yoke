@@ -440,3 +440,45 @@ func TestSelectAction(t *testing.T) {
 		t.Fatal("select without an option must be a usage error")
 	}
 }
+
+func TestEveryActionHonorsTheTabAddress(t *testing.T) {
+	f := actionFlags{TabURL: "app.local", TabTitle: "Inbox", TabByID: 9}
+	for _, args := range [][]string{
+		{"navigate", "http://x.test"}, {"click", "#a"}, {"type", "#a", "hi"},
+		{"extract"}, {"screenshot", "/tmp/s.png"}, {"scroll", "down"},
+		{"evaluate", "1+1"}, {"back"},
+	} {
+		a, err := actionFromArgs(args, f)
+		if err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		if a.MatchURL != "app.local" || a.MatchTitle != "Inbox" || a.TabID != 9 {
+			t.Fatalf("%v: address lost: %+v", args, a)
+		}
+	}
+	a, _ := actionFromArgs([]string{"click", "#a"}, actionFlags{})
+	if a.MatchURL != "" || a.MatchTitle != "" || a.TabID != 0 {
+		t.Fatalf("unaddressed action grew an address: %+v", a)
+	}
+}
+
+func TestTabAddressRequiresLiveMode(t *testing.T) {
+	for _, mode := range []string{"solo", "probe"} {
+		for _, f := range []actionFlags{{TabURL: "a"}, {TabTitle: "b"}, {TabByID: 7}} {
+			a, err := actionFromArgs([]string{"extract"}, f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := requireLiveForTabAddress(mode, a); err == nil {
+				t.Fatalf("%s %+v: address silently ignored", mode, f)
+			}
+			if err := requireLiveForTabAddress("live", a); err != nil {
+				t.Fatalf("live %+v: %v", f, err)
+			}
+		}
+		a, _ := actionFromArgs([]string{"extract"}, actionFlags{})
+		if err := requireLiveForTabAddress(mode, a); err != nil {
+			t.Fatalf("%s unaddressed: %v", mode, err)
+		}
+	}
+}

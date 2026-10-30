@@ -233,3 +233,25 @@ func TestActionsReachEveryFrame(t *testing.T) {
 		}
 	}
 }
+
+func TestDispatchResolvesAddressedTabsAndNeverFallsBack(t *testing.T) {
+	src := extensionFile(t, "background.js")
+	for _, want := range []string{
+		"params.match_url || params.match_title || params.by_id",
+		"selectTab(tabs, params, null)",
+		"cause: tab-mismatch",
+		`method === "navigate"`,
+		`chrome.tabs.create({ url: "about:blank" })`,
+		"tabs: no tab with",
+		"tabs: ${hits.length} tabs match",
+	} {
+		if !strings.Contains(src, want) {
+			t.Fatalf("background.js lost addressed-tab handling: %q missing", want)
+		}
+	}
+	i := strings.Index(src, "const addressed")
+	j := strings.Index(src, `tabId = (method === "guard_fill"`)
+	if i < 0 || j < i {
+		t.Fatal("addressed resolution must run before the active-tab fallback")
+	}
+}
