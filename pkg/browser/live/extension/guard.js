@@ -6,7 +6,9 @@
 // name/id, <label>, aria-label/-labelledby/-describedby, placeholder, title,
 // or the VISIBLE QUESTION TEXT around it (a Typeform-style screen whose
 // heading says "Social Security Number" over a plain text box) — says
-// ssn/tax id/ein/routing/account/card/password/username.
+// ssn/tax id/ein/routing/bank account/card number/cvv/password/username.
+// The field's OWN identity decides; describedby, help text and the
+// surrounding question never classify it (the question is only reported).
 //
 // Loaded before page.js in the same ISOLATED world (background.js injects
 // files ["guard.js", "page.js"]); probe/solo evaluate the same bytes in a
@@ -23,7 +25,7 @@
   if (globalThis.__bashyGuard && globalThis.__bashyGuard.version === VERSION) return;
 
   // autocomplete tokens that mark credentials, one-time codes, and cards.
-  const AUTOCOMPLETE = new Set(["username", "current-password", "new-password", "one-time-code"]);
+  const AUTOCOMPLETE = new Set(["current-password", "new-password", "one-time-code"]);
 
   // Words that name a sensitive field. Matched on whole words of the
   // normalised text (camelCase and snake_case split), so "accountant" or
@@ -33,8 +35,8 @@
     ["tax", /\b(tax ?id|tax identification|taxpayer|tax number|tax no|tin|itin|vat id)\b/],
     ["ein", /\b(ein|fein|employer identification)\b/],
     ["routing", /\b(routing|aba|sort code|swift|bic|iban)\b/],
-    ["account", /\b(account|acct)\b/],
-    ["card", /\b(card|cc|ccnum|cvv|cvc|csc|card security|security code|expiry|expiration date)\b/],
+    ["account", /\b(bank|checking|savings|deposit|wire|ach) (account|acct)\b/],
+    ["card", /\b((credit|debit|payment|bank) card|card (number|no|num|security|verification|expiry|expiration)|cc ?(num|number)|ccnum|cvv|cvc|csc|security code)\b/],
     ["password", /\b(password|passwd|passcode|passphrase|pwd|pass word)\b/],
     ["username", /\b(username|user name|user id|userid|login id|login name)\b/],
     ["otp", /\b(one time code|one time password|otp|verification code|2fa|mfa code)\b/],
@@ -84,7 +86,6 @@
     if (wrap) push("label", wrap.innerText || wrap.textContent);
     push("label", el.getAttribute("aria-label"));
     for (const id of (el.getAttribute("aria-labelledby") || "").split(/\s+/)) push("label", textOf(id));
-    for (const id of (el.getAttribute("aria-describedby") || "").split(/\s+/)) push("label", textOf(id));
     push("label", el.getAttribute("placeholder"));
     push("label", el.getAttribute("title"));
     push("name", el.getAttribute("data-qa"));
@@ -154,8 +155,6 @@
       const kind = sensitiveWord(s);
       if (kind) return Object.assign(base, { guarded: true, reason: `field:${src}-${kind}` });
     }
-    const kind = sensitiveWord(question);
-    if (kind) return Object.assign(base, { guarded: true, reason: "field:label-" + kind });
     return Object.assign(base, { guarded: false });
   }
 
@@ -178,9 +177,22 @@
   function focusForHuman(el) {
     try { el.scrollIntoView({ block: "center", inline: "nearest" }); } catch (_) { /* detached */ }
     if (el.focus) el.focus();
-    try { el.style.outline = "3px solid #d93025"; el.style.outlineOffset = "2px"; } catch (_) { /* read-only style */ }
+    try {
+      el.__bashyPrevOutline = [el.style.outline, el.style.outlineOffset];
+      el.style.outline = "3px solid #d93025"; el.style.outlineOffset = "2px";
+    } catch (_) { /* read-only style */ }
     return { content: "focused", data: JSON.stringify({ matched: describe(el) }) };
   }
 
-  globalThis.__bashyGuard = { version: VERSION, inspect, inspectSelector, focusForHuman, sensitiveWord };
+  // releaseFocus removes focusForHuman's outline (Done/Skip/Stop).
+  function releaseFocus(el) {
+    try {
+      const prev = el.__bashyPrevOutline || ["", ""];
+      el.style.outline = prev[0]; el.style.outlineOffset = prev[1];
+      delete el.__bashyPrevOutline;
+    } catch (_) { /* read-only style */ }
+    return { content: "released", data: JSON.stringify({ matched: describe(el) }) };
+  }
+
+  globalThis.__bashyGuard = { version: VERSION, inspect, inspectSelector, focusForHuman, releaseFocus, sensitiveWord };
 })();

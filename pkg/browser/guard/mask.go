@@ -9,10 +9,9 @@ import (
 	"github.com/qiangli/yoke/pkg/sensitive"
 )
 
-// Mask replaces every guarded value in a result's text with
-// [guarded:<kind>]: what a page SHOWS (an SSN on a confirmation screen, a
-// card on a receipt, a vault secret echoed back) is not handed to the agent
-// either. Image bytes are not inspected — screenshots are a recorded gap.
+// Mask replaces every vault value in a result's text with
+// [guarded:<kind>]: a vault secret a page echoes back is not handed to the
+// agent. Other page text is read unmasked. Image bytes are not inspected — screenshots are a recorded gap.
 func Mask(ctx context.Context, r *wire.Result) *wire.Result {
 	if r == nil {
 		return nil
@@ -31,17 +30,25 @@ func Mask(ctx context.Context, r *wire.Result) *wire.Result {
 // outside a wire.Result).
 func MaskText(ctx context.Context, s string) string { return maskString(s, loadVault(ctx)) }
 
-func spansOf(s string, vm *vaultMatcher) []sensitive.Span {
+// spansOf finds guarded spans. Reads (strict=false) mask only vault values:
+// page text is handed over unmasked. The ask record (strict=true) also masks
+// validator-shaped values.
+func spansOf(s string, vm *vaultMatcher, strict bool) []sensitive.Span {
 	if s == "" {
 		return nil
 	}
-	sp := sensitive.Scan(s)
+	var sp []sensitive.Span
+	if strict {
+		sp = sensitive.Scan(s)
+	}
 	sp = append(sp, vm.spans(s)...)
 	return sensitive.ResolveOverlaps(sp)
 }
 
-func maskString(s string, vm *vaultMatcher) string {
-	spans := spansOf(s, vm)
+func maskString(s string, vm *vaultMatcher) string { return maskWith(s, vm, false) }
+
+func maskWith(s string, vm *vaultMatcher, strict bool) string {
+	spans := spansOf(s, vm, strict)
 	if len(spans) == 0 {
 		return s
 	}
@@ -60,7 +67,7 @@ func maskString(s string, vm *vaultMatcher) string {
 // the payload stays valid JSON (a number is never rewritten into a bare
 // token); anything else is masked as text.
 func maskData(s string, vm *vaultMatcher) string {
-	if len(spansOf(s, vm)) == 0 {
+	if len(spansOf(s, vm, false)) == 0 {
 		return s
 	}
 	t := strings.TrimSpace(s)
@@ -82,7 +89,7 @@ func maskJSON(v any, vm *vaultMatcher) any {
 	case string:
 		return maskString(x, vm)
 	case json.Number:
-		if len(spansOf(x.String(), vm)) > 0 {
+		if len(spansOf(x.String(), vm, false)) > 0 {
 			return "[guarded]"
 		}
 		return x

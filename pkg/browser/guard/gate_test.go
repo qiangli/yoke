@@ -27,6 +27,7 @@ type fakeBackend struct {
 
 	inspected []wire.Action
 	focused   []wire.Action
+	released  []wire.Action
 	executed  []wire.Action
 	filled    []string // values FillAdmitted typed (the operator's answers)
 	fillErr   error
@@ -56,6 +57,11 @@ func (b *fakeBackend) FillAdmitted(_ context.Context, a wire.Action, _ string, v
 func (b *fakeBackend) InspectField(_ context.Context, a wire.Action) (Field, error) {
 	b.inspected = append(b.inspected, a)
 	return b.field, b.fieldErr
+}
+
+func (b *fakeBackend) ReleaseField(_ context.Context, a wire.Action) error {
+	b.released = append(b.released, a)
+	return nil
 }
 
 func (b *fakeBackend) FocusField(_ context.Context, a wire.Action) error {
@@ -597,18 +603,16 @@ func TestResultsAreMasked(t *testing.T) {
 		Data:     `{"elements":[{"text":"IBAN DE89370400440532013000","box":{"x":12}}],"total":2}`,
 	}}
 	res := run(t, b, wire.Action{Type: wire.ActionExtract})
-	for _, leaked := range []string{"212-48-7731", "4111 1111 1111 1111", secret, "021000021", "DE89370400440532013000"} {
-		if strings.Contains(res.Content+res.Elements+res.Data, leaked) {
-			t.Errorf("%q not masked", leaked)
-		}
+	if strings.Contains(res.Content, secret) || !strings.Contains(res.Content, "[guarded:vault]") {
+		t.Errorf("vault value not masked: %s", res.Content)
 	}
-	for _, kept := range []string{"ORD-2026-001234", "(415) 555-0132", "[guarded:ssn]", "[guarded:luhn]", "[guarded:vault]"} {
+	for _, kept := range []string{"212-48-7731", "4111 1111 1111 1111", "ORD-2026-001234", "(415) 555-0132"} {
 		if !strings.Contains(res.Content, kept) {
-			t.Errorf("content lost %q: %s", kept, res.Content)
+			t.Errorf("read content lost %q: %s", kept, res.Content)
 		}
 	}
-	if !json.Valid([]byte(res.Data)) || !strings.Contains(res.Data, "[guarded:iban]") {
-		t.Errorf("data masked badly: %s", res.Data)
+	if !strings.Contains(res.Elements, "021000021") || !json.Valid([]byte(res.Data)) || !strings.Contains(res.Data, "DE89370400440532013000") {
+		t.Errorf("validator-shaped values must read unmasked: %s %s", res.Elements, res.Data)
 	}
 }
 
@@ -645,18 +649,35 @@ func TestFakeSeamIsTestOnly(t *testing.T) {
 func TestClipboardReadIsMasked(t *testing.T) {
 	const secret = "correct-horse-battery-staple"
 	isolate(t, secret)
-	for v, kind := range map[string]string{
-		"212-48-7731": "ssn", "912-70-1234": "itin", "94-1234567": "ein", "021000021": "aba",
-		"4111 1111 1111 1111": "luhn", "DE89370400440532013000": "iban", secret: "vault",
-	} {
+	for _, v := range []string{"212-48-7731", "4111 1111 1111 1111", "DE89370400440532013000"} {
 		b := &fakeBackend{result: &wire.Result{Success: true, Data: v}}
-		res := run(t, b, wire.Action{Type: wire.ActionClipboardRead})
-		if strings.Contains(res.Data+res.Content, v) || res.Data != "[guarded:"+kind+"]" {
-			t.Errorf("clipboard %s not masked: %q", kind, res.Data)
+		if res := run(t, b, wire.Action{Type: wire.ActionClipboardRead}); res.Data != v {
+			t.Errorf("clipboard %q changed: %q", v, res.Data)
 		}
 	}
-	b := &fakeBackend{result: &wire.Result{Success: true, Data: "ORD-2026-001234 (415) 555-0132"}}
+	b := &fakeBackend{result: &wire.Result{Success: true, Data: secret}}
+	if res := run(t, b, wire.Action{Type: wire.ActionClipboardRead}); res.Data != "[guarded:vault]" {
+		t.Errorf("vault clipboard not masked: %q", res.Data)
+	}
+	b = &fakeBackend{result: &wire.Result{Success: true, Data: "ORD-2026-001234 (415) 555-0132"}}
 	if res := run(t, b, wire.Action{Type: wire.ActionClipboardRead}); res.Data != "ORD-2026-001234 (415) 555-0132" {
 		t.Errorf("ordinary clipboard changed: %q", res.Data)
+	}
+}
+
+// The human-focus outline is cleared after the operator's Done and after a
+// focus that ends in Stop; nothing is released when nothing was focused.
+func TestSelfFocusIsReleased(t *testing.T) {
+	for _, tc := range []struct {
+		answer   string
+		released int
+	}{{"fake:type-myself", 1}, {"fake:skip", 0}, {"fake:stop", 0}} {
+		isolate(t)
+		t.Setenv(FakeAskEnv, tc.answer)
+		b := &fakeBackend{human: true, field: guardedField("field:label-ssn", "SSN")}
+		run(t, b, typeAction("x"))
+		if len(b.released) != tc.released {
+			t.Errorf("%s: released %d, want %d", tc.answer, len(b.released), tc.released)
+		}
 	}
 }
