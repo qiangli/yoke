@@ -602,3 +602,41 @@ func TestPageTypeSkipsHiddenSteps(t *testing.T) {
 		t.Fatalf("include_hidden is the explicit override: %v", res["error"])
 	}
 }
+
+const shadowKeyFixture = `<!doctype html><body>
+<input id="outer"><div id="host"></div>
+<script>
+window.log = [];
+const root = document.getElementById('host').attachShadow({mode: 'open'});
+root.innerHTML = '<input id="inner" aria-label="Inner">';
+for (const n of ['keydown', 'keypress', 'keyup']) {
+  document.addEventListener(n, e => window.log.push(n + ':' + e.composedPath()[0].id));
+}
+</script></body>`
+
+// The synthetic keyboard fallback must hit the focused control inside an open
+// shadow root, not the shadow host that document.activeElement reports.
+func TestPageKeySyntheticTargetsShadowFocus(t *testing.T) {
+	h := newPageHarness(t, map[string]string{"/k": shadowKeyFixture})
+	h.open("/k")
+	h.mainEval(`document.getElementById('outer').focus()`, nil)
+	if got := h.call("keyFocus", map[string]any{"selector": "label=Inner"}); got["ok"] != true {
+		t.Fatalf("keyFocus: %v", got)
+	}
+	if got := h.call("keySynthetic", map[string]any{"key": "x"}); got["ok"] != true {
+		t.Fatalf("keySynthetic: %v", got)
+	}
+	var log string
+	h.mainEval(`JSON.stringify(window.log)`, &log)
+	if log != `["keydown:inner","keypress:inner","keyup:inner"]` {
+		t.Fatalf("synthetic keys went to the wrong element: %s", log)
+	}
+	h.mainEval(`window.log = []`, nil)
+	if got := h.call("keyFocus", map[string]any{"selector": "xpath=//nothing"}); got["error"] == nil {
+		t.Fatalf("missing target must error: %v", got)
+	}
+	h.mainEval(`JSON.stringify(window.log)`, &log)
+	if log != `[]` {
+		t.Fatalf("refused target produced events: %s", log)
+	}
+}

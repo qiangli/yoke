@@ -483,12 +483,13 @@ const selectorE2EPage = `<!doctype html><body>
 <input id="other" name="other" placeholder="other">
 <input class="dup" id="d1"><input class="dup" id="d2">
 <input id="hid" style="display:none">
-<div id="host"></div><iframe src="/selchild"></iframe>
+<div id="host"></div><div id="khost"></div><iframe src="/selchild"></iframe>
 <script>
 window.log = [];
-document.addEventListener('keydown', e => window.log.push('key:' + e.key + ':' + (e.target.id || e.target.tagName)));
+document.addEventListener('keydown', e => window.log.push('key:' + e.key + ':' + (e.composedPath()[0].id || e.target.tagName)));
 document.getElementById('host').attachShadow({mode: 'open'}).innerHTML = '<button id="sb">Shadow go</button>';
 document.getElementById('host').shadowRoot.getElementById('sb').addEventListener('ping', e => window.log.push('shadow:' + JSON.stringify(e.detail)));
+document.getElementById('khost').attachShadow({mode: 'open'}).innerHTML = '<input id="kin" aria-label="Shadow key">';
 setTimeout(() => { const b = document.createElement('button'); b.id = 'late'; b.textContent = 'Late'; document.body.appendChild(b); }, 400);
 </script></body>`
 
@@ -588,5 +589,13 @@ func TestExtensionE2ESelectorWaitDispatchKeyboard(t *testing.T) {
 	ok("keyboard child label", wire.Action{Type: wire.ActionKeyboardPress, Key: "y", Selector: "label=Child field"})
 	if got := e2eLog(t, browserCtx); !strings.Contains(got, "key:x:who") || !strings.Contains(got, "childkey:y:cin") {
 		t.Fatalf("keyboard log: %s", got)
+	}
+	// Shadow-hosted control: the key lands on the inner input, not its host.
+	if err := chromedp.Run(browserCtx, chromedp.Evaluate(`window.log = []`, nil)); err != nil {
+		t.Fatal(err)
+	}
+	ok("keyboard shadow label", wire.Action{Type: wire.ActionKeyboardPress, Key: "z", Selector: "label=Shadow key"})
+	if got := e2eLog(t, browserCtx); got != `["key:z:kin"]` {
+		t.Fatalf("shadow keyboard log: %s", got)
 	}
 }
