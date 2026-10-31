@@ -36,3 +36,5 @@ Acceptance: red/green tests (injection on each shaped app page; the protected pa
 
 
 Manager constraints (S526): yoke pkg/webconsole (inject the component where pages are served: servePageFile / shaped app page path / preview); add the protected path to pkg/src ProtectedManifest; reuse F3a preview handling (yoke e0898d17). NO podman/docker/make test/full suites on Dragon: focused go test + go vet only. Desk apps (notepad, form) are shaped apps served via the public path; inject there too. Manager runs the live zoo check.
+
+Operator update 2026-10-31: button TOP-RIGHT by default; its position and hidden state come from the app's shaped config (e.g. a small shaped.json / app config key), so a wish can move or hide it while the component itself stays protected.
