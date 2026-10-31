@@ -9,7 +9,7 @@
 //   data-base      the launcher's base path, trailing slash (the API lives there)
 //   data-app       the shaped app the wish targets
 //   data-page      the page/route the person is on, relative to the app
-//   data-mode      live | protected | preview
+//   data-mode      live | protected | preview | draft
 //   data-position  top-right (default) | top-left | bottom-right | bottom-left
 //   data-anchor    CSS selector list; the button goes inside the first match
 //   data-hidden    "1" keeps the button off this page (landing page excepted)
@@ -27,6 +27,19 @@
 // session storage remembers the review, so the live page the before-toggle
 // shows and a protected page reached from the review both say so.
 //
+// In draft mode the component is the EDIT SESSION (S526.B1h): the page is
+// the person's private draft of their active version, served at
+// shape/<app>/draft/, and the bar on top reads "Editing draft: N wishes ·
+// undo · redo · Save · Cancel". Each wish is one stored step on the draft;
+// undo and redo move through the steps without re-running Genie (a new
+// wish clears the redo list), Ctrl/Cmd-Z and Ctrl/Cmd-Shift-Z work while
+// the bar is shown, Save verifies the whole draft once and makes it one
+// version listing every wish (a refusal names the failing part and keeps
+// the draft open), Cancel discards it. The draft is on the server, so it
+// survives a reload and a closed tab: a live page of the app, and a
+// protected page, say an edit session is open and lead back into it.
+// "Start editing" lives in the wish panel on every live page.
+//
 // Plain JS, no framework, no CDN, no dependency on the host page's styles:
 // the look is the launcher's design system, carried here so it is the same
 // on every app and every OS. The keyboard shortcut (Alt+Shift+G) opens the
@@ -41,7 +54,7 @@
   const base = d.base || "/";
   const app = d.app || "";
   const page = d.page || "/";
-  const mode = d.mode === "protected" || d.mode === "preview" ? d.mode : "live";
+  const mode = ["protected", "preview", "draft"].includes(d.mode) ? d.mode : "live";
   const corners = { "top-right": "tr", "top-left": "tl", "bottom-right": "br", "bottom-left": "bl" };
   const corner = corners[d.position] || "tr";
   const anchor = d.anchor || "";
@@ -107,6 +120,10 @@
 .bgn-bar .bgn-alert{font-size:.8rem;color:#dc2626;overflow-wrap:anywhere}
 .bgn-bar .bgn-b[aria-pressed="true"]{box-shadow:inset 0 0 0 2px var(--g-primary)}
 .bgn-bar .bgn-b.bgn-danger{color:#dc2626}
+.bgn-bar .bgn-count{font-weight:600;white-space:nowrap}
+.bgn-bar .bgn-b.bgn-ur{min-width:2.2rem;font-size:1rem;line-height:1;padding:.2rem .4rem}
+.bgn-edit{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;border-top:1px solid var(--g-border);padding-top:.6rem}
+.bgn-edit .bgn-note{color:var(--g-muted)}
 .bgn-changed{outline:2px dashed #2563eb!important;outline-offset:2px}
 .bgn-added{outline:2px dashed #16a34a!important;outline-offset:2px}
 .bgn-wide{width:min(64rem,100%)}
@@ -129,6 +146,41 @@
   const liveURL = (p) => abs(base + mount + (p || page).replace(/^\//, "")).href;
   const previewPrefix = (ofApp, id) => base + "shape/" + encodeURIComponent(ofApp) + "/preview/" + id + "/";
   const previewURL = (id, p) => abs(previewPrefix(app, id) + (p || page).replace(/^\//, "")).href;
+  // The edit session: its API and its pages (the draft served in place of
+  // the app, same routes under the draft prefix).
+  const draftAPI = (rest) => abs(base + "api/shape/" + encodeURIComponent(app) + "/draft" + (rest || ""));
+  const draftURL = (p) => abs(base + "shape/" + encodeURIComponent(app) + "/draft/" + (p || page).replace(/^\//, "")).href;
+
+  // The browser remembers that an edit session is open for this app — in
+  // local storage, so it outlives the tab: a live page of the app, and a
+  // protected page, then ask the server and say so. Cleared on Save and
+  // Cancel, and whenever the server says there is no draft.
+  const DRAFT = "bashy.genie.draft";
+  function draftMark() {
+    try {
+      const m = JSON.parse(localStorage.getItem(DRAFT) || "null");
+      return m && m.app ? m : null;
+    } catch (_) { return null; }
+  }
+  function rememberDraft(open, ofApp) {
+    const a = ofApp || app;
+    try {
+      if (open) localStorage.setItem(DRAFT, JSON.stringify({ app: a, at: Date.now() }));
+      else if ((draftMark() || {}).app === a) localStorage.removeItem(DRAFT);
+    } catch (_) {}
+  }
+  // draftState asks the server for the open draft of an app (this one by
+  // default): null when there is none (the marker is dropped then),
+  // undefined when unknown.
+  async function draftState(ofApp) {
+    const a = ofApp || app;
+    try {
+      const res = await fetch(abs(base + "api/shape/" + encodeURIComponent(a) + "/draft"), { credentials: "same-origin" });
+      if (res.status === 404) { rememberDraft(false, a); return null; }
+      if (!res.ok) return undefined;
+      return await res.json();
+    } catch (_) { return undefined; }
+  }
 
   // The tab remembers which candidate is under review, so the live page
   // the before/after toggle shows, and a protected page reached from the
@@ -187,6 +239,9 @@
       btn.title = "You're previewing a candidate";
       btn.setAttribute("aria-label", "Genie is off while you preview a candidate");
       btn.setAttribute("aria-disabled", "true");
+    } else if (mode === "draft") {
+      btn.title = "Add a wish to your draft of " + app + " (" + SHORTCUT + ")";
+      btn.setAttribute("aria-label", "Add a wish to your draft of " + app);
     } else {
       btn.title = "Make a wish for " + app + " (" + SHORTCUT + ")";
       btn.setAttribute("aria-label", "Make a wish for " + app);
@@ -222,6 +277,37 @@
   // ---- the wish panel ----------------------------------------------------
   let overlay = null, ta = null, status = null, send = null, chip = null, element = "";
   let lastFocus = null;
+  let editBtn = null, editNote = null;
+
+  // refreshEditRow labels the edit button after the open draft, if any.
+  async function refreshEditRow() {
+    if (!editBtn) return;
+    const st = draftMark() ? await draftState() : null;
+    if (st) {
+      editBtn.textContent = "Resume editing";
+      editNote.textContent = "Your draft has " + plural(st.wishes, "wish", "wishes") + "; it is not your active version until you save.";
+    } else {
+      editBtn.textContent = "Start editing";
+      editNote.textContent = "Many wishes in place, undo and redo, then Save or Cancel.";
+    }
+  }
+  const plural = (n, one, many) => n + " " + (n === 1 ? one : many);
+
+  // startEditing opens (or resumes) the edit session and moves to the
+  // draft's copy of this page.
+  async function startEditing() {
+    editBtn.disabled = true;
+    status.textContent = "Opening your draft…";
+    try {
+      const res = await fetch(draftAPI(), { method: "POST", credentials: "same-origin" });
+      if (!res.ok) throw new Error((await res.text()).trim() || res.statusText);
+      rememberDraft(true);
+      location.assign(draftURL());
+    } catch (e) {
+      status.textContent = e.message || "The draft could not be opened";
+      editBtn.disabled = false;
+    }
+  }
 
   function build() {
     overlay = el("div", "bgn bgn-overlay");
@@ -240,7 +326,9 @@
     chip = el("span", "bgn-chip");
     chip.hidden = true;
     ctx.append(chip);
-    const hint = el("span", "", "The wish is for the whole app; the page and a pointed-at element are context.");
+    const hint = el("span", "", mode === "draft"
+      ? "The wish applies on your draft so far; undo and redo from the bar."
+      : "The wish is for the whole app; the page and a pointed-at element are context.");
     ctx.append(hint);
     sheet.append(h, ctx);
     if (mode === "protected") {
@@ -261,11 +349,24 @@
     const cancel = el("button", "bgn-b", "Cancel");
     cancel.type = "button";
     cancel.addEventListener("click", close);
-    send = el("button", "bgn-b bgn-p", mode === "protected" ? "File request" : "Make the wish");
+    send = el("button", "bgn-b bgn-p", mode === "protected" ? "File request" : mode === "draft" ? "Add the wish" : "Make the wish");
     send.type = "button";
     send.addEventListener("click", submit);
     row.append(pick, el("span", "bgn-sp"), status, cancel, send);
     sheet.append(row);
+    if (mode === "live") {
+      // The edit session starts here: many wishes in place, undo/redo,
+      // then Save or Cancel. With a draft already open, the way back in.
+      const edit = el("div", "bgn-edit");
+      edit.setAttribute("data-bgn-edit", "");
+      editBtn = el("button", "bgn-b", "Start editing");
+      editBtn.type = "button";
+      editBtn.setAttribute("aria-label", "Start an edit session: shape " + app + " like a document, with undo, redo, Save and Cancel");
+      editBtn.addEventListener("click", startEditing);
+      editNote = el("span", "bgn-note", "Many wishes in place, undo and redo, then Save or Cancel.");
+      edit.append(editBtn, editNote);
+      sheet.append(edit);
+    }
     const foot = el("div", "bgn-ctx");
     const link = el("a", "", "Wishes & versions");
     link.href = reviewURL();
@@ -296,6 +397,7 @@
     overlay.hidden = false;
     status.textContent = "";
     ta.focus();
+    refreshEditRow();
   }
   function close() {
     if (!overlay || overlay.hidden) return;
@@ -309,6 +411,7 @@
     if (!request) { ta.focus(); return; }
     send.disabled = true;
     status.textContent = "Sending…";
+    if (mode === "draft") { await submitStep(request); return; }
     try {
       const res = await fetch(api(), {
         method: "POST", credentials: "same-origin",
@@ -333,6 +436,44 @@
       status.textContent = e.message || "The wish could not be sent";
     }
     send.disabled = false;
+  }
+
+  // submitStep adds one wish to the draft as a step: posted, then the
+  // draft is watched until Genie is done, and the page reloads to show
+  // the result in place. A wish that produced no step says why here.
+  async function submitStep(request) {
+    try {
+      const res = await fetch(draftAPI("/wishes"), {
+        method: "POST", credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request, page, element, protected: false }),
+      });
+      const text = await res.text();
+      if (!res.ok) throw new Error(text.trim() || res.statusText);
+      ta.value = "";
+      setElement("");
+      status.textContent = "Genie is on it (a few minutes)…";
+      if (barState) barState.watch();
+      const st = await settle();
+      if (!st) throw new Error("the draft is gone");
+      if (st.last_error) { status.textContent = "No step: " + st.last_error; send.disabled = false; return; }
+      close();
+      toast("Wish applied to your draft.");
+      location.reload();
+    } catch (e) {
+      status.textContent = e.message || "The wish could not be added";
+      send.disabled = false;
+    }
+  }
+
+  // settle polls the draft until no wish is running. null = no draft.
+  async function settle() {
+    for (;;) {
+      const st = await draftState();
+      if (st === null) return null;
+      if (st && !st.busy) return st;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
   }
 
   // ---- pointing at an element --------------------------------------------
@@ -398,10 +539,22 @@
   }
 
   // ---- keyboard ----------------------------------------------------------
+  // typing reports whether the key went to something the person types in:
+  // their own undo there is theirs, not the draft's.
+  const typing = (ev) => {
+    const t = ev.target;
+    return !!(t && t.nodeType === 1 && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)));
+  };
   document.addEventListener("keydown", (ev) => {
     if (ev.altKey && ev.shiftKey && !ev.ctrlKey && !ev.metaKey && ev.code === "KeyG") {
       ev.preventDefault();
       toggle();
+    } else if (barState && (ev.ctrlKey || ev.metaKey) && !ev.altKey && (ev.key === "z" || ev.key === "Z" || ev.code === "KeyZ") &&
+      !typing(ev) && (!overlay || overlay.hidden)) {
+      // Ctrl/Cmd-Z undoes the last wish, Ctrl/Cmd-Shift-Z redoes, while
+      // the editing bar is shown.
+      ev.preventDefault();
+      if (ev.shiftKey) barState.redo(); else barState.undo();
     } else if (ev.key === "Escape" && overlay && !overlay.hidden && !picking) {
       close();
     } else if (ev.key === "Escape" && diffSheet && !diffSheet.hidden) {
@@ -416,6 +569,9 @@
   // reached from a review, a note that says so. The sparkle button sits in
   // the bar's left slot while a bar is shown.
   let barSlot = null, bar = null, diffSheet = null, diffHost = null, baseMargin = null;
+  // barState is the editing bar's controller while one is shown (draft
+  // mode): undo/redo for the keyboard, watch for a wish in flight.
+  let barState = null;
   const bodyMargin = () => {
     if (baseMargin === null) baseMargin = parseFloat(getComputedStyle(document.body).marginTop) || 0;
     return baseMargin;
@@ -454,6 +610,74 @@
     b.addEventListener("click", fn);
     return b;
   };
+
+  // outlineAgainstLive marks what differs from the live page, best effort:
+  // the live page is fetched and parsed, elements are paired by id or by
+  // their tag path, and the innermost changed and outermost added ones get
+  // a dashed outline. Scripts, styles and the component's own nodes are
+  // ignored; a page that renders itself from an API shows little. Returns
+  // the [node, class] marks, so a toggle can flip them. Shared by the
+  // review (candidate vs current version) and the edit session (draft vs
+  // current version).
+  async function outlineAgainstLive() {
+    let live;
+    try {
+      const res = await fetch(liveURL(), { credentials: "same-origin", headers: { Accept: "text/html" } });
+      if (!res.ok) return [];
+      live = new DOMParser().parseFromString(await res.text(), "text/html");
+    } catch (_) { return []; }
+    const SEL = "[id],h1,h2,h3,h4,header,nav,main,footer,section,article,aside,form,fieldset,table,ul,ol,dl,button,a,p,label,input,select,textarea,img,figure,blockquote,pre";
+    const ours = (n) => !!n.closest(".bgn, .bgn-bar, [data-bashy-genie]");
+    const norm = (n) => {
+      const c = n.cloneNode(true);
+      for (const x of c.querySelectorAll("script, style, .bgn, .bgn-bar")) x.remove();
+      for (const x of [c, ...c.querySelectorAll("[class]")]) {
+        x.classList.remove("bgn-changed", "bgn-added");
+        if (!x.className) x.removeAttribute("class");
+        x.removeAttribute("data-bgn-top");
+        if (x.hasAttribute("style") && x.style.top && x.style.length === 1) x.removeAttribute("style");
+      }
+      if (c.tagName === "SCRIPT" || c.tagName === "STYLE") return "";
+      return c.outerHTML.replace(/\s+/g, " ").trim();
+    };
+    const pathOf = (n, root) => {
+      const parts = [];
+      for (let e = n; e && e !== root && e.nodeType === 1; e = e.parentElement) {
+        if (e.id) { parts.unshift("#" + e.id); break; }
+        let i = 1;
+        for (let s = e.previousElementSibling; s; s = s.previousElementSibling) if (s.tagName === e.tagName) i++;
+        parts.unshift(e.tagName.toLowerCase() + ":" + i);
+      }
+      return parts.join(">");
+    };
+    const liveMap = new Map();
+    for (const n of live.body.querySelectorAll(SEL)) {
+      if (n.closest(".bgn, .bgn-bar") || n.tagName === "SCRIPT" || n.tagName === "STYLE") continue;
+      const k = pathOf(n, live.body);
+      if (!liveMap.has(k)) liveMap.set(k, norm(n));
+    }
+    const cands = [...document.body.querySelectorAll(SEL)].filter((n) => !ours(n) && n.tagName !== "SCRIPT" && n.tagName !== "STYLE").slice(0, 800);
+    const differs = new Map();
+    for (const n of cands) {
+      const k = pathOf(n, document.body);
+      differs.set(n, liveMap.has(k) ? (liveMap.get(k) !== norm(n) ? "changed" : "") : "added");
+    }
+    const marks = [];
+    for (const n of cands) {
+      const d = differs.get(n);
+      if (!d) continue;
+      if (d === "added") {
+        if (n.parentElement && n.parentElement.closest(".bgn-added")) continue;
+        n.classList.add("bgn-added");
+        marks.push([n, "bgn-added"]);
+      } else if (!cands.some((m) => m !== n && n.contains(m) && differs.get(m))) {
+        n.classList.add("bgn-changed");
+        marks.push([n, "bgn-changed"]);
+      }
+    }
+    return marks;
+  }
+  const differsText = (n) => n === 1 ? "1 element differs from your current version (outlined)" : n + " elements differ from your current version (outlined)";
 
   // reviewBar: the in-place review of `candidate` on this preview page.
   function reviewBar() {
@@ -620,68 +844,10 @@
       if (c.kind === "request" || !c.rev) for (const b of [approve, reject, before, diffBtn]) b.disabled = true;
     }
 
-    // outline marks what differs from the live page, best effort: the
-    // live page is fetched and parsed, elements are paired by id or by
-    // their tag path, and the innermost changed and outermost added ones
-    // get a dashed outline. Scripts, styles and the component's own nodes
-    // are ignored; a page that renders itself from an API shows little.
+    // outline marks what differs from the live page (outlineAgainstLive).
     async function outline() {
-      let live;
-      try {
-        const res = await fetch(liveURL(), { credentials: "same-origin", headers: { Accept: "text/html" } });
-        if (!res.ok) return;
-        live = new DOMParser().parseFromString(await res.text(), "text/html");
-      } catch (_) { return; }
-      const SEL = "[id],h1,h2,h3,h4,header,nav,main,footer,section,article,aside,form,fieldset,table,ul,ol,dl,button,a,p,label,input,select,textarea,img,figure,blockquote,pre";
-      const ours = (n) => !!n.closest(".bgn, .bgn-bar, [data-bashy-genie]");
-      const norm = (n) => {
-        const c = n.cloneNode(true);
-        for (const x of c.querySelectorAll("script, style, .bgn, .bgn-bar")) x.remove();
-        for (const x of [c, ...c.querySelectorAll("[class]")]) {
-          x.classList.remove("bgn-changed", "bgn-added");
-          if (!x.className) x.removeAttribute("class");
-          x.removeAttribute("data-bgn-top");
-          if (x.hasAttribute("style") && x.style.top && x.style.length === 1) x.removeAttribute("style");
-        }
-        if (c.tagName === "SCRIPT" || c.tagName === "STYLE") return "";
-        return c.outerHTML.replace(/\s+/g, " ").trim();
-      };
-      const pathOf = (n, root) => {
-        const parts = [];
-        for (let e = n; e && e !== root && e.nodeType === 1; e = e.parentElement) {
-          if (e.id) { parts.unshift("#" + e.id); break; }
-          let i = 1;
-          for (let s = e.previousElementSibling; s; s = s.previousElementSibling) if (s.tagName === e.tagName) i++;
-          parts.unshift(e.tagName.toLowerCase() + ":" + i);
-        }
-        return parts.join(">");
-      };
-      const liveMap = new Map();
-      for (const n of live.body.querySelectorAll(SEL)) {
-        if (n.closest(".bgn, .bgn-bar") || n.tagName === "SCRIPT" || n.tagName === "STYLE") continue;
-        const k = pathOf(n, live.body);
-        if (!liveMap.has(k)) liveMap.set(k, norm(n));
-      }
-      const cands = [...document.body.querySelectorAll(SEL)].filter((n) => !ours(n) && n.tagName !== "SCRIPT" && n.tagName !== "STYLE").slice(0, 800);
-      const differs = new Map();
-      for (const n of cands) {
-        const k = pathOf(n, document.body);
-        differs.set(n, liveMap.has(k) ? (liveMap.get(k) !== norm(n) ? "changed" : "") : "added");
-      }
-      marks = [];
-      for (const n of cands) {
-        const d = differs.get(n);
-        if (!d) continue;
-        if (d === "added") {
-          if (n.parentElement && n.parentElement.closest(".bgn-added")) continue;
-          n.classList.add("bgn-added");
-          marks.push([n, "bgn-added"]);
-        } else if (!cands.some((m) => m !== n && n.contains(m) && differs.get(m))) {
-          n.classList.add("bgn-changed");
-          marks.push([n, "bgn-changed"]);
-        }
-      }
-      if (marks.length) sum.append(el("span", "", " · "), el("span", "", marks.length === 1 ? "1 element differs from your current version (outlined)" : marks.length + " elements differ from your current version (outlined)"));
+      marks = await outlineAgainstLive();
+      if (marks.length) sum.append(el("span", "", " · "), el("span", "", differsText(marks.length)));
       else outlineBtn.disabled = true;
     }
 
@@ -722,11 +888,245 @@
     pin(bar);
   }
 
+  // ---- the edit session ------------------------------------------------------
+  // draftBar: on the draft's own pages, the bar "Editing draft: N wishes ·
+  // undo · redo · Diff · Cancel · Save", with the sparkle in its slot to add
+  // a wish. Undo and redo move the server-side cursor and reload the page
+  // (the steps are stored; Genie does not run). Save verifies the whole
+  // draft once: a refusal is shown here with its reason and the draft
+  // stays; a pass lands on the live app, now one version newer. Cancel is
+  // armed on the first click and discards on the second.
+  function draftBar() {
+    bar = el("div", "bgn bgn-bar");
+    bar.setAttribute("role", "region");
+    bar.setAttribute("aria-label", "Edit session");
+    bar.setAttribute("data-bgn-draft", "");
+    theme(bar);
+    const head = el("div", "bgn-row");
+    barSlot = el("span", "bgn-slot");
+    const count = el("span", "bgn-count", "Editing draft");
+    const wish = el("b", "bgn-wish", "");
+    const busy = el("span", "bgn-status");
+    busy.setAttribute("role", "status");
+    busy.setAttribute("aria-live", "polite");
+    const sum = el("div", "bgn-sum");
+    const alertEl = el("div", "bgn-alert");
+    alertEl.setAttribute("role", "alert");
+    alertEl.hidden = true;
+    const say = (msg) => { alertEl.textContent = msg || ""; alertEl.hidden = !msg; };
+
+    let st = null, polling = false, armed = 0;
+    const move = async (what) => {
+      if (!st || st.busy) return;
+      setBusy(true, what === "/undo" ? "Undoing…" : "Redoing…");
+      say("");
+      try {
+        const res = await fetch(draftAPI(what), { method: "POST", credentials: "same-origin" });
+        if (!res.ok) throw new Error((await res.text()).trim() || res.statusText);
+        location.reload();
+      } catch (e) { setBusy(false); say("Could not " + what.slice(1) + ": " + e.message); }
+    };
+    const undoBtn = action("↶", "bgn-ur", () => move("/undo"), "Undo the last wish (Ctrl/Cmd-Z)");
+    const redoBtn = action("↷", "bgn-ur", () => move("/redo"), "Redo the undone wish (Ctrl/Cmd-Shift-Z)");
+    undoBtn.title = "Undo the last wish (Ctrl/Cmd-Z)";
+    redoBtn.title = "Redo the undone wish (Ctrl/Cmd-Shift-Z)";
+    const diffBtn = action("Diff", "", () => showDraftDiff(), "Show the code diff of your draft against your current version");
+    const cancelBtn = action("Cancel", "bgn-danger", async () => {
+      if (!armed) {
+        armed = setTimeout(() => { armed = 0; cancelBtn.textContent = "Cancel"; }, 5000);
+        cancelBtn.textContent = "Cancel — discard the draft?";
+        return;
+      }
+      clearTimeout(armed); armed = 0;
+      setBusy(true, "Discarding the draft…");
+      try {
+        const res = await fetch(draftAPI("/cancel"), { method: "POST", credentials: "same-origin" });
+        if (!res.ok) throw new Error((await res.text()).trim() || res.statusText);
+        rememberDraft(false);
+        toast("Draft discarded. Your current version is unchanged.");
+        location.assign(liveURL());
+      } catch (e) { setBusy(false); say("Could not cancel: " + e.message); }
+    }, "Cancel the edit session: discard the draft and keep your current version");
+    const saveBtn = action("Save", "bgn-p", async () => {
+      setBusy(true, "Verifying the whole draft with the trusted verifier…");
+      say("");
+      try {
+        const res = await fetch(draftAPI("/save"), { method: "POST", credentials: "same-origin" });
+        const text = await res.text();
+        if (res.ok) {
+          let saved = {};
+          try { saved = JSON.parse(text); } catch (_) {}
+          rememberDraft(false);
+          toast("Saved: one new version of " + app + " with " + plural(saved.wishes || 0, "wish", "wishes") + ".");
+          location.assign(liveURL());
+          return;
+        }
+        let reason = text.trim();
+        try { const j = JSON.parse(text); reason = (j.verdict && j.verdict.detail) || j.error || reason; } catch (_) {}
+        say("Not saved: " + (reason || res.statusText) + ". The draft stays open: fix it with another wish, undo, or cancel.");
+        load(true);
+      } catch (e) { say("Not saved: " + e.message); }
+      setBusy(false);
+    }, "Save the edit session: verify the whole draft once, then make it one new version listing every wish");
+    const buttons = [undoBtn, redoBtn, diffBtn, cancelBtn, saveBtn];
+    head.append(barSlot, count, wish, el("span", "bgn-sp"), busy, ...buttons);
+    bar.append(head, sum, alertEl);
+    function setBusy(on, msg) {
+      for (const b of buttons) b.disabled = on;
+      busy.textContent = on ? (msg || "") : "";
+      if (!on && st) render(st);
+    }
+
+    // render fills the bar from the draft record.
+    function render(state) {
+      st = state;
+      count.textContent = "Editing draft: " + plural(st.wishes || 0, "wish", "wishes");
+      const applied = (st.steps || []).slice(0, st.cursor || 0);
+      const last = applied[applied.length - 1];
+      wish.textContent = last ? last.request : "";
+      wish.title = wish.textContent;
+      undoBtn.disabled = !st.can_undo;
+      redoBtn.disabled = !st.can_redo;
+      saveBtn.disabled = !!st.busy || !(st.wishes > 0);
+      cancelBtn.disabled = !!st.busy;
+      diffBtn.disabled = !!st.busy;
+      busy.textContent = st.busy && st.running ? "Genie is working on “" + st.running.request + "”…" : "";
+      const parts = [];
+      if (applied.length) parts.push(["Wishes", applied.map((s, i) => (i + 1) + ". " + s.request).join(" · ")]);
+      const undone = (st.steps || []).length - (st.cursor || 0);
+      if (undone) parts.push(["Undone", plural(undone, "wish", "wishes") + " (redo brings " + (undone === 1 ? "it" : "them") + " back; a new wish clears " + (undone === 1 ? "it" : "them") + ")"]);
+      sum.replaceChildren();
+      if (!parts.length) sum.append(el("span", "", "Your private draft of " + app + ": make a wish from the sparkle, as many as you like; nothing changes your current version until you save."));
+      parts.forEach(([k, v], i) => {
+        if (i) sum.append(el("span", "", " · "));
+        sum.append(el("b", "", k + ": "), el("span", "", v));
+      });
+      if (st.last_error) say("The last wish made no step: " + st.last_error);
+      else if (st.verdict && !st.verdict.pass) say("Not saved" + (st.verdict.detail ? ": " + st.verdict.detail : "") + ". The draft stays open: fix it with another wish, undo, or cancel.");
+    }
+
+    // watch waits for the wish in flight and reloads the page to show its
+    // result in place; a wish that made no step is reported instead.
+    async function watch(onDone) {
+      if (polling) return;
+      polling = true;
+      setBusy(true, "Genie is working on your wish…");
+      const s2 = await settle();
+      polling = false;
+      if (s2 === null) {
+        say("This draft no longer exists: it was saved or cancelled elsewhere.");
+        for (const b of buttons) b.disabled = true;
+        return;
+      }
+      if (onDone) onDone(s2);
+      if (s2.last_error) { render(s2); return; }
+      location.reload();
+    }
+
+    // load fills the bar from the server; keep leaves a fresh message.
+    async function load(keep) {
+      const s2 = await draftState();
+      if (s2 === null) {
+        wish.textContent = "";
+        count.textContent = "No draft";
+        sum.replaceChildren(el("span", "", "This draft no longer exists. "), Object.assign(el("a", "", "Open the live app"), { href: liveURL() }));
+        for (const b of buttons) b.disabled = true;
+        return;
+      }
+      if (!s2) { say("The draft could not be loaded"); return; }
+      const msg = alertEl.textContent;
+      render(s2);
+      if (keep && msg) say(msg);
+      if (s2.busy) watch();
+    }
+
+    async function showDraftDiff() {
+      if (!diffSheet) {
+        diffSheet = el("div", "bgn bgn-overlay");
+        diffSheet.hidden = true;
+        diffSheet.setAttribute("role", "dialog");
+        diffSheet.setAttribute("aria-label", "Code diff");
+        diffSheet.setAttribute("data-bgn-diff", "");
+        const sheet = el("div", "bgn-sheet bgn-wide");
+        const h = el("h2");
+        h.innerHTML = sparkle;
+        h.append(el("span", "", "Code diff of your draft of "), el("b", "", app));
+        diffHost = el("div", "bgn-diff");
+        const row = el("div", "bgn-row");
+        row.append(el("span", "bgn-sp"), action("Close", "", () => { diffSheet.hidden = true; }));
+        sheet.append(h, diffHost, row);
+        diffSheet.append(sheet);
+        diffSheet.addEventListener("click", (e) => { if (e.target === diffSheet) diffSheet.hidden = true; });
+        document.body.append(diffSheet);
+      }
+      theme(diffSheet);
+      diffHost.textContent = "Loading…";
+      diffSheet.hidden = false;
+      let html = "";
+      try {
+        const res = await fetch(draftAPI("/diff"), { credentials: "same-origin" });
+        html = res.ok ? await res.text() : "";
+      } catch (_) {}
+      // The fragment is rendered and escaped by the console's own API.
+      if (html) diffHost.innerHTML = html;
+      else diffHost.textContent = "The diff is not available.";
+    }
+
+    // outline marks what the draft changed against the current version.
+    async function outline() {
+      const marks = await outlineAgainstLive();
+      if (marks.length && st) sum.append(el("span", "", " · "), el("span", "", differsText(marks.length)));
+    }
+
+    pin(bar);
+    rememberDraft(true);
+    barState = { undo: () => move("/undo"), redo: () => move("/redo"), watch };
+    load().then(outline);
+  }
+
+  // draftNoteBar: on a live page of the app while a draft is open (the
+  // person left the draft, or came back after closing the tab), and on a
+  // protected page: this is not the draft, and the way back into it.
+  function draftNoteBar(m, st) {
+    bar = el("div", "bgn bgn-bar");
+    bar.setAttribute("role", "region");
+    bar.setAttribute("aria-label", "Edit session");
+    bar.setAttribute("data-bgn-draft-note", m.app);
+    theme(bar);
+    const row = el("div", "bgn-row");
+    const text = el("span", "bgn-sum");
+    const n = plural(st.wishes || 0, "wish", "wishes");
+    if (mode === "protected") {
+      text.append(el("b", "", "This page is protected"), el("span", "", " and is not part of your draft of "), el("code", "", m.app),
+        el("span", "", ": sign-in, pairing, the Shape page, the terminal and accounts are never shaped. A wish made here is filed as a request."));
+    } else {
+      text.append(el("b", "", "This is your current version"), el("span", "", " of " + app + ". Your draft has " + n + " and is not active until you save it."));
+    }
+    const done = action("Done", "", () => {
+      try { sessionStorage.setItem(DRAFT + ".quiet", m.app); } catch (_) {}
+      unpin(bar); bar = null;
+    }, "Hide this note for now");
+    const target = m.app === app && mode !== "protected" ? draftURL() : abs(base + "shape/" + encodeURIComponent(m.app) + "/draft/").href;
+    const resume = action("Resume editing", "bgn-p", () => location.assign(target), "Back into your draft of " + m.app);
+    row.append(text, el("span", "bgn-sp"), done, resume);
+    bar.append(row);
+    pin(bar);
+  }
+
   function start() {
-    if (candidate) reviewBar();
+    if (mode === "draft") draftBar();
+    else if (candidate) reviewBar();
     else {
       const m = marker();
       if (m && (mode === "protected" || (mode === "live" && m.app === app))) noteBar(m);
+      else {
+        const dm = draftMark();
+        let quiet = false;
+        try { quiet = !!dm && sessionStorage.getItem(DRAFT + ".quiet") === dm.app; } catch (_) {}
+        if (dm && !quiet && (mode === "protected" || (mode === "live" && dm.app === app))) {
+          draftState(dm.app).then((st) => { if (st && !bar) draftNoteBar(dm, st); });
+        }
+      }
     }
     placeButton();
   }

@@ -80,7 +80,14 @@
 // verifier first, activation only on pass), Reject and Back, outlines of
 // what differs from the live page, a before/after toggle and the code diff
 // one click away; the Shape page stays the list of all wishes and the
-// version history.
+// version history. The same component is the edit session (shaped_draft.go,
+// S526.B1h): Start editing switches the app to the principal's private
+// draft of their active version, served at /shape/<app>/draft/, with a bar
+// "Editing draft: N wishes · undo · redo · Save · Cancel". Every wish is a
+// stored step on the draft (undo and redo move a cursor, never re-run the
+// agent; a new wish clears the redo list), Save verifies the whole draft
+// once and activates it as one version listing every wish, Cancel discards
+// it, and the draft survives reloads, closed tabs and restarts.
 //
 // # Look settings
 //

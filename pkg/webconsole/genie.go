@@ -66,6 +66,10 @@ const (
 	genieLive      = "live"
 	genieProtected = "protected"
 	geniePreview   = "preview"
+	// genieDraft is the edit session (S526.B1h, shaped_draft.go): the page
+	// is the principal's private draft, the component pins the editing bar
+	// and every wish becomes a step on the draft.
+	genieDraft = "draft"
 
 	// genieConsoleAnchor is where the button goes on the launcher's own
 	// pages when nobody has placed it: inside the header bar, where the
@@ -195,6 +199,8 @@ func genieTagFor(r *http.Request, app, mount string, tree *object.Tree, page, de
 	mode, candidate := genieLive, ""
 	if id, ok := previewOf(r); ok {
 		mode, candidate = geniePreview, id
+	} else if draftOf(r) {
+		mode = genieDraft
 	}
 	return genieTag{
 		Base: launcherBase(r), App: app, Page: page, Mode: mode,
@@ -246,6 +252,20 @@ func withPreview(r *http.Request, id string) *http.Request {
 func previewOf(r *http.Request) (string, bool) {
 	id, ok := r.Context().Value(previewKey{}).(string)
 	return id, ok && id != ""
+}
+
+type draftKey struct{}
+
+// withDraft marks a request as serving the principal's draft (the edit
+// session); the component then pins the editing bar.
+func withDraft(r *http.Request) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), draftKey{}, true))
+}
+
+// draftOf reports whether a request serves the draft.
+func draftOf(r *http.Request) bool {
+	on, ok := r.Context().Value(draftKey{}).(bool)
+	return ok && on
 }
 
 // ---- the asset route ---------------------------------------------------------

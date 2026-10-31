@@ -329,6 +329,10 @@ func parseCoverageSummary(output string) *CoverageSummary {
 type shapeHub struct {
 	mu sync.Mutex
 	wg sync.WaitGroup
+	// saving marks the draft directories a Save is verifying (shaped_draft.go):
+	// no wish, undo, redo or cancel lands on a draft while the verifier
+	// judges it. In-memory on purpose: a crash mid-save leaves no stuck flag.
+	saving map[string]bool
 }
 
 // principalKey is a filesystem-safe, non-reversible directory name: workspace
@@ -768,9 +772,14 @@ func (s *server) handleShapeState(w http.ResponseWriter, r *http.Request) {
 			active = c.Hash.String()
 		}
 	}
+	var draft any
+	if d, _, err := a.loadDraft(principal); err == nil {
+		// The open edit session, so the Shape page can lead back into it.
+		draft = viewDraft(d)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"app": a.name, "principal": principal, "active": active,
-		"candidates": a.listCandidates(principal),
+		"candidates": a.listCandidates(principal), "draft": draft,
 	})
 }
 
@@ -1084,4 +1093,5 @@ func (s *server) shapedRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/shape/{app}/candidates/{id}/approve", s.handleShapeApprove)
 	mux.HandleFunc("POST /api/shape/{app}/candidates/{id}/reject", s.handleShapeReject)
 	s.historyRoutes(mux)
+	s.draftRoutes(mux)
 }

@@ -106,6 +106,32 @@ function render(c) {
   return card;
 }
 
+// renderDraft is the open edit session (S526.B1h): its wishes so far and
+// the way back in. Save and Cancel happen in the app, under the editing bar.
+function renderDraft(d) {
+  const card = el("article", "shape-card shape-draft");
+  card.setAttribute("data-shape-draft", "");
+  const head = el("div", "row");
+  const n = (d.wishes || 0) + " " + (d.wishes === 1 ? "wish" : "wishes");
+  head.append(el("b", "", "Editing draft: " + n), el("span", "spacer"), el("span", "shape-status draft", d.busy ? "working" : "open"));
+  card.append(head);
+  const applied = (d.steps || []).slice(0, d.cursor || 0);
+  const undone = (d.steps || []).length - (d.cursor || 0);
+  const meta = [];
+  if (applied.length) meta.push(applied.map((s, i) => (i + 1) + ". " + s.request).join(" · "));
+  if (undone) meta.push(undone + " undone");
+  if (d.busy && d.running) meta.push("Genie is working on: " + d.running.request);
+  meta.push("private to you; your active version does not change until you save");
+  card.append(el("div", "shape-meta", meta.join(" · ")));
+  const acts = el("div", "row foot");
+  const back = el("a", "btn primary", "Continue editing");
+  back.href = url("shape/" + encodeURIComponent(app) + "/draft/");
+  back.setAttribute("aria-label", "Continue the edit session of " + app + " in place, inside the app");
+  acts.append(el("span", "spacer"), back);
+  card.append(acts);
+  return card;
+}
+
 const short = (s) => (s || "").slice(0, 12);
 
 function historyStatus(msg) {
@@ -235,6 +261,7 @@ async function refresh() {
   $("shape-active").textContent = st.active ? "your version " + st.active.slice(0, 10) : "";
   const list = $("shape-list");
   list.replaceChildren(...(st.candidates || []).sort((a, b) => (a.created < b.created ? 1 : -1)).map(render));
+  if (st.draft) list.prepend(renderDraft(st.draft));
   clearTimeout(polling);
   if ((st.candidates || []).some((c) => c.status === "running")) polling = setTimeout(refresh, 3000);
   refreshHistory();
