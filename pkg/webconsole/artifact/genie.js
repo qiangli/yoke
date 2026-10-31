@@ -457,7 +457,9 @@
     } finally {
       examplesPending = false;
     }
-    if (!examples.length) return;
+    // An empty answer (timeout, failure) is not final: the next open asks
+    // again (the server caches a failure only briefly).
+    if (!examples.length) { examples = null; return; }
     if (overlay && !overlay.hidden) startRotating();
   }
   function showExample(i) {

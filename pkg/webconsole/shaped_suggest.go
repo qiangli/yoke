@@ -49,7 +49,9 @@ import (
 const (
 	// suggestTimeoutDefault bounds one generation when ShapeOptions leaves
 	// SuggestTimeout zero.
-	suggestTimeoutDefault = 10 * time.Second
+	// One short Genie turn over a model door measured ~9 s cold (zoo,
+	// 2026-10-31), so the bound leaves room for the page excerpt.
+	suggestTimeoutDefault = 45 * time.Second
 	// suggestExcerptLimit bounds the static-source excerpt in the brief.
 	suggestExcerptLimit = 6 << 10
 	// suggestListLimit bounds the file listing used when the page itself
