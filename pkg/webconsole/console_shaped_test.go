@@ -238,6 +238,11 @@ func TestConsoleShapedPresentation(t *testing.T) {
 	if got := get(alice, previewPrefix+"shape.js", http.StatusOK).Body.String(); got != embedded("shape.js") {
 		t.Fatal("preview served a non-embedded protected script")
 	}
+	// Links to routes outside the shaped presentation leave the preview for
+	// the live page under the real mount (S526.F3a: the sparkle link 404'd).
+	if w := get(alice, previewPrefix+"shape/"+consoleApp+"/", http.StatusSeeOther); w.Header().Get("Location") != "/cloud/apps/shape/"+consoleApp+"/" {
+		t.Fatalf("preview shape link Location = %q, want the live shape page", w.Header().Get("Location"))
+	}
 	if got := get(bob, previewPrefix, http.StatusNotFound).Body.String(); strings.Contains(got, "ALICE-CANDIDATE") {
 		t.Fatal("bob can preview alice's candidate")
 	}

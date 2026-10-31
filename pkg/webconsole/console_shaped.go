@@ -306,6 +306,13 @@ func consolePreviewPage(rel string) (string, bool) {
 	return rel, false
 }
 
+// previewLeaves names the first path segments a preview hands back to the
+// live console instead of serving from the candidate tree.
+var previewLeaves = map[string]bool{
+	"shape": true, "term": true, "accounts": true, "files": true, "host": true,
+	"loom": true, "meet": true, consoleBaseMount: true, "login": true, "pair": true,
+}
+
 // serveConsolePreview answers one request under /shape/console/preview/<id>/
 // from candidate commit c: pages and assets from the candidate's tree with
 // <base href> at the preview prefix, protected pages and assets from the
@@ -333,6 +340,17 @@ func (s *server) serveConsolePreview(w http.ResponseWriter, r *http.Request, c *
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Routes outside the shaped presentation (the Shape page itself, the
+	// protected and Go-served panels) are not part of a candidate: a link
+	// to one leaves the preview for the live page under the real mount.
+	if previewLeaves[firstSegment("/"+rel)] {
+		dest := coopauth.PrefixPath(r, "/"+rel)
+		if r.URL.RawQuery != "" {
+			dest += "?" + r.URL.RawQuery
+		}
+		http.Redirect(w, r, dest, http.StatusSeeOther)
 		return
 	}
 	name, isPage := consolePreviewPage(rel)
