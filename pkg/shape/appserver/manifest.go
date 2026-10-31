@@ -34,6 +34,9 @@ const File = "shaped.json"
 // Manifest is shaped.json.
 type Manifest struct {
 	Server *Server `json:"server,omitempty"`
+	// Properties are the app's declared stored properties. The trusted
+	// verifier refuses a candidate that removes or renames one.
+	Properties []string `json:"properties,omitempty"`
 }
 
 // Server is the app's declared server.

@@ -52,7 +52,7 @@ import (
 // part of the build id, so every record minted by an older engine goes
 // stale rather than being honoured by a verifier that would now judge
 // differently.
-const engineVersion = "shape-verify/1"
+const engineVersion = "shape-verify/2"
 
 // StagedChecks is the verifier-owned directory, inside the clone, that the
 // frozen check bodies are written to. It is not a candidate path: whatever
@@ -86,6 +86,11 @@ type Options struct {
 	Runner Runner
 	// Timeout caps one check; 2 minutes by default.
 	Timeout time.Duration
+	// Contract lists surface elements (Surface keys, e.g.
+	// "property:title") the user explicitly approved dropping in this
+	// separate contract step. It is supplied by the caller, never read
+	// from the candidate, so a candidate cannot approve its own removals.
+	Contract []string
 	// KeepClone leaves the isolated clone on disk for inspection.
 	KeepClone bool
 }
@@ -203,10 +208,18 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
+	baseSurface, err := ReadSurface(clone)
+	if err != nil {
+		return Report{}, err
+	}
 	if err := detach(clone, o.CandidateSHA); err != nil {
 		return Report{}, err
 	}
 	candidate, err := reader.ReadContract(clone)
+	if err != nil {
+		return Report{}, err
+	}
+	candSurface, err := ReadSurface(clone)
 	if err != nil {
 		return Report{}, err
 	}
@@ -308,6 +321,12 @@ func Run(ctx context.Context, o Options) (Report, error) {
 		})
 	}
 
+	compat := CompareSurface(baseSurface, candSurface, o.Contract)
+	checks = append(checks, compat.Result())
+	if compat.Failed() {
+		allPass = false
+	}
+
 	seen := make([]string, 0, len(observed))
 	for c := range observed {
 		seen = append(seen, c)
@@ -323,6 +342,9 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	reason := ""
 	if !allPass {
 		reason = "not every required check passed"
+	}
+	if compat.Failed() {
+		reason = CompatCheck + ": " + compat.Detail()
 	}
 	return finish(reason, checks, uncalled)
 }
