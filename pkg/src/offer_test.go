@@ -494,3 +494,44 @@ func TestS525A8CLI(t *testing.T) {
 		t.Fatalf("cli decline: %v", err)
 	}
 }
+
+// TestAdoptMergeNeedsNoGitIdentity: a diverged (non-conflicting) adoption
+// merges in a scratch repo; it must not depend on the host user's git
+// identity (S526.B3b: live, a fresh home failed "user identity not
+// configured").
+func TestAdoptMergeNeedsNoGitIdentity(t *testing.T) {
+	empty := t.TempDir()
+	t.Setenv("HOME", empty)
+	t.Setenv("XDG_CONFIG_HOME", empty)
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(empty, "nogitconfig"))
+	home := t.TempDir()
+	appDir, base := setupOfferingFixture(t, home)
+	gate := s525a8Gate()
+
+	// bob's own change, off the base
+	if _, err := ygit.Checkout(ygit.CheckoutOptions{RepoPath: appDir, Branch: "bob-own", Create: true}); err != nil {
+		t.Fatal(err)
+	}
+	s525a8WriteFile(t, appDir, "bob.txt", "bob-own\n")
+	bobRev := s525a8Commit(t, appDir, "bob own")
+	if _, err := src.Activate(home, s525a8App, bobRev, s525a8Bob, src.ActivateOptions{Gate: gate}); err != nil {
+		t.Fatalf("bob activate: %v", err)
+	}
+	// alice's feature, also off the base, touching another file
+	if _, err := ygit.Checkout(ygit.CheckoutOptions{RepoPath: appDir, Branch: "alice-feat", Create: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ygit.Reset(ygit.ResetOpts{RepoPath: appDir, Mode: ygit.ResetHard, Commit: base}); err != nil {
+		t.Fatal(err)
+	}
+	s525a8WriteFile(t, appDir, "feature.txt", "alice-feature\n")
+	s525a8WriteFile(t, appDir, "shape.yaml", s525a8Shape("demo", "v1", s525a8Alice))
+	aliceRev := s525a8Commit(t, appDir, "alice feature")
+	s525a8Release(t, home, aliceRev)
+	if _, err := src.Offer(home, s525a8App, aliceRev, s525a8Alice, src.OfferOptions{To: []string{s525a8Bob}}); err != nil {
+		t.Fatalf("offer: %v", err)
+	}
+	if _, err := src.Adopt(home, s525a8App, "demo", s525a8Bob, src.AdoptOptions{Gate: gate}); err != nil {
+		t.Fatalf("bob adopt (diverged merge, no git identity): %v", err)
+	}
+}

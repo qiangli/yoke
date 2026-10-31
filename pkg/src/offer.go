@@ -497,6 +497,15 @@ func mergeRevisions(home, dir, app, principal, activeSHA, lineTip string, hasLin
 	if err := unlockRepo(scratchDir, app); err != nil {
 		return "", "", false, err
 	}
+	// The scratch merge commits as the adopting principal: a throwaway repo
+	// must not depend on the host user's git identity.
+	if cfg, cerr := rScratch.Config(); cerr == nil {
+		cfg.User.Name = principal
+		cfg.User.Email = principalSlug(principal) + "@bashy.local"
+		if err := rScratch.SetConfig(cfg); err != nil {
+			return "", "", false, fmt.Errorf("src: scratch identity: %w", err)
+		}
+	}
 
 	wt, err := rScratch.Worktree()
 	if err != nil {
