@@ -401,6 +401,35 @@ func TestShapedProductionGates(t *testing.T) {
 		}
 	})
 
+	t.Run("renaming a stored property is refused, add-with-fallback passes", func(t *testing.T) {
+		withProps := func(id, rev string, props string) Candidate {
+			t.Helper()
+			return productionCandidate(t, app, id, rev, func(work string) {
+				if err := os.WriteFile(filepath.Join(work, "shaped.json"), []byte(`{"properties":`+props+`}`+"\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+		declare := withProps("aaaaaaaaaaaaaaa1", stateOf("device:alice").ActiveRevision, `["title"]`)
+		post(alice, "/api/shape/notes/candidates/"+declare.ID+"/approve", http.StatusOK)
+		active := stateOf("device:alice").ActiveRevision
+
+		rename := withProps("aaaaaaaaaaaaaaa2", active, `["heading"]`)
+		body := post(alice, "/api/shape/notes/candidates/"+rename.ID+"/approve", http.StatusConflict)
+		if !strings.Contains(body, "property:title") || !strings.Contains(body, "property:heading") {
+			t.Fatalf("refusal does not name the rename: %s", body)
+		}
+		if got := stateOf("device:alice").ActiveRevision; got != active {
+			t.Fatalf("refused rename moved alice active to %s", got)
+		}
+
+		fallback := withProps("aaaaaaaaaaaaaaa3", active, `["title","heading"]`)
+		post(alice, "/api/shape/notes/candidates/"+fallback.ID+"/approve", http.StatusOK)
+		if got := stateOf("device:alice").ActiveRevision; got != fallback.Rev {
+			t.Fatalf("alice active = %s, want %s", got, fallback.Rev)
+		}
+	})
+
 	t.Run("revoked grant", func(t *testing.T) {
 		existing := productionCandidate(t, app, "5555555555555555", good.Rev, func(work string) {
 			p := filepath.Join(work, "public", "notes.css")
