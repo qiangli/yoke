@@ -1,0 +1,25 @@
+---
+id: b65275088a3e
+kind: feature
+title: S546.1 Signed CUDA Ollama/llama-server runner and persistent gp3 EBS model volume layout
+seq: 2987
+status: todo
+priority: p0
+labels:
+    - cloud
+    - aws
+    - gpu
+    - ollama
+created: 2026-10-30T23:46:49.358342Z
+sprint: 546
+sprint_id: ae111a75-889f-50a4-a423-de1bab0fbca6
+sprint_title: On-demand cloud GPU workers for large/custom Ollama models via Cloudbox and Outpost (AWS EC2 first)
+---
+
+Qualify and wire the permissive-licensed, bashy-built and signed CUDA-enabled Ollama/llama-server runner for Linux x86_64 NVIDIA L4 (g6.xlarge/g6.2xlarge, 24 GB VRAM) and L40S (g6e.xlarge, 48 GB VRAM) per docs/bashy-service-supply-chain-policy.md. Define the persistent AWS EBS gp3 volume layout (<=200 GB per aws-gpu-guard.sh, provisioned throughput up to 1,000 MB/s) mounted at /var/lib/ollama (or /mnt/models) so custom GGUF and Ollama blobs persist across EC2 Stop/Start cycles without re-downloading.
+
+Review 2026-10-30 (operator session, satellite integration): (1) This story IS the open S451.4a (todo 0298aca73fdd, status assigned to claude-sonnet5.5 in done Sprint 451): the latest signed runner qiangli/ollama bashy-v0.21.2-15 has no CUDA backend. Absorb S451.4a here (move it to Sprint 546 or close it as superseded with a link) so one story owns the runner. Same rules: pinned sha256-verified CUDA toolkit as BUILD-ONLY input in bashy CI, SBOM, Sigstore, binmgr verify; driver + CUDA runtime (libcuda, cudart, cuBLAS) are HOST-provided and dynamically loaded, never bundled; fail closed without them; CPU only on explicit selection. (2) Host libs on EC2: use the AWS Deep Learning Base GPU AMI (Ubuntu 24.04, Amazon-built, NVIDIA driver + CUDA runtime preinstalled, no license fee), resolved at plan time via ec2:DescribeImages (owner amazon; the guard grants Describe*, not ssm:GetParameter). It removes the driver install from first boot and satisfies the host-provided rule; operator confirms the AMI choice. (3) Runner = bashy's ONE model server (`bashy ollama serve` / the yoke pkg/broker door), never a second Ollama service on the worker. (4) Model volume: put models on the instance's own gp3 volume created at RunInstances (block-device mapping, <=200 GB); EBS persists across Stop/Start with no extra IAM. A separately created/attached volume (survives terminate, re-attach to another instance type) needs ec2:CreateVolume/AttachVolume/DetachVolume/DeleteVolume, which aws-gpu-guard.sh does NOT grant: guard change first if wanted. (5) Qualification: policy requires a GPU model-load proof on puppy.local before release; a g6.xlarge qualification run instead needs operator approval with type, hourly price ($0.805), duration and cap.
+
+Decision 2026-10-30 (operator-delegated, operator-aws-1030): S451.4a (0298aca73fdd) moved into Sprint 546 as the build-and-sign half (bashy CI recipe, Rule 1 audit, SBOM, Sigstore, binmgr verify, puppy.local CUDA model-load proof per policy; no paid GPU qualification run). S546.1 keeps the AWS half: DLAMI host driver/CUDA qualification, EBS layout, bashy model-server wiring; it depends on S451.4a's signed release. S451.11 stays in Sprint 451 (cross-provider lifecycle policy); S546.4 implements only the AWS on-demand case and cites it.
+
+Manager brief slice 1 (s546-manager, 2026-10-31; operator gap note mb:11253): S546.2 landed (yoke 9c5181e8: pkg/provider/aws/ec2.go adapter `aws-ec2-gpu`, spec.image must be a raw AMI id today). This slice, yoke only, no live AWS: (1) DLAMI resolution inside the EC2 adapter: when spec.image is empty or the alias `dlami-ubuntu-24.04`, OpPlan/OpCreate resolve the newest image via ec2:DescribeImages (Owner=amazon, name filter for the AWS Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 24.04), architecture x86_64, state available; newest CreationDate) and the plan prints the resolved AMI id + name; a raw ami- id still passes through. Extend fakeec2 with DescribeImages (multiple candidates, wrong owner, wrong arch, none found -> fail closed with an actionable message). (2) Model volume layout on the instance's own root gp3 (<=200 GB, block-device mapping, no CreateVolume/AttachVolume): document and encode in the worker user-data the model dir (/var/lib/ollama) and the knob for gp3 throughput (default 125 MB/s, priced in the plan). The signed CUDA runner wiring (bashy's one model server, `bashy ollama serve`) is slice 2 and waits for the S451.4a release. Red first; gate: cd pkg/provider && go test ./... + go vet. No real account ids/IPs/hostnames (OSS).
