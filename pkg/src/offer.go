@@ -1,6 +1,7 @@
 package src
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,7 +15,9 @@ import (
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	ygit "github.com/qiangli/yoke/git"
+	shapegate "github.com/qiangli/yoke/pkg/shape/gate"
 	"github.com/qiangli/yoke/pkg/shape/state"
+	"github.com/qiangli/yoke/pkg/shape/verify"
 )
 
 // Offering records one published host offering for a shaped feature
@@ -45,7 +48,13 @@ type OfferOptions struct {
 // AdoptOptions configures Adopt.
 type AdoptOptions struct {
 	Preview bool
-	Gate    state.ActivationGate
+	// Gate overrides the activation gate. Nil verifies the adopter's own
+	// pair (their active revision -> the merged candidate) and gates on that
+	// fresh evidence, like a sealed restore: the offering's evidence was
+	// minted for the origin's base and cannot bind the adopter's.
+	Gate state.ActivationGate
+	// Runner is the check runner for that verification; nil = production.
+	Runner verify.Runner
 }
 
 // AdoptResult reports the outcome of an Adopt call.
@@ -362,14 +371,6 @@ func Adopt(home, app, offerTarget, principal string, opts AdoptOptions) (AdoptRe
 		}, nil
 	}
 
-	gate := opts.Gate
-	if gate == nil {
-		gate = cliGate
-	}
-	if gate == nil {
-		return AdoptResult{}, fmt.Errorf("src: adopt refused: no activation gate is wired")
-	}
-
 	store, err := state.OpenAt(home, app, principal)
 	if err != nil {
 		return AdoptResult{}, err
@@ -412,6 +413,13 @@ func Adopt(home, app, offerTarget, principal string, opts AdoptOptions) (AdoptRe
 		return AdoptResult{}, err
 	}
 
+	gate := opts.Gate
+	if gate == nil {
+		gate, err = adoptGate(home, dir, principal, oursSHA, candidateSHA, opts.Runner)
+		if err != nil {
+			return AdoptResult{}, err
+		}
+	}
 	actRes, err := Activate(home, app, candidateSHA, principal, ActivateOptions{Gate: gate})
 	if err != nil {
 		return AdoptResult{}, err
@@ -431,6 +439,32 @@ func Adopt(home, app, offerTarget, principal string, opts AdoptOptions) (AdoptRe
 		Activation: actRes.Activation,
 		Previous:   actRes.Previous,
 	}, nil
+}
+
+// adoptGate verifies base -> candidate for the adopting principal in an
+// isolated workspace and returns the gate sealed to that evidence.
+func adoptGate(home, dir, principal, baseSHA, candidateSHA string, runner verify.Runner) (state.ActivationGate, error) {
+	ctx := context.Background()
+	work, err := prepareRestoreWorkspace(ctx, dir, candidateSHA, baseSHA)
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(filepath.Dir(work))
+	report, err := verify.Run(ctx, verify.Options{
+		Home: home, RepoDir: work, BaseSHA: baseSHA,
+		CandidateSHA: candidateSHA, Principal: principal, Runner: runner,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !report.Passed() {
+		reason := strings.TrimSpace(report.Record.Reason)
+		if reason == "" {
+			reason = "the verifier did not pass this offering for you"
+		}
+		return nil, fmt.Errorf("src: adopt refused: %s", reason)
+	}
+	return shapegate.New(home, report.Path), nil
 }
 
 func mergeRevisions(home, dir, app, principal, activeSHA, lineTip string, hasLine bool, targetSHA string) (candidateSHA, reviewRef string, conflict bool, err error) {

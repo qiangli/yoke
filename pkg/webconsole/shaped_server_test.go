@@ -309,3 +309,35 @@ func TestShapedServerInvalidManifestAndManifestless(t *testing.T) {
 		t.Fatalf("a manifest-less app started %d servers", n)
 	}
 }
+
+// TestShapedAdoptVerifiesForTheAdopter: alice's revision carries evidence for
+// alice's base; bob adopting her offering must be verified for bob's own pair,
+// not refused for "record is bound to different inputs" (S526.B3a, found live).
+func TestShapedAdoptVerifiesForTheAdopter(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BASHY_HOME", home)
+	source, _, v1, v2, _ := serverAppSource(t, home)
+	p := serverPanel(source)
+	h := newServerAppHarness(t, home, p)
+	const alice, bob = "device:alice", "device:bob"
+	activateFor(t, home, "serverapp", v1, alice)
+	activateFor(t, home, "serverapp", v2, alice)
+	if _, err := src.Release(home, "serverapp", v1, alice, src.ReleaseOptions{}); err != nil {
+		t.Fatalf("release v1: %v", err)
+	}
+	if _, err := src.Release(home, "serverapp", v2, alice, src.ReleaseOptions{}); err != nil {
+		t.Fatalf("release v2: %v", err)
+	}
+	offer, err := src.Offer(home, "serverapp", v2, alice, src.OfferOptions{To: []string{bob}})
+	if err != nil {
+		t.Fatalf("offer: %v", err)
+	}
+	runner := shapeverify.TrustedRunner{Bin: "/bin/sh", Effects: []string{"read"}}
+	if _, err := src.Adopt(home, "serverapp", offer.ID, bob, src.AdoptOptions{Runner: runner}); err != nil {
+		t.Fatalf("bob adopt: %v", err)
+	}
+	w := h.do(p, bob, http.MethodGet, "/serverapp/", "", nil)
+	if !strings.Contains(w.Body.String(), "version=v2 ") {
+		t.Fatalf("bob after adopt served %q, want v2", w.Body.String())
+	}
+}
