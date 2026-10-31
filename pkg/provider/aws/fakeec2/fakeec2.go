@@ -82,6 +82,19 @@ type fault struct {
 	n    int
 }
 
+// Image is one fake AMI as DescribeImages reports it. OwnerID is a
+// fictitious 12-digit placeholder, never a real account: matching in
+// tests keys on OwnerAlias ("amazon" for AWS-owned images).
+type Image struct {
+	ID           string
+	Name         string
+	OwnerAlias   string
+	OwnerID      string
+	Arch         string
+	State        string
+	CreationDate string
+}
+
 // Instance is the fake's view of one worker.
 type Instance struct {
 	ID               string
@@ -123,6 +136,8 @@ type Server struct {
 	instances map[string]*Instance
 	byToken   map[string]string
 	faults    map[string]*fault
+	// images is what DescribeImages answers, in no particular order.
+	images []Image
 	// quotas is what GetServiceQuota answers, keyed by quota code.
 	// It starts with headroom for one 8-vCPU worker (the approved
 	// state); a test reproduces the PENDING quota with SetQuota(..., 0).
@@ -158,6 +173,7 @@ func New(t *testing.T) *Server {
 		faults:    map[string]*fault{},
 		quotas:    map[string]float64{aws.QuotaRunningOnDemandG: 8},
 		objects:   map[string]*S3Object{},
+		images:    defaultImages(),
 		calls:     map[string]int{},
 		scopes:    map[string]string{},
 		next:      0,
@@ -184,6 +200,48 @@ func (s *Server) SetStuck(stuck bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.stuck = stuck
+}
+
+// fakeAmazonOwnerID is the fictitious owner id carried by
+// AWS-owned images in the default seed. It is all zeros on purpose:
+// no real account id may appear in the open-source tree.
+const fakeAmazonOwnerID = "000000000000"
+
+// dlamiName is the fake's copy of the AWS Deep Learning Base OSS
+// Nvidia Driver GPU AMI (Ubuntu 24.04) name stem the adapter resolves.
+const dlamiName = "Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 24.04)"
+
+// defaultImages seeds what DescribeImages answers: two dated DLAMI
+// candidates (the newer must win), plus one decoy each for the
+// filters the adapter applies client-side — a same-name image owned
+// by someone else, one built for the wrong architecture, and one
+// that is not yet available.
+func defaultImages() []Image {
+	return []Image{
+		{ID: "ami-fakedlami00000001", Name: dlamiName + " 20251001",
+			OwnerAlias: "amazon", OwnerID: fakeAmazonOwnerID,
+			Arch: "x86_64", State: "available", CreationDate: "2025-10-01T00:00:00.000Z"},
+		{ID: "ami-fakedlami00000002", Name: dlamiName + " 20251029",
+			OwnerAlias: "amazon", OwnerID: fakeAmazonOwnerID,
+			Arch: "x86_64", State: "available", CreationDate: "2025-10-29T00:00:00.000Z"},
+		{ID: "ami-fakedlami00000003", Name: dlamiName + " 20251029",
+			OwnerAlias: "", OwnerID: fakelightsail.TestAccountID,
+			Arch: "x86_64", State: "available", CreationDate: "2025-10-30T00:00:00.000Z"},
+		{ID: "ami-fakedlami00000004", Name: dlamiName + " 20251030",
+			OwnerAlias: "amazon", OwnerID: fakeAmazonOwnerID,
+			Arch: "arm64", State: "available", CreationDate: "2025-10-30T00:00:00.000Z"},
+		{ID: "ami-fakedlami00000005", Name: dlamiName + " 20251030",
+			OwnerAlias: "amazon", OwnerID: fakeAmazonOwnerID,
+			Arch: "x86_64", State: "pending", CreationDate: "2025-10-30T00:00:00.000Z"},
+	}
+}
+
+// SetImages replaces what DescribeImages answers. An empty slice
+// means no image matches anything: the adapter must fail closed.
+func (s *Server) SetImages(images []Image) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.images = append([]Image(nil), images...)
 }
 
 // Inject arms a fault on the next n calls to action (e.g.
@@ -441,6 +499,11 @@ func (s *Server) replyEC2(w http.ResponseWriter, action string, form url.Values)
 			return
 		}
 		writeXML(w, http.StatusOK, docs)
+	case "DescribeImages":
+		s.mu.Lock()
+		images := append([]Image(nil), s.images...)
+		s.mu.Unlock()
+		writeXML(w, http.StatusOK, imagesDoc(form, images))
 	case "StartInstances", "StopInstances", "TerminateInstances":
 		id := form.Get("InstanceId.1")
 		s.mu.Lock()
@@ -461,7 +524,7 @@ func (s *Server) replyEC2(w http.ResponseWriter, action string, form url.Values)
 // written by replyEC2.
 func (s *Server) dispatchEC2(action string, form url.Values) (bool, *ec2Failure) {
 	switch action {
-	case "RunInstances", "DescribeInstances", "StartInstances", "StopInstances", "TerminateInstances":
+	case "RunInstances", "DescribeInstances", "DescribeImages", "StartInstances", "StopInstances", "TerminateInstances":
 	default:
 		return false, nil
 	}
@@ -702,6 +765,114 @@ func stateChangeDoc(action string, in *Instance) string {
 		`<instanceId>` + xmlEscape(in.ID) + `</instanceId>` +
 		`<currentState><code>` + strconv.Itoa(stateCode(in.State)) + `</code><name>` + xmlEscape(in.State) + `</name></currentState>` +
 		`</item></instancesSet></` + root + `>`
+}
+
+// imagesDoc renders DescribeImages, honoring Owner.N and the name,
+// architecture, state, owner-alias and owner-id filters the way the
+// real API does: every value of one filter is OR'd, different
+// filters are AND'd.
+func imagesDoc(form url.Values, images []Image) string {
+	var b strings.Builder
+	b.WriteString(`<DescribeImagesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">`)
+	b.WriteString(`<requestId>req-fake</requestId><imagesSet>`)
+	for _, im := range images {
+		if !matchImage(im, form) {
+			continue
+		}
+		fmt.Fprintf(&b, `<item><imageId>%s</imageId>`, xmlEscape(im.ID))
+		fmt.Fprintf(&b, `<imageLocation>%s/%s</imageLocation>`, xmlEscape(im.OwnerAlias), xmlEscape(im.Name))
+		fmt.Fprintf(&b, `<imageState>%s</imageState>`, xmlEscape(im.State))
+		fmt.Fprintf(&b, `<imageOwnerId>%s</imageOwnerId>`, xmlEscape(im.OwnerID))
+		if im.OwnerAlias != "" {
+			fmt.Fprintf(&b, `<imageOwnerAlias>%s</imageOwnerAlias>`, xmlEscape(im.OwnerAlias))
+		}
+		b.WriteString(`<isPublic>true</isPublic>`)
+		fmt.Fprintf(&b, `<architecture>%s</architecture>`, xmlEscape(im.Arch))
+		fmt.Fprintf(&b, `<name>%s</name>`, xmlEscape(im.Name))
+		fmt.Fprintf(&b, `<creationDate>%s</creationDate>`, xmlEscape(im.CreationDate))
+		b.WriteString(`</item>`)
+	}
+	b.WriteString(`</imagesSet></DescribeImagesResponse>`)
+	return b.String()
+}
+
+// matchImage reports whether im satisfies every Owner.N and
+// Filter.N in a DescribeImages form.
+func matchImage(im Image, form url.Values) bool {
+	for i := 1; ; i++ {
+		o := form.Get(fmt.Sprintf("Owner.%d", i))
+		if o == "" {
+			break
+		}
+		if o != im.OwnerAlias && o != im.OwnerID {
+			return false
+		}
+	}
+	for i := 1; ; i++ {
+		name := form.Get(fmt.Sprintf("Filter.%d.Name", i))
+		if name == "" {
+			break
+		}
+		var values []string
+		for j := 1; ; j++ {
+			v := form.Get(fmt.Sprintf("Filter.%d.Value.%d", i, j))
+			if v == "" {
+				break
+			}
+			values = append(values, v)
+		}
+		matched := false
+		for _, v := range values {
+			switch name {
+			case "name":
+				matched = wildcard(v, im.Name)
+			case "architecture":
+				matched = v == im.Arch
+			case "state":
+				matched = v == im.State
+			case "owner-alias":
+				matched = v == im.OwnerAlias
+			case "owner-id":
+				matched = v == im.OwnerID
+			default:
+				// An unknown filter matches nothing: like the real
+				// API's InvalidParameterValue, but answer-shaped.
+				matched = false
+			}
+			if matched {
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+// wildcard matches s against a pattern where "*" matches any run of
+// characters, the way EC2 name filters treat it.
+func wildcard(pattern, s string) bool {
+	if pattern == "*" || pattern == "" {
+		return true
+	}
+	parts := strings.Split(pattern, "*")
+	if len(parts) == 1 {
+		return s == pattern
+	}
+	rest := s
+	if !strings.HasPrefix(rest, parts[0]) {
+		return false
+	}
+	rest = rest[len(parts[0]):]
+	for _, p := range parts[1 : len(parts)-1] {
+		i := strings.Index(rest, p)
+		if i < 0 {
+			return false
+		}
+		rest = rest[i+len(p):]
+	}
+	return strings.HasSuffix(rest, parts[len(parts)-1])
 }
 
 // describeDoc renders DescribeInstances: one reservation per worker

@@ -25,6 +25,19 @@
 //     groups (the default SG is egress-only; the worker dials out),
 //     volumes (no CreateVolume/AttachVolume) or spot (no market
 //     options).
+//   - The host image resolves at plan time (S546.1): an empty
+//     spec.image or the dlami-ubuntu-24.04 alias resolves the newest
+//     AWS Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu
+//     24.04) via DescribeImages (Owner=amazon, x86_64, available,
+//     newest CreationDate) — driver plus CUDA runtime preinstalled,
+//     no license fee, no driver install on first boot; a raw ami- id
+//     passes through untouched. No match fails closed.
+//   - Models live in /var/lib/ollama on the worker's OWN gp3 root
+//     volume (the block-device mapping at launch, <= 200 GB): EBS
+//     persists across Stop/Start, so blobs survive a stop without
+//     re-downloading, and terminate deletes the volume with the
+//     worker. There is deliberately no second volume: the guard
+//     grants no CreateVolume/AttachVolume.
 //   - Create runs TWO money preflights plus a quota preflight
 //     (ec2budget.go): the hourly session model against
 //     dhnt-monthly-cap, the session cost against dhnt-gpu-daily, and
@@ -177,6 +190,36 @@ const (
 	DefaultGPUMonthlyCapUSD = 400.0
 	// DailyBudgetName is the AWS Budget the daily preflight reads.
 	DailyBudgetName = "dhnt-gpu-daily"
+)
+
+// Host image and model layout (S546.1).
+const (
+	// DLAMIImageAlias is the spec.image value that resolves the AWS
+	// Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 24.04)
+	// at plan time. An empty spec.image means the same.
+	DLAMIImageAlias = "dlami-ubuntu-24.04"
+	// DLAMIOwner is the DescribeImages owner the DLAMI resolves
+	// under: an Amazon-built image (no license fee) with the NVIDIA
+	// driver plus CUDA runtime preinstalled. The automation guard
+	// grants ec2:Describe*, not ssm:GetParameter, so resolution
+	// goes through DescribeImages, never SSM public parameters.
+	DLAMIOwner = "amazon"
+	// DLAMINameStem is the DLAMI name up to the date suffix, e.g.
+	// "... (Ubuntu 24.04) 20251029". The DescribeImages name filter
+	// is the stem plus "*".
+	DLAMINameStem = "Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 24.04)"
+	// ModelDir is where the worker keeps model weights: the Ollama
+	// default on the worker's own gp3 root volume (the
+	// block-device mapping at launch, within the 200 GB IAM
+	// ceiling). EBS persists across Stop/Start, so custom GGUF and
+	// Ollama blobs survive a stop without re-downloading;
+	// terminate deletes the volume with the worker. The worker's
+	// first-boot script must point the model server here
+	// (OLLAMA_MODELS) rather than anywhere ephemeral. There is
+	// deliberately no second volume on this path: the guard grants
+	// no CreateVolume/AttachVolume/DetachVolume (a guard change
+	// first if a re-attachable data volume is ever wanted).
+	ModelDir = "/var/lib/ollama"
 )
 
 // ebsMonthly prices one gp3 volume for a month: size plus provisioned
@@ -504,15 +547,17 @@ func addEC2Tags(p url.Values, n int, resourceType string, flat []string) {
 }
 
 // resolveGPUSpec validates the create/plan spec: the region must be the
-// pinned one, the size must be on the allowlist, and the image must be
-// an AMI id. Everything decidable without asking AWS is decided here,
-// so a refused spec costs no API calls.
+// pinned one and the size must be on the allowlist. The image is
+// validated but not resolved here: empty and the DLAMI alias resolve
+// through DescribeImages later, a raw ami- id passes through, and
+// anything else is refused. Everything decidable without asking AWS
+// is decided here, so a refused spec costs no API calls.
 func (e *ec2Adapter) resolveGPUSpec(req provider.Request) (gpuType, *provider.Error) {
 	s := req.Spec
-	if s == nil || s.Region == "" || s.Size == "" || s.Image == "" {
+	if s == nil || s.Region == "" || s.Size == "" {
 		return gpuType{}, &provider.Error{Code: provider.ErrInvalidRequest,
-			Message: fmt.Sprintf("aws-ec2-gpu: %s needs spec.region (%s), spec.size (one of %s) and spec.image (an AMI id)",
-				req.Op, EC2Region, strings.Join(gpuTypeNames(), ", "))}
+			Message: fmt.Sprintf("aws-ec2-gpu: %s needs spec.region (%s) and spec.size (one of %s); spec.image is an AMI id, %q, or empty for the DLAMI",
+				req.Op, EC2Region, strings.Join(gpuTypeNames(), ", "), DLAMIImageAlias)}
 	}
 	if s.Region != EC2Region {
 		return gpuType{}, &provider.Error{Code: provider.ErrInvalidRequest,
@@ -525,11 +570,104 @@ func (e *ec2Adapter) resolveGPUSpec(req provider.Request) (gpuType, *provider.Er
 			Message: fmt.Sprintf("aws-ec2-gpu: instance type %q is not on the dhnt-automation-ec2-gpu allowlist (%s)",
 				s.Size, strings.Join(gpuTypeNames(), ", "))}
 	}
-	if !strings.HasPrefix(s.Image, "ami-") {
+	if s.Image != "" && s.Image != DLAMIImageAlias && !strings.HasPrefix(s.Image, "ami-") {
 		return gpuType{}, &provider.Error{Code: provider.ErrInvalidRequest,
-			Message: fmt.Sprintf("aws-ec2-gpu: spec.image %q is not an AMI id", s.Image)}
+			Message: fmt.Sprintf("aws-ec2-gpu: spec.image %q is not an AMI id or %q (empty means the DLAMI too)", s.Image, DLAMIImageAlias)}
 	}
 	return t, nil
+}
+
+// ec2Image is one AMI as DescribeImages reports it: only the fields
+// image resolution reads.
+type ec2Image struct {
+	ID           string `xml:"imageId"`
+	Name         string `xml:"name"`
+	State        string `xml:"imageState"`
+	Arch         string `xml:"architecture"`
+	OwnerAlias   string `xml:"imageOwnerAlias"`
+	OwnerID      string `xml:"imageOwnerId"`
+	CreationDate string `xml:"creationDate"`
+}
+
+type describeImagesResp struct {
+	XMLName xml.Name   `xml:"DescribeImagesResponse"`
+	Images  []ec2Image `xml:"imagesSet>item"`
+}
+
+// resolvedImage is a launch image: the AMI id plus, when it was
+// resolved rather than passed through, the AMI name the plan prints.
+type resolvedImage struct {
+	id, name string
+}
+
+// addImageFilter encodes one DescribeImages Filter.N (name plus a
+// single value) into the request form.
+func addImageFilter(p url.Values, n int, name, value string) {
+	p.Set(fmt.Sprintf("Filter.%d.Name", n), name)
+	p.Set(fmt.Sprintf("Filter.%d.Value.1", n), value)
+}
+
+// resolveImage settles spec.image into a launch AMI. A raw ami- id
+// passes through untouched, with no DescribeImages call. An empty
+// image or the DLAMI alias resolves the newest AWS Deep Learning
+// Base OSS Nvidia Driver GPU AMI (Ubuntu 24.04): Owner=amazon,
+// architecture x86_64, state available, newest CreationDate.
+//
+// The server-side filters should already hold; every candidate is
+// re-checked client-side anyway, so a foreign, wrong-arch or
+// unavailable image that slipped through is never launched — and an
+// empty answer fails closed with what was searched and the explicit
+// ami- escape hatch.
+func (e *ec2Adapter) resolveImage(ctx context.Context, image string) (resolvedImage, *provider.Error) {
+	if strings.HasPrefix(image, "ami-") {
+		return resolvedImage{id: image}, nil
+	}
+	p := url.Values{}
+	p.Set("Owner.1", DLAMIOwner)
+	addImageFilter(p, 1, "name", DLAMINameStem+"*")
+	addImageFilter(p, 2, "architecture", ArchX8664)
+	addImageFilter(p, 3, "state", "available")
+	var out describeImagesResp
+	if err := e.ec2.callWith(ctx, "DescribeImages", p, &out); err != nil {
+		pe := normalize(err)
+		return resolvedImage{}, &provider.Error{Code: pe.Code, Retryable: pe.Retryable, Message: fmt.Sprintf(
+			"aws-ec2-gpu: resolving the Deep Learning Base GPU AMI (Ubuntu 24.04) via DescribeImages: %s", pe.Message)}
+	}
+	best := -1
+	for i := range out.Images {
+		im := &out.Images[i]
+		if im.ID == "" || im.OwnerAlias != DLAMIOwner {
+			continue
+		}
+		if im.Arch != ArchX8664 || im.State != "available" {
+			continue
+		}
+		if !strings.HasPrefix(im.Name, DLAMINameStem) {
+			continue
+		}
+		if best < 0 || imageNewer(out.Images[best].CreationDate, im.CreationDate) {
+			best = i
+		}
+	}
+	if best < 0 {
+		return resolvedImage{}, &provider.Error{Code: provider.ErrInvalidRequest, Message: fmt.Sprintf(
+			"aws-ec2-gpu: no image matched the AWS Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 24.04) "+
+				"(DescribeImages Owner=%s, name %q, architecture %s, state available); pass an explicit AMI id as spec.image (a previous plan's image_id)",
+			DLAMIOwner, DLAMINameStem+"*", ArchX8664)}
+	}
+	return resolvedImage{id: out.Images[best].ID, name: out.Images[best].Name}, nil
+}
+
+// imageNewer reports whether b is a later CreationDate than a. Dates
+// that do not parse as RFC3339 fall back to a string comparison, so
+// one oddly formatted candidate cannot hide a good one.
+func imageNewer(a, b string) bool {
+	ta, aerr := time.Parse(time.RFC3339, a)
+	tb, berr := time.Parse(time.RFC3339, b)
+	if aerr == nil && berr == nil {
+		return tb.After(ta)
+	}
+	return b > a
 }
 
 // ---- EC2 reads ----
@@ -767,21 +905,32 @@ func (e *ec2Adapter) capacity(ctx context.Context, req provider.Request) (provid
 // would do, what it would cost by the hour, and what the three
 // preflights decide about it.
 type GPUPlan struct {
-	Provider         string   `json:"provider"`
-	Name             string   `json:"name"`
-	Region           string   `json:"region"`
-	AvailabilityZone string   `json:"availability_zone"`
-	InstanceType     string   `json:"instance_type"`
-	ImageID          string   `json:"image_id"`
-	Arch             string   `json:"arch"`
-	Tags             []string `json:"tags"`
-	PriceHourlyUSD   float64  `json:"price_hourly_usd"`
-	SessionHours     float64  `json:"session_hours"`
-	SessionCostUSD   float64  `json:"session_cost_usd"`
-	VolumeGB         int      `json:"volume_gb"`
-	VolumeType       string   `json:"volume_type"`
-	ThroughputMBs    int      `json:"throughput_mbs"`
-	EBSMonthlyUSD    float64  `json:"ebs_monthly_usd"`
+	Provider         string `json:"provider"`
+	Name             string `json:"name"`
+	Region           string `json:"region"`
+	AvailabilityZone string `json:"availability_zone"`
+	InstanceType     string `json:"instance_type"`
+	ImageID          string `json:"image_id"`
+	// ImageName is the resolved AMI's name. It is set only when the
+	// image was resolved (empty spec.image or the DLAMI alias); a
+	// raw ami- id passes through with no name to print.
+	ImageName      string   `json:"image_name,omitempty"`
+	Arch           string   `json:"arch"`
+	Tags           []string `json:"tags"`
+	PriceHourlyUSD float64  `json:"price_hourly_usd"`
+	SessionHours   float64  `json:"session_hours"`
+	SessionCostUSD float64  `json:"session_cost_usd"`
+	VolumeGB       int      `json:"volume_gb"`
+	VolumeType     string   `json:"volume_type"`
+	// ThroughputMBs is the provisioned gp3 throughput knob: 125 by
+	// default (the free baseline), up to 1000, priced into
+	// EBSMonthlyUSD even while the worker is stopped.
+	ThroughputMBs int `json:"throughput_mbs"`
+	// ModelDir is where model weights live on the worker: ModelDir
+	// (/var/lib/ollama) on this same gp3 volume, persisting across
+	// Stop/Start and deleted with the worker on terminate.
+	ModelDir      string  `json:"model_dir"`
+	EBSMonthlyUSD float64 `json:"ebs_monthly_usd"`
 	// PublicIPv4HourlyUSD is billed only while the worker runs; the
 	// address is released on stop, so a stopped worker pays none of it.
 	PublicIPv4HourlyUSD float64      `json:"public_ipv4_hourly_usd"`
@@ -801,6 +950,12 @@ func (e *ec2Adapter) plan(ctx context.Context, req provider.Request) (provider.R
 	if pe != nil {
 		return provider.Result{ProtocolVersion: provider.ProtocolVersion, Op: req.Op, Error: pe}, pe
 	}
+	// The image resolves before anything is rendered, so the plan
+	// prints the AMI id the create would launch.
+	ri, rie := e.resolveImage(ctx, req.Spec.Image)
+	if rie != nil {
+		return provider.Result{ProtocolVersion: provider.ProtocolVersion, Op: req.Op, Error: rie}, rie
+	}
 	name := instanceName(req)
 	// A plan STAGES NOTHING: it renders what the create would send,
 	// so a --dry-run reports the real inline size and the bucket it
@@ -812,7 +967,7 @@ func (e *ec2Adapter) plan(ctx context.Context, req provider.Request) (provider.R
 	p := GPUPlan{
 		Provider: EC2Name, Name: name,
 		Region: EC2Region, AvailabilityZone: e.cfg.AvailabilityZone,
-		InstanceType: req.Spec.Size, ImageID: req.Spec.Image, Arch: ArchX8664,
+		InstanceType: req.Spec.Size, ImageID: ri.id, ImageName: ri.name, Arch: ArchX8664,
 		Tags:                e.createTags(req, ud.Key),
 		PriceHourlyUSD:      t.hourlyUSD,
 		SessionHours:        e.gpu.hours,
@@ -820,6 +975,7 @@ func (e *ec2Adapter) plan(ctx context.Context, req provider.Request) (provider.R
 		VolumeGB:            e.gpu.volumeGB,
 		VolumeType:          "gp3",
 		ThroughputMBs:       e.gpu.throughput,
+		ModelDir:            ModelDir,
 		EBSMonthlyUSD:       ebsMonthly(e.gpu.volumeGB, e.gpu.throughput),
 		PublicIPv4HourlyUSD: PublicIPv4HourUSD,
 		ShutdownBehavior:    "stop",
@@ -863,6 +1019,12 @@ func (e *ec2Adapter) create(ctx context.Context, req provider.Request) (provider
 	if pe != nil {
 		return provider.Result{ProtocolVersion: provider.ProtocolVersion, Op: req.Op, Error: pe}, pe
 	}
+	// The image resolves before the preflights: an unresolvable
+	// image refuses before any budget or quota read.
+	ri, rie := e.resolveImage(ctx, req.Spec.Image)
+	if rie != nil {
+		return provider.Result{ProtocolVersion: provider.ProtocolVersion, Op: req.Op, Error: rie}, rie
+	}
 	if _, be := e.gpuPreflight(ctx, t, req.Spec.Size); be != nil {
 		return provider.Result{ProtocolVersion: provider.ProtocolVersion, Op: req.Op, Error: be}, be
 	}
@@ -874,7 +1036,7 @@ func (e *ec2Adapter) create(ctx context.Context, req provider.Request) (provider
 		return fail(req.Op, uerr)
 	}
 	p := url.Values{}
-	p.Set("ImageId", req.Spec.Image)
+	p.Set("ImageId", ri.id)
 	p.Set("InstanceType", req.Spec.Size)
 	p.Set("MinCount", "1")
 	p.Set("MaxCount", "1")
