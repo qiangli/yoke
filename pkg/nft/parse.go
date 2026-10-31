@@ -22,6 +22,9 @@ type Command struct {
 	Counter      *CounterSpec
 	Elements     []rawElement // element commands
 	RuleToks     []token      // rule commands
+	JSONExpr     []byte
+	Handle       uint64
+	Insert       bool
 }
 
 // rawElement is an element before encoding (encoding needs the set's types).
@@ -114,6 +117,14 @@ func parseCommand(t []token) (*Command, error) {
 		c.Elements = els
 		return c, err
 	case "rule":
+		if c.Verb == "delete" && len(rest) == 2 && rest[0].is("handle") {
+			h, err := strconv.ParseUint(rest[1].val, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid rule handle %q", rest[1].val)
+			}
+			c.Handle = h
+			return c, nil
+		}
 		if c.Verb != "add" {
 			return nil, fmt.Errorf("unsupported command: %s rule", c.Verb)
 		}

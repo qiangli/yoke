@@ -1,9 +1,9 @@
-// Package nftcmd implements nft(8) for the subset sigs.k8s.io/knftables
-// drives — kube-proxy's nftables mode and flannel's nftables traffic
-// manager — over github.com/google/nftables (pkg/nft):
+// Package nftcmd implements nft(8) for the subsets driven by knftables
+// (kube-proxy and flannel) and netavark, over github.com/google/nftables:
 //
 //	nft --version
 //	nft [--check] -f FILE|-               (one atomic transaction)
+//	nft -j -f FILE|-                      (netavark JSON transaction)
 //	nft [--check] COMMAND...              (same language, as operands)
 //	nft --json [--terse] list table|chain|set|map|counters ...
 //
@@ -15,8 +15,10 @@
 package nftcmd
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/qiangli/coreutils/tool"
@@ -25,14 +27,28 @@ import (
 
 var cmd = &tool.Tool{
 	Name:     "nft",
-	Synopsis: "Apply and list nftables rules (the knftables subset; pure Go, netlink).",
+	Synopsis: "Apply and list nftables rules (knftables and netavark subsets; pure Go, netlink).",
 	Usage: "nft [-c] -f FILE|-\n   or: nft [-c] COMMAND...\n" +
 		"   or: nft -j [-t] list table [FAMILY] TABLE\n" +
 		"   or: nft -j list chain|set|map [FAMILY] TABLE NAME\n" +
 		"   or: nft -j list counters table [FAMILY] TABLE\n   or: nft -v",
 }
 
-func init() { cmd.Run = run; tool.Register(cmd) }
+func init() { cmd.Run = run }
+
+// Register exposes nft as a general command only in the DKS runtime build.
+func Register() { tool.Register(cmd) }
+
+// RunHelper is the private netavark entry point used by embedded Podman.
+func RunHelper(args []string) int {
+	dir, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, FS: tool.NewLocalFS(), Stdio: tool.Stdio{In: os.Stdin, Out: os.Stdout, Err: os.Stderr}}
+	return run(rc, args)
+}
 
 // newBackend is swapped by tests for an in-memory backend.
 var newBackend = nft.NewNetlink
@@ -77,6 +93,18 @@ func run(rc *tool.RunContext, args []string) int {
 		if err != nil {
 			fmt.Fprintf(rc.Err, "Error: %v\n", err)
 			return 1
+		}
+		if *jsonOut && strings.HasPrefix(strings.TrimSpace(string(script)), "{") {
+			b, err := newBackend()
+			if err != nil {
+				fmt.Fprintf(rc.Err, "Error: %v\n", err)
+				return 1
+			}
+			if err := nft.RunJSON(b, script, *check); err != nil {
+				fmt.Fprintln(rc.Err, nft.ErrorText(err))
+				return 1
+			}
+			return 0
 		}
 		return apply(rc, string(script), *check)
 	}

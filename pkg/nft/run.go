@@ -27,6 +27,7 @@ type Backend interface {
 	AddElements(s *SetSpec, els []Element)
 	DelElements(s *SetSpec, els []Element)
 	AddRule(r *RuleSpec)
+	InsertRule(r *RuleSpec)
 	DelRule(fam Family, table, chain string, handle uint64)
 	AddCounter(c *CounterSpec, create bool)
 	DelCounter(fam Family, table, name string)
@@ -58,6 +59,10 @@ func Run(b Backend, script string, check bool) error {
 	if err != nil {
 		return err
 	}
+	return runCommands(b, cmds, check)
+}
+
+func runCommands(b Backend, cmds []*Command, check bool) error {
 	pending := map[setKey]*SetSpec{}
 	deleted := map[setKey]bool{}
 	lookup := func(fam Family, table, name string) (*SetSpec, error) {
@@ -175,6 +180,12 @@ func apply(w Backend, c *Command, pending map[setKey]*SetSpec, deleted map[setKe
 			}
 		}
 	case "rule":
+		if c.Verb == "delete" {
+			if w != nil {
+				w.DelRule(c.Family, c.Table, c.Name, c.Handle)
+			}
+			return nil
+		}
 		r, err := CompileRule(c.Family, c.Table, c.Name, c.RuleToks, func(name string) (*SetSpec, error) {
 			return lookup(c.Family, c.Table, name)
 		})
@@ -182,7 +193,12 @@ func apply(w Backend, c *Command, pending map[setKey]*SetSpec, deleted map[setKe
 			return err
 		}
 		if w != nil {
-			w.AddRule(r)
+			r.JSONExpr = c.JSONExpr
+			if c.Insert {
+				w.InsertRule(r)
+			} else {
+				w.AddRule(r)
+			}
 		}
 	}
 	return nil

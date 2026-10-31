@@ -57,9 +57,6 @@ func CompileRuleText(fam Family, table, chain, text string, sets SetLookup) (*Ru
 
 // CompileRule compiles the text of one rule (everything after the chain name).
 func CompileRule(fam Family, table, chain string, toks []token, sets SetLookup) (*RuleSpec, error) {
-	if fam == FamilyInet {
-		return nil, fmt.Errorf("unsupported: rules in inet tables")
-	}
 	c := &compiler{fam: fam, t: toks, r: &RuleSpec{Family: fam, Table: table, Chain: chain}, sets: sets}
 	for !c.eof() {
 		if err := c.statement(); err != nil {
@@ -166,7 +163,7 @@ func (c *compiler) statement() error {
 		return c.nat()
 	case t.is("update"), t.is("add") && c.at(1).is("@"):
 		return c.dynset()
-	case (t.is("mark") || (t.is("meta") && c.at(1).is("mark"))) && (c.at(1).is("set") || c.at(2).is("set")):
+	case (t.is("mark") || ((t.is("meta") || t.is("ct")) && c.at(1).is("mark"))) && (c.at(1).is("set") || c.at(2).is("set")):
 		return c.markSet()
 	}
 	return c.match()
@@ -182,7 +179,7 @@ func (c *compiler) selector() (*selector, error) {
 		if !field.is("saddr") && !field.is("daddr") {
 			return nil, nil
 		}
-		if fam != c.fam {
+		if fam != c.fam && c.fam != FamilyInet {
 			return nil, fmt.Errorf("%s %s is not valid in a %s table", t.val, field.val, c.fam)
 		}
 		c.pos += 2
@@ -244,6 +241,9 @@ func (c *compiler) selector() (*selector, error) {
 			vals = map[string]uint32{"invalid": 1, "established": 2, "related": 4, "new": 8, "untracked": 64}
 		case "status":
 			vals = map[string]uint32{"expected": 1, "seen-reply": 2, "assured": 4, "confirmed": 8, "snat": 16, "dnat": 32, "dying": 512}
+		case "mark":
+			c.pos += 2
+			return &selector{name: "ct mark", typ: dataTypes["mark"], load: func(r uint32) []Expr { return []Expr{Ct{Key: "mark", DReg: r}} }}, nil
 		default:
 			return nil, fmt.Errorf("unsupported: ct %s", key)
 		}
@@ -624,13 +624,18 @@ func (c *compiler) addrType() DataType {
 //	dnat|snat ip|ip6 addr . port to numgen random mod N map { K : ADDR . PORT, ... }
 func (c *compiler) nat() error {
 	typ := c.next().val
+	natFam := c.fam
 	if c.peek().is("ip") || c.peek().is("ip6") {
-		if Family(c.peek().val) != c.fam {
+		if Family(c.peek().val) != c.fam && c.fam != FamilyInet {
 			return fmt.Errorf("%s %s is not valid in a %s table", typ, c.peek().val, c.fam)
 		}
+		natFam = Family(c.peek().val)
 		c.next()
 	}
 	at := c.addrType()
+	if natFam == FamilyIP6 {
+		at = dataTypes["ipv6_addr"]
+	}
 	if c.peek().is("addr") {
 		if err := c.expect("addr", ".", "port", "to"); err != nil {
 			return err
@@ -676,13 +681,13 @@ func (c *compiler) nat() error {
 		}
 		c.r.AnonSets = append(c.r.AnonSets, &AnonSet{Spec: spec, Elements: elems})
 		c.emit(Lookup{SReg: reg1, DReg: reg1, HasDReg: true, Anon: len(c.r.AnonSets) - 1},
-			Nat{Type: typ, Family: c.fam, RegAddr: reg1, RegProto: regAt(padLen(at.Len))})
+			Nat{Type: typ, Family: natFam, RegAddr: reg1, RegProto: regAt(padLen(at.Len))})
 		return nil
 	}
 	if err := c.expect("to"); err != nil {
 		return err
 	}
-	addr, port, err := splitHostPort(c.next().val, c.fam)
+	addr, port, err := splitHostPort(c.next().val, natFam)
 	if err != nil {
 		return err
 	}
@@ -691,7 +696,7 @@ func (c *compiler) nat() error {
 		return fmt.Errorf("bad %s address %q", typ, addr)
 	}
 	c.emit(Immediate{DReg: reg1, Data: ab})
-	n := Nat{Type: typ, Family: c.fam, RegAddr: reg1}
+	n := Nat{Type: typ, Family: natFam, RegAddr: reg1}
 	if port != "" {
 		pb, _, err := encodeValue(dataTypes["inet_service"], port)
 		if err != nil {
@@ -758,17 +763,20 @@ func (c *compiler) dynset() error {
 
 // markSet compiles "[meta] mark set mark (or|xor|and) V" and "[meta] mark set V".
 func (c *compiler) markSet() error {
-	if c.peek().is("meta") {
-		c.next()
+	dest := "meta"
+	if c.peek().is("meta") || c.peek().is("ct") {
+		dest = c.next().val
 	}
 	if err := c.expect("mark", "set"); err != nil {
 		return err
 	}
 	mt := dataTypes["mark"]
-	if c.peek().is("mark") || (c.peek().is("meta") && c.at(1).is("mark")) {
-		if c.next().is("meta") {
-			c.next()
+	if c.peek().is("mark") || ((c.peek().is("meta") || c.peek().is("ct")) && c.at(1).is("mark")) {
+		source := "meta"
+		if c.peek().is("meta") || c.peek().is("ct") {
+			source = c.next().val
 		}
+		c.next() // mark
 		op := c.next().val
 		v, _, err := encodeValue(mt, c.next().val)
 		if err != nil {
@@ -786,15 +794,28 @@ func (c *compiler) markSet() error {
 		default:
 			return fmt.Errorf("unsupported: mark set mark %s", op)
 		}
-		c.emit(Meta{Key: "mark", DReg: reg1},
-			Bitwise{SReg: reg1, DReg: reg1, Len: 4, Mask: binary.NativeEndian.AppendUint32(nil, mask), Xor: binary.NativeEndian.AppendUint32(nil, xor)},
-			Meta{Key: "mark", Set: true, SReg: reg1})
+		if source == "ct" {
+			c.emit(Ct{Key: "mark", DReg: reg1})
+		} else {
+			c.emit(Meta{Key: "mark", DReg: reg1})
+		}
+		c.emit(Bitwise{SReg: reg1, DReg: reg1, Len: 4, Mask: binary.NativeEndian.AppendUint32(nil, mask), Xor: binary.NativeEndian.AppendUint32(nil, xor)})
+		if dest == "ct" {
+			c.emit(Ct{Key: "mark", Set: true, SReg: reg1})
+		} else {
+			c.emit(Meta{Key: "mark", Set: true, SReg: reg1})
+		}
 		return nil
 	}
 	v, _, err := encodeValue(mt, c.next().val)
 	if err != nil {
 		return err
 	}
-	c.emit(Immediate{DReg: reg1, Data: v}, Meta{Key: "mark", Set: true, SReg: reg1})
+	c.emit(Immediate{DReg: reg1, Data: v})
+	if dest == "ct" {
+		c.emit(Ct{Key: "mark", Set: true, SReg: reg1})
+	} else {
+		c.emit(Meta{Key: "mark", Set: true, SReg: reg1})
+	}
 	return nil
 }

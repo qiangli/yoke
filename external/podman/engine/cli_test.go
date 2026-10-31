@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/qiangli/yoke/pkg/nfthelper"
 )
 
 func TestSafePathPodmanRejectsBashyShim(t *testing.T) {
@@ -105,7 +107,7 @@ func TestManagedExecLinuxHelpers(t *testing.T) {
 	}
 	for _, want := range []string{
 		"conmon_path = [\"" + filepath.Join(helpers, "conmon") + "\"]",
-		"helper_binaries_dir = [\"" + helpers + "\", \"" + filepath.Join(dir, "usr", "local", "libexec", "podman") + "\", \"" + binDir + "\"]",
+		"helper_binaries_dir = [\"" + nfthelper.Dir() + "\", \"" + helpers + "\", \"" + filepath.Join(dir, "usr", "local", "libexec", "podman") + "\", \"" + binDir + "\"]",
 		"[engine.runtimes]",
 		"crun = [\"" + filepath.Join(binDir, "crun") + "\"]",
 		"runc = [\"" + filepath.Join(binDir, "runc") + "\"]",
@@ -113,6 +115,15 @@ func TestManagedExecLinuxHelpers(t *testing.T) {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("conf missing %q:\n%s", want, data)
 		}
+	}
+	// Netavark execs nft by name. The private helper must be visible to that
+	// child without adding an nft command to the caller's shell namespace.
+	private := nfthelper.Dir()
+	if !strings.Contains(string(data), `"`+private+`"`) {
+		t.Fatalf("helper config does not include private nft directory: %s", data)
+	}
+	if _, err := os.Stat(filepath.Join(private, "nft")); err != nil {
+		t.Fatalf("private nft helper: %v", err)
 	}
 	if again := find(buildManagedExec(context.Background(), filepath.Join(binDir, "podman"), "", nil)); again != conf {
 		t.Fatalf("not idempotent: %q vs %q", again, conf)
@@ -129,10 +140,37 @@ func TestHelperConfContent(t *testing.T) {
 	binDir := filepath.Join(t.TempDir(), "usr", "local", "bin")
 	root := filepath.Join(binDir, "..")
 	got := helperConfContent(binDir, filepath.Join(root, "lib", "podman"))
-	want := "helper_binaries_dir = [\"" + filepath.Join(root, "lib", "podman") + "\", \"" +
+	want := "helper_binaries_dir = [\"" + nfthelper.Dir() + "\", \"" + filepath.Join(root, "lib", "podman") + "\", \"" +
 		filepath.Join(root, "libexec", "podman") + "\", \"" + binDir + "\"]"
 	if !strings.Contains(got, want) {
 		t.Fatalf("conf missing %q:\n%s", want, got)
+	}
+}
+
+func TestPrivateNFTHelper(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("private nft helper is Linux only")
+	}
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	dir, err := nfthelper.Ensure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "nft")
+	target, err := os.Readlink(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != self {
+		t.Fatalf("nft helper points to %q, want %q", target, self)
+	}
+	if !strings.Contains(helperConfContent("/tmp/bin", "/tmp/lib/podman"), `"`+dir+`"`) {
+		t.Fatal("helper config omits nft helper")
 	}
 }
 
