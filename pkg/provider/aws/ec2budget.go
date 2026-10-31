@@ -74,10 +74,17 @@ type GPUPreflight struct {
 	QuotaNeedVCPU int     `json:"quota_need_vcpu"`
 }
 
-// gpuPreflight decides whether a worker of this type may launch. It
-// returns the verdict always, and a normalized provider error when
-// the verdict refuses.
-func (e *ec2Adapter) gpuPreflight(ctx context.Context, t gpuType, typeName string) (GPUPreflight, *provider.Error) {
+// gpuPreflight decides whether a worker of this type may launch (create)
+// or wake (start). It returns the verdict always, and a normalized
+// provider error when the verdict refuses.
+//
+// The refusal code is op-aware: a start past the money or quota fails
+// with budget_exceeded / quota_exceeded so an operator can tell a
+// refused wake from a malformed request, while create and plan keep
+// the historical invalid_request their callers assert on. The reason
+// text is identical either way: it names the budget, its limit, the
+// spend to date and the session estimate.
+func (e *ec2Adapter) gpuPreflight(ctx context.Context, op provider.Op, t gpuType, typeName string) (GPUPreflight, *provider.Error) {
 	v := GPUPreflight{
 		InstanceType:   typeName,
 		HourlyUSD:      t.hourlyUSD,
@@ -96,9 +103,16 @@ func (e *ec2Adapter) gpuPreflight(ctx context.Context, t gpuType, typeName strin
 		return v, nil
 	}
 	v.Checked = true
-	refuse := func() (GPUPreflight, *provider.Error) {
-		return v, &provider.Error{Code: provider.ErrInvalidRequest,
-			Message: "aws-ec2-gpu: preflight refused create: " + v.Reason}
+	// budgetCode refuses a money verdict; quotaCode a quota one. Only
+	// a start carries the distinct codes; create and plan keep the
+	// historical invalid_request.
+	budgetCode, quotaCode := provider.ErrInvalidRequest, provider.ErrInvalidRequest
+	if op == provider.OpStart {
+		budgetCode, quotaCode = provider.ErrBudgetExceeded, provider.ErrQuotaExceeded
+	}
+	refuse := func(code provider.ErrorCode) (GPUPreflight, *provider.Error) {
+		return v, &provider.Error{Code: code,
+			Message: fmt.Sprintf("aws-ec2-gpu: preflight refused %s: %s", op, v.Reason)}
 	}
 
 	// 1. Monthly: session compute plus the EBS month on top of what
@@ -117,8 +131,8 @@ func (e *ec2Adapter) gpuPreflight(ctx context.Context, t gpuType, typeName strin
 	}
 	if !s.Known() {
 		if !e.cfg.Budget.AllowUnknownSpend {
-			v.Reason = fmt.Sprintf("month-to-date spend is unknown (%s); refusing to launch against an unknown bill", s.why())
-			return refuse()
+			v.Reason = fmt.Sprintf("month-to-date spend is unknown (%s) against budget %s; refusing to launch against an unknown bill", s.why(), v.BudgetName)
+			return refuse(budgetCode)
 		}
 		v.ProjectedMonthlyUSD = v.SessionCostUSD + v.EBSMonthlyUSD
 		v.Reason = fmt.Sprintf("month-to-date spend is unknown (%s) and allow_unknown_spend is set", s.why())
@@ -127,9 +141,9 @@ func (e *ec2Adapter) gpuPreflight(ctx context.Context, t gpuType, typeName strin
 		v.SpendSource, v.CreditsIncluded = s.Source, s.CreditsIncluded
 		v.ProjectedMonthlyUSD = s.USD + v.SessionCostUSD + v.EBSMonthlyUSD
 		if v.ProjectedMonthlyUSD > v.MonthlyCapUSD {
-			v.Reason = fmt.Sprintf("month-to-date spend $%.2f plus a %.1fh %s session at $%.3f/h ($%.2f) and $%.2f EBS is $%.2f, over the $%.2f monthly cap",
-				s.USD, v.SessionHours, typeName, v.HourlyUSD, v.SessionCostUSD, v.EBSMonthlyUSD, v.ProjectedMonthlyUSD, v.MonthlyCapUSD)
-			return refuse()
+			v.Reason = fmt.Sprintf("month-to-date spend $%.2f plus a %.1fh %s session at $%.3f/h ($%.2f) and $%.2f EBS is $%.2f, over the $%.2f monthly cap (budget %s)",
+				s.USD, v.SessionHours, typeName, v.HourlyUSD, v.SessionCostUSD, v.EBSMonthlyUSD, v.ProjectedMonthlyUSD, v.MonthlyCapUSD, v.BudgetName)
+			return refuse(budgetCode)
 		}
 		if v.CreditsIncluded {
 			v.Reason = fmt.Sprintf("month-to-date spend $%.2f (from the %s budget, which counts credits, so the figure may understate the bill) plus $%.2f session and $%.2f EBS is $%.2f, within the $%.2f monthly cap",
@@ -147,7 +161,7 @@ func (e *ec2Adapter) gpuPreflight(ctx context.Context, t gpuType, typeName strin
 		if !e.cfg.Budget.AllowUnknownSpend {
 			v.Reason = fmt.Sprintf("daily spend is unknown (budget %s: %s); refusing to launch against an unknown bill",
 				e.gpu.dailyBudget, normalize(derr).Message)
-			return refuse()
+			return refuse(budgetCode)
 		}
 		v.Reason += "; daily spend is unknown and allow_unknown_spend is set"
 	} else {
@@ -156,7 +170,7 @@ func (e *ec2Adapter) gpuPreflight(ctx context.Context, t gpuType, typeName strin
 		if dSpend+v.SessionCostUSD > dLimit {
 			v.Reason = fmt.Sprintf("today's spend $%.2f plus a %.1fh %s session ($%.2f) is $%.2f, over the %s daily limit of $%.2f",
 				dSpend, v.SessionHours, typeName, v.SessionCostUSD, dSpend+v.SessionCostUSD, e.gpu.dailyBudget, dLimit)
-			return refuse()
+			return refuse(budgetCode)
 		}
 	}
 
@@ -165,13 +179,13 @@ func (e *ec2Adapter) gpuPreflight(ctx context.Context, t gpuType, typeName strin
 	if qerr != nil {
 		v.Reason = fmt.Sprintf("quota %s is unreadable (%s); refusing to launch against unknown headroom",
 			e.gpu.quotaCode, normalize(qerr).Message)
-		return refuse()
+		return refuse(quotaCode)
 	}
 	v.QuotaValue = q
 	if q < float64(t.vcpu) {
 		v.Reason = fmt.Sprintf("quota %s allows %.0f vCPUs and a %s worker needs %d; request an increase before launching",
 			e.gpu.quotaCode, q, typeName, t.vcpu)
-		return refuse()
+		return refuse(quotaCode)
 	}
 
 	v.OK = true

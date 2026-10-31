@@ -38,11 +38,13 @@
 //     re-downloading, and terminate deletes the volume with the
 //     worker. There is deliberately no second volume: the guard
 //     grants no CreateVolume/AttachVolume.
-//   - Create runs TWO money preflights plus a quota preflight
-//     (ec2budget.go): the hourly session model against
-//     dhnt-monthly-cap, the session cost against dhnt-gpu-daily, and
-//     the type's vCPUs against the Running On-Demand G quota. All
-//     three fail closed.
+//   - Create AND start-of-stopped run TWO money preflights plus a
+//     quota preflight (ec2budget.go): the hourly session model
+//     against dhnt-monthly-cap, the session cost against
+//     dhnt-gpu-daily, and the type's vCPUs against the Running
+//     On-Demand G quota. All three fail closed; a refused start
+//     issues no StartInstances, an already-running worker needs no
+//     preflight, and a stop never preflights.
 //   - A start that answers InsufficientInstanceCapacity is reported
 //     with its AZ: the worker's gp3 volume is AZ-bound, so the adapter
 //     never recreates the worker elsewhere to route around it.
@@ -991,7 +993,7 @@ func (e *ec2Adapter) plan(ctx context.Context, req provider.Request) (provider.R
 	}
 	// The plan is where --dry-run learns the preflight verdicts, so
 	// run the same three the create will run; they allocate nothing.
-	v, be := e.gpuPreflight(ctx, t, req.Spec.Size)
+	v, be := e.gpuPreflight(ctx, req.Op, t, req.Spec.Size)
 	p.Preflight = v
 	data, merr := json.Marshal(p)
 	if merr != nil {
@@ -1025,7 +1027,7 @@ func (e *ec2Adapter) create(ctx context.Context, req provider.Request) (provider
 	if rie != nil {
 		return provider.Result{ProtocolVersion: provider.ProtocolVersion, Op: req.Op, Error: rie}, rie
 	}
-	if _, be := e.gpuPreflight(ctx, t, req.Spec.Size); be != nil {
+	if _, be := e.gpuPreflight(ctx, req.Op, t, req.Spec.Size); be != nil {
 		return provider.Result{ProtocolVersion: provider.ProtocolVersion, Op: req.Op, Error: be}, be
 	}
 	// The user data is settled BEFORE RunInstances: a script too large
@@ -1169,6 +1171,14 @@ func (e *ec2Adapter) findByKey(ctx context.Context, key string) (*ec2Instance, e
 // already in its target state is a replay and issues nothing; a call
 // already in flight is waited out rather than re-issued (a second
 // StartInstances against a pending worker is an IncorrectState).
+//
+// A start of a stopped worker runs the same money preflights as a
+// create — the hourly session model for the instance's own type
+// against dhnt-monthly-cap, the session cost against dhnt-gpu-daily,
+// and the type's vCPUs against the Running On-Demand G quota — before
+// StartInstances, and refuses with budget_exceeded / quota_exceeded
+// without issuing it. An already-running worker is a no-op start with
+// no preflight, and a stop never preflights.
 func (e *ec2Adapter) power(ctx context.Context, req provider.Request, action, want string) (provider.Result, error) {
 	in, res, err := e.owned(ctx, req)
 	if err != nil {
@@ -1179,6 +1189,18 @@ func (e *ec2Adapter) power(ctx context.Context, req provider.Request, action, wa
 	inFlight := (want == "running" && in.State.Name == "pending") ||
 		(want == "stopped" && in.State.Name == "stopping")
 	if !inFlight && !strings.EqualFold(in.State.Name, want) {
+		if action == "StartInstances" {
+			t, ok := gpuTypes[in.Type]
+			if !ok {
+				ce := &provider.Error{Code: provider.ErrInvalidRequest, Message: fmt.Sprintf(
+					"aws-ec2-gpu: cannot start worker %s: instance type %q is not on the dhnt-automation-ec2-gpu allowlist (%s); refusing to start an unreviewed shape",
+					in.ID, in.Type, strings.Join(gpuTypeNames(), ", "))}
+				return provider.Result{ProtocolVersion: provider.ProtocolVersion, Op: req.Op, Error: ce}, ce
+			}
+			if _, be := e.gpuPreflight(ctx, req.Op, t, in.Type); be != nil {
+				return provider.Result{ProtocolVersion: provider.ProtocolVersion, Op: req.Op, Error: be}, be
+			}
+		}
 		p := url.Values{}
 		p.Set("InstanceId.1", in.ID)
 		var out powerResp

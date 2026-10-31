@@ -166,6 +166,8 @@ const (
 	ErrNotOwned              ErrorCode = "not_owned" // untagged or foreign resource
 	ErrNotFound              ErrorCode = "not_found"
 	ErrInvalidRequest        ErrorCode = "invalid_request"
+	ErrBudgetExceeded        ErrorCode = "budget_exceeded"
+	ErrQuotaExceeded         ErrorCode = "quota_exceeded"
 	ErrInvalidCredentials    ErrorCode = "invalid_credentials"
 	ErrProtocolMismatch      ErrorCode = "protocol_mismatch"
 	ErrRateLimited           ErrorCode = "rate_limited"
